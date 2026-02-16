@@ -1,0 +1,51 @@
+# Build directories
+build/
+cmake-build-debug/
+cmake-build-release/
+dist/
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# CMake
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.user
+*.pro.user
+
+# Compiler output
+*.out
+*.exe
+
+# Dependencies
+depend.mk
+*.d
+
+# Temporary files
+*.tmp
+*.log
+
+# Test coverage
+coverage/
+*.gcno
+*.gcda
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Local config
+local_config.txt
+debug_output.txt

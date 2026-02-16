@@ -1,0 +1,36 @@
+---
+# cmake-format configuration file
+# Automatic code formatting for CMake files
+
+# Indent size
+indent: 2
+
+# Line length cutoff
+line_length: 100
+
+# Statement indent
+statement_indent: 2
+
+# TAB size if using tabs
+tab_width: 2
+
+# Use spaces instead of tabs
+use_tabchar: false
+
+# Margin for comments (when wrapping long lines)
+comment_margin: 80
+
+# Break before opening paren in function call
+break_before_open_paren: false
+
+# Separate flow control names from their parentheses
+separate_flow_control_names: true
+
+# Split arguments on comma in function calls
+split_argument_on_trailing_comma: true
+
+# Split arguments and kwargs on comma in function calls
+split_cmake_force_multiline_for_list_of_list: false
+
+# Normalize lists of function arguments
+normalize_lists: false

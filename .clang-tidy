@@ -1,0 +1,70 @@
+# ClangTidy 配置文件，用于代码质量检查和静态分析
+
+---
+Checks: >
+  -*,
+  readability-*,
+  -readability-magic-numbers,
+  -readability-else-after-return,
+  google-*,
+  -google-runtime-references,
+  -google-default-arguments,
+  modernize-*,
+  -modernize-use-auto,
+  -modernize-avoid-c-arrays,
+  performance-*,
+  bugprone-*,
+  clang-analyzer-*,
+  -clang-analyzer-alpha*,
+  cppcoreguidelines-*,
+  -cppcoreguidelines-pro-type-cstyle-cast,
+  -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-avoid-goto,
+  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
+  misc-*,
+  -misc-non-private-member-variables-in-classes
+
+WarningsAsErrors: >
+  -performance-unnecessary-copy-initialization,
+  -readability-identifier-naming
+
+# 检查选项
+HeaderFilterRegex: '(agentflow|include).*'
+
+CheckOptions:
+  - key: readability-identifier-naming.ClassCase
+    value: PascalCase
+  - key: readability-identifier-naming.ClassMemberCase
+    value: lower_case
+  - key: readability-identifier-naming.ClassMemberSuffix
+    value: '_'
+  - key: readability-identifier-naming.ConstexprVariableCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.EnumCase
+    value: PascalCase
+  - key: readability-identifier-naming.EnumConstantCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.FunctionCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalConstantCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.GlobalConstantSuffix
+    value: ''
+  - key: readability-identifier-naming.GlobalVariableCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalVariableSuffix
+    value: ''
+  - key: readability-identifier-naming.LocalVariableCase
+    value: lower_case
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.StaticConstantCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.TypedefCase
+    value: PascalCase
+  - key: readability-identifier-naming.TypedefSuffix
+    value: ''
+  - key: modernize-replace-auto-ptr.AutoPtrTypedefName
+    value: auto_ptr
+  - key: performance-inefficient-string-concatenation.WarnOnImplicitConversion
+    value: true

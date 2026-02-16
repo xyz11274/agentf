@@ -1,0 +1,33 @@
+# EditorConfig 帮助开发人员在不同编辑器和 IDE 中维持一致的编码风格
+# https://editorconfig.org
+
+root = true
+
+# 所有文件
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# C++ 源文件
+[*.{h,hpp,cpp,cc,cxx}]
+indent_style = space
+indent_size = 2
+max_line_length = 100
+
+# CMake 文件
+[{CMakeLists.txt,*.cmake}]
+indent_style = space
+indent_size = 2
+
+# Markdown 文件
+[*.md]
+trim_trailing_whitespace = false
+max_line_length = off
+
+# Shell 脚本
+[*.sh]
+indent_style = space
+indent_size = 2
+end_of_line = lf

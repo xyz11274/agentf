@@ -1,0 +1,80 @@
+---
+Language: Cpp
+BasedOnStyle: Google
+
+# 缩进规则
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+ContinuationIndentWidth: 4
+AccessModifierOffset: -2
+
+# 括号和空格
+BreakBeforeBraces: Attach
+Cpp11BracedListStyle: false
+SpaceBeforeCtorInitializerColon: true
+SpaceBeforeRangeBasedForLoopColon: true
+
+# 空行
+MaxEmptyLinesToKeep: 2
+KeepEmptyLinesAtTheStartOfBlocks: false
+
+# 行长和换行
+ColumnLimit: 100
+BreakBeforeBinaryOperators: NonAssignment
+BreakConstructorInitializers: BeforeColon
+ConstructorInitializerAllOnOneLineOrOnePerLine: true
+
+# 对齐
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: true
+AlignConsecutiveDeclarations: true
+AlignEscapedNewlines: Right
+AlignOperands: true
+AlignTrailingComments: true
+
+# 排序和整理
+SortIncludes: true
+SortUsingDeclarations: true
+
+# 指针和引用
+DerivePointerAlignment: false
+PointerAlignment: Left
+
+# 其他规则
+AllowShortBlocksOnASingleLine: Empty
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: InlineOnly
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+
+FixNamespaceComments: true
+ReflowComments: true
+SpaceAfterCStyleCast: false
+SpaceAfterTemplateKeyword: true
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeParens: Never
+SpacesBeforeTrailingComments: 2
+SpacesInAngles: false
+SpacesInCStyleCastParentheses: false
+SpacesInContainerLiterals: false
+SpacesInParentheses: false
+SpacesInSquareBrackets: false
+
+# 模板
+TypenameMacros:
+  - DEFINE_PROTOCOL_BUFFER
+
+# 命名空间
+CompactNamespaces: false
+NamespaceIndentation: None
+
+# 包含
+IncludeBlocks: Reorder
+IncludeCategories:
+  - Regex: '^<sys/.*'
+    Priority: 2
+  - Regex: '^<.*'
+    Priority: 1
+  - Regex: '.*'
+    Priority: 3
