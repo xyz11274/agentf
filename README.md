@@ -264,3 +264,101 @@ AgentFlow通过分离"开发编排框架"和"运行框架"，实现了职责清�
 - **开发编排框架**关注Agent和Workflow的定义和编排
 - **运行框架**关注Agent和Workflow实例的加载和执行
 - 支持灵活的部署模式和扩展能力
+
+---
+
+## 编程规范和贡献
+
+为了保持代码质量和团队协作的一致性，AgentFlow项目遵循严格的编程规范。
+
+### 📋 必读文档
+
+1. **[CODING_STANDARDS.md](CODING_STANDARDS.md)** - 编程规范指南
+   - C++11标准代码风格（命名、缩进、注释等）
+   - 内存管理和线程安全最佳实践
+   - 测试规范和文档要求
+   - 代码审查检查清单
+
+2. **[DEVELOPMENT.md](DEVELOPMENT.md)** - 开发工作流指南
+   - 快速开始和环境设置
+   - 代码格式化和质量检查工具使用
+   - 完整的开发流程（分支、编码、测试、提交、PR）
+   - 常见问题解决
+
+### 🔧 项目配置
+
+项目包含以下工具配置文件用于保证代码质量：
+
+- **.gitignore** - Git忽略规则，排除build、IDE配置等
+- **.clang-format** - 代码格式化配置（Google风格）
+- **.clang-tidy** - 静态分析和代码质量检查配置
+- **.editorconfig** - 跨编辑器的一致性配置
+- **.cmake-format** - CMake文件格式化配置
+
+### ⚡ 快速检查清单
+
+提交代码前，请确认：
+
+```bash
+# 构建和测试
+./build.sh build && ./build.sh test
+
+# 代码格式化
+clang-format -r -i include/ src/ tests/ examples/
+
+# 代码质量检查（可选）
+clang-tidy -p build include/**/*.h src/*.cpp
+
+# Git提交
+git add <files>
+git commit -m "type: descriptive message"
+git push
+```
+
+### 📝 规范要点（快速参考）
+
+| 规范项 | 要求 | 示例 |
+|--------|------|------|
+| **类名** | PascalCase | `class AgentRuntime` |
+| **函数名** | snake_case | `void execute_node()` |
+| **变量名** | snake_case | `int task_id` |
+| **常量** | UPPER_CASE | `const int MAX_WORKERS = 4` |
+| **缩进** | 2空格 | 无TAB |
+| **行长** | 100字符（推荐）| 120字符（硬限制） |
+| **内存** | shared_ptr/unique_ptr | 禁止原始指针 |
+| **线程** | std::mutex保护共享资源 | lock_guard |
+| **C++版本** | C++11标准 | 禁用C++14+ |
+
+### 🚀 贡献流程
+
+1. **Fork并克隆**
+   ```bash
+   git clone https://github.com/YourUsername/AgentFlow.git
+   cd AgentFlow
+   ```
+
+2. **创建特性分支**
+   ```bash
+   git checkout -b feature/your-feature
+   ```
+
+3. **编码、测试、提交**
+   - 遵循[CODING_STANDARDS.md](CODING_STANDARDS.md)
+   - 编写对应的测试
+   - 运行`./build.sh test`确保通过
+   - 提交遵循规范的commit信息
+
+4. **推送并创建Pull Request**
+   ```bash
+   git push origin feature/your-feature
+   ```
+
+5. **等待Code Review**
+   - 项目维护者会检查代码规范和功能正确性
+   - 根据反馈进行修改
+
+### 📧 联系方式
+
+- **问题报告**: GitHub Issues
+- **贡献讨论**: GitHub Discussions
+- **维护团队**: AgentFlow Team
