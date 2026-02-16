@@ -97,7 +97,7 @@ private:
 
 ### 1.4 注释
 
-- **文件头注释**：包含文件描述（C++11 标准）
+- **文件头注释**：包含文件描述（C++17 标准）
   ```cpp
   // Copyright (c) 2026 AgentFlow Authors
   // Licensed under MIT License
@@ -131,24 +131,33 @@ clang-format -i <file>
 clang-format -r -i include/ src/ tests/ examples/
 ```
 
-## 2. C++11 标准要求
+## 2. C++17 标准要求
 
 ### 2.1 现代 C++ 特性（允许）
 
 - ✅ `std::shared_ptr` / `std::unique_ptr`
 - ✅ `std::thread` 和线程原语
 - ✅ `std::function` 和 lambda 表达式
-- ✅ `std::mutex`, `std::lock_guard`
+- ✅ `std::mutex`, `std::lock_guard`, `std::shared_mutex`
 - ✅ `auto` 关键字用于类型推导
 - ✅ 初始化列表
 - ✅ 基于范围的 for 循环
+- ✅ `std::optional` (C++17)
+- ✅ `std::variant` (C++17)
+- ✅ `std::string_view` (C++17)
+- ✅ `std::any` (C++17)
+- ✅ 结构化绑定 (C++17)
+- ✅ `if constexpr` (C++17)
+- ✅ `inline` 变量 (C++17)
+- ✅ `[[nodiscard]]` 和 `[[maybe_unused]]` 属性 (C++17)
+- ✅ 折叠表达式 (C++17)
+- ✅ `std::filesystem` (C++17，可选)
 
 ### 2.2 禁止使用
 
-- ❌ C++14/17/20 特性（如 `std::Optional`, `std::variant`）
-- ❌ 外部第三方库（仅使用标准库）
-- ❌ 原始指针管理内存
-- ❌ C 风格数组（使用 `std::vector` 代替）
+- ❌ C++20/23 特性（如协程、modules、concepts）
+- ❌ 原始指针管理内存（使用智能指针）
+- ❌ C 风格数组（使用 `std::vector` 或 `std::array`）
 - ❌ `goto` 语句
 
 ### 2.3 内存管理
@@ -343,12 +352,13 @@ bool test_node_creation() {
 提交代码前请检查：
 
 - [ ] 命名规范一致（类/函数/变量）
-- [ ] 没有使用 C++14+ 特性
-- [ ] 没有原始指针
+- [ ] 没有使用 C++20+ 特性
+- [ ] 正确使用 C++17 特性（std::optional, std::variant等）
+- [ ] 没有原始指针（使用智能指针）
 - [ ] 所有共享资源都有互斥量保护
 - [ ] 头文件包含顺序正确
 - [ ] const 正确性已应用
-- [ ] 代码可以用 C++11 编译
+- [ ] 代码可以用 C++17 编译
 - [ ] 构建/测试通过（`./build.sh build && ./build.sh test`）
 - [ ] 代码格式化已应用（`clang-format -r -i`）
 - [ ] 没有编译警告
@@ -421,6 +431,6 @@ Closes #123
 
 ---
 
-**最后更新**: 2026-02-16  
-**标准版本**: C++11  
+**最后更新**: 2026-02-17
+**标准版本**: C++17
 **维护人**: AgentFlow Team

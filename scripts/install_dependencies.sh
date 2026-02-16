@@ -48,6 +48,13 @@ install_macos() {
     # 安装依赖
     echo "安装依赖..."
 
+    # Protoactor-cpp 依赖
+    echo "  - gRPC..."
+    brew install grpc || brew upgrade grpc || true
+
+    echo "  - zlib..."
+    brew install zlib || brew upgrade zlib || true
+
     # OpenSSL
     echo "  - OpenSSL..."
     brew install openssl || brew upgrade openssl || true
@@ -81,9 +88,12 @@ install_macos() {
     echo "  git clone https://github.com/DanielKernel/Protoactor-cpp.git"
     echo "  cd Protoactor-cpp"
     echo "  mkdir build && cd build"
-    echo "  cmake .."
-    echo "  make"
+    echo "  cmake .. -DCMAKE_BUILD_TYPE=Release"
+    echo "  make -j\$(sysctl -n hw.ncpu)"
     echo "  sudo make install"
+    echo ""
+    echo "注意：如果编译时找不到 OpenSSL，请设置："
+    echo "  export OPENSSL_ROOT_DIR=\$(brew --prefix openssl)"
     echo ""
 }
 
@@ -92,6 +102,13 @@ install_ubuntu() {
     sudo apt-get update
 
     echo "安装依赖..."
+
+    # Protoactor-cpp 依赖
+    echo "  - gRPC..."
+    sudo apt-get install -y libgrpc++-dev libgrpc-dev
+
+    echo "  - zlib..."
+    sudo apt-get install -y zlib1g-dev
 
     # OpenSSL
     echo "  - OpenSSL..."
@@ -130,8 +147,8 @@ install_ubuntu() {
     echo "  git clone https://github.com/DanielKernel/Protoactor-cpp.git"
     echo "  cd Protoactor-cpp"
     echo "  mkdir build && cd build"
-    echo "  cmake .."
-    echo "  make"
+    echo "  cmake .. -DCMAKE_BUILD_TYPE=Release"
+    echo "  make -j\$(nproc)"
     echo "  sudo make install"
     echo ""
 }
@@ -141,6 +158,13 @@ install_fedora() {
     sudo dnf check-update || sudo yum check-update || true
 
     echo "安装依赖..."
+
+    # Protoactor-cpp 依赖
+    echo "  - gRPC..."
+    sudo dnf install -y grpc-devel grpc-plugins || sudo yum install -y grpc-devel grpc-plugins
+
+    echo "  - zlib..."
+    sudo dnf install -y zlib-devel || sudo yum install -y zlib-devel
 
     # OpenSSL
     echo "  - OpenSSL..."
@@ -177,6 +201,13 @@ install_arch() {
 
     echo "安装依赖..."
 
+    # Protoactor-cpp 依赖
+    echo "  - gRPC..."
+    sudo pacman -S --noconfirm grpc || true
+
+    echo "  - zlib..."
+    sudo pacman -S --noconfirm zlib || true
+
     # OpenSSL
     echo "  - OpenSSL..."
     sudo pacman -S --noconfirm openssl || true
@@ -211,6 +242,13 @@ install_opensuse() {
     sudo zypper refresh
 
     echo "安装依赖..."
+
+    # Protoactor-cpp 依赖
+    echo "  - gRPC..."
+    sudo zypper install -y grpc-devel || true
+
+    echo "  - zlib..."
+    sudo zypper install -y zlib-devel
 
     # OpenSSL
     echo "  - OpenSSL..."

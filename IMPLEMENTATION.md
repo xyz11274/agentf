@@ -1,6 +1,6 @@
 # AgentFlow Implementation Guide
 
-This directory contains the C++11 implementation of AgentFlow based on the architecture described in the README.
+This directory contains the C++17 implementation of AgentFlow based on the architecture described in the README.
 
 ## Project Structure
 
@@ -42,7 +42,7 @@ AgentFlow/
 ## Building
 
 ### Prerequisites
-- C++11 compatible compiler (GCC, Clang, LLVM)
+- C++17 compatible compiler (GCC 7+, Clang 5+, MSVC 2017+)
 - CMake 3.10 or higher
 - Linux/Unix environment (tested on Ubuntu 24.04)
 
@@ -67,7 +67,8 @@ Or manually:
 mkdir -p build
 cd build
 cmake .. -DCMAKE_BUILD_TYPE=Debug
-make -j$(nproc)
+# Use -j$(nproc) on Linux or -j$(sysctl -n hw.ncpu) on macOS
+make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 ./test_agentflow       # Run tests
 ./example_basic        # Run example
 ```
@@ -201,8 +202,8 @@ Run tests with: `./build.sh test`
 
 ## Notes
 
-- Compiled against C++11 standard for broad compatibility
-- Uses standard library only (no external dependencies except CMake)
+- Compiled against C++17 standard for modern features (std::optional, std::variant, etc.)
+- Supports optional external dependencies (Protoactor-cpp, OpenSSL, libwebsockets, etc.) - see DEPENDENCIES.md
 - Thread-safe implementations using std::mutex
 - Simplified data variant type (std::string) - can be extended with more complex types
 - Logger uses singleton pattern

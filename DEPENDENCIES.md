@@ -7,7 +7,7 @@
 ## 一、核心依赖（必需）
 
 ### 1. C++标准库
-- **版本**: C++11
+- **版本**: C++17
 - **用途**: 基础数据结构和算法
 - **说明**: 标准库功能，无需额外安装
 
@@ -18,11 +18,18 @@
 ### 1. Protoactor-cpp（Actor框架）
 - **GitHub**: https://github.com/DanielKernel/Protoactor-cpp.git
 - **用途**: Actor模型实现
+- **依赖**:
+  - grpc (gRPC通信库)
+  - protobuf (Protocol Buffer序列化)
+  - openssl (SSL/TLS安全通信)
+  - zlib (数据压缩)
 - **说明**:
   - 提供Actor消息机制
   - 支持分布式Actor通信
   - Node控制面Actor实现
+  - 系统维护通信面基础
 - **当前状态**: 项目提供stub实现，Protoactor-cpp启用时使用完整功能
+- **C++标准**: C++17
 
 ### 2. OpenSSL（SSL/TLS加密）
 - **官网**: https://www.openssl.org/
@@ -98,12 +105,21 @@ endif()
 
 **Ubuntu/Debian**:
 ```bash
-# Protoactor-cpp（需要从源码编译）
+# Protoactor-cpp依赖
+sudo apt-get install -y \
+    libgrpc++-dev \
+    libgrpc-dev \
+    libprotobuf-dev \
+    protobuf-compiler \
+    libssl-dev \
+    zlib1g-dev
+
+# Protoactor-cpp（从源码编译）
 git clone https://github.com/DanielKernel/Protoactor-cpp.git
 cd Protoactor-cpp && mkdir build && cd build
-cmake .. && make && sudo make install
+cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(nproc) && sudo make install
 
-# OpenSSL
+# OpenSSL（AgentFlow使用）
 sudo apt-get install libssl-dev
 
 # libwebsockets
@@ -112,7 +128,7 @@ sudo apt-get install libwebsockets-dev
 # libevent
 sudo apt-get install libevent-dev
 
-# Protobuf
+# Protobuf（AgentFlow使用）
 sudo apt-get install libprotobuf-dev protobuf-compiler
 
 # RapidJSON（header-only，手动下载或通过包管理器）
@@ -121,10 +137,16 @@ sudo apt-get install rapidjson-dev
 
 **macOS**:
 ```bash
-# 使用Homebrew
-brew install openssl libwebsockets libevent protobuf rapidjson
+# Protoactor-cpp依赖
+brew install grpc protobuf openssl zlib
 
-# Protoactor-cpp需要从源码编译
+# Protoactor-cpp（从源码编译）
+git clone https://github.com/DanielKernel/Protoactor-cpp.git
+cd Protoactor-cpp && mkdir build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release && make -j$(sysctl -n hw.ncpu) && sudo make install
+
+# 其他AgentFlow依赖
+brew install libwebsockets libevent rapidjson
 ```
 
 ---
@@ -188,8 +210,133 @@ std::shared_ptr<ISslAdapter> create_ssl_adapter() {
 
 ---
 
-## 七、更新日志
+## 七、Protoactor-cpp依赖详解
+
+Protoactor-cpp是一个基于Actor模型的C++框架，实现分布式Actor通信和消息机制。以下是详细的依赖说明：
+
+### 核心依赖
+
+| 依赖 | 版本要求 | 用途 |
+|------|---------|------|
+| grpc | >= 1.30 | gRPC通信库，用于远程Actor通信 |
+| protobuf | >= 3.10 | Protocol Buffer，用于消息序列化 |
+| openssl | >= 1.1 | SSL/TLS加密，安全通信支持 |
+| zlib | >= 1.2 | 数据压缩，减少网络传输数据量 |
+
+### 编译要求
+
+- **C++标准**: C++17
+- **CMake版本**: >= 3.10
+- **编译器**: GCC 7+, Clang 5+, MSVC 2017+
+
+### 支持的平台
+
+- Linux (x86_64, ARM64)
+- macOS (x86_64, Apple Silicon ARM64)
+- Windows (x86_64, CMake支持)
+
+### 安装方式
+
+**方式一：从源码编译（推荐）**
+
+```bash
+# 克隆仓库
+git clone https://github.com/DanielKernel/Protoactor-cpp.git
+cd Protoactor-cpp
+
+# 创建构建目录
+mkdir build && cd build
+
+# 配置构建（可选择安装路径）
+cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local
+
+# 编译并安装
+make -j$(nproc)
+sudo make install
+
+# 配置环境变量（如需要）
+export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+```
+
+**方式二：指定自定义安装路径**
+
+```bash
+mkdir build && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=$HOME/.local
+make -j$(nproc)
+make install
+
+# 配置环境
+export PATH=$HOME/.local/bin:$PATH
+export LD_LIBRARY_PATH=$HOME/.local/lib:$LD_LIBRARY_PATH
+export PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig:$PKG_CONFIG_PATH
+```
+
+### 验证安装
+
+```bash
+# 检查库文件
+ls -l /usr/local/lib/libprotoactor*
+
+# 检查头文件
+ls -l /usr/local/include/protoactor/
+
+# 检查CMake配置
+cmake --find-package -DNAME=protoactor -DCOMPILER_ID=GNU -DLANGUAGE=CXX -DMODE=EXIST
+```
+
+### 故障排除
+
+**问题1：找不到grpc相关库**
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install libgrpc++-dev libgrpc-dev
+
+# CentOS/RHEL
+sudo yum install grpc-devel grpc-plugins
+
+# macOS
+brew install grpc
+```
+
+**问题2：protobuf版本冲突**
+
+```bash
+# 卸载旧版本后重新安装
+sudo apt-get remove libprotobuf-dev protobuf-compiler
+sudo apt-get install libprotobuf-dev protobuf-compiler
+```
+
+**问题3：openssl找不到**
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install libssl-dev
+
+# macOS
+brew install openssl
+export OPENSSL_ROOT_DIR=$(brew --prefix openssl)
+```
+
+**问题4：zlib缺失**
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install zlib1g-dev
+
+# CentOS/RHEL
+sudo yum install zlib-devel
+
+# macOS
+brew install zlib
+```
+
+---
+
+## 八、更新日志
 
 | 日期 | 变更 |
 |------|------|
+| 2026-02-17 | 更新C++标准至C++17，补充Protoactor-cpp完整依赖说明 |
 | 2026-02-16 | 初始版本，列出所有外部依赖 |

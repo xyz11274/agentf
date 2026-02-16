@@ -4,7 +4,7 @@
 
 ### 前置要求
 - CMake 3.10 or higher
-- C++11 compatible compiler (GCC, Clang, etc.)
+- C++17 compatible compiler (GCC 7+, Clang 5+, MSVC 2017+)
 - Linux/Unix environment
 - git
 
@@ -32,7 +32,7 @@ cd AgentFlow
 所有代码必须符合 [CODING_STANDARDS.md](CODING_STANDARDS.md) 中的规范。
 
 主要要点：
-- **语言**: C++11 标准（不支持 C++14+）
+- **语言**: C++17 标准（支持 C++17 特性，不支持 C++20+）
 - **命名**: PascalCase（类），snake_case（函数/变量）
 - **缩进**: 2 个空格
 - **行长**: 100 字符（硬限制 120）
@@ -306,7 +306,7 @@ Implements #42
 ## 常见问题
 
 ### Q: 如何更新依赖项？
-A: AgentFlow 仅使用 C++ 标准库，无外部依赖。
+A: AgentFlow 有一些可选的外部依赖，详见 [DEPENDENCIES.md](DEPENDENCIES.md)。必需的 Protoactor-cpp 需要从源码编译，其他依赖可通过包管理器安装。
 
 ### Q: 如何添加新的编译选项？
 A: 修改 [CMakeLists.txt](CMakeLists.txt)，然后 `./build.sh build`
@@ -364,7 +364,7 @@ git log --oneline --graph --all
 
 2. **使用移动语义**
    ```cpp
-   // ✅ C++11 支持
+   // ✅ C++17 支持
    std::unique_ptr<Node> create_node() {
      return std::make_unique<Node>();  // 移动返回
    }

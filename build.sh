@@ -5,6 +5,9 @@
 
 set -e
 
+# Detect operating system
+OS="$(uname -s)"
+
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="${PROJECT_DIR}/build"
 
@@ -41,7 +44,15 @@ case $ACTION in
         mkdir -p "${BUILD_DIR}"
         cd "${BUILD_DIR}"
         cmake .. -DCMAKE_BUILD_TYPE=Debug
-        make -j$(nproc)
+
+        # Detect number of CPU cores (cross-platform)
+        if [[ "$OS" == "Darwin" ]]; then
+            CORES=$(sysctl -n hw.ncpu)
+        else
+            CORES=$(nproc)
+        fi
+
+        make -j${CORES}
         print_info "Build completed successfully"
         ;;
     
