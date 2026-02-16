@@ -1,0 +1,2 @@
+/usr/bin/ar qc libagentflow.a CMakeFiles/agentflow.dir/src/node.cpp.o CMakeFiles/agentflow.dir/src/edge.cpp.o CMakeFiles/agentflow.dir/src/workflow.cpp.o CMakeFiles/agentflow.dir/src/agent.cpp.o CMakeFiles/agentflow.dir/src/databus.cpp.o CMakeFiles/agentflow.dir/src/agent_runtime.cpp.o CMakeFiles/agentflow.dir/src/logger.cpp.o
+/usr/bin/ranlib libagentflow.a
