@@ -165,25 +165,54 @@ bool AgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId& w
 
 void AgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr node) {
     if (!agent || !node) {
+        Logger::instance().error_f("[PROCESS_NODE_ERROR] Invalid agent or node pointer");
         return;
     }
 
-    Logger::instance().info_f("Processing node: %s (state: %d)",
+    // [DEBUG] Log node processing start
+    std::thread::id thread_id = std::this_thread::get_id();
+
+    Logger::instance().info_f("[PROCESS_NODE_START] ThreadId=%zu, AgentId=%s, WorkflowId=%s, NodeId=%s, NodeName=%s, State=%d",
+                            std::hash<std::thread::id>{}(thread_id),
+                            agent->get_id().c_str(),
+                            workflow ? workflow->get_id().c_str() : "unknown",
+                            node->get_id().c_str(),
                             node->get_name().c_str(),
                             static_cast<int>(node->get_state()));
 
     // Execute node
-    if (!node->execute()) {
-        Logger::instance().error_f("Node execution failed: %s - %s",
-                                node->get_name().c_str(),
-                                node->get_retry_count() > 0 ?
-                                    "Retried " + std::to_string(node->get_retry_count()) + " times" : "");
+    auto start_time = std::chrono::steady_clock::now();
+    bool execution_result = node->execute();
+    auto end_time = std::chrono::steady_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+    // [DEBUG] Log node processing result
+    if (!execution_result) {
+        Logger::instance().error_f("[PROCESS_NODE_FAILED] ThreadId=%zu, AgentId=%s, WorkflowId=%s, NodeId=%s, NodeName=%s, Duration=%ldms, RetryCount=%d",
+                                 std::hash<std::thread::id>{}(thread_id),
+                                 agent->get_id().c_str(),
+                                 workflow ? workflow->get_id().c_str() : "unknown",
+                                 node->get_id().c_str(),
+                                 node->get_name().c_str(),
+                                 duration,
+                                 node->get_retry_count());
     } else {
-        Logger::instance().info_f("Node executed successfully: %s",
-                                node->get_name().c_str());
+        Logger::instance().info_f("[PROCESS_NODE_SUCCESS] ThreadId=%zu, AgentId=%s, WorkflowId=%s, NodeId=%s, NodeName=%s, Duration=%ldms",
+                                std::hash<std::thread::id>{}(thread_id),
+                                agent->get_id().c_str(),
+                                workflow ? workflow->get_id().c_str() : "unknown",
+                                node->get_id().c_str(),
+                                node->get_name().c_str(),
+                                duration);
     }
 
     node->cleanup();
+
+    // [DEBUG] Log node cleanup
+    Logger::instance().debug_f("[PROCESS_NODE_CLEANUP] ThreadId=%zu, AgentId=%s, NodeId=%s",
+                             std::hash<std::thread::id>{}(thread_id),
+                             agent->get_id().c_str(),
+                             node->get_id().c_str());
 
     // Find execution state and update it
     std::string execution_id = agent->get_id() + ":" + (workflow ? workflow->get_id() : "") + ":*";

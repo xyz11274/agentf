@@ -35,10 +35,20 @@ public:
     void error(const std::string& msg) { log(Level::ERROR, msg); }
     
     template<typename... Args>
+    void debug_f(const char* fmt, Args... args) {
+        log_formatted(Level::DEBUG, fmt, args...);
+    }
+
+    template<typename... Args>
     void info_f(const char* fmt, Args... args) {
         log_formatted(Level::INFO, fmt, args...);
     }
-    
+
+    template<typename... Args>
+    void warn_f(const char* fmt, Args... args) {
+        log_formatted(Level::WARN, fmt, args...);
+    }
+
     template<typename... Args>
     void error_f(const char* fmt, Args... args) {
         log_formatted(Level::ERROR, fmt, args...);

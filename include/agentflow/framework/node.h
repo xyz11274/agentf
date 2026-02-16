@@ -2,7 +2,10 @@
 #define AGENTFLOW_FRAMEWORK_NODE_H
 
 #include "agentflow/common.h"
+#include "agentflow/runtime/hot_reload.h"
+#include "agentflow/runtime/code_loader.h"
 #include <functional>
+#include <memory>
 
 namespace agentflow {
 namespace framework {
@@ -46,6 +49,15 @@ public:
 
         // Retry configuration
         int retry_delay_ms = 1000;  // Delay between retries
+
+        // Hot reload configuration
+        bool enable_hot_reload = true;          // Enable hot reload for this node
+        runtime::HotReloadConfig hot_reload_config;  // Hot reload settings
+
+        // Code execution configuration
+        std::string function_name;  // Function name for SO library execution
+        std::string main_class;     // Main class for JAR execution
+        std::vector<std::string> args;  // Additional arguments for script execution
     };
     
     explicit Node(const Config& config);
@@ -81,7 +93,17 @@ public:
     bool initialize();
     bool execute();
     bool cleanup();
-    
+
+    // Hot reload operations
+    bool enable_code_reload();
+    bool disable_code_reload();
+    bool reload_code();
+    bool check_and_reload_code();
+    std::shared_ptr<runtime::ExecutableVersion> get_code_version() const;
+    bool rollback_to_version(const std::string& version_id);
+
+    // Code loader access
+    runtime::ExecutionResult execute_with_code_loader();
 private:
     Config config_;
     NodeState state_ = NodeState::WAITING;
@@ -92,11 +114,25 @@ private:
     // Execution result tracking
     std::string last_error_;
 
+    // Hot reload state
+    bool hot_reload_enabled_ = false;
+    std::string current_version_id_;
+
+    // Code loader reference
+    runtime::CodeLoader* code_loader_ = nullptr;
+
     // Helper methods for execution
     bool execute_cpp_function();
     bool execute_shell_command();
     bool execute_external_program();
     bool execute_with_timeout(int timeout_ms, std::function<bool()> executor);
+    bool execute_so_library();
+    bool execute_jar_file();
+    bool execute_script(runtime::ExecutableType type);
+
+    // Hot reload helper methods
+    void setup_hot_reload();
+    void cleanup_hot_reload();
 };
 
 } // namespace framework

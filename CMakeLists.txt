@@ -282,10 +282,13 @@ set(AGENTFLOW_RUNTIME_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/event.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent_runtime.cpp
     ${AGENTFLOW_SOURCE_DIR}/metrics.cpp
+    ${AGENTFLOW_SOURCE_DIR}/hot_reload.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/code_loader.cpp
 )
 
 set(AGENTFLOW_BASIC_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/logger.cpp
+    ${AGENTFLOW_SOURCE_DIR}/thread_pool.cpp
 )
 
 set(AGENTFLOW_ACTOR_SOURCES
@@ -482,6 +485,7 @@ if(USE_GTEST)
       ${AGENTFLOW_TEST_DIR}/test_agent_json_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/test_local_channel_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/test_request_response_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/test_hot_reload.cpp
   )
   if(TARGET GTest::gtest)
     target_link_libraries(test_agentflow_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)
@@ -495,6 +499,26 @@ if(USE_GTEST)
     target_compile_options(test_agentflow_gtest PRIVATE -Wno-non-virtual-dtor)
   endif()
   add_test(NAME AgentFlowGoogleTests COMMAND test_agentflow_gtest)
+
+  # Hot reload tests (separate executable for better organization)
+  add_executable(test_hot_reload
+      ${AGENTFLOW_TEST_DIR}/test_hot_reload.cpp
+  )
+  if(TARGET GTest::gtest)
+    target_link_libraries(test_hot_reload PRIVATE agentflow GTest::gtest GTest::gtest_main)
+  else()
+    target_link_libraries(test_hot_reload PRIVATE agentflow ${GTEST_LIBRARIES})
+    if(GTEST_INCLUDE_DIRS)
+      target_include_directories(test_hot_reload PRIVATE ${GTEST_INCLUDE_DIRS})
+    endif()
+  endif()
+  if(NOT MSVC)
+    target_compile_options(test_hot_reload PRIVATE -Wno-non-virtual-dtor)
+  endif()
+  add_test(NAME HotReloadTests COMMAND test_hot_reload)
+
+  # Add tests subdirectory
+  add_subdirectory(tests)
 
   # Adapter isolation tests with Google Test
   add_executable(test_adapter_isolation

@@ -1,0 +1,6 @@
+Manifest-Version: 1.0
+Main-Class: HotReloadTest
+Implementation-Title: Hot Reload Test JAR
+Implementation-Version: 1.0
+Implementation-Vendor: AgentFlow
+Created-By: AgentFlow Build System
