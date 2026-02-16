@@ -60,10 +60,14 @@ private:
     std::map<NodeId, std::shared_ptr<Node>> node_map_;
     std::vector<std::shared_ptr<Node>> nodes_;
     std::vector<std::shared_ptr<Edge>> edges_;
-    
+
     // DAG validation and computation
     bool validate_dag();
     bool compute_topological_order();
+
+    // Cached topological order (computed once after nodes/edges are finalized)
+    std::vector<NodeId> topological_order_;
+    bool topological_order_valid_ = false;
 };
 
 } // namespace framework

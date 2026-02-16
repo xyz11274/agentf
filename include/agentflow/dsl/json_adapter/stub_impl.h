@@ -17,8 +17,12 @@
 namespace agentflow {
 namespace dsl {
 
+// Forward declaration
+class StubJsonDocument;
+
 /// @brief Simple value holder for stub JSON implementation
 class StubJsonValue : public IJsonValue {
+  friend class StubJsonDocument;  // Allow document to access private members
  public:
   StubJsonValue() = default;
   explicit StubJsonValue(const std::string& string_value);
@@ -91,6 +95,18 @@ class StubJsonDocument : public IJsonDocument {
 
   // Simple JSON parser for stub implementation
   bool parse_value(const std::string& json_str, size_t& pos,
+                   std::shared_ptr<StubJsonValue>& result);
+  bool parse_object(const std::string& json_str, size_t& pos,
+                   std::shared_ptr<StubJsonValue>& result);
+  bool parse_array(const std::string& json_str, size_t& pos,
+                  std::shared_ptr<StubJsonValue>& result);
+  bool parse_string(const std::string& json_str, size_t& pos,
+                   std::shared_ptr<StubJsonValue>& result);
+  bool parse_bool(const std::string& json_str, size_t& pos,
+                  std::shared_ptr<StubJsonValue>& result);
+  bool parse_null(const std::string& json_str, size_t& pos,
+                  std::shared_ptr<StubJsonValue>& result);
+  bool parse_number(const std::string& json_str, size_t& pos,
                    std::shared_ptr<StubJsonValue>& result);
   void skip_whitespace(const std::string& str, size_t& pos);
 };

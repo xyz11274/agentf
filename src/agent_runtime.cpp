@@ -3,6 +3,7 @@
 #include <chrono>
 #include <thread>
 #include <condition_variable>
+#include <random>
 
 namespace agentflow {
 namespace runtime {
@@ -24,28 +25,31 @@ bool AgentRuntime::register_agent(AgentPtr agent) {
     if (!agent) {
         return false;
     }
-    
+
     std::lock_guard<std::mutex> lock(agents_mutex_);
-    
+
     // Register agent
     agents_[agent->get_id()] = agent;
-    
+
     // Create databus for agent
     databuses_[agent->get_id()] = std::unique_ptr<HighSpeedDataBus>(
         new HighSpeedDataBus(1024 * 1024)  // 1MB databus
     );
-    
-    Logger::instance().info_f("Agent registered: %s", agent->get_name().c_str());
+
+    Logger::instance().info_f("Agent registered: %s (id: %s)",
+                            agent->get_name().c_str(),
+                            agent->get_id().c_str());
     return true;
 }
 
 bool AgentRuntime::unregister_agent(const AgentId& agent_id) {
     std::lock_guard<std::mutex> lock(agents_mutex_);
-    
+
     auto it = agents_.find(agent_id);
     if (it != agents_.end()) {
         agents_.erase(it);
         databuses_.erase(agent_id);
+        Logger::instance().info_f("Agent unregistered: %s", agent_id.c_str());
         return true;
     }
     return false;
@@ -53,14 +57,14 @@ bool AgentRuntime::unregister_agent(const AgentId& agent_id) {
 
 AgentPtr AgentRuntime::get_agent(const AgentId& agent_id) {
     std::lock_guard<std::mutex> lock(agents_mutex_);
-    
+
     auto it = agents_.find(agent_id);
     return it != agents_.end() ? it->second : nullptr;
 }
 
 std::vector<AgentPtr> AgentRuntime::list_agents() {
     std::lock_guard<std::mutex> lock(agents_mutex_);
-    
+
     std::vector<AgentPtr> result;
     for (const auto& pair : agents_) {
         result.push_back(pair.second);
@@ -73,14 +77,20 @@ bool AgentRuntime::load_workflow(const AgentId& agent_id, WorkflowPtr workflow) 
     if (!agent || !workflow) {
         return false;
     }
-    
+
     agent->add_workflow(workflow);
     if (!workflow->validate()) {
         agent->remove_workflow(workflow->get_id());
+        Logger::instance().error_f("Workflow validation failed: %s",
+                                 workflow->get_name().c_str());
         return false;
     }
-    
-    Logger::instance().info_f("Workflow loaded: %s", workflow->get_name().c_str());
+
+    Logger::instance().info_f("Workflow loaded into agent %s: %s (id: %s, %zu nodes)",
+                            agent_id.c_str(),
+                            workflow->get_name().c_str(),
+                            workflow->get_id().c_str(),
+                            workflow->get_nodes().size());
     return true;
 }
 
@@ -89,49 +99,294 @@ bool AgentRuntime::unload_workflow(const AgentId& agent_id, const WorkflowId& wo
     if (!agent) {
         return false;
     }
-    
+
     agent->remove_workflow(workflow_id);
+    Logger::instance().info_f("Workflow unloaded from agent %s: %s",
+                            agent_id.c_str(),
+                            workflow_id.c_str());
     return true;
 }
 
 bool AgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId& workflow_id, const DataMap& inputs) {
     auto agent = get_agent(agent_id);
     auto workflow = agent ? agent->get_workflow(workflow_id) : nullptr;
-    
-    if (!workflow) {
+
+    if (!agent || !workflow) {
+        Logger::instance().error_f("Cannot execute workflow: agent=%s, workflow=%s",
+                                agent_id.c_str(),
+                                workflow_id.c_str());
         return false;
     }
-    
-    // Set input data
+
+    // Set input data to agent
     for (const auto& pair : inputs) {
         agent->publish_data(pair.first, pair.second);
     }
-    
-    Logger::instance().info_f("Executing workflow: %s", workflow->get_name().c_str());
+
+    // Create execution state for this workflow
+    std::string execution_id = agent_id + ":" + workflow_id + ":" +
+                               std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+
+    WorkflowExecutionState state;
+    state.workflow_id = workflow_id;
+    state.agent_id = agent_id;
+    state.total_nodes = static_cast<int>(workflow->get_nodes().size());
+    state.completed_count = 0;
+    state.in_progress = true;
+
+    {
+        std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+        workflow_states_[execution_id] = state;
+    }
+
+    Logger::instance().info_f("Starting workflow execution: %s (execution_id: %s)",
+                            workflow->get_name().c_str(),
+                            execution_id.c_str());
+
+    // Initialize all nodes to READY state
+    for (const auto& node : workflow->get_nodes()) {
+        if (node->get_state() != NodeState::WAITING &&
+            node->get_state() != NodeState::READY) {
+            node->set_state(NodeState::READY);
+            if (!node->initialize()) {
+                Logger::instance().error_f("Failed to initialize node: %s",
+                                        node->get_name().c_str());
+                node->set_state(NodeState::FAILED);
+                update_workflow_state(execution_id, node->get_id(), false);
+            }
+        }
+    }
+
+    // Schedule executable nodes
+    schedule_workflow_executable_nodes(execution_id);
+
     return true;
 }
 
 void AgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr node) {
-    if (!agent || !workflow || !node) {
+    if (!agent || !node) {
         return;
     }
-    
-    // Initialize node
-    if (!node->initialize()) {
-        node->set_state(NodeState::FAILED);
-        return;
-    }
-    
+
+    Logger::instance().info_f("Processing node: %s (state: %d)",
+                            node->get_name().c_str(),
+                            static_cast<int>(node->get_state()));
+
     // Execute node
     if (!node->execute()) {
-        node->set_state(NodeState::FAILED);
+        Logger::instance().error_f("Node execution failed: %s - %s",
+                                node->get_name().c_str(),
+                                node->get_retry_count() > 0 ?
+                                    "Retried " + std::to_string(node->get_retry_count()) + " times" : "");
+    } else {
+        Logger::instance().info_f("Node executed successfully: %s",
+                                node->get_name().c_str());
+    }
+
+    node->cleanup();
+
+    // Find execution state and update it
+    std::string execution_id = agent->get_id() + ":" + (workflow ? workflow->get_id() : "") + ":*";
+
+    // Find the matching execution state
+    {
+        std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+        for (auto& pair : workflow_states_) {
+            if (pair.second.workflow_id == (workflow ? workflow->get_id() : node->get_id()) &&
+                pair.second.agent_id == agent->get_id()) {
+                update_workflow_state(pair.first, node->get_id(), node->get_state() == NodeState::SUCCESS);
+                break;
+            }
+        }
+    }
+}
+
+void AgentRuntime::schedule_workflow_executable_nodes(const std::string& execution_id) {
+    std::lock_guard<std::mutex> state_lock(workflow_state_mutex_);
+
+    auto it = workflow_states_.find(execution_id);
+    if (it == workflow_states_.end()) {
         return;
     }
-    
-    // Cleanup node
-    node->cleanup();
-    
-    Logger::instance().info_f("Node executed: %s", node->get_name().c_str());
+
+    auto& state = it->second;
+    if (!state.in_progress) {
+        return;
+    }
+
+    // Find the agent and workflow
+    auto agent = get_agent(state.agent_id);
+    if (!agent) {
+        return;
+    }
+
+    auto workflow = agent->get_workflow(state.workflow_id);
+    if (!workflow) {
+        return;
+    }
+
+    // Get executable nodes
+    auto executable_nodes = workflow->get_executable_nodes();
+
+    // Submit executable nodes to task queue
+    {
+        std::lock_guard<std::mutex> lock(task_queue_mutex_);
+        for (const auto& node_id : executable_nodes) {
+            auto node = workflow->get_node(node_id);
+            if (node && node->get_state() == NodeState::READY) {
+                node_task_queue_.push({agent, node});
+            }
+        }
+    }
+
+    // Notify worker threads
+    g_worker_cv.notify_all();
+
+    Logger::instance().info_f("Scheduled %zu executable nodes for execution",
+                            executable_nodes.size());
+}
+
+void AgentRuntime::update_workflow_state(const std::string& execution_id, const NodeId& node_id, bool success) {
+    std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+
+    auto it = workflow_states_.find(execution_id);
+    if (it == workflow_states_.end()) {
+        return;
+    }
+
+    auto& state = it->second;
+
+    if (success) {
+        state.completed_nodes[node_id] = true;
+        state.completed_count++;
+    } else {
+        state.failed_nodes[node_id] = true;
+    }
+
+    Logger::instance().info_f("Workflow progress: %s - %d/%d completed, %zu failed",
+                            execution_id.c_str(),
+                            state.completed_count,
+                            state.total_nodes,
+                            state.failed_nodes.size());
+
+    // Check if workflow is complete
+    if (state.completed_count + static_cast<int>(state.failed_nodes.size()) >= state.total_nodes) {
+        state.in_progress = false;
+
+        if (state.failed_nodes.empty()) {
+            Logger::instance().info_f("Workflow execution completed successfully: %s",
+                                    state.workflow_id.c_str());
+            on_workflow_complete(state.agent_id, state.workflow_id, true);
+        } else {
+            Logger::instance().error_f("Workflow execution failed: %s (%zu nodes failed)",
+                                     state.workflow_id.c_str(),
+                                     state.failed_nodes.size());
+            on_workflow_complete(state.agent_id, state.workflow_id, false);
+        }
+    } else if (success) {
+        // Schedule next batch of executable nodes
+        g_worker_cv.notify_one();
+    }
+}
+
+void AgentRuntime::on_node_complete(const AgentId& agent_id, const WorkflowId& workflow_id, const NodeId& node_id, bool success) {
+    Logger::instance().info_f("Node complete event: agent=%s, workflow=%s, node=%s, success=%d",
+                            agent_id.c_str(),
+                            workflow_id.c_str(),
+                            node_id.c_str(),
+                            success ? 1 : 0);
+
+    // Trigger next nodes
+    auto agent = get_agent(agent_id);
+    if (!agent) {
+        return;
+    }
+
+    auto workflow = agent->get_workflow(workflow_id);
+    if (!workflow) {
+        return;
+    }
+
+    // Find next executable nodes
+    auto executable = workflow->get_executable_nodes();
+
+    if (!executable.empty()) {
+        std::lock_guard<std::mutex> lock(task_queue_mutex_);
+        for (const auto& node_id : executable) {
+            auto node = workflow->get_node(node_id);
+            if (node && node->get_state() == NodeState::READY) {
+                node_task_queue_.push({agent, node});
+            }
+        }
+        g_worker_cv.notify_all();
+    }
+}
+
+void AgentRuntime::on_workflow_complete(const AgentId& agent_id, const WorkflowId& workflow_id, bool success) {
+    Logger::instance().info_f("Workflow complete event: agent=%s, workflow=%s, success=%d",
+                            agent_id.c_str(),
+                            workflow_id.c_str(),
+                            success ? 1 : 0);
+
+    // Clean up execution state
+    std::string execution_id = agent_id + ":" + workflow_id + ":*";
+    {
+        std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+        workflow_states_.erase(execution_id);
+    }
+}
+
+void AgentRuntime::update_worker_load(int worker_id, int load_change) {
+    std::lock_guard<std::mutex> lock(worker_load_mutex_);
+
+    if (worker_id >= 0 && worker_id < num_worker_threads_) {
+        if (worker_loads_.size() <= static_cast<size_t>(worker_id)) {
+            worker_loads_.resize(num_worker_threads_, 0);
+        }
+        worker_loads_[worker_id] += load_change;
+    }
+}
+
+int AgentRuntime::get_least_loaded_worker() {
+    std::lock_guard<std::mutex> lock(worker_load_mutex_);
+
+    if (worker_loads_.empty()) {
+        return 0;
+    }
+
+    int min_load = worker_loads_[0];
+    int min_worker = 0;
+
+    for (size_t i = 1; i < worker_loads_.size(); ++i) {
+        if (worker_loads_[i] < min_load) {
+            min_load = worker_loads_[i];
+            min_worker = static_cast<int>(i);
+        }
+    }
+
+    return min_worker;
+}
+
+void AgentRuntime::monitor_agents() {
+    // Agent Level Master: monitor agent health
+    std::lock_guard<std::mutex> lock(agents_mutex_);
+
+    for (const auto& pair : agents_) {
+        check_agent_health(pair.first);
+    }
+}
+
+void AgentRuntime::check_agent_health(const AgentId& agent_id) {
+    // Check agent health (simplified implementation)
+    auto agent = get_agent(agent_id);
+    if (agent) {
+        auto state = agent->get_state();
+        // In production, check agent health metrics
+        // For now, just log the state
+        Logger::instance().info_f("Agent health check: %s (state: %d)",
+                                agent_id.c_str(),
+                                static_cast<int>(state));
+    }
 }
 
 int AgentRuntime::get_active_agents() const {
@@ -143,30 +398,52 @@ int AgentRuntime::get_active_workflows() const {
     std::lock_guard<std::mutex> lock(agents_mutex_);
     int count = 0;
     for (const auto& pair : agents_) {
-        count += pair.second->get_workflows().size();
+        count += static_cast<int>(pair.second->get_workflows().size());
     }
     return count;
 }
 
 int AgentRuntime::get_running_nodes() const {
-    // Simplified implementation
-    return 0;
+    // Count nodes in EXECUTING state across all workflows
+    int running_count = 0;
+
+    std::lock_guard<std::mutex> lock(agents_mutex_);
+    for (const auto& pair : agents_) {
+        const auto& workflows = pair.second->get_workflows();
+        for (const auto& workflow : workflows) {
+            const auto& nodes = workflow->get_nodes();
+            for (const auto& node : nodes) {
+                if (node->get_state() == NodeState::EXECUTING) {
+                    running_count++;
+                }
+            }
+        }
+    }
+
+    return running_count;
 }
 
 bool AgentRuntime::start() {
     if (is_running_) {
         return false;
     }
-    
+
     is_running_ = true;
     g_shutdown = false;
-    
+
+    // Initialize worker load tracking
+    {
+        std::lock_guard<std::mutex> lock(worker_load_mutex_);
+        worker_loads_.resize(num_worker_threads_, 0);
+    }
+
     // Start worker threads
     for (int i = 0; i < num_worker_threads_; ++i) {
         worker_threads_.emplace_back(&AgentRuntime::worker_thread_main, this);
     }
-    
-    Logger::instance().info("AgentRuntime started");
+
+    Logger::instance().info_f("AgentRuntime started with %d worker threads",
+                            num_worker_threads_);
     return true;
 }
 
@@ -174,13 +451,13 @@ bool AgentRuntime::stop() {
     if (!is_running_) {
         return false;
     }
-    
+
     is_running_ = false;
     g_shutdown = true;
-    
+
     // Notify all worker threads
     g_worker_cv.notify_all();
-    
+
     // Wait for all worker threads to finish
     for (auto& thread : worker_threads_) {
         if (thread.joinable()) {
@@ -188,47 +465,58 @@ bool AgentRuntime::stop() {
         }
     }
     worker_threads_.clear();
-    
+
     Logger::instance().info("AgentRuntime stopped");
     return true;
 }
 
 HighSpeedDataBus& AgentRuntime::get_databus(const AgentId& agent_id) {
     std::lock_guard<std::mutex> lock(agents_mutex_);
-    
+
     if (databuses_.find(agent_id) == databuses_.end()) {
         databuses_[agent_id] = std::unique_ptr<HighSpeedDataBus>(
             new HighSpeedDataBus(1024 * 1024)
         );
     }
-    
+
     return *databuses_[agent_id];
 }
 
 void AgentRuntime::worker_thread_main() {
+    int worker_id = std::rand() % num_worker_threads_;
+
     while (is_running_) {
         std::unique_lock<std::mutex> lock(g_worker_mutex);
-        
+
         // Wait for tasks or shutdown signal
-        g_worker_cv.wait_for(lock, std::chrono::milliseconds(100), 
+        g_worker_cv.wait_for(lock, std::chrono::milliseconds(100),
             [this]() { return !node_task_queue_.empty() || !is_running_; });
-        
+
         if (!is_running_) {
             break;
         }
-        
+
         // Process pending tasks
         std::lock_guard<std::mutex> task_lock(task_queue_mutex_);
         while (!node_task_queue_.empty()) {
-            auto pair = node_task_queue_.front();
+            auto task = node_task_queue_.front();
             node_task_queue_.pop();
-            
-            auto agent = pair.first;
-            auto node = pair.second;
-            
+
+            auto agent = task.first;
+            auto node = task.second;
+
+            // Update worker load
+            update_worker_load(worker_id, 1);
+
+            // Process node
             process_node(agent, nullptr, node);
+
+            // Update worker load
+            update_worker_load(worker_id, -1);
         }
     }
+
+    Logger::instance().info_f("Worker thread %d exiting", worker_id);
 }
 
 } // namespace runtime

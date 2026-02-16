@@ -1,5 +1,8 @@
 #include "agentflow/framework/workflow.h"
+#include "agentflow/basic/logger.h"
 #include <algorithm>
+#include <unordered_set>
+#include <queue>
 
 namespace agentflow {
 namespace framework {
@@ -67,23 +70,28 @@ bool Workflow::update_dynamic(const std::string& dsl_content) {
 }
 
 std::vector<NodeId> Workflow::get_topological_order() {
-    std::vector<NodeId> result;
-    // Implement topological sort based on edges
-    // Simplified implementation
-    for (const auto& node : nodes_) {
-        result.push_back(node->get_id());
+    // If cached order is valid, return it
+    if (topological_order_valid_) {
+        return topological_order_;
     }
-    return result;
+
+    // Compute topological order using Kahn's algorithm
+    compute_topological_order();
+
+    return topological_order_;
 }
 
 std::vector<NodeId> Workflow::get_executable_nodes() {
     std::vector<NodeId> executable;
-    
+
     for (const auto& node : nodes_) {
         // Check if all dependencies are satisfied
         bool all_deps_ready = true;
+        int in_edge_count = 0;
+
         for (const auto& edge : edges_) {
             if (edge->get_target() == node->get_id()) {
+                in_edge_count++;
                 // Check if source node is done
                 auto source = get_node(edge->get_source());
                 if (source && source->get_state() != NodeState::SUCCESS) {
@@ -92,23 +100,140 @@ std::vector<NodeId> Workflow::get_executable_nodes() {
                 }
             }
         }
-        
+
+        // Nodes with no incoming edges (sources) are always ready to execute
+        // if they are in READY state
+        if (in_edge_count == 0) {
+            all_deps_ready = true;
+        }
+
         if (all_deps_ready && node->get_state() == NodeState::READY) {
             executable.push_back(node->get_id());
         }
     }
-    
+
     return executable;
 }
 
 bool Workflow::validate_dag() {
-    // Check for cycles in DAG
-    // Simplified implementation
+    // Check for cycles in DAG using DFS coloring
+    enum class Color {
+        WHITE,  // Not visited
+        GRAY,   // Being visited (in recursion stack)
+        BLACK    // Visited
+    };
+
+    std::map<NodeId, Color> colors;
+
+    // Initialize all nodes as WHITE
+    for (const auto& node : nodes_) {
+        colors[node->get_id()] = Color::WHITE;
+    }
+
+    // Build adjacency list for the graph
+    std::map<NodeId, std::vector<NodeId>> adjacency;
+    for (const auto& edge : edges_) {
+        adjacency[edge->get_source()].push_back(edge->get_target());
+    }
+
+    // DFS to detect cycles
+    std::function<bool(const NodeId&)> dfs = [&](const NodeId& node_id) -> bool {
+        colors[node_id] = Color::GRAY;  // Mark as being visited
+
+        // Visit all neighbors
+        if (adjacency.find(node_id) != adjacency.end()) {
+            for (const auto& neighbor_id : adjacency[node_id]) {
+                if (colors[neighbor_id] == Color::GRAY) {
+                    // Back edge found - cycle detected
+                    Logger::instance().error_f("Cycle detected in workflow: %s -> %s",
+                                            node_id.c_str(), neighbor_id.c_str());
+                    return false;
+                } else if (colors[neighbor_id] == Color::WHITE) {
+                    if (!dfs(neighbor_id)) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        colors[node_id] = Color::BLACK;  // Mark as fully visited
+        return true;
+    };
+
+    // Run DFS from each unvisited node
+    for (const auto& node : nodes_) {
+        if (colors[node->get_id()] == Color::WHITE) {
+            if (!dfs(node->get_id())) {
+                return false;
+            }
+        }
+    }
+
+    Logger::instance().info("Workflow DAG validation passed - no cycles detected");
     return true;
 }
 
 bool Workflow::compute_topological_order() {
-    // Compute and cache topological order
+    // Use Kahn's algorithm to compute topological order
+    std::map<NodeId, int> in_degree;
+
+    // Initialize in-degree of all nodes
+    for (const auto& node : nodes_) {
+        in_degree[node->get_id()] = 0;
+    }
+
+    // Calculate in-degree for each node
+    for (const auto& edge : edges_) {
+        in_degree[edge->get_target()]++;
+    }
+
+    // Queue for nodes with zero in-degree
+    std::queue<NodeId> zero_in_degree;
+    for (const auto& node : nodes_) {
+        if (in_degree[node->get_id()] == 0) {
+            zero_in_degree.push(node->get_id());
+        }
+    }
+
+    // Build adjacency list
+    std::map<NodeId, std::vector<NodeId>> adjacency;
+    for (const auto& edge : edges_) {
+        adjacency[edge->get_source()].push_back(edge->get_target());
+    }
+
+    // Process nodes in topological order
+    topological_order_.clear();
+    int processed_count = 0;
+
+    while (!zero_in_degree.empty()) {
+        NodeId current = zero_in_degree.front();
+        zero_in_degree.pop();
+        topological_order_.push_back(current);
+        processed_count++;
+
+        // Remove all outgoing edges from current node
+        if (adjacency.find(current) != adjacency.end()) {
+            for (const auto& neighbor : adjacency[current]) {
+                in_degree[neighbor]--;
+                if (in_degree[neighbor] == 0) {
+                    zero_in_degree.push(neighbor);
+                }
+            }
+        }
+    }
+
+    // Check if topological sort is possible (no cycle)
+    if (processed_count != static_cast<int>(nodes_.size())) {
+        Logger::instance().error("Failed to compute topological order - cycle detected");
+        topological_order_.clear();
+        return false;
+    }
+
+    topological_order_valid_ = true;
+
+    Logger::instance().info_f("Computed topological order with %zu nodes",
+                            topological_order_.size());
+
     return true;
 }
 

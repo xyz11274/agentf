@@ -91,6 +91,7 @@ set(AGENTFLOW_RUNTIME_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/databus.cpp
     ${AGENTFLOW_SOURCE_DIR}/event.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent_runtime.cpp
+    ${AGENTFLOW_SOURCE_DIR}/metrics.cpp
 )
 
 set(AGENTFLOW_BASIC_SOURCES
@@ -113,6 +114,7 @@ endif()
 set(AGENTFLOW_DSL_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/dsl/json_adapter_factory.cpp
     ${AGENTFLOW_SOURCE_DIR}/dsl/json_adapter_stub.cpp
+    ${AGENTFLOW_SOURCE_DIR}/dsl/workflow_parser.cpp
 )
 
 if(USE_RAPIDJSON)
@@ -200,6 +202,18 @@ target_link_libraries(example_basic PRIVATE agentflow)
 # Adapter example
 add_executable(example_adapter ${AGENTFLOW_EXAMPLE_DIR}/adapter_example.cpp)
 target_link_libraries(example_adapter PRIVATE agentflow)
+
+# DSL parser example
+add_executable(example_dsl ${AGENTFLOW_EXAMPLE_DIR}/dsl_example.cpp)
+target_link_libraries(example_dsl PRIVATE agentflow)
+
+# Node execution example
+add_executable(example_node_execution ${AGENTFLOW_EXAMPLE_DIR}/node_execution_example.cpp)
+target_link_libraries(example_node_execution PRIVATE agentflow)
+
+# Metrics collector example
+add_executable(example_metrics ${AGENTFLOW_EXAMPLE_DIR}/metrics_example.cpp)
+target_link_libraries(example_metrics PRIVATE agentflow)
 
 # Tests
 enable_testing()
