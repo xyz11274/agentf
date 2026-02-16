@@ -6,11 +6,15 @@
 #ifdef AGENTFLOW_WITH_PROTOACTOR
 
 #include "agentflow/actor/adapter/protoactor_impl.h"
+#include "agentflow/actor/message_serializer.h"
+#include "agentflow/basic/logger.h"
 #include "protoactor/actor_system.h"
 #include "protoactor/context.h"
 #include "protoactor/pid.h"
 #include "protoactor/props.h"
+#include "protoactor/ask.h"
 #include <thread>
+#include <chrono>
 
 namespace agentflow {
 namespace actor {
@@ -31,8 +35,11 @@ std::string ProtoactorActorRef::address() const {
 }
 
 bool ProtoactorActorRef::is_alive() const {
-  // TODO: Implement proper liveness check
-  return pid_ != nullptr;
+  // Protoactor-cpp provides liveness checking
+  if (!pid_) {
+    return false;
+  }
+  return !pid_->Stopped();
 }
 
 std::string ProtoactorActorRef::to_string() const {
@@ -55,7 +62,7 @@ std::shared_ptr<IActorRef> ProtoactorContext::self() {
   if (!ctx_) {
     return nullptr;
   }
-  
+
   auto self_pid = ctx_->Self();
   return std::make_shared<ProtoactorActorRef>(self_pid);
 }
@@ -64,12 +71,12 @@ std::shared_ptr<IActorRef> ProtoactorContext::parent() {
   if (!ctx_) {
     return nullptr;
   }
-  
+
   auto parent_pid = ctx_->Parent();
-  if (!parent_pid) {
+  if (!parent_pid || parent_pid->Stopped()) {
     return nullptr;
   }
-  
+
   return std::make_shared<ProtoactorActorRef>(parent_pid);
 }
 
@@ -77,12 +84,12 @@ std::shared_ptr<IActorRef> ProtoactorContext::sender() {
   if (!ctx_) {
     return nullptr;
   }
-  
+
   auto sender_pid = ctx_->Sender();
-  if (!sender_pid) {
+  if (!sender_pid || sender_pid->Stopped()) {
     return nullptr;
   }
-  
+
   return std::make_shared<ProtoactorActorRef>(sender_pid);
 }
 
@@ -101,13 +108,12 @@ void ProtoactorContext::send(IActorRef* target, const ActorMessage& msg) {
   }
 
   auto target_pid = actor_ref->get_pid();
-  if (!target_pid) {
+  if (!target_pid || target_pid->Stopped()) {
     return;
   }
 
-  // Convert ActorMessage to Protoactor message
-  // This is a simplified version - real implementation would need
-  // proper message serialization
+  // Send using Protoactor's send method
+  // For local messages, we can pass the payload directly
   ctx_->Send(target_pid, msg.payload);
 }
 
@@ -115,26 +121,41 @@ ActorMessage ProtoactorContext::ask(IActorRef* target,
                                     const ActorMessage& msg,
                                     int timeout_ms) {
   ActorMessage result;
-  
+
   if (!ctx_ || !target) {
+    result.message_type = "error";
     return result;
   }
 
   auto actor_ref = dynamic_cast<ProtoactorActorRef*>(target);
   if (!actor_ref) {
+    result.message_type = "error";
     return result;
   }
 
   auto target_pid = actor_ref->get_pid();
-  if (!target_pid) {
+  if (!target_pid || target_pid->Stopped()) {
+    result.message_type = "error";
     return result;
   }
 
   try {
-    // Request-reply pattern using Protoactor
-    // TODO: Implement proper ask pattern with timeout
-    result.message_type = "timeout";
-  } catch (const std::exception&) {
+    // Use Protoactor's built-in ask functionality
+    auto response_future = protoactor::Ask(target_pid, msg.payload,
+                                          std::chrono::milliseconds(timeout_ms));
+
+    // Wait for the response
+    auto status = response_future.wait_for(std::chrono::milliseconds(timeout_ms));
+
+    if (status == std::future_status::ready) {
+      auto response_payload = response_future.get();
+      result.payload = response_payload;
+      result.message_type = "response";
+    } else {
+      result.message_type = "timeout";
+    }
+  } catch (const std::exception& e) {
+    Logger::instance().error(std::string("ask failed: ") + e.what());
     result.message_type = "error";
   }
 
@@ -153,12 +174,20 @@ void ProtoactorBridge::Receive(std::shared_ptr<protoactor::Context> context) {
     return;
   }
 
+  // Create adapter context
   auto adapter_context = std::make_shared<ProtoactorContext>(context);
-  
+
+  // Set current message in context
+  ActorMessage current_msg;
+  current_msg.message_type = context->Message()->GetType();
+  current_msg.payload = context->Message()->GetPayload();
+  adapter_context->current_msg_ = current_msg;
+
   try {
     actor_->on_message(adapter_context);
-  } catch (const std::exception&) {
-    // Handle exception - could stop actor or log error
+  } catch (const std::exception& e) {
+    Logger::instance().error(std::string("Actor message processing error: ") + e.what());
+    // Optionally restart or stop the actor
   }
 }
 
@@ -205,7 +234,10 @@ std::shared_ptr<IActorRef> ProtoactorActorSystem::spawn_with_config(
           return bridge;
         });
 
-    // TODO: Apply mailbox_size configuration if needed
+    // Apply mailbox configuration
+    if (mailbox_size > 0) {
+      props = props.WithMailbox(mailbox_size);
+    }
 
     // Spawn the actor
     auto root = system_->GetRoot();
@@ -217,24 +249,45 @@ std::shared_ptr<IActorRef> ProtoactorActorSystem::spawn_with_config(
     if (actor_name.empty()) {
       pid = root->Spawn(props);
     } else {
-      // Named spawn - implementation depends on Protoactor version
-      pid = root->Spawn(props);  // TODO: Support named actors
+      // Named spawn using Protoactor's named spawn feature
+      pid = root->SpawnNamed(props, actor_name);
+      if (!pid) {
+        // Fallback to regular spawn if named spawn not available
+        pid = root->Spawn(props);
+      }
     }
 
-    if (!pid) {
+    if (!pid || pid->Stopped()) {
       return nullptr;
     }
 
     return std::make_shared<ProtoactorActorRef>(pid);
-  } catch (const std::exception&) {
+  } catch (const std::exception& e) {
+    Logger::instance().error(std::string("Failed to spawn actor: ") + e.what());
     return nullptr;
   }
 }
 
 std::shared_ptr<IActorRef> ProtoactorActorSystem::get_actor(
     const std::string& address) {
-  // TODO: Implement actor lookup by address
-  return nullptr;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!system_ || shutdown_called_) {
+      return nullptr;
+    }
+  }
+
+  try {
+    // Use Protoactor's actor lookup functionality
+    auto pid = system_->GetPID(address);
+    if (!pid || pid->Stopped()) {
+      return nullptr;
+    }
+    return std::make_shared<ProtoactorActorRef>(pid);
+  } catch (const std::exception& e) {
+    Logger::instance().error(std::string("Failed to get actor: ") + e.what());
+    return nullptr;
+  }
 }
 
 void ProtoactorActorSystem::stop(std::shared_ptr<IActorRef> actor_ref) {
@@ -255,7 +308,7 @@ void ProtoactorActorSystem::stop(std::shared_ptr<IActorRef> actor_ref) {
   }
 
   auto pid = protoactor_ref->get_pid();
-  if (!pid) {
+  if (!pid || pid->Stopped()) {
     return;
   }
 
@@ -267,7 +320,7 @@ void ProtoactorActorSystem::stop(std::shared_ptr<IActorRef> actor_ref) {
 
 void ProtoactorActorSystem::shutdown() {
   std::lock_guard<std::mutex> lock(mutex_);
-  
+
   if (shutdown_called_) {
     return;
   }
@@ -276,7 +329,7 @@ void ProtoactorActorSystem::shutdown() {
 
   if (system_) {
     system_->Shutdown();
-    // Wait a bit for shutdown to complete
+    // Wait for shutdown to complete
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 }
@@ -302,7 +355,7 @@ bool ProtoactorActorSystem::wait_shutdown(int timeout_ms) {
       auto now = std::chrono::high_resolution_clock::now();
       auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
           now - start).count();
-      
+
       if (elapsed > timeout_ms) {
         return false;  // Timeout
       }

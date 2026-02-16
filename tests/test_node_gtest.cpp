@@ -78,8 +78,18 @@ TEST_F(NodeTest, NodeDataHandling) {
 
   const DataMap& retrieved_input = node.get_inputs();
   EXPECT_EQ(retrieved_input.size(), 2);
-  EXPECT_EQ(retrieved_input.at("key1"), "value1");
-  EXPECT_EQ(retrieved_input.at("key2"), "value2");
+  // Compare DataVariant values using std::visit
+  auto compare_variant = [](const DataVariant& v, const std::string& expected) {
+    return std::visit([&expected](auto&& arg) -> bool {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, std::string>) {
+        return arg == expected;
+      }
+      return false;
+    }, v);
+  };
+  EXPECT_TRUE(compare_variant(retrieved_input.at("key1"), "value1"));
+  EXPECT_TRUE(compare_variant(retrieved_input.at("key2"), "value2"));
 
   // Set output data
   DataMap output;
@@ -87,7 +97,7 @@ TEST_F(NodeTest, NodeDataHandling) {
   node.set_outputs(output);
 
   const DataMap& retrieved_output = node.get_outputs();
-  EXPECT_EQ(retrieved_output.at("result"), "success");
+  EXPECT_TRUE(compare_variant(retrieved_output.at("result"), "success"));
 }
 
 // Test Node lifecycle

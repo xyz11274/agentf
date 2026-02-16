@@ -14,6 +14,10 @@
 #include "agentflow/actor/actors.h"
 #include "protoactor/actor.h"
 
+namespace protoactor {
+class Context;
+}
+
 namespace agentflow {
 namespace actor {
 
@@ -51,12 +55,39 @@ class NodeActor : public protoactor::Actor,
   DataMap input_data_;
   DataMap output_data_;
   int retry_count_ = 0;
+  uint64_t start_time_;
+
+  /// @brief Handle InitializeNodeMessage
+  void handle_initialize_node(const InitializeNodeMessage& msg);
 
   /// @brief Handle ExecuteNodeMessage
   void handle_execute_node(const ExecuteNodeMessage& msg);
 
+  /// @brief Handle StopNodeMessage
+  void handle_stop_node(const StopNodeMessage& msg);
+
+  /// @brief Handle NodeStatusMessage
+  void handle_status_query(const NodeStatusMessage& msg,
+                          std::shared_ptr<protoactor::Context> context);
+
+  /// @brief Handle NodeHealthCheckMessage
+  void handle_health_check(const NodeHealthCheckMessage& msg,
+                          std::shared_ptr<protoactor::Context> context);
+
   /// @brief Send result back to parent workflow actor
-  void send_result(Status status);
+  void send_result(Status status, const std::string& error_message = "");
+
+  /// @brief Execute C++ Actor-based node
+  bool execute_cpp_actor();
+
+  /// @brief Execute shell script node
+  bool execute_shell_script();
+
+  /// @brief Execute Python script node
+  bool execute_python_script();
+
+  /// @brief Convert NodeState to string
+  static std::string node_state_to_string(NodeState state);
 };
 
 }  // namespace actor

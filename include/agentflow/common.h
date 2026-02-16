@@ -7,6 +7,7 @@
 #include <map>
 #include <functional>
 #include <stdint.h>
+#include <variant>
 
 namespace agentflow {
 
@@ -56,7 +57,8 @@ enum class WorkflowState {
 };
 
 // Shared data types
-using DataVariant = std::string;  // Simplified for now, can be extended
+using DataVariant = std::variant<int64_t, double, std::string, bool>;
+using DataValue = DataVariant;  // Alias for consistency
 using DataMap = std::map<std::string, DataVariant>;
 // Event types for control flow
 enum class EventType {

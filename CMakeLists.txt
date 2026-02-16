@@ -50,6 +50,11 @@ endif()
 find_package(PkgConfig QUIET)
 
 # ============================================================================
+# Build options
+# ============================================================================
+option(USE_LIBEVENT "Enable libevent for event loop support" ON)
+
+# ============================================================================
 # Find optional dependencies (all with graceful fallback to stub implementations)
 # ============================================================================
 
@@ -128,39 +133,38 @@ else()
 endif()
 
 # libevent for event loop support
-find_package(libevent CONFIG QUIET
-  PATHS
-    "${CMAKE_INSTALL_PREFIX}"
-    "${HOMEBREW_PREFIX}"
-  PATH_SUFFIXES
-    lib/cmake
-    lib/cmake/libevent
-    share/cmake
-)
-if(libevent_FOUND)
-  message(STATUS "libevent found - enabling event loop support")
-  set(USE_LIBEVENT ON)
-else()
-  # Try pkg-config as fallback
-  if(PKG_CONFIG_FOUND)
-    pkg_check_modules(LIBEVENT libevent)
-  endif()
-  if(LIBEVENT_FOUND)
-    message(STATUS "libevent found (via pkg-config) - enabling event loop support")
-    set(USE_LIBEVENT ON)
-    # Add pkg-config variables
-    if(LIBEVENT_INCLUDE_DIRS)
-      include_directories(${LIBEVENT_INCLUDE_DIRS})
-    endif()
-    if(LIBEVENT_LIBRARIES)
-      # Create an imported target for libevent
-      add_library(libevent::libevent STATIC IMPORTED)
-      set_target_properties(libevent::libevent PROPERTIES
-        IMPORTED_LOCATION "${LIBEVENT_LIBRARIES}"
-        INTERFACE_INCLUDE_DIRECTORIES "${LIBEVENT_INCLUDE_DIRS}"
-      )
-    endif()
+if(USE_LIBEVENT)
+  find_package(libevent CONFIG QUIET
+    PATHS
+      "${CMAKE_INSTALL_PREFIX}"
+      "${HOMEBREW_PREFIX}"
+    PATH_SUFFIXES
+      lib/cmake
+      lib/cmake/libevent
+      share/cmake
+  )
+  if(libevent_FOUND)
+    message(STATUS "libevent found - enabling event loop support")
   else()
+    # Try pkg-config as fallback
+    if(PKG_CONFIG_FOUND)
+      pkg_check_modules(LIBEVENT libevent)
+    endif()
+    if(LIBEVENT_FOUND)
+      message(STATUS "libevent found (via pkg-config) - enabling event loop support")
+      # Add pkg-config variables
+      if(LIBEVENT_INCLUDE_DIRS)
+        include_directories(${LIBEVENT_INCLUDE_DIRS})
+      endif()
+      if(LIBEVENT_LIBRARIES)
+        # Create an imported target for libevent
+        add_library(libevent::libevent STATIC IMPORTED)
+        set_target_properties(libevent::libevent PROPERTIES
+          IMPORTED_LOCATION "${LIBEVENT_LIBRARIES}"
+          INTERFACE_INCLUDE_DIRECTORIES "${LIBEVENT_INCLUDE_DIRS}"
+        )
+      endif()
+    endif()
     # Try find_library and find_path as last resort
     find_library(LIBEVENT_LIB
       NAMES event event_core
@@ -296,6 +300,8 @@ set(AGENTFLOW_ACTOR_SOURCES
 if(USE_PROTOACTOR)
   list(APPEND AGENTFLOW_ACTOR_SOURCES
        ${AGENTFLOW_SOURCE_DIR}/actor/protoactor_impl.cpp
+       ${AGENTFLOW_SOURCE_DIR}/actor/message_serializer.cpp
+       ${AGENTFLOW_SOURCE_DIR}/actor/ask_pattern_manager.cpp
   )
 endif()
 
@@ -316,6 +322,8 @@ endif()
 set(AGENTFLOW_NETWORK_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/network/adapter_factory.cpp
     ${AGENTFLOW_SOURCE_DIR}/network/private_protocol.cpp
+    ${AGENTFLOW_SOURCE_DIR}/network/request.cpp
+    ${AGENTFLOW_SOURCE_DIR}/network/response.cpp
 )
 
 # Serialization sources
@@ -326,6 +334,7 @@ set(AGENTFLOW_SERIALIZATION_SOURCES
 # Event sources
 set(AGENTFLOW_EVENT_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/event/adapter_factory.cpp
+    ${AGENTFLOW_SOURCE_DIR}/event/eventloop_adapter/libevent_impl.cpp
 )
 
 # Storage sources
@@ -344,6 +353,7 @@ set(AGENTFLOW_CONTROL_FLOW_SOURCES
 # Zero-copy data bus sources
 set(AGENTFLOW_ZERO_COPY_DATABUS_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/runtime/zero_copy_databus.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/local_channel.cpp
 )
 
 set(AGENTFLOW_SOURCES
@@ -467,6 +477,11 @@ if(USE_GTEST)
       ${AGENTFLOW_TEST_DIR}/test_node_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/test_databus_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/test_event_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/test_eventloop_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/test_workflow_json_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/test_agent_json_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/test_local_channel_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/test_request_response_gtest.cpp
   )
   if(TARGET GTest::gtest)
     target_link_libraries(test_agentflow_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)

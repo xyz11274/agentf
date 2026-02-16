@@ -64,22 +64,46 @@ void example_zero_copy_databus() {
     // Get data (with zero-copy access if available)
     DataVariant value;
     if (databus.get("key1", value)) {
-        Logger::instance().info_f("key1: %s", value.c_str());
+        std::string value_str = std::visit([](auto&& arg) -> std::string {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, std::string>) {
+                return arg;
+            } else {
+                return std::to_string(arg);
+            }
+        }, value);
+        Logger::instance().info_f("key1: %s", value_str.c_str());
     }
 
     // Get data pointer directly (zero-copy access)
     const DataVariant* value_ptr = databus.get_data_ptr("key2");
     if (value_ptr) {
-        Logger::instance().info_f("key2 (ptr): %s", value_ptr->c_str());
+        std::string value_str = std::visit([](auto&& arg) -> std::string {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, std::string>) {
+                return arg;
+            } else {
+                return std::to_string(arg);
+            }
+        }, *value_ptr);
+        Logger::instance().info_f("key2 (ptr): %s", value_str.c_str());
     }
 
     // Subscribe to data changes
     int notification_count = 0;
     databus.subscribe("key3", [&notification_count](const std::string& key,
                                                 const DataVariant& value) {
+        std::string value_str = std::visit([](auto&& arg) -> std::string {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<T, std::string>) {
+                return arg;
+            } else {
+                return std::to_string(arg);
+            }
+        }, value);
         Logger::instance().info_f("Subscription notification #%d: %s = %s",
                               ++notification_count, key.c_str(),
-                              value.c_str());
+                              value_str.c_str());
     });
 
     // Modify data and trigger notification

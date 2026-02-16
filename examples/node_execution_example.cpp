@@ -73,7 +73,14 @@ int main() {
         auto it = outputs.find("stdout");
         if (it != outputs.end()) {
             Logger::instance().info("Command output:");
-            Logger::instance().info(it->second);
+            std::visit([](auto&& arg) {
+                using T = std::decay_t<decltype(arg)>;
+                if constexpr (std::is_same_v<T, std::string>) {
+                    Logger::instance().info(arg);
+                } else {
+                    Logger::instance().info_f("%s", std::to_string(arg).c_str());
+                }
+            }, it->second);
         }
     } else {
         Logger::instance().error("Shell node execution failed");
@@ -108,7 +115,14 @@ int main() {
         auto it = outputs.find("stdout");
         if (it != outputs.end()) {
             Logger::instance().info("Echo output:");
-            Logger::instance().info(it->second);
+            std::visit([](auto&& arg) {
+                using T = std::decay_t<decltype(arg)>;
+                if constexpr (std::is_same_v<T, std::string>) {
+                    Logger::instance().info(arg);
+                } else {
+                    Logger::instance().info_f("%s", std::to_string(arg).c_str());
+                }
+            }, it->second);
         }
     } else {
         Logger::instance().error("Echo node execution failed");

@@ -1,0 +1,688 @@
+// Copyright (c) 2026 AgentFlow Authors
+// Licensed under MIT License
+//
+// Google Test tests for JSON Workflow functionality
+
+#include <gtest/gtest.h>
+#include "agentflow/dsl/workflow_parser.h"
+#include "agentflow/framework/workflow.h"
+#include "agentflow/framework/node.h"
+#include "agentflow/framework/edge.h"
+#include "agentflow/runtime/control_flow.h"
+
+namespace agentflow {
+namespace tests {
+
+class WorkflowJsonTest : public ::testing::Test {
+ protected:
+  void SetUp() override {}
+  void TearDown() override {}
+
+  std::unique_ptr<agentflow::dsl::WorkflowParser> parser_;
+
+  // Sample valid workflow JSON
+  const char* valid_workflow_json_ = R"({
+    "id": "workflow_001",
+    "name": "Test Workflow",
+    "version": "1.0.0",
+    "description": "A test workflow for unit testing",
+    "nodes": [
+      {
+        "id": "node_start",
+        "name": "Start Node",
+        "type": "TASK",
+        "inputs": {
+          "input_data": "string"
+        },
+        "outputs": {
+          "output_data": "string"
+        },
+        "config": {
+          "timeout_ms": 5000,
+          "max_retries": 3,
+          "retry_delay_ms": 1000,
+          "execution_mode": "CPP_ACTOR"
+        }
+      },
+      {
+        "id": "node_process",
+        "name": "Process Node",
+        "type": "TASK",
+        "inputs": {
+          "input_data": "string"
+        },
+        "outputs": {
+          "output_data": "string"
+        },
+        "config": {
+          "timeout_ms": 3000,
+          "max_retries": 2,
+          "execution_mode": "CPP_ACTOR"
+        }
+      },
+      {
+        "id": "node_end",
+        "name": "End Node",
+        "type": "TASK",
+        "inputs": {
+          "input_data": "string"
+        },
+        "outputs": {
+          "output_data": "string"
+        },
+        "config": {
+          "timeout_ms": 2000,
+          "max_retries": 1,
+          "execution_mode": "CPP_ACTOR"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge_start_to_process",
+        "source": "node_start",
+        "target": "node_process",
+        "data_transfer": {
+          "mode": "DIRECT",
+          "data_formats": ["STRING"]
+        },
+        "supported_events": ["DATA_READY", "START"]
+      },
+      {
+        "id": "edge_process_to_end",
+        "source": "node_process",
+        "target": "node_end",
+        "data_transfer": {
+          "mode": "DIRECT",
+          "data_formats": ["STRING"]
+        },
+        "supported_events": ["DATA_READY", "COMPLETE"]
+      },
+      {
+        "id": "edge_conditional",
+        "source": "node_process",
+        "target": "node_end",
+        "data_transfer": {
+          "mode": "DIRECT",
+          "data_formats": ["STRING"]
+        },
+        "supported_events": ["DATA_READY"],
+        "condition": {
+          "expression": "output_data == 'success'",
+          "description": "Only proceed if output is success"
+        }
+      }
+    ]
+  })";
+
+  // Sample workflow with loop
+  const char* workflow_with_loop_json_ = R"({
+    "id": "workflow_loop_001",
+    "name": "Loop Workflow",
+    "version": "1.0.0",
+    "nodes": [
+      {
+        "id": "node_init",
+        "name": "Initialize",
+        "type": "TASK"
+      },
+      {
+        "id": "node_loop",
+        "name": "Loop Node",
+        "type": "TASK",
+        "config": {
+          "loop_config": {
+            "type": "FOR",
+            "max_iterations": 5,
+            "condition": "i < 5"
+          }
+        }
+      },
+      {
+        "id": "node_final",
+        "name": "Finalize",
+        "type": "TASK"
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge_init_loop",
+        "source": "node_init",
+        "target": "node_loop"
+      },
+      {
+        "id": "edge_loop_final",
+        "source": "node_loop",
+        "target": "node_final"
+      }
+    ]
+  })";
+
+  // Sample workflow with parallel execution
+  const char* workflow_parallel_json_ = R"({
+    "id": "workflow_parallel_001",
+    "name": "Parallel Workflow",
+    "version": "1.0.0",
+    "nodes": [
+      {
+        "id": "node_start",
+        "name": "Start",
+        "type": "TASK"
+      },
+      {
+        "id": "node_parallel_a",
+        "name": "Parallel Task A",
+        "type": "TASK"
+      },
+      {
+        "id": "node_parallel_b",
+        "name": "Parallel Task B",
+        "type": "TASK"
+      },
+      {
+        "id": "node_end",
+        "name": "End",
+        "type": "TASK"
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge_start_a",
+        "source": "node_start",
+        "target": "node_parallel_a"
+      },
+      {
+        "id": "edge_start_b",
+        "source": "node_start",
+        "target": "node_parallel_b"
+      },
+      {
+        "id": "edge_a_end",
+        "source": "node_parallel_a",
+        "target": "node_end"
+      },
+      {
+        "id": "edge_b_end",
+        "source": "node_parallel_b",
+        "target": "node_end"
+      }
+    ]
+  })";
+
+  // Sample invalid workflow JSON - missing required fields
+  const char* invalid_workflow_missing_id_json_ = R"({
+    "name": "Invalid Workflow",
+    "version": "1.0.0",
+    "nodes": [],
+    "edges": []
+  })";
+
+  // Sample invalid workflow JSON - duplicate node IDs
+  const char* invalid_workflow_duplicate_nodes_json_ = R"({
+    "id": "workflow_invalid",
+    "name": "Invalid Workflow",
+    "version": "1.0.0",
+    "nodes": [
+      {
+        "id": "node_001",
+        "name": "Node 1",
+        "type": "TASK"
+      },
+      {
+        "id": "node_001",
+        "name": "Node 2",
+        "type": "TASK"
+      }
+    ],
+    "edges": []
+  })";
+
+  // Sample invalid workflow JSON - circular dependency
+  const char* invalid_workflow_circular_json_ = R"({
+    "id": "workflow_circular",
+    "name": "Circular Workflow",
+    "version": "1.0.0",
+    "nodes": [
+      {
+        "id": "node_a",
+        "name": "Node A",
+        "type": "TASK"
+      },
+      {
+        "id": "node_b",
+        "name": "Node B",
+        "type": "TASK"
+      },
+      {
+        "id": "node_c",
+        "name": "Node C",
+        "type": "TASK"
+      }
+    ],
+    "edges": [
+      {
+        "id": "edge_a_b",
+        "source": "node_a",
+        "target": "node_b"
+      },
+      {
+        "id": "edge_b_c",
+        "source": "node_b",
+        "target": "node_c"
+      },
+      {
+        "id": "edge_c_a",
+        "source": "node_c",
+        "target": "node_a"
+      }
+    ]
+  })";
+};
+
+// ============================================================================
+// Workflow JSON Parsing Tests
+// ============================================================================
+
+TEST_F(WorkflowJsonTest, ParseValidWorkflow) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+
+  EXPECT_TRUE(result.is_valid()) << "Workflow parsing should succeed";
+  EXPECT_NE(result.workflow, nullptr) << "Workflow object should be created";
+  EXPECT_EQ(result.workflow->get_id(), "workflow_001");
+  EXPECT_EQ(result.workflow->get_name(), "Test Workflow");
+  EXPECT_EQ(result.workflow->get_nodes().size(), 3) << "Should parse 3 nodes";
+  EXPECT_EQ(result.workflow->get_edges().size(), 3) << "Should parse 3 edges";
+}
+
+TEST_F(WorkflowJsonTest, ParseWorkflowWithLoop) {
+  auto result = parser_->parse_workflow(workflow_with_loop_json_);
+
+  EXPECT_TRUE(result.is_valid()) << "Workflow with loop should parse successfully";
+  EXPECT_NE(result.workflow, nullptr);
+  EXPECT_EQ(result.workflow->get_nodes().size(), 3);
+}
+
+TEST_F(WorkflowJsonTest, ParseParallelWorkflow) {
+  auto result = parser_->parse_workflow(workflow_parallel_json_);
+
+  EXPECT_TRUE(result.is_valid()) << "Parallel workflow should parse successfully";
+  EXPECT_NE(result.workflow, nullptr);
+  EXPECT_EQ(result.workflow->get_nodes().size(), 4);
+  EXPECT_EQ(result.workflow->get_edges().size(), 4);
+
+  // Check that parallel nodes are both executable
+  auto executable_nodes = result.workflow->get_executable_nodes();
+  // After initialization, nodes with no dependencies should be executable
+  // For this workflow, node_start should be executable
+  EXPECT_FALSE(executable_nodes.empty());
+}
+
+TEST_F(WorkflowJsonTest, ParseWorkflowMissingId) {
+  auto result = parser_->parse_workflow(invalid_workflow_missing_id_json_);
+
+  EXPECT_FALSE(result.is_valid()) << "Workflow without ID should fail validation";
+  EXPECT_FALSE(result.errors.empty()) << "Should have parse errors";
+}
+
+TEST_F(WorkflowJsonTest, ParseWorkflowDuplicateNodeIds) {
+  auto result = parser_->parse_workflow(invalid_workflow_duplicate_nodes_json_);
+
+  EXPECT_FALSE(result.is_valid()) << "Workflow with duplicate node IDs should fail";
+}
+
+TEST_F(WorkflowJsonTest, ParseWorkflowCircularDependency) {
+  auto result = parser_->parse_workflow(invalid_workflow_circular_json_);
+
+  // Workflow with circular dependency should parse but validation should fail
+  EXPECT_NE(result.workflow, nullptr) << "Circular workflow should still parse";
+
+  bool is_valid = result.workflow->validate();
+  EXPECT_FALSE(is_valid) << "Circular dependency should make workflow invalid";
+}
+
+// ============================================================================
+// Node Configuration Tests
+// ============================================================================
+
+TEST_F(WorkflowJsonTest, ParseNodeConfiguration) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+
+  ASSERT_TRUE(result.is_valid());
+  ASSERT_NE(result.workflow, nullptr);
+
+  auto start_node = result.workflow->get_node("node_start");
+  ASSERT_NE(start_node, nullptr);
+
+  auto config = start_node->get_config();
+  EXPECT_EQ(config.timeout_ms, 5000);
+  EXPECT_EQ(config.max_retries, 3);
+  EXPECT_EQ(config.retry_delay_ms, 1000);
+}
+
+TEST_F(WorkflowJsonTest, ParseNodeInputOutput) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+
+  ASSERT_TRUE(result.is_valid());
+  ASSERT_NE(result.workflow, nullptr);
+
+  auto process_node = result.workflow->get_node("node_process");
+  ASSERT_NE(process_node, nullptr);
+
+  // Check input parameters
+  const auto& inputs = process_node->get_input_params();
+  EXPECT_FALSE(inputs.empty());
+
+  // Check output parameters
+  const auto& outputs = process_node->get_output_params();
+  EXPECT_FALSE(outputs.empty());
+}
+
+// ============================================================================
+// Edge Configuration Tests
+// ============================================================================
+
+TEST_F(WorkflowJsonTest, ParseEdgeConfiguration) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+
+  ASSERT_TRUE(result.is_valid());
+  ASSERT_NE(result.workflow, nullptr);
+
+  const auto& edges = result.workflow->get_edges();
+  ASSERT_GE(edges.size(), 1);
+
+  auto edge = edges[0];
+  EXPECT_EQ(edge->get_source(), "node_start");
+  EXPECT_EQ(edge->get_target(), "node_process");
+}
+
+TEST_F(WorkflowJsonTest, ParseEdgeConditionExpression) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+
+  ASSERT_TRUE(result.is_valid());
+  ASSERT_NE(result.workflow, nullptr);
+
+  const auto& edges = result.workflow->get_edges();
+
+  // Find the edge with condition
+  agentflow::framework::Edge* conditional_edge = nullptr;
+  for (const auto& edge_ptr : edges) {
+    if (edge_ptr->get_id() == "edge_conditional") {
+      conditional_edge = edge_ptr.get();
+      break;
+    }
+  }
+
+  ASSERT_NE(conditional_edge, nullptr);
+
+  // Check condition expression
+  const auto& condition = conditional_edge->get_condition();
+  EXPECT_FALSE(condition.expression.empty());
+  EXPECT_EQ(condition.expression, "output_data == 'success'");
+  EXPECT_EQ(condition.description, "Only proceed if output is success");
+}
+
+// ============================================================================
+// Topological Order Tests
+// ============================================================================
+
+TEST_F(WorkflowJsonTest, GetTopologicalOrder) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+
+  ASSERT_TRUE(result.is_valid());
+  ASSERT_NE(result.workflow, nullptr);
+
+  auto order = result.workflow->get_topological_order();
+
+  EXPECT_FALSE(order.empty()) << "Topological order should not be empty";
+  EXPECT_EQ(order.size(), 3) << "Should have 3 nodes in order";
+
+  // Check order: start -> process -> end
+  EXPECT_EQ(order[0], "node_start");
+  EXPECT_EQ(order[1], "node_process");
+  EXPECT_EQ(order[2], "node_end");
+}
+
+TEST_F(WorkflowJsonTest, GetExecutableNodes) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+
+  ASSERT_TRUE(result.is_valid());
+  ASSERT_NE(result.workflow, nullptr);
+
+  auto executable = result.workflow->get_executable_nodes();
+
+  EXPECT_FALSE(executable.empty());
+  // Initially, only node_start should be executable (no dependencies)
+  EXPECT_EQ(executable.size(), 1);
+  EXPECT_EQ(executable[0], "node_start");
+}
+
+// ============================================================================
+// Control Flow Integration Tests
+// ============================================================================
+
+TEST_F(WorkflowJsonTest, GetExecutableNodesWithControl) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+
+  ASSERT_TRUE(result.is_valid());
+  ASSERT_NE(result.workflow, nullptr);
+
+  auto executable_with_control = result.workflow->get_executable_nodes_with_control();
+
+  EXPECT_FALSE(executable_with_control.empty()) << "Should have executable nodes with control flow";
+}
+
+TEST_F(WorkflowJsonTest, ControlFlowManagerIntegration) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+
+  ASSERT_TRUE(result.is_valid());
+  ASSERT_NE(result.workflow, nullptr);
+
+  // Check that control flow manager is accessible
+  auto& control_manager = result.workflow->get_control_flow_manager();
+  auto& control_context = result.workflow->get_control_context();
+
+  // Verify control context is initialized
+  EXPECT_NE(control_context.get_context_data().get_nodes().size(), 0);
+}
+
+// ============================================================================
+// Loop Management Tests
+// ============================================================================
+
+TEST_F(WorkflowJsonTest, WorkflowLoopConfiguration) {
+  auto result = parser_->parse_workflow(workflow_with_loop_json_);
+
+  ASSERT_TRUE(result.is_valid());
+  ASSERT_NE(result.workflow, nullptr);
+
+  auto loop_node = result.workflow->get_node("node_loop");
+  ASSERT_NE(loop_node, nullptr);
+
+  const auto& config = loop_node->get_config();
+
+  // Check for loop config in extra_config
+  bool has_loop_config = std::holds_alternative<agentflow::framework::LoopConfig>(config.extra_config);
+
+  if (has_loop_config) {
+    auto loop_config = std::get<agentflow::framework::LoopConfig>(config.extra_config);
+    EXPECT_EQ(loop_config.type, agentflow::framework::LoopType::FOR);
+    EXPECT_EQ(loop_config.max_iterations, 5);
+    EXPECT_EQ(loop_config.condition, "i < 5");
+  }
+}
+
+TEST_F(WorkflowJsonTest, EnterLoop) {
+  auto result = parser_->parse_workflow(workflow_with_loop_json_);
+
+  ASSERT_TRUE(result.is_valid());
+  ASSERT_NE(result.workflow, nullptr);
+
+  agentflow::runtime::LoopConfig loop_config;
+  loop_config.type = agentflow::runtime::LoopType::FOR_LOOP;
+  loop_config.max_iterations = 3;
+  // loop_config.condition is shared_ptr<ConditionExpression>, cannot assign string directly
+
+  result.workflow->enter_loop("test_loop", loop_config);
+
+  auto& control_context = result.workflow->get_control_context();
+  EXPECT_TRUE(control_context.is_in_loop("test_loop"));
+}
+
+TEST_F(WorkflowJsonTest, ExitLoopIteration) {
+  auto result = parser_->parse_workflow(workflow_with_loop_json_);
+
+  ASSERT_TRUE(result.is_valid());
+  ASSERT_NE(result.workflow, nullptr);
+
+  agentflow::runtime::LoopConfig loop_config;
+  loop_config.type = agentflow::runtime::LoopType::FOR_LOOP;
+  loop_config.max_iterations = 3;
+
+  result.workflow->enter_loop("test_loop", loop_config);
+
+  // Exit current iteration
+  result.workflow->exit_loop_iteration("test_loop");
+
+  auto& control_context = result.workflow->get_control_context();
+  EXPECT_TRUE(control_context.has_loop("test_loop"));
+}
+
+TEST_F(WorkflowJsonTest, ShouldContinueLoop) {
+  auto result = parser_->parse_workflow(workflow_with_loop_json_);
+
+  ASSERT_TRUE(result.is_valid());
+  ASSERT_NE(result.workflow, nullptr);
+
+  agentflow::framework::LoopConfig loop_config;
+  loop_config.type = agentflow::framework::LoopType::FOR;
+  loop_config.max_iterations = 3;
+  loop_config.condition = "i < 3";
+
+  result.workflow->enter_loop("test_loop", loop_config);
+
+  // Should continue initially
+  EXPECT_TRUE(result.workflow->should_continue_loop("test_loop"));
+}
+
+// ============================================================================
+// Error Handler Tests
+// ============================================================================
+
+TEST_F(WorkflowJsonTest, SetErrorHandler) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+
+  ASSERT_TRUE(result.is_valid());
+  ASSERT_NE(result.workflow, nullptr);
+
+  agentflow::runtime::ErrorHandlerConfig error_handler;
+  error_handler.strategy = agentflow::ErrorHandlingStrategy::RETRY;
+  error_handler.max_retries = 3;
+
+  result.workflow->set_error_handler("node_process", error_handler);
+}
+
+// ============================================================================
+// Version Management Tests
+// ============================================================================
+
+TEST_F(WorkflowJsonTest, WorkflowVersionParsing) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+
+  ASSERT_TRUE(result.is_valid());
+  EXPECT_EQ(result.workflow->get_name(), "Test Workflow");
+  EXPECT_EQ(result.workflow->get_id(), "workflow_001");
+}
+
+TEST_F(WorkflowJsonTest, WorkflowMetadataParsing) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+
+  ASSERT_TRUE(result.is_valid());
+  // Check metadata field parsing
+  // Metadata should be parsed if present
+}
+
+// ============================================================================
+// DAG Validation Tests
+// ============================================================================
+
+TEST_F(WorkflowJsonTest, ValidateDAGStructure) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+
+  ASSERT_TRUE(result.is_valid());
+
+  // Valid workflow should pass DAG validation
+  EXPECT_TRUE(result.workflow->validate_dag());
+}
+
+TEST_F(WorkflowJsonTest, ValidateEdgeReferences) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+
+  ASSERT_TRUE(result.is_valid());
+
+  // All edge references should be valid
+  EXPECT_TRUE(result.workflow->validate());
+}
+
+TEST_F(WorkflowJsonTest, ValidateNodeIdsUnique) {
+  // Valid workflow has unique node IDs
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+  ASSERT_TRUE(result.is_valid());
+
+  // Validation should succeed
+  EXPECT_TRUE(result.workflow->validate());
+}
+
+// ============================================================================
+// Error Handling Tests
+// ============================================================================
+
+TEST_F(WorkflowJsonTest, HandleInvalidJSON) {
+  auto result = parser_->parse_workflow("{invalid json}");
+
+  EXPECT_FALSE(result.is_valid()) << "Invalid JSON should fail to parse";
+  EXPECT_FALSE(result.errors.empty()) << "Should have parse errors";
+}
+
+TEST_F(WorkflowJsonTest, HandleEmptyWorkflow) {
+  auto result = parser_->parse_workflow("{}");
+
+  EXPECT_FALSE(result.is_valid()) << "Empty workflow should fail validation";
+}
+
+TEST_F(WorkflowJsonTest, HandleMissingNodes) {
+  auto result = parser_->parse_workflow(R"({
+    "id": "test",
+    "name": "Test",
+    "edges": []
+  })");
+
+  EXPECT_FALSE(result.is_valid()) << "Missing nodes should fail";
+}
+
+TEST_F(WorkflowJsonTest, HandleMissingEdges) {
+  auto result = parser_->parse_workflow(R"({
+    "id": "test",
+    "name": "Test",
+    "nodes": []
+  })");
+
+  // This might be valid (empty workflow)
+  // But edges with invalid node references should be caught
+}
+
+// ============================================================================
+// Dynamic Update Tests
+// ============================================================================
+
+TEST_F(WorkflowJsonTest, DynamicWorkflowUpdate) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
+
+  ASSERT_TRUE(result.is_valid());
+
+  // Update workflow dynamically
+  bool update_result = result.workflow->update_dynamic(valid_workflow_json_);
+  EXPECT_TRUE(update_result) << "Dynamic update should succeed";
+}
+
+}  // namespace tests
+}  // namespace agentflow

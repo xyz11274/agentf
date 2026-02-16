@@ -429,8 +429,16 @@ void example_data_bus_integration() {
   int update_count = 0;
   databus.subscribe("key1", [&update_count](const std::string& key,
                                                   const DataVariant& value) {
+    std::string value_str = std::visit([](auto&& arg) -> std::string {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, std::string>) {
+        return arg;
+      } else {
+        return std::to_string(arg);
+      }
+    }, value);
     Logger::instance().info_f("Data update #%d: %s = %s",
-                              ++update_count, key.c_str(), value.c_str());
+                              ++update_count, key.c_str(), value_str.c_str());
   });
 
   // Simulate multiple updates
@@ -455,7 +463,15 @@ void example_data_bus_integration() {
 
   DataVariant value;
   if (databus.get("key2", value)) {
-    Logger::instance().info_f("Read key2: %s", value.c_str());
+    std::string value_str = std::visit([](auto&& arg) -> std::string {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, std::string>) {
+        return arg;
+      } else {
+        return std::to_string(arg);
+      }
+    }, value);
+    Logger::instance().info_f("Read key2: %s", value_str.c_str());
   }
 
   databus.unlock_read();

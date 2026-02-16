@@ -12,24 +12,38 @@
 #include <string>
 #include <map>
 #include <vector>
+#include <unordered_set>
 #include "agentflow/common.h"
 #include "agentflow/actor/actors.h"
 #include "protoactor/actor.h"
 
 namespace protoactor {
 class PID;
+class Context;
 }
 
 namespace agentflow {
 namespace actor {
+
+/// @brief Message for workflow status query
+struct WorkflowStatusMessage {
+  WorkflowId workflow_id;
+  WorkflowState state;
+  DataMap output_data;
+  DataMap metadata;
+
+  WorkflowStatusMessage(const WorkflowId& id, WorkflowState s, const DataMap& output,
+                     const DataMap& meta = DataMap())
+      : workflow_id(id), state(s), output_data(output), metadata(meta) {}
+};
 
 /// @brief Workflow Actor for orchestrating workflow execution
 class WorkflowActor : public protoactor::Actor,
                       public AgentFlowActor {
  public:
   /// @brief Constructor
-  /// @param workflow_id The ID of the workflow
-  /// @param workflow_config Configuration for the workflow
+  /// @param workflow_id The ID of workflow
+  /// @param workflow_config Configuration for workflow
   WorkflowActor(const WorkflowId& workflow_id,
                 const WorkflowConfig& workflow_config);
 
@@ -56,7 +70,10 @@ class WorkflowActor : public protoactor::Actor,
   WorkflowConfig config_;
   WorkflowState state_ = WorkflowState::CREATED;
   std::map<NodeId, std::shared_ptr<protoactor::PID>> node_actors_;
+  DataMap input_data_;
   DataMap output_data_;
+  std::unordered_set<NodeId> completed_nodes_;
+  std::unordered_set<NodeId> failed_nodes_;
 
   /// @brief Handle ExecuteWorkflowMessage
   void handle_execute_workflow(const ExecuteWorkflowMessage& msg);
@@ -64,13 +81,25 @@ class WorkflowActor : public protoactor::Actor,
   /// @brief Handle NodeResultMessage from a child node actor
   void handle_node_result(const NodeResultMessage& msg);
 
+  /// @brief Handle workflow status query
+  void handle_status_query(std::shared_ptr<protoactor::Context> context);
+
   /// @brief Create and spawn a node actor
   /// @param node_id The node ID
-  /// @return PID of the spawned node actor
+  /// @return PID of spawned node actor
   std::shared_ptr<protoactor::PID> spawn_node_actor(const NodeId& node_id);
+
+  /// @brief Schedule executable nodes (no unsatisfied dependencies)
+  void schedule_executable_nodes();
+
+  /// @brief Check if workflow has completed
+  void check_workflow_completion();
 
   /// @brief Send workflow result to parent
   void send_workflow_result(WorkflowState state);
+
+  /// @brief Convert WorkflowState to string
+  static std::string workflow_state_to_string(WorkflowState state);
 };
 
 }  // namespace actor

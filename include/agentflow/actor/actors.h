@@ -37,9 +37,11 @@ class AgentActor;
 struct ExecuteNodeMessage {
   NodeId node_id;
   DataMap input_data;
-  
-  ExecuteNodeMessage(const NodeId& id, const DataMap& data)
-      : node_id(id), input_data(data) {}
+  std::string correlation_id;
+
+  ExecuteNodeMessage(const NodeId& id, const DataMap& data,
+                   const std::string& corr_id = "")
+      : node_id(id), input_data(data), correlation_id(corr_id) {}
 };
 
 /// @brief Message containing node execution result
@@ -47,9 +49,71 @@ struct NodeResultMessage {
   NodeId node_id;
   Status status;
   DataMap output_data;
-  
-  NodeResultMessage(const NodeId& id, Status s, const DataMap& data)
-      : node_id(id), status(s), output_data(data) {}
+  std::string correlation_id;
+  std::string error_message;
+
+  NodeResultMessage(const NodeId& id, Status s, const DataMap& data,
+                  const std::string& corr_id = "", const std::string& error = "")
+      : node_id(id), status(s), output_data(data),
+        correlation_id(corr_id), error_message(error) {}
+};
+
+/// @brief Message for initializing a node
+struct InitializeNodeMessage {
+  NodeId node_id;
+  NodeConfig config;
+
+  InitializeNodeMessage(const NodeId& id, const NodeConfig& cfg)
+      : node_id(id), config(cfg) {}
+};
+
+/// @brief Message for stopping a node
+struct StopNodeMessage {
+  NodeId node_id;
+  bool force;
+
+  StopNodeMessage(const NodeId& id, bool f = false)
+      : node_id(id), force(f) {}
+};
+
+/// @brief Message for querying node status
+struct NodeStatusMessage {
+  NodeId node_id;
+  std::string query_id;
+
+  NodeStatusMessage(const NodeId& id, const std::string& qid = "")
+      : node_id(id), query_id(qid) {}
+};
+
+/// @brief Message containing node status
+struct NodeStatusResponse {
+  NodeId node_id;
+  NodeState state;
+  DataMap metadata;
+  std::string query_id;
+
+  NodeStatusResponse(const NodeId& id, NodeState s, const DataMap& meta,
+                   const std::string& qid = "")
+      : node_id(id), state(s), metadata(meta), query_id(qid) {}
+};
+
+/// @brief Message for node health check
+struct NodeHealthCheckMessage {
+  NodeId node_id;
+
+  explicit NodeHealthCheckMessage(const NodeId& id) : node_id(id) {}
+};
+
+/// @brief Message containing health check result
+struct NodeHealthCheckResponse {
+  NodeId node_id;
+  bool healthy;
+  std::string health_status;
+  uint64_t uptime_ms;
+
+  NodeHealthCheckResponse(const NodeId& id, bool h, const std::string& status,
+                       uint64_t uptime = 0)
+      : node_id(id), healthy(h), health_status(status), uptime_ms(uptime) {}
 };
 
 /// @brief Message for workflow execution

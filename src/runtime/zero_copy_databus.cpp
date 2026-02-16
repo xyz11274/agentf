@@ -105,8 +105,20 @@ class InProcessSharedMemoryBlock : public SharedMemoryBlock {
   size_t used_capacity_;
 
   size_t estimate_data_size(const DataVariant& data) const {
-    // DataVariant is std::string, so just return the string size
-    return data.size();
+    // DataVariant is std::variant<int64_t, double, std::string, bool>
+    return std::visit([](auto&& arg) -> size_t {
+      using T = std::decay_t<decltype(arg)>;
+      if constexpr (std::is_same_v<T, std::string>) {
+        return arg.size();
+      } else if constexpr (std::is_same_v<T, int64_t>) {
+        return sizeof(int64_t);
+      } else if constexpr (std::is_same_v<T, double>) {
+        return sizeof(double);
+      } else if constexpr (std::is_same_v<T, bool>) {
+        return sizeof(bool);
+      }
+      return 0;
+    }, data);
   }
 };
 
@@ -241,8 +253,20 @@ void ZeroCopyDataBus::notify_subscribers(const std::string& key, const DataVaria
 }
 
 size_t ZeroCopyDataBus::estimate_data_size(const DataVariant& data) const {
-  // DataVariant is std::string, so just return the string size
-  return data.size();
+  // DataVariant is std::variant<int64_t, double, std::string, bool>
+  return std::visit([](auto&& arg) -> size_t {
+    using T = std::decay_t<decltype(arg)>;
+    if constexpr (std::is_same_v<T, std::string>) {
+      return arg.size();
+    } else if constexpr (std::is_same_v<T, int64_t>) {
+      return sizeof(int64_t);
+    } else if constexpr (std::is_same_v<T, double>) {
+      return sizeof(double);
+    } else if constexpr (std::is_same_v<T, bool>) {
+      return sizeof(bool);
+    }
+    return 0;
+  }, data);
 }
 
 // ============================================================================

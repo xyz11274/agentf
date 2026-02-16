@@ -135,7 +135,7 @@ StorageResult StorageManager::cancel_gray_release(const std::string& agent_id) {
   }
 
   // Rollback to previous version
-  const auto& config = it->second;
+  (void)it->second;  // Suppress unused variable warning
   StorageResult result = agent_storage_->set_active_agent_version(agent_id, "1.0");
 
   if (result.is_success()) {
