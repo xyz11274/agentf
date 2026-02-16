@@ -58,7 +58,79 @@ enum class WorkflowState {
 // Shared data types
 using DataVariant = std::string;  // Simplified for now, can be extended
 using DataMap = std::map<std::string, DataVariant>;
+// Event types for control flow
+enum class EventType {
+  NODE_START = 0,
+  NODE_COMPLETE = 1,
+  NODE_FAILURE = 2,
+  NODE_RETRY = 3,
+  DATA_READY = 4,
+  SYNC_WAIT = 5,
+  DEPENDENCY_READY = 6,
+};
 
+// Error handling strategies
+enum class ErrorStrategy {
+  FAIL_FAST = 0,        // Stop immediately on error
+  RETRY = 1,            // Retry on error
+  FALLBACK = 2,         // Use fallback handler
+  COMPENSATION = 3,     // Execute compensation logic
+  IGNORE = 4,           // Ignore and continue
+};
+
+// Agent lifecycle policy
+enum class AgentLifecyclePolicy {
+  PER_REQUEST = 0,      // Create new instance per request
+  FACTORY = 1,          // Use factory to manage instances
+  SINGLETON = 2,        // Single global instance
+};
+
+// Data transfer mode
+enum class DataTransferMode {
+  SHARED_MEMORY = 0,    // Zero-copy shared memory
+  MESSAGE_QUEUE = 1,    // Message queue copy
+  REMOTE_TRANSFER = 2,  // Remote transfer
+};
+
+// Node configuration
+struct NodeConfig {
+  std::string name;
+  std::string type;
+  int priority = 0;
+  int timeout_ms = 30000;           // Default 30 seconds
+  int max_retries = 0;              // No retry by default
+  ErrorStrategy error_strategy = ErrorStrategy::FAIL_FAST;
+  std::map<std::string, std::string> metadata;  // For extension
+  
+  NodeConfig() = default;
+  NodeConfig(const std::string& n, const std::string& t)
+      : name(n), type(t) {}
+};
+
+// Workflow configuration
+struct WorkflowConfig {
+  std::string name;
+  std::string version = "1.0.0";
+  std::string description;
+  int timeout_ms = 300000;          // Default 5 minutes
+  std::map<std::string, std::string> metadata;
+  
+  WorkflowConfig() = default;
+  explicit WorkflowConfig(const std::string& n) : name(n) {}
+};
+
+// Agent configuration
+struct AgentConfig {
+  std::string name;
+  std::string version = "1.0.0";
+  std::string description;
+  AgentLifecyclePolicy lifecycle = AgentLifecyclePolicy::FACTORY;
+  std::vector<std::string> tags;
+  std::map<std::string, std::string> metadata;
+  
+  AgentConfig() = default;
+  explicit AgentConfig(const std::string& n) : name(n) {}
+};
 } // namespace agentflow
 
 #endif // AGENTFLOW_COMMON_H
