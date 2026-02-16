@@ -27,8 +27,8 @@ class EchoActor : public IActor {
     auto msg = ctx->current_message();
     
     // Log message reception
-    Logger& logger = Logger::get_instance();
-    logger.log(LogLevel::INFO,
+    Logger& logger = Logger::instance();
+    logger.log(Logger::Level::INFO,
                "EchoActor [" + actor_id_ + "] received: " + msg.message_type);
     
     // Echo back to sender if there is one
@@ -39,13 +39,13 @@ class EchoActor : public IActor {
   }
 
   void on_start() override {
-    Logger& logger = Logger::get_instance();
-    logger.log(LogLevel::INFO, "EchoActor [" + actor_id_ + "] started");
+    Logger& logger = Logger::instance();
+    logger.log(Logger::Level::INFO, "EchoActor [" + actor_id_ + "] started");
   }
 
   void on_stop() override {
-    Logger& logger = Logger::get_instance();
-    logger.log(LogLevel::INFO, "EchoActor [" + actor_id_ + "] stopping");
+    Logger& logger = Logger::instance();
+    logger.log(Logger::Level::INFO, "EchoActor [" + actor_id_ + "] stopping");
   }
 
   std::string actor_type() const override {
@@ -72,12 +72,12 @@ class CounterActor : public IActor {
     
     if (msg.message_type == "increment") {
       count_++;
-      Logger& logger = Logger::get_instance();
-      logger.log(LogLevel::INFO, "Counter incremented: " + std::to_string(count_));
+      Logger& logger = Logger::instance();
+      logger.log(Logger::Level::INFO, "Counter incremented: " + std::to_string(count_));
     } else if (msg.message_type == "decrement") {
       count_--;
-      Logger& logger = Logger::get_instance();
-      logger.log(LogLevel::INFO,
+      Logger& logger = Logger::instance();
+      logger.log(Logger::Level::INFO,
                  "Counter decremented: " + std::to_string(count_));
     }
   }
@@ -88,7 +88,7 @@ class CounterActor : public IActor {
 };
 
 // Example 3: Actor factory
-class ActorFactory {
+class ExampleActorFactory {
  public:
   static std::shared_ptr<IActor> create_echo_actor(const std::string& id) {
     return std::make_shared<EchoActor>(id);
@@ -102,9 +102,9 @@ class ActorFactory {
 int main() {
   std::cout << "=== AgentFlow Adapter Example ===\n\n";
 
-  Logger& logger = Logger::get_instance();
-  logger.log(LogLevel::INFO, "Starting adapter example");
-  logger.log(LogLevel::INFO,
+  Logger& logger = Logger::instance();
+  logger.log(Logger::Level::INFO, "Starting adapter example");
+  logger.log(Logger::Level::INFO,
              "Actor implementation: " + ActorSystemFactory::implementation_name());
 
   // Create actor system
@@ -114,37 +114,37 @@ int main() {
     return 1;
   }
 
-  logger.log(LogLevel::INFO,
+  logger.log(Logger::Level::INFO,
              "Actor system created: " + system->system_address());
 
   // Spawn echo actors
   std::cout << "\n--- Spawning Actors ---\n";
 
-  auto echo_factory = []() {
-    return ActorFactory::create_echo_actor("echo-1");
+  auto echo_factory = []() -> std::shared_ptr<IActor> {
+    return ExampleActorFactory::create_echo_actor("echo-1");
   };
 
   auto echo_ref = system->spawn(echo_factory, "echo-actor-1");
   if (!echo_ref) {
-    logger.log(LogLevel::ERROR, "Failed to spawn echo actor");
+    logger.log(Logger::Level::ERROR, "Failed to spawn echo actor");
     return 1;
   }
 
-  logger.log(LogLevel::INFO,
+  logger.log(Logger::Level::INFO,
              "Echo actor spawned: " + echo_ref->to_string());
 
   // Spawn counter actor
-  auto counter_factory = []() {
-    return ActorFactory::create_counter_actor();
+  auto counter_factory = []() -> std::shared_ptr<IActor> {
+    return ExampleActorFactory::create_counter_actor();
   };
 
   auto counter_ref = system->spawn(counter_factory, "counter-actor");
   if (!counter_ref) {
-    logger.log(LogLevel::ERROR, "Failed to spawn counter actor");
+    logger.log(Logger::Level::ERROR, "Failed to spawn counter actor");
     return 1;
   }
 
-  logger.log(LogLevel::INFO,
+  logger.log(Logger::Level::INFO,
              "Counter actor spawned: " + counter_ref->to_string());
 
   // Send messages
@@ -152,10 +152,10 @@ int main() {
 
   // Create messages using the builder utility
   auto msg1 = MessageBuilder::create("hello", std::string("test message"));
-  logger.log(LogLevel::INFO, "Created message: " + msg1.message_type);
+  logger.log(Logger::Level::INFO, "Created message: " + msg1.message_type);
 
   auto msg2 = MessageBuilder::create<int>("number", 42);
-  logger.log(LogLevel::INFO, "Created numeric message");
+  logger.log(Logger::Level::INFO, "Created numeric message");
 
   // In a real scenario, you would send these messages
   // This example just demonstrates the API
@@ -163,25 +163,25 @@ int main() {
   std::cout << "\n--- Checking State ---\n";
 
   if (echo_ref->is_alive()) {
-    logger.log(LogLevel::INFO, "Echo actor is alive");
+    logger.log(Logger::Level::INFO, "Echo actor is alive");
   }
 
   if (counter_ref->is_alive()) {
-    logger.log(LogLevel::INFO, "Counter actor is alive");
+    logger.log(Logger::Level::INFO, "Counter actor is alive");
   }
 
   std::cout << "\n--- Shutting Down ---\n";
 
   // Stop actors
   system->stop(echo_ref);
-  logger.log(LogLevel::INFO, "Echo actor stopped");
+  logger.log(Logger::Level::INFO, "Echo actor stopped");
 
   system->stop(counter_ref);
-  logger.log(LogLevel::INFO, "Counter actor stopped");
+  logger.log(Logger::Level::INFO, "Counter actor stopped");
 
   // Shutdown system
   system->shutdown();
-  logger.log(LogLevel::INFO, "Actor system shutdown");
+  logger.log(Logger::Level::INFO, "Actor system shutdown");
 
   std::cout << "\n=== Example Complete ===\n\n";
 

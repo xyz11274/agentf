@@ -4,7 +4,7 @@
 // Google Test tests for DataBus component
 
 #include <gtest/gtest.h>
-#include "agentflow/databus.h"
+#include "agentflow/runtime/databus.h"
 
 class DataBusTest : public ::testing::Test {
  protected:

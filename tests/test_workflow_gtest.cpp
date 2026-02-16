@@ -4,7 +4,7 @@
 // Google Test tests for Workflow component
 
 #include <gtest/gtest.h>
-#include "agentflow/workflow.h"
+#include "agentflow/framework/workflow.h"
 
 class WorkflowTest : public ::testing::Test {
  protected:

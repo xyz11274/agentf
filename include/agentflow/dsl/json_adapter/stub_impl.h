@@ -24,6 +24,7 @@ class StubJsonValue : public IJsonValue {
   explicit StubJsonValue(const std::string& string_value);
   explicit StubJsonValue(double number_value);
   explicit StubJsonValue(bool bool_value);
+  ~StubJsonValue() override;
 
   JsonValueType get_type() const override;
   bool is_null() const override;

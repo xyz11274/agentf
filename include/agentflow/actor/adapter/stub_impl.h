@@ -99,7 +99,7 @@ class StubActorSystem : public IActorSystem {
  private:
   std::string system_id_;
   std::map<std::string, std::shared_ptr<StubActorInternal>> actors_;
-  std::mutex actors_mutex_;
+  mutable std::mutex actors_mutex_;
   bool running_ = true;
   int next_actor_id_ = 0;
   

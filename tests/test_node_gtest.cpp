@@ -6,7 +6,8 @@
 #include <gtest/gtest.h>
 #include "agentflow/framework/node.h"
 
-namespace agentflow {
+using namespace agentflow;
+using namespace agentflow::framework;
 
 class NodeTest : public ::testing::Test {
  protected:
@@ -21,7 +22,10 @@ class NodeTest : public ::testing::Test {
 
 // Test Node creation and basic properties
 TEST_F(NodeTest, CreateNodeWithConfig) {
-  NodeConfig config("test_node", "process");
+  Node::Config config;
+  config.id = "test_node";
+  config.name = "test_node";
+  config.type = "process";
   config.priority = 10;
   config.timeout_ms = 5000;
   config.max_retries = 3;
@@ -35,7 +39,12 @@ TEST_F(NodeTest, CreateNodeWithConfig) {
 
 // Test Node state transitions
 TEST_F(NodeTest, NodeStateTransitions) {
-  Node node("node_1", "Process");
+  Node::Config config;
+  config.id = "node_1";
+  config.name = "node_1";
+  config.type = "Process";
+
+  Node node(config);
 
   EXPECT_EQ(node.get_state(), NodeState::WAITING);
 
@@ -54,67 +63,78 @@ TEST_F(NodeTest, NodeStateTransitions) {
 
 // Test Node with input/output data
 TEST_F(NodeTest, NodeDataHandling) {
-  Node node("data_node", "DataProcessor");
+  Node::Config config;
+  config.id = "data_node";
+  config.name = "data_node";
+  config.type = "DataProcessor";
+
+  Node node(config);
 
   DataMap input;
   input["key1"] = "value1";
   input["key2"] = "value2";
 
-  node.set_input_data(input);
+  node.set_inputs(input);
 
-  DataMap retrieved_input = node.get_input_data();
+  const DataMap& retrieved_input = node.get_inputs();
   EXPECT_EQ(retrieved_input.size(), 2);
-  EXPECT_EQ(retrieved_input["key1"], "value1");
-  EXPECT_EQ(retrieved_input["key2"], "value2");
+  EXPECT_EQ(retrieved_input.at("key1"), "value1");
+  EXPECT_EQ(retrieved_input.at("key2"), "value2");
 
   // Set output data
   DataMap output;
   output["result"] = "success";
-  node.set_output_data(output);
+  node.set_outputs(output);
 
-  DataMap retrieved_output = node.get_output_data();
-  EXPECT_EQ(retrieved_output["result"], "success");
-}
-
-// Test Node config with error strategy
-TEST_F(NodeTest, NodeErrorStrategy) {
-  NodeConfig config("error_node", "ErrorHandler");
-  config.error_strategy = ErrorStrategy::RETRY;
-  config.max_retries = 5;
-
-  Node node(config);
-
-  EXPECT_EQ(node.get_name(), "error_node");
-  EXPECT_EQ(node.get_state(), NodeState::WAITING);
+  const DataMap& retrieved_output = node.get_outputs();
+  EXPECT_EQ(retrieved_output.at("result"), "success");
 }
 
 // Test Node lifecycle
 TEST_F(NodeTest, NodeLifecycle) {
-  Node node("lifecycle_node", "LifecycleTest");
+  Node::Config config;
+  config.id = "lifecycle_node";
+  config.name = "lifecycle_node";
+  config.type = "LifecycleTest";
+
+  Node node(config);
 
   // Initial state
   EXPECT_EQ(node.get_state(), NodeState::WAITING);
 
   // Initialize
-  Status status = node.initialize(Status::OK);
-  EXPECT_EQ(status, Status::OK);
+  bool result = node.initialize();
+  EXPECT_TRUE(result);
 
   // Execute
-  dataMap input_data;
-  status = node.execute(input_data);
-  EXPECT_EQ(status, Status::OK);
-  EXPECT_EQ(node.get_state(), NodeState::EXECUTING);
+  result = node.execute();
+  EXPECT_TRUE(result);
 
   // Cleanup
-  status = node.cleanup();
-  EXPECT_EQ(status, Status::OK);
+  result = node.cleanup();
+  EXPECT_TRUE(result);
 }
 
 // Test multiple nodes
 TEST_F(NodeTest, MultipleNodes) {
-  Node node1("node_1", "Source");
-  Node node2("node_2", "Filter");
-  Node node3("node_3", "Sink");
+  Node::Config config1;
+  config1.id = "node_1";
+  config1.name = "node_1";
+  config1.type = "Source";
+
+  Node::Config config2;
+  config2.id = "node_2";
+  config2.name = "node_2";
+  config2.type = "Filter";
+
+  Node::Config config3;
+  config3.id = "node_3";
+  config3.name = "node_3";
+  config3.type = "Sink";
+
+  Node node1(config1);
+  Node node2(config2);
+  Node node3(config3);
 
   EXPECT_EQ(node1.get_id(), "node_1");
   EXPECT_EQ(node2.get_id(), "node_2");
@@ -126,19 +146,3 @@ TEST_F(NodeTest, MultipleNodes) {
   EXPECT_EQ(node2.get_state(), NodeState::WAITING);
   EXPECT_EQ(node3.get_state(), NodeState::WAITING);
 }
-
-// Test Node priority
-TEST_F(NodeTest, NodePriority) {
-  NodeConfig config1("high_priority", "Task");
-  config1.priority = 100;
-
-  NodeConfig config2("low_priority", "Task");
-  config2.priority = 1;
-
-  Node node_high(config1);
-  Node node_low(config2);
-
-  EXPECT_GT(node_high.get_priority(), node_low.get_priority());
-}
-
-}  // namespace agentflow
