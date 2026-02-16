@@ -60,20 +60,22 @@ class ActorSystemManager {
 #else
 
 // Stub implementation when Protoactor-cpp is not available
+#include <memory>
+
 namespace agentflow {
 
 class ActorSystemManager {
  public:
   static ActorSystemManager& get_instance();
 
-  bool initialize() { return false; }
-  void shutdown() {}
-  bool is_running() const { return false; }
-  std::shared_ptr<void> get_actor_system() const { return nullptr; }
+  bool initialize();
+  void shutdown();
+  bool is_running() const;
+  std::shared_ptr<void> get_actor_system() const;
 
  private:
   ActorSystemManager() = default;
-  ~ActorSystemManager() = default;
+  ~ActorSystemManager();
 };
 
 }  // namespace agentflow

@@ -79,6 +79,9 @@ class WorkflowActor : public protoactor::Actor,
 #else
 
 // Stub for when Protoactor is not available
+#include "agentflow/common.h"
+#include "agentflow/actor/actors.h"
+
 namespace agentflow {
 namespace actor {
 

@@ -2,6 +2,7 @@
 #define AGENTFLOW_FRAMEWORK_EDGE_H
 
 #include "agentflow/common.h"
+#include <string>
 #include <vector>
 
 namespace agentflow {
@@ -18,39 +19,55 @@ public:
         MESSAGE_QUEUE = 1,
         REMOTE_TRANSFER = 2,
     };
-    
+
     struct Config {
-        EdgeId id;
-        NodeId source_node;
-        NodeId target_node;
-        
+        std::string id;
+        std::string source_node;
+        std::string target_node;
+
         // Dependency relationships
         std::vector<std::string> source_outputs;
         std::vector<std::string> target_inputs;
-        
+
         // Data transfer configuration
         DataTransferMode transfer_mode = DataTransferMode::SHARED_MEMORY;
         std::vector<std::string> data_formats;  // text, binary, audio, video, etc.
-        
+
         // Control flow events
         std::vector<std::string> supported_events;  // start, end, fail, data_ready, etc.
+
+        // Conditional execution support (as string, parsed by Workflow)
+        std::string condition_expression;
+
+        // Edge priority (for multiple outgoing edges)
+        int priority = 0;
     };
-    
+
     explicit Edge(const Config& config);
     ~Edge() = default;
-    
+
     // Getters
-    const EdgeId& get_id() const { return config_.id; }
-    const NodeId& get_source() const { return config_.source_node; }
-    const NodeId& get_target() const { return config_.target_node; }
+    const std::string& get_id() const { return config_.id; }
+    const std::string& get_source() const { return config_.source_node; }
+    const std::string& get_target() const { return config_.target_node; }
     DataTransferMode get_transfer_mode() const { return config_.transfer_mode; }
-    
+
+    // Config getters for storage
+    const std::vector<std::string>& get_source_outputs() const { return config_.source_outputs; }
+    const std::vector<std::string>& get_target_inputs() const { return config_.target_inputs; }
+
+    // Conditional execution support
+    bool has_condition() const { return !config_.condition_expression.empty(); }
+    const std::string& get_condition_expression() const {
+        return config_.condition_expression;
+    }
+
     // Data passing
     bool transfer_data(const DataMap& source_data, DataMap& target_data);
-    
+
     // Event management
     bool trigger_event(const std::string& event_type);
-    
+
 private:
     Config config_;
 };

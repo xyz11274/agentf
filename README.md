@@ -221,9 +221,20 @@ Actor是系统的最小执行单元，其实现、管理和消息交互等完全
 
 ### 2. 项目依赖关系
 
+AgentFlow项目依赖以下外部库（详见[DEPENDENCIES.md](DEPENDENCIES.md)）：
+
 - **AgentFlow项目**：依赖Protoactor-cpp项目（提供Actor机制，代码仓：https://github.com/DanielKernel/Protoactor-cpp.git）
 - **DSL工具项目**：独立实现，为开发编排框架提供DSL编辑、解析、验证等功能
 - **监控日志收集**：通过标准协议与第三方运维系统对接
+
+**第三方依赖库**：
+- OpenSSL（SSL/TLS加密）
+- libwebsockets（WebSocket支持）
+- libevent（事件循环）
+- RapidJSON（JSON解析）
+- protobuf-c / Protobuf（序列化）
+
+> 注意：上述第三方库由成熟的开源项目提供，AgentFlow仅提供接口适配和集成，不需要重新实现。
 
 ---
 

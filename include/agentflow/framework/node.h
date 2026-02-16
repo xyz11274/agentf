@@ -60,7 +60,9 @@ public:
     const DataMap& get_inputs() const { return inputs_; }
     const DataMap& get_outputs() const { return outputs_; }
 
-    // Execution getters
+    // Config getters for storage
+    const std::vector<std::string>& get_input_params() const { return config_.input_params; }
+    const std::vector<std::string>& get_output_params() const { return config_.output_params; }
     ExecutionMode get_execution_mode() const { return config_.execution_mode; }
     const std::string& get_command() const { return config_.command; }
     int get_timeout_ms() const { return config_.timeout_ms; }

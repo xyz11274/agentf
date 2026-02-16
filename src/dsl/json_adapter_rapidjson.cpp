@@ -167,7 +167,7 @@ bool RapidjsonDocument::parse(const std::string& json_str) {
   if (doc_->HasParseError()) {
     std::stringstream ss;
     ss << "Parse error at offset " << doc_->GetErrorOffset() << ": "
-       << rapidjson::GetParseError_En(doc_->GetParseError());
+       << doc_->GetParseError();
     error_msg_ = ss.str();
     valid_ = false;
     return false;

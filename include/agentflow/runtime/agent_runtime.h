@@ -4,6 +4,7 @@
 #include "agentflow/common.h"
 #include "agentflow/runtime/databus.h"
 #include "agentflow/framework/agent.h"
+#include "agentflow/framework/workflow.h"
 #include <thread>
 #include <queue>
 #include <mutex>

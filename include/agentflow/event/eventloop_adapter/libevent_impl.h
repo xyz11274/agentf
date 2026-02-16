@@ -15,20 +15,22 @@ namespace agentflow {
 namespace event {
 
 #ifdef AGENTFLOW_WITH_LIBEVENT
+// Use explicit struct qualification to avoid naming conflict with event namespace
+using LibeventEvent = ::event;
 
 /**
  * libevent-based timer event implementation
  */
 class EventTimerLibevent : public ITimerEvent {
  public:
-  explicit EventTimerLibevent(event* ev);
+  explicit EventTimerLibevent(LibeventEvent* ev);
   ~EventTimerLibevent() override;
 
   bool cancel() override;
   bool is_active() const override;
 
  private:
-  event* ev_;
+  LibeventEvent* ev_;
 };
 
 /**
@@ -47,7 +49,7 @@ class EventFileLibevent : public IFileEvent {
  private:
   int fd_;
   event_base* base_;
-  event* ev_;
+  LibeventEvent* ev_;
   EventCallback callback_;
 };
 

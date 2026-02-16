@@ -11,14 +11,7 @@
 #include "agentflow/dsl/json_adapter.h"
 #include <memory>
 #include <string>
-
-// Forward declare rapidjson types
-namespace rapidjson {
-class Document;
-template<typename BaseAllocator>
-class GenericValue;
-typedef GenericValue<Document::AllocatorType> Value;
-}
+#include <rapidjson/document.h>
 
 namespace agentflow {
 namespace dsl {

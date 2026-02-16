@@ -6,71 +6,257 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -fPIC")
 
+# ============================================================================
+# Homebrew support for macOS
+# ============================================================================
+if(APPLE)
+  # Find Homebrew prefix - try common locations
+  set(HOMEBREW_PREFIX "")
+  if(EXISTS "/opt/homebrew")
+    set(HOMEBREW_PREFIX "/opt/homebrew")
+  elseif(EXISTS "/usr/local/Cellar")
+    set(HOMEBREW_PREFIX "/usr/local")
+  endif()
+
+  if(HOMEBREW_PREFIX)
+    message(STATUS "Found Homebrew: ${HOMEBREW_PREFIX}")
+    # Add Homebrew include and lib paths
+    list(APPEND CMAKE_PREFIX_PATH "${HOMEBREW_PREFIX}")
+    list(APPEND CMAKE_INCLUDE_PATH "${HOMEBREW_PREFIX}/include")
+    list(APPEND CMAKE_LIBRARY_PATH "${HOMEBREW_PREFIX}/lib")
+
+    # Add OpenSSL specific paths (Homebrew keg-only)
+    set(OPENSSL_ROOT_DIR "${HOMEBREW_PREFIX}/opt/openssl@3")
+    if(NOT EXISTS "${OPENSSL_ROOT_DIR}")
+      set(OPENSSL_ROOT_DIR "${HOMEBREW_PREFIX}/opt/openssl")
+    endif()
+
+    # Add RapidJSON path
+    set(RAPIDJSON_ROOT_DIR "${HOMEBREW_PREFIX}")
+  else()
+    message(STATUS "Homebrew not found in standard locations")
+  endif()
+elseif(UNIX)
+  # Linux support - add common library paths
+  message(STATUS "Unix/Linux detected - adding common library paths")
+  list(APPEND CMAKE_PREFIX_PATH "/usr/local")
+  list(APPEND CMAKE_INCLUDE_PATH "/usr/local/include")
+  list(APPEND CMAKE_LIBRARY_PATH "/usr/local/lib")
+  list(APPEND CMAKE_INCLUDE_PATH "/usr/include")
+  list(APPEND CMAKE_LIBRARY_PATH "/usr/lib")
+endif()
+
+# Find pkg-config for fallback package finding
+find_package(PkgConfig QUIET)
+
+# ============================================================================
 # Find optional dependencies (all with graceful fallback to stub implementations)
+# ============================================================================
 
 # Protoactor-cpp for Actor-based implementation
-find_package(protoactor CONFIG QUIET)
+find_package(protoactor CONFIG QUIET
+  PATHS
+    "${CMAKE_INSTALL_PREFIX}"
+    "${HOMEBREW_PREFIX}"
+  PATH_SUFFIXES
+    lib/cmake
+    lib/cmake/protoactor
+    share/cmake
+)
 if(protoactor_FOUND)
   message(STATUS "Protoactor-cpp found - enabling Actor-based implementation")
   set(USE_PROTOACTOR ON)
 else()
   message(STATUS "Protoactor-cpp not found - using stub actor implementation")
+  message(STATUS "  To install: git clone https://github.com/DanielKernel/Protoactor-cpp.git && cd Protoactor-cpp/build && cmake .. && make && sudo make install")
   set(USE_PROTOACTOR OFF)
 endif()
 
 # OpenSSL for SSL/TLS support
+if(OPENSSL_ROOT_DIR)
+  set(OPENSSL_USE_STATIC_LIBS TRUE)
+endif()
 find_package(OpenSSL QUIET)
 if(OPENSSL_FOUND)
   message(STATUS "OpenSSL found - enabling SSL/TLS support")
+  message(STATUS "  OpenSSL Version: ${OPENSSL_VERSION}")
   set(USE_OPENSSL ON)
 else()
   message(STATUS "OpenSSL not found - SSL/TLS disabled")
+  message(STATUS "  To install: brew install openssl (macOS) or sudo apt-get install libssl-dev (Ubuntu)")
   set(USE_OPENSSL OFF)
 endif()
 
 # libwebsockets for WebSocket support
-find_package(libwebsockets CONFIG QUIET)
+find_package(libwebsockets CONFIG QUIET
+  PATHS
+    "${CMAKE_INSTALL_PREFIX}"
+    "${HOMEBREW_PREFIX}"
+  PATH_SUFFIXES
+    lib/cmake
+    lib/cmake/libwebsockets
+    share/cmake
+)
 if(libwebsockets_FOUND)
   message(STATUS "libwebsockets found - enabling WebSocket support")
   set(USE_LIBWEBSOCKETS ON)
 else()
-  message(STATUS "libwebsockets not found - WebSocket disabled")
-  set(USE_LIBWEBSOCKETS OFF)
+  # Try pkg-config as fallback
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(libwebsockets libwebsockets)
+  endif()
+  if(libwebsockets_FOUND)
+    message(STATUS "libwebsockets found (via pkg-config) - enabling WebSocket support")
+    set(USE_LIBWEBSOCKETS ON)
+  else()
+    message(STATUS "libwebsockets not found - WebSocket disabled")
+    message(STATUS "  To install: brew install libwebsockets (macOS) or sudo apt-get install libwebsockets-dev (Ubuntu)")
+    set(USE_LIBWEBSOCKETS OFF)
+  endif()
 endif()
 
 # protobuf for serialization support
 find_package(Protobuf QUIET)
 if(Protobuf_FOUND)
   message(STATUS "Protobuf found - enabling serialization support")
+  message(STATUS "  Protobuf Version: ${Protobuf_VERSION}")
   set(USE_PROTOBUF ON)
 else()
   message(STATUS "Protobuf not found - protobuf serialization disabled")
+  message(STATUS "  To install: brew install protobuf (macOS) or sudo apt-get install libprotobuf-dev protobuf-compiler (Ubuntu)")
   set(USE_PROTOBUF OFF)
 endif()
 
 # libevent for event loop support
-find_package(libevent CONFIG QUIET)
+find_package(libevent CONFIG QUIET
+  PATHS
+    "${CMAKE_INSTALL_PREFIX}"
+    "${HOMEBREW_PREFIX}"
+  PATH_SUFFIXES
+    lib/cmake
+    lib/cmake/libevent
+    share/cmake
+)
 if(libevent_FOUND)
   message(STATUS "libevent found - enabling event loop support")
   set(USE_LIBEVENT ON)
 else()
-  message(STATUS "libevent not found - using stub event loop")
-  set(USE_LIBEVENT OFF)
+  # Try pkg-config as fallback
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(LIBEVENT libevent)
+  endif()
+  if(LIBEVENT_FOUND)
+    message(STATUS "libevent found (via pkg-config) - enabling event loop support")
+    set(USE_LIBEVENT ON)
+    # Add pkg-config variables
+    if(LIBEVENT_INCLUDE_DIRS)
+      include_directories(${LIBEVENT_INCLUDE_DIRS})
+    endif()
+    if(LIBEVENT_LIBRARIES)
+      # Create an imported target for libevent
+      add_library(libevent::libevent STATIC IMPORTED)
+      set_target_properties(libevent::libevent PROPERTIES
+        IMPORTED_LOCATION "${LIBEVENT_LIBRARIES}"
+        INTERFACE_INCLUDE_DIRECTORIES "${LIBEVENT_INCLUDE_DIRS}"
+      )
+    endif()
+  else()
+    # Try find_library and find_path as last resort
+    find_library(LIBEVENT_LIB
+      NAMES event event_core
+      PATHS
+        "${HOMEBREW_PREFIX}/lib"
+        "/usr/local/lib"
+        "/usr/lib"
+        "/opt/homebrew/lib"
+        "/opt/homebrew/lib"
+        "/usr/lib/x86_64-linux-gnu"
+    )
+    find_path(LIBEVENT_INCLUDE_DIR
+      NAMES event.h event2/event.h
+      PATHS
+        "${HOMEBREW_PREFIX}/include"
+        "/usr/local/include"
+        "/usr/include"
+        "/opt/homebrew/include"
+        "/usr/include/x86_64-linux-gnu"
+    )
+    if(LIBEVENT_LIB AND LIBEVENT_INCLUDE_DIR)
+      message(STATUS "libevent found - enabling event loop support")
+      message(STATUS "  libevent Library: ${LIBEVENT_LIB}")
+      message(STATUS "  libevent Include: ${LIBEVENT_INCLUDE_DIR}")
+      set(USE_LIBEVENT ON)
+      # Create imported target
+      add_library(libevent::libevent STATIC IMPORTED)
+      set_target_properties(libevent::libevent PROPERTIES
+        IMPORTED_LOCATION "${LIBEVENT_LIB}"
+        INTERFACE_INCLUDE_DIRECTORIES "${LIBEVENT_INCLUDE_DIR}"
+      )
+    else()
+      message(STATUS "libevent not found - using stub event loop")
+      message(STATUS "  To install: brew install libevent (macOS) or sudo apt-get install libevent-dev (Ubuntu)")
+      set(USE_LIBEVENT OFF)
+    endif()
+  endif()
 endif()
 
 # rapidjson for JSON parsing (header-only, commonly available)
 if(NOT DEFINED RAPIDJSON_INCLUDE_DIR)
-  find_path(RAPIDJSON_INCLUDE_DIR NAMES rapidjson/document.h)
+  # RapidJSON header is at include/rapidjson/document.h
+  # We need to find the parent directory of rapidjson/
+  find_path(RAPIDJSON_INCLUDE_DIR
+    NAMES document.h
+    PATHS
+      "${CMAKE_INSTALL_PREFIX}/include"
+      "${HOMEBREW_PREFIX}/include"
+      "/usr/local/include"
+      "/usr/local/include"
+      "/usr/include"
+      "/opt/homebrew/include"
+      "/usr/include/x86_64-linux-gnu"
+    PATH_SUFFIXES rapidjson
+    NO_DEFAULT_PATH
+    NO_CMAKE_ENVIRONMENT_PATH
+    NO_CMAKE_SYSTEM_PATH
+  )
 endif()
 if(RAPIDJSON_INCLUDE_DIR)
   message(STATUS "RapidJSON found - enabling JSON parsing")
+  message(STATUS "  RapidJSON Include: ${RAPIDJSON_INCLUDE_DIR}")
   set(USE_RAPIDJSON ON)
 else()
   message(STATUS "RapidJSON not found - using stub JSON parser")
+  message(STATUS "  To install: brew install rapidjson (macOS) or sudo apt-get install rapidjson-dev (Ubuntu)")
   set(USE_RAPIDJSON OFF)
 endif()
 
+# Google Test
+find_package(GTest CONFIG QUIET
+  PATHS
+    "${CMAKE_INSTALL_PREFIX}"
+    "${HOMEBREW_PREFIX}"
+  PATH_SUFFIXES
+    lib/cmake
+    lib/cmake/GTest
+    share/cmake
+)
+if(NOT GTest_FOUND)
+  # Try pkg-config as fallback
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(GTEST gtest)
+  endif()
+  if(GTEST_FOUND)
+    message(STATUS "Google Test found (via pkg-config)")
+    set(GTest_FOUND TRUE)
+  else()
+    message(STATUS "Google Test not found")
+    message(STATUS "  To install: brew install googletest (macOS) or sudo apt-get install libgtest-dev cmake (Ubuntu)")
+  endif()
+endif()
+
+# ============================================================================
 # Directories
+# ============================================================================
 set(AGENTFLOW_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(AGENTFLOW_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(AGENTFLOW_TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests)
@@ -99,8 +285,11 @@ set(AGENTFLOW_BASIC_SOURCES
 )
 
 set(AGENTFLOW_ACTOR_SOURCES
+    ${AGENTFLOW_SOURCE_DIR}/actor_system.cpp
     ${AGENTFLOW_SOURCE_DIR}/actor/adapter_factory.cpp
     ${AGENTFLOW_SOURCE_DIR}/actor/stub_impl.cpp
+    ${AGENTFLOW_SOURCE_DIR}/node_actor.cpp
+    ${AGENTFLOW_SOURCE_DIR}/workflow_actor.cpp
 )
 
 # Include Protoactor implementation only if available
@@ -126,6 +315,7 @@ endif()
 # Network sources
 set(AGENTFLOW_NETWORK_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/network/adapter_factory.cpp
+    ${AGENTFLOW_SOURCE_DIR}/network/private_protocol.cpp
 )
 
 # Serialization sources
@@ -138,6 +328,24 @@ set(AGENTFLOW_EVENT_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/event/adapter_factory.cpp
 )
 
+# Storage sources
+set(AGENTFLOW_STORAGE_SOURCES
+    ${AGENTFLOW_SOURCE_DIR}/storage/storage.cpp
+    ${AGENTFLOW_SOURCE_DIR}/storage/agent_storage.cpp
+    ${AGENTFLOW_SOURCE_DIR}/storage/workflow_storage.cpp
+    ${AGENTFLOW_SOURCE_DIR}/storage/storage_manager.cpp
+)
+
+# Control flow sources
+set(AGENTFLOW_CONTROL_FLOW_SOURCES
+    ${AGENTFLOW_SOURCE_DIR}/runtime/control_flow.cpp
+)
+
+# Zero-copy data bus sources
+set(AGENTFLOW_ZERO_COPY_DATABUS_SOURCES
+    ${AGENTFLOW_SOURCE_DIR}/runtime/zero_copy_databus.cpp
+)
+
 set(AGENTFLOW_SOURCES
     ${AGENTFLOW_FRAMEWORK_SOURCES}
     ${AGENTFLOW_RUNTIME_SOURCES}
@@ -147,6 +355,9 @@ set(AGENTFLOW_SOURCES
     ${AGENTFLOW_NETWORK_SOURCES}
     ${AGENTFLOW_SERIALIZATION_SOURCES}
     ${AGENTFLOW_EVENT_SOURCES}
+    ${AGENTFLOW_STORAGE_SOURCES}
+    ${AGENTFLOW_CONTROL_FLOW_SOURCES}
+    ${AGENTFLOW_ZERO_COPY_DATABUS_SOURCES}
 )
 
 # Create main library
@@ -171,7 +382,14 @@ endif()
 
 # Link with libwebsockets if available
 if(USE_LIBWEBSOCKETS)
-  target_link_libraries(agentflow PUBLIC websockets)
+  if(TARGET websockets)
+    target_link_libraries(agentflow PUBLIC websockets)
+  else()
+    target_link_libraries(agentflow PUBLIC ${libwebsockets_LIBRARIES})
+    if(libwebsockets_INCLUDE_DIRS)
+      target_include_directories(agentflow PUBLIC ${libwebsockets_INCLUDE_DIRS})
+    endif()
+  endif()
   target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_LIBWEBSOCKETS=1)
 endif()
 
@@ -183,7 +401,11 @@ endif()
 
 # Link with libevent if available
 if(USE_LIBEVENT)
-  target_link_libraries(agentflow PUBLIC libevent::libevent)
+  if(TARGET libevent::libevent)
+    target_link_libraries(agentflow PUBLIC libevent::libevent)
+  else()
+    target_link_libraries(agentflow PUBLIC ${LIBEVENT_LIBRARIES})
+  endif()
   target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_LIBEVENT=1)
 endif()
 
@@ -195,7 +417,9 @@ if(USE_RAPIDJSON)
   target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_RAPIDJSON=1)
 endif()
 
+# ============================================================================
 # Examples
+# ============================================================================
 add_executable(example_basic ${AGENTFLOW_EXAMPLE_DIR}/basic_example.cpp)
 target_link_libraries(example_basic PRIVATE agentflow)
 
@@ -215,46 +439,66 @@ target_link_libraries(example_node_execution PRIVATE agentflow)
 add_executable(example_metrics ${AGENTFLOW_EXAMPLE_DIR}/metrics_example.cpp)
 target_link_libraries(example_metrics PRIVATE agentflow)
 
+# P1 features example
+add_executable(example_p1_features ${AGENTFLOW_EXAMPLE_DIR}/p1_features_example.cpp)
+target_link_libraries(example_p1_features PRIVATE agentflow)
+
+# Storage example
+add_executable(example_storage ${AGENTFLOW_EXAMPLE_DIR}/storage_example.cpp)
+target_link_libraries(example_storage PRIVATE agentflow)
+
+# Control flow example
+add_executable(example_control_flow ${AGENTFLOW_EXAMPLE_DIR}/control_flow_example.cpp)
+target_link_libraries(example_control_flow PRIVATE agentflow)
+
+# ============================================================================
 # Tests
+# ============================================================================
 enable_testing()
 
-# Try to find Google Test, if not found, we'll use the simple test system
-find_package(GTest CONFIG QUIET)
-
-if(NOT GTest_FOUND)
-  message(STATUS "Google Test not found. Install with: sudo apt-get install libgtest-dev")
-  message(STATUS "Using simple test harness instead.")
-  set(USE_GTEST OFF)
-else()
-  message(STATUS "Google Test found. Using Google Test framework.")
-  set(USE_GTEST ON)
-endif()
+set(USE_GTEST ${GTest_FOUND})
 
 if(USE_GTEST)
+  message(STATUS "Google Test found. Using Google Test framework.")
   # Google Test based tests
-  add_executable(test_agentflow_gtest 
+  add_executable(test_agentflow_gtest
       ${AGENTFLOW_TEST_DIR}/test_agent_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/test_workflow_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/test_node_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/test_databus_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/test_event_gtest.cpp
   )
-  target_link_libraries(test_agentflow_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)
+  if(TARGET GTest::gtest)
+    target_link_libraries(test_agentflow_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)
+  else()
+    target_link_libraries(test_agentflow_gtest PRIVATE agentflow ${GTEST_LIBRARIES})
+    if(GTEST_INCLUDE_DIRS)
+      target_include_directories(test_agentflow_gtest PRIVATE ${GTEST_INCLUDE_DIRS})
+    endif()
+  endif()
   if(NOT MSVC)
     target_compile_options(test_agentflow_gtest PRIVATE -Wno-non-virtual-dtor)
   endif()
   add_test(NAME AgentFlowGoogleTests COMMAND test_agentflow_gtest)
-  
+
   # Adapter isolation tests with Google Test
   add_executable(test_adapter_isolation
       ${AGENTFLOW_TEST_DIR}/test_adapter_isolation.cpp
   )
-  target_link_libraries(test_adapter_isolation PRIVATE agentflow GTest::gtest GTest::gtest_main)
+  if(TARGET GTest::gtest)
+    target_link_libraries(test_adapter_isolation PRIVATE agentflow GTest::gtest GTest::gtest_main)
+  else()
+    target_link_libraries(test_adapter_isolation PRIVATE agentflow ${GTEST_LIBRARIES})
+    if(GTEST_INCLUDE_DIRS)
+      target_include_directories(test_adapter_isolation PRIVATE ${GTEST_INCLUDE_DIRS})
+    endif()
+  endif()
   if(NOT MSVC)
     target_compile_options(test_adapter_isolation PRIVATE -Wno-non-virtual-dtor)
   endif()
   add_test(NAME AdapterIsolationTests COMMAND test_adapter_isolation)
 else()
+  message(STATUS "Google Test not found. Using simple test harness.")
   # Simple test harness (fallback)
   add_executable(test_agentflow_simple
       ${AGENTFLOW_TEST_DIR}/test_main.cpp
@@ -265,7 +509,7 @@ else()
   )
   target_link_libraries(test_agentflow_simple PRIVATE agentflow)
   add_test(NAME AgentFlowSimpleTests COMMAND test_agentflow_simple)
-  
+
   # Adapter isolation tests (standalone executable when no Google Test)
   add_executable(test_adapter_isolation
       ${AGENTFLOW_TEST_DIR}/test_adapter_isolation.cpp
@@ -274,12 +518,19 @@ else()
   add_test(NAME AdapterIsolationTests COMMAND test_adapter_isolation)
 endif()
 
-# Print configuration
-message(STATUS "AgentFlow Configuration:")
+# ============================================================================
+# Print configuration summary
+# ============================================================================
+message(STATUS "")
+message(STATUS "============================================")
+message(STATUS "AgentFlow Configuration Summary")
+message(STATUS "============================================")
 message(STATUS "  Version: ${PROJECT_VERSION}")
 message(STATUS "  CXX Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Include Dir: ${AGENTFLOW_INCLUDE_DIR}")
 message(STATUS "  Source Dir: ${AGENTFLOW_SOURCE_DIR}")
+message(STATUS "  Build Type: ${CMAKE_BUILD_TYPE}")
+message(STATUS "")
 message(STATUS "Optional Dependencies:")
 message(STATUS "  Protoactor-cpp: ${USE_PROTOACTOR}")
 message(STATUS "  OpenSSL: ${USE_OPENSSL}")
@@ -288,3 +539,27 @@ message(STATUS "  Protobuf: ${USE_PROTOBUF}")
 message(STATUS "  libevent: ${USE_LIBEVENT}")
 message(STATUS "  RapidJSON: ${USE_RAPIDJSON}")
 message(STATUS "  Google Test: ${USE_GTEST}")
+message(STATUS "============================================")
+message(STATUS "")
+message(STATUS "To install missing dependencies:")
+message(STATUS "")
+message(STATUS "macOS (Homebrew):")
+message(STATUS "  ./scripts/install_dependencies.sh")
+message(STATUS "")
+message(STATUS "Ubuntu/Debian:")
+message(STATUS "  sudo apt-get install libssl-dev libwebsockets-dev libevent-dev rapidjson-dev libprotobuf-dev protobuf-compiler libgtest-dev pkg-config")
+message(STATUS "")
+message(STATUS "Fedora/CentOS:")
+message(STATUS "  sudo dnf install openssl-devel protobuf-devel libevent-devel rapidjson-devel libwebsockets-devel gtest-devel cmake")
+message(STATUS "  (or: sudo yum install openssl-devel protobuf-devel libevent-devel rapidjson-devel libwebsockets-devel gtest-devel cmake)")
+message(STATUS "")
+message(STATUS "Arch Linux:")
+message(STATUS "  sudo pacman -S openssl protobuf libevent rapidjson libwebsockets gtest cmake")
+message(STATUS "")
+message(STATUS "openSUSE:")
+message(STATUS "  sudo zypper install libopenssl-devel protobuf-devel libevent-devel rapidjson-devel libwebsockets-devel gtest-devel cmake")
+message(STATUS "")
+message(STATUS "Protoactor-cpp (all systems):")
+message(STATUS "  git clone https://github.com/DanielKernel/Protoactor-cpp.git")
+message(STATUS "  cd Protoactor-cpp && mkdir build && cd build && cmake .. && make && sudo make install")
+message(STATUS "============================================")
