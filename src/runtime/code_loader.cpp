@@ -11,12 +11,50 @@
 #include <unistd.h>
 #include <unordered_map>
 
+#include <sys/stat.h>
+
 #include <sys/wait.h>
 
 #include "agentflow/basic/logger.h"
 
 namespace agentflow {
 namespace runtime {
+
+namespace {
+
+bool is_executable_path(const std::string& path) {
+  struct stat st;
+  if(stat(path.c_str(), &st) != 0) {
+    return false;
+  }
+  if(S_ISDIR(st.st_mode)) {
+    return false;
+  }
+  return access(path.c_str(), X_OK) == 0;
+}
+
+std::string resolve_python_command(const char* python_path) {
+  if(!python_path || *python_path == '\0') {
+    return "";
+  }
+
+  std::string candidate = python_path;
+  if(is_executable_path(candidate)) {
+    return candidate;
+  }
+
+  struct stat st;
+  if(stat(candidate.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+    std::string from_dir = candidate + "/bin/python3";
+    if(is_executable_path(from_dir)) {
+      return from_dir;
+    }
+  }
+
+  return "";
+}
+
+}  // namespace
 
 // ============================================================================
 // SoLibraryHandle - Platform-specific SO library handle
@@ -228,8 +266,9 @@ ExecutionResult CodeLoader::execute_python_script(const std::string&            
 
   std::string python_cmd  = "python3";
   const char* python_path = std::getenv("PYTHON_PATH");
-  if(python_path) {
-    python_cmd = python_path;
+  std::string resolved_path = resolve_python_command(python_path);
+  if(!resolved_path.empty()) {
+    python_cmd = resolved_path;
   }
 
   std::string command = build_command_string(python_cmd, { script_path });

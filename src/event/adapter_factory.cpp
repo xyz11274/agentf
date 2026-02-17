@@ -14,8 +14,7 @@ std::shared_ptr<IEventLoopAdapter> create_eventloop_adapter() {
 #ifdef AGENTFLOW_WITH_LIBEVENT
   return std::make_shared<EventLoopLibeventAdapter>();
 #else
-  // Return nullptr for now - stub implementation needed
-  return nullptr;
+  return std::make_shared<EventLoopStubAdapter>();
 #endif
 }
 

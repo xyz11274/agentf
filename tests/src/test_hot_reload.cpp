@@ -4,6 +4,10 @@
 #include <gtest/gtest.h>
 #include <thread>
 
+#include <cstdlib>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include "agentflow/basic/logger.h"
 #include "agentflow/framework/node.h"
 #include "agentflow/runtime/code_loader.h"
@@ -13,6 +17,51 @@ using namespace agentflow;
 using namespace agentflow::runtime;
 
 namespace fs = std::filesystem;
+
+namespace {
+
+bool is_executable_file(const std::string& path) {
+  struct stat st;
+  if(stat(path.c_str(), &st) != 0) {
+    return false;
+  }
+  if(S_ISDIR(st.st_mode)) {
+    return false;
+  }
+  return access(path.c_str(), X_OK) == 0;
+}
+
+bool command_available(const std::string& cmd) {
+  if(cmd.empty()) {
+    return false;
+  }
+  std::string command = "command -v " + cmd + " >/dev/null 2>&1";
+  return std::system(command.c_str()) == 0;
+}
+
+bool python_available() {
+  const char* python_path = std::getenv("PYTHON_PATH");
+  if(python_path && *python_path != '\0') {
+    std::string candidate = python_path;
+    if(is_executable_file(candidate)) {
+      return true;
+    }
+    struct stat st;
+    if(stat(candidate.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+      std::string from_dir = candidate + "/bin/python3";
+      if(is_executable_file(from_dir)) {
+        return true;
+      }
+    }
+  }
+  return command_available("python3");
+}
+
+bool lua_available() {
+  return command_available("lua");
+}
+
+}  // namespace
 
 // ============================================================================
 // Test fixtures and helpers
@@ -232,6 +281,9 @@ TEST_F(HotReloadTest, ShellScript_WithWorkingDir) {
 // ============================================================================
 
 TEST_F(HotReloadTest, PythonScript_BasicExecution) {
+  if(!python_available()) {
+    GTEST_SKIP() << "Python interpreter not available";
+  }
   auto& loader = global_code_loader();
 
   std::string test_file = create_python_script("python_basic.py", "print('Hello from Python')");
@@ -249,6 +301,9 @@ TEST_F(HotReloadTest, PythonScript_BasicExecution) {
 }
 
 TEST_F(HotReloadTest, PythonScript_HotReload) {
+  if(!python_available()) {
+    GTEST_SKIP() << "Python interpreter not available";
+  }
   auto& manager = global_hot_reload_manager();
   auto& loader  = global_code_loader();
 
@@ -281,6 +336,9 @@ TEST_F(HotReloadTest, PythonScript_HotReload) {
 }
 
 TEST_F(HotReloadTest, PythonScript_WithArguments) {
+  if(!python_available()) {
+    GTEST_SKIP() << "Python interpreter not available";
+  }
   auto& loader = global_code_loader();
 
   std::string test_file = create_python_script("python_args.py", "print('Args:', sys.argv[1:])");
@@ -298,6 +356,9 @@ TEST_F(HotReloadTest, PythonScript_WithArguments) {
 }
 
 TEST_F(HotReloadTest, PythonScript_WithInputs) {
+  if(!python_available()) {
+    GTEST_SKIP() << "Python interpreter not available";
+  }
   auto& loader = global_code_loader();
 
   std::string test_file = create_python_script("python_inputs.py",
@@ -318,6 +379,9 @@ TEST_F(HotReloadTest, PythonScript_WithInputs) {
 }
 
 TEST_F(HotReloadTest, PythonScript_ErrorHandling) {
+  if(!python_available()) {
+    GTEST_SKIP() << "Python interpreter not available";
+  }
   auto& loader = global_code_loader();
 
   std::string test_file = create_python_script("python_error.py", "raise Exception('Test error')");
@@ -387,6 +451,9 @@ TEST_F(HotReloadTest, NodeJSScript_HotReload) {
 // ============================================================================
 
 TEST_F(HotReloadTest, LuaScript_BasicExecution) {
+  if(!lua_available()) {
+    GTEST_SKIP() << "Lua interpreter not available";
+  }
   auto& loader = global_code_loader();
 
   std::string test_file = create_lua_script("lua_basic.lua", "print('Hello from Lua')");
@@ -402,6 +469,9 @@ TEST_F(HotReloadTest, LuaScript_BasicExecution) {
 }
 
 TEST_F(HotReloadTest, LuaScript_HotReload) {
+  if(!lua_available()) {
+    GTEST_SKIP() << "Lua interpreter not available";
+  }
   auto& manager = global_hot_reload_manager();
   auto& loader  = global_code_loader();
 
