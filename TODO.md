@@ -10,10 +10,12 @@
 
 | 功能模块 | 完成度 | 说明 |
 |---------|--------|------|
-| 开发编排框架 | 88% | Agent、Workflow、Node、Edge定义基本完成，存储功能已实现，Edge条件支持已添加 |
-| 运行框架 | 85% | 核心调度和执行功能完成，控制流集成完成，零拷贝共享已实现，本地数据通道已实现，微服务内部接口已实现 |
-| 基础设施 | 50% | 适配器接口已定义，Protoactor-cpp适配已完成，libevent完整集成已完成 |
-| 监控和日志 | 60% | 基础监控完成，分布式监控和第三方对接待实现 |
+| 开发编排框架 | 85% | Agent、Workflow、Node、Edge定义基本完成，存储功能已实现，Edge条件支持已添加。DSL load_from_dsl为占位实现 |
+| 运行框架 | 75% | 核心调度和执行功能完成，控制流集成完成，本地数据通道已实现。零拷贝跨进程不可用，C++函数执行为stub，调度闭环需补全 |
+| 基础设施 | 48% | 适配器接口已定义，Protoactor-cpp适配已完成，libevent完整集成已完成。跨进程序列化为stub |
+| 监控和日志 | 58% | 基础监控完成，分布式监控和第三方对接待实现。performance_metrics.cpp未加入编译 |
+
+> ⚠️ 详细的代码完备性评估见 [docs/CODE_REVIEW.md](docs/CODE_REVIEW.md)
 
 ---
 
@@ -54,6 +56,7 @@
 - [x] Node超时配置和资源限制 - 已实现timeout_ms、memory_limit_mb、cpu_limit_mb
 - [x] 控制面/运行面分离架构 - 已定义ExecutionMode
 - [x] 支持非C++代码实现的Node - 已支持SHELL_SCRIPT、PYTHON_SCRIPT、SO_LIBRARY等
+  - ⚠️ **注意**: C++函数执行(execute_cpp_function)为stub，仅sleep+假输出
 - [x] 运行面DSL配置指定运行模式 - 已支持execution_mode配置
 - [ ] Node控制面Actor实际实现（暂时不需要实现）
 - [ ] Node间Actor协作机制实现（暂时不需要实现）
@@ -84,6 +87,7 @@
 - [x] Agent内部资源管理 - 已实现数据总线、事件队列
 - [x] Agent实例策略 - 已支持PER_REQUEST、FACTORY、SINGLETON
 - [x] 微服务层接口封装（内部函数） - 已实现Request/Response封装器
+  - ⚠️ **注意**: from_json()/from_binary()反序列化为stub
 - [ ] Agent对外统一访问接口定义（依赖微服务框架）
 - [ ] 多种协议支持（依赖微服务框架）
 
@@ -97,8 +101,10 @@
 - [x] Node输入输出数据处理 - 已实现inputs_/outputs_
 - [x] Node生命周期管理 - 已实现initialize/execute/cleanup
 - [x] 复杂流程控制（条件、循环、异常处理） - 已实现ControlFlowManager
+  - ⚠️ **注意**: FOR_EACH循环未实现（直接返回false）
 - [ ] Workflow动态更新时无需重新创建实例的实现
 - [x] 复杂流程控制与Workflow调度的集成 - 已实现get_executable_nodes_with_control等接口
+  - ⚠️ **注意**: on_node_complete未将后续节点入队，调度闭环断裂
 
 ### 2.3 AgentRuntime - 核心分层调度
 - [x] Agent层Master实现 - 已实现monitor_agents
@@ -124,7 +130,8 @@
 - [x] Node间Actor消息接口定义 - 已定义Actor相关接口
 - [x] Actor消息机制基础框架 - 已实现ActorSystem
 - [x] 业务数据通信面实现（private protocol） - 已实现协议定义、编解码、消息类型
-- [x] 本地零拷贝共享具体实现 - 已实现ZeroCopyDataBus，支持共享内存和读写锁
+- [x] 本地零拷贝共享具体实现 - 已实现ZeroCopyDataBus
+  - ⚠️ **注意**: 仅InProcess(堆内存)可用；POSIX/SystemV共享内存返回nullptr；订阅通知未触发
 - [ ] 跨节点高速传输
 - [ ] 系统维护通信面完整实现
 - [ ] gRPC协议支持
@@ -255,19 +262,22 @@
 
 ## 优先级建议
 
-### P0 - 核心功能（已完成）✅
+### P0 - 核心功能（存在已知缺陷需修复）
 - [x] 1. 完整的DSL解析和验证
 - [x] 2. AgentRuntime三层调度完整实现
+  - ⚠️ on_node_complete调度闭环断裂；std::rand()线程不安全
 - [x] 3. Node执行完整实现
+  - ⚠️ C++函数执行为stub（Shell/Python/SO等已完成）
 - [x] 4. 基础监控接口
 - [x] 5. 持久化存储基础功能
 - [x] 6. 复杂流程控制
+  - ⚠️ FOR_EACH循环未实现
 
 ### P1 - 重要功能（高优先级）
-1. [x] **复杂流程控制与Workflow调度集成** - ControlFlowManager已实现，已与Workflow调度集成
-2. [x] **本地零拷贝共享实现** - 已实现ZeroCopyDataBus，支持共享内存和读写锁
+1. [x] **复杂流程控制与Workflow调度集成** - ControlFlowManager已实现 ⚠️ 调度闭环需补全
+2. [x] **本地零拷贝共享实现** - 已实现ZeroCopyDataBus ⚠️ 仅InProcess可用，POSIX/SystemV返回nullptr
 3. [x] **本地数据通道实现** - 已实现LocalChannel，支持Agent/Workflow/Node间数据共享
-4. [x] **微服务层接口封装** - 已实现Request/Response封装器（内部函数接口）
+4. [x] **微服务层接口封装** - 已实现Request/Response封装器 ⚠️ from_json/from_binary为stub
 5. [x] **Protoactor-cpp适配** - 已完成Protoactor-cpp消息序列化和Ask模式适配
 6. [x] **libevent完整集成** - 已实现事件循环、定时器、文件描述符事件
 7. ⏸ **Node控制面Actor实现** - 暂时不需要实现
@@ -306,7 +316,27 @@
 1. ✅ 实现微服务层接口封装（Request/Response）
 2. ✅ 完善第三方库集成（Protoactor-cpp、libevent）
 
-### 第三阶段（暂不实现）
+### 第三阶段：缺陷修复与优化（建议优先执行）
+
+> 详细优化指南见 [docs/CODE_REVIEW.md](docs/CODE_REVIEW.md)
+
+#### 立即修复（P0 缺陷）
+1. 🔧 CMakeLists.txt 加入 performance_metrics.cpp
+2. 🔧 修复 gtest RPATH 链接问题
+3. 🔧 std::rand() → thread_local std::mt19937（agent_runtime.cpp）
+4. 🔧 on_node_complete 调度闭环补全（agent_runtime.cpp）
+5. 🔧 execute_with_timeout lambda 引用悬空修复（node.cpp）
+
+#### 短期补全（P1 功能）
+1. 🔧 execute_cpp_function 真实实现（node.cpp）
+2. 🔧 ZeroCopyDataBus put()后触发订阅通知（zero_copy_databus.cpp）
+3. 🔧 Request/Response from_json/from_binary 反序列化实现
+4. 🔧 FOR_EACH 循环实现（control_flow.cpp）
+5. 🔧 条件表达式解析缓存（workflow.cpp）
+6. 🔧 AgentRuntime 优雅关闭机制
+7. 🔧 补充核心模块单元测试（Agent/Workflow/DataBus/ControlFlow/AgentRuntime）
+
+### 第四阶段（暂不实现）
 1. ⏸ Node控制面Actor实现
 2. ⏸ WorkflowActor协调逻辑实现
 3. ⏸ 执行代理模式（分布式）

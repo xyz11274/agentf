@@ -146,12 +146,12 @@ AgentFlow/
 
 | 功能模块 | 完成度 | 详情 |
 |---------|--------|------|
-| 开发编排框架 | 88% | [查看详情](docs/PLANNING.md) |
-| 运行框架 | 85% | [查看详情](docs/PLANNING.md) |
-| 基础设施 | 50% | [查看详情](docs/PLANNING.md) |
-| 监控和日志 | 60% | [查看详情](docs/PLANNING.md) |
+| 开发编排框架 | 85% | [查看详情](docs/PLANNING.md) |
+| 运行框架 | 75% | [查看详情](docs/PLANNING.md) |
+| 基础设施 | 48% | [查看详情](docs/PLANNING.md) |
+| 监控和日志 | 58% | [查看详情](docs/PLANNING.md) |
 
-完整的功能规划和实现状态见 [项目规划](docs/PLANNING.md)。
+完整的功能规划和实现状态见 [项目规划](docs/PLANNING.md)，代码完备性评估见 [代码审查](docs/CODE_REVIEW.md)。
 
 ## 📋 支持和帮助
 

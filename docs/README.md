@@ -21,6 +21,7 @@
 |------|------|-----|
 | **ARCHITECTURE.md** | 系统5视图架构设计 | 84KB |
 | **PLANNING.md** | 功能规划和优先级 | 16KB |
+| **CODE_REVIEW.md** | 代码完备性评估和优化指南 | 12KB |
 | **development.md** | 开发环境设置和规范 | 12KB |
 | **dependencies.md** | 外部依赖管理 | 12KB |
 | **testing.md** | 测试指南和方法 | 13KB |
@@ -91,6 +92,7 @@
 | 我想... | 查看文档 |
 |--------|--------|
 | 学习系统架构 | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| 了解代码现状和优化点 | [CODE_REVIEW.md](CODE_REVIEW.md) |
 | 开始开发 | [development.md](development.md) |
 | 贡献代码 | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | 了解项目规划 | [PLANNING.md](PLANNING.md) |
