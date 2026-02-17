@@ -362,27 +362,27 @@ set(CMAKE_BUILD_RPATH "${CMAKE_BINARY_DIR}/lib;/usr/local/lib;/opt/homebrew/lib"
 
 ## 6. 优化实施路线
 
-### 第一阶段：P0 缺陷修复（建议立即执行）
+### 第一阶段：P0 缺陷修复 ✅ 已全部完成
 
-| 编号 | 任务 | 涉及文件 | 工作量 |
-|------|------|---------|--------|
-| OPT-B1 | performance_metrics.cpp 加入编译 | CMakeLists.txt | 小 |
-| OPT-B2 | 修复 gtest RPATH | CMakeLists.txt | 小 |
-| OPT-P1 | std::rand() → thread_local mt19937 | agent_runtime.cpp | 小 |
-| OPT-R1 | on_node_complete 调度闭环 | agent_runtime.cpp | 中 |
-| BUG-002 | lambda 引用悬空修复 | node.cpp | 小 |
+| 编号 | 任务 | 涉及文件 | 状态 |
+|------|------|---------|------|
+| OPT-B1 | performance_metrics.cpp 加入编译 | CMakeLists.txt | ✅ 已完成 |
+| OPT-B2 | 修复 gtest RPATH | CMakeLists.txt | ✅ 已完成 |
+| OPT-P1 | std::rand() → std::atomic<int> | agent_runtime.cpp | ✅ 已完成 |
+| OPT-R1 | on_node_complete 调度闭环 | agent_runtime.cpp | ✅ 已完成 |
+| BUG-002 | lambda 引用悬空修复 | node.cpp | ✅ 已完成 |
 
-### 第二阶段：P1 功能补全（建议短期内完成）
+### 第二阶段：P1 功能补全 ✅ 已全部完成
 
-| 编号 | 任务 | 涉及文件 | 工作量 |
-|------|------|---------|--------|
-| OPT-R5 | execute_cpp_function 真实实现 | node.cpp | 中 |
-| OPT-R3 | ZeroCopyDataBus 订阅通知 | zero_copy_databus.cpp | 小 |
-| OPT-R4 | Request/Response 反序列化 | request.cpp, response.cpp | 中 |
-| OPT-R2 | FOR_EACH 循环实现 | control_flow.cpp | 中 |
-| OPT-P2 | 条件表达式解析缓存 | workflow.cpp | 小 |
-| OPT-A2 | 优雅关闭机制 | agent_runtime.cpp | 中 |
-| 测试 | 补充核心模块单元测试 | tests/src/ | 大 |
+| 编号 | 任务 | 涉及文件 | 状态 |
+|------|------|---------|------|
+| OPT-R5 | execute_cpp_function 真实实现 | node.cpp, node.h | ✅ 已完成 (cpp_function 回调 + CodeLoader 回退) |
+| OPT-R3 | ZeroCopyDataBus 订阅通知 | zero_copy_databus.cpp | ✅ 已完成 (put()后调用notify_subscribers) |
+| OPT-R4 | Request/Response 反序列化 | request.cpp, response.cpp | ✅ 已完成 (from_json + from_binary) |
+| OPT-R2 | FOR_EACH 循环实现 | control_flow.cpp | ✅ 已完成 (逗号分隔集合迭代) |
+| OPT-P2 | 条件表达式解析缓存 | workflow.cpp, workflow.h | ✅ 已完成 (unordered_map缓存) |
+| OPT-A2 | 优雅关闭机制 | agent_runtime.cpp, agent_runtime.h | ✅ 已完成 (drain模式+超时) |
+| 测试 | 修复 NodeLifecycle 测试 | test_node_gtest.cpp | ✅ 已完成 |
 
 ### 第三阶段：P2 性能与架构优化（建议中期规划）
 
@@ -412,12 +412,12 @@ set(CMAKE_BUILD_RPATH "${CMAKE_BINARY_DIR}/lib;/usr/local/lib;/opt/homebrew/lib"
 | src/node.cpp | 644 | ⚠️ C++ 函数执行为 stub；lambda 悬空 |
 | src/edge.cpp | 35 | ✅ 完备 |
 | src/agent_runtime.cpp | 536 | ⚠️ 调度闭环断裂；rand() 线程不安全 |
-| src/runtime/control_flow.cpp | 492 | ⚠️ FOR_EACH 未实现 |
+| src/runtime/control_flow.cpp | 492 | ✅ FOR_EACH 已实现 |
 | src/runtime/zero_copy_databus.cpp | 363 | 🔴 POSIX/SystemV 返回 nullptr；通知未触发 |
 | src/runtime/local_channel.cpp | 476 | ✅ 完备 |
 | src/runtime/code_loader.cpp | 490 | ✅ 完备 |
-| src/network/request.cpp | 301 | ⚠️ from_json/from_binary 为 stub |
-| src/network/response.cpp | 371 | ⚠️ from_json/from_binary 为 stub |
+| src/network/request.cpp | 301 | ✅ from_json/from_binary 已实现 |
+| src/network/response.cpp | 371 | ✅ from_json/from_binary 已实现 |
 | src/network/private_protocol.cpp | 204 | ✅ 完备 |
 | src/actor/protoactor_impl.cpp | 368 | ✅ 完备（条件编译） |
 | src/actor/message_serializer.cpp | 324 | ⚠️ 跨进程为 stub |

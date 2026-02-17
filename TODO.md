@@ -2,7 +2,7 @@
 
 本项目的完整规划和功能实现状态已整合到 `docs/` 目录。
 
-**查看详细规划**：[docs/PLANNING.md](docs/PLANNING.md)
+**查看详细规划**：[docs/planning.md](docs/planning.md)
 
 ---
 
@@ -15,14 +15,14 @@
 | 基础设施 | 48% | 适配器接口已定义，Protoactor-cpp适配已完成，libevent完整集成已完成。跨进程序列化为stub |
 | 监控和日志 | 58% | 基础监控完成，分布式监控和第三方对接待实现。performance_metrics.cpp未加入编译 |
 
-> ⚠️ 详细的代码完备性评估见 [docs/CODE_REVIEW.md](docs/CODE_REVIEW.md)
+> ⚠️ 详细的代码完备性评估见 [docs/code-review.md](docs/code-review.md)
 
 ---
 
 ## 📖 文档导航
 
 ### 项目规划与功能
-- [PLANNING.md](docs/PLANNING.md) - **完整的项目规划文档**
+- [PLANNING.md](docs/planning.md) - **完整的项目规划文档**
   - 功能实现状态（P0、P1、P2、P3、P4）
   - 各模块详细规划
   - 优先级排序
@@ -318,7 +318,7 @@
 
 ### 第三阶段：缺陷修复与优化（建议优先执行）
 
-> 详细优化指南见 [docs/CODE_REVIEW.md](docs/CODE_REVIEW.md)
+> 详细优化指南见 [docs/code-review.md](docs/code-review.md)
 
 #### 立即修复（P0 缺陷）
 1. 🔧 CMakeLists.txt 加入 performance_metrics.cpp

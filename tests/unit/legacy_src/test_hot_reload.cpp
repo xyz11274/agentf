@@ -8,8 +8,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "agentflow/basic/logger.h"
-#include "agentflow/framework/node.h"
+#include "agentflow/utils/logger.h"
+#include "agentflow/core/node.h"
 #include "agentflow/runtime/code_loader.h"
 #include "agentflow/runtime/hot_reload.h"
 

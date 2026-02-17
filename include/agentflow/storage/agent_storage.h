@@ -8,7 +8,7 @@
 #include <memory>
 #include <vector>
 
-#include "agentflow/framework/agent.h"
+#include "agentflow/core/agent.h"
 #include "agentflow/storage/storage.h"
 
 namespace agentflow {

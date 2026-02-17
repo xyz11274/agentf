@@ -1,6 +1,6 @@
 #include <cassert>
 
-#include "agentflow/framework/node.h"
+#include "agentflow/core/node.h"
 
 using namespace agentflow;
 

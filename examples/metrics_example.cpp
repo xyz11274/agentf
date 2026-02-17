@@ -7,7 +7,7 @@
 #include <iostream>
 #include <thread>
 
-#include "agentflow/basic/logger.h"
+#include "agentflow/utils/logger.h"
 #include "agentflow/runtime/metrics.h"
 
 using namespace agentflow;

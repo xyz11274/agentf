@@ -1,7 +1,7 @@
-#include "agentflow/basic/logger.h"
-#include "agentflow/framework/agent.h"
-#include "agentflow/framework/node.h"
-#include "agentflow/framework/workflow.h"
+#include "agentflow/utils/logger.h"
+#include "agentflow/core/agent.h"
+#include "agentflow/core/node.h"
+#include "agentflow/core/workflow.h"
 #include "agentflow/runtime/agent_runtime.h"
 
 using namespace agentflow;

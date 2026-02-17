@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "agentflow/common.h"
-#include "agentflow/framework/workflow.h"
+#include "agentflow/core/workflow.h"
 
 namespace agentflow {
 namespace framework {

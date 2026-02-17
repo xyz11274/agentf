@@ -2,11 +2,12 @@
 #define AGENTFLOW_FRAMEWORK_WORKFLOW_H
 
 #include <map>
+#include <unordered_map>
 #include <vector>
 
 #include "agentflow/common.h"
-#include "agentflow/framework/edge.h"
-#include "agentflow/framework/node.h"
+#include "agentflow/core/edge.h"
+#include "agentflow/core/node.h"
 #include "agentflow/runtime/control_flow.h"
 
 namespace agentflow {
@@ -95,8 +96,9 @@ private:
   bool validate_dag();
   bool compute_topological_order();
 
-  // Condition expression parsing
+  // Condition expression parsing (with cache)
   runtime::ConditionExpression parse_condition_expression(const std::string& expr_str);
+  std::unordered_map<std::string, runtime::ConditionExpression> condition_cache_;
 
   // Cached topological order (computed once after nodes/edges are finalized)
   std::vector<NodeId> topological_order_;

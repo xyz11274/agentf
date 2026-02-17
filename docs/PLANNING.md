@@ -7,9 +7,9 @@
 | 功能模块 | 完成度 | 说明 |
 |---------|--------|------|
 | 开发编排框架 | 85% | Agent、Workflow、Node、Edge定义基本完成，存储功能已实现，Edge条件支持已添加。DSL load_from_dsl为占位实现 |
-| 运行框架 | 75% | 核心调度和执行功能完成，控制流集成完成，本地数据通道已实现。零拷贝跨进程不可用，C++函数执行为stub，节点调度闭环需补全 |
-| 基础设施 | 48% | 适配器接口已定义，Protoactor-cpp适配已完成，libevent完整集成已完成。跨进程序列化为stub |
-| 监控和日志 | 58% | 基础监控完成，分布式监控和第三方对接待实现。performance_metrics.cpp未加入编译 |
+| 运行框架 | 88% | 核心调度和执行功能完成 ✅，控制流集成完成 ✅，本地数据通道已实现。零拷贝跨进程不可用（P2），C++函数执行已实现 ✅，节点调度闭环已补全 ✅ |
+| 基础设施 | 58% | 适配器接口已定义，Protoactor-cpp适配已完成，libevent完整集成已完成。跨进程序列化已实现 ✅，performance_metrics.cpp已加入编译 ✅ |
+| 监控和日志 | 68% | 基础监控完成，performance_metrics跨平台实现完成 ✅，分布式监控和第三方对接待实现 |
 
 > ⚠️ 详细的代码完备性评估见 [CODE_REVIEW.md](CODE_REVIEW.md)
 
@@ -40,7 +40,7 @@
 - ✅ Node错误处理策略（支持重试、超时配置）
 - ✅ Node超时配置和资源限制
 - ✅ 控制面/运行面分离架构
-- ⚠️ 支持非C++代码实现的Node — Shell/Python/SO/Lua/Ruby/JAR等已实现，但**C++函数执行为stub**（硬编码sleep+假输出）
+- ✅ 支持非C++代码实现的Node — Shell/Python/SO/Lua/Ruby/JAR等已实现，C++函数执行已实现（cpp_function回调 + CodeLoader回退）
 - ✅ 运行面DSL配置指定运行模式
 - ⏳ Node控制面Actor实际实现（暂时不需要实现）
 - ⏳ Node间Actor协作机制实现（暂时不需要实现）
@@ -83,9 +83,9 @@
 - ✅ Node执行状态管理
 - ✅ Node输入输出数据处理
 - ✅ Node生命周期管理
-- ⚠️ 复杂流程控制（条件、循环、异常处理）— FOR_EACH循环未实现，直接返回false
+- ✅ 复杂流程控制（条件、循环、异常处理）— FOR_EACH循环已实现，条件表达式缓存已优化
 - ⏳ Workflow动态更新时无需重新创建实例的实现
-- ⚠️ 复杂流程控制与Workflow调度的集成 — on_node_complete未将后续节点入队调度
+- ✅ 复杂流程控制与Workflow调度的集成 — on_node_complete已将后续节点入队调度
 
 ### AgentRuntime - 核心分层调度
 - ✅ Agent层Master实现
@@ -242,20 +242,19 @@
 
 ## 🎯 优先级规划
 
-### P0 - 核心功能
-已完成大部分P0功能，以下项存在已知缺陷需修复：
+### P0 - 核心功能 ✅ 已全部完成
 - ✅ 完整的DSL解析和验证
-- ⚠️ AgentRuntime三层调度 — on_node_complete调度闭环断裂，std::rand()线程不安全
-- ⚠️ Node执行 — C++函数执行为stub（Shell/Python/SO等已完成）
+- ✅ AgentRuntime三层调度 — on_node_complete调度闭环已修复，std::atomic<int>替换std::rand()
+- ✅ Node执行 — C++函数执行已实现（cpp_function回调 + CodeLoader回退）
 - ✅ 基础监控接口
 - ✅ 持久化存储基础功能
-- ⚠️ 复杂流程控制 — FOR_EACH循环未实现
+- ✅ 复杂流程控制 — FOR_EACH循环已实现
 
 ### P1 - 重要功能（高优先级）
-1. ⚠️ 复杂流程控制与Workflow调度集成 — 调度闭环需补全
-2. ⚠️ 本地零拷贝共享实现 — 仅InProcess可用，POSIX/SystemV返回nullptr
+1. ✅ 复杂流程控制与Workflow调度集成 — 调度闭环已补全
+2. ⚠️ 本地零拷贝共享实现 — 仅InProcess可用，POSIX/SystemV返回nullptr（P2规划）
 3. ✅ 本地数据通道实现
-4. ⚠️ 微服务层接口封装 — Request/Response from_json/from_binary为stub
+4. ✅ 微服务层接口封装 — Request/Response from_json/from_binary已实现
 5. ✅ Protoactor-cpp适配
 6. ✅ libevent完整集成
 7. ⏸ Node控制面Actor实现（暂时不需要）

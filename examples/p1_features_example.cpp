@@ -11,10 +11,10 @@
 #include <memory>
 #include <thread>
 
-#include "agentflow/basic/logger.h"
-#include "agentflow/framework/agent.h"
-#include "agentflow/framework/node.h"
-#include "agentflow/framework/workflow.h"
+#include "agentflow/utils/logger.h"
+#include "agentflow/core/agent.h"
+#include "agentflow/core/node.h"
+#include "agentflow/core/workflow.h"
 #include "agentflow/network/private_protocol.h"
 #include "agentflow/runtime/control_flow.h"
 #include "agentflow/runtime/zero_copy_databus.h"

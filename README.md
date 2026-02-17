@@ -70,16 +70,16 @@ agent->start();
 
 ### 📖 新用户入门
 1. **[文档导航](docs/README.md)** - 所有文档的索引和说明
-2. **[架构设计](docs/ARCHITECTURE.md)** - 系统5视图架构设计
+2. **[架构设计](docs/architecture.md)** - 系统5视图架构设计
 3. **[开发指南](docs/development.md)** - 环境配置和编程规范
-4. **[快速参考](docs/QUICK_REFERENCE.md)** - 常用命令和快速指南
+4. **[快速参考](docs/ci-cd.md)** - 常用命令和快速指南
 
 ### 🏗️ 项目规划与功能状态
-- **[项目规划](docs/PLANNING.md)** - 功能实现状态、优先级和路线图
+- **[项目规划](docs/planning.md)** - 功能实现状态、优先级和路线图
 - **[路线图](docs/roadmap.md)** - 短期计划和功能愿景
 
 ### 💻 开发和贡献
-- **[贡献指南](docs/CONTRIBUTING.md)** - 如何为项目做贡献
+- **[贡献指南](docs/contributing.md)** - 如何为项目做贡献
   - 代码规范和提交流程
   - 测试要求
   - Pull Request 指南
@@ -87,8 +87,8 @@ agent->start();
 - **[测试指南](docs/testing.md)** - 测试方法和覆盖率要求
 
 ### ⚙️ CI/CD 和部署
-- **[CI/CD 流水线](docs/CI_CD_PIPELINE.md)** - 自动化测试和部署流程
-- **[CI/CD 设置](docs/CI_CD_SETUP.md)** - 配置和常见问题
+- **[CI/CD 流水线](docs/ci-cd.md)** - 自动化测试和部署流程
+- **[CI/CD 设置](docs/ci-cd.md)** - 配置和常见问题
 - **[脚本指南](scripts/README.md)** - 项目脚本使用说明
 
 ## 🏗️ 项目结构
@@ -133,7 +133,7 @@ AgentFlow/
 
 ## 🤝 贡献
 
-欢迎贡献！请参考 [贡献指南](docs/CONTRIBUTING.md)：
+欢迎贡献！请参考 [贡献指南](docs/contributing.md)：
 
 1. Fork 项目
 2. 创建特性分支 (`git checkout -b feature/my-feature`)
@@ -146,12 +146,12 @@ AgentFlow/
 
 | 功能模块 | 完成度 | 详情 |
 |---------|--------|------|
-| 开发编排框架 | 85% | [查看详情](docs/PLANNING.md) |
-| 运行框架 | 75% | [查看详情](docs/PLANNING.md) |
-| 基础设施 | 48% | [查看详情](docs/PLANNING.md) |
-| 监控和日志 | 58% | [查看详情](docs/PLANNING.md) |
+| 开发编排框架 | 85% | [查看详情](docs/planning.md) |
+| 运行框架 | 75% | [查看详情](docs/planning.md) |
+| 基础设施 | 48% | [查看详情](docs/planning.md) |
+| 监控和日志 | 58% | [查看详情](docs/planning.md) |
 
-完整的功能规划和实现状态见 [项目规划](docs/PLANNING.md)，代码完备性评估见 [代码审查](docs/CODE_REVIEW.md)。
+完整的功能规划和实现状态见 [项目规划](docs/planning.md)，代码完备性评估见 [代码审查](docs/code-review.md)。
 
 ## 📋 支持和帮助
 

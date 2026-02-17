@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-#include "agentflow/framework/node.h"
+#include "agentflow/core/node.h"
 
 using namespace agentflow;
 using namespace agentflow::framework;
@@ -109,6 +109,10 @@ TEST_F(NodeTest, NodeLifecycle) {
   config.id   = "lifecycle_node";
   config.name = "lifecycle_node";
   config.type = "LifecycleTest";
+  config.cpp_function = [](const DataMap& inputs, DataMap& outputs) -> bool {
+    outputs["result"] = std::string("success");
+    return true;
+  };
 
   Node node(config);
 

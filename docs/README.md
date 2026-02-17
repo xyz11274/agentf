@@ -13,42 +13,29 @@
 
 ---
 
-## 📚 docs/ 目录完整列表
+## 📚 docs/ 目录文档列表
 
 ### 📖 核心文档
 
 | 文档 | 用途 | 大小 |
 |------|------|-----|
-| **ARCHITECTURE.md** | 系统5视图架构设计 | 84KB |
-| **PLANNING.md** | 功能规划和优先级 | 16KB |
-| **CODE_REVIEW.md** | 代码完备性评估和优化指南 | 12KB |
-| **development.md** | 开发环境设置和规范 | 12KB |
-| **dependencies.md** | 外部依赖管理 | 12KB |
-| **testing.md** | 测试指南和方法 | 13KB |
-| **roadmap.md** | 项目路线图 | 6.1KB |
+| **architecture.md** | 系统5视图架构设计 | 83KB |
+| **planning.md** | 功能规划和优先级 | 10KB |
+| **code-review.md** | 代码完备性评估和优化指南（P0/P1 已完成✅） | 17KB |
+| **api-reference.md** | API 参考手册 | 30KB |
+| **development.md** | 开发环境设置和规范 | 11KB |
+| **dependencies.md** | 外部依赖管理 | 11KB |
+| **testing.md** | 测试指南和方法 | 12KB |
+| **roadmap.md** | 项目路线图 | 6.3KB |
 
-### 📝 贡献和参考
-
-| 文档 | 用途 | 大小 |
-|------|------|-----|
-| **CONTRIBUTING.md** | 贡献指南完整版 | 9.5KB |
-| **QUICK_REFERENCE.md** | 快速参考卡 | 3.2KB |
-
-### ⚙️ CI/CD 和部署
+### 📝 贡献和 CI/CD
 
 | 文档 | 用途 | 大小 |
 |------|------|-----|
-| **CI_CD_PIPELINE.md** | 流水线自动化指南 | 11KB |
-| **CI_CD_SETUP.md** | 配置和常见问题 | 8.7KB |
-| **CI_CD_IMPLEMENTATION.md** | 实现细节 | 14KB |
+| **contributing.md** | 贡献指南完整版 | 9.5KB |
+| **ci-cd.md** | CI/CD 自动化管线（合并版） | 8.0KB |
 
-### 🚀 性能测试 (新增)
-
-| 文档 | 用途 | 位置 |
-|------|------|-----|
-| **README_PERFORMANCE_TESTS.md** | 性能测试框架完整指南 | ../tests/ |
-
-**总文档量**：~230KB
+**总文档量**：~200KB
 
 ---
 
@@ -57,28 +44,27 @@
 ### 新用户入门
 
 1. 查看 [../README.md](../README.md) - 项目概览和导航
-2. 阅读 [ARCHITECTURE.md](ARCHITECTURE.md) - 了解系统架构
-3. 查看 [development.md](development.md) - 设置开发环境
-4. 参考 [QUICK_REFERENCE.md](QUICK_REFERENCE.md) - 常用命令
+2. 阅读 [architecture.md](architecture.md) - 了解系统架构
+3. 查看 [api-reference.md](api-reference.md) - API 使用指南
+4. 查看 [development.md](development.md) - 设置开发环境
 
 ### 贡献代码前
 
-1. 阅读 [CONTRIBUTING.md](CONTRIBUTING.md) - 完整贡献指南
+1. 阅读 [contributing.md](contributing.md) - 完整贡献指南
 2. 查看 [testing.md](testing.md) - 测试要求
-3. 检查 [QUICK_REFERENCE.md](QUICK_REFERENCE.md) - 提交清单
+3. 查看 [ci-cd.md](ci-cd.md) - 本地质量检查
 
 ### 了解项目规划
 
-1. 查看 [PLANNING.md](PLANNING.md) - 功能实现状态
-2. 查看 [../TODO.md](../TODO.md) - 快速规划导航
-3. 查看 [roadmap.md](roadmap.md) - 长期计划
+1. 查看 [planning.md](planning.md) - 功能实现状态
+2. 查看 [code-review.md](code-review.md) - 代码现状和优化
+3. 查看 [../TODO.md](../TODO.md) - 快速规划导航
+4. 查看 [roadmap.md](roadmap.md) - 长期计划
 
 ### CI/CD 和部署
 
-1. 查看 [CI_CD_PIPELINE.md](CI_CD_PIPELINE.md) - 流水线完整文档
-2. 查看 [CI_CD_SETUP.md](CI_CD_SETUP.md) - 配置和问题排查
-3. 查看 [CI_CD_IMPLEMENTATION.md](CI_CD_IMPLEMENTATION.md) - 实现细节
-4. 查看 [../tests/README_PERFORMANCE_TESTS.md](../tests/README_PERFORMANCE_TESTS.md) - 性能测试指南
+1. 查看 [ci-cd.md](ci-cd.md) - CI/CD 完整指南
+2. 查看 [../tests/README_PERFORMANCE_TESTS.md](../tests/README_PERFORMANCE_TESTS.md) - 性能测试指南
 
 ### 运维和系统
 
@@ -91,13 +77,13 @@
 
 | 我想... | 查看文档 |
 |--------|--------|
-| 学习系统架构 | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| 了解代码现状和优化点 | [CODE_REVIEW.md](CODE_REVIEW.md) |
+| 学习系统架构 | [architecture.md](architecture.md) |
+| 了解代码现状和优化点 | [code-review.md](code-review.md) |
+| 查看 API 使用方法 | [api-reference.md](api-reference.md) |
 | 开始开发 | [development.md](development.md) |
-| 贡献代码 | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| 了解项目规划 | [PLANNING.md](PLANNING.md) |
-| 查询 CI/CD | [CI_CD_PIPELINE.md](CI_CD_PIPELINE.md) |
-| 快速查阅命令 | [QUICK_REFERENCE.md](QUICK_REFERENCE.md) |
+| 贡献代码 | [contributing.md](contributing.md) |
+| 了解项目规划 | [planning.md](planning.md) |
+| 查询 CI/CD | [ci-cd.md](ci-cd.md) |
 | 了解依赖库 | [dependencies.md](dependencies.md) |
 | 运行测试 | [testing.md](testing.md) |
 | 使用脚本 | [../scripts/README.md](../scripts/README.md) |
@@ -108,65 +94,65 @@
 
 ## 📊 文档内容梗概
 
-### ARCHITECTURE.md (84KB)
+### architecture.md (83KB)
 - 5视图架构（场景、逻辑、开发、运行、部署）
 - 模块设计详解
 - 设计模式说明
 
-### development.md (12KB)
+### api-reference.md (30KB)
+- 核心 API 使用指南
+- 代码示例
+- 最佳实践
+
+### code-review.md (17KB)
+- 代码完备性评估
+- P0 缺陷修复 ✅ 已完成
+- P1 功能补全 ✅ 已完成
+- P2 性能优化计划
+
+### development.md (11KB)
 - 环境配置步骤
 - 编程规范
 - 开发工作流程
 - 工具和命令
 
-### CONTRIBUTING.md (9.5KB)
+### contributing.md (9.5KB)
 - 代码规范
 - 提交流程
 - Pull Request 指南
 - 行为守则
 
-### testing.md (13KB)
+### testing.md (12KB)
 - 测试方法
 - 覆盖率要求
 - 测试工具说明
 
-### PLANNING.md (16KB)
+### planning.md (10KB)
 - P0-P4 优先级功能
 - 各模块实现状态  
 - 更新日志
 
-### CI/CD 系列 (~34KB)
-- **CI_CD_PIPELINE.md** - 流水线描述
-- **CI_CD_SETUP.md** - 配置指南
-- **CI_CD_IMPLEMENTATION.md** - 实现细节
+### ci-cd.md (8KB) - 合并版
+- 构建/测试/发布工作流
+- 代码质量检查
+- 本地开发指南
+- 快速参考
 
-### dependencies.md (12KB)
+### dependencies.md (11KB)
 - 依赖列表
 - 安装方式
 - 隔离策略
 
-### QUICK_REFERENCE.md (3.2KB)
-- 常用命令
-- Git 工作流
-- 检查清单
-
-### roadmap.md (6.1KB)
+### roadmap.md (6.3KB)
 - 版本计划
 - 特性愿景
-
-### README_PERFORMANCE_TESTS.md (位于 ../tests/)
-- 性能测试框架体系
-- 5个测试场景详解
-- 性能指标和基线
-- 本地测试和调试方法
-- CI/CD性能测试工作流
 
 ---
 
 ## 📝 维护指南
 
 ### 添加新文档
-1. 在 `docs/` 目录创建 Markdown 文件
+1. 在 `docs/` 目录创建 Markdown 文件（使用 lowercase-hyphen 命名）
 2. 编写清晰的标题和目录
 3. 在本文件中更新文档列表
 4. 在 [../README.md](../README.md) 中添加导航
@@ -175,6 +161,11 @@
 1. 保持与代码同步
 2. 更新相关链接
 3. 在文档尾部记录更新日期
+
+### 文档命名规范
+- 使用小写字母和连字符（lowercase-hyphen）
+- 例如：`api-reference.md`, `code-review.md`, `ci-cd.md`
+- 例外：`README.md`（GitHub 标准）
 
 ### 文档标准
 - 使用 Markdown 格式
@@ -191,12 +182,15 @@
 
 **文档有错误或不清晰？**
 - 提交 Issue 或 Pull Request
-- 参考 [CONTRIBUTING.md](CONTRIBUTING.md)
+- 参考 [contributing.md](contributing.md)
 
 **需要快速参考？**
-- 查看 [QUICK_REFERENCE.md](QUICK_REFERENCE.md)
+- 查看 [ci-cd.md](ci-cd.md) 的快速参考部分
 
 ---
 
-**最后更新**：2026 年 2 月 17 日  
-**维护者**：@DanielKernel
+**最后更新**：2026 年 2 月 18 日  
+**维护者**：@DanielKernel  
+**变更记录**：
+- 2026-02-18: 合并 CI/CD 文档，统一命名规范为 lowercase-hyphen
+- 2026-02-17: 添加 API 参考和代码审查文档

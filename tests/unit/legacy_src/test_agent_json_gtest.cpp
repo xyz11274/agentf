@@ -6,8 +6,8 @@
 #include <gtest/gtest.h>
 
 #include "agentflow/dsl/workflow_parser.h"
-#include "agentflow/framework/agent.h"
-#include "agentflow/framework/workflow.h"
+#include "agentflow/core/agent.h"
+#include "agentflow/core/workflow.h"
 #include "agentflow/runtime/databus.h"
 
 namespace agentflow {

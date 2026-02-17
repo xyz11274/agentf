@@ -4,7 +4,7 @@
 // Ask pattern manager - lightweight wrapper for Protoactor's built-in ask
 
 #include "agentflow/actor/ask_pattern.h"
-#include "agentflow/basic/logger.h"
+#include "agentflow/utils/logger.h"
 
 #ifdef AGENTFLOW_WITH_PROTOACTOR
 

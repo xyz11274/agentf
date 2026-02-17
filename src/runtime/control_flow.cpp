@@ -10,7 +10,7 @@
 #include <cstring>
 #include <sstream>
 
-#include "agentflow/basic/logger.h"
+#include "agentflow/utils/logger.h"
 
 namespace agentflow {
 namespace runtime {
@@ -98,9 +98,55 @@ bool ControlContext::should_continue_loop(const std::string& loop_id, const Loop
     }
 
     case LoopType::FOR_EACH_LOOP: {
-      // Check if there are more items in collection
-      // (Implementation depends on how collection is stored)
-      return false;  // Placeholder
+      // Iterate over collection stored in a context variable.
+      // The collection is a comma-separated string in collection_variable.
+      // Each iteration sets item_variable to the current element.
+      std::string collection_str;
+      if(!get_variable(config.collection_variable, collection_str)) {
+        return false;
+      }
+
+      // Count elements in the comma-separated collection
+      int element_count = 1;
+      for(char c : collection_str) {
+        if(c == ',') {
+          element_count++;
+        }
+      }
+
+      if(state.iteration >= element_count) {
+        return false;
+      }
+
+      // Extract current element and set as item variable
+      int         idx = 0;
+      std::string current_item;
+      size_t      start = 0;
+      for(size_t i = 0; i <= collection_str.size(); ++i) {
+        if(i == collection_str.size() || collection_str[i] == ',') {
+          if(idx == state.iteration) {
+            current_item = collection_str.substr(start, i - start);
+            // Trim whitespace
+            size_t first = current_item.find_first_not_of(" \t");
+            size_t last  = current_item.find_last_not_of(" \t");
+            if(first != std::string::npos) {
+              current_item = current_item.substr(first, last - first + 1);
+            }
+            break;
+          }
+          idx++;
+          start = i + 1;
+        }
+      }
+
+      // Set the item variable in context and loop state
+      set_variable(config.item_variable, current_item);
+      auto mut_it = loops_.find(loop_id);
+      if(mut_it != loops_.end()) {
+        mut_it->second.variables[config.item_variable] = current_item;
+      }
+
+      return true;
     }
 
     case LoopType::REPEAT_LOOP: {

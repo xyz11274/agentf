@@ -2,9 +2,9 @@
 #include <thread>
 #include <vector>
 
-#include "agentflow/framework/agent.h"
-#include "agentflow/framework/node.h"
-#include "agentflow/framework/workflow.h"
+#include "agentflow/core/agent.h"
+#include "agentflow/core/node.h"
+#include "agentflow/core/workflow.h"
 #include "agentflow/runtime/agent_runtime.h"
 #include "agentflow/testing/performance_metrics.h"
 

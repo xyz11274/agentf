@@ -10,7 +10,7 @@
 #include <algorithm>
 
 #include "agentflow/actor/node_actor.h"
-#include "agentflow/basic/logger.h"
+#include "agentflow/utils/logger.h"
 #include "protoactor/context.h"
 #include "protoactor/pid.h"
 #include "protoactor/props.h"

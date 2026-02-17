@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <cstring>
 
-#include "agentflow/basic/logger.h"
+#include "agentflow/utils/logger.h"
 
 #ifdef __linux__
 #include <fcntl.h>
@@ -130,8 +130,15 @@ ZeroCopyDataBus::~ZeroCopyDataBus() {
 }
 
 bool ZeroCopyDataBus::put(const std::string& key, const DataVariant& value) {
-  std::shared_lock<std::shared_mutex> lock(data_mutex_);
-  return shared_memory_->write(key, value);
+  bool result;
+  {
+    std::shared_lock<std::shared_mutex> lock(data_mutex_);
+    result = shared_memory_->write(key, value);
+  }
+  if(result) {
+    notify_subscribers(key, value);
+  }
+  return result;
 }
 
 bool ZeroCopyDataBus::get(const std::string& key, DataVariant& value) const {

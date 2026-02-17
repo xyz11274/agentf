@@ -344,34 +344,33 @@ set(AGENTFLOW_EXAMPLE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/examples)
 include_directories(${AGENTFLOW_INCLUDE_DIR})
 
 # Source files
-set(AGENTFLOW_FRAMEWORK_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/node.cpp
-    ${AGENTFLOW_SOURCE_DIR}/edge.cpp
-    ${AGENTFLOW_SOURCE_DIR}/workflow.cpp
-    ${AGENTFLOW_SOURCE_DIR}/agent.cpp
+set(AGENTFLOW_CORE_SOURCES
+    ${AGENTFLOW_SOURCE_DIR}/core/node.cpp
+    ${AGENTFLOW_SOURCE_DIR}/core/edge.cpp
+    ${AGENTFLOW_SOURCE_DIR}/core/workflow.cpp
+    ${AGENTFLOW_SOURCE_DIR}/core/agent.cpp
 )
 
 set(AGENTFLOW_RUNTIME_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/databus.cpp
-    ${AGENTFLOW_SOURCE_DIR}/event.cpp
-    ${AGENTFLOW_SOURCE_DIR}/agent_runtime.cpp
-    ${AGENTFLOW_SOURCE_DIR}/metrics.cpp
-    ${AGENTFLOW_SOURCE_DIR}/hot_reload.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/databus.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/agent_runtime.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/metrics.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/hot_reload.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/code_loader.cpp
-    ${AGENTFLOW_SOURCE_DIR}/performance_metrics.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/performance_metrics.cpp
 )
 
-set(AGENTFLOW_BASIC_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/logger.cpp
-    ${AGENTFLOW_SOURCE_DIR}/thread_pool.cpp
+set(AGENTFLOW_UTILS_SOURCES
+    ${AGENTFLOW_SOURCE_DIR}/utils/logger.cpp
+    ${AGENTFLOW_SOURCE_DIR}/utils/thread_pool.cpp
 )
 
 set(AGENTFLOW_ACTOR_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/actor_system.cpp
+    ${AGENTFLOW_SOURCE_DIR}/actor/actor_system.cpp
     ${AGENTFLOW_SOURCE_DIR}/actor/adapter_factory.cpp
     ${AGENTFLOW_SOURCE_DIR}/actor/stub_impl.cpp
-    ${AGENTFLOW_SOURCE_DIR}/node_actor.cpp
-    ${AGENTFLOW_SOURCE_DIR}/workflow_actor.cpp
+    ${AGENTFLOW_SOURCE_DIR}/actor/node_actor.cpp
+    ${AGENTFLOW_SOURCE_DIR}/actor/workflow_actor.cpp
 )
 
 # Include Protoactor implementation only if available
@@ -411,6 +410,7 @@ set(AGENTFLOW_SERIALIZATION_SOURCES
 
 # Event sources
 set(AGENTFLOW_EVENT_SOURCES
+    ${AGENTFLOW_SOURCE_DIR}/event/event.cpp
     ${AGENTFLOW_SOURCE_DIR}/event/adapter_factory.cpp
     ${AGENTFLOW_SOURCE_DIR}/event/eventloop_adapter/libevent_impl.cpp
 )
@@ -435,9 +435,9 @@ set(AGENTFLOW_ZERO_COPY_DATABUS_SOURCES
 )
 
 set(AGENTFLOW_SOURCES
-    ${AGENTFLOW_FRAMEWORK_SOURCES}
+    ${AGENTFLOW_CORE_SOURCES}
     ${AGENTFLOW_RUNTIME_SOURCES}
-    ${AGENTFLOW_BASIC_SOURCES}
+    ${AGENTFLOW_UTILS_SOURCES}
     ${AGENTFLOW_ACTOR_SOURCES}
     ${AGENTFLOW_DSL_SOURCES}
     ${AGENTFLOW_NETWORK_SOURCES}
@@ -578,17 +578,17 @@ if(AGENTFLOW_BUILD_TESTS)
   message(STATUS "Google Test found. Using Google Test framework.")
   # Google Test based tests
   add_executable(test_agentflow_gtest
-      ${AGENTFLOW_TEST_DIR}/src/test_agent_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/src/test_workflow_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/src/test_node_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/src/test_databus_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/src/test_event_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/src/test_eventloop_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/src/test_workflow_json_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/src/test_agent_json_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/src/test_local_channel_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/src/test_request_response_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/src/test_hot_reload.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_agent_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_workflow_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_node_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_databus_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_event_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_eventloop_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_workflow_json_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_agent_json_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_local_channel_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_request_response_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_hot_reload.cpp
   )
   if(TARGET GTest::gtest)
     target_link_libraries(test_agentflow_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)
@@ -608,7 +608,7 @@ if(AGENTFLOW_BUILD_TESTS)
 
   # Hot reload tests (separate executable for better organization)
     add_executable(test_hot_reload
-      ${AGENTFLOW_TEST_DIR}/src/test_hot_reload.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_hot_reload.cpp
     )
   if(TARGET GTest::gtest)
     target_link_libraries(test_hot_reload PRIVATE agentflow GTest::gtest GTest::gtest_main)
@@ -631,7 +631,7 @@ if(AGENTFLOW_BUILD_TESTS)
 
   # Adapter isolation tests with Google Test
     add_executable(test_adapter_isolation
-      ${AGENTFLOW_TEST_DIR}/src/test_adapter_isolation.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_adapter_isolation.cpp
     )
   if(TARGET GTest::gtest)
     target_link_libraries(test_adapter_isolation PRIVATE agentflow GTest::gtest GTest::gtest_main)
@@ -652,11 +652,11 @@ if(AGENTFLOW_BUILD_TESTS)
     message(STATUS "Google Test not found. Using simple test harness.")
     # Simple test harness (fallback)
     add_executable(test_agentflow_simple
-      ${AGENTFLOW_TEST_DIR}/src/test_main.cpp
-      ${AGENTFLOW_TEST_DIR}/src/test_agent.cpp
-      ${AGENTFLOW_TEST_DIR}/src/test_workflow.cpp
-      ${AGENTFLOW_TEST_DIR}/src/test_node.cpp
-      ${AGENTFLOW_TEST_DIR}/src/test_databus.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_main.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_agent.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_workflow.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_node.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_databus.cpp
     )
     target_link_libraries(test_agentflow_simple PRIVATE agentflow)
     add_test(NAME AgentFlowSimpleTests COMMAND test_agentflow_simple)
@@ -666,7 +666,7 @@ if(AGENTFLOW_BUILD_TESTS)
 
     # Adapter isolation tests (standalone executable when no Google Test)
     add_executable(test_adapter_isolation
-      ${AGENTFLOW_TEST_DIR}/src/test_adapter_isolation.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/legacy_src/test_adapter_isolation.cpp
     )
     target_link_libraries(test_adapter_isolation PRIVATE agentflow)
     add_test(NAME AdapterIsolationTests COMMAND test_adapter_isolation)

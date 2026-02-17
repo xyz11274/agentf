@@ -11,7 +11,7 @@
 #include <event2/event.h>
 #include <memory>
 
-#include "agentflow/basic/logger.h"
+#include "agentflow/utils/logger.h"
 
 namespace agentflow {
 namespace event {

@@ -8,7 +8,7 @@
 #include <chrono>
 #include <cstring>
 
-#include "agentflow/basic/logger.h"
+#include "agentflow/utils/logger.h"
 
 #ifdef AGENTFLOW_WITH_PROTOACTOR
 

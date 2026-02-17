@@ -8,13 +8,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Test sources
 set(TEST_SOURCES
-    src/test_hot_reload.cpp
-    src/test_agent_gtest.cpp
-    src/test_workflow_gtest.cpp
-    src/test_node_gtest.cpp
-    src/test_databus_gtest.cpp
-    src/test_event_gtest.cpp
-    src/test_eventloop_gtest.cpp
+    unit/legacy_src/test_hot_reload.cpp
+    unit/legacy_src/test_agent_gtest.cpp
+    unit/legacy_src/test_workflow_gtest.cpp
+    unit/legacy_src/test_node_gtest.cpp
+    unit/legacy_src/test_databus_gtest.cpp
+    unit/legacy_src/test_event_gtest.cpp
+    unit/legacy_src/test_eventloop_gtest.cpp
 )
 
 # Find dependencies
@@ -61,7 +61,7 @@ endif()
 
 # Other test executables
 add_executable(test_agent_gtest
-    src/test_agent_gtest.cpp
+    unit/legacy_src/test_agent_gtest.cpp
 )
 target_link_libraries(test_agent_gtest PRIVATE
     agentflow
@@ -70,7 +70,7 @@ target_link_libraries(test_agent_gtest PRIVATE
 )
 
 add_executable(test_workflow_gtest
-    src/test_workflow_gtest.cpp
+    unit/legacy_src/test_workflow_gtest.cpp
 )
 target_link_libraries(test_workflow_gtest PRIVATE
     agentflow
@@ -79,7 +79,7 @@ target_link_libraries(test_workflow_gtest PRIVATE
 )
 
 add_executable(test_node_gtest
-    src/test_node_gtest.cpp
+    unit/legacy_src/test_node_gtest.cpp
 )
 target_link_libraries(test_node_gtest PRIVATE
     agentflow
@@ -88,7 +88,7 @@ target_link_libraries(test_node_gtest PRIVATE
 )
 
 add_executable(test_databus_gtest
-    src/test_databus_gtest.cpp
+    unit/legacy_src/test_databus_gtest.cpp
 )
 target_link_libraries(test_databus_gtest PRIVATE
     agentflow
@@ -97,7 +97,7 @@ target_link_libraries(test_databus_gtest PRIVATE
 )
 
 add_executable(test_event_gtest
-    src/test_event_gtest.cpp
+    unit/legacy_src/test_event_gtest.cpp
 )
 target_link_libraries(test_event_gtest PRIVATE
     agentflow
@@ -106,7 +106,7 @@ target_link_libraries(test_event_gtest PRIVATE
 )
 
 add_executable(test_eventloop_gtest
-    src/test_eventloop_gtest.cpp
+    unit/legacy_src/test_eventloop_gtest.cpp
 )
 target_link_libraries(test_eventloop_gtest PRIVATE
     agentflow

@@ -10,7 +10,7 @@
 #include <thread>
 
 #include "agentflow/actor/adapter.h"
-#include "agentflow/basic/logger.h"
+#include "agentflow/utils/logger.h"
 #include "agentflow/common.h"
 
 using namespace agentflow;

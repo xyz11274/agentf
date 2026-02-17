@@ -1,6 +1,7 @@
 #ifndef AGENTFLOW_RUNTIME_AGENT_RUNTIME_H
 #define AGENTFLOW_RUNTIME_AGENT_RUNTIME_H
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -8,8 +9,8 @@
 #include <vector>
 
 #include "agentflow/common.h"
-#include "agentflow/framework/agent.h"
-#include "agentflow/framework/workflow.h"
+#include "agentflow/core/agent.h"
+#include "agentflow/core/workflow.h"
 #include "agentflow/runtime/databus.h"
 
 namespace agentflow {
@@ -77,6 +78,7 @@ private:
   int                      num_worker_threads_ = 4;
   std::vector<std::thread> worker_threads_;
   bool                     is_running_ = false;
+  std::atomic<bool>        draining_{false};
 
   // Node task queue
   std::queue<std::pair<AgentPtr, NodePtr>> node_task_queue_;

@@ -1,4 +1,4 @@
-#include "agentflow/framework/node.h"
+#include "agentflow/core/node.h"
 
 #include <chrono>
 #include <cstring>
@@ -6,8 +6,8 @@
 #include <memory>
 #include <thread>
 
-#include "agentflow/basic/logger.h"
-#include "agentflow/basic/thread_pool.h"
+#include "agentflow/utils/logger.h"
+#include "agentflow/utils/thread_pool.h"
 
 namespace agentflow {
 namespace framework {
@@ -172,31 +172,53 @@ bool Node::cleanup() {
 bool Node::execute_cpp_function() {
   auto start_time = std::chrono::steady_clock::now();
 
-  // [DEBUG] Log C++ function execution start
   Logger::instance().info_f("[CPP_FUNC_START] NodeId=%s, NodeName=%s", config_.id.c_str(),
                             config_.name.c_str());
 
-  // For C++ function execution, we simulate a simple operation
-  // In real implementation, this would call a registered callback or plugin function
-  Logger::instance().debug_f("[CPP_FUNC_EXEC] NodeId=%s, Executing C++ function",
-                             config_.id.c_str());
+  bool success = false;
 
-  // Simulate some work
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-
-  // Set output (simulated)
-  outputs_["result"]            = "success";
-  outputs_["execution_time_ms"] = "100";
+  if(config_.cpp_function) {
+    // Use the registered C++ function callback
+    try {
+      success = config_.cpp_function(inputs_, outputs_);
+    } catch(const std::exception& e) {
+      last_error_ = std::string("C++ function threw exception: ") + e.what();
+      Logger::instance().error_f("[CPP_FUNC_ERROR] NodeId=%s, Error=%s", config_.id.c_str(),
+                                 e.what());
+      return false;
+    }
+  } else {
+    // No callback registered — fallback to CodeLoader if function_name is set
+    if(!config_.function_name.empty() && code_loader_) {
+      auto result = code_loader_->execute(config_.command);
+      success     = result.success;
+      if(success && !result.stdout.empty()) {
+        outputs_["result"] = result.stdout;
+      }
+      if(!result.error_message.empty()) {
+        last_error_ = result.error_message;
+      }
+    } else {
+      last_error_ = "No cpp_function callback or function_name configured";
+      Logger::instance().warn_f("[CPP_FUNC_WARN] NodeId=%s, %s", config_.id.c_str(),
+                                last_error_.c_str());
+      return false;
+    }
+  }
 
   auto end_time = std::chrono::steady_clock::now();
   auto duration =
       std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
-  // [DEBUG] Log C++ function execution end
-  Logger::instance().info_f("[CPP_FUNC_SUCCESS] NodeId=%s, NodeName=%s, Duration=%ldms",
-                            config_.id.c_str(), config_.name.c_str(), duration);
+  if(success) {
+    Logger::instance().info_f("[CPP_FUNC_SUCCESS] NodeId=%s, NodeName=%s, Duration=%ldms",
+                              config_.id.c_str(), config_.name.c_str(), duration);
+  } else {
+    Logger::instance().error_f("[CPP_FUNC_FAILED] NodeId=%s, Duration=%ldms, Error=%s",
+                               config_.id.c_str(), duration, last_error_.c_str());
+  }
 
-  return true;
+  return success;
 }
 
 bool Node::execute_shell_command() {

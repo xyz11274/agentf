@@ -1,10 +1,10 @@
-#include "agentflow/framework/workflow.h"
+#include "agentflow/core/workflow.h"
 
 #include <algorithm>
 #include <queue>
 #include <unordered_set>
 
-#include "agentflow/basic/logger.h"
+#include "agentflow/utils/logger.h"
 
 namespace agentflow {
 namespace framework {
@@ -383,6 +383,12 @@ bool Workflow::compute_topological_order() {
 }
 
 runtime::ConditionExpression Workflow::parse_condition_expression(const std::string& expr_str) {
+  // Cache lookup — avoid re-parsing the same expression
+  auto cache_it = condition_cache_.find(expr_str);
+  if(cache_it != condition_cache_.end()) {
+    return cache_it->second;
+  }
+
   // Simple parser for condition expressions
   // Format: "left_operand operator right_operand"
   // Operators: ==, !=, >, <, >=, <=, contains, not_contains
@@ -454,6 +460,7 @@ runtime::ConditionExpression Workflow::parse_condition_expression(const std::str
   expr.right_operand.erase(0, expr.right_operand.find_first_not_of(" \t"));
   expr.right_operand.erase(expr.right_operand.find_last_not_of(" \t") + 1);
 
+  condition_cache_[expr_str] = expr;
   return expr;
 }
 

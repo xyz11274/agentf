@@ -10,12 +10,12 @@
 #include <sstream>
 #include <unordered_set>
 
-#include "agentflow/basic/logger.h"
+#include "agentflow/utils/logger.h"
 #include "agentflow/dsl/json_adapter.h"
-#include "agentflow/framework/agent.h"
-#include "agentflow/framework/edge.h"
-#include "agentflow/framework/node.h"
-#include "agentflow/framework/workflow.h"
+#include "agentflow/core/agent.h"
+#include "agentflow/core/edge.h"
+#include "agentflow/core/node.h"
+#include "agentflow/core/workflow.h"
 
 namespace agentflow {
 namespace dsl {

@@ -11,7 +11,7 @@
 #include <thread>
 
 #include "agentflow/actor/message_serializer.h"
-#include "agentflow/basic/logger.h"
+#include "agentflow/utils/logger.h"
 #include "protoactor/actor_system.h"
 #include "protoactor/ask.h"
 #include "protoactor/context.h"

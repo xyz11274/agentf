@@ -9,7 +9,7 @@
 
 #include <chrono>
 
-#include "agentflow/basic/logger.h"
+#include "agentflow/utils/logger.h"
 #include "protoactor/context.h"
 #include "protoactor/pid.h"
 

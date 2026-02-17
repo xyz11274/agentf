@@ -7,9 +7,10 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <sstream>
 
-#include "agentflow/basic/logger.h"
+#include "agentflow/utils/logger.h"
 
 namespace agentflow {
 namespace network {
@@ -115,10 +116,150 @@ std::string Request::to_json() const {
 }
 
 std::shared_ptr<Request> Request::from_json(const std::string& json_str) {
-  // Placeholder: JSON parsing would require a JSON library
-  // This is a simplified implementation
-  Logger::instance().warn("Request::from_json not fully implemented");
-  auto request = std::make_shared<Request>("unknown");
+  if(json_str.empty()) {
+    return nullptr;
+  }
+
+  auto request = std::make_shared<Request>();
+
+  // Simple JSON field extraction helpers
+  auto extract_string = [&json_str](const std::string& key) -> std::string {
+    std::string search = "\"" + key + "\":\"";
+    auto        pos    = json_str.find(search);
+    if(pos == std::string::npos)
+      return "";
+    pos += search.length();
+    auto end = json_str.find('"', pos);
+    if(end == std::string::npos)
+      return "";
+    return json_str.substr(pos, end - pos);
+  };
+
+  auto extract_int64 = [&json_str](const std::string& key) -> int64_t {
+    std::string search = "\"" + key + "\":";
+    auto        pos    = json_str.find(search);
+    if(pos == std::string::npos)
+      return 0;
+    pos += search.length();
+    try {
+      return std::stoll(json_str.substr(pos));
+    } catch(...) {
+      return 0;
+    }
+  };
+
+  // Extract top-level fields
+  request->type_                  = extract_string("type");
+  request->metadata_.request_id   = extract_string("request_id");
+  request->metadata_.request_type = request->type_;
+  request->metadata_.source_id    = extract_string("source_id");
+  request->metadata_.target_id    = extract_string("target_id");
+  request->metadata_.workflow_id  = extract_string("workflow_id");
+  request->metadata_.node_id      = extract_string("node_id");
+  request->metadata_.timestamp_ms = extract_int64("timestamp_ms");
+  request->metadata_.timeout_ms   = static_cast<int>(extract_int64("timeout_ms"));
+
+  // Extract payload object
+  auto payload_pos = json_str.find("\"payload\":{");
+  if(payload_pos != std::string::npos) {
+    payload_pos += 10;  // skip "payload":{
+    auto payload_end = json_str.find('}', payload_pos);
+    if(payload_end != std::string::npos) {
+      std::string payload_str = json_str.substr(payload_pos + 1, payload_end - payload_pos - 1);
+      // Parse simple key-value pairs from payload
+      size_t pos = 0;
+      while(pos < payload_str.size()) {
+        // Find key
+        auto key_start = payload_str.find('"', pos);
+        if(key_start == std::string::npos)
+          break;
+        auto key_end = payload_str.find('"', key_start + 1);
+        if(key_end == std::string::npos)
+          break;
+        std::string key = payload_str.substr(key_start + 1, key_end - key_start - 1);
+
+        // Skip ":"
+        auto colon = payload_str.find(':', key_end);
+        if(colon == std::string::npos)
+          break;
+        pos = colon + 1;
+
+        // Skip whitespace
+        while(pos < payload_str.size() && (payload_str[pos] == ' ' || payload_str[pos] == '\t'))
+          pos++;
+
+        if(pos >= payload_str.size())
+          break;
+
+        // Determine value type
+        if(payload_str[pos] == '"') {
+          // String value
+          auto val_end = payload_str.find('"', pos + 1);
+          if(val_end == std::string::npos)
+            break;
+          request->payload_[key] = payload_str.substr(pos + 1, val_end - pos - 1);
+          pos                    = val_end + 1;
+        } else if(payload_str[pos] == 't' || payload_str[pos] == 'f') {
+          // Bool value
+          request->payload_[key] = (payload_str[pos] == 't');
+          pos += (payload_str[pos] == 't') ? 4 : 5;
+        } else {
+          // Numeric value
+          auto val_end = payload_str.find_first_of(",}", pos);
+          if(val_end == std::string::npos)
+            val_end = payload_str.size();
+          std::string num_str = payload_str.substr(pos, val_end - pos);
+          try {
+            if(num_str.find('.') != std::string::npos) {
+              request->payload_[key] = std::stod(num_str);
+            } else {
+              request->payload_[key] = std::stoll(num_str);
+            }
+          } catch(...) {
+            request->payload_[key] = num_str;
+          }
+          pos = val_end;
+        }
+
+        // Skip comma
+        auto comma = payload_str.find(',', pos);
+        if(comma == std::string::npos)
+          break;
+        pos = comma + 1;
+      }
+    }
+  }
+
+  // Extract headers object
+  auto headers_pos = json_str.find("\"headers\":{");
+  if(headers_pos != std::string::npos) {
+    headers_pos += 10;
+    auto headers_end = json_str.find('}', headers_pos + 1);
+    if(headers_end != std::string::npos) {
+      std::string headers_str = json_str.substr(headers_pos + 1, headers_end - headers_pos - 1);
+      size_t      pos         = 0;
+      while(pos < headers_str.size()) {
+        auto key_start = headers_str.find('"', pos);
+        if(key_start == std::string::npos)
+          break;
+        auto key_end = headers_str.find('"', key_start + 1);
+        if(key_end == std::string::npos)
+          break;
+        std::string key = headers_str.substr(key_start + 1, key_end - key_start - 1);
+
+        auto val_start = headers_str.find('"', key_end + 2);
+        if(val_start == std::string::npos)
+          break;
+        auto val_end = headers_str.find('"', val_start + 1);
+        if(val_end == std::string::npos)
+          break;
+
+        request->metadata_.headers[key] = headers_str.substr(val_start + 1, val_end - val_start - 1);
+        pos                             = val_end + 1;
+      }
+    }
+  }
+
   return request;
 }
 
@@ -197,9 +338,82 @@ std::vector<uint8_t> Request::to_binary() const {
 }
 
 std::shared_ptr<Request> Request::from_binary(const uint8_t* data, size_t size) {
-  // Placeholder: Binary deserialization would need full implementation
-  Logger::instance().warn("Request::from_binary not fully implemented");
-  auto request = std::make_shared<Request>("unknown");
+  if(!data || size < 24) {  // minimum: type_len(4) + req_id_len(4) + timestamp(8) + timeout(4) + payload_cnt(4)
+    return nullptr;
+  }
+
+  auto   request = std::make_shared<Request>();
+  size_t offset  = 0;
+
+  auto read_uint32 = [&](uint32_t& val) -> bool {
+    if(offset + 4 > size)
+      return false;
+    std::memcpy(&val, data + offset, 4);
+    offset += 4;
+    return true;
+  };
+
+  auto read_string = [&](std::string& str, uint32_t len) -> bool {
+    if(offset + len > size)
+      return false;
+    str.assign(reinterpret_cast<const char*>(data + offset), len);
+    offset += len;
+    return true;
+  };
+
+  // Read type
+  uint32_t type_len = 0;
+  if(!read_uint32(type_len) || offset + type_len > size)
+    return nullptr;
+  read_string(request->type_, type_len);
+  request->metadata_.request_type = request->type_;
+
+  // Read request_id
+  uint32_t req_id_len = 0;
+  if(!read_uint32(req_id_len) || offset + req_id_len > size)
+    return nullptr;
+  read_string(request->metadata_.request_id, req_id_len);
+
+  // Read timestamp_ms (8 bytes)
+  if(offset + 8 > size)
+    return nullptr;
+  std::memcpy(&request->metadata_.timestamp_ms, data + offset, 8);
+  offset += 8;
+
+  // Read timeout_ms (4 bytes — note: to_binary writes 4 bytes for int)
+  if(offset + 4 > size)
+    return nullptr;
+  std::memcpy(&request->metadata_.timeout_ms, data + offset, 4);
+  offset += 4;
+
+  // Read payload count (skip payload entries as to_binary also skips them)
+  uint32_t payload_count = 0;
+  if(!read_uint32(payload_count))
+    return nullptr;
+
+  // Read headers count
+  uint32_t headers_count = 0;
+  if(!read_uint32(headers_count))
+    return nullptr;
+
+  // Read headers
+  for(uint32_t i = 0; i < headers_count; ++i) {
+    uint32_t    key_len = 0;
+    std::string key, value;
+    if(!read_uint32(key_len))
+      return nullptr;
+    if(!read_string(key, key_len))
+      return nullptr;
+
+    uint32_t value_len = 0;
+    if(!read_uint32(value_len))
+      return nullptr;
+    if(!read_string(value, value_len))
+      return nullptr;
+
+    request->metadata_.headers[key] = value;
+  }
+
   return request;
 }
 

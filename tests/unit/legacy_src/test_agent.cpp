@@ -1,7 +1,7 @@
 #include <cassert>
 
-#include "agentflow/framework/agent.h"
-#include "agentflow/framework/workflow.h"
+#include "agentflow/core/agent.h"
+#include "agentflow/core/workflow.h"
 
 using namespace agentflow;
 

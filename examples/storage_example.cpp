@@ -6,9 +6,9 @@
 #include <iostream>
 #include <string>
 
-#include "agentflow/basic/logger.h"
-#include "agentflow/framework/agent.h"
-#include "agentflow/framework/workflow.h"
+#include "agentflow/utils/logger.h"
+#include "agentflow/core/agent.h"
+#include "agentflow/core/workflow.h"
 #include "agentflow/storage/agent_storage.h"
 #include "agentflow/storage/storage.h"
 #include "agentflow/storage/storage_manager.h"

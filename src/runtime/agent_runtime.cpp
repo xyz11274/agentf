@@ -6,7 +6,7 @@
 #include <random>
 #include <thread>
 
-#include "agentflow/basic/logger.h"
+#include "agentflow/utils/logger.h"
 
 namespace agentflow {
 namespace runtime {
@@ -107,6 +107,11 @@ bool AgentRuntime::unload_workflow(const AgentId& agent_id, const WorkflowId& wo
 
 bool AgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId& workflow_id,
                                     const DataMap& inputs) {
+  if(draining_) {
+    Logger::instance().warn("Rejecting new workflow — runtime is draining");
+    return false;
+  }
+
   auto agent    = get_agent(agent_id);
   auto workflow = agent ? agent->get_workflow(workflow_id) : nullptr;
 
@@ -487,6 +492,40 @@ bool AgentRuntime::stop() {
     return false;
   }
 
+  // Phase 1: Enter draining mode — stop accepting new tasks
+  draining_ = true;
+  Logger::instance().info("AgentRuntime entering drain mode...");
+
+  // Phase 2: Wait for in-progress workflows to complete (with timeout)
+  const int  max_drain_wait_ms = 5000;
+  const int  poll_interval_ms  = 50;
+  int        waited_ms         = 0;
+  bool       drained           = false;
+
+  while(waited_ms < max_drain_wait_ms) {
+    {
+      std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+      bool has_active = false;
+      for(const auto& pair : workflow_states_) {
+        if(pair.second.in_progress) {
+          has_active = true;
+          break;
+        }
+      }
+      if(!has_active) {
+        drained = true;
+        break;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
+    waited_ms += poll_interval_ms;
+  }
+
+  if(!drained) {
+    Logger::instance().warn_f("AgentRuntime drain timeout after %dms, forcing shutdown", waited_ms);
+  }
+
+  // Phase 3: Shutdown workers
   is_running_ = false;
   g_shutdown  = true;
 
@@ -501,6 +540,7 @@ bool AgentRuntime::stop() {
   }
   worker_threads_.clear();
 
+  draining_ = false;
   Logger::instance().info("AgentRuntime stopped");
   return true;
 }

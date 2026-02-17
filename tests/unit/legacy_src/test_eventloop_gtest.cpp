@@ -9,7 +9,7 @@
 #include <thread>
 #include <vector>
 
-#include "agentflow/basic/logger.h"
+#include "agentflow/utils/logger.h"
 #include "agentflow/event/adapter_factory.h"
 #include "agentflow/event/eventloop_adapter.h"
 
