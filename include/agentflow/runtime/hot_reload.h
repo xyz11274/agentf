@@ -17,14 +17,11 @@ namespace runtime {
  */
 enum class ExecutableType {
   UNKNOWN = 0,
-  SO_LIBRARY,      // Shared object library (.so, .dylib)
-  JAR_FILE,        // Java Archive (.jar)
-  SHELL_SCRIPT,    // Shell script (.sh, .bash)
-  PYTHON_SCRIPT,   // Python script (.py)
-  EXECUTABLE,      // Executable binary
-  NODE_JS_SCRIPT,  // Node.js script (.js)
-  LUA_SCRIPT,      // Lua script (.lua)
-  RUBY_SCRIPT      // Ruby script (.rb)
+  SO_LIBRARY,     // Shared object library (.so, .dylib)
+  JAR_FILE,       // Java Archive (.jar)
+  SHELL_SCRIPT,   // Shell script (.sh, .bash)
+  PYTHON_SCRIPT,  // Python script (.py)
+  EXECUTABLE      // Executable binary
 };
 
 /**

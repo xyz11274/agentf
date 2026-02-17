@@ -600,15 +600,6 @@ bool Node::execute_script(runtime::ExecutableType type) {
       case runtime::ExecutableType::PYTHON_SCRIPT:
         result = code_loader_->execute_python_script(config_.command, config_.args, exec_config);
         break;
-      case runtime::ExecutableType::NODE_JS_SCRIPT:
-        result = code_loader_->execute_nodejs_script(config_.command, config_.args, exec_config);
-        break;
-      case runtime::ExecutableType::LUA_SCRIPT:
-        result = code_loader_->execute_lua_script(config_.command, config_.args, exec_config);
-        break;
-      case runtime::ExecutableType::RUBY_SCRIPT:
-        result = code_loader_->execute_ruby_script(config_.command, config_.args, exec_config);
-        break;
       case runtime::ExecutableType::JAR_FILE:
         result = code_loader_->execute_jar(config_.command, config_.main_class, config_.args,
                                            exec_config);

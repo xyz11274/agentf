@@ -57,9 +57,7 @@ bool python_available() {
   return command_available("python3");
 }
 
-bool lua_available() {
-  return command_available("lua");
-}
+
 
 }  // namespace
 
@@ -79,9 +77,6 @@ protected:
     fs::create_directories(test_dir_ + "/libs");
     fs::create_directories(test_dir_ + "/python");
     fs::create_directories(test_dir_ + "/java");
-    fs::create_directories(test_dir_ + "/nodejs");
-    fs::create_directories(test_dir_ + "/lua");
-    fs::create_directories(test_dir_ + "/ruby");
     fs::create_directories(test_dir_ + "/backups");
 
     Logger::instance().set_level(Logger::Level::INFO);
@@ -121,37 +116,7 @@ protected:
     return filepath;
   }
 
-  std::string create_nodejs_script(const std::string& filename, const std::string& content) {
-    std::string   filepath = test_dir_ + "/nodejs/" + filename;
-    std::ofstream file(filepath);
-    file << "#!/usr/bin/env node\n";
-    file << content << "\n";
-    file.close();
-    fs::permissions(filepath, fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec
-                                  | fs::perms::others_read | fs::perms::others_exec);
-    return filepath;
-  }
 
-  std::string create_lua_script(const std::string& filename, const std::string& content) {
-    std::string   filepath = test_dir_ + "/lua/" + filename;
-    std::ofstream file(filepath);
-    file << content << "\n";
-    file.close();
-    fs::permissions(filepath, fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec
-                                  | fs::perms::others_read | fs::perms::others_exec);
-    return filepath;
-  }
-
-  std::string create_ruby_script(const std::string& filename, const std::string& content) {
-    std::string   filepath = test_dir_ + "/ruby/" + filename;
-    std::ofstream file(filepath);
-    file << "#!/usr/bin/env ruby\n";
-    file << content << "\n";
-    file.close();
-    fs::permissions(filepath, fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec
-                                  | fs::perms::others_read | fs::perms::others_exec);
-    return filepath;
-  }
 
   void wait_for_file_change(int ms = 100) {
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
@@ -397,152 +362,7 @@ TEST_F(HotReloadTest, PythonScript_ErrorHandling) {
               || result.stdout.find("Test error") != std::string::npos);
 }
 
-// ============================================================================
-// Node.js Script Hot Reload Tests
-// ============================================================================
 
-TEST_F(HotReloadTest, NodeJSScript_BasicExecution) {
-  auto& loader = global_code_loader();
-
-  std::string test_file =
-      create_nodejs_script("nodejs_basic.js", "console.log('Hello from Node.js')");
-  loader.reload_code(test_file);
-  wait_for_file_change(200);
-
-  ExecutionConfig config;
-  config.timeout_ms = 5000;
-
-  auto result = loader.execute_nodejs_script(test_file, {}, config);
-  EXPECT_TRUE(result.success);
-  EXPECT_FALSE(result.stdout.empty());
-  EXPECT_TRUE(result.stdout.find("Hello from Node.js") != std::string::npos);
-}
-
-TEST_F(HotReloadTest, NodeJSScript_HotReload) {
-  auto& manager = global_hot_reload_manager();
-  auto& loader  = global_code_loader();
-
-  std::string test_file =
-      create_nodejs_script("nodejs_hotreload.js", "console.log('Node.js Version 1.0')");
-  manager.start_watching(test_file);
-  loader.reload_code(test_file);
-  wait_for_file_change(200);
-
-  // Execute version 1
-  ExecutionConfig config;
-  config.timeout_ms = 5000;
-  auto result1      = loader.execute_nodejs_script(test_file, {}, config);
-  EXPECT_TRUE(result1.success);
-  EXPECT_TRUE(result1.stdout.find("Node.js Version 1.0") != std::string::npos);
-
-  // Modify file to version 2
-  modify_file(test_file, "console.log('Node.js Version 2.0')");
-  manager.reload(test_file);
-  wait_for_file_change(500);
-
-  // Execute version 2
-  auto result2 = loader.execute_nodejs_script(test_file, {}, config);
-  EXPECT_TRUE(result2.success);
-  EXPECT_TRUE(result2.stdout.find("Node.js Version 2.0") != std::string::npos);
-}
-
-// ============================================================================
-// Lua Script Hot Reload Tests
-// ============================================================================
-
-TEST_F(HotReloadTest, LuaScript_BasicExecution) {
-  if(!lua_available()) {
-    GTEST_SKIP() << "Lua interpreter not available";
-  }
-  auto& loader = global_code_loader();
-
-  std::string test_file = create_lua_script("lua_basic.lua", "print('Hello from Lua')");
-  loader.reload_code(test_file);
-  wait_for_file_change(200);
-
-  ExecutionConfig config;
-  config.timeout_ms = 5000;
-
-  auto result = loader.execute_lua_script(test_file, {}, config);
-  EXPECT_TRUE(result.success);
-  EXPECT_TRUE(result.stdout.find("Hello from Lua") != std::string::npos);
-}
-
-TEST_F(HotReloadTest, LuaScript_HotReload) {
-  if(!lua_available()) {
-    GTEST_SKIP() << "Lua interpreter not available";
-  }
-  auto& manager = global_hot_reload_manager();
-  auto& loader  = global_code_loader();
-
-  std::string test_file = create_lua_script("lua_hotreload.lua", "print('Lua Version 1.0')");
-  manager.start_watching(test_file);
-  loader.reload_code(test_file);
-  wait_for_file_change(200);
-
-  // Execute version 1
-  ExecutionConfig config;
-  config.timeout_ms = 5000;
-  auto result1      = loader.execute_lua_script(test_file, {}, config);
-  EXPECT_TRUE(result1.success);
-  EXPECT_TRUE(result1.stdout.find("Lua Version 1.0") != std::string::npos);
-
-  // Modify file to version 2
-  modify_file(test_file, "print('Lua Version 2.0')");
-  manager.reload(test_file);
-  wait_for_file_change(500);
-
-  // Execute version 2
-  auto result2 = loader.execute_lua_script(test_file, {}, config);
-  EXPECT_TRUE(result2.success);
-  EXPECT_TRUE(result2.stdout.find("Lua Version 2.0") != std::string::npos);
-}
-
-// ============================================================================
-// Ruby Script Hot Reload Tests
-// ============================================================================
-
-TEST_F(HotReloadTest, RubyScript_BasicExecution) {
-  auto& loader = global_code_loader();
-
-  std::string test_file = create_ruby_script("ruby_basic.rb", "puts 'Hello from Ruby'");
-  loader.reload_code(test_file);
-  wait_for_file_change(200);
-
-  ExecutionConfig config;
-  config.timeout_ms = 5000;
-
-  auto result = loader.execute_ruby_script(test_file, {}, config);
-  EXPECT_TRUE(result.success);
-  EXPECT_TRUE(result.stdout.find("Hello from Ruby") != std::string::npos);
-}
-
-TEST_F(HotReloadTest, RubyScript_HotReload) {
-  auto& manager = global_hot_reload_manager();
-  auto& loader  = global_code_loader();
-
-  std::string test_file = create_ruby_script("ruby_hotreload.rb", "puts 'Ruby Version 1.0'");
-  manager.start_watching(test_file);
-  loader.reload_code(test_file);
-  wait_for_file_change(200);
-
-  // Execute version 1
-  ExecutionConfig config;
-  config.timeout_ms = 5000;
-  auto result1      = loader.execute_ruby_script(test_file, {}, config);
-  EXPECT_TRUE(result1.success);
-  EXPECT_TRUE(result1.stdout.find("Ruby Version 1.0") != std::string::npos);
-
-  // Modify file to version 2
-  modify_file(test_file, "puts 'Ruby Version 2.0'");
-  manager.reload(test_file);
-  wait_for_file_change(500);
-
-  // Execute version 2
-  auto result2 = loader.execute_ruby_script(test_file, {}, config);
-  EXPECT_TRUE(result2.success);
-  EXPECT_TRUE(result2.stdout.find("Ruby Version 2.0") != std::string::npos);
-}
 
 // ============================================================================
 // JAR File Tests
@@ -667,24 +487,6 @@ TEST_F(HotReloadTest, TypeDetection_PythonScript) {
   std::string test_file = create_python_script("detect_py.py", "print('test')");
   auto        type      = detect_executable_type(test_file);
   EXPECT_EQ(type, ExecutableType::PYTHON_SCRIPT);
-}
-
-TEST_F(HotReloadTest, TypeDetection_NodeJSScript) {
-  std::string test_file = create_nodejs_script("detect_js.js", "console.log('test')");
-  auto        type      = detect_executable_type(test_file);
-  EXPECT_EQ(type, ExecutableType::NODE_JS_SCRIPT);
-}
-
-TEST_F(HotReloadTest, TypeDetection_LuaScript) {
-  std::string test_file = create_lua_script("detect_lua.lua", "print('test')");
-  auto        type      = detect_executable_type(test_file);
-  EXPECT_EQ(type, ExecutableType::LUA_SCRIPT);
-}
-
-TEST_F(HotReloadTest, TypeDetection_RubyScript) {
-  std::string test_file = create_ruby_script("detect_rb.rb", "puts 'test'");
-  auto        type      = detect_executable_type(test_file);
-  EXPECT_EQ(type, ExecutableType::RUBY_SCRIPT);
 }
 
 TEST_F(HotReloadTest, TypeDetection_Unknown) {
@@ -1045,9 +847,6 @@ TEST_F(HotReloadTest, ExecutableTypeToString) {
   EXPECT_EQ(executable_type_to_string(ExecutableType::PYTHON_SCRIPT), "PYTHON_SCRIPT");
   EXPECT_EQ(executable_type_to_string(ExecutableType::JAR_FILE), "JAR_FILE");
   EXPECT_EQ(executable_type_to_string(ExecutableType::SO_LIBRARY), "SO_LIBRARY");
-  EXPECT_EQ(executable_type_to_string(ExecutableType::NODE_JS_SCRIPT), "NODE_JS_SCRIPT");
-  EXPECT_EQ(executable_type_to_string(ExecutableType::LUA_SCRIPT), "LUA_SCRIPT");
-  EXPECT_EQ(executable_type_to_string(ExecutableType::RUBY_SCRIPT), "RUBY_SCRIPT");
   EXPECT_EQ(executable_type_to_string(ExecutableType::EXECUTABLE), "EXECUTABLE");
   EXPECT_EQ(executable_type_to_string(ExecutableType::UNKNOWN), "UNKNOWN");
 }

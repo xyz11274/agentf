@@ -277,47 +277,6 @@ ExecutionResult CodeLoader::execute_python_script(const std::string&            
   return execute_command(command, config.working_dir, config.timeout_ms, config.env_vars);
 }
 
-ExecutionResult CodeLoader::execute_nodejs_script(const std::string&              script_path,
-                                                  const std::vector<std::string>& args,
-                                                  const ExecutionConfig&          config) {
-  log_execution_start(script_path, ExecutableType::NODE_JS_SCRIPT);
-
-  std::string node_cmd  = "node";
-  const char* node_path = std::getenv("NODE_PATH");
-  if(node_path) {
-    node_cmd = node_path;
-  }
-
-  std::string command = build_command_string(node_cmd, { script_path });
-  command += " " + build_command_string("", args);
-
-  return execute_command(command, config.working_dir, config.timeout_ms, config.env_vars);
-}
-
-ExecutionResult CodeLoader::execute_lua_script(const std::string&              script_path,
-                                               const std::vector<std::string>& args,
-                                               const ExecutionConfig&          config) {
-  log_execution_start(script_path, ExecutableType::LUA_SCRIPT);
-
-  std::string lua_cmd = "lua";
-  std::string command = build_command_string(lua_cmd, { script_path });
-  command += " " + build_command_string("", args);
-
-  return execute_command(command, config.working_dir, config.timeout_ms, config.env_vars);
-}
-
-ExecutionResult CodeLoader::execute_ruby_script(const std::string&              script_path,
-                                                const std::vector<std::string>& args,
-                                                const ExecutionConfig&          config) {
-  log_execution_start(script_path, ExecutableType::RUBY_SCRIPT);
-
-  std::string ruby_cmd = "ruby";
-  std::string command  = build_command_string(ruby_cmd, { script_path });
-  command += " " + build_command_string("", args);
-
-  return execute_command(command, config.working_dir, config.timeout_ms, config.env_vars);
-}
-
 ExecutionResult CodeLoader::execute(const std::string& file_path, const ExecutionConfig& config) {
   ExecutableType type = detect_executable_type(file_path);
 
@@ -333,15 +292,6 @@ ExecutionResult CodeLoader::execute(const std::string& file_path, const Executio
 
     case ExecutableType::PYTHON_SCRIPT:
       return execute_python_script(file_path, {}, config);
-
-    case ExecutableType::NODE_JS_SCRIPT:
-      return execute_nodejs_script(file_path, {}, config);
-
-    case ExecutableType::LUA_SCRIPT:
-      return execute_lua_script(file_path, {}, config);
-
-    case ExecutableType::RUBY_SCRIPT:
-      return execute_ruby_script(file_path, {}, config);
 
     case ExecutableType::EXECUTABLE:
       return execute_shell_script(file_path, {}, config);

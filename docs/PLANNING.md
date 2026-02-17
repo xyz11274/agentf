@@ -40,7 +40,7 @@
 - ✅ Node错误处理策略（支持重试、超时配置）
 - ✅ Node超时配置和资源限制
 - ✅ 控制面/运行面分离架构
-- ✅ 支持非C++代码实现的Node — Shell/Python/SO/Lua/Ruby/JAR等已实现，C++函数执行已实现（cpp_function回调 + CodeLoader回退）
+- ✅ 支持非C++代码实现的Node — Shell/Python/SO/JAR等已实现，C++函数执行已实现（cpp_function回调 + CodeLoader回退）
 - ✅ 运行面DSL配置指定运行模式
 - ⏳ Node控制面Actor实际实现（暂时不需要实现）
 - ⏳ Node间Actor协作机制实现（暂时不需要实现）

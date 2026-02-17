@@ -105,39 +105,6 @@ public:
                                         const ExecutionConfig&          config = ExecutionConfig());
 
   /**
-   * Execute a Node.js script
-   * @param script_path Path to the Node.js script
-   * @param args Command line arguments
-   * @param config Execution configuration
-   * @return Execution result
-   */
-  ExecutionResult execute_nodejs_script(const std::string&              script_path,
-                                        const std::vector<std::string>& args   = {},
-                                        const ExecutionConfig&          config = ExecutionConfig());
-
-  /**
-   * Execute a Lua script
-   * @param script_path Path to the Lua script
-   * @param args Command line arguments
-   * @param config Execution configuration
-   * @return Execution result
-   */
-  ExecutionResult execute_lua_script(const std::string&              script_path,
-                                     const std::vector<std::string>& args   = {},
-                                     const ExecutionConfig&          config = ExecutionConfig());
-
-  /**
-   * Execute a Ruby script
-   * @param script_path Path to the Ruby script
-   * @param args Command line arguments
-   * @param config Execution configuration
-   * @return Execution result
-   */
-  ExecutionResult execute_ruby_script(const std::string&              script_path,
-                                      const std::vector<std::string>& args   = {},
-                                      const ExecutionConfig&          config = ExecutionConfig());
-
-  /**
    * Generic execute method that auto-detects file type
    * @param file_path Path to the executable file
    * @param config Execution configuration

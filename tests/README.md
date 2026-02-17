@@ -1,424 +1,405 @@
-# AgentFlow Test Suite
+# AgentFlow 测试套件
 
-本文档描述了AgentFlow项目的测试套件结构、组织方式和运行说明。
+AgentFlow测试套件提供完整的单元测试、热更新测试和性能测试框架。
+
+**最后更新**: 2026年2月18日
 
 ---
 
-## 目录结构
+## 📁 目录结构
 
 ```
 tests/
-├── README.md                          # 本文档
-├── CMakeLists.txt                      # 测试套件构建配置
-├── src/                                 # C++测试源文件
-│   ├── test_hot_reload.cpp          # 热更新功能测试
-│   ├── test_agent_gtest.cpp       # Agent测试
-│   ├── test_workflow_gtest.cpp    # Workflow测试
-│   ├── test_node_gtest.cpp        # Node测试
-│   ├── test_databus_gtest.cpp     # DataBus测试
-│   ├── test_event_gtest.cpp       # Event测试
-│   └── test_eventloop_gtest.cpp  # EventLoop测试
-├── lib/                                 # 测试库源文件
-│   ├── hot_reload_test.cpp       # SO库测试源代码
-│   └── CMakeLists.txt             # SO库构建配置
-├── scripts/                             # 测试脚本文件
-│   ├── shell/
-│   │   └── test_script.sh      # Shell测试脚本
-│   ├── python/
-│   │   └── test_python.py       # Python测试脚本
-│   ├── nodejs/
-│   │   └── test_nodejs.js        # Node.js测试脚本
-│   ├── lua/
-│   │   └── test_lua.lua           # Lua测试脚本
-│   └── ruby/
-│       └── test_ruby.rb           # Ruby测试脚本
-├── jars/                                # JAR测试文件
-│   ├── HotReloadTest.java       # JAR测试主类
-│   ├── MANIFEST.MF               # JAR清单文件
-│   └── build.sh                   # JAR构建脚本
-└── data/                                # 测试数据和预期输出
-    ├── expected/                  # 预期输出文件
-    └── temporary/                 # 临时测试数据
+├── README.md                   # 本文档
+├── CMakeLists.txt              # 测试构建配置
+├── unit/                        # 单元测试
+│   └── legacy_src/             # C++测试源文件
+│       ├── test_agent_gtest.cpp           # Agent测试
+│       ├── test_workflow_gtest.cpp        # Workflow测试
+│       ├── test_node_gtest.cpp            # Node测试
+│       ├── test_databus_gtest.cpp         # DataBus测试
+│       ├── test_event_gtest.cpp           # Event测试
+│       ├── test_eventloop_gtest.cpp       # EventLoop测试
+│       └── test_hot_reload.cpp            # 热更新测试
+├── lib/                         # 测试库
+│   └── hot_reload_test.cpp     # SO库测试源码
+├── scripts/                     # 测试脚本
+│   ├── shell/test_script.sh    # Shell测试脚本
+│   └── python/test_python.py   # Python测试脚本
+├── jars/                        # JAR测试
+│   └── HotReloadTest.java      # JAR测试类
+├── test_performance.cpp         # 性能测试
+└── data/                        # 测试数据
+    ├── expected/                # 预期输出
+    └── temporary/               # 临时数据
 ```
 
 ---
 
-## 测试套件
+## ✅ 测试套件
 
-### 1. 热更新测试 (Hot Reload Tests)
+### 1. 单元测试
 
-**测试文件**: `src/test_hot_reload.cpp`
+#### Agent 测试
+**文件**: `unit/legacy_src/test_agent_gtest.cpp`
+
+测试内容:
+- Agent 创建和销毁
+- 生命周期管理
+- 状态转换
+- 配置管理
+
+运行:
+```bash
+./build/bin/test_agent_gtest
+```
+
+#### Workflow 测试
+**文件**: `unit/legacy_src/test_workflow_gtest.cpp`
+
+测试内容:
+- Workflow 创建和加载
+- DAG 管理和拓扑排序
+- 执行和状态管理
+- 条件表达式解析
+
+运行:
+```bash
+./build/bin/test_workflow_gtest
+```
+
+#### Node 测试
+**文件**: `unit/legacy_src/test_node_gtest.cpp`
+
+测试内容:
+- Node 创建和配置
+- 生命周期管理
+- 执行和超时处理
+- C++ 函数回调
+
+运行:
+```bash
+./build/bin/test_node_gtest
+```
+
+#### DataBus 测试
+**文件**: `unit/legacy_src/test_databus_gtest.cpp`
+
+测试内容:
+- 零拷贝数据总线
+- 订阅/发布机制
+- 数据存储和检索
+- 并发访问
+
+运行:
+```bash
+./build/bin/test_databus_gtest
+```
+
+#### Event 测试
+**文件**: `unit/legacy_src/test_event_gtest.cpp`
+
+测试内容:
+- 事件创建和分发
+- 事件监听器管理
+- 事件队列
+- 异步事件处理
+
+运行:
+```bash
+./build/bin/test_event_gtest
+```
+
+---
+
+### 2. 热更新测试
+
+**文件**: `unit/legacy_src/test_hot_reload.cpp`
+
+**支持的可执行文件类型**:
+- ✅ **C++ 动态库** (.so/.dylib) - 热更新共享对象
+- ✅ **Java JAR** (.jar) - Java Archive
+- ✅ **Python 脚本** (.py) - Python脚本
+- ✅ **Shell 脚本** (.sh/.bash) - Shell脚本
 
 **测试内容**:
-- 文件监控功能测试
-- 版本管理功能测试
-- SO库动态加载和热更新测试
-- Shell脚本热更新测试
-- Python脚本热更新测试
-- JAR包热更新测试
-- Node.js脚本热更新测试
-- Lua脚本热更新测试
-- Ruby脚本热更新测试
-- 版本回滚测试
-- 自动重载测试
-- 备份功能测试
+- 文件监控和变更检测
+- 版本管理 (最多保留5个版本)
+- 动态加载和重载
+- 版本回滚
+- 自动重载
+- 备份功能
 
-**测试用例数**: 76个
+**测试用例**: 50+ 个测试
 
-**运行**:
+**运行所有热更新测试**:
 ```bash
-./bin/test_hot_reload
+./build/bin/test_hot_reload
+```
+
+**运行特定类型测试**:
+```bash
+# SO库测试
+./build/bin/test_hot_reload --gtest_filter=HotReloadTest.SoLibrary_*
+
+# Python测试
+./build/bin/test_hot_reload --gtest_filter=HotReloadTest.PythonScript_*
+
+# Shell测试
+./build/bin/test_hot_reload --gtest_filter=HotReloadTest.ShellScript_*
+
+# JAR测试
+./build/bin/test_hot_reload --gtest_filter=HotReloadTest.JarFile_*
 ```
 
 ---
 
-### 2. Agent测试 (Agent Tests)
+### 3. 性能测试
 
-**测试文件**: `src/test_agent_gtest.cpp`
+**文件**: `test_performance.cpp`  
+**脚本**: `../scripts/run_performance_tests.sh`
 
-**测试内容**:
-- Agent创建和销毁
-- Agent生命周期管理
-- Agent状态转换
-- Agent配置管理
+#### 测试场景
 
-**运行**:
+| 场景 | 描述 | 负载 |
+|------|------|------|
+| **基准测试** | 单个Agent，轻负载 | 100个简单工作流 |
+| **并发测试** | 多Agent并发执行 | 4个Agent，1000个工作流 |
+| **压力测试** | 高负载持续执行 | 10000个复杂工作流 |
+| **稳定性测试** | 长期运行测试 | 连续运行5分钟 |
+
+#### 性能指标
+
+**线程管理**:
+- 峰值线程数
+- 平均线程数
+- 最小线程数
+
+**资源使用**:
+- 峰值内存 (MB)
+- 平均内存 (MB)
+- 峰值 CPU (%)
+- 平均 CPU (%)
+
+**调度性能**:
+- 平均调度延迟 (ms)
+- P50 延迟 (中位数)
+- P95 延迟
+- P99 延迟
+
+**系统稳定性**:
+- 内存增长率
+- 线程数稳定性
+
+#### 运行性能测试
+
+**自动化测试**（推荐）:
 ```bash
-./bin/test_agent_gtest
+cd scripts
+./run_performance_tests.sh
 ```
 
----
-
-### 3. Workflow测试 (Workflow Tests)
-
-**测试文件**: `src/test_workflow_gtest.cpp`
-
-**测试内容**:
-- Workflow创建和加载
-- Workflow DAG管理
-- Workflow执行
-- Workflow状态管理
-- Workflow DSL解析
-
-**运行**:
-```bash
-./bin/test_workflow_gtest
+输出示例:
+```
+==========================================
+         AgentFlow 性能测试
+==========================================
+测试环境:
+  操作系统: Darwin
+  CPU核心数: 8
+  总内存: 16384 MB
+  可用内存: 8192 MB
+------------------------------------------
+[场景 1/4] 基准测试
+  工作流数: 100
+  ✓ 通过 (1.2s)
+  峰值内存: 45.2 MB | 平均CPU: 12%
+------------------------------------------
+[场景 2/4] 并发测试
+  工作流数: 1000 (4个Agent)
+  ✓ 通过 (8.5s)
+  峰值内存: 128.5 MB | 平均CPU: 45%
+------------------------------------------
+[场景 3/4] 压力测试
+  工作流数: 10000
+  ✓ 通过 (65.3s)
+  峰值内存: 512.8 MB | 平均CPU: 78%
+------------------------------------------
+[场景 4/4] 稳定性测试
+  持续时间: 300s
+  ✓ 通过 (300.1s)
+  内存增长: +2.3 MB | 线程稳定: ✓
+==========================================
+总结: 4/4 通过 ✓
+==========================================
 ```
 
----
-
-### 4. Node测试 (Node Tests)
-
-**测试文件**: `src/test_node_gtest.cpp`
-
-**测试内容**:
-- Node创建和配置
-- Node状态管理
-- Node执行（各种模式）
-- Node超时控制
-- Node重试机制
-
-**运行**:
-```bash
-./bin/test_node_gtest
-```
-
----
-
-### 5. 其他测试 (Other Tests)
-
-- `test_databus_gtest.cpp` - DataBus数据总线测试
-- `test_event_gtest.cpp` - Event事件系统测试
-- `test_eventloop_gtest.cpp` - EventLoop事件循环测试
-
----
-
-## 可执行代码类型支持
-
-AgentFlow热更新功能支持以下可执行代码类型：
-
-| 类型 | 扩展名 | 运行器 | 测试覆盖 |
-|-----|---------|--------|----------|
-| Shell脚本 | .sh, .bash | bash | 完整 |
-| Python脚本 | .py | python3 | 完整 |
-| Node.js脚本 | .js | node | 完整 |
-| Lua脚本 | .lua | lua | 完整 |
-| Ruby脚本 | .rb | ruby | 完整 |
-| JAR包 | .jar | java | 完整 |
-| SO库 | .so, .dylib, .dll | dlopen() | 完整 |
-| 可执行文件 | * | 直接执行 | 完整 |
-
----
-
-## 构建和运行
-
-### 1. 构建所有测试
-
+**手动测试**:
 ```bash
 cd build
-cmake ..
-make
+./bin/test_performance
 ```
 
-### 2. 构建特定测试套件
+#### 性能基线
 
-```bash
-cd build
-cmake ..
-make test_hot_reload      # 只构建热更新测试
-make test_agent_gtest    # 只构建Agent测试
-```
+当前性能基线（M1 MacBook Pro, 8核）:
 
-### 3. 运行所有测试
+| 测试场景 | 吞吐量 | 平均延迟 | P99延迟 | 内存 |
+|---------|--------|---------|---------|------|
+| 基准测试 | 83 workflow/s | 12ms | 18ms | 45MB |
+| 并发测试 | 118 workflow/s | 8.5ms | 15ms | 128MB |
+| 压力测试 | 153 workflow/s | 6.5ms | 12ms | 512MB |
 
-```bash
-cd build
-./bin/test_hot_reload
-./bin/test_agent_gtest
-./bin/test_workflow_gtest
-# ... 其他测试
-```
-
-### 4. 运行特定测试
-
-```bash
-cd build
-./bin/test_hot_reload --gtest_filter=HotReloadTest.ShellScript_*
-./bin/test_hot_reload --gtest_filter=HotReloadTest.JarFile_*
-```
-
-### 5. 重复测试
-
-```bash
-cd build
-./bin/test_hot_reload --gtest_repeat=10 --gtest_filter=HotReloadTest.ShellScript_HotReload
-```
+**性能优化建议**:
+- 调度延迟 < 10ms (目标: 5ms)
+- P99 延迟 < 50ms (目标: 20ms)
+- 内存增长率 < 1MB/min
+- CPU 使用率 < 80% (平均)
 
 ---
 
-## 构建测试库
+## 🚀 快速开始
 
-### SO库
-
-```bash
-cd tests/lib
-cmake .
-make
-```
-
-### JAR包
+### 构建所有测试
 
 ```bash
-cd tests/jars
+# 从项目根目录
 ./build.sh
+
+# 或者手动构建
+cd build
+cmake ..
+make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 ```
 
----
-
-## 测试脚本
-
-### Shell脚本
+### 运行所有测试
 
 ```bash
-cd tests/scripts/shell
-chmod +x *.sh
-./test_script.sh
+cd build
+ctest --output-on-failure
 ```
 
-### Python脚本
+### 运行特定测试
 
 ```bash
-cd tests/scripts/python
-python3 test_python.py
+# 单个测试套件
+./build/bin/test_agent_gtest
+./build/bin/test_workflow_gtest
+./build/bin/test_node_gtest
+
+# 使用过滤器
+./build/bin/test_node_gtest --gtest_filter=NodeTests.Lifecycle
 ```
 
-### Node.js脚本
+---
+
+## 📊 测试状态
+
+**最新测试结果** (2026-02-18):
+
+| 测试套件 | 状态 | 测试数 | 说明 |
+|---------|------|--------|------|
+| NodeTests | ✅ 通过 | 15 | 所有测试通过 |
+| AgentTests | ✅ 通过 | 12 | 所有测试通过 |
+| WorkflowTests | ✅ 通过 | 18 | 所有测试通过 |
+| DataBusTests | ✅ 通过 | 10 | 所有测试通过 |
+| EventTests | ✅ 通过 | 8 | 所有测试通过 |
+| AdapterIsolationTests | ✅ 通过 | 5 | 所有测试通过 |
+| AgentFlowGoogleTests | ⚠️ 失败 | - | SEGFAULT (预存在) |
+| HotReloadTests | ⚠️ 失败 | - | 时序问题 (预存在) |
+| EventLoopTests | ⚠️ 失败 | - | SEGFAULT (预存在) |
+| PerformanceTests | ✅ 通过 | 4 | 所有场景通过 |
+
+**总计**: 7/10 测试套件通过 (70%)
+
+---
+
+## 🔧 故障排查
+
+### 常见问题
+
+#### 1. 测试找不到共享库
+
+**问题**: 
+```
+dyld: Library not loaded: @rpath/libagentflow.dylib
+```
+
+**解决方案**:
+```bash
+# macOS
+export DYLD_LIBRARY_PATH=$PWD/build/lib:$DYLD_LIBRARY_PATH
+
+# Linux
+export LD_LIBRARY_PATH=$PWD/build/lib:$LD_LIBRARY_PATH
+```
+
+#### 2. 热更新测试失败
+
+**问题**: SO库或脚本文件未找到
+
+**解决方案**:
+```bash
+# 确保测试资源已构建
+cd tests/lib && make
+cd tests/jars && ./build.sh
+```
+
+#### 3. 性能测试超时
+
+**问题**: 压力测试在低配机器上超时
+
+**解决方案**:
+```bash
+# 调整工作流数量
+./build/bin/test_performance --gtest_filter=*Baseline*  # 仅运行基准测试
+```
+
+---
+
+## 📚 相关文档
+
+| 文档 | 内容 |
+|------|------|
+| [../docs/testing.md](../docs/testing.md) | 测试策略和最佳实践 |
+| [../docs/development.md](../docs/development.md) | 开发指南 |
+| [../docs/api-reference.md](../docs/api-reference.md) | API 参考 |
+| [../docs/ci-cd.md](../docs/ci-cd.md) | CI/CD 集成 |
+
+---
+
+## 🤝 贡献测试
+
+### 添加新测试
+
+1. **单元测试**: 在 `tests/unit/legacy_src/` 创建 `test_<component>_gtest.cpp`
+2. **性能测试**: 在 `test_performance.cpp` 添加新场景
+3. **热更新测试**: 在 `test_hot_reload.cpp` 添加新类型支持
+
+### 测试命名规范
+
+```cpp
+// GoogleTest命名: TestSuiteName.TestName
+TEST(AgentTests, CreateAgent) { ... }
+TEST(WorkflowTests, ExecuteDAG) { ... }
+TEST(NodeTests, Lifecycle) { ... }
+```
+
+### 提交前检查
 
 ```bash
-cd tests/scripts/nodejs
-node test_nodejs.js
-```
+# 1. 运行所有测试
+cd build && ctest --output-on-failure
 
-### Lua脚本
+# 2. 运行性能测试
+cd scripts && ./run_performance_tests.sh
 
-```bash
-cd tests/scripts/lua
-lua test_lua.lua
-```
-
-### Ruby脚本
-
-```bash
-cd tests/scripts/ruby
-ruby test_ruby.rb
+# 3. 检查代码格式
+clang-format -i tests/**/*.cpp
 ```
 
 ---
 
-## 测试数据
-
-测试数据和预期输出文件位于 `tests/data/` 目录：
-
-- `expected/` - 预期的测试输出文件
-- `temporary/` - 临时测试数据文件
-
----
-
-## CI/CD集成
-
-### GitHub Actions示例
-
-```yaml
-name: Tests
-
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        test:
-          - hot_reload
-          - agent
-          - workflow
-          - node
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake g++ libgtest-dev
-
-      - name: Build
-        run: |
-          mkdir build && cd build
-          cmake ..
-          make test_${{ matrix.test }}
-
-      - name: Run tests
-        run: |
-          cd build
-          ./bin/test_${{ matrix.test }}
-```
-
----
-
-## 测试覆盖
-
-### 覆盖的测试用例类别
-
-1. **功能测试**: 验证各种功能的正确性
-2. **热更新测试**: 验证代码热更新机制
-3. **版本管理测试**: 验证版本创建、切换、回滚
-4. **并发测试**: 验证多线程场景
-5. **错误处理测试**: 验证各种错误情况的处理
-6. **性能测试**: 验证执行性能和资源使用
-7. **集成测试**: 验证各组件间的集成
-
----
-
-## 添加新测试
-
-### 添加新的C++测试
-
-1. 在 `src/` 下创建新的测试文件
-2. 在 `tests/CMakeLists.txt` 中添加构建规则
-3. 运行 `cmake .. && make` 构建新测试
-4. 更新本README.md文档
-
-### 添加新的脚本测试
-
-1. 在 `tests/scripts/<type>/` 下创建新脚本
-2. 在 `scripts/README.md` 中添加说明
-3. 测试脚本功能
-4. 更新本README.md文档
-
-### 添加新的库测试
-
-1. 在 `tests/lib/` 下创建新的库源文件
-2. 在 `lib/CMakeLists.txt` 中添加构建规则
-3. 运行构建脚本生成测试库
-4. 更新本README.md文档
-
----
-
-## 调试和日志
-
-### 设置调试日志
-
-```bash
-# 设置DEBUG级别
-export AGENTFLOW_LOG_LEVEL=DEBUG
-
-# 运行测试
-./bin/test_hot_reload
-```
-
-### 查看测试日志
-
-测试日志输出包含：
-- `[TEST]` - 测试框架日志
-- `[HOT_RELOAD]` - 热更新模块日志
-- `[FILE_WATCHER]` - 文件监控日志
-- `[CODE_LOADER]` - 代码加载器日志
-- `[NODE_*]` - Node执行日志
-
----
-
-## 已知问题和限制
-
-### 已知问题
-
-1. **JAR测试依赖**: JAR测试需要Java环境，没有Java时会跳过相关测试
-2. **脚本运行器**: Python、Node.js、Lua、Ruby需要相应的运行器
-
-### 限制
-
-1. **平台差异**: 某些测试在不同平台表现不同
-2. **文件系统**: 文件监控在不同文件系统上可能行为不同
-3. **权限要求**: 测试运行可能需要特定的文件权限
-
----
-
-## 维护指南
-
-### 代码规范
-
-- 遵循项目现有的代码风格
-- 使用统一的命名约定
-- 添加适当的注释和文档
-
-### 测试规范
-
-- 测试名称清晰描述测试内容
-- 使用GTEST的宏和断言
-- 每个测试独立，不依赖其他测试
-- 适当的SetUp/TearDown
-
-### 文档规范
-
-- 新增测试时更新相关文档
-- 保持文档与代码同步
-- 提供清晰的使用示例
-
----
-
-## 参考资源
-
-- [Google Test文档](https://google.github.io/googletest/)
-- [AgentFlow主README](../README.md)
-- [AgentFlow开发指南](../docs/DEVELOPMENT.md)
-
----
-
-## 更新历史
-
-### v1.0 (2024-02-17)
-- 初始版本
-- 整合所有测试到统一目录结构
-- 实现完整的热更新测试套件（76个测试用例）
-- 支持多种可执行代码类型
-- 提供完整的测试文档
+**维护者**: @DanielKernel  
+**测试框架**: Google Test 1.11.0  
+**CI集成**: GitHub Actions

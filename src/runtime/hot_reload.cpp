@@ -32,12 +32,6 @@ std::string executable_type_to_string(ExecutableType type) {
       return "PYTHON_SCRIPT";
     case ExecutableType::EXECUTABLE:
       return "EXECUTABLE";
-    case ExecutableType::NODE_JS_SCRIPT:
-      return "NODE_JS_SCRIPT";
-    case ExecutableType::LUA_SCRIPT:
-      return "LUA_SCRIPT";
-    case ExecutableType::RUBY_SCRIPT:
-      return "RUBY_SCRIPT";
     default:
       return "UNKNOWN";
   }
@@ -58,12 +52,6 @@ ExecutableType detect_executable_type(const std::string& file_path) {
     return ExecutableType::SHELL_SCRIPT;
   } else if(ext == ".py") {
     return ExecutableType::PYTHON_SCRIPT;
-  } else if(ext == ".js") {
-    return ExecutableType::NODE_JS_SCRIPT;
-  } else if(ext == ".lua") {
-    return ExecutableType::LUA_SCRIPT;
-  } else if(ext == ".rb") {
-    return ExecutableType::RUBY_SCRIPT;
   } else if(ext.empty() || ext == ".exe" || ext == ".bin") {
     // Check if file has execute permission
     std::error_code ec;

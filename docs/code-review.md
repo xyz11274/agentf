@@ -249,7 +249,7 @@ size_t worker_id = dist(gen);
 
 #### OPT-A1: Worker 池按语言分组
 
-- **当前问题**: 所有 Node（C++/Python/Shell/Lua）共享同一个 worker 线程池，Python 的 GIL 和脚本启动开销会阻塞 C++ 节点执行
+- **当前问题**: 所有 Node（C++/Python/Shell）共享同一个 worker 线程池，Python 的 GIL 和脚本启动开销会阻塞 C++ 节点执行
 - **建议**: 按 ExecutionMode 分组，C++ 节点使用高优先级池，脚本节点使用隔离池
 - **优先级**: P2
 
