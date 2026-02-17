@@ -1,9 +1,12 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag (e.g., v1.2.3)'
+        required: true
+        type: string
 
 jobs:
   create-release:
@@ -19,7 +22,7 @@ jobs:
       - name: Get changelog
         id: changelog
         run: |
-          VERSION=${GITHUB_REF#refs/tags/}
+          VERSION="${{ github.event.inputs.release_tag }}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           
           # Extract changelog for this version
@@ -77,7 +80,7 @@ jobs:
 
       - name: Get version
         id: version
-        run: echo "version=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+        run: echo "version=${{ github.event.inputs.release_tag }}" >> "$GITHUB_OUTPUT"
 
       - name: Install dependencies on Ubuntu
         if: runner.os == 'Linux'

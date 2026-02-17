@@ -64,6 +64,7 @@ The CI/CD pipeline automatically builds and tests on the following platforms:
 - Verifies code formatting consistency
 - Uses `.clang-format` configuration file
 - Reports files that need formatting
+- Optional/manual: run via workflow dispatch with input `run_clang_format=true`
 
 #### b. Clang Tidy Analysis
 - Performs static analysis for code quality issues

@@ -1,13 +1,7 @@
 name: Status Badge Refresh
 
 on:
-  workflow_run:
-    workflows: ["Build", "Tests", "Code Quality"]
-    types:
-      - completed
-  schedule:
-    # Update badge status hourly
-    - cron: "0 * * * *"
+  workflow_dispatch:
 
 jobs:
   update-badges:

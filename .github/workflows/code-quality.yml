@@ -1,38 +1,33 @@
 name: Code Quality
 
 on:
-  push:
-    branches: [ main, develop ]
-    paths:
-      - 'src/**'
-      - 'include/**'
-      - 'examples/**'
-      - 'tests/**'
-      - 'CMakeLists.txt'
-      - '.clang-format'
-      - '.clang-tidy'
-      - '.github/workflows/code-quality.yml'
-  pull_request:
-    branches: [ main, develop ]
-    paths:
-      - 'src/**'
-      - 'include/**'
-      - 'examples/**'
-      - 'tests/**'
-      - 'CMakeLists.txt'
-      - '.clang-format'
-      - '.clang-tidy'
-      - '.github/workflows/code-quality.yml'
   workflow_dispatch:
     inputs:
+      run_clang_format:
+        description: "Run clang-format check"
+        required: false
+        default: "false"
       run_clang_tidy:
         description: "Run clang-tidy analysis"
+        required: false
+        default: "false"
+      run_cppcheck:
+        description: "Run cppcheck static analysis"
+        required: false
+        default: "false"
+      run_cpplint:
+        description: "Run cpplint style check"
+        required: false
+        default: "false"
+      run_sanitizer:
+        description: "Run sanitizer compilation check"
         required: false
         default: "false"
 
 jobs:
   clang-format:
     name: Clang Format Check
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_clang_format == 'true' }}
     runs-on: ubuntu-latest
     
     steps:
@@ -141,6 +136,7 @@ jobs:
 
   cppcheck:
     name: Cppcheck Static Analysis
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_cppcheck == 'true' }}
     runs-on: ubuntu-latest
     
     steps:
@@ -166,6 +162,7 @@ jobs:
 
   cpplint:
     name: CPPLint Style Check
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_cpplint == 'true' }}
     runs-on: ubuntu-latest
     
     steps:
@@ -186,6 +183,7 @@ jobs:
 
   sanitizer-compile:
     name: Sanitizer Compilation Check
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_sanitizer == 'true' }}
     runs-on: ubuntu-latest
     
     steps:

@@ -157,6 +157,24 @@ if(USE_LIBEVENT)
       if(LIBEVENT_INCLUDE_DIRS)
         include_directories(${LIBEVENT_INCLUDE_DIRS})
       endif()
+
+      set(LIBEVENT_LIB_FIRST "")
+      if(LIBEVENT_LIBRARIES)
+        list(GET LIBEVENT_LIBRARIES 0 LIBEVENT_LIB_FIRST)
+      endif()
+      if(LIBEVENT_LIB_FIRST AND NOT IS_ABSOLUTE "${LIBEVENT_LIB_FIRST}")
+        set(LIBEVENT_LIB_FROM_PKGCONFIG "")
+        if(LIBEVENT_LIBRARY_DIRS)
+          find_library(LIBEVENT_LIB_FROM_PKGCONFIG
+            NAMES event event_core
+            HINTS ${LIBEVENT_LIBRARY_DIRS}
+          )
+        endif()
+        if(LIBEVENT_LIB_FROM_PKGCONFIG)
+          set(LIBEVENT_LIBRARIES "${LIBEVENT_LIB_FROM_PKGCONFIG}")
+        endif()
+      endif()
+
       if(LIBEVENT_LIBRARIES AND NOT TARGET libevent::libevent)
         # Create an imported target for libevent
         add_library(libevent::libevent STATIC IMPORTED)
@@ -165,44 +183,50 @@ if(USE_LIBEVENT)
           INTERFACE_INCLUDE_DIRECTORIES "${LIBEVENT_INCLUDE_DIRS}"
         )
       endif()
+      if(NOT TARGET libevent::libevent AND NOT LIBEVENT_LIBRARIES)
+        message(STATUS "libevent pkg-config found but no usable library; disabling event loop support")
+        set(USE_LIBEVENT OFF)
+      endif()
     endif()
     # Try find_library and find_path as last resort
-    find_library(LIBEVENT_LIB
-      NAMES event event_core
-      PATHS
-        "${HOMEBREW_PREFIX}/lib"
-        "/usr/local/lib"
-        "/usr/lib"
-        "/opt/homebrew/lib"
-        "/opt/homebrew/lib"
-        "/usr/lib/x86_64-linux-gnu"
-    )
-    find_path(LIBEVENT_INCLUDE_DIR
-      NAMES event.h event2/event.h
-      PATHS
-        "${HOMEBREW_PREFIX}/include"
-        "/usr/local/include"
-        "/usr/include"
-        "/opt/homebrew/include"
-        "/usr/include/x86_64-linux-gnu"
-    )
-    if(LIBEVENT_LIB AND LIBEVENT_INCLUDE_DIR)
-      message(STATUS "libevent found - enabling event loop support")
-      message(STATUS "  libevent Library: ${LIBEVENT_LIB}")
-      message(STATUS "  libevent Include: ${LIBEVENT_INCLUDE_DIR}")
-      set(USE_LIBEVENT ON)
-      # Create imported target
-      if(NOT TARGET libevent::libevent)
-        add_library(libevent::libevent STATIC IMPORTED)
-        set_target_properties(libevent::libevent PROPERTIES
-          IMPORTED_LOCATION "${LIBEVENT_LIB}"
-          INTERFACE_INCLUDE_DIRECTORIES "${LIBEVENT_INCLUDE_DIR}"
-        )
+    if(NOT TARGET libevent::libevent AND NOT LIBEVENT_LIBRARIES)
+      find_library(LIBEVENT_LIB
+        NAMES event event_core
+        PATHS
+          "${HOMEBREW_PREFIX}/lib"
+          "/usr/local/lib"
+          "/usr/lib"
+          "/opt/homebrew/lib"
+          "/opt/homebrew/lib"
+          "/usr/lib/x86_64-linux-gnu"
+      )
+      find_path(LIBEVENT_INCLUDE_DIR
+        NAMES event.h event2/event.h
+        PATHS
+          "${HOMEBREW_PREFIX}/include"
+          "/usr/local/include"
+          "/usr/include"
+          "/opt/homebrew/include"
+          "/usr/include/x86_64-linux-gnu"
+      )
+      if(LIBEVENT_LIB AND LIBEVENT_INCLUDE_DIR)
+        message(STATUS "libevent found - enabling event loop support")
+        message(STATUS "  libevent Library: ${LIBEVENT_LIB}")
+        message(STATUS "  libevent Include: ${LIBEVENT_INCLUDE_DIR}")
+        set(USE_LIBEVENT ON)
+        # Create imported target
+        if(NOT TARGET libevent::libevent)
+          add_library(libevent::libevent STATIC IMPORTED)
+          set_target_properties(libevent::libevent PROPERTIES
+            IMPORTED_LOCATION "${LIBEVENT_LIB}"
+            INTERFACE_INCLUDE_DIRECTORIES "${LIBEVENT_INCLUDE_DIR}"
+          )
+        endif()
+      else()
+        message(STATUS "libevent not found - using stub event loop")
+        message(STATUS "  To install: brew install libevent (macOS) or sudo apt-get install libevent-dev (Ubuntu)")
+        set(USE_LIBEVENT OFF)
       endif()
-    else()
-      message(STATUS "libevent not found - using stub event loop")
-      message(STATUS "  To install: brew install libevent (macOS) or sudo apt-get install libevent-dev (Ubuntu)")
-      set(USE_LIBEVENT OFF)
     endif()
   endif()
 endif()
