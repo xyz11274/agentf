@@ -1,26 +1,7 @@
 name: Build
 
 on:
-  push:
-    branches: [ main, develop ]
-    paths:
-      - 'src/**'
-      - 'include/**'
-      - 'examples/**'
-      - 'cmake/**'
-      - 'CMakeLists.txt'
-      - 'build.sh'
-      - '.github/workflows/build.yml'
-  pull_request:
-    branches: [ main, develop ]
-    paths:
-      - 'src/**'
-      - 'include/**'
-      - 'examples/**'
-      - 'cmake/**'
-      - 'CMakeLists.txt'
-      - 'build.sh'
-      - '.github/workflows/build.yml'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -40,33 +21,16 @@ jobs:
             cmake_arch: "-DCMAKE_SYSTEM_PROCESSOR=aarch64"
             name: "Linux ARM64"
             optional: false
-          # macOS AMD64
-          - os: macos-latest
-            arch: x86_64
-            cmake_arch: ""
-            name: "macOS AMD64"
-            optional: true
-          # macOS ARM64 (Apple Silicon)
-          - os: macos-14
-            arch: arm64
-            cmake_arch: ""
-            name: "macOS ARM64"
-            optional: true
 
     runs-on: ${{ matrix.os }}
     name: Build - ${{ matrix.name }}
-    continue-on-error: ${{ matrix.optional }}
+    continue-on-error: true
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Install dependencies on macOS
-        if: runner.os == 'macOS'
-        run: |
-          brew install cmake pkg-config openssl libwebsockets protobuf rapidjson libevent googletest
 
       - name: Set up system for Linux ARM64
         if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm64'

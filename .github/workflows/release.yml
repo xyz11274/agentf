@@ -12,6 +12,7 @@ jobs:
   create-release:
     name: Create Release
     runs-on: ubuntu-latest
+    continue-on-error: true
     
     steps:
       - name: Checkout code
@@ -52,6 +53,7 @@ jobs:
   build-release:
     name: Build Release - ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:

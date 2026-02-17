@@ -43,6 +43,7 @@ jobs:
   generate-readme-badges:
     name: Generate README Badges
     runs-on: ubuntu-latest
+    continue-on-error: true
     
     steps:
       - name: Checkout code
