@@ -213,7 +213,7 @@ jobs:
           fail_ci_if_error: false
 
       - name: Upload coverage report as artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: coverage-report-${{ github.sha }}
           path: build/coverage_html/
@@ -513,7 +513,7 @@ jobs:
 
       - name: Upload performance report
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: performance-report-${{ github.sha }}
           path: |
