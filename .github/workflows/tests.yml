@@ -32,6 +32,10 @@ jobs:
           - os: ubuntu-latest
             arch: x86_64
             name: "Linux AMD64"
+          # Linux ARM64 (QEMU)
+          - os: ubuntu-latest
+            arch: arm64
+            name: "Linux ARM64"
           # macOS x86_64
           - os: macos-12
             arch: x86_64
@@ -49,6 +53,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Set up system for Linux ARM64
+        if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
+          sudo apt-get install -y crossbuild-essential-arm64
 
       - name: Install dependencies on Ubuntu
         if: runner.os == 'Linux'
@@ -79,13 +90,24 @@ jobs:
       - name: Configure CMake
         working-directory: build
         run: |
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_STANDARD=17 \
-            -DAGENTFLOW_WITH_PROTOACTOR=OFF \
-            -DAGENTFLOW_WITH_OPENSSL=ON \
-            -DAGENTFLOW_WITH_PROTOBUF=ON \
-            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" && "${{ matrix.arch }}" == "arm64" ]]; then
+            cmake .. \
+              -DCMAKE_BUILD_TYPE=Debug \
+              -DCMAKE_CXX_STANDARD=17 \
+              -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+              -DAGENTFLOW_WITH_PROTOACTOR=OFF \
+              -DAGENTFLOW_WITH_OPENSSL=ON \
+              -DAGENTFLOW_WITH_PROTOBUF=ON \
+              -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+          else
+            cmake .. \
+              -DCMAKE_BUILD_TYPE=Debug \
+              -DCMAKE_CXX_STANDARD=17 \
+              -DAGENTFLOW_WITH_PROTOACTOR=OFF \
+              -DAGENTFLOW_WITH_OPENSSL=ON \
+              -DAGENTFLOW_WITH_PROTOBUF=ON \
+              -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+          fi
 
       - name: Build
         working-directory: build
@@ -319,13 +341,36 @@ jobs:
 
   performance-testing:
     name: Performance Benchmarking
-    runs-on: ubuntu-latest
-    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux AMD64
+          - os: ubuntu-latest
+            arch: x86_64
+            name: "Linux AMD64"
+          # Linux ARM64 (QEMU)
+          - os: ubuntu-latest
+            arch: arm64
+            name: "Linux ARM64"
+          # macOS x86_64
+          - os: macos-12
+            arch: x86_64
+            name: "macOS AMD64"
+    runs-on: ${{ matrix.os }}
     steps:
+      - name: Set up system for Linux ARM64
+        if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
+          sudo apt-get install -y crossbuild-essential-arm64
+
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install dependencies on Ubuntu
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -342,35 +387,63 @@ jobs:
             procps \
             sysstat
 
+      - name: Install dependencies on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install cmake openssl@3 libwebsockets protobuf rapidjson libevent googletest ninja
+
       - name: Create build directory
         run: mkdir -p build
 
       - name: Configure CMake for performance testing
         working-directory: build
         run: |
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_CXX_STANDARD=17 \
-            -DAGENTFLOW_WITH_PROTOACTOR=OFF \
-            -DAGENTFLOW_WITH_OPENSSL=ON \
-            -DAGENTFLOW_WITH_PROTOBUF=ON \
-            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" && "${{ matrix.arch }}" == "arm64" ]]; then
+            cmake .. \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_CXX_STANDARD=17 \
+              -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+              -DAGENTFLOW_WITH_PROTOACTOR=OFF \
+              -DAGENTFLOW_WITH_OPENSSL=ON \
+              -DAGENTFLOW_WITH_PROTOBUF=ON \
+              -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+          else
+            cmake .. \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_CXX_STANDARD=17 \
+              -DAGENTFLOW_WITH_PROTOACTOR=OFF \
+              -DAGENTFLOW_WITH_OPENSSL=ON \
+              -DAGENTFLOW_WITH_PROTOBUF=ON \
+              -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+          fi
 
       - name: Build with optimizations
         working-directory: build
-        run: make -j$(nproc)
+        run: |
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            make -j$(sysctl -n hw.ncpu)
+          else
+            make -j$(nproc)
+          fi
 
       - name: Run performance benchmarks
         working-directory: build
         run: |
           echo "Starting Performance Benchmarking..."
           echo ""
-          echo "System Information:"
-          echo "  CPU Cores: $(nproc)"
-          echo "  Total Memory: $(free -h | awk '/^Mem:/ {print $2}')"
-          echo "  Kernel: $(uname -r)"
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            echo "System Information:"
+            echo "  CPU Cores: $(sysctl -n hw.ncpu)"
+            echo "  Total Memory: $(vm_stat | grep 'Pages free' | awk '{print $3}' | sed 's/\.//') pages free"
+            echo "  Kernel: $(uname -r)"
+          else
+            echo "System Information:"
+            echo "  CPU Cores: $(nproc)"
+            echo "  Total Memory: $(free -h | awk '/^Mem:/ {print $2}')"
+            echo "  Kernel: $(uname -r)"
+          fi
           echo ""
-          
           # Run performance tests
           if [ -f test_performance ]; then
             echo "Running performance tests..."
