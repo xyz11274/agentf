@@ -150,7 +150,7 @@ public:
  */
 class EventLoopStubAdapter : public IEventLoopAdapter {
 public:
-  std::shared_ptr<IEventLoop> create_loop() override { return std::make_shared<EventLoopStub>(); }
+  std::shared_ptr<IEventLoop> create_loop() override { return nullptr; }
   std::string                 get_version() override { return "stub"; }
   bool                        is_available() const override { return false; }
   bool                        initialize() override { return false; }
