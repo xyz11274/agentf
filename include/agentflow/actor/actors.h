@@ -160,6 +160,11 @@ public:
 #else
 
 // Stub implementation when Protoactor-cpp is not available
+#include <memory>
+#include <string>
+
+#include "agentflow/common.h"
+
 namespace agentflow {
 namespace actor {
 

@@ -14,6 +14,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <sys/ipc.h>
+#include <sys/shm.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #endif
