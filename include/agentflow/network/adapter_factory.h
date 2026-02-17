@@ -5,10 +5,11 @@
 
 #pragma once
 
-#include "agentflow/network/ssl_adapter.h"
-#include "agentflow/network/websocket_adapter.h"
 #include <memory>
 #include <string>
+
+#include "agentflow/network/ssl_adapter.h"
+#include "agentflow/network/websocket_adapter.h"
 
 namespace agentflow {
 namespace network {

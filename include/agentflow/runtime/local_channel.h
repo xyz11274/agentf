@@ -6,13 +6,14 @@
 #ifndef AGENTFLOW_RUNTIME_LOCAL_CHANNEL_H
 #define AGENTFLOW_RUNTIME_LOCAL_CHANNEL_H
 
-#include <memory>
-#include <string>
-#include <map>
-#include <vector>
-#include <functional>
-#include <mutex>
 #include <condition_variable>
+#include <functional>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
+
 #include "agentflow/common.h"
 
 namespace agentflow {
@@ -20,28 +21,29 @@ namespace runtime {
 
 /// @brief Channel event types
 enum class ChannelEvent : uint8_t {
-  DATA_READY = 0,
-  DATA_CONSUMED = 1,
+  DATA_READY     = 0,
+  DATA_CONSUMED  = 1,
   CHANNEL_CLOSED = 2,
-  ERROR = 3,
+  ERROR          = 3,
 };
 
 /// @brief Data packet with metadata
 struct DataPacket {
   std::string key;
-  DataValue value;
+  DataValue   value;
   std::string source_id;
-  int64_t timestamp_ms;
-  uint32_t sequence_number;
+  int64_t     timestamp_ms;
+  uint32_t    sequence_number;
 
-  DataPacket()
-      : timestamp_ms(0), sequence_number(0) {}
+  DataPacket() : timestamp_ms(0), sequence_number(0) {}
 
-  DataPacket(const std::string& k, const DataValue& v,
-             const std::string& src = "")
-      : key(k), value(v), source_id(src),
+  DataPacket(const std::string& k, const DataValue& v, const std::string& src = "")
+      : key(k),
+        value(v),
+        source_id(src),
         timestamp_ms(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()).count()),
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count()),
         sequence_number(0) {}
 };
 
@@ -52,11 +54,15 @@ struct ChannelStats {
   uint64_t bytes_sent;
   uint64_t bytes_received;
   uint64_t errors;
-  int64_t queue_depth;
+  int64_t  queue_depth;
 
   ChannelStats()
-      : packets_sent(0), packets_received(0), bytes_sent(0),
-        bytes_received(0), errors(0), queue_depth(0) {}
+      : packets_sent(0),
+        packets_received(0),
+        bytes_sent(0),
+        bytes_received(0),
+        errors(0),
+        queue_depth(0) {}
 };
 
 /// @brief Event callback type
@@ -65,12 +71,11 @@ using EventCallback = std::function<void(ChannelEvent, const DataPacket&)>;
 /// @brief Local data channel for intra-process data sharing
 /// Provides high-performance, zero-copy data passing between actors
 class LocalChannel {
- public:
+public:
   /// @brief Constructor
   /// @param channel_id Unique channel identifier
   /// @param capacity Maximum number of packets in queue (0 = unlimited)
-  explicit LocalChannel(const std::string& channel_id,
-                     size_t capacity = 1000);
+  explicit LocalChannel(const std::string& channel_id, size_t capacity = 1000);
 
   /// @brief Destructor
   ~LocalChannel();
@@ -117,8 +122,7 @@ class LocalChannel {
   /// @param packet Output parameter for received packet
   /// @param timeout_ms Timeout in milliseconds (0 = infinite)
   /// @return true if packet received
-  bool receive_from_key(const std::string& key, DataPacket& packet,
-                        int timeout_ms = 0);
+  bool receive_from_key(const std::string& key, DataPacket& packet, int timeout_ms = 0);
 
   /// @brief Subscribe to channel events
   /// @param callback The event callback function
@@ -163,20 +167,20 @@ class LocalChannel {
   /// @return true if data became available
   bool wait_for_data(const std::string& key, int timeout_ms = 0);
 
- private:
+private:
   std::string channel_id_;
-  size_t capacity_;
-  bool open_ = false;
+  size_t      capacity_;
+  bool        open_ = false;
 
-  mutable std::mutex mutex_;
+  mutable std::mutex      mutex_;
   std::condition_variable cv_;
 
-  std::vector<DataPacket> queue_;
-  std::map<std::string, std::vector<DataPacket>> key_data_;
+  std::vector<DataPacket>                         queue_;
+  std::map<std::string, std::vector<DataPacket>>  key_data_;
   std::map<std::string, std::condition_variable*> key_cvs_;
 
   std::map<size_t, EventCallback> subscribers_;
-  size_t next_subscription_id_ = 1;
+  size_t                          next_subscription_id_ = 1;
 
   ChannelStats stats_;
 
@@ -189,7 +193,7 @@ class LocalChannel {
 
 /// @brief Local channel registry for managing multiple channels
 class LocalChannelRegistry {
- public:
+public:
   /// @brief Get singleton instance
   static LocalChannelRegistry& instance();
 
@@ -197,8 +201,8 @@ class LocalChannelRegistry {
   /// @param channel_id Channel identifier
   /// @param capacity Channel capacity
   /// @return Shared pointer to the channel
-  std::shared_ptr<LocalChannel> get_or_create(
-      const std::string& channel_id, size_t capacity = 1000);
+  std::shared_ptr<LocalChannel> get_or_create(const std::string& channel_id,
+                                              size_t             capacity = 1000);
 
   /// @brief Get an existing channel
   /// @param channel_id Channel identifier
@@ -219,15 +223,15 @@ class LocalChannelRegistry {
   /// @brief Close all channels
   void close_all();
 
- private:
-  LocalChannelRegistry() = default;
+private:
+  LocalChannelRegistry()  = default;
   ~LocalChannelRegistry() = default;
 
   // Non-copyable, non-movable
-  LocalChannelRegistry(const LocalChannelRegistry&) = delete;
+  LocalChannelRegistry(const LocalChannelRegistry&)            = delete;
   LocalChannelRegistry& operator=(const LocalChannelRegistry&) = delete;
 
-  mutable std::mutex mutex_;
+  mutable std::mutex                                   mutex_;
   std::map<std::string, std::shared_ptr<LocalChannel>> channels_;
 };
 

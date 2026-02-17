@@ -20,34 +20,34 @@ ActorSystemManager& ActorSystemManager::get_instance() {
 
 bool ActorSystemManager::initialize() {
   std::lock_guard<std::mutex> lock(mutex_);
-  
-  if (initialized_) {
+
+  if(initialized_) {
     return true;
   }
 
   try {
     // Create Protoactor actor system
     actor_system_ = protoactor::ActorSystem::New();
-    
-    if (!actor_system_) {
+
+    if(!actor_system_) {
       return false;
     }
-    
+
     initialized_ = true;
     return true;
-  } catch (const std::exception& e) {
+  } catch(const std::exception& e) {
     return false;
   }
 }
 
 void ActorSystemManager::shutdown() {
   std::lock_guard<std::mutex> lock(mutex_);
-  
-  if (actor_system_) {
+
+  if(actor_system_) {
     actor_system_->Shutdown();
     actor_system_.reset();
   }
-  
+
   initialized_ = false;
 }
 
@@ -56,8 +56,7 @@ bool ActorSystemManager::is_running() const {
   return initialized_ && actor_system_ != nullptr;
 }
 
-std::shared_ptr<protoactor::ActorSystem> 
-ActorSystemManager::get_actor_system() const {
+std::shared_ptr<protoactor::ActorSystem> ActorSystemManager::get_actor_system() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return actor_system_;
 }
@@ -72,7 +71,8 @@ bool ActorSystemManager::initialize() {
   return false;
 }
 
-void ActorSystemManager::shutdown() {}
+void ActorSystemManager::shutdown() {
+}
 
 bool ActorSystemManager::is_running() const {
   return false;
@@ -82,7 +82,8 @@ std::shared_ptr<void> ActorSystemManager::get_actor_system() const {
   return nullptr;
 }
 
-ActorSystemManager::~ActorSystemManager() {}
+ActorSystemManager::~ActorSystemManager() {
+}
 
 #endif
 

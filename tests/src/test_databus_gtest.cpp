@@ -4,10 +4,11 @@
 // Google Test tests for DataBus component
 
 #include <gtest/gtest.h>
+
 #include "agentflow/runtime/databus.h"
 
 class DataBusTest : public ::testing::Test {
- protected:
+protected:
   void SetUp() override {}
   void TearDown() override {}
 };

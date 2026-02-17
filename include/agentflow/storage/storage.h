@@ -5,12 +5,12 @@
 
 #pragma once
 
-#include <string>
-#include <vector>
-#include <map>
-#include <memory>
 #include <cstdint>
 #include <functional>
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace agentflow {
 namespace storage {
@@ -19,13 +19,13 @@ namespace storage {
  * Storage error codes
  */
 enum class StorageError {
-  STORAGE_OK = 0,
-  STORAGE_ERROR_IO = 1,
-  STORAGE_ERROR_NOT_FOUND = 2,
-  STORAGE_ERROR_ALREADY_EXISTS = 3,
-  STORAGE_ERROR_INVALID_DATA = 4,
+  STORAGE_OK                     = 0,
+  STORAGE_ERROR_IO               = 1,
+  STORAGE_ERROR_NOT_FOUND        = 2,
+  STORAGE_ERROR_ALREADY_EXISTS   = 3,
+  STORAGE_ERROR_INVALID_DATA     = 4,
   STORAGE_ERROR_VERSION_CONFLICT = 5,
-  STORAGE_ERROR_UNKNOWN = 6,
+  STORAGE_ERROR_UNKNOWN          = 6,
 };
 
 /**
@@ -33,7 +33,7 @@ enum class StorageError {
  */
 struct StorageResult {
   StorageError error = StorageError::STORAGE_OK;
-  std::string message;
+  std::string  message;
 
   bool is_success() const { return error == StorageError::STORAGE_OK; }
 };
@@ -43,7 +43,7 @@ struct StorageResult {
  */
 struct VersionInfo {
   std::string version;
-  int64_t timestamp;  // Unix timestamp in milliseconds
+  int64_t     timestamp;  // Unix timestamp in milliseconds
   std::string description;
   std::string author;
   std::string commit_id;  // Git commit ID if applicable
@@ -57,7 +57,7 @@ struct VersionInfo {
  * Generic storage interface for key-value operations
  */
 class IStorage {
- public:
+public:
   virtual ~IStorage() = default;
 
   /**
@@ -68,14 +68,12 @@ class IStorage {
   /**
    * Save data with key
    */
-  virtual StorageResult save(const std::string& key,
-                            const std::string& data) = 0;
+  virtual StorageResult save(const std::string& key, const std::string& data) = 0;
 
   /**
    * Load data by key
    */
-  virtual StorageResult load(const std::string& key,
-                            std::string& data) = 0;
+  virtual StorageResult load(const std::string& key, std::string& data) = 0;
 
   /**
    * Delete data by key
@@ -90,8 +88,7 @@ class IStorage {
   /**
    * List all keys matching a prefix
    */
-  virtual StorageResult list(const std::string& prefix,
-                            std::vector<std::string>& keys) = 0;
+  virtual StorageResult list(const std::string& prefix, std::vector<std::string>& keys) = 0;
 
   /**
    * Get last error
@@ -109,58 +106,51 @@ class IStorage {
  * Adds version management capabilities
  */
 class IVersionStorage : public IStorage {
- public:
+public:
   virtual ~IVersionStorage() = default;
 
   /**
    * Save data with version
    */
-  virtual StorageResult save_version(const std::string& key,
-                                   const std::string& data,
-                                   const VersionInfo& version) = 0;
+  virtual StorageResult save_version(const std::string& key, const std::string& data,
+                                     const VersionInfo& version) = 0;
 
   /**
    * Load data by key and version
    */
-  virtual StorageResult load_version(const std::string& key,
-                                    const std::string& version,
-                                    std::string& data) = 0;
+  virtual StorageResult load_version(const std::string& key, const std::string& version,
+                                     std::string& data) = 0;
 
   /**
    * Get latest version info for a key
    */
-  virtual StorageResult get_latest_version(const std::string& key,
-                                         VersionInfo& version) = 0;
+  virtual StorageResult get_latest_version(const std::string& key, VersionInfo& version) = 0;
 
   /**
    * List all versions for a key
    */
-  virtual StorageResult list_versions(const std::string& key,
-                                     std::vector<VersionInfo>& versions) = 0;
+  virtual StorageResult list_versions(const std::string&        key,
+                                      std::vector<VersionInfo>& versions) = 0;
 
   /**
    * Delete a specific version
    */
-  virtual StorageResult delete_version(const std::string& key,
-                                     const std::string& version) = 0;
+  virtual StorageResult delete_version(const std::string& key, const std::string& version) = 0;
 
   /**
    * Set version as active (for canary/gray release)
    */
-  virtual StorageResult set_active_version(const std::string& key,
-                                         const std::string& version) = 0;
+  virtual StorageResult set_active_version(const std::string& key, const std::string& version) = 0;
 
   /**
    * Get active version for a key
    */
-  virtual StorageResult get_active_version(const std::string& key,
-                                         std::string& version) = 0;
+  virtual StorageResult get_active_version(const std::string& key, std::string& version) = 0;
 
   /**
    * Rollback to a specific version
    */
-  virtual StorageResult rollback_to_version(const std::string& key,
-                                          const std::string& version) = 0;
+  virtual StorageResult rollback_to_version(const std::string& key, const std::string& version) = 0;
 };
 
 /**
@@ -168,9 +158,9 @@ class IVersionStorage : public IStorage {
  */
 struct StorageConfig {
   std::string base_path;  // Base directory for file-based storage
-  bool use_compression = false;
-  int max_versions = 10;  // Maximum number of versions to keep
-  bool enable_versioning = true;
+  bool        use_compression   = false;
+  int         max_versions      = 10;  // Maximum number of versions to keep
+  bool        enable_versioning = true;
 };
 
 /**

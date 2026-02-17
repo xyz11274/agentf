@@ -8,9 +8,10 @@
 #ifdef AGENTFLOW_WITH_LIBEVENT
 
 #include <event2/event.h>
-#include "agentflow/event/eventloop_adapter.h"
-#include <memory>
 #include <functional>
+#include <memory>
+
+#include "agentflow/event/eventloop_adapter.h"
 
 namespace agentflow {
 namespace event {
@@ -24,14 +25,14 @@ using LibeventEvent = struct event;
  * Timer event using libevent
  */
 class EventTimerLibevent : public ITimerEvent {
- public:
+public:
   explicit EventTimerLibevent(LibeventEvent* ev);
   ~EventTimerLibevent() override;
 
   bool cancel() override;
   bool is_active() const override;
 
- private:
+private:
   LibeventEvent* ev_;
 };
 
@@ -39,7 +40,7 @@ class EventTimerLibevent : public ITimerEvent {
  * File descriptor event using libevent
  */
 class EventFileLibevent : public IFileEvent {
- public:
+public:
   EventFileLibevent(int fd, event_base* base);
   ~EventFileLibevent() override;
 
@@ -48,64 +49,62 @@ class EventFileLibevent : public IFileEvent {
   bool disable(int flags) override;
   bool is_active() const override;
 
- private:
-  int fd_;
-  event_base* base_;
+private:
+  int            fd_;
+  event_base*    base_;
   LibeventEvent* ev_;
-  EventCallback callback_;
+  EventCallback  callback_;
 };
 
 /**
  * Event loop using libevent
  */
 class EventLoopLibevent : public IEventLoop {
- public:
+public:
   EventLoopLibevent();
   ~EventLoopLibevent() override;
 
   bool initialize() override;
-  int dispatch(int timeout_ms = -1) override;
-  int dispatch_once(int timeout_ms = 0) override;
+  int  dispatch(int timeout_ms = -1) override;
+  int  dispatch_once(int timeout_ms = 0) override;
   void exit() override;
 
   std::shared_ptr<IFileEvent> add_fd_event(int fd) override;
-  bool remove_fd_event(int fd) override;
+  bool                        remove_fd_event(int fd) override;
 
-  std::shared_ptr<ITimerEvent> add_timer(
-      uint32_t timeout_ms,
-      std::function<void()> callback) override;
+  std::shared_ptr<ITimerEvent> add_timer(uint32_t              timeout_ms,
+                                         std::function<void()> callback) override;
 
-  std::shared_ptr<ITimerEvent> add_persistent_timer(
-      uint32_t interval_ms,
-      std::function<void()> callback) override;
+  std::shared_ptr<ITimerEvent> add_persistent_timer(uint32_t              interval_ms,
+                                                    std::function<void()> callback) override;
 
   bool add_callback(std::function<void()> cb) override;
 
   EventLoopError last_error() const override { return error_; }
-  std::string error_message() const override { return error_msg_; }
-  bool is_running() const override;
+  std::string    error_message() const override { return error_msg_; }
+  bool           is_running() const override;
 
- private:
-  event_base* base_;
+private:
+  event_base*    base_;
   EventLoopError error_;
-  std::string error_msg_;
+  std::string    error_msg_;
 };
 
 /**
  * Event loop adapter for libevent
  */
 class EventLoopLibeventAdapter : public IEventLoopAdapter {
- public:
+public:
   EventLoopLibeventAdapter();
   ~EventLoopLibeventAdapter() override;
 
   std::shared_ptr<IEventLoop> create_loop() override;
-  std::string get_version() override;
-  bool is_available() const override { return available_; }
-  bool initialize() override;
-  void cleanup() override;
+  std::string                 get_version() override;
+  bool                        is_available() const override { return available_; }
+  bool                        initialize() override;
+  void                        cleanup() override;
 
- private:
+private:
   bool available_;
 };
 

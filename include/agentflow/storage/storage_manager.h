@@ -5,10 +5,11 @@
 
 #pragma once
 
-#include "agentflow/storage/storage.h"
-#include "agentflow/storage/agent_storage.h"
-#include "agentflow/storage/workflow_storage.h"
 #include <memory>
+
+#include "agentflow/storage/agent_storage.h"
+#include "agentflow/storage/storage.h"
+#include "agentflow/storage/workflow_storage.h"
 
 namespace agentflow {
 namespace storage {
@@ -19,9 +20,9 @@ namespace storage {
 struct GrayReleaseConfig {
   std::string agent_id;
   std::string target_version;  // Version to release to gray
-  double percentage;           // Percentage of traffic (0.0 - 1.0)
-  int64_t start_time;          // Unix timestamp
-  int64_t end_time;            // Unix timestamp
+  double      percentage;      // Percentage of traffic (0.0 - 1.0)
+  int64_t     start_time;      // Unix timestamp
+  int64_t     end_time;        // Unix timestamp
   std::string description;
 };
 
@@ -29,7 +30,7 @@ struct GrayReleaseConfig {
  * Storage manager for unified Agent and Workflow storage management
  */
 class StorageManager {
- public:
+public:
   explicit StorageManager(const StorageConfig& config);
   ~StorageManager();
 
@@ -70,8 +71,7 @@ class StorageManager {
   /**
    * Update gray release percentage
    */
-  StorageResult update_gray_release(const std::string& agent_id,
-                                   double percentage);
+  StorageResult update_gray_release(const std::string& agent_id, double percentage);
 
   /**
    * Get current gray release status
@@ -79,14 +79,13 @@ class StorageManager {
   struct GrayReleaseStatus {
     std::string active_version;
     std::string gray_version;
-    double gray_percentage;
-    int64_t start_time;
-    int64_t end_time;
+    double      gray_percentage;
+    int64_t     start_time;
+    int64_t     end_time;
     std::string description;
   };
 
-  StorageResult get_gray_release_status(const std::string& agent_id,
-                                       GrayReleaseStatus& status);
+  StorageResult get_gray_release_status(const std::string& agent_id, GrayReleaseStatus& status);
 
   /**
    * Complete gray release and make gray version active
@@ -102,7 +101,7 @@ class StorageManager {
    * Get storage statistics
    */
   struct OverallStats {
-    IAgentStorage::StorageStats agent_stats;
+    IAgentStorage::StorageStats    agent_stats;
     IWorkflowStorage::StorageStats workflow_stats;
   };
 
@@ -118,9 +117,9 @@ class StorageManager {
    */
   StorageResult import_data(const std::string& input_path);
 
- private:
-  StorageConfig config_;
-  std::unique_ptr<IAgentStorage> agent_storage_;
+private:
+  StorageConfig                     config_;
+  std::unique_ptr<IAgentStorage>    agent_storage_;
   std::unique_ptr<IWorkflowStorage> workflow_storage_;
 
   // Gray release state (could be persisted)

@@ -6,12 +6,12 @@
 #ifndef AGENTFLOW_RUNTIME_EVENT_H
 #define AGENTFLOW_RUNTIME_EVENT_H
 
-#include <string>
-#include <memory>
 #include <functional>
 #include <map>
-#include <vector>
+#include <memory>
 #include <mutex>
+#include <string>
+#include <vector>
 
 #include "agentflow/common.h"
 
@@ -23,33 +23,33 @@ class Node;
 
 /// @brief Represents an event in the workflow execution pipeline
 class WorkflowEvent {
- public:
+public:
   /// @brief Constructor
   /// @param event_type The type of event
   /// @param node_id The node that generated the event
   /// @param workflow_id The workflow associated with the event
   /// @param data Optional event data
-  explicit WorkflowEvent(EventType event_type,
-                         const NodeId& node_id,
-                         const WorkflowId& workflow_id,
+  explicit WorkflowEvent(EventType event_type, const NodeId& node_id, const WorkflowId& workflow_id,
                          const DataMap& data = DataMap())
-      : event_type_(event_type), node_id_(node_id),
-        workflow_id_(workflow_id), data_(data),
+      : event_type_(event_type),
+        node_id_(node_id),
+        workflow_id_(workflow_id),
+        data_(data),
         timestamp_ms_(get_current_timestamp_ms()) {}
 
   // Getters
-  EventType get_event_type() const { return event_type_; }
-  const NodeId& get_node_id() const { return node_id_; }
+  EventType         get_event_type() const { return event_type_; }
+  const NodeId&     get_node_id() const { return node_id_; }
   const WorkflowId& get_workflow_id() const { return workflow_id_; }
-  const DataMap& get_data() const { return data_; }
-  uint64_t get_timestamp_ms() const { return timestamp_ms_; }
+  const DataMap&    get_data() const { return data_; }
+  uint64_t          get_timestamp_ms() const { return timestamp_ms_; }
 
- private:
-  EventType event_type_;
-  NodeId node_id_;
+private:
+  EventType  event_type_;
+  NodeId     node_id_;
   WorkflowId workflow_id_;
-  DataMap data_;
-  uint64_t timestamp_ms_;
+  DataMap    data_;
+  uint64_t   timestamp_ms_;
 
   static uint64_t get_current_timestamp_ms();
 };
@@ -59,7 +59,7 @@ using EventHandler = std::function<void(const WorkflowEvent&)>;
 
 /// @brief Event manager for workflow control flow
 class EventManager {
- public:
+public:
   /// @brief Constructor
   EventManager() = default;
 
@@ -88,15 +88,15 @@ class EventManager {
   /// @brief Clear all subscriptions
   void clear();
 
- private:
+private:
   struct Subscription {
-    EventType event_type;
+    EventType    event_type;
     EventHandler handler;
   };
 
-  mutable std::mutex handler_mutex_;
+  mutable std::mutex                  handler_mutex_;
   std::map<std::string, Subscription> handlers_;
-  size_t next_subscription_id_ = 0;
+  size_t                              next_subscription_id_ = 0;
 
   std::string generate_subscription_id();
 };

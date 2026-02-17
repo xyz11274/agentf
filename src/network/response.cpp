@@ -4,9 +4,11 @@
 // Response wrapper implementation
 
 #include "agentflow/network/response.h"
-#include "agentflow/basic/logger.h"
+
 #include <chrono>
 #include <sstream>
+
+#include "agentflow/basic/logger.h"
 
 namespace agentflow {
 namespace network {
@@ -15,20 +17,20 @@ namespace network {
 // Response Implementation
 // ============================================================================
 
-Response::Response()
-    : payload_() {
+Response::Response() : payload_() {
   metadata_.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
 }
 
-Response::Response(ResponseStatus status)
-    : payload_() {
-  metadata_.status = status;
+Response::Response(ResponseStatus status) : payload_() {
+  metadata_.status       = status;
   metadata_.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
 
   // Set default status message based on status
-  switch (static_cast<int>(status)) {
+  switch(static_cast<int>(status)) {
     case 200:
       metadata_.status_message = "OK";
       break;
@@ -53,19 +55,19 @@ Response::Response(ResponseStatus status)
   }
 }
 
-Response::Response(ResponseStatus status, const DataMap& payload,
-                const ResponseMetadata& metadata)
+Response::Response(ResponseStatus status, const DataMap& payload, const ResponseMetadata& metadata)
     : payload_(payload), metadata_(metadata) {
   metadata_.status = status;
-  if (metadata_.timestamp_ms == 0) {
+  if(metadata_.timestamp_ms == 0) {
     metadata_.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+                                 std::chrono::system_clock::now().time_since_epoch())
+                                 .count();
   }
 }
 
 DataValue Response::get(const std::string& key) const {
   auto it = payload_.find(key);
-  if (it != payload_.end()) {
+  if(it != payload_.end()) {
     return it->second;
   }
   return std::string();
@@ -81,7 +83,7 @@ bool Response::has(const std::string& key) const {
 
 std::string Response::get_header(const std::string& key) const {
   auto it = metadata_.headers.find(key);
-  if (it != metadata_.headers.end()) {
+  if(it != metadata_.headers.end()) {
     return it->second;
   }
   return "";
@@ -100,23 +102,23 @@ std::string Response::to_json() const {
   oss << "\"timestamp_ms\":" << metadata_.timestamp_ms << ",";
   oss << "\"processing_time_ms\":" << metadata_.processing_time_ms << ",";
 
-  if (!metadata_.request_id.empty()) {
+  if(!metadata_.request_id.empty()) {
     oss << "\"request_id\":\"" << metadata_.request_id << "\",";
   }
 
-  if (!metadata_.error_code.empty()) {
+  if(!metadata_.error_code.empty()) {
     oss << "\"error_code\":\"" << metadata_.error_code << "\",";
   }
 
-  if (!metadata_.error_detail.empty()) {
+  if(!metadata_.error_detail.empty()) {
     oss << "\"error_detail\":\"" << metadata_.error_detail << "\",";
   }
 
   // Add payload
   oss << "\"payload\":{";
   bool first = true;
-  for (const auto& [key, value] : payload_) {
-    if (!first) {
+  for(const auto& [key, value] : payload_) {
+    if(!first) {
       oss << ",";
     }
     first = false;
@@ -124,13 +126,13 @@ std::string Response::to_json() const {
     oss << "\"" << key << "\":";
 
     // Serialize value based on type
-    if (std::holds_alternative<int64_t>(value)) {
+    if(std::holds_alternative<int64_t>(value)) {
       oss << std::get<int64_t>(value);
-    } else if (std::holds_alternative<double>(value)) {
+    } else if(std::holds_alternative<double>(value)) {
       oss << std::get<double>(value);
-    } else if (std::holds_alternative<std::string>(value)) {
+    } else if(std::holds_alternative<std::string>(value)) {
       oss << "\"" << std::get<std::string>(value) << "\"";
-    } else if (std::holds_alternative<bool>(value)) {
+    } else if(std::holds_alternative<bool>(value)) {
       oss << (std::get<bool>(value) ? "true" : "false");
     }
   }
@@ -139,8 +141,8 @@ std::string Response::to_json() const {
   // Add headers
   oss << "\"headers\":{";
   first = true;
-  for (const auto& [key, value] : metadata_.headers) {
-    if (!first) {
+  for(const auto& [key, value] : metadata_.headers) {
+    if(!first) {
       oss << ",";
     }
     first = false;
@@ -190,21 +192,21 @@ std::vector<uint8_t> Response::to_binary() const {
   //   [N bytes] value
 
   // Write status
-  int status = static_cast<int>(metadata_.status);
+  int            status       = static_cast<int>(metadata_.status);
   const uint8_t* status_bytes = reinterpret_cast<const uint8_t*>(&status);
   result.insert(result.end(), status_bytes, status_bytes + 4);
 
   // Write status message
-  const std::string& msg = metadata_.status_message;
-  uint32_t msg_len = static_cast<uint32_t>(msg.length());
-  const uint8_t* msg_len_bytes = reinterpret_cast<const uint8_t*>(&msg_len);
+  const std::string& msg           = metadata_.status_message;
+  uint32_t           msg_len       = static_cast<uint32_t>(msg.length());
+  const uint8_t*     msg_len_bytes = reinterpret_cast<const uint8_t*>(&msg_len);
   result.insert(result.end(), msg_len_bytes, msg_len_bytes + 4);
   result.insert(result.end(), msg.begin(), msg.end());
 
   // Write request_id
-  const std::string& req_id = metadata_.request_id;
-  uint32_t req_id_len = static_cast<uint32_t>(req_id.length());
-  const uint8_t* req_id_len_bytes = reinterpret_cast<const uint8_t*>(&req_id_len);
+  const std::string& req_id           = metadata_.request_id;
+  uint32_t           req_id_len       = static_cast<uint32_t>(req_id.length());
+  const uint8_t*     req_id_len_bytes = reinterpret_cast<const uint8_t*>(&req_id_len);
   result.insert(result.end(), req_id_len_bytes, req_id_len_bytes + 4);
   result.insert(result.end(), req_id.begin(), req_id.end());
 
@@ -213,25 +215,26 @@ std::vector<uint8_t> Response::to_binary() const {
   result.insert(result.end(), timestamp_bytes, timestamp_bytes + 8);
 
   // Write processing time
-  const uint8_t* processing_time_bytes = reinterpret_cast<const uint8_t*>(&metadata_.processing_time_ms);
+  const uint8_t* processing_time_bytes =
+      reinterpret_cast<const uint8_t*>(&metadata_.processing_time_ms);
   result.insert(result.end(), processing_time_bytes, processing_time_bytes + 4);
 
   // Write error code
-  const std::string& error_code = metadata_.error_code;
-  uint32_t error_code_len = static_cast<uint32_t>(error_code.length());
-  const uint8_t* error_code_len_bytes = reinterpret_cast<const uint8_t*>(&error_code_len);
+  const std::string& error_code           = metadata_.error_code;
+  uint32_t           error_code_len       = static_cast<uint32_t>(error_code.length());
+  const uint8_t*     error_code_len_bytes = reinterpret_cast<const uint8_t*>(&error_code_len);
   result.insert(result.end(), error_code_len_bytes, error_code_len_bytes + 4);
   result.insert(result.end(), error_code.begin(), error_code.end());
 
   // Write error detail
-  const std::string& error_detail = metadata_.error_detail;
-  uint32_t error_detail_len = static_cast<uint32_t>(error_detail.length());
-  const uint8_t* error_detail_len_bytes = reinterpret_cast<const uint8_t*>(&error_detail_len);
+  const std::string& error_detail           = metadata_.error_detail;
+  uint32_t           error_detail_len       = static_cast<uint32_t>(error_detail.length());
+  const uint8_t*     error_detail_len_bytes = reinterpret_cast<const uint8_t*>(&error_detail_len);
   result.insert(result.end(), error_detail_len_bytes, error_detail_len_bytes + 4);
   result.insert(result.end(), error_detail.begin(), error_detail.end());
 
   // Write payload count
-  uint32_t payload_count = static_cast<uint32_t>(payload_.size());
+  uint32_t       payload_count       = static_cast<uint32_t>(payload_.size());
   const uint8_t* payload_count_bytes = reinterpret_cast<const uint8_t*>(&payload_count);
   result.insert(result.end(), payload_count_bytes, payload_count_bytes + 4);
 
@@ -239,18 +242,18 @@ std::vector<uint8_t> Response::to_binary() const {
   // For now, skip detailed payload serialization
 
   // Write headers count
-  uint32_t headers_count = static_cast<uint32_t>(metadata_.headers.size());
+  uint32_t       headers_count       = static_cast<uint32_t>(metadata_.headers.size());
   const uint8_t* headers_count_bytes = reinterpret_cast<const uint8_t*>(&headers_count);
   result.insert(result.end(), headers_count_bytes, headers_count_bytes + 4);
 
   // Write headers
-  for (const auto& [key, value] : metadata_.headers) {
-    uint32_t key_len = static_cast<uint32_t>(key.length());
+  for(const auto& [key, value] : metadata_.headers) {
+    uint32_t       key_len       = static_cast<uint32_t>(key.length());
     const uint8_t* key_len_bytes = reinterpret_cast<const uint8_t*>(&key_len);
     result.insert(result.end(), key_len_bytes, key_len_bytes + 4);
     result.insert(result.end(), key.begin(), key.end());
 
-    uint32_t value_len = static_cast<uint32_t>(value.length());
+    uint32_t       value_len       = static_cast<uint32_t>(value.length());
     const uint8_t* value_len_bytes = reinterpret_cast<const uint8_t*>(&value_len);
     result.insert(result.end(), value_len_bytes, value_len_bytes + 4);
     result.insert(result.end(), value.begin(), value.end());
@@ -306,16 +309,16 @@ Response Response::service_unavailable(const std::string& message) {
 // ResponseBuilder Implementation
 // ============================================================================
 
-ResponseBuilder::ResponseBuilder()
-    : payload_() {
-  metadata_.status = ResponseStatus::OK;
+ResponseBuilder::ResponseBuilder() : payload_() {
+  metadata_.status       = ResponseStatus::OK;
   metadata_.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
   metadata_.status_message = "OK";
 }
 
 ResponseBuilder& ResponseBuilder::with_status(ResponseStatus status) {
-  status_ = status;
+  status_          = status;
   metadata_.status = status;
   return *this;
 }

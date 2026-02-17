@@ -3,19 +3,20 @@
 //
 // Example demonstrating DSL parsing functionality
 
-#include "agentflow/dsl/workflow_parser.h"
-#include "agentflow/basic/logger.h"
 #include <iostream>
+
+#include "agentflow/basic/logger.h"
+#include "agentflow/dsl/workflow_parser.h"
 
 using namespace agentflow;
 using namespace agentflow::dsl;
 
 int main() {
-    Logger::instance().info("AgentFlow DSL Parser Example");
-    Logger::instance().info("===============================");
+  Logger::instance().info("AgentFlow DSL Parser Example");
+  Logger::instance().info("===============================");
 
-    // Example Workflow DSL (JSON format)
-    std::string workflow_dsl = R"({
+  // Example Workflow DSL (JSON format)
+  std::string workflow_dsl = R"({
         "dsl_version": "1.0.0",
         "id": "example_workflow",
         "name": "Simple Processing Workflow",
@@ -81,76 +82,74 @@ int main() {
         ]
     })";
 
-    // Parse the workflow
-    Logger::instance().info("Parsing workflow from DSL...");
-    auto parser = WorkflowParserFactory::create();
-    auto result = parser->parse_workflow(workflow_dsl);
+  // Parse the workflow
+  Logger::instance().info("Parsing workflow from DSL...");
+  auto parser = WorkflowParserFactory::create();
+  auto result = parser->parse_workflow(workflow_dsl);
 
-    // Check parsing result
-    if (result.is_valid()) {
-        Logger::instance().info("Workflow parsed successfully!");
-        Logger::instance().info_f("Workflow ID: %s", result.workflow->get_id().c_str());
-        Logger::instance().info_f("Workflow Name: %s", result.workflow->get_name().c_str());
-        Logger::instance().info_f("Number of nodes: %zu", result.workflow->get_nodes().size());
-        Logger::instance().info_f("Number of edges: %zu", result.workflow->get_edges().size());
+  // Check parsing result
+  if(result.is_valid()) {
+    Logger::instance().info("Workflow parsed successfully!");
+    Logger::instance().info_f("Workflow ID: %s", result.workflow->get_id().c_str());
+    Logger::instance().info_f("Workflow Name: %s", result.workflow->get_name().c_str());
+    Logger::instance().info_f("Number of nodes: %zu", result.workflow->get_nodes().size());
+    Logger::instance().info_f("Number of edges: %zu", result.workflow->get_edges().size());
 
-        // List nodes
-        for (const auto& node : result.workflow->get_nodes()) {
-            Logger::instance().info_f("  Node: %s (type: %s, priority: %d)",
-                                   node->get_name().c_str(),
-                                   node->get_type().c_str(),
-                                   node->get_priority());
-        }
+    // List nodes
+    for(const auto& node : result.workflow->get_nodes()) {
+      Logger::instance().info_f("  Node: %s (type: %s, priority: %d)", node->get_name().c_str(),
+                                node->get_type().c_str(), node->get_priority());
+    }
 
-        // Validate workflow
-        Logger::instance().info("Validating workflow structure...");
-        ParseResult validate_result;
-        if (parser->validate_workflow(result.workflow, validate_result)) {
-            Logger::instance().info("Workflow validation passed!");
-        } else {
-            Logger::instance().error("Workflow validation failed!");
-            for (const auto& error : validate_result.errors) {
-                Logger::instance().error_f("  %s", error.to_string().c_str());
-            }
-        }
-
-        // Test topological sorting
-        Logger::instance().info("Getting topological order...");
-        auto topological_order = result.workflow->get_topological_order();
-        Logger::instance().info_f("Topological order: %zu nodes", topological_order.size());
-        for (size_t i = 0; i < topological_order.size(); ++i) {
-            auto node = result.workflow->get_node(topological_order[i]);
-            if (node) {
-                Logger::instance().info_f("  %zu. %s", i + 1, node->get_name().c_str());
-            }
-        }
-
-        // Test executable nodes
-        Logger::instance().info("Getting executable nodes (all nodes initially READY)...");
-        auto executable = result.workflow->get_executable_nodes();
-        Logger::instance().info_f("Executable nodes: %zu", executable.size());
-        for (const auto& node_id : executable) {
-            auto node = result.workflow->get_node(node_id);
-            if (node) {
-                Logger::instance().info_f("  - %s", node->get_name().c_str());
-            }
-        }
+    // Validate workflow
+    Logger::instance().info("Validating workflow structure...");
+    ParseResult validate_result;
+    if(parser->validate_workflow(result.workflow, validate_result)) {
+      Logger::instance().info("Workflow validation passed!");
     } else {
-        Logger::instance().error("Failed to parse workflow!");
-        for (const auto& error : result.errors) {
-            Logger::instance().error_f("  %s", error.to_string().c_str());
-        }
-        return 1;
+      Logger::instance().error("Workflow validation failed!");
+      for(const auto& error : validate_result.errors) {
+        Logger::instance().error_f("  %s", error.to_string().c_str());
+      }
     }
 
-    // Print warnings if any
-    if (!result.warnings.empty()) {
-        Logger::instance().info("Warnings:");
-        for (const auto& warning : result.warnings) {
-            Logger::instance().info_f("  %s", warning.c_str());
-        }
+    // Test topological sorting
+    Logger::instance().info("Getting topological order...");
+    auto topological_order = result.workflow->get_topological_order();
+    Logger::instance().info_f("Topological order: %zu nodes", topological_order.size());
+    for(size_t i = 0; i < topological_order.size(); ++i) {
+      auto node = result.workflow->get_node(topological_order[i]);
+      if(node) {
+        Logger::instance().info_f("  %zu. %s", i + 1, node->get_name().c_str());
+      }
     }
 
-    Logger::instance().info("Example completed successfully!");
-    return 0;
+    // Test executable nodes
+    Logger::instance().info("Getting executable nodes (all nodes initially READY)...");
+    auto executable = result.workflow->get_executable_nodes();
+    Logger::instance().info_f("Executable nodes: %zu", executable.size());
+    for(const auto& node_id : executable) {
+      auto node = result.workflow->get_node(node_id);
+      if(node) {
+        Logger::instance().info_f("  - %s", node->get_name().c_str());
+      }
+    }
+  } else {
+    Logger::instance().error("Failed to parse workflow!");
+    for(const auto& error : result.errors) {
+      Logger::instance().error_f("  %s", error.to_string().c_str());
+    }
+    return 1;
+  }
+
+  // Print warnings if any
+  if(!result.warnings.empty()) {
+    Logger::instance().info("Warnings:");
+    for(const auto& warning : result.warnings) {
+      Logger::instance().info_f("  %s", warning.c_str());
+    }
+  }
+
+  Logger::instance().info("Example completed successfully!");
+  return 0;
 }

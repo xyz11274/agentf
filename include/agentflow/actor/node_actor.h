@@ -10,8 +10,9 @@
 
 #include <memory>
 #include <string>
-#include "agentflow/common.h"
+
 #include "agentflow/actor/actors.h"
+#include "agentflow/common.h"
 #include "protoactor/actor.h"
 
 namespace protoactor {
@@ -22,9 +23,8 @@ namespace agentflow {
 namespace actor {
 
 /// @brief Node Actor for executing individual workflow nodes
-class NodeActor : public protoactor::Actor,
-                   public AgentFlowActor {
- public:
+class NodeActor : public protoactor::Actor, public AgentFlowActor {
+public:
   /// @brief Constructor
   /// @param node_id The ID of the node this actor represents
   /// @param node_config Configuration for the node
@@ -40,22 +40,21 @@ class NodeActor : public protoactor::Actor,
   /// @brief Process AgentFlow messages
   /// @param message_type Type of message
   /// @param message The message payload
-  void process_message(const std::string& message_type,
-                       std::shared_ptr<void> message) override;
+  void process_message(const std::string& message_type, std::shared_ptr<void> message) override;
 
   // Getters
-  const NodeId& get_node_id() const { return node_id_; }
+  const NodeId&     get_node_id() const { return node_id_; }
   const NodeConfig& get_config() const { return config_; }
-  NodeState get_state() const { return state_; }
+  NodeState         get_state() const { return state_; }
 
- private:
-  NodeId node_id_;
+private:
+  NodeId     node_id_;
   NodeConfig config_;
-  NodeState state_ = NodeState::WAITING;
-  DataMap input_data_;
-  DataMap output_data_;
-  int retry_count_ = 0;
-  uint64_t start_time_;
+  NodeState  state_ = NodeState::WAITING;
+  DataMap    input_data_;
+  DataMap    output_data_;
+  int        retry_count_ = 0;
+  uint64_t   start_time_;
 
   /// @brief Handle InitializeNodeMessage
   void handle_initialize_node(const InitializeNodeMessage& msg);
@@ -67,12 +66,12 @@ class NodeActor : public protoactor::Actor,
   void handle_stop_node(const StopNodeMessage& msg);
 
   /// @brief Handle NodeStatusMessage
-  void handle_status_query(const NodeStatusMessage& msg,
-                          std::shared_ptr<protoactor::Context> context);
+  void handle_status_query(const NodeStatusMessage&             msg,
+                           std::shared_ptr<protoactor::Context> context);
 
   /// @brief Handle NodeHealthCheckMessage
-  void handle_health_check(const NodeHealthCheckMessage& msg,
-                          std::shared_ptr<protoactor::Context> context);
+  void handle_health_check(const NodeHealthCheckMessage&        msg,
+                           std::shared_ptr<protoactor::Context> context);
 
   /// @brief Send result back to parent workflow actor
   void send_result(Status status, const std::string& error_message = "");
@@ -96,19 +95,18 @@ class NodeActor : public protoactor::Actor,
 #else
 
 // Stub for when Protoactor is not available
-#include "agentflow/common.h"
 #include "agentflow/actor/actors.h"
+#include "agentflow/common.h"
 
 namespace agentflow {
 namespace actor {
 
 class NodeActor : public AgentFlowActor {
- public:
+public:
   NodeActor(const NodeId& node_id, const NodeConfig& node_config) {}
   ~NodeActor() override = default;
 
-  void process_message(const std::string& message_type,
-                       std::shared_ptr<void> message) override {}
+  void process_message(const std::string& message_type, std::shared_ptr<void> message) override {}
 };
 
 }  // namespace actor

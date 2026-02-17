@@ -6,10 +6,12 @@
 #ifdef AGENTFLOW_WITH_LIBEVENT
 
 #include "agentflow/event/eventloop_adapter/libevent_impl.h"
-#include "agentflow/basic/logger.h"
+
 #include <cstring>
-#include <memory>
 #include <event2/event.h>
+#include <memory>
+
+#include "agentflow/basic/logger.h"
 
 namespace agentflow {
 namespace event {
@@ -18,11 +20,11 @@ namespace event {
 // EventTimerLibevent Implementation
 // ============================================================================
 
-EventTimerLibevent::EventTimerLibevent(LibeventEvent* ev)
-    : ev_(ev) {}
+EventTimerLibevent::EventTimerLibevent(LibeventEvent* ev) : ev_(ev) {
+}
 
 EventTimerLibevent::~EventTimerLibevent() {
-  if (ev_) {
+  if(ev_) {
     event_del(ev_);
     event_free(ev_);
     ev_ = nullptr;
@@ -30,7 +32,7 @@ EventTimerLibevent::~EventTimerLibevent() {
 }
 
 bool EventTimerLibevent::cancel() {
-  if (!ev_) {
+  if(!ev_) {
     return false;
   }
 
@@ -47,10 +49,11 @@ bool EventTimerLibevent::is_active() const {
 // ============================================================================
 
 EventFileLibevent::EventFileLibevent(int fd, event_base* base)
-    : fd_(fd), base_(base), ev_(nullptr) {}
+    : fd_(fd), base_(base), ev_(nullptr) {
+}
 
 EventFileLibevent::~EventFileLibevent() {
-  if (ev_) {
+  if(ev_) {
     event_del(ev_);
     event_free(ev_);
     ev_ = nullptr;
@@ -60,19 +63,19 @@ EventFileLibevent::~EventFileLibevent() {
 bool EventFileLibevent::set_callback(EventCallback cb) {
   callback_ = cb;
 
-  if (!base_ || !callback_) {
+  if(!base_ || !callback_) {
     return false;
   }
 
   // If event already exists, delete and recreate
-  if (ev_) {
+  if(ev_) {
     event_del(ev_);
     event_free(ev_);
   }
 
   // Create new event
   ev_ = event_new(base_, fd_, EV_READ | EV_PERSIST, nullptr, nullptr);
-  if (!ev_) {
+  if(!ev_) {
     return false;
   }
 
@@ -80,7 +83,7 @@ bool EventFileLibevent::set_callback(EventCallback cb) {
 }
 
 bool EventFileLibevent::enable(int flags) {
-  if (!ev_ || !callback_) {
+  if(!ev_ || !callback_) {
     return false;
   }
 
@@ -89,7 +92,7 @@ bool EventFileLibevent::enable(int flags) {
 }
 
 bool EventFileLibevent::disable(int flags) {
-  if (!ev_) {
+  if(!ev_) {
     return false;
   }
 
@@ -105,8 +108,7 @@ bool EventFileLibevent::is_active() const {
 // EventLoopLibevent Implementation
 // ============================================================================
 
-EventLoopLibevent::EventLoopLibevent()
-    : base_(nullptr), error_(EventLoopError::EL_OK) {
+EventLoopLibevent::EventLoopLibevent() : base_(nullptr), error_(EventLoopError::EL_OK) {
 }
 
 EventLoopLibevent::~EventLoopLibevent() {
@@ -114,13 +116,13 @@ EventLoopLibevent::~EventLoopLibevent() {
 }
 
 bool EventLoopLibevent::initialize() {
-  if (base_) {
+  if(base_) {
     return true;
   }
 
   base_ = event_base_new();
-  if (!base_) {
-    error_ = EventLoopError::EL_INIT_FAILED;
+  if(!base_) {
+    error_     = EventLoopError::EL_INIT_FAILED;
     error_msg_ = "Failed to create event base";
     return false;
   }
@@ -130,19 +132,19 @@ bool EventLoopLibevent::initialize() {
 }
 
 int EventLoopLibevent::dispatch(int timeout_ms) {
-  if (!base_) {
+  if(!base_) {
     error_ = EventLoopError::EL_INIT_FAILED;
     return -1;
   }
 
   struct timeval tv;
-  if (timeout_ms >= 0) {
-    tv.tv_sec = timeout_ms / 1000;
+  if(timeout_ms >= 0) {
+    tv.tv_sec  = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
   }
 
   // Set timeout if specified
-  if (timeout_ms >= 0) {
+  if(timeout_ms >= 0) {
     event_base_loopexit(base_, &tv);
   }
 
@@ -151,19 +153,19 @@ int EventLoopLibevent::dispatch(int timeout_ms) {
 }
 
 int EventLoopLibevent::dispatch_once(int timeout_ms) {
-  if (!base_) {
+  if(!base_) {
     error_ = EventLoopError::EL_INIT_FAILED;
     return -1;
   }
 
   struct timeval tv;
-  if (timeout_ms >= 0) {
-    tv.tv_sec = timeout_ms / 1000;
+  if(timeout_ms >= 0) {
+    tv.tv_sec  = timeout_ms / 1000;
     tv.tv_usec = (timeout_ms % 1000) * 1000;
   }
 
   // Set timeout if specified
-  if (timeout_ms >= 0) {
+  if(timeout_ms >= 0) {
     event_base_loopexit(base_, &tv);
   }
 
@@ -172,7 +174,7 @@ int EventLoopLibevent::dispatch_once(int timeout_ms) {
 }
 
 void EventLoopLibevent::exit() {
-  if (base_) {
+  if(base_) {
     event_base_loopbreak(base_);
     event_base_free(base_);
     base_ = nullptr;
@@ -181,7 +183,7 @@ void EventLoopLibevent::exit() {
 }
 
 std::shared_ptr<IFileEvent> EventLoopLibevent::add_fd_event(int fd) {
-  if (!base_) {
+  if(!base_) {
     error_ = EventLoopError::EL_INIT_FAILED;
     return nullptr;
   }
@@ -196,25 +198,25 @@ bool EventLoopLibevent::remove_fd_event(int fd) {
   return true;
 }
 
-std::shared_ptr<ITimerEvent> EventLoopLibevent::add_timer(
-    uint32_t timeout_ms, std::function<void()> callback) {
-  if (!base_) {
+std::shared_ptr<ITimerEvent> EventLoopLibevent::add_timer(uint32_t              timeout_ms,
+                                                          std::function<void()> callback) {
+  if(!base_) {
     error_ = EventLoopError::EL_INIT_FAILED;
     return nullptr;
   }
 
   auto ev = event_new(base_, -1, 0, nullptr, nullptr);
-  if (!ev) {
+  if(!ev) {
     error_ = EventLoopError::EL_TIMER_FAILED;
     return nullptr;
   }
 
   struct timeval tv;
-  tv.tv_sec = timeout_ms / 1000;
+  tv.tv_sec  = timeout_ms / 1000;
   tv.tv_usec = (timeout_ms % 1000) * 1000;
 
   int result = event_add(ev, &tv);
-  if (result != 0) {
+  if(result != 0) {
     event_free(ev);
     return nullptr;
   }
@@ -224,23 +226,23 @@ std::shared_ptr<ITimerEvent> EventLoopLibevent::add_timer(
 
 std::shared_ptr<ITimerEvent> EventLoopLibevent::add_persistent_timer(
     uint32_t interval_ms, std::function<void()> callback) {
-  if (!base_) {
+  if(!base_) {
     error_ = EventLoopError::EL_INIT_FAILED;
     return nullptr;
   }
 
   auto ev = event_new(base_, -1, EV_PERSIST, nullptr, nullptr);
-  if (!ev) {
+  if(!ev) {
     error_ = EventLoopError::EL_TIMER_FAILED;
     return nullptr;
   }
 
   struct timeval tv;
-  tv.tv_sec = interval_ms / 1000;
+  tv.tv_sec  = interval_ms / 1000;
   tv.tv_usec = (interval_ms % 1000) * 1000;
 
   int result = event_add(ev, &tv);
-  if (result != 0) {
+  if(result != 0) {
     event_free(ev);
     return nullptr;
   }
@@ -249,7 +251,7 @@ std::shared_ptr<ITimerEvent> EventLoopLibevent::add_persistent_timer(
 }
 
 bool EventLoopLibevent::add_callback(std::function<void()> cb) {
-  if (!cb) {
+  if(!cb) {
     return false;
   }
 
@@ -265,11 +267,10 @@ bool EventLoopLibevent::is_running() const {
 // EventLoopLibeventAdapter Implementation
 // ============================================================================
 
-EventLoopLibeventAdapter::EventLoopLibeventAdapter()
-    : available_(false) {
+EventLoopLibeventAdapter::EventLoopLibeventAdapter() : available_(false) {
   // Check if libevent is available by attempting to create an event base
   event_base* test_base = event_base_new();
-  if (test_base) {
+  if(test_base) {
     available_ = true;
     event_base_free(test_base);
   }
@@ -280,7 +281,7 @@ EventLoopLibeventAdapter::~EventLoopLibeventAdapter() {
 }
 
 std::shared_ptr<IEventLoop> EventLoopLibeventAdapter::create_loop() {
-  if (!available_) {
+  if(!available_) {
     return nullptr;
   }
 

@@ -4,17 +4,18 @@
 // Google Test tests for JSON Workflow functionality
 
 #include <gtest/gtest.h>
+
 #include "agentflow/dsl/workflow_parser.h"
-#include "agentflow/framework/workflow.h"
-#include "agentflow/framework/node.h"
 #include "agentflow/framework/edge.h"
+#include "agentflow/framework/node.h"
+#include "agentflow/framework/workflow.h"
 #include "agentflow/runtime/control_flow.h"
 
 namespace agentflow {
 namespace tests {
 
 class WorkflowJsonTest : public ::testing::Test {
- protected:
+protected:
   void SetUp() override {}
   void TearDown() override {}
 
@@ -405,8 +406,8 @@ TEST_F(WorkflowJsonTest, ParseEdgeConditionExpression) {
 
   // Find the edge with condition
   agentflow::framework::Edge* conditional_edge = nullptr;
-  for (const auto& edge_ptr : edges) {
-    if (edge_ptr->get_id() == "edge_conditional") {
+  for(const auto& edge_ptr : edges) {
+    if(edge_ptr->get_id() == "edge_conditional") {
       conditional_edge = edge_ptr.get();
       break;
     }
@@ -501,9 +502,10 @@ TEST_F(WorkflowJsonTest, WorkflowLoopConfiguration) {
   const auto& config = loop_node->get_config();
 
   // Check for loop config in extra_config
-  bool has_loop_config = std::holds_alternative<agentflow::framework::LoopConfig>(config.extra_config);
+  bool has_loop_config =
+      std::holds_alternative<agentflow::framework::LoopConfig>(config.extra_config);
 
-  if (has_loop_config) {
+  if(has_loop_config) {
     auto loop_config = std::get<agentflow::framework::LoopConfig>(config.extra_config);
     EXPECT_EQ(loop_config.type, agentflow::framework::LoopType::FOR);
     EXPECT_EQ(loop_config.max_iterations, 5);
@@ -518,7 +520,7 @@ TEST_F(WorkflowJsonTest, EnterLoop) {
   ASSERT_NE(result.workflow, nullptr);
 
   agentflow::runtime::LoopConfig loop_config;
-  loop_config.type = agentflow::runtime::LoopType::FOR_LOOP;
+  loop_config.type           = agentflow::runtime::LoopType::FOR_LOOP;
   loop_config.max_iterations = 3;
   // loop_config.condition is shared_ptr<ConditionExpression>, cannot assign string directly
 
@@ -535,7 +537,7 @@ TEST_F(WorkflowJsonTest, ExitLoopIteration) {
   ASSERT_NE(result.workflow, nullptr);
 
   agentflow::runtime::LoopConfig loop_config;
-  loop_config.type = agentflow::runtime::LoopType::FOR_LOOP;
+  loop_config.type           = agentflow::runtime::LoopType::FOR_LOOP;
   loop_config.max_iterations = 3;
 
   result.workflow->enter_loop("test_loop", loop_config);
@@ -554,9 +556,9 @@ TEST_F(WorkflowJsonTest, ShouldContinueLoop) {
   ASSERT_NE(result.workflow, nullptr);
 
   agentflow::framework::LoopConfig loop_config;
-  loop_config.type = agentflow::framework::LoopType::FOR;
+  loop_config.type           = agentflow::framework::LoopType::FOR;
   loop_config.max_iterations = 3;
-  loop_config.condition = "i < 3";
+  loop_config.condition      = "i < 3";
 
   result.workflow->enter_loop("test_loop", loop_config);
 
@@ -575,7 +577,7 @@ TEST_F(WorkflowJsonTest, SetErrorHandler) {
   ASSERT_NE(result.workflow, nullptr);
 
   agentflow::runtime::ErrorHandlerConfig error_handler;
-  error_handler.strategy = agentflow::ErrorHandlingStrategy::RETRY;
+  error_handler.strategy    = agentflow::ErrorHandlingStrategy::RETRY;
   error_handler.max_retries = 3;
 
   result.workflow->set_error_handler("node_process", error_handler);

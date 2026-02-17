@@ -6,11 +6,12 @@
 #ifndef AGENTFLOW_NETWORK_REQUEST_H
 #define AGENTFLOW_NETWORK_REQUEST_H
 
+#include <chrono>
+#include <map>
 #include <memory>
 #include <string>
-#include <map>
 #include <vector>
-#include <chrono>
+
 #include "agentflow/common.h"
 
 namespace agentflow {
@@ -18,24 +19,22 @@ namespace network {
 
 /// @brief Request metadata
 struct RequestMetadata {
-  std::string request_id;
-  std::string request_type;
-  std::string source_id;
-  std::string target_id;
-  std::string workflow_id;
-  std::string node_id;
-  int64_t timestamp_ms;
-  int timeout_ms;
+  std::string                        request_id;
+  std::string                        request_type;
+  std::string                        source_id;
+  std::string                        target_id;
+  std::string                        workflow_id;
+  std::string                        node_id;
+  int64_t                            timestamp_ms;
+  int                                timeout_ms;
   std::map<std::string, std::string> headers;
 
-  RequestMetadata()
-      : timestamp_ms(0),
-        timeout_ms(30000) {}  // Default 30s timeout
+  RequestMetadata() : timestamp_ms(0), timeout_ms(30000) {}  // Default 30s timeout
 };
 
 /// @brief Request wrapper for microservice internal interface
 class Request {
- public:
+public:
   /// @brief Default constructor
   Request() = default;
 
@@ -47,8 +46,7 @@ class Request {
   /// @param type Request type
   /// @param payload Request payload
   /// @param metadata Request metadata
-  Request(const std::string& type, const DataMap& payload,
-           const RequestMetadata& metadata);
+  Request(const std::string& type, const DataMap& payload, const RequestMetadata& metadata);
 
   /// @brief Destructor
   ~Request() = default;
@@ -126,15 +124,15 @@ class Request {
   /// @return true if request is valid
   bool is_valid() const;
 
- private:
-  std::string type_;
-  DataMap payload_;
+private:
+  std::string     type_;
+  DataMap         payload_;
   RequestMetadata metadata_;
 };
 
 /// @brief Request builder for convenient request construction
 class RequestBuilder {
- public:
+public:
   RequestBuilder();
 
   /// @brief Set request type
@@ -187,25 +185,25 @@ class RequestBuilder {
   /// @return Shared pointer to Request object
   std::shared_ptr<Request> build_shared();
 
- private:
-  std::string type_;
-  DataMap payload_;
+private:
+  std::string     type_;
+  DataMap         payload_;
   RequestMetadata metadata_;
 };
 
 /// @brief Common request types
 namespace RequestTypes {
-  constexpr const char* EXECUTE_WORKFLOW = "execute_workflow";
-  constexpr const char* EXECUTE_NODE = "execute_node";
-  constexpr const char* GET_STATUS = "get_status";
-  constexpr const char* HEALTH_CHECK = "health_check";
-  constexpr const char* GET_CONFIG = "get_config";
-  constexpr const char* UPDATE_CONFIG = "update_config";
-  constexpr const char* STOP_WORKFLOW = "stop_workflow";
-  constexpr const char* STOP_NODE = "stop_node";
-  constexpr const char* GET_METRICS = "get_metrics";
-  constexpr const char* GET_LOGS = "get_logs";
-}
+constexpr const char* EXECUTE_WORKFLOW = "execute_workflow";
+constexpr const char* EXECUTE_NODE     = "execute_node";
+constexpr const char* GET_STATUS       = "get_status";
+constexpr const char* HEALTH_CHECK     = "health_check";
+constexpr const char* GET_CONFIG       = "get_config";
+constexpr const char* UPDATE_CONFIG    = "update_config";
+constexpr const char* STOP_WORKFLOW    = "stop_workflow";
+constexpr const char* STOP_NODE        = "stop_node";
+constexpr const char* GET_METRICS      = "get_metrics";
+constexpr const char* GET_LOGS         = "get_logs";
+}  // namespace RequestTypes
 
 }  // namespace network
 }  // namespace agentflow

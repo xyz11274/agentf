@@ -5,11 +5,11 @@
 
 #pragma once
 
-#include <string>
-#include <vector>
-#include <memory>
 #include <cstdint>
 #include <map>
+#include <memory>
+#include <string>
+#include <vector>
 
 namespace agentflow {
 namespace network {
@@ -23,38 +23,35 @@ constexpr uint32_t PRIVATE_PROTOCOL_VERSION = 0x0001;
  * Protocol header format (24 bytes total)
  */
 struct ProtocolHeader {
-  uint32_t magic;           // Magic number: 0xAF01AF01
-  uint16_t version;          // Protocol version
-  uint16_t message_type;    // Message type
-  uint32_t body_length;      // Message body length
-  uint32_t sequence_id;     // Message sequence ID
-  uint32_t flags;           // Flags (bit fields)
-  uint64_t timestamp;        // Timestamp in nanoseconds
+  uint32_t magic;         // Magic number: 0xAF01AF01
+  uint16_t version;       // Protocol version
+  uint16_t message_type;  // Message type
+  uint32_t body_length;   // Message body length
+  uint32_t sequence_id;   // Message sequence ID
+  uint32_t flags;         // Flags (bit fields)
+  uint64_t timestamp;     // Timestamp in nanoseconds
 
   // Initialize header
   ProtocolHeader() { std::memset(this, 0, sizeof(*this)); }
 
   // Set header fields
   void set_header(uint16_t msg_type, uint32_t body_len, uint32_t seq_id = 0) {
-    magic = 0xAF01AF01;
-    version = PRIVATE_PROTOCOL_VERSION;
+    magic        = 0xAF01AF01;
+    version      = PRIVATE_PROTOCOL_VERSION;
     message_type = msg_type;
-    body_length = body_len;
-    sequence_id = seq_id;
-    timestamp = get_timestamp_ns();
-    flags = 0;
+    body_length  = body_len;
+    sequence_id  = seq_id;
+    timestamp    = get_timestamp_ns();
+    flags        = 0;
   }
 
-  bool is_valid() const {
-    return magic == 0xAF01AF01;
-  }
+  bool is_valid() const { return magic == 0xAF01AF01; }
 
- private:
+private:
   static uint64_t get_timestamp_ns() {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
-    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL +
-           static_cast<uint64_t>(ts.tv_nsec);
+    return static_cast<uint64_t>(ts.tv_sec) * 1000000000ULL + static_cast<uint64_t>(ts.tv_nsec);
   }
 };
 
@@ -63,34 +60,34 @@ struct ProtocolHeader {
  */
 enum class MessageType : uint16_t {
   // Data messages
-  DATA_REQUEST = 0x0001,
-  DATA_RESPONSE = 0x0002,
-  DATA_BROADCAST = 0x0003,
-  DATA_SUBSCRIBE = 0x0004,
+  DATA_REQUEST     = 0x0001,
+  DATA_RESPONSE    = 0x0002,
+  DATA_BROADCAST   = 0x0003,
+  DATA_SUBSCRIBE   = 0x0004,
   DATA_UNSUBSCRIBE = 0x0005,
 
   // Control messages
-  CONTROL_START = 0x0101,
-  CONTROL_STOP = 0x0102,
-  CONTROL_PAUSE = 0x0103,
+  CONTROL_START  = 0x0101,
+  CONTROL_STOP   = 0x0102,
+  CONTROL_PAUSE  = 0x0103,
   CONTROL_RESUME = 0x0104,
   CONTROL_STATUS = 0x0105,
 
   // Flow control messages
   FLOW_CONDITION = 0x0201,
-  FLOW_LOOP = 0x0202,
-  FLOW_BRANCH = 0x0203,
+  FLOW_LOOP      = 0x0202,
+  FLOW_BRANCH    = 0x0203,
   FLOW_EXCEPTION = 0x0204,
 
   // Connection messages
-  CONN_CONNECT = 0x0301,
+  CONN_CONNECT    = 0x0301,
   CONN_DISCONNECT = 0x0302,
-  CONN_PING = 0x0303,
-  CONN_PONG = 0x0304,
+  CONN_PING       = 0x0303,
+  CONN_PONG       = 0x0304,
 
   // Error messages
   ERROR_PROTOCOL = 0x0401,
-  ERROR_VERSION = 0x0402,
+  ERROR_VERSION  = 0x0402,
   ERROR_CHECKSUM = 0x0403,
   ERROR_INTERNAL = 0x0404,
 };
@@ -99,12 +96,12 @@ enum class MessageType : uint16_t {
  * Protocol flags
  */
 enum class ProtocolFlags : uint32_t {
-  NONE = 0x0000,
-  COMPRESSED = 0x0001,        // Body is compressed
-  ENCRYPTED = 0x0002,         // Body is encrypted
-  STREAMING = 0x0004,         // Streaming data
-  BROADCAST = 0x0008,          // Broadcast message
-  NO_ACK = 0x0010,            // No acknowledgment needed
+  NONE       = 0x0000,
+  COMPRESSED = 0x0001,  // Body is compressed
+  ENCRYPTED  = 0x0002,  // Body is encrypted
+  STREAMING  = 0x0004,  // Streaming data
+  BROADCAST  = 0x0008,  // Broadcast message
+  NO_ACK     = 0x0010,  // No acknowledgment needed
 };
 
 /**
@@ -121,12 +118,12 @@ struct DataRequest {
  * Data response message
  */
 struct DataResponse {
-  std::string sender_id;
-  std::string receiver_id;
-  std::string data_key;
-  std::string request_id;
-  bool success;
-  std::string error_message;
+  std::string          sender_id;
+  std::string          receiver_id;
+  std::string          data_key;
+  std::string          request_id;
+  bool                 success;
+  std::string          error_message;
   std::vector<uint8_t> data;  // Variable length data
 };
 
@@ -143,9 +140,9 @@ struct ControlStart {
  * Control status message
  */
 struct ControlStatus {
-  std::string controller_id;
-  std::string target_id;
-  std::string status;
+  std::string                        controller_id;
+  std::string                        target_id;
+  std::string                        status;
   std::map<std::string, std::string> metadata;
 };
 
@@ -157,7 +154,7 @@ struct FlowCondition {
   std::string node_id;
   std::string condition_key;
   std::string condition_value;
-  bool condition_result;
+  bool        condition_result;
 };
 
 /**
@@ -167,8 +164,8 @@ struct FlowLoop {
   std::string workflow_id;
   std::string loop_id;
   std::string loop_type;
-  int loop_iteration;
-  bool continue_loop;
+  int         loop_iteration;
+  bool        continue_loop;
 };
 
 /**
@@ -179,18 +176,18 @@ struct FlowException {
   std::string node_id;
   std::string exception_type;
   std::string exception_message;
-  bool should_retry;
-  bool should_rollback;
+  bool        should_retry;
+  bool        should_rollback;
 };
 
 /**
  * Error message
  */
 struct ErrorMessage {
-  std::string sender_id;
-  std::string receiver_id;
-  uint16_t error_code;
-  std::string error_message;
+  std::string                        sender_id;
+  std::string                        receiver_id;
+  uint16_t                           error_code;
+  std::string                        error_message;
   std::map<std::string, std::string> context;
 };
 
@@ -198,13 +195,13 @@ struct ErrorMessage {
  * Protocol encoder
  */
 class ProtocolEncoder {
- public:
+public:
   /**
    * Encode message to byte buffer
    */
   static std::vector<uint8_t> encode_header(const ProtocolHeader& header);
 
-  template<typename T>
+  template <typename T>
   static std::vector<uint8_t> encode_message(const T& message);
 
   /**
@@ -252,7 +249,7 @@ class ProtocolEncoder {
  * Protocol decoder
  */
 class ProtocolDecoder {
- public:
+public:
   /**
    * Decode header from byte buffer
    */
@@ -261,7 +258,7 @@ class ProtocolDecoder {
   /**
    * Decode message body based on message type
    */
-  template<typename T>
+  template <typename T>
   static bool decode_message(const uint8_t* data, size_t size, T& message);
 };
 

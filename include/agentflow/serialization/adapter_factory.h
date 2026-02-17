@@ -5,8 +5,9 @@
 
 #pragma once
 
-#include "agentflow/serialization/proto_adapter.h"
 #include <memory>
+
+#include "agentflow/serialization/proto_adapter.h"
 
 namespace agentflow {
 namespace serialization {

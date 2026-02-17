@@ -3,26 +3,25 @@
 //
 // Google Test tests for EventLoopAdapter functionality
 
-#include <gtest/gtest.h>
-#include "agentflow/event/eventloop_adapter.h"
-#include "agentflow/event/adapter_factory.h"
-#include "agentflow/basic/logger.h"
-#include <thread>
-#include <chrono>
 #include <atomic>
+#include <chrono>
+#include <gtest/gtest.h>
+#include <thread>
 #include <vector>
+
+#include "agentflow/basic/logger.h"
+#include "agentflow/event/adapter_factory.h"
+#include "agentflow/event/eventloop_adapter.h"
 
 namespace agentflow {
 namespace tests {
 
 class EventLoopAdapterTest : public ::testing::Test {
- protected:
-  void SetUp() override {
-    adapter_ = event::create_eventloop_adapter();
-  }
+protected:
+  void SetUp() override { adapter_ = event::create_eventloop_adapter(); }
 
   void TearDown() override {
-    if (adapter_) {
+    if(adapter_) {
       adapter_->cleanup();
     }
   }
@@ -60,7 +59,7 @@ TEST_F(EventLoopAdapterTest, InitializeAdapter) {
 TEST_F(EventLoopAdapterTest, CreateEventLoop) {
   auto event_loop = adapter_->create_loop();
 
-  if (adapter_->is_available()) {
+  if(adapter_->is_available()) {
     ASSERT_NE(event_loop, nullptr);
   } else {
     // Stub implementation returns nullptr
@@ -75,11 +74,11 @@ TEST_F(EventLoopAdapterTest, CreateEventLoop) {
 TEST_F(EventLoopAdapterTest, InitializeEventLoop) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     bool initialized = event_loop->initialize();
 
     // Check error handling
-    if (initialized) {
+    if(initialized) {
       EXPECT_EQ(event_loop->last_error(), event::EventLoopError::EL_OK);
     } else {
       // Failed initialization should set error
@@ -91,7 +90,7 @@ TEST_F(EventLoopAdapterTest, InitializeEventLoop) {
 TEST_F(EventLoopAdapterTest, IsRunningAfterInitialize) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
     bool is_running = event_loop->is_running();
@@ -106,7 +105,7 @@ TEST_F(EventLoopAdapterTest, IsRunningWithoutInitialize) {
   bool is_running = event_loop->is_running();
 
   // Stub may return false
-  if (adapter_->is_available()) {
+  if(adapter_->is_available()) {
     EXPECT_FALSE(is_running);
   }
 }
@@ -118,14 +117,12 @@ TEST_F(EventLoopAdapterTest, IsRunningWithoutInitialize) {
 TEST_F(EventLoopAdapterTest, AddTimerEvent) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
     int callback_count = 0;
 
-    auto timer = event_loop->add_timer(100, [&callback_count]() {
-      callback_count++;
-    });
+    auto timer = event_loop->add_timer(100, [&callback_count]() { callback_count++; });
 
     ASSERT_NE(timer, nullptr);
     EXPECT_TRUE(timer->is_active());
@@ -140,14 +137,12 @@ TEST_F(EventLoopAdapterTest, AddTimerEvent) {
 TEST_F(EventLoopAdapterTest, CancelTimerEvent) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
     int callback_count = 0;
 
-    auto timer = event_loop->add_timer(10000, [&callback_count]() {
-      callback_count++;
-    });
+    auto timer = event_loop->add_timer(10000, [&callback_count]() { callback_count++; });
 
     ASSERT_NE(timer, nullptr);
 
@@ -165,16 +160,14 @@ TEST_F(EventLoopAdapterTest, CancelTimerEvent) {
 TEST_F(EventLoopAdapterTest, MultipleTimerEvents) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
-    std::atomic<int> callback_count{0};
+    std::atomic<int> callback_count{ 0 };
 
     // Add multiple timers
-    for (int i = 0; i < 5; ++i) {
-      auto timer = event_loop->add_timer(100 * (i + 1), [&callback_count]() {
-        callback_count++;
-      });
+    for(int i = 0; i < 5; ++i) {
+      auto timer = event_loop->add_timer(100 * (i + 1), [&callback_count]() { callback_count++; });
       ASSERT_NE(timer, nullptr);
     }
 
@@ -188,14 +181,12 @@ TEST_F(EventLoopAdapterTest, MultipleTimerEvents) {
 TEST_F(EventLoopAdapterTest, AddPersistentTimerEvent) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
     int callback_count = 0;
 
-    auto timer = event_loop->add_persistent_timer(50, [&callback_count]() {
-      callback_count++;
-    });
+    auto timer = event_loop->add_persistent_timer(50, [&callback_count]() { callback_count++; });
 
     ASSERT_NE(timer, nullptr);
     EXPECT_TRUE(timer->is_active());
@@ -211,14 +202,12 @@ TEST_F(EventLoopAdapterTest, AddPersistentTimerEvent) {
 TEST_F(EventLoopAdapterTest, CancelPersistentTimerEvent) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
     int callback_count = 0;
 
-    auto timer = event_loop->add_persistent_timer(50, [&callback_count]() {
-      callback_count++;
-    });
+    auto timer = event_loop->add_persistent_timer(50, [&callback_count]() { callback_count++; });
 
     ASSERT_NE(timer, nullptr);
 
@@ -240,14 +229,12 @@ TEST_F(EventLoopAdapterTest, CancelPersistentTimerEvent) {
 TEST_F(EventLoopAdapterTest, AddImmediateCallback) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
-    std::atomic<bool> callback_executed{false};
+    std::atomic<bool> callback_executed{ false };
 
-    bool added = event_loop->add_callback([&callback_executed]() {
-      callback_executed = true;
-    });
+    bool added = event_loop->add_callback([&callback_executed]() { callback_executed = true; });
 
     EXPECT_TRUE(added);
 
@@ -263,15 +250,13 @@ TEST_F(EventLoopAdapterTest, AddImmediateCallback) {
 TEST_F(EventLoopAdapterTest, AddMultipleCallbacks) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
-    std::atomic<int> callback_count{0};
+    std::atomic<int> callback_count{ 0 };
 
-    for (int i = 0; i < 5; ++i) {
-      event_loop->add_callback([&callback_count]() {
-        callback_count++;
-      });
+    for(int i = 0; i < 5; ++i) {
+      event_loop->add_callback([&callback_count]() { callback_count++; });
     }
 
     // Callbacks should execute in dispatch order
@@ -290,14 +275,12 @@ TEST_F(EventLoopAdapterTest, AddMultipleCallbacks) {
 TEST_F(EventLoopAdapterTest, DispatchWithTimeout) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
-    std::atomic<bool> dispatched{false};
+    std::atomic<bool> dispatched{ false };
 
-    event_loop->add_callback([&dispatched]() {
-      dispatched = true;
-    });
+    event_loop->add_callback([&dispatched]() { dispatched = true; });
 
     // Dispatch with timeout
     int result = event_loop->dispatch(100);
@@ -313,14 +296,12 @@ TEST_F(EventLoopAdapterTest, DispatchWithTimeout) {
 TEST_F(EventLoopAdapterTest, DispatchOnceWithTimeout) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
-    std::atomic<bool> dispatched{false};
+    std::atomic<bool> dispatched{ false };
 
-    event_loop->add_callback([&dispatched]() {
-      dispatched = true;
-    });
+    event_loop->add_callback([&dispatched]() { dispatched = true; });
 
     // Dispatch once with timeout
     int result = event_loop->dispatch_once(100);
@@ -336,14 +317,12 @@ TEST_F(EventLoopAdapterTest, DispatchOnceWithTimeout) {
 TEST_F(EventLoopAdapterTest, DispatchNoTimeout) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
-    std::atomic<bool> dispatched{false};
+    std::atomic<bool> dispatched{ false };
 
-    event_loop->add_callback([&dispatched]() {
-      dispatched = true;
-    });
+    event_loop->add_callback([&dispatched]() { dispatched = true; });
 
     // Dispatch without timeout (infinite)
     int result = event_loop->dispatch(-1);
@@ -364,14 +343,14 @@ TEST_F(EventLoopAdapterTest, DispatchNoTimeout) {
 TEST_F(EventLoopAdapterTest, ExitEventLoop) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
-    std::atomic<bool> running{true};
+    std::atomic<bool> running{ true };
 
     // Monitor loop in thread
     std::thread monitor([this, &running, &event_loop]() {
-      while (running.load()) {
+      while(running.load()) {
         event_loop->dispatch(10);
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
       }
@@ -390,7 +369,7 @@ TEST_F(EventLoopAdapterTest, ExitEventLoop) {
 TEST_F(EventLoopAdapterTest, IsRunningAfterExit) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
     event_loop->exit();
 
@@ -403,11 +382,11 @@ TEST_F(EventLoopAdapterTest, IsRunningAfterExit) {
 TEST_F(EventLoopAdapterTest, MultipleDispatchAfterExit) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
     // Dispatch some events
-    for (int i = 0; i < 3; ++i) {
+    for(int i = 0; i < 3; ++i) {
       event_loop->add_callback([]() {});
       event_loop->dispatch(10);
     }
@@ -427,7 +406,7 @@ TEST_F(EventLoopAdapterTest, MultipleDispatchAfterExit) {
 TEST_F(EventLoopAdapterTest, AddFileDescriptorEvent) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
     // Create pipe for testing
@@ -437,7 +416,7 @@ TEST_F(EventLoopAdapterTest, AddFileDescriptorEvent) {
 
     auto file_event = event_loop->add_fd_event(pipe_fds[0]);
 
-    if (adapter_->is_available()) {
+    if(adapter_->is_available()) {
       ASSERT_NE(file_event, nullptr);
       EXPECT_TRUE(file_event->is_active());
     } else {
@@ -453,23 +432,23 @@ TEST_F(EventLoopAdapterTest, AddFileDescriptorEvent) {
 TEST_F(EventLoopAdapterTest, FileEventCallback) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
     // Create pipe
     int pipe_fds[2];
     ASSERT_EQ(::pipe(pipe_fds), 0);
 
-    std::atomic<int> callback_count{0};
+    std::atomic<int> callback_count{ 0 };
 
     auto file_event = event_loop->add_fd_event(pipe_fds[0]);
 
-    if (adapter_->is_available()) {
+    if(adapter_->is_available()) {
       ASSERT_NE(file_event, nullptr);
 
       // Set callback
       bool callback_set = file_event->set_callback([&callback_count](int fd, int flags) {
-        if (flags & 0x01) {  // EV_READ
+        if(flags & 0x01) {  // EV_READ
           callback_count++;
         }
       });
@@ -501,7 +480,7 @@ TEST_F(EventLoopAdapterTest, FileEventCallback) {
 TEST_F(EventLoopAdapterTest, RemoveFileDescriptorEvent) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
     // Create pipe
@@ -510,7 +489,7 @@ TEST_F(EventLoopAdapterTest, RemoveFileDescriptorEvent) {
 
     auto file_event = event_loop->add_fd_event(pipe_fds[0]);
 
-    if (adapter_->is_available()) {
+    if(adapter_->is_available()) {
       ASSERT_NE(file_event, nullptr);
 
       // Remove event
@@ -527,7 +506,7 @@ TEST_F(EventLoopAdapterTest, RemoveFileDescriptorEvent) {
 TEST_F(EventLoopAdapterTest, FileEventEnableDisable) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
     // Create pipe
@@ -536,7 +515,7 @@ TEST_F(EventLoopAdapterTest, FileEventEnableDisable) {
 
     auto file_event = event_loop->add_fd_event(pipe_fds[0]);
 
-    if (adapter_->is_available()) {
+    if(adapter_->is_available()) {
       ASSERT_NE(file_event, nullptr);
 
       // Enable event
@@ -566,7 +545,7 @@ TEST_F(EventLoopAdapterTest, FileEventEnableDisable) {
 TEST_F(EventLoopAdapterTest, FileEventIsActive) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
     // Create pipe
@@ -575,7 +554,7 @@ TEST_F(EventLoopAdapterTest, FileEventIsActive) {
 
     auto file_event = event_loop->add_fd_event(pipe_fds[0]);
 
-    if (adapter_->is_available()) {
+    if(adapter_->is_available()) {
       ASSERT_NE(file_event, nullptr);
 
       // Initially inactive
@@ -599,7 +578,7 @@ TEST_F(EventLoopAdapterTest, FileEventIsActive) {
 TEST_F(EventLoopAdapterTest, GetLastError) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     // Initially no error
     EXPECT_EQ(event_loop->last_error(), event::EventLoopError::EL_OK);
   }
@@ -608,7 +587,7 @@ TEST_F(EventLoopAdapterTest, GetLastError) {
 TEST_F(EventLoopAdapterTest, GetErrorMessage) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     // Initially no error
     EXPECT_TRUE(event_loop->error_message().empty());
   }
@@ -617,20 +596,20 @@ TEST_F(EventLoopAdapterTest, GetErrorMessage) {
 TEST_F(EventLoopAdapterTest, ErrorAfterInitializationFailure) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     // Simulate initialization failure
     // This is conceptual - actual error depends on libevent
     bool initialized = event_loop->initialize();
 
-    if (!initialized && adapter_->is_available()) {
+    if(!initialized && adapter_->is_available()) {
       // If libevent fails to initialize, check error
-      auto error = event_loop->last_error();
+      auto error     = event_loop->last_error();
       auto error_msg = event_loop->error_message();
 
       EXPECT_NE(error, event::EventLoopError::EL_OK);
 
       // Error message should not be empty
-      if (!adapter_->get_version().empty()) {
+      if(!adapter_->get_version().empty()) {
         EXPECT_FALSE(error_msg.empty());
       }
     }
@@ -644,7 +623,7 @@ TEST_F(EventLoopAdapterTest, ErrorAfterInitializationFailure) {
 TEST_F(EventLoopAdapterTest, GetVersion) {
   auto version = adapter_->get_version();
 
-  if (adapter_->is_available()) {
+  if(adapter_->is_available()) {
     EXPECT_FALSE(version.empty());
     EXPECT_FALSE(version.find("libevent") == std::string::npos);
   } else {
@@ -653,7 +632,7 @@ TEST_F(EventLoopAdapterTest, GetVersion) {
 }
 
 TEST_F(EventLoopAdapterTest, StubBehavior) {
-  if (!adapter_->is_available()) {
+  if(!adapter_->is_available()) {
     // Stub implementation should handle gracefully
     auto event_loop = adapter_->create_loop();
 
@@ -682,7 +661,7 @@ TEST_F(EventLoopAdapterTest, CreateLoopAfterCleanup) {
 
   auto event_loop = adapter_->create_loop();
 
-  if (adapter_->is_available()) {
+  if(adapter_->is_available()) {
     // Should still be able to create new loop
     ASSERT_NE(event_loop, nullptr);
   }
@@ -695,23 +674,21 @@ TEST_F(EventLoopAdapterTest, CreateLoopAfterCleanup) {
 TEST_F(EventLoopAdapterTest, ConcurrentDispatch) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
-    std::atomic<int> callback_count{0};
+    std::atomic<int> callback_count{ 0 };
 
     // Add callbacks from multiple threads
-    const int num_threads = 5;
+    const int num_threads          = 5;
     const int callbacks_per_thread = 10;
 
     std::vector<std::thread> threads;
 
-    for (int t = 0; t < num_threads; ++t) {
+    for(int t = 0; t < num_threads; ++t) {
       threads.emplace_back([this, &callback_count, callbacks_per_thread, &event_loop]() {
-        for (int i = 0; i < callbacks_per_thread; ++i) {
-          event_loop->add_callback([&callback_count]() {
-            callback_count++;
-          });
+        for(int i = 0; i < callbacks_per_thread; ++i) {
+          event_loop->add_callback([&callback_count]() { callback_count++; });
           event_loop->dispatch(10);
           std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
@@ -719,7 +696,7 @@ TEST_F(EventLoopAdapterTest, ConcurrentDispatch) {
     }
 
     // Join all threads
-    for (auto& thread : threads) {
+    for(auto& thread : threads) {
       thread.join();
     }
 
@@ -735,20 +712,20 @@ TEST_F(EventLoopAdapterTest, ConcurrentDispatch) {
 TEST_F(EventLoopAdapterTest, ShortTimerPrecision) {
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
-    std::atomic<int64_t> first_time{0};
-    std::atomic<bool> first_fired{false};
+    std::atomic<int64_t> first_time{ 0 };
+    std::atomic<bool>    first_fired{ false };
 
     auto timer = event_loop->add_timer(10, [&first_time, &first_fired]() {
       auto now = std::chrono::steady_clock::now();
-      auto time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-          now.time_since_epoch()).count();
+      auto time_ms =
+          std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 
-      if (first_fired.load()) {
+      if(first_fired.load()) {
         // Reset after first fire
-      return;
+        return;
       }
 
       first_time.store(time_ms);
@@ -773,7 +750,7 @@ TEST_F(EventLoopAdapterTest, MultipleEventLoops) {
   auto loop2 = adapter_->create_loop();
   auto loop3 = adapter_->create_loop();
 
-  if (adapter_->is_available()) {
+  if(adapter_->is_available()) {
     ASSERT_NE(loop1, nullptr);
     ASSERT_NE(loop2, nullptr);
     ASSERT_NE(loop3, nullptr);
@@ -787,7 +764,7 @@ TEST_F(EventLoopAdapterTest, EventLoopReuse) {
   // Test reusing event loop after cleanup
   auto event_loop = adapter_->create_loop();
 
-  if (event_loop) {
+  if(event_loop) {
     event_loop->initialize();
 
     bool initialized = event_loop->initialize();

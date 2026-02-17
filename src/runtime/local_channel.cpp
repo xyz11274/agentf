@@ -4,13 +4,16 @@
 // Local data channel implementation with zero-copy support
 
 #include "agentflow/runtime/local_channel.h"
-#include "agentflow/basic/logger.h"
-#include <sys/mman.h>
-#include <sys/stat.h>
+
+#include <algorithm>
+#include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
-#include <cstring>
-#include <algorithm>
+
+#include <sys/mman.h>
+#include <sys/stat.h>
+
+#include "agentflow/basic/logger.h"
 
 namespace agentflow {
 namespace runtime {
@@ -37,7 +40,7 @@ bool LocalChannel::is_open() const {
 bool LocalChannel::open() {
   std::lock_guard<std::mutex> lock(mutex_);
 
-  if (open_) {
+  if(open_) {
     return true;
   }
 
@@ -49,7 +52,7 @@ bool LocalChannel::open() {
 void LocalChannel::close() {
   std::lock_guard<std::mutex> lock(mutex_);
 
-  if (!open_) {
+  if(!open_) {
     return;
   }
 
@@ -59,14 +62,14 @@ void LocalChannel::close() {
   cv_.notify_all();
 
   // Notify key-specific condition variables
-  for (auto& [key, cv_ptr] : key_cvs_) {
-    if (cv_ptr) {
+  for(auto& [key, cv_ptr] : key_cvs_) {
+    if(cv_ptr) {
       cv_ptr->notify_all();
     }
   }
 
   // Clean up key condition variables
-  for (auto& [key, cv_ptr] : key_cvs_) {
+  for(auto& [key, cv_ptr] : key_cvs_) {
     delete cv_ptr;
   }
   key_cvs_.clear();
@@ -82,15 +85,14 @@ void LocalChannel::close() {
 bool LocalChannel::send(const DataPacket& packet) {
   std::unique_lock<std::mutex> lock(mutex_);
 
-  if (!open_) {
+  if(!open_) {
     return false;
   }
 
   // Check capacity
-  if (capacity_ > 0 && queue_.size() >= capacity_) {
+  if(capacity_ > 0 && queue_.size() >= capacity_) {
     stats_.errors++;
-    Logger::instance().warn("LocalChannel [" + channel_id_ +
-                          "] queue full, send failed");
+    Logger::instance().warn("LocalChannel [" + channel_id_ + "] queue full, send failed");
     return false;
   }
 
@@ -108,7 +110,7 @@ bool LocalChannel::send(const DataPacket& packet) {
 
   // Notify key-specific waiters
   auto key_cv = get_key_cv(packet.key);
-  if (key_cv) {
+  if(key_cv) {
     key_cv->notify_one();
   }
 
@@ -118,23 +120,23 @@ bool LocalChannel::send(const DataPacket& packet) {
 bool LocalChannel::receive(DataPacket& packet, int timeout_ms) {
   std::unique_lock<std::mutex> lock(mutex_);
 
-  if (!open_ && queue_.empty()) {
+  if(!open_ && queue_.empty()) {
     return false;
   }
 
   // Wait for data
   auto pred = [this] { return !queue_.empty() || !open_; };
 
-  if (timeout_ms <= 0) {
+  if(timeout_ms <= 0) {
     cv_.wait(lock, pred);
   } else {
-    if (!cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), pred)) {
+    if(!cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), pred)) {
       // Timeout
       return false;
     }
   }
 
-  if (!open_ || queue_.empty()) {
+  if(!open_ || queue_.empty()) {
     return false;
   }
 
@@ -144,7 +146,7 @@ bool LocalChannel::receive(DataPacket& packet, int timeout_ms) {
 
   // Remove from key data (keep latest for get_latest)
   auto& key_packets = key_data_[packet.key];
-  if (!key_packets.empty()) {
+  if(!key_packets.empty()) {
     key_packets.erase(key_packets.begin());
   }
 
@@ -161,7 +163,7 @@ bool LocalChannel::receive(DataPacket& packet, int timeout_ms) {
 bool LocalChannel::try_receive(DataPacket& packet) {
   std::lock_guard<std::mutex> lock(mutex_);
 
-  if (queue_.empty()) {
+  if(queue_.empty()) {
     return false;
   }
 
@@ -170,7 +172,7 @@ bool LocalChannel::try_receive(DataPacket& packet) {
 
   // Remove from key data
   auto& key_packets = key_data_[packet.key];
-  if (!key_packets.empty()) {
+  if(!key_packets.empty()) {
     key_packets.erase(key_packets.begin());
   }
 
@@ -184,16 +186,15 @@ bool LocalChannel::try_receive(DataPacket& packet) {
 }
 
 bool LocalChannel::send_to_key(const std::string& key, const DataValue& value,
-                             const std::string& source_id) {
+                               const std::string& source_id) {
   DataPacket packet(key, value, source_id);
   return send(packet);
 }
 
-bool LocalChannel::receive_from_key(const std::string& key, DataPacket& packet,
-                                  int timeout_ms) {
+bool LocalChannel::receive_from_key(const std::string& key, DataPacket& packet, int timeout_ms) {
   std::unique_lock<std::mutex> lock(mutex_);
 
-  if (!open_) {
+  if(!open_) {
     return false;
   }
 
@@ -205,32 +206,32 @@ bool LocalChannel::receive_from_key(const std::string& key, DataPacket& packet,
     return (it != key_data_.end() && !it->second.empty()) || !open_;
   };
 
-  if (timeout_ms <= 0) {
-    if (key_cv) {
+  if(timeout_ms <= 0) {
+    if(key_cv) {
       key_cv->wait(lock, pred);
     } else {
       cv_.wait(lock, pred);
     }
   } else {
     bool success;
-    if (key_cv) {
+    if(key_cv) {
       success = key_cv->wait_for(lock, std::chrono::milliseconds(timeout_ms), pred);
     } else {
       success = cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), pred);
     }
 
-    if (!success) {
+    if(!success) {
       return false;  // Timeout
     }
   }
 
-  if (!open_) {
+  if(!open_) {
     return false;
   }
 
   // Get packet from key data
   auto it = key_data_.find(key);
-  if (it == key_data_.end() || it->second.empty()) {
+  if(it == key_data_.end() || it->second.empty()) {
     return false;
   }
 
@@ -239,8 +240,8 @@ bool LocalChannel::receive_from_key(const std::string& key, DataPacket& packet,
 
   // Remove from main queue if present
   auto queue_it = std::find_if(queue_.begin(), queue_.end(),
-      [&key](const DataPacket& p) { return p.key == key; });
-  if (queue_it != queue_.end()) {
+                               [&key](const DataPacket& p) { return p.key == key; });
+  if(queue_it != queue_.end()) {
     queue_.erase(queue_it);
   }
 
@@ -255,11 +256,11 @@ bool LocalChannel::receive_from_key(const std::string& key, DataPacket& packet,
 size_t LocalChannel::subscribe(EventCallback callback) {
   std::lock_guard<std::mutex> lock(mutex_);
 
-  size_t subscription_id = next_subscription_id_++;
+  size_t subscription_id        = next_subscription_id_++;
   subscribers_[subscription_id] = callback;
 
-  Logger::instance().debug("LocalChannel [" + channel_id_ + "] subscription " +
-                          std::to_string(subscription_id) + " added");
+  Logger::instance().debug("LocalChannel [" + channel_id_ + "] subscription "
+                           + std::to_string(subscription_id) + " added");
 
   return subscription_id;
 }
@@ -268,10 +269,10 @@ bool LocalChannel::unsubscribe(size_t subscription_id) {
   std::lock_guard<std::mutex> lock(mutex_);
 
   auto it = subscribers_.find(subscription_id);
-  if (it != subscribers_.end()) {
+  if(it != subscribers_.end()) {
     subscribers_.erase(it);
-    Logger::instance().debug("LocalChannel [" + channel_id_ + "] subscription " +
-                            std::to_string(subscription_id) + " removed");
+    Logger::instance().debug("LocalChannel [" + channel_id_ + "] subscription "
+                             + std::to_string(subscription_id) + " removed");
     return true;
   }
 
@@ -285,8 +286,8 @@ size_t LocalChannel::get_queue_depth() const {
 
 ChannelStats LocalChannel::get_stats() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  ChannelStats stats = stats_;
-  stats.queue_depth = static_cast<int64_t>(queue_.size());
+  ChannelStats                stats = stats_;
+  stats.queue_depth                 = static_cast<int64_t>(queue_.size());
   return stats;
 }
 
@@ -303,8 +304,8 @@ void LocalChannel::clear() {
   key_data_.clear();
 
   stats_.packets_sent += cleared;
-  Logger::instance().info("LocalChannel [" + channel_id_ + "] cleared " +
-                         std::to_string(cleared) + " packets");
+  Logger::instance().info("LocalChannel [" + channel_id_ + "] cleared " + std::to_string(cleared)
+                          + " packets");
 }
 
 bool LocalChannel::has_data(const std::string& key) const {
@@ -318,7 +319,7 @@ DataValue LocalChannel::get_latest(const std::string& key) const {
   std::lock_guard<std::mutex> lock(mutex_);
 
   auto it = key_data_.find(key);
-  if (it != key_data_.end() && !it->second.empty()) {
+  if(it != key_data_.end() && !it->second.empty()) {
     return it->second.back().value;
   }
 
@@ -329,7 +330,7 @@ std::vector<DataPacket> LocalChannel::get_all(const std::string& key) const {
   std::lock_guard<std::mutex> lock(mutex_);
 
   auto it = key_data_.find(key);
-  if (it != key_data_.end()) {
+  if(it != key_data_.end()) {
     return it->second;
   }
 
@@ -339,24 +340,24 @@ std::vector<DataPacket> LocalChannel::get_all(const std::string& key) const {
 bool LocalChannel::wait_for_data(const std::string& key, int timeout_ms) {
   std::unique_lock<std::mutex> lock(mutex_);
 
-  if (!open_) {
+  if(!open_) {
     return false;
   }
 
   auto key_cv = get_key_cv(key);
-  auto pred = [this, &key] {
+  auto pred   = [this, &key] {
     auto it = key_data_.find(key);
     return (it != key_data_.end() && !it->second.empty()) || !open_;
   };
 
-  if (timeout_ms <= 0) {
-    if (key_cv) {
+  if(timeout_ms <= 0) {
+    if(key_cv) {
       key_cv->wait(lock, pred);
     } else {
       cv_.wait(lock, pred);
     }
   } else {
-    if (key_cv) {
+    if(key_cv) {
       return key_cv->wait_for(lock, std::chrono::milliseconds(timeout_ms), pred);
     } else {
       return cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), pred);
@@ -370,20 +371,19 @@ void LocalChannel::notify_subscribers(ChannelEvent event, const DataPacket& pack
   // Notify all subscribers (make copies of callback to avoid holding lock)
   std::map<size_t, EventCallback> subscribers_copy = subscribers_;
 
-  for (auto& [id, callback] : subscribers_copy) {
+  for(auto& [id, callback] : subscribers_copy) {
     try {
       callback(event, packet);
-    } catch (const std::exception& e) {
-      Logger::instance().error("LocalChannel [" + channel_id_ +
-                             "] subscriber callback error: " +
-                             std::string(e.what()));
+    } catch(const std::exception& e) {
+      Logger::instance().error("LocalChannel [" + channel_id_
+                               + "] subscriber callback error: " + std::string(e.what()));
     }
   }
 }
 
 std::condition_variable* LocalChannel::get_key_cv(const std::string& key) {
   auto it = key_cvs_.find(key);
-  if (it == key_cvs_.end()) {
+  if(it == key_cvs_.end()) {
     key_cvs_[key] = new std::condition_variable();
     return key_cvs_[key];
   }
@@ -399,28 +399,27 @@ LocalChannelRegistry& LocalChannelRegistry::instance() {
   return registry;
 }
 
-std::shared_ptr<LocalChannel> LocalChannelRegistry::get_or_create(
-    const std::string& channel_id, size_t capacity) {
+std::shared_ptr<LocalChannel> LocalChannelRegistry::get_or_create(const std::string& channel_id,
+                                                                  size_t             capacity) {
   std::lock_guard<std::mutex> lock(mutex_);
 
   auto it = channels_.find(channel_id);
-  if (it != channels_.end()) {
+  if(it != channels_.end()) {
     return it->second;
   }
 
-  auto channel = std::make_shared<LocalChannel>(channel_id, capacity);
+  auto channel          = std::make_shared<LocalChannel>(channel_id, capacity);
   channels_[channel_id] = channel;
 
   Logger::instance().info("LocalChannelRegistry: created channel [" + channel_id + "]");
   return channel;
 }
 
-std::shared_ptr<LocalChannel> LocalChannelRegistry::get(
-    const std::string& channel_id) {
+std::shared_ptr<LocalChannel> LocalChannelRegistry::get(const std::string& channel_id) {
   std::lock_guard<std::mutex> lock(mutex_);
 
   auto it = channels_.find(channel_id);
-  if (it != channels_.end()) {
+  if(it != channels_.end()) {
     return it->second;
   }
 
@@ -431,7 +430,7 @@ bool LocalChannelRegistry::remove(const std::string& channel_id) {
   std::lock_guard<std::mutex> lock(mutex_);
 
   auto it = channels_.find(channel_id);
-  if (it != channels_.end()) {
+  if(it != channels_.end()) {
     it->second->close();
     channels_.erase(it);
 
@@ -448,7 +447,7 @@ std::vector<std::string> LocalChannelRegistry::get_channel_ids() const {
   std::vector<std::string> ids;
   ids.reserve(channels_.size());
 
-  for (const auto& [id, channel] : channels_) {
+  for(const auto& [id, channel] : channels_) {
     ids.push_back(id);
   }
 
@@ -463,7 +462,7 @@ size_t LocalChannelRegistry::size() const {
 void LocalChannelRegistry::close_all() {
   std::lock_guard<std::mutex> lock(mutex_);
 
-  for (auto& [id, channel] : channels_) {
+  for(auto& [id, channel] : channels_) {
     channel->close();
   }
 

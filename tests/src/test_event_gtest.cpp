@@ -4,10 +4,11 @@
 // Google Test tests for Event system
 
 #include <gtest/gtest.h>
+
 #include "agentflow/runtime/event.h"
 
 class EventTest : public ::testing::Test {
- protected:
+protected:
   void SetUp() override {}
   void TearDown() override {}
 };

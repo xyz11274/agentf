@@ -5,27 +5,27 @@
 
 #pragma once
 
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
-#include <functional>
-#include <cstdint>
 
 namespace agentflow {
 namespace event {
 
 enum class EventLoopError {
-  EL_OK = 0,
-  EL_INIT_FAILED = 1,
-  EL_ADD_EVENT_FAILED = 2,
+  EL_OK                  = 0,
+  EL_INIT_FAILED         = 1,
+  EL_ADD_EVENT_FAILED    = 2,
   EL_REMOVE_EVENT_FAILED = 3,
-  EL_DISPATCH_FAILED = 4,
-  EL_TIMER_FAILED = 5,
+  EL_DISPATCH_FAILED     = 4,
+  EL_TIMER_FAILED        = 5,
 };
 
 // Event flags
 enum class EventFlag {
-  EV_READ = 0x01,
-  EV_WRITE = 0x02,
+  EV_READ    = 0x01,
+  EV_WRITE   = 0x02,
   EV_PERSIST = 0x10,  // Persistent event
 };
 
@@ -33,9 +33,9 @@ enum class EventFlag {
  * Timer event handle
  */
 class ITimerEvent {
- public:
-  virtual ~ITimerEvent() = default;
-  virtual bool cancel() = 0;
+public:
+  virtual ~ITimerEvent()         = default;
+  virtual bool cancel()          = 0;
   virtual bool is_active() const = 0;
 };
 
@@ -43,21 +43,21 @@ class ITimerEvent {
  * File descriptor event interface
  */
 class IFileEvent {
- public:
+public:
   virtual ~IFileEvent() = default;
-  using EventCallback = std::function<void(int fd, int flags)>;
+  using EventCallback   = std::function<void(int fd, int flags)>;
 
   virtual bool set_callback(EventCallback cb) = 0;
-  virtual bool enable(int flags) = 0;
-  virtual bool disable(int flags) = 0;
-  virtual bool is_active() const = 0;
+  virtual bool enable(int flags)              = 0;
+  virtual bool disable(int flags)             = 0;
+  virtual bool is_active() const              = 0;
 };
 
 /**
  * Event loop interface
  */
 class IEventLoop {
- public:
+public:
   virtual ~IEventLoop() = default;
 
   /**
@@ -93,16 +93,14 @@ class IEventLoop {
   /**
    * Add timer event (one-shot)
    */
-  virtual std::shared_ptr<ITimerEvent> add_timer(
-      uint32_t timeout_ms,
-      std::function<void()> callback) = 0;
+  virtual std::shared_ptr<ITimerEvent> add_timer(uint32_t              timeout_ms,
+                                                 std::function<void()> callback) = 0;
 
   /**
    * Add persistent timer event
    */
-  virtual std::shared_ptr<ITimerEvent> add_persistent_timer(
-      uint32_t interval_ms,
-      std::function<void()> callback) = 0;
+  virtual std::shared_ptr<ITimerEvent> add_persistent_timer(uint32_t              interval_ms,
+                                                            std::function<void()> callback) = 0;
 
   /**
    * Add callback to be executed in event loop
@@ -130,7 +128,7 @@ class IEventLoop {
  * Isolates libevent or other event frameworks from AgentFlow core
  */
 class IEventLoopAdapter {
- public:
+public:
   virtual ~IEventLoopAdapter() = default;
 
   /**

@@ -5,10 +5,10 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
-#include <cstdint>
 
 namespace agentflow {
 namespace network {
@@ -17,16 +17,16 @@ namespace network {
  * SSL/TLS error codes
  */
 enum class SslError {
-  SSL_ERR_OK = 0,
-  SSL_ERR_INIT_FAILED = 1,
-  SSL_ERR_CERT_NOT_FOUND = 2,
-  SSL_ERR_KEY_NOT_FOUND = 3,
-  SSL_ERR_LOAD_FAILED = 4,
-  SSL_ERR_HANDSHAKE_FAILED = 5,
+  SSL_ERR_OK                = 0,
+  SSL_ERR_INIT_FAILED       = 1,
+  SSL_ERR_CERT_NOT_FOUND    = 2,
+  SSL_ERR_KEY_NOT_FOUND     = 3,
+  SSL_ERR_LOAD_FAILED       = 4,
+  SSL_ERR_HANDSHAKE_FAILED  = 5,
   SSL_ERR_CONNECTION_FAILED = 6,
-  SSL_ERR_READ_FAILED = 7,
-  SSL_ERR_WRITE_FAILED = 8,
-  SSL_ERR_INVALID_STATE = 9,
+  SSL_ERR_READ_FAILED       = 7,
+  SSL_ERR_WRITE_FAILED      = 8,
+  SSL_ERR_INVALID_STATE     = 9,
 };
 
 /**
@@ -44,7 +44,7 @@ enum class SslVersion {
  */
 struct SslCipherInfo {
   std::string name;
-  uint32_t bits;
+  uint32_t    bits;
   std::string protocol;
 };
 
@@ -52,11 +52,11 @@ struct SslCipherInfo {
  * SSL certificate info
  */
 struct SslCertificateInfo {
-  std::string subject;
-  std::string issuer;
-  std::string fingerprint;
-  int64_t valid_from;  // Unix timestamp
-  int64_t valid_until; // Unix timestamp
+  std::string              subject;
+  std::string              issuer;
+  std::string              fingerprint;
+  int64_t                  valid_from;   // Unix timestamp
+  int64_t                  valid_until;  // Unix timestamp
   std::vector<std::string> alt_names;
 };
 
@@ -64,7 +64,7 @@ struct SslCertificateInfo {
  * Abstract SSL connection interface
  */
 class ISslConnection {
- public:
+public:
   virtual ~ISslConnection() = default;
 
   /**
@@ -122,7 +122,7 @@ class ISslConnection {
  * Abstract SSL context interface
  */
 class ISslContext {
- public:
+public:
   virtual ~ISslContext() = default;
 
   /**
@@ -153,14 +153,12 @@ class ISslContext {
   /**
    * Create client connection
    */
-  virtual std::shared_ptr<ISslConnection> create_client_connection(
-      int socket_fd) = 0;
+  virtual std::shared_ptr<ISslConnection> create_client_connection(int socket_fd) = 0;
 
   /**
    * Create server connection
    */
-  virtual std::shared_ptr<ISslConnection> create_server_connection(
-      int socket_fd) = 0;
+  virtual std::shared_ptr<ISslConnection> create_server_connection(int socket_fd) = 0;
 
   /**
    * Get context error
@@ -178,7 +176,7 @@ class ISslContext {
  * Isolates OpenSSL or other SSL implementations from AgentFlow core
  */
 class ISslAdapter {
- public:
+public:
   virtual ~ISslAdapter() = default;
 
   /**

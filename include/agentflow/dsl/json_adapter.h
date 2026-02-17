@@ -7,11 +7,11 @@
 #ifndef AGENTFLOW_DSL_JSON_ADAPTER_H
 #define AGENTFLOW_DSL_JSON_ADAPTER_H
 
+#include <map>
 #include <memory>
 #include <string>
-#include <vector>
-#include <map>
 #include <variant>
+#include <vector>
 
 namespace agentflow {
 namespace dsl {
@@ -32,7 +32,7 @@ enum class JsonValueType {
 
 /// @brief Generic JSON value interface
 class IJsonValue {
- public:
+public:
   virtual ~IJsonValue() = default;
 
   /// @brief Get type of this value
@@ -58,10 +58,10 @@ class IJsonValue {
   virtual bool is_object() const = 0;
 
   // Type conversions
-  virtual bool as_bool() const = 0;
-  virtual double as_double() const = 0;
-  virtual int64_t as_int64() const = 0;
-  virtual uint64_t as_uint64() const = 0;
+  virtual bool        as_bool() const   = 0;
+  virtual double      as_double() const = 0;
+  virtual int64_t     as_int64() const  = 0;
+  virtual uint64_t    as_uint64() const = 0;
   virtual std::string as_string() const = 0;
 
   // Array operations
@@ -82,8 +82,7 @@ class IJsonValue {
   virtual std::shared_ptr<IJsonValue> get_member(const std::string& key) = 0;
 
   /// @brief Get object member (const version)
-  virtual std::shared_ptr<const IJsonValue> get_member(
-      const std::string& key) const = 0;
+  virtual std::shared_ptr<const IJsonValue> get_member(const std::string& key) const = 0;
 
   /// @brief Get all keys in object
   virtual std::vector<std::string> object_keys() const = 0;
@@ -97,7 +96,7 @@ class IJsonValue {
 
 /// @brief Generic JSON document interface
 class IJsonDocument {
- public:
+public:
   virtual ~IJsonDocument() = default;
 
   /// @brief Parse JSON from string
@@ -136,7 +135,7 @@ class IJsonDocument {
 
 /// @brief Factory for creating JSON documents
 class JsonDocumentFactory {
- public:
+public:
   /// @brief Create new JSON document
   /// @return Shared pointer to JSON document
   static std::shared_ptr<IJsonDocument> create();
@@ -152,14 +151,13 @@ class JsonDocumentFactory {
 
 /// @brief Utility helpers for JSON operations
 class JsonHelper {
- public:
+public:
   /// @brief Safely get boolean value with default
   /// @param obj JSON object
   /// @param key Key to look up
   /// @param default_value Default if key not found or not bool
   /// @return Boolean value
-  static bool get_bool(std::shared_ptr<const IJsonValue> obj,
-                       const std::string& key,
+  static bool get_bool(std::shared_ptr<const IJsonValue> obj, const std::string& key,
                        bool default_value = false);
 
   /// @brief Safely get integer value with default
@@ -167,8 +165,7 @@ class JsonHelper {
   /// @param key Key to look up
   /// @param default_value Default if key not found or not number
   /// @return Integer value
-  static int64_t get_int(std::shared_ptr<const IJsonValue> obj,
-                         const std::string& key,
+  static int64_t get_int(std::shared_ptr<const IJsonValue> obj, const std::string& key,
                          int64_t default_value = 0);
 
   /// @brief Safely get double value with default
@@ -176,8 +173,7 @@ class JsonHelper {
   /// @param key Key to look up
   /// @param default_value Default if key not found or not number
   /// @return Double value
-  static double get_double(std::shared_ptr<const IJsonValue> obj,
-                           const std::string& key,
+  static double get_double(std::shared_ptr<const IJsonValue> obj, const std::string& key,
                            double default_value = 0.0);
 
   /// @brief Safely get string value with default
@@ -185,25 +181,22 @@ class JsonHelper {
   /// @param key Key to look up
   /// @param default_value Default if key not found or not string
   /// @return String value
-  static std::string get_string(std::shared_ptr<const IJsonValue> obj,
-                                const std::string& key,
+  static std::string get_string(std::shared_ptr<const IJsonValue> obj, const std::string& key,
                                 const std::string& default_value = "");
 
   /// @brief Safely get object value
   /// @param obj JSON object
   /// @param key Key to look up
   /// @return Object if found and is object, nullptr otherwise
-  static std::shared_ptr<const IJsonValue> get_object(
-      std::shared_ptr<const IJsonValue> obj,
-      const std::string& key);
+  static std::shared_ptr<const IJsonValue> get_object(std::shared_ptr<const IJsonValue> obj,
+                                                      const std::string&                key);
 
   /// @brief Safely get array value
   /// @param obj JSON object
   /// @param key Key to look up
   /// @return Array if found and is array, nullptr otherwise
-  static std::shared_ptr<const IJsonValue> get_array(
-      std::shared_ptr<const IJsonValue> obj,
-      const std::string& key);
+  static std::shared_ptr<const IJsonValue> get_array(std::shared_ptr<const IJsonValue> obj,
+                                                     const std::string&                key);
 };
 
 }  // namespace dsl

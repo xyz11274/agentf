@@ -3,23 +3,24 @@
 //
 // Google Test tests for LocalChannel functionality
 
-#include <gtest/gtest.h>
-#include "agentflow/runtime/local_channel.h"
-#include <thread>
 #include <chrono>
+#include <gtest/gtest.h>
+#include <thread>
+
+#include "agentflow/runtime/local_channel.h"
 
 namespace agentflow {
 namespace tests {
 
 class LocalChannelTest : public ::testing::Test {
- protected:
+protected:
   void SetUp() override {
     channel_ = std::make_shared<runtime::LocalChannel>("test_channel", 100);
     channel_->open();
   }
 
   void TearDown() override {
-    if (channel_) {
+    if(channel_) {
       channel_->close();
     }
   }
@@ -61,8 +62,8 @@ TEST_F(LocalChannelTest, ReopenChannel) {
 
 TEST_F(LocalChannelTest, SendReceiveSinglePacket) {
   runtime::DataPacket packet;
-  packet.key = "test_key";
-  packet.value = std::string("test_value");
+  packet.key       = "test_key";
+  packet.value     = std::string("test_value");
   packet.source_id = "test_sender";
 
   ASSERT_TRUE(channel_->send(packet));
@@ -77,9 +78,9 @@ TEST_F(LocalChannelTest, SendReceiveSinglePacket) {
 TEST_F(LocalChannelTest, SendReceiveMultiplePackets) {
   const int num_packets = 10;
 
-  for (int i = 0; i < num_packets; ++i) {
+  for(int i = 0; i < num_packets; ++i) {
     runtime::DataPacket packet;
-    packet.key = "key_" + std::to_string(i);
+    packet.key   = "key_" + std::to_string(i);
     packet.value = static_cast<int64_t>(i);
 
     ASSERT_TRUE(channel_->send(packet));
@@ -88,7 +89,7 @@ TEST_F(LocalChannelTest, SendReceiveMultiplePackets) {
   EXPECT_EQ(channel_->get_queue_depth(), num_packets);
 
   // Receive all packets
-  for (int i = 0; i < num_packets; ++i) {
+  for(int i = 0; i < num_packets; ++i) {
     runtime::DataPacket received;
     ASSERT_TRUE(channel_->receive(received));
     EXPECT_EQ(std::get<int64_t>(received.value), i);
@@ -105,7 +106,7 @@ TEST_F(LocalChannelTest, TryReceiveWhenEmpty) {
 TEST_F(LocalChannelTest, TryReceiveWhenDataAvailable) {
   // Send data first
   runtime::DataPacket send_packet;
-  send_packet.key = "test_key";
+  send_packet.key   = "test_key";
   send_packet.value = std::string("test_value");
 
   ASSERT_TRUE(channel_->send(send_packet));
@@ -122,7 +123,7 @@ TEST_F(LocalChannelTest, TryReceiveWhenDataAvailable) {
 
 TEST_F(LocalChannelTest, SendToKey) {
   runtime::DataPacket packet;
-  packet.key = "user_data";
+  packet.key   = "user_data";
   packet.value = std::string("user_value");
 
   ASSERT_TRUE(channel_->send_to_key("user_data", packet.value));
@@ -131,7 +132,7 @@ TEST_F(LocalChannelTest, SendToKey) {
 TEST_F(LocalChannelTest, ReceiveFromKey) {
   // Send data to a specific key
   runtime::DataPacket packet;
-  packet.key = "user_profile";
+  packet.key   = "user_profile";
   packet.value = std::string("profile_data");
 
   ASSERT_TRUE(channel_->send_to_key("user_profile", packet.value));
@@ -146,17 +147,17 @@ TEST_F(LocalChannelTest, ReceiveFromKey) {
 TEST_F(LocalChannelTest, GetLatestForKey) {
   // Send multiple packets with same key
   runtime::DataPacket packet1;
-  packet1.key = "counter";
+  packet1.key   = "counter";
   packet1.value = static_cast<int64_t>(1);
   channel_->send(packet1);
 
   runtime::DataPacket packet2;
-  packet2.key = "counter";
+  packet2.key   = "counter";
   packet2.value = static_cast<int64_t>(2);
   channel_->send(packet2);
 
   runtime::DataPacket packet3;
-  packet3.key = "counter";
+  packet3.key   = "counter";
   packet3.value = static_cast<int64_t>(3);
   channel_->send(packet3);
 
@@ -167,9 +168,9 @@ TEST_F(LocalChannelTest, GetLatestForKey) {
 
 TEST_F(LocalChannelTest, GetAllForKey) {
   // Send multiple packets with same key
-  for (int i = 0; i < 5; ++i) {
+  for(int i = 0; i < 5; ++i) {
     runtime::DataPacket packet;
-    packet.key = "history";
+    packet.key   = "history";
     packet.value = std::string("value_" + std::to_string(i));
     channel_->send(packet);
   }
@@ -186,7 +187,7 @@ TEST_F(LocalChannelTest, HasDataForKey) {
 
   // Send data
   runtime::DataPacket packet;
-  packet.key = "existing_key";
+  packet.key   = "existing_key";
   packet.value = std::string("exists");
   channel_->send(packet);
 
@@ -208,7 +209,7 @@ TEST_F(LocalChannelTest, SubscribeUnsubscribe) {
 
   auto sub_id = channel_->subscribe(
       [&callback_count](runtime::ChannelEvent event, const runtime::DataPacket& packet) {
-        if (event == runtime::ChannelEvent::DATA_READY) {
+        if(event == runtime::ChannelEvent::DATA_READY) {
           callback_count++;
         }
       });
@@ -217,7 +218,7 @@ TEST_F(LocalChannelTest, SubscribeUnsubscribe) {
 
   // Send data to trigger callback
   runtime::DataPacket packet;
-  packet.key = "test";
+  packet.key   = "test";
   packet.value = std::string("value");
   channel_->send(packet);
 
@@ -236,7 +237,7 @@ TEST_F(LocalChannelTest, MultipleSubscribers) {
   channel_->subscribe([&count2](auto, auto) { count2++; });
 
   runtime::DataPacket packet;
-  packet.key = "test";
+  packet.key   = "test";
   packet.value = std::string("value");
   channel_->send(packet);
 
@@ -251,14 +252,14 @@ TEST_F(LocalChannelTest, MultipleSubscribers) {
 // ============================================================================
 
 TEST_F(LocalChannelTest, FillQueueToCapacity) {
-  const size_t capacity = 100;
-  auto capped_channel = std::make_shared<runtime::LocalChannel>("capped", capacity);
+  const size_t capacity       = 100;
+  auto         capped_channel = std::make_shared<runtime::LocalChannel>("capped", capacity);
   capped_channel->open();
 
   // Fill queue to capacity
-  for (size_t i = 0; i < capacity; ++i) {
+  for(size_t i = 0; i < capacity; ++i) {
     runtime::DataPacket packet;
-    packet.key = "item_" + std::to_string(i);
+    packet.key   = "item_" + std::to_string(i);
     packet.value = static_cast<int64_t>(i);
     ASSERT_TRUE(capped_channel->send(packet));
   }
@@ -267,7 +268,7 @@ TEST_F(LocalChannelTest, FillQueueToCapacity) {
 
   // Next send should fail (queue full)
   runtime::DataPacket overflow_packet;
-  overflow_packet.key = "overflow";
+  overflow_packet.key   = "overflow";
   overflow_packet.value = std::string("should_fail");
   EXPECT_FALSE(capped_channel->send(overflow_packet));
 }
@@ -277,7 +278,7 @@ TEST_F(LocalChannelTest, ZeroCapacityQueue) {
   zero_capacity_channel->open();
 
   runtime::DataPacket packet;
-  packet.key = "test";
+  packet.key   = "test";
   packet.value = std::string("value");
 
   EXPECT_FALSE(zero_capacity_channel->send(packet));
@@ -289,9 +290,9 @@ TEST_F(LocalChannelTest, UnlimitedCapacityQueue) {
 
   const int num_packets = 1000;
 
-  for (int i = 0; i < num_packets; ++i) {
+  for(int i = 0; i < num_packets; ++i) {
     runtime::DataPacket packet;
-    packet.key = "item_" + std::to_string(i);
+    packet.key   = "item_" + std::to_string(i);
     packet.value = static_cast<int64_t>(i);
     ASSERT_TRUE(unlimited_channel->send(packet));
   }
@@ -306,7 +307,7 @@ TEST_F(LocalChannelTest, UnlimitedCapacityQueue) {
 TEST_F(LocalChannelTest, ReceiveWithTimeout) {
   // Set short timeout
   runtime::DataPacket packet;
-  bool received = channel_->receive(packet, 100);
+  bool                received = channel_->receive(packet, 100);
 
   EXPECT_FALSE(received) << "Should timeout before data arrives";
 }
@@ -316,13 +317,13 @@ TEST_F(LocalChannelTest, ReceiveWithNoTimeout) {
   std::thread sender([this]() {
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     runtime::DataPacket packet;
-    packet.key = "timed_test";
+    packet.key   = "timed_test";
     packet.value = std::string("received");
     this->channel_->send(packet);
   });
 
   runtime::DataPacket packet;
-  bool received = channel_->receive(packet, 500);  // 500ms timeout
+  bool                received = channel_->receive(packet, 500);  // 500ms timeout
 
   sender.join();
   EXPECT_TRUE(received) << "Should receive data within timeout";
@@ -333,13 +334,13 @@ TEST_F(LocalChannelTest, ReceiveFromKeyWithTimeout) {
   std::thread sender([this]() {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     runtime::DataPacket packet;
-    packet.key = "delayed_key";
+    packet.key   = "delayed_key";
     packet.value = std::string("delayed_value");
     this->channel_->send_to_key("delayed_key", packet.value);
   });
 
   runtime::DataPacket packet;
-  bool received = channel_->receive_from_key("delayed_key", packet, 200);
+  bool                received = channel_->receive_from_key("delayed_key", packet, 200);
 
   sender.join();
   EXPECT_FALSE(received) << "Should timeout before data arrives";
@@ -348,12 +349,12 @@ TEST_F(LocalChannelTest, ReceiveFromKeyWithTimeout) {
 TEST_F(LocalChannelTest, ReceiveFromKeyImmediate) {
   // Send data first
   runtime::DataPacket send_packet;
-  send_packet.key = "immediate_key";
+  send_packet.key   = "immediate_key";
   send_packet.value = std::string("immediate_value");
   channel_->send_to_key("immediate_key", send_packet.value);
 
   runtime::DataPacket receive_packet;
-  bool received = channel_->receive_from_key("immediate_key", receive_packet, 100);
+  bool                received = channel_->receive_from_key("immediate_key", receive_packet, 100);
 
   EXPECT_TRUE(received);
   EXPECT_EQ(receive_packet.key, "immediate_key");
@@ -365,7 +366,7 @@ TEST_F(LocalChannelTest, ReceiveFromKeyImmediate) {
 
 TEST_F(LocalChannelTest, GetStatistics) {
   runtime::DataPacket packet;
-  packet.key = "stats_test";
+  packet.key   = "stats_test";
   packet.value = std::string("value");
 
   channel_->send(packet);
@@ -377,7 +378,7 @@ TEST_F(LocalChannelTest, GetStatistics) {
 
 TEST_F(LocalChannelTest, StatisticsAfterReceive) {
   runtime::DataPacket packet;
-  packet.key = "stats_test2";
+  packet.key   = "stats_test2";
   packet.value = std::string("value");
 
   channel_->send(packet);
@@ -393,9 +394,9 @@ TEST_F(LocalChannelTest, StatisticsAfterReceive) {
 
 TEST_F(LocalChannelTest, ResetStatistics) {
   // Send some packets
-  for (int i = 0; i < 5; ++i) {
+  for(int i = 0; i < 5; ++i) {
     runtime::DataPacket packet;
-    packet.key = "reset_test";
+    packet.key   = "reset_test";
     packet.value = static_cast<int64_t>(i);
     channel_->send(packet);
   }
@@ -417,12 +418,11 @@ TEST_F(LocalChannelTest, ResetStatistics) {
 TEST_F(LocalChannelTest, ChannelClosedEvent) {
   bool closed_notified = false;
 
-  auto sub_id = channel_->subscribe(
-      [&closed_notified](runtime::ChannelEvent event, const auto&) {
-        if (event == runtime::ChannelEvent::CHANNEL_CLOSED) {
-          closed_notified = true;
-        }
-      });
+  auto sub_id = channel_->subscribe([&closed_notified](runtime::ChannelEvent event, const auto&) {
+    if(event == runtime::ChannelEvent::CHANNEL_CLOSED) {
+      closed_notified = true;
+    }
+  });
 
   channel_->close();
 
@@ -436,14 +436,14 @@ TEST_F(LocalChannelTest, DataConsumedEvent) {
   int consumed_count = 0;
 
   channel_->subscribe([&consumed_count](runtime::ChannelEvent event, const auto&) {
-    if (event == runtime::ChannelEvent::DATA_CONSUMED) {
-          consumed_count++;
-        }
-      });
+    if(event == runtime::ChannelEvent::DATA_CONSUMED) {
+      consumed_count++;
+    }
+  });
 
   // Send and receive
   runtime::DataPacket packet;
-  packet.key = "event_test";
+  packet.key   = "event_test";
   packet.value = std::string("value");
   channel_->send(packet);
 
@@ -459,14 +459,14 @@ TEST_F(LocalChannelTest, DataReadyEvent) {
   int ready_count = 0;
 
   channel_->subscribe([&ready_count](runtime::ChannelEvent event, const auto&) {
-    if (event == runtime::ChannelEvent::DATA_READY) {
-          ready_count++;
-        }
-      });
+    if(event == runtime::ChannelEvent::DATA_READY) {
+      ready_count++;
+    }
+  });
 
   // Send data
   runtime::DataPacket packet;
-  packet.key = "ready_test";
+  packet.key   = "ready_test";
   packet.value = std::string("value");
   channel_->send(packet);
 
@@ -486,9 +486,9 @@ TEST_F(LocalChannelTest, ClearEmptyChannel) {
 
 TEST_F(LocalChannelTest, ClearChannelWithData) {
   // Add some data
-  for (int i = 0; i < 10; ++i) {
+  for(int i = 0; i < 10; ++i) {
     runtime::DataPacket packet;
-    packet.key = "clear_test";
+    packet.key   = "clear_test";
     packet.value = static_cast<int64_t>(i);
     channel_->send(packet);
   }
@@ -503,9 +503,9 @@ TEST_F(LocalChannelTest, ClearChannelWithData) {
 
 TEST_F(LocalChannelTest, ClearWithKeyData) {
   // Add data to specific key
-  for (int i = 0; i < 3; ++i) {
+  for(int i = 0; i < 3; ++i) {
     runtime::DataPacket packet;
-    packet.key = "clear_key";
+    packet.key   = "clear_key";
     packet.value = std::string("value_" + std::to_string(i));
     channel_->send_to_key("clear_key", packet.value);
   }
@@ -534,7 +534,7 @@ TEST_F(LocalChannelTest, WaitForDataAvailable) {
 
   // Now send data
   runtime::DataPacket packet;
-  packet.key = "wait_key";
+  packet.key   = "wait_key";
   packet.value = std::string("arrived");
   channel_->send_to_key("wait_key", packet.value);
 
@@ -544,7 +544,7 @@ TEST_F(LocalChannelTest, WaitForDataAvailable) {
 TEST_F(LocalChannelTest, WaitForDataImmediate) {
   // Send data first
   runtime::DataPacket packet;
-  packet.key = "wait_immediate";
+  packet.key   = "wait_immediate";
   packet.value = std::string("already_here");
   channel_->send_to_key("wait_immediate", packet.value);
 
@@ -614,10 +614,10 @@ TEST_F(LocalChannelTest, CloseAllChannels) {
   auto channel_a = registry.get("close_a");
   auto channel_b = registry.get("close_b");
 
-  if (channel_a) {
+  if(channel_a) {
     EXPECT_FALSE(channel_a->is_open());
   }
-  if (channel_b) {
+  if(channel_b) {
     EXPECT_FALSE(channel_b->is_open());
   }
 }
@@ -631,7 +631,7 @@ TEST_F(LocalChannelTest, ZeroCopyDataTransfer) {
   std::string large_data(1000, 'x');  // 1KB string
 
   runtime::DataPacket packet;
-  packet.key = "large_data";
+  packet.key   = "large_data";
   packet.value = large_data;
 
   ASSERT_TRUE(channel_->send(packet));
@@ -647,16 +647,16 @@ TEST_F(LocalChannelTest, ZeroCopyDataTransfer) {
 }
 
 TEST_F(LocalChannelTest, ConcurrentAccessToDifferentKeys) {
-  const int num_threads = 5;
+  const int num_threads        = 5;
   const int packets_per_thread = 10;
 
   std::vector<std::thread> threads;
 
-  for (int t = 0; t < num_threads; ++t) {
+  for(int t = 0; t < num_threads; ++t) {
     threads.emplace_back([this, t, num_threads, packets_per_thread]() {
-      for (int i = 0; i < packets_per_thread; ++i) {
+      for(int i = 0; i < packets_per_thread; ++i) {
         runtime::DataPacket packet;
-        packet.key = "thread_" + std::to_string(t) + "_item_" + std::to_string(i);
+        packet.key   = "thread_" + std::to_string(t) + "_item_" + std::to_string(i);
         packet.value = static_cast<int64_t>(t * packets_per_thread + i);
 
         this->channel_->send(packet);
@@ -666,7 +666,7 @@ TEST_F(LocalChannelTest, ConcurrentAccessToDifferentKeys) {
   }
 
   // Join all threads
-  for (auto& thread : threads) {
+  for(auto& thread : threads) {
     thread.join();
   }
 
@@ -682,7 +682,7 @@ TEST_F(LocalChannelTest, SendToClosedChannel) {
   channel_->close();
 
   runtime::DataPacket packet;
-  packet.key = "after_close";
+  packet.key   = "after_close";
   packet.value = std::string("should_fail");
 
   EXPECT_FALSE(channel_->send(packet));
@@ -692,16 +692,16 @@ TEST_F(LocalChannelTest, ReceiveFromClosedChannel) {
   channel_->close();
 
   runtime::DataPacket packet;
-  bool received = channel_->receive(packet);
+  bool                received = channel_->receive(packet);
 
   EXPECT_FALSE(received);
 }
 
 TEST_F(LocalChannelTest, StatisticsAfterClose) {
   // Send some packets
-  for (int i = 0; i < 5; ++i) {
+  for(int i = 0; i < 5; ++i) {
     runtime::DataPacket packet;
-    packet.key = "before_close";
+    packet.key   = "before_close";
     packet.value = static_cast<int64_t>(i);
     channel_->send(packet);
   }

@@ -4,10 +4,11 @@
 // Google Test tests for Agent component
 
 #include <gtest/gtest.h>
+
 #include "agentflow/framework/agent.h"
 
 class AgentTest : public ::testing::Test {
- protected:
+protected:
   void SetUp() override {}
   void TearDown() override {}
 };

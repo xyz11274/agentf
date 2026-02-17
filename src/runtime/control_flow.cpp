@@ -4,12 +4,13 @@
 // Control flow management implementation
 
 #include "agentflow/runtime/control_flow.h"
-#include "agentflow/basic/logger.h"
 
 #include <algorithm>
-#include <sstream>
 #include <cstdlib>
 #include <cstring>
+#include <sstream>
+
+#include "agentflow/basic/logger.h"
 
 namespace agentflow {
 namespace runtime {
@@ -24,7 +25,7 @@ ControlContext::ControlContext() {
 
 bool ControlContext::get_variable(const std::string& name, std::string& value) const {
   auto it = variables_.find(name);
-  if (it != variables_.end()) {
+  if(it != variables_.end()) {
     value = it->second;
     return true;
   }
@@ -45,7 +46,7 @@ void ControlContext::clear_variables() {
 
 int ControlContext::get_loop_iteration(const std::string& loop_id) const {
   auto it = loops_.find(loop_id);
-  if (it != loops_.end()) {
+  if(it != loops_.end()) {
     return it->second.iteration;
   }
   return 0;
@@ -53,43 +54,42 @@ int ControlContext::get_loop_iteration(const std::string& loop_id) const {
 
 void ControlContext::increment_loop_iteration(const std::string& loop_id) {
   auto it = loops_.find(loop_id);
-  if (it != loops_.end()) {
+  if(it != loops_.end()) {
     it->second.iteration++;
   }
 }
 
 void ControlContext::reset_loop_iteration(const std::string& loop_id) {
   auto it = loops_.find(loop_id);
-  if (it != loops_.end()) {
+  if(it != loops_.end()) {
     it->second.iteration = 0;
   }
 }
 
-bool ControlContext::should_continue_loop(const std::string& loop_id,
-                                      const LoopConfig& config) {
+bool ControlContext::should_continue_loop(const std::string& loop_id, const LoopConfig& config) {
   auto it = loops_.find(loop_id);
-  if (it == loops_.end()) {
+  if(it == loops_.end()) {
     return false;
   }
 
   const LoopState& state = it->second;
 
-  switch (config.type) {
+  switch(config.type) {
     case LoopType::FOR_LOOP: {
       int current = state.iteration;
-      int end = config.end_value;
-      int step = config.step;
+      int end     = config.end_value;
+      int step    = config.step;
 
-      if (step > 0) {
+      if(step > 0) {
         return current < end;
-      } else if (step < 0) {
+      } else if(step < 0) {
         return current > end;
       }
       return false;
     }
 
     case LoopType::WHILE_LOOP: {
-      if (!config.condition) {
+      if(!config.condition) {
         return false;
       }
       // Evaluate condition
@@ -112,16 +112,15 @@ bool ControlContext::should_continue_loop(const std::string& loop_id,
   }
 }
 
-bool ControlContext::get_loop_variable(const std::string& loop_id,
-                                    const std::string& var_name,
-                                    std::string& value) const {
+bool ControlContext::get_loop_variable(const std::string& loop_id, const std::string& var_name,
+                                       std::string& value) const {
   auto it = loops_.find(loop_id);
-  if (it == loops_.end()) {
+  if(it == loops_.end()) {
     return false;
   }
 
   auto var_it = it->second.variables.find(var_name);
-  if (var_it != it->second.variables.end()) {
+  if(var_it != it->second.variables.end()) {
     value = var_it->second;
     return true;
   }
@@ -129,15 +128,14 @@ bool ControlContext::get_loop_variable(const std::string& loop_id,
   return false;
 }
 
-void ControlContext::set_loop_variable(const std::string& loop_id,
-                                    const std::string& var_name,
-                                    const std::string& value) {
+void ControlContext::set_loop_variable(const std::string& loop_id, const std::string& var_name,
+                                       const std::string& value) {
   loops_[loop_id].variables[var_name] = value;
 }
 
 void ControlContext::enter_loop(const std::string& loop_id, const LoopConfig& config) {
   LoopState state;
-  state.config = config;
+  state.config    = config;
   state.iteration = 0;
   loops_[loop_id] = state;
 }
@@ -152,7 +150,7 @@ bool ControlContext::is_in_loop(const std::string& loop_id) const {
 
 std::vector<std::string> ControlContext::get_active_loops() const {
   std::vector<std::string> loop_ids;
-  for (const auto& pair : loops_) {
+  for(const auto& pair : loops_) {
     loop_ids.push_back(pair.first);
   }
   return loop_ids;
@@ -162,28 +160,27 @@ std::vector<std::string> ControlContext::get_active_loops() const {
 // ConditionEvaluator implementation
 // ============================================================================
 
-bool ConditionEvaluator::evaluate(const ConditionExpression& expr,
-                                const ControlContext& context,
-                                const DataMap& node_outputs) const {
-  switch (expr.op) {
+bool ConditionEvaluator::evaluate(const ConditionExpression& expr, const ControlContext& context,
+                                  const DataMap& node_outputs) const {
+  switch(expr.op) {
     case ConditionOperator::AND: {
-      if (expr.left_expr && expr.right_expr) {
-        return evaluate(*expr.left_expr, context, node_outputs) &&
-               evaluate(*expr.right_expr, context, node_outputs);
+      if(expr.left_expr && expr.right_expr) {
+        return evaluate(*expr.left_expr, context, node_outputs)
+               && evaluate(*expr.right_expr, context, node_outputs);
       }
       return false;
     }
 
     case ConditionOperator::OR: {
-      if (expr.left_expr && expr.right_expr) {
-        return evaluate(*expr.left_expr, context, node_outputs) ||
-               evaluate(*expr.right_expr, context, node_outputs);
+      if(expr.left_expr && expr.right_expr) {
+        return evaluate(*expr.left_expr, context, node_outputs)
+               || evaluate(*expr.right_expr, context, node_outputs);
       }
       return false;
     }
 
     case ConditionOperator::NOT: {
-      if (expr.left_expr) {
+      if(expr.left_expr) {
         return !evaluate(*expr.left_expr, context, node_outputs);
       }
       return false;
@@ -201,30 +198,29 @@ bool ConditionEvaluator::evaluate(const ConditionExpression& expr,
 
     default: {
       // Comparison operators
-      std::string left = resolve_value(expr.left_operand, context, node_outputs);
+      std::string left  = resolve_value(expr.left_operand, context, node_outputs);
       std::string right = resolve_value(expr.right_operand, context, node_outputs);
       return evaluate_comparison(left, expr.op, right);
     }
   }
 }
 
-bool ConditionEvaluator::evaluate_comparison(const std::string& left,
-                                          ConditionOperator op,
-                                          const std::string& right) const {
+bool ConditionEvaluator::evaluate_comparison(const std::string& left, ConditionOperator op,
+                                             const std::string& right) const {
   // Try numeric comparison
-  double left_num = 0.0;
-  double right_num = 0.0;
-  bool is_numeric = false;
+  double left_num   = 0.0;
+  double right_num  = 0.0;
+  bool   is_numeric = false;
 
   try {
-    left_num = std::stod(left);
-    right_num = std::stod(right);
+    left_num   = std::stod(left);
+    right_num  = std::stod(right);
     is_numeric = true;
-  } catch (const std::exception&) {
+  } catch(const std::exception&) {
     // Not numeric, use string comparison
   }
 
-  switch (op) {
+  switch(op) {
     case ConditionOperator::EQUAL:
       return is_numeric ? (left_num == right_num) : (left == right);
 
@@ -254,32 +250,34 @@ bool ConditionEvaluator::evaluate_comparison(const std::string& left,
   }
 }
 
-std::string ConditionEvaluator::resolve_value(const std::string& name,
-                                           const ControlContext& context,
-                                           const DataMap& node_outputs) const {
+std::string ConditionEvaluator::resolve_value(const std::string&    name,
+                                              const ControlContext& context,
+                                              const DataMap&        node_outputs) const {
   // Try to resolve as variable from context
   std::string value;
-  if (context.get_variable(name, value)) {
+  if(context.get_variable(name, value)) {
     return value;
   }
 
   // Try to resolve as output from node
   auto it = node_outputs.find(name);
-  if (it != node_outputs.end()) {
+  if(it != node_outputs.end()) {
     // Convert DataVariant to string
-    return std::visit([](auto&& arg) -> std::string {
-      using T = std::decay_t<decltype(arg)>;
-      if constexpr (std::is_same_v<T, std::string>) {
-        return arg;
-      } else if constexpr (std::is_same_v<T, int64_t>) {
-        return std::to_string(arg);
-      } else if constexpr (std::is_same_v<T, double>) {
-        return std::to_string(arg);
-      } else if constexpr (std::is_same_v<T, bool>) {
-        return arg ? "true" : "false";
-      }
-      return "";
-    }, it->second);
+    return std::visit(
+        [](auto&& arg) -> std::string {
+          using T = std::decay_t<decltype(arg)>;
+          if constexpr(std::is_same_v<T, std::string>) {
+            return arg;
+          } else if constexpr(std::is_same_v<T, int64_t>) {
+            return std::to_string(arg);
+          } else if constexpr(std::is_same_v<T, double>) {
+            return std::to_string(arg);
+          } else if constexpr(std::is_same_v<T, bool>) {
+            return arg ? "true" : "false";
+          }
+          return "";
+        },
+        it->second);
   }
 
   // Return name itself if not found (literal value)
@@ -297,52 +295,52 @@ void ControlFlowManager::initialize(const ControlContext& context) {
   context_ = context;
 }
 
-bool ControlFlowManager::should_traverse_edge(const std::string& edge_id,
-                                            const ConditionExpression& condition) {
+bool ControlFlowManager::should_traverse_edge(const std::string&         edge_id,
+                                              const ConditionExpression& condition) {
   return evaluator_.evaluate(condition, context_, DataMap());
 }
 
-ControlAction ControlFlowManager::determine_next_action(const NodeId& current_node,
-                                                     NodeState execution_state,
-                                                     const std::string& error_message) {
+ControlAction ControlFlowManager::determine_next_action(const NodeId&      current_node,
+                                                        NodeState          execution_state,
+                                                        const std::string& error_message) {
   ControlAction action;
 
-  if (execution_state == NodeState::SUCCESS) {
+  if(execution_state == NodeState::SUCCESS) {
     action.type = ControlActionType::PROCEED;
-  } else if (execution_state == NodeState::FAILED) {
+  } else if(execution_state == NodeState::FAILED) {
     // Check if there's an error handler
     auto it = error_handlers_.find(current_node);
-    if (it != error_handlers_.end()) {
+    if(it != error_handlers_.end()) {
       const ErrorHandlerConfig& handler = it->second;
 
-      switch (handler.strategy) {
+      switch(handler.strategy) {
         case ErrorStrategy::RETRY:
           action.type = ControlActionType::RETRY;
           break;
 
         case ErrorStrategy::SKIP:
-          action.type = ControlActionType::SKIP;
+          action.type       = ControlActionType::SKIP;
           action.skip_count = 1;
           break;
 
         case ErrorStrategy::FAIL:
-          action.type = ControlActionType::ABORT;
+          action.type   = ControlActionType::ABORT;
           action.reason = error_message;
           break;
 
         case ErrorStrategy::CATCH:
-          action.type = ControlActionType::GOTO;
+          action.type           = ControlActionType::GOTO;
           action.target_node_id = handler.handler_node_id;
           break;
 
         case ErrorStrategy::FALLBACK:
-          action.type = ControlActionType::GOTO;
+          action.type           = ControlActionType::GOTO;
           action.target_node_id = handler.fallback_node_id;
           break;
       }
     } else {
       // No error handler, abort workflow
-      action.type = ControlActionType::ABORT;
+      action.type   = ControlActionType::ABORT;
       action.reason = error_message;
     }
   }
@@ -350,9 +348,8 @@ ControlAction ControlFlowManager::determine_next_action(const NodeId& current_no
   return action;
 }
 
-NodeId ControlFlowManager::get_next_node(const NodeId& current_node,
-                                       const ControlAction& action) {
-  switch (action.type) {
+NodeId ControlFlowManager::get_next_node(const NodeId& current_node, const ControlAction& action) {
+  switch(action.type) {
     case ControlActionType::GOTO:
       return action.target_node_id;
 
@@ -382,8 +379,7 @@ NodeId ControlFlowManager::get_next_node(const NodeId& current_node,
   }
 }
 
-void ControlFlowManager::enter_loop(const std::string& loop_id,
-                                   const LoopConfig& config) {
+void ControlFlowManager::enter_loop(const std::string& loop_id, const LoopConfig& config) {
   active_loops_[loop_id] = config;
   context_.enter_loop(loop_id, config);
 }
@@ -394,22 +390,22 @@ void ControlFlowManager::exit_loop_iteration(const std::string& loop_id) {
 
 bool ControlFlowManager::should_continue_loop(const std::string& loop_id) {
   auto it = active_loops_.find(loop_id);
-  if (it == active_loops_.end()) {
+  if(it == active_loops_.end()) {
     return false;
   }
 
   return context_.should_continue_loop(loop_id, it->second);
 }
 
-ControlAction ControlFlowManager::handle_error(const NodeId& failed_node,
-                                             const std::string& error_type,
-                                             const std::string& error_message) {
+ControlAction ControlFlowManager::handle_error(const NodeId&      failed_node,
+                                               const std::string& error_type,
+                                               const std::string& error_message) {
   // Find error handler for this node
   auto it = error_handlers_.find(failed_node);
-  if (it == error_handlers_.end()) {
+  if(it == error_handlers_.end()) {
     // No handler, abort
     ControlAction action;
-    action.type = ControlActionType::ABORT;
+    action.type   = ControlActionType::ABORT;
     action.reason = error_message;
     return action;
   }
@@ -417,29 +413,29 @@ ControlAction ControlFlowManager::handle_error(const NodeId& failed_node,
   const ErrorHandlerConfig& handler = it->second;
 
   // Check if error type matches
-  if (!handler.error_types.empty()) {
+  if(!handler.error_types.empty()) {
     bool matches = false;
-    for (const auto& type : handler.error_types) {
-      if (error_type.find(type) != std::string::npos) {
+    for(const auto& type : handler.error_types) {
+      if(error_type.find(type) != std::string::npos) {
         matches = true;
         break;
       }
     }
-    if (!matches) {
+    if(!matches) {
       // Error type doesn't match, abort
       ControlAction action;
-      action.type = ControlActionType::ABORT;
+      action.type   = ControlActionType::ABORT;
       action.reason = error_message;
       return action;
     }
   }
 
   // Evaluate condition if present
-  if (handler.condition) {
-    if (!evaluator_.evaluate(*handler.condition, context_, DataMap())) {
+  if(handler.condition) {
+    if(!evaluator_.evaluate(*handler.condition, context_, DataMap())) {
       // Condition doesn't match, abort
       ControlAction action;
-      action.type = ControlActionType::ABORT;
+      action.type   = ControlActionType::ABORT;
       action.reason = error_message;
       return action;
     }
@@ -447,28 +443,28 @@ ControlAction ControlFlowManager::handle_error(const NodeId& failed_node,
 
   // Execute handler strategy
   ControlAction action;
-  switch (handler.strategy) {
+  switch(handler.strategy) {
     case ErrorStrategy::RETRY:
       action.type = ControlActionType::RETRY;
       break;
 
     case ErrorStrategy::SKIP:
-      action.type = ControlActionType::SKIP;
+      action.type       = ControlActionType::SKIP;
       action.skip_count = 1;
       break;
 
     case ErrorStrategy::FAIL:
-      action.type = ControlActionType::ABORT;
+      action.type   = ControlActionType::ABORT;
       action.reason = error_message;
       break;
 
     case ErrorStrategy::CATCH:
-      action.type = ControlActionType::GOTO;
+      action.type           = ControlActionType::GOTO;
       action.target_node_id = handler.handler_node_id;
       break;
 
     case ErrorStrategy::FALLBACK:
-      action.type = ControlActionType::GOTO;
+      action.type           = ControlActionType::GOTO;
       action.target_node_id = handler.fallback_node_id;
       break;
   }
@@ -476,15 +472,15 @@ ControlAction ControlFlowManager::handle_error(const NodeId& failed_node,
   return action;
 }
 
-void ControlFlowManager::set_error_handler(const NodeId& node_id,
-                                          const ErrorHandlerConfig& handler) {
+void ControlFlowManager::set_error_handler(const NodeId&             node_id,
+                                           const ErrorHandlerConfig& handler) {
   error_handlers_[node_id] = handler;
 }
 
-bool ControlFlowManager::get_error_handler(const NodeId& node_id,
-                                          ErrorHandlerConfig& handler) const {
+bool ControlFlowManager::get_error_handler(const NodeId&       node_id,
+                                           ErrorHandlerConfig& handler) const {
   auto it = error_handlers_.find(node_id);
-  if (it != error_handlers_.end()) {
+  if(it != error_handlers_.end()) {
     handler = it->second;
     return true;
   }

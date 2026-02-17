@@ -4,10 +4,12 @@
 // Request wrapper implementation
 
 #include "agentflow/network/request.h"
-#include "agentflow/basic/logger.h"
+
+#include <atomic>
 #include <chrono>
 #include <sstream>
-#include <atomic>
+
+#include "agentflow/basic/logger.h"
 
 namespace agentflow {
 namespace network {
@@ -16,34 +18,33 @@ namespace network {
 // Request Implementation
 // ============================================================================
 
-Request::Request(const std::string& type)
-    : type_(type) {
-  metadata_.request_id = generate_request_id();
+Request::Request(const std::string& type) : type_(type) {
+  metadata_.request_id   = generate_request_id();
   metadata_.request_type = type;
   metadata_.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
 }
 
-Request::Request(const std::string& type, const DataMap& payload,
-               const RequestMetadata& metadata)
+Request::Request(const std::string& type, const DataMap& payload, const RequestMetadata& metadata)
     : type_(type), payload_(payload), metadata_(metadata) {
-  if (metadata_.request_id.empty()) {
+  if(metadata_.request_id.empty()) {
     metadata_.request_id = generate_request_id();
   }
   metadata_.request_type = type;
-  if (metadata_.timestamp_ms == 0) {
+  if(metadata_.timestamp_ms == 0) {
     metadata_.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-        std::chrono::system_clock::now().time_since_epoch()).count();
+                                 std::chrono::system_clock::now().time_since_epoch())
+                                 .count();
   }
 }
 
 std::string Request::generate_request_id() {
-  static std::atomic<uint64_t> counter{1};
-  auto now = std::chrono::system_clock::now();
-  auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-      now.time_since_epoch()).count();
-  return "req_" + std::to_string(timestamp) + "_" +
-         std::to_string(counter.fetch_add(1));
+  static std::atomic<uint64_t> counter{ 1 };
+  auto                         now = std::chrono::system_clock::now();
+  auto                         timestamp =
+      std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+  return "req_" + std::to_string(timestamp) + "_" + std::to_string(counter.fetch_add(1));
 }
 
 std::string Request::to_json() const {
@@ -54,19 +55,19 @@ std::string Request::to_json() const {
   oss << "\"request_id\":\"" << metadata_.request_id << "\",";
   oss << "\"timestamp_ms\":" << metadata_.timestamp_ms << ",";
 
-  if (!metadata_.source_id.empty()) {
+  if(!metadata_.source_id.empty()) {
     oss << "\"source_id\":\"" << metadata_.source_id << "\",";
   }
 
-  if (!metadata_.target_id.empty()) {
+  if(!metadata_.target_id.empty()) {
     oss << "\"target_id\":\"" << metadata_.target_id << "\",";
   }
 
-  if (!metadata_.workflow_id.empty()) {
+  if(!metadata_.workflow_id.empty()) {
     oss << "\"workflow_id\":\"" << metadata_.workflow_id << "\",";
   }
 
-  if (!metadata_.node_id.empty()) {
+  if(!metadata_.node_id.empty()) {
     oss << "\"node_id\":\"" << metadata_.node_id << "\",";
   }
 
@@ -75,8 +76,8 @@ std::string Request::to_json() const {
   // Add payload
   oss << "\"payload\":{";
   bool first = true;
-  for (const auto& [key, value] : payload_) {
-    if (!first) {
+  for(const auto& [key, value] : payload_) {
+    if(!first) {
       oss << ",";
     }
     first = false;
@@ -84,13 +85,13 @@ std::string Request::to_json() const {
     oss << "\"" << key << "\":";
 
     // Serialize value based on type
-    if (std::holds_alternative<int64_t>(value)) {
+    if(std::holds_alternative<int64_t>(value)) {
       oss << std::get<int64_t>(value);
-    } else if (std::holds_alternative<double>(value)) {
+    } else if(std::holds_alternative<double>(value)) {
       oss << std::get<double>(value);
-    } else if (std::holds_alternative<std::string>(value)) {
+    } else if(std::holds_alternative<std::string>(value)) {
       oss << "\"" << std::get<std::string>(value) << "\"";
-    } else if (std::holds_alternative<bool>(value)) {
+    } else if(std::holds_alternative<bool>(value)) {
       oss << (std::get<bool>(value) ? "true" : "false");
     }
   }
@@ -99,8 +100,8 @@ std::string Request::to_json() const {
   // Add headers
   oss << "\"headers\":{";
   first = true;
-  for (const auto& [key, value] : metadata_.headers) {
-    if (!first) {
+  for(const auto& [key, value] : metadata_.headers) {
+    if(!first) {
       oss << ",";
     }
     first = false;
@@ -146,15 +147,15 @@ std::vector<uint8_t> Request::to_binary() const {
   //   [N bytes] value
 
   // Write type
-  uint32_t type_len = static_cast<uint32_t>(type_.length());
+  uint32_t       type_len   = static_cast<uint32_t>(type_.length());
   const uint8_t* type_bytes = reinterpret_cast<const uint8_t*>(&type_len);
   result.insert(result.end(), type_bytes, type_bytes + 4);
   result.insert(result.end(), type_.begin(), type_.end());
 
   // Write request_id
-  const std::string& req_id = metadata_.request_id;
-  uint32_t req_id_len = static_cast<uint32_t>(req_id.length());
-  const uint8_t* req_id_len_bytes = reinterpret_cast<const uint8_t*>(&req_id_len);
+  const std::string& req_id           = metadata_.request_id;
+  uint32_t           req_id_len       = static_cast<uint32_t>(req_id.length());
+  const uint8_t*     req_id_len_bytes = reinterpret_cast<const uint8_t*>(&req_id_len);
   result.insert(result.end(), req_id_len_bytes, req_id_len_bytes + 4);
   result.insert(result.end(), req_id.begin(), req_id.end());
 
@@ -167,7 +168,7 @@ std::vector<uint8_t> Request::to_binary() const {
   result.insert(result.end(), timeout_bytes, timeout_bytes + 4);
 
   // Write payload count
-  uint32_t payload_count = static_cast<uint32_t>(payload_.size());
+  uint32_t       payload_count       = static_cast<uint32_t>(payload_.size());
   const uint8_t* payload_count_bytes = reinterpret_cast<const uint8_t*>(&payload_count);
   result.insert(result.end(), payload_count_bytes, payload_count_bytes + 4);
 
@@ -175,18 +176,18 @@ std::vector<uint8_t> Request::to_binary() const {
   // For now, skip detailed payload serialization
 
   // Write headers count
-  uint32_t headers_count = static_cast<uint32_t>(metadata_.headers.size());
+  uint32_t       headers_count       = static_cast<uint32_t>(metadata_.headers.size());
   const uint8_t* headers_count_bytes = reinterpret_cast<const uint8_t*>(&headers_count);
   result.insert(result.end(), headers_count_bytes, headers_count_bytes + 4);
 
   // Write headers
-  for (const auto& [key, value] : metadata_.headers) {
-    uint32_t key_len = static_cast<uint32_t>(key.length());
+  for(const auto& [key, value] : metadata_.headers) {
+    uint32_t       key_len       = static_cast<uint32_t>(key.length());
     const uint8_t* key_len_bytes = reinterpret_cast<const uint8_t*>(&key_len);
     result.insert(result.end(), key_len_bytes, key_len_bytes + 4);
     result.insert(result.end(), key.begin(), key.end());
 
-    uint32_t value_len = static_cast<uint32_t>(value.length());
+    uint32_t       value_len       = static_cast<uint32_t>(value.length());
     const uint8_t* value_len_bytes = reinterpret_cast<const uint8_t*>(&value_len);
     result.insert(result.end(), value_len_bytes, value_len_bytes + 4);
     result.insert(result.end(), value.begin(), value.end());
@@ -204,7 +205,7 @@ std::shared_ptr<Request> Request::from_binary(const uint8_t* data, size_t size) 
 
 DataValue Request::get(const std::string& key) const {
   auto it = payload_.find(key);
-  if (it != payload_.end()) {
+  if(it != payload_.end()) {
     return it->second;
   }
   return std::string();
@@ -220,7 +221,7 @@ bool Request::has(const std::string& key) const {
 
 std::string Request::get_header(const std::string& key) const {
   auto it = metadata_.headers.find(key);
-  if (it != metadata_.headers.end()) {
+  if(it != metadata_.headers.end()) {
     return it->second;
   }
   return "";
@@ -239,14 +240,15 @@ bool Request::is_valid() const {
 // ============================================================================
 
 RequestBuilder::RequestBuilder() {
-  metadata_.request_id = Request::generate_request_id();
+  metadata_.request_id   = Request::generate_request_id();
   metadata_.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::system_clock::now().time_since_epoch()).count();
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
   metadata_.timeout_ms = 30000;  // Default 30s
 }
 
 RequestBuilder& RequestBuilder::with_type(const std::string& type) {
-  type_ = type;
+  type_                  = type;
   metadata_.request_type = type;
   return *this;
 }

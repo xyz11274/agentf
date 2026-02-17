@@ -70,7 +70,7 @@ CompactNamespaces: false
 NamespaceIndentation: None
 
 # 包含
-IncludeBlocks: Reorder
+IncludeBlocks: Regroup
 IncludeCategories:
   - Regex: '^<sys/.*'
     Priority: 2

@@ -8,21 +8,21 @@
 
 #ifdef AGENTFLOW_WITH_PROTOACTOR
 
-#include <memory>
-#include <string>
 #include <map>
+#include <memory>
 #include <mutex>
+#include <string>
 
 namespace protoactor {
 class ActorSystem;
 class PID;
-}
+}  // namespace protoactor
 
 namespace agentflow {
 
 /// @brief ActorSystemManager manages the Protoactor-cpp runtime
 class ActorSystemManager {
- public:
+public:
   /// @brief Get or create singleton instance
   /// @return ActorSystemManager instance
   static ActorSystemManager& get_instance();
@@ -42,17 +42,17 @@ class ActorSystemManager {
   /// @return Pointer to ActorSystem or nullptr if not initialized
   std::shared_ptr<protoactor::ActorSystem> get_actor_system() const;
 
- private:
+private:
   ActorSystemManager() = default;
   ~ActorSystemManager();
 
   // Prevent copying
-  ActorSystemManager(const ActorSystemManager&) = delete;
+  ActorSystemManager(const ActorSystemManager&)            = delete;
   ActorSystemManager& operator=(const ActorSystemManager&) = delete;
 
-  mutable std::mutex mutex_;
+  mutable std::mutex                       mutex_;
   std::shared_ptr<protoactor::ActorSystem> actor_system_;
-  bool initialized_ = false;
+  bool                                     initialized_ = false;
 };
 
 }  // namespace agentflow
@@ -65,15 +65,15 @@ class ActorSystemManager {
 namespace agentflow {
 
 class ActorSystemManager {
- public:
+public:
   static ActorSystemManager& get_instance();
 
-  bool initialize();
-  void shutdown();
-  bool is_running() const;
+  bool                  initialize();
+  void                  shutdown();
+  bool                  is_running() const;
   std::shared_ptr<void> get_actor_system() const;
 
- private:
+private:
   ActorSystemManager() = default;
   ~ActorSystemManager();
 };

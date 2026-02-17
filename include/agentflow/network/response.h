@@ -6,10 +6,11 @@
 #ifndef AGENTFLOW_NETWORK_RESPONSE_H
 #define AGENTFLOW_NETWORK_RESPONSE_H
 
+#include <chrono>
+#include <map>
 #include <memory>
 #include <string>
-#include <map>
-#include <chrono>
+
 #include "agentflow/common.h"
 
 namespace agentflow {
@@ -17,46 +18,43 @@ namespace network {
 
 /// @brief Response status codes
 enum class ResponseStatus : int {
-  OK = 200,
-  CREATED = 201,
-  ACCEPTED = 202,
+  OK         = 200,
+  CREATED    = 201,
+  ACCEPTED   = 202,
   NO_CONTENT = 204,
 
-  BAD_REQUEST = 400,
-  UNAUTHORIZED = 401,
-  FORBIDDEN = 403,
-  NOT_FOUND = 404,
-  CONFLICT = 409,
+  BAD_REQUEST          = 400,
+  UNAUTHORIZED         = 401,
+  FORBIDDEN            = 403,
+  NOT_FOUND            = 404,
+  CONFLICT             = 409,
   UNPROCESSABLE_ENTITY = 422,
 
-  INTERNAL_ERROR = 500,
-  NOT_IMPLEMENTED = 501,
-  BAD_GATEWAY = 502,
+  INTERNAL_ERROR      = 500,
+  NOT_IMPLEMENTED     = 501,
+  BAD_GATEWAY         = 502,
   SERVICE_UNAVAILABLE = 503,
-  GATEWAY_TIMEOUT = 504,
+  GATEWAY_TIMEOUT     = 504,
 };
 
 /// @brief Response metadata
 struct ResponseMetadata {
-  std::string request_id;
-  std::string response_type;
-  ResponseStatus status;
-  std::string status_message;
-  int64_t timestamp_ms;
-  int64_t processing_time_ms;
+  std::string                        request_id;
+  std::string                        response_type;
+  ResponseStatus                     status;
+  std::string                        status_message;
+  int64_t                            timestamp_ms;
+  int64_t                            processing_time_ms;
   std::map<std::string, std::string> headers;
-  std::string error_code;
-  std::string error_detail;
+  std::string                        error_code;
+  std::string                        error_detail;
 
-  ResponseMetadata()
-      : status(ResponseStatus::OK),
-        timestamp_ms(0),
-        processing_time_ms(0) {}
+  ResponseMetadata() : status(ResponseStatus::OK), timestamp_ms(0), processing_time_ms(0) {}
 };
 
 /// @brief Response wrapper for microservice internal interface
 class Response {
- public:
+public:
   /// @brief Default constructor
   Response();
 
@@ -68,8 +66,7 @@ class Response {
   /// @param status Response status code
   /// @param payload Response payload
   /// @param metadata Response metadata
-  Response(ResponseStatus status, const DataMap& payload,
-           const ResponseMetadata& metadata);
+  Response(ResponseStatus status, const DataMap& payload, const ResponseMetadata& metadata);
 
   /// @brief Destructor
   ~Response() = default;
@@ -102,9 +99,7 @@ class Response {
   const std::string& get_status_message() const { return metadata_.status_message; }
 
   /// @brief Set status message
-  void set_status_message(const std::string& message) {
-    metadata_.status_message = message;
-  }
+  void set_status_message(const std::string& message) { metadata_.status_message = message; }
 
   /// @brief Get error code
   const std::string& get_error_code() const { return metadata_.error_code; }
@@ -211,14 +206,14 @@ class Response {
   /// @return Service unavailable response
   static Response service_unavailable(const std::string& message = "Service unavailable");
 
- private:
-  DataMap payload_;
+private:
+  DataMap          payload_;
   ResponseMetadata metadata_;
 };
 
 /// @brief Response builder for convenient response construction
 class ResponseBuilder {
- public:
+public:
   ResponseBuilder();
 
   /// @brief Set response status
@@ -271,9 +266,9 @@ class ResponseBuilder {
   /// @return Shared pointer to Response object
   std::shared_ptr<Response> build_shared();
 
- private:
-  ResponseStatus status_ = ResponseStatus::OK;
-  DataMap payload_;
+private:
+  ResponseStatus   status_ = ResponseStatus::OK;
+  DataMap          payload_;
   ResponseMetadata metadata_;
 };
 

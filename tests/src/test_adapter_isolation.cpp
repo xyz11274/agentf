@@ -13,9 +13,9 @@ using namespace agentflow::actor::adapter;
 
 // Test 1: Verify adapter can be used without Protoactor
 TEST(AdapterIsolation, IndependentAPI) {
-  auto msg = ActorMessage();
+  auto msg         = ActorMessage();
   msg.message_type = "TestMessage";
-  msg.payload = nullptr;
+  msg.payload      = nullptr;
 
   EXPECT_EQ(msg.message_type, "TestMessage");
 }
@@ -43,9 +43,7 @@ TEST(AdapterIsolation, ActorSpawning) {
     void on_stop() override {}
   };
 
-  auto factory = []() -> std::shared_ptr<IActor> {
-    return std::make_shared<TestActor>();
-  };
+  auto factory = []() -> std::shared_ptr<IActor> { return std::make_shared<TestActor>(); };
 
   auto actor_ref = system->spawn(factory, "test-actor");
   ASSERT_TRUE(actor_ref != nullptr);
@@ -60,12 +58,12 @@ TEST(AdapterIsolation, ActorSpawning) {
 // Test 4: Verify message creation utilities
 TEST(AdapterIsolation, MessageBuilder) {
   struct TestPayload {
-    int value;
+    int         value;
     std::string name;
   };
 
-  TestPayload payload = {42, "test"};
-  auto msg = MessageBuilder::create("TestType", payload);
+  TestPayload payload = { 42, "test" };
+  auto        msg     = MessageBuilder::create("TestType", payload);
 
   EXPECT_EQ(msg.message_type, "TestType");
   ASSERT_TRUE(msg.payload != nullptr);
@@ -85,7 +83,7 @@ TEST(AdapterIsolation, ActorReferenceLifecycle) {
   };
 
   auto factory = []() { return std::make_shared<SimpleActor>(); };
-  auto ref = system->spawn(factory, "lifecycle-actor");
+  auto ref     = system->spawn(factory, "lifecycle-actor");
 
   ASSERT_TRUE(ref->is_alive());
   std::string addr = ref->address();

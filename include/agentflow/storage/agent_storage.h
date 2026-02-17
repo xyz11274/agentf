@@ -5,10 +5,11 @@
 
 #pragma once
 
-#include "agentflow/storage/storage.h"
-#include "agentflow/framework/agent.h"
-#include <vector>
 #include <memory>
+#include <vector>
+
+#include "agentflow/framework/agent.h"
+#include "agentflow/storage/storage.h"
 
 namespace agentflow {
 namespace storage {
@@ -17,14 +18,14 @@ namespace storage {
  * Agent metadata for storage
  */
 struct AgentMetadata {
-  std::string id;
-  std::string name;
-  std::string version;
-  std::string description;
-  int64_t created_at;
-  int64_t updated_at;
-  std::string author;
-  std::vector<std::string> workflow_ids;
+  std::string                        id;
+  std::string                        name;
+  std::string                        version;
+  std::string                        description;
+  int64_t                            created_at;
+  int64_t                            updated_at;
+  std::string                        author;
+  std::vector<std::string>           workflow_ids;
   std::map<std::string, std::string> tags;
 };
 
@@ -33,31 +34,29 @@ struct AgentMetadata {
  * Provides methods for persisting and loading Agent definitions
  */
 class IAgentStorage {
- public:
+public:
   virtual ~IAgentStorage() = default;
 
   /**
    * Save Agent definition to storage
    */
   virtual StorageResult save_agent(
-      const framework::Agent::Config& config,
+      const framework::Agent::Config&                          config,
       const std::vector<std::shared_ptr<framework::Workflow>>& workflows,
-      const VersionInfo& version_info) = 0;
+      const VersionInfo&                                       version_info) = 0;
 
   /**
    * Load Agent definition from storage
    */
-  virtual StorageResult load_agent(const std::string& agent_id,
-                                   framework::Agent::Config& config,
+  virtual StorageResult load_agent(const std::string& agent_id, framework::Agent::Config& config,
                                    std::vector<framework::Workflow::Config>& workflow_configs) = 0;
 
   /**
    * Load Agent by specific version
    */
-  virtual StorageResult load_agent_version(const std::string& agent_id,
-                                          const std::string& version,
-                                          framework::Agent::Config& config,
-                                          std::vector<framework::Workflow::Config>& workflow_configs) = 0;
+  virtual StorageResult load_agent_version(
+      const std::string& agent_id, const std::string& version, framework::Agent::Config& config,
+      std::vector<framework::Workflow::Config>& workflow_configs) = 0;
 
   /**
    * Delete Agent from storage
@@ -73,13 +72,13 @@ class IAgentStorage {
    * Get Agent metadata
    */
   virtual StorageResult get_agent_metadata(const std::string& agent_id,
-                                          AgentMetadata& metadata) = 0;
+                                           AgentMetadata&     metadata) = 0;
 
   /**
    * List all versions for an Agent
    */
-  virtual StorageResult list_agent_versions(const std::string& agent_id,
-                                           std::vector<VersionInfo>& versions) = 0;
+  virtual StorageResult list_agent_versions(const std::string&        agent_id,
+                                            std::vector<VersionInfo>& versions) = 0;
 
   /**
    * Set active version for an Agent (for gray release)
@@ -91,13 +90,12 @@ class IAgentStorage {
    * Get active version for an Agent
    */
   virtual StorageResult get_active_agent_version(const std::string& agent_id,
-                                                 std::string& version) = 0;
+                                                 std::string&       version) = 0;
 
   /**
    * Rollback Agent to specific version
    */
-  virtual StorageResult rollback_agent(const std::string& agent_id,
-                                      const std::string& version) = 0;
+  virtual StorageResult rollback_agent(const std::string& agent_id, const std::string& version) = 0;
 
   /**
    * Check if Agent exists

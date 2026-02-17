@@ -5,13 +5,14 @@
 
 #pragma once
 
-#include "agentflow/common.h"
-#include <memory>
+#include <condition_variable>
 #include <functional>
-#include <vector>
+#include <memory>
 #include <mutex>
 #include <shared_mutex>
-#include <condition_variable>
+#include <vector>
+
+#include "agentflow/common.h"
 
 namespace agentflow {
 namespace runtime {
@@ -20,7 +21,7 @@ namespace runtime {
  * Shared memory block for zero-copy data sharing
  */
 class SharedMemoryBlock {
- public:
+public:
   virtual ~SharedMemoryBlock() = default;
 
   /**
@@ -69,7 +70,7 @@ class SharedMemoryBlock {
  * Uses shared memory to avoid unnecessary data copies
  */
 class ZeroCopyDataBus {
- public:
+public:
   using DataChangeCallback = std::function<void(const std::string&, const DataVariant&)>;
 
   /**
@@ -84,7 +85,7 @@ class ZeroCopyDataBus {
   ~ZeroCopyDataBus();
 
   // Disable copy constructor and assignment
-  ZeroCopyDataBus(const ZeroCopyDataBus&) = delete;
+  ZeroCopyDataBus(const ZeroCopyDataBus&)            = delete;
   ZeroCopyDataBus& operator=(const ZeroCopyDataBus&) = delete;
 
   // Data operations
@@ -114,7 +115,7 @@ class ZeroCopyDataBus {
   // Statistics
   size_t get_used_capacity() const;
   size_t get_total_capacity() const;
-  int get_data_count() const;
+  int    get_data_count() const;
 
   /**
    * Get shared memory block (for direct access)
@@ -151,19 +152,19 @@ class ZeroCopyDataBus {
    */
   void clear();
 
- private:
+private:
   std::unique_ptr<SharedMemoryBlock> shared_memory_;
-  size_t capacity_;
+  size_t                             capacity_;
 
   mutable std::shared_mutex data_mutex_;
 
   struct Subscription {
-    std::string key;
+    std::string        key;
     DataChangeCallback callback;
   };
 
   std::vector<Subscription> subscriptions_;
-  mutable std::mutex subscriptions_mutex_;
+  mutable std::mutex        subscriptions_mutex_;
 
   /**
    * Notify subscribers of data change
@@ -180,7 +181,7 @@ class ZeroCopyDataBus {
  * Factory for creating shared memory blocks
  */
 class SharedMemoryFactory {
- public:
+public:
   /**
    * Create in-process shared memory (using heap allocation)
    * This is the simplest approach and works well for single-process scenarios
@@ -190,20 +191,20 @@ class SharedMemoryFactory {
   /**
    * Create POSIX shared memory (for multi-process scenarios)
    */
-  static std::unique_ptr<SharedMemoryBlock> create_posix_shared(size_t capacity,
-                                                       const std::string& name);
+  static std::unique_ptr<SharedMemoryBlock> create_posix_shared(size_t             capacity,
+                                                                const std::string& name);
 
   /**
    * Create System V shared memory (for multi-process scenarios)
    */
-  static std::unique_ptr<SharedMemoryBlock> create_systemv_shared(size_t capacity,
-                                                         const std::string& name);
+  static std::unique_ptr<SharedMemoryBlock> create_systemv_shared(size_t             capacity,
+                                                                  const std::string& name);
 
   /**
    * Get the best available shared memory implementation
    */
-  static std::unique_ptr<SharedMemoryBlock> create_best(size_t capacity,
-                                                    const std::string& name = "");
+  static std::unique_ptr<SharedMemoryBlock> create_best(size_t             capacity,
+                                                        const std::string& name = "");
 };
 
 }  // namespace runtime

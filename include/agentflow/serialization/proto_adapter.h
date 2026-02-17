@@ -5,11 +5,11 @@
 
 #pragma once
 
+#include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
-#include <cstdint>
-#include <map>
 
 namespace agentflow {
 namespace serialization {
@@ -18,19 +18,19 @@ namespace serialization {
  * Protobuf error codes
  */
 enum class ProtoError {
-  PROTO_ERR_OK = 0,
-  PROTO_ERR_INIT_FAILED = 1,
-  PROTO_ERR_ENCODE_FAILED = 2,
-  PROTO_ERR_DECODE_FAILED = 3,
+  PROTO_ERR_OK              = 0,
+  PROTO_ERR_INIT_FAILED     = 1,
+  PROTO_ERR_ENCODE_FAILED   = 2,
+  PROTO_ERR_DECODE_FAILED   = 3,
   PROTO_ERR_INVALID_MESSAGE = 4,
-  PROTO_ERR_UNKNOWN_FIELD = 5,
+  PROTO_ERR_UNKNOWN_FIELD   = 5,
 };
 
 /**
  * Abstract protobuf message interface
  */
 class IProtoMessage {
- public:
+public:
   virtual ~IProtoMessage() = default;
 
   /**
@@ -83,7 +83,7 @@ class IProtoMessage {
  * Abstract protobuf message builder
  */
 class IProtoMessageBuilder {
- public:
+public:
   virtual ~IProtoMessageBuilder() = default;
 
   /**
@@ -117,7 +117,7 @@ class IProtoMessageBuilder {
  * Isolates protobuf-c or protobuf from AgentFlow core
  */
 class IProtoAdapter {
- public:
+public:
   virtual ~IProtoAdapter() = default;
 
   /**
@@ -149,8 +149,7 @@ class IProtoAdapter {
   /**
    * Decode message from JSON string
    */
-  virtual bool message_from_json(const std::string& json_str,
-                                 IProtoMessage& message) = 0;
+  virtual bool message_from_json(const std::string& json_str, IProtoMessage& message) = 0;
 
   /**
    * Get library version

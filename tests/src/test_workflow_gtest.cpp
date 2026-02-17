@@ -4,10 +4,11 @@
 // Google Test tests for Workflow component
 
 #include <gtest/gtest.h>
+
 #include "agentflow/framework/workflow.h"
 
 class WorkflowTest : public ::testing::Test {
- protected:
+protected:
   void SetUp() override {}
   void TearDown() override {}
 };

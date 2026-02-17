@@ -4,6 +4,7 @@
 // Google Test tests for JSON Agent functionality
 
 #include <gtest/gtest.h>
+
 #include "agentflow/dsl/workflow_parser.h"
 #include "agentflow/framework/agent.h"
 #include "agentflow/framework/workflow.h"
@@ -13,14 +14,10 @@ namespace agentflow {
 namespace tests {
 
 class AgentJsonTest : public ::testing::Test {
- protected:
-  void SetUp() override {
-    parser_ = dsl::WorkflowParserFactory::create();
-  }
+protected:
+  void SetUp() override { parser_ = dsl::WorkflowParserFactory::create(); }
 
-  void TearDown() override {
-    parser_.reset();
-  }
+  void TearDown() override { parser_.reset(); }
 
   std::unique_ptr<dsl::WorkflowParser> parser_;
 
@@ -259,7 +256,7 @@ TEST_F(AgentJsonTest, ParseAgentWithMultipleWorkflows) {
   EXPECT_EQ(workflows.size(), 2);
 
   // Check workflow references
-  if (!workflows.empty()) {
+  if(!workflows.empty()) {
     EXPECT_EQ(workflows[0]->get_id(), "workflow_001");
     EXPECT_EQ(workflows[1]->get_id(), "workflow_002");
   }
@@ -289,8 +286,7 @@ TEST_F(AgentJsonTest, LifecyclePolicyPerRequest) {
   ASSERT_NE(result.agent, nullptr);
 
   auto config = result.agent->get_config();
-  EXPECT_EQ(static_cast<int>(config.policy),
-            static_cast<int>(Agent::LifecyclePolicy::PER_REQUEST));
+  EXPECT_EQ(static_cast<int>(config.policy), static_cast<int>(Agent::LifecyclePolicy::PER_REQUEST));
 }
 
 TEST_F(AgentJsonTest, LifecyclePolicyFactory) {
@@ -300,8 +296,7 @@ TEST_F(AgentJsonTest, LifecyclePolicyFactory) {
   ASSERT_NE(result.agent, nullptr);
 
   auto config = result.agent->get_config();
-  EXPECT_EQ(static_cast<int>(config.policy),
-            static_cast<int>(Agent::LifecyclePolicy::FACTORY));
+  EXPECT_EQ(static_cast<int>(config.policy), static_cast<int>(Agent::LifecyclePolicy::FACTORY));
 }
 
 TEST_F(AgentJsonTest, LifecyclePolicySingleton) {
@@ -311,8 +306,7 @@ TEST_F(AgentJsonTest, LifecyclePolicySingleton) {
   ASSERT_NE(result.agent, nullptr);
 
   auto config = result.agent->get_config();
-  EXPECT_EQ(static_cast<int>(config.policy),
-            static_cast<int>(Agent::LifecyclePolicy::SINGLETON));
+  EXPECT_EQ(static_cast<int>(config.policy), static_cast<int>(Agent::LifecyclePolicy::SINGLETON));
 }
 
 // ============================================================================
@@ -383,7 +377,7 @@ TEST_F(AgentJsonTest, WorkflowCompositionParsing) {
   EXPECT_EQ(workflows.size(), 2);
 
   // Verify workflow IDs are valid
-  if (!workflows.empty()) {
+  if(!workflows.empty()) {
     EXPECT_EQ(workflows[0]->get_id(), "workflow_001");
     EXPECT_EQ(workflows[1]->get_id(), "workflow_002");
   }
@@ -398,7 +392,7 @@ TEST_F(AgentJsonTest, EmbeddedWorkflowParsing) {
   const auto& workflows = result.agent->get_workflows();
   ASSERT_GE(workflows.size(), 1);
 
-  if (!workflows.empty()) {
+  if(!workflows.empty()) {
     auto workflow = workflows[0];
     EXPECT_EQ(workflow->get_id(), "workflow_embedded_1");
     EXPECT_EQ(workflow->get_nodes().size(), 2);

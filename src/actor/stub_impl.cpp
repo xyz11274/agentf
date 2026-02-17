@@ -6,6 +6,7 @@
 #ifndef AGENTFLOW_WITH_PROTOACTOR
 
 #include "agentflow/actor/adapter/stub_impl.h"
+
 #include <chrono>
 #include <sstream>
 
@@ -15,8 +16,8 @@ namespace adapter {
 
 // StubActorRef implementation
 
-StubActorRef::StubActorRef(const std::string& address)
-    : address_(address) {}
+StubActorRef::StubActorRef(const std::string& address) : address_(address) {
+}
 
 StubActorRef::~StubActorRef() = default;
 
@@ -59,8 +60,7 @@ void StubContext::send(IActorRef* target, const ActorMessage& msg) {
   // In real stub, would queue message for target actor
 }
 
-ActorMessage StubContext::ask(IActorRef* target, const ActorMessage& msg,
-                             int timeout_ms) {
+ActorMessage StubContext::ask(IActorRef* target, const ActorMessage& msg, int timeout_ms) {
   // Stub implementation: return empty message
   ActorMessage result;
   result.message_type = "reply";
@@ -71,8 +71,7 @@ ActorMessage StubContext::ask(IActorRef* target, const ActorMessage& msg,
 
 StubActorSystem::StubActorSystem() {
   std::stringstream ss;
-  ss << "agentflow-stub-" 
-     << std::chrono::high_resolution_clock::now().time_since_epoch().count();
+  ss << "agentflow-stub-" << std::chrono::high_resolution_clock::now().time_since_epoch().count();
   system_id_ = ss.str();
 }
 
@@ -80,67 +79,64 @@ StubActorSystem::~StubActorSystem() {
   shutdown();
 }
 
-std::shared_ptr<IActorRef> StubActorSystem::spawn(
-    const ActorFactory& factory,
-    const std::string& actor_name) {
+std::shared_ptr<IActorRef> StubActorSystem::spawn(const ActorFactory& factory,
+                                                  const std::string&  actor_name) {
   return spawn_with_config(factory, actor_name, 1000);
 }
 
-std::shared_ptr<IActorRef> StubActorSystem::spawn_with_config(
-    const ActorFactory& factory,
-    const std::string& actor_name,
-    int mailbox_size) {
+std::shared_ptr<IActorRef> StubActorSystem::spawn_with_config(const ActorFactory& factory,
+                                                              const std::string&  actor_name,
+                                                              int                 mailbox_size) {
   std::lock_guard<std::mutex> lock(actors_mutex_);
-  
-  if (!running_) {
+
+  if(!running_) {
     return nullptr;
   }
 
-  auto actor_internal = std::make_shared<StubActorInternal>();
+  auto actor_internal   = std::make_shared<StubActorInternal>();
   actor_internal->actor = factory();
-  
-  if (!actor_internal->actor) {
+
+  if(!actor_internal->actor) {
     return nullptr;
   }
 
   std::string address = actor_name;
-  if (address.empty()) {
+  if(address.empty()) {
     std::stringstream ss;
     ss << "actor-" << (next_actor_id_++);
     address = ss.str();
   }
 
   actor_internal->ref = std::make_shared<StubActorRef>(address);
-  
+
   // Start worker thread for this actor
-  actor_internal->worker_thread = std::thread(
-      &StubActorSystem::actor_worker_loop, this, actor_internal);
+  actor_internal->worker_thread =
+      std::thread(&StubActorSystem::actor_worker_loop, this, actor_internal);
 
   actors_[address] = actor_internal;
   return actor_internal->ref;
 }
 
-std::shared_ptr<IActorRef> StubActorSystem::get_actor(
-    const std::string& address) {
+std::shared_ptr<IActorRef> StubActorSystem::get_actor(const std::string& address) {
   std::lock_guard<std::mutex> lock(actors_mutex_);
-  
+
   auto it = actors_.find(address);
-  if (it != actors_.end()) {
+  if(it != actors_.end()) {
     return it->second->ref;
   }
-  
+
   return nullptr;
 }
 
 void StubActorSystem::stop(std::shared_ptr<IActorRef> actor_ref) {
-  if (!actor_ref) {
+  if(!actor_ref) {
     return;
   }
 
   std::lock_guard<std::mutex> lock(actors_mutex_);
-  
+
   auto it = actors_.find(actor_ref->address());
-  if (it != actors_.end()) {
+  if(it != actors_.end()) {
     it->second->should_stop = true;
     it->second->mailbox_cv.notify_all();
   }
@@ -148,18 +144,18 @@ void StubActorSystem::stop(std::shared_ptr<IActorRef> actor_ref) {
 
 void StubActorSystem::shutdown() {
   std::lock_guard<std::mutex> lock(actors_mutex_);
-  
+
   running_ = false;
 
   // Signal all actors to stop
-  for (auto& pair : actors_) {
+  for(auto& pair : actors_) {
     pair.second->should_stop = true;
     pair.second->mailbox_cv.notify_all();
   }
 
   // Wait for all worker threads to finish
-  for (auto& pair : actors_) {
-    if (pair.second->worker_thread.joinable()) {
+  for(auto& pair : actors_) {
+    if(pair.second->worker_thread.joinable()) {
       pair.second->worker_thread.join();
     }
   }
@@ -178,59 +174,54 @@ std::string StubActorSystem::system_address() const {
 
 bool StubActorSystem::wait_shutdown(int timeout_ms) {
   auto start = std::chrono::high_resolution_clock::now();
-  
-  while (is_running()) {
-    if (timeout_ms > 0) {
-      auto now = std::chrono::high_resolution_clock::now();
-      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-          now - start).count();
-      
-      if (elapsed > timeout_ms) {
+
+  while(is_running()) {
+    if(timeout_ms > 0) {
+      auto now     = std::chrono::high_resolution_clock::now();
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+
+      if(elapsed > timeout_ms) {
         return false;  // Timeout
       }
     }
-    
+
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
-  
+
   return true;  // Shutdown completed
 }
 
-void StubActorSystem::actor_worker_loop(
-    std::shared_ptr<StubActorInternal> actor_internal) {
+void StubActorSystem::actor_worker_loop(std::shared_ptr<StubActorInternal> actor_internal) {
   auto context = std::make_shared<StubContext>();
   context->set_self(actor_internal->ref);
 
   // Call on_start
-  if (actor_internal->actor) {
+  if(actor_internal->actor) {
     actor_internal->actor->on_start();
   }
 
   // Process messages until stop signal
-  while (!actor_internal->should_stop) {
+  while(!actor_internal->should_stop) {
     std::unique_lock<std::mutex> lock(actor_internal->mailbox_mutex);
-    
-    // Wait for message or stop signal
-    actor_internal->mailbox_cv.wait_for(
-        lock, std::chrono::milliseconds(100),
-        [&actor_internal] { 
-          return !actor_internal->mailbox.empty() || 
-                 actor_internal->should_stop; 
-        });
 
-    if (!actor_internal->mailbox.empty()) {
+    // Wait for message or stop signal
+    actor_internal->mailbox_cv.wait_for(lock, std::chrono::milliseconds(100), [&actor_internal] {
+      return !actor_internal->mailbox.empty() || actor_internal->should_stop;
+    });
+
+    if(!actor_internal->mailbox.empty()) {
       ActorMessage msg = actor_internal->mailbox.front();
       actor_internal->mailbox.pop();
-      
+
       context->set_current_message(msg);
-      
+
       lock.unlock();
-      
+
       // Process message
-      if (actor_internal->actor) {
+      if(actor_internal->actor) {
         try {
           actor_internal->actor->on_message(context);
-        } catch (const std::exception&) {
+        } catch(const std::exception&) {
           // Handle exception
         }
       }
@@ -238,7 +229,7 @@ void StubActorSystem::actor_worker_loop(
   }
 
   // Call on_stop
-  if (actor_internal->actor) {
+  if(actor_internal->actor) {
     actor_internal->actor->on_stop();
   }
 }

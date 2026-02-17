@@ -8,44 +8,43 @@
 
 #ifdef AGENTFLOW_WITH_PROTOACTOR
 
+#include <map>
 #include <memory>
 #include <string>
-#include <map>
-#include <vector>
 #include <unordered_set>
-#include "agentflow/common.h"
+#include <vector>
+
 #include "agentflow/actor/actors.h"
+#include "agentflow/common.h"
 #include "protoactor/actor.h"
 
 namespace protoactor {
 class PID;
 class Context;
-}
+}  // namespace protoactor
 
 namespace agentflow {
 namespace actor {
 
 /// @brief Message for workflow status query
 struct WorkflowStatusMessage {
-  WorkflowId workflow_id;
+  WorkflowId    workflow_id;
   WorkflowState state;
-  DataMap output_data;
-  DataMap metadata;
+  DataMap       output_data;
+  DataMap       metadata;
 
   WorkflowStatusMessage(const WorkflowId& id, WorkflowState s, const DataMap& output,
-                     const DataMap& meta = DataMap())
+                        const DataMap& meta = DataMap())
       : workflow_id(id), state(s), output_data(output), metadata(meta) {}
 };
 
 /// @brief Workflow Actor for orchestrating workflow execution
-class WorkflowActor : public protoactor::Actor,
-                      public AgentFlowActor {
- public:
+class WorkflowActor : public protoactor::Actor, public AgentFlowActor {
+public:
   /// @brief Constructor
   /// @param workflow_id The ID of workflow
   /// @param workflow_config Configuration for workflow
-  WorkflowActor(const WorkflowId& workflow_id,
-                const WorkflowConfig& workflow_config);
+  WorkflowActor(const WorkflowId& workflow_id, const WorkflowConfig& workflow_config);
 
   /// @brief Destructor
   ~WorkflowActor() override = default;
@@ -57,23 +56,22 @@ class WorkflowActor : public protoactor::Actor,
   /// @brief Process AgentFlow messages
   /// @param message_type Type of message
   /// @param message The message payload
-  void process_message(const std::string& message_type,
-                       std::shared_ptr<void> message) override;
+  void process_message(const std::string& message_type, std::shared_ptr<void> message) override;
 
   // Getters
-  const WorkflowId& get_workflow_id() const { return workflow_id_; }
+  const WorkflowId&     get_workflow_id() const { return workflow_id_; }
   const WorkflowConfig& get_config() const { return config_; }
-  WorkflowState get_state() const { return state_; }
+  WorkflowState         get_state() const { return state_; }
 
- private:
-  WorkflowId workflow_id_;
-  WorkflowConfig config_;
-  WorkflowState state_ = WorkflowState::CREATED;
+private:
+  WorkflowId                                         workflow_id_;
+  WorkflowConfig                                     config_;
+  WorkflowState                                      state_ = WorkflowState::CREATED;
   std::map<NodeId, std::shared_ptr<protoactor::PID>> node_actors_;
-  DataMap input_data_;
-  DataMap output_data_;
-  std::unordered_set<NodeId> completed_nodes_;
-  std::unordered_set<NodeId> failed_nodes_;
+  DataMap                                            input_data_;
+  DataMap                                            output_data_;
+  std::unordered_set<NodeId>                         completed_nodes_;
+  std::unordered_set<NodeId>                         failed_nodes_;
 
   /// @brief Handle ExecuteWorkflowMessage
   void handle_execute_workflow(const ExecuteWorkflowMessage& msg);
@@ -108,20 +106,18 @@ class WorkflowActor : public protoactor::Actor,
 #else
 
 // Stub for when Protoactor is not available
-#include "agentflow/common.h"
 #include "agentflow/actor/actors.h"
+#include "agentflow/common.h"
 
 namespace agentflow {
 namespace actor {
 
 class WorkflowActor : public AgentFlowActor {
- public:
-  WorkflowActor(const WorkflowId& workflow_id,
-                const WorkflowConfig& workflow_config) {}
+public:
+  WorkflowActor(const WorkflowId& workflow_id, const WorkflowConfig& workflow_config) {}
   ~WorkflowActor() override = default;
 
-  void process_message(const std::string& message_type,
-                       std::shared_ptr<void> message) override {}
+  void process_message(const std::string& message_type, std::shared_ptr<void> message) override {}
 };
 
 }  // namespace actor

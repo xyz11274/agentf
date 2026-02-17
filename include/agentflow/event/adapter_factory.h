@@ -5,8 +5,9 @@
 
 #pragma once
 
-#include "agentflow/event/eventloop_adapter.h"
 #include <memory>
+
+#include "agentflow/event/eventloop_adapter.h"
 
 namespace agentflow {
 namespace event {
