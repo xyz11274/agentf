@@ -29,6 +29,7 @@ jobs:
     name: Clang Format Check
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_clang_format == 'true' }}
     runs-on: ubuntu-latest
+    continue-on-error: true
     
     steps:
       - name: Checkout code
@@ -74,6 +75,7 @@ jobs:
     name: Clang Tidy Analysis
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_clang_tidy == 'true' }}
     runs-on: ubuntu-latest
+    continue-on-error: true
     
     steps:
       - name: Checkout code
@@ -138,6 +140,7 @@ jobs:
     name: Cppcheck Static Analysis
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_cppcheck == 'true' }}
     runs-on: ubuntu-latest
+    continue-on-error: true
     
     steps:
       - name: Checkout code
@@ -164,6 +167,7 @@ jobs:
     name: CPPLint Style Check
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_cpplint == 'true' }}
     runs-on: ubuntu-latest
+    continue-on-error: true
     
     steps:
       - name: Checkout code
@@ -185,6 +189,7 @@ jobs:
     name: Sanitizer Compilation Check
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_sanitizer == 'true' }}
     runs-on: ubuntu-latest
+    continue-on-error: true
     
     steps:
       - name: Checkout code

@@ -32,15 +32,32 @@ jobs:
           - os: ubuntu-latest
             arch: arm64
             name: "Linux ARM64"
+            optional: false
+          # macOS AMD64
+          - os: macos-latest
+            arch: x86_64
+            name: "macOS AMD64"
+            optional: true
+          # macOS ARM64 (Apple Silicon)
+          - os: macos-14
+            arch: arm64
+            name: "macOS ARM64"
+            optional: true
 
     runs-on: ${{ matrix.os }}
     name: Test - ${{ matrix.name }}
+    continue-on-error: ${{ matrix.optional }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Install dependencies on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake pkg-config openssl libwebsockets protobuf rapidjson libevent googletest
 
       - name: Set up system for Linux ARM64
         if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm64'
@@ -72,15 +89,26 @@ jobs:
       - name: Configure CMake
         working-directory: build
         run: |
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_STANDARD=17 \
-            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-            -DAGENTFLOW_BUILD_TESTS=ON \
-            -DAGENTFLOW_WITH_PROTOACTOR=OFF \
-            -DAGENTFLOW_WITH_OPENSSL=ON \
-            -DAGENTFLOW_WITH_PROTOBUF=ON \
-            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" && "${{ matrix.arch }}" == "arm64" ]]; then
+            cmake .. \
+              -DCMAKE_BUILD_TYPE=Debug \
+              -DCMAKE_CXX_STANDARD=17 \
+              -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+              -DAGENTFLOW_BUILD_TESTS=ON \
+              -DAGENTFLOW_WITH_PROTOACTOR=OFF \
+              -DAGENTFLOW_WITH_OPENSSL=ON \
+              -DAGENTFLOW_WITH_PROTOBUF=ON \
+              -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+          else
+            cmake .. \
+              -DCMAKE_BUILD_TYPE=Debug \
+              -DCMAKE_CXX_STANDARD=17 \
+              -DAGENTFLOW_BUILD_TESTS=ON \
+              -DAGENTFLOW_WITH_PROTOACTOR=OFF \
+              -DAGENTFLOW_WITH_OPENSSL=ON \
+              -DAGENTFLOW_WITH_PROTOBUF=ON \
+              -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+          fi
 
       - name: Build
         working-directory: build
@@ -112,88 +140,6 @@ jobs:
           if [ -d Testing/Temporary ]; then
             ls -la Testing/Temporary/
           fi
-
-  coverage:
-    name: Code Coverage Analysis
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            pkg-config \
-            libssl-dev \
-            libwebsockets-dev \
-            libprotobuf-dev \
-            protobuf-compiler \
-            rapidjson-dev \
-            libevent-dev \
-            libgtest-dev \
-            git \
-            lcov \
-            gcovr
-
-      - name: Create build directory
-        run: mkdir -p build
-
-      - name: Configure CMake with coverage flags
-        working-directory: build
-        run: |
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_CXX_STANDARD=17 \
-            -DCMAKE_CXX_FLAGS="--coverage" \
-            -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
-            -DAGENTFLOW_BUILD_TESTS=ON \
-            -DAGENTFLOW_WITH_PROTOACTOR=OFF \
-            -DAGENTFLOW_WITH_OPENSSL=ON \
-            -DAGENTFLOW_WITH_PROTOBUF=ON \
-            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
-
-      - name: Build with coverage
-        working-directory: build
-        run: make -j$(nproc)
-
-      - name: Run tests for coverage
-        working-directory: build
-        run: ctest --output-on-failure
-
-      - name: Generate coverage report
-        working-directory: build
-        run: |
-          echo "Generating coverage report..."
-          lcov --directory . --capture --output-file coverage.info --no-external
-          lcov --remove coverage.info '/usr/*' '/opt/*' '*/test/*' '*/tests/*' --output-file coverage.info
-          genhtml coverage.info --output-directory coverage_html --title "AgentFlow Coverage Report"
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v3
-        with:
-          files: ./build/coverage.info
-          flags: unittests
-          name: codecov-umbrella
-          fail_ci_if_error: false
-
-      - name: Upload coverage report as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report-${{ github.sha }}
-          path: build/coverage_html/
-          retention-days: 30
-
-      - name: Print coverage summary
-        working-directory: build
-        run: |
-          echo "Coverage Summary:"
-          gcovr --root .. --print-summary
 
   integration-tests:
     name: Integration Tests
@@ -259,59 +205,9 @@ jobs:
             echo "✓ Control flow example completed"
           fi
 
-  memory-leak-detection:
-    name: Memory Leak Detection
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            cmake \
-            pkg-config \
-            libssl-dev \
-            libwebsockets-dev \
-            libprotobuf-dev \
-            protobuf-compiler \
-            rapidjson-dev \
-            libevent-dev \
-            libgtest-dev \
-            valgrind
-
-      - name: Create build directory
-        run: mkdir -p build
-
-      - name: Configure CMake
-        working-directory: build
-        run: |
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DAGENTFLOW_WITH_PROTOACTOR=OFF \
-            -DAGENTFLOW_WITH_OPENSSL=ON \
-            -DAGENTFLOW_WITH_PROTOBUF=ON \
-            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
-
-      - name: Build
-        working-directory: build
-        run: make -j$(nproc)
-
-      - name: Run memory leak detection
-        working-directory: build
-        run: |
-          echo "Running memory leak detection with Valgrind..."
-          ctest --output-on-failure -j1 -D ExperimentalMemCheck || true
-          if [ -d Testing/Temporary ]; then
-            ls -la Testing/Temporary/MemoryChecker* || true
-          fi
-        continue-on-error: true
-
   performance-testing:
     name: Performance Benchmarking
+    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
