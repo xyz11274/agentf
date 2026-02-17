@@ -87,6 +87,7 @@ std::shared_ptr<IActorRef> StubActorSystem::spawn(const ActorFactory& factory,
 std::shared_ptr<IActorRef> StubActorSystem::spawn_with_config(const ActorFactory& factory,
                                                               const std::string&  actor_name,
                                                               int                 mailbox_size) {
+  (void)mailbox_size;
   std::lock_guard<std::mutex> lock(actors_mutex_);
 
   if(!running_) {
