@@ -1,0 +1,82 @@
+name: Status Badge Refresh
+
+on:
+  workflow_run:
+    workflows: ["Build", "Tests", "Code Quality"]
+    types:
+      - completed
+  schedule:
+    # Update badge status hourly
+    - cron: "0 * * * *"
+
+jobs:
+  update-badges:
+    name: Update Status Badges
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check build status
+        id: build_status
+        run: |
+          # Get last build workflow status
+          BUILD_STATUS=$(gh run list --workflow=build.yml --limit 1 --json conclusion --jq '.[0].conclusion')
+          
+          if [ "$BUILD_STATUS" = "success" ]; then
+            echo "status=passing" >> "$GITHUB_OUTPUT"
+            echo "color=green" >> "$GITHUB_OUTPUT"
+          elif [ "$BUILD_STATUS" = "failure" ]; then
+            echo "status=failing" >> "$GITHUB_OUTPUT"
+            echo "color=red" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=unknown" >> "$GITHUB_OUTPUT"
+            echo "color=yellow" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate badge status
+        run: |
+          echo "Build Status: ${{ steps.build_status.outputs.status }}"
+          echo "Color: ${{ steps.build_status.outputs.color }}"
+
+  generate-readme-badges:
+    name: Generate README Badges
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create badge markdown
+        run: |
+          cat > /tmp/badges.md << 'EOF'
+          # Status Badges
+          
+          ![Build](https://github.com/DanielKernel/AgentFlow/workflows/Build/badge.svg?branch=main)
+          ![Tests](https://github.com/DanielKernel/AgentFlow/workflows/Tests/badge.svg?branch=main)
+          ![Code Quality](https://github.com/DanielKernel/AgentFlow/workflows/Code%20Quality/badge.svg?branch=main)
+          
+          ## Platform Support
+          
+          | Platform | Status |
+          |----------|--------|
+          | Linux AMD64 | ![Linux AMD64](https://github.com/DanielKernel/AgentFlow/workflows/Build/badge.svg) |
+          | Linux ARM64 | ![Linux ARM64](https://github.com/DanielKernel/AgentFlow/workflows/Build/badge.svg) |
+          | macOS AMD64 | ![macOS AMD64](https://github.com/DanielKernel/AgentFlow/workflows/Build/badge.svg) |
+          | macOS ARM64 | ![macOS ARM64](https://github.com/DanielKernel/AgentFlow/workflows/Build/badge.svg) |
+          EOF
+          cat /tmp/badges.md
+
+      - name: Print badge URLs
+        run: |
+          echo "Use these badges in your README:"
+          echo ""
+          echo "Build: ![Build](https://github.com/DanielKernel/AgentFlow/workflows/Build/badge.svg)"
+          echo "Tests: ![Tests](https://github.com/DanielKernel/AgentFlow/workflows/Tests/badge.svg)"
+          echo "Code Quality: ![Code Quality](https://github.com/DanielKernel/AgentFlow/workflows/Code%20Quality/badge.svg)"

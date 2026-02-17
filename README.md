@@ -11,7 +11,7 @@
 - **多语言支持**：C++、Python、Shell 等多种执行模式
 - **热重载**：运行时动态更新配置和代码
 
-## 快速开始
+## 🚀 快速开始
 
 ### 环境要求
 
@@ -66,17 +66,32 @@ agent->initialize();
 agent->start();
 ```
 
-## 文档
+## 📚 完整文档
 
-| 文档 | 说明 |
-|------|------|
-| [架构设计](docs/ARCHITECTURE.md) | 5视图架构设计（场景、逻辑、开发、运行、部署） |
-| [开发指南](docs/development.md) | 环境配置、编程规范、开发流程 |
-| [依赖管理](docs/dependencies.md) | 外部依赖安装和隔离策略 |
-| [测试指南](docs/testing.md) | 测试方法和组件使用示例 |
-| [路线图](docs/roadmap.md) | 功能实现状态和开发计划 |
+### 📖 新用户入门
+1. **[文档导航](docs/README.md)** - 所有文档的索引和说明
+2. **[架构设计](docs/ARCHITECTURE.md)** - 系统5视图架构设计
+3. **[开发指南](docs/development.md)** - 环境配置和编程规范
+4. **[快速参考](docs/QUICK_REFERENCE.md)** - 常用命令和快速指南
 
-## 项目结构
+### 🏗️ 项目规划与功能状态
+- **[项目规划](docs/PLANNING.md)** - 功能实现状态、优先级和路线图
+- **[路线图](docs/roadmap.md)** - 短期计划和功能愿景
+
+### 💻 开发和贡献
+- **[贡献指南](docs/CONTRIBUTING.md)** - 如何为项目做贡献
+  - 代码规范和提交流程
+  - 测试要求
+  - Pull Request 指南
+- **[依赖管理](docs/dependencies.md)** - 外部依赖和安装方式
+- **[测试指南](docs/testing.md)** - 测试方法和覆盖率要求
+
+### ⚙️ CI/CD 和部署
+- **[CI/CD 流水线](docs/CI_CD_PIPELINE.md)** - 自动化测试和部署流程
+- **[CI/CD 设置](docs/CI_CD_SETUP.md)** - 配置和常见问题
+- **[脚本指南](scripts/README.md)** - 项目脚本使用说明
+
+## 🏗️ 项目结构
 
 ```
 AgentFlow/
@@ -88,13 +103,14 @@ AgentFlow/
 ├── src/                  # 源代码
 ├── tests/                # 测试
 ├── examples/             # 示例
-├── docs/                 # 文档
+├── docs/                 # 📚 所有项目文档
 ├── configs/              # 配置文件
 ├── proto/                # Protobuf 定义
-└── scripts/              # 构建和部署脚本
+├── scripts/              # 🔧 构建和部署脚本
+└── scripts/docker/       # Docker 和容器配置
 ```
 
-## 架构概览
+## 🔗 系统架构
 
 ```
 ┌─────────────────────────────────────────┐
@@ -115,7 +131,9 @@ AgentFlow/
 └───────┘      └───────┘      └───────┘
 ```
 
-## 贡献
+## 🤝 贡献
+
+欢迎贡献！请参考 [贡献指南](docs/CONTRIBUTING.md)：
 
 1. Fork 项目
 2. 创建特性分支 (`git checkout -b feature/my-feature`)
@@ -124,10 +142,28 @@ AgentFlow/
 5. 推送分支 (`git push origin feature/my-feature`)
 6. 创建 Pull Request
 
-## 许可证
+## 📊 项目状态
 
-MIT License
+| 功能模块 | 完成度 | 详情 |
+|---------|--------|------|
+| 开发编排框架 | 88% | [查看详情](docs/PLANNING.md) |
+| 运行框架 | 85% | [查看详情](docs/PLANNING.md) |
+| 基础设施 | 50% | [查看详情](docs/PLANNING.md) |
+| 监控和日志 | 60% | [查看详情](docs/PLANNING.md) |
+
+完整的功能规划和实现状态见 [项目规划](docs/PLANNING.md)。
+
+## 📋 支持和帮助
+
+- 📖 查看 [文档导航](docs/README.md) 了解所有可用文档
+- 🐛 报告问题：使用 [问题报告模板](.github/ISSUE_TEMPLATE/bug_report.md)
+- 💡 提出建议：使用 [功能请求模板](.github/ISSUE_TEMPLATE/feature_request.md)
+- ⚙️ 配置问题：查看 [配置模板](.github/ISSUE_TEMPLATE/config.md)
+- 🚀 性能优化：查看 [性能模板](.github/ISSUE_TEMPLATE/performance.md)
 
 ---
 
-*维护: AgentFlow Team*
+**维护者**: @DanielKernel  
+**文档最后更新**: 2026-02-17  
+**快速设置**: `./scripts/verify_cicd_setup.sh` 验证所有组件是否正确安装
+

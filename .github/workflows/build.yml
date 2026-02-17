@@ -1,0 +1,134 @@
+name: Build
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'examples/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - 'build.sh'
+      - '.github/workflows/build.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'examples/**'
+      - 'cmake/**'
+      - 'CMakeLists.txt'
+      - 'build.sh'
+      - '.github/workflows/build.yml'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - os: ubuntu-latest
+            arch: x86_64
+            cmake_arch: ""
+            name: "Linux AMD64"
+          # Linux ARM64 (using QEMU)
+          - os: ubuntu-latest
+            arch: arm64
+            cmake_arch: "-DCMAKE_SYSTEM_PROCESSOR=aarch64"
+            name: "Linux ARM64"
+          # macOS x86_64
+          - os: macos-12
+            arch: x86_64
+            cmake_arch: ""
+            name: "macOS AMD64"
+          # macOS ARM64 (Apple Silicon)
+          - os: macos-14
+            arch: arm64
+            cmake_arch: ""
+            name: "macOS ARM64"
+
+    runs-on: ${{ matrix.os }}
+    name: Build - ${{ matrix.name }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up system for Linux ARM64
+        if: matrix.os == 'ubuntu-latest' && matrix.arch == 'arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static binfmt-support
+          # Install ARM64 cross-compilation tools
+          sudo apt-get install -y crossbuild-essential-arm64
+
+      - name: Install dependencies on Ubuntu
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            libssl-dev \
+            libwebsockets-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            rapidjson-dev \
+            libevent-dev \
+            libgtest-dev \
+            git
+
+      - name: Install dependencies on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install cmake openssl@3 libwebsockets protobuf rapidjson libevent googletest ninja
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Configure CMake
+        working-directory: build
+        run: |
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=17 \
+            ${{ matrix.cmake_arch }} \
+            -DAGENTFLOW_WITH_PROTOACTOR=OFF \
+            -DAGENTFLOW_WITH_OPENSSL=ON \
+            -DAGENTFLOW_WITH_PROTOBUF=ON \
+            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+
+      - name: Build
+        working-directory: build
+        run: |
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            make -j$(sysctl -n hw.ncpu)
+          else
+            make -j$(nproc)
+          fi
+
+      - name: Upload build artifacts
+        if: success()
+        uses: actions/upload-artifact@v3
+        with:
+          name: agentflow-${{ matrix.name }}-${{ github.sha }}
+          path: build/
+          retention-days: 7
+
+      - name: Print build info
+        if: success()
+        run: |
+          echo "Build completed successfully for ${{ matrix.name }}"
+          echo "C++ Standard: 17"
+          echo "Build Type: Release"
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            clang++ --version
+          else
+            g++ --version
+          fi

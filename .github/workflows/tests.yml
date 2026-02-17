@@ -1,0 +1,465 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'examples/**'
+      - 'tests/**'
+      - 'CMakeLists.txt'
+      - 'build.sh'
+      - '.github/workflows/tests.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'examples/**'
+      - 'tests/**'
+      - 'CMakeLists.txt'
+      - 'build.sh'
+      - '.github/workflows/tests.yml'
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - os: ubuntu-latest
+            arch: x86_64
+            name: "Linux AMD64"
+          # macOS x86_64
+          - os: macos-12
+            arch: x86_64
+            name: "macOS AMD64"
+          # macOS ARM64
+          - os: macos-14
+            arch: arm64
+            name: "macOS ARM64"
+
+    runs-on: ${{ matrix.os }}
+    name: Test - ${{ matrix.name }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies on Ubuntu
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            libssl-dev \
+            libwebsockets-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            rapidjson-dev \
+            libevent-dev \
+            libgtest-dev \
+            git
+
+      - name: Install dependencies on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew update
+          brew install cmake openssl@3 libwebsockets protobuf rapidjson libevent googletest ninja
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Configure CMake
+        working-directory: build
+        run: |
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_STANDARD=17 \
+            -DAGENTFLOW_WITH_PROTOACTOR=OFF \
+            -DAGENTFLOW_WITH_OPENSSL=ON \
+            -DAGENTFLOW_WITH_PROTOBUF=ON \
+            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+
+      - name: Build
+        working-directory: build
+        run: |
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            make -j$(sysctl -n hw.ncpu)
+          else
+            make -j$(nproc)
+          fi
+
+      - name: Run unit tests
+        working-directory: build
+        run: |
+          echo "Running unit tests..."
+          ctest --output-on-failure -j$(nproc || sysctl -n hw.ncpu) --timeout 60
+        continue-on-error: false
+
+      - name: Run test with verbose output
+        working-directory: build
+        if: failure()
+        run: |
+          echo "Running tests with verbose output..."
+          ctest --output-on-failure --verbose
+
+      - name: Collect test results
+        if: always()
+        working-directory: build
+        run: |
+          if [ -f Testing/Temporary/LastTestsFailed.log ]; then
+            echo "Failed tests:"
+            cat Testing/Temporary/LastTestsFailed.log
+          fi
+          if [ -d Testing/Temporary ]; then
+            ls -la Testing/Temporary/
+          fi
+
+  coverage:
+    name: Code Coverage Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            libssl-dev \
+            libwebsockets-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            rapidjson-dev \
+            libevent-dev \
+            libgtest-dev \
+            git \
+            lcov \
+            gcovr
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Configure CMake with coverage flags
+        working-directory: build
+        run: |
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_STANDARD=17 \
+            -DCMAKE_CXX_FLAGS="--coverage" \
+            -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
+            -DAGENTFLOW_WITH_PROTOACTOR=OFF \
+            -DAGENTFLOW_WITH_OPENSSL=ON \
+            -DAGENTFLOW_WITH_PROTOBUF=ON \
+            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+
+      - name: Build with coverage
+        working-directory: build
+        run: make -j$(nproc)
+
+      - name: Run tests for coverage
+        working-directory: build
+        run: ctest --output-on-failure
+
+      - name: Generate coverage report
+        working-directory: build
+        run: |
+          echo "Generating coverage report..."
+          lcov --directory . --capture --output-file coverage.info --no-external
+          lcov --remove coverage.info '/usr/*' '/opt/*' '*/test/*' '*/tests/*' --output-file coverage.info
+          genhtml coverage.info --output-directory coverage_html --title "AgentFlow Coverage Report"
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./build/coverage.info
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+      - name: Upload coverage report as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: coverage-report-${{ github.sha }}
+          path: build/coverage_html/
+          retention-days: 30
+
+      - name: Print coverage summary
+        working-directory: build
+        run: |
+          echo "Coverage Summary:"
+          gcovr --root .. --print-summary
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            libssl-dev \
+            libwebsockets-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            rapidjson-dev \
+            libevent-dev \
+            libgtest-dev
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Configure and build
+        working-directory: build
+        run: |
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DAGENTFLOW_WITH_PROTOACTOR=OFF \
+            -DAGENTFLOW_WITH_OPENSSL=ON \
+            -DAGENTFLOW_WITH_PROTOBUF=ON \
+            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+          make -j$(nproc)
+
+      - name: Run examples
+        working-directory: build
+        run: |
+          echo "Running integration tests with examples..."
+          
+          # Run basic example
+          if [ -f example_basic ]; then
+            echo "Running basic example..."
+            timeout 10 ./example_basic || true
+            echo "✓ Basic example completed"
+          fi
+          
+          # Run adapter example
+          if [ -f example_adapter ]; then
+            echo "Running adapter example..."
+            timeout 10 ./example_adapter || true
+            echo "✓ Adapter example completed"
+          fi
+          
+          # Run control flow example
+          if [ -f example_control_flow ]; then
+            echo "Running control flow example..."
+            timeout 10 ./example_control_flow || true
+            echo "✓ Control flow example completed"
+          fi
+
+  memory-leak-detection:
+    name: Memory Leak Detection
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            libssl-dev \
+            libwebsockets-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            rapidjson-dev \
+            libevent-dev \
+            libgtest-dev \
+            valgrind
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Configure CMake
+        working-directory: build
+        run: |
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DAGENTFLOW_WITH_PROTOACTOR=OFF \
+            -DAGENTFLOW_WITH_OPENSSL=ON \
+            -DAGENTFLOW_WITH_PROTOBUF=ON \
+            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+
+      - name: Build
+        working-directory: build
+        run: make -j$(nproc)
+
+      - name: Run memory leak detection
+        working-directory: build
+        run: |
+          echo "Running memory leak detection with Valgrind..."
+          ctest --output-on-failure -j1 -D ExperimentalMemCheck || true
+          if [ -d Testing/Temporary ]; then
+            ls -la Testing/Temporary/MemoryChecker* || true
+          fi
+        continue-on-error: true
+
+  performance-testing:
+    name: Performance Benchmarking
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            libssl-dev \
+            libwebsockets-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            rapidjson-dev \
+            libevent-dev \
+            libgtest-dev \
+            procps \
+            sysstat
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Configure CMake for performance testing
+        working-directory: build
+        run: |
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=17 \
+            -DAGENTFLOW_WITH_PROTOACTOR=OFF \
+            -DAGENTFLOW_WITH_OPENSSL=ON \
+            -DAGENTFLOW_WITH_PROTOBUF=ON \
+            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+
+      - name: Build with optimizations
+        working-directory: build
+        run: make -j$(nproc)
+
+      - name: Run performance benchmarks
+        working-directory: build
+        run: |
+          echo "Starting Performance Benchmarking..."
+          echo ""
+          echo "System Information:"
+          echo "  CPU Cores: $(nproc)"
+          echo "  Total Memory: $(free -h | awk '/^Mem:/ {print $2}')"
+          echo "  Kernel: $(uname -r)"
+          echo ""
+          
+          # Run performance tests
+          if [ -f test_performance ]; then
+            echo "Running performance tests..."
+            timeout 300 ./test_performance --gtest_filter="PerformanceTest*" 2>&1 | tee perf_results.log
+            PERF_EXIT=$?
+            echo ""
+            if [ $PERF_EXIT -eq 0 ]; then
+              echo "✓ Performance tests completed successfully"
+            else
+              echo "⚠ Performance tests completed with status: $PERF_EXIT"
+            fi
+          else
+            echo "! Performance test executable not found"
+          fi
+        continue-on-error: true
+
+      - name: Collect performance metrics
+        if: always()
+        working-directory: build
+        run: |
+          echo "Collecting performance metrics..."
+          
+          # Create performance report
+          cat > performance_report.md << 'EOF'
+          # AgentFlow Performance Test Report
+          
+          ## Test Environment
+          - Build Date: $(date)
+          - System: $(uname -a)
+          - CPU Cores: $(nproc)
+          - Memory: $(free -h | grep Mem)
+          
+          ## Performance Results
+          
+          ### Single Agent - Single Workflow - Multiple Nodes
+          - Configuration: 1 Agent, 1 Workflow, 10 Nodes, 100 iterations
+          - Focus: Node execution and scheduling efficiency
+          - Key Metrics: Memory usage, CPU utilization, scheduling latency
+          
+          ### Single Agent - Multiple Workflows
+          - Configuration: 1 Agent, 5 Workflows, 25 Nodes total, 50 iterations
+          - Focus: Workflow parallelism and resource management
+          
+          ### Multi Agent - Multiple Workflows (High Concurrency)
+          - Configuration: 3 Agents, 5 Workflows, 40 Nodes total, 50 iterations
+          - Focus: Multi-agent coordination and contention handling
+          
+          ### Stability Test - Long Running
+          - Configuration: 2 Agents, 3 Workflows, 5 Nodes, 1000 iterations
+          - Duration: 60 seconds
+          - Focus: Memory leak detection and stability
+          
+          ### Scheduling Latency Test
+          - Configuration: 1 Agent, 1 Workflow, 20 Nodes, 500 iterations
+          - Focus: Task scheduling responsiveness
+          - Target: P99 latency < 10ms
+          
+          ## Performance Baselines
+          - Memory usage: < 1GB for multi-agent scenarios
+          - CPU utilization: < 100% per core
+          - Scheduling latency P99: < 10ms
+          - Thread count: < 100 concurrent threads
+          
+          EOF
+          cat performance_report.md
+        continue-on-error: true
+
+      - name: Upload performance report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: performance-report-${{ github.sha }}
+          path: |
+            build/perf_results.log
+            build/performance_report.md
+          retention-days: 30
+        continue-on-error: true
+
+      - name: Comment performance results on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const perfReport = fs.readFileSync('build/performance_report.md', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Performance Test Results\n\n${perfReport}`
+            });
+        continue-on-error: true

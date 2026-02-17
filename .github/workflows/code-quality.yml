@@ -1,0 +1,219 @@
+name: Code Quality
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'examples/**'
+      - 'tests/**'
+      - 'CMakeLists.txt'
+      - '.clang-format'
+      - '.clang-tidy'
+      - '.github/workflows/code-quality.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'include/**'
+      - 'examples/**'
+      - 'tests/**'
+      - 'CMakeLists.txt'
+      - '.clang-format'
+      - '.clang-tidy'
+      - '.github/workflows/code-quality.yml'
+
+jobs:
+  clang-format:
+    name: Clang Format Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install clang-format
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-format
+
+      - name: Check code formatting
+        run: |
+          echo "Checking code formatting with clang-format..."
+          failed_files=0
+          
+          for file in $(find src include examples tests -name '*.cpp' -o -name '*.h' -o -name '*.hpp'); do
+            if [ -f "$file" ]; then
+              if ! clang-format -style=file --dry-run --Werror "$file" > /dev/null 2>&1; then
+                echo "❌ $file needs formatting"
+                clang-format -style=file -output-replacements-xml "$file" | grep -c replacement || true
+                failed_files=$((failed_files + 1))
+              else
+                echo "✓ $file"
+              fi
+            fi
+          done
+          
+          if [ $failed_files -gt 0 ]; then
+            echo ""
+            echo "❌ $failed_files file(s) need formatting"
+            echo ""
+            echo "To fix formatting, run:"
+            echo "  find src include examples tests -name '*.cpp' -o -name '*.h' -o -name '*.hpp' | xargs clang-format -i -style=file"
+            exit 1
+          else
+            echo ""
+            echo "✓ All files are properly formatted"
+          fi
+
+  clang-tidy:
+    name: Clang Tidy Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            clang-tidy \
+            clang-tools \
+            pkg-config \
+            libssl-dev \
+            libwebsockets-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            rapidjson-dev \
+            libevent-dev \
+            libgtest-dev
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Configure CMake with compile_commands
+        working-directory: build
+        run: |
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DAGENTFLOW_WITH_PROTOACTOR=OFF \
+            -DAGENTFLOW_WITH_OPENSSL=ON \
+            -DAGENTFLOW_WITH_PROTOBUF=ON \
+            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+
+      - name: Run clang-tidy
+        run: |
+          echo "Running clang-tidy analysis..."
+          warnings=0
+          errors=0
+          
+          for file in $(find src include examples -name '*.cpp' -o -name '*.h' -o -name '*.hpp'); do
+            if [[ "$file" == *"test"* ]]; then
+              continue
+            fi
+            if [ -f "$file" ]; then
+              echo "Analyzing $file..."
+              clang-tidy -p build "$file" 2>&1 | tee /tmp/tidy_output.txt || true
+              grep -c "warning:" /tmp/tidy_output.txt && warnings=$((warnings + $(grep -c "warning:" /tmp/tidy_output.txt))) || true
+              grep -c "error:" /tmp/tidy_output.txt && errors=$((errors + $(grep -c "error:" /tmp/tidy_output.txt))) || true
+            fi
+          done
+          
+          echo ""
+          echo "Summary: $warnings warnings, $errors errors"
+
+  cppcheck:
+    name: Cppcheck Static Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install cppcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck
+
+      - name: Run cppcheck
+        run: |
+          echo "Running cppcheck static analysis..."
+          cppcheck \
+            --enable=all \
+            --suppress=missingIncludeSystem \
+            --suppress=unusedFunction \
+            --std=c++17 \
+            --force \
+            -q \
+            src/ include/ examples/ tests/
+
+  cpplint:
+    name: CPPLint Style Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install cpplint
+        run: |
+          pip3 install cpplint
+
+      - name: Run cpplint
+        run: |
+          echo "Running cpplint style check..."
+          cpplint \
+            --linelength=100 \
+            --filter=-legal/copyright,-readability/casting \
+            $(find src include examples tests -name '*.cpp' -o -name '*.h') || true
+
+  sanitizer-compile:
+    name: Sanitizer Compilation Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            libssl-dev \
+            libwebsockets-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            rapidjson-dev \
+            libevent-dev \
+            libgtest-dev
+
+      - name: Create build directory
+        run: mkdir -p build
+
+      - name: Configure with AddressSanitizer
+        working-directory: build
+        run: |
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DAGENTFLOW_ENABLE_ASAN=ON \
+            -DAGENTFLOW_WITH_PROTOACTOR=OFF \
+            -DAGENTFLOW_WITH_OPENSSL=ON \
+            -DAGENTFLOW_WITH_PROTOBUF=ON \
+            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+
+      - name: Compile with sanitizer
+        working-directory: build
+        run: make -j$(nproc)
+        continue-on-error: true

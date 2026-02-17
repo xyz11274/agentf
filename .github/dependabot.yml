@@ -1,0 +1,35 @@
+version: 2
+updates:
+  # GitHub Actions workflow dependencies
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:00"
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "chore(deps):"
+      prefix-dev: "chore(deps-dev):"
+      include: "scope"
+    reviewers:
+      - "DanielKernel"
+    labels:
+      - "dependencies"
+      - "github-actions"
+
+  # Dockerfile dependencies (if any)
+  - package-ecosystem: "docker"
+    directory: "/scripts/docker"
+    schedule:
+      interval: "weekly"
+      day: "wednesday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(docker):"
+      include: "scope"
+    reviewers:
+      - "DanielKernel"
+    labels:
+      - "dependencies"
+      - "docker"
