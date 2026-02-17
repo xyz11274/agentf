@@ -105,6 +105,7 @@ jobs:
           cmake .. \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DAGENTFLOW_BUILD_TESTS=OFF \
             -DAGENTFLOW_WITH_PROTOACTOR=OFF \
             -DAGENTFLOW_WITH_OPENSSL=ON \
             -DAGENTFLOW_WITH_PROTOBUF=ON \
@@ -208,6 +209,7 @@ jobs:
           cmake .. \
             -DCMAKE_BUILD_TYPE=Debug \
             -DAGENTFLOW_ENABLE_ASAN=ON \
+            -DAGENTFLOW_BUILD_TESTS=OFF \
             -DAGENTFLOW_WITH_PROTOACTOR=OFF \
             -DAGENTFLOW_WITH_OPENSSL=ON \
             -DAGENTFLOW_WITH_PROTOBUF=ON \
