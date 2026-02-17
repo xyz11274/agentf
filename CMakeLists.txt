@@ -176,14 +176,29 @@ if(USE_LIBEVENT)
       endif()
 
       if(LIBEVENT_LIBRARIES AND NOT TARGET libevent::libevent)
-        # Create an imported target for libevent
-        add_library(libevent::libevent STATIC IMPORTED)
-        set_target_properties(libevent::libevent PROPERTIES
-          IMPORTED_LOCATION "${LIBEVENT_LIBRARIES}"
-          INTERFACE_INCLUDE_DIRECTORIES "${LIBEVENT_INCLUDE_DIRS}"
-        )
+        set(_libevent_pkg_path "")
+        if(LIBEVENT_LIB_FIRST AND NOT IS_ABSOLUTE "${LIBEVENT_LIB_FIRST}")
+          find_library(_libevent_pkg_path
+            NAMES event event_core
+            HINTS ${LIBEVENT_LIBRARY_DIRS}
+          )
+        endif()
+
+        if(_libevent_pkg_path)
+          set(LIBEVENT_LIBRARIES "${_libevent_pkg_path}")
+        endif()
+
+        if(IS_ABSOLUTE "${LIBEVENT_LIBRARIES}")
+          # Create an imported target for libevent
+          add_library(libevent::libevent STATIC IMPORTED)
+          set_target_properties(libevent::libevent PROPERTIES
+            IMPORTED_LOCATION "${LIBEVENT_LIBRARIES}"
+            INTERFACE_INCLUDE_DIRECTORIES "${LIBEVENT_INCLUDE_DIRS}"
+          )
+        endif()
       endif()
-      if(NOT TARGET libevent::libevent AND NOT LIBEVENT_LIBRARIES)
+
+      if(NOT TARGET libevent::libevent AND NOT (LIBEVENT_LIBRARIES AND IS_ABSOLUTE "${LIBEVENT_LIBRARIES}"))
         message(STATUS "libevent pkg-config found but no usable library; disabling event loop support")
         set(USE_LIBEVENT OFF)
       endif()
