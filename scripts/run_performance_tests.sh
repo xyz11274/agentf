@@ -2,6 +2,7 @@
 
 # 性能测试脚本
 # 用于收集和分析AgentFlow的性能指标
+# 支持 macOS (Darwin) 和 Linux，自动探测平台
 
 set -e
 
@@ -10,12 +11,130 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="${PROJECT_ROOT}/build"
 RESULTS_DIR="${BUILD_DIR}/performance_results"
 
+# ============================================================================
+# Platform Detection
+# ============================================================================
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+
+# Detect number of CPU cores
+detect_cores() {
+    case "$OS" in
+        Darwin)  sysctl -n hw.ncpu 2>/dev/null || echo 1 ;;
+        Linux)   nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1 ;;
+        *)       echo 1 ;;
+    esac
+}
+
+# Collect CPU model name
+detect_cpu_model() {
+    case "$OS" in
+        Darwin)  sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Unknown" ;;
+        Linux)   grep -m1 'model name' /proc/cpuinfo 2>/dev/null | sed 's/.*: //' || echo "Unknown" ;;
+        *)       echo "Unknown" ;;
+    esac
+}
+
+# Collect CPU frequency
+detect_cpu_freq() {
+    case "$OS" in
+        Darwin)
+            local freq_hz
+            freq_hz=$(sysctl -n hw.cpufrequency 2>/dev/null || echo "")
+            if [ -n "$freq_hz" ]; then
+                echo "$((freq_hz / 1000000)) MHz"
+            else
+                echo "Unknown"
+            fi
+            ;;
+        Linux)
+            grep -m1 'cpu MHz' /proc/cpuinfo 2>/dev/null | awk '{print $4 " MHz"}' || echo "Unknown"
+            ;;
+        *)  echo "Unknown" ;;
+    esac
+}
+
+# Collect memory info
+detect_memory_total() {
+    case "$OS" in
+        Darwin)
+            local bytes
+            bytes=$(sysctl -n hw.memsize 2>/dev/null || echo 0)
+            if [ "$bytes" -gt 0 ] 2>/dev/null; then
+                echo "$((bytes / 1073741824)) GB"
+            else
+                echo "Unknown"
+            fi
+            ;;
+        Linux)
+            free -h 2>/dev/null | awk '/^Mem:/ {print $2}' || echo "Unknown"
+            ;;
+        *)  echo "Unknown" ;;
+    esac
+}
+
+detect_memory_available() {
+    case "$OS" in
+        Darwin)
+            # vm_stat reports pages; pagesize is typically 4096 or 16384
+            local pagesize free_pages
+            pagesize=$(sysctl -n hw.pagesize 2>/dev/null || echo 4096)
+            free_pages=$(vm_stat 2>/dev/null | awk '/Pages free/ {gsub(/\./,"",$3); print $3}' || echo 0)
+            if [ "$free_pages" -gt 0 ] 2>/dev/null; then
+                echo "$(( free_pages * pagesize / 1073741824 )) GB (free)"
+            else
+                echo "Unknown"
+            fi
+            ;;
+        Linux)
+            free -h 2>/dev/null | awk '/^Mem:/ {print $7}' || echo "Unknown"
+            ;;
+        *)  echo "Unknown" ;;
+    esac
+}
+
+# Set dynamic library search path for running binaries
+setup_runtime_library_path() {
+    local extra_paths=("${BUILD_DIR}" "${BUILD_DIR}/lib")
+    [ -n "$CONDA_PREFIX" ] && extra_paths+=("$CONDA_PREFIX/lib")
+
+    case "$OS" in
+        Darwin)
+            extra_paths+=("/usr/local/lib" "/opt/homebrew/lib")
+            local joined
+            joined=$(IFS=:; echo "${extra_paths[*]}")
+            export DYLD_LIBRARY_PATH="${joined}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+            ;;
+        Linux)
+            extra_paths+=("/usr/local/lib" "/usr/lib")
+            local joined
+            joined=$(IFS=:; echo "${extra_paths[*]}")
+            export LD_LIBRARY_PATH="${joined}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            ;;
+    esac
+}
+
+# timeout command: GNU coreutils on Linux, may need gtimeout on macOS
+portable_timeout() {
+    local duration="$1"; shift
+    if command -v timeout &>/dev/null; then
+        timeout "$duration" "$@"
+    elif command -v gtimeout &>/dev/null; then
+        gtimeout "$duration" "$@"
+    else
+        # Fallback: run without timeout
+        "$@"
+    fi
+}
+
 # 创建结果目录
 mkdir -p "$RESULTS_DIR"
 
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║     AgentFlow Performance Test Suite - Build Phase          ║"
 echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+echo "Platform: ${OS} ${ARCH}"
 echo ""
 
 # 1. 系统信息收集
@@ -26,15 +145,16 @@ echo "[1/4] Collecting System Information..."
     echo ""
     echo "Date: $(date)"
     echo "Hostname: $(hostname)"
+    echo "OS: ${OS} ${ARCH}"
     echo ""
     echo "CPU Information:"
-    echo "  Model: $(grep -m1 'model name' /proc/cpuinfo 2>/dev/null || echo 'Unknown')"
-    echo "  Cores: $(nproc)"
-    echo "  Frequency: $(grep -m1 'cpu MHz' /proc/cpuinfo 2>/dev/null | awk '{print $4}' || echo 'Unknown') MHz"
+    echo "  Model: $(detect_cpu_model)"
+    echo "  Cores: $(detect_cores)"
+    echo "  Frequency: $(detect_cpu_freq)"
     echo ""
     echo "Memory Information:"
-    echo "  Total: $(free -h | awk '/^Mem:/ {print $2}')"
-    echo "  Available: $(free -h | awk '/^Mem:/ {print $7}')"
+    echo "  Total: $(detect_memory_total)"
+    echo "  Available: $(detect_memory_available)"
     echo ""
     echo "Kernel:"
     echo "  $(uname -r)"
@@ -47,24 +167,23 @@ echo ""
 
 # 2. 构建检查
 echo "[2/4] Verifying Build Configuration..."
+CORES="$(detect_cores)"
+
 if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
     echo "Build directory not configured. Running cmake..."
     mkdir -p "$BUILD_DIR"
     cd "$BUILD_DIR"
     cmake .. \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_CXX_STANDARD=17 \
-        -DAGENTFLOW_WITH_PROTOACTOR=OFF \
-        -DAGENTFLOW_WITH_OPENSSL=ON \
-        -DAGENTFLOW_WITH_PROTOBUF=ON \
-        -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+        -DCMAKE_CXX_STANDARD=17
     cd "$PROJECT_ROOT"
 fi
 
 if [ ! -f "$BUILD_DIR/test_performance" ] && [ ! -f "$BUILD_DIR/test_agentflow_gtest" ]; then
     echo "Building performance tests..."
     cd "$BUILD_DIR"
-    make -j$(nproc) test_performance test_agentflow_gtest 2>&1 | tail -20
+    cmake --build . --parallel "$CORES" --target test_performance test_agentflow_gtest 2>&1 | tail -20 || \
+    cmake --build . --parallel "$CORES" 2>&1 | tail -20
     cd "$PROJECT_ROOT"
 fi
 
@@ -75,9 +194,11 @@ echo ""
 echo "[3/4] Running Performance Tests..."
 echo ""
 
+setup_runtime_library_path
 cd "$BUILD_DIR"
 
 # 运行性能测试，并捕获输出
+PERF_STATUS=0
 if [ -f test_performance ]; then
     {
         echo "Performance Test Results"
@@ -87,7 +208,7 @@ if [ -f test_performance ]; then
         echo ""
         
         # 运行测试（带超时保护）
-        timeout 300 ./test_performance \
+        portable_timeout 300 ./test_performance \
             --gtest_filter="Performance*" \
             --gtest_output="json:$RESULTS_DIR/performance_results.json" \
             2>&1 || PERF_STATUS=$?

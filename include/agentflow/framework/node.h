@@ -59,6 +59,9 @@ public:
     std::string              function_name;  // Function name for SO library execution
     std::string              main_class;     // Main class for JAR execution
     std::vector<std::string> args;           // Additional arguments for script execution
+
+    // C++ function callback for CPP_FUNCTION execution mode
+    std::function<bool(const DataMap& inputs, DataMap& outputs)> cpp_function;
   };
 
   explicit Node(const Config& config);

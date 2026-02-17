@@ -298,8 +298,9 @@ bool Node::execute_with_timeout(int timeout_ms, std::function<bool()> executor) 
   // Execute with timeout using thread pool
   auto start = std::chrono::steady_clock::now();
 
-  // Submit task to global thread pool
-  auto future = basic::global_thread_pool().submit([this, &executor]() { return executor(); });
+  // Submit task to global thread pool (capture executor by value to avoid dangling reference)
+  auto executor_copy = executor;
+  auto future = basic::global_thread_pool().submit([executor_copy]() { return executor_copy(); });
 
   // Wait for completion or timeout
   bool timed_out = false;

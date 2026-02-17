@@ -3,12 +3,20 @@
 #include <algorithm>
 #include <fstream>
 #include <numeric>
-#include <platform.h>  // 根据实际情况调整
 
 #ifdef _WIN32
 #include <psapi.h>
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/task.h>
+#include <pthread.h>
+#include <sys/sysctl.h>
+#include <sys/types.h>
+#include <thread>
+#include <unistd.h>
 #else
+// Linux
 #include <fcntl.h>
 #include <thread>
 #include <unistd.h>
@@ -23,8 +31,28 @@ namespace testing {
 int SystemMonitor::get_thread_count() {
 #ifdef _WIN32
   return static_cast<int>(std::thread::hardware_concurrency());
+#elif defined(__APPLE__)
+  // macOS: use task_info to get thread count
+  mach_msg_type_number_t count;
+  task_basic_info_data_t info;
+  count = TASK_BASIC_INFO_COUNT;
+  if(task_info(mach_task_self(), TASK_BASIC_INFO, (task_info_t)&info, &count) == KERN_SUCCESS) {
+    // task_basic_info doesn't give thread count directly; use thread_info
+    thread_array_t    thread_list;
+    mach_msg_type_number_t thread_count;
+    if(task_threads(mach_task_self(), &thread_list, &thread_count) == KERN_SUCCESS) {
+      // Deallocate the thread list
+      for(mach_msg_type_number_t i = 0; i < thread_count; ++i) {
+        mach_port_deallocate(mach_task_self(), thread_list[i]);
+      }
+      vm_deallocate(mach_task_self(), (vm_address_t)thread_list,
+                    thread_count * sizeof(thread_act_t));
+      return static_cast<int>(thread_count);
+    }
+  }
+  return static_cast<int>(std::thread::hardware_concurrency());
 #else
-  // 在Linux上，可以通过/proc/self/status读取线程数
+  // Linux: read from /proc/self/status
   int           count = 0;
   std::ifstream status_file("/proc/self/status");
   if(status_file.is_open()) {
@@ -47,8 +75,17 @@ double SystemMonitor::get_memory_usage_mb() {
     return pmc.WorkingSetSize / (1024.0 * 1024.0);
   }
   return 0.0;
+#elif defined(__APPLE__)
+  // macOS: use mach task_info for resident memory
+  mach_task_basic_info_data_t info;
+  mach_msg_type_number_t      count = MACH_TASK_BASIC_INFO_COUNT;
+  if(task_info(mach_task_self(), MACH_TASK_BASIC_INFO, (task_info_t)&info, &count)
+     == KERN_SUCCESS) {
+    return info.resident_size / (1024.0 * 1024.0);
+  }
+  return 0.0;
 #else
-  // 在Linux上，从/proc/self/status读取内存信息
+  // Linux: read from /proc/self/status
   double        rss_mb = 0.0;
   std::ifstream status_file("/proc/self/status");
   if(status_file.is_open()) {
@@ -66,10 +103,31 @@ double SystemMonitor::get_memory_usage_mb() {
 
 double SystemMonitor::get_cpu_usage_percent() {
 #ifdef _WIN32
-  // Windows CPU使用率较复杂，可以使用简化方法或跳过
-  return 0.0;  // TODO: 实现Windows CPU监控
+  return 0.0;  // TODO: Windows CPU monitoring
+#elif defined(__APPLE__)
+  // macOS: use thread_info to sum CPU usage across all threads
+  thread_array_t         thread_list;
+  mach_msg_type_number_t thread_count;
+
+  if(task_threads(mach_task_self(), &thread_list, &thread_count) != KERN_SUCCESS) {
+    return 0.0;
+  }
+
+  double total_cpu = 0.0;
+  for(mach_msg_type_number_t i = 0; i < thread_count; ++i) {
+    thread_basic_info_data_t tinfo;
+    mach_msg_type_number_t   tinfo_count = THREAD_BASIC_INFO_COUNT;
+    if(thread_info(thread_list[i], THREAD_BASIC_INFO, (thread_info_t)&tinfo, &tinfo_count)
+       == KERN_SUCCESS) {
+      total_cpu += tinfo.cpu_usage / (double)TH_USAGE_SCALE * 100.0;
+    }
+    mach_port_deallocate(mach_task_self(), thread_list[i]);
+  }
+  vm_deallocate(mach_task_self(), (vm_address_t)thread_list,
+                thread_count * sizeof(thread_act_t));
+  return total_cpu;
 #else
-  // 从/proc/stat读取CPU信息
+  // Linux: read from /proc/stat
   static unsigned long last_idle = 0, last_total = 0;
 
   std::ifstream stat_file("/proc/stat");

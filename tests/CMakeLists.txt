@@ -154,6 +154,39 @@ if(AGENTFLOW_TEST_ENV)
     set_tests_properties(EventLoopTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
 endif()
 
+# Set RPATH for test executables so they can find shared libs at runtime
+if(APPLE)
+  set(_test_rpath "${CMAKE_BINARY_DIR}/lib;/usr/local/lib;/opt/homebrew/lib")
+  if(DEFINED ENV{CONDA_PREFIX})
+    set(_test_rpath "$ENV{CONDA_PREFIX}/lib;${_test_rpath}")
+  endif()
+elseif(UNIX)
+  set(_test_rpath "${CMAKE_BINARY_DIR}/lib;/usr/local/lib;/usr/lib")
+  execute_process(
+    COMMAND ${CMAKE_C_COMPILER} -dumpmachine
+    OUTPUT_VARIABLE _gcc_multiarch
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+  if(_gcc_multiarch AND EXISTS "/usr/lib/${_gcc_multiarch}")
+    set(_test_rpath "${_test_rpath};/usr/lib/${_gcc_multiarch}")
+  endif()
+  if(DEFINED ENV{CONDA_PREFIX})
+    set(_test_rpath "$ENV{CONDA_PREFIX}/lib;${_test_rpath}")
+  endif()
+endif()
+if(_test_rpath)
+  foreach(_tgt test_agent_gtest test_workflow_gtest test_node_gtest
+               test_databus_gtest test_event_gtest test_eventloop_gtest)
+    if(TARGET ${_tgt})
+      set_target_properties(${_tgt} PROPERTIES BUILD_RPATH "${_test_rpath}")
+    endif()
+  endforeach()
+  if(TARGET test_hot_reload)
+    set_target_properties(test_hot_reload PROPERTIES BUILD_RPATH "${_test_rpath}")
+  endif()
+endif()
+
 # Install targets
 install(TARGETS test_hot_reload test_agent_gtest test_workflow_gtest test_node_gtest
         test_databus_gtest test_event_gtest test_eventloop_gtest

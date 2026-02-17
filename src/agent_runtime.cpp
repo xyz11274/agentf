@@ -1,5 +1,6 @@
 #include "agentflow/runtime/agent_runtime.h"
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <random>
@@ -206,14 +207,11 @@ void AgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr no
                              node->get_id().c_str());
 
   // Find execution state and update it
-  std::string execution_id = agent->get_id() + ":" + (workflow ? workflow->get_id() : "") + ":*";
-
-  // Find the matching execution state
   {
     std::lock_guard<std::mutex> lock(workflow_state_mutex_);
     for(auto& pair : workflow_states_) {
-      if(pair.second.workflow_id == (workflow ? workflow->get_id() : node->get_id())
-         && pair.second.agent_id == agent->get_id()) {
+      if(pair.second.agent_id == agent->get_id() && pair.second.in_progress
+         && (workflow ? pair.second.workflow_id == workflow->get_id() : true)) {
         update_workflow_state(pair.first, node->get_id(), node->get_state() == NodeState::SUCCESS);
         break;
       }
@@ -303,7 +301,27 @@ void AgentRuntime::update_workflow_state(const std::string& execution_id, const 
     }
   } else if(success) {
     // Schedule next batch of executable nodes
-    g_worker_cv.notify_one();
+    auto agent = get_agent(state.agent_id);
+    if(agent) {
+      auto workflow = agent->get_workflow(state.workflow_id);
+      if(workflow) {
+        // Mark node as executed in workflow DAG
+        workflow->mark_node_executed(node_id, true);
+
+        // Get next executable nodes and enqueue them
+        auto next_nodes = workflow->get_executable_nodes();
+        if(!next_nodes.empty()) {
+          std::lock_guard<std::mutex> task_lock(task_queue_mutex_);
+          for(const auto& next_id : next_nodes) {
+            auto next_node = workflow->get_node(next_id);
+            if(next_node && next_node->get_state() == NodeState::READY) {
+              node_task_queue_.push({ agent, next_node });
+            }
+          }
+          g_worker_cv.notify_all();
+        }
+      }
+    }
   }
 }
 
@@ -344,11 +362,14 @@ void AgentRuntime::on_workflow_complete(const AgentId& agent_id, const WorkflowI
   Logger::instance().info_f("Workflow complete event: agent=%s, workflow=%s, success=%d",
                             agent_id.c_str(), workflow_id.c_str(), success ? 1 : 0);
 
-  // Clean up execution state
-  std::string execution_id = agent_id + ":" + workflow_id + ":*";
-  {
-    std::lock_guard<std::mutex> lock(workflow_state_mutex_);
-    workflow_states_.erase(execution_id);
+  // Clean up execution states matching this agent+workflow
+  std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+  for(auto it = workflow_states_.begin(); it != workflow_states_.end();) {
+    if(it->second.agent_id == agent_id && it->second.workflow_id == workflow_id) {
+      it = workflow_states_.erase(it);
+    } else {
+      ++it;
+    }
   }
 }
 
@@ -495,7 +516,9 @@ HighSpeedDataBus& AgentRuntime::get_databus(const AgentId& agent_id) {
 }
 
 void AgentRuntime::worker_thread_main() {
-  int worker_id = std::rand() % num_worker_threads_;
+  // Thread-safe worker ID assignment
+  static std::atomic<int> next_worker_id{0};
+  int worker_id = next_worker_id.fetch_add(1) % num_worker_threads_;
 
   while(is_running_) {
     std::unique_lock<std::mutex> lock(g_worker_mutex);

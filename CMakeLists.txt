@@ -6,6 +6,38 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -Wextra -fPIC")
 
+# RPATH settings for proper dynamic library resolution (macOS + Linux)
+set(CMAKE_MACOSX_RPATH ON)
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+set(CMAKE_BUILD_RPATH_USE_ORIGIN TRUE)
+
+# Build RPATH: ensure test/example binaries can find libs at build time
+list(APPEND CMAKE_BUILD_RPATH "${CMAKE_BINARY_DIR}/lib")
+if(APPLE)
+  list(APPEND CMAKE_BUILD_RPATH "/usr/local/lib" "/opt/homebrew/lib")
+elseif(UNIX)
+  list(APPEND CMAKE_BUILD_RPATH "/usr/local/lib" "/usr/lib")
+  # Add multiarch library path (e.g. /usr/lib/x86_64-linux-gnu)
+  execute_process(
+    COMMAND ${CMAKE_C_COMPILER} -dumpmachine
+    OUTPUT_VARIABLE _gcc_multiarch
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+  )
+  if(_gcc_multiarch AND EXISTS "/usr/lib/${_gcc_multiarch}")
+    list(APPEND CMAKE_BUILD_RPATH "/usr/lib/${_gcc_multiarch}")
+  endif()
+endif()
+
+# Conda environment detection (both macOS and Linux)
+if(DEFINED ENV{CONDA_PREFIX})
+  message(STATUS "Detected conda environment: $ENV{CONDA_PREFIX}")
+  list(APPEND CMAKE_BUILD_RPATH "$ENV{CONDA_PREFIX}/lib")
+  list(APPEND CMAKE_PREFIX_PATH "$ENV{CONDA_PREFIX}")
+  list(APPEND CMAKE_INCLUDE_PATH "$ENV{CONDA_PREFIX}/include")
+  list(APPEND CMAKE_LIBRARY_PATH "$ENV{CONDA_PREFIX}/lib")
+endif()
+
 # ============================================================================
 # Homebrew support for macOS
 # ============================================================================
@@ -326,6 +358,7 @@ set(AGENTFLOW_RUNTIME_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/metrics.cpp
     ${AGENTFLOW_SOURCE_DIR}/hot_reload.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/code_loader.cpp
+    ${AGENTFLOW_SOURCE_DIR}/performance_metrics.cpp
 )
 
 set(AGENTFLOW_BASIC_SOURCES
@@ -524,10 +557,19 @@ target_link_libraries(example_control_flow PRIVATE agentflow)
 if(AGENTFLOW_BUILD_TESTS)
   enable_testing()
 
-  # Ensure tests use system libstdc++ instead of conda-provided libraries.
+  # Set runtime library search path for test binaries
   if(UNIX AND NOT APPLE)
-    set(AGENTFLOW_TEST_LD_LIBRARY_PATH "/usr/lib/x86_64-linux-gnu:/usr/lib:/lib")
+    set(AGENTFLOW_TEST_LD_LIBRARY_PATH "${CMAKE_BINARY_DIR}/lib:/usr/lib/x86_64-linux-gnu:/usr/lib:/lib")
+    if(DEFINED ENV{CONDA_PREFIX})
+      set(AGENTFLOW_TEST_LD_LIBRARY_PATH "$ENV{CONDA_PREFIX}/lib:${AGENTFLOW_TEST_LD_LIBRARY_PATH}")
+    endif()
     set(AGENTFLOW_TEST_ENV "LD_LIBRARY_PATH=${AGENTFLOW_TEST_LD_LIBRARY_PATH}")
+  elseif(APPLE)
+    set(AGENTFLOW_TEST_DYLD_PATH "${CMAKE_BINARY_DIR}/lib:/usr/local/lib:/opt/homebrew/lib")
+    if(DEFINED ENV{CONDA_PREFIX})
+      set(AGENTFLOW_TEST_DYLD_PATH "$ENV{CONDA_PREFIX}/lib:${AGENTFLOW_TEST_DYLD_PATH}")
+    endif()
+    set(AGENTFLOW_TEST_ENV "DYLD_LIBRARY_PATH=${AGENTFLOW_TEST_DYLD_PATH}")
   endif()
 
   set(USE_GTEST ${GTest_FOUND})
