@@ -56,11 +56,15 @@ ActorMessage StubContext::current_message() const {
 }
 
 void StubContext::send(IActorRef* target, const ActorMessage& msg) {
-  // Stub implementation: just log
+  (void)target;
+  (void)msg;
   // In real stub, would queue message for target actor
 }
 
 ActorMessage StubContext::ask(IActorRef* target, const ActorMessage& msg, int timeout_ms) {
+  (void)target;
+  (void)msg;
+  (void)timeout_ms;
   // Stub implementation: return empty message
   ActorMessage result;
   result.message_type = "reply";

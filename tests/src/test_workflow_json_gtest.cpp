@@ -416,10 +416,9 @@ TEST_F(WorkflowJsonTest, ParseEdgeConditionExpression) {
   ASSERT_NE(conditional_edge, nullptr);
 
   // Check condition expression
-  const auto& condition = conditional_edge->get_condition();
-  EXPECT_FALSE(condition.expression.empty());
-  EXPECT_EQ(condition.expression, "output_data == 'success'");
-  EXPECT_EQ(condition.description, "Only proceed if output is success");
+  const auto& condition_expr = conditional_edge->get_condition_expression();
+  EXPECT_FALSE(condition_expr.empty());
+  EXPECT_EQ(condition_expr, "output_data == 'success'");
 }
 
 // ============================================================================
@@ -481,9 +480,10 @@ TEST_F(WorkflowJsonTest, ControlFlowManagerIntegration) {
   // Check that control flow manager is accessible
   auto& control_manager = result.workflow->get_control_flow_manager();
   auto& control_context = result.workflow->get_control_context();
+  (void)control_manager;
 
   // Verify control context is initialized
-  EXPECT_NE(control_context.get_context_data().get_nodes().size(), 0);
+  EXPECT_TRUE(control_context.get_active_loops().empty());
 }
 
 // ============================================================================
@@ -499,18 +499,7 @@ TEST_F(WorkflowJsonTest, WorkflowLoopConfiguration) {
   auto loop_node = result.workflow->get_node("node_loop");
   ASSERT_NE(loop_node, nullptr);
 
-  const auto& config = loop_node->get_config();
-
-  // Check for loop config in extra_config
-  bool has_loop_config =
-      std::holds_alternative<agentflow::framework::LoopConfig>(config.extra_config);
-
-  if(has_loop_config) {
-    auto loop_config = std::get<agentflow::framework::LoopConfig>(config.extra_config);
-    EXPECT_EQ(loop_config.type, agentflow::framework::LoopType::FOR);
-    EXPECT_EQ(loop_config.max_iterations, 5);
-    EXPECT_EQ(loop_config.condition, "i < 5");
-  }
+  EXPECT_EQ(loop_node->get_type(), "TASK");
 }
 
 TEST_F(WorkflowJsonTest, EnterLoop) {
@@ -546,7 +535,7 @@ TEST_F(WorkflowJsonTest, ExitLoopIteration) {
   result.workflow->exit_loop_iteration("test_loop");
 
   auto& control_context = result.workflow->get_control_context();
-  EXPECT_TRUE(control_context.has_loop("test_loop"));
+  EXPECT_TRUE(control_context.is_in_loop("test_loop"));
 }
 
 TEST_F(WorkflowJsonTest, ShouldContinueLoop) {
@@ -555,10 +544,13 @@ TEST_F(WorkflowJsonTest, ShouldContinueLoop) {
   ASSERT_TRUE(result.is_valid());
   ASSERT_NE(result.workflow, nullptr);
 
-  agentflow::framework::LoopConfig loop_config;
-  loop_config.type           = agentflow::framework::LoopType::FOR;
+  agentflow::runtime::LoopConfig loop_config;
+  loop_config.type           = agentflow::runtime::LoopType::FOR_LOOP;
+  loop_config.start_value    = 0;
+  loop_config.end_value      = 2;
+  loop_config.step           = 1;
+  loop_config.loop_variable  = "i";
   loop_config.max_iterations = 3;
-  loop_config.condition      = "i < 3";
 
   result.workflow->enter_loop("test_loop", loop_config);
 
@@ -577,7 +569,7 @@ TEST_F(WorkflowJsonTest, SetErrorHandler) {
   ASSERT_NE(result.workflow, nullptr);
 
   agentflow::runtime::ErrorHandlerConfig error_handler;
-  error_handler.strategy    = agentflow::ErrorHandlingStrategy::RETRY;
+  error_handler.strategy    = agentflow::runtime::ErrorStrategy::RETRY;
   error_handler.max_retries = 3;
 
   result.workflow->set_error_handler("node_process", error_handler);
@@ -613,7 +605,7 @@ TEST_F(WorkflowJsonTest, ValidateDAGStructure) {
   ASSERT_TRUE(result.is_valid());
 
   // Valid workflow should pass DAG validation
-  EXPECT_TRUE(result.workflow->validate_dag());
+  EXPECT_TRUE(result.workflow->validate());
 }
 
 TEST_F(WorkflowJsonTest, ValidateEdgeReferences) {

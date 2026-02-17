@@ -145,6 +145,7 @@ TEST_F(HotReloadTest, ShellScript_BasicExecution) {
 
 TEST_F(HotReloadTest, ShellScript_HotReload) {
   auto& manager = global_hot_reload_manager();
+  (void)manager;
   auto& loader  = global_code_loader();
 
   std::string test_file = create_shell_script("shell_hotreload.sh", "echo 'Version 1.0'");
@@ -814,6 +815,7 @@ TEST_F(HotReloadTest, Node_PythonScriptNode) {
 
 TEST_F(HotReloadTest, Node_HotReloadIntegration) {
   auto& manager = global_hot_reload_manager();
+  (void)manager;
 
   framework::Node::Config config;
   config.id                = "test_node_hotreload";

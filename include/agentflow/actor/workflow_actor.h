@@ -114,10 +114,16 @@ namespace actor {
 
 class WorkflowActor : public AgentFlowActor {
 public:
-  WorkflowActor(const WorkflowId& workflow_id, const WorkflowConfig& workflow_config) {}
+  WorkflowActor(const WorkflowId& workflow_id, const WorkflowConfig& workflow_config) {
+    (void)workflow_id;
+    (void)workflow_config;
+  }
   ~WorkflowActor() override = default;
 
-  void process_message(const std::string& message_type, std::shared_ptr<void> message) override {}
+  void process_message(const std::string& message_type, std::shared_ptr<void> message) override {
+    (void)message_type;
+    (void)message;
+  }
 };
 
 }  // namespace actor

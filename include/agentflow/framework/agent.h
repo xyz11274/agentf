@@ -46,6 +46,7 @@ public:
   const AgentId&     get_id() const { return config_.id; }
   const std::string& get_name() const { return config_.name; }
   AgentState         get_state() const { return state_; }
+  const Config&      get_config() const { return config_; }
 
   // Workflow management
   void                                          add_workflow(std::shared_ptr<Workflow> workflow);

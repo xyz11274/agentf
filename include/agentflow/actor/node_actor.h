@@ -103,7 +103,10 @@ namespace actor {
 
 class NodeActor : public AgentFlowActor {
 public:
-  NodeActor(const NodeId& node_id, const NodeConfig& node_config) {}
+  NodeActor(const NodeId& node_id, const NodeConfig& node_config) {
+    (void)node_id;
+    (void)node_config;
+  }
   ~NodeActor() override = default;
 
   void process_message(const std::string& message_type, std::shared_ptr<void> message) override {

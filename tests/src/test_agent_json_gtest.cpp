@@ -168,7 +168,7 @@ TEST_F(AgentJsonTest, ParseAgentPerRequestPolicy) {
   EXPECT_NE(result.agent, nullptr);
 
   auto config = result.agent->get_config();
-  EXPECT_EQ(config.policy, Agent::LifecyclePolicy::PER_REQUEST);
+  EXPECT_EQ(config.policy, framework::Agent::LifecyclePolicy::PER_REQUEST);
   EXPECT_EQ(config.max_workflows, 1);
 }
 
@@ -179,7 +179,7 @@ TEST_F(AgentJsonTest, ParseAgentFactoryPolicy) {
   EXPECT_NE(result.agent, nullptr);
 
   auto config = result.agent->get_config();
-  EXPECT_EQ(config.policy, Agent::LifecyclePolicy::FACTORY);
+  EXPECT_EQ(config.policy, framework::Agent::LifecyclePolicy::FACTORY);
   EXPECT_EQ(config.max_workflows, 10);
   EXPECT_EQ(config.max_concurrent_workflows, 5);
 }
@@ -191,7 +191,7 @@ TEST_F(AgentJsonTest, ParseAgentSingletonPolicy) {
   EXPECT_NE(result.agent, nullptr);
 
   auto config = result.agent->get_config();
-  EXPECT_EQ(config.policy, Agent::LifecyclePolicy::SINGLETON);
+  EXPECT_EQ(config.policy, framework::Agent::LifecyclePolicy::SINGLETON);
   EXPECT_EQ(config.max_workflows, 10);
 }
 
@@ -286,7 +286,8 @@ TEST_F(AgentJsonTest, LifecyclePolicyPerRequest) {
   ASSERT_NE(result.agent, nullptr);
 
   auto config = result.agent->get_config();
-  EXPECT_EQ(static_cast<int>(config.policy), static_cast<int>(Agent::LifecyclePolicy::PER_REQUEST));
+  EXPECT_EQ(static_cast<int>(config.policy),
+            static_cast<int>(framework::Agent::LifecyclePolicy::PER_REQUEST));
 }
 
 TEST_F(AgentJsonTest, LifecyclePolicyFactory) {
@@ -296,7 +297,8 @@ TEST_F(AgentJsonTest, LifecyclePolicyFactory) {
   ASSERT_NE(result.agent, nullptr);
 
   auto config = result.agent->get_config();
-  EXPECT_EQ(static_cast<int>(config.policy), static_cast<int>(Agent::LifecyclePolicy::FACTORY));
+  EXPECT_EQ(static_cast<int>(config.policy),
+            static_cast<int>(framework::Agent::LifecyclePolicy::FACTORY));
 }
 
 TEST_F(AgentJsonTest, LifecyclePolicySingleton) {
@@ -306,7 +308,8 @@ TEST_F(AgentJsonTest, LifecyclePolicySingleton) {
   ASSERT_NE(result.agent, nullptr);
 
   auto config = result.agent->get_config();
-  EXPECT_EQ(static_cast<int>(config.policy), static_cast<int>(Agent::LifecyclePolicy::SINGLETON));
+  EXPECT_EQ(static_cast<int>(config.policy),
+            static_cast<int>(framework::Agent::LifecyclePolicy::SINGLETON));
 }
 
 // ============================================================================

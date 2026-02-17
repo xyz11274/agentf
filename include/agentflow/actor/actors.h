@@ -205,7 +205,10 @@ class AgentFlowActor {
 public:
   virtual ~AgentFlowActor() = default;
 
-  virtual void process_message(const std::string& message_type, std::shared_ptr<void> message) {}
+  virtual void process_message(const std::string& message_type, std::shared_ptr<void> message) {
+    (void)message_type;
+    (void)message;
+  }
 };
 
 }  // namespace actor

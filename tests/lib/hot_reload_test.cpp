@@ -1,4 +1,5 @@
 #include <cstring>
+#include <ctime>
 #include <iostream>
 #include <map>
 #include <string>
@@ -161,6 +162,8 @@ void multiply(const std::map<std::string, std::string>* inputs,
 void get_info(const std::map<std::string, std::string>* inputs,
               std::map<std::string, std::string>*       outputs) {
   std::cout << "[SO_LIB] get_info called" << std::endl;
+
+  (void)inputs;
 
   if(outputs) {
     (*outputs)["name"]        = "Hot Reload Test Library";

@@ -38,7 +38,7 @@ TEST(AdapterIsolation, ActorSpawning) {
   ASSERT_TRUE(system != nullptr);
 
   class TestActor : public IActor {
-    void on_message(std::shared_ptr<IContext> ctx) override {}
+    void on_message(std::shared_ptr<IContext> ctx) override { (void)ctx; }
     void on_start() override {}
     void on_stop() override {}
   };
@@ -79,7 +79,7 @@ TEST(AdapterIsolation, ActorReferenceLifecycle) {
   auto system = ActorSystemFactory::create("ref-test");
 
   class SimpleActor : public IActor {
-    void on_message(std::shared_ptr<IContext> ctx) override {}
+    void on_message(std::shared_ptr<IContext> ctx) override { (void)ctx; }
   };
 
   auto factory = []() { return std::make_shared<SimpleActor>(); };

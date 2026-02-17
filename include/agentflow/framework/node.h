@@ -72,6 +72,7 @@ public:
   NodeState          get_state() const { return state_; }
   const DataMap&     get_inputs() const { return inputs_; }
   const DataMap&     get_outputs() const { return outputs_; }
+  const Config&      get_config() const { return config_; }
 
   // Config getters for storage
   const std::vector<std::string>& get_input_params() const { return config_.input_params; }

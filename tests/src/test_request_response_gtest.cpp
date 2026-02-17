@@ -91,7 +91,7 @@ TEST_F(RequestResponseTest, RequestBuilderChaining) {
                      .build();
 
   EXPECT_EQ(request.get_type(), "execute_workflow");
-  EXPECT_EQ(std::get<std::string>(request.get_payload()["input"]), "test_value");
+  EXPECT_EQ(std::get<std::string>(request.get("input")), "test_value");
   EXPECT_EQ(request.get_metadata().source_id, "client_001");
   EXPECT_EQ(request.get_metadata().target_id, "workflow_001");
   EXPECT_EQ(request.get_metadata().workflow_id, "workflow_001");
@@ -191,8 +191,9 @@ TEST_F(RequestResponseTest, RequestToJsonWithMetadata) {
   network::RequestBuilder builder;
   auto                    request = builder.with_type("execute_workflow")
                      .with_source("source_001")
-                     .with_request_id("req_12345")
                      .build();
+
+  request.set_request_id("req_12345");
 
   auto json_str = request.to_json();
 
@@ -209,7 +210,7 @@ TEST_F(RequestResponseTest, RequestToJsonWithComplexData) {
   payload["bool_val"]   = true;
   payload["double_val"] = 3.14;
 
-  request.set("payload", payload);
+  request.set_payload(payload);
 
   auto json_str = request.to_json();
 
@@ -324,7 +325,7 @@ TEST_F(RequestResponseTest, ResponseBuilderChaining) {
   EXPECT_EQ(response.get_status(), network::ResponseStatus::OK);
   EXPECT_EQ(response.get_request_id(), "req_123");
   EXPECT_EQ(response.get_status_message(), "Processed successfully");
-  EXPECT_EQ(std::get<std::string>(response.get_payload()["result"]), "success");
+  EXPECT_EQ(std::get<std::string>(response.get("result")), "success");
   EXPECT_EQ(response.get_metadata().processing_time_ms, 42);
   EXPECT_EQ(response.get_header("X-Response-Id"), "response_123");
   EXPECT_TRUE(response.is_success());
@@ -343,7 +344,7 @@ TEST_F(RequestResponseTest, ResponseBuilderWithMultipleHeaders) {
   EXPECT_EQ(response.get_header("X-Custom-2"), "value2");
 }
 
-TEST_F(ResponseResponseTest, ResponseBuilderWithError) {
+TEST_F(RequestResponseTest, ResponseBuilderWithError) {
   auto response = network::ResponseBuilder()
                       .with_status(network::ResponseStatus::BAD_REQUEST)
                       .with_status_message("Validation failed")
@@ -438,7 +439,7 @@ TEST_F(RequestResponseTest, ResponseGetPayloadData) {
   DataMap           payload;
   payload["result"] = std::string("success");
   payload["count"]  = static_cast<int64_t>(42);
-  response.set("payload", payload);
+  response.set_payload(payload);
 
   EXPECT_EQ(std::get<std::string>(response.get("result")), "success");
   EXPECT_EQ(std::get<int64_t>(response.get("count")), 42);
@@ -470,7 +471,7 @@ TEST_F(RequestResponseTest, ResponseSetComplexPayload) {
   payload["bool_val"]   = true;
   payload["double_val"] = 3.14;
 
-  response.set("payload", payload);
+  response.set_payload(payload);
 
   EXPECT_EQ(std::get<std::string>(response.get("string_val")), "hello");
   EXPECT_EQ(std::get<int64_t>(response.get("int_val")), 42);
@@ -517,8 +518,7 @@ TEST_F(RequestResponseTest, ResponseSetHeader) {
 }
 
 TEST_F(RequestResponseTest, ResponseSetProcessingTime) {
-  network::Response response;
-  response.set_processing_time(123);
+  auto response = network::ResponseBuilder().with_processing_time(123).build();
 
   EXPECT_EQ(response.get_metadata().processing_time_ms, 123);
 }
@@ -561,7 +561,7 @@ TEST_F(RequestResponseTest, ResponseToJsonWithComplexData) {
   payload["bool_val"]   = true;
   payload["double_val"] = 3.14;
 
-  response.set("payload", payload);
+  response.set_payload(payload);
 
   auto json_str = response.to_json();
 
@@ -635,16 +635,16 @@ TEST_F(RequestResponseTest, RequestBuilderShared) {
   auto shared = network::RequestBuilder().with_type("shared_test").build_shared();
 
   auto request = shared;
-  EXPECT_TRUE(request.is_valid());
-  EXPECT_EQ(request.get_type(), "shared_test");
+  EXPECT_TRUE(request->is_valid());
+  EXPECT_EQ(request->get_type(), "shared_test");
 }
 
 TEST_F(RequestResponseTest, ResponseBuilderShared) {
   auto shared = network::ResponseBuilder().with_status(network::ResponseStatus::OK).build_shared();
 
   auto response = shared;
-  EXPECT_TRUE(response.is_success());
-  EXPECT_EQ(response.get_status(), network::ResponseStatus::OK);
+  EXPECT_TRUE(response->is_success());
+  EXPECT_EQ(response->get_status(), network::ResponseStatus::OK);
 }
 
 // ============================================================================
