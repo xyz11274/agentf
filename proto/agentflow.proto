@@ -1,0 +1,86 @@
+syntax = "proto3";
+
+package agentflow;
+
+// Version information
+message VersionInfo {
+  string version = 1;
+  string commit = 2;
+  string build_time = 3;
+}
+
+// Common types
+message DataValue {
+  oneof value {
+    int64 int_value = 1;
+    double double_value = 2;
+    string string_value = 3;
+    bool bool_value = 4;
+    bytes bytes_value = 5;
+  }
+}
+
+message DataMap {
+  map<string, DataValue> entries = 1;
+}
+
+// Status codes
+enum StatusCode {
+  STATUS_UNKNOWN = 0;
+  STATUS_SUCCESS = 1;
+  STATUS_PENDING = 2;
+  STATUS_RUNNING = 3;
+  STATUS_FAILED = 4;
+  STATUS_TIMEOUT = 5;
+  STATUS_CANCELLED = 6;
+}
+
+// Node states
+enum NodeState {
+  NODE_STATE_UNKNOWN = 0;
+  NODE_STATE_WAITING = 1;
+  NODE_STATE_READY = 2;
+  NODE_STATE_EXECUTING = 3;
+  NODE_STATE_SUCCESS = 4;
+  NODE_STATE_FAILED = 5;
+  NODE_STATE_RETRYING = 6;
+}
+
+// Workflow states
+enum WorkflowState {
+  WORKFLOW_STATE_UNKNOWN = 0;
+  WORKFLOW_STATE_CREATED = 1;
+  WORKFLOW_STATE_LOADED = 2;
+  WORKFLOW_STATE_RUNNING = 3;
+  WORKFLOW_STATE_PAUSED = 4;
+  WORKFLOW_STATE_COMPLETED = 5;
+  WORKFLOW_STATE_FAILED = 6;
+}
+
+// Agent states
+enum AgentState {
+  AGENT_STATE_UNKNOWN = 0;
+  AGENT_STATE_CREATED = 1;
+  AGENT_STATE_INITIALIZED = 2;
+  AGENT_STATE_RUNNING = 3;
+  AGENT_STATE_PAUSED = 4;
+  AGENT_STATE_STOPPED = 5;
+}
+
+// Lifecycle policy
+enum LifecyclePolicy {
+  LIFECYCLE_UNKNOWN = 0;
+  LIFECYCLE_PER_REQUEST = 1;
+  LIFECYCLE_FACTORY = 2;
+  LIFECYCLE_SINGLETON = 3;
+}
+
+// Execution mode
+enum ExecutionMode {
+  EXECUTION_MODE_UNKNOWN = 0;
+  EXECUTION_MODE_CPP_FUNCTION = 1;
+  EXECUTION_MODE_SHELL_SCRIPT = 2;
+  EXECUTION_MODE_EXECUTABLE = 3;
+  EXECUTION_MODE_PYTHON_SCRIPT = 4;
+  EXECUTION_MODE_SO_LIBRARY = 5;
+}

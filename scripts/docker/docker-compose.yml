@@ -1,0 +1,89 @@
+version: '3.8'
+
+services:
+  # AgentFlow Server
+  agentflow-server:
+    build:
+      context: ../..
+      dockerfile: scripts/docker/Dockerfile
+    image: agentflow/server:1.0.0
+    container_name: agentflow-server
+    ports:
+      - "50051:50051"   # gRPC
+      - "8080:8080"     # REST API
+      - "8081:8081"     # WebSocket
+      - "9090:9090"     # Metrics
+    volumes:
+      - agentflow-data:/app/data
+      - ./../../configs:/app/configs:ro
+    environment:
+      - AGENTFLOW_CONFIG_PATH=/app/configs/server.yaml
+      - AGENTFLOW_LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - agentflow-network
+
+  # AgentFlow Agent (distributed worker)
+  agentflow-agent:
+    build:
+      context: ../..
+      dockerfile: scripts/docker/Dockerfile.agent
+    image: agentflow/agent:1.0.0
+    deploy:
+      replicas: 3
+    environment:
+      - AGENTFLOW_MASTER_ADDR=agentflow-server:50051
+    depends_on:
+      agentflow-server:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - agentflow-network
+
+  # Prometheus for metrics
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: agentflow-prometheus
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    restart: unless-stopped
+    networks:
+      - agentflow-network
+
+  # Grafana for visualization
+  grafana:
+    image: grafana/grafana:10.0.0
+    container_name: agentflow-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    networks:
+      - agentflow-network
+
+networks:
+  agentflow-network:
+    driver: bridge
+
+volumes:
+  agentflow-data:
+  prometheus-data:
+  grafana-data:

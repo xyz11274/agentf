@@ -1,0 +1,102 @@
+{
+  "workflow": {
+    "id": "conditional-workflow-001",
+    "name": "Conditional Branch Workflow",
+    "version": "1.0.0",
+    "description": "A workflow demonstrating conditional branching based on data values",
+
+    "nodes": [
+      {
+        "id": "node-input",
+        "name": "Process Input",
+        "type": "input",
+        "execution_mode": "CPP_FUNCTION",
+        "input_params": ["request"],
+        "output_params": ["data", "request_type"]
+      },
+      {
+        "id": "node-process-a",
+        "name": "Process Type A",
+        "type": "processor",
+        "execution_mode": "CPP_FUNCTION",
+        "input_params": ["data"],
+        "output_params": ["result_a"]
+      },
+      {
+        "id": "node-process-b",
+        "name": "Process Type B",
+        "type": "processor",
+        "execution_mode": "PYTHON_SCRIPT",
+        "command": "./scripts/process_b.py",
+        "input_params": ["data"],
+        "output_params": ["result_b"]
+      },
+      {
+        "id": "node-process-c",
+        "name": "Process Type C",
+        "type": "processor",
+        "execution_mode": "SHELL_SCRIPT",
+        "command": "./scripts/process_c.sh",
+        "input_params": ["data"],
+        "output_params": ["result_c"]
+      },
+      {
+        "id": "node-merge",
+        "name": "Merge Results",
+        "type": "merger",
+        "execution_mode": "CPP_FUNCTION",
+        "input_params": ["result_a", "result_b", "result_c"],
+        "output_params": ["final_result"]
+      },
+      {
+        "id": "node-output",
+        "name": "Output",
+        "type": "output",
+        "execution_mode": "CPP_FUNCTION",
+        "input_params": ["final_result"],
+        "output_params": ["response"]
+      }
+    ],
+
+    "edges": [
+      {
+        "id": "edge-input-a",
+        "source": "node-input",
+        "target": "node-process-a",
+        "condition_expression": "request_type == 'A'"
+      },
+      {
+        "id": "edge-input-b",
+        "source": "node-input",
+        "target": "node-process-b",
+        "condition_expression": "request_type == 'B'"
+      },
+      {
+        "id": "edge-input-c",
+        "source": "node-input",
+        "target": "node-process-c",
+        "condition_expression": "request_type == 'C'"
+      },
+      {
+        "id": "edge-a-merge",
+        "source": "node-process-a",
+        "target": "node-merge"
+      },
+      {
+        "id": "edge-b-merge",
+        "source": "node-process-b",
+        "target": "node-merge"
+      },
+      {
+        "id": "edge-c-merge",
+        "source": "node-process-c",
+        "target": "node-merge"
+      },
+      {
+        "id": "edge-merge-output",
+        "source": "node-merge",
+        "target": "node-output"
+      }
+    ]
+  }
+}

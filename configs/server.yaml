@@ -1,0 +1,129 @@
+# AgentFlow Server Configuration
+#
+# This is the main configuration file for AgentFlow server.
+
+# Server settings
+server:
+  # gRPC server configuration
+  grpc:
+    host: "0.0.0.0"
+    port: 50051
+    max_message_size: 4194304  # 4MB
+
+  # REST API configuration
+  rest:
+    host: "0.0.0.0"
+    port: 8080
+    cors:
+      enabled: true
+      origins:
+        - "*"
+
+  # WebSocket configuration
+  websocket:
+    enabled: true
+    port: 8081
+    path: "/ws"
+
+# Runtime settings
+runtime:
+  # Worker thread pool size
+  worker_threads: 4
+
+  # Maximum concurrent workflows
+  max_concurrent_workflows: 100
+
+  # Maximum concurrent nodes per workflow
+  max_concurrent_nodes_per_workflow: 10
+
+  # Default timeout for workflow execution (milliseconds)
+  default_workflow_timeout_ms: 300000  # 5 minutes
+
+  # Default timeout for node execution (milliseconds)
+  default_node_timeout_ms: 30000  # 30 seconds
+
+# Agent settings
+agent:
+  # Default lifecycle policy
+  default_lifecycle_policy: "FACTORY"
+
+  # Maximum agents in memory
+  max_agents: 1000
+
+  # Agent cleanup interval (milliseconds)
+  cleanup_interval_ms: 60000  # 1 minute
+
+  # Agent idle timeout before cleanup (milliseconds)
+  idle_timeout_ms: 300000  # 5 minutes
+
+# Data bus settings
+data_bus:
+  # Data bus capacity (bytes)
+  capacity: 104857600  # 100MB
+
+  # Enable zero-copy mode
+  zero_copy_enabled: true
+
+  # Maximum subscription count per key
+  max_subscriptions_per_key: 100
+
+# Storage settings
+storage:
+  # Storage type: "rocksdb", "memory", "file"
+  type: "rocksdb"
+
+  # RocksDB specific settings
+  rocksdb:
+    data_dir: "./data/rocksdb"
+    create_if_missing: true
+
+  # File storage settings (fallback)
+  file:
+    data_dir: "./data/files"
+
+# Hot reload settings
+hot_reload:
+  enabled: true
+  watch_interval_ms: 1000
+  max_versions: 10
+
+# Metrics settings
+metrics:
+  enabled: true
+  port: 9090
+  path: "/metrics"
+
+  # Metrics collection interval (milliseconds)
+  collection_interval_ms: 10000
+
+# Logging settings
+logging:
+  level: "INFO"
+  format: "json"
+  output: "stdout"
+
+  # File logging (optional)
+  file:
+    enabled: false
+    path: "./logs/agentflow.log"
+    max_size_mb: 100
+    max_files: 10
+
+# Distributed settings (optional)
+distributed:
+  enabled: false
+
+  # Node identification
+  node_id: "node-1"
+
+  # Service discovery
+  discovery:
+    type: "etcd"
+    endpoints:
+      - "http://localhost:2379"
+
+  # Coordination
+  coordination:
+    type: "etcd"
+    endpoints:
+      - "http://localhost:2379"

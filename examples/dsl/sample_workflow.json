@@ -1,0 +1,100 @@
+{
+  "workflow": {
+    "id": "sample-workflow-001",
+    "name": "Sample Data Processing Workflow",
+    "version": "1.0.0",
+    "description": "A sample workflow demonstrating basic DAG execution with conditions and loops",
+
+    "nodes": [
+      {
+        "id": "node-start",
+        "name": "Start",
+        "type": "start",
+        "execution_mode": "CPP_FUNCTION",
+        "input_params": ["input_data"],
+        "output_params": ["initialized_data"]
+      },
+      {
+        "id": "node-validate",
+        "name": "Validate Input",
+        "type": "validator",
+        "execution_mode": "CPP_FUNCTION",
+        "input_params": ["initialized_data"],
+        "output_params": ["validated_data"],
+        "timeout_ms": 5000,
+        "max_retries": 3
+      },
+      {
+        "id": "node-transform",
+        "name": "Transform Data",
+        "type": "transformer",
+        "execution_mode": "PYTHON_SCRIPT",
+        "command": "./scripts/transform.py",
+        "input_params": ["validated_data"],
+        "output_params": ["transformed_data"],
+        "timeout_ms": 30000
+      },
+      {
+        "id": "node-enrich",
+        "name": "Enrich Data",
+        "type": "enricher",
+        "execution_mode": "CPP_FUNCTION",
+        "input_params": ["transformed_data"],
+        "output_params": ["enriched_data"],
+        "timeout_ms": 10000
+      },
+      {
+        "id": "node-filter",
+        "name": "Filter Results",
+        "type": "filter",
+        "execution_mode": "CPP_FUNCTION",
+        "input_params": ["enriched_data"],
+        "output_params": ["filtered_data"],
+        "timeout_ms": 5000
+      },
+      {
+        "id": "node-output",
+        "name": "Output Results",
+        "type": "output",
+        "execution_mode": "CPP_FUNCTION",
+        "input_params": ["filtered_data"],
+        "output_params": ["result"]
+      }
+    ],
+
+    "edges": [
+      {
+        "id": "edge-start-validate",
+        "source": "node-start",
+        "target": "node-validate"
+      },
+      {
+        "id": "edge-validate-transform",
+        "source": "node-validate",
+        "target": "node-transform",
+        "condition_expression": "validated_data.is_valid == true"
+      },
+      {
+        "id": "edge-transform-enrich",
+        "source": "node-transform",
+        "target": "node-enrich"
+      },
+      {
+        "id": "edge-enrich-filter",
+        "source": "node-enrich",
+        "target": "node-filter"
+      },
+      {
+        "id": "edge-filter-output",
+        "source": "node-filter",
+        "target": "node-output"
+      }
+    ],
+
+    "metadata": {
+      "author": "AgentFlow Team",
+      "created_at": "2026-02-17",
+      "tags": ["sample", "data-processing", "demo"]
+    }
+  }
+}

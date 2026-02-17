@@ -1,0 +1,132 @@
+# Default values for agentflow.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+replicaCount: 3
+
+image:
+  repository: agentflow/server
+  pullPolicy: IfNotPresent
+  tag: "1.0.0"
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+
+service:
+  type: ClusterIP
+  grpc:
+    port: 50051
+  rest:
+    port: 8080
+  websocket:
+    port: 8081
+  metrics:
+    port: 9090
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: agentflow.local
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+
+resources:
+  limits:
+    cpu: 2000m
+    memory: 2Gi
+  requests:
+    cpu: 500m
+    memory: 512Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+# AgentFlow specific configuration
+config:
+  workerThreads: 4
+  maxConcurrentWorkflows: 100
+  defaultWorkflowTimeoutMs: 300000
+  defaultNodeTimeoutMs: 30000
+
+storage:
+  enabled: true
+  type: "rocksdb"
+  size: 10Gi
+  storageClass: ""
+
+# Agent (worker) deployment
+agent:
+  enabled: true
+  replicaCount: 5
+
+  image:
+    repository: agentflow/agent
+    pullPolicy: IfNotPresent
+    tag: "1.0.0"
+
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+    requests:
+      cpu: 250m
+      memory: 256Mi
+
+# Monitoring
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    labels: {}
+
+# Redis for distributed coordination (optional)
+redis:
+  enabled: false
+  auth:
+    enabled: false
+  master:
+    persistence:
+      enabled: true
+      size: 1Gi
+
+# etcd for service discovery (optional)
+etcd:
+  enabled: false
+  replicaCount: 3
+  persistence:
+    enabled: true
+    size: 1Gi

@@ -1,0 +1,67 @@
+{
+  "workflow": {
+    "id": "loop-workflow-001",
+    "name": "Loop Processing Workflow",
+    "version": "1.0.0",
+    "description": "A workflow demonstrating loop iteration over data collections",
+
+    "nodes": [
+      {
+        "id": "node-load",
+        "name": "Load Data",
+        "type": "loader",
+        "execution_mode": "CPP_FUNCTION",
+        "input_params": ["source"],
+        "output_params": ["items"]
+      },
+      {
+        "id": "node-process-item",
+        "name": "Process Item",
+        "type": "processor",
+        "execution_mode": "CPP_FUNCTION",
+        "input_params": ["current_item"],
+        "output_params": ["processed_item"],
+        "loop_config": {
+          "type": "FOR_EACH",
+          "collection_variable": "items",
+          "item_variable": "current_item",
+          "max_iterations": 1000
+        }
+      },
+      {
+        "id": "node-aggregate",
+        "name": "Aggregate Results",
+        "type": "aggregator",
+        "execution_mode": "CPP_FUNCTION",
+        "input_params": ["processed_items"],
+        "output_params": ["aggregated_result"]
+      },
+      {
+        "id": "node-output",
+        "name": "Output Result",
+        "type": "output",
+        "execution_mode": "CPP_FUNCTION",
+        "input_params": ["aggregated_result"],
+        "output_params": ["final_output"]
+      }
+    ],
+
+    "edges": [
+      {
+        "id": "edge-load-process",
+        "source": "node-load",
+        "target": "node-process-item"
+      },
+      {
+        "id": "edge-process-aggregate",
+        "source": "node-process-item",
+        "target": "node-aggregate"
+      },
+      {
+        "id": "edge-aggregate-output",
+        "source": "node-aggregate",
+        "target": "node-output"
+      }
+    ]
+  }
+}
