@@ -38,16 +38,6 @@ jobs:
             arch: arm64
             cmake_arch: "-DCMAKE_SYSTEM_PROCESSOR=aarch64"
             name: "Linux ARM64"
-          # macOS x86_64
-          - os: macos-12
-            arch: x86_64
-            cmake_arch: ""
-            name: "macOS AMD64"
-          # macOS ARM64 (Apple Silicon)
-          - os: macos-14
-            arch: arm64
-            cmake_arch: ""
-            name: "macOS ARM64"
 
     runs-on: ${{ matrix.os }}
     name: Build - ${{ matrix.name }}
@@ -83,12 +73,6 @@ jobs:
             libgtest-dev \
             git
 
-      - name: Install dependencies on macOS
-        if: runner.os == 'macOS'
-        run: |
-          brew update
-          brew install cmake openssl@3 libwebsockets protobuf rapidjson libevent googletest ninja
-
       - name: Create build directory
         run: mkdir -p build
 
@@ -108,11 +92,7 @@ jobs:
       - name: Build
         working-directory: build
         run: |
-          if [[ "${{ runner.os }}" == "macOS" ]]; then
-            make -j$(sysctl -n hw.ncpu)
-          else
-            make -j$(nproc)
-          fi
+          make -j$(nproc)
 
       - name: Upload build artifacts
         if: success()
@@ -128,8 +108,4 @@ jobs:
           echo "Build completed successfully for ${{ matrix.name }}"
           echo "C++ Standard: 17"
           echo "Build Type: Release"
-          if [[ "${{ runner.os }}" == "macOS" ]]; then
-            clang++ --version
-          else
-            g++ --version
-          fi
+          g++ --version

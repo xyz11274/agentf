@@ -62,8 +62,6 @@ jobs:
           |----------|--------|
           | Linux AMD64 | ![Linux AMD64](https://github.com/DanielKernel/AgentFlow/workflows/Build/badge.svg) |
           | Linux ARM64 | ![Linux ARM64](https://github.com/DanielKernel/AgentFlow/workflows/Build/badge.svg) |
-          | macOS AMD64 | ![macOS AMD64](https://github.com/DanielKernel/AgentFlow/workflows/Build/badge.svg) |
-          | macOS ARM64 | ![macOS ARM64](https://github.com/DanielKernel/AgentFlow/workflows/Build/badge.svg) |
           EOF
           cat /tmp/badges.md
 

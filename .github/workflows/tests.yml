@@ -36,14 +36,6 @@ jobs:
           - os: ubuntu-latest
             arch: arm64
             name: "Linux ARM64"
-          # macOS x86_64
-          - os: macos-12
-            arch: x86_64
-            name: "macOS AMD64"
-          # macOS ARM64
-          - os: macos-14
-            arch: arm64
-            name: "macOS ARM64"
 
     runs-on: ${{ matrix.os }}
     name: Test - ${{ matrix.name }}
@@ -78,12 +70,6 @@ jobs:
             libgtest-dev \
             git
 
-      - name: Install dependencies on macOS
-        if: runner.os == 'macOS'
-        run: |
-          brew update
-          brew install cmake openssl@3 libwebsockets protobuf rapidjson libevent googletest ninja
-
       - name: Create build directory
         run: mkdir -p build
 
@@ -114,11 +100,7 @@ jobs:
       - name: Build
         working-directory: build
         run: |
-          if [[ "${{ runner.os }}" == "macOS" ]]; then
-            make -j$(sysctl -n hw.ncpu)
-          else
-            make -j$(nproc)
-          fi
+          make -j$(nproc)
 
       - name: Run unit tests
         working-directory: build
@@ -357,10 +339,6 @@ jobs:
           - os: ubuntu-latest
             arch: arm64
             name: "Linux ARM64"
-          # macOS x86_64
-          - os: macos-12
-            arch: x86_64
-            name: "macOS AMD64"
     runs-on: ${{ matrix.os }}
     steps:
       - name: Set up system for Linux ARM64
@@ -391,12 +369,6 @@ jobs:
             procps \
             sysstat
 
-      - name: Install dependencies on macOS
-        if: runner.os == 'macOS'
-        run: |
-          brew update
-          brew install cmake openssl@3 libwebsockets protobuf rapidjson libevent googletest ninja
-
       - name: Create build directory
         run: mkdir -p build
 
@@ -426,29 +398,17 @@ jobs:
 
       - name: Build with optimizations
         working-directory: build
-        run: |
-          if [[ "${{ runner.os }}" == "macOS" ]]; then
-            make -j$(sysctl -n hw.ncpu)
-          else
-            make -j$(nproc)
-          fi
+        run: make -j$(nproc)
 
       - name: Run performance benchmarks
         working-directory: build
         run: |
           echo "Starting Performance Benchmarking..."
           echo ""
-          if [[ "${{ runner.os }}" == "macOS" ]]; then
-            echo "System Information:"
-            echo "  CPU Cores: $(sysctl -n hw.ncpu)"
-            echo "  Total Memory: $(vm_stat | grep 'Pages free' | awk '{print $3}' | sed 's/\.//') pages free"
-            echo "  Kernel: $(uname -r)"
-          else
-            echo "System Information:"
-            echo "  CPU Cores: $(nproc)"
-            echo "  Total Memory: $(free -h | awk '/^Mem:/ {print $2}')"
-            echo "  Kernel: $(uname -r)"
-          fi
+          echo "System Information:"
+          echo "  CPU Cores: $(nproc)"
+          echo "  Total Memory: $(free -h | awk '/^Mem:/ {print $2}')"
+          echo "  Kernel: $(uname -r)"
           echo ""
           # Run performance tests
           if [ -f test_performance ]; then
