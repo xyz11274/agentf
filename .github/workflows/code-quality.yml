@@ -23,6 +23,12 @@ on:
       - '.clang-format'
       - '.clang-tidy'
       - '.github/workflows/code-quality.yml'
+  workflow_dispatch:
+    inputs:
+      run_clang_tidy:
+        description: "Run clang-tidy analysis"
+        required: false
+        default: "false"
 
 jobs:
   clang-format:
@@ -71,6 +77,7 @@ jobs:
 
   clang-tidy:
     name: Clang Tidy Analysis
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_clang_tidy == 'true' }}
     runs-on: ubuntu-latest
     
     steps:

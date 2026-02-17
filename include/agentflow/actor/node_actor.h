@@ -106,7 +106,10 @@ public:
   NodeActor(const NodeId& node_id, const NodeConfig& node_config) {}
   ~NodeActor() override = default;
 
-  void process_message(const std::string& message_type, std::shared_ptr<void> message) override {}
+  void process_message(const std::string& message_type, std::shared_ptr<void> message) override {
+    (void)message_type;
+    (void)message;
+  }
 };
 
 }  // namespace actor

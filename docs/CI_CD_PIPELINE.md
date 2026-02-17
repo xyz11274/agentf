@@ -70,6 +70,7 @@ The CI/CD pipeline automatically builds and tests on the following platforms:
 - Checks for performance anti-patterns
 - Identifies modernization opportunities
 - Generates compile_commands.json for analysis
+- Optional/manual: run via workflow dispatch with input `run_clang_tidy=true`
 
 #### c. Cppcheck Static Analysis
 - Comprehensive static analysis tool
