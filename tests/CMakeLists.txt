@@ -142,6 +142,18 @@ add_test(NAME DataBusTests COMMAND test_databus_gtest)
 add_test(NAME EventTests COMMAND test_event_gtest)
 add_test(NAME EventLoopTests COMMAND test_eventloop_gtest)
 
+if(AGENTFLOW_TEST_ENV)
+    if(TARGET test_hot_reload)
+        set_tests_properties(HotReloadTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
+    endif()
+    set_tests_properties(AgentTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
+    set_tests_properties(WorkflowTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
+    set_tests_properties(NodeTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
+    set_tests_properties(DataBusTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
+    set_tests_properties(EventTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
+    set_tests_properties(EventLoopTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
+endif()
+
 # Install targets
 install(TARGETS test_hot_reload test_agent_gtest test_workflow_gtest test_node_gtest
         test_databus_gtest test_event_gtest test_eventloop_gtest
