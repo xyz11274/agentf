@@ -99,6 +99,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_CXX_STANDARD=17 \
             ${{ matrix.cmake_arch }} \
+            -DAGENTFLOW_BUILD_TESTS=OFF \
             -DAGENTFLOW_WITH_PROTOACTOR=OFF \
             -DAGENTFLOW_WITH_OPENSSL=ON \
             -DAGENTFLOW_WITH_PROTOBUF=ON \

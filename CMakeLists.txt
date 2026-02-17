@@ -53,6 +53,7 @@ find_package(PkgConfig QUIET)
 # Build options
 # ============================================================================
 option(USE_LIBEVENT "Enable libevent for event loop support" ON)
+option(AGENTFLOW_BUILD_TESTS "Build unit tests" ON)
 
 # ============================================================================
 # Find optional dependencies (all with graceful fallback to stub implementations)
@@ -467,11 +468,12 @@ target_link_libraries(example_control_flow PRIVATE agentflow)
 # ============================================================================
 # Tests
 # ============================================================================
-enable_testing()
+if(AGENTFLOW_BUILD_TESTS)
+  enable_testing()
 
-set(USE_GTEST ${GTest_FOUND})
+  set(USE_GTEST ${GTest_FOUND})
 
-if(USE_GTEST)
+  if(USE_GTEST)
   message(STATUS "Google Test found. Using Google Test framework.")
   # Google Test based tests
   add_executable(test_agentflow_gtest
@@ -536,25 +538,28 @@ if(USE_GTEST)
     target_compile_options(test_adapter_isolation PRIVATE -Wno-non-virtual-dtor)
   endif()
   add_test(NAME AdapterIsolationTests COMMAND test_adapter_isolation)
-else()
-  message(STATUS "Google Test not found. Using simple test harness.")
-  # Simple test harness (fallback)
-  add_executable(test_agentflow_simple
-      ${AGENTFLOW_TEST_DIR}/test_main.cpp
-      ${AGENTFLOW_TEST_DIR}/test_agent.cpp
-      ${AGENTFLOW_TEST_DIR}/test_workflow.cpp
-      ${AGENTFLOW_TEST_DIR}/test_node.cpp
-      ${AGENTFLOW_TEST_DIR}/test_databus.cpp
-  )
-  target_link_libraries(test_agentflow_simple PRIVATE agentflow)
-  add_test(NAME AgentFlowSimpleTests COMMAND test_agentflow_simple)
+  else()
+    message(STATUS "Google Test not found. Using simple test harness.")
+    # Simple test harness (fallback)
+    add_executable(test_agentflow_simple
+        ${AGENTFLOW_TEST_DIR}/test_main.cpp
+        ${AGENTFLOW_TEST_DIR}/test_agent.cpp
+        ${AGENTFLOW_TEST_DIR}/test_workflow.cpp
+        ${AGENTFLOW_TEST_DIR}/test_node.cpp
+        ${AGENTFLOW_TEST_DIR}/test_databus.cpp
+    )
+    target_link_libraries(test_agentflow_simple PRIVATE agentflow)
+    add_test(NAME AgentFlowSimpleTests COMMAND test_agentflow_simple)
 
-  # Adapter isolation tests (standalone executable when no Google Test)
-  add_executable(test_adapter_isolation
-      ${AGENTFLOW_TEST_DIR}/test_adapter_isolation.cpp
-  )
-  target_link_libraries(test_adapter_isolation PRIVATE agentflow)
-  add_test(NAME AdapterIsolationTests COMMAND test_adapter_isolation)
+    # Adapter isolation tests (standalone executable when no Google Test)
+    add_executable(test_adapter_isolation
+        ${AGENTFLOW_TEST_DIR}/test_adapter_isolation.cpp
+    )
+    target_link_libraries(test_adapter_isolation PRIVATE agentflow)
+    add_test(NAME AdapterIsolationTests COMMAND test_adapter_isolation)
+  endif()
+else()
+  message(STATUS "Tests disabled (AGENTFLOW_BUILD_TESTS=OFF)")
 endif()
 
 # ============================================================================

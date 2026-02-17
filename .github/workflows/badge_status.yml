@@ -38,7 +38,7 @@ jobs:
             echo "color=yellow" >> "$GITHUB_OUTPUT"
           fi
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
 
       - name: Generate badge status
         run: |

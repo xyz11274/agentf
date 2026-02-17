@@ -18,7 +18,11 @@ set(TEST_SOURCES
 )
 
 # Find dependencies
-find_package(GTest 1.10 REQUIRED)
+find_package(GTest 1.10 QUIET)
+if(NOT GTest_FOUND)
+    message(STATUS "GTest not found in tests/ subdir; skipping extra test targets")
+    return()
+endif()
 
 # Test library (SO library for hot reload testing)
 add_library(test_hot_reload_lib SHARED
