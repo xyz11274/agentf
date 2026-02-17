@@ -157,7 +157,7 @@ if(USE_LIBEVENT)
       if(LIBEVENT_INCLUDE_DIRS)
         include_directories(${LIBEVENT_INCLUDE_DIRS})
       endif()
-      if(LIBEVENT_LIBRARIES)
+      if(LIBEVENT_LIBRARIES AND NOT TARGET libevent::libevent)
         # Create an imported target for libevent
         add_library(libevent::libevent STATIC IMPORTED)
         set_target_properties(libevent::libevent PROPERTIES
@@ -192,11 +192,13 @@ if(USE_LIBEVENT)
       message(STATUS "  libevent Include: ${LIBEVENT_INCLUDE_DIR}")
       set(USE_LIBEVENT ON)
       # Create imported target
-      add_library(libevent::libevent STATIC IMPORTED)
-      set_target_properties(libevent::libevent PROPERTIES
-        IMPORTED_LOCATION "${LIBEVENT_LIB}"
-        INTERFACE_INCLUDE_DIRECTORIES "${LIBEVENT_INCLUDE_DIR}"
-      )
+      if(NOT TARGET libevent::libevent)
+        add_library(libevent::libevent STATIC IMPORTED)
+        set_target_properties(libevent::libevent PROPERTIES
+          IMPORTED_LOCATION "${LIBEVENT_LIB}"
+          INTERFACE_INCLUDE_DIRECTORIES "${LIBEVENT_INCLUDE_DIR}"
+        )
+      endif()
     else()
       message(STATUS "libevent not found - using stub event loop")
       message(STATUS "  To install: brew install libevent (macOS) or sudo apt-get install libevent-dev (Ubuntu)")
@@ -477,17 +479,17 @@ if(AGENTFLOW_BUILD_TESTS)
   message(STATUS "Google Test found. Using Google Test framework.")
   # Google Test based tests
   add_executable(test_agentflow_gtest
-      ${AGENTFLOW_TEST_DIR}/test_agent_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/test_workflow_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/test_node_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/test_databus_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/test_event_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/test_eventloop_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/test_workflow_json_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/test_agent_json_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/test_local_channel_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/test_request_response_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/test_hot_reload.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_agent_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_workflow_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_node_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_databus_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_event_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_eventloop_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_workflow_json_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_agent_json_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_local_channel_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_request_response_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_hot_reload.cpp
   )
   if(TARGET GTest::gtest)
     target_link_libraries(test_agentflow_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)
@@ -503,9 +505,9 @@ if(AGENTFLOW_BUILD_TESTS)
   add_test(NAME AgentFlowGoogleTests COMMAND test_agentflow_gtest)
 
   # Hot reload tests (separate executable for better organization)
-  add_executable(test_hot_reload
-      ${AGENTFLOW_TEST_DIR}/test_hot_reload.cpp
-  )
+    add_executable(test_hot_reload
+      ${AGENTFLOW_TEST_DIR}/src/test_hot_reload.cpp
+    )
   if(TARGET GTest::gtest)
     target_link_libraries(test_hot_reload PRIVATE agentflow GTest::gtest GTest::gtest_main)
   else()
@@ -523,9 +525,9 @@ if(AGENTFLOW_BUILD_TESTS)
   add_subdirectory(tests)
 
   # Adapter isolation tests with Google Test
-  add_executable(test_adapter_isolation
-      ${AGENTFLOW_TEST_DIR}/test_adapter_isolation.cpp
-  )
+    add_executable(test_adapter_isolation
+      ${AGENTFLOW_TEST_DIR}/src/test_adapter_isolation.cpp
+    )
   if(TARGET GTest::gtest)
     target_link_libraries(test_adapter_isolation PRIVATE agentflow GTest::gtest GTest::gtest_main)
   else()
@@ -542,18 +544,18 @@ if(AGENTFLOW_BUILD_TESTS)
     message(STATUS "Google Test not found. Using simple test harness.")
     # Simple test harness (fallback)
     add_executable(test_agentflow_simple
-        ${AGENTFLOW_TEST_DIR}/test_main.cpp
-        ${AGENTFLOW_TEST_DIR}/test_agent.cpp
-        ${AGENTFLOW_TEST_DIR}/test_workflow.cpp
-        ${AGENTFLOW_TEST_DIR}/test_node.cpp
-        ${AGENTFLOW_TEST_DIR}/test_databus.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_main.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_agent.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_workflow.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_node.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_databus.cpp
     )
     target_link_libraries(test_agentflow_simple PRIVATE agentflow)
     add_test(NAME AgentFlowSimpleTests COMMAND test_agentflow_simple)
 
     # Adapter isolation tests (standalone executable when no Google Test)
     add_executable(test_adapter_isolation
-        ${AGENTFLOW_TEST_DIR}/test_adapter_isolation.cpp
+      ${AGENTFLOW_TEST_DIR}/src/test_adapter_isolation.cpp
     )
     target_link_libraries(test_adapter_isolation PRIVATE agentflow)
     add_test(NAME AdapterIsolationTests COMMAND test_adapter_isolation)

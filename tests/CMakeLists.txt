@@ -49,13 +49,15 @@ else()
 endif()
 
 # Test executables
-add_executable(test_hot_reload ${TEST_SOURCES})
-target_link_libraries(test_hot_reload PRIVATE
-    agentflow
-    GTest::gtest
-    GTest::gtest_main
-    test_hot_reload_lib
-)
+if(NOT TARGET test_hot_reload)
+    add_executable(test_hot_reload ${TEST_SOURCES})
+    target_link_libraries(test_hot_reload PRIVATE
+        agentflow
+        GTest::gtest
+        GTest::gtest_main
+        test_hot_reload_lib
+    )
+endif()
 
 # Other test executables
 add_executable(test_agent_gtest
@@ -114,7 +116,9 @@ target_link_libraries(test_eventloop_gtest PRIVATE
 
 # Compiler options
 if(NOT MSVC)
-    target_compile_options(test_hot_reload PRIVATE -Wno-non-virtual-dtor)
+    if(TARGET test_hot_reload)
+        target_compile_options(test_hot_reload PRIVATE -Wno-non-virtual-dtor)
+    endif()
     target_compile_options(test_agent_gtest PRIVATE -Wno-non-virtual-dtor)
     target_compile_options(test_workflow_gtest PRIVATE -Wno-non-virtual-dtor)
     target_compile_options(test_node_gtest PRIVATE -Wno-non-virtual-dtor)
@@ -128,7 +132,9 @@ add_subdirectory(scripts)
 
 # Testing
 enable_testing()
-add_test(NAME HotReloadTests COMMAND test_hot_reload)
+if(TARGET test_hot_reload)
+    add_test(NAME HotReloadTests COMMAND test_hot_reload)
+endif()
 add_test(NAME AgentTests COMMAND test_agent_gtest)
 add_test(NAME WorkflowTests COMMAND test_workflow_gtest)
 add_test(NAME NodeTests COMMAND test_node_gtest)
