@@ -28,10 +28,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64
-          - os: ubuntu-latest
-            arch: x86_64
-            name: "Linux AMD64"
           # Linux ARM64 (QEMU)
           - os: ubuntu-latest
             arch: arm64
@@ -76,26 +72,15 @@ jobs:
       - name: Configure CMake
         working-directory: build
         run: |
-          if [[ "${{ matrix.os }}" == "ubuntu-latest" && "${{ matrix.arch }}" == "arm64" ]]; then
-            cmake .. \
-              -DCMAKE_BUILD_TYPE=Debug \
-              -DCMAKE_CXX_STANDARD=17 \
-              -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-              -DAGENTFLOW_BUILD_TESTS=ON \
-              -DAGENTFLOW_WITH_PROTOACTOR=OFF \
-              -DAGENTFLOW_WITH_OPENSSL=ON \
-              -DAGENTFLOW_WITH_PROTOBUF=ON \
-              -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
-          else
-            cmake .. \
-              -DCMAKE_BUILD_TYPE=Debug \
-              -DCMAKE_CXX_STANDARD=17 \
-              -DAGENTFLOW_BUILD_TESTS=ON \
-              -DAGENTFLOW_WITH_PROTOACTOR=OFF \
-              -DAGENTFLOW_WITH_OPENSSL=ON \
-              -DAGENTFLOW_WITH_PROTOBUF=ON \
-              -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
-          fi
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_STANDARD=17 \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DAGENTFLOW_BUILD_TESTS=ON \
+            -DAGENTFLOW_WITH_PROTOACTOR=OFF \
+            -DAGENTFLOW_WITH_OPENSSL=ON \
+            -DAGENTFLOW_WITH_PROTOBUF=ON \
+            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
 
       - name: Build
         working-directory: build
