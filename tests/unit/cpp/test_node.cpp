@@ -12,6 +12,12 @@ void test_node() {
   config.type        = "test";
   config.max_retries = 3;
   config.timeout_ms  = 1000;
+  config.cpp_function = [](const DataMap& inputs, DataMap& outputs) -> bool {
+    // Simple test function that just returns success
+    (void)inputs;
+    outputs["result"] = true;
+    return true;
+  };
 
   auto node = std::make_shared<framework::Node>(config);
 

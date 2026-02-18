@@ -353,109 +353,112 @@ include_directories(${AGENTFLOW_INCLUDE_DIR}/external)
 # Internal headers - for internal implementation only
 include_directories(${AGENTFLOW_INCLUDE_DIR}/internal)
 
-# Source files
-set(AGENTFLOW_CORE_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/core/node.cpp
-    ${AGENTFLOW_SOURCE_DIR}/core/edge.cpp
-    ${AGENTFLOW_SOURCE_DIR}/core/workflow.cpp
-    ${AGENTFLOW_SOURCE_DIR}/core/agent.cpp
+# Source files - Reorganized structure
+
+# Agent sources
+set(AGENTFLOW_AGENT_SOURCES
+    ${AGENTFLOW_SOURCE_DIR}/agent/agent.cpp
 )
 
+# Workflow sources (includes node, edge, dsl)
+set(AGENTFLOW_WORKFLOW_SOURCES
+    ${AGENTFLOW_SOURCE_DIR}/workflow/workflow.cpp
+    ${AGENTFLOW_SOURCE_DIR}/workflow/workflow_actor.cpp
+    ${AGENTFLOW_SOURCE_DIR}/workflow/workflow_storage.cpp
+    ${AGENTFLOW_SOURCE_DIR}/workflow/node/node.cpp
+    ${AGENTFLOW_SOURCE_DIR}/workflow/node/node_actor.cpp
+    ${AGENTFLOW_SOURCE_DIR}/workflow/node/code_loader.cpp
+    ${AGENTFLOW_SOURCE_DIR}/workflow/edge/edge.cpp
+    ${AGENTFLOW_SOURCE_DIR}/workflow/dsl/workflow_parser.cpp
+    ${AGENTFLOW_SOURCE_DIR}/workflow/dsl/json_adapter_factory.cpp
+)
+
+# Runtime sources
 set(AGENTFLOW_RUNTIME_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/runtime/databus.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/agent_runtime.cpp
+    # Actor subsystem
+    ${AGENTFLOW_SOURCE_DIR}/runtime/actor/actor_system.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/actor/adapter_factory.cpp
+    # Scheduler
+    ${AGENTFLOW_SOURCE_DIR}/runtime/scheduler/agent_runtime.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/scheduler/control_flow.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/scheduler/performance_metrics.cpp
+    # Communication
+    ${AGENTFLOW_SOURCE_DIR}/runtime/communication/databus.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/communication/zero_copy_databus.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/communication/local_channel.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/communication/hot_reload.cpp
+    # Storage
+    ${AGENTFLOW_SOURCE_DIR}/runtime/storage/storage.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/storage/storage_manager.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/storage/agent_storage.cpp
+    # Network
+    ${AGENTFLOW_SOURCE_DIR}/runtime/network/private_protocol.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/network/request.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/network/response.cpp
+    # Event & Metrics
+    ${AGENTFLOW_SOURCE_DIR}/runtime/event.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/metrics.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/hot_reload.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/code_loader.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/performance_metrics.cpp
 )
 
+# Utils sources
 set(AGENTFLOW_UTILS_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/utils/logger.cpp
-    ${AGENTFLOW_SOURCE_DIR}/utils/thread_pool.cpp
+    ${AGENTFLOW_SOURCE_DIR}/utils/log/logger.cpp
+    ${AGENTFLOW_SOURCE_DIR}/utils/log/thread_pool.cpp
 )
 
-set(AGENTFLOW_ACTOR_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/actor/actor_system.cpp
-    ${AGENTFLOW_SOURCE_DIR}/actor/adapter_factory.cpp
+# Actor adapter sources
+set(AGENTFLOW_ACTOR_ADAPTER_SOURCES
     ${AGENTFLOW_VENDOR_DIR}/adapter/actor/stub_impl.cpp
-    ${AGENTFLOW_SOURCE_DIR}/actor/node_actor.cpp
-    ${AGENTFLOW_SOURCE_DIR}/actor/workflow_actor.cpp
 )
 
-# Include Protoactor implementation only if available
+# Include Protoactor implementation and additional sources only if available
 if(USE_PROTOACTOR)
-  list(APPEND AGENTFLOW_ACTOR_SOURCES
+  list(APPEND AGENTFLOW_ACTOR_ADAPTER_SOURCES
        ${AGENTFLOW_VENDOR_DIR}/adapter/actor/protoactor_impl.cpp
-       ${AGENTFLOW_SOURCE_DIR}/actor/message_serializer.cpp
-       ${AGENTFLOW_SOURCE_DIR}/actor/ask_pattern_manager.cpp
+  )
+  list(APPEND AGENTFLOW_RUNTIME_SOURCES
+       ${AGENTFLOW_SOURCE_DIR}/runtime/actor/message_serializer.cpp
+       ${AGENTFLOW_SOURCE_DIR}/runtime/actor/ask_pattern_manager.cpp
   )
 endif()
 
-# DSL/JSON sources
-set(AGENTFLOW_DSL_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/dsl/json_adapter_factory.cpp
+# DSL/JSON adapter sources
+set(AGENTFLOW_DSL_ADAPTER_SOURCES
     ${AGENTFLOW_VENDOR_DIR}/adapter/dsl/json_adapter_stub.cpp
-    ${AGENTFLOW_SOURCE_DIR}/dsl/workflow_parser.cpp
 )
 
 if(USE_RAPIDJSON)
-  list(APPEND AGENTFLOW_DSL_SOURCES
+  list(APPEND AGENTFLOW_DSL_ADAPTER_SOURCES
        ${AGENTFLOW_VENDOR_DIR}/adapter/dsl/json_adapter_rapidjson.cpp
   )
 endif()
 
-# Network sources
-set(AGENTFLOW_NETWORK_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/network/adapter_factory.cpp
-    ${AGENTFLOW_SOURCE_DIR}/network/private_protocol.cpp
-    ${AGENTFLOW_SOURCE_DIR}/network/request.cpp
-    ${AGENTFLOW_SOURCE_DIR}/network/response.cpp
+# Event adapter sources
+set(AGENTFLOW_EVENT_ADAPTER_SOURCES
+    ${AGENTFLOW_VENDOR_DIR}/adapter/event/libevent_impl.cpp
+    ${AGENTFLOW_VENDOR_DIR}/adapter/event/adapter_factory.cpp
 )
 
-# Serialization sources
-set(AGENTFLOW_SERIALIZATION_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/serialization/adapter_factory.cpp
+# Network adapter sources
+set(AGENTFLOW_NETWORK_ADAPTER_SOURCES
+    ${AGENTFLOW_VENDOR_DIR}/adapter/network/adapter_factory.cpp
 )
 
-# Event sources
-set(AGENTFLOW_EVENT_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/event/event.cpp
-    ${AGENTFLOW_SOURCE_DIR}/event/adapter_factory.cpp
-    ${AGENTFLOW_VENDOR_DIR}/adapter/eventloop/libevent_impl.cpp
-)
-
-# Storage sources
-set(AGENTFLOW_STORAGE_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/storage/storage.cpp
-    ${AGENTFLOW_SOURCE_DIR}/storage/agent_storage.cpp
-    ${AGENTFLOW_SOURCE_DIR}/storage/workflow_storage.cpp
-    ${AGENTFLOW_SOURCE_DIR}/storage/storage_manager.cpp
-)
-
-# Control flow sources
-set(AGENTFLOW_CONTROL_FLOW_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/runtime/control_flow.cpp
-)
-
-# Zero-copy data bus sources
-set(AGENTFLOW_ZERO_COPY_DATABUS_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/runtime/zero_copy_databus.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/local_channel.cpp
+# Serialization adapter sources
+set(AGENTFLOW_SERIALIZATION_ADAPTER_SOURCES
+    ${AGENTFLOW_VENDOR_DIR}/adapter/serialization/adapter_factory.cpp
 )
 
 set(AGENTFLOW_SOURCES
-    ${AGENTFLOW_CORE_SOURCES}
+    ${AGENTFLOW_AGENT_SOURCES}
+    ${AGENTFLOW_WORKFLOW_SOURCES}
     ${AGENTFLOW_RUNTIME_SOURCES}
     ${AGENTFLOW_UTILS_SOURCES}
-    ${AGENTFLOW_ACTOR_SOURCES}
-    ${AGENTFLOW_DSL_SOURCES}
-    ${AGENTFLOW_NETWORK_SOURCES}
-    ${AGENTFLOW_SERIALIZATION_SOURCES}
-    ${AGENTFLOW_EVENT_SOURCES}
-    ${AGENTFLOW_STORAGE_SOURCES}
-    ${AGENTFLOW_CONTROL_FLOW_SOURCES}
-    ${AGENTFLOW_ZERO_COPY_DATABUS_SOURCES}
+    ${AGENTFLOW_ACTOR_ADAPTER_SOURCES}
+    ${AGENTFLOW_DSL_ADAPTER_SOURCES}
+    ${AGENTFLOW_EVENT_ADAPTER_SOURCES}
+    ${AGENTFLOW_NETWORK_ADAPTER_SOURCES}
+    ${AGENTFLOW_SERIALIZATION_ADAPTER_SOURCES}
 )
 
 # Create main library
@@ -673,16 +676,7 @@ if(AGENTFLOW_BUILD_TESTS)
     if(AGENTFLOW_TEST_ENV)
       set_tests_properties(AgentFlowSimpleTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
     endif()
-
-    # Adapter isolation tests (standalone executable when no Google Test)
-    add_executable(test_adapter_isolation
-      ${AGENTFLOW_TEST_DIR}/unit/cpp/test_adapter_isolation.cpp
-    )
-    target_link_libraries(test_adapter_isolation PRIVATE agentflow)
-    add_test(NAME AdapterIsolationTests COMMAND test_adapter_isolation)
-    if(AGENTFLOW_TEST_ENV)
-      set_tests_properties(AdapterIsolationTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
-    endif()
+    # Note: test_adapter_isolation requires Google Test and is skipped when GTest is not available
   endif()
 else()
   message(STATUS "Tests disabled (AGENTFLOW_BUILD_TESTS=OFF)")

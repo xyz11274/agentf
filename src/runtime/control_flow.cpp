@@ -3,7 +3,7 @@
 //
 // Control flow management implementation
 
-#include "runtime/control_flow.h"
+#include "runtime/scheduler/control_flow.h"
 
 #include <algorithm>
 #include <cstdlib>

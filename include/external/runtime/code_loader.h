@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "common.h"
-#include "runtime/hot_reload.h"
+#include "runtime/communication/hot_reload.h"
 
 namespace agentflow {
 namespace runtime {

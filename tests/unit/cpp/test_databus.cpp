@@ -10,11 +10,11 @@ void test_databus() {
   HighSpeedDataBus databus(1024 * 1024);  // 1MB capacity
 
   // Test put and get
-  assert(databus.put("key1", "value1"));
+  assert(databus.put("key1", std::string("value1")));
 
   agentflow::DataVariant value;
   assert(databus.get("key1", value));
-  assert(value == "value1");
+  assert(std::get<std::string>(value) == "value1");
 
   // Test contains
   assert(databus.contains("key1"));

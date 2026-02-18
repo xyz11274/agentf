@@ -20,12 +20,12 @@ void test_agent() {
   assert(agent->get_state() == AgentState::CREATED);
 
   // Test data bus operations
-  DataVariant value = "test_value";
+  DataVariant value = std::string("test_value");
   assert(agent->publish_data("key1", value));
 
   DataVariant retrieved;
   assert(agent->get_data("key1", retrieved));
-  assert(retrieved == "test_value");
+  assert(std::get<std::string>(retrieved) == "test_value");
 
   // Test event queue operations
   agent->post_event("event1");

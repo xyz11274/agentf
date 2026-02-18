@@ -3,7 +3,7 @@
 //
 // Zero-copy data bus implementation using shared memory
 
-#include "runtime/zero_copy_databus.h"
+#include "runtime/communication/zero_copy_databus.h"
 
 #include <algorithm>
 #include <cstring>

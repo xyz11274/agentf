@@ -21,22 +21,31 @@ void test_workflow() {
   assert(workflow->get_state() == WorkflowState::CREATED);
 
   // Test adding nodes
-  framework::Node::Config node_config;
-  node_config.id   = "node1";
-  node_config.name = "Node1";
-  node_config.type = "test";
+  framework::Node::Config node_config1;
+  node_config1.id   = "node1";
+  node_config1.name = "Node1";
+  node_config1.type = "test";
 
-  auto node1 = std::make_shared<framework::Node>(node_config);
+  auto node1 = std::make_shared<framework::Node>(node_config1);
   workflow->add_node(node1);
 
-  assert(workflow->get_nodes().size() == 1);
-  assert(workflow->get_node("node1") != nullptr);
+  framework::Node::Config node_config2;
+  node_config2.id   = "node2";
+  node_config2.name = "Node2";
+  node_config2.type = "test";
 
-  // Test adding edges
+  auto node2 = std::make_shared<framework::Node>(node_config2);
+  workflow->add_node(node2);
+
+  assert(workflow->get_nodes().size() == 2);
+  assert(workflow->get_node("node1") != nullptr);
+  assert(workflow->get_node("node2") != nullptr);
+
+  // Test adding edges (node1 -> node2, no cycle)
   framework::Edge::Config edge_config;
   edge_config.id          = "edge1";
   edge_config.source_node = "node1";
-  edge_config.target_node = "node1";
+  edge_config.target_node = "node2";
 
   auto edge1 = std::make_shared<framework::Edge>(edge_config);
   workflow->add_edge(edge1);
@@ -49,5 +58,5 @@ void test_workflow() {
 
   // Test removal
   workflow->remove_node("node1");
-  assert(workflow->get_nodes().size() == 0);
+  assert(workflow->get_nodes().size() == 1);
 }

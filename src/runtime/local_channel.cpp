@@ -3,7 +3,7 @@
 //
 // Local data channel implementation with zero-copy support
 
-#include "runtime/local_channel.h"
+#include "runtime/communication/local_channel.h"
 
 #include <algorithm>
 #include <cstring>

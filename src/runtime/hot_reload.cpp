@@ -1,4 +1,4 @@
-#include "runtime/hot_reload.h"
+#include "runtime/communication/hot_reload.h"
 
 #include <algorithm>
 #include <atomic>

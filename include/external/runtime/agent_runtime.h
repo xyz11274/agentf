@@ -9,9 +9,9 @@
 #include <vector>
 
 #include "common.h"
-#include "core/agent.h"
-#include "core/workflow.h"
-#include "runtime/databus.h"
+#include "agent/agent.h"
+#include "workflow/workflow.h"
+#include "runtime/communication/databus.h"
 
 namespace agentflow {
 namespace runtime {
