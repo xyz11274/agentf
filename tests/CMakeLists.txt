@@ -26,7 +26,7 @@ endif()
 
 # Test library (SO library for hot reload testing)
 add_library(test_hot_reload_lib SHARED
-    lib/hot_reload_test.cpp
+    unit/lib/hot_reload_test.cpp
 )
 
 set_target_properties(test_hot_reload_lib PROPERTIES
@@ -128,7 +128,7 @@ if(NOT MSVC)
 endif()
 
 # Add subdirectories
-add_subdirectory(scripts)
+add_subdirectory(unit/scripts)
 
 # Testing
 enable_testing()

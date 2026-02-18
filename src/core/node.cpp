@@ -1,4 +1,4 @@
-#include "agentflow/core/node.h"
+#include "core/node.h"
 
 #include <chrono>
 #include <cstring>
@@ -6,8 +6,8 @@
 #include <memory>
 #include <thread>
 
-#include "agentflow/utils/logger.h"
-#include "agentflow/utils/thread_pool.h"
+#include "utils/logger.h"
+#include "utils/thread_pool.h"
 
 namespace agentflow {
 namespace framework {

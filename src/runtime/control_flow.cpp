@@ -3,14 +3,14 @@
 //
 // Control flow management implementation
 
-#include "agentflow/runtime/control_flow.h"
+#include "runtime/control_flow.h"
 
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
 
-#include "agentflow/utils/logger.h"
+#include "utils/logger.h"
 
 namespace agentflow {
 namespace runtime {

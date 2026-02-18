@@ -3,8 +3,8 @@
 //
 // Ask pattern manager - lightweight wrapper for Protoactor's built-in ask
 
-#include "agentflow/actor/ask_pattern.h"
-#include "agentflow/utils/logger.h"
+#include "actor/ask_pattern.h"
+#include "utils/logger.h"
 
 #ifdef AGENTFLOW_WITH_PROTOACTOR
 

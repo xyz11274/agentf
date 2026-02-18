@@ -5,11 +5,11 @@
 
 #include <gtest/gtest.h>
 
-#include "agentflow/dsl/workflow_parser.h"
-#include "agentflow/core/edge.h"
-#include "agentflow/core/node.h"
-#include "agentflow/core/workflow.h"
-#include "agentflow/runtime/control_flow.h"
+#include "dsl/workflow_parser.h"
+#include "core/edge.h"
+#include "core/node.h"
+#include "core/workflow.h"
+#include "runtime/control_flow.h"
 
 namespace agentflow {
 namespace tests {

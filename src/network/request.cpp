@@ -3,14 +3,14 @@
 //
 // Request wrapper implementation
 
-#include "agentflow/network/request.h"
+#include "network/request.h"
 
 #include <atomic>
 #include <chrono>
 #include <cstring>
 #include <sstream>
 
-#include "agentflow/utils/logger.h"
+#include "utils/logger.h"
 
 namespace agentflow {
 namespace network {

@@ -9,9 +9,9 @@
 #include <memory>
 #include <thread>
 
-#include "agentflow/actor/adapter.h"
-#include "agentflow/utils/logger.h"
-#include "agentflow/common.h"
+#include "actor/adapter.h"
+#include "utils/logger.h"
+#include "common.h"
 
 using namespace agentflow;
 using namespace agentflow::actor::adapter;

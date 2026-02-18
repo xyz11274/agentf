@@ -1,8 +1,8 @@
 #include <cassert>
 
-#include "agentflow/core/edge.h"
-#include "agentflow/core/node.h"
-#include "agentflow/core/workflow.h"
+#include "core/edge.h"
+#include "core/node.h"
+#include "core/workflow.h"
 
 using namespace agentflow;
 

@@ -91,27 +91,29 @@ agent->start();
 - **[CI/CD 设置](docs/ci-cd.md)** - 配置和常见问题
 - **[重构说明](docs/REFACTORING.md)** - 项目目录结构优化说明
 
-## 🏗️ 项目结构
+## 项目结构
 
 ```
 AgentFlow/
-├── include/agentflow/    # 头文件
-│   ├── framework/        # Agent、Workflow、Node、Edge
-│   ├── runtime/          # 运行时引擎、数据总线、控制流
-│   ├── actor/            # Actor 系统
-│   └── ...
-├── src/                  # 源代码
-├── tests/                # 测试
-├── examples/             # 示例
-├── docs/                 # 📚 所有项目文档
-├── configs/              # 配置文件
-├── proto/                # Protobuf 定义
-├── vendor/               # 🔧 三方依赖下载和适配器
-│   ├── vendor.sh         # 依赖下载脚本
-│   └── adapter/          # 三方适配器实现
-└── build/                # 🔧 构建脚本和配置
-    ├── cmake/            # CMake 配置文件
-    └── install_dependencies.sh  # 依赖安装脚本
+├── include/             # 头文件
+│   ├── external/        # 公共 API（供外部调用方使用）
+│   │   ├── core/        # Agent、Workflow、Node、Edge
+│   │   ├── runtime/     # 运行时引擎、数据总线、控制流
+│   │   ├── actor/       # Actor 系统
+│   │   └── ...
+│   └── internal/        # 内部实现（仅供内部系统使用）
+├── src/                 # 核心业务源代码
+├── vendor/              # 三方依赖和适配器
+│   ├── vendor.sh        # 依赖下载脚本
+│   └── adapter/         # 三方适配器实现
+├── tests/               # 测试
+│   ├── unit/            # 单元测试
+│   └── functional/      # 功能测试
+├── examples/            # 示例
+├── docs/                # 文档
+├── configs/             # 配置文件
+├── proto/               # Protobuf 定义
+└── build/               # 构建输出和CMake配置
 ```
 
 ## 🔗 系统架构

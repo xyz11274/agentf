@@ -3,7 +3,7 @@
 //
 // Storage manager implementation
 
-#include "agentflow/storage/storage_manager.h"
+#include "storage/storage_manager.h"
 
 #include <dirent.h>
 #include <fstream>
@@ -11,7 +11,7 @@
 
 #include <sys/types.h>
 
-#include "agentflow/utils/logger.h"
+#include "utils/logger.h"
 
 namespace agentflow {
 namespace storage {

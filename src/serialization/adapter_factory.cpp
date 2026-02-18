@@ -3,9 +3,9 @@
 //
 // Serialization adapter factory implementation
 
-#include "agentflow/serialization/adapter_factory.h"
+#include "serialization/adapter_factory.h"
 
-#include "agentflow/serialization/proto_adapter/protobuf_impl.h"
+#include "serialization/proto_adapter/protobuf_impl.h"
 
 namespace agentflow {
 namespace serialization {

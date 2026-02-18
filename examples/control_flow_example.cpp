@@ -5,9 +5,9 @@
 
 #include <iostream>
 
-#include "agentflow/utils/logger.h"
-#include "agentflow/runtime/control_flow.h"
-#include "agentflow/runtime/zero_copy_databus.h"
+#include "utils/logger.h"
+#include "runtime/control_flow.h"
+#include "runtime/zero_copy_databus.h"
 
 using namespace agentflow;
 

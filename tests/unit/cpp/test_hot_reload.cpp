@@ -8,10 +8,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "agentflow/utils/logger.h"
-#include "agentflow/core/node.h"
-#include "agentflow/runtime/code_loader.h"
-#include "agentflow/runtime/hot_reload.h"
+#include "utils/logger.h"
+#include "core/node.h"
+#include "runtime/code_loader.h"
+#include "runtime/hot_reload.h"
 
 using namespace agentflow;
 using namespace agentflow::runtime;

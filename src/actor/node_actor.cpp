@@ -3,13 +3,13 @@
 //
 // Node Actor implementation
 
-#include "agentflow/actor/node_actor.h"
+#include "actor/node_actor.h"
 
 #ifdef AGENTFLOW_WITH_PROTOACTOR
 
 #include <chrono>
 
-#include "agentflow/utils/logger.h"
+#include "utils/logger.h"
 #include "protoactor/context.h"
 #include "protoactor/pid.h"
 

@@ -3,9 +3,9 @@
 //
 // Event loop adapter factory implementation
 
-#include "agentflow/event/adapter_factory.h"
+#include "event/adapter_factory.h"
 
-#include "agentflow/event/eventloop_adapter/libevent_impl.h"
+#include "event/eventloop_adapter/libevent_impl.h"
 
 namespace agentflow {
 namespace event {

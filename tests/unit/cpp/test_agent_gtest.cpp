@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-#include "agentflow/core/agent.h"
+#include "core/agent.h"
 
 class AgentTest : public ::testing::Test {
 protected:

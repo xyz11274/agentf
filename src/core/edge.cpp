@@ -1,4 +1,4 @@
-#include "agentflow/core/edge.h"
+#include "core/edge.h"
 
 #include <algorithm>
 

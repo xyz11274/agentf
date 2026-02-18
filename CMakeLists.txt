@@ -339,9 +339,13 @@ set(AGENTFLOW_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 set(AGENTFLOW_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src)
 set(AGENTFLOW_TEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 set(AGENTFLOW_EXAMPLE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/examples)
+set(AGENTFLOW_VENDOR_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vendor)
 
 # Include directories
-include_directories(${AGENTFLOW_INCLUDE_DIR})
+# Public headers (external) - for external users
+include_directories(${AGENTFLOW_INCLUDE_DIR}/external)
+# Internal headers - for internal implementation only
+include_directories(${AGENTFLOW_INCLUDE_DIR}/internal)
 
 # Source files
 set(AGENTFLOW_CORE_SOURCES
@@ -368,7 +372,7 @@ set(AGENTFLOW_UTILS_SOURCES
 set(AGENTFLOW_ACTOR_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/actor/actor_system.cpp
     ${AGENTFLOW_SOURCE_DIR}/actor/adapter_factory.cpp
-    ${AGENTFLOW_SOURCE_DIR}/actor/stub_impl.cpp
+    ${AGENTFLOW_VENDOR_DIR}/adapter/actor/stub_impl.cpp
     ${AGENTFLOW_SOURCE_DIR}/actor/node_actor.cpp
     ${AGENTFLOW_SOURCE_DIR}/actor/workflow_actor.cpp
 )
@@ -376,7 +380,7 @@ set(AGENTFLOW_ACTOR_SOURCES
 # Include Protoactor implementation only if available
 if(USE_PROTOACTOR)
   list(APPEND AGENTFLOW_ACTOR_SOURCES
-       ${AGENTFLOW_SOURCE_DIR}/actor/protoactor_impl.cpp
+       ${AGENTFLOW_VENDOR_DIR}/adapter/actor/protoactor_impl.cpp
        ${AGENTFLOW_SOURCE_DIR}/actor/message_serializer.cpp
        ${AGENTFLOW_SOURCE_DIR}/actor/ask_pattern_manager.cpp
   )
@@ -385,13 +389,13 @@ endif()
 # DSL/JSON sources
 set(AGENTFLOW_DSL_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/dsl/json_adapter_factory.cpp
-    ${AGENTFLOW_SOURCE_DIR}/dsl/json_adapter_stub.cpp
+    ${AGENTFLOW_VENDOR_DIR}/adapter/dsl/json_adapter_stub.cpp
     ${AGENTFLOW_SOURCE_DIR}/dsl/workflow_parser.cpp
 )
 
 if(USE_RAPIDJSON)
   list(APPEND AGENTFLOW_DSL_SOURCES
-       ${AGENTFLOW_SOURCE_DIR}/dsl/json_adapter_rapidjson.cpp
+       ${AGENTFLOW_VENDOR_DIR}/adapter/dsl/json_adapter_rapidjson.cpp
   )
 endif()
 
@@ -412,7 +416,7 @@ set(AGENTFLOW_SERIALIZATION_SOURCES
 set(AGENTFLOW_EVENT_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/event/event.cpp
     ${AGENTFLOW_SOURCE_DIR}/event/adapter_factory.cpp
-    ${AGENTFLOW_SOURCE_DIR}/event/eventloop_adapter/libevent_impl.cpp
+    ${AGENTFLOW_VENDOR_DIR}/adapter/eventloop/libevent_impl.cpp
 )
 
 # Storage sources
@@ -704,7 +708,7 @@ message(STATUS "")
 message(STATUS "To install missing dependencies:")
 message(STATUS "")
 message(STATUS "macOS (Homebrew):")
-message(STATUS "  ./scripts/install_dependencies.sh")
+message(STATUS "  ./build/install_dependencies.sh")
 message(STATUS "")
 message(STATUS "Ubuntu/Debian:")
 message(STATUS "  sudo apt-get install libssl-dev libwebsockets-dev libevent-dev rapidjson-dev libprotobuf-dev protobuf-compiler libgtest-dev pkg-config")

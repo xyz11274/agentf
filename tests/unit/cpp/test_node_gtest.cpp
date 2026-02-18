@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-#include "agentflow/core/node.h"
+#include "core/node.h"
 
 using namespace agentflow;
 using namespace agentflow::framework;

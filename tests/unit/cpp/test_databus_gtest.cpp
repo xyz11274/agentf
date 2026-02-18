@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-#include "agentflow/runtime/databus.h"
+#include "runtime/databus.h"
 
 class DataBusTest : public ::testing::Test {
 protected:

@@ -3,12 +3,12 @@
 //
 // JSON adapter factory and helper implementation
 
-#include "agentflow/dsl/json_adapter.h"
+#include "dsl/json_adapter.h"
 
 #ifdef AGENTFLOW_WITH_RAPIDJSON
-#include "agentflow/dsl/json_adapter/rapidjson_impl.h"
+#include "dsl/json_adapter/rapidjson_impl.h"
 #else
-#include "agentflow/dsl/json_adapter/stub_impl.h"
+#include "dsl/json_adapter/stub_impl.h"
 #endif
 
 namespace agentflow {

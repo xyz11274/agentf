@@ -3,14 +3,14 @@
 //
 // Workflow Actor implementation
 
-#include "agentflow/actor/workflow_actor.h"
+#include "actor/workflow_actor.h"
 
 #ifdef AGENTFLOW_WITH_PROTOACTOR
 
 #include <algorithm>
 
-#include "agentflow/actor/node_actor.h"
-#include "agentflow/utils/logger.h"
+#include "actor/node_actor.h"
+#include "utils/logger.h"
 #include "protoactor/context.h"
 #include "protoactor/pid.h"
 #include "protoactor/props.h"

@@ -6,8 +6,8 @@
 #include <gtest/gtest.h>
 #include <iostream>
 
-#include "agentflow/actor/adapter.h"
-#include "agentflow/common.h"
+#include "actor/adapter.h"
+#include "common.h"
 
 using namespace agentflow::actor::adapter;
 

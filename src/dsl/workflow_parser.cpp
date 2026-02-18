@@ -3,19 +3,19 @@
 //
 // DSL Workflow Parser Implementation
 
-#include "agentflow/dsl/workflow_parser.h"
+#include "dsl/workflow_parser.h"
 
 #include <algorithm>
 #include <cstdlib>
 #include <sstream>
 #include <unordered_set>
 
-#include "agentflow/utils/logger.h"
-#include "agentflow/dsl/json_adapter.h"
-#include "agentflow/core/agent.h"
-#include "agentflow/core/edge.h"
-#include "agentflow/core/node.h"
-#include "agentflow/core/workflow.h"
+#include "utils/logger.h"
+#include "dsl/json_adapter.h"
+#include "core/agent.h"
+#include "core/edge.h"
+#include "core/node.h"
+#include "core/workflow.h"
 
 namespace agentflow {
 namespace dsl {

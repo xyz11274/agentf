@@ -6,13 +6,13 @@
 #include <iostream>
 #include <string>
 
-#include "agentflow/utils/logger.h"
-#include "agentflow/core/agent.h"
-#include "agentflow/core/workflow.h"
-#include "agentflow/storage/agent_storage.h"
-#include "agentflow/storage/storage.h"
-#include "agentflow/storage/storage_manager.h"
-#include "agentflow/storage/workflow_storage.h"
+#include "utils/logger.h"
+#include "core/agent.h"
+#include "core/workflow.h"
+#include "storage/agent_storage.h"
+#include "storage/storage.h"
+#include "storage/storage_manager.h"
+#include "storage/workflow_storage.h"
 
 using namespace agentflow;
 

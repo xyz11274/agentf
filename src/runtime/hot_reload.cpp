@@ -1,4 +1,4 @@
-#include "agentflow/runtime/hot_reload.h"
+#include "runtime/hot_reload.h"
 
 #include <algorithm>
 #include <atomic>
@@ -9,7 +9,7 @@
 #include <sstream>
 #include <thread>
 
-#include "agentflow/utils/logger.h"
+#include "utils/logger.h"
 
 namespace agentflow {
 namespace runtime {

@@ -3,12 +3,12 @@
 //
 // Message serializer implementation
 
-#include "agentflow/actor/message_serializer.h"
+#include "actor/message_serializer.h"
 
 #include <chrono>
 #include <cstring>
 
-#include "agentflow/utils/logger.h"
+#include "utils/logger.h"
 
 #ifdef AGENTFLOW_WITH_PROTOACTOR
 

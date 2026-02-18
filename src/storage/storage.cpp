@@ -3,7 +3,7 @@
 //
 // Storage implementation using file-based backend
 
-#include "agentflow/storage/storage.h"
+#include "storage/storage.h"
 
 #include <algorithm>
 #include <cstring>
@@ -16,7 +16,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 
-#include "agentflow/utils/logger.h"
+#include "utils/logger.h"
 
 #ifdef AGENTFLOW_WITH_RAPIDJSON
 #include <rapidjson/document.h>

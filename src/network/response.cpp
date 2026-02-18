@@ -3,13 +3,13 @@
 //
 // Response wrapper implementation
 
-#include "agentflow/network/response.h"
+#include "network/response.h"
 
 #include <chrono>
 #include <cstring>
 #include <sstream>
 
-#include "agentflow/utils/logger.h"
+#include "utils/logger.h"
 
 namespace agentflow {
 namespace network {

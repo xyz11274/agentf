@@ -3,13 +3,13 @@
 //
 // Workflow storage implementation
 
-#include "agentflow/storage/workflow_storage.h"
+#include "storage/workflow_storage.h"
 
 #include <sstream>
 
 #include <sys/time.h>
 
-#include "agentflow/utils/logger.h"
+#include "utils/logger.h"
 
 #ifdef AGENTFLOW_WITH_RAPIDJSON
 #include <rapidjson/document.h>

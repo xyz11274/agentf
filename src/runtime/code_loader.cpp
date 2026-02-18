@@ -1,4 +1,4 @@
-#include "agentflow/runtime/code_loader.h"
+#include "runtime/code_loader.h"
 
 #include <chrono>
 #include <cstring>
@@ -15,7 +15,7 @@
 
 #include <sys/wait.h>
 
-#include "agentflow/utils/logger.h"
+#include "utils/logger.h"
 
 namespace agentflow {
 namespace runtime {

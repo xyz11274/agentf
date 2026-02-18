@@ -3,12 +3,12 @@
 //
 // Zero-copy data bus implementation using shared memory
 
-#include "agentflow/runtime/zero_copy_databus.h"
+#include "runtime/zero_copy_databus.h"
 
 #include <algorithm>
 #include <cstring>
 
-#include "agentflow/utils/logger.h"
+#include "utils/logger.h"
 
 #ifdef __linux__
 #include <fcntl.h>

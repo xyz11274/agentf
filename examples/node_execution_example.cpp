@@ -5,8 +5,8 @@
 
 #include <iostream>
 
-#include "agentflow/utils/logger.h"
-#include "agentflow/core/node.h"
+#include "utils/logger.h"
+#include "core/node.h"
 
 using namespace agentflow;
 using namespace agentflow::framework;

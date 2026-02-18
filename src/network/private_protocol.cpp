@@ -3,13 +3,13 @@
 //
 // Private protocol implementation
 
-#include "agentflow/network/private_protocol.h"
+#include "network/private_protocol.h"
 
 #include <algorithm>
 #include <cstring>
 #include <string>
 
-#include "agentflow/utils/logger.h"
+#include "utils/logger.h"
 
 namespace agentflow {
 namespace network {

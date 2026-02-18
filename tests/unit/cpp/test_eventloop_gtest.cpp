@@ -9,9 +9,9 @@
 #include <thread>
 #include <vector>
 
-#include "agentflow/utils/logger.h"
-#include "agentflow/event/adapter_factory.h"
-#include "agentflow/event/eventloop_adapter.h"
+#include "utils/logger.h"
+#include "event/adapter_factory.h"
+#include "event/eventloop_adapter.h"
 
 namespace agentflow {
 namespace tests {

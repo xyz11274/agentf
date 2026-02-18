@@ -1,10 +1,10 @@
-#include "agentflow/core/workflow.h"
+#include "core/workflow.h"
 
 #include <algorithm>
 #include <queue>
 #include <unordered_set>
 
-#include "agentflow/utils/logger.h"
+#include "utils/logger.h"
 
 namespace agentflow {
 namespace framework {

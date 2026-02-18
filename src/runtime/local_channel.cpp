@@ -3,7 +3,7 @@
 //
 // Local data channel implementation with zero-copy support
 
-#include "agentflow/runtime/local_channel.h"
+#include "runtime/local_channel.h"
 
 #include <algorithm>
 #include <cstring>
@@ -13,7 +13,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 
-#include "agentflow/utils/logger.h"
+#include "utils/logger.h"
 
 namespace agentflow {
 namespace runtime {

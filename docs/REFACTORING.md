@@ -2,149 +2,169 @@
 
 本文档说明了 AgentFlow 项目目录结构的优化工作。
 
+## 目录结构总览
+
+```
+AgentFlow/
+├── build.sh              # 构建入口脚本
+├── build/                # 构建输出目录和CMake配置
+│   ├── cmake/           # CMake 配置文件
+│   └── install_dependencies.sh
+├── include/             # 头文件目录
+│   ├── external/        # 公共 API 头文件（随库发布）
+│   └── internal/        # 内部实现头文件（仅供内部使用）
+├── src/                 # 核心业务源代码
+├── vendor/              # 三方依赖和适配器
+│   ├── vendor.sh       # 三方依赖下载脚本
+│   └── adapter/        # 三方依赖适配器实现
+├── tests/               # 测试目录
+│   ├── unit/           # 单元测试
+│   └── functional/     # 功能测试
+├── examples/           # 示例代码
+├── docs/               # 项目文档
+├── configs/            # 配置文件
+└── proto/              # Protobuf 定义
+```
+
 ## 优化内容
 
-### 1. 脚本目录重组
+### 1. 头文件目录重组
 
-**变更前：**
+**目录结构：**
 ```
-scripts/
-├── vendor.sh
-├── install_dependencies.sh
-├── run_performance_tests.sh
-├── verify_cicd_setup.sh
-├── docker/
-├── helm/
-└── README.md
+include/
+├── external/            # 公共 API 头文件（供外部调用方使用）
+│   ├── core/           # 核心组件：Agent, Workflow, Node, Edge
+│   ├── runtime/        # 运行时：DataBus, HotReload, Metrics 等
+│   ├── actor/          # Actor 系统
+│   ├── network/        # 网络组件
+│   ├── serialization/  # 序列化接口
+│   ├── event/          # 事件系统
+│   ├── dsl/            # DSL 解析器接口
+│   ├── storage/        # 存储接口
+│   ├── utils/          # 工具类
+│   └── common.h        # 公共定义
+└── internal/            # 内部实现头文件（仅供内部系统使用）
+    ├── actor/adapter/  # Actor 适配器实现
+    ├── dsl/json_adapter/ # JSON 适配器实现
+    ├── event/eventloop_adapter/ # 事件循环适配器实现
+    ├── network/        # 网络内部实现
+    │   ├── ssl_adapter/
+    │   ├── websocket_adapter/
+    │   └── private_protocol.h
+    ├── serialization/proto_adapter/ # Protobuf 适配器实现
+    └── testing/        # 测试工具
 ```
 
-**变更后：**
+**说明：**
+- `external/` - 公共 API 头文件，随 agentflow 库发布，外部调用方使用
+- `internal/` - 内部实现头文件，外部无法直接调用
+- 不再有 `agentflow` 中间目录，简化 include 路径
+
+**include 方式：**
+```cpp
+// 公共 API（外部使用）
+#include "core/agent.h"
+#include "runtime/databus.h"
+
+// 内部实现（仅内部系统使用）
+#include "actor/adapter/protoactor_impl.h"
+```
+
+### 2. 测试目录重组
+
+**目录结构：**
+```
+tests/
+├── unit/                # 单元测试
+│   ├── cpp/            # C++ 单元测试代码
+│   ├── data/           # 测试数据
+│   ├── lib/            # 测试库（如 hot_reload_test）
+│   └── scripts/        # 测试脚本
+│       ├── python/
+│       └── shell/
+├── functional/          # 功能测试
+│   ├── cpp/            # 功能测试代码
+│   └── scripts/        # 功能测试脚本
+└── jars/               # Java 测试
+```
+
+**说明：**
+- `unit/` - 单元测试，针对单个组件的测试
+- `functional/` - 功能测试，包括性能测试、集成测试等
+
+### 3. 三方依赖适配器目录
+
+**目录结构：**
 ```
 vendor/
 ├── vendor.sh           # 三方依赖下载脚本
-├── README.md          # 使用文档
-└── adapter/           # 三方依赖适配器目录
-
-build/
-├── cmake/             # CMake 配置文件（从项目根目录移入）
-├── install_dependencies.sh  # 依赖安装脚本
-└── build.sh           # 构建脚本
-
-tests/
-├── functional/
-│   ├── run_performance_tests.sh  # 性能测试脚本
-│   └── test_performance.cpp
-└── unit/
-    └── cpp/          # 单元测试代码
+├── README.md           # 使用文档
+└── adapter/            # 三方依赖适配器实现
+    ├── actor/          # Actor 框架适配器
+    │   ├── protoactor_impl.cpp
+    │   └── stub_impl.cpp
+    ├── dsl/            # DSL 解析器适配器
+    │   ├── json_adapter_rapidjson.cpp
+    │   └── json_adapter_stub.cpp
+    ├── eventloop/      # 事件循环适配器
+    │   └── libevent_impl.cpp
+    ├── network/        # 网络适配器（预留）
+    └── serialization/  # 序列化适配器（预留）
 ```
 
 **说明：**
-- 三方依赖相关脚本移动到 `vendor/` 目录
-- 构建相关脚本移动到 `build/` 目录
-- 测试相关脚本移动到 `tests/` 目录
-- 删除了 `docker/`、`helm/` 等部署相关目录和 `verify_cicd_setup.sh` 等脚本
-- 删除了 `scripts/` 目录
+- `vendor/adapter/` - 与三方依赖相关的适配器代码
+- `src/` - 保留核心业务代码，不包含适配器实现
 
-### 2. 头文件目录重组
+### 4. 源代码目录
 
-**变更前：**
+**目录结构：**
 ```
-include/agentflow/
-├── core/
-├── network/
-├── runtime/
-├── actor/
-├── ...
-└── testing/
-```
-
-**变更后：**
-```
-include/
-├── agentflow/         # 保留原有结构（向后兼容）
-├── external/agentflow/ # 公共 API 头文件
-│   ├── core/
-│   ├── network/
-│   ├── runtime/
-│   ├── actor/
-│   ├── serialization/
-│   ├── event/
-│   ├── dsl/
-│   ├── storage/
-│   └── utils/
-└── internal/agentflow/ # 内部实现头文件
-    ├── actor/adapter/
-    ├── network/websocket_adapter/
-    ├── network/ssl_adapter/
-    ├── serialization/proto_adapter/
-    ├── event/eventloop_adapter/
-    ├── dsl/json_adapter/
-    ├── network/
-    └── testing/
+src/
+├── core/               # 核心组件实现
+├── runtime/            # 运行时实现
+├── actor/              # Actor 系统核心（不包含适配器）
+├── dsl/                # DSL 解析器核心（不包含适配器）
+├── event/              # 事件系统核心（不包含适配器）
+├── network/            # 网络组件核心
+├── serialization/      # 序列化核心
+├── storage/            # 存储实现
+└── utils/              # 工具类
 ```
 
 **说明：**
-- `external/agentflow/` - 公共 API 头文件，供外部使用
-- `internal/agentflow/` - 内部实现头文件，包括适配器实现等
-- 原 `agentflow/` 目录保留，用于向后兼容
+- 适配器实现代码已移动到 `vendor/adapter/` 目录
+- `src/` 只包含核心业务逻辑
 
-### 3. 测试目录重组
+### 5. 构建系统
 
-**变更前：**
-```
-tests/
-├── unit/
-│   └── legacy_src/
-├── test_performance.cpp
-├── run_performance_tests.sh
-└── ...
-```
+**构建入口：**
+- `build.sh` - 项目根目录的构建入口脚本
 
-**变更后：**
-```
-tests/
-├── unit/
-│   └── cpp/           # 单元测试代码
-│       ├── test_*.cpp
-│       └── test_main.cpp
-└── functional/        # 功能测试
-    ├── test_performance.cpp
-    └── run_performance_tests.sh
-```
-
-**说明：**
-- `unit/cpp/` - 单元测试，针对单个组件的测试
-- `functional/` - 功能测试，包括性能测试等
-
-### 4. 三方依赖适配器目录
-
-新增 `vendor/adapter/` 目录，结构如下：
-```
-vendor/adapter/
-├── network/          # 网络适配器实现
-├── serialization/    # 序列化适配器实现
-├── eventloop/        # 事件循环适配器实现
-├── dsl/              # DSL 解析器适配器实现
-└── actor/            # Actor 框架适配器实现
-```
-
-### 5. CMake 配置文件移动
-
-**变更前：**
-```
-cmake/
-├── CompilerOptions.cmake
-└── Dependencies.cmake
-```
-
-**变更后：**
-```
-build/cmake/
-├── CompilerOptions.cmake
-└── Dependencies.cmake
-```
+**构建输出：**
+- `build/` - 构建输出目录，包含编译产物和 CMake 配置
 
 ## 使用说明
+
+### 构建项目
+
+```bash
+# 构建项目
+./build.sh build
+
+# 清理构建
+./build.sh clean
+
+# 重新构建
+./build.sh rebuild
+
+# 运行测试
+./build.sh test
+
+# 运行示例
+./build.sh example basic
+```
 
 ### 下载三方依赖
 
@@ -162,18 +182,6 @@ build/cmake/
 ./vendor/vendor.sh --clean
 ```
 
-### 配置三方依赖
-
-编辑项目根目录的 `vendor.conf` 文件，格式如下：
-```
-name|url|branch|target_dir
-```
-
-示例：
-```
-nlohmann_json|https://github.com/nlohmann/json.git|develop|json
-```
-
 ### 安装构建依赖
 
 ```bash
@@ -187,59 +195,55 @@ nlohmann_json|https://github.com/nlohmann/json.git|develop|json
 # 运行单元测试
 ./build.sh test
 
-# 运行性能测试
-./tests/functional/run_performance_tests.sh
+# 运行功能测试
+./tests/functional/scripts/run_performance_tests.sh
 ```
 
-## 迁移指南
+## CMake 配置说明
 
-### 更新代码中的 include 路径
+### Include 目录配置
 
-如果代码中使用了 `include/agentflow/` 路径，可以考虑迁移到新的目录结构：
-
-**公共 API：**
-```cpp
-// 旧方式
-#include "agentflow/core/agent.h"
-
-// 新方式（推荐，用于公共 API）
-#include "agentflow/core/agent.h"  // 仍然有效
-```
-
-**内部实现：**
-```cpp
-// 新方式（用于内部实现）
-#include "internal/agentflow/network/websocket_adapter/libwebsockets_impl.h"
-```
-
-### CMake 配置更新
-
-现有的 CMake 配置无需修改，因为：
-1. `include/agentflow/` 目录仍存在
-2. `include_directories(${AGENTFLOW_INCLUDE_DIR})` 会自动包含所有子目录
-
-如需使用新的目录结构，可以在 `CMakeLists.txt` 中添加：
 ```cmake
-# 公共 API
+# 公共 API（用于外部用户）
 include_directories(${CMAKE_SOURCE_DIR}/include/external)
 
-# 内部实现（仅用于源代码）
+# 内部实现（仅用于源代码编译）
 include_directories(${CMAKE_SOURCE_DIR}/include/internal)
 ```
 
-## 注意事项
+### 源文件组织
 
-1. **向后兼容性**：保留了原有的目录结构，现有代码无需立即修改
-2. **Git 忽略**：`vendor/` 目录已添加到 `.gitignore`，不会提交到仓库
-3. **文档更新**：相关文档（如 contributing.md）已更新路径引用
-4. **构建系统**：现有的 CMakeLists.txt 无需修改即可正常工作
+```cmake
+# 核心业务代码
+set(AGENTFLOW_SOURCES
+    ${AGENTFLOW_SOURCE_DIR}/core/...
+    ${AGENTFLOW_SOURCE_DIR}/runtime/...
+    ...
+)
 
-## 后续工作建议
+# 适配器代码
+set(AGENTFLOW_ADAPTER_SOURCES
+    ${AGENTFLOW_VENDOR_DIR}/adapter/actor/...
+    ${AGENTFLOW_VENDOR_DIR}/adapter/dsl/...
+    ...
+)
+```
 
-1. 逐步将源代码中的 include 路径更新为使用新的目录结构
-2. 为 vendor/adapter 目录下的适配器添加更多实现
-3. 更新 CI/CD 配置以适应新的目录结构
-4. 更新 README 文档以反映新的项目结构
+## 设计原则
+
+1. **关注点分离**：
+   - `include/external/` - 公共 API，面向外部用户
+   - `include/internal/` - 内部实现，面向开发者
+   - `src/` - 核心业务逻辑
+   - `vendor/adapter/` - 三方依赖适配
+
+2. **模块化**：
+   - 适配器与核心业务分离
+   - 单元测试与功能测试分离
+
+3. **清晰的边界**：
+   - 外部用户只能使用 `external/` 中的接口
+   - 内部实现细节对用户透明
 
 ---
 

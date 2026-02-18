@@ -1,4 +1,4 @@
-#include "agentflow/runtime/agent_runtime.h"
+#include "runtime/agent_runtime.h"
 
 #include <atomic>
 #include <chrono>
@@ -6,7 +6,7 @@
 #include <random>
 #include <thread>
 
-#include "agentflow/utils/logger.h"
+#include "utils/logger.h"
 
 namespace agentflow {
 namespace runtime {
