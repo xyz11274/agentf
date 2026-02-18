@@ -12,6 +12,16 @@
 
 > AgentFlow 采用**双框架分离架构**——开发编排框架负责 Agent/Workflow/Node/Edge 的定义与装配，运行框架通过三层 Master-Worker 调度引擎完成 DAG 的并发执行；核心技术栈为 C++17 + Actor 反应式模型（Protoactor-cpp 可选）+ Protobuf + libwebsockets；首要质量目标是高吞吐（单机 > 1000 节点/秒）、低延迟（P99 节点调度 < 10ms）和热重载零停机。
 
+### 设计目标
+
+| 目标 | 描述 |
+|------|------|
+| **高性能** | 零拷贝数据传输、并行调度、高效事件处理 |
+| **可扩展** | 支持分布式部署、多语言节点执行、插件化架构 |
+| **高可用** | 热重载、故障转移、优雅降级 |
+| **易用性** | DSL 编排、可视化监控、丰富 API |
+| **标准化** | 遵循行业规范、开放接口协议 |
+
 ---
 
 ## 一、用例视图（Use Case View）
@@ -37,6 +47,15 @@ AgentFlow 是一个面向开发者的 **Agent Workflow 开发编排与执行引�
 | 文件存储 | 出 | POSIX FS | JSON / Protobuf Binary | Agent/Workflow 持久化 |
 | 指标系统 | 出 | 内存导出 | Prometheus 文本 / JSON | Counter/Gauge/Histogram |
 | Protoactor-cpp | 双向 | Actor 消息 | C++ 对象 / Protobuf | 可选分布式 Actor 调度 |
+
+#### 外部角色定义
+
+| 角色 | 描述 | 交互方式 |
+|------|------|----------|
+| **应用开发者** | 使用 AgentFlow 构建工作流应用的开发人员 | DSL 定义、C++ API 调用 |
+| **运维人员** | 负责系统部署、监控和维护的人员 | WebSocket 控制台、指标系统 |
+| **外部系统** | 与 AgentFlow 集成的第三方系统（如 LLM API） | gRPC/REST/WebSocket（规划） |
+| **执行代理** | 分布式部署的 Node 执行单元（规划） | 私有协议 |
 
 ```mermaid
 graph TB
@@ -356,6 +375,30 @@ stateDiagram-v2
     FAILED --> LOADED: reset_execution_state()（重试）
 ```
 
+#### Agent 状态机
+
+```mermaid
+stateDiagram-v2
+    [*] --> CREATED: new Agent(config)
+    CREATED --> INITIALIZED: initialize_resources()
+    INITIALIZED --> RUNNING: start()
+    RUNNING --> PAUSED: pause()
+    PAUSED --> RUNNING: resume()
+    RUNNING --> STOPPED: stop()
+    STOPPED --> [*]
+
+    note right of INITIALIZED: 分配 DataBus、事件队列等共享资源
+    note right of RUNNING: Agent Level Master 监控各 Workflow 状态
+```
+
+#### 三层调度职责详述
+
+| 层次 | 职责 |
+|------|------|
+| **Agent Level Master** | Agent 实例生命周期管理；共享资源（DataBus）分配与隔离；健康检查与故障转移 |
+| **Workflow Level Master** | DAG 解析与拓扑排序；调度决策与执行状态管理；条件/循环控制流驱动 |
+| **Node Level Worker** | 具体节点任务执行（多模式）；结果写回 DataBus；执行计时与超时控制 |
+
 ---
 
 ### 2.3 数据模型
@@ -447,6 +490,82 @@ erDiagram
 | DataValue | HighSpeedDataBus | 内存 KV | key → DataVariant（mutex 保护） |
 | ExecutableVersion | HotReloadManager | 内存列表 + 文件备份 | (file_path, version_id) |
 
+#### C++ 核心数据类型定义
+
+```cpp
+// 基础数据类型
+using DataVariant = std::variant<int64_t, double, std::string, bool>;
+using DataMap = std::map<std::string, DataVariant>;
+
+// ID 类型定义
+using AgentId    = std::string;
+using WorkflowId = std::string;
+using NodeId     = std::string;
+using EdgeId     = std::string;
+
+// 状态枚举
+enum class AgentState    { CREATED, INITIALIZED, RUNNING, PAUSED, STOPPED };
+enum class WorkflowState { CREATED, LOADED, RUNNING, PAUSED, COMPLETED, FAILED };
+enum class NodeState     { WAITING, READY, EXECUTING, SUCCESS, FAILED, RETRYING };
+
+// 生命周期策略
+enum class LifecyclePolicy { PER_REQUEST, FACTORY, SINGLETON };
+
+// 执行模式
+enum class ExecutionMode { CPP_FUNCTION, SHELL_SCRIPT, EXECUTABLE, PYTHON_SCRIPT, SO_LIBRARY };
+```
+
+#### DSL 数据模型（JSON Schema）
+
+Workflow 支持通过 JSON/DSL 文件加载（`load_from_dsl()`），格式如下：
+
+```json
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "workflow": {
+      "type": "object",
+      "properties": {
+        "id":      { "type": "string" },
+        "name":    { "type": "string" },
+        "version": { "type": "string" },
+        "nodes":   { "type": "array", "items": { "$ref": "#/definitions/node" } },
+        "edges":   { "type": "array", "items": { "$ref": "#/definitions/edge" } }
+      }
+    }
+  },
+  "definitions": {
+    "node": {
+      "type": "object",
+      "required": ["id", "execution_mode"],
+      "properties": {
+        "id":             { "type": "string" },
+        "name":           { "type": "string" },
+        "type":           { "type": "string" },
+        "execution_mode": { "type": "string", "enum": ["cpp_function","shell_script","executable","python_script","so_library"] },
+        "command":        { "type": "string", "description": "脚本路径或可执行文件路径" },
+        "timeout_ms":     { "type": "integer", "default": 0 },
+        "max_retries":    { "type": "integer", "default": 3 },
+        "input_params":   { "type": "array", "items": { "type": "string" } },
+        "output_params":  { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": ["id", "source", "target"],
+      "properties": {
+        "id":        { "type": "string" },
+        "source":    { "type": "string", "description": "source_node_id" },
+        "target":    { "type": "string", "description": "target_node_id" },
+        "condition": { "type": "string", "description": "条件表达式，如 result_flag == true" },
+        "data_formats": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
+```
+
 ---
 
 ### 2.4 技术模型
@@ -512,6 +631,19 @@ graph TB
 | 事件循环 | libevent | 2.x | 网络 I/O 复用 | 跨平台 epoll/kqueue 抽象 |
 | 测试 | GoogleTest | 1.14+ | 单元 + 集成测试 | C++ 测试事实标准 |
 | YAML | yaml-cpp（规划） | 0.8+ | 配置文件解析 | 人可读配置，已有 YAML 配置 |
+
+#### 外部依赖集成策略
+
+| 依赖 | 集成方式 | 可替代方案 | 说明 |
+|------|----------|------------|------|
+| **Protoactor-cpp** | 条件编译（可选） | Stub 实现 | Actor 核心框架，`AGENTFLOW_WITH_PROTOACTOR` 宏控制 |
+| **libevent** | 条件编译（可选） | Stub 实现 | 事件循环，WebSocket 依赖 |
+| **libwebsockets** | 可选依赖 | Stub 实现 | WebSocket 控制台通信 |
+| **OpenSSL** | 可选依赖 | Stub 实现 | TLS 加密 |
+| **RapidJSON** | 可选依赖 | Stub 实现 | JSON/DSL 解析 |
+| **Protobuf** | 直接依赖 | — | 序列化，节点 I/O 协议 |
+| **spdlog** | 直接依赖 | — | 结构化日志 |
+| **GoogleTest** | 测试依赖 | Catch2 | 单元 + 集成测试 |
 
 ---
 
@@ -615,6 +747,18 @@ AgentFlow/
 | 网络层 | `include/agentflow/network/` | `src/network/` | `WebSocketAdapter`, `SSLAdapter`, `PrivateProtocol` |
 | 序列化层 | `include/agentflow/serialization/` | `src/serialization/` | `ProtoAdapter`, `AdapterFactory` |
 | 存储层 | `include/agentflow/storage/` | `src/storage/` | `StorageManager`, `IAgentStorage`, `IWorkflowStorage` |
+
+#### 命名规范
+
+| 类型 | 规范 | 示例 |
+|------|------|------|
+| **命名空间** | 小写下划线 | `agentflow::runtime` |
+| **类名** | PascalCase | `AgentRuntime` |
+| **函数名** | snake_case | `execute_workflow()` |
+| **变量名** | snake_case | `workflow_id` |
+| **常量** | UPPER_CASE | `MAX_WORKERS` |
+| **文件名** | snake_case.cpp/.h | `agent_runtime.cpp` |
+| **宏/编译选项** | UPPER_CASE | `AGENTFLOW_WITH_PROTOACTOR` |
 
 #### 关键类图
 
@@ -748,6 +892,58 @@ graph LR
 | `./build.sh example` | 编译并运行示例 |
 | `./build.sh clean` | 清理构建产物 |
 
+#### CMake 构建选项
+
+```cmake
+option(AGENTFLOW_BUILD_TESTS    "Build tests"              ON)
+option(AGENTFLOW_BUILD_EXAMPLES "Build examples"           ON)
+option(AGENTFLOW_WITH_PROTOACTOR "Enable Protoactor-cpp"  OFF)
+option(AGENTFLOW_WITH_LIBEVENT  "Enable libevent"          ON)
+option(AGENTFLOW_ENABLE_COVERAGE "Enable code coverage"   OFF)
+```
+
+#### 构建目标结构
+
+```
+libagentflow（静态/动态库）
+├── agentflow_core        → src/core/
+├── agentflow_runtime     → src/runtime/
+├── agentflow_actor       → src/actor/  (含 protoactor_impl, stub_impl)
+├── agentflow_network     → src/network/
+├── agentflow_storage     → src/storage/
+├── agentflow_serialization → src/serialization/
+└── agentflow_utils       → src/utils/
+
+可执行目标：
+├── example_basic          → examples/
+├── example_control_flow   → examples/
+├── agentflow_tests        → tests/unit/
+└── agentflow_integration  → tests/integration/
+```
+
+#### 完整构建命令参考
+
+```bash
+# 开发构建（Debug）
+cmake -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j$(nproc)
+
+# 发布构建（Release）
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DAGENTFLOW_BUILD_TESTS=OFF
+cmake --build build -j$(nproc)
+
+# 运行测试
+ctest --test-dir build --output-on-failure
+
+# 安装
+cmake --install build --prefix /usr/local
+
+# 代码覆盖率
+cmake -B build -DAGENTFLOW_ENABLE_COVERAGE=ON
+cmake --build build && ctest --test-dir build
+gcovr -r . build
+```
+
 ---
 
 ### 3.3 硬件模型
@@ -818,7 +1014,84 @@ graph TB
 | `is_running_` | `std::atomic<bool>` | 运行状态无锁读取 |
 | `draining_` | `std::atomic<bool>` | 优雅停机标志 |
 
-#### 高可用策略
+关键并发原语实现参考（ZeroCopyDataBus 使用读写锁，任务队列使用条件变量）：
+
+```cpp
+// ZeroCopyDataBus — 读多写少场景使用 shared_mutex
+class ZeroCopyDataBus {
+    mutable std::shared_mutex data_mutex_;
+    // 读：data_mutex_.lock_shared() / unlock_shared()
+    // 写：data_mutex_.lock()       / unlock()
+};
+
+// 任务队列 — 条件变量避免 busy-wait
+class TaskQueue {
+    std::mutex              queue_mutex_;
+    std::condition_variable queue_cv_;
+
+    void push(Task task) {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        tasks_.push(std::move(task));
+        queue_cv_.notify_one();
+    }
+
+    Task pop() {
+        std::unique_lock<std::mutex> lock(queue_mutex_);
+        queue_cv_.wait(lock, [this] { return !tasks_.empty() || stopping_; });
+        auto task = std::move(tasks_.front());
+        tasks_.pop();
+        return task;
+    }
+};
+```
+
+#### 负载均衡策略
+
+AgentRuntime 维护每个 Worker 的负载计数，新任务分配给负载最低的 Worker：
+
+```
+worker_loads_: [2, 5, 1, 4]
+                        ↑
+              get_least_loaded_worker() → Worker 2 (load=1)
+```
+
+- 策略：最小负载优先（Least-Loaded First）
+- 更新时机：`update_worker_load(worker_id, +1)` 入队时，`update_worker_load(worker_id, -1)` 出队时
+- 支持动态 Worker 增减（规划）
+
+#### 双平面通信机制
+
+```
+┌──────────────────────────────────────────────────────┐
+│              业务数据通信面（Data Plane）               │
+│  ┌────────────────┐  ┌───────────────┐  ┌──────────┐ │
+│  │ZeroCopyDataBus │  │PrivateProtocol│  │共享内存  │ │
+│  │• 本地零拷贝    │  │• 跨节点传输   │  │POSIX SHM │ │
+│  │• 订阅发布      │  │• 高性能编解码 │  │（规划）  │ │
+│  └────────────────┘  └───────────────┘  └──────────┘ │
+│  特点：高性能、低延迟、批量传输                         │
+└──────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│             系统维护通信面（Control Plane）             │
+│  ┌────────────────┐  ┌───────────────┐  ┌──────────┐ │
+│  │Actor Message   │  │WebSocket      │  │REST API  │ │
+│  │(Protoactor)    │  │（控制台）      │  │（规划）  │ │
+│  │• Tell/Ask 模式 │  │• 监控与控制   │  │• 资源操作│ │
+│  └────────────────┘  └───────────────┘  └──────────┘ │
+│  特点：标准化、可观测、易于调试                         │
+└──────────────────────────────────────────────────────┘
+```
+
+#### Actor 消息通信模式
+
+当启用 Protoactor-cpp 时，NodeActor 支持以下消息模式：
+
+| 模式 | 说明 | 使用场景 |
+|------|------|---------|
+| **Tell** | 单向消息，不等待响应 | 节点状态通知、事件广播 |
+| **Ask** | 双向消息，等待响应（Future） | 节点执行结果查询、健康检查 |
+| **Broadcast** | 广播给所有订阅者 | Workflow 级别事件通知 |
+| **Forward** | 转发消息，保持原始发送者 | 跨 Actor 代理执行 |
 
 | 场景 | 检测机制 | 恢复策略 | RTO 目标 |
 |------|---------|---------|---------|
@@ -943,6 +1216,77 @@ graph LR
 | DataBus 容量 | `get_used_capacity() / capacity < 0.9` | 防止内存溢出 |
 | HotReload 状态 | `HotReloadStatus != ERROR` | 文件监控正常 |
 
+#### 监控指标层次结构
+
+```
+监控指标层次
+├── 系统层指标（宿主进程）
+│   ├── CPU 使用率
+│   ├── 内存使用率（含 DataBus 占用）
+│   ├── 磁盘 I/O（存储读写）
+│   └── 文件描述符数量（dlopen 动态库）
+│
+├── 应用层指标
+│   ├── 请求 QPS（Workflow 执行请求数）
+│   ├── 请求延迟 P50/P95/P99
+│   ├── 错误率（节点/Workflow 失败率）
+│   ├── Worker 线程活跃数
+│   └── 任务队列深度
+│
+├── 业务层指标
+│   ├── agentflow_workflow_executions_total   (Counter)
+│   ├── agentflow_node_executions_total       (Counter)
+│   ├── agentflow_node_success_rate           (Gauge)
+│   ├── agentflow_active_agents               (Gauge)
+│   ├── agentflow_hot_reload_count_total      (Counter)
+│   └── agentflow_version_distribution        (Gauge)
+│
+└── 自定义指标
+    ├── agentflow_node_execution_duration_ms  (Histogram, P50/P90/P95/P99)
+    ├── agentflow_databus_usage_ratio         (Gauge)
+    ├── agentflow_worker_load_distribution    (Histogram)
+    └── agentflow_dag_depth_distribution      (Histogram)
+```
+
+#### Prometheus 告警规则示例
+
+```yaml
+# prometheus-rules.yaml
+groups:
+- name: agentflow-alerts
+  rules:
+  - alert: HighWorkflowErrorRate
+    expr: |
+      sum(rate(agentflow_workflow_errors_total[5m])) /
+      sum(rate(agentflow_workflow_executions_total[5m])) > 0.05
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "AgentFlow workflow error rate too high"
+      description: "Error rate is {{ $value | humanizePercentage }}"
+
+  - alert: HighNodeLatency
+    expr: |
+      histogram_quantile(0.99,
+        sum(rate(agentflow_node_execution_duration_ms_bucket[5m])) by (le)
+      ) > 10000
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: "AgentFlow node P99 latency > 10s"
+      description: "P99 latency is {{ $value }}ms"
+
+  - alert: DataBusCapacityHigh
+    expr: agentflow_databus_usage_ratio > 0.9
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "AgentFlow DataBus capacity above 90%"
+```
+
 ---
 
 ## 五、部署视图（Deployment View）
@@ -966,7 +1310,40 @@ libagentflow-0.1.0-darwin-arm64.dylib
 agentflow-headers-0.1.0.tar.gz
 ```
 
-#### 多环境交付策略
+#### 完整交付物目录结构
+
+```
+agentflow-0.1.0-linux-x86_64/
+├── bin/                         # 可执行工具（规划）
+│   └── agentflow-cli            # 配置验证/Workflow 模拟工具
+├── lib/                         # 库文件
+│   ├── libagentflow.a           # 静态库
+│   ├── libagentflow.so          # 动态库
+│   └── cmake/                   # CMake Package 文件
+│       ├── AgentFlowConfig.cmake
+│       └── AgentFlowConfigVersion.cmake
+├── include/                     # 公开头文件
+│   └── agentflow/
+│       ├── core/                # agent.h / workflow.h / node.h / edge.h
+│       ├── runtime/             # agent_runtime.h / databus.h / hot_reload.h
+│       └── agentflow.h          # 总入口
+├── configs/                     # 默认配置示例
+│   └── default.yaml
+├── docs/                        # 文档（可选）
+│   ├── architecture.md
+│   └── api/                     # Doxygen 生成（规划）
+└── README.md
+```
+
+#### 软件包格式
+
+| 格式 | 目标平台 | 工具 | 说明 |
+|------|---------|------|------|
+| `.tar.gz` | 全平台 | CMake CPack | 通用压缩包 |
+| `.deb` | Ubuntu/Debian | CPack DEB | 系统级安装 |
+| `.rpm` | RHEL/CentOS | CPack RPM | 系统级安装 |
+| Docker Image | 容器平台 | Dockerfile（规划） | `FROM ubuntu:22.04` |
+| AUR / `PKGBUILD` | Arch Linux | AUR（规划） | 社区维护 |
 
 | 环境 | 分发方式 | 配置来源 | 敏感信息管理 |
 |------|---------|---------|------------|
@@ -1018,7 +1395,102 @@ graph TB
     AgentInst --> AgentFiles & WorkflowFiles & LogFiles
 ```
 
-#### 各环境配置矩阵
+#### 分布式部署架构（规划）
+
+多实例通过外部协调服务横向扩展：
+
+```
+                    ┌──────────────────────────────────┐
+                    │          负载均衡器（规划）         │
+                    │    Nginx / Envoy / AWS ALB         │
+                    └──────────────┬───────────────────┘
+                                   │
+               ┌───────────────────┼──────────────────┐
+               ▼                   ▼                  ▼
+   ┌─────────────────┐  ┌──────────────────┐  ┌─────────────────┐
+   │  应用实例节点1   │  │   应用实例节点2   │  │  应用实例节点3  │
+   │  (libagentflow) │  │  (libagentflow)  │  │ (libagentflow)  │
+   │  + AgentRuntime │  │  + AgentRuntime  │  │ + AgentRuntime  │
+   └────────┬────────┘  └────────┬─────────┘  └────────┬────────┘
+            │                    │                      │
+            └──────────┬─────────┘──────────────────────┘
+                       ▼
+          ┌────────────────────────┐
+          │   外部协调/存储层（规划）│
+          │  ┌──────┐ ┌────────┐  │
+          │  │ etcd │ │ Redis  │  │
+          │  └──────┘ └────────┘  │
+          │  ┌──────────────────┐ │
+          │  │  MinIO (存储)    │ │
+          │  └──────────────────┘ │
+          └────────────────────────┘
+```
+
+#### Kubernetes 部署（规划）
+
+```yaml
+# agentflow-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentflow-app
+  namespace: production
+  labels:
+    app: agentflow
+    version: "0.1.0"
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: agentflow
+  template:
+    metadata:
+      labels:
+        app: agentflow
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+    spec:
+      containers:
+      - name: agentflow-app
+        image: ghcr.io/danielkernel/agentflow:0.1.0
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "4000m"
+        env:
+        - name: AGENTFLOW_WORKER_THREADS
+          value: "4"
+        - name: AGENTFLOW_LOG_LEVEL
+          value: "WARN"
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/configs
+        - name: agent-storage
+          mountPath: /app/data
+      volumes:
+      - name: config-volume
+        configMap:
+          name: agentflow-config
+      - name: agent-storage
+        persistentVolumeClaim:
+          claimName: agentflow-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentflow-service
+spec:
+  selector:
+    app: agentflow
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
+```
 
 | 配置项 | 开发环境 | CI 环境 | 生产环境 |
 |--------|---------|---------|---------|
@@ -1210,6 +1682,8 @@ Node 重试：
 | ExecutionMode | Node 的执行模式：CPP_FUNCTION / SHELL_SCRIPT / EXECUTABLE / PYTHON_SCRIPT / SO_LIBRARY |
 | Master-Worker | 三层调度架构：Agent Level Master → Workflow Level Master → Node Level Worker |
 | Protoactor-cpp | 可选的 C++ Actor 框架，提供消息驱动的分布式节点调度能力 |
+| Actor | Actor 模型的最小执行单元，基于消息驱动，每个 Actor 封装状态并通过消息通信 |
+| DSL | Domain Specific Language，领域特定语言；AgentFlow 通过 JSON Schema 描述 Workflow/Node/Edge 编排 |
 
 ### B. 参考资料
 
@@ -1223,6 +1697,9 @@ Node 重试：
 | Protoactor-cpp | https://github.com/AsynkronIT/protoactor-cpp |
 | libwebsockets 文档 | https://libwebsockets.org |
 | OpenTelemetry C++ | https://opentelemetry.io/docs/languages/cpp/ |
+| gRPC 文档 | https://grpc.io/docs/ |
+| Kubernetes 文档 | https://kubernetes.io/docs/ |
+| Prometheus | https://prometheus.io/docs/ |
 
 ### C. 变更历史
 
