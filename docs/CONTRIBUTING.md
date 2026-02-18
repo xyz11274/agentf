@@ -97,7 +97,7 @@ git checkout -b docs/update-readme
 cd build && ctest -R test_name --output-on-failure
 
 # Run with sanitizers (if enabled)
-# See cmake/CompilerOptions.cmake for available options
+# See build/cmake/CompilerOptions.cmake for available options
 ```
 
 ### 4. Code Quality Checks

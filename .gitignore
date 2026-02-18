@@ -49,3 +49,6 @@ Thumbs.db
 # Local config
 local_config.txt
 debug_output.txt
+
+# Vendor dependencies (downloaded locally)
+vendor/

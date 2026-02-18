@@ -89,7 +89,7 @@ agent->start();
 ### ⚙️ CI/CD 和部署
 - **[CI/CD 流水线](docs/ci-cd.md)** - 自动化测试和部署流程
 - **[CI/CD 设置](docs/ci-cd.md)** - 配置和常见问题
-- **[脚本指南](scripts/README.md)** - 项目脚本使用说明
+- **[重构说明](docs/REFACTORING.md)** - 项目目录结构优化说明
 
 ## 🏗️ 项目结构
 
@@ -106,8 +106,12 @@ AgentFlow/
 ├── docs/                 # 📚 所有项目文档
 ├── configs/              # 配置文件
 ├── proto/                # Protobuf 定义
-├── scripts/              # 🔧 构建和部署脚本
-└── scripts/docker/       # Docker 和容器配置
+├── vendor/               # 🔧 三方依赖下载和适配器
+│   ├── vendor.sh         # 依赖下载脚本
+│   └── adapter/          # 三方适配器实现
+└── build/                # 🔧 构建脚本和配置
+    ├── cmake/            # CMake 配置文件
+    └── install_dependencies.sh  # 依赖安装脚本
 ```
 
 ## 🔗 系统架构
@@ -163,7 +167,7 @@ AgentFlow/
 
 ---
 
-**维护者**: @DanielKernel  
-**文档最后更新**: 2026-02-17  
-**快速设置**: `./scripts/verify_cicd_setup.sh` 验证所有组件是否正确安装
+**维护者**: @DanielKernel
+**文档最后更新**: 2026-02-18
+**快速设置**: `./build.sh build && ./build.sh test` 验证所有组件是否正确安装
 
