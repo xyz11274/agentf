@@ -1694,7 +1694,7 @@ Node 重试：
 | C++ Core Guidelines | https://isocpp.github.io/CppCoreGuidelines/ |
 | Protobuf 3 语言规范 | https://protobuf.dev/programming-guides/proto3/ |
 | spdlog 文档 | https://github.com/gabime/spdlog |
-| Protoactor-cpp | https://github.com/AsynkronIT/protoactor-cpp |
+| Protoactor-cpp | https://github.com/DanielKernel/Protoactor-cpp.git |
 | libwebsockets 文档 | https://libwebsockets.org |
 | OpenTelemetry C++ | https://opentelemetry.io/docs/languages/cpp/ |
 | gRPC 文档 | https://grpc.io/docs/ |

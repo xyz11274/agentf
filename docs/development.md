@@ -607,33 +607,55 @@ find_path(RAPIDJSON_INCLUDE_DIR NAMES rapidjson/document.h)
 
 #### OpenSSL（SSL/TLS 加密）
 
+- **GitHub**: https://github.com/openssl/openssl.git
 - **官网**: https://www.openssl.org/
 - **用途**: SSL/TLS 安全通信
 - **功能**: SSL/TLS 协议支持、证书管理、加密通信
 
 #### libwebsockets（WebSocket 支持）
 
+- **GitHub**: https://github.com/warmcat/libwebsockets.git
 - **官网**: https://libwebsockets.org/
 - **用途**: WebSocket 协议实现
 - **功能**: WebSocket 服务器和客户端、实时双向通信
 
 #### libevent（事件循环）
 
+- **GitHub**: https://github.com/libevent/libevent.git
 - **官网**: https://libevent.org/
 - **用途**: 高性能事件循环
 - **功能**: 跨平台事件循环、高性能 I/O 多路复用
 
 #### RapidJSON（JSON 解析）
 
-- **GitHub**: https://github.com/Tencent/rapidjson
+- **GitHub**: https://github.com/Tencent/rapidjson.git
 - **用途**: JSON 序列化和反序列化
 - **特点**: Header-only 库，高性能 JSON 解析
 
 #### Protobuf（序列化）
 
+- **GitHub**: https://github.com/protocolbuffers/protobuf.git
 - **官网**: https://developers.google.com/protocol-buffers
 - **用途**: 二进制序列化协议
 - **特点**: 高效的二进制序列化，跨语言支持
+
+### 8.2.1 第三方库GitHub仓库地址
+
+以下为AgentFlow依赖的所有第三方库的GitHub仓库地址：
+
+| 依赖库 | GitHub地址 |
+|--------|-----------|
+| Protoactor-cpp | https://github.com/DanielKernel/Protoactor-cpp.git |
+| OpenSSL | https://github.com/openssl/openssl.git |
+| libwebsockets | https://github.com/warmcat/libwebsockets.git |
+| libevent | https://github.com/libevent/libevent.git |
+| RapidJSON | https://github.com/Tencent/rapidjson.git |
+| protobuf | https://github.com/protocolbuffers/protobuf.git |
+
+这些库的源码也可以通过vendor脚本下载：
+```bash
+./vendor/vendor.sh
+```
 
 ### 8.3 依赖安装指南
 

@@ -30,8 +30,12 @@ Edit `vendor.conf` in this directory to add your dependencies:
 
 ```bash
 # Format: name|url|branch|target_dir
-nlohmann_json|https://github.com/nlohmann/json.git|develop|json
-fmtlib|https://github.com/fmtlib/fmt.git|master|fmt
+Protoactor-cpp|https://github.com/DanielKernel/Protoactor-cpp.git|main|Protoactor-cpp
+OpenSSL|https://github.com/openssl/openssl.git|master|openssl
+libwebsockets|https://github.com/warmcat/libwebsockets.git|main|libwebsockets
+libevent|https://github.com/libevent/libevent.git|master|libevent
+RapidJSON|https://github.com/Tencent/rapidjson.git|master|rapidjson
+protobuf|https://github.com/protocolbuffers/protobuf.git|main|protobuf
 ```
 
 ### 2. Download Dependencies
@@ -76,18 +80,21 @@ name|url|branch|target_dir
 
 Example:
 ```
-nlohmann_json|https://github.com/nlohmann/json.git|develop|json
+Protoactor-cpp|https://github.com/DanielKernel/Protoactor-cpp.git|main|Protoactor-cpp
 ```
 
-This will clone the repository to `vendor/json/`.
+This will clone the repository to `vendor/Protoactor-cpp/`.
 
 ## Adapters
 
 The `adapter/` subdirectory contains adapter implementations that wrap third-party libraries:
 
 - **actor/**: Actor framework adapters (protoactor_impl.cpp, stub_impl.cpp)
+  - Uses Protoactor-cpp: https://github.com/DanielKernel/Protoactor-cpp.git
 - **dsl/**: JSON parser adapters (json_adapter_rapidjson.cpp, json_adapter_stub.cpp)
+  - Uses RapidJSON: https://github.com/Tencent/rapidjson.git
 - **eventloop/**: Event loop adapters (libevent_impl.cpp)
+  - Uses libevent: https://github.com/libevent/libevent.git
 
 These adapters provide a uniform interface for AgentFlow to interact with different implementations.
 
@@ -123,4 +130,22 @@ include_directories(${CMAKE_SOURCE_DIR}/vendor/json/include)
 
 # Example: Add vendor library as subdirectory
 add_subdirectory(${CMAKE_SOURCE_DIR}/vendor/fmt)
+```
+
+## Third-Party Libraries
+
+AgentFlow depends on the following third-party libraries. All are optional and have stub implementations available when not installed:
+
+| Library | GitHub | Purpose |
+|---------|--------|---------|
+| Protoactor-cpp | https://github.com/DanielKernel/Protoactor-cpp.git | Actor model implementation |
+| OpenSSL | https://github.com/openssl/openssl.git | SSL/TLS encryption |
+| libwebsockets | https://github.com/warmcat/libwebsockets.git | WebSocket protocol |
+| libevent | https://github.com/libevent/libevent.git | High-performance event loop |
+| RapidJSON | https://github.com/Tencent/rapidjson.git | JSON parsing (header-only) |
+| protobuf | https://github.com/protocolbuffers/protobuf.git | Binary serialization |
+
+To download all these libraries:
+```bash
+./vendor/vendor.sh
 ```
