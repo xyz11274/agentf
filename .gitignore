@@ -50,5 +50,16 @@ Thumbs.db
 local_config.txt
 debug_output.txt
 
-# Vendor dependencies (downloaded locally)
-vendor/
+# Vendor dependencies (downloaded third-party libraries)
+# Keep adapter code and config files, only ignore downloaded libs
+vendor/json/
+vendor/fmt/
+vendor/protobuf/
+vendor/libevent/
+vendor/rapidjson/
+vendor/gtest/
+vendor/googletest/
+vendor/libwebsockets/
+vendor/openssl/
+vendor/protoactor/
+# Add other downloaded dependencies here as needed

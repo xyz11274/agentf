@@ -93,27 +93,31 @@ tests/
 - `unit/` - 单元测试，针对单个组件的测试
 - `functional/` - 功能测试，包括性能测试、集成测试等
 
-### 3. 三方依赖适配器目录
+### 3. 三方依赖与适配器目录
 
 **目录结构：**
 ```
 vendor/
+├── vendor.conf         # 三方依赖配置文件
 ├── vendor.sh           # 三方依赖下载脚本
 ├── README.md           # 使用文档
-└── adapter/            # 三方依赖适配器实现
-    ├── actor/          # Actor 框架适配器
-    │   ├── protoactor_impl.cpp
-    │   └── stub_impl.cpp
-    ├── dsl/            # DSL 解析器适配器
-    │   ├── json_adapter_rapidjson.cpp
-    │   └── json_adapter_stub.cpp
-    ├── eventloop/      # 事件循环适配器
-    │   └── libevent_impl.cpp
-    ├── network/        # 网络适配器（预留）
-    └── serialization/  # 序列化适配器（预留）
+├── adapter/            # 三方依赖适配器实现
+│   ├── actor/          # Actor 框架适配器
+│   │   ├── protoactor_impl.cpp
+│   │   └── stub_impl.cpp
+│   ├── dsl/            # DSL 解析器适配器
+│   │   ├── json_adapter_rapidjson.cpp
+│   │   └── json_adapter_stub.cpp
+│   ├── eventloop/      # 事件循环适配器
+│   │   └── libevent_impl.cpp
+│   ├── network/        # 网络适配器（预留）
+│   └── serialization/  # 序列化适配器（预留）
+└── <downloaded>/       # 下载的三方依赖（gitignore）
 ```
 
 **说明：**
+- `vendor/` - 所有三方依赖相关内容统一放置
+- `vendor.conf` - 三方依赖下载配置
 - `vendor/adapter/` - 与三方依赖相关的适配器代码
 - `src/` - 保留核心业务代码，不包含适配器实现
 
