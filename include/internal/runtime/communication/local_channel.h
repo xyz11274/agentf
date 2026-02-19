@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-#include "common.h"
+#include "agent/common.h"
 
 namespace agentflow {
 namespace runtime {

@@ -3,10 +3,10 @@
 //
 // Network adapter factory implementations
 
-#include "runtime/network/adapter_factory.h"
+#include "vendor/network/adapter_factory.h"
 
-#include "adapter/network/openssl_impl.h"
-#include "adapter/network/libwebsockets_impl.h"
+#include "vendor/network/openssl_impl.h"
+#include "vendor/network/libwebsockets_impl.h"
 
 namespace agentflow {
 namespace network {

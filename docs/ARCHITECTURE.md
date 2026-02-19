@@ -971,13 +971,13 @@ AgentFlow/
 
 #### 逻辑组件 → 代码路径映射图
 
-> 说明：当前对外头文件仅保留 `include/external/agent` 与 `include/external/node`；其余能力头文件均内收至 `include/internal`。
+> 说明：当前对外头文件仅保留 `include/external/agent` 与 `include/external/workflow`；其余能力头文件均内收至 `include/internal`。
 
 | 逻辑组件 | 头文件路径 | 实现路径 | 关键类/接口 |
 |----------|-----------|----------|-------------|
 | 开发编排框架（核心实体） | `include/external/core/` | `src/core/` | `Agent`, `Workflow`, `Node`, `Edge` |
 | Agent 外部接口 | `include/external/agent/` | `src/agent/` | Agent 实例生命周期管理（唯一对外 Agent 接口） |
-| Node 外部接口 | `include/external/node/` | `src/workflow/node/` | Node 定制开发接口（控制面/运行面） |
+| Workflow 外部接口 | `include/external/workflow/` | `src/workflow/` | Workflow/Node/Edge 定制开发外部接口 |
 | 三层调度引擎 | `include/external/runtime/agent_runtime.h` | `src/runtime/scheduler/agent_runtime.cpp` | `AgentRuntime` |
 | 控制流管理器 | `include/external/runtime/control_flow.h` | `src/runtime/scheduler/control_flow.cpp` | `ControlFlowManager`, `ConditionExpression` |
 | 高速数据总线 | `include/external/runtime/databus.h` | `src/runtime/communication/databus.cpp` | `HighSpeedDataBus` |

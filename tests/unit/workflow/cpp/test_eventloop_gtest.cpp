@@ -10,8 +10,8 @@
 #include <vector>
 
 #include "utils/logger.h"
-#include "event/adapter_factory.h"
-#include "event/eventloop_adapter.h"
+#include "vendor/event/adapter_factory.h"
+#include "vendor/event/eventloop_adapter.h"
 
 namespace agentflow {
 namespace tests {

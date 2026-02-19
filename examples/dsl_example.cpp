@@ -6,7 +6,7 @@
 #include <iostream>
 
 #include "utils/logger.h"
-#include "workflow/workflow_parser.h"
+#include "workflow/dsl/workflow_parser.h"
 
 using namespace agentflow;
 using namespace agentflow::dsl;

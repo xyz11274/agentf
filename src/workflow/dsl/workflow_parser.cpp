@@ -3,7 +3,7 @@
 //
 // DSL Workflow Parser Implementation
 
-#include "workflow/workflow_parser.h"
+#include "workflow/dsl/workflow_parser.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -11,7 +11,7 @@
 #include <unordered_set>
 
 #include "utils/logger.h"
-#include "workflow/json_adapter.h"
+#include "workflow/dsl/json_adapter.h"
 #include "agent/agent.h"
 #include "workflow/edge.h"
 #include "workflow/node.h"

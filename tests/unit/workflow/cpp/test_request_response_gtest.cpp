@@ -5,9 +5,9 @@
 
 #include <gtest/gtest.h>
 
-#include "common.h"
-#include "runtime/network/request.h"
-#include "runtime/network/response.h"
+#include "agent/common.h"
+#include "vendor/network/request.h"
+#include "vendor/network/response.h"
 
 namespace agentflow {
 namespace tests {

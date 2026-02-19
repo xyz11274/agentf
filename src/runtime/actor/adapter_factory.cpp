@@ -3,12 +3,12 @@
 //
 // Actor adapter factory - selects implementation at runtime
 
-#include "actor/adapter.h"
+#include "vendor/actor/adapter.h"
 
 #ifdef AGENTFLOW_WITH_PROTOACTOR
-#include "adapter/actor/protoactor_impl.h"
+#include "vendor/actor/protoactor_impl.h"
 #else
-#include "adapter/actor/stub_impl.h"
+#include "vendor/actor/stub_impl.h"
 #endif
 
 namespace agentflow {

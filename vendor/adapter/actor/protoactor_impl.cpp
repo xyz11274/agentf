@@ -5,12 +5,12 @@
 
 #ifdef AGENTFLOW_WITH_PROTOACTOR
 
-#include "adapter/actor/protoactor_impl.h"
+#include "vendor/actor/protoactor_impl.h"
 
 #include <chrono>
 #include <thread>
 
-#include "actor/message_serializer.h"
+#include "vendor/actor/message_serializer.h"
 #include "utils/logger.h"
 #include "protoactor/actor_system.h"
 #include "protoactor/ask.h"

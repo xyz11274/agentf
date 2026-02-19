@@ -5,7 +5,7 @@
 
 #ifndef AGENTFLOW_WITH_PROTOACTOR
 
-#include "adapter/actor/stub_impl.h"
+#include "vendor/actor/stub_impl.h"
 
 #include <chrono>
 #include <sstream>

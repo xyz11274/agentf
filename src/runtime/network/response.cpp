@@ -3,7 +3,7 @@
 //
 // Response wrapper implementation
 
-#include "runtime/network/response.h"
+#include "vendor/network/response.h"
 
 #include <chrono>
 #include <cstring>

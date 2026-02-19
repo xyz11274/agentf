@@ -3,7 +3,7 @@
 //
 // Message serializer implementation
 
-#include "runtime/actor/message_serializer.h"
+#include "vendor/actor/message_serializer.h"
 
 #include <chrono>
 #include <cstring>

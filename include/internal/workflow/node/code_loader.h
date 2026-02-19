@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "common.h"
+#include "agent/common.h"
 #include "runtime/communication/hot_reload.h"
 
 namespace agentflow {

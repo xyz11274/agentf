@@ -3,7 +3,7 @@
 //
 // Actor system manager implementation
 
-#include "runtime/actor/actor_system.h"
+#include "vendor/actor/actor_system.h"
 
 #ifdef AGENTFLOW_WITH_PROTOACTOR
 #include "protoactor/actor_system.h"

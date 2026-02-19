@@ -11,7 +11,7 @@
 #include <functional>
 #include <memory>
 
-#include "event/eventloop_adapter.h"
+#include "vendor/event/eventloop_adapter.h"
 
 namespace agentflow {
 namespace event {

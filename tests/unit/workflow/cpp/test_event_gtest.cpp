@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-#include "runtime/event.h"
+#include "vendor/event/event.h"
 
 class EventTest : public ::testing::Test {
 protected:

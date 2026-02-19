@@ -8,7 +8,7 @@
 #include <thread>
 #include <vector>
 
-#include "common.h"
+#include "agent/common.h"
 #include "agent/agent.h"
 #include "workflow/workflow.h"
 #include "runtime/communication/databus.h"

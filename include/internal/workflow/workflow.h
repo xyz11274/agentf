@@ -5,7 +5,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "common.h"
+#include "agent/common.h"
 #include "workflow/edge.h"
 #include "workflow/node.h"
 #include "runtime/scheduler/control_flow.h"

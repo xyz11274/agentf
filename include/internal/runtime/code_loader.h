@@ -1,3 +1,3 @@
 // Backward-compatible redirect header.
-// Use #include "workflow/node/code_loader.h" directly.
+// CodeLoader implementation lives with workflow node internals.
 #include "workflow/node/code_loader.h"

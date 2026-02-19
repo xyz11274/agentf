@@ -5,7 +5,7 @@
 
 #ifdef AGENTFLOW_WITH_LIBEVENT
 
-#include "adapter/event/libevent_impl.h"
+#include "vendor/event/libevent_impl.h"
 
 #include <cstring>
 #include <event2/event.h>

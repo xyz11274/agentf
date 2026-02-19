@@ -252,7 +252,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 ## 设计原则
 
 1. **关注点分离**：
-   - `include/external/agent` + `include/external/node` - 公共 API，面向外部用户
+   - `include/external/agent` + `include/external/workflow` - 公共 API，面向外部用户
    - `include/internal/` - 内部实现，面向开发者
    - `src/` - 核心业务逻辑
    - `vendor/` - 三方依赖适配
@@ -262,7 +262,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
    - 单元测试与功能测试分离
 
 3. **清晰的边界**：
-   - 外部用户只能使用 `external/agent` 与 `external/node` 接口
+   - 外部用户只能使用 `external/agent` 与 `external/workflow` 接口
    - 内部实现细节对用户透明
 
 ---

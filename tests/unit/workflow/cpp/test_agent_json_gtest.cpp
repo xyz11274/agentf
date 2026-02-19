@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-#include "workflow/workflow_parser.h"
+#include "workflow/dsl/workflow_parser.h"
 #include "agent/agent.h"
 #include "workflow/workflow.h"
 #include "runtime/communication/databus.h"

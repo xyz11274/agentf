@@ -3,7 +3,7 @@
 //
 // Private protocol implementation
 
-#include "network/private_protocol.h"
+#include "vendor/private_protocol.h"
 
 #include <algorithm>
 #include <cstring>

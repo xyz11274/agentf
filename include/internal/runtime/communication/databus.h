@@ -5,7 +5,7 @@
 #include <memory>
 #include <mutex>
 
-#include "common.h"
+#include "agent/common.h"
 
 namespace agentflow {
 namespace runtime {

@@ -11,8 +11,8 @@
 #include <memory>
 #include <string>
 
-#include "actor/actors.h"
-#include "common.h"
+#include "vendor/actor/actors.h"
+#include "agent/common.h"
 #include "protoactor/actor.h"
 
 namespace protoactor {
@@ -95,8 +95,8 @@ private:
 #else
 
 // Stub for when Protoactor is not available
-#include "actor/actors.h"
-#include "common.h"
+#include "vendor/actor/actors.h"
+#include "agent/common.h"
 
 namespace agentflow {
 namespace actor {

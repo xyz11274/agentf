@@ -10,7 +10,7 @@
 
 #include "utils/logger.h"
 #include "workflow/node.h"
-#include "workflow/node/code_loader.h"
+#include "runtime/code_loader.h"
 #include "runtime/communication/hot_reload.h"
 
 using namespace agentflow;

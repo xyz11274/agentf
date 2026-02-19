@@ -12,7 +12,7 @@
 #include <shared_mutex>
 #include <vector>
 
-#include "common.h"
+#include "agent/common.h"
 
 namespace agentflow {
 namespace runtime {

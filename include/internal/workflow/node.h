@@ -4,8 +4,8 @@
 #include <functional>
 #include <memory>
 
-#include "common.h"
-#include "workflow/node/code_loader.h"
+#include "agent/common.h"
+#include "runtime/code_loader.h"
 #include "runtime/communication/hot_reload.h"
 
 namespace agentflow {

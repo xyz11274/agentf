@@ -9,7 +9,7 @@
 #include <fstream>
 #include <sstream>
 
-#include "adapter/dsl/stub_impl.h"
+#include "vendor/json/stub_impl.h"
 
 namespace agentflow {
 namespace dsl {

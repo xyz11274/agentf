@@ -3,7 +3,7 @@
 //
 // Request wrapper implementation
 
-#include "runtime/network/request.h"
+#include "vendor/network/request.h"
 
 #include <atomic>
 #include <chrono>
