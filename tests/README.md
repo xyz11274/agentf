@@ -361,10 +361,10 @@ cd tests/jars && ./build.sh
 
 | 文档 | 内容 |
 |------|------|
-| [../docs/testing.md](../docs/testing.md) | 测试策略和最佳实践 |
-| [../docs/development.md](../docs/development.md) | 开发指南 |
+| [../docs/README.md](../docs/README.md) | 测试策略和最佳实践 |
+| [../docs/CONTRIBUTING.md](../docs/CONTRIBUTING.md) | 开发指南 |
 | [../docs/api-reference.md](../docs/api-reference.md) | API 参考 |
-| [../docs/ci-cd.md](../docs/ci-cd.md) | CI/CD 集成 |
+| [../docs/README.md](../docs/README.md) | CI/CD 集成 |
 
 ---
 

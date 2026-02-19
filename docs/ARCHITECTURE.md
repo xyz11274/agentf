@@ -1149,14 +1149,14 @@ option(AGENTFLOW_ENABLE_COVERAGE "Enable code coverage"   OFF)
 ```
 libagentflow（静态/动态库）
 ├── agentflow_agent          → src/agent/
-├── agentflow_workflow       → src/workflow/（workflow.cpp, node.cpp, edge.cpp, dsl/, node/, edge/）
+├── agentflow_workflow       → src/workflow/（workflow.cpp, dsl/, node/node.cpp, edge/edge.cpp）
 ├── agentflow_runtime        → src/runtime/（scheduler/, communication/, storage/, actor/, network/）
-├── agentflow_vendor         → src/vendor/（actor/, dsl/, event/, network/, serialization/, storage/）
+├── agentflow_vendor         → vendor/adapter/（actor/, dsl/, event/, network/, serialization/, storage/）
 ├── agentflow_utils          → src/utils/
 └── agentflow_vendor_adapters（条件编译）
     ├── actor_adapter        → vendor/adapter/actor/  (protoactor_impl, stub_impl)
     ├── dsl_adapter          → vendor/adapter/dsl/    (json_adapter_rapidjson, json_adapter_stub)
-    ├── event_adapter        → vendor/adapter/event/ + vendor/adapter/eventloop/  (libevent_impl)
+    ├── event_adapter        → vendor/adapter/event/  (libevent_impl)
     ├── network_adapter      → vendor/adapter/network/
     └── serialization_adapter→ vendor/adapter/serialization/
 

@@ -14,7 +14,7 @@
 - 近期开发重点和版本规划
 - 代码质量、文档和部署目标
 
-### �� [功能规划](docs/planning.md)
+### �� [功能规划](docs/REFACTORING.md)
 **详细的功能实现状态和模块规划**
 - 开发编排框架（85%）
 - 运行框架（88%）
@@ -75,13 +75,13 @@
 |------|------|
 | [README.md](README.md) | 项目概览和快速入门 |
 | [docs/roadmap.md](docs/roadmap.md) | 完整路线图 ⭐ |
-| [docs/planning.md](docs/planning.md) | 详细功能规划 |
+| [docs/REFACTORING.md](docs/REFACTORING.md) | 详细功能规划 |
 | [docs/code-review.md](docs/code-review.md) | 代码审查和优化 |
-| [docs/architecture.md](docs/architecture.md) | 系统架构设计 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统架构设计 |
 | [docs/api-reference.md](docs/api-reference.md) | API 使用手册 |
-| [docs/development.md](docs/development.md) | 开发指南 |
-| [docs/ci-cd.md](docs/ci-cd.md) | CI/CD 完整指南 |
-| [docs/contributing.md](docs/contributing.md) | 贡献指南 |
+| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | 开发与贡献指南 |
+| [docs/README.md](docs/README.md) | CI/CD 与测试指南 |
+| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | 贡献指南 |
 
 ---
 
@@ -103,4 +103,3 @@
 
 **维护者**: @DanielKernel  
 **最后更新**: 2026年2月18日
-
