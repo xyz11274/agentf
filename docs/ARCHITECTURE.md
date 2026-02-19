@@ -840,8 +840,7 @@ AgentFlow/
 │       ├── workflow/               # 含 dsl/、node_actor.h、workflow_actor.h
 │       ├── runtime/
 │       ├── vendor/                 # actor/json/event/network/serialization/private_protocol.h
-│       ├── utils/
-│       └── testing/
+│       └── utils/
 ├── src/                            # 核心业务源代码
 │   ├── agent/                      # Agent 实例管理实现（agent.cpp）
 │   ├── workflow/                   # Workflow 管理实现
@@ -906,7 +905,7 @@ AgentFlow/
 | JSON 适配器实现 | `include/internal/vendor/json/` | `vendor/adapter/dsl/` | `RapidJsonImpl`, `StubImpl` |
 | 事件循环适配器实现 | `include/internal/vendor/event/` | `vendor/adapter/event/` | `LibeventImpl` |
 | 私有网络协议 | `include/internal/vendor/private_protocol.h` | `src/runtime/network/private_protocol.cpp` | `PrivateProtocol` |
-| 测试工具 | `include/internal/testing/` | `tests/unit/workflow/lib/` | `PerformanceMetrics`, `HotReloadTest` |
+| 测试工具 | `tests/unit/workflow/lib/` | `tests/unit/workflow/lib/` | `PerformanceMetrics`, `HotReloadTest` |
 
 #### 命名规范
 

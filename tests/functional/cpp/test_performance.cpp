@@ -6,7 +6,7 @@
 #include "workflow/node.h"
 #include "workflow/workflow.h"
 #include "runtime/scheduler/agent_runtime.h"
-#include "testing/performance_metrics.h"
+#include "../unit/workflow/lib/performance_metrics.h"
 
 using namespace agentflow;
 using namespace agentflow::testing;

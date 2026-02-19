@@ -650,7 +650,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 | 编译 | 通过 | 38个源文件全部编译成功 |
 | 链接 | 通过 | agentflow 库和 8 个示例程序链接成功 |
 | 测试运行 | 失败 | macOS dyld 找不到 libgtest_main.1.11.0.dylib（RPATH 问题） |
-| 遗漏文件 | 警告 | `src/runtime/scheduler/performance_metrics.cpp` 未加入 CMakeLists.txt |
+| 测试性能工具 | 已迁移 | `tests/unit/workflow/lib/performance_metrics.{h,cpp}` 已与测试代码同目录 |
 
 ### 文档与代码一致性审查
 

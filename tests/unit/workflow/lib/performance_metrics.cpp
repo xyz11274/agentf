@@ -1,4 +1,4 @@
-#include "testing/performance_metrics.h"
+#include "performance_metrics.h"
 
 #include <algorithm>
 #include <fstream>

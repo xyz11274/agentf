@@ -228,7 +228,7 @@ set(AGENTFLOW_RUNTIME_SOURCES
     # Scheduler
     ${AGENTFLOW_SOURCE_DIR}/runtime/scheduler/agent_runtime.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/scheduler/control_flow.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/scheduler/performance_metrics.cpp
+    ${AGENTFLOW_TEST_DIR}/unit/workflow/lib/performance_metrics.cpp
     # Communication
     ${AGENTFLOW_SOURCE_DIR}/runtime/communication/databus.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/communication/zero_copy_databus.cpp
