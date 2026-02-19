@@ -49,11 +49,7 @@ jobs:
             cmake \
             pkg-config \
             libssl-dev \
-            libwebsockets-dev \
-            libprotobuf-dev \
-            protobuf-compiler \
             rapidjson-dev \
-            libevent-dev \
             libgtest-dev \
             git
 
@@ -69,9 +65,7 @@ jobs:
             ${{ matrix.cmake_arch }} \
             -DAGENTFLOW_BUILD_TESTS=OFF \
             -DAGENTFLOW_WITH_PROTOACTOR=OFF \
-            -DAGENTFLOW_WITH_OPENSSL=ON \
-            -DAGENTFLOW_WITH_PROTOBUF=ON \
-            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+            -DAGENTFLOW_WITH_OPENSSL=ON
 
       - name: Build
         working-directory: build

@@ -46,12 +46,8 @@ git checkout -b feature/your-feature-name
 # On Ubuntu/Debian:
 sudo apt-get update
 sudo apt-get install -y build-essential cmake pkg-config \
-  libssl-dev libwebsockets-dev libprotobuf-dev protobuf-compiler \
-  rapidjson-dev libevent-dev libgtest-dev
 
 # On macOS:
-brew install cmake openssl@3 libwebsockets protobuf rapidjson \
-  libevent googletest ninja
 
 # Build the project
 ./build.sh build
@@ -543,7 +539,6 @@ AgentFlow/
 ├── examples/                  # 示例程序
 │   └── dsl/                   # DSL 示例
 ├── docs/                      # 文档
-├── proto/                     # Protobuf 定义
 ├── scripts/                   # 构建脚本
 │   ├── docker/                # Docker 配置
 │   └── helm/                  # Kubernetes 部署
@@ -1007,10 +1002,7 @@ find . -name "*.cpp" -o -name "*.h" | xargs wc -l
 | **核心** | Threads | 必需 | 多线程支持 |
 | **可选** | Protoactor-cpp | 可选 | Actor 模型实现 |
 | **可选** | OpenSSL | 可选 | SSL/TLS 加密 |
-| **可选** | libwebsockets | 可选 | WebSocket 支持 |
-| **可选** | libevent | 可选 | 事件循环 |
 | **可选** | RapidJSON | 可选 | JSON 解析 |
-| **可选** | Protobuf | 可选 | 序列化 |
 | **测试** | Google Test | 可选 | 单元测试框架 |
 
 #### 依赖检测机制
@@ -1024,9 +1016,6 @@ find_package(Threads REQUIRED)
 # 可选依赖（未找到时使用stub）
 find_package(protoactor CONFIG QUIET)
 find_package(OpenSSL QUIET)
-find_package(libwebsockets CONFIG QUIET)
-find_package(Protobuf QUIET)
-find_package(libevent CONFIG QUIET)
 
 # RapidJSON (header-only)
 find_path(RAPIDJSON_INCLUDE_DIR NAMES rapidjson/document.h)
@@ -1045,7 +1034,6 @@ find_path(RAPIDJSON_INCLUDE_DIR NAMES rapidjson/document.h)
 | 依赖 | 版本要求 | 用途 |
 |------|---------|------|
 | grpc | >= 1.30 | gRPC 通信库，用于远程 Actor 通信 |
-| protobuf | >= 3.10 | Protocol Buffer，用于消息序列化 |
 | openssl | >= 1.1 | SSL/TLS 加密，安全通信支持 |
 | zlib | >= 1.2 | 数据压缩，减少网络传输数据量 |
 
@@ -1065,17 +1053,9 @@ find_path(RAPIDJSON_INCLUDE_DIR NAMES rapidjson/document.h)
 - **用途**: SSL/TLS 安全通信
 - **功能**: SSL/TLS 协议支持、证书管理、加密通信
 
-#### libwebsockets（WebSocket 支持）
 
-- **GitHub**: https://github.com/warmcat/libwebsockets.git
-- **官网**: https://libwebsockets.org/
-- **用途**: WebSocket 协议实现
-- **功能**: WebSocket 服务器和客户端、实时双向通信
 
-#### libevent（事件循环）
 
-- **GitHub**: https://github.com/libevent/libevent.git
-- **官网**: https://libevent.org/
 - **用途**: 高性能事件循环
 - **功能**: 跨平台事件循环、高性能 I/O 多路复用
 
@@ -1085,9 +1065,7 @@ find_path(RAPIDJSON_INCLUDE_DIR NAMES rapidjson/document.h)
 - **用途**: JSON 序列化和反序列化
 - **特点**: Header-only 库，高性能 JSON 解析
 
-#### Protobuf（序列化）
 
-- **GitHub**: https://github.com/protocolbuffers/protobuf.git
 - **官网**: https://developers.google.com/protocol-buffers
 - **用途**: 二进制序列化协议
 - **特点**: 高效的二进制序列化，跨语言支持
@@ -1100,10 +1078,7 @@ find_path(RAPIDJSON_INCLUDE_DIR NAMES rapidjson/document.h)
 |--------|-----------|
 | Protoactor-cpp | https://github.com/DanielKernel/Protoactor-cpp.git |
 | OpenSSL | https://github.com/openssl/openssl.git |
-| libwebsockets | https://github.com/warmcat/libwebsockets.git |
-| libevent | https://github.com/libevent/libevent.git |
 | RapidJSON | https://github.com/Tencent/rapidjson.git |
-| protobuf | https://github.com/protocolbuffers/protobuf.git |
 
 这些库的源码也可以通过vendor脚本下载：
 ```bash
@@ -1122,15 +1097,11 @@ sudo apt-get install -y build-essential cmake git pkg-config
 sudo apt-get install -y \
     libgrpc++-dev \
     libgrpc-dev \
-    libprotobuf-dev \
-    protobuf-compiler \
     libssl-dev \
     zlib1g-dev
 
 # AgentFlow 可选依赖
 sudo apt-get install -y \
-    libwebsockets-dev \
-    libevent-dev \
     rapidjson-dev
 
 # 测试框架
@@ -1152,10 +1123,8 @@ xcode-select --install
 brew install cmake git
 
 # Protoactor-cpp 依赖
-brew install grpc protobuf openssl zlib
 
 # AgentFlow 可选依赖
-brew install libwebsockets libevent rapidjson
 
 # 测试框架
 brew install googletest
@@ -1177,19 +1146,14 @@ sudo make install
 # Fedora
 sudo dnf install -y \
     gcc-c++ cmake git \
-    grpc-devel protobuf-devel \
     openssl-devel zlib-devel \
-    libevent-devel rapidjson-devel \
-    libwebsockets-devel \
     gtest-devel
 
 # CentOS/RHEL（需要 EPEL）
 sudo yum install -y epel-release
 sudo yum install -y \
     gcc-c++ cmake git \
-    grpc-devel protobuf-devel \
     openssl-devel zlib-devel \
-    libevent-devel
 ```
 
 #### Arch Linux
@@ -1197,8 +1161,6 @@ sudo yum install -y \
 ```bash
 sudo pacman -S --noconfirm \
     base-devel cmake git \
-    grpc protobuf openssl zlib \
-    libevent rapidjson libwebsockets \
     gtest
 ```
 
@@ -1300,10 +1262,7 @@ public:
 |------|-----------|------|
 | Actor | `vendor/adapter/actor/stub_impl.cpp` | 基本Actor模拟 |
 | SSL | `include/.../openssl_impl.h` | 无加密通信 |
-| WebSocket | `include/.../libwebsockets_impl.h` | 无 WebSocket 支持 |
-| Event Loop | `include/.../libevent_impl.h` | 简单事件处理 |
 | JSON | `vendor/adapter/dsl/json_adapter_stub.cpp` | 基础 JSON 解析 |
-| Protobuf | `include/.../protobuf_impl.h` | 无序列化 |
 
 #### 适配器模式示例
 
@@ -1339,18 +1298,14 @@ sudo apt-get install libgrpc++-dev libgrpc-dev
 brew install grpc
 ```
 
-#### Protobuf 版本冲突
 
 ```bash
 # 检查版本
 protoc --version
 
 # 重新安装
-sudo apt-get remove libprotobuf-dev protobuf-compiler
-sudo apt-get install libprotobuf-dev protobuf-compiler
 
 # macOS
-brew upgrade protobuf
 ```
 
 #### OpenSSL 找不到（macOS）

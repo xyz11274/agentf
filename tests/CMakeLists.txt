@@ -14,7 +14,6 @@ set(TEST_SOURCES
     unit/workflow/cpp/test_node_gtest.cpp
     unit/workflow/cpp/test_databus_gtest.cpp
     unit/workflow/cpp/test_event_gtest.cpp
-    unit/workflow/cpp/test_eventloop_gtest.cpp
 )
 
 # Find dependencies
@@ -105,15 +104,6 @@ target_link_libraries(test_event_gtest PRIVATE
     GTest::gtest_main
 )
 
-add_executable(test_eventloop_gtest
-    unit/workflow/cpp/test_eventloop_gtest.cpp
-)
-target_link_libraries(test_eventloop_gtest PRIVATE
-    agentflow
-    GTest::gtest
-    GTest::gtest_main
-)
-
 # Compiler options
 if(NOT MSVC)
     if(TARGET test_hot_reload)
@@ -124,7 +114,6 @@ if(NOT MSVC)
     target_compile_options(test_node_gtest PRIVATE -Wno-non-virtual-dtor)
     target_compile_options(test_databus_gtest PRIVATE -Wno-non-virtual-dtor)
     target_compile_options(test_event_gtest PRIVATE -Wno-non-virtual-dtor)
-    target_compile_options(test_eventloop_gtest PRIVATE -Wno-non-virtual-dtor)
 endif()
 
 # Add subdirectories
@@ -140,7 +129,6 @@ add_test(NAME WorkflowTests COMMAND test_workflow_gtest)
 add_test(NAME NodeTests COMMAND test_node_gtest)
 add_test(NAME DataBusTests COMMAND test_databus_gtest)
 add_test(NAME EventTests COMMAND test_event_gtest)
-add_test(NAME EventLoopTests COMMAND test_eventloop_gtest)
 
 if(AGENTFLOW_TEST_ENV)
     if(TARGET test_hot_reload)
@@ -151,7 +139,6 @@ if(AGENTFLOW_TEST_ENV)
     set_tests_properties(NodeTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
     set_tests_properties(DataBusTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
     set_tests_properties(EventTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
-    set_tests_properties(EventLoopTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
 endif()
 
 # Set RPATH for test executables so they can find shared libs at runtime
@@ -177,7 +164,7 @@ elseif(UNIX)
 endif()
 if(_test_rpath)
   foreach(_tgt test_agent_gtest test_workflow_gtest test_node_gtest
-               test_databus_gtest test_event_gtest test_eventloop_gtest)
+               test_databus_gtest test_event_gtest)
     if(TARGET ${_tgt})
       set_target_properties(${_tgt} PROPERTIES BUILD_RPATH "${_test_rpath}")
     endif()
@@ -189,7 +176,7 @@ endif()
 
 # Install targets
 install(TARGETS test_hot_reload test_agent_gtest test_workflow_gtest test_node_gtest
-        test_databus_gtest test_event_gtest test_eventloop_gtest
+        test_databus_gtest test_event_gtest
         RUNTIME DESTINATION bin)
 
 # Library install

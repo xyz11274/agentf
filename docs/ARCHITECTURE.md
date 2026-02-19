@@ -42,7 +42,6 @@ AgentFlow 是一个面向开发者的 **Agent开发编排与执行引擎**，提
 |------|------|------|----------|------|
 | 开发者 | 入 | JSON流程文件 / Node开发框架 | JSON / Shell/Python/C++/Java/Go等多语言 | 创建Agent包 |
 | 运维控制台 | 入/出 | Restful/gRPC | 私有二进制协议 / JSON | Agent实例运行时监控与控制 |
-| 基础设施 | 出 | Restful/gRPC/WebSocket等协议 | JSON / Protobuf Binary /流式 | Agent依赖南向服务：数据库、分布式文件系统、LLM推理服务、记忆服务、工具服务等；Agent依赖的治理中心服务 |
 
 #### 外部角色定义
 
@@ -50,7 +49,6 @@ AgentFlow 是一个面向开发者的 **Agent开发编排与执行引擎**，提
 |------|------|----------|
 | **应用开发者** | 使用 AgentFlow 构建Agent应用的开发人员 | DSL 定义Workflow、多语言实现Node |
 | **运维人员** | 负责Agent系统部署、监控和维护的人员 | OM系统 |
-| **外部系统** | 与 Agent 集成的第三方系统（如 LLM API、Agent治理中心等） | gRPC/REST/WebSocket（规划） |
 
 ```mermaid
 graph TB
@@ -59,7 +57,6 @@ graph TB
         Console["👤 运维/管理员\nWeb Console"]
         Shell["🔧 Shell/Python 环境\n外部执行器"]
         SO["🔧 动态库 (.so/.dylib)\n热重载载体"]
-        Storage["🔧 文件存储\nJSON/Protobuf"]
         Monitor["🔧 监控系统\nPrometheus/Grafana"]
     end
 
@@ -67,13 +64,11 @@ graph TB
         DevFW["开发编排框架\nAgent/Workflow/Node/Edge"]
         Runtime["运行框架\nAgentRuntime + DataBus"]
         Actor["Actor 系统\n(可选 Protoactor-cpp)"]
-        Network["网络层\nWebSocket + SSL"]
         StorageLayer["存储层\nAgent/Workflow Storage"]
         MetricLayer["指标层\nMetricsCollector"]
     end
 
     Dev -->|"C++ API"| DevFW
-    Console -->|"WebSocket / 私有协议"| Network
     Network --> Runtime
     Runtime -->|"进程调用"| Shell
     Runtime -->|"dlopen/符号"| SO
@@ -429,7 +424,6 @@ sequenceDiagram
 |------|----------|------|
 | 开发编排框架 | `agentflow::framework` | Agent管理、Node定制 |
 | 运行框架 | `agentflow::runtime` | AgentRuntime 三层调度、DataBus、ControlFlow、HotReload |
-| 基础设施层 | `agentflow::utils` | OMAdapter（log等对接）、ThreadPool、ActorFramework、Storage、Protobuf等 |
 
 ```mermaid
 graph TD
@@ -465,7 +459,6 @@ graph TD
     subgraph Infra["基础设施"]
         Logger["Logger (spdlog)"]
         TP["ThreadPool"]
-        Serial["Serialization\n(Protobuf)"]
     end
 
     DevSDK --> AgentCore
@@ -772,18 +765,14 @@ graph TB
 
     subgraph Runtime["运行时层"]
         STL["C++ STL\nstd::thread/mutex/atomic"]
-        libevent["libevent 2.x\n事件循环"]
     end
 
     subgraph Communication["通信层"]
-        LWS["libwebsockets 4.x\nWebSocket 服务"]
         OpenSSL["OpenSSL 3.x\nTLS 加密"]
-        Protobuf["Protobuf 3.x\n序列化"]
     end
 
     subgraph Data["数据层"]
         InMemKV["HighSpeedDataBus\n内存 KV + 订阅"]
-        FileFS["POSIX 文件系统\nJSON/Protobuf 持久化"]
         RapidJSON["RapidJSON 1.x\nJSON 解析"]
     end
 
@@ -793,12 +782,9 @@ graph TB
         PromeExport["Prometheus 文本导出\n/metrics 端点（规划）"]
     end
 
-    CPP17 --> STL & libevent
     CMake --> GCC
     STL --> InMemKV
-    libevent --> LWS
     LWS --> OpenSSL
-    CPP17 --> Protobuf & ProtoActor
     FileFS --> RapidJSON
     CPP17 --> spdlog & MetricsLib
     MetricsLib --> PromeExport
@@ -810,13 +796,10 @@ graph TB
 |------|------|------|------|----------|
 | 语言 | C++ | 17 | 全栈实现 | 高性能、零开销抽象、跨平台 |
 | 构建 | CMake | 3.10+ | 跨平台构建 | 事实标准，支持 Linux/macOS |
-| 序列化 | Protobuf | 3.x | 网络协议 + 节点 I/O | 高效二进制、强类型、跨语言 |
-| WebSocket | libwebsockets | 4.x | 控制台通信 | 轻量级、C 原生，适合嵌入 |
 | TLS/SSL | OpenSSL | 3.x | 传输加密 | 工业级安全库 |
 | Actor 框架 | Protoactor-cpp | latest | 可选分布式调度 | 轻量消息驱动，可插拔 |
 | 日志 | spdlog | 1.x | 结构化日志 | 异步高性能，格式灵活 |
 | JSON | RapidJSON | 1.x | 配置/DSL 解析 | 零依赖、性能优秀 |
-| 事件循环 | libevent | 2.x | 网络 I/O 复用 | 跨平台 epoll/kqueue 抽象 |
 | 测试 | GoogleTest | 1.14+ | 单元 + 集成测试 | C++ 测试事实标准 |
 | YAML | yaml-cpp（规划） | 0.8+ | 配置文件解析 | 人可读配置，已有 YAML 配置 |
 
@@ -825,11 +808,8 @@ graph TB
 | 依赖 | 集成方式 | 可替代方案 | 说明 |
 |------|----------|------------|------|
 | **Protoactor-cpp** | 条件编译（必选） | Stub 实现 | Actor 核心框架，`AGENTFLOW_WITH_PROTOACTOR` 宏控制 |
-| **libevent** | 条件编译（可选） | Stub 实现 | 事件循环，WebSocket 依赖 |
-| **libwebsockets** | 可选依赖 | Stub 实现 | WebSocket 控制台通信 |
 | **OpenSSL** | 可选依赖 | Stub 实现 | TLS 加密 |
 | **RapidJSON** | 可选依赖 | Stub 实现 | JSON/DSL 解析 |
-| **Protobuf** | 直接依赖 | — | 序列化，节点 I/O 协议 |
 | **spdlog** | 直接依赖 | — | 结构化日志 |
 | **GoogleTest** | 测试依赖 | Catch2 | 单元 + 集成测试 |
 
@@ -882,11 +862,9 @@ AgentFlow/
 │   ├── adapter/                    # 三方依赖适配器实现（与 src/ 业务代码隔离）
 │   │   ├── actor/                  # Actor 框架适配（protoactor_impl.cpp, stub_impl.cpp）
 │   │   ├── dsl/                    # DSL 适配（json_adapter_rapidjson.cpp, json_adapter_stub.cpp）
-│   │   ├── event/                  # 事件循环适配（libevent_impl.cpp）
 │   │   ├── network/                # 网络适配（adapter_factory.cpp）
 │   │   └── serialization/          # 序列化适配（adapter_factory.cpp）
 │   └── <downloaded>/               # 下载的三方依赖（.gitignore）
-├── proto/                          # Protobuf 定义
 │   ├── agentflow.proto             # 公共类型（DataValue, DataMap, 枚举）
 │   └── node_service.proto          # 节点执行 Request/Response/Metrics
 ├── tests/                          # 测试套件
@@ -921,7 +899,6 @@ AgentFlow/
 | 指标采集器 | `include/internal/runtime/metrics.h` | `src/runtime/metrics.cpp` | `MetricsCollector`, `CounterMetric`, `GaugeMetric`, `HistogramMetric` |
 | Actor 运行时实现 | `include/internal/workflow/{node_actor.h,workflow_actor.h}` | `src/runtime/actor/` + `src/workflow/node/node_actor.cpp` | `NodeActor`, `WorkflowActor` |
 | DSL 解析器 | `include/internal/workflow/dsl/` | `src/workflow/dsl/workflow_parser.cpp` + `vendor/adapter/dsl/json_adapter_factory.cpp` | `WorkflowParser`, `JsonDocumentFactory` |
-| 网络层 | `include/internal/runtime/communication/` + `include/internal/vendor/network/` | `src/runtime/network/` + `vendor/adapter/network/` | `WebSocketAdapter`, `SSLAdapter`, `PrivateProtocol` |
 | 序列化层 | `include/internal/vendor/serialization/` | `vendor/adapter/serialization/` | `ProtoAdapter`, `AdapterFactory` |
 | 存储层 | `include/internal/runtime/storage/` | `src/runtime/storage/` | `StorageManager`, `IAgentStorage`, `IWorkflowStorage` |
 | 工具库 | `include/internal/utils/` | `src/utils/` | `Logger`, `ThreadPool` |
@@ -1081,7 +1058,6 @@ graph LR
 option(AGENTFLOW_BUILD_TESTS    "Build tests"              ON)
 option(AGENTFLOW_BUILD_EXAMPLES "Build examples"           ON)
 option(AGENTFLOW_WITH_PROTOACTOR "Enable Protoactor-cpp"  OFF)
-option(AGENTFLOW_WITH_LIBEVENT  "Enable libevent"          ON)
 option(AGENTFLOW_ENABLE_COVERAGE "Enable code coverage"   OFF)
 ```
 
@@ -1097,7 +1073,6 @@ libagentflow（静态/动态库）
 └── agentflow_vendor_adapters（条件编译）
     ├── actor_adapter        → vendor/adapter/actor/  (protoactor_impl, stub_impl)
     ├── dsl_adapter          → vendor/adapter/dsl/    (json_adapter_rapidjson, json_adapter_stub)
-    ├── event_adapter        → vendor/adapter/event/  (libevent_impl)
     ├── network_adapter      → vendor/adapter/network/
     └── serialization_adapter→ vendor/adapter/serialization/
 
@@ -1140,7 +1115,6 @@ gcovr -r . build
 | 组件 | CPU | 内存 | 存储 | 网络 |
 |------|-----|------|------|------|
 | AgentRuntime（单节点） | x86_64 / ARM64，≥ 2 核 | ≥ 512 MB（节点 I/O 缓冲 1MB × agent 数） | SSD ≥ 1 GB（存储 + 日志） | — |
-| WebSocket 服务 | + 0.5 核（libevent） | + 64 MB | — | ≥ 100 Mbps |
 | Protoactor-cpp（可选） | + 1 核 | + 128 MB | — | — |
 
 #### 各环境配置
@@ -1265,7 +1239,6 @@ worker_loads_: [2, 5, 1, 4]
 ┌──────────────────────────────────────────────────────┐
 │             系统维护通信面（Control Plane）             │
 │  ┌────────────────┐  ┌───────────────┐  ┌──────────┐ │
-│  │Actor Message   │  │WebSocket      │  │REST API  │ │
 │  │(Protoactor)    │  │（控制台）      │  │（规划）  │ │
 │  │• Tell/Ask 模式 │  │• 监控与控制   │  │• 资源操作│ │
 │  └────────────────┘  └───────────────┘  └──────────┘ │
@@ -1315,7 +1288,6 @@ graph TB
         end
         TaskQueue["Node 任务队列\n(mutex 保护)"]
         HRThread["HotReload 监控线程\n轮询文件变更"]
-        WSThread["WebSocket 线程\nlibevent event_loop"]
     end
 
     subgraph DataLayer["数据层（高可用）"]
@@ -1544,8 +1516,6 @@ graph TB
             SOLibs["动态库目录\n*.so / *.dylib"]
         end
         subgraph LocalStorage["本地存储"]
-            AgentFiles["Agent 定义文件\nJSON/Protobuf"]
-            WorkflowFiles["Workflow 定义文件\nJSON/Protobuf + DSL"]
             LogFiles["日志文件\nspdlog 结构化日志"]
         end
     end
@@ -1666,7 +1636,6 @@ spec:
 
 #### 数据库迁移策略
 
-AgentFlow 存储层使用文件系统（JSON/Protobuf），无传统数据库迁移概念。版本演进策略：
 
 1. 新版本字段追加（向前兼容），旧字段标注废弃
 2. 存储格式变更时提供迁移脚本（`scripts/migrate_storage.sh`，规划）
@@ -1738,11 +1707,9 @@ AgentFlow 存储层使用文件系统（JSON/Protobuf），无传统数据库迁
 
 #### 认证与授权
 - **当前**：AgentFlow 为嵌入式库，认证授权由宿主应用负责
-- **WebSocket 控制台**：SSL/TLS 加密（OpenSSL 3.x，TLS 1.2+），基于 Token 的访问控制（规划）
 - **未来**：为管理 API 增加 API Key / RBAC 模型
 
 #### 数据加密
-- **传输中**：WebSocket 通信强制 TLS（`ssl_adapter.h` + OpenSSL 3.x）
 - **静态数据**：Agent/Workflow 定义文件暂不加密（不含敏感业务数据）；若有敏感配置，应由宿主应用加密后传入
 
 #### 安全扫描策略
@@ -1799,13 +1766,11 @@ Node 重试：
 - **错误返回**：`bool`（成功/失败）+ 内部 `last_error_` / `StorageResult`；不抛异常（嵌入库风格）
 - **线程安全**：所有公开接口标注线程安全性（见头文件注释）
 
-#### Protobuf API 规范（网络层）
 
 - **版本策略**：`package agentflow`，新字段追加编号，不复用已废弃字段编号
 - **向前兼容**：新版本客户端可解析旧版本消息（`proto3` 默认值语义）
 - **节点 I/O**：统一使用 `DataMap`（`map<string, DataValue>`）传递，`DataValue` 支持 int64/double/string/bool/bytes
 
-#### WebSocket 私有协议规范（规划）
 
 - **分帧**：4 字节 magic + 4 字节 message_type + 4 字节 payload_len + payload
 - **幂等性**：控制指令（start/stop workflow）携带 `request_id`，服务端去重
@@ -1841,10 +1806,8 @@ Node 重试：
 | Kruchten 4+1 视图方法论 | Philippe Kruchten, "Architectural Blueprints—The '4+1' View Model" |
 | C4 模型 | https://c4model.com |
 | C++ Core Guidelines | https://isocpp.github.io/CppCoreGuidelines/ |
-| Protobuf 3 语言规范 | https://protobuf.dev/programming-guides/proto3/ |
 | spdlog 文档 | https://github.com/gabime/spdlog |
 | Protoactor-cpp | https://github.com/DanielKernel/Protoactor-cpp.git |
-| libwebsockets 文档 | https://libwebsockets.org |
 | OpenTelemetry C++ | https://opentelemetry.io/docs/languages/cpp/ |
 | gRPC 文档 | https://grpc.io/docs/ |
 | Kubernetes 文档 | https://kubernetes.io/docs/ |

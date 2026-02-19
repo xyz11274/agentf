@@ -12,7 +12,6 @@ vendor/
 ├── adapter/           # Adapter implementations for third-party libraries
 │   ├── actor/         # Actor framework adapters (protoactor, stub)
 │   ├── dsl/           # DSL/JSON parser adapters (rapidjson, stub)
-│   ├── eventloop/     # Event loop adapters (libevent)
 │   ├── network/       # Network adapters (reserved)
 │   ├── serialization/ # Serialization adapters (reserved)
 │   └── README.md
@@ -32,10 +31,7 @@ Edit `vendor.conf` in this directory to add your dependencies:
 # Format: name|url|branch|target_dir
 Protoactor-cpp|https://github.com/DanielKernel/Protoactor-cpp.git|main|Protoactor-cpp
 OpenSSL|https://github.com/openssl/openssl.git|master|openssl
-libwebsockets|https://github.com/warmcat/libwebsockets.git|main|libwebsockets
-libevent|https://github.com/libevent/libevent.git|master|libevent
 RapidJSON|https://github.com/Tencent/rapidjson.git|master|rapidjson
-protobuf|https://github.com/protocolbuffers/protobuf.git|main|protobuf
 ```
 
 ### 2. Download Dependencies
@@ -93,8 +89,6 @@ The `adapter/` subdirectory contains adapter implementations that wrap third-par
   - Uses Protoactor-cpp: https://github.com/DanielKernel/Protoactor-cpp.git
 - **dsl/**: JSON parser adapters (json_adapter_rapidjson.cpp, json_adapter_stub.cpp)
   - Uses RapidJSON: https://github.com/Tencent/rapidjson.git
-- **eventloop/**: Event loop adapters (libevent_impl.cpp)
-  - Uses libevent: https://github.com/libevent/libevent.git
 
 These adapters provide a uniform interface for AgentFlow to interact with different implementations.
 
@@ -117,7 +111,6 @@ set(AGENTFLOW_VENDOR_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vendor)
 set(AGENTFLOW_ADAPTER_SOURCES
     ${AGENTFLOW_VENDOR_DIR}/adapter/actor/stub_impl.cpp
     ${AGENTFLOW_VENDOR_DIR}/adapter/dsl/json_adapter_stub.cpp
-    ${AGENTFLOW_VENDOR_DIR}/adapter/eventloop/libevent_impl.cpp
     ...
 )
 ```
@@ -140,10 +133,7 @@ AgentFlow depends on the following third-party libraries. All are optional and h
 |---------|--------|---------|
 | Protoactor-cpp | https://github.com/DanielKernel/Protoactor-cpp.git | Actor model implementation |
 | OpenSSL | https://github.com/openssl/openssl.git | SSL/TLS encryption |
-| libwebsockets | https://github.com/warmcat/libwebsockets.git | WebSocket protocol |
-| libevent | https://github.com/libevent/libevent.git | High-performance event loop |
 | RapidJSON | https://github.com/Tencent/rapidjson.git | JSON parsing (header-only) |
-| protobuf | https://github.com/protocolbuffers/protobuf.git | Binary serialization |
 
 To download all these libraries:
 ```bash

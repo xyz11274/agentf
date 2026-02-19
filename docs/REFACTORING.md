@@ -25,7 +25,6 @@ AgentFlow/
 │   └── functional/     # 功能测试
 ├── examples/           # 示例代码
 ├── docs/               # 项目文档
-└── proto/              # Protobuf 定义
 ```
 
 ## 优化内容
@@ -50,10 +49,8 @@ include/
     ├── runtime/        # master/worker部署，多agent、多workflow、多worker调度
     ├── vendor/         # 三方依赖适配
     │   ├── json_adapter/
-    │   ├── websocket_adapter/
     │   └── private_protocol.h
     ├── serialization/
-    │   └── proto_adapter/  # Protobuf 适配器实现
     ├── actor_adapter/  # Actor 适配器实现
     └── testing/        # 测试工具
 ```
@@ -102,8 +99,6 @@ vendor/                 # 三方依赖相关实现
 │   ├── dsl/            # DSL 解析器适配器
 │   │   ├── json_adapter_rapidjson.cpp
 │   │   └── json_adapter_stub.cpp
-│   ├── event/          # 事件循环适配器（adapter_factory.cpp, libevent_impl.cpp）
-│   ├── eventloop/      # 事件循环适配器（备用路径，libevent_impl.cpp）
 │   ├── network/        # 网络适配器（adapter_factory.cpp）
 │   └── serialization/  # 序列化适配器（adapter_factory.cpp）
 └── <downloaded>/       # 下载的三方依赖（gitignore）
@@ -296,7 +291,6 @@ set(AGENTFLOW_ADAPTER_SOURCES
 |---------|--------|---------|
 | 开发编排框架 | 85% | Agent、Workflow、Node、Edge 定义完成，存储功能已实现 |
 | 运行框架 | **88%** | 核心调度完成，控制流完成，P0/P1 缺陷已修复 |
-| 基础设施 | **58%** | 适配器完成，libevent 集成完成，序列化已实现 |
 | 监控和日志 | **68%** | 基础监控完成，跨平台实现完成 |
 
 **进度提升**:
@@ -439,22 +433,18 @@ set(AGENTFLOW_ADAPTER_SOURCES
 - 已完成 网络接口定义
 - 已完成 私有协议实现
 - 已完成 SSL 适配器接口
-- 已完成 WebSocket 适配器接口
 - 待完成 服务器/客户端完整实现
 - 待完成 负载均衡支持
 - 待完成 连接池管理
 
 #### 事件循环适配器
 - 已完成 EventLoop 接口定义
-- 已完成 libevent 完整集成
 - 已完成 定时器支持
 - 已完成 文件描述符事件
 - 待完成 其他事件库适配（libuv、libev）
 
 #### 序列化适配器
 - 已完成 序列化接口定义
-- 已完成 Protobuf 适配器接口
-- 待完成 Protobuf 完整实现
 - 待完成 JSON 序列化优化
 - 待完成 其他序列化格式支持
 
@@ -568,9 +558,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 
 1. **可选依赖完整实现**
    - Protoactor-cpp 远程通信
-   - Protobuf 完整序列化
    - OpenSSL 完整 SSL/TLS
-   - WebSocket 完整实现
 
 2. **新依赖引入评估**
    - gRPC 支持
@@ -743,7 +731,6 @@ set(AGENTFLOW_ADAPTER_SOURCES
 
 | 测试文件 | 用例数 | 覆盖组件 | 质量 |
 |---------|--------|---------|------|
-| test_eventloop_gtest.cpp | 36 | EventLoopAdapter 完整生命周期 | 完善 |
 | test_request_response_gtest.cpp | 56 | Request/Response 构建、序列化、验证 | 完善 |
 | test_local_channel_gtest.cpp | 43 | LocalChannel 完整功能 | 完善 |
 | test_hot_reload.cpp | 44 | 多语言热重载、版本管理 | 完善 |
@@ -941,7 +928,6 @@ set(AGENTFLOW_ADAPTER_SOURCES
 | 2026-02-18 | 合并 roadmap.md 和 code-review.md 到 planning.md，整合项目规划文档 |
 | 2026-02-17 | 代码完备性评估：修正功能状态标注，标记 stub/不完备功能 |
 | 2026-02-17 | 整理功能规划文档，更新至 docs 目录 |
-| 2026-02-17 | 完成 P1 功能：Protoactor-cpp 适配、本地数据通道、微服务接口封装、libevent 完整集成 |
 | 2026-02-16 | 重新梳理功能实现状态，更新优先级排序 |
 
 ---

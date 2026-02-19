@@ -254,7 +254,6 @@ AgentFlow 项目采用 GitHub Actions 实现完整的 CI/CD 自动化基础设�
 
 **构建步骤:**
 1. 检出源码
-2. 安装平台依赖（OpenSSL, Protobuf, libwebsockets, libevent, RapidJSON, GTest）
 3. 配置 CMake (Release 模式)
 4. 并行构建 (`-j` 自动检测核心数)
 5. 上传构建产物（7天保留）
@@ -264,8 +263,6 @@ AgentFlow 项目采用 GitHub Actions 实现完整的 CI/CD 自动化基础设�
 -DCMAKE_BUILD_TYPE=Release
 -DCMAKE_CXX_STANDARD=17
 -DAGENTFLOW_WITH_OPENSSL=ON
--DAGENTFLOW_WITH_PROTOBUF=ON
--DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
 ```
 
 **特性:**
@@ -1050,7 +1047,6 @@ tests/
 ├── test_node_gtest.cpp          # Node 测试
 ├── test_databus_gtest.cpp       # DataBus 测试
 ├── test_event_gtest.cpp         # Event 系统测试
-├── test_eventloop_gtest.cpp     # EventLoop 测试
 ├── test_workflow_json_gtest.cpp # Workflow JSON 解析测试
 ├── test_agent_json_gtest.cpp    # Agent JSON 解析测试
 ├── test_local_channel_gtest.cpp # LocalChannel 测试

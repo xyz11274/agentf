@@ -6,9 +6,6 @@ This directory contains adapter implementations for third-party libraries that a
 
 ```
 vendor/adapter/
-├── network/          # Network adapter implementations (libwebsockets, etc.)
-├── serialization/    # Serialization adapter implementations (protobuf, etc.)
-├── eventloop/        # Event loop adapter implementations (libevent, etc.)
 ├── dsl/              # DSL parser adapter implementations (rapidjson, etc.)
 └── actor/            # Actor framework adapter implementations (protoactor, etc.)
 ```
@@ -33,15 +30,12 @@ Third-party library adapters provide a uniform interface for AgentFlow to intera
 
 ```cpp
 // vendor/adapter/network/my_adapter/my_adapter_impl.h
-#include "agentflow/network/websocket_adapter.h"
 
 namespace agentflow {
 namespace network {
 namespace my_adapter {
 
-class MyWebSocketAdapter : public WebSocketAdapter {
 public:
-    // Implement WebSocketAdapter interface
     bool connect(const std::string& url) override;
     bool send(const Message& msg) override;
     void disconnect() override;

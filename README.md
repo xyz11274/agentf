@@ -109,7 +109,6 @@ AgentFlow/
 │   └── functional/      # 功能测试
 ├── examples/            # 示例
 ├── docs/                # 文档
-├── proto/               # Protobuf 定义
 └── build/               # 构建输出和CMake配置
 ```
 

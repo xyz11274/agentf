@@ -41,11 +41,7 @@ jobs:
             cmake \
             pkg-config \
             libssl-dev \
-            libwebsockets-dev \
-            libprotobuf-dev \
-            protobuf-compiler \
             rapidjson-dev \
-            libevent-dev \
             libgtest-dev \
             git
 
@@ -62,18 +58,14 @@ jobs:
               -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
               -DAGENTFLOW_BUILD_TESTS=ON \
               -DAGENTFLOW_WITH_PROTOACTOR=OFF \
-              -DAGENTFLOW_WITH_OPENSSL=ON \
-              -DAGENTFLOW_WITH_PROTOBUF=ON \
-              -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+              -DAGENTFLOW_WITH_OPENSSL=ON
           else
             cmake .. \
               -DCMAKE_BUILD_TYPE=Debug \
               -DCMAKE_CXX_STANDARD=17 \
               -DAGENTFLOW_BUILD_TESTS=ON \
               -DAGENTFLOW_WITH_PROTOACTOR=OFF \
-              -DAGENTFLOW_WITH_OPENSSL=ON \
-              -DAGENTFLOW_WITH_PROTOBUF=ON \
-              -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+              -DAGENTFLOW_WITH_OPENSSL=ON
           fi
 
       - name: Build
@@ -124,11 +116,7 @@ jobs:
             cmake \
             pkg-config \
             libssl-dev \
-            libwebsockets-dev \
-            libprotobuf-dev \
-            protobuf-compiler \
             rapidjson-dev \
-            libevent-dev \
             libgtest-dev
 
       - name: Create build directory
@@ -141,9 +129,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DAGENTFLOW_BUILD_TESTS=ON \
             -DAGENTFLOW_WITH_PROTOACTOR=OFF \
-            -DAGENTFLOW_WITH_OPENSSL=ON \
-            -DAGENTFLOW_WITH_PROTOBUF=ON \
-            -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+            -DAGENTFLOW_WITH_OPENSSL=ON
           make -j$(nproc)
 
       - name: Run examples
@@ -208,11 +194,7 @@ jobs:
             cmake \
             pkg-config \
             libssl-dev \
-            libwebsockets-dev \
-            libprotobuf-dev \
-            protobuf-compiler \
             rapidjson-dev \
-            libevent-dev \
             libgtest-dev \
             procps \
             sysstat
@@ -230,18 +212,14 @@ jobs:
               -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
               -DAGENTFLOW_BUILD_TESTS=ON \
               -DAGENTFLOW_WITH_PROTOACTOR=OFF \
-              -DAGENTFLOW_WITH_OPENSSL=ON \
-              -DAGENTFLOW_WITH_PROTOBUF=ON \
-              -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+              -DAGENTFLOW_WITH_OPENSSL=ON
           else
             cmake .. \
               -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_CXX_STANDARD=17 \
               -DAGENTFLOW_BUILD_TESTS=ON \
               -DAGENTFLOW_WITH_PROTOACTOR=OFF \
-              -DAGENTFLOW_WITH_OPENSSL=ON \
-              -DAGENTFLOW_WITH_PROTOBUF=ON \
-              -DAGENTFLOW_WITH_LIBWEBSOCKETS=ON
+              -DAGENTFLOW_WITH_OPENSSL=ON
           fi
 
       - name: Build with optimizations

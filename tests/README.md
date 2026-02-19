@@ -19,7 +19,6 @@ tests/
 │       ├── test_node_gtest.cpp            # Node测试
 │       ├── test_databus_gtest.cpp         # DataBus测试
 │       ├── test_event_gtest.cpp           # Event测试
-│       ├── test_eventloop_gtest.cpp       # EventLoop测试
 │       └── test_hot_reload.cpp            # 热更新测试
 ├── lib/                         # 测试库
 │   └── hot_reload_test.cpp     # SO库测试源码

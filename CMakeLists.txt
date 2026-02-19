@@ -84,7 +84,6 @@ find_package(PkgConfig QUIET)
 # ============================================================================
 # Build options
 # ============================================================================
-option(USE_LIBEVENT "Enable libevent for event loop support" ON)
 option(AGENTFLOW_BUILD_TESTS "Build unit tests" ON)
 
 # ============================================================================
@@ -127,162 +126,6 @@ else()
   set(USE_OPENSSL OFF)
 endif()
 
-# libwebsockets for WebSocket support
-find_package(libwebsockets CONFIG QUIET
-  PATHS
-    "${CMAKE_INSTALL_PREFIX}"
-    "${HOMEBREW_PREFIX}"
-  PATH_SUFFIXES
-    lib/cmake
-    lib/cmake/libwebsockets
-    share/cmake
-)
-if(libwebsockets_FOUND)
-  message(STATUS "libwebsockets found - enabling WebSocket support")
-  set(USE_LIBWEBSOCKETS ON)
-else()
-  # Try pkg-config as fallback
-  if(PKG_CONFIG_FOUND)
-    pkg_check_modules(libwebsockets libwebsockets)
-  endif()
-  if(libwebsockets_FOUND)
-    message(STATUS "libwebsockets found (via pkg-config) - enabling WebSocket support")
-    set(USE_LIBWEBSOCKETS ON)
-  else()
-    message(STATUS "libwebsockets not found - WebSocket disabled")
-    message(STATUS "  GitHub: https://github.com/warmcat/libwebsockets.git")
-    message(STATUS "  To install: brew install libwebsockets (macOS) or sudo apt-get install libwebsockets-dev (Ubuntu)")
-    set(USE_LIBWEBSOCKETS OFF)
-  endif()
-endif()
-
-# protobuf for serialization support
-find_package(Protobuf QUIET)
-if(Protobuf_FOUND)
-  message(STATUS "Protobuf found - enabling serialization support")
-  message(STATUS "  Protobuf Version: ${Protobuf_VERSION}")
-  set(USE_PROTOBUF ON)
-else()
-  message(STATUS "Protobuf not found - protobuf serialization disabled")
-  message(STATUS "  GitHub: https://github.com/protocolbuffers/protobuf.git")
-  message(STATUS "  To install: brew install protobuf (macOS) or sudo apt-get install libprotobuf-dev protobuf-compiler (Ubuntu)")
-  set(USE_PROTOBUF OFF)
-endif()
-
-# libevent for event loop support
-if(USE_LIBEVENT)
-  find_package(libevent CONFIG QUIET
-    PATHS
-      "${CMAKE_INSTALL_PREFIX}"
-      "${HOMEBREW_PREFIX}"
-    PATH_SUFFIXES
-      lib/cmake
-      lib/cmake/libevent
-      share/cmake
-  )
-  if(libevent_FOUND)
-    message(STATUS "libevent found - enabling event loop support")
-  else()
-    # Try pkg-config as fallback
-    if(PKG_CONFIG_FOUND)
-      pkg_check_modules(LIBEVENT libevent)
-    endif()
-    if(LIBEVENT_FOUND)
-      message(STATUS "libevent found (via pkg-config) - enabling event loop support")
-      # Add pkg-config variables
-      if(LIBEVENT_INCLUDE_DIRS)
-        include_directories(${LIBEVENT_INCLUDE_DIRS})
-      endif()
-
-      set(LIBEVENT_LIB_FIRST "")
-      if(LIBEVENT_LIBRARIES)
-        list(GET LIBEVENT_LIBRARIES 0 LIBEVENT_LIB_FIRST)
-      endif()
-      if(LIBEVENT_LIB_FIRST AND NOT IS_ABSOLUTE "${LIBEVENT_LIB_FIRST}")
-        set(LIBEVENT_LIB_FROM_PKGCONFIG "")
-        if(LIBEVENT_LIBRARY_DIRS)
-          find_library(LIBEVENT_LIB_FROM_PKGCONFIG
-            NAMES event event_core
-            HINTS ${LIBEVENT_LIBRARY_DIRS}
-          )
-        endif()
-        if(LIBEVENT_LIB_FROM_PKGCONFIG)
-          set(LIBEVENT_LIBRARIES "${LIBEVENT_LIB_FROM_PKGCONFIG}")
-        endif()
-      endif()
-
-      if(LIBEVENT_LIBRARIES AND NOT TARGET libevent::libevent)
-        set(_libevent_pkg_path "")
-        if(LIBEVENT_LIB_FIRST AND NOT IS_ABSOLUTE "${LIBEVENT_LIB_FIRST}")
-          find_library(_libevent_pkg_path
-            NAMES event event_core
-            HINTS ${LIBEVENT_LIBRARY_DIRS}
-          )
-        endif()
-
-        if(_libevent_pkg_path)
-          set(LIBEVENT_LIBRARIES "${_libevent_pkg_path}")
-        endif()
-
-        if(IS_ABSOLUTE "${LIBEVENT_LIBRARIES}")
-          # Create an imported target for libevent
-          add_library(libevent::libevent STATIC IMPORTED)
-          set_target_properties(libevent::libevent PROPERTIES
-            IMPORTED_LOCATION "${LIBEVENT_LIBRARIES}"
-            INTERFACE_INCLUDE_DIRECTORIES "${LIBEVENT_INCLUDE_DIRS}"
-          )
-        endif()
-      endif()
-
-      if(NOT TARGET libevent::libevent AND NOT (LIBEVENT_LIBRARIES AND IS_ABSOLUTE "${LIBEVENT_LIBRARIES}"))
-        message(STATUS "libevent pkg-config found but no usable library; disabling event loop support")
-        set(USE_LIBEVENT OFF)
-      endif()
-    endif()
-    # Try find_library and find_path as last resort
-    if(NOT TARGET libevent::libevent AND NOT LIBEVENT_LIBRARIES)
-      find_library(LIBEVENT_LIB
-        NAMES event event_core
-        PATHS
-          "${HOMEBREW_PREFIX}/lib"
-          "/usr/local/lib"
-          "/usr/lib"
-          "/opt/homebrew/lib"
-          "/opt/homebrew/lib"
-          "/usr/lib/x86_64-linux-gnu"
-      )
-      find_path(LIBEVENT_INCLUDE_DIR
-        NAMES event.h event2/event.h
-        PATHS
-          "${HOMEBREW_PREFIX}/include"
-          "/usr/local/include"
-          "/usr/include"
-          "/opt/homebrew/include"
-          "/usr/include/x86_64-linux-gnu"
-      )
-      if(LIBEVENT_LIB AND LIBEVENT_INCLUDE_DIR)
-        message(STATUS "libevent found - enabling event loop support")
-        message(STATUS "  libevent Library: ${LIBEVENT_LIB}")
-        message(STATUS "  libevent Include: ${LIBEVENT_INCLUDE_DIR}")
-        set(USE_LIBEVENT ON)
-        # Create imported target
-        if(NOT TARGET libevent::libevent)
-          add_library(libevent::libevent STATIC IMPORTED)
-          set_target_properties(libevent::libevent PROPERTIES
-            IMPORTED_LOCATION "${LIBEVENT_LIB}"
-            INTERFACE_INCLUDE_DIRECTORIES "${LIBEVENT_INCLUDE_DIR}"
-          )
-        endif()
-      else()
-        message(STATUS "libevent not found - using stub event loop")
-        message(STATUS "  GitHub: https://github.com/libevent/libevent.git")
-        message(STATUS "  To install: brew install libevent (macOS) or sudo apt-get install libevent-dev (Ubuntu)")
-        set(USE_LIBEVENT OFF)
-      endif()
-    endif()
-  endif()
-endif()
-
 # rapidjson for JSON parsing (header-only, commonly available)
 if(NOT DEFINED RAPIDJSON_INCLUDE_DIR)
   # RapidJSON header is at include/rapidjson/document.h
@@ -304,8 +147,12 @@ if(NOT DEFINED RAPIDJSON_INCLUDE_DIR)
   )
 endif()
 if(RAPIDJSON_INCLUDE_DIR)
+  set(RAPIDJSON_INCLUDE_ROOT "${RAPIDJSON_INCLUDE_DIR}")
+  if(EXISTS "${RAPIDJSON_INCLUDE_DIR}/document.h")
+    get_filename_component(RAPIDJSON_INCLUDE_ROOT "${RAPIDJSON_INCLUDE_DIR}" DIRECTORY)
+  endif()
   message(STATUS "RapidJSON found - enabling JSON parsing")
-  message(STATUS "  RapidJSON Include: ${RAPIDJSON_INCLUDE_DIR}")
+  message(STATUS "  RapidJSON Include: ${RAPIDJSON_INCLUDE_ROOT}")
   set(USE_RAPIDJSON ON)
 else()
   message(STATUS "RapidJSON not found - using stub JSON parser")
@@ -433,22 +280,6 @@ if(USE_RAPIDJSON)
   )
 endif()
 
-# Event adapter sources
-set(AGENTFLOW_EVENT_ADAPTER_SOURCES
-    ${AGENTFLOW_VENDOR_DIR}/adapter/event/libevent_impl.cpp
-    ${AGENTFLOW_VENDOR_DIR}/adapter/event/adapter_factory.cpp
-)
-
-# Network adapter sources
-set(AGENTFLOW_NETWORK_ADAPTER_SOURCES
-    ${AGENTFLOW_VENDOR_DIR}/adapter/network/adapter_factory.cpp
-)
-
-# Serialization adapter sources
-set(AGENTFLOW_SERIALIZATION_ADAPTER_SOURCES
-    ${AGENTFLOW_VENDOR_DIR}/adapter/serialization/adapter_factory.cpp
-)
-
 set(AGENTFLOW_SOURCES
     ${AGENTFLOW_AGENT_SOURCES}
     ${AGENTFLOW_WORKFLOW_SOURCES}
@@ -456,9 +287,6 @@ set(AGENTFLOW_SOURCES
     ${AGENTFLOW_UTILS_SOURCES}
     ${AGENTFLOW_ACTOR_ADAPTER_SOURCES}
     ${AGENTFLOW_DSL_ADAPTER_SOURCES}
-    ${AGENTFLOW_EVENT_ADAPTER_SOURCES}
-    ${AGENTFLOW_NETWORK_ADAPTER_SOURCES}
-    ${AGENTFLOW_SERIALIZATION_ADAPTER_SOURCES}
 )
 
 # Create main library
@@ -481,51 +309,10 @@ if(USE_OPENSSL)
   target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_OPENSSL=1)
 endif()
 
-# Link with libwebsockets if available
-if(USE_LIBWEBSOCKETS)
-  if(TARGET websockets)
-    target_link_libraries(agentflow PUBLIC websockets)
-  else()
-    target_link_libraries(agentflow PUBLIC ${libwebsockets_LIBRARIES})
-    if(libwebsockets_INCLUDE_DIRS)
-      target_include_directories(agentflow PUBLIC ${libwebsockets_INCLUDE_DIRS})
-    endif()
-  endif()
-  target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_LIBWEBSOCKETS=1)
-endif()
-
-# Link with Protobuf if available
-if(USE_PROTOBUF)
-  target_link_libraries(agentflow PUBLIC protobuf::libprotobuf)
-  target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_PROTOBUF=1)
-endif()
-
-# Link with libevent if available
-if(USE_LIBEVENT)
-  set(_agentflow_libevent_linked OFF)
-  if(TARGET libevent::libevent)
-    target_link_libraries(agentflow PUBLIC libevent::libevent)
-    set(_agentflow_libevent_linked ON)
-  elseif(LIBEVENT_LIBRARIES)
-    set(LIBEVENT_LIB_FIRST "")
-    list(GET LIBEVENT_LIBRARIES 0 LIBEVENT_LIB_FIRST)
-    if(LIBEVENT_LIB_FIRST AND IS_ABSOLUTE "${LIBEVENT_LIB_FIRST}")
-      target_link_libraries(agentflow PUBLIC ${LIBEVENT_LIBRARIES})
-      set(_agentflow_libevent_linked ON)
-    endif()
-  endif()
-  if(_agentflow_libevent_linked)
-    target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_LIBEVENT=1)
-  else()
-    message(STATUS "libevent link target not usable; disabling event loop support")
-    set(USE_LIBEVENT OFF)
-  endif()
-endif()
-
 # Include RapidJSON headers if available
 if(USE_RAPIDJSON)
-  if(RAPIDJSON_INCLUDE_DIR)
-    target_include_directories(agentflow PUBLIC ${RAPIDJSON_INCLUDE_DIR})
+  if(RAPIDJSON_INCLUDE_ROOT)
+    target_include_directories(agentflow PUBLIC ${RAPIDJSON_INCLUDE_ROOT})
   endif()
   target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_RAPIDJSON=1)
 endif()
@@ -596,7 +383,6 @@ if(AGENTFLOW_BUILD_TESTS)
       ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_node_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_databus_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_event_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_eventloop_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_workflow_json_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_agent_json_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_local_channel_gtest.cpp
@@ -698,9 +484,6 @@ message(STATUS "")
 message(STATUS "Optional Dependencies:")
 message(STATUS "  Protoactor-cpp: ${USE_PROTOACTOR}")
 message(STATUS "  OpenSSL: ${USE_OPENSSL}")
-message(STATUS "  libwebsockets: ${USE_LIBWEBSOCKETS}")
-message(STATUS "  Protobuf: ${USE_PROTOBUF}")
-message(STATUS "  libevent: ${USE_LIBEVENT}")
 message(STATUS "  RapidJSON: ${USE_RAPIDJSON}")
 message(STATUS "  Google Test: ${USE_GTEST}")
 message(STATUS "============================================")
@@ -711,17 +494,17 @@ message(STATUS "macOS (Homebrew):")
 message(STATUS "  ./build/install_dependencies.sh")
 message(STATUS "")
 message(STATUS "Ubuntu/Debian:")
-message(STATUS "  sudo apt-get install libssl-dev libwebsockets-dev libevent-dev rapidjson-dev libprotobuf-dev protobuf-compiler libgtest-dev pkg-config")
+message(STATUS "  sudo apt-get install libssl-dev rapidjson-dev libgtest-dev pkg-config")
 message(STATUS "")
 message(STATUS "Fedora/CentOS:")
-message(STATUS "  sudo dnf install openssl-devel protobuf-devel libevent-devel rapidjson-devel libwebsockets-devel gtest-devel cmake")
-message(STATUS "  (or: sudo yum install openssl-devel protobuf-devel libevent-devel rapidjson-devel libwebsockets-devel gtest-devel cmake)")
+message(STATUS "  sudo dnf install openssl-devel rapidjson-devel gtest-devel cmake")
+message(STATUS "  (or: sudo yum install openssl-devel rapidjson-devel gtest-devel cmake)")
 message(STATUS "")
 message(STATUS "Arch Linux:")
-message(STATUS "  sudo pacman -S openssl protobuf libevent rapidjson libwebsockets gtest cmake")
+message(STATUS "  sudo pacman -S openssl rapidjson gtest cmake")
 message(STATUS "")
 message(STATUS "openSUSE:")
-message(STATUS "  sudo zypper install libopenssl-devel protobuf-devel libevent-devel rapidjson-devel libwebsockets-devel gtest-devel cmake")
+message(STATUS "  sudo zypper install libopenssl-devel rapidjson-devel gtest-devel cmake")
 message(STATUS "")
 message(STATUS "Protoactor-cpp (all systems):")
 message(STATUS "  GitHub: https://github.com/DanielKernel/Protoactor-cpp.git")
@@ -731,8 +514,5 @@ message(STATUS "")
 message(STATUS "Third-party Library GitHub Repositories:")
 message(STATUS "  Protoactor-cpp: https://github.com/DanielKernel/Protoactor-cpp.git")
 message(STATUS "  OpenSSL: https://github.com/openssl/openssl.git")
-message(STATUS "  libwebsockets: https://github.com/warmcat/libwebsockets.git")
-message(STATUS "  libevent: https://github.com/libevent/libevent.git")
 message(STATUS "  RapidJSON: https://github.com/Tencent/rapidjson.git")
-message(STATUS "  protobuf: https://github.com/protocolbuffers/protobuf.git")
 message(STATUS "============================================")
