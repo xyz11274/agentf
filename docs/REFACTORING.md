@@ -662,7 +662,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 | 编译 | 通过 | 38个源文件全部编译成功 |
 | 链接 | 通过 | agentflow 库和 8 个示例程序链接成功 |
 | 测试运行 | 失败 | macOS dyld 找不到 libgtest_main.1.11.0.dylib（RPATH 问题） |
-| 遗漏文件 | 警告 | `src/performance_metrics.cpp` 未加入 CMakeLists.txt |
+| 遗漏文件 | 警告 | `src/runtime/scheduler/performance_metrics.cpp` 未加入 CMakeLists.txt |
 
 ### 文档与代码一致性审查
 
@@ -672,7 +672,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 
 **ZeroCopyDataBus POSIX/SystemV 共享内存**
 - **文档声称**: "本地零拷贝共享具体实现 - 已实现 ZeroCopyDataBus，支持共享内存和读写锁"
-- **代码现状**: `src/runtime/zero_copy_databus.cpp` 中：
+- **代码现状**: `src/runtime/communication/zero_copy_databus.cpp` 中：
   - `SharedMemoryFactory::create_posix_shared()` -> 返回 nullptr
   - `SharedMemoryFactory::create_systemv_shared()` -> 返回 nullptr
   - 仅 `create_in_process()` (堆内存模拟) 可用，不是真正的共享内存
@@ -682,37 +682,37 @@ set(AGENTFLOW_ADAPTER_SOURCES
 #### 中等不一致（功能部分缺失）
 
 **Request/Response 反序列化**
-- **文件**: `src/network/request.cpp`, `src/network/response.cpp`
+- **文件**: `src/runtime/network/request.cpp`, `src/runtime/network/response.cpp`
 - **问题**: `from_json()` 和 `from_binary()` 方法为空 stub
 - **影响**: 无法从 JSON/Binary 格式恢复 Request/Response 对象
 - **状态**: 已修复
 
 **AgentRuntime 节点调度闭环断裂**
-- **文件**: `src/agent_runtime.cpp` 中 `on_node_complete()`
+- **文件**: `src/runtime/scheduler/agent_runtime.cpp` 中 `on_node_complete()`
 - **问题**: 方法获取了后续可执行节点列表，但没有将其入队到 worker 线程
 - **影响**: DAG 执行在第一批节点完成后停止
 - **状态**: 已修复
 
 **ZeroCopyDataBus 订阅通知未触发**
-- **文件**: `src/runtime/zero_copy_databus.cpp`
+- **文件**: `src/runtime/communication/zero_copy_databus.cpp`
 - **问题**: `subscribe()` 注册了回调，但 `put()` 方法中从未调用 `notify_subscribers()`
 - **影响**: 数据变更订阅机制完全无效
 - **状态**: 已修复
 
 **ControlFlow FOR_EACH 循环**
-- **文件**: `src/runtime/control_flow.cpp`
+- **文件**: `src/runtime/scheduler/control_flow.cpp`
 - **问题**: `FOR_EACH_LOOP` 分支直接 `return false`
 - **影响**: FOR_EACH 循环类型完全不可用
 - **状态**: 已修复
 
 **跨进程消息序列化**
-- **文件**: `src/actor/message_serializer.cpp`
+- **文件**: `vendor/adapter/actor/message_serializer.cpp`
 - **问题**: 仅 RAW 格式可用，跨进程序列化路径为 stub
 - **影响**: Actor 消息无法跨进程传递
 - **状态**: 待实现（P2）
 
 **StorageManager 工厂函数未定义**
-- **文件**: `src/storage/storage_manager.cpp`
+- **文件**: `src/runtime/storage/storage_manager.cpp`
 - **问题**: `create_agent_storage()` 和 `create_workflow_storage()` 工厂函数体未实现
 - **影响**: StorageManager 初始化时无法创建实际的存储实例
 - **状态**: 待实现
@@ -720,19 +720,19 @@ set(AGENTFLOW_ADAPTER_SOURCES
 ### 代码 Bug 清单
 
 #### BUG-001: std::rand() 线程安全问题
-- **文件**: `src/agent_runtime.cpp`
+- **文件**: `src/runtime/scheduler/agent_runtime.cpp`
 - **严重度**: 中
 - **描述**: `get_least_loaded_worker()` 中使用 `std::rand()`，该函数非线程安全
 - **状态**: 已修复 - 使用 std::atomic<int> 替换
 
 #### BUG-002: execute_with_timeout lambda 引用悬空
-- **文件**: `src/node.cpp` 中 `execute_with_timeout()`
+- **文件**: `src/workflow/node/node.cpp` 中 `execute_with_timeout()`
 - **严重度**: 中
 - **描述**: lambda 捕获 `executor` 引用，如果超时后线程仍在运行，executor 生命周期结束后引用悬空
 - **状态**: 已修复
 
 #### BUG-003: on_node_complete 调度闭环断裂
-- **文件**: `src/agent_runtime.cpp` 中 `on_node_complete()`
+- **文件**: `src/runtime/scheduler/agent_runtime.cpp` 中 `on_node_complete()`
 - **严重度**: 中（功能性 Bug）
 - **描述**: 获取后续可执行节点后未入队调度
 - **状态**: 已修复
@@ -948,10 +948,10 @@ set(AGENTFLOW_ADAPTER_SOURCES
 
 ## 相关文档
 
-- [架构设计](architecture.md) - 系统5视图架构
-- [开发指南](development.md) - 开发和构建说明
-- [测试指南](testing.md) - 测试方法
-- [贡献指南](contributing.md) - 贡献流程
+- [架构设计](ARCHITECTURE.md) - 系统5视图架构
+- [开发指南](CONTRIBUTING.md) - 开发和构建说明
+- [测试指南](README.md) - 测试方法
+- [贡献指南](CONTRIBUTING.md) - 贡献流程
 
 ---
 

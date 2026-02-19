@@ -19,18 +19,18 @@
 
 | 文档 | 用途 |
 |------|------|
-| **[architecture.md](architecture.md)** | 系统5视图架构设计 |
-| **[planning.md](planning.md)** | 功能规划、路线图和代码完备性评估 |
+| **[ARCHITECTURE.md](ARCHITECTURE.md)** | 系统5视图架构设计 |
+| **[REFACTORING.md](REFACTORING.md)** | 功能规划、路线图和代码完备性评估 |
 | **[api-reference.md](api-reference.md)** | API 参考手册 |
-| **[development.md](development.md)** | 开发环境设置、规范和依赖管理 |
-| **[testing.md](testing.md)** | 测试指南和方法 |
+| **[CONTRIBUTING.md](CONTRIBUTING.md)** | 开发环境设置、规范和依赖管理 |
+| **[README.md](README.md)** | 测试指南和方法 |
 
 ### 贡献和 CI/CD
 
 | 文档 | 用途 |
 |------|------|
-| **[contributing.md](contributing.md)** | 贡献指南完整版 |
-| **[ci-cd.md](ci-cd.md)** | CI/CD 自动化管线 |
+| **[CONTRIBUTING.md](CONTRIBUTING.md)** | 贡献指南完整版 |
+| **[README.md](README.md)** | CI/CD 自动化管线 |
 
 ### 重构文档
 
@@ -45,29 +45,29 @@
 ### 新用户入门
 
 1. 查看 [../README.md](../README.md) - 项目概览和导航
-2. 阅读 [architecture.md](architecture.md) - 了解系统架构
+2. 阅读 [ARCHITECTURE.md](ARCHITECTURE.md) - 了解系统架构
 3. 查看 [api-reference.md](api-reference.md) - API 使用指南
-4. 查看 [development.md](development.md) - 设置开发环境
+4. 查看 [CONTRIBUTING.md](CONTRIBUTING.md) - 设置开发环境
 
 ### 贡献代码前
 
-1. 阅读 [contributing.md](contributing.md) - 完整贡献指南
-2. 查看 [testing.md](testing.md) - 测试要求
-3. 查看 [ci-cd.md](ci-cd.md) - 本地质量检查
+1. 阅读 [CONTRIBUTING.md](CONTRIBUTING.md) - 完整贡献指南
+2. 查看 [README.md](README.md) - 测试要求
+3. 查看 [README.md](README.md) - 本地质量检查
 
 ### 了解项目规划
 
-1. 查看 [planning.md](planning.md) - 功能实现状态、路线图和代码评估
+1. 查看 [REFACTORING.md](REFACTORING.md) - 功能实现状态、路线图和代码评估
 2. 查看 [../TODO.md](../TODO.md) - 快速规划导航
 
 ### CI/CD 和部署
 
-1. 查看 [ci-cd.md](ci-cd.md) - CI/CD 完整指南
+1. 查看 [README.md](README.md) - CI/CD 完整指南
 
 ### 运维和系统
 
-1. 查看 [development.md](development.md) 第8章 - 依赖管理
-2. 查看 [planning.md](planning.md) - 构建和部署目标
+1. 查看 [CONTRIBUTING.md](CONTRIBUTING.md) 第8章 - 依赖管理
+2. 查看 [REFACTORING.md](REFACTORING.md) - 构建和部署目标
 
 ---
 
@@ -75,15 +75,15 @@
 
 | 我想... | 查看文档 |
 |--------|--------|
-| 学习系统架构 | [architecture.md](architecture.md) |
-| 了解代码现状和优化点 | [planning.md](planning.md) - 代码完备性评估章节 |
+| 学习系统架构 | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| 了解代码现状和优化点 | [REFACTORING.md](REFACTORING.md) - 代码完备性评估章节 |
 | 查看 API 使用方法 | [api-reference.md](api-reference.md) |
-| 开始开发 | [development.md](development.md) |
-| 了解依赖库 | [development.md](development.md) - 第8章依赖管理 |
-| 贡献代码 | [contributing.md](contributing.md) |
-| 了解项目规划 | [planning.md](planning.md) |
-| 查询 CI/CD | [ci-cd.md](ci-cd.md) |
-| 运行测试 | [testing.md](testing.md) |
+| 开始开发 | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| 了解依赖库 | [CONTRIBUTING.md](CONTRIBUTING.md) - 第8章依赖管理 |
+| 贡献代码 | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| 了解项目规划 | [REFACTORING.md](REFACTORING.md) |
+| 查询 CI/CD | [README.md](README.md) |
+| 运行测试 | [README.md](README.md) |
 | 了解重构进展 | [REFACTORING.md](REFACTORING.md) |
 
 ---
@@ -95,7 +95,7 @@
 - 模块设计详解
 - 设计模式说明
 
-### planning.md（合并版）
+### REFACTORING.md（合并版）
 - 功能实现状态概览
 - 待实现功能（按优先级）
 - 版本规划
@@ -114,7 +114,7 @@
 - 代码示例
 - 最佳实践
 
-### development.md（合并版）
+### CONTRIBUTING.md（合并版）
 - 环境配置步骤
 - 编程规范
 - 开发工作流程
@@ -135,12 +135,12 @@
 - Pull Request 指南
 - 行为守则
 
-### testing.md
+### README.md（测试合并）
 - 测试方法
 - 覆盖率要求
 - 测试工具说明
 
-### ci-cd.md
+### README.md（CI/CD 合并）
 - 构建/测试/发布工作流
 - 代码质量检查
 - 本地开发指南
@@ -163,7 +163,7 @@
 
 ### 文档命名规范
 - 使用小写字母和连字符（lowercase-hyphen）
-- 例如：`api-reference.md`, `ci-cd.md`
+- 例如：`api-reference.md`, `README.md`
 - 例外：`README.md`（GitHub 标准）, `REFACTORING.md`（历史保留）
 
 ### 文档标准
@@ -181,10 +181,10 @@
 
 **文档有错误或不清晰？**
 - 提交 Issue 或 Pull Request
-- 参考 [contributing.md](contributing.md)
+- 参考 [CONTRIBUTING.md](CONTRIBUTING.md)
 
 **需要快速参考？**
-- 查看 [ci-cd.md](ci-cd.md) 的快速参考部分
+- 查看 [README.md](README.md) 的快速参考部分
 
 ---
 
@@ -233,7 +233,7 @@ AgentFlow 项目采用 GitHub Actions 实现完整的 CI/CD 自动化基础设�
 
 ### 配置文件
 
-- ✅ `.github/CODEOWNERS` - 代码所有权和审查分配
+- ✅ `.github/workflows/build.yml + tests.yml` - 代码所有权和审查分配
 - ✅ `.github/dependabot.yml` - 自动化依赖更新
 - ✅ `.github/pull_request_template.md` - PR 模板
 - ✅ `.github/ISSUE_TEMPLATE/` - Issue 模板（bug、feature、performance）
@@ -473,11 +473,10 @@ git push origin feature/my-feature
 1. **必须通过状态检查**
    - Build 工作流必须成功
    - Tests 工作流必须成功
-   - Code Quality 工作流必须成功
 
 2. **必须有审查批准**
    - 至少需要1个审查批准
-   - 代码所有者必须审查 (CODEOWNERS)
+   - 建议关键模块至少 1 位维护者审查
 
 3. **强制线性历史**
    - 要求线性提交历史
@@ -509,21 +508,15 @@ git push origin feature/my-feature
 
 1. **构建检查** - 所有平台编译成功
 2. **测试执行** - 单元测试、集成测试、内存泄漏检测
-3. **代码质量** - 格式检查、静态分析、风格验证
-4. **覆盖率分析** - 代码覆盖率报告到 Codecov
 
 ---
 
 ## 实施完成清单
 
-✅ **工作流文件**: 6个 GitHub Actions workflows
-✅ **配置文件**: CODEOWNERS, dependabot.yml, PR/Issue 模板
+✅ **工作流文件**: 2个 GitHub Actions workflows（build/tests）
 ✅ **平台支持**: Linux AMD64/ARM64, macOS AMD64/ARM64
-✅ **代码质量**: clang-format, clang-tidy, cppcheck, cpplint
 ✅ **测试覆盖**: 单元测试, 集成测试, 内存检测, 覆盖率
-✅ **自动发布**: Tag-based release automation
-✅ **手动触发**: 可配置的手动构建选项
-✅ **文档**: 完整的 CI/CD 指南
+✅ **文档**: 构建与测试流程已合并到当前文档
 
 ---
 
@@ -573,19 +566,19 @@ git push origin feature/my-feature
 | 组件 | 文件 | 状态 | 说明 |
 |------|------|------|------|
 | **核心库** | `libagentflow.a` | ✅ | 核心功能库 |
-| **Agent** | `src/agent.cpp` | ✅ | Agent 基础功能 |
-| **Workflow** | `src/workflow.cpp` | ✅ | DAG 调度、验证 |
-| **Node** | `src/node.cpp` | ✅ | 节点执行、状态管理 |
-| **Edge** | `src/edge.cpp` | ✅ | 依赖关系定义 |
-| **DataBus** | `src/databus.cpp` | ✅ | 数据总线功能 |
-| **ZeroCopyDataBus** | `src/runtime/zero_copy_databus.cpp` | ✅ | 零拷贝数据总线 |
-| **LocalChannel** | `src/runtime/local_channel.cpp` | ✅ | 本地通道 |
-| **ControlFlow** | `src/runtime/control_flow.cpp` | ✅ | 控制流管理 |
-| **Actor System** | `src/actor_system.cpp` | ✅ | Actor 框架适配 |
-| **DSL Parser** | `src/dsl/workflow_parser.cpp` | ✅ | JSON 解析 |
-| **EventLoop** | `src/event/eventloop_adapter/` | ✅ | 事件循环 |
-| **Storage** | `src/storage/` | ✅ | 存储管理 |
-| **Network** | `src/network/` | ✅ | 网络通信 |
+| **Agent** | `src/agent/agent.cpp` | ✅ | Agent 基础功能 |
+| **Workflow** | `src/workflow/workflow.cpp` | ✅ | DAG 调度、验证 |
+| **Node** | `src/workflow/node/node.cpp` | ✅ | 节点执行、状态管理 |
+| **Edge** | `src/workflow/edge/edge.cpp` | ✅ | 依赖关系定义 |
+| **DataBus** | `src/runtime/communication/databus.cpp` | ✅ | 数据总线功能 |
+| **ZeroCopyDataBus** | `src/runtime/communication/zero_copy_databus.cpp` | ✅ | 零拷贝数据总线 |
+| **LocalChannel** | `src/runtime/communication/local_channel.cpp` | ✅ | 本地通道 |
+| **ControlFlow** | `src/runtime/scheduler/control_flow.cpp` | ✅ | 控制流管理 |
+| **Actor System** | `src/runtime/actor/actor_system.cpp` | ✅ | Actor 框架适配 |
+| **DSL Parser** | `src/workflow/dsl/workflow_parser.cpp` | ✅ | JSON 解析 |
+| **EventLoop** | `vendor/adapter/event/` | ✅ | 事件循环 |
+| **Storage** | `src/runtime/storage/` | ✅ | 存储管理 |
+| **Network** | `src/runtime/network/` | ✅ | 网络通信 |
 
 ### 1.2 示例程序
 

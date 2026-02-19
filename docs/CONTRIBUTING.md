@@ -30,7 +30,7 @@ We are committed to providing a welcoming and inclusive environment for all cont
 - C++17 compatible compiler (GCC 7+, Clang 5+, MSVC 2017+)
 - CMake 3.10 or later
 - Git
-- Platform-specific development tools (see [Development Guide](development.md))
+- Platform-specific development tools (see [Development Guide](CONTRIBUTING.md))
 
 ### Setup Development Environment
 
@@ -416,20 +416,20 @@ Our Pull Request template includes:
 
 ## Setup Code Owners
 
-Repository maintainers are specified in `.github/CODEOWNERS`:
+Repository maintainers are managed in repository settings:
 
 ```
 * @DanielKernel
-/src/actor/ @DanielKernel
-/src/dsl/ @DanielKernel
+/src/runtime/ @DanielKernel
+/vendor/adapter/ @DanielKernel
 ```
 
 ## Resources
 
 - [Architecture Overview](ARCHITECTURE.md)
-- [Development Guide](development.md)
-- [Testing Guide](testing.md)
-- [CI/CD Pipeline Documentation](CI_CD_PIPELINE.md)
+- [Contributing Guide](CONTRIBUTING.md)
+- [Documentation Index](README.md)
+- [Architecture Overview](ARCHITECTURE.md)
 - [Dependencies Management](dependencies.md)
 
 ## Getting Help
@@ -1298,11 +1298,11 @@ public:
 
 | 依赖 | Stub 文件 | 说明 |
 |------|-----------|------|
-| Actor | `src/actor/stub_impl.cpp` | 基本Actor模拟 |
+| Actor | `vendor/adapter/actor/stub_impl.cpp` | 基本Actor模拟 |
 | SSL | `include/.../openssl_impl.h` | 无加密通信 |
 | WebSocket | `include/.../libwebsockets_impl.h` | 无 WebSocket 支持 |
 | Event Loop | `include/.../libevent_impl.h` | 简单事件处理 |
-| JSON | `src/dsl/json_adapter_stub.cpp` | 基础 JSON 解析 |
+| JSON | `vendor/adapter/dsl/json_adapter_stub.cpp` | 基础 JSON 解析 |
 | Protobuf | `include/.../protobuf_impl.h` | 无序列化 |
 
 #### 适配器模式示例
@@ -1413,16 +1413,16 @@ export PKG_CONFIG_PATH=$HOME/.local/lib/pkgconfig:$PKG_CONFIG_PATH
 | `include/agentflow/actor/adapter.h` | 适配器接口定义 |
 | `include/agentflow/actor/adapter/protoactor_impl.h` | Protoactor 实现 |
 | `include/agentflow/actor/adapter/stub_impl.h` | Stub 实现 |
-| `src/actor/adapter/*.cpp` | 适配器实现 |
+| `vendor/adapter/actor/*.cpp` | 适配器实现 |
 
 ---
 
 ## 相关文档
 
-- [架构设计](architecture.md) - 系统5视图架构
-- [项目规划](planning.md) - 功能实现状态和路线图
-- [测试指南](testing.md) - 测试方法
-- [贡献指南](contributing.md) - 贡献流程
+- [架构设计](ARCHITECTURE.md) - 系统5视图架构
+- [项目规划](REFACTORING.md) - 功能实现状态和路线图
+- [测试指南](README.md) - 测试方法
+- [贡献指南](CONTRIBUTING.md) - 贡献流程
 
 ---
 
