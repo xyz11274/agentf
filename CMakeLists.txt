@@ -357,18 +357,18 @@ include_directories(${AGENTFLOW_INCLUDE_DIR}/internal)
 
 # Agent sources
 set(AGENTFLOW_AGENT_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/agent/agent.cpp
+    ${AGENTFLOW_SOURCE_DIR}/core/agent.cpp
 )
 
 # Workflow sources (includes node, edge, dsl)
 set(AGENTFLOW_WORKFLOW_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/workflow/workflow.cpp
+    ${AGENTFLOW_SOURCE_DIR}/core/workflow.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/workflow_actor.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/workflow_storage.cpp
-    ${AGENTFLOW_SOURCE_DIR}/workflow/node/node.cpp
+    ${AGENTFLOW_SOURCE_DIR}/core/node.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/node/node_actor.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/node/code_loader.cpp
-    ${AGENTFLOW_SOURCE_DIR}/workflow/edge/edge.cpp
+    ${AGENTFLOW_SOURCE_DIR}/core/edge.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/dsl/workflow_parser.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/dsl/json_adapter_factory.cpp
 )
@@ -408,45 +408,45 @@ set(AGENTFLOW_UTILS_SOURCES
 
 # Actor adapter sources
 set(AGENTFLOW_ACTOR_ADAPTER_SOURCES
-    ${AGENTFLOW_VENDOR_DIR}/adapter/actor/stub_impl.cpp
+    ${AGENTFLOW_SOURCE_DIR}/vendor/actor/stub_impl.cpp
 )
 
 # Include Protoactor implementation and additional sources only if available
 if(USE_PROTOACTOR)
   list(APPEND AGENTFLOW_ACTOR_ADAPTER_SOURCES
-       ${AGENTFLOW_VENDOR_DIR}/adapter/actor/protoactor_impl.cpp
+       ${AGENTFLOW_SOURCE_DIR}/vendor/actor/protoactor_impl.cpp
   )
   list(APPEND AGENTFLOW_RUNTIME_SOURCES
-       ${AGENTFLOW_SOURCE_DIR}/runtime/actor/message_serializer.cpp
-       ${AGENTFLOW_SOURCE_DIR}/runtime/actor/ask_pattern_manager.cpp
+       ${AGENTFLOW_SOURCE_DIR}/vendor/actor/message_serializer.cpp
+       ${AGENTFLOW_SOURCE_DIR}/vendor/actor/ask_pattern_manager.cpp
   )
 endif()
 
 # DSL/JSON adapter sources
 set(AGENTFLOW_DSL_ADAPTER_SOURCES
-    ${AGENTFLOW_VENDOR_DIR}/adapter/dsl/json_adapter_stub.cpp
+    ${AGENTFLOW_SOURCE_DIR}/vendor/dsl/json_adapter_stub.cpp
 )
 
 if(USE_RAPIDJSON)
   list(APPEND AGENTFLOW_DSL_ADAPTER_SOURCES
-       ${AGENTFLOW_VENDOR_DIR}/adapter/dsl/json_adapter_rapidjson.cpp
+       ${AGENTFLOW_SOURCE_DIR}/vendor/dsl/json_adapter_rapidjson.cpp
   )
 endif()
 
 # Event adapter sources
 set(AGENTFLOW_EVENT_ADAPTER_SOURCES
-    ${AGENTFLOW_VENDOR_DIR}/adapter/event/libevent_impl.cpp
-    ${AGENTFLOW_VENDOR_DIR}/adapter/event/adapter_factory.cpp
+    ${AGENTFLOW_SOURCE_DIR}/vendor/event/libevent_impl.cpp
+    ${AGENTFLOW_SOURCE_DIR}/vendor/event/adapter_factory.cpp
 )
 
 # Network adapter sources
 set(AGENTFLOW_NETWORK_ADAPTER_SOURCES
-    ${AGENTFLOW_VENDOR_DIR}/adapter/network/adapter_factory.cpp
+    ${AGENTFLOW_SOURCE_DIR}/vendor/network/adapter_factory.cpp
 )
 
 # Serialization adapter sources
 set(AGENTFLOW_SERIALIZATION_ADAPTER_SOURCES
-    ${AGENTFLOW_VENDOR_DIR}/adapter/serialization/adapter_factory.cpp
+    ${AGENTFLOW_SOURCE_DIR}/vendor/serialization/adapter_factory.cpp
 )
 
 set(AGENTFLOW_SOURCES
