@@ -9,9 +9,9 @@
 #include <unistd.h>
 
 #include "utils/logger.h"
-#include "core/node.h"
-#include "runtime/code_loader.h"
-#include "runtime/hot_reload.h"
+#include "workflow/node.h"
+#include "workflow/node/code_loader.h"
+#include "runtime/communication/hot_reload.h"
 
 using namespace agentflow;
 using namespace agentflow::runtime;

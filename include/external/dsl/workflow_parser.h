@@ -11,10 +11,10 @@
 #include <vector>
 
 #include "dsl/json_adapter.h"
-#include "core/agent.h"
-#include "core/edge.h"
-#include "core/node.h"
-#include "core/workflow.h"
+#include "agent/agent.h"
+#include "workflow/edge.h"
+#include "workflow/node.h"
+#include "workflow/workflow.h"
 
 namespace agentflow {
 namespace dsl {

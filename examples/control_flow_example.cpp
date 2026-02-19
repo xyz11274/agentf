@@ -6,8 +6,8 @@
 #include <iostream>
 
 #include "utils/logger.h"
-#include "runtime/control_flow.h"
-#include "runtime/zero_copy_databus.h"
+#include "runtime/scheduler/control_flow.h"
+#include "runtime/communication/zero_copy_databus.h"
 
 using namespace agentflow;
 

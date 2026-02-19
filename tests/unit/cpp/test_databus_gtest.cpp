@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-#include "runtime/databus.h"
+#include "runtime/communication/databus.h"
 
 class DataBusTest : public ::testing::Test {
 protected:

@@ -7,8 +7,8 @@
 #include <string>
 
 #include "utils/logger.h"
-#include "core/agent.h"
-#include "core/workflow.h"
+#include "agent/agent.h"
+#include "workflow/workflow.h"
 #include "storage/agent_storage.h"
 #include "storage/storage.h"
 #include "storage/storage_manager.h"

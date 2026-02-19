@@ -1,8 +1,8 @@
 #include "utils/logger.h"
-#include "core/agent.h"
-#include "core/node.h"
-#include "core/workflow.h"
-#include "runtime/agent_runtime.h"
+#include "agent/agent.h"
+#include "workflow/node.h"
+#include "workflow/workflow.h"
+#include "runtime/scheduler/agent_runtime.h"
 
 using namespace agentflow;
 

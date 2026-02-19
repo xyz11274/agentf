@@ -12,12 +12,12 @@
 #include <thread>
 
 #include "utils/logger.h"
-#include "core/agent.h"
-#include "core/node.h"
-#include "core/workflow.h"
+#include "agent/agent.h"
+#include "workflow/node.h"
+#include "workflow/workflow.h"
 #include "network/private_protocol.h"
-#include "runtime/control_flow.h"
-#include "runtime/zero_copy_databus.h"
+#include "runtime/scheduler/control_flow.h"
+#include "runtime/communication/zero_copy_databus.h"
 
 using namespace agentflow;
 

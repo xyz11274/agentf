@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-#include "core/workflow.h"
+#include "workflow/workflow.h"
 
 class WorkflowTest : public ::testing::Test {
 protected:

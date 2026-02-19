@@ -2,10 +2,10 @@
 #include <thread>
 #include <vector>
 
-#include "core/agent.h"
-#include "core/node.h"
-#include "core/workflow.h"
-#include "runtime/agent_runtime.h"
+#include "agent/agent.h"
+#include "workflow/node.h"
+#include "workflow/workflow.h"
+#include "runtime/scheduler/agent_runtime.h"
 #include "testing/performance_metrics.h"
 
 using namespace agentflow;

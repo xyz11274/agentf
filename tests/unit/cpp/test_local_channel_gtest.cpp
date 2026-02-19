@@ -7,7 +7,7 @@
 #include <gtest/gtest.h>
 #include <thread>
 
-#include "runtime/local_channel.h"
+#include "runtime/communication/local_channel.h"
 
 namespace agentflow {
 namespace tests {

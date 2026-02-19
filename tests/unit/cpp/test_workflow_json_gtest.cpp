@@ -6,10 +6,10 @@
 #include <gtest/gtest.h>
 
 #include "dsl/workflow_parser.h"
-#include "core/edge.h"
-#include "core/node.h"
-#include "core/workflow.h"
-#include "runtime/control_flow.h"
+#include "workflow/edge.h"
+#include "workflow/node.h"
+#include "workflow/workflow.h"
+#include "runtime/scheduler/control_flow.h"
 
 namespace agentflow {
 namespace tests {

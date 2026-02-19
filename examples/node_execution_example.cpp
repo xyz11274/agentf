@@ -6,7 +6,7 @@
 #include <iostream>
 
 #include "utils/logger.h"
-#include "core/node.h"
+#include "workflow/node.h"
 
 using namespace agentflow;
 using namespace agentflow::framework;
