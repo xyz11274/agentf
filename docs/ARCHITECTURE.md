@@ -42,7 +42,7 @@ AgentFlow 是一个面向开发者的 **Agent开发编排与执行引擎**，提
 |------|------|------|----------|------|
 | 开发者 | 入 | JSON流程文件 / Node开发框架 | JSON / Shell/Python/C++/Java/Go等多语言 | 创建Agent包 |
 | 运维控制台 | 入/出 | Restful/gRPC | 私有二进制协议 / JSON | Agent实例运行时监控与控制 |
-| 基础设施 | 出 | Restful/gRPC/WebSocket等协议 | JSON / Protobuf Binary /流式 | Agent依赖南向服务：数据库、分布式文件系统、LLM推理服务、记忆服务、工具服务等 |
+| 基础设施 | 出 | Restful/gRPC/WebSocket等协议 | JSON / Protobuf Binary /流式 | Agent依赖南向服务：数据库、分布式文件系统、LLM推理服务、记忆服务、工具服务等；Agent依赖的治理中心服务 |
 
 #### 外部角色定义
 
@@ -50,7 +50,7 @@ AgentFlow 是一个面向开发者的 **Agent开发编排与执行引擎**，提
 |------|------|----------|
 | **应用开发者** | 使用 AgentFlow 构建Agent应用的开发人员 | DSL 定义Workflow、多语言实现Node |
 | **运维人员** | 负责Agent系统部署、监控和维护的人员 | OM系统 |
-| **外部系统** | 与 Agent 集成的第三方系统（如 LLM API） | gRPC/REST/WebSocket（规划） |
+| **外部系统** | 与 Agent 集成的第三方系统（如 LLM API、Agent治理中心等） | gRPC/REST/WebSocket（规划） |
 
 ```mermaid
 graph TB
@@ -101,7 +101,7 @@ graph TB
 | S1-02 Agent运行 | S1-02-S2-02 Agent执行 | S1-02-S2-02-S3-03 Agent任务调度 | L0 | P0 | Agent任务对应的Workflow实例调度  |
 | S1-02 Agent运行 | S1-02-S2-02 Agent执行 | S1-02-S2-02-S3-04 Agent任务执行 | L0 | P0 | Agent任务对应的Workflow、Node执行引擎  |
 
-### 1.3 S1-01 Agent开发关键用例与交互模型
+### 1.3 S1-01 Agent开发场景关键用例与交互模型
 
 #### 用例优先级列表
 
@@ -165,15 +165,15 @@ graph TB
 - **质量目标**：控制Agent包大小（比如<500M）
 
 
-### 1.4 S1-02 Agent运行关键用例与交互模型
+### 1.4 S1-02 Agent运行场景关键用例与交互模型
 
 #### 用例优先级列表
 
 | S3场景 | 用例 | 参与者 | 描述 | 优先级 |
 |--------|------|--------|------|------|
-| S1-02-S2-01-S3-01 Agent实例生命周期管理 | S1-02-S2-01-S3-01-UC-01 Agent包加载 | Agent治理中心 | Agent包加载 | P0 |
-| S1-02-S2-01-S3-01 Agent实例生命周期管理 | S1-02-S2-01-S3-01-UC-02 Agent实例生命周期管理 | Agent、AgentManager、Agent治理中心 | Agent实例创建、注册发现等 | P0 |
-| S1-02-S2-01-S3-01 Agent实例生命周期管理 | S1-02-S2-01-S3-01-UC-02 Agent状态管理 | Agent、AgentManager | Agent状态机及运行、暂停、停止、销毁等状态跃迁管理 | P0 |
+| S1-02-S2-01-S3-01 Agent实例生命周期管理 | S1-02-S2-01-S3-01-UC-01 Agent包加载 | 运维者、Agent治理中心 | Agent包加载 | P0 |
+| S1-02-S2-01-S3-01 Agent实例生命周期管理 | S1-02-S2-01-S3-01-UC-02 Agent实例生命周期管理 | AgentManager、Agent治理中心 | Agent实例创建、注册发现等 | P0 |
+| S1-02-S2-01-S3-01 Agent实例生命周期管理 | S1-02-S2-01-S3-01-UC-02 Agent状态管理 | AgentManager | Agent状态机及运行、暂停、停止、销毁等状态跃迁管理 | P0 |
 | S1-02-S2-01-S3-02 Agent实例部署 | S1-02-S2-01-S3-02-UC-01 Agent实例部署 | AgentRuntime | 支持Agent单服务单实例、单服务多实例、多服务多实例分布式方式部署 | P0 |
 | S1-02-S2-02-S3-01 Agent消息管理 | S1-02-S2-02-S3-01-UC-01 Agent接收消息 | Agent | Agent接收消息缓存及路由处理 | P0 |
 | S1-02-S2-02-S3-01 Agent消息管理 | S1-02-S2-02-S3-01-UC-02 Agent发送消息 | Agent | Agent发送消息缓存及路由处理 | P0 |
@@ -181,100 +181,109 @@ graph TB
 | S1-02-S2-02-S3-02 Agent任务管理 | S1-02-S2-02-S3-02-UC-02 任务生命周期管理 | Agent | 多任务生命周期管理 | P0 |
 | S1-02-S2-02-S3-03 Agent任务调度 | S1-02-S2-02-S3-03-UC-01 任务对应Workflow实例调度 | AgentRuntime | 调度任务对应的Workflow实例到Worker上执行 | P0 |
 | S1-02-S2-02-S3-04 Agent任务执行 | S1-02-S2-02-S3-04-UC-01 Workflow及Node执行引擎 | AgentRuntime | Workflow及Node执行引擎实现 | P0 |
+| S1-02-S2-02-S3-05 Agent会话管理 | S1-02-S2-02-S3-05-UC-01 Agent会话管理 | Agent | 支持Agent按照会话管理消息及任务 | P0 |
 
 ---
 
 #### S1-02-S2-01-S3-01-UC-01 Agent包加载
 
-- **参与者**：开发者、构建者
-- **前置条件**：已经实现Workflow流程文件及Node代码
-- **主成功流程**：将Agent依赖的Workflow及Node定制代码按照Agent包规范打包，并发布
-- **异常流程**：包构建格式不正确，遗漏关键文件
-- **质量目标**：控制Agent包大小（比如<500M）
+- **参与者**：运维者、Agent治理中心
+- **前置条件**：Agent包已经Ready
+- **主成功流程**：上传Agent包到运维服务，运维服务将包传递并加载到Agent治理中心
+- **异常流程**：包传递或加载失败
+- **质量目标**：Agent包加载时长<10s
   
 
 #### S1-02-S2-01-S3-01-UC-02 Agent实例生命周期管理
 
-- **参与者**：开发者、构建者
-- **前置条件**：已经实现Workflow流程文件及Node代码
-- **主成功流程**：将Agent依赖的Workflow及Node定制代码按照Agent包规范打包，并发布
-- **异常流程**：包构建格式不正确，遗漏关键文件
-- **质量目标**：控制Agent包大小（比如<500M）
+- **参与者**：AgentManager、Agent治理中心
+- **前置条件**：业务已经创建Agent实例
+- **主成功流程**：Agent实例创建后自动向Agent治理中心进行注册
+- **异常流程**：注册失败
+- **质量目标**：注册时延<100ms，治理中心支持注册速率1000/s
 
 
 #### S1-02-S2-01-S3-01-UC-02 Agent状态管理
 
-- **参与者**：开发者、构建者
-- **前置条件**：已经实现Workflow流程文件及Node代码
-- **主成功流程**：将Agent依赖的Workflow及Node定制代码按照Agent包规范打包，并发布
-- **异常流程**：包构建格式不正确，遗漏关键文件
-- **质量目标**：控制Agent包大小（比如<500M）
+- **参与者**：AgentManager
+- **前置条件**：Agent实例已经注册和运行
+- **主成功流程**：管理Agent工作状态，根据条件进行状态迁移
+- **异常流程**：Agent脱管
+- **质量目标**：状态100%准确
 
 #### S1-02-S2-01-S3-02-UC-01 Agent实例部署
 
-- **参与者**：开发者、构建者
-- **前置条件**：已经实现Workflow流程文件及Node代码
-- **主成功流程**：将Agent依赖的Workflow及Node定制代码按照Agent包规范打包，并发布
-- **异常流程**：包构建格式不正确，遗漏关键文件
-- **质量目标**：控制Agent包大小（比如<500M）
+- **参与者**：AgentRuntime
+- **前置条件**：Agent实例已经注册
+- **主成功流程**：按照配置要求，Agent实例可以支持单服务单实例，单服务多实例，以及多服务多实例分布式部署方式
+- **异常流程**：部署方式不正确
+- **质量目标**：单实例处理请求100 QPS
 
 
 #### S1-02-S2-02-S3-01-UC-01 Agent接收消息
 
-- **参与者**：开发者、构建者
-- **前置条件**：已经实现Workflow流程文件及Node代码
-- **主成功流程**：将Agent依赖的Workflow及Node定制代码按照Agent包规范打包，并发布
-- **异常流程**：包构建格式不正确，遗漏关键文件
-- **质量目标**：控制Agent包大小（比如<500M）
+- **参与者**：Agent
+- **前置条件**：Agent实例已经注册和运行
+- **主成功流程**：Agent实例支持接收并缓存消息，并根据一定规则分发到不同任务
+- **异常流程**：消息丢失等
+- **质量目标**：单Agent实例处理消息的并发能力100 QPS
 
 
 #### S1-02-S2-02-S3-01-UC-02 Agent发送消息
 
-- **参与者**：开发者、构建者
-- **前置条件**：已经实现Workflow流程文件及Node代码
-- **主成功流程**：将Agent依赖的Workflow及Node定制代码按照Agent包规范打包，并发布
-- **异常流程**：包构建格式不正确，遗漏关键文件
+- **参与者**：Agent
+- **前置条件**：Agent实例已经注册和运行
+- **主成功流程**：Agent实例支持收集来自各个任务的处理结果，并组装结果作为Agent实例回应给发送方
+- **异常流程**：消息收集和组装不正确
 - **质量目标**：控制Agent包大小（比如<500M）
 
 
 #### S1-02-S2-02-S3-02-UC-01 Agent消息与任务映射
 
-- **参与者**：开发者、构建者
-- **前置条件**：已经实现Workflow流程文件及Node代码
-- **主成功流程**：将Agent依赖的Workflow及Node定制代码按照Agent包规范打包，并发布
-- **异常流程**：包构建格式不正确，遗漏关键文件
-- **质量目标**：控制Agent包大小（比如<500M）
+- **参与者**：Agent
+- **前置条件**：Agent实例已经注册和运行，可以正确接收消息
+- **主成功流程**：接收到的Agent消息可以触发不同的多个任务
+- **异常流程**：消息没有对应任务处理
+- **质量目标**：单消息可以触发100个任务
 
 #### S1-02-S2-02-S3-02-UC-02 任务生命周期管理
 
-- **参与者**：开发者、构建者
-- **前置条件**：已经实现Workflow流程文件及Node代码
-- **主成功流程**：将Agent依赖的Workflow及Node定制代码按照Agent包规范打包，并发布
-- **异常流程**：包构建格式不正确，遗漏关键文件
-- **质量目标**：控制Agent包大小（比如<500M）
+- **参与者**：Agent
+- **前置条件**：Agent实例已经注册和运行，已经触发多个任务
+- **主成功流程**：对任务状态进行管理，并根据条件跃迁到新状态
+- **异常流程**：任务状态不正确
+- **质量目标**：状态100%准确
 
 #### S1-02-S2-02-S3-03-UC-01 任务对应Workflow实例调度
 
-- **参与者**：开发者、构建者
-- **前置条件**：已经实现Workflow流程文件及Node代码
-- **主成功流程**：将Agent依赖的Workflow及Node定制代码按照Agent包规范打包，并发布
-- **异常流程**：包构建格式不正确，遗漏关键文件
-- **质量目标**：控制Agent包大小（比如<500M）
+- **参与者**：AgentRuntime
+- **前置条件**：已经有任务，已经实现Workflow实例
+- **主成功流程**：将任务调度到不同的Workflow实例上
+- **异常流程**：任务没有workflow执行
+- **质量目标**：同时支持100任务和100个Workflow实例并行调度
 
 
 #### S1-02-S2-02-S3-04-UC-01 Workflow及Node执行引擎
 
-- **参与者**：开发者、构建者
-- **前置条件**：已经实现Workflow流程文件及Node代码
-- **主成功流程**：将Agent依赖的Workflow及Node定制代码按照Agent包规范打包，并发布
-- **异常流程**：包构建格式不正确，遗漏关键文件
-- **质量目标**：控制Agent包大小（比如<500M）
+- **参与者**：AgentRuntime
+- **前置条件**：已经实现workflow实例
+- **主成功流程**：按照Workflow流程、Node及Edge实现执行
+- **异常流程**：流程执行失败
+- **质量目标**：流程执行逻辑正确
 
+#### S1-02-S2-02-S3-05-UC-01 Agent会话管理
 
+- **参与者**：Agent
+- **前置条件**：已经和交互方大同，支持消息收发
+- **主成功流程**：按照交互方及请求消息创建会话，并对会话进行生命周期管理
+- **异常流程**：会话管理失败
+- **质量目标**：单Agent实例支持1K会话管理
 
-### 1.5 workflow关键用例与交互模型
+### 1.5 关键用例与交互模型
 
-#### 用例优先级列表
+#### 1.5.1 workflow关键用例与交互模型
+
+##### 用例优先级列表
 
 | 优先级 | 用例 | 参与者 | 价值 |
 |--------|------|--------|------|
@@ -286,7 +295,7 @@ graph TB
 
 ---
 
-#### UC-01：定义并执行 Workflow
+##### UC-01：定义并执行 Workflow
 
 - **参与者**：开发者（调用方）、AgentRuntime
 - **前置条件**：AgentRuntime 已启动（`start()` 返回 true）
@@ -341,7 +350,7 @@ sequenceDiagram
 
 ---
 
-#### UC-02：节点热重载
+##### UC-02：节点热重载
 
 - **参与者**：开发者、HotReloadManager、Node
 - **前置条件**：Node 的 `enable_hot_reload = true`，对应 .so/.py/.sh 文件存在
@@ -372,7 +381,7 @@ sequenceDiagram
 
 ---
 
-#### UC-03：DAG 条件分支 & 循环执行
+##### UC-03：DAG 条件分支 & 循环执行
 
 ```mermaid
 sequenceDiagram
@@ -411,22 +420,17 @@ sequenceDiagram
 | 决策标题 | 采用双框架分离架构（开发编排框架 + 运行框架） |
 | 状态 | 已接受 |
 | 背景 | Agent/Workflow 的定义、装配属于开发期行为，而调度、执行、监控属于运行期行为，两者混合会导致高耦合，难以独立演进。 |
-| 决策 | 将系统拆分为独立的开发编排框架（`core/`）和运行框架（`runtime/`），通过 AgentRuntime 桥接。 |
-| 备选方案 | 方案 A（单一框架）：简单，但扩展性差；方案 B（微服务拆分）：灵活但部署复杂度高，与 C++ 嵌入式定位不符。 |
-| 后果 | ✅ 各自独立演进；✅ 易于单元测试；⚠️ 跨框架对象共享需额外设计接口；📌 关注 AgentRuntime 成为瓶颈 |
+| 决策 | 将系统拆分为独立的开发编排框架（`framework/`）和运行框架（`runtime/`），支持合一部署和分离部署两种模式。 |
+| 部署方式 | 模式一（合一模式）：开发框架和运行框架共部署；模式二（分离模式）：开发框架和运行框架分离部署，开发框架和业务服务共部署，运行框架独立部署 |
 
 #### 分层架构说明
 
 | 层次 | 命名空间 | 职责 |
 |------|----------|------|
-| 展示/接入层 | —— | 开发者 C++ SDK、WebSocket 控制台接入 |
-| 接入层 | `agentflow::network` | WebSocket、SSL、私有协议编解码 |
+| 交互层 | `agentflow::gateway` | 消息出入口网关，支持WebSocket、SSL、私有协议编解码 |
 | 开发编排框架 | `agentflow::framework` | Agent、Workflow、Node、Edge 定义与装配 |
 | 运行框架 | `agentflow::runtime` | AgentRuntime 三层调度、DataBus、ControlFlow、HotReload |
-| Actor 层（可选） | `agentflow::actor` | Protoactor-cpp NodeActor，消息驱动执行 |
-| 存储层 | `agentflow::storage` | Agent/Workflow 版本化持久化 |
-| 基础设施层 | `agentflow::utils` | Logger（spdlog）、ThreadPool |
-| 序列化层 | `agentflow::serialization` | Protobuf 编解码、适配器工厂 |
+| 基础设施层 | `agentflow::utils` | OMAdapter（log等对接）、ThreadPool、ActorFramework、Storage、Protobuf等 |
 
 ```mermaid
 graph TD
@@ -490,6 +494,13 @@ graph TD
 ### 2.2 行为模型
 
 #### 内部组件协作：三层调度主路径
+
+Agent实例内支持Agent任务实例 -> Workflow实例 -> Node实例三层调度，其实例映射关系如下：
+- 1个Agent实例包含1~N个Agent会话
+- 1个Agent会话包含1~M个请求消息
+- 1个请求消息触发1~X个任务
+- 1个任务映射1~Y个Workflow实例
+- 1个Workflow实例包含1~Z个Node及XX个Edge
 
 ```mermaid
 sequenceDiagram
@@ -575,13 +586,18 @@ stateDiagram-v2
 
 | 层次 | 职责 |
 |------|------|
-| **Agent Level Master** | Agent 实例生命周期管理；共享资源（DataBus）分配与隔离；健康检查与故障转移 |
-| **Workflow Level Master** | DAG 解析与拓扑排序；调度决策与执行状态管理；条件/循环控制流驱动 |
-| **Node Level Worker** | 具体节点任务执行（多模式）；结果写回 DataBus；执行计时与超时控制 |
+| **Agent Level Master** | Agent 实例；多个会话共享资源；每个会话包含多个消息，每个消息包含多个任务实例 |
+| **Workflow Level Worker** | DAG 解析、调度与执行：多个Workflow的DAG图被调度到不同worker上执行；执行满足Workflow的流程控制，比如条件/循环控制流驱动 |
+| **Node Level Worker** | 具体节点执行：Node按照运行面代码进行执行，Node间支持高速数据共享（依赖DataBus）；执行计时与超时控制 |
 
 ---
 
 ### 2.3 数据模型
+
+三层拥有及包含关系：
+Agent -> Workflow -> Node + Edge
+同一个Agent实例内的Workflow基于数据总线共享数据
+同一个Workflow实例内的Node基于数据总线共享数据，Node上下游传输数据
 
 #### 核心实体与关系
 
@@ -667,8 +683,6 @@ erDiagram
 | Agent | AgentRuntime | 内存 Map + 文件 | agent_id → AgentPtr |
 | Workflow | AgentRuntime / Agent | 内存 Map + 文件 | (agent_id, workflow_id) |
 | Node | Workflow | 内存 Map | node_id → NodePtr；拓扑排序缓存 |
-| DataValue | HighSpeedDataBus | 内存 KV | key → DataVariant（mutex 保护） |
-| ExecutableVersion | HotReloadManager | 内存列表 + 文件备份 | (file_path, version_id) |
 
 #### C++ 核心数据类型定义
 
@@ -697,7 +711,7 @@ enum class ExecutionMode { CPP_FUNCTION, SHELL_SCRIPT, EXECUTABLE, PYTHON_SCRIPT
 
 #### DSL 数据模型（JSON Schema）
 
-Workflow 支持通过 JSON/DSL 文件加载（`load_from_dsl()`），格式如下：
+Workflow 支持低码化实现业务流程编排，低码化规范需要支持可定义，支持通过 JSON/DSL 文件格式，并可以进行文件方式加载（`load_from_dsl()`），参考格式如下：
 
 ```json
 {
@@ -770,7 +784,6 @@ graph TB
         LWS["libwebsockets 4.x\nWebSocket 服务"]
         OpenSSL["OpenSSL 3.x\nTLS 加密"]
         Protobuf["Protobuf 3.x\n序列化"]
-        ProtoActor["Protoactor-cpp\nActor 框架（可选）"]
     end
 
     subgraph Data["数据层"]
@@ -816,7 +829,7 @@ graph TB
 
 | 依赖 | 集成方式 | 可替代方案 | 说明 |
 |------|----------|------------|------|
-| **Protoactor-cpp** | 条件编译（可选） | Stub 实现 | Actor 核心框架，`AGENTFLOW_WITH_PROTOACTOR` 宏控制 |
+| **Protoactor-cpp** | 条件编译（必选） | Stub 实现 | Actor 核心框架，`AGENTFLOW_WITH_PROTOACTOR` 宏控制 |
 | **libevent** | 条件编译（可选） | Stub 实现 | 事件循环，WebSocket 依赖 |
 | **libwebsockets** | 可选依赖 | Stub 实现 | WebSocket 控制台通信 |
 | **OpenSSL** | 可选依赖 | Stub 实现 | TLS 加密 |
@@ -834,8 +847,9 @@ graph TB
 #### 仓库策略
 单仓库（Monorepo），所有组件共享同一 CMake 构建树，发布为单一静态/动态库（`libagentflow`）。
 
-#### 完整目录结构
+#### 完整目录结构（重构后重新生成）
 
+图（待更新）
 ```
 AgentFlow/
 ├── CMakeLists.txt                  # 顶层构建入口
@@ -911,7 +925,7 @@ AgentFlow/
 └── docs/                           # 项目文档
 ```
 
-#### 逻辑组件 → 代码路径映射
+#### 逻辑组件 → 代码路径映射图（待更新）
 
 | 逻辑组件 | 头文件路径 | 实现路径 | 关键类/接口 |
 |----------|-----------|----------|-------------|
@@ -940,7 +954,7 @@ AgentFlow/
 | **文件名** | snake_case.cpp/.h | `agent_runtime.cpp` |
 | **宏/编译选项** | UPPER_CASE | `AGENTFLOW_WITH_PROTOACTOR` |
 
-#### 关键类图
+#### 关键类图图（待更新）
 
 ```mermaid
 classDiagram
@@ -1171,28 +1185,32 @@ graph TB
 
 ### 4.1 运行模型
 
+libagentflow是运行时的库，需要在部署时指定是Master还是Worker，Master模式时，除了包含所有Worker能力外，还具备对所有worker的管理和调度能力
+
 #### 进程 / 线程模型
 
-```
+
 进程：单进程嵌入（libagentflow 作为库嵌入宿主进程）
 线程：
-  ├── 主线程：AgentRuntime 控制（start/stop/register）
-  ├── Worker 线程池：num_worker_threads_（默认 4）× 节点执行线程
-  ├── HotReload 监控线程：轮询文件变更（check_interval_ms）
-  ├── WebSocket 服务线程：libevent event_loop（如启用）
-  └── Metrics 导出线程（规划）：定期 Flush 到 /metrics
-```
+  ├── 主线程：AgentRuntime 控制Agent实例（start/stop/register）
+  ├── Session 线程组：会话管理
+  ├── Message 线程组：消息收发管理
+  ├── Task 线程组：任务生命周期及调度管理
+  ├── Master 线程组：worker的管理和调度
+  ├── Worker 线程组：Workflow、Node执行
+
 
 #### 并发控制
 
 | 共享资源 | 保护机制 | 说明 |
 |---------|---------|------|
-| `agents_` Map | `std::mutex agents_mutex_` | Agent 注册/查找 |
-| `node_task_queue_` | `std::mutex task_queue_mutex_` | Worker 任务队列 |
-| `workflow_states_` | `std::mutex workflow_state_mutex_` | 执行状态追踪 |
-| `HighSpeedDataBus::data_` | `std::mutex mutex_` | KV 读写 + 订阅通知 |
-| `is_running_` | `std::atomic<bool>` | 运行状态无锁读取 |
-| `draining_` | `std::atomic<bool>` | 优雅停机标志 |
+| `agents_` Map | `std::mutex agents_mutex_` | Agent实例 注册/查找 |
+| `sessions_` Map | `std::mutex sessions_mutex_` | Session实例 创建/删除 |
+| `message_queue_` | `std::mutex task_queue_mutex_` | 消息 队列 |
+| `task_queue_` | `std::mutex task_queue_mutex_` | Task 队列 |
+| `worker_queue_` | `std::mutex worker_queue_mutex_` | Worker 队列 |
+| `AgentDataBus::data_` | `std::mutex mutex_` | Agent实例内跨Workflow数据总线，KV 读写 + 订阅通知 |
+| `WorkflowDataBus::data_` | `std::mutex mutex_` | Workflow实例内跨Node数据总线，KV 读写 + 订阅通知 |
 
 关键并发原语实现参考（ZeroCopyDataBus 使用读写锁，任务队列使用条件变量）：
 
@@ -1323,14 +1341,27 @@ graph TB
 
 #### 弹性伸缩
 
-AgentFlow 当前为嵌入式单进程库，弹性伸缩通过以下方式实现：
+AgentFlow 支持Scale Out和Scale Up两个方向弹性伸缩：
+- Scale UP：单master服务实例内：增加CPU、内存资源，比如增加增加Agent实例个数，增加单实例会话数，单会话消息量，单消息任务数，单任务支持的workflow实例数，单workflow支持的Node数
+- scale out：多master服务集群：增加单master对应的worker数，增加多master集群中master的数量
+
+##### 单master服务实例内
 
 | 策略 | 机制 | 边界 |
 |------|------|------|
-| Worker 线程扩展 | 启动时配置 `num_worker_threads_`（默认 4） | 建议不超过 CPU 物理核数 × 2 |
-| DataBus 容量扩展 | `data_bus_capacity` 配置（默认 1MB） | 按 Agent 数和数据量线性扩展 |
-| Workflow 并发 | `max_concurrent_workflows`（默认 5） | 受 Worker 池容量约束 |
-| 分布式扩展（规划） | Protoactor-cpp 跨节点 Actor | 需启用 `AGENTFLOW_WITH_PROTOACTOR` |
+| Agent实例数 |  `num_agents`（默认 xxx） | 建议不超过xxx |
+| 单Agent实例会话数 | `session_capacity` 配置（默认 XXX） | 按 单Agent 处理容量扩展 |
+| 单会话消息数 | `max_messages`（默认 XX） | 受 单会话内存容量限制 |
+| 单消息任务数 | `max_tasks`（默认 XX） | 受单消息处理复杂度 |
+| 单任务Workflow实例数 | `max_flows`（默认 XX） | 受单任务需要多少流程处理复杂度 |
+| 单Workflow支持Node数 | `max_nodes`（默认 XX） | 受单流程处理步骤数限制，Edge不受影响 |
+
+##### 多master服务集群
+
+| 策略 | 机制 | 边界 |
+|------|------|------|
+| 单Master管理Worker数 |  `num_workers`（默认 XX） | 建议不超过XXX |
+| 集群master数 | `num_masters` （默认 XX） | 多master组去中心化集群 |
 
 ---
 
@@ -1338,18 +1369,18 @@ AgentFlow 当前为嵌入式单进程库，弹性伸缩通过以下方式实现�
 
 #### 可观测性三支柱
 
-**日志（spdlog）**：
+**内部日志（spdlog），对接外部log服务统一管理**：
 - 格式：`[时间戳][级别][logger名称] 消息`
 - 输出：控制台 + 文件（按模块分级，见 `logging.yaml`）
 - 模块日志器：`agentflow.core`（DEBUG）/ `agentflow.runtime`（INFO）/ `agentflow.network`（WARN）
 
-**指标（MetricsCollector）**：
+**内部指标采集（MetricsCollector），对接外部监控服务统一管理**：
 - Counter：`agentflow_node_executions_total`、`agentflow_workflow_completions_total`
 - Gauge：`agentflow_active_agents`、`agentflow_running_nodes`、`agentflow_task_queue_size`
 - Histogram：`agentflow_node_execution_duration_ms`（分位数 P50/P90/P95/P99）
 - 导出格式：Prometheus 文本 / JSON / 纯文本（`MetricsCollector::export_prometheus()`）
 
-**链路追踪**（规划）：OpenTelemetry C++ SDK，Workflow 执行 ID 作为 trace_id
+**内部链路追踪打点，，对接外部监控服务统一管理**：OpenTelemetry C++ SDK，Workflow 执行 ID 作为 trace_id
 
 #### 关键 SLI/SLO 定义
 
@@ -1396,7 +1427,7 @@ graph LR
 | DataBus 容量 | `get_used_capacity() / capacity < 0.9` | 防止内存溢出 |
 | HotReload 状态 | `HotReloadStatus != ERROR` | 文件监控正常 |
 
-#### 监控指标层次结构
+#### 监控指标层次结构图（待更新）
 
 ```
 监控指标层次
@@ -1428,44 +1459,7 @@ graph LR
     └── agentflow_dag_depth_distribution      (Histogram)
 ```
 
-#### Prometheus 告警规则示例
 
-```yaml
-# prometheus-rules.yaml
-groups:
-- name: agentflow-alerts
-  rules:
-  - alert: HighWorkflowErrorRate
-    expr: |
-      sum(rate(agentflow_workflow_errors_total[5m])) /
-      sum(rate(agentflow_workflow_executions_total[5m])) > 0.05
-    for: 5m
-    labels:
-      severity: critical
-    annotations:
-      summary: "AgentFlow workflow error rate too high"
-      description: "Error rate is {{ $value | humanizePercentage }}"
-
-  - alert: HighNodeLatency
-    expr: |
-      histogram_quantile(0.99,
-        sum(rate(agentflow_node_execution_duration_ms_bucket[5m])) by (le)
-      ) > 10000
-    for: 5m
-    labels:
-      severity: warning
-    annotations:
-      summary: "AgentFlow node P99 latency > 10s"
-      description: "P99 latency is {{ $value }}ms"
-
-  - alert: DataBusCapacityHigh
-    expr: agentflow_databus_usage_ratio > 0.9
-    for: 2m
-    labels:
-      severity: warning
-    annotations:
-      summary: "AgentFlow DataBus capacity above 90%"
-```
 
 ---
 
@@ -1479,18 +1473,19 @@ groups:
 |------|------|---------|---------|
 | 静态库 | `libagentflow.a` | `libagentflow-{semver}-{os}-{arch}.a` | 全量编译单元 |
 | 动态库 | `libagentflow.so/.dylib` | `libagentflow-{semver}-{os}-{arch}.{so/dylib}` | 全量编译单元 |
-| 公开头文件 | `.h` 归档 | `agentflow-headers-{semver}.tar.gz` | `include/agentflow/` |
-| CMake 配置包 | CMake Package | `AgentFlowConfig.cmake` | `find_package(AgentFlow)` 支持 |
-| Docker 镜像（规划） | OCI Image | `ghcr.io/danielkernel/agentflow:{semver}` | Runtime + 依赖 |
+| 运行配置文件 | `config.json` 归档 | `agentflow-rt-{semver}.tar.gz` | 与库打包到一起 |
+| 公开头文件 | `.h` 归档 | `agentflow-dev-{semver}.tar.gz` | `include/external/`，开发依赖包 |
+| CMake 配置包 | AgentFlowConfig.cmake | `agentflow-dev-{semver}.tar.gz` | 开发依赖包 |
 
-**命名规范示例**：
+**命名规范示例**：（已更新）
 ```
 libagentflow-0.1.0-linux-x86_64.a
 libagentflow-0.1.0-darwin-arm64.dylib
-agentflow-headers-0.1.0.tar.gz
+agentflow-dev-0.1.0.tar.gz
+agentflow-rt-0.1.0.tar.gz
 ```
 
-#### 完整交付物目录结构
+#### 完整交付物目录结构（待更新）
 
 ```
 agentflow-0.1.0-linux-x86_64/
@@ -1515,15 +1510,12 @@ agentflow-0.1.0-linux-x86_64/
 └── README.md
 ```
 
-#### 软件包格式
+#### 软件包格式（已更新）
 
 | 格式 | 目标平台 | 工具 | 说明 |
 |------|---------|------|------|
 | `.tar.gz` | 全平台 | CMake CPack | 通用压缩包 |
-| `.deb` | Ubuntu/Debian | CPack DEB | 系统级安装 |
-| `.rpm` | RHEL/CentOS | CPack RPM | 系统级安装 |
 | Docker Image | 容器平台 | Dockerfile（规划） | `FROM ubuntu:22.04` |
-| AUR / `PKGBUILD` | Arch Linux | AUR（规划） | 社区维护 |
 
 | 环境 | 分发方式 | 配置来源 | 敏感信息管理 |
 |------|---------|---------|------------|
@@ -1534,7 +1526,6 @@ agentflow-0.1.0-linux-x86_64/
 #### 制品安全措施（规划）
 
 - 静态库 SHA256 校验和随 Release 发布
-- Snyk/Dependabot 扫描第三方依赖漏洞
 - SBOM（软件物料清单）生成
 
 ---
@@ -1545,9 +1536,9 @@ agentflow-0.1.0-linux-x86_64/
 
 AgentFlow 作为**嵌入式 C++ 库**，部署形态为宿主应用链接 `libagentflow`，不独立部署。典型部署场景：
 
-1. **单机嵌入**：直接链接到 AI Agent 应用进程
-2. **多实例嵌入**：多个应用实例各自内嵌，通过外部消息队列协调（规划）
-3. **分布式 Actor 模式**（规划）：通过 Protoactor-cpp 远程 Actor 跨机器调度节点
+1. **单机嵌入**：直接链接到 AI Agent 应用进程，master和worker共部署
+2. **多实例嵌入**：多个应用实例各自内嵌，通过外部消息队列协调（规划），master和worker共部署
+3. **分布式模式**：，master和worker分离部署，部署时指定角色
 
 ```mermaid
 graph TB
@@ -1701,14 +1692,9 @@ AgentFlow 存储层使用文件系统（JSON/Protobuf），无传统数据库迁
 - **状态**：已接受
 - **背景**：开发期（定义/装配 Agent/Workflow）与运行期（调度/执行/监控）行为差异显著，混合实现导致高耦合、难以独立测试和演进。
 - **决策**：将系统分为 `agentflow::framework`（开发编排框架）和 `agentflow::runtime`（运行框架），通过 `AgentRuntime` 桥接。
-- **备选方案**：
-  - 方案 A（单框架）：实现简单 / 扩展性差，随功能增长耦合爆炸
-  - 方案 B（微服务拆分）：灵活独立 / 引入分布式复杂性，不适合嵌入式场景
-- **后果**：
-  - ✅ 各层独立演进，单元测试边界清晰
-  - ✅ 支持开发期 DSL 加载和运行期热替换
-  - ⚠️ 跨层对象共享需通过接口（shared_ptr）传递，有轻微开销
-  - 📌 关注 AgentRuntime 成为单点瓶颈，后续可分布式化
+- **部署模式**：
+  - 模式一（合一部署）：开发框架和运行框架共部署在一个服务
+  - 模式二（分离部署）：开发框架在业务服务中，运行框架独立服务
 
 ---
 
@@ -1716,7 +1702,7 @@ AgentFlow 存储层使用文件系统（JSON/Protobuf），无传统数据库迁
 
 - **日期**：2026-01-15
 - **状态**：已接受
-- **背景**：节点执行结果（DataMap）需要在 Worker 线程间高效共享，避免跨线程数据拷贝成本。
+- **背景**：单个Agent实例内，单个workflow的node可能在跨节点的woker中运行，多个workflow也可能在跨节点的worker中运行，需要支持单Agent内跨节点高速数据共享。
 - **决策**：实现 `HighSpeedDataBus`（mutex 保护的内存 KV + 订阅通知）和 `ZeroCopyDataBus`（共享内存，规划真实实现），Node 通过 key 读写数据而非直接传递对象。
 - **备选方案**：
   - 方案 A（直接函数参数传递）：简单 / 不支持并发节点间数据共享，无订阅机制
@@ -1746,20 +1732,13 @@ AgentFlow 存储层使用文件系统（JSON/Protobuf），无传统数据库迁
 
 ---
 
-### ADR-004：Protoactor-cpp 作为可选 Actor 层
+### ADR-004：Protoactor-cpp 作为 Actor 框架底座
 
 - **日期**：2026-02-10
 - **状态**：已接受
-- **背景**：Actor 模型适合分布式消息驱动调度，但引入 Protoactor-cpp 增加了编译依赖和构建复杂度；并非所有使用场景都需要分布式能力。
-- **决策**：通过 CMake 编译宏 `AGENTFLOW_WITH_PROTOACTOR` 条件编译，默认不启用；核心调度路径（AgentRuntime 三层 Master-Worker）不依赖 Actor 框架。
-- **备选方案**：
-  - 方案 A（强制依赖 Protoactor-cpp）：功能完整 / 依赖复杂，部署成本高
-  - 方案 B（完全自研 Actor）：零依赖 / 开发成本高，维护负担重
-- **后果**：
-  - ✅ 零强制依赖，嵌入简单
-  - ✅ 分布式场景可按需启用
-  - ⚠️ 两条代码路径需同步维护（有条件编译 stub）
-  - 📌 Actor 层测试覆盖率需专项保障
+- **背景**：Actor 模型适合分布式消息驱动调度，引入 Protoactor-cpp 支持AgentFlow简化并行编码。
+- **决策**：非Node部分业务均基于Actor编程，Node内除了控制面外，运行面不强制要求基于Actor编程
+
 
 ---
 
