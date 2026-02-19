@@ -5,7 +5,7 @@
 
 #ifdef AGENTFLOW_WITH_PROTOACTOR
 
-#include "actor/adapter/protoactor_impl.h"
+#include "adapter/actor/protoactor_impl.h"
 
 #include <chrono>
 #include <thread>

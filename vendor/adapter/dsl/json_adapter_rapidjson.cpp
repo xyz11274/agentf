@@ -8,7 +8,7 @@
 #include <fstream>
 #include <sstream>
 
-#include "dsl/json_adapter/rapidjson_impl.h"
+#include "adapter/dsl/rapidjson_impl.h"
 #include "rapidjson/document.h"
 #include "rapidjson/stringbuffer.h"
 #include "rapidjson/writer.h"

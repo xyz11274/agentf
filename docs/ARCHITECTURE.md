@@ -3,8 +3,8 @@
 | 字段 | 内容 |
 |------|------|
 | 项目名称 | AgentFlow |
-| 文档版本 | v2.0 |
-| 编写日期 | 2026-02-18 |
+| 文档版本 | v2.1 |
+| 编写日期 | 2026-02-19 |
 | 架构状态 | 已批准 |
 | 适用范围 | AgentFlow 核心引擎（开发编排框架 + 运行框架），版本 0.1.x |
 
@@ -842,100 +842,163 @@ graph TB
 #### 仓库策略
 单仓库（Monorepo），所有组件共享同一 CMake 构建树，发布为单一静态/动态库（`libagentflow`）。
 
-#### 完整目录结构（重构后重新生成）
+#### 完整目录结构
 
-图（待更新）
 ```
 AgentFlow/
 ├── CMakeLists.txt                  # 顶层构建入口
 ├── build.sh                        # 构建/测试/示例快捷脚本
-├── include/agentflow/              # 公开头文件（安装接口）
-│   ├── common.h                    # 公共类型定义（DataVariant, AgentId, 枚举等）
-│   ├── core/                       # 开发编排框架
-│   │   ├── agent.h                 # Agent 实体：生命周期 + Workflow 管理
-│   │   ├── workflow.h              # Workflow 实体：DAG + ControlFlow 集成
-│   │   ├── node.h                  # Node 实体：多模式执行 + 热重载
-│   │   └── edge.h                  # Edge 实体：数据传递 + 条件表达式
-│   ├── runtime/                    # 运行框架
-│   │   ├── agent_runtime.h         # 三层 Master-Worker 调度引擎
-│   │   ├── databus.h               # HighSpeedDataBus：KV + 订阅通知
-│   │   ├── zero_copy_databus.h     # ZeroCopyDataBus：共享内存高速通道
-│   │   ├── local_channel.h         # 本地通信通道
-│   │   ├── control_flow.h          # 条件/循环/错误处理控制流
-│   │   ├── hot_reload.h            # 热重载：文件监控 + 版本管理
-│   │   ├── code_loader.h           # 多语言代码加载（.so/shell/python）
-│   │   ├── metrics.h               # 指标采集：Counter/Gauge/Histogram
-│   │   └── event.h                 # 运行时事件定义
-│   ├── actor/                      # Actor 系统（Protoactor-cpp 封装，可选）
-│   │   ├── actor_system.h          # ActorSystemManager 单例
-│   │   ├── node_actor.h            # NodeActor：消息驱动节点执行
-│   │   └── actors.h                # Actor 消息类型定义
-│   ├── network/                    # 网络通信适配层
-│   │   ├── websocket_adapter.h     # WebSocket 抽象接口
-│   │   ├── ssl_adapter.h           # SSL/TLS 抽象接口
-│   │   ├── private_protocol.h      # 私有二进制协议
-│   │   ├── request.h               # 请求对象
-│   │   └── response.h              # 响应对象
-│   ├── serialization/              # 序列化适配层
-│   │   ├── proto_adapter.h         # Protobuf 序列化接口
-│   │   └── adapter_factory.h       # 序列化适配器工厂
-│   ├── storage/                    # 持久化层
-│   │   ├── storage.h               # 存储基础类型（StorageResult, StorageConfig）
-│   │   ├── storage_manager.h       # 存储管理器（统一入口）
-│   │   ├── agent_storage.h         # Agent 版本化存储接口
-│   │   └── workflow_storage.h      # Workflow 版本化存储接口
-│   └── utils/                      # 工具库
-│       ├── logger.h                # Logger（spdlog 封装）
-│       └── thread_pool.h           # 线程池
-├── src/                            # 实现文件（与 include 结构对应）
-│   ├── core/                       # 框架核心实现
+├── build/                          # 构建输出目录
+│   ├── cmake/                      # CMake 配置文件
+│   └── install_dependencies.sh     # 系统依赖安装脚本
+├── include/                        # 头文件目录
+│   ├── external/                   # 公开 API 头文件（随库发布，外部调用方使用）
+│   │   ├── common.h                # 公共类型定义（DataVariant, AgentId, 枚举等）
+│   │   ├── core/                   # 开发编排框架核心接口
+│   │   │   ├── agent.h             # Agent 实体：生命周期 + Workflow 管理
+│   │   │   ├── workflow.h          # Workflow 实体：DAG + ControlFlow 集成
+│   │   │   ├── node.h              # Node 实体：多模式执行 + 热重载
+│   │   │   └── edge.h              # Edge 实体：数据传递 + 条件表达式
+│   │   ├── runtime/                # 运行框架公开接口
+│   │   │   ├── agent_runtime.h     # 三层 Master-Worker 调度引擎
+│   │   │   ├── databus.h           # HighSpeedDataBus：KV + 订阅通知
+│   │   │   ├── zero_copy_databus.h # ZeroCopyDataBus：共享内存高速通道
+│   │   │   ├── local_channel.h     # 本地通信通道
+│   │   │   ├── control_flow.h      # 条件/循环/错误处理控制流
+│   │   │   ├── hot_reload.h        # 热重载：文件监控 + 版本管理
+│   │   │   ├── code_loader.h       # 多语言代码加载（.so/shell/python）
+│   │   │   ├── metrics.h           # 指标采集：Counter/Gauge/Histogram
+│   │   │   ├── event.h             # 运行时事件定义
+│   │   │   ├── scheduler/          # 调度器子接口
+│   │   │   ├── communication/      # 通信子接口（databus, hot_reload 等）
+│   │   │   ├── storage/            # 存储子接口
+│   │   │   └── actor/              # Actor 子接口
+│   │   ├── actor/                  # Actor 系统公开接口（Protoactor-cpp 封装）
+│   │   │   ├── actor_system.h      # ActorSystemManager 单例
+│   │   │   ├── node_actor.h        # NodeActor：消息驱动节点执行
+│   │   │   ├── workflow_actor.h    # WorkflowActor：消息驱动 Workflow 执行
+│   │   │   ├── actors.h            # Actor 消息类型定义
+│   │   │   ├── adapter.h           # Actor 框架适配器抽象接口
+│   │   │   ├── ask_pattern.h       # Ask 模式（Request-Response）接口
+│   │   │   └── message_serializer.h# 消息序列化接口
+│   │   ├── dsl/                    # DSL 解析公开接口
+│   │   │   ├── json_adapter.h      # JSON 解析适配器接口
+│   │   │   └── workflow_parser.h   # Workflow DSL 解析器
+│   │   ├── event/                  # 事件循环公开接口
+│   │   │   ├── eventloop_adapter.h # 事件循环适配器抽象接口
+│   │   │   └── adapter_factory.h   # 事件循环适配器工厂
+│   │   ├── network/                # 网络通信公开接口
+│   │   │   ├── websocket_adapter.h # WebSocket 抽象接口
+│   │   │   ├── ssl_adapter.h       # SSL/TLS 抽象接口
+│   │   │   ├── request.h           # 请求对象
+│   │   │   ├── response.h          # 响应对象
+│   │   │   └── adapter_factory.h   # 网络适配器工厂
+│   │   ├── serialization/          # 序列化公开接口
+│   │   │   ├── proto_adapter.h     # Protobuf 序列化接口
+│   │   │   └── adapter_factory.h   # 序列化适配器工厂
+│   │   ├── storage/                # 持久化公开接口
+│   │   │   ├── storage.h           # 存储基础类型（StorageResult, StorageConfig）
+│   │   │   ├── storage_manager.h   # 存储管理器（统一入口）
+│   │   │   ├── agent_storage.h     # Agent 版本化存储接口
+│   │   │   └── workflow_storage.h  # Workflow 版本化存储接口
+│   │   ├── utils/                  # 工具库公开接口
+│   │   │   ├── logger.h            # Logger（spdlog 封装）
+│   │   │   └── thread_pool.h       # 线程池
+│   │   ├── agent/                  # Agent 实例化外部接口（生命周期管理）
+│   │   └── workflow/               # Workflow/Node/Edge 定制开发外部接口
+│   └── internal/                   # 内部实现头文件（仅供内部系统使用）
+│       ├── adapter/                # 三方依赖适配实现头文件
+│       │   ├── actor/              # Actor 框架适配（protoactor_impl.h, stub_impl.h）
+│       │   ├── dsl/                # DSL 适配（rapidjson_impl.h, stub_impl.h）
+│       │   ├── event/              # 事件循环适配（libevent_impl.h）
+│       │   ├── network/            # 网络适配（libwebsockets_impl.h, openssl_impl.h）
+│       │   └── serialization/      # 序列化适配（protobuf_impl.h）
+│       ├── dsl/                    # DSL 内部实现头文件
+│       ├── event/                  # 事件循环内部实现头文件
+│       ├── network/                # 网络内部实现头文件（private_protocol.h 等）
+│       ├── serialization/          # 序列化内部实现头文件
+│       └── testing/                # 测试工具（performance_metrics.h 等）
+├── src/                            # 核心业务源代码
+│   ├── core/                       # 开发编排框架核心实现（Agent/Workflow/Node/Edge）
+│   ├── agent/                      # Agent 实例管理实现
+│   ├── workflow/                   # Workflow 管理实现
+│   │   ├── dsl/                    # DSL 解析实现
+│   │   ├── edge/                   # Edge 实现
+│   │   └── node/                   # Node 实现（code_loader, node_actor 等）
 │   ├── runtime/                    # 运行时实现
-│   ├── actor/                      # Actor 系统实现
-│   ├── network/                    # 网络层实现
+│   │   ├── scheduler/              # 调度器（agent_runtime, control_flow）
+│   │   ├── communication/          # 通信（databus, hot_reload, local_channel 等）
+│   │   ├── storage/                # 存储（agent_storage, storage_manager 等）
+│   │   └── actor/                  # Actor 系统运行时（actor_system, node_actor 等）
+│   ├── actor/                      # Actor 系统实现（ask_pattern, message_serializer 等）
+│   ├── dsl/                        # DSL 适配器工厂实现
+│   ├── event/                      # 事件循环适配器工厂实现
+│   ├── network/                    # 网络层实现（private_protocol, request, response）
 │   ├── serialization/              # 序列化实现
 │   ├── storage/                    # 存储实现
-│   └── utils/                      # 工具实现
+│   └── utils/                      # 工具实现（logger, thread_pool）
+├── vendor/                         # 三方依赖相关内容
+│   ├── vendor.conf                 # 三方依赖下载配置
+│   ├── vendor.sh                   # 三方依赖下载脚本
+│   ├── README.md                   # Vendor 使用说明
+│   ├── adapter/                    # 三方依赖适配器实现（与 src/ 业务代码隔离）
+│   │   ├── actor/                  # Actor 框架适配（protoactor_impl.cpp, stub_impl.cpp）
+│   │   ├── dsl/                    # DSL 适配（json_adapter_rapidjson.cpp, json_adapter_stub.cpp）
+│   │   ├── event/                  # 事件循环适配（libevent_impl.cpp）
+│   │   ├── eventloop/              # 事件循环适配（备用路径）
+│   │   ├── network/                # 网络适配（adapter_factory.cpp）
+│   │   └── serialization/          # 序列化适配（adapter_factory.cpp）
+│   └── <downloaded>/               # 下载的三方依赖（.gitignore）
 ├── proto/                          # Protobuf 定义
 │   ├── agentflow.proto             # 公共类型（DataValue, DataMap, 枚举）
 │   └── node_service.proto          # 节点执行 Request/Response/Metrics
 ├── tests/                          # 测试套件
 │   ├── unit/                       # 单元测试（GoogleTest）
-│   │   ├── NodeTests               # Node 执行测试
-│   │   ├── AgentTests              # Agent 生命周期测试
-│   │   ├── WorkflowTests           # DAG 拓扑 + 调度测试
-│   │   ├── DataBusTests            # 数据总线测试
-│   │   └── EventTests              # 事件机制测试
-│   └── integration/                # 集成测试
-│       ├── AgentFlowGoogleTests    # 端到端集成测试
-│       ├── HotReloadTests          # 热重载集成测试
-│       └── EventLoopTests          # 事件循环测试
+│   │   ├── cpp/                    # C++ 单元测试（test_agent, test_workflow, test_databus 等）
+│   │   ├── data/                   # 测试数据（JSON 配置、期望输出等）
+│   │   ├── lib/                    # 测试库（hot_reload_test 等）
+│   │   └── scripts/                # 测试脚本（python/, shell/）
+│   └── functional/                 # 功能测试（性能/集成）
+│       ├── cpp/                    # 功能测试代码（test_performance.cpp 等）
+│       └── scripts/                # 功能测试脚本
 ├── examples/                       # 示例程序
 ├── configs/                        # 配置文件模板
 │   ├── default.yaml                # 默认配置
 │   ├── logging.yaml                # 日志配置
 │   └── server.yaml                 # 服务端配置
-├── scripts/                        # 运维脚本
-│   └── docker/                     # 容器配置
-├── cmake/                          # CMake 模块
 └── docs/                           # 项目文档
 ```
 
-#### 逻辑组件 → 代码路径映射图（待更新）
+#### 逻辑组件 → 代码路径映射图
 
 | 逻辑组件 | 头文件路径 | 实现路径 | 关键类/接口 |
 |----------|-----------|----------|-------------|
-| 开发编排框架 | `include/agentflow/core/` | `src/core/` | `Agent`, `Workflow`, `Node`, `Edge` |
-| 三层调度引擎 | `include/agentflow/runtime/agent_runtime.h` | `src/runtime/agent_runtime.cpp` | `AgentRuntime` |
-| 高速数据总线 | `include/agentflow/runtime/databus.h` | `src/runtime/databus.cpp` | `HighSpeedDataBus` |
-| 零拷贝数据总线 | `include/agentflow/runtime/zero_copy_databus.h` | `src/runtime/zero_copy_databus.cpp` | `ZeroCopyDataBus` |
-| 控制流管理器 | `include/agentflow/runtime/control_flow.h` | `src/runtime/control_flow.cpp` | `ControlFlowManager`, `ConditionExpression` |
-| 热重载管理器 | `include/agentflow/runtime/hot_reload.h` | `src/runtime/hot_reload.cpp` | `HotReloadManager`, `ExecutableVersion` |
-| 代码加载器 | `include/agentflow/runtime/code_loader.h` | `src/runtime/code_loader.cpp` | `CodeLoader` |
-| 指标采集器 | `include/agentflow/runtime/metrics.h` | `src/runtime/metrics.cpp` | `MetricsCollector`, `CounterMetric`, `GaugeMetric`, `HistogramMetric` |
-| Actor 系统 | `include/agentflow/actor/` | `src/actor/` | `ActorSystemManager`, `NodeActor` |
-| 网络层 | `include/agentflow/network/` | `src/network/` | `WebSocketAdapter`, `SSLAdapter`, `PrivateProtocol` |
-| 序列化层 | `include/agentflow/serialization/` | `src/serialization/` | `ProtoAdapter`, `AdapterFactory` |
-| 存储层 | `include/agentflow/storage/` | `src/storage/` | `StorageManager`, `IAgentStorage`, `IWorkflowStorage` |
+| 开发编排框架（核心实体） | `include/external/core/` | `src/core/` | `Agent`, `Workflow`, `Node`, `Edge` |
+| Agent 外部接口 | `include/external/agent/` | `src/agent/` | Agent 实例生命周期管理 |
+| Workflow 外部接口 | `include/external/workflow/` | `src/workflow/` | Workflow/Node/Edge 定制开发 |
+| 三层调度引擎 | `include/external/runtime/agent_runtime.h` | `src/runtime/scheduler/agent_runtime.cpp` | `AgentRuntime` |
+| 控制流管理器 | `include/external/runtime/control_flow.h` | `src/runtime/scheduler/control_flow.cpp` | `ControlFlowManager`, `ConditionExpression` |
+| 高速数据总线 | `include/external/runtime/databus.h` | `src/runtime/communication/databus.cpp` | `HighSpeedDataBus` |
+| 零拷贝数据总线 | `include/external/runtime/zero_copy_databus.h` | `src/runtime/communication/zero_copy_databus.cpp` | `ZeroCopyDataBus` |
+| 本地通信通道 | `include/external/runtime/local_channel.h` | `src/runtime/communication/local_channel.cpp` | `LocalChannel` |
+| 热重载管理器 | `include/external/runtime/hot_reload.h` | `src/runtime/communication/hot_reload.cpp` | `HotReloadManager`, `ExecutableVersion` |
+| 代码加载器 | `include/external/runtime/code_loader.h` | `src/workflow/node/code_loader.cpp` | `CodeLoader` |
+| 指标采集器 | `include/external/runtime/metrics.h` | `src/runtime/metrics.cpp` | `MetricsCollector`, `CounterMetric`, `GaugeMetric`, `HistogramMetric` |
+| Actor 系统 | `include/external/actor/` | `src/actor/` | `ActorSystemManager`, `NodeActor`, `WorkflowActor` |
+| Actor 运行时实现 | `include/external/runtime/actor/` | `src/runtime/actor/` | Actor 系统运行时封装 |
+| DSL 解析器 | `include/external/dsl/` | `src/dsl/` | `WorkflowParser`, `JsonAdapter` |
+| 事件循环接口 | `include/external/event/` | `src/event/` | `EventLoopAdapter`, `AdapterFactory` |
+| 网络层 | `include/external/network/` | `src/network/` | `WebSocketAdapter`, `SSLAdapter`, `PrivateProtocol` |
+| 序列化层 | `include/external/serialization/` | `src/serialization/` | `ProtoAdapter`, `AdapterFactory` |
+| 存储层 | `include/external/storage/` | `src/storage/` + `src/runtime/storage/` | `StorageManager`, `IAgentStorage`, `IWorkflowStorage` |
+| 工具库 | `include/external/utils/` | `src/utils/` | `Logger`, `ThreadPool` |
+| Actor 适配器实现 | `include/internal/adapter/actor/` | `vendor/adapter/actor/` | `ProtoactorImpl`, `StubImpl` |
+| DSL 适配器实现 | `include/internal/adapter/dsl/` | `vendor/adapter/dsl/` | `RapidJsonImpl`, `StubImpl` |
+| 事件循环适配器实现 | `include/internal/adapter/event/` | `vendor/adapter/event/` + `vendor/adapter/eventloop/` | `LibeventImpl` |
+| 网络适配器实现 | `include/internal/adapter/network/` | `vendor/adapter/network/` | `LibwebsocketsImpl`, `OpenSSLImpl` |
+| 序列化适配器实现 | `include/internal/adapter/serialization/` | `vendor/adapter/serialization/` | `ProtobufImpl` |
+| 私有网络协议 | `include/internal/network/` | `src/network/private_protocol.cpp` | `PrivateProtocol` |
+| 测试工具 | `include/internal/testing/` | `tests/unit/lib/` | `PerformanceMetrics`, `HotReloadTest` |
 
 #### 命名规范
 
@@ -949,7 +1012,7 @@ AgentFlow/
 | **文件名** | snake_case.cpp/.h | `agent_runtime.cpp` |
 | **宏/编译选项** | UPPER_CASE | `AGENTFLOW_WITH_PROTOACTOR` |
 
-#### 关键类图图（待更新）
+#### 关键类图
 
 ```mermaid
 classDiagram
@@ -1052,18 +1115,18 @@ classDiagram
 
 | 层次 | 范围 | 覆盖目标 | 工具 |
 |------|------|---------|------|
-| 单元测试 | Node/Agent/Workflow/DataBus/Event 各模块 | 行覆盖率 ≥ 80% | GoogleTest |
-| 集成测试 | 三层调度闭环、热重载、事件循环 | 关键路径全覆盖 | GoogleTest |
+| 单元测试 | Node/Agent/Workflow/DataBus/Event 各模块（`tests/unit/cpp/`） | 行覆盖率 ≥ 80% | GoogleTest |
+| 功能测试 | 性能基准、集成场景（`tests/functional/cpp/` + `tests/functional/scripts/`） | 关键路径全覆盖 | GoogleTest / Shell |
 | 端到端测试（规划） | 完整 Agent 执行场景 | 5 个核心用例 | GoogleTest / Shell |
 
 ```mermaid
 graph LR
     subgraph CI["CI 流水线（每次 Push / PR）"]
         Fmt["代码格式检查\nclang-format --dry-run"] --> Tidy["静态分析\nclang-tidy"]
-        Tidy --> Build["编译构建\nCMake + make\n84 编译单元"]
-        Build --> Unit["单元测试\nGoogleTest\nNode/Agent/Workflow/DataBus/Event"]
-        Unit --> Integ["集成测试\nHotReload/EventLoop/AgentFlow"]
-        Integ --> BinPkg["产物打包\n静态库 + 头文件"]
+        Tidy --> Build["编译构建\nCMake + make\nsrc/ + vendor/adapter/"]
+        Build --> Unit["单元测试\nGoogleTest\ntests/unit/cpp/"]
+        Unit --> Perf["功能/性能测试\ntests/functional/"]
+        Perf --> BinPkg["产物打包\n静态库 + include/external/ 头文件"]
     end
 
     subgraph CD["CD（合并到 main）"]
@@ -1095,19 +1158,29 @@ option(AGENTFLOW_ENABLE_COVERAGE "Enable code coverage"   OFF)
 
 ```
 libagentflow（静态/动态库）
-├── agentflow_core        → src/core/
-├── agentflow_runtime     → src/runtime/
-├── agentflow_actor       → src/actor/  (含 protoactor_impl, stub_impl)
-├── agentflow_network     → src/network/
-├── agentflow_storage     → src/storage/
-├── agentflow_serialization → src/serialization/
-└── agentflow_utils       → src/utils/
+├── agentflow_core           → src/core/
+├── agentflow_agent          → src/agent/
+├── agentflow_workflow       → src/workflow/（dsl/, edge/, node/）
+├── agentflow_runtime        → src/runtime/（scheduler/, communication/, storage/, actor/）
+├── agentflow_actor          → src/actor/
+├── agentflow_dsl            → src/dsl/
+├── agentflow_event          → src/event/
+├── agentflow_network        → src/network/
+├── agentflow_storage        → src/storage/
+├── agentflow_serialization  → src/serialization/
+├── agentflow_utils          → src/utils/
+└── agentflow_vendor_adapters（条件编译）
+    ├── actor_adapter        → vendor/adapter/actor/  (protoactor_impl, stub_impl)
+    ├── dsl_adapter          → vendor/adapter/dsl/    (json_adapter_rapidjson, json_adapter_stub)
+    ├── event_adapter        → vendor/adapter/event/ + vendor/adapter/eventloop/  (libevent_impl)
+    ├── network_adapter      → vendor/adapter/network/
+    └── serialization_adapter→ vendor/adapter/serialization/
 
 可执行目标：
-├── example_basic          → examples/
-├── example_control_flow   → examples/
-├── agentflow_tests        → tests/unit/
-└── agentflow_integration  → tests/integration/
+├── example_basic            → examples/
+├── example_control_flow     → examples/
+├── agentflow_unit_tests     → tests/unit/cpp/
+└── agentflow_perf_tests     → tests/functional/cpp/
 ```
 
 #### 完整构建命令参考
@@ -1422,7 +1495,7 @@ graph LR
 | DataBus 容量 | `get_used_capacity() / capacity < 0.9` | 防止内存溢出 |
 | HotReload 状态 | `HotReloadStatus != ERROR` | 文件监控正常 |
 
-#### 监控指标层次结构图（待更新）
+#### 监控指标层次结构图
 
 ```
 监控指标层次
@@ -1470,7 +1543,7 @@ graph LR
 | 动态库 | `libagentflow.so/.dylib` | `libagentflow-{semver}-{os}-{arch}.{so/dylib}` | 全量编译单元 |
 | 运行配置文件 | `config.json` 归档 | `agentflow-rt-{semver}.tar.gz` | 与库打包到一起 |
 | 公开头文件 | `.h` 归档 | `agentflow-dev-{semver}.tar.gz` | `include/external/`，开发依赖包 |
-| CMake 配置包 | AgentFlowConfig.cmake | `agentflow-dev-{semver}.tar.gz` | 开发依赖包 |
+| CMake 配置包 | AgentFlowConfig.cmake | `agentflow-dev-{semver}.tar.gz` | 开发依赖包（`build/cmake/`） |
 
 **命名规范示例**：（已更新）
 ```
@@ -1480,7 +1553,7 @@ agentflow-dev-0.1.0.tar.gz
 agentflow-rt-0.1.0.tar.gz
 ```
 
-#### 完整交付物目录结构（待更新）
+#### 完整交付物目录结构
 
 ```
 agentflow-0.1.0-linux-x86_64/
@@ -1492,15 +1565,23 @@ agentflow-0.1.0-linux-x86_64/
 │   └── cmake/                   # CMake Package 文件
 │       ├── AgentFlowConfig.cmake
 │       └── AgentFlowConfigVersion.cmake
-├── include/                     # 公开头文件
-│   └── agentflow/
-│       ├── core/                # agent.h / workflow.h / node.h / edge.h
-│       ├── runtime/             # agent_runtime.h / databus.h / hot_reload.h
-│       └── agentflow.h          # 总入口
+├── include/                     # 公开头文件（来自 include/external/）
+│   ├── common.h                 # 公共类型（DataVariant, AgentId, 枚举等）
+│   ├── core/                    # agent.h / workflow.h / node.h / edge.h
+│   ├── runtime/                 # agent_runtime.h / databus.h / hot_reload.h 等
+│   ├── actor/                   # actor_system.h / node_actor.h 等
+│   ├── dsl/                     # json_adapter.h / workflow_parser.h
+│   ├── event/                   # eventloop_adapter.h / adapter_factory.h
+│   ├── network/                 # websocket_adapter.h / ssl_adapter.h 等
+│   ├── serialization/           # proto_adapter.h / adapter_factory.h
+│   ├── storage/                 # storage.h / storage_manager.h 等
+│   ├── utils/                   # logger.h / thread_pool.h
+│   ├── agent/                   # Agent 实例化外部接口
+│   └── workflow/                # Workflow/Node/Edge 定制开发接口
 ├── configs/                     # 默认配置示例
 │   └── default.yaml
 ├── docs/                        # 文档（可选）
-│   ├── architecture.md
+│   ├── ARCHITECTURE.md
 │   └── api/                     # Doxygen 生成（规划）
 └── README.md
 ```
@@ -1860,4 +1941,4 @@ Node 重试：
 | 版本 | 日期 | 作者 | 变更说明 |
 |------|------|------|---------|
 | v1.0 | 2026-02-17 | @DanielKernel | 初始架构文档 |
-| v2.0 | 2026-02-18 | @DanielKernel | 重构为 4+1 视图方法论，补充 Mermaid 图、ADR、横切关注点、完整技术选型 |
+| v2.1 | 2026-02-19 | @DanielKernel | 同步目录结构重构：include/external/ + include/internal/ 替代 include/agentflow/；vendor/adapter/ 适配器独立；tests/ 重组为 unit/ + functional/；更新逻辑组件路径映射、构建目标结构、交付物目录 |
