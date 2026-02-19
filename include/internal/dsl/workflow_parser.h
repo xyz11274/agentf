@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-#include "dsl/json_adapter.h"
+#include "workflow/json_adapter.h"
 #include "agent/agent.h"
 #include "workflow/edge.h"
 #include "workflow/node.h"

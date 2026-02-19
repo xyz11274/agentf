@@ -9,10 +9,10 @@
 #include "utils/logger.h"
 #include "agent/agent.h"
 #include "workflow/workflow.h"
-#include "storage/agent_storage.h"
-#include "storage/storage.h"
-#include "storage/storage_manager.h"
-#include "storage/workflow_storage.h"
+#include "runtime/storage/agent_storage.h"
+#include "runtime/storage/storage.h"
+#include "runtime/storage/storage_manager.h"
+#include "workflow/workflow_storage.h"
 
 using namespace agentflow;
 

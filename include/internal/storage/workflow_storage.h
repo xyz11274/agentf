@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "workflow/workflow.h"
-#include "storage/storage.h"
+#include "runtime/storage/storage.h"
 
 namespace agentflow {
 namespace storage {

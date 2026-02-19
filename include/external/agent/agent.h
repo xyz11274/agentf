@@ -6,7 +6,7 @@
 #include <queue>
 #include <vector>
 
-#include "common.h"
+#include "agent/common.h"
 #include "workflow/workflow.h"
 
 namespace agentflow {

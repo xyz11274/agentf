@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "network/websocket_adapter.h"
+#include "runtime/network/websocket_adapter.h"
 
 #ifdef AGENTFLOW_WITH_LIBWEBSOCKETS
 #include <libwebsockets.h>

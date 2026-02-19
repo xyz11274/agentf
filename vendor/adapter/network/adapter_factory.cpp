@@ -3,7 +3,7 @@
 //
 // Network adapter factory implementations
 
-#include "network/adapter_factory.h"
+#include "runtime/network/adapter_factory.h"
 
 #include "adapter/network/openssl_impl.h"
 #include "adapter/network/libwebsockets_impl.h"

@@ -971,11 +971,13 @@ AgentFlow/
 
 #### 逻辑组件 → 代码路径映射图
 
+> 说明：当前对外头文件仅保留 `include/external/agent` 与 `include/external/node`；其余能力头文件均内收至 `include/internal`。
+
 | 逻辑组件 | 头文件路径 | 实现路径 | 关键类/接口 |
 |----------|-----------|----------|-------------|
 | 开发编排框架（核心实体） | `include/external/core/` | `src/core/` | `Agent`, `Workflow`, `Node`, `Edge` |
-| Agent 外部接口 | `include/external/agent/` | `src/agent/` | Agent 实例生命周期管理 |
-| Workflow 外部接口 | `include/external/workflow/` | `src/workflow/` | Workflow/Node/Edge 定制开发 |
+| Agent 外部接口 | `include/external/agent/` | `src/agent/` | Agent 实例生命周期管理（唯一对外 Agent 接口） |
+| Node 外部接口 | `include/external/node/` | `src/workflow/node/` | Node 定制开发接口（控制面/运行面） |
 | 三层调度引擎 | `include/external/runtime/agent_runtime.h` | `src/runtime/scheduler/agent_runtime.cpp` | `AgentRuntime` |
 | 控制流管理器 | `include/external/runtime/control_flow.h` | `src/runtime/scheduler/control_flow.cpp` | `ControlFlowManager`, `ConditionExpression` |
 | 高速数据总线 | `include/external/runtime/databus.h` | `src/runtime/communication/databus.cpp` | `HighSpeedDataBus` |
@@ -998,7 +1000,7 @@ AgentFlow/
 | 网络适配器实现 | `include/internal/adapter/network/` | `vendor/adapter/network/` | `LibwebsocketsImpl`, `OpenSSLImpl` |
 | 序列化适配器实现 | `include/internal/adapter/serialization/` | `vendor/adapter/serialization/` | `ProtobufImpl` |
 | 私有网络协议 | `include/internal/network/` | `src/network/private_protocol.cpp` | `PrivateProtocol` |
-| 测试工具 | `include/internal/testing/` | `tests/unit/lib/` | `PerformanceMetrics`, `HotReloadTest` |
+| 测试工具 | `include/internal/testing/` | `tests/unit/workflow/lib/` | `PerformanceMetrics`, `HotReloadTest` |
 
 #### 命名规范
 
@@ -1115,7 +1117,7 @@ classDiagram
 
 | 层次 | 范围 | 覆盖目标 | 工具 |
 |------|------|---------|------|
-| 单元测试 | Node/Agent/Workflow/DataBus/Event 各模块（`tests/unit/cpp/`） | 行覆盖率 ≥ 80% | GoogleTest |
+| 单元测试 | Node/Agent/Workflow/DataBus/Event 各模块（`tests/unit/workflow/cpp/`） | 行覆盖率 ≥ 80% | GoogleTest |
 | 功能测试 | 性能基准、集成场景（`tests/functional/cpp/` + `tests/functional/scripts/`） | 关键路径全覆盖 | GoogleTest / Shell |
 | 端到端测试（规划） | 完整 Agent 执行场景 | 5 个核心用例 | GoogleTest / Shell |
 
@@ -1124,9 +1126,9 @@ graph LR
     subgraph CI["CI 流水线（每次 Push / PR）"]
         Fmt["代码格式检查\nclang-format --dry-run"] --> Tidy["静态分析\nclang-tidy"]
         Tidy --> Build["编译构建\nCMake + make\nsrc/ + vendor/adapter/"]
-        Build --> Unit["单元测试\nGoogleTest\ntests/unit/cpp/"]
+        Build --> Unit["单元测试\nGoogleTest\ntests/unit/workflow/cpp/"]
         Unit --> Perf["功能/性能测试\ntests/functional/"]
-        Perf --> BinPkg["产物打包\n静态库 + include/external/ 头文件"]
+        Perf --> BinPkg["产物打包\n静态库 + include/external/{agent,node} 头文件"]
     end
 
     subgraph CD["CD（合并到 main）"]
@@ -1179,7 +1181,7 @@ libagentflow（静态/动态库）
 可执行目标：
 ├── example_basic            → examples/
 ├── example_control_flow     → examples/
-├── agentflow_unit_tests     → tests/unit/cpp/
+├── agentflow_unit_tests     → tests/unit/workflow/cpp/
 └── agentflow_perf_tests     → tests/functional/cpp/
 ```
 
@@ -1542,7 +1544,7 @@ graph LR
 | 静态库 | `libagentflow.a` | `libagentflow-{semver}-{os}-{arch}.a` | 全量编译单元 |
 | 动态库 | `libagentflow.so/.dylib` | `libagentflow-{semver}-{os}-{arch}.{so/dylib}` | 全量编译单元 |
 | 运行配置文件 | `config.json` 归档 | `agentflow-rt-{semver}.tar.gz` | 与库打包到一起 |
-| 公开头文件 | `.h` 归档 | `agentflow-dev-{semver}.tar.gz` | `include/external/`，开发依赖包 |
+| 公开头文件 | `.h` 归档 | `agentflow-dev-{semver}.tar.gz` | `include/external/{agent,node}`，开发依赖包 |
 | CMake 配置包 | AgentFlowConfig.cmake | `agentflow-dev-{semver}.tar.gz` | 开发依赖包（`build/cmake/`） |
 
 **命名规范示例**：（已更新）
@@ -1565,7 +1567,7 @@ agentflow-0.1.0-linux-x86_64/
 │   └── cmake/                   # CMake Package 文件
 │       ├── AgentFlowConfig.cmake
 │       └── AgentFlowConfigVersion.cmake
-├── include/                     # 公开头文件（来自 include/external/）
+├── include/                     # 公开头文件（来自 include/external/{agent,node}）
 │   ├── common.h                 # 公共类型（DataVariant, AgentId, 枚举等）
 │   ├── core/                    # agent.h / workflow.h / node.h / edge.h
 │   ├── runtime/                 # agent_runtime.h / databus.h / hot_reload.h 等

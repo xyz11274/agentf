@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-#include "dsl/workflow_parser.h"
+#include "workflow/workflow_parser.h"
 #include "workflow/edge.h"
 #include "workflow/node.h"
 #include "workflow/workflow.h"

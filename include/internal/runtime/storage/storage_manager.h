@@ -7,9 +7,9 @@
 
 #include <memory>
 
-#include "storage/agent_storage.h"
-#include "storage/storage.h"
-#include "storage/workflow_storage.h"
+#include "runtime/storage/agent_storage.h"
+#include "runtime/storage/storage.h"
+#include "workflow/workflow_storage.h"
 
 namespace agentflow {
 namespace storage {

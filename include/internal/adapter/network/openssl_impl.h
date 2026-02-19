@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "network/ssl_adapter.h"
+#include "runtime/network/ssl_adapter.h"
 
 #ifdef AGENTFLOW_WITH_OPENSSL
 #include <openssl/err.h>

@@ -8,8 +8,8 @@
 #include <memory>
 #include <string>
 
-#include "network/ssl_adapter.h"
-#include "network/websocket_adapter.h"
+#include "runtime/network/ssl_adapter.h"
+#include "runtime/network/websocket_adapter.h"
 
 namespace agentflow {
 namespace network {
