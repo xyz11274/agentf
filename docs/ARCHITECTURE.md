@@ -427,17 +427,12 @@ sequenceDiagram
 
 | 层次 | 命名空间 | 职责 |
 |------|----------|------|
-| 交互层 | `agentflow::gateway` | 消息出入口网关，支持WebSocket、SSL、私有协议编解码 |
-| 开发编排框架 | `agentflow::framework` | Agent、Workflow、Node、Edge 定义与装配 |
+| 开发编排框架 | `agentflow::framework` | Agent管理、Node定制 |
 | 运行框架 | `agentflow::runtime` | AgentRuntime 三层调度、DataBus、ControlFlow、HotReload |
 | 基础设施层 | `agentflow::utils` | OMAdapter（log等对接）、ThreadPool、ActorFramework、Storage、Protobuf等 |
 
 ```mermaid
 graph TD
-    subgraph SDK["接入层"]
-        DevSDK["C++ Developer SDK"]
-        WSNet["WebSocket / SSL\n(libwebsockets + OpenSSL)"]
-    end
 
     subgraph DevFW["开发编排框架 (agentflow::framework)"]
         AgentCore["Agent\nLifecycle + WorkflowMgmt"]
