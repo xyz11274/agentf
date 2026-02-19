@@ -357,18 +357,18 @@ include_directories(${AGENTFLOW_INCLUDE_DIR}/internal)
 
 # Agent sources
 set(AGENTFLOW_AGENT_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/core/agent.cpp
+    ${AGENTFLOW_SOURCE_DIR}/agent/agent.cpp
 )
 
 # Workflow sources (includes node, edge, dsl)
 set(AGENTFLOW_WORKFLOW_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/core/workflow.cpp
+    ${AGENTFLOW_SOURCE_DIR}/workflow/workflow.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/workflow_actor.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/workflow_storage.cpp
-    ${AGENTFLOW_SOURCE_DIR}/core/node.cpp
+    ${AGENTFLOW_SOURCE_DIR}/workflow/node.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/node/node_actor.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/node/code_loader.cpp
-    ${AGENTFLOW_SOURCE_DIR}/core/edge.cpp
+    ${AGENTFLOW_SOURCE_DIR}/workflow/edge.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/dsl/workflow_parser.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/dsl/json_adapter_factory.cpp
 )

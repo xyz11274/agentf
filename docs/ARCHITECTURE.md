@@ -854,11 +854,8 @@ AgentFlow/
 ├── include/                        # 头文件目录
 │   ├── external/                   # 公开 API 头文件（随库发布，外部调用方使用）
 │   │   ├── common.h                # 公共类型定义（DataVariant, AgentId, 枚举等）
-│   │   ├── core/                   # 开发编排框架核心接口
-│   │   │   ├── agent.h             # Agent 实体：生命周期 + Workflow 管理
-│   │   │   ├── workflow.h          # Workflow 实体：DAG + ControlFlow 集成
-│   │   │   ├── node.h              # Node 实体：多模式执行 + 热重载
-│   │   │   └── edge.h              # Edge 实体：数据传递 + 条件表达式
+│   │   ├── agent/                  # Agent 外部接口（agent.h）
+│   │   └── workflow/               # Workflow/Node/Edge 外部接口（workflow.h/node.h/edge.h）
 │   │   ├── runtime/                # 运行框架公开接口
 │   │   │   ├── agent_runtime.h     # 三层 Master-Worker 调度引擎
 │   │   │   ├── databus.h           # HighSpeedDataBus：KV + 订阅通知
@@ -919,23 +916,18 @@ AgentFlow/
 │       ├── serialization/          # 序列化内部实现头文件
 │       └── testing/                # 测试工具（performance_metrics.h 等）
 ├── src/                            # 核心业务源代码
-│   ├── core/                       # 开发编排框架核心实现（Agent/Workflow/Node/Edge）
-│   ├── agent/                      # Agent 实例管理实现
+│   ├── agent/                      # Agent 实例管理实现（agent.cpp）
 │   ├── workflow/                   # Workflow 管理实现
 │   │   ├── dsl/                    # DSL 解析实现
-│   │   ├── edge/                   # Edge 实现
-│   │   └── node/                   # Node 实现（code_loader, node_actor 等）
+│   │   ├── edge/                   # Edge 子模块实现
+│   │   └── node/                   # Node 子模块实现（code_loader, node_actor 等）
 │   ├── runtime/                    # 运行时实现
 │   │   ├── scheduler/              # 调度器（agent_runtime, control_flow）
 │   │   ├── communication/          # 通信（databus, hot_reload, local_channel 等）
 │   │   ├── storage/                # 存储（agent_storage, storage_manager 等）
-│   │   └── actor/                  # Actor 系统运行时（actor_system, node_actor 等）
-│   ├── actor/                      # Actor 系统实现（ask_pattern, message_serializer 等）
-│   ├── dsl/                        # DSL 适配器工厂实现
-│   ├── event/                      # 事件循环适配器工厂实现
-│   ├── network/                    # 网络层实现（private_protocol, request, response）
-│   ├── serialization/              # 序列化实现
-│   ├── storage/                    # 存储实现
+│   │   ├── actor/                  # Actor 系统运行时（actor_system 等）
+│   │   └── network/                # 运行时网络（private_protocol, request, response）
+│   ├── vendor/                     # 三方适配实现（actor/dsl/event/network/serialization/storage）
 │   └── utils/                      # 工具实现（logger, thread_pool）
 ├── vendor/                         # 三方依赖相关内容
 │   ├── vendor.conf                 # 三方依赖下载配置
@@ -962,10 +954,6 @@ AgentFlow/
 │       ├── cpp/                    # 功能测试代码（test_performance.cpp 等）
 │       └── scripts/                # 功能测试脚本
 ├── examples/                       # 示例程序
-├── configs/                        # 配置文件模板
-│   ├── default.yaml                # 默认配置
-│   ├── logging.yaml                # 日志配置
-│   └── server.yaml                 # 服务端配置
 └── docs/                           # 项目文档
 ```
 
@@ -975,7 +963,7 @@ AgentFlow/
 
 | 逻辑组件 | 头文件路径 | 实现路径 | 关键类/接口 |
 |----------|-----------|----------|-------------|
-| 开发编排框架（核心实体） | `include/external/core/` | `src/core/` | `Agent`, `Workflow`, `Node`, `Edge` |
+| 开发编排框架（核心实体） | `include/external/{agent,workflow}/` | `src/{agent,workflow}/` | `Agent`, `Workflow`, `Node`, `Edge` |
 | Agent 外部接口 | `include/external/agent/` | `src/agent/` | Agent 实例生命周期管理（唯一对外 Agent 接口） |
 | Workflow 外部接口 | `include/external/workflow/` | `src/workflow/` | Workflow/Node/Edge 定制开发外部接口 |
 | 三层调度引擎 | `include/external/runtime/agent_runtime.h` | `src/runtime/scheduler/agent_runtime.cpp` | `AgentRuntime` |
@@ -1160,16 +1148,10 @@ option(AGENTFLOW_ENABLE_COVERAGE "Enable code coverage"   OFF)
 
 ```
 libagentflow（静态/动态库）
-├── agentflow_core           → src/core/
 ├── agentflow_agent          → src/agent/
-├── agentflow_workflow       → src/workflow/（dsl/, edge/, node/）
-├── agentflow_runtime        → src/runtime/（scheduler/, communication/, storage/, actor/）
-├── agentflow_actor          → src/actor/
-├── agentflow_dsl            → src/dsl/
-├── agentflow_event          → src/event/
-├── agentflow_network        → src/network/
-├── agentflow_storage        → src/storage/
-├── agentflow_serialization  → src/serialization/
+├── agentflow_workflow       → src/workflow/（workflow.cpp, node.cpp, edge.cpp, dsl/, node/, edge/）
+├── agentflow_runtime        → src/runtime/（scheduler/, communication/, storage/, actor/, network/）
+├── agentflow_vendor         → src/vendor/（actor/, dsl/, event/, network/, serialization/, storage/）
 ├── agentflow_utils          → src/utils/
 └── agentflow_vendor_adapters（条件编译）
     ├── actor_adapter        → vendor/adapter/actor/  (protoactor_impl, stub_impl)
@@ -1569,19 +1551,8 @@ agentflow-0.1.0-linux-x86_64/
 │       └── AgentFlowConfigVersion.cmake
 ├── include/                     # 公开头文件（来自 include/external/{agent,node}）
 │   ├── common.h                 # 公共类型（DataVariant, AgentId, 枚举等）
-│   ├── core/                    # agent.h / workflow.h / node.h / edge.h
-│   ├── runtime/                 # agent_runtime.h / databus.h / hot_reload.h 等
-│   ├── actor/                   # actor_system.h / node_actor.h 等
-│   ├── dsl/                     # json_adapter.h / workflow_parser.h
-│   ├── event/                   # eventloop_adapter.h / adapter_factory.h
-│   ├── network/                 # websocket_adapter.h / ssl_adapter.h 等
-│   ├── serialization/           # proto_adapter.h / adapter_factory.h
-│   ├── storage/                 # storage.h / storage_manager.h 等
-│   ├── utils/                   # logger.h / thread_pool.h
-│   ├── agent/                   # Agent 实例化外部接口
-│   └── workflow/                # Workflow/Node/Edge 定制开发接口
-├── configs/                     # 默认配置示例
-│   └── default.yaml
+│   ├── agent/                   # Agent 实例化外部接口（agent.h）
+│   └── workflow/                # Workflow/Node/Edge 定制开发接口（workflow.h/node.h/edge.h）
 ├── docs/                        # 文档（可选）
 │   ├── ARCHITECTURE.md
 │   └── api/                     # Doxygen 生成（规划）
@@ -1597,7 +1568,7 @@ agentflow-0.1.0-linux-x86_64/
 
 | 环境 | 分发方式 | 配置来源 | 敏感信息管理 |
 |------|---------|---------|------------|
-| 开发 | 本地 `./build.sh build` | `configs/default.yaml` | 无敏感信息（嵌入库） |
+| 开发 | 本地 `./build.sh build` | 宿主应用配置（环境变量/配置中心） | 无敏感信息（嵌入库） |
 | CI | GitHub Actions artifact | 环境变量注入 | GitHub Secrets |
 | 生产 | CMake 安装 / 包管理器（规划） | 宿主应用配置 | 宿主应用负责 |
 

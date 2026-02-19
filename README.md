@@ -97,12 +97,10 @@ agent->start();
 AgentFlow/
 ├── include/             # 头文件
 │   ├── external/        # 公共 API（供外部调用方使用）
-│   │   ├── core/        # Agent、Workflow、Node、Edge
-│   │   ├── runtime/     # 运行时引擎、数据总线、控制流
-│   │   ├── actor/       # Actor 系统
-│   │   └── ...
+│   │   ├── agent/       # Agent 外部接口
+│   │   └── workflow/    # Workflow/Node/Edge 外部接口
 │   └── internal/        # 内部实现（仅供内部系统使用）
-├── src/                 # 核心业务源代码
+├── src/                 # 核心业务源代码（agent/workflow/runtime/vendor/utils）
 ├── vendor/              # 三方依赖和适配器
 │   ├── vendor.sh        # 依赖下载脚本
 │   └── adapter/         # 三方适配器实现
@@ -111,7 +109,6 @@ AgentFlow/
 │   └── functional/      # 功能测试
 ├── examples/            # 示例
 ├── docs/                # 文档
-├── configs/             # 配置文件
 ├── proto/               # Protobuf 定义
 └── build/               # 构建输出和CMake配置
 ```
@@ -172,4 +169,3 @@ AgentFlow/
 **维护者**: @DanielKernel
 **文档最后更新**: 2026-02-18
 **快速设置**: `./build.sh build && ./build.sh test` 验证所有组件是否正确安装
-

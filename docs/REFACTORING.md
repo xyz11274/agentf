@@ -25,7 +25,6 @@ AgentFlow/
 │   └── functional/     # 功能测试
 ├── examples/           # 示例代码
 ├── docs/               # 项目文档
-├── configs/            # 配置文件
 └── proto/              # Protobuf 定义
 ```
 
@@ -121,23 +120,21 @@ vendor/                 # 三方依赖相关实现
 **目录结构：**
 ```
 src/
-├── agent/              # Agent 实例管理实现（生命周期、会话、消息、任务）
+├── agent/              # Agent 实例管理实现（agent.cpp）
 ├── workflow/           # Workflow 管理实现
 │   ├── dsl/            # DSL 解析实现
-│   ├── edge/           # Edge 实现
-│   └── node/           # Node 实现（code_loader, node_actor 等）
+│   ├── edge/           # Edge 子模块实现
+│   ├── node/           # Node 子模块实现（code_loader, node_actor 等）
+│   ├── workflow.cpp    # Workflow 核心实现
+│   ├── node.cpp        # Node 核心实现
+│   └── edge.cpp        # Edge 核心实现
 ├── runtime/            # 运行时实现
 │   ├── scheduler/      # 调度器（agent_runtime, control_flow）
 │   ├── communication/  # 通信（databus, hot_reload, local_channel, zero_copy_databus）
 │   ├── storage/        # 存储（agent_storage, storage_manager）
 │   ├── actor/          # Actor 系统运行时（actor_system, node_actor 等）
 │   └── network/        # 运行时网络（private_protocol, request, response）
-├── actor/              # Actor 系统实现（ask_pattern, message_serializer 等）
-├── dsl/                # DSL 适配器工厂实现
-├── event/              # 事件循环适配器工厂实现
-├── network/            # 网络层实现（private_protocol, request, response）
-├── serialization/      # 序列化实现
-├── storage/            # 存储实现
+├── vendor/             # 三方适配实现（actor/dsl/event/network/serialization/storage）
 └── utils/              # 工具实现（logger, thread_pool）
 ```
 
@@ -226,16 +223,10 @@ include_directories(${CMAKE_SOURCE_DIR}/include/internal)
 ```cmake
 # 核心业务代码
 set(AGENTFLOW_SOURCES
-    ${AGENTFLOW_SOURCE_DIR}/core/...
     ${AGENTFLOW_SOURCE_DIR}/agent/...
     ${AGENTFLOW_SOURCE_DIR}/workflow/...
     ${AGENTFLOW_SOURCE_DIR}/runtime/...
-    ${AGENTFLOW_SOURCE_DIR}/actor/...
-    ${AGENTFLOW_SOURCE_DIR}/dsl/...
-    ${AGENTFLOW_SOURCE_DIR}/event/...
-    ${AGENTFLOW_SOURCE_DIR}/network/...
-    ${AGENTFLOW_SOURCE_DIR}/serialization/...
-    ${AGENTFLOW_SOURCE_DIR}/storage/...
+    ${AGENTFLOW_SOURCE_DIR}/vendor/...
     ${AGENTFLOW_SOURCE_DIR}/utils/...
 )
 

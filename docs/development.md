@@ -89,7 +89,6 @@ AgentFlow/
 ├── examples/                  # 示例程序
 │   └── dsl/                   # DSL 示例
 ├── docs/                      # 文档
-├── configs/                   # 配置文件
 ├── proto/                     # Protobuf 定义
 ├── scripts/                   # 构建脚本
 │   ├── docker/                # Docker 配置
