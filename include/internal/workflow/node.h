@@ -6,7 +6,6 @@
 
 #include "agent/common.h"
 #include "runtime/code_loader.h"
-#include "runtime/communication/hot_reload.h"
 
 namespace agentflow {
 namespace framework {

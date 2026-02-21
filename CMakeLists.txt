@@ -205,13 +205,13 @@ include_directories(${AGENTFLOW_INCLUDE_DIR}/internal)
 # Agent sources
 set(AGENTFLOW_AGENT_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/agent/agent.cpp
+    ${AGENTFLOW_SOURCE_DIR}/agent/agent_actor.cpp
 )
 
 # Workflow sources (includes node, edge, dsl)
 set(AGENTFLOW_WORKFLOW_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/workflow/workflow.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/workflow_actor.cpp
-    ${AGENTFLOW_SOURCE_DIR}/workflow/dsl/workflow_storage.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/node/node.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/node/node_actor.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/node/code_loader.cpp
@@ -223,21 +223,14 @@ set(AGENTFLOW_WORKFLOW_SOURCES
 # Runtime sources
 set(AGENTFLOW_RUNTIME_SOURCES
     # Actor subsystem
-    ${AGENTFLOW_SOURCE_DIR}/runtime/actor/actor_system.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/actor/adapter_factory.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/runtime_actor.cpp
     # Scheduler
-    ${AGENTFLOW_SOURCE_DIR}/runtime/scheduler/agent_runtime.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/scheduler/control_flow.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/agent_runtime.cpp
     ${AGENTFLOW_TEST_DIR}/unit/workflow/lib/performance_metrics.cpp
-    # Communication
-    ${AGENTFLOW_SOURCE_DIR}/runtime/communication/databus.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/communication/zero_copy_databus.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/communication/local_channel.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/communication/hot_reload.cpp
-    # Storage
-    ${AGENTFLOW_SOURCE_DIR}/runtime/storage/storage.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/storage/storage_manager.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/storage/agent_storage.cpp
+    # Databus (Communication)
+    ${AGENTFLOW_SOURCE_DIR}/runtime/databus/databus.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/databus/local_databus.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/databus/remote_databus.cpp
     # Network
     ${AGENTFLOW_SOURCE_DIR}/runtime/network/private_protocol.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/network/request.cpp
@@ -251,11 +244,13 @@ set(AGENTFLOW_RUNTIME_SOURCES
 set(AGENTFLOW_UTILS_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/utils/logger.cpp
     ${AGENTFLOW_SOURCE_DIR}/utils/thread_pool.cpp
+    ${AGENTFLOW_SOURCE_DIR}/utils/file_storage.cpp
 )
 
 # Actor adapter sources
 set(AGENTFLOW_ACTOR_ADAPTER_SOURCES
     ${AGENTFLOW_VENDOR_DIR}/adapter/actor/stub_impl.cpp
+    ${AGENTFLOW_VENDOR_DIR}/adapter/actor/adapter_factory.cpp
 )
 
 # Include Protoactor implementation and additional sources only if available
@@ -347,9 +342,7 @@ target_link_libraries(example_p1_features PRIVATE agentflow)
 add_executable(example_storage ${AGENTFLOW_EXAMPLE_DIR}/storage_example.cpp)
 target_link_libraries(example_storage PRIVATE agentflow)
 
-# Control flow example
-add_executable(example_control_flow ${AGENTFLOW_EXAMPLE_DIR}/control_flow_example.cpp)
-target_link_libraries(example_control_flow PRIVATE agentflow)
+
 
 # ============================================================================
 # Tests

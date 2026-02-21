@@ -52,7 +52,9 @@ struct ParseResult {
   std::vector<ParseError>              errors;
   std::vector<std::string>             warnings;
 
-  bool        is_valid() const { return errors.empty() && workflow != nullptr; }
+  bool        is_valid() const { 
+    return errors.empty() && (workflow != nullptr || agent != nullptr); 
+  }
   std::string get_error_summary() const;
 };
 
@@ -167,7 +169,7 @@ private:
   // Validation methods
   bool validate_workflow_structure(std::shared_ptr<framework::Workflow> workflow,
                                    ParseResult&                         result);
-  bool validate_node_ids_unique(const ParseResult& result);
+  bool validate_node_ids_unique(ParseResult& result);
   bool validate_edge_references(std::shared_ptr<framework::Workflow> workflow, ParseResult& result);
 
   // Member variables

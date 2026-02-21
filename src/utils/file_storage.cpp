@@ -3,7 +3,7 @@
 //
 // Storage implementation using file-based backend
 
-#include "runtime/storage/storage.h"
+#include "utils/file_storage.h"
 
 #include <algorithm>
 #include <cstring>
@@ -28,6 +28,7 @@
 #endif
 
 namespace agentflow {
+namespace utils {
 namespace storage {
 
 namespace {
@@ -446,4 +447,5 @@ std::unique_ptr<IVersionStorage> create_versioned_storage(const StorageConfig& c
 }
 
 }  // namespace storage
+}  // namespace utils
 }  // namespace agentflow

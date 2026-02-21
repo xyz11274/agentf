@@ -2,7 +2,7 @@
 #include "agent/agent.h"
 #include "workflow/node.h"
 #include "workflow/workflow.h"
-#include "runtime/scheduler/agent_runtime.h"
+#include "runtime/agent_runtime.h"
 
 using namespace agentflow;
 

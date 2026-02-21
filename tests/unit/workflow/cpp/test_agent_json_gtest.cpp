@@ -8,7 +8,8 @@
 #include "workflow/dsl/workflow_parser.h"
 #include "agent/agent.h"
 #include "workflow/workflow.h"
-#include "runtime/communication/databus.h"
+#include "runtime/databus/databus.h"
+
 
 namespace agentflow {
 namespace tests {

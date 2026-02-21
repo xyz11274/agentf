@@ -13,6 +13,7 @@
 #include <vector>
 
 namespace agentflow {
+namespace utils {
 namespace storage {
 
 /**
@@ -169,4 +170,5 @@ struct StorageConfig {
 std::unique_ptr<IVersionStorage> create_versioned_storage(const StorageConfig& config);
 
 }  // namespace storage
+}  // namespace utils
 }  // namespace agentflow

@@ -11,7 +11,6 @@
 #include "utils/logger.h"
 #include "workflow/node.h"
 #include "runtime/code_loader.h"
-#include "runtime/communication/hot_reload.h"
 
 using namespace agentflow;
 using namespace agentflow::runtime;
@@ -158,12 +157,10 @@ TEST_F(HotReloadTest, ShellScript_BasicExecution) {
 }
 
 TEST_F(HotReloadTest, ShellScript_HotReload) {
-  auto& manager = global_hot_reload_manager();
-  (void)manager;
   auto& loader  = global_code_loader();
 
   std::string test_file = create_shell_script("shell_hotreload.sh", "echo 'Version 1.0'");
-  manager.start_watching(test_file);
+  loader.start_watching(test_file);
   loader.reload_code(test_file);
   wait_for_file_change(200);
 
@@ -176,7 +173,7 @@ TEST_F(HotReloadTest, ShellScript_HotReload) {
 
   // Modify file to version 2
   modify_file(test_file, "#!/bin/bash\nset -e\necho 'Version 2.0'");
-  manager.reload(test_file);
+  loader.reload_code(test_file);
   wait_for_file_change(500);
 
   // Execute version 2
@@ -186,8 +183,11 @@ TEST_F(HotReloadTest, ShellScript_HotReload) {
   EXPECT_TRUE(result2.stdout.find("Version 1.0") == std::string::npos);
 
   // Verify multiple versions exist
-  auto versions = manager.get_all_versions(test_file);
+  auto versions = loader.get_all_versions(test_file);
   EXPECT_GE(versions.size(), 2);
+  
+  // Cleanup: stop watching the file
+  loader.stop_watching(test_file);
 }
 
 TEST_F(HotReloadTest, ShellScript_WithArguments) {
@@ -269,12 +269,11 @@ TEST_F(HotReloadTest, PythonScript_HotReload) {
   if(!python_available()) {
     GTEST_SKIP() << "Python interpreter not available";
   }
-  auto& manager = global_hot_reload_manager();
   auto& loader  = global_code_loader();
 
   std::string test_file =
       create_python_script("python_hotreload.py", "print('Python Version 1.0')");
-  manager.start_watching(test_file);
+  loader.start_watching(test_file);
   loader.reload_code(test_file);
   wait_for_file_change(200);
 
@@ -291,13 +290,16 @@ TEST_F(HotReloadTest, PythonScript_HotReload) {
               "import sys\n"
               "import json\n"
               "print('Python Version 2.0')");
-  manager.reload(test_file);
+  loader.reload_code(test_file);
   wait_for_file_change(500);
 
   // Execute version 2
   auto result2 = loader.execute_python_script(test_file, {}, config);
   EXPECT_TRUE(result2.success);
   EXPECT_TRUE(result2.stdout.find("Python Version 2.0") != std::string::npos);
+  
+  // Cleanup: stop watching the file
+  loader.stop_watching(test_file);
 }
 
 TEST_F(HotReloadTest, PythonScript_WithArguments) {
@@ -389,88 +391,100 @@ TEST_F(HotReloadTest, JarFile_Execution) {
 // ============================================================================
 
 TEST_F(HotReloadTest, VersionManager_CreateMultipleVersions) {
-  auto&           manager = global_hot_reload_manager();
+  auto&           loader = global_code_loader();
   HotReloadConfig config;
   config.max_versions = 5;
-  manager.set_config(config);
+  loader.set_hot_reload_config(config);
 
   std::string test_file = create_shell_script("version_test.sh", "echo 'V1'");
 
   for(int i = 2; i <= 5; ++i) {
-    manager.start_watching(test_file);
+    loader.start_watching(test_file);
     wait_for_file_change(100);
     modify_file(test_file, "#!/bin/bash\nset -e\necho 'V" + std::to_string(i) + "'");
-    manager.reload(test_file);
+    loader.reload_code(test_file);
     wait_for_file_change(200);
   }
 
-  auto versions = manager.get_all_versions(test_file);
+  auto versions = loader.get_all_versions(test_file);
   EXPECT_EQ(versions.size(), 5);
 
-  auto active = manager.get_current_version(test_file);
+  auto active = loader.get_current_version(test_file);
   ASSERT_NE(active, nullptr);
   EXPECT_TRUE(active->is_active);
   EXPECT_TRUE(active->version_id.find("v") != std::string::npos);
+  
+  // Cleanup: stop watching the file
+  loader.stop_watching(test_file);
 }
 
 TEST_F(HotReloadTest, VersionManager_MaxVersionsLimit) {
-  auto&           manager = global_hot_reload_manager();
+  auto&           loader = global_code_loader();
   HotReloadConfig config;
   config.max_versions = 3;
-  manager.set_config(config);
+  loader.set_hot_reload_config(config);
 
   std::string test_file = create_shell_script("max_version_test.sh", "echo 'V1'");
 
   for(int i = 2; i <= 6; ++i) {
-    manager.start_watching(test_file);
+    loader.start_watching(test_file);
     wait_for_file_change(100);
     modify_file(test_file, "#!/bin/bash\nset -e\necho 'V" + std::to_string(i) + "'");
-    manager.reload(test_file);
+    loader.reload_code(test_file);
     wait_for_file_change(200);
   }
 
-  auto versions = manager.get_all_versions(test_file);
+  auto versions = loader.get_all_versions(test_file);
   // Should only keep max_versions (3)
   EXPECT_LE(versions.size(), 3);
+  
+  // Cleanup: stop watching the file
+  loader.stop_watching(test_file);
 }
 
 TEST_F(HotReloadTest, VersionManager_Rollback) {
-  auto& manager = global_hot_reload_manager();
+  auto& loader = global_code_loader();
 
   std::string test_file = create_shell_script("rollback_test.sh", "echo 'Original'");
 
-  manager.start_watching(test_file);
-  auto version1 = manager.get_current_version(test_file);
+  loader.start_watching(test_file);
+  auto version1 = loader.get_current_version(test_file);
   ASSERT_NE(version1, nullptr);
   std::string version_id1 = version1->version_id;
 
   // Create new version
   wait_for_file_change(100);
   modify_file(test_file, "#!/bin/bash\nset -e\necho 'Modified'");
-  manager.reload(test_file);
+  loader.reload_code(test_file);
   wait_for_file_change(200);
 
-  auto version2 = manager.get_current_version(test_file);
+  auto version2 = loader.get_current_version(test_file);
   ASSERT_NE(version2, nullptr);
   EXPECT_NE(version2->version_id, version_id1);
 
   // Rollback to original version
-  EXPECT_TRUE(manager.rollback_to_version(test_file, version_id1));
+  EXPECT_TRUE(loader.rollback_to_version(test_file, version_id1));
 
-  auto current = manager.get_current_version(test_file);
+  auto current = loader.get_current_version(test_file);
   ASSERT_NE(current, nullptr);
   EXPECT_EQ(current->version_id, version_id1);
+  
+  // Cleanup: stop watching the file
+  loader.stop_watching(test_file);
 }
 
 TEST_F(HotReloadTest, VersionManager_RollbackToInvalidVersion) {
-  auto& manager = global_hot_reload_manager();
+  auto& loader = global_code_loader();
 
   std::string test_file = create_shell_script("invalid_rollback.sh", "echo 'test'");
 
-  manager.start_watching(test_file);
+  loader.start_watching(test_file);
 
   // Try to rollback to non-existent version
-  EXPECT_FALSE(manager.rollback_to_version(test_file, "invalid_version_xyz"));
+  EXPECT_FALSE(loader.rollback_to_version(test_file, "invalid_version_xyz"));
+  
+  // Cleanup: stop watching the file
+  loader.stop_watching(test_file);
 }
 
 // ============================================================================
@@ -479,13 +493,13 @@ TEST_F(HotReloadTest, VersionManager_RollbackToInvalidVersion) {
 
 TEST_F(HotReloadTest, TypeDetection_ShellScript) {
   std::string test_file = create_shell_script("detect_sh.sh", "echo 'test'");
-  auto        type      = detect_executable_type(test_file);
+  auto        type      = CodeLoader::detect_executable_type(test_file);
   EXPECT_EQ(type, ExecutableType::SHELL_SCRIPT);
 }
 
 TEST_F(HotReloadTest, TypeDetection_PythonScript) {
   std::string test_file = create_python_script("detect_py.py", "print('test')");
-  auto        type      = detect_executable_type(test_file);
+  auto        type      = CodeLoader::detect_executable_type(test_file);
   EXPECT_EQ(type, ExecutableType::PYTHON_SCRIPT);
 }
 
@@ -495,7 +509,7 @@ TEST_F(HotReloadTest, TypeDetection_Unknown) {
   file << "unknown content";
   file.close();
 
-  auto type = detect_executable_type(test_file);
+  auto type = CodeLoader::detect_executable_type(test_file);
   EXPECT_EQ(type, ExecutableType::UNKNOWN);
 }
 
@@ -505,7 +519,7 @@ TEST_F(HotReloadTest, TypeDetection_JarFile) {
   file << "jar content";
   file.close();
 
-  auto type = detect_executable_type(test_file);
+  auto type = CodeLoader::detect_executable_type(test_file);
   EXPECT_EQ(type, ExecutableType::JAR_FILE);
 }
 
@@ -514,44 +528,44 @@ TEST_F(HotReloadTest, TypeDetection_JarFile) {
 // ============================================================================
 
 TEST_F(HotReloadTest, FileWatcher_StartStop) {
-  auto& manager = global_hot_reload_manager();
+  auto& loader = global_code_loader();
 
   std::string test_file = create_shell_script("watcher_test.sh", "echo 'test'");
 
-  ASSERT_TRUE(manager.start_watching(test_file));
-  EXPECT_TRUE(manager.is_watching(test_file));
+  ASSERT_TRUE(loader.start_watching(test_file));
+  EXPECT_TRUE(loader.is_watching(test_file));
 
-  ASSERT_TRUE(manager.stop_watching(test_file));
-  EXPECT_FALSE(manager.is_watching(test_file));
+  ASSERT_TRUE(loader.stop_watching(test_file));
+  EXPECT_FALSE(loader.is_watching(test_file));
 }
 
 TEST_F(HotReloadTest, FileWatcher_NonExistentFile) {
-  auto& manager = global_hot_reload_manager();
+  auto& loader = global_code_loader();
 
   std::string non_existent = test_dir_ + "/non_existent.sh";
-  EXPECT_FALSE(manager.start_watching(non_existent));
-  EXPECT_FALSE(manager.is_watching(non_existent));
+  EXPECT_FALSE(loader.start_watching(non_existent));
+  EXPECT_FALSE(loader.is_watching(non_existent));
 }
 
 TEST_F(HotReloadTest, FileWatcher_MultipleFiles) {
-  auto& manager = global_hot_reload_manager();
+  auto& loader = global_code_loader();
 
   std::string file1 = create_shell_script("multi_test1.sh", "echo 'test1'");
   std::string file2 = create_shell_script("multi_test2.sh", "echo 'test2'");
   std::string file3 = create_shell_script("multi_test3.sh", "echo 'test3'");
 
-  ASSERT_TRUE(manager.start_watching(file1));
-  ASSERT_TRUE(manager.start_watching(file2));
-  ASSERT_TRUE(manager.start_watching(file3));
+  ASSERT_TRUE(loader.start_watching(file1));
+  ASSERT_TRUE(loader.start_watching(file2));
+  ASSERT_TRUE(loader.start_watching(file3));
 
-  EXPECT_EQ(manager.get_watched_files_count(), 3);
+  EXPECT_EQ(loader.get_watched_files_count(), 3);
 
-  ASSERT_TRUE(manager.stop_watching(file1));
-  EXPECT_EQ(manager.get_watched_files_count(), 2);
+  ASSERT_TRUE(loader.stop_watching(file1));
+  EXPECT_EQ(loader.get_watched_files_count(), 2);
 
-  ASSERT_TRUE(manager.stop_watching(file2));
-  ASSERT_TRUE(manager.stop_watching(file3));
-  EXPECT_EQ(manager.get_watched_files_count(), 0);
+  ASSERT_TRUE(loader.stop_watching(file2));
+  ASSERT_TRUE(loader.stop_watching(file3));
+  EXPECT_EQ(loader.get_watched_files_count(), 0);
 }
 
 // ============================================================================
@@ -559,20 +573,20 @@ TEST_F(HotReloadTest, FileWatcher_MultipleFiles) {
 // ============================================================================
 
 TEST_F(HotReloadTest, AutoReload_Enabled) {
-  auto& manager = global_hot_reload_manager();
+  auto& loader = global_code_loader();
 
   HotReloadConfig config;
   config.enabled           = true;
   config.auto_reload       = true;
   config.check_interval_ms = 100;
   config.max_versions      = 5;
-  manager.set_config(config);
+  loader.set_hot_reload_config(config);
 
   std::string test_file = create_shell_script("auto_reload.sh", "echo 'V1'");
 
-  ASSERT_TRUE(manager.start_watching(test_file));
+  ASSERT_TRUE(loader.start_watching(test_file));
 
-  auto version1 = manager.get_current_version(test_file);
+  auto version1 = loader.get_current_version(test_file);
   ASSERT_NE(version1, nullptr);
   std::string version_id1 = version1->version_id;
 
@@ -583,25 +597,31 @@ TEST_F(HotReloadTest, AutoReload_Enabled) {
   // Wait for auto reload to complete
   wait_for_file_change(2000);
 
-  auto version2 = manager.get_current_version(test_file);
+  auto version2 = loader.get_current_version(test_file);
   ASSERT_NE(version2, nullptr);
   EXPECT_NE(version2->version_id, version_id1);
+  
+  // Cleanup: stop watching the file and disable hot reload
+  loader.stop_watching(test_file);
+  HotReloadConfig disable_config;
+  disable_config.enabled = false;
+  loader.set_hot_reload_config(disable_config);
 }
 
 TEST_F(HotReloadTest, AutoReload_Disabled) {
-  auto& manager = global_hot_reload_manager();
+  auto& loader = global_code_loader();
 
   HotReloadConfig config;
   config.enabled           = true;
   config.auto_reload       = false;  // Disable auto reload
   config.check_interval_ms = 100;
-  manager.set_config(config);
+  loader.set_hot_reload_config(config);
 
   std::string test_file = create_shell_script("no_auto_reload.sh", "echo 'V1'");
 
-  ASSERT_TRUE(manager.start_watching(test_file));
+  ASSERT_TRUE(loader.start_watching(test_file));
 
-  auto version1 = manager.get_current_version(test_file);
+  auto version1 = loader.get_current_version(test_file);
   ASSERT_NE(version1, nullptr);
   std::string version_id1 = version1->version_id;
 
@@ -613,10 +633,13 @@ TEST_F(HotReloadTest, AutoReload_Disabled) {
   wait_for_file_change(2000);
 
   // Version should not have changed
-  auto version2 = manager.get_current_version(test_file);
+  auto version2 = loader.get_current_version(test_file);
   ASSERT_NE(version2, nullptr);
   // With auto_reload disabled, version won't change until manual reload
   EXPECT_EQ(version2->version_id, version_id1);
+  
+  // Cleanup: stop watching the file
+  loader.stop_watching(test_file);
 }
 
 // ============================================================================
@@ -624,23 +647,29 @@ TEST_F(HotReloadTest, AutoReload_Disabled) {
 // ============================================================================
 
 TEST_F(HotReloadTest, Backup_BeforeReload) {
-  auto& manager = global_hot_reload_manager();
+  auto& loader = global_code_loader();
 
   HotReloadConfig config;
   config.enabled              = true;
   config.backup_before_reload = true;
   config.backup_dir           = test_dir_ + "/backups";
-  manager.set_config(config);
+  loader.set_hot_reload_config(config);
 
   std::string test_file = create_shell_script("backup_test.sh", "echo 'V1'");
-  manager.start_watching(test_file);
+  loader.start_watching(test_file);
 
   // Reload should create backup
-  auto reload_result = manager.reload(test_file);
+  auto reload_result = loader.reload_code(test_file);
   EXPECT_TRUE(reload_result.success);
 
   // Backup directory should exist
   EXPECT_TRUE(fs::exists(config.backup_dir));
+  
+  // Cleanup: stop watching the file and disable hot reload
+  loader.stop_watching(test_file);
+  HotReloadConfig disable_config;
+  disable_config.enabled = false;
+  loader.set_hot_reload_config(disable_config);
 }
 
 // ============================================================================
@@ -686,8 +715,8 @@ TEST_F(HotReloadTest, Node_PythonScriptNode) {
 }
 
 TEST_F(HotReloadTest, Node_HotReloadIntegration) {
-  auto& manager = global_hot_reload_manager();
-  (void)manager;
+  auto& loader = global_code_loader();
+  (void)loader;
 
   framework::Node::Config config;
   config.id                = "test_node_hotreload";
@@ -843,12 +872,12 @@ TEST_F(HotReloadTest, Config_DefaultValues) {
 }
 
 TEST_F(HotReloadTest, ExecutableTypeToString) {
-  EXPECT_EQ(executable_type_to_string(ExecutableType::SHELL_SCRIPT), "SHELL_SCRIPT");
-  EXPECT_EQ(executable_type_to_string(ExecutableType::PYTHON_SCRIPT), "PYTHON_SCRIPT");
-  EXPECT_EQ(executable_type_to_string(ExecutableType::JAR_FILE), "JAR_FILE");
-  EXPECT_EQ(executable_type_to_string(ExecutableType::SO_LIBRARY), "SO_LIBRARY");
-  EXPECT_EQ(executable_type_to_string(ExecutableType::EXECUTABLE), "EXECUTABLE");
-  EXPECT_EQ(executable_type_to_string(ExecutableType::UNKNOWN), "UNKNOWN");
+  EXPECT_EQ(CodeLoader::executable_type_to_string(ExecutableType::SHELL_SCRIPT), "SHELL_SCRIPT");
+  EXPECT_EQ(CodeLoader::executable_type_to_string(ExecutableType::PYTHON_SCRIPT), "PYTHON_SCRIPT");
+  EXPECT_EQ(CodeLoader::executable_type_to_string(ExecutableType::JAR_FILE), "JAR_FILE");
+  EXPECT_EQ(CodeLoader::executable_type_to_string(ExecutableType::SO_LIBRARY), "SO_LIBRARY");
+  EXPECT_EQ(CodeLoader::executable_type_to_string(ExecutableType::EXECUTABLE), "EXECUTABLE");
+  EXPECT_EQ(CodeLoader::executable_type_to_string(ExecutableType::UNKNOWN), "UNKNOWN");
 }
 
 // ============================================================================

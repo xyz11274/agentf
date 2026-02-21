@@ -1,6 +1,6 @@
 #include <cassert>
 
-#include "runtime/communication/databus.h"
+#include "runtime/databus/databus.h"
 
 using namespace agentflow;
 using namespace agentflow::runtime;

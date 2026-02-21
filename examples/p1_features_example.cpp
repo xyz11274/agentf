@@ -16,8 +16,8 @@
 #include "workflow/node.h"
 #include "workflow/workflow.h"
 #include "vendor/private_protocol.h"
-#include "runtime/scheduler/control_flow.h"
-#include "runtime/communication/zero_copy_databus.h"
+#include "workflow/control_flow.h"
+#include "runtime/databus/local_databus.h"
 
 using namespace agentflow;
 
@@ -118,8 +118,9 @@ void example_zero_copy_databus() {
 }
 
 /**
- * Example 2: Condition evaluation
+ * Example 2: Condition evaluation (Removed)
  */
+/*
 void example_condition_evaluation() {
   Logger::instance().info("=== Example 2: Condition Evaluation ===");
 
@@ -169,6 +170,7 @@ void example_condition_evaluation() {
   bool not_result = evaluator.evaluate(not_expr, context, DataMap());
   Logger::instance().info_f("NOT (status == 'active'): %s", not_result ? "true" : "false");
 }
+*/
 
 /**
  * Example 3: Control flow manager with workflow
@@ -418,8 +420,8 @@ int main() {
   example_zero_copy_databus();
   Logger::instance().info("");
 
-  example_condition_evaluation();
-  Logger::instance().info("");
+  // example_condition_evaluation(); // Removed as internal implementation details are hidden
+  // Logger::instance().info("");
 
   example_control_flow_workflow();
   Logger::instance().info("");

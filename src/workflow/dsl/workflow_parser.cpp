@@ -88,7 +88,9 @@ DslVersion DslVersion::from_string(const std::string& version_str) {
 // ============================================================================
 
 ParseResult WorkflowParser::parse_workflow(const std::string& json_content) {
+  Logger::instance().info("Parsing workflow content...");
   ParseResult result;
+
   current_result_   = ParseResult();
   current_workflow_ = nullptr;
   current_agent_    = nullptr;
@@ -251,15 +253,17 @@ bool WorkflowParser::parse_workflow_root(std::shared_ptr<const IJsonValue> root,
   // Create workflow object
   current_workflow_ = std::make_shared<framework::Workflow>(config);
 
+
   // Parse nodes
   auto nodes_array = JsonHelper::get_array(root, "nodes");
-  if(!nodes_array) {
-    result.errors.emplace_back("Missing 'nodes' array", "root.nodes");
-    return false;
-  }
-
-  if(!parse_nodes(nodes_array, result, "root.nodes")) {
-    return false;
+  if(nodes_array) {
+    if(!parse_nodes(nodes_array, result, "root.nodes")) {
+      return false;
+    }
+  } else {
+    // If nodes are missing, it might be a valid partial workflow definition (e.g. metadata only)
+    // especially when used inside an Agent definition.
+    // So we don't fail here, but validation might warn or fail depending on context.
   }
 
   // Parse edges
@@ -269,6 +273,9 @@ bool WorkflowParser::parse_workflow_root(std::shared_ptr<const IJsonValue> root,
       return false;
     }
   }
+
+  // Set workflow in result before validation so it's available even if validation fails
+  result.workflow = current_workflow_;
 
   // Validate
   if(!validate_node_ids_unique(result)) {
@@ -293,7 +300,8 @@ bool WorkflowParser::parse_agent_root(std::shared_ptr<const IJsonValue> root, Pa
   framework::Agent::Config config;
   config.id = JsonHelper::get_string(root, "id", "");
   if(config.id.empty()) {
-    config.id = "agent_" + std::to_string(std::rand());
+    result.errors.emplace_back("Agent missing required 'id' field", "root");
+    return false;
   }
 
   config.name        = JsonHelper::get_string(root, "name", "unnamed_agent");
@@ -301,19 +309,43 @@ bool WorkflowParser::parse_agent_root(std::shared_ptr<const IJsonValue> root, Pa
   config.description = JsonHelper::get_string(root, "description", "");
 
   // Parse lifecycle policy
-  std::string policy_str = JsonHelper::get_string(root, "lifecycle_policy", "factory");
+  std::string policy_str = JsonHelper::get_string(root, "lifecycle_policy", "");
+  if(policy_str.empty()) {
+    policy_str = JsonHelper::get_string(root, "policy", "factory");
+  }
+  
+  // Convert to lowercase for comparison
+  std::transform(policy_str.begin(), policy_str.end(), policy_str.begin(), ::tolower);
+  
   if(policy_str == "per_request") {
     config.policy = framework::Agent::LifecyclePolicy::PER_REQUEST;
   } else if(policy_str == "singleton") {
     config.policy = framework::Agent::LifecyclePolicy::SINGLETON;
-  } else {
+  } else if(policy_str == "factory") {
     config.policy = framework::Agent::LifecyclePolicy::FACTORY;
+  } else {
+    result.errors.emplace_back("Invalid agent policy: " + policy_str, "root.policy");
+    return false;
   }
 
   // Parse resource limits
   config.max_workflows            = JsonHelper::get_int(root, "max_workflows", 10);
+  if(config.max_workflows <= 0) {
+    result.errors.emplace_back("max_workflows must be positive", "root.max_workflows");
+    return false;
+  }
+
   config.max_concurrent_workflows = JsonHelper::get_int(root, "max_concurrent_workflows", 5);
+  if(config.max_concurrent_workflows <= 0) {
+    result.errors.emplace_back("max_concurrent_workflows must be positive", "root.max_concurrent_workflows");
+    return false;
+  }
+
   config.data_bus_capacity        = JsonHelper::get_int(root, "data_bus_capacity", 1024 * 1024);
+  if(config.data_bus_capacity <= 0) {
+    result.errors.emplace_back("data_bus_capacity must be positive", "root.data_bus_capacity");
+    return false;
+  }
 
   if(!parse_agent_config(root, config, result, "root")) {
     return false;
@@ -439,14 +471,19 @@ bool WorkflowParser::parse_node_config(std::shared_ptr<const IJsonValue> node_ob
 
   config.name            = JsonHelper::get_string(node_obj, "name", config.id);
   config.type            = JsonHelper::get_string(node_obj, "type", "default");
-  config.priority        = static_cast<int>(JsonHelper::get_int(node_obj, "priority", 0));
-  config.max_retries     = static_cast<int>(JsonHelper::get_int(node_obj, "max_retries", 3));
-  config.timeout_ms      = static_cast<int>(JsonHelper::get_int(node_obj, "timeout_ms", 30000));
-  config.memory_limit_mb = static_cast<int>(JsonHelper::get_int(node_obj, "memory_limit_mb", 0));
-  config.cpu_limit       = static_cast<int>(JsonHelper::get_int(node_obj, "cpu_limit", 0));
+
+  // Check for nested config object
+  auto nested_config_obj = JsonHelper::get_object(node_obj, "config");
+  auto config_source     = nested_config_obj ? nested_config_obj : node_obj;
+
+  config.priority        = static_cast<int>(JsonHelper::get_int(config_source, "priority", 0));
+  config.max_retries     = static_cast<int>(JsonHelper::get_int(config_source, "max_retries", 3));
+  config.timeout_ms      = static_cast<int>(JsonHelper::get_int(config_source, "timeout_ms", 30000));
+  config.memory_limit_mb = static_cast<int>(JsonHelper::get_int(config_source, "memory_limit_mb", 0));
+  config.cpu_limit       = static_cast<int>(JsonHelper::get_int(config_source, "cpu_limit", 0));
 
   // Parse execution mode
-  std::string exec_mode_str = JsonHelper::get_string(node_obj, "execution_mode", "cpp_function");
+  std::string exec_mode_str = JsonHelper::get_string(config_source, "execution_mode", "cpp_function");
   if(exec_mode_str == "shell_script") {
     config.execution_mode = framework::Node::ExecutionMode::SHELL_SCRIPT;
   } else if(exec_mode_str == "executable") {
@@ -459,15 +496,15 @@ bool WorkflowParser::parse_node_config(std::shared_ptr<const IJsonValue> node_ob
     config.execution_mode = framework::Node::ExecutionMode::CPP_FUNCTION;
   }
 
-  config.command          = JsonHelper::get_string(node_obj, "command", "");
-  config.working_dir      = JsonHelper::get_string(node_obj, "working_dir", "");
-  config.retry_delay_ms   = static_cast<int>(JsonHelper::get_int(node_obj, "retry_delay_ms", 1000));
-  config.enable_hot_reload = JsonHelper::get_bool(node_obj, "enable_hot_reload", true);
-  config.function_name    = JsonHelper::get_string(node_obj, "function_name", "");
-  config.main_class       = JsonHelper::get_string(node_obj, "main_class", "");
+  config.command          = JsonHelper::get_string(config_source, "command", "");
+  config.working_dir      = JsonHelper::get_string(config_source, "working_dir", "");
+  config.retry_delay_ms   = static_cast<int>(JsonHelper::get_int(config_source, "retry_delay_ms", 1000));
+  config.enable_hot_reload = JsonHelper::get_bool(config_source, "enable_hot_reload", true);
+  config.function_name    = JsonHelper::get_string(config_source, "function_name", "");
+  config.main_class       = JsonHelper::get_string(config_source, "main_class", "");
 
   // Parse script/command args array
-  auto args_array = JsonHelper::get_array(node_obj, "args");
+  auto args_array = JsonHelper::get_array(config_source, "args");
   if(args_array) {
     size_t num_args = args_array->array_size();
     for(size_t i = 0; i < num_args; ++i) {
@@ -484,6 +521,7 @@ bool WorkflowParser::parse_node_config(std::shared_ptr<const IJsonValue> node_ob
 bool WorkflowParser::parse_node_inputs(std::shared_ptr<const IJsonValue> node_obj,
                                        framework::Node::Config& config, ParseResult& result,
                                        const std::string& path) {
+  // Try to parse as array of strings
   auto inputs_array = JsonHelper::get_array(node_obj, "inputs");
   if(inputs_array) {
     size_t num_inputs = inputs_array->array_size();
@@ -493,6 +531,17 @@ bool WorkflowParser::parse_node_inputs(std::shared_ptr<const IJsonValue> node_ob
         config.input_params.push_back(input->as_string());
       }
     }
+    return true;
+  }
+
+  // Try to parse as object (use keys as input names)
+  auto inputs_obj = JsonHelper::get_object(node_obj, "inputs");
+  if(inputs_obj) {
+    auto keys = inputs_obj->object_keys();
+    for(const auto& key : keys) {
+      config.input_params.push_back(key);
+    }
+    return true;
   }
 
   return true;
@@ -501,6 +550,7 @@ bool WorkflowParser::parse_node_inputs(std::shared_ptr<const IJsonValue> node_ob
 bool WorkflowParser::parse_node_outputs(std::shared_ptr<const IJsonValue> node_obj,
                                         framework::Node::Config& config, ParseResult& result,
                                         const std::string& path) {
+  // Try to parse as array of strings
   auto outputs_array = JsonHelper::get_array(node_obj, "outputs");
   if(outputs_array) {
     size_t num_outputs = outputs_array->array_size();
@@ -510,6 +560,17 @@ bool WorkflowParser::parse_node_outputs(std::shared_ptr<const IJsonValue> node_o
         config.output_params.push_back(output->as_string());
       }
     }
+    return true;
+  }
+
+  // Try to parse as object (use keys as output names)
+  auto outputs_obj = JsonHelper::get_object(node_obj, "outputs");
+  if(outputs_obj) {
+    auto keys = outputs_obj->object_keys();
+    for(const auto& key : keys) {
+      config.output_params.push_back(key);
+    }
+    return true;
   }
 
   return true;
@@ -609,7 +670,14 @@ bool WorkflowParser::parse_edge_config(std::shared_ptr<const IJsonValue> edge_ob
     }
   }
 
-  config.condition_expression = JsonHelper::get_string(edge_obj, "condition_expression", "");
+  // Check for 'condition' object (nested) or 'condition_expression' string
+  auto condition_obj = JsonHelper::get_object(edge_obj, "condition");
+  if(condition_obj) {
+    config.condition_expression = JsonHelper::get_string(condition_obj, "expression", "");
+  } else {
+    config.condition_expression = JsonHelper::get_string(edge_obj, "condition_expression", "");
+  }
+  
   config.priority             = static_cast<int>(JsonHelper::get_int(edge_obj, "priority", 0));
 
   return true;
@@ -658,11 +726,23 @@ bool WorkflowParser::parse_workflow_ref(std::shared_ptr<const IJsonValue> ref_ob
     current_agent_->add_workflow(parse_result.workflow);
   } else if(ref_obj->is_object()) {
     // Inline workflow definition
-    auto workflow_parser = WorkflowParserFactory::create();
-    // Convert object to JSON string (simplified - in real implementation, need proper
-    // serialization)
-    result.warnings.push_back("Inline workflow definition not fully supported yet");
-    return false;
+    // Save current workflow state
+    auto saved_workflow = current_workflow_;
+    
+    // Parse inline workflow
+    if(!parse_workflow_root(ref_obj, result)) {
+        current_workflow_ = saved_workflow;
+        return false;
+    }
+    
+    // Add parsed workflow to agent
+    if(current_workflow_) {
+        current_agent_->add_workflow(current_workflow_);
+    }
+    
+    // Restore workflow state
+    current_workflow_ = saved_workflow;
+    return true;
   } else {
     result.errors.emplace_back("Workflow reference must be string or object", path);
     return false;
@@ -675,8 +755,8 @@ bool WorkflowParser::validate_workflow_structure(std::shared_ptr<framework::Work
                                                  ParseResult&                         result) {
   // Validate workflow has nodes
   if(workflow->get_nodes().empty()) {
-    result.errors.emplace_back("Workflow must have at least one node");
-    return false;
+    // result.warnings.emplace_back("Workflow has no nodes");
+    // Empty workflow is allowed (e.g. reference only)
   }
 
   // Validate workflow DAG (no cycles)
@@ -688,13 +768,14 @@ bool WorkflowParser::validate_workflow_structure(std::shared_ptr<framework::Work
   return true;
 }
 
-bool WorkflowParser::validate_node_ids_unique(const ParseResult& result) {
+bool WorkflowParser::validate_node_ids_unique(ParseResult& result) {
   std::unordered_set<NodeId> node_ids;
   bool                       unique = true;
 
   for(const auto& node : current_workflow_->get_nodes()) {
     if(node_ids.find(node->get_id()) != node_ids.end()) {
       unique = false;
+      result.errors.emplace_back("Duplicate node ID found: " + node->get_id());
       break;
     }
     node_ids.insert(node->get_id());

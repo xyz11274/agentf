@@ -18,11 +18,7 @@ namespace network {
 // Response Implementation
 // ============================================================================
 
-Response::Response() : payload_() {
-  metadata_.timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                               std::chrono::system_clock::now().time_since_epoch())
-                               .count();
-}
+Response::Response() : Response(ResponseStatus::OK) {}
 
 Response::Response(ResponseStatus status) : payload_() {
   metadata_.status       = status;

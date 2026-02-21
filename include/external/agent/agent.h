@@ -8,9 +8,24 @@
 
 #include "agent/common.h"
 #include "workflow/workflow.h"
+#include "utils/file_storage.h"
 
 namespace agentflow {
 namespace framework {
+
+/**
+ * Agent metadata structure
+ */
+struct AgentMetadata {
+  AgentId                  id;
+  std::string              name;
+  std::string              version;
+  std::string              description;
+  int64_t                  created_at;
+  int64_t                  updated_at;
+  std::string              author;
+  std::vector<WorkflowId>  workflow_ids;
+};
 
 /**
  * Agent is the basic execution subject in AgentFlow
@@ -72,6 +87,32 @@ public:
   bool pause();
   bool resume();
   bool stop();
+
+  // Storage operations
+  utils::storage::StorageResult save(const utils::storage::StorageConfig& config,
+                                     const utils::storage::VersionInfo&   version_info);
+
+  static utils::storage::StorageResult load(const AgentId&                agent_id,
+                                            const utils::storage::StorageConfig& storage_config,
+                                            std::shared_ptr<Agent>&       agent);
+
+  static utils::storage::StorageResult delete_agent(const AgentId&                agent_id,
+                                                    const utils::storage::StorageConfig& storage_config);
+
+  static utils::storage::StorageResult list_agents(const utils::storage::StorageConfig& storage_config,
+                                                   std::vector<AgentId>&         agent_ids);
+
+  static utils::storage::StorageResult get_metadata(const AgentId&                agent_id,
+                                                    const utils::storage::StorageConfig& storage_config,
+                                                    AgentMetadata&                metadata);
+
+  static utils::storage::StorageResult set_active_version(const AgentId&                agent_id,
+                                                          const std::string&            version,
+                                                          const utils::storage::StorageConfig& storage_config);
+
+  static utils::storage::StorageResult get_active_version(const AgentId&                agent_id,
+                                                          const utils::storage::StorageConfig& storage_config,
+                                                          std::string&                  version);
 
 private:
   Config                                          config_;

@@ -1,4 +1,4 @@
-#include "runtime/scheduler/agent_runtime.h"
+#include "runtime/agent_runtime.h"
 
 #include <atomic>
 #include <chrono>
@@ -36,7 +36,7 @@ bool AgentRuntime::register_agent(AgentPtr agent) {
 
   // Create databus for agent
   databuses_[agent->get_id()] =
-      std::unique_ptr<HighSpeedDataBus>(new HighSpeedDataBus(1024 * 1024)  // 1MB databus
+      std::unique_ptr<DataBus>(new DataBus(1024 * 1024)  // 1MB databus
       );
 
   Logger::instance().info_f("Agent registered: %s (id: %s)", agent->get_name().c_str(),
@@ -545,14 +545,18 @@ bool AgentRuntime::stop() {
   return true;
 }
 
-HighSpeedDataBus& AgentRuntime::get_databus(const AgentId& agent_id) {
+DataBus& AgentRuntime::get_databus(const AgentId& agent_id) {
   std::lock_guard<std::mutex> lock(agents_mutex_);
 
-  if(databuses_.find(agent_id) == databuses_.end()) {
-    databuses_[agent_id] = std::unique_ptr<HighSpeedDataBus>(new HighSpeedDataBus(1024 * 1024));
+  auto it = databuses_.find(agent_id);
+  if(it == databuses_.end()) {
+    // If databus doesn't exist, create one (this shouldn't happen for registered agents)
+    // But for safety, we create a new one
+    databuses_[agent_id] = std::unique_ptr<DataBus>(new DataBus(1024 * 1024));
+    return *databuses_[agent_id];
   }
 
-  return *databuses_[agent_id];
+  return *it->second;
 }
 
 void AgentRuntime::worker_thread_main() {

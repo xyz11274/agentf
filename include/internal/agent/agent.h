@@ -9,8 +9,32 @@
 #include "agent/common.h"
 #include "workflow/workflow.h"
 
+// Forward declaration
+namespace agentflow {
+namespace utils {
+namespace storage {
+struct StorageConfig;
+struct StorageResult;
+struct VersionInfo;
+struct StorageStats;
+}  // namespace storage
+}  // namespace utils
+}  // namespace agentflow
+
 namespace agentflow {
 namespace framework {
+
+struct AgentMetadata {
+  std::string                        id;
+  std::string                        name;
+  std::string                        version;
+  std::string                        description;
+  int64_t                            created_at;
+  int64_t                            updated_at;
+  std::string                        author;
+  std::vector<std::string>           workflow_ids;
+  std::map<std::string, std::string> tags;
+};
 
 /**
  * Agent is the basic execution subject in AgentFlow
@@ -72,6 +96,37 @@ public:
   bool pause();
   bool resume();
   bool stop();
+
+  // Storage operations
+  agentflow::utils::storage::StorageResult save(const agentflow::utils::storage::StorageConfig& config,
+                                         const agentflow::utils::storage::VersionInfo&   version_info);
+
+  static agentflow::utils::storage::StorageResult load(const std::string&                       agent_id,
+                                                const agentflow::utils::storage::StorageConfig& storage_config,
+                                                std::shared_ptr<Agent>&                  agent);
+
+  static agentflow::utils::storage::StorageResult delete_agent(
+      const std::string&                       agent_id,
+      const agentflow::utils::storage::StorageConfig& storage_config);
+
+  static agentflow::utils::storage::StorageResult list_agents(
+      const agentflow::utils::storage::StorageConfig& storage_config,
+      std::vector<std::string>&                agent_ids);
+
+  static agentflow::utils::storage::StorageResult get_metadata(
+      const std::string&                       agent_id,
+      const agentflow::utils::storage::StorageConfig& storage_config,
+      AgentMetadata&                           metadata);
+
+  static agentflow::utils::storage::StorageResult set_active_version(
+      const AgentId&                agent_id,
+      const std::string&            version,
+      const agentflow::utils::storage::StorageConfig& storage_config);
+
+  static agentflow::utils::storage::StorageResult get_active_version(
+      const AgentId&                agent_id,
+      const agentflow::utils::storage::StorageConfig& storage_config,
+      std::string&                  version);
 
 private:
   Config                                          config_;

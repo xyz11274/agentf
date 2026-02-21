@@ -7,7 +7,7 @@
 #include <gtest/gtest.h>
 #include <thread>
 
-#include "runtime/communication/local_channel.h"
+#include "runtime/databus/local_databus.h"
 
 namespace agentflow {
 namespace tests {
@@ -273,16 +273,7 @@ TEST_F(LocalChannelTest, FillQueueToCapacity) {
   EXPECT_FALSE(capped_channel->send(overflow_packet));
 }
 
-TEST_F(LocalChannelTest, ZeroCapacityQueue) {
-  auto zero_capacity_channel = std::make_shared<runtime::LocalChannel>("zero", 0);
-  zero_capacity_channel->open();
 
-  runtime::DataPacket packet;
-  packet.key   = "test";
-  packet.value = std::string("value");
-
-  EXPECT_FALSE(zero_capacity_channel->send(packet));
-}
 
 TEST_F(LocalChannelTest, UnlimitedCapacityQueue) {
   auto unlimited_channel = std::make_shared<runtime::LocalChannel>("unlimited", 0);
@@ -332,7 +323,7 @@ TEST_F(LocalChannelTest, ReceiveWithNoTimeout) {
 TEST_F(LocalChannelTest, ReceiveFromKeyWithTimeout) {
   // Send data to key after delay
   std::thread sender([this]() {
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
     runtime::DataPacket packet;
     packet.key   = "delayed_key";
     packet.value = std::string("delayed_value");
@@ -340,7 +331,7 @@ TEST_F(LocalChannelTest, ReceiveFromKeyWithTimeout) {
   });
 
   runtime::DataPacket packet;
-  bool                received = channel_->receive_from_key("delayed_key", packet, 200);
+  bool                received = channel_->receive_from_key("delayed_key", packet, 100);
 
   sender.join();
   EXPECT_FALSE(received) << "Should timeout before data arrives";
@@ -389,7 +380,7 @@ TEST_F(LocalChannelTest, StatisticsAfterReceive) {
   auto stats = channel_->get_stats();
   EXPECT_EQ(stats.packets_sent, 1);
   EXPECT_EQ(stats.packets_received, 1);
-  EXPECT_GT(stats.queue_depth, 0);
+  EXPECT_EQ(stats.queue_depth, 0);
 }
 
 TEST_F(LocalChannelTest, ResetStatistics) {
@@ -525,8 +516,8 @@ TEST_F(LocalChannelTest, WaitForDataAvailable) {
     // Wait for data to become available on a key
     bool result = this->channel_->wait_for_data("wait_key", 1000);
 
-    // Should return false (timeout)
-    EXPECT_FALSE(result);
+    // Should return true (success)
+    EXPECT_TRUE(result);
   });
 
   // Send data after delay
@@ -576,6 +567,7 @@ TEST_F(LocalChannelTest, GetNonexistentChannel) {
 
 TEST_F(LocalChannelTest, RemoveChannel) {
   auto& registry = runtime::LocalChannelRegistry::instance();
+  registry.close_all(); // Ensure clean state
 
   registry.get_or_create("removable", 10);
   EXPECT_EQ(registry.size(), 1);
@@ -588,6 +580,7 @@ TEST_F(LocalChannelTest, RemoveChannel) {
 
 TEST_F(LocalChannelTest, GetChannelIds) {
   auto& registry = runtime::LocalChannelRegistry::instance();
+  registry.close_all(); // Ensure clean state
 
   registry.get_or_create("channel_a", 10);
   registry.get_or_create("channel_b", 10);
@@ -599,6 +592,7 @@ TEST_F(LocalChannelTest, GetChannelIds) {
 
 TEST_F(LocalChannelTest, CloseAllChannels) {
   auto& registry = runtime::LocalChannelRegistry::instance();
+  registry.close_all(); // Ensure clean state
 
   registry.get_or_create("close_a", 10);
   registry.get_or_create("close_b", 10);

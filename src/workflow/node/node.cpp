@@ -399,8 +399,8 @@ bool Node::reload_code() {
     return false;
   }
 
-  auto& hot_reload = runtime::global_hot_reload_manager();
-  auto  result     = hot_reload.reload(config_.command);
+  auto& hot_reload = runtime::global_code_loader();
+  auto  result     = hot_reload.reload_code(config_.command);
 
   if(result.success) {
     current_version_id_ = result.version_id;
@@ -419,12 +419,13 @@ bool Node::check_and_reload_code() {
     return false;
   }
 
-  auto& hot_reload = runtime::global_hot_reload_manager();
+  auto& hot_reload = runtime::global_code_loader();
 
   if(!hot_reload.is_watching(config_.command)) {
     hot_reload.start_watching(config_.command);
   }
 
+  // First check if a new version has already been detected by the file watcher
   auto current_version = hot_reload.get_current_version(config_.command);
   if(current_version && current_version->version_id != current_version_id_) {
     Logger::instance().info_f("[NODE_HOT_RELOAD] New version detected: %s, Old=%s, New=%s",
@@ -432,6 +433,15 @@ bool Node::check_and_reload_code() {
                               current_version->version_id.c_str());
 
     return reload_code();
+  }
+
+  // If no new version detected yet, actively check for file changes and reload if needed
+  auto result = hot_reload.reload_code(config_.command);
+  if(result.success && result.version_id != current_version_id_) {
+    current_version_id_ = result.version_id;
+    Logger::instance().info_f("[NODE_HOT_RELOAD] File change detected and reloaded: %s, Version=%s",
+                              config_.name.c_str(), result.version_id.c_str());
+    return true;
   }
 
   return false;
@@ -442,7 +452,7 @@ std::shared_ptr<runtime::ExecutableVersion> Node::get_code_version() const {
     return nullptr;
   }
 
-  auto& hot_reload = runtime::global_hot_reload_manager();
+  auto& hot_reload = runtime::global_code_loader();
   return hot_reload.get_current_version(config_.command);
 }
 
@@ -451,7 +461,7 @@ bool Node::rollback_to_version(const std::string& version_id) {
     return false;
   }
 
-  auto& hot_reload = runtime::global_hot_reload_manager();
+  auto& hot_reload = runtime::global_code_loader();
   bool  result     = hot_reload.rollback_to_version(config_.command, version_id);
 
   if(result) {
@@ -471,8 +481,8 @@ void Node::setup_hot_reload() {
     return;
   }
 
-  auto& hot_reload = runtime::global_hot_reload_manager();
-  hot_reload.set_config(config_.hot_reload_config);
+  auto& hot_reload = runtime::global_code_loader();
+  hot_reload.set_hot_reload_config(config_.hot_reload_config);
 
   if(!hot_reload.is_watching(config_.command)) {
     hot_reload.start_watching(config_.command);
@@ -491,7 +501,7 @@ void Node::cleanup_hot_reload() {
     return;
   }
 
-  auto& hot_reload = runtime::global_hot_reload_manager();
+  auto& hot_reload = runtime::global_code_loader();
   hot_reload.stop_watching(config_.command);
 
   Logger::instance().info_f("[NODE_HOT_RELOAD] Cleanup complete: %s", config_.name.c_str());
@@ -583,7 +593,7 @@ runtime::ExecutionResult Node::execute_with_code_loader() {
 bool Node::execute_script(runtime::ExecutableType type) {
   auto start_time = std::chrono::steady_clock::now();
 
-  std::string type_str = runtime::executable_type_to_string(type);
+  std::string type_str = runtime::CodeLoader::executable_type_to_string(type);
   Logger::instance().info_f("[SCRIPT_EXEC_START] NodeId=%s, NodeName=%s, Type=%s, Script=%s",
                             config_.id.c_str(), config_.name.c_str(), type_str.c_str(),
                             config_.command.c_str());
