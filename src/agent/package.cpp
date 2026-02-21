@@ -3,6 +3,13 @@
 #include <sys/time.h>
 #include <mutex>
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <iostream>
+
+#include <rapidjson/document.h>
+#include <rapidjson/istreamwrapper.h>
 
 namespace agentflow {
 namespace framework {
@@ -14,6 +21,103 @@ int64_t get_current_time_ms() {
   return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 }  // namespace
+
+std::shared_ptr<AgentPackage> AgentPackage::load_from_directory(const std::string& package_path) {
+  namespace fs = std::filesystem;
+  fs::path root_path(package_path);
+  
+  if (!fs::exists(root_path) || !fs::is_directory(root_path)) {
+    std::cerr << "Package directory not found: " << package_path << std::endl;
+    return nullptr;
+  }
+
+  fs::path package_json_path = root_path / "package.json";
+  if (!fs::exists(package_json_path)) {
+    std::cerr << "package.json not found in: " << package_path << std::endl;
+    return nullptr;
+  }
+
+  std::ifstream ifs(package_json_path);
+  if (!ifs.is_open()) {
+    std::cerr << "Failed to open package.json: " << package_json_path << std::endl;
+    return nullptr;
+  }
+
+  rapidjson::IStreamWrapper isw(ifs);
+  rapidjson::Document doc;
+  doc.ParseStream(isw);
+
+  if (doc.HasParseError()) {
+    std::cerr << "Failed to parse package.json" << std::endl;
+    return nullptr;
+  }
+
+  Config config;
+  config.package_root = fs::absolute(root_path).string();
+  
+  if (doc.HasMember("name") && doc["name"].IsString()) {
+    config.package_name = doc["name"].GetString();
+    config.package_id = config.package_name; // Default ID to name
+  }
+  
+  if (doc.HasMember("version") && doc["version"].IsString()) {
+    config.version = doc["version"].GetString();
+  }
+  
+  if (doc.HasMember("description") && doc["description"].IsString()) {
+    config.description = doc["description"].GetString();
+  }
+
+  if (doc.HasMember("author") && doc["author"].IsString()) {
+    config.author = doc["author"].GetString();
+  }
+
+  if (doc.HasMember("entry_point") && doc["entry_point"].IsString()) {
+    config.entry_point = doc["entry_point"].GetString();
+  }
+
+  // Handle workflow files
+  // If workflows are explicitly listed
+  if (doc.HasMember("workflows") && doc["workflows"].IsArray()) {
+    const rapidjson::Value& workflows = doc["workflows"];
+    for (rapidjson::SizeType i = 0; i < workflows.Size(); i++) {
+      if (workflows[i].IsString()) {
+        config.workflow_files.push_back(workflows[i].GetString());
+      }
+    }
+  } else {
+    // Auto-discover workflow.json if present
+    if (fs::exists(root_path / "workflow.json")) {
+      config.workflow_files.push_back("workflow.json");
+    }
+  }
+
+  auto package = std::make_shared<AgentPackage>(config);
+
+  // Load dependencies
+  if (doc.HasMember("dependencies") && doc["dependencies"].IsObject()) {
+    for (auto& m : doc["dependencies"].GetObject()) {
+      if (m.value.IsString()) {
+        Dependency dep;
+        dep.name = m.name.GetString();
+        dep.version = m.value.GetString();
+        package->add_dependency(dep);
+      }
+    }
+  }
+
+  // Load metadata
+  if (doc.HasMember("metadata") && doc["metadata"].IsObject()) {
+    for (auto& m : doc["metadata"].GetObject()) {
+      if (m.value.IsString()) {
+        package->set_metadata(m.name.GetString(), m.value.GetString());
+      }
+    }
+  }
+
+  package->state_ = PackageState::DEPLOYED;
+  return package;
+}
 
 AgentPackage::AgentPackage(const Config& config)
     : config_(config), state_(PackageState::CREATED) {

@@ -136,6 +136,9 @@ public:
                                                           const utils::storage::StorageConfig& storage_config,
                                                           std::string&                  version);
 
+  // Factory method to create an agent from a package directory
+  static std::shared_ptr<Agent> create_from_package(const std::string& package_path);
+
 private:
   Config                                          config_;
   AgentState                                      state_ = AgentState::CREATED;
@@ -157,7 +160,7 @@ private:
   std::shared_ptr<AgentPackage>   package_;
 
   // Helper method to initialize components
-  bool initialize_components();
+  bool initialize_components(std::shared_ptr<AgentPackage> package = nullptr);
 };
 
 }  // namespace framework

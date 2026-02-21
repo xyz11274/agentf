@@ -4,9 +4,12 @@
 
 #include <algorithm>
 #include <sstream>
+#include <filesystem>
+#include <iostream>
 
 #include "utils/file_storage.h"
 #include "utils/logger.h"
+#include "workflow/dsl/workflow_parser.h"
 
 // Include internal agent components
 #include "agent/session.h"
@@ -159,6 +162,55 @@ Agent::Agent(const Config& config) : config_(config), state_(AgentState::CREATED
   initialize_components();
 }
 
+std::shared_ptr<Agent> Agent::create_from_package(const std::string& package_path) {
+  auto package = AgentPackage::load_from_directory(package_path);
+  if (!package) {
+    // We don't have direct access to logger macros here easily unless we included logger
+    // But let's assume standard error output or basic error handling
+    std::cerr << "Failed to load agent package from: " << package_path << std::endl;
+    return nullptr;
+  }
+
+  Agent::Config config;
+  config.id = package->get_package_id();
+  config.name = package->get_package_name();
+  config.version = package->get_version();
+  config.description = package->get_config().description;
+  
+  // Set default policies
+  config.policy = Agent::LifecyclePolicy::PER_REQUEST;
+  config.max_workflows = 10;
+  config.max_concurrent_workflows = 5;
+
+  auto agent = std::make_shared<Agent>(config);
+  
+  // Re-initialize with package to ensure the package component is set correctly
+  agent->initialize_components(package);
+  
+  // Load workflows
+  namespace fs = std::filesystem;
+  auto parser = dsl::WorkflowParserFactory::create();
+  
+  for (const auto& wf_file : package->get_config().workflow_files) {
+    fs::path wf_path = fs::path(package_path) / wf_file;
+    if (fs::exists(wf_path)) {
+      auto result = parser->parse_workflow_file(wf_path.string());
+      if (result.is_valid() && result.workflow) {
+        agent->add_workflow(result.workflow);
+      } else {
+        std::cerr << "Failed to load workflow from: " << wf_path.string() << std::endl;
+        if (!result.errors.empty()) {
+            std::cerr << "Parser error: " << result.errors[0].message << std::endl;
+        }
+      }
+    } else {
+      std::cerr << "Workflow file not found: " << wf_path.string() << std::endl;
+    }
+  }
+
+  return agent;
+}
+
 Agent::~Agent() {
   // Clean up components
   session_.reset();
@@ -171,7 +223,7 @@ Agent::~Agent() {
   cleanup_resources();
 }
 
-bool Agent::initialize_components() {
+bool Agent::initialize_components(std::shared_ptr<AgentPackage> package) {
   // Initialize session component
   AgentSession::Config session_config;
   session_config.session_id = config_.id + "_session";
@@ -201,11 +253,15 @@ bool Agent::initialize_components() {
   event_ = std::make_shared<AgentEvent>(event_config);
 
   // Initialize package component
-  AgentPackage::Config package_config;
-  package_config.package_id = config_.id + "_package";
-  package_config.package_name = config_.name;
-  package_config.version = config_.version;
-  package_ = std::make_shared<AgentPackage>(package_config);
+  if (package) {
+    package_ = package;
+  } else {
+    AgentPackage::Config package_config;
+    package_config.package_id = config_.id + "_package";
+    package_config.package_name = config_.name;
+    package_config.version = config_.version;
+    package_ = std::make_shared<AgentPackage>(package_config);
+  }
 
   return true;
 }

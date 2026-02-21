@@ -1149,3 +1149,33 @@ All examples have been validated:
 ---
 
 **项目维护者**: @DanielKernel
+
+## Agent 包管理与加载重构 (2026-02-21)
+
+### 功能概述
+为了支持 Agent 的包管理与加载功能，进行了以下重构工作：
+1. **支持目录方式加载 Agent**：
+   - 在 `src/agent` 下新增 `package.h` 和 `package.cpp`，支持解析 `package.json` 和加载 Agent 包目录。
+   - `package.json` 定义了 Agent 的名称、版本、入口点和工作流文件列表。
+2. **简化 Agent 实例化**：
+   - 在 `Agent` 类中新增 `create_from_package` 静态工厂方法，支持直接从目录创建 Agent 实例。
+   - 更新了 `Agent` 类的成员函数，支持加载多个工作流。
+3. **构建系统更新**：
+   - 更新 `CMakeLists.txt` 链接 `dl` 库，支持动态加载。
+   - 新增 `test_agent_loading` 测试目标。
+4. **功能验证**：
+   - 新增 `tests/functional/src/test_agent_loading.cpp` 功能测试，验证 Agent 包加载、生命周期管理和工作流执行。
+   - 修复了 `AgentState` 命名空间引用的编译错误。
+5. **示例增强**：
+   - 在 `examples/agent` 目录下新增 `basic_agent` 和 `calculator_agent` 示例包，包含完整的 `package.json` 和 `workflow.json`。
+
+### 文件变更
+- `include/internal/agent/package.h` (新增)
+- `src/agent/package.cpp` (新增)
+- `include/external/agent/agent.h` (修改)
+- `src/agent/agent.cpp` (修改)
+- `CMakeLists.txt` (修改)
+- `tests/functional/src/test_agent_loading.cpp` (新增)
+- `examples/agent/basic_agent/workflow.json` (新增)
+- `examples/agent/calculator_agent/workflow.json` (新增)
+

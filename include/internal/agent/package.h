@@ -37,10 +37,15 @@ public:
     std::string description;
     std::string author;
     std::string entry_point;
+    std::string package_root;
+    std::vector<std::string> workflow_files;
   };
 
   explicit AgentPackage(const Config& config);
   ~AgentPackage();
+
+  // Static factory method
+  static std::shared_ptr<AgentPackage> load_from_directory(const std::string& package_path);
 
   // Getters
   const std::string& get_package_id() const { return config_.package_id; }

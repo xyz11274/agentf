@@ -352,6 +352,9 @@ target_include_directories(agentflow PUBLIC ${AGENTFLOW_INCLUDE_DIR})
 # Link with common libraries
 find_package(Threads REQUIRED)
 target_link_libraries(agentflow PUBLIC Threads::Threads)
+if(UNIX)
+  target_link_libraries(agentflow PUBLIC ${CMAKE_DL_LIBS})
+endif()
 
 # Link with libevent if available
 if(libevent_FOUND)
@@ -421,6 +424,10 @@ target_link_libraries(example_storage PRIVATE agentflow)
 add_executable(example_agent ${AGENTFLOW_EXAMPLE_DIR}/agent/agent_example.cpp)
 target_link_libraries(example_agent PRIVATE agentflow)
 
+# Agent loader example
+add_executable(example_agent_loader ${AGENTFLOW_EXAMPLE_DIR}/agent/agent_loader_example.cpp)
+target_link_libraries(example_agent_loader PRIVATE agentflow)
+
 # ============================================================================
 # Node Adapter Library and Executable
 # ============================================================================
@@ -437,6 +444,9 @@ add_library(node_adapter_lib SHARED
 target_include_directories(node_adapter_lib PUBLIC ${AGENTFLOW_INCLUDE_DIR})
 find_package(Threads REQUIRED)
 target_link_libraries(node_adapter_lib PUBLIC Threads::Threads)
+if(UNIX)
+  target_link_libraries(node_adapter_lib PUBLIC ${CMAKE_DL_LIBS})
+endif()
 
 # Link with libevent if available
 if(libevent_FOUND)
@@ -571,6 +581,26 @@ if(AGENTFLOW_BUILD_TESTS)
   add_test(NAME AdapterIsolationTests COMMAND test_adapter_isolation)
   if(AGENTFLOW_TEST_ENV)
     set_tests_properties(AdapterIsolationTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
+  endif()
+
+  # Agent loading tests
+  add_executable(test_agent_loading
+      tests/functional/src/test_agent_loading.cpp
+  )
+  if(TARGET GTest::gtest)
+    target_link_libraries(test_agent_loading PRIVATE agentflow GTest::gtest GTest::gtest_main)
+  else()
+    target_link_libraries(test_agent_loading PRIVATE agentflow ${GTEST_LIBRARIES})
+    if(GTEST_INCLUDE_DIRS)
+      target_include_directories(test_agent_loading PRIVATE ${GTEST_INCLUDE_DIRS})
+    endif()
+  endif()
+  if(NOT MSVC)
+    target_compile_options(test_agent_loading PRIVATE -Wno-non-virtual-dtor)
+  endif()
+  add_test(NAME AgentLoadingTests COMMAND test_agent_loading)
+  if(AGENTFLOW_TEST_ENV)
+    set_tests_properties(AgentLoadingTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
   endif()
   else()
     message(STATUS "Google Test not found. Using simple test harness.")

@@ -1,4 +1,5 @@
 {
+  "id": "calculator-workflow",
   "version": "1.0",
   "name": "calculator-agent-workflow",
   "description": "Calculator agent workflow for performing arithmetic operations",
@@ -36,16 +37,19 @@
   ],
   "edges": [
     {
-      "from": "start",
-      "to": "validate_input"
+      "id": "edge_start_to_validate",
+      "source": "start",
+      "target": "validate_input"
     },
     {
-      "from": "validate_input",
-      "to": "add_numbers"
+      "id": "edge_validate_to_add",
+      "source": "validate_input",
+      "target": "add_numbers"
     },
     {
-      "from": "add_numbers",
-      "to": "end"
+      "id": "edge_add_to_end",
+      "source": "add_numbers",
+      "target": "end"
     }
   ],
   "metadata": {

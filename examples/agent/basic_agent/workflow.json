@@ -1,4 +1,5 @@
 {
+  "id": "basic-workflow",
   "version": "1.0",
   "name": "basic-agent-workflow",
   "description": "Basic agent workflow example",
@@ -25,12 +26,14 @@
   ],
   "edges": [
     {
-      "from": "start",
-      "to": "process"
+      "id": "edge_start_to_process",
+      "source": "start",
+      "target": "process"
     },
     {
-      "from": "process",
-      "to": "end"
+      "id": "edge_process_to_end",
+      "source": "process",
+      "target": "end"
     }
   ],
   "metadata": {
