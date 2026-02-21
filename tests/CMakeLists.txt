@@ -8,12 +8,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Test sources
 set(TEST_SOURCES
-    unit/workflow/cpp/test_hot_reload.cpp
-    unit/workflow/cpp/test_agent_gtest.cpp
-    unit/workflow/cpp/test_workflow_gtest.cpp
-    unit/workflow/cpp/test_node_gtest.cpp
-    unit/workflow/cpp/test_databus_gtest.cpp
-    unit/workflow/cpp/test_event_gtest.cpp
+    unit/src/test_hot_reload.cpp
+    unit/src/test_agent_gtest.cpp
+    unit/src/test_workflow_gtest.cpp
+    unit/src/test_node_gtest.cpp
+    unit/src/test_databus_gtest.cpp
+    unit/src/test_event_gtest.cpp
 )
 
 # Find dependencies
@@ -25,7 +25,7 @@ endif()
 
 # Test library (SO library for hot reload testing)
 add_library(test_hot_reload_lib SHARED
-    unit/workflow/lib/hot_reload_test.cpp
+    unit/data/lib/hot_reload_test.cpp
 )
 
 set_target_properties(test_hot_reload_lib PROPERTIES
@@ -60,7 +60,7 @@ endif()
 
 # Other test executables
 add_executable(test_agent_gtest
-    unit/workflow/cpp/test_agent_gtest.cpp
+    unit/src/test_agent_gtest.cpp
 )
 target_link_libraries(test_agent_gtest PRIVATE
     agentflow
@@ -69,7 +69,7 @@ target_link_libraries(test_agent_gtest PRIVATE
 )
 
 add_executable(test_workflow_gtest
-    unit/workflow/cpp/test_workflow_gtest.cpp
+    unit/src/test_workflow_gtest.cpp
 )
 target_link_libraries(test_workflow_gtest PRIVATE
     agentflow
@@ -78,7 +78,7 @@ target_link_libraries(test_workflow_gtest PRIVATE
 )
 
 add_executable(test_node_gtest
-    unit/workflow/cpp/test_node_gtest.cpp
+    unit/src/test_node_gtest.cpp
 )
 target_link_libraries(test_node_gtest PRIVATE
     agentflow
@@ -87,7 +87,7 @@ target_link_libraries(test_node_gtest PRIVATE
 )
 
 add_executable(test_databus_gtest
-    unit/workflow/cpp/test_databus_gtest.cpp
+    unit/src/test_databus_gtest.cpp
 )
 target_link_libraries(test_databus_gtest PRIVATE
     agentflow
@@ -96,7 +96,7 @@ target_link_libraries(test_databus_gtest PRIVATE
 )
 
 add_executable(test_event_gtest
-    unit/workflow/cpp/test_event_gtest.cpp
+    unit/src/test_event_gtest.cpp
 )
 target_link_libraries(test_event_gtest PRIVATE
     agentflow
@@ -117,7 +117,7 @@ if(NOT MSVC)
 endif()
 
 # Add subdirectories
-add_subdirectory(unit/workflow/scripts)
+# (scripts directory is currently not used)
 
 # Testing
 enable_testing()

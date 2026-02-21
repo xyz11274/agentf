@@ -269,10 +269,10 @@ set(AGENTFLOW_WORKFLOW_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/workflow/workflow_actor.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/node/node.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/node/node_actor.cpp
-    ${AGENTFLOW_SOURCE_DIR}/workflow/node/code_loader.cpp
+    ${AGENTFLOW_SOURCE_DIR}/workflow/node/exe_loader.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/edge/edge.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/dsl/workflow_parser.cpp
-    ${AGENTFLOW_VENDOR_DIR}/adapter/dsl/json_adapter_factory.cpp
+    ${AGENTFLOW_VENDOR_DIR}/adapter/json/json_adapter_factory.cpp
 )
 
 # Runtime sources
@@ -280,8 +280,8 @@ set(AGENTFLOW_RUNTIME_SOURCES
     # Actor subsystem
     ${AGENTFLOW_SOURCE_DIR}/runtime/runtime_actor.cpp
     # Scheduler
-    ${AGENTFLOW_SOURCE_DIR}/runtime/agent_runtime.cpp
-    ${AGENTFLOW_TEST_DIR}/unit/workflow/lib/performance_metrics.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/runtime.cpp
+    ${AGENTFLOW_TEST_DIR}/unit/data/lib/performance_metrics.cpp
     # Databus (Communication)
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/databus.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/local_databus.cpp
@@ -316,18 +316,17 @@ if(USE_PROTOACTOR)
   )
   list(APPEND AGENTFLOW_RUNTIME_SOURCES
        ${AGENTFLOW_VENDOR_DIR}/adapter/actor/message_serializer.cpp
-       ${AGENTFLOW_VENDOR_DIR}/adapter/actor/ask_pattern_manager.cpp
   )
 endif()
 
 # DSL/JSON adapter sources
 set(AGENTFLOW_DSL_ADAPTER_SOURCES
-    ${AGENTFLOW_VENDOR_DIR}/adapter/dsl/json_adapter_stub.cpp
+    ${AGENTFLOW_VENDOR_DIR}/adapter/json/json_adapter_stub.cpp
 )
 
 if(USE_RAPIDJSON)
   list(APPEND AGENTFLOW_DSL_ADAPTER_SOURCES
-       ${AGENTFLOW_VENDOR_DIR}/adapter/dsl/json_adapter_rapidjson.cpp
+       ${AGENTFLOW_VENDOR_DIR}/adapter/json/json_adapter_rapidjson.cpp
   )
 endif()
 
@@ -445,15 +444,15 @@ if(AGENTFLOW_BUILD_TESTS)
   message(STATUS "Google Test found. Using Google Test framework.")
   # Google Test based tests
   add_executable(test_agentflow_gtest
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_agent_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_workflow_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_node_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_databus_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_event_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_workflow_json_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_agent_json_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_local_channel_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_hot_reload.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_agent_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_workflow_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_node_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_databus_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_event_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_workflow_json_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_agent_json_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_local_channel_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_hot_reload.cpp
   )
   if(TARGET GTest::gtest)
     target_link_libraries(test_agentflow_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)
@@ -473,7 +472,7 @@ if(AGENTFLOW_BUILD_TESTS)
 
   # Hot reload tests (separate executable for better organization)
     add_executable(test_hot_reload
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_hot_reload.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_hot_reload.cpp
     )
   if(TARGET GTest::gtest)
     target_link_libraries(test_hot_reload PRIVATE agentflow GTest::gtest GTest::gtest_main)
@@ -496,7 +495,7 @@ if(AGENTFLOW_BUILD_TESTS)
 
   # Adapter isolation tests with Google Test
     add_executable(test_adapter_isolation
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_adapter_isolation.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_adapter_isolation.cpp
     )
   if(TARGET GTest::gtest)
     target_link_libraries(test_adapter_isolation PRIVATE agentflow GTest::gtest GTest::gtest_main)
@@ -517,11 +516,11 @@ if(AGENTFLOW_BUILD_TESTS)
     message(STATUS "Google Test not found. Using simple test harness.")
     # Simple test harness (fallback)
     add_executable(test_agentflow_simple
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_main.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_agent.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_workflow.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_node.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_databus.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_main.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_agent.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_workflow.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_node.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_databus.cpp
     )
     target_link_libraries(test_agentflow_simple PRIVATE agentflow)
     add_test(NAME AgentFlowSimpleTests COMMAND test_agentflow_simple)
