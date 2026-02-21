@@ -90,6 +90,55 @@ option(AGENTFLOW_BUILD_TESTS "Build unit tests" ON)
 # Find optional dependencies (all with graceful fallback to stub implementations)
 # ============================================================================
 
+# libevent for event management
+find_package(libevent CONFIG QUIET
+  PATHS
+    "${CMAKE_INSTALL_PREFIX}"
+    "${HOMEBREW_PREFIX}/opt/libevent"
+    "/usr/local"
+    "/usr"
+  PATH_SUFFIXES
+    lib/cmake
+    lib/cmake/libevent
+    share/cmake
+)
+if(NOT libevent_FOUND)
+  # Try pkg-config as fallback
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(libevent libevent)
+  endif()
+  if(NOT libevent_FOUND)
+    # Check homebrew location directly
+    if(HOMEBREW_PREFIX AND EXISTS "${HOMEBREW_PREFIX}/opt/libevent")
+      set(LIBEVENT_ROOT "${HOMEBREW_PREFIX}/opt/libevent")
+      find_path(LIBEVENT_INCLUDE_DIR event.h
+        PATHS ${LIBEVENT_ROOT} /usr/local /usr
+        PATH_SUFFIXES include
+        NO_DEFAULT_PATH
+      )
+      find_library(LIBEVENT_LIB event
+        PATHS ${LIBEVENT_ROOT} /usr/local /usr
+        PATH_SUFFIXES lib
+        NO_DEFAULT_PATH
+      )
+      if(LIBEVENT_INCLUDE_DIR AND LIBEVENT_LIB)
+        set(libevent_FOUND TRUE)
+        set(libevent_INCLUDE_DIRS ${LIBEVENT_INCLUDE_DIR})
+        set(libevent_LIBRARIES ${LIBEVENT_LIB})
+        message(STATUS "libevent found (manual detection)")
+      endif()
+    endif()
+  endif()
+  if(NOT libevent_FOUND)
+    message(STATUS "libevent not found")
+    message(STATUS "  To install: brew install libevent (macOS) or sudo apt-get install libevent-dev (Ubuntu)")
+  else()
+    message(STATUS "libevent found")
+  endif()
+else()
+  message(STATUS "libevent found")
+endif()
+
 # Protoactor-cpp for Actor-based implementation
 find_package(protoactor CONFIG QUIET
   PATHS
@@ -206,6 +255,12 @@ include_directories(${AGENTFLOW_INCLUDE_DIR}/internal)
 set(AGENTFLOW_AGENT_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/agent/agent.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/agent_actor.cpp
+    ${AGENTFLOW_SOURCE_DIR}/agent/session.cpp
+    ${AGENTFLOW_SOURCE_DIR}/agent/task.cpp
+    ${AGENTFLOW_SOURCE_DIR}/agent/messages.cpp
+    ${AGENTFLOW_SOURCE_DIR}/agent/context.cpp
+    ${AGENTFLOW_SOURCE_DIR}/agent/event.cpp
+    ${AGENTFLOW_SOURCE_DIR}/agent/package.cpp
 )
 
 # Workflow sources (includes node, edge, dsl)
@@ -231,10 +286,6 @@ set(AGENTFLOW_RUNTIME_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/databus.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/local_databus.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/remote_databus.cpp
-    # Network
-    ${AGENTFLOW_SOURCE_DIR}/runtime/network/private_protocol.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/network/request.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/network/response.cpp
     # Event & Metrics
     ${AGENTFLOW_SOURCE_DIR}/runtime/event.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/metrics.cpp
@@ -251,6 +302,11 @@ set(AGENTFLOW_UTILS_SOURCES
 set(AGENTFLOW_ACTOR_ADAPTER_SOURCES
     ${AGENTFLOW_VENDOR_DIR}/adapter/actor/stub_impl.cpp
     ${AGENTFLOW_VENDOR_DIR}/adapter/actor/adapter_factory.cpp
+)
+
+# Event adapter sources
+set(AGENTFLOW_EVENT_ADAPTER_SOURCES
+    ${AGENTFLOW_VENDOR_DIR}/adapter/event/libevent_adapter.cpp
 )
 
 # Include Protoactor implementation and additional sources only if available
@@ -281,6 +337,7 @@ set(AGENTFLOW_SOURCES
     ${AGENTFLOW_RUNTIME_SOURCES}
     ${AGENTFLOW_UTILS_SOURCES}
     ${AGENTFLOW_ACTOR_ADAPTER_SOURCES}
+    ${AGENTFLOW_EVENT_ADAPTER_SOURCES}
     ${AGENTFLOW_DSL_ADAPTER_SOURCES}
 )
 
@@ -291,6 +348,20 @@ target_include_directories(agentflow PUBLIC ${AGENTFLOW_INCLUDE_DIR})
 # Link with common libraries
 find_package(Threads REQUIRED)
 target_link_libraries(agentflow PUBLIC Threads::Threads)
+
+# Link with libevent if available
+if(libevent_FOUND)
+  if(TARGET libevent::core)
+    target_link_libraries(agentflow PUBLIC libevent::core)
+  elseif(libevent_LIBRARIES)
+    target_link_libraries(agentflow PUBLIC ${libevent_LIBRARIES})
+    if(libevent_INCLUDE_DIRS)
+      target_include_directories(agentflow PUBLIC ${libevent_INCLUDE_DIRS})
+    endif()
+  endif()
+  target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_LIBEVENT=1)
+  message(STATUS "libevent linked successfully")
+endif()
 
 # Link with Protoactor if available
 if(USE_PROTOACTOR)
@@ -323,11 +394,11 @@ add_executable(example_adapter ${AGENTFLOW_EXAMPLE_DIR}/adapter_example.cpp)
 target_link_libraries(example_adapter PRIVATE agentflow)
 
 # DSL parser example
-add_executable(example_dsl ${AGENTFLOW_EXAMPLE_DIR}/dsl_example.cpp)
+add_executable(example_dsl ${AGENTFLOW_EXAMPLE_DIR}/workflow/dsl_example.cpp)
 target_link_libraries(example_dsl PRIVATE agentflow)
 
 # Node execution example
-add_executable(example_node_execution ${AGENTFLOW_EXAMPLE_DIR}/node_execution_example.cpp)
+add_executable(example_node_execution ${AGENTFLOW_EXAMPLE_DIR}/workflow/node_execution_example.cpp)
 target_link_libraries(example_node_execution PRIVATE agentflow)
 
 # Metrics collector example
@@ -342,6 +413,9 @@ target_link_libraries(example_p1_features PRIVATE agentflow)
 add_executable(example_storage ${AGENTFLOW_EXAMPLE_DIR}/storage_example.cpp)
 target_link_libraries(example_storage PRIVATE agentflow)
 
+# Agent components example
+add_executable(example_agent ${AGENTFLOW_EXAMPLE_DIR}/agent/agent_example.cpp)
+target_link_libraries(example_agent PRIVATE agentflow)
 
 
 # ============================================================================
@@ -379,7 +453,6 @@ if(AGENTFLOW_BUILD_TESTS)
       ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_workflow_json_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_agent_json_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_local_channel_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_request_response_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/workflow/cpp/test_hot_reload.cpp
   )
   if(TARGET GTest::gtest)

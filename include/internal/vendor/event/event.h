@@ -14,12 +14,38 @@
 #include <vector>
 
 #include "agent/common.h"
+#include "vendor/adapter/event/event_adapter.h"
 
 namespace agentflow {
 
 // Forward declarations
 class Workflow;
 class Node;
+
+/**
+ * Helper function to convert agentflow::EventType to adapter::EventType.
+ * Maps the workflow event types to the adapter's event type enumeration.
+ */
+inline vendor::adapter::EventType MapEventType(EventType event_type) {
+  switch(event_type) {
+    case EventType::NODE_START:
+      return vendor::adapter::EventType::NODE_START;
+    case EventType::NODE_COMPLETE:
+      return vendor::adapter::EventType::NODE_COMPLETE;
+    case EventType::NODE_FAILURE:
+      return vendor::adapter::EventType::NODE_FAILURE;
+    case EventType::NODE_RETRY:
+      return vendor::adapter::EventType::NODE_RETRY;
+    case EventType::DATA_READY:
+      return vendor::adapter::EventType::DATA_READY;
+    case EventType::SYNC_WAIT:
+      return vendor::adapter::EventType::SYNC_WAIT;
+    case EventType::DEPENDENCY_READY:
+      return vendor::adapter::EventType::DEPENDENCY_READY;
+    default:
+      return vendor::adapter::EventType::CUSTOM;
+  }
+}
 
 /// @brief Represents an event in the workflow execution pipeline
 class WorkflowEvent {
@@ -61,7 +87,7 @@ using EventHandler = std::function<void(const WorkflowEvent&)>;
 class EventManager {
 public:
   /// @brief Constructor
-  EventManager() = default;
+  EventManager();
 
   /// @brief Destructor
   ~EventManager() = default;
@@ -97,6 +123,7 @@ private:
   mutable std::mutex                  handler_mutex_;
   std::map<std::string, Subscription> handlers_;
   size_t                              next_subscription_id_ = 0;
+  std::unique_ptr<vendor::adapter::EventAdapter> adapter_;
 
   std::string generate_subscription_id();
 };

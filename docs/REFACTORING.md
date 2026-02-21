@@ -57,7 +57,7 @@ include/
 
 **说明：**
 - `external/` 仅暴露 `agent/` 与 `node/` 最小外部接口
-- `internal/` 承载 `runtime`、`storage`、`network`、`workflow` 等全部内部实现能力
+- `internal/` 承载 `runtime`、`storage`、`workflow` 等全部内部实现能力
 
 ### 2. 测试目录重组
 
@@ -99,7 +99,6 @@ vendor/                 # 三方依赖相关实现
 │   ├── dsl/            # DSL 解析器适配器
 │   │   ├── json_adapter_rapidjson.cpp
 │   │   └── json_adapter_stub.cpp
-│   ├── network/        # 网络适配器（adapter_factory.cpp）
 │   └── serialization/  # 序列化适配器（adapter_factory.cpp）
 └── <downloaded>/       # 下载的三方依赖（gitignore）
 ```
@@ -129,9 +128,8 @@ src/
 │   ├── scheduler/      # 调度器（agent_runtime, control_flow）
 │   ├── communication/  # 通信（databus, hot_reload, local_channel, zero_copy_databus）
 │   ├── storage/        # 存储（agent_storage, storage_manager）
-│   ├── actor/          # Actor 系统运行时（actor_system, node_actor 等）
-│   └── network/        # 运行时网络（private_protocol, request, response）
-├── vendor/             # 三方适配实现（actor/dsl/event/network/serialization/storage）
+│   └── actor/          # Actor 系统运行时（actor_system, node_actor 等）
+├── vendor/             # 三方适配实现（actor/dsl/event/serialization/storage）
 └── utils/              # 工具实现（logger, thread_pool）
 ```
 
@@ -731,7 +729,6 @@ set(AGENTFLOW_ADAPTER_SOURCES
 
 | 测试文件 | 用例数 | 覆盖组件 | 质量 |
 |---------|--------|---------|------|
-| test_request_response_gtest.cpp | 56 | Request/Response 构建、序列化、验证 | 完善 |
 | test_local_channel_gtest.cpp | 43 | LocalChannel 完整功能 | 完善 |
 | test_hot_reload.cpp | 44 | 多语言热重载、版本管理 | 完善 |
 | test_workflow_json_gtest.cpp | 29 | Workflow JSON 解析 | 完善 |
@@ -921,10 +918,92 @@ set(AGENTFLOW_ADAPTER_SOURCES
 
 ---
 
+## 变更记录：移除网络模块
+
+### 移除内容
+
+**2026-02-21**: 移除了 `src/runtime/network` 目录，包括：
+- `src/runtime/network/private_protocol.cpp` - 私有协议编码解码器
+- `src/runtime/network/request.cpp` - Request 类实现
+- `src/runtime/network/response.cpp` - Response 类实现
+- `tests/unit/workflow/cpp/test_request_response_gtest.cpp` - Request/Response 测试用例（56个测试）
+
+### 移除原因
+
+网络模块（Request/Response/PrivateProtocol）在当前阶段不是核心功能，优先级较低。移除该模块以：
+1. 简化核心功能结构
+2. 减少代码维护负担
+3. 专注于 Agent、Workflow、Runtime 等核心模块的完善
+4. 为将来的网络功能设计留出空间
+
+### 后续计划
+
+- 网络通信功能可在未来版本中重新设计和实现
+- 将根据实际需求确定通信协议和 API 设计
+
+---
+
+## 最新变更总结 (2026-02-21)
+
+### 事件适配器 (Event Adapter)
+
+**新增内容：**
+- `include/internal/vendor/event_adapter.h` - 事件适配器接口定义
+- 支持将 Agent 运行时事件转换为可观察的事件流
+- 提供统一的事件发送和订阅机制
+
+**功能特性：**
+- 事件类型：Agent 生命周期事件（启动、停止、错误等）
+- 事件过滤和优先级支持
+- 异步事件处理机制
+
+### Agent 组件完善
+
+**更新内容：**
+- Agent 组件加强了生命周期管理
+- 改进了 Workflow 任务调度和执行
+- 完善了错误处理和日志记录机制
+
+### 示例代码重组
+
+**调整内容：**
+- 将 `examples/dsl` 目录中的所有 DSL 示例文件移动到 `examples/workflow/dsl/`
+- 包含文件：
+  - `conditional_workflow.json` - 条件流程示例
+  - `loop_workflow.json` - 循环流程示例
+  - `sample_workflow.json` - 基础流程示例
+  - `visualizer.html` - 流程可视化工具
+- 目的：统一整理示例代码结构，使 DSL 示例与 Workflow 示例位置更加紧密
+
+**新的目录结构：**
+```
+examples/
+├── workflow/
+│   ├── dsl/                      # DSL 相关示例（新位置）
+│   │   ├── conditional_workflow.json
+│   │   ├── loop_workflow.json
+│   │   ├── sample_workflow.json
+│   │   └── visualizer.html
+│   ├── dsl_example.cpp
+│   └── node_execution_example.cpp
+├── agent/
+├── adapter_example.cpp
+├── basic_example.cpp
+├── metrics_example.cpp
+├── p1_features_example.cpp
+├── storage_example.cpp
+└── README.md
+```
+
+---
+
 ## 更新日志
 
 | 日期 | 变更 |
 |------|------|
+| 2026-02-21 | 新增事件适配器 (Event Adapter) 和示例代码重组：DSL 示例从 examples/dsl 移动到 examples/workflow/dsl |
+| 2026-02-21 | 移除网络模块 (Request/Response/PrivateProtocol) 以简化核心功能结构，优先专注于 Agent、Workflow、Runtime 等核心模块 |
+| 2026-02-21 | 完成网络协议和Request/Response实现：Protocol Encoder/Decoder、Request/Response类、JSON序列化支持 |
 | 2026-02-18 | 合并 roadmap.md 和 code-review.md 到 planning.md，整合项目规划文档 |
 | 2026-02-17 | 代码完备性评估：修正功能状态标注，标记 stub/不完备功能 |
 | 2026-02-17 | 整理功能规划文档，更新至 docs 目录 |

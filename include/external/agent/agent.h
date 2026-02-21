@@ -13,6 +13,20 @@
 namespace agentflow {
 namespace framework {
 
+// Forward declarations for internal agent components
+class AgentSession;
+class AgentTask;
+class AgentMessages;
+class AgentContext;
+class AgentEvent;
+class AgentPackage;
+
+}  // namespace framework
+}  // namespace agentflow
+
+namespace agentflow {
+namespace framework {
+
 /**
  * Agent metadata structure
  */
@@ -55,13 +69,21 @@ public:
   };
 
   explicit Agent(const Config& config);
-  ~Agent() = default;
+  ~Agent();
 
   // Getters
   const AgentId&     get_id() const { return config_.id; }
   const std::string& get_name() const { return config_.name; }
   AgentState         get_state() const { return state_; }
   const Config&      get_config() const { return config_; }
+
+  // Component accessors
+  std::shared_ptr<AgentSession>   get_session() const { return session_; }
+  std::shared_ptr<AgentTask>      get_current_task() const { return current_task_; }
+  std::shared_ptr<AgentMessages>  get_messages() const { return messages_; }
+  std::shared_ptr<AgentContext>   get_context() const { return context_; }
+  std::shared_ptr<AgentEvent>     get_event_handler() const { return event_; }
+  std::shared_ptr<AgentPackage>   get_package() const { return package_; }
 
   // Workflow management
   void                                          add_workflow(std::shared_ptr<Workflow> workflow);
@@ -125,6 +147,17 @@ private:
   std::queue<std::string> event_queue_;
   mutable std::mutex      mutex_;
   mutable std::mutex      event_mutex_;
+
+  // Agent components
+  std::shared_ptr<AgentSession>   session_;
+  std::shared_ptr<AgentTask>      current_task_;
+  std::shared_ptr<AgentMessages>  messages_;
+  std::shared_ptr<AgentContext>   context_;
+  std::shared_ptr<AgentEvent>     event_;
+  std::shared_ptr<AgentPackage>   package_;
+
+  // Helper method to initialize components
+  bool initialize_components();
 };
 
 }  // namespace framework

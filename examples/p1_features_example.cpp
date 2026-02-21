@@ -364,50 +364,18 @@ void example_control_flow_workflow() {
 
 /**
  * Example 4: Business data communication via private protocol
+ * NOTE: This example is disabled as the network module was removed to simplify
+ * the core functionality structure (see docs/REFACTORING.md for details).
+ * Network communication functionality can be re-implemented in future versions
+ * based on actual requirements.
  */
 void example_private_protocol() {
   Logger::instance().info("=== Example 4: Private Protocol Communication ===");
+  Logger::instance().info("NOTE: Network module has been removed. See docs/REFACTORING.md for details.");
+  Logger::instance().info("This example is currently disabled.");
 
-  // Create protocol header
-  network::ProtocolHeader header;
-  header.set_header(static_cast<uint16_t>(network::MessageType::DATA_REQUEST), 128, 1001);
-
-  Logger::instance().info_f("Protocol header created: magic=0x%08X, version=0x%04X, type=0x%04X",
-                            header.magic, header.version, header.message_type);
-  Logger::instance().info_f("Header is valid: %s", header.is_valid() ? "true" : "false");
-
-  // Create and encode a data request
-  network::DataRequest data_request{ "sender_agent_001", "receiver_agent_001", "data_key_123",
-                                     "request_id_456" };
-
-  // Encode the data request
-  auto encoded = network::ProtocolEncoder::encode_data_request(data_request);
-  Logger::instance().info_f("Encoded data request: %zu bytes", encoded.size());
-
-  // Decode the data request back
-  network::DataRequest decoded_request;
-  bool                 decode_success =
-      network::ProtocolDecoder::decode_message(encoded.data(), encoded.size(), decoded_request);
-
-  if(decode_success) {
-    Logger::instance().info_f(
-        "Decoded request: sender=%s, receiver=%s, key=%s", decoded_request.sender_id.c_str(),
-        decoded_request.receiver_id.c_str(), decoded_request.data_key.c_str());
-  } else {
-    Logger::instance().error("Failed to decode data request");
-  }
-
-  // Create and encode a control start message
-  network::ControlStart control_start{ "controller_001", "target_001", "start_workflow" };
-
-  auto encoded_control = network::ProtocolEncoder::encode_control_start(control_start);
-  Logger::instance().info_f("Encoded control start: %zu bytes", encoded_control.size());
-
-  // Create and encode a flow condition message
-  network::FlowCondition flow_condition{ "workflow_001", "node_002", "status", "active", true };
-
-  auto encoded_flow = network::ProtocolEncoder::encode_flow_condition(flow_condition);
-  Logger::instance().info_f("Encoded flow condition: %zu bytes", encoded_flow.size());
+  // Example implementation would be similar to previous versions
+  // Network communication functionality can be re-designed when needed
 }
 
 /**

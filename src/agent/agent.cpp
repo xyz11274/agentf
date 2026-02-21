@@ -8,6 +8,14 @@
 #include "utils/file_storage.h"
 #include "utils/logger.h"
 
+// Include internal agent components
+#include "agent/session.h"
+#include "agent/task.h"
+#include "agent/messages.h"
+#include "agent/context.h"
+#include "agent/event.h"
+#include "agent/package.h"
+
 #ifdef AGENTFLOW_WITH_RAPIDJSON
 #include <rapidjson/document.h>
 #include <rapidjson/prettywriter.h>
@@ -148,6 +156,58 @@ bool agent_config_from_json(const std::string& json_str, Agent::Config& config,
 }  // namespace
 
 Agent::Agent(const Config& config) : config_(config), state_(AgentState::CREATED) {
+  initialize_components();
+}
+
+Agent::~Agent() {
+  // Clean up components
+  session_.reset();
+  current_task_.reset();
+  messages_.reset();
+  context_.reset();
+  event_.reset();
+  package_.reset();
+  
+  cleanup_resources();
+}
+
+bool Agent::initialize_components() {
+  // Initialize session component
+  AgentSession::Config session_config;
+  session_config.session_id = config_.id + "_session";
+  session_ = std::make_shared<AgentSession>(session_config);
+
+  // Initialize task component
+  AgentTask::Config task_config;
+  task_config.task_id = config_.id + "_task";
+  task_config.task_type = "default";
+  current_task_ = std::make_shared<AgentTask>(task_config);
+
+  // Initialize messages component
+  AgentMessages::Config messages_config;
+  messages_config.max_queue_size = 1024;
+  messages_ = std::make_shared<AgentMessages>(messages_config);
+
+  // Initialize context component
+  AgentContext::Config context_config;
+  context_config.context_id = config_.id + "_context";
+  context_config.agent_id = config_.id;
+  context_ = std::make_shared<AgentContext>(context_config);
+
+  // Initialize event component
+  AgentEvent::Config event_config;
+  event_config.handler_id = config_.id + "_event_handler";
+  event_config.async_dispatch = false;
+  event_ = std::make_shared<AgentEvent>(event_config);
+
+  // Initialize package component
+  AgentPackage::Config package_config;
+  package_config.package_id = config_.id + "_package";
+  package_config.package_name = config_.name;
+  package_config.version = config_.version;
+  package_ = std::make_shared<AgentPackage>(package_config);
+
+  return true;
 }
 
 void Agent::add_workflow(std::shared_ptr<Workflow> workflow) {
