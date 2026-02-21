@@ -3,14 +3,28 @@
 | 字段 | 内容 |
 |------|------|
 | 项目名称 | AgentFlow |
-| 文档版本 | v2.1 |
-| 编写日期 | 2026-02-19 |
+| 文档版本 | v2.2 |
+| 编写日期 | 2026-02-21 |
 | 架构状态 | 已批准 |
 | 适用范围 | AgentFlow 核心引擎（开发编排框架 + 运行框架），版本 0.1.x |
 
 ## 架构摘要
 
 > AgentFlow 采用**双框架分离架构**——开发编排框架负责 Agent/Workflow/Node/Edge 的定义与装配，运行框架通过三层 Master-Worker 调度引擎完成Workflow实例中DAG图或子图的并发执行；核心技术栈为 C++17 + Actor 反应式模型（Protoactor-cpp 必选）；首要质量目标是高吞吐（单机 > 10000 节点/秒）、低延迟（P99 节点调度 < 10ms）和热重载零停机。
+
+### 2026-02-21 增量实现对齐（最新代码）
+
+- Agent 消息主链路已实现为：`reqmsg -> agent.defaultsession -> agent.newsession -> agent.coordinator -> agent.newsession.task -> agent.workflow`。
+- Agent 内部采用 `AgentMsgQue` 多优先级队列模型；每会话具备高/默认接收队列与发送队列。
+- Runtime 支持全局角色化：`MASTER`（含 worker 能力）与 `WORKER`；引入 deployer/scheduler/worker 组合实现 task 到 workflow 实例再到 worker 的闭环调度。
+- 内建 workflow 资产目录已落地：`publish/workflow/memory|skills|tools`，支持通过 package 元数据按需启用与业务定制。
+- 当前回归验证状态：全量 `ctest` 通过（10/10）。
+
+### 下一步架构优化方向
+
+1. 将 runtime 共享状态从内存实现扩展为外部可插拔后端，提升多实例一致性能力。
+2. 为 deployer/scheduler 增加调度可观测性（决策日志、指标、追踪）与更细粒度容灾策略。
+3. 为内建 workflow 增加版本治理与兼容策略，支持可控升级/回滚。
 
 ### 设计目标
 
@@ -1816,5 +1830,6 @@ Node 重试：
 
 | 版本 | 日期 | 作者 | 变更说明 |
 |------|------|------|---------|
+| v2.2 | 2026-02-21 | @DanielKernel | 同步 Agent 消息链路（默认会话+动态会话+Coordinator+Task 映射）、Runtime master/worker 全局部署调度能力、内建 workflow（memory/skills/tools）与后续优化方向 |
 | v1.0 | 2026-02-17 | @DanielKernel | 初始架构文档 |
 | v2.1 | 2026-02-19 | @DanielKernel | 同步目录结构重构：include/external/ + include/internal/ 替代 include/agentflow/；vendor/adapter/ 适配器独立；tests/ 重组为 unit/ + functional/；更新逻辑组件路径映射、构建目标结构、交付物目录 |

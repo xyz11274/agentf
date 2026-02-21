@@ -73,6 +73,24 @@ AgentFlow/
 - 构建脚本 `publish/agent_build.sh` 在打包时仅注入声明的内建 workflow 到包内 `workflows/builtin/<name>/`。
 - AgentPackage 加载时支持解析 `builtin_workflows` 并将可解析的内建流程文件加入 workflow 列表。
 
+### 0.3 今日优化交付与验证快照（2026-02-21）
+
+本轮代码已完成“Agent 消息链路 + Runtime 全局调度 + Workflow 内建模板”三条主线的端到端打通，关键更新如下：
+
+- **Agent 路径闭环**：`reqmsg -> default_session -> dynamic_session -> coordinator -> session_task -> workflow` 已落到代码与测试。
+- **会话与任务归属强化**：每个 Agent 固定默认会话，动态会话按 `user_id + client_id` 拆分；Task 仅归属触发会话并携带 workflow 映射元数据。
+- **Runtime 主从能力成型**：`MASTER` 包含 `WORKER` 能力，新增 deployer/scheduler/worker/shared state 协作链路，支持 worker 注册、心跳、负载调度与 workflow 实例映射刷新。
+- **内建 workflow 资产化**：新增 `publish/workflow/{memory,skills,tools}`，支持 `builtin_workflows` 按需打包、解析和加载，并保留业务定制入口。
+- **测试与构建验证**：最新全量回归通过（`ctest --output-on-failure`，10/10 passed）。
+
+### 0.4 下一步继续优化方向（基于当前代码状态）
+
+1. **共享状态后端外置化**：将 `IRuntimeSharedState` 从内存实现扩展到可插拔外部存储（如 Redis/etcd），支撑多 runtime 实例真实共享。
+2. **deployer 调度策略增强**：在状态/负载基础上补充容量阈值、故障隔离与预热策略，提升高并发下的稳定性。
+3. **scheduler 可观测性与可解释性**：补充 task->workflow->worker 的调度决策日志与指标，支持按会话和 agent 维度追踪。
+4. **内建 workflow 版本化管理**：为 memory/skills/tools 引入版本字段与兼容策略，支持灰度升级与回滚。
+5. **协同任务插件治理**：对 so 协同算法增加加载约束、校验与隔离机制，降低线上扩展风险。
+
 ### 1. 头文件目录重组
 
 **目录结构：**
@@ -1045,6 +1063,7 @@ examples/
 
 | 日期 | 变更 |
 |------|------|
+| 2026-02-21 | 刷新 Agent/Runtime/Workflow 当日优化快照：补充消息链路、master/worker 全局调度、内建 workflow 资产化与全量测试结果（ctest 10/10）并更新下一步优化方向 |
 | 2026-02-21 | 新增事件适配器 (Event Adapter) 和示例代码重组：DSL 示例从 examples/dsl 移动到 examples/workflow/dsl |
 | 2026-02-21 | 移除网络模块 (Request/Response/PrivateProtocol) 以简化核心功能结构，优先专注于 Agent、Workflow、Runtime 等核心模块 |
 | 2026-02-21 | 完成网络协议和Request/Response实现：Protocol Encoder/Decoder、Request/Response类、JSON序列化支持 |
