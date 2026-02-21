@@ -292,7 +292,6 @@ set(AGENTFLOW_RUNTIME_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/local_databus.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/remote_databus.cpp
     # Event & Metrics
-    ${AGENTFLOW_SOURCE_DIR}/runtime/event.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/metrics.cpp
 )
 

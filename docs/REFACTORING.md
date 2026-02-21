@@ -1179,3 +1179,36 @@ All examples have been validated:
 - `examples/agent/basic_agent/workflow.json` (新增)
 - `examples/agent/calculator_agent/workflow.json` (新增)
 
+### 2026-06-25 Agent核心重构与事件系统合并
+
+1. **运行时清理**：
+   - 移除了未使用的 `src/runtime/network` 目录。
+   - 删除了旧的 `src/runtime/event.cpp` 和 `include/internal/vendor/event/event.h`，将事件管理逻辑合并至 `AgentEvent`。
+   - 删除了 `Testing` 目录及冗余的测试目录 (`tests/unit/workflow`, `tests/unit/runtime`, `tests/unit/agent`)。
+
+2. **事件系统增强**：
+   - 基于 `libevent` 实现了 `EventAdapter` (`vendor/adapter/event/libevent_adapter.cpp`)。
+   - `AgentEvent` 集成了适配器模式，支持同步和基于 `libevent` 的异步事件分发。
+   - 更新了 `tests/unit/src/test_event_gtest.cpp` 以测试新的 `AgentEvent` 类。
+
+3. **Agent 核心组件增强**：
+   - 实现了 `AgentSession` (会话管理), `AgentTask` (任务管理), `AgentMessages` (消息队列), `AgentContext` (上下文管理)。
+   - `Agent` 类集成所有新组件，并在 `initialize_components` 中统一初始化。
+   - 更新了 `src/agent/agent.cpp` 和 `include/external/agent/agent.h`。
+
+4. **示例与目录重构**：
+   - 将 `examples/dsl` 目录重构为 `examples/workflow`，包含原来的 DSL 示例和 JSON 工作流文件。
+   - 将 `visualizer.html` 移至 `publish/agent` 目录。
+   - 确保 `examples/agent` 包含 Agent 包示例 (`basic_agent`, `calculator_agent`)。
+
+### 文件变更
+- `src/runtime/event.cpp` (删除)
+- `include/internal/vendor/event/event.h` (删除)
+- `src/agent/session.cpp` / `include/internal/agent/session.h` (新增/更新)
+- `src/agent/task.cpp` / `include/internal/agent/task.h` (新增/更新)
+- `src/agent/messages.cpp` / `include/internal/agent/messages.h` (新增/更新)
+- `src/agent/context.cpp` / `include/internal/agent/context.h` (新增/更新)
+- `src/agent/event.cpp` / `include/internal/agent/event.h` (更新)
+- `src/agent/agent.cpp` (更新)
+- `CMakeLists.txt` (更新)
+

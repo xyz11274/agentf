@@ -1,17 +1,50 @@
 #include "agent/event.h"
+#include "vendor/adapter/event/libevent_adapter.h"
 
 #include <mutex>
 #include <algorithm>
+#include <iostream>
 
 namespace agentflow {
 namespace framework {
 
+using AdapterEventType = agentflow::vendor::adapter::EventType;
+
+AdapterEventType MapToAdapterEventType(AgentEvent::EventType type) {
+    switch (type) {
+        case AgentEvent::EventType::TASK_STARTED: return AdapterEventType::TASK_STARTED;
+        case AgentEvent::EventType::TASK_COMPLETED: return AdapterEventType::TASK_COMPLETED;
+        case AgentEvent::EventType::TASK_FAILED: return AdapterEventType::TASK_FAILED;
+        case AgentEvent::EventType::MESSAGE_SENT: return AdapterEventType::AGENT_MESSAGE;
+        case AgentEvent::EventType::MESSAGE_RECEIVED: return AdapterEventType::AGENT_MESSAGE;
+        
+        case AgentEvent::EventType::NODE_START: return AdapterEventType::NODE_START;
+        case AgentEvent::EventType::NODE_COMPLETE: return AdapterEventType::NODE_COMPLETE;
+        case AgentEvent::EventType::NODE_FAILURE: return AdapterEventType::NODE_FAILURE;
+        case AgentEvent::EventType::NODE_RETRY: return AdapterEventType::NODE_RETRY;
+        case AgentEvent::EventType::DATA_READY: return AdapterEventType::DATA_READY;
+        case AgentEvent::EventType::SYNC_WAIT: return AdapterEventType::SYNC_WAIT;
+        case AgentEvent::EventType::DEPENDENCY_READY: return AdapterEventType::DEPENDENCY_READY;
+        
+        default: return AdapterEventType::CUSTOM;
+    }
+}
+
 AgentEvent::AgentEvent(const Config& config)
     : config_(config) {
+    if (config_.async_dispatch) {
+        adapter_ = agentflow::vendor::adapter::CreateLibEventAdapter();
+        if (adapter_) {
+            adapter_->Initialize();
+        }
+    }
 }
 
 AgentEvent::~AgentEvent() {
   std::lock_guard<std::mutex> lock(mutex_);
+  if (adapter_) {
+      adapter_->Shutdown();
+  }
   listeners_.clear();
   event_history_.clear();
 }
@@ -34,8 +67,16 @@ bool AgentEvent::emit_event(const EventData& event_data) {
 }
 
 bool AgentEvent::emit_event_async(const EventData& event_data) {
-  // For now, just emit synchronously
-  // In a real implementation, this would queue the event for async processing
+  if (config_.async_dispatch && adapter_) {
+      agentflow::vendor::adapter::EventData adapter_data;
+      adapter_data.type = MapToAdapterEventType(event_data.type);
+      adapter_data.timestamp = event_data.timestamp;
+      // We pass the original event data via custom_data to retrieve it back
+      adapter_data.custom_data = std::make_shared<EventData>(event_data);
+      
+      adapter_->Publish(adapter_data);
+      return true;
+  }
   return emit_event(event_data);
 }
 
@@ -45,7 +86,26 @@ int AgentEvent::register_listener(EventType type, EventListener listener) {
     return -1;
   }
   int listener_id = next_listener_id_++;
+  bool first_listener = listeners_[type].empty();
   listeners_[type].push_back({listener_id, listener});
+  
+  // If async dispatch is enabled and this is the first listener for this type,
+  // subscribe to the adapter to receive events of this type.
+  if (config_.async_dispatch && adapter_ && first_listener) {
+      AdapterEventType adapter_type = MapToAdapterEventType(type);
+      
+      auto self = this;
+      adapter_->Subscribe(adapter_type, [self](const agentflow::vendor::adapter::EventData& data) {
+          if (data.custom_data) {
+              auto event_ptr = std::static_pointer_cast<EventData>(data.custom_data);
+              if (event_ptr) {
+                  // We call emit_event directly, which will notify all listeners
+                  self->emit_event(*event_ptr);
+              }
+          }
+      });
+  }
+  
   return listener_id;
 }
 

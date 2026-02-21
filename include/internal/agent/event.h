@@ -10,6 +10,14 @@
 #include <mutex>
 
 namespace agentflow {
+namespace vendor {
+namespace adapter {
+class EventAdapter;
+}
+}
+}
+
+namespace agentflow {
 namespace framework {
 
 /**
@@ -28,6 +36,14 @@ public:
     MESSAGE_RECEIVED = 6,
     ERROR_OCCURRED   = 7,
     STATE_CHANGED    = 8,
+    // Workflow events
+    NODE_START       = 9,
+    NODE_COMPLETE    = 10,
+    NODE_FAILURE     = 11,
+    NODE_RETRY       = 12,
+    DATA_READY       = 13,
+    SYNC_WAIT        = 14,
+    DEPENDENCY_READY = 15,
   };
 
   struct EventData {
@@ -76,6 +92,9 @@ private:
   int64_t                                     total_events_emitted_ = 0;
   int                                         next_listener_id_ = 1;
   mutable std::mutex                          mutex_;
+  
+  // LibEvent adapter for async dispatch
+  std::unique_ptr<agentflow::vendor::adapter::EventAdapter> adapter_;
 };
 
 }  // namespace framework
