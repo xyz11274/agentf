@@ -10,8 +10,12 @@
 
 #include "agent/common.h"
 #include "agent/agent.h"
-#include "workflow/workflow.h"
+#include "runtime/master/deployer.h"
+#include "runtime/master/scheduler.h"
+#include "runtime/shared_runtime_state.h"
 #include "runtime/databus/databus.h"
+#include "runtime/worker.h"
+#include "workflow/workflow.h"
 
 namespace agentflow {
 namespace runtime {
@@ -29,7 +33,19 @@ using NodePtr     = std::shared_ptr<framework::Node>;
  */
 class AgentRuntime {
 public:
+  enum class RuntimeRole {
+    WORKER = 0,
+    MASTER = 1,  // MASTER includes WORKER capabilities.
+  };
+
+  struct Config {
+    RuntimeRole role = RuntimeRole::MASTER;
+    int         worker_threads = 4;
+    std::string local_worker_id = "runtime-local-worker";
+  };
+
   AgentRuntime();
+  explicit AgentRuntime(const Config& config);
   ~AgentRuntime();
 
   // Agent management (Agent Level Master)
@@ -65,11 +81,32 @@ public:
   bool start();
   bool stop();
   bool is_running() const { return is_running_; }
+  RuntimeRole get_role() const { return role_; }
+
+  // Runtime role and global deployment/scheduling
+  void set_role(RuntimeRole role);
+
+  bool register_worker_engine(const std::shared_ptr<WorkerEngine>& worker);
+  bool unregister_worker_engine(const std::string& worker_id);
+  bool heartbeat_worker(const std::string& worker_id);
+  bool update_worker_engine_status(const std::string& worker_id, WorkerEngine::WorkerStatus status);
+  std::vector<master::WorkerSnapshot> list_worker_engines() const;
+
+  bool deploy_workflow_instance(const WorkflowInstanceInfo& info, const std::string& preferred_worker_id = "");
+  bool destroy_workflow_instance(const std::string& workflow_instance_id);
+  master::TaskScheduleResult schedule_task(const master::TaskScheduleRequest& request);
 
   // Shared resource access
   DataBus& get_databus(const AgentId& agent_id);
 
 private:
+  Config                                              config_;
+  RuntimeRole                                         role_ = RuntimeRole::MASTER;
+  std::shared_ptr<WorkerEngine>                       local_worker_;
+  std::shared_ptr<IRuntimeSharedState>                shared_state_;
+  std::unique_ptr<master::Deployer>                   deployer_;
+  std::unique_ptr<master::Scheduler>                  scheduler_;
+
   std::map<AgentId, AgentPtr>                          agents_;
   std::map<AgentId, std::unique_ptr<DataBus>>          databuses_;
   mutable std::mutex                                   agents_mutex_;

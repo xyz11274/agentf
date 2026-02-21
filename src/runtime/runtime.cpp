@@ -18,10 +18,104 @@ bool                    g_shutdown = false;
 }  // namespace
 
 AgentRuntime::AgentRuntime() {
+  config_.worker_threads = num_worker_threads_;
+  role_ = config_.role;
+  shared_state_ = std::make_shared<InMemoryRuntimeSharedState>();
+  deployer_ = std::unique_ptr<master::Deployer>(new master::Deployer());
+  scheduler_ = std::unique_ptr<master::Scheduler>(new master::Scheduler());
+  local_worker_ = std::make_shared<WorkerEngine>(WorkerEngine::Config{config_.local_worker_id, true});
+  local_worker_->set_status(WorkerEngine::WorkerStatus::RUNNING);
+}
+
+AgentRuntime::AgentRuntime(const Config& config) : config_(config), role_(config.role) {
+  num_worker_threads_ = config.worker_threads > 0 ? config.worker_threads : num_worker_threads_;
+  shared_state_ = std::make_shared<InMemoryRuntimeSharedState>();
+  deployer_ = std::unique_ptr<master::Deployer>(new master::Deployer());
+  scheduler_ = std::unique_ptr<master::Scheduler>(new master::Scheduler());
+  local_worker_ = std::make_shared<WorkerEngine>(WorkerEngine::Config{config.local_worker_id, true});
+  local_worker_->set_status(WorkerEngine::WorkerStatus::RUNNING);
 }
 
 AgentRuntime::~AgentRuntime() {
   stop();
+}
+
+void AgentRuntime::set_role(RuntimeRole role) {
+  role_ = role;
+}
+
+bool AgentRuntime::register_worker_engine(const std::shared_ptr<WorkerEngine>& worker) {
+  if(!deployer_) {
+    return false;
+  }
+  return deployer_->register_worker(worker);
+}
+
+bool AgentRuntime::unregister_worker_engine(const std::string& worker_id) {
+  if(!deployer_) {
+    return false;
+  }
+  return deployer_->unregister_worker(worker_id);
+}
+
+bool AgentRuntime::heartbeat_worker(const std::string& worker_id) {
+  if(!deployer_) {
+    return false;
+  }
+  return deployer_->update_worker_heartbeat(worker_id);
+}
+
+bool AgentRuntime::update_worker_engine_status(const std::string& worker_id,
+                                               WorkerEngine::WorkerStatus status) {
+  if(!deployer_) {
+    return false;
+  }
+  return deployer_->update_worker_status(worker_id, status);
+}
+
+std::vector<master::WorkerSnapshot> AgentRuntime::list_worker_engines() const {
+  if(!deployer_) {
+    return {};
+  }
+  return deployer_->list_worker_snapshots();
+}
+
+bool AgentRuntime::deploy_workflow_instance(const WorkflowInstanceInfo& info,
+                                            const std::string& preferred_worker_id) {
+  if(!deployer_ || !shared_state_) {
+    return false;
+  }
+  if(!deployer_->deploy_workflow_instance(info.workflow_instance_id, info.workflow_id, preferred_worker_id)) {
+    return false;
+  }
+  std::string assigned_worker;
+  if(!deployer_->get_workflow_worker(info.workflow_instance_id, assigned_worker)) {
+    return false;
+  }
+  WorkflowInstanceInfo persisted = info;
+  persisted.worker_id = assigned_worker;
+  shared_state_->add_or_update_workflow_instance(persisted);
+  return true;
+}
+
+bool AgentRuntime::destroy_workflow_instance(const std::string& workflow_instance_id) {
+  if(!deployer_ || !shared_state_) {
+    return false;
+  }
+  bool removed_mapping = deployer_->remove_workflow_instance(workflow_instance_id);
+  bool removed_state = shared_state_->remove_workflow_instance(workflow_instance_id);
+  return removed_mapping || removed_state;
+}
+
+master::TaskScheduleResult AgentRuntime::schedule_task(const master::TaskScheduleRequest& request) {
+  if(!scheduler_ || !shared_state_) {
+    return {};
+  }
+  auto result = scheduler_->schedule_task(request, shared_state_->list_workflow_instances());
+  if(result.scheduled) {
+    shared_state_->increment_workflow_ref(result.workflow_instance_id);
+  }
+  return result;
 }
 
 bool AgentRuntime::register_agent(AgentPtr agent) {
@@ -483,6 +577,13 @@ bool AgentRuntime::start() {
     worker_threads_.emplace_back(&AgentRuntime::worker_thread_main, this);
   }
 
+  if(local_worker_) {
+    local_worker_->set_status(WorkerEngine::WorkerStatus::RUNNING);
+  }
+  if(deployer_ && local_worker_ && (role_ == RuntimeRole::MASTER || role_ == RuntimeRole::WORKER)) {
+    deployer_->register_worker(local_worker_);
+  }
+
   Logger::instance().info_f("AgentRuntime started with %d worker threads", num_worker_threads_);
   return true;
 }
@@ -541,6 +642,9 @@ bool AgentRuntime::stop() {
   worker_threads_.clear();
 
   draining_ = false;
+  if(local_worker_) {
+    local_worker_->set_status(WorkerEngine::WorkerStatus::STOPPED);
+  }
   Logger::instance().info("AgentRuntime stopped");
   return true;
 }

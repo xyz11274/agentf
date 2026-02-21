@@ -287,6 +287,9 @@ set(AGENTFLOW_RUNTIME_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/runtime/runtime_actor.cpp
     # Scheduler
     ${AGENTFLOW_SOURCE_DIR}/runtime/runtime.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/worker.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/master/deployer.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/master/scheduler.cpp
     ${AGENTFLOW_TEST_DIR}/unit/data/lib/performance_metrics.cpp
     # Databus (Communication)
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/databus.cpp
@@ -522,6 +525,7 @@ if(AGENTFLOW_BUILD_TESTS)
       ${AGENTFLOW_TEST_DIR}/unit/src/test_workflow_json_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_agent_json_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_local_channel_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_runtime_master_worker_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_hot_reload.cpp
   )
   if(TARGET GTest::gtest)

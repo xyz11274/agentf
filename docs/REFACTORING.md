@@ -44,6 +44,20 @@ AgentFlow/
   - 协同任务：支持通过 so 路径指定协同算法扩展。
 - 任务归属模型调整：task 必须绑定其触发会话，并保留 workflow 映射信息供 runtime scheduler 消费。
 
+### 0.1 Runtime 全局 Master/Worker 能力增强（2026-02-21）
+
+本次补齐 Runtime 的全局部署与调度能力，支持 master/worker 角色化运行：
+
+- 新增 `runtime/worker`：Worker 作为 workflow/node 执行引擎抽象，维护负载、状态、心跳与支持的 workflow 类型集合。
+- 新增 `runtime/master/deployer`：负责全局 worker 注册、心跳/状态更新、workflow 实例到 worker 的部署映射、映射刷新与版本更新。
+- 新增 `runtime/master/scheduler`：负责全局 task 调度到 workflow 实例，再间接落到对应 worker。
+  - 调度策略：优先同 agent 实例，再回退到同 agent 对象的其他实例共享 workflow。
+- 新增 `runtime/shared_runtime_state` 抽象：本轮实现“接口 + 本地内存默认实现”，用于多实例共享语义与 workflow 实例引用计数。
+- `AgentRuntime` 增强：
+  - 支持 role 配置（`MASTER` 包含 `WORKER` 能力，`WORKER` 不包含 master 能力）；
+  - 暴露 worker 注册/心跳/状态接口；
+  - 暴露 workflow 实例部署与销毁、task 调度接口，形成 task -> workflow instance -> worker 闭环。
+
 ### 1. 头文件目录重组
 
 **目录结构：**
