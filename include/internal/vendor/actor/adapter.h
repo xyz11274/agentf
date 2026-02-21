@@ -30,6 +30,10 @@ struct ActorMessage {
   std::string           message_type;
   std::shared_ptr<void> payload;
 
+  // Optional routing fields used by stub and protoactor adapters
+  std::string sender_address;    ///< Address of the sender (for ask/reply routing)
+  std::string reply_to_address;  ///< Correlation ID for ask pattern reply routing
+
   template <typename T>
   std::shared_ptr<T> get_payload() const {
     return std::static_pointer_cast<T>(payload);

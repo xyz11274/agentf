@@ -10,6 +10,7 @@
 
 #include "vendor/json/rapidjson_impl.h"
 #include "rapidjson/document.h"
+#include "rapidjson/prettywriter.h"
 #include "rapidjson/stringbuffer.h"
 #include "rapidjson/writer.h"
 
@@ -158,8 +159,8 @@ std::string RapidjsonValue::to_string() const {
   if(!value_)
     return "";
 
-  rapidjson::StringBuffer                    buffer;
-  rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+  rapidjson::StringBuffer                          buffer;
+  rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(buffer);
   value_->Accept(writer);
   return buffer.GetString();
 }
@@ -231,14 +232,20 @@ std::string RapidjsonDocument::to_string() const {
   if(!valid_ || !doc_)
     return "";
 
-  rapidjson::StringBuffer                    buffer;
-  rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+  rapidjson::StringBuffer                          buffer;
+  rapidjson::PrettyWriter<rapidjson::StringBuffer> writer(buffer);
   doc_->Accept(writer);
   return buffer.GetString();
 }
 
 std::string RapidjsonDocument::to_compact_string() const {
-  return to_string();  // Rapidjson writer produces compact format by default
+  if(!valid_ || !doc_)
+    return "";
+
+  rapidjson::StringBuffer                    buffer;
+  rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+  doc_->Accept(writer);
+  return buffer.GetString();
 }
 
 }  // namespace dsl

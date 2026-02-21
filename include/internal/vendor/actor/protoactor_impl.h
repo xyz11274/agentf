@@ -97,7 +97,6 @@ public:
 private:
   std::shared_ptr<protoactor::ActorSystem> system_;
   mutable std::mutex                       mutex_;
-  bool                                     shutdown_called_ = false;
 };
 
 }  // namespace adapter

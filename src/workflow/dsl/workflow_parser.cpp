@@ -445,6 +445,39 @@ bool WorkflowParser::parse_node_config(std::shared_ptr<const IJsonValue> node_ob
   config.memory_limit_mb = static_cast<int>(JsonHelper::get_int(node_obj, "memory_limit_mb", 0));
   config.cpu_limit       = static_cast<int>(JsonHelper::get_int(node_obj, "cpu_limit", 0));
 
+  // Parse execution mode
+  std::string exec_mode_str = JsonHelper::get_string(node_obj, "execution_mode", "cpp_function");
+  if(exec_mode_str == "shell_script") {
+    config.execution_mode = framework::Node::ExecutionMode::SHELL_SCRIPT;
+  } else if(exec_mode_str == "executable") {
+    config.execution_mode = framework::Node::ExecutionMode::EXECUTABLE;
+  } else if(exec_mode_str == "python_script") {
+    config.execution_mode = framework::Node::ExecutionMode::PYTHON_SCRIPT;
+  } else if(exec_mode_str == "so_library") {
+    config.execution_mode = framework::Node::ExecutionMode::SO_LIBRARY;
+  } else {
+    config.execution_mode = framework::Node::ExecutionMode::CPP_FUNCTION;
+  }
+
+  config.command          = JsonHelper::get_string(node_obj, "command", "");
+  config.working_dir      = JsonHelper::get_string(node_obj, "working_dir", "");
+  config.retry_delay_ms   = static_cast<int>(JsonHelper::get_int(node_obj, "retry_delay_ms", 1000));
+  config.enable_hot_reload = JsonHelper::get_bool(node_obj, "enable_hot_reload", true);
+  config.function_name    = JsonHelper::get_string(node_obj, "function_name", "");
+  config.main_class       = JsonHelper::get_string(node_obj, "main_class", "");
+
+  // Parse script/command args array
+  auto args_array = JsonHelper::get_array(node_obj, "args");
+  if(args_array) {
+    size_t num_args = args_array->array_size();
+    for(size_t i = 0; i < num_args; ++i) {
+      auto arg = args_array->array_at(i);
+      if(arg && arg->is_string()) {
+        config.args.push_back(arg->as_string());
+      }
+    }
+  }
+
   return true;
 }
 
@@ -575,6 +608,9 @@ bool WorkflowParser::parse_edge_config(std::shared_ptr<const IJsonValue> edge_ob
       }
     }
   }
+
+  config.condition_expression = JsonHelper::get_string(edge_obj, "condition_expression", "");
+  config.priority             = static_cast<int>(JsonHelper::get_int(edge_obj, "priority", 0));
 
   return true;
 }

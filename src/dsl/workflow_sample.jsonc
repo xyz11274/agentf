@@ -1,0 +1,342 @@
+// AgentFlow Workflow DSL – Comprehensive Reference Sample
+// Format: JSONC (JSON with Comments, RFC-style)
+// Version: 1.0
+//
+// This file is the canonical DSL standard for AgentFlow workflows.
+// It documents every field accepted by WorkflowParser and can be used to
+// auto-generate a parser: every key below corresponds to a JsonHelper call
+// in src/workflow/dsl/workflow_parser.cpp.
+//
+// Parser generation conventions
+// ──────────────────────────────
+// • String fields   → JsonHelper::get_string(obj, "<key>", "<default>")
+// • Integer fields  → JsonHelper::get_int(obj, "<key>", <default>)
+// • Boolean fields  → JsonHelper::get_bool(obj, "<key>", <default>)
+// • Array fields    → JsonHelper::get_array(obj, "<key>") → iterate
+// • Nested objects  → JsonHelper::get_object(obj, "<key>")
+// • Enum strings    → map to C++ enum in WorkflowParser
+//
+// Top-level structure
+// ───────────────────
+// {
+//   "version": <string>        – DSL schema version (required, e.g. "1.0")
+//   "id":      <string>        – Workflow unique identifier (required)
+//   "name":    <string>        – Human-readable name (optional)
+//   "description": <string>    – Description of workflow purpose (optional)
+//   "dsl_file":    <string>    – Relative path of this DSL file (optional)
+//   "metadata":   { ... }      – Freeform metadata (optional, informational)
+//   "nodes":  [ ... ]          – Array of node objects (required)
+//   "edges":  [ ... ]          – Array of edge objects (required)
+// }
+
+{
+  // ──────────────────────────────────────────────────────────────────────────
+  // Workflow header
+  // ──────────────────────────────────────────────────────────────────────────
+
+  // DSL schema version – must match what WorkflowParser expects ("1.0")
+  "version": "1.0",
+
+  // Globally unique identifier for this workflow (snake_case recommended)
+  "id": "document_processing_pipeline",
+
+  // Display name shown in dashboards / logs
+  "name": "Document Processing Pipeline",
+
+  // Free-text description of what this workflow does
+  "description": "Ingests raw documents, extracts text, classifies them and persists results.",
+
+  // Path to this DSL file, stored in Workflow::Config for traceability
+  "dsl_file": "src/dsl/workflow_sample.jsonc",
+
+  // Optional metadata block – not parsed by WorkflowParser, informational only
+  "metadata": {
+    "author": "AgentFlow Team",
+    "created_at": "2024-01-01",
+    "tags": ["nlp", "document", "demo"]
+  },
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Nodes
+  // Each object in "nodes" defines one computational unit in the workflow DAG.
+  // Required fields: id
+  // All other fields have documented defaults.
+  // ──────────────────────────────────────────────────────────────────────────
+  "nodes": [
+
+    // ── Node 1: Ingest (C++ function, simplest form) ───────────────────────
+    {
+      // REQUIRED. Must be unique within this workflow.
+      "id": "ingest",
+
+      // Human-readable name. Default: same as id.
+      "name": "Document Ingestion",
+
+      // Node category, used for routing and UI rendering. Default: "default".
+      "type": "source",
+
+      // Scheduling priority among sibling nodes. Higher = earlier. Default: 0.
+      "priority": 10,
+
+      // Execution mode controls how the node runs. Default: "cpp_function".
+      // Valid values:
+      //   "cpp_function"  – calls a registered C++ lambda (config.cpp_function)
+      //   "shell_script"  – runs config.command via /bin/sh in config.working_dir
+      //   "executable"    – runs config.command as a direct subprocess
+      //   "python_script" – runs config.command with the Python interpreter
+      //   "so_library"    – dlopen(config.command) and calls config.function_name
+      "execution_mode": "cpp_function",
+
+      // Named C++ function to call when execution_mode == "so_library".
+      // The function must conform to: bool fn(const DataMap&, DataMap&)
+      "function_name": "",
+
+      // Shell command, script path or SO library path.
+      // Interpreted based on execution_mode. Empty for "cpp_function".
+      "command": "",
+
+      // Working directory for external execution (shell/executable/python).
+      // Empty string means the process inherits the parent working directory.
+      "working_dir": "",
+
+      // Extra positional arguments appended to command at runtime.
+      "args": [],
+
+      // Main class name for JAR-based nodes (future JAR execution mode).
+      "main_class": "",
+
+      // Named input parameter ports consumed by this node.
+      // At runtime, the workflow runtime populates these from upstream edges.
+      "inputs": [],
+
+      // Named output parameter ports produced by this node.
+      "outputs": ["raw_document"],
+
+      // Maximum number of retry attempts on failure. Default: 3.
+      "max_retries": 3,
+
+      // Milliseconds to wait between retry attempts. Default: 1000.
+      "retry_delay_ms": 500,
+
+      // Wall-clock timeout for a single execution attempt (ms). Default: 30000.
+      // 0 means no timeout.
+      "timeout_ms": 10000,
+
+      // Memory ceiling in MiB. 0 = unlimited. Default: 0.
+      "memory_limit_mb": 256,
+
+      // CPU limit as a percentage (100 = one full core). 0 = unlimited. Default: 0.
+      "cpu_limit": 50,
+
+      // Whether this node participates in hot-reload. Default: true.
+      // When true and the underlying SO library is updated on disk, the workflow
+      // runtime can reload it without stopping the workflow.
+      "enable_hot_reload": false
+    },
+
+    // ── Node 2: Text extraction (shell script) ─────────────────────────────
+    {
+      "id": "extract_text",
+      "name": "Text Extraction",
+      "type": "transform",
+      "priority": 5,
+
+      "execution_mode": "shell_script",
+      "command": "scripts/extract_text.sh",
+      "working_dir": "/opt/agentflow",
+      // Arguments are passed to the script as positional parameters ($1, $2 …)
+      "args": ["--format", "plain"],
+
+      "inputs": ["raw_document"],
+      "outputs": ["plain_text"],
+
+      "max_retries": 2,
+      "retry_delay_ms": 2000,
+      "timeout_ms": 60000,
+      "memory_limit_mb": 512,
+      "cpu_limit": 80,
+      "enable_hot_reload": false
+    },
+
+    // ── Node 3: Classifier (Python script) ────────────────────────────────
+    {
+      "id": "classify",
+      "name": "Document Classifier",
+      "type": "inference",
+      "priority": 0,
+
+      "execution_mode": "python_script",
+      "command": "ml/classify.py",
+      "working_dir": "/opt/agentflow",
+      "args": ["--model", "models/doc_classifier_v2.pkl"],
+
+      "inputs": ["plain_text"],
+      "outputs": ["category", "confidence"],
+
+      "max_retries": 1,
+      "retry_delay_ms": 3000,
+      "timeout_ms": 120000,
+      "memory_limit_mb": 2048,
+      "cpu_limit": 200,
+      "enable_hot_reload": false
+    },
+
+    // ── Node 4: Persist (SO library with hot-reload) ───────────────────────
+    {
+      "id": "persist",
+      "name": "Result Persistence",
+      "type": "sink",
+      "priority": 0,
+
+      "execution_mode": "so_library",
+      // Path to the shared object that implements the node logic
+      "command": "lib/persistence_plugin.so",
+      // Symbol exported by the SO library that WorkflowRuntime will call
+      "function_name": "persist_result",
+      "working_dir": "",
+      "args": [],
+
+      "inputs": ["category", "confidence"],
+      "outputs": [],
+
+      "max_retries": 5,
+      "retry_delay_ms": 1000,
+      "timeout_ms": 30000,
+      "memory_limit_mb": 128,
+      "cpu_limit": 20,
+      // Enabling hot-reload means the runtime watches persistence_plugin.so
+      // and reloads it when modified without restarting the workflow.
+      "enable_hot_reload": true
+    },
+
+    // ── Node 5: Error handler (demonstrates all defaults) ──────────────────
+    {
+      "id": "error_handler",
+      "name": "Error Handler",
+      // Omitted fields use their documented defaults:
+      //   type            → "default"
+      //   priority        → 0
+      //   execution_mode  → "cpp_function"
+      //   max_retries     → 3
+      //   retry_delay_ms  → 1000
+      //   timeout_ms      → 30000
+      //   memory_limit_mb → 0  (unlimited)
+      //   cpu_limit       → 0  (unlimited)
+      //   enable_hot_reload → true
+      "inputs": ["raw_document", "plain_text", "category"],
+      "outputs": ["error_report"]
+    }
+  ],
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Edges
+  // Each object in "edges" declares a directed data-flow connection between
+  // two nodes. Required fields: id, source, target.
+  // ──────────────────────────────────────────────────────────────────────────
+  "edges": [
+
+    // ── Edge 1: ingest → extract_text (unconditional, shared memory) ───────
+    {
+      // REQUIRED. Unique identifier for this edge.
+      "id": "e_ingest_to_extract",
+
+      // REQUIRED. ID of the upstream (producer) node.
+      "source": "ingest",
+
+      // REQUIRED. ID of the downstream (consumer) node.
+      "target": "extract_text",
+
+      // Named output ports of the source node to wire up.
+      // If omitted or empty, all source outputs are forwarded.
+      "source_outputs": ["raw_document"],
+
+      // Named input ports of the target node to connect to.
+      // Must correspond positionally to source_outputs.
+      "target_inputs": ["raw_document"],
+
+      // How data is passed from source to target.
+      // Valid values:
+      //   "shared_memory"  – zero-copy in-process (default)
+      //   "message_queue"  – serialised through an async queue
+      //   "remote_transfer" – serialised and sent over network
+      "transfer_mode": "shared_memory",
+
+      // MIME-type or custom format tags for the data on this edge.
+      // Used by runtime type-checkers and serializers.
+      "data_formats": ["application/octet-stream"],
+
+      // Lifecycle events that this edge listens to / propagates.
+      // Supported values: "start", "end", "fail", "data_ready", "timeout"
+      "supported_events": ["data_ready", "fail"],
+
+      // CEL / expression string evaluated at runtime before activating edge.
+      // Empty string (default) means the edge is always active.
+      // Example: "outputs['confidence'] > 0.8"
+      "condition_expression": "",
+
+      // Tie-breaking priority when a node has multiple outgoing edges that
+      // all satisfy their conditions. Higher value = chosen first. Default: 0.
+      "priority": 0
+    },
+
+    // ── Edge 2: extract_text → classify (message queue) ───────────────────
+    {
+      "id": "e_extract_to_classify",
+      "source": "extract_text",
+      "target": "classify",
+      "source_outputs": ["plain_text"],
+      "target_inputs": ["plain_text"],
+      "transfer_mode": "message_queue",
+      "data_formats": ["text/plain"],
+      "supported_events": ["data_ready"],
+      "condition_expression": "",
+      "priority": 0
+    },
+
+    // ── Edge 3: classify → persist (conditional on confidence) ────────────
+    {
+      "id": "e_classify_to_persist",
+      "source": "classify",
+      "target": "persist",
+      "source_outputs": ["category", "confidence"],
+      "target_inputs": ["category", "confidence"],
+      "transfer_mode": "shared_memory",
+      "data_formats": ["text/plain", "application/json"],
+      "supported_events": ["data_ready", "end"],
+      // Only persist when the classifier is confident (score > 0.5)
+      "condition_expression": "outputs['confidence'] > 0.5",
+      "priority": 10
+    },
+
+    // ── Edge 4: classify → error_handler (low-confidence fallback) ─────────
+    {
+      "id": "e_classify_to_error",
+      "source": "classify",
+      "target": "error_handler",
+      "source_outputs": ["category", "confidence"],
+      "target_inputs": ["category"],
+      "transfer_mode": "shared_memory",
+      "data_formats": ["application/json"],
+      "supported_events": ["data_ready", "fail"],
+      // Mirror condition: handle low-confidence results
+      "condition_expression": "outputs['confidence'] <= 0.5",
+      // Lower priority than e_classify_to_persist so persist is checked first
+      "priority": 1
+    },
+
+    // ── Edge 5: ingest → error_handler (on failure) ────────────────────────
+    {
+      "id": "e_ingest_fail",
+      "source": "ingest",
+      "target": "error_handler",
+      "source_outputs": ["raw_document"],
+      "target_inputs": ["raw_document"],
+      "transfer_mode": "message_queue",
+      "data_formats": ["application/octet-stream"],
+      // Only activate when ingest raised an error
+      "supported_events": ["fail"],
+      "condition_expression": "",
+      "priority": 0
+    }
+  ]
+}

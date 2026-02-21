@@ -1,12 +1,15 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// Stub actor system implementation
+// Stub actor system implementation – used when Protoactor-cpp is not available.
+// Provides a fully functional in-process actor system with per-actor thread
+// mailboxes, synchronous ask/reply via futures, and proper lifecycle callbacks.
 
 #ifndef AGENTFLOW_WITH_PROTOACTOR
 
 #include "vendor/actor/stub_impl.h"
 
+#include <atomic>
 #include <chrono>
 #include <sstream>
 
@@ -14,10 +17,11 @@ namespace agentflow {
 namespace actor {
 namespace adapter {
 
+// ============================================================================
 // StubActorRef implementation
+// ============================================================================
 
-StubActorRef::StubActorRef(const std::string& address) : address_(address) {
-}
+StubActorRef::StubActorRef(const std::string& address) : address_(address) {}
 
 StubActorRef::~StubActorRef() = default;
 
@@ -33,7 +37,9 @@ std::string StubActorRef::to_string() const {
   return address_;
 }
 
+// ============================================================================
 // StubContext implementation
+// ============================================================================
 
 StubContext::StubContext() = default;
 
@@ -56,22 +62,79 @@ ActorMessage StubContext::current_message() const {
 }
 
 void StubContext::send(IActorRef* target, const ActorMessage& msg) {
-  (void)target;
-  (void)msg;
-  // In real stub, would queue message for target actor
+  if(!target) {
+    return;
+  }
+
+  auto system = system_.lock();
+  if(!system) {
+    return;
+  }
+
+  const std::string& addr = target->address();
+
+  // Route replies for ask pattern: addresses starting with "__reply_future:" are handled
+  // by the system's future registry rather than a real actor mailbox.
+  if(addr.rfind("__reply_future:", 0) == 0) {
+    std::string correlation_id = addr.substr(15);
+    system->complete_reply_future(correlation_id, msg);
+    return;
+  }
+
+  system->deliver_message(addr, msg);
 }
 
 ActorMessage StubContext::ask(IActorRef* target, const ActorMessage& msg, int timeout_ms) {
-  (void)target;
-  (void)msg;
-  (void)timeout_ms;
-  // Stub implementation: return empty message
-  ActorMessage result;
-  result.message_type = "reply";
-  return result;
+  ActorMessage error_result;
+  error_result.message_type = "error";
+
+  if(!target) {
+    return error_result;
+  }
+
+  auto system = system_.lock();
+  if(!system) {
+    return error_result;
+  }
+
+  // Generate a unique correlation ID for this ask
+  static std::atomic<uint64_t> ask_counter{ 1 };
+  const std::string correlation_id =
+      "__ask_" + std::to_string(ask_counter.fetch_add(1, std::memory_order_relaxed));
+
+  // Register a reply future in the system before sending the message
+  auto reply_future = std::make_shared<StubReplyFuture>();
+  system->register_reply_future(correlation_id, reply_future);
+
+  // Create a synthetic sender ref whose address maps to the reply future.
+  // The receiving actor replies via ctx->send(ctx->sender(), reply_msg),
+  // which will be routed to complete_reply_future().
+  auto reply_to_ref = std::make_shared<StubActorRef>("__reply_future:" + correlation_id);
+
+  // Deliver the message with the reply-to ref as the sender
+  system->deliver_message_with_sender(target->address(), msg, reply_to_ref);
+
+  // Block until the reply arrives or timeout expires
+  const int effective_timeout = timeout_ms > 0 ? timeout_ms : 30000;
+  {
+    std::unique_lock<std::mutex> lock(reply_future->mutex);
+    const bool got_reply = reply_future->cv.wait_for(
+        lock, std::chrono::milliseconds(effective_timeout),
+        [&reply_future] { return reply_future->resolved; });
+
+    if(got_reply) {
+      return reply_future->reply;
+    }
+  }
+
+  ActorMessage timeout_result;
+  timeout_result.message_type = "timeout";
+  return timeout_result;
 }
 
+// ============================================================================
 // StubActorSystem implementation
+// ============================================================================
 
 StubActorSystem::StubActorSystem() {
   std::stringstream ss;
@@ -90,7 +153,7 @@ std::shared_ptr<IActorRef> StubActorSystem::spawn(const ActorFactory& factory,
 
 std::shared_ptr<IActorRef> StubActorSystem::spawn_with_config(const ActorFactory& factory,
                                                               const std::string&  actor_name,
-                                                              int                 mailbox_size) {
+                                                              int mailbox_size) {
   (void)mailbox_size;
   std::lock_guard<std::mutex> lock(actors_mutex_);
 
@@ -100,7 +163,6 @@ std::shared_ptr<IActorRef> StubActorSystem::spawn_with_config(const ActorFactory
 
   auto actor_internal   = std::make_shared<StubActorInternal>();
   actor_internal->actor = factory();
-
   if(!actor_internal->actor) {
     return nullptr;
   }
@@ -113,8 +175,6 @@ std::shared_ptr<IActorRef> StubActorSystem::spawn_with_config(const ActorFactory
   }
 
   actor_internal->ref = std::make_shared<StubActorRef>(address);
-
-  // Start worker thread for this actor
   actor_internal->worker_thread =
       std::thread(&StubActorSystem::actor_worker_loop, this, actor_internal);
 
@@ -124,12 +184,10 @@ std::shared_ptr<IActorRef> StubActorSystem::spawn_with_config(const ActorFactory
 
 std::shared_ptr<IActorRef> StubActorSystem::get_actor(const std::string& address) {
   std::lock_guard<std::mutex> lock(actors_mutex_);
-
   auto it = actors_.find(address);
   if(it != actors_.end()) {
     return it->second->ref;
   }
-
   return nullptr;
 }
 
@@ -139,7 +197,6 @@ void StubActorSystem::stop(std::shared_ptr<IActorRef> actor_ref) {
   }
 
   std::lock_guard<std::mutex> lock(actors_mutex_);
-
   auto it = actors_.find(actor_ref->address());
   if(it != actors_.end()) {
     it->second->should_stop = true;
@@ -149,16 +206,13 @@ void StubActorSystem::stop(std::shared_ptr<IActorRef> actor_ref) {
 
 void StubActorSystem::shutdown() {
   std::lock_guard<std::mutex> lock(actors_mutex_);
-
   running_ = false;
 
-  // Signal all actors to stop
   for(auto& pair : actors_) {
     pair.second->should_stop = true;
     pair.second->mailbox_cv.notify_all();
   }
 
-  // Wait for all worker threads to finish
   for(auto& pair : actors_) {
     if(pair.second->worker_thread.joinable()) {
       pair.second->worker_thread.join();
@@ -184,32 +238,80 @@ bool StubActorSystem::wait_shutdown(int timeout_ms) {
     if(timeout_ms > 0) {
       auto now     = std::chrono::high_resolution_clock::now();
       auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
-
       if(elapsed > timeout_ms) {
-        return false;  // Timeout
+        return false;
       }
     }
-
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
-  return true;  // Shutdown completed
+  return true;
+}
+
+void StubActorSystem::deliver_message(const std::string& address, const ActorMessage& msg) {
+  // Intercept reply-future deliveries
+  if(address.rfind("__reply_future:", 0) == 0) {
+    complete_reply_future(address.substr(15), msg);
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(actors_mutex_);
+  auto it = actors_.find(address);
+  if(it != actors_.end() && !it->second->should_stop) {
+    std::lock_guard<std::mutex> mb_lock(it->second->mailbox_mutex);
+    it->second->mailbox.push(msg);
+    it->second->mailbox_cv.notify_one();
+  }
+}
+
+void StubActorSystem::deliver_message_with_sender(const std::string&         address,
+                                                  const ActorMessage&        msg,
+                                                  std::shared_ptr<IActorRef> sender_ref) {
+  // Embed the sender address in the message so the worker loop can restore it
+  ActorMessage wrapped     = msg;
+  wrapped.sender_address   = sender_ref ? sender_ref->address() : "";
+  deliver_message(address, wrapped);
+}
+
+void StubActorSystem::register_reply_future(const std::string&               correlation_id,
+                                            std::shared_ptr<StubReplyFuture> future) {
+  std::lock_guard<std::mutex> lock(reply_futures_mutex_);
+  reply_futures_[correlation_id] = future;
+}
+
+void StubActorSystem::complete_reply_future(const std::string&  correlation_id,
+                                            const ActorMessage& reply) {
+  std::shared_ptr<StubReplyFuture> future;
+  {
+    std::lock_guard<std::mutex> lock(reply_futures_mutex_);
+    auto it = reply_futures_.find(correlation_id);
+    if(it == reply_futures_.end()) {
+      return;
+    }
+    future = it->second;
+    reply_futures_.erase(it);
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(future->mutex);
+    future->reply    = reply;
+    future->resolved = true;
+  }
+  future->cv.notify_all();
 }
 
 void StubActorSystem::actor_worker_loop(std::shared_ptr<StubActorInternal> actor_internal) {
   auto context = std::make_shared<StubContext>();
   context->set_self(actor_internal->ref);
+  context->set_system(weak_from_this());
 
-  // Call on_start
   if(actor_internal->actor) {
     actor_internal->actor->on_start();
   }
 
-  // Process messages until stop signal
   while(!actor_internal->should_stop) {
     std::unique_lock<std::mutex> lock(actor_internal->mailbox_mutex);
 
-    // Wait for message or stop signal
     actor_internal->mailbox_cv.wait_for(lock, std::chrono::milliseconds(100), [&actor_internal] {
       return !actor_internal->mailbox.empty() || actor_internal->should_stop;
     });
@@ -218,22 +320,26 @@ void StubActorSystem::actor_worker_loop(std::shared_ptr<StubActorInternal> actor
       ActorMessage msg = actor_internal->mailbox.front();
       actor_internal->mailbox.pop();
 
-      context->set_current_message(msg);
+      // Restore the sender ref from the embedded sender_address field
+      if(!msg.sender_address.empty()) {
+        context->set_sender(std::make_shared<StubActorRef>(msg.sender_address));
+      } else {
+        context->set_sender(nullptr);
+      }
 
+      context->set_current_message(msg);
       lock.unlock();
 
-      // Process message
       if(actor_internal->actor) {
         try {
           actor_internal->actor->on_message(context);
         } catch(const std::exception&) {
-          // Handle exception
+          // Swallow exceptions; actor isolation prevents cascading failures
         }
       }
     }
   }
 
-  // Call on_stop
   if(actor_internal->actor) {
     actor_internal->actor->on_stop();
   }
