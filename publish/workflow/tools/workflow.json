@@ -1,0 +1,45 @@
+{
+  "id": "builtin-tools-workflow",
+  "version": "1.0",
+  "name": "builtin-tools-workflow",
+  "description": "Default MCP/tools call workflow",
+  "nodes": [
+    {
+      "id": "tool_select",
+      "name": "Tool Select",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "nodes/tool_select.sh"
+    },
+    {
+      "id": "tool_call",
+      "name": "Tool Call",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "nodes/tool_call.sh"
+    },
+    {
+      "id": "tool_format",
+      "name": "Tool Format",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "nodes/tool_format.sh"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_select_call",
+      "source": "tool_select",
+      "target": "tool_call"
+    },
+    {
+      "id": "edge_call_format",
+      "source": "tool_call",
+      "target": "tool_format"
+    }
+  ],
+  "metadata": {
+    "builtin": "tools",
+    "customizable": "true"
+  }
+}

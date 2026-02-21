@@ -1,0 +1,45 @@
+{
+  "id": "builtin-skills-workflow",
+  "version": "1.0",
+  "name": "builtin-skills-workflow",
+  "description": "Default skills invocation workflow",
+  "nodes": [
+    {
+      "id": "skills_match",
+      "name": "Skills Match",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "nodes/skills_match.sh"
+    },
+    {
+      "id": "skills_execute",
+      "name": "Skills Execute",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "nodes/skills_execute.sh"
+    },
+    {
+      "id": "skills_postprocess",
+      "name": "Skills Postprocess",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "nodes/skills_postprocess.sh"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_match_execute",
+      "source": "skills_match",
+      "target": "skills_execute"
+    },
+    {
+      "id": "edge_execute_postprocess",
+      "source": "skills_execute",
+      "target": "skills_postprocess"
+    }
+  ],
+  "metadata": {
+    "builtin": "skills",
+    "customizable": "true"
+  }
+}

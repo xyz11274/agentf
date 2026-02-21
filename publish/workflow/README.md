@@ -3,6 +3,30 @@
 ## Overview
 This guide covers developing and deploying Workflows and Nodes using AgentFlow framework.
 
+## Built-in Workflows
+
+AgentFlow provides built-in workflow templates under `publish/workflow/`:
+
+- `memory/` - memory read/merge/write default flow
+- `skills/` - skill match/execute/postprocess default flow
+- `tools/` - MCP/tools select/call/format default flow
+
+Each built-in workflow directory contains a default `workflow.json` and `nodes/` scripts.
+You can use them directly or customize by replacing node scripts and extending the DSL graph.
+
+### Opt-in Packaging
+
+Built-in workflows are opt-in via Agent `package.json`:
+
+```json
+{
+  "builtin_workflows": ["memory", "skills", "tools"]
+}
+```
+
+When running `publish/agent_build.sh build ...`, selected built-in workflows are staged into:
+`workflows/builtin/<name>/` inside the packaged agent.
+
 ## Node Development
 
 ### What is a Node?

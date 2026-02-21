@@ -11,6 +11,9 @@ A sample agent template for AgentFlow framework.
 ## Configuration
 Agents can be configured via `package.json` with the following options:
 
+- `builtin_workflows` (optional): enable built-in workflow templates to be packaged into your agent.
+  - Supported values: `memory`, `skills`, `tools`
+
 ```json
 {
   "agentFlow": {

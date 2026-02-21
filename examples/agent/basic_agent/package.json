@@ -11,5 +11,6 @@
     "type": "agent",
     "category": "example",
     "tags": ["basic", "example"]
-  }
+  },
+  "builtin_workflows": ["memory"]
 }

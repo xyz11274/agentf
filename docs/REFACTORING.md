@@ -58,6 +58,21 @@ AgentFlow/
   - 暴露 worker 注册/心跳/状态接口；
   - 暴露 workflow 实例部署与销毁、task 调度接口，形成 task -> workflow instance -> worker 闭环。
 
+### 0.2 Workflow 内建模板能力增强（2026-02-21）
+
+新增内建 workflow 模板目录，支持开箱即用与业务定制增强：
+
+- `publish/workflow/memory/`
+- `publish/workflow/skills/`
+- `publish/workflow/tools/`
+
+每个目录均包含默认 `workflow.json` 与 `nodes/` 节点脚本，可在业务侧直接替换节点脚本并扩展流程图。
+
+打包策略采用按需选择（opt-in）：
+- Agent `package.json` 可配置 `builtin_workflows`（如 `["memory","skills","tools"]`）。
+- 构建脚本 `publish/agent_build.sh` 在打包时仅注入声明的内建 workflow 到包内 `workflows/builtin/<name>/`。
+- AgentPackage 加载时支持解析 `builtin_workflows` 并将可解析的内建流程文件加入 workflow 列表。
+
 ### 1. 头文件目录重组
 
 **目录结构：**

@@ -925,6 +925,7 @@ publish/
 ### Publishing Workflow
 1. Create your agent in `publish/agent/`
 2. Update `package.json` with your agent details
+   - Optional: set `"builtin_workflows": ["memory","skills","tools"]` to include built-in templates
 3. Run `./publish/agent_build.sh build` to compile
 4. Run `./publish/agent_build.sh package` to prepare for distribution
 5. Run `./publish/agent_build.sh publish` to upload

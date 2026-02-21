@@ -39,6 +39,7 @@ public:
     std::string entry_point;
     std::string package_root;
     std::vector<std::string> workflow_files;
+    std::vector<std::string> builtin_workflows;
   };
 
   explicit AgentPackage(const Config& config);

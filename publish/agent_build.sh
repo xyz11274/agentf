@@ -46,6 +46,45 @@ Examples:
 EOF
 }
 
+stage_source_with_builtins() {
+    local source="$1"
+    local stage_dir="$2"
+    rm -rf "$stage_dir"
+    mkdir -p "$stage_dir"
+    cp -R "$source"/. "$stage_dir"/
+
+    local builtins
+    builtins=$(python - "$source/package.json" <<'PY'
+import json,sys
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as f:
+        data = json.load(f)
+    arr = data.get("builtin_workflows", [])
+    if isinstance(arr, list):
+        print("\n".join([x for x in arr if isinstance(x, str)]))
+except Exception:
+    pass
+PY
+)
+
+    if [ -z "$builtins" ]; then
+        return 0
+    fi
+
+    mkdir -p "$stage_dir/workflows/builtin"
+    while IFS= read -r builtin; do
+        [ -z "$builtin" ] && continue
+        local src_dir="$PUBLISH_DIR/workflow/$builtin"
+        local dst_dir="$stage_dir/workflows/builtin/$builtin"
+        if [ -d "$src_dir" ]; then
+            cp -R "$src_dir" "$dst_dir"
+            print_info "Included built-in workflow: $builtin"
+        else
+            print_warn "Built-in workflow not found: $builtin"
+        fi
+    done <<< "$builtins"
+}
+
 build_agents() {
     local source="${1:-$PUBLISH_DIR/agent}"
     local output="${2:-}"
@@ -70,12 +109,18 @@ build_agents() {
         output_dir=$(dirname "$output")
         mkdir -p "$output_dir"
         
-        # Create a zip file with the agent contents
-        cd "$source"
+        # Create a staged package with opt-in built-in workflows.
+        local stage_dir="$PROJECT_ROOT/build/.agent_stage_$(basename "$source")"
+        stage_source_with_builtins "$source" "$stage_dir" || {
+            print_error "Failed to stage source package"
+            return 1
+        }
+        cd "$stage_dir"
         zip -r "$PROJECT_ROOT/$output" . -x "*.git*" "build/*" || {
             print_error "Failed to create package"
             return 1
         }
+        rm -rf "$stage_dir"
         cd "$PROJECT_ROOT"
         print_info "Agent package created: $output"
     elif [ -f "$source/CMakeLists.txt" ]; then
@@ -90,11 +135,17 @@ build_agents() {
     else
         print_warn "No CMakeLists.txt found in $source, creating package only"
         # Create a basic package
-        cd "$source"
+        local stage_dir="$PROJECT_ROOT/build/.agent_stage_$(basename "$source")"
+        stage_source_with_builtins "$source" "$stage_dir" || {
+            print_error "Failed to stage source package"
+            return 1
+        }
+        cd "$stage_dir"
         zip -r "$PROJECT_ROOT/build/$(basename $source).zip" . -x "*.git*" "build/*" || {
             print_error "Failed to create package"
             return 1
         }
+        rm -rf "$stage_dir"
         cd "$PROJECT_ROOT"
         print_info "Agent package created: build/$(basename $source).zip"
     fi

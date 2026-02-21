@@ -526,6 +526,7 @@ if(AGENTFLOW_BUILD_TESTS)
       ${AGENTFLOW_TEST_DIR}/unit/src/test_agent_json_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_local_channel_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_runtime_master_worker_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_builtin_workflow_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_hot_reload.cpp
   )
   if(TARGET GTest::gtest)

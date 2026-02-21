@@ -1,0 +1,45 @@
+{
+  "id": "builtin-memory-workflow",
+  "version": "1.0",
+  "name": "builtin-memory-workflow",
+  "description": "Default memory access workflow",
+  "nodes": [
+    {
+      "id": "memory_read",
+      "name": "Memory Read",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "nodes/memory_read.sh"
+    },
+    {
+      "id": "memory_merge",
+      "name": "Memory Merge",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "nodes/memory_merge.sh"
+    },
+    {
+      "id": "memory_write",
+      "name": "Memory Write",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "nodes/memory_write.sh"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_read_merge",
+      "source": "memory_read",
+      "target": "memory_merge"
+    },
+    {
+      "id": "edge_merge_write",
+      "source": "memory_merge",
+      "target": "memory_write"
+    }
+  ],
+  "metadata": {
+    "builtin": "memory",
+    "customizable": "true"
+  }
+}

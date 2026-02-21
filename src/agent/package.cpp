@@ -3,6 +3,7 @@
 #include <sys/time.h>
 #include <mutex>
 #include <algorithm>
+#include <unordered_set>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -19,6 +20,25 @@ int64_t get_current_time_ms() {
   struct timeval tv;
   gettimeofday(&tv, NULL);
   return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+std::string resolve_builtin_workflow_file(const std::filesystem::path& root_path,
+                                          const std::string& builtin_name) {
+  namespace fs = std::filesystem;
+  const std::vector<fs::path> candidates = {
+      root_path / "workflows" / "builtin" / builtin_name / "workflow.json",
+      root_path / "publish" / "workflow" / builtin_name / "workflow.json",
+      root_path / ".." / "publish" / "workflow" / builtin_name / "workflow.json",
+      root_path / ".." / ".." / "publish" / "workflow" / builtin_name / "workflow.json",
+      fs::current_path() / "publish" / "workflow" / builtin_name / "workflow.json",
+      fs::current_path() / ".." / "publish" / "workflow" / builtin_name / "workflow.json",
+      fs::current_path() / ".." / ".." / "publish" / "workflow" / builtin_name / "workflow.json"};
+  for(const auto& candidate : candidates) {
+    if(fs::exists(candidate)) {
+      return fs::absolute(candidate).string();
+    }
+  }
+  return "";
 }
 }  // namespace
 
@@ -90,6 +110,34 @@ std::shared_ptr<AgentPackage> AgentPackage::load_from_directory(const std::strin
     if (fs::exists(root_path / "workflow.json")) {
       config.workflow_files.push_back("workflow.json");
     }
+  }
+
+  // Handle builtin workflow selection (opt-in)
+  if (doc.HasMember("builtin_workflows") && doc["builtin_workflows"].IsArray()) {
+    const rapidjson::Value& builtins = doc["builtin_workflows"];
+    for (rapidjson::SizeType i = 0; i < builtins.Size(); i++) {
+      if (!builtins[i].IsString()) {
+        continue;
+      }
+      const std::string builtin_name = builtins[i].GetString();
+      config.builtin_workflows.push_back(builtin_name);
+      const std::string builtin_file = resolve_builtin_workflow_file(root_path, builtin_name);
+      if (!builtin_file.empty()) {
+        config.workflow_files.push_back(builtin_file);
+      }
+    }
+  }
+
+  // Deduplicate workflow file entries while preserving order.
+  {
+    std::unordered_set<std::string> seen;
+    std::vector<std::string> unique_files;
+    for (const auto& wf : config.workflow_files) {
+      if (seen.insert(wf).second) {
+        unique_files.push_back(wf);
+      }
+    }
+    config.workflow_files.swap(unique_files);
   }
 
   auto package = std::make_shared<AgentPackage>(config);
