@@ -211,7 +211,7 @@ set(AGENTFLOW_AGENT_SOURCES
 set(AGENTFLOW_WORKFLOW_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/workflow/workflow.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/workflow_actor.cpp
-    ${AGENTFLOW_SOURCE_DIR}/workflow/workflow_storage.cpp
+    ${AGENTFLOW_SOURCE_DIR}/workflow/dsl/workflow_storage.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/node/node.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/node/node_actor.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/node/code_loader.cpp

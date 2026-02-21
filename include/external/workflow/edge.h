@@ -60,6 +60,8 @@ public:
   // Conditional execution support
   bool               has_condition() const { return !config_.condition_expression.empty(); }
   const std::string& get_condition_expression() const { return config_.condition_expression; }
+  int                get_priority() const { return config_.priority; }
+  const Config&      get_config() const { return config_; }
 
   // Data passing
   bool transfer_data(const DataMap& source_data, DataMap& target_data);

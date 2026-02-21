@@ -61,7 +61,67 @@ std::string workflow_config_to_json(const framework::Workflow::Config&          
     node_obj.AddMember("id", rapidjson::StringRef(node->get_id().c_str()), allocator);
     node_obj.AddMember("name", rapidjson::StringRef(node->get_name().c_str()), allocator);
     node_obj.AddMember("type", rapidjson::StringRef(node->get_type().c_str()), allocator);
-    node_obj.AddMember("timeout_ms", node->get_timeout_ms(), allocator);
+    node_obj.AddMember("priority", node->get_priority(), allocator);
+
+    // Execution mode
+    const char* exec_mode = "cpp_function";
+    switch(node->get_execution_mode()) {
+      case framework::Node::ExecutionMode::CPP_FUNCTION:
+        exec_mode = "cpp_function";
+        break;
+      case framework::Node::ExecutionMode::SHELL_SCRIPT:
+        exec_mode = "shell_script";
+        break;
+      case framework::Node::ExecutionMode::EXECUTABLE:
+        exec_mode = "executable";
+        break;
+      case framework::Node::ExecutionMode::PYTHON_SCRIPT:
+        exec_mode = "python_script";
+        break;
+      case framework::Node::ExecutionMode::SO_LIBRARY:
+        exec_mode = "so_library";
+        break;
+    }
+    node_obj.AddMember("execution_mode", rapidjson::StringRef(exec_mode), allocator);
+
+    // External execution config
+    if(!node->get_command().empty()) {
+      node_obj.AddMember("command", rapidjson::StringRef(node->get_command().c_str()), allocator);
+    }
+    // Note: working_dir, args, function_name, main_class, enable_hot_reload, memory_limit_mb, cpu_limit
+    // are missing from node interface getters, so we can't serialize them unless we update Node class
+    // or add config getter. 
+    // Wait, Node has get_config() which returns const Config&.
+    const auto& node_cfg = node->get_config();
+    
+    if(!node_cfg.working_dir.empty()) {
+      node_obj.AddMember("working_dir", rapidjson::StringRef(node_cfg.working_dir.c_str()), allocator);
+    }
+    
+    if(!node_cfg.args.empty()) {
+      rapidjson::Value args_array(rapidjson::kArrayType);
+      for(const auto& arg : node_cfg.args) {
+        rapidjson::Value arg_val;
+        arg_val.SetString(arg.c_str(), allocator);
+        args_array.PushBack(arg_val, allocator);
+      }
+      node_obj.AddMember("args", args_array, allocator);
+    }
+
+    if(!node_cfg.function_name.empty()) {
+      node_obj.AddMember("function_name", rapidjson::StringRef(node_cfg.function_name.c_str()), allocator);
+    }
+
+    if(!node_cfg.main_class.empty()) {
+      node_obj.AddMember("main_class", rapidjson::StringRef(node_cfg.main_class.c_str()), allocator);
+    }
+
+    node_obj.AddMember("max_retries", node_cfg.max_retries, allocator);
+    node_obj.AddMember("retry_delay_ms", node_cfg.retry_delay_ms, allocator);
+    node_obj.AddMember("timeout_ms", node_cfg.timeout_ms, allocator);
+    node_obj.AddMember("memory_limit_mb", node_cfg.memory_limit_mb, allocator);
+    node_obj.AddMember("cpu_limit", node_cfg.cpu_limit, allocator);
+    node_obj.AddMember("enable_hot_reload", node_cfg.enable_hot_reload, allocator);
 
     // Input parameters (as array for compatibility)
     rapidjson::Value inputs_array(rapidjson::kArrayType);
@@ -92,6 +152,7 @@ std::string workflow_config_to_json(const framework::Workflow::Config&          
     edge_obj.AddMember("id", rapidjson::StringRef(edge->get_id().c_str()), allocator);
     edge_obj.AddMember("source_node", rapidjson::StringRef(edge->get_source().c_str()), allocator);
     edge_obj.AddMember("target_node", rapidjson::StringRef(edge->get_target().c_str()), allocator);
+    edge_obj.AddMember("priority", edge->get_priority(), allocator);
 
     // Transfer mode
     const char* transfer_mode = "shared_memory";
@@ -108,9 +169,56 @@ std::string workflow_config_to_json(const framework::Workflow::Config&          
     }
     edge_obj.AddMember("transfer_mode", rapidjson::StringRef(transfer_mode), allocator);
 
+    // Edge config for extra fields
+    const auto& edge_cfg = edge->get_config();
+
+    // Source outputs
+    if(!edge_cfg.source_outputs.empty()) {
+      rapidjson::Value source_outputs_arr(rapidjson::kArrayType);
+      for(const auto& val : edge_cfg.source_outputs) {
+        rapidjson::Value v;
+        v.SetString(val.c_str(), allocator);
+        source_outputs_arr.PushBack(v, allocator);
+      }
+      edge_obj.AddMember("source_outputs", source_outputs_arr, allocator);
+    }
+
+    // Target inputs
+    if(!edge_cfg.target_inputs.empty()) {
+      rapidjson::Value target_inputs_arr(rapidjson::kArrayType);
+      for(const auto& val : edge_cfg.target_inputs) {
+        rapidjson::Value v;
+        v.SetString(val.c_str(), allocator);
+        target_inputs_arr.PushBack(v, allocator);
+      }
+      edge_obj.AddMember("target_inputs", target_inputs_arr, allocator);
+    }
+
+    // Data formats
+    if(!edge_cfg.data_formats.empty()) {
+      rapidjson::Value data_formats_arr(rapidjson::kArrayType);
+      for(const auto& val : edge_cfg.data_formats) {
+        rapidjson::Value v;
+        v.SetString(val.c_str(), allocator);
+        data_formats_arr.PushBack(v, allocator);
+      }
+      edge_obj.AddMember("data_formats", data_formats_arr, allocator);
+    }
+
+    // Supported events
+    if(!edge_cfg.supported_events.empty()) {
+      rapidjson::Value events_arr(rapidjson::kArrayType);
+      for(const auto& val : edge_cfg.supported_events) {
+        rapidjson::Value v;
+        v.SetString(val.c_str(), allocator);
+        events_arr.PushBack(v, allocator);
+      }
+      edge_obj.AddMember("supported_events", events_arr, allocator);
+    }
+
     // Condition
     if(edge->has_condition()) {
-      edge_obj.AddMember("condition",
+      edge_obj.AddMember("condition_expression",
                          rapidjson::StringRef(edge->get_condition_expression().c_str()), allocator);
     }
 
@@ -173,6 +281,52 @@ bool workflow_config_from_json(const std::string& json_str, framework::Workflow:
         node_config.type = node_obj["type"].GetString();
       if(node_obj.HasMember("timeout_ms"))
         node_config.timeout_ms = node_obj["timeout_ms"].GetInt();
+      if(node_obj.HasMember("priority"))
+        node_config.priority = node_obj["priority"].GetInt();
+
+      // Execution mode
+      if(node_obj.HasMember("execution_mode")) {
+        std::string mode_str = node_obj["execution_mode"].GetString();
+        if(mode_str == "shell_script") {
+          node_config.execution_mode = framework::Node::ExecutionMode::SHELL_SCRIPT;
+        } else if(mode_str == "executable") {
+          node_config.execution_mode = framework::Node::ExecutionMode::EXECUTABLE;
+        } else if(mode_str == "python_script") {
+          node_config.execution_mode = framework::Node::ExecutionMode::PYTHON_SCRIPT;
+        } else if(mode_str == "so_library") {
+          node_config.execution_mode = framework::Node::ExecutionMode::SO_LIBRARY;
+        } else {
+          node_config.execution_mode = framework::Node::ExecutionMode::CPP_FUNCTION;
+        }
+      }
+
+      if(node_obj.HasMember("command"))
+        node_config.command = node_obj["command"].GetString();
+      if(node_obj.HasMember("working_dir"))
+        node_config.working_dir = node_obj["working_dir"].GetString();
+      
+      if(node_obj.HasMember("args") && node_obj["args"].IsArray()) {
+        const rapidjson::Value& args_array = node_obj["args"];
+        for(rapidjson::SizeType j = 0; j < args_array.Size(); ++j) {
+          node_config.args.push_back(args_array[j].GetString());
+        }
+      }
+
+      if(node_obj.HasMember("function_name"))
+        node_config.function_name = node_obj["function_name"].GetString();
+      if(node_obj.HasMember("main_class"))
+        node_config.main_class = node_obj["main_class"].GetString();
+      
+      if(node_obj.HasMember("max_retries"))
+        node_config.max_retries = node_obj["max_retries"].GetInt();
+      if(node_obj.HasMember("retry_delay_ms"))
+        node_config.retry_delay_ms = node_obj["retry_delay_ms"].GetInt();
+      if(node_obj.HasMember("memory_limit_mb"))
+        node_config.memory_limit_mb = node_obj["memory_limit_mb"].GetInt();
+      if(node_obj.HasMember("cpu_limit"))
+        node_config.cpu_limit = node_obj["cpu_limit"].GetInt();
+      if(node_obj.HasMember("enable_hot_reload"))
+        node_config.enable_hot_reload = node_obj["enable_hot_reload"].GetBool();
 
       // Parse input parameters
       if(node_obj.HasMember("inputs") && node_obj["inputs"].IsArray()) {
@@ -207,6 +361,8 @@ bool workflow_config_from_json(const std::string& json_str, framework::Workflow:
         edge_config.source_node = edge_obj["source_node"].GetString();
       if(edge_obj.HasMember("target_node"))
         edge_config.target_node = edge_obj["target_node"].GetString();
+      if(edge_obj.HasMember("priority"))
+        edge_config.priority = edge_obj["priority"].GetInt();
 
       if(edge_obj.HasMember("transfer_mode")) {
         const std::string& transfer_mode = edge_obj["transfer_mode"].GetString();
@@ -221,6 +377,40 @@ bool workflow_config_from_json(const std::string& json_str, framework::Workflow:
 
       if(edge_obj.HasMember("condition"))
         edge_config.condition_expression = edge_obj["condition"].GetString();
+      if(edge_obj.HasMember("condition_expression"))
+        edge_config.condition_expression = edge_obj["condition_expression"].GetString();
+
+      // Source outputs
+      if(edge_obj.HasMember("source_outputs") && edge_obj["source_outputs"].IsArray()) {
+        const rapidjson::Value& source_outputs_arr = edge_obj["source_outputs"];
+        for(rapidjson::SizeType j = 0; j < source_outputs_arr.Size(); ++j) {
+          edge_config.source_outputs.push_back(source_outputs_arr[j].GetString());
+        }
+      }
+
+      // Target inputs
+      if(edge_obj.HasMember("target_inputs") && edge_obj["target_inputs"].IsArray()) {
+        const rapidjson::Value& target_inputs_arr = edge_obj["target_inputs"];
+        for(rapidjson::SizeType j = 0; j < target_inputs_arr.Size(); ++j) {
+          edge_config.target_inputs.push_back(target_inputs_arr[j].GetString());
+        }
+      }
+
+      // Data formats
+      if(edge_obj.HasMember("data_formats") && edge_obj["data_formats"].IsArray()) {
+        const rapidjson::Value& data_formats_arr = edge_obj["data_formats"];
+        for(rapidjson::SizeType j = 0; j < data_formats_arr.Size(); ++j) {
+          edge_config.data_formats.push_back(data_formats_arr[j].GetString());
+        }
+      }
+
+      // Supported events
+      if(edge_obj.HasMember("supported_events") && edge_obj["supported_events"].IsArray()) {
+        const rapidjson::Value& supported_events_arr = edge_obj["supported_events"];
+        for(rapidjson::SizeType j = 0; j < supported_events_arr.Size(); ++j) {
+          edge_config.supported_events.push_back(supported_events_arr[j].GetString());
+        }
+      }
 
       edge_configs.push_back(edge_config);
     }
