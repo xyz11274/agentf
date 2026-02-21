@@ -14,7 +14,8 @@
 // Include internal agent components
 #include "agent/session.h"
 #include "agent/task.h"
-#include "agent/messages.h"
+#include "agent/msgque.h"
+#include "agent/coordinator.h"
 #include "agent/context.h"
 #include "agent/event.h"
 #include "agent/package.h"
@@ -213,9 +214,11 @@ std::shared_ptr<Agent> Agent::create_from_package(const std::string& package_pat
 
 Agent::~Agent() {
   // Clean up components
-  session_.reset();
+  default_session_.reset();
+  sessions_.clear();
   current_task_.reset();
   messages_.reset();
+  coordinator_.reset();
   context_.reset();
   event_.reset();
   package_.reset();
@@ -224,10 +227,11 @@ Agent::~Agent() {
 }
 
 bool Agent::initialize_components(std::shared_ptr<AgentPackage> package) {
-  // Initialize session component
+  // Initialize default session component
   AgentSession::Config session_config;
-  session_config.session_id = config_.id + "_session";
-  session_ = std::make_shared<AgentSession>(session_config);
+  session_config.session_id = config_.id + "_default_session";
+  default_session_ = std::make_shared<AgentSession>(session_config);
+  sessions_[session_config.session_id] = default_session_;
 
   // Initialize task component
   AgentTask::Config task_config;
@@ -236,9 +240,14 @@ bool Agent::initialize_components(std::shared_ptr<AgentPackage> package) {
   current_task_ = std::make_shared<AgentTask>(task_config);
 
   // Initialize messages component
-  AgentMessages::Config messages_config;
+  AgentMsgQue::Config messages_config;
   messages_config.max_queue_size = 1024;
-  messages_ = std::make_shared<AgentMessages>(messages_config);
+  messages_ = std::make_shared<AgentMsgQue>(messages_config);
+
+  // Initialize coordinator component
+  AgentCoordinator::Config coordinator_config;
+  coordinator_config.coordinator_id = config_.id + "_coordinator";
+  coordinator_ = std::make_shared<AgentCoordinator>(coordinator_config);
 
   // Initialize context component
   AgentContext::Config context_config;
@@ -264,6 +273,67 @@ bool Agent::initialize_components(std::shared_ptr<AgentPackage> package) {
   }
 
   return true;
+}
+
+std::shared_ptr<AgentSession> Agent::get_or_create_session(const std::string& user_id,
+                                                           const std::string& client_id) {
+  const std::string session_key = user_id + ":" + client_id;
+  auto              it = sessions_.find(session_key);
+  if(it != sessions_.end()) {
+    return it->second;
+  }
+
+  AgentSession::Config session_config;
+  session_config.session_id = session_key;
+  auto session = std::make_shared<AgentSession>(session_config);
+  sessions_[session_key] = session;
+  return session;
+}
+
+std::shared_ptr<AgentSession> Agent::get_session_by_key(const std::string& session_key) const {
+  auto it = sessions_.find(session_key);
+  if(it == sessions_.end()) {
+    return nullptr;
+  }
+  return it->second;
+}
+
+bool Agent::route_request_message(const AgentMsgQue::Message& message) {
+  if(!default_session_) {
+    return false;
+  }
+
+  const bool high_priority = message.priority == AgentMsgQue::MessagePriority::HIGH;
+  if(!default_session_->enqueue_received_message(message, high_priority)) {
+    return false;
+  }
+
+  AgentMsgQue::Message received;
+  if(!default_session_->dequeue_received_message(received)) {
+    return false;
+  }
+
+  const auto user_it = received.metadata.find("user_id");
+  const auto client_it = received.metadata.find("client_id");
+  if(user_it == received.metadata.end() || client_it == received.metadata.end()) {
+    return false;
+  }
+
+  auto target_session = get_or_create_session(user_it->second, client_it->second);
+  if(!target_session) {
+    return false;
+  }
+
+  return target_session->enqueue_received_message(received, high_priority);
+}
+
+int Agent::process_session_messages(const std::string& session_key) {
+  auto session = get_session_by_key(session_key);
+  if(!session || !coordinator_) {
+    return 0;
+  }
+  auto tasks = coordinator_->process_session_messages(*session, workflows_);
+  return static_cast<int>(tasks.size());
 }
 
 void Agent::add_workflow(std::shared_ptr<Workflow> workflow) {

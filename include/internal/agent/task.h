@@ -29,6 +29,9 @@ public:
     std::string task_id;
     std::string task_type;
     std::string description;
+    std::string session_id;
+    std::string workflow_id;
+    std::string collaboration_so_path;
     int64_t     priority = 0;
     int         max_retries = 3;
   };
@@ -39,6 +42,9 @@ public:
   // Getters
   const std::string& get_task_id() const { return config_.task_id; }
   const std::string& get_task_type() const { return config_.task_type; }
+  const std::string& get_session_id() const { return config_.session_id; }
+  const std::string& get_workflow_id() const { return config_.workflow_id; }
+  const std::string& get_collaboration_so_path() const { return config_.collaboration_so_path; }
   TaskState          get_state() const { return state_; }
   const Config&      get_config() const { return config_; }
   int64_t            get_created_time() const { return created_time_; }

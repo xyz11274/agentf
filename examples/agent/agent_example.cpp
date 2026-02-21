@@ -4,7 +4,7 @@
 #include "agent/agent.h"
 #include "agent/session.h"
 #include "agent/task.h"
-#include "agent/messages.h"
+#include "agent/msgque.h"
 #include "agent/context.h"
 #include "agent/event.h"
 #include "agent/package.h"
@@ -55,9 +55,9 @@ int main() {
   auto messages = agent->get_messages();
   if(messages) {
     std::cout << "\n4. Messages Component:" << std::endl;
-    AgentMessages::Message msg;
+    AgentMsgQue::Message msg;
     msg.message_id = "msg_001";
-    msg.type = AgentMessages::MessageType::TASK_REQUEST;
+    msg.type = AgentMsgQue::MessageType::TASK_REQUEST;
     msg.sender_id = agent->get_id();
     msg.receiver_id = "target_agent";
     msg.content = "Hello from agent example";

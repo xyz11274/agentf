@@ -2,11 +2,13 @@
 #define AGENTFLOW_FRAMEWORK_AGENT_H
 
 #include <memory>
+#include <map>
 #include <mutex>
 #include <queue>
 #include <vector>
 
 #include "agent/common.h"
+#include "agent/msgque.h"
 #include "workflow/workflow.h"
 #include "utils/file_storage.h"
 
@@ -16,10 +18,10 @@ namespace framework {
 // Forward declarations for internal agent components
 class AgentSession;
 class AgentTask;
-class AgentMessages;
 class AgentContext;
 class AgentEvent;
 class AgentPackage;
+class AgentCoordinator;
 
 }  // namespace framework
 }  // namespace agentflow
@@ -78,12 +80,21 @@ public:
   const Config&      get_config() const { return config_; }
 
   // Component accessors
-  std::shared_ptr<AgentSession>   get_session() const { return session_; }
+  std::shared_ptr<AgentSession>   get_session() const { return default_session_; }
+  std::shared_ptr<AgentSession>   get_default_session() const { return default_session_; }
   std::shared_ptr<AgentTask>      get_current_task() const { return current_task_; }
   std::shared_ptr<AgentMessages>  get_messages() const { return messages_; }
+  std::shared_ptr<AgentCoordinator> get_coordinator() const { return coordinator_; }
   std::shared_ptr<AgentContext>   get_context() const { return context_; }
   std::shared_ptr<AgentEvent>     get_event_handler() const { return event_; }
   std::shared_ptr<AgentPackage>   get_package() const { return package_; }
+
+  // Session/message routing
+  std::shared_ptr<AgentSession> get_or_create_session(const std::string& user_id,
+                                                      const std::string& client_id);
+  std::shared_ptr<AgentSession> get_session_by_key(const std::string& session_key) const;
+  bool route_request_message(const AgentMsgQue::Message& message);
+  int  process_session_messages(const std::string& session_key);
 
   // Workflow management
   void                                          add_workflow(std::shared_ptr<Workflow> workflow);
@@ -152,9 +163,11 @@ private:
   mutable std::mutex      event_mutex_;
 
   // Agent components
-  std::shared_ptr<AgentSession>   session_;
+  std::shared_ptr<AgentSession>   default_session_;
+  std::map<std::string, std::shared_ptr<AgentSession>> sessions_;
   std::shared_ptr<AgentTask>      current_task_;
   std::shared_ptr<AgentMessages>  messages_;
+  std::shared_ptr<AgentCoordinator> coordinator_;
   std::shared_ptr<AgentContext>   context_;
   std::shared_ptr<AgentEvent>     event_;
   std::shared_ptr<AgentPackage>   package_;

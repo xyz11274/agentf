@@ -6,9 +6,14 @@
 #include <string>
 #include <map>
 #include <mutex>
+#include <vector>
+
+#include "agent/msgque.h"
 
 namespace agentflow {
 namespace framework {
+
+class AgentTask;
 
 /**
  * AgentSession represents a session context for an agent execution
@@ -26,6 +31,7 @@ public:
 
   struct Config {
     std::string session_id;
+    int         max_queue_size = 1024;
     int64_t     timeout_ms = 30000;  // 30 seconds default
     int         max_retries = 3;
   };
@@ -57,12 +63,28 @@ public:
   void update_activity();
   bool is_timeout_expired() const;
 
+  // Queue operations
+  bool enqueue_received_message(const AgentMsgQue::Message& message, bool high_priority = false);
+  bool dequeue_received_message(AgentMsgQue::Message& message);
+  bool enqueue_send_message(const AgentMsgQue::Message& message);
+  bool dequeue_send_message(AgentMsgQue::Message& message);
+  int  get_receive_queue_size() const;
+  int  get_send_queue_size() const;
+
+  // Session task ownership
+  void                                      add_task(const std::shared_ptr<AgentTask>& task);
+  std::shared_ptr<AgentTask>                get_task(const std::string& task_id) const;
+  std::vector<std::shared_ptr<AgentTask>>   get_tasks() const;
+
 private:
   Config                                      config_;
   SessionState                                state_ = SessionState::CREATED;
   int64_t                                     created_time_ = 0;
   int64_t                                     last_activity_time_ = 0;
   std::map<std::string, std::string>          metadata_;
+  AgentMsgQue                                 receive_queue_;
+  AgentMsgQue                                 send_queue_;
+  std::map<std::string, std::shared_ptr<AgentTask>> tasks_;
   mutable std::mutex                          mutex_;
 };
 

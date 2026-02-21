@@ -1,0 +1,62 @@
+#include "agent/coordinator.h"
+
+#include <sstream>
+
+#include "agent/session.h"
+#include "agent/task.h"
+#include "workflow/workflow.h"
+
+namespace agentflow {
+namespace framework {
+
+AgentCoordinator::AgentCoordinator(const Config& config) : config_(config) {
+}
+
+std::shared_ptr<AgentTask> AgentCoordinator::build_task_for_message(
+    const std::string& session_id, const AgentMsgQue::Message& message,
+    const std::vector<std::shared_ptr<Workflow>>& workflows, int64_t suffix_counter) const {
+  AgentTask::Config task_config;
+  std::ostringstream task_id;
+  task_id << session_id << "_task_" << suffix_counter;
+  task_config.task_id = task_id.str();
+
+  const auto type_it = message.metadata.find("task_type");
+  task_config.task_type = (type_it != message.metadata.end()) ? type_it->second : "execution";
+  task_config.session_id = session_id;
+
+  const auto workflow_it = message.metadata.find("workflow_id");
+  if(workflow_it != message.metadata.end()) {
+    task_config.workflow_id = workflow_it->second;
+  } else if(!workflows.empty()) {
+    task_config.workflow_id = workflows.front()->get_id();
+  }
+
+  if(task_config.task_type == "collaboration") {
+    const auto so_it = message.metadata.find("collaboration_so");
+    if(so_it != message.metadata.end()) {
+      task_config.collaboration_so_path = so_it->second;
+    }
+  }
+
+  auto task = std::make_shared<AgentTask>(task_config);
+  task->set_parameter("message_id", message.message_id);
+  task->set_parameter("message_sender", message.sender_id);
+  task->set_parameter("message_content", message.content);
+  return task;
+}
+
+std::vector<std::shared_ptr<AgentTask>> AgentCoordinator::process_session_messages(
+    AgentSession& session, const std::vector<std::shared_ptr<Workflow>>& workflows) {
+  std::vector<std::shared_ptr<AgentTask>> tasks;
+  AgentMsgQue::Message                    message;
+  int64_t                                 counter = 0;
+  while(session.dequeue_received_message(message)) {
+    auto task = build_task_for_message(session.get_session_id(), message, workflows, ++counter);
+    session.add_task(task);
+    tasks.push_back(task);
+  }
+  return tasks;
+}
+
+}  // namespace framework
+}  // namespace agentflow

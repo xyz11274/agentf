@@ -257,7 +257,8 @@ set(AGENTFLOW_AGENT_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/agent/agent_actor.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/session.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/task.cpp
-    ${AGENTFLOW_SOURCE_DIR}/agent/messages.cpp
+    ${AGENTFLOW_SOURCE_DIR}/agent/msgque.cpp
+    ${AGENTFLOW_SOURCE_DIR}/agent/coordinator.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/context.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/event.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/package.cpp

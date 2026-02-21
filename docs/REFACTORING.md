@@ -29,6 +29,21 @@ AgentFlow/
 
 ## 优化内容
 
+### 0. Agent 消息链路与会话协同增强（2026-02-21）
+
+本次优化将 Agent 内部消息处理从单消息容器升级为会话化消息队列协同模型，主链路为：
+
+`reqmsg -> agent.defaultsession -> agent.newsession -> agent.coordinator -> agent.newsession.task -> agent.workflow`
+
+核心变更：
+- `src/agent/messages.cpp` 迁移为 `src/agent/msgque.cpp`，核心类升级为 `AgentMsgQue`（保留 `AgentMessages` 兼容别名）。
+- 每个 Agent 实例持有默认会话 `default_session`，请求消息先进入默认会话接收队列。
+- 会话按 `user_id + client_id` 动态创建，子会话持有独立接收/发送队列与任务集合。
+- 新增 `AgentCoordinator`（`src/agent/coordinator.cpp`），统一处理会话消息并生成任务：
+  - 执行任务：映射到某个 workflow 类型；
+  - 协同任务：支持通过 so 路径指定协同算法扩展。
+- 任务归属模型调整：task 必须绑定其触发会话，并保留 workflow 映射信息供 runtime scheduler 消费。
+
 ### 1. 头文件目录重组
 
 **目录结构：**
@@ -1211,4 +1226,3 @@ All examples have been validated:
 - `src/agent/event.cpp` / `include/internal/agent/event.h` (更新)
 - `src/agent/agent.cpp` (更新)
 - `CMakeLists.txt` (更新)
-

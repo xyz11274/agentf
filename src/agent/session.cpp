@@ -3,6 +3,8 @@
 #include <sys/time.h>
 #include <mutex>
 
+#include "agent/task.h"
+
 namespace agentflow {
 namespace framework {
 
@@ -15,7 +17,10 @@ int64_t get_current_time_ms() {
 }  // namespace
 
 AgentSession::AgentSession(const Config& config)
-    : config_(config), state_(SessionState::CREATED) {
+    : config_(config),
+      state_(SessionState::CREATED),
+      receive_queue_(AgentMsgQue::Config{config.max_queue_size}),
+      send_queue_(AgentMsgQue::Config{config.max_queue_size}) {
   created_time_ = get_current_time_ms();
   last_activity_time_ = created_time_;
 }
@@ -23,6 +28,7 @@ AgentSession::AgentSession(const Config& config)
 AgentSession::~AgentSession() {
   std::lock_guard<std::mutex> lock(mutex_);
   metadata_.clear();
+  tasks_.clear();
 }
 
 bool AgentSession::activate() {
@@ -109,6 +115,69 @@ bool AgentSession::is_timeout_expired() const {
   std::lock_guard<std::mutex> lock(mutex_);
   int64_t current_time = get_current_time_ms();
   return (current_time - last_activity_time_) > config_.timeout_ms;
+}
+
+bool AgentSession::enqueue_received_message(const AgentMsgQue::Message& message, bool high_priority) {
+  AgentMsgQue::Message queued = message;
+  queued.priority = high_priority ? AgentMsgQue::MessagePriority::HIGH : queued.priority;
+  update_activity();
+  return receive_queue_.enqueue_message(queued);
+}
+
+bool AgentSession::dequeue_received_message(AgentMsgQue::Message& message) {
+  bool ok = receive_queue_.dequeue_message(message);
+  if(ok) {
+    update_activity();
+  }
+  return ok;
+}
+
+bool AgentSession::enqueue_send_message(const AgentMsgQue::Message& message) {
+  update_activity();
+  return send_queue_.enqueue_message(message);
+}
+
+bool AgentSession::dequeue_send_message(AgentMsgQue::Message& message) {
+  bool ok = send_queue_.dequeue_message(message);
+  if(ok) {
+    update_activity();
+  }
+  return ok;
+}
+
+int AgentSession::get_receive_queue_size() const {
+  return receive_queue_.get_queue_size();
+}
+
+int AgentSession::get_send_queue_size() const {
+  return send_queue_.get_queue_size();
+}
+
+void AgentSession::add_task(const std::shared_ptr<AgentTask>& task) {
+  if(!task) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  tasks_[task->get_task_id()] = task;
+}
+
+std::shared_ptr<AgentTask> AgentSession::get_task(const std::string& task_id) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto                        it = tasks_.find(task_id);
+  if(it == tasks_.end()) {
+    return nullptr;
+  }
+  return it->second;
+}
+
+std::vector<std::shared_ptr<AgentTask>> AgentSession::get_tasks() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<std::shared_ptr<AgentTask>> result;
+  result.reserve(tasks_.size());
+  for(const auto& kv : tasks_) {
+    result.push_back(kv.second);
+  }
+  return result;
 }
 
 }  // namespace framework
