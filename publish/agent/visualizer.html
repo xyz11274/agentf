@@ -1,0 +1,804 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AgentFlow DSL Visualizer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 320px;
+            background: #16213e;
+            border-right: 1px solid #0f3460;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .sidebar-header {
+            padding: 20px;
+            background: #0f3460;
+        }
+
+        .sidebar-header h1 {
+            font-size: 18px;
+            margin-bottom: 5px;
+            color: #e94560;
+        }
+
+        .sidebar-header p {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .file-upload {
+            padding: 15px 20px;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        .file-upload-area {
+            border: 2px dashed #0f3460;
+            border-radius: 8px;
+            padding: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .file-upload-area:hover, .file-upload-area.dragover {
+            border-color: #e94560;
+            background: rgba(233, 69, 96, 0.1);
+        }
+
+        .file-upload-area input {
+            display: none;
+        }
+
+        .file-upload-area span {
+            font-size: 13px;
+            color: #888;
+        }
+
+        .workflow-info {
+            padding: 15px 20px;
+            border-bottom: 1px solid #0f3460;
+            display: none;
+        }
+
+        .workflow-info.active {
+            display: block;
+        }
+
+        .workflow-info h3 {
+            font-size: 13px;
+            color: #e94560;
+            margin-bottom: 10px;
+        }
+
+        .workflow-meta {
+            font-size: 12px;
+            color: #aaa;
+        }
+
+        .workflow-meta div {
+            margin-bottom: 5px;
+        }
+
+        .workflow-meta strong {
+            color: #ddd;
+        }
+
+        .properties-panel {
+            flex: 1;
+            overflow-y: auto;
+            padding: 15px 20px;
+        }
+
+        .properties-panel h3 {
+            font-size: 13px;
+            color: #e94560;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #0f3460;
+        }
+
+        .no-selection {
+            color: #666;
+            font-size: 13px;
+            text-align: center;
+            padding: 20px;
+        }
+
+        .property-group {
+            margin-bottom: 15px;
+        }
+
+        .property-group-title {
+            font-size: 11px;
+            color: #888;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+            letter-spacing: 1px;
+        }
+
+        .property-item {
+            display: flex;
+            margin-bottom: 6px;
+            font-size: 12px;
+        }
+
+        .property-key {
+            color: #4fc3f7;
+            min-width: 90px;
+        }
+
+        .property-value {
+            color: #fff;
+            word-break: break-all;
+        }
+
+        .property-value.array { color: #81c784; }
+        .property-value.string { color: #ffb74d; }
+        .property-value.number { color: #64b5f6; }
+
+        /* Canvas Area */
+        .canvas-container {
+            flex: 1;
+            position: relative;
+            background: #1a1a2e;
+        }
+
+        #canvas {
+            width: 100%;
+            height: 100%;
+            cursor: grab;
+        }
+
+        #canvas:active {
+            cursor: grabbing;
+        }
+
+        .toolbar {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            display: flex;
+            gap: 8px;
+        }
+
+        .toolbar button {
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: 6px;
+            background: #16213e;
+            color: #ddd;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.2s;
+        }
+
+        .toolbar button:hover {
+            background: #0f3460;
+        }
+
+        .zoom-level {
+            position: absolute;
+            bottom: 15px;
+            right: 15px;
+            background: #16213e;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #888;
+        }
+
+        .legend {
+            position: absolute;
+            bottom: 15px;
+            left: 15px;
+            background: rgba(22, 33, 62, 0.9);
+            padding: 10px 15px;
+            border-radius: 6px;
+            font-size: 11px;
+        }
+
+        .legend-title {
+            color: #888;
+            margin-bottom: 8px;
+            font-weight: bold;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 3px;
+            margin-right: 8px;
+        }
+
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #16213e; }
+        ::-webkit-scrollbar-thumb { background: #0f3460; border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: #1a4a7a; }
+
+        .nested-object {
+            background: rgba(0,0,0,0.2);
+            border-radius: 4px;
+            padding: 8px 10px;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h1>AgentFlow DSL Visualizer</h1>
+                <p>JSON Workflow 可视化工具</p>
+            </div>
+
+            <div class="file-upload">
+                <div class="file-upload-area" id="dropZone">
+                    <input type="file" id="fileInput" accept=".json">
+                    <span>拖放JSON文件到此处<br>或点击选择文件</span>
+                </div>
+            </div>
+
+            <div class="workflow-info" id="workflowInfo">
+                <h3>Workflow 信息</h3>
+                <div class="workflow-meta" id="workflowMeta"></div>
+            </div>
+
+            <div class="properties-panel">
+                <h3>属性详情</h3>
+                <div id="propertiesContent">
+                    <div class="no-selection">点击节点或边查看属性</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="canvas-container">
+            <canvas id="canvas"></canvas>
+            <div class="toolbar">
+                <button id="zoomIn" title="放大">+</button>
+                <button id="zoomOut" title="缩小">-</button>
+                <button id="resetView" title="重置视图">⟲</button>
+                <button id="fitView" title="适应视图">⊡</button>
+            </div>
+            <div class="zoom-level" id="zoomLevel">100%</div>
+            <div class="legend">
+                <div class="legend-title">节点类型</div>
+                <div class="legend-item"><div class="legend-color" style="background:#4caf50"></div>start/input</div>
+                <div class="legend-item"><div class="legend-color" style="background:#2196f3"></div>processor</div>
+                <div class="legend-item"><div class="legend-color" style="background:#9c27b0"></div>transformer</div>
+                <div class="legend-item"><div class="legend-color" style="background:#ff9800"></div>validator/filter</div>
+                <div class="legend-item"><div class="legend-color" style="background:#f44336"></div>output</div>
+                <div class="legend-item"><div class="legend-color" style="background:#607d8b"></div>其他</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Global state
+        let workflowData = null;
+        let nodes = [];
+        let edges = [];
+        let selectedElement = null;
+
+        // Canvas state
+        let canvas, ctx;
+        let scale = 1;
+        let offsetX = 0, offsetY = 0;
+        let isDragging = false;
+        let dragStartX, dragStartY;
+        let nodeWidth = 180;
+        let nodeHeight = 70;
+
+        // Node colors
+        const typeColors = {
+            'start': '#4caf50', 'input': '#4caf50', 'loader': '#4caf50',
+            'processor': '#2196f3', 'transformer': '#9c27b0', 'enricher': '#7b1fa2',
+            'validator': '#ff9800', 'filter': '#ff9800',
+            'output': '#f44336', 'merger': '#00bcd4', 'aggregator': '#009688',
+            'default': '#607d8b'
+        };
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            initCanvas();
+            initEventListeners();
+            resizeCanvas();
+        });
+
+        function initCanvas() {
+            canvas = document.getElementById('canvas');
+            ctx = canvas.getContext('2d');
+            window.addEventListener('resize', resizeCanvas);
+            canvas.addEventListener('mousedown', onMouseDown);
+            canvas.addEventListener('mousemove', onMouseMove);
+            canvas.addEventListener('mouseup', onMouseUp);
+            canvas.addEventListener('wheel', onWheel);
+            canvas.addEventListener('click', onClick);
+        }
+
+        function resizeCanvas() {
+            const container = canvas.parentElement;
+            canvas.width = container.clientWidth;
+            canvas.height = container.clientHeight;
+            render();
+        }
+
+        function initEventListeners() {
+            const dropZone = document.getElementById('dropZone');
+            const fileInput = document.getElementById('fileInput');
+
+            dropZone.addEventListener('click', () => fileInput.click());
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                dropZone.classList.add('dragover');
+            });
+            dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+            dropZone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('dragover');
+                const file = e.dataTransfer.files[0];
+                if (file) loadLocalFile(file);
+            });
+            fileInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) loadLocalFile(file);
+            });
+
+            document.getElementById('zoomIn').addEventListener('click', () => zoom(1.2));
+            document.getElementById('zoomOut').addEventListener('click', () => zoom(0.8));
+            document.getElementById('resetView').addEventListener('click', resetView);
+            document.getElementById('fitView').addEventListener('click', fitView);
+        }
+
+        function loadLocalFile(file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    processWorkflow(data);
+                } catch (error) {
+                    alert('解析JSON失败: ' + error.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function processWorkflow(data) {
+            workflowData = data.workflow || data;
+            nodes = workflowData.nodes || [];
+            edges = workflowData.edges || [];
+
+            calculateNodePositions();
+            updateWorkflowInfo();
+            fitView();
+            clearSelection();
+            render();
+        }
+
+        function calculateNodePositions() {
+            const adjList = {};
+            const inDegree = {};
+            const nodeMap = {};
+
+            nodes.forEach(node => {
+                nodeMap[node.id] = node;
+                adjList[node.id] = [];
+                inDegree[node.id] = 0;
+            });
+
+            edges.forEach(edge => {
+                if (adjList[edge.source]) {
+                    adjList[edge.source].push(edge.target);
+                    inDegree[edge.target] = (inDegree[edge.target] || 0) + 1;
+                }
+            });
+
+            const levels = {};
+            let queue = nodes.filter(n => inDegree[n.id] === 0).map(n => n.id);
+            queue.forEach(id => levels[id] = 0);
+
+            while (queue.length > 0) {
+                const current = queue.shift();
+                const currentLevel = levels[current];
+                adjList[current].forEach(next => {
+                    if (levels[next] === undefined || levels[next] < currentLevel + 1) {
+                        levels[next] = currentLevel + 1;
+                    }
+                    inDegree[next]--;
+                    if (inDegree[next] === 0) queue.push(next);
+                });
+            }
+
+            const levelGroups = {};
+            nodes.forEach(node => {
+                const level = levels[node.id] || 0;
+                if (!levelGroups[level]) levelGroups[level] = [];
+                levelGroups[level].push(node);
+            });
+
+            const horizontalGap = 280;
+            const verticalGap = 120;
+
+            Object.keys(levelGroups).forEach(level => {
+                const group = levelGroups[level];
+                const totalHeight = (group.length - 1) * (nodeHeight + verticalGap);
+                const startY = -totalHeight / 2;
+                group.forEach((node, index) => {
+                    node.x = parseInt(level) * horizontalGap;
+                    node.y = startY + index * (nodeHeight + verticalGap);
+                });
+            });
+        }
+
+        function updateWorkflowInfo() {
+            const infoDiv = document.getElementById('workflowInfo');
+            const metaDiv = document.getElementById('workflowMeta');
+
+            if (!workflowData) {
+                infoDiv.classList.remove('active');
+                return;
+            }
+
+            infoDiv.classList.add('active');
+            metaDiv.innerHTML = `
+                <div><strong>ID:</strong> ${workflowData.id || '-'}</div>
+                <div><strong>名称:</strong> ${workflowData.name || '-'}</div>
+                <div><strong>版本:</strong> ${workflowData.version || '-'}</div>
+                <div><strong>节点数:</strong> ${nodes.length}</div>
+                <div><strong>边数:</strong> ${edges.length}</div>
+            `;
+        }
+
+        function render() {
+            if (!ctx) return;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.save();
+            ctx.translate(canvas.width / 2 + offsetX, canvas.height / 2 + offsetY);
+            ctx.scale(scale, scale);
+
+            // Draw edges first
+            edges.forEach(edge => {
+                const sourceNode = nodes.find(n => n.id === edge.source);
+                const targetNode = nodes.find(n => n.id === edge.target);
+                if (sourceNode && targetNode) drawEdge(sourceNode, targetNode, edge);
+            });
+
+            // Draw nodes
+            nodes.forEach(node => drawNode(node));
+
+            ctx.restore();
+        }
+
+        function drawNode(node) {
+            const x = node.x - nodeWidth / 2;
+            const y = node.y - nodeHeight / 2;
+            const isSelected = selectedElement?.type === 'node' && selectedElement.data.id === node.id;
+            const color = typeColors[node.type] || typeColors.default;
+            const hasLoop = node.loop_config;
+
+            // Shadow
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.4)';
+            ctx.shadowBlur = 12;
+            ctx.shadowOffsetX = 3;
+            ctx.shadowOffsetY = 3;
+
+            // Node body
+            ctx.beginPath();
+            ctx.roundRect(x, y, nodeWidth, nodeHeight, 8);
+            ctx.fillStyle = hasLoop ? '#2d1f3d' : '#1e2a4a';
+            ctx.fill();
+
+            ctx.shadowColor = 'transparent';
+
+            // Border
+            ctx.strokeStyle = isSelected ? '#e94560' : (hasLoop ? '#9c27b0' : color);
+            ctx.lineWidth = isSelected ? 3 : 2;
+            ctx.stroke();
+
+            // Loop indicator ring
+            if (hasLoop) {
+                ctx.beginPath();
+                ctx.arc(x + nodeWidth - 15, y + 15, 10, 0, Math.PI * 2);
+                ctx.fillStyle = '#9c27b0';
+                ctx.fill();
+                ctx.font = 'bold 10px sans-serif';
+                ctx.fillStyle = '#fff';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('L', x + nodeWidth - 15, y + 15);
+            }
+
+            // Color indicator bar
+            ctx.beginPath();
+            ctx.roundRect(x, y, 6, nodeHeight, [8, 0, 0, 8]);
+            ctx.fillStyle = color;
+            ctx.fill();
+
+            // Type badge
+            ctx.font = '10px sans-serif';
+            ctx.fillStyle = color;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            ctx.fillText(node.type.toUpperCase(), x + 14, y + 12);
+
+            // Node name
+            ctx.font = 'bold 13px sans-serif';
+            ctx.fillStyle = '#fff';
+            ctx.fillText(truncateText(node.name, 18), x + 14, y + 30);
+
+            // Execution mode
+            ctx.font = '10px sans-serif';
+            ctx.fillStyle = '#888';
+            ctx.fillText(node.execution_mode || '', x + 14, y + 50);
+        }
+
+        function drawEdge(sourceNode, targetNode, edge) {
+            const isSelected = selectedElement?.type === 'edge' && selectedElement.data.id === edge.id;
+            const hasCondition = edge.condition_expression;
+            const startX = sourceNode.x + nodeWidth / 2;
+            const startY = sourceNode.y;
+            const endX = targetNode.x - nodeWidth / 2;
+            const endY = targetNode.y;
+            const midX = (startX + endX) / 2;
+
+            // Draw curve
+            ctx.beginPath();
+            ctx.moveTo(startX, startY);
+            ctx.bezierCurveTo(midX, startY, midX, endY, endX, endY);
+
+            const lineColor = isSelected ? '#e94560' : (hasCondition ? '#ff9800' : '#4fc3f7');
+            ctx.strokeStyle = lineColor;
+            ctx.lineWidth = isSelected ? 4 : 2.5;
+            ctx.stroke();
+
+            // Arrow
+            const arrowSize = 10;
+            const angle = Math.atan2(endY - startY, endX - midX);
+            ctx.beginPath();
+            ctx.moveTo(endX, endY);
+            ctx.lineTo(endX - arrowSize * Math.cos(angle - Math.PI / 6), endY - arrowSize * Math.sin(angle - Math.PI / 6));
+            ctx.lineTo(endX - arrowSize * Math.cos(angle + Math.PI / 6), endY - arrowSize * Math.sin(angle + Math.PI / 6));
+            ctx.closePath();
+            ctx.fillStyle = lineColor;
+            ctx.fill();
+
+            // Condition label - LARGE
+            if (hasCondition) {
+                const labelX = midX;
+                const labelY = (startY + endY) / 2;
+
+                // Background box
+                ctx.font = 'bold 12px sans-serif';
+                const text = 'IF';
+                const textWidth = ctx.measureText(text).width;
+                const boxWidth = textWidth + 16;
+                const boxHeight = 22;
+
+                ctx.fillStyle = '#ff9800';
+                ctx.beginPath();
+                ctx.roundRect(labelX - boxWidth/2, labelY - boxHeight/2 - 2, boxWidth, boxHeight, 4);
+                ctx.fill();
+
+                ctx.fillStyle = '#fff';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(text, labelX, labelY);
+            }
+        }
+
+        function onMouseDown(e) {
+            isDragging = true;
+            dragStartX = e.clientX - offsetX;
+            dragStartY = e.clientY - offsetY;
+            canvas.style.cursor = 'grabbing';
+        }
+
+        function onMouseMove(e) {
+            if (isDragging) {
+                offsetX = e.clientX - dragStartX;
+                offsetY = e.clientY - dragStartY;
+                render();
+            }
+        }
+
+        function onMouseUp() {
+            isDragging = false;
+            canvas.style.cursor = 'grab';
+        }
+
+        function onWheel(e) {
+            e.preventDefault();
+            zoom(e.deltaY > 0 ? 0.9 : 1.1);
+        }
+
+        function onClick(e) {
+            const rect = canvas.getBoundingClientRect();
+            const mouseX = (e.clientX - rect.left - canvas.width / 2 - offsetX) / scale;
+            const mouseY = (e.clientY - rect.top - canvas.height / 2 - offsetY) / scale;
+
+            // Check nodes
+            for (const node of nodes) {
+                const x = node.x - nodeWidth / 2;
+                const y = node.y - nodeHeight / 2;
+                if (mouseX >= x && mouseX <= x + nodeWidth && mouseY >= y && mouseY <= y + nodeHeight) {
+                    selectElement('node', node);
+                    return;
+                }
+            }
+
+            // Check edges
+            for (const edge of edges) {
+                const sourceNode = nodes.find(n => n.id === edge.source);
+                const targetNode = nodes.find(n => n.id === edge.target);
+                if (sourceNode && targetNode && isPointNearEdge(mouseX, mouseY, sourceNode, targetNode)) {
+                    selectElement('edge', edge);
+                    return;
+                }
+            }
+
+            clearSelection();
+        }
+
+        function isPointNearEdge(px, py, sourceNode, targetNode) {
+            const startX = sourceNode.x + nodeWidth / 2;
+            const startY = sourceNode.y;
+            const endX = targetNode.x - nodeWidth / 2;
+            const endY = targetNode.y;
+            const midX = (startX + endX) / 2;
+
+            for (let t = 0; t <= 1; t += 0.05) {
+                const x = Math.pow(1-t, 3) * startX + 3 * Math.pow(1-t, 2) * t * midX + 3 * (1-t) * t * t * midX + Math.pow(t, 3) * endX;
+                const y = Math.pow(1-t, 3) * startY + 3 * Math.pow(1-t, 2) * t * startY + 3 * (1-t) * t * t * endY + Math.pow(t, 3) * endY;
+                if (Math.sqrt(Math.pow(px - x, 2) + Math.pow(py - y, 2)) < 20) return true;
+            }
+            return false;
+        }
+
+        function selectElement(type, data) {
+            selectedElement = { type, data };
+            render();
+            showProperties(type, data);
+        }
+
+        function clearSelection() {
+            selectedElement = null;
+            render();
+            document.getElementById('propertiesContent').innerHTML = '<div class="no-selection">点击节点或边查看属性</div>';
+        }
+
+        function showProperties(type, data) {
+            const container = document.getElementById('propertiesContent');
+            let html = '';
+
+            if (type === 'node') {
+                html = `
+                    <div class="property-group">
+                        <div class="property-group-title">基本信息</div>
+                        ${renderProperty('id', data.id)}
+                        ${renderProperty('name', data.name)}
+                        ${renderProperty('type', data.type)}
+                        ${renderProperty('execution_mode', data.execution_mode)}
+                    </div>
+                    <div class="property-group">
+                        <div class="property-group-title">数据流</div>
+                        ${renderProperty('input_params', data.input_params)}
+                        ${renderProperty('output_params', data.output_params)}
+                    </div>
+                    <div class="property-group">
+                        <div class="property-group-title">执行配置</div>
+                        ${renderProperty('command', data.command)}
+                        ${renderProperty('timeout_ms', data.timeout_ms)}
+                        ${renderProperty('max_retries', data.max_retries)}
+                    </div>
+                `;
+                if (data.loop_config) {
+                    html += `
+                        <div class="property-group">
+                            <div class="property-group-title">循环配置 (LOOP)</div>
+                            <div class="nested-object">
+                                ${renderProperty('type', data.loop_config.type)}
+                                ${renderProperty('collection_variable', data.loop_config.collection_variable)}
+                                ${renderProperty('item_variable', data.loop_config.item_variable)}
+                                ${renderProperty('max_iterations', data.loop_config.max_iterations)}
+                            </div>
+                        </div>
+                    `;
+                }
+            } else if (type === 'edge') {
+                html = `
+                    <div class="property-group">
+                        <div class="property-group-title">基本信息</div>
+                        ${renderProperty('id', data.id)}
+                        ${renderProperty('source', data.source)}
+                        ${renderProperty('target', data.target)}
+                    </div>
+                    <div class="property-group">
+                        <div class="property-group-title">条件表达式 (IF)</div>
+                        ${data.condition_expression
+                            ? `<div class="nested-object"><code style="color:#ff9800;font-size:13px;">${data.condition_expression}</code></div>`
+                            : '<div style="color:#666;">无 (无条件执行)</div>'
+                        }
+                    </div>
+                `;
+            }
+
+            container.innerHTML = html;
+        }
+
+        function renderProperty(key, value) {
+            if (value === undefined || value === null) return '';
+            let valueClass = Array.isArray(value) ? 'array' : (typeof value === 'string' ? 'string' : 'number');
+            let displayValue = Array.isArray(value) ? '[' + value.map(v => `"${v}"`).join(', ') + ']' :
+                              (typeof value === 'string' ? `"${value}"` : value);
+            return `<div class="property-item"><span class="property-key">${key}:</span><span class="property-value ${valueClass}">${displayValue}</span></div>`;
+        }
+
+        function truncateText(text, max) {
+            return text.length > max ? text.substring(0, max) + '...' : text;
+        }
+
+        function zoom(factor) {
+            scale = Math.max(0.2, Math.min(3, scale * factor));
+            document.getElementById('zoomLevel').textContent = Math.round(scale * 100) + '%';
+            render();
+        }
+
+        function resetView() {
+            scale = 1;
+            offsetX = offsetY = 0;
+            document.getElementById('zoomLevel').textContent = '100%';
+            render();
+        }
+
+        function fitView() {
+            if (nodes.length === 0) return;
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+            nodes.forEach(node => {
+                minX = Math.min(minX, node.x - nodeWidth / 2);
+                maxX = Math.max(maxX, node.x + nodeWidth / 2);
+                minY = Math.min(minY, node.y - nodeHeight / 2);
+                maxY = Math.max(maxY, node.y + nodeHeight / 2);
+            });
+            const padding = 100;
+            const scaleX = canvas.width / (maxX - minX + padding * 2);
+            const scaleY = canvas.height / (maxY - minY + padding * 2);
+            scale = Math.min(scaleX, scaleY, 1.5);
+            offsetX = -(minX + maxX) / 2;
+            offsetY = -(minY + maxY) / 2;
+            document.getElementById('zoomLevel').textContent = Math.round(scale * 100) + '%';
+            render();
+        }
+    </script>
+</body>
+</html>

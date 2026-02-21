@@ -1,0 +1,56 @@
+{
+  "version": "1.0",
+  "name": "calculator-agent-workflow",
+  "description": "Calculator agent workflow for performing arithmetic operations",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "name": "Start Node"
+    },
+    {
+      "id": "validate_input",
+      "type": "task",
+      "name": "Validate Input",
+      "action": "validate",
+      "inputs": {
+        "num1": "${input.num1}",
+        "num2": "${input.num2}"
+      }
+    },
+    {
+      "id": "add_numbers",
+      "type": "task",
+      "name": "Add Numbers",
+      "action": "add",
+      "inputs": {
+        "a": "${validate_input.output.num1}",
+        "b": "${validate_input.output.num2}"
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "name": "End Node"
+    }
+  ],
+  "edges": [
+    {
+      "from": "start",
+      "to": "validate_input"
+    },
+    {
+      "from": "validate_input",
+      "to": "add_numbers"
+    },
+    {
+      "from": "add_numbers",
+      "to": "end"
+    }
+  ],
+  "metadata": {
+    "author": "AgentFlow Team",
+    "version": "1.0.0",
+    "tags": ["calculator", "example"]
+  }
+}

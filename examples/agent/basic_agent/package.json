@@ -1,0 +1,15 @@
+{
+  "name": "basic-agent",
+  "version": "1.0.0",
+  "description": "Basic agent example for AgentFlow",
+  "author": "AgentFlow Team",
+  "entry_point": "basic_agent.so",
+  "dependencies": {
+    "core-lib": "1.0.0"
+  },
+  "metadata": {
+    "type": "agent",
+    "category": "example",
+    "tags": ["basic", "example"]
+  }
+}

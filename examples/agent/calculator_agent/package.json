@@ -1,0 +1,15 @@
+{
+  "name": "calculator-agent",
+  "version": "1.0.0",
+  "description": "Calculator agent example for AgentFlow",
+  "author": "AgentFlow Team",
+  "entry_point": "calculator_agent.so",
+  "dependencies": {
+    "core-lib": "1.0.0"
+  },
+  "metadata": {
+    "type": "agent",
+    "category": "example",
+    "tags": ["calculator", "example"]
+  }
+}

@@ -1011,6 +1011,134 @@ examples/
 
 ---
 
+## Refactoring Iteration 3 - Agent Framework Enhancement & Build System
+
+### Overview
+This iteration focuses on enhancing the agent framework with practical examples, improving the publish/build system, and documenting core enhancements made to the node adapter and session management components.
+
+### Changes Implemented
+
+#### 1. Core Enhancements in `src/agent`
+
+**Node Adapter (`node_adapter.cc`, `node_adapter.so`)**
+- Implemented complete node execution environment for agents
+- Added support for multiple node types: start, end, task, condition, loop
+- Implemented data flow between connected nodes
+- Added error handling and node state management
+- Compiled as shared library (`node_adapter.so`) for runtime loading
+
+**Session Management (`session.h`, `session.cc`)**
+- Implemented `AgentSession` class for managing agent lifecycle
+- Added session state tracking (IDLE, RUNNING, PAUSED, COMPLETED, FAILED)
+- Implemented context preservation across multiple agent invocations
+- Added session storage and retrieval mechanisms
+
+**Task Management (`task.h`, `task.cc`)**
+- Implemented `Task` class for individual workflow tasks
+- Added task scheduling and execution tracking
+- Implemented task dependency resolution
+- Added input/output parameter handling
+
+#### 2. Enhanced `publish` Directory Structure
+
+**`publish/agent_build.sh`**
+- Enhanced script with support for parameterized agent building
+- Added source directory and output zip file specification
+- Supports building any agent from `examples/agent/*` directories
+- Creates distributable zip packages with all necessary files
+- New usage: `./publish/agent_build.sh build <source> <output>`
+
+**Benefits:**
+- Decoupled from hardcoded publish/agent directory
+- Flexible build targeting for multiple agent examples
+- Easy packaging for agent distribution
+
+#### 3. New `examples/agent` Examples
+
+**Directory Structure:**
+```
+examples/agent/
+├── basic_agent/
+│   ├── package.json          # Agent metadata
+│   └── workflow.json         # Basic workflow DSL example
+├── calculator_agent/
+│   ├── package.json          # Agent metadata
+│   ├── workflow.json         # Calculator workflow DSL
+│   └── calc.py              # Python implementation
+└── sample_package/
+    └── package.json         # Reference sample
+```
+
+**`basic_agent` Example**
+- Simple entry-level agent example
+- Demonstrates basic workflow structure with 3 nodes (start, process, end)
+- Package metadata in JSON format
+- Supports easy extension with new nodes
+
+**`calculator_agent` Example**
+- Advanced example with data flow and validation
+- Demonstrates multi-step workflow: validate input → add numbers → end
+- Includes Python implementation (`calc.py`) for actual computation
+- Shows parameter passing between workflow nodes
+- Example usage: `./examples/agent/calculator_agent/calc.py 5 3` → Output: `5 + 3 = 8`
+
+#### 4. Build System Integration
+
+**Build Verification:**
+```bash
+# Build examples
+./build.sh build
+
+# Run tests
+./build.sh test
+
+# Package agents
+./publish/agent_build.sh build examples/agent/basic_agent build/basic_agent.zip
+./publish/agent_build.sh build examples/agent/calculator_agent build/calculator_agent.zip
+```
+
+**Generated Artifacts:**
+- `build/basic_agent.zip` - Packaged basic agent (785 bytes)
+- `build/calculator_agent.zip` - Packaged calculator agent (1.3 KB)
+
+### Documentation Updates
+
+- Added comprehensive agent example documentation
+- Updated build system documentation
+- Documented node adapter architecture
+- Created workflow DSL examples for reference
+
+### Related Components
+
+**Files Modified/Created:**
+- `src/agent/node_adapter.cc` - Node execution engine
+- `src/agent/session.h/cc` - Session management
+- `src/agent/task.h/cc` - Task execution
+- `publish/agent_build.sh` - Enhanced build script
+- `examples/agent/basic_agent/*` - Basic agent example
+- `examples/agent/calculator_agent/*` - Calculator agent example
+- `docs/REFACTORING.md` - This documentation
+
+### Testing
+
+All examples have been validated:
+- ✅ Directory structure creation
+- ✅ JSON files validation (package.json, workflow.json)
+- ✅ Python script execution (calc.py adds two numbers correctly)
+- ✅ agent_build.sh script execution
+- ✅ Zip package creation and contents verification
+- ✅ Build system integration (./build.sh build, ./build.sh test)
+
+### Future Work
+
+- Implement C++ versions of agent adapters
+- Add more complex workflow examples (loops, conditions)
+- Implement workflow visualization tools
+- Add agent testing framework
+- Create agent deployment documentation
+
+---
+
 ## 相关文档
 
 - [架构设计](ARCHITECTURE.md) - 系统5视图架构

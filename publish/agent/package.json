@@ -1,0 +1,25 @@
+{
+  "name": "sample-agent",
+  "version": "1.0.0",
+  "description": "A sample AgentFlow agent package",
+  "main": "index.js",
+  "author": "",
+  "license": "MIT",
+  "agentFlow": {
+    "type": "agent",
+    "entryPoint": "main.cpp",
+    "capabilities": {
+      "workflows": true,
+      "databus": true,
+      "events": true
+    },
+    "dependencies": {
+      "core": ">=1.0.0"
+    }
+  },
+  "scripts": {
+    "build": "cmake . && make",
+    "test": "ctest",
+    "package": "agentflow publish"
+  }
+}

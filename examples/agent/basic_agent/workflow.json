@@ -1,0 +1,41 @@
+{
+  "version": "1.0",
+  "name": "basic-agent-workflow",
+  "description": "Basic agent workflow example",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "name": "Start Node"
+    },
+    {
+      "id": "process",
+      "type": "task",
+      "name": "Process Task",
+      "action": "process_data",
+      "inputs": {
+        "data": "${input.data}"
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "name": "End Node"
+    }
+  ],
+  "edges": [
+    {
+      "from": "start",
+      "to": "process"
+    },
+    {
+      "from": "process",
+      "to": "end"
+    }
+  ],
+  "metadata": {
+    "author": "AgentFlow Team",
+    "version": "1.0.0",
+    "tags": ["basic", "example"]
+  }
+}

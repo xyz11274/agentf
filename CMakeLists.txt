@@ -275,6 +275,11 @@ set(AGENTFLOW_WORKFLOW_SOURCES
     ${AGENTFLOW_VENDOR_DIR}/adapter/json/json_adapter_factory.cpp
 )
 
+# Node adapter sources (for standalone node execution)
+set(AGENTFLOW_NODE_ADAPTER_SOURCES
+    ${AGENTFLOW_SOURCE_DIR}/workflow/node/node_adapter.cpp
+)
+
 # Runtime sources
 set(AGENTFLOW_RUNTIME_SOURCES
     # Actor subsystem
@@ -416,8 +421,63 @@ target_link_libraries(example_storage PRIVATE agentflow)
 add_executable(example_agent ${AGENTFLOW_EXAMPLE_DIR}/agent/agent_example.cpp)
 target_link_libraries(example_agent PRIVATE agentflow)
 
-
 # ============================================================================
+# Node Adapter Library and Executable
+# ============================================================================
+
+# Node adapter shared library - needs all AgentFlow sources including agent
+add_library(node_adapter_lib SHARED 
+    ${AGENTFLOW_AGENT_SOURCES}
+    ${AGENTFLOW_WORKFLOW_SOURCES} 
+    ${AGENTFLOW_RUNTIME_SOURCES} 
+    ${AGENTFLOW_UTILS_SOURCES} 
+    ${AGENTFLOW_ACTOR_ADAPTER_SOURCES} 
+    ${AGENTFLOW_EVENT_ADAPTER_SOURCES} 
+    ${AGENTFLOW_DSL_ADAPTER_SOURCES})
+target_include_directories(node_adapter_lib PUBLIC ${AGENTFLOW_INCLUDE_DIR})
+find_package(Threads REQUIRED)
+target_link_libraries(node_adapter_lib PUBLIC Threads::Threads)
+
+# Link with libevent if available
+if(libevent_FOUND)
+  if(TARGET libevent::core)
+    target_link_libraries(node_adapter_lib PUBLIC libevent::core)
+  elseif(libevent_LIBRARIES)
+    target_link_libraries(node_adapter_lib PUBLIC ${libevent_LIBRARIES})
+    if(libevent_INCLUDE_DIRS)
+      target_include_directories(node_adapter_lib PUBLIC ${libevent_INCLUDE_DIRS})
+    endif()
+  endif()
+  target_compile_definitions(node_adapter_lib PUBLIC AGENTFLOW_WITH_LIBEVENT=1)
+endif()
+
+# Link with Protoactor if available
+if(USE_PROTOACTOR)
+  target_link_libraries(node_adapter_lib PUBLIC protoactor::protoactor)
+  target_compile_definitions(node_adapter_lib PUBLIC AGENTFLOW_WITH_PROTOACTOR=1)
+endif()
+
+# Link with OpenSSL if available
+if(USE_OPENSSL)
+  target_link_libraries(node_adapter_lib PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+  target_compile_definitions(node_adapter_lib PUBLIC AGENTFLOW_WITH_OPENSSL=1)
+endif()
+
+# Include RapidJSON headers if available
+if(USE_RAPIDJSON)
+  if(RAPIDJSON_INCLUDE_ROOT)
+    target_include_directories(node_adapter_lib PUBLIC ${RAPIDJSON_INCLUDE_ROOT})
+  endif()
+  target_compile_definitions(node_adapter_lib PUBLIC AGENTFLOW_WITH_RAPIDJSON=1)
+endif()
+
+# Node adapter executable
+add_executable(node_adapter_bin ${AGENTFLOW_NODE_ADAPTER_SOURCES})
+target_link_libraries(node_adapter_bin PRIVATE node_adapter_lib)
+target_include_directories(node_adapter_bin PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+
+
+
 # Tests
 # ============================================================================
 if(AGENTFLOW_BUILD_TESTS)
