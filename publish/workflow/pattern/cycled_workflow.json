@@ -1,0 +1,20 @@
+{
+  "id": "cycled-workflow-pattern",
+  "version": "1.0",
+  "name": "cycled-workflow-pattern",
+  "description": "start -> decision -> execute -> evaluate -> decision/end",
+  "nodes": [
+    {"id": "start", "type": "start", "execution_mode": "cpp_function"},
+    {"id": "decision", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_select.sh"},
+    {"id": "execute", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_call.sh"},
+    {"id": "evaluate", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_format.sh"},
+    {"id": "end", "type": "end", "execution_mode": "cpp_function"}
+  ],
+  "edges": [
+    {"id": "e_start_decision", "source": "start", "target": "decision", "control": {"type": "if", "expression": "true"}},
+    {"id": "e_decision_exec", "source": "decision", "target": "execute", "control": {"type": "if", "expression": "need_retry == true"}},
+    {"id": "e_exec_eval", "source": "execute", "target": "evaluate", "control": {"type": "if", "expression": "true"}},
+    {"id": "e_eval_decision", "source": "evaluate", "target": "decision", "control": {"type": "goto", "goto_target": "decision"}},
+    {"id": "e_eval_end", "source": "evaluate", "target": "end", "control": {"type": "if", "expression": "need_retry == false"}}
+  ]
+}

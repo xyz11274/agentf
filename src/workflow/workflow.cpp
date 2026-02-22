@@ -33,6 +33,42 @@ int64_t get_current_timestamp_ms() {
   return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
+const char* control_type_to_string(Edge::ControlType type) {
+  switch(type) {
+    case Edge::ControlType::IF:
+      return "if";
+    case Edge::ControlType::LOOP:
+      return "loop";
+    case Edge::ControlType::FORK:
+      return "fork";
+    case Edge::ControlType::JOIN:
+      return "join";
+    case Edge::ControlType::ASYNC:
+      return "async";
+    case Edge::ControlType::GOTO:
+      return "goto";
+    case Edge::ControlType::NONE:
+    default:
+      return "none";
+  }
+}
+
+Edge::ControlType control_type_from_string(const std::string& type) {
+  if(type == "if")
+    return Edge::ControlType::IF;
+  if(type == "loop")
+    return Edge::ControlType::LOOP;
+  if(type == "fork")
+    return Edge::ControlType::FORK;
+  if(type == "join")
+    return Edge::ControlType::JOIN;
+  if(type == "async")
+    return Edge::ControlType::ASYNC;
+  if(type == "goto")
+    return Edge::ControlType::GOTO;
+  return Edge::ControlType::NONE;
+}
+
 /**
  * Convert Workflow::Config to JSON string
  */
@@ -217,6 +253,34 @@ std::string workflow_config_to_json(const Workflow::Config&                   co
       edge_obj.AddMember("condition_expression",
                          rapidjson::StringRef(edge->get_condition_expression().c_str()), allocator);
     }
+    if(edge->has_control()) {
+      rapidjson::Value control_obj(rapidjson::kObjectType);
+      const auto& c = edge_cfg.control;
+      control_obj.AddMember("type", rapidjson::StringRef(control_type_to_string(c.type)), allocator);
+      if(!c.expression.empty()) {
+        control_obj.AddMember("expression", rapidjson::StringRef(c.expression.c_str()), allocator);
+      }
+      if(!c.goto_target.empty()) {
+        control_obj.AddMember("goto_target", rapidjson::StringRef(c.goto_target.c_str()), allocator);
+      }
+      if(!c.loop_id.empty()) {
+        control_obj.AddMember("loop_id", rapidjson::StringRef(c.loop_id.c_str()), allocator);
+      }
+      if(c.max_iterations > 0) {
+        control_obj.AddMember("max_iterations", c.max_iterations, allocator);
+      }
+      if(!c.fork_group.empty()) {
+        control_obj.AddMember("fork_group", rapidjson::StringRef(c.fork_group.c_str()), allocator);
+      }
+      if(!c.join_group.empty()) {
+        control_obj.AddMember("join_group", rapidjson::StringRef(c.join_group.c_str()), allocator);
+      }
+      if(!c.callback_node.empty()) {
+        control_obj.AddMember("callback_node", rapidjson::StringRef(c.callback_node.c_str()),
+                              allocator);
+      }
+      edge_obj.AddMember("control", control_obj, allocator);
+    }
 
     edges_array.PushBack(edge_obj, allocator);
   }
@@ -375,6 +439,42 @@ bool workflow_config_from_json(const std::string& json_str, Workflow::Config& co
         edge_config.condition_expression = edge_obj["condition"].GetString();
       if(edge_obj.HasMember("condition_expression"))
         edge_config.condition_expression = edge_obj["condition_expression"].GetString();
+      if(edge_obj.HasMember("control") && edge_obj["control"].IsObject()) {
+        const rapidjson::Value& control_obj = edge_obj["control"];
+        if(control_obj.HasMember("type")) {
+          edge_config.control.type = control_type_from_string(control_obj["type"].GetString());
+        }
+        if(control_obj.HasMember("expression")) {
+          edge_config.control.expression = control_obj["expression"].GetString();
+        }
+        if(control_obj.HasMember("goto_target")) {
+          edge_config.control.goto_target = control_obj["goto_target"].GetString();
+        }
+        if(control_obj.HasMember("loop_id")) {
+          edge_config.control.loop_id = control_obj["loop_id"].GetString();
+        }
+        if(control_obj.HasMember("max_iterations")) {
+          edge_config.control.max_iterations = control_obj["max_iterations"].GetInt();
+        }
+        if(control_obj.HasMember("fork_group")) {
+          edge_config.control.fork_group = control_obj["fork_group"].GetString();
+        }
+        if(control_obj.HasMember("join_group")) {
+          edge_config.control.join_group = control_obj["join_group"].GetString();
+        }
+        if(control_obj.HasMember("callback_node")) {
+          edge_config.control.callback_node = control_obj["callback_node"].GetString();
+        }
+      }
+      if(edge_config.control.type == Edge::ControlType::IF &&
+         edge_config.control.expression.empty()) {
+        edge_config.control.expression = edge_config.condition_expression;
+      }
+      if(edge_config.control.type == Edge::ControlType::NONE &&
+         !edge_config.condition_expression.empty()) {
+        edge_config.control.type       = Edge::ControlType::IF;
+        edge_config.control.expression = edge_config.condition_expression;
+      }
 
       if(edge_obj.HasMember("source_outputs") && edge_obj["source_outputs"].IsArray()) {
         const rapidjson::Value& source_outputs_arr = edge_obj["source_outputs"];
@@ -561,13 +661,41 @@ std::vector<std::string> Workflow::get_executable_nodes_with_control() {
 
         // Evaluate edge condition if present
         bool should_traverse = true;
-        if(edge->has_condition()) {
-          should_traverse = evaluate_condition(parse_condition_expression(edge->get_condition_expression()), control_context_, DataMap());
+        const auto& control_cfg = edge->get_control_config();
+        if(control_cfg.type == Edge::ControlType::IF ||
+           (!control_cfg.expression.empty() || edge->has_condition())) {
+          const std::string expr =
+              !control_cfg.expression.empty() ? control_cfg.expression : edge->get_condition_expression();
+          should_traverse =
+              evaluate_condition(parse_condition_expression(expr), control_context_, DataMap());
+        } else if(control_cfg.type == Edge::ControlType::LOOP) {
+          const std::string loop_id =
+              !control_cfg.loop_id.empty() ? control_cfg.loop_id : edge->get_id();
+          if(!control_context_.is_in_loop(loop_id)) {
+            LoopConfig loop_cfg{};
+            loop_cfg.type           = LoopType::REPEAT_LOOP;
+            loop_cfg.max_iterations = control_cfg.max_iterations > 0 ? control_cfg.max_iterations : 1;
+            active_loops_[loop_id]  = loop_cfg;
+            control_context_.enter_loop(loop_id, loop_cfg);
+          }
+          should_traverse = control_context_.should_continue_loop(loop_id, active_loops_.at(loop_id));
+          if(!should_traverse) {
+            control_context_.exit_loop(loop_id);
+            active_loops_.erase(loop_id);
+          }
+        } else if(control_cfg.type == Edge::ControlType::ASYNC) {
+          auto source = get_node(edge->get_source());
+          should_traverse = source && source->get_state() != NodeState::WAITING;
         }
 
         if(should_traverse) {
           auto source = get_node(edge->get_source());
-          if(source && source->get_state() != NodeState::SUCCESS) {
+          const bool async_edge = control_cfg.type == Edge::ControlType::ASYNC;
+          const bool source_done = source && source->get_state() != NodeState::WAITING;
+          if(source && !async_edge && source->get_state() != NodeState::SUCCESS) {
+            all_deps_ready = false;
+            break;
+          } else if(async_edge && !source_done) {
             all_deps_ready = false;
             break;
           }
@@ -694,6 +822,10 @@ bool Workflow::validate_dag() {
   // Build adjacency list for graph
   std::map<std::string, std::vector<std::string>> adjacency;
   for(const auto& edge : edges_) {
+    if(edge->get_control_type() == Edge::ControlType::LOOP ||
+       edge->get_control_type() == Edge::ControlType::GOTO) {
+      continue;
+    }
     adjacency[edge->get_source()].push_back(edge->get_target());
   }
 
@@ -745,6 +877,10 @@ bool Workflow::compute_topological_order() {
 
   // Calculate in-degree for each node
   for(const auto& edge : edges_) {
+    if(edge->get_control_type() == Edge::ControlType::LOOP ||
+       edge->get_control_type() == Edge::ControlType::GOTO) {
+      continue;
+    }
     in_degree[edge->get_target()]++;
   }
 
@@ -759,6 +895,10 @@ bool Workflow::compute_topological_order() {
   // Build adjacency list
   std::map<std::string, std::vector<std::string>> adjacency;
   for(const auto& edge : edges_) {
+    if(edge->get_control_type() == Edge::ControlType::LOOP ||
+       edge->get_control_type() == Edge::ControlType::GOTO) {
+      continue;
+    }
     adjacency[edge->get_source()].push_back(edge->get_target());
   }
 

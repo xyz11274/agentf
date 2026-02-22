@@ -15,6 +15,16 @@ namespace framework {
  */
 class Edge {
 public:
+  enum class ControlType {
+    NONE  = 0,
+    IF    = 1,
+    LOOP  = 2,
+    FORK  = 3,
+    JOIN  = 4,
+    ASYNC = 5,
+    GOTO  = 6,
+  };
+
   enum class DataTransferMode {
     SHARED_MEMORY   = 0,
     MESSAGE_QUEUE   = 1,
@@ -42,6 +52,17 @@ public:
 
     // Edge priority (for multiple outgoing edges)
     int priority = 0;
+
+    struct ControlConfig {
+      ControlType  type = ControlType::NONE;
+      std::string  expression;
+      std::string  goto_target;
+      std::string  loop_id;
+      int          max_iterations = 0;
+      std::string  fork_group;
+      std::string  join_group;
+      std::string  callback_node;
+    } control;
   };
 
   explicit Edge(const Config& config);
@@ -60,6 +81,9 @@ public:
   // Conditional execution support
   bool               has_condition() const { return !config_.condition_expression.empty(); }
   const std::string& get_condition_expression() const { return config_.condition_expression; }
+  bool               has_control() const { return config_.control.type != ControlType::NONE; }
+  ControlType        get_control_type() const { return config_.control.type; }
+  const Config::ControlConfig& get_control_config() const { return config_.control; }
   int                get_priority() const { return config_.priority; }
   const Config&      get_config() const { return config_; }
 

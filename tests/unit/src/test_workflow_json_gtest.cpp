@@ -212,6 +212,26 @@ protected:
     ]
   })";
 
+  const char* workflow_with_control_cycle_json_ = R"({
+    "id": "workflow_cycle_001",
+    "name": "Cycle Workflow",
+    "version": "1.0.0",
+    "nodes": [
+      {"id": "start", "name": "Start", "type": "TASK"},
+      {"id": "decision", "name": "Decision", "type": "TASK"},
+      {"id": "worker", "name": "Worker", "type": "TASK"},
+      {"id": "end", "name": "End", "type": "TASK"}
+    ],
+    "edges": [
+      {"id": "e_start_decision", "source": "start", "target": "decision"},
+      {"id": "e_decision_worker", "source": "decision", "target": "worker"},
+      {"id": "e_worker_decision", "source": "worker", "target": "decision",
+        "control": {"type": "goto", "goto_target": "decision"}},
+      {"id": "e_worker_end", "source": "worker", "target": "end",
+        "control": {"type": "if", "expression": "need_retry == false"}}
+    ]
+  })";
+
   // Sample invalid workflow JSON - missing required fields
   const char* invalid_workflow_missing_id_json_ = R"({
     "name": "Invalid Workflow",
@@ -623,6 +643,39 @@ TEST_F(WorkflowJsonTest, ValidateNodeIdsUnique) {
 
   // Validation should succeed
   EXPECT_TRUE(result.workflow->validate());
+}
+
+TEST_F(WorkflowJsonTest, ParseEdgeControlConfig) {
+  auto result = parser_->parse_workflow(R"({
+    "id": "workflow_control_001",
+    "name": "Control Workflow",
+    "version": "1.0.0",
+    "nodes": [
+      {"id": "n1", "name": "N1", "type": "TASK"},
+      {"id": "n2", "name": "N2", "type": "TASK"}
+    ],
+    "edges": [
+      {
+        "id": "e1",
+        "source": "n1",
+        "target": "n2",
+        "control": {"type": "async", "callback_node": "n1"}
+      }
+    ]
+  })");
+
+  ASSERT_TRUE(result.is_valid());
+  ASSERT_NE(result.workflow, nullptr);
+  const auto& edges = result.workflow->get_edges();
+  ASSERT_EQ(edges.size(), 1u);
+  EXPECT_EQ(edges[0]->get_control_type(), agentflow::framework::Edge::ControlType::ASYNC);
+  EXPECT_EQ(edges[0]->get_control_config().callback_node, "n1");
+}
+
+TEST_F(WorkflowJsonTest, AllowCycleWhenUsingGotoControl) {
+  auto result = parser_->parse_workflow(workflow_with_control_cycle_json_);
+  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
+  ASSERT_NE(result.workflow, nullptr);
 }
 
 // ============================================================================

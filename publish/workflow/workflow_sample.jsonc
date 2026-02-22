@@ -274,6 +274,13 @@
       // Example: "outputs['confidence'] > 0.8"
       "condition_expression": "",
 
+      // Unified flow-control object (new style).
+      // type: if/loop/fork/join/async/goto
+      "control": {
+        "type": "if",
+        "expression": ""
+      },
+
       // Tie-breaking priority when a node has multiple outgoing edges that
       // all satisfy their conditions. Higher value = chosen first. Default: 0.
       "priority": 0
@@ -305,6 +312,10 @@
       "supported_events": ["data_ready", "end"],
       // Only persist when the classifier is confident (score > 0.5)
       "condition_expression": "outputs['confidence'] > 0.5",
+      "control": {
+        "type": "if",
+        "expression": "outputs['confidence'] > 0.5"
+      },
       "priority": 10
     },
 

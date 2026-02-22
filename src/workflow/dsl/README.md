@@ -73,7 +73,19 @@ AgentFlow 工作流 DSL 是一个 JSON（或 JSONC —— 带注释的 JSON）�
 | `data_formats` | 字符串数组 | `[]` | MIME 类型或自定义格式标签 |
 | `supported_events` | 字符串数组 | `[]` | 此边反应的生命周期事件 |
 | `condition_expression` | 字符串 | `""` | CEL 表达式；空 = 始终活跃 |
+| `control` | 对象 | `{}` | 统一流程控制对象，含 `type` 和控制参数 |
 | `priority` | 整数 | `0` | 在出边中的平手优先级 |
+
+### `control` 对象
+
+- `type`: `if` / `loop` / `fork` / `join` / `async` / `goto`
+- 典型参数：
+  - `expression`（if）
+  - `loop_id` / `max_iterations`（loop）
+  - `fork_group`（fork）
+  - `join_group`（join）
+  - `callback_node`（async）
+  - `goto_target`（goto）
 
 ### `transfer_mode` 值
 
@@ -128,4 +140,4 @@ if (arr) {
 - `node.id` 必须非空且在工作流内唯一。
 - `edge.id` 必须非空且在工作流内唯一。
 - `edge.source` 和 `edge.target` 必须引用现有的节点 `id` 值。
-- 节点图中的循环由 `WorkflowValidator` 检测（不是由解析器）。
+- 默认按 DAG 校验；当 edge 使用 `loop/goto` 控制时，允许显式环回并进入控制流校验路径。

@@ -1298,3 +1298,27 @@ All examples have been validated:
 
 5. **示例刷新**
    - 更新 `examples/agent/basic_agent` 与 `examples/agent/calculator_agent`，补充规范化示例文件并保留现有加载兼容字段。
+
+### 2026-02-22 Workflow Edge 控制与模式化重构
+
+1. **Edge 控制统一化**
+   - 扩展 Edge 配置，新增 `control.type + control.*` 机制，支持 `if/loop/fork/join/async/goto`。
+   - DSL 解析器支持新控制字段，并保留 `condition_expression` 向 `if` 控制映射的兼容行为。
+
+2. **Workflow 流程能力增强**
+   - 执行路径增加 edge 控制判断（含 async 软依赖、loop/goto 控制判定）。
+   - DAG 校验与拓扑排序对 `loop/goto` 控制边放宽，支持显式环回流程。
+
+3. **模式资产新增**
+   - 新增 `publish/workflow/pattern/serial_workflow.json`。
+   - 新增 `publish/workflow/pattern/parallel_workflow.json`。
+   - 新增 `publish/workflow/pattern/cycled_workflow.json`。
+
+4. **Node 模式模板新增**
+   - `publish/workflow/node_patterns/` 新增问答/API工具/MCP/skills 四类模板文档。
+
+5. **文档同步**
+   - 更新 `publish/README.md`、`publish/workflow/README.md`、`publish/workflow/workflow_sample.jsonc`、`src/workflow/dsl/README.md`。
+
+6. **测试增强**
+   - `tests/unit/src/test_workflow_json_gtest.cpp` 增加 edge control 解析与 goto 环回流程解析测试。

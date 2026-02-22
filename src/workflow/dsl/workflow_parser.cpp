@@ -25,6 +25,31 @@ using NodeId     = agentflow::NodeId;
 using WorkflowId = agentflow::WorkflowId;
 using EdgeId     = agentflow::EdgeId;
 
+namespace {
+framework::Edge::ControlType parse_edge_control_type(const std::string& type) {
+  if(type == "if") return framework::Edge::ControlType::IF;
+  if(type == "loop") return framework::Edge::ControlType::LOOP;
+  if(type == "fork") return framework::Edge::ControlType::FORK;
+  if(type == "join") return framework::Edge::ControlType::JOIN;
+  if(type == "async") return framework::Edge::ControlType::ASYNC;
+  if(type == "goto") return framework::Edge::ControlType::GOTO;
+  return framework::Edge::ControlType::NONE;
+}
+
+bool has_cycle_control_edge(const framework::Workflow& workflow) {
+  for(const auto& edge : workflow.get_edges()) {
+    if(!edge) {
+      continue;
+    }
+    const auto type = edge->get_control_type();
+    if(type == framework::Edge::ControlType::LOOP || type == framework::Edge::ControlType::GOTO) {
+      return true;
+    }
+  }
+  return false;
+}
+}  // namespace
+
 // ============================================================================
 // ParseError Implementation
 // ============================================================================
@@ -677,6 +702,32 @@ bool WorkflowParser::parse_edge_config(std::shared_ptr<const IJsonValue> edge_ob
   } else {
     config.condition_expression = JsonHelper::get_string(edge_obj, "condition_expression", "");
   }
+
+  // Parse unified edge control config
+  auto control_obj = JsonHelper::get_object(edge_obj, "control");
+  if(control_obj) {
+    const std::string control_type = JsonHelper::get_string(control_obj, "type", "");
+    config.control.type            = parse_edge_control_type(control_type);
+    config.control.expression      = JsonHelper::get_string(control_obj, "expression", "");
+    config.control.goto_target     = JsonHelper::get_string(control_obj, "goto_target", "");
+    config.control.loop_id         = JsonHelper::get_string(control_obj, "loop_id", "");
+    config.control.max_iterations =
+        static_cast<int>(JsonHelper::get_int(control_obj, "max_iterations", 0));
+    config.control.fork_group   = JsonHelper::get_string(control_obj, "fork_group", "");
+    config.control.join_group   = JsonHelper::get_string(control_obj, "join_group", "");
+    config.control.callback_node = JsonHelper::get_string(control_obj, "callback_node", "");
+  }
+  if(config.control.type == framework::Edge::ControlType::IF) {
+    if(config.control.expression.empty()) {
+      config.control.expression = config.condition_expression;
+    }
+    config.condition_expression = config.control.expression;
+  } else if(config.control.type == framework::Edge::ControlType::NONE &&
+            !config.condition_expression.empty()) {
+    // Backward compatibility: old condition_expression maps to IF edge.
+    config.control.type       = framework::Edge::ControlType::IF;
+    config.control.expression = config.condition_expression;
+  }
   
   config.priority             = static_cast<int>(JsonHelper::get_int(edge_obj, "priority", 0));
 
@@ -759,10 +810,19 @@ bool WorkflowParser::validate_workflow_structure(std::shared_ptr<framework::Work
     // Empty workflow is allowed (e.g. reference only)
   }
 
-  // Validate workflow DAG (no cycles)
+  // Validate workflow graph; cycle control edges (loop/goto) are allowed.
   if(!workflow->validate()) {
-    result.errors.emplace_back("Workflow DAG validation failed - possible cycle detected");
-    return false;
+    if(!has_cycle_control_edge(*workflow)) {
+      result.errors.emplace_back("Workflow DAG validation failed - possible cycle detected");
+      return false;
+    }
+    for(const auto& node : workflow->get_nodes()) {
+      if(node) {
+        node->initialize();
+      }
+    }
+    result.warnings.emplace_back(
+        "Workflow contains loop/goto control edges; DAG-only validation is bypassed.");
   }
 
   return true;
