@@ -47,7 +47,7 @@
   "description": "Ingests raw documents, extracts text, classifies them and persists results.",
 
   // Path to this DSL file, stored in Workflow::Config for traceability
-  "dsl_file": "src/dsl/workflow_sample.jsonc",
+  "dsl_file": "publish/workflow/workflow_sample.jsonc",
 
   // Optional metadata block – not parsed by WorkflowParser, informational only
   "metadata": {

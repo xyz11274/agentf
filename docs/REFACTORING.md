@@ -1274,3 +1274,27 @@ All examples have been validated:
 - `src/agent/event.cpp` / `include/internal/agent/event.h` (更新)
 - `src/agent/agent.cpp` (更新)
 - `CMakeLists.txt` (更新)
+
+### 2026-02-22 Agent 发布规范重构
+
+1. **Agent 包规范落地**
+   - 在 `publish/agent/AGENT_PACKAGE_SPEC.md` 新增 Agent 双层打包规范说明。
+   - 在 `publish/agent` 补充 `agent.json`、`workflow_01.json`、`node_demo.sh` 模板。
+
+2. **打包脚本升级**
+   - `publish/agent_build.sh` 从 zip 产物调整为双层 `tar.gz` 产物：
+     - `$xxxAgent_$PKGTYPE_$PKGVER.tar.gz`
+     - `$xxxAgent_$AGTVER.tar.gz`
+
+3. **开发文档重写**
+   - `publish/README.md` 改为业务 Agent 包开发指南，覆盖 Agent/Workflow/Node 开发流程。
+   - 在 `publish/workflow` 新增 Node 规范与 API 手册：
+     - `NODE_DEVELOPMENT_SPEC.md`
+     - `NODE_API_REFERENCE.md`
+
+4. **Workflow 样例迁移**
+   - `workflow_sample.jsonc` 迁移到 `publish/workflow/workflow_sample.jsonc`。
+   - `src/workflow/dsl/README.md` 已更新引用路径。
+
+5. **示例刷新**
+   - 更新 `examples/agent/basic_agent` 与 `examples/agent/calculator_agent`，补充规范化示例文件并保留现有加载兼容字段。

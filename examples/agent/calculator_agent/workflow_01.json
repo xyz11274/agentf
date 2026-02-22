@@ -1,0 +1,15 @@
+{
+  "id": "calculator-workflow-v2",
+  "version": "1.0",
+  "name": "calculator-agent-workflow-v2",
+  "description": "Calculator workflow with executable node binding",
+  "nodes": [
+    {
+      "id": "node_calc",
+      "type": "task",
+      "execution_mode": "python_script",
+      "command": "calc.py"
+    }
+  ],
+  "edges": []
+}

@@ -1,0 +1,16 @@
+{
+  "id": "sample-agent-workflow",
+  "version": "1.0",
+  "name": "sample-agent-workflow",
+  "description": "Sample workflow template in agent package",
+  "nodes": [
+    {
+      "id": "node_demo",
+      "name": "Node Demo",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "node_demo.sh"
+    }
+  ],
+  "edges": []
+}

@@ -1,0 +1,8 @@
+{
+  "name": "BasicAgent",
+  "version": "1.0.0",
+  "description": "Basic agent example",
+  "workflows": [
+    "workflow_01.json"
+  ]
+}

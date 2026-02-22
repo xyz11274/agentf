@@ -1,0 +1,8 @@
+{
+  "name": "CalculatorAgent",
+  "version": "1.0.0",
+  "description": "Calculator agent example",
+  "workflows": [
+    "workflow_01.json"
+  ]
+}

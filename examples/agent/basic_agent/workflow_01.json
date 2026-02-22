@@ -1,0 +1,15 @@
+{
+  "id": "basic-workflow-v2",
+  "version": "1.0",
+  "name": "basic-agent-workflow-v2",
+  "description": "Basic workflow example in new naming style",
+  "nodes": [
+    {
+      "id": "node_basic",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "node_basic.sh"
+    }
+  ],
+  "edges": []
+}

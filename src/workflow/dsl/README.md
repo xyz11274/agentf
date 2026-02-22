@@ -4,7 +4,7 @@
 
 AgentFlow 工作流 DSL 是一个 JSON（或 JSONC —— 带注释的 JSON）文档，完整描述了由类型化边连接的有向无环图 (DAG) 的计算节点。
 
-规范参考示例是 [`workflow_sample.jsonc`](workflow_sample.jsonc)。该文件中的每个字段都与 `src/workflow/dsl/workflow_parser.cpp` 中的 `JsonHelper` 调用一一对应。
+规范参考示例是 [`publish/workflow/workflow_sample.jsonc`](../../../publish/workflow/workflow_sample.jsonc)。该文件中的每个字段都与 `src/workflow/dsl/workflow_parser.cpp` 中的 `JsonHelper` 调用一一对应。
 
 ---
 
@@ -113,7 +113,7 @@ if (arr) {
 }
 ```
 
-使用 `workflow_sample.jsonc` 的代码生成器可以：
+使用 `publish/workflow/workflow_sample.jsonc` 的代码生成器可以：
 
 1. 遍历 `nodes[0]` 和 `edges[0]` 对象中的每个 JSON 键。
 2. 从值类型推断辅助调用：`string` → `get_string`、`number` → `get_int` 或 `get_double`、`bool` → `get_bool`、`array` → `get_array` + 元素循环。

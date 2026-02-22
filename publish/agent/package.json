@@ -1,26 +1,15 @@
 {
-  "name": "sample-agent",
+  "name": "SampleAgent",
   "version": "1.0.0",
-  "description": "A sample AgentFlow agent package",
-  "main": "index.js",
-  "author": "",
-  "license": "MIT",
-  "agentFlow": {
-    "type": "agent",
-    "entryPoint": "main.cpp",
-    "capabilities": {
-      "workflows": true,
-      "databus": true,
-      "events": true
-    },
-    "dependencies": {
-      "core": ">=1.0.0"
-    }
-  },
-  "builtin_workflows": ["memory", "tools"],
-  "scripts": {
-    "build": "cmake . && make",
-    "test": "ctest",
-    "package": "agentflow publish"
-  }
+  "package_type": "release",
+  "agent_version": "1.0.0",
+  "description": "Sample AgentFlow agent package",
+  "file_manifest": [
+    "package.json",
+    "SampleAgent_1.0.0.tar.gz"
+  ],
+  "builtin_workflows": [
+    "memory",
+    "tools"
+  ]
 }

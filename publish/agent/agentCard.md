@@ -1,54 +1,17 @@
-# Agent Card
+# SampleAgent Card
 
 ## Overview
-A sample agent template for AgentFlow framework.
+SampleAgent template for AgentFlow packaging and publication.
 
-## Features
-- Workflow execution
-- Data bus communication
-- Event handling
+## Capabilities
+- Workflow orchestration
+- Node execution delegation (`.sh/.py/.so/.jar`)
+- Built-in workflow composition (`memory`, `skills`, `tools`)
 
-## Configuration
-Agents can be configured via `package.json` with the following options:
+## Package Files
+- `agent.json`: runtime metadata
+- `workflow_01.json`: workflow definition
+- `node_demo.sh`: node executable sample
 
-- `builtin_workflows` (optional): enable built-in workflow templates to be packaged into your agent.
-  - Supported values: `memory`, `skills`, `tools`
-
-```json
-{
-  "agentFlow": {
-    "type": "agent",
-    "capabilities": {
-      "workflows": true,
-      "databus": true,
-      "events": true
-    }
-  }
-}
-```
-
-## Building
-```bash
-cmake . && make
-```
-
-## Usage
-```cpp
-#include "agent/agent.h"
-
-using namespace agentflow;
-framework::Agent agent;
-agent.initialize();
-// Use agent...
-```
-
-## API Reference
-See `/publish/README.md` for complete API documentation.
-
-## Requirements
-- C++17 or later
-- CMake 3.10+
-- AgentFlow core library
-
-## License
-MIT License
+## Prompt
+You are SampleAgent. Follow workflow definitions in `workflow_01.json` and execute nodes using declared artifacts.

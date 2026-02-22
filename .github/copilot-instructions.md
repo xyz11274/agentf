@@ -52,4 +52,4 @@ cpplint --linelength=100 src/your_file.cpp
   - includes in code use short project paths (for example `#include "agent/common.h"`).
 - `build.sh test` sets runtime library search paths (`DYLD_LIBRARY_PATH` on macOS, `LD_LIBRARY_PATH` on Linux); if running binaries manually, preserve equivalent library path behavior.
 - C++ style in this repository follows `.clang-format` (Google base, 2-space indent, 100-column limit, snake_case function names with PascalCase types).
-- Workflow DSL is JSON/JSONC and should align with parser behavior in `src/workflow/dsl/workflow_parser.cpp`; update `src/workflow/dsl/workflow_sample.jsonc`-style fields consistently when DSL keys change.
+- Workflow DSL is JSON/JSONC and should align with parser behavior in `src/workflow/dsl/workflow_parser.cpp`; update `publish/workflow/workflow_sample.jsonc`-style fields consistently when DSL keys change.
