@@ -4,10 +4,10 @@
   "name": "serial-workflow-pattern",
   "description": "start -> tool_select -> tool_execute -> end",
   "nodes": [
-    {"id": "start", "type": "start", "execution_mode": "cpp_function"},
-    {"id": "tool_select", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_select.sh"},
-    {"id": "tool_execute", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_call.sh"},
-    {"id": "end", "type": "end", "execution_mode": "cpp_function"}
+    {"id": "start", "name": "Start", "type": "start", "execution_mode": "cpp_function"},
+    {"id": "tool_select", "name": "Tool Select", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_select.sh"},
+    {"id": "tool_execute", "name": "Tool Execute", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_call.sh"},
+    {"id": "end", "name": "End", "type": "end", "execution_mode": "cpp_function"}
   ],
   "edges": [
     {"id": "e_start_select", "source": "start", "target": "tool_select", "control": {"type": "if", "expression": "true"}},

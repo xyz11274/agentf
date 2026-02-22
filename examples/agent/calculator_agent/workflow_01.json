@@ -6,6 +6,7 @@
   "nodes": [
     {
       "id": "node_calc",
+      "name": "Calculator Node",
       "type": "task",
       "execution_mode": "python_script",
       "command": "calc.py"

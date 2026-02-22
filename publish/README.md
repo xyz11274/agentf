@@ -68,4 +68,5 @@ Node API 手册：
 ## 4. 可视化调试
 - 使用 `publish/agent/visualizer.html` 可视化 workflow。
 - 支持 `.json/.jsonc`，并可展示 `includes`、`workflow_ref`、`edge.control.*`。
+- 节点 `name/type` 缺省时会自动回退到 `id/unknown`，避免示例文件因字段缺失导致加载失败。
 - 对带环流程（如 `goto`）已支持可视化布局，不要求严格无环图。

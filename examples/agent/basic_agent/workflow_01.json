@@ -6,6 +6,7 @@
   "nodes": [
     {
       "id": "node_basic",
+      "name": "Basic Node",
       "type": "task",
       "execution_mode": "shell_script",
       "command": "node_basic.sh"

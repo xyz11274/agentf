@@ -4,11 +4,11 @@
   "name": "cycled-workflow-pattern",
   "description": "start -> decision -> execute -> evaluate -> decision/end",
   "nodes": [
-    {"id": "start", "type": "start", "execution_mode": "cpp_function"},
-    {"id": "decision", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_select.sh"},
-    {"id": "execute", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_call.sh"},
-    {"id": "evaluate", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_format.sh"},
-    {"id": "end", "type": "end", "execution_mode": "cpp_function"}
+    {"id": "start", "name": "Start", "type": "start", "execution_mode": "cpp_function"},
+    {"id": "decision", "name": "Decision", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_select.sh"},
+    {"id": "execute", "name": "Execute", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_call.sh"},
+    {"id": "evaluate", "name": "Evaluate", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_format.sh"},
+    {"id": "end", "name": "End", "type": "end", "execution_mode": "cpp_function"}
   ],
   "edges": [
     {"id": "e_start_decision", "source": "start", "target": "decision", "control": {"type": "if", "expression": "true"}},

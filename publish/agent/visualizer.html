@@ -404,6 +404,8 @@
             workflowData = data.workflow || data;
             nodes = (workflowData.nodes || []).map(n => ({
                 ...n,
+                name: n.name || n.id || 'unnamed_node',
+                type: n.type || 'unknown',
                 input_params: n.input_params || n.inputs || [],
                 output_params: n.output_params || n.outputs || []
             }));
@@ -817,7 +819,8 @@
         }
 
         function truncateText(text, max) {
-            return text.length > max ? text.substring(0, max) + '...' : text;
+            const safeText = (text === undefined || text === null) ? '' : String(text);
+            return safeText.length > max ? safeText.substring(0, max) + '...' : safeText;
         }
 
         function zoom(factor) {
