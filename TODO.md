@@ -78,9 +78,9 @@
 | [docs/code-review.md](docs/code-review.md) | 代码审查和优化 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 系统架构设计 |
 | [docs/api-reference.md](docs/api-reference.md) | API 使用手册 |
-| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | 开发与贡献指南 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 开发与贡献指南 |
 | [docs/README.md](docs/README.md) | CI/CD 与测试指南 |
-| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | 贡献指南 |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献指南 |
 
 ---
 

@@ -19,17 +19,17 @@
 
 | 文档 | 用途 |
 |------|------|
-| **[ARCHITECTURE.md](ARCHITECTURE.md)** | 系统5视图架构设计 |
+| **[ARCHITECTURE.md](ARCHITECTURE.md)** | Framework/Runtime/DataBus 架构设计 |
 | **[REFACTORING.md](REFACTORING.md)** | 功能规划、路线图和代码完备性评估 |
 | **[api-reference.md](api-reference.md)** | API 参考手册 |
-| **[CONTRIBUTING.md](CONTRIBUTING.md)** | 开发环境设置、规范和依赖管理 |
+| **[../CONTRIBUTING.md](../CONTRIBUTING.md)** | 贡献流程、开发规范与提交流程 |
 | **[README.md](README.md)** | 测试指南和方法 |
 
 ### 贡献和 CI/CD
 
 | 文档 | 用途 |
 |------|------|
-| **[CONTRIBUTING.md](CONTRIBUTING.md)** | 贡献指南完整版 |
+| **[../CONTRIBUTING.md](../CONTRIBUTING.md)** | 贡献指南 |
 | **[README.md](README.md)** | CI/CD 自动化管线 |
 
 ### 重构文档
@@ -47,11 +47,11 @@
 1. 查看 [../README.md](../README.md) - 项目概览和导航
 2. 阅读 [ARCHITECTURE.md](ARCHITECTURE.md) - 了解系统架构
 3. 查看 [api-reference.md](api-reference.md) - API 使用指南
-4. 查看 [CONTRIBUTING.md](CONTRIBUTING.md) - 设置开发环境
+4. 查看 [../CONTRIBUTING.md](../CONTRIBUTING.md) - 设置开发环境
 
 ### 贡献代码前
 
-1. 阅读 [CONTRIBUTING.md](CONTRIBUTING.md) - 完整贡献指南
+1. 阅读 [../CONTRIBUTING.md](../CONTRIBUTING.md) - 完整贡献指南
 2. 查看 [README.md](README.md) - 测试要求
 3. 查看 [README.md](README.md) - 本地质量检查
 
@@ -66,7 +66,7 @@
 
 ### 运维和系统
 
-1. 查看 [CONTRIBUTING.md](CONTRIBUTING.md) 第8章 - 依赖管理
+1. 查看 [../CONTRIBUTING.md](../CONTRIBUTING.md) - 开发与贡献规则
 2. 查看 [REFACTORING.md](REFACTORING.md) - 构建和部署目标
 
 ---
@@ -78,9 +78,9 @@
 | 学习系统架构 | [ARCHITECTURE.md](ARCHITECTURE.md) |
 | 了解代码现状和优化点 | [REFACTORING.md](REFACTORING.md) - 代码完备性评估章节 |
 | 查看 API 使用方法 | [api-reference.md](api-reference.md) |
-| 开始开发 | [CONTRIBUTING.md](CONTRIBUTING.md) |
-| 了解依赖库 | [CONTRIBUTING.md](CONTRIBUTING.md) - 第8章依赖管理 |
-| 贡献代码 | [CONTRIBUTING.md](CONTRIBUTING.md) |
+| 开始开发 | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
+| 了解依赖库 | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
+| 贡献代码 | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | 了解项目规划 | [REFACTORING.md](REFACTORING.md) |
 | 查询 CI/CD | [README.md](README.md) |
 | 运行测试 | [README.md](README.md) |
@@ -114,26 +114,10 @@
 - 代码示例
 - 最佳实践
 
-### CONTRIBUTING.md（合并版）
-- 环境配置步骤
-- 编程规范
-- 开发工作流程
-- 组件概述
-- 代码示例
-- 工具配置
-- **依赖管理**（原 dependencies.md 内容）
-  - 依赖概览
-  - 可选依赖详解
-  - 依赖安装指南
-  - 依赖隔离策略
-  - Stub 实现说明
-  - 故障排除
-
-### contributing.md
-- 代码规范
-- 提交流程
-- Pull Request 指南
-- 行为守则
+### CONTRIBUTING.md
+- 贡献流程
+- 提交与 PR 规范
+- 基础本地验证要求
 
 ### README.md（测试合并）
 - 测试方法
@@ -181,7 +165,7 @@
 
 **文档有错误或不清晰？**
 - 提交 Issue 或 Pull Request
-- 参考 [CONTRIBUTING.md](CONTRIBUTING.md)
+- 参考 [../CONTRIBUTING.md](../CONTRIBUTING.md)
 
 **需要快速参考？**
 - 查看 [README.md](README.md) 的快速参考部分
@@ -1060,7 +1044,7 @@ tests/
 
 ## 7. 开发建议
 
-1. **遵循编码规范**: 参考 `docs/CONTRIBUTING.md`
+1. **遵循编码规范**: 参考 `../CONTRIBUTING.md`
 2. **使用智能指针**: 避免原始指针
 3. **线程安全**: 所有共享资源用 `std::mutex` 保护
 4. **错误处理**: 使用返回值和异常机制

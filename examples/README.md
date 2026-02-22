@@ -301,4 +301,4 @@ network::ProtocolDecoder::decode_message(encoded.data(), encoded.size(), decoded
 
 - [API 参考](../docs/README.md)
 - [架构设计](../docs/ARCHITECTURE.md)
-- [开发指南](../docs/CONTRIBUTING.md)
+- [开发指南](../CONTRIBUTING.md)

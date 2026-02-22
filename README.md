@@ -70,8 +70,8 @@ agent->start();
 
 ### 📖 新用户入门
 1. **[文档导航](docs/README.md)** - 所有文档的索引和说明
-2. **[架构设计](docs/ARCHITECTURE.md)** - 系统5视图架构设计
-3. **[开发与贡献指南](docs/CONTRIBUTING.md)** - 环境配置、编程规范与贡献流程
+2. **[架构设计](docs/ARCHITECTURE.md)** - Framework/Runtime/DataBus 架构设计
+3. **[开发与贡献指南](CONTRIBUTING.md)** - 环境配置、编程规范与贡献流程
 4. **[快速参考](docs/README.md)** - 常用命令、测试与 CI/CD 快速指南
 
 ### 🏗️ 项目规划与功能状态
@@ -79,7 +79,7 @@ agent->start();
 - **[路线图](docs/roadmap.md)** - 短期计划和功能愿景
 
 ### 💻 开发和贡献
-- **[贡献指南](docs/CONTRIBUTING.md)** - 如何为项目做贡献
+- **[贡献指南](CONTRIBUTING.md)** - 如何为项目做贡献
   - 代码规范和提交流程
   - 测试要求
   - Pull Request 指南
@@ -135,11 +135,11 @@ AgentFlow/
 
 ## 🤝 贡献
 
-欢迎贡献！请参考 [贡献指南](docs/CONTRIBUTING.md)：
+欢迎贡献！请参考 [贡献指南](CONTRIBUTING.md)：
 
 1. Fork 项目
 2. 创建特性分支 (`git checkout -b feature/my-feature`)
-3. 遵循 [编码规范](docs/CONTRIBUTING.md)
+3. 遵循 [编码规范](CONTRIBUTING.md)
 4. 提交代码 (`git commit -m 'feat: add feature'`)
 5. 推送分支 (`git push origin feature/my-feature`)
 6. 创建 Pull Request
