@@ -17,6 +17,7 @@ AgentFlow 工作流 DSL 是一个 JSON（或 JSONC —— 带注释的 JSON）�
   "name":    "My Workflow",    // 可选 – 显示名称
   "description": "…",         // 可选
   "dsl_file":    "path/to.jsonc",  // 可选 – 存储以便追踪
+  "includes": ["subflow.json"],    // 可选 – 引入子 workflow
   "metadata": { … },          // 可选 – 自由格式，不被解析
   "nodes": [ … ],             // 必需 – 节点对象数组
   "edges": [ … ]              // 必需 – 边对象数组
@@ -47,6 +48,7 @@ AgentFlow 工作流 DSL 是一个 JSON（或 JSONC —— 带注释的 JSON）�
 | `memory_limit_mb` | 整数 | `0` | 内存上限（MiB）（`0` = 无限制） |
 | `cpu_limit` | 整数 | `0` | CPU 上限（单核百分比）（`0` = 无限制） |
 | `enable_hot_reload` | 布尔值 | `true` | 参与实时 SO 库热重新加载 |
+| `workflow_ref` | 字符串 | `""` | 当 `type="workflow"` 时，引用子 workflow 文件 |
 
 ### `execution_mode` 值
 

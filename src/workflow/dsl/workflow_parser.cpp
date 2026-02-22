@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
 #include <sstream>
 #include <unordered_set>
 
@@ -119,6 +120,7 @@ ParseResult WorkflowParser::parse_workflow(const std::string& json_content) {
   current_result_   = ParseResult();
   current_workflow_ = nullptr;
   current_agent_    = nullptr;
+  current_workflow_file_.clear();
   node_id_to_name_.clear();
 
   auto doc = JsonDocumentFactory::create();
@@ -169,29 +171,48 @@ ParseResult WorkflowParser::parse_agent(const std::string& json_content) {
 }
 
 ParseResult WorkflowParser::parse_workflow_file(const std::string& file_path) {
+  namespace fs = std::filesystem;
   ParseResult result;
   current_result_   = ParseResult();
   current_workflow_ = nullptr;
   current_agent_    = nullptr;
   node_id_to_name_.clear();
 
+  const std::string normalized_path = fs::absolute(fs::path(file_path)).lexically_normal().string();
+  if(include_guard_.count(normalized_path) > 0) {
+    result.errors.emplace_back("Detected recursive include cycle: " + normalized_path,
+                               "file:" + file_path);
+    return result;
+  }
+  include_guard_.insert(normalized_path);
+  const std::string previous_file = current_workflow_file_;
+  current_workflow_file_          = normalized_path;
+
   auto doc = JsonDocumentFactory::create();
   if(!doc->parse_file(file_path)) {
+    include_guard_.erase(normalized_path);
+    current_workflow_file_ = previous_file;
     result.errors.emplace_back(doc->get_error(), "file:" + file_path);
     return result;
   }
 
   auto root = doc->root();
   if(!root || !root->is_object()) {
+    include_guard_.erase(normalized_path);
+    current_workflow_file_ = previous_file;
     result.errors.emplace_back("Root must be an object", "file:" + file_path);
     return result;
   }
 
   if(!parse_workflow_root(root, current_result_)) {
+    include_guard_.erase(normalized_path);
+    current_workflow_file_ = previous_file;
     return current_result_;
   }
 
   result = current_result_;
+  include_guard_.erase(normalized_path);
+  current_workflow_file_ = previous_file;
   return result;
 }
 
@@ -249,6 +270,7 @@ bool WorkflowParser::validate_agent(std::shared_ptr<framework::Agent> agent, Par
 
 bool WorkflowParser::parse_workflow_root(std::shared_ptr<const IJsonValue> root,
                                          ParseResult&                      result) {
+  namespace fs = std::filesystem;
   // Check DSL version
   auto dsl_version_obj = root->get_member("dsl_version");
   if(dsl_version_obj && dsl_version_obj->is_string()) {
@@ -277,6 +299,64 @@ bool WorkflowParser::parse_workflow_root(std::shared_ptr<const IJsonValue> root,
 
   // Create workflow object
   current_workflow_ = std::make_shared<framework::Workflow>(config);
+
+  // Parse includes and merge nested workflows
+  auto includes_array = JsonHelper::get_array(root, "includes");
+  if(includes_array) {
+    const fs::path base_dir = current_workflow_file_.empty()
+                                  ? fs::current_path()
+                                  : fs::path(current_workflow_file_).parent_path();
+    const size_t include_count = includes_array->array_size();
+    for(size_t i = 0; i < include_count; ++i) {
+      auto include_item = includes_array->array_at(i);
+      if(!include_item || !include_item->is_string()) {
+        result.errors.emplace_back("includes item must be string",
+                                   "root.includes[" + std::to_string(i) + "]");
+        return false;
+      }
+      fs::path include_path(include_item->as_string());
+      if(include_path.is_relative()) {
+        include_path = base_dir / include_path;
+      }
+      include_path = fs::absolute(include_path).lexically_normal();
+
+      WorkflowParser include_parser;
+      include_parser.include_guard_ = include_guard_;
+      auto include_result = include_parser.parse_workflow_file(include_path.string());
+      include_guard_      = include_parser.include_guard_;
+      if(!include_result.is_valid() || !include_result.workflow) {
+        result.errors.emplace_back("Failed to parse include workflow: " + include_path.string(),
+                                   "root.includes[" + std::to_string(i) + "]");
+        if(!include_result.errors.empty()) {
+          result.errors.push_back(include_result.errors.front());
+        }
+        return false;
+      }
+
+      for(const auto& node : include_result.workflow->get_nodes()) {
+        if(node && !current_workflow_->get_node(node->get_id())) {
+          current_workflow_->add_node(node);
+          node_id_to_name_[node->get_id()] = node->get_name();
+        }
+      }
+
+      for(const auto& edge : include_result.workflow->get_edges()) {
+        if(!edge) {
+          continue;
+        }
+        bool exists = false;
+        for(const auto& existing_edge : current_workflow_->get_edges()) {
+          if(existing_edge && existing_edge->get_id() == edge->get_id()) {
+            exists = true;
+            break;
+          }
+        }
+        if(!exists) {
+          current_workflow_->add_edge(edge);
+        }
+      }
+    }
+  }
 
 
   // Parse nodes
@@ -527,6 +607,11 @@ bool WorkflowParser::parse_node_config(std::shared_ptr<const IJsonValue> node_ob
   config.enable_hot_reload = JsonHelper::get_bool(config_source, "enable_hot_reload", true);
   config.function_name    = JsonHelper::get_string(config_source, "function_name", "");
   config.main_class       = JsonHelper::get_string(config_source, "main_class", "");
+  config.workflow_ref     = JsonHelper::get_string(config_source, "workflow_ref", "");
+  if(config.type == "workflow" && config.workflow_ref.empty()) {
+    result.errors.emplace_back("workflow node requires 'workflow_ref' field", path);
+    return false;
+  }
 
   // Parse script/command args array
   auto args_array = JsonHelper::get_array(config_source, "args");

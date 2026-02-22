@@ -1322,3 +1322,27 @@ All examples have been validated:
 
 6. **测试增强**
    - `tests/unit/src/test_workflow_json_gtest.cpp` 增加 edge control 解析与 goto 环回流程解析测试。
+
+### 2026-02-22 Workflow 动态生成与嵌套重构
+
+1. **Node/Workflow Skill 化**
+   - 新增 `src/workflow/node/skill.md`，定义 node 能力说明、调用方法、输入输出契约。
+   - 新增 `src/workflow/dsl/skill.md`，定义 workflow 编排技能、include 调用方式与控制约定。
+
+2. **嵌套 Workflow 支持**
+   - 扩展 `Node::Config`，新增 `workflow_ref` 字段，支持 `type: "workflow"` 节点引用子工作流。
+   - `WorkflowParser` 支持顶层 `includes`（相对路径）并合并子工作流节点/边。
+   - 增加 include 循环引用检测，防止递归 include 造成死循环。
+
+3. **动态流程模式新增**
+   - 新增 `publish/workflow/pattern/dynamic_workflow.json`：
+     - `start -> selector -> (dynamic node or dynamic workflow) -> end`
+     - 使用 `goto` 控制边表达动态跳转。
+
+4. **文档与测试同步**
+   - 更新 `publish/workflow/README.md`、`publish/README.md`、`src/workflow/dsl/README.md`。
+   - 增强 `tests/unit/src/test_workflow_json_gtest.cpp`：覆盖 include 解析、workflow 类型节点解析、dynamic pattern 文件解析。
+
+5. **验证结果**
+   - `./build.sh build` 通过。
+   - `./build.sh test` 并行存在热重载波动；串行兜底 `ctest --test-dir build --output-on-failure -j 1` 全量通过。

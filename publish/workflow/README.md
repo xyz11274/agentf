@@ -8,6 +8,7 @@ Built-in templates are provided under `publish/workflow/`:
 - `pattern/serial_workflow.json`
 - `pattern/parallel_workflow.json`
 - `pattern/cycled_workflow.json`
+- `pattern/dynamic_workflow.json`
 
 ## Workflow DSL specification sample
 Canonical sample is now located at:
@@ -20,11 +21,18 @@ Canonical sample is now located at:
 4. Use unified edge control model:
    - `control.type`: `if` / `loop` / `fork` / `join` / `async` / `goto`
    - `control.*`: per-mode parameters (`expression`, `max_iterations`, `join_group`, etc.)
+5. Nested workflow support:
+   - top-level include: `includes: ["relative/path/subflow.json"]`
+   - workflow node: `type: "workflow"` with `workflow_ref`
 
 ## Node development
 - Node specification: `publish/workflow/NODE_DEVELOPMENT_SPEC.md`
 - Node API reference: `publish/workflow/NODE_API_REFERENCE.md`
 - Node pattern templates: `publish/workflow/node_patterns/`
+- Runtime node skill contract: `src/workflow/node/skill.md`
+
+## Workflow as skill
+- DSL skill contract: `src/workflow/dsl/skill.md`
 
 ## Packaging integration
 When `builtin_workflows` is configured in agent `package.json`, `publish/agent_build.sh` stages selected built-ins into packaged artifact content.

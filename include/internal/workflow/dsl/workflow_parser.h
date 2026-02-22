@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "workflow/dsl/json_adapter.h"
@@ -177,6 +178,8 @@ private:
   std::shared_ptr<framework::Workflow> current_workflow_;
   std::shared_ptr<framework::Agent>    current_agent_;
   std::map<NodeId, std::string>        node_id_to_name_;
+  std::string                          current_workflow_file_;
+  std::unordered_set<std::string>      include_guard_;
 };
 
 /**

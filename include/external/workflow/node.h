@@ -61,6 +61,9 @@ public:
 
     // C++ function callback for CPP_FUNCTION execution mode
     std::function<bool(const DataMap& inputs, DataMap& outputs)> cpp_function;
+
+    // Workflow reference for nested workflow node (type == "workflow")
+    std::string workflow_ref;
   };
 
   explicit Node(const Config& config);

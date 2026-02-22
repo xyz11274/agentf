@@ -4,6 +4,8 @@
 // Google Test tests for JSON Workflow functionality
 
 #include <gtest/gtest.h>
+#include <filesystem>
+#include <fstream>
 
 #include "workflow/dsl/workflow_parser.h"
 #include "workflow/edge.h"
@@ -232,6 +234,21 @@ protected:
     ]
   })";
 
+  const char* workflow_with_nested_node_json_ = R"({
+    "id": "workflow_nested_001",
+    "name": "Nested Workflow Node",
+    "version": "1.0.0",
+    "nodes": [
+      {"id": "start", "name": "Start", "type": "TASK"},
+      {"id": "subflow", "name": "Subflow", "type": "workflow", "workflow_ref": "subflow.json"},
+      {"id": "end", "name": "End", "type": "TASK"}
+    ],
+    "edges": [
+      {"id": "e1", "source": "start", "target": "subflow"},
+      {"id": "e2", "source": "subflow", "target": "end"}
+    ]
+  })";
+
   // Sample invalid workflow JSON - missing required fields
   const char* invalid_workflow_missing_id_json_ = R"({
     "name": "Invalid Workflow",
@@ -398,6 +415,72 @@ TEST_F(WorkflowJsonTest, ParseNodeInputOutput) {
   // Check output parameters
   const auto& outputs = process_node->get_output_params();
   EXPECT_FALSE(outputs.empty());
+}
+
+TEST_F(WorkflowJsonTest, ParseWorkflowTypeNode) {
+  auto result = parser_->parse_workflow(workflow_with_nested_node_json_);
+  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
+  ASSERT_NE(result.workflow, nullptr);
+  auto subflow_node = result.workflow->get_node("subflow");
+  ASSERT_NE(subflow_node, nullptr);
+  EXPECT_EQ(subflow_node->get_type(), "workflow");
+  EXPECT_EQ(subflow_node->get_config().workflow_ref, "subflow.json");
+}
+
+TEST_F(WorkflowJsonTest, ParseWorkflowIncludes) {
+  namespace fs = std::filesystem;
+  const fs::path tmp_dir = fs::path("build/test_workflow_includes");
+  fs::create_directories(tmp_dir);
+  const fs::path sub_path = tmp_dir / "subflow.json";
+  const fs::path main_path = tmp_dir / "mainflow.json";
+
+  {
+    std::ofstream sub(sub_path.string());
+    sub << R"({
+      "id": "subflow_001",
+      "name": "SubFlow",
+      "version": "1.0.0",
+      "nodes": [{"id": "sub_node", "name": "Sub Node", "type": "TASK"}],
+      "edges": []
+    })";
+  }
+
+  {
+    std::ofstream main(main_path.string());
+    main << R"({
+      "id": "mainflow_001",
+      "name": "MainFlow",
+      "version": "1.0.0",
+      "includes": ["subflow.json"],
+      "nodes": [{"id": "main_node", "name": "Main Node", "type": "TASK"}],
+      "edges": []
+    })";
+  }
+
+  auto result = parser_->parse_workflow_file(main_path.string());
+  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
+  ASSERT_NE(result.workflow, nullptr);
+  EXPECT_NE(result.workflow->get_node("sub_node"), nullptr);
+  EXPECT_NE(result.workflow->get_node("main_node"), nullptr);
+
+  fs::remove_all(tmp_dir);
+}
+
+TEST_F(WorkflowJsonTest, ParseDynamicWorkflowPatternFile) {
+  namespace fs = std::filesystem;
+  fs::path pattern = fs::path("publish/workflow/pattern/dynamic_workflow.json");
+  if(!fs::exists(pattern)) {
+    pattern = fs::path("../publish/workflow/pattern/dynamic_workflow.json");
+  }
+  if(!fs::exists(pattern)) {
+    pattern = fs::path("../../publish/workflow/pattern/dynamic_workflow.json");
+  }
+  ASSERT_TRUE(fs::exists(pattern));
+
+  auto result = parser_->parse_workflow_file(pattern.string());
+  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
+  ASSERT_NE(result.workflow, nullptr);
+  EXPECT_NE(result.workflow->get_node("dynamic_workflow"), nullptr);
 }
 
 // ============================================================================

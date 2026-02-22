@@ -1,0 +1,23 @@
+{
+  "id": "dynamic-workflow-pattern",
+  "version": "1.0",
+  "name": "dynamic-workflow-pattern",
+  "description": "start -> selector(node/workflow) -> selected target -> end",
+  "includes": [
+    "../tools/workflow.json"
+  ],
+  "nodes": [
+    {"id": "start", "type": "start", "execution_mode": "cpp_function"},
+    {"id": "selector", "type": "task", "execution_mode": "shell_script", "command": "../tools/nodes/tool_select.sh"},
+    {"id": "dynamic_node", "type": "task", "execution_mode": "shell_script", "command": "../tools/nodes/tool_call.sh"},
+    {"id": "dynamic_workflow", "type": "workflow", "workflow_ref": "../tools/workflow.json"},
+    {"id": "end", "type": "end", "execution_mode": "cpp_function"}
+  ],
+  "edges": [
+    {"id": "e_start_selector", "source": "start", "target": "selector", "control": {"type": "if", "expression": "true"}},
+    {"id": "e_selector_node", "source": "selector", "target": "dynamic_node", "control": {"type": "goto", "goto_target": "dynamic_node"}},
+    {"id": "e_selector_workflow", "source": "selector", "target": "dynamic_workflow", "control": {"type": "goto", "goto_target": "dynamic_workflow"}},
+    {"id": "e_node_end", "source": "dynamic_node", "target": "end", "control": {"type": "if", "expression": "true"}},
+    {"id": "e_workflow_end", "source": "dynamic_workflow", "target": "end", "control": {"type": "if", "expression": "true"}}
+  ]
+}

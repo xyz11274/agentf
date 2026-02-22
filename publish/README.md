@@ -42,6 +42,11 @@ Workflow 规范样例位于：
 - `publish/workflow/pattern/serial_workflow.json`
 - `publish/workflow/pattern/parallel_workflow.json`
 - `publish/workflow/pattern/cycled_workflow.json`
+- `publish/workflow/pattern/dynamic_workflow.json`
+
+嵌套编排支持：
+- `includes`: 在 workflow 顶层引入其他 workflow 文件
+- `type: "workflow"` 节点 + `workflow_ref`：将子 workflow 作为节点引用
 
 ## 3. Node 定制开发
 Node 规范文档：
@@ -55,5 +60,7 @@ Node API 手册：
 - `publish/workflow/node_patterns/api_tool_select_template.md`
 - `publish/workflow/node_patterns/mcp_tool_select_template.md`
 - `publish/workflow/node_patterns/skills_select_template.md`
+- Node skill 规范：`src/workflow/node/skill.md`
+- Workflow skill 规范：`src/workflow/dsl/skill.md`
 
 建议实现统一入口（输入/输出 JSON、明确退出码），并在 workflow node 中声明 `execution_mode` 与 `command`。
