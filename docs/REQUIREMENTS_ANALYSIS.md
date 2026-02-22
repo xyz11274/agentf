@@ -652,3 +652,24 @@ $xxxAgent_$PKGTYPE_$PKGVER.tar.gz     # Agent发布包，$xxxAgent为名称，$P
 2)将workflow包装成skills：在src/workflow/dsl中增加skill.md，仿照业界skill规范，填充node的功能说明和调用方法
 3)workflow支持嵌套其他workflow：workflow.json支持include其他workflow，node扩充类型为workflow，可以以这种类型的node引用另一个workflow，需要修改workflow的解析代码、node的定义扩充支持一个workflow
 4）workflow动态生成：新增publish/workflow/pattern/dynamic_workflow.json，其节点为start node->node或workflow选择node1——（支持goto流程控制的edge）-> 被node1动态选中的node2（该node既可以是普通node，也可以是另一个workflow）->end node
+
+八、完成以下重构，并记录到docs下合适文档中，确保构建和测试成功：
+1、检查docs/CONTRIBUTING.md文档内容是否和其他文档重叠，如果有没重叠的内容，可以搬移到其他文档，搬移完成后删除这个文档
+2、检查docs/ARCHITECTURE.md文档是否和docs/REQUIREMENTS_ANALYSIS.md及代码一致，如果不一致需要更新
+3、开发框架只有Agent和workflow两层（主要是Agent包规范、workflow规范，还有Node开发API），runtime主要是workflow实例到worker的部署调度、task实例到workflow实例的执行调度，还有一个是高速数据总线，供所有Agent实例、workflow实例和node实例共用，在docs/api-reference.md按照这几层来组织接口说明
+
+九、完成以下重构，并记录到docs下合适文档中，确保构建和测试成功：
+src/runtime/databus提供的数据总线需要支持进程内共享、跨进程数据共享以及跨节点（不同OS、容器等）数据共享，需要支持数据的存储、获取、订阅/通知等功能，需要支持跨Agent实例、跨workflow实例、跨node实例共享和传输数据。
+1、需要与Agent的msgque（src/agent/msgque.cpp）、event（src/agent/event.cpp）机制配合使用，msgque、event只起到共享数据的控制作用，本身不携带数据本身，只携带数据的访问地址（数据是全局存放的，重复数据全局唯一），需要增强event和msgque，实现与databus协同。
+2、databus需要支持全局共享数据，除了runtime本地有数据缓存外，还需要有独立的缓存服务来提供数据的全局共享以及持久化存储，需要选型数据缓存系统，比如redis等，请完成数据缓存的选型，并实现databus和数据缓存服务协同工作。
+3、数据缓存服务需要存储原始的数据内容，同时也需要把数据与所属者关联起来，需要与request_id、user_id、client_id、agent_id、session_id、task_id、workflow_id、node_id、master_id、worker_id等关联，以支持使用不同的xxx_id均可以获取对应的数据
+4、不要只是打桩依赖redis，而是真实引入redis作为三方依赖（redis的代码仓地址：https://github.com/redis/redis.git），在vendor中增加对redis 的依赖和适配；所有message、event携带的数据都访问databus的本地缓存，本地缓存可以按照dataref访问，本地缓存和数据服务之间可以进行同步，数据消费方不感知数据服务，不直接使用数据服务，本地缓存没有需要的数据时才自动从数据服务上拉取，Agent收到的第一个消息中已经包含了原始数据，默认需要进行数据转储到databus的本地缓存，由本地缓存自动转储到数据服务上。
+
+十、完成以下重构，并记录到docs下合适文档中，确保构建和测试成功：
+1、整个workflow的流程控制机制均依托edge对象来完成，需要考虑include/external/workflow/control_flow.h的内容是不是应该合并到include/external/workflow/edge.h中
+2、publish/agent/AGENT_PACKAGE_SPEC.md、publish/workflow/NODE_API_REFERENCE.md、publish/workflow/NODE_DEVELOPMENT_SPEC.md、publish/workflow/README.md中文化，检查其他文档都需要中文化
+3、检查proto这个目录中的代码是否还有引用的地方，如果不需要建议删除
+4、tests/functional目录中需要增加功能测试用例，测试用例可以参考docs/REQUIREMENTS_ANALYSIS.md中列出的场景用例，并加入到自动化测试用例集中。
+5、当前workflow已经进行了扩充，可以支持有环图，所有文档及代码中涉及DAG的描述需要更新，比如README.md有一些DAG描述。
+6、TODO.md中的内容已经过时了，需要合并到docs/REFACTORING.md中。vendor.conf应该可以删除
+7、examples目录下的一些示例与真实代码不匹配了，需要进行更新
