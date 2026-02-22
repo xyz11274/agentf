@@ -595,7 +595,7 @@ sequenceDiagram
 - [x] 用例描述、主成功场景、扩展场景、架构影响已显著细化。
 
 ## 10. 实现功能的一些说明
-1、完善Agent对象的功能：
+一、完善Agent对象的功能：
 消息在agent穿越关系：reqmsg -> agent.msgque -> agent.defaultsession -> agent.newsession -> 
 1）将src/agent/messages.cpp改为src/agent/msgque.cpp，体现消息队列功能，同步修改类名，msgque支持自定义优先级多队列
 2）每个agent实例均有一个默认session实例，输入消息先送往默认session实例的接收队列（每个session有基于msgque机制配置有“高和默认”两个优先级接收队列，以及一个发送队列）
@@ -603,14 +603,52 @@ sequenceDiagram
 4）src/agent目录下新增coordinator.cpp，实现AgentCoordinator类，coordinator属于某个agent实例，它对来自所有session会话的消息进行意图识别、理解判断等，生成对应session实例下的各类任务实例。Coordinator根据来自不同session的请求消息生成各类任务，这些任务包含两大类，一类是执行任务，依赖agent实例下某个workflow实例进行执行（执行流程由agent包中提供workflow流程文件决定）；另一类是协同任务，支持对多个执行任务进行协调，协调算法支持业务定制（通过so库的方式自动加载）。每个agent实例均有自己的Coordinator实例。
 5）session会话实例中的消息均需要经过Coordinator处理，Coordinator按照识别结果生成若干个task实例，这些生成的task归属其触发消息所属的会话，每个task实例只能归属一个session会话实例。task实例可以和agent实例所包含的workflow类型映射，一个task实例就表示要按照对应的workflow流程来执行，但是task实例执行时需要被调度到对应workflow实例上（这个调度由runtime的scheduler完成）。
 
-2、完善workflow能力
+二、完善workflow能力
 1）内建workflow：AgentFlow支持一些写好的默认workflow，比如MCP工具调用workflow、skills调用workflow、记忆访问workflow
 2）内建workflow包含默认写好的流程文件、Node代码，可以被直接打包到Agent包中；
 3)内建workflow也支持业务在已有流程及node代码实现上定制增强，在publish/workflow目录中增加一些内建workflow的目录，比如memory、skills、tools等
 
-3、完善runtime能力
+三、完善runtime能力
 runtime是所有agent实例全局共享的，runtime支持配置为master角色和worker角色，master包含了worker的所有内容，但是worker不包含master的能力。runtime可以支持多实例部署，多实例间支持共享数据
 1）src/runtime新增worker.cpp，worker是workflow及Node的执行引擎，这些worker对象均包含了workflow的解析执行引擎（也支持node执行引擎）
 2）src/runtime新增master目录，该目录下新增deployer.cpp、scheduler.cpp两个文件。
 A）deployer实现agent实例内workflow实例到worker的映射和调度（当前不支持workflow实例中node到worker的映射，node可以通过单node的workflow进行映射），所有的worker在启动成功后均需要向deployer注册，并定期同步心跳和状态，deployer决定agent实例中哪些workflow实例运行在哪些worker实例上，调度支持按照状态、负载等进行均衡，worker记录自身可以执行哪些workflow实例，某些workflow实例如果销毁了，需要通知deployer刷新，并广播到所有worker进行更新；deployer支持预配置一些worker实例，也支持主动查询其管理的worker状态。worker实例也可以预配置所支持的workflow实例。deployer的部署调度是全局的，支持所有workflow实例到所有worker的调度，所以往往在部署时会按照worker池来预部署和调度。
 B）scheduler实现agent实例中所有会话的task任务调度到哪个workflow实例上，同一个agent实例的任务优先调度到其所属agent实例的workflow实例，相同agent对象的不同agent实例可以共享workflow实例（因为它们的workflow是一样的，只是实例不同，通过计数进行数量管理），也就是说同一个agent对象创建出来的不同实例，Agent-A实例的任务可以调度到Agent-B实例的workflow实例上去。因为workflow实例是被部署到某个worker上，所以最终可以实现某个task任务被调度到某个worker上。scheduler是全局的，支持所有agent实例的任务到所有workflow实例（以及所有worker实例）的调度。
+
+四、完成以下重构，并记录到docs下合适文档中，确保构建和测试成功：
+1、在publish/agent目录下补充agent包的规范定义文档，并刷新打包脚本及publish、examples/agent目录下的内容。
+1）agent包的规范如下：
+$xxxAgent_$PKGTYPE_$PKGVER.tar.gz     # Agent发布包，$xxxAgent为名称，$PKGTYPE为包类型，$PKGVER为包版本
+├── $xxxAgent_$AGTVER.tar.gz/             # Agent对象包，这个包是需要被Agent对象加载的，$AGTVER为Agent版本号
+ |            ├── agent.json             # Agent配置文档，加载agent时，需要读取这里面的内容。包括Agent名称、版本号、概述、包含了哪些workflow文件等
+ │            ├── agentCard.md       # Agent prompt，当被其他大模型或Agent访问时需要获取，内容也包含类似openclaw中的SOUL.md
+ │            ├── workflow_XX.json    # Workflow_XX 流程文件，包含了node和edge定义，node中需要指明调用了哪个可执行部件
+ │            ├── node_xxx.$TYPE             # node_xx为名称，$TYPE后缀代表可执行部件格式，比如.so、.sh、.py、.jar等
+└── package.json           # Agent 包描述文件，用于支撑包管理，包括包名、包版本、包功能描述、包中文件清单等
+
+五、优化publish/README.md描述，这篇文档主要描述业务如何开发一个新的业务Agent包，包含以下内容：
+1）Agent包开发：需要参考Agent的规范，定义Agent包中包含哪些workflow，填充Agent包内容
+2）workflow开发：参考workflow规范（将src/workflow/dsl/workflow_sample.jsonc移到publish/workflow下面），定义每个workflow中的node（负责执行）及Edge（负责控制流程）
+3）node定制开发：publish/workflow下生成node开发规范文档，明确可执行代码的通用入口函数及参数，可以调用的API接口等，额外提供node开发的api手册文档
+
+六、完成以下重构，并记录到docs下合适文档中，确保构建和测试成功：
+1、Workflow重新定义node和edge，node负责动作执行，不负责控制流程
+1）edge负责执行流程的控制，node中的LOOP、FOR_EACH等循环控制流程功能移到edge实现中。
+2）edge新增流程控制：除了已经实现的if选择某个node，loop循环执行某个node，新增fork实现多个node并行启动执行，join实现多个node执行完后再同步进入下个node，async实现node异步执行（当前node启动后不等结果，继续执行下一个node，等其结果完成后再回调）
+3）workflow支持带环的流程：node可以被重入执行，edge新增支持环回流程控制（类似goto到某个node）
+2、workflow新增一些固定模式，就是几个node+几个edge流程控制实现一个workflow，这些workflow可以被直接使用或二次开发
+1）publish/workflow目录下新增pattern目录
+2）串行workflow模式：新增串行流程文件serial_workflow.json，比如start node->工具选择node1->工具执行node2->end node
+3）并行workflow模式：新增并行流程文件parallel_workflow.json，比如start node->工具选择node1->工具执行node2+工具执行node3->end node
+4）环形workflow模式：新增环形式流程文件cycled_workflow.json，比如start node->决策node1 -> 工具执行node2 ->结果评估node3-> 决策node1或end node
+3、node新增一些固定模式，就是1个node实现一些固定操作
+1）问答node模式：通过COT、Relection等模式填充prompt，然后访问LLM大模型获得问题的回答
+2)API工具选择模式：通过Function calling模式填充prompt，然后访问LLM大模型，获得选择的API及其调用参数
+3)MCP工具选择模式：通过MCP协议模式填充prompt，然后访问LLM大模型，获得选择的MCP工具及其调用参数
+4）skills选择模式：过skills协议模式填充prompt，然后访问LLM大模型，获得选择的skill及其调用参数
+
+七、完成workflow支持由大模型动态生成流程的重构，并记录到docs下合适文档中，确保构建和测试成功：
+1）将node包装成skills：在src/workflow/node中增加skill.md，仿照业界skill规范，填充node的功能说明和调用方法
+2)将workflow包装成skills：在src/workflow/dsl中增加skill.md，仿照业界skill规范，填充node的功能说明和调用方法
+3)workflow支持嵌套其他workflow：workflow.json支持include其他workflow，node扩充类型为workflow，可以以这种类型的node引用另一个workflow，需要修改workflow的解析代码、node的定义扩充支持一个workflow
+4）workflow动态生成：新增publish/workflow/pattern/dynamic_workflow.json，其节点为start node->node或workflow选择node1——（支持goto流程控制的edge）-> 被node1动态选中的node2（该node既可以是普通node，也可以是另一个workflow）->end node
