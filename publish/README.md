@@ -64,3 +64,8 @@ Node API 手册：
 - Workflow skill 规范：`src/workflow/dsl/skill.md`
 
 建议实现统一入口（输入/输出 JSON、明确退出码），并在 workflow node 中声明 `execution_mode` 与 `command`。
+
+## 4. 可视化调试
+- 使用 `publish/agent/visualizer.html` 可视化 workflow。
+- 支持 `.json/.jsonc`，并可展示 `includes`、`workflow_ref`、`edge.control.*`。
+- 对带环流程（如 `goto`）已支持可视化布局，不要求严格 DAG。

@@ -264,7 +264,7 @@
 
             <div class="file-upload">
                 <div class="file-upload-area" id="dropZone">
-                    <input type="file" id="fileInput" accept=".json">
+                    <input type="file" id="fileInput" accept=".json,.jsonc">
                     <span>拖放JSON文件到此处<br>或点击选择文件</span>
                 </div>
             </div>
@@ -384,7 +384,7 @@
             const reader = new FileReader();
             reader.onload = (e) => {
                 try {
-                    const data = JSON.parse(e.target.result);
+                    const data = parseJsonLike(e.target.result);
                     processWorkflow(data);
                 } catch (error) {
                     alert('解析JSON失败: ' + error.message);
@@ -393,10 +393,25 @@
             reader.readAsText(file);
         }
 
+        function parseJsonLike(content) {
+            // Minimal JSONC support for workflow samples with comments.
+            const withoutBlock = content.replace(/\/\*[\s\S]*?\*\//g, '');
+            const withoutLine = withoutBlock.replace(/(^|[^:])\/\/.*$/gm, '$1');
+            return JSON.parse(withoutLine);
+        }
+
         function processWorkflow(data) {
             workflowData = data.workflow || data;
-            nodes = workflowData.nodes || [];
-            edges = workflowData.edges || [];
+            nodes = (workflowData.nodes || []).map(n => ({
+                ...n,
+                input_params: n.input_params || n.inputs || [],
+                output_params: n.output_params || n.outputs || []
+            }));
+            edges = (workflowData.edges || []).map(e => ({
+                ...e,
+                source: e.source || e.source_node,
+                target: e.target || e.target_node
+            }));
 
             calculateNodePositions();
             updateWorkflowInfo();
@@ -408,10 +423,8 @@
         function calculateNodePositions() {
             const adjList = {};
             const inDegree = {};
-            const nodeMap = {};
 
             nodes.forEach(node => {
-                nodeMap[node.id] = node;
                 adjList[node.id] = [];
                 inDegree[node.id] = 0;
             });
@@ -425,6 +438,9 @@
 
             const levels = {};
             let queue = nodes.filter(n => inDegree[n.id] === 0).map(n => n.id);
+            if (queue.length === 0 && nodes.length > 0) {
+                queue = [nodes[0].id];
+            }
             queue.forEach(id => levels[id] = 0);
 
             while (queue.length > 0) {
@@ -438,6 +454,27 @@
                     if (inDegree[next] === 0) queue.push(next);
                 });
             }
+
+            // Fallback for cyclic/partially connected graphs:
+            // infer unresolved node levels from already-resolved predecessors.
+            for (let iter = 0; iter < nodes.length * 2; iter++) {
+                let changed = false;
+                nodes.forEach(node => {
+                    if (levels[node.id] !== undefined) return;
+                    const preds = edges
+                        .filter(e => e.target === node.id)
+                        .map(e => e.source)
+                        .filter(id => levels[id] !== undefined);
+                    if (preds.length > 0) {
+                        levels[node.id] = Math.max(...preds.map(id => levels[id])) + 1;
+                        changed = true;
+                    }
+                });
+                if (!changed) break;
+            }
+            nodes.forEach(node => {
+                if (levels[node.id] === undefined) levels[node.id] = 0;
+            });
 
             const levelGroups = {};
             nodes.forEach(node => {
@@ -474,6 +511,7 @@
                 <div><strong>ID:</strong> ${workflowData.id || '-'}</div>
                 <div><strong>名称:</strong> ${workflowData.name || '-'}</div>
                 <div><strong>版本:</strong> ${workflowData.version || '-'}</div>
+                <div><strong>Includes:</strong> ${Array.isArray(workflowData.includes) ? workflowData.includes.length : 0}</div>
                 <div><strong>节点数:</strong> ${nodes.length}</div>
                 <div><strong>边数:</strong> ${edges.length}</div>
             `;
@@ -565,7 +603,8 @@
 
         function drawEdge(sourceNode, targetNode, edge) {
             const isSelected = selectedElement?.type === 'edge' && selectedElement.data.id === edge.id;
-            const hasCondition = edge.condition_expression;
+            const controlType = edge.control?.type || (edge.condition_expression ? 'if' : '');
+            const hasCondition = controlType === 'if';
             const startX = sourceNode.x + nodeWidth / 2;
             const startY = sourceNode.y;
             const endX = targetNode.x - nodeWidth / 2;
@@ -577,7 +616,15 @@
             ctx.moveTo(startX, startY);
             ctx.bezierCurveTo(midX, startY, midX, endY, endX, endY);
 
-            const lineColor = isSelected ? '#e94560' : (hasCondition ? '#ff9800' : '#4fc3f7');
+            const controlColorMap = {
+                'if': '#ff9800',
+                'loop': '#ab47bc',
+                'fork': '#26c6da',
+                'join': '#66bb6a',
+                'async': '#42a5f5',
+                'goto': '#ef5350'
+            };
+            const lineColor = isSelected ? '#e94560' : (controlColorMap[controlType] || '#4fc3f7');
             ctx.strokeStyle = lineColor;
             ctx.lineWidth = isSelected ? 4 : 2.5;
             ctx.stroke();
@@ -594,18 +641,18 @@
             ctx.fill();
 
             // Condition label - LARGE
-            if (hasCondition) {
+            if (controlType) {
                 const labelX = midX;
                 const labelY = (startY + endY) / 2;
 
                 // Background box
                 ctx.font = 'bold 12px sans-serif';
-                const text = 'IF';
+                const text = controlType.toUpperCase();
                 const textWidth = ctx.measureText(text).width;
                 const boxWidth = textWidth + 16;
                 const boxHeight = 22;
 
-                ctx.fillStyle = '#ff9800';
+                ctx.fillStyle = lineColor;
                 ctx.beginPath();
                 ctx.roundRect(labelX - boxWidth/2, labelY - boxHeight/2 - 2, boxWidth, boxHeight, 4);
                 ctx.fill();
@@ -709,6 +756,7 @@
                         ${renderProperty('name', data.name)}
                         ${renderProperty('type', data.type)}
                         ${renderProperty('execution_mode', data.execution_mode)}
+                        ${renderProperty('workflow_ref', data.workflow_ref)}
                     </div>
                     <div class="property-group">
                         <div class="property-group-title">数据流</div>
@@ -744,11 +792,15 @@
                         ${renderProperty('target', data.target)}
                     </div>
                     <div class="property-group">
-                        <div class="property-group-title">条件表达式 (IF)</div>
-                        ${data.condition_expression
-                            ? `<div class="nested-object"><code style="color:#ff9800;font-size:13px;">${data.condition_expression}</code></div>`
-                            : '<div style="color:#666;">无 (无条件执行)</div>'
-                        }
+                        <div class="property-group-title">流程控制</div>
+                        ${renderProperty('control.type', data.control?.type)}
+                        ${renderProperty('control.expression', data.control?.expression || data.condition_expression)}
+                        ${renderProperty('control.goto_target', data.control?.goto_target)}
+                        ${renderProperty('control.loop_id', data.control?.loop_id)}
+                        ${renderProperty('control.max_iterations', data.control?.max_iterations)}
+                        ${renderProperty('control.fork_group', data.control?.fork_group)}
+                        ${renderProperty('control.join_group', data.control?.join_group)}
+                        ${renderProperty('control.callback_node', data.control?.callback_node)}
                     </div>
                 `;
             }

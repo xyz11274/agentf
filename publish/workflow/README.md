@@ -34,5 +34,10 @@ Canonical sample is now located at:
 ## Workflow as skill
 - DSL skill contract: `src/workflow/dsl/skill.md`
 
+## Visualizer compatibility
+- `publish/agent/visualizer.html` supports `.json/.jsonc` workflow files.
+- Supports new fields: `includes`, node `workflow_ref`, edge `control.type + control.*`.
+- Supports cyclic/loop workflows (`goto`/`loop`) with fallback graph layout.
+
 ## Packaging integration
 When `builtin_workflows` is configured in agent `package.json`, `publish/agent_build.sh` stages selected built-ins into packaged artifact content.

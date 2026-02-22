@@ -1346,3 +1346,21 @@ All examples have been validated:
 5. **验证结果**
    - `./build.sh build` 通过。
    - `./build.sh test` 并行存在热重载波动；串行兜底 `ctest --test-dir build --output-on-failure -j 1` 全量通过。
+
+### 2026-02-22 Workflow 重构后兼容性巡检修复
+
+1. **Visualizer 新 DSL 兼容修复**
+   - 修复 `publish/agent/visualizer.html` 对新 workflow 字段的兼容：
+     - 支持 `.json/.jsonc` 读取（轻量 JSONC 去注释）。
+     - 支持 edge `control.type + control.*` 展示与边样式区分。
+     - 支持 node `workflow_ref` 和 workflow `includes` 元信息展示。
+
+2. **有环流程可视化修复**
+   - 解决旧 DAG 入度布局在 `goto/loop` 环回流程上的坐标缺失问题。
+   - 增加有环图 fallback 层级计算，保证节点可渲染。
+
+3. **文档同步**
+   - 更新 `publish/workflow/README.md` 与 `publish/README.md`，补充 visualizer 对新 DSL 的支持说明。
+
+4. **验证**
+   - 执行构建与测试回归，确认修复不影响主流程。
