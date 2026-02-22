@@ -84,10 +84,13 @@ AgentFlow 由两层开发框架 + 一层运行时组成：
 - `put/get/remove/contains`
 - key 级订阅回调（`subscribe/unsubscribe`）
 - 本地与远端数据总线统一抽象（`LocalDatabus` + `RemoteDatabus`）
+- DataRef 引用模型（消息/事件只传引用，不传大 payload）
+- owner 索引检索（request/user/client/agent/session/task/workflow/node/master/worker）
 
 使用边界：
 - Agent、Workflow、Node 在执行链路中共享数据。
 - 控制流求值与节点参数传递通过统一数据键空间协作。
+- `msgque/event` 只做控制面协同，payload 统一写入 DataBus 本地缓存；本地未命中时由 DataBus 自动回源远端数据服务并回填。
 
 ## 5. 与需求分析文档的对齐结论
 
@@ -99,5 +102,5 @@ AgentFlow 由两层开发框架 + 一层运行时组成：
 
 ## 6. 当前约束与后续建议
 
-- 当前实现优先覆盖单机/本地内存共享路径，跨实例共享能力仍依赖后续外部状态后端增强。
+- 当前实现采用“本地缓存优先 + Redis 数据服务同步”的混合模式；当 Redis 不可用时保持本地缓存可用。
 - 对包含复杂环回的 workflow，建议配合 `publish/workflow/pattern` 样例验证 DSL 与可视化一致性。

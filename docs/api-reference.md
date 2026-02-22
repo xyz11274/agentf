@@ -15,6 +15,7 @@
 - 会话与消息路由：`get_or_create_session/route_request_message/process_session_messages`
 - 共享数据：`publish_data/get_data`
 - 包加载：`create_from_package`
+- 控制面协同：`msgque/event` 仅传 `data_ref`，payload 通过 DataBus 获取
 
 关联规范：
 - Agent 包结构：`publish/agent/AGENT_PACKAGE_SPEC.md`
@@ -130,15 +131,17 @@ Node 规范与模板：
 核心接口：
 - 数据操作：`put/get/remove/contains`
 - 订阅：`subscribe/unsubscribe`
+- DataRef：`store_with_ref/resolve_ref/find_refs_by_owner`
 - 远端连接：`connect_remote/disconnect_remote`
 - 统计：`get_used_capacity/get_total_capacity/get_data_count`
 
 实现组件：
 - `LocalDatabus`（本地共享）
-- `RemoteDatabus`（跨节点/远端）
+- `RemoteDatabus`（跨节点/远端，默认 Redis 适配）
 - 统一封装类型：`DataBus`（兼容别名 `HighSpeedDataBus`）
 
 使用建议：
 - 统一 key 命名，避免 workflow 间冲突。
 - 对大对象优先使用可复用键并控制生命周期。
 - 在控制流条件读取与节点输出写入之间保持键语义一致。
+- 首条请求原始数据应先落本地缓存并生成 `data_ref`，再由 DataBus 自动同步远端服务。

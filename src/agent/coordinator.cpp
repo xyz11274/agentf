@@ -2,6 +2,7 @@
 
 #include <sstream>
 
+#include "agent/dataref_bridge.h"
 #include "agent/session.h"
 #include "agent/task.h"
 #include "workflow/workflow.h"
@@ -41,7 +42,12 @@ std::shared_ptr<AgentTask> AgentCoordinator::build_task_for_message(
   auto task = std::make_shared<AgentTask>(task_config);
   task->set_parameter("message_id", message.message_id);
   task->set_parameter("message_sender", message.sender_id);
-  task->set_parameter("message_content", message.content);
+  std::string payload = message.content;
+  if(payload.empty() && !message.data_ref.empty()) {
+    dataref_bridge::resolve_payload(message.data_ref, payload);
+  }
+  task->set_parameter("message_content", payload);
+  task->set_parameter("message_data_ref", message.data_ref);
   return task;
 }
 

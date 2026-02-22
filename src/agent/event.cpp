@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <iostream>
 
+#include "agent/dataref_bridge.h"
+
 namespace agentflow {
 namespace framework {
 
@@ -51,16 +53,25 @@ AgentEvent::~AgentEvent() {
 
 bool AgentEvent::emit_event(const EventData& event_data) {
   std::lock_guard<std::mutex> lock(mutex_);
+  EventData normalized = event_data;
+  if(normalized.data_ref.empty() && !normalized.description.empty()) {
+    normalized.data_ref =
+        dataref_bridge::store_payload(normalized.description, normalized.attributes,
+                                      "event:" + normalized.event_id);
+    if(!normalized.data_ref.empty()) {
+      normalized.description.clear();
+    }
+  }
   
   // Store in history
-  event_history_.push_back(event_data);
+  event_history_.push_back(normalized);
   total_events_emitted_++;
 
   // Call registered listeners
-  auto it = listeners_.find(event_data.type);
+  auto it = listeners_.find(normalized.type);
   if(it != listeners_.end()) {
     for(const auto& listener_pair : it->second) {
-      listener_pair.second(event_data);
+      listener_pair.second(normalized);
     }
   }
   return true;

@@ -1,6 +1,9 @@
 #include "agent/msgque.h"
 
 #include <mutex>
+#include <sstream>
+
+#include "agent/dataref_bridge.h"
 
 namespace agentflow {
 namespace framework {
@@ -30,7 +33,17 @@ bool AgentMsgQue::enqueue_message(const Message& message) {
   if(get_queue_size() >= config_.max_queue_size) {
     return false;
   }
-  return enqueue_to_priority_queue(message);
+  Message control_message = message;
+  if(control_message.data_ref.empty() && !control_message.content.empty()) {
+    std::ostringstream logical_key;
+    logical_key << "msg:" << control_message.message_id;
+    control_message.data_ref =
+        dataref_bridge::store_payload(control_message.content, control_message.metadata, logical_key.str());
+    if(!control_message.data_ref.empty()) {
+      control_message.content.clear();
+    }
+  }
+  return enqueue_to_priority_queue(control_message);
 }
 
 bool AgentMsgQue::dequeue_from_priority_queues(Message& message) {

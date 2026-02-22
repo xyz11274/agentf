@@ -12,6 +12,7 @@ vendor/
 ├── adapter/           # Adapter implementations for third-party libraries
 │   ├── actor/         # Actor framework adapters (protoactor, stub)
 │   ├── dsl/           # DSL/JSON parser adapters (rapidjson, stub)
+│   ├── cache/         # Cache adapters (redis)
 │   ├── network/       # Network adapters (reserved)
 │   ├── serialization/ # Serialization adapters (reserved)
 │   └── README.md
@@ -134,6 +135,7 @@ AgentFlow depends on the following third-party libraries. All are optional and h
 | Protoactor-cpp | https://github.com/DanielKernel/Protoactor-cpp.git | Actor model implementation |
 | OpenSSL | https://github.com/openssl/openssl.git | SSL/TLS encryption |
 | RapidJSON | https://github.com/Tencent/rapidjson.git | JSON parsing (header-only) |
+| Redis | https://github.com/redis/redis.git | Global data cache/service backend |
 
 To download all these libraries:
 ```bash

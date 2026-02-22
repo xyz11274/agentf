@@ -33,6 +33,7 @@ public:
     std::string                        sender_id;
     std::string                        receiver_id;
     std::string                        content;
+    std::string                        data_ref;   // Databus reference for payload
     int64_t                            timestamp = 0;
     std::map<std::string, std::string> metadata;
   };

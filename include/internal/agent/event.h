@@ -52,6 +52,7 @@ public:
     std::string                          source_id;
     std::string                          target_id;
     std::string                          description;
+    std::string                          data_ref;  // Databus reference for payload
     int64_t                              timestamp = 0;
     std::map<std::string, std::string>   attributes;
   };

@@ -3,9 +3,32 @@
 
 #include "runtime/databus/remote_databus.h"
 #include "utils/logger.h"
+#include "vendor/cache/redis_adapter.h"
+#include <type_traits>
 
 namespace agentflow {
 namespace runtime {
+namespace {
+agentflow::vendor::adapter::RedisAdapter& redis_adapter_instance() {
+  static agentflow::vendor::adapter::RedisAdapter adapter;
+  return adapter;
+}
+
+std::string variant_to_string(const DataVariant& value) {
+  return std::visit(
+      [](auto&& arg) -> std::string {
+        using T = std::decay_t<decltype(arg)>;
+        if constexpr(std::is_same_v<T, std::string>) {
+          return arg;
+        } else if constexpr(std::is_same_v<T, bool>) {
+          return arg ? "true" : "false";
+        } else {
+          return std::to_string(arg);
+        }
+      },
+      value);
+}
+}  // namespace
 
 RemoteDatabus::RemoteDatabus() {
 }
@@ -20,7 +43,7 @@ bool RemoteDatabus::connect(const std::string& address) {
     return true;
   }
   address_ = address;
-  // Stub connection
+  redis_adapter_instance().connect(address_);
   connected_ = true;
   Logger::instance().info("RemoteDatabus connected to " + address);
   return true;
@@ -31,6 +54,7 @@ void RemoteDatabus::disconnect() {
   if (!connected_) {
     return;
   }
+  redis_adapter_instance().disconnect();
   connected_ = false;
   Logger::instance().info("RemoteDatabus disconnected from " + address_);
 }
@@ -45,8 +69,33 @@ bool RemoteDatabus::publish(const std::string& key, const DataVariant& value) {
   if (!connected_) {
     return false;
   }
-  // Stub publish
+  data_store_[key] = value;
+  redis_adapter_instance().set(key, variant_to_string(value));
+  auto sub_it = subscriptions_.find(key);
+  if(sub_it != subscriptions_.end()) {
+    sub_it->second(key, value);
+  }
   Logger::instance().debug("RemoteDatabus published key: " + key);
+  return true;
+}
+
+bool RemoteDatabus::fetch(const std::string& key, DataVariant& value) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = data_store_.find(key);
+  if(it == data_store_.end()) {
+    return false;
+  }
+  value = it->second;
+  return true;
+}
+
+bool RemoteDatabus::remove(const std::string& key) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if(!connected_) {
+    return false;
+  }
+  data_store_.erase(key);
+  redis_adapter_instance().del(key);
   return true;
 }
 
@@ -55,7 +104,7 @@ void RemoteDatabus::subscribe(const std::string& key, DataChangeCallback callbac
   if (!connected_) {
     return;
   }
-  // Stub subscribe
+  subscriptions_[key] = callback;
   Logger::instance().debug("RemoteDatabus subscribed to key: " + key);
 }
 
@@ -64,8 +113,30 @@ void RemoteDatabus::unsubscribe(const std::string& key) {
   if (!connected_) {
     return;
   }
-  // Stub unsubscribe
+  subscriptions_.erase(key);
   Logger::instance().debug("RemoteDatabus unsubscribed from key: " + key);
+}
+
+bool RemoteDatabus::index_data_ref(const std::string& owner_index_key, const std::string& data_ref) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if(!connected_) {
+    return false;
+  }
+  owner_index_[owner_index_key].insert(data_ref);
+  redis_adapter_instance().sadd(owner_index_key, data_ref);
+  return true;
+}
+
+std::vector<std::string> RemoteDatabus::find_indexed_refs(const std::string& owner_index_key) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<std::string> refs;
+  auto it = owner_index_.find(owner_index_key);
+  if(it != owner_index_.end()) {
+    for(const auto& ref : it->second) {
+      refs.push_back(ref);
+    }
+  }
+  return refs;
 }
 
 }  // namespace runtime

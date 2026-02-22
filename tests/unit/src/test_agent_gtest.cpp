@@ -41,6 +41,23 @@ TEST_F(AgentTest, MsgQuePrioritizesHighMessages) {
   EXPECT_EQ(out.message_id, "normal");
 }
 
+TEST_F(AgentTest, MsgQueStoresPayloadAsDataRef) {
+  framework::AgentMsgQue::Config qcfg;
+  framework::AgentMsgQue queue(qcfg);
+
+  framework::AgentMsgQue::Message msg;
+  msg.message_id = "payload-msg";
+  msg.content = "raw-payload";
+  msg.metadata["user_id"] = "u-data";
+  msg.metadata["client_id"] = "c-data";
+  ASSERT_TRUE(queue.enqueue_message(msg));
+
+  framework::AgentMsgQue::Message out;
+  ASSERT_TRUE(queue.dequeue_message(out));
+  EXPECT_TRUE(out.content.empty());
+  EXPECT_FALSE(out.data_ref.empty());
+}
+
 TEST_F(AgentTest, RouteRequestCreatesSessionByUserAndClient) {
   auto agent = std::make_shared<framework::Agent>(base_config());
 
@@ -65,6 +82,7 @@ TEST_F(AgentTest, CoordinatorBuildsSessionOwnedTaskWithWorkflowMapping) {
 
   framework::AgentMsgQue::Message req;
   req.message_id = "req2";
+  req.content = "task-input";
   req.metadata["user_id"] = "u2";
   req.metadata["client_id"] = "c2";
   req.metadata["task_type"] = "collaboration";
@@ -82,6 +100,12 @@ TEST_F(AgentTest, CoordinatorBuildsSessionOwnedTaskWithWorkflowMapping) {
   EXPECT_EQ(tasks[0]->get_workflow_id(), "wf1");
   EXPECT_EQ(tasks[0]->get_task_type(), "collaboration");
   EXPECT_EQ(tasks[0]->get_collaboration_so_path(), "/tmp/demo_collab.so");
+  std::string message_content;
+  std::string message_data_ref;
+  EXPECT_TRUE(tasks[0]->get_parameter("message_content", message_content));
+  EXPECT_TRUE(tasks[0]->get_parameter("message_data_ref", message_data_ref));
+  EXPECT_EQ(message_content, "task-input");
+  EXPECT_FALSE(message_data_ref.empty());
 }
 
 }  // namespace tests

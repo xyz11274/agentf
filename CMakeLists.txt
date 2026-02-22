@@ -195,6 +195,21 @@ if(NOT DEFINED RAPIDJSON_INCLUDE_DIR)
     NO_CMAKE_SYSTEM_PATH
   )
 endif()
+
+# Redis CLI (for global databus cache service integration)
+find_program(REDIS_CLI_EXECUTABLE redis-cli
+  PATHS
+    "${HOMEBREW_PREFIX}/bin"
+    "/usr/local/bin"
+    "/usr/bin"
+)
+if(REDIS_CLI_EXECUTABLE)
+  message(STATUS "Redis CLI found - enabling Redis cache adapter integration")
+  set(USE_REDIS ON)
+else()
+  message(STATUS "Redis CLI not found - Redis cache adapter runs in local-cache mode")
+  set(USE_REDIS OFF)
+endif()
 if(RAPIDJSON_INCLUDE_DIR)
   set(RAPIDJSON_INCLUDE_ROOT "${RAPIDJSON_INCLUDE_DIR}")
   if(EXISTS "${RAPIDJSON_INCLUDE_DIR}/document.h")
@@ -258,6 +273,7 @@ set(AGENTFLOW_AGENT_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/agent/session.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/task.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/msgque.cpp
+    ${AGENTFLOW_SOURCE_DIR}/agent/dataref_bridge.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/coordinator.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/context.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/event.cpp
@@ -317,6 +333,10 @@ set(AGENTFLOW_EVENT_ADAPTER_SOURCES
     ${AGENTFLOW_VENDOR_DIR}/adapter/event/libevent_adapter.cpp
 )
 
+set(AGENTFLOW_CACHE_ADAPTER_SOURCES
+    ${AGENTFLOW_VENDOR_DIR}/adapter/cache/redis_adapter.cpp
+)
+
 # Include Protoactor implementation and additional sources only if available
 if(USE_PROTOACTOR)
   list(APPEND AGENTFLOW_ACTOR_ADAPTER_SOURCES
@@ -338,6 +358,10 @@ if(USE_RAPIDJSON)
   )
 endif()
 
+if(USE_REDIS)
+  target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_REDIS=1)
+endif()
+
 set(AGENTFLOW_SOURCES
     ${AGENTFLOW_AGENT_SOURCES}
     ${AGENTFLOW_WORKFLOW_SOURCES}
@@ -345,6 +369,7 @@ set(AGENTFLOW_SOURCES
     ${AGENTFLOW_UTILS_SOURCES}
     ${AGENTFLOW_ACTOR_ADAPTER_SOURCES}
     ${AGENTFLOW_EVENT_ADAPTER_SOURCES}
+    ${AGENTFLOW_CACHE_ADAPTER_SOURCES}
     ${AGENTFLOW_DSL_ADAPTER_SOURCES}
 )
 
@@ -391,6 +416,10 @@ if(USE_RAPIDJSON)
     target_include_directories(agentflow PUBLIC ${RAPIDJSON_INCLUDE_ROOT})
   endif()
   target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_RAPIDJSON=1)
+endif()
+
+if(USE_REDIS)
+  target_compile_definitions(node_adapter_lib PUBLIC AGENTFLOW_WITH_REDIS=1)
 endif()
 
 # ============================================================================
@@ -443,6 +472,7 @@ add_library(node_adapter_lib SHARED
     ${AGENTFLOW_UTILS_SOURCES} 
     ${AGENTFLOW_ACTOR_ADAPTER_SOURCES} 
     ${AGENTFLOW_EVENT_ADAPTER_SOURCES} 
+    ${AGENTFLOW_CACHE_ADAPTER_SOURCES}
     ${AGENTFLOW_DSL_ADAPTER_SOURCES})
 target_include_directories(node_adapter_lib PUBLIC ${AGENTFLOW_INCLUDE_DIR})
 find_package(Threads REQUIRED)
