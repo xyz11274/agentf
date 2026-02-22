@@ -35,7 +35,7 @@ cpplint --linelength=100 src/your_file.cpp
 ## High-level architecture
 
 - AgentFlow is split into two core layers:
-  - `agentflow::framework`: authoring/orchestration objects (`Agent`, `Workflow`, `Node`, `Edge`) and DAG/control-flow definitions.
+  - `agentflow::framework`: authoring/orchestration objects (`Agent`, `Workflow`, `Node`, `Edge`) and workflow-graph/control-flow definitions.
   - `agentflow::runtime`: execution-time scheduling and infrastructure (runtime actor loop, databus, metrics, control flow, hot reload).
 - Scheduling model is three-tier: **Agent -> Workflow -> Node**. Runtime repeatedly asks workflows for executable nodes, dispatches nodes to worker threads, and exchanges node inputs/outputs through the DataBus.
 - Public API surface is intentionally narrow under `include/external/{agent,workflow}`; most implementation and extension points live under `include/internal/` and `src/`.

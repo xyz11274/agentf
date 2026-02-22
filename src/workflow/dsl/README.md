@@ -2,7 +2,7 @@
 
 ## 概览
 
-AgentFlow 工作流 DSL 是一个 JSON（或 JSONC —— 带注释的 JSON）文档，完整描述了由类型化边连接的有向无环图 (DAG) 的计算节点。
+AgentFlow 工作流 DSL 是一个 JSON（或 JSONC —— 带注释的 JSON）文档，完整描述了由类型化边连接的工作流图（支持受控环回）的计算节点。
 
 规范参考示例是 [`publish/workflow/workflow_sample.jsonc`](../../../publish/workflow/workflow_sample.jsonc)。该文件中的每个字段都与 `src/workflow/dsl/workflow_parser.cpp` 中的 `JsonHelper` 调用一一对应。
 
@@ -142,4 +142,4 @@ if (arr) {
 - `node.id` 必须非空且在工作流内唯一。
 - `edge.id` 必须非空且在工作流内唯一。
 - `edge.source` 和 `edge.target` 必须引用现有的节点 `id` 值。
-- 默认按 DAG 校验；当 edge 使用 `loop/goto` 控制时，允许显式环回并进入控制流校验路径。
+- 默认按工作流图校验；当 edge 使用 `loop/goto` 控制时，允许显式环回并进入控制流校验路径。

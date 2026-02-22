@@ -7,7 +7,7 @@
 项目根目录保留最关键的三个文件：
 - **[README.md](../README.md)** - 项目主导航和快速入门
 - **[CONTRIBUTING.md](../CONTRIBUTING.md)** - 贡献指南（GitHub标准文件）
-- **[TODO.md](../TODO.md)** - 项目规划和功能状态
+- **[REFACTORING.md](REFACTORING.md)** - 项目规划和功能状态
 
 **建议首先阅读 [根目录 README.md](../README.md)，它包含了所有文档导航。**
 
@@ -58,7 +58,7 @@
 ### 了解项目规划
 
 1. 查看 [REFACTORING.md](REFACTORING.md) - 功能实现状态、路线图和代码评估
-2. 查看 [../TODO.md](../TODO.md) - 快速规划导航
+2. 查看 [REFACTORING.md](REFACTORING.md) - 快速规划导航
 
 ### CI/CD 和部署
 
@@ -549,7 +549,7 @@ git push origin feature/my-feature
 |------|------|------|------|
 | **核心库** | `libagentflow.a` | ✅ | 核心功能库 |
 | **Agent** | `src/agent/agent.cpp` | ✅ | Agent 基础功能 |
-| **Workflow** | `src/workflow/workflow.cpp` | ✅ | DAG 调度、验证 |
+| **Workflow** | `src/workflow/workflow.cpp` | ✅ | 工作流图调度、验证 |
 | **Node** | `src/workflow/node/node.cpp` | ✅ | 节点执行、状态管理 |
 | **Edge** | `src/workflow/edge/edge.cpp` | ✅ | 依赖关系定义 |
 | **DataBus** | `src/runtime/communication/databus.cpp` | ✅ | 数据总线功能 |
@@ -763,9 +763,9 @@ edge_config.target_node_id = "node_b";
 auto edge = std::make_shared<framework::Edge>(edge_config);
 workflow->add_edge(edge);
 
-// 验证 DAG
+// 验证工作流图
 if (workflow->validate()) {
-  // DAG 有效
+  // 工作流图有效
 }
 ```
 

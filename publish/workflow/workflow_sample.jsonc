@@ -58,7 +58,7 @@
 
   // ──────────────────────────────────────────────────────────────────────────
   // Nodes
-  // Each object in "nodes" defines one computational unit in the workflow DAG.
+  // Each object in "nodes" defines one computational unit in the workflow graph.
   // Required fields: id
   // All other fields have documented defaults.
   // ──────────────────────────────────────────────────────────────────────────

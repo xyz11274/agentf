@@ -28,7 +28,7 @@ using NodePtr     = std::shared_ptr<framework::Node>;
  * AgentRuntime is the core scheduling and execution engine
  * Three-level Master-Worker architecture:
  * - Agent Level Master: Manages multiple agent instances
- * - Workflow Level Master: Manages workflow DAG and scheduling
+ * - Workflow Level Master: Manages workflow graph and scheduling
  * - Node Level Worker: Executes node tasks
  */
 class AgentRuntime {

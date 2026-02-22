@@ -404,7 +404,7 @@ void AgentRuntime::update_workflow_state(const std::string& execution_id, const 
     if(agent) {
       auto workflow = agent->get_workflow(state.workflow_id);
       if(workflow) {
-        // Mark node as executed in workflow DAG
+        // Mark node as executed in workflow graph
         workflow->mark_node_executed(node_id, true);
 
         // Get next executable nodes and enqueue them

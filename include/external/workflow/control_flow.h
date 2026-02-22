@@ -12,9 +12,14 @@
 #include <vector>
 
 #include "agent/common.h"
+#include "workflow/edge.h"
 
 namespace agentflow {
 namespace runtime {
+
+// Control flow for workflow execution is edge-driven.
+// Use framework::Edge::ControlType as the canonical edge control type.
+using EdgeControlType = framework::Edge::ControlType;
 
 /**
  * Condition operator types

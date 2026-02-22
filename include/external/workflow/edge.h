@@ -11,7 +11,8 @@ namespace framework {
 
 /**
  * Edge defines the dependency relationship between nodes
- * Supports data passing and control flow events
+ * Supports data passing and control flow events.
+ * Workflow process control is edge-centric, including branch/loop/fork/join/async/goto.
  */
 class Edge {
 public:

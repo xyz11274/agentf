@@ -1,7 +1,8 @@
-# Workflow / Node Development Guide
+# Workflow / Node 开发指南
 
-## Built-in workflows
-Built-in templates are provided under `publish/workflow/`:
+## 内建 workflow
+
+`publish/workflow/` 内提供内建模板：
 - `memory/`
 - `skills/`
 - `tools/`
@@ -10,34 +11,40 @@ Built-in templates are provided under `publish/workflow/`:
 - `pattern/cycled_workflow.json`
 - `pattern/dynamic_workflow.json`
 
-## Workflow DSL specification sample
-Canonical sample is now located at:
+## Workflow DSL 示例
+
+标准示例文件位于：
 - `publish/workflow/workflow_sample.jsonc`
 
-## Workflow development
-1. Define workflow id/name/version.
-2. Define nodes with `execution_mode` and executable binding (`command` / symbol).
-3. Define edges for control/data flow.
-4. Use unified edge control model:
-   - `control.type`: `if` / `loop` / `fork` / `join` / `async` / `goto`
-   - `control.*`: per-mode parameters (`expression`, `max_iterations`, `join_group`, etc.)
-5. Nested workflow support:
-   - top-level include: `includes: ["relative/path/subflow.json"]`
-   - workflow node: `type: "workflow"` with `workflow_ref`
+## Workflow 开发步骤
 
-## Node development
-- Node specification: `publish/workflow/NODE_DEVELOPMENT_SPEC.md`
-- Node API reference: `publish/workflow/NODE_API_REFERENCE.md`
-- Node pattern templates: `publish/workflow/node_patterns/`
-- Runtime node skill contract: `src/workflow/node/skill.md`
+1. 定义 workflow 的 id/name/version。
+2. 定义 node（声明 `execution_mode` 与可执行绑定）。
+3. 定义 edge（数据依赖与流程控制）。
+4. 统一使用 edge 控制模型：
+   - `control.type`：`if` / `loop` / `fork` / `join` / `async` / `goto`
+   - `control.*`：对应模式参数（如 `expression`、`max_iterations`、`join_group` 等）
+5. 支持嵌套 workflow：
+   - 顶层包含：`includes: ["relative/path/subflow.json"]`
+   - workflow 节点：`type: "workflow"` + `workflow_ref`
 
-## Workflow as skill
-- DSL skill contract: `src/workflow/dsl/skill.md`
+## Node 开发入口
 
-## Visualizer compatibility
-- `publish/agent/visualizer.html` supports `.json/.jsonc` workflow files.
-- Supports new fields: `includes`, node `workflow_ref`, edge `control.type + control.*`.
-- Supports cyclic/loop workflows (`goto`/`loop`) with fallback graph layout.
+- Node 开发规范：`publish/workflow/NODE_DEVELOPMENT_SPEC.md`
+- Node API：`publish/workflow/NODE_API_REFERENCE.md`
+- Node 模板：`publish/workflow/node_patterns/`
+- Node Skill 说明：`src/workflow/node/skill.md`
 
-## Packaging integration
-When `builtin_workflows` is configured in agent `package.json`, `publish/agent_build.sh` stages selected built-ins into packaged artifact content.
+## Workflow Skill 化
+
+- DSL Skill 说明：`src/workflow/dsl/skill.md`
+
+## 可视化兼容
+
+- `publish/agent/visualizer.html` 支持 `.json` / `.jsonc`
+- 支持新字段：`includes`、node `workflow_ref`、edge `control.type + control.*`
+- 支持有环流程（`goto`/`loop`）的布局展示
+
+## 打包集成
+
+当 Agent `package.json` 配置了 `builtin_workflows` 时，`publish/agent_build.sh` 会将对应内建 workflow 一并打包。

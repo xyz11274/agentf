@@ -233,7 +233,7 @@ case $ACTION in
         echo "Examples:"
         echo "  ./build.sh build Release"
         echo "  ./build.sh test"
-        echo "  ./build.sh example control_flow"
+        echo "  ./build.sh example agent_loader"
         exit 1
         ;;
 esac

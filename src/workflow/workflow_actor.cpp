@@ -88,7 +88,7 @@ void WorkflowActor::handle_execute_workflow(const ExecuteWorkflowMessage& msg) {
 
   Logger::instance().info("Workflow [" + workflow_id_ + "] started execution");
 
-  // Parse workflow DAG and schedule node execution
+  // Parse workflow graph and schedule node execution
   // For each node without dependencies, spawn a NodeActor
   schedule_executable_nodes();
 

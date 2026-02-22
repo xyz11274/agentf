@@ -698,15 +698,15 @@ TEST_F(WorkflowJsonTest, WorkflowMetadataParsing) {
 }
 
 // ============================================================================
-// DAG Validation Tests
+// Workflow Graph Validation Tests
 // ============================================================================
 
-TEST_F(WorkflowJsonTest, ValidateDAGStructure) {
+TEST_F(WorkflowJsonTest, ValidateWorkflowGraphStructure) {
   auto result = parser_->parse_workflow(valid_workflow_json_);
 
   ASSERT_TRUE(result.is_valid());
 
-  // Valid workflow should pass DAG validation
+  // Valid workflow should pass workflow graph validation
   EXPECT_TRUE(result.workflow->validate());
 }
 

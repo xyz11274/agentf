@@ -28,6 +28,16 @@
   - `./build.sh test` 存在既有 HotReload 并行抖动；
   - `ctest --test-dir build --output-on-failure -j 1` 串行 10/10 通过。
 
+## 历史 TODO 合并记录（2026-02-22）
+
+- 原根目录 `TODO.md` 已合并并下线，规划内容统一收敛到本文件与 `docs/README.md` 导航。
+- 历史状态快照（来自旧 TODO）：
+  - 开发编排框架：约 85%
+  - 运行框架：约 88%
+  - 监控和日志：约 68%
+- 已完成主线（P0/P1）：AgentRuntime 调度闭环、C++ 节点执行、循环控制、序列化链路、DataBus 通知等。
+- 后续主线（P2）：性能与稳定性增强（共享内存、worker 分组、热更新稳定性、测试抖动治理）。
+
 ## 目录结构总览
 
 ```
@@ -177,7 +187,7 @@ tests/
 ```
 src/                    # 业务代码相关实现，和三方实现独立目录
 vendor/                 # 三方依赖相关实现
-├── vendor.conf         # 三方依赖配置文件
+├── vendor/vendor.conf  # 三方依赖配置文件
 ├── vendor.sh           # 三方依赖下载脚本
 ├── README.md           # 使用文档
 ├── adapter/            # 三方依赖适配器实现
@@ -194,7 +204,7 @@ vendor/                 # 三方依赖相关实现
 **说明：**
 - `src/` - 保留核心业务代码，不包含适配器实现
 - `vendor/` - 所有三方依赖相关内容统一放置
-- `vendor.conf` - 三方依赖下载配置
+- `vendor/vendor.conf` - 三方依赖下载配置
 - `vendor/adapter/` - 与三方依赖相关的适配器代码
 
 ### 4. 源代码目录
@@ -449,7 +459,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 - 已完成 DSL 动态加载和解析
 - 已完成 Workflow 实例创建
 - 已完成 Workflow 动态加载、卸载和版本更新接口
-- 已完成 DAG 调度算法（Kahn 算法拓扑排序）
+- 已完成工作流图调度算法（Kahn 算法拓扑排序）
 - 已完成 并行执行互不依赖的 Node
 - 已完成 Node 执行状态管理
 - 已完成 Node 输入输出数据处理
@@ -764,7 +774,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 **AgentRuntime 节点调度闭环断裂**
 - **文件**: `src/runtime/scheduler/agent_runtime.cpp` 中 `on_node_complete()`
 - **问题**: 方法获取了后续可执行节点列表，但没有将其入队到 worker 线程
-- **影响**: DAG 执行在第一批节点完成后停止
+- **影响**: 工作流图执行在第一批节点完成后停止
 - **状态**: 已修复
 
 **ZeroCopyDataBus 订阅通知未触发**
@@ -834,7 +844,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 | 组件 | 需要测试的内容 |
 |------|--------------|
 | **AgentRuntime** | 三层调度、workflow 执行、node 并发调度、负载均衡 |
-| **Workflow 执行** | DAG 拓扑排序、get_executable_nodes、mark_node_executed、循环/条件 |
+| **Workflow 执行** | 工作流图拓扑排序、get_executable_nodes、mark_node_executed、循环/条件 |
 | **Agent 生命周期** | 状态机转换（CREATED->INITIALIZED->RUNNING->PAUSED->STOPPED） |
 | **ControlFlowManager** | 条件评估、循环控制、错误处理策略 |
 | **DataBus** | put/get/remove、订阅回调、线程安全、容量限制 |
@@ -856,7 +866,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 
 **OPT-A3: Workflow 热替换**
 - **当前问题**: `Workflow::update_dynamic()` 仅调用 `load_from_dsl()`，需要重建实例
-- **建议**: 支持原地更新 DAG 定义，保持执行状态
+- **建议**: 支持原地更新工作流图定义，保持执行状态
 - **优先级**: P2
 
 #### 性能层面优化
@@ -1333,7 +1343,7 @@ All examples have been validated:
 
 2. **Workflow 流程能力增强**
    - 执行路径增加 edge 控制判断（含 async 软依赖、loop/goto 控制判定）。
-   - DAG 校验与拓扑排序对 `loop/goto` 控制边放宽，支持显式环回流程。
+   - 工作流图校验与拓扑排序对 `loop/goto` 控制边放宽，支持显式环回流程。
 
 3. **模式资产新增**
    - 新增 `publish/workflow/pattern/serial_workflow.json`。
@@ -1382,7 +1392,7 @@ All examples have been validated:
      - 支持 node `workflow_ref` 和 workflow `includes` 元信息展示。
 
 2. **有环流程可视化修复**
-   - 解决旧 DAG 入度布局在 `goto/loop` 环回流程上的坐标缺失问题。
+   - 解决旧工作流图入度布局在 `goto/loop` 环回流程上的坐标缺失问题。
    - 增加有环图 fallback 层级计算，保证节点可渲染。
 
 3. **文档同步**

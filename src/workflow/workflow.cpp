@@ -805,7 +805,7 @@ void Workflow::reset_execution_state() {
 }
 
 bool Workflow::validate_dag() {
-  // Check for cycles in DAG using DFS coloring
+  // Check for cycles in workflow graph using DFS coloring
   enum class Color {
     WHITE,  // Not visited
     GRAY,   // Being visited (in recursion stack)
@@ -862,7 +862,7 @@ bool Workflow::validate_dag() {
     }
   }
 
-  Logger::instance().info("Workflow DAG validation passed - no cycles detected");
+  Logger::instance().info("Workflow graph validation passed - no cycles detected");
   return true;
 }
 

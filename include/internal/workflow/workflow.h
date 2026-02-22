@@ -213,8 +213,8 @@ struct WorkflowMetadata {
 };
 
 /**
- * Workflow represents a DAG (Directed Acyclic Graph) of nodes and edges
- * Supports DSL-based orchestration and dynamic loading
+ * Workflow represents a directed workflow graph of nodes and edges.
+ * Supports DSL-based orchestration, dynamic loading, and controlled cycles via edge control.
  */
 class Workflow {
 public:
@@ -273,7 +273,7 @@ public:
       const agentflow::utils::storage::StorageConfig& storage_config,
       WorkflowMetadata&                        metadata);
 
-  // DAG operations with control flow support
+  // Graph operations with control flow support
   std::vector<NodeId> get_topological_order();
   std::vector<NodeId> get_executable_nodes();               // Nodes ready to execute
   std::vector<NodeId> get_executable_nodes_with_control();  // With condition evaluation
@@ -313,7 +313,7 @@ private:
   std::map<NodeId, bool> executed_nodes_;
   std::map<NodeId, int>  node_retry_counts_;
 
-  // DAG validation and computation
+  // Graph validation and computation
   bool validate_dag();
   bool compute_topological_order();
 

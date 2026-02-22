@@ -898,7 +898,7 @@ bool WorkflowParser::validate_workflow_structure(std::shared_ptr<framework::Work
   // Validate workflow graph; cycle control edges (loop/goto) are allowed.
   if(!workflow->validate()) {
     if(!has_cycle_control_edge(*workflow)) {
-      result.errors.emplace_back("Workflow DAG validation failed - possible cycle detected");
+      result.errors.emplace_back("Workflow graph validation failed - possible cycle detected");
       return false;
     }
     for(const auto& node : workflow->get_nodes()) {
@@ -907,7 +907,7 @@ bool WorkflowParser::validate_workflow_structure(std::shared_ptr<framework::Work
       }
     }
     result.warnings.emplace_back(
-        "Workflow contains loop/goto control edges; DAG-only validation is bypassed.");
+        "Workflow contains loop/goto control edges; acyclic-only validation is bypassed.");
   }
 
   return true;

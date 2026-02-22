@@ -11,7 +11,7 @@ namespace agentflow {
 namespace framework {
 
 /**
- * Node represents a task execution unit in a workflow DAG
+ * Node represents a task execution unit in a workflow graph.
  * Each node has a control plane and a running plane
  */
 class Node {

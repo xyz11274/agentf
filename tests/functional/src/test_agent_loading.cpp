@@ -3,6 +3,11 @@
 #include <fstream>
 #include "agent/agent.h"
 #include "agent/package.h"
+#include "runtime/agent_runtime.h"
+#include "workflow/node.h"
+#include "workflow/edge.h"
+#include "workflow/workflow.h"
+#include "workflow/dsl/workflow_parser.h"
 
 namespace agentflow {
 namespace functional {
@@ -85,6 +90,53 @@ TEST_F(AgentLoadingTest, LoadInvalidPackage) {
     std::string package_path = "non_existent_path";
     auto agent = framework::Agent::create_from_package(package_path);
     EXPECT_EQ(agent, nullptr);
+}
+
+TEST_F(AgentLoadingTest, TaskToWorkflowScheduling) {
+    framework::Agent::Config agent_cfg;
+    agent_cfg.id = "agent-schedule";
+    agent_cfg.name = "agent-schedule";
+    auto agent = std::make_shared<framework::Agent>(agent_cfg);
+
+    framework::Workflow::Config wf_cfg;
+    wf_cfg.id = "wf-schedule";
+    wf_cfg.name = "wf-schedule";
+    auto workflow = std::make_shared<framework::Workflow>(wf_cfg);
+
+    framework::Node::Config node_cfg;
+    node_cfg.id = "node-run";
+    node_cfg.name = "node-run";
+    node_cfg.type = "tool";
+    node_cfg.execution_mode = framework::Node::ExecutionMode::CPP_FUNCTION;
+    node_cfg.cpp_function = [](const DataMap&, DataMap&) { return true; };
+    workflow->add_node(std::make_shared<framework::Node>(node_cfg));
+    agent->add_workflow(workflow);
+
+    runtime::AgentRuntime runtime;
+    ASSERT_TRUE(runtime.register_agent(agent));
+    ASSERT_TRUE(runtime.start());
+
+    DataMap inputs;
+    inputs["request_id"] = std::string("req-schedule");
+    EXPECT_TRUE(runtime.execute_workflow(agent->get_id(), workflow->get_id(), inputs));
+    EXPECT_TRUE(runtime.stop());
+}
+
+TEST_F(AgentLoadingTest, CyclicWorkflowControlFlow) {
+    std::string workflow_path = "publish/workflow/pattern/cycled_workflow.json";
+    if(!std::filesystem::exists(workflow_path)) {
+        workflow_path = "../publish/workflow/pattern/cycled_workflow.json";
+    }
+    if(!std::filesystem::exists(workflow_path)) {
+        workflow_path = "../../publish/workflow/pattern/cycled_workflow.json";
+    }
+    ASSERT_TRUE(std::filesystem::exists(workflow_path)) << "workflow path not found";
+
+    auto parser = dsl::WorkflowParserFactory::create();
+    auto result = parser->parse_workflow_file(workflow_path);
+    ASSERT_TRUE(result.is_valid());
+    ASSERT_NE(result.workflow, nullptr);
+    EXPECT_TRUE(result.workflow->validate());
 }
 
 TEST_F(AgentLoadingTest, AgentLifecycle) {

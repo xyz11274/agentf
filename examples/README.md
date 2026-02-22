@@ -13,12 +13,13 @@
 # 运行指定示例
 ./build.sh example basic            # 基础入门
 ./build.sh example adapter          # Actor 适配器
-./build.sh example control_flow     # 控制流
 ./build.sh example dsl              # DSL 工作流定义
 ./build.sh example metrics          # 指标收集
 ./build.sh example node_execution   # 节点执行模式
 ./build.sh example p1_features      # 高级特性
 ./build.sh example storage          # 持久化存储
+./build.sh example agent            # Agent 打包/加载示例
+./build.sh example agent_loader     # Agent 包加载器
 ```
 
 ## 示例列表
@@ -109,7 +110,7 @@ if (result.is_valid()) {
 }
 ```
 
-**DSL 文件（`examples/dsl/` 目录）：**
+**DSL 文件（`examples/workflow/` 目录）：**
 
 | 文件 | 说明 |
 |------|------|
@@ -156,39 +157,34 @@ auto echo_ref = system->spawn(echo_factory, "echo-actor-1");
 
 ---
 
-### 5. control_flow_example — 控制流
+### 5. agent_example — Agent 打包与装载
 
 - **难度**: ⭐⭐⭐ 中级
-- **演示**: 条件评估、循环控制（FOR/WHILE/REPEAT）、错误处理策略、控制动作、数据总线集成
-- **涉及 API**: `runtime::ControlFlowManager`, `runtime::ConditionEvaluator`, `runtime::ConditionExpression`, `runtime::ZeroCopyDataBus`
+- **演示**: Agent 包结构、workflow 清单发现、节点脚本装载与运行入口
+- **涉及 API**: `framework::Agent`, `framework::AgentPackage`, `framework::AgentLoader`
 
-本示例包含 6 个子示例：
+本示例包含 3 个子流程：
 
-1. **条件运算符** — `EQUAL`, `NOT_EQUAL`, `GREATER_THAN`, `LESS_THAN`, `CONTAINS`, `IS_NULL`, `AND`, `OR`
-2. **循环控制** — FOR 循环、WHILE 循环、REPEAT 循环
-3. **错误处理** — `RETRY`（重试）、`SKIP`（跳过）、`FAIL`（中止）策略
-4. **控制动作** — `PROCEED`, `SKIP`, `GOTO`, `ABORT`, `RETRY`, `RETURN`, `BREAK`, `CONTINUE`
-5. **下一节点决策** — 基于节点执行状态决定后续动作
-6. **数据总线集成** — 订阅/取消订阅、读写锁、容量监控
+1. **Agent 清单读取** — 读取 `agent.json` / `package.json` 并解析元信息
+2. **Workflow 发现** — 从包内 workflow 列表建立可执行工作流集合
+3. **节点加载** — 按节点类型（脚本/动态库）绑定执行入口
 
-**关键代码片段 — 条件评估：**
+**关键代码片段 — 加载 Agent 包：**
 
 ```cpp
-runtime::ConditionExpression expr_gt("score", runtime::ConditionOperator::GREATER_THAN, "80");
-bool result = evaluator.evaluate(expr_gt, context, DataMap());
+auto package = framework::AgentPackage::load_from_file(package_path);
+auto agent = framework::AgentLoader::load_agent_package(package);
 ```
 
-**关键代码片段 — 错误处理策略：**
+**关键代码片段 — 读取 workflow 清单：**
 
 ```cpp
-runtime::ErrorHandlerConfig retry_handler;
-retry_handler.strategy       = runtime::ErrorStrategy::RETRY;
-retry_handler.max_retries    = 3;
-retry_handler.retry_delay_ms = 500;
-manager.set_error_handler("node_retry", retry_handler);
+for(const auto& workflow_file : package->get_workflow_files()) {
+  Logger::instance().info_f("workflow: %s", workflow_file.c_str());
+}
 ```
 
-**预期输出**: 依次输出各运算符评估结果、循环迭代日志、错误重试过程和数据总线操作日志。
+**预期输出**: 输出 Agent 包元数据、可加载 workflow 列表以及节点入口加载结果。
 
 ---
 
@@ -286,7 +282,7 @@ network::ProtocolDecoder::decode_message(encoded.data(), encoded.size(), decoded
        ↓
 3. dsl_example            ← 学习 JSON DSL 定义工作流
        ↓
-4. control_flow_example   ← 理解条件、循环、错误处理
+4. agent_example          ← 学习 Agent 包定义与加载
        ↓
 5. adapter_example        ← 学习 Actor 模式与消息传递
        ↓
