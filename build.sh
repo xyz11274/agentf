@@ -199,7 +199,7 @@ case $ACTION in
         ;;
 
     example)
-        EXAMPLE_NAME=${2:-basic}
+        EXAMPLE_NAME=${2:-databus}
         EXAMPLE_BIN="example_${EXAMPLE_NAME}"
 
         setup_runtime_library_path
@@ -228,12 +228,12 @@ case $ACTION in
         echo "  build [type]       Build the project (type: Debug|Release|RelWithDebInfo, default: Debug)"
         echo "  rebuild [type]     Clean and rebuild"
         echo "  test               Run all tests via ctest"
-        echo "  example [name]     Run an example (default: basic)"
+        echo "  example [name]     Run an example (default: databus)"
         echo ""
         echo "Examples:"
         echo "  ./build.sh build Release"
         echo "  ./build.sh test"
-        echo "  ./build.sh example agent_loader"
+        echo "  ./build.sh example databus"
         exit 1
         ;;
 esac

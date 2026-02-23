@@ -1,9 +1,13 @@
 #include <gtest/gtest.h>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <thread>
 #include "agent/agent.h"
+#include "agent/agent_actor.h"
 #include "agent/package.h"
 #include "runtime/agent_runtime.h"
+#include "runtime/runtime_actor.h"
 #include "workflow/node.h"
 #include "workflow/edge.h"
 #include "workflow/workflow.h"
@@ -192,6 +196,36 @@ TEST_F(AgentLoadingTest, LoadPackageMalformedJson) {
     
     std::filesystem::remove_all(temp_dir);
 }
+
+#ifdef AGENTFLOW_WITH_RAPIDJSON
+TEST_F(AgentLoadingTest, AgentActorAutoLoadsPackagesAndRegistersRuntime) {
+    namespace fs = std::filesystem;
+    fs::path temp_dir = fs::temp_directory_path() / "agentflow_agent_actor_test";
+    fs::create_directories(temp_dir);
+
+    fs::path config_path = temp_dir / "AgentService.config";
+    std::ofstream ofs(config_path.string());
+    ofs << "{"
+        << "\"package_root\":\"../examples/agent\","
+        << "\"manifests\":[\"basic_agent\"],"
+        << "\"scan_interval_ms\":100,"
+        << "\"heartbeat_interval_ms\":100"
+        << "}";
+    ofs.close();
+
+    auto runtime = std::make_shared<runtime::AgentRuntime>();
+    auto runtime_actor = std::make_shared<runtime::RuntimeActor>(runtime);
+    agent::AgentActor actor(config_path.string(), runtime_actor);
+    actor.on_start();
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    auto agents = runtime->list_agents();
+    actor.on_stop();
+
+    fs::remove_all(temp_dir);
+    EXPECT_FALSE(agents.empty());
+}
+#endif
 
 } // namespace functional
 } // namespace agentflow

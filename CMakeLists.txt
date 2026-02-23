@@ -426,40 +426,21 @@ endif()
 # ============================================================================
 # Examples
 # ============================================================================
-add_executable(example_basic ${AGENTFLOW_EXAMPLE_DIR}/basic_example.cpp)
-target_link_libraries(example_basic PRIVATE agentflow)
-
 # Adapter example
 add_executable(example_adapter ${AGENTFLOW_EXAMPLE_DIR}/adapter_example.cpp)
 target_link_libraries(example_adapter PRIVATE agentflow)
-
-# DSL parser example
-add_executable(example_dsl ${AGENTFLOW_EXAMPLE_DIR}/workflow/dsl_example.cpp)
-target_link_libraries(example_dsl PRIVATE agentflow)
-
-# Node execution example
-add_executable(example_node_execution ${AGENTFLOW_EXAMPLE_DIR}/workflow/node_execution_example.cpp)
-target_link_libraries(example_node_execution PRIVATE agentflow)
 
 # Metrics collector example
 add_executable(example_metrics ${AGENTFLOW_EXAMPLE_DIR}/metrics_example.cpp)
 target_link_libraries(example_metrics PRIVATE agentflow)
 
-# P1 features example
-add_executable(example_p1_features ${AGENTFLOW_EXAMPLE_DIR}/p1_features_example.cpp)
-target_link_libraries(example_p1_features PRIVATE agentflow)
+# Databus example
+add_executable(example_databus ${AGENTFLOW_EXAMPLE_DIR}/databus_example.cpp)
+target_link_libraries(example_databus PRIVATE agentflow)
 
 # Storage example
 add_executable(example_storage ${AGENTFLOW_EXAMPLE_DIR}/storage_example.cpp)
 target_link_libraries(example_storage PRIVATE agentflow)
-
-# Agent components example
-add_executable(example_agent ${AGENTFLOW_EXAMPLE_DIR}/agent/agent_example.cpp)
-target_link_libraries(example_agent PRIVATE agentflow)
-
-# Agent loader example
-add_executable(example_agent_loader ${AGENTFLOW_EXAMPLE_DIR}/agent/agent_loader_example.cpp)
-target_link_libraries(example_agent_loader PRIVATE agentflow)
 
 # ============================================================================
 # Node Adapter Library and Executable

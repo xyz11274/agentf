@@ -2,38 +2,48 @@
 #define AGENTFLOW_FRAMEWORK_AGENT_H
 
 #include <memory>
+#include <atomic>
+#include <condition_variable>
+#include <map>
 #include <mutex>
 #include <queue>
+#include <thread>
 #include <vector>
 
 #include "agent/common.h"
+#include "agent/msgque.h"
 #include "workflow/workflow.h"
+#include "utils/file_storage.h"
 
-// Forward declaration
 namespace agentflow {
-namespace utils {
-namespace storage {
-struct StorageConfig;
-struct StorageResult;
-struct VersionInfo;
-struct StorageStats;
-}  // namespace storage
-}  // namespace utils
+namespace framework {
+
+// Forward declarations for internal agent components
+class AgentSession;
+class AgentTask;
+class AgentContext;
+class AgentEvent;
+class AgentPackage;
+class AgentCoordinator;
+
+}  // namespace framework
 }  // namespace agentflow
 
 namespace agentflow {
 namespace framework {
 
+/**
+ * Agent metadata structure
+ */
 struct AgentMetadata {
-  std::string                        id;
-  std::string                        name;
-  std::string                        version;
-  std::string                        description;
-  int64_t                            created_at;
-  int64_t                            updated_at;
-  std::string                        author;
-  std::vector<std::string>           workflow_ids;
-  std::map<std::string, std::string> tags;
+  AgentId                  id;
+  std::string              name;
+  std::string              version;
+  std::string              description;
+  int64_t                  created_at;
+  int64_t                  updated_at;
+  std::string              author;
+  std::vector<WorkflowId>  workflow_ids;
 };
 
 /**
@@ -64,13 +74,32 @@ public:
   };
 
   explicit Agent(const Config& config);
-  ~Agent() = default;
+  ~Agent();
 
   // Getters
   const AgentId&     get_id() const { return config_.id; }
   const std::string& get_name() const { return config_.name; }
   AgentState         get_state() const { return state_; }
   const Config&      get_config() const { return config_; }
+
+  // Component accessors
+  std::shared_ptr<AgentSession>   get_session() const { return default_session_; }
+  std::shared_ptr<AgentSession>   get_default_session() const { return default_session_; }
+  std::shared_ptr<AgentTask>      get_current_task() const { return current_task_; }
+  std::shared_ptr<AgentMessages>  get_messages() const { return messages_; }
+  std::shared_ptr<AgentCoordinator> get_coordinator() const { return coordinator_; }
+  std::shared_ptr<AgentContext>   get_context() const { return context_; }
+  std::shared_ptr<AgentEvent>     get_event_handler() const { return event_; }
+  std::shared_ptr<AgentPackage>   get_package() const { return package_; }
+
+  // Session/message routing
+  std::shared_ptr<AgentSession> get_or_create_session(const std::string& user_id,
+                                                      const std::string& client_id);
+  std::shared_ptr<AgentSession> get_session_by_key(const std::string& session_key) const;
+  bool route_request_message(const AgentMsgQue::Message& message);
+  int  process_session_messages(const std::string& session_key);
+  int  process_all_sessions_until_idle();
+  bool pop_generated_task(std::shared_ptr<AgentTask>& task);
 
   // Workflow management
   void                                          add_workflow(std::shared_ptr<Workflow> workflow);
@@ -98,35 +127,33 @@ public:
   bool stop();
 
   // Storage operations
-  agentflow::utils::storage::StorageResult save(const agentflow::utils::storage::StorageConfig& config,
-                                         const agentflow::utils::storage::VersionInfo&   version_info);
+  utils::storage::StorageResult save(const utils::storage::StorageConfig& config,
+                                     const utils::storage::VersionInfo&   version_info);
 
-  static agentflow::utils::storage::StorageResult load(const std::string&                       agent_id,
-                                                const agentflow::utils::storage::StorageConfig& storage_config,
-                                                std::shared_ptr<Agent>&                  agent);
+  static utils::storage::StorageResult load(const AgentId&                agent_id,
+                                            const utils::storage::StorageConfig& storage_config,
+                                            std::shared_ptr<Agent>&       agent);
 
-  static agentflow::utils::storage::StorageResult delete_agent(
-      const std::string&                       agent_id,
-      const agentflow::utils::storage::StorageConfig& storage_config);
+  static utils::storage::StorageResult delete_agent(const AgentId&                agent_id,
+                                                    const utils::storage::StorageConfig& storage_config);
 
-  static agentflow::utils::storage::StorageResult list_agents(
-      const agentflow::utils::storage::StorageConfig& storage_config,
-      std::vector<std::string>&                agent_ids);
+  static utils::storage::StorageResult list_agents(const utils::storage::StorageConfig& storage_config,
+                                                   std::vector<AgentId>&         agent_ids);
 
-  static agentflow::utils::storage::StorageResult get_metadata(
-      const std::string&                       agent_id,
-      const agentflow::utils::storage::StorageConfig& storage_config,
-      AgentMetadata&                           metadata);
+  static utils::storage::StorageResult get_metadata(const AgentId&                agent_id,
+                                                    const utils::storage::StorageConfig& storage_config,
+                                                    AgentMetadata&                metadata);
 
-  static agentflow::utils::storage::StorageResult set_active_version(
-      const AgentId&                agent_id,
-      const std::string&            version,
-      const agentflow::utils::storage::StorageConfig& storage_config);
+  static utils::storage::StorageResult set_active_version(const AgentId&                agent_id,
+                                                          const std::string&            version,
+                                                          const utils::storage::StorageConfig& storage_config);
 
-  static agentflow::utils::storage::StorageResult get_active_version(
-      const AgentId&                agent_id,
-      const agentflow::utils::storage::StorageConfig& storage_config,
-      std::string&                  version);
+  static utils::storage::StorageResult get_active_version(const AgentId&                agent_id,
+                                                          const utils::storage::StorageConfig& storage_config,
+                                                          std::string&                  version);
+
+  // Factory method to create an agent from a package directory
+  static std::shared_ptr<Agent> create_from_package(const std::string& package_path);
 
 private:
   Config                                          config_;
@@ -139,6 +166,30 @@ private:
   std::queue<std::string> event_queue_;
   mutable std::mutex      mutex_;
   mutable std::mutex      event_mutex_;
+
+  // Agent components
+  std::shared_ptr<AgentSession>   default_session_;
+  std::map<std::string, std::shared_ptr<AgentSession>> sessions_;
+  std::shared_ptr<AgentTask>      current_task_;
+  std::shared_ptr<AgentMessages>  messages_;
+  std::shared_ptr<AgentCoordinator> coordinator_;
+  std::shared_ptr<AgentContext>   context_;
+  std::shared_ptr<AgentEvent>     event_;
+  std::shared_ptr<AgentPackage>   package_;
+
+  // Helper method to initialize components
+  bool initialize_components(std::shared_ptr<AgentPackage> package = nullptr);
+
+  std::queue<AgentMsgQue::Message> request_event_queue_;
+  std::condition_variable           request_event_cv_;
+  std::thread                       request_event_thread_;
+  std::atomic<bool>                 request_event_running_{false};
+
+  std::queue<std::shared_ptr<AgentTask>> generated_tasks_;
+  std::mutex                             generated_tasks_mutex_;
+
+  void request_event_loop();
+  void handle_request_event(const AgentMsgQue::Message& message);
 };
 
 }  // namespace framework
