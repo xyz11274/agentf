@@ -2,6 +2,7 @@
 #define AGENTFLOW_RUNTIME_AGENT_RUNTIME_H
 
 #include <atomic>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -98,6 +99,8 @@ public:
   bool deploy_workflow_instance(const WorkflowInstanceInfo& info, const std::string& preferred_worker_id = "");
   bool destroy_workflow_instance(const std::string& workflow_instance_id);
   master::TaskScheduleResult schedule_task(const master::TaskScheduleRequest& request);
+  bool report_agent_heartbeat(const AgentId& agent_id);
+  bool update_task_status(const std::string& task_id, const std::string& status, int progress);
 
   // Shared resource access
   DataBus& get_databus(const AgentId& agent_id);
@@ -146,11 +149,29 @@ private:
 
   // Agent Level Master functions
   void monitor_agents();
+  void agent_registration_loop();
+  void agent_monitor_loop();
+  void process_agent_state_change(const AgentId& agent_id, bool is_healthy);
   void check_agent_health(const AgentId& agent_id);
 
   // Workflow Level Master functions
   void schedule_workflow_executable_nodes(const std::string& execution_id);
   void update_workflow_state(const std::string& execution_id, const NodeId& node_id, bool success);
+
+  struct AgentRegistrationRequest {
+    AgentPtr                 agent;
+    bool                     unregister = false;
+    std::condition_variable* done_cv = nullptr;
+    std::mutex*              done_mutex = nullptr;
+    bool*                    done = nullptr;
+    bool*                    result = nullptr;
+  };
+  std::queue<AgentRegistrationRequest> agent_registration_queue_;
+  std::mutex                           agent_registration_mutex_;
+  std::condition_variable              agent_registration_cv_;
+  std::thread                          agent_registration_thread_;
+  std::thread                          agent_monitor_thread_;
+  std::map<AgentId, int64_t>           agent_heartbeats_;
 };
 
 }  // namespace runtime

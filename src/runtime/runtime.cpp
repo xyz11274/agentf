@@ -15,6 +15,11 @@ namespace {
 std::condition_variable g_worker_cv;
 std::mutex              g_worker_mutex;
 bool                    g_shutdown = false;
+int64_t now_ms() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
 }  // namespace
 
 AgentRuntime::AgentRuntime() {
@@ -23,6 +28,8 @@ AgentRuntime::AgentRuntime() {
   shared_state_ = std::make_shared<InMemoryRuntimeSharedState>();
   deployer_ = std::unique_ptr<master::Deployer>(new master::Deployer());
   scheduler_ = std::unique_ptr<master::Scheduler>(new master::Scheduler());
+  scheduler_->set_workflow_snapshot_provider(
+      [this]() { return shared_state_ ? shared_state_->list_workflow_instances() : std::vector<WorkflowInstanceInfo>{}; });
   local_worker_ = std::make_shared<WorkerEngine>(
       WorkerEngine::Config{config_.local_worker_id, true, config_.worker_default_workflow_threads,
                            config_.worker_event_threads, config_.worker_queue_size});
@@ -34,6 +41,8 @@ AgentRuntime::AgentRuntime(const Config& config) : config_(config), role_(config
   shared_state_ = std::make_shared<InMemoryRuntimeSharedState>();
   deployer_ = std::unique_ptr<master::Deployer>(new master::Deployer());
   scheduler_ = std::unique_ptr<master::Scheduler>(new master::Scheduler());
+  scheduler_->set_workflow_snapshot_provider(
+      [this]() { return shared_state_ ? shared_state_->list_workflow_instances() : std::vector<WorkflowInstanceInfo>{}; });
   local_worker_ =
       std::make_shared<WorkerEngine>(WorkerEngine::Config{config.local_worker_id, true,
                                                            config.worker_default_workflow_threads,
@@ -117,44 +126,105 @@ master::TaskScheduleResult AgentRuntime::schedule_task(const master::TaskSchedul
   if(!scheduler_ || !shared_state_) {
     return {};
   }
+  scheduler_->enqueue_task(request);
   auto result = scheduler_->schedule_task(request, shared_state_->list_workflow_instances());
   if(result.scheduled) {
     shared_state_->increment_workflow_ref(result.workflow_instance_id);
+    TaskInstanceInfo task;
+    task.task_id = request.task_id;
+    task.agent_object_id = request.agent_object_id;
+    task.agent_instance_id = request.agent_instance_id;
+    task.workflow_id = request.workflow_id;
+    task.workflow_instance_id = result.workflow_instance_id;
+    task.worker_id = result.worker_id;
+    task.status = "scheduled";
+    shared_state_->add_or_update_task_instance(task);
   }
   return result;
+}
+
+bool AgentRuntime::report_agent_heartbeat(const AgentId& agent_id) {
+  std::lock_guard<std::mutex> lock(agents_mutex_);
+  if(agents_.find(agent_id) == agents_.end()) {
+    return false;
+  }
+  agent_heartbeats_[agent_id] = now_ms();
+  return true;
+}
+
+bool AgentRuntime::update_task_status(const std::string& task_id, const std::string& status,
+                                      int progress) {
+  if(!shared_state_ || !scheduler_) {
+    return false;
+  }
+  TaskInstanceInfo info;
+  if(!shared_state_->get_task_instance(task_id, info)) {
+    return false;
+  }
+  info.status = status;
+  info.progress = progress;
+  shared_state_->add_or_update_task_instance(info);
+  return scheduler_->update_task_status(task_id, status, progress);
 }
 
 bool AgentRuntime::register_agent(AgentPtr agent) {
   if(!agent) {
     return false;
   }
+  if(!is_running_) {
+    std::lock_guard<std::mutex> lock(agents_mutex_);
+    agents_[agent->get_id()] = agent;
+    databuses_[agent->get_id()] = std::unique_ptr<DataBus>(new DataBus(1024 * 1024));
+    agent_heartbeats_[agent->get_id()] = now_ms();
+    Logger::instance().info_f("Agent registered: %s (id: %s)", agent->get_name().c_str(),
+                              agent->get_id().c_str());
+    return true;
+  }
 
-  std::lock_guard<std::mutex> lock(agents_mutex_);
-
-  // Register agent
-  agents_[agent->get_id()] = agent;
-
-  // Create databus for agent
-  databuses_[agent->get_id()] =
-      std::unique_ptr<DataBus>(new DataBus(1024 * 1024)  // 1MB databus
-      );
-
-  Logger::instance().info_f("Agent registered: %s (id: %s)", agent->get_name().c_str(),
-                            agent->get_id().c_str());
-  return true;
+  bool result = false;
+  bool done = false;
+  std::mutex done_mutex;
+  std::condition_variable done_cv;
+  {
+    std::lock_guard<std::mutex> queue_lock(agent_registration_mutex_);
+    agent_registration_queue_.push({agent, false, &done_cv, &done_mutex, &done, &result});
+  }
+  agent_registration_cv_.notify_all();
+  std::unique_lock<std::mutex> done_lock(done_mutex);
+  done_cv.wait(done_lock, [&done]() { return done; });
+  return result;
 }
 
 bool AgentRuntime::unregister_agent(const AgentId& agent_id) {
-  std::lock_guard<std::mutex> lock(agents_mutex_);
-
-  auto it = agents_.find(agent_id);
-  if(it != agents_.end()) {
-    agents_.erase(it);
-    databuses_.erase(agent_id);
-    Logger::instance().info_f("Agent unregistered: %s", agent_id.c_str());
-    return true;
+  auto agent = get_agent(agent_id);
+  if(!agent) {
+    return false;
   }
-  return false;
+  if(!is_running_) {
+    std::lock_guard<std::mutex> lock(agents_mutex_);
+    auto                        it = agents_.find(agent_id);
+    if(it != agents_.end()) {
+      agents_.erase(it);
+      databuses_.erase(agent_id);
+      agent_heartbeats_.erase(agent_id);
+      Logger::instance().info_f("Agent unregistered: %s", agent_id.c_str());
+      return true;
+    }
+    return false;
+  }
+
+  bool result = false;
+  bool done = false;
+  std::mutex done_mutex;
+  std::condition_variable done_cv;
+  {
+    std::lock_guard<std::mutex> queue_lock(agent_registration_mutex_);
+    agent_registration_queue_.push({agent, true, &done_cv, &done_mutex, &done, &result});
+  }
+  agent_registration_cv_.notify_all();
+  std::unique_lock<std::mutex> done_lock(done_mutex);
+  done_cv.wait(done_lock, [&done]() { return done; });
+  return result;
 }
 
 AgentPtr AgentRuntime::get_agent(const AgentId& agent_id) {
@@ -518,6 +588,90 @@ void AgentRuntime::monitor_agents() {
   }
 }
 
+void AgentRuntime::agent_registration_loop() {
+  while(is_running_) {
+    AgentRegistrationRequest request;
+    bool has_request = false;
+    {
+      std::unique_lock<std::mutex> lock(agent_registration_mutex_);
+      agent_registration_cv_.wait_for(lock, std::chrono::milliseconds(100),
+                                      [this]() { return !agent_registration_queue_.empty() || !is_running_; });
+      if(!is_running_) {
+        break;
+      }
+      if(!agent_registration_queue_.empty()) {
+        request = agent_registration_queue_.front();
+        agent_registration_queue_.pop();
+        has_request = true;
+      }
+    }
+    if(!has_request || !request.agent) {
+      continue;
+    }
+
+    bool ok = false;
+    {
+      std::lock_guard<std::mutex> lock(agents_mutex_);
+      const auto&                 agent_id = request.agent->get_id();
+      if(request.unregister) {
+        auto it = agents_.find(agent_id);
+        if(it != agents_.end()) {
+          agents_.erase(it);
+          databuses_.erase(agent_id);
+          agent_heartbeats_.erase(agent_id);
+          ok = true;
+        }
+      } else {
+        agents_[agent_id] = request.agent;
+        databuses_[agent_id] = std::unique_ptr<DataBus>(new DataBus(1024 * 1024));
+        agent_heartbeats_[agent_id] = now_ms();
+        ok = true;
+      }
+    }
+    if(request.done && request.result && request.done_cv && request.done_mutex) {
+      {
+        std::lock_guard<std::mutex> done_lock(*request.done_mutex);
+        *request.result = ok;
+        *request.done = true;
+      }
+      request.done_cv->notify_all();
+    }
+  }
+}
+
+void AgentRuntime::process_agent_state_change(const AgentId& agent_id, bool is_healthy) {
+  if(is_healthy || !shared_state_ || !deployer_ || !scheduler_) {
+    return;
+  }
+  auto workflows = shared_state_->list_workflow_instances_by_agent_instance(agent_id);
+  for(const auto& workflow : workflows) {
+    deployer_->remove_workflow_instance(workflow.workflow_instance_id);
+    shared_state_->remove_workflow_instance(workflow.workflow_instance_id);
+  }
+  deployer_->handle_agent_state_change(agent_id, false);
+  scheduler_->handle_agent_state_change(agent_id, false);
+}
+
+void AgentRuntime::agent_monitor_loop() {
+  constexpr int64_t kHeartbeatTimeoutMs = 10000;
+  while(is_running_) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    std::vector<AgentId> unhealthy_agents;
+    {
+      std::lock_guard<std::mutex> lock(agents_mutex_);
+      const int64_t               now = now_ms();
+      for(const auto& kv : agent_heartbeats_) {
+        if(now - kv.second > kHeartbeatTimeoutMs) {
+          unhealthy_agents.push_back(kv.first);
+        }
+      }
+    }
+    for(const auto& agent_id : unhealthy_agents) {
+      process_agent_state_change(agent_id, false);
+    }
+  }
+}
+
 void AgentRuntime::check_agent_health(const AgentId& agent_id) {
   // Check agent health (simplified implementation)
   auto agent = get_agent(agent_id);
@@ -582,6 +736,8 @@ bool AgentRuntime::start() {
   for(int i = 0; i < num_worker_threads_; ++i) {
     worker_threads_.emplace_back(&AgentRuntime::worker_thread_main, this);
   }
+  agent_registration_thread_ = std::thread(&AgentRuntime::agent_registration_loop, this);
+  agent_monitor_thread_ = std::thread(&AgentRuntime::agent_monitor_loop, this);
 
   if(local_worker_) {
     local_worker_->set_status(WorkerEngine::WorkerStatus::RUNNING);
@@ -639,6 +795,7 @@ bool AgentRuntime::stop() {
 
   // Notify all worker threads
   g_worker_cv.notify_all();
+  agent_registration_cv_.notify_all();
 
   // Wait for all worker threads to finish
   for(auto& thread : worker_threads_) {
@@ -647,6 +804,12 @@ bool AgentRuntime::stop() {
     }
   }
   worker_threads_.clear();
+  if(agent_registration_thread_.joinable()) {
+    agent_registration_thread_.join();
+  }
+  if(agent_monitor_thread_.joinable()) {
+    agent_monitor_thread_.join();
+  }
 
   draining_ = false;
   if(local_worker_) {
