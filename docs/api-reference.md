@@ -115,7 +115,7 @@ Node 规范与模板：
 ### 2.4 Worker 执行
 
 头文件：`include/internal/runtime/worker.h`  
-实现：`src/runtime/worker.cpp`
+实现：`src/runtime/worker/worker.cpp`
 
 职责：
 - 执行节点。

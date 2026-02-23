@@ -301,9 +301,10 @@ set(AGENTFLOW_NODE_ADAPTER_SOURCES
 set(AGENTFLOW_RUNTIME_SOURCES
     # Actor subsystem
     ${AGENTFLOW_SOURCE_DIR}/runtime/runtime_actor.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/worker/worker_actor.cpp
     # Scheduler
     ${AGENTFLOW_SOURCE_DIR}/runtime/runtime.cpp
-    ${AGENTFLOW_SOURCE_DIR}/runtime/worker.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/worker/worker.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/master/deployer.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/master/scheduler.cpp
     ${AGENTFLOW_TEST_DIR}/unit/data/lib/performance_metrics.cpp

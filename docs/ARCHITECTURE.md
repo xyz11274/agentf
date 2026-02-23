@@ -54,7 +54,7 @@ AgentFlow 由两层开发框架 + 一层运行时组成：
 - `include/internal/runtime/master/scheduler.h`
 - `include/internal/runtime/worker.h`
 - `src/runtime/master/*`
-- `src/runtime/worker.cpp`
+- `src/runtime/worker/worker.cpp`
 
 ### 3.1 角色模型
 

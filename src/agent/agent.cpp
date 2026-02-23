@@ -3,6 +3,7 @@
 #include <sys/time.h>
 
 #include <algorithm>
+#include <chrono>
 #include <sstream>
 #include <filesystem>
 #include <iostream>
@@ -213,6 +214,11 @@ std::shared_ptr<Agent> Agent::create_from_package(const std::string& package_pat
 }
 
 Agent::~Agent() {
+  request_event_running_ = false;
+  request_event_cv_.notify_all();
+  if(request_event_thread_.joinable()) {
+    request_event_thread_.join();
+  }
   // Clean up components
   default_session_.reset();
   sessions_.clear();
@@ -299,32 +305,16 @@ std::shared_ptr<AgentSession> Agent::get_session_by_key(const std::string& sessi
 }
 
 bool Agent::route_request_message(const AgentMsgQue::Message& message) {
-  if(!default_session_) {
-    return false;
+  if(!request_event_running_) {
+    handle_request_event(message);
+    return true;
   }
-
-  const bool high_priority = message.priority == AgentMsgQue::MessagePriority::HIGH;
-  if(!default_session_->enqueue_received_message(message, high_priority)) {
-    return false;
+  {
+    std::lock_guard<std::mutex> lock(event_mutex_);
+    request_event_queue_.push(message);
   }
-
-  AgentMsgQue::Message received;
-  if(!default_session_->dequeue_received_message(received)) {
-    return false;
-  }
-
-  const auto user_it = received.metadata.find("user_id");
-  const auto client_it = received.metadata.find("client_id");
-  if(user_it == received.metadata.end() || client_it == received.metadata.end()) {
-    return false;
-  }
-
-  auto target_session = get_or_create_session(user_it->second, client_it->second);
-  if(!target_session) {
-    return false;
-  }
-
-  return target_session->enqueue_received_message(received, high_priority);
+  request_event_cv_.notify_all();
+  return true;
 }
 
 int Agent::process_session_messages(const std::string& session_key) {
@@ -333,7 +323,72 @@ int Agent::process_session_messages(const std::string& session_key) {
     return 0;
   }
   auto tasks = coordinator_->process_session_messages(*session, workflows_);
+  if(!tasks.empty()) {
+    std::lock_guard<std::mutex> lock(generated_tasks_mutex_);
+    for(const auto& task : tasks) {
+      generated_tasks_.push(task);
+    }
+  }
   return static_cast<int>(tasks.size());
+}
+
+int Agent::process_all_sessions_until_idle() {
+  if(!coordinator_) {
+    return 0;
+  }
+
+  int total_tasks = 0;
+  int rounds = 0;
+  while(rounds++ < 64) {
+    int round_tasks = 0;
+    std::vector<std::shared_ptr<AgentSession>> snapshot;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      for(const auto& kv : sessions_) {
+        snapshot.push_back(kv.second);
+      }
+    }
+
+    for(const auto& session : snapshot) {
+      if(!session) {
+        continue;
+      }
+      auto tasks = coordinator_->process_session_messages(*session, workflows_);
+      round_tasks += static_cast<int>(tasks.size());
+      if(!tasks.empty()) {
+        std::lock_guard<std::mutex> lock(generated_tasks_mutex_);
+        for(const auto& task : tasks) {
+          generated_tasks_.push(task);
+        }
+      }
+      AgentMsgQue::Message out;
+      while(session->dequeue_send_message(out)) {
+      }
+    }
+    total_tasks += round_tasks;
+
+    bool queues_empty = true;
+    for(const auto& session : snapshot) {
+      if(session && (session->get_receive_queue_size() > 0 || session->get_send_queue_size() > 0)) {
+        queues_empty = false;
+        break;
+      }
+    }
+    if(queues_empty && round_tasks == 0) {
+      break;
+    }
+  }
+  return total_tasks;
+}
+
+bool Agent::pop_generated_task(std::shared_ptr<AgentTask>& task) {
+  std::lock_guard<std::mutex> lock(generated_tasks_mutex_);
+  if(generated_tasks_.empty()) {
+    return false;
+  }
+  task = generated_tasks_.front();
+  generated_tasks_.pop();
+  return static_cast<bool>(task);
 }
 
 void Agent::add_workflow(std::shared_ptr<Workflow> workflow) {
@@ -424,6 +479,9 @@ bool Agent::start() {
   if(state_ != AgentState::INITIALIZED) {
     return false;
   }
+  if(!request_event_running_.exchange(true)) {
+    request_event_thread_ = std::thread(&Agent::request_event_loop, this);
+  }
   state_ = AgentState::RUNNING;
   return true;
 }
@@ -448,9 +506,66 @@ bool Agent::stop() {
   if(state_ != AgentState::RUNNING && state_ != AgentState::PAUSED) {
     return false;
   }
+  request_event_running_ = false;
+  request_event_cv_.notify_all();
+  if(request_event_thread_.joinable()) {
+    request_event_thread_.join();
+  }
   cleanup_resources();
   state_ = AgentState::STOPPED;
   return true;
+}
+
+void Agent::request_event_loop() {
+  while(request_event_running_) {
+    AgentMsgQue::Message message;
+    bool                 has_message = false;
+    {
+      std::unique_lock<std::mutex> lock(event_mutex_);
+      request_event_cv_.wait_for(lock, std::chrono::milliseconds(100),
+                                 [this]() { return !request_event_queue_.empty() || !request_event_running_; });
+      if(!request_event_running_) {
+        break;
+      }
+      if(!request_event_queue_.empty()) {
+        message = request_event_queue_.front();
+        request_event_queue_.pop();
+        has_message = true;
+      }
+    }
+    if(!has_message) {
+      continue;
+    }
+    handle_request_event(message);
+    process_all_sessions_until_idle();
+  }
+}
+
+void Agent::handle_request_event(const AgentMsgQue::Message& message) {
+  if(!default_session_) {
+    return;
+  }
+  const bool high_priority = message.priority == AgentMsgQue::MessagePriority::HIGH;
+  if(!default_session_->enqueue_received_message(message, high_priority)) {
+    return;
+  }
+
+  AgentMsgQue::Message received;
+  if(!default_session_->dequeue_received_message(received)) {
+    return;
+  }
+
+  const auto user_it = received.metadata.find("user_id");
+  const auto client_it = received.metadata.find("client_id");
+  if(user_it == received.metadata.end() || client_it == received.metadata.end()) {
+    return;
+  }
+
+  auto target_session = get_or_create_session(user_it->second, client_it->second);
+  if(!target_session) {
+    return;
+  }
+  target_session->enqueue_received_message(received, high_priority);
 }
 
 storage::StorageResult Agent::save(const storage::StorageConfig& config,

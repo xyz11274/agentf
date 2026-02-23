@@ -4,6 +4,8 @@
 // Actor system manager implementation
 
 #include "vendor/actor/actor_system.h"
+#include "runtime/runtime_actor.h"
+#include "utils/logger.h"
 
 #ifdef AGENTFLOW_WITH_PROTOACTOR
 #include "protoactor/actor_system.h"
@@ -87,4 +89,110 @@ ActorSystemManager::~ActorSystemManager() {
 
 #endif
 
+}  // namespace agentflow
+
+namespace agentflow {
+namespace runtime {
+
+RuntimeActor::RuntimeActor(std::shared_ptr<AgentRuntime> runtime) : runtime_(std::move(runtime)) {
+}
+
+void RuntimeActor::on_start() {
+  Logger::instance().info("RuntimeActor started");
+}
+
+void RuntimeActor::on_stop() {
+  Logger::instance().info("RuntimeActor stopped");
+}
+
+void RuntimeActor::on_message(std::shared_ptr<actor::adapter::IContext> ctx) {
+  if(!ctx) {
+    return;
+  }
+  handle_message(ctx->current_message());
+}
+
+bool RuntimeActor::handle_message(const actor::adapter::ActorMessage& msg) {
+  if(!runtime_) {
+    return false;
+  }
+
+  if(msg.message_type == "agent.register") {
+    auto report = msg.get_payload<AgentRuntimeReport>();
+    if(!report || !report->agent) {
+      return false;
+    }
+    bool ok = runtime_->register_agent(report->agent);
+    if(ok) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      agent_states_[report->agent_instance_id] = "registered";
+    }
+    return ok;
+  }
+  if(msg.message_type == "agent.heartbeat") {
+    auto report = msg.get_payload<AgentRuntimeReport>();
+    if(!report) {
+      return false;
+    }
+    return runtime_->report_agent_heartbeat(report->agent_instance_id);
+  }
+  if(msg.message_type == "agent.status") {
+    auto report = msg.get_payload<AgentRuntimeReport>();
+    if(!report) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    agent_states_[report->agent_instance_id] = std::to_string(static_cast<int>(report->state));
+    return true;
+  }
+
+  if(msg.message_type == "task.status" || msg.message_type == "task.heartbeat"
+     || msg.message_type == "task.register") {
+    auto report = msg.get_payload<TaskRuntimeReport>();
+    if(!report) {
+      return false;
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      task_states_[report->task_id] = report->status;
+    }
+    return runtime_->update_task_status(report->task_id, report->status, report->progress);
+  }
+
+  if(msg.message_type == "worker.register") {
+    auto report = msg.get_payload<WorkerRuntimeReport>();
+    if(!report || !report->worker) {
+      return false;
+    }
+    bool ok = runtime_->register_worker_engine(report->worker);
+    if(ok) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      worker_states_[report->worker_id] = "registered";
+    }
+    return ok;
+  }
+  if(msg.message_type == "worker.heartbeat") {
+    auto report = msg.get_payload<WorkerRuntimeReport>();
+    if(!report) {
+      return false;
+    }
+    return runtime_->heartbeat_worker(report->worker_id);
+  }
+  if(msg.message_type == "worker.status") {
+    auto report = msg.get_payload<WorkerRuntimeReport>();
+    if(!report) {
+      return false;
+    }
+    bool ok = runtime_->update_worker_engine_status(report->worker_id, report->status);
+    if(ok) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      worker_states_[report->worker_id] = std::to_string(static_cast<int>(report->status));
+    }
+    return ok;
+  }
+
+  return false;
+}
+
+}  // namespace runtime
 }  // namespace agentflow

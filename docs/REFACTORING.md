@@ -2,6 +2,28 @@
 
 本文档说明了 AgentFlow 项目目录结构的优化工作。
 
+## Agent 自主能力增强（2026-02-23）
+
+- `src/agent/agent_actor.cpp` 重构为自动化实例管理能力：
+  - 从 `AgentService.config`（JSON）读取 `package_root` 与 `manifests`；
+  - 自动加载 agent 包并创建 Agent 实例；
+  - 启动包监控线程，目录变化时增量加载新版本实例，支持多版本并行运行；
+  - 维护 agent/task 实例清单，并提供 `agent.start/pause/resume/stop`、`task.start/pause/stop` 控制消息入口。
+- 按要求将请求事件处理能力下沉到 `Agent`：
+  - `include/external/agent/agent.h`、`src/agent/agent.cpp` 新增请求事件队列与监控线程；
+  - 新请求入队后触发 Agent 内 `AgentCoordinator` 对默认会话及其他会话收发队列进行扫描处理，直到队列清空；
+  - 处理生成的 task 通过 Agent 接口回传给 AgentActor 统一管理与上报。
+- 新增独立 `RuntimeActor`：
+  - 新增 `include/internal/runtime/runtime_actor.h`；
+  - `src/runtime/runtime_actor.cpp` 新增 RuntimeActor 消息处理，接收 agent/task/worker 的注册、心跳、状态上报并对接 `AgentRuntime`。
+- Worker 目录与 actor 化能力增强：
+  - `src/runtime/worker.cpp` 迁移为 `src/runtime/worker/worker.cpp`；
+  - 新增 `include/internal/runtime/worker/worker_actor.h` 与 `src/runtime/worker/worker_actor.cpp`；
+  - WorkerActor 负责 worker 注册、心跳、状态同步消息上报到 RuntimeActor。
+- 构建与测试验证：
+  - `./build.sh build` 通过；
+  - `./build.sh test` 通过（10/10）。
+
 ## Runtime Master 自主调度重构（2026-02-23）
 
 - `src/runtime/runtime.cpp` 增强全局 Agent 管理能力：

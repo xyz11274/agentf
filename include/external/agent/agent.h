@@ -2,9 +2,12 @@
 #define AGENTFLOW_FRAMEWORK_AGENT_H
 
 #include <memory>
+#include <atomic>
+#include <condition_variable>
 #include <map>
 #include <mutex>
 #include <queue>
+#include <thread>
 #include <vector>
 
 #include "agent/common.h"
@@ -95,6 +98,8 @@ public:
   std::shared_ptr<AgentSession> get_session_by_key(const std::string& session_key) const;
   bool route_request_message(const AgentMsgQue::Message& message);
   int  process_session_messages(const std::string& session_key);
+  int  process_all_sessions_until_idle();
+  bool pop_generated_task(std::shared_ptr<AgentTask>& task);
 
   // Workflow management
   void                                          add_workflow(std::shared_ptr<Workflow> workflow);
@@ -174,6 +179,17 @@ private:
 
   // Helper method to initialize components
   bool initialize_components(std::shared_ptr<AgentPackage> package = nullptr);
+
+  std::queue<AgentMsgQue::Message> request_event_queue_;
+  std::condition_variable           request_event_cv_;
+  std::thread                       request_event_thread_;
+  std::atomic<bool>                 request_event_running_{false};
+
+  std::queue<std::shared_ptr<AgentTask>> generated_tasks_;
+  std::mutex                             generated_tasks_mutex_;
+
+  void request_event_loop();
+  void handle_request_event(const AgentMsgQue::Message& message);
 };
 
 }  // namespace framework
