@@ -3,6 +3,7 @@
 #include <sys/time.h>
 
 #include <algorithm>
+#include <future>
 #include <queue>
 #include <sstream>
 #include <unordered_set>
@@ -531,6 +532,258 @@ namespace framework {
 
 Workflow::Workflow(const Config& config) : config_(config), state_(WorkflowState::CREATED) {
   Logger::instance().info("Workflow created: " + config.id);
+}
+
+Workflow::~Workflow() {
+  stop_runtime();
+}
+
+bool Workflow::start_runtime() {
+  return start_runtime(RuntimeConfig{});
+}
+
+bool Workflow::start_runtime(const RuntimeConfig& config) {
+  bool expected = false;
+  if(!runtime_running_.compare_exchange_strong(expected, true)) {
+    return false;
+  }
+
+  runtime_config_ = config;
+  message_worker_pool_ = std::make_unique<basic::ThreadPool>(
+      static_cast<size_t>(std::max(1, runtime_config_.message_threads)));
+  event_worker_pool_ = std::make_unique<basic::ThreadPool>(
+      static_cast<size_t>(std::max(1, runtime_config_.event_threads)));
+  node_executor_pool_ = std::make_unique<basic::ThreadPool>(
+      static_cast<size_t>(std::max(1, runtime_config_.node_executor_threads)));
+
+  message_thread_ = std::thread(&Workflow::message_dispatch_loop, this);
+  event_thread_   = std::thread(&Workflow::event_dispatch_loop, this);
+  return true;
+}
+
+void Workflow::stop_runtime() {
+  bool expected = true;
+  if(!runtime_running_.compare_exchange_strong(expected, false)) {
+    return;
+  }
+
+  message_cv_.notify_all();
+  event_cv_.notify_all();
+
+  if(message_thread_.joinable()) {
+    message_thread_.join();
+  }
+  if(event_thread_.joinable()) {
+    event_thread_.join();
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(message_queue_mutex_);
+    high_priority_messages_.clear();
+    normal_priority_messages_.clear();
+  }
+  {
+    std::lock_guard<std::mutex> lock(event_queue_mutex_);
+    while(!event_queue_.empty()) {
+      event_queue_.pop();
+    }
+  }
+
+  message_worker_pool_.reset();
+  event_worker_pool_.reset();
+  node_executor_pool_.reset();
+}
+
+bool Workflow::enqueue_message(const Message& message) {
+  std::lock_guard<std::mutex> lock(message_queue_mutex_);
+  const size_t queued_size = high_priority_messages_.size() + normal_priority_messages_.size();
+  if(queued_size >= runtime_config_.max_queue_size) {
+    return false;
+  }
+
+  if(message.priority == MessagePriority::HIGH) {
+    high_priority_messages_.push_back(message);
+  } else {
+    normal_priority_messages_.push_back(message);
+  }
+  message_cv_.notify_all();
+  return true;
+}
+
+bool Workflow::enqueue_event(const WorkflowEvent& event) {
+  std::lock_guard<std::mutex> lock(event_queue_mutex_);
+  if(event_queue_.size() >= runtime_config_.max_queue_size) {
+    return false;
+  }
+  event_queue_.push(event);
+  event_cv_.notify_all();
+  return true;
+}
+
+void Workflow::register_event_handler(const std::string& event_type, WorkflowEventHandler handler) {
+  std::lock_guard<std::mutex> lock(event_handler_mutex_);
+  event_handlers_[event_type].push_back(std::move(handler));
+}
+
+void Workflow::message_dispatch_loop() {
+  while(runtime_running_) {
+    Message message;
+    {
+      std::unique_lock<std::mutex> lock(message_queue_mutex_);
+      message_cv_.wait(lock, [this]() {
+        return !high_priority_messages_.empty() || !normal_priority_messages_.empty()
+               || !runtime_running_;
+      });
+      if(!runtime_running_) {
+        break;
+      }
+
+      if(!high_priority_messages_.empty()) {
+        message = high_priority_messages_.front();
+        high_priority_messages_.pop_front();
+      } else if(!normal_priority_messages_.empty()) {
+        message = normal_priority_messages_.front();
+        normal_priority_messages_.pop_front();
+      } else {
+        continue;
+      }
+    }
+
+    if(message_worker_pool_) {
+      message_worker_pool_->submit([this, message]() { execute_message_through_workflow(message); });
+    } else {
+      execute_message_through_workflow(message);
+    }
+  }
+}
+
+void Workflow::event_dispatch_loop() {
+  while(runtime_running_) {
+    WorkflowEvent event;
+    {
+      std::unique_lock<std::mutex> lock(event_queue_mutex_);
+      event_cv_.wait(lock, [this]() { return !event_queue_.empty() || !runtime_running_; });
+      if(!runtime_running_) {
+        break;
+      }
+      event = event_queue_.front();
+      event_queue_.pop();
+    }
+
+    std::vector<WorkflowEventHandler> handlers;
+    {
+      std::lock_guard<std::mutex> lock(event_handler_mutex_);
+      auto                        it = event_handlers_.find(event.type);
+      if(it != event_handlers_.end()) {
+        handlers = it->second;
+      }
+    }
+
+    for(const auto& handler : handlers) {
+      if(event_worker_pool_) {
+        event_worker_pool_->submit([handler, event]() { handler(event); });
+      } else {
+        handler(event);
+      }
+    }
+  }
+}
+
+std::vector<std::string> Workflow::get_start_nodes() const {
+  std::unordered_set<std::string> targets;
+  for(const auto& edge : edges_) {
+    targets.insert(edge->get_target());
+  }
+
+  std::vector<std::string> starts;
+  for(const auto& node : nodes_) {
+    if(targets.count(node->get_id()) == 0) {
+      starts.push_back(node->get_id());
+    }
+  }
+  return starts;
+}
+
+bool Workflow::execute_message_through_workflow(const Message& message) {
+  (void)message;
+  state_ = WorkflowState::RUNNING;
+
+  std::map<std::string, int> in_degree;
+  std::map<std::string, std::vector<std::string>> adjacency;
+
+  for(const auto& node : nodes_) {
+    in_degree[node->get_id()] = 0;
+  }
+  for(const auto& edge : edges_) {
+    if(edge->get_control_type() == Edge::ControlType::LOOP
+       || edge->get_control_type() == Edge::ControlType::GOTO) {
+      continue;
+    }
+    adjacency[edge->get_source()].push_back(edge->get_target());
+    in_degree[edge->get_target()]++;
+  }
+
+  std::vector<std::string> current_level;
+  for(const auto& node : nodes_) {
+    if(in_degree[node->get_id()] == 0) {
+      current_level.push_back(node->get_id());
+    }
+  }
+
+  bool success = true;
+  while(!current_level.empty()) {
+    std::vector<std::future<bool>> futures;
+    for(const auto& node_id : current_level) {
+      auto node = get_node(node_id);
+      if(!node) {
+        continue;
+      }
+
+      futures.push_back(node_executor_pool_->submit([node, message]() mutable {
+        if(node->get_state() == NodeState::WAITING) {
+          node->initialize();
+        } else if(node->get_state() != NodeState::READY && node->get_state() != NodeState::RETRYING) {
+          node->set_state(NodeState::READY);
+        }
+        if(!message.payload.empty()) {
+          node->set_inputs(message.payload);
+        }
+        const bool ok = node->execute();
+        node->cleanup();
+        return ok;
+      }));
+    }
+
+    for(auto& future : futures) {
+      if(!future.get()) {
+        success = false;
+      }
+    }
+
+    std::vector<std::string> next_level;
+    for(const auto& node_id : current_level) {
+      auto it = adjacency.find(node_id);
+      if(it == adjacency.end()) {
+        continue;
+      }
+      for(const auto& target : it->second) {
+        in_degree[target]--;
+        if(in_degree[target] == 0) {
+          next_level.push_back(target);
+        }
+      }
+    }
+    current_level.swap(next_level);
+  }
+
+  state_ = success ? WorkflowState::COMPLETED : WorkflowState::FAILED;
+
+  WorkflowEvent event;
+  event.type          = success ? "workflow_message_success" : "workflow_message_failed";
+  event.data["workflow_id"] = get_id();
+  event.data["message_id"]  = message.message_id;
+  enqueue_event(event);
+  return success;
 }
 
 

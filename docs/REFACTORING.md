@@ -2,6 +2,43 @@
 
 本文档说明了 AgentFlow 项目目录结构的优化工作。
 
+## Visualizer GOTO 环路可视化修复（2026-02-23）
+
+- 优化 `publish/agent/visualizer.html` 的边绘制逻辑，新增对回跳边（`goto` 或目标层级在左侧）的专用贝塞尔路径路由：
+  - 回跳边从源节点左侧出发，目标节点右侧入边，并抬升弧线高度，避免与前向边重叠；
+  - 解决 `publish/workflow/pattern/cycled_workflow.json` 中 `evaluate -> decision` 的 `goto` 控制边不可辨识问题。
+- 标签与箭头计算改为基于贝塞尔曲线采样点：
+  - 箭头方向使用曲线末端切线，保证回跳边箭头方向正确；
+  - 控制类型标签（如 `GOTO`）在曲线上居中显示，回跳边额外上移，提升可读性。
+- 边命中检测改为复用统一曲线路径计算，保证回跳边可点击选中并查看属性。
+- `fitView` 增加视图留白，避免环路弧线被视口裁切。
+
+## Worker/Workflow/Node/Edge 自主执行重构（2026-02-23）
+
+- `runtime/worker` 增强为自驱动执行模型：
+  - 新增高优先级/普通任务队列、workflow 实例登记队列、事件队列；
+  - 新增事件监控线程、事件处理线程池和 workflow 处理线程池；
+  - 新 task 入队会触发事件并优先调度高优任务；
+  - 新 workflow 实例登记时会按配置动态创建对应处理线程池。
+- `workflow/workflow` 增强运行时能力：
+  - 新增 workflow 级高优先级/普通消息队列与事件队列；
+  - 新增消息调度线程、事件调度线程、消息处理线程池和 node 执行线程池；
+  - 消息执行采用主控调度逻辑，按 edge 依赖进行分层串并执行，并推送完成/失败事件。
+- `workflow/node` 增强运行时能力：
+  - 新增 node 级消息队列、事件队列、executor 线程池和事件处理线程池；
+  - 支持消息驱动执行与事件处理器注册。
+- `workflow/edge` 增强运行时能力：
+  - 新增 edge 级消息队列、事件队列、processor 线程池和事件处理线程池；
+  - 支持消息驱动的 edge 处理与事件处理器注册。
+- 线程/并发配置入口统一放在 `runtime::AgentRuntime::Config`，新增：
+  - `worker_default_workflow_threads`
+  - `worker_event_threads`
+  - `worker_queue_size`
+- 验证结果：
+  - `./build.sh build` 通过；
+  - `./build.sh test` 仍存在既有 HotReload 并行抖动；
+  - `ctest --test-dir build --output-on-failure -j 1` 串行回归 10/10 通过。
+
 ## Vendor 依赖配置与文档刷新（2026-02-23）
 
 - `vendor/vendor.conf` 补充两项依赖配置：

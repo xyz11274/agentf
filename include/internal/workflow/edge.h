@@ -1,17 +1,27 @@
 #ifndef AGENTFLOW_FRAMEWORK_EDGE_H
 #define AGENTFLOW_FRAMEWORK_EDGE_H
 
+#include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <functional>
+#include <mutex>
+#include <queue>
 #include <string>
+#include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "agent/common.h"
+#include "utils/thread_pool.h"
 
 namespace agentflow {
 namespace framework {
 
 /**
  * Edge defines the dependency relationship between nodes
- * Supports data passing and control flow events
+ * Supports data passing and control flow events.
+ * Workflow process control is edge-centric, including branch/loop/fork/join/async/goto.
  */
 class Edge {
 public:
@@ -65,8 +75,33 @@ public:
     } control;
   };
 
+  enum class MessagePriority {
+    NORMAL = 0,
+    HIGH   = 1,
+  };
+
+  struct Message {
+    std::string     message_id;
+    DataMap         source_data;
+    MessagePriority priority = MessagePriority::NORMAL;
+  };
+
+  struct EdgeEvent {
+    std::string                        type;
+    std::map<std::string, std::string> data;
+  };
+
+  struct RuntimeConfig {
+    int    message_threads = 1;
+    int    event_threads = 1;
+    int    processor_threads = 2;
+    size_t max_queue_size = 1024;
+  };
+
+  using EdgeEventHandler = std::function<void(const EdgeEvent&)>;
+
   explicit Edge(const Config& config);
-  ~Edge() = default;
+  ~Edge();
 
   // Getters
   const std::string& get_id() const { return config_.id; }
@@ -93,8 +128,36 @@ public:
   // Event management
   bool trigger_event(const std::string& event_type);
 
+  // Edge runtime queue + event loop
+  bool start_runtime();
+  bool start_runtime(const RuntimeConfig& config);
+  void stop_runtime();
+  bool is_runtime_running() const { return runtime_running_; }
+
+  bool enqueue_message(const Message& message);
+  bool enqueue_event(const EdgeEvent& event);
+  void register_event_handler(const std::string& event_type, EdgeEventHandler handler);
+
 private:
+  void message_dispatch_loop();
+  void event_dispatch_loop();
+  void process_message(const Message& message);
+
   Config config_;
+  RuntimeConfig runtime_config_;
+  std::atomic<bool> runtime_running_{false};
+  std::deque<Message> high_priority_messages_;
+  std::deque<Message> normal_priority_messages_;
+  std::queue<EdgeEvent> event_queue_;
+  std::mutex             queue_mutex_;
+  std::condition_variable message_cv_;
+  std::condition_variable event_cv_;
+  std::thread             message_thread_;
+  std::thread             event_thread_;
+  std::unique_ptr<basic::ThreadPool> processor_pool_;
+  std::unique_ptr<basic::ThreadPool> event_pool_;
+  std::unordered_map<std::string, std::vector<EdgeEventHandler>> event_handlers_;
+  std::mutex event_handler_mutex_;
 };
 
 }  // namespace framework

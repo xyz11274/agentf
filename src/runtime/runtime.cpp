@@ -23,7 +23,9 @@ AgentRuntime::AgentRuntime() {
   shared_state_ = std::make_shared<InMemoryRuntimeSharedState>();
   deployer_ = std::unique_ptr<master::Deployer>(new master::Deployer());
   scheduler_ = std::unique_ptr<master::Scheduler>(new master::Scheduler());
-  local_worker_ = std::make_shared<WorkerEngine>(WorkerEngine::Config{config_.local_worker_id, true});
+  local_worker_ = std::make_shared<WorkerEngine>(
+      WorkerEngine::Config{config_.local_worker_id, true, config_.worker_default_workflow_threads,
+                           config_.worker_event_threads, config_.worker_queue_size});
   local_worker_->set_status(WorkerEngine::WorkerStatus::RUNNING);
 }
 
@@ -32,7 +34,11 @@ AgentRuntime::AgentRuntime(const Config& config) : config_(config), role_(config
   shared_state_ = std::make_shared<InMemoryRuntimeSharedState>();
   deployer_ = std::unique_ptr<master::Deployer>(new master::Deployer());
   scheduler_ = std::unique_ptr<master::Scheduler>(new master::Scheduler());
-  local_worker_ = std::make_shared<WorkerEngine>(WorkerEngine::Config{config.local_worker_id, true});
+  local_worker_ =
+      std::make_shared<WorkerEngine>(WorkerEngine::Config{config.local_worker_id, true,
+                                                           config.worker_default_workflow_threads,
+                                                           config.worker_event_threads,
+                                                           config.worker_queue_size});
   local_worker_->set_status(WorkerEngine::WorkerStatus::RUNNING);
 }
 
@@ -579,6 +585,7 @@ bool AgentRuntime::start() {
 
   if(local_worker_) {
     local_worker_->set_status(WorkerEngine::WorkerStatus::RUNNING);
+    local_worker_->start();
   }
   if(deployer_ && local_worker_ && (role_ == RuntimeRole::MASTER || role_ == RuntimeRole::WORKER)) {
     deployer_->register_worker(local_worker_);
@@ -643,6 +650,7 @@ bool AgentRuntime::stop() {
 
   draining_ = false;
   if(local_worker_) {
+    local_worker_->stop();
     local_worker_->set_status(WorkerEngine::WorkerStatus::STOPPED);
   }
   Logger::instance().info("AgentRuntime stopped");

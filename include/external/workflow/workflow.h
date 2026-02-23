@@ -1,11 +1,19 @@
 #ifndef AGENTFLOW_FRAMEWORK_WORKFLOW_H
 #define AGENTFLOW_FRAMEWORK_WORKFLOW_H
 
+#include <atomic>
+#include <condition_variable>
+#include <deque>
+#include <functional>
 #include <map>
+#include <mutex>
+#include <queue>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 #include "agent/common.h"
+#include "utils/thread_pool.h"
 #include "workflow/edge.h"
 #include "workflow/node.h"
 
@@ -229,8 +237,33 @@ public:
     std::map<std::string, std::string> metadata;
   };
 
+  enum class MessagePriority {
+    NORMAL = 0,
+    HIGH   = 1,
+  };
+
+  struct Message {
+    std::string     message_id;
+    DataMap         payload;
+    MessagePriority priority = MessagePriority::NORMAL;
+  };
+
+  struct WorkflowEvent {
+    std::string                        type;
+    std::map<std::string, std::string> data;
+  };
+
+  struct RuntimeConfig {
+    int    message_threads = 1;
+    int    event_threads = 1;
+    int    node_executor_threads = 4;
+    size_t max_queue_size = 1024;
+  };
+
+  using WorkflowEventHandler = std::function<void(const WorkflowEvent&)>;
+
   explicit Workflow(const Config& config);
-  ~Workflow() = default;
+  ~Workflow();
 
   // Getters
   const WorkflowId&  get_id() const { return config_.id; }
@@ -297,7 +330,22 @@ public:
   // Reset workflow execution state
   void reset_execution_state();
 
+  // Runtime execution model
+  bool start_runtime();
+  bool start_runtime(const RuntimeConfig& config);
+  void stop_runtime();
+  bool is_runtime_running() const { return runtime_running_; }
+
+  bool enqueue_message(const Message& message);
+  bool enqueue_event(const WorkflowEvent& event);
+  void register_event_handler(const std::string& event_type, WorkflowEventHandler handler);
+
 private:
+  void                     message_dispatch_loop();
+  void                     event_dispatch_loop();
+  std::vector<std::string> get_start_nodes() const;
+  bool                     execute_message_through_workflow(const Message& message);
+
   Config                                  config_;
   WorkflowState                           state_ = WorkflowState::CREATED;
   std::map<NodeId, std::shared_ptr<Node>> node_map_;
@@ -324,6 +372,23 @@ private:
   // Cached topological order (computed once after nodes/edges are finalized)
   std::vector<NodeId> topological_order_;
   bool                topological_order_valid_ = false;
+
+  RuntimeConfig runtime_config_;
+  std::atomic<bool> runtime_running_{false};
+  std::deque<Message> high_priority_messages_;
+  std::deque<Message> normal_priority_messages_;
+  std::queue<WorkflowEvent> event_queue_;
+  std::mutex                message_queue_mutex_;
+  std::mutex                event_queue_mutex_;
+  std::condition_variable   message_cv_;
+  std::condition_variable   event_cv_;
+  std::thread               message_thread_;
+  std::thread               event_thread_;
+  std::unique_ptr<basic::ThreadPool> message_worker_pool_;
+  std::unique_ptr<basic::ThreadPool> event_worker_pool_;
+  std::unique_ptr<basic::ThreadPool> node_executor_pool_;
+  std::unordered_map<std::string, std::vector<WorkflowEventHandler>> event_handlers_;
+  std::mutex                                                     event_handler_mutex_;
 
   // Condition evaluation
   bool evaluate_condition(const ConditionExpression& expr, const ControlContext& context,

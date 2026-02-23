@@ -606,17 +606,12 @@
         function drawEdge(sourceNode, targetNode, edge) {
             const isSelected = selectedElement?.type === 'edge' && selectedElement.data.id === edge.id;
             const controlType = edge.control?.type || (edge.condition_expression ? 'if' : '');
-            const hasCondition = controlType === 'if';
-            const startX = sourceNode.x + nodeWidth / 2;
-            const startY = sourceNode.y;
-            const endX = targetNode.x - nodeWidth / 2;
-            const endY = targetNode.y;
-            const midX = (startX + endX) / 2;
+            const geometry = getEdgeGeometry(sourceNode, targetNode, edge);
 
             // Draw curve
             ctx.beginPath();
-            ctx.moveTo(startX, startY);
-            ctx.bezierCurveTo(midX, startY, midX, endY, endX, endY);
+            ctx.moveTo(geometry.startX, geometry.startY);
+            ctx.bezierCurveTo(geometry.cp1X, geometry.cp1Y, geometry.cp2X, geometry.cp2Y, geometry.endX, geometry.endY);
 
             const controlColorMap = {
                 'if': '#ff9800',
@@ -633,19 +628,21 @@
 
             // Arrow
             const arrowSize = 10;
-            const angle = Math.atan2(endY - startY, endX - midX);
+            const beforeEnd = cubicBezierPoint(0.96, geometry.startX, geometry.startY, geometry.cp1X, geometry.cp1Y, geometry.cp2X, geometry.cp2Y, geometry.endX, geometry.endY);
+            const angle = Math.atan2(geometry.endY - beforeEnd.y, geometry.endX - beforeEnd.x);
             ctx.beginPath();
-            ctx.moveTo(endX, endY);
-            ctx.lineTo(endX - arrowSize * Math.cos(angle - Math.PI / 6), endY - arrowSize * Math.sin(angle - Math.PI / 6));
-            ctx.lineTo(endX - arrowSize * Math.cos(angle + Math.PI / 6), endY - arrowSize * Math.sin(angle + Math.PI / 6));
+            ctx.moveTo(geometry.endX, geometry.endY);
+            ctx.lineTo(geometry.endX - arrowSize * Math.cos(angle - Math.PI / 6), geometry.endY - arrowSize * Math.sin(angle - Math.PI / 6));
+            ctx.lineTo(geometry.endX - arrowSize * Math.cos(angle + Math.PI / 6), geometry.endY - arrowSize * Math.sin(angle + Math.PI / 6));
             ctx.closePath();
             ctx.fillStyle = lineColor;
             ctx.fill();
 
             // Condition label - LARGE
             if (controlType) {
-                const labelX = midX;
-                const labelY = (startY + endY) / 2;
+                const labelPoint = cubicBezierPoint(0.5, geometry.startX, geometry.startY, geometry.cp1X, geometry.cp1Y, geometry.cp2X, geometry.cp2Y, geometry.endX, geometry.endY);
+                const labelX = labelPoint.x;
+                const labelY = labelPoint.y - (geometry.isBackEdge ? 14 : 0);
 
                 // Background box
                 ctx.font = 'bold 12px sans-serif';
@@ -664,6 +661,44 @@
                 ctx.textBaseline = 'middle';
                 ctx.fillText(text, labelX, labelY);
             }
+        }
+
+        function getEdgeGeometry(sourceNode, targetNode, edge) {
+            const controlType = edge.control?.type || (edge.condition_expression ? 'if' : '');
+            const isBackEdge = controlType === 'goto' || targetNode.x < sourceNode.x;
+            let startX, startY, endX, endY, cp1X, cp1Y, cp2X, cp2Y;
+
+            if (isBackEdge) {
+                startX = sourceNode.x - nodeWidth / 2;
+                startY = sourceNode.y;
+                endX = targetNode.x + nodeWidth / 2;
+                endY = targetNode.y;
+                const lift = Math.max(120, Math.abs(startX - endX) * 0.2);
+                const arcY = Math.min(startY, endY) - lift;
+                cp1X = startX - 40;
+                cp1Y = arcY;
+                cp2X = endX + 40;
+                cp2Y = arcY;
+            } else {
+                startX = sourceNode.x + nodeWidth / 2;
+                startY = sourceNode.y;
+                endX = targetNode.x - nodeWidth / 2;
+                endY = targetNode.y;
+                const midX = (startX + endX) / 2;
+                cp1X = midX;
+                cp1Y = startY;
+                cp2X = midX;
+                cp2Y = endY;
+            }
+
+            return { startX, startY, endX, endY, cp1X, cp1Y, cp2X, cp2Y, isBackEdge };
+        }
+
+        function cubicBezierPoint(t, x0, y0, x1, y1, x2, y2, x3, y3) {
+            const mt = 1 - t;
+            const x = Math.pow(mt, 3) * x0 + 3 * Math.pow(mt, 2) * t * x1 + 3 * mt * Math.pow(t, 2) * x2 + Math.pow(t, 3) * x3;
+            const y = Math.pow(mt, 3) * y0 + 3 * Math.pow(mt, 2) * t * y1 + 3 * mt * Math.pow(t, 2) * y2 + Math.pow(t, 3) * y3;
+            return { x, y };
         }
 
         function onMouseDown(e) {
@@ -710,7 +745,7 @@
             for (const edge of edges) {
                 const sourceNode = nodes.find(n => n.id === edge.source);
                 const targetNode = nodes.find(n => n.id === edge.target);
-                if (sourceNode && targetNode && isPointNearEdge(mouseX, mouseY, sourceNode, targetNode)) {
+                if (sourceNode && targetNode && isPointNearEdge(mouseX, mouseY, sourceNode, targetNode, edge)) {
                     selectElement('edge', edge);
                     return;
                 }
@@ -719,17 +754,12 @@
             clearSelection();
         }
 
-        function isPointNearEdge(px, py, sourceNode, targetNode) {
-            const startX = sourceNode.x + nodeWidth / 2;
-            const startY = sourceNode.y;
-            const endX = targetNode.x - nodeWidth / 2;
-            const endY = targetNode.y;
-            const midX = (startX + endX) / 2;
+        function isPointNearEdge(px, py, sourceNode, targetNode, edge) {
+            const geometry = getEdgeGeometry(sourceNode, targetNode, edge || {});
 
             for (let t = 0; t <= 1; t += 0.05) {
-                const x = Math.pow(1-t, 3) * startX + 3 * Math.pow(1-t, 2) * t * midX + 3 * (1-t) * t * t * midX + Math.pow(t, 3) * endX;
-                const y = Math.pow(1-t, 3) * startY + 3 * Math.pow(1-t, 2) * t * startY + 3 * (1-t) * t * t * endY + Math.pow(t, 3) * endY;
-                if (Math.sqrt(Math.pow(px - x, 2) + Math.pow(py - y, 2)) < 20) return true;
+                const point = cubicBezierPoint(t, geometry.startX, geometry.startY, geometry.cp1X, geometry.cp1Y, geometry.cp2X, geometry.cp2Y, geometry.endX, geometry.endY);
+                if (Math.sqrt(Math.pow(px - point.x, 2) + Math.pow(py - point.y, 2)) < 20) return true;
             }
             return false;
         }
@@ -845,7 +875,7 @@
                 minY = Math.min(minY, node.y - nodeHeight / 2);
                 maxY = Math.max(maxY, node.y + nodeHeight / 2);
             });
-            const padding = 100;
+            const padding = 180;
             const scaleX = canvas.width / (maxX - minX + padding * 2);
             const scaleY = canvas.height / (maxY - minY + padding * 2);
             scale = Math.min(scaleX, scaleY, 1.5);

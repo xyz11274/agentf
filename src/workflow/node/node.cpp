@@ -1,5 +1,6 @@
 #include "workflow/node.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <functional>
@@ -20,6 +21,174 @@ Node::Node(const Config& config) : config_(config), state_(NodeState::WAITING), 
   if(config_.enable_hot_reload && !config_.command.empty()) {
     hot_reload_enabled_ = true;
   }
+}
+
+Node::~Node() {
+  stop_runtime();
+}
+
+bool Node::start_runtime() {
+  return start_runtime(RuntimeConfig{});
+}
+
+bool Node::start_runtime(const RuntimeConfig& config) {
+  bool expected = false;
+  if(!runtime_running_.compare_exchange_strong(expected, true)) {
+    return false;
+  }
+
+  runtime_config_ = config;
+  executor_pool_  = std::make_unique<basic::ThreadPool>(
+      static_cast<size_t>(std::max(1, runtime_config_.executor_threads)));
+  event_pool_ = std::make_unique<basic::ThreadPool>(
+      static_cast<size_t>(std::max(1, runtime_config_.event_threads)));
+
+  message_thread_ = std::thread(&Node::message_dispatch_loop, this);
+  event_thread_   = std::thread(&Node::event_dispatch_loop, this);
+  return true;
+}
+
+void Node::stop_runtime() {
+  bool expected = true;
+  if(!runtime_running_.compare_exchange_strong(expected, false)) {
+    return;
+  }
+
+  message_cv_.notify_all();
+  event_cv_.notify_all();
+
+  if(message_thread_.joinable()) {
+    message_thread_.join();
+  }
+  if(event_thread_.joinable()) {
+    event_thread_.join();
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    high_priority_messages_.clear();
+    normal_priority_messages_.clear();
+    while(!event_queue_.empty()) {
+      event_queue_.pop();
+    }
+  }
+
+  executor_pool_.reset();
+  event_pool_.reset();
+}
+
+bool Node::enqueue_message(const Message& message) {
+  std::lock_guard<std::mutex> lock(queue_mutex_);
+  const size_t queued_size = high_priority_messages_.size() + normal_priority_messages_.size();
+  if(queued_size >= runtime_config_.max_queue_size) {
+    return false;
+  }
+
+  if(message.priority == MessagePriority::HIGH) {
+    high_priority_messages_.push_back(message);
+  } else {
+    normal_priority_messages_.push_back(message);
+  }
+  message_cv_.notify_all();
+  return true;
+}
+
+bool Node::enqueue_event(const NodeEvent& event) {
+  std::lock_guard<std::mutex> lock(queue_mutex_);
+  if(event_queue_.size() >= runtime_config_.max_queue_size) {
+    return false;
+  }
+  event_queue_.push(event);
+  event_cv_.notify_all();
+  return true;
+}
+
+void Node::register_event_handler(const std::string& event_type, NodeEventHandler handler) {
+  std::lock_guard<std::mutex> lock(event_handler_mutex_);
+  event_handlers_[event_type].push_back(std::move(handler));
+}
+
+void Node::message_dispatch_loop() {
+  while(runtime_running_) {
+    Message message;
+    {
+      std::unique_lock<std::mutex> lock(queue_mutex_);
+      message_cv_.wait(lock, [this]() {
+        return !high_priority_messages_.empty() || !normal_priority_messages_.empty()
+               || !runtime_running_;
+      });
+      if(!runtime_running_) {
+        break;
+      }
+
+      if(!high_priority_messages_.empty()) {
+        message = high_priority_messages_.front();
+        high_priority_messages_.pop_front();
+      } else if(!normal_priority_messages_.empty()) {
+        message = normal_priority_messages_.front();
+        normal_priority_messages_.pop_front();
+      } else {
+        continue;
+      }
+    }
+
+    if(executor_pool_) {
+      executor_pool_->submit([this, message]() { process_message(message); });
+    } else {
+      process_message(message);
+    }
+  }
+}
+
+void Node::event_dispatch_loop() {
+  while(runtime_running_) {
+    NodeEvent event;
+    {
+      std::unique_lock<std::mutex> lock(queue_mutex_);
+      event_cv_.wait(lock, [this]() { return !event_queue_.empty() || !runtime_running_; });
+      if(!runtime_running_) {
+        break;
+      }
+
+      event = event_queue_.front();
+      event_queue_.pop();
+    }
+
+    std::vector<NodeEventHandler> handlers;
+    {
+      std::lock_guard<std::mutex> lock(event_handler_mutex_);
+      auto                        it = event_handlers_.find(event.type);
+      if(it != event_handlers_.end()) {
+        handlers = it->second;
+      }
+    }
+
+    for(const auto& handler : handlers) {
+      if(event_pool_) {
+        event_pool_->submit([handler, event]() { handler(event); });
+      } else {
+        handler(event);
+      }
+    }
+  }
+}
+
+void Node::process_message(const Message& message) {
+  std::lock_guard<std::mutex> exec_lock(execution_mutex_);
+  set_inputs(message.inputs);
+  if(get_state() == NodeState::WAITING) {
+    initialize();
+  } else if(get_state() != NodeState::READY && get_state() != NodeState::RETRYING) {
+    set_state(NodeState::READY);
+  }
+
+  const bool success = execute();
+
+  NodeEvent completion_event;
+  completion_event.type = success ? "node_message_success" : "node_message_failed";
+  completion_event.data["message_id"] = message.message_id;
+  completion_event.data["node_id"] = get_id();
+  enqueue_event(completion_event);
 }
 
 bool Node::initialize() {

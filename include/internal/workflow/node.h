@@ -1,11 +1,20 @@
 #ifndef AGENTFLOW_FRAMEWORK_NODE_H
 #define AGENTFLOW_FRAMEWORK_NODE_H
 
+#include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <queue>
+#include <thread>
+#include <unordered_map>
+#include <vector>
 
 #include "agent/common.h"
 #include "runtime/exe_loader.h"
+#include "utils/thread_pool.h"
 
 namespace agentflow {
 namespace framework {
@@ -66,8 +75,33 @@ public:
     std::string workflow_ref;
   };
 
+  enum class MessagePriority {
+    NORMAL = 0,
+    HIGH   = 1,
+  };
+
+  struct Message {
+    std::string     message_id;
+    DataMap         inputs;
+    MessagePriority priority = MessagePriority::NORMAL;
+  };
+
+  struct NodeEvent {
+    std::string                        type;
+    std::map<std::string, std::string> data;
+  };
+
+  struct RuntimeConfig {
+    int    message_threads = 1;
+    int    event_threads = 1;
+    int    executor_threads = 2;
+    size_t max_queue_size = 1024;
+  };
+
+  using NodeEventHandler = std::function<void(const NodeEvent&)>;
+
   explicit Node(const Config& config);
-  ~Node() = default;
+  ~Node();
 
   // Getters
   const NodeId&      get_id() const { return config_.id; }
@@ -112,7 +146,21 @@ public:
   // Code loader access
   runtime::ExecutionResult execute_with_code_loader();
 
+  // Node runtime queue + event loop
+  bool start_runtime();
+  bool start_runtime(const RuntimeConfig& config);
+  void stop_runtime();
+  bool is_runtime_running() const { return runtime_running_; }
+
+  bool enqueue_message(const Message& message);
+  bool enqueue_event(const NodeEvent& event);
+  void register_event_handler(const std::string& event_type, NodeEventHandler handler);
+
 private:
+  void message_dispatch_loop();
+  void event_dispatch_loop();
+  void process_message(const Message& message);
+
   Config    config_;
   NodeState state_ = NodeState::WAITING;
   DataMap   inputs_;
@@ -128,6 +176,22 @@ private:
 
   // Code loader reference
   runtime::CodeLoader* code_loader_ = nullptr;
+
+  RuntimeConfig runtime_config_;
+  std::atomic<bool> runtime_running_{false};
+  std::deque<Message> high_priority_messages_;
+  std::deque<Message> normal_priority_messages_;
+  std::queue<NodeEvent> event_queue_;
+  std::mutex             queue_mutex_;
+  std::condition_variable message_cv_;
+  std::condition_variable event_cv_;
+  std::thread             message_thread_;
+  std::thread             event_thread_;
+  std::mutex              execution_mutex_;
+  std::unique_ptr<basic::ThreadPool> executor_pool_;
+  std::unique_ptr<basic::ThreadPool> event_pool_;
+  std::unordered_map<std::string, std::vector<NodeEventHandler>> event_handlers_;
+  std::mutex event_handler_mutex_;
 
   // Helper methods for execution
   bool execute_cpp_function();
