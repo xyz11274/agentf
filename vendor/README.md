@@ -1,143 +1,68 @@
-# Vendor Dependencies and Adapters
+# Vendor 依赖与适配器说明
 
-This directory contains third-party dependencies and their adapter implementations.
+本目录用于管理 AgentFlow 的第三方依赖及其适配器实现。
 
-## Directory Structure
+## 目录结构
 
-```
+```text
 vendor/
-├── vendor.conf        # Third-party dependencies configuration
-├── vendor.sh          # Dependencies download script
-├── README.md          # This file
-├── adapter/           # Adapter implementations for third-party libraries
-│   ├── actor/         # Actor framework adapters (protoactor, stub)
-│   ├── dsl/           # DSL/JSON parser adapters (rapidjson, stub)
-│   ├── cache/         # Cache adapters (redis)
-│   ├── network/       # Network adapters (reserved)
-│   ├── serialization/ # Serialization adapters (reserved)
-│   └── README.md
-└── <downloaded>/      # Downloaded third-party libraries (gitignored)
-    ├── json/          # e.g., nlohmann_json
-    ├── fmt/           # e.g., fmtlib
-    └── ...
+├── vendor.conf        # 第三方依赖配置（name|url|branch|target_dir）
+├── vendor.sh          # 依赖下载与更新脚本
+├── README.md          # 本文档
+├── adapter/           # 三方适配器实现
+│   ├── actor/         # Actor 适配（Protoactor / stub）
+│   ├── cache/         # 缓存适配（Redis）
+│   ├── dsl/           # JSON 适配（RapidJSON / stub）
+│   ├── event/         # 事件循环适配
+│   ├── network/       # 网络适配（预留）
+│   └── serialization/ # 序列化适配（预留）
+└── <downloaded>/      # 下载的第三方源码（已在 .gitignore 中忽略）
 ```
 
-## Quick Start
+## `vendor.conf` 配置格式
 
-### 1. Configure Dependencies
+每行一个依赖，格式如下：
 
-Edit `vendor.conf` in this directory to add your dependencies:
-
-```bash
-# Format: name|url|branch|target_dir
-Protoactor-cpp|https://github.com/DanielKernel/Protoactor-cpp.git|main|Protoactor-cpp
-OpenSSL|https://github.com/openssl/openssl.git|master|openssl
-RapidJSON|https://github.com/Tencent/rapidjson.git|master|rapidjson
-```
-
-### 2. Download Dependencies
-
-```bash
-./vendor/vendor.sh
-```
-
-This will download all configured dependencies to this `vendor/` directory.
-
-## Usage
-
-```bash
-# Download all configured dependencies
-./vendor/vendor.sh
-
-# List configured dependencies and their status
-./vendor/vendor.sh --list
-
-# Update all downloaded dependencies
-./vendor/vendor.sh --update
-
-# Clean vendor directory (removes all downloaded code)
-./vendor/vendor.sh --clean
-
-# Show help
-./vendor/vendor.sh --help
-```
-
-## Configuration Format
-
-Each line in `vendor.conf` should follow this format:
-
-```
+```text
 name|url|branch|target_dir
 ```
 
-- **name**: A descriptive name for the dependency
-- **url**: Git repository URL
-- **branch**: Branch/tag to clone
-- **target_dir**: Directory name under vendor/
+当前配置示例：
 
-Example:
-```
+```text
+libevent|https://github.com/libevent/libevent.git|master|libevent
 Protoactor-cpp|https://github.com/DanielKernel/Protoactor-cpp.git|main|Protoactor-cpp
+RapidJSON|https://github.com/Tencent/rapidjson.git|master|rapidjson
+redis|https://github.com/redis/redis.git|unstable|redis
 ```
 
-This will clone the repository to `vendor/Protoactor-cpp/`.
+## 使用方式
 
-## Adapters
+在仓库根目录执行：
 
-The `adapter/` subdirectory contains adapter implementations that wrap third-party libraries:
-
-- **actor/**: Actor framework adapters (protoactor_impl.cpp, stub_impl.cpp)
-  - Uses Protoactor-cpp: https://github.com/DanielKernel/Protoactor-cpp.git
-- **dsl/**: JSON parser adapters (json_adapter_rapidjson.cpp, json_adapter_stub.cpp)
-  - Uses RapidJSON: https://github.com/Tencent/rapidjson.git
-
-These adapters provide a uniform interface for AgentFlow to interact with different implementations.
-
-## Notes
-
-- Downloaded third-party libraries are excluded from Git (see `.gitignore`)
-- Adapter source code IS tracked by Git
-- Each developer needs to run `./vendor/vendor.sh` after cloning the project
-- Use `--update` to pull latest changes from upstream repositories
-- Use `--clean` to remove all vendor code and re-download
-
-## Integration with CMake
-
-The CMakeLists.txt includes vendor adapter sources:
-
-```cmake
-set(AGENTFLOW_VENDOR_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vendor)
-
-# Adapter sources
-set(AGENTFLOW_ADAPTER_SOURCES
-    ${AGENTFLOW_VENDOR_DIR}/adapter/actor/stub_impl.cpp
-    ${AGENTFLOW_VENDOR_DIR}/adapter/dsl/json_adapter_stub.cpp
-    ...
-)
-```
-
-To use downloaded vendor libraries:
-
-```cmake
-# Example: Add vendor library include path
-include_directories(${CMAKE_SOURCE_DIR}/vendor/json/include)
-
-# Example: Add vendor library as subdirectory
-add_subdirectory(${CMAKE_SOURCE_DIR}/vendor/fmt)
-```
-
-## Third-Party Libraries
-
-AgentFlow depends on the following third-party libraries. All are optional and have stub implementations available when not installed:
-
-| Library | GitHub | Purpose |
-|---------|--------|---------|
-| Protoactor-cpp | https://github.com/DanielKernel/Protoactor-cpp.git | Actor model implementation |
-| OpenSSL | https://github.com/openssl/openssl.git | SSL/TLS encryption |
-| RapidJSON | https://github.com/Tencent/rapidjson.git | JSON parsing (header-only) |
-| Redis | https://github.com/redis/redis.git | Global data cache/service backend |
-
-To download all these libraries:
 ```bash
+# 下载全部依赖
 ./vendor/vendor.sh
+
+# 查看配置与安装状态
+./vendor/vendor.sh --list
+
+# 更新已下载依赖
+./vendor/vendor.sh --update
+
+# 清理 vendor 目录（会删除已下载内容）
+./vendor/vendor.sh --clean
 ```
+
+## 适配器与依赖对应关系
+
+- `adapter/actor/`：Protoactor-cpp（未启用时使用 stub）
+- `adapter/dsl/`：RapidJSON（未启用时使用 stub）
+- `adapter/cache/`：Redis
+- `adapter/event/`：libevent
+
+## 注意事项
+
+- 下载的第三方源码不纳入 Git 版本控制；适配器代码会纳入版本控制。
+- 新克隆仓库后，需至少执行一次 `./vendor/vendor.sh`。
+- 若需切换分支或重拉依赖，建议先执行 `--list` 检查状态。
