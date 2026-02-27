@@ -198,6 +198,66 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
+**Mermaid 版本：**
+
+```mermaid
+flowchart TB
+    subgraph AgentLevel["AGENT LEVEL MASTER"]
+        direction TB
+        AR["AgentRuntime + AgentActor"]
+        ARD1["- Agent实例生命周期管理"]
+        ARD2["- Agent注册/心跳/监控"]
+        ARD3["- 全局Agent状态管理"]
+        AR --> ARD1
+        AR --> ARD2
+        AR --> ARD3
+    end
+
+    AgentLevel --> WorkflowLevel
+
+    subgraph WorkflowLevel["WORKFLOW LEVEL MASTER"]
+        direction TB
+        Deployer["DEPLOYER (deployer.cpp)"]
+        DeployerDesc1["Workflow → Worker mapping"]
+        DeployerDesc2["- Worker注册"]
+        DeployerDesc3["- 心跳监控"]
+        DeployerDesc4["- 故障转移"]
+        Deployer --> DeployerDesc1
+        DeployerDesc1 --> DeployerDesc2
+        DeployerDesc1 --> DeployerDesc3
+        DeployerDesc1 --> DeployerDesc4
+
+        Scheduler["SCHEDULER (scheduler.cpp)"]
+        SchedulerDesc1["Task → Workflow Instance mapping"]
+        SchedulerDesc2["- Task队列管理"]
+        SchedulerDesc3["- 负载均衡"]
+        SchedulerDesc4["- 插件算法"]
+        Scheduler --> SchedulerDesc1
+        SchedulerDesc1 --> SchedulerDesc2
+        SchedulerDesc1 --> SchedulerDesc3
+        SchedulerDesc1 --> SchedulerDesc4
+    end
+
+    WorkflowLevel --> WorkerLevel
+
+    subgraph WorkerLevel["WORKER LEVEL (Node Execution)"]
+        direction TB
+        WE["WorkerEngine (runtime/worker/worker.cpp)"]
+        WEDesc1["- 双优先级任务队列 (高/普通)"]
+        WEDesc2["- Workflow实例池"]
+        WEDesc3["- 事件驱动执行"]
+        WEDesc4["- 多执行器类型支持"]
+        WE --> WEDesc1
+        WE --> WEDesc2
+        WE --> WEDesc3
+        WE --> WEDesc4
+    end
+
+    style AgentLevel fill:#e1f5ff,stroke:#01579b,stroke-width:2px
+    style WorkflowLevel fill:#fff8e1,stroke:#ff6f00,stroke-width:2px
+    style WorkerLevel fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+```
+
 ### 1.2 核心组件映射
 
 | 设计层级 | 设计目标 | 代码实现 | 符合度 |
@@ -782,6 +842,101 @@ sequenceDiagram
 │  └─────────────────────────────────────────────────────────────────┘   │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Mermaid 版本：**
+
+**单节点部署模式 (开发/测试)**
+
+```mermaid
+flowchart TB
+    subgraph Server["单台服务器"]
+        direction TB
+
+        subgraph ARSingle["AgentRuntime (MASTER角色)"]
+            direction LR
+            DSingle["Deployer"]
+            SchSingle["Scheduler"]
+            LWSingle["LocalWorker"]
+        end
+
+        subgraph AASingle["AgentActor"]
+            AADesc["自动加载Agent包"]
+        end
+
+        subgraph DBSingle["DataBus"]
+            DBDesc["本地缓存"]
+        end
+
+        ARSingle --> AASingle
+        AASingle --> DBSingle
+    end
+
+    style Server fill:#f5f5f5,stroke:#333,stroke-width:2px
+    style ARSingle fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
+    style AASingle fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    style DBSingle fill:#f3e5f5,stroke:#6a1b9a,stroke-width:2px
+```
+
+**多节点部署模式 (生产环境)**
+
+```mermaid
+flowchart TB
+    subgraph Cluster["生产集群"]
+        direction TB
+
+        subgraph MasterNodes["Master节点 (1~3台)"]
+            direction TB
+
+            subgraph AR["AgentRuntime"]
+                direction LR
+                D["Deployer"]
+                Sch["Scheduler"]
+            end
+
+            subgraph AA["AgentActor"]
+                AADesc["Agent管理"]
+            end
+        end
+
+        subgraph WorkerNodes["Worker节点池 (N台)"]
+            direction TB
+
+            subgraph WE1["WorkerEngine #1"]
+                subgraph WP1["Workflow Pools"]
+                    direction LR
+                    WF11["WF1"]
+                    WF12["WF2"]
+                    WF13["..."]
+                end
+            end
+
+            subgraph WE2["WorkerEngine #N"]
+                subgraph WP2["Workflow Pools"]
+                    direction LR
+                    WF21["WF1"]
+                    WF22["WF2"]
+                    WF23["..."]
+                end
+            end
+        end
+
+        subgraph SharedDB["共享DataBus层 (Redis集群)"]
+            DBDesc["存储：workflow实例、task状态、Node数据"]
+        end
+
+        AR -->|调度| WE1
+        AR -->|Task调度| WE2
+        MasterNodes --> WorkerNodes
+        MasterNodes --> SharedDB
+        WorkerNodes --> SharedDB
+    end
+
+    style Cluster fill:#f5f5f5,stroke:#333,stroke-width:2px
+    style MasterNodes fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    style WorkerNodes fill:#fff3e0,stroke:#ef6c00,stroke-width:2px
+    style SharedDB fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    style AR fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
 ```
 
 ---
