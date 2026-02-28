@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <thread>
 #include <type_traits>
 
 #include "runtime/agent_runtime.h"
@@ -105,6 +107,46 @@ TEST(RuntimeMasterWorkerTest, WorkerExecutesShellScriptViaEngine) {
       },
       it->second);
   EXPECT_NE(output.find("worker-shell-ok"), std::string::npos);
+  fs::remove(script);
+}
+
+TEST(RuntimeMasterWorkerTest, WorkerHotReloadAndRollback) {
+  namespace fs = std::filesystem;
+  const fs::path script = fs::path("build/test_worker_hot_reload.sh");
+  {
+    std::ofstream ofs(script);
+    ofs << "#!/bin/sh\n";
+    ofs << "echo v1\n";
+  }
+  fs::permissions(script, fs::perms::owner_exec | fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::add);
+
+  runtime::WorkerEngine::ExecutionRequest request;
+  request.mode = runtime::WorkerEngine::ExecutionMode::SHELL_SCRIPT;
+  request.command = script.string();
+  request.enable_hot_reload = true;
+  ASSERT_TRUE(runtime::WorkerEngine::execute_code(request).success);
+
+  auto version1 = runtime::WorkerEngine::get_code_version(script.string());
+  ASSERT_NE(version1, nullptr);
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  {
+    std::ofstream ofs(script);
+    ofs << "#!/bin/sh\n";
+    ofs << "echo v2\n";
+  }
+
+  ASSERT_TRUE(runtime::WorkerEngine::check_and_reload_code(script.string()));
+  auto version2 = runtime::WorkerEngine::get_code_version(script.string());
+  ASSERT_NE(version2, nullptr);
+  EXPECT_NE(version2->version_id, version1->version_id);
+
+  ASSERT_TRUE(runtime::WorkerEngine::rollback_code_version(script.string(), version1->version_id));
+  auto current = runtime::WorkerEngine::get_code_version(script.string());
+  ASSERT_NE(current, nullptr);
+  EXPECT_EQ(current->version_id, version1->version_id);
+  runtime::WorkerEngine::stop_hot_reload(script.string());
   fs::remove(script);
 }
 

@@ -206,8 +206,8 @@
       "timeout_ms": 30000,
       "memory_limit_mb": 128,
       "cpu_limit": 20,
-      // Enabling hot-reload means the runtime watches persistence_plugin.so
-      // and reloads it when modified without restarting the workflow.
+      // Enabling hot-reload means Worker watches persistence_plugin.so
+      // and reloads it when modified without restarting Worker/workflow.
       "enable_hot_reload": true
     },
 
@@ -224,7 +224,7 @@
       //   timeout_ms      → 30000
       //   memory_limit_mb → 0  (unlimited)
       //   cpu_limit       → 0  (unlimited)
-      //   enable_hot_reload → true
+      //   enable_hot_reload → true（默认由 Worker 侧热更新处理）
       "inputs": ["raw_document", "plain_text", "category"],
       "outputs": ["error_report"]
     }

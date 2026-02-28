@@ -19,6 +19,7 @@ Node 实现应遵循以下运行时约定：
 - `cpp_function`：调用框架注册的 C++ 函数
 
 以上执行模式统一由 Worker 执行引擎分发，Node 负责声明执行模式、命令、参数与 I/O 约束。
+Node 热更新也由 Worker 处理，默认按 `enable_hot_reload/hot_reload_config` 生效，无需手工调用 enable 接口。
 
 ## 输出示例
 

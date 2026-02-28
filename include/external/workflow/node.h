@@ -61,8 +61,8 @@ public:
     // Retry configuration
     int retry_delay_ms = 1000;  // Delay between retries
 
-    // Hot reload configuration
-    bool                     enable_hot_reload = true;  // Enable hot reload for this node
+    // Hot reload configuration (worker-side; enabled by default for executable nodes)
+    bool                     enable_hot_reload = true;  // Legacy compatibility flag
     runtime::HotReloadConfig hot_reload_config;         // Hot reload settings
 
     // Code execution configuration

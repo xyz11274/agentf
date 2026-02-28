@@ -747,7 +747,6 @@ TEST_F(HotReloadTest, Node_ShellScriptNode) {
   framework::Node node(config);
   ASSERT_TRUE(node.initialize());
 
-  EXPECT_TRUE(node.enable_code_reload());
   ASSERT_TRUE(node.execute());
 
   auto outputs = node.get_outputs();
@@ -766,7 +765,6 @@ TEST_F(HotReloadTest, Node_PythonScriptNode) {
   framework::Node node(config);
   ASSERT_TRUE(node.initialize());
 
-  EXPECT_TRUE(node.enable_code_reload());
   ASSERT_TRUE(node.execute());
 
   auto outputs = node.get_outputs();
@@ -787,8 +785,6 @@ TEST_F(HotReloadTest, DISABLED_Node_HotReloadIntegration) {
 
   framework::Node node(config);
   ASSERT_TRUE(node.initialize());
-  ASSERT_TRUE(node.enable_code_reload());
-
   // Execute version 1
   ASSERT_TRUE(node.execute());
   auto version1 = node.get_code_version();
@@ -829,8 +825,6 @@ TEST_F(HotReloadTest, Node_RollbackIntegration) {
 
   framework::Node node(config);
   ASSERT_TRUE(node.initialize());
-  ASSERT_TRUE(node.enable_code_reload());
-
   auto version1 = node.get_code_version();
   ASSERT_NE(version1, nullptr);
   std::string version_id1 = version1->version_id;
@@ -853,19 +847,21 @@ TEST_F(HotReloadTest, Node_RollbackIntegration) {
   EXPECT_EQ(current->version_id, version_id1);
 }
 
-TEST_F(HotReloadTest, Node_DisableHotReload) {
+TEST_F(HotReloadTest, Node_DefaultHotReloadWithoutEnable) {
   framework::Node::Config config;
   config.id                = "test_node_no_reload";
   config.name              = "Test No Reload Node";
   config.type              = "test";
   config.execution_mode    = framework::Node::ExecutionMode::SHELL_SCRIPT;
   config.command           = create_shell_script("node_no_reload.sh", "echo 'test'");
-  config.enable_hot_reload = false;
+  config.enable_hot_reload = true;
 
   framework::Node node(config);
   ASSERT_TRUE(node.initialize());
 
-  EXPECT_FALSE(node.enable_code_reload());
+  ASSERT_TRUE(node.execute());
+  auto version = node.get_code_version();
+  EXPECT_NE(version, nullptr);
 }
 
 // ============================================================================

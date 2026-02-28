@@ -23,6 +23,14 @@ WorkerEngine::ExecutionResponse WorkerEngine::execute_code(const ExecutionReques
   exec_config.timeout_ms  = request.timeout_ms > 0 ? request.timeout_ms : 30000;
 
   auto& code_loader = runtime::global_code_loader();
+  if(request.enable_hot_reload) {
+    code_loader.set_hot_reload_config(request.hot_reload_config);
+    if(!code_loader.is_watching(request.command)) {
+      code_loader.start_watching(request.command);
+    }
+    code_loader.reload_code(request.command);
+  }
+
   runtime::ExecutionResult result;
   switch(request.mode) {
     case ExecutionMode::SHELL_SCRIPT:
@@ -75,7 +83,59 @@ WorkerEngine::ExecutionResponse WorkerEngine::execute_code(const ExecutionReques
       response.outputs[line.substr(0, pos)] = line.substr(pos + 1);
     }
   }
+  if(request.enable_hot_reload) {
+    auto version = code_loader.get_current_version(request.command);
+    if(version) {
+      response.active_version_id = version->version_id;
+    }
+  }
   return response;
+}
+
+bool WorkerEngine::check_and_reload_code(const std::string& command, const HotReloadConfig& config) {
+  if(command.empty()) {
+    return false;
+  }
+
+  auto& code_loader = runtime::global_code_loader();
+  code_loader.set_hot_reload_config(config);
+  if(!code_loader.is_watching(command)) {
+    code_loader.start_watching(command);
+  }
+
+  auto current_before = code_loader.get_current_version(command);
+  const std::string before_id = current_before ? current_before->version_id : "";
+  auto reload_result = code_loader.reload_code(command);
+  if(!reload_result.success) {
+    return false;
+  }
+
+  auto current_after = code_loader.get_current_version(command);
+  return current_after && current_after->version_id != before_id;
+}
+
+std::shared_ptr<ExecutableVersion> WorkerEngine::get_code_version(const std::string& command) {
+  if(command.empty()) {
+    return nullptr;
+  }
+  auto& code_loader = runtime::global_code_loader();
+  return code_loader.get_current_version(command);
+}
+
+bool WorkerEngine::rollback_code_version(const std::string& command, const std::string& version_id) {
+  if(command.empty() || version_id.empty()) {
+    return false;
+  }
+  auto& code_loader = runtime::global_code_loader();
+  return code_loader.rollback_to_version(command, version_id);
+}
+
+bool WorkerEngine::stop_hot_reload(const std::string& command) {
+  if(command.empty()) {
+    return false;
+  }
+  auto& code_loader = runtime::global_code_loader();
+  return code_loader.stop_watching(command);
 }
 
 int64_t WorkerEngine::now_ms() {

@@ -286,7 +286,7 @@ set(AGENTFLOW_WORKFLOW_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/workflow/workflow_actor.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/node/node.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/node/node_actor.cpp
-    ${AGENTFLOW_SOURCE_DIR}/workflow/node/exe_loader.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/worker/exe_loader.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/edge/edge.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/dsl/workflow_parser.cpp
     ${AGENTFLOW_VENDOR_DIR}/adapter/json/json_adapter_factory.cpp

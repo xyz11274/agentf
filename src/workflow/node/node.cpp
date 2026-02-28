@@ -18,7 +18,6 @@ Node::Node(const Config& config) : config_(config), state_(NodeState::WAITING), 
   // Get reference to global code loader
   code_loader_ = &runtime::global_code_loader();
 
-  // Setup hot reload if enabled
   if(config_.enable_hot_reload && !config_.command.empty()) {
     hot_reload_enabled_ = true;
   }
@@ -26,6 +25,9 @@ Node::Node(const Config& config) : config_(config), state_(NodeState::WAITING), 
 
 Node::~Node() {
   stop_runtime();
+  if(hot_reload_enabled_) {
+    cleanup_hot_reload();
+  }
 }
 
 bool Node::start_runtime() {
@@ -199,11 +201,9 @@ bool Node::initialize() {
   state_ = NodeState::READY;
 
   Logger::instance().info_f("[NODE_INIT] NodeId=%s, NodeName=%s, HotReload=%s", config_.id.c_str(),
-                            config_.name.c_str(),
-                            config_.enable_hot_reload ? "ENABLED" : "DISABLED");
+                            config_.name.c_str(), hot_reload_enabled_ ? "ENABLED" : "DISABLED");
 
-  // Setup hot reload if enabled
-  if(config_.enable_hot_reload && hot_reload_enabled_) {
+  if(hot_reload_enabled_) {
     setup_hot_reload();
   }
 
@@ -275,7 +275,7 @@ bool Node::execute() {
   state_ = NodeState::EXECUTING;
 
   // Check and reload code if hot reload is enabled
-  if(hot_reload_enabled_ && config_.enable_hot_reload) {
+  if(hot_reload_enabled_) {
     check_and_reload_code();
   }
 
@@ -342,6 +342,9 @@ bool Node::cleanup() {
   inputs_.clear();
   outputs_.clear();
   last_error_.clear();
+  if(hot_reload_enabled_) {
+    cleanup_hot_reload();
+  }
   return true;
 }
 
@@ -553,6 +556,8 @@ bool Node::execute_with_worker_engine() {
   request.args          = config_.args;
   request.timeout_ms    = config_.timeout_ms > 0 ? config_.timeout_ms : 30000;
   request.inputs        = inputs_;
+  request.enable_hot_reload = hot_reload_enabled_;
+  request.hot_reload_config = config_.hot_reload_config;
 
   switch(config_.execution_mode) {
     case ExecutionMode::SHELL_SCRIPT:
@@ -596,12 +601,9 @@ bool Node::execute_with_worker_engine() {
 // ============================================================================
 
 bool Node::enable_code_reload() {
-  if(!config_.enable_hot_reload) {
-    Logger::instance().warn_f("[NODE_HOT_RELOAD] Hot reload disabled in config for node: %s",
-                              config_.name.c_str());
+  if(config_.command.empty()) {
     return false;
   }
-
   hot_reload_enabled_ = true;
   setup_hot_reload();
 
@@ -618,22 +620,19 @@ bool Node::disable_code_reload() {
 }
 
 bool Node::reload_code() {
-  if(!hot_reload_enabled_ || config_.command.empty()) {
+  if(config_.command.empty()) {
     return false;
   }
 
-  auto& hot_reload = runtime::global_code_loader();
-  auto  result     = hot_reload.reload_code(config_.command);
-
-  if(result.success) {
-    current_version_id_ = result.version_id;
+  if(runtime::WorkerEngine::check_and_reload_code(config_.command, config_.hot_reload_config)) {
+    auto current_version = runtime::WorkerEngine::get_code_version(config_.command);
+    current_version_id_  = current_version ? current_version->version_id : current_version_id_;
     Logger::instance().info_f("[NODE_HOT_RELOAD] Reload success: %s, Version=%s",
-                              config_.name.c_str(), result.version_id.c_str());
+                              config_.name.c_str(), current_version_id_.c_str());
     return true;
   }
 
-  Logger::instance().error_f("[NODE_HOT_RELOAD] Reload failed: %s, Error=%s", config_.name.c_str(),
-                             result.message.c_str());
+  Logger::instance().error_f("[NODE_HOT_RELOAD] Reload failed: %s", config_.name.c_str());
   return false;
 }
 
@@ -642,28 +641,11 @@ bool Node::check_and_reload_code() {
     return false;
   }
 
-  auto& hot_reload = runtime::global_code_loader();
-
-  if(!hot_reload.is_watching(config_.command)) {
-    hot_reload.start_watching(config_.command);
-  }
-
-  // First check if a new version has already been detected by the file watcher
-  auto current_version = hot_reload.get_current_version(config_.command);
-  if(current_version && current_version->version_id != current_version_id_) {
-    Logger::instance().info_f("[NODE_HOT_RELOAD] New version detected: %s, Old=%s, New=%s",
-                              config_.name.c_str(), current_version_id_.c_str(),
-                              current_version->version_id.c_str());
-
-    return reload_code();
-  }
-
-  // If no new version detected yet, actively check for file changes and reload if needed
-  auto result = hot_reload.reload_code(config_.command);
-  if(result.success && result.version_id != current_version_id_) {
-    current_version_id_ = result.version_id;
+  if(runtime::WorkerEngine::check_and_reload_code(config_.command, config_.hot_reload_config)) {
+    auto current_version = runtime::WorkerEngine::get_code_version(config_.command);
+    current_version_id_  = current_version ? current_version->version_id : current_version_id_;
     Logger::instance().info_f("[NODE_HOT_RELOAD] File change detected and reloaded: %s, Version=%s",
-                              config_.name.c_str(), result.version_id.c_str());
+                              config_.name.c_str(), current_version_id_.c_str());
     return true;
   }
 
@@ -675,8 +657,7 @@ std::shared_ptr<runtime::ExecutableVersion> Node::get_code_version() const {
     return nullptr;
   }
 
-  auto& hot_reload = runtime::global_code_loader();
-  return hot_reload.get_current_version(config_.command);
+  return runtime::WorkerEngine::get_code_version(config_.command);
 }
 
 bool Node::rollback_to_version(const std::string& version_id) {
@@ -684,8 +665,7 @@ bool Node::rollback_to_version(const std::string& version_id) {
     return false;
   }
 
-  auto& hot_reload = runtime::global_code_loader();
-  bool  result     = hot_reload.rollback_to_version(config_.command, version_id);
+  bool result = runtime::WorkerEngine::rollback_code_version(config_.command, version_id);
 
   if(result) {
     current_version_id_ = version_id;
@@ -704,14 +684,8 @@ void Node::setup_hot_reload() {
     return;
   }
 
-  auto& hot_reload = runtime::global_code_loader();
-  hot_reload.set_hot_reload_config(config_.hot_reload_config);
-
-  if(!hot_reload.is_watching(config_.command)) {
-    hot_reload.start_watching(config_.command);
-  }
-
-  auto version = hot_reload.get_current_version(config_.command);
+  runtime::WorkerEngine::check_and_reload_code(config_.command, config_.hot_reload_config);
+  auto version = runtime::WorkerEngine::get_code_version(config_.command);
   if(version) {
     current_version_id_ = version->version_id;
     Logger::instance().info_f("[NODE_HOT_RELOAD] Setup complete: %s, InitialVersion=%s",
@@ -724,8 +698,7 @@ void Node::cleanup_hot_reload() {
     return;
   }
 
-  auto& hot_reload = runtime::global_code_loader();
-  hot_reload.stop_watching(config_.command);
+  runtime::WorkerEngine::stop_hot_reload(config_.command);
 
   Logger::instance().info_f("[NODE_HOT_RELOAD] Cleanup complete: %s", config_.name.c_str());
 }

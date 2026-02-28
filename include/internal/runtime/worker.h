@@ -44,6 +44,8 @@ public:
     std::vector<std::string>  args;
     int                       timeout_ms = 30000;
     DataMap                   inputs;
+    bool                      enable_hot_reload = false;
+    HotReloadConfig           hot_reload_config;
   };
 
   struct ExecutionResponse {
@@ -53,6 +55,7 @@ public:
     std::string               stderr_content;
     std::string               error_message;
     int                       exit_code = -1;
+    std::string               active_version_id;
   };
 
   enum class WorkerStatus {
@@ -126,6 +129,11 @@ public:
   bool enqueue_event(const WorkerEvent& event);
   void register_event_handler(const std::string& event_type, WorkerEventHandler handler);
   static ExecutionResponse execute_code(const ExecutionRequest& request);
+  static bool check_and_reload_code(const std::string& command,
+                                    const HotReloadConfig& config = HotReloadConfig());
+  static std::shared_ptr<ExecutableVersion> get_code_version(const std::string& command);
+  static bool rollback_code_version(const std::string& command, const std::string& version_id);
+  static bool stop_hot_reload(const std::string& command);
 
 private:
   static int64_t now_ms();

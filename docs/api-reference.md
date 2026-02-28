@@ -60,7 +60,7 @@ DSL 关键字段：
 - 输入输出：`input_params/output_params`
 - 执行入口：`command/function_name/main_class/args`
 - 可靠性：`timeout_ms/max_retries/retry_delay_ms`
-- 热更新：`enable_hot_reload/hot_reload_config`
+- 热更新：`enable_hot_reload/hot_reload_config`（默认生效，无需显式调用 `enable_code_reload`）
 - 嵌套 workflow 引用：`workflow_ref`（当 `type=workflow`）
 
 Node 规范与模板：
@@ -123,6 +123,7 @@ Node 规范与模板：
 
 职责：
 - 通过 `WorkerEngine::execute_code` 统一执行节点多语言任务。
+- 通过 `check_and_reload_code/get_code_version/rollback_code_version` 统一处理热更新与回退。
 - 上报执行状态。
 - 配合 runtime 推进 workflow 状态机。
 
