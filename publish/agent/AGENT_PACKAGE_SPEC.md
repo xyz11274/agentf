@@ -55,6 +55,7 @@ Agent Prompt/能力卡片，供其他模型或 Agent 读取。
 - agent 版本
 - 功能说明
 - 文件清单（manifest）
+- `task_workflows`：任务类型到 workflow 的默认映射（例如 `"0"` 对应 task0 默认流程）
 
 ## 4. 校验清单
 

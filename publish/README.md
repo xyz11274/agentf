@@ -10,7 +10,7 @@
 - `agentCard.md`：Agent Prompt/能力说明
 - `workflow_XX.json`：流程定义
 - `node_xxx.$TYPE`：可执行部件（`.sh/.py/.so/.jar`）
-- `package.json`：外层包描述与文件清单
+- `package.json`：外层包描述与文件清单（支持 `task_workflows["0"]` 配置 task0 默认 workflow）
 
 ### 1.2 打包
 使用：
@@ -64,6 +64,7 @@ Node API 手册：
 - Workflow skill 规范：`src/workflow/dsl/skill.md`
 
 建议实现统一入口（输入/输出 JSON、明确退出码），并在 workflow node 中声明 `execution_mode` 与 `command`。
+多语言执行由 worker 执行引擎统一承载，node 侧主要声明执行配置与输入输出契约。
 
 ## 4. 可视化调试
 - 使用 `publish/agent/visualizer.html` 可视化 workflow。

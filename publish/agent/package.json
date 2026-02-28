@@ -11,5 +11,8 @@
   "builtin_workflows": [
     "memory",
     "tools"
-  ]
+  ],
+  "task_workflows": {
+    "0": "workflow_01.json"
+  }
 }

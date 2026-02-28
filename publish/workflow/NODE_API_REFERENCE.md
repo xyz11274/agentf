@@ -12,9 +12,13 @@ Node 实现应遵循以下运行时约定：
 
 - `shell_script`：通过 shell 执行命令
 - `executable`：直接执行二进制
+- `go_script`：执行 Go 脚本
 - `python_script`：执行 Python 脚本
+- `java_jar`：执行 Java JAR
 - `so_library`：加载动态库并调用指定符号
 - `cpp_function`：调用框架注册的 C++ 函数
+
+以上执行模式统一由 Worker 执行引擎分发，Node 负责声明执行模式、命令、参数与 I/O 约束。
 
 ## 输出示例
 

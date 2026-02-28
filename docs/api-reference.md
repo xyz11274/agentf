@@ -13,6 +13,8 @@
 - 生命周期：`initialize/start/pause/resume/stop`
 - workflow 管理：`add_workflow/remove_workflow/get_workflow/get_workflows`
 - 会话与消息路由：`get_or_create_session/route_request_message/process_session_messages`
+- Coordinator 默认任务：未显式声明 `task_type` 时按 `task0` 处理
+- 包内任务映射：`package.json.task_workflows["0"]` 可配置 task0 默认 workflow
 - 共享数据：`publish_data/get_data`
 - 包加载：`create_from_package`
 - 控制面协同：`msgque/event` 仅传 `data_ref`，payload 通过 DataBus 获取
@@ -49,7 +51,9 @@ DSL 关键字段：
 - `CPP_FUNCTION`
 - `SHELL_SCRIPT`
 - `EXECUTABLE`
+- `GO_SCRIPT`
 - `PYTHON_SCRIPT`
+- `JAVA_JAR`
 - `SO_LIBRARY`
 
 配置重点：
@@ -118,7 +122,7 @@ Node 规范与模板：
 实现：`src/runtime/worker/worker.cpp`
 
 职责：
-- 执行节点。
+- 通过 `WorkerEngine::execute_code` 统一执行节点多语言任务。
 - 上报执行状态。
 - 配合 runtime 推进 workflow 状态机。
 

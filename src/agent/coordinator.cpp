@@ -13,6 +13,29 @@ namespace framework {
 AgentCoordinator::AgentCoordinator(const Config& config) : config_(config) {
 }
 
+std::string AgentCoordinator::resolve_task_workflow(
+    const std::string& task_type, const std::vector<std::shared_ptr<Workflow>>& workflows) const {
+  if(task_type != "task0") {
+    return "";
+  }
+  const auto it = config_.task_workflows.find("0");
+  if(it == config_.task_workflows.end() || it->second.empty()) {
+    return "";
+  }
+  const std::string& target = it->second;
+  for(const auto& workflow : workflows) {
+    if(workflow && workflow->get_id() == target) {
+      return workflow->get_id();
+    }
+  }
+  for(const auto& workflow : workflows) {
+    if(workflow && workflow->get_name() == target) {
+      return workflow->get_id();
+    }
+  }
+  return "";
+}
+
 std::shared_ptr<AgentTask> AgentCoordinator::build_task_for_message(
     const std::string& session_id, const AgentMsgQue::Message& message,
     const std::vector<std::shared_ptr<Workflow>>& workflows, int64_t suffix_counter) const {
@@ -22,12 +45,16 @@ std::shared_ptr<AgentTask> AgentCoordinator::build_task_for_message(
   task_config.task_id = task_id.str();
 
   const auto type_it = message.metadata.find("task_type");
-  task_config.task_type = (type_it != message.metadata.end()) ? type_it->second : "execution";
+  task_config.task_type =
+      (type_it != message.metadata.end()) ? type_it->second : config_.default_task_type;
   task_config.session_id = session_id;
 
   const auto workflow_it = message.metadata.find("workflow_id");
   if(workflow_it != message.metadata.end()) {
     task_config.workflow_id = workflow_it->second;
+  } else if(const auto task_workflow = resolve_task_workflow(task_config.task_type, workflows);
+            !task_workflow.empty()) {
+    task_config.workflow_id = task_workflow;
   } else if(!workflows.empty()) {
     task_config.workflow_id = workflows.front()->get_id();
   }

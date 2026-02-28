@@ -2,6 +2,7 @@
 #define AGENTFLOW_INTERNAL_AGENT_COORDINATOR_H
 
 #include <memory>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,8 @@ class AgentCoordinator {
 public:
   struct Config {
     std::string coordinator_id;
+    std::string default_task_type = "task0";
+    std::map<std::string, std::string> task_workflows;
   };
 
   explicit AgentCoordinator(const Config& config);
@@ -32,6 +35,8 @@ private:
   std::shared_ptr<AgentTask> build_task_for_message(
       const std::string& session_id, const AgentMsgQue::Message& message,
       const std::vector<std::shared_ptr<Workflow>>& workflows, int64_t suffix_counter) const;
+  std::string resolve_task_workflow(const std::string& task_type,
+                                    const std::vector<std::shared_ptr<Workflow>>& workflows) const;
 
   Config config_;
 };

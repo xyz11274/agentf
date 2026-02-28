@@ -172,9 +172,10 @@
 
 ---
 
-**最后更新**：2026 年 2 月 21 日
+**最后更新**：2026 年 2 月 28 日
 **维护者**：@DanielKernel
 **变更记录**：
+- 2026-02-28: 同步刷新 Node 执行引擎下沉到 Worker、Coordinator task0 默认处理与 `task_workflows` 配置说明
 - 2026-02-21: 刷新 ARCHITECTURE.md 与 REFACTORING.md，补充 Agent/Runtime/Workflow 当日优化落地与下一步优化方向
 - 2026-02-18: 合并 roadmap.md 和 code-review.md 到 planning.md，合并 dependencies.md 到 development.md
 - 2026-02-18: 合并 CI/CD 文档，统一命名规范为 lowercase-hyphen

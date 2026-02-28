@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <filesystem>
+#include <fstream>
+
 #include "agent/agent.h"
 #include "agent/msgque.h"
 #include "agent/session.h"
@@ -106,6 +109,70 @@ TEST_F(AgentTest, CoordinatorBuildsSessionOwnedTaskWithWorkflowMapping) {
   EXPECT_TRUE(tasks[0]->get_parameter("message_data_ref", message_data_ref));
   EXPECT_EQ(message_content, "task-input");
   EXPECT_FALSE(message_data_ref.empty());
+}
+
+TEST_F(AgentTest, CoordinatorDefaultsToTask0Type) {
+  auto agent = std::make_shared<framework::Agent>(base_config());
+  framework::Workflow::Config wf_cfg;
+  wf_cfg.id = "wf_default";
+  wf_cfg.name = "wf_default";
+  agent->add_workflow(std::make_shared<framework::Workflow>(wf_cfg));
+
+  framework::AgentMsgQue::Message req;
+  req.message_id = "req_task0";
+  req.metadata["user_id"] = "u3";
+  req.metadata["client_id"] = "c3";
+  ASSERT_TRUE(agent->route_request_message(req));
+  EXPECT_EQ(agent->process_session_messages("u3:c3"), 1);
+
+  auto session = agent->get_session_by_key("u3:c3");
+  ASSERT_NE(session, nullptr);
+  auto tasks = session->get_tasks();
+  ASSERT_EQ(tasks.size(), 1);
+  EXPECT_EQ(tasks[0]->get_task_type(), "task0");
+}
+
+TEST_F(AgentTest, PackageTask0WorkflowMappingIsApplied) {
+  namespace fs = std::filesystem;
+  const fs::path tmp = fs::path("build/test_task0_pkg");
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({
+      "name": "task0-test-agent",
+      "version": "1.0.0",
+      "workflows": ["workflow_a.json", "workflow_b.json"],
+      "task_workflows": {"0": "wf_b"}
+    })";
+  }
+  {
+    std::ofstream wf(tmp / "workflow_a.json");
+    wf << R"({"id":"wf_a","name":"wf_a","version":"1.0.0","nodes":[{"id":"n1","name":"n1","type":"TASK"}],"edges":[]})";
+  }
+  {
+    std::ofstream wf(tmp / "workflow_b.json");
+    wf << R"({"id":"wf_b","name":"wf_b","version":"1.0.0","nodes":[{"id":"n2","name":"n2","type":"TASK"}],"edges":[]})";
+  }
+
+  auto agent = framework::Agent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  framework::AgentMsgQue::Message req;
+  req.message_id = "req_task0_map";
+  req.metadata["user_id"] = "u4";
+  req.metadata["client_id"] = "c4";
+  ASSERT_TRUE(agent->route_request_message(req));
+  EXPECT_EQ(agent->process_session_messages("u4:c4"), 1);
+
+  auto session = agent->get_session_by_key("u4:c4");
+  ASSERT_NE(session, nullptr);
+  auto tasks = session->get_tasks();
+  ASSERT_EQ(tasks.size(), 1);
+  EXPECT_EQ(tasks[0]->get_task_type(), "task0");
+  EXPECT_EQ(tasks[0]->get_workflow_id(), "wf_b");
+
+  fs::remove_all(tmp);
 }
 
 }  // namespace tests

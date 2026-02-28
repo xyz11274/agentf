@@ -253,6 +253,10 @@ bool Agent::initialize_components(std::shared_ptr<AgentPackage> package) {
   // Initialize coordinator component
   AgentCoordinator::Config coordinator_config;
   coordinator_config.coordinator_id = config_.id + "_coordinator";
+  coordinator_config.default_task_type = "task0";
+  if(package) {
+    coordinator_config.task_workflows = package->get_config().task_workflows;
+  }
   coordinator_ = std::make_shared<AgentCoordinator>(coordinator_config);
 
   // Initialize context component

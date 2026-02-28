@@ -24,6 +24,23 @@
   - `./build.sh build` 通过；
   - `./build.sh test` 通过（10/10）。
 
+## Node 执行引擎下沉 + Coordinator Task0 默认化（2026-02-28）
+
+- Node 多语言执行引擎下沉到 Worker：
+  - `include/internal/runtime/worker.h` 增加 Worker 执行请求/结果模型与 `execute_code` 入口；
+  - `src/runtime/worker/worker.cpp` 实现 shell/python/go/jar/so/executable 分发执行；
+  - `src/workflow/node/node.cpp` 的外部执行模式统一改为委托 worker 执行，Node 保留状态机与输入输出管理。
+- Coordinator 默认 task 语义统一为 task0：
+  - `include/internal/agent/coordinator.h` / `src/agent/coordinator.cpp` 增加默认 task 类型配置，缺省改为 `task0`；
+  - 新增 task0 workflow 解析逻辑：优先使用 `task_workflows["0"]`，支持按 workflow id 或 DSL 文件名匹配。
+- Agent 包新增 task0 workflow 定制能力：
+  - `include/internal/agent/package.h` / `src/agent/package.cpp` 新增 `task_workflows` 配置解析；
+  - `src/agent/agent.cpp` 初始化 coordinator 时注入包配置中的 task workflow 映射。
+- 测试增强：
+  - `tests/unit/src/test_agent_gtest.cpp` 新增 task0 默认行为和 package task0 workflow 映射测试；
+  - `tests/unit/src/test_builtin_workflow_gtest.cpp` 增加 `task_workflows` 解析断言；
+  - `tests/unit/src/test_runtime_master_worker_gtest.cpp` 新增 worker 执行引擎 shell 路径测试。
+
 ## Runtime Master 自主调度重构（2026-02-23）
 
 - `src/runtime/runtime.cpp` 增强全局 Agent 管理能力：
@@ -1511,4 +1528,3 @@ All examples have been validated:
 - 文档与测试：
   - `examples/README.md` 改为 agent 包视角说明，补充 `AgentService.config`、自动加载与请求处理链路说明；
   - `tests/functional/src/test_agent_loading.cpp` 新增 AgentActor + RuntimeActor 自动加载/注册链路测试（RapidJSON 开启时执行）。
-

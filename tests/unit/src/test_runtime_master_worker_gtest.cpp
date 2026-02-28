@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <filesystem>
+#include <fstream>
+#include <type_traits>
+
 #include "runtime/agent_runtime.h"
 
 namespace agentflow {
@@ -70,6 +74,38 @@ TEST(RuntimeMasterWorkerTest, SchedulerPrefersSameAgentInstanceThenSharedInstanc
   result = runtime.schedule_task(request);
   ASSERT_TRUE(result.scheduled);
   EXPECT_EQ(result.workflow_instance_id, "wf-shared");
+}
+
+TEST(RuntimeMasterWorkerTest, WorkerExecutesShellScriptViaEngine) {
+  namespace fs = std::filesystem;
+  const fs::path script = fs::path("build/test_worker_shell.sh");
+  {
+    std::ofstream ofs(script);
+    ofs << "#!/bin/sh\n";
+    ofs << "echo worker-shell-ok\n";
+  }
+  fs::permissions(script, fs::perms::owner_exec | fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::add);
+
+  runtime::WorkerEngine::ExecutionRequest request;
+  request.mode = runtime::WorkerEngine::ExecutionMode::SHELL_SCRIPT;
+  request.command = script.string();
+  auto response = runtime::WorkerEngine::execute_code(request);
+  ASSERT_TRUE(response.success);
+
+  auto it = response.outputs.find("stdout");
+  ASSERT_NE(it, response.outputs.end());
+  const std::string output = std::visit(
+      [](const auto& v) -> std::string {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr(std::is_same_v<T, std::string>) {
+          return v;
+        }
+        return "";
+      },
+      it->second);
+  EXPECT_NE(output.find("worker-shell-ok"), std::string::npos);
+  fs::remove(script);
 }
 
 }  // namespace tests

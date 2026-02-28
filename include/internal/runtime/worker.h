@@ -16,6 +16,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "agent/common.h"
+#include "runtime/exe_loader.h"
 #include "utils/thread_pool.h"
 
 namespace agentflow {
@@ -23,6 +25,36 @@ namespace runtime {
 
 class WorkerEngine {
 public:
+  enum class ExecutionMode {
+    CPP_FUNCTION = 0,
+    SHELL_SCRIPT = 1,
+    EXECUTABLE = 2,
+    GO_SCRIPT = 3,
+    PYTHON_SCRIPT = 4,
+    JAVA_JAR = 5,
+    SO_LIBRARY = 6
+  };
+
+  struct ExecutionRequest {
+    ExecutionMode             mode = ExecutionMode::CPP_FUNCTION;
+    std::string               command;
+    std::string               function_name;
+    std::string               main_class;
+    std::string               working_dir;
+    std::vector<std::string>  args;
+    int                       timeout_ms = 30000;
+    DataMap                   inputs;
+  };
+
+  struct ExecutionResponse {
+    bool                      success = false;
+    DataMap                   outputs;
+    std::string               stdout_content;
+    std::string               stderr_content;
+    std::string               error_message;
+    int                       exit_code = -1;
+  };
+
   enum class WorkerStatus {
     STARTING = 0,
     RUNNING  = 1,
@@ -93,6 +125,7 @@ public:
   bool unregister_workflow_instance(const std::string& workflow_instance_id);
   bool enqueue_event(const WorkerEvent& event);
   void register_event_handler(const std::string& event_type, WorkerEventHandler handler);
+  static ExecutionResponse execute_code(const ExecutionRequest& request);
 
 private:
   static int64_t now_ms();

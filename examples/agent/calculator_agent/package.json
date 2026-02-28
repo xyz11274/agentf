@@ -10,6 +10,9 @@
     "workflow.json",
     "workflow_01.json"
   ],
+  "task_workflows": {
+    "0": "workflow_01.json"
+  },
   "dependencies": {
     "core-lib": "1.0.0"
   },

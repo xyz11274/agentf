@@ -199,6 +199,7 @@ private:
   bool execute_cpp_function();
   bool execute_shell_command();
   bool execute_external_program();
+  bool execute_with_worker_engine();
   bool execute_with_timeout(int timeout_ms, std::function<bool()> executor);
   bool execute_so_library();
   bool execute_jar_file();

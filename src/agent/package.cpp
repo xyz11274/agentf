@@ -128,6 +128,14 @@ std::shared_ptr<AgentPackage> AgentPackage::load_from_directory(const std::strin
     }
   }
 
+  if (doc.HasMember("task_workflows") && doc["task_workflows"].IsObject()) {
+    for (auto& m : doc["task_workflows"].GetObject()) {
+      if (m.value.IsString()) {
+        config.task_workflows[m.name.GetString()] = m.value.GetString();
+      }
+    }
+  }
+
   // Deduplicate workflow file entries while preserving order.
   {
     std::unordered_set<std::string> seen;

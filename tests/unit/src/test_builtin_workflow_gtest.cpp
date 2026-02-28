@@ -43,7 +43,8 @@ TEST(BuiltinWorkflowTest, PackageBuiltinWorkflowsAreResolvedAndParseable) {
     "name": "builtin-test-agent",
     "version": "1.0.0",
     "entry_point": "builtin_test.so",
-    "builtin_workflows": ["memory", "tools"]
+    "builtin_workflows": ["memory", "tools"],
+    "task_workflows": {"0": "tools/workflow.json"}
   })";
   ofs.close();
 
@@ -51,6 +52,9 @@ TEST(BuiltinWorkflowTest, PackageBuiltinWorkflowsAreResolvedAndParseable) {
   ASSERT_NE(package, nullptr);
   const auto& wf_files = package->get_config().workflow_files;
   ASSERT_GE(wf_files.size(), 2u);
+  auto task_wf_it = package->get_config().task_workflows.find("0");
+  ASSERT_NE(task_wf_it, package->get_config().task_workflows.end());
+  EXPECT_EQ(task_wf_it->second, "tools/workflow.json");
 
   bool has_memory = false;
   bool has_tools = false;

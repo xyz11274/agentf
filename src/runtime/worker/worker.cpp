@@ -3,11 +3,80 @@
 #include <sys/time.h>
 
 #include <algorithm>
+#include <sstream>
 
 #include "utils/logger.h"
 
 namespace agentflow {
 namespace runtime {
+
+WorkerEngine::ExecutionResponse WorkerEngine::execute_code(const ExecutionRequest& request) {
+  ExecutionResponse response;
+  if(request.command.empty()) {
+    response.error_message = "No command specified for execution";
+    return response;
+  }
+
+  runtime::ExecutionConfig exec_config;
+  exec_config.inputs      = request.inputs;
+  exec_config.working_dir = request.working_dir;
+  exec_config.timeout_ms  = request.timeout_ms > 0 ? request.timeout_ms : 30000;
+
+  auto& code_loader = runtime::global_code_loader();
+  runtime::ExecutionResult result;
+  switch(request.mode) {
+    case ExecutionMode::SHELL_SCRIPT:
+      result = code_loader.execute_shell_script(request.command, request.args, exec_config);
+      break;
+    case ExecutionMode::EXECUTABLE:
+      result = code_loader.execute_shell_script(request.command, request.args, exec_config);
+      break;
+    case ExecutionMode::PYTHON_SCRIPT:
+      result = code_loader.execute_python_script(request.command, request.args, exec_config);
+      break;
+    case ExecutionMode::GO_SCRIPT:
+      result = code_loader.execute_go_script(request.command, request.args, exec_config);
+      break;
+    case ExecutionMode::JAVA_JAR:
+      result = code_loader.execute_jar(request.command, request.main_class, request.args, exec_config);
+      break;
+    case ExecutionMode::SO_LIBRARY:
+      result = code_loader.load_and_execute_so(
+          request.command, request.function_name.empty() ? "execute" : request.function_name,
+          exec_config);
+      break;
+    case ExecutionMode::CPP_FUNCTION:
+    default:
+      result = code_loader.execute(request.command, exec_config);
+      break;
+  }
+
+  response.success        = result.success;
+  response.stdout_content = result.stdout;
+  response.stderr_content = result.stderr;
+  response.error_message  = result.error_message;
+  response.exit_code      = result.exit_code;
+  if(!result.stdout.empty()) {
+    response.outputs["stdout"] = result.stdout;
+  }
+  if(!result.stderr.empty()) {
+    response.outputs["stderr"] = result.stderr;
+  }
+  response.outputs["exit_code"] = std::to_string(result.exit_code);
+
+  if(request.mode == ExecutionMode::SO_LIBRARY && result.success && !result.stdout.empty()) {
+    std::istringstream iss(result.stdout);
+    std::string        line;
+    while(std::getline(iss, line)) {
+      const size_t pos = line.find('=');
+      if(pos == std::string::npos) {
+        continue;
+      }
+      response.outputs[line.substr(0, pos)] = line.substr(pos + 1);
+    }
+  }
+  return response;
+}
 
 int64_t WorkerEngine::now_ms() {
   timeval tv;

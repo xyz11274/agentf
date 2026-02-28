@@ -8,7 +8,7 @@
 - **工作流图执行**：支持条件分支、循环迭代、环回跳转、异常处理
 - **三层调度**：Agent → Workflow → Node 的 Master-Worker 架构
 - **高性能通信**：零拷贝数据总线、双平面通信机制
-- **多语言支持**：C++、Python、Shell 等多种执行模式
+- **多语言支持**：C++、Python、Shell、Go、Java 等执行模式（由 Worker 执行引擎统一承载）
 - **热重载**：运行时动态更新配置和代码
 
 ## 🚀 快速开始
@@ -76,14 +76,14 @@ agent->start();
 
 ### 🏗️ 项目规划与功能状态
 - **[项目规划](docs/REFACTORING.md)** - 功能实现状态、优先级和路线图
-- **[路线图](docs/roadmap.md)** - 短期计划和功能愿景
+- **[重构记录](docs/REFACTORING.md)** - 近期重构与兼容策略
 
 ### 💻 开发和贡献
 - **[贡献指南](CONTRIBUTING.md)** - 如何为项目做贡献
   - 代码规范和提交流程
   - 测试要求
   - Pull Request 指南
-- **[依赖管理](docs/dependencies.md)** - 外部依赖和安装方式
+- **[发布与打包](publish/README.md)** - Agent 包开发与发布说明
 - **[测试指南](docs/README.md)** - 测试方法和覆盖率要求
 
 ### ⚙️ CI/CD 和部署
@@ -153,7 +153,7 @@ AgentFlow/
 | 基础设施 | 48% | [查看详情](docs/REFACTORING.md) |
 | 监控和日志 | 58% | [查看详情](docs/REFACTORING.md) |
 
-完整的功能规划和实现状态见 [项目规划](docs/REFACTORING.md)，代码完备性评估见 [代码审查](docs/code-review.md)。
+完整的功能规划和实现状态见 [项目规划](docs/REFACTORING.md)。
 
 ## 📋 支持和帮助
 

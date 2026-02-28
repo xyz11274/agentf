@@ -7,6 +7,7 @@
 #include <memory>
 #include <thread>
 
+#include "runtime/worker.h"
 #include "utils/logger.h"
 #include "utils/thread_pool.h"
 
@@ -287,16 +288,10 @@ bool Node::execute() {
     case ExecutionMode::SHELL_SCRIPT:
     case ExecutionMode::PYTHON_SCRIPT:
     case ExecutionMode::EXECUTABLE:
-      result = execute_shell_command();
-      break;
     case ExecutionMode::GO_SCRIPT:
-      result = execute_script(runtime::ExecutableType::GO_SCRIPT);
-      break;
     case ExecutionMode::JAVA_JAR:
-      result = execute_jar_file();
-      break;
     case ExecutionMode::SO_LIBRARY:
-      result = execute_so_library();
+      result = execute_with_worker_engine();
       break;
   }
 
@@ -547,6 +542,53 @@ bool Node::execute_with_timeout(int timeout_ms, std::function<bool()> executor) 
                                config_.id.c_str());
     throw;
   }
+}
+
+bool Node::execute_with_worker_engine() {
+  runtime::WorkerEngine::ExecutionRequest request;
+  request.command       = config_.command;
+  request.function_name = config_.function_name;
+  request.main_class    = config_.main_class;
+  request.working_dir   = config_.working_dir;
+  request.args          = config_.args;
+  request.timeout_ms    = config_.timeout_ms > 0 ? config_.timeout_ms : 30000;
+  request.inputs        = inputs_;
+
+  switch(config_.execution_mode) {
+    case ExecutionMode::SHELL_SCRIPT:
+      request.mode = runtime::WorkerEngine::ExecutionMode::SHELL_SCRIPT;
+      break;
+    case ExecutionMode::EXECUTABLE:
+      request.mode = runtime::WorkerEngine::ExecutionMode::EXECUTABLE;
+      break;
+    case ExecutionMode::GO_SCRIPT:
+      request.mode = runtime::WorkerEngine::ExecutionMode::GO_SCRIPT;
+      break;
+    case ExecutionMode::PYTHON_SCRIPT:
+      request.mode = runtime::WorkerEngine::ExecutionMode::PYTHON_SCRIPT;
+      break;
+    case ExecutionMode::JAVA_JAR:
+      request.mode = runtime::WorkerEngine::ExecutionMode::JAVA_JAR;
+      break;
+    case ExecutionMode::SO_LIBRARY:
+      request.mode = runtime::WorkerEngine::ExecutionMode::SO_LIBRARY;
+      break;
+    case ExecutionMode::CPP_FUNCTION:
+    default:
+      request.mode = runtime::WorkerEngine::ExecutionMode::CPP_FUNCTION;
+      break;
+  }
+
+  auto response = runtime::WorkerEngine::execute_code(request);
+  if(response.success) {
+    outputs_ = response.outputs;
+    return true;
+  }
+  if(!response.outputs.empty()) {
+    outputs_ = response.outputs;
+  }
+  last_error_ = response.error_message.empty() ? "Worker execution failed" : response.error_message;
+  return false;
 }
 
 // ============================================================================

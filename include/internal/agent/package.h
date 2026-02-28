@@ -40,6 +40,7 @@ public:
     std::string package_root;
     std::vector<std::string> workflow_files;
     std::vector<std::string> builtin_workflows;
+    std::map<std::string, std::string> task_workflows;
   };
 
   explicit AgentPackage(const Config& config);
