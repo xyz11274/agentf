@@ -83,7 +83,9 @@
       //   "cpp_function"  – calls a registered C++ lambda (config.cpp_function)
       //   "shell_script"  – runs config.command via /bin/sh in config.working_dir
       //   "executable"    – runs config.command as a direct subprocess
+      //   "go_script"     – runs `go run config.command` with config.args
       //   "python_script" – runs config.command with the Python interpreter
+      //   "java_jar"      – runs config.command via `java -jar` (or `-cp` with main_class)
       //   "so_library"    – dlopen(config.command) and calls config.function_name
       "execution_mode": "cpp_function",
 
@@ -95,14 +97,14 @@
       // Interpreted based on execution_mode. Empty for "cpp_function".
       "command": "",
 
-      // Working directory for external execution (shell/executable/python).
+      // Working directory for external execution (shell/executable/go/python/java).
       // Empty string means the process inherits the parent working directory.
       "working_dir": "",
 
       // Extra positional arguments appended to command at runtime.
       "args": [],
 
-      // Main class name for JAR-based nodes (future JAR execution mode).
+      // Main class name for java_jar mode when using classpath execution.
       "main_class": "",
 
       // Named input parameter ports consumed by this node.

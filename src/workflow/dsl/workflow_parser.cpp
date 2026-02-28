@@ -593,8 +593,12 @@ bool WorkflowParser::parse_node_config(std::shared_ptr<const IJsonValue> node_ob
     config.execution_mode = framework::Node::ExecutionMode::SHELL_SCRIPT;
   } else if(exec_mode_str == "executable") {
     config.execution_mode = framework::Node::ExecutionMode::EXECUTABLE;
+  } else if(exec_mode_str == "go_script") {
+    config.execution_mode = framework::Node::ExecutionMode::GO_SCRIPT;
   } else if(exec_mode_str == "python_script") {
     config.execution_mode = framework::Node::ExecutionMode::PYTHON_SCRIPT;
+  } else if(exec_mode_str == "java_jar") {
+    config.execution_mode = framework::Node::ExecutionMode::JAVA_JAR;
   } else if(exec_mode_str == "so_library") {
     config.execution_mode = framework::Node::ExecutionMode::SO_LIBRARY;
   } else {

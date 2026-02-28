@@ -22,6 +22,7 @@ enum class ExecutableType {
   SO_LIBRARY,     // Shared object library (.so, .dylib)
   JAR_FILE,       // Java Archive (.jar)
   SHELL_SCRIPT,   // Shell script (.sh, .bash)
+  GO_SCRIPT,      // Go script (.go)
   PYTHON_SCRIPT,  // Python script (.py)
   EXECUTABLE      // Executable binary
 };
@@ -195,6 +196,17 @@ public:
   ExecutionResult execute_python_script(const std::string&              script_path,
                                         const std::vector<std::string>& args   = {},
                                         const ExecutionConfig&          config = ExecutionConfig());
+
+  /**
+   * Execute a Go script
+   * @param script_path Path to the Go script
+   * @param args Command line arguments
+   * @param config Execution configuration
+   * @return Execution result
+   */
+  ExecutionResult execute_go_script(const std::string&              script_path,
+                                    const std::vector<std::string>& args   = {},
+                                    const ExecutionConfig&          config = ExecutionConfig());
 
   /**
    * Generic execute method that auto-detects file type

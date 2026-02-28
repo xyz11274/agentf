@@ -15,7 +15,7 @@ Execute one atomic action in workflow runtime.
 ## Invocation
 1. Resolve node execution contract.
 2. If `type == workflow`, resolve `workflow_ref` and handoff to nested workflow execution entry.
-3. Otherwise execute by `execution_mode` (`cpp_function/shell_script/executable/python_script/so_library`).
+3. Otherwise execute by `execution_mode` (`cpp_function/shell_script/executable/go_script/python_script/java_jar/so_library`).
 
 ## Outputs
 - `status`: SUCCESS/FAILED

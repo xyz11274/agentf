@@ -224,8 +224,14 @@ bool Node::execute() {
     case ExecutionMode::EXECUTABLE:
       mode_str = "EXECUTABLE";
       break;
+    case ExecutionMode::GO_SCRIPT:
+      mode_str = "GO_SCRIPT";
+      break;
     case ExecutionMode::PYTHON_SCRIPT:
       mode_str = "PYTHON_SCRIPT";
+      break;
+    case ExecutionMode::JAVA_JAR:
+      mode_str = "JAVA_JAR";
       break;
     case ExecutionMode::SO_LIBRARY:
       mode_str = "SO_LIBRARY";
@@ -282,6 +288,12 @@ bool Node::execute() {
     case ExecutionMode::PYTHON_SCRIPT:
     case ExecutionMode::EXECUTABLE:
       result = execute_shell_command();
+      break;
+    case ExecutionMode::GO_SCRIPT:
+      result = execute_script(runtime::ExecutableType::GO_SCRIPT);
+      break;
+    case ExecutionMode::JAVA_JAR:
+      result = execute_jar_file();
       break;
     case ExecutionMode::SO_LIBRARY:
       result = execute_so_library();
@@ -776,8 +788,17 @@ bool Node::execute_script(runtime::ExecutableType type) {
     runtime::ExecutionResult result;
 
     switch(type) {
+      case runtime::ExecutableType::SHELL_SCRIPT:
+        result = code_loader_->execute_shell_script(config_.command, config_.args, exec_config);
+        break;
+      case runtime::ExecutableType::EXECUTABLE:
+        result = code_loader_->execute_shell_script(config_.command, config_.args, exec_config);
+        break;
       case runtime::ExecutableType::PYTHON_SCRIPT:
         result = code_loader_->execute_python_script(config_.command, config_.args, exec_config);
+        break;
+      case runtime::ExecutableType::GO_SCRIPT:
+        result = code_loader_->execute_go_script(config_.command, config_.args, exec_config);
         break;
       case runtime::ExecutableType::JAR_FILE:
         result = code_loader_->execute_jar(config_.command, config_.main_class, config_.args,

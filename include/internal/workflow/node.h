@@ -29,7 +29,9 @@ public:
     CPP_FUNCTION,   // Local C++ function execution
     SHELL_SCRIPT,   // Shell script execution
     EXECUTABLE,     // External program execution
+    GO_SCRIPT,      // Go script execution
     PYTHON_SCRIPT,  // Python script execution
+    JAVA_JAR,       // Java JAR execution
     SO_LIBRARY      // Shared object library execution
   };
 

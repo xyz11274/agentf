@@ -280,6 +280,27 @@ std::string resolve_python_command(const char* python_path) {
   return "";
 }
 
+std::string resolve_go_command(const char* go_path) {
+  if(!go_path || *go_path == '\0') {
+    return "";
+  }
+
+  std::string candidate = go_path;
+  if(is_executable_path(candidate)) {
+    return candidate;
+  }
+
+  struct stat st;
+  if(stat(candidate.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+    std::string from_dir = candidate + "/bin/go";
+    if(is_executable_path(from_dir)) {
+      return from_dir;
+    }
+  }
+
+  return "";
+}
+
 }  // namespace
 
 // ============================================================================
@@ -338,6 +359,8 @@ std::string CodeLoader::executable_type_to_string(ExecutableType type) {
       return "JAR_FILE";
     case ExecutableType::SHELL_SCRIPT:
       return "SHELL_SCRIPT";
+    case ExecutableType::GO_SCRIPT:
+      return "GO_SCRIPT";
     case ExecutableType::PYTHON_SCRIPT:
       return "PYTHON_SCRIPT";
     case ExecutableType::EXECUTABLE:
@@ -360,6 +383,8 @@ ExecutableType CodeLoader::detect_executable_type(const std::string& file_path) 
     return ExecutableType::JAR_FILE;
   } else if(ext == ".sh" || ext == ".bash") {
     return ExecutableType::SHELL_SCRIPT;
+  } else if(ext == ".go") {
+    return ExecutableType::GO_SCRIPT;
   } else if(ext == ".py") {
     return ExecutableType::PYTHON_SCRIPT;
   } else if(ext.empty() || ext == ".exe" || ext == ".bin") {
@@ -552,6 +577,24 @@ ExecutionResult CodeLoader::execute_python_script(const std::string&            
   return execute_command(command, config.working_dir, config.timeout_ms, config.env_vars);
 }
 
+ExecutionResult CodeLoader::execute_go_script(const std::string&              script_path,
+                                              const std::vector<std::string>& args,
+                                              const ExecutionConfig&          config) {
+  log_execution_start(script_path, ExecutableType::GO_SCRIPT);
+
+  std::string go_cmd  = "go";
+  const char* go_path = std::getenv("GO_PATH");
+  std::string resolved_path = resolve_go_command(go_path);
+  if(!resolved_path.empty()) {
+    go_cmd = resolved_path;
+  }
+
+  std::string command = build_command_string(go_cmd, { "run", script_path });
+  command += " " + build_command_string("", args);
+
+  return execute_command(command, config.working_dir, config.timeout_ms, config.env_vars);
+}
+
 ExecutionResult CodeLoader::execute(const std::string& file_path, const ExecutionConfig& config) {
   ExecutableType type = detect_executable_type(file_path);
 
@@ -564,6 +607,9 @@ ExecutionResult CodeLoader::execute(const std::string& file_path, const Executio
 
     case ExecutableType::SHELL_SCRIPT:
       return execute_shell_script(file_path, {}, config);
+
+    case ExecutableType::GO_SCRIPT:
+      return execute_go_script(file_path, {}, config);
 
     case ExecutableType::PYTHON_SCRIPT:
       return execute_python_script(file_path, {}, config);

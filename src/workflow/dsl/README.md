@@ -39,7 +39,7 @@ AgentFlow 工作流 DSL 是一个 JSON（或 JSONC —— 带注释的 JSON）�
 | `working_dir` | 字符串 | `""` | 外部执行的工作目录 |
 | `args` | 字符串数组 | `[]` | 附加到 `command` 的额外参数 |
 | `function_name` | 字符串 | `""` | `so_library` 模式下导出的符号名称 |
-| `main_class` | 字符串 | `""` | 用于将来 JAR 模式的 Java 主类 |
+| `main_class` | 字符串 | `""` | `java_jar` 模式下 `java -cp` 所需主类名（留空则走 `-jar`） |
 | `inputs` | 字符串数组 | `[]` | 命名的输入数据端口 |
 | `outputs` | 字符串数组 | `[]` | 命名的输出数据端口 |
 | `max_retries` | 整数 | `3` | 失败时的重试次数 |
@@ -57,7 +57,9 @@ AgentFlow 工作流 DSL 是一个 JSON（或 JSONC —— 带注释的 JSON）�
 | `"cpp_function"` | 调用已注册的 C++ lambda（`Config::cpp_function`） |
 | `"shell_script"` | 通过 `/bin/sh` 在 `working_dir` 中运行 `command` |
 | `"executable"` | 作为直接子进程运行 `command` |
+| `"go_script"` | 使用 `go run command [args]` 执行 Go 源码 |
 | `"python_script"` | 使用系统 Python 解释器运行 `command` |
+| `"java_jar"` | 使用 `java -jar command [args]`（或配置 `main_class` 走 `-cp`） |
 | `"so_library"` | 使用 `dlopen(command)` 并调用符号 `function_name` |
 
 ---

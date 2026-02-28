@@ -113,8 +113,14 @@ std::string workflow_config_to_json(const Workflow::Config&                   co
       case Node::ExecutionMode::EXECUTABLE:
         exec_mode = "executable";
         break;
+      case Node::ExecutionMode::GO_SCRIPT:
+        exec_mode = "go_script";
+        break;
       case Node::ExecutionMode::PYTHON_SCRIPT:
         exec_mode = "python_script";
+        break;
+      case Node::ExecutionMode::JAVA_JAR:
+        exec_mode = "java_jar";
         break;
       case Node::ExecutionMode::SO_LIBRARY:
         exec_mode = "so_library";
@@ -352,8 +358,12 @@ bool workflow_config_from_json(const std::string& json_str, Workflow::Config& co
           node_config.execution_mode = Node::ExecutionMode::SHELL_SCRIPT;
         } else if(mode_str == "executable") {
           node_config.execution_mode = Node::ExecutionMode::EXECUTABLE;
+        } else if(mode_str == "go_script") {
+          node_config.execution_mode = Node::ExecutionMode::GO_SCRIPT;
         } else if(mode_str == "python_script") {
           node_config.execution_mode = Node::ExecutionMode::PYTHON_SCRIPT;
+        } else if(mode_str == "java_jar") {
+          node_config.execution_mode = Node::ExecutionMode::JAVA_JAR;
         } else if(mode_str == "so_library") {
           node_config.execution_mode = Node::ExecutionMode::SO_LIBRARY;
         } else {

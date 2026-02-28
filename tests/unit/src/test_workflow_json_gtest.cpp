@@ -399,6 +399,48 @@ TEST_F(WorkflowJsonTest, ParseNodeConfiguration) {
   EXPECT_EQ(config.retry_delay_ms, 1000);
 }
 
+TEST_F(WorkflowJsonTest, ParseNodeExecutionModesGoAndJavaJar) {
+  auto result = parser_->parse_workflow(R"({
+    "id": "workflow_exec_mode_ext",
+    "name": "Execution Mode Extensions",
+    "version": "1.0.0",
+    "nodes": [
+      {
+        "id": "go_node",
+        "name": "Go Node",
+        "type": "TASK",
+        "config": {
+          "execution_mode": "go_script",
+          "command": "scripts/run.go"
+        }
+      },
+      {
+        "id": "java_node",
+        "name": "Java Node",
+        "type": "TASK",
+        "config": {
+          "execution_mode": "java_jar",
+          "command": "jars/app.jar",
+          "main_class": "com.example.Main"
+        }
+      }
+    ],
+    "edges": []
+  })");
+
+  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
+  ASSERT_NE(result.workflow, nullptr);
+
+  auto go_node = result.workflow->get_node("go_node");
+  ASSERT_NE(go_node, nullptr);
+  EXPECT_EQ(go_node->get_config().execution_mode, framework::Node::ExecutionMode::GO_SCRIPT);
+
+  auto java_node = result.workflow->get_node("java_node");
+  ASSERT_NE(java_node, nullptr);
+  EXPECT_EQ(java_node->get_config().execution_mode, framework::Node::ExecutionMode::JAVA_JAR);
+  EXPECT_EQ(java_node->get_config().main_class, "com.example.Main");
+}
+
 TEST_F(WorkflowJsonTest, ParseNodeInputOutput) {
   auto result = parser_->parse_workflow(valid_workflow_json_);
 

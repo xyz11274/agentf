@@ -68,8 +68,12 @@ bool parse_node_config(const std::string& config_file, Node::Config& config) {
       config.execution_mode = Node::ExecutionMode::SHELL_SCRIPT;
     } else if(mode == "EXECUTABLE") {
       config.execution_mode = Node::ExecutionMode::EXECUTABLE;
+    } else if(mode == "GO_SCRIPT") {
+      config.execution_mode = Node::ExecutionMode::GO_SCRIPT;
     } else if(mode == "PYTHON_SCRIPT") {
       config.execution_mode = Node::ExecutionMode::PYTHON_SCRIPT;
+    } else if(mode == "JAVA_JAR") {
+      config.execution_mode = Node::ExecutionMode::JAVA_JAR;
     } else if(mode == "SO_LIBRARY") {
       config.execution_mode = Node::ExecutionMode::SO_LIBRARY;
     }
