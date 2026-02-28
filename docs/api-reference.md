@@ -14,7 +14,7 @@
 - workflow 管理：`add_workflow/remove_workflow/get_workflow/get_workflows`
 - 会话与消息路由：`get_or_create_session/route_request_message/process_session_messages`
 - Coordinator 默认任务：未显式声明 `task_type` 时按 `task0` 处理
-- 包内任务映射：`package.json.task_workflows["0"]` 可配置 task0 默认 workflow
+- 包内 coordinator 固定映射：`package.json.coordinator_workflow` 可配置 task0 默认 workflow
 - 共享数据：`publish_data/get_data`
 - 包加载：`create_from_package`
 - 控制面协同：`msgque/event` 仅传 `data_ref`，payload 通过 DataBus 获取

@@ -1,0 +1,29 @@
+{
+  "id": "coordinator-workflow-v1",
+  "version": "1.0",
+  "name": "coordinator-workflow-v1",
+  "description": "Coordinator task0 workflow template with session/task creation steps",
+  "nodes": [
+    {
+      "id": "session_create",
+      "name": "Session Create Node",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "node_demo.sh"
+    },
+    {
+      "id": "task_create",
+      "name": "Task Create Node",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "node_demo.sh"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge_session_to_task",
+      "source": "session_create",
+      "target": "task_create"
+    }
+  ]
+}

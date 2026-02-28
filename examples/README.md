@@ -45,16 +45,14 @@
 
 业务侧通过 Actor 消息投递 `request.message`，`Agent` 内部事件队列触发 `AgentCoordinator` 会话处理，默认生成 `task0` 类型 task，并由 `AgentActor` 统一维护生命周期并继续上报 Runtime。
 
-### 4) task0 默认流程定制
+### 4) coordinator(task0) 固定流程定制
 
 可在 Agent 包 `package.json` 中配置：
 
 ```json
 {
-  "task_workflows": {
-    "0": "workflow_01.json"
-  }
+  "coordinator_workflow": "basic-coordinator-workflow"
 }
 ```
 
-当请求消息未显式指定 `workflow_id` 时，系统会优先按 `task_workflows["0"]` 选择默认 workflow。
+当请求消息未显式指定 `workflow_id` 时，系统会优先使用 `coordinator_workflow`。示例中的 `coordinator_workflow.json` 展示了 session 创建节点与 task 创建节点的编排方式。

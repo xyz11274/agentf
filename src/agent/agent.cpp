@@ -222,6 +222,7 @@ Agent::~Agent() {
   // Clean up components
   default_session_.reset();
   sessions_.clear();
+  session_coordinators_.clear();
   current_task_.reset();
   messages_.reset();
   coordinator_.reset();
@@ -233,11 +234,8 @@ Agent::~Agent() {
 }
 
 bool Agent::initialize_components(std::shared_ptr<AgentPackage> package) {
-  // Initialize default session component
-  AgentSession::Config session_config;
-  session_config.session_id = config_.id + "_default_session";
-  default_session_ = std::make_shared<AgentSession>(session_config);
-  sessions_[session_config.session_id] = default_session_;
+  sessions_.clear();
+  session_coordinators_.clear();
 
   // Initialize task component
   AgentTask::Config task_config;
@@ -249,15 +247,6 @@ bool Agent::initialize_components(std::shared_ptr<AgentPackage> package) {
   AgentMsgQue::Config messages_config;
   messages_config.max_queue_size = 1024;
   messages_ = std::make_shared<AgentMsgQue>(messages_config);
-
-  // Initialize coordinator component
-  AgentCoordinator::Config coordinator_config;
-  coordinator_config.coordinator_id = config_.id + "_coordinator";
-  coordinator_config.default_task_type = "task0";
-  if(package) {
-    coordinator_config.task_workflows = package->get_config().task_workflows;
-  }
-  coordinator_ = std::make_shared<AgentCoordinator>(coordinator_config);
 
   // Initialize context component
   AgentContext::Config context_config;
@@ -282,22 +271,60 @@ bool Agent::initialize_components(std::shared_ptr<AgentPackage> package) {
     package_ = std::make_shared<AgentPackage>(package_config);
   }
 
+  default_session_ = create_session_with_defaults("0");
+  coordinator_ = get_session_coordinator("0");
   return true;
+}
+
+std::shared_ptr<AgentSession> Agent::create_session_with_defaults(const std::string& session_id) {
+  AgentSession::Config session_config;
+  session_config.session_id = session_id;
+  auto session = std::make_shared<AgentSession>(session_config);
+
+  AgentTask::Config coordinator_task_config;
+  coordinator_task_config.task_id = session_id + "_task_0";
+  coordinator_task_config.task_type = "task0";
+  coordinator_task_config.session_id = session_id;
+  auto coordinator_task = std::make_shared<AgentTask>(coordinator_task_config);
+  session->add_task(coordinator_task);
+
+  AgentCoordinator::Config coordinator_config;
+  coordinator_config.coordinator_id = config_.id + "_coordinator_" + session_id;
+  coordinator_config.default_task_type = "task0";
+  if(package_) {
+    coordinator_config.coordinator_workflow = package_->get_config().coordinator_workflow;
+    coordinator_config.task_workflows = package_->get_config().task_workflows;
+  }
+  auto session_coordinator = std::make_shared<AgentCoordinator>(coordinator_config, coordinator_task);
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    sessions_[session_id] = session;
+    session_coordinators_[session_id] = session_coordinator;
+  }
+  return session;
+}
+
+std::shared_ptr<AgentCoordinator> Agent::get_session_coordinator(const std::string& session_id) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto it = session_coordinators_.find(session_id);
+  if(it == session_coordinators_.end()) {
+    return nullptr;
+  }
+  return it->second;
 }
 
 std::shared_ptr<AgentSession> Agent::get_or_create_session(const std::string& user_id,
                                                            const std::string& client_id) {
   const std::string session_key = user_id + ":" + client_id;
-  auto              it = sessions_.find(session_key);
-  if(it != sessions_.end()) {
-    return it->second;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto                        it = sessions_.find(session_key);
+    if(it != sessions_.end()) {
+      return it->second;
+    }
   }
-
-  AgentSession::Config session_config;
-  session_config.session_id = session_key;
-  auto session = std::make_shared<AgentSession>(session_config);
-  sessions_[session_key] = session;
-  return session;
+  return create_session_with_defaults(session_key);
 }
 
 std::shared_ptr<AgentSession> Agent::get_session_by_key(const std::string& session_key) const {
@@ -323,10 +350,11 @@ bool Agent::route_request_message(const AgentMsgQue::Message& message) {
 
 int Agent::process_session_messages(const std::string& session_key) {
   auto session = get_session_by_key(session_key);
-  if(!session || !coordinator_) {
+  auto session_coordinator = get_session_coordinator(session_key);
+  if(!session || !session_coordinator) {
     return 0;
   }
-  auto tasks = coordinator_->process_session_messages(*session, workflows_);
+  auto tasks = session_coordinator->process_session_messages(*session, workflows_);
   if(!tasks.empty()) {
     std::lock_guard<std::mutex> lock(generated_tasks_mutex_);
     for(const auto& task : tasks) {
@@ -357,7 +385,11 @@ int Agent::process_all_sessions_until_idle() {
       if(!session) {
         continue;
       }
-      auto tasks = coordinator_->process_session_messages(*session, workflows_);
+      auto session_coordinator = get_session_coordinator(session->get_session_id());
+      if(!session_coordinator) {
+        continue;
+      }
+      auto tasks = session_coordinator->process_session_messages(*session, workflows_);
       round_tasks += static_cast<int>(tasks.size());
       if(!tasks.empty()) {
         std::lock_guard<std::mutex> lock(generated_tasks_mutex_);

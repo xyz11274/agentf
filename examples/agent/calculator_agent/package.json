@@ -8,10 +8,12 @@
   "entry_point": "calculator_agent.so",
   "workflows": [
     "workflow.json",
-    "workflow_01.json"
+    "workflow_01.json",
+    "coordinator_workflow.json"
   ],
+  "coordinator_workflow": "calculator-coordinator-workflow",
   "task_workflows": {
-    "0": "workflow_01.json"
+    "0": "calculator-coordinator-workflow"
   },
   "dependencies": {
     "core-lib": "1.0.0"

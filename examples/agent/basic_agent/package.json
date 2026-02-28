@@ -8,13 +8,15 @@
   "entry_point": "basic_agent.so",
   "workflows": [
     "workflow.json",
-    "workflow_01.json"
+    "workflow_01.json",
+    "coordinator_workflow.json"
   ],
   "builtin_workflows": [
     "memory"
   ],
+  "coordinator_workflow": "basic-coordinator-workflow",
   "task_workflows": {
-    "0": "workflow_01.json"
+    "0": "basic-coordinator-workflow"
   },
   "dependencies": {
     "core-lib": "1.0.0"

@@ -12,7 +12,8 @@
     "memory",
     "tools"
   ],
+  "coordinator_workflow": "coordinator-workflow-v1",
   "task_workflows": {
-    "0": "workflow_01.json"
+    "0": "coordinator-workflow-v1"
   }
 }

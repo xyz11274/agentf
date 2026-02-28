@@ -170,6 +170,7 @@ private:
   // Agent components
   std::shared_ptr<AgentSession>   default_session_;
   std::map<std::string, std::shared_ptr<AgentSession>> sessions_;
+  std::map<std::string, std::shared_ptr<AgentCoordinator>> session_coordinators_;
   std::shared_ptr<AgentTask>      current_task_;
   std::shared_ptr<AgentMessages>  messages_;
   std::shared_ptr<AgentCoordinator> coordinator_;
@@ -179,6 +180,8 @@ private:
 
   // Helper method to initialize components
   bool initialize_components(std::shared_ptr<AgentPackage> package = nullptr);
+  std::shared_ptr<AgentSession> create_session_with_defaults(const std::string& session_id);
+  std::shared_ptr<AgentCoordinator> get_session_coordinator(const std::string& session_id) const;
 
   std::queue<AgentMsgQue::Message> request_event_queue_;
   std::condition_variable           request_event_cv_;

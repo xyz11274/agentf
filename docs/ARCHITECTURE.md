@@ -26,7 +26,7 @@ AgentFlow 由两层开发框架 + 一层运行时组成：
 职责：
 - 管理 agent 生命周期与 workflow 挂载。
 - 维护默认会话与按 `user_id + client_id` 创建的会话。
-- 将会话消息交给 `AgentCoordinator` 生成 task。
+- 将会话消息交给 `AgentCoordinator` 生成 task（coordinator 作为 session 级 task0，默认由 `coordinator_workflow` 绑定固定 workflow）。
 
 ### 2.2 Workflow
 

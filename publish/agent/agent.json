@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Sample Agent package template",
   "workflows": [
-    "workflow_01.json"
+    "workflow_01.json",
+    "coordinator_workflow.json"
   ]
 }

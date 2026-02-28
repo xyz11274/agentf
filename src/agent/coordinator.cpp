@@ -10,7 +10,9 @@
 namespace agentflow {
 namespace framework {
 
-AgentCoordinator::AgentCoordinator(const Config& config) : config_(config) {
+AgentCoordinator::AgentCoordinator(const Config& config,
+                                   const std::shared_ptr<AgentTask>& coordinator_task)
+    : config_(config), coordinator_task_(coordinator_task) {
 }
 
 std::string AgentCoordinator::resolve_task_workflow(
@@ -18,11 +20,16 @@ std::string AgentCoordinator::resolve_task_workflow(
   if(task_type != "task0") {
     return "";
   }
-  const auto it = config_.task_workflows.find("0");
-  if(it == config_.task_workflows.end() || it->second.empty()) {
+  std::string target = config_.coordinator_workflow;
+  if(target.empty()) {
+    const auto it = config_.task_workflows.find("0");
+    if(it != config_.task_workflows.end()) {
+      target = it->second;
+    }
+  }
+  if(target.empty()) {
     return "";
   }
-  const std::string& target = it->second;
   for(const auto& workflow : workflows) {
     if(workflow && workflow->get_id() == target) {
       return workflow->get_id();

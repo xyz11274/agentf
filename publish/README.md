@@ -10,7 +10,7 @@
 - `agentCard.md`：Agent Prompt/能力说明
 - `workflow_XX.json`：流程定义
 - `node_xxx.$TYPE`：可执行部件（`.sh/.py/.so/.jar`）
-- `package.json`：外层包描述与文件清单（支持 `task_workflows["0"]` 配置 task0 默认 workflow）
+- `package.json`：外层包描述与文件清单（支持 `coordinator_workflow` 固定 task0 workflow）
 
 ### 1.2 打包
 使用：

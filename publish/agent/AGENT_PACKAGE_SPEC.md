@@ -45,6 +45,7 @@ Agent Prompt/能力卡片，供其他模型或 Agent 读取。
 工作流定义文件，包含 `node` 与 `edge`：
 - node 负责动作执行
 - edge 负责流程控制（包含 if/loop/fork/join/async/goto）
+- coordinator workflow 推荐包含 session 创建节点与 task 创建节点，作为 task0 的固定编排入口
 
 ### 3.4 `node_xxx.$TYPE`
 节点可执行实现，支持后缀示例：`.so`、`.sh`、`.py`、`.jar`。
@@ -55,7 +56,8 @@ Agent Prompt/能力卡片，供其他模型或 Agent 读取。
 - agent 版本
 - 功能说明
 - 文件清单（manifest）
-- `task_workflows`：任务类型到 workflow 的默认映射（例如 `"0"` 对应 task0 默认流程）
+- `coordinator_workflow`：固定指定 coordinator（task0）默认 workflow
+- `task_workflows`：任务类型到 workflow 的默认映射（用于非 task0 或兼容场景）
 
 ## 4. 校验清单
 
