@@ -612,6 +612,7 @@ bool WorkflowParser::parse_node_config(std::shared_ptr<const IJsonValue> node_ob
   config.function_name    = JsonHelper::get_string(config_source, "function_name", "");
   config.main_class       = JsonHelper::get_string(config_source, "main_class", "");
   config.workflow_ref     = JsonHelper::get_string(config_source, "workflow_ref", "");
+  config.node_context_workflow = JsonHelper::get_string(config_source, "node_context_workflow", "");
   if(config.type == "workflow" && config.workflow_ref.empty()) {
     result.errors.emplace_back("workflow node requires 'workflow_ref' field", path);
     return false;

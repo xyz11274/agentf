@@ -93,6 +93,7 @@ TEST_F(AgentTest, CoordinatorBuildsSessionOwnedTaskWithWorkflowMapping) {
   framework::Workflow::Config wf_cfg;
   wf_cfg.id = "wf1";
   wf_cfg.name = "wf1";
+  wf_cfg.dsl_file = "wf1.json";
   agent->add_workflow(std::make_shared<framework::Workflow>(wf_cfg));
 
   framework::AgentMsgQue::Message req;
@@ -115,7 +116,9 @@ TEST_F(AgentTest, CoordinatorBuildsSessionOwnedTaskWithWorkflowMapping) {
   ASSERT_NE(collaboration_task, nullptr);
   EXPECT_EQ(collaboration_task->get_session_id(), "u2:c2");
   EXPECT_EQ(collaboration_task->get_workflow_id(), "wf1");
+  EXPECT_EQ(collaboration_task->get_workflow_file(), "wf1.json");
   EXPECT_EQ(collaboration_task->get_collaboration_so_path(), "/tmp/demo_collab.so");
+  ASSERT_NE(collaboration_task->get_context(), nullptr);
   std::string message_content;
   std::string message_data_ref;
   EXPECT_TRUE(collaboration_task->get_parameter("message_content", message_content));
@@ -243,6 +246,7 @@ TEST_F(AgentTest, DefaultAndDynamicSessionsContainTask0CoordinatorTask) {
   auto default_session = agent->get_default_session();
   ASSERT_NE(default_session, nullptr);
   EXPECT_EQ(default_session->get_session_id(), "0");
+  ASSERT_NE(default_session->get_task_coordinator(), nullptr);
   auto default_task0 = default_session->get_task("0_task_0");
   ASSERT_NE(default_task0, nullptr);
   EXPECT_EQ(default_task0->get_task_type(), "task0");

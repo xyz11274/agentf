@@ -198,6 +198,14 @@ std::shared_ptr<Agent> Agent::create_from_package(const std::string& package_pat
     if (fs::exists(wf_path)) {
       auto result = parser->parse_workflow_file(wf_path.string());
       if (result.is_valid() && result.workflow) {
+        const auto& node_context_workflow = package->get_config().node_context_workflow;
+        if(!node_context_workflow.empty()) {
+          for(const auto& node : result.workflow->get_nodes()) {
+            if(node && node->get_config().node_context_workflow.empty()) {
+              node->bind_context_workflow(node_context_workflow);
+            }
+          }
+        }
         agent->add_workflow(result.workflow);
       } else {
         std::cerr << "Failed to load workflow from: " << wf_path.string() << std::endl;
@@ -222,7 +230,6 @@ Agent::~Agent() {
   // Clean up components
   default_session_.reset();
   sessions_.clear();
-  session_coordinators_.clear();
   current_task_.reset();
   messages_.reset();
   coordinator_.reset();
@@ -235,12 +242,14 @@ Agent::~Agent() {
 
 bool Agent::initialize_components(std::shared_ptr<AgentPackage> package) {
   sessions_.clear();
-  session_coordinators_.clear();
 
   // Initialize task component
   AgentTask::Config task_config;
   task_config.task_id = config_.id + "_task";
   task_config.task_type = "default";
+  if(package) {
+    task_config.task_context_workflow = package->get_config().task_context_workflow;
+  }
   current_task_ = std::make_shared<AgentTask>(task_config);
 
   // Initialize messages component
@@ -252,6 +261,9 @@ bool Agent::initialize_components(std::shared_ptr<AgentPackage> package) {
   AgentContext::Config context_config;
   context_config.context_id = config_.id + "_context";
   context_config.agent_id = config_.id;
+  if(package) {
+    context_config.context_workflow = package->get_config().agent_context_workflow;
+  }
   context_ = std::make_shared<AgentContext>(context_config);
 
   // Initialize event component
@@ -272,46 +284,64 @@ bool Agent::initialize_components(std::shared_ptr<AgentPackage> package) {
   }
 
   default_session_ = create_session_with_defaults("0");
-  coordinator_ = get_session_coordinator("0");
+  coordinator_ = default_session_ ? default_session_->get_task_coordinator() : nullptr;
   return true;
 }
 
 std::shared_ptr<AgentSession> Agent::create_session_with_defaults(const std::string& session_id) {
   AgentSession::Config session_config;
   session_config.session_id = session_id;
+  if(package_) {
+    session_config.coordinator_workflow = package_->get_config().coordinator_workflow;
+    session_config.task_workflows = package_->get_config().task_workflows;
+    session_config.session_context_workflow = package_->get_config().session_context_workflow;
+    session_config.task_context_workflow = package_->get_config().task_context_workflow;
+  }
   auto session = std::make_shared<AgentSession>(session_config);
 
   AgentTask::Config coordinator_task_config;
   coordinator_task_config.task_id = session_id + "_task_0";
   coordinator_task_config.task_type = "task0";
   coordinator_task_config.session_id = session_id;
+  coordinator_task_config.task_context_workflow = session_config.task_context_workflow;
+  coordinator_task_config.workflow_id = session_config.coordinator_workflow;
+  if(coordinator_task_config.workflow_id.empty()) {
+    const auto it = session_config.task_workflows.find("0");
+    if(it != session_config.task_workflows.end()) {
+      coordinator_task_config.workflow_id = it->second;
+    }
+  }
+  coordinator_task_config.workflow_file = resolve_workflow_file(coordinator_task_config.workflow_id);
   auto coordinator_task = std::make_shared<AgentTask>(coordinator_task_config);
   session->add_task(coordinator_task);
 
-  AgentCoordinator::Config coordinator_config;
+  SessionTaskCoordinator::Config coordinator_config;
   coordinator_config.coordinator_id = config_.id + "_coordinator_" + session_id;
   coordinator_config.default_task_type = "task0";
-  if(package_) {
-    coordinator_config.coordinator_workflow = package_->get_config().coordinator_workflow;
-    coordinator_config.task_workflows = package_->get_config().task_workflows;
-  }
-  auto session_coordinator = std::make_shared<AgentCoordinator>(coordinator_config, coordinator_task);
+  coordinator_config.coordinator_workflow = session_config.coordinator_workflow;
+  coordinator_config.task_workflows = session_config.task_workflows;
+  coordinator_config.task_context_workflow = session_config.task_context_workflow;
+  auto session_coordinator =
+      std::make_shared<SessionTaskCoordinator>(coordinator_config, coordinator_task);
+  session->set_task_coordinator(session_coordinator);
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
     sessions_[session_id] = session;
-    session_coordinators_[session_id] = session_coordinator;
   }
   return session;
 }
 
-std::shared_ptr<AgentCoordinator> Agent::get_session_coordinator(const std::string& session_id) const {
-  std::lock_guard<std::mutex> lock(mutex_);
-  const auto it = session_coordinators_.find(session_id);
-  if(it == session_coordinators_.end()) {
-    return nullptr;
+std::string Agent::resolve_workflow_file(const std::string& workflow_ref) const {
+  if(workflow_ref.empty()) {
+    return "";
   }
-  return it->second;
+  for(const auto& workflow : workflows_) {
+    if(workflow && (workflow->get_id() == workflow_ref || workflow->get_name() == workflow_ref)) {
+      return workflow->get_config().dsl_file;
+    }
+  }
+  return workflow_ref;
 }
 
 std::shared_ptr<AgentSession> Agent::get_or_create_session(const std::string& user_id,
@@ -350,7 +380,7 @@ bool Agent::route_request_message(const AgentMsgQue::Message& message) {
 
 int Agent::process_session_messages(const std::string& session_key) {
   auto session = get_session_by_key(session_key);
-  auto session_coordinator = get_session_coordinator(session_key);
+  auto session_coordinator = session ? session->get_task_coordinator() : nullptr;
   if(!session || !session_coordinator) {
     return 0;
   }
@@ -385,7 +415,7 @@ int Agent::process_all_sessions_until_idle() {
       if(!session) {
         continue;
       }
-      auto session_coordinator = get_session_coordinator(session->get_session_id());
+      auto session_coordinator = session->get_task_coordinator();
       if(!session_coordinator) {
         continue;
       }

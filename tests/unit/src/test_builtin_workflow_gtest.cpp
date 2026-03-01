@@ -44,7 +44,11 @@ TEST(BuiltinWorkflowTest, PackageBuiltinWorkflowsAreResolvedAndParseable) {
     "version": "1.0.0",
     "entry_point": "builtin_test.so",
     "builtin_workflows": ["memory", "tools"],
-    "coordinator_workflow": "tools/workflow.json"
+    "coordinator_workflow": "tools/workflow.json",
+    "agent_context_workflow": "agent-context.json",
+    "session_context_workflow": "session-context.json",
+    "task_context_workflow": "task-context.json",
+    "node_context_workflow": "node-context.json"
   })";
   ofs.close();
 
@@ -53,6 +57,10 @@ TEST(BuiltinWorkflowTest, PackageBuiltinWorkflowsAreResolvedAndParseable) {
   const auto& wf_files = package->get_config().workflow_files;
   ASSERT_GE(wf_files.size(), 2u);
   EXPECT_EQ(package->get_config().coordinator_workflow, "tools/workflow.json");
+  EXPECT_EQ(package->get_config().agent_context_workflow, "agent-context.json");
+  EXPECT_EQ(package->get_config().session_context_workflow, "session-context.json");
+  EXPECT_EQ(package->get_config().task_context_workflow, "task-context.json");
+  EXPECT_EQ(package->get_config().node_context_workflow, "node-context.json");
 
   bool has_memory = false;
   bool has_tools = false;

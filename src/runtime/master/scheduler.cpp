@@ -81,6 +81,10 @@ TaskScheduleResult Scheduler::run_default_algorithm(
     if(wi.workflow_id != request.workflow_id) {
       continue;
     }
+    if(!request.workflow_file.empty() && !wi.workflow_file.empty()
+       && wi.workflow_file != request.workflow_file) {
+      continue;
+    }
     int current_load = wi.ref_count;
     auto load_it = workflow_task_load_.find(wi.workflow_instance_id);
     if(load_it != workflow_task_load_.end()) {

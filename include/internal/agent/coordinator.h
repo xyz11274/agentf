@@ -15,17 +15,18 @@ class AgentTask;
 class AgentSession;
 class Workflow;
 
-class AgentCoordinator {
+class SessionTaskCoordinator {
 public:
   struct Config {
     std::string coordinator_id;
     std::string default_task_type = "task0";
     std::string coordinator_workflow;
     std::map<std::string, std::string> task_workflows;
+    std::string task_context_workflow;
   };
 
-  AgentCoordinator(const Config& config, const std::shared_ptr<AgentTask>& coordinator_task);
-  ~AgentCoordinator() = default;
+  SessionTaskCoordinator(const Config& config, const std::shared_ptr<AgentTask>& coordinator_task);
+  ~SessionTaskCoordinator() = default;
 
   std::vector<std::shared_ptr<AgentTask>> process_session_messages(
       AgentSession& session, const std::vector<std::shared_ptr<Workflow>>& workflows);

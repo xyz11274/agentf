@@ -11,6 +11,8 @@
 namespace agentflow {
 namespace framework {
 
+class AgentContext;
+
 /**
  * AgentTask represents a single task executed within an agent
  * Manages task execution state, progress, and results
@@ -31,6 +33,8 @@ public:
     std::string description;
     std::string session_id;
     std::string workflow_id;
+    std::string workflow_file;
+    std::string task_context_workflow;
     std::string collaboration_so_path;
     int64_t     priority = 0;
     int         max_retries = 3;
@@ -44,7 +48,9 @@ public:
   const std::string& get_task_type() const { return config_.task_type; }
   const std::string& get_session_id() const { return config_.session_id; }
   const std::string& get_workflow_id() const { return config_.workflow_id; }
+  const std::string& get_workflow_file() const { return config_.workflow_file; }
   const std::string& get_collaboration_so_path() const { return config_.collaboration_so_path; }
+  std::shared_ptr<AgentContext> get_context() const { return context_; }
   TaskState          get_state() const { return state_; }
   const Config&      get_config() const { return config_; }
   int64_t            get_created_time() const { return created_time_; }
@@ -83,6 +89,7 @@ private:
   std::string                                 result_;
   int                                         retry_count_ = 0;
   std::map<std::string, std::string>          parameters_;
+  std::shared_ptr<AgentContext>               context_;
   mutable std::mutex                          mutex_;
 };
 

@@ -3,6 +3,8 @@
 #include <sys/time.h>
 #include <mutex>
 
+#include "agent/context.h"
+
 namespace agentflow {
 namespace framework {
 
@@ -17,6 +19,13 @@ int64_t get_current_time_ms() {
 AgentTask::AgentTask(const Config& config)
     : config_(config), state_(TaskState::PENDING) {
   created_time_ = get_current_time_ms();
+  if(config_.task_type != "context_updater") {
+    AgentContext::Config context_config;
+    context_config.context_id = config_.task_id + "_context";
+    context_config.agent_id = config_.session_id;
+    context_config.context_workflow = config_.task_context_workflow;
+    context_ = std::make_shared<AgentContext>(context_config);
+  }
 }
 
 AgentTask::~AgentTask() {

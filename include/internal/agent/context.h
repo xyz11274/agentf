@@ -11,6 +11,8 @@
 namespace agentflow {
 namespace framework {
 
+class AgentTask;
+
 /**
  * AgentContext maintains the execution context for an agent
  * Provides access to configuration, state, and runtime information
@@ -20,6 +22,7 @@ public:
   struct Config {
     std::string context_id;
     std::string agent_id;
+    std::string context_workflow;
     int         max_context_variables = 1024;
   };
 
@@ -29,7 +32,9 @@ public:
   // Getters
   const std::string& get_context_id() const { return config_.context_id; }
   const std::string& get_agent_id() const { return config_.agent_id; }
+  const std::string& get_context_workflow() const { return config_.context_workflow; }
   const Config&      get_config() const { return config_; }
+  std::shared_ptr<AgentTask> get_context_updater_task() const { return context_updater_task_; }
 
   // Context variables - for storing dynamic data
   void       set_variable(const std::string& key, const std::any& value);
@@ -58,6 +63,7 @@ private:
   std::map<std::string, std::any>             context_variables_;
   std::map<std::string, std::string>          env_variables_;
   std::map<std::string, std::string>          properties_;
+  std::shared_ptr<AgentTask>                  context_updater_task_;
   bool                                        is_valid_ = true;
   mutable std::mutex                          mutex_;
 };

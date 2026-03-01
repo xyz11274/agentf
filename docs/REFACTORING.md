@@ -1547,3 +1547,11 @@ All examples have been validated:
 - 文档与测试：
   - `examples/README.md` 改为 agent 包视角说明，补充 `AgentService.config`、自动加载与请求处理链路说明；
   - `tests/functional/src/test_agent_loading.cpp` 新增 AgentActor + RuntimeActor 自动加载/注册链路测试（RapidJSON 开启时执行）。
+
+## 2026-03-01 SessionTaskCoordinator & Context 分层重构
+
+- `AgentTask` 增加 `workflow_file`，并在任务实例化时透传，供调度阶段做 workflow 一致性校验。
+- `AgentCoordinator` 重命名为 `SessionTaskCoordinator`，作为 session 0 号任务化协调单元，下沉至 `AgentSession` 持有。
+- `AgentContext` 增加可选 `context_workflow` 及默认 `context_updater` 任务。
+- 上下文能力扩展至 `Agent/Session/Task/Node` 四级作用域，缺失 workflow 配置时走默认处理模式。
+- package 增加可选字段：`agent_context_workflow`、`session_context_workflow`、`task_context_workflow`、`node_context_workflow`。

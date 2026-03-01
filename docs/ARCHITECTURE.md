@@ -73,7 +73,7 @@ graph TB
 5. 通过 DataBus 与 RuntimeActor 完成状态和数据协同。
 
 #### 用例 UC-01：请求到任务生成
-- 参与者：业务调用方、AgentActor、Agent、AgentCoordinator。
+- 参与者：业务调用方、AgentActor、Agent、SessionTaskCoordinator。
 - 前置条件：Agent 已由 package 加载，默认/目标 session 已存在或可创建。
 - 主流程：
   1) 业务请求进入 Agent。
@@ -88,7 +88,7 @@ sequenceDiagram
     participant C as Client
     participant A as Agent
     participant S as AgentSession
-    participant CO as AgentCoordinator(task0)
+    participant CO as SessionTaskCoordinator(task0)
     participant T as AgentTask
 
     C->>A: route_request_message(message)
@@ -150,7 +150,7 @@ sequenceDiagram
 
 #### 组件职责
 - `Agent`：生命周期、会话路由、session-level coordinator 管理。
-- `AgentCoordinator`：消息解析为 task，默认 `task0`。
+- `SessionTaskCoordinator`：消息解析为 task，默认 `task0`。
 - `Workflow`：图结构、控制流、执行态推进。
 - `Node`：动作定义与状态机；外部执行统一委托 WorkerEngine。
 - `Scheduler`：task -> workflow instance 映射。
@@ -162,7 +162,7 @@ graph LR
     subgraph Framework
       AG[Agent]
       SES[AgentSession]
-      CO[AgentCoordinator]
+      CO[SessionTaskCoordinator]
       TK[AgentTask]
       WF[Workflow]
       ND[Node]
@@ -246,7 +246,7 @@ stateDiagram-v2
 #### 核心实体
 - `Agent`：agent 元信息与 workflow 挂载。
 - `AgentSession`：会话状态、收发队列、任务集合。
-- `AgentTask`：task 标识、类型、session/workflow 归属、状态进度。
+- `AgentTask`：task 标识、类型、session/workflow 归属、workflow_file 一致性标识、状态进度。
 - `WorkflowInstanceInfo`：运行时实例映射（workflow -> worker）。
 - `TaskInstanceInfo`：运行时 task 状态与调度绑定。
 - `DataRef`：payload 引用与 owner 索引。
@@ -391,7 +391,7 @@ classDiagram
       +enqueue_received_message()
       +add_task()
     }
-    class AgentCoordinator {
+    class SessionTaskCoordinator {
       +process_session_messages()
       +resolve_task_workflow()
     }
@@ -423,8 +423,8 @@ classDiagram
     }
 
     Agent --> AgentSession
-    AgentSession --> AgentCoordinator
-    AgentCoordinator --> AgentTask
+    AgentSession --> SessionTaskCoordinator
+    SessionTaskCoordinator --> AgentTask
     AgentTask --> Workflow
     Workflow --> Node
     AgentRuntime --> Scheduler
@@ -731,3 +731,6 @@ graph TB
 
 ### C. 变更历史
 - 2026-02-28：按 4+1 视图重写架构文档，补齐 ADR、横切关注点与 Mermaid 图。
+
+
+- 2026-03-01：补充 Agent/Session/Task/Node 四级 context 与 SessionTaskCoordinator（session 0号任务单元）设计说明。

@@ -24,7 +24,7 @@ class AgentTask;
 class AgentContext;
 class AgentEvent;
 class AgentPackage;
-class AgentCoordinator;
+class SessionTaskCoordinator;
 
 }  // namespace framework
 }  // namespace agentflow
@@ -87,7 +87,7 @@ public:
   std::shared_ptr<AgentSession>   get_default_session() const { return default_session_; }
   std::shared_ptr<AgentTask>      get_current_task() const { return current_task_; }
   std::shared_ptr<AgentMessages>  get_messages() const { return messages_; }
-  std::shared_ptr<AgentCoordinator> get_coordinator() const { return coordinator_; }
+  std::shared_ptr<SessionTaskCoordinator> get_coordinator() const { return coordinator_; }
   std::shared_ptr<AgentContext>   get_context() const { return context_; }
   std::shared_ptr<AgentEvent>     get_event_handler() const { return event_; }
   std::shared_ptr<AgentPackage>   get_package() const { return package_; }
@@ -170,10 +170,9 @@ private:
   // Agent components
   std::shared_ptr<AgentSession>   default_session_;
   std::map<std::string, std::shared_ptr<AgentSession>> sessions_;
-  std::map<std::string, std::shared_ptr<AgentCoordinator>> session_coordinators_;
   std::shared_ptr<AgentTask>      current_task_;
   std::shared_ptr<AgentMessages>  messages_;
-  std::shared_ptr<AgentCoordinator> coordinator_;
+  std::shared_ptr<SessionTaskCoordinator> coordinator_;
   std::shared_ptr<AgentContext>   context_;
   std::shared_ptr<AgentEvent>     event_;
   std::shared_ptr<AgentPackage>   package_;
@@ -181,7 +180,7 @@ private:
   // Helper method to initialize components
   bool initialize_components(std::shared_ptr<AgentPackage> package = nullptr);
   std::shared_ptr<AgentSession> create_session_with_defaults(const std::string& session_id);
-  std::shared_ptr<AgentCoordinator> get_session_coordinator(const std::string& session_id) const;
+  std::string resolve_workflow_file(const std::string& workflow_ref) const;
 
   std::queue<AgentMsgQue::Message> request_event_queue_;
   std::condition_variable           request_event_cv_;

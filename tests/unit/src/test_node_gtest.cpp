@@ -36,6 +36,7 @@ TEST_F(NodeTest, CreateNodeWithConfig) {
   EXPECT_EQ(node.get_id(), "test_node");
   EXPECT_EQ(node.get_name(), "test_node");
   EXPECT_EQ(node.get_state(), NodeState::WAITING);
+  ASSERT_NE(node.get_context(), nullptr);
 }
 
 // Test Node state transitions

@@ -268,6 +268,7 @@ public:
   // Getters
   const WorkflowId&  get_id() const { return config_.id; }
   const std::string& get_name() const { return config_.name; }
+  const Config&      get_config() const { return config_; }
   WorkflowState      get_state() const { return state_; }
 
   // Node and edge management

@@ -19,6 +19,8 @@
 namespace agentflow {
 namespace framework {
 
+class AgentContext;
+
 /**
  * Node represents a task execution unit in a workflow graph.
  * Each node has a control plane and a running plane
@@ -75,6 +77,7 @@ public:
 
     // Workflow reference for nested workflow node (type == "workflow")
     std::string workflow_ref;
+    std::string node_context_workflow;
   };
 
   enum class MessagePriority {
@@ -114,6 +117,7 @@ public:
   const DataMap&     get_inputs() const { return inputs_; }
   const DataMap&     get_outputs() const { return outputs_; }
   const Config&      get_config() const { return config_; }
+  std::shared_ptr<AgentContext> get_context() const { return context_; }
 
   // Config getters for storage
   const std::vector<std::string>& get_input_params() const { return config_.input_params; }
@@ -157,6 +161,7 @@ public:
   bool enqueue_message(const Message& message);
   bool enqueue_event(const NodeEvent& event);
   void register_event_handler(const std::string& event_type, NodeEventHandler handler);
+  void bind_context_workflow(const std::string& workflow_file);
 
 private:
   void message_dispatch_loop();
@@ -167,6 +172,7 @@ private:
   NodeState state_ = NodeState::WAITING;
   DataMap   inputs_;
   DataMap   outputs_;
+  std::shared_ptr<AgentContext> context_;
   int       retry_count_ = 0;
 
   // Execution result tracking

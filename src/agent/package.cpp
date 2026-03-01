@@ -139,6 +139,18 @@ std::shared_ptr<AgentPackage> AgentPackage::load_from_directory(const std::strin
       }
     }
   }
+  if (doc.HasMember("agent_context_workflow") && doc["agent_context_workflow"].IsString()) {
+    config.agent_context_workflow = doc["agent_context_workflow"].GetString();
+  }
+  if (doc.HasMember("session_context_workflow") && doc["session_context_workflow"].IsString()) {
+    config.session_context_workflow = doc["session_context_workflow"].GetString();
+  }
+  if (doc.HasMember("task_context_workflow") && doc["task_context_workflow"].IsString()) {
+    config.task_context_workflow = doc["task_context_workflow"].GetString();
+  }
+  if (doc.HasMember("node_context_workflow") && doc["node_context_workflow"].IsString()) {
+    config.node_context_workflow = doc["node_context_workflow"].GetString();
+  }
 
   // Deduplicate workflow file entries while preserving order.
   {

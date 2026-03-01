@@ -135,6 +135,7 @@ master::TaskScheduleResult AgentRuntime::schedule_task(const master::TaskSchedul
     task.agent_object_id = request.agent_object_id;
     task.agent_instance_id = request.agent_instance_id;
     task.workflow_id = request.workflow_id;
+    task.workflow_file = request.workflow_file;
     task.workflow_instance_id = result.workflow_instance_id;
     task.worker_id = result.worker_id;
     task.status = "scheduled";

@@ -8,6 +8,7 @@
 #include <thread>
 
 #include "runtime/worker.h"
+#include "agent/context.h"
 #include "utils/logger.h"
 #include "utils/thread_pool.h"
 
@@ -21,6 +22,11 @@ Node::Node(const Config& config) : config_(config), state_(NodeState::WAITING), 
   if(config_.enable_hot_reload && !config_.command.empty()) {
     hot_reload_enabled_ = true;
   }
+  AgentContext::Config context_config;
+  context_config.context_id = config_.id + "_context";
+  context_config.agent_id = config_.id;
+  context_config.context_workflow = config_.node_context_workflow;
+  context_ = std::make_shared<AgentContext>(context_config);
 }
 
 Node::~Node() {
@@ -109,6 +115,15 @@ bool Node::enqueue_event(const NodeEvent& event) {
 void Node::register_event_handler(const std::string& event_type, NodeEventHandler handler) {
   std::lock_guard<std::mutex> lock(event_handler_mutex_);
   event_handlers_[event_type].push_back(std::move(handler));
+}
+
+void Node::bind_context_workflow(const std::string& workflow_file) {
+  config_.node_context_workflow = workflow_file;
+  AgentContext::Config context_config;
+  context_config.context_id = config_.id + "_context";
+  context_config.agent_id = config_.id;
+  context_config.context_workflow = config_.node_context_workflow;
+  context_ = std::make_shared<AgentContext>(context_config);
 }
 
 void Node::message_dispatch_loop() {

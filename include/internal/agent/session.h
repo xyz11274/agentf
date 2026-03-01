@@ -14,6 +14,8 @@ namespace agentflow {
 namespace framework {
 
 class AgentTask;
+class AgentContext;
+class SessionTaskCoordinator;
 
 /**
  * AgentSession represents a session context for an agent execution
@@ -34,6 +36,10 @@ public:
     int         max_queue_size = 1024;
     int64_t     timeout_ms = 30000;  // 30 seconds default
     int         max_retries = 3;
+    std::string coordinator_workflow;
+    std::map<std::string, std::string> task_workflows;
+    std::string session_context_workflow;
+    std::string task_context_workflow;
   };
 
   explicit AgentSession(const Config& config);
@@ -45,6 +51,8 @@ public:
   const Config&      get_config() const { return config_; }
   int64_t            get_created_time() const { return created_time_; }
   int64_t            get_last_activity_time() const { return last_activity_time_; }
+  std::shared_ptr<AgentContext> get_context() const { return context_; }
+  std::shared_ptr<SessionTaskCoordinator> get_task_coordinator() const { return task_coordinator_; }
 
   // Session lifecycle
   bool activate();
@@ -75,6 +83,8 @@ public:
   void                                      add_task(const std::shared_ptr<AgentTask>& task);
   std::shared_ptr<AgentTask>                get_task(const std::string& task_id) const;
   std::vector<std::shared_ptr<AgentTask>>   get_tasks() const;
+  void                                      set_task_coordinator(
+      const std::shared_ptr<SessionTaskCoordinator>& coordinator);
 
 private:
   Config                                      config_;
@@ -85,6 +95,8 @@ private:
   AgentMsgQue                                 receive_queue_;
   AgentMsgQue                                 send_queue_;
   std::map<std::string, std::shared_ptr<AgentTask>> tasks_;
+  std::shared_ptr<SessionTaskCoordinator>     task_coordinator_;
+  std::shared_ptr<AgentContext>               context_;
   mutable std::mutex                          mutex_;
 };
 

@@ -10,12 +10,12 @@
 namespace agentflow {
 namespace framework {
 
-AgentCoordinator::AgentCoordinator(const Config& config,
-                                   const std::shared_ptr<AgentTask>& coordinator_task)
+SessionTaskCoordinator::SessionTaskCoordinator(const Config& config,
+                                               const std::shared_ptr<AgentTask>& coordinator_task)
     : config_(config), coordinator_task_(coordinator_task) {
 }
 
-std::string AgentCoordinator::resolve_task_workflow(
+std::string SessionTaskCoordinator::resolve_task_workflow(
     const std::string& task_type, const std::vector<std::shared_ptr<Workflow>>& workflows) const {
   if(task_type != "task0") {
     return "";
@@ -43,7 +43,7 @@ std::string AgentCoordinator::resolve_task_workflow(
   return "";
 }
 
-std::shared_ptr<AgentTask> AgentCoordinator::build_task_for_message(
+std::shared_ptr<AgentTask> SessionTaskCoordinator::build_task_for_message(
     const std::string& session_id, const AgentMsgQue::Message& message,
     const std::vector<std::shared_ptr<Workflow>>& workflows, int64_t suffix_counter) const {
   AgentTask::Config task_config;
@@ -55,6 +55,7 @@ std::shared_ptr<AgentTask> AgentCoordinator::build_task_for_message(
   task_config.task_type =
       (type_it != message.metadata.end()) ? type_it->second : config_.default_task_type;
   task_config.session_id = session_id;
+  task_config.task_context_workflow = config_.task_context_workflow;
 
   const auto workflow_it = message.metadata.find("workflow_id");
   if(workflow_it != message.metadata.end()) {
@@ -64,6 +65,18 @@ std::shared_ptr<AgentTask> AgentCoordinator::build_task_for_message(
     task_config.workflow_id = task_workflow;
   } else if(!workflows.empty()) {
     task_config.workflow_id = workflows.front()->get_id();
+  }
+
+  const auto workflow_file_it = message.metadata.find("workflow_file");
+  if(workflow_file_it != message.metadata.end()) {
+    task_config.workflow_file = workflow_file_it->second;
+  } else {
+    for(const auto& workflow : workflows) {
+      if(workflow && workflow->get_id() == task_config.workflow_id) {
+        task_config.workflow_file = workflow->get_config().dsl_file;
+        break;
+      }
+    }
   }
 
   if(task_config.task_type == "collaboration") {
@@ -85,7 +98,7 @@ std::shared_ptr<AgentTask> AgentCoordinator::build_task_for_message(
   return task;
 }
 
-std::vector<std::shared_ptr<AgentTask>> AgentCoordinator::process_session_messages(
+std::vector<std::shared_ptr<AgentTask>> SessionTaskCoordinator::process_session_messages(
     AgentSession& session, const std::vector<std::shared_ptr<Workflow>>& workflows) {
   std::vector<std::shared_ptr<AgentTask>> tasks;
   AgentMsgQue::Message                    message;

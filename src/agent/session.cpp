@@ -3,6 +3,7 @@
 #include <sys/time.h>
 #include <mutex>
 
+#include "agent/context.h"
 #include "agent/task.h"
 
 namespace agentflow {
@@ -23,6 +24,11 @@ AgentSession::AgentSession(const Config& config)
       send_queue_(AgentMsgQue::Config{config.max_queue_size}) {
   created_time_ = get_current_time_ms();
   last_activity_time_ = created_time_;
+  AgentContext::Config context_config;
+  context_config.context_id = config_.session_id + "_context";
+  context_config.agent_id = config_.session_id;
+  context_config.context_workflow = config_.session_context_workflow;
+  context_ = std::make_shared<AgentContext>(context_config);
 }
 
 AgentSession::~AgentSession() {
@@ -178,6 +184,12 @@ std::vector<std::shared_ptr<AgentTask>> AgentSession::get_tasks() const {
     result.push_back(kv.second);
   }
   return result;
+}
+
+void AgentSession::set_task_coordinator(
+    const std::shared_ptr<SessionTaskCoordinator>& coordinator) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  task_coordinator_ = coordinator;
 }
 
 }  // namespace framework

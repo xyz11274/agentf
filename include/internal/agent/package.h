@@ -42,6 +42,10 @@ public:
     std::vector<std::string> builtin_workflows;
     std::string coordinator_workflow;
     std::map<std::string, std::string> task_workflows;
+    std::string agent_context_workflow;
+    std::string session_context_workflow;
+    std::string task_context_workflow;
+    std::string node_context_workflow;
   };
 
   explicit AgentPackage(const Config& config);

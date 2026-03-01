@@ -22,6 +22,7 @@ struct TaskScheduleRequest {
   std::string agent_object_id;
   std::string agent_instance_id;
   std::string workflow_id;
+  std::string workflow_file;
 };
 
 struct TaskScheduleResult {

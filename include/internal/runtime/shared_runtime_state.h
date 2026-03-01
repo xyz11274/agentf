@@ -12,6 +12,7 @@ namespace runtime {
 struct WorkflowInstanceInfo {
   std::string workflow_instance_id;
   std::string workflow_id;
+  std::string workflow_file;
   std::string agent_object_id;
   std::string agent_instance_id;
   std::string worker_id;
@@ -23,6 +24,7 @@ struct TaskInstanceInfo {
   std::string agent_object_id;
   std::string agent_instance_id;
   std::string workflow_id;
+  std::string workflow_file;
   std::string workflow_instance_id;
   std::string worker_id;
   std::string status = "pending";
