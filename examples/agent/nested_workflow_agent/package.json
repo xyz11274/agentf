@@ -1,0 +1,28 @@
+{
+  "name": "nested-workflow-agent",
+  "version": "1.0.0",
+  "package_type": "release",
+  "agent_version": "1.0.0",
+  "description": "Nested workflow agent example demonstrating workflow-to-workflow calls",
+  "author": "AgentFlow Team",
+  "entry_point": "nested_workflow_agent.so",
+  "workflows": [
+    "main_workflow.json",
+    "data_pipeline.json",
+    "validation_workflow.json",
+    "processing_workflow.json"
+  ],
+  "builtin_workflows": [],
+  "coordinator_workflow": "main-workflow",
+  "task_workflows": {
+    "0": "main-workflow"
+  },
+  "dependencies": {
+    "core-lib": "1.0.0"
+  },
+  "metadata": {
+    "type": "agent",
+    "category": "example",
+    "tags": ["nested", "workflow", "example"]
+  }
+}

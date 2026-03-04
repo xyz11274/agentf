@@ -50,6 +50,9 @@ Thumbs.db
 local_config.txt
 debug_output.txt
 
+# Claude Code config
+CLAUDE.md
+
 # Vendor dependencies (downloaded third-party libraries)
 # Keep adapter code and config files, only ignore downloaded libs
 vendor/json/

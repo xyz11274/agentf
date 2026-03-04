@@ -117,6 +117,7 @@ if(NOT MSVC)
 endif()
 
 # Add subdirectories
+add_subdirectory(e2e)
 # (scripts directory is currently not used)
 
 # Testing
