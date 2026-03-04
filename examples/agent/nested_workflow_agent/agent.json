@@ -1,0 +1,11 @@
+{
+  "name": "NestedWorkflowAgent",
+  "version": "1.0.0",
+  "description": "Agent demonstrating nested workflow calls with workflow_ref",
+  "workflows": [
+    "main_workflow.json",
+    "data_pipeline.json",
+    "validation_workflow.json",
+    "processing_workflow.json"
+  ]
+}
