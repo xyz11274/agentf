@@ -1283,5 +1283,1736 @@ struct Config {
 
 ---
 
-*文档更新时间：2026-02-27*
-*补充设计章节版本：v1.0*
+## 7. Node-Edge同步执行与Node-Workflow调度机制
+
+> 本章节设计Edge与源Node同步执行的调度机制。
+> - 设计日期：2026-03-04
+> - 更新日期：2026-03-04
+> - 核心原则：**Edge的执行与源Node是同步的**，由框架在执行完源Node代码后，直接调用Edge代码，再根据Edge返回值给下一跳Node发消息
+> - 目标：实现Edge驱动的Node间通信、Workflow嵌套调度
+
+### 7.1 设计背景与核心原则
+
+#### 7.1.1 同步Edge执行原则
+
+**核心设计：**
+```
+Node执行流程（同步）
+    |
+    v
+node->execute() → [同步] → edge->execute() → [同步] → publish(next_node_msg)
+    |                              |
+    |                              v
+    |                    Edge在同一调用栈中执行
+    |                    可访问当前执行上下文
+    v
+Edge执行是Node执行的一部分
+```
+
+**设计优势：**
+1. **执行顺序确定性**：Edge紧随Node执行，顺序可预测
+2. **上下文完整性**：Edge可直接访问Node输出，无需消息传递
+3. **调试友好**：调用栈清晰，便于问题定位
+4. **事务一致性**：Node+Edge可作为一个原子操作
+5. **简化实现**：无需维护Edge的订阅/消息路由机制
+
+#### 7.1.2 架构设计
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        Node-Edge同步执行架构                                  │
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                      同步执行单元 (同一调用栈)                           │  │
+│  │                                                                       │  │
+│  │  ┌─────────────┐      ┌─────────────┐                                │  │
+│  │  │   Node A    │─────>│   Edge      │                                │  │
+│  │  │             │ 同步  │   execute() │                                │  │
+│  │  │ execute()   │ 调用  │             │                                │  │
+│  │  │ outputs     │      │ 条件评估    │                                │  │
+│  │  └─────────────┘      │ 数据映射    │                                │  │
+│  │        │              └──────┬──────┘                                │  │
+│  │        │                     │                                       │  │
+│  │        v                     │ 返回EdgeResult                        │  │
+│  │  ┌─────────────┐             │                                       │  │
+│  │  │  DataBus    │             v                                       │  │
+│  │  │  (存储输出) │      ┌─────────────┐                                │  │
+│  │  └─────────────┘      │ 发布消息    │                                │  │
+│  │                       │ NodeExecution│                               │  │
+│  │                       │ Message     │                                │  │
+│  │                       └──────┬──────┘                                │  │
+│  └──────────────────────────────┼────────────────────────────────────────┘  │
+│                                 │                                           │
+│                                 │ 消息队列（仅用于跨Node通信）                │
+│                                 v                                           │
+│  ┌─────────────┐      ┌─────────────┐                                      │
+│  │   Node B    │      │  Message    │                                      │
+│  │             │<─────│ Dispatcher  │                                      │
+│  │ execute()   │ 异步  │             │                                      │
+│  └─────────────┘ 调度  └─────────────┘                                      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**关键设计点：**
+- **Node与Edge同步**：Node执行完成后立即执行Edge，在同一个线程/调用栈
+- **消息仅用于跨Node**：Edge返回后，通过消息触发下一个Node执行
+- **EdgeResult**：Edge执行结果决定是否触发下游Node
+
+#### 7.1.3 多出边并行执行设计
+
+**场景：一个Node完成后，需要执行多个出边**
+
+```
+                    ┌─────────────┐
+                    │   Node A    │
+                    │  (完成执行)  │
+                    └──────┬──────┘
+                           │
+           ┌───────────────┼───────────────┐
+           │               │               │
+           v               v               v
+    ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+    │   Edge 1    │ │   Edge 2    │ │   Edge 3    │
+    │ (IF分支A)   │ │ (IF分支B)   │ │ (无条件)    │
+    │ condition:  │ │ condition:  │ │             │
+    │ x > 0       │ │ x <= 0      │ │             │
+    └──────┬──────┘ └──────┬──────┘ └──────┬──────┘
+           │               │               │
+           v               v               v
+    ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+    │   Node B    │ │   Node C    │ │   Node D    │
+    └─────────────┘ └─────────────┘ └─────────────┘
+```
+
+**执行策略：**
+
+1. **顺序执行所有出边**（同一调用栈内）
+   ```
+   Node A 执行完成
+       │
+       ├── Edge 1::execute(outputs) → EdgeResult{should_proceed=true}
+       │       └── 满足条件，publish(NodeExecutionMessage{Node B})
+       │
+       ├── Edge 2::execute(outputs) → EdgeResult{should_proceed=false}
+       │       └── 不满足条件，跳过
+       │
+       └── Edge 3::execute(outputs) → EdgeResult{should_proceed=true}
+               └── publish(NodeExecutionMessage{Node D})
+   ```
+
+2. **EdgeResult 结构**
+   ```cpp
+   struct EdgeResult {
+       bool should_proceed = false;      // 是否触发下游Node
+       std::string target_node_id;       // 目标Node ID
+       DataMap target_inputs;            // 传递给目标Node的数据
+       std::string skip_reason;          // 跳过原因（条件不满足等）
+       int priority = 0;                 // 执行优先级
+   };
+   ```
+
+3. **并行触发下游Node**
+   - 所有Edge在同一调用栈顺序执行
+   - 满足条件的Edge通过消息并行触发下游Node
+   - 下游Node在不同Worker线程并行执行
+
+**代码示例：**
+
+```cpp
+void NodeActor::handle_execution_request(const NodeExecutionMessage& msg) {
+    // 1. 执行Node
+    auto outputs = node_->execute(inputs);
+
+    // 2. 存储输出到DataBus
+    store_outputs(outputs);
+
+    // 3. 获取所有出边（按优先级排序）
+    auto outgoing_edges = workflow_->get_outgoing_edges(node_->get_id());
+
+    // 4. 顺序执行所有Edge（同步）
+    for (auto& edge : outgoing_edges) {
+        EdgeResult result = edge->execute(outputs);  // 同步调用
+
+        if (result.should_proceed) {
+            // 通过消息触发下游Node（异步）
+            dispatcher_->publish(NodeExecutionMessage{
+                .node_id = result.target_node_id,
+                .input_refs = store_to_databus(result.target_inputs)
+            });
+        }
+    }
+}
+```
+
+#### 7.1.4 FORK控制流的并行执行
+
+**FORK场景：一个Node分叉出多个并行执行路径**
+
+```
+                    ┌─────────────┐
+                    │   Node A    │
+                    │  (FORK点)   │
+                    └──────┬──────┘
+                           │
+              ┌────────────┼────────────┐
+              │            │            │
+              v            v            v
+       ┌──────────┐ ┌──────────┐ ┌──────────┐
+       │  Edge 1  │ │  Edge 2  │ │  Edge 3  │
+       │(FORK成员)│ │(FORK成员)│ │(FORK成员)│
+       └────┬─────┘ └────┬─────┘ └────┬─────┘
+            │            │            │
+            v            v            v
+       ┌──────────┐ ┌──────────┐ ┌──────────┐
+       │  Node B  │ │  Node C  │ │  Node D  │
+       │(并行执行)│ │(并行执行)│ │(并行执行)│
+       └────┬─────┘ └────┬─────┘ └────┬─────┘
+            │            │            │
+            └────────────┼────────────┘
+                         │
+                         v
+                  ┌─────────────┐
+                  │   Node E    │
+                  │  (JOIN点)   │
+                  └─────────────┘
+```
+
+**FORK执行逻辑：**
+
+```cpp
+EdgeResult Edge::execute(const DataMap& source_outputs) {
+    EdgeResult result;
+
+    switch (get_control_type()) {
+        case ControlType::FORK: {
+            // FORK边无条件执行
+            result.should_proceed = true;
+            result.target_node_id = get_target();
+
+            // 数据映射
+            transfer_data(source_outputs, result.target_inputs);
+
+            // 注册到JoinCoordinator（用于后续Join同步）
+            auto& control = get_control_config();
+            join_coordinator_->register_fork_branch(
+                control.fork_group,
+                get_target()
+            );
+            break;
+        }
+
+        case ControlType::IF: {
+            // 条件判断
+            if (evaluate_condition(get_condition_expression(), source_outputs)) {
+                result.should_proceed = true;
+                result.target_node_id = get_target();
+                transfer_data(source_outputs, result.target_inputs);
+            }
+            break;
+        }
+
+        default: {
+            // 无条件边
+            result.should_proceed = true;
+            result.target_node_id = get_target();
+            transfer_data(source_outputs, result.target_inputs);
+            break;
+        }
+    }
+
+    return result;
+}
+```
+
+**关键点：**
+- FORK的多个Edge在Node执行后**顺序执行**（同步）
+- 每个FORK Edge产生一个`NodeExecutionMessage`
+- 下游Node由MessageDispatcher分发到不同Worker**并行执行**
+- JOIN点等待所有分支完成
+
+### 7.2 核心消息类型定义
+
+#### 7.2.1 消息类型层次结构
+
+```cpp
+// include/internal/runtime/message_types.h
+
+namespace agentflow {
+namespace runtime {
+
+/**
+ * @brief 消息基类
+ */
+struct MessageBase {
+  std::string message_id;      // 消息唯一ID
+  std::string correlation_id;  // 关联ID（用于请求-响应）
+  int64_t timestamp_ms;        // 消息时间戳
+  int32_t ttl_ms = 30000;      // 消息生存时间
+  int32_t retry_count = 0;     // 重试次数
+};
+
+/**
+ * @brief Node执行请求消息
+ *
+ * 由Edge或Workflow调度器发送，触发Node执行
+ */
+struct NodeExecutionMessage : MessageBase {
+  std::string node_id;
+  std::string workflow_instance_id;
+  std::string task_id;
+
+  // 输入数据引用（通过DataBus获取实际数据）
+  std::map<std::string, DataBus::DataRef> input_refs;
+
+  // 执行上下文
+  std::string agent_instance_id;
+  std::string session_id;
+
+  // 优先级
+  enum class Priority { LOW = 0, NORMAL = 1, HIGH = 2 } priority = Priority::NORMAL;
+};
+
+/**
+ * @brief Node执行完成消息
+ *
+ * Node执行完成后发送，携带输出数据引用
+ */
+struct NodeCompletionMessage : MessageBase {
+  std::string node_id;
+  std::string workflow_instance_id;
+  std::string task_id;
+
+  bool success = false;
+  std::string error_message;
+
+  // 输出数据引用
+  std::map<std::string, DataBus::DataRef> output_refs;
+
+  // 执行统计
+  int64_t execution_time_ms = 0;
+  int64_t memory_used_bytes = 0;
+};
+
+/**
+ * @brief Edge数据传递消息
+ *
+ * Edge将源Node的输出转换为目标Node的输入
+ */
+struct EdgeTransferMessage : MessageBase {
+  std::string edge_id;
+  std::string source_node_id;
+  std::string target_node_id;
+  std::string workflow_instance_id;
+
+  // 数据映射关系
+  struct DataMapping {
+    std::string source_output;    // 源Node输出端口名
+    std::string target_input;     // 目标Node输入端口名
+    DataBus::DataRef data_ref;    // 数据引用
+  };
+  std::vector<DataMapping> mappings;
+
+  // 控制流信息
+  Edge::ControlType control_type = Edge::ControlType::NONE;
+  std::string condition_result;   // 条件表达式计算结果
+};
+
+/**
+ * @brief Workflow调度请求消息
+ *
+ * 用于嵌套Workflow调用（type: workflow的Node）
+ */
+struct WorkflowScheduleMessage : MessageBase {
+  std::string workflow_id;           // 目标Workflow ID或workflow_ref
+  std::string workflow_file;         // Workflow DSL文件路径
+  std::string parent_workflow_instance_id;  // 父Workflow实例ID
+  std::string parent_node_id;        // 父Node ID
+
+  // 输入数据引用
+  std::map<std::string, DataBus::DataRef> input_refs;
+
+  // 调度策略
+  enum class SchedulePolicy {
+    SYNC_WAIT,     // 同步等待完成
+    ASYNC_CALLBACK // 异步回调
+  } policy = SchedulePolicy::ASYNC_CALLBACK;
+};
+
+/**
+ * @brief Workflow完成消息
+ *
+ * 嵌套Workflow执行完成后通知父Workflow
+ */
+struct WorkflowCompletionMessage : MessageBase {
+  std::string workflow_instance_id;
+  std::string parent_workflow_instance_id;
+  std::string parent_node_id;
+
+  bool success = false;
+  std::string error_message;
+
+  // 输出数据引用
+  std::map<std::string, DataBus::DataRef> output_refs;
+};
+
+/**
+ * @brief 控制流消息
+ *
+ * 用于if/loop/fork/join等控制流操作
+ */
+struct ControlFlowMessage : MessageBase {
+  std::string workflow_instance_id;
+  std::string edge_id;
+
+  Edge::ControlType control_type;
+
+  // IF分支
+  struct IfControl {
+    bool condition_result;
+    std::string selected_branch;
+  } if_control;
+
+  // LOOP循环
+  struct LoopControl {
+    std::string loop_id;
+    int current_iteration;
+    int max_iterations;
+    bool should_continue;
+  } loop_control;
+
+  // FORK/JOIN并行
+  struct ForkJoinControl {
+    std::string fork_group_id;
+    std::vector<std::string> parallel_nodes;
+    std::set<std::string> completed_nodes;
+  } fork_join_control;
+};
+
+}  // namespace runtime
+}  // namespace agentflow
+```
+
+### 7.3 核心组件设计
+
+#### 7.3.1 MessageDispatcher - 消息分发中心
+
+```cpp
+// include/internal/runtime/message_dispatcher.h
+
+namespace agentflow {
+namespace runtime {
+
+/**
+ * @brief 消息分发器
+ *
+ * 集中处理所有组件间的消息路由，支持发布-订阅模式
+ */
+class MessageDispatcher {
+public:
+  using MessageHandler = std::function<void(const std::shared_ptr<MessageBase>&)>;
+
+  struct Config {
+    int worker_threads = 4;
+    size_t max_queue_size = 1024;
+    int64_t message_timeout_ms = 30000;
+  };
+
+  explicit MessageDispatcher(const Config& config);
+  ~MessageDispatcher();
+
+  // 启动/停止
+  bool start();
+  void stop();
+
+  // 发布消息
+  bool publish(const std::shared_ptr<MessageBase>& message);
+
+  // 订阅消息类型
+  void subscribe(const std::string& message_type, MessageHandler handler);
+
+  // 取消订阅
+  void unsubscribe(const std::string& message_type);
+
+  // 请求-响应模式
+  std::shared_ptr<MessageBase> request(
+      const std::shared_ptr<MessageBase>& message,
+      int64_t timeout_ms = 5000);
+
+  // 注册组件地址
+  void register_component(const std::string& component_id, const std::string& address);
+
+private:
+  void dispatch_loop();
+  void handle_message(const std::shared_ptr<MessageBase>& message);
+
+  Config config_;
+  std::atomic<bool> running_{false};
+
+  // 消息队列
+  std::queue<std::shared_ptr<MessageBase>> message_queue_;
+  std::mutex queue_mutex_;
+  std::condition_variable queue_cv_;
+
+  // 消息处理器映射
+  std::unordered_map<std::string, std::vector<MessageHandler>> handlers_;
+  std::mutex handlers_mutex_;
+
+  // 线程池
+  std::unique_ptr<basic::ThreadPool> worker_pool_;
+  std::thread dispatch_thread_;
+};
+
+}  // namespace runtime
+}  // namespace agentflow
+```
+
+#### 7.3.2 NodeActor - Node执行Actor
+
+```cpp
+// include/internal/workflow/node_actor.h
+
+namespace agentflow {
+namespace framework {
+
+/**
+ * @brief Node执行Actor
+ *
+ * 每个Node实例绑定一个NodeActor，负责接收执行消息并执行
+ */
+class NodeActor : public actor::adapter::IActor {
+public:
+  explicit NodeActor(std::shared_ptr<Node> node,
+                     std::shared_ptr<runtime::DataBus> databus,
+                     std::shared_ptr<runtime::MessageDispatcher> dispatcher);
+  ~NodeActor() override = default;
+
+  void on_message(std::shared_ptr<actor::adapter::IContext> ctx) override;
+  void on_start() override;
+  void on_stop() override;
+  std::string actor_type() const override { return "NodeActor"; }
+
+private:
+  // 处理执行请求
+  void handle_execution_request(const runtime::NodeExecutionMessage& msg);
+
+  // 处理取消请求
+  void handle_cancellation(const runtime::MessageBase& msg);
+
+  // 执行完成通知
+  void notify_completion(const runtime::NodeExecutionMessage& request,
+                         bool success,
+                         const DataMap& outputs,
+                         const std::string& error = "");
+
+  // 获取输入数据
+  bool resolve_inputs(const std::map<std::string, runtime::DataBus::DataRef>& input_refs,
+                      DataMap& inputs);
+
+  // 存储输出数据
+  void store_outputs(const DataMap& outputs,
+                     std::map<std::string, runtime::DataBus::DataRef>& output_refs);
+
+  std::shared_ptr<Node> node_;
+  std::shared_ptr<runtime::DataBus> databus_;
+  std::shared_ptr<runtime::MessageDispatcher> dispatcher_;
+
+  std::atomic<bool> executing_{false};
+  std::string current_message_id_;
+};
+
+}  // namespace framework
+}  // namespace agentflow
+```
+
+#### 7.3.3 Edge - 同步执行的Edge
+
+```cpp
+// include/internal/workflow/edge.h (扩展)
+
+namespace agentflow {
+namespace framework {
+
+/**
+ * @brief Edge执行结果
+ *
+ * Edge执行后返回的结果，决定是否触发下游Node
+ */
+struct EdgeResult {
+  bool should_proceed = false;      // 是否触发下游Node
+  std::string target_node_id;       // 目标Node ID
+  DataMap target_inputs;            // 传递给目标Node的数据
+  std::string skip_reason;          // 跳过原因（条件不满足等）
+  int priority = 0;                 // 执行优先级
+};
+
+/**
+ * @brief Edge类扩展 - 同步执行方法
+ */
+class Edge {
+public:
+  // ... 现有方法 ...
+
+  /**
+   * @brief 同步执行Edge
+   *
+   * 由Node执行完成后直接调用，在同一个调用栈中执行
+   *
+   * @param source_outputs 源Node的输出数据
+   * @return EdgeResult 执行结果，决定是否触发下游Node
+   */
+  EdgeResult execute(const DataMap& source_outputs);
+
+  /**
+   * @brief 设置消息分发器（用于触发下游Node）
+   */
+  void set_dispatcher(std::shared_ptr<runtime::MessageDispatcher> dispatcher);
+
+  /**
+   * @brief 设置DataBus（用于数据存储）
+   */
+  void set_databus(std::shared_ptr<runtime::DataBus> databus);
+
+private:
+  std::shared_ptr<runtime::MessageDispatcher> dispatcher_;
+  std::shared_ptr<runtime::DataBus> databus_;
+};
+
+}  // namespace framework
+}  // namespace agentflow
+```
+
+#### 7.3.4 NodeActor - Node执行Actor（扩展）
+
+```cpp
+// include/internal/workflow/node_actor.h
+
+namespace agentflow {
+namespace framework {
+
+/**
+ * @brief Node执行Actor
+ *
+ * 每个Node实例绑定一个NodeActor，负责：
+ * 1. 接收执行消息并执行Node
+ * 2. 同步执行所有出边
+ * 3. 发布下游Node执行消息
+ */
+class NodeActor : public actor::adapter::IActor {
+public:
+  explicit NodeActor(std::shared_ptr<Node> node,
+                     std::shared_ptr<Workflow> workflow,
+                     std::shared_ptr<runtime::DataBus> databus,
+                     std::shared_ptr<runtime::MessageDispatcher> dispatcher);
+
+  void on_message(std::shared_ptr<actor::adapter::IContext> ctx) override;
+  void on_start() override;
+  void on_stop() override;
+
+private:
+  // 处理执行请求
+  void handle_execution_request(const runtime::NodeExecutionMessage& msg);
+
+  // 同步执行所有出边
+  void execute_outgoing_edges(const DataMap& outputs);
+
+  // 获取出边（按优先级排序）
+  std::vector<std::shared_ptr<Edge>> get_outgoing_edges() const;
+
+  std::shared_ptr<Node> node_;
+  std::shared_ptr<Workflow> workflow_;
+  std::shared_ptr<runtime::DataBus> databus_;
+  std::shared_ptr<runtime::MessageDispatcher> dispatcher_;
+};
+
+}  // namespace framework
+}  // namespace agentflow
+```
+
+### 7.4 Node-Edge同步执行流程
+
+#### 7.4.1 时序图
+
+```mermaid
+sequenceDiagram
+    participant MD as MessageDispatcher
+    participant NA as NodeActor-A
+    participant DB as DataBus
+    participant E1 as Edge-1
+    participant E2 as Edge-2
+    participant NB as NodeActor-B
+
+    %% Node A 执行（从消息队列接收）
+    MD->>NA: NodeExecutionMessage{node_id: A, input_refs}
+    NA->>DB: resolve_ref(input_refs) → inputs
+    DB-->>NA: inputs数据
+
+    %% 执行Node A
+    NA->>NA: execute(inputs) → outputs
+    NA->>DB: store_outputs(outputs) → output_refs
+
+    %% 同步执行所有Edge（同一调用栈）
+    Note over NA,E2: Edge同步执行阶段
+    NA->>E1: execute(outputs) [同步调用]
+    E1->>E1: evaluate_condition()
+    E1-->>NA: EdgeResult{should_proceed=true, target=B}
+    NA->>DB: store_input_refs(B, target_inputs)
+    NA->>MD: publish(NodeExecutionMessage{node_id: B})
+
+    NA->>E2: execute(outputs) [同步调用]
+    E2->>E2: evaluate_condition()
+    E2-->>NA: EdgeResult{should_proceed=false}
+    Note over NA: 条件不满足，跳过
+
+    %% Node B 异步执行
+    MD->>NB: NodeExecutionMessage{node_id: B}
+    NB->>DB: resolve_ref(input_refs) → inputs
+    NB->>NB: execute(inputs)
+```
+
+#### 7.4.2 调用栈详解
+
+```
+【Node执行阶段 - 同步调用Edge】
+NodeActor-A::handle_execution_request(msg)
+    ├── resolve_inputs(input_refs, inputs)     // 从DataBus获取输入
+    ├── node_->set_inputs(inputs)
+    ├── node_->execute()                        // 执行Node逻辑
+    ├── store_outputs(outputs, output_refs)    // 输出写入DataBus
+    │
+    ├── execute_outgoing_edges(outputs)        // 同步执行所有出边
+    │   │
+    │   ├── Edge-1::execute(outputs)           // Edge 1 同步调用
+    │   │   ├── evaluate_condition()           // 条件判断
+    │   │   ├── transfer_data()                // 数据映射
+    │   │   └── return EdgeResult{true, B}     // 返回执行结果
+    │   │
+    │   ├── if (result.should_proceed)
+    │   │   ├── store_target_inputs(result.target_inputs)
+    │   │   └── dispatcher_->publish(NodeExecutionMessage{B})  // 触发下游
+    │   │
+    │   ├── Edge-2::execute(outputs)           // Edge 2 同步调用
+    │   │   ├── evaluate_condition()
+    │   │   └── return EdgeResult{false}       // 条件不满足
+    │   │
+    │   └── // Edge执行完成，当前调用栈结束
+    │
+    └── // Node执行完成
+
+【目标Node接收阶段 - 异步消息驱动】
+MessageDispatcher::dispatch_loop()
+    └── handle_message(NodeExecutionMessage)
+        └── handlers_["node.execution"][i](msg)
+
+NodeActor-B::handle_execution_request(msg)
+    ├── resolve_inputs(input_refs, inputs)
+    ├── node_->execute()
+    └── execute_outgoing_edges(outputs)
+```
+
+**关键点：**
+1. **Edge在Node调用栈内同步执行**：`execute_outgoing_edges()`在`handle_execution_request()`中被直接调用
+2. **顺序执行多个Edge**：Edge按优先级顺序执行，每个Edge返回后决定是否发布下游消息
+3. **下游Node通过消息触发**：满足条件的Edge发布消息，触发下游Node在Worker线程中执行
+
+### 7.5 Node-Workflow嵌套调度
+
+#### 7.5.1 嵌套Workflow时序图
+
+```mermaid
+sequenceDiagram
+    participant NA as NodeActor<br/>(type: workflow)
+    participant MD as MessageDispatcher
+    participant WS as WorkflowScheduler
+    participant WF as ChildWorkflow
+    participant DB as DataBus
+
+    %% 父Workflow触发嵌套Node
+    NA->>NA: 检测到 type==workflow
+    NA->>NA: 获取 workflow_ref
+
+    %% 发送Workflow调度请求
+    NA->>MD: publish(WorkflowScheduleMessage{workflow_ref, input_refs, policy: ASYNC})
+    MD->>WS: 路由到WorkflowScheduler
+
+    %% 子Workflow调度
+    WS->>WS: 创建新的Workflow实例
+    WS->>WF: load_from_dsl(workflow_ref)
+    WS->>WF: 初始化子Workflow执行上下文
+
+    %% 输入数据传递
+    WS->>DB: resolve_ref(input_refs) → 子Workflow输入
+    DB-->>WS: 输入数据
+
+    %% 执行子Workflow
+    WS->>WF: start_execution(input_data)
+
+    loop 子Workflow内部Node执行
+        WF->>WF: 按Edge驱动执行Node
+    end
+
+    %% 子Workflow完成
+    WF-->>WS: completion_callback(outputs)
+    WS->>DB: store_outputs(outputs) → output_refs
+
+    %% 通知父Workflow
+    WS->>MD: publish(WorkflowCompletionMessage{parent_node_id, output_refs})
+    MD->>NA: 路由回父NodeActor
+
+    %% 父Node继续执行
+    NA->>NA: 继续执行后续逻辑
+    NA->>MD: publish(NodeCompletionMessage{outputs})
+```
+
+#### 7.5.2 WorkflowScheduler实现
+
+```cpp
+// include/internal/runtime/workflow_scheduler.h
+
+namespace agentflow {
+namespace runtime {
+
+/**
+ * @brief Workflow调度器
+ *
+ * 负责Workflow实例的创建、调度和生命周期管理
+ */
+class WorkflowScheduler {
+public:
+  struct Config {
+    int max_concurrent_workflows = 100;
+    int workflow_executor_threads = 4;
+    int64_t workflow_timeout_ms = 300000;  // 5分钟
+  };
+
+  explicit WorkflowScheduler(const Config& config,
+                             std::shared_ptr<MessageDispatcher> dispatcher,
+                             std::shared_ptr<DataBus> databus);
+  ~WorkflowScheduler();
+
+  bool start();
+  void stop();
+
+private:
+  // 消息处理器
+  void handle_workflow_schedule(const WorkflowScheduleMessage& msg);
+  void handle_workflow_completion(const WorkflowCompletionMessage& msg);
+
+  // Workflow实例管理
+  std::string create_workflow_instance(const std::string& workflow_id,
+                                        const std::string& workflow_file);
+  bool destroy_workflow_instance(const std::string& instance_id);
+
+  // 执行控制
+  void start_workflow_execution(const std::string& instance_id,
+                                const std::map<std::string, DataBus::DataRef>& input_refs);
+
+  // 完成回调
+  void on_workflow_complete(const std::string& instance_id,
+                            bool success,
+                            const DataMap& outputs);
+
+  Config config_;
+  std::shared_ptr<MessageDispatcher> dispatcher_;
+  std::shared_ptr<DataBus> databus_;
+
+  // Workflow实例映射
+  struct WorkflowInstance {
+    std::string instance_id;
+    std::string workflow_id;
+    std::shared_ptr<framework::Workflow> workflow;
+    std::string parent_instance_id;
+    std::string parent_node_id;
+    std::chrono::steady_clock::time_point start_time;
+  };
+  std::unordered_map<std::string, WorkflowInstance> instances_;
+  std::mutex instances_mutex_;
+
+  // 线程池
+  std::unique_ptr<basic::ThreadPool> executor_pool_;
+};
+
+}  // namespace runtime
+}  // namespace agentflow
+```
+
+### 7.6 控制流消息处理
+
+#### 7.6.1 IF条件分支
+
+```mermaid
+flowchart TB
+    subgraph IF控制流
+        A[Node A 完成] --> B{Edge条件评估}
+        B -->|true| C[EdgeProcessor<br/>选择分支A]
+        B -->|false| D[EdgeProcessor<br/>选择分支B]
+        C --> E[发送NodeExecutionMessage<br/>到分支A的起始Node]
+        D --> F[发送NodeExecutionMessage<br/>到分支B的起始Node]
+    end
+```
+
+#### 7.6.2 LOOP循环
+
+```mermaid
+sequenceDiagram
+    participant EP as EdgeProcessor
+    participant CC as ControlContext
+    participant NA as NodeActor
+    participant MD as MessageDispatcher
+
+    loop 循环执行
+        EP->>CC: check_loop_condition(loop_id)
+        CC-->>EP: should_continue: true/false
+
+        alt should_continue == true
+            EP->>CC: increment_iteration(loop_id)
+            EP->>MD: publish(NodeExecutionMessage{loop_body_node})
+            MD->>NA: 执行循环体
+            NA-->>EP: NodeCompletionMessage
+        else should_continue == false
+            EP->>MD: publish(ControlFlowMessage{type: BREAK, loop_id})
+        end
+    end
+```
+
+#### 7.6.3 FORK/JOIN并行
+
+```mermaid
+sequenceDiagram
+    participant EP as EdgeProcessor
+    participant MD as MessageDispatcher
+    participant NA as NodeActor-A
+    participant NB as NodeActor-B
+    participant NC as NodeActor-C
+    participant JC as JoinCoordinator
+
+    %% Fork阶段
+    EP->>EP: 创建fork_group_id
+    EP->>JC: 注册Join等待组
+
+    par 并行执行
+        EP->>MD: NodeExecutionMessage{node_A, fork_group_id}
+        MD->>NA: 执行
+        NA-->>JC: completion
+    and
+        EP->>MD: NodeExecutionMessage{node_B, fork_group_id}
+        MD->>NB: 执行
+        NB-->>JC: completion
+    and
+        EP->>MD: NodeExecutionMessage{node_C, fork_group_id}
+        MD->>NC: 执行
+        NC-->>JC: completion
+    end
+
+    %% Join阶段
+    JC->>JC: 检查所有分支完成
+    JC->>MD: Join完成消息
+    MD->>EP: 继续后续Edge
+```
+
+### 7.7 实现路径
+
+#### 7.7.1 阶段一：基础设施（2周）
+
+| 任务 | 输出 | 依赖 |
+|------|------|------|
+| MessageDispatcher实现 | `message_dispatcher.cpp/h` | 无 |
+| 消息类型定义 | `message_types.h` | 无 |
+| DataBus DataRef增强 | `databus.h` 扩展 | 无 |
+| 单元测试 | `test_message_dispatcher.cpp` | 以上全部 |
+
+#### 7.7.2 阶段二：Node-Node通信（2周）
+
+| 任务 | 输出 | 依赖 |
+|------|------|------|
+| NodeActor实现 | `node_actor.cpp/h` | 阶段一 |
+| EdgeProcessor实现 | `edge_processor.cpp/h` | 阶段一 |
+| 集成测试 | `test_node_node_async.cpp` | 以上全部 |
+
+#### 7.7.3 阶段三：控制流支持（2周）
+
+| 任务 | 输出 | 依赖 |
+|------|------|------|
+| IF/LOOP控制流 | `control_flow_handler.cpp` | 阶段二 |
+| FORK/JOIN并行 | `fork_join_coordinator.cpp` | 阶段二 |
+| 控制流测试 | `test_control_flow.cpp` | 以上全部 |
+
+#### 7.7.4 阶段四：嵌套Workflow（2周）
+
+| 任务 | 输出 | 依赖 |
+|------|------|------|
+| WorkflowScheduler实现 | `workflow_scheduler.cpp/h` | 阶段三 |
+| 嵌套调用支持 | `nested_workflow_handler.cpp` | 阶段三 |
+| E2E测试 | `test_nested_workflow.cpp` | 以上全部 |
+
+### 7.8 与现有系统的集成
+
+#### 7.8.1 兼容模式
+
+```cpp
+// 在Workflow类中增加执行模式选择
+class Workflow {
+public:
+  enum class ExecutionMode {
+    SYNC_TOPO,      // 现有同步拓扑执行
+    ASYNC_MESSAGE   // 新的异步消息执行
+  };
+
+  void set_execution_mode(ExecutionMode mode) { execution_mode_ = mode; }
+
+private:
+  ExecutionMode execution_mode_ = ExecutionMode::SYNC_TOPO;  // 默认保持兼容
+};
+```
+
+#### 7.8.2 迁移策略
+
+```
+阶段1：双轨运行
+├── 新增MessageDispatcher，与现有同步执行并存
+├── 通过配置开关选择执行模式
+└── 默认使用SYNC_TOPO，保持向后兼容
+
+阶段2：逐步迁移
+├── 新开发的Workflow默认使用ASYNC_MESSAGE
+├── 现有Workflow逐步迁移
+└── 性能对比测试
+
+阶段3：全面切换
+├── ASYNC_MESSAGE成为默认模式
+├── SYNC_TOPO作为降级选项
+└── 最终废弃SYNC_TOPO
+```
+
+### 7.9 性能考量
+
+#### 7.9.1 消息吞吐量
+
+| 场景 | 目标吞吐量 | 优化手段 |
+|------|-----------|---------|
+| Node执行消息 | 10K msg/s | 线程池批处理 |
+| Edge数据传递 | 5K msg/s | DataBus零拷贝 |
+| 控制流消息 | 20K msg/s | 内存池复用 |
+
+#### 7.9.2 延迟控制
+
+| 消息类型 | 目标延迟 | 超时处理 |
+|---------|---------|---------|
+| NodeExecution | < 10ms | 丢弃+重试 |
+| EdgeTransfer | < 5ms | 直接传递 |
+| WorkflowSchedule | < 50ms | 排队等待 |
+
+### 7.10 监控与可观测性
+
+#### 7.10.1 关键指标
+
+```yaml
+# Prometheus指标示例
+agentflow_messages_published_total{type="node_execution"}
+agentflow_messages_processed_total{type="node_completion"}
+agentflow_message_latency_seconds{type="edge_transfer"}
+agentflow_workflow_depth{workflow_id="xxx"}  # 嵌套深度
+agentflow_node_execution_duration_seconds{node_id="xxx"}
+```
+
+#### 7.10.2 链路追踪
+
+```
+Span: WorkflowExecution
+  ├── Span: NodeExecution[node_A]
+  │     └── Span: DataBus::get
+  ├── Span: EdgeTransfer[e_A_to_B]
+  │     ├── Span: ConditionEvaluation
+  │     └── Span: DataBus::put
+  └── Span: NodeExecution[node_B]
+        └── Span: WorkflowSchedule[child_workflow]
+              └── Span: NodeExecution[child_node_A]
+```
+
+---
+
+## 8. 同步Edge执行实现细节
+
+> 本章节补充Node-Edge同步执行的具体实现代码和流程。
+> 核心原则：Edge在Node调用栈内同步执行，通过消息触发下游Node。
+
+### 8.1 Edge同步执行实现
+
+```cpp
+// src/workflow/edge.cpp (扩展)
+
+#include "workflow/edge.h"
+#include "runtime/message_types.h"
+#include "utils/logger.h"
+
+namespace agentflow {
+namespace framework {
+
+EdgeResult Edge::execute(const DataMap& source_outputs) {
+  EdgeResult result;
+  result.target_node_id = config_.target_node;
+
+  switch (config_.control.type) {
+    case ControlType::IF: {
+      // IF条件判断
+      if (evaluate_condition(config_.control.expression, source_outputs)) {
+        result.should_proceed = true;
+        transfer_data(source_outputs, result.target_inputs);
+        Logger::instance().debug_f("[Edge] %s: IF condition passed, target=%s",
+                                   config_.id.c_str(), config_.target_node.c_str());
+      } else {
+        result.skip_reason = "IF condition not met";
+        Logger::instance().debug_f("[Edge] %s: IF condition failed", config_.id.c_str());
+      }
+      break;
+    }
+
+    case ControlType::FORK: {
+      // FORK无条件执行，注册到JoinCoordinator
+      result.should_proceed = true;
+      transfer_data(source_outputs, result.target_inputs);
+      result.priority = config_.priority;
+
+      // 注册FORK分支（用于后续JOIN同步）
+      if (!config_.control.fork_group.empty() && join_coordinator_) {
+        join_coordinator_->register_branch(config_.control.fork_group, config_.target_node);
+      }
+      Logger::instance().debug_f("[Edge] %s: FORK branch, target=%s, fork_group=%s",
+                                 config_.id.c_str(), config_.target_node.c_str(),
+                                 config_.control.fork_group.c_str());
+      break;
+    }
+
+    case ControlType::LOOP: {
+      // LOOP循环控制
+      if (check_loop_condition(config_.control.loop_id, source_outputs)) {
+        result.should_proceed = true;
+        transfer_data(source_outputs, result.target_inputs);
+        Logger::instance().debug_f("[Edge] %s: LOOP iteration %d",
+                                   config_.id.c_str(), loop_iterations_[config_.control.loop_id]);
+      } else {
+        result.skip_reason = "LOOP completed";
+        Logger::instance().debug_f("[Edge] %s: LOOP finished", config_.id.c_str());
+      }
+      break;
+    }
+
+    case ControlType::GOTO: {
+      // GOTO跳转
+      result.should_proceed = true;
+      result.target_node_id = config_.control.goto_target;  // 覆盖默认target
+      transfer_data(source_outputs, result.target_inputs);
+      Logger::instance().debug_f("[Edge] %s: GOTO to %s",
+                                 config_.id.c_str(), config_.control.goto_target.c_str());
+      break;
+    }
+
+    default: {
+      // 无条件边
+      result.should_proceed = true;
+      transfer_data(source_outputs, result.target_inputs);
+      Logger::instance().debug_f("[Edge] %s: Unconditional transfer to %s",
+                                 config_.id.c_str(), config_.target_node.c_str());
+      break;
+    }
+  }
+
+  return result;
+}
+
+bool Edge::evaluate_condition(const std::string& expression, const DataMap& context) {
+  // 简单表达式求值（生产环境应使用表达式引擎）
+  // 示例: "outputs['confidence'] > 0.5"
+  // ... 表达式解析逻辑 ...
+  return true;  // 简化实现
+}
+
+void Edge::transfer_data(const DataMap& source_outputs, DataMap& target_inputs) {
+  // 按配置映射数据
+  for (size_t i = 0; i < config_.source_outputs.size() && i < config_.target_inputs.size(); ++i) {
+    const auto& src_key = config_.source_outputs[i];
+    const auto& tgt_key = config_.target_inputs[i];
+
+    auto it = source_outputs.find(src_key);
+    if (it != source_outputs.end()) {
+      target_inputs[tgt_key] = it->second;
+    }
+  }
+}
+
+}  // namespace framework
+}  // namespace agentflow
+```
+
+### 8.2 NodeActor实现（含同步Edge执行）
+
+```cpp
+// src/workflow/node_actor.cpp
+
+#include "workflow/node_actor.h"
+#include "runtime/message_types.h"
+#include "utils/logger.h"
+
+namespace agentflow {
+namespace framework {
+
+NodeActor::NodeActor(std::shared_ptr<Node> node,
+                     std::shared_ptr<Workflow> workflow,
+                     std::shared_ptr<runtime::DataBus> databus,
+                     std::shared_ptr<runtime::MessageDispatcher> dispatcher)
+    : node_(std::move(node)),
+      workflow_(std::move(workflow)),
+      databus_(std::move(databus)),
+      dispatcher_(std::move(dispatcher)) {
+}
+
+void NodeActor::on_start() {
+  Logger::instance().info_f("[NodeActor] Started for node: %s", node_->get_id().c_str());
+
+  // 订阅执行消息
+  dispatcher_->subscribe("node.execution",
+      [this](const std::shared_ptr<runtime::MessageBase>& msg) {
+        auto* exec_msg = dynamic_cast<runtime::NodeExecutionMessage*>(msg.get());
+        if (exec_msg && exec_msg->node_id == node_->get_id()) {
+          handle_execution_request(*exec_msg);
+        }
+      });
+}
+
+void NodeActor::handle_execution_request(const runtime::NodeExecutionMessage& msg) {
+  Logger::instance().info_f("[NodeActor] Executing node: %s", node_->get_id().c_str());
+
+  // 1. 从DataBus获取输入数据
+  DataMap inputs;
+  for (const auto& [key, ref] : msg.input_refs) {
+    DataVariant value;
+    if (databus_->resolve_ref(ref.data_id, value)) {
+      inputs[key] = value;
+    }
+  }
+
+  // 2. 设置Node输入
+  node_->set_inputs(inputs);
+
+  // 3. 执行Node
+  bool success = false;
+  DataMap outputs;
+  try {
+    success = node_->execute();
+    outputs = node_->get_outputs();
+  } catch (const std::exception& e) {
+    Logger::instance().error_f("[NodeActor] Node %s threw exception: %s",
+                               node_->get_id().c_str(), e.what());
+    return;
+  }
+
+  if (!success) {
+    Logger::instance().error_f("[NodeActor] Node %s execution failed", node_->get_id().c_str());
+    return;
+  }
+
+  // 4. 存储输出到DataBus
+  std::map<std::string, runtime::DataBus::DataRef> output_refs;
+  runtime::DataBus::OwnerContext owner;
+  owner.node_id = node_->get_id();
+  for (const auto& [key, value] : outputs) {
+    runtime::DataBus::DataRef ref;
+    databus_->store_with_ref(key, value, owner, ref);
+    output_refs[key] = ref;
+  }
+
+  // 5. 同步执行所有出边
+  execute_outgoing_edges(outputs);
+}
+
+void NodeActor::execute_outgoing_edges(const DataMap& outputs) {
+  auto edges = get_outgoing_edges();  // 按优先级排序
+
+  Logger::instance().debug_f("[NodeActor] Executing %zu outgoing edges for node %s",
+                             edges.size(), node_->get_id().c_str());
+
+  for (auto& edge : edges) {
+    // 同步调用Edge执行
+    EdgeResult result = edge->execute(outputs);
+
+    if (result.should_proceed) {
+      // 存储目标Node的输入数据到DataBus
+      std::map<std::string, runtime::DataBus::DataRef> input_refs;
+      runtime::DataBus::OwnerContext owner;
+      owner.node_id = result.target_node_id;
+
+      for (const auto& [key, value] : result.target_inputs) {
+        runtime::DataBus::DataRef ref;
+        databus_->store_with_ref(key, value, owner, ref);
+        input_refs[key] = ref;
+      }
+
+      // 发布下游Node执行消息
+      auto exec_msg = std::make_shared<runtime::NodeExecutionMessage>();
+      exec_msg->message_id = "exec_" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count());
+      exec_msg->node_id = result.target_node_id;
+      exec_msg->input_refs = input_refs;
+
+      dispatcher_->publish(exec_msg);
+
+      Logger::instance().debug_f("[NodeActor] Triggered node %s via edge %s",
+                                 result.target_node_id.c_str(), edge->get_id().c_str());
+    } else {
+      Logger::instance().debug_f("[NodeActor] Skipped edge %s: %s",
+                                 edge->get_id().c_str(), result.skip_reason.c_str());
+    }
+  }
+}
+
+std::vector<std::shared_ptr<Edge>> NodeActor::get_outgoing_edges() const {
+  std::vector<std::shared_ptr<Edge>> outgoing;
+  for (const auto& edge : workflow_->get_edges()) {
+    if (edge->get_source() == node_->get_id()) {
+      outgoing.push_back(edge);
+    }
+  }
+
+  // 按优先级排序
+  std::sort(outgoing.begin(), outgoing.end(),
+            [](const std::shared_ptr<Edge>& a, const std::shared_ptr<Edge>& b) {
+              return a->get_priority() > b->get_priority();
+            });
+
+  return outgoing;
+}
+
+}  // namespace framework
+}  // namespace agentflow
+```
+
+### 8.3 MessageDispatcher实现
+
+```cpp
+// src/runtime/message_dispatcher.cpp
+
+#include "runtime/message_dispatcher.h"
+#include "utils/logger.h"
+
+namespace agentflow {
+namespace runtime {
+
+MessageDispatcher::MessageDispatcher(const Config& config) : config_(config) {
+}
+
+MessageDispatcher::~MessageDispatcher() {
+  stop();
+}
+
+bool MessageDispatcher::start() {
+  bool expected = false;
+  if (!running_.compare_exchange_strong(expected, true)) {
+    return false;
+  }
+
+  worker_pool_ = std::make_unique<basic::ThreadPool>(config_.worker_threads);
+  dispatch_thread_ = std::thread(&MessageDispatcher::dispatch_loop, this);
+  return true;
+}
+
+void MessageDispatcher::stop() {
+  bool expected = true;
+  if (!running_.compare_exchange_strong(expected, false)) {
+    return;
+  }
+
+  queue_cv_.notify_all();
+  if (dispatch_thread_.joinable()) {
+    dispatch_thread_.join();
+  }
+  worker_pool_.reset();
+}
+
+bool MessageDispatcher::publish(const std::shared_ptr<MessageBase>& message) {
+  if (!running_ || !message) {
+    return false;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    if (message_queue_.size() >= config_.max_queue_size) {
+      return false;
+    }
+    message_queue_.push(message);
+  }
+  queue_cv_.notify_one();
+  return true;
+}
+
+void MessageDispatcher::dispatch_loop() {
+  while (running_) {
+    std::shared_ptr<MessageBase> message;
+    {
+      std::unique_lock<std::mutex> lock(queue_mutex_);
+      queue_cv_.wait(lock, [this]() { return !message_queue_.empty() || !running_; });
+      if (!running_) break;
+      if (message_queue_.empty()) continue;
+      message = message_queue_.front();
+      message_queue_.pop();
+    }
+    handle_message(message);
+  }
+}
+
+void MessageDispatcher::handle_message(const std::shared_ptr<MessageBase>& message) {
+  // 根据消息类型分发到对应处理器
+  std::string message_type;
+  if (auto* node_msg = dynamic_cast<NodeExecutionMessage*>(message.get())) {
+    message_type = "node.execution";
+  } else if (auto* wf_msg = dynamic_cast<WorkflowScheduleMessage*>(message.get())) {
+    message_type = "workflow.schedule";
+  }
+
+  std::vector<MessageHandler> handlers;
+  {
+    std::lock_guard<std::mutex> lock(handlers_mutex_);
+    auto it = handlers_.find(message_type);
+    if (it != handlers_.end()) {
+      handlers = it->second;
+    }
+  }
+
+  for (const auto& handler : handlers) {
+    if (worker_pool_) {
+      worker_pool_->submit([handler, message]() { handler(message); });
+    } else {
+      handler(message);
+    }
+  }
+}
+
+}  // namespace runtime
+}  // namespace agentflow
+```
+
+### 8.4 WorkflowScheduler实现
+
+```cpp
+// src/runtime/workflow_scheduler.cpp
+
+#include "runtime/workflow_scheduler.h"
+#include "workflow/workflow_parser.h"
+#include "utils/logger.h"
+
+namespace agentflow {
+namespace runtime {
+
+WorkflowScheduler::WorkflowScheduler(const Config& config,
+                                     std::shared_ptr<MessageDispatcher> dispatcher,
+                                     std::shared_ptr<DataBus> databus)
+    : config_(config), dispatcher_(std::move(dispatcher)), databus_(std::move(databus)) {
+}
+
+WorkflowScheduler::~WorkflowScheduler() {
+  stop();
+}
+
+bool WorkflowScheduler::start() {
+  executor_pool_ = std::make_unique<basic::ThreadPool>(config_.workflow_executor_threads);
+
+  // 订阅消息
+  dispatcher_->subscribe("workflow.schedule",
+      [this](const std::shared_ptr<MessageBase>& msg) {
+        auto* wf_msg = dynamic_cast<WorkflowScheduleMessage*>(msg.get());
+        if (wf_msg) {
+          handle_workflow_schedule(*wf_msg);
+        }
+      });
+
+  dispatcher_->subscribe("workflow.completion",
+      [this](const std::shared_ptr<MessageBase>& msg) {
+        auto* wf_msg = dynamic_cast<WorkflowCompletionMessage*>(msg.get());
+        if (wf_msg) {
+          handle_workflow_completion(*wf_msg);
+        }
+      });
+
+  return true;
+}
+
+void WorkflowScheduler::stop() {
+  executor_pool_.reset();
+}
+
+void WorkflowScheduler::handle_workflow_schedule(const WorkflowScheduleMessage& msg) {
+  // 创建Workflow实例
+  std::string instance_id = create_workflow_instance(msg.workflow_id, msg.workflow_file);
+  if (instance_id.empty()) {
+    Logger::instance().error_f("[WorkflowScheduler] Failed to create workflow instance for %s",
+                               msg.workflow_id.c_str());
+    return;
+  }
+
+  // 记录父子关系
+  {
+    std::lock_guard<std::mutex> lock(instances_mutex_);
+    auto it = instances_.find(instance_id);
+    if (it != instances_.end()) {
+      it->second.parent_instance_id = msg.parent_workflow_instance_id;
+      it->second.parent_node_id = msg.parent_node_id;
+    }
+  }
+
+  // 开始执行
+  start_workflow_execution(instance_id, msg.input_refs);
+}
+
+void WorkflowScheduler::handle_workflow_completion(const WorkflowCompletionMessage& msg) {
+  // 处理嵌套Workflow完成
+  if (!msg.parent_workflow_instance_id.empty() && !msg.parent_node_id.empty()) {
+    // 通知父Workflow继续执行
+    auto node_completion = std::make_shared<NodeCompletionMessage>();
+    node_completion->message_id = "wf_completion_" + msg.message_id;
+    node_completion->node_id = msg.parent_node_id;
+    node_completion->workflow_instance_id = msg.parent_workflow_instance_id;
+    node_completion->success = msg.success;
+    node_completion->error_message = msg.error_message;
+    node_completion->output_refs = msg.output_refs;
+
+    dispatcher_->publish(node_completion);
+  }
+
+  // 清理实例
+  destroy_workflow_instance(msg.workflow_instance_id);
+}
+
+std::string WorkflowScheduler::create_workflow_instance(const std::string& workflow_id,
+                                                        const std::string& workflow_file) {
+  auto workflow = std::make_shared<framework::Workflow>(framework::Workflow::Config{});
+  workflow->set_id(workflow_id);
+
+  // 加载DSL
+  if (!workflow_file.empty()) {
+    WorkflowParser parser;
+    auto result = parser.parse_file(workflow_file);
+    if (!result.success) {
+      Logger::instance().error_f("[WorkflowScheduler] Failed to parse workflow file: %s",
+                                 workflow_file.c_str());
+      return "";
+    }
+    workflow = result.workflow;
+  }
+
+  std::string instance_id = workflow_id + "_" + std::to_string(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+
+  {
+    std::lock_guard<std::mutex> lock(instances_mutex_);
+    WorkflowInstance instance;
+    instance.instance_id = instance_id;
+    instance.workflow_id = workflow_id;
+    instance.workflow = workflow;
+    instance.start_time = std::chrono::steady_clock::now();
+    instances_[instance_id] = instance;
+  }
+
+  return instance_id;
+}
+
+bool WorkflowScheduler::destroy_workflow_instance(const std::string& instance_id) {
+  std::lock_guard<std::mutex> lock(instances_mutex_);
+  return instances_.erase(instance_id) > 0;
+}
+
+void WorkflowScheduler::start_workflow_execution(
+    const std::string& instance_id,
+    const std::map<std::string, DataBus::DataRef>& input_refs) {
+  std::shared_ptr<framework::Workflow> workflow;
+  {
+    std::lock_guard<std::mutex> lock(instances_mutex_);
+    auto it = instances_.find(instance_id);
+    if (it == instances_.end()) return;
+    workflow = it->second.workflow;
+  }
+
+  // 获取起始节点
+  auto start_nodes = workflow->get_executable_nodes();
+  if (start_nodes.empty()) {
+    Logger::instance().warn_f("[WorkflowScheduler] No start nodes for workflow %s",
+                              instance_id.c_str());
+    return;
+  }
+
+  // 为每个起始节点发送执行消息
+  for (const auto& node_id : start_nodes) {
+    auto exec_msg = std::make_shared<NodeExecutionMessage>();
+    exec_msg->message_id = "exec_" + node_id + "_" + instance_id;
+    exec_msg->node_id = node_id;
+    exec_msg->workflow_instance_id = instance_id;
+    exec_msg->input_refs = input_refs;
+
+    dispatcher_->publish(exec_msg);
+  }
+}
+
+}  // namespace runtime
+}  // namespace agentflow
+```
+
+### 8.5 集成示例
+
+```cpp
+// examples/sync_edge_workflow_demo.cpp
+
+#include "runtime/message_dispatcher.h"
+#include "runtime/workflow_scheduler.h"
+#include "runtime/databus/databus.h"
+#include "workflow/node_actor.h"
+#include "workflow/workflow.h"
+
+using namespace agentflow;
+
+int main() {
+  // 1. 创建核心组件
+  runtime::MessageDispatcher::Config dispatcher_config;
+  dispatcher_config.worker_threads = 4;
+  auto dispatcher = std::make_shared<runtime::MessageDispatcher>(dispatcher_config);
+  dispatcher->start();
+
+  auto databus = std::make_shared<runtime::DataBus>(1024 * 1024);
+
+  // 2. 创建Workflow和Node
+  auto workflow = std::make_shared<framework::Workflow>(framework::Workflow::Config{});
+  workflow->set_id("demo_workflow");
+
+  auto node_a = std::make_shared<framework::Node>(framework::Node::Config{
+      .id = "node_a",
+      .name = "Input Node",
+      .type = "source"
+  });
+  node_a->set_execute_callback([](const DataMap& inputs, DataMap& outputs) {
+    outputs["result"] = std::string("Hello from Node A");
+    return true;
+  });
+
+  auto node_b = std::make_shared<framework::Node>(framework::Node::Config{
+      .id = "node_b",
+      .name = "Process Node",
+      .type = "transform"
+  });
+  node_b->set_execute_callback([](const DataMap& inputs, DataMap& outputs) {
+    auto it = inputs.find("input");
+    if (it != inputs.end()) {
+      std::string val = std::get<std::string>(it->second);
+      outputs["processed"] = val + " -> Processed by Node B";
+    }
+    return true;
+  });
+
+  workflow->add_node(node_a);
+  workflow->add_node(node_b);
+
+  // 3. 创建Edge（支持多出边）
+  auto edge1 = std::make_shared<framework::Edge>(framework::Edge::Config{
+      .id = "edge_a_to_b",
+      .source_node = "node_a",
+      .target_node = "node_b",
+      .source_outputs = {"result"},
+      .target_inputs = {"input"}
+  });
+  edge1->set_dispatcher(dispatcher);
+  edge1->set_databus(databus);
+
+  workflow->add_edge(edge1);
+
+  // 4. 创建NodeActor（Edge同步执行在NodeActor中）
+  auto actor_a = std::make_shared<framework::NodeActor>(node_a, workflow, databus, dispatcher);
+  auto actor_b = std::make_shared<framework::NodeActor>(node_b, workflow, databus, dispatcher);
+
+  actor_a->on_start();
+  actor_b->on_start();
+
+  // 5. 触发执行
+  auto exec_msg = std::make_shared<runtime::NodeExecutionMessage>();
+  exec_msg->message_id = "exec_001";
+  exec_msg->node_id = "node_a";
+  exec_msg->workflow_instance_id = "demo_workflow";
+
+  dispatcher->publish(exec_msg);
+
+  // 6. 等待完成
+  std::this_thread::sleep_for(std::chrono::seconds(1));
+
+  // 清理
+  actor_a->on_stop();
+  actor_b->on_stop();
+  dispatcher->stop();
+  dispatcher->stop();
+
+  return 0;
+}
+```
+
+### 8.6 文件结构
+
+```
+include/internal/runtime/
+├── message_dispatcher.h      # 消息分发器（仅用于Node间通信）
+├── message_types.h           # 消息类型定义
+├── workflow_scheduler.h      # Workflow调度器
+└── databus/
+    └── databus.h             # DataBus接口
+
+src/runtime/
+├── message_dispatcher.cpp    # 消息分发器实现
+├── workflow_scheduler.cpp    # Workflow调度器实现
+└── databus/
+    └── databus.cpp           # DataBus实现
+
+include/internal/workflow/
+├── node_actor.h              # Node Actor（含同步Edge执行）
+├── edge.h                    # Edge定义（含EdgeResult）
+└── workflow.h                # Workflow定义
+
+src/workflow/
+├── node/
+│   └── node_actor.cpp        # Node Actor实现（execute_outgoing_edges）
+├── edge/
+│   └── edge.cpp              # Edge实现（同步execute方法）
+└── workflow.cpp              # Workflow实现
+
+tests/
+├── test_sync_edge_execution.cpp    # Edge同步执行测试
+├── test_multi_edge_node.cpp        # 多出边Node测试
+├── test_fork_join.cpp              # FORK/JOIN测试
+└── test_workflow_integration.cpp   # 集成测试
+```
+
+---
+
+## 9. 设计总结
+
+### 9.1 核心设计原则
+
+| 原则 | 说明 |
+|------|------|
+| **Edge与Node同步执行** | Edge在Node调用栈内直接调用，不通过消息队列 |
+| **多出边顺序执行** | 一个Node的多个出边按优先级顺序执行 |
+| **下游Node异步触发** | Edge返回后通过消息触发下游Node，实现并行 |
+| **FORK并行执行** | FORK的多个Edge同步执行，下游Node并行执行 |
+
+### 9.2 执行流程对比
+
+```
+【旧设计 - 异步Edge执行】
+Node A execute → publish(Completion) → MessageDispatcher → EdgeProcessor → publish(Execution) → Node B
+
+【新设计 - 同步Edge执行】
+Node A execute → Edge execute (同步) → publish(Execution) → MessageDispatcher → Node B
+```
+
+### 9.3 关键代码改动
+
+1. **Edge类**：新增`EdgeResult execute(const DataMap& source_outputs)`同步方法
+2. **NodeActor类**：新增`execute_outgoing_edges()`方法，在Node执行后同步调用
+3. **移除EdgeProcessor**：不再需要独立的Edge消息处理器
+
+---
+
+*文档更新时间：2026-03-04*
+*同步Edge执行设计版本：v2.0*
