@@ -442,6 +442,13 @@ target_link_libraries(example_databus PRIVATE agentflow)
 add_executable(example_storage ${AGENTFLOW_EXAMPLE_DIR}/storage_example.cpp)
 target_link_libraries(example_storage PRIVATE agentflow)
 
+# Agent Runner - Standalone executable for loading and executing Agent packages
+add_executable(agent_runner
+    ${AGENTFLOW_EXAMPLE_DIR}/agent_runner.cpp
+    ${AGENTFLOW_EXAMPLE_DIR}/interactive_runner.cpp
+)
+target_link_libraries(agent_runner PRIVATE agentflow)
+
 # ============================================================================
 # Node Adapter Library and Executable
 # ============================================================================

@@ -1,8 +1,8 @@
 # AgentFlow 测试套件
 
-AgentFlow测试套件提供完整的单元测试、热更新测试和性能测试框架。
+AgentFlow测试套件提供完整的单元测试、端到端测试、热更新测试和性能测试框架。
 
-**最后更新**: 2026年2月18日
+**最后更新**: 2026年3月3日
 
 ---
 
@@ -12,25 +12,31 @@ AgentFlow测试套件提供完整的单元测试、热更新测试和性能测�
 tests/
 ├── README.md                   # 本文档
 ├── CMakeLists.txt              # 测试构建配置
-├── unit/                        # 单元测试
-│   └── legacy_src/             # C++测试源文件
-│       ├── test_agent_gtest.cpp           # Agent测试
-│       ├── test_workflow_gtest.cpp        # Workflow测试
-│       ├── test_node_gtest.cpp            # Node测试
-│       ├── test_databus_gtest.cpp         # DataBus测试
-│       ├── test_event_gtest.cpp           # Event测试
-│       └── test_hot_reload.cpp            # 热更新测试
-├── lib/                         # 测试库
-│   └── hot_reload_test.cpp     # SO库测试源码
-├── scripts/                     # 测试脚本
-│   ├── shell/test_script.sh    # Shell测试脚本
-│   └── python/test_python.py   # Python测试脚本
-├── jars/                        # JAR测试
-│   └── HotReloadTest.java      # JAR测试类
-├── test_performance.cpp         # 性能测试
-└── data/                        # 测试数据
-    ├── expected/                # 预期输出
-    └── temporary/               # 临时数据
+├── unit/                       # 单元测试
+│   ├── src/                    # C++测试源文件
+│   │   ├── test_agent_gtest.cpp           # Agent测试
+│   │   ├── test_workflow_gtest.cpp        # Workflow测试
+│   │   ├── test_node_gtest.cpp            # Node测试
+│   │   ├── test_databus_gtest.cpp         # DataBus测试
+│   │   ├── test_event_gtest.cpp           # Event测试
+│   │   └── test_hot_reload.cpp            # 热更新测试
+│   └── data/                   # 测试数据
+│       ├── lib/                # SO库测试源码
+│       ├── jars/               # JAR测试
+│       ├── python/             # Python测试脚本
+│       └── shell/              # Shell测试脚本
+├── functional/                 # 功能测试
+│   └── src/
+│       └── test_agent_loading.cpp        # Agent加载测试
+├── e2e/                        # 端到端测试
+│   ├── README.md               # E2E测试说明
+│   ├── CMakeLists.txt          # E2E构建配置
+│   ├── message_routing/        # 消息路由场景
+│   ├── workflow_execution/     # Workflow执行场景
+│   ├── session_isolation/      # Session隔离场景
+│   └── data_sharing/           # 数据共享场景
+└── perf/                       # 性能测试
+    └── test_performance.cpp
 ```
 
 ---
@@ -111,9 +117,97 @@ tests/
 
 ---
 
-### 2. 热更新测试
+## 🔗 端到端测试 (E2E Tests)
 
-**文件**: `unit/legacy_src/test_hot_reload.cpp`
+端到端测试验证完整的业务链路，从 Agent 包加载到 Workflow 执行的全流程。
+
+### 测试场景
+
+#### 1. 消息路由场景 (message_routing)
+
+**测试链路**:
+```
+reqmsg → Agent.default_session → Agent.new_session → SessionTaskCoordinator → AgentTask
+```
+
+| 用例ID | 名称 | 描述 |
+|--------|------|------|
+| TC-E2E-001 | BasicRouting | 基础消息路由（user_id + client_id 创建新 session） |
+| TC-E2E-002 | MissingMetadata | 消息 metadata 缺失 user_id/client_id 处理 |
+| TC-E2E-003 | CoordinatorWorkflow | coordinator_workflow 默认路由 |
+| TC-E2E-004 | ExplicitWorkflowId | 显式 workflow_id 覆盖 |
+| TC-E2E-005 | ConcurrentMultiUser | 多用户并发路由 |
+
+#### 2. Workflow 执行场景 (workflow_execution)
+
+**测试链路**:
+```
+AgentTask → Scheduler → Deployer → WorkerEngine → Node执行 → 状态更新
+```
+
+使用 `examples/agent/basic_agent` 作为测试数据。
+
+| 用例ID | 名称 | 描述 |
+|--------|------|------|
+| TC-E2E-101 | PackageLoading | 包加载验证 |
+| TC-E2E-102 | AgentCreationAndInit | Agent 创建和初始化 |
+| TC-E2E-103 | AgentLifecycle | Agent 生命周期状态转换 |
+| TC-E2E-104 | RuntimeRegistrationAndWorkflowExecution | Runtime 注册和 Workflow 执行 |
+| TC-E2E-105 | MessageRoutingToWorkflowExecution | 消息路由到 Workflow 执行完整链路 |
+| TC-E2E-106 | WorkflowDAGExecution | 多节点 DAG 执行 |
+| TC-E2E-107 | CoordinatorWorkflowDefaultRouting | Coordinator Workflow 默认路由 |
+
+#### 3. Session 隔离场景 (session_isolation)
+
+验证不同 Session 之间的隔离性。
+
+| 用例ID | 名称 | 描述 |
+|--------|------|------|
+| TC-E2E-201 | MultiSessionCreation | 多 Session 并发创建 |
+| TC-E2E-202 | TaskIsolation | Session 任务隔离 |
+| TC-E2E-203 | MessageQueueIsolation | Session 消息队列隔离 |
+| TC-E2E-204 | CoordinatorIsolation | Session coordinator 隔离 |
+
+#### 4. 数据共享场景 (data_sharing)
+
+验证 DataBus 跨实例数据共享。
+
+| 用例ID | 名称 | 描述 |
+|--------|------|------|
+| TC-E2E-301 | InProcessSharing | 进程内数据共享 |
+| TC-E2E-302 | DataRefPassing | DataRef 引用传递 |
+| TC-E2E-303 | SubscriptionNotify | 订阅通知机制 |
+| TC-E2E-304 | OwnerIndexQuery | Owner 索引查询 |
+
+### 运行 E2E 测试
+
+```bash
+# 运行所有 E2E 测试
+ctest --test-dir build -R E2E --output-on-failure
+
+# 运行特定场景
+./build/bin/test_e2e_message_routing
+./build/bin/test_e2e_basic_agent
+
+# 运行单个测试用例
+./build/bin/test_e2e_basic_agent --gtest_filter=BasicAgentE2ETest.PackageLoading
+```
+
+### E2E 测试设计原则
+
+1. **独立性**: 每个测试用例独立运行，不依赖其他用例状态
+2. **可重复性**: 测试可多次运行，结果一致
+3. **自包含**: 测试数据、配置、预期结果都在用例目录内
+4. **真实模拟**: 使用真实的 Agent 包（如 basic_agent）而非简单 Mock
+5. **链路验证**: 验证完整链路而非单个组件
+
+详细设计文档: [e2e/README.md](e2e/README.md)
+
+---
+
+## 🔥 热更新测试
+
+**文件**: `unit/src/test_hot_reload.cpp`
 
 **支持的可执行文件类型**:
 - ✅ **C++ 动态库** (.so/.dylib) - 热更新共享对象
@@ -153,9 +247,9 @@ tests/
 
 ---
 
-### 3. 性能测试
+## 📈 性能测试
 
-**文件**: `test_performance.cpp`  
+**文件**: `perf/test_performance.cpp`  
 **脚本**: `../scripts/run_performance_tests.sh`
 
 #### 测试场景
