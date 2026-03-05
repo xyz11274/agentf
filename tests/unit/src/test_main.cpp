@@ -13,38 +13,38 @@ int main(int argc, char* argv[]) {
   int failed = 0;
 
   try {
-    std::cout << "Running Node tests..." << std::endl;
+    std::cout << "Running MMNode tests..." << std::endl;
     test_node();
-    std::cout << "✓ Node tests passed" << std::endl << std::endl;
+    std::cout << "✓ MMNode tests passed" << std::endl << std::endl;
   } catch(const std::exception& e) {
-    std::cerr << "✗ Node tests failed: " << e.what() << std::endl;
+    std::cerr << "✗ MMNode tests failed: " << e.what() << std::endl;
     failed++;
   }
 
   try {
-    std::cout << "Running Workflow tests..." << std::endl;
+    std::cout << "Running MMWorkflow tests..." << std::endl;
     test_workflow();
-    std::cout << "✓ Workflow tests passed" << std::endl << std::endl;
+    std::cout << "✓ MMWorkflow tests passed" << std::endl << std::endl;
   } catch(const std::exception& e) {
-    std::cerr << "✗ Workflow tests failed: " << e.what() << std::endl;
+    std::cerr << "✗ MMWorkflow tests failed: " << e.what() << std::endl;
     failed++;
   }
 
   try {
-    std::cout << "Running Agent tests..." << std::endl;
+    std::cout << "Running MMAgent tests..." << std::endl;
     test_agent();
-    std::cout << "✓ Agent tests passed" << std::endl << std::endl;
+    std::cout << "✓ MMAgent tests passed" << std::endl << std::endl;
   } catch(const std::exception& e) {
-    std::cerr << "✗ Agent tests failed: " << e.what() << std::endl;
+    std::cerr << "✗ MMAgent tests failed: " << e.what() << std::endl;
     failed++;
   }
 
   try {
-    std::cout << "Running DataBus tests..." << std::endl;
+    std::cout << "Running MMDataBus tests..." << std::endl;
     test_databus();
-    std::cout << "✓ DataBus tests passed" << std::endl << std::endl;
+    std::cout << "✓ MMDataBus tests passed" << std::endl << std::endl;
   } catch(const std::exception& e) {
-    std::cerr << "✗ DataBus tests failed: " << e.what() << std::endl;
+    std::cerr << "✗ MMDataBus tests failed: " << e.what() << std::endl;
     failed++;
   }
 

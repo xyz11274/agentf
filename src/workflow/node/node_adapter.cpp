@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// Node Adapter - Standalone executable for node execution
+// MMNode Adapter - Standalone executable for node execution
 
 #include <iostream>
 #include <fstream>
@@ -24,8 +24,8 @@
 using namespace agentflow;
 using namespace agentflow::framework;
 
-// Parse JSON config file and create Node config
-bool parse_node_config(const std::string& config_file, Node::Config& config) {
+// Parse JSON config file and create MMNode config
+bool parse_node_config(const std::string& config_file, MMNode::Config& config) {
 #ifdef AGENTFLOW_WITH_RAPIDJSON
   std::ifstream file(config_file);
   if(!file.is_open()) {
@@ -63,19 +63,19 @@ bool parse_node_config(const std::string& config_file, Node::Config& config) {
   if(doc.HasMember("execution_mode") && doc["execution_mode"].IsString()) {
     std::string mode = doc["execution_mode"].GetString();
     if(mode == "CPP_FUNCTION") {
-      config.execution_mode = Node::ExecutionMode::CPP_FUNCTION;
+      config.execution_mode = MMNode::ExecutionMode::CPP_FUNCTION;
     } else if(mode == "SHELL_SCRIPT") {
-      config.execution_mode = Node::ExecutionMode::SHELL_SCRIPT;
+      config.execution_mode = MMNode::ExecutionMode::SHELL_SCRIPT;
     } else if(mode == "EXECUTABLE") {
-      config.execution_mode = Node::ExecutionMode::EXECUTABLE;
+      config.execution_mode = MMNode::ExecutionMode::EXECUTABLE;
     } else if(mode == "GO_SCRIPT") {
-      config.execution_mode = Node::ExecutionMode::GO_SCRIPT;
+      config.execution_mode = MMNode::ExecutionMode::GO_SCRIPT;
     } else if(mode == "PYTHON_SCRIPT") {
-      config.execution_mode = Node::ExecutionMode::PYTHON_SCRIPT;
+      config.execution_mode = MMNode::ExecutionMode::PYTHON_SCRIPT;
     } else if(mode == "JAVA_JAR") {
-      config.execution_mode = Node::ExecutionMode::JAVA_JAR;
+      config.execution_mode = MMNode::ExecutionMode::JAVA_JAR;
     } else if(mode == "SO_LIBRARY") {
-      config.execution_mode = Node::ExecutionMode::SO_LIBRARY;
+      config.execution_mode = MMNode::ExecutionMode::SO_LIBRARY;
     }
   }
 
@@ -129,7 +129,7 @@ bool parse_node_config(const std::string& config_file, Node::Config& config) {
     }
   }
 
-  Logger::instance().info("Node config parsed: id=" + config.id + ", name=" + config.name);
+  Logger::instance().info("MMNode config parsed: id=" + config.id + ", name=" + config.name);
   return true;
 #else
   Logger::instance().warn("RapidJSON not available - using basic JSON parsing");
@@ -238,8 +238,8 @@ bool write_outputs(const std::string& output_file, const DataMap& outputs) {
 void print_usage(const char* program_name) {
   std::cerr << "Usage: " << program_name << " [OPTIONS]\n"
             << "Options:\n"
-            << "  --config <file>    Node config JSON file (required)\n"
-            << "  --inputs <file>    Node inputs JSON file (optional)\n"
+            << "  --config <file>    MMNode config JSON file (required)\n"
+            << "  --inputs <file>    MMNode inputs JSON file (optional)\n"
             << "  --output <file>    Output JSON file for results (default: output.json)\n"
             << "  --help             Show this help message\n";
 }
@@ -247,7 +247,7 @@ void print_usage(const char* program_name) {
 // Main entry point
 int main(int argc, char* argv[]) {
   // Initialize logger
-  Logger::instance().info("Node Adapter initializing");
+  Logger::instance().info("MMNode Adapter initializing");
 
   // Parse command line arguments
   std::string config_file;
@@ -276,7 +276,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  Logger::instance().info("Node Adapter started");
+  Logger::instance().info("MMNode Adapter started");
   Logger::instance().info("Config file: " + config_file);
   if(!inputs_file.empty()) {
     Logger::instance().info("Inputs file: " + inputs_file);
@@ -284,7 +284,7 @@ int main(int argc, char* argv[]) {
   Logger::instance().info("Output file: " + output_file);
 
   // Parse node configuration
-  Node::Config node_config;
+  MMNode::Config node_config;
   if(!parse_node_config(config_file, node_config)) {
     Logger::instance().error("Failed to parse node config");
     return 1;
@@ -297,13 +297,13 @@ int main(int argc, char* argv[]) {
   }
 
   // Create and initialize node
-  Node node(node_config);
+  MMNode node(node_config);
   if(!node.initialize()) {
     Logger::instance().error("Failed to initialize node");
     return 1;
   }
 
-  Logger::instance().info("Node initialized successfully");
+  Logger::instance().info("MMNode initialized successfully");
 
   // Set inputs
   node.set_inputs(inputs);
@@ -311,15 +311,15 @@ int main(int argc, char* argv[]) {
   // Execute node
   Logger::instance().info("Executing node...");
   if(!node.execute()) {
-    Logger::instance().error("Node execution failed");
+    Logger::instance().error("MMNode execution failed");
     DataMap error_output;
-    error_output["error"] = std::string("Node execution failed");
+    error_output["error"] = std::string("MMNode execution failed");
     error_output["status"] = std::string("FAILED");
     write_outputs(output_file, error_output);
     return 1;
   }
 
-  Logger::instance().info("Node execution completed successfully");
+  Logger::instance().info("MMNode execution completed successfully");
 
   // Get outputs
   const DataMap& outputs = node.get_outputs();
@@ -334,10 +334,10 @@ int main(int argc, char* argv[]) {
 
   // Cleanup
   if(!node.cleanup()) {
-    Logger::instance().warn("Node cleanup completed with warnings");
+    Logger::instance().warn("MMNode cleanup completed with warnings");
   }
 
-  Logger::instance().info("Node Adapter finished successfully");
+  Logger::instance().info("MMNode Adapter finished successfully");
 
   return 0;
 }

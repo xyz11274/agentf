@@ -1,15 +1,15 @@
-# Agent 包规范说明
+# MMAgent 包规范说明
 
 ## 1. 包命名规范
 
 - 外层发布包：`$xxxAgent_$PKGTYPE_$PKGVER.tar.gz`
-- 内层 Agent 对象包：`$xxxAgent_$AGTVER.tar.gz`
+- 内层 MMAgent 对象包：`$xxxAgent_$AGTVER.tar.gz`
 
 字段含义：
-- `$xxxAgent`：Agent 名称（建议以 `Agent` 结尾）
+- `$xxxAgent`：MMAgent 名称（建议以 `MMAgent` 结尾）
 - `$PKGTYPE`：包类型，例如 `release` / `snapshot`
 - `$PKGVER`：发布包版本
-- `$AGTVER`：Agent 对象版本
+- `$AGTVER`：MMAgent 对象版本
 
 ## 2. 包结构
 
@@ -19,7 +19,7 @@ $xxxAgent_$PKGTYPE_$PKGVER.tar.gz
 └── package.json
 ```
 
-内层 Agent 对象包内容：
+内层 MMAgent 对象包内容：
 
 ```text
 $xxxAgent_$AGTVER.tar.gz/
@@ -32,14 +32,14 @@ $xxxAgent_$AGTVER.tar.gz/
 ## 3. 必需文件说明
 
 ### 3.1 `agent.json`
-Agent 运行时元数据，至少包含：
-- `name`：Agent 名称
-- `version`：Agent 版本（应与 `$AGTVER` 一致）
+MMAgent 运行时元数据，至少包含：
+- `name`：MMAgent 名称
+- `version`：MMAgent 版本（应与 `$AGTVER` 一致）
 - `description`：功能概述
 - `workflows`：工作流文件列表
 
 ### 3.2 `agentCard.md`
-Agent Prompt/能力卡片，供其他模型或 Agent 读取。
+MMAgent Prompt/能力卡片，供其他模型或 MMAgent 读取。
 
 ### 3.3 `workflow_XX.json`
 工作流定义文件，包含 `node` 与 `edge`：

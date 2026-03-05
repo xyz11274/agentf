@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// Workflow Actor implementation
+// MMWorkflow Actor implementation
 
 #ifndef AGENTFLOW_ACTOR_WORKFLOW_ACTOR_H
 #define AGENTFLOW_ACTOR_WORKFLOW_ACTOR_H
@@ -38,7 +38,7 @@ struct WorkflowStatusMessage {
       : workflow_id(id), state(s), output_data(output), metadata(meta) {}
 };
 
-/// @brief Workflow Actor for orchestrating workflow execution
+/// @brief MMWorkflow Actor for orchestrating workflow execution
 class WorkflowActor : public protoactor::Actor, public AgentFlowActor {
 public:
   /// @brief Constructor

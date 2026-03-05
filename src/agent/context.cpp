@@ -9,12 +9,12 @@ namespace framework {
 
 AgentContext::AgentContext(const Config& config)
     : config_(config), is_valid_(true) {
-  AgentTask::Config updater_config;
+  MMAgentTask::Config updater_config;
   updater_config.task_id = config_.context_id + "_context_updater";
   updater_config.task_type = "context_updater";
   updater_config.session_id = config_.agent_id;
   updater_config.workflow_file = config_.context_workflow;
-  context_updater_task_ = std::make_shared<AgentTask>(updater_config);
+  context_updater_task_ = std::make_shared<MMAgentTask>(updater_config);
 }
 
 AgentContext::~AgentContext() {

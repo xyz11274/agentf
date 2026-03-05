@@ -19,7 +19,7 @@
 - [5. 系统级非功能性需求](#5-系统级非功能性需求)
 - [6. 用例→模块→优先级映射](#6-用例模块优先级映射)
 - [7. 里程碑交付映射（含用例编号+用例名）](#7-里程碑交付映射含用例编号用例名)
-- [8. 主流 AI Agent 实践映射](#8-主流-ai-agent-实践映射)
+- [8. 主流 AI MMAgent 实践映射](#8-主流-ai-agent-实践映射)
 - [9. 自检结论](#9-自检结论)
 
 ---
@@ -27,16 +27,16 @@
 ## 1. 项目背景与范围
 
 ### 1.1 项目背景
-AgentFlow 是一个面向 Agent 编排与运行的一体化系统，覆盖 **开发（定义/构建）→部署（加载/实例化）→运行（消息/任务/调度/执行/会话）** 全链路。
+AgentFlow 是一个面向 MMAgent 编排与运行的一体化系统，覆盖 **开发（定义/构建）→部署（加载/实例化）→运行（消息/任务/调度/执行/会话）** 全链路。
 
 ### 1.2 系统边界
-- **系统内**：Agent 包开发与发布、实例生命周期与部署、消息与任务管理、Workflow/Node 执行引擎、会话管理。
+- **系统内**：MMAgent 包开发与发布、实例生命周期与部署、消息与任务管理、MMWorkflow/MMNode 执行引擎、会话管理。
 - **系统外**：本次需求分析不扩展外部系统边界，仅关注系统内部功能协同。
 
 ### 1.3 目标用户
 - 开发者
 - 运维者
-- 系统内部 Actor：`AgentManager`、`AgentRuntime`、`Agent`
+- 系统内部 Actor：`AgentManager`、`MMAgentRuntime`、`MMAgent`
 
 ---
 
@@ -45,8 +45,8 @@ AgentFlow 是一个面向 Agent 编排与运行的一体化系统，覆盖 **开
 ### 2.1 S1 顶层业务场景
 | S1编号 | 场景名称 | 目标 | 产出 |
 |---|---|---|---|
-| S1-01 | Agent开发 | 完成可运行 Agent 包的开发与发布 | Workflow/Node 定义、解析结果、发布包 |
-| S1-02 | Agent运行 | 完成 Agent 在线运行与任务执行闭环 | 实例状态、任务执行结果、会话上下文 |
+| S1-01 | Agent开发 | 完成可运行 MMAgent 包的开发与发布 | MMWorkflow/MMNode 定义、解析结果、发布包 |
+| S1-02 | Agent运行 | 完成 MMAgent 在线运行与任务执行闭环 | 实例状态、任务执行结果、会话上下文 |
 
 ### 2.2 S2 子场景分解
 | 归属S1 | S2编号 | 子场景名称 | 核心能力 |
@@ -58,15 +58,15 @@ AgentFlow 是一个面向 Agent 编排与运行的一体化系统，覆盖 **开
 ### 2.3 S3 业务执行场景
 | 归属S2 | S3编号 | 场景名称 | 说明 |
 |---|---|---|---|
-| S1-01-S2-01 | S3-01 | Workflow开发 | Workflow/Node/Edge 建模与解析 |
+| S1-01-S2-01 | S3-01 | Workflow开发 | MMWorkflow/MMNode/MMEdge 建模与解析 |
 | S1-01-S2-01 | S3-02 | Node定制开发 | 控制面、运行面、热加载 |
 | S1-01-S2-01 | S3-03 | Agent包构建 | 产物打包、签名、发布 |
 | S1-02-S2-01 | S3-01 | Agent实例生命周期 | 包加载、实例与状态管理 |
 | S1-02-S2-01 | S3-02 | Agent实例部署 | 拓扑部署与运行接入 |
 | S1-02-S2-02 | S3-01 | Agent消息管理 | 接收消息、发送消息 |
 | S1-02-S2-02 | S3-02 | Agent任务管理 | 消息映射任务、任务生命周期 |
-| S1-02-S2-02 | S3-03 | Agent任务调度 | Workflow 实例调度 |
-| S1-02-S2-02 | S3-04 | Agent任务执行 | Workflow/Node 执行引擎 |
+| S1-02-S2-02 | S3-03 | Agent任务调度 | MMWorkflow 实例调度 |
+| S1-02-S2-02 | S3-04 | Agent任务执行 | MMWorkflow/MMNode 执行引擎 |
 | S1-02-S2-02 | S3-05 | Agent会话管理 | 会话级上下文管理 |
 
 ---
@@ -76,29 +76,29 @@ AgentFlow 是一个面向 Agent 编排与运行的一体化系统，覆盖 **开
 ### 3.1 S1-01 Agent开发
 | 用例编号 | 用例名称 | 主 Actor | 一句话摘要 | 优先级 |
 |---|---|---|---|---|
-| S1-01-S2-01-S3-01-UC-01 | Workflow、Node和Edge定义 | 开发者 | 定义编排核心实体、约束和依赖关系 | P0 |
-| S1-01-S2-01-S3-01-UC-02 | Workflow、Node和Edge解析器 | 解析工具、Agent | 将 JSON/DSL 解析为可执行 IR 模型 | P0 |
-| S1-01-S2-01-S3-02-UC-01 | Node控制面 | 开发者 | 统一 Node 生命周期控制与运维接口 | P0 |
-| S1-01-S2-01-S3-02-UC-02 | Node运行面 | 开发者 | 多语言 Node 运行逻辑接入与执行 | P0 |
-| S1-01-S2-01-S3-02-UC-03 | Node运行面热加载 | 开发者 | 支持不停机更新 Node 运行逻辑 | P1 |
+| S1-01-S2-01-S3-01-UC-01 | MMWorkflow、Node和Edge定义 | 开发者 | 定义编排核心实体、约束和依赖关系 | P0 |
+| S1-01-S2-01-S3-01-UC-02 | MMWorkflow、Node和Edge解析器 | 解析工具、MMAgent | 将 JSON/DSL 解析为可执行 IR 模型 | P0 |
+| S1-01-S2-01-S3-02-UC-01 | Node控制面 | 开发者 | 统一 MMNode 生命周期控制与运维接口 | P0 |
+| S1-01-S2-01-S3-02-UC-02 | Node运行面 | 开发者 | 多语言 MMNode 运行逻辑接入与执行 | P0 |
+| S1-01-S2-01-S3-02-UC-03 | Node运行面热加载 | 开发者 | 支持不停机更新 MMNode 运行逻辑 | P1 |
 | S1-01-S2-01-S3-03-UC-01 | Agent包构建发布 | 开发者 | 产物打包、签名、发布与可追溯管理 | P0 |
 
 ### 3.2 S1-02 Agent运行
 | 用例编号 | 用例名称 | 主 Actor | 一句话摘要 | 优先级 |
 |---|---|---|---|---|
-| S1-02-S2-01-S3-01-UC-01 | Agent包加载 | 运维者 | 将 Agent 包加载至运行环境并校验合法性 | P0 |
+| S1-02-S2-01-S3-01-UC-01 | Agent包加载 | 运维者 | 将 MMAgent 包加载至运行环境并校验合法性 | P0 |
 | S1-02-S2-01-S3-01-UC-02 | Agent实例生命周期管理 | AgentManager | 管理实例创建、启动、停止、销毁 | P0 |
 | S1-02-S2-01-S3-01-UC-02 | Agent状态管理 | AgentManager | 管理实例状态机与跃迁约束 | P0 |
-| S1-02-S2-01-S3-02-UC-01 | Agent实例部署 | AgentRuntime | 在单机/分布式拓扑部署实例 | P0 |
-| S1-02-S2-02-S3-01-UC-01 | Agent接收消息 | Agent | 入站消息鉴权、去重、缓存、路由 | P0 |
-| S1-02-S2-02-S3-01-UC-02 | Agent发送消息 | Agent | 出站消息投递、重试、死信处理 | P0 |
-| S1-02-S2-02-S3-02-UC-01 | Agent消息与任务映射 | Agent | 消息映射任务与关联关系管理 | P0 |
-| S1-02-S2-02-S3-02-UC-02 | 任务生命周期管理 | Agent | 管理任务状态与重试策略 | P0 |
-| S1-02-S2-02-S3-03-UC-01 | 任务对应Workflow实例调度 | AgentRuntime | 调度任务到匹配 Workflow 与 Worker | P0 |
-| S1-02-S2-02-S3-04-UC-01 | Workflow及Node执行引擎 | AgentRuntime | 执行工作流图、驱动 Node、汇聚结果 | P0 |
-| S1-02-S2-02-S3-05-UC-01 | Agent会话管理 | Agent | 会话创建、销毁等生命周期管理 | P0 |
-| S1-02-S2-02-S3-05-UC-02 | 长时会话资源管理 | Agent | 长时会话资源发放与回收 | P0 |
-| S1-02-S2-02-S3-05-UC-03 | 会话内多任务并发 | Agent | 会话内多任务并发管理 | P0 |
+| S1-02-S2-01-S3-02-UC-01 | Agent实例部署 | MMAgentRuntime | 在单机/分布式拓扑部署实例 | P0 |
+| S1-02-S2-02-S3-01-UC-01 | Agent接收消息 | MMAgent | 入站消息鉴权、去重、缓存、路由 | P0 |
+| S1-02-S2-02-S3-01-UC-02 | Agent发送消息 | MMAgent | 出站消息投递、重试、死信处理 | P0 |
+| S1-02-S2-02-S3-02-UC-01 | Agent消息与任务映射 | MMAgent | 消息映射任务与关联关系管理 | P0 |
+| S1-02-S2-02-S3-02-UC-02 | 任务生命周期管理 | MMAgent | 管理任务状态与重试策略 | P0 |
+| S1-02-S2-02-S3-03-UC-01 | 任务对应Workflow实例调度 | MMAgentRuntime | 调度任务到匹配 MMWorkflow 与 Worker | P0 |
+| S1-02-S2-02-S3-04-UC-01 | Workflow及Node执行引擎 | MMAgentRuntime | 执行工作流图、驱动 MMNode、汇聚结果 | P0 |
+| S1-02-S2-02-S3-05-UC-01 | Agent会话管理 | MMAgent | 会话创建、销毁等生命周期管理 | P0 |
+| S1-02-S2-02-S3-05-UC-02 | 长时会话资源管理 | MMAgent | 长时会话资源发放与回收 | P0 |
+| S1-02-S2-02-S3-05-UC-03 | 会话内多任务并发 | MMAgent | 会话内多任务并发管理 | P0 |
 
 ---
 
@@ -108,14 +108,14 @@ AgentFlow 是一个面向 Agent 编排与运行的一体化系统，覆盖 **开
 
 ### 4.1 S1-01 Agent开发
 
-#### S1-01-S2-01-S3-01-UC-01 Workflow、Node和Edge定义
-**用例描述**：开发者按照业务流程定义业务agent对应的 Workflow/Node/Edge 的结构、约束与依赖，系统完成结构校验、语义校验与版本化保存。该能力是所有运行能力的前置基础。  
+#### S1-01-S2-01-S3-01-UC-01 MMWorkflow、Node和Edge定义
+**用例描述**：开发者按照业务流程定义业务agent对应的 MMWorkflow/MMNode/MMEdge 的结构、约束与依赖，系统完成结构校验、语义校验与版本化保存。该能力是所有运行能力的前置基础。  
 **主成功场景**：
-1. 开发者创建 Workflow 元数据（ID/版本/入口）。
+1. 开发者创建 MMWorkflow 元数据（ID/版本/入口）。
 2. 系统校验元数据唯一性与格式。
-3. 开发者定义 Node（输入输出、执行参数、资源需求）。
-4. 系统校验 Node 配置完整性与类型约束。
-5. 开发者定义 Edge（依赖关系、条件表达式、数据映射）。
+3. 开发者定义 MMNode（输入输出、执行参数、资源需求）。
+4. 系统校验 MMNode 配置完整性与类型约束。
+5. 开发者定义 MMEdge（依赖关系、条件表达式、数据映射）。
 6. 系统进行工作流图校验（含可达性、出口收敛；带 `loop/goto` 时允许受控环回）。
 7. 系统保存定义版本并返回校验报告。  
 **扩展场景**：
@@ -130,7 +130,7 @@ sequenceDiagram
     participant Def as DefinitionService
     participant Val as Validator
     participant Repo as DefinitionRepo
-    Dev->>Def: 提交Workflow/Node/Edge定义
+    Dev->>Def: 提交Workflow/MMNode/Edge定义
     Def->>Val: 元数据+语义+DAG校验
     Val-->>Def: 校验结果
     alt 校验通过
@@ -142,7 +142,7 @@ sequenceDiagram
     end
 ```
 
-#### S1-01-S2-01-S3-01-UC-02 Workflow、Node和Edge解析器
+#### S1-01-S2-01-S3-01-UC-02 MMWorkflow、Node和Edge解析器
 **用例描述**：系统将 JSON/DSL 解析为内部 IR（中间表示），用于后续执行引擎、调试器与可视化工具。  
 **主成功场景**：1）定义JSON格式的解析规范；2）对DSL文件加载定义 → 词法语法解析 → 语义绑定 → 默认值补全 → 输出 IR 与告警。  
 **扩展场景**：语法错误、引用节点缺失、字段类型冲突。  
@@ -162,7 +162,7 @@ sequenceDiagram
 ```
 
 #### S1-01-S2-01-S3-02-UC-01 Node控制面
-**用例描述**：为 Node 提供统一控制平面接口（start/stop/health/config），支持生命周期控制、状态采集和运维诊断。  
+**用例描述**：为 MMNode 提供统一控制平面接口（start/stop/health/config），支持生命周期控制、状态采集和运维诊断。  
 **主成功场景**：定义控制契约 → 实现控制接口 → 执行契约测试 → 注册控制能力。  
 **扩展场景**：契约不完整、健康探针失败、配置下发失败。  
 **架构影响**：新增 `NodeControlPlane` 接口层与命令总线适配器；状态事件对接监控系统。
@@ -204,7 +204,7 @@ sequenceDiagram
 ```
 
 #### S1-01-S2-01-S3-02-UC-03 Node运行面热加载
-**用例描述**：在不中断整体业务的前提下替换 Node 可执行逻辑，支持灰度与回滚。  
+**用例描述**：在不中断整体业务的前提下替换 MMNode 可执行逻辑，支持灰度与回滚。  
 **主成功场景**：上传新版本 → 验签与兼容校验 → 灰度切流 → 健康通过后全量。  
 **扩展场景**：灰度探针失败自动回滚；版本校验失败直接拒绝。  
 **架构影响**：增加版本状态机（candidate/canary/stable）、灰度路由器、自动回滚控制器。
@@ -226,7 +226,7 @@ sequenceDiagram
 ```
 
 #### S1-01-S2-01-S3-03-UC-01 Agent包构建发布
-**用例描述**：将 Workflow 定义、Node 产物、元数据打包为可发布 Agent 包并进入制品仓。  
+**用例描述**：将 MMWorkflow 定义、MMNode 产物、元数据打包为可发布 MMAgent 包并进入制品仓。  
 **主成功场景**：拉取产物 → 依赖完整性校验 → 打包签名 → 上传制品库 → 发布元数据。  
 **扩展场景**：依赖缺失、签名失败、上传失败。  
 **架构影响**：增加制品清单模型、签名验签链路、发布审计日志与 SBOM 输出。
@@ -247,7 +247,7 @@ sequenceDiagram
 ### 4.2 S1-02 Agent运行
 
 #### S1-02-S2-01-S3-01-UC-01 Agent包加载
-**用例描述**：运维者加载 Agent 包，系统完成验签、兼容性校验与包注册。  
+**用例描述**：运维者加载 MMAgent 包，系统完成验签、兼容性校验与包注册。  
 **主成功场景**：提交包标识 → 下载包 → 验签 → 兼容校验 → 注册包状态。  
 **扩展场景**：验签失败、运行环境不兼容、包元数据损坏。  
 **架构影响**：部署入口接入 `PackageVerifier`，治理中心维护包状态机。
@@ -292,7 +292,7 @@ sequenceDiagram
 ```
 
 #### S1-02-S2-01-S3-01-UC-02 Agent状态管理
-**用例描述**：执行 Agent 状态机合法跃迁，保证状态一致性、可追溯性和幂等处理。  
+**用例描述**：执行 MMAgent 状态机合法跃迁，保证状态一致性、可追溯性和幂等处理。  
 **主成功场景**：接收状态变更命令 → 校验迁移矩阵 → 更新状态 → 写审计事件。  
 **扩展场景**：非法跃迁被拒绝；重复命令幂等返回。  
 **架构影响**：引入统一状态机引擎，状态迁移表配置化。
@@ -320,13 +320,13 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant RT as AgentRuntime
+    participant RT as MMAgentRuntime
     participant Sched as DeployScheduler
-    participant Node as WorkerNode
+    participant MMNode as WorkerNode
     participant Route as ServiceRouter
     RT->>Sched: 请求部署
-    Sched->>Node: 下发部署指令
-    Node-->>Sched: 健康结果
+    Sched->>MMNode: 下发部署指令
+    MMNode-->>Sched: 健康结果
     alt 健康通过
         Sched->>Route: 加入流量
     else 失败
@@ -364,14 +364,14 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Agent as Agent
+    participant MMAgent as MMAgent
     participant Out as Outbox
     participant Down as Downstream
     participant DLQ as DeadLetterQueue
-    Agent->>Out: 写入待发送消息
+    MMAgent->>Out: 写入待发送消息
     Out->>Down: 投递
     alt 投递成功
-        Out-->>Agent: Confirmed
+        Out-->>MMAgent: Confirmed
     else 超时/失败
         Out->>DLQ: 超限后转死信
     end
@@ -385,15 +385,15 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Agent as Agent
+    participant MMAgent as MMAgent
     participant Rule as MappingRuleEngine
     participant Task as TaskService
-    Agent->>Rule: 匹配消息规则
+    MMAgent->>Rule: 匹配消息规则
     alt 匹配成功
         Rule->>Task: 创建任务
-        Task-->>Agent: task_id
+        Task-->>MMAgent: task_id
     else 匹配失败
-        Rule-->>Agent: Unmapped
+        Rule-->>MMAgent: Unmapped
     end
 ```
 
@@ -405,18 +405,18 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Agent as Agent
+    participant MMAgent as MMAgent
     participant FSM as TaskStateMachine
     participant Store as TaskStore
-    Agent->>FSM: 更新任务状态事件
+    MMAgent->>FSM: 更新任务状态事件
     FSM->>Store: 乐观锁更新
     Store-->>FSM: 更新结果
-    FSM-->>Agent: 当前状态
+    FSM-->>MMAgent: 当前状态
 ```
 
 #### S1-02-S2-02-S3-03-UC-01 任务对应Workflow实例调度
-**用例描述**：将任务调度到可执行 Workflow 实例与 Worker 节点。  
-**主成功场景**：拉取待调度任务 → 匹配 Workflow 版本 → 选择 Worker → 下发执行命令。  
+**用例描述**：将任务调度到可执行 MMWorkflow 实例与 Worker 节点。  
+**主成功场景**：拉取待调度任务 → 匹配 MMWorkflow 版本 → 选择 Worker → 下发执行命令。  
 **扩展场景**：无可用 Worker 退避重试；版本不兼容阻断调度。  
 **架构影响**：调度策略插件化、Worker 能力标签、负载模型。
 
@@ -435,19 +435,19 @@ sequenceDiagram
 ```
 
 #### S1-02-S2-02-S3-04-UC-01 Workflow及Node执行引擎
-**用例描述**：执行引擎按工作流图语义驱动 Node，处理分支、聚合、异常与补偿。  
-**主成功场景**：加载 IR → 执行入口 Node → 推进依赖 Node → 聚合结果 → 输出终态。  
-**扩展场景**：Node 失败进入错误分支；补偿失败触发任务失败。  
+**用例描述**：执行引擎按工作流图语义驱动 MMNode，处理分支、聚合、异常与补偿。  
+**主成功场景**：加载 IR → 执行入口 MMNode → 推进依赖 MMNode → 聚合结果 → 输出终态。  
+**扩展场景**：MMNode 失败进入错误分支；补偿失败触发任务失败。  
 **架构影响**：执行上下文快照、并行分支执行器、错误分支与补偿管理器。
 
 ```mermaid
 sequenceDiagram
     participant Eng as ExecutionEngine
-    participant Node as NodeExecutor
+    participant MMNode as NodeExecutor
     participant Ctx as ContextStore
     Eng->>Ctx: 读取流程上下文
-    Eng->>Node: 执行节点
-    Node-->>Eng: 节点结果
+    Eng->>MMNode: 执行节点
+    MMNode-->>Eng: 节点结果
     Eng->>Ctx: 更新上下文
     Eng-->>Eng: 判断后继节点并继续
 ```
@@ -460,13 +460,13 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant Agent as Agent
+    participant MMAgent as MMAgent
     participant Sess as SessionService
     participant Task as TaskService
-    Agent->>Sess: 创建/查询会话
+    MMAgent->>Sess: 创建/查询会话
     Sess->>Task: 绑定任务到会话
     Task-->>Sess: 绑定结果
-    Sess-->>Agent: 会话状态
+    Sess-->>MMAgent: 会话状态
 ```
 
 ---
@@ -477,7 +477,7 @@ sequenceDiagram
 - API 响应：P50 < 80ms，P95 < 200ms，P99 < 500ms `[推断值，请核实]`
 - 调度决策：P95 < 50ms `[推断值，请核实]`
 - 峰值并发：2000 会话并发、2 万消息/分钟 `[推断值，请核实]`
-- 单 Workflow（100 Node）调度开销占比 < 10% `[推断值，请核实]`
+- 单 MMWorkflow（100 MMNode）调度开销占比 < 10% `[推断值，请核实]`
 
 ### 5.2 可靠性
 - 运行面 SLA ≥ 99.9% `[推断值，请核实]`
@@ -517,8 +517,8 @@ sequenceDiagram
 
 | S1分类 | 用例编号 | 用例名称 | 优先级 | 主要模块 | 关键产出 |
 |---|---|---|---|---|---|
-| S1-01 | S1-01-S2-01-S3-01-UC-01 | Workflow、Node和Edge定义 | P0 | `workflow` | 定义模型、DAG校验 |
-| S1-01 | S1-01-S2-01-S3-01-UC-02 | Workflow、Node和Edge解析工具 | P0 | `workflow/dsl` | Parser、IR、错误定位 |
+| S1-01 | S1-01-S2-01-S3-01-UC-01 | MMWorkflow、Node和Edge定义 | P0 | `workflow` | 定义模型、DAG校验 |
+| S1-01 | S1-01-S2-01-S3-01-UC-02 | MMWorkflow、Node和Edge解析工具 | P0 | `workflow/dsl` | Parser、IR、错误定位 |
 | S1-01 | S1-01-S2-01-S3-02-UC-01 | Node控制面 | P0 | `workflow/node`、`runtime` | 控制契约、健康管理 |
 | S1-01 | S1-01-S2-01-S3-02-UC-02 | Node运行面 | P0 | `workflow/node` | 运行面接入、多语言执行 |
 | S1-01 | S1-01-S2-01-S3-02-UC-03 | Node运行面热加载 | P1 | `runtime/communication` | 灰度切换、回滚机制 |
@@ -542,8 +542,8 @@ sequenceDiagram
 ### M1（P0：开发底座）
 | 用例编号 | 用例名称 | 交付内容 |
 |---|---|---|
-| S1-01-S2-01-S3-01-UC-01 | Workflow、Node和Edge定义 | 定义模型与校验器 |
-| S1-01-S2-01-S3-01-UC-02 | Workflow、Node和Edge解析工具 | Parser 与 IR 构建能力 |
+| S1-01-S2-01-S3-01-UC-01 | MMWorkflow、Node和Edge定义 | 定义模型与校验器 |
+| S1-01-S2-01-S3-01-UC-02 | MMWorkflow、Node和Edge解析工具 | Parser 与 IR 构建能力 |
 | S1-01-S2-01-S3-02-UC-01 | Node控制面 | 控制契约与健康管理 |
 | S1-01-S2-01-S3-02-UC-02 | Node运行面 | 多语言运行面接入 |
 
@@ -574,12 +574,12 @@ sequenceDiagram
 
 ---
 
-## 8. 主流 AI Agent 实践映射
+## 8. 主流 AI MMAgent 实践映射
 
-> 参考 Anthropic/OpenAI/Manus 等主流 Agent 体系中的通用工程实践，映射到本系统：
+> 参考 Anthropic/OpenAI/Manus 等主流 MMAgent 体系中的通用工程实践，映射到本系统：
 
 1. **任务分解与可恢复执行**：采用任务状态机 + 事件溯源，确保失败可恢复。
-2. **工具调用可控性**：通过 Node 控制面契约限制执行边界，避免不受控调用。
+2. **工具调用可控性**：通过 MMNode 控制面契约限制执行边界，避免不受控调用。
 3. **安全护栏（Guardrails）**：入站鉴权、幂等、防重放、审计追踪。
 4. **热更新与最小中断**：灰度发布 + 自动回滚降低升级风险。
 5. **可观测优先**：统一 trace_id 将“消息→任务→调度→执行”链路串联。
@@ -613,7 +613,7 @@ runtime是所有agent实例全局共享的，runtime支持配置为master角色�
 1）src/runtime新增worker.cpp，worker是workflow及Node的执行引擎，这些worker对象均包含了workflow的解析执行引擎（也支持node执行引擎）
 2）src/runtime新增master目录，该目录下新增deployer.cpp、scheduler.cpp两个文件。
 A）deployer实现agent实例内workflow实例到worker的映射和调度（当前不支持workflow实例中node到worker的映射，node可以通过单node的workflow进行映射），所有的worker在启动成功后均需要向deployer注册，并定期同步心跳和状态，deployer决定agent实例中哪些workflow实例运行在哪些worker实例上，调度支持按照状态、负载等进行均衡，worker记录自身可以执行哪些workflow实例，某些workflow实例如果销毁了，需要通知deployer刷新，并广播到所有worker进行更新；deployer支持预配置一些worker实例，也支持主动查询其管理的worker状态。worker实例也可以预配置所支持的workflow实例。deployer的部署调度是全局的，支持所有workflow实例到所有worker的调度，所以往往在部署时会按照worker池来预部署和调度。
-B）scheduler实现agent实例中所有会话的task任务调度到哪个workflow实例上，同一个agent实例的任务优先调度到其所属agent实例的workflow实例，相同agent对象的不同agent实例可以共享workflow实例（因为它们的workflow是一样的，只是实例不同，通过计数进行数量管理），也就是说同一个agent对象创建出来的不同实例，Agent-A实例的任务可以调度到Agent-B实例的workflow实例上去。因为workflow实例是被部署到某个worker上，所以最终可以实现某个task任务被调度到某个worker上。scheduler是全局的，支持所有agent实例的任务到所有workflow实例（以及所有worker实例）的调度。
+B）scheduler实现agent实例中所有会话的task任务调度到哪个workflow实例上，同一个agent实例的任务优先调度到其所属agent实例的workflow实例，相同agent对象的不同agent实例可以共享workflow实例（因为它们的workflow是一样的，只是实例不同，通过计数进行数量管理），也就是说同一个agent对象创建出来的不同实例，MMAgent-A实例的任务可以调度到Agent-B实例的workflow实例上去。因为workflow实例是被部署到某个worker上，所以最终可以实现某个task任务被调度到某个worker上。scheduler是全局的，支持所有agent实例的任务到所有workflow实例（以及所有worker实例）的调度。
 
 四、完成以下重构，并记录到docs下合适文档中，确保构建和测试成功：
 1、在publish/agent目录下补充agent包的规范定义文档，并刷新打包脚本及publish、examples/agent目录下的内容。
@@ -621,10 +621,10 @@ B）scheduler实现agent实例中所有会话的task任务调度到哪个workflo
 $xxxAgent_$PKGTYPE_$PKGVER.tar.gz     # Agent发布包，$xxxAgent为名称，$PKGTYPE为包类型，$PKGVER为包版本
 ├── $xxxAgent_$AGTVER.tar.gz/             # Agent对象包，这个包是需要被Agent对象加载的，$AGTVER为Agent版本号
  |            ├── agent.json             # Agent配置文档，加载agent时，需要读取这里面的内容。包括Agent名称、版本号、概述、包含了哪些workflow文件等
- │            ├── agentCard.md       # Agent prompt，当被其他大模型或Agent访问时需要获取，内容也包含类似openclaw中的SOUL.md
+ │            ├── agentCard.md       # MMAgent prompt，当被其他大模型或Agent访问时需要获取，内容也包含类似openclaw中的SOUL.md
  │            ├── workflow_XX.json    # Workflow_XX 流程文件，包含了node和edge定义，node中需要指明调用了哪个可执行部件
  │            ├── node_xxx.$TYPE             # node_xx为名称，$TYPE后缀代表可执行部件格式，比如.so、.sh、.py、.jar等
-└── package.json           # Agent 包描述文件，用于支撑包管理，包括包名、包版本、包功能描述、包中文件清单等
+└── package.json           # MMAgent 包描述文件，用于支撑包管理，包括包名、包版本、包功能描述、包中文件清单等
 
 五、优化publish/README.md描述，这篇文档主要描述业务如何开发一个新的业务Agent包，包含以下内容：
 1）Agent包开发：需要参考Agent的规范，定义Agent包中包含哪些workflow，填充Agent包内容

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// Google Test unit tests for Node component
+// Google Test unit tests for MMNode component
 
 #include <gtest/gtest.h>
 
@@ -21,9 +21,9 @@ protected:
   }
 };
 
-// Test Node creation and basic properties
+// Test MMNode creation and basic properties
 TEST_F(NodeTest, CreateNodeWithConfig) {
-  Node::Config config;
+  MMNode::Config config;
   config.id          = "test_node";
   config.name        = "test_node";
   config.type        = "process";
@@ -31,7 +31,7 @@ TEST_F(NodeTest, CreateNodeWithConfig) {
   config.timeout_ms  = 5000;
   config.max_retries = 3;
 
-  Node node(config);
+  MMNode node(config);
 
   EXPECT_EQ(node.get_id(), "test_node");
   EXPECT_EQ(node.get_name(), "test_node");
@@ -39,14 +39,14 @@ TEST_F(NodeTest, CreateNodeWithConfig) {
   ASSERT_NE(node.get_context(), nullptr);
 }
 
-// Test Node state transitions
+// Test MMNode state transitions
 TEST_F(NodeTest, NodeStateTransitions) {
-  Node::Config config;
+  MMNode::Config config;
   config.id   = "node_1";
   config.name = "node_1";
   config.type = "Process";
 
-  Node node(config);
+  MMNode node(config);
 
   EXPECT_EQ(node.get_state(), NodeState::WAITING);
 
@@ -63,14 +63,14 @@ TEST_F(NodeTest, NodeStateTransitions) {
   EXPECT_EQ(node.get_state(), NodeState::SUCCESS);
 }
 
-// Test Node with input/output data
+// Test MMNode with input/output data
 TEST_F(NodeTest, NodeDataHandling) {
-  Node::Config config;
+  MMNode::Config config;
   config.id   = "data_node";
   config.name = "data_node";
   config.type = "DataProcessor";
 
-  Node node(config);
+  MMNode node(config);
 
   DataMap input;
   input["key1"] = "value1";
@@ -104,9 +104,9 @@ TEST_F(NodeTest, NodeDataHandling) {
   EXPECT_TRUE(compare_variant(retrieved_output.at("result"), "success"));
 }
 
-// Test Node lifecycle
+// Test MMNode lifecycle
 TEST_F(NodeTest, NodeLifecycle) {
-  Node::Config config;
+  MMNode::Config config;
   config.id   = "lifecycle_node";
   config.name = "lifecycle_node";
   config.type = "LifecycleTest";
@@ -115,7 +115,7 @@ TEST_F(NodeTest, NodeLifecycle) {
     return true;
   };
 
-  Node node(config);
+  MMNode node(config);
 
   // Initial state
   EXPECT_EQ(node.get_state(), NodeState::WAITING);
@@ -135,24 +135,24 @@ TEST_F(NodeTest, NodeLifecycle) {
 
 // Test multiple nodes
 TEST_F(NodeTest, MultipleNodes) {
-  Node::Config config1;
+  MMNode::Config config1;
   config1.id   = "node_1";
   config1.name = "node_1";
   config1.type = "Source";
 
-  Node::Config config2;
+  MMNode::Config config2;
   config2.id   = "node_2";
   config2.name = "node_2";
   config2.type = "Filter";
 
-  Node::Config config3;
+  MMNode::Config config3;
   config3.id   = "node_3";
   config3.name = "node_3";
   config3.type = "Sink";
 
-  Node node1(config1);
-  Node node2(config2);
-  Node node3(config3);
+  MMNode node1(config1);
+  MMNode node2(config2);
+  MMNode node3(config3);
 
   EXPECT_EQ(node1.get_id(), "node_1");
   EXPECT_EQ(node2.get_id(), "node_2");

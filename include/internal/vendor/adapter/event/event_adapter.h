@@ -14,12 +14,12 @@ namespace adapter {
  * Used to categorize and dispatch events.
  */
 enum class EventType {
-  // Workflow-related events
+  // MMWorkflow-related events
   WORKFLOW_STARTED   = 0,
   WORKFLOW_COMPLETED = 1,
   WORKFLOW_FAILED    = 2,
   
-  // Node-related events
+  // MMNode-related events
   NODE_START       = 3,
   NODE_COMPLETE    = 4,
   NODE_FAILURE     = 5,

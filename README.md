@@ -1,12 +1,12 @@
 # AgentFlow
 
-基于 C++ Actor 反应式编程框架实现的 Agent Workflow 开发编排与执行引擎。
+基于 C++ Actor 反应式编程框架实现的 MMAgent MMWorkflow 开发编排与执行引擎。
 
 ## 核心特性
 
 - **双框架架构**：开发编排框架 + 运行框架分离
 - **工作流图执行**：支持条件分支、循环迭代、环回跳转、异常处理
-- **三层调度**：Agent → Workflow → Node 的 Master-Worker 架构
+- **三层调度**：MMAgent → MMWorkflow → MMNode 的 Master-Worker 架构
 - **高性能通信**：零拷贝数据总线、双平面通信机制
 - **多语言支持**：C++、Python、Shell、Go、Java 等执行模式（由 Worker 执行引擎统一承载）
 - **热重载**：运行时动态更新配置和代码
@@ -44,20 +44,20 @@ cd AgentFlow
 
 using namespace agentflow;
 
-// 创建 Agent
-framework::Agent::Config agent_config;
+// 创建 MMAgent
+framework::MMAgent::Config agent_config;
 agent_config.id = "my_agent";
-auto agent = std::make_shared<framework::Agent>(agent_config);
+auto agent = std::make_shared<framework::MMAgent>(agent_config);
 
-// 创建 Workflow
-framework::Workflow::Config wf_config;
+// 创建 MMWorkflow
+framework::MMWorkflow::Config wf_config;
 wf_config.id = "my_workflow";
-auto workflow = std::make_shared<framework::Workflow>(wf_config);
+auto workflow = std::make_shared<framework::MMWorkflow>(wf_config);
 
 // 添加节点
-framework::Node::Config node_config;
+framework::MMNode::Config node_config;
 node_config.id = "task_1";
-auto node = std::make_shared<framework::Node>(node_config);
+auto node = std::make_shared<framework::MMNode>(node_config);
 workflow->add_node(node);
 
 // 启动
@@ -70,7 +70,7 @@ agent->start();
 
 ### 📖 新用户入门
 1. **[文档导航](docs/README.md)** - 所有文档的索引和说明
-2. **[架构设计](docs/ARCHITECTURE.md)** - Framework/Runtime/DataBus 架构设计
+2. **[架构设计](docs/ARCHITECTURE.md)** - Framework/Runtime/MMDataBus 架构设计
 3. **[开发与贡献指南](CONTRIBUTING.md)** - 环境配置、编程规范与贡献流程
 4. **[快速参考](docs/README.md)** - 常用命令、测试与 CI/CD 快速指南
 
@@ -83,7 +83,7 @@ agent->start();
   - 代码规范和提交流程
   - 测试要求
   - Pull Request 指南
-- **[发布与打包](publish/README.md)** - Agent 包开发与发布说明
+- **[发布与打包](publish/README.md)** - MMAgent 包开发与发布说明
 - **[测试指南](docs/README.md)** - 测试方法和覆盖率要求
 
 ### ⚙️ CI/CD 和部署
@@ -97,8 +97,8 @@ agent->start();
 AgentFlow/
 ├── include/             # 头文件
 │   ├── external/        # 公共 API（供外部调用方使用）
-│   │   ├── agent/       # Agent 外部接口
-│   │   └── workflow/    # Workflow/Node/Edge 外部接口
+│   │   ├── agent/       # MMAgent 外部接口
+│   │   └── workflow/    # MMWorkflow/MMNode/MMEdge 外部接口
 │   └── internal/        # 内部实现（仅供内部系统使用）
 ├── src/                 # 核心业务源代码（agent/workflow/runtime/vendor/utils）
 ├── vendor/              # 三方依赖和适配器
@@ -116,12 +116,12 @@ AgentFlow/
 
 ```
 ┌─────────────────────────────────────────┐
-│            Agent Level Master           │
-│        (Agent 实例生命周期管理)           │
+│            MMAgent Level Master           │
+│        (MMAgent 实例生命周期管理)           │
 └──────────────────┬──────────────────────┘
                    │
 ┌──────────────────▼──────────────────────┐
-│          Workflow Level Master          │
+│          MMWorkflow Level Master          │
 │      (工作流图解析、调度、状态管理)       │
 └──────────────────┬──────────────────────┘
                    │
@@ -129,7 +129,7 @@ AgentFlow/
     │              │              │
 ┌───▼───┐      ┌───▼───┐      ┌───▼───┐
 │Worker1│      │Worker2│      │WorkerN│
-│(Node) │      │(Node) │      │(Node) │
+│(MMNode) │      │(MMNode) │      │(MMNode) │
 └───────┘      └───────┘      └───────┘
 ```
 

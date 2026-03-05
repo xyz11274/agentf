@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// Node Actor implementation based on Protoactor-cpp
+// MMNode Actor implementation based on Protoactor-cpp
 
 #ifndef AGENTFLOW_ACTOR_NODE_ACTOR_H
 #define AGENTFLOW_ACTOR_NODE_ACTOR_H
@@ -22,7 +22,7 @@ class Context;
 namespace agentflow {
 namespace actor {
 
-/// @brief Node Actor for executing individual workflow nodes
+/// @brief MMNode Actor for executing individual workflow nodes
 class NodeActor : public protoactor::Actor, public AgentFlowActor {
 public:
   /// @brief Constructor

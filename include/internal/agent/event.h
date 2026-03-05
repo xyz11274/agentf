@@ -21,10 +21,10 @@ namespace agentflow {
 namespace framework {
 
 /**
- * AgentEvent handles event generation and dispatching for agent operations
+ * MMAgentEvent handles event generation and dispatching for agent operations
  * Supports event listeners, handlers, and event routing
  */
-class AgentEvent {
+class MMAgentEvent {
 public:
   enum class EventType {
     SESSION_CREATED  = 0,
@@ -36,7 +36,7 @@ public:
     MESSAGE_RECEIVED = 6,
     ERROR_OCCURRED   = 7,
     STATE_CHANGED    = 8,
-    // Workflow events
+    // MMWorkflow events
     NODE_START       = 9,
     NODE_COMPLETE    = 10,
     NODE_FAILURE     = 11,
@@ -63,8 +63,8 @@ public:
     bool        async_dispatch = false;
   };
 
-  explicit AgentEvent(const Config& config);
-  ~AgentEvent();
+  explicit MMAgentEvent(const Config& config);
+  ~MMAgentEvent();
 
   // Event emission
   bool emit_event(const EventData& event_data);

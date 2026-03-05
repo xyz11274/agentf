@@ -19,7 +19,7 @@
 namespace agentflow {
 namespace agent {
 
-class AgentActor : public actor::adapter::IActor {
+class MMAgentActor : public actor::adapter::IActor {
 public:
   struct ServiceConfig {
     std::string              package_root = ".";
@@ -28,16 +28,16 @@ public:
     int                      heartbeat_interval_ms = 1000;
   };
 
-  explicit AgentActor(std::shared_ptr<framework::Agent> agent);
-  explicit AgentActor(const std::string& config_path);
-  AgentActor(const std::string& config_path, std::shared_ptr<runtime::RuntimeActor> runtime_actor);
-  ~AgentActor() override;
+  explicit MMAgentActor(std::shared_ptr<framework::MMAgent> agent);
+  explicit MMAgentActor(const std::string& config_path);
+  MMAgentActor(const std::string& config_path, std::shared_ptr<runtime::MMRuntimeActor> runtime_actor);
+  ~MMAgentActor() override;
 
   void on_message(std::shared_ptr<actor::adapter::IContext> ctx) override;
   void on_start() override;
   void on_stop() override;
 
-  std::string actor_type() const override { return "AgentActor"; }
+  std::string actor_type() const override { return "MMAgentActor"; }
 
 private:
   struct ManagedAgent {
@@ -45,7 +45,7 @@ private:
     std::string                      package_id;
     std::string                      version;
     std::string                      package_path;
-    std::shared_ptr<framework::Agent> agent;
+    std::shared_ptr<framework::MMAgent> agent;
     int64_t                          last_mtime_ms = 0;
   };
 
@@ -67,8 +67,8 @@ private:
   std::string                           config_path_;
   ServiceConfig                         service_config_;
   std::map<std::string, ManagedAgent>   managed_agents_;
-  std::map<std::string, std::shared_ptr<framework::AgentTask>> managed_tasks_;
-  std::shared_ptr<runtime::RuntimeActor> runtime_actor_;
+  std::map<std::string, std::shared_ptr<framework::MMAgentTask>> managed_tasks_;
+  std::shared_ptr<runtime::MMRuntimeActor> runtime_actor_;
   std::atomic<bool>                     running_{false};
   std::thread                           package_monitor_thread_;
   std::thread                           heartbeat_thread_;

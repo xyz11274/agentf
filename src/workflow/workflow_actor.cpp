@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// Workflow Actor implementation
+// MMWorkflow Actor implementation
 
 #include "workflow/workflow_actor.h"
 
@@ -77,7 +77,7 @@ void WorkflowActor::handle_execute_workflow(const ExecuteWorkflowMessage& msg) {
   }
 
   if(state_ == WorkflowState::RUNNING) {
-    Logger::instance().warn("Workflow [" + workflow_id_ + "] already running");
+    Logger::instance().warn("MMWorkflow [" + workflow_id_ + "] already running");
     return;
   }
 
@@ -86,7 +86,7 @@ void WorkflowActor::handle_execute_workflow(const ExecuteWorkflowMessage& msg) {
   completed_nodes_.clear();
   failed_nodes_.clear();
 
-  Logger::instance().info("Workflow [" + workflow_id_ + "] started execution");
+  Logger::instance().info("MMWorkflow [" + workflow_id_ + "] started execution");
 
   // Parse workflow graph and schedule node execution
   // For each node without dependencies, spawn a NodeActor
@@ -100,7 +100,7 @@ void WorkflowActor::handle_node_result(const NodeResultMessage& msg) {
   // Update workflow state based on node results
 
   if(msg.status == Status::SUCCESS) {
-    Logger::instance().info("Node [" + msg.node_id + "] completed successfully");
+    Logger::instance().info("MMNode [" + msg.node_id + "] completed successfully");
 
     // Store node output
     for(const auto& [key, value] : msg.output_data) {
@@ -114,7 +114,7 @@ void WorkflowActor::handle_node_result(const NodeResultMessage& msg) {
     schedule_executable_nodes();
 
   } else {
-    Logger::instance().error("Node [" + msg.node_id + "] failed: " + msg.error_message);
+    Logger::instance().error("MMNode [" + msg.node_id + "] failed: " + msg.error_message);
 
     // Mark node as failed
     failed_nodes_.insert(msg.node_id);
@@ -216,7 +216,7 @@ std::shared_ptr<protoactor::PID> WorkflowActor::spawn_node_actor(const NodeId& n
   }
 
   if(!found) {
-    Logger::instance().error("Node [" + node_id + "] not found in workflow config");
+    Logger::instance().error("MMNode [" + node_id + "] not found in workflow config");
     return nullptr;
   }
 
@@ -259,7 +259,7 @@ void WorkflowActor::check_workflow_completion() {
       state_ = WorkflowState::COMPLETED;
     }
 
-    Logger::instance().info("Workflow [" + workflow_id_
+    Logger::instance().info("MMWorkflow [" + workflow_id_
                             + "] finished: " + workflow_state_to_string(state_));
     send_workflow_result(state_);
   }
@@ -278,7 +278,7 @@ void WorkflowActor::send_workflow_result(WorkflowState state) {
 
   // Send result to parent
   // This would be done through Protoactor's messaging system
-  Logger::instance().info("Workflow result sent: " + workflow_state_to_string(state));
+  Logger::instance().info("MMWorkflow result sent: " + workflow_state_to_string(state));
 }
 
 std::string WorkflowActor::workflow_state_to_string(WorkflowState state) {

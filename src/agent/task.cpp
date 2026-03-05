@@ -16,7 +16,7 @@ int64_t get_current_time_ms() {
 }
 }  // namespace
 
-AgentTask::AgentTask(const Config& config)
+MMAgentTask::MMAgentTask(const Config& config)
     : config_(config), state_(TaskState::PENDING) {
   created_time_ = get_current_time_ms();
   if(config_.task_type != "context_updater") {
@@ -28,12 +28,12 @@ AgentTask::AgentTask(const Config& config)
   }
 }
 
-AgentTask::~AgentTask() {
+MMAgentTask::~MMAgentTask() {
   std::lock_guard<std::mutex> lock(mutex_);
   parameters_.clear();
 }
 
-bool AgentTask::start() {
+bool MMAgentTask::start() {
   std::lock_guard<std::mutex> lock(mutex_);
   if(state_ != TaskState::PENDING) {
     return false;
@@ -42,7 +42,7 @@ bool AgentTask::start() {
   return true;
 }
 
-bool AgentTask::complete(const std::string& result) {
+bool MMAgentTask::complete(const std::string& result) {
   std::lock_guard<std::mutex> lock(mutex_);
   if(state_ != TaskState::RUNNING) {
     return false;
@@ -54,7 +54,7 @@ bool AgentTask::complete(const std::string& result) {
   return true;
 }
 
-bool AgentTask::fail(const std::string& error_message) {
+bool MMAgentTask::fail(const std::string& error_message) {
   std::lock_guard<std::mutex> lock(mutex_);
   if(state_ == TaskState::COMPLETED || state_ == TaskState::CANCELLED) {
     return false;
@@ -65,7 +65,7 @@ bool AgentTask::fail(const std::string& error_message) {
   return true;
 }
 
-bool AgentTask::cancel() {
+bool MMAgentTask::cancel() {
   std::lock_guard<std::mutex> lock(mutex_);
   if(state_ == TaskState::COMPLETED) {
     return false;
@@ -75,7 +75,7 @@ bool AgentTask::cancel() {
   return true;
 }
 
-bool AgentTask::retry() {
+bool MMAgentTask::retry() {
   std::lock_guard<std::mutex> lock(mutex_);
   if(retry_count_ >= config_.max_retries) {
     return false;
@@ -85,24 +85,24 @@ bool AgentTask::retry() {
   return true;
 }
 
-void AgentTask::set_progress(double progress) {
+void MMAgentTask::set_progress(double progress) {
   std::lock_guard<std::mutex> lock(mutex_);
   if(progress >= 0.0 && progress <= 1.0) {
     progress_ = progress;
   }
 }
 
-void AgentTask::increment_progress(double delta) {
+void MMAgentTask::increment_progress(double delta) {
   std::lock_guard<std::mutex> lock(mutex_);
   progress_ = std::min(1.0, progress_ + delta);
 }
 
-void AgentTask::set_parameter(const std::string& key, const std::string& value) {
+void MMAgentTask::set_parameter(const std::string& key, const std::string& value) {
   std::lock_guard<std::mutex> lock(mutex_);
   parameters_[key] = value;
 }
 
-bool AgentTask::get_parameter(const std::string& key, std::string& value) const {
+bool MMAgentTask::get_parameter(const std::string& key, std::string& value) const {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = parameters_.find(key);
   if(it != parameters_.end()) {
@@ -112,12 +112,12 @@ bool AgentTask::get_parameter(const std::string& key, std::string& value) const 
   return false;
 }
 
-void AgentTask::set_result(const std::string& result) {
+void MMAgentTask::set_result(const std::string& result) {
   std::lock_guard<std::mutex> lock(mutex_);
   result_ = result;
 }
 
-int AgentTask::increment_retry_count() {
+int MMAgentTask::increment_retry_count() {
   std::lock_guard<std::mutex> lock(mutex_);
   return ++retry_count_;
 }

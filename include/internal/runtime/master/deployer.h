@@ -21,7 +21,7 @@ namespace master {
 
 struct WorkerSnapshot {
   std::string             worker_id;
-  WorkerEngine::WorkerStatus status = WorkerEngine::WorkerStatus::STARTING;
+  MMWorkerEngine::WorkerStatus status = MMWorkerEngine::WorkerStatus::STARTING;
   int                     load = 0;
   int64_t                 last_heartbeat_ms = 0;
   bool                    preconfigured = false;
@@ -43,11 +43,11 @@ public:
   explicit Deployer(const Config& config);
   ~Deployer();
 
-  bool register_worker(const std::shared_ptr<WorkerEngine>& worker);
+  bool register_worker(const std::shared_ptr<MMWorkerEngine>& worker);
   bool unregister_worker(const std::string& worker_id);
 
   bool update_worker_heartbeat(const std::string& worker_id);
-  bool update_worker_status(const std::string& worker_id, WorkerEngine::WorkerStatus status);
+  bool update_worker_status(const std::string& worker_id, MMWorkerEngine::WorkerStatus status);
   bool update_worker_load(const std::string& worker_id, int load);
 
   bool deploy_workflow_instance(const std::string& workflow_instance_id, const std::string& workflow_id,
@@ -71,7 +71,7 @@ public:
 
 private:
   struct WorkerRegistrationRequest {
-    std::shared_ptr<WorkerEngine> worker;
+    std::shared_ptr<MMWorkerEngine> worker;
     bool                          unregister = false;
   };
 
@@ -80,11 +80,11 @@ private:
     std::string          preferred_worker_id;
   };
 
-  bool register_worker_internal(const std::shared_ptr<WorkerEngine>& worker);
+  bool register_worker_internal(const std::shared_ptr<MMWorkerEngine>& worker);
   bool unregister_worker_internal(const std::string& worker_id);
   bool deploy_workflow_internal(const WorkflowInstanceInfo& info,
                                 const std::string& preferred_worker_id);
-  std::shared_ptr<WorkerEngine> pick_worker_for_workflow(const std::string& workflow_id,
+  std::shared_ptr<MMWorkerEngine> pick_worker_for_workflow(const std::string& workflow_id,
                                                           const std::string& preferred_worker_id) const;
   std::vector<std::string>      find_unhealthy_workers_locked(int64_t now_ms) const;
   std::vector<WorkflowDeployRequest> collect_failed_worker_workflows_locked(
@@ -98,7 +98,7 @@ private:
 
   Config                                              config_;
   mutable std::mutex                                  mutex_;
-  std::map<std::string, std::shared_ptr<WorkerEngine>> workers_;
+  std::map<std::string, std::shared_ptr<MMWorkerEngine>> workers_;
   std::map<std::string, std::string>                   workflow_to_worker_;
   int64_t                                              mapping_version_ = 0;
 

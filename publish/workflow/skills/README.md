@@ -1,4 +1,4 @@
-# Built-in Workflow: skills
+# Built-in MMWorkflow: skills
 
 This built-in workflow provides a default skills invocation flow (match -> execute -> postprocess).
 

@@ -1,4 +1,4 @@
-# Built-in Workflow: memory
+# Built-in MMWorkflow: memory
 
 This built-in workflow provides a default memory access flow (read -> merge -> write).
 

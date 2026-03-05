@@ -14,7 +14,7 @@ examples/agent/nested_workflow_agent/
 └── processing_workflow.json  # 处理子工作流
 ```
 
-### Workflow 层次结构
+### MMWorkflow 层次结构
 
 ```
 main-workflow (主工作流)
@@ -47,40 +47,40 @@ export LD_LIBRARY_PATH=$PWD/build/lib:$LD_LIBRARY_PATH
 │                        InteractiveRunner::initialize()                  │
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                        │
-│  1. 加载 Agent Package                                                 │
-│     agent_ = Agent::create_from_package(package_path)                  │
+│  1. 加载 MMAgent Package                                                 │
+│     agent_ = MMAgent::create_from_package(package_path)                  │
 │     - 解析 package.json                                                │
 │     - 加载 4 个 workflow 定义                                          │
 │     - 构建节点依赖图                                                   │
 │                                                                        │
-│  2. 创建 AgentRuntime                                                  │
-│     runtime_ = std::make_unique<AgentRuntime>()                        │
+│  2. 创建 MMAgentRuntime                                                  │
+│     runtime_ = std::make_unique<MMAgentRuntime>()                        │
 │     - 初始化 Worker 线程池                                             │
 │     - 创建 Scheduler 和 Deployer                                       │
 │                                                                        │
-│  3. 注册 Agent 到 Runtime                                              │
+│  3. 注册 MMAgent 到 Runtime                                              │
 │     runtime_->register_agent(agent_)                                   │
-│     - 创建 Agent 专属 DataBus                                          │
+│     - 创建 MMAgent 专属 MMDataBus                                          │
 │     - 启动心跳监控                                                     │
 │                                                                        │
-│  4. 启动 Runtime 和 Agent                                              │
+│  4. 启动 Runtime 和 MMAgent                                              │
 │     runtime_->start()  → 启动工作线程                                  │
 │     agent_->start()    → 启动事件循环线程                              │
 │                                                                        │
 └────────────────────────────────────────────────────────────────────────┘
 
 输出:
-=== AgentFlow Agent Runner ===
+=== AgentFlow MMAgent Runner ===
 Package: examples/agent/nested_workflow_agent
 Package: nested-workflow-agent v1.0.0
-Agent: nested-workflow-agent initialized
+MMAgent: nested-workflow-agent initialized
 
 === Starting Interactive Mode ===
-Using message-driven architecture through Agent framework
+Using message-driven architecture through MMAgent framework
 
 === AgentFlow Interactive Mode ===
 Package: examples/agent/nested_workflow_agent
-Agent: nested-workflow-agent
+MMAgent: nested-workflow-agent
 Type 'help' for available commands.
 
 Available commands:
@@ -141,7 +141,7 @@ std::string InteractiveRunner::execute_workflow(const std::string& workflow_id,
 │  ┌─────────────────────────────────────────────────────────────────┐  │
 │  │ 构造 Message                                                     │  │
 │  │                                                                  │  │
-│  │ AgentMsgQue::Message message;                                    │  │
+│  │ MMAgentMsgQue::Message message;                                    │  │
 │  │ message.message_id = "msg_1_1735932904558"                       │  │
 │  │ message.type = MessageType::TASK_REQUEST                         │  │
 │  │ message.priority = MessagePriority::NORMAL                       │  │
@@ -157,7 +157,7 @@ std::string InteractiveRunner::execute_workflow(const std::string& workflow_id,
 │                              │                                         │
 │                              ▼                                         │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │ Agent::route_request_message(message)                            │  │
+│  │ MMAgent::route_request_message(message)                            │  │
 │  │                                                                  │  │
 │  │ 1. 检查事件循环是否运行                                          │  │
 │  │    if (!request_event_running_) {                                │  │
@@ -171,7 +171,7 @@ std::string InteractiveRunner::execute_workflow(const std::string& workflow_id,
 │                              │                                         │
 │                              ▼                                         │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │ Agent::handle_request_event(message)                             │  │
+│  │ MMAgent::handle_request_event(message)                             │  │
 │  │                                                                  │  │
 │  │ 1. 将消息加入 default_session 的接收队列                         │  │
 │  │    default_session_->enqueue_received_message(message)           │  │
@@ -197,7 +197,7 @@ std::string InteractiveRunner::execute_workflow(const std::string& workflow_id,
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                        │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │ Agent::process_all_sessions_until_idle()                         │  │
+│  │ MMAgent::process_all_sessions_until_idle()                         │  │
 │  │                                                                  │  │
 │  │ while (rounds++ < 64) {                                          │  │
 │  │   for (const auto& session : sessions) {                         │  │
@@ -220,7 +220,7 @@ std::string InteractiveRunner::execute_workflow(const std::string& workflow_id,
 │  │   tasks.push_back(task);                                         │  │
 │  │ }                                                                │  │
 │  │                                                                  │  │
-│  │ // build_task_for_message() 构建 AgentTask:                      │  │
+│  │ // build_task_for_message() 构建 MMAgentTask:                      │  │
 │  │ // - task_id: "interactive_user:cli_task_1"                      │  │
 │  │ // - task_type: "task0" (默认)                                   │  │
 │  │ // - workflow_id: "main-workflow" (从 message.metadata 获取)     │  │
@@ -253,18 +253,18 @@ std::string InteractiveRunner::execute_workflow(const std::string& workflow_id,
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                    AgentRuntime 三级调度执行                            │
+│                    MMAgentRuntime 三级调度执行                            │
 ├────────────────────────────────────────────────────────────────────────┤
 │                                                                        │
-│  Level 1: Agent Level Master (Agent 实例生命周期管理)                  │
+│  Level 1: MMAgent Level Master (MMAgent 实例生命周期管理)                  │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
-│  │ - 监控 Agent 健康状态                                            │  │
-│  │ - 管理所有 Workflow 实例                                         │  │
-│  │ - 协调多个 Agent 实例间的负载均衡                                │  │
+│  │ - 监控 MMAgent 健康状态                                            │  │
+│  │ - 管理所有 MMWorkflow 实例                                         │  │
+│  │ - 协调多个 MMAgent 实例间的负载均衡                                │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 │                              │                                         │
 │                              ▼                                         │
-│  Level 2: Workflow Level Master (Workflow 图解析和调度)                │
+│  Level 2: MMWorkflow Level Master (MMWorkflow 图解析和调度)                │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
 │  │ - 解析 main-workflow 的 DAG 结构                                 │  │
 │  │ - 计算拓扑排序: [start → data_pipeline → final_processing → end]│  │
@@ -273,12 +273,12 @@ std::string InteractiveRunner::execute_workflow(const std::string& workflow_id,
 │  └─────────────────────────────────────────────────────────────────┘  │
 │                              │                                         │
 │                              ▼                                         │
-│  Level 3: Worker (Node 执行)                                           │
+│  Level 3: Worker (MMNode 执行)                                           │
 │  ┌─────────────────────────────────────────────────────────────────┐  │
 │  │ - 执行具体节点                                                   │  │
 │  │ - 处理 shell_script 节点 (运行 .sh 脚本)                         │  │
 │  │ - 处理 workflow 类型节点 (递归调用子 workflow)                   │  │
-│  │ - 通过 DataBus 交换数据                                          │  │
+│  │ - 通过 MMDataBus 交换数据                                          │  │
 │  └─────────────────────────────────────────────────────────────────┘  │
 │                                                                        │
 └────────────────────────────────────────────────────────────────────────┘
@@ -401,7 +401,7 @@ bool InteractiveRunner::wait_for_completion(int timeout_ms) {
 │                                                                        │
 │  auto session = agent_->get_default_session();                         │
 │                                                                        │
-│  AgentMsgQue::Message response;                                        │
+│  MMAgentMsgQue::Message response;                                        │
 │  while (session->dequeue_send_message(response)) {                     │
 │    // response.content 包含 workflow 执行结果                          │
 │    // response.metadata 包含额外信息                                   │
@@ -418,17 +418,17 @@ bool InteractiveRunner::wait_for_completion(int timeout_ms) {
 ```bash
 $ ./build/agent_runner examples/agent/nested_workflow_agent --interactive
 
-=== AgentFlow Agent Runner ===
+=== AgentFlow MMAgent Runner ===
 Package: examples/agent/nested_workflow_agent
 Package: nested-workflow-agent v1.0.0
-Agent: nested-workflow-agent initialized
+MMAgent: nested-workflow-agent initialized
 
 === Starting Interactive Mode ===
-Using message-driven architecture through Agent framework
+Using message-driven architecture through MMAgent framework
 
 === AgentFlow Interactive Mode ===
 Package: examples/agent/nested_workflow_agent
-Agent: nested-workflow-agent
+MMAgent: nested-workflow-agent
 Type 'help' for available commands.
 
 Available commands:
@@ -441,19 +441,19 @@ Available commands:
 > list
 
 === Workflows ===
-  [main-workflow] Main Workflow (4 nodes)
+  [main-workflow] Main MMWorkflow (4 nodes)
     └─> workflow_ref: data_pipeline.json
     └─> workflow_ref: processing_workflow.json
-  [data-pipeline-workflow] Data Pipeline Workflow (3 nodes)
+  [data-pipeline-workflow] Data Pipeline MMWorkflow (3 nodes)
     └─> workflow_ref: validation_workflow.json
-  [validation-workflow] Validation Workflow (3 nodes)
-  [processing-workflow] Processing Workflow (3 nodes)
+  [validation-workflow] Validation MMWorkflow (3 nodes)
+  [processing-workflow] Processing MMWorkflow (3 nodes)
 
 > status
 
 === Status ===
-  Agent: nested-workflow-agent
-  Agent ID: nested-workflow-agent
+  MMAgent: nested-workflow-agent
+  MMAgent ID: nested-workflow-agent
   State: 2
   Workflows: 4
   Runtime running: yes
@@ -465,7 +465,7 @@ Available commands:
 
 Executing workflow: main-workflow
 --- Output ---
-[Workflow execution results...]
+[MMWorkflow execution results...]
 
 > quit
 
@@ -477,17 +477,17 @@ Goodbye!
 ### 5.1 消息驱动架构的好处
 
 1. **正确的框架使用**:
-   - 使用 `Agent::route_request_message()` 而非直接调用 `WorkerEngine::execute_code()`
+   - 使用 `MMAgent::route_request_message()` 而非直接调用 `MMWorkerEngine::execute_code()`
    - 利用 Session 管理用户上下文
    - 利用 Coordinator 协调任务生成
 
 2. **完整的功能支持**:
    - Session 管理: 多用户、多客户端隔离
    - Coordinator: 根据消息自动生成任务并绑定 workflow
-   - 三级调度: Agent → Workflow → Node
+   - 三级调度: MMAgent → MMWorkflow → MMNode
 
 3. **可扩展性**:
-   - 支持多 Agent 实例
+   - 支持多 MMAgent 实例
    - 支持分布式部署
    - 支持热加载
 
@@ -495,11 +495,11 @@ Goodbye!
 
 | 方面 | 旧实现 (直接执行) | 新实现 (消息驱动) |
 |------|------------------|------------------|
-| 执行方式 | 直接调用 `WorkerEngine::execute_code()` | 通过消息队列驱动 |
+| 执行方式 | 直接调用 `MMWorkerEngine::execute_code()` | 通过消息队列驱动 |
 | Session 管理 | 不使用 | 完整的 Session 生命周期管理 |
 | Coordinator | 不使用 | 自动任务生成和 workflow 绑定 |
-| 三级调度 | 不使用 | Agent → Workflow → Node 完整调度 |
-| 嵌套 Workflow | 手动处理 | 框架自动处理 DAG 依赖 |
+| 三级调度 | 不使用 | MMAgent → MMWorkflow → MMNode 完整调度 |
+| 嵌套 MMWorkflow | 手动处理 | 框架自动处理 DAG 依赖 |
 | 可扩展性 | 单进程 | 支持分布式部署 |
 
 ## 6. InteractiveRunner 与框架组件交互图
@@ -521,7 +521,7 @@ Goodbye!
               │                        │                        │
               ▼                        ▼                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                                  Agent                                          │
+│                                  MMAgent                                          │
 │  ┌───────────────────────────────────────────────────────────────────────────┐  │
 │  │ route_request_message() ─▶ handle_request_event()                         │  │
 │  │        │                          │                                        │  │
@@ -538,7 +538,7 @@ Goodbye!
 │                              │                                                  │
 │                              ▼                                                  │
 │  ┌───────────────────────────────────────────────────────────────────────────┐  │
-│  │                            AgentSession                                    │  │
+│  │                            MMAgentSession                                    │  │
 │  │                                                                            │  │
 │  │  receive_queue_ ◀── enqueue_received_message()                            │  │
 │  │        │                                                                   │  │
@@ -558,8 +558,8 @@ Goodbye!
 │  │        ├──▶ build_task_for_message()                                       │  │
 │  │        │         │                                                         │  │
 │  │        │         ├──▶ 解析 message.metadata["workflow_id"]                │  │
-│  │        │         ├──▶ 查找对应 Workflow                                    │  │
-│  │        │         └──▶ 创建 AgentTask                                       │  │
+│  │        │         ├──▶ 查找对应 MMWorkflow                                    │  │
+│  │        │         └──▶ 创建 MMAgentTask                                       │  │
 │  │        │                                                                   │  │
 │  │        └──▶ session.add_task(task)                                        │  │
 │  │                   返回 tasks 列表                                          │  │
@@ -568,18 +568,18 @@ Goodbye!
               │
               ▼
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              AgentRuntime                                       │
+│                              MMAgentRuntime                                       │
 │  ┌───────────────────────────────────────────────────────────────────────────┐  │
 │  │                         三级调度架构                                       │  │
 │  │                                                                            │  │
-│  │  Level 1: Agent Master                                                     │  │
+│  │  Level 1: MMAgent Master                                                     │  │
 │  │  ┌─────────────────────────────────────────────────────────────────────┐  │  │
 │  │  │ register_agent() ─▶ agents_ map                                     │  │  │
 │  │  │ monitor_agents()  ─▶ 心跳监控、健康检查                              │  │  │
 │  │  └─────────────────────────────────────────────────────────────────────┘  │  │
 │  │                              │                                             │  │
 │  │                              ▼                                             │  │
-│  │  Level 2: Workflow Master                                                  │  │
+│  │  Level 2: MMWorkflow Master                                                  │  │
 │  │  ┌─────────────────────────────────────────────────────────────────────┐  │  │
 │  │  │ schedule_task(request)                                               │  │  │
 │  │  │       │                                                              │  │  │
@@ -592,7 +592,7 @@ Goodbye!
 │  │  └─────────────────────────────────────────────────────────────────────┘  │  │
 │  │                              │                                             │  │
 │  │                              ▼                                             │  │
-│  │  Level 3: Worker (Node Executor)                                          │  │
+│  │  Level 3: Worker (MMNode Executor)                                          │  │
 │  │  ┌─────────────────────────────────────────────────────────────────────┐  │  │
 │  │  │ worker_thread_main()                                                 │  │  │
 │  │  │       │                                                              │  │  │
@@ -613,7 +613,7 @@ Goodbye!
               │
               ▼
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                                 Workflow                                        │
+│                                 MMWorkflow                                        │
 │  ┌───────────────────────────────────────────────────────────────────────────┐  │
 │  │                            DAG 执行引擎                                    │  │
 │  │                                                                            │  │
@@ -628,14 +628,14 @@ Goodbye!
               │
               ▼
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                                  Node                                           │
+│                                  MMNode                                           │
 │  ┌───────────────────────────────────────────────────────────────────────────┐  │
 │  │                            节点执行器                                      │  │
 │  │                                                                            │  │
 │  │  execute()                                                                 │  │
 │  │      │                                                                     │  │
 │  │      ├──▶ ExecutionMode::SHELL_SCRIPT                                      │  │
-│  │      │         └──▶ WorkerEngine::execute_code()                           │  │
+│  │      │         └──▶ MMWorkerEngine::execute_code()                           │  │
 │  │      │                     └──▶ fork + exec 脚本                           │  │
 │  │      │                                                                     │  │
 │  │      ├──▶ ExecutionMode::WORKFLOW                                          │  │
@@ -671,26 +671,26 @@ Goodbye!
 │         │                                                                       │
 │         ▼                                                                       │
 │  ┌─────────────┐                                                                │
-│  │ AgentTask   │  task_id = "interactive_user:cli_task_1"                      │
+│  │ MMAgentTask   │  task_id = "interactive_user:cli_task_1"                      │
 │  │             │  workflow_id = "main-workflow"                                │
 │  │             │  parameters["message_content"] = "test data"                  │
 │  └──────┬──────┘                                                                │
 │         │                                                                       │
 │         ▼                                                                       │
 │  ┌─────────────┐                                                                │
-│  │  Workflow   │  main-workflow DAG                                            │
+│  │  MMWorkflow   │  main-workflow DAG                                            │
 │  │   Instance  │  instance_id = "wf_inst_001"                                  │
 │  └──────┬──────┘                                                                │
 │         │                                                                       │
 │         ▼                                                                       │
 │  ┌─────────────┐                                                                │
-│  │    Node     │  节点执行，通过 DataBus 传递数据                               │
+│  │    MMNode     │  节点执行，通过 MMDataBus 传递数据                               │
 │  │ Execution   │  node_id → node_output                                        │
 │  └──────┬──────┘                                                                │
 │         │                                                                       │
 │         ▼                                                                       │
 │  ┌─────────────┐                                                                │
-│  │  DataBus    │  key-value 数据存储                                           │
+│  │  MMDataBus    │  key-value 数据存储                                           │
 │  │             │  "fetch_data/output" → fetched_data                           │
 │  │             │  "transform_data/output" → transformed_data                   │
 │  └──────┬──────┘                                                                │
@@ -713,24 +713,24 @@ Goodbye!
 
 | 接口 | 类 | 作用 | 文件位置 |
 |------|-----|------|----------|
-| `Agent::create_from_package()` | Agent | 从 package 创建 Agent 实例 | `src/agent/agent.cpp:167` |
-| `Agent::initialize()` | Agent | 初始化 Agent | `src/agent/agent.cpp:529` |
-| `Agent::start()` | Agent | 启动 Agent 事件循环 | `src/agent/agent.cpp:544` |
-| `Agent::stop()` | Agent | 停止 Agent | `src/agent/agent.cpp:571` |
-| `Agent::route_request_message()` | Agent | 路由消息到 Session | `src/agent/agent.cpp:368` |
-| `Agent::process_all_sessions_until_idle()` | Agent | 处理所有 Session 消息 | `src/agent/agent.cpp:397` |
-| `Agent::pop_generated_task()` | Agent | 获取生成的任务 | `src/agent/agent.cpp:450` |
-| `Agent::get_default_session()` | Agent | 获取默认 Session | `include/internal/agent/agent.h:86` |
-| `Agent::get_workflow()` | Agent | 获取指定 Workflow | `src/agent/agent.cpp:479` |
-| `Agent::get_workflows()` | Agent | 获取所有 Workflow | `include/internal/agent/agent.h:89` |
-| `AgentRuntime::register_agent()` | AgentRuntime | 注册 Agent 到 Runtime | `src/runtime/runtime.cpp:171` |
-| `AgentRuntime::start()` | AgentRuntime | 启动 Runtime | `src/runtime/runtime.cpp:722` |
-| `AgentRuntime::stop()` | AgentRuntime | 停止 Runtime | `src/runtime/runtime.cpp:755` |
-| `AgentRuntime::schedule_task()` | AgentRuntime | 调度任务执行 | `src/runtime/runtime.cpp:125` |
-| `AgentRuntime::get_running_nodes()` | AgentRuntime | 获取正在执行的节点数 | `src/runtime/runtime.cpp:702` |
-| `AgentSession::dequeue_send_message()` | AgentSession | 从发送队列获取消息 | `src/agent/session.cpp:146` |
-| `AgentSession::get_receive_queue_size()` | AgentSession | 获取接收队列大小 | `src/agent/session.cpp:154` |
-| `AgentSession::get_send_queue_size()` | AgentSession | 获取发送队列大小 | `src/agent/session.cpp:158` |
+| `MMAgent::create_from_package()` | MMAgent | 从 package 创建 MMAgent 实例 | `src/agent/agent.cpp:167` |
+| `MMAgent::initialize()` | MMAgent | 初始化 MMAgent | `src/agent/agent.cpp:529` |
+| `MMAgent::start()` | MMAgent | 启动 MMAgent 事件循环 | `src/agent/agent.cpp:544` |
+| `MMAgent::stop()` | MMAgent | 停止 MMAgent | `src/agent/agent.cpp:571` |
+| `MMAgent::route_request_message()` | MMAgent | 路由消息到 Session | `src/agent/agent.cpp:368` |
+| `MMAgent::process_all_sessions_until_idle()` | MMAgent | 处理所有 Session 消息 | `src/agent/agent.cpp:397` |
+| `MMAgent::pop_generated_task()` | MMAgent | 获取生成的任务 | `src/agent/agent.cpp:450` |
+| `MMAgent::get_default_session()` | MMAgent | 获取默认 Session | `include/internal/agent/agent.h:86` |
+| `MMAgent::get_workflow()` | MMAgent | 获取指定 MMWorkflow | `src/agent/agent.cpp:479` |
+| `MMAgent::get_workflows()` | MMAgent | 获取所有 MMWorkflow | `include/internal/agent/agent.h:89` |
+| `MMAgentRuntime::register_agent()` | MMAgentRuntime | 注册 MMAgent 到 Runtime | `src/runtime/runtime.cpp:171` |
+| `MMAgentRuntime::start()` | MMAgentRuntime | 启动 Runtime | `src/runtime/runtime.cpp:722` |
+| `MMAgentRuntime::stop()` | MMAgentRuntime | 停止 Runtime | `src/runtime/runtime.cpp:755` |
+| `MMAgentRuntime::schedule_task()` | MMAgentRuntime | 调度任务执行 | `src/runtime/runtime.cpp:125` |
+| `MMAgentRuntime::get_running_nodes()` | MMAgentRuntime | 获取正在执行的节点数 | `src/runtime/runtime.cpp:702` |
+| `MMAgentSession::dequeue_send_message()` | MMAgentSession | 从发送队列获取消息 | `src/agent/session.cpp:146` |
+| `MMAgentSession::get_receive_queue_size()` | MMAgentSession | 获取接收队列大小 | `src/agent/session.cpp:154` |
+| `MMAgentSession::get_send_queue_size()` | MMAgentSession | 获取发送队列大小 | `src/agent/session.cpp:158` |
 
 ### 8.2 消息结构
 
@@ -742,7 +742,7 @@ struct Message {
   std::string                        sender_id;       // 发送者ID
   std::string                        receiver_id;     // 接收者ID
   std::string                        content;         // 消息内容
-  std::string                        data_ref;        // DataBus 数据引用
+  std::string                        data_ref;        // MMDataBus 数据引用
   int64_t                            timestamp;       // 时间戳
   std::map<std::string, std::string> metadata;        // 元数据 (user_id, client_id, workflow_id)
 };
@@ -755,7 +755,7 @@ struct TaskScheduleRequest {
   std::string task_id;            // 任务ID
   std::string agent_object_id;    // Agent对象ID
   std::string agent_instance_id;  // Agent实例ID
-  std::string workflow_id;        // Workflow ID
+  std::string workflow_id;        // MMWorkflow ID
   std::string workflow_file;      // Workflow文件路径
 };
 

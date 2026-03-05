@@ -11,12 +11,12 @@ namespace agentflow {
 namespace framework {
 
 SessionTaskCoordinator::SessionTaskCoordinator(const Config& config,
-                                               const std::shared_ptr<AgentTask>& coordinator_task)
+                                               const std::shared_ptr<MMAgentTask>& coordinator_task)
     : config_(config), coordinator_task_(coordinator_task) {
 }
 
 std::string SessionTaskCoordinator::resolve_task_workflow(
-    const std::string& task_type, const std::vector<std::shared_ptr<Workflow>>& workflows) const {
+    const std::string& task_type, const std::vector<std::shared_ptr<MMWorkflow>>& workflows) const {
   if(task_type != "task0") {
     return "";
   }
@@ -43,10 +43,10 @@ std::string SessionTaskCoordinator::resolve_task_workflow(
   return "";
 }
 
-std::shared_ptr<AgentTask> SessionTaskCoordinator::build_task_for_message(
-    const std::string& session_id, const AgentMsgQue::Message& message,
-    const std::vector<std::shared_ptr<Workflow>>& workflows, int64_t suffix_counter) const {
-  AgentTask::Config task_config;
+std::shared_ptr<MMAgentTask> SessionTaskCoordinator::build_task_for_message(
+    const std::string& session_id, const MMAgentMsgQue::Message& message,
+    const std::vector<std::shared_ptr<MMWorkflow>>& workflows, int64_t suffix_counter) const {
+  MMAgentTask::Config task_config;
   std::ostringstream task_id;
   task_id << session_id << "_task_" << suffix_counter;
   task_config.task_id = task_id.str();
@@ -86,7 +86,7 @@ std::shared_ptr<AgentTask> SessionTaskCoordinator::build_task_for_message(
     }
   }
 
-  auto task = std::make_shared<AgentTask>(task_config);
+  auto task = std::make_shared<MMAgentTask>(task_config);
   task->set_parameter("message_id", message.message_id);
   task->set_parameter("message_sender", message.sender_id);
   std::string payload = message.content;
@@ -98,10 +98,10 @@ std::shared_ptr<AgentTask> SessionTaskCoordinator::build_task_for_message(
   return task;
 }
 
-std::vector<std::shared_ptr<AgentTask>> SessionTaskCoordinator::process_session_messages(
-    AgentSession& session, const std::vector<std::shared_ptr<Workflow>>& workflows) {
-  std::vector<std::shared_ptr<AgentTask>> tasks;
-  AgentMsgQue::Message                    message;
+std::vector<std::shared_ptr<MMAgentTask>> SessionTaskCoordinator::process_session_messages(
+    MMAgentSession& session, const std::vector<std::shared_ptr<MMWorkflow>>& workflows) {
+  std::vector<std::shared_ptr<MMAgentTask>> tasks;
+  MMAgentMsgQue::Message                    message;
   int64_t                                 counter = 0;
   while(session.dequeue_received_message(message)) {
     auto task = build_task_for_message(session.get_session_id(), message, workflows, ++counter);

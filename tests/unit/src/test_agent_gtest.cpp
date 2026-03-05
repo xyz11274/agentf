@@ -13,8 +13,8 @@ namespace agentflow {
 namespace tests {
 
 namespace {
-std::shared_ptr<framework::AgentTask> find_task_by_type(
-    const std::vector<std::shared_ptr<framework::AgentTask>>& tasks, const std::string& task_type) {
+std::shared_ptr<framework::MMAgentTask> find_task_by_type(
+    const std::vector<std::shared_ptr<framework::MMAgentTask>>& tasks, const std::string& task_type) {
   for(const auto& task : tasks) {
     if(task && task->get_task_type() == task_type) {
       return task;
@@ -26,8 +26,8 @@ std::shared_ptr<framework::AgentTask> find_task_by_type(
 
 class AgentTest : public ::testing::Test {
 protected:
-  framework::Agent::Config base_config() {
-    framework::Agent::Config cfg;
+  framework::MMAgent::Config base_config() {
+    framework::MMAgent::Config cfg;
     cfg.id = "agent_test";
     cfg.name = "agent_test";
     return cfg;
@@ -35,21 +35,21 @@ protected:
 };
 
 TEST_F(AgentTest, MsgQuePrioritizesHighMessages) {
-  framework::AgentMsgQue::Config qcfg;
+  framework::MMAgentMsgQue::Config qcfg;
   qcfg.max_queue_size = 10;
-  framework::AgentMsgQue queue(qcfg);
+  framework::MMAgentMsgQue queue(qcfg);
 
-  framework::AgentMsgQue::Message normal;
+  framework::MMAgentMsgQue::Message normal;
   normal.message_id = "normal";
-  normal.priority = framework::AgentMsgQue::MessagePriority::NORMAL;
+  normal.priority = framework::MMAgentMsgQue::MessagePriority::NORMAL;
   ASSERT_TRUE(queue.enqueue_message(normal));
 
-  framework::AgentMsgQue::Message high;
+  framework::MMAgentMsgQue::Message high;
   high.message_id = "high";
-  high.priority = framework::AgentMsgQue::MessagePriority::HIGH;
+  high.priority = framework::MMAgentMsgQue::MessagePriority::HIGH;
   ASSERT_TRUE(queue.enqueue_message(high));
 
-  framework::AgentMsgQue::Message out;
+  framework::MMAgentMsgQue::Message out;
   ASSERT_TRUE(queue.dequeue_message(out));
   EXPECT_EQ(out.message_id, "high");
   ASSERT_TRUE(queue.dequeue_message(out));
@@ -57,26 +57,26 @@ TEST_F(AgentTest, MsgQuePrioritizesHighMessages) {
 }
 
 TEST_F(AgentTest, MsgQueStoresPayloadAsDataRef) {
-  framework::AgentMsgQue::Config qcfg;
-  framework::AgentMsgQue queue(qcfg);
+  framework::MMAgentMsgQue::Config qcfg;
+  framework::MMAgentMsgQue queue(qcfg);
 
-  framework::AgentMsgQue::Message msg;
+  framework::MMAgentMsgQue::Message msg;
   msg.message_id = "payload-msg";
   msg.content = "raw-payload";
   msg.metadata["user_id"] = "u-data";
   msg.metadata["client_id"] = "c-data";
   ASSERT_TRUE(queue.enqueue_message(msg));
 
-  framework::AgentMsgQue::Message out;
+  framework::MMAgentMsgQue::Message out;
   ASSERT_TRUE(queue.dequeue_message(out));
   EXPECT_TRUE(out.content.empty());
   EXPECT_FALSE(out.data_ref.empty());
 }
 
 TEST_F(AgentTest, RouteRequestCreatesSessionByUserAndClient) {
-  auto agent = std::make_shared<framework::Agent>(base_config());
+  auto agent = std::make_shared<framework::MMAgent>(base_config());
 
-  framework::AgentMsgQue::Message req;
+  framework::MMAgentMsgQue::Message req;
   req.message_id = "req1";
   req.metadata["user_id"] = "u1";
   req.metadata["client_id"] = "c1";
@@ -88,15 +88,15 @@ TEST_F(AgentTest, RouteRequestCreatesSessionByUserAndClient) {
 }
 
 TEST_F(AgentTest, CoordinatorBuildsSessionOwnedTaskWithWorkflowMapping) {
-  auto agent = std::make_shared<framework::Agent>(base_config());
+  auto agent = std::make_shared<framework::MMAgent>(base_config());
 
-  framework::Workflow::Config wf_cfg;
+  framework::MMWorkflow::Config wf_cfg;
   wf_cfg.id = "wf1";
   wf_cfg.name = "wf1";
   wf_cfg.dsl_file = "wf1.json";
-  agent->add_workflow(std::make_shared<framework::Workflow>(wf_cfg));
+  agent->add_workflow(std::make_shared<framework::MMWorkflow>(wf_cfg));
 
-  framework::AgentMsgQue::Message req;
+  framework::MMAgentMsgQue::Message req;
   req.message_id = "req2";
   req.content = "task-input";
   req.metadata["user_id"] = "u2";
@@ -128,13 +128,13 @@ TEST_F(AgentTest, CoordinatorBuildsSessionOwnedTaskWithWorkflowMapping) {
 }
 
 TEST_F(AgentTest, CoordinatorDefaultsToTask0Type) {
-  auto agent = std::make_shared<framework::Agent>(base_config());
-  framework::Workflow::Config wf_cfg;
+  auto agent = std::make_shared<framework::MMAgent>(base_config());
+  framework::MMWorkflow::Config wf_cfg;
   wf_cfg.id = "wf_default";
   wf_cfg.name = "wf_default";
-  agent->add_workflow(std::make_shared<framework::Workflow>(wf_cfg));
+  agent->add_workflow(std::make_shared<framework::MMWorkflow>(wf_cfg));
 
-  framework::AgentMsgQue::Message req;
+  framework::MMAgentMsgQue::Message req;
   req.message_id = "req_task0";
   req.metadata["user_id"] = "u3";
   req.metadata["client_id"] = "c3";
@@ -176,10 +176,10 @@ TEST_F(AgentTest, PackageTask0WorkflowMappingIsApplied) {
     wf << R"({"id":"wf_b","name":"wf_b","version":"1.0.0","nodes":[{"id":"n2","name":"n2","type":"TASK"}],"edges":[]})";
   }
 
-  auto agent = framework::Agent::create_from_package(tmp.string());
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
   ASSERT_NE(agent, nullptr);
 
-  framework::AgentMsgQue::Message req;
+  framework::MMAgentMsgQue::Message req;
   req.message_id = "req_task0_map";
   req.metadata["user_id"] = "u4";
   req.metadata["client_id"] = "c4";
@@ -221,10 +221,10 @@ TEST_F(AgentTest, WorkflowIdMetadataHasHigherPriorityThanCoordinatorWorkflow) {
     wf << R"({"id":"wf_b","name":"wf_b","version":"1.0.0","nodes":[{"id":"n2","name":"n2","type":"TASK"}],"edges":[]})";
   }
 
-  auto agent = framework::Agent::create_from_package(tmp.string());
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
   ASSERT_NE(agent, nullptr);
 
-  framework::AgentMsgQue::Message req;
+  framework::MMAgentMsgQue::Message req;
   req.message_id = "req_workflow_override";
   req.metadata["user_id"] = "u6";
   req.metadata["client_id"] = "c6";
@@ -242,7 +242,7 @@ TEST_F(AgentTest, WorkflowIdMetadataHasHigherPriorityThanCoordinatorWorkflow) {
 }
 
 TEST_F(AgentTest, DefaultAndDynamicSessionsContainTask0CoordinatorTask) {
-  auto agent = std::make_shared<framework::Agent>(base_config());
+  auto agent = std::make_shared<framework::MMAgent>(base_config());
   auto default_session = agent->get_default_session();
   ASSERT_NE(default_session, nullptr);
   EXPECT_EQ(default_session->get_session_id(), "0");

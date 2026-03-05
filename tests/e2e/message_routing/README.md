@@ -7,7 +7,7 @@
 ## 测试链路
 
 ```
-reqmsg → Agent.default_session → Agent.new_session → SessionTaskCoordinator → AgentTask
+reqmsg → MMAgent.default_session → MMAgent.new_session → SessionTaskCoordinator → MMAgentTask
 ```
 
 ---
@@ -25,4 +25,4 @@ reqmsg → Agent.default_session → Agent.new_session → SessionTaskCoordinato
 
 ## 测试数据
 
-`data/agent_package/` 包含完整的 Agent 包定义，用于测试消息路由。
+`data/agent_package/` 包含完整的 MMAgent 包定义，用于测试消息路由。

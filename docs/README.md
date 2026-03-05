@@ -19,7 +19,7 @@
 
 | 文档 | 用途 |
 |------|------|
-| **[ARCHITECTURE.md](ARCHITECTURE.md)** | Framework/Runtime/DataBus 架构设计 |
+| **[ARCHITECTURE.md](ARCHITECTURE.md)** | Framework/Runtime/MMDataBus 架构设计 |
 | **[REFACTORING.md](REFACTORING.md)** | 功能规划、路线图和代码完备性评估 |
 | **[api-reference.md](api-reference.md)** | API 参考手册 |
 | **[../CONTRIBUTING.md](../CONTRIBUTING.md)** | 贡献流程、开发规范与提交流程 |
@@ -175,8 +175,8 @@
 **最后更新**：2026 年 2 月 28 日
 **维护者**：@DanielKernel
 **变更记录**：
-- 2026-02-28: 同步刷新 Node 执行引擎下沉到 Worker、Coordinator task0 默认处理与 `coordinator_workflow` 配置说明
-- 2026-02-21: 刷新 ARCHITECTURE.md 与 REFACTORING.md，补充 Agent/Runtime/Workflow 当日优化落地与下一步优化方向
+- 2026-02-28: 同步刷新 MMNode 执行引擎下沉到 Worker、Coordinator task0 默认处理与 `coordinator_workflow` 配置说明
+- 2026-02-21: 刷新 ARCHITECTURE.md 与 REFACTORING.md，补充 MMAgent/Runtime/MMWorkflow 当日优化落地与下一步优化方向
 - 2026-02-18: 合并 roadmap.md 和 code-review.md 到 planning.md，合并 dependencies.md 到 development.md
 - 2026-02-18: 合并 CI/CD 文档，统一命名规范为 lowercase-hyphen
 - 2026-02-17: 添加 API 参考和代码审查文档
@@ -208,7 +208,7 @@ AgentFlow 项目采用 GitHub Actions 实现完整的 CI/CD 自动化基础设�
 
 ## 工作流文件
 
-### 已创建的 Workflow
+### 已创建的 MMWorkflow
 
 - ✅ `.github/workflows/build.yml` - 多平台构建管线
 - ✅ `.github/workflows/code-quality.yml` - 代码质量与风格检查
@@ -226,7 +226,7 @@ AgentFlow 项目采用 GitHub Actions 实现完整的 CI/CD 自动化基础设�
 
 ---
 
-## 1. Build Workflow (构建工作流)
+## 1. Build MMWorkflow (构建工作流)
 
 **触发事件:**
 - 推送到 `main` 或 `develop` 分支
@@ -258,7 +258,7 @@ AgentFlow 项目采用 GitHub Actions 实现完整的 CI/CD 自动化基础设�
 
 ---
 
-## 2. Code Quality Workflow (代码质量工作流)
+## 2. Code Quality MMWorkflow (代码质量工作流)
 
 **触发事件:**
 - 推送到 `main` 或 `develop` 分支
@@ -296,7 +296,7 @@ AgentFlow 项目采用 GitHub Actions 实现完整的 CI/CD 自动化基础设�
 
 ---
 
-## 3. Test Workflow (测试工作流)
+## 3. Test MMWorkflow (测试工作流)
 
 **触发事件:**
 - 推送到 `main` 或 `develop` 分支
@@ -320,7 +320,7 @@ AgentFlow 项目采用 GitHub Actions 实现完整的 CI/CD 自动化基础设�
 
 #### c. 集成测试
 - 示例应用测试
-- Workflow 验证
+- MMWorkflow 验证
 - 端到端功能检查
 
 #### d. 内存泄漏检测
@@ -330,7 +330,7 @@ AgentFlow 项目采用 GitHub Actions 实现完整的 CI/CD 自动化基础设�
 
 ---
 
-## 4. Release Workflow (发布工作流)
+## 4. Release MMWorkflow (发布工作流)
 
 **触发事件:**
 - Git tag 推送 (v* 模式，如 v1.0.0)
@@ -349,7 +349,7 @@ AgentFlow 项目采用 GitHub Actions 实现完整的 CI/CD 自动化基础设�
 
 ---
 
-## 5. Manual Build Workflow (手动构建工作流)
+## 5. Manual Build MMWorkflow (手动构建工作流)
 
 **用户可配置参数:**
 - 构建类型选择 (Debug/Release/RelWithDebInfo)
@@ -364,7 +364,7 @@ AgentFlow 项目采用 GitHub Actions 实现完整的 CI/CD 自动化基础设�
 
 ---
 
-## 6. Status Badge Workflow (状态徽章工作流)
+## 6. Status Badge MMWorkflow (状态徽章工作流)
 
 自动生成项目状态徽章，显示：
 - 构建状态
@@ -549,11 +549,11 @@ git push origin feature/my-feature
 | 组件 | 文件 | 状态 | 说明 |
 |------|------|------|------|
 | **核心库** | `libagentflow.a` | ✅ | 核心功能库 |
-| **Agent** | `src/agent/agent.cpp` | ✅ | Agent 基础功能 |
-| **Workflow** | `src/workflow/workflow.cpp` | ✅ | 工作流图调度、验证 |
-| **Node** | `src/workflow/node/node.cpp` | ✅ | 节点执行、状态管理 |
-| **Edge** | `src/workflow/edge/edge.cpp` | ✅ | 依赖关系定义 |
-| **DataBus** | `src/runtime/communication/databus.cpp` | ✅ | 数据总线功能 |
+| **MMAgent** | `src/agent/agent.cpp` | ✅ | MMAgent 基础功能 |
+| **MMWorkflow** | `src/workflow/workflow.cpp` | ✅ | 工作流图调度、验证 |
+| **MMNode** | `src/workflow/node/node.cpp` | ✅ | 节点执行、状态管理 |
+| **MMEdge** | `src/workflow/edge/edge.cpp` | ✅ | 依赖关系定义 |
+| **MMDataBus** | `src/runtime/communication/databus.cpp` | ✅ | 数据总线功能 |
 | **ZeroCopyDataBus** | `src/runtime/communication/zero_copy_databus.cpp` | ✅ | 零拷贝数据总线 |
 | **LocalChannel** | `src/runtime/communication/local_channel.cpp` | ✅ | 本地通道 |
 | **ControlFlow** | `src/runtime/scheduler/control_flow.cpp` | ✅ | 控制流管理 |
@@ -580,10 +580,10 @@ git push origin feature/my-feature
 | 测试文件 | 说明 |
 |----------|------|
 | `test_adapter_isolation.cpp` | 适配器隔离测试 |
-| `test_agent_gtest.cpp` | Agent 测试 |
-| `test_workflow_gtest.cpp` | Workflow 测试 |
-| `test_node_gtest.cpp` | Node 测试 |
-| `test_databus_gtest.cpp` | DataBus 测试 |
+| `test_agent_gtest.cpp` | MMAgent 测试 |
+| `test_workflow_gtest.cpp` | MMWorkflow 测试 |
+| `test_node_gtest.cpp` | MMNode 测试 |
+| `test_databus_gtest.cpp` | MMDataBus 测试 |
 | `test_event_gtest.cpp` | Event 系统测试 |
 | `test_hot_reload.cpp` | 热重载测试 |
 
@@ -665,7 +665,7 @@ class AgentTest : public ::testing::Test {
  protected:
   void SetUp() override {
     // 测试前置准备
-    agent_ = std::make_unique<framework::Agent>(framework::Agent::Config{});
+    agent_ = std::make_unique<framework::MMAgent>(framework::MMAgent::Config{});
   }
 
   void TearDown() override {
@@ -673,7 +673,7 @@ class AgentTest : public ::testing::Test {
     agent_.reset();
   }
 
-  std::unique_ptr<framework::Agent> agent_;
+  std::unique_ptr<framework::MMAgent> agent_;
 };
 
 TEST_F(AgentTest, CreateAgent) {
@@ -697,10 +697,10 @@ TEST_F(AgentTest, AgentLifecycle) {
 ```cpp
 bool test_feature_description() {
   // Arrange: 准备测试数据
-  framework::Node::Config config;
+  framework::MMNode::Config config;
   config.id = "node_1";
   config.name = "TestNode";
-  framework::Node node(config);
+  framework::MMNode node(config);
 
   // Act: 执行操作
   node.initialize();
@@ -719,19 +719,19 @@ bool test_feature_description() {
 
 ## 4. 核心组件使用示例
 
-### 4.1 Agent
+### 4.1 MMAgent
 
 ```cpp
 #include "agentflow/framework/agent.h"
 
 using namespace agentflow;
 
-// 创建 Agent
-framework::Agent::Config config;
+// 创建 MMAgent
+framework::MMAgent::Config config;
 config.id = "agent_001";
-config.name = "My Agent";
-config.policy = framework::Agent::LifecyclePolicy::FACTORY;
-auto agent = std::make_shared<framework::Agent>(config);
+config.name = "My MMAgent";
+config.policy = framework::MMAgent::LifecyclePolicy::FACTORY;
+auto agent = std::make_shared<framework::MMAgent>(config);
 
 // 生命周期管理
 agent->initialize();
@@ -739,29 +739,29 @@ agent->start();
 agent->stop();
 ```
 
-### 4.2 Workflow
+### 4.2 MMWorkflow
 
 ```cpp
 #include "agentflow/framework/workflow.h"
 
-// 创建 Workflow
-framework::Workflow::Config config;
+// 创建 MMWorkflow
+framework::MMWorkflow::Config config;
 config.id = "workflow_001";
-config.name = "My Workflow";
-auto workflow = std::make_shared<framework::Workflow>(config);
+config.name = "My MMWorkflow";
+auto workflow = std::make_shared<framework::MMWorkflow>(config);
 
 // 添加节点
-framework::Node::Config node_config;
+framework::MMNode::Config node_config;
 node_config.id = "node_001";
-auto node = std::make_shared<framework::Node>(node_config);
+auto node = std::make_shared<framework::MMNode>(node_config);
 workflow->add_node(node);
 
 // 添加边
-framework::Edge::Config edge_config;
+framework::MMEdge::Config edge_config;
 edge_config.id = "edge_001";
 edge_config.source_node_id = "node_a";
 edge_config.target_node_id = "node_b";
-auto edge = std::make_shared<framework::Edge>(edge_config);
+auto edge = std::make_shared<framework::MMEdge>(edge_config);
 workflow->add_edge(edge);
 
 // 验证工作流图
@@ -770,20 +770,20 @@ if (workflow->validate()) {
 }
 ```
 
-### 4.3 Node
+### 4.3 MMNode
 
 ```cpp
 #include "agentflow/framework/node.h"
 
 // 创建节点
-framework::Node::Config config;
+framework::MMNode::Config config;
 config.id = "node_001";
-config.name = "My Node";
+config.name = "My MMNode";
 config.type = "DataProcessor";
 config.timeout_ms = 30000;
 config.max_retries = 3;
 
-framework::Node node(config);
+framework::MMNode node(config);
 
 // 设置输入
 DataMap input;
@@ -800,7 +800,7 @@ if (node.execute()) {
 node.cleanup();
 ```
 
-### 4.4 DataBus
+### 4.4 MMDataBus
 
 ```cpp
 #include "agentflow/runtime/databus.h"
@@ -1028,13 +1028,13 @@ auto variant_to_string = [](const DataVariant& v) -> std::string {
 
 ```
 tests/
-├── test_agent_gtest.cpp         # Agent 测试
-├── test_workflow_gtest.cpp      # Workflow 测试
-├── test_node_gtest.cpp          # Node 测试
-├── test_databus_gtest.cpp       # DataBus 测试
+├── test_agent_gtest.cpp         # MMAgent 测试
+├── test_workflow_gtest.cpp      # MMWorkflow 测试
+├── test_node_gtest.cpp          # MMNode 测试
+├── test_databus_gtest.cpp       # MMDataBus 测试
 ├── test_event_gtest.cpp         # Event 系统测试
-├── test_workflow_json_gtest.cpp # Workflow JSON 解析测试
-├── test_agent_json_gtest.cpp    # Agent JSON 解析测试
+├── test_workflow_json_gtest.cpp # MMWorkflow JSON 解析测试
+├── test_agent_json_gtest.cpp    # MMAgent JSON 解析测试
 ├── test_local_channel_gtest.cpp # LocalChannel 测试
 ├── test_request_response_gtest.cpp # Request/Response 测试
 ├── test_adapter_isolation.cpp   # 适配器隔离测试

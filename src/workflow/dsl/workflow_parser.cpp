@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// DSL Workflow Parser Implementation
+// DSL MMWorkflow Parser Implementation
 
 #include "workflow/dsl/workflow_parser.h"
 
@@ -27,23 +27,23 @@ using WorkflowId = agentflow::WorkflowId;
 using EdgeId     = agentflow::EdgeId;
 
 namespace {
-framework::Edge::ControlType parse_edge_control_type(const std::string& type) {
-  if(type == "if") return framework::Edge::ControlType::IF;
-  if(type == "loop") return framework::Edge::ControlType::LOOP;
-  if(type == "fork") return framework::Edge::ControlType::FORK;
-  if(type == "join") return framework::Edge::ControlType::JOIN;
-  if(type == "async") return framework::Edge::ControlType::ASYNC;
-  if(type == "goto") return framework::Edge::ControlType::GOTO;
-  return framework::Edge::ControlType::NONE;
+framework::MMEdge::ControlType parse_edge_control_type(const std::string& type) {
+  if(type == "if") return framework::MMEdge::ControlType::IF;
+  if(type == "loop") return framework::MMEdge::ControlType::LOOP;
+  if(type == "fork") return framework::MMEdge::ControlType::FORK;
+  if(type == "join") return framework::MMEdge::ControlType::JOIN;
+  if(type == "async") return framework::MMEdge::ControlType::ASYNC;
+  if(type == "goto") return framework::MMEdge::ControlType::GOTO;
+  return framework::MMEdge::ControlType::NONE;
 }
 
-bool has_cycle_control_edge(const framework::Workflow& workflow) {
+bool has_cycle_control_edge(const framework::MMWorkflow& workflow) {
   for(const auto& edge : workflow.get_edges()) {
     if(!edge) {
       continue;
     }
     const auto type = edge->get_control_type();
-    if(type == framework::Edge::ControlType::LOOP || type == framework::Edge::ControlType::GOTO) {
+    if(type == framework::MMEdge::ControlType::LOOP || type == framework::MMEdge::ControlType::GOTO) {
       return true;
     }
   }
@@ -243,26 +243,26 @@ ParseResult WorkflowParser::parse_agent_file(const std::string& file_path) {
   return result;
 }
 
-bool WorkflowParser::validate_workflow(std::shared_ptr<framework::Workflow> workflow,
+bool WorkflowParser::validate_workflow(std::shared_ptr<framework::MMWorkflow> workflow,
                                        ParseResult&                         result) {
   if(!workflow) {
-    result.errors.emplace_back("Workflow is null");
+    result.errors.emplace_back("MMWorkflow is null");
     return false;
   }
 
   return validate_workflow_structure(workflow, result);
 }
 
-bool WorkflowParser::validate_agent(std::shared_ptr<framework::Agent> agent, ParseResult& result) {
+bool WorkflowParser::validate_agent(std::shared_ptr<framework::MMAgent> agent, ParseResult& result) {
   if(!agent) {
-    result.errors.emplace_back("Agent is null");
+    result.errors.emplace_back("MMAgent is null");
     return false;
   }
 
   // Basic validation - agent must have at least one workflow
   const auto& workflows = agent->get_workflows();
   if(workflows.empty()) {
-    result.warnings.push_back("Agent has no workflows");
+    result.warnings.push_back("MMAgent has no workflows");
   }
 
   return true;
@@ -282,7 +282,7 @@ bool WorkflowParser::parse_workflow_root(std::shared_ptr<const IJsonValue> root,
   }
 
   // Parse metadata
-  framework::Workflow::Config config;
+  framework::MMWorkflow::Config config;
   config.id = JsonHelper::get_string(root, "id", "");
   if(config.id.empty()) {
     config.id = "workflow_" + std::to_string(std::rand());
@@ -298,7 +298,7 @@ bool WorkflowParser::parse_workflow_root(std::shared_ptr<const IJsonValue> root,
   }
 
   // Create workflow object
-  current_workflow_ = std::make_shared<framework::Workflow>(config);
+  current_workflow_ = std::make_shared<framework::MMWorkflow>(config);
 
   // Parse includes and merge nested workflows
   auto includes_array = JsonHelper::get_array(root, "includes");
@@ -367,7 +367,7 @@ bool WorkflowParser::parse_workflow_root(std::shared_ptr<const IJsonValue> root,
     }
   } else {
     // If nodes are missing, it might be a valid partial workflow definition (e.g. metadata only)
-    // especially when used inside an Agent definition.
+    // especially when used inside an MMAgent definition.
     // So we don't fail here, but validation might warn or fail depending on context.
   }
 
@@ -402,10 +402,10 @@ bool WorkflowParser::parse_workflow_root(std::shared_ptr<const IJsonValue> root,
 
 bool WorkflowParser::parse_agent_root(std::shared_ptr<const IJsonValue> root, ParseResult& result) {
   // Parse agent config
-  framework::Agent::Config config;
+  framework::MMAgent::Config config;
   config.id = JsonHelper::get_string(root, "id", "");
   if(config.id.empty()) {
-    result.errors.emplace_back("Agent missing required 'id' field", "root");
+    result.errors.emplace_back("MMAgent missing required 'id' field", "root");
     return false;
   }
 
@@ -423,11 +423,11 @@ bool WorkflowParser::parse_agent_root(std::shared_ptr<const IJsonValue> root, Pa
   std::transform(policy_str.begin(), policy_str.end(), policy_str.begin(), ::tolower);
   
   if(policy_str == "per_request") {
-    config.policy = framework::Agent::LifecyclePolicy::PER_REQUEST;
+    config.policy = framework::MMAgent::LifecyclePolicy::PER_REQUEST;
   } else if(policy_str == "singleton") {
-    config.policy = framework::Agent::LifecyclePolicy::SINGLETON;
+    config.policy = framework::MMAgent::LifecyclePolicy::SINGLETON;
   } else if(policy_str == "factory") {
-    config.policy = framework::Agent::LifecyclePolicy::FACTORY;
+    config.policy = framework::MMAgent::LifecyclePolicy::FACTORY;
   } else {
     result.errors.emplace_back("Invalid agent policy: " + policy_str, "root.policy");
     return false;
@@ -457,7 +457,7 @@ bool WorkflowParser::parse_agent_root(std::shared_ptr<const IJsonValue> root, Pa
   }
 
   // Create agent object
-  current_agent_ = std::make_shared<framework::Agent>(config);
+  current_agent_ = std::make_shared<framework::MMAgent>(config);
 
   // Parse workflows
   auto workflows_array = JsonHelper::get_array(root, "workflows");
@@ -477,7 +477,7 @@ bool WorkflowParser::parse_agent_root(std::shared_ptr<const IJsonValue> root, Pa
 }
 
 bool WorkflowParser::parse_workflow_metadata(std::shared_ptr<const IJsonValue> obj,
-                                             framework::Workflow::Config&      config,
+                                             framework::MMWorkflow::Config&      config,
                                              ParseResult& /* result */,
                                              const std::string& /* path */) {
   // Parse metadata map
@@ -506,7 +506,7 @@ bool WorkflowParser::parse_nodes(std::shared_ptr<const IJsonValue> nodes_array, 
   for(size_t i = 0; i < num_nodes; ++i) {
     auto node_obj = nodes_array->array_at(i);
     if(!node_obj || !node_obj->is_object()) {
-      result.errors.emplace_back("Node at index " + std::to_string(i) + " is not an object",
+      result.errors.emplace_back("MMNode at index " + std::to_string(i) + " is not an object",
                                  path + "[" + std::to_string(i) + "]");
       return false;
     }
@@ -526,7 +526,7 @@ bool WorkflowParser::parse_edges(std::shared_ptr<const IJsonValue> edges_array, 
   for(size_t i = 0; i < num_edges; ++i) {
     auto edge_obj = edges_array->array_at(i);
     if(!edge_obj || !edge_obj->is_object()) {
-      result.errors.emplace_back("Edge at index " + std::to_string(i) + " is not an object",
+      result.errors.emplace_back("MMEdge at index " + std::to_string(i) + " is not an object",
                                  path + "[" + std::to_string(i) + "]");
       return false;
     }
@@ -541,7 +541,7 @@ bool WorkflowParser::parse_edges(std::shared_ptr<const IJsonValue> edges_array, 
 
 bool WorkflowParser::parse_node(std::shared_ptr<const IJsonValue> node_obj, ParseResult& result,
                                 const std::string& path) {
-  framework::Node::Config config;
+  framework::MMNode::Config config;
 
   if(!parse_node_config(node_obj, config, result, path)) {
     return false;
@@ -556,7 +556,7 @@ bool WorkflowParser::parse_node(std::shared_ptr<const IJsonValue> node_obj, Pars
   }
 
   // Create node and add to workflow
-  auto node = std::make_shared<framework::Node>(config);
+  auto node = std::make_shared<framework::MMNode>(config);
   current_workflow_->add_node(node);
 
   // Track node ID mapping
@@ -566,11 +566,11 @@ bool WorkflowParser::parse_node(std::shared_ptr<const IJsonValue> node_obj, Pars
 }
 
 bool WorkflowParser::parse_node_config(std::shared_ptr<const IJsonValue> node_obj,
-                                       framework::Node::Config& config, ParseResult& result,
+                                       framework::MMNode::Config& config, ParseResult& result,
                                        const std::string& path) {
   config.id = JsonHelper::get_string(node_obj, "id", "");
   if(config.id.empty()) {
-    result.errors.emplace_back("Node missing required 'id' field", path);
+    result.errors.emplace_back("MMNode missing required 'id' field", path);
     return false;
   }
 
@@ -590,19 +590,19 @@ bool WorkflowParser::parse_node_config(std::shared_ptr<const IJsonValue> node_ob
   // Parse execution mode
   std::string exec_mode_str = JsonHelper::get_string(config_source, "execution_mode", "cpp_function");
   if(exec_mode_str == "shell_script") {
-    config.execution_mode = framework::Node::ExecutionMode::SHELL_SCRIPT;
+    config.execution_mode = framework::MMNode::ExecutionMode::SHELL_SCRIPT;
   } else if(exec_mode_str == "executable") {
-    config.execution_mode = framework::Node::ExecutionMode::EXECUTABLE;
+    config.execution_mode = framework::MMNode::ExecutionMode::EXECUTABLE;
   } else if(exec_mode_str == "go_script") {
-    config.execution_mode = framework::Node::ExecutionMode::GO_SCRIPT;
+    config.execution_mode = framework::MMNode::ExecutionMode::GO_SCRIPT;
   } else if(exec_mode_str == "python_script") {
-    config.execution_mode = framework::Node::ExecutionMode::PYTHON_SCRIPT;
+    config.execution_mode = framework::MMNode::ExecutionMode::PYTHON_SCRIPT;
   } else if(exec_mode_str == "java_jar") {
-    config.execution_mode = framework::Node::ExecutionMode::JAVA_JAR;
+    config.execution_mode = framework::MMNode::ExecutionMode::JAVA_JAR;
   } else if(exec_mode_str == "so_library") {
-    config.execution_mode = framework::Node::ExecutionMode::SO_LIBRARY;
+    config.execution_mode = framework::MMNode::ExecutionMode::SO_LIBRARY;
   } else {
-    config.execution_mode = framework::Node::ExecutionMode::CPP_FUNCTION;
+    config.execution_mode = framework::MMNode::ExecutionMode::CPP_FUNCTION;
   }
 
   config.command          = JsonHelper::get_string(config_source, "command", "");
@@ -634,7 +634,7 @@ bool WorkflowParser::parse_node_config(std::shared_ptr<const IJsonValue> node_ob
 }
 
 bool WorkflowParser::parse_node_inputs(std::shared_ptr<const IJsonValue> node_obj,
-                                       framework::Node::Config& config, ParseResult& result,
+                                       framework::MMNode::Config& config, ParseResult& result,
                                        const std::string& path) {
   // Try to parse as array of strings
   auto inputs_array = JsonHelper::get_array(node_obj, "inputs");
@@ -663,7 +663,7 @@ bool WorkflowParser::parse_node_inputs(std::shared_ptr<const IJsonValue> node_ob
 }
 
 bool WorkflowParser::parse_node_outputs(std::shared_ptr<const IJsonValue> node_obj,
-                                        framework::Node::Config& config, ParseResult& result,
+                                        framework::MMNode::Config& config, ParseResult& result,
                                         const std::string& path) {
   // Try to parse as array of strings
   auto outputs_array = JsonHelper::get_array(node_obj, "outputs");
@@ -693,48 +693,48 @@ bool WorkflowParser::parse_node_outputs(std::shared_ptr<const IJsonValue> node_o
 
 bool WorkflowParser::parse_edge(std::shared_ptr<const IJsonValue> edge_obj, ParseResult& result,
                                 const std::string& path) {
-  framework::Edge::Config config;
+  framework::MMEdge::Config config;
 
   if(!parse_edge_config(edge_obj, config, result, path)) {
     return false;
   }
 
   // Create edge and add to workflow
-  auto edge = std::make_shared<framework::Edge>(config);
+  auto edge = std::make_shared<framework::MMEdge>(config);
   current_workflow_->add_edge(edge);
 
   return true;
 }
 
 bool WorkflowParser::parse_edge_config(std::shared_ptr<const IJsonValue> edge_obj,
-                                       framework::Edge::Config& config, ParseResult& result,
+                                       framework::MMEdge::Config& config, ParseResult& result,
                                        const std::string& path) {
   config.id = JsonHelper::get_string(edge_obj, "id", "");
   if(config.id.empty()) {
-    result.errors.emplace_back("Edge missing required 'id' field", path);
+    result.errors.emplace_back("MMEdge missing required 'id' field", path);
     return false;
   }
 
   config.source_node = JsonHelper::get_string(edge_obj, "source", "");
   if(config.source_node.empty()) {
-    result.errors.emplace_back("Edge missing required 'source' field", path);
+    result.errors.emplace_back("MMEdge missing required 'source' field", path);
     return false;
   }
 
   config.target_node = JsonHelper::get_string(edge_obj, "target", "");
   if(config.target_node.empty()) {
-    result.errors.emplace_back("Edge missing required 'target' field", path);
+    result.errors.emplace_back("MMEdge missing required 'target' field", path);
     return false;
   }
 
   // Parse data transfer mode
   std::string mode_str = JsonHelper::get_string(edge_obj, "transfer_mode", "shared_memory");
   if(mode_str == "message_queue") {
-    config.transfer_mode = framework::Edge::DataTransferMode::MESSAGE_QUEUE;
+    config.transfer_mode = framework::MMEdge::DataTransferMode::MESSAGE_QUEUE;
   } else if(mode_str == "remote_transfer") {
-    config.transfer_mode = framework::Edge::DataTransferMode::REMOTE_TRANSFER;
+    config.transfer_mode = framework::MMEdge::DataTransferMode::REMOTE_TRANSFER;
   } else {
-    config.transfer_mode = framework::Edge::DataTransferMode::SHARED_MEMORY;
+    config.transfer_mode = framework::MMEdge::DataTransferMode::SHARED_MEMORY;
   }
 
   // Parse source outputs
@@ -807,15 +807,15 @@ bool WorkflowParser::parse_edge_config(std::shared_ptr<const IJsonValue> edge_ob
     config.control.join_group   = JsonHelper::get_string(control_obj, "join_group", "");
     config.control.callback_node = JsonHelper::get_string(control_obj, "callback_node", "");
   }
-  if(config.control.type == framework::Edge::ControlType::IF) {
+  if(config.control.type == framework::MMEdge::ControlType::IF) {
     if(config.control.expression.empty()) {
       config.control.expression = config.condition_expression;
     }
     config.condition_expression = config.control.expression;
-  } else if(config.control.type == framework::Edge::ControlType::NONE &&
+  } else if(config.control.type == framework::MMEdge::ControlType::NONE &&
             !config.condition_expression.empty()) {
     // Backward compatibility: old condition_expression maps to IF edge.
-    config.control.type       = framework::Edge::ControlType::IF;
+    config.control.type       = framework::MMEdge::ControlType::IF;
     config.control.expression = config.condition_expression;
   }
   
@@ -825,9 +825,9 @@ bool WorkflowParser::parse_edge_config(std::shared_ptr<const IJsonValue> edge_ob
 }
 
 bool WorkflowParser::parse_agent_config(std::shared_ptr<const IJsonValue> obj,
-                                        framework::Agent::Config& config, ParseResult& result,
+                                        framework::MMAgent::Config& config, ParseResult& result,
                                         const std::string& path) {
-  // Agent metadata parsing is not currently supported in Agent::Config
+  // MMAgent metadata parsing is not currently supported in MMAgent::Config
   // This can be added in future if needed
 
   return true;
@@ -840,7 +840,7 @@ bool WorkflowParser::parse_agent_workflows(std::shared_ptr<const IJsonValue> wor
   for(size_t i = 0; i < num_workflows; ++i) {
     auto workflow_obj = workflows_array->array_at(i);
     if(!workflow_obj) {
-      result.errors.emplace_back("Workflow reference at index " + std::to_string(i) + " is null",
+      result.errors.emplace_back("MMWorkflow reference at index " + std::to_string(i) + " is null",
                                  path + "[" + std::to_string(i) + "]");
       return false;
     }
@@ -857,7 +857,7 @@ bool WorkflowParser::parse_workflow_ref(std::shared_ptr<const IJsonValue> ref_ob
                                         ParseResult& result, const std::string& path) {
   // Check if it's a workflow reference (string) or inline workflow definition (object)
   if(ref_obj->is_string()) {
-    // Workflow file reference - load from file
+    // MMWorkflow file reference - load from file
     std::string file_path    = ref_obj->as_string();
     auto        parse_result = parse_workflow_file(file_path);
     if(!parse_result.is_valid()) {
@@ -885,25 +885,25 @@ bool WorkflowParser::parse_workflow_ref(std::shared_ptr<const IJsonValue> ref_ob
     current_workflow_ = saved_workflow;
     return true;
   } else {
-    result.errors.emplace_back("Workflow reference must be string or object", path);
+    result.errors.emplace_back("MMWorkflow reference must be string or object", path);
     return false;
   }
 
   return true;
 }
 
-bool WorkflowParser::validate_workflow_structure(std::shared_ptr<framework::Workflow> workflow,
+bool WorkflowParser::validate_workflow_structure(std::shared_ptr<framework::MMWorkflow> workflow,
                                                  ParseResult&                         result) {
   // Validate workflow has nodes
   if(workflow->get_nodes().empty()) {
-    // result.warnings.emplace_back("Workflow has no nodes");
+    // result.warnings.emplace_back("MMWorkflow has no nodes");
     // Empty workflow is allowed (e.g. reference only)
   }
 
   // Validate workflow graph; cycle control edges (loop/goto) are allowed.
   if(!workflow->validate()) {
     if(!has_cycle_control_edge(*workflow)) {
-      result.errors.emplace_back("Workflow graph validation failed - possible cycle detected");
+      result.errors.emplace_back("MMWorkflow graph validation failed - possible cycle detected");
       return false;
     }
     for(const auto& node : workflow->get_nodes()) {
@@ -912,7 +912,7 @@ bool WorkflowParser::validate_workflow_structure(std::shared_ptr<framework::Work
       }
     }
     result.warnings.emplace_back(
-        "Workflow contains loop/goto control edges; acyclic-only validation is bypassed.");
+        "MMWorkflow contains loop/goto control edges; acyclic-only validation is bypassed.");
   }
 
   return true;
@@ -934,7 +934,7 @@ bool WorkflowParser::validate_node_ids_unique(ParseResult& result) {
   return unique;
 }
 
-bool WorkflowParser::validate_edge_references(std::shared_ptr<framework::Workflow> workflow,
+bool WorkflowParser::validate_edge_references(std::shared_ptr<framework::MMWorkflow> workflow,
                                               ParseResult&                         result) {
   const auto&                nodes = workflow->get_nodes();
   std::unordered_set<NodeId> node_ids;
@@ -945,13 +945,13 @@ bool WorkflowParser::validate_edge_references(std::shared_ptr<framework::Workflo
   bool valid = true;
   for(const auto& edge : workflow->get_edges()) {
     if(node_ids.find(edge->get_source()) == node_ids.end()) {
-      result.errors.emplace_back("Edge '" + edge->get_id()
+      result.errors.emplace_back("MMEdge '" + edge->get_id()
                                  + "' references non-existent source node '" + edge->get_source()
                                  + "'");
       valid = false;
     }
     if(node_ids.find(edge->get_target()) == node_ids.end()) {
-      result.errors.emplace_back("Edge '" + edge->get_id()
+      result.errors.emplace_back("MMEdge '" + edge->get_id()
                                  + "' references non-existent target node '" + edge->get_target()
                                  + "'");
       valid = false;

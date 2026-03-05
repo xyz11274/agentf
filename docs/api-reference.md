@@ -1,10 +1,10 @@
 # AgentFlow API Reference
 
-> 本文档按“Framework（Agent/Workflow）- Runtime（调度）- DataBus（共享总线）”组织。
+> 本文档按“Framework（MMAgent/MMWorkflow）- Runtime（调度）- MMDataBus（共享总线）”组织。
 
 ## 1. Framework 层
 
-### 1.1 Agent API
+### 1.1 MMAgent API
 
 头文件：`include/external/agent/agent.h`  
 命名空间：`agentflow::framework`
@@ -17,13 +17,13 @@
 - 包内 coordinator 固定映射：`package.json.coordinator_workflow` 可配置 task0 默认 workflow
 - 共享数据：`publish_data/get_data`
 - 包加载：`create_from_package`
-- 控制面协同：`msgque/event` 仅传 `data_ref`，payload 通过 DataBus 获取
+- 控制面协同：`msgque/event` 仅传 `data_ref`，payload 通过 MMDataBus 获取
 
 关联规范：
-- Agent 包结构：`publish/agent/AGENT_PACKAGE_SPEC.md`
+- MMAgent 包结构：`publish/agent/AGENT_PACKAGE_SPEC.md`
 - 打包脚本：`publish/agent_build.sh`
 
-### 1.2 Workflow API
+### 1.2 MMWorkflow API
 
 头文件：`include/external/workflow/workflow.h`  
 命名空间：`agentflow::framework`
@@ -43,7 +43,7 @@ DSL 关键字段：
 
 参考：`publish/workflow/README.md`、`publish/workflow/pattern/*.json`。
 
-### 1.3 Node 开发 API
+### 1.3 MMNode 开发 API
 
 头文件：`include/external/workflow/node.h`
 
@@ -63,11 +63,11 @@ DSL 关键字段：
 - 热更新：`enable_hot_reload/hot_reload_config`（默认生效，无需显式调用 `enable_code_reload`）
 - 嵌套 workflow 引用：`workflow_ref`（当 `type=workflow`）
 
-Node 规范与模板：
+MMNode 规范与模板：
 - `publish/workflow/node_patterns/`
 - `src/workflow/node/skill.md`
 
-### 1.4 Edge API
+### 1.4 MMEdge API
 
 头文件：`include/external/workflow/edge.h`
 
@@ -80,7 +80,7 @@ Node 规范与模板：
 
 ## 2. Runtime 层
 
-### 2.1 AgentRuntime
+### 2.1 MMAgentRuntime
 
 头文件：`include/internal/runtime/agent_runtime.h`  
 命名空间：`agentflow::runtime`
@@ -90,7 +90,7 @@ Node 规范与模板：
 - `RuntimeRole::WORKER`
 
 关键接口：
-- Agent 注册：`register_agent/unregister_agent/list_agents`
+- MMAgent 注册：`register_agent/unregister_agent/list_agents`
 - workflow 执行：`load_workflow/execute_workflow/unload_workflow`
 - worker 管理：`register_worker_engine/heartbeat_worker/update_worker_engine_status`
 - workflow 部署：`deploy_workflow_instance/destroy_workflow_instance`
@@ -122,14 +122,14 @@ Node 规范与模板：
 实现：`src/runtime/worker/worker.cpp`
 
 职责：
-- 通过 `WorkerEngine::execute_code` 统一执行节点多语言任务。
+- 通过 `MMWorkerEngine::execute_code` 统一执行节点多语言任务。
 - 通过 `check_and_reload_code/get_code_version/rollback_code_version` 统一处理热更新与回退。
 - 上报执行状态。
 - 配合 runtime 推进 workflow 状态机。
 
 ---
 
-## 3. 高速数据总线（DataBus）
+## 3. 高速数据总线（MMDataBus）
 
 头文件：`include/internal/runtime/databus/databus.h`
 
@@ -143,10 +143,10 @@ Node 规范与模板：
 实现组件：
 - `LocalDatabus`（本地共享）
 - `RemoteDatabus`（跨节点/远端，默认 Redis 适配）
-- 统一封装类型：`DataBus`（兼容别名 `HighSpeedDataBus`）
+- 统一封装类型：`MMDataBus`（兼容别名 `HighSpeedDataBus`）
 
 使用建议：
 - 统一 key 命名，避免 workflow 间冲突。
 - 对大对象优先使用可复用键并控制生命周期。
 - 在控制流条件读取与节点输出写入之间保持键语义一致。
-- 首条请求原始数据应先落本地缓存并生成 `data_ref`，再由 DataBus 自动同步远端服务。
+- 首条请求原始数据应先落本地缓存并生成 `data_ref`，再由 MMDataBus 自动同步远端服务。

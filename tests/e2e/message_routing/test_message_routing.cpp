@@ -3,16 +3,19 @@
  * @brief E2E测试：消息路由场景
  *
  * 测试目标：验证消息从进入到任务生成的完整链路
- * 链路：reqmsg → Agent.default_session → Agent.new_session → SessionTaskCoordinator → AgentTask
+ * 链路：reqmsg → MMAgent.default_session → MMAgent.new_session → SessionTaskCoordinator → MMAgentTask
  */
 
 #include <gtest/gtest.h>
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <thread>
 #include <chrono>
 
 #include "agent/agent.h"
+#include "agent/session.h"
+#include "agent/task.h"
 #include "agent/package.h"
 #include "runtime/agent_runtime.h"
 #include "workflow/dsl/workflow_parser.h"
@@ -28,7 +31,7 @@ protected:
         std::filesystem::create_directories(test_dir_);
         std::filesystem::create_directories(test_dir_ / "workflows");
 
-        // 创建测试用 Agent 包
+        // 创建测试用 MMAgent 包
         create_test_agent_package();
     }
 
@@ -51,7 +54,7 @@ protected:
         std::ofstream wf_main(test_dir_ / "workflows" / "main.json");
         wf_main << R"({
             "id": "wf_main",
-            "name": "Main Workflow",
+            "name": "Main MMWorkflow",
             "version": "1.0.0",
             "nodes": [
                 {"id": "n1", "name": "Start", "type": "source"},
@@ -69,7 +72,7 @@ protected:
         std::ofstream wf_coord(test_dir_ / "workflows" / "coordinator.json");
         wf_coord << R"({
             "id": "wf_coordinator",
-            "name": "Coordinator Workflow",
+            "name": "Coordinator MMWorkflow",
             "version": "1.0.0",
             "nodes": [
                 {"id": "c1", "name": "Analyze", "type": "source"}
@@ -87,20 +90,20 @@ protected:
  * 验证消息通过 user_id + client_id 创建新 session 并生成 task
  */
 TEST_F(E2EMessageRouting, BasicRouting) {
-    // 1. 从包创建 Agent
-    auto agent = framework::Agent::create_from_package(test_dir_.string());
+    // 1. 从包创建 MMAgent
+    auto agent = framework::MMAgent::create_from_package(test_dir_.string());
     ASSERT_NE(agent, nullptr) << "Failed to create agent from package";
 
-    // 2. 初始化并启动 Agent
+    // 2. 初始化并启动 MMAgent
     ASSERT_TRUE(agent->initialize());
     ASSERT_TRUE(agent->start());
 
     // 3. 创建请求消息
-    framework::AgentMsgQue::Message request;
+    framework::MMAgentMsgQue::Message request;
     request.message_id = "msg-001";
     request.metadata["user_id"] = "user-123";
     request.metadata["client_id"] = "client-456";
-    request.data["payload"] = std::string("test payload");
+    request.content = "test payload";
 
     // 4. 路由消息
     agent->route_request_message(request);
@@ -125,13 +128,13 @@ TEST_F(E2EMessageRouting, BasicRouting) {
  * 验证缺失 user_id 或 client_id 时不会创建业务 session
  */
 TEST_F(E2EMessageRouting, MissingMetadata) {
-    auto agent = framework::Agent::create_from_package(test_dir_.string());
+    auto agent = framework::MMAgent::create_from_package(test_dir_.string());
     ASSERT_NE(agent, nullptr);
     agent->initialize();
     agent->start();
 
     // 测试缺失 user_id
-    framework::AgentMsgQue::Message request1;
+    framework::MMAgentMsgQue::Message request1;
     request1.message_id = "msg-002";
     request1.metadata["client_id"] = "client-456";
     // 缺失 user_id
@@ -144,7 +147,7 @@ TEST_F(E2EMessageRouting, MissingMetadata) {
     size_t session_count_no_user = sessions.size();
 
     // 测试缺失 client_id
-    framework::AgentMsgQue::Message request2;
+    framework::MMAgentMsgQue::Message request2;
     request2.message_id = "msg-003";
     request2.metadata["user_id"] = "user-123";
     // 缺失 client_id
@@ -165,13 +168,13 @@ TEST_F(E2EMessageRouting, MissingMetadata) {
  * 验证未指定 workflow_id 时使用 coordinator_workflow
  */
 TEST_F(E2EMessageRouting, CoordinatorWorkflow) {
-    auto agent = framework::Agent::create_from_package(test_dir_.string());
+    auto agent = framework::MMAgent::create_from_package(test_dir_.string());
     ASSERT_NE(agent, nullptr);
     agent->initialize();
     agent->start();
 
     // 创建不带 workflow_id 的消息
-    framework::AgentMsgQue::Message request;
+    framework::MMAgentMsgQue::Message request;
     request.message_id = "msg-004";
     request.metadata["user_id"] = "user-789";
     request.metadata["client_id"] = "client-012";
@@ -201,13 +204,13 @@ TEST_F(E2EMessageRouting, CoordinatorWorkflow) {
  * 验证显式指定的 workflow_id 优先级最高
  */
 TEST_F(E2EMessageRouting, ExplicitWorkflowId) {
-    auto agent = framework::Agent::create_from_package(test_dir_.string());
+    auto agent = framework::MMAgent::create_from_package(test_dir_.string());
     ASSERT_NE(agent, nullptr);
     agent->initialize();
     agent->start();
 
     // 创建带显式 workflow_id 的消息
-    framework::AgentMsgQue::Message request;
+    framework::MMAgentMsgQue::Message request;
     request.message_id = "msg-005";
     request.metadata["user_id"] = "user-abc";
     request.metadata["client_id"] = "client-def";
@@ -222,11 +225,14 @@ TEST_F(E2EMessageRouting, ExplicitWorkflowId) {
 
     // 验证 task 绑定到显式指定的 workflow
     auto tasks = session->get_tasks();
-    if (!tasks.empty()) {
-        auto task = tasks[0];
-        EXPECT_EQ(task->get_workflow_id(), "wf_main")
-            << "Task should bind to explicitly specified workflow";
-    }
+    auto target = std::find_if(tasks.begin(), tasks.end(), [](const auto& task) {
+        if (!task) return false;
+        std::string message_id;
+        return task->get_parameter("message_id", message_id) && message_id == "msg-005";
+    });
+    ASSERT_NE(target, tasks.end()) << "Generated task for request should exist";
+    EXPECT_EQ((*target)->get_workflow_id(), "wf_main")
+        << "Task should bind to explicitly specified workflow";
 
     agent->stop();
 }
@@ -236,7 +242,7 @@ TEST_F(E2EMessageRouting, ExplicitWorkflowId) {
  * 验证多个用户消息并发处理
  */
 TEST_F(E2EMessageRouting, ConcurrentMultiUser) {
-    auto agent = framework::Agent::create_from_package(test_dir_.string());
+    auto agent = framework::MMAgent::create_from_package(test_dir_.string());
     ASSERT_NE(agent, nullptr);
     agent->initialize();
     agent->start();
@@ -245,7 +251,7 @@ TEST_F(E2EMessageRouting, ConcurrentMultiUser) {
 
     // 并发发送多个用户的消息
     for (int i = 0; i < num_users; i++) {
-        framework::AgentMsgQue::Message request;
+        framework::MMAgentMsgQue::Message request;
         request.message_id = "msg-concurrent-" + std::to_string(i);
         request.metadata["user_id"] = "user-" + std::to_string(i);
         request.metadata["client_id"] = "client-" + std::to_string(i);

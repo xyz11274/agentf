@@ -21,18 +21,18 @@
 namespace agentflow {
 namespace runtime {
 
-using AgentPtr    = std::shared_ptr<framework::Agent>;
-using WorkflowPtr = std::shared_ptr<framework::Workflow>;
-using NodePtr     = std::shared_ptr<framework::Node>;
+using AgentPtr    = std::shared_ptr<framework::MMAgent>;
+using WorkflowPtr = std::shared_ptr<framework::MMWorkflow>;
+using NodePtr     = std::shared_ptr<framework::MMNode>;
 
 /**
- * AgentRuntime is the core scheduling and execution engine
+ * MMAgentRuntime is the core scheduling and execution engine
  * Three-level Master-Worker architecture:
- * - Agent Level Master: Manages multiple agent instances
- * - Workflow Level Master: Manages workflow graph and scheduling
- * - Node Level Worker: Executes node tasks
+ * - MMAgent Level Master: Manages multiple agent instances
+ * - MMWorkflow Level Master: Manages workflow graph and scheduling
+ * - MMNode Level Worker: Executes node tasks
  */
-class AgentRuntime {
+class MMAgentRuntime {
 public:
   enum class RuntimeRole {
     WORKER = 0,
@@ -48,23 +48,23 @@ public:
     size_t      worker_queue_size = 1024;
   };
 
-  AgentRuntime();
-  explicit AgentRuntime(const Config& config);
-  ~AgentRuntime();
+  MMAgentRuntime();
+  explicit MMAgentRuntime(const Config& config);
+  ~MMAgentRuntime();
 
-  // Agent management (Agent Level Master)
+  // MMAgent management (MMAgent Level Master)
   bool                  register_agent(AgentPtr agent);
   bool                  unregister_agent(const AgentId& agent_id);
   AgentPtr              get_agent(const AgentId& agent_id);
   std::vector<AgentPtr> list_agents();
 
-  // Workflow scheduling (Workflow Level Master)
+  // MMWorkflow scheduling (MMWorkflow Level Master)
   bool load_workflow(const AgentId& agent_id, WorkflowPtr workflow);
   bool unload_workflow(const AgentId& agent_id, const WorkflowId& workflow_id);
   bool execute_workflow(const AgentId& agent_id, const WorkflowId& workflow_id,
                         const DataMap& inputs);
 
-  // Node execution (Node Level Worker)
+  // MMNode execution (MMNode Level Worker)
   void process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr node);
 
   // Event handling
@@ -90,10 +90,10 @@ public:
   // Runtime role and global deployment/scheduling
   void set_role(RuntimeRole role);
 
-  bool register_worker_engine(const std::shared_ptr<WorkerEngine>& worker);
+  bool register_worker_engine(const std::shared_ptr<MMWorkerEngine>& worker);
   bool unregister_worker_engine(const std::string& worker_id);
   bool heartbeat_worker(const std::string& worker_id);
-  bool update_worker_engine_status(const std::string& worker_id, WorkerEngine::WorkerStatus status);
+  bool update_worker_engine_status(const std::string& worker_id, MMWorkerEngine::WorkerStatus status);
   std::vector<master::WorkerSnapshot> list_worker_engines() const;
 
   bool deploy_workflow_instance(const WorkflowInstanceInfo& info, const std::string& preferred_worker_id = "");
@@ -103,18 +103,18 @@ public:
   bool update_task_status(const std::string& task_id, const std::string& status, int progress);
 
   // Shared resource access
-  DataBus& get_databus(const AgentId& agent_id);
+  MMDataBus& get_databus(const AgentId& agent_id);
 
 private:
   Config                                              config_;
   RuntimeRole                                         role_ = RuntimeRole::MASTER;
-  std::shared_ptr<WorkerEngine>                       local_worker_;
+  std::shared_ptr<MMWorkerEngine>                       local_worker_;
   std::shared_ptr<IRuntimeSharedState>                shared_state_;
   std::unique_ptr<master::Deployer>                   deployer_;
   std::unique_ptr<master::Scheduler>                  scheduler_;
 
   std::map<AgentId, AgentPtr>                          agents_;
-  std::map<AgentId, std::unique_ptr<DataBus>>          databuses_;
+  std::map<AgentId, std::unique_ptr<MMDataBus>>          databuses_;
   mutable std::mutex                                   agents_mutex_;
 
   // Execution thread pool for nodes
@@ -123,7 +123,7 @@ private:
   bool                     is_running_ = false;
   std::atomic<bool>        draining_{false};
 
-  // Node task queue
+  // MMNode task queue
   std::queue<std::pair<AgentPtr, NodePtr>> node_task_queue_;
   std::mutex                               task_queue_mutex_;
 
@@ -131,7 +131,7 @@ private:
   std::vector<int> worker_loads_;
   std::mutex       worker_load_mutex_;
 
-  // Workflow execution state tracking
+  // MMWorkflow execution state tracking
   struct WorkflowExecutionState {
     WorkflowId             workflow_id;
     AgentId                agent_id;
@@ -147,14 +147,14 @@ private:
   // Worker thread main loop
   void worker_thread_main();
 
-  // Agent Level Master functions
+  // MMAgent Level Master functions
   void monitor_agents();
   void agent_registration_loop();
   void agent_monitor_loop();
   void process_agent_state_change(const AgentId& agent_id, bool is_healthy);
   void check_agent_health(const AgentId& agent_id);
 
-  // Workflow Level Master functions
+  // MMWorkflow Level Master functions
   void schedule_workflow_executable_nodes(const std::string& execution_id);
   void update_workflow_state(const std::string& execution_id, const NodeId& node_id, bool success);
 

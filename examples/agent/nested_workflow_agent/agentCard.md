@@ -1,4 +1,4 @@
-# Nested Workflow Agent Example
+# Nested MMWorkflow MMAgent Example
 
 This example demonstrates **workflow-to-workflow calls** using the `workflow_ref` feature in AgentFlow.
 
@@ -6,7 +6,7 @@ This example demonstrates **workflow-to-workflow calls** using the `workflow_ref
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        Main Workflow                             │
+│                        Main MMWorkflow                             │
 │  ┌─────┐     ┌──────────────┐     ┌──────────────┐     ┌─────┐ │
 │  │start│ ──→ │ data_pipeline│ ──→ │final_process │ ──→ │ end │ │
 │  └─────┘     │  (workflow)  │     │  (workflow)  │     └─────┘ │
@@ -16,7 +16,7 @@ This example demonstrates **workflow-to-workflow calls** using the `workflow_ref
                       │                    │
                       ▼                    ▼
         ┌─────────────────────┐    ┌─────────────────────┐
-        │  Data Pipeline      │    │  Processing Workflow │
+        │  Data Pipeline      │    │  Processing MMWorkflow │
         │  ┌───────────────┐  │    │  ┌───────────────┐   │
         │  │  fetch_data   │  │    │  │ aggregate_data│   │
         │  └───────┬───────┘  │    │  └───────┬───────┘   │
@@ -35,7 +35,7 @@ This example demonstrates **workflow-to-workflow calls** using the `workflow_ref
                       │
                       ▼
         ┌─────────────────────┐
-        │ Validation Workflow │
+        │ Validation MMWorkflow │
         │  ┌───────────────┐  │
         │  │ check_schema  │  │
         │  └───────┬───────┘  │
@@ -56,27 +56,27 @@ This example demonstrates **workflow-to-workflow calls** using the `workflow_ref
 
 ```
 nested_workflow_agent/
-├── package.json              # Agent package configuration
+├── package.json              # MMAgent package configuration
 ├── main_workflow.json        # Main orchestrator workflow
 ├── data_pipeline.json        # Sub-workflow: data processing pipeline
 ├── validation_workflow.json  # Sub-workflow: validation (called by data_pipeline)
 └── processing_workflow.json  # Sub-workflow: final processing
 ```
 
-## Workflow Nesting Pattern
+## MMWorkflow Nesting Pattern
 
-### Level 1: Main Workflow
+### Level 1: Main MMWorkflow
 - `start` → `data_pipeline` (workflow_ref) → `final_processing` (workflow_ref) → `end`
 
 ### Level 2: Data Pipeline
 - `fetch_data` → `validate_data` (workflow_ref) → `transform_data`
 
-### Level 3: Validation Workflow (deepest)
+### Level 3: Validation MMWorkflow (deepest)
 - `check_schema` → `validate_fields` → `validation_report`
 
 ## Key Features Demonstrated
 
-1. **workflow_ref**: Node type `workflow` with `workflow_ref` field for nested workflow calls
+1. **workflow_ref**: MMNode type `workflow` with `workflow_ref` field for nested workflow calls
 2. **Multi-level nesting**: 3 levels deep (main → pipeline → validation)
 3. **Sequential orchestration**: Workflows execute in defined order via edges
 4. **Shell script execution**: Leaf nodes use `shell_script` execution mode
@@ -85,7 +85,7 @@ nested_workflow_agent/
 
 ```cpp
 // Load agent with nested workflows
-auto agent = framework::Agent::create_from_package("examples/agent/nested_workflow_agent");
+auto agent = framework::MMAgent::create_from_package("examples/agent/nested_workflow_agent");
 
 // Initialize and start
 agent->initialize();

@@ -30,7 +30,7 @@ namespace actor {
 // Forward declarations
 class NodeActor;
 class WorkflowActor;
-class AgentActor;
+class MMAgentActor;
 
 // Message types used in the actor system
 

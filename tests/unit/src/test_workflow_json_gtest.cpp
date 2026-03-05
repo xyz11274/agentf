@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// Google Test tests for JSON Workflow functionality
+// Google Test tests for JSON MMWorkflow functionality
 
 #include <gtest/gtest.h>
 #include <filesystem>
@@ -28,13 +28,13 @@ protected:
   // Sample valid workflow JSON
   const char* valid_workflow_json_ = R"({
     "id": "workflow_001",
-    "name": "Test Workflow",
+    "name": "Test MMWorkflow",
     "version": "1.0.0",
     "description": "A test workflow for unit testing",
     "nodes": [
       {
         "id": "node_start",
-        "name": "Start Node",
+        "name": "Start MMNode",
         "type": "TASK",
         "inputs": {
           "input_data": "string"
@@ -51,7 +51,7 @@ protected:
       },
       {
         "id": "node_process",
-        "name": "Process Node",
+        "name": "Process MMNode",
         "type": "TASK",
         "inputs": {
           "input_data": "string"
@@ -67,7 +67,7 @@ protected:
       },
       {
         "id": "node_end",
-        "name": "End Node",
+        "name": "End MMNode",
         "type": "TASK",
         "inputs": {
           "input_data": "string"
@@ -123,7 +123,7 @@ protected:
   // Sample workflow with loop
   const char* workflow_with_loop_json_ = R"({
     "id": "workflow_loop_001",
-    "name": "Loop Workflow",
+    "name": "Loop MMWorkflow",
     "version": "1.0.0",
     "nodes": [
       {
@@ -133,7 +133,7 @@ protected:
       },
       {
         "id": "node_loop",
-        "name": "Loop Node",
+        "name": "Loop MMNode",
         "type": "TASK",
         "config": {
           "loop_config": {
@@ -166,7 +166,7 @@ protected:
   // Sample workflow with parallel execution
   const char* workflow_parallel_json_ = R"({
     "id": "workflow_parallel_001",
-    "name": "Parallel Workflow",
+    "name": "Parallel MMWorkflow",
     "version": "1.0.0",
     "nodes": [
       {
@@ -216,7 +216,7 @@ protected:
 
   const char* workflow_with_control_cycle_json_ = R"({
     "id": "workflow_cycle_001",
-    "name": "Cycle Workflow",
+    "name": "Cycle MMWorkflow",
     "version": "1.0.0",
     "nodes": [
       {"id": "start", "name": "Start", "type": "TASK"},
@@ -236,7 +236,7 @@ protected:
 
   const char* workflow_with_nested_node_json_ = R"({
     "id": "workflow_nested_001",
-    "name": "Nested Workflow Node",
+    "name": "Nested MMWorkflow MMNode",
     "version": "1.0.0",
     "nodes": [
       {"id": "start", "name": "Start", "type": "TASK"},
@@ -251,7 +251,7 @@ protected:
 
   // Sample invalid workflow JSON - missing required fields
   const char* invalid_workflow_missing_id_json_ = R"({
-    "name": "Invalid Workflow",
+    "name": "Invalid MMWorkflow",
     "version": "1.0.0",
     "nodes": [],
     "edges": []
@@ -260,17 +260,17 @@ protected:
   // Sample invalid workflow JSON - duplicate node IDs
   const char* invalid_workflow_duplicate_nodes_json_ = R"({
     "id": "workflow_invalid",
-    "name": "Invalid Workflow",
+    "name": "Invalid MMWorkflow",
     "version": "1.0.0",
     "nodes": [
       {
         "id": "node_001",
-        "name": "Node 1",
+        "name": "MMNode 1",
         "type": "TASK"
       },
       {
         "id": "node_001",
-        "name": "Node 2",
+        "name": "MMNode 2",
         "type": "TASK"
       }
     ],
@@ -280,22 +280,22 @@ protected:
   // Sample invalid workflow JSON - circular dependency
   const char* invalid_workflow_circular_json_ = R"({
     "id": "workflow_circular",
-    "name": "Circular Workflow",
+    "name": "Circular MMWorkflow",
     "version": "1.0.0",
     "nodes": [
       {
         "id": "node_a",
-        "name": "Node A",
+        "name": "MMNode A",
         "type": "TASK"
       },
       {
         "id": "node_b",
-        "name": "Node B",
+        "name": "MMNode B",
         "type": "TASK"
       },
       {
         "id": "node_c",
-        "name": "Node C",
+        "name": "MMNode C",
         "type": "TASK"
       }
     ],
@@ -320,16 +320,16 @@ protected:
 };
 
 // ============================================================================
-// Workflow JSON Parsing Tests
+// MMWorkflow JSON Parsing Tests
 // ============================================================================
 
 TEST_F(WorkflowJsonTest, ParseValidWorkflow) {
   auto result = parser_->parse_workflow(valid_workflow_json_);
 
-  EXPECT_TRUE(result.is_valid()) << "Workflow parsing should succeed";
-  EXPECT_NE(result.workflow, nullptr) << "Workflow object should be created";
+  EXPECT_TRUE(result.is_valid()) << "MMWorkflow parsing should succeed";
+  EXPECT_NE(result.workflow, nullptr) << "MMWorkflow object should be created";
   EXPECT_EQ(result.workflow->get_id(), "workflow_001");
-  EXPECT_EQ(result.workflow->get_name(), "Test Workflow");
+  EXPECT_EQ(result.workflow->get_name(), "Test MMWorkflow");
   EXPECT_EQ(result.workflow->get_nodes().size(), 3) << "Should parse 3 nodes";
   EXPECT_EQ(result.workflow->get_edges().size(), 3) << "Should parse 3 edges";
 }
@@ -337,7 +337,7 @@ TEST_F(WorkflowJsonTest, ParseValidWorkflow) {
 TEST_F(WorkflowJsonTest, ParseWorkflowWithLoop) {
   auto result = parser_->parse_workflow(workflow_with_loop_json_);
 
-  EXPECT_TRUE(result.is_valid()) << "Workflow with loop should parse successfully";
+  EXPECT_TRUE(result.is_valid()) << "MMWorkflow with loop should parse successfully";
   EXPECT_NE(result.workflow, nullptr);
   EXPECT_EQ(result.workflow->get_nodes().size(), 3);
 }
@@ -360,20 +360,20 @@ TEST_F(WorkflowJsonTest, ParseParallelWorkflow) {
 TEST_F(WorkflowJsonTest, ParseWorkflowMissingId) {
   auto result = parser_->parse_workflow(invalid_workflow_missing_id_json_);
 
-  EXPECT_FALSE(result.is_valid()) << "Workflow without ID should fail validation";
+  EXPECT_FALSE(result.is_valid()) << "MMWorkflow without ID should fail validation";
   EXPECT_FALSE(result.errors.empty()) << "Should have parse errors";
 }
 
 TEST_F(WorkflowJsonTest, ParseWorkflowDuplicateNodeIds) {
   auto result = parser_->parse_workflow(invalid_workflow_duplicate_nodes_json_);
 
-  EXPECT_FALSE(result.is_valid()) << "Workflow with duplicate node IDs should fail";
+  EXPECT_FALSE(result.is_valid()) << "MMWorkflow with duplicate node IDs should fail";
 }
 
 TEST_F(WorkflowJsonTest, ParseWorkflowCircularDependency) {
   auto result = parser_->parse_workflow(invalid_workflow_circular_json_);
 
-  // Workflow with circular dependency should parse but validation should fail
+  // MMWorkflow with circular dependency should parse but validation should fail
   EXPECT_NE(result.workflow, nullptr) << "Circular workflow should still parse";
 
   bool is_valid = result.workflow->validate();
@@ -381,7 +381,7 @@ TEST_F(WorkflowJsonTest, ParseWorkflowCircularDependency) {
 }
 
 // ============================================================================
-// Node Configuration Tests
+// MMNode Configuration Tests
 // ============================================================================
 
 TEST_F(WorkflowJsonTest, ParseNodeConfiguration) {
@@ -407,7 +407,7 @@ TEST_F(WorkflowJsonTest, ParseNodeExecutionModesGoAndJavaJar) {
     "nodes": [
       {
         "id": "go_node",
-        "name": "Go Node",
+        "name": "Go MMNode",
         "type": "TASK",
         "config": {
           "execution_mode": "go_script",
@@ -416,7 +416,7 @@ TEST_F(WorkflowJsonTest, ParseNodeExecutionModesGoAndJavaJar) {
       },
       {
         "id": "java_node",
-        "name": "Java Node",
+        "name": "Java MMNode",
         "type": "TASK",
         "config": {
           "execution_mode": "java_jar",
@@ -433,11 +433,11 @@ TEST_F(WorkflowJsonTest, ParseNodeExecutionModesGoAndJavaJar) {
 
   auto go_node = result.workflow->get_node("go_node");
   ASSERT_NE(go_node, nullptr);
-  EXPECT_EQ(go_node->get_config().execution_mode, framework::Node::ExecutionMode::GO_SCRIPT);
+  EXPECT_EQ(go_node->get_config().execution_mode, framework::MMNode::ExecutionMode::GO_SCRIPT);
 
   auto java_node = result.workflow->get_node("java_node");
   ASSERT_NE(java_node, nullptr);
-  EXPECT_EQ(java_node->get_config().execution_mode, framework::Node::ExecutionMode::JAVA_JAR);
+  EXPECT_EQ(java_node->get_config().execution_mode, framework::MMNode::ExecutionMode::JAVA_JAR);
   EXPECT_EQ(java_node->get_config().main_class, "com.example.Main");
 }
 
@@ -482,7 +482,7 @@ TEST_F(WorkflowJsonTest, ParseWorkflowIncludes) {
       "id": "subflow_001",
       "name": "SubFlow",
       "version": "1.0.0",
-      "nodes": [{"id": "sub_node", "name": "Sub Node", "type": "TASK"}],
+      "nodes": [{"id": "sub_node", "name": "Sub MMNode", "type": "TASK"}],
       "edges": []
     })";
   }
@@ -494,7 +494,7 @@ TEST_F(WorkflowJsonTest, ParseWorkflowIncludes) {
       "name": "MainFlow",
       "version": "1.0.0",
       "includes": ["subflow.json"],
-      "nodes": [{"id": "main_node", "name": "Main Node", "type": "TASK"}],
+      "nodes": [{"id": "main_node", "name": "Main MMNode", "type": "TASK"}],
       "edges": []
     })";
   }
@@ -526,7 +526,7 @@ TEST_F(WorkflowJsonTest, ParseDynamicWorkflowPatternFile) {
 }
 
 // ============================================================================
-// Edge Configuration Tests
+// MMEdge Configuration Tests
 // ============================================================================
 
 TEST_F(WorkflowJsonTest, ParseEdgeConfiguration) {
@@ -552,7 +552,7 @@ TEST_F(WorkflowJsonTest, ParseEdgeConditionExpression) {
   const auto& edges = result.workflow->get_edges();
 
   // Find the edge with condition
-  agentflow::framework::Edge* conditional_edge = nullptr;
+  agentflow::framework::MMEdge* conditional_edge = nullptr;
   for(const auto& edge_ptr : edges) {
     if(edge_ptr->get_id() == "edge_conditional") {
       conditional_edge = edge_ptr.get();
@@ -727,7 +727,7 @@ TEST_F(WorkflowJsonTest, WorkflowVersionParsing) {
   auto result = parser_->parse_workflow(valid_workflow_json_);
 
   ASSERT_TRUE(result.is_valid());
-  EXPECT_EQ(result.workflow->get_name(), "Test Workflow");
+  EXPECT_EQ(result.workflow->get_name(), "Test MMWorkflow");
   EXPECT_EQ(result.workflow->get_id(), "workflow_001");
 }
 
@@ -740,7 +740,7 @@ TEST_F(WorkflowJsonTest, WorkflowMetadataParsing) {
 }
 
 // ============================================================================
-// Workflow Graph Validation Tests
+// MMWorkflow Graph Validation Tests
 // ============================================================================
 
 TEST_F(WorkflowJsonTest, ValidateWorkflowGraphStructure) {
@@ -773,7 +773,7 @@ TEST_F(WorkflowJsonTest, ValidateNodeIdsUnique) {
 TEST_F(WorkflowJsonTest, ParseEdgeControlConfig) {
   auto result = parser_->parse_workflow(R"({
     "id": "workflow_control_001",
-    "name": "Control Workflow",
+    "name": "Control MMWorkflow",
     "version": "1.0.0",
     "nodes": [
       {"id": "n1", "name": "N1", "type": "TASK"},
@@ -793,7 +793,7 @@ TEST_F(WorkflowJsonTest, ParseEdgeControlConfig) {
   ASSERT_NE(result.workflow, nullptr);
   const auto& edges = result.workflow->get_edges();
   ASSERT_EQ(edges.size(), 1u);
-  EXPECT_EQ(edges[0]->get_control_type(), agentflow::framework::Edge::ControlType::ASYNC);
+  EXPECT_EQ(edges[0]->get_control_type(), agentflow::framework::MMEdge::ControlType::ASYNC);
   EXPECT_EQ(edges[0]->get_control_config().callback_node, "n1");
 }
 
@@ -827,7 +827,7 @@ TEST_F(WorkflowJsonTest, HandleMissingNodes) {
     "edges": []
   })");
 
-  EXPECT_TRUE(result.is_valid()) << "Workflow without nodes should be valid (partial definition)";
+  EXPECT_TRUE(result.is_valid()) << "MMWorkflow without nodes should be valid (partial definition)";
 }
 
 TEST_F(WorkflowJsonTest, HandleMissingEdges) {

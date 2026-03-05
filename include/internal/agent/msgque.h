@@ -10,7 +10,7 @@
 namespace agentflow {
 namespace framework {
 
-class AgentMsgQue {
+class MMAgentMsgQue {
 public:
   enum class MessageType {
     TASK_REQUEST  = 0,
@@ -46,8 +46,8 @@ public:
     int     low_priority_queues = 1;
   };
 
-  explicit AgentMsgQue(const Config& config);
-  ~AgentMsgQue();
+  explicit MMAgentMsgQue(const Config& config);
+  ~MMAgentMsgQue();
 
   bool enqueue_message(const Message& message);
   bool dequeue_message(Message& message);
@@ -77,7 +77,7 @@ private:
   mutable std::mutex        mutex_;
 };
 
-using AgentMessages = AgentMsgQue;
+using AgentMessages = MMAgentMsgQue;
 
 }  // namespace framework
 }  // namespace agentflow

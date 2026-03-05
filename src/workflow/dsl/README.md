@@ -14,7 +14,7 @@ AgentFlow 工作流 DSL 是一个 JSON（或 JSONC —— 带注释的 JSON）�
 {
   "version": "1.0",            // 必需 – DSL 模式版本
   "id":      "my_workflow",    // 必需 – 唯一的工作流标识符
-  "name":    "My Workflow",    // 可选 – 显示名称
+  "name":    "My MMWorkflow",    // 可选 – 显示名称
   "description": "…",         // 可选
   "dsl_file":    "path/to.jsonc",  // 可选 – 存储以便追踪
   "includes": ["subflow.json"],    // 可选 – 引入子 workflow

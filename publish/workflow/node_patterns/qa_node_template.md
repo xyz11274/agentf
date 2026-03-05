@@ -1,4 +1,4 @@
-# QA Node Template
+# QA MMNode Template
 
 ## Prompt Pattern
 - System: define domain policy

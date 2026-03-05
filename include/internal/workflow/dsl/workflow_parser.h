@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// DSL Workflow Parser - Parse JSON DSL to create Workflow objects
+// DSL MMWorkflow Parser - Parse JSON DSL to create MMWorkflow objects
 
 #ifndef AGENTFLOW_DSL_WORKFLOW_PARSER_H
 #define AGENTFLOW_DSL_WORKFLOW_PARSER_H
@@ -48,8 +48,8 @@ struct ParseError {
  * @brief Parse result with workflow and optional errors
  */
 struct ParseResult {
-  std::shared_ptr<framework::Workflow> workflow;
-  std::shared_ptr<framework::Agent>    agent;
+  std::shared_ptr<framework::MMWorkflow> workflow;
+  std::shared_ptr<framework::MMAgent>    agent;
   std::vector<ParseError>              errors;
   std::vector<std::string>             warnings;
 
@@ -75,8 +75,8 @@ struct DslVersion {
 };
 
 /**
- * @brief Workflow DSL Parser
- * Parses JSON DSL format to create Workflow, Node, Edge objects
+ * @brief MMWorkflow DSL Parser
+ * Parses JSON DSL format to create MMWorkflow, MMNode, MMEdge objects
  */
 class WorkflowParser {
 public:
@@ -113,54 +113,54 @@ public:
 
   /**
    * @brief Validate parsed workflow
-   * @param workflow Workflow to validate
+   * @param workflow MMWorkflow to validate
    * @return true if valid, errors populated in result
    */
-  bool validate_workflow(std::shared_ptr<framework::Workflow> workflow, ParseResult& result);
+  bool validate_workflow(std::shared_ptr<framework::MMWorkflow> workflow, ParseResult& result);
 
   /**
    * @brief Validate parsed agent
-   * @param agent Agent to validate
+   * @param agent MMAgent to validate
    * @return true if valid, errors populated in result
    */
-  bool validate_agent(std::shared_ptr<framework::Agent> agent, ParseResult& result);
+  bool validate_agent(std::shared_ptr<framework::MMAgent> agent, ParseResult& result);
 
 private:
   // Core parsing methods
   bool parse_workflow_root(std::shared_ptr<const IJsonValue> root, ParseResult& result);
   bool parse_agent_root(std::shared_ptr<const IJsonValue> root, ParseResult& result);
 
-  // Workflow parsing
+  // MMWorkflow parsing
   bool parse_workflow_metadata(std::shared_ptr<const IJsonValue> obj,
-                               framework::Workflow::Config& config, ParseResult& result,
+                               framework::MMWorkflow::Config& config, ParseResult& result,
                                const std::string& path);
   bool parse_nodes(std::shared_ptr<const IJsonValue> nodes_array, ParseResult& result,
                    const std::string& path);
   bool parse_edges(std::shared_ptr<const IJsonValue> edges_array, ParseResult& result,
                    const std::string& path);
 
-  // Node parsing
+  // MMNode parsing
   bool parse_node(std::shared_ptr<const IJsonValue> node_obj, ParseResult& result,
                   const std::string& path);
   bool parse_node_config(std::shared_ptr<const IJsonValue> node_obj,
-                         framework::Node::Config& config, ParseResult& result,
+                         framework::MMNode::Config& config, ParseResult& result,
                          const std::string& path);
   bool parse_node_inputs(std::shared_ptr<const IJsonValue> node_obj,
-                         framework::Node::Config& config, ParseResult& result,
+                         framework::MMNode::Config& config, ParseResult& result,
                          const std::string& path);
   bool parse_node_outputs(std::shared_ptr<const IJsonValue> node_obj,
-                          framework::Node::Config& config, ParseResult& result,
+                          framework::MMNode::Config& config, ParseResult& result,
                           const std::string& path);
 
-  // Edge parsing
+  // MMEdge parsing
   bool parse_edge(std::shared_ptr<const IJsonValue> edge_obj, ParseResult& result,
                   const std::string& path);
   bool parse_edge_config(std::shared_ptr<const IJsonValue> edge_obj,
-                         framework::Edge::Config& config, ParseResult& result,
+                         framework::MMEdge::Config& config, ParseResult& result,
                          const std::string& path);
 
-  // Agent parsing
-  bool parse_agent_config(std::shared_ptr<const IJsonValue> obj, framework::Agent::Config& config,
+  // MMAgent parsing
+  bool parse_agent_config(std::shared_ptr<const IJsonValue> obj, framework::MMAgent::Config& config,
                           ParseResult& result, const std::string& path);
   bool parse_agent_workflows(std::shared_ptr<const IJsonValue> workflows_array, ParseResult& result,
                              const std::string& path);
@@ -168,15 +168,15 @@ private:
                           const std::string& path);
 
   // Validation methods
-  bool validate_workflow_structure(std::shared_ptr<framework::Workflow> workflow,
+  bool validate_workflow_structure(std::shared_ptr<framework::MMWorkflow> workflow,
                                    ParseResult&                         result);
   bool validate_node_ids_unique(ParseResult& result);
-  bool validate_edge_references(std::shared_ptr<framework::Workflow> workflow, ParseResult& result);
+  bool validate_edge_references(std::shared_ptr<framework::MMWorkflow> workflow, ParseResult& result);
 
   // Member variables
   ParseResult                          current_result_;
-  std::shared_ptr<framework::Workflow> current_workflow_;
-  std::shared_ptr<framework::Agent>    current_agent_;
+  std::shared_ptr<framework::MMWorkflow> current_workflow_;
+  std::shared_ptr<framework::MMAgent>    current_agent_;
   std::map<NodeId, std::string>        node_id_to_name_;
   std::string                          current_workflow_file_;
   std::unordered_set<std::string>      include_guard_;

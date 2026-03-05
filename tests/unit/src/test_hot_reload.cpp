@@ -732,19 +732,19 @@ TEST_F(HotReloadTest, Backup_BeforeReload) {
 }
 
 // ============================================================================
-// Node Integration Tests
+// MMNode Integration Tests
 // ============================================================================
 
 TEST_F(HotReloadTest, Node_ShellScriptNode) {
-  framework::Node::Config config;
+  framework::MMNode::Config config;
   config.id                = "test_node_shell";
-  config.name              = "Test Shell Node";
+  config.name              = "Test Shell MMNode";
   config.type              = "test";
-  config.execution_mode    = framework::Node::ExecutionMode::SHELL_SCRIPT;
-  config.command           = create_shell_script("node_shell.sh", "echo 'Node execution'");
+  config.execution_mode    = framework::MMNode::ExecutionMode::SHELL_SCRIPT;
+  config.command           = create_shell_script("node_shell.sh", "echo 'MMNode execution'");
   config.enable_hot_reload = true;
 
-  framework::Node node(config);
+  framework::MMNode node(config);
   ASSERT_TRUE(node.initialize());
 
   ASSERT_TRUE(node.execute());
@@ -754,15 +754,15 @@ TEST_F(HotReloadTest, Node_ShellScriptNode) {
 }
 
 TEST_F(HotReloadTest, Node_PythonScriptNode) {
-  framework::Node::Config config;
+  framework::MMNode::Config config;
   config.id                = "test_node_python";
-  config.name              = "Test Python Node";
+  config.name              = "Test Python MMNode";
   config.type              = "test";
-  config.execution_mode    = framework::Node::ExecutionMode::PYTHON_SCRIPT;
-  config.command           = create_python_script("node_python.py", "print('Node execution')");
+  config.execution_mode    = framework::MMNode::ExecutionMode::PYTHON_SCRIPT;
+  config.command           = create_python_script("node_python.py", "print('MMNode execution')");
   config.enable_hot_reload = true;
 
-  framework::Node node(config);
+  framework::MMNode node(config);
   ASSERT_TRUE(node.initialize());
 
   ASSERT_TRUE(node.execute());
@@ -775,15 +775,15 @@ TEST_F(HotReloadTest, DISABLED_Node_HotReloadIntegration) {
   auto& loader = global_code_loader();
   (void)loader;
 
-  framework::Node::Config config;
+  framework::MMNode::Config config;
   config.id                = "test_node_hotreload";
-  config.name              = "Test Hot Reload Node";
+  config.name              = "Test Hot Reload MMNode";
   config.type              = "test";
-  config.execution_mode    = framework::Node::ExecutionMode::SHELL_SCRIPT;
+  config.execution_mode    = framework::MMNode::ExecutionMode::SHELL_SCRIPT;
   config.command           = create_shell_script("node_integration.sh", "echo 'Version 1'");
   config.enable_hot_reload = true;
 
-  framework::Node node(config);
+  framework::MMNode node(config);
   ASSERT_TRUE(node.initialize());
   // Execute version 1
   ASSERT_TRUE(node.execute());
@@ -815,15 +815,15 @@ TEST_F(HotReloadTest, DISABLED_Node_HotReloadIntegration) {
 }
 
 TEST_F(HotReloadTest, Node_RollbackIntegration) {
-  framework::Node::Config config;
+  framework::MMNode::Config config;
   config.id                = "test_node_rollback";
-  config.name              = "Test Rollback Node";
+  config.name              = "Test Rollback MMNode";
   config.type              = "test";
-  config.execution_mode    = framework::Node::ExecutionMode::SHELL_SCRIPT;
+  config.execution_mode    = framework::MMNode::ExecutionMode::SHELL_SCRIPT;
   config.command           = create_shell_script("node_rollback.sh", "echo 'Original'");
   config.enable_hot_reload = true;
 
-  framework::Node node(config);
+  framework::MMNode node(config);
   ASSERT_TRUE(node.initialize());
   auto version1 = node.get_code_version();
   ASSERT_NE(version1, nullptr);
@@ -848,15 +848,15 @@ TEST_F(HotReloadTest, Node_RollbackIntegration) {
 }
 
 TEST_F(HotReloadTest, Node_DefaultHotReloadWithoutEnable) {
-  framework::Node::Config config;
+  framework::MMNode::Config config;
   config.id                = "test_node_no_reload";
-  config.name              = "Test No Reload Node";
+  config.name              = "Test No Reload MMNode";
   config.type              = "test";
-  config.execution_mode    = framework::Node::ExecutionMode::SHELL_SCRIPT;
+  config.execution_mode    = framework::MMNode::ExecutionMode::SHELL_SCRIPT;
   config.command           = create_shell_script("node_no_reload.sh", "echo 'test'");
   config.enable_hot_reload = true;
 
-  framework::Node node(config);
+  framework::MMNode node(config);
   ASSERT_TRUE(node.initialize());
 
   ASSERT_TRUE(node.execute());

@@ -45,16 +45,16 @@ int64_t get_current_timestamp_ms() {
 }
 
 /**
- * Convert Agent::Config to JSON string
+ * Convert MMAgent::Config to JSON string
  */
-std::string agent_config_to_json(const Agent::Config&                            config,
-                                 const std::vector<std::shared_ptr<Workflow>>& workflows) {
+std::string agent_config_to_json(const MMAgent::Config&                            config,
+                                 const std::vector<std::shared_ptr<MMWorkflow>>& workflows) {
 #ifdef AGENTFLOW_WITH_RAPIDJSON
   rapidjson::Document doc;
   doc.SetObject();
   rapidjson::Document::AllocatorType& allocator = doc.GetAllocator();
 
-  // Agent config
+  // MMAgent config
   rapidjson::Value agent_obj(rapidjson::kObjectType);
   agent_obj.AddMember("id", rapidjson::StringRef(config.id.c_str()), allocator);
   agent_obj.AddMember("name", rapidjson::StringRef(config.name.c_str()), allocator);
@@ -92,10 +92,10 @@ std::string agent_config_to_json(const Agent::Config&                           
 }
 
 /**
- * Parse Agent::Config from JSON string
+ * Parse MMAgent::Config from JSON string
  */
-bool agent_config_from_json(const std::string& json_str, Agent::Config& config,
-                            std::vector<Workflow::Config>& workflow_configs) {
+bool agent_config_from_json(const std::string& json_str, MMAgent::Config& config,
+                            std::vector<MMWorkflow::Config>& workflow_configs) {
 #ifdef AGENTFLOW_WITH_RAPIDJSON
   rapidjson::Document doc;
   doc.Parse(json_str.c_str());
@@ -115,7 +115,7 @@ bool agent_config_from_json(const std::string& json_str, Agent::Config& config,
   if(agent_obj.HasMember("description"))
     config.description = agent_obj["description"].GetString();
   if(agent_obj.HasMember("policy"))
-    config.policy = static_cast<Agent::LifecyclePolicy>(agent_obj["policy"].GetInt());
+    config.policy = static_cast<MMAgent::LifecyclePolicy>(agent_obj["policy"].GetInt());
   if(agent_obj.HasMember("max_workflows"))
     config.max_workflows = agent_obj["max_workflows"].GetInt();
   if(agent_obj.HasMember("max_concurrent_workflows"))
@@ -128,7 +128,7 @@ bool agent_config_from_json(const std::string& json_str, Agent::Config& config,
     const rapidjson::Value& workflows_array = doc["workflows"];
     for(rapidjson::SizeType i = 0; i < workflows_array.Size(); ++i) {
       const rapidjson::Value& workflow_obj = workflows_array[i];
-      Workflow::Config        wf_config;
+      MMWorkflow::Config        wf_config;
 
       if(workflow_obj.HasMember("id"))
         wf_config.id = workflow_obj["id"].GetString();
@@ -160,11 +160,11 @@ bool agent_config_from_json(const std::string& json_str, Agent::Config& config,
 
 }  // namespace
 
-Agent::Agent(const Config& config) : config_(config), state_(AgentState::CREATED) {
+MMAgent::MMAgent(const Config& config) : config_(config), state_(AgentState::CREATED) {
   initialize_components();
 }
 
-std::shared_ptr<Agent> Agent::create_from_package(const std::string& package_path) {
+std::shared_ptr<MMAgent> MMAgent::create_from_package(const std::string& package_path) {
   auto package = AgentPackage::load_from_directory(package_path);
   if (!package) {
     // We don't have direct access to logger macros here easily unless we included logger
@@ -173,18 +173,18 @@ std::shared_ptr<Agent> Agent::create_from_package(const std::string& package_pat
     return nullptr;
   }
 
-  Agent::Config config;
+  MMAgent::Config config;
   config.id = package->get_package_id();
   config.name = package->get_package_name();
   config.version = package->get_version();
   config.description = package->get_config().description;
   
   // Set default policies
-  config.policy = Agent::LifecyclePolicy::PER_REQUEST;
+  config.policy = MMAgent::LifecyclePolicy::PER_REQUEST;
   config.max_workflows = 10;
   config.max_concurrent_workflows = 5;
 
-  auto agent = std::make_shared<Agent>(config);
+  auto agent = std::make_shared<MMAgent>(config);
   
   // Re-initialize with package to ensure the package component is set correctly
   agent->initialize_components(package);
@@ -214,14 +214,14 @@ std::shared_ptr<Agent> Agent::create_from_package(const std::string& package_pat
         }
       }
     } else {
-      std::cerr << "Workflow file not found: " << wf_path.string() << std::endl;
+      std::cerr << "MMWorkflow file not found: " << wf_path.string() << std::endl;
     }
   }
 
   return agent;
 }
 
-Agent::~Agent() {
+MMAgent::~MMAgent() {
   request_event_running_ = false;
   request_event_cv_.notify_all();
   if(request_event_thread_.joinable()) {
@@ -240,22 +240,22 @@ Agent::~Agent() {
   cleanup_resources();
 }
 
-bool Agent::initialize_components(std::shared_ptr<AgentPackage> package) {
+bool MMAgent::initialize_components(std::shared_ptr<AgentPackage> package) {
   sessions_.clear();
 
   // Initialize task component
-  AgentTask::Config task_config;
+  MMAgentTask::Config task_config;
   task_config.task_id = config_.id + "_task";
   task_config.task_type = "default";
   if(package) {
     task_config.task_context_workflow = package->get_config().task_context_workflow;
   }
-  current_task_ = std::make_shared<AgentTask>(task_config);
+  current_task_ = std::make_shared<MMAgentTask>(task_config);
 
   // Initialize messages component
-  AgentMsgQue::Config messages_config;
+  MMAgentMsgQue::Config messages_config;
   messages_config.max_queue_size = 1024;
-  messages_ = std::make_shared<AgentMsgQue>(messages_config);
+  messages_ = std::make_shared<MMAgentMsgQue>(messages_config);
 
   // Initialize context component
   AgentContext::Config context_config;
@@ -267,10 +267,10 @@ bool Agent::initialize_components(std::shared_ptr<AgentPackage> package) {
   context_ = std::make_shared<AgentContext>(context_config);
 
   // Initialize event component
-  AgentEvent::Config event_config;
+  MMAgentEvent::Config event_config;
   event_config.handler_id = config_.id + "_event_handler";
   event_config.async_dispatch = false;
-  event_ = std::make_shared<AgentEvent>(event_config);
+  event_ = std::make_shared<MMAgentEvent>(event_config);
 
   // Initialize package component
   if (package) {
@@ -288,8 +288,8 @@ bool Agent::initialize_components(std::shared_ptr<AgentPackage> package) {
   return true;
 }
 
-std::shared_ptr<AgentSession> Agent::create_session_with_defaults(const std::string& session_id) {
-  AgentSession::Config session_config;
+std::shared_ptr<MMAgentSession> MMAgent::create_session_with_defaults(const std::string& session_id) {
+  MMAgentSession::Config session_config;
   session_config.session_id = session_id;
   if(package_) {
     session_config.coordinator_workflow = package_->get_config().coordinator_workflow;
@@ -297,9 +297,9 @@ std::shared_ptr<AgentSession> Agent::create_session_with_defaults(const std::str
     session_config.session_context_workflow = package_->get_config().session_context_workflow;
     session_config.task_context_workflow = package_->get_config().task_context_workflow;
   }
-  auto session = std::make_shared<AgentSession>(session_config);
+  auto session = std::make_shared<MMAgentSession>(session_config);
 
-  AgentTask::Config coordinator_task_config;
+  MMAgentTask::Config coordinator_task_config;
   coordinator_task_config.task_id = session_id + "_task_0";
   coordinator_task_config.task_type = "task0";
   coordinator_task_config.session_id = session_id;
@@ -312,7 +312,7 @@ std::shared_ptr<AgentSession> Agent::create_session_with_defaults(const std::str
     }
   }
   coordinator_task_config.workflow_file = resolve_workflow_file(coordinator_task_config.workflow_id);
-  auto coordinator_task = std::make_shared<AgentTask>(coordinator_task_config);
+  auto coordinator_task = std::make_shared<MMAgentTask>(coordinator_task_config);
   session->add_task(coordinator_task);
 
   SessionTaskCoordinator::Config coordinator_config;
@@ -332,7 +332,7 @@ std::shared_ptr<AgentSession> Agent::create_session_with_defaults(const std::str
   return session;
 }
 
-std::string Agent::resolve_workflow_file(const std::string& workflow_ref) const {
+std::string MMAgent::resolve_workflow_file(const std::string& workflow_ref) const {
   if(workflow_ref.empty()) {
     return "";
   }
@@ -344,7 +344,7 @@ std::string Agent::resolve_workflow_file(const std::string& workflow_ref) const 
   return workflow_ref;
 }
 
-std::shared_ptr<AgentSession> Agent::get_or_create_session(const std::string& user_id,
+std::shared_ptr<MMAgentSession> MMAgent::get_or_create_session(const std::string& user_id,
                                                            const std::string& client_id) {
   const std::string session_key = user_id + ":" + client_id;
   {
@@ -357,7 +357,7 @@ std::shared_ptr<AgentSession> Agent::get_or_create_session(const std::string& us
   return create_session_with_defaults(session_key);
 }
 
-std::shared_ptr<AgentSession> Agent::get_session_by_key(const std::string& session_key) const {
+std::shared_ptr<MMAgentSession> MMAgent::get_session_by_key(const std::string& session_key) const {
   auto it = sessions_.find(session_key);
   if(it == sessions_.end()) {
     return nullptr;
@@ -365,7 +365,22 @@ std::shared_ptr<AgentSession> Agent::get_session_by_key(const std::string& sessi
   return it->second;
 }
 
-bool Agent::route_request_message(const AgentMsgQue::Message& message) {
+std::shared_ptr<MMAgentSession> MMAgent::get_session(const std::string& session_key) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return get_session_by_key(session_key);
+}
+
+std::vector<std::shared_ptr<MMAgentSession>> MMAgent::get_sessions() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<std::shared_ptr<MMAgentSession>> out;
+  out.reserve(sessions_.size());
+  for(const auto& kv : sessions_) {
+    out.push_back(kv.second);
+  }
+  return out;
+}
+
+bool MMAgent::route_request_message(const MMAgentMsgQue::Message& message) {
   if(!request_event_running_) {
     handle_request_event(message);
     return true;
@@ -378,7 +393,7 @@ bool Agent::route_request_message(const AgentMsgQue::Message& message) {
   return true;
 }
 
-int Agent::process_session_messages(const std::string& session_key) {
+int MMAgent::process_session_messages(const std::string& session_key) {
   auto session = get_session_by_key(session_key);
   auto session_coordinator = session ? session->get_task_coordinator() : nullptr;
   if(!session || !session_coordinator) {
@@ -394,7 +409,7 @@ int Agent::process_session_messages(const std::string& session_key) {
   return static_cast<int>(tasks.size());
 }
 
-int Agent::process_all_sessions_until_idle() {
+int MMAgent::process_all_sessions_until_idle() {
   if(!coordinator_) {
     return 0;
   }
@@ -403,7 +418,7 @@ int Agent::process_all_sessions_until_idle() {
   int rounds = 0;
   while(rounds++ < 64) {
     int round_tasks = 0;
-    std::vector<std::shared_ptr<AgentSession>> snapshot;
+    std::vector<std::shared_ptr<MMAgentSession>> snapshot;
     {
       std::lock_guard<std::mutex> lock(mutex_);
       for(const auto& kv : sessions_) {
@@ -427,7 +442,7 @@ int Agent::process_all_sessions_until_idle() {
           generated_tasks_.push(task);
         }
       }
-      AgentMsgQue::Message out;
+      MMAgentMsgQue::Message out;
       while(session->dequeue_send_message(out)) {
       }
     }
@@ -447,7 +462,7 @@ int Agent::process_all_sessions_until_idle() {
   return total_tasks;
 }
 
-bool Agent::pop_generated_task(std::shared_ptr<AgentTask>& task) {
+bool MMAgent::pop_generated_task(std::shared_ptr<MMAgentTask>& task) {
   std::lock_guard<std::mutex> lock(generated_tasks_mutex_);
   if(generated_tasks_.empty()) {
     return false;
@@ -457,37 +472,37 @@ bool Agent::pop_generated_task(std::shared_ptr<AgentTask>& task) {
   return static_cast<bool>(task);
 }
 
-void Agent::add_workflow(std::shared_ptr<Workflow> workflow) {
+void MMAgent::add_workflow(std::shared_ptr<MMWorkflow> workflow) {
   if(workflow && workflow_map_.size() < static_cast<size_t>(config_.max_workflows)) {
     workflow_map_[workflow->get_id()] = workflow;
     workflows_.push_back(workflow);
   }
 }
 
-void Agent::remove_workflow(const WorkflowId& workflow_id) {
+void MMAgent::remove_workflow(const WorkflowId& workflow_id) {
   auto it = workflow_map_.find(workflow_id);
   if(it != workflow_map_.end()) {
     workflow_map_.erase(it);
     workflows_.erase(std::remove_if(workflows_.begin(), workflows_.end(),
-                                    [&workflow_id](const std::shared_ptr<Workflow>& w) {
+                                    [&workflow_id](const std::shared_ptr<MMWorkflow>& w) {
                                       return w->get_id() == workflow_id;
                                     }),
                      workflows_.end());
   }
 }
 
-std::shared_ptr<Workflow> Agent::get_workflow(const WorkflowId& workflow_id) {
+std::shared_ptr<MMWorkflow> MMAgent::get_workflow(const WorkflowId& workflow_id) {
   auto it = workflow_map_.find(workflow_id);
   return it != workflow_map_.end() ? it->second : nullptr;
 }
 
-bool Agent::initialize_resources() {
+bool MMAgent::initialize_resources() {
   // Initialize shared resources
   state_ = AgentState::INITIALIZED;
   return true;
 }
 
-void Agent::cleanup_resources() {
+void MMAgent::cleanup_resources() {
   // Clean up shared resources
   data_bus_.clear();
   while(!event_queue_.empty()) {
@@ -495,13 +510,13 @@ void Agent::cleanup_resources() {
   }
 }
 
-bool Agent::publish_data(const std::string& key, const DataVariant& value) {
+bool MMAgent::publish_data(const std::string& key, const DataVariant& value) {
   std::lock_guard<std::mutex> lock(mutex_);
   data_bus_[key] = value;
   return true;
 }
 
-bool Agent::get_data(const std::string& key, DataVariant& value) {
+bool MMAgent::get_data(const std::string& key, DataVariant& value) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto                        it = data_bus_.find(key);
   if(it != data_bus_.end()) {
@@ -511,12 +526,12 @@ bool Agent::get_data(const std::string& key, DataVariant& value) {
   return false;
 }
 
-void Agent::post_event(const std::string& event) {
+void MMAgent::post_event(const std::string& event) {
   std::lock_guard<std::mutex> lock(event_mutex_);
   event_queue_.push(event);
 }
 
-std::string Agent::get_event() {
+std::string MMAgent::get_event() {
   std::lock_guard<std::mutex> lock(event_mutex_);
   if(!event_queue_.empty()) {
     std::string event = event_queue_.front();
@@ -526,7 +541,7 @@ std::string Agent::get_event() {
   return "";
 }
 
-bool Agent::initialize() {
+bool MMAgent::initialize() {
   if(!initialize_resources()) {
     return false;
   }
@@ -541,18 +556,18 @@ bool Agent::initialize() {
   return true;
 }
 
-bool Agent::start() {
+bool MMAgent::start() {
   if(state_ != AgentState::INITIALIZED) {
     return false;
   }
   if(!request_event_running_.exchange(true)) {
-    request_event_thread_ = std::thread(&Agent::request_event_loop, this);
+    request_event_thread_ = std::thread(&MMAgent::request_event_loop, this);
   }
   state_ = AgentState::RUNNING;
   return true;
 }
 
-bool Agent::pause() {
+bool MMAgent::pause() {
   if(state_ != AgentState::RUNNING) {
     return false;
   }
@@ -560,7 +575,7 @@ bool Agent::pause() {
   return true;
 }
 
-bool Agent::resume() {
+bool MMAgent::resume() {
   if(state_ != AgentState::PAUSED) {
     return false;
   }
@@ -568,7 +583,7 @@ bool Agent::resume() {
   return true;
 }
 
-bool Agent::stop() {
+bool MMAgent::stop() {
   if(state_ != AgentState::RUNNING && state_ != AgentState::PAUSED) {
     return false;
   }
@@ -582,9 +597,9 @@ bool Agent::stop() {
   return true;
 }
 
-void Agent::request_event_loop() {
+void MMAgent::request_event_loop() {
   while(request_event_running_) {
-    AgentMsgQue::Message message;
+    MMAgentMsgQue::Message message;
     bool                 has_message = false;
     {
       std::unique_lock<std::mutex> lock(event_mutex_);
@@ -607,16 +622,16 @@ void Agent::request_event_loop() {
   }
 }
 
-void Agent::handle_request_event(const AgentMsgQue::Message& message) {
+void MMAgent::handle_request_event(const MMAgentMsgQue::Message& message) {
   if(!default_session_) {
     return;
   }
-  const bool high_priority = message.priority == AgentMsgQue::MessagePriority::HIGH;
+  const bool high_priority = message.priority == MMAgentMsgQue::MessagePriority::HIGH;
   if(!default_session_->enqueue_received_message(message, high_priority)) {
     return;
   }
 
-  AgentMsgQue::Message received;
+  MMAgentMsgQue::Message received;
   if(!default_session_->dequeue_received_message(received)) {
     return;
   }
@@ -634,7 +649,7 @@ void Agent::handle_request_event(const AgentMsgQue::Message& message) {
   target_session->enqueue_received_message(received, high_priority);
 }
 
-storage::StorageResult Agent::save(const storage::StorageConfig& config,
+storage::StorageResult MMAgent::save(const storage::StorageConfig& config,
                                    const storage::VersionInfo&   version_info) {
   auto version_storage = utils::storage::create_versioned_storage(config);
   if(!version_storage) {
@@ -662,9 +677,9 @@ storage::StorageResult Agent::save(const storage::StorageConfig& config,
   return version_storage->set_active_version(config_.id, version_info.version);
 }
 
-utils::storage::StorageResult Agent::load(const std::string&            agent_id,
+utils::storage::StorageResult MMAgent::load(const std::string&            agent_id,
                                    const utils::storage::StorageConfig& storage_config,
-                                   std::shared_ptr<Agent>&       agent) {
+                                   std::shared_ptr<MMAgent>&       agent) {
   auto version_storage = utils::storage::create_versioned_storage(storage_config);
   if(!version_storage) {
     return utils::storage::StorageResult{ utils::storage::StorageError::STORAGE_ERROR_IO,
@@ -677,8 +692,8 @@ utils::storage::StorageResult Agent::load(const std::string&            agent_id
     return result;
   }
 
-  Agent::Config                 config;
-  std::vector<Workflow::Config> workflow_configs;
+  MMAgent::Config                 config;
+  std::vector<MMWorkflow::Config> workflow_configs;
 
   if(!agent_config_from_json(json_data, config, workflow_configs)) {
     return utils::storage::StorageResult{ utils::storage::StorageError::STORAGE_ERROR_INVALID_DATA,
@@ -686,10 +701,10 @@ utils::storage::StorageResult Agent::load(const std::string&            agent_id
   }
 
   // Create agent
-  agent = std::make_shared<Agent>(config);
+  agent = std::make_shared<MMAgent>(config);
 
-  // Note: Workflows are not fully restored here as Workflow::Config only has basic info
-  // and we don't have the Workflow factory or registry here to recreate them.
+  // Note: Workflows are not fully restored here as MMWorkflow::Config only has basic info
+  // and we don't have the MMWorkflow factory or registry here to recreate them.
   // In a real implementation, we would need to load workflows from their DSL files
   // or store full workflow definitions.
   // For now, we just restore the agent config.
@@ -697,7 +712,7 @@ utils::storage::StorageResult Agent::load(const std::string&            agent_id
   return utils::storage::StorageResult{ utils::storage::StorageError::STORAGE_OK, "" };
 }
 
-utils::storage::StorageResult Agent::delete_agent(const std::string&            agent_id,
+utils::storage::StorageResult MMAgent::delete_agent(const std::string&            agent_id,
                                            const utils::storage::StorageConfig& storage_config) {
   auto version_storage = utils::storage::create_versioned_storage(storage_config);
   if(!version_storage) {
@@ -708,7 +723,7 @@ utils::storage::StorageResult Agent::delete_agent(const std::string&            
   return version_storage->remove(agent_id);
 }
 
-utils::storage::StorageResult Agent::list_agents(const utils::storage::StorageConfig& storage_config,
+utils::storage::StorageResult MMAgent::list_agents(const utils::storage::StorageConfig& storage_config,
                                           std::vector<std::string>&     agent_ids) {
   auto version_storage = utils::storage::create_versioned_storage(storage_config);
   if(!version_storage) {
@@ -719,7 +734,7 @@ utils::storage::StorageResult Agent::list_agents(const utils::storage::StorageCo
   return version_storage->list("", agent_ids);
 }
 
-utils::storage::StorageResult Agent::get_metadata(const std::string&            agent_id,
+utils::storage::StorageResult MMAgent::get_metadata(const std::string&            agent_id,
                                            const utils::storage::StorageConfig& storage_config,
                                            AgentMetadata&                metadata) {
   auto version_storage = utils::storage::create_versioned_storage(storage_config);
@@ -734,8 +749,8 @@ utils::storage::StorageResult Agent::get_metadata(const std::string&            
     return result;
   }
 
-  Agent::Config                 config;
-  std::vector<Workflow::Config> workflow_configs;
+  MMAgent::Config                 config;
+  std::vector<MMWorkflow::Config> workflow_configs;
 
   if(!agent_config_from_json(json_data, config, workflow_configs)) {
     return utils::storage::StorageResult{ utils::storage::StorageError::STORAGE_ERROR_INVALID_DATA,
@@ -758,7 +773,7 @@ utils::storage::StorageResult Agent::get_metadata(const std::string&            
   return utils::storage::StorageResult{ utils::storage::StorageError::STORAGE_OK, "" };
 }
 
-utils::storage::StorageResult Agent::set_active_version(const AgentId&                agent_id,
+utils::storage::StorageResult MMAgent::set_active_version(const AgentId&                agent_id,
                                                  const std::string&            version,
                                                  const utils::storage::StorageConfig& storage_config) {
   auto version_storage = utils::storage::create_versioned_storage(storage_config);
@@ -769,7 +784,7 @@ utils::storage::StorageResult Agent::set_active_version(const AgentId&          
   return version_storage->set_active_version(agent_id, version);
 }
 
-utils::storage::StorageResult Agent::get_active_version(const AgentId&                agent_id,
+utils::storage::StorageResult MMAgent::get_active_version(const AgentId&                agent_id,
                                                  const utils::storage::StorageConfig& storage_config,
                                                  std::string&                  version) {
   auto version_storage = utils::storage::create_versioned_storage(storage_config);

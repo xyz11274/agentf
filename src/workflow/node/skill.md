@@ -1,7 +1,7 @@
-# Node Skill Specification
+# MMNode Skill Specification
 
 ## Skill Name
-Workflow Node Execution Skill
+MMWorkflow MMNode Execution Skill
 
 ## Capability
 Execute one atomic action in workflow runtime.

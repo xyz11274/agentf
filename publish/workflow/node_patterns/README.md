@@ -1,6 +1,6 @@
-# Node Patterns
+# MMNode Patterns
 
-固定 Node 模式模板：
+固定 MMNode 模式模板：
 - `qa_node_template.md`：问答节点（CoT/Reflection）
 - `api_tool_select_template.md`：API Function Calling 选择节点
 - `mcp_tool_select_template.md`：MCP 工具选择节点

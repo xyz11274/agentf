@@ -1,4 +1,4 @@
-# MCP Tool Select Node Template
+# MCP Tool Select MMNode Template
 
 ## Prompt Pattern
 Use MCP tool inventory and tool schema to select one tool + args.

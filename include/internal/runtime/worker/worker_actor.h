@@ -15,7 +15,7 @@ namespace runtime {
 
 class WorkerActor : public actor::adapter::IActor {
 public:
-  WorkerActor(std::shared_ptr<WorkerEngine> worker, std::shared_ptr<RuntimeActor> runtime_actor,
+  WorkerActor(std::shared_ptr<MMWorkerEngine> worker, std::shared_ptr<MMRuntimeActor> runtime_actor,
               int heartbeat_interval_ms = 1000);
   ~WorkerActor() override;
 
@@ -30,8 +30,8 @@ private:
   void report_heartbeat();
   void report_status();
 
-  std::shared_ptr<WorkerEngine> worker_;
-  std::shared_ptr<RuntimeActor> runtime_actor_;
+  std::shared_ptr<MMWorkerEngine> worker_;
+  std::shared_ptr<MMRuntimeActor> runtime_actor_;
   int                           heartbeat_interval_ms_ = 1000;
   std::atomic<bool>             running_{false};
   std::thread                   heartbeat_thread_;

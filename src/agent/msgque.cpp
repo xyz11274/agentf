@@ -8,14 +8,14 @@
 namespace agentflow {
 namespace framework {
 
-AgentMsgQue::AgentMsgQue(const Config& config) : config_(config) {
+MMAgentMsgQue::MMAgentMsgQue(const Config& config) : config_(config) {
 }
 
-AgentMsgQue::~AgentMsgQue() {
+MMAgentMsgQue::~MMAgentMsgQue() {
   clear_queue();
 }
 
-bool AgentMsgQue::enqueue_to_priority_queue(const Message& message) {
+bool MMAgentMsgQue::enqueue_to_priority_queue(const Message& message) {
   std::vector<Message>* target = &normal_priority_queue_;
   if(message.priority == MessagePriority::HIGH) {
     target = &high_priority_queue_;
@@ -28,7 +28,7 @@ bool AgentMsgQue::enqueue_to_priority_queue(const Message& message) {
   return true;
 }
 
-bool AgentMsgQue::enqueue_message(const Message& message) {
+bool MMAgentMsgQue::enqueue_message(const Message& message) {
   std::lock_guard<std::mutex> lock(mutex_);
   if(get_queue_size() >= config_.max_queue_size) {
     return false;
@@ -46,7 +46,7 @@ bool AgentMsgQue::enqueue_message(const Message& message) {
   return enqueue_to_priority_queue(control_message);
 }
 
-bool AgentMsgQue::dequeue_from_priority_queues(Message& message) {
+bool MMAgentMsgQue::dequeue_from_priority_queues(Message& message) {
   if(!high_priority_queue_.empty()) {
     message = high_priority_queue_.front();
     high_priority_queue_.erase(high_priority_queue_.begin());
@@ -65,12 +65,12 @@ bool AgentMsgQue::dequeue_from_priority_queues(Message& message) {
   return false;
 }
 
-bool AgentMsgQue::dequeue_message(Message& message) {
+bool MMAgentMsgQue::dequeue_message(Message& message) {
   std::lock_guard<std::mutex> lock(mutex_);
   return dequeue_from_priority_queues(message);
 }
 
-bool AgentMsgQue::peek_message(Message& message) const {
+bool MMAgentMsgQue::peek_message(Message& message) const {
   std::lock_guard<std::mutex> lock(mutex_);
   if(!high_priority_queue_.empty()) {
     message = high_priority_queue_.front();
@@ -87,12 +87,12 @@ bool AgentMsgQue::peek_message(Message& message) const {
   return false;
 }
 
-int AgentMsgQue::get_queue_size() const {
+int MMAgentMsgQue::get_queue_size() const {
   return static_cast<int>(high_priority_queue_.size() + normal_priority_queue_.size() +
                           low_priority_queue_.size());
 }
 
-int AgentMsgQue::get_queue_size(MessagePriority priority) const {
+int MMAgentMsgQue::get_queue_size(MessagePriority priority) const {
   std::lock_guard<std::mutex> lock(mutex_);
   if(priority == MessagePriority::HIGH) {
     return static_cast<int>(high_priority_queue_.size());
@@ -103,30 +103,30 @@ int AgentMsgQue::get_queue_size(MessagePriority priority) const {
   return static_cast<int>(normal_priority_queue_.size());
 }
 
-bool AgentMsgQue::is_queue_empty() const {
+bool MMAgentMsgQue::is_queue_empty() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return get_queue_size() == 0;
 }
 
-bool AgentMsgQue::is_queue_full() const {
+bool MMAgentMsgQue::is_queue_full() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return get_queue_size() >= config_.max_queue_size;
 }
 
-void AgentMsgQue::clear_queue() {
+void MMAgentMsgQue::clear_queue() {
   std::lock_guard<std::mutex> lock(mutex_);
   high_priority_queue_.clear();
   normal_priority_queue_.clear();
   low_priority_queue_.clear();
 }
 
-bool AgentMsgQue::route_message(const std::string& receiver_id, const Message& message) {
+bool MMAgentMsgQue::route_message(const std::string& receiver_id, const Message& message) {
   Message routed_message = message;
   routed_message.receiver_id = receiver_id;
   return enqueue_message(routed_message);
 }
 
-std::vector<AgentMsgQue::Message> AgentMsgQue::get_messages_for_receiver(
+std::vector<MMAgentMsgQue::Message> MMAgentMsgQue::get_messages_for_receiver(
     const std::string& receiver_id) {
   std::lock_guard<std::mutex> lock(mutex_);
   std::vector<Message> result;

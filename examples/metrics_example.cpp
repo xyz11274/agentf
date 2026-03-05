@@ -41,11 +41,11 @@ int main() {
 
   // Create histograms
   auto execution_time = collector->create_histogram(
-      "workflow_execution_time_ms", "Workflow execution time in milliseconds",
+      "workflow_execution_time_ms", "MMWorkflow execution time in milliseconds",
       { 1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000 });
 
   auto node_latency = collector->create_histogram(
-      "node_execution_latency_ms", "Node execution latency in milliseconds",
+      "node_execution_latency_ms", "MMNode execution latency in milliseconds",
       { 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000 });
 
   Logger::instance().info("Metrics created successfully");
@@ -113,13 +113,13 @@ int main() {
   // Display histogram statistics
   Logger::instance().info("\n--- Histogram Statistics ---");
   Logger::instance().info_f(
-      "Workflow Execution Time - P50: %.2f ms, P90: %.2f ms, P95: %.2f ms, P99: %.2f ms, Avg: %.2f "
+      "MMWorkflow Execution Time - P50: %.2f ms, P90: %.2f ms, P95: %.2f ms, P99: %.2f ms, Avg: %.2f "
       "ms",
       execution_time->get_p50(), execution_time->get_p90(), execution_time->get_p95(),
       execution_time->get_p99(), execution_time->get_average());
 
   Logger::instance().info_f(
-      "Node Execution Latency - P50: %.2f ms, P90: %.2f ms, P95: %.2f ms, P99: %.2f ms, Avg: %.2f "
+      "MMNode Execution Latency - P50: %.2f ms, P90: %.2f ms, P95: %.2f ms, P99: %.2f ms, Avg: %.2f "
       "ms",
       node_latency->get_p50(), node_latency->get_p90(), node_latency->get_p95(),
       node_latency->get_p99(), node_latency->get_average());

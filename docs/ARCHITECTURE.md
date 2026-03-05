@@ -6,10 +6,10 @@
 | 文档版本 | v1.0 |
 | 编写日期 | 2026-02-28 |
 | 架构状态 | 评审中 |
-| 适用范围 | AgentFlow Framework + Runtime + DataBus + Agent 包交付链路 |
+| 适用范围 | AgentFlow Framework + Runtime + MMDataBus + MMAgent 包交付链路 |
 
 ## 架构摘要
-> AgentFlow 采用“Framework 编排 + Runtime 调度 + DataBus 共享数据”的 4+1 架构，实现 Agent→Workflow→Node 三层执行。核心技术栈为 C++17、CMake、GoogleTest，运行时以 Master/Worker 协作、可插拔调度部署算法和会话化 coordinator(task0) 为关键机制。首要质量目标是高并发下的稳定调度、可扩展多语言执行与可观测可运维。
+> AgentFlow 采用“Framework 编排 + Runtime 调度 + MMDataBus 共享数据”的 4+1 架构，实现 MMAgent→MMWorkflow→MMNode 三层执行。核心技术栈为 C++17、CMake、GoogleTest，运行时以 Master/Worker 协作、可插拔调度部署算法和会话化 coordinator(task0) 为关键机制。首要质量目标是高并发下的稳定调度、可扩展多语言执行与可观测可运维。
 
 ---
 
@@ -18,20 +18,20 @@
 ### 1.1 系统上下文模型
 
 #### 系统定位
-AgentFlow 是一个面向 Agent 工作流编排与执行的 C++ 引擎，负责从 Agent 包加载定义、会话化生成任务并在 Runtime 中完成跨 Worker 执行。
+AgentFlow 是一个面向 MMAgent 工作流编排与执行的 C++ 引擎，负责从 MMAgent 包加载定义、会话化生成任务并在 Runtime 中完成跨 Worker 执行。
 
 #### 系统边界
-- **系统内**：Agent/Session/Task 管理、Workflow 图执行、Node 执行、Deployer/Scheduler 调度、DataBus 数据共享、Agent 包解析与打包。
+- **系统内**：MMAgent/Session/Task 管理、MMWorkflow 图执行、MMNode 执行、Deployer/Scheduler 调度、MMDataBus 数据共享、MMAgent 包解析与打包。
 - **系统外**：业务调用方、外部 Redis 服务、CI/CD 平台（GitHub Actions）、系统依赖库与编译环境。
 
 #### 外部接口清单
 
 | 接口 | 方向 | 协议 | 数据格式 | 说明 |
 |------|------|------|----------|------|
-| 业务请求 -> AgentActor | 入 | Actor Message | 结构化消息 + metadata/data_ref | 触发会话消息处理与 task 生成 |
-| AgentActor -> RuntimeActor | 出 | Actor Message | AgentRuntimeReport/TaskRuntimeReport | 上报注册、心跳、状态 |
-| WorkerActor -> RuntimeActor | 出 | Actor Message | WorkerRuntimeReport | 上报 worker 注册/心跳/状态 |
-| DataBus -> RedisAdapter | 双向 | Redis TCP | 字符串/索引集合 | 远端数据与 data_ref 索引同步 |
+| 业务请求 -> MMAgentActor | 入 | Actor Message | 结构化消息 + metadata/data_ref | 触发会话消息处理与 task 生成 |
+| MMAgentActor -> MMRuntimeActor | 出 | Actor Message | AgentRuntimeReport/TaskRuntimeReport | 上报注册、心跳、状态 |
+| WorkerActor -> MMRuntimeActor | 出 | Actor Message | WorkerRuntimeReport | 上报 worker 注册/心跳/状态 |
+| MMDataBus -> RedisAdapter | 双向 | Redis TCP | 字符串/索引集合 | 远端数据与 data_ref 索引同步 |
 | DSL/Package 文件加载 | 入 | 文件系统 API | JSON/JSONC | 加载 package/workflow/node 资产 |
 
 ```mermaid
@@ -43,20 +43,20 @@ graph TB
     end
 
     subgraph AF[AgentFlow 系统]
-      A[AgentActor]
-      R[RuntimeActor]
-      RT[AgentRuntime]
-      DB[DataBus]
+      A[MMAgentActor]
+      R[MMRuntimeActor]
+      RT[MMAgentRuntime]
+      DB[MMDataBus]
       PKG[AgentPackage + WorkflowParser]
     end
 
     EXT1[(Redis)]
-    EXT2[(Agent 包目录)]
+    EXT2[(MMAgent 包目录)]
 
     U1 -->|Actor Message| A
     U2 -->|提交代码/配置| PKG
     U3 -->|build.yml/tests.yml| RT
-    A -->|Agent/Task 状态上报| R
+    A -->|MMAgent/Task 状态上报| R
     R -->|注册/调度调用| RT
     RT -->|数据读写| DB
     DB <--> |Redis 命令| EXT1
@@ -66,18 +66,18 @@ graph TB
 ### 1.2 关键用例与交互模型
 
 #### 核心用例（按优先级）
-1. 从 Agent 包自动加载并实例化 Agent。
+1. 从 MMAgent 包自动加载并实例化 MMAgent。
 2. 接收业务请求并在会话中生成 task（coordinator=task0）。
 3. 将 task 调度到 workflow instance 并分配 Worker。
-4. 由 Worker 执行 Node（多语言执行由 WorkerEngine 统一承载）。
-5. 通过 DataBus 与 RuntimeActor 完成状态和数据协同。
+4. 由 Worker 执行 MMNode（多语言执行由 MMWorkerEngine 统一承载）。
+5. 通过 MMDataBus 与 MMRuntimeActor 完成状态和数据协同。
 
 #### 用例 UC-01：请求到任务生成
-- 参与者：业务调用方、AgentActor、Agent、SessionTaskCoordinator。
-- 前置条件：Agent 已由 package 加载，默认/目标 session 已存在或可创建。
+- 参与者：业务调用方、MMAgentActor、MMAgent、SessionTaskCoordinator。
+- 前置条件：MMAgent 已由 package 加载，默认/目标 session 已存在或可创建。
 - 主流程：
-  1) 业务请求进入 Agent。
-  2) Agent 路由到 `user_id:client_id` session。
+  1) 业务请求进入 MMAgent。
+  2) MMAgent 路由到 `user_id:client_id` session。
   3) session coordinator 读取消息，创建 `<session>_task_n`。
   4) 若无显式 `workflow_id`，优先按 `coordinator_workflow` 绑定 task0 workflow。
 - 异常流程：metadata 缺失 user/client 时不创建业务 session。
@@ -86,10 +86,10 @@ graph TB
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant A as Agent
-    participant S as AgentSession
+    participant A as MMAgent
+    participant S as MMAgentSession
     participant CO as SessionTaskCoordinator(task0)
-    participant T as AgentTask
+    participant T as MMAgentTask
 
     C->>A: route_request_message(message)
     A->>A: handle_request_event + session key
@@ -105,24 +105,24 @@ sequenceDiagram
 ```
 
 #### 用例 UC-02：task 调度与执行
-- 参与者：RuntimeActor、AgentRuntime、Scheduler、Deployer、WorkerEngine、Workflow/Node。
+- 参与者：MMRuntimeActor、MMAgentRuntime、Scheduler、Deployer、MMWorkerEngine、MMWorkflow/MMNode。
 - 前置条件：workflow instance 已注册，worker 可用。
 - 主流程：
   1) Scheduler 根据 agent instance/object/负载选择 workflow instance。
   2) Deployer 将 workflow instance 映射到 worker。
-  3) Runtime 驱动 Node 执行；外部执行模式调用 `WorkerEngine::execute_code`。
+  3) Runtime 驱动 MMNode 执行；外部执行模式调用 `MMWorkerEngine::execute_code`。
   4) 状态上报并推进后继节点。
 - 异常流程：worker 不健康则 Deployer 迁移映射，Scheduler 清理失效任务映射。
 - 质量目标：调度延迟 P99 < 10ms（CI 性能基线目标）。
 
 ```mermaid
 sequenceDiagram
-    participant RA as RuntimeActor
-    participant RT as AgentRuntime
+    participant RA as MMRuntimeActor
+    participant RT as MMAgentRuntime
     participant SCH as Scheduler
     participant DEP as Deployer
-    participant WE as WorkerEngine
-    participant N as Node
+    participant WE as MMWorkerEngine
+    participant N as MMNode
 
     RA->>RT: task.register/task.status
     RT->>SCH: schedule_task(request)
@@ -144,40 +144,40 @@ sequenceDiagram
 #### 架构风格
 - **主风格**：分层 + 反应式消息驱动。
 - **核心分层**：
-  - Framework 层：Agent/Session/Task/Coordinator/Workflow/Node/Edge。
-  - Runtime 层：AgentRuntime + Scheduler + Deployer + Worker。
-  - Infrastructure 层：DataBus、Storage、Adapter。
+  - Framework 层：MMAgent/Session/Task/Coordinator/MMWorkflow/MMNode/MMEdge。
+  - Runtime 层：MMAgentRuntime + Scheduler + Deployer + Worker。
+  - Infrastructure 层：MMDataBus、Storage、Adapter。
 
 #### 组件职责
-- `Agent`：生命周期、会话路由、session-level coordinator 管理。
+- `MMAgent`：生命周期、会话路由、session-level coordinator 管理。
 - `SessionTaskCoordinator`：消息解析为 task，默认 `task0`。
-- `Workflow`：图结构、控制流、执行态推进。
-- `Node`：动作定义与状态机；外部执行统一委托 WorkerEngine。
+- `MMWorkflow`：图结构、控制流、执行态推进。
+- `MMNode`：动作定义与状态机；外部执行统一委托 MMWorkerEngine。
 - `Scheduler`：task -> workflow instance 映射。
 - `Deployer`：workflow instance -> worker 映射与重平衡。
-- `DataBus`：本地/远端统一数据读写与 data_ref。
+- `MMDataBus`：本地/远端统一数据读写与 data_ref。
 
 ```mermaid
 graph LR
     subgraph Framework
-      AG[Agent]
-      SES[AgentSession]
+      AG[MMAgent]
+      SES[MMAgentSession]
       CO[SessionTaskCoordinator]
-      TK[AgentTask]
-      WF[Workflow]
-      ND[Node]
-      ED[Edge]
+      TK[MMAgentTask]
+      WF[MMWorkflow]
+      ND[MMNode]
+      ED[MMEdge]
     end
 
     subgraph Runtime
-      RT[AgentRuntime]
+      RT[MMAgentRuntime]
       SC[Scheduler]
       DP[Deployer]
-      WK[WorkerEngine]
+      WK[MMWorkerEngine]
     end
 
     subgraph Infra
-      DB[DataBus]
+      DB[MMDataBus]
       LDB[LocalDatabus]
       RDB[RemoteDatabus]
       ST[Storage]
@@ -202,26 +202,26 @@ graph LR
 
 ### 2.2 行为模型
 
-#### 关键行为 A：Workflow 控制流推进
-- Workflow 依据 edge 依赖与 `control.type`（if/loop/fork/join/async/goto）选择可执行节点。
-- Node 执行完成后，Workflow 更新状态并调度后继节点。
+#### 关键行为 A：MMWorkflow 控制流推进
+- MMWorkflow 依据 edge 依赖与 `control.type`（if/loop/fork/join/async/goto）选择可执行节点。
+- MMNode 执行完成后，MMWorkflow 更新状态并调度后继节点。
 
 ```mermaid
 flowchart TD
-    START([Workflow Start]) --> READY[计算可执行节点]
-    READY --> EXEC[调度 Node 执行]
+    START([MMWorkflow Start]) --> READY[计算可执行节点]
+    READY --> EXEC[调度 MMNode 执行]
     EXEC --> CHECK{执行成功?}
     CHECK -- Yes --> MARK[mark_node_executed(success)]
     CHECK -- No --> FAIL[mark_node_executed(failed)]
     MARK --> CTRL{存在控制流?}
     FAIL --> RETRY{可重试?}
     RETRY -- Yes --> EXEC
-    RETRY -- No --> ENDFAIL([Workflow Failed])
+    RETRY -- No --> ENDFAIL([MMWorkflow Failed])
     CTRL -- if/loop/goto --> READY
     CTRL -- fork/join/async --> READY
     CTRL -- none --> DONE{全部完成?}
     DONE -- No --> READY
-    DONE -- Yes --> ENDSUCC([Workflow Success])
+    DONE -- Yes --> ENDSUCC([MMWorkflow Success])
 ```
 
 #### 关键行为 B：Session/Task 生命周期
@@ -244,17 +244,17 @@ stateDiagram-v2
 ### 2.3 数据模型
 
 #### 核心实体
-- `Agent`：agent 元信息与 workflow 挂载。
-- `AgentSession`：会话状态、收发队列、任务集合。
-- `AgentTask`：task 标识、类型、session/workflow 归属、workflow_file 一致性标识、状态进度。
+- `MMAgent`：agent 元信息与 workflow 挂载。
+- `MMAgentSession`：会话状态、收发队列、任务集合。
+- `MMAgentTask`：task 标识、类型、session/workflow 归属、workflow_file 一致性标识、状态进度。
 - `WorkflowInstanceInfo`：运行时实例映射（workflow -> worker）。
 - `TaskInstanceInfo`：运行时 task 状态与调度绑定。
 - `DataRef`：payload 引用与 owner 索引。
 
 #### 数据所有权边界
-- Framework 对象（Agent/Session/Task/Workflow）由 Framework 管理。
+- Framework 对象（MMAgent/Session/Task/MMWorkflow）由 Framework 管理。
 - Runtime 映射（WorkflowInstanceInfo/TaskInstanceInfo）由 `IRuntimeSharedState` 管理。
-- 业务 payload 由 DataBus 持有，消息总线只传 `data_ref`。
+- 业务 payload 由 MMDataBus 持有，消息总线只传 `data_ref`。
 
 ```mermaid
 erDiagram
@@ -312,12 +312,12 @@ erDiagram
 | RapidJSON | header-only | package/workflow JSON 解析 | 轻量、无额外运行时依赖 |
 | OpenSSL | 3.x（可选） | SSL/TLS 支持 | 安全通信基础库 |
 | libevent | 可选 | 事件适配 | 事件驱动扩展能力 |
-| RedisAdapter | 内置适配器 | 远端 DataBus | 支持 data_ref 跨节点协同 |
+| RedisAdapter | 内置适配器 | 远端 MMDataBus | 支持 data_ref 跨节点协同 |
 
 ```mermaid
 graph TB
-    APP[Business App / Agent Package]
-    FW[Framework Layer\nAgent/Workflow/Node/Edge]
+    APP[Business App / MMAgent Package]
+    FW[Framework Layer\nAgent/MMWorkflow/MMNode/MMEdge]
     RT[Runtime Layer\nAgentRuntime/Scheduler/Deployer/Worker]
     INF[Infrastructure\nDataBus/Storage/Adapter]
     EXT[(Redis/OpenSSL/libevent)]
@@ -339,7 +339,7 @@ graph TB
 - `include/external`：外部 API（当前以 workflow/node 等为主）。
 - `include/internal`：内部核心与适配器扩展点。
 - `src`：framework/runtime/databus/actor 实现。
-- `publish`：Agent 包模板、打包脚本、workflow 规范。
+- `publish`：MMAgent 包模板、打包脚本、workflow 规范。
 - `tests`：unit + functional + perf。
 
 ```text
@@ -372,22 +372,22 @@ AgentFlow/
 
 | 逻辑组件 | 代码路径 |
 |------|------|
-| Agent / Session / Coordinator | `include/internal/agent/*`, `src/agent/*` |
-| Workflow / Node / Edge / DSL | `include/internal/workflow/*`, `src/workflow/*` |
+| MMAgent / Session / Coordinator | `include/internal/agent/*`, `src/agent/*` |
+| MMWorkflow / MMNode / MMEdge / DSL | `include/internal/workflow/*`, `src/workflow/*` |
 | Runtime Core | `include/internal/runtime/agent_runtime.h`, `src/runtime/runtime.cpp` |
 | Scheduler / Deployer | `include/internal/runtime/master/*`, `src/runtime/master/*` |
 | Worker / WorkerActor | `include/internal/runtime/worker*.h`, `src/runtime/worker/*` |
-| DataBus | `include/internal/runtime/databus/*`, `src/runtime/databus/*` |
-| Agent 打包链路 | `publish/agent/*`, `publish/agent_build.sh` |
+| MMDataBus | `include/internal/runtime/databus/*`, `src/runtime/databus/*` |
+| MMAgent 打包链路 | `publish/agent/*`, `publish/agent_build.sh` |
 
 ```mermaid
 classDiagram
-    class Agent {
+    class MMAgent {
       +route_request_message()
       +process_session_messages()
       +create_from_package()
     }
-    class AgentSession {
+    class MMAgentSession {
       +enqueue_received_message()
       +add_task()
     }
@@ -395,42 +395,42 @@ classDiagram
       +process_session_messages()
       +resolve_task_workflow()
     }
-    class AgentTask {
+    class MMAgentTask {
       +start()
       +complete()
       +fail()
     }
-    class Workflow {
+    class MMWorkflow {
       +get_executable_nodes_with_control()
       +mark_node_executed()
     }
-    class Node {
+    class MMNode {
       +execute()
       +execute_with_worker_engine()
     }
-    class AgentRuntime {
+    class MMAgentRuntime {
       +schedule_task()
       +deploy_workflow_instance()
     }
     class Scheduler
     class Deployer
-    class WorkerEngine {
+    class MMWorkerEngine {
       +execute_code()
     }
-    class DataBus {
+    class MMDataBus {
       +store_with_ref()
       +resolve_ref()
     }
 
-    Agent --> AgentSession
-    AgentSession --> SessionTaskCoordinator
-    SessionTaskCoordinator --> AgentTask
-    AgentTask --> Workflow
-    Workflow --> Node
-    AgentRuntime --> Scheduler
-    AgentRuntime --> Deployer
-    Node --> WorkerEngine
-    AgentRuntime --> DataBus
+    MMAgent --> MMAgentSession
+    MMAgentSession --> SessionTaskCoordinator
+    SessionTaskCoordinator --> MMAgentTask
+    MMAgentTask --> MMWorkflow
+    MMWorkflow --> MMNode
+    MMAgentRuntime --> Scheduler
+    MMAgentRuntime --> Deployer
+    MMNode --> MMWorkerEngine
+    MMAgentRuntime --> MMDataBus
 ```
 
 ### 3.2 构建模型
@@ -441,10 +441,10 @@ classDiagram
 - 可选依赖通过 CMake 自动探测与 graceful fallback（Protoactor/libevent/OpenSSL/RapidJSON）。
 
 #### 测试策略
-- 单元测试：Agent/Workflow/Node/DataBus/Event。
-- 功能测试：Agent loading、包加载链路。
+- 单元测试：MMAgent/MMWorkflow/MMNode/MMDataBus/Event。
+- 功能测试：MMAgent loading、包加载链路。
 - 热更新测试：SO/Python/Shell/JAR。
-- 性能测试：多 Agent/多 Workflow 并发场景（tests 工作流定义）。
+- 性能测试：多 MMAgent/多 MMWorkflow 并发场景（tests 工作流定义）。
 
 ```mermaid
 flowchart LR
@@ -470,9 +470,9 @@ flowchart LR
 
 ```mermaid
 graph TB
-    DEV[Dev Workstation\n4C/8G+] --> BUILDNODE[CI Build Node\n4C/8G+]
-    BUILDNODE --> TESTNODE[CI Test Node\n4C/8G+]
-    TESTNODE --> PRODNODE[Runtime Node\n8C/16G+]
+    DEV[Dev Workstation\n4C/8G+] --> BUILDNODE[CI Build MMNode\n4C/8G+]
+    BUILDNODE --> TESTNODE[CI Test MMNode\n4C/8G+]
+    TESTNODE --> PRODNODE[Runtime MMNode\n8C/16G+]
     PRODNODE <--> REDIS[(Redis Service)]
 ```
 
@@ -483,12 +483,12 @@ graph TB
 ### 4.1 运行模型
 
 #### 并发/线程模型
-- `Agent`：请求事件队列线程 + session 处理循环。
-- `AgentRuntime`：worker thread pool + agent 注册线程 + agent 监控线程。
+- `MMAgent`：请求事件队列线程 + session 处理循环。
+- `MMAgentRuntime`：worker thread pool + agent 注册线程 + agent 监控线程。
 - `Scheduler`：独立调度线程。
 - `Deployer`：注册线程 + 调度线程。
-- `WorkerEngine`：事件监控线程 + workflow 线程池 + 事件线程池。
-- `Node/Edge/Workflow`：各自可选 runtime 队列与线程池。
+- `MMWorkerEngine`：事件监控线程 + workflow 线程池 + 事件线程池。
+- `MMNode/MMEdge/MMWorkflow`：各自可选 runtime 队列与线程池。
 
 #### 高可用与故障恢复
 - 心跳监测：agent/worker 心跳周期上报。
@@ -502,20 +502,20 @@ graph TB
 ```mermaid
 graph TD
     subgraph ControlPlane
-      AA[AgentActor]
-      RA[RuntimeActor]
+      AA[MMAgentActor]
+      RA[MMRuntimeActor]
     end
 
     subgraph RuntimeCore
-      AR[AgentRuntime]
+      AR[MMAgentRuntime]
       SCH[Scheduler Thread]
       DEP[Deployer Threads]
     end
 
     subgraph ExecutionPlane
       WA[WorkerActor]
-      WE[WorkerEngine]
-      WP[Workflow Pools]
+      WE[MMWorkerEngine]
+      WP[MMWorkflow Pools]
     end
 
     AA --> RA
@@ -540,13 +540,13 @@ graph TD
 |------|----------|----------|
 | 请求到 task 生成延迟 | route_request_message -> task enqueue | P99 < 50ms |
 | task 调度延迟 | schedule_task 耗时 | P99 < 10ms |
-| 节点执行成功率 | Node 执行成功 / 总执行 | >= 99.5% |
+| 节点执行成功率 | MMNode 执行成功 / 总执行 | >= 99.5% |
 | worker 心跳可用率 | 心跳按周期到达比例 | >= 99.9% |
 
 #### 告警建议
 - 心跳超时：`heartbeat_timeout_ms` 超限告警。
 - 调度积压：task queue 深度持续增长告警。
-- 执行失败率：窗口内 Node 失败率超过阈值告警。
+- 执行失败率：窗口内 MMNode 失败率超过阈值告警。
 
 ```mermaid
 graph LR
@@ -565,8 +565,8 @@ graph LR
 
 #### 制品类型
 - 核心库/可执行：`libagentflow.*`、`test_*`、`example_*`。
-- Agent 包：双层 tar.gz（外层发布包 + 内层 agent 对象包）。
-- Workflow 资产：`workflow_XX.json`、`coordinator_workflow.json`、node 可执行脚本/动态库。
+- MMAgent 包：双层 tar.gz（外层发布包 + 内层 agent 对象包）。
+- MMWorkflow 资产：`workflow_XX.json`、`coordinator_workflow.json`、node 可执行脚本/动态库。
 
 #### 命名规范
 - 外层：`$xxxAgent_$PKGTYPE_$PKGVER.tar.gz`
@@ -585,18 +585,18 @@ graph LR
 ### 5.2 部署模型
 
 #### 部署拓扑
-- AgentActor 与 RuntimeActor 可同进程或分进程部署。
-- WorkerActor 可单节点多实例部署，统一向 RuntimeActor 汇报。
-- DataBus 本地缓存优先，Redis 作为跨节点共享补充。
+- MMAgentActor 与 MMRuntimeActor 可同进程或分进程部署。
+- WorkerActor 可单节点多实例部署，统一向 MMRuntimeActor 汇报。
+- MMDataBus 本地缓存优先，Redis 作为跨节点共享补充。
 
 #### 资源与冗余建议
-- RuntimeActor：至少 2 副本（主备/滚动更新）。
+- MMRuntimeActor：至少 2 副本（主备/滚动更新）。
 - WorkerActor：按负载水平扩容，建议最少 2 副本。
 - Redis：生产建议主从 + 持久化。
 
 #### 环境配置矩阵（建议）
 
-| 环境 | RuntimeActor | WorkerActor | Redis | 备注 |
+| 环境 | MMRuntimeActor | WorkerActor | Redis | 备注 |
 |------|--------------|-------------|-------|------|
 | Dev | 1 | 1 | 可选 | 本地开发调试 |
 | Test | 1 | 1-2 | 建议开启 | 集成测试与稳定性验证 |
@@ -609,9 +609,9 @@ graph TB
     end
 
     subgraph ServiceZone
-      A1[AgentActor]
-      R1[RuntimeActor-1]
-      R2[RuntimeActor-2]
+      A1[MMAgentActor]
+      R1[MMRuntimeActor-1]
+      R2[MMRuntimeActor-2]
     end
 
     subgraph WorkerZone
@@ -621,7 +621,7 @@ graph TB
     end
 
     subgraph DataZone
-      D1[(DataBus Local Cache)]
+      D1[(MMDataBus Local Cache)]
       D2[(Redis)]
     end
 
@@ -640,7 +640,7 @@ graph TB
 
 ## 六、架构决策记录（ADR）
 
-### ADR-001：采用 Agent→Workflow→Node 三层调度
+### ADR-001：采用 MMAgent→MMWorkflow→MMNode 三层调度
 - **日期**：2026-02-28
 - **状态**：已接受
 - **背景**：系统需要同时管理 agent 生命周期、workflow 图执行和 node 并发执行。
@@ -653,13 +653,13 @@ graph TB
   - ⚠️ 需要保证跨组件状态一致性。
   - 📌 需关注调度链路监控与故障回滚策略。
 
-### ADR-002：将多语言执行引擎下沉至 WorkerEngine
+### ADR-002：将多语言执行引擎下沉至 MMWorkerEngine
 - **日期**：2026-02-28
 - **状态**：已接受
-- **背景**：Node 同时承担动作建模与执行引擎导致职责耦合。
-- **决策**：Node 保留状态机与契约，外部执行模式统一委托 `WorkerEngine::execute_code`。
+- **背景**：MMNode 同时承担动作建模与执行引擎导致职责耦合。
+- **决策**：MMNode 保留状态机与契约，外部执行模式统一委托 `MMWorkerEngine::execute_code`。
 - **备选方案**：
-  - 方案 A（Node 内执行）：调用路径短 / 运行时治理能力弱。
+  - 方案 A（MMNode 内执行）：调用路径短 / 运行时治理能力弱。
   - 方案 B（Worker 统一执行）：治理一致 / 需要更多跨层通信。
 - **后果**：
   - ✅ 执行治理集中，便于统一超时、日志和资源策略。
@@ -685,10 +685,10 @@ graph TB
 
 ### 7.1 安全架构
 - 认证机制：当前框架层未内置 OAuth/JWT，建议由接入层网关负责认证，Actor 消息透传身份上下文。
-- 授权模型：建议按 Agent 包、workflow、task 维度做 RBAC。
+- 授权模型：建议按 MMAgent 包、workflow、task 维度做 RBAC。
 - 数据加密：
   - 传输中：对外接口建议 TLS 1.3+（OpenSSL 3.x 可选启用）。
-  - 静态：DataBus 远端持久化建议启用 Redis 加密与 ACL。
+  - 静态：MMDataBus 远端持久化建议启用 Redis 加密与 ACL。
 - 敏感数据：建议 payload 仅以 data_ref 传递，PII 数据在写入前脱敏。
 - 安全扫描：CI 增加依赖漏洞扫描与脚本安全检查（建议项）。
 
@@ -696,15 +696,15 @@ graph TB
 - 错误码：
   - Framework 层：返回 bool + logger 错误信息。
   - Runtime 层：状态字段（scheduled/running/completed/failed/cancelled）+ progress。
-- 重试策略：Node 支持 `max_retries`、`retry_delay_ms`；Workflow/Edge 支持错误策略与 fallback。
+- 重试策略：MMNode 支持 `max_retries`、`retry_delay_ms`；MMWorkflow/MMEdge 支持错误策略与 fallback。
 - 错误传播：
   - 节点错误上抛至 workflow 状态机。
-  - agent/worker 健康异常通过 RuntimeActor 上报并触发映射调整。
+  - agent/worker 健康异常通过 MMRuntimeActor 上报并触发映射调整。
 
 ### 7.3 API 设计规范
 - 版本策略：
   - 包级：`package.json.version` + `agent_version`。
-  - 运行时对象：Agent/Workflow metadata version。
+  - 运行时对象：MMAgent/MMWorkflow metadata version。
 - 分页规范：当前内存列表接口以全量返回为主；如接入控制面 API，建议采用 cursor 模式。
 - 幂等性：
   - `task_id`、`workflow_instance_id` 作为幂等键。
@@ -715,10 +715,10 @@ graph TB
 ## 附录
 
 ### A. 术语表
-- **Agent**：执行主体，管理会话与工作流。
+- **MMAgent**：执行主体，管理会话与工作流。
 - **Session**：按 user/client 分区的会话上下文。
 - **Task**：由 coordinator 生成的可调度工作单元。
-- **Workflow Instance**：workflow 的运行时实例。
+- **MMWorkflow Instance**：workflow 的运行时实例。
 - **DataRef**：payload 的数据引用标识。
 
 ### B. 参考资料
@@ -733,4 +733,4 @@ graph TB
 - 2026-02-28：按 4+1 视图重写架构文档，补齐 ADR、横切关注点与 Mermaid 图。
 
 
-- 2026-03-01：补充 Agent/Session/Task/Node 四级 context 与 SessionTaskCoordinator（session 0号任务单元）设计说明。
+- 2026-03-01：补充 MMAgent/Session/Task/MMNode 四级 context 与 SessionTaskCoordinator（session 0号任务单元）设计说明。

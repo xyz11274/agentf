@@ -1,4 +1,4 @@
-# API Tool Select Node Template
+# API Tool Select MMNode Template
 
 ## Prompt Pattern
 Use function-calling style instructions and provide API schema list.

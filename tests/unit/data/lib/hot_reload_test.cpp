@@ -8,7 +8,7 @@
 extern "C" {
 
 /**
- * Execute function - This is the default function that Node::execute_so_library calls
+ * Execute function - This is the default function that MMNode::execute_so_library calls
  * @param inputs Input data map (key-value pairs)
  * @param outputs Output data map (key-value pairs)
  */

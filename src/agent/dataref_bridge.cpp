@@ -8,18 +8,18 @@ namespace agentflow {
 namespace framework {
 namespace dataref_bridge {
 namespace {
-runtime::DataBus& control_databus() {
-  static runtime::DataBus bus(4 * 1024 * 1024);
+runtime::MMDataBus& control_databus() {
+  static runtime::MMDataBus bus(4 * 1024 * 1024);
   static std::once_flag once;
   std::call_once(once, [] {
-    // Default local redis endpoint; DataBus remains usable even if remote is unavailable.
+    // Default local redis endpoint; MMDataBus remains usable even if remote is unavailable.
     bus.connect_remote("redis://127.0.0.1:6379");
   });
   return bus;
 }
 
-runtime::DataBus::OwnerContext build_owner(const std::map<std::string, std::string>& metadata) {
-  runtime::DataBus::OwnerContext owner;
+runtime::MMDataBus::OwnerContext build_owner(const std::map<std::string, std::string>& metadata) {
+  runtime::MMDataBus::OwnerContext owner;
   const auto copy = [&metadata](const char* key, std::string& target) {
     auto it = metadata.find(key);
     if(it != metadata.end()) {
@@ -46,7 +46,7 @@ std::string store_payload(const std::string& payload,
   if(payload.empty()) {
     return "";
   }
-  runtime::DataBus::DataRef out;
+  runtime::MMDataBus::DataRef out;
   if(!control_databus().store_with_ref(logical_key, payload, build_owner(metadata), out)) {
     return "";
   }

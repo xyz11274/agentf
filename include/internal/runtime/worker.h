@@ -23,7 +23,7 @@
 namespace agentflow {
 namespace runtime {
 
-class WorkerEngine {
+class MMWorkerEngine {
 public:
   enum class ExecutionMode {
     CPP_FUNCTION = 0,
@@ -100,8 +100,8 @@ public:
 
   using WorkerEventHandler = std::function<void(const WorkerEvent&)>;
 
-  explicit WorkerEngine(const Config& config);
-  ~WorkerEngine();
+  explicit MMWorkerEngine(const Config& config);
+  ~MMWorkerEngine();
 
   const std::string& get_worker_id() const { return config_.worker_id; }
   WorkerStatus       get_status() const;

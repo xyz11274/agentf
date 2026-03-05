@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// Google Test tests for JSON Agent functionality
+// Google Test tests for JSON MMAgent functionality
 
 #include <gtest/gtest.h>
 
@@ -25,7 +25,7 @@ protected:
   // Sample valid agent JSON
   const char* valid_agent_json_ = R"({
     "id": "agent_001",
-    "name": "Test Agent",
+    "name": "Test MMAgent",
     "version": "1.0.0",
     "description": "A test agent for unit testing",
     "policy": "FACTORY",
@@ -35,12 +35,12 @@ protected:
     "workflows": [
       {
         "id": "workflow_001",
-        "name": "Primary Workflow",
+        "name": "Primary MMWorkflow",
         "version": "1.0.0"
       },
       {
         "id": "workflow_002",
-        "name": "Secondary Workflow",
+        "name": "Secondary MMWorkflow",
         "version": "1.0.0"
       }
     ]
@@ -49,14 +49,14 @@ protected:
   // Sample agent with PER_REQUEST policy
   const char* agent_per_request_json_ = R"({
     "id": "agent_per_request",
-    "name": "Per-Request Agent",
+    "name": "Per-Request MMAgent",
     "version": "1.0.0",
     "policy": "PER_REQUEST",
     "max_workflows": 1,
     "workflows": [
       {
         "id": "workflow_single",
-        "name": "Single Workflow"
+        "name": "Single MMWorkflow"
       }
     ]
   })";
@@ -64,18 +64,18 @@ protected:
   // Sample agent with SINGLETON policy
   const char* agent_singleton_json_ = R"({
     "id": "agent_singleton",
-    "name": "Singleton Agent",
+    "name": "Singleton MMAgent",
     "version": "1.0.0",
     "policy": "SINGLETON",
     "max_workflows": 10,
     "workflows": [
       {
         "id": "workflow_multi_1",
-        "name": "Workflow 1"
+        "name": "MMWorkflow 1"
       },
       {
         "id": "workflow_multi_2",
-        "name": "Workflow 2"
+        "name": "MMWorkflow 2"
       }
     ]
   })";
@@ -83,22 +83,22 @@ protected:
   // Sample agent with embedded workflow definitions
   const char* agent_with_workflow_json_ = R"({
     "id": "agent_embedded",
-    "name": "Agent with Embedded Workflows",
+    "name": "MMAgent with Embedded Workflows",
     "version": "1.0.0",
     "policy": "FACTORY",
     "workflows": [
       {
         "id": "workflow_embedded_1",
-        "name": "Embedded Workflow 1",
+        "name": "Embedded MMWorkflow 1",
         "nodes": [
           {
             "id": "node_a",
-            "name": "Node A",
+            "name": "MMNode A",
             "type": "TASK"
           },
           {
             "id": "node_b",
-            "name": "Node B",
+            "name": "MMNode B",
             "type": "TASK"
           }
         ],
@@ -115,7 +115,7 @@ protected:
 
   // Sample invalid agent JSON - missing required id
   const char* invalid_agent_missing_id_json_ = R"({
-    "name": "Invalid Agent",
+    "name": "Invalid MMAgent",
     "version": "1.0.0",
     "policy": "FACTORY",
     "workflows": []
@@ -124,7 +124,7 @@ protected:
   // Sample invalid agent JSON - invalid policy
   const char* invalid_agent_bad_policy_json_ = R"({
     "id": "agent_invalid",
-    "name": "Invalid Agent",
+    "name": "Invalid MMAgent",
     "version": "1.0.0",
     "policy": "INVALID_POLICY",
     "workflows": []
@@ -133,7 +133,7 @@ protected:
   // Sample invalid agent JSON - negative values
   const char* invalid_agent_negative_values_json_ = R"({
     "id": "agent_negative",
-    "name": "Invalid Agent",
+    "name": "Invalid MMAgent",
     "version": "1.0.0",
     "policy": "FACTORY",
     "max_workflows": -1,
@@ -142,22 +142,22 @@ protected:
 };
 
 // ============================================================================
-// Agent JSON Parsing Tests
+// MMAgent JSON Parsing Tests
 // ============================================================================
 
 TEST_F(AgentJsonTest, ParseValidAgent) {
   auto result = parser_->parse_agent(valid_agent_json_);
 
-  EXPECT_TRUE(result.is_valid()) << "Agent parsing should succeed";
-  EXPECT_NE(result.agent, nullptr) << "Agent object should be created";
+  EXPECT_TRUE(result.is_valid()) << "MMAgent parsing should succeed";
+  EXPECT_NE(result.agent, nullptr) << "MMAgent object should be created";
   EXPECT_EQ(result.agent->get_id(), "agent_001");
-  EXPECT_EQ(result.agent->get_name(), "Test Agent");
+  EXPECT_EQ(result.agent->get_name(), "Test MMAgent");
 }
 
 TEST_F(AgentJsonTest, ParseAgentWithEmbeddedWorkflow) {
   auto result = parser_->parse_agent(agent_with_workflow_json_);
 
-  EXPECT_TRUE(result.is_valid()) << "Agent with embedded workflows should parse successfully";
+  EXPECT_TRUE(result.is_valid()) << "MMAgent with embedded workflows should parse successfully";
   EXPECT_NE(result.agent, nullptr);
   EXPECT_EQ(result.agent->get_workflows().size(), 1);
 }
@@ -169,7 +169,7 @@ TEST_F(AgentJsonTest, ParseAgentPerRequestPolicy) {
   EXPECT_NE(result.agent, nullptr);
 
   auto config = result.agent->get_config();
-  EXPECT_EQ(config.policy, framework::Agent::LifecyclePolicy::PER_REQUEST);
+  EXPECT_EQ(config.policy, framework::MMAgent::LifecyclePolicy::PER_REQUEST);
   EXPECT_EQ(config.max_workflows, 1);
 }
 
@@ -180,7 +180,7 @@ TEST_F(AgentJsonTest, ParseAgentFactoryPolicy) {
   EXPECT_NE(result.agent, nullptr);
 
   auto config = result.agent->get_config();
-  EXPECT_EQ(config.policy, framework::Agent::LifecyclePolicy::FACTORY);
+  EXPECT_EQ(config.policy, framework::MMAgent::LifecyclePolicy::FACTORY);
   EXPECT_EQ(config.max_workflows, 10);
   EXPECT_EQ(config.max_concurrent_workflows, 5);
 }
@@ -192,31 +192,31 @@ TEST_F(AgentJsonTest, ParseAgentSingletonPolicy) {
   EXPECT_NE(result.agent, nullptr);
 
   auto config = result.agent->get_config();
-  EXPECT_EQ(config.policy, framework::Agent::LifecyclePolicy::SINGLETON);
+  EXPECT_EQ(config.policy, framework::MMAgent::LifecyclePolicy::SINGLETON);
   EXPECT_EQ(config.max_workflows, 10);
 }
 
 TEST_F(AgentJsonTest, ParseAgentMissingId) {
   auto result = parser_->parse_agent(invalid_agent_missing_id_json_);
 
-  EXPECT_FALSE(result.is_valid()) << "Agent without ID should fail validation";
+  EXPECT_FALSE(result.is_valid()) << "MMAgent without ID should fail validation";
   EXPECT_FALSE(result.errors.empty()) << "Should have parse errors";
 }
 
 TEST_F(AgentJsonTest, ParseAgentInvalidPolicy) {
   auto result = parser_->parse_agent(invalid_agent_bad_policy_json_);
 
-  EXPECT_FALSE(result.is_valid()) << "Agent with invalid policy should fail";
+  EXPECT_FALSE(result.is_valid()) << "MMAgent with invalid policy should fail";
 }
 
 TEST_F(AgentJsonTest, ParseAgentNegativeValues) {
   auto result = parser_->parse_agent(invalid_agent_negative_values_json_);
 
-  EXPECT_FALSE(result.is_valid()) << "Agent with negative values should fail";
+  EXPECT_FALSE(result.is_valid()) << "MMAgent with negative values should fail";
 }
 
 // ============================================================================
-// Agent Configuration Tests
+// MMAgent Configuration Tests
 // ============================================================================
 
 TEST_F(AgentJsonTest, ParseAgentConfiguration) {
@@ -239,12 +239,12 @@ TEST_F(AgentJsonTest, ParseAgentMetadata) {
   ASSERT_NE(result.agent, nullptr);
 
   // Check metadata field parsing
-  EXPECT_EQ(result.agent->get_name(), "Test Agent");
+  EXPECT_EQ(result.agent->get_name(), "Test MMAgent");
   EXPECT_EQ(result.agent->get_id(), "agent_001");
 }
 
 // ============================================================================
-// Agent Workflow Association Tests
+// MMAgent MMWorkflow Association Tests
 // ============================================================================
 
 TEST_F(AgentJsonTest, ParseAgentWithMultipleWorkflows) {
@@ -266,18 +266,18 @@ TEST_F(AgentJsonTest, ParseAgentWithMultipleWorkflows) {
 TEST_F(AgentJsonTest, ParseAgentWithEmptyWorkflows) {
   auto result = parser_->parse_agent(R"({
     "id": "agent_empty",
-    "name": "Empty Agent",
+    "name": "Empty MMAgent",
     "policy": "FACTORY",
     "workflows": []
   })");
 
-  EXPECT_TRUE(result.is_valid()) << "Agent with empty workflows should be valid";
+  EXPECT_TRUE(result.is_valid()) << "MMAgent with empty workflows should be valid";
   EXPECT_NE(result.agent, nullptr);
   EXPECT_EQ(result.agent->get_workflows().size(), 0);
 }
 
 // ============================================================================
-// Agent Lifecycle Policy Tests
+// MMAgent Lifecycle Policy Tests
 // ============================================================================
 
 TEST_F(AgentJsonTest, LifecyclePolicyPerRequest) {
@@ -288,7 +288,7 @@ TEST_F(AgentJsonTest, LifecyclePolicyPerRequest) {
 
   auto config = result.agent->get_config();
   EXPECT_EQ(static_cast<int>(config.policy),
-            static_cast<int>(framework::Agent::LifecyclePolicy::PER_REQUEST));
+            static_cast<int>(framework::MMAgent::LifecyclePolicy::PER_REQUEST));
 }
 
 TEST_F(AgentJsonTest, LifecyclePolicyFactory) {
@@ -299,7 +299,7 @@ TEST_F(AgentJsonTest, LifecyclePolicyFactory) {
 
   auto config = result.agent->get_config();
   EXPECT_EQ(static_cast<int>(config.policy),
-            static_cast<int>(framework::Agent::LifecyclePolicy::FACTORY));
+            static_cast<int>(framework::MMAgent::LifecyclePolicy::FACTORY));
 }
 
 TEST_F(AgentJsonTest, LifecyclePolicySingleton) {
@@ -310,11 +310,11 @@ TEST_F(AgentJsonTest, LifecyclePolicySingleton) {
 
   auto config = result.agent->get_config();
   EXPECT_EQ(static_cast<int>(config.policy),
-            static_cast<int>(framework::Agent::LifecyclePolicy::SINGLETON));
+            static_cast<int>(framework::MMAgent::LifecyclePolicy::SINGLETON));
 }
 
 // ============================================================================
-// Agent Resource Configuration Tests
+// MMAgent Resource Configuration Tests
 // ============================================================================
 
 TEST_F(AgentJsonTest, ResourceConfigurationParsing) {
@@ -336,7 +336,7 @@ TEST_F(AgentJsonTest, ResourceCapacityValidation) {
 }
 
 // ============================================================================
-// Agent Version Management Tests
+// MMAgent Version Management Tests
 // ============================================================================
 
 TEST_F(AgentJsonTest, AgentVersionParsing) {
@@ -355,7 +355,7 @@ TEST_F(AgentJsonTest, AgentNameParsing) {
   ASSERT_TRUE(result.is_valid());
   ASSERT_NE(result.agent, nullptr);
 
-  EXPECT_EQ(result.agent->get_name(), "Test Agent");
+  EXPECT_EQ(result.agent->get_name(), "Test MMAgent");
 }
 
 TEST_F(AgentJsonTest, AgentDescriptionParsing) {
@@ -368,7 +368,7 @@ TEST_F(AgentJsonTest, AgentDescriptionParsing) {
 }
 
 // ============================================================================
-// Agent Workflow Composition Tests
+// MMAgent MMWorkflow Composition Tests
 // ============================================================================
 
 TEST_F(AgentJsonTest, WorkflowCompositionParsing) {
@@ -424,16 +424,16 @@ TEST_F(AgentJsonTest, HandleEmptyAgent) {
 TEST_F(AgentJsonTest, HandleMissingWorkflowsField) {
   auto result = parser_->parse_agent(R"({
     "id": "agent_test",
-    "name": "Test Agent",
+    "name": "Test MMAgent",
     "policy": "FACTORY"
   })");
 
-  // Agent without workflows field may or may not be valid
+  // MMAgent without workflows field may or may not be valid
   // depending on validation requirements
 }
 
 // ============================================================================
-// Agent State Management Tests
+// MMAgent State Management Tests
 // ============================================================================
 
 TEST_F(AgentJsonTest, AgentInitialState) {

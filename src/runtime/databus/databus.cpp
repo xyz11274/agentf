@@ -34,13 +34,13 @@ void add_owner_index(RemoteDatabus* remote, const std::string& owner_key, const 
 }
 }  // namespace
 
-DataBus::DataBus(size_t capacity) {
+MMDataBus::MMDataBus(size_t capacity) {
   local_bus_  = std::make_shared<LocalDatabus>();
   remote_bus_ = std::make_shared<RemoteDatabus>();
   (void)capacity;
 }
 
-bool DataBus::put(const std::string& key, const DataVariant& value) {
+bool MMDataBus::put(const std::string& key, const DataVariant& value) {
   // Put into local shared memory
   bool local_success = local_bus_->get_shared_memory()->put(key, value);
 
@@ -52,7 +52,7 @@ bool DataBus::put(const std::string& key, const DataVariant& value) {
   return local_success;
 }
 
-bool DataBus::get(const std::string& key, DataVariant& value) const {
+bool MMDataBus::get(const std::string& key, DataVariant& value) const {
   // Try local cache first.
   if(local_bus_->get_shared_memory()->get(key, value)) {
     return true;
@@ -67,7 +67,7 @@ bool DataBus::get(const std::string& key, DataVariant& value) const {
   return false;
 }
 
-bool DataBus::remove(const std::string& key) {
+bool MMDataBus::remove(const std::string& key) {
   const bool local_removed = local_bus_->get_shared_memory()->remove(key);
   if(remote_bus_->is_connected()) {
     remote_bus_->remove(key);
@@ -75,11 +75,11 @@ bool DataBus::remove(const std::string& key) {
   return local_removed;
 }
 
-bool DataBus::contains(const std::string& key) const {
+bool MMDataBus::contains(const std::string& key) const {
   return local_bus_->get_shared_memory()->contains(key);
 }
 
-void DataBus::subscribe(const std::string& key, const DataChangeCallback& callback) {
+void MMDataBus::subscribe(const std::string& key, const DataChangeCallback& callback) {
   local_bus_->get_shared_memory()->subscribe(key, callback);
 
   if(remote_bus_->is_connected()) {
@@ -87,7 +87,7 @@ void DataBus::subscribe(const std::string& key, const DataChangeCallback& callba
   }
 }
 
-void DataBus::unsubscribe(const std::string& key) {
+void MMDataBus::unsubscribe(const std::string& key) {
   local_bus_->get_shared_memory()->unsubscribe(key);
 
   if(remote_bus_->is_connected()) {
@@ -95,7 +95,7 @@ void DataBus::unsubscribe(const std::string& key) {
   }
 }
 
-bool DataBus::store_with_ref(const std::string& key, const DataVariant& value, const OwnerContext& owner,
+bool MMDataBus::store_with_ref(const std::string& key, const DataVariant& value, const OwnerContext& owner,
                              DataRef& out_ref) {
   const std::string data_id = build_data_id(value);
   out_ref.data_id           = data_id;
@@ -129,7 +129,7 @@ bool DataBus::store_with_ref(const std::string& key, const DataVariant& value, c
   return true;
 }
 
-bool DataBus::resolve_ref(const std::string& data_ref, DataVariant& value) const {
+bool MMDataBus::resolve_ref(const std::string& data_ref, DataVariant& value) const {
   // data_ref format: databus://global/<data_id>
   const std::string prefix = "databus://global/";
   if(data_ref.rfind(prefix, 0) != 0) {
@@ -140,7 +140,7 @@ bool DataBus::resolve_ref(const std::string& data_ref, DataVariant& value) const
   return get(data_key, value);
 }
 
-std::vector<std::string> DataBus::find_refs_by_owner(const std::string& owner_key,
+std::vector<std::string> MMDataBus::find_refs_by_owner(const std::string& owner_key,
                                                      const std::string& owner_value) const {
   if(owner_key.empty() || owner_value.empty() || !remote_bus_->is_connected()) {
     return {};
@@ -148,27 +148,27 @@ std::vector<std::string> DataBus::find_refs_by_owner(const std::string& owner_ke
   return remote_bus_->find_indexed_refs(owner_index_key(owner_key, owner_value));
 }
 
-bool DataBus::connect_remote(const std::string& address) {
+bool MMDataBus::connect_remote(const std::string& address) {
   return remote_bus_->connect(address);
 }
 
-void DataBus::disconnect_remote() {
+void MMDataBus::disconnect_remote() {
   remote_bus_->disconnect();
 }
 
-size_t DataBus::get_used_capacity() const {
+size_t MMDataBus::get_used_capacity() const {
   return local_bus_->get_shared_memory()->get_used_capacity();
 }
 
-size_t DataBus::get_total_capacity() const {
+size_t MMDataBus::get_total_capacity() const {
   return local_bus_->get_shared_memory()->get_total_capacity();
 }
 
-int DataBus::get_data_count() const {
+int MMDataBus::get_data_count() const {
   return local_bus_->get_shared_memory()->get_data_count();
 }
 
-std::string DataBus::build_data_id(const DataVariant& value) {
+std::string MMDataBus::build_data_id(const DataVariant& value) {
   const auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
                           std::chrono::system_clock::now().time_since_epoch())
                           .count();
@@ -179,11 +179,11 @@ std::string DataBus::build_data_id(const DataVariant& value) {
   return oss.str();
 }
 
-std::string DataBus::build_address(const std::string& data_id) {
+std::string MMDataBus::build_address(const std::string& data_id) {
   return std::string("databus://global/") + data_id;
 }
 
-std::string DataBus::owner_index_key(const std::string& owner_key, const std::string& owner_value) {
+std::string MMDataBus::owner_index_key(const std::string& owner_key, const std::string& owner_value) {
   return owner_key + ":" + owner_value;
 }
 

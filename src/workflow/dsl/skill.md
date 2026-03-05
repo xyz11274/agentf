@@ -1,7 +1,7 @@
-# Workflow DSL Skill Specification
+# MMWorkflow DSL Skill Specification
 
 ## Skill Name
-Workflow Orchestration Skill
+MMWorkflow Orchestration Skill
 
 ## Capability
 Parse and orchestrate workflow definitions, including nested workflows.

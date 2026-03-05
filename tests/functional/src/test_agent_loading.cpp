@@ -47,7 +47,7 @@ TEST_F(AgentLoadingTest, LoadBasicAgentPackage) {
         FAIL() << "Package path not found: examples/agent/basic_agent";
     }
     
-    auto agent = framework::Agent::create_from_package(package_path);
+    auto agent = framework::MMAgent::create_from_package(package_path);
     ASSERT_NE(agent, nullptr);
 
     // Basic checks
@@ -80,7 +80,7 @@ TEST_F(AgentLoadingTest, LoadCalculatorAgentPackage) {
     
     ASSERT_TRUE(std::filesystem::exists(package_path)) << "Package path not found: " << package_path;
 
-    auto agent = framework::Agent::create_from_package(package_path);
+    auto agent = framework::MMAgent::create_from_package(package_path);
     ASSERT_NE(agent, nullptr);
 
     EXPECT_EQ(agent->get_id(), "calculator-agent");
@@ -92,31 +92,31 @@ TEST_F(AgentLoadingTest, LoadCalculatorAgentPackage) {
 
 TEST_F(AgentLoadingTest, LoadInvalidPackage) {
     std::string package_path = "non_existent_path";
-    auto agent = framework::Agent::create_from_package(package_path);
+    auto agent = framework::MMAgent::create_from_package(package_path);
     EXPECT_EQ(agent, nullptr);
 }
 
 TEST_F(AgentLoadingTest, TaskToWorkflowScheduling) {
-    framework::Agent::Config agent_cfg;
+    framework::MMAgent::Config agent_cfg;
     agent_cfg.id = "agent-schedule";
     agent_cfg.name = "agent-schedule";
-    auto agent = std::make_shared<framework::Agent>(agent_cfg);
+    auto agent = std::make_shared<framework::MMAgent>(agent_cfg);
 
-    framework::Workflow::Config wf_cfg;
+    framework::MMWorkflow::Config wf_cfg;
     wf_cfg.id = "wf-schedule";
     wf_cfg.name = "wf-schedule";
-    auto workflow = std::make_shared<framework::Workflow>(wf_cfg);
+    auto workflow = std::make_shared<framework::MMWorkflow>(wf_cfg);
 
-    framework::Node::Config node_cfg;
+    framework::MMNode::Config node_cfg;
     node_cfg.id = "node-run";
     node_cfg.name = "node-run";
     node_cfg.type = "tool";
-    node_cfg.execution_mode = framework::Node::ExecutionMode::CPP_FUNCTION;
+    node_cfg.execution_mode = framework::MMNode::ExecutionMode::CPP_FUNCTION;
     node_cfg.cpp_function = [](const DataMap&, DataMap&) { return true; };
-    workflow->add_node(std::make_shared<framework::Node>(node_cfg));
+    workflow->add_node(std::make_shared<framework::MMNode>(node_cfg));
     agent->add_workflow(workflow);
 
-    runtime::AgentRuntime runtime;
+    runtime::MMAgentRuntime runtime;
     ASSERT_TRUE(runtime.register_agent(agent));
     ASSERT_TRUE(runtime.start());
 
@@ -149,7 +149,7 @@ TEST_F(AgentLoadingTest, AgentLifecycle) {
         package_path = "../examples/agent/basic_agent";
     }
     
-    auto agent = framework::Agent::create_from_package(package_path);
+    auto agent = framework::MMAgent::create_from_package(package_path);
     ASSERT_NE(agent, nullptr);
     
     // Test lifecycle transitions
@@ -176,7 +176,7 @@ TEST_F(AgentLoadingTest, LoadPackageMissingJson) {
     std::string temp_dir = "temp_invalid_pkg";
     std::filesystem::create_directory(temp_dir);
     
-    auto agent = framework::Agent::create_from_package(temp_dir);
+    auto agent = framework::MMAgent::create_from_package(temp_dir);
     EXPECT_EQ(agent, nullptr);
     
     std::filesystem::remove(temp_dir);
@@ -191,7 +191,7 @@ TEST_F(AgentLoadingTest, LoadPackageMalformedJson) {
     ofs << "{ \"name\": \"broken-agent\", \"version\": "; // Incomplete JSON
     ofs.close();
     
-    auto agent = framework::Agent::create_from_package(temp_dir);
+    auto agent = framework::MMAgent::create_from_package(temp_dir);
     EXPECT_EQ(agent, nullptr);
     
     std::filesystem::remove_all(temp_dir);
@@ -213,9 +213,9 @@ TEST_F(AgentLoadingTest, AgentActorAutoLoadsPackagesAndRegistersRuntime) {
         << "}";
     ofs.close();
 
-    auto runtime = std::make_shared<runtime::AgentRuntime>();
-    auto runtime_actor = std::make_shared<runtime::RuntimeActor>(runtime);
-    agent::AgentActor actor(config_path.string(), runtime_actor);
+    auto runtime = std::make_shared<runtime::MMAgentRuntime>();
+    auto runtime_actor = std::make_shared<runtime::MMRuntimeActor>(runtime);
+    agent::MMAgentActor actor(config_path.string(), runtime_actor);
     actor.on_start();
 
     std::this_thread::sleep_for(std::chrono::milliseconds(300));

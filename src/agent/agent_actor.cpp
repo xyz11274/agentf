@@ -30,7 +30,7 @@ int64_t file_mtime_ms(const std::string& path) {
 }
 }  // namespace
 
-AgentActor::AgentActor(std::shared_ptr<framework::Agent> agent)
+MMAgentActor::MMAgentActor(std::shared_ptr<framework::MMAgent> agent)
     : config_path_("AgentService.config"), runtime_actor_(nullptr) {
   if(agent) {
     ManagedAgent managed;
@@ -43,21 +43,21 @@ AgentActor::AgentActor(std::shared_ptr<framework::Agent> agent)
   }
 }
 
-AgentActor::AgentActor(const std::string& config_path)
+MMAgentActor::MMAgentActor(const std::string& config_path)
     : config_path_(config_path.empty() ? "AgentService.config" : config_path), runtime_actor_(nullptr) {
 }
 
-AgentActor::AgentActor(const std::string& config_path,
-                       std::shared_ptr<runtime::RuntimeActor> runtime_actor)
+MMAgentActor::MMAgentActor(const std::string& config_path,
+                       std::shared_ptr<runtime::MMRuntimeActor> runtime_actor)
     : config_path_(config_path.empty() ? "AgentService.config" : config_path),
       runtime_actor_(std::move(runtime_actor)) {
 }
 
-AgentActor::~AgentActor() {
+MMAgentActor::~MMAgentActor() {
   on_stop();
 }
 
-bool AgentActor::parse_service_config() {
+bool MMAgentActor::parse_service_config() {
 #ifdef AGENTFLOW_WITH_RAPIDJSON
   namespace fs = std::filesystem;
   if(!fs::exists(config_path_)) {
@@ -100,7 +100,7 @@ bool AgentActor::parse_service_config() {
 #endif
 }
 
-bool AgentActor::should_reload(const std::string& package_path, int64_t& out_mtime_ms) const {
+bool MMAgentActor::should_reload(const std::string& package_path, int64_t& out_mtime_ms) const {
   out_mtime_ms = file_mtime_ms(package_path + "/package.json");
   if(out_mtime_ms == 0) {
     return false;
@@ -113,13 +113,13 @@ bool AgentActor::should_reload(const std::string& package_path, int64_t& out_mti
   return true;
 }
 
-bool AgentActor::create_agent_from_package(const std::string& package_path) {
+bool MMAgentActor::create_agent_from_package(const std::string& package_path) {
   int64_t mtime_ms = 0;
   if(!should_reload(package_path, mtime_ms)) {
     return false;
   }
 
-  auto agent = framework::Agent::create_from_package(package_path);
+  auto agent = framework::MMAgent::create_from_package(package_path);
   if(!agent) {
     return false;
   }
@@ -144,7 +144,7 @@ bool AgentActor::create_agent_from_package(const std::string& package_path) {
   return true;
 }
 
-void AgentActor::load_agents_from_config() {
+void MMAgentActor::load_agents_from_config() {
   ServiceConfig snapshot;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -160,7 +160,7 @@ void AgentActor::load_agents_from_config() {
   }
 }
 
-void AgentActor::report_agent_registered(const ManagedAgent& managed) {
+void MMAgentActor::report_agent_registered(const ManagedAgent& managed) {
   if(!runtime_actor_) {
     return;
   }
@@ -174,7 +174,7 @@ void AgentActor::report_agent_registered(const ManagedAgent& managed) {
   runtime_actor_->handle_message(msg);
 }
 
-void AgentActor::report_agent_heartbeat(const ManagedAgent& managed) {
+void MMAgentActor::report_agent_heartbeat(const ManagedAgent& managed) {
   if(!runtime_actor_) {
     return;
   }
@@ -187,7 +187,7 @@ void AgentActor::report_agent_heartbeat(const ManagedAgent& managed) {
   runtime_actor_->handle_message(msg);
 }
 
-void AgentActor::report_agent_status(const ManagedAgent& managed) {
+void MMAgentActor::report_agent_status(const ManagedAgent& managed) {
   if(!runtime_actor_) {
     return;
   }
@@ -200,7 +200,7 @@ void AgentActor::report_agent_status(const ManagedAgent& managed) {
   runtime_actor_->handle_message(msg);
 }
 
-void AgentActor::report_task_status(const std::string& task_id, const std::string& status, int progress) {
+void MMAgentActor::report_task_status(const std::string& task_id, const std::string& status, int progress) {
   if(!runtime_actor_) {
     return;
   }
@@ -214,7 +214,7 @@ void AgentActor::report_task_status(const std::string& task_id, const std::strin
   runtime_actor_->handle_message(msg);
 }
 
-void AgentActor::collect_agent_tasks_and_report() {
+void MMAgentActor::collect_agent_tasks_and_report() {
   std::vector<ManagedAgent> snapshot;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -227,7 +227,7 @@ void AgentActor::collect_agent_tasks_and_report() {
     if(!managed.agent) {
       continue;
     }
-    std::shared_ptr<framework::AgentTask> task;
+    std::shared_ptr<framework::MMAgentTask> task;
     while(managed.agent->pop_generated_task(task)) {
       if(!task) {
         continue;
@@ -241,7 +241,7 @@ void AgentActor::collect_agent_tasks_and_report() {
   }
 }
 
-void AgentActor::monitor_packages_loop() {
+void MMAgentActor::monitor_packages_loop() {
   while(running_) {
     parse_service_config();
     load_agents_from_config();
@@ -250,7 +250,7 @@ void AgentActor::monitor_packages_loop() {
   }
 }
 
-void AgentActor::heartbeat_loop() {
+void MMAgentActor::heartbeat_loop() {
   while(running_) {
     std::vector<ManagedAgent> snapshot;
     {
@@ -268,7 +268,7 @@ void AgentActor::heartbeat_loop() {
   }
 }
 
-void AgentActor::apply_agent_control(const std::string& action, const std::string& instance_id) {
+void MMAgentActor::apply_agent_control(const std::string& action, const std::string& instance_id) {
   std::lock_guard<std::mutex> lock(mutex_);
   for(auto& kv : managed_agents_) {
     if(!instance_id.empty() && kv.first != instance_id) {
@@ -290,7 +290,7 @@ void AgentActor::apply_agent_control(const std::string& action, const std::strin
   }
 }
 
-void AgentActor::apply_task_control(const std::string& action, const std::string& task_id) {
+void MMAgentActor::apply_task_control(const std::string& action, const std::string& task_id) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = managed_tasks_.find(task_id);
   if(it == managed_tasks_.end() || !it->second) {
@@ -305,17 +305,17 @@ void AgentActor::apply_task_control(const std::string& action, const std::string
   }
 }
 
-void AgentActor::on_start() {
+void MMAgentActor::on_start() {
   if(running_.exchange(true)) {
     return;
   }
   parse_service_config();
   load_agents_from_config();
-  package_monitor_thread_ = std::thread(&AgentActor::monitor_packages_loop, this);
-  heartbeat_thread_ = std::thread(&AgentActor::heartbeat_loop, this);
+  package_monitor_thread_ = std::thread(&MMAgentActor::monitor_packages_loop, this);
+  heartbeat_thread_ = std::thread(&MMAgentActor::heartbeat_loop, this);
 }
 
-void AgentActor::on_stop() {
+void MMAgentActor::on_stop() {
   if(!running_.exchange(false)) {
     return;
   }
@@ -327,7 +327,7 @@ void AgentActor::on_stop() {
   }
 }
 
-void AgentActor::on_message(std::shared_ptr<actor::adapter::IContext> ctx) {
+void MMAgentActor::on_message(std::shared_ptr<actor::adapter::IContext> ctx) {
   if(!ctx) {
     return;
   }
@@ -374,7 +374,7 @@ void AgentActor::on_message(std::shared_ptr<actor::adapter::IContext> ctx) {
     return;
   }
   if(msg.message_type == "request.message") {
-    auto payload = msg.get_payload<framework::AgentMsgQue::Message>();
+    auto payload = msg.get_payload<framework::MMAgentMsgQue::Message>();
     if(!payload) {
       return;
     }

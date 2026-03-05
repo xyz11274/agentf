@@ -19,11 +19,11 @@ namespace agentflow {
 namespace framework {
 
 /**
- * Edge defines the dependency relationship between nodes
+ * MMEdge defines the dependency relationship between nodes
  * Supports data passing and control flow events.
- * Workflow process control is edge-centric, including branch/loop/fork/join/async/goto.
+ * MMWorkflow process control is edge-centric, including branch/loop/fork/join/async/goto.
  */
-class Edge {
+class MMEdge {
 public:
   enum class ControlType {
     NONE  = 0,
@@ -57,10 +57,10 @@ public:
     // Control flow events
     std::vector<std::string> supported_events;  // start, end, fail, data_ready, etc.
 
-    // Conditional execution support (as string, parsed by Workflow)
+    // Conditional execution support (as string, parsed by MMWorkflow)
     std::string condition_expression;
 
-    // Edge priority (for multiple outgoing edges)
+    // MMEdge priority (for multiple outgoing edges)
     int priority = 0;
 
     struct ControlConfig {
@@ -100,8 +100,8 @@ public:
 
   using EdgeEventHandler = std::function<void(const EdgeEvent&)>;
 
-  explicit Edge(const Config& config);
-  ~Edge();
+  explicit MMEdge(const Config& config);
+  ~MMEdge();
 
   // Getters
   const std::string& get_id() const { return config_.id; }
@@ -128,7 +128,7 @@ public:
   // Event management
   bool trigger_event(const std::string& event_type);
 
-  // Edge runtime queue + event loop
+  // MMEdge runtime queue + event loop
   bool start_runtime();
   bool start_runtime(const RuntimeConfig& config);
   void stop_runtime();

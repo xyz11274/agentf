@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// Storage interface definitions for Agent and Workflow persistence
+// Storage interface definitions for MMAgent and MMWorkflow persistence
 
 #pragma once
 

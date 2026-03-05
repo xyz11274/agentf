@@ -15,7 +15,7 @@
 namespace agentflow {
 namespace framework {
 
-Node::Node(const Config& config) : config_(config), state_(NodeState::WAITING), retry_count_(0) {
+MMNode::MMNode(const Config& config) : config_(config), state_(NodeState::WAITING), retry_count_(0) {
   // Get reference to global code loader
   code_loader_ = &runtime::global_code_loader();
 
@@ -29,18 +29,18 @@ Node::Node(const Config& config) : config_(config), state_(NodeState::WAITING), 
   context_ = std::make_shared<AgentContext>(context_config);
 }
 
-Node::~Node() {
+MMNode::~MMNode() {
   stop_runtime();
   if(hot_reload_enabled_) {
     cleanup_hot_reload();
   }
 }
 
-bool Node::start_runtime() {
+bool MMNode::start_runtime() {
   return start_runtime(RuntimeConfig{});
 }
 
-bool Node::start_runtime(const RuntimeConfig& config) {
+bool MMNode::start_runtime(const RuntimeConfig& config) {
   bool expected = false;
   if(!runtime_running_.compare_exchange_strong(expected, true)) {
     return false;
@@ -52,12 +52,12 @@ bool Node::start_runtime(const RuntimeConfig& config) {
   event_pool_ = std::make_unique<basic::ThreadPool>(
       static_cast<size_t>(std::max(1, runtime_config_.event_threads)));
 
-  message_thread_ = std::thread(&Node::message_dispatch_loop, this);
-  event_thread_   = std::thread(&Node::event_dispatch_loop, this);
+  message_thread_ = std::thread(&MMNode::message_dispatch_loop, this);
+  event_thread_   = std::thread(&MMNode::event_dispatch_loop, this);
   return true;
 }
 
-void Node::stop_runtime() {
+void MMNode::stop_runtime() {
   bool expected = true;
   if(!runtime_running_.compare_exchange_strong(expected, false)) {
     return;
@@ -86,7 +86,7 @@ void Node::stop_runtime() {
   event_pool_.reset();
 }
 
-bool Node::enqueue_message(const Message& message) {
+bool MMNode::enqueue_message(const Message& message) {
   std::lock_guard<std::mutex> lock(queue_mutex_);
   const size_t queued_size = high_priority_messages_.size() + normal_priority_messages_.size();
   if(queued_size >= runtime_config_.max_queue_size) {
@@ -102,7 +102,7 @@ bool Node::enqueue_message(const Message& message) {
   return true;
 }
 
-bool Node::enqueue_event(const NodeEvent& event) {
+bool MMNode::enqueue_event(const NodeEvent& event) {
   std::lock_guard<std::mutex> lock(queue_mutex_);
   if(event_queue_.size() >= runtime_config_.max_queue_size) {
     return false;
@@ -112,12 +112,12 @@ bool Node::enqueue_event(const NodeEvent& event) {
   return true;
 }
 
-void Node::register_event_handler(const std::string& event_type, NodeEventHandler handler) {
+void MMNode::register_event_handler(const std::string& event_type, NodeEventHandler handler) {
   std::lock_guard<std::mutex> lock(event_handler_mutex_);
   event_handlers_[event_type].push_back(std::move(handler));
 }
 
-void Node::bind_context_workflow(const std::string& workflow_file) {
+void MMNode::bind_context_workflow(const std::string& workflow_file) {
   config_.node_context_workflow = workflow_file;
   AgentContext::Config context_config;
   context_config.context_id = config_.id + "_context";
@@ -126,7 +126,7 @@ void Node::bind_context_workflow(const std::string& workflow_file) {
   context_ = std::make_shared<AgentContext>(context_config);
 }
 
-void Node::message_dispatch_loop() {
+void MMNode::message_dispatch_loop() {
   while(runtime_running_) {
     Message message;
     {
@@ -158,7 +158,7 @@ void Node::message_dispatch_loop() {
   }
 }
 
-void Node::event_dispatch_loop() {
+void MMNode::event_dispatch_loop() {
   while(runtime_running_) {
     NodeEvent event;
     {
@@ -191,7 +191,7 @@ void Node::event_dispatch_loop() {
   }
 }
 
-void Node::process_message(const Message& message) {
+void MMNode::process_message(const Message& message) {
   std::lock_guard<std::mutex> exec_lock(execution_mutex_);
   set_inputs(message.inputs);
   if(get_state() == NodeState::WAITING) {
@@ -209,7 +209,7 @@ void Node::process_message(const Message& message) {
   enqueue_event(completion_event);
 }
 
-bool Node::initialize() {
+bool MMNode::initialize() {
   // Initialize node control plane
   retry_count_ = 0;
   last_error_.clear();
@@ -225,7 +225,7 @@ bool Node::initialize() {
   return true;
 }
 
-bool Node::execute() {
+bool MMNode::execute() {
   // [DEBUG] Log node execution start
   auto start_time = std::chrono::steady_clock::now();
 
@@ -282,7 +282,7 @@ bool Node::execute() {
   // Execute node task
   if(state_ != NodeState::READY && state_ != NodeState::RETRYING) {
     Logger::instance().error_f(
-        "[NODE_EXECUTE_ERROR] Node %s not in executable state, current state=%d",
+        "[NODE_EXECUTE_ERROR] MMNode %s not in executable state, current state=%d",
         config_.name.c_str(), static_cast<int>(state_));
     return false;
   }
@@ -350,9 +350,9 @@ bool Node::execute() {
   return result;
 }
 
-bool Node::cleanup() {
+bool MMNode::cleanup() {
   // Clean up node resources
-  Logger::instance().info_f("Node cleanup: %s", config_.name.c_str());
+  Logger::instance().info_f("MMNode cleanup: %s", config_.name.c_str());
   state_ = NodeState::WAITING;
   inputs_.clear();
   outputs_.clear();
@@ -363,7 +363,7 @@ bool Node::cleanup() {
   return true;
 }
 
-bool Node::execute_cpp_function() {
+bool MMNode::execute_cpp_function() {
   auto start_time = std::chrono::steady_clock::now();
 
   Logger::instance().info_f("[CPP_FUNC_START] NodeId=%s, NodeName=%s", config_.id.c_str(),
@@ -415,7 +415,7 @@ bool Node::execute_cpp_function() {
   return success;
 }
 
-bool Node::execute_shell_command() {
+bool MMNode::execute_shell_command() {
   auto start_time = std::chrono::steady_clock::now();
 
   // [DEBUG] Log shell command execution start
@@ -495,7 +495,7 @@ bool Node::execute_shell_command() {
   }
 }
 
-bool Node::execute_with_timeout(int timeout_ms, std::function<bool()> executor) {
+bool MMNode::execute_with_timeout(int timeout_ms, std::function<bool()> executor) {
   // [DEBUG] Log timeout execution start
   Logger::instance().info_f("[TIMEOUT_EXEC_START] NodeId=%s, NodeName=%s, Timeout=%dms",
                             config_.id.c_str(), config_.name.c_str(), timeout_ms);
@@ -562,8 +562,8 @@ bool Node::execute_with_timeout(int timeout_ms, std::function<bool()> executor) 
   }
 }
 
-bool Node::execute_with_worker_engine() {
-  runtime::WorkerEngine::ExecutionRequest request;
+bool MMNode::execute_with_worker_engine() {
+  runtime::MMWorkerEngine::ExecutionRequest request;
   request.command       = config_.command;
   request.function_name = config_.function_name;
   request.main_class    = config_.main_class;
@@ -576,30 +576,30 @@ bool Node::execute_with_worker_engine() {
 
   switch(config_.execution_mode) {
     case ExecutionMode::SHELL_SCRIPT:
-      request.mode = runtime::WorkerEngine::ExecutionMode::SHELL_SCRIPT;
+      request.mode = runtime::MMWorkerEngine::ExecutionMode::SHELL_SCRIPT;
       break;
     case ExecutionMode::EXECUTABLE:
-      request.mode = runtime::WorkerEngine::ExecutionMode::EXECUTABLE;
+      request.mode = runtime::MMWorkerEngine::ExecutionMode::EXECUTABLE;
       break;
     case ExecutionMode::GO_SCRIPT:
-      request.mode = runtime::WorkerEngine::ExecutionMode::GO_SCRIPT;
+      request.mode = runtime::MMWorkerEngine::ExecutionMode::GO_SCRIPT;
       break;
     case ExecutionMode::PYTHON_SCRIPT:
-      request.mode = runtime::WorkerEngine::ExecutionMode::PYTHON_SCRIPT;
+      request.mode = runtime::MMWorkerEngine::ExecutionMode::PYTHON_SCRIPT;
       break;
     case ExecutionMode::JAVA_JAR:
-      request.mode = runtime::WorkerEngine::ExecutionMode::JAVA_JAR;
+      request.mode = runtime::MMWorkerEngine::ExecutionMode::JAVA_JAR;
       break;
     case ExecutionMode::SO_LIBRARY:
-      request.mode = runtime::WorkerEngine::ExecutionMode::SO_LIBRARY;
+      request.mode = runtime::MMWorkerEngine::ExecutionMode::SO_LIBRARY;
       break;
     case ExecutionMode::CPP_FUNCTION:
     default:
-      request.mode = runtime::WorkerEngine::ExecutionMode::CPP_FUNCTION;
+      request.mode = runtime::MMWorkerEngine::ExecutionMode::CPP_FUNCTION;
       break;
   }
 
-  auto response = runtime::WorkerEngine::execute_code(request);
+  auto response = runtime::MMWorkerEngine::execute_code(request);
   if(response.success) {
     outputs_ = response.outputs;
     return true;
@@ -615,7 +615,7 @@ bool Node::execute_with_worker_engine() {
 // Hot Reload Implementation
 // ============================================================================
 
-bool Node::enable_code_reload() {
+bool MMNode::enable_code_reload() {
   if(config_.command.empty()) {
     return false;
   }
@@ -626,7 +626,7 @@ bool Node::enable_code_reload() {
   return true;
 }
 
-bool Node::disable_code_reload() {
+bool MMNode::disable_code_reload() {
   hot_reload_enabled_ = false;
   cleanup_hot_reload();
 
@@ -634,13 +634,13 @@ bool Node::disable_code_reload() {
   return true;
 }
 
-bool Node::reload_code() {
+bool MMNode::reload_code() {
   if(config_.command.empty()) {
     return false;
   }
 
-  if(runtime::WorkerEngine::check_and_reload_code(config_.command, config_.hot_reload_config)) {
-    auto current_version = runtime::WorkerEngine::get_code_version(config_.command);
+  if(runtime::MMWorkerEngine::check_and_reload_code(config_.command, config_.hot_reload_config)) {
+    auto current_version = runtime::MMWorkerEngine::get_code_version(config_.command);
     current_version_id_  = current_version ? current_version->version_id : current_version_id_;
     Logger::instance().info_f("[NODE_HOT_RELOAD] Reload success: %s, Version=%s",
                               config_.name.c_str(), current_version_id_.c_str());
@@ -651,13 +651,13 @@ bool Node::reload_code() {
   return false;
 }
 
-bool Node::check_and_reload_code() {
+bool MMNode::check_and_reload_code() {
   if(!hot_reload_enabled_ || config_.command.empty()) {
     return false;
   }
 
-  if(runtime::WorkerEngine::check_and_reload_code(config_.command, config_.hot_reload_config)) {
-    auto current_version = runtime::WorkerEngine::get_code_version(config_.command);
+  if(runtime::MMWorkerEngine::check_and_reload_code(config_.command, config_.hot_reload_config)) {
+    auto current_version = runtime::MMWorkerEngine::get_code_version(config_.command);
     current_version_id_  = current_version ? current_version->version_id : current_version_id_;
     Logger::instance().info_f("[NODE_HOT_RELOAD] File change detected and reloaded: %s, Version=%s",
                               config_.name.c_str(), current_version_id_.c_str());
@@ -667,20 +667,20 @@ bool Node::check_and_reload_code() {
   return false;
 }
 
-std::shared_ptr<runtime::ExecutableVersion> Node::get_code_version() const {
+std::shared_ptr<runtime::ExecutableVersion> MMNode::get_code_version() const {
   if(!hot_reload_enabled_ || config_.command.empty()) {
     return nullptr;
   }
 
-  return runtime::WorkerEngine::get_code_version(config_.command);
+  return runtime::MMWorkerEngine::get_code_version(config_.command);
 }
 
-bool Node::rollback_to_version(const std::string& version_id) {
+bool MMNode::rollback_to_version(const std::string& version_id) {
   if(!hot_reload_enabled_ || config_.command.empty()) {
     return false;
   }
 
-  bool result = runtime::WorkerEngine::rollback_code_version(config_.command, version_id);
+  bool result = runtime::MMWorkerEngine::rollback_code_version(config_.command, version_id);
 
   if(result) {
     current_version_id_ = version_id;
@@ -694,13 +694,13 @@ bool Node::rollback_to_version(const std::string& version_id) {
   return result;
 }
 
-void Node::setup_hot_reload() {
+void MMNode::setup_hot_reload() {
   if(config_.command.empty()) {
     return;
   }
 
-  runtime::WorkerEngine::check_and_reload_code(config_.command, config_.hot_reload_config);
-  auto version = runtime::WorkerEngine::get_code_version(config_.command);
+  runtime::MMWorkerEngine::check_and_reload_code(config_.command, config_.hot_reload_config);
+  auto version = runtime::MMWorkerEngine::get_code_version(config_.command);
   if(version) {
     current_version_id_ = version->version_id;
     Logger::instance().info_f("[NODE_HOT_RELOAD] Setup complete: %s, InitialVersion=%s",
@@ -708,12 +708,12 @@ void Node::setup_hot_reload() {
   }
 }
 
-void Node::cleanup_hot_reload() {
+void MMNode::cleanup_hot_reload() {
   if(config_.command.empty()) {
     return;
   }
 
-  runtime::WorkerEngine::stop_hot_reload(config_.command);
+  runtime::MMWorkerEngine::stop_hot_reload(config_.command);
 
   Logger::instance().info_f("[NODE_HOT_RELOAD] Cleanup complete: %s", config_.name.c_str());
 }
@@ -722,7 +722,7 @@ void Node::cleanup_hot_reload() {
 // SO Library Execution
 // ============================================================================
 
-bool Node::execute_so_library() {
+bool MMNode::execute_so_library() {
   auto start_time = std::chrono::steady_clock::now();
 
   Logger::instance().info_f("[SO_LIB_START] NodeId=%s, NodeName=%s, Lib=%s, Function=%s",
@@ -781,7 +781,7 @@ bool Node::execute_so_library() {
 // Execute with Code Loader
 // ============================================================================
 
-runtime::ExecutionResult Node::execute_with_code_loader() {
+runtime::ExecutionResult MMNode::execute_with_code_loader() {
   if(!code_loader_) {
     runtime::ExecutionResult result;
     result.success       = false;
@@ -801,7 +801,7 @@ runtime::ExecutionResult Node::execute_with_code_loader() {
 // Script Execution (generic)
 // ============================================================================
 
-bool Node::execute_script(runtime::ExecutableType type) {
+bool MMNode::execute_script(runtime::ExecutableType type) {
   auto start_time = std::chrono::steady_clock::now();
 
   std::string type_str = runtime::CodeLoader::executable_type_to_string(type);
@@ -879,7 +879,7 @@ bool Node::execute_script(runtime::ExecutableType type) {
 // JAR File Execution
 // ============================================================================
 
-bool Node::execute_jar_file() {
+bool MMNode::execute_jar_file() {
   return execute_script(runtime::ExecutableType::JAR_FILE);
 }
 

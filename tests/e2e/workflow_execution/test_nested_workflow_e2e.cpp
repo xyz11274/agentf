@@ -41,7 +41,7 @@ protected:
 };
 
 /**
- * TC-E2E-011: 嵌套 Workflow Agent 包加载
+ * TC-E2E-011: 嵌套 MMWorkflow MMAgent 包加载
  */
 TEST_F(NestedWorkflowE2ETest, PackageLoading) {
     EXPECT_TRUE(std::filesystem::exists(package_path_ + "/package.json"));
@@ -56,10 +56,10 @@ TEST_F(NestedWorkflowE2ETest, PackageLoading) {
 }
 
 /**
- * TC-E2E-012: 嵌套 Workflow Agent 创建和初始化
+ * TC-E2E-012: 嵌套 MMWorkflow MMAgent 创建和初始化
  */
 TEST_F(NestedWorkflowE2ETest, AgentCreationAndInit) {
-    auto agent = framework::Agent::create_from_package(package_path_);
+    auto agent = framework::MMAgent::create_from_package(package_path_);
     ASSERT_NE(agent, nullptr);
 
     EXPECT_TRUE(agent->initialize());
@@ -69,10 +69,10 @@ TEST_F(NestedWorkflowE2ETest, AgentCreationAndInit) {
 }
 
 /**
- * TC-E2E-013: Main Workflow 结构验证
+ * TC-E2E-013: Main MMWorkflow 结构验证
  */
 TEST_F(NestedWorkflowE2ETest, MainWorkflowStructure) {
-    auto agent = framework::Agent::create_from_package(package_path_);
+    auto agent = framework::MMAgent::create_from_package(package_path_);
     ASSERT_NE(agent, nullptr);
     ASSERT_TRUE(agent->initialize());
 
@@ -95,10 +95,10 @@ TEST_F(NestedWorkflowE2ETest, MainWorkflowStructure) {
 }
 
 /**
- * TC-E2E-014: Data Pipeline Workflow 嵌套结构
+ * TC-E2E-014: Data Pipeline MMWorkflow 嵌套结构
  */
 TEST_F(NestedWorkflowE2ETest, DataPipelineNestedStructure) {
-    auto agent = framework::Agent::create_from_package(package_path_);
+    auto agent = framework::MMAgent::create_from_package(package_path_);
     ASSERT_NE(agent, nullptr);
     ASSERT_TRUE(agent->initialize());
 
@@ -121,10 +121,10 @@ TEST_F(NestedWorkflowE2ETest, DataPipelineNestedStructure) {
 }
 
 /**
- * TC-E2E-015: Validation Workflow 结构（最深层嵌套）
+ * TC-E2E-015: Validation MMWorkflow 结构（最深层嵌套）
  */
 TEST_F(NestedWorkflowE2ETest, ValidationWorkflowStructure) {
-    auto agent = framework::Agent::create_from_package(package_path_);
+    auto agent = framework::MMAgent::create_from_package(package_path_);
     ASSERT_NE(agent, nullptr);
     ASSERT_TRUE(agent->initialize());
 
@@ -136,16 +136,16 @@ TEST_F(NestedWorkflowE2ETest, ValidationWorkflowStructure) {
 
     // 验证所有节点都是 shell_script 类型（叶子节点）
     for (const auto& node : nodes) {
-        EXPECT_EQ(node->get_execution_mode(), framework::Node::ExecutionMode::SHELL_SCRIPT)
+        EXPECT_EQ(node->get_execution_mode(), framework::MMNode::ExecutionMode::SHELL_SCRIPT)
             << "Leaf nodes should use shell_script execution";
     }
 }
 
 /**
- * TC-E2E-016: Processing Workflow 结构
+ * TC-E2E-016: Processing MMWorkflow 结构
  */
 TEST_F(NestedWorkflowE2ETest, ProcessingWorkflowStructure) {
-    auto agent = framework::Agent::create_from_package(package_path_);
+    auto agent = framework::MMAgent::create_from_package(package_path_);
     ASSERT_NE(agent, nullptr);
     ASSERT_TRUE(agent->initialize());
 
@@ -160,7 +160,7 @@ TEST_F(NestedWorkflowE2ETest, ProcessingWorkflowStructure) {
  * TC-E2E-017: 嵌套层级验证
  */
 TEST_F(NestedWorkflowE2ETest, NestedLevelsVerification) {
-    auto agent = framework::Agent::create_from_package(package_path_);
+    auto agent = framework::MMAgent::create_from_package(package_path_);
     ASSERT_NE(agent, nullptr);
     ASSERT_TRUE(agent->initialize());
 
@@ -202,12 +202,12 @@ TEST_F(NestedWorkflowE2ETest, NestedLevelsVerification) {
 }
 
 /**
- * TC-E2E-018: 嵌套 Workflow 执行验证
+ * TC-E2E-018: 嵌套 MMWorkflow 执行验证
  * 验证 main workflow 的节点执行顺序和输出
  */
 TEST_F(NestedWorkflowE2ETest, MainWorkflowExecution) {
-    // 1. 创建并初始化 Agent
-    auto agent = framework::Agent::create_from_package(package_path_);
+    // 1. 创建并初始化 MMAgent
+    auto agent = framework::MMAgent::create_from_package(package_path_);
     ASSERT_NE(agent, nullptr);
     ASSERT_TRUE(agent->initialize());
 
@@ -240,11 +240,11 @@ TEST_F(NestedWorkflowE2ETest, MainWorkflowExecution) {
 }
 
 /**
- * TC-E2E-019: 子 Workflow 执行验证 (Data Pipeline)
+ * TC-E2E-019: 子 MMWorkflow 执行验证 (Data Pipeline)
  * 验证 data_pipeline workflow 的节点执行顺序
  */
 TEST_F(NestedWorkflowE2ETest, DataPipelineExecution) {
-    auto agent = framework::Agent::create_from_package(package_path_);
+    auto agent = framework::MMAgent::create_from_package(package_path_);
     ASSERT_NE(agent, nullptr);
     ASSERT_TRUE(agent->initialize());
 
@@ -272,11 +272,11 @@ TEST_F(NestedWorkflowE2ETest, DataPipelineExecution) {
 }
 
 /**
- * TC-E2E-020: Validation Workflow 执行验证（叶子层）
+ * TC-E2E-020: Validation MMWorkflow 执行验证（叶子层）
  * 验证最深层 workflow 的节点执行顺序
  */
 TEST_F(NestedWorkflowE2ETest, ValidationWorkflowExecution) {
-    auto agent = framework::Agent::create_from_package(package_path_);
+    auto agent = framework::MMAgent::create_from_package(package_path_);
     ASSERT_NE(agent, nullptr);
     ASSERT_TRUE(agent->initialize());
 
@@ -303,11 +303,11 @@ TEST_F(NestedWorkflowE2ETest, ValidationWorkflowExecution) {
 }
 
 /**
- * TC-E2E-021: Processing Workflow 执行验证
+ * TC-E2E-021: Processing MMWorkflow 执行验证
  * 验证 processing workflow 的节点执行顺序
  */
 TEST_F(NestedWorkflowE2ETest, ProcessingWorkflowExecution) {
-    auto agent = framework::Agent::create_from_package(package_path_);
+    auto agent = framework::MMAgent::create_from_package(package_path_);
     ASSERT_NE(agent, nullptr);
     ASSERT_TRUE(agent->initialize());
 
@@ -338,7 +338,7 @@ TEST_F(NestedWorkflowE2ETest, ProcessingWorkflowExecution) {
  * 验证叶子节点的 shell_script 可以正确执行并产生输出
  */
 TEST_F(NestedWorkflowE2ETest, ShellScriptNodeExecution) {
-    auto agent = framework::Agent::create_from_package(package_path_);
+    auto agent = framework::MMAgent::create_from_package(package_path_);
     ASSERT_NE(agent, nullptr);
     ASSERT_TRUE(agent->initialize());
 
@@ -351,7 +351,7 @@ TEST_F(NestedWorkflowE2ETest, ShellScriptNodeExecution) {
     ASSERT_NE(node, nullptr);
 
     // 验证节点配置
-    EXPECT_EQ(node->get_execution_mode(), framework::Node::ExecutionMode::SHELL_SCRIPT);
+    EXPECT_EQ(node->get_execution_mode(), framework::MMNode::ExecutionMode::SHELL_SCRIPT);
     EXPECT_FALSE(node->get_command().empty());
 
     // 获取脚本绝对路径
@@ -361,14 +361,14 @@ TEST_F(NestedWorkflowE2ETest, ShellScriptNodeExecution) {
     // 验证脚本文件存在
     ASSERT_TRUE(std::filesystem::exists(script_path)) << "Script should exist: " << script_path;
 
-    // 通过 WorkerEngine 执行脚本
-    runtime::WorkerEngine::ExecutionRequest request;
-    request.mode = runtime::WorkerEngine::ExecutionMode::SHELL_SCRIPT;
+    // 通过 MMWorkerEngine 执行脚本
+    runtime::MMWorkerEngine::ExecutionRequest request;
+    request.mode = runtime::MMWorkerEngine::ExecutionMode::SHELL_SCRIPT;
     request.command = script_path;
     request.working_dir = script_dir;
     request.timeout_ms = 5000;
 
-    auto response = runtime::WorkerEngine::execute_code(request);
+    auto response = runtime::MMWorkerEngine::execute_code(request);
 
     // 验证执行结果
     EXPECT_TRUE(response.success) << "Script execution should succeed, error: " << response.error_message;
@@ -383,11 +383,11 @@ TEST_F(NestedWorkflowE2ETest, ShellScriptNodeExecution) {
 }
 
 /**
- * TC-E2E-023: 完整嵌套 Workflow 执行链路验证
+ * TC-E2E-023: 完整嵌套 MMWorkflow 执行链路验证
  * 验证从 main workflow 到叶子节点的完整执行链路
  */
 TEST_F(NestedWorkflowE2ETest, FullNestedExecutionChain) {
-    auto agent = framework::Agent::create_from_package(package_path_);
+    auto agent = framework::MMAgent::create_from_package(package_path_);
     ASSERT_NE(agent, nullptr);
     ASSERT_TRUE(agent->initialize());
 
@@ -416,7 +416,7 @@ TEST_F(NestedWorkflowE2ETest, FullNestedExecutionChain) {
         for (const auto& node : wf->get_nodes()) {
             if (node->get_type() == "workflow") {
                 workflow_type_count++;
-            } else if (node->get_execution_mode() == framework::Node::ExecutionMode::SHELL_SCRIPT) {
+            } else if (node->get_execution_mode() == framework::MMNode::ExecutionMode::SHELL_SCRIPT) {
                 shell_script_count++;
             } else if (node->get_type() == "start" || node->get_type() == "end") {
                 start_end_count++;

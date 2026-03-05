@@ -1,4 +1,4 @@
-# Workflow / Node 开发指南
+# MMWorkflow / MMNode 开发指南
 
 ## 内建 workflow
 
@@ -11,12 +11,12 @@
 - `pattern/cycled_workflow.json`
 - `pattern/dynamic_workflow.json`
 
-## Workflow DSL 示例
+## MMWorkflow DSL 示例
 
 标准示例文件位于：
 - `publish/workflow/workflow_sample.jsonc`
 
-## Workflow 开发步骤
+## MMWorkflow 开发步骤
 
 1. 定义 workflow 的 id/name/version。
 2. 定义 node（声明 `execution_mode` 与可执行绑定）。
@@ -28,14 +28,14 @@
    - 顶层包含：`includes: ["relative/path/subflow.json"]`
    - workflow 节点：`type: "workflow"` + `workflow_ref`
 
-## Node 开发入口
+## MMNode 开发入口
 
-- Node 开发规范：`publish/workflow/NODE_DEVELOPMENT_SPEC.md`
-- Node API：`publish/workflow/NODE_API_REFERENCE.md`
-- Node 模板：`publish/workflow/node_patterns/`
-- Node Skill 说明：`src/workflow/node/skill.md`
+- MMNode 开发规范：`publish/workflow/NODE_DEVELOPMENT_SPEC.md`
+- MMNode API：`publish/workflow/NODE_API_REFERENCE.md`
+- MMNode 模板：`publish/workflow/node_patterns/`
+- MMNode Skill 说明：`src/workflow/node/skill.md`
 
-## Workflow Skill 化
+## MMWorkflow Skill 化
 
 - DSL Skill 说明：`src/workflow/dsl/skill.md`
 
@@ -47,4 +47,4 @@
 
 ## 打包集成
 
-当 Agent `package.json` 配置了 `builtin_workflows` 时，`publish/agent_build.sh` 会将对应内建 workflow 一并打包。
+当 MMAgent `package.json` 配置了 `builtin_workflows` 时，`publish/agent_build.sh` 会将对应内建 workflow 一并打包。

@@ -22,10 +22,10 @@ namespace framework {
 class AgentContext;
 
 /**
- * Node represents a task execution unit in a workflow graph.
+ * MMNode represents a task execution unit in a workflow graph.
  * Each node has a control plane and a running plane
  */
-class Node {
+class MMNode {
 public:
   enum class ExecutionMode {
     CPP_FUNCTION,   // Local C++ function execution
@@ -75,7 +75,7 @@ public:
     // C++ function callback for CPP_FUNCTION execution mode
     std::function<bool(const DataMap& inputs, DataMap& outputs)> cpp_function;
 
-    // Workflow reference for nested workflow node (type == "workflow")
+    // MMWorkflow reference for nested workflow node (type == "workflow")
     std::string workflow_ref;
     std::string node_context_workflow;
   };
@@ -105,8 +105,8 @@ public:
 
   using NodeEventHandler = std::function<void(const NodeEvent&)>;
 
-  explicit Node(const Config& config);
-  ~Node();
+  explicit MMNode(const Config& config);
+  ~MMNode();
 
   // Getters
   const NodeId&      get_id() const { return config_.id; }
@@ -152,7 +152,7 @@ public:
   // Code loader access
   runtime::ExecutionResult execute_with_code_loader();
 
-  // Node runtime queue + event loop
+  // MMNode runtime queue + event loop
   bool start_runtime();
   bool start_runtime(const RuntimeConfig& config);
   void stop_runtime();

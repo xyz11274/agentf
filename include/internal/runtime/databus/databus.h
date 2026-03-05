@@ -15,10 +15,10 @@ namespace agentflow {
 namespace runtime {
 
 /**
- * DataBus provides unified data sharing interface for both local and remote communication.
+ * MMDataBus provides unified data sharing interface for both local and remote communication.
  * It encapsulates LocalDatabus (intra-node) and RemoteDatabus (cross-node).
  */
-class DataBus {
+class MMDataBus {
 public:
   using DataChangeCallback = std::function<void(const std::string&, const DataVariant&)>;
   struct OwnerContext {
@@ -40,8 +40,8 @@ public:
     std::string checksum;
   };
 
-  explicit DataBus(size_t capacity = 1024 * 1024);
-  ~DataBus() = default;
+  explicit MMDataBus(size_t capacity = 1024 * 1024);
+  ~MMDataBus() = default;
 
   // Data operations (delegates to shared memory / remote bus)
   bool put(const std::string& key, const DataVariant& value);
@@ -85,7 +85,7 @@ private:
 };
 
 // Alias for backward compatibility if needed, or just replace usages
-using HighSpeedDataBus = DataBus;
+using HighSpeedDataBus = MMDataBus;
 
 }  // namespace runtime
 }  // namespace agentflow

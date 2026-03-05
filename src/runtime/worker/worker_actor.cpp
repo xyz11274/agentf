@@ -6,8 +6,8 @@
 namespace agentflow {
 namespace runtime {
 
-WorkerActor::WorkerActor(std::shared_ptr<WorkerEngine> worker,
-                         std::shared_ptr<RuntimeActor> runtime_actor, int heartbeat_interval_ms)
+WorkerActor::WorkerActor(std::shared_ptr<MMWorkerEngine> worker,
+                         std::shared_ptr<MMRuntimeActor> runtime_actor, int heartbeat_interval_ms)
     : worker_(std::move(worker)),
       runtime_actor_(std::move(runtime_actor)),
       heartbeat_interval_ms_(heartbeat_interval_ms) {
@@ -96,13 +96,13 @@ void WorkerActor::on_message(std::shared_ptr<actor::adapter::IContext> ctx) {
   }
   auto msg = ctx->current_message();
   if(msg.message_type == "worker.start") {
-    worker_->set_status(WorkerEngine::WorkerStatus::RUNNING);
+    worker_->set_status(MMWorkerEngine::WorkerStatus::RUNNING);
     report_status();
   } else if(msg.message_type == "worker.pause") {
-    worker_->set_status(WorkerEngine::WorkerStatus::DEGRADED);
+    worker_->set_status(MMWorkerEngine::WorkerStatus::DEGRADED);
     report_status();
   } else if(msg.message_type == "worker.stop") {
-    worker_->set_status(WorkerEngine::WorkerStatus::STOPPED);
+    worker_->set_status(MMWorkerEngine::WorkerStatus::STOPPED);
     report_status();
   } else if(msg.message_type == "worker.sync_status") {
     report_status();

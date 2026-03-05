@@ -14,10 +14,10 @@ namespace framework {
 class AgentContext;
 
 /**
- * AgentTask represents a single task executed within an agent
+ * MMAgentTask represents a single task executed within an agent
  * Manages task execution state, progress, and results
  */
-class AgentTask {
+class MMAgentTask {
 public:
   enum class TaskState {
     PENDING    = 0,
@@ -40,8 +40,8 @@ public:
     int         max_retries = 3;
   };
 
-  explicit AgentTask(const Config& config);
-  ~AgentTask();
+  explicit MMAgentTask(const Config& config);
+  ~MMAgentTask();
 
   // Getters
   const std::string& get_task_id() const { return config_.task_id; }

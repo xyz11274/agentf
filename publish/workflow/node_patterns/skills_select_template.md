@@ -1,4 +1,4 @@
-# Skills Select Node Template
+# Skills Select MMNode Template
 
 ## Prompt Pattern
 Use skills protocol manifest to select a skill and generate invocation args.

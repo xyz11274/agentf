@@ -94,25 +94,25 @@ ActorSystemManager::~ActorSystemManager() {
 namespace agentflow {
 namespace runtime {
 
-RuntimeActor::RuntimeActor(std::shared_ptr<AgentRuntime> runtime) : runtime_(std::move(runtime)) {
+MMRuntimeActor::MMRuntimeActor(std::shared_ptr<MMAgentRuntime> runtime) : runtime_(std::move(runtime)) {
 }
 
-void RuntimeActor::on_start() {
-  Logger::instance().info("RuntimeActor started");
+void MMRuntimeActor::on_start() {
+  Logger::instance().info("MMRuntimeActor started");
 }
 
-void RuntimeActor::on_stop() {
-  Logger::instance().info("RuntimeActor stopped");
+void MMRuntimeActor::on_stop() {
+  Logger::instance().info("MMRuntimeActor stopped");
 }
 
-void RuntimeActor::on_message(std::shared_ptr<actor::adapter::IContext> ctx) {
+void MMRuntimeActor::on_message(std::shared_ptr<actor::adapter::IContext> ctx) {
   if(!ctx) {
     return;
   }
   handle_message(ctx->current_message());
 }
 
-bool RuntimeActor::handle_message(const actor::adapter::ActorMessage& msg) {
+bool MMRuntimeActor::handle_message(const actor::adapter::ActorMessage& msg) {
   if(!runtime_) {
     return false;
   }

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// Google Test tests for Workflow component
+// Google Test tests for MMWorkflow component
 
 #include <gtest/gtest.h>
 

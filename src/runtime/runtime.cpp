@@ -22,7 +22,7 @@ int64_t now_ms() {
 }
 }  // namespace
 
-AgentRuntime::AgentRuntime() {
+MMAgentRuntime::MMAgentRuntime() {
   config_.worker_threads = num_worker_threads_;
   role_ = config_.role;
   shared_state_ = std::make_shared<InMemoryRuntimeSharedState>();
@@ -30,13 +30,13 @@ AgentRuntime::AgentRuntime() {
   scheduler_ = std::unique_ptr<master::Scheduler>(new master::Scheduler());
   scheduler_->set_workflow_snapshot_provider(
       [this]() { return shared_state_ ? shared_state_->list_workflow_instances() : std::vector<WorkflowInstanceInfo>{}; });
-  local_worker_ = std::make_shared<WorkerEngine>(
-      WorkerEngine::Config{config_.local_worker_id, true, config_.worker_default_workflow_threads,
+  local_worker_ = std::make_shared<MMWorkerEngine>(
+      MMWorkerEngine::Config{config_.local_worker_id, true, config_.worker_default_workflow_threads,
                            config_.worker_event_threads, config_.worker_queue_size});
-  local_worker_->set_status(WorkerEngine::WorkerStatus::RUNNING);
+  local_worker_->set_status(MMWorkerEngine::WorkerStatus::RUNNING);
 }
 
-AgentRuntime::AgentRuntime(const Config& config) : config_(config), role_(config.role) {
+MMAgentRuntime::MMAgentRuntime(const Config& config) : config_(config), role_(config.role) {
   num_worker_threads_ = config.worker_threads > 0 ? config.worker_threads : num_worker_threads_;
   shared_state_ = std::make_shared<InMemoryRuntimeSharedState>();
   deployer_ = std::unique_ptr<master::Deployer>(new master::Deployer());
@@ -44,58 +44,58 @@ AgentRuntime::AgentRuntime(const Config& config) : config_(config), role_(config
   scheduler_->set_workflow_snapshot_provider(
       [this]() { return shared_state_ ? shared_state_->list_workflow_instances() : std::vector<WorkflowInstanceInfo>{}; });
   local_worker_ =
-      std::make_shared<WorkerEngine>(WorkerEngine::Config{config.local_worker_id, true,
+      std::make_shared<MMWorkerEngine>(MMWorkerEngine::Config{config.local_worker_id, true,
                                                            config.worker_default_workflow_threads,
                                                            config.worker_event_threads,
                                                            config.worker_queue_size});
-  local_worker_->set_status(WorkerEngine::WorkerStatus::RUNNING);
+  local_worker_->set_status(MMWorkerEngine::WorkerStatus::RUNNING);
 }
 
-AgentRuntime::~AgentRuntime() {
+MMAgentRuntime::~MMAgentRuntime() {
   stop();
 }
 
-void AgentRuntime::set_role(RuntimeRole role) {
+void MMAgentRuntime::set_role(RuntimeRole role) {
   role_ = role;
 }
 
-bool AgentRuntime::register_worker_engine(const std::shared_ptr<WorkerEngine>& worker) {
+bool MMAgentRuntime::register_worker_engine(const std::shared_ptr<MMWorkerEngine>& worker) {
   if(!deployer_) {
     return false;
   }
   return deployer_->register_worker(worker);
 }
 
-bool AgentRuntime::unregister_worker_engine(const std::string& worker_id) {
+bool MMAgentRuntime::unregister_worker_engine(const std::string& worker_id) {
   if(!deployer_) {
     return false;
   }
   return deployer_->unregister_worker(worker_id);
 }
 
-bool AgentRuntime::heartbeat_worker(const std::string& worker_id) {
+bool MMAgentRuntime::heartbeat_worker(const std::string& worker_id) {
   if(!deployer_) {
     return false;
   }
   return deployer_->update_worker_heartbeat(worker_id);
 }
 
-bool AgentRuntime::update_worker_engine_status(const std::string& worker_id,
-                                               WorkerEngine::WorkerStatus status) {
+bool MMAgentRuntime::update_worker_engine_status(const std::string& worker_id,
+                                               MMWorkerEngine::WorkerStatus status) {
   if(!deployer_) {
     return false;
   }
   return deployer_->update_worker_status(worker_id, status);
 }
 
-std::vector<master::WorkerSnapshot> AgentRuntime::list_worker_engines() const {
+std::vector<master::WorkerSnapshot> MMAgentRuntime::list_worker_engines() const {
   if(!deployer_) {
     return {};
   }
   return deployer_->list_worker_snapshots();
 }
 
-bool AgentRuntime::deploy_workflow_instance(const WorkflowInstanceInfo& info,
+bool MMAgentRuntime::deploy_workflow_instance(const WorkflowInstanceInfo& info,
                                             const std::string& preferred_worker_id) {
   if(!deployer_ || !shared_state_) {
     return false;
@@ -113,7 +113,7 @@ bool AgentRuntime::deploy_workflow_instance(const WorkflowInstanceInfo& info,
   return true;
 }
 
-bool AgentRuntime::destroy_workflow_instance(const std::string& workflow_instance_id) {
+bool MMAgentRuntime::destroy_workflow_instance(const std::string& workflow_instance_id) {
   if(!deployer_ || !shared_state_) {
     return false;
   }
@@ -122,7 +122,7 @@ bool AgentRuntime::destroy_workflow_instance(const std::string& workflow_instanc
   return removed_mapping || removed_state;
 }
 
-master::TaskScheduleResult AgentRuntime::schedule_task(const master::TaskScheduleRequest& request) {
+master::TaskScheduleResult MMAgentRuntime::schedule_task(const master::TaskScheduleRequest& request) {
   if(!scheduler_ || !shared_state_) {
     return {};
   }
@@ -144,7 +144,7 @@ master::TaskScheduleResult AgentRuntime::schedule_task(const master::TaskSchedul
   return result;
 }
 
-bool AgentRuntime::report_agent_heartbeat(const AgentId& agent_id) {
+bool MMAgentRuntime::report_agent_heartbeat(const AgentId& agent_id) {
   std::lock_guard<std::mutex> lock(agents_mutex_);
   if(agents_.find(agent_id) == agents_.end()) {
     return false;
@@ -153,7 +153,7 @@ bool AgentRuntime::report_agent_heartbeat(const AgentId& agent_id) {
   return true;
 }
 
-bool AgentRuntime::update_task_status(const std::string& task_id, const std::string& status,
+bool MMAgentRuntime::update_task_status(const std::string& task_id, const std::string& status,
                                       int progress) {
   if(!shared_state_ || !scheduler_) {
     return false;
@@ -168,16 +168,16 @@ bool AgentRuntime::update_task_status(const std::string& task_id, const std::str
   return scheduler_->update_task_status(task_id, status, progress);
 }
 
-bool AgentRuntime::register_agent(AgentPtr agent) {
+bool MMAgentRuntime::register_agent(AgentPtr agent) {
   if(!agent) {
     return false;
   }
   if(!is_running_) {
     std::lock_guard<std::mutex> lock(agents_mutex_);
     agents_[agent->get_id()] = agent;
-    databuses_[agent->get_id()] = std::unique_ptr<DataBus>(new DataBus(1024 * 1024));
+    databuses_[agent->get_id()] = std::unique_ptr<MMDataBus>(new MMDataBus(1024 * 1024));
     agent_heartbeats_[agent->get_id()] = now_ms();
-    Logger::instance().info_f("Agent registered: %s (id: %s)", agent->get_name().c_str(),
+    Logger::instance().info_f("MMAgent registered: %s (id: %s)", agent->get_name().c_str(),
                               agent->get_id().c_str());
     return true;
   }
@@ -196,7 +196,7 @@ bool AgentRuntime::register_agent(AgentPtr agent) {
   return result;
 }
 
-bool AgentRuntime::unregister_agent(const AgentId& agent_id) {
+bool MMAgentRuntime::unregister_agent(const AgentId& agent_id) {
   auto agent = get_agent(agent_id);
   if(!agent) {
     return false;
@@ -208,7 +208,7 @@ bool AgentRuntime::unregister_agent(const AgentId& agent_id) {
       agents_.erase(it);
       databuses_.erase(agent_id);
       agent_heartbeats_.erase(agent_id);
-      Logger::instance().info_f("Agent unregistered: %s", agent_id.c_str());
+      Logger::instance().info_f("MMAgent unregistered: %s", agent_id.c_str());
       return true;
     }
     return false;
@@ -228,14 +228,14 @@ bool AgentRuntime::unregister_agent(const AgentId& agent_id) {
   return result;
 }
 
-AgentPtr AgentRuntime::get_agent(const AgentId& agent_id) {
+AgentPtr MMAgentRuntime::get_agent(const AgentId& agent_id) {
   std::lock_guard<std::mutex> lock(agents_mutex_);
 
   auto it = agents_.find(agent_id);
   return it != agents_.end() ? it->second : nullptr;
 }
 
-std::vector<AgentPtr> AgentRuntime::list_agents() {
+std::vector<AgentPtr> MMAgentRuntime::list_agents() {
   std::lock_guard<std::mutex> lock(agents_mutex_);
 
   std::vector<AgentPtr> result;
@@ -245,7 +245,7 @@ std::vector<AgentPtr> AgentRuntime::list_agents() {
   return result;
 }
 
-bool AgentRuntime::load_workflow(const AgentId& agent_id, WorkflowPtr workflow) {
+bool MMAgentRuntime::load_workflow(const AgentId& agent_id, WorkflowPtr workflow) {
   auto agent = get_agent(agent_id);
   if(!agent || !workflow) {
     return false;
@@ -254,29 +254,29 @@ bool AgentRuntime::load_workflow(const AgentId& agent_id, WorkflowPtr workflow) 
   agent->add_workflow(workflow);
   if(!workflow->validate()) {
     agent->remove_workflow(workflow->get_id());
-    Logger::instance().error_f("Workflow validation failed: %s", workflow->get_name().c_str());
+    Logger::instance().error_f("MMWorkflow validation failed: %s", workflow->get_name().c_str());
     return false;
   }
 
-  Logger::instance().info_f("Workflow loaded into agent %s: %s (id: %s, %zu nodes)",
+  Logger::instance().info_f("MMWorkflow loaded into agent %s: %s (id: %s, %zu nodes)",
                             agent_id.c_str(), workflow->get_name().c_str(),
                             workflow->get_id().c_str(), workflow->get_nodes().size());
   return true;
 }
 
-bool AgentRuntime::unload_workflow(const AgentId& agent_id, const WorkflowId& workflow_id) {
+bool MMAgentRuntime::unload_workflow(const AgentId& agent_id, const WorkflowId& workflow_id) {
   auto agent = get_agent(agent_id);
   if(!agent) {
     return false;
   }
 
   agent->remove_workflow(workflow_id);
-  Logger::instance().info_f("Workflow unloaded from agent %s: %s", agent_id.c_str(),
+  Logger::instance().info_f("MMWorkflow unloaded from agent %s: %s", agent_id.c_str(),
                             workflow_id.c_str());
   return true;
 }
 
-bool AgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId& workflow_id,
+bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId& workflow_id,
                                     const DataMap& inputs) {
   if(draining_) {
     Logger::instance().warn("Rejecting new workflow — runtime is draining");
@@ -335,7 +335,7 @@ bool AgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId& w
   return true;
 }
 
-void AgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr node) {
+void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr node) {
   if(!agent || !node) {
     Logger::instance().error_f("[PROCESS_NODE_ERROR] Invalid agent or node pointer");
     return;
@@ -395,7 +395,7 @@ void AgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr no
   }
 }
 
-void AgentRuntime::schedule_workflow_executable_nodes(const std::string& execution_id) {
+void MMAgentRuntime::schedule_workflow_executable_nodes(const std::string& execution_id) {
   std::lock_guard<std::mutex> state_lock(workflow_state_mutex_);
 
   auto it = workflow_states_.find(execution_id);
@@ -440,7 +440,7 @@ void AgentRuntime::schedule_workflow_executable_nodes(const std::string& executi
                             executable_nodes.size());
 }
 
-void AgentRuntime::update_workflow_state(const std::string& execution_id, const NodeId& node_id,
+void MMAgentRuntime::update_workflow_state(const std::string& execution_id, const NodeId& node_id,
                                          bool success) {
   std::lock_guard<std::mutex> lock(workflow_state_mutex_);
 
@@ -458,7 +458,7 @@ void AgentRuntime::update_workflow_state(const std::string& execution_id, const 
     state.failed_nodes[node_id] = true;
   }
 
-  Logger::instance().info_f("Workflow progress: %s - %d/%d completed, %zu failed",
+  Logger::instance().info_f("MMWorkflow progress: %s - %d/%d completed, %zu failed",
                             execution_id.c_str(), state.completed_count, state.total_nodes,
                             state.failed_nodes.size());
 
@@ -467,11 +467,11 @@ void AgentRuntime::update_workflow_state(const std::string& execution_id, const 
     state.in_progress = false;
 
     if(state.failed_nodes.empty()) {
-      Logger::instance().info_f("Workflow execution completed successfully: %s",
+      Logger::instance().info_f("MMWorkflow execution completed successfully: %s",
                                 state.workflow_id.c_str());
       on_workflow_complete(state.agent_id, state.workflow_id, true);
     } else {
-      Logger::instance().error_f("Workflow execution failed: %s (%zu nodes failed)",
+      Logger::instance().error_f("MMWorkflow execution failed: %s (%zu nodes failed)",
                                  state.workflow_id.c_str(), state.failed_nodes.size());
       on_workflow_complete(state.agent_id, state.workflow_id, false);
     }
@@ -501,9 +501,9 @@ void AgentRuntime::update_workflow_state(const std::string& execution_id, const 
   }
 }
 
-void AgentRuntime::on_node_complete(const AgentId& agent_id, const WorkflowId& workflow_id,
+void MMAgentRuntime::on_node_complete(const AgentId& agent_id, const WorkflowId& workflow_id,
                                     const NodeId& node_id, bool success) {
-  Logger::instance().info_f("Node complete event: agent=%s, workflow=%s, node=%s, success=%d",
+  Logger::instance().info_f("MMNode complete event: agent=%s, workflow=%s, node=%s, success=%d",
                             agent_id.c_str(), workflow_id.c_str(), node_id.c_str(),
                             success ? 1 : 0);
 
@@ -533,9 +533,9 @@ void AgentRuntime::on_node_complete(const AgentId& agent_id, const WorkflowId& w
   }
 }
 
-void AgentRuntime::on_workflow_complete(const AgentId& agent_id, const WorkflowId& workflow_id,
+void MMAgentRuntime::on_workflow_complete(const AgentId& agent_id, const WorkflowId& workflow_id,
                                         bool success) {
-  Logger::instance().info_f("Workflow complete event: agent=%s, workflow=%s, success=%d",
+  Logger::instance().info_f("MMWorkflow complete event: agent=%s, workflow=%s, success=%d",
                             agent_id.c_str(), workflow_id.c_str(), success ? 1 : 0);
 
   // Clean up execution states matching this agent+workflow
@@ -549,7 +549,7 @@ void AgentRuntime::on_workflow_complete(const AgentId& agent_id, const WorkflowI
   }
 }
 
-void AgentRuntime::update_worker_load(int worker_id, int load_change) {
+void MMAgentRuntime::update_worker_load(int worker_id, int load_change) {
   std::lock_guard<std::mutex> lock(worker_load_mutex_);
 
   if(worker_id >= 0 && worker_id < num_worker_threads_) {
@@ -560,7 +560,7 @@ void AgentRuntime::update_worker_load(int worker_id, int load_change) {
   }
 }
 
-int AgentRuntime::get_least_loaded_worker() {
+int MMAgentRuntime::get_least_loaded_worker() {
   std::lock_guard<std::mutex> lock(worker_load_mutex_);
 
   if(worker_loads_.empty()) {
@@ -580,8 +580,8 @@ int AgentRuntime::get_least_loaded_worker() {
   return min_worker;
 }
 
-void AgentRuntime::monitor_agents() {
-  // Agent Level Master: monitor agent health
+void MMAgentRuntime::monitor_agents() {
+  // MMAgent Level Master: monitor agent health
   std::lock_guard<std::mutex> lock(agents_mutex_);
 
   for(const auto& pair : agents_) {
@@ -589,7 +589,7 @@ void AgentRuntime::monitor_agents() {
   }
 }
 
-void AgentRuntime::agent_registration_loop() {
+void MMAgentRuntime::agent_registration_loop() {
   while(is_running_) {
     AgentRegistrationRequest request;
     bool has_request = false;
@@ -624,7 +624,7 @@ void AgentRuntime::agent_registration_loop() {
         }
       } else {
         agents_[agent_id] = request.agent;
-        databuses_[agent_id] = std::unique_ptr<DataBus>(new DataBus(1024 * 1024));
+        databuses_[agent_id] = std::unique_ptr<MMDataBus>(new MMDataBus(1024 * 1024));
         agent_heartbeats_[agent_id] = now_ms();
         ok = true;
       }
@@ -640,7 +640,7 @@ void AgentRuntime::agent_registration_loop() {
   }
 }
 
-void AgentRuntime::process_agent_state_change(const AgentId& agent_id, bool is_healthy) {
+void MMAgentRuntime::process_agent_state_change(const AgentId& agent_id, bool is_healthy) {
   if(is_healthy || !shared_state_ || !deployer_ || !scheduler_) {
     return;
   }
@@ -653,7 +653,7 @@ void AgentRuntime::process_agent_state_change(const AgentId& agent_id, bool is_h
   scheduler_->handle_agent_state_change(agent_id, false);
 }
 
-void AgentRuntime::agent_monitor_loop() {
+void MMAgentRuntime::agent_monitor_loop() {
   constexpr int64_t kHeartbeatTimeoutMs = 10000;
   while(is_running_) {
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -673,24 +673,24 @@ void AgentRuntime::agent_monitor_loop() {
   }
 }
 
-void AgentRuntime::check_agent_health(const AgentId& agent_id) {
+void MMAgentRuntime::check_agent_health(const AgentId& agent_id) {
   // Check agent health (simplified implementation)
   auto agent = get_agent(agent_id);
   if(agent) {
     auto state = agent->get_state();
     // In production, check agent health metrics
     // For now, just log the state
-    Logger::instance().info_f("Agent health check: %s (state: %d)", agent_id.c_str(),
+    Logger::instance().info_f("MMAgent health check: %s (state: %d)", agent_id.c_str(),
                               static_cast<int>(state));
   }
 }
 
-int AgentRuntime::get_active_agents() const {
+int MMAgentRuntime::get_active_agents() const {
   std::lock_guard<std::mutex> lock(agents_mutex_);
   return static_cast<int>(agents_.size());
 }
 
-int AgentRuntime::get_active_workflows() const {
+int MMAgentRuntime::get_active_workflows() const {
   std::lock_guard<std::mutex> lock(agents_mutex_);
   int                         count = 0;
   for(const auto& pair : agents_) {
@@ -699,7 +699,7 @@ int AgentRuntime::get_active_workflows() const {
   return count;
 }
 
-int AgentRuntime::get_running_nodes() const {
+int MMAgentRuntime::get_running_nodes() const {
   // Count nodes in EXECUTING state across all workflows
   int running_count = 0;
 
@@ -719,7 +719,7 @@ int AgentRuntime::get_running_nodes() const {
   return running_count;
 }
 
-bool AgentRuntime::start() {
+bool MMAgentRuntime::start() {
   if(is_running_) {
     return false;
   }
@@ -735,31 +735,31 @@ bool AgentRuntime::start() {
 
   // Start worker threads
   for(int i = 0; i < num_worker_threads_; ++i) {
-    worker_threads_.emplace_back(&AgentRuntime::worker_thread_main, this);
+    worker_threads_.emplace_back(&MMAgentRuntime::worker_thread_main, this);
   }
-  agent_registration_thread_ = std::thread(&AgentRuntime::agent_registration_loop, this);
-  agent_monitor_thread_ = std::thread(&AgentRuntime::agent_monitor_loop, this);
+  agent_registration_thread_ = std::thread(&MMAgentRuntime::agent_registration_loop, this);
+  agent_monitor_thread_ = std::thread(&MMAgentRuntime::agent_monitor_loop, this);
 
   if(local_worker_) {
-    local_worker_->set_status(WorkerEngine::WorkerStatus::RUNNING);
+    local_worker_->set_status(MMWorkerEngine::WorkerStatus::RUNNING);
     local_worker_->start();
   }
   if(deployer_ && local_worker_ && (role_ == RuntimeRole::MASTER || role_ == RuntimeRole::WORKER)) {
     deployer_->register_worker(local_worker_);
   }
 
-  Logger::instance().info_f("AgentRuntime started with %d worker threads", num_worker_threads_);
+  Logger::instance().info_f("MMAgentRuntime started with %d worker threads", num_worker_threads_);
   return true;
 }
 
-bool AgentRuntime::stop() {
+bool MMAgentRuntime::stop() {
   if(!is_running_) {
     return false;
   }
 
   // Phase 1: Enter draining mode — stop accepting new tasks
   draining_ = true;
-  Logger::instance().info("AgentRuntime entering drain mode...");
+  Logger::instance().info("MMAgentRuntime entering drain mode...");
 
   // Phase 2: Wait for in-progress workflows to complete (with timeout)
   const int  max_drain_wait_ms = 5000;
@@ -787,7 +787,7 @@ bool AgentRuntime::stop() {
   }
 
   if(!drained) {
-    Logger::instance().warn_f("AgentRuntime drain timeout after %dms, forcing shutdown", waited_ms);
+    Logger::instance().warn_f("MMAgentRuntime drain timeout after %dms, forcing shutdown", waited_ms);
   }
 
   // Phase 3: Shutdown workers
@@ -815,27 +815,27 @@ bool AgentRuntime::stop() {
   draining_ = false;
   if(local_worker_) {
     local_worker_->stop();
-    local_worker_->set_status(WorkerEngine::WorkerStatus::STOPPED);
+    local_worker_->set_status(MMWorkerEngine::WorkerStatus::STOPPED);
   }
-  Logger::instance().info("AgentRuntime stopped");
+  Logger::instance().info("MMAgentRuntime stopped");
   return true;
 }
 
-DataBus& AgentRuntime::get_databus(const AgentId& agent_id) {
+MMDataBus& MMAgentRuntime::get_databus(const AgentId& agent_id) {
   std::lock_guard<std::mutex> lock(agents_mutex_);
 
   auto it = databuses_.find(agent_id);
   if(it == databuses_.end()) {
     // If databus doesn't exist, create one (this shouldn't happen for registered agents)
     // But for safety, we create a new one
-    databuses_[agent_id] = std::unique_ptr<DataBus>(new DataBus(1024 * 1024));
+    databuses_[agent_id] = std::unique_ptr<MMDataBus>(new MMDataBus(1024 * 1024));
     return *databuses_[agent_id];
   }
 
   return *it->second;
 }
 
-void AgentRuntime::worker_thread_main() {
+void MMAgentRuntime::worker_thread_main() {
   // Thread-safe worker ID assignment
   static std::atomic<int> next_worker_id{0};
   int worker_id = next_worker_id.fetch_add(1) % num_worker_threads_;

@@ -1,8 +1,8 @@
-# Agent Runner 设计文档
+# MMAgent Runner 设计文档
 
 ## 概述
 
-Agent Runner 是 AgentFlow 框架的独立可执行程序，用于加载、验证和执行 Agent Package。它支持两种运行模式：
+MMAgent Runner 是 AgentFlow 框架的独立可执行程序，用于加载、验证和执行 MMAgent Package。它支持两种运行模式：
 
 1. **批处理模式** - 执行一次命令后退出
 2. **交互式模式** - 启动常驻进程，通过消息驱动架构接受用户输入并驱动 workflow 执行
@@ -15,13 +15,13 @@ Agent Runner 是 AgentFlow 框架的独立可执行程序，用于加载、验�
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
-│  │   CLI       │    │   Package   │    │   Agent     │         │
+│  │   CLI       │    │   Package   │    │   MMAgent     │         │
 │  │   Parser    │───▶│   Loader    │───▶│   Engine    │         │
 │  └─────────────┘    └─────────────┘    └─────────────┘         │
 │         │                  │                  │                 │
 │         ▼                  ▼                  ▼                 │
 │  ┌─────────────┐    ┌─────────────┐    ┌─────────────┐         │
-│  │   Command   │    │   Workflow  │    │   Executor  │         │
+│  │   Command   │    │   MMWorkflow  │    │   Executor  │         │
 │  │   Router    │    │   Manager   │    │   (Worker)  │         │
 │  └─────────────┘    └─────────────┘    └─────────────┘         │
 │         │                                                        │
@@ -29,17 +29,17 @@ Agent Runner 是 AgentFlow 框架的独立可执行程序，用于加载、验�
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │               InteractiveRunner (Message-Driven)         │   │
 │  │                                                          │   │
-│  │  用户输入 → Message → Agent::route_request_message()     │   │
+│  │  用户输入 → Message → MMAgent::route_request_message()     │   │
 │  │      ↓                                                   │   │
 │  │  Session.receive_queue                                   │   │
 │  │      ↓                                                   │   │
 │  │  SessionTaskCoordinator::process_session_messages()      │   │
 │  │      ↓                                                   │   │
-│  │  AgentTask 生成 (关联 workflow_id)                        │   │
+│  │  MMAgentTask 生成 (关联 workflow_id)                        │   │
 │  │      ↓                                                   │   │
-│  │  AgentRuntime::schedule_task()                           │   │
+│  │  MMAgentRuntime::schedule_task()                           │   │
 │  │      ↓                                                   │   │
-│  │  Workflow DAG 执行                                        │   │
+│  │  MMWorkflow DAG 执行                                        │   │
 │  │      ↓                                                   │   │
 │  │  Session.send_queue → 输出给用户                          │   │
 │  └─────────────────────────────────────────────────────────┘   │
@@ -58,7 +58,7 @@ Agent Runner 是 AgentFlow 框架的独立可执行程序，用于加载、验�
 │                                                                 │
 │  1. InteractiveRunner::submit_user_request()                    │
 │     ┌─────────────────────────────────────────────────────┐    │
-│     │  构造 AgentMsgQue::Message                          │    │
+│     │  构造 MMAgentMsgQue::Message                          │    │
 │     │  - message_id: "msg_1_1234567890"                   │    │
 │     │  - type: TASK_REQUEST                               │    │
 │     │  - content: 用户输入                                 │    │
@@ -68,24 +68,24 @@ Agent Runner 是 AgentFlow 框架的独立可执行程序，用于加载、验�
 │     └─────────────────────────────────────────────────────┘    │
 │                         │                                       │
 │                         ▼                                       │
-│  2. Agent::route_request_message(message)                       │
+│  2. MMAgent::route_request_message(message)                       │
 │     ┌─────────────────────────────────────────────────────┐    │
 │     │  消息路由到 default_session                          │    │
 │     │  或创建新的 user:client session                      │    │
 │     └─────────────────────────────────────────────────────┘    │
 │                         │                                       │
 │                         ▼                                       │
-│  3. Agent::process_all_sessions_until_idle()                    │
+│  3. MMAgent::process_all_sessions_until_idle()                    │
 │     ┌─────────────────────────────────────────────────────┐    │
 │     │  SessionTaskCoordinator 处理消息                     │    │
-│     │  生成 AgentTask 并绑定 workflow                      │    │
+│     │  生成 MMAgentTask 并绑定 workflow                      │    │
 │     └─────────────────────────────────────────────────────┘    │
 │                         │                                       │
 │                         ▼                                       │
-│  4. AgentRuntime::schedule_task()                               │
+│  4. MMAgentRuntime::schedule_task()                               │
 │     ┌─────────────────────────────────────────────────────┐    │
-│     │  通过三级调度执行 Workflow DAG                       │    │
-│     │  Agent -> Workflow -> Node                           │    │
+│     │  通过三级调度执行 MMWorkflow DAG                       │    │
+│     │  MMAgent -> MMWorkflow -> MMNode                           │    │
 │     └─────────────────────────────────────────────────────┘    │
 │                         │                                       │
 │                         ▼                                       │
@@ -102,12 +102,12 @@ Agent Runner 是 AgentFlow 框架的独立可执行程序，用于加载、验�
 
 | 组件 | 接口 | 文件位置 |
 |------|------|----------|
-| 消息路由 | `Agent::route_request_message()` | `src/agent/agent.cpp` |
-| 会话管理 | `Agent::get_or_create_session()` | `src/agent/agent.cpp` |
-| 消息处理 | `Agent::process_all_sessions_until_idle()` | `src/agent/agent.cpp` |
-| 任务获取 | `Agent::pop_generated_task()` | `src/agent/agent.cpp` |
-| 任务调度 | `AgentRuntime::schedule_task()` | `src/runtime/runtime.cpp` |
-| 输出收集 | `AgentSession::dequeue_send_message()` | `src/agent/session.cpp` |
+| 消息路由 | `MMAgent::route_request_message()` | `src/agent/agent.cpp` |
+| 会话管理 | `MMAgent::get_or_create_session()` | `src/agent/agent.cpp` |
+| 消息处理 | `MMAgent::process_all_sessions_until_idle()` | `src/agent/agent.cpp` |
+| 任务获取 | `MMAgent::pop_generated_task()` | `src/agent/agent.cpp` |
+| 任务调度 | `MMAgentRuntime::schedule_task()` | `src/runtime/runtime.cpp` |
+| 输出收集 | `MMAgentSession::dequeue_send_message()` | `src/agent/session.cpp` |
 
 ## 运行模式
 
@@ -152,8 +152,8 @@ Example:
 │  1. 启动常驻进程                                                 │
 │     $ agent_runner package_path --interactive                   │
 │                                                                 │
-│  2. 初始化 Agent 和 Runtime                                      │
-│     > Agent loaded: basic-agent                                 │
+│  2. 初始化 MMAgent 和 Runtime                                      │
+│     > MMAgent loaded: basic-agent                                 │
 │     > Runtime started with worker threads                       │
 │     > Ready. Type 'help' for commands.                          │
 │                                                                 │
@@ -260,14 +260,14 @@ agent_runner <package_path> -i
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Data Flow in Workflow                         │
+│                    Data Flow in MMWorkflow                         │
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  用户输入: "hello world"                                         │
 │       │                                                         │
 │       ▼                                                         │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │                    DataBus                                │   │
+│  │                    MMDataBus                                │   │
 │  │                                                          │   │
 │  │   Key                    Value                           │   │
 │  │   ───                    ─────                           │   │
@@ -278,14 +278,14 @@ agent_runner <package_path> -i
 │       │                                                         │
 │       ▼                                                         │
 │  ┌─────────────────┐                                            │
-│  │     Node 1      │  读取: DataBus.get("user_input")          │
-│  │   (process)     │  写入: DataBus.put("node1.output", ...)   │
+│  │     MMNode 1      │  读取: MMDataBus.get("user_input")          │
+│  │   (process)     │  写入: MMDataBus.put("node1.output", ...)   │
 │  └────────┬────────┘                                            │
 │           │                                                     │
 │           ▼                                                     │
 │  ┌─────────────────┐                                            │
-│  │     Node 2      │  读取: DataBus.get("node1.output")        │
-│  │   (transform)   │  写入: DataBus.put("node2.output", ...)   │
+│  │     MMNode 2      │  读取: MMDataBus.get("node1.output")        │
+│  │   (transform)   │  写入: MMDataBus.put("node2.output", ...)   │
 │  └────────┬────────┘                                            │
 │           │                                                     │
 │           ▼                                                     │
@@ -310,7 +310,7 @@ struct InteractiveSession {
 ```
 $ agent_runner examples/agent/basic_agent --interactive
 
-=== AgentFlow Agent Runner (Interactive Mode) ===
+=== AgentFlow MMAgent Runner (Interactive Mode) ===
 Package: basic-agent v1.0.0
 Loaded 3 workflows
 
@@ -323,8 +323,8 @@ Workflows:
   [3] basic-coordinator-workflow (2 nodes)
 
 > info basic-workflow-v2
-Workflow: basic-workflow-v2
-  Name: Basic Workflow V2
+MMWorkflow: basic-workflow-v2
+  Name: Basic MMWorkflow V2
   Nodes: 1
     - node_basic (shell_script: node_basic.sh)
 
@@ -342,11 +342,11 @@ Input set for workflow 'basic-workflow': "hello world"
 [SKIP] start (start)
 [SKIP] process (task) - no shell_script
 [SKIP] end (end)
-Workflow completed
+MMWorkflow completed
 
 > status
 Session Status:
-  Current Workflow: basic-workflow
+  Current MMWorkflow: basic-workflow
   Pending Inputs: 1
   Commands Executed: 5
 
@@ -380,12 +380,12 @@ Goodbye!
        │             └──────────────┘
        ▼
 ┌──────────────┐     ┌──────────────┐
-│  创建 Agent  │────▶│  错误退出    │
+│  创建 MMAgent  │────▶│  错误退出    │
 └──────┬───────┘     │  (code: 1)   │
        │             └──────────────┘
        ▼
 ┌──────────────┐
-│  初始化 Agent│
+│  初始化 MMAgent│
 └──────┬───────┘
        │
        ▼
@@ -434,7 +434,7 @@ Goodbye!
 ### Package 验证输出
 
 ```
-=== AgentFlow Agent Runner ===
+=== AgentFlow MMAgent Runner ===
 Package: examples/agent/nested_workflow_agent
 Package: nested-workflow-agent v1.0.0
 
@@ -453,33 +453,33 @@ Package: nested-workflow-agent v1.0.0
 [OK] Package validation passed
 ```
 
-### Workflow 列表输出
+### MMWorkflow 列表输出
 
 ```
-=== AgentFlow Agent Runner ===
+=== AgentFlow MMAgent Runner ===
 Package: examples/agent/nested_workflow_agent
 Package: nested-workflow-agent v1.0.0
-Agent: nested-workflow-agent initialized
+MMAgent: nested-workflow-agent initialized
 
 === Workflows ===
-  [main-workflow] Main Workflow (4 nodes)
+  [main-workflow] Main MMWorkflow (4 nodes)
     └─> workflow_ref: data_pipeline.json
     └─> workflow_ref: processing_workflow.json
-  [data-pipeline-workflow] Data Pipeline Workflow (3 nodes)
+  [data-pipeline-workflow] Data Pipeline MMWorkflow (3 nodes)
     └─> workflow_ref: validation_workflow.json
-  [validation-workflow] Validation Workflow (3 nodes)
-  [processing-workflow] Processing Workflow (3 nodes)
+  [validation-workflow] Validation MMWorkflow (3 nodes)
+  [processing-workflow] Processing MMWorkflow (3 nodes)
 ```
 
-### Workflow 执行输出
+### MMWorkflow 执行输出
 
 ```
-=== AgentFlow Agent Runner ===
+=== AgentFlow MMAgent Runner ===
 Package: examples/agent/nested_workflow_agent
 Package: nested-workflow-agent v1.0.0
-Agent: nested-workflow-agent initialized
+MMAgent: nested-workflow-agent initialized
 
-=== Executing Workflow: validation-workflow ===
+=== Executing MMWorkflow: validation-workflow ===
 Execution order: 3 nodes
 
 --- Execution Output ---
@@ -494,7 +494,7 @@ Execution order: 3 nodes
 Executed: 3 nodes
 Success: 3 nodes
 
-[OK] Workflow execution completed
+[OK] MMWorkflow execution completed
 ```
 
 ## 返回码
@@ -516,7 +516,7 @@ Success: 3 nodes
 
 ## 路径解析
 
-Agent Runner 支持多种路径格式：
+MMAgent Runner 支持多种路径格式：
 
 ```bash
 # 绝对路径
@@ -566,7 +566,7 @@ fi
 
 1. **输出内容验证**
    - Package 名称、版本
-   - Workflow 列表
+   - MMWorkflow 列表
    - 脚本执行输出
    - 嵌套引用关系
 
@@ -628,9 +628,9 @@ AgentFlow/
 agent_runner
     │
     ├── agentflow (静态库)
-    │     ├── agent (Agent, Package)
-    │     ├── workflow (Workflow, Node, Parser)
-    │     └── runtime (WorkerEngine)
+    │     ├── agent (MMAgent, Package)
+    │     ├── workflow (MMWorkflow, MMNode, Parser)
+    │     └── runtime (MMWorkerEngine)
     │
     ├── std::filesystem (路径处理)
     │

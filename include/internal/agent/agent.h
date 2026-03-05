@@ -19,10 +19,10 @@ namespace agentflow {
 namespace framework {
 
 // Forward declarations for internal agent components
-class AgentSession;
-class AgentTask;
+class MMAgentSession;
+class MMAgentTask;
 class AgentContext;
-class AgentEvent;
+class MMAgentEvent;
 class AgentPackage;
 class SessionTaskCoordinator;
 
@@ -33,7 +33,7 @@ namespace agentflow {
 namespace framework {
 
 /**
- * Agent metadata structure
+ * MMAgent metadata structure
  */
 struct AgentMetadata {
   AgentId                  id;
@@ -47,10 +47,10 @@ struct AgentMetadata {
 };
 
 /**
- * Agent is the basic execution subject in AgentFlow
+ * MMAgent is the basic execution subject in AgentFlow
  * It manages multiple workflows with shared resources
  */
-class Agent {
+class MMAgent {
 public:
   enum class LifecyclePolicy {
     PER_REQUEST = 0,  // Create new instance for each request
@@ -73,8 +73,8 @@ public:
     int data_bus_capacity        = 1024 * 1024;  // 1MB
   };
 
-  explicit Agent(const Config& config);
-  ~Agent();
+  explicit MMAgent(const Config& config);
+  ~MMAgent();
 
   // Getters
   const AgentId&     get_id() const { return config_.id; }
@@ -83,29 +83,31 @@ public:
   const Config&      get_config() const { return config_; }
 
   // Component accessors
-  std::shared_ptr<AgentSession>   get_session() const { return default_session_; }
-  std::shared_ptr<AgentSession>   get_default_session() const { return default_session_; }
-  std::shared_ptr<AgentTask>      get_current_task() const { return current_task_; }
+  std::shared_ptr<MMAgentSession>   get_session() const { return default_session_; }
+  std::shared_ptr<MMAgentSession>   get_session(const std::string& session_key) const;
+  std::vector<std::shared_ptr<MMAgentSession>> get_sessions() const;
+  std::shared_ptr<MMAgentSession>   get_default_session() const { return default_session_; }
+  std::shared_ptr<MMAgentTask>      get_current_task() const { return current_task_; }
   std::shared_ptr<AgentMessages>  get_messages() const { return messages_; }
   std::shared_ptr<SessionTaskCoordinator> get_coordinator() const { return coordinator_; }
   std::shared_ptr<AgentContext>   get_context() const { return context_; }
-  std::shared_ptr<AgentEvent>     get_event_handler() const { return event_; }
+  std::shared_ptr<MMAgentEvent>     get_event_handler() const { return event_; }
   std::shared_ptr<AgentPackage>   get_package() const { return package_; }
 
   // Session/message routing
-  std::shared_ptr<AgentSession> get_or_create_session(const std::string& user_id,
+  std::shared_ptr<MMAgentSession> get_or_create_session(const std::string& user_id,
                                                       const std::string& client_id);
-  std::shared_ptr<AgentSession> get_session_by_key(const std::string& session_key) const;
-  bool route_request_message(const AgentMsgQue::Message& message);
+  std::shared_ptr<MMAgentSession> get_session_by_key(const std::string& session_key) const;
+  bool route_request_message(const MMAgentMsgQue::Message& message);
   int  process_session_messages(const std::string& session_key);
   int  process_all_sessions_until_idle();
-  bool pop_generated_task(std::shared_ptr<AgentTask>& task);
+  bool pop_generated_task(std::shared_ptr<MMAgentTask>& task);
 
-  // Workflow management
-  void                                          add_workflow(std::shared_ptr<Workflow> workflow);
+  // MMWorkflow management
+  void                                          add_workflow(std::shared_ptr<MMWorkflow> workflow);
   void                                          remove_workflow(const WorkflowId& workflow_id);
-  std::shared_ptr<Workflow>                     get_workflow(const WorkflowId& workflow_id);
-  const std::vector<std::shared_ptr<Workflow>>& get_workflows() const { return workflows_; }
+  std::shared_ptr<MMWorkflow>                     get_workflow(const WorkflowId& workflow_id);
+  const std::vector<std::shared_ptr<MMWorkflow>>& get_workflows() const { return workflows_; }
 
   // Shared resource management
   bool initialize_resources();
@@ -119,7 +121,7 @@ public:
   void        post_event(const std::string& event);
   std::string get_event();
 
-  // Agent lifecycle
+  // MMAgent lifecycle
   bool initialize();
   bool start();
   bool pause();
@@ -132,7 +134,7 @@ public:
 
   static utils::storage::StorageResult load(const AgentId&                agent_id,
                                             const utils::storage::StorageConfig& storage_config,
-                                            std::shared_ptr<Agent>&       agent);
+                                            std::shared_ptr<MMAgent>&       agent);
 
   static utils::storage::StorageResult delete_agent(const AgentId&                agent_id,
                                                     const utils::storage::StorageConfig& storage_config);
@@ -153,13 +155,13 @@ public:
                                                           std::string&                  version);
 
   // Factory method to create an agent from a package directory
-  static std::shared_ptr<Agent> create_from_package(const std::string& package_path);
+  static std::shared_ptr<MMAgent> create_from_package(const std::string& package_path);
 
 private:
   Config                                          config_;
   AgentState                                      state_ = AgentState::CREATED;
-  std::vector<std::shared_ptr<Workflow>>          workflows_;
-  std::map<WorkflowId, std::shared_ptr<Workflow>> workflow_map_;
+  std::vector<std::shared_ptr<MMWorkflow>>          workflows_;
+  std::map<WorkflowId, std::shared_ptr<MMWorkflow>> workflow_map_;
 
   // Shared resources
   DataMap                 data_bus_;
@@ -167,31 +169,31 @@ private:
   mutable std::mutex      mutex_;
   mutable std::mutex      event_mutex_;
 
-  // Agent components
-  std::shared_ptr<AgentSession>   default_session_;
-  std::map<std::string, std::shared_ptr<AgentSession>> sessions_;
-  std::shared_ptr<AgentTask>      current_task_;
+  // MMAgent components
+  std::shared_ptr<MMAgentSession>   default_session_;
+  std::map<std::string, std::shared_ptr<MMAgentSession>> sessions_;
+  std::shared_ptr<MMAgentTask>      current_task_;
   std::shared_ptr<AgentMessages>  messages_;
   std::shared_ptr<SessionTaskCoordinator> coordinator_;
   std::shared_ptr<AgentContext>   context_;
-  std::shared_ptr<AgentEvent>     event_;
+  std::shared_ptr<MMAgentEvent>     event_;
   std::shared_ptr<AgentPackage>   package_;
 
   // Helper method to initialize components
   bool initialize_components(std::shared_ptr<AgentPackage> package = nullptr);
-  std::shared_ptr<AgentSession> create_session_with_defaults(const std::string& session_id);
+  std::shared_ptr<MMAgentSession> create_session_with_defaults(const std::string& session_id);
   std::string resolve_workflow_file(const std::string& workflow_ref) const;
 
-  std::queue<AgentMsgQue::Message> request_event_queue_;
+  std::queue<MMAgentMsgQue::Message> request_event_queue_;
   std::condition_variable           request_event_cv_;
   std::thread                       request_event_thread_;
   std::atomic<bool>                 request_event_running_{false};
 
-  std::queue<std::shared_ptr<AgentTask>> generated_tasks_;
+  std::queue<std::shared_ptr<MMAgentTask>> generated_tasks_;
   std::mutex                             generated_tasks_mutex_;
 
   void request_event_loop();
-  void handle_request_event(const AgentMsgQue::Message& message);
+  void handle_request_event(const MMAgentMsgQue::Message& message);
 };
 
 }  // namespace framework

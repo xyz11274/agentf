@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// InteractiveRunner - Message-driven interactive execution for Agent packages
+// InteractiveRunner - Message-driven interactive execution for MMAgent packages
 
 #ifndef AGENTFLOW_EXAMPLES_INTERACTIVE_RUNNER_H
 #define AGENTFLOW_EXAMPLES_INTERACTIVE_RUNNER_H
@@ -17,12 +17,12 @@ namespace agentflow {
 
 /**
  * InteractiveRunner provides a message-driven interactive execution environment
- * for Agent packages. It routes user input through the framework's message queue
+ * for MMAgent packages. It routes user input through the framework's message queue
  * instead of directly executing nodes, ensuring proper use of:
  * - Session management
  * - Coordinator task coordination
- * - AgentRuntime three-tier scheduling
- * - Workflow DAG dependency handling
+ * - MMAgentRuntime three-tier scheduling
+ * - MMWorkflow DAG dependency handling
  */
 class InteractiveRunner {
 public:
@@ -75,21 +75,21 @@ private:
   // Core components
   std::string package_path_;
   Config config_;
-  std::shared_ptr<framework::Agent> agent_;
-  std::unique_ptr<runtime::AgentRuntime> runtime_;
+  std::shared_ptr<framework::MMAgent> agent_;
+  std::unique_ptr<runtime::MMAgentRuntime> runtime_;
 
   // Message ID counter for generating unique IDs
   int64_t message_counter_ = 0;
 
   /**
    * Submit a user request through the message-driven pipeline
-   * Routes the message through Agent::route_request_message()
+   * Routes the message through MMAgent::route_request_message()
    */
   void submit_user_request(const std::string& workflow_id, const std::string& input);
 
   /**
    * Process all pending messages and generated tasks
-   * Uses Agent::process_all_sessions_until_idle() and schedules tasks
+   * Uses MMAgent::process_all_sessions_until_idle() and schedules tasks
    */
   void process_pending_tasks();
 

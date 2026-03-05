@@ -1,8 +1,8 @@
-# Node API 参考
+# MMNode API 参考
 
 ## 运行时 API 约定
 
-Node 实现应遵循以下运行时约定：
+MMNode 实现应遵循以下运行时约定：
 
 1. 调用输入包含基础元信息（如 `trace_id/workflow_id/node_id`）。
 2. 输入输出数据通过 JSON `payload` 交互，并与 workflow 的 `inputs/outputs` 对齐。
@@ -18,8 +18,8 @@ Node 实现应遵循以下运行时约定：
 - `so_library`：加载动态库并调用指定符号
 - `cpp_function`：调用框架注册的 C++ 函数
 
-以上执行模式统一由 Worker 执行引擎分发，Node 负责声明执行模式、命令、参数与 I/O 约束。
-Node 热更新也由 Worker 处理，默认按 `enable_hot_reload/hot_reload_config` 生效，无需手工调用 enable 接口。
+以上执行模式统一由 Worker 执行引擎分发，MMNode 负责声明执行模式、命令、参数与 I/O 约束。
+MMNode 热更新也由 Worker 处理，默认按 `enable_hot_reload/hot_reload_config` 生效，无需手工调用 enable 接口。
 
 ## 输出示例
 

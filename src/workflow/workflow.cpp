@@ -34,54 +34,54 @@ int64_t get_current_timestamp_ms() {
   return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
-const char* control_type_to_string(Edge::ControlType type) {
+const char* control_type_to_string(MMEdge::ControlType type) {
   switch(type) {
-    case Edge::ControlType::IF:
+    case MMEdge::ControlType::IF:
       return "if";
-    case Edge::ControlType::LOOP:
+    case MMEdge::ControlType::LOOP:
       return "loop";
-    case Edge::ControlType::FORK:
+    case MMEdge::ControlType::FORK:
       return "fork";
-    case Edge::ControlType::JOIN:
+    case MMEdge::ControlType::JOIN:
       return "join";
-    case Edge::ControlType::ASYNC:
+    case MMEdge::ControlType::ASYNC:
       return "async";
-    case Edge::ControlType::GOTO:
+    case MMEdge::ControlType::GOTO:
       return "goto";
-    case Edge::ControlType::NONE:
+    case MMEdge::ControlType::NONE:
     default:
       return "none";
   }
 }
 
-Edge::ControlType control_type_from_string(const std::string& type) {
+MMEdge::ControlType control_type_from_string(const std::string& type) {
   if(type == "if")
-    return Edge::ControlType::IF;
+    return MMEdge::ControlType::IF;
   if(type == "loop")
-    return Edge::ControlType::LOOP;
+    return MMEdge::ControlType::LOOP;
   if(type == "fork")
-    return Edge::ControlType::FORK;
+    return MMEdge::ControlType::FORK;
   if(type == "join")
-    return Edge::ControlType::JOIN;
+    return MMEdge::ControlType::JOIN;
   if(type == "async")
-    return Edge::ControlType::ASYNC;
+    return MMEdge::ControlType::ASYNC;
   if(type == "goto")
-    return Edge::ControlType::GOTO;
-  return Edge::ControlType::NONE;
+    return MMEdge::ControlType::GOTO;
+  return MMEdge::ControlType::NONE;
 }
 
 /**
- * Convert Workflow::Config to JSON string
+ * Convert MMWorkflow::Config to JSON string
  */
-std::string workflow_config_to_json(const Workflow::Config&                   config,
-                                    const std::vector<std::shared_ptr<Node>>& nodes,
-                                    const std::vector<std::shared_ptr<Edge>>& edges) {
+std::string workflow_config_to_json(const MMWorkflow::Config&                   config,
+                                    const std::vector<std::shared_ptr<MMNode>>& nodes,
+                                    const std::vector<std::shared_ptr<MMEdge>>& edges) {
 #ifdef AGENTFLOW_WITH_RAPIDJSON
   rapidjson::Document doc;
   doc.SetObject();
   rapidjson::Document::AllocatorType& allocator = doc.GetAllocator();
 
-  // Workflow config
+  // MMWorkflow config
   rapidjson::Value workflow_obj(rapidjson::kObjectType);
   workflow_obj.AddMember("id", rapidjson::StringRef(config.id.c_str()), allocator);
   workflow_obj.AddMember("name", rapidjson::StringRef(config.name.c_str()), allocator);
@@ -104,25 +104,25 @@ std::string workflow_config_to_json(const Workflow::Config&                   co
     // Execution mode
     const char* exec_mode = "cpp_function";
     switch(node->get_execution_mode()) {
-      case Node::ExecutionMode::CPP_FUNCTION:
+      case MMNode::ExecutionMode::CPP_FUNCTION:
         exec_mode = "cpp_function";
         break;
-      case Node::ExecutionMode::SHELL_SCRIPT:
+      case MMNode::ExecutionMode::SHELL_SCRIPT:
         exec_mode = "shell_script";
         break;
-      case Node::ExecutionMode::EXECUTABLE:
+      case MMNode::ExecutionMode::EXECUTABLE:
         exec_mode = "executable";
         break;
-      case Node::ExecutionMode::GO_SCRIPT:
+      case MMNode::ExecutionMode::GO_SCRIPT:
         exec_mode = "go_script";
         break;
-      case Node::ExecutionMode::PYTHON_SCRIPT:
+      case MMNode::ExecutionMode::PYTHON_SCRIPT:
         exec_mode = "python_script";
         break;
-      case Node::ExecutionMode::JAVA_JAR:
+      case MMNode::ExecutionMode::JAVA_JAR:
         exec_mode = "java_jar";
         break;
-      case Node::ExecutionMode::SO_LIBRARY:
+      case MMNode::ExecutionMode::SO_LIBRARY:
         exec_mode = "so_library";
         break;
     }
@@ -200,19 +200,19 @@ std::string workflow_config_to_json(const Workflow::Config&                   co
     // Transfer mode
     const char* transfer_mode = "shared_memory";
     switch(edge->get_transfer_mode()) {
-      case Edge::DataTransferMode::SHARED_MEMORY:
+      case MMEdge::DataTransferMode::SHARED_MEMORY:
         transfer_mode = "shared_memory";
         break;
-      case Edge::DataTransferMode::MESSAGE_QUEUE:
+      case MMEdge::DataTransferMode::MESSAGE_QUEUE:
         transfer_mode = "message_queue";
         break;
-      case Edge::DataTransferMode::REMOTE_TRANSFER:
+      case MMEdge::DataTransferMode::REMOTE_TRANSFER:
         transfer_mode = "remote_transfer";
         break;
     }
     edge_obj.AddMember("transfer_mode", rapidjson::StringRef(transfer_mode), allocator);
 
-    // Edge config
+    // MMEdge config
     const auto& edge_cfg = edge->get_config();
 
     if(!edge_cfg.source_outputs.empty()) {
@@ -307,11 +307,11 @@ std::string workflow_config_to_json(const Workflow::Config&                   co
 }
 
 /**
- * Parse Workflow::Config from JSON string
+ * Parse MMWorkflow::Config from JSON string
  */
-bool workflow_config_from_json(const std::string& json_str, Workflow::Config& config,
-                               std::vector<Node::Config>& node_configs,
-                               std::vector<Edge::Config>& edge_configs) {
+bool workflow_config_from_json(const std::string& json_str, MMWorkflow::Config& config,
+                               std::vector<MMNode::Config>& node_configs,
+                               std::vector<MMEdge::Config>& edge_configs) {
 #ifdef AGENTFLOW_WITH_RAPIDJSON
   rapidjson::Document doc;
   doc.Parse(json_str.c_str());
@@ -338,7 +338,7 @@ bool workflow_config_from_json(const std::string& json_str, Workflow::Config& co
     const rapidjson::Value& nodes_array = doc["nodes"];
     for(rapidjson::SizeType i = 0; i < nodes_array.Size(); ++i) {
       const rapidjson::Value& node_obj = nodes_array[i];
-      Node::Config            node_config;
+      MMNode::Config            node_config;
 
       if(node_obj.HasMember("id"))
         node_config.id = node_obj["id"].GetString();
@@ -355,19 +355,19 @@ bool workflow_config_from_json(const std::string& json_str, Workflow::Config& co
       if(node_obj.HasMember("execution_mode")) {
         std::string mode_str = node_obj["execution_mode"].GetString();
         if(mode_str == "shell_script") {
-          node_config.execution_mode = Node::ExecutionMode::SHELL_SCRIPT;
+          node_config.execution_mode = MMNode::ExecutionMode::SHELL_SCRIPT;
         } else if(mode_str == "executable") {
-          node_config.execution_mode = Node::ExecutionMode::EXECUTABLE;
+          node_config.execution_mode = MMNode::ExecutionMode::EXECUTABLE;
         } else if(mode_str == "go_script") {
-          node_config.execution_mode = Node::ExecutionMode::GO_SCRIPT;
+          node_config.execution_mode = MMNode::ExecutionMode::GO_SCRIPT;
         } else if(mode_str == "python_script") {
-          node_config.execution_mode = Node::ExecutionMode::PYTHON_SCRIPT;
+          node_config.execution_mode = MMNode::ExecutionMode::PYTHON_SCRIPT;
         } else if(mode_str == "java_jar") {
-          node_config.execution_mode = Node::ExecutionMode::JAVA_JAR;
+          node_config.execution_mode = MMNode::ExecutionMode::JAVA_JAR;
         } else if(mode_str == "so_library") {
-          node_config.execution_mode = Node::ExecutionMode::SO_LIBRARY;
+          node_config.execution_mode = MMNode::ExecutionMode::SO_LIBRARY;
         } else {
-          node_config.execution_mode = Node::ExecutionMode::CPP_FUNCTION;
+          node_config.execution_mode = MMNode::ExecutionMode::CPP_FUNCTION;
         }
       }
 
@@ -424,7 +424,7 @@ bool workflow_config_from_json(const std::string& json_str, Workflow::Config& co
     const rapidjson::Value& edges_array = doc["edges"];
     for(rapidjson::SizeType i = 0; i < edges_array.Size(); ++i) {
       const rapidjson::Value& edge_obj = edges_array[i];
-      Edge::Config            edge_config;
+      MMEdge::Config            edge_config;
 
       if(edge_obj.HasMember("id"))
         edge_config.id = edge_obj["id"].GetString();
@@ -438,11 +438,11 @@ bool workflow_config_from_json(const std::string& json_str, Workflow::Config& co
       if(edge_obj.HasMember("transfer_mode")) {
         const std::string& transfer_mode = edge_obj["transfer_mode"].GetString();
         if(transfer_mode == "shared_memory") {
-          edge_config.transfer_mode = Edge::DataTransferMode::SHARED_MEMORY;
+          edge_config.transfer_mode = MMEdge::DataTransferMode::SHARED_MEMORY;
         } else if(transfer_mode == "message_queue") {
-          edge_config.transfer_mode = Edge::DataTransferMode::MESSAGE_QUEUE;
+          edge_config.transfer_mode = MMEdge::DataTransferMode::MESSAGE_QUEUE;
         } else if(transfer_mode == "remote_transfer") {
-          edge_config.transfer_mode = Edge::DataTransferMode::REMOTE_TRANSFER;
+          edge_config.transfer_mode = MMEdge::DataTransferMode::REMOTE_TRANSFER;
         }
       }
 
@@ -477,13 +477,13 @@ bool workflow_config_from_json(const std::string& json_str, Workflow::Config& co
           edge_config.control.callback_node = control_obj["callback_node"].GetString();
         }
       }
-      if(edge_config.control.type == Edge::ControlType::IF &&
+      if(edge_config.control.type == MMEdge::ControlType::IF &&
          edge_config.control.expression.empty()) {
         edge_config.control.expression = edge_config.condition_expression;
       }
-      if(edge_config.control.type == Edge::ControlType::NONE &&
+      if(edge_config.control.type == MMEdge::ControlType::NONE &&
          !edge_config.condition_expression.empty()) {
-        edge_config.control.type       = Edge::ControlType::IF;
+        edge_config.control.type       = MMEdge::ControlType::IF;
         edge_config.control.expression = edge_config.condition_expression;
       }
 
@@ -540,19 +540,19 @@ bool workflow_config_from_json(const std::string& json_str, Workflow::Config& co
 
 namespace framework {
 
-Workflow::Workflow(const Config& config) : config_(config), state_(WorkflowState::CREATED) {
-  Logger::instance().info("Workflow created: " + config.id);
+MMWorkflow::MMWorkflow(const Config& config) : config_(config), state_(WorkflowState::CREATED) {
+  Logger::instance().info("MMWorkflow created: " + config.id);
 }
 
-Workflow::~Workflow() {
+MMWorkflow::~MMWorkflow() {
   stop_runtime();
 }
 
-bool Workflow::start_runtime() {
+bool MMWorkflow::start_runtime() {
   return start_runtime(RuntimeConfig{});
 }
 
-bool Workflow::start_runtime(const RuntimeConfig& config) {
+bool MMWorkflow::start_runtime(const RuntimeConfig& config) {
   bool expected = false;
   if(!runtime_running_.compare_exchange_strong(expected, true)) {
     return false;
@@ -566,12 +566,12 @@ bool Workflow::start_runtime(const RuntimeConfig& config) {
   node_executor_pool_ = std::make_unique<basic::ThreadPool>(
       static_cast<size_t>(std::max(1, runtime_config_.node_executor_threads)));
 
-  message_thread_ = std::thread(&Workflow::message_dispatch_loop, this);
-  event_thread_   = std::thread(&Workflow::event_dispatch_loop, this);
+  message_thread_ = std::thread(&MMWorkflow::message_dispatch_loop, this);
+  event_thread_   = std::thread(&MMWorkflow::event_dispatch_loop, this);
   return true;
 }
 
-void Workflow::stop_runtime() {
+void MMWorkflow::stop_runtime() {
   bool expected = true;
   if(!runtime_running_.compare_exchange_strong(expected, false)) {
     return;
@@ -604,7 +604,7 @@ void Workflow::stop_runtime() {
   node_executor_pool_.reset();
 }
 
-bool Workflow::enqueue_message(const Message& message) {
+bool MMWorkflow::enqueue_message(const Message& message) {
   std::lock_guard<std::mutex> lock(message_queue_mutex_);
   const size_t queued_size = high_priority_messages_.size() + normal_priority_messages_.size();
   if(queued_size >= runtime_config_.max_queue_size) {
@@ -620,7 +620,7 @@ bool Workflow::enqueue_message(const Message& message) {
   return true;
 }
 
-bool Workflow::enqueue_event(const WorkflowEvent& event) {
+bool MMWorkflow::enqueue_event(const WorkflowEvent& event) {
   std::lock_guard<std::mutex> lock(event_queue_mutex_);
   if(event_queue_.size() >= runtime_config_.max_queue_size) {
     return false;
@@ -630,12 +630,12 @@ bool Workflow::enqueue_event(const WorkflowEvent& event) {
   return true;
 }
 
-void Workflow::register_event_handler(const std::string& event_type, WorkflowEventHandler handler) {
+void MMWorkflow::register_event_handler(const std::string& event_type, WorkflowEventHandler handler) {
   std::lock_guard<std::mutex> lock(event_handler_mutex_);
   event_handlers_[event_type].push_back(std::move(handler));
 }
 
-void Workflow::message_dispatch_loop() {
+void MMWorkflow::message_dispatch_loop() {
   while(runtime_running_) {
     Message message;
     {
@@ -667,7 +667,7 @@ void Workflow::message_dispatch_loop() {
   }
 }
 
-void Workflow::event_dispatch_loop() {
+void MMWorkflow::event_dispatch_loop() {
   while(runtime_running_) {
     WorkflowEvent event;
     {
@@ -699,7 +699,7 @@ void Workflow::event_dispatch_loop() {
   }
 }
 
-std::vector<std::string> Workflow::get_start_nodes() const {
+std::vector<std::string> MMWorkflow::get_start_nodes() const {
   std::unordered_set<std::string> targets;
   for(const auto& edge : edges_) {
     targets.insert(edge->get_target());
@@ -714,7 +714,7 @@ std::vector<std::string> Workflow::get_start_nodes() const {
   return starts;
 }
 
-bool Workflow::execute_message_through_workflow(const Message& message) {
+bool MMWorkflow::execute_message_through_workflow(const Message& message) {
   (void)message;
   state_ = WorkflowState::RUNNING;
 
@@ -725,8 +725,8 @@ bool Workflow::execute_message_through_workflow(const Message& message) {
     in_degree[node->get_id()] = 0;
   }
   for(const auto& edge : edges_) {
-    if(edge->get_control_type() == Edge::ControlType::LOOP
-       || edge->get_control_type() == Edge::ControlType::GOTO) {
+    if(edge->get_control_type() == MMEdge::ControlType::LOOP
+       || edge->get_control_type() == MMEdge::ControlType::GOTO) {
       continue;
     }
     adjacency[edge->get_source()].push_back(edge->get_target());
@@ -797,50 +797,50 @@ bool Workflow::execute_message_through_workflow(const Message& message) {
 }
 
 
-void Workflow::add_node(std::shared_ptr<Node> node) {
+void MMWorkflow::add_node(std::shared_ptr<MMNode> node) {
   if(node) {
     node_map_[node->get_id()] = node;
     nodes_.push_back(node);
   }
 }
 
-void Workflow::remove_node(const std::string& node_id) {
+void MMWorkflow::remove_node(const std::string& node_id) {
   auto it = node_map_.find(node_id);
   if(it != node_map_.end()) {
     node_map_.erase(it);
     nodes_.erase(std::remove_if(
                      nodes_.begin(), nodes_.end(),
-                     [&node_id](const std::shared_ptr<Node>& n) { return n->get_id() == node_id; }),
+                     [&node_id](const std::shared_ptr<MMNode>& n) { return n->get_id() == node_id; }),
                  nodes_.end());
   }
 }
 
-std::shared_ptr<Node> Workflow::get_node(const std::string& node_id) {
+std::shared_ptr<MMNode> MMWorkflow::get_node(const std::string& node_id) {
   auto it = node_map_.find(node_id);
   return it != node_map_.end() ? it->second : nullptr;
 }
 
-void Workflow::add_edge(std::shared_ptr<Edge> edge) {
+void MMWorkflow::add_edge(std::shared_ptr<MMEdge> edge) {
   if(edge) {
     edges_.push_back(edge);
   }
 }
 
-void Workflow::remove_edge(const std::string& edge_id) {
+void MMWorkflow::remove_edge(const std::string& edge_id) {
   edges_.erase(
       std::remove_if(edges_.begin(), edges_.end(),
-                     [&edge_id](const std::shared_ptr<Edge>& e) { return e->get_id() == edge_id; }),
+                     [&edge_id](const std::shared_ptr<MMEdge>& e) { return e->get_id() == edge_id; }),
       edges_.end());
 }
 
-bool Workflow::load_from_dsl(const std::string& dsl_content) {
+bool MMWorkflow::load_from_dsl(const std::string& dsl_content) {
   // Parse DSL and build workflow
   // In real implementation, this would parse JSON or other DSL format
   state_ = WorkflowState::LOADED;
   return true;
 }
 
-bool Workflow::validate() {
+bool MMWorkflow::validate() {
   if(!validate_dag()) {
     return false;
   }
@@ -854,12 +854,12 @@ bool Workflow::validate() {
   return true;
 }
 
-bool Workflow::update_dynamic(const std::string& dsl_content) {
+bool MMWorkflow::update_dynamic(const std::string& dsl_content) {
   // Dynamically update workflow DSL without recreating instance
   return load_from_dsl(dsl_content);
 }
 
-std::vector<std::string> Workflow::get_topological_order() {
+std::vector<std::string> MMWorkflow::get_topological_order() {
   // If cached order is valid, return it
   if(topological_order_valid_) {
     return topological_order_;
@@ -871,7 +871,7 @@ std::vector<std::string> Workflow::get_topological_order() {
   return topological_order_;
 }
 
-std::vector<std::string> Workflow::get_executable_nodes() {
+std::vector<std::string> MMWorkflow::get_executable_nodes() {
   std::vector<std::string> executable;
 
   for(const auto& node : nodes_) {
@@ -905,7 +905,7 @@ std::vector<std::string> Workflow::get_executable_nodes() {
   return executable;
 }
 
-std::vector<std::string> Workflow::get_executable_nodes_with_control() {
+std::vector<std::string> MMWorkflow::get_executable_nodes_with_control() {
   std::vector<std::string> executable;
 
   for(const auto& node : nodes_) {
@@ -925,13 +925,13 @@ std::vector<std::string> Workflow::get_executable_nodes_with_control() {
         // Evaluate edge condition if present
         bool should_traverse = true;
         const auto& control_cfg = edge->get_control_config();
-        if(control_cfg.type == Edge::ControlType::IF ||
+        if(control_cfg.type == MMEdge::ControlType::IF ||
            (!control_cfg.expression.empty() || edge->has_condition())) {
           const std::string expr =
               !control_cfg.expression.empty() ? control_cfg.expression : edge->get_condition_expression();
           should_traverse =
               evaluate_condition(parse_condition_expression(expr), control_context_, DataMap());
-        } else if(control_cfg.type == Edge::ControlType::LOOP) {
+        } else if(control_cfg.type == MMEdge::ControlType::LOOP) {
           const std::string loop_id =
               !control_cfg.loop_id.empty() ? control_cfg.loop_id : edge->get_id();
           if(!control_context_.is_in_loop(loop_id)) {
@@ -946,14 +946,14 @@ std::vector<std::string> Workflow::get_executable_nodes_with_control() {
             control_context_.exit_loop(loop_id);
             active_loops_.erase(loop_id);
           }
-        } else if(control_cfg.type == Edge::ControlType::ASYNC) {
+        } else if(control_cfg.type == MMEdge::ControlType::ASYNC) {
           auto source = get_node(edge->get_source());
           should_traverse = source && source->get_state() != NodeState::WAITING;
         }
 
         if(should_traverse) {
           auto source = get_node(edge->get_source());
-          const bool async_edge = control_cfg.type == Edge::ControlType::ASYNC;
+          const bool async_edge = control_cfg.type == MMEdge::ControlType::ASYNC;
           const bool source_done = source && source->get_state() != NodeState::WAITING;
           if(source && !async_edge && source->get_state() != NodeState::SUCCESS) {
             all_deps_ready = false;
@@ -977,7 +977,7 @@ std::vector<std::string> Workflow::get_executable_nodes_with_control() {
   return executable;
 }
 
-std::string Workflow::get_next_node_after_execution(const std::string& current_node, bool success,
+std::string MMWorkflow::get_next_node_after_execution(const std::string& current_node, bool success,
                                                     const std::string& error_msg) {
   // Determine control action after node execution
   NodeState execution_state = success ? NodeState::SUCCESS : NodeState::FAILED;
@@ -999,7 +999,7 @@ std::string Workflow::get_next_node_after_execution(const std::string& current_n
       return action.target_node_id;
 
     case ControlActionType::ABORT:
-      // Workflow abort
+      // MMWorkflow abort
       return "__ABORT__";
 
     case ControlActionType::RETURN:
@@ -1020,7 +1020,7 @@ std::string Workflow::get_next_node_after_execution(const std::string& current_n
   }
 }
 
-void Workflow::mark_node_executed(const std::string& node_id, bool success,
+void MMWorkflow::mark_node_executed(const std::string& node_id, bool success,
                                   const std::string& error_msg) {
   executed_nodes_[node_id] = success;
 
@@ -1051,12 +1051,12 @@ void Workflow::mark_node_executed(const std::string& node_id, bool success,
 
 
 
-void Workflow::set_error_handler(const std::string&                 node_id,
+void MMWorkflow::set_error_handler(const std::string&                 node_id,
                                  const ErrorHandlerConfig& handler) {
   error_handlers_[node_id] = handler;
 }
 
-void Workflow::reset_execution_state() {
+void MMWorkflow::reset_execution_state() {
   executed_nodes_.clear();
   node_retry_counts_.clear();
   topological_order_valid_ = false;
@@ -1067,7 +1067,7 @@ void Workflow::reset_execution_state() {
   }
 }
 
-bool Workflow::validate_dag() {
+bool MMWorkflow::validate_dag() {
   // Check for cycles in workflow graph using DFS coloring
   enum class Color {
     WHITE,  // Not visited
@@ -1085,8 +1085,8 @@ bool Workflow::validate_dag() {
   // Build adjacency list for graph
   std::map<std::string, std::vector<std::string>> adjacency;
   for(const auto& edge : edges_) {
-    if(edge->get_control_type() == Edge::ControlType::LOOP ||
-       edge->get_control_type() == Edge::ControlType::GOTO) {
+    if(edge->get_control_type() == MMEdge::ControlType::LOOP ||
+       edge->get_control_type() == MMEdge::ControlType::GOTO) {
       continue;
     }
     adjacency[edge->get_source()].push_back(edge->get_target());
@@ -1125,11 +1125,11 @@ bool Workflow::validate_dag() {
     }
   }
 
-  Logger::instance().info("Workflow graph validation passed - no cycles detected");
+  Logger::instance().info("MMWorkflow graph validation passed - no cycles detected");
   return true;
 }
 
-bool Workflow::compute_topological_order() {
+bool MMWorkflow::compute_topological_order() {
   // Use Kahn's algorithm to compute topological order
   std::map<std::string, int> in_degree;
 
@@ -1140,8 +1140,8 @@ bool Workflow::compute_topological_order() {
 
   // Calculate in-degree for each node
   for(const auto& edge : edges_) {
-    if(edge->get_control_type() == Edge::ControlType::LOOP ||
-       edge->get_control_type() == Edge::ControlType::GOTO) {
+    if(edge->get_control_type() == MMEdge::ControlType::LOOP ||
+       edge->get_control_type() == MMEdge::ControlType::GOTO) {
       continue;
     }
     in_degree[edge->get_target()]++;
@@ -1158,8 +1158,8 @@ bool Workflow::compute_topological_order() {
   // Build adjacency list
   std::map<std::string, std::vector<std::string>> adjacency;
   for(const auto& edge : edges_) {
-    if(edge->get_control_type() == Edge::ControlType::LOOP ||
-       edge->get_control_type() == Edge::ControlType::GOTO) {
+    if(edge->get_control_type() == MMEdge::ControlType::LOOP ||
+       edge->get_control_type() == MMEdge::ControlType::GOTO) {
       continue;
     }
     adjacency[edge->get_source()].push_back(edge->get_target());
@@ -1200,7 +1200,7 @@ bool Workflow::compute_topological_order() {
   return true;
 }
 
-ConditionExpression Workflow::parse_condition_expression(const std::string& expr_str) {
+ConditionExpression MMWorkflow::parse_condition_expression(const std::string& expr_str) {
   // Cache lookup — avoid re-parsing the same expression
   auto cache_it = condition_cache_.find(expr_str);
   if(cache_it != condition_cache_.end()) {
@@ -1282,7 +1282,7 @@ ConditionExpression Workflow::parse_condition_expression(const std::string& expr
   return expr;
 }
 
-bool Workflow::evaluate_condition(const ConditionExpression& expr, const ControlContext& context,
+bool MMWorkflow::evaluate_condition(const ConditionExpression& expr, const ControlContext& context,
                                   const DataMap& node_outputs) const {
   switch(expr.op) {
     case ConditionOperator::AND: {
@@ -1326,7 +1326,7 @@ bool Workflow::evaluate_condition(const ConditionExpression& expr, const Control
   }
 }
 
-bool Workflow::evaluate_comparison(const std::string& left, ConditionOperator op,
+bool MMWorkflow::evaluate_comparison(const std::string& left, ConditionOperator op,
                                    const std::string& right) const {
   double left_num   = 0.0;
   double right_num  = 0.0;
@@ -1370,7 +1370,7 @@ bool Workflow::evaluate_comparison(const std::string& left, ConditionOperator op
   }
 }
 
-std::string Workflow::resolve_value(const std::string& name, const ControlContext& context,
+std::string MMWorkflow::resolve_value(const std::string& name, const ControlContext& context,
                                     const DataMap& node_outputs) const {
   std::string value;
   if(context.get_variable(name, value)) {
@@ -1394,7 +1394,7 @@ std::string Workflow::resolve_value(const std::string& name, const ControlContex
   return name;
 }
 
-ControlAction Workflow::determine_next_action(const NodeId& current_node, NodeState execution_state,
+ControlAction MMWorkflow::determine_next_action(const NodeId& current_node, NodeState execution_state,
                                               const std::string& error_message) {
   ControlAction action;
 
@@ -1434,7 +1434,7 @@ ControlAction Workflow::determine_next_action(const NodeId& current_node, NodeSt
   return action;
 }
 
-ControlAction Workflow::handle_error(const NodeId& failed_node, const std::string& error_type,
+ControlAction MMWorkflow::handle_error(const NodeId& failed_node, const std::string& error_type,
                                      const std::string& error_message) {
   auto it = error_handlers_.find(failed_node);
   if(it == error_handlers_.end()) {
@@ -1496,7 +1496,7 @@ ControlAction Workflow::handle_error(const NodeId& failed_node, const std::strin
   return action;
 }
 
-utils::storage::StorageResult Workflow::save(const utils::storage::StorageConfig& config,
+utils::storage::StorageResult MMWorkflow::save(const utils::storage::StorageConfig& config,
                                       const utils::storage::VersionInfo&   version_info) {
   auto version_storage = utils::storage::create_versioned_storage(config);
   if(!version_storage) {
@@ -1524,9 +1524,9 @@ utils::storage::StorageResult Workflow::save(const utils::storage::StorageConfig
   return version_storage->set_active_version(config_.id, version_info.version);
 }
 
-utils::storage::StorageResult Workflow::load(const std::string&            workflow_id,
+utils::storage::StorageResult MMWorkflow::load(const std::string&            workflow_id,
                                       const utils::storage::StorageConfig& storage_config,
-                                      std::shared_ptr<Workflow>&    workflow) {
+                                      std::shared_ptr<MMWorkflow>&    workflow) {
   auto version_storage = utils::storage::create_versioned_storage(storage_config);
   if(!version_storage) {
     return utils::storage::StorageResult{ utils::storage::StorageError::STORAGE_ERROR_IO,
@@ -1539,9 +1539,9 @@ utils::storage::StorageResult Workflow::load(const std::string&            workf
     return result;
   }
 
-  Workflow::Config          config;
-  std::vector<Node::Config> node_configs;
-  std::vector<Edge::Config> edge_configs;
+  MMWorkflow::Config          config;
+  std::vector<MMNode::Config> node_configs;
+  std::vector<MMEdge::Config> edge_configs;
 
   if(!workflow_config_from_json(json_data, config, node_configs, edge_configs)) {
     return utils::storage::StorageResult{ utils::storage::StorageError::STORAGE_ERROR_INVALID_DATA,
@@ -1549,18 +1549,18 @@ utils::storage::StorageResult Workflow::load(const std::string&            workf
   }
 
   // Create workflow
-  workflow = std::make_shared<Workflow>(config);
+  workflow = std::make_shared<MMWorkflow>(config);
 
   // Restore nodes
   // Note: We don't have the node factory here, so we can't easily recreate nodes
   // In a real implementation, we would need a NodeFactory to create nodes from configs
   // For now, we just log a warning that nodes are not fully restored
-  Logger::instance().warn("Nodes are not fully restored in Workflow::load (missing NodeFactory)");
+  Logger::instance().warn("Nodes are not fully restored in MMWorkflow::load (missing NodeFactory)");
 
   return utils::storage::StorageResult{ utils::storage::StorageError::STORAGE_OK, "" };
 }
 
-utils::storage::StorageResult Workflow::delete_workflow(const std::string&            workflow_id,
+utils::storage::StorageResult MMWorkflow::delete_workflow(const std::string&            workflow_id,
                                                  const utils::storage::StorageConfig& storage_config) {
   auto version_storage = utils::storage::create_versioned_storage(storage_config);
   if(!version_storage) {
@@ -1571,7 +1571,7 @@ utils::storage::StorageResult Workflow::delete_workflow(const std::string&      
   return version_storage->remove(workflow_id);
 }
 
-utils::storage::StorageResult Workflow::list_workflows(const utils::storage::StorageConfig& storage_config,
+utils::storage::StorageResult MMWorkflow::list_workflows(const utils::storage::StorageConfig& storage_config,
                                                 std::vector<std::string>&     workflow_ids) {
   auto version_storage = utils::storage::create_versioned_storage(storage_config);
   if(!version_storage) {
@@ -1582,7 +1582,7 @@ utils::storage::StorageResult Workflow::list_workflows(const utils::storage::Sto
   return version_storage->list("", workflow_ids);
 }
 
-utils::storage::StorageResult Workflow::get_metadata(const std::string&            workflow_id,
+utils::storage::StorageResult MMWorkflow::get_metadata(const std::string&            workflow_id,
                                               const utils::storage::StorageConfig& storage_config,
                                               WorkflowMetadata&             metadata) {
   auto version_storage = utils::storage::create_versioned_storage(storage_config);
@@ -1597,9 +1597,9 @@ utils::storage::StorageResult Workflow::get_metadata(const std::string&         
     return result;
   }
 
-  Workflow::Config          config;
-  std::vector<Node::Config> node_configs;
-  std::vector<Edge::Config> edge_configs;
+  MMWorkflow::Config          config;
+  std::vector<MMNode::Config> node_configs;
+  std::vector<MMEdge::Config> edge_configs;
 
   if(!workflow_config_from_json(json_data, config, node_configs, edge_configs)) {
     return utils::storage::StorageResult{ utils::storage::StorageError::STORAGE_ERROR_INVALID_DATA,
@@ -1618,16 +1618,16 @@ utils::storage::StorageResult Workflow::get_metadata(const std::string&         
   return utils::storage::StorageResult{ utils::storage::StorageError::STORAGE_OK, "" };
 }
 
-void Workflow::enter_loop(const std::string& loop_id, const LoopConfig& config) {
+void MMWorkflow::enter_loop(const std::string& loop_id, const LoopConfig& config) {
   active_loops_[loop_id] = config;
   control_context_.enter_loop(loop_id, config);
 }
 
-void Workflow::exit_loop_iteration(const std::string& loop_id) {
+void MMWorkflow::exit_loop_iteration(const std::string& loop_id) {
   control_context_.increment_loop_iteration(loop_id);
 }
 
-bool Workflow::should_continue_loop(const std::string& loop_id) {
+bool MMWorkflow::should_continue_loop(const std::string& loop_id) {
   auto it = active_loops_.find(loop_id);
   if(it == active_loops_.end()) {
     return false;

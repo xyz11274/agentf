@@ -13,15 +13,15 @@
 namespace agentflow {
 namespace framework {
 
-class AgentTask;
+class MMAgentTask;
 class AgentContext;
 class SessionTaskCoordinator;
 
 /**
- * AgentSession represents a session context for an agent execution
+ * MMAgentSession represents a session context for an agent execution
  * Manages session lifecycle, state, and metadata
  */
-class AgentSession {
+class MMAgentSession {
 public:
   enum class SessionState {
     CREATED    = 0,
@@ -42,8 +42,8 @@ public:
     std::string task_context_workflow;
   };
 
-  explicit AgentSession(const Config& config);
-  ~AgentSession();
+  explicit MMAgentSession(const Config& config);
+  ~MMAgentSession();
 
   // Getters
   const std::string& get_session_id() const { return config_.session_id; }
@@ -72,17 +72,17 @@ public:
   bool is_timeout_expired() const;
 
   // Queue operations
-  bool enqueue_received_message(const AgentMsgQue::Message& message, bool high_priority = false);
-  bool dequeue_received_message(AgentMsgQue::Message& message);
-  bool enqueue_send_message(const AgentMsgQue::Message& message);
-  bool dequeue_send_message(AgentMsgQue::Message& message);
+  bool enqueue_received_message(const MMAgentMsgQue::Message& message, bool high_priority = false);
+  bool dequeue_received_message(MMAgentMsgQue::Message& message);
+  bool enqueue_send_message(const MMAgentMsgQue::Message& message);
+  bool dequeue_send_message(MMAgentMsgQue::Message& message);
   int  get_receive_queue_size() const;
   int  get_send_queue_size() const;
 
   // Session task ownership
-  void                                      add_task(const std::shared_ptr<AgentTask>& task);
-  std::shared_ptr<AgentTask>                get_task(const std::string& task_id) const;
-  std::vector<std::shared_ptr<AgentTask>>   get_tasks() const;
+  void                                      add_task(const std::shared_ptr<MMAgentTask>& task);
+  std::shared_ptr<MMAgentTask>                get_task(const std::string& task_id) const;
+  std::vector<std::shared_ptr<MMAgentTask>>   get_tasks() const;
   void                                      set_task_coordinator(
       const std::shared_ptr<SessionTaskCoordinator>& coordinator);
 
@@ -92,9 +92,9 @@ private:
   int64_t                                     created_time_ = 0;
   int64_t                                     last_activity_time_ = 0;
   std::map<std::string, std::string>          metadata_;
-  AgentMsgQue                                 receive_queue_;
-  AgentMsgQue                                 send_queue_;
-  std::map<std::string, std::shared_ptr<AgentTask>> tasks_;
+  MMAgentMsgQue                                 receive_queue_;
+  MMAgentMsgQue                                 send_queue_;
+  std::map<std::string, std::shared_ptr<MMAgentTask>> tasks_;
   std::shared_ptr<SessionTaskCoordinator>     task_coordinator_;
   std::shared_ptr<AgentContext>               context_;
   mutable std::mutex                          mutex_;

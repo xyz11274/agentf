@@ -157,12 +157,12 @@ public:
   RequestBuilder& with_target(const std::string& target_id);
 
   /// @brief Set workflow ID
-  /// @param workflow_id Workflow identifier
+  /// @param workflow_id MMWorkflow identifier
   /// @return Reference to builder for chaining
   RequestBuilder& with_workflow(const std::string& workflow_id);
 
   /// @brief Set node ID
-  /// @param node_id Node identifier
+  /// @param node_id MMNode identifier
   /// @return Reference to builder for chaining
   RequestBuilder& with_node(const std::string& node_id);
 

@@ -71,7 +71,7 @@ int64_t Deployer::now_ms() {
       .count();
 }
 
-bool Deployer::register_worker_internal(const std::shared_ptr<WorkerEngine>& worker) {
+bool Deployer::register_worker_internal(const std::shared_ptr<MMWorkerEngine>& worker) {
   if(!worker) {
     return false;
   }
@@ -81,7 +81,7 @@ bool Deployer::register_worker_internal(const std::shared_ptr<WorkerEngine>& wor
   return true;
 }
 
-bool Deployer::register_worker(const std::shared_ptr<WorkerEngine>& worker) {
+bool Deployer::register_worker(const std::shared_ptr<MMWorkerEngine>& worker) {
   if(!worker) {
     return false;
   }
@@ -112,8 +112,8 @@ bool Deployer::unregister_worker_internal(const std::string& worker_id) {
 bool Deployer::unregister_worker(const std::string& worker_id) {
   {
     std::lock_guard<std::mutex> qlock(queue_mutex_);
-    worker_registration_queue_.push({std::make_shared<WorkerEngine>(
-                                         WorkerEngine::Config{worker_id, false}),
+    worker_registration_queue_.push({std::make_shared<MMWorkerEngine>(
+                                         MMWorkerEngine::Config{worker_id, false}),
                                      true});
   }
   queue_cv_.notify_all();
@@ -130,7 +130,7 @@ bool Deployer::update_worker_heartbeat(const std::string& worker_id) {
   return true;
 }
 
-bool Deployer::update_worker_status(const std::string& worker_id, WorkerEngine::WorkerStatus status) {
+bool Deployer::update_worker_status(const std::string& worker_id, MMWorkerEngine::WorkerStatus status) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = workers_.find(worker_id);
   if(it == workers_.end()) {
@@ -150,21 +150,21 @@ bool Deployer::update_worker_load(const std::string& worker_id, int load) {
   return true;
 }
 
-std::shared_ptr<WorkerEngine> Deployer::pick_worker_for_workflow(
+std::shared_ptr<MMWorkerEngine> Deployer::pick_worker_for_workflow(
     const std::string& workflow_id, const std::string& preferred_worker_id) const {
   if(!preferred_worker_id.empty()) {
     auto it = workers_.find(preferred_worker_id);
     if(it != workers_.end() && it->second->supports_workflow(workflow_id)
-       && it->second->get_status() == WorkerEngine::WorkerStatus::RUNNING) {
+       && it->second->get_status() == MMWorkerEngine::WorkerStatus::RUNNING) {
       return it->second;
     }
   }
 
-  std::shared_ptr<WorkerEngine> picked;
+  std::shared_ptr<MMWorkerEngine> picked;
   int min_load = 0;
   for(const auto& kv : workers_) {
     const auto& worker = kv.second;
-    if(worker->get_status() != WorkerEngine::WorkerStatus::RUNNING
+    if(worker->get_status() != MMWorkerEngine::WorkerStatus::RUNNING
        || !worker->supports_workflow(workflow_id)) {
       continue;
     }
@@ -237,7 +237,7 @@ std::map<std::string, std::string> Deployer::run_default_algorithm(
   std::map<std::string, std::string> result = stable_mapping;
   std::map<std::string, int>         projected_load;
   for(const auto& ws : workers) {
-    if(ws.status == WorkerEngine::WorkerStatus::RUNNING) {
+    if(ws.status == MMWorkerEngine::WorkerStatus::RUNNING) {
       projected_load[ws.worker_id] = ws.load;
     }
   }
@@ -364,7 +364,7 @@ std::vector<std::string> Deployer::find_unhealthy_workers_locked(int64_t now) co
   std::vector<std::string> failed;
   for(const auto& kv : workers_) {
     const auto status = kv.second->get_status();
-    if(status == WorkerEngine::WorkerStatus::STOPPED) {
+    if(status == MMWorkerEngine::WorkerStatus::STOPPED) {
       failed.push_back(kv.first);
       continue;
     }

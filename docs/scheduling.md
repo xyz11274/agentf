@@ -1,4 +1,4 @@
-# Agent-Workflow-Node 调度机制实现分析
+# MMAgent-MMWorkflow-MMNode 调度机制实现分析
 
 > 本文档对比设计规范与代码实现，评估调度机制的符合度。
 > - 分析日期：2026-02-27
@@ -9,7 +9,7 @@
 
 ## 0. 核心概念关系说明
 
-### 0.1 TaskItem、Workflow、Node 的关系
+### 0.1 TaskItem、MMWorkflow、MMNode 的关系
 
 #### 开发态 vs 运行态
 
@@ -18,20 +18,20 @@
 │                              开发态 (Design Time)                                    │
 │                                                                                      │
 │  ┌──────────────────────────────────────────────────────────────────────────────┐   │
-│  │                           Agent 包开发                                          │   │
+│  │                           MMAgent 包开发                                          │   │
 │  │                                                                                │   │
 │  │  workflow_XXX.json ──────┐                                                     │   │
 │  │       │                  │                                                     │   │
 │  │       ▼                  ▼                                                     │   │
 │  │  ┌──────────┐      ┌──────────┐      ┌──────────────────┐                    │   │
-│  │  │ Workflow │──────┤  Node A  │      │ node_a.so        │                    │   │
+│  │  │ MMWorkflow │──────┤  MMNode A  │      │ node_a.so        │                    │   │
 │  │  │ (流程图)  │      ├──────────┤      │ (可执行代码)      │                    │   │
-│  │  │          │      │  Node B  │      ├──────────────────┤                    │   │
+│  │  │          │      │  MMNode B  │      ├──────────────────┤                    │   │
 │  │  │ - nodes[]│      ├──────────┤      │ node_b.py        │                    │   │
-│  │  │ - edges[]│──────┤  Node C  │      │ (Python脚本)      │                    │   │
+│  │  │ - edges[]│──────┤  MMNode C  │      │ (Python脚本)      │                    │   │
 │  │  │          │      └──────────┘      └──────────────────┘                    │   │
-│  │  │ Node:执行 │                                                                │   │
-│  │  │ Edge:控制 │      Edge 定义控制流:                                           │   │
+│  │  │ MMNode:执行 │                                                                │   │
+│  │  │ MMEdge:控制 │      MMEdge 定义控制流:                                           │   │
 │  │  └──────────┘      - if: 条件分支                                             │   │
 │  │                    - loop: 循环                                               │   │
 │  │                    - fork/join: 并行                                          │   │
@@ -39,10 +39,10 @@
 │  └──────────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                      │
 │  关键特点：                                                                           │
-│  - Workflow 是静态定义的DAG（有向图）                                                  │
-│  - Node 包含执行代码的引用（SO/Python/Shell等）                                         │
-│  - Edge 定义控制流逻辑，Node只负责动作执行                                              │
-│  - 此时没有 TaskItem，只有 Workflow/Node 的定义                                        │
+│  - MMWorkflow 是静态定义的DAG（有向图）                                                  │
+│  - MMNode 包含执行代码的引用（SO/Python/Shell等）                                         │
+│  - MMEdge 定义控制流逻辑，Node只负责动作执行                                              │
+│  - 此时没有 TaskItem，只有 MMWorkflow/MMNode 的定义                                        │
 └─────────────────────────────────────────────────────────────────────────────────────┘
                                           │
                                           │ Agent包加载
@@ -56,7 +56,7 @@
 │  │  用户请求 ────────┐                                                            │   │
 │  │       │          ▼                                                            │   │
 │  │       │    ┌──────────┐     ┌──────────────────────────────────────────┐     │   │
-│  │       └───▶│  Agent   │────▶│           AgentTask (agent/task.h)        │     │   │
+│  │       └───▶│  MMAgent   │────▶│           MMAgentTask (agent/task.h)        │     │   │
 │  │            │ Session  │     ├──────────────────────────────────────────┤     │   │
 │  │            └──────────┘     │ task_id        │ 唯一标识                 │     │   │
 │  │                             │ workflow_id    │ 关联Workflow定义         │     │   │
@@ -95,9 +95,9 @@
 │                                            ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────┐
 │  ┌──────────────────────────────────────────────────────────────────────────────┐   │
-│  │                         Workflow 运行时实例                                    │   │
+│  │                         MMWorkflow 运行时实例                                    │   │
 │  │                                                                                │   │
-│  │   Workflow Instance (workflow.cpp)                                             │   │
+│  │   MMWorkflow Instance (workflow.cpp)                                             │   │
 │  │   ┌──────────────────────────────────────────────────────────────────────┐    │   │
 │  │   │  control_context_    │ 运行时控制流上下文（循环变量、条件状态）         │    │   │
 │  │   │  executed_nodes_     │ 已执行Node记录                                 │    │   │
@@ -113,9 +113,9 @@
 │                                            ▼
 ┌─────────────────────────────────────────────────────────────────────────────────────┐
 │  ┌──────────────────────────────────────────────────────────────────────────────┐   │
-│  │                              Node 执行                                         │   │
+│  │                              MMNode 执行                                         │   │
 │  │                                                                                │   │
-│  │   Node Instance                                                                │   │
+│  │   MMNode Instance                                                                │   │
 │  │   ┌────────────────────────────────────────────────────────────────────┐      │   │
 │  │   │ state_           │ WAITING → READY → EXECUTING → SUCCESS/FAILED   │      │   │
 │  │   │ inputs_          │ 输入数据（来自DataBus或上游Node）                 │      │   │
@@ -136,17 +136,17 @@
 
 | 关系 | 说明 | 示例 |
 |------|------|------|
-| **AgentTask → Workflow** | 1个AgentTask对应1个Workflow定义 | 用户查询任务 → 执行"QueryWorkflow" |
-| **AgentTask → TaskItem** | 1个AgentTask可能产生多个TaskItem | 复杂任务分阶段执行，每阶段一个TaskItem |
-| **TaskItem → Workflow Instance** | 1个TaskItem对应1个Workflow运行时实例 | Task被调度到WorkerA的Workflow实例X |
-| **Workflow Instance → Node** | 1个Workflow实例包含多个Node（按DAG图） | Workflow包含：Start→Validate→Process→End |
-| **Node → TaskItem** | N:N关系，多个TaskItem可触发同一个Node | 不同用户请求都执行"Validate" Node |
+| **MMAgentTask → MMWorkflow** | 1个AgentTask对应1个Workflow定义 | 用户查询任务 → 执行"QueryWorkflow" |
+| **MMAgentTask → TaskItem** | 1个AgentTask可能产生多个TaskItem | 复杂任务分阶段执行，每阶段一个TaskItem |
+| **TaskItem → MMWorkflow Instance** | 1个TaskItem对应1个Workflow运行时实例 | Task被调度到WorkerA的Workflow实例X |
+| **MMWorkflow Instance → MMNode** | 1个Workflow实例包含多个Node（按DAG图） | Workflow包含：Start→Validate→Process→End |
+| **MMNode → TaskItem** | N:N关系，多个TaskItem可触发同一个Node | 不同用户请求都执行"Validate" MMNode |
 
 #### 为什么需要 TaskItem？
 
 | 层级 | 对象 | 职责 | 存在时机 |
 |------|------|------|---------|
-| **Agent层** | AgentTask | 业务任务概念，含生命周期管理（start/pause/stop） | Agent生成任务时 |
+| **Agent层** | MMAgentTask | 业务任务概念，含生命周期管理（start/pause/stop） | Agent生成任务时 |
 | **Runtime层** | TaskItem | 调度单元，用于Worker间任务传递和队列管理 | 进入调度系统后 |
 | **Worker层** | TaskItem | 执行单元，关联具体Workflow实例和Node | Worker执行时 |
 
@@ -164,7 +164,7 @@
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    AGENT LEVEL MASTER                       │
-│              (AgentRuntime + AgentActor)                    │
+│              (MMAgentRuntime + MMAgentActor)                    │
 │     - Agent实例生命周期管理                                  │
 │     - Agent注册/心跳/监控                                   │
 │     - 全局Agent状态管理                                     │
@@ -178,7 +178,7 @@
 │  │    DEPLOYER     │    │         SCHEDULER           │    │
 │  │  (deployer.cpp) │    │      (scheduler.cpp)        │    │
 │  │                 │    │                             │    │
-│  │ Workflow ->     │    │ Task -> Workflow Instance   │    │
+│  │ MMWorkflow ->     │    │ Task -> MMWorkflow Instance   │    │
 │  │ Worker mapping  │    │ mapping                     │    │
 │  │                 │    │                             │    │
 │  │ - Worker注册    │    │ - Task队列管理              │    │
@@ -188,8 +188,8 @@
 └───────────────────────┬─────────────────────────────────────┘
                         │
 ┌───────────────────────▼─────────────────────────────────────┐
-│              WORKER LEVEL (Node Execution)                  │
-│        (WorkerEngine - runtime/worker/worker.cpp)           │
+│              WORKER LEVEL (MMNode Execution)                  │
+│        (MMWorkerEngine - runtime/worker/worker.cpp)           │
 │                                                             │
 │  - 双优先级任务队列 (高/普通)                                │
 │  - Workflow实例池                                           │
@@ -204,7 +204,7 @@
 flowchart TB
     subgraph AgentLevel["AGENT LEVEL MASTER"]
         direction TB
-        AR["AgentRuntime + AgentActor"]
+        AR["MMAgentRuntime + MMAgentActor"]
         ARD1["- Agent实例生命周期管理"]
         ARD2["- Agent注册/心跳/监控"]
         ARD3["- 全局Agent状态管理"]
@@ -218,7 +218,7 @@ flowchart TB
     subgraph WorkflowLevel["WORKFLOW LEVEL MASTER"]
         direction TB
         Deployer["DEPLOYER (deployer.cpp)"]
-        DeployerDesc1["Workflow → Worker mapping"]
+        DeployerDesc1["MMWorkflow → Worker mapping"]
         DeployerDesc2["- Worker注册"]
         DeployerDesc3["- 心跳监控"]
         DeployerDesc4["- 故障转移"]
@@ -228,7 +228,7 @@ flowchart TB
         DeployerDesc1 --> DeployerDesc4
 
         Scheduler["SCHEDULER (scheduler.cpp)"]
-        SchedulerDesc1["Task → Workflow Instance mapping"]
+        SchedulerDesc1["Task → MMWorkflow Instance mapping"]
         SchedulerDesc2["- Task队列管理"]
         SchedulerDesc3["- 负载均衡"]
         SchedulerDesc4["- 插件算法"]
@@ -240,9 +240,9 @@ flowchart TB
 
     WorkflowLevel --> WorkerLevel
 
-    subgraph WorkerLevel["WORKER LEVEL (Node Execution)"]
+    subgraph WorkerLevel["WORKER LEVEL (MMNode Execution)"]
         direction TB
-        WE["WorkerEngine (runtime/worker/worker.cpp)"]
+        WE["MMWorkerEngine (runtime/worker/worker.cpp)"]
         WEDesc1["- 双优先级任务队列 (高/普通)"]
         WEDesc2["- Workflow实例池"]
         WEDesc3["- 事件驱动执行"]
@@ -262,15 +262,15 @@ flowchart TB
 
 | 设计层级 | 设计目标 | 代码实现 | 符合度 |
 |---------|---------|---------|--------|
-| **Agent Level Master** | 管理多Agent实例生命周期 | `AgentRuntime` + `AgentActor` | 高 |
-| **Workflow Level Master** | Deployer(workflow→worker) + Scheduler(task→workflow) | `runtime::master::Deployer` + `runtime::master::Scheduler` | 高 |
-| **Node Level Worker** | 执行引擎、任务队列、事件驱动 | `WorkerEngine` | 中 |
+| **MMAgent Level Master** | 管理多Agent实例生命周期 | `MMAgentRuntime` + `MMAgentActor` | 高 |
+| **MMWorkflow Level Master** | Deployer(workflow→worker) + Scheduler(task→workflow) | `runtime::master::Deployer` + `runtime::master::Scheduler` | 高 |
+| **MMNode Level Worker** | 执行引擎、任务队列、事件驱动 | `MMWorkerEngine` | 中 |
 
 ---
 
 ## 2. 详细符合性分析
 
-### 2.1 Agent Level Master - 符合度：高
+### 2.1 MMAgent Level Master - 符合度：高
 
 #### 设计规范（REFACTORING.md 第15节）
 
@@ -307,7 +307,7 @@ apply_agent_control()         // start/pause/resume/stop控制
 
 ---
 
-### 2.2 Workflow Level Master - 符合度：高
+### 2.2 MMWorkflow Level Master - 符合度：高
 
 #### 2.2.1 Deployer（workflow→worker调度）
 
@@ -385,7 +385,7 @@ schedule_task()              // 主调度逻辑
 
 ---
 
-### 2.3 Node Level Worker - 符合度：中
+### 2.3 MMNode Level Worker - 符合度：中
 
 #### 设计规范（REFACTORING.md 第13节）
 
@@ -412,7 +412,7 @@ event_monitor_loop()        // 事件监控线程
 |---------|---------|---------|
 | 双优先级任务队列 | ✅ 已实现 | `high_priority_tasks_` + `normal_priority_tasks_` |
 | workflow处理线程池 | ⚠️ 部分实现 | 线程池创建但未充分用于node级并行 |
-| Node执行多线程 | ❌ 未完全实现 | Worker提交的任务仅记录日志，实际Node执行在`AgentRuntime::worker_thread_main` |
+| Node执行多线程 | ❌ 未完全实现 | Worker提交的任务仅记录日志，实际Node执行在`MMAgentRuntime::worker_thread_main` |
 | Event驱动执行 | ✅ 已实现 | `event_monitor_loop()`完整实现 |
 
 #### 主要问题
@@ -421,10 +421,10 @@ event_monitor_loop()        // 事件监控线程
 
 当前执行流程：
 ```
-AgentRuntime::schedule_task()
+MMAgentRuntime::schedule_task()
   -> Scheduler调度
-  -> WorkerEngine::enqueue_task() // 仅入队，无实际执行
-  -> AgentRuntime::worker_thread_main() // 实际执行Node
+  -> MMWorkerEngine::enqueue_task() // 仅入队，无实际执行
+  -> MMAgentRuntime::worker_thread_main() // 实际执行Node
 ```
 
 **建议改进：**
@@ -440,9 +440,9 @@ AgentRuntime::schedule_task()
 |---------|---------|---------|---------|
 | S1-02-S2-02-S3-03-UC-01 | 任务对应Workflow实例调度 | ✅ 已实现 | `Scheduler::schedule_task()` |
 | S1-02-S2-01-S3-02-UC-01 | Agent实例部署 | ✅ 已实现 | `Deployer::deploy_workflow_instance()` |
-| S1-02-S2-01-S3-01-UC-02 | Agent实例生命周期管理 | ✅ 已实现 | `AgentActor`全功能 |
+| S1-02-S2-01-S3-01-UC-02 | Agent实例生命周期管理 | ✅ 已实现 | `MMAgentActor`全功能 |
 | S1-02-S2-02-S3-02-UC-02 | 任务生命周期管理 | ⚠️ 基础实现 | `Scheduler::update_task_status()` |
-| S1-02-S2-02-S3-04-UC-01 | Workflow及Node执行引擎 | ⚠️ 基础实现 | `AgentRuntime::worker_thread_main()` |
+| S1-02-S2-02-S3-04-UC-01 | Workflow及Node执行引擎 | ⚠️ 基础实现 | `MMAgentRuntime::worker_thread_main()` |
 
 ---
 
@@ -451,7 +451,7 @@ AgentRuntime::schedule_task()
 ### 问题1：Worker与Runtime的Node执行职责混淆
 
 **现状：**
-- Node执行逻辑分散在`AgentRuntime::worker_thread_main()`和`WorkerEngine::process_task_queues()`
+- Node执行逻辑分散在`MMAgentRuntime::worker_thread_main()`和`MMWorkerEngine::process_task_queues()`
 - WorkerEngine接收task但仅记录日志，未实际执行Node
 
 **建议：**
@@ -488,7 +488,7 @@ AgentRuntime::schedule_task()
 - 需验证集成的完整性
 
 **建议：**
-- 验证`AgentMsgQue`与`DataBus`的集成是否符合设计
+- 验证`MMAgentMsgQue`与`MMDataBus`的集成是否符合设计
 - 确保大payload通过DataBus传输，消息只传引用
 
 ---
@@ -508,7 +508,7 @@ AgentRuntime::schedule_task()
 
 ### 5.2 结论
 
-**Agent-Workflow-Node调度机制的整体实现基本符合设计文档**。
+**MMAgent-MMWorkflow-Node调度机制的整体实现基本符合设计文档**。
 
 - **优势：**
   - 三层架构清晰，Master-Worker模式实现规范
@@ -526,7 +526,7 @@ AgentRuntime::schedule_task()
 | 类型 | 文件路径 | 说明 |
 |-----|---------|-----|
 | 核心代码 | `src/runtime/runtime.cpp` | AgentRuntime实现 |
-| 核心代码 | `src/runtime/master/deployer.cpp` | Workflow→Worker调度 |
+| 核心代码 | `src/runtime/master/deployer.cpp` | MMWorkflow→Worker调度 |
 | 核心代码 | `src/runtime/master/scheduler.cpp` | Task→Workflow调度 |
 | 核心代码 | `src/runtime/worker/worker.cpp` | Worker引擎 |
 | 核心代码 | `src/agent/agent_actor.cpp` | Agent自动化管理 |
@@ -538,7 +538,7 @@ AgentRuntime::schedule_task()
 
 ## 6. 未完成实现部分补充设计
 
-针对 **Node Level Worker** 层未完全实现的部分（Worker与Runtime职责划分、Workflow级线程池利用、Node并行执行），本节补充详细设计方案。
+针对 **MMNode Level Worker** 层未完全实现的部分（Worker与Runtime职责划分、Workflow级线程池利用、Node并行执行），本节补充详细设计方案。
 
 ### 6.1 目标架构
 
@@ -546,26 +546,26 @@ AgentRuntime::schedule_task()
 
 | 组件 | 当前职责 | 目标职责 | 变更说明 |
 |------|---------|---------|---------|
-| **AgentRuntime** | 任务调度 + Node执行 | 任务调度协调 | 将Node执行下沉到WorkerEngine |
-| **WorkerEngine** | 任务队列 + 事件处理 | Node执行引擎 | 增加NodeExecutor，实际执行Node |
-| **Workflow** | 控制流判断 | 可执行Node发现 | 保持现状，优化`get_executable_nodes()` |
+| **MMAgentRuntime** | 任务调度 + Node执行 | 任务调度协调 | 将Node执行下沉到WorkerEngine |
+| **MMWorkerEngine** | 任务队列 + 事件处理 | Node执行引擎 | 增加NodeExecutor，实际执行Node |
+| **MMWorkflow** | 控制流判断 | 可执行Node发现 | 保持现状，优化`get_executable_nodes()` |
 
 #### 6.1.2 核心交互流程
 
 ```
 Task调度阶段：
-  AgentRuntime::schedule_task()
+  MMAgentRuntime::schedule_task()
     -> Scheduler::schedule_task()          [选择Workflow实例]
-    -> WorkerEngine::enqueue_task()         [投递到Worker队列]
+    -> MMWorkerEngine::enqueue_task()         [投递到Worker队列]
     -> WorkerEvent("task_arrived")          [触发事件]
 
 Task执行阶段：
-  WorkerEngine::event_monitor_loop()
+  MMWorkerEngine::event_monitor_loop()
     -> handle_internal_event("task_arrived")
     -> process_task_queues()
     -> WorkflowThreadPool::submit()         [提交到Workflow线程池]
     -> NodeExecutor::execute()              [执行Node]
-    -> Node::execute()                      [实际Node逻辑]
+    -> MMNode::execute()                      [实际Node逻辑]
     -> report_node_complete()               [上报完成]
 ```
 
@@ -578,14 +578,14 @@ Task执行阶段：
 ```mermaid
 sequenceDiagram
     participant Client as 客户端
-    participant AA as AgentActor
-    participant AR as AgentRuntime
+    participant AA as MMAgentActor
+    participant AR as MMAgentRuntime
     participant Sch as Scheduler
     participant DE as Deployer
-    participant WE as WorkerEngine
+    participant WE as MMWorkerEngine
     participant WFP as WorkflowThreadPool
-    participant Node as Node
-    participant DB as DataBus
+    participant MMNode as MMNode
+    participant DB as MMDataBus
 
     %% Task创建阶段
     Client->>AA: 发送请求消息
@@ -615,11 +615,11 @@ sequenceDiagram
     WE->>WFP: submit(task)
     WFP->>WFP: 工作线程获取任务
 
-    WFP->>Node: execute()
-    Node->>DB: get_input_data()
-    Node->>Node: 执行Node逻辑
-    Node->>DB: put_output_data()
-    Node-->>WFP: 执行结果
+    WFP->>MMNode: execute()
+    MMNode->>DB: get_input_data()
+    MMNode->>MMNode: 执行Node逻辑
+    MMNode->>DB: put_output_data()
+    MMNode-->>WFP: 执行结果
 
     WFP->>WE: 回调完成
     WE->>AR: report_node_complete()
@@ -641,7 +641,7 @@ sequenceDiagram
     participant NodeB as NodeB
     participant NodeC as NodeC
     participant Join as JoinEdge
-    participant DB as DataBus
+    participant DB as MMDataBus
 
     WFP->>Fork: 执行Fork边
     Fork->>Fork: 判断并行分支
@@ -681,7 +681,7 @@ sequenceDiagram
     participant Sch as Scheduler
     participant WE1 as WorkerA(故障)
     participant WE2 as WorkerB(正常)
-    participant AR as AgentRuntime
+    participant AR as MMAgentRuntime
 
     Mon->>Mon: 定期检测Worker健康
     Mon->>WE1: 检查心跳超时
@@ -756,9 +756,9 @@ sequenceDiagram
 │  │                    Workflow实例线程池 (每个Workflow独立)         │   │
 │  │                                                                 │   │
 │  │  ┌───────────────────┐  ┌───────────────────┐                  │   │
-│  │  │  Workflow-A Pool  │  │  Workflow-B Pool  │  ...             │   │
+│  │  │  MMWorkflow-A Pool  │  │  MMWorkflow-B Pool  │  ...             │   │
 │  │  │  ┌─────┐ ┌─────┐  │  │  ┌─────┐ ┌─────┐  │                  │   │
-│  │  │  │Node │ │Node │  │  │  │Node │ │Node │  │                  │   │
+│  │  │  │MMNode │ │MMNode │  │  │  │MMNode │ │MMNode │  │                  │   │
 │  │  │  │Exec │ │Exec │  │  │  │Exec │ │Exec │  │                  │   │
 │  │  │  │Thr0 │ │Thr1 │  │  │  │Thr0 │ │Thr1 │  │                  │   │
 │  │  │  └─────┘ └─────┘  │  │  └─────┘ └─────┘  │                  │   │
@@ -796,19 +796,19 @@ sequenceDiagram
 │                        单台服务器                                │
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │              AgentRuntime (MASTER角色)                   │   │
+│  │              MMAgentRuntime (MASTER角色)                   │   │
 │  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  │   │
 │  │  │   Deployer   │  │  Scheduler   │  │ LocalWorker  │  │   │
 │  │  └──────────────┘  └──────────────┘  └──────────────┘  │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │                   AgentActor                             │   │
+│  │                   MMAgentActor                             │   │
 │  │              (自动加载Agent包)                            │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │                   DataBus (本地缓存)                     │   │
+│  │                   MMDataBus (本地缓存)                     │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
@@ -821,9 +821,9 @@ sequenceDiagram
 │  │   Master节点 (1~3台)     │        │       Worker节点池 (N台)         ││
 │  │                         │        │                                 ││
 │  │  ┌─────────────────┐   │        │  ┌─────────────────────────┐   ││
-│  │  │  AgentRuntime   │   │        │  │      WorkerEngine       │   ││
+│  │  │  MMAgentRuntime   │   │        │  │      MMWorkerEngine       │   ││
 │  │  │  ┌───────────┐  │   │◄──────►│  │  ┌─────────────────┐    │   ││
-│  │  │  │  Deployer │  │   │  调度  │  │  │ Workflow Pools  │    │   ││
+│  │  │  │  Deployer │  │   │  调度  │  │  │ MMWorkflow Pools  │    │   ││
 │  │  │  └───────────┘  │   │        │  │  │  ┌───┐┌───┐    │    │   ││
 │  │  │  ┌───────────┐  │   │        │  │  │  │WF1││WF2│... │    │   ││
 │  │  │  │ Scheduler │  │   │◄──────►│  │  │  └───┘└───┘    │    │   ││
@@ -831,7 +831,7 @@ sequenceDiagram
 │  │  └─────────────────┘   │        │  └─────────────────────────┘   ││
 │  │                         │        │                                 ││
 │  │  ┌─────────────────┐   │        │  ┌─────────────────────────┐   ││
-│  │  │  AgentActor     │   │        │  │      WorkerEngine       │   ││
+│  │  │  MMAgentActor     │   │        │  │      MMWorkerEngine       │   ││
 │  │  │  (Agent管理)     │   │        │  │         ...             │   ││
 │  │  └─────────────────┘   │        │  └─────────────────────────┘   ││
 │  └─────────────────────────┘        └─────────────────────────────────┘│
@@ -853,18 +853,18 @@ flowchart TB
     subgraph Server["单台服务器"]
         direction TB
 
-        subgraph ARSingle["AgentRuntime (MASTER角色)"]
+        subgraph ARSingle["MMAgentRuntime (MASTER角色)"]
             direction LR
             DSingle["Deployer"]
             SchSingle["Scheduler"]
             LWSingle["LocalWorker"]
         end
 
-        subgraph AASingle["AgentActor"]
+        subgraph AASingle["MMAgentActor"]
             AADesc["自动加载Agent包"]
         end
 
-        subgraph DBSingle["DataBus"]
+        subgraph DBSingle["MMDataBus"]
             DBDesc["本地缓存"]
         end
 
@@ -888,13 +888,13 @@ flowchart TB
         subgraph MasterNodes["Master节点 (1~3台)"]
             direction TB
 
-            subgraph AR["AgentRuntime"]
+            subgraph AR["MMAgentRuntime"]
                 direction LR
                 D["Deployer"]
                 Sch["Scheduler"]
             end
 
-            subgraph AA["AgentActor"]
+            subgraph AA["MMAgentActor"]
                 AADesc["Agent管理"]
             end
         end
@@ -902,8 +902,8 @@ flowchart TB
         subgraph WorkerNodes["Worker节点池 (N台)"]
             direction TB
 
-            subgraph WE1["WorkerEngine #1"]
-                subgraph WP1["Workflow Pools"]
+            subgraph WE1["MMWorkerEngine #1"]
+                subgraph WP1["MMWorkflow Pools"]
                     direction LR
                     WF11["WF1"]
                     WF12["WF2"]
@@ -911,8 +911,8 @@ flowchart TB
                 end
             end
 
-            subgraph WE2["WorkerEngine #N"]
-                subgraph WP2["Workflow Pools"]
+            subgraph WE2["MMWorkerEngine #N"]
+                subgraph WP2["MMWorkflow Pools"]
                     direction LR
                     WF21["WF1"]
                     WF22["WF2"]
@@ -945,12 +945,12 @@ flowchart TB
 
 #### 6.4.1 新增接口
 
-##### WorkerEngine 新增方法
+##### MMWorkerEngine 新增方法
 
 ```cpp
 // include/internal/runtime/worker.h
 
-class WorkerEngine {
+class MMWorkerEngine {
  public:
   // ... 现有接口 ...
 
@@ -972,8 +972,8 @@ class WorkerEngine {
 
   NodeExecutionResult execute_node(
       const TaskItem& task,
-      std::shared_ptr<framework::Node> node,
-      std::shared_ptr<framework::Workflow> workflow);
+      std::shared_ptr<framework::MMNode> node,
+      std::shared_ptr<framework::MMWorkflow> workflow);
 
   /**
    * @brief 注册Node执行完成回调
@@ -999,7 +999,7 @@ class WorkerEngine {
    * @param factory 工厂函数
    */
   using NodeExecutorFactory = std::function<std::unique_ptr<NodeExecutor>(
-      std::shared_ptr<framework::Node>)>;
+      std::shared_ptr<framework::MMNode>)>;
 
   void set_node_executor_factory(NodeExecutorFactory factory);
 
@@ -1035,14 +1035,14 @@ class NodeExecutor {
    * @param node 关联的Node实例
    * @return 是否成功
    */
-  virtual bool initialize(std::shared_ptr<framework::Node> node) = 0;
+  virtual bool initialize(std::shared_ptr<framework::MMNode> node) = 0;
 
   /**
    * @brief 执行Node逻辑
    * @param input_data 输入数据引用
    * @return 执行结果
    */
-  virtual WorkerEngine::NodeExecutionResult execute(
+  virtual MMWorkerEngine::NodeExecutionResult execute(
       const DataMap& input_data) = 0;
 
   /**
@@ -1066,14 +1066,14 @@ class NodeExecutor {
  */
 class SONodeExecutor : public NodeExecutor {
  public:
-  bool initialize(std::shared_ptr<framework::Node> node) override;
-  WorkerEngine::NodeExecutionResult execute(const DataMap& input_data) override;
+  bool initialize(std::shared_ptr<framework::MMNode> node) override;
+  MMWorkerEngine::NodeExecutionResult execute(const DataMap& input_data) override;
   void cancel() override;
   ExecutorStatus get_status() const override;
   void cleanup() override;
 
  private:
-  std::shared_ptr<framework::Node> node_;
+  std::shared_ptr<framework::MMNode> node_;
   void* so_handle_ = nullptr;
   std::atomic<bool> cancelled_{false};
 };
@@ -1083,14 +1083,14 @@ class SONodeExecutor : public NodeExecutor {
  */
 class PythonNodeExecutor : public NodeExecutor {
  public:
-  bool initialize(std::shared_ptr<framework::Node> node) override;
-  WorkerEngine::NodeExecutionResult execute(const DataMap& input_data) override;
+  bool initialize(std::shared_ptr<framework::MMNode> node) override;
+  MMWorkerEngine::NodeExecutionResult execute(const DataMap& input_data) override;
   void cancel() override;
   ExecutorStatus get_status() const override;
   void cleanup() override;
 
  private:
-  std::shared_ptr<framework::Node> node_;
+  std::shared_ptr<framework::MMNode> node_;
   std::unique_ptr<ProcessExecutor> process_executor_;
 };
 
@@ -1105,12 +1105,12 @@ class ShellNodeExecutor : public NodeExecutor {
 }  // namespace agentflow
 ```
 
-##### AgentRuntime 接口调整
+##### MMAgentRuntime 接口调整
 
 ```cpp
 // include/internal/runtime/agent_runtime.h
 
-class AgentRuntime {
+class MMAgentRuntime {
  public:
   // ... 现有接口 ...
 
@@ -1124,12 +1124,12 @@ class AgentRuntime {
       const std::string& task_id,
       const std::string& workflow_instance_id,
       const std::string& node_id,
-      const WorkerEngine::NodeExecutionResult& result);
+      const MMWorkerEngine::NodeExecutionResult& result);
 
   /**
    * @brief 注册WorkerEngine回调
    */
-  void setup_worker_callbacks(std::shared_ptr<WorkerEngine> worker);
+  void setup_worker_callbacks(std::shared_ptr<MMWorkerEngine> worker);
 
   // ===== 移除/废弃接口 =====
   // 以下接口应由WorkerEngine接管
@@ -1203,7 +1203,7 @@ struct WorkflowRegistration {
   /**
    * @brief Workflow对象指针
    */
-  std::shared_ptr<framework::Workflow> workflow;
+  std::shared_ptr<framework::MMWorkflow> workflow;
 
   /**
    * @brief 执行策略
@@ -1218,7 +1218,7 @@ struct WorkflowRegistration {
 #### 6.4.3 配置变更
 
 ```cpp
-// WorkerEngine::Config 扩展
+// MMWorkerEngine::Config 扩展
 
 struct Config {
   std::string worker_id;
@@ -1257,8 +1257,8 @@ struct Config {
 
 #### 阶段1：接口准备 (兼容模式)
 - 在WorkerEngine中新增接口
-- 保持现有`AgentRuntime::process_node()`不变
-- 新增`WorkerEngine::execute_node()`，内部调用`process_node()`
+- 保持现有`MMAgentRuntime::process_node()`不变
+- 新增`MMWorkerEngine::execute_node()`，内部调用`process_node()`
 
 #### 阶段2：双轨运行
 - AgentRuntime根据配置选择执行路径
@@ -1283,7 +1283,7 @@ struct Config {
 
 ---
 
-## 7. Node-Edge同步执行与Node-Workflow调度机制
+## 7. MMNode-Edge同步执行与Node-Workflow调度机制
 
 > 本章节设计Edge与源Node同步执行的调度机制。
 > - 设计日期：2026-03-04
@@ -1313,20 +1313,20 @@ Edge执行是Node执行的一部分
 1. **执行顺序确定性**：Edge紧随Node执行，顺序可预测
 2. **上下文完整性**：Edge可直接访问Node输出，无需消息传递
 3. **调试友好**：调用栈清晰，便于问题定位
-4. **事务一致性**：Node+Edge可作为一个原子操作
+4. **事务一致性**：MMNode+Edge可作为一个原子操作
 5. **简化实现**：无需维护Edge的订阅/消息路由机制
 
 #### 7.1.2 架构设计
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        Node-Edge同步执行架构                                  │
+│                        MMNode-Edge同步执行架构                                  │
 │                                                                             │
 │  ┌───────────────────────────────────────────────────────────────────────┐  │
 │  │                      同步执行单元 (同一调用栈)                           │  │
 │  │                                                                       │  │
 │  │  ┌─────────────┐      ┌─────────────┐                                │  │
-│  │  │   Node A    │─────>│   Edge      │                                │  │
+│  │  │   MMNode A    │─────>│   MMEdge      │                                │  │
 │  │  │             │ 同步  │   execute() │                                │  │
 │  │  │ execute()   │ 调用  │             │                                │  │
 │  │  │ outputs     │      │ 条件评估    │                                │  │
@@ -1335,7 +1335,7 @@ Edge执行是Node执行的一部分
 │  │        │                     │                                       │  │
 │  │        v                     │ 返回EdgeResult                        │  │
 │  │  ┌─────────────┐             │                                       │  │
-│  │  │  DataBus    │             v                                       │  │
+│  │  │  MMDataBus    │             v                                       │  │
 │  │  │  (存储输出) │      ┌─────────────┐                                │  │
 │  │  └─────────────┘      │ 发布消息    │                                │  │
 │  │                       │ NodeExecution│                               │  │
@@ -1346,7 +1346,7 @@ Edge执行是Node执行的一部分
 │                                 │ 消息队列（仅用于跨Node通信）                │
 │                                 v                                           │
 │  ┌─────────────┐      ┌─────────────┐                                      │
-│  │   Node B    │      │  Message    │                                      │
+│  │   MMNode B    │      │  Message    │                                      │
 │  │             │<─────│ Dispatcher  │                                      │
 │  │ execute()   │ 异步  │             │                                      │
 │  └─────────────┘ 调度  └─────────────┘                                      │
@@ -1365,7 +1365,7 @@ Edge执行是Node执行的一部分
 
 ```
                     ┌─────────────┐
-                    │   Node A    │
+                    │   MMNode A    │
                     │  (完成执行)  │
                     └──────┬──────┘
                            │
@@ -1373,7 +1373,7 @@ Edge执行是Node执行的一部分
            │               │               │
            v               v               v
     ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
-    │   Edge 1    │ │   Edge 2    │ │   Edge 3    │
+    │   MMEdge 1    │ │   MMEdge 2    │ │   MMEdge 3    │
     │ (IF分支A)   │ │ (IF分支B)   │ │ (无条件)    │
     │ condition:  │ │ condition:  │ │             │
     │ x > 0       │ │ x <= 0      │ │             │
@@ -1381,7 +1381,7 @@ Edge执行是Node执行的一部分
            │               │               │
            v               v               v
     ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
-    │   Node B    │ │   Node C    │ │   Node D    │
+    │   MMNode B    │ │   MMNode C    │ │   MMNode D    │
     └─────────────┘ └─────────────┘ └─────────────┘
 ```
 
@@ -1389,16 +1389,16 @@ Edge执行是Node执行的一部分
 
 1. **顺序执行所有出边**（同一调用栈内）
    ```
-   Node A 执行完成
+   MMNode A 执行完成
        │
-       ├── Edge 1::execute(outputs) → EdgeResult{should_proceed=true}
-       │       └── 满足条件，publish(NodeExecutionMessage{Node B})
+       ├── MMEdge 1::execute(outputs) → EdgeResult{should_proceed=true}
+       │       └── 满足条件，publish(NodeExecutionMessage{MMNode B})
        │
-       ├── Edge 2::execute(outputs) → EdgeResult{should_proceed=false}
+       ├── MMEdge 2::execute(outputs) → EdgeResult{should_proceed=false}
        │       └── 不满足条件，跳过
        │
-       └── Edge 3::execute(outputs) → EdgeResult{should_proceed=true}
-               └── publish(NodeExecutionMessage{Node D})
+       └── MMEdge 3::execute(outputs) → EdgeResult{should_proceed=true}
+               └── publish(NodeExecutionMessage{MMNode D})
    ```
 
 2. **EdgeResult 结构**
@@ -1451,7 +1451,7 @@ void NodeActor::handle_execution_request(const NodeExecutionMessage& msg) {
 
 ```
                     ┌─────────────┐
-                    │   Node A    │
+                    │   MMNode A    │
                     │  (FORK点)   │
                     └──────┬──────┘
                            │
@@ -1459,13 +1459,13 @@ void NodeActor::handle_execution_request(const NodeExecutionMessage& msg) {
               │            │            │
               v            v            v
        ┌──────────┐ ┌──────────┐ ┌──────────┐
-       │  Edge 1  │ │  Edge 2  │ │  Edge 3  │
+       │  MMEdge 1  │ │  MMEdge 2  │ │  MMEdge 3  │
        │(FORK成员)│ │(FORK成员)│ │(FORK成员)│
        └────┬─────┘ └────┬─────┘ └────┬─────┘
             │            │            │
             v            v            v
        ┌──────────┐ ┌──────────┐ ┌──────────┐
-       │  Node B  │ │  Node C  │ │  Node D  │
+       │  MMNode B  │ │  MMNode C  │ │  MMNode D  │
        │(并行执行)│ │(并行执行)│ │(并行执行)│
        └────┬─────┘ └────┬─────┘ └────┬─────┘
             │            │            │
@@ -1473,7 +1473,7 @@ void NodeActor::handle_execution_request(const NodeExecutionMessage& msg) {
                          │
                          v
                   ┌─────────────┐
-                  │   Node E    │
+                  │   MMNode E    │
                   │  (JOIN点)   │
                   └─────────────┘
 ```
@@ -1481,7 +1481,7 @@ void NodeActor::handle_execution_request(const NodeExecutionMessage& msg) {
 **FORK执行逻辑：**
 
 ```cpp
-EdgeResult Edge::execute(const DataMap& source_outputs) {
+EdgeResult MMEdge::execute(const DataMap& source_outputs) {
     EdgeResult result;
 
     switch (get_control_type()) {
@@ -1563,7 +1563,7 @@ struct NodeExecutionMessage : MessageBase {
   std::string task_id;
 
   // 输入数据引用（通过DataBus获取实际数据）
-  std::map<std::string, DataBus::DataRef> input_refs;
+  std::map<std::string, MMDataBus::DataRef> input_refs;
 
   // 执行上下文
   std::string agent_instance_id;
@@ -1587,7 +1587,7 @@ struct NodeCompletionMessage : MessageBase {
   std::string error_message;
 
   // 输出数据引用
-  std::map<std::string, DataBus::DataRef> output_refs;
+  std::map<std::string, MMDataBus::DataRef> output_refs;
 
   // 执行统计
   int64_t execution_time_ms = 0;
@@ -1609,12 +1609,12 @@ struct EdgeTransferMessage : MessageBase {
   struct DataMapping {
     std::string source_output;    // 源Node输出端口名
     std::string target_input;     // 目标Node输入端口名
-    DataBus::DataRef data_ref;    // 数据引用
+    MMDataBus::DataRef data_ref;    // 数据引用
   };
   std::vector<DataMapping> mappings;
 
   // 控制流信息
-  Edge::ControlType control_type = Edge::ControlType::NONE;
+  MMEdge::ControlType control_type = MMEdge::ControlType::NONE;
   std::string condition_result;   // 条件表达式计算结果
 };
 
@@ -1625,12 +1625,12 @@ struct EdgeTransferMessage : MessageBase {
  */
 struct WorkflowScheduleMessage : MessageBase {
   std::string workflow_id;           // 目标Workflow ID或workflow_ref
-  std::string workflow_file;         // Workflow DSL文件路径
+  std::string workflow_file;         // MMWorkflow DSL文件路径
   std::string parent_workflow_instance_id;  // 父Workflow实例ID
   std::string parent_node_id;        // 父Node ID
 
   // 输入数据引用
-  std::map<std::string, DataBus::DataRef> input_refs;
+  std::map<std::string, MMDataBus::DataRef> input_refs;
 
   // 调度策略
   enum class SchedulePolicy {
@@ -1653,7 +1653,7 @@ struct WorkflowCompletionMessage : MessageBase {
   std::string error_message;
 
   // 输出数据引用
-  std::map<std::string, DataBus::DataRef> output_refs;
+  std::map<std::string, MMDataBus::DataRef> output_refs;
 };
 
 /**
@@ -1665,7 +1665,7 @@ struct ControlFlowMessage : MessageBase {
   std::string workflow_instance_id;
   std::string edge_id;
 
-  Edge::ControlType control_type;
+  MMEdge::ControlType control_type;
 
   // IF分支
   struct IfControl {
@@ -1782,8 +1782,8 @@ namespace framework {
  */
 class NodeActor : public actor::adapter::IActor {
 public:
-  explicit NodeActor(std::shared_ptr<Node> node,
-                     std::shared_ptr<runtime::DataBus> databus,
+  explicit NodeActor(std::shared_ptr<MMNode> node,
+                     std::shared_ptr<runtime::MMDataBus> databus,
                      std::shared_ptr<runtime::MessageDispatcher> dispatcher);
   ~NodeActor() override = default;
 
@@ -1806,15 +1806,15 @@ private:
                          const std::string& error = "");
 
   // 获取输入数据
-  bool resolve_inputs(const std::map<std::string, runtime::DataBus::DataRef>& input_refs,
+  bool resolve_inputs(const std::map<std::string, runtime::MMDataBus::DataRef>& input_refs,
                       DataMap& inputs);
 
   // 存储输出数据
   void store_outputs(const DataMap& outputs,
-                     std::map<std::string, runtime::DataBus::DataRef>& output_refs);
+                     std::map<std::string, runtime::MMDataBus::DataRef>& output_refs);
 
-  std::shared_ptr<Node> node_;
-  std::shared_ptr<runtime::DataBus> databus_;
+  std::shared_ptr<MMNode> node_;
+  std::shared_ptr<runtime::MMDataBus> databus_;
   std::shared_ptr<runtime::MessageDispatcher> dispatcher_;
 
   std::atomic<bool> executing_{false};
@@ -1825,7 +1825,7 @@ private:
 }  // namespace agentflow
 ```
 
-#### 7.3.3 Edge - 同步执行的Edge
+#### 7.3.3 MMEdge - 同步执行的Edge
 
 ```cpp
 // include/internal/workflow/edge.h (扩展)
@@ -1849,7 +1849,7 @@ struct EdgeResult {
 /**
  * @brief Edge类扩展 - 同步执行方法
  */
-class Edge {
+class MMEdge {
 public:
   // ... 现有方法 ...
 
@@ -1871,11 +1871,11 @@ public:
   /**
    * @brief 设置DataBus（用于数据存储）
    */
-  void set_databus(std::shared_ptr<runtime::DataBus> databus);
+  void set_databus(std::shared_ptr<runtime::MMDataBus> databus);
 
 private:
   std::shared_ptr<runtime::MessageDispatcher> dispatcher_;
-  std::shared_ptr<runtime::DataBus> databus_;
+  std::shared_ptr<runtime::MMDataBus> databus_;
 };
 
 }  // namespace framework
@@ -1900,9 +1900,9 @@ namespace framework {
  */
 class NodeActor : public actor::adapter::IActor {
 public:
-  explicit NodeActor(std::shared_ptr<Node> node,
-                     std::shared_ptr<Workflow> workflow,
-                     std::shared_ptr<runtime::DataBus> databus,
+  explicit NodeActor(std::shared_ptr<MMNode> node,
+                     std::shared_ptr<MMWorkflow> workflow,
+                     std::shared_ptr<runtime::MMDataBus> databus,
                      std::shared_ptr<runtime::MessageDispatcher> dispatcher);
 
   void on_message(std::shared_ptr<actor::adapter::IContext> ctx) override;
@@ -1917,11 +1917,11 @@ private:
   void execute_outgoing_edges(const DataMap& outputs);
 
   // 获取出边（按优先级排序）
-  std::vector<std::shared_ptr<Edge>> get_outgoing_edges() const;
+  std::vector<std::shared_ptr<MMEdge>> get_outgoing_edges() const;
 
-  std::shared_ptr<Node> node_;
-  std::shared_ptr<Workflow> workflow_;
-  std::shared_ptr<runtime::DataBus> databus_;
+  std::shared_ptr<MMNode> node_;
+  std::shared_ptr<MMWorkflow> workflow_;
+  std::shared_ptr<runtime::MMDataBus> databus_;
   std::shared_ptr<runtime::MessageDispatcher> dispatcher_;
 };
 
@@ -1929,7 +1929,7 @@ private:
 }  // namespace agentflow
 ```
 
-### 7.4 Node-Edge同步执行流程
+### 7.4 MMNode-Edge同步执行流程
 
 #### 7.4.1 时序图
 
@@ -1937,12 +1937,12 @@ private:
 sequenceDiagram
     participant MD as MessageDispatcher
     participant NA as NodeActor-A
-    participant DB as DataBus
-    participant E1 as Edge-1
-    participant E2 as Edge-2
+    participant DB as MMDataBus
+    participant E1 as MMEdge-1
+    participant E2 as MMEdge-2
     participant NB as NodeActor-B
 
-    %% Node A 执行（从消息队列接收）
+    %% MMNode A 执行（从消息队列接收）
     MD->>NA: NodeExecutionMessage{node_id: A, input_refs}
     NA->>DB: resolve_ref(input_refs) → inputs
     DB-->>NA: inputs数据
@@ -1964,7 +1964,7 @@ sequenceDiagram
     E2-->>NA: EdgeResult{should_proceed=false}
     Note over NA: 条件不满足，跳过
 
-    %% Node B 异步执行
+    %% MMNode B 异步执行
     MD->>NB: NodeExecutionMessage{node_id: B}
     NB->>DB: resolve_ref(input_refs) → inputs
     NB->>NB: execute(inputs)
@@ -1982,7 +1982,7 @@ NodeActor-A::handle_execution_request(msg)
     │
     ├── execute_outgoing_edges(outputs)        // 同步执行所有出边
     │   │
-    │   ├── Edge-1::execute(outputs)           // Edge 1 同步调用
+    │   ├── MMEdge-1::execute(outputs)           // MMEdge 1 同步调用
     │   │   ├── evaluate_condition()           // 条件判断
     │   │   ├── transfer_data()                // 数据映射
     │   │   └── return EdgeResult{true, B}     // 返回执行结果
@@ -1991,7 +1991,7 @@ NodeActor-A::handle_execution_request(msg)
     │   │   ├── store_target_inputs(result.target_inputs)
     │   │   └── dispatcher_->publish(NodeExecutionMessage{B})  // 触发下游
     │   │
-    │   ├── Edge-2::execute(outputs)           // Edge 2 同步调用
+    │   ├── MMEdge-2::execute(outputs)           // MMEdge 2 同步调用
     │   │   ├── evaluate_condition()
     │   │   └── return EdgeResult{false}       // 条件不满足
     │   │
@@ -2015,7 +2015,7 @@ NodeActor-B::handle_execution_request(msg)
 2. **顺序执行多个Edge**：Edge按优先级顺序执行，每个Edge返回后决定是否发布下游消息
 3. **下游Node通过消息触发**：满足条件的Edge发布消息，触发下游Node在Worker线程中执行
 
-### 7.5 Node-Workflow嵌套调度
+### 7.5 MMNode-Workflow嵌套调度
 
 #### 7.5.1 嵌套Workflow时序图
 
@@ -2025,7 +2025,7 @@ sequenceDiagram
     participant MD as MessageDispatcher
     participant WS as WorkflowScheduler
     participant WF as ChildWorkflow
-    participant DB as DataBus
+    participant DB as MMDataBus
 
     %% 父Workflow触发嵌套Node
     NA->>NA: 检测到 type==workflow
@@ -2087,7 +2087,7 @@ public:
 
   explicit WorkflowScheduler(const Config& config,
                              std::shared_ptr<MessageDispatcher> dispatcher,
-                             std::shared_ptr<DataBus> databus);
+                             std::shared_ptr<MMDataBus> databus);
   ~WorkflowScheduler();
 
   bool start();
@@ -2105,7 +2105,7 @@ private:
 
   // 执行控制
   void start_workflow_execution(const std::string& instance_id,
-                                const std::map<std::string, DataBus::DataRef>& input_refs);
+                                const std::map<std::string, MMDataBus::DataRef>& input_refs);
 
   // 完成回调
   void on_workflow_complete(const std::string& instance_id,
@@ -2114,13 +2114,13 @@ private:
 
   Config config_;
   std::shared_ptr<MessageDispatcher> dispatcher_;
-  std::shared_ptr<DataBus> databus_;
+  std::shared_ptr<MMDataBus> databus_;
 
   // Workflow实例映射
   struct WorkflowInstance {
     std::string instance_id;
     std::string workflow_id;
-    std::shared_ptr<framework::Workflow> workflow;
+    std::shared_ptr<framework::MMWorkflow> workflow;
     std::string parent_instance_id;
     std::string parent_node_id;
     std::chrono::steady_clock::time_point start_time;
@@ -2143,7 +2143,7 @@ private:
 ```mermaid
 flowchart TB
     subgraph IF控制流
-        A[Node A 完成] --> B{Edge条件评估}
+        A[MMNode A 完成] --> B{Edge条件评估}
         B -->|true| C[EdgeProcessor<br/>选择分支A]
         B -->|false| D[EdgeProcessor<br/>选择分支B]
         C --> E[发送NodeExecutionMessage<br/>到分支A的起始Node]
@@ -2218,10 +2218,10 @@ sequenceDiagram
 |------|------|------|
 | MessageDispatcher实现 | `message_dispatcher.cpp/h` | 无 |
 | 消息类型定义 | `message_types.h` | 无 |
-| DataBus DataRef增强 | `databus.h` 扩展 | 无 |
+| MMDataBus DataRef增强 | `databus.h` 扩展 | 无 |
 | 单元测试 | `test_message_dispatcher.cpp` | 以上全部 |
 
-#### 7.7.2 阶段二：Node-Node通信（2周）
+#### 7.7.2 阶段二：MMNode-Node通信（2周）
 
 | 任务 | 输出 | 依赖 |
 |------|------|------|
@@ -2251,7 +2251,7 @@ sequenceDiagram
 
 ```cpp
 // 在Workflow类中增加执行模式选择
-class Workflow {
+class MMWorkflow {
 public:
   enum class ExecutionMode {
     SYNC_TOPO,      // 现有同步拓扑执行
@@ -2320,10 +2320,10 @@ agentflow_node_execution_duration_seconds{node_id="xxx"}
 ```
 Span: WorkflowExecution
   ├── Span: NodeExecution[node_A]
-  │     └── Span: DataBus::get
+  │     └── Span: MMDataBus::get
   ├── Span: EdgeTransfer[e_A_to_B]
   │     ├── Span: ConditionEvaluation
-  │     └── Span: DataBus::put
+  │     └── Span: MMDataBus::put
   └── Span: NodeExecution[node_B]
         └── Span: WorkflowSchedule[child_workflow]
               └── Span: NodeExecution[child_node_A]
@@ -2348,7 +2348,7 @@ Span: WorkflowExecution
 namespace agentflow {
 namespace framework {
 
-EdgeResult Edge::execute(const DataMap& source_outputs) {
+EdgeResult MMEdge::execute(const DataMap& source_outputs) {
   EdgeResult result;
   result.target_node_id = config_.target_node;
 
@@ -2358,11 +2358,11 @@ EdgeResult Edge::execute(const DataMap& source_outputs) {
       if (evaluate_condition(config_.control.expression, source_outputs)) {
         result.should_proceed = true;
         transfer_data(source_outputs, result.target_inputs);
-        Logger::instance().debug_f("[Edge] %s: IF condition passed, target=%s",
+        Logger::instance().debug_f("[MMEdge] %s: IF condition passed, target=%s",
                                    config_.id.c_str(), config_.target_node.c_str());
       } else {
         result.skip_reason = "IF condition not met";
-        Logger::instance().debug_f("[Edge] %s: IF condition failed", config_.id.c_str());
+        Logger::instance().debug_f("[MMEdge] %s: IF condition failed", config_.id.c_str());
       }
       break;
     }
@@ -2377,7 +2377,7 @@ EdgeResult Edge::execute(const DataMap& source_outputs) {
       if (!config_.control.fork_group.empty() && join_coordinator_) {
         join_coordinator_->register_branch(config_.control.fork_group, config_.target_node);
       }
-      Logger::instance().debug_f("[Edge] %s: FORK branch, target=%s, fork_group=%s",
+      Logger::instance().debug_f("[MMEdge] %s: FORK branch, target=%s, fork_group=%s",
                                  config_.id.c_str(), config_.target_node.c_str(),
                                  config_.control.fork_group.c_str());
       break;
@@ -2388,11 +2388,11 @@ EdgeResult Edge::execute(const DataMap& source_outputs) {
       if (check_loop_condition(config_.control.loop_id, source_outputs)) {
         result.should_proceed = true;
         transfer_data(source_outputs, result.target_inputs);
-        Logger::instance().debug_f("[Edge] %s: LOOP iteration %d",
+        Logger::instance().debug_f("[MMEdge] %s: LOOP iteration %d",
                                    config_.id.c_str(), loop_iterations_[config_.control.loop_id]);
       } else {
         result.skip_reason = "LOOP completed";
-        Logger::instance().debug_f("[Edge] %s: LOOP finished", config_.id.c_str());
+        Logger::instance().debug_f("[MMEdge] %s: LOOP finished", config_.id.c_str());
       }
       break;
     }
@@ -2402,7 +2402,7 @@ EdgeResult Edge::execute(const DataMap& source_outputs) {
       result.should_proceed = true;
       result.target_node_id = config_.control.goto_target;  // 覆盖默认target
       transfer_data(source_outputs, result.target_inputs);
-      Logger::instance().debug_f("[Edge] %s: GOTO to %s",
+      Logger::instance().debug_f("[MMEdge] %s: GOTO to %s",
                                  config_.id.c_str(), config_.control.goto_target.c_str());
       break;
     }
@@ -2411,7 +2411,7 @@ EdgeResult Edge::execute(const DataMap& source_outputs) {
       // 无条件边
       result.should_proceed = true;
       transfer_data(source_outputs, result.target_inputs);
-      Logger::instance().debug_f("[Edge] %s: Unconditional transfer to %s",
+      Logger::instance().debug_f("[MMEdge] %s: Unconditional transfer to %s",
                                  config_.id.c_str(), config_.target_node.c_str());
       break;
     }
@@ -2420,14 +2420,14 @@ EdgeResult Edge::execute(const DataMap& source_outputs) {
   return result;
 }
 
-bool Edge::evaluate_condition(const std::string& expression, const DataMap& context) {
+bool MMEdge::evaluate_condition(const std::string& expression, const DataMap& context) {
   // 简单表达式求值（生产环境应使用表达式引擎）
   // 示例: "outputs['confidence'] > 0.5"
   // ... 表达式解析逻辑 ...
   return true;  // 简化实现
 }
 
-void Edge::transfer_data(const DataMap& source_outputs, DataMap& target_inputs) {
+void MMEdge::transfer_data(const DataMap& source_outputs, DataMap& target_inputs) {
   // 按配置映射数据
   for (size_t i = 0; i < config_.source_outputs.size() && i < config_.target_inputs.size(); ++i) {
     const auto& src_key = config_.source_outputs[i];
@@ -2456,9 +2456,9 @@ void Edge::transfer_data(const DataMap& source_outputs, DataMap& target_inputs) 
 namespace agentflow {
 namespace framework {
 
-NodeActor::NodeActor(std::shared_ptr<Node> node,
-                     std::shared_ptr<Workflow> workflow,
-                     std::shared_ptr<runtime::DataBus> databus,
+NodeActor::NodeActor(std::shared_ptr<MMNode> node,
+                     std::shared_ptr<MMWorkflow> workflow,
+                     std::shared_ptr<runtime::MMDataBus> databus,
                      std::shared_ptr<runtime::MessageDispatcher> dispatcher)
     : node_(std::move(node)),
       workflow_(std::move(workflow)),
@@ -2501,22 +2501,22 @@ void NodeActor::handle_execution_request(const runtime::NodeExecutionMessage& ms
     success = node_->execute();
     outputs = node_->get_outputs();
   } catch (const std::exception& e) {
-    Logger::instance().error_f("[NodeActor] Node %s threw exception: %s",
+    Logger::instance().error_f("[NodeActor] MMNode %s threw exception: %s",
                                node_->get_id().c_str(), e.what());
     return;
   }
 
   if (!success) {
-    Logger::instance().error_f("[NodeActor] Node %s execution failed", node_->get_id().c_str());
+    Logger::instance().error_f("[NodeActor] MMNode %s execution failed", node_->get_id().c_str());
     return;
   }
 
   // 4. 存储输出到DataBus
-  std::map<std::string, runtime::DataBus::DataRef> output_refs;
-  runtime::DataBus::OwnerContext owner;
+  std::map<std::string, runtime::MMDataBus::DataRef> output_refs;
+  runtime::MMDataBus::OwnerContext owner;
   owner.node_id = node_->get_id();
   for (const auto& [key, value] : outputs) {
-    runtime::DataBus::DataRef ref;
+    runtime::MMDataBus::DataRef ref;
     databus_->store_with_ref(key, value, owner, ref);
     output_refs[key] = ref;
   }
@@ -2537,12 +2537,12 @@ void NodeActor::execute_outgoing_edges(const DataMap& outputs) {
 
     if (result.should_proceed) {
       // 存储目标Node的输入数据到DataBus
-      std::map<std::string, runtime::DataBus::DataRef> input_refs;
-      runtime::DataBus::OwnerContext owner;
+      std::map<std::string, runtime::MMDataBus::DataRef> input_refs;
+      runtime::MMDataBus::OwnerContext owner;
       owner.node_id = result.target_node_id;
 
       for (const auto& [key, value] : result.target_inputs) {
-        runtime::DataBus::DataRef ref;
+        runtime::MMDataBus::DataRef ref;
         databus_->store_with_ref(key, value, owner, ref);
         input_refs[key] = ref;
       }
@@ -2565,8 +2565,8 @@ void NodeActor::execute_outgoing_edges(const DataMap& outputs) {
   }
 }
 
-std::vector<std::shared_ptr<Edge>> NodeActor::get_outgoing_edges() const {
-  std::vector<std::shared_ptr<Edge>> outgoing;
+std::vector<std::shared_ptr<MMEdge>> NodeActor::get_outgoing_edges() const {
+  std::vector<std::shared_ptr<MMEdge>> outgoing;
   for (const auto& edge : workflow_->get_edges()) {
     if (edge->get_source() == node_->get_id()) {
       outgoing.push_back(edge);
@@ -2575,7 +2575,7 @@ std::vector<std::shared_ptr<Edge>> NodeActor::get_outgoing_edges() const {
 
   // 按优先级排序
   std::sort(outgoing.begin(), outgoing.end(),
-            [](const std::shared_ptr<Edge>& a, const std::shared_ptr<Edge>& b) {
+            [](const std::shared_ptr<MMEdge>& a, const std::shared_ptr<MMEdge>& b) {
               return a->get_priority() > b->get_priority();
             });
 
@@ -2704,7 +2704,7 @@ namespace runtime {
 
 WorkflowScheduler::WorkflowScheduler(const Config& config,
                                      std::shared_ptr<MessageDispatcher> dispatcher,
-                                     std::shared_ptr<DataBus> databus)
+                                     std::shared_ptr<MMDataBus> databus)
     : config_(config), dispatcher_(std::move(dispatcher)), databus_(std::move(databus)) {
 }
 
@@ -2783,7 +2783,7 @@ void WorkflowScheduler::handle_workflow_completion(const WorkflowCompletionMessa
 
 std::string WorkflowScheduler::create_workflow_instance(const std::string& workflow_id,
                                                         const std::string& workflow_file) {
-  auto workflow = std::make_shared<framework::Workflow>(framework::Workflow::Config{});
+  auto workflow = std::make_shared<framework::MMWorkflow>(framework::MMWorkflow::Config{});
   workflow->set_id(workflow_id);
 
   // 加载DSL
@@ -2821,8 +2821,8 @@ bool WorkflowScheduler::destroy_workflow_instance(const std::string& instance_id
 
 void WorkflowScheduler::start_workflow_execution(
     const std::string& instance_id,
-    const std::map<std::string, DataBus::DataRef>& input_refs) {
-  std::shared_ptr<framework::Workflow> workflow;
+    const std::map<std::string, MMDataBus::DataRef>& input_refs) {
+  std::shared_ptr<framework::MMWorkflow> workflow;
   {
     std::lock_guard<std::mutex> lock(instances_mutex_);
     auto it = instances_.find(instance_id);
@@ -2874,32 +2874,32 @@ int main() {
   auto dispatcher = std::make_shared<runtime::MessageDispatcher>(dispatcher_config);
   dispatcher->start();
 
-  auto databus = std::make_shared<runtime::DataBus>(1024 * 1024);
+  auto databus = std::make_shared<runtime::MMDataBus>(1024 * 1024);
 
   // 2. 创建Workflow和Node
-  auto workflow = std::make_shared<framework::Workflow>(framework::Workflow::Config{});
+  auto workflow = std::make_shared<framework::MMWorkflow>(framework::MMWorkflow::Config{});
   workflow->set_id("demo_workflow");
 
-  auto node_a = std::make_shared<framework::Node>(framework::Node::Config{
+  auto node_a = std::make_shared<framework::MMNode>(framework::MMNode::Config{
       .id = "node_a",
-      .name = "Input Node",
+      .name = "Input MMNode",
       .type = "source"
   });
   node_a->set_execute_callback([](const DataMap& inputs, DataMap& outputs) {
-    outputs["result"] = std::string("Hello from Node A");
+    outputs["result"] = std::string("Hello from MMNode A");
     return true;
   });
 
-  auto node_b = std::make_shared<framework::Node>(framework::Node::Config{
+  auto node_b = std::make_shared<framework::MMNode>(framework::MMNode::Config{
       .id = "node_b",
-      .name = "Process Node",
+      .name = "Process MMNode",
       .type = "transform"
   });
   node_b->set_execute_callback([](const DataMap& inputs, DataMap& outputs) {
     auto it = inputs.find("input");
     if (it != inputs.end()) {
       std::string val = std::get<std::string>(it->second);
-      outputs["processed"] = val + " -> Processed by Node B";
+      outputs["processed"] = val + " -> Processed by MMNode B";
     }
     return true;
   });
@@ -2908,7 +2908,7 @@ int main() {
   workflow->add_node(node_b);
 
   // 3. 创建Edge（支持多出边）
-  auto edge1 = std::make_shared<framework::Edge>(framework::Edge::Config{
+  auto edge1 = std::make_shared<framework::MMEdge>(framework::MMEdge::Config{
       .id = "edge_a_to_b",
       .source_node = "node_a",
       .target_node = "node_b",
@@ -2965,13 +2965,13 @@ src/runtime/
     └── databus.cpp           # DataBus实现
 
 include/internal/workflow/
-├── node_actor.h              # Node Actor（含同步Edge执行）
+├── node_actor.h              # MMNode Actor（含同步Edge执行）
 ├── edge.h                    # Edge定义（含EdgeResult）
 └── workflow.h                # Workflow定义
 
 src/workflow/
 ├── node/
-│   └── node_actor.cpp        # Node Actor实现（execute_outgoing_edges）
+│   └── node_actor.cpp        # MMNode Actor实现（execute_outgoing_edges）
 ├── edge/
 │   └── edge.cpp              # Edge实现（同步execute方法）
 └── workflow.cpp              # Workflow实现
@@ -3000,10 +3000,10 @@ tests/
 
 ```
 【旧设计 - 异步Edge执行】
-Node A execute → publish(Completion) → MessageDispatcher → EdgeProcessor → publish(Execution) → Node B
+MMNode A execute → publish(Completion) → MessageDispatcher → EdgeProcessor → publish(Execution) → MMNode B
 
 【新设计 - 同步Edge执行】
-Node A execute → Edge execute (同步) → publish(Execution) → MessageDispatcher → Node B
+MMNode A execute → MMEdge execute (同步) → publish(Execution) → MessageDispatcher → MMNode B
 ```
 
 ### 9.3 关键代码改动

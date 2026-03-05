@@ -1,12 +1,12 @@
-# Node 开发规范
+# MMNode 开发规范
 
 ## 适用范围
-本文档定义 `publish/workflow` 下自定义 Node 的通用开发约定。
-说明：Node 在 DSL 中定义执行行为，运行时由 Worker 执行引擎执行多语言代码。
+本文档定义 `publish/workflow` 下自定义 MMNode 的通用开发约定。
+说明：MMNode 在 DSL 中定义执行行为，运行时由 Worker 执行引擎执行多语言代码。
 
 ## 1. 通用入口契约
 
-所有 Node 实现建议遵循：
+所有 MMNode 实现建议遵循：
 - 输入：来自 runtime/databus 的 JSON 载荷
 - 输出：写回 JSON（stdout 或输出文件）
 - 退出码：`0` 表示成功，非 `0` 表示失败
@@ -36,7 +36,7 @@ python node_xxx.py --input <input.json> --output <output.json>
 - `payload`（对象）
 - `error`（可选，字符串）
 
-## 3. 与 Workflow 的绑定
+## 3. 与 MMWorkflow 的绑定
 
 workflow node 字段建议至少包含：
 - `execution_mode`

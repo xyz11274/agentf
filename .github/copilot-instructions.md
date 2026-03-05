@@ -35,9 +35,9 @@ cpplint --linelength=100 src/your_file.cpp
 ## High-level architecture
 
 - AgentFlow is split into two core layers:
-  - `agentflow::framework`: authoring/orchestration objects (`Agent`, `Workflow`, `Node`, `Edge`) and workflow-graph/control-flow definitions.
+  - `agentflow::framework`: authoring/orchestration objects (`MMAgent`, `MMWorkflow`, `MMNode`, `MMEdge`) and workflow-graph/control-flow definitions.
   - `agentflow::runtime`: execution-time scheduling and infrastructure (runtime actor loop, databus, metrics, control flow, hot reload).
-- Scheduling model is three-tier: **Agent -> Workflow -> Node**. Runtime repeatedly asks workflows for executable nodes, dispatches nodes to worker threads, and exchanges node inputs/outputs through the DataBus.
+- Scheduling model is three-tier: **MMAgent -> MMWorkflow -> MMNode**. Runtime repeatedly asks workflows for executable nodes, dispatches nodes to worker threads, and exchanges node inputs/outputs through the MMDataBus.
 - Public API surface is intentionally narrow under `include/external/{agent,workflow}`; most implementation and extension points live under `include/internal/` and `src/`.
 - Optional integrations are isolated behind adapters in `vendor/adapter/` (actor/json/event/network/serialization), with compile-time switches enabling full implementations when dependencies are present.
 
@@ -52,4 +52,4 @@ cpplint --linelength=100 src/your_file.cpp
   - includes in code use short project paths (for example `#include "agent/common.h"`).
 - `build.sh test` sets runtime library search paths (`DYLD_LIBRARY_PATH` on macOS, `LD_LIBRARY_PATH` on Linux); if running binaries manually, preserve equivalent library path behavior.
 - C++ style in this repository follows `.clang-format` (Google base, 2-space indent, 100-column limit, snake_case function names with PascalCase types).
-- Workflow DSL is JSON/JSONC and should align with parser behavior in `src/workflow/dsl/workflow_parser.cpp`; update `publish/workflow/workflow_sample.jsonc`-style fields consistently when DSL keys change.
+- MMWorkflow DSL is JSON/JSONC and should align with parser behavior in `src/workflow/dsl/workflow_parser.cpp`; update `publish/workflow/workflow_sample.jsonc`-style fields consistently when DSL keys change.

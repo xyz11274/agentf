@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// Node Actor implementation
+// MMNode Actor implementation
 
 #include "workflow/node_actor.h"
 
@@ -98,7 +98,7 @@ void NodeActor::handle_initialize_node(const InitializeNodeMessage& msg) {
   state_       = NodeState::READY;
   retry_count_ = 0;
 
-  Logger::instance().info("Node [" + node_id_ + "] initialized");
+  Logger::instance().info("MMNode [" + node_id_ + "] initialized");
 }
 
 void NodeActor::handle_execute_node(const ExecuteNodeMessage& msg) {
@@ -107,7 +107,7 @@ void NodeActor::handle_execute_node(const ExecuteNodeMessage& msg) {
   }
 
   if(state_ == NodeState::FAILED && retry_count_ >= config_.max_retries) {
-    Logger::instance().error("Node [" + node_id_ + "] exceeded max retries");
+    Logger::instance().error("MMNode [" + node_id_ + "] exceeded max retries");
     send_result(Status::FAILED, "Max retries exceeded");
     return;
   }
@@ -118,7 +118,7 @@ void NodeActor::handle_execute_node(const ExecuteNodeMessage& msg) {
                     std::chrono::steady_clock::now().time_since_epoch())
                     .count();
 
-  Logger::instance().info("Node [" + node_id_ + "] executing");
+  Logger::instance().info("MMNode [" + node_id_ + "] executing");
 
   // Execute node logic - this would call the actual node implementation
   // For now, simulate successful execution
@@ -157,7 +157,7 @@ void NodeActor::handle_stop_node(const StopNodeMessage& msg) {
 
   state_ = msg.force ? NodeState::TERMINATED : NodeState::STOPPED;
 
-  Logger::instance().info("Node [" + node_id_
+  Logger::instance().info("MMNode [" + node_id_
                           + "] stopped (force: " + std::string(msg.force ? "true" : "false") + ")");
 }
 
@@ -222,9 +222,9 @@ void NodeActor::send_result(Status status, const std::string& error_message) {
 
   Logger& logger = Logger::instance();
   if(status == Status::SUCCESS) {
-    logger.info("Node [" + node_id_ + "] completed successfully");
+    logger.info("MMNode [" + node_id_ + "] completed successfully");
   } else {
-    logger.error("Node [" + node_id_ + "] failed: " + error_message);
+    logger.error("MMNode [" + node_id_ + "] failed: " + error_message);
   }
 
   // The result would be sent to the parent WorkflowActor
@@ -248,7 +248,7 @@ bool NodeActor::execute_cpp_actor() {
 }
 
 bool NodeActor::execute_shell_script() {
-  // Delegate to Node's shell script execution through config command
+  // Delegate to MMNode's shell script execution through config command
   Logger::instance().info("Executing shell script: " + config_.command);
 
   if(config_.command.empty()) {
@@ -256,9 +256,9 @@ bool NodeActor::execute_shell_script() {
     return false;
   }
 
-  // Use system execution via Node's execute_shell_command method
+  // Use system execution via MMNode's execute_shell_command method
   // For now, we provide basic output structure
-  // In production, this would integrate with the full Node execution pipeline
+  // In production, this would integrate with the full MMNode execution pipeline
 
   try {
     // Set output data to indicate successful shell script execution
@@ -275,7 +275,7 @@ bool NodeActor::execute_shell_script() {
 }
 
 bool NodeActor::execute_python_script() {
-  // Delegate to Node's Python script execution through config command
+  // Delegate to MMNode's Python script execution through config command
   Logger::instance().info("Executing Python script: " + config_.command);
 
   if(config_.command.empty()) {
@@ -283,8 +283,8 @@ bool NodeActor::execute_python_script() {
     return false;
   }
 
-  // Use system execution via Node's execute_script method
-  // The actual Python interpreter invocation is handled by the Node class
+  // Use system execution via MMNode's execute_script method
+  // The actual Python interpreter invocation is handled by the MMNode class
   // For now, we provide basic output structure
 
   try {

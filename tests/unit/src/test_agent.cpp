@@ -6,13 +6,13 @@
 using namespace agentflow;
 
 void test_agent() {
-  // Test Agent creation
-  framework::Agent::Config config;
+  // Test MMAgent creation
+  framework::MMAgent::Config config;
   config.id     = "test_agent";
   config.name   = "TestAgent";
-  config.policy = framework::Agent::LifecyclePolicy::SINGLETON;
+  config.policy = framework::MMAgent::LifecyclePolicy::SINGLETON;
 
-  auto agent = std::make_shared<framework::Agent>(config);
+  auto agent = std::make_shared<framework::MMAgent>(config);
 
   // Test getters
   assert(agent->get_id() == "test_agent");
@@ -33,11 +33,11 @@ void test_agent() {
   assert(event == "event1");
 
   // Test workflow management
-  framework::Workflow::Config wf_config;
+  framework::MMWorkflow::Config wf_config;
   wf_config.id   = "workflow1";
   wf_config.name = "Workflow1";
 
-  auto workflow = std::make_shared<framework::Workflow>(wf_config);
+  auto workflow = std::make_shared<framework::MMWorkflow>(wf_config);
   agent->add_workflow(workflow);
 
   assert(agent->get_workflows().size() == 1);

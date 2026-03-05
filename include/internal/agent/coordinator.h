@@ -11,9 +11,9 @@
 namespace agentflow {
 namespace framework {
 
-class AgentTask;
-class AgentSession;
-class Workflow;
+class MMAgentTask;
+class MMAgentSession;
+class MMWorkflow;
 
 class SessionTaskCoordinator {
 public:
@@ -25,24 +25,24 @@ public:
     std::string task_context_workflow;
   };
 
-  SessionTaskCoordinator(const Config& config, const std::shared_ptr<AgentTask>& coordinator_task);
+  SessionTaskCoordinator(const Config& config, const std::shared_ptr<MMAgentTask>& coordinator_task);
   ~SessionTaskCoordinator() = default;
 
-  std::vector<std::shared_ptr<AgentTask>> process_session_messages(
-      AgentSession& session, const std::vector<std::shared_ptr<Workflow>>& workflows);
+  std::vector<std::shared_ptr<MMAgentTask>> process_session_messages(
+      MMAgentSession& session, const std::vector<std::shared_ptr<MMWorkflow>>& workflows);
 
   const std::string& get_coordinator_id() const { return config_.coordinator_id; }
-  const std::shared_ptr<AgentTask>& get_coordinator_task() const { return coordinator_task_; }
+  const std::shared_ptr<MMAgentTask>& get_coordinator_task() const { return coordinator_task_; }
 
 private:
-  std::shared_ptr<AgentTask> build_task_for_message(
-      const std::string& session_id, const AgentMsgQue::Message& message,
-      const std::vector<std::shared_ptr<Workflow>>& workflows, int64_t suffix_counter) const;
+  std::shared_ptr<MMAgentTask> build_task_for_message(
+      const std::string& session_id, const MMAgentMsgQue::Message& message,
+      const std::vector<std::shared_ptr<MMWorkflow>>& workflows, int64_t suffix_counter) const;
   std::string resolve_task_workflow(const std::string& task_type,
-                                    const std::vector<std::shared_ptr<Workflow>>& workflows) const;
+                                    const std::vector<std::shared_ptr<MMWorkflow>>& workflows) const;
 
   Config config_;
-  std::shared_ptr<AgentTask> coordinator_task_;
+  std::shared_ptr<MMAgentTask> coordinator_task_;
 };
 
 }  // namespace framework

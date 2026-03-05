@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// InteractiveRunner - Message-driven interactive execution for Agent packages
+// InteractiveRunner - Message-driven interactive execution for MMAgent packages
 
 #include "interactive_runner.h"
 
@@ -80,8 +80,8 @@ bool InteractiveRunner::initialize() {
     return false;
   }
 
-  // Create and initialize Agent from package
-  agent_ = framework::Agent::create_from_package(package_path_);
+  // Create and initialize MMAgent from package
+  agent_ = framework::MMAgent::create_from_package(package_path_);
   if (!agent_) {
     std::cerr << "Error: Failed to create agent from package" << std::endl;
     return false;
@@ -92,8 +92,8 @@ bool InteractiveRunner::initialize() {
     return false;
   }
 
-  // Create and start AgentRuntime
-  runtime_ = std::make_unique<runtime::AgentRuntime>();
+  // Create and start MMAgentRuntime
+  runtime_ = std::make_unique<runtime::MMAgentRuntime>();
   if (!runtime_->register_agent(agent_)) {
     std::cerr << "Error: Failed to register agent with runtime" << std::endl;
     return false;
@@ -111,7 +111,7 @@ bool InteractiveRunner::initialize() {
   }
 
   if (config_.verbose) {
-    std::cout << "Agent initialized: " << agent_->get_name() << std::endl;
+    std::cout << "MMAgent initialized: " << agent_->get_name() << std::endl;
     std::cout << "Workflows loaded: " << agent_->get_workflows().size() << std::endl;
   }
 
@@ -121,7 +121,7 @@ bool InteractiveRunner::initialize() {
 void InteractiveRunner::run() {
   std::cout << "\n=== AgentFlow Interactive Mode ===" << std::endl;
   std::cout << "Package: " << package_path_ << std::endl;
-  std::cout << "Agent: " << agent_->get_name() << std::endl;
+  std::cout << "MMAgent: " << agent_->get_name() << std::endl;
   std::cout << "Type 'help' for available commands.\n" << std::endl;
 
   print_help();
@@ -167,7 +167,7 @@ std::string InteractiveRunner::execute_workflow(const std::string& workflow_id,
     return "[ERROR] Execution timeout";
   }
 
-  // 收集结果 (从 DataBus)
+  // 收集结果 (从 MMDataBus)
   auto& databus = runtime_->get_databus(agent_->get_id());
 
   std::ostringstream result;
@@ -182,9 +182,9 @@ std::string InteractiveRunner::execute_workflow(const std::string& workflow_id,
     }
   }
 
-  // 如果 DataBus 中没有结果，返回成功状态
+  // 如果 MMDataBus 中没有结果，返回成功状态
   if (result.str().empty()) {
-    result << "[OK] Workflow " << workflow_id << " executed successfully\n";
+    result << "[OK] MMWorkflow " << workflow_id << " executed successfully\n";
   }
 
   return result.str();
@@ -213,8 +213,8 @@ std::string InteractiveRunner::list_workflows() const {
 std::string InteractiveRunner::get_status() const {
   std::ostringstream oss;
   oss << "=== Status ===\n";
-  oss << "  Agent: " << agent_->get_name() << "\n";
-  oss << "  Agent ID: " << agent_->get_id() << "\n";
+  oss << "  MMAgent: " << agent_->get_name() << "\n";
+  oss << "  MMAgent ID: " << agent_->get_id() << "\n";
   oss << "  State: " << static_cast<int>(agent_->get_state()) << "\n";
   oss << "  Workflows: " << agent_->get_workflows().size() << "\n";
   oss << "  Runtime running: " << (runtime_ && runtime_->is_running() ? "yes" : "no") << "\n";
@@ -227,10 +227,10 @@ std::string InteractiveRunner::get_status() const {
 void InteractiveRunner::submit_user_request(const std::string& workflow_id,
                                              const std::string& input) {
   // Construct message
-  framework::AgentMsgQue::Message message;
+  framework::MMAgentMsgQue::Message message;
   message.message_id = generate_message_id();
-  message.type = framework::AgentMsgQue::MessageType::TASK_REQUEST;
-  message.priority = framework::AgentMsgQue::MessagePriority::NORMAL;
+  message.type = framework::MMAgentMsgQue::MessageType::TASK_REQUEST;
+  message.priority = framework::MMAgentMsgQue::MessagePriority::NORMAL;
   message.sender_id = "interactive_user";
   message.receiver_id = agent_->get_id();
   message.content = input;
@@ -261,7 +261,7 @@ void InteractiveRunner::process_pending_tasks() {
   }
 
   // Get generated tasks and schedule them through runtime
-  std::shared_ptr<framework::AgentTask> task;
+  std::shared_ptr<framework::MMAgentTask> task;
   while (agent_->pop_generated_task(task)) {
     if (!task) {
       continue;
@@ -328,7 +328,7 @@ std::string InteractiveRunner::collect_results() {
   }
 
   std::ostringstream result;
-  framework::AgentMsgQue::Message response;
+  framework::MMAgentMsgQue::Message response;
 
   while (session->dequeue_send_message(response)) {
     if (!response.content.empty()) {
@@ -423,7 +423,7 @@ bool InteractiveRunner::handle_command(const std::string& command_line) {
     // Verify workflow exists
     auto workflow = agent_->get_workflow(workflow_id);
     if (!workflow) {
-      std::cerr << "Error: Workflow not found: " << workflow_id << std::endl;
+      std::cerr << "Error: MMWorkflow not found: " << workflow_id << std::endl;
       std::cout << "Use 'list' to see available workflows." << std::endl;
       return true;
     }

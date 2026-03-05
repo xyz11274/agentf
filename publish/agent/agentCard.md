@@ -4,8 +4,8 @@
 SampleAgent template for AgentFlow packaging and publication.
 
 ## Capabilities
-- Workflow orchestration
-- Node execution delegation (`.sh/.py/.so/.jar`)
+- MMWorkflow orchestration
+- MMNode execution delegation (`.sh/.py/.so/.jar`)
 - Built-in workflow composition (`memory`, `skills`, `tools`)
 
 ## Package Files

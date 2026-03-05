@@ -7,7 +7,7 @@
 
 class DataBusTest : public ::testing::Test {
 protected:
-  agentflow::runtime::DataBus databus_{1024 * 1024};
+  agentflow::runtime::MMDataBus databus_{1024 * 1024};
 
   void SetUp() override {
     databus_.connect_remote("redis://127.0.0.1:6379");
@@ -23,11 +23,11 @@ TEST_F(DataBusTest, PutGetLocalCache) {
 }
 
 TEST_F(DataBusTest, StoreResolveDataRef) {
-  agentflow::runtime::DataBus::OwnerContext owner;
+  agentflow::runtime::MMDataBus::OwnerContext owner;
   owner.agent_id = "agent-A";
   owner.session_id = "session-1";
 
-  agentflow::runtime::DataBus::DataRef ref;
+  agentflow::runtime::MMDataBus::DataRef ref;
   ASSERT_TRUE(databus_.store_with_ref("msg:m1", std::string("payload"), owner, ref));
   ASSERT_FALSE(ref.address.empty());
 
@@ -37,11 +37,11 @@ TEST_F(DataBusTest, StoreResolveDataRef) {
 }
 
 TEST_F(DataBusTest, FindRefsByOwner) {
-  agentflow::runtime::DataBus::OwnerContext owner;
+  agentflow::runtime::MMDataBus::OwnerContext owner;
   owner.user_id = "user-42";
   owner.workflow_id = "wf-main";
 
-  agentflow::runtime::DataBus::DataRef ref;
+  agentflow::runtime::MMDataBus::DataRef ref;
   ASSERT_TRUE(databus_.store_with_ref("msg:owner", std::string("owner-payload"), owner, ref));
 
   auto refs = databus_.find_refs_by_owner("user_id", "user-42");

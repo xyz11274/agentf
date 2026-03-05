@@ -45,11 +45,11 @@ tests/
 
 ### 1. 单元测试
 
-#### Agent 测试
+#### MMAgent 测试
 **文件**: `unit/legacy_src/test_agent_gtest.cpp`
 
 测试内容:
-- Agent 创建和销毁
+- MMAgent 创建和销毁
 - 生命周期管理
 - 状态转换
 - 配置管理
@@ -59,11 +59,11 @@ tests/
 ./build/bin/test_agent_gtest
 ```
 
-#### Workflow 测试
+#### MMWorkflow 测试
 **文件**: `unit/legacy_src/test_workflow_gtest.cpp`
 
 测试内容:
-- Workflow 创建和加载
+- MMWorkflow 创建和加载
 - 工作流图管理和拓扑排序
 - 执行和状态管理
 - 条件表达式解析
@@ -73,11 +73,11 @@ tests/
 ./build/bin/test_workflow_gtest
 ```
 
-#### Node 测试
+#### MMNode 测试
 **文件**: `unit/legacy_src/test_node_gtest.cpp`
 
 测试内容:
-- Node 创建和配置
+- MMNode 创建和配置
 - 生命周期管理
 - 执行和超时处理
 - C++ 函数回调
@@ -87,7 +87,7 @@ tests/
 ./build/bin/test_node_gtest
 ```
 
-#### DataBus 测试
+#### MMDataBus 测试
 **文件**: `unit/legacy_src/test_databus_gtest.cpp`
 
 测试内容:
@@ -119,7 +119,7 @@ tests/
 
 ## 🔗 端到端测试 (E2E Tests)
 
-端到端测试验证完整的业务链路，从 Agent 包加载到 Workflow 执行的全流程。
+端到端测试验证完整的业务链路，从 MMAgent 包加载到 MMWorkflow 执行的全流程。
 
 ### 测试场景
 
@@ -127,7 +127,7 @@ tests/
 
 **测试链路**:
 ```
-reqmsg → Agent.default_session → Agent.new_session → SessionTaskCoordinator → AgentTask
+reqmsg → MMAgent.default_session → MMAgent.new_session → SessionTaskCoordinator → MMAgentTask
 ```
 
 | 用例ID | 名称 | 描述 |
@@ -138,11 +138,11 @@ reqmsg → Agent.default_session → Agent.new_session → SessionTaskCoordinato
 | TC-E2E-004 | ExplicitWorkflowId | 显式 workflow_id 覆盖 |
 | TC-E2E-005 | ConcurrentMultiUser | 多用户并发路由 |
 
-#### 2. Workflow 执行场景 (workflow_execution)
+#### 2. MMWorkflow 执行场景 (workflow_execution)
 
 **测试链路**:
 ```
-AgentTask → Scheduler → Deployer → WorkerEngine → Node执行 → 状态更新
+MMAgentTask → Scheduler → Deployer → MMWorkerEngine → Node执行 → 状态更新
 ```
 
 使用 `examples/agent/basic_agent` 作为测试数据。
@@ -150,12 +150,12 @@ AgentTask → Scheduler → Deployer → WorkerEngine → Node执行 → 状态�
 | 用例ID | 名称 | 描述 |
 |--------|------|------|
 | TC-E2E-101 | PackageLoading | 包加载验证 |
-| TC-E2E-102 | AgentCreationAndInit | Agent 创建和初始化 |
-| TC-E2E-103 | AgentLifecycle | Agent 生命周期状态转换 |
-| TC-E2E-104 | RuntimeRegistrationAndWorkflowExecution | Runtime 注册和 Workflow 执行 |
-| TC-E2E-105 | MessageRoutingToWorkflowExecution | 消息路由到 Workflow 执行完整链路 |
+| TC-E2E-102 | AgentCreationAndInit | MMAgent 创建和初始化 |
+| TC-E2E-103 | AgentLifecycle | MMAgent 生命周期状态转换 |
+| TC-E2E-104 | RuntimeRegistrationAndWorkflowExecution | Runtime 注册和 MMWorkflow 执行 |
+| TC-E2E-105 | MessageRoutingToWorkflowExecution | 消息路由到 MMWorkflow 执行完整链路 |
 | TC-E2E-106 | WorkflowDAGExecution | 多节点 DAG 执行 |
-| TC-E2E-107 | CoordinatorWorkflowDefaultRouting | Coordinator Workflow 默认路由 |
+| TC-E2E-107 | CoordinatorWorkflowDefaultRouting | Coordinator MMWorkflow 默认路由 |
 
 #### 3. Session 隔离场景 (session_isolation)
 
@@ -170,7 +170,7 @@ AgentTask → Scheduler → Deployer → WorkerEngine → Node执行 → 状态�
 
 #### 4. 数据共享场景 (data_sharing)
 
-验证 DataBus 跨实例数据共享。
+验证 MMDataBus 跨实例数据共享。
 
 | 用例ID | 名称 | 描述 |
 |--------|------|------|
@@ -198,7 +198,7 @@ ctest --test-dir build -R E2E --output-on-failure
 1. **独立性**: 每个测试用例独立运行，不依赖其他用例状态
 2. **可重复性**: 测试可多次运行，结果一致
 3. **自包含**: 测试数据、配置、预期结果都在用例目录内
-4. **真实模拟**: 使用真实的 Agent 包（如 basic_agent）而非简单 Mock
+4. **真实模拟**: 使用真实的 MMAgent 包（如 basic_agent）而非简单 Mock
 5. **链路验证**: 验证完整链路而非单个组件
 
 详细设计文档: [e2e/README.md](e2e/README.md)

@@ -41,7 +41,7 @@ e2e/
 
 **链路**:
 ```
-reqmsg → Agent.default_session → Agent.new_session → SessionTaskCoordinator → AgentTask
+reqmsg → MMAgent.default_session → MMAgent.new_session → SessionTaskCoordinator → MMAgentTask
 ```
 
 **测试用例**:
@@ -52,19 +52,19 @@ reqmsg → Agent.default_session → Agent.new_session → SessionTaskCoordinato
 
 ### 2. Workflow执行场景 (workflow_execution)
 
-**测试目标**: 验证 Workflow 从加载到执行完成的完整流程
+**测试目标**: 验证 MMWorkflow 从加载到执行完成的完整流程
 
 **链路**:
 ```
-AgentTask → Scheduler → Deployer → WorkerEngine → Node执行 → 状态更新
+MMAgentTask → Scheduler → Deployer → MMWorkerEngine → Node执行 → 状态更新
 ```
 
 **测试用例**:
-- TC-E2E-101: 单节点 Workflow 执行
+- TC-E2E-101: 单节点 MMWorkflow 执行
 - TC-E2E-102: 多节点 DAG 执行
 - TC-E2E-103: 条件分支执行
 - TC-E2E-104: 循环控制流执行
-- TC-E2E-105: 嵌套 Workflow 调用（Node 调用子 Workflow）
+- TC-E2E-105: 嵌套 MMWorkflow 调用（MMNode 调用子 MMWorkflow）
 
 ### 3. Session隔离场景 (session_isolation)
 
@@ -78,11 +78,11 @@ AgentTask → Scheduler → Deployer → WorkerEngine → Node执行 → 状态�
 
 ### 4. 数据共享场景 (data_sharing)
 
-**测试目标**: 验证 DataBus 跨实例数据共享
+**测试目标**: 验证 MMDataBus 跨实例数据共享
 
 **链路**:
 ```
-Node1.output → DataBus.put → DataRef → Node2.input → DataBus.get
+Node1.output → MMDataBus.put → DataRef → Node2.input → MMDataBus.get
 ```
 
 **测试用例**:

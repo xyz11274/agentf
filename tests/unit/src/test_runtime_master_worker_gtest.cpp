@@ -12,12 +12,12 @@ namespace agentflow {
 namespace tests {
 
 TEST(RuntimeMasterWorkerTest, DeployerRegisterHeartbeatAndDeployWorkflowInstance) {
-  runtime::AgentRuntime runtime;
-  runtime.set_role(runtime::AgentRuntime::RuntimeRole::MASTER);
+  runtime::MMAgentRuntime runtime;
+  runtime.set_role(runtime::MMAgentRuntime::RuntimeRole::MASTER);
 
-  auto worker = std::make_shared<runtime::WorkerEngine>(
-      runtime::WorkerEngine::Config{"worker-a", true});
-  worker->set_status(runtime::WorkerEngine::WorkerStatus::RUNNING);
+  auto worker = std::make_shared<runtime::MMWorkerEngine>(
+      runtime::MMWorkerEngine::Config{"worker-a", true});
+  worker->set_status(runtime::MMWorkerEngine::WorkerStatus::RUNNING);
   worker->add_supported_workflow("wf-type-1");
 
   ASSERT_TRUE(runtime.register_worker_engine(worker));
@@ -33,16 +33,16 @@ TEST(RuntimeMasterWorkerTest, DeployerRegisterHeartbeatAndDeployWorkflowInstance
 }
 
 TEST(RuntimeMasterWorkerTest, SchedulerPrefersSameAgentInstanceThenSharedInstance) {
-  runtime::AgentRuntime runtime;
-  runtime.set_role(runtime::AgentRuntime::RuntimeRole::MASTER);
+  runtime::MMAgentRuntime runtime;
+  runtime.set_role(runtime::MMAgentRuntime::RuntimeRole::MASTER);
 
-  auto worker_a = std::make_shared<runtime::WorkerEngine>(
-      runtime::WorkerEngine::Config{"worker-a", true});
-  worker_a->set_status(runtime::WorkerEngine::WorkerStatus::RUNNING);
+  auto worker_a = std::make_shared<runtime::MMWorkerEngine>(
+      runtime::MMWorkerEngine::Config{"worker-a", true});
+  worker_a->set_status(runtime::MMWorkerEngine::WorkerStatus::RUNNING);
   worker_a->add_supported_workflow("wf-type-1");
-  auto worker_b = std::make_shared<runtime::WorkerEngine>(
-      runtime::WorkerEngine::Config{"worker-b", true});
-  worker_b->set_status(runtime::WorkerEngine::WorkerStatus::RUNNING);
+  auto worker_b = std::make_shared<runtime::MMWorkerEngine>(
+      runtime::MMWorkerEngine::Config{"worker-b", true});
+  worker_b->set_status(runtime::MMWorkerEngine::WorkerStatus::RUNNING);
   worker_b->add_supported_workflow("wf-type-1");
 
   ASSERT_TRUE(runtime.register_worker_engine(worker_a));
@@ -89,10 +89,10 @@ TEST(RuntimeMasterWorkerTest, WorkerExecutesShellScriptViaEngine) {
   fs::permissions(script, fs::perms::owner_exec | fs::perms::owner_read | fs::perms::owner_write,
                   fs::perm_options::add);
 
-  runtime::WorkerEngine::ExecutionRequest request;
-  request.mode = runtime::WorkerEngine::ExecutionMode::SHELL_SCRIPT;
+  runtime::MMWorkerEngine::ExecutionRequest request;
+  request.mode = runtime::MMWorkerEngine::ExecutionMode::SHELL_SCRIPT;
   request.command = script.string();
-  auto response = runtime::WorkerEngine::execute_code(request);
+  auto response = runtime::MMWorkerEngine::execute_code(request);
   ASSERT_TRUE(response.success);
 
   auto it = response.outputs.find("stdout");
@@ -121,13 +121,13 @@ TEST(RuntimeMasterWorkerTest, WorkerHotReloadAndRollback) {
   fs::permissions(script, fs::perms::owner_exec | fs::perms::owner_read | fs::perms::owner_write,
                   fs::perm_options::add);
 
-  runtime::WorkerEngine::ExecutionRequest request;
-  request.mode = runtime::WorkerEngine::ExecutionMode::SHELL_SCRIPT;
+  runtime::MMWorkerEngine::ExecutionRequest request;
+  request.mode = runtime::MMWorkerEngine::ExecutionMode::SHELL_SCRIPT;
   request.command = script.string();
   request.enable_hot_reload = true;
-  ASSERT_TRUE(runtime::WorkerEngine::execute_code(request).success);
+  ASSERT_TRUE(runtime::MMWorkerEngine::execute_code(request).success);
 
-  auto version1 = runtime::WorkerEngine::get_code_version(script.string());
+  auto version1 = runtime::MMWorkerEngine::get_code_version(script.string());
   ASSERT_NE(version1, nullptr);
 
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
@@ -137,16 +137,16 @@ TEST(RuntimeMasterWorkerTest, WorkerHotReloadAndRollback) {
     ofs << "echo v2\n";
   }
 
-  ASSERT_TRUE(runtime::WorkerEngine::check_and_reload_code(script.string()));
-  auto version2 = runtime::WorkerEngine::get_code_version(script.string());
+  ASSERT_TRUE(runtime::MMWorkerEngine::check_and_reload_code(script.string()));
+  auto version2 = runtime::MMWorkerEngine::get_code_version(script.string());
   ASSERT_NE(version2, nullptr);
   EXPECT_NE(version2->version_id, version1->version_id);
 
-  ASSERT_TRUE(runtime::WorkerEngine::rollback_code_version(script.string(), version1->version_id));
-  auto current = runtime::WorkerEngine::get_code_version(script.string());
+  ASSERT_TRUE(runtime::MMWorkerEngine::rollback_code_version(script.string(), version1->version_id));
+  auto current = runtime::MMWorkerEngine::get_code_version(script.string());
   ASSERT_NE(current, nullptr);
   EXPECT_EQ(current->version_id, version1->version_id);
-  runtime::WorkerEngine::stop_hot_reload(script.string());
+  runtime::MMWorkerEngine::stop_hot_reload(script.string());
   fs::remove(script);
 }
 

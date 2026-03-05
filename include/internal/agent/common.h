@@ -80,7 +80,7 @@ enum class ErrorStrategy {
   IGNORE       = 4,  // Ignore and continue
 };
 
-// Agent lifecycle policy
+// MMAgent lifecycle policy
 enum class AgentLifecyclePolicy {
   PER_REQUEST = 0,  // Create new instance per request
   FACTORY     = 1,  // Use factory to manage instances
@@ -94,7 +94,7 @@ enum class DataTransferMode {
   REMOTE_TRANSFER = 2,  // Remote transfer
 };
 
-// Node configuration
+// MMNode configuration
 struct NodeConfig {
   std::string                        name;
   std::string                        type;
@@ -108,7 +108,7 @@ struct NodeConfig {
   NodeConfig(const std::string& n, const std::string& t) : name(n), type(t) {}
 };
 
-// Workflow configuration
+// MMWorkflow configuration
 struct WorkflowConfig {
   std::string                        name;
   std::string                        version = "1.0.0";
@@ -120,7 +120,7 @@ struct WorkflowConfig {
   explicit WorkflowConfig(const std::string& n) : name(n) {}
 };
 
-// Agent configuration
+// MMAgent configuration
 struct AgentConfig {
   std::string                        name;
   std::string                        version = "1.0.0";

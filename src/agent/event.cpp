@@ -12,27 +12,27 @@ namespace framework {
 
 using AdapterEventType = agentflow::vendor::adapter::EventType;
 
-AdapterEventType MapToAdapterEventType(AgentEvent::EventType type) {
+AdapterEventType MapToAdapterEventType(MMAgentEvent::EventType type) {
     switch (type) {
-        case AgentEvent::EventType::TASK_STARTED: return AdapterEventType::TASK_STARTED;
-        case AgentEvent::EventType::TASK_COMPLETED: return AdapterEventType::TASK_COMPLETED;
-        case AgentEvent::EventType::TASK_FAILED: return AdapterEventType::TASK_FAILED;
-        case AgentEvent::EventType::MESSAGE_SENT: return AdapterEventType::AGENT_MESSAGE;
-        case AgentEvent::EventType::MESSAGE_RECEIVED: return AdapterEventType::AGENT_MESSAGE;
+        case MMAgentEvent::EventType::TASK_STARTED: return AdapterEventType::TASK_STARTED;
+        case MMAgentEvent::EventType::TASK_COMPLETED: return AdapterEventType::TASK_COMPLETED;
+        case MMAgentEvent::EventType::TASK_FAILED: return AdapterEventType::TASK_FAILED;
+        case MMAgentEvent::EventType::MESSAGE_SENT: return AdapterEventType::AGENT_MESSAGE;
+        case MMAgentEvent::EventType::MESSAGE_RECEIVED: return AdapterEventType::AGENT_MESSAGE;
         
-        case AgentEvent::EventType::NODE_START: return AdapterEventType::NODE_START;
-        case AgentEvent::EventType::NODE_COMPLETE: return AdapterEventType::NODE_COMPLETE;
-        case AgentEvent::EventType::NODE_FAILURE: return AdapterEventType::NODE_FAILURE;
-        case AgentEvent::EventType::NODE_RETRY: return AdapterEventType::NODE_RETRY;
-        case AgentEvent::EventType::DATA_READY: return AdapterEventType::DATA_READY;
-        case AgentEvent::EventType::SYNC_WAIT: return AdapterEventType::SYNC_WAIT;
-        case AgentEvent::EventType::DEPENDENCY_READY: return AdapterEventType::DEPENDENCY_READY;
+        case MMAgentEvent::EventType::NODE_START: return AdapterEventType::NODE_START;
+        case MMAgentEvent::EventType::NODE_COMPLETE: return AdapterEventType::NODE_COMPLETE;
+        case MMAgentEvent::EventType::NODE_FAILURE: return AdapterEventType::NODE_FAILURE;
+        case MMAgentEvent::EventType::NODE_RETRY: return AdapterEventType::NODE_RETRY;
+        case MMAgentEvent::EventType::DATA_READY: return AdapterEventType::DATA_READY;
+        case MMAgentEvent::EventType::SYNC_WAIT: return AdapterEventType::SYNC_WAIT;
+        case MMAgentEvent::EventType::DEPENDENCY_READY: return AdapterEventType::DEPENDENCY_READY;
         
         default: return AdapterEventType::CUSTOM;
     }
 }
 
-AgentEvent::AgentEvent(const Config& config)
+MMAgentEvent::MMAgentEvent(const Config& config)
     : config_(config) {
     if (config_.async_dispatch) {
         adapter_ = agentflow::vendor::adapter::CreateLibEventAdapter();
@@ -42,7 +42,7 @@ AgentEvent::AgentEvent(const Config& config)
     }
 }
 
-AgentEvent::~AgentEvent() {
+MMAgentEvent::~MMAgentEvent() {
   std::lock_guard<std::mutex> lock(mutex_);
   if (adapter_) {
       adapter_->Shutdown();
@@ -51,7 +51,7 @@ AgentEvent::~AgentEvent() {
   event_history_.clear();
 }
 
-bool AgentEvent::emit_event(const EventData& event_data) {
+bool MMAgentEvent::emit_event(const EventData& event_data) {
   std::lock_guard<std::mutex> lock(mutex_);
   EventData normalized = event_data;
   if(normalized.data_ref.empty() && !normalized.description.empty()) {
@@ -77,7 +77,7 @@ bool AgentEvent::emit_event(const EventData& event_data) {
   return true;
 }
 
-bool AgentEvent::emit_event_async(const EventData& event_data) {
+bool MMAgentEvent::emit_event_async(const EventData& event_data) {
   if (config_.async_dispatch && adapter_) {
       agentflow::vendor::adapter::EventData adapter_data;
       adapter_data.type = MapToAdapterEventType(event_data.type);
@@ -91,7 +91,7 @@ bool AgentEvent::emit_event_async(const EventData& event_data) {
   return emit_event(event_data);
 }
 
-int AgentEvent::register_listener(EventType type, EventListener listener) {
+int MMAgentEvent::register_listener(EventType type, EventListener listener) {
   std::lock_guard<std::mutex> lock(mutex_);
   if(get_listener_count() >= config_.max_event_listeners) {
     return -1;
@@ -120,7 +120,7 @@ int AgentEvent::register_listener(EventType type, EventListener listener) {
   return listener_id;
 }
 
-bool AgentEvent::unregister_listener(int listener_id) {
+bool MMAgentEvent::unregister_listener(int listener_id) {
   std::lock_guard<std::mutex> lock(mutex_);
   for(auto& listener_pair : listeners_) {
     auto& listener_list = listener_pair.second;
@@ -136,12 +136,12 @@ bool AgentEvent::unregister_listener(int listener_id) {
   return false;
 }
 
-bool AgentEvent::unregister_all_listeners(EventType type) {
+bool MMAgentEvent::unregister_all_listeners(EventType type) {
   std::lock_guard<std::mutex> lock(mutex_);
   return listeners_.erase(type) > 0;
 }
 
-std::vector<AgentEvent::EventData> AgentEvent::get_recent_events(int count) const {
+std::vector<MMAgentEvent::EventData> MMAgentEvent::get_recent_events(int count) const {
   std::lock_guard<std::mutex> lock(mutex_);
   std::vector<EventData> result;
   int start_idx = std::max(0, static_cast<int>(event_history_.size()) - count);
@@ -151,7 +151,7 @@ std::vector<AgentEvent::EventData> AgentEvent::get_recent_events(int count) cons
   return result;
 }
 
-std::vector<AgentEvent::EventData> AgentEvent::get_events_by_type(EventType type, int count) const {
+std::vector<MMAgentEvent::EventData> MMAgentEvent::get_events_by_type(EventType type, int count) const {
   std::lock_guard<std::mutex> lock(mutex_);
   std::vector<EventData> result;
   for(const auto& event : event_history_) {
@@ -165,12 +165,12 @@ std::vector<AgentEvent::EventData> AgentEvent::get_events_by_type(EventType type
   return result;
 }
 
-void AgentEvent::clear_events() {
+void MMAgentEvent::clear_events() {
   std::lock_guard<std::mutex> lock(mutex_);
   event_history_.clear();
 }
 
-int AgentEvent::get_listener_count() const {
+int MMAgentEvent::get_listener_count() const {
   int count = 0;
   for(const auto& listener_pair : listeners_) {
     count += listener_pair.second.size();

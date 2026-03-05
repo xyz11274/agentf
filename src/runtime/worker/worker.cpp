@@ -10,7 +10,7 @@
 namespace agentflow {
 namespace runtime {
 
-WorkerEngine::ExecutionResponse WorkerEngine::execute_code(const ExecutionRequest& request) {
+MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRequest& request) {
   ExecutionResponse response;
   if(request.command.empty()) {
     response.error_message = "No command specified for execution";
@@ -92,7 +92,7 @@ WorkerEngine::ExecutionResponse WorkerEngine::execute_code(const ExecutionReques
   return response;
 }
 
-bool WorkerEngine::check_and_reload_code(const std::string& command, const HotReloadConfig& config) {
+bool MMWorkerEngine::check_and_reload_code(const std::string& command, const HotReloadConfig& config) {
   if(command.empty()) {
     return false;
   }
@@ -114,7 +114,7 @@ bool WorkerEngine::check_and_reload_code(const std::string& command, const HotRe
   return current_after && current_after->version_id != before_id;
 }
 
-std::shared_ptr<ExecutableVersion> WorkerEngine::get_code_version(const std::string& command) {
+std::shared_ptr<ExecutableVersion> MMWorkerEngine::get_code_version(const std::string& command) {
   if(command.empty()) {
     return nullptr;
   }
@@ -122,7 +122,7 @@ std::shared_ptr<ExecutableVersion> WorkerEngine::get_code_version(const std::str
   return code_loader.get_current_version(command);
 }
 
-bool WorkerEngine::rollback_code_version(const std::string& command, const std::string& version_id) {
+bool MMWorkerEngine::rollback_code_version(const std::string& command, const std::string& version_id) {
   if(command.empty() || version_id.empty()) {
     return false;
   }
@@ -130,7 +130,7 @@ bool WorkerEngine::rollback_code_version(const std::string& command, const std::
   return code_loader.rollback_to_version(command, version_id);
 }
 
-bool WorkerEngine::stop_hot_reload(const std::string& command) {
+bool MMWorkerEngine::stop_hot_reload(const std::string& command) {
   if(command.empty()) {
     return false;
   }
@@ -138,76 +138,76 @@ bool WorkerEngine::stop_hot_reload(const std::string& command) {
   return code_loader.stop_watching(command);
 }
 
-int64_t WorkerEngine::now_ms() {
+int64_t MMWorkerEngine::now_ms() {
   timeval tv;
   gettimeofday(&tv, nullptr);
   return static_cast<int64_t>(tv.tv_sec) * 1000 + tv.tv_usec / 1000;
 }
 
-WorkerEngine::WorkerEngine(const Config& config) : config_(config) {
+MMWorkerEngine::MMWorkerEngine(const Config& config) : config_(config) {
   last_heartbeat_ms_ = now_ms();
 }
 
-WorkerEngine::~WorkerEngine() {
+MMWorkerEngine::~MMWorkerEngine() {
   stop();
 }
 
-WorkerEngine::WorkerStatus WorkerEngine::get_status() const {
+MMWorkerEngine::WorkerStatus MMWorkerEngine::get_status() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return status_;
 }
 
-int WorkerEngine::get_load() const {
+int MMWorkerEngine::get_load() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return load_;
 }
 
-int64_t WorkerEngine::get_last_heartbeat_ms() const {
+int64_t MMWorkerEngine::get_last_heartbeat_ms() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return last_heartbeat_ms_;
 }
 
-void WorkerEngine::set_status(WorkerStatus status) {
+void MMWorkerEngine::set_status(WorkerStatus status) {
   std::lock_guard<std::mutex> lock(mutex_);
   status_ = status;
 }
 
-void WorkerEngine::set_load(int load) {
+void MMWorkerEngine::set_load(int load) {
   std::lock_guard<std::mutex> lock(mutex_);
   load_ = load < 0 ? 0 : load;
 }
 
-void WorkerEngine::heartbeat() {
+void MMWorkerEngine::heartbeat() {
   std::lock_guard<std::mutex> lock(mutex_);
   last_heartbeat_ms_ = now_ms();
 }
 
-void WorkerEngine::set_supported_workflows(const std::set<std::string>& workflow_ids) {
+void MMWorkerEngine::set_supported_workflows(const std::set<std::string>& workflow_ids) {
   std::lock_guard<std::mutex> lock(mutex_);
   supported_workflows_ = workflow_ids;
 }
 
-void WorkerEngine::add_supported_workflow(const std::string& workflow_id) {
+void MMWorkerEngine::add_supported_workflow(const std::string& workflow_id) {
   std::lock_guard<std::mutex> lock(mutex_);
   supported_workflows_.insert(workflow_id);
 }
 
-void WorkerEngine::remove_supported_workflow(const std::string& workflow_id) {
+void MMWorkerEngine::remove_supported_workflow(const std::string& workflow_id) {
   std::lock_guard<std::mutex> lock(mutex_);
   supported_workflows_.erase(workflow_id);
 }
 
-bool WorkerEngine::supports_workflow(const std::string& workflow_id) const {
+bool MMWorkerEngine::supports_workflow(const std::string& workflow_id) const {
   std::lock_guard<std::mutex> lock(mutex_);
   return supported_workflows_.empty() || supported_workflows_.count(workflow_id) > 0;
 }
 
-std::set<std::string> WorkerEngine::get_supported_workflows() const {
+std::set<std::string> MMWorkerEngine::get_supported_workflows() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return supported_workflows_;
 }
 
-bool WorkerEngine::start() {
+bool MMWorkerEngine::start() {
   bool expected = false;
   if(!running_.compare_exchange_strong(expected, true)) {
     return false;
@@ -216,11 +216,11 @@ bool WorkerEngine::start() {
   set_status(WorkerStatus::RUNNING);
   const int event_threads = std::max(1, config_.event_threads);
   event_pool_             = std::make_unique<basic::ThreadPool>(static_cast<size_t>(event_threads));
-  event_monitor_thread_   = std::thread(&WorkerEngine::event_monitor_loop, this);
+  event_monitor_thread_   = std::thread(&MMWorkerEngine::event_monitor_loop, this);
   return true;
 }
 
-void WorkerEngine::stop() {
+void MMWorkerEngine::stop() {
   bool expected = true;
   if(!running_.compare_exchange_strong(expected, false)) {
     return;
@@ -246,7 +246,7 @@ void WorkerEngine::stop() {
   set_status(WorkerStatus::STOPPED);
 }
 
-bool WorkerEngine::enqueue_task(const TaskItem& task) {
+bool MMWorkerEngine::enqueue_task(const TaskItem& task) {
   std::lock_guard<std::mutex> lock(queue_mutex_);
   const size_t queued_tasks = high_priority_tasks_.size() + normal_priority_tasks_.size();
   if(queued_tasks >= config_.max_queue_size) {
@@ -269,7 +269,7 @@ bool WorkerEngine::enqueue_task(const TaskItem& task) {
   return true;
 }
 
-bool WorkerEngine::register_workflow_instance(const WorkflowRegistration& registration) {
+bool MMWorkerEngine::register_workflow_instance(const WorkflowRegistration& registration) {
   std::lock_guard<std::mutex> lock(queue_mutex_);
   if(workflow_registrations_.size() >= config_.max_queue_size) {
     return false;
@@ -287,7 +287,7 @@ bool WorkerEngine::register_workflow_instance(const WorkflowRegistration& regist
   return true;
 }
 
-bool WorkerEngine::unregister_workflow_instance(const std::string& workflow_instance_id) {
+bool MMWorkerEngine::unregister_workflow_instance(const std::string& workflow_instance_id) {
   std::lock_guard<std::mutex> lock(queue_mutex_);
   WorkerEvent event;
   event.type                         = "workflow_unregistered";
@@ -298,7 +298,7 @@ bool WorkerEngine::unregister_workflow_instance(const std::string& workflow_inst
   return true;
 }
 
-bool WorkerEngine::enqueue_event(const WorkerEvent& event) {
+bool MMWorkerEngine::enqueue_event(const WorkerEvent& event) {
   std::lock_guard<std::mutex> lock(queue_mutex_);
   if(event_queue_.size() >= config_.max_queue_size) {
     return false;
@@ -308,19 +308,19 @@ bool WorkerEngine::enqueue_event(const WorkerEvent& event) {
   return true;
 }
 
-void WorkerEngine::register_event_handler(const std::string& event_type, WorkerEventHandler handler) {
+void MMWorkerEngine::register_event_handler(const std::string& event_type, WorkerEventHandler handler) {
   std::lock_guard<std::mutex> lock(handler_mutex_);
   event_handlers_[event_type].push_back(std::move(handler));
 }
 
-std::string WorkerEngine::workflow_pool_key(const TaskItem& task) const {
+std::string MMWorkerEngine::workflow_pool_key(const TaskItem& task) const {
   if(!task.workflow_instance_id.empty()) {
     return task.workflow_instance_id;
   }
   return task.workflow_id;
 }
 
-void WorkerEngine::ensure_workflow_pool(const std::string& pool_key, int thread_count) {
+void MMWorkerEngine::ensure_workflow_pool(const std::string& pool_key, int thread_count) {
   const int effective_threads = std::max(1, thread_count <= 0 ? config_.default_workflow_threads : thread_count);
   auto      it                = workflow_pools_.find(pool_key);
   if(it == workflow_pools_.end()) {
@@ -329,7 +329,7 @@ void WorkerEngine::ensure_workflow_pool(const std::string& pool_key, int thread_
   }
 }
 
-void WorkerEngine::handle_internal_event(const WorkerEvent& event) {
+void MMWorkerEngine::handle_internal_event(const WorkerEvent& event) {
   if(event.type == "task_arrived") {
     process_task_queues();
     return;
@@ -356,7 +356,7 @@ void WorkerEngine::handle_internal_event(const WorkerEvent& event) {
   }
 }
 
-void WorkerEngine::process_task_queues() {
+void MMWorkerEngine::process_task_queues() {
   std::vector<TaskItem> tasks_to_run;
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -394,7 +394,7 @@ void WorkerEngine::process_task_queues() {
   }
 }
 
-void WorkerEngine::event_monitor_loop() {
+void MMWorkerEngine::event_monitor_loop() {
   while(running_) {
     WorkerEvent event;
     {

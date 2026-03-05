@@ -221,10 +221,10 @@ struct WorkflowMetadata {
 };
 
 /**
- * Workflow represents a directed workflow graph of nodes and edges.
+ * MMWorkflow represents a directed workflow graph of nodes and edges.
  * Supports DSL-based orchestration, dynamic loading, and controlled cycles via edge control.
  */
-class Workflow {
+class MMWorkflow {
 public:
   struct Config {
     WorkflowId  id;
@@ -232,7 +232,7 @@ public:
     std::string version = "1.0";
     std::string dsl_file;  // Path to DSL definition file
 
-    // Workflow metadata
+    // MMWorkflow metadata
     std::string                        description;
     std::map<std::string, std::string> metadata;
   };
@@ -262,8 +262,8 @@ public:
 
   using WorkflowEventHandler = std::function<void(const WorkflowEvent&)>;
 
-  explicit Workflow(const Config& config);
-  ~Workflow();
+  explicit MMWorkflow(const Config& config);
+  ~MMWorkflow();
 
   // Getters
   const WorkflowId&  get_id() const { return config_.id; }
@@ -271,17 +271,17 @@ public:
   const Config&      get_config() const { return config_; }
   WorkflowState      get_state() const { return state_; }
 
-  // Node and edge management
-  void                                      add_node(std::shared_ptr<Node> node);
+  // MMNode and edge management
+  void                                      add_node(std::shared_ptr<MMNode> node);
   void                                      remove_node(const NodeId& node_id);
-  std::shared_ptr<Node>                     get_node(const NodeId& node_id);
-  const std::vector<std::shared_ptr<Node>>& get_nodes() const { return nodes_; }
+  std::shared_ptr<MMNode>                     get_node(const NodeId& node_id);
+  const std::vector<std::shared_ptr<MMNode>>& get_nodes() const { return nodes_; }
 
-  void                                      add_edge(std::shared_ptr<Edge> edge);
+  void                                      add_edge(std::shared_ptr<MMEdge> edge);
   void                                      remove_edge(const EdgeId& edge_id);
-  const std::vector<std::shared_ptr<Edge>>& get_edges() const { return edges_; }
+  const std::vector<std::shared_ptr<MMEdge>>& get_edges() const { return edges_; }
 
-  // Workflow operations
+  // MMWorkflow operations
   bool load_from_dsl(const std::string& dsl_content);
   bool validate();
   bool update_dynamic(const std::string& dsl_content);
@@ -292,7 +292,7 @@ public:
 
   static agentflow::utils::storage::StorageResult load(const std::string&                       workflow_id,
                                                 const agentflow::utils::storage::StorageConfig& storage_config,
-                                                std::shared_ptr<Workflow>&               workflow);
+                                                std::shared_ptr<MMWorkflow>&               workflow);
 
   static agentflow::utils::storage::StorageResult delete_workflow(
       const std::string&                       workflow_id,
@@ -349,9 +349,9 @@ private:
 
   Config                                  config_;
   WorkflowState                           state_ = WorkflowState::CREATED;
-  std::map<NodeId, std::shared_ptr<Node>> node_map_;
-  std::vector<std::shared_ptr<Node>>      nodes_;
-  std::vector<std::shared_ptr<Edge>>      edges_;
+  std::map<NodeId, std::shared_ptr<MMNode>> node_map_;
+  std::vector<std::shared_ptr<MMNode>>      nodes_;
+  std::vector<std::shared_ptr<MMEdge>>      edges_;
 
   // Control flow context
   ControlContext                       control_context_;

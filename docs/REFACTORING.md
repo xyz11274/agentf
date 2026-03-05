@@ -2,42 +2,42 @@
 
 本文档说明了 AgentFlow 项目目录结构的优化工作。
 
-## Agent 自主能力增强（2026-02-23）
+## MMAgent 自主能力增强（2026-02-23）
 
 - `src/agent/agent_actor.cpp` 重构为自动化实例管理能力：
   - 从 `AgentService.config`（JSON）读取 `package_root` 与 `manifests`；
-  - 自动加载 agent 包并创建 Agent 实例；
+  - 自动加载 agent 包并创建 MMAgent 实例；
   - 启动包监控线程，目录变化时增量加载新版本实例，支持多版本并行运行；
   - 维护 agent/task 实例清单，并提供 `agent.start/pause/resume/stop`、`task.start/pause/stop` 控制消息入口。
-- 按要求将请求事件处理能力下沉到 `Agent`：
+- 按要求将请求事件处理能力下沉到 `MMAgent`：
   - `include/external/agent/agent.h`、`src/agent/agent.cpp` 新增请求事件队列与监控线程；
-  - 新请求入队后触发 Agent 内 `AgentCoordinator` 对默认会话及其他会话收发队列进行扫描处理，直到队列清空；
-  - 处理生成的 task 通过 Agent 接口回传给 AgentActor 统一管理与上报。
-- 新增独立 `RuntimeActor`：
+  - 新请求入队后触发 MMAgent 内 `AgentCoordinator` 对默认会话及其他会话收发队列进行扫描处理，直到队列清空；
+  - 处理生成的 task 通过 MMAgent 接口回传给 MMAgentActor 统一管理与上报。
+- 新增独立 `MMRuntimeActor`：
   - 新增 `include/internal/runtime/runtime_actor.h`；
-  - `src/runtime/runtime_actor.cpp` 新增 RuntimeActor 消息处理，接收 agent/task/worker 的注册、心跳、状态上报并对接 `AgentRuntime`。
+  - `src/runtime/runtime_actor.cpp` 新增 MMRuntimeActor 消息处理，接收 agent/task/worker 的注册、心跳、状态上报并对接 `MMAgentRuntime`。
 - Worker 目录与 actor 化能力增强：
   - `src/runtime/worker.cpp` 迁移为 `src/runtime/worker/worker.cpp`；
   - 新增 `include/internal/runtime/worker/worker_actor.h` 与 `src/runtime/worker/worker_actor.cpp`；
-  - WorkerActor 负责 worker 注册、心跳、状态同步消息上报到 RuntimeActor。
+  - WorkerActor 负责 worker 注册、心跳、状态同步消息上报到 MMRuntimeActor。
 - 构建与测试验证：
   - `./build.sh build` 通过；
   - `./build.sh test` 通过（10/10）。
 
-## Node 执行引擎下沉 + Coordinator Task0 默认化（2026-02-28）
+## MMNode 执行引擎下沉 + Coordinator Task0 默认化（2026-02-28）
 
-- Node 多语言执行引擎下沉到 Worker：
+- MMNode 多语言执行引擎下沉到 Worker：
   - `include/internal/runtime/worker.h` 增加 Worker 执行请求/结果模型与 `execute_code` 入口；
   - `src/runtime/worker/worker.cpp` 实现 shell/python/go/jar/so/executable 分发执行；
-  - `src/workflow/node/node.cpp` 的外部执行模式统一改为委托 worker 执行，Node 保留状态机与输入输出管理。
+  - `src/workflow/node/node.cpp` 的外部执行模式统一改为委托 worker 执行，MMNode 保留状态机与输入输出管理。
 - Coordinator 默认 task 语义统一为 task0：
   - `include/internal/agent/coordinator.h` / `src/agent/coordinator.cpp` 增加默认 task 类型配置，缺省改为 `task0`；
   - 新增 task0 workflow 解析逻辑：优先使用 `coordinator_workflow`，未配置时兼容回退 `task_workflows["0"]`，支持按 workflow id 或 name 匹配。
 - Session/Coordinator 语义对齐：
-  - 默认会话统一为 `0` 号 `AgentSession`；
+  - 默认会话统一为 `0` 号 `MMAgentSession`；
   - 每个 session 创建时默认注入 `task0`（`<session_id>_task_0`）并创建该 session 专属 coordinator；
   - session 消息处理改为使用 session 级 coordinator，确保 coordinator 归属 session。
-- Agent 包新增 task0 workflow 定制能力：
+- MMAgent 包新增 task0 workflow 定制能力：
   - `include/internal/agent/package.h` / `src/agent/package.cpp` 新增 `coordinator_workflow` 配置解析；
   - `src/agent/agent.cpp` 初始化 coordinator 时注入包配置中的固定 workflow；
   - `publish/agent/package.json` 与 examples 增加 `coordinator_workflow.json`，用于演示 session 创建节点与 task 创建节点编排。
@@ -46,26 +46,26 @@
   - `tests/unit/src/test_builtin_workflow_gtest.cpp` 增加 `coordinator_workflow` 解析断言；
   - `tests/unit/src/test_runtime_master_worker_gtest.cpp` 新增 worker 执行引擎 shell 路径测试。
 
-## Node 热更新能力下沉到 Worker（2026-02-28）
+## MMNode 热更新能力下沉到 Worker（2026-02-28）
 
 - 热更新控制面迁移到 Worker：
   - `include/internal/runtime/worker.h` 新增 `check_and_reload_code/get_code_version/rollback_code_version/stop_hot_reload`；
   - `src/runtime/worker/worker.cpp` 统一执行与热更新能力，支持运行中版本更新与回退。
-- Node 热更新 API 保持兼容但改为 Worker 委托：
+- MMNode 热更新 API 保持兼容但改为 Worker 委托：
   - `src/workflow/node/node.cpp` 中 `reload/check/version/rollback` 统一转发到 Worker；
   - 外部执行请求携带 `enable_hot_reload/hot_reload_config`，默认配置无需额外 `enable_code_reload` 调用。
 - 代码归属调整：
   - `src/workflow/node/exe_loader.cpp` 迁移到 `src/runtime/worker/exe_loader.cpp`，热更新实现与 Worker 执行引擎同域管理。
 - 测试补充：
   - `tests/unit/src/test_runtime_master_worker_gtest.cpp` 新增 Worker 热更新+回退用例；
-  - `tests/unit/src/test_hot_reload.cpp` 刷新 Node 场景为默认热更新语义。
+  - `tests/unit/src/test_hot_reload.cpp` 刷新 MMNode 场景为默认热更新语义。
 
 ## Runtime Master 自主调度重构（2026-02-23）
 
-- `src/runtime/runtime.cpp` 增强全局 Agent 管理能力：
-  - 新增 Agent 注册请求队列与注册处理线程（`agent_registration_loop`）；
-  - 新增 Agent 心跳上报与监控线程（`report_agent_heartbeat` / `agent_monitor_loop`）；
-  - Agent 故障时联动 Deployer/Scheduler 执行 workflow 注销与 task 映射刷新。
+- `src/runtime/runtime.cpp` 增强全局 MMAgent 管理能力：
+  - 新增 MMAgent 注册请求队列与注册处理线程（`agent_registration_loop`）；
+  - 新增 MMAgent 心跳上报与监控线程（`report_agent_heartbeat` / `agent_monitor_loop`）；
+  - MMAgent 故障时联动 Deployer/Scheduler 执行 workflow 注销与 task 映射刷新。
 - `include/internal/runtime/shared_runtime_state.h` 扩展共享状态：
   - 增加 `TaskInstanceInfo`；
   - 增加 workflow 按 agent/workflow 检索接口；
@@ -94,7 +94,7 @@
 - 边命中检测改为复用统一曲线路径计算，保证回跳边可点击选中并查看属性。
 - `fitView` 增加视图留白，避免环路弧线被视口裁切。
 
-## Worker/Workflow/Node/Edge 自主执行重构（2026-02-23）
+## Worker/MMWorkflow/MMNode/MMEdge 自主执行重构（2026-02-23）
 
 - `runtime/worker` 增强为自驱动执行模型：
   - 新增高优先级/普通任务队列、workflow 实例登记队列、事件队列；
@@ -111,7 +111,7 @@
 - `workflow/edge` 增强运行时能力：
   - 新增 edge 级消息队列、事件队列、processor 线程池和事件处理线程池；
   - 支持消息驱动的 edge 处理与事件处理器注册。
-- 线程/并发配置入口统一放在 `runtime::AgentRuntime::Config`，新增：
+- 线程/并发配置入口统一放在 `runtime::MMAgentRuntime::Config`，新增：
   - `worker_default_workflow_threads`
   - `worker_event_threads`
   - `worker_queue_size`
@@ -136,21 +136,21 @@
 - 删除重复文档：`docs/contributing.md`，并将保留的贡献规范收敛到根目录 `CONTRIBUTING.md`。
 - 修正全仓链接：将原 `docs/CONTRIBUTING.md` 引用统一到 `CONTRIBUTING.md`，避免失效链接。
 - 重写 `docs/ARCHITECTURE.md`，按当前实现统一为：
-  - Framework 两层：Agent + Workflow（Node/Edge 为 Workflow 组成）
+  - Framework 两层：MMAgent + MMWorkflow（MMNode/MMEdge 为 MMWorkflow 组成）
   - Runtime 两类调度：`task -> workflow instance` 与 `workflow instance -> worker`
-  - 共享基础设施：DataBus
-- 重组 `docs/api-reference.md`，按 Framework / Runtime / DataBus 三层组织接口说明，并补充 Agent 包、Workflow DSL 与 Node 开发 API 的索引关系。
+  - 共享基础设施：MMDataBus
+- 重组 `docs/api-reference.md`，按 Framework / Runtime / MMDataBus 三层组织接口说明，并补充 MMAgent 包、MMWorkflow DSL 与 MMNode 开发 API 的索引关系。
 - 构建与测试回归：
   - `./build.sh build` 通过；
   - `./build.sh test` 出现既有 HotReload 并行抖动；
   - `ctest --test-dir build --output-on-failure -j 1` 串行回归 10/10 通过。
 
-## DataBus 全局共享重构（2026-02-22）
+## MMDataBus 全局共享重构（2026-02-22）
 
-- DataBus 增强为“本地缓存优先 + 远端服务同步”模型：支持进程内、跨进程、跨节点共享链路。
+- MMDataBus 增强为“本地缓存优先 + 远端服务同步”模型：支持进程内、跨进程、跨节点共享链路。
 - 新增 DataRef 流程：`store_with_ref / resolve_ref / find_refs_by_owner`。
 - owner 维度索引支持：`request_id/user_id/client_id/agent_id/session_id/task_id/workflow_id/node_id/master_id/worker_id`。
-- `msgque/event` 协同增强：控制面仅携带 `data_ref`，payload 由 DataBus 本地缓存读取，本地 miss 自动回源并回填。
+- `msgque/event` 协同增强：控制面仅携带 `data_ref`，payload 由 MMDataBus 本地缓存读取，本地 miss 自动回源并回填。
 - Redis 依赖接入：`vendor/vendor.conf` 增加 redis 仓库条目，新增 `vendor/adapter/cache/redis_adapter.cpp` 适配实现。
 - 回归结果：
   - `./build.sh build` 通过；
@@ -164,7 +164,7 @@
   - 开发编排框架：约 85%
   - 运行框架：约 88%
   - 监控和日志：约 68%
-- 已完成主线（P0/P1）：AgentRuntime 调度闭环、C++ 节点执行、循环控制、序列化链路、DataBus 通知等。
+- 已完成主线（P0/P1）：MMAgentRuntime 调度闭环、C++ 节点执行、循环控制、序列化链路、MMDataBus 通知等。
 - 后续主线（P2）：性能与稳定性增强（共享内存、worker 分组、热更新稳定性、测试抖动治理）。
 
 ## 目录结构总览
@@ -194,15 +194,15 @@ AgentFlow/
 
 ## 优化内容
 
-### 0. Agent 消息链路与会话协同增强（2026-02-21）
+### 0. MMAgent 消息链路与会话协同增强（2026-02-21）
 
-本次优化将 Agent 内部消息处理从单消息容器升级为会话化消息队列协同模型，主链路为：
+本次优化将 MMAgent 内部消息处理从单消息容器升级为会话化消息队列协同模型，主链路为：
 
 `reqmsg -> agent.defaultsession -> agent.newsession -> agent.coordinator -> agent.newsession.task -> agent.workflow`
 
 核心变更：
-- `src/agent/messages.cpp` 迁移为 `src/agent/msgque.cpp`，核心类升级为 `AgentMsgQue`（保留 `AgentMessages` 兼容别名）。
-- 每个 Agent 实例持有默认会话 `default_session`，请求消息先进入默认会话接收队列。
+- `src/agent/messages.cpp` 迁移为 `src/agent/msgque.cpp`，核心类升级为 `MMAgentMsgQue`（保留 `AgentMessages` 兼容别名）。
+- 每个 MMAgent 实例持有默认会话 `default_session`，请求消息先进入默认会话接收队列。
 - 会话按 `user_id + client_id` 动态创建，子会话持有独立接收/发送队列与任务集合。
 - 新增 `AgentCoordinator`（`src/agent/coordinator.cpp`），统一处理会话消息并生成任务：
   - 执行任务：映射到某个 workflow 类型；
@@ -218,12 +218,12 @@ AgentFlow/
 - 新增 `runtime/master/scheduler`：负责全局 task 调度到 workflow 实例，再间接落到对应 worker。
   - 调度策略：优先同 agent 实例，再回退到同 agent 对象的其他实例共享 workflow。
 - 新增 `runtime/shared_runtime_state` 抽象：本轮实现“接口 + 本地内存默认实现”，用于多实例共享语义与 workflow 实例引用计数。
-- `AgentRuntime` 增强：
+- `MMAgentRuntime` 增强：
   - 支持 role 配置（`MASTER` 包含 `WORKER` 能力，`WORKER` 不包含 master 能力）；
   - 暴露 worker 注册/心跳/状态接口；
   - 暴露 workflow 实例部署与销毁、task 调度接口，形成 task -> workflow instance -> worker 闭环。
 
-### 0.2 Workflow 内建模板能力增强（2026-02-21）
+### 0.2 MMWorkflow 内建模板能力增强（2026-02-21）
 
 新增内建 workflow 模板目录，支持开箱即用与业务定制增强：
 
@@ -234,16 +234,16 @@ AgentFlow/
 每个目录均包含默认 `workflow.json` 与 `nodes/` 节点脚本，可在业务侧直接替换节点脚本并扩展流程图。
 
 打包策略采用按需选择（opt-in）：
-- Agent `package.json` 可配置 `builtin_workflows`（如 `["memory","skills","tools"]`）。
+- MMAgent `package.json` 可配置 `builtin_workflows`（如 `["memory","skills","tools"]`）。
 - 构建脚本 `publish/agent_build.sh` 在打包时仅注入声明的内建 workflow 到包内 `workflows/builtin/<name>/`。
 - AgentPackage 加载时支持解析 `builtin_workflows` 并将可解析的内建流程文件加入 workflow 列表。
 
 ### 0.3 今日优化交付与验证快照（2026-02-21）
 
-本轮代码已完成“Agent 消息链路 + Runtime 全局调度 + Workflow 内建模板”三条主线的端到端打通，关键更新如下：
+本轮代码已完成“MMAgent 消息链路 + Runtime 全局调度 + MMWorkflow 内建模板”三条主线的端到端打通，关键更新如下：
 
-- **Agent 路径闭环**：`reqmsg -> default_session -> dynamic_session -> coordinator -> session_task -> workflow` 已落到代码与测试。
-- **会话与任务归属强化**：每个 Agent 固定默认会话，动态会话按 `user_id + client_id` 拆分；Task 仅归属触发会话并携带 workflow 映射元数据。
+- **MMAgent 路径闭环**：`reqmsg -> default_session -> dynamic_session -> coordinator -> session_task -> workflow` 已落到代码与测试。
+- **会话与任务归属强化**：每个 MMAgent 固定默认会话，动态会话按 `user_id + client_id` 拆分；Task 仅归属触发会话并携带 workflow 映射元数据。
 - **Runtime 主从能力成型**：`MASTER` 包含 `WORKER` 能力，新增 deployer/scheduler/worker/shared state 协作链路，支持 worker 注册、心跳、负载调度与 workflow 实例映射刷新。
 - **内建 workflow 资产化**：新增 `publish/workflow/{memory,skills,tools}`，支持 `builtin_workflows` 按需打包、解析和加载，并保留业务定制入口。
 - **测试与构建验证**：最新全量回归通过（`ctest --output-on-failure`，10/10 passed）。
@@ -341,16 +341,16 @@ vendor/                 # 三方依赖相关实现
 **目录结构：**
 ```
 src/
-├── agent/              # Agent 实例管理实现（agent.cpp）
-├── workflow/           # Workflow 管理实现
+├── agent/              # MMAgent 实例管理实现（agent.cpp）
+├── workflow/           # MMWorkflow 管理实现
 │   ├── dsl/            # DSL 解析实现
-│   ├── edge/           # Edge 子模块实现
-│   ├── node/           # Node 子模块实现（code_loader, node_actor 等）
-│   ├── workflow.cpp    # Workflow 核心实现
+│   ├── edge/           # MMEdge 子模块实现
+│   ├── node/           # MMNode 子模块实现（code_loader, node_actor 等）
+│   ├── workflow.cpp    # MMWorkflow 核心实现
 │   ├── node/
-│   │   └── node.cpp    # Node 核心实现
+│   │   └── node.cpp    # MMNode 核心实现
 │   └── edge/
-│       └── edge.cpp    # Edge 核心实现
+│       └── edge.cpp    # MMEdge 核心实现
 ├── runtime/            # 运行时实现
 │   ├── scheduler/      # 调度器（agent_runtime, control_flow）
 │   ├── communication/  # 通信（databus, hot_reload, local_channel, zero_copy_databus）
@@ -514,7 +514,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 
 | 功能模块 | 完成度 | 状态说明 |
 |---------|--------|---------|
-| 开发编排框架 | 85% | Agent、Workflow、Node、Edge 定义完成，存储功能已实现 |
+| 开发编排框架 | 85% | MMAgent、MMWorkflow、MMNode、MMEdge 定义完成，存储功能已实现 |
 | 运行框架 | **88%** | 核心调度完成，控制流完成，P0/P1 缺陷已修复 |
 | 监控和日志 | **68%** | 基础监控完成，跨平台实现完成 |
 
@@ -529,43 +529,43 @@ set(AGENTFLOW_ADAPTER_SOURCES
 
 ### 第一阶段：开发编排框架（85% 完成）
 
-#### Agent 编排
-- 已完成 Agent 对象定义
-- 已完成 Agent 生命周期策略（PER_REQUEST、FACTORY、SINGLETON）
-- 已完成 Agent 版本管理基础字段
-- 待完成 Agent 资源访问权限管理
-- 待完成 Agent 版本管理逻辑（版本比较、兼容性检查）
-- 待完成 Agent 灰度发布配置逻辑
+#### MMAgent 编排
+- 已完成 MMAgent 对象定义
+- 已完成 MMAgent 生命周期策略（PER_REQUEST、FACTORY、SINGLETON）
+- 已完成 MMAgent 版本管理基础字段
+- 待完成 MMAgent 资源访问权限管理
+- 待完成 MMAgent 版本管理逻辑（版本比较、兼容性检查）
+- 待完成 MMAgent 灰度发布配置逻辑
 
-#### Workflow 编排
+#### MMWorkflow 编排
 - 已完成 完整的 DSL 解析实现（WorkflowParser）
 - 已完成 DSL 验证功能
-- 已完成 Workflow 版本管理基础字段
+- 已完成 MMWorkflow 版本管理基础字段
 - 已完成 灰度发布支持
 - 已完成 版本回滚机制
-- 待完成 Workflow 版本管理逻辑（版本比较、兼容性检查）
+- 待完成 MMWorkflow 版本管理逻辑（版本比较、兼容性检查）
 
-#### Node 实现
-- 已完成 Node 控制面结构
-- 已完成 Node 输入输出接口定义
-- 已完成 Node 错误处理策略（重试、超时）
-- 已完成 Node 资源限制
+#### MMNode 实现
+- 已完成 MMNode 控制面结构
+- 已完成 MMNode 输入输出接口定义
+- 已完成 MMNode 错误处理策略（重试、超时）
+- 已完成 MMNode 资源限制
 - 已完成 控制面/运行面分离架构
-- 已完成 多语言 Node 支持（Shell、Python、SO、JAR）
+- 已完成 多语言 MMNode 支持（Shell、Python、SO、JAR）
 - 已完成 C++ 函数执行（cpp_function 回调 + CodeLoader 回退）
 - 已完成 运行面 DSL 配置
 
-#### Edge 定义
+#### MMEdge 定义
 - 已完成 依赖关系定义
 - 已完成 数据类型定义
 - 已完成 数据传递方式（DataTransferMode）
 - 已完成 控制流事件定义
-- 已完成 Edge 条件表达式支持
-- 已完成 Edge 条件评估实现
+- 已完成 MMEdge 条件表达式支持
+- 已完成 MMEdge 条件评估实现
 
 #### 持久化
-- 已完成 本地存储 Agent 定义
-- 已完成 本地存储 Workflow 定义
+- 已完成 本地存储 MMAgent 定义
+- 已完成 本地存储 MMWorkflow 定义
 - 已完成 版本管理和变更历史
 - 已完成 灰度发布配置存储
 - 待完成 CI/CD 流程集成接口
@@ -575,47 +575,47 @@ set(AGENTFLOW_ADAPTER_SOURCES
 
 ### 第二阶段：运行框架（88% 完成）
 
-#### Agent 运行管理
-- 已完成 Agent 实例定义
-- 已完成 Agent 生命周期和状态管理
-- 已完成 Agent 内部资源管理
-- 已完成 Agent 实例策略
+#### MMAgent 运行管理
+- 已完成 MMAgent 实例定义
+- 已完成 MMAgent 生命周期和状态管理
+- 已完成 MMAgent 内部资源管理
+- 已完成 MMAgent 实例策略
 - 已完成 微服务层接口封装（内部函数）
-- 待完成 Agent 对外统一访问接口（依赖微服务框架）
+- 待完成 MMAgent 对外统一访问接口（依赖微服务框架）
 - 待完成 多种协议支持（依赖微服务框架）
 
-#### Workflow 运行和 Node 调度
+#### MMWorkflow 运行和 MMNode 调度
 - 已完成 DSL 动态加载和解析
-- 已完成 Workflow 实例创建
-- 已完成 Workflow 动态加载、卸载和版本更新接口
+- 已完成 MMWorkflow 实例创建
+- 已完成 MMWorkflow 动态加载、卸载和版本更新接口
 - 已完成工作流图调度算法（Kahn 算法拓扑排序）
-- 已完成 并行执行互不依赖的 Node
-- 已完成 Node 执行状态管理
-- 已完成 Node 输入输出数据处理
-- 已完成 Node 生命周期管理
+- 已完成 并行执行互不依赖的 MMNode
+- 已完成 MMNode 执行状态管理
+- 已完成 MMNode 输入输出数据处理
+- 已完成 MMNode 生命周期管理
 - 已完成 复杂流程控制（条件、循环、异常处理）
   - FOR_EACH 循环实现
   - 条件表达式解析缓存
-- 已完成 复杂流程控制与 Workflow 调度集成
+- 已完成 复杂流程控制与 MMWorkflow 调度集成
   - on_node_complete 调度闭环修复
-- 待完成 Workflow 动态更新无需重新创建实例
+- 待完成 MMWorkflow 动态更新无需重新创建实例
 
-#### AgentRuntime - 核心分层调度
-- 已完成 Agent 层 Master 实现
-- 已完成 Agent 生命周期管理、状态监控、资源分配
+#### MMAgentRuntime - 核心分层调度
+- 已完成 MMAgent 层 Master 实现
+- 已完成 MMAgent 生命周期管理、状态监控、资源分配
 - 已完成 故障转移基础
-- 已完成 Workflow 层 Master 实现
-- 已完成 Workflow 依赖关系计算
-- 已完成 Workflow 调度决策和状态管理
-- 已完成 Workflow 动态加载、卸载和版本更新
-- 已完成 Node 层 Worker 池
-- 已完成 Node 多线程并发执行
+- 已完成 MMWorkflow 层 Master 实现
+- 已完成 MMWorkflow 依赖关系计算
+- 已完成 MMWorkflow 调度决策和状态管理
+- 已完成 MMWorkflow 动态加载、卸载和版本更新
+- 已完成 MMNode 层 Worker 池
+- 已完成 MMNode 多线程并发执行
 - 已完成 动态负载均衡
 - 已完成 线程安全（std::atomic 替换 std::rand()）
 - 已完成 优雅关闭（drain 模式 + 5s 超时）
 
 #### 系统通信机制
-- 已完成 Agent 间通信基础
+- 已完成 MMAgent 间通信基础
 - 已完成 微服务层接口封装
 - 已完成 Request/Response 序列化
   - to_json/from_json 实现
@@ -623,7 +623,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 - 已完成 高速数据总线（InProcess）
 - 已完成 ZeroCopyDataBus 订阅通知
 - 待完成 零拷贝跨进程（POSIX/SystemV，P2 规划）
-- 待完成 分布式 Agent 间通信
+- 待完成 分布式 MMAgent 间通信
 
 #### 监控和日志
 - 已完成 基础监控接口
@@ -636,7 +636,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 - 待完成 第三方监控系统对接（Prometheus、Grafana）
 
 #### 分布式执行支持
-- 待完成 多 Agent 实例协同
+- 待完成 多 MMAgent 实例协同
 - 待完成 负载均衡策略
 - 待完成 容错和故障转移
 - 待完成 分布式事务支持
@@ -702,7 +702,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 #### 后端服务
 - 待完成 文件存储服务集成
 - 待完成 大语言模型推理服务集成
-- 待完成 其他第三方 Agent 或工具服务集成
+- 待完成 其他第三方 MMAgent 或工具服务集成
 
 ---
 
@@ -711,7 +711,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 ### P0 - 核心功能（已全部完成）
 
 所有 P0 缺陷已在 2026-02-18 修复：
-- AgentRuntime 调度闭环
+- MMAgentRuntime 调度闭环
 - 线程安全（atomic worker ID）
 - C++ 函数执行
 - FOR_EACH 循环
@@ -739,8 +739,8 @@ set(AGENTFLOW_ADAPTER_SOURCES
    - 动态 Worker 池扩缩容
    - 智能负载均衡
 
-3. **Workflow 优化**
-   - Workflow 热替换
+3. **MMWorkflow 优化**
+   - MMWorkflow 热替换
    - 动态更新无需重启
    - ZeroCopyDataBus 分段锁
 
@@ -764,7 +764,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
    - DSL 到 JSON 转换器
 
 2. **调试工具**
-   - Workflow 执行追踪
+   - MMWorkflow 执行追踪
    - 可视化监控面板
    - 性能分析工具
 
@@ -812,7 +812,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
    - 优先级：高
    - 预计时间：1-2周
 
-3. **Workflow 热替换**
+3. **MMWorkflow 热替换**
    - 工作量：大
    - 优先级：中
    - 预计时间：2-3周
@@ -840,7 +840,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 - 主要特性：
   - POSIX 共享内存
   - Worker 池优化
-  - Workflow 热替换
+  - MMWorkflow 热替换
   - 测试失败修复
 
 ### v0.3.0（规划中）
@@ -900,7 +900,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 - **影响**: 无法从 JSON/Binary 格式恢复 Request/Response 对象
 - **状态**: 已修复
 
-**AgentRuntime 节点调度闭环断裂**
+**MMAgentRuntime 节点调度闭环断裂**
 - **文件**: `src/runtime/scheduler/agent_runtime.cpp` 中 `on_node_complete()`
 - **问题**: 方法获取了后续可执行节点列表，但没有将其入队到 worker 线程
 - **影响**: 工作流图执行在第一批节点完成后停止
@@ -958,12 +958,12 @@ set(AGENTFLOW_ADAPTER_SOURCES
 |---------|--------|---------|------|
 | test_local_channel_gtest.cpp | 43 | LocalChannel 完整功能 | 完善 |
 | test_hot_reload.cpp | 44 | 多语言热重载、版本管理 | 完善 |
-| test_workflow_json_gtest.cpp | 29 | Workflow JSON 解析 | 完善 |
-| test_agent_json_gtest.cpp | 27 | Agent JSON 解析 | 完善 |
+| test_workflow_json_gtest.cpp | 29 | MMWorkflow JSON 解析 | 完善 |
+| test_agent_json_gtest.cpp | 27 | MMAgent JSON 解析 | 完善 |
 | test_adapter_isolation.cpp | 6 | Actor 适配器隔离 | 基本 |
-| test_node_gtest.cpp | 5 | Node 基本创建和状态 | 基础 |
-| test_agent_gtest.cpp | 3 | Agent 创建 | stub |
-| test_workflow_gtest.cpp | 3 | Workflow 创建 | stub |
+| test_node_gtest.cpp | 5 | MMNode 基本创建和状态 | 基础 |
+| test_agent_gtest.cpp | 3 | MMAgent 创建 | stub |
+| test_workflow_gtest.cpp | 3 | MMWorkflow 创建 | stub |
 | **合计** | **258** | | |
 
 #### 缺失测试（按优先级排序）
@@ -972,29 +972,29 @@ set(AGENTFLOW_ADAPTER_SOURCES
 
 | 组件 | 需要测试的内容 |
 |------|--------------|
-| **AgentRuntime** | 三层调度、workflow 执行、node 并发调度、负载均衡 |
-| **Workflow 执行** | 工作流图拓扑排序、get_executable_nodes、mark_node_executed、循环/条件 |
-| **Agent 生命周期** | 状态机转换（CREATED->INITIALIZED->RUNNING->PAUSED->STOPPED） |
+| **MMAgentRuntime** | 三层调度、workflow 执行、node 并发调度、负载均衡 |
+| **MMWorkflow 执行** | 工作流图拓扑排序、get_executable_nodes、mark_node_executed、循环/条件 |
+| **MMAgent 生命周期** | 状态机转换（CREATED->INITIALIZED->RUNNING->PAUSED->STOPPED） |
 | **ControlFlowManager** | 条件评估、循环控制、错误处理策略 |
-| **DataBus** | put/get/remove、订阅回调、线程安全、容量限制 |
+| **MMDataBus** | put/get/remove、订阅回调、线程安全、容量限制 |
 
 ### 代码优化建议
 
 #### 架构层面优化
 
 **OPT-A1: Worker 池按语言分组**
-- **当前问题**: 所有 Node（C++/Python/Shell）共享同一个 worker 线程池
+- **当前问题**: 所有 MMNode（C++/Python/Shell）共享同一个 worker 线程池
 - **建议**: 按 ExecutionMode 分组，C++ 节点使用高优先级池，脚本节点使用隔离池
 - **优先级**: P2
 
 **OPT-A2: 优雅关闭机制**
-- **当前问题**: `AgentRuntime::stop()` 直接标记 `running_ = false`，不等待进行中的 workflow 完成
+- **当前问题**: `MMAgentRuntime::stop()` 直接标记 `running_ = false`，不等待进行中的 workflow 完成
 - **建议**: 实现 drain 模式：停止接受新任务 -> 等待进行中任务完成 -> 关闭 worker 线程
 - **优先级**: P1
 - **状态**: 已完成
 
-**OPT-A3: Workflow 热替换**
-- **当前问题**: `Workflow::update_dynamic()` 仅调用 `load_from_dsl()`，需要重建实例
+**OPT-A3: MMWorkflow 热替换**
+- **当前问题**: `MMWorkflow::update_dynamic()` 仅调用 `load_from_dsl()`，需要重建实例
 - **建议**: 支持原地更新工作流图定义，保持执行状态
 - **优先级**: P2
 
@@ -1007,7 +1007,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 - **状态**: 已完成
 
 **OPT-P2: 条件表达式解析缓存**
-- **当前问题**: `Workflow::parse_condition_expression()` 每次评估都重新解析条件字符串
+- **当前问题**: `MMWorkflow::parse_condition_expression()` 每次评估都重新解析条件字符串
 - **建议**: 首次解析后缓存 `ConditionExpression` 对象
 - **优先级**: P1
 - **状态**: 已完成
@@ -1017,7 +1017,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 - **建议**: 按 key 的 hash 分段，每段独立锁，降低锁竞争
 - **优先级**: P2
 
-**OPT-P4: DataBus 容量预分配**
+**OPT-P4: MMDataBus 容量预分配**
 - **当前问题**: `HighSpeedDataBus` 的 `std::unordered_map` 在数据量增长时频繁 rehash
 - **建议**: 构造时根据 `max_capacity` 预留 bucket 数量 (`reserve()`)
 - **优先级**: P3
@@ -1052,7 +1052,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 |------|------|---------|--------|
 | 2.1.1 | POSIX 共享内存真实实现 | zero_copy_databus.cpp | 大 |
 | OPT-A1 | Worker 池按语言分组 | agent_runtime.cpp | 大 |
-| OPT-A3 | Workflow 热替换 | workflow.cpp | 大 |
+| OPT-A3 | MMWorkflow 热替换 | workflow.cpp | 大 |
 | OPT-P3 | ZeroCopyDataBus 分段锁 | zero_copy_databus.cpp | 中 |
 | 2.2.5 | 跨进程消息序列化 | message_serializer.cpp | 大 |
 | 2.2.6 | StorageManager 工厂函数 | storage_manager.cpp | 中 |
@@ -1160,7 +1160,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
 网络模块（Request/Response/PrivateProtocol）在当前阶段不是核心功能，优先级较低。移除该模块以：
 1. 简化核心功能结构
 2. 减少代码维护负担
-3. 专注于 Agent、Workflow、Runtime 等核心模块的完善
+3. 专注于 MMAgent、MMWorkflow、Runtime 等核心模块的完善
 4. 为将来的网络功能设计留出空间
 
 ### 后续计划
@@ -1176,19 +1176,19 @@ set(AGENTFLOW_ADAPTER_SOURCES
 
 **新增内容：**
 - `include/internal/vendor/event_adapter.h` - 事件适配器接口定义
-- 支持将 Agent 运行时事件转换为可观察的事件流
+- 支持将 MMAgent 运行时事件转换为可观察的事件流
 - 提供统一的事件发送和订阅机制
 
 **功能特性：**
-- 事件类型：Agent 生命周期事件（启动、停止、错误等）
+- 事件类型：MMAgent 生命周期事件（启动、停止、错误等）
 - 事件过滤和优先级支持
 - 异步事件处理机制
 
-### Agent 组件完善
+### MMAgent 组件完善
 
 **更新内容：**
-- Agent 组件加强了生命周期管理
-- 改进了 Workflow 任务调度和执行
+- MMAgent 组件加强了生命周期管理
+- 改进了 MMWorkflow 任务调度和执行
 - 完善了错误处理和日志记录机制
 
 ### 示例代码重组
@@ -1200,7 +1200,7 @@ set(AGENTFLOW_ADAPTER_SOURCES
   - `loop_workflow.json` - 循环流程示例
   - `sample_workflow.json` - 基础流程示例
   - `visualizer.html` - 流程可视化工具
-- 目的：统一整理示例代码结构，使 DSL 示例与 Workflow 示例位置更加紧密
+- 目的：统一整理示例代码结构，使 DSL 示例与 MMWorkflow 示例位置更加紧密
 
 **新的目录结构：**
 ```
@@ -1228,9 +1228,9 @@ examples/
 
 | 日期 | 变更 |
 |------|------|
-| 2026-02-21 | 刷新 Agent/Runtime/Workflow 当日优化快照：补充消息链路、master/worker 全局调度、内建 workflow 资产化与全量测试结果（ctest 10/10）并更新下一步优化方向 |
+| 2026-02-21 | 刷新 MMAgent/Runtime/MMWorkflow 当日优化快照：补充消息链路、master/worker 全局调度、内建 workflow 资产化与全量测试结果（ctest 10/10）并更新下一步优化方向 |
 | 2026-02-21 | 新增事件适配器 (Event Adapter) 和示例代码重组：DSL 示例从 examples/dsl 移动到 examples/workflow/dsl |
-| 2026-02-21 | 移除网络模块 (Request/Response/PrivateProtocol) 以简化核心功能结构，优先专注于 Agent、Workflow、Runtime 等核心模块 |
+| 2026-02-21 | 移除网络模块 (Request/Response/PrivateProtocol) 以简化核心功能结构，优先专注于 MMAgent、MMWorkflow、Runtime 等核心模块 |
 | 2026-02-21 | 完成网络协议和Request/Response实现：Protocol Encoder/Decoder、Request/Response类、JSON序列化支持 |
 | 2026-02-18 | 合并 roadmap.md 和 code-review.md 到 planning.md，整合项目规划文档 |
 | 2026-02-17 | 代码完备性评估：修正功能状态标注，标记 stub/不完备功能 |
@@ -1239,7 +1239,7 @@ examples/
 
 ---
 
-## Refactoring Iteration 3 - Agent Framework Enhancement & Build System
+## Refactoring Iteration 3 - MMAgent Framework Enhancement & Build System
 
 ### Overview
 This iteration focuses on enhancing the agent framework with practical examples, improving the publish/build system, and documenting core enhancements made to the node adapter and session management components.
@@ -1248,7 +1248,7 @@ This iteration focuses on enhancing the agent framework with practical examples,
 
 #### 1. Core Enhancements in `src/agent`
 
-**Node Adapter (`node_adapter.cc`, `node_adapter.so`)**
+**MMNode Adapter (`node_adapter.cc`, `node_adapter.so`)**
 - Implemented complete node execution environment for agents
 - Added support for multiple node types: start, end, task, condition, loop
 - Implemented data flow between connected nodes
@@ -1256,7 +1256,7 @@ This iteration focuses on enhancing the agent framework with practical examples,
 - Compiled as shared library (`node_adapter.so`) for runtime loading
 
 **Session Management (`session.h`, `session.cc`)**
-- Implemented `AgentSession` class for managing agent lifecycle
+- Implemented `MMAgentSession` class for managing agent lifecycle
 - Added session state tracking (IDLE, RUNNING, PAUSED, COMPLETED, FAILED)
 - Implemented context preservation across multiple agent invocations
 - Added session storage and retrieval mechanisms
@@ -1287,10 +1287,10 @@ This iteration focuses on enhancing the agent framework with practical examples,
 ```
 examples/agent/
 ├── basic_agent/
-│   ├── package.json          # Agent metadata
+│   ├── package.json          # MMAgent metadata
 │   └── workflow.json         # Basic workflow DSL example
 ├── calculator_agent/
-│   ├── package.json          # Agent metadata
+│   ├── package.json          # MMAgent metadata
 │   ├── workflow.json         # Calculator workflow DSL
 │   └── calc.py              # Python implementation
 └── sample_package/
@@ -1339,7 +1339,7 @@ examples/agent/
 ### Related Components
 
 **Files Modified/Created:**
-- `src/agent/node_adapter.cc` - Node execution engine
+- `src/agent/node_adapter.cc` - MMNode execution engine
 - `src/agent/session.h/cc` - Session management
 - `src/agent/task.h/cc` - Task execution
 - `publish/agent_build.sh` - Enhanced build script
@@ -1369,7 +1369,7 @@ All examples have been validated:
 
 ## 相关文档
 
-- [架构设计](ARCHITECTURE.md) - Framework/Runtime/DataBus 架构
+- [架构设计](ARCHITECTURE.md) - Framework/Runtime/MMDataBus 架构
 - [开发指南](../CONTRIBUTING.md) - 开发和构建说明
 - [测试指南](README.md) - 测试方法
 - [贡献指南](../CONTRIBUTING.md) - 贡献流程
@@ -1378,21 +1378,21 @@ All examples have been validated:
 
 **项目维护者**: @DanielKernel
 
-## Agent 包管理与加载重构 (2026-02-21)
+## MMAgent 包管理与加载重构 (2026-02-21)
 
 ### 功能概述
-为了支持 Agent 的包管理与加载功能，进行了以下重构工作：
-1. **支持目录方式加载 Agent**：
-   - 在 `src/agent` 下新增 `package.h` 和 `package.cpp`，支持解析 `package.json` 和加载 Agent 包目录。
-   - `package.json` 定义了 Agent 的名称、版本、入口点和工作流文件列表。
-2. **简化 Agent 实例化**：
-   - 在 `Agent` 类中新增 `create_from_package` 静态工厂方法，支持直接从目录创建 Agent 实例。
-   - 更新了 `Agent` 类的成员函数，支持加载多个工作流。
+为了支持 MMAgent 的包管理与加载功能，进行了以下重构工作：
+1. **支持目录方式加载 MMAgent**：
+   - 在 `src/agent` 下新增 `package.h` 和 `package.cpp`，支持解析 `package.json` 和加载 MMAgent 包目录。
+   - `package.json` 定义了 MMAgent 的名称、版本、入口点和工作流文件列表。
+2. **简化 MMAgent 实例化**：
+   - 在 `MMAgent` 类中新增 `create_from_package` 静态工厂方法，支持直接从目录创建 MMAgent 实例。
+   - 更新了 `MMAgent` 类的成员函数，支持加载多个工作流。
 3. **构建系统更新**：
    - 更新 `CMakeLists.txt` 链接 `dl` 库，支持动态加载。
    - 新增 `test_agent_loading` 测试目标。
 4. **功能验证**：
-   - 新增 `tests/functional/src/test_agent_loading.cpp` 功能测试，验证 Agent 包加载、生命周期管理和工作流执行。
+   - 新增 `tests/functional/src/test_agent_loading.cpp` 功能测试，验证 MMAgent 包加载、生命周期管理和工作流执行。
    - 修复了 `AgentState` 命名空间引用的编译错误。
 5. **示例增强**：
    - 在 `examples/agent` 目录下新增 `basic_agent` 和 `calculator_agent` 示例包，包含完整的 `package.json` 和 `workflow.json`。
@@ -1411,23 +1411,23 @@ All examples have been validated:
 
 1. **运行时清理**：
    - 移除了未使用的 `src/runtime/network` 目录。
-   - 删除了旧的 `src/runtime/event.cpp` 和 `include/internal/vendor/event/event.h`，将事件管理逻辑合并至 `AgentEvent`。
+   - 删除了旧的 `src/runtime/event.cpp` 和 `include/internal/vendor/event/event.h`，将事件管理逻辑合并至 `MMAgentEvent`。
    - 删除了 `Testing` 目录及冗余的测试目录 (`tests/unit/workflow`, `tests/unit/runtime`, `tests/unit/agent`)。
 
 2. **事件系统增强**：
    - 基于 `libevent` 实现了 `EventAdapter` (`vendor/adapter/event/libevent_adapter.cpp`)。
-   - `AgentEvent` 集成了适配器模式，支持同步和基于 `libevent` 的异步事件分发。
-   - 更新了 `tests/unit/src/test_event_gtest.cpp` 以测试新的 `AgentEvent` 类。
+   - `MMAgentEvent` 集成了适配器模式，支持同步和基于 `libevent` 的异步事件分发。
+   - 更新了 `tests/unit/src/test_event_gtest.cpp` 以测试新的 `MMAgentEvent` 类。
 
-3. **Agent 核心组件增强**：
-   - 实现了 `AgentSession` (会话管理), `AgentTask` (任务管理), `AgentMessages` (消息队列), `AgentContext` (上下文管理)。
-   - `Agent` 类集成所有新组件，并在 `initialize_components` 中统一初始化。
+3. **MMAgent 核心组件增强**：
+   - 实现了 `MMAgentSession` (会话管理), `MMAgentTask` (任务管理), `AgentMessages` (消息队列), `AgentContext` (上下文管理)。
+   - `MMAgent` 类集成所有新组件，并在 `initialize_components` 中统一初始化。
    - 更新了 `src/agent/agent.cpp` 和 `include/external/agent/agent.h`。
 
 4. **示例与目录重构**：
    - 将 `examples/dsl` 目录重构为 `examples/workflow`，包含原来的 DSL 示例和 JSON 工作流文件。
    - 将 `visualizer.html` 移至 `publish/agent` 目录。
-   - 确保 `examples/agent` 包含 Agent 包示例 (`basic_agent`, `calculator_agent`)。
+   - 确保 `examples/agent` 包含 MMAgent 包示例 (`basic_agent`, `calculator_agent`)。
 
 ### 文件变更
 - `src/runtime/event.cpp` (删除)
@@ -1440,10 +1440,10 @@ All examples have been validated:
 - `src/agent/agent.cpp` (更新)
 - `CMakeLists.txt` (更新)
 
-### 2026-02-22 Agent 发布规范重构
+### 2026-02-22 MMAgent 发布规范重构
 
-1. **Agent 包规范落地**
-   - 在 `publish/agent/AGENT_PACKAGE_SPEC.md` 新增 Agent 双层打包规范说明。
+1. **MMAgent 包规范落地**
+   - 在 `publish/agent/AGENT_PACKAGE_SPEC.md` 新增 MMAgent 双层打包规范说明。
    - 在 `publish/agent` 补充 `agent.json`、`workflow_01.json`、`node_demo.sh` 模板。
 
 2. **打包脚本升级**
@@ -1452,25 +1452,25 @@ All examples have been validated:
      - `$xxxAgent_$AGTVER.tar.gz`
 
 3. **开发文档重写**
-   - `publish/README.md` 改为业务 Agent 包开发指南，覆盖 Agent/Workflow/Node 开发流程。
-   - 在 `publish/workflow` 新增 Node 规范与 API 手册：
+   - `publish/README.md` 改为业务 MMAgent 包开发指南，覆盖 MMAgent/MMWorkflow/MMNode 开发流程。
+   - 在 `publish/workflow` 新增 MMNode 规范与 API 手册：
      - `NODE_DEVELOPMENT_SPEC.md`
      - `NODE_API_REFERENCE.md`
 
-4. **Workflow 样例迁移**
+4. **MMWorkflow 样例迁移**
    - `workflow_sample.jsonc` 迁移到 `publish/workflow/workflow_sample.jsonc`。
    - `src/workflow/dsl/README.md` 已更新引用路径。
 
 5. **示例刷新**
    - 更新 `examples/agent/basic_agent` 与 `examples/agent/calculator_agent`，补充规范化示例文件并保留现有加载兼容字段。
 
-### 2026-02-22 Workflow Edge 控制与模式化重构
+### 2026-02-22 MMWorkflow MMEdge 控制与模式化重构
 
-1. **Edge 控制统一化**
-   - 扩展 Edge 配置，新增 `control.type + control.*` 机制，支持 `if/loop/fork/join/async/goto`。
+1. **MMEdge 控制统一化**
+   - 扩展 MMEdge 配置，新增 `control.type + control.*` 机制，支持 `if/loop/fork/join/async/goto`。
    - DSL 解析器支持新控制字段，并保留 `condition_expression` 向 `if` 控制映射的兼容行为。
 
-2. **Workflow 流程能力增强**
+2. **MMWorkflow 流程能力增强**
    - 执行路径增加 edge 控制判断（含 async 软依赖、loop/goto 控制判定）。
    - 工作流图校验与拓扑排序对 `loop/goto` 控制边放宽，支持显式环回流程。
 
@@ -1479,7 +1479,7 @@ All examples have been validated:
    - 新增 `publish/workflow/pattern/parallel_workflow.json`。
    - 新增 `publish/workflow/pattern/cycled_workflow.json`。
 
-4. **Node 模式模板新增**
+4. **MMNode 模式模板新增**
    - `publish/workflow/node_patterns/` 新增问答/API工具/MCP/skills 四类模板文档。
 
 5. **文档同步**
@@ -1488,14 +1488,14 @@ All examples have been validated:
 6. **测试增强**
    - `tests/unit/src/test_workflow_json_gtest.cpp` 增加 edge control 解析与 goto 环回流程解析测试。
 
-### 2026-02-22 Workflow 动态生成与嵌套重构
+### 2026-02-22 MMWorkflow 动态生成与嵌套重构
 
-1. **Node/Workflow Skill 化**
+1. **MMNode/MMWorkflow Skill 化**
    - 新增 `src/workflow/node/skill.md`，定义 node 能力说明、调用方法、输入输出契约。
    - 新增 `src/workflow/dsl/skill.md`，定义 workflow 编排技能、include 调用方式与控制约定。
 
-2. **嵌套 Workflow 支持**
-   - 扩展 `Node::Config`，新增 `workflow_ref` 字段，支持 `type: "workflow"` 节点引用子工作流。
+2. **嵌套 MMWorkflow 支持**
+   - 扩展 `MMNode::Config`，新增 `workflow_ref` 字段，支持 `type: "workflow"` 节点引用子工作流。
    - `WorkflowParser` 支持顶层 `includes`（相对路径）并合并子工作流节点/边。
    - 增加 include 循环引用检测，防止递归 include 造成死循环。
 
@@ -1512,7 +1512,7 @@ All examples have been validated:
    - `./build.sh build` 通过。
    - `./build.sh test` 并行存在热重载波动；串行兜底 `ctest --test-dir build --output-on-failure -j 1` 全量通过。
 
-### 2026-02-22 Workflow 重构后兼容性巡检修复
+### 2026-02-22 MMWorkflow 重构后兼容性巡检修复
 
 1. **Visualizer 新 DSL 兼容修复**
    - 修复 `publish/agent/visualizer.html` 对新 workflow 字段的兼容：
@@ -1543,15 +1543,15 @@ All examples have been validated:
 - 对外头文件发布面收敛：
   - `include/external` 仅保留 node 定制开发接口；
   - 删除 `include/external/agent/agent.h` 与 `include/external/workflow/{workflow.h,edge.h,control_flow.h}`；
-  - `include/internal/agent/agent.h` 承接 Agent 声明能力，保证内部编译路径稳定。
+  - `include/internal/agent/agent.h` 承接 MMAgent 声明能力，保证内部编译路径稳定。
 - 文档与测试：
   - `examples/README.md` 改为 agent 包视角说明，补充 `AgentService.config`、自动加载与请求处理链路说明；
-  - `tests/functional/src/test_agent_loading.cpp` 新增 AgentActor + RuntimeActor 自动加载/注册链路测试（RapidJSON 开启时执行）。
+  - `tests/functional/src/test_agent_loading.cpp` 新增 MMAgentActor + MMRuntimeActor 自动加载/注册链路测试（RapidJSON 开启时执行）。
 
 ## 2026-03-01 SessionTaskCoordinator & Context 分层重构
 
-- `AgentTask` 增加 `workflow_file`，并在任务实例化时透传，供调度阶段做 workflow 一致性校验。
-- `AgentCoordinator` 重命名为 `SessionTaskCoordinator`，作为 session 0 号任务化协调单元，下沉至 `AgentSession` 持有。
+- `MMAgentTask` 增加 `workflow_file`，并在任务实例化时透传，供调度阶段做 workflow 一致性校验。
+- `AgentCoordinator` 重命名为 `SessionTaskCoordinator`，作为 session 0 号任务化协调单元，下沉至 `MMAgentSession` 持有。
 - `AgentContext` 增加可选 `context_workflow` 及默认 `context_updater` 任务。
-- 上下文能力扩展至 `Agent/Session/Task/Node` 四级作用域，缺失 workflow 配置时走默认处理模式。
+- 上下文能力扩展至 `MMAgent/Session/Task/MMNode` 四级作用域，缺失 workflow 配置时走默认处理模式。
 - package 增加可选字段：`agent_context_workflow`、`session_context_workflow`、`task_context_workflow`、`node_context_workflow`。

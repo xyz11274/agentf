@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// Agent Runner - Standalone executable that loads and executes Agent packages
+// MMAgent Runner - Standalone executable that loads and executes MMAgent packages
 // Usage: agent_runner <package_path> [workflow_id] [--execute] [--interactive]
 
 #include <chrono>
@@ -138,10 +138,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    capture_output("=== AgentFlow Agent Runner ===");
+    capture_output("=== AgentFlow MMAgent Runner ===");
     capture_output("Package: " + package_path);
 
-    // 1. Load Agent Package
+    // 1. Load MMAgent Package
     auto package = framework::AgentPackage::load_from_directory(package_path);
     if (!package) {
         capture_output("ERROR: Failed to load agent package");
@@ -167,8 +167,8 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    // 3. Create and initialize Agent
-    auto agent = framework::Agent::create_from_package(package_path);
+    // 3. Create and initialize MMAgent
+    auto agent = framework::MMAgent::create_from_package(package_path);
     if (!agent) {
         capture_output("ERROR: Failed to create agent");
         return 1;
@@ -179,7 +179,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    capture_output("Agent: " + agent->get_name() + " initialized");
+    capture_output("MMAgent: " + agent->get_name() + " initialized");
 
     // 4. List workflows mode
     if (list_workflows) {
@@ -206,11 +206,11 @@ int main(int argc, char* argv[]) {
             workflow_id = pkg_config.coordinator_workflow;
         }
 
-        capture_output("\n=== Executing Workflow: " + workflow_id + " ===");
+        capture_output("\n=== Executing MMWorkflow: " + workflow_id + " ===");
 
         auto workflow = agent->get_workflow(workflow_id);
         if (!workflow) {
-            capture_output("ERROR: Workflow not found: " + workflow_id);
+            capture_output("ERROR: MMWorkflow not found: " + workflow_id);
             return 1;
         }
 
@@ -236,19 +236,19 @@ int main(int argc, char* argv[]) {
             }
 
             // Only execute shell_script nodes
-            if (node->get_execution_mode() == framework::Node::ExecutionMode::SHELL_SCRIPT) {
+            if (node->get_execution_mode() == framework::MMNode::ExecutionMode::SHELL_SCRIPT) {
                 std::string script_path = script_dir + "/" + node->get_command();
 
                 capture_output("[EXEC] " + node_id + ": " + node->get_command());
 
                 if (std::filesystem::exists(script_path)) {
-                    runtime::WorkerEngine::ExecutionRequest request;
-                    request.mode = runtime::WorkerEngine::ExecutionMode::SHELL_SCRIPT;
+                    runtime::MMWorkerEngine::ExecutionRequest request;
+                    request.mode = runtime::MMWorkerEngine::ExecutionMode::SHELL_SCRIPT;
                     request.command = script_path;
                     request.working_dir = script_dir;
                     request.timeout_ms = 5000;
 
-                    auto response = runtime::WorkerEngine::execute_code(request);
+                    auto response = runtime::MMWorkerEngine::execute_code(request);
                     executed_count++;
 
                     if (response.success) {
@@ -277,7 +277,7 @@ int main(int argc, char* argv[]) {
         capture_output("\n--- Execution Summary ---");
         capture_output("Executed: " + std::to_string(executed_count) + " nodes");
         capture_output("Success: " + std::to_string(success_count) + " nodes");
-        capture_output("\n[OK] Workflow execution completed");
+        capture_output("\n[OK] MMWorkflow execution completed");
 
         return (success_count == executed_count) ? 0 : 1;
     }
@@ -285,7 +285,7 @@ int main(int argc, char* argv[]) {
     // 6. Interactive mode - Message-driven execution
     if (interactive) {
         capture_output("\n=== Starting Interactive Mode ===");
-        capture_output("Using message-driven architecture through Agent framework");
+        capture_output("Using message-driven architecture through MMAgent framework");
         capture_output("");
 
         InteractiveRunner::Config runner_config;

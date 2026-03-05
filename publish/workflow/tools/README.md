@@ -1,4 +1,4 @@
-# Built-in Workflow: tools
+# Built-in MMWorkflow: tools
 
 This built-in workflow provides a default MCP/tools invocation flow (select tool -> call tool -> format result).
 

@@ -5,8 +5,8 @@
 using namespace agentflow;
 
 void test_node() {
-  // Test Node creation
-  framework::Node::Config config;
+  // Test MMNode creation
+  framework::MMNode::Config config;
   config.id          = "test_node";
   config.name        = "TestNode";
   config.type        = "test";
@@ -19,7 +19,7 @@ void test_node() {
     return true;
   };
 
-  auto node = std::make_shared<framework::Node>(config);
+  auto node = std::make_shared<framework::MMNode>(config);
 
   // Test getters
   assert(node->get_id() == "test_node");

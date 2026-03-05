@@ -14,13 +14,13 @@ protected:
 };
 
 TEST_F(AgentEventTest, EventCreation) {
-  agentflow::framework::AgentEvent::Config config;
+  agentflow::framework::MMAgentEvent::Config config;
   config.async_dispatch = false;
   
-  agentflow::framework::AgentEvent event_mgr(config);
+  agentflow::framework::MMAgentEvent event_mgr(config);
   
-  agentflow::framework::AgentEvent::EventData event;
-  event.type = agentflow::framework::AgentEvent::EventType::TASK_STARTED;
+  agentflow::framework::MMAgentEvent::EventData event;
+  event.type = agentflow::framework::MMAgentEvent::EventType::TASK_STARTED;
   event.source_id = "agent_1";
   
   EXPECT_TRUE(event_mgr.emit_event(event));
@@ -28,22 +28,22 @@ TEST_F(AgentEventTest, EventCreation) {
 }
 
 TEST_F(AgentEventTest, EventSubscription) {
-  agentflow::framework::AgentEvent::Config config;
+  agentflow::framework::MMAgentEvent::Config config;
   config.async_dispatch = false;
   
-  agentflow::framework::AgentEvent event_mgr(config);
+  agentflow::framework::MMAgentEvent event_mgr(config);
   
   bool received = false;
-  auto listener = [&](const agentflow::framework::AgentEvent::EventData& e) {
-    if (e.type == agentflow::framework::AgentEvent::EventType::MESSAGE_SENT) {
+  auto listener = [&](const agentflow::framework::MMAgentEvent::EventData& e) {
+    if (e.type == agentflow::framework::MMAgentEvent::EventType::MESSAGE_SENT) {
       received = true;
     }
   };
   
-  event_mgr.register_listener(agentflow::framework::AgentEvent::EventType::MESSAGE_SENT, listener);
+  event_mgr.register_listener(agentflow::framework::MMAgentEvent::EventType::MESSAGE_SENT, listener);
   
-  agentflow::framework::AgentEvent::EventData event;
-  event.type = agentflow::framework::AgentEvent::EventType::MESSAGE_SENT;
+  agentflow::framework::MMAgentEvent::EventData event;
+  event.type = agentflow::framework::MMAgentEvent::EventType::MESSAGE_SENT;
   
   event_mgr.emit_event(event);
   
@@ -51,13 +51,13 @@ TEST_F(AgentEventTest, EventSubscription) {
 }
 
 TEST_F(AgentEventTest, EventStoresDescriptionAsDataRef) {
-  agentflow::framework::AgentEvent::Config config;
+  agentflow::framework::MMAgentEvent::Config config;
   config.async_dispatch = false;
-  agentflow::framework::AgentEvent event_mgr(config);
+  agentflow::framework::MMAgentEvent event_mgr(config);
 
-  agentflow::framework::AgentEvent::EventData event;
+  agentflow::framework::MMAgentEvent::EventData event;
   event.event_id = "event-dataref";
-  event.type = agentflow::framework::AgentEvent::EventType::DATA_READY;
+  event.type = agentflow::framework::MMAgentEvent::EventType::DATA_READY;
   event.description = "event-payload";
   event.attributes["agent_id"] = "agent-e";
   ASSERT_TRUE(event_mgr.emit_event(event));

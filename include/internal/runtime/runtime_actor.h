@@ -17,7 +17,7 @@ namespace runtime {
 struct AgentRuntimeReport {
   std::string                      agent_instance_id;
   AgentState                       state = AgentState::CREATED;
-  std::shared_ptr<framework::Agent> agent;
+  std::shared_ptr<framework::MMAgent> agent;
 };
 
 struct TaskRuntimeReport {
@@ -28,25 +28,25 @@ struct TaskRuntimeReport {
 
 struct WorkerRuntimeReport {
   std::string                 worker_id;
-  runtime::WorkerEngine::WorkerStatus status = runtime::WorkerEngine::WorkerStatus::STARTING;
-  std::shared_ptr<WorkerEngine> worker;
+  runtime::MMWorkerEngine::WorkerStatus status = runtime::MMWorkerEngine::WorkerStatus::STARTING;
+  std::shared_ptr<MMWorkerEngine> worker;
 };
 
-class RuntimeActor : public actor::adapter::IActor {
+class MMRuntimeActor : public actor::adapter::IActor {
 public:
-  explicit RuntimeActor(std::shared_ptr<AgentRuntime> runtime);
-  ~RuntimeActor() override = default;
+  explicit MMRuntimeActor(std::shared_ptr<MMAgentRuntime> runtime);
+  ~MMRuntimeActor() override = default;
 
   void on_message(std::shared_ptr<actor::adapter::IContext> ctx) override;
   void on_start() override;
   void on_stop() override;
-  std::string actor_type() const override { return "RuntimeActor"; }
+  std::string actor_type() const override { return "MMRuntimeActor"; }
 
   bool handle_message(const actor::adapter::ActorMessage& msg);
-  std::shared_ptr<AgentRuntime> get_runtime() const { return runtime_; }
+  std::shared_ptr<MMAgentRuntime> get_runtime() const { return runtime_; }
 
 private:
-  std::shared_ptr<AgentRuntime>             runtime_;
+  std::shared_ptr<MMAgentRuntime>             runtime_;
   mutable std::mutex                        mutex_;
   std::unordered_map<std::string, std::string> agent_states_;
   std::unordered_map<std::string, std::string> task_states_;

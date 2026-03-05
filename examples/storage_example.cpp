@@ -27,13 +27,13 @@ int main() {
 
   Logger::instance().info("Storage configured");
 
-  // Create an Agent configuration
-  framework::Agent::Config agent_config;
+  // Create an MMAgent configuration
+  framework::MMAgent::Config agent_config;
   agent_config.id                       = "agent_001";
-  agent_config.name                     = "Example Agent";
+  agent_config.name                     = "Example MMAgent";
   agent_config.version                  = "1.0";
   agent_config.description              = "An example agent for testing";
-  agent_config.policy                   = framework::Agent::LifecyclePolicy::FACTORY;
+  agent_config.policy                   = framework::MMAgent::LifecyclePolicy::FACTORY;
   agent_config.max_workflows            = 5;
   agent_config.max_concurrent_workflows = 3;
 
@@ -45,14 +45,14 @@ int main() {
   version_info.author      = "AgentFlow System";
   version_info.commit_id   = "abc123";
 
-  // Create Agent instance
-  auto agent = std::make_shared<framework::Agent>(agent_config);
+  // Create MMAgent instance
+  auto agent = std::make_shared<framework::MMAgent>(agent_config);
 
   // Save the agent
   auto result = agent->save(config, version_info);
 
   if(result.is_success()) {
-    Logger::instance().info("Agent saved successfully: " + agent_config.id);
+    Logger::instance().info("MMAgent saved successfully: " + agent_config.id);
   } else {
     Logger::instance().error("Failed to save agent: " + result.message);
     // Don't return 1 here as directory might not exist yet if not created by save
@@ -60,11 +60,11 @@ int main() {
   }
 
   // Load the agent
-  std::shared_ptr<framework::Agent> loaded_agent;
-  result = framework::Agent::load("agent_001", config, loaded_agent);
+  std::shared_ptr<framework::MMAgent> loaded_agent;
+  result = framework::MMAgent::load("agent_001", config, loaded_agent);
 
   if(result.is_success() && loaded_agent) {
-    Logger::instance().info("Agent loaded successfully: " + loaded_agent->get_name());
+    Logger::instance().info("MMAgent loaded successfully: " + loaded_agent->get_name());
     Logger::instance().info("  Version: " + loaded_agent->get_config().version);
     Logger::instance().info("  Description: " + loaded_agent->get_config().description);
   } else {
@@ -73,7 +73,7 @@ int main() {
 
   // List agents
   std::vector<std::string> agent_ids;
-  result = framework::Agent::list_agents(config, agent_ids);
+  result = framework::MMAgent::list_agents(config, agent_ids);
 
   if(result.is_success()) {
     Logger::instance().info("Found " + std::to_string(agent_ids.size()) + " agent(s):");
@@ -84,45 +84,45 @@ int main() {
 
   // Get agent metadata
   framework::AgentMetadata metadata;
-  result = framework::Agent::get_metadata("agent_001", config, metadata);
+  result = framework::MMAgent::get_metadata("agent_001", config, metadata);
   if(result.is_success()) {
-    Logger::instance().info("Agent metadata:");
+    Logger::instance().info("MMAgent metadata:");
     Logger::instance().info("  Updated at: " + std::to_string(metadata.updated_at));
   }
 
   // Create a workflow configuration
-  framework::Workflow::Config workflow_config;
+  framework::MMWorkflow::Config workflow_config;
   workflow_config.id          = "workflow_001";
-  workflow_config.name        = "Example Workflow";
+  workflow_config.name        = "Example MMWorkflow";
   workflow_config.version     = "1.0";
   workflow_config.description = "An example workflow for testing";
   workflow_config.dsl_file    = "workflows/example.json";
 
-  // Create Workflow instance
-  auto workflow = std::make_shared<framework::Workflow>(workflow_config);
+  // Create MMWorkflow instance
+  auto workflow = std::make_shared<framework::MMWorkflow>(workflow_config);
 
   // Save the workflow
   result = workflow->save(config, version_info);
 
   if(result.is_success()) {
-    Logger::instance().info("Workflow saved successfully: " + workflow_config.id);
+    Logger::instance().info("MMWorkflow saved successfully: " + workflow_config.id);
   } else {
     Logger::instance().error("Failed to save workflow: " + result.message);
   }
 
   // Load the workflow
-  std::shared_ptr<framework::Workflow> loaded_workflow;
-  result = framework::Workflow::load("workflow_001", config, loaded_workflow);
+  std::shared_ptr<framework::MMWorkflow> loaded_workflow;
+  result = framework::MMWorkflow::load("workflow_001", config, loaded_workflow);
 
   if(result.is_success() && loaded_workflow) {
-    Logger::instance().info("Workflow loaded successfully: " + loaded_workflow->get_name());
+    Logger::instance().info("MMWorkflow loaded successfully: " + loaded_workflow->get_name());
   } else {
     Logger::instance().error("Failed to load workflow: " + result.message);
   }
 
   // List workflows
   std::vector<std::string> workflow_ids;
-  result = framework::Workflow::list_workflows(config, workflow_ids);
+  result = framework::MMWorkflow::list_workflows(config, workflow_ids);
 
   if(result.is_success()) {
     Logger::instance().info("Found " + std::to_string(workflow_ids.size()) + " workflow(s):");
