@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <cctype>
+#include <cstdlib>
 #include <csignal>
 #include <cstring>
 #include <filesystem>
@@ -122,6 +123,12 @@ class ConversationStore {
     return oss.str();
   }
 
+  bool clear_session(const std::string& session_id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::error_code ec;
+    return std::filesystem::remove(file_for(session_id), ec) || !std::filesystem::exists(file_for(session_id));
+  }
+
  private:
   std::filesystem::path file_for(const std::string& session_id) const {
     return root_ / (sanitize_session_id(session_id) + ".jsonl");
@@ -156,32 +163,54 @@ class ChatAgentBridge {
     return true;
   }
 
+  const std::string& package_path() const { return package_path_; }
+
   std::string execute(const std::string& workflow_id, const std::string& payload) {
     std::lock_guard<std::mutex> lock(mutex_);
+    auto& bus = runtime_->get_databus(agent_->get_id());
+    for (const std::string& key : {"final_response", "response", "output", "result", "stdout",
+                                   "default-dispatcher-workflow.reply.stdout",
+                                   "default-dispatcher-workflow.pipeline.stdout",
+                                   "default-coordinator-workflow.reply.stdout"}) {
+      bus.remove(key);
+    }
+    std::filesystem::remove(std::filesystem::path(package_path_) / "runtime" / "final_response.txt");
     DataMap inputs;
     inputs["input"] = payload;
     if (!runtime_->execute_workflow(agent_->get_id(), workflow_id, inputs)) {
       return "[error] failed to execute workflow";
     }
+    int max_wait_sec = 45;
+    if (const char* timeout_env = std::getenv("CHAT_WORKFLOW_TIMEOUT_SEC"); timeout_env && *timeout_env) {
+      try {
+        max_wait_sec = std::max(5, std::stoi(timeout_env));
+      } catch (...) {
+      }
+    }
     auto start = std::chrono::steady_clock::now();
-    while (runtime_->get_running_nodes() > 0) {
-      if (std::chrono::steady_clock::now() - start > std::chrono::seconds(8)) {
-        return "[error] execution timeout";
+    while (std::chrono::steady_clock::now() - start < std::chrono::seconds(max_wait_sec)) {
+      for (const std::string& key : {"final_response", "response", "output", "result", "stdout",
+                                     "default-dispatcher-workflow.reply.stdout",
+                                     "default-dispatcher-workflow.pipeline.stdout",
+                                     "default-coordinator-workflow.reply.stdout"}) {
+        DataVariant value;
+        if (bus.get(key, value) && std::holds_alternative<std::string>(value)) {
+          std::string text = std::get<std::string>(value);
+          if (!text.empty()) {
+            return text;
+          }
+        }
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    auto& bus = runtime_->get_databus(agent_->get_id());
-    std::ostringstream oss;
-    for (const std::string& key : {"output", "result", "response"}) {
-      DataVariant value;
-      if (bus.get(key, value) && std::holds_alternative<std::string>(value)) {
-        oss << std::get<std::string>(value);
+    {
+      std::ifstream in(std::filesystem::path(package_path_) / "runtime" / "final_response.txt");
+      std::string from_file;
+      if (in.is_open() && std::getline(in, from_file) && !from_file.empty()) {
+        return from_file;
       }
     }
-    if (oss.str().empty()) {
-      return "[ok] processed";
-    }
-    return oss.str();
+    return "[error] workflow timeout or no response produced";
   }
 
  private:
@@ -386,6 +415,24 @@ std::string mime_type_for(const std::string& path) {
   return "text/plain; charset=utf-8";
 }
 
+std::string url_decode(const std::string& s) {
+  std::string out;
+  out.reserve(s.size());
+  for (size_t i = 0; i < s.size(); ++i) {
+    if (s[i] == '%' && i + 2 < s.size()) {
+      int hi = std::isdigit(s[i + 1]) ? s[i + 1] - '0' : (std::tolower(s[i + 1]) - 'a' + 10);
+      int lo = std::isdigit(s[i + 2]) ? s[i + 2] - '0' : (std::tolower(s[i + 2]) - 'a' + 10);
+      if (hi >= 0 && hi < 16 && lo >= 0 && lo < 16) {
+        out.push_back(static_cast<char>(hi * 16 + lo));
+        i += 2;
+        continue;
+      }
+    }
+    out.push_back(s[i] == '+' ? ' ' : s[i]);
+  }
+  return out;
+}
+
 int create_listen_socket(const std::string& host, int port) {
   int fd = socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) {
@@ -505,14 +552,59 @@ void run_http_server(const std::string& host, int port, const std::filesystem::p
       std::string workflow_id = json_field("workflow_id");
       if (workflow_id.empty()) workflow_id = "default-dispatcher-workflow";
       store.append(session_id, "user", text);
+      {
+        std::filesystem::create_directories(std::filesystem::path(bridge.package_path()) / "runtime");
+        std::ofstream latest(std::filesystem::path(bridge.package_path()) / "runtime" /
+                                 "latest_user_input.txt",
+                             std::ios::trunc);
+        latest << text;
+        std::ofstream latest_sid(std::filesystem::path(bridge.package_path()) / "runtime" /
+                                     "latest_session_id.txt",
+                                 std::ios::trunc);
+        latest_sid << session_id;
+      }
       std::string history = store.recent_as_json(session_id, 12);
       std::string payload = "session=" + session_id + "\nuser=" + text + "\nhistory=" + history;
       std::string result = bridge.execute(workflow_id, payload);
       store.append(session_id, "assistant", result);
       std::ostringstream payload_json;
-      payload_json << "{\"session_id\":\"" << json_escape(session_id) << "\",\"text\":\""
-                   << json_escape(result) << "\"}";
+      payload_json << "{\"type\":\"message\",\"role\":\"assistant\",\"session_id\":\""
+                   << json_escape(session_id) << "\",\"text\":\"" << json_escape(result) << "\"}";
       auto json = payload_json.str();
+      std::ostringstream resp;
+      resp << "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " << json.size()
+           << "\r\n\r\n" << json;
+      auto s = resp.str();
+      send_all(client, s.data(), s.size());
+      close(client);
+      continue;
+    }
+    if ((method == "GET" || method == "DELETE") && uri.rfind("/api/history", 0) == 0) {
+      std::string session_id = "webui:default";
+      size_t limit = 50;
+      size_t q = uri.find('?');
+      if (q != std::string::npos) {
+        std::istringstream qs(uri.substr(q + 1));
+        std::string pair;
+        while (std::getline(qs, pair, '&')) {
+          size_t eq = pair.find('=');
+          if (eq == std::string::npos) continue;
+          std::string k = pair.substr(0, eq);
+          std::string v = url_decode(pair.substr(eq + 1));
+          if (k == "session_id" && !v.empty()) {
+            session_id = v;
+          } else if (k == "limit" && !v.empty()) {
+            limit = static_cast<size_t>(std::stoul(v));
+          }
+        }
+      }
+      std::string json;
+      if (method == "DELETE") {
+        bool ok = store.clear_session(session_id);
+        json = ok ? "{\"ok\":true}" : "{\"ok\":false}";
+      } else {
+        json = store.recent_as_json(session_id, limit);
+      }
       std::ostringstream resp;
       resp << "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " << json.size()
            << "\r\n\r\n" << json;
@@ -668,13 +760,32 @@ void handle_ws_client(int client_fd, ChatAgentBridge& bridge, ConversationStore&
     if (workflow_id.empty()) workflow_id = "default-dispatcher-workflow";
 
     store.append(session_id, "user", text);
+    {
+      std::filesystem::create_directories(std::filesystem::path(bridge.package_path()) / "runtime");
+      std::ofstream latest(std::filesystem::path(bridge.package_path()) / "runtime" /
+                               "latest_user_input.txt",
+                           std::ios::trunc);
+      latest << text;
+      std::ofstream latest_sid(std::filesystem::path(bridge.package_path()) / "runtime" /
+                                   "latest_session_id.txt",
+                               std::ios::trunc);
+      latest_sid << session_id;
+    }
+    {
+      std::ostringstream user_evt;
+      user_evt << "{\"type\":\"message\",\"role\":\"user\",\"session_id\":\"" << json_escape(session_id)
+               << "\",\"text\":\"" << json_escape(text) << "\"}";
+      if (!send_ws_text_frame(client_fd, user_evt.str())) {
+        break;
+      }
+    }
     std::string history = store.recent_as_json(session_id, 12);
     std::string payload = "session=" + session_id + "\nuser=" + text + "\nhistory=" + history;
     std::string result = bridge.execute(workflow_id, payload);
     store.append(session_id, "assistant", result);
 
     std::ostringstream response;
-    response << "{\"type\":\"message\",\"session_id\":\"" << json_escape(session_id)
+    response << "{\"type\":\"message\",\"role\":\"assistant\",\"session_id\":\"" << json_escape(session_id)
              << "\",\"text\":\"" << json_escape(result) << "\"}";
     if (!send_ws_text_frame(client_fd, response.str())) {
       break;

@@ -3,7 +3,7 @@
   "version": "1.0",
   "name": "default-dispatcher-workflow",
   "nodes": [
-    {"id": "broadcast", "name": "broadcast-to-all", "type": "task", "execution_mode": "shell_script", "command": "scripts/default_dispatch_broadcast.sh"}
+    {"id": "pipeline", "name": "run-chat-pipeline", "type": "task", "execution_mode": "shell_script", "command": "examples/multi_session_chat/package/scripts/run_full_pipeline.sh"}
   ],
   "edges": []
 }

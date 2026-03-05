@@ -3,9 +3,9 @@
   "version": "1.0",
   "name": "session-dispatcher-workflow",
   "nodes": [
-    {"id": "load_context", "name": "load-session-context", "type": "task", "execution_mode": "shell_script", "command": "scripts/session_context_pipeline.sh"},
-    {"id": "select_skill", "name": "select-skill-via-llm", "type": "task", "execution_mode": "shell_script", "command": "scripts/select_skill.sh"},
-    {"id": "create_task", "name": "create-skill-task-disabled", "type": "task", "execution_mode": "shell_script", "command": "scripts/create_skill_task.sh"}
+    {"id": "load_context", "name": "load-session-context", "type": "task", "execution_mode": "shell_script", "command": "examples/multi_session_chat/package/scripts/session_context_pipeline.sh"},
+    {"id": "select_skill", "name": "select-skill-via-llm", "type": "task", "execution_mode": "shell_script", "command": "examples/multi_session_chat/package/scripts/select_skill.sh"},
+    {"id": "create_task", "name": "create-skill-task-disabled", "type": "task", "execution_mode": "shell_script", "command": "examples/multi_session_chat/package/scripts/create_skill_task.sh"}
   ],
   "edges": [
     {"id": "e1", "source": "load_context", "target": "select_skill"},

@@ -1,1 +1,1 @@
-{"id":"skill-search-workflow","version":"1.0","name":"skill-search-workflow","nodes":[{"id":"n1","name":"online-search","type":"task","execution_mode":"shell_script","command":"scripts/skill_search.sh"}],"edges":[]}
+{"id":"skill-search-workflow","version":"1.0","name":"skill-search-workflow","nodes":[{"id":"n1","name":"online-search","type":"task","execution_mode":"shell_script","command": "examples/multi_session_chat/package/scripts/skill_search.sh"}],"edges":[]}

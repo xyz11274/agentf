@@ -3,7 +3,9 @@
 #include <sys/time.h>
 
 #include <algorithm>
+#include <cctype>
 #include <sstream>
+#include <type_traits>
 
 #include "utils/logger.h"
 
@@ -21,6 +23,40 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
   exec_config.inputs      = request.inputs;
   exec_config.working_dir = request.working_dir;
   exec_config.timeout_ms  = request.timeout_ms > 0 ? request.timeout_ms : 30000;
+  auto to_env_suffix = [](const std::string& key) {
+    std::string out;
+    out.reserve(key.size());
+    for(char ch : key) {
+      unsigned char uch = static_cast<unsigned char>(ch);
+      if(std::isalnum(uch)) {
+        out.push_back(static_cast<char>(std::toupper(uch)));
+      } else {
+        out.push_back('_');
+      }
+    }
+    return out;
+  };
+  auto variant_to_string = [](const DataVariant& value) -> std::string {
+    return std::visit(
+        [](const auto& arg) -> std::string {
+          using T = std::decay_t<decltype(arg)>;
+          if constexpr(std::is_same_v<T, std::string>) {
+            return arg;
+          } else if constexpr(std::is_same_v<T, bool>) {
+            return arg ? "true" : "false";
+          } else if constexpr(std::is_arithmetic_v<T>) {
+            std::ostringstream oss;
+            oss << arg;
+            return oss.str();
+          }
+          return "";
+        },
+        value);
+  };
+  for(const auto& pair : request.inputs) {
+    std::string env_key = "AF_" + to_env_suffix(pair.first);
+    exec_config.env_vars.push_back(env_key + "=" + variant_to_string(pair.second));
+  }
 
   auto& code_loader = runtime::global_code_loader();
   if(request.enable_hot_reload) {

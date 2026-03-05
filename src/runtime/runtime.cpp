@@ -319,7 +319,7 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
 
   // Initialize all nodes to READY state
   for(const auto& node : workflow->get_nodes()) {
-    if(node->get_state() != NodeState::WAITING && node->get_state() != NodeState::READY) {
+    if(node->get_state() != NodeState::READY) {
       node->set_state(NodeState::READY);
       if(!node->initialize()) {
         Logger::instance().error_f("Failed to initialize node: %s", node->get_name().c_str());
@@ -375,6 +375,22 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
         node->get_name().c_str(), duration);
   }
 
+  // Publish node outputs for downstream consumers (bridge/UI/orchestration scripts).
+  const DataMap& node_outputs = node->get_outputs();
+  if(!node_outputs.empty()) {
+    auto& bus = get_databus(agent->get_id());
+    for(const auto& out : node_outputs) {
+      agent->publish_data(out.first, out.second);
+      bus.put(out.first, out.second);
+      if(workflow) {
+        std::string scoped_key = workflow->get_id() + "." + node->get_id() + "." + out.first;
+        agent->publish_data(scoped_key, out.second);
+        bus.put(scoped_key, out.second);
+      }
+    }
+  }
+
+  bool node_success = (node->get_state() == NodeState::SUCCESS);
   node->cleanup();
 
   // [DEBUG] Log node cleanup
@@ -383,15 +399,19 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
                              node->get_id().c_str());
 
   // Find execution state and update it
+  std::string matched_execution_id;
   {
     std::lock_guard<std::mutex> lock(workflow_state_mutex_);
-    for(auto& pair : workflow_states_) {
+    for(const auto& pair : workflow_states_) {
       if(pair.second.agent_id == agent->get_id() && pair.second.in_progress
          && (workflow ? pair.second.workflow_id == workflow->get_id() : true)) {
-        update_workflow_state(pair.first, node->get_id(), node->get_state() == NodeState::SUCCESS);
+        matched_execution_id = pair.first;
         break;
       }
     }
+  }
+  if(!matched_execution_id.empty()) {
+    update_workflow_state(matched_execution_id, node->get_id(), node_success);
   }
 }
 
@@ -442,62 +462,68 @@ void MMAgentRuntime::schedule_workflow_executable_nodes(const std::string& execu
 
 void MMAgentRuntime::update_workflow_state(const std::string& execution_id, const NodeId& node_id,
                                          bool success) {
-  std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+  bool        invoke_complete = false;
+  bool        complete_ok     = false;
+  std::string complete_agent;
+  std::string complete_workflow;
 
-  auto it = workflow_states_.find(execution_id);
-  if(it == workflow_states_.end()) {
-    return;
-  }
+  {
+    std::lock_guard<std::mutex> lock(workflow_state_mutex_);
 
-  auto& state = it->second;
-
-  if(success) {
-    state.completed_nodes[node_id] = true;
-    state.completed_count++;
-  } else {
-    state.failed_nodes[node_id] = true;
-  }
-
-  Logger::instance().info_f("MMWorkflow progress: %s - %d/%d completed, %zu failed",
-                            execution_id.c_str(), state.completed_count, state.total_nodes,
-                            state.failed_nodes.size());
-
-  // Check if workflow is complete
-  if(state.completed_count + static_cast<int>(state.failed_nodes.size()) >= state.total_nodes) {
-    state.in_progress = false;
-
-    if(state.failed_nodes.empty()) {
-      Logger::instance().info_f("MMWorkflow execution completed successfully: %s",
-                                state.workflow_id.c_str());
-      on_workflow_complete(state.agent_id, state.workflow_id, true);
-    } else {
-      Logger::instance().error_f("MMWorkflow execution failed: %s (%zu nodes failed)",
-                                 state.workflow_id.c_str(), state.failed_nodes.size());
-      on_workflow_complete(state.agent_id, state.workflow_id, false);
+    auto it = workflow_states_.find(execution_id);
+    if(it == workflow_states_.end()) {
+      return;
     }
-  } else if(success) {
-    // Schedule next batch of executable nodes
-    auto agent = get_agent(state.agent_id);
-    if(agent) {
-      auto workflow = agent->get_workflow(state.workflow_id);
-      if(workflow) {
-        // Mark node as executed in workflow graph
-        workflow->mark_node_executed(node_id, true);
 
-        // Get next executable nodes and enqueue them
-        auto next_nodes = workflow->get_executable_nodes();
-        if(!next_nodes.empty()) {
-          std::lock_guard<std::mutex> task_lock(task_queue_mutex_);
-          for(const auto& next_id : next_nodes) {
-            auto next_node = workflow->get_node(next_id);
-            if(next_node && next_node->get_state() == NodeState::READY) {
-              node_task_queue_.push({ agent, next_node });
+    auto& state = it->second;
+
+    if(success) {
+      state.completed_nodes[node_id] = true;
+      state.completed_count++;
+    } else {
+      state.failed_nodes[node_id] = true;
+    }
+
+    Logger::instance().info_f("MMWorkflow progress: %s - %d/%d completed, %zu failed",
+                              execution_id.c_str(), state.completed_count, state.total_nodes,
+                              state.failed_nodes.size());
+
+    if(state.completed_count + static_cast<int>(state.failed_nodes.size()) >= state.total_nodes) {
+      state.in_progress   = false;
+      invoke_complete     = true;
+      complete_ok         = state.failed_nodes.empty();
+      complete_agent      = state.agent_id;
+      complete_workflow   = state.workflow_id;
+    } else if(success) {
+      auto agent = get_agent(state.agent_id);
+      if(agent) {
+        auto workflow = agent->get_workflow(state.workflow_id);
+        if(workflow) {
+          workflow->mark_node_executed(node_id, true);
+          auto next_nodes = workflow->get_executable_nodes();
+          if(!next_nodes.empty()) {
+            std::lock_guard<std::mutex> task_lock(task_queue_mutex_);
+            for(const auto& next_id : next_nodes) {
+              auto next_node = workflow->get_node(next_id);
+              if(next_node && next_node->get_state() == NodeState::READY) {
+                node_task_queue_.push({ agent, next_node });
+              }
             }
+            g_worker_cv.notify_all();
           }
-          g_worker_cv.notify_all();
         }
       }
     }
+  }
+
+  if(invoke_complete) {
+    if(complete_ok) {
+      Logger::instance().info_f("MMWorkflow execution completed successfully: %s",
+                                complete_workflow.c_str());
+    } else {
+      Logger::instance().error_f("MMWorkflow execution failed: %s", complete_workflow.c_str());
+    }
+    on_workflow_complete(complete_agent, complete_workflow, complete_ok);
   }
 }
 

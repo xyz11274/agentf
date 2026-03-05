@@ -868,18 +868,51 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
   Logger::instance().debug_f("[CODE_LOADER] Executing command: %s (timeout_ms=%d)", command.c_str(),
                              timeout_ms);
 
-  // Build final command with timeout wrapper if needed
-  // Always redirect stderr to stdout so we can capture both
-  std::string final_command = "(" + command + ") 2>&1";
+  auto shell_escape_single = [](const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for(char ch : s) {
+      if(ch == '\'') {
+        out += "'\\''";
+      } else {
+        out += ch;
+      }
+    }
+    return out;
+  };
+  std::string prepared_command = command;
+  if(!working_dir.empty()) {
+    prepared_command =
+        "cd '" + shell_escape_single(working_dir) + "' && (" + prepared_command + ")";
+  }
+  if(!env_vars.empty()) {
+    std::ostringstream env_prefix;
+    for(const auto& env : env_vars) {
+      size_t eq = env.find('=');
+      if(eq == std::string::npos || eq == 0) {
+        continue;
+      }
+      std::string key = env.substr(0, eq);
+      std::string val = env.substr(eq + 1);
+      env_prefix << key << "='" << shell_escape_single(val) << "' ";
+    }
+    std::string exports = env_prefix.str();
+    if(!exports.empty()) {
+      prepared_command = "export " + exports + "; " + prepared_command;
+    }
+  }
+
+  // Build final command with timeout wrapper if needed.
+  std::string final_command = "(" + prepared_command + ") 2>&1";
   
-  if(timeout_ms > 0) {
+  if(false && timeout_ms > 0) {
     // Use a simple bash wrapper that implements timeout using background sleep + kill
     int timeout_secs = (timeout_ms + 999) / 1000;  // Round up to seconds
 
     std::ostringstream oss;
     // Wrapper: run command in background and kill it if timeout expires
     // Note: stderr is already redirected to stdout in the command above
-    oss << "sh -c '((" << command << ") 2>&1) & PID=$!; "
+    oss << "sh -c '( " << prepared_command << " ) & PID=$!; "
         << "(sleep " << timeout_secs << "; kill -KILL $PID 2>/dev/null) & SLEEP_PID=$!; "
         << "wait $PID; "
         << "exit_code=$?; "

@@ -19,14 +19,35 @@ cleanup(){ kill "$SERVER_PID" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 sleep 1
 
-curl -sf "http://127.0.0.1:18088/" >/tmp/multichat_index.html
-curl -sf -X POST "http://127.0.0.1:18088/api/chat" \
+curl --noproxy "*" -sf "http://127.0.0.1:18088/" >/tmp/multichat_index.html
+curl --noproxy "*" -sf -X POST "http://127.0.0.1:18088/api/chat" \
   -H 'Content-Type: application/json' \
   -d '{"session_id":"webui:default","text":"hello","workflow_id":"default-dispatcher-workflow"}' \
   >/tmp/multichat_chat.json
+curl --noproxy "*" -sf -X POST "http://127.0.0.1:18088/api/chat" \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id":"webui:default","text":"请帮我总结一下上条消息","workflow_id":"default-dispatcher-workflow"}' \
+  >/tmp/multichat_chat2.json
+curl --noproxy "*" -sf "http://127.0.0.1:18088/api/history?session_id=webui%3Adefault&limit=20" \
+  >/tmp/multichat_history.json
 
 if ! grep -q "session_id" /tmp/multichat_chat.json; then
   echo "chat API failed"
+  exit 1
+fi
+
+if grep -q "\\[ok\\] processed" /tmp/multichat_chat.json; then
+  echo "chat API returned placeholder response"
+  exit 1
+fi
+
+if ! grep -q '"text":"' /tmp/multichat_chat2.json; then
+  echo "second round chat failed"
+  exit 1
+fi
+
+if ! grep -q '"role":"assistant"' /tmp/multichat_history.json; then
+  echo "history API missing assistant messages"
   exit 1
 fi
 
@@ -37,6 +58,11 @@ fi
 
 if ! grep -q '"role":"user"' "$LOG_DIR"/webui_default.jsonl; then
   echo "user message not persisted"
+  exit 1
+fi
+
+if ! grep -q '"role":"assistant"' "$LOG_DIR"/webui_default.jsonl; then
+  echo "assistant message not persisted"
   exit 1
 fi
 

@@ -1,11 +1,14 @@
 #include "workflow/node.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstring>
 #include <functional>
 #include <memory>
+#include <sstream>
 #include <thread>
+#include <type_traits>
 
 #include "runtime/worker.h"
 #include "agent/context.h"
@@ -814,6 +817,40 @@ bool MMNode::execute_script(runtime::ExecutableType type) {
     exec_config.inputs      = inputs_;
     exec_config.working_dir = config_.working_dir;
     exec_config.timeout_ms  = config_.timeout_ms > 0 ? config_.timeout_ms : 30000;
+    auto to_env_suffix = [](const std::string& key) {
+      std::string out;
+      out.reserve(key.size());
+      for(char ch : key) {
+        unsigned char uch = static_cast<unsigned char>(ch);
+        if(std::isalnum(uch)) {
+          out.push_back(static_cast<char>(std::toupper(uch)));
+        } else {
+          out.push_back('_');
+        }
+      }
+      return out;
+    };
+    auto variant_to_string = [](const DataVariant& value) -> std::string {
+      return std::visit(
+          [](const auto& arg) -> std::string {
+            using T = std::decay_t<decltype(arg)>;
+            if constexpr(std::is_same_v<T, std::string>) {
+              return arg;
+            } else if constexpr(std::is_same_v<T, bool>) {
+              return arg ? "true" : "false";
+            } else if constexpr(std::is_arithmetic_v<T>) {
+              std::ostringstream oss;
+              oss << arg;
+              return oss.str();
+            }
+            return "";
+          },
+          value);
+    };
+    for(const auto& pair : inputs_) {
+      std::string env_key = "AF_" + to_env_suffix(pair.first);
+      exec_config.env_vars.push_back(env_key + "=" + variant_to_string(pair.second));
+    }
 
     runtime::ExecutionResult result;
 
