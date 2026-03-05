@@ -1,0 +1,30 @@
+{
+  "name": "multi-session-chat-agent",
+  "version": "1.0.0",
+  "description": "AgentFlow multi-round conversation example with 4 precreated sessions",
+  "workflows": [
+    "default_dispatcher_workflow.json",
+    "default_coordinator_workflow.json",
+    "session_context_workflow.json",
+    "session_dispatcher_workflow.json",
+    "skill_search_workflow.json",
+    "skill_summary_workflow.json",
+    "skill_date_workflow.json",
+    "skill_delegate_workflow.json"
+  ],
+  "dispatcher_workflow": "default-dispatcher-workflow",
+  "coordinator_workflow": "default-coordinator-workflow",
+  "task_workflows": {
+    "0": "session-dispatcher-workflow",
+    "1": "default-coordinator-workflow",
+    "skill_search": "skill-search-workflow",
+    "skill_summary": "skill-summary-workflow",
+    "skill_date": "skill-date-workflow",
+    "skill_delegate": "skill-delegate-workflow"
+  },
+  "session_context_workflow": "session-context-workflow",
+  "metadata": {
+    "example": "true",
+    "websocket": "true"
+  }
+}

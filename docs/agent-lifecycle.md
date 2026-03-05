@@ -728,6 +728,20 @@ sequenceDiagram
   - `task1`：coordinator（优先 `coordinator_workflow`）
 - 默认 session、预创建 session、动态 session 均采用同一 task0/task1 初始化策略。
 
+### 7.2 多轮对话样例（WebSocket + 多 Session 协作）
+
+- 参考样例：
+  - `examples/multi_session_chat/server/chat_server.cpp`
+  - `examples/multi_session_chat/server/webui/index.html`
+  - `examples/multi_session_chat/package/`
+- 样例采用 Agent 包驱动，`agent.json` 配置 `precreate_session_count=4`，并通过:
+  - `dispatcher_workflow`（task0）
+  - `coordinator_workflow`（task1）
+  - `session_context_workflow`
+  组织多 session 协作对话。
+- LLM 调用约定为 OpenAI Chat Completions 兼容协议，支持 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL` 环境变量。
+- 对话管理模块将消息持久化到 session 文件，用于后续 context 汇总与压缩。
+
 ---
 
 *文档生成时间：2026-02-27*

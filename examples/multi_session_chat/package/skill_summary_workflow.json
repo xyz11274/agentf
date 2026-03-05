@@ -1,0 +1,1 @@
+{"id":"skill-summary-workflow","version":"1.0","name":"skill-summary-workflow","nodes":[{"id":"n1","name":"result-summary","type":"task","execution_mode":"shell_script","command":"scripts/skill_summary.sh"}],"edges":[]}

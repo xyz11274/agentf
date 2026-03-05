@@ -1,0 +1,14 @@
+{
+  "id": "default-coordinator-workflow",
+  "version": "1.0",
+  "name": "default-coordinator-workflow",
+  "nodes": [
+    {"id": "collect", "name": "collect-selected-skills", "type": "task", "execution_mode": "shell_script", "command": "scripts/collect_selected_skills.sh"},
+    {"id": "plan", "name": "llm-plan-dependencies", "type": "task", "execution_mode": "shell_script", "command": "scripts/plan_dependencies.sh"},
+    {"id": "apply", "name": "apply-task-status", "type": "task", "execution_mode": "shell_script", "command": "scripts/apply_task_plan.sh"}
+  ],
+  "edges": [
+    {"id": "c1", "source": "collect", "target": "plan"},
+    {"id": "c2", "source": "plan", "target": "apply"}
+  ]
+}

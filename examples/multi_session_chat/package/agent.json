@@ -1,0 +1,19 @@
+{
+  "name": "MultiSessionChatAgent",
+  "version": "1.0.0",
+  "description": "Multi-session chat orchestration agent package",
+  "workflows": [
+    "default_dispatcher_workflow.json",
+    "default_coordinator_workflow.json",
+    "session_context_workflow.json",
+    "session_dispatcher_workflow.json",
+    "skill_search_workflow.json",
+    "skill_summary_workflow.json",
+    "skill_date_workflow.json",
+    "skill_delegate_workflow.json"
+  ],
+  "precreate_session_count": 4,
+  "dispatcher_workflow": "default-dispatcher-workflow",
+  "coordinator_workflow": "default-coordinator-workflow",
+  "session_context_workflow": "session-context-workflow"
+}

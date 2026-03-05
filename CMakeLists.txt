@@ -449,6 +449,10 @@ add_executable(agent_runner
 )
 target_link_libraries(agent_runner PRIVATE agentflow)
 
+# Chat server example (C++ standalone HTTP + WebSocket)
+add_executable(example_chat_server ${AGENTFLOW_EXAMPLE_DIR}/multi_session_chat/server/chat_server.cpp)
+target_link_libraries(example_chat_server PRIVATE agentflow)
+
 # ============================================================================
 # Node Adapter Library and Executable
 # ============================================================================

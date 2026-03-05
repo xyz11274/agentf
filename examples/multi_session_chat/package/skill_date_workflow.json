@@ -1,0 +1,1 @@
+{"id":"skill-date-workflow","version":"1.0","name":"skill-date-workflow","nodes":[{"id":"n1","name":"date-calc","type":"task","execution_mode":"shell_script","command":"scripts/skill_date.sh"}],"edges":[]}

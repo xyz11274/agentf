@@ -1,0 +1,16 @@
+{
+  "id": "session-context-workflow",
+  "version": "1.0",
+  "name": "session-context-workflow",
+  "nodes": [
+    {"id": "read_prompt", "name": "read-prompt-template", "type": "task", "execution_mode": "shell_script", "command": "scripts/read_prompt_template.sh"},
+    {"id": "read_history", "name": "read-dialog-history", "type": "task", "execution_mode": "shell_script", "command": "scripts/read_history.sh"},
+    {"id": "summarize", "name": "summarize-history-via-llm", "type": "task", "execution_mode": "shell_script", "command": "scripts/summarize_history.sh"},
+    {"id": "fill_context", "name": "fill-context", "type": "task", "execution_mode": "shell_script", "command": "scripts/fill_context.sh"}
+  ],
+  "edges": [
+    {"id": "s1", "source": "read_prompt", "target": "read_history"},
+    {"id": "s2", "source": "read_history", "target": "summarize"},
+    {"id": "s3", "source": "summarize", "target": "fill_context"}
+  ]
+}
