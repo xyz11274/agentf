@@ -40,12 +40,14 @@ public:
     std::string package_root;
     std::vector<std::string> workflow_files;
     std::vector<std::string> builtin_workflows;
+    std::string dispatcher_workflow;
     std::string coordinator_workflow;
     std::map<std::string, std::string> task_workflows;
     std::string agent_context_workflow;
     std::string session_context_workflow;
     std::string task_context_workflow;
     std::string node_context_workflow;
+    int         precreate_session_count = 0;
   };
 
   explicit AgentPackage(const Config& config);

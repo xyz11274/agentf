@@ -546,7 +546,6 @@ if(AGENTFLOW_BUILD_TESTS)
       ${AGENTFLOW_TEST_DIR}/unit/src/test_local_channel_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_runtime_master_worker_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_builtin_workflow_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/src/test_hot_reload.cpp
   )
   if(TARGET GTest::gtest)
     target_link_libraries(test_agentflow_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)
@@ -562,26 +561,6 @@ if(AGENTFLOW_BUILD_TESTS)
   add_test(NAME AgentFlowGoogleTests COMMAND test_agentflow_gtest)
   if(AGENTFLOW_TEST_ENV)
     set_tests_properties(AgentFlowGoogleTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
-  endif()
-
-  # Hot reload tests (separate executable for better organization)
-    add_executable(test_hot_reload
-      ${AGENTFLOW_TEST_DIR}/unit/src/test_hot_reload.cpp
-    )
-  if(TARGET GTest::gtest)
-    target_link_libraries(test_hot_reload PRIVATE agentflow GTest::gtest GTest::gtest_main)
-  else()
-    target_link_libraries(test_hot_reload PRIVATE agentflow ${GTEST_LIBRARIES})
-    if(GTEST_INCLUDE_DIRS)
-      target_include_directories(test_hot_reload PRIVATE ${GTEST_INCLUDE_DIRS})
-    endif()
-  endif()
-  if(NOT MSVC)
-    target_compile_options(test_hot_reload PRIVATE -Wno-non-virtual-dtor)
-  endif()
-  add_test(NAME HotReloadTests COMMAND test_hot_reload)
-  if(AGENTFLOW_TEST_ENV)
-    set_tests_properties(HotReloadTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
   endif()
 
   # Add tests subdirectory

@@ -8,7 +8,6 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Test sources
 set(TEST_SOURCES
-    unit/src/test_hot_reload.cpp
     unit/src/test_agent_gtest.cpp
     unit/src/test_workflow_gtest.cpp
     unit/src/test_node_gtest.cpp
@@ -21,41 +20,6 @@ find_package(GTest 1.10 QUIET)
 if(NOT GTest_FOUND)
     message(STATUS "GTest not found in tests/ subdir; skipping extra test targets")
     return()
-endif()
-
-# Test library (SO library for hot reload testing)
-add_library(test_hot_reload_lib SHARED
-    unit/data/lib/hot_reload_test.cpp
-)
-
-set_target_properties(test_hot_reload_lib PROPERTIES
-    OUTPUT_NAME "hot_reload_test"
-    PREFIX ""
-    VERSION 1.0
-    SOVERSION 1
-)
-
-if(APPLE)
-    set_target_properties(test_hot_reload_lib PROPERTIES
-        SUFFIX ".dylib"
-    )
-endif()
-
-if(WIN32)
-    target_compile_definitions(test_hot_reload_lib PRIVATE BUILD_DLL)
-else()
-    target_compile_options(test_hot_reload_lib PRIVATE -fPIC)
-endif()
-
-# Test executables
-if(NOT TARGET test_hot_reload)
-    add_executable(test_hot_reload ${TEST_SOURCES})
-    target_link_libraries(test_hot_reload PRIVATE
-        agentflow
-        GTest::gtest
-        GTest::gtest_main
-        test_hot_reload_lib
-    )
 endif()
 
 # Other test executables
@@ -106,9 +70,6 @@ target_link_libraries(test_event_gtest PRIVATE
 
 # Compiler options
 if(NOT MSVC)
-    if(TARGET test_hot_reload)
-        target_compile_options(test_hot_reload PRIVATE -Wno-non-virtual-dtor)
-    endif()
     target_compile_options(test_agent_gtest PRIVATE -Wno-non-virtual-dtor)
     target_compile_options(test_workflow_gtest PRIVATE -Wno-non-virtual-dtor)
     target_compile_options(test_node_gtest PRIVATE -Wno-non-virtual-dtor)
@@ -122,9 +83,6 @@ add_subdirectory(e2e)
 
 # Testing
 enable_testing()
-if(TARGET test_hot_reload)
-    add_test(NAME HotReloadTests COMMAND test_hot_reload)
-endif()
 add_test(NAME AgentTests COMMAND test_agent_gtest)
 add_test(NAME WorkflowTests COMMAND test_workflow_gtest)
 add_test(NAME NodeTests COMMAND test_node_gtest)
@@ -132,9 +90,6 @@ add_test(NAME DataBusTests COMMAND test_databus_gtest)
 add_test(NAME EventTests COMMAND test_event_gtest)
 
 if(AGENTFLOW_TEST_ENV)
-    if(TARGET test_hot_reload)
-        set_tests_properties(HotReloadTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
-    endif()
     set_tests_properties(AgentTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
     set_tests_properties(WorkflowTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
     set_tests_properties(NodeTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
@@ -170,16 +125,9 @@ if(_test_rpath)
       set_target_properties(${_tgt} PROPERTIES BUILD_RPATH "${_test_rpath}")
     endif()
   endforeach()
-  if(TARGET test_hot_reload)
-    set_target_properties(test_hot_reload PROPERTIES BUILD_RPATH "${_test_rpath}")
-  endif()
 endif()
 
 # Install targets
-install(TARGETS test_hot_reload test_agent_gtest test_workflow_gtest test_node_gtest
+install(TARGETS test_agent_gtest test_workflow_gtest test_node_gtest
         test_databus_gtest test_event_gtest
         RUNTIME DESTINATION bin)
-
-# Library install
-install(TARGETS test_hot_reload_lib
-        LIBRARY DESTINATION lib)

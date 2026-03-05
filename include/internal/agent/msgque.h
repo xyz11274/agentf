@@ -12,6 +12,12 @@ namespace framework {
 
 class MMAgentMsgQue {
 public:
+  enum class MessageQueueType {
+    INTENT_REQUEST     = 0,
+    OUTPUT_RESULT      = 1,
+    EXTENSIBLE_RESERVED = 2,
+  };
+
   enum class MessageType {
     TASK_REQUEST  = 0,
     TASK_RESPONSE = 1,
@@ -20,16 +26,9 @@ public:
     ERROR         = 4,
   };
 
-  enum class MessagePriority {
-    LOW    = 0,
-    NORMAL = 1,
-    HIGH   = 2,
-  };
-
   struct Message {
     std::string                        message_id;
-    MessageType                        type;
-    MessagePriority                    priority = MessagePriority::NORMAL;
+    MessageType                        type = MessageType::TASK_REQUEST;
     std::string                        sender_id;
     std::string                        receiver_id;
     std::string                        content;
@@ -39,11 +38,11 @@ public:
   };
 
   struct Config {
-    int     max_queue_size      = 1024;
-    int64_t message_timeout_ms  = 5000;
-    int     high_priority_queues = 1;
-    int     normal_priority_queues = 1;
-    int     low_priority_queues = 1;
+    int     max_queue_size          = 1024;
+    int64_t message_timeout_ms      = 5000;
+    int     intent_request_queues   = 1;
+    int     output_result_queues    = 1;
+    int     extensible_queues       = 1;
   };
 
   explicit MMAgentMsgQue(const Config& config);
@@ -51,10 +50,11 @@ public:
 
   bool enqueue_message(const Message& message);
   bool dequeue_message(Message& message);
+  bool dequeue_message_by_type(MessageQueueType queue_type, Message& message);
   bool peek_message(Message& message) const;
 
   int  get_queue_size() const;
-  int  get_queue_size(MessagePriority priority) const;
+  int  get_queue_size(MessageQueueType queue_type) const;
   bool is_queue_empty() const;
   bool is_queue_full() const;
   void clear_queue();
@@ -66,13 +66,14 @@ public:
   int64_t       get_total_messages_processed() const { return total_messages_processed_; }
 
 private:
-  bool enqueue_to_priority_queue(const Message& message);
-  bool dequeue_from_priority_queues(Message& message);
+  MessageQueueType resolve_queue_type(const Message& message) const;
+  bool enqueue_to_type_queue(const Message& message);
+  bool dequeue_from_type_queue(MessageQueueType queue_type, Message& message);
 
   Config                    config_;
-  std::vector<Message>      high_priority_queue_;
-  std::vector<Message>      normal_priority_queue_;
-  std::vector<Message>      low_priority_queue_;
+  std::vector<Message>      intent_request_queue_;
+  std::vector<Message>      output_result_queue_;
+  std::vector<Message>      extensible_reserved_queue_;
   int64_t                   total_messages_processed_ = 0;
   mutable std::mutex        mutex_;
 };

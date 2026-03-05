@@ -230,7 +230,7 @@ void InteractiveRunner::submit_user_request(const std::string& workflow_id,
   framework::MMAgentMsgQue::Message message;
   message.message_id = generate_message_id();
   message.type = framework::MMAgentMsgQue::MessageType::TASK_REQUEST;
-  message.priority = framework::MMAgentMsgQue::MessagePriority::NORMAL;
+  message.metadata["message_type"] = "intent_request";
   message.sender_id = "interactive_user";
   message.receiver_id = agent_->get_id();
   message.content = input;

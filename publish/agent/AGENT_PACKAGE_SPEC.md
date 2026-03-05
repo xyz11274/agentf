@@ -37,6 +37,7 @@ MMAgent 运行时元数据，至少包含：
 - `version`：MMAgent 版本（应与 `$AGTVER` 一致）
 - `description`：功能概述
 - `workflows`：工作流文件列表
+- `precreate_session_count`：默认 session 初始化时预创建 session 数量（可选，默认 `0`）
 
 ### 3.2 `agentCard.md`
 MMAgent Prompt/能力卡片，供其他模型或 MMAgent 读取。
@@ -58,6 +59,8 @@ MMAgent Prompt/能力卡片，供其他模型或 MMAgent 读取。
 - 文件清单（manifest）
 - `coordinator_workflow`：固定指定 coordinator（task0）默认 workflow
 - `task_workflows`：任务类型到 workflow 的默认映射（用于非 task0 或兼容场景）
+
+> 说明：`precreate_session_count` 仅从 `agent.json` 读取，不从 `package.json` 读取。
 
 ## 4. 校验清单
 

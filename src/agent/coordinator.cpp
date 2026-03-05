@@ -17,14 +17,24 @@ SessionTaskCoordinator::SessionTaskCoordinator(const Config& config,
 
 std::string SessionTaskCoordinator::resolve_task_workflow(
     const std::string& task_type, const std::vector<std::shared_ptr<MMWorkflow>>& workflows) const {
-  if(task_type != "task0") {
-    return "";
-  }
-  std::string target = config_.coordinator_workflow;
-  if(target.empty()) {
-    const auto it = config_.task_workflows.find("0");
-    if(it != config_.task_workflows.end()) {
-      target = it->second;
+  std::string target;
+  if(task_type == "task0") {
+    target = config_.dispatcher_workflow;
+    if(target.empty()) {
+      const auto task0_it = config_.task_workflows.find("0");
+      if(task0_it != config_.task_workflows.end()) {
+        target = task0_it->second;
+      } else {
+        target = config_.coordinator_workflow;
+      }
+    }
+  } else if(task_type == "task1") {
+    target = config_.coordinator_workflow;
+    if(target.empty()) {
+      const auto task1_it = config_.task_workflows.find("1");
+      if(task1_it != config_.task_workflows.end()) {
+        target = task1_it->second;
+      }
     }
   }
   if(target.empty()) {
@@ -102,8 +112,10 @@ std::vector<std::shared_ptr<MMAgentTask>> SessionTaskCoordinator::process_sessio
     MMAgentSession& session, const std::vector<std::shared_ptr<MMWorkflow>>& workflows) {
   std::vector<std::shared_ptr<MMAgentTask>> tasks;
   MMAgentMsgQue::Message                    message;
-  int64_t                                 counter = 0;
-  while(session.dequeue_received_message(message)) {
+  int64_t                                 counter = static_cast<int64_t>(session.get_tasks().size());
+  while(config_.input_queue_type == InputQueueType::INTENT_REQUEST
+            ? session.dequeue_intent_request_message(message)
+            : session.dequeue_output_result_message(message)) {
     auto task = build_task_for_message(session.get_session_id(), message, workflows, ++counter);
     session.add_task(task);
     tasks.push_back(task);

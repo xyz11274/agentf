@@ -17,9 +17,16 @@ class MMWorkflow;
 
 class SessionTaskCoordinator {
 public:
+  enum class InputQueueType {
+    INTENT_REQUEST = 0,
+    OUTPUT_RESULT  = 1,
+  };
+
   struct Config {
     std::string coordinator_id;
-    std::string default_task_type = "task0";
+    std::string default_task_type = "task1";
+    InputQueueType input_queue_type = InputQueueType::OUTPUT_RESULT;
+    std::string dispatcher_workflow;
     std::string coordinator_workflow;
     std::map<std::string, std::string> task_workflows;
     std::string task_context_workflow;

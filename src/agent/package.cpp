@@ -128,6 +128,9 @@ std::shared_ptr<AgentPackage> AgentPackage::load_from_directory(const std::strin
     }
   }
 
+  if (doc.HasMember("dispatcher_workflow") && doc["dispatcher_workflow"].IsString()) {
+    config.dispatcher_workflow = doc["dispatcher_workflow"].GetString();
+  }
   if (doc.HasMember("coordinator_workflow") && doc["coordinator_workflow"].IsString()) {
     config.coordinator_workflow = doc["coordinator_workflow"].GetString();
   }
@@ -150,6 +153,37 @@ std::shared_ptr<AgentPackage> AgentPackage::load_from_directory(const std::strin
   }
   if (doc.HasMember("node_context_workflow") && doc["node_context_workflow"].IsString()) {
     config.node_context_workflow = doc["node_context_workflow"].GetString();
+  }
+
+  // precreate_session_count is only sourced from agent.json.
+  fs::path agent_json_path = root_path / "agent.json";
+  if (fs::exists(agent_json_path)) {
+    std::ifstream agent_ifs(agent_json_path);
+    if (!agent_ifs.is_open()) {
+      std::cerr << "Failed to open agent.json: " << agent_json_path << std::endl;
+      return nullptr;
+    }
+
+    rapidjson::IStreamWrapper agent_isw(agent_ifs);
+    rapidjson::Document agent_doc;
+    agent_doc.ParseStream(agent_isw);
+    if (agent_doc.HasParseError()) {
+      std::cerr << "Failed to parse agent.json" << std::endl;
+      return nullptr;
+    }
+
+    if (agent_doc.HasMember("precreate_session_count")
+        && agent_doc["precreate_session_count"].IsInt()) {
+      config.precreate_session_count = std::max(0, agent_doc["precreate_session_count"].GetInt());
+    }
+    if (agent_doc.HasMember("dispatcher_workflow")
+        && agent_doc["dispatcher_workflow"].IsString()) {
+      config.dispatcher_workflow = agent_doc["dispatcher_workflow"].GetString();
+    }
+    if (agent_doc.HasMember("coordinator_workflow")
+        && agent_doc["coordinator_workflow"].IsString()) {
+      config.coordinator_workflow = agent_doc["coordinator_workflow"].GetString();
+    }
   }
 
   // Deduplicate workflow file entries while preserving order.

@@ -187,14 +187,16 @@ TEST_F(E2EMessageRouting, CoordinatorWorkflow) {
     auto session = agent->get_session("user-789:client-012");
     ASSERT_NE(session, nullptr);
 
-    // 验证 task 绑定到 coordinator_workflow
+    // 验证生成 task 绑定到 coordinator_workflow（当前未显式配置 dispatcher_workflow）
     auto tasks = session->get_tasks();
-    if (!tasks.empty()) {
-        auto task = tasks[0];
-        // coordinator_workflow 应为 "wf_coordinator"
-        EXPECT_EQ(task->get_workflow_id(), "wf_coordinator")
-            << "Task should bind to coordinator_workflow by default";
-    }
+    auto target = std::find_if(tasks.begin(), tasks.end(), [](const auto& task) {
+        if (!task) return false;
+        std::string message_id;
+        return task->get_parameter("message_id", message_id) && message_id == "msg-004";
+    });
+    ASSERT_NE(target, tasks.end()) << "Generated task for request should exist";
+    EXPECT_EQ((*target)->get_workflow_id(), "wf_coordinator")
+        << "Task should bind to coordinator_workflow by default";
 
     agent->stop();
 }

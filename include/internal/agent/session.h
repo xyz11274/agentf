@@ -36,6 +36,7 @@ public:
     int         max_queue_size = 1024;
     int64_t     timeout_ms = 30000;  // 30 seconds default
     int         max_retries = 3;
+    std::string dispatcher_workflow;
     std::string coordinator_workflow;
     std::map<std::string, std::string> task_workflows;
     std::string session_context_workflow;
@@ -53,6 +54,7 @@ public:
   int64_t            get_last_activity_time() const { return last_activity_time_; }
   std::shared_ptr<AgentContext> get_context() const { return context_; }
   std::shared_ptr<SessionTaskCoordinator> get_task_coordinator() const { return task_coordinator_; }
+  std::shared_ptr<SessionTaskCoordinator> get_task_dispatcher() const { return task_dispatcher_; }
 
   // Session lifecycle
   bool activate();
@@ -72,8 +74,10 @@ public:
   bool is_timeout_expired() const;
 
   // Queue operations
-  bool enqueue_received_message(const MMAgentMsgQue::Message& message, bool high_priority = false);
+  bool enqueue_received_message(const MMAgentMsgQue::Message& message);
   bool dequeue_received_message(MMAgentMsgQue::Message& message);
+  bool dequeue_intent_request_message(MMAgentMsgQue::Message& message);
+  bool dequeue_output_result_message(MMAgentMsgQue::Message& message);
   bool enqueue_send_message(const MMAgentMsgQue::Message& message);
   bool dequeue_send_message(MMAgentMsgQue::Message& message);
   int  get_receive_queue_size() const;
@@ -85,6 +89,8 @@ public:
   std::vector<std::shared_ptr<MMAgentTask>>   get_tasks() const;
   void                                      set_task_coordinator(
       const std::shared_ptr<SessionTaskCoordinator>& coordinator);
+  void                                      set_task_dispatcher(
+      const std::shared_ptr<SessionTaskCoordinator>& dispatcher);
 
 private:
   Config                                      config_;
@@ -95,6 +101,7 @@ private:
   MMAgentMsgQue                                 receive_queue_;
   MMAgentMsgQue                                 send_queue_;
   std::map<std::string, std::shared_ptr<MMAgentTask>> tasks_;
+  std::shared_ptr<SessionTaskCoordinator>     task_dispatcher_;
   std::shared_ptr<SessionTaskCoordinator>     task_coordinator_;
   std::shared_ptr<AgentContext>               context_;
   mutable std::mutex                          mutex_;

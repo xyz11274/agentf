@@ -699,9 +699,12 @@ sequenceDiagram
     "policy": 0,
     "max_workflows": 10,
     "max_concurrent_workflows": 5,
-    "data_bus_capacity": 1048576
+    "data_bus_capacity": 1048576,
+    "precreate_session_count": 3
 }
 ```
+
+- `precreate_session_count`：初始化默认 session 后，额外预创建的 session 数量（默认 `0`）。
 
 ---
 
@@ -712,6 +715,18 @@ sequenceDiagram
 3. **状态检查**：每个生命周期方法都会检查前置状态，非法状态转换会返回 false
 4. **多版本支持**：相同 MMAgent 的不同版本可以同时运行，通过 `instance_id` 区分
 5. **故障处理**：当前实现中 FAILED 状态主要用于错误标识，需要上层进行恢复处理
+
+### 7.1 Session 消息类型队列与任务分工（2026-03）
+
+- Session 接收队列由优先级模型调整为消息类型模型：
+  - `intent_request`
+  - `output_result`
+  - `extensible_reserved`
+- 消息根据消息头 `metadata["message_type"]` 路由；缺失该头时默认按 `intent_request` 处理。
+- 每个 session 默认创建两个固定任务：
+  - `task0`：dispatcher（优先 `dispatcher_workflow`）
+  - `task1`：coordinator（优先 `coordinator_workflow`）
+- 默认 session、预创建 session、动态 session 均采用同一 task0/task1 初始化策略。
 
 ---
 

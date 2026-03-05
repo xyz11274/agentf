@@ -67,19 +67,19 @@ graph TB
 
 #### 核心用例（按优先级）
 1. 从 MMAgent 包自动加载并实例化 MMAgent。
-2. 接收业务请求并在会话中生成 task（coordinator=task0）。
+2. 接收业务请求并在会话中生成 task（dispatcher=task0，coordinator=task1）。
 3. 将 task 调度到 workflow instance 并分配 Worker。
 4. 由 Worker 执行 MMNode（多语言执行由 MMWorkerEngine 统一承载）。
 5. 通过 MMDataBus 与 MMRuntimeActor 完成状态和数据协同。
 
 #### 用例 UC-01：请求到任务生成
-- 参与者：业务调用方、MMAgentActor、MMAgent、SessionTaskCoordinator。
+- 参与者：业务调用方、MMAgentActor、MMAgent、SessionTaskCoordinator(task0 dispatcher/task1 coordinator)。
 - 前置条件：MMAgent 已由 package 加载，默认/目标 session 已存在或可创建。
 - 主流程：
   1) 业务请求进入 MMAgent。
   2) MMAgent 路由到 `user_id:client_id` session。
-  3) session coordinator 读取消息，创建 `<session>_task_n`。
-  4) 若无显式 `workflow_id`，优先按 `coordinator_workflow` 绑定 task0 workflow。
+  3) session 按消息头类型入队：`intent_request`→dispatcher(task0)，`output_result`→coordinator(task1)，`extensible_reserved`→扩展队列。
+  4) 若无显式 `workflow_id`，task0 优先 `dispatcher_workflow`，task1 优先 `coordinator_workflow`。
 - 异常流程：metadata 缺失 user/client 时不创建业务 session。
 - 质量目标：单请求 task 生成路径 P99 < 50ms（本地基线）。
 
@@ -88,20 +88,21 @@ sequenceDiagram
     participant C as Client
     participant A as MMAgent
     participant S as MMAgentSession
-    participant CO as SessionTaskCoordinator(task0)
+    participant DI as SessionTaskCoordinator(task0 dispatcher)
+    participant CO as SessionTaskCoordinator(task1 coordinator)
     participant T as MMAgentTask
 
     C->>A: route_request_message(message)
     A->>A: handle_request_event + session key
     A->>S: enqueue_received_message
-    A->>CO: process_session_messages(session, workflows)
-    CO->>T: build_task_for_message
+    A->>DI: process_session_messages(session, workflows)
+    DI->>T: build_task_for_message (intent_request)
     alt metadata.workflow_id 存在
-      CO->>T: 直接使用 workflow_id
+      DI->>T: 直接使用 workflow_id
     else metadata.workflow_id 缺失
-      CO->>T: coordinator_workflow -> task_workflows["0"] -> 默认workflow
+      DI->>T: dispatcher_workflow -> task_workflows["0"] -> 默认workflow
     end
-    CO->>S: add_task(task)
+    DI->>S: add_task(task)
 ```
 
 #### 用例 UC-02：task 调度与执行
