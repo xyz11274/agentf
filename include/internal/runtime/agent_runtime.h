@@ -151,6 +151,9 @@ private:
   void monitor_agents();
   void agent_registration_loop();
   void agent_monitor_loop();
+  // Polls each registered agent for generated tasks (from msgque processing) and
+  // dispatches them to execute_workflow().  Runs on a dedicated background thread.
+  void agent_task_poller_loop();
   void process_agent_state_change(const AgentId& agent_id, bool is_healthy);
   void check_agent_health(const AgentId& agent_id);
 
@@ -171,6 +174,7 @@ private:
   std::condition_variable              agent_registration_cv_;
   std::thread                          agent_registration_thread_;
   std::thread                          agent_monitor_thread_;
+  std::thread                          agent_task_poller_thread_;
   std::map<AgentId, int64_t>           agent_heartbeats_;
 };
 

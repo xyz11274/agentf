@@ -152,121 +152,141 @@ std::string json_get_str(const std::string& json, const std::string& key) {
 //   broadcast → per-session skill selection → collect → execute → compose reply
 // Inputs:  user_text, session_id, package_root (all optional; fall back to env/files)
 // Outputs: final_response
+// ============================================================================
+// default-dispatcher-workflow: node "pipeline"   (DISPATCHER ONLY)
+// ============================================================================
+// Phase 1 dispatcher: selects skills per session and publishes to DataBus.
+// It does NOT execute skills — ChatAgentBridge runs skill workflows after the
+// coordinator approves them via orchestration_plan.
+//
+// Inputs:  user_text, input, session_id, package_root
+// Outputs: dispatcher_done (=1), session_ids (JSON array),
+//          selected_skills (JSONL), and per-session DataBus keys
+//          session:<sid>:skill_selected
 extern "C" void node_pipeline(const DataMap& inputs, DataMap& outputs) {
-  std::string root      = resolve_root(inputs);
-  std::string user_text = get_str(inputs, "user_text");
-  std::string session_id = get_str(inputs, "session_id", "default");
-  std::string scripts   = root + "/scripts";
-  std::string runtime   = root + "/runtime";
+  std::string root       = resolve_root(inputs);
+  std::string user_text  = get_str(inputs, "user_text");
+  std::string scripts    = root + "/scripts";
+  std::string runtime_dir = root + "/runtime";
 
-  std::filesystem::create_directories(runtime);
-
-  // 1. Broadcast user input to all session inboxes
-  if(!user_text.empty()) {
-    write_file(runtime + "/latest_user_input.txt", user_text);
-    for(const auto& sid : kSessionIds) {
-      std::ofstream f(runtime + "/" + sid + ".inbox", std::ios::app);
-      f << "user=" << user_text << "\n";
+  // Prefer "user_text"; fall back to "input" (multi-line payload) or env/file
+  if(user_text.empty()) {
+    std::string raw_input = get_str(inputs, "input");
+    if(!raw_input.empty()) {
+      std::istringstream ss(raw_input);
+      std::string line;
+      while(std::getline(ss, line)) {
+        if(line.rfind("user=", 0) == 0) { user_text = line.substr(5); break; }
+      }
     }
   }
+  if(user_text.empty()) {
+    const char* env_user = std::getenv("AF_USER_TEXT");
+    if(env_user) user_text = env_user;
+  }
+  if(user_text.empty()) {
+    user_text = read_file(runtime_dir + "/latest_user_input.txt");
+  }
 
-  // 2. Per-session: select skill (calls LLM or uses fallback) + create task record
-  std::string latest_user =
-      read_file(runtime + "/latest_user_input.txt");
-  if(latest_user.empty()) latest_user = user_text;
+  std::filesystem::create_directories(runtime_dir);
 
+  if(!user_text.empty()) {
+    write_file(runtime_dir + "/latest_user_input.txt", user_text);
+  }
+
+  // Per-session skill selection:
+  // Try LLM-based selection via select_skill.sh; fall back to round-robin.
   const std::vector<std::string> fallback_skills = {
       "skill_search", "skill_summary", "skill_date", "skill_delegate"};
+
+  std::ostringstream skills_jsonl;
   for(size_t i = 0; i < kSessionIds.size(); ++i) {
     const std::string& sid = kSessionIds[i];
-    // Try LLM-based selection; fall back to round-robin assignment
-    std::string skill_cmd =
-        "AF_SESSION_ID='" + sid + "' AF_INPUT='user=" + json_esc(latest_user) +
-        "' '" + scripts + "/select_skill.sh' 2>/dev/null";
-    run_cmd(skill_cmd);
 
-    // Ensure skill file exists (select_skill.sh writes it)
-    std::string skill_file = runtime + "/" + sid + ".skill.json";
-    if(!std::filesystem::exists(skill_file)) {
-      std::string fallback = fallback_skills[i % fallback_skills.size()];
-      std::string json = "{\"session_id\":\"" + sid + "\",\"skill\":\"" + fallback +
-                         "\",\"params\":{\"query\":\"" + json_esc(latest_user) + "\"}}";
-      write_file(skill_file, json);
+    run_cmd("AF_SESSION_ID='" + sid + "' AF_INPUT='user=" + json_esc(user_text) +
+            "' '" + scripts + "/select_skill.sh' 2>/dev/null");
+
+    std::string skill_file  = runtime_dir + "/" + sid + ".skill.json";
+    std::string skill_name;
+    if(std::filesystem::exists(skill_file)) {
+      std::string skill_json = read_file(skill_file);
+      skill_name = json_get_str(skill_json, "skill");
+    }
+    if(skill_name.empty()) {
+      skill_name = fallback_skills[i % fallback_skills.size()];
+      std::string skill_json =
+          "{\"session_id\":\"" + sid + "\",\"skill\":\"" + skill_name +
+          "\",\"params\":{\"query\":\"" + json_esc(user_text) + "\"}}";
+      write_file(skill_file, skill_json);
     }
 
-    // Create task record (not-started state)
-    std::string task_id  = sid + "_skill_task";
-    std::string skill_content = read_file(skill_file);
-    std::string task_json = "{\"task_id\":\"" + task_id +
-                            "\",\"status\":\"created_not_started\",\"skill\":" +
-                            skill_content + "}";
-    write_file(runtime + "/" + task_id + ".json", task_json);
+    // Publish per-session skill selection to DataBus outputs (framework publishes to DataBus)
+    outputs["session:" + sid + ":skill_selected"] = skill_name;
+    skills_jsonl << "{\"session_id\":\"" << sid << "\",\"skill\":\"" << skill_name << "\"}\n";
   }
 
-  // 3. Execute each session's selected skill
-  std::string skill_results_path = runtime + "/skill_results.jsonl";
-  write_file(skill_results_path, "");  // clear
-  for(const auto& sid : kSessionIds) {
-    std::string skill_file = runtime + "/" + sid + ".skill.json";
-    if(!std::filesystem::exists(skill_file)) continue;
-    std::string skill_json = read_file(skill_file);
-    std::string skill      = json_get_str(skill_json, "skill");
-    if(skill.empty()) skill = "skill_search";
-
-    std::string skill_script = scripts + "/" + skill + ".sh";
-    if(!std::filesystem::exists(skill_script)) {
-      skill_script = scripts + "/skill_search.sh";
-    }
-    std::string result = run_cmd("AF_USER_TEXT='" + json_esc(latest_user) +
-                                 "' AF_SESSION_ID='" + sid + "' '" + skill_script +
-                                 "' 2>/dev/null");
-
-    std::ofstream rf(skill_results_path, std::ios::app);
-    rf << "{\"session_id\":\"" << sid << "\",\"skill\":\"" << skill
-       << "\",\"result\":\"" << json_esc(result) << "\"}\n";
-  }
-
-  // 4. Compose final response via LLM or local fallback
-  std::string compose_cmd =
-      "'" + scripts + "/compose_final_response.sh' 2>/dev/null";
-  std::string final_response = run_cmd(compose_cmd);
-  if(final_response.empty()) {
-    final_response = read_file(runtime + "/final_response.txt");
-  }
-  if(final_response.empty()) {
-    final_response = "已完成多技能分析，请查阅详细结果。";
-  }
-
-  outputs["final_response"] = final_response;
-  outputs["skill_results"]  = read_file(skill_results_path);
+  // Signal ChatAgentBridge that dispatching is done; coordinator can proceed.
+  outputs["dispatcher_done"]  = static_cast<int64_t>(1);
+  outputs["selected_skills"]  = skills_jsonl.str();
+  outputs["user_text"]        = user_text;
+  write_file(runtime_dir + "/selected_skills.jsonl", skills_jsonl.str());
 }
 
 // ============================================================================
 // default-coordinator-workflow: node "collect"
 // ============================================================================
 // Collects skill selection results from all session inboxes into a unified JSONL.
-// Inputs:  package_root
+// Prefers DataBus-injected per-session keys (session:<sid>:skill_selected) written
+// by node_pipeline; falls back to runtime/<sid>.skill.json files.
+// Inputs:  package_root, selected_skills (optional — forwarded from dispatcher)
+//          session:<sid>:skill_selected  (injected by DataBus hydration for each sid)
 // Outputs: selected_skills (JSONL text), selected_skills_count
 extern "C" void node_collect_skills(const DataMap& inputs, DataMap& outputs) {
   std::string root    = resolve_root(inputs);
   std::string runtime = root + "/runtime";
   std::filesystem::create_directories(runtime);
 
-  std::string out_path = runtime + "/selected_skills.jsonl";
-  std::ofstream out(out_path, std::ios::trunc);
+  // First: if DataBus already provided a combined JSONL (forwarded from dispatcher), reuse it.
+  std::string injected = get_str(inputs, "selected_skills");
+  if(!injected.empty()) {
+    write_file(runtime + "/selected_skills.jsonl", injected);
+    int cnt = 0;
+    std::istringstream ss(injected);
+    std::string ln;
+    while(std::getline(ss, ln)) if(!ln.empty()) ++cnt;
+    outputs["selected_skills"]       = injected;
+    outputs["selected_skills_count"] = static_cast<int64_t>(cnt);
+    return;
+  }
+
+  // Second: read per-session DataBus keys session:<sid>:skill_selected
+  std::ostringstream out_ss;
   int count = 0;
   for(const auto& sid : kSessionIds) {
-    std::string fpath = runtime + "/" + sid + ".skill.json";
-    if(!std::filesystem::exists(fpath)) continue;
-    std::string content = read_file(fpath);
-    if(!content.empty()) {
-      out << content << "\n";
+    std::string skill = get_str(inputs, "session:" + sid + ":skill_selected");
+    if(!skill.empty()) {
+      out_ss << "{\"session_id\":\"" << sid << "\",\"skill\":\"" << skill << "\"}\n";
       ++count;
     }
   }
-  out.close();
 
-  outputs["selected_skills"]       = read_file(out_path);
+  // Third: fall back to skill.json files on disk
+  if(count == 0) {
+    for(const auto& sid : kSessionIds) {
+      std::string fpath   = runtime + "/" + sid + ".skill.json";
+      if(!std::filesystem::exists(fpath)) continue;
+      std::string content = read_file(fpath);
+      if(!content.empty()) {
+        out_ss << content << "\n";
+        ++count;
+      }
+    }
+  }
+
+  std::string selected = out_ss.str();
+  write_file(runtime + "/selected_skills.jsonl", selected);
+
+  outputs["selected_skills"]       = selected;
   outputs["selected_skills_count"] = static_cast<int64_t>(count);
 }
 

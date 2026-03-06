@@ -92,32 +92,53 @@ bash examples/multi_session_chat/nodes/java/build.sh
 
 ## 消息/事件驱动与 DataBus 集成
 
-节点间数据通过 **DataBus** 流转，替代早期的文件传递方式：
+所有节点间的数据共享通过 **AgentFlow DataBus** 完成，用户请求通过 **agent msgque 消息队列**驱动，彻底取代了旧的文件交换方式。
 
-- SO 库节点的 `inputs` / `outputs` 直接读写 DataBus `DataMap`
-- 脚本节点（Go/Python/Java）通过 `json_output: true` 协议：框架注入 `AF_OUTPUT_FORMAT=json` 环境变量，节点将输出写为扁平 JSON 对象，框架解析后将每个键写入 DataBus
-- 节点可通过 `node_runtime` DSL 字段在 workflow 启动时自动注册消息/事件处理器
+### 请求流水线（ChatAgentBridge）
+
+```
+用户请求
+    ↓
+Phase 1: route_request_message(TASK_REQUEST)
+         process_all_sessions_until_idle()
+         → generated_tasks_ 入队
+    ↓
+后台轮询线程 agent_task_poller_loop() 消费任务
+         → execute_workflow("default-dispatcher-workflow")
+    ↓
+Phase 2: 等待 dispatcher_done=1 出现在 DataBus
+    ↓
+Phase 3: execute_workflow("default-coordinator-workflow")
+         → collect → plan → apply
+         → 等待 orchestration_plan 出现在 DataBus
+    ↓
+Phase 4: 遍历 orchestration_plan，对 action="start" 的任务
+         串行执行对应技能工作流
+    ↓
+Phase 5: 聚合所有 session:<sid>:skill_result
+         → 返回最终响应
+```
 
 ### DataBus 键约定
 
-| 键名 | 写入节点 | 用途 |
-|---|---|---|
-| `session:<sid>:context` | `fill_context`（Go） | session 上下文摘要 |
-| `session:<sid>:skill_selected` | `select_skill`（C++） | 选中的技能名称 |
-| `session:<sid>:skill_result` | skill 节点 stdout | 技能执行结果 |
-| `coordinator:selected_skills` | `collect`（C++） | 所有 session 汇总技能 |
-| `coordinator:task_plan` | `plan`（C++） | 依赖计划 |
-| `coordinator:orchestration_plan` | `apply`（C++） | 编排决策（start/stop/skip） |
+| 键名 | 写入方 | 读取方 | 说明 |
+|---|---|---|---|
+| `user_text` | ChatAgentBridge | `node_pipeline` | 原始用户输入 |
+| `input` | ChatAgentBridge | `node_pipeline` | 多行 payload（session/user/history） |
+| `dispatcher_done` | `node_pipeline` outputs | ChatAgentBridge Phase 2 | 值为 1，作分阶段完成信号 |
+| `session:<sid>:skill_selected` | `node_pipeline` outputs | `node_collect_skills` | 各 session 选中的技能名 |
+| `selected_skills` | `node_collect_skills` outputs | `node_plan_dependencies` | 所有 session 技能选择 JSONL |
+| `task_plan` | `node_plan_dependencies` outputs | `node_apply_task_plan` | LLM 生成的任务依赖图 JSON |
+| `orchestration_plan` | `node_apply_task_plan` outputs | ChatAgentBridge Phase 3 | start/waiting/skip/stop 决策 JSON |
+| `session:<sid>:skill_result` | skill workflow 节点 | ChatAgentBridge Phase 5 | 技能执行结果文本 |
+| `session:<sid>:context` | `fill_context`（Go）outputs | Go 节点内部 | session 上下文摘要 |
+| `final_response` | ChatAgentBridge Phase 5 | HTTP/WS 响应层 | 最终汇总响应文本 |
 
-跨 session DataBus 访问通过以下框架 API 实现：
-```cpp
-// MMAgent 新增 API
-std::vector<std::string> get_all_session_ids() const;
-bool get_session_output(const std::string& session_id, const std::string& key, DataVariant& value) const;
+### DataBus 输入注水（Input Hydration）
 
-// SessionTaskCoordinator 新增 API
-void aggregate_session_results(MMAgent& agent, const std::vector<std::string>& output_keys);
-```
+框架 `process_node()` 在执行节点 `execute()` 前，自动将 DataBus 中与节点声明 `inputs` 字段对应的值合并到节点 `inputs_` 中：
+- 节点显式传入的 input 优先级不变（输入非空时不被 DataBus 值覆盖）；
+- 节点只需在 workflow JSON 中声明 `"inputs": ["key1", "key2"]`，框架自动注水，无需文件读取。
 
 ---
 
@@ -133,7 +154,18 @@ void aggregate_session_results(MMAgent& agent, const std::vector<std::string>& o
    - `skip`：有前置依赖已失败
    - `stop`：任务结果已可用（成功/失败）
    - `already_done`：历史已完成
-4. **输出**：将 `orchestration_plan` JSON 写入 DataBus，供 agent 回复生成使用
+4. **输出**：将 `orchestration_plan` JSON 写入 DataBus，ChatAgentBridge 读取后串行调用对应技能工作流
+
+ChatAgentBridge 根据 `orchestration_plan` 中每条 `action="start"` 的记录，将 `skill` 字段映射到技能工作流：
+
+| skill 字段 | 对应工作流 | 执行模式 |
+|---|---|---|
+| `skill_search` | `skill-search-workflow` | shell_script |
+| `skill_summary` | `skill-summary-workflow` | shell_script |
+| `skill_date` | `skill-date-workflow` | python_script |
+| `skill_delegate` | `skill-delegate-workflow` | java_jar |
+
+> **串行限制**：同一 agent 的同一 workflow 共享 node 对象，并发执行会导致状态竞争，因此技能工作流顺序执行。
 
 ---
 

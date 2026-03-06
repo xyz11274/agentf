@@ -6,6 +6,7 @@
 #include <random>
 #include <thread>
 
+#include "agent/task.h"
 #include "utils/logger.h"
 
 namespace agentflow {
@@ -350,6 +351,29 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
       std::hash<std::thread::id>{}(thread_id), agent->get_id().c_str(),
       workflow ? workflow->get_id().c_str() : "unknown", node->get_id().c_str(),
       node->get_name().c_str(), static_cast<int>(node->get_state()));
+
+  // Hydrate node inputs from DataBus using declared input_params keys.
+  // This enables genuine DataBus-driven data flow between nodes/workflows.
+  {
+    auto& bus = get_databus(agent->get_id());
+    DataMap hydrated;
+    for(const auto& key : node->get_input_params()) {
+      DataVariant val;
+      if(bus.get(key, val)) {
+        hydrated[key] = val;
+      }
+    }
+    // Merge with any existing inputs (e.g. set via set_inputs() or message payload)
+    const DataMap& existing = node->get_inputs();
+    for(const auto& kv : existing) {
+      if(hydrated.find(kv.first) == hydrated.end()) {
+        hydrated[kv.first] = kv.second;
+      }
+    }
+    if(!hydrated.empty()) {
+      node->set_inputs(hydrated);
+    }
+  }
 
   // Execute node
   auto start_time       = std::chrono::steady_clock::now();
@@ -699,6 +723,46 @@ void MMAgentRuntime::agent_monitor_loop() {
   }
 }
 
+void MMAgentRuntime::agent_task_poller_loop() {
+  // Consumes tasks generated via the msgque path (route_request_message →
+  // process_all_sessions_until_idle → generated_tasks_) and dispatches them
+  // to execute_workflow() so worker threads can execute the workflow nodes.
+  while(is_running_) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    std::vector<AgentPtr> agents_snap;
+    {
+      std::lock_guard<std::mutex> lock(agents_mutex_);
+      agents_snap.reserve(agents_.size());
+      for(auto& [id, agent] : agents_) {
+        agents_snap.push_back(agent);
+      }
+    }
+    for(auto& agent : agents_snap) {
+      if(!agent) continue;
+      std::shared_ptr<framework::MMAgentTask> task;
+      while(agent->pop_generated_task(task) && task) {
+        const auto& workflow_id = task->get_config().workflow_id;
+        if(workflow_id.empty()) continue;
+        DataMap inputs;
+        // Propagate task parameters (message_content → user_text, session_id, etc.)
+        std::string msg_content;
+        if(task->get_parameter("message_content", msg_content) && !msg_content.empty()) {
+          inputs["input"]     = msg_content;
+          inputs["user_text"] = msg_content;
+        }
+        if(!task->get_config().session_id.empty()) {
+          inputs["session_id"] = task->get_config().session_id;
+        }
+        Logger::instance().info_f(
+            "[TASK_POLLER] Dispatching task=%s workflow=%s agent=%s",
+            task->get_config().task_id.c_str(), workflow_id.c_str(),
+            agent->get_id().c_str());
+        execute_workflow(agent->get_id(), workflow_id, inputs);
+      }
+    }
+  }
+}
+
 void MMAgentRuntime::check_agent_health(const AgentId& agent_id) {
   // Check agent health (simplified implementation)
   auto agent = get_agent(agent_id);
@@ -765,6 +829,7 @@ bool MMAgentRuntime::start() {
   }
   agent_registration_thread_ = std::thread(&MMAgentRuntime::agent_registration_loop, this);
   agent_monitor_thread_ = std::thread(&MMAgentRuntime::agent_monitor_loop, this);
+  agent_task_poller_thread_ = std::thread(&MMAgentRuntime::agent_task_poller_loop, this);
 
   if(local_worker_) {
     local_worker_->set_status(MMWorkerEngine::WorkerStatus::RUNNING);
@@ -836,6 +901,9 @@ bool MMAgentRuntime::stop() {
   }
   if(agent_monitor_thread_.joinable()) {
     agent_monitor_thread_.join();
+  }
+  if(agent_task_poller_thread_.joinable()) {
+    agent_task_poller_thread_.join();
   }
 
   draining_ = false;

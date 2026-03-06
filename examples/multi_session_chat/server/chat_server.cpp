@@ -20,11 +20,13 @@
 #include <memory>
 #include <mutex>
 #include <sstream>
+#include <map>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "agent/agent.h"
+#include "agent/msgque.h"
 #include "runtime/agent_runtime.h"
 #include "runtime/databus/databus.h"
 
@@ -165,52 +167,216 @@ class ChatAgentBridge {
 
   const std::string& package_path() const { return package_path_; }
 
-  std::string execute(const std::string& workflow_id, const std::string& payload) {
+  // Route user input through the agent's msgque pipeline, then orchestrate
+  // session dispatchers, coordinator, and skill workflows end-to-end.
+  std::string execute(const std::string& /*workflow_id*/, const std::string& payload) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto& bus = runtime_->get_databus(agent_->get_id());
-    for (const std::string& key : {"final_response", "response", "output", "result", "stdout",
-                                   "default-dispatcher-workflow.reply.stdout",
-                                   "default-dispatcher-workflow.pipeline.stdout",
-                                   "default-coordinator-workflow.reply.stdout"}) {
+    const std::string agent_id = agent_->get_id();
+
+    // Extract user_text and session_id from the payload
+    std::string user_text;
+    std::string client_session_id = "default";
+    {
+      std::istringstream ss(payload);
+      std::string line;
+      while (std::getline(ss, line)) {
+        if (line.rfind("user=", 0) == 0) {
+          user_text = line.substr(5);
+        } else if (line.rfind("session=", 0) == 0) {
+          client_session_id = line.substr(8);
+          if (client_session_id.empty()) client_session_id = "default";
+        }
+      }
+      if (user_text.empty()) user_text = payload;
+    }
+
+    // Clear stale result keys from DataBus
+    for (const std::string& key : {
+             "final_response", "response", "output", "result",
+             "dispatcher_done", "coordinator_done", "orchestration_plan",
+             "selected_skills", "task_plan",
+             "default-dispatcher-workflow.pipeline.final_response",
+             "default-coordinator-workflow.apply.orchestration_plan"}) {
       bus.remove(key);
     }
-    std::filesystem::remove(std::filesystem::path(package_path_) / "runtime" / "final_response.txt");
-    DataMap inputs;
-    inputs["input"] = payload;
-    if (!runtime_->execute_workflow(agent_->get_id(), workflow_id, inputs)) {
-      return "[error] failed to execute workflow";
-    }
+    std::filesystem::remove(
+        std::filesystem::path(package_path_) / "runtime" / "final_response.txt");
+
+    // -------------------------------------------------------------------------
+    // Phase 1: Route user input via agent msgque → dispatcher workflow
+    // -------------------------------------------------------------------------
+    bus.put("user_text", user_text);
+    bus.put("input", payload);
+
+    framework::MMAgentMsgQue::Message msg;
+    msg.message_id = "bridge-" + std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    msg.type      = framework::MMAgentMsgQue::MessageType::TASK_REQUEST;
+    msg.sender_id = "chat_bridge";
+    msg.content   = user_text;
+    msg.metadata["user_id"]    = "chat_user";
+    msg.metadata["client_id"]  = client_session_id;
+    msg.metadata["task_type"]  = "task0";
+    agent_->route_request_message(msg);
+    // Drive session message queue → creates task in generated_tasks_
+    agent_->process_all_sessions_until_idle();
+    // The agent_task_poller_loop() (runtime background thread) will pick up the
+    // generated task and call execute_workflow("default-dispatcher-workflow", inputs).
+
     int max_wait_sec = 45;
-    if (const char* timeout_env = std::getenv("CHAT_WORKFLOW_TIMEOUT_SEC"); timeout_env && *timeout_env) {
-      try {
-        max_wait_sec = std::max(5, std::stoi(timeout_env));
-      } catch (...) {
-      }
+    if (const char* env = std::getenv("CHAT_WORKFLOW_TIMEOUT_SEC"); env && *env) {
+      try { max_wait_sec = std::max(5, std::stoi(env)); } catch (...) {}
     }
-    auto start = std::chrono::steady_clock::now();
-    while (std::chrono::steady_clock::now() - start < std::chrono::seconds(max_wait_sec)) {
-      for (const std::string& key : {"final_response", "response", "output", "result", "stdout",
-                                     "default-dispatcher-workflow.reply.stdout",
-                                     "default-dispatcher-workflow.pipeline.stdout",
-                                     "default-coordinator-workflow.reply.stdout"}) {
-        DataVariant value;
-        if (bus.get(key, value) && std::holds_alternative<std::string>(value)) {
-          std::string text = std::get<std::string>(value);
-          if (!text.empty()) {
-            return text;
-          }
-        }
+
+    // -------------------------------------------------------------------------
+    // Phase 2: Wait for dispatcher to write skill selections to DataBus
+    //   node_pipeline writes: "dispatcher_done"=1 and session:SID:skill_selected
+    //   (or falls through to legacy "final_response" if it ran the full pipeline)
+    // -------------------------------------------------------------------------
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(max_wait_sec);
+    bool dispatcher_done = false;
+    while (!dispatcher_done && std::chrono::steady_clock::now() < deadline) {
+      DataVariant v;
+      if (bus.get("dispatcher_done", v)) { dispatcher_done = true; break; }
+      // Legacy: dispatcher already produced final_response (monolithic node_pipeline)
+      if (bus.get("final_response", v) && std::holds_alternative<std::string>(v) &&
+          !std::get<std::string>(v).empty()) {
+        return std::get<std::string>(v);
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    {
-      std::ifstream in(std::filesystem::path(package_path_) / "runtime" / "final_response.txt");
+
+    if (!dispatcher_done) {
+      // Fall back to legacy polling for any result key
+      DataVariant val;
+      for (const std::string& key : {"final_response", "response", "output", "result",
+                                     "default-dispatcher-workflow.pipeline.final_response"}) {
+        if (bus.get(key, val) && std::holds_alternative<std::string>(val)) {
+          std::string t = std::get<std::string>(val);
+          if (!t.empty()) return t;
+        }
+      }
+      // Read file fallback
+      std::ifstream fin(std::filesystem::path(package_path_) / "runtime" / "final_response.txt");
       std::string from_file;
-      if (in.is_open() && std::getline(in, from_file) && !from_file.empty()) {
+      if (fin.is_open() && std::getline(fin, from_file) && !from_file.empty()) {
         return from_file;
       }
+      return "[error] dispatcher workflow timeout";
     }
-    return "[error] workflow timeout or no response produced";
+
+    // -------------------------------------------------------------------------
+    // Phase 3: Run coordinator workflow to build orchestration plan
+    // -------------------------------------------------------------------------
+    bus.remove("orchestration_plan");
+    runtime_->execute_workflow(agent_id, "default-coordinator-workflow", {});
+
+    auto coord_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    std::string orchestration_plan;
+    while (std::chrono::steady_clock::now() < coord_deadline) {
+      DataVariant v;
+      if (bus.get("orchestration_plan", v) && std::holds_alternative<std::string>(v)) {
+        orchestration_plan = std::get<std::string>(v);
+        if (!orchestration_plan.empty()) break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 4: Execute skill workflows for tasks with action="start"
+    // Parse orchestration_plan JSON and start skill workflows sequentially.
+    // -------------------------------------------------------------------------
+    static const std::map<std::string, std::string> kSkillWorkflows = {
+      {"skill_search",   "skill-search-workflow"},
+      {"skill_summary",  "skill-summary-workflow"},
+      {"skill_date",     "skill-date-workflow"},
+      {"skill_delegate", "skill-delegate-workflow"},
+    };
+
+    auto parse_str = [](const std::string& json, const std::string& key) -> std::string {
+      std::string needle = "\"" + key + "\":\"";
+      auto pos = json.find(needle);
+      if (pos == std::string::npos) return "";
+      pos += needle.size();
+      std::string val;
+      while (pos < json.size() && json[pos] != '"') {
+        if (json[pos] == '\\' && pos + 1 < json.size()) { ++pos; }
+        val += json[pos++];
+      }
+      return val;
+    };
+
+    std::vector<std::string> skill_result_keys;
+    if (!orchestration_plan.empty()) {
+      // Iterate over tasks in the plan
+      size_t pos = 0;
+      while (pos < orchestration_plan.size()) {
+        size_t start_brace = orchestration_plan.find('{', pos);
+        if (start_brace == std::string::npos) break;
+        size_t end_brace = orchestration_plan.find('}', start_brace);
+        if (end_brace == std::string::npos) break;
+        std::string entry = orchestration_plan.substr(start_brace, end_brace - start_brace + 1);
+        pos = end_brace + 1;
+
+        std::string action     = parse_str(entry, "action");
+        std::string skill      = parse_str(entry, "skill");
+        std::string session_id = parse_str(entry, "session_id");
+
+        if (action != "start") continue;
+        auto wf_it = kSkillWorkflows.find(skill);
+        if (wf_it == kSkillWorkflows.end()) continue;
+
+        // Publish per-session user_text to DataBus for skill node to read
+        std::string result_key = "session:" + session_id + ":skill_result";
+        bus.remove(result_key);
+        bus.put("session_id", session_id);
+
+        DataMap skill_inputs;
+        skill_inputs["user_text"]   = user_text;
+        skill_inputs["session_id"]  = session_id;
+        skill_inputs["input"]       = user_text;
+        runtime_->execute_workflow(agent_id, wf_it->second, skill_inputs);
+        skill_result_keys.push_back(result_key);
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // Phase 5: Wait for skill results and compose final response
+    // -------------------------------------------------------------------------
+    auto skills_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+    std::ostringstream final_resp;
+    final_resp << "多技能分析结果：\n";
+
+    for (const std::string& rk : skill_result_keys) {
+      while (std::chrono::steady_clock::now() < skills_deadline) {
+        DataVariant v;
+        if (bus.get(rk, v) && std::holds_alternative<std::string>(v)) {
+          std::string r = std::get<std::string>(v);
+          if (!r.empty()) {
+            final_resp << "[" << rk << "] " << r << "\n";
+            break;
+          }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+      }
+    }
+
+    if (skill_result_keys.empty()) {
+      // No skills were started by coordinator; fall back to any available response
+      DataVariant v;
+      for (const std::string& key : {"final_response", "response", "output", "result"}) {
+        if (bus.get(key, v) && std::holds_alternative<std::string>(v)) {
+          std::string t = std::get<std::string>(v);
+          if (!t.empty()) return t;
+        }
+      }
+      return "已完成分析处理。";
+    }
+
+    std::string result = final_resp.str();
+    bus.put("final_response", result);
+    return result;
   }
 
  private:
