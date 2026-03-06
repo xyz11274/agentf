@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "agent/msgque.h"
+#include "agent/common.h"
 
 namespace agentflow {
 namespace framework {
@@ -14,6 +15,7 @@ namespace framework {
 class MMAgentTask;
 class MMAgentSession;
 class MMWorkflow;
+class MMAgent;
 
 class SessionTaskCoordinator {
 public:
@@ -37,6 +39,12 @@ public:
 
   std::vector<std::shared_ptr<MMAgentTask>> process_session_messages(
       MMAgentSession& session, const std::vector<std::shared_ptr<MMWorkflow>>& workflows);
+
+  // Aggregate outputs from all sessions into a DataMap for use in coordinator workflow inputs.
+  // Reads keys "session:<session_id>:<output_key>" from the agent's shared data bus.
+  // output_keys: list of per-session output keys to collect (e.g. {"skill_selected", "skill_result"})
+  DataMap aggregate_session_results(MMAgent& agent,
+                                    const std::vector<std::string>& output_keys) const;
 
   const std::string& get_coordinator_id() const { return config_.coordinator_id; }
   const std::shared_ptr<MMAgentTask>& get_coordinator_task() const { return coordinator_task_; }

@@ -18,6 +18,9 @@
 - 共享数据：`publish_data/get_data`
 - 包加载：`create_from_package`
 - 控制面协同：`msgque/event` 仅传 `data_ref`，payload 通过 MMDataBus 获取
+- **跨 session 查询**（2026-03-06 新增）：
+  - `get_all_session_ids() -> std::vector<std::string>`：返回当前 agent 所有 session ID
+  - `get_session_output(session_id, key, value) -> bool`：从 agent DataBus 读取指定 session 的输出值，key 格式为 `session:<session_id>:<key>`
 
 关联规范：
 - MMAgent 包结构：`publish/agent/AGENT_PACKAGE_SPEC.md`
@@ -57,11 +60,21 @@ DSL 关键字段：
 - `SO_LIBRARY`
 
 配置重点：
-- 输入输出：`input_params/output_params`
+- 输入输出：`input_params/output_params`（DSL 字段 `inputs`/`outputs`）
 - 执行入口：`command/function_name/main_class/args`
 - 可靠性：`timeout_ms/max_retries/retry_delay_ms`
 - 热更新：`enable_hot_reload/hot_reload_config`（默认生效，无需显式调用 `enable_code_reload`）
 - 嵌套 workflow 引用：`workflow_ref`（当 `type=workflow`）
+- **结构化输出**（2026-03-06 新增）：`json_output: true` — 脚本节点（Go/Python/Java）输出 JSON 时框架自动将每个键映射到 DataBus，无需文件中转
+- **节点运行时自动注册**（2026-03-06 新增）：`node_runtime` 对象 — 在 workflow `start_runtime()` 时自动启动指定执行器，在 `stop_runtime()` 时自动停止
+
+SO 库节点开发约定（`execution_mode: so_library`）：
+```cpp
+// 导出函数签名
+using SoFunction = void (*)(const DataMap& inputs, DataMap& outputs);
+// DataMap = std::map<std::string, DataVariant>
+extern "C" void my_node_func(const DataMap& inputs, DataMap& outputs);
+```
 
 MMNode 规范与模板：
 - `publish/workflow/node_patterns/`

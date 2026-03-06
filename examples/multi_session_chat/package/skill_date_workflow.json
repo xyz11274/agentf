@@ -1,1 +1,1 @@
-{"id":"skill-date-workflow","version":"1.0","name":"skill-date-workflow","nodes":[{"id":"n1","name":"date-calc","type":"task","execution_mode":"shell_script","command": "examples/multi_session_chat/package/scripts/skill_date.sh"}],"edges":[]}
+{"id":"skill-date-workflow","version":"1.0","name":"skill-date-workflow","nodes":[{"id":"n1","name":"date-calc","type":"task","execution_mode":"python_script","command":"examples/multi_session_chat/nodes/python/skill_date_node.py","json_output":true,"inputs":["user_text","session_id"],"outputs":["date_result"]}],"edges":[]}

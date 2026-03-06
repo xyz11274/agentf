@@ -2,6 +2,7 @@
 
 #include <sstream>
 
+#include "agent/agent.h"
 #include "agent/dataref_bridge.h"
 #include "agent/session.h"
 #include "agent/task.h"
@@ -121,6 +122,24 @@ std::vector<std::shared_ptr<MMAgentTask>> SessionTaskCoordinator::process_sessio
     tasks.push_back(task);
   }
   return tasks;
+}
+
+DataMap SessionTaskCoordinator::aggregate_session_results(
+    MMAgent& agent, const std::vector<std::string>& output_keys) const {
+  DataMap result;
+  auto session_ids = agent.get_all_session_ids();
+
+  for(const auto& session_id : session_ids) {
+    for(const auto& key : output_keys) {
+      DataVariant value;
+      if(agent.get_session_output(session_id, key, value)) {
+        // Store as "session:<session_id>:<key>"
+        std::string result_key = "session:" + session_id + ":" + key;
+        result[result_key] = value;
+      }
+    }
+  }
+  return result;
 }
 
 }  // namespace framework

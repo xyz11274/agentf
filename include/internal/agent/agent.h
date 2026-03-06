@@ -117,6 +117,11 @@ public:
   bool publish_data(const std::string& key, const DataVariant& value);
   bool get_data(const std::string& key, DataVariant& value);
 
+  // Cross-session query helpers
+  std::vector<std::string> get_all_session_ids() const;
+  bool get_session_output(const std::string& session_id, const std::string& key,
+                          DataVariant& value) const;
+
   // Control flow event queue
   void        post_event(const std::string& event);
   std::string get_event();

@@ -3,9 +3,36 @@
   "version": "1.0",
   "name": "session-dispatcher-workflow",
   "nodes": [
-    {"id": "load_context", "name": "load-session-context", "type": "task", "execution_mode": "shell_script", "command": "examples/multi_session_chat/package/scripts/session_context_pipeline.sh"},
-    {"id": "select_skill", "name": "select-skill-via-llm", "type": "task", "execution_mode": "shell_script", "command": "examples/multi_session_chat/package/scripts/select_skill.sh"},
-    {"id": "create_task", "name": "create-skill-task-disabled", "type": "task", "execution_mode": "shell_script", "command": "examples/multi_session_chat/package/scripts/create_skill_task.sh"}
+    {
+      "id": "load_context",
+      "name": "load-session-context",
+      "type": "task",
+      "execution_mode": "so_library",
+      "command": "build/libmulti_session_nodes.dylib",
+      "function_name": "node_load_context",
+      "inputs": ["session_id"],
+      "outputs": ["session_context"]
+    },
+    {
+      "id": "select_skill",
+      "name": "select-skill-via-llm",
+      "type": "task",
+      "execution_mode": "so_library",
+      "command": "build/libmulti_session_nodes.dylib",
+      "function_name": "node_select_skill",
+      "inputs": ["session_id", "session_context", "user_text"],
+      "outputs": ["skill_selected"]
+    },
+    {
+      "id": "create_task",
+      "name": "create-skill-task",
+      "type": "task",
+      "execution_mode": "so_library",
+      "command": "build/libmulti_session_nodes.dylib",
+      "function_name": "node_create_task",
+      "inputs": ["session_id", "skill_selected", "user_text"],
+      "outputs": ["task_created"]
+    }
   ],
   "edges": [
     {"id": "e1", "source": "load_context", "target": "select_skill"},

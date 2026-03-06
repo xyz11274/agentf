@@ -53,6 +53,12 @@ debug_output.txt
 # Claude Code config
 CLAUDE.md
 
+# multi_session_chat example — build artifacts and runtime state
+examples/multi_session_chat/nodes/java/*.class
+examples/multi_session_chat/nodes/java/skill_delegate.jar
+examples/multi_session_chat/nodes/python/__pycache__/
+examples/multi_session_chat/package/runtime/
+
 # Vendor dependencies (downloaded third-party libraries)
 # Keep adapter code and config files, only ignore downloaded libs
 vendor/json/

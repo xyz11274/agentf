@@ -3,7 +3,16 @@
   "version": "1.0",
   "name": "default-dispatcher-workflow",
   "nodes": [
-    {"id": "pipeline", "name": "run-chat-pipeline", "type": "task", "execution_mode": "shell_script", "command": "examples/multi_session_chat/package/scripts/run_full_pipeline.sh"}
+    {
+      "id": "pipeline",
+      "name": "run-chat-pipeline",
+      "type": "task",
+      "execution_mode": "so_library",
+      "command": "build/libmulti_session_nodes.dylib",
+      "function_name": "node_pipeline",
+      "inputs": ["user_text", "session_id"],
+      "outputs": ["pipeline_status"]
+    }
   ],
   "edges": []
 }

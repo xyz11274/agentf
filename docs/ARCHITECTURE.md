@@ -440,6 +440,20 @@ classDiagram
 - 本地统一入口：`./build.sh build|test|example`。
 - 底层：CMake + Ninja/Make，CTest 统一测试执行。
 - 可选依赖通过 CMake 自动探测与 graceful fallback（Protoactor/libevent/OpenSSL/RapidJSON）。
+- **multi_session_chat 示例** 额外需要 Go（session-context 节点）、Java（skill-delegate 节点）、Python（skill-date 节点）。
+
+#### 多语言节点示例（multi_session_chat）
+
+`examples/multi_session_chat` 是 AgentFlow 多语言节点能力的参考实现，各 workflow 节点分别用不同语言编写：
+
+| Workflow | 语言 | 执行模式 | 产物 |
+|---|---|---|---|
+| dispatcher/coordinator/session-dispatcher | C++ | `so_library` | `build/libmulti_session_nodes.dylib` |
+| session-context-workflow | Go | `go_script` | `nodes/go/session_context/main.go`（`go run` 直接执行）|
+| skill-date-workflow | Python | `python_script` | `nodes/python/skill_date_node.py` |
+| skill-delegate-workflow | Java | `java_jar` | `nodes/java/skill_delegate.jar` |
+
+脚本节点通过 `json_output: true` 协议将 stdout JSON 直接映射到 DataBus，替代早期的文件传递方式。详见 `docs/multi-session-chat-example.md`。
 
 #### 测试策略
 - 单元测试：MMAgent/MMWorkflow/MMNode/MMDataBus/Event。

@@ -555,6 +555,30 @@ void MMAgent::cleanup_resources() {
   }
 }
 
+std::vector<std::string> MMAgent::get_all_session_ids() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<std::string> ids;
+  ids.reserve(sessions_.size());
+  for(const auto& kv : sessions_) {
+    ids.push_back(kv.first);
+  }
+  return ids;
+}
+
+bool MMAgent::get_session_output(const std::string& session_id, const std::string& key,
+                                 DataVariant& value) const {
+  // Session outputs are stored in the agent's shared data_bus_ with namespaced keys:
+  // "session:<session_id>:<key>"
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::string namespaced_key = "session:" + session_id + ":" + key;
+  auto it = data_bus_.find(namespaced_key);
+  if(it != data_bus_.end()) {
+    value = it->second;
+    return true;
+  }
+  return false;
+}
+
 bool MMAgent::publish_data(const std::string& key, const DataVariant& value) {
   std::lock_guard<std::mutex> lock(mutex_);
   data_bus_[key] = value;

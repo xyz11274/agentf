@@ -18,6 +18,96 @@
 namespace agentflow {
 namespace framework {
 
+namespace {
+// Lightweight flat-JSON-object parser: parses {"key":"value","key2":42,...}
+// Handles string, number (int/double), and bool values at the top level only.
+// Returns false if the input is not a valid JSON object.
+bool parse_flat_json_object(const std::string& json, DataMap& out) {
+  size_t i = 0;
+  auto skip_ws = [&]() { while(i < json.size() && std::isspace((unsigned char)json[i])) ++i; };
+  auto read_string = [&](std::string& s) -> bool {
+    if(i >= json.size() || json[i] != '"') return false;
+    ++i;
+    s.clear();
+    while(i < json.size() && json[i] != '"') {
+      if(json[i] == '\\' && i + 1 < json.size()) {
+        char esc = json[++i];
+        switch(esc) {
+          case '"': s += '"'; break;
+          case '\\': s += '\\'; break;
+          case 'n': s += '\n'; break;
+          case 'r': s += '\r'; break;
+          case 't': s += '\t'; break;
+          default: s += esc; break;
+        }
+      } else {
+        s += json[i];
+      }
+      ++i;
+    }
+    if(i >= json.size()) return false;
+    ++i;  // consume closing '"'
+    return true;
+  };
+
+  skip_ws();
+  if(i >= json.size() || json[i] != '{') return false;
+  ++i;
+  skip_ws();
+  if(i < json.size() && json[i] == '}') return true;  // empty object
+
+  while(i < json.size()) {
+    skip_ws();
+    std::string key;
+    if(!read_string(key)) return false;
+    skip_ws();
+    if(i >= json.size() || json[i] != ':') return false;
+    ++i;
+    skip_ws();
+
+    if(i < json.size() && json[i] == '"') {
+      std::string val;
+      if(!read_string(val)) return false;
+      out[key] = val;
+    } else if(i + 4 <= json.size() && json.substr(i, 4) == "true") {
+      out[key] = true; i += 4;
+    } else if(i + 5 <= json.size() && json.substr(i, 5) == "false") {
+      out[key] = false; i += 5;
+    } else if(i + 4 <= json.size() && json.substr(i, 4) == "null") {
+      out[key] = std::string(""); i += 4;
+    } else {
+      // number
+      size_t start = i;
+      bool is_float = false;
+      if(i < json.size() && (json[i] == '-' || json[i] == '+')) ++i;
+      while(i < json.size() && (std::isdigit((unsigned char)json[i]) ||
+                                  json[i] == '.' || json[i] == 'e' || json[i] == 'E' ||
+                                  json[i] == '+' || json[i] == '-')) {
+        if(json[i] == '.' || json[i] == 'e' || json[i] == 'E') is_float = true;
+        ++i;
+      }
+      if(i == start) return false;
+      std::string numstr = json.substr(start, i - start);
+      try {
+        if(is_float) {
+          out[key] = std::stod(numstr);
+        } else {
+          out[key] = static_cast<int64_t>(std::stoll(numstr));
+        }
+      } catch(...) {
+        out[key] = numstr;
+      }
+    }
+    skip_ws();
+    if(i >= json.size()) break;
+    if(json[i] == '}') { ++i; return true; }
+    if(json[i] == ',') { ++i; continue; }
+    return false;
+  }
+  return false;
+}
+}  // namespace
+
 MMNode::MMNode(const Config& config) : config_(config), state_(NodeState::WAITING), retry_count_(0) {
   // Get reference to global code loader
   code_loader_ = &runtime::global_code_loader();
@@ -851,6 +941,9 @@ bool MMNode::execute_script(runtime::ExecutableType type) {
       std::string env_key = "AF_" + to_env_suffix(pair.first);
       exec_config.env_vars.push_back(env_key + "=" + variant_to_string(pair.second));
     }
+    if(config_.json_output) {
+      exec_config.env_vars.push_back("AF_OUTPUT_FORMAT=json");
+    }
 
     runtime::ExecutionResult result;
 
@@ -877,7 +970,21 @@ bool MMNode::execute_script(runtime::ExecutableType type) {
     }
 
     if(result.success) {
-      outputs_["stdout"] = result.stdout;
+      // When json_output is enabled, attempt to parse stdout as a JSON object and
+      // populate outputs_ with individual keys. Falls back to raw stdout on failure.
+      bool json_parsed = false;
+      if(config_.json_output && !result.stdout.empty()) {
+        DataMap parsed;
+        if(parse_flat_json_object(result.stdout, parsed)) {
+          for(auto& kv : parsed) {
+            outputs_[kv.first] = std::move(kv.second);
+          }
+          json_parsed = true;
+        }
+      }
+      if(!json_parsed) {
+        outputs_["stdout"] = result.stdout;
+      }
       if(!result.stderr.empty()) {
         outputs_["stderr"] = result.stderr;
       }

@@ -613,9 +613,25 @@ bool WorkflowParser::parse_node_config(std::shared_ptr<const IJsonValue> node_ob
   config.main_class       = JsonHelper::get_string(config_source, "main_class", "");
   config.workflow_ref     = JsonHelper::get_string(config_source, "workflow_ref", "");
   config.node_context_workflow = JsonHelper::get_string(config_source, "node_context_workflow", "");
+  config.json_output      = JsonHelper::get_bool(config_source, "json_output", false);
   if(config.type == "workflow" && config.workflow_ref.empty()) {
     result.errors.emplace_back("workflow node requires 'workflow_ref' field", path);
     return false;
+  }
+
+  // Parse optional per-node runtime configuration.
+  // Example JSON: "node_runtime": {"message_threads": 1, "event_threads": 1, "executor_threads": 2}
+  auto node_runtime_obj = JsonHelper::get_object(config_source, "node_runtime");
+  if(node_runtime_obj) {
+    config.auto_start_runtime = true;
+    config.node_runtime_config.message_threads =
+        static_cast<int>(JsonHelper::get_int(node_runtime_obj, "message_threads", 1));
+    config.node_runtime_config.event_threads =
+        static_cast<int>(JsonHelper::get_int(node_runtime_obj, "event_threads", 1));
+    config.node_runtime_config.executor_threads =
+        static_cast<int>(JsonHelper::get_int(node_runtime_obj, "executor_threads", 2));
+    config.node_runtime_config.max_queue_size =
+        static_cast<size_t>(JsonHelper::get_int(node_runtime_obj, "max_queue_size", 1024));
   }
 
   // Parse script/command args array

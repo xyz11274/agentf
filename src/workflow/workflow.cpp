@@ -568,6 +568,14 @@ bool MMWorkflow::start_runtime(const RuntimeConfig& config) {
 
   message_thread_ = std::thread(&MMWorkflow::message_dispatch_loop, this);
   event_thread_   = std::thread(&MMWorkflow::event_dispatch_loop, this);
+
+  // Auto-start per-node runtime loops for nodes that declare node_runtime config.
+  for(auto& node : nodes_) {
+    if(node->get_config().auto_start_runtime) {
+      node->start_runtime(node->get_config().node_runtime_config);
+    }
+  }
+
   return true;
 }
 
@@ -575,6 +583,13 @@ void MMWorkflow::stop_runtime() {
   bool expected = true;
   if(!runtime_running_.compare_exchange_strong(expected, false)) {
     return;
+  }
+
+  // Stop per-node runtime loops before shutting down workflow threads.
+  for(auto& node : nodes_) {
+    if(node->get_config().auto_start_runtime) {
+      node->stop_runtime();
+    }
   }
 
   message_cv_.notify_all();

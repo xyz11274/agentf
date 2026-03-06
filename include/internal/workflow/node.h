@@ -37,6 +37,13 @@ public:
     SO_LIBRARY      // Shared object library execution
   };
 
+  struct RuntimeConfig {
+    int    message_threads = 1;
+    int    event_threads = 1;
+    int    executor_threads = 2;
+    size_t max_queue_size = 1024;
+  };
+
   struct Config {
     NodeId      id;
     std::string name;
@@ -75,6 +82,16 @@ public:
     // C++ function callback for CPP_FUNCTION execution mode
     std::function<bool(const DataMap& inputs, DataMap& outputs)> cpp_function;
 
+    // If true, stdout from script execution is parsed as a JSON object and each
+    // top-level key is stored in outputs_ DataMap (instead of a single "stdout" key).
+    // The framework also injects AF_OUTPUT_FORMAT=json into the subprocess environment.
+    bool json_output = false;
+
+    // Optional per-node runtime configuration. When set, MMWorkflow::start_runtime()
+    // will automatically call node->start_runtime(node_runtime_config) for this node.
+    bool          auto_start_runtime = false;
+    RuntimeConfig node_runtime_config;
+
     // MMWorkflow reference for nested workflow node (type == "workflow")
     std::string workflow_ref;
     std::string node_context_workflow;
@@ -94,13 +111,6 @@ public:
   struct NodeEvent {
     std::string                        type;
     std::map<std::string, std::string> data;
-  };
-
-  struct RuntimeConfig {
-    int    message_threads = 1;
-    int    event_threads = 1;
-    int    executor_threads = 2;
-    size_t max_queue_size = 1024;
   };
 
   using NodeEventHandler = std::function<void(const NodeEvent&)>;
