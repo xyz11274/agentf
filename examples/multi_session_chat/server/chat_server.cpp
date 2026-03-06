@@ -462,7 +462,8 @@ void run_http_server(const std::string& host, int port, const std::filesystem::p
                      ChatAgentBridge& bridge, ConversationStore& store) {
   int server_fd = create_listen_socket(host, port);
   if (server_fd < 0) {
-    std::cerr << "Failed to start HTTP server on " << host << ":" << port << std::endl;
+    std::cerr << "[ERROR] Failed to start HTTP server on " << host << ":" << port
+              << " — port may already be in use. Stop any existing server and retry." << std::endl;
     return;
   }
   while (true) {
@@ -794,12 +795,16 @@ void handle_ws_client(int client_fd, ChatAgentBridge& bridge, ConversationStore&
   close(client_fd);
 }
 
-void run_ws_server(const std::string& host, int port, ChatAgentBridge& bridge, ConversationStore& store) {
+void run_ws_server(const std::string& host, int port, ChatAgentBridge& bridge,
+                   ConversationStore& store, std::atomic<bool>& bind_ok) {
   int server_fd = create_listen_socket(host, port);
   if (server_fd < 0) {
-    std::cerr << "Failed to start WebSocket server on " << host << ":" << port << std::endl;
+    std::cerr << "[ERROR] Failed to start WebSocket server on " << host << ":" << port
+              << " — port may already be in use. Stop any existing server and retry." << std::endl;
+    bind_ok.store(false);
     return;
   }
+  bind_ok.store(true);
   while (true) {
     int client = accept(server_fd, nullptr, nullptr);
     if (client < 0) {
@@ -855,9 +860,10 @@ int main(int argc, char* argv[]) {
   }
 
   ConversationStore store(config.history_dir);
+  std::atomic<bool> ws_bind_ok{false};
   std::thread http_thread(run_http_server, config.host, config.http_port,
                           std::filesystem::path(config.web_root), std::ref(bridge), std::ref(store));
-  run_ws_server(config.host, config.ws_port, bridge, store);
+  run_ws_server(config.host, config.ws_port, bridge, store, ws_bind_ok);
   http_thread.join();
-  return 0;
+  return ws_bind_ok.load() ? 0 : 1;
 }
