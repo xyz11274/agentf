@@ -22,11 +22,11 @@ sleep 1
 curl --noproxy "*" -sf "http://127.0.0.1:18088/" >/tmp/multichat_index.html
 curl --noproxy "*" -sf -X POST "http://127.0.0.1:18088/api/chat" \
   -H 'Content-Type: application/json' \
-  -d '{"session_id":"webui:default","text":"hello","workflow_id":"default-dispatcher-workflow"}' \
+  -d '{"session_id":"webui:default","text":"hello","workflow_id":"session-dispatcher-workflow"}' \
   >/tmp/multichat_chat.json
 curl --noproxy "*" -sf -X POST "http://127.0.0.1:18088/api/chat" \
   -H 'Content-Type: application/json' \
-  -d '{"session_id":"webui:default","text":"请帮我总结一下上条消息","workflow_id":"default-dispatcher-workflow"}' \
+  -d '{"session_id":"webui:default","text":"请帮我总结一下上条消息","workflow_id":"session-dispatcher-workflow"}' \
   >/tmp/multichat_chat2.json
 curl --noproxy "*" -sf "http://127.0.0.1:18088/api/history?session_id=webui%3Adefault&limit=20" \
   >/tmp/multichat_history.json

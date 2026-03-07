@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "description": "AgentFlow multi-round conversation example with a 5-session reusable pool",
   "workflows": [
-    "default_dispatcher_workflow.json",
     "session_coordinator_workflow.json",
     "session_context_workflow.json",
     "session_dispatcher_workflow.json",
@@ -12,7 +11,7 @@
     "skill_date_workflow.json",
     "skill_delegate_workflow.json"
   ],
-  "dispatcher_workflow": "default-dispatcher-workflow",
+  "dispatcher_workflow": "session-dispatcher-workflow",
   "coordinator_workflow": "session-coordinator-workflow",
   "task_workflows": {
     "dispatcher": "session-dispatcher-workflow",

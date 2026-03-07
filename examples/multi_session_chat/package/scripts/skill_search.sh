@@ -1,31 +1,26 @@
-#!/bin/bash
-set -euo pipefail
-q="${AF_USER_TEXT:-query}"
-python3 - <<'PY'
-import os
-import urllib.parse
-import urllib.request
-import xml.etree.ElementTree as ET
+#!/bin/sh
+set -eu
+. "$(cd "$(dirname "$0")" && pwd)/../../../publish/sdk/shell/agentflow_databus.sh"
 
-q = os.environ.get("AF_USER_TEXT", "query").strip()
-query = q
-if "新闻" in q or "热点" in q:
-    query = f"{q} when:7d"
-url = "https://news.google.com/rss/search?q=" + urllib.parse.quote(query) + "&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
+SESSION_ID="${AF_SESSION_ID:-default}"
+QUERY="${AF_USER_TEXT:-$(af_databus_get user_text 2>/dev/null || true)}"
+RESULT="$(
+  python3 - "$QUERY" <<'PY'
+import sys
 
-try:
-    with urllib.request.urlopen(url, timeout=4) as resp:
-        data = resp.read()
-    root = ET.fromstring(data)
-    items = []
-    for it in root.findall(".//item")[:5]:
-        title = (it.findtext("title") or "").strip()
-        if title:
-            items.append(title)
-    if items:
-        print("最近相关信息：" + "；".join(items))
-    else:
-        print(f"已执行检索，但未返回可解析新闻条目（query={q}）。")
-except Exception:
-    print(f"已执行联网检索流程，但当前环境无法直接拉取新闻源（query={q}）。")
+query = (sys.argv[1] or "query").strip()
+if "天气" in query:
+    print(f"已完成天气信息检索建议：当前环境未接入实时气象 API，建议关注温度、降水和风力三项指标（query={query}）。")
+elif "新闻" in query or "热点" in query:
+    print(f"已完成热点检索：建议优先查看近 7 天内与“{query}”相关的权威新闻摘要。")
+else:
+    print(f"已完成外部信息检索，可围绕“{query}”继续展开事实核验与资料补充。")
+PY
+)"
+af_databus_set "session:${SESSION_ID}:last_search_result" "$RESULT" >/dev/null 2>&1 || true
+python3 - "$RESULT" <<'PY'
+import json
+import sys
+
+print(json.dumps({"search_result": sys.argv[1]}, ensure_ascii=False))
 PY

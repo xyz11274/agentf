@@ -83,31 +83,6 @@ std::string sanitize_session_id(const std::string& session_id) {
   return safe;
 }
 
-bool write_text_file(const std::filesystem::path& path, const std::string& content) {
-  std::ofstream out(path, std::ios::trunc);
-  if (!out.is_open()) {
-    return false;
-  }
-  out << content;
-  return true;
-}
-
-std::string run_command_capture(const std::string& command) {
-  std::array<char, 256> buffer{};
-  std::string output;
-  std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
-  if (!pipe) {
-    return "";
-  }
-  while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe.get()) != nullptr) {
-    output += buffer.data();
-  }
-  while (!output.empty() && (output.back() == '\n' || output.back() == '\r')) {
-    output.pop_back();
-  }
-  return output;
-}
-
 class ConversationStore {
  public:
   explicit ConversationStore(const std::string& root) : root_(root) {
@@ -194,15 +169,15 @@ class ChatAgentBridge {
   const std::string& package_path() const { return package_path_; }
 
   // Route user input through the agent's msgque pipeline, then orchestrate
-  // session dispatchers, coordinator, and skill workflows end-to-end.
-  std::string execute(const std::string& /*workflow_id*/, const std::string& payload) {
+  // dispatcher/coordinator workflows plus skill execution end-to-end.
+  std::string execute(const std::string& workflow_id, const std::string& payload) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto& bus = runtime_->get_databus(agent_->get_id());
     const std::string agent_id = agent_->get_id();
 
-    // Extract user_text and session_id from the payload
     std::string user_text;
     std::string client_session_id = "default";
+    std::string history_json = "[]";
     {
       std::istringstream ss(payload);
       std::string line;
@@ -212,28 +187,30 @@ class ChatAgentBridge {
         } else if (line.rfind("session=", 0) == 0) {
           client_session_id = line.substr(8);
           if (client_session_id.empty()) client_session_id = "default";
+        } else if (line.rfind("history=", 0) == 0) {
+          history_json = line.substr(8);
         }
       }
       if (user_text.empty()) user_text = payload;
     }
 
-    // Clear stale result keys from DataBus
     for (const std::string& key : {
              "final_response", "response", "output", "result",
              "dispatcher_done", "coordinator_done", "orchestration_plan",
-             "selected_skills", "task_plan",
-             "default-dispatcher-workflow.pipeline.final_response",
-             "session-coordinator-workflow.apply.orchestration_plan"}) {
+             "selected_skills", "partial_skill_results",
+             "session-dispatcher-workflow.merge_candidates.selected_skills",
+             "session-coordinator-workflow.merge_plan.orchestration_plan",
+             "session-coordinator-workflow.merge_plan.final_response"}) {
       bus.remove(key);
     }
-    std::filesystem::remove(
-        std::filesystem::path(package_path_) / "runtime" / "final_response.txt");
-
-    // -------------------------------------------------------------------------
-    // Phase 1: Route user input via agent msgque → dispatcher workflow
-    // -------------------------------------------------------------------------
     bus.put("user_text", user_text);
     bus.put("input", payload);
+    bus.put("session:" + client_session_id + ":history_json", history_json);
+    std::ostringstream context_json;
+    context_json << "{\"session_id\":\"" << json_escape(client_session_id) << "\","
+                 << "\"user_text\":\"" << json_escape(user_text) << "\","
+                 << "\"history_json\":" << history_json << "}";
+    bus.put("session:" + client_session_id + ":context", context_json.str());
 
     framework::MMAgentMsgQue::Message msg;
     msg.message_id = "bridge-" + std::to_string(
@@ -245,59 +222,41 @@ class ChatAgentBridge {
     msg.metadata["client_id"]  = client_session_id;
     msg.metadata["session_id"] = "0";
     msg.metadata["task_type"]  = "dispatcher";
+    if (!workflow_id.empty()) {
+      msg.metadata["workflow_id"] = workflow_id;
+    }
     agent_->route_request_message(msg);
-    // Drive session message queue → creates task in generated_tasks_
     agent_->process_all_sessions_until_idle();
-    // The runtime background polling thread will pick up the generated task and
-    // execute the workflow mapped to the dispatcher task template.
 
     int max_wait_sec = 45;
     if (const char* env = std::getenv("CHAT_WORKFLOW_TIMEOUT_SEC"); env && *env) {
       try { max_wait_sec = std::max(5, std::stoi(env)); } catch (...) {}
     }
 
-    // -------------------------------------------------------------------------
-    // Phase 2: Wait for dispatcher to write skill selections to DataBus
-    //   node_pipeline writes: "dispatcher_done"=1 and session:SID:skill_selected
-    //   (or falls through to legacy "final_response" if it ran the full pipeline)
-    // -------------------------------------------------------------------------
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(max_wait_sec);
     bool dispatcher_done = false;
+    std::string selected_skills;
     while (!dispatcher_done && std::chrono::steady_clock::now() < deadline) {
       DataVariant v;
-      if (bus.get("dispatcher_done", v)) { dispatcher_done = true; break; }
-      // Legacy: dispatcher already produced final_response (monolithic node_pipeline)
-      if (bus.get("final_response", v) && std::holds_alternative<std::string>(v) &&
-          !std::get<std::string>(v).empty()) {
-        return std::get<std::string>(v);
+      if (bus.get("dispatcher_done", v)) {
+        dispatcher_done = true;
+      }
+      if (bus.get("selected_skills", v) && std::holds_alternative<std::string>(v)) {
+        selected_skills = std::get<std::string>(v);
+      }
+      if (dispatcher_done && !selected_skills.empty()) {
+        break;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
-    if (!dispatcher_done) {
-      // Fall back to legacy polling for any result key
-      DataVariant val;
-      for (const std::string& key : {"final_response", "response", "output", "result",
-                                     "default-dispatcher-workflow.pipeline.final_response"}) {
-        if (bus.get(key, val) && std::holds_alternative<std::string>(val)) {
-          std::string t = std::get<std::string>(val);
-          if (!t.empty()) return t;
-        }
-      }
-      // Read file fallback
-      std::ifstream fin(std::filesystem::path(package_path_) / "runtime" / "final_response.txt");
-      std::string from_file;
-      if (fin.is_open() && std::getline(fin, from_file) && !from_file.empty()) {
-        return from_file;
-      }
+    if (!dispatcher_done || selected_skills.empty()) {
       return "[error] dispatcher workflow timeout";
     }
 
-    // -------------------------------------------------------------------------
-    // Phase 3: Run coordinator workflow to build orchestration plan
-    // -------------------------------------------------------------------------
     bus.remove("orchestration_plan");
-    runtime_->execute_workflow(agent_id, "session-coordinator-workflow", {});
+    runtime_->execute_workflow(agent_id, "session-coordinator-workflow",
+                               {{"session_id", client_session_id}, {"user_text", user_text}});
 
     auto coord_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
     std::string orchestration_plan;
@@ -310,10 +269,6 @@ class ChatAgentBridge {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
-    // -------------------------------------------------------------------------
-    // Phase 4: Execute skill workflows for tasks with action="start"
-    // Parse orchestration_plan JSON and start skill workflows sequentially.
-    // -------------------------------------------------------------------------
     static const std::map<std::string, std::string> kSkillWorkflows = {
       {"skill_search",   "skill-search-workflow"},
       {"skill_summary",  "skill-summary-workflow"},
@@ -332,7 +287,7 @@ class ChatAgentBridge {
         val += json[pos++];
       }
       return val;
-    };
+      };
 
     struct SkillExecution {
       std::string session_id;
@@ -364,8 +319,10 @@ class ChatAgentBridge {
         started_skill.skill = skill;
         started_skill.result_keys.push_back("session:" + session_id + ":skill_result");
         if (skill == "skill_search" || skill == "skill_summary") {
-          started_skill.result_keys.push_back(wf_it->second + ".n1.stdout");
-          started_skill.result_keys.push_back("stdout");
+          const std::string output_key =
+              skill == "skill_search" ? "search_result" : "summary_result";
+          started_skill.result_keys.push_back(wf_it->second + ".n1." + output_key);
+          started_skill.result_keys.push_back(output_key);
         } else if (skill == "skill_date") {
           started_skill.result_keys.push_back(wf_it->second + ".n1.date_result");
           started_skill.result_keys.push_back("date_result");
@@ -390,13 +347,7 @@ class ChatAgentBridge {
       }
     }
 
-    // -------------------------------------------------------------------------
-    // Phase 5: Wait for skill results and compose final response
-    // -------------------------------------------------------------------------
     auto skills_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    std::ostringstream final_resp;
-    final_resp << "多技能分析结果：\n";
-
     std::vector<std::string> skill_result_jsonl;
     for (const auto& started_skill : started_skills) {
       bool found_result = false;
@@ -406,8 +357,6 @@ class ChatAgentBridge {
           if (bus.get(result_key, v) && std::holds_alternative<std::string>(v)) {
             std::string r = std::get<std::string>(v);
             if (!r.empty()) {
-              final_resp << "[" << started_skill.session_id << "/" << started_skill.skill
-                         << "] " << r << "\n";
               bus.put("session:" + started_skill.session_id + ":skill_result", r);
               skill_result_jsonl.push_back(
                   "{\"session_id\":\"" + json_escape(started_skill.session_id)
@@ -424,7 +373,6 @@ class ChatAgentBridge {
     }
 
     if (started_skills.empty()) {
-      // No skills were started by coordinator; fall back to any available response
       DataVariant v;
       for (const std::string& key : {"final_response", "response", "output", "result"}) {
         if (bus.get(key, v) && std::holds_alternative<std::string>(v)) {
@@ -435,20 +383,40 @@ class ChatAgentBridge {
       return "已完成分析处理。";
     }
 
-    const auto runtime_dir = std::filesystem::path(package_path_) / "runtime";
     std::ostringstream jsonl;
     for (size_t i = 0; i < skill_result_jsonl.size(); ++i) {
       if (i > 0) jsonl << "\n";
       jsonl << skill_result_jsonl[i];
     }
-    write_text_file(runtime_dir / "skill_results.jsonl", jsonl.str());
+    bus.put("partial_skill_results", jsonl.str());
 
-    std::string result = final_resp.str();
-    std::string composed = run_command_capture(
-        "'" + (std::filesystem::path(package_path_) / "scripts" / "compose_final_response.sh").string()
-        + "' 2>/dev/null");
-    if (!composed.empty()) {
-      result = composed;
+    bus.remove("final_response");
+    runtime_->execute_workflow(agent_id, "session-coordinator-workflow",
+                               {{"session_id", client_session_id},
+                                {"user_text", user_text},
+                                {"selected_skills", selected_skills},
+                                {"partial_skill_results", jsonl.str()}});
+
+    auto final_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+    std::string result;
+    while (std::chrono::steady_clock::now() < final_deadline) {
+      DataVariant v;
+      if (bus.get("final_response", v) && std::holds_alternative<std::string>(v)) {
+        result = std::get<std::string>(v);
+        if (!result.empty()) {
+          break;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (result.empty()) {
+      std::ostringstream fallback;
+      fallback << "多技能分析结果：";
+      for (size_t i = 0; i < skill_result_jsonl.size(); ++i) {
+        if (i > 0) fallback << "；";
+        fallback << skill_result_jsonl[i];
+      }
+      result = fallback.str();
     }
     bus.put("final_response", result);
     return result;
@@ -792,19 +760,8 @@ void run_http_server(const std::string& host, int port, const std::filesystem::p
         continue;
       }
       std::string workflow_id = json_field("workflow_id");
-      if (workflow_id.empty()) workflow_id = "default-dispatcher-workflow";
+      if (workflow_id.empty()) workflow_id = "session-dispatcher-workflow";
       store.append(session_id, "user", text);
-      {
-        std::filesystem::create_directories(std::filesystem::path(bridge.package_path()) / "runtime");
-        std::ofstream latest(std::filesystem::path(bridge.package_path()) / "runtime" /
-                                 "latest_user_input.txt",
-                             std::ios::trunc);
-        latest << text;
-        std::ofstream latest_sid(std::filesystem::path(bridge.package_path()) / "runtime" /
-                                     "latest_session_id.txt",
-                                 std::ios::trunc);
-        latest_sid << session_id;
-      }
       std::string history = store.recent_as_json(session_id, 12);
       std::string payload = "session=" + session_id + "\nuser=" + text + "\nhistory=" + history;
       std::string result = bridge.execute(workflow_id, payload);
@@ -999,20 +956,9 @@ void handle_ws_client(int client_fd, ChatAgentBridge& bridge, ConversationStore&
       continue;
     }
     std::string workflow_id = extract_json_string(request, "workflow_id");
-    if (workflow_id.empty()) workflow_id = "default-dispatcher-workflow";
+    if (workflow_id.empty()) workflow_id = "session-dispatcher-workflow";
 
     store.append(session_id, "user", text);
-    {
-      std::filesystem::create_directories(std::filesystem::path(bridge.package_path()) / "runtime");
-      std::ofstream latest(std::filesystem::path(bridge.package_path()) / "runtime" /
-                               "latest_user_input.txt",
-                           std::ios::trunc);
-      latest << text;
-      std::ofstream latest_sid(std::filesystem::path(bridge.package_path()) / "runtime" /
-                                   "latest_session_id.txt",
-                               std::ios::trunc);
-      latest_sid << session_id;
-    }
     {
       std::ostringstream user_evt;
       user_evt << "{\"type\":\"message\",\"role\":\"user\",\"session_id\":\"" << json_escape(session_id)

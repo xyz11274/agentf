@@ -82,7 +82,7 @@ async function sendMsg() {
   const resp = await fetch('/api/chat', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({session_id: sid, text, workflow_id: 'default-dispatcher-workflow'})
+    body: JSON.stringify({session_id: sid, text, workflow_id: 'session-dispatcher-workflow'})
   });
   const data = await resp.json();
   append('assistant', data.text || '[empty]', sid);
