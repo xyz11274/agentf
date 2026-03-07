@@ -29,25 +29,24 @@ using EdgeId     = agentflow::EdgeId;
 namespace {
 framework::MMEdge::ControlType parse_edge_control_type(const std::string& type) {
   if(type == "if") return framework::MMEdge::ControlType::IF;
-  if(type == "loop") return framework::MMEdge::ControlType::LOOP;
-  if(type == "fork") return framework::MMEdge::ControlType::FORK;
-  if(type == "join") return framework::MMEdge::ControlType::JOIN;
-  if(type == "async") return framework::MMEdge::ControlType::ASYNC;
-  if(type == "goto") return framework::MMEdge::ControlType::GOTO;
+  if(type == "switch-case") return framework::MMEdge::ControlType::SWITCH_CASE;
   return framework::MMEdge::ControlType::NONE;
 }
 
-bool has_cycle_control_edge(const framework::MMWorkflow& workflow) {
-  for(const auto& edge : workflow.get_edges()) {
-    if(!edge) {
-      continue;
-    }
-    const auto type = edge->get_control_type();
-    if(type == framework::MMEdge::ControlType::LOOP || type == framework::MMEdge::ControlType::GOTO) {
-      return true;
-    }
+framework::MMNode::FieldType parse_node_field_type(const std::string& type) {
+  if(type == "int") return framework::MMNode::FieldType::INT;
+  if(type == "float") return framework::MMNode::FieldType::FLOAT;
+  if(type == "bool") return framework::MMNode::FieldType::BOOL;
+  if(type == "list") return framework::MMNode::FieldType::LIST;
+  if(type == "map") return framework::MMNode::FieldType::MAP;
+  return framework::MMNode::FieldType::STRING;
+}
+
+framework::MMNode::TransferMode parse_node_transfer_mode(const std::string& mode) {
+  if(mode == "ref" || mode == "reference") {
+    return framework::MMNode::TransferMode::REFERENCE;
   }
-  return false;
+  return framework::MMNode::TransferMode::VALUE;
 }
 }  // namespace
 
@@ -652,7 +651,6 @@ bool WorkflowParser::parse_node_config(std::shared_ptr<const IJsonValue> node_ob
 bool WorkflowParser::parse_node_inputs(std::shared_ptr<const IJsonValue> node_obj,
                                        framework::MMNode::Config& config, ParseResult& result,
                                        const std::string& path) {
-  // Try to parse as array of strings
   auto inputs_array = JsonHelper::get_array(node_obj, "inputs");
   if(inputs_array) {
     size_t num_inputs = inputs_array->array_size();
@@ -660,17 +658,47 @@ bool WorkflowParser::parse_node_inputs(std::shared_ptr<const IJsonValue> node_ob
       auto input = inputs_array->array_at(i);
       if(input && input->is_string()) {
         config.input_params.push_back(input->as_string());
+        config.input_definitions.push_back(
+            framework::MMNode::FieldDefinition{input->as_string(),
+                                               framework::MMNode::FieldType::STRING,
+                                               framework::MMNode::TransferMode::VALUE,
+                                               false});
+      } else if(input && input->is_object()) {
+        framework::MMNode::FieldDefinition field;
+        field.name = JsonHelper::get_string(input, "name", "");
+        field.type = parse_node_field_type(JsonHelper::get_string(input, "type", "string"));
+        field.transfer_mode =
+            parse_node_transfer_mode(JsonHelper::get_string(input, "transfer_mode", "value"));
+        field.required = JsonHelper::get_bool(input, "required", false);
+        if(field.name.empty()) {
+          result.errors.emplace_back("node input definition requires non-empty name",
+                                     path + ".inputs[" + std::to_string(i) + "]");
+          return false;
+        }
+        config.input_params.push_back(field.name);
+        config.input_definitions.push_back(field);
       }
     }
     return true;
   }
 
-  // Try to parse as object (use keys as input names)
   auto inputs_obj = JsonHelper::get_object(node_obj, "inputs");
   if(inputs_obj) {
     auto keys = inputs_obj->object_keys();
     for(const auto& key : keys) {
       config.input_params.push_back(key);
+      auto input = inputs_obj->get_member(key);
+      framework::MMNode::FieldDefinition field;
+      field.name = key;
+      if(input && input->is_string()) {
+        field.type = parse_node_field_type(input->as_string());
+      } else if(input && input->is_object()) {
+        field.type = parse_node_field_type(JsonHelper::get_string(input, "type", "string"));
+        field.transfer_mode =
+            parse_node_transfer_mode(JsonHelper::get_string(input, "transfer_mode", "value"));
+        field.required = JsonHelper::get_bool(input, "required", false);
+      }
+      config.input_definitions.push_back(field);
     }
     return true;
   }
@@ -681,7 +709,6 @@ bool WorkflowParser::parse_node_inputs(std::shared_ptr<const IJsonValue> node_ob
 bool WorkflowParser::parse_node_outputs(std::shared_ptr<const IJsonValue> node_obj,
                                         framework::MMNode::Config& config, ParseResult& result,
                                         const std::string& path) {
-  // Try to parse as array of strings
   auto outputs_array = JsonHelper::get_array(node_obj, "outputs");
   if(outputs_array) {
     size_t num_outputs = outputs_array->array_size();
@@ -689,17 +716,47 @@ bool WorkflowParser::parse_node_outputs(std::shared_ptr<const IJsonValue> node_o
       auto output = outputs_array->array_at(i);
       if(output && output->is_string()) {
         config.output_params.push_back(output->as_string());
+        config.output_definitions.push_back(
+            framework::MMNode::FieldDefinition{output->as_string(),
+                                               framework::MMNode::FieldType::STRING,
+                                               framework::MMNode::TransferMode::VALUE,
+                                               false});
+      } else if(output && output->is_object()) {
+        framework::MMNode::FieldDefinition field;
+        field.name = JsonHelper::get_string(output, "name", "");
+        field.type = parse_node_field_type(JsonHelper::get_string(output, "type", "string"));
+        field.transfer_mode =
+            parse_node_transfer_mode(JsonHelper::get_string(output, "transfer_mode", "value"));
+        field.required = JsonHelper::get_bool(output, "required", false);
+        if(field.name.empty()) {
+          result.errors.emplace_back("node output definition requires non-empty name",
+                                     path + ".outputs[" + std::to_string(i) + "]");
+          return false;
+        }
+        config.output_params.push_back(field.name);
+        config.output_definitions.push_back(field);
       }
     }
     return true;
   }
 
-  // Try to parse as object (use keys as output names)
   auto outputs_obj = JsonHelper::get_object(node_obj, "outputs");
   if(outputs_obj) {
     auto keys = outputs_obj->object_keys();
     for(const auto& key : keys) {
       config.output_params.push_back(key);
+      auto output = outputs_obj->get_member(key);
+      framework::MMNode::FieldDefinition field;
+      field.name = key;
+      if(output && output->is_string()) {
+        field.type = parse_node_field_type(output->as_string());
+      } else if(output && output->is_object()) {
+        field.type = parse_node_field_type(JsonHelper::get_string(output, "type", "string"));
+        field.transfer_mode =
+            parse_node_transfer_mode(JsonHelper::get_string(output, "transfer_mode", "value"));
+        field.required = JsonHelper::get_bool(output, "required", false);
+      }
+      config.output_definitions.push_back(field);
     }
     return true;
   }
@@ -744,14 +801,11 @@ bool WorkflowParser::parse_edge_config(std::shared_ptr<const IJsonValue> edge_ob
   }
 
   // Parse data transfer mode
-  std::string mode_str = JsonHelper::get_string(edge_obj, "transfer_mode", "shared_memory");
-  if(mode_str == "message_queue") {
-    config.transfer_mode = framework::MMEdge::DataTransferMode::MESSAGE_QUEUE;
-  } else if(mode_str == "remote_transfer") {
-    config.transfer_mode = framework::MMEdge::DataTransferMode::REMOTE_TRANSFER;
-  } else {
-    config.transfer_mode = framework::MMEdge::DataTransferMode::SHARED_MEMORY;
-  }
+  std::string mode_str = JsonHelper::get_string(edge_obj, "transfer_mode", "value");
+  config.transfer_mode =
+      (mode_str == "ref" || mode_str == "reference")
+          ? framework::MMEdge::DataTransferMode::REFERENCE
+          : framework::MMEdge::DataTransferMode::VALUE;
 
   // Parse source outputs
   auto source_outputs = JsonHelper::get_array(edge_obj, "source_outputs");
@@ -813,21 +867,33 @@ bool WorkflowParser::parse_edge_config(std::shared_ptr<const IJsonValue> edge_ob
   auto control_obj = JsonHelper::get_object(edge_obj, "control");
   if(control_obj) {
     const std::string control_type = JsonHelper::get_string(control_obj, "type", "");
-    config.control.type            = parse_edge_control_type(control_type);
-    config.control.expression      = JsonHelper::get_string(control_obj, "expression", "");
-    config.control.goto_target     = JsonHelper::get_string(control_obj, "goto_target", "");
-    config.control.loop_id         = JsonHelper::get_string(control_obj, "loop_id", "");
-    config.control.max_iterations =
-        static_cast<int>(JsonHelper::get_int(control_obj, "max_iterations", 0));
-    config.control.fork_group   = JsonHelper::get_string(control_obj, "fork_group", "");
-    config.control.join_group   = JsonHelper::get_string(control_obj, "join_group", "");
-    config.control.callback_node = JsonHelper::get_string(control_obj, "callback_node", "");
+    if(control_type == "loop" || control_type == "fork" || control_type == "join"
+       || control_type == "async" || control_type == "goto") {
+      result.errors.emplace_back(
+          "edge control types loop/fork/join/async/goto are no longer supported; use if or switch-case",
+          path + ".control.type");
+      return false;
+    }
+    config.control.type       = parse_edge_control_type(control_type);
+    config.control.expression = JsonHelper::get_string(control_obj, "expression", "");
+    config.control.case_value = JsonHelper::get_string(control_obj, "case_value", "");
+    config.control.is_default = JsonHelper::get_bool(control_obj, "is_default", false);
   }
   if(config.control.type == framework::MMEdge::ControlType::IF) {
     if(config.control.expression.empty()) {
       config.control.expression = config.condition_expression;
     }
     config.condition_expression = config.control.expression;
+  } else if(config.control.type == framework::MMEdge::ControlType::SWITCH_CASE) {
+    if(config.control.expression.empty()) {
+      result.errors.emplace_back("switch-case control requires expression", path + ".control.expression");
+      return false;
+    }
+    if(config.control.case_value.empty() && !config.control.is_default) {
+      result.errors.emplace_back("switch-case control requires case_value or is_default=true",
+                                 path + ".control.case_value");
+      return false;
+    }
   } else if(config.control.type == framework::MMEdge::ControlType::NONE &&
             !config.condition_expression.empty()) {
     // Backward compatibility: old condition_expression maps to IF edge.
@@ -916,19 +982,10 @@ bool WorkflowParser::validate_workflow_structure(std::shared_ptr<framework::MMWo
     // Empty workflow is allowed (e.g. reference only)
   }
 
-  // Validate workflow graph; cycle control edges (loop/goto) are allowed.
+  // Validate workflow graph. Controlled cycles are no longer supported.
   if(!workflow->validate()) {
-    if(!has_cycle_control_edge(*workflow)) {
-      result.errors.emplace_back("MMWorkflow graph validation failed - possible cycle detected");
-      return false;
-    }
-    for(const auto& node : workflow->get_nodes()) {
-      if(node) {
-        node->initialize();
-      }
-    }
-    result.warnings.emplace_back(
-        "MMWorkflow contains loop/goto control edges; acyclic-only validation is bypassed.");
+    result.errors.emplace_back("MMWorkflow graph validation failed - workflow must be acyclic");
+    return false;
   }
 
   return true;

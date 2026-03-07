@@ -10,8 +10,13 @@
       "execution_mode": "so_library",
       "command": "build/libmulti_session_nodes.dylib",
       "function_name": "node_pipeline",
-      "inputs": ["user_text", "session_id"],
-      "outputs": ["pipeline_status"]
+      "inputs": [
+        {"name": "user_text", "type": "string", "required": true},
+        {"name": "session_id", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "pipeline_status", "type": "string"}
+      ]
     }
   ],
   "edges": []

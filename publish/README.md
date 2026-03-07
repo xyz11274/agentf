@@ -30,8 +30,8 @@ MMWorkflow 规范样例位于：
 开发时重点定义：
 - `nodes`：负责执行，明确执行模式与执行部件
 - `edges`：负责控制流程与数据传递
-- 统一控制字段：`edge.control.type + edge.control.*`，支持 `if/loop/fork/join/async/goto`
-- 支持环回流程：通过 `control.type = "goto"` 或 `loop` 允许节点重入
+- 统一控制字段：`edge.control.type + edge.control.*`，支持 `if` 与 `switch-case`
+- Workflow 图保持有向无环；分支通过 `if` / `switch-case` 表达，避免隐式回跳控制
 
 可复用内置模板：
 - `publish/workflow/memory`
@@ -70,4 +70,4 @@ MMNode API 手册：
 - 使用 `publish/agent/visualizer.html` 可视化 workflow。
 - 支持 `.json/.jsonc`，并可展示 `includes`、`workflow_ref`、`edge.control.*`。
 - 节点 `name/type` 缺省时会自动回退到 `id/unknown`，避免示例文件因字段缺失导致加载失败。
-- 对带环流程（如 `goto`）已支持可视化布局，不要求严格无环图。
+- 可视化面向 DAG + 条件/分支边；`switch-case` 默认与普通分支边一致展示。

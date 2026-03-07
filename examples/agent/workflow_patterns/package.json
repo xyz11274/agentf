@@ -16,6 +16,6 @@
   "metadata": {
     "type": "workflow",
     "category": "patterns",
-    "tags": ["conditional", "loop", "sample", "patterns", "example"]
+    "tags": ["conditional", "switch-case", "sample", "patterns", "example"]
   }
 }

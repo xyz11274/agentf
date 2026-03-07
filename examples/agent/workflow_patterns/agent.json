@@ -1,19 +1,21 @@
 {
   "name": "WorkflowPatternsAgent",
   "version": "1.0.0",
-  "description": "Agent demonstrating common workflow patterns: conditional branching, loop iteration, and sequential processing",
+  "description": "Agent demonstrating common workflow patterns: conditional branching, switch-case routing, and sequential processing",
   "session_pool_size": 1,
-  "contextupdater": {
-    "id": 0,
-    "type": "contextupdater",
-    "description": "Update workflow-pattern context",
-    "workflow_file": "loop_workflow.json"
-  },
+  "tasks": [
+    {
+      "id": 0,
+      "type": "contextupdater",
+      "description": "Update workflow-pattern context",
+      "workflow_file": "loop_workflow.json"
+    }
+  ],
   "sessions": [
     {
       "id": 0,
-      "description": "Primary pooled session",
-      "task_count": 2,
+      "description": "Homogeneous pooled session template",
+      "task_count": 3,
       "tasks": [
         {
           "id": 0,
@@ -26,6 +28,17 @@
           "type": "coordinator",
           "description": "Coordinate workflow pattern outputs",
           "workflow_file": "conditional_workflow.json"
+        },
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "Run switch-case routing skill",
+          "workflow_file": "loop_workflow.json",
+          "skill": {
+            "name": "switch-router",
+            "config_dir": "skills/switch-router",
+            "instance_pool_size": 2
+          }
         }
       ]
     }

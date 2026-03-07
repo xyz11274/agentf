@@ -178,12 +178,17 @@ bool MMEdge::transfer_data(const DataMap& source_data, DataMap& target_data) {
   // Transfer data from source to target node
   // Based on configured data transfer mode
 
-  for(const auto& output : config_.source_outputs) {
+  for(size_t index = 0; index < config_.source_outputs.size(); ++index) {
+    const auto& output = config_.source_outputs[index];
     auto it = source_data.find(output);
     if(it != source_data.end()) {
-      // Find corresponding input parameter
-      if(!config_.target_inputs.empty()) {
-        target_data[config_.target_inputs[0]] = it->second;
+      const std::string target_key =
+          index < config_.target_inputs.size() ? config_.target_inputs[index] : output;
+      if(config_.transfer_mode == DataTransferMode::REFERENCE) {
+        target_data[target_key] = std::string("databus://global/") + config_.source_node + "."
+                                  + output;
+      } else {
+        target_data[target_key] = it->second;
       }
     }
   }

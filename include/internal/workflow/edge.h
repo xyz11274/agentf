@@ -21,24 +21,19 @@ namespace framework {
 /**
  * MMEdge defines the dependency relationship between nodes
  * Supports data passing and control flow events.
- * MMWorkflow process control is edge-centric, including branch/loop/fork/join/async/goto.
+ * MMWorkflow process control is edge-centric, including if and switch-case selection.
  */
 class MMEdge {
 public:
   enum class ControlType {
-    NONE  = 0,
-    IF    = 1,
-    LOOP  = 2,
-    FORK  = 3,
-    JOIN  = 4,
-    ASYNC = 5,
-    GOTO  = 6,
+    NONE        = 0,
+    IF          = 1,
+    SWITCH_CASE = 2,
   };
 
   enum class DataTransferMode {
-    SHARED_MEMORY   = 0,
-    MESSAGE_QUEUE   = 1,
-    REMOTE_TRANSFER = 2,
+    VALUE     = 0,
+    REFERENCE = 1,
   };
 
   struct Config {
@@ -50,29 +45,25 @@ public:
     std::vector<std::string> source_outputs;
     std::vector<std::string> target_inputs;
 
-    // Data transfer configuration
-    DataTransferMode         transfer_mode = DataTransferMode::SHARED_MEMORY;
-    std::vector<std::string> data_formats;  // text, binary, audio, video, etc.
+     // Data transfer configuration
+     DataTransferMode         transfer_mode = DataTransferMode::VALUE;
+     std::vector<std::string> data_formats;  // text, binary, audio, video, etc.
 
     // Control flow events
     std::vector<std::string> supported_events;  // start, end, fail, data_ready, etc.
 
-    // Conditional execution support (as string, parsed by MMWorkflow)
-    std::string condition_expression;
+     // Conditional execution support (as string, parsed by MMWorkflow)
+     std::string condition_expression;
 
     // MMEdge priority (for multiple outgoing edges)
     int priority = 0;
 
-    struct ControlConfig {
-      ControlType  type = ControlType::NONE;
-      std::string  expression;
-      std::string  goto_target;
-      std::string  loop_id;
-      int          max_iterations = 0;
-      std::string  fork_group;
-      std::string  join_group;
-      std::string  callback_node;
-    } control;
+     struct ControlConfig {
+       ControlType  type = ControlType::NONE;
+       std::string  expression;
+       std::string  case_value;
+       bool         is_default = false;
+     } control;
   };
 
   enum class MessagePriority {

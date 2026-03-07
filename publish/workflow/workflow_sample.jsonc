@@ -258,10 +258,9 @@
 
       // How data is passed from source to target.
       // Valid values:
-      //   "shared_memory"  – zero-copy in-process (default)
-      //   "message_queue"  – serialised through an async queue
-      //   "remote_transfer" – serialised and sent over network
-      "transfer_mode": "shared_memory",
+      //   "value" – pass the value directly to the target input
+      //   "ref"   – pass a DataBus reference string to the target input
+      "transfer_mode": "value",
 
       // MIME-type or custom format tags for the data on this edge.
       // Used by runtime type-checkers and serializers.
@@ -277,7 +276,7 @@
       "condition_expression": "",
 
       // Unified flow-control object (new style).
-      // type: if/loop/fork/join/async/goto
+      // type: if/switch-case
       "control": {
         "type": "if",
         "expression": ""
@@ -295,7 +294,7 @@
       "target": "classify",
       "source_outputs": ["plain_text"],
       "target_inputs": ["plain_text"],
-      "transfer_mode": "message_queue",
+      "transfer_mode": "ref",
       "data_formats": ["text/plain"],
       "supported_events": ["data_ready"],
       "condition_expression": "",
@@ -309,7 +308,7 @@
       "target": "persist",
       "source_outputs": ["category", "confidence"],
       "target_inputs": ["category", "confidence"],
-      "transfer_mode": "shared_memory",
+      "transfer_mode": "value",
       "data_formats": ["text/plain", "application/json"],
       "supported_events": ["data_ready", "end"],
       // Only persist when the classifier is confident (score > 0.5)
@@ -328,7 +327,7 @@
       "target": "error_handler",
       "source_outputs": ["category", "confidence"],
       "target_inputs": ["category"],
-      "transfer_mode": "shared_memory",
+      "transfer_mode": "value",
       "data_formats": ["application/json"],
       "supported_events": ["data_ready", "fail"],
       // Mirror condition: handle low-confidence results
@@ -344,7 +343,7 @@
       "target": "error_handler",
       "source_outputs": ["raw_document"],
       "target_inputs": ["raw_document"],
-      "transfer_mode": "message_queue",
+      "transfer_mode": "ref",
       "data_formats": ["application/octet-stream"],
       // Only activate when ingest raised an error
       "supported_events": ["fail"],

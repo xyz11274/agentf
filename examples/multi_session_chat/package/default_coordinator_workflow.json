@@ -10,8 +10,12 @@
       "execution_mode": "so_library",
       "command": "build/libmulti_session_nodes.dylib",
       "function_name": "node_collect_skills",
-      "inputs": ["session_ids"],
-      "outputs": ["selected_skills"]
+      "inputs": [
+        {"name": "session_ids", "type": "list", "required": true}
+      ],
+      "outputs": [
+        {"name": "selected_skills", "type": "string"}
+      ]
     },
     {
       "id": "plan",
@@ -20,8 +24,12 @@
       "execution_mode": "so_library",
       "command": "build/libmulti_session_nodes.dylib",
       "function_name": "node_plan_dependencies",
-      "inputs": ["selected_skills"],
-      "outputs": ["task_plan"]
+      "inputs": [
+        {"name": "selected_skills", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "task_plan", "type": "string"}
+      ]
     },
     {
       "id": "apply",
@@ -30,12 +38,31 @@
       "execution_mode": "so_library",
       "command": "build/libmulti_session_nodes.dylib",
       "function_name": "node_apply_task_plan",
-      "inputs": ["task_plan", "selected_skills"],
-      "outputs": ["orchestration_plan"]
+      "inputs": [
+        {"name": "task_plan", "type": "string", "required": true},
+        {"name": "selected_skills", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "orchestration_plan", "type": "string"}
+      ]
     }
   ],
   "edges": [
-    {"id": "c1", "source": "collect", "target": "plan"},
-    {"id": "c2", "source": "plan", "target": "apply"}
+    {
+      "id": "c1",
+      "source": "collect",
+      "target": "plan",
+      "source_outputs": ["selected_skills"],
+      "target_inputs": ["selected_skills"],
+      "transfer_mode": "value"
+    },
+    {
+      "id": "c2",
+      "source": "plan",
+      "target": "apply",
+      "source_outputs": ["task_plan"],
+      "target_inputs": ["task_plan"],
+      "transfer_mode": "value"
+    }
   ]
 }

@@ -204,7 +204,7 @@ graph LR
 ### 2.2 行为模型
 
 #### 关键行为 A：MMWorkflow 控制流推进
-- MMWorkflow 依据 edge 依赖与 `control.type`（if/loop/fork/join/async/goto）选择可执行节点。
+- MMWorkflow 依据 edge 依赖与 `control.type`（if/switch-case）选择可执行节点。
 - MMNode 执行完成后，MMWorkflow 更新状态并调度后继节点。
 
 ```mermaid
@@ -218,8 +218,7 @@ flowchart TD
     FAIL --> RETRY{可重试?}
     RETRY -- Yes --> EXEC
     RETRY -- No --> ENDFAIL([MMWorkflow Failed])
-    CTRL -- if/loop/goto --> READY
-    CTRL -- fork/join/async --> READY
+    CTRL -- if/switch-case --> READY
     CTRL -- none --> DONE{全部完成?}
     DONE -- No --> READY
     DONE -- Yes --> ENDSUCC([MMWorkflow Success])
@@ -681,17 +680,17 @@ graph TB
   - ⚠️ 增加 Runtime 依赖与测试维度。
   - 📌 需持续完善 Worker 负载与隔离策略。
 
-### ADR-003：Session 拓扑固化为 talker / thinker + 显式任务配置
+### ADR-003：Session 池同质化 + 显式任务配置
 - **日期**：2026-02-28
 - **状态**：已更新（2026-03-07）
-- **背景**：需要把 session / task / skill 拓扑前移到 `agent.json`，并让 context workflow 收敛到 `contextkeeper` 任务。
-- **决策**：每个 agent 由 `agent.json.sessions` 显式定义 session 列表；0 号 session 固定为 talker，任务编号从 `0..N` 连续，基础任务类型为 `dispatcher`、`coordinator`、`contextkeeper`，`skill` 可按 `instance_pool_size` 生成实例池。
+- **背景**：需要把 session / task / skill 拓扑前移到 `agent.json`，并让 context workflow 收敛到 agent 顶层任务。
+- **决策**：每个 agent 由 `session_pool_size + tasks + sessions` 描述；`tasks[]` 中声明 `contextupdater`，`sessions[]` 只保留 1 份同质化 session 模板，模板内固定包含 `dispatcher`、`coordinator` 和若干 `skill`，并按 `instance_pool_size` 生成技能实例池。
 - **备选方案**：
   - 方案 A（继续沿用 task0/task1 隐式约定）：改动小 / 难以表达多 session skill 池。
   - 方案 B（显式 session/task schema）：配置更长 / 但职责更清晰。
 - **后果**：
-  - ✅ session 类型、任务职责与 workflow 绑定关系在配置中可见。
-  - ✅ `contextkeeper` 直接承接原有 context workflow 任务链路。
+  - ✅ session 池拓扑更短，扩容只需调整 `session_pool_size`。
+  - ✅ agent 级 `contextupdater` 与 session 内 skill 任务职责边界更清晰。
   - ⚠️ examples / publish / tests / 文档都需一起迁移。
   - 📌 需保证 metadata 显式 `workflow_id` 的最高优先级不被破坏。
 

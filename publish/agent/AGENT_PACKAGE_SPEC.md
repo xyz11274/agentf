@@ -36,20 +36,22 @@ MMAgent 运行时元数据，至少包含：
 - `name`：MMAgent 名称
 - `version`：MMAgent 版本（应与 `$AGTVER` 一致）
 - `description`：功能概述
-- `session_pool_size`：预创建 session 池大小，需与 `sessions` 数组长度一致
-- `contextupdater`：agent 级 context 更新任务配置（`type = contextupdater`，绑定 workflow 文件）
-- `sessions`：session 池模板定义，至少包含 1 个 session
-  - `session.id`：从 `0` 开始连续编号
+- `session_pool_size`：预创建 session 池大小（>= 1），按同一份 session 模板实例化
+- `tasks`：agent 级任务列表；当前要求包含 1 个 `contextupdater` 任务
+- `sessions`：同质化 session 模板定义，固定只配置 1 个 session
+  - `session.id`：固定为 `0`，表示模板编号
   - `session.description`
   - `session.task_count`
   - `session.tasks`
 - `task.id`：从 `0` 开始连续编号
-- `task.type`：`dispatcher` / `coordinator` / `skill`
+- 顶层 `tasks[].type`：当前固定为 `contextupdater`
+- `session.tasks[].type`：`dispatcher` / `coordinator` / `skill`
 - `task.workflow_file`：任务绑定的 workflow 文件
 - `skill` 任务额外包含：
   - `skill.name`
   - `skill.config_dir`
-  - `skill.instance_pool_size`（>= 1）
+  - `skill.instance_pool_size`（>= 1，默认 2）
+- 每个 session 模板必须包含 1 个 `dispatcher`、1 个 `coordinator`，以及至少 1 个 `skill`
 
 ### 3.2 `agentCard.md`
 MMAgent Prompt/能力卡片，供其他模型或 MMAgent 读取。
@@ -57,9 +59,9 @@ MMAgent Prompt/能力卡片，供其他模型或 MMAgent 读取。
 ### 3.3 `workflow_XX.json`
 工作流定义文件，包含 `node` 与 `edge`：
 - node 负责动作执行
-- edge 负责流程控制（包含 if/loop/fork/join/async/goto）
-- session pool 中每个 session 的 dispatcher / coordinator workflow 推荐分别承担请求分发与结果编排入口
-- context workflow 应收敛到 agent 级 `contextupdater` 任务
+- edge 负责流程控制（包含 if/switch-case）
+- session pool 中每个 session 都由同一份模板复制而来，并固定包含 1 个 dispatcher、1 个 coordinator 和若干 skill 任务
+- agent 级 context workflow 应通过顶层 `tasks[]` 中的 `contextupdater` 任务声明
 
 ### 3.4 `node_xxx.$TYPE`
 节点可执行实现，支持后缀示例：`.so`、`.sh`、`.py`、`.jar`。

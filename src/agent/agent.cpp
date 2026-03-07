@@ -280,9 +280,14 @@ bool MMAgent::initialize_components(std::shared_ptr<AgentPackage> package) {
 
   std::vector<std::shared_ptr<MMAgentSession>> session_pool;
   if(package_ && !package_->get_config().sessions.empty()) {
-    for(const auto& session_definition : package_->get_config().sessions) {
-      auto session = create_session_from_definition(std::to_string(session_definition.session_index),
-                                                    session_definition);
+    const auto& session_template = package_->get_config().sessions.front();
+    const int session_pool_size =
+        std::max(1, package_->get_config().session_pool_size);
+    for(int session_index = 0; session_index < session_pool_size; ++session_index) {
+      auto session_definition = session_template;
+      session_definition.session_index = session_index;
+      auto session =
+          create_session_from_definition(std::to_string(session_index), session_definition);
       if(session) {
         session_pool.push_back(session);
       }

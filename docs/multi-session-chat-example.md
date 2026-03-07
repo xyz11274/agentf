@@ -13,11 +13,11 @@
 1. **独立 agent 进程 + WebUI + 对话管理落盘**  
    `example_chat_server` 直接加载 MMAgent 包并初始化 MMAgentRuntime，提供 HTTP + WebSocket，并将消息按 `session_id` 存到 `package/history/*.jsonl`；WebUI 通过 `/api/chat` 和 `/api/history` 展示多轮消息。
 
-2. **多轮对话包 + precreate_session_count=4 + task0 dispatcher**
-   - `agent.json` 设置 `precreate_session_count: 4`
-   - 默认 session 使用 `default-dispatcher-workflow`（C++ SO 节点）广播请求到其他 session
-   - 非默认 session 使用 `session-dispatcher-workflow`（C++ SO 节点）：读取 context、选择 skill、生成任务计划
-   - 默认 session 的 `default-coordinator-workflow`（C++ SO 节点）实现跨 session 编排
+2. **多轮对话包 + 同质化 session 池 + 顶层 contextupdater**
+   - `agent.json` 设置 `session_pool_size: 5`，并只保留 1 份同质化 session 模板
+   - 顶层 `tasks[0]` 使用 `contextupdater`，绑定 `session-context-workflow`
+   - 每个 pooled session 都包含 `session-dispatcher-workflow`、`default-coordinator-workflow` 与 4 个 skill workflow
+   - `default-coordinator-workflow`（C++ SO 节点）负责跨 session 编排
 
 3. **session_context_workflow**
    `session-context-workflow` 节点链路（**Go 实现**）：  
@@ -92,7 +92,7 @@ bash examples/multi_session_chat/nodes/java/build.sh
 
 ## 消息/事件驱动与 DataBus 集成
 
-所有节点间的数据共享通过 **AgentFlow DataBus** 完成，用户请求通过 **agent msgque 消息队列**驱动，彻底取代了旧的文件交换方式。
+所有节点间的数据共享通过 **AgentFlow DataBus** 完成，用户请求通过 **agent msgque 消息队列**驱动，workflow 侧已切换到 typed node I/O + `value/ref` 传递模型。
 
 ### 请求流水线（ChatAgentBridge）
 
@@ -103,8 +103,8 @@ Phase 1: route_request_message(TASK_REQUEST)
          process_all_sessions_until_idle()
          → generated_tasks_ 入队
     ↓
-后台轮询线程 agent_task_poller_loop() 消费任务
-         → execute_workflow("default-dispatcher-workflow")
+后台任务轮询线程消费生成任务
+         → 根据 task/workflow 映射执行 dispatcher 或 skill workflow
     ↓
 Phase 2: 等待 dispatcher_done=1 出现在 DataBus
     ↓
@@ -138,7 +138,7 @@ Phase 5: 聚合所有 session:<sid>:skill_result
 
 框架 `process_node()` 在执行节点 `execute()` 前，自动将 DataBus 中与节点声明 `inputs` 字段对应的值合并到节点 `inputs_` 中：
 - 节点显式传入的 input 优先级不变（输入非空时不被 DataBus 值覆盖）；
-- 节点只需在 workflow JSON 中声明 `"inputs": ["key1", "key2"]`，框架自动注水，无需文件读取。
+- 节点可在 workflow JSON 中声明 typed `inputs` / `outputs`，框架按字段名自动注水，无需文件读取。
 
 ---
 
@@ -218,4 +218,3 @@ Linux 上 SO 库后缀为 `.so`，需将以下 workflow JSON 中的 `command` �
 ```bash
 bash examples/multi_session_chat/tests/auto_dialog_test.sh
 ```
-

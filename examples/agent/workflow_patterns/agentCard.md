@@ -8,9 +8,9 @@
 
 演示基于数据值的条件分支执行：根据 `request_type` 字段将任务路由到不同的处理节点（A/B/C 三路并行 + 聚合）。
 
-### loop_workflow.json — 循环迭代
+### loop_workflow.json — switch-case 路由
 
-演示对数据集合的 FOR_EACH 循环处理：加载数据 → 逐条处理（配置 `loop_config`）→ 聚合结果。
+演示 `switch-case` 分支路由：加载请求 → 根据 route 选择 A/B/default 分支。
 
 ### sample_workflow.json — 顺序处理管道
 

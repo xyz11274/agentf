@@ -2,18 +2,20 @@
   "name": "SampleAgent",
   "version": "1.0.0",
   "description": "Sample Agent package template",
-  "session_pool_size": 1,
-  "contextupdater": {
-    "id": 0,
-    "type": "contextupdater",
-    "description": "Update agent-level context",
-    "workflow_file": "workflow_01.json"
-  },
+  "session_pool_size": 2,
+  "tasks": [
+    {
+      "id": 0,
+      "type": "contextupdater",
+      "description": "Update agent-level context",
+      "workflow_file": "workflow_01.json"
+    }
+  ],
   "sessions": [
     {
       "id": 0,
-      "description": "Primary pooled session",
-      "task_count": 2,
+      "description": "Homogeneous pooled session template",
+      "task_count": 4,
       "tasks": [
         {
           "id": 0,
@@ -26,6 +28,28 @@
           "type": "coordinator",
           "description": "Coordinate task outputs",
           "workflow_file": "coordinator_workflow.json"
+        },
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "Run knowledge skill workflow",
+          "workflow_file": "workflow_knowledge.json",
+          "skill": {
+            "name": "knowledge",
+            "config_dir": "skills/knowledge",
+            "instance_pool_size": 2
+          }
+        },
+        {
+          "id": 3,
+          "type": "skill",
+          "description": "Run tools skill workflow",
+          "workflow_file": "workflow_tools.json",
+          "skill": {
+            "name": "tools",
+            "config_dir": "skills/tools",
+            "instance_pool_size": 2
+          }
         }
       ]
     }

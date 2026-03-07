@@ -2,38 +2,52 @@
   "id": "basic-workflow",
   "version": "1.0",
   "name": "basic-agent-workflow",
-  "description": "Basic agent workflow example",
+  "description": "Basic agent workflow example with typed IO",
   "nodes": [
     {
       "id": "start",
       "type": "start",
-      "name": "Start Node"
+      "name": "Start Node",
+      "outputs": [
+        {"name": "request", "type": "map", "transfer_mode": "ref"}
+      ]
     },
     {
       "id": "process",
       "type": "task",
       "name": "Process Task",
-      "action": "process_data",
-      "inputs": {
-        "data": "${input.data}"
-      }
+      "inputs": [
+        {"name": "request", "type": "map", "transfer_mode": "ref", "required": true}
+      ],
+      "outputs": [
+        {"name": "result", "type": "string"}
+      ]
     },
     {
       "id": "end",
       "type": "end",
-      "name": "End Node"
+      "name": "End Node",
+      "inputs": [
+        {"name": "result", "type": "string", "required": true}
+      ]
     }
   ],
   "edges": [
     {
       "id": "edge_start_to_process",
       "source": "start",
-      "target": "process"
+      "target": "process",
+      "source_outputs": ["request"],
+      "target_inputs": ["request"],
+      "transfer_mode": "ref"
     },
     {
       "id": "edge_process_to_end",
       "source": "process",
-      "target": "end"
+      "target": "end",
+      "source_outputs": ["result"],
+      "target_inputs": ["result"],
+      "transfer_mode": "value"
     }
   ],
   "metadata": {

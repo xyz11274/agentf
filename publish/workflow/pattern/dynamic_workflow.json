@@ -7,17 +7,18 @@
     "../tools/workflow.json"
   ],
   "nodes": [
-    {"id": "start", "name": "Start", "type": "start", "execution_mode": "cpp_function"},
-    {"id": "selector", "name": "Selector", "type": "task", "execution_mode": "shell_script", "command": "../tools/nodes/tool_select.sh"},
+    {"id": "start", "name": "Start", "type": "start", "execution_mode": "cpp_function", "outputs": [{"name": "route", "type": "string"}]},
+    {"id": "selector", "name": "Selector", "type": "task", "execution_mode": "shell_script", "command": "../tools/nodes/tool_select.sh", "outputs": [{"name": "selection", "type": "string"}]},
     {"id": "dynamic_node", "name": "Dynamic Node", "type": "task", "execution_mode": "shell_script", "command": "../tools/nodes/tool_call.sh"},
     {"id": "dynamic_workflow", "name": "Dynamic Workflow", "type": "workflow", "workflow_ref": "../tools/workflow.json"},
     {"id": "end", "name": "End", "type": "end", "execution_mode": "cpp_function"}
   ],
   "edges": [
-    {"id": "e_start_selector", "source": "start", "target": "selector", "control": {"type": "if", "expression": "true"}},
-    {"id": "e_selector_node", "source": "selector", "target": "dynamic_node", "control": {"type": "goto", "goto_target": "dynamic_node"}},
-    {"id": "e_selector_workflow", "source": "selector", "target": "dynamic_workflow", "control": {"type": "goto", "goto_target": "dynamic_workflow"}},
-    {"id": "e_node_end", "source": "dynamic_node", "target": "end", "control": {"type": "if", "expression": "true"}},
-    {"id": "e_workflow_end", "source": "dynamic_workflow", "target": "end", "control": {"type": "if", "expression": "true"}}
+    {"id": "e_start_selector", "source": "start", "target": "selector"},
+    {"id": "e_selector_node", "source": "selector", "target": "dynamic_node", "control": {"type": "switch-case", "expression": "selection", "case_value": "node"}},
+    {"id": "e_selector_workflow", "source": "selector", "target": "dynamic_workflow", "control": {"type": "switch-case", "expression": "selection", "case_value": "workflow"}},
+    {"id": "e_selector_default", "source": "selector", "target": "dynamic_node", "control": {"type": "switch-case", "expression": "selection", "is_default": true}},
+    {"id": "e_node_end", "source": "dynamic_node", "target": "end"},
+    {"id": "e_workflow_end", "source": "dynamic_workflow", "target": "end"}
   ]
 }

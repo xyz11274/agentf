@@ -3,7 +3,7 @@
     "id": "sample-workflow-001",
     "name": "Sample Data Processing Workflow",
     "version": "1.0.0",
-    "description": "A sample workflow demonstrating graph execution with conditions and loops",
+    "description": "A sample workflow demonstrating graph execution with conditions and sequential processing",
 
     "nodes": [
       {

@@ -1,66 +1,84 @@
 {
   "workflow": {
-    "id": "loop-workflow-001",
-    "name": "Loop Processing Workflow",
+    "id": "routing-workflow-001",
+    "name": "Switch Routing Workflow",
     "version": "1.0.0",
-    "description": "A workflow demonstrating loop iteration over data collections",
-
+    "description": "A workflow demonstrating switch-case style routing with typed node IO",
     "nodes": [
       {
         "id": "node-load",
-        "name": "Load Data",
+        "name": "Load Request",
         "type": "loader",
-        "execution_mode": "CPP_FUNCTION",
-        "input_params": ["source"],
-        "output_params": ["items"]
+        "execution_mode": "cpp_function",
+        "outputs": [
+          {"name": "route", "type": "string"},
+          {"name": "payload", "type": "map", "transfer_mode": "ref"}
+        ]
       },
       {
-        "id": "node-process-item",
-        "name": "Process Item",
+        "id": "node-process-a",
+        "name": "Process Route A",
         "type": "processor",
-        "execution_mode": "CPP_FUNCTION",
-        "input_params": ["current_item"],
-        "output_params": ["processed_item"],
-        "loop_config": {
-          "type": "FOR_EACH",
-          "collection_variable": "items",
-          "item_variable": "current_item",
-          "max_iterations": 1000
-        }
+        "execution_mode": "cpp_function",
+        "inputs": [
+          {"name": "payload", "type": "map", "transfer_mode": "ref"}
+        ],
+        "outputs": [
+          {"name": "result_a", "type": "string"}
+        ]
       },
       {
-        "id": "node-aggregate",
-        "name": "Aggregate Results",
-        "type": "aggregator",
-        "execution_mode": "CPP_FUNCTION",
-        "input_params": ["processed_items"],
-        "output_params": ["aggregated_result"]
+        "id": "node-process-b",
+        "name": "Process Route B",
+        "type": "processor",
+        "execution_mode": "cpp_function",
+        "inputs": [
+          {"name": "payload", "type": "map", "transfer_mode": "ref"}
+        ],
+        "outputs": [
+          {"name": "result_b", "type": "string"}
+        ]
       },
       {
-        "id": "node-output",
-        "name": "Output Result",
-        "type": "output",
-        "execution_mode": "CPP_FUNCTION",
-        "input_params": ["aggregated_result"],
-        "output_params": ["final_output"]
+        "id": "node-fallback",
+        "name": "Fallback Route",
+        "type": "processor",
+        "execution_mode": "cpp_function",
+        "inputs": [
+          {"name": "payload", "type": "map", "transfer_mode": "ref"}
+        ],
+        "outputs": [
+          {"name": "fallback_result", "type": "string"}
+        ]
       }
     ],
-
     "edges": [
       {
-        "id": "edge-load-process",
+        "id": "edge-load-process-a",
         "source": "node-load",
-        "target": "node-process-item"
+        "target": "node-process-a",
+        "source_outputs": ["payload"],
+        "target_inputs": ["payload"],
+        "transfer_mode": "ref",
+        "control": {"type": "switch-case", "expression": "route", "case_value": "A"}
       },
       {
-        "id": "edge-process-aggregate",
-        "source": "node-process-item",
-        "target": "node-aggregate"
+        "id": "edge-load-process-b",
+        "source": "node-load",
+        "target": "node-process-b",
+        "source_outputs": ["payload"],
+        "target_inputs": ["payload"],
+        "transfer_mode": "ref",
+        "control": {"type": "switch-case", "expression": "route", "case_value": "B"}
       },
       {
-        "id": "edge-aggregate-output",
-        "source": "node-aggregate",
-        "target": "node-output"
+        "id": "edge-load-fallback",
+        "source": "node-load",
+        "target": "node-fallback",
+        "source_outputs": ["payload"],
+        "target_inputs": ["payload"],
+        "transfer_mode": "ref",
+        "control": {"type": "switch-case", "expression": "route", "is_default": true}
       }
     ]
   }

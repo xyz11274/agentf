@@ -73,7 +73,7 @@ AgentFlow 工作流 DSL 是一个 JSON（或 JSONC —— 带注释的 JSON）�
 | `target` | 字符串 | **必需** | 下游节点的 `id` |
 | `source_outputs` | 字符串数组 | `[]` | 要转发的 `source` 的输出端口 |
 | `target_inputs` | 字符串数组 | `[]` | 要接收数据的 `target` 的输入端口 |
-| `transfer_mode` | 枚举字符串 | `"shared_memory"` | 数据传输机制（见下文） |
+| `transfer_mode` | 枚举字符串 | `"value"` | 数据传输机制（见下文） |
 | `data_formats` | 字符串数组 | `[]` | MIME 类型或自定义格式标签 |
 | `supported_events` | 字符串数组 | `[]` | 此边反应的生命周期事件 |
 | `condition_expression` | 字符串 | `""` | CEL 表达式；空 = 始终活跃 |
@@ -82,22 +82,18 @@ AgentFlow 工作流 DSL 是一个 JSON（或 JSONC —— 带注释的 JSON）�
 
 ### `control` 对象
 
-- `type`: `if` / `loop` / `fork` / `join` / `async` / `goto`
+- `type`: `if` / `switch-case`
 - 典型参数：
   - `expression`（if）
-  - `loop_id` / `max_iterations`（loop）
-  - `fork_group`（fork）
-  - `join_group`（join）
-  - `callback_node`（async）
-  - `goto_target`（goto）
+  - `expression + case_value`（switch-case 命中的 case 分支）
+  - `expression + is_default`（switch-case 默认分支）
 
 ### `transfer_mode` 值
 
 | 值 | 行为 |
 |-------|-----------|
-| `"shared_memory"` | 零复制的进程内指针传递（默认） |
-| `"message_queue"` | 通过异步有界队列进行序列化 |
-| `"remote_transfer"` | 序列化并通过网络连接发送 |
+| `"value"` | 直接把值复制到目标输入槽位 |
+| `"ref"` | 传递 DataBus 引用字符串，由目标侧按引用读取 |
 
 ### `supported_events` 值
 

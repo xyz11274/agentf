@@ -248,8 +248,8 @@ class ChatAgentBridge {
     agent_->route_request_message(msg);
     // Drive session message queue → creates task in generated_tasks_
     agent_->process_all_sessions_until_idle();
-    // The agent_task_poller_loop() (runtime background thread) will pick up the
-    // generated task and call execute_workflow("default-dispatcher-workflow", inputs).
+    // The runtime background polling thread will pick up the generated task and
+    // execute the workflow mapped to the dispatcher task template.
 
     int max_wait_sec = 45;
     if (const char* env = std::getenv("CHAT_WORKFLOW_TIMEOUT_SEC"); env && *env) {

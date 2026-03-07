@@ -3,36 +3,19 @@
   "version": "1.0.0",
   "description": "Multi-session chat orchestration agent package",
   "session_pool_size": 5,
-  "contextupdater": {
-    "id": 0,
-    "type": "contextupdater",
-    "description": "Update shared agent context",
-    "workflow_file": "session_context_workflow.json"
-  },
+  "tasks": [
+    {
+      "id": 0,
+      "type": "contextupdater",
+      "description": "Update shared agent context",
+      "workflow_file": "session_context_workflow.json"
+    }
+  ],
   "sessions": [
     {
       "id": 0,
-      "description": "Primary pooled session",
-      "task_count": 2,
-      "tasks": [
-        {
-          "id": 0,
-          "type": "dispatcher",
-          "description": "Dispatch requests",
-          "workflow_file": "default_dispatcher_workflow.json"
-        },
-        {
-          "id": 1,
-          "type": "coordinator",
-          "description": "Coordinate outputs",
-          "workflow_file": "default_coordinator_workflow.json"
-        }
-      ]
-    },
-    {
-      "id": 1,
-      "description": "Search skill pooled session",
-      "task_count": 3,
+      "description": "Homogeneous pooled chat session template",
+      "task_count": 6,
       "tasks": [
         {
           "id": 0,
@@ -54,97 +37,40 @@
           "skill": {
             "name": "search",
             "config_dir": "runtime",
-            "instance_pool_size": 1
+            "instance_pool_size": 2
           }
-        }
-      ]
-    },
-    {
-      "id": 2,
-      "description": "Summary skill pooled session",
-      "task_count": 3,
-      "tasks": [
-        {
-          "id": 0,
-          "type": "dispatcher",
-          "description": "Dispatch requests",
-          "workflow_file": "session_dispatcher_workflow.json"
         },
         {
-          "id": 1,
-          "type": "coordinator",
-          "description": "Coordinate outputs",
-          "workflow_file": "default_coordinator_workflow.json"
-        },
-        {
-          "id": 2,
+          "id": 3,
           "type": "skill",
           "description": "Summary skill task",
           "workflow_file": "skill_summary_workflow.json",
           "skill": {
             "name": "summary",
             "config_dir": "runtime",
-            "instance_pool_size": 1
+            "instance_pool_size": 2
           }
-        }
-      ]
-    },
-    {
-      "id": 3,
-      "description": "Date skill pooled session",
-      "task_count": 3,
-      "tasks": [
-        {
-          "id": 0,
-          "type": "dispatcher",
-          "description": "Dispatch requests",
-          "workflow_file": "session_dispatcher_workflow.json"
         },
         {
-          "id": 1,
-          "type": "coordinator",
-          "description": "Coordinate outputs",
-          "workflow_file": "default_coordinator_workflow.json"
-        },
-        {
-          "id": 2,
+          "id": 4,
           "type": "skill",
           "description": "Date skill task",
           "workflow_file": "skill_date_workflow.json",
           "skill": {
             "name": "date",
             "config_dir": "runtime",
-            "instance_pool_size": 1
+            "instance_pool_size": 2
           }
-        }
-      ]
-    },
-    {
-      "id": 4,
-      "description": "Delegate skill pooled session",
-      "task_count": 3,
-      "tasks": [
-        {
-          "id": 0,
-          "type": "dispatcher",
-          "description": "Dispatch requests",
-          "workflow_file": "session_dispatcher_workflow.json"
         },
         {
-          "id": 1,
-          "type": "coordinator",
-          "description": "Coordinate outputs",
-          "workflow_file": "default_coordinator_workflow.json"
-        },
-        {
-          "id": 2,
+          "id": 5,
           "type": "skill",
           "description": "Delegate skill task",
           "workflow_file": "skill_delegate_workflow.json",
           "skill": {
             "name": "delegate",
             "config_dir": "runtime",
-            "instance_pool_size": 1
+            "instance_pool_size": 2
           }
         }
       ]

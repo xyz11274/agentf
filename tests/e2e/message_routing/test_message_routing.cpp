@@ -53,101 +53,33 @@ protected:
         std::ofstream agent_json(test_dir_ / "agent.json");
         agent_json << R"({
             "session_pool_size": 10,
-            "contextupdater": {
-                "id": 0,
-                "type": "contextupdater",
-                "description": "Update agent context",
-                "workflow_file": "workflows/coordinator.json"
-            },
+            "tasks": [
+                {
+                    "id": 0,
+                    "type": "contextupdater",
+                    "description": "Update agent context",
+                    "workflow_file": "workflows/coordinator.json"
+                }
+            ],
             "sessions": [
                 {
                     "id": 0,
-                    "description": "pool-0",
-                    "task_count": 2,
+                    "description": "homogeneous-session-template",
+                    "task_count": 3,
                     "tasks": [
                         {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
-                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
-                    ]
-                },
-                {
-                    "id": 1,
-                    "description": "pool-1",
-                    "task_count": 2,
-                    "tasks": [
-                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
-                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
-                    ]
-                },
-                {
-                    "id": 2,
-                    "description": "pool-2",
-                    "task_count": 2,
-                    "tasks": [
-                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
-                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
-                    ]
-                },
-                {
-                    "id": 3,
-                    "description": "pool-3",
-                    "task_count": 2,
-                    "tasks": [
-                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
-                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
-                    ]
-                },
-                {
-                    "id": 4,
-                    "description": "pool-4",
-                    "task_count": 2,
-                    "tasks": [
-                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
-                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
-                    ]
-                },
-                {
-                    "id": 5,
-                    "description": "pool-5",
-                    "task_count": 2,
-                    "tasks": [
-                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
-                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
-                    ]
-                },
-                {
-                    "id": 6,
-                    "description": "pool-6",
-                    "task_count": 2,
-                    "tasks": [
-                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
-                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
-                    ]
-                },
-                {
-                    "id": 7,
-                    "description": "pool-7",
-                    "task_count": 2,
-                    "tasks": [
-                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
-                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
-                    ]
-                },
-                {
-                    "id": 8,
-                    "description": "pool-8",
-                    "task_count": 2,
-                    "tasks": [
-                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
-                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
-                    ]
-                },
-                {
-                    "id": 9,
-                    "description": "pool-9",
-                    "task_count": 2,
-                    "tasks": [
-                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
-                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
+                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"},
+                        {
+                            "id": 2,
+                            "type": "skill",
+                            "description": "Search skill",
+                            "workflow_file": "workflows/main.json",
+                            "skill": {
+                                "name": "search",
+                                "config_dir": "runtime",
+                                "instance_pool_size": 2
+                            }
+                        }
                     ]
                 }
             ]

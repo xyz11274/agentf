@@ -1,20 +1,22 @@
 {
-  "id": "cycled-workflow-pattern",
+  "id": "review-workflow-pattern",
   "version": "1.0",
-  "name": "cycled-workflow-pattern",
-  "description": "start -> decision -> execute -> evaluate -> decision/end",
+  "name": "review-workflow-pattern",
+  "description": "start -> decision -> execute -> evaluate -> retry/end",
   "nodes": [
     {"id": "start", "name": "Start", "type": "start", "execution_mode": "cpp_function"},
-    {"id": "decision", "name": "Decision", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_select.sh"},
+    {"id": "decision", "name": "Decision", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_select.sh", "outputs": [{"name": "need_retry", "type": "bool"}]},
     {"id": "execute", "name": "Execute", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_call.sh"},
-    {"id": "evaluate", "name": "Evaluate", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_format.sh"},
+    {"id": "evaluate", "name": "Evaluate", "type": "task", "execution_mode": "shell_script", "command": "nodes/tool_format.sh", "outputs": [{"name": "retry_route", "type": "string"}]},
+    {"id": "retry_handler", "name": "Retry Handler", "type": "task", "execution_mode": "cpp_function"},
     {"id": "end", "name": "End", "type": "end", "execution_mode": "cpp_function"}
   ],
   "edges": [
-    {"id": "e_start_decision", "source": "start", "target": "decision", "control": {"type": "if", "expression": "true"}},
+    {"id": "e_start_decision", "source": "start", "target": "decision"},
     {"id": "e_decision_exec", "source": "decision", "target": "execute", "control": {"type": "if", "expression": "need_retry == true"}},
-    {"id": "e_exec_eval", "source": "execute", "target": "evaluate", "control": {"type": "if", "expression": "true"}},
-    {"id": "e_eval_decision", "source": "evaluate", "target": "decision", "control": {"type": "goto", "goto_target": "decision"}},
-    {"id": "e_eval_end", "source": "evaluate", "target": "end", "control": {"type": "if", "expression": "need_retry == false"}}
+    {"id": "e_exec_eval", "source": "execute", "target": "evaluate"},
+    {"id": "e_eval_retry", "source": "evaluate", "target": "retry_handler", "control": {"type": "switch-case", "expression": "retry_route", "case_value": "retry"}},
+    {"id": "e_eval_end", "source": "evaluate", "target": "end", "control": {"type": "switch-case", "expression": "retry_route", "is_default": true}},
+    {"id": "e_retry_end", "source": "retry_handler", "target": "end"}
   ]
 }

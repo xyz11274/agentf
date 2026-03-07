@@ -3,17 +3,19 @@
   "version": "1.0.0",
   "description": "Basic agent example",
   "session_pool_size": 1,
-  "contextupdater": {
-    "id": 0,
-    "type": "contextupdater",
-    "description": "Update basic agent context",
-    "workflow_file": "workflow_01.json"
-  },
+  "tasks": [
+    {
+      "id": 0,
+      "type": "contextupdater",
+      "description": "Update basic agent context",
+      "workflow_file": "workflow_01.json"
+    }
+  ],
   "sessions": [
     {
       "id": 0,
-      "description": "Primary pooled session",
-      "task_count": 2,
+      "description": "Homogeneous pooled session template",
+      "task_count": 3,
       "tasks": [
         {
           "id": 0,
@@ -26,6 +28,17 @@
           "type": "coordinator",
           "description": "Coordinate task outputs",
           "workflow_file": "coordinator_workflow.json"
+        },
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "Run basic conversation skill",
+          "workflow_file": "workflow.json",
+          "skill": {
+            "name": "basic-conversation",
+            "config_dir": "skills/basic-conversation",
+            "instance_pool_size": 2
+          }
         }
       ]
     }

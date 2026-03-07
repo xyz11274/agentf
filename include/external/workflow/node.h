@@ -26,6 +26,27 @@ namespace framework {
  */
 class MMNode {
 public:
+  enum class FieldType {
+    STRING = 0,
+    INT    = 1,
+    FLOAT  = 2,
+    BOOL   = 3,
+    LIST   = 4,
+    MAP    = 5,
+  };
+
+  enum class TransferMode {
+    VALUE     = 0,
+    REFERENCE = 1,
+  };
+
+  struct FieldDefinition {
+    std::string  name;
+    FieldType    type          = FieldType::STRING;
+    TransferMode transfer_mode = TransferMode::VALUE;
+    bool         required      = false;
+  };
+
   enum class ExecutionMode {
     CPP_FUNCTION,   // Local C++ function execution
     SHELL_SCRIPT,   // Shell script execution
@@ -50,6 +71,10 @@ public:
     int         priority = 0;
 
     // Input/Output interface definitions
+    std::vector<FieldDefinition> input_definitions;
+    std::vector<FieldDefinition> output_definitions;
+
+    // Compatibility accessors for legacy code paths.
     std::vector<std::string> input_params;
     std::vector<std::string> output_params;
 
@@ -128,6 +153,12 @@ public:
   const Config&      get_config() const { return config_; }
 
   // Config getters for storage
+  const std::vector<FieldDefinition>& get_input_definitions() const {
+    return config_.input_definitions;
+  }
+  const std::vector<FieldDefinition>& get_output_definitions() const {
+    return config_.output_definitions;
+  }
   const std::vector<std::string>& get_input_params() const { return config_.input_params; }
   const std::vector<std::string>& get_output_params() const { return config_.output_params; }
   ExecutionMode                   get_execution_mode() const { return config_.execution_mode; }

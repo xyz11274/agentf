@@ -98,8 +98,11 @@ bool parse_task_definition(const rapidjson::Value& task_value, int expected_inde
         || task_definition.skill.skill_config_dir.empty()) {
       return fail_agent_json_parse("skill.config_dir must be a non-empty string");
     }
-    if(!parse_int_member(skill_object, "instance_pool_size", task_definition.skill.instance_pool_size)
-        || task_definition.skill.instance_pool_size < 1) {
+    task_definition.skill.instance_pool_size = 2;
+    if(skill_object.HasMember("instance_pool_size")
+       && (!parse_int_member(skill_object, "instance_pool_size",
+                             task_definition.skill.instance_pool_size)
+           || task_definition.skill.instance_pool_size < 1)) {
       return fail_agent_json_parse("skill.instance_pool_size must be an integer >= 1");
     }
   }
@@ -108,7 +111,7 @@ bool parse_task_definition(const rapidjson::Value& task_value, int expected_inde
 }
 
 bool parse_session_definition(const rapidjson::Value& session_value, int expected_index,
-                              AgentPackage::SessionDefinition& session_definition) {
+                               AgentPackage::SessionDefinition& session_definition) {
   if(!session_value.IsObject()) {
     return fail_agent_json_parse("session entries must be objects");
   }
@@ -124,8 +127,8 @@ bool parse_session_definition(const rapidjson::Value& session_value, int expecte
     return fail_agent_json_parse("session.description must be a non-empty string");
   }
   if(!parse_int_member(session_value, "task_count", session_definition.task_count)
-      || session_definition.task_count < 2) {
-    return fail_agent_json_parse("session.task_count must be an integer >= 2");
+      || session_definition.task_count < 3) {
+    return fail_agent_json_parse("session.task_count must be an integer >= 3");
   }
   if(!session_value.HasMember("tasks") || !session_value["tasks"].IsArray()) {
     return fail_agent_json_parse("session.tasks must be an array");
@@ -138,6 +141,7 @@ bool parse_session_definition(const rapidjson::Value& session_value, int expecte
 
   int dispatcher_count = 0;
   int coordinator_count = 0;
+  int skill_count = 0;
   for(rapidjson::SizeType i = 0; i < tasks.Size(); ++i) {
     AgentPackage::TaskDefinition task_definition;
     if(!parse_task_definition(tasks[i], static_cast<int>(i), task_definition, false)) {
@@ -147,6 +151,8 @@ bool parse_session_definition(const rapidjson::Value& session_value, int expecte
       ++dispatcher_count;
     } else if(task_definition.task_type == "coordinator") {
       ++coordinator_count;
+    } else if(task_definition.task_type == "skill") {
+      ++skill_count;
     }
     session_definition.tasks.push_back(task_definition);
   }
@@ -156,6 +162,9 @@ bool parse_session_definition(const rapidjson::Value& session_value, int expecte
   }
   if(coordinator_count != 1) {
     return fail_agent_json_parse("each session must define exactly one coordinator task");
+  }
+  if(skill_count < 1) {
+    return fail_agent_json_parse("each session must define at least one skill task");
   }
   return true;
 }
@@ -171,16 +180,14 @@ bool parse_agent_sessions(const rapidjson::Document& agent_doc,
   }
 
   const auto& session_array = agent_doc["sessions"];
-  if(session_array.Empty()) {
-    return fail_agent_json_parse("sessions must contain at least one configured session");
+  if(session_array.Size() != 1) {
+    return fail_agent_json_parse("sessions must contain exactly one homogeneous session template");
   }
-  for(rapidjson::SizeType i = 0; i < session_array.Size(); ++i) {
-    AgentPackage::SessionDefinition session_definition;
-    if(!parse_session_definition(session_array[i], static_cast<int>(i), session_definition)) {
-      return false;
-    }
-    sessions.push_back(session_definition);
+  AgentPackage::SessionDefinition session_definition;
+  if(!parse_session_definition(session_array[0], 0, session_definition)) {
+    return false;
   }
+  sessions.push_back(session_definition);
 
   if(agent_doc.HasMember("session_pool_size")) {
     if(!agent_doc["session_pool_size"].IsInt()) {
@@ -190,33 +197,51 @@ bool parse_agent_sessions(const rapidjson::Document& agent_doc,
     if(session_pool_size < 1) {
       return fail_agent_json_parse("session_pool_size must be >= 1");
     }
-    if(session_pool_size != static_cast<int>(sessions.size())) {
-      return fail_agent_json_parse("session_pool_size must match the number of configured sessions");
-    }
   } else {
-    session_pool_size = static_cast<int>(sessions.size());
+    session_pool_size = 1;
   }
   return true;
 }
 
-bool parse_contextupdater_definition(const rapidjson::Document& agent_doc,
-                                     AgentPackage::TaskDefinition& task_definition,
-                                     bool& has_contextupdater) {
+bool parse_top_level_tasks(const rapidjson::Document& agent_doc,
+                           AgentPackage::TaskDefinition& task_definition,
+                           bool& has_contextupdater) {
   has_contextupdater = false;
-  if(!agent_doc.HasMember("contextupdater")) {
+  if(agent_doc.HasMember("tasks")) {
+    if(!agent_doc["tasks"].IsArray()) {
+      return fail_agent_json_parse("tasks must be an array");
+    }
+    const auto& tasks = agent_doc["tasks"];
+    for(rapidjson::SizeType i = 0; i < tasks.Size(); ++i) {
+      AgentPackage::TaskDefinition parsed_task;
+      if(!parse_task_definition(tasks[i], static_cast<int>(i), parsed_task, true)) {
+        return false;
+      }
+      if(parsed_task.task_type != "contextupdater") {
+        return fail_agent_json_parse("top-level tasks currently only support contextupdater");
+      }
+      if(has_contextupdater) {
+        return fail_agent_json_parse("top-level tasks must not contain more than one contextupdater");
+      }
+      task_definition = parsed_task;
+      has_contextupdater = true;
+    }
     return true;
   }
-  if(!agent_doc["contextupdater"].IsObject()) {
-    return fail_agent_json_parse("contextupdater must be an object");
+
+  if(agent_doc.HasMember("contextupdater")) {
+    if(!agent_doc["contextupdater"].IsObject()) {
+      return fail_agent_json_parse("contextupdater must be an object");
+    }
+    task_definition.task_index = 0;
+    if(!parse_task_definition(agent_doc["contextupdater"], 0, task_definition, true)) {
+      return false;
+    }
+    if(task_definition.task_type != "contextupdater") {
+      return fail_agent_json_parse("contextupdater.type must be contextupdater");
+    }
+    has_contextupdater = true;
   }
-  task_definition.task_index = 0;
-  if(!parse_task_definition(agent_doc["contextupdater"], 0, task_definition, true)) {
-    return false;
-  }
-  if(task_definition.task_type != "contextupdater") {
-    return fail_agent_json_parse("contextupdater.type must be contextupdater");
-  }
-  has_contextupdater = true;
   return true;
 }
 
@@ -360,8 +385,7 @@ std::shared_ptr<AgentPackage> AgentPackage::load_from_directory(const std::strin
     if(!parse_agent_sessions(agent_doc, config.sessions, config.session_pool_size)) {
       return nullptr;
     }
-    if(!parse_contextupdater_definition(agent_doc, config.contextupdater_task,
-                                        config.has_contextupdater)) {
+    if(!parse_top_level_tasks(agent_doc, config.contextupdater_task, config.has_contextupdater)) {
       return nullptr;
     }
     if(agent_doc.HasMember("dispatcher_workflow") && agent_doc["dispatcher_workflow"].IsString()) {

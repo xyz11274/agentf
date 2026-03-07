@@ -198,20 +198,32 @@ TEST_F(AgentTest, PackageDispatcherWorkflowMappingIsApplied) {
     std::ofstream agent_json(tmp / "agent.json");
     agent_json << R"({
       "session_pool_size": 1,
-      "contextupdater": {
-        "id": 0,
-        "type": "contextupdater",
-        "description": "Update agent context",
-        "workflow_file": "task-context.json"
-      },
+      "tasks": [
+        {
+          "id": 0,
+          "type": "contextupdater",
+          "description": "Update agent context",
+          "workflow_file": "task-context.json"
+        }
+      ],
       "sessions": [
         {
           "id": 0,
-          "description": "Primary pooled session",
-          "task_count": 2,
+          "description": "Homogeneous pooled session template",
+          "task_count": 3,
           "tasks": [
             { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflow_a.json" },
-            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflow_b.json" }
+            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflow_b.json" },
+            {
+              "id": 2,
+              "type": "skill",
+              "description": "Support skill",
+              "workflow_file": "workflow_a.json",
+              "skill": {
+                "name": "support",
+                "config_dir": "skills/support"
+              }
+            }
           ]
         }
       ]
@@ -263,20 +275,32 @@ TEST_F(AgentTest, WorkflowIdMetadataHasHigherPriorityThanCoordinatorWorkflow) {
     std::ofstream agent_json(tmp / "agent.json");
     agent_json << R"({
       "session_pool_size": 1,
-      "contextupdater": {
-        "id": 0,
-        "type": "contextupdater",
-        "description": "Update agent context",
-        "workflow_file": "task-context.json"
-      },
+      "tasks": [
+        {
+          "id": 0,
+          "type": "contextupdater",
+          "description": "Update agent context",
+          "workflow_file": "task-context.json"
+        }
+      ],
       "sessions": [
         {
           "id": 0,
-          "description": "Primary pooled session",
-          "task_count": 2,
+          "description": "Homogeneous pooled session template",
+          "task_count": 3,
           "tasks": [
             { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflow_b.json" },
-            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflow_b.json" }
+            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflow_b.json" },
+            {
+              "id": 2,
+              "type": "skill",
+              "description": "Support skill",
+              "workflow_file": "workflow_a.json",
+              "skill": {
+                "name": "support",
+                "config_dir": "skills/support"
+              }
+            }
           ]
         }
       ]
@@ -343,25 +367,18 @@ TEST_F(AgentTest, AgentJsonInstantiatesConfiguredSessionPoolAndSkillPools) {
     std::ofstream agent_json(tmp / "agent.json");
     agent_json << R"({
       "session_pool_size": 2,
-      "contextupdater": {
-        "id": 0,
-        "type": "contextupdater",
-        "description": "Update agent context",
-        "workflow_file": "task-context.json"
-      },
+      "tasks": [
+        {
+          "id": 0,
+          "type": "contextupdater",
+          "description": "Update agent context",
+          "workflow_file": "task-context.json"
+        }
+      ],
       "sessions": [
         {
           "id": 0,
-          "description": "Primary pooled session",
-          "task_count": 2,
-          "tasks": [
-            { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflow_main.json" },
-            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflow_main.json" }
-          ]
-        },
-        {
-          "id": 1,
-          "description": "Skill pooled session",
+          "description": "Homogeneous pooled session",
           "task_count": 3,
           "tasks": [
             { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflow_main.json" },
@@ -373,8 +390,7 @@ TEST_F(AgentTest, AgentJsonInstantiatesConfiguredSessionPoolAndSkillPools) {
               "workflow_file": "workflow_skill.json",
               "skill": {
                 "name": "search",
-                "config_dir": "skills/search",
-                "instance_pool_size": 2
+                "config_dir": "skills/search"
               }
             }
           ]

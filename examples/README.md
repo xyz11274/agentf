@@ -69,7 +69,7 @@ Workflow 模式参考模板（DSL 示例，不依赖外部脚本）：
 | 文件 | 模式 |
 |---|---|
 | `conditional_workflow.json` | 条件分支：按 `request_type` 三路路由 + 聚合 |
-| `loop_workflow.json` | FOR_EACH 循环：`loop_config` 遍历集合逐条处理 |
+| `loop_workflow.json` | `switch-case` 分支：同一表达式驱动多条 case/default 出边 |
 | `sample_workflow.json` | 顺序管道：验证 → 转换 → 增强 → 过滤 → 输出（含条件边） |
 
 ---

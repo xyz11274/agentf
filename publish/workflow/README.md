@@ -22,8 +22,8 @@
 2. 定义 node（声明 `execution_mode` 与可执行绑定）。
 3. 定义 edge（数据依赖与流程控制）。
 4. 统一使用 edge 控制模型：
-   - `control.type`：`if` / `loop` / `fork` / `join` / `async` / `goto`
-   - `control.*`：对应模式参数（如 `expression`、`max_iterations`、`join_group` 等）
+   - `control.type`：`if` / `switch-case`
+   - `control.*`：`if` 使用 `expression`；`switch-case` 使用共享 `expression` + 每条边自己的 `case_value` / `is_default`
 5. 支持嵌套 workflow：
    - 顶层包含：`includes: ["relative/path/subflow.json"]`
    - workflow 节点：`type: "workflow"` + `workflow_ref`
@@ -43,7 +43,7 @@
 
 - `publish/agent/visualizer.html` 支持 `.json` / `.jsonc`
 - 支持新字段：`includes`、node `workflow_ref`、edge `control.type + control.*`
-- 支持有环流程（`goto`/`loop`）的布局展示
+- 推荐使用 DAG + 条件/分支边建模，不再提供 `goto`/`loop` 控制边
 
 ## 打包集成
 

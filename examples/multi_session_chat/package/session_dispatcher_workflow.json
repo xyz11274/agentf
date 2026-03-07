@@ -10,8 +10,12 @@
       "execution_mode": "so_library",
       "command": "build/libmulti_session_nodes.dylib",
       "function_name": "node_load_context",
-      "inputs": ["session_id"],
-      "outputs": ["session_context"]
+      "inputs": [
+        {"name": "session_id", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "session_context", "type": "string"}
+      ]
     },
     {
       "id": "select_skill",
@@ -20,8 +24,14 @@
       "execution_mode": "so_library",
       "command": "build/libmulti_session_nodes.dylib",
       "function_name": "node_select_skill",
-      "inputs": ["session_id", "session_context", "user_text"],
-      "outputs": ["skill_selected"]
+      "inputs": [
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "session_context", "type": "string", "required": true},
+        {"name": "user_text", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "skill_selected", "type": "string"}
+      ]
     },
     {
       "id": "create_task",
@@ -30,12 +40,32 @@
       "execution_mode": "so_library",
       "command": "build/libmulti_session_nodes.dylib",
       "function_name": "node_create_task",
-      "inputs": ["session_id", "skill_selected", "user_text"],
-      "outputs": ["task_created"]
+      "inputs": [
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "skill_selected", "type": "string", "required": true},
+        {"name": "user_text", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "task_created", "type": "bool"}
+      ]
     }
   ],
   "edges": [
-    {"id": "e1", "source": "load_context", "target": "select_skill"},
-    {"id": "e2", "source": "select_skill", "target": "create_task"}
+    {
+      "id": "e1",
+      "source": "load_context",
+      "target": "select_skill",
+      "source_outputs": ["session_context"],
+      "target_inputs": ["session_context"],
+      "transfer_mode": "value"
+    },
+    {
+      "id": "e2",
+      "source": "select_skill",
+      "target": "create_task",
+      "source_outputs": ["skill_selected"],
+      "target_inputs": ["skill_selected"],
+      "transfer_mode": "value"
+    }
   ]
 }

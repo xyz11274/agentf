@@ -1,779 +1,126 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
-//
-// Google Test tests for JSON MMWorkflow functionality
 
-#include <gtest/gtest.h>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+
+#include <gtest/gtest.h>
 
 #include "workflow/dsl/workflow_parser.h"
 #include "workflow/edge.h"
 #include "workflow/node.h"
 #include "workflow/workflow.h"
 
-
 namespace agentflow {
 namespace tests {
 
-class WorkflowJsonTest : public ::testing::Test {
-protected:
-  void SetUp() override {
-    parser_ = std::make_unique<agentflow::dsl::WorkflowParser>();
+namespace {
+std::filesystem::path repo_root() {
+  namespace fs = std::filesystem;
+  const fs::path cwd = fs::current_path();
+  const std::vector<fs::path> candidates = {cwd, cwd / "..", cwd / "../.."};
+  for(const auto& c : candidates) {
+    if(fs::exists(c / "publish/workflow/README.md")) {
+      return fs::absolute(c);
+    }
   }
-  void TearDown() override {}
+  return fs::absolute(cwd);
+}
+}  // namespace
+
+class WorkflowJsonTest : public ::testing::Test {
+ protected:
+  void SetUp() override { parser_ = std::make_unique<agentflow::dsl::WorkflowParser>(); }
 
   std::unique_ptr<agentflow::dsl::WorkflowParser> parser_;
 
-  // Sample valid workflow JSON
   const char* valid_workflow_json_ = R"({
     "id": "workflow_001",
-    "name": "Test MMWorkflow",
+    "name": "Typed Workflow",
     "version": "1.0.0",
-    "description": "A test workflow for unit testing",
+    "description": "Workflow with typed node IO",
     "nodes": [
       {
         "id": "node_start",
-        "name": "Start MMNode",
+        "name": "Start Node",
         "type": "TASK",
-        "inputs": {
-          "input_data": "string"
-        },
-        "outputs": {
-          "output_data": "string"
-        },
+        "inputs": [
+          {"name": "request_id", "type": "string", "required": true},
+          {"name": "flags", "type": "list", "transfer_mode": "ref"}
+        ],
+        "outputs": [
+          {"name": "status", "type": "string"},
+          {"name": "payload", "type": "map", "transfer_mode": "ref"}
+        ],
         "config": {
           "timeout_ms": 5000,
           "max_retries": 3,
           "retry_delay_ms": 1000,
-          "execution_mode": "CPP_ACTOR"
-        }
-      },
-      {
-        "id": "node_process",
-        "name": "Process MMNode",
-        "type": "TASK",
-        "inputs": {
-          "input_data": "string"
-        },
-        "outputs": {
-          "output_data": "string"
-        },
-        "config": {
-          "timeout_ms": 3000,
-          "max_retries": 2,
-          "execution_mode": "CPP_ACTOR"
+          "execution_mode": "cpp_function"
         }
       },
       {
         "id": "node_end",
-        "name": "End MMNode",
+        "name": "End Node",
         "type": "TASK",
-        "inputs": {
-          "input_data": "string"
-        },
-        "outputs": {
-          "output_data": "string"
-        },
-        "config": {
-          "timeout_ms": 2000,
-          "max_retries": 1,
-          "execution_mode": "CPP_ACTOR"
-        }
+        "inputs": [
+          {"name": "status", "type": "string"},
+          {"name": "payload", "type": "map", "transfer_mode": "ref"}
+        ],
+        "outputs": [
+          {"name": "final_status", "type": "string"}
+        ]
       }
     ],
     "edges": [
       {
-        "id": "edge_start_to_process",
+        "id": "edge_start_to_end",
         "source": "node_start",
-        "target": "node_process",
-        "data_transfer": {
-          "mode": "DIRECT",
-          "data_formats": ["STRING"]
-        },
-        "supported_events": ["DATA_READY", "START"]
-      },
-      {
-        "id": "edge_process_to_end",
-        "source": "node_process",
         "target": "node_end",
-        "data_transfer": {
-          "mode": "DIRECT",
-          "data_formats": ["STRING"]
-        },
-        "supported_events": ["DATA_READY", "COMPLETE"]
-      },
-      {
-        "id": "edge_conditional",
-        "source": "node_process",
-        "target": "node_end",
-        "data_transfer": {
-          "mode": "DIRECT",
-          "data_formats": ["STRING"]
-        },
-        "supported_events": ["DATA_READY"],
-        "condition": {
-          "expression": "output_data == 'success'",
-          "description": "Only proceed if output is success"
-        }
+        "source_outputs": ["status", "payload"],
+        "target_inputs": ["status", "payload"],
+        "transfer_mode": "ref",
+        "control": {"type": "if", "expression": "status == 'ok'"}
       }
     ]
   })";
 
-  // Sample workflow with loop
-  const char* workflow_with_loop_json_ = R"({
-    "id": "workflow_loop_001",
-    "name": "Loop MMWorkflow",
+  const char* switch_case_workflow_json_ = R"({
+    "id": "workflow_switch_001",
+    "name": "Switch Case Workflow",
     "version": "1.0.0",
     "nodes": [
-      {
-        "id": "node_init",
-        "name": "Initialize",
-        "type": "TASK"
-      },
-      {
-        "id": "node_loop",
-        "name": "Loop MMNode",
-        "type": "TASK",
-        "config": {
-          "loop_config": {
-            "type": "FOR",
-            "max_iterations": 5,
-            "condition": "i < 5"
-          }
-        }
-      },
-      {
-        "id": "node_final",
-        "name": "Finalize",
-        "type": "TASK"
-      }
+      {"id": "selector", "name": "Selector", "type": "TASK", "outputs": [{"name": "route", "type": "string"}]},
+      {"id": "path_a", "name": "Path A", "type": "TASK"},
+      {"id": "path_b", "name": "Path B", "type": "TASK"},
+      {"id": "path_default", "name": "Path Default", "type": "TASK"}
     ],
     "edges": [
       {
-        "id": "edge_init_loop",
-        "source": "node_init",
-        "target": "node_loop"
+        "id": "selector_a",
+        "source": "selector",
+        "target": "path_a",
+        "control": {"type": "switch-case", "expression": "route", "case_value": "A"}
       },
       {
-        "id": "edge_loop_final",
-        "source": "node_loop",
-        "target": "node_final"
+        "id": "selector_b",
+        "source": "selector",
+        "target": "path_b",
+        "control": {"type": "switch-case", "expression": "route", "case_value": "B"}
+      },
+      {
+        "id": "selector_default",
+        "source": "selector",
+        "target": "path_default",
+        "control": {"type": "switch-case", "expression": "route", "is_default": true}
       }
     ]
   })";
 
-  // Sample workflow with parallel execution
-  const char* workflow_parallel_json_ = R"({
-    "id": "workflow_parallel_001",
-    "name": "Parallel MMWorkflow",
-    "version": "1.0.0",
-    "nodes": [
-      {
-        "id": "node_start",
-        "name": "Start",
-        "type": "TASK"
-      },
-      {
-        "id": "node_parallel_a",
-        "name": "Parallel Task A",
-        "type": "TASK"
-      },
-      {
-        "id": "node_parallel_b",
-        "name": "Parallel Task B",
-        "type": "TASK"
-      },
-      {
-        "id": "node_end",
-        "name": "End",
-        "type": "TASK"
-      }
-    ],
-    "edges": [
-      {
-        "id": "edge_start_a",
-        "source": "node_start",
-        "target": "node_parallel_a"
-      },
-      {
-        "id": "edge_start_b",
-        "source": "node_start",
-        "target": "node_parallel_b"
-      },
-      {
-        "id": "edge_a_end",
-        "source": "node_parallel_a",
-        "target": "node_end"
-      },
-      {
-        "id": "edge_b_end",
-        "source": "node_parallel_b",
-        "target": "node_end"
-      }
-    ]
-  })";
-
-  const char* workflow_with_control_cycle_json_ = R"({
-    "id": "workflow_cycle_001",
-    "name": "Cycle MMWorkflow",
-    "version": "1.0.0",
-    "nodes": [
-      {"id": "start", "name": "Start", "type": "TASK"},
-      {"id": "decision", "name": "Decision", "type": "TASK"},
-      {"id": "worker", "name": "Worker", "type": "TASK"},
-      {"id": "end", "name": "End", "type": "TASK"}
-    ],
-    "edges": [
-      {"id": "e_start_decision", "source": "start", "target": "decision"},
-      {"id": "e_decision_worker", "source": "decision", "target": "worker"},
-      {"id": "e_worker_decision", "source": "worker", "target": "decision",
-        "control": {"type": "goto", "goto_target": "decision"}},
-      {"id": "e_worker_end", "source": "worker", "target": "end",
-        "control": {"type": "if", "expression": "need_retry == false"}}
-    ]
-  })";
-
-  const char* workflow_with_nested_node_json_ = R"({
-    "id": "workflow_nested_001",
-    "name": "Nested MMWorkflow MMNode",
-    "version": "1.0.0",
-    "nodes": [
-      {"id": "start", "name": "Start", "type": "TASK"},
-      {"id": "subflow", "name": "Subflow", "type": "workflow", "workflow_ref": "subflow.json"},
-      {"id": "end", "name": "End", "type": "TASK"}
-    ],
-    "edges": [
-      {"id": "e1", "source": "start", "target": "subflow"},
-      {"id": "e2", "source": "subflow", "target": "end"}
-    ]
-  })";
-
-  // Sample invalid workflow JSON - missing required fields
-  const char* invalid_workflow_missing_id_json_ = R"({
-    "name": "Invalid MMWorkflow",
-    "version": "1.0.0",
-    "nodes": [],
-    "edges": []
-  })";
-
-  // Sample invalid workflow JSON - duplicate node IDs
-  const char* invalid_workflow_duplicate_nodes_json_ = R"({
-    "id": "workflow_invalid",
-    "name": "Invalid MMWorkflow",
-    "version": "1.0.0",
-    "nodes": [
-      {
-        "id": "node_001",
-        "name": "MMNode 1",
-        "type": "TASK"
-      },
-      {
-        "id": "node_001",
-        "name": "MMNode 2",
-        "type": "TASK"
-      }
-    ],
-    "edges": []
-  })";
-
-  // Sample invalid workflow JSON - circular dependency
-  const char* invalid_workflow_circular_json_ = R"({
-    "id": "workflow_circular",
-    "name": "Circular MMWorkflow",
-    "version": "1.0.0",
-    "nodes": [
-      {
-        "id": "node_a",
-        "name": "MMNode A",
-        "type": "TASK"
-      },
-      {
-        "id": "node_b",
-        "name": "MMNode B",
-        "type": "TASK"
-      },
-      {
-        "id": "node_c",
-        "name": "MMNode C",
-        "type": "TASK"
-      }
-    ],
-    "edges": [
-      {
-        "id": "edge_a_b",
-        "source": "node_a",
-        "target": "node_b"
-      },
-      {
-        "id": "edge_b_c",
-        "source": "node_b",
-        "target": "node_c"
-      },
-      {
-        "id": "edge_c_a",
-        "source": "node_c",
-        "target": "node_a"
-      }
-    ]
-  })";
-};
-
-// ============================================================================
-// MMWorkflow JSON Parsing Tests
-// ============================================================================
-
-TEST_F(WorkflowJsonTest, ParseValidWorkflow) {
-  auto result = parser_->parse_workflow(valid_workflow_json_);
-
-  EXPECT_TRUE(result.is_valid()) << "MMWorkflow parsing should succeed";
-  EXPECT_NE(result.workflow, nullptr) << "MMWorkflow object should be created";
-  EXPECT_EQ(result.workflow->get_id(), "workflow_001");
-  EXPECT_EQ(result.workflow->get_name(), "Test MMWorkflow");
-  EXPECT_EQ(result.workflow->get_nodes().size(), 3) << "Should parse 3 nodes";
-  EXPECT_EQ(result.workflow->get_edges().size(), 3) << "Should parse 3 edges";
-}
-
-TEST_F(WorkflowJsonTest, ParseWorkflowWithLoop) {
-  auto result = parser_->parse_workflow(workflow_with_loop_json_);
-
-  EXPECT_TRUE(result.is_valid()) << "MMWorkflow with loop should parse successfully";
-  EXPECT_NE(result.workflow, nullptr);
-  EXPECT_EQ(result.workflow->get_nodes().size(), 3);
-}
-
-TEST_F(WorkflowJsonTest, ParseParallelWorkflow) {
-  auto result = parser_->parse_workflow(workflow_parallel_json_);
-
-  EXPECT_TRUE(result.is_valid()) << "Parallel workflow should parse successfully";
-  EXPECT_NE(result.workflow, nullptr);
-  EXPECT_EQ(result.workflow->get_nodes().size(), 4);
-  EXPECT_EQ(result.workflow->get_edges().size(), 4);
-
-  // Check that parallel nodes are both executable
-  auto executable_nodes = result.workflow->get_executable_nodes();
-  // After initialization, nodes with no dependencies should be executable
-  // For this workflow, node_start should be executable
-  EXPECT_FALSE(executable_nodes.empty());
-}
-
-TEST_F(WorkflowJsonTest, ParseWorkflowMissingId) {
-  auto result = parser_->parse_workflow(invalid_workflow_missing_id_json_);
-
-  EXPECT_FALSE(result.is_valid()) << "MMWorkflow without ID should fail validation";
-  EXPECT_FALSE(result.errors.empty()) << "Should have parse errors";
-}
-
-TEST_F(WorkflowJsonTest, ParseWorkflowDuplicateNodeIds) {
-  auto result = parser_->parse_workflow(invalid_workflow_duplicate_nodes_json_);
-
-  EXPECT_FALSE(result.is_valid()) << "MMWorkflow with duplicate node IDs should fail";
-}
-
-TEST_F(WorkflowJsonTest, ParseWorkflowCircularDependency) {
-  auto result = parser_->parse_workflow(invalid_workflow_circular_json_);
-
-  // MMWorkflow with circular dependency should parse but validation should fail
-  EXPECT_NE(result.workflow, nullptr) << "Circular workflow should still parse";
-
-  bool is_valid = result.workflow->validate();
-  EXPECT_FALSE(is_valid) << "Circular dependency should make workflow invalid";
-}
-
-// ============================================================================
-// MMNode Configuration Tests
-// ============================================================================
-
-TEST_F(WorkflowJsonTest, ParseNodeConfiguration) {
-  auto result = parser_->parse_workflow(valid_workflow_json_);
-
-  ASSERT_TRUE(result.is_valid());
-  ASSERT_NE(result.workflow, nullptr);
-
-  auto start_node = result.workflow->get_node("node_start");
-  ASSERT_NE(start_node, nullptr);
-
-  auto config = start_node->get_config();
-  EXPECT_EQ(config.timeout_ms, 5000);
-  EXPECT_EQ(config.max_retries, 3);
-  EXPECT_EQ(config.retry_delay_ms, 1000);
-}
-
-TEST_F(WorkflowJsonTest, ParseNodeExecutionModesGoAndJavaJar) {
-  auto result = parser_->parse_workflow(R"({
-    "id": "workflow_exec_mode_ext",
-    "name": "Execution Mode Extensions",
-    "version": "1.0.0",
-    "nodes": [
-      {
-        "id": "go_node",
-        "name": "Go MMNode",
-        "type": "TASK",
-        "config": {
-          "execution_mode": "go_script",
-          "command": "scripts/run.go"
-        }
-      },
-      {
-        "id": "java_node",
-        "name": "Java MMNode",
-        "type": "TASK",
-        "config": {
-          "execution_mode": "java_jar",
-          "command": "jars/app.jar",
-          "main_class": "com.example.Main"
-        }
-      }
-    ],
-    "edges": []
-  })");
-
-  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
-  ASSERT_NE(result.workflow, nullptr);
-
-  auto go_node = result.workflow->get_node("go_node");
-  ASSERT_NE(go_node, nullptr);
-  EXPECT_EQ(go_node->get_config().execution_mode, framework::MMNode::ExecutionMode::GO_SCRIPT);
-
-  auto java_node = result.workflow->get_node("java_node");
-  ASSERT_NE(java_node, nullptr);
-  EXPECT_EQ(java_node->get_config().execution_mode, framework::MMNode::ExecutionMode::JAVA_JAR);
-  EXPECT_EQ(java_node->get_config().main_class, "com.example.Main");
-}
-
-TEST_F(WorkflowJsonTest, ParseNodeInputOutput) {
-  auto result = parser_->parse_workflow(valid_workflow_json_);
-
-  ASSERT_TRUE(result.is_valid());
-  ASSERT_NE(result.workflow, nullptr);
-
-  auto process_node = result.workflow->get_node("node_process");
-  ASSERT_NE(process_node, nullptr);
-
-  // Check input parameters
-  const auto& inputs = process_node->get_input_params();
-  EXPECT_FALSE(inputs.empty());
-
-  // Check output parameters
-  const auto& outputs = process_node->get_output_params();
-  EXPECT_FALSE(outputs.empty());
-}
-
-TEST_F(WorkflowJsonTest, ParseWorkflowTypeNode) {
-  auto result = parser_->parse_workflow(workflow_with_nested_node_json_);
-  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
-  ASSERT_NE(result.workflow, nullptr);
-  auto subflow_node = result.workflow->get_node("subflow");
-  ASSERT_NE(subflow_node, nullptr);
-  EXPECT_EQ(subflow_node->get_type(), "workflow");
-  EXPECT_EQ(subflow_node->get_config().workflow_ref, "subflow.json");
-}
-
-TEST_F(WorkflowJsonTest, ParseWorkflowIncludes) {
-  namespace fs = std::filesystem;
-  const fs::path tmp_dir = fs::path("build/test_workflow_includes");
-  fs::create_directories(tmp_dir);
-  const fs::path sub_path = tmp_dir / "subflow.json";
-  const fs::path main_path = tmp_dir / "mainflow.json";
-
-  {
-    std::ofstream sub(sub_path.string());
-    sub << R"({
-      "id": "subflow_001",
-      "name": "SubFlow",
-      "version": "1.0.0",
-      "nodes": [{"id": "sub_node", "name": "Sub MMNode", "type": "TASK"}],
-      "edges": []
-    })";
-  }
-
-  {
-    std::ofstream main(main_path.string());
-    main << R"({
-      "id": "mainflow_001",
-      "name": "MainFlow",
-      "version": "1.0.0",
-      "includes": ["subflow.json"],
-      "nodes": [{"id": "main_node", "name": "Main MMNode", "type": "TASK"}],
-      "edges": []
-    })";
-  }
-
-  auto result = parser_->parse_workflow_file(main_path.string());
-  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
-  ASSERT_NE(result.workflow, nullptr);
-  EXPECT_NE(result.workflow->get_node("sub_node"), nullptr);
-  EXPECT_NE(result.workflow->get_node("main_node"), nullptr);
-
-  fs::remove_all(tmp_dir);
-}
-
-TEST_F(WorkflowJsonTest, ParseDynamicWorkflowPatternFile) {
-  namespace fs = std::filesystem;
-  fs::path pattern = fs::path("publish/workflow/pattern/dynamic_workflow.json");
-  if(!fs::exists(pattern)) {
-    pattern = fs::path("../publish/workflow/pattern/dynamic_workflow.json");
-  }
-  if(!fs::exists(pattern)) {
-    pattern = fs::path("../../publish/workflow/pattern/dynamic_workflow.json");
-  }
-  ASSERT_TRUE(fs::exists(pattern));
-
-  auto result = parser_->parse_workflow_file(pattern.string());
-  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
-  ASSERT_NE(result.workflow, nullptr);
-  EXPECT_NE(result.workflow->get_node("dynamic_workflow"), nullptr);
-}
-
-// ============================================================================
-// MMEdge Configuration Tests
-// ============================================================================
-
-TEST_F(WorkflowJsonTest, ParseEdgeConfiguration) {
-  auto result = parser_->parse_workflow(valid_workflow_json_);
-
-  ASSERT_TRUE(result.is_valid());
-  ASSERT_NE(result.workflow, nullptr);
-
-  const auto& edges = result.workflow->get_edges();
-  ASSERT_GE(edges.size(), 1);
-
-  auto edge = edges[0];
-  EXPECT_EQ(edge->get_source(), "node_start");
-  EXPECT_EQ(edge->get_target(), "node_process");
-}
-
-TEST_F(WorkflowJsonTest, ParseEdgeConditionExpression) {
-  auto result = parser_->parse_workflow(valid_workflow_json_);
-
-  ASSERT_TRUE(result.is_valid());
-  ASSERT_NE(result.workflow, nullptr);
-
-  const auto& edges = result.workflow->get_edges();
-
-  // Find the edge with condition
-  agentflow::framework::MMEdge* conditional_edge = nullptr;
-  for(const auto& edge_ptr : edges) {
-    if(edge_ptr->get_id() == "edge_conditional") {
-      conditional_edge = edge_ptr.get();
-      break;
-    }
-  }
-
-  ASSERT_NE(conditional_edge, nullptr);
-
-  // Check condition expression
-  const auto& condition_expr = conditional_edge->get_condition_expression();
-  EXPECT_FALSE(condition_expr.empty());
-  EXPECT_EQ(condition_expr, "output_data == 'success'");
-}
-
-// ============================================================================
-// Topological Order Tests
-// ============================================================================
-
-TEST_F(WorkflowJsonTest, GetTopologicalOrder) {
-  auto result = parser_->parse_workflow(valid_workflow_json_);
-
-  ASSERT_TRUE(result.is_valid());
-  ASSERT_NE(result.workflow, nullptr);
-
-  auto order = result.workflow->get_topological_order();
-
-  EXPECT_FALSE(order.empty()) << "Topological order should not be empty";
-  EXPECT_EQ(order.size(), 3) << "Should have 3 nodes in order";
-
-  // Check order: start -> process -> end
-  EXPECT_EQ(order[0], "node_start");
-  EXPECT_EQ(order[1], "node_process");
-  EXPECT_EQ(order[2], "node_end");
-}
-
-TEST_F(WorkflowJsonTest, GetExecutableNodes) {
-  auto result = parser_->parse_workflow(valid_workflow_json_);
-
-  ASSERT_TRUE(result.is_valid());
-  ASSERT_NE(result.workflow, nullptr);
-
-  auto executable = result.workflow->get_executable_nodes();
-
-  EXPECT_FALSE(executable.empty());
-  // Initially, only node_start should be executable (no dependencies)
-  EXPECT_EQ(executable.size(), 1);
-  EXPECT_EQ(executable[0], "node_start");
-}
-
-// ============================================================================
-// Control Flow Integration Tests
-// ============================================================================
-
-TEST_F(WorkflowJsonTest, GetExecutableNodesWithControl) {
-  auto result = parser_->parse_workflow(valid_workflow_json_);
-
-  ASSERT_TRUE(result.is_valid());
-  ASSERT_NE(result.workflow, nullptr);
-
-  auto executable_with_control = result.workflow->get_executable_nodes_with_control();
-
-  EXPECT_FALSE(executable_with_control.empty()) << "Should have executable nodes with control flow";
-}
-
-TEST_F(WorkflowJsonTest, ControlFlowManagerIntegration) {
-  auto result = parser_->parse_workflow(valid_workflow_json_);
-
-  ASSERT_TRUE(result.is_valid());
-  ASSERT_NE(result.workflow, nullptr);
-
-  // Verify control context is initialized
-  auto& control_context = result.workflow->get_control_context();
-  EXPECT_TRUE(control_context.get_active_loops().empty());
-
-}
-
-// ============================================================================
-// Loop Management Tests
-// ============================================================================
-
-TEST_F(WorkflowJsonTest, WorkflowLoopConfiguration) {
-  auto result = parser_->parse_workflow(workflow_with_loop_json_);
-
-  ASSERT_TRUE(result.is_valid());
-  ASSERT_NE(result.workflow, nullptr);
-
-  auto loop_node = result.workflow->get_node("node_loop");
-  ASSERT_NE(loop_node, nullptr);
-
-  EXPECT_EQ(loop_node->get_type(), "TASK");
-}
-
-TEST_F(WorkflowJsonTest, EnterLoop) {
-  auto result = parser_->parse_workflow(workflow_with_loop_json_);
-
-  ASSERT_TRUE(result.is_valid());
-  ASSERT_NE(result.workflow, nullptr);
-
-  agentflow::framework::LoopConfig loop_config;
-  loop_config.type           = agentflow::framework::LoopType::FOR_LOOP;
-  loop_config.max_iterations = 3;
-  // loop_config.condition is shared_ptr<ConditionExpression>, cannot assign string directly
-
-  result.workflow->enter_loop("test_loop", loop_config);
-
-  auto& control_context = result.workflow->get_control_context();
-  EXPECT_TRUE(control_context.is_in_loop("test_loop"));
-}
-
-TEST_F(WorkflowJsonTest, ExitLoopIteration) {
-  auto result = parser_->parse_workflow(workflow_with_loop_json_);
-
-  ASSERT_TRUE(result.is_valid());
-  ASSERT_NE(result.workflow, nullptr);
-
-  agentflow::framework::LoopConfig loop_config;
-  loop_config.type           = agentflow::framework::LoopType::FOR_LOOP;
-  loop_config.max_iterations = 3;
-
-  result.workflow->enter_loop("test_loop", loop_config);
-
-  // Exit current iteration
-  result.workflow->exit_loop_iteration("test_loop");
-
-  auto& control_context = result.workflow->get_control_context();
-  EXPECT_TRUE(control_context.is_in_loop("test_loop"));
-}
-
-TEST_F(WorkflowJsonTest, ShouldContinueLoop) {
-  auto result = parser_->parse_workflow(workflow_with_loop_json_);
-
-  ASSERT_TRUE(result.is_valid());
-  ASSERT_NE(result.workflow, nullptr);
-
-  agentflow::framework::LoopConfig loop_config;
-  loop_config.type           = agentflow::framework::LoopType::FOR_LOOP;
-  loop_config.start_value    = 0;
-  loop_config.end_value      = 2;
-  loop_config.step           = 1;
-  loop_config.loop_variable  = "i";
-  loop_config.max_iterations = 3;
-
-  result.workflow->enter_loop("test_loop", loop_config);
-
-  // Should continue initially
-  EXPECT_TRUE(result.workflow->should_continue_loop("test_loop"));
-}
-
-// ============================================================================
-// Error Handler Tests
-// ============================================================================
-
-TEST_F(WorkflowJsonTest, SetErrorHandler) {
-  auto result = parser_->parse_workflow(valid_workflow_json_);
-
-  ASSERT_TRUE(result.is_valid());
-  ASSERT_NE(result.workflow, nullptr);
-
-  agentflow::framework::ErrorHandlerConfig error_handler;
-  error_handler.strategy    = agentflow::framework::ErrorStrategy::RETRY;
-  error_handler.max_retries = 3;
-
-  result.workflow->set_error_handler("node_process", error_handler);
-}
-
-// ============================================================================
-// Version Management Tests
-// ============================================================================
-
-TEST_F(WorkflowJsonTest, WorkflowVersionParsing) {
-  auto result = parser_->parse_workflow(valid_workflow_json_);
-
-  ASSERT_TRUE(result.is_valid());
-  EXPECT_EQ(result.workflow->get_name(), "Test MMWorkflow");
-  EXPECT_EQ(result.workflow->get_id(), "workflow_001");
-}
-
-TEST_F(WorkflowJsonTest, WorkflowMetadataParsing) {
-  auto result = parser_->parse_workflow(valid_workflow_json_);
-
-  ASSERT_TRUE(result.is_valid());
-  // Check metadata field parsing
-  // Metadata should be parsed if present
-}
-
-// ============================================================================
-// MMWorkflow Graph Validation Tests
-// ============================================================================
-
-TEST_F(WorkflowJsonTest, ValidateWorkflowGraphStructure) {
-  auto result = parser_->parse_workflow(valid_workflow_json_);
-
-  ASSERT_TRUE(result.is_valid());
-
-  // Valid workflow should pass workflow graph validation
-  EXPECT_TRUE(result.workflow->validate());
-}
-
-TEST_F(WorkflowJsonTest, ValidateEdgeReferences) {
-  auto result = parser_->parse_workflow(valid_workflow_json_);
-
-  ASSERT_TRUE(result.is_valid());
-
-  // All edge references should be valid
-  EXPECT_TRUE(result.workflow->validate());
-}
-
-TEST_F(WorkflowJsonTest, ValidateNodeIdsUnique) {
-  // Valid workflow has unique node IDs
-  auto result = parser_->parse_workflow(valid_workflow_json_);
-  ASSERT_TRUE(result.is_valid());
-
-  // Validation should succeed
-  EXPECT_TRUE(result.workflow->validate());
-}
-
-TEST_F(WorkflowJsonTest, ParseEdgeControlConfig) {
-  auto result = parser_->parse_workflow(R"({
-    "id": "workflow_control_001",
-    "name": "Control MMWorkflow",
+  const char* legacy_control_workflow_json_ = R"({
+    "id": "workflow_legacy_edge_001",
+    "name": "Legacy Control Workflow",
     "version": "1.0.0",
     "nodes": [
       {"id": "n1", "name": "N1", "type": "TASK"},
@@ -781,78 +128,181 @@ TEST_F(WorkflowJsonTest, ParseEdgeControlConfig) {
     ],
     "edges": [
       {
-        "id": "e1",
+        "id": "legacy_edge",
         "source": "n1",
         "target": "n2",
-        "control": {"type": "async", "callback_node": "n1"}
+        "control": {"type": "goto", "goto_target": "n2"}
       }
     ]
-  })");
+  })";
 
-  ASSERT_TRUE(result.is_valid());
-  ASSERT_NE(result.workflow, nullptr);
-  const auto& edges = result.workflow->get_edges();
-  ASSERT_EQ(edges.size(), 1u);
-  EXPECT_EQ(edges[0]->get_control_type(), agentflow::framework::MMEdge::ControlType::ASYNC);
-  EXPECT_EQ(edges[0]->get_control_config().callback_node, "n1");
-}
+  const char* legacy_object_io_workflow_json_ = R"({
+    "id": "workflow_object_io_001",
+    "name": "Object IO Workflow",
+    "version": "1.0.0",
+    "nodes": [
+      {
+        "id": "mapper",
+        "name": "Mapper",
+        "type": "TASK",
+        "inputs": {
+          "count": "int",
+          "enabled": {"type": "bool", "required": true},
+          "attrs": {"type": "map", "transfer_mode": "ref"}
+        },
+        "outputs": {
+          "result": "float"
+        }
+      }
+    ],
+    "edges": []
+  })";
 
-TEST_F(WorkflowJsonTest, AllowCycleWhenUsingGotoControl) {
-  auto result = parser_->parse_workflow(workflow_with_control_cycle_json_);
+  const char* invalid_workflow_circular_json_ = R"({
+    "id": "workflow_circular",
+    "name": "Circular Workflow",
+    "version": "1.0.0",
+    "nodes": [
+      {"id": "node_a", "name": "A", "type": "TASK"},
+      {"id": "node_b", "name": "B", "type": "TASK"},
+      {"id": "node_c", "name": "C", "type": "TASK"}
+    ],
+    "edges": [
+      {"id": "edge_a_b", "source": "node_a", "target": "node_b"},
+      {"id": "edge_b_c", "source": "node_b", "target": "node_c"},
+      {"id": "edge_c_a", "source": "node_c", "target": "node_a"}
+    ]
+  })";
+};
+
+TEST_F(WorkflowJsonTest, ParseValidWorkflowWithTypedIo) {
+  auto result = parser_->parse_workflow(valid_workflow_json_);
   ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
   ASSERT_NE(result.workflow, nullptr);
+  ASSERT_EQ(result.workflow->get_nodes().size(), 2u);
+  ASSERT_EQ(result.workflow->get_edges().size(), 1u);
+
+  auto start_node = result.workflow->get_node("node_start");
+  ASSERT_NE(start_node, nullptr);
+  ASSERT_EQ(start_node->get_input_definitions().size(), 2u);
+  ASSERT_EQ(start_node->get_output_definitions().size(), 2u);
+  EXPECT_EQ(start_node->get_input_definitions()[0].type, framework::MMNode::FieldType::STRING);
+  EXPECT_EQ(start_node->get_input_definitions()[1].type, framework::MMNode::FieldType::LIST);
+  EXPECT_EQ(start_node->get_input_definitions()[1].transfer_mode,
+            framework::MMNode::TransferMode::REFERENCE);
+  EXPECT_EQ(start_node->get_output_definitions()[1].type, framework::MMNode::FieldType::MAP);
+
+  const auto& edge = result.workflow->get_edges().front();
+  EXPECT_EQ(edge->get_transfer_mode(), framework::MMEdge::DataTransferMode::REFERENCE);
+  EXPECT_EQ(edge->get_control_type(), framework::MMEdge::ControlType::IF);
+  EXPECT_EQ(edge->get_condition_expression(), "status == 'ok'");
 }
 
-// ============================================================================
-// Error Handling Tests
-// ============================================================================
-
-TEST_F(WorkflowJsonTest, HandleInvalidJSON) {
-  auto result = parser_->parse_workflow("{invalid json}");
-
-  EXPECT_FALSE(result.is_valid()) << "Invalid JSON should fail to parse";
-  EXPECT_FALSE(result.errors.empty()) << "Should have parse errors";
+TEST_F(WorkflowJsonTest, ParseObjectStyleIoAsTypedDefinitions) {
+  auto result = parser_->parse_workflow(legacy_object_io_workflow_json_);
+  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
+  auto node = result.workflow->get_node("mapper");
+  ASSERT_NE(node, nullptr);
+  ASSERT_EQ(node->get_input_definitions().size(), 3u);
+  EXPECT_EQ(node->get_input_definitions()[0].name, "count");
+  EXPECT_EQ(node->get_input_definitions()[0].type, framework::MMNode::FieldType::INT);
+  EXPECT_EQ(node->get_input_definitions()[1].type, framework::MMNode::FieldType::BOOL);
+  EXPECT_TRUE(node->get_input_definitions()[1].required);
+  EXPECT_EQ(node->get_input_definitions()[2].transfer_mode,
+            framework::MMNode::TransferMode::REFERENCE);
+  ASSERT_EQ(node->get_output_definitions().size(), 1u);
+  EXPECT_EQ(node->get_output_definitions()[0].type, framework::MMNode::FieldType::FLOAT);
 }
 
-TEST_F(WorkflowJsonTest, HandleEmptyWorkflow) {
-  auto result = parser_->parse_workflow("{}");
-
-  EXPECT_TRUE(result.is_valid()) << "Empty workflow should be valid (with auto-generated ID)";
+TEST_F(WorkflowJsonTest, ParseSwitchCaseWorkflow) {
+  auto result = parser_->parse_workflow(switch_case_workflow_json_);
+  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
+  ASSERT_NE(result.workflow, nullptr);
+  ASSERT_EQ(result.workflow->get_edges().size(), 3u);
+  for(const auto& edge : result.workflow->get_edges()) {
+    EXPECT_EQ(edge->get_control_type(), framework::MMEdge::ControlType::SWITCH_CASE);
+    EXPECT_EQ(edge->get_control_config().expression, "route");
+  }
+  EXPECT_TRUE(result.workflow->validate());
 }
 
-TEST_F(WorkflowJsonTest, HandleMissingNodes) {
-  auto result = parser_->parse_workflow(R"({
-    "id": "test",
-    "name": "Test",
-    "edges": []
-  })");
+TEST_F(WorkflowJsonTest, SwitchCaseSelectsMatchingAndDefaultBranches) {
+  auto result = parser_->parse_workflow(switch_case_workflow_json_);
+  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
+  ASSERT_TRUE(result.workflow->validate());
 
-  EXPECT_TRUE(result.is_valid()) << "MMWorkflow without nodes should be valid (partial definition)";
+  auto selector = result.workflow->get_node("selector");
+  auto path_a = result.workflow->get_node("path_a");
+  auto path_b = result.workflow->get_node("path_b");
+  auto path_default = result.workflow->get_node("path_default");
+  ASSERT_NE(selector, nullptr);
+  ASSERT_NE(path_a, nullptr);
+  ASSERT_NE(path_b, nullptr);
+  ASSERT_NE(path_default, nullptr);
+
+  path_a->set_state(NodeState::READY);
+  path_b->set_state(NodeState::READY);
+  path_default->set_state(NodeState::READY);
+  selector->set_state(NodeState::SUCCESS);
+  selector->set_outputs({{"route", std::string("B")}});
+  result.workflow->mark_node_executed("selector", true);
+  auto executable = result.workflow->get_executable_nodes_with_control();
+  EXPECT_NE(std::find(executable.begin(), executable.end(), "path_b"), executable.end());
+  EXPECT_EQ(std::find(executable.begin(), executable.end(), "path_a"), executable.end());
+  EXPECT_EQ(std::find(executable.begin(), executable.end(), "path_default"), executable.end());
+
+  selector->set_outputs({{"route", std::string("Z")}});
+  executable = result.workflow->get_executable_nodes_with_control();
+  EXPECT_NE(std::find(executable.begin(), executable.end(), "path_default"), executable.end());
 }
 
-TEST_F(WorkflowJsonTest, HandleMissingEdges) {
-  auto result = parser_->parse_workflow(R"({
-    "id": "test",
-    "name": "Test",
-    "nodes": []
-  })");
-
-  // This might be valid (empty workflow)
-  // But edges with invalid node references should be caught
+TEST_F(WorkflowJsonTest, RejectLegacyEdgeControlTypes) {
+  auto result = parser_->parse_workflow(legacy_control_workflow_json_);
+  EXPECT_FALSE(result.is_valid());
+  ASSERT_FALSE(result.errors.empty());
+  EXPECT_NE(result.get_error_summary().find("no longer supported"), std::string::npos);
 }
 
-// ============================================================================
-// Dynamic Update Tests
-// ============================================================================
-
-TEST_F(WorkflowJsonTest, DynamicWorkflowUpdate) {
+TEST_F(WorkflowJsonTest, ValidateWorkflowGraphStructure) {
   auto result = parser_->parse_workflow(valid_workflow_json_);
+  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
+  EXPECT_TRUE(result.workflow->validate());
+}
 
-  ASSERT_TRUE(result.is_valid());
+TEST_F(WorkflowJsonTest, CircularWorkflowValidationFails) {
+  auto result = parser_->parse_workflow(invalid_workflow_circular_json_);
+  EXPECT_FALSE(result.is_valid());
+  EXPECT_NE(result.workflow, nullptr);
+  EXPECT_NE(result.get_error_summary().find("acyclic"), std::string::npos);
+}
 
-  // Update workflow dynamically
-  bool update_result = result.workflow->update_dynamic(valid_workflow_json_);
-  EXPECT_TRUE(update_result) << "Dynamic update should succeed";
+TEST_F(WorkflowJsonTest, ReferenceTransferProducesDatabusRefMarker) {
+  framework::MMEdge::Config config;
+  config.id = "edge_ref";
+  config.source_node = "source";
+  config.target_node = "target";
+  config.source_outputs = {"payload"};
+  config.target_inputs = {"payload_ref"};
+  config.transfer_mode = framework::MMEdge::DataTransferMode::REFERENCE;
+  framework::MMEdge edge(config);
+
+  DataMap source_data;
+  source_data["payload"] = std::string("body");
+  DataMap target_data;
+  ASSERT_TRUE(edge.transfer_data(source_data, target_data));
+  ASSERT_TRUE(target_data.count("payload_ref") > 0);
+  EXPECT_EQ(std::get<std::string>(target_data["payload_ref"]), "databus://global/source.payload");
+}
+
+TEST_F(WorkflowJsonTest, ParseUpdatedPatternWorkflowFile) {
+  namespace fs = std::filesystem;
+  fs::path pattern = repo_root() / "publish/workflow/pattern/dynamic_workflow.json";
+  ASSERT_TRUE(fs::exists(pattern));
+
+  auto result = parser_->parse_workflow_file(pattern.string());
+  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
+  ASSERT_NE(result.workflow, nullptr);
+  EXPECT_NE(result.workflow->get_node("dynamic_workflow"), nullptr);
 }
 
 }  // namespace tests

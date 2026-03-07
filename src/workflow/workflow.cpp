@@ -38,16 +38,8 @@ const char* control_type_to_string(MMEdge::ControlType type) {
   switch(type) {
     case MMEdge::ControlType::IF:
       return "if";
-    case MMEdge::ControlType::LOOP:
-      return "loop";
-    case MMEdge::ControlType::FORK:
-      return "fork";
-    case MMEdge::ControlType::JOIN:
-      return "join";
-    case MMEdge::ControlType::ASYNC:
-      return "async";
-    case MMEdge::ControlType::GOTO:
-      return "goto";
+    case MMEdge::ControlType::SWITCH_CASE:
+      return "switch-case";
     case MMEdge::ControlType::NONE:
     default:
       return "none";
@@ -57,17 +49,102 @@ const char* control_type_to_string(MMEdge::ControlType type) {
 MMEdge::ControlType control_type_from_string(const std::string& type) {
   if(type == "if")
     return MMEdge::ControlType::IF;
-  if(type == "loop")
-    return MMEdge::ControlType::LOOP;
-  if(type == "fork")
-    return MMEdge::ControlType::FORK;
-  if(type == "join")
-    return MMEdge::ControlType::JOIN;
-  if(type == "async")
-    return MMEdge::ControlType::ASYNC;
-  if(type == "goto")
-    return MMEdge::ControlType::GOTO;
+  if(type == "switch-case")
+    return MMEdge::ControlType::SWITCH_CASE;
   return MMEdge::ControlType::NONE;
+}
+
+const char* field_type_to_string(MMNode::FieldType type) {
+  switch(type) {
+    case MMNode::FieldType::INT:
+      return "int";
+    case MMNode::FieldType::FLOAT:
+      return "float";
+    case MMNode::FieldType::BOOL:
+      return "bool";
+    case MMNode::FieldType::LIST:
+      return "list";
+    case MMNode::FieldType::MAP:
+      return "map";
+    case MMNode::FieldType::STRING:
+    default:
+      return "string";
+  }
+}
+
+MMNode::FieldType field_type_from_string(const std::string& type) {
+  if(type == "int") {
+    return MMNode::FieldType::INT;
+  }
+  if(type == "float") {
+    return MMNode::FieldType::FLOAT;
+  }
+  if(type == "bool") {
+    return MMNode::FieldType::BOOL;
+  }
+  if(type == "list") {
+    return MMNode::FieldType::LIST;
+  }
+  if(type == "map") {
+    return MMNode::FieldType::MAP;
+  }
+  return MMNode::FieldType::STRING;
+}
+
+const char* node_transfer_mode_to_string(MMNode::TransferMode mode) {
+  switch(mode) {
+    case MMNode::TransferMode::REFERENCE:
+      return "ref";
+    case MMNode::TransferMode::VALUE:
+    default:
+      return "value";
+  }
+}
+
+MMNode::TransferMode node_transfer_mode_from_string(const std::string& mode) {
+  if(mode == "ref") {
+    return MMNode::TransferMode::REFERENCE;
+  }
+  return MMNode::TransferMode::VALUE;
+}
+
+const char* edge_transfer_mode_to_string(MMEdge::DataTransferMode mode) {
+  switch(mode) {
+    case MMEdge::DataTransferMode::REFERENCE:
+      return "ref";
+    case MMEdge::DataTransferMode::VALUE:
+    default:
+      return "value";
+  }
+}
+
+MMEdge::DataTransferMode edge_transfer_mode_from_string(const std::string& mode) {
+  if(mode == "ref") {
+    return MMEdge::DataTransferMode::REFERENCE;
+  }
+  if(mode == "shared_memory" || mode == "message_queue" || mode == "remote_transfer") {
+    return MMEdge::DataTransferMode::VALUE;
+  }
+  return MMEdge::DataTransferMode::VALUE;
+}
+
+std::string trim_copy(const std::string& value) {
+  const auto start = value.find_first_not_of(" \t\n\r");
+  if(start == std::string::npos) {
+    return "";
+  }
+  const auto end = value.find_last_not_of(" \t\n\r");
+  return value.substr(start, end - start + 1);
+}
+
+std::string strip_quotes(std::string value) {
+  value = trim_copy(value);
+  if(value.size() >= 2
+     && ((value.front() == '\'' && value.back() == '\'')
+         || (value.front() == '"' && value.back() == '"'))) {
+    return value.substr(1, value.size() - 2);
+  }
+  return value;
 }
 
 /**
@@ -168,19 +245,29 @@ std::string workflow_config_to_json(const MMWorkflow::Config&                   
 
     // Input parameters
     rapidjson::Value inputs_array(rapidjson::kArrayType);
-    for(const auto& param : node->get_input_params()) {
-      rapidjson::Value value_str;
-      value_str.SetString(param.c_str(), allocator);
-      inputs_array.PushBack(value_str, allocator);
+    for(const auto& field : node->get_input_definitions()) {
+      rapidjson::Value field_obj(rapidjson::kObjectType);
+      field_obj.AddMember("name", rapidjson::StringRef(field.name.c_str()), allocator);
+      field_obj.AddMember("type", rapidjson::StringRef(field_type_to_string(field.type)), allocator);
+      field_obj.AddMember("transfer_mode",
+                          rapidjson::StringRef(node_transfer_mode_to_string(field.transfer_mode)),
+                          allocator);
+      field_obj.AddMember("required", field.required, allocator);
+      inputs_array.PushBack(field_obj, allocator);
     }
     node_obj.AddMember("inputs", inputs_array, allocator);
 
     // Output parameters
     rapidjson::Value outputs_array(rapidjson::kArrayType);
-    for(const auto& param : node->get_output_params()) {
-      rapidjson::Value value_str;
-      value_str.SetString(param.c_str(), allocator);
-      outputs_array.PushBack(value_str, allocator);
+    for(const auto& field : node->get_output_definitions()) {
+      rapidjson::Value field_obj(rapidjson::kObjectType);
+      field_obj.AddMember("name", rapidjson::StringRef(field.name.c_str()), allocator);
+      field_obj.AddMember("type", rapidjson::StringRef(field_type_to_string(field.type)), allocator);
+      field_obj.AddMember("transfer_mode",
+                          rapidjson::StringRef(node_transfer_mode_to_string(field.transfer_mode)),
+                          allocator);
+      field_obj.AddMember("required", field.required, allocator);
+      outputs_array.PushBack(field_obj, allocator);
     }
     node_obj.AddMember("outputs", outputs_array, allocator);
 
@@ -198,19 +285,9 @@ std::string workflow_config_to_json(const MMWorkflow::Config&                   
     edge_obj.AddMember("priority", edge->get_priority(), allocator);
 
     // Transfer mode
-    const char* transfer_mode = "shared_memory";
-    switch(edge->get_transfer_mode()) {
-      case MMEdge::DataTransferMode::SHARED_MEMORY:
-        transfer_mode = "shared_memory";
-        break;
-      case MMEdge::DataTransferMode::MESSAGE_QUEUE:
-        transfer_mode = "message_queue";
-        break;
-      case MMEdge::DataTransferMode::REMOTE_TRANSFER:
-        transfer_mode = "remote_transfer";
-        break;
-    }
-    edge_obj.AddMember("transfer_mode", rapidjson::StringRef(transfer_mode), allocator);
+    edge_obj.AddMember("transfer_mode",
+                       rapidjson::StringRef(edge_transfer_mode_to_string(edge->get_transfer_mode())),
+                       allocator);
 
     // MMEdge config
     const auto& edge_cfg = edge->get_config();
@@ -267,25 +344,10 @@ std::string workflow_config_to_json(const MMWorkflow::Config&                   
       if(!c.expression.empty()) {
         control_obj.AddMember("expression", rapidjson::StringRef(c.expression.c_str()), allocator);
       }
-      if(!c.goto_target.empty()) {
-        control_obj.AddMember("goto_target", rapidjson::StringRef(c.goto_target.c_str()), allocator);
+      if(!c.case_value.empty()) {
+        control_obj.AddMember("case_value", rapidjson::StringRef(c.case_value.c_str()), allocator);
       }
-      if(!c.loop_id.empty()) {
-        control_obj.AddMember("loop_id", rapidjson::StringRef(c.loop_id.c_str()), allocator);
-      }
-      if(c.max_iterations > 0) {
-        control_obj.AddMember("max_iterations", c.max_iterations, allocator);
-      }
-      if(!c.fork_group.empty()) {
-        control_obj.AddMember("fork_group", rapidjson::StringRef(c.fork_group.c_str()), allocator);
-      }
-      if(!c.join_group.empty()) {
-        control_obj.AddMember("join_group", rapidjson::StringRef(c.join_group.c_str()), allocator);
-      }
-      if(!c.callback_node.empty()) {
-        control_obj.AddMember("callback_node", rapidjson::StringRef(c.callback_node.c_str()),
-                              allocator);
-      }
+      control_obj.AddMember("is_default", c.is_default, allocator);
       edge_obj.AddMember("control", control_obj, allocator);
     }
 
@@ -399,20 +461,53 @@ bool workflow_config_from_json(const std::string& json_str, MMWorkflow::Config& 
       if(node_obj.HasMember("enable_hot_reload"))
         node_config.enable_hot_reload = node_obj["enable_hot_reload"].GetBool();
 
+      auto parse_fields = [](const rapidjson::Value& field_array,
+                             std::vector<MMNode::FieldDefinition>& field_defs,
+                             std::vector<std::string>& field_names) {
+        for(rapidjson::SizeType j = 0; j < field_array.Size(); ++j) {
+          const auto& field_value = field_array[j];
+          MMNode::FieldDefinition field_def;
+          if(field_value.IsString()) {
+            field_def.name = field_value.GetString();
+          } else if(field_value.IsObject()) {
+            if(field_value.HasMember("name") && field_value["name"].IsString()) {
+              field_def.name = field_value["name"].GetString();
+            }
+            if(field_value.HasMember("type") && field_value["type"].IsString()) {
+              field_def.type = field_type_from_string(field_value["type"].GetString());
+            }
+            if(field_value.HasMember("transfer_mode") && field_value["transfer_mode"].IsString()) {
+              field_def.transfer_mode =
+                  node_transfer_mode_from_string(field_value["transfer_mode"].GetString());
+            }
+            if(field_value.HasMember("required") && field_value["required"].IsBool()) {
+              field_def.required = field_value["required"].GetBool();
+            }
+          } else {
+            continue;
+          }
+
+          if(field_def.name.empty()) {
+            continue;
+          }
+          field_defs.push_back(field_def);
+          field_names.push_back(field_def.name);
+        }
+      };
+
       // Parse input parameters
       if(node_obj.HasMember("inputs") && node_obj["inputs"].IsArray()) {
-        const rapidjson::Value& inputs_array = node_obj["inputs"];
-        for(rapidjson::SizeType j = 0; j < inputs_array.Size(); ++j) {
-          node_config.input_params.push_back(inputs_array[j].GetString());
-        }
+        parse_fields(node_obj["inputs"], node_config.input_definitions, node_config.input_params);
+      } else if(node_obj.HasMember("input_params") && node_obj["input_params"].IsArray()) {
+        parse_fields(node_obj["input_params"], node_config.input_definitions, node_config.input_params);
       }
 
       // Parse output parameters
       if(node_obj.HasMember("outputs") && node_obj["outputs"].IsArray()) {
-        const rapidjson::Value& outputs_array = node_obj["outputs"];
-        for(rapidjson::SizeType j = 0; j < outputs_array.Size(); ++j) {
-          node_config.output_params.push_back(outputs_array[j].GetString());
-        }
+        parse_fields(node_obj["outputs"], node_config.output_definitions, node_config.output_params);
+      } else if(node_obj.HasMember("output_params") && node_obj["output_params"].IsArray()) {
+        parse_fields(node_obj["output_params"], node_config.output_definitions,
+                     node_config.output_params);
       }
 
       node_configs.push_back(node_config);
@@ -436,14 +531,7 @@ bool workflow_config_from_json(const std::string& json_str, MMWorkflow::Config& 
         edge_config.priority = edge_obj["priority"].GetInt();
 
       if(edge_obj.HasMember("transfer_mode")) {
-        const std::string& transfer_mode = edge_obj["transfer_mode"].GetString();
-        if(transfer_mode == "shared_memory") {
-          edge_config.transfer_mode = MMEdge::DataTransferMode::SHARED_MEMORY;
-        } else if(transfer_mode == "message_queue") {
-          edge_config.transfer_mode = MMEdge::DataTransferMode::MESSAGE_QUEUE;
-        } else if(transfer_mode == "remote_transfer") {
-          edge_config.transfer_mode = MMEdge::DataTransferMode::REMOTE_TRANSFER;
-        }
+        edge_config.transfer_mode = edge_transfer_mode_from_string(edge_obj["transfer_mode"].GetString());
       }
 
       if(edge_obj.HasMember("condition"))
@@ -458,23 +546,11 @@ bool workflow_config_from_json(const std::string& json_str, MMWorkflow::Config& 
         if(control_obj.HasMember("expression")) {
           edge_config.control.expression = control_obj["expression"].GetString();
         }
-        if(control_obj.HasMember("goto_target")) {
-          edge_config.control.goto_target = control_obj["goto_target"].GetString();
+        if(control_obj.HasMember("case_value")) {
+          edge_config.control.case_value = control_obj["case_value"].GetString();
         }
-        if(control_obj.HasMember("loop_id")) {
-          edge_config.control.loop_id = control_obj["loop_id"].GetString();
-        }
-        if(control_obj.HasMember("max_iterations")) {
-          edge_config.control.max_iterations = control_obj["max_iterations"].GetInt();
-        }
-        if(control_obj.HasMember("fork_group")) {
-          edge_config.control.fork_group = control_obj["fork_group"].GetString();
-        }
-        if(control_obj.HasMember("join_group")) {
-          edge_config.control.join_group = control_obj["join_group"].GetString();
-        }
-        if(control_obj.HasMember("callback_node")) {
-          edge_config.control.callback_node = control_obj["callback_node"].GetString();
+        if(control_obj.HasMember("is_default")) {
+          edge_config.control.is_default = control_obj["is_default"].GetBool();
         }
       }
       if(edge_config.control.type == MMEdge::ControlType::IF &&
@@ -740,10 +816,6 @@ bool MMWorkflow::execute_message_through_workflow(const Message& message) {
     in_degree[node->get_id()] = 0;
   }
   for(const auto& edge : edges_) {
-    if(edge->get_control_type() == MMEdge::ControlType::LOOP
-       || edge->get_control_type() == MMEdge::ControlType::GOTO) {
-      continue;
-    }
     adjacency[edge->get_source()].push_back(edge->get_target());
     in_degree[edge->get_target()]++;
   }
@@ -922,6 +994,56 @@ std::vector<std::string> MMWorkflow::get_executable_nodes() {
 
 std::vector<std::string> MMWorkflow::get_executable_nodes_with_control() {
   std::vector<std::string> executable;
+  std::unordered_map<std::string, bool> selected_edges;
+
+  for(const auto& edge : edges_) {
+    selected_edges[edge->get_id()] = edge->get_control_type() != MMEdge::ControlType::SWITCH_CASE;
+  }
+
+  std::map<std::string, std::map<std::string, std::vector<std::shared_ptr<MMEdge>>>> switch_groups;
+  for(const auto& edge : edges_) {
+    if(edge->get_control_type() != MMEdge::ControlType::SWITCH_CASE) {
+      continue;
+    }
+    const auto& control_cfg = edge->get_control_config();
+    const std::string group_expression =
+        !control_cfg.expression.empty() ? control_cfg.expression : "__missing_switch_expression__";
+    switch_groups[edge->get_source()][group_expression].push_back(edge);
+  }
+
+  for(const auto& source_entry : switch_groups) {
+    auto          source         = get_node(source_entry.first);
+    const DataMap source_outputs = source ? source->get_outputs() : DataMap{};
+
+    for(const auto& group_entry : source_entry.second) {
+      const auto& expression = group_entry.first;
+      if(expression == "__missing_switch_expression__") {
+        continue;
+      }
+
+      const std::string selector_value =
+          strip_quotes(resolve_value(expression, control_context_, source_outputs));
+      bool matched = false;
+      for(const auto& edge : group_entry.second) {
+        const auto& control_cfg = edge->get_control_config();
+        const auto  case_value  = strip_quotes(control_cfg.case_value);
+        if(!control_cfg.is_default && selector_value == case_value) {
+          selected_edges[edge->get_id()] = true;
+          matched = true;
+        } else {
+          selected_edges[edge->get_id()] = false;
+        }
+      }
+
+      if(!matched) {
+        for(const auto& edge : group_entry.second) {
+          if(edge->get_control_config().is_default) {
+            selected_edges[edge->get_id()] = true;
+          }
+        }
+      }
+    }
+  }
 
   for(const auto& node : nodes_) {
     // Check if node is already executed
@@ -930,50 +1052,35 @@ std::vector<std::string> MMWorkflow::get_executable_nodes_with_control() {
     }
 
     // Check if all dependencies are satisfied
-    bool all_deps_ready = true;
-    int  in_edge_count  = 0;
+    bool all_deps_ready      = true;
+    int  selected_edge_count = 0;
+    int  in_edge_count       = 0;
 
     for(const auto& edge : edges_) {
       if(edge->get_target() == node->get_id()) {
         in_edge_count++;
 
         // Evaluate edge condition if present
-        bool should_traverse = true;
+        bool should_traverse = selected_edges[edge->get_id()];
         const auto& control_cfg = edge->get_control_config();
-        if(control_cfg.type == MMEdge::ControlType::IF ||
-           (!control_cfg.expression.empty() || edge->has_condition())) {
+        if(control_cfg.type == MMEdge::ControlType::IF
+           || (control_cfg.type == MMEdge::ControlType::NONE
+               && (!control_cfg.expression.empty() || edge->has_condition()))) {
           const std::string expr =
               !control_cfg.expression.empty() ? control_cfg.expression : edge->get_condition_expression();
-          should_traverse =
-              evaluate_condition(parse_condition_expression(expr), control_context_, DataMap());
-        } else if(control_cfg.type == MMEdge::ControlType::LOOP) {
-          const std::string loop_id =
-              !control_cfg.loop_id.empty() ? control_cfg.loop_id : edge->get_id();
-          if(!control_context_.is_in_loop(loop_id)) {
-            LoopConfig loop_cfg{};
-            loop_cfg.type           = LoopType::REPEAT_LOOP;
-            loop_cfg.max_iterations = control_cfg.max_iterations > 0 ? control_cfg.max_iterations : 1;
-            active_loops_[loop_id]  = loop_cfg;
-            control_context_.enter_loop(loop_id, loop_cfg);
-          }
-          should_traverse = control_context_.should_continue_loop(loop_id, active_loops_.at(loop_id));
-          if(!should_traverse) {
-            control_context_.exit_loop(loop_id);
-            active_loops_.erase(loop_id);
-          }
-        } else if(control_cfg.type == MMEdge::ControlType::ASYNC) {
           auto source = get_node(edge->get_source());
-          should_traverse = source && source->get_state() != NodeState::WAITING;
+          should_traverse =
+              source && evaluate_condition(parse_condition_expression(expr), control_context_,
+                                           source->get_outputs());
         }
 
         if(should_traverse) {
+          selected_edge_count++;
           auto source = get_node(edge->get_source());
-          const bool async_edge = control_cfg.type == MMEdge::ControlType::ASYNC;
-          const bool source_done = source && source->get_state() != NodeState::WAITING;
-          if(source && !async_edge && source->get_state() != NodeState::SUCCESS) {
+          if(source && source->get_state() != NodeState::SUCCESS) {
             all_deps_ready = false;
             break;
-          } else if(async_edge && !source_done) {
+          } else if(!source) {
             all_deps_ready = false;
             break;
           }
@@ -982,10 +1089,9 @@ std::vector<std::string> MMWorkflow::get_executable_nodes_with_control() {
     }
 
     // Nodes with no incoming edges (sources) or all conditions met
-    if(in_edge_count == 0 || all_deps_ready) {
-      if(node->get_state() == NodeState::READY) {
-        executable.push_back(node->get_id());
-      }
+    if((in_edge_count == 0 || (selected_edge_count > 0 && all_deps_ready))
+       && node->get_state() == NodeState::READY) {
+      executable.push_back(node->get_id());
     }
   }
 
@@ -1100,10 +1206,6 @@ bool MMWorkflow::validate_dag() {
   // Build adjacency list for graph
   std::map<std::string, std::vector<std::string>> adjacency;
   for(const auto& edge : edges_) {
-    if(edge->get_control_type() == MMEdge::ControlType::LOOP ||
-       edge->get_control_type() == MMEdge::ControlType::GOTO) {
-      continue;
-    }
     adjacency[edge->get_source()].push_back(edge->get_target());
   }
 
@@ -1155,10 +1257,6 @@ bool MMWorkflow::compute_topological_order() {
 
   // Calculate in-degree for each node
   for(const auto& edge : edges_) {
-    if(edge->get_control_type() == MMEdge::ControlType::LOOP ||
-       edge->get_control_type() == MMEdge::ControlType::GOTO) {
-      continue;
-    }
     in_degree[edge->get_target()]++;
   }
 
@@ -1173,10 +1271,6 @@ bool MMWorkflow::compute_topological_order() {
   // Build adjacency list
   std::map<std::string, std::vector<std::string>> adjacency;
   for(const auto& edge : edges_) {
-    if(edge->get_control_type() == MMEdge::ControlType::LOOP ||
-       edge->get_control_type() == MMEdge::ControlType::GOTO) {
-      continue;
-    }
     adjacency[edge->get_source()].push_back(edge->get_target());
   }
 

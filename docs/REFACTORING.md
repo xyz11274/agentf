@@ -14,10 +14,10 @@
 
 ### 本次重构
 
-- `agent.json` 改为 `session_pool_size + sessions + contextupdater` 组合：
-  - session 编号必须连续，池大小需与 `sessions` 数组长度一致；
-  - session 只声明 `dispatcher` / `coordinator` / `skill` 三类任务；
-  - `contextupdater` 迁移为 agent 级任务配置。
+- `agent.json` 改为 `session_pool_size + tasks + sessions` 组合：
+  - `tasks[]` 中使用 `contextupdater` 声明 agent 级上下文更新任务；
+  - `sessions[]` 固定只保留 1 份同质化 session 模板，由 `session_pool_size` 复制出整个 session 池；
+  - session 只声明 `dispatcher` / `coordinator` / `skill` 三类任务，`skill.instance_pool_size` 默认值为 `2`。
 - `SessionRouter` 统一维护默认请求接收队列、响应发送队列、路由线程和 aging 线程；消息按 `user_id + client_id` 命中或分配预创建 session。
 - `skill` 任务新增 `skill.name`、`skill.config_dir`、`skill.instance_pool_size`，初始化时按配置创建任务实例池。
 - `MMAgent::initialize_components()` 改为优先按 `agent.json.sessions` 预创建 session pool；请求先进入 router，再映射到具体 session。
@@ -1736,6 +1736,20 @@ All examples have been validated:
 
 5. **示例刷新**
    - 更新 `examples/agent/basic_agent` 与 `examples/agent/calculator_agent`，补充规范化示例文件并保留现有加载兼容字段。
+
+### 2026-03-07 MMWorkflow edge/node typed IO 重构
+
+1. **MMEdge 控制模型收敛**
+   - 删除 `loop/fork/join/async/goto` 控制语义，仅保留 `if` 与 `switch-case`。
+   - `switch-case` 采用“多条 edge 共享 `expression`、每条 edge 自带 `case_value` / `is_default`”的分支模型。
+
+2. **MMNode 输入输出类型化**
+   - node 新增结构化 `inputs` / `outputs` 字段，支持 `string/int/float/bool/list/map`。
+   - 每个字段支持 `transfer_mode: value|ref`，其中 `ref` 用于传递 DataBus 引用。
+
+3. **样例/测试/发布资产同步**
+   - 更新 `examples/`、`publish/workflow/pattern/`、`publish/workflow/workflow_sample.jsonc` 与 `tests/unit/src/test_workflow_json_gtest.cpp`。
+   - 清理 `examples/multi_session_chat` 下遗留的 `.bak` 备份文件。
 
 ### 2026-02-22 MMWorkflow MMEdge 控制与模式化重构
 
