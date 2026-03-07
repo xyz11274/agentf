@@ -36,14 +36,15 @@ MMAgent 运行时元数据，至少包含：
 - `name`：MMAgent 名称
 - `version`：MMAgent 版本（应与 `$AGTVER` 一致）
 - `description`：功能概述
-- `sessions`：session 拓扑定义，至少包含 1 个 session
+- `session_pool_size`：预创建 session 池大小，需与 `sessions` 数组长度一致
+- `contextupdater`：agent 级 context 更新任务配置（`type = contextupdater`，绑定 workflow 文件）
+- `sessions`：session 池模板定义，至少包含 1 个 session
   - `session.id`：从 `0` 开始连续编号
-  - `session.type`：`talker` / `thinker`，且必须且只能存在 1 个 `talker`
   - `session.description`
   - `session.task_count`
   - `session.tasks`
 - `task.id`：从 `0` 开始连续编号
-- `task.type`：`dispatcher` / `coordinator` / `contextkeeper` / `skill`
+- `task.type`：`dispatcher` / `coordinator` / `skill`
 - `task.workflow_file`：任务绑定的 workflow 文件
 - `skill` 任务额外包含：
   - `skill.name`
@@ -57,8 +58,8 @@ MMAgent Prompt/能力卡片，供其他模型或 MMAgent 读取。
 工作流定义文件，包含 `node` 与 `edge`：
 - node 负责动作执行
 - edge 负责流程控制（包含 if/loop/fork/join/async/goto）
-- talker session 的 dispatcher / coordinator workflow 推荐分别承担请求分发与结果编排入口
-- context workflow 应收敛到 `contextkeeper` 任务
+- session pool 中每个 session 的 dispatcher / coordinator workflow 推荐分别承担请求分发与结果编排入口
+- context workflow 应收敛到 agent 级 `contextupdater` 任务
 
 ### 3.4 `node_xxx.$TYPE`
 节点可执行实现，支持后缀示例：`.so`、`.sh`、`.py`、`.jar`。
@@ -70,7 +71,7 @@ MMAgent Prompt/能力卡片，供其他模型或 MMAgent 读取。
 - 功能说明
 - 文件清单（manifest）
 - `coordinator_workflow`：可作为 coordinator 任务的默认 workflow
-- `task_workflows`：任务类型到 workflow 的默认映射（如 `dispatcher` / `coordinator` / `contextkeeper` / `skill:<name>`）
+- `task_workflows`：任务类型到 workflow 的默认映射（如 `dispatcher` / `coordinator` / `contextupdater` / `skill:<name>`）
 
 > 说明：session / task / skill 的主拓扑定义应放在 `agent.json`，`package.json` 负责包级元数据与默认 workflow 映射。
 

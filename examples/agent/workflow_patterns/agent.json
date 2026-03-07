@@ -2,12 +2,18 @@
   "name": "WorkflowPatternsAgent",
   "version": "1.0.0",
   "description": "Agent demonstrating common workflow patterns: conditional branching, loop iteration, and sequential processing",
+  "session_pool_size": 1,
+  "contextupdater": {
+    "id": 0,
+    "type": "contextupdater",
+    "description": "Update workflow-pattern context",
+    "workflow_file": "loop_workflow.json"
+  },
   "sessions": [
     {
       "id": 0,
-      "type": "talker",
-      "description": "Primary talker session",
-      "task_count": 3,
+      "description": "Primary pooled session",
+      "task_count": 2,
       "tasks": [
         {
           "id": 0,
@@ -20,12 +26,6 @@
           "type": "coordinator",
           "description": "Coordinate workflow pattern outputs",
           "workflow_file": "conditional_workflow.json"
-        },
-        {
-          "id": 2,
-          "type": "contextkeeper",
-          "description": "Maintain workflow pattern context",
-          "workflow_file": "loop_workflow.json"
         }
       ]
     }

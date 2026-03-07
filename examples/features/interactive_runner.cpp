@@ -300,12 +300,13 @@ bool InteractiveRunner::wait_for_completion(int timeout_ms) {
     int running_nodes = runtime_->get_running_nodes();
 
     // Check if agent has pending messages
-    auto session = agent_->get_default_session();
+    auto session = agent_->get_session_by_key("interactive_user:cli");
     int pending_receive = session ? session->get_receive_queue_size() : 0;
     int pending_send = session ? session->get_send_queue_size() : 0;
+    int pending_router_responses = agent_->get_response_queue_size();
 
     // If nothing is running and no pending messages, we're done
-    if (running_nodes == 0 && pending_receive == 0 && pending_send == 0) {
+    if (running_nodes == 0 && pending_receive == 0 && pending_send == 0 && pending_router_responses == 0) {
       return true;
     }
 
@@ -322,15 +323,10 @@ bool InteractiveRunner::wait_for_completion(int timeout_ms) {
 }
 
 std::string InteractiveRunner::collect_results() {
-  auto session = agent_->get_default_session();
-  if (!session) {
-    return "";
-  }
-
   std::ostringstream result;
   framework::MMAgentMsgQue::Message response;
 
-  while (session->dequeue_send_message(response)) {
+  while (agent_->dequeue_response_message(response)) {
     if (!response.content.empty()) {
       result << response.content;
       if (response.content.back() != '\n') {

@@ -6,20 +6,17 @@
 using namespace agentflow;
 
 void test_agent() {
-  // Test MMAgent creation
   framework::MMAgent::Config config;
-  config.id     = "test_agent";
-  config.name   = "TestAgent";
+  config.id = "test_agent";
+  config.name = "TestAgent";
   config.policy = framework::MMAgent::LifecyclePolicy::SINGLETON;
 
   auto agent = std::make_shared<framework::MMAgent>(config);
 
-  // Test getters
   assert(agent->get_id() == "test_agent");
   assert(agent->get_name() == "TestAgent");
   assert(agent->get_state() == AgentState::CREATED);
 
-  // Test data bus operations
   DataVariant value = std::string("test_value");
   assert(agent->publish_data("key1", value));
 
@@ -27,14 +24,15 @@ void test_agent() {
   assert(agent->get_data("key1", retrieved));
   assert(std::get<std::string>(retrieved) == "test_value");
 
-  // Test event queue operations
-  agent->post_event("event1");
-  std::string event = agent->get_event();
-  assert(event == "event1");
+  framework::MMAgentMsgQue::Message request;
+  request.message_id = "msg-1";
+  request.metadata["user_id"] = "user-a";
+  request.metadata["client_id"] = "client-a";
+  assert(agent->route_request_message(request));
+  assert(agent->get_session_by_key("user-a:client-a") != nullptr);
 
-  // Test workflow management
   framework::MMWorkflow::Config wf_config;
-  wf_config.id   = "workflow1";
+  wf_config.id = "workflow1";
   wf_config.name = "Workflow1";
 
   auto workflow = std::make_shared<framework::MMWorkflow>(wf_config);
@@ -43,7 +41,6 @@ void test_agent() {
   assert(agent->get_workflows().size() == 1);
   assert(agent->get_workflow("workflow1") != nullptr);
 
-  // Test lifecycle
   assert(agent->initialize());
   assert(agent->get_state() == AgentState::INITIALIZED);
 

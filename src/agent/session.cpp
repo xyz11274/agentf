@@ -1,9 +1,7 @@
 #include "agent/session.h"
 
 #include <sys/time.h>
-#include <mutex>
 
-#include "agent/context.h"
 #include "agent/task.h"
 
 namespace agentflow {
@@ -13,7 +11,7 @@ namespace {
 int64_t get_current_time_ms() {
   struct timeval tv;
   gettimeofday(&tv, NULL);
-  return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+  return static_cast<int64_t>(tv.tv_sec) * 1000 + tv.tv_usec / 1000;
 }
 }  // namespace
 
@@ -24,22 +22,18 @@ MMAgentSession::MMAgentSession(const Config& config)
       send_queue_(MMAgentMsgQue::Config{config.max_queue_size}) {
   created_time_ = get_current_time_ms();
   last_activity_time_ = created_time_;
-  AgentContext::Config context_config;
-  context_config.context_id = config_.session_id + "_context";
-  context_config.agent_id = config_.session_id;
-  context_config.context_workflow = config_.session_context_workflow;
-  context_ = std::make_shared<AgentContext>(context_config);
 }
 
 MMAgentSession::~MMAgentSession() {
   std::lock_guard<std::mutex> lock(mutex_);
   metadata_.clear();
-  tasks_.clear();
+  template_tasks_.clear();
+  runtime_tasks_.clear();
 }
 
 bool MMAgentSession::activate() {
   std::lock_guard<std::mutex> lock(mutex_);
-  if(state_ != SessionState::CREATED) {
+  if(state_ == SessionState::TERMINATED) {
     return false;
   }
   state_ = SessionState::ACTIVE;
@@ -87,6 +81,37 @@ bool MMAgentSession::terminate() {
   return true;
 }
 
+void MMAgentSession::bind_route(const std::string& user_id, const std::string& client_id) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  active_user_id_ = user_id;
+  active_client_id_ = client_id;
+  active_route_key_ = user_id.empty() && client_id.empty() ? std::string() : user_id + ":" + client_id;
+  if(!user_id.empty()) {
+    metadata_["user_id"] = user_id;
+  }
+  if(!client_id.empty()) {
+    metadata_["client_id"] = client_id;
+  }
+  if(!active_route_key_.empty()) {
+    metadata_["route_key"] = active_route_key_;
+  }
+  state_ = SessionState::ACTIVE;
+  last_activity_time_ = get_current_time_ms();
+}
+
+void MMAgentSession::reset_for_pool() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  state_ = SessionState::CREATED;
+  active_route_key_.clear();
+  active_user_id_.clear();
+  active_client_id_.clear();
+  metadata_.clear();
+  runtime_tasks_.clear();
+  receive_queue_.clear_queue();
+  send_queue_.clear_queue();
+  last_activity_time_ = get_current_time_ms();
+}
+
 void MMAgentSession::set_metadata(const std::string& key, const std::string& value) {
   std::lock_guard<std::mutex> lock(mutex_);
   metadata_[key] = value;
@@ -94,12 +119,12 @@ void MMAgentSession::set_metadata(const std::string& key, const std::string& val
 
 bool MMAgentSession::get_metadata(const std::string& key, std::string& value) const {
   std::lock_guard<std::mutex> lock(mutex_);
-  auto it = metadata_.find(key);
-  if(it != metadata_.end()) {
-    value = it->second;
-    return true;
+  const auto it = metadata_.find(key);
+  if(it == metadata_.end()) {
+    return false;
   }
-  return false;
+  value = it->second;
+  return true;
 }
 
 bool MMAgentSession::has_metadata(const std::string& key) const {
@@ -119,7 +144,10 @@ void MMAgentSession::update_activity() {
 
 bool MMAgentSession::is_timeout_expired() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  int64_t current_time = get_current_time_ms();
+  if(active_route_key_.empty()) {
+    return false;
+  }
+  const int64_t current_time = get_current_time_ms();
   return (current_time - last_activity_time_) > config_.timeout_ms;
 }
 
@@ -129,7 +157,7 @@ bool MMAgentSession::enqueue_received_message(const MMAgentMsgQue::Message& mess
 }
 
 bool MMAgentSession::dequeue_received_message(MMAgentMsgQue::Message& message) {
-  bool ok = receive_queue_.dequeue_message(message);
+  const bool ok = receive_queue_.dequeue_message(message);
   if(ok) {
     update_activity();
   }
@@ -137,7 +165,8 @@ bool MMAgentSession::dequeue_received_message(MMAgentMsgQue::Message& message) {
 }
 
 bool MMAgentSession::dequeue_intent_request_message(MMAgentMsgQue::Message& message) {
-  bool ok = receive_queue_.dequeue_message_by_type(MMAgentMsgQue::MessageQueueType::INTENT_REQUEST, message);
+  const bool ok =
+      receive_queue_.dequeue_message_by_type(MMAgentMsgQue::MessageQueueType::INTENT_REQUEST, message);
   if(ok) {
     update_activity();
   }
@@ -145,7 +174,8 @@ bool MMAgentSession::dequeue_intent_request_message(MMAgentMsgQue::Message& mess
 }
 
 bool MMAgentSession::dequeue_output_result_message(MMAgentMsgQue::Message& message) {
-  bool ok = receive_queue_.dequeue_message_by_type(MMAgentMsgQue::MessageQueueType::OUTPUT_RESULT, message);
+  const bool ok =
+      receive_queue_.dequeue_message_by_type(MMAgentMsgQue::MessageQueueType::OUTPUT_RESULT, message);
   if(ok) {
     update_activity();
   }
@@ -158,7 +188,7 @@ bool MMAgentSession::enqueue_send_message(const MMAgentMsgQue::Message& message)
 }
 
 bool MMAgentSession::dequeue_send_message(MMAgentMsgQue::Message& message) {
-  bool ok = send_queue_.dequeue_message(message);
+  const bool ok = send_queue_.dequeue_message(message);
   if(ok) {
     update_activity();
   }
@@ -173,31 +203,49 @@ int MMAgentSession::get_send_queue_size() const {
   return send_queue_.get_queue_size();
 }
 
+void MMAgentSession::add_template_task(const std::shared_ptr<MMAgentTask>& task) {
+  if(!task) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  template_tasks_[task->get_task_id()] = task;
+}
+
 void MMAgentSession::add_task(const std::shared_ptr<MMAgentTask>& task) {
   if(!task) {
     return;
   }
   std::lock_guard<std::mutex> lock(mutex_);
-  tasks_[task->get_task_id()] = task;
+  runtime_tasks_[task->get_task_id()] = task;
 }
 
 std::shared_ptr<MMAgentTask> MMAgentSession::get_task(const std::string& task_id) const {
   std::lock_guard<std::mutex> lock(mutex_);
-  auto                        it = tasks_.find(task_id);
-  if(it == tasks_.end()) {
-    return nullptr;
+  if(const auto runtime_it = runtime_tasks_.find(task_id); runtime_it != runtime_tasks_.end()) {
+    return runtime_it->second;
   }
-  return it->second;
+  if(const auto template_it = template_tasks_.find(task_id); template_it != template_tasks_.end()) {
+    return template_it->second;
+  }
+  return nullptr;
 }
 
 std::vector<std::shared_ptr<MMAgentTask>> MMAgentSession::get_tasks() const {
   std::lock_guard<std::mutex> lock(mutex_);
   std::vector<std::shared_ptr<MMAgentTask>> result;
-  result.reserve(tasks_.size());
-  for(const auto& kv : tasks_) {
+  result.reserve(template_tasks_.size() + runtime_tasks_.size());
+  for(const auto& kv : template_tasks_) {
+    result.push_back(kv.second);
+  }
+  for(const auto& kv : runtime_tasks_) {
     result.push_back(kv.second);
   }
   return result;
+}
+
+int MMAgentSession::get_template_task_count() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return static_cast<int>(template_tasks_.size());
 }
 
 void MMAgentSession::set_task_coordinator(

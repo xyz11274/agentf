@@ -84,10 +84,6 @@ std::shared_ptr<MMAgentTask> SessionTaskCoordinator::build_task_for_message(
       (type_it != message.metadata.end()) ? type_it->second : config_.default_task_type;
   task_config.session_id = session_id;
   task_config.task_context_workflow = config_.task_context_workflow;
-  if(task_config.task_type == "contextkeeper") {
-    task_config.context_workflow = config_.task_context_workflow;
-    task_config.disable_context = true;
-  }
 
   const auto workflow_it = message.metadata.find("workflow_id");
   if(workflow_it != message.metadata.end()) {

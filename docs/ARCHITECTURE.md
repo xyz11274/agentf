@@ -67,17 +67,17 @@ graph TB
 
 #### 核心用例（按优先级）
 1. 从 MMAgent 包自动加载并实例化 MMAgent。
-2. 接收业务请求并在会话中生成 task（dispatcher/coordinator/contextkeeper/skill）。
+2. 接收业务请求并在可复用 session 中生成 task（dispatcher/coordinator/skill），同时由 agent 级 contextupdater 维护上下文。
 3. 将 task 调度到 workflow instance 并分配 Worker。
 4. 由 Worker 执行 MMNode（多语言执行由 MMWorkerEngine 统一承载）。
 5. 通过 MMDataBus 与 MMRuntimeActor 完成状态和数据协同。
 
 #### 用例 UC-01：请求到任务生成
 - 参与者：业务调用方、MMAgentActor、MMAgent、SessionTaskCoordinator（dispatcher / coordinator）。
-- 前置条件：MMAgent 已由 package 加载，`agent.json` 中声明的 talker / thinker session 已实例化。
+- 前置条件：MMAgent 已由 package 加载，`agent.json` 中声明的 session pool 已预创建。
 - 主流程：
   1) 业务请求进入 MMAgent。
-  2) MMAgent 优先按 `metadata["session_id"]` 路由；未显式指定时默认进入 0 号 talker session。
+  2) MMAgent 通过 `user_id + client_id` 交给 `SessionRouter` 路由；命中失败时从预创建 session pool 分配空闲 session。
   3) session 按消息头类型入队：`intent_request`→dispatcher，`output_result`→coordinator，`extensible_reserved`→扩展队列。
   4) 若无显式 `workflow_id`，dispatcher 优先使用 session 中 dispatcher 任务对应 workflow，coordinator 优先使用 coordinator 任务对应 workflow。
 - 异常流程：metadata 缺失 user/client 时不处理业务消息。
@@ -93,7 +93,7 @@ sequenceDiagram
     participant T as MMAgentTask
 
     C->>A: route_request_message(message)
-    A->>A: handle_request_event + session key
+    A->>A: SessionRouter 路由 user/client
     A->>S: enqueue_received_message
     A->>DI: process_session_messages(session, workflows)
     DI->>T: build_task_for_message (intent_request)

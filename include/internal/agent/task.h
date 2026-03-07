@@ -2,29 +2,23 @@
 #define AGENTFLOW_INTERNAL_AGENT_TASK_H
 
 #include <cstdint>
-#include <memory>
-#include <string>
 #include <map>
-#include <vector>
+#include <memory>
 #include <mutex>
+#include <string>
+#include <vector>
 
 namespace agentflow {
 namespace framework {
 
-class AgentContext;
-
-/**
- * MMAgentTask represents a single task executed within an agent
- * Manages task execution state, progress, and results
- */
 class MMAgentTask {
-public:
+ public:
   enum class TaskState {
-    PENDING    = 0,
-    RUNNING    = 1,
-    COMPLETED  = 2,
-    FAILED     = 3,
-    CANCELLED  = 4,
+    PENDING = 0,
+    RUNNING = 1,
+    COMPLETED = 2,
+    FAILED = 3,
+    CANCELLED = 4,
   };
 
   struct Config {
@@ -51,7 +45,6 @@ public:
   explicit MMAgentTask(const Config& config);
   ~MMAgentTask();
 
-  // Getters
   const std::string& get_task_id() const { return config_.task_id; }
   const std::string& get_task_type() const { return config_.task_type; }
   int                get_task_index() const { return config_.task_index; }
@@ -65,7 +58,6 @@ public:
   int                get_instance_pool_size() const { return config_.instance_pool_size; }
   bool               is_skill_instance() const { return config_.is_skill_instance; }
   int                get_skill_instance_index() const { return config_.skill_instance_index; }
-  std::shared_ptr<AgentContext> get_context() const { return context_; }
   TaskState          get_state() const { return state_; }
   const Config&      get_config() const { return config_; }
   int64_t            get_created_time() const { return created_time_; }
@@ -73,39 +65,34 @@ public:
   double             get_progress() const { return progress_; }
   const std::string& get_error_message() const { return error_message_; }
 
-  // Task lifecycle
   bool start();
   bool complete(const std::string& result = "");
   bool fail(const std::string& error_message);
   bool cancel();
   bool retry();
 
-  // Progress tracking
   void set_progress(double progress);
   void increment_progress(double delta);
 
-  // Task parameters and results
-  void       set_parameter(const std::string& key, const std::string& value);
-  bool       get_parameter(const std::string& key, std::string& value) const;
-  void       set_result(const std::string& result);
+  void               set_parameter(const std::string& key, const std::string& value);
+  bool               get_parameter(const std::string& key, std::string& value) const;
+  void               set_result(const std::string& result);
   const std::string& get_result() const { return result_; }
 
-  // Retry tracking
   int get_retry_count() const { return retry_count_; }
   int increment_retry_count();
 
-private:
-  Config                                      config_;
-  TaskState                                   state_ = TaskState::PENDING;
-  int64_t                                     created_time_ = 0;
-  int64_t                                     completed_time_ = 0;
-  double                                      progress_ = 0.0;
-  std::string                                 error_message_;
-  std::string                                 result_;
-  int                                         retry_count_ = 0;
-  std::map<std::string, std::string>          parameters_;
-  std::shared_ptr<AgentContext>               context_;
-  mutable std::mutex                          mutex_;
+ private:
+  Config                             config_;
+  TaskState                          state_ = TaskState::PENDING;
+  int64_t                            created_time_ = 0;
+  int64_t                            completed_time_ = 0;
+  double                             progress_ = 0.0;
+  std::string                        error_message_;
+  std::string                        result_;
+  int                                retry_count_ = 0;
+  std::map<std::string, std::string> parameters_;
+  mutable std::mutex                 mutex_;
 };
 
 }  // namespace framework

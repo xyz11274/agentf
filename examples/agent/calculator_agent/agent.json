@@ -2,12 +2,18 @@
   "name": "CalculatorAgent",
   "version": "1.0.0",
   "description": "Calculator agent example",
+  "session_pool_size": 1,
+  "contextupdater": {
+    "id": 0,
+    "type": "contextupdater",
+    "description": "Update calculator context",
+    "workflow_file": "workflow_01.json"
+  },
   "sessions": [
     {
       "id": 0,
-      "type": "talker",
-      "description": "Primary talker session",
-      "task_count": 3,
+      "description": "Primary pooled session",
+      "task_count": 2,
       "tasks": [
         {
           "id": 0,
@@ -20,12 +26,6 @@
           "type": "coordinator",
           "description": "Coordinate calculator outputs",
           "workflow_file": "coordinator_workflow.json"
-        },
-        {
-          "id": 2,
-          "type": "contextkeeper",
-          "description": "Maintain calculator context",
-          "workflow_file": "workflow_01.json"
         }
       ]
     }

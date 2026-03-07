@@ -11,7 +11,6 @@
 #include <type_traits>
 
 #include "runtime/worker.h"
-#include "agent/context.h"
 #include "utils/logger.h"
 #include "utils/thread_pool.h"
 
@@ -115,11 +114,6 @@ MMNode::MMNode(const Config& config) : config_(config), state_(NodeState::WAITIN
   if(config_.enable_hot_reload && !config_.command.empty()) {
     hot_reload_enabled_ = true;
   }
-  AgentContext::Config context_config;
-  context_config.context_id = config_.id + "_context";
-  context_config.agent_id = config_.id;
-  context_config.context_workflow = config_.node_context_workflow;
-  context_ = std::make_shared<AgentContext>(context_config);
 }
 
 MMNode::~MMNode() {
@@ -212,11 +206,6 @@ void MMNode::register_event_handler(const std::string& event_type, NodeEventHand
 
 void MMNode::bind_context_workflow(const std::string& workflow_file) {
   config_.node_context_workflow = workflow_file;
-  AgentContext::Config context_config;
-  context_config.context_id = config_.id + "_context";
-  context_config.agent_id = config_.id;
-  context_config.context_workflow = config_.node_context_workflow;
-  context_ = std::make_shared<AgentContext>(context_config);
 }
 
 void MMNode::message_dispatch_loop() {

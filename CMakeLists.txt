@@ -271,6 +271,7 @@ set(AGENTFLOW_AGENT_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/agent/agent.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/agent_actor.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/session.cpp
+    ${AGENTFLOW_SOURCE_DIR}/agent/session_router.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/task.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/msgque.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/dataref_bridge.cpp

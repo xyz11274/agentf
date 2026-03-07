@@ -14,14 +14,13 @@
 
 ### 本次重构
 
-- `agent.json` 新增 `sessions` 数组，显式声明 session 与 task 拓扑：
-  - session 编号必须连续，`0` 号固定为 `talker`；
-  - 只能存在一个 `talker`，其余可为 `thinker`；
-  - task 编号必须连续，类型为 `dispatcher` / `coordinator` / `contextkeeper` / `skill`。
-- `contextkeeper` 任务直接承接既有 context workflow，对应旧的 context 任务链路。
+- `agent.json` 改为 `session_pool_size + sessions + contextupdater` 组合：
+  - session 编号必须连续，池大小需与 `sessions` 数组长度一致；
+  - session 只声明 `dispatcher` / `coordinator` / `skill` 三类任务；
+  - `contextupdater` 迁移为 agent 级任务配置。
+- `SessionRouter` 统一维护默认请求接收队列、响应发送队列、路由线程和 aging 线程；消息按 `user_id + client_id` 命中或分配预创建 session。
 - `skill` 任务新增 `skill.name`、`skill.config_dir`、`skill.instance_pool_size`，初始化时按配置创建任务实例池。
-- `MMAgent::initialize_components()` 改为优先按 `agent.json.sessions` 实例化 session 与 task；
-  无显式 `session_id` 的消息默认路由到 0 号 talker session。
+- `MMAgent::initialize_components()` 改为优先按 `agent.json.sessions` 预创建 session pool；请求先进入 router，再映射到具体 session。
 - examples / publish / tests 已同步切换到新 schema。
 
 ### 验证结果

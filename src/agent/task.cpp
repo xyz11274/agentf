@@ -1,9 +1,6 @@
 #include "agent/task.h"
 
 #include <sys/time.h>
-#include <mutex>
-
-#include "agent/context.h"
 
 namespace agentflow {
 namespace framework {
@@ -12,21 +9,12 @@ namespace {
 int64_t get_current_time_ms() {
   struct timeval tv;
   gettimeofday(&tv, NULL);
-  return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+  return static_cast<int64_t>(tv.tv_sec) * 1000 + tv.tv_usec / 1000;
 }
 }  // namespace
 
-MMAgentTask::MMAgentTask(const Config& config)
-    : config_(config), state_(TaskState::PENDING) {
+MMAgentTask::MMAgentTask(const Config& config) : config_(config), state_(TaskState::PENDING) {
   created_time_ = get_current_time_ms();
-  if(!config_.disable_context) {
-    AgentContext::Config context_config;
-    context_config.context_id = config_.task_id + "_context";
-    context_config.agent_id = config_.session_id;
-    context_config.context_workflow =
-        config_.context_workflow.empty() ? config_.task_context_workflow : config_.context_workflow;
-    context_ = std::make_shared<AgentContext>(context_config);
-  }
 }
 
 MMAgentTask::~MMAgentTask() {
@@ -81,7 +69,7 @@ bool MMAgentTask::retry() {
   if(retry_count_ >= config_.max_retries) {
     return false;
   }
-  retry_count_++;
+  ++retry_count_;
   state_ = TaskState::RUNNING;
   return true;
 }
@@ -105,12 +93,12 @@ void MMAgentTask::set_parameter(const std::string& key, const std::string& value
 
 bool MMAgentTask::get_parameter(const std::string& key, std::string& value) const {
   std::lock_guard<std::mutex> lock(mutex_);
-  auto it = parameters_.find(key);
-  if(it != parameters_.end()) {
-    value = it->second;
-    return true;
+  const auto it = parameters_.find(key);
+  if(it == parameters_.end()) {
+    return false;
   }
-  return false;
+  value = it->second;
+  return true;
 }
 
 void MMAgentTask::set_result(const std::string& result) {

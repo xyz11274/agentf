@@ -104,7 +104,7 @@ Workflow 模式参考模板（DSL 示例，不依赖外部脚本）：
 
 ### 3) 业务请求处理
 
-业务侧通过 Actor 消息投递 `request.message`，`MMAgent` 内部事件队列触发会话处理，默认进入 0 号 `talker` session，并生成 `dispatcher` 类型任务，由 `MMAgentActor` 统一维护生命周期并继续上报 Runtime。
+业务侧通过 Actor 消息投递 `request.message`，`MMAgent` 通过 `SessionRouter` 按 `user_id + client_id` 命中或分配预创建 session，并生成 `dispatcher` 类型任务，由 `MMAgentActor` 统一维护生命周期并继续上报 Runtime。
 
 ### 4) dispatcher / coordinator 固定流程定制
 
@@ -140,11 +140,11 @@ Workflow 模式参考模板（DSL 示例，不依赖外部脚本）：
 ### 4) 样例能力说明
 
 - 对话管理模块将消息按 `session_id` 追加保存到 `examples/multi_session_chat/package/history/*.jsonl`。
-- 默认 talker session 的 dispatcher 通过 workflow 节点示例脚本把请求广播到其他 thinker session inbox。
-- thinker session 的 dispatcher 示例节点会读取 session context、执行 skill 选择并创建“未启动”的 skill task 计划文件。
-- `contextkeeper` 任务对应的 `session_context_workflow` 示例节点包含：模板读取、历史读取、LLM 摘要、context 填充。
+- 主 dispatcher workflow 会把请求广播到可复用 skill session。
+- skill session 的 dispatcher 示例节点会读取 session context、执行 skill 选择并创建“未启动”的 skill task 计划文件。
+- agent 级 `contextupdater` 对应的 `session_context_workflow` 示例节点包含：模板读取、历史读取、LLM 摘要、context 填充。
 - 四类 skill workflow：联网搜索、结果总结、日期计算、Agent 分发（样例脚本可替换为真实实现）。
-- 默认 talker session 的 coordinator 示例节点会收集已选 skill、调用 LLM 规划依赖并落盘 task 状态编排结果。
+- 主 coordinator 示例节点会收集已选 skill、调用 LLM 规划依赖并落盘 task 状态编排结果。
 
 ### 5) 构建脚本与自动化对话测试
 

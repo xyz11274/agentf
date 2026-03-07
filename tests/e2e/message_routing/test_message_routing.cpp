@@ -3,7 +3,7 @@
  * @brief E2E测试：消息路由场景
  *
  * 测试目标：验证消息从进入到任务生成的完整链路
- * 链路：reqmsg → MMAgent.default_session → MMAgent.new_session → SessionTaskCoordinator → MMAgentTask
+ * 链路：reqmsg → SessionRouter → pooled MMAgentSession → SessionTaskCoordinator → MMAgentTask
  */
 
 #include <gtest/gtest.h>
@@ -49,6 +49,110 @@ protected:
             "coordinator_workflow": "wf_coordinator"
         })";
         pkg.close();
+
+        std::ofstream agent_json(test_dir_ / "agent.json");
+        agent_json << R"({
+            "session_pool_size": 10,
+            "contextupdater": {
+                "id": 0,
+                "type": "contextupdater",
+                "description": "Update agent context",
+                "workflow_file": "workflows/coordinator.json"
+            },
+            "sessions": [
+                {
+                    "id": 0,
+                    "description": "pool-0",
+                    "task_count": 2,
+                    "tasks": [
+                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
+                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
+                    ]
+                },
+                {
+                    "id": 1,
+                    "description": "pool-1",
+                    "task_count": 2,
+                    "tasks": [
+                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
+                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
+                    ]
+                },
+                {
+                    "id": 2,
+                    "description": "pool-2",
+                    "task_count": 2,
+                    "tasks": [
+                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
+                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
+                    ]
+                },
+                {
+                    "id": 3,
+                    "description": "pool-3",
+                    "task_count": 2,
+                    "tasks": [
+                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
+                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
+                    ]
+                },
+                {
+                    "id": 4,
+                    "description": "pool-4",
+                    "task_count": 2,
+                    "tasks": [
+                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
+                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
+                    ]
+                },
+                {
+                    "id": 5,
+                    "description": "pool-5",
+                    "task_count": 2,
+                    "tasks": [
+                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
+                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
+                    ]
+                },
+                {
+                    "id": 6,
+                    "description": "pool-6",
+                    "task_count": 2,
+                    "tasks": [
+                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
+                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
+                    ]
+                },
+                {
+                    "id": 7,
+                    "description": "pool-7",
+                    "task_count": 2,
+                    "tasks": [
+                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
+                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
+                    ]
+                },
+                {
+                    "id": 8,
+                    "description": "pool-8",
+                    "task_count": 2,
+                    "tasks": [
+                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
+                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
+                    ]
+                },
+                {
+                    "id": 9,
+                    "description": "pool-9",
+                    "task_count": 2,
+                    "tasks": [
+                        {"id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflows/main.json"},
+                        {"id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflows/coordinator.json"}
+                    ]
+                }
+            ]
+        })";
+        agent_json.close();
 
         // 创建主 workflow
         std::ofstream wf_main(test_dir_ / "workflows" / "main.json");
@@ -116,6 +220,7 @@ TEST_F(E2EMessageRouting, BasicRouting) {
     EXPECT_NE(session, nullptr) << "Session should be created for user:client";
 
     // 7. 验证 task 生成
+    agent->process_all_sessions_until_idle();
     auto tasks = session->get_tasks();
     EXPECT_FALSE(tasks.empty()) << "At least one task should be generated";
 
@@ -164,8 +269,8 @@ TEST_F(E2EMessageRouting, MissingMetadata) {
 }
 
 /**
- * TC-E2E-003: coordinator_workflow 默认路由
- * 验证未指定 workflow_id 时使用 coordinator_workflow
+ * TC-E2E-003: dispatcher workflow 默认路由
+ * 验证未指定 workflow_id 时使用 session dispatcher workflow
  */
 TEST_F(E2EMessageRouting, CoordinatorWorkflow) {
     auto agent = framework::MMAgent::create_from_package(test_dir_.string());
@@ -182,12 +287,13 @@ TEST_F(E2EMessageRouting, CoordinatorWorkflow) {
 
     agent->route_request_message(request);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    agent->process_all_sessions_until_idle();
 
     // 验证 session 创建
     auto session = agent->get_session("user-789:client-012");
     ASSERT_NE(session, nullptr);
 
-    // 验证生成 task 绑定到 coordinator_workflow（当前未显式配置 dispatcher_workflow）
+    // 验证生成 task 绑定到 session dispatcher workflow
     auto tasks = session->get_tasks();
     auto target = std::find_if(tasks.begin(), tasks.end(), [](const auto& task) {
         if (!task) return false;
@@ -195,8 +301,8 @@ TEST_F(E2EMessageRouting, CoordinatorWorkflow) {
         return task->get_parameter("message_id", message_id) && message_id == "msg-004";
     });
     ASSERT_NE(target, tasks.end()) << "Generated task for request should exist";
-    EXPECT_EQ((*target)->get_workflow_id(), "wf_coordinator")
-        << "Task should bind to coordinator_workflow by default";
+    EXPECT_EQ((*target)->get_workflow_id(), "wf_main")
+        << "Task should bind to the configured dispatcher workflow by default";
 
     agent->stop();
 }
@@ -220,6 +326,7 @@ TEST_F(E2EMessageRouting, ExplicitWorkflowId) {
 
     agent->route_request_message(request);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    agent->process_all_sessions_until_idle();
 
     // 验证 session 创建
     auto session = agent->get_session("user-abc:client-def");

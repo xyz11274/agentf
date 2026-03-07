@@ -8,7 +8,7 @@
 
 ## 1. 设计概述
 
-> 2026-03-07 更新：`src/agent` 已切换到显式的 session/task 配置模型。`agent.json` 通过 `sessions` 数组定义 talker / thinker session，以及 `dispatcher` / `coordinator` / `contextkeeper` / `skill` 任务；0 号 session 固定为 talker，`contextkeeper` 直接复用既有 context workflow 链路。
+> 2026-03-07 更新：`src/agent` 已切换到显式的 session pool / task 配置模型。`agent.json` 通过 `session_pool_size` + `sessions` 预创建可复用 session，并通过 agent 级 `contextupdater` 任务维护上下文；session 内只保留 `dispatcher` / `coordinator` / `skill`。
 
 ### 1.1 架构位置
 

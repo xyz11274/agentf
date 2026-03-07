@@ -1,7 +1,7 @@
 {
   "name": "multi-session-chat-agent",
   "version": "1.0.0",
-  "description": "AgentFlow multi-round conversation example with 4 precreated sessions",
+  "description": "AgentFlow multi-round conversation example with a 5-session reusable pool",
   "workflows": [
     "default_dispatcher_workflow.json",
     "default_coordinator_workflow.json",
@@ -17,7 +17,7 @@
   "task_workflows": {
     "dispatcher": "session-dispatcher-workflow",
     "coordinator": "default-coordinator-workflow",
-    "contextkeeper": "session-context-workflow",
+    "contextupdater": "session-context-workflow",
     "skill:search": "skill-search-workflow",
     "skill:summary": "skill-summary-workflow",
     "skill:date": "skill-date-workflow",
