@@ -124,8 +124,13 @@ private:
   std::atomic<bool>        draining_{false};
 
   // MMNode task queue
-  std::queue<std::pair<AgentPtr, NodePtr>> node_task_queue_;
-  std::mutex                               task_queue_mutex_;
+  struct QueuedNodeTask {
+    AgentPtr    agent;
+    WorkflowPtr workflow;
+    NodePtr     node;
+  };
+  std::queue<QueuedNodeTask> node_task_queue_;
+  std::mutex                 task_queue_mutex_;
 
   // Worker load tracking for load balancing
   std::vector<int> worker_loads_;

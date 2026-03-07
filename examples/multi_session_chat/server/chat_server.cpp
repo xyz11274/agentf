@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cctype>
@@ -80,6 +81,31 @@ std::string sanitize_session_id(const std::string& session_id) {
     }
   }
   return safe;
+}
+
+bool write_text_file(const std::filesystem::path& path, const std::string& content) {
+  std::ofstream out(path, std::ios::trunc);
+  if (!out.is_open()) {
+    return false;
+  }
+  out << content;
+  return true;
+}
+
+std::string run_command_capture(const std::string& command) {
+  std::array<char, 256> buffer{};
+  std::string output;
+  std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
+  if (!pipe) {
+    return "";
+  }
+  while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe.get()) != nullptr) {
+    output += buffer.data();
+  }
+  while (!output.empty() && (output.back() == '\n' || output.back() == '\r')) {
+    output.pop_back();
+  }
+  return output;
 }
 
 class ConversationStore {
@@ -307,7 +333,12 @@ class ChatAgentBridge {
       return val;
     };
 
-    std::vector<std::string> skill_result_keys;
+    struct SkillExecution {
+      std::string session_id;
+      std::string skill;
+      std::vector<std::string> result_keys;
+    };
+    std::vector<SkillExecution> started_skills;
     if (!orchestration_plan.empty()) {
       // Iterate over tasks in the plan
       size_t pos = 0;
@@ -327,9 +358,26 @@ class ChatAgentBridge {
         auto wf_it = kSkillWorkflows.find(skill);
         if (wf_it == kSkillWorkflows.end()) continue;
 
-        // Publish per-session user_text to DataBus for skill node to read
-        std::string result_key = "session:" + session_id + ":skill_result";
-        bus.remove(result_key);
+        SkillExecution started_skill;
+        started_skill.session_id = session_id;
+        started_skill.skill = skill;
+        started_skill.result_keys.push_back("session:" + session_id + ":skill_result");
+        if (skill == "skill_search" || skill == "skill_summary") {
+          started_skill.result_keys.push_back(wf_it->second + ".n1.stdout");
+          started_skill.result_keys.push_back("stdout");
+        } else if (skill == "skill_date") {
+          started_skill.result_keys.push_back(wf_it->second + ".n1.date_result");
+          started_skill.result_keys.push_back("date_result");
+          started_skill.result_keys.push_back(wf_it->second + ".n1.stdout");
+        } else if (skill == "skill_delegate") {
+          started_skill.result_keys.push_back(wf_it->second + ".n1.delegate_result");
+          started_skill.result_keys.push_back("delegate_result");
+          started_skill.result_keys.push_back(wf_it->second + ".n1.stdout");
+        }
+
+        for (const auto& result_key : started_skill.result_keys) {
+          bus.remove(result_key);
+        }
         bus.put("session_id", session_id);
 
         DataMap skill_inputs;
@@ -337,7 +385,7 @@ class ChatAgentBridge {
         skill_inputs["session_id"]  = session_id;
         skill_inputs["input"]       = user_text;
         runtime_->execute_workflow(agent_id, wf_it->second, skill_inputs);
-        skill_result_keys.push_back(result_key);
+        started_skills.push_back(std::move(started_skill));
       }
     }
 
@@ -348,21 +396,33 @@ class ChatAgentBridge {
     std::ostringstream final_resp;
     final_resp << "多技能分析结果：\n";
 
-    for (const std::string& rk : skill_result_keys) {
+    std::vector<std::string> skill_result_jsonl;
+    for (const auto& started_skill : started_skills) {
+      bool found_result = false;
       while (std::chrono::steady_clock::now() < skills_deadline) {
-        DataVariant v;
-        if (bus.get(rk, v) && std::holds_alternative<std::string>(v)) {
-          std::string r = std::get<std::string>(v);
-          if (!r.empty()) {
-            final_resp << "[" << rk << "] " << r << "\n";
-            break;
+        for (const auto& result_key : started_skill.result_keys) {
+          DataVariant v;
+          if (bus.get(result_key, v) && std::holds_alternative<std::string>(v)) {
+            std::string r = std::get<std::string>(v);
+            if (!r.empty()) {
+              final_resp << "[" << started_skill.session_id << "/" << started_skill.skill
+                         << "] " << r << "\n";
+              bus.put("session:" + started_skill.session_id + ":skill_result", r);
+              skill_result_jsonl.push_back(
+                  "{\"session_id\":\"" + json_escape(started_skill.session_id)
+                  + "\",\"skill\":\"" + json_escape(started_skill.skill)
+                  + "\",\"result\":\"" + json_escape(r) + "\"}");
+              found_result = true;
+              break;
+            }
           }
         }
+        if (found_result) break;
         std::this_thread::sleep_for(std::chrono::milliseconds(80));
       }
     }
 
-    if (skill_result_keys.empty()) {
+    if (started_skills.empty()) {
       // No skills were started by coordinator; fall back to any available response
       DataVariant v;
       for (const std::string& key : {"final_response", "response", "output", "result"}) {
@@ -374,7 +434,21 @@ class ChatAgentBridge {
       return "已完成分析处理。";
     }
 
+    const auto runtime_dir = std::filesystem::path(package_path_) / "runtime";
+    std::ostringstream jsonl;
+    for (size_t i = 0; i < skill_result_jsonl.size(); ++i) {
+      if (i > 0) jsonl << "\n";
+      jsonl << skill_result_jsonl[i];
+    }
+    write_text_file(runtime_dir / "skill_results.jsonl", jsonl.str());
+
     std::string result = final_resp.str();
+    std::string composed = run_command_capture(
+        "'" + (std::filesystem::path(package_path_) / "scripts" / "compose_final_response.sh").string()
+        + "' 2>/dev/null");
+    if (!composed.empty()) {
+      result = composed;
+    }
     bus.put("final_response", result);
     return result;
   }

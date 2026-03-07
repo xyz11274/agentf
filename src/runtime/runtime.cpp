@@ -497,7 +497,7 @@ void MMAgentRuntime::schedule_workflow_executable_nodes(const std::string& execu
     for(const auto& node_id : executable_nodes) {
       auto node = workflow->get_node(node_id);
       if(node && node->get_state() == NodeState::READY) {
-        node_task_queue_.push({ agent, node });
+          node_task_queue_.push({agent, workflow, node});
       }
     }
   }
@@ -555,7 +555,7 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
             for(const auto& next_id : next_nodes) {
               auto next_node = workflow->get_node(next_id);
               if(next_node && next_node->get_state() == NodeState::READY) {
-                node_task_queue_.push({ agent, next_node });
+                node_task_queue_.push({agent, workflow, next_node});
               }
             }
             g_worker_cv.notify_all();
@@ -601,7 +601,7 @@ void MMAgentRuntime::on_node_complete(const AgentId& agent_id, const WorkflowId&
     for(const auto& node_id : executable) {
       auto node = workflow->get_node(node_id);
       if(node && node->get_state() == NodeState::READY) {
-        node_task_queue_.push({ agent, node });
+        node_task_queue_.push({agent, workflow, node});
       }
     }
     g_worker_cv.notify_all();
@@ -971,19 +971,23 @@ void MMAgentRuntime::worker_thread_main() {
     }
 
     // Process pending tasks
-    std::lock_guard<std::mutex> task_lock(task_queue_mutex_);
-    while(!node_task_queue_.empty()) {
-      auto task = node_task_queue_.front();
-      node_task_queue_.pop();
-
-      auto agent = task.first;
-      auto node  = task.second;
+    while(true) {
+      QueuedNodeTask task;
+      {
+        std::lock_guard<std::mutex> task_lock(task_queue_mutex_);
+        if(node_task_queue_.empty()) {
+          break;
+        }
+        task = node_task_queue_.front();
+        node_task_queue_.pop();
+      }
 
       // Update worker load
       update_worker_load(worker_id, 1);
 
-      // Process node
-      process_node(agent, nullptr, node);
+      // Process node without holding task_queue_mutex_ so downstream scheduling
+      // can enqueue follow-up nodes from the same workflow.
+      process_node(task.agent, task.workflow, task.node);
 
       // Update worker load
       update_worker_load(worker_id, -1);
