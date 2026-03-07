@@ -9,7 +9,7 @@
 | 适用范围 | AgentFlow Framework + Runtime + MMDataBus + MMAgent 包交付链路 |
 
 ## 架构摘要
-> AgentFlow 采用“Framework 编排 + Runtime 调度 + MMDataBus 共享数据”的 4+1 架构，实现 MMAgent→MMWorkflow→MMNode 三层执行。核心技术栈为 C++17、CMake、GoogleTest，运行时以 Master/Worker 协作、可插拔调度部署算法和会话化 coordinator(task0) 为关键机制。首要质量目标是高并发下的稳定调度、可扩展多语言执行与可观测可运维。
+> AgentFlow 采用“Framework 编排 + Runtime 调度 + MMDataBus 共享数据”的 4+1 架构，实现 MMAgent→MMWorkflow→MMNode 三层执行。核心技术栈为 C++17、CMake、GoogleTest，运行时以 Master/Worker 协作、可插拔调度部署算法和会话化 session/task 编排为关键机制。首要质量目标是高并发下的稳定调度、可扩展多语言执行与可观测可运维。
 
 ---
 
@@ -67,20 +67,20 @@ graph TB
 
 #### 核心用例（按优先级）
 1. 从 MMAgent 包自动加载并实例化 MMAgent。
-2. 接收业务请求并在会话中生成 task（dispatcher=task0，coordinator=task1）。
+2. 接收业务请求并在会话中生成 task（dispatcher/coordinator/contextkeeper/skill）。
 3. 将 task 调度到 workflow instance 并分配 Worker。
 4. 由 Worker 执行 MMNode（多语言执行由 MMWorkerEngine 统一承载）。
 5. 通过 MMDataBus 与 MMRuntimeActor 完成状态和数据协同。
 
 #### 用例 UC-01：请求到任务生成
-- 参与者：业务调用方、MMAgentActor、MMAgent、SessionTaskCoordinator(task0 dispatcher/task1 coordinator)。
-- 前置条件：MMAgent 已由 package 加载，默认/目标 session 已存在或可创建。
+- 参与者：业务调用方、MMAgentActor、MMAgent、SessionTaskCoordinator（dispatcher / coordinator）。
+- 前置条件：MMAgent 已由 package 加载，`agent.json` 中声明的 talker / thinker session 已实例化。
 - 主流程：
   1) 业务请求进入 MMAgent。
-  2) MMAgent 路由到 `user_id:client_id` session。
-  3) session 按消息头类型入队：`intent_request`→dispatcher(task0)，`output_result`→coordinator(task1)，`extensible_reserved`→扩展队列。
-  4) 若无显式 `workflow_id`，task0 优先 `dispatcher_workflow`，task1 优先 `coordinator_workflow`。
-- 异常流程：metadata 缺失 user/client 时不创建业务 session。
+  2) MMAgent 优先按 `metadata["session_id"]` 路由；未显式指定时默认进入 0 号 talker session。
+  3) session 按消息头类型入队：`intent_request`→dispatcher，`output_result`→coordinator，`extensible_reserved`→扩展队列。
+  4) 若无显式 `workflow_id`，dispatcher 优先使用 session 中 dispatcher 任务对应 workflow，coordinator 优先使用 coordinator 任务对应 workflow。
+- 异常流程：metadata 缺失 user/client 时不处理业务消息。
 - 质量目标：单请求 task 生成路径 P99 < 50ms（本地基线）。
 
 ```mermaid
@@ -88,8 +88,8 @@ sequenceDiagram
     participant C as Client
     participant A as MMAgent
     participant S as MMAgentSession
-    participant DI as SessionTaskCoordinator(task0 dispatcher)
-    participant CO as SessionTaskCoordinator(task1 coordinator)
+    participant DI as SessionTaskCoordinator(dispatcher)
+    participant CO as SessionTaskCoordinator(coordinator)
     participant T as MMAgentTask
 
     C->>A: route_request_message(message)
@@ -100,7 +100,7 @@ sequenceDiagram
     alt metadata.workflow_id 存在
       DI->>T: 直接使用 workflow_id
     else metadata.workflow_id 缺失
-      DI->>T: dispatcher_workflow -> task_workflows["0"] -> 默认workflow
+      DI->>T: dispatcher_workflow -> task_workflows["dispatcher"] -> 默认workflow
     end
     DI->>S: add_task(task)
 ```
@@ -151,7 +151,7 @@ sequenceDiagram
 
 #### 组件职责
 - `MMAgent`：生命周期、会话路由、session-level coordinator 管理。
-- `SessionTaskCoordinator`：消息解析为 task，默认 `task0`。
+- `SessionTaskCoordinator`：消息解析为 task，默认 `intent_request -> dispatcher`、`output_result -> coordinator`。
 - `MMWorkflow`：图结构、控制流、执行态推进。
 - `MMNode`：动作定义与状态机；外部执行统一委托 MMWorkerEngine。
 - `Scheduler`：task -> workflow instance 映射。
@@ -681,17 +681,18 @@ graph TB
   - ⚠️ 增加 Runtime 依赖与测试维度。
   - 📌 需持续完善 Worker 负载与隔离策略。
 
-### ADR-003：Coordinator 固化为 session 归属 task0
+### ADR-003：Session 拓扑固化为 talker / thinker + 显式任务配置
 - **日期**：2026-02-28
-- **状态**：已接受
-- **背景**：需要统一消息分析入口并支持包级 workflow 定制。
-- **决策**：每个 session 默认创建 `<session_id>_task_0` 与 session coordinator，优先 `coordinator_workflow` 路由。
+- **状态**：已更新（2026-03-07）
+- **背景**：需要把 session / task / skill 拓扑前移到 `agent.json`，并让 context workflow 收敛到 `contextkeeper` 任务。
+- **决策**：每个 agent 由 `agent.json.sessions` 显式定义 session 列表；0 号 session 固定为 talker，任务编号从 `0..N` 连续，基础任务类型为 `dispatcher`、`coordinator`、`contextkeeper`，`skill` 可按 `instance_pool_size` 生成实例池。
 - **备选方案**：
-  - 方案 A（全局 coordinator）：实现简单 / 难以实现 session 隔离。
-  - 方案 B（session 级 task0 coordinator）：隔离清晰 / session 管理逻辑更复杂。
+  - 方案 A（继续沿用 task0/task1 隐式约定）：改动小 / 难以表达多 session skill 池。
+  - 方案 B（显式 session/task schema）：配置更长 / 但职责更清晰。
 - **后果**：
-  - ✅ session 语义一致，包级定制明确。
-  - ⚠️ 任务编号与历史兼容需要注意。
+  - ✅ session 类型、任务职责与 workflow 绑定关系在配置中可见。
+  - ✅ `contextkeeper` 直接承接原有 context workflow 任务链路。
+  - ⚠️ examples / publish / tests / 文档都需一起迁移。
   - 📌 需保证 metadata 显式 `workflow_id` 的最高优先级不被破坏。
 
 ---

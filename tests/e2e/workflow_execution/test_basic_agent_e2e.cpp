@@ -303,8 +303,8 @@ TEST_F(BasicAgentE2ETest, MessageRoutingToSessionCreation) {
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
     // 6. 验证 Session 创建
-    auto session = agent->get_session_by_key("e2e-user-001:e2e-client-001");
-    EXPECT_NE(session, nullptr) << "Session should be created for user:client";
+    auto session = agent->get_session_by_key("0");
+    EXPECT_NE(session, nullptr) << "Talker session 0 should be precreated from agent.json";
 
     // 7. 清理
     agent->stop();
@@ -517,8 +517,8 @@ TEST_F(BasicAgentE2ETest, FullWorkflowWithScriptExecution) {
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
 
     // 8. 验证 Session 创建
-    auto session = agent->get_session_by_key("full-e2e-user:full-e2e-client");
-    EXPECT_NE(session, nullptr) << "Session should be created";
+    auto session = agent->get_session_by_key("0");
+    EXPECT_NE(session, nullptr) << "Talker session 0 should remain available";
 
     // 9. 清理
     agent->stop();

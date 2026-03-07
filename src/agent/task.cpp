@@ -19,11 +19,12 @@ int64_t get_current_time_ms() {
 MMAgentTask::MMAgentTask(const Config& config)
     : config_(config), state_(TaskState::PENDING) {
   created_time_ = get_current_time_ms();
-  if(config_.task_type != "context_updater") {
+  if(!config_.disable_context) {
     AgentContext::Config context_config;
     context_config.context_id = config_.task_id + "_context";
     context_config.agent_id = config_.session_id;
-    context_config.context_workflow = config_.task_context_workflow;
+    context_config.context_workflow =
+        config_.context_workflow.empty() ? config_.task_context_workflow : config_.context_workflow;
     context_ = std::make_shared<AgentContext>(context_config);
   }
 }

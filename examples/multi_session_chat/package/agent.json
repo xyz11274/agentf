@@ -2,18 +2,180 @@
   "name": "MultiSessionChatAgent",
   "version": "1.0.0",
   "description": "Multi-session chat orchestration agent package",
-  "workflows": [
-    "default_dispatcher_workflow.json",
-    "default_coordinator_workflow.json",
-    "session_context_workflow.json",
-    "session_dispatcher_workflow.json",
-    "skill_search_workflow.json",
-    "skill_summary_workflow.json",
-    "skill_date_workflow.json",
-    "skill_delegate_workflow.json"
-  ],
-  "precreate_session_count": 4,
-  "dispatcher_workflow": "default-dispatcher-workflow",
-  "coordinator_workflow": "default-coordinator-workflow",
-  "session_context_workflow": "session-context-workflow"
+  "sessions": [
+    {
+      "id": 0,
+      "type": "talker",
+      "description": "Primary talker session",
+      "task_count": 3,
+      "tasks": [
+        {
+          "id": 0,
+          "type": "dispatcher",
+          "description": "Dispatch talker requests",
+          "workflow_file": "default_dispatcher_workflow.json"
+        },
+        {
+          "id": 1,
+          "type": "coordinator",
+          "description": "Coordinate talker outputs",
+          "workflow_file": "default_coordinator_workflow.json"
+        },
+        {
+          "id": 2,
+          "type": "contextkeeper",
+          "description": "Maintain talker context",
+          "workflow_file": "session_context_workflow.json"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "type": "thinker",
+      "description": "Search skill thinker session",
+      "task_count": 4,
+      "tasks": [
+        {
+          "id": 0,
+          "type": "dispatcher",
+          "description": "Dispatch thinker requests",
+          "workflow_file": "session_dispatcher_workflow.json"
+        },
+        {
+          "id": 1,
+          "type": "coordinator",
+          "description": "Coordinate thinker outputs",
+          "workflow_file": "default_coordinator_workflow.json"
+        },
+        {
+          "id": 2,
+          "type": "contextkeeper",
+          "description": "Maintain thinker context",
+          "workflow_file": "session_context_workflow.json"
+        },
+        {
+          "id": 3,
+          "type": "skill",
+          "description": "Search skill task",
+          "workflow_file": "skill_search_workflow.json",
+          "skill": {
+            "name": "search",
+            "config_dir": "runtime",
+            "instance_pool_size": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "thinker",
+      "description": "Summary skill thinker session",
+      "task_count": 4,
+      "tasks": [
+        {
+          "id": 0,
+          "type": "dispatcher",
+          "description": "Dispatch thinker requests",
+          "workflow_file": "session_dispatcher_workflow.json"
+        },
+        {
+          "id": 1,
+          "type": "coordinator",
+          "description": "Coordinate thinker outputs",
+          "workflow_file": "default_coordinator_workflow.json"
+        },
+        {
+          "id": 2,
+          "type": "contextkeeper",
+          "description": "Maintain thinker context",
+          "workflow_file": "session_context_workflow.json"
+        },
+        {
+          "id": 3,
+          "type": "skill",
+          "description": "Summary skill task",
+          "workflow_file": "skill_summary_workflow.json",
+          "skill": {
+            "name": "summary",
+            "config_dir": "runtime",
+            "instance_pool_size": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "thinker",
+      "description": "Date skill thinker session",
+      "task_count": 4,
+      "tasks": [
+        {
+          "id": 0,
+          "type": "dispatcher",
+          "description": "Dispatch thinker requests",
+          "workflow_file": "session_dispatcher_workflow.json"
+        },
+        {
+          "id": 1,
+          "type": "coordinator",
+          "description": "Coordinate thinker outputs",
+          "workflow_file": "default_coordinator_workflow.json"
+        },
+        {
+          "id": 2,
+          "type": "contextkeeper",
+          "description": "Maintain thinker context",
+          "workflow_file": "session_context_workflow.json"
+        },
+        {
+          "id": 3,
+          "type": "skill",
+          "description": "Date skill task",
+          "workflow_file": "skill_date_workflow.json",
+          "skill": {
+            "name": "date",
+            "config_dir": "runtime",
+            "instance_pool_size": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "thinker",
+      "description": "Delegate skill thinker session",
+      "task_count": 4,
+      "tasks": [
+        {
+          "id": 0,
+          "type": "dispatcher",
+          "description": "Dispatch thinker requests",
+          "workflow_file": "session_dispatcher_workflow.json"
+        },
+        {
+          "id": 1,
+          "type": "coordinator",
+          "description": "Coordinate thinker outputs",
+          "workflow_file": "default_coordinator_workflow.json"
+        },
+        {
+          "id": 2,
+          "type": "contextkeeper",
+          "description": "Maintain thinker context",
+          "workflow_file": "session_context_workflow.json"
+        },
+        {
+          "id": 3,
+          "type": "skill",
+          "description": "Delegate skill task",
+          "workflow_file": "skill_delegate_workflow.json",
+          "skill": {
+            "name": "delegate",
+            "config_dir": "runtime",
+            "instance_pool_size": 1
+          }
+        }
+      ]
+    }
+  ]
 }

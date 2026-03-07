@@ -2,8 +2,32 @@
   "name": "BasicAgent",
   "version": "1.0.0",
   "description": "Basic agent example",
-  "workflows": [
-    "workflow_01.json",
-    "coordinator_workflow.json"
+  "sessions": [
+    {
+      "id": 0,
+      "type": "talker",
+      "description": "Primary talker session",
+      "task_count": 3,
+      "tasks": [
+        {
+          "id": 0,
+          "type": "dispatcher",
+          "description": "Dispatch user requests",
+          "workflow_file": "workflow_01.json"
+        },
+        {
+          "id": 1,
+          "type": "coordinator",
+          "description": "Coordinate task outputs",
+          "workflow_file": "coordinator_workflow.json"
+        },
+        {
+          "id": 2,
+          "type": "contextkeeper",
+          "description": "Maintain task context",
+          "workflow_file": "workflow_01.json"
+        }
+      ]
+    }
   ]
 }

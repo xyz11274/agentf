@@ -12,6 +12,7 @@
 
 #include "agent/common.h"
 #include "agent/msgque.h"
+#include "agent/package.h"
 #include "workflow/workflow.h"
 #include "utils/file_storage.h"
 
@@ -186,7 +187,11 @@ private:
 
   // Helper method to initialize components
   bool initialize_components(std::shared_ptr<AgentPackage> package = nullptr);
+  AgentPackage::SessionDefinition build_default_session_definition() const;
+  std::shared_ptr<MMAgentSession> create_session_from_definition(
+      const std::string& session_id, const AgentPackage::SessionDefinition& session_definition);
   std::shared_ptr<MMAgentSession> create_session_with_defaults(const std::string& session_id);
+  std::string resolve_workflow_reference(const std::string& workflow_ref) const;
   std::string resolve_workflow_file(const std::string& workflow_ref) const;
 
   std::queue<MMAgentMsgQue::Message> request_event_queue_;

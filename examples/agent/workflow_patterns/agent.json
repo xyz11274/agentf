@@ -2,9 +2,32 @@
   "name": "WorkflowPatternsAgent",
   "version": "1.0.0",
   "description": "Agent demonstrating common workflow patterns: conditional branching, loop iteration, and sequential processing",
-  "workflows": [
-    "conditional_workflow.json",
-    "loop_workflow.json",
-    "sample_workflow.json"
+  "sessions": [
+    {
+      "id": 0,
+      "type": "talker",
+      "description": "Primary talker session",
+      "task_count": 3,
+      "tasks": [
+        {
+          "id": 0,
+          "type": "dispatcher",
+          "description": "Dispatch workflow pattern requests",
+          "workflow_file": "sample_workflow.json"
+        },
+        {
+          "id": 1,
+          "type": "coordinator",
+          "description": "Coordinate workflow pattern outputs",
+          "workflow_file": "conditional_workflow.json"
+        },
+        {
+          "id": 2,
+          "type": "contextkeeper",
+          "description": "Maintain workflow pattern context",
+          "workflow_file": "loop_workflow.json"
+        }
+      ]
+    }
   ]
 }

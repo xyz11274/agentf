@@ -8,6 +8,8 @@
 
 ## 1. 设计概述
 
+> 2026-03-07 更新：`src/agent` 已切换到显式的 session/task 配置模型。`agent.json` 通过 `sessions` 数组定义 talker / thinker session，以及 `dispatcher` / `coordinator` / `contextkeeper` / `skill` 任务；0 号 session 固定为 talker，`contextkeeper` 直接复用既有 context workflow 链路。
+
 ### 1.1 架构位置
 
 MMAgent 生命周期管理位于 **MMAgent Level Master** 层，由 `MMAgentActor` 和 `MMAgent` 两个核心类协同实现：
@@ -692,19 +694,40 @@ sequenceDiagram
 
 ```json
 {
-    "id": "customer_service_agent",
     "name": "Customer Service MMAgent",
     "version": "1.2.0",
     "description": "Handles customer inquiries",
-    "policy": 0,
-    "max_workflows": 10,
-    "max_concurrent_workflows": 5,
-    "data_bus_capacity": 1048576,
-    "precreate_session_count": 3
+    "sessions": [
+        {
+            "id": 0,
+            "type": "talker",
+            "description": "Primary talker session",
+            "task_count": 4,
+            "tasks": [
+                {"id": 0, "type": "dispatcher", "description": "Dispatch requests", "workflow_file": "dispatcher_workflow.json"},
+                {"id": 1, "type": "coordinator", "description": "Coordinate results", "workflow_file": "coordinator_workflow.json"},
+                {"id": 2, "type": "contextkeeper", "description": "Keep context", "workflow_file": "task_context_workflow.json"},
+                {
+                    "id": 3,
+                    "type": "skill",
+                    "description": "FAQ skill",
+                    "workflow_file": "faq_skill_workflow.json",
+                    "skill": {
+                        "name": "faq",
+                        "config_dir": "skills/faq",
+                        "instance_pool_size": 2
+                    }
+                }
+            ]
+        }
+    ]
 }
 ```
 
-- `precreate_session_count`：初始化默认 session 后，额外预创建的 session 数量（默认 `0`）。
+- `sessions`：显式 session 拓扑，至少一个 session，且必须且只能有一个 `talker`。
+- `session.id` / `task.id`：必须分别从 `0` 连续编号。
+- `contextkeeper`：承接既有 context workflow 对应任务，不再单独维护一套旧语义。
+- `skill.instance_pool_size`：skill 任务实例池大小，必须大于等于 `1`。
 
 ---
 
@@ -723,10 +746,12 @@ sequenceDiagram
   - `output_result`
   - `extensible_reserved`
 - 消息根据消息头 `metadata["message_type"]` 路由；缺失该头时默认按 `intent_request` 处理。
-- 每个 session 默认创建两个固定任务：
-  - `task0`：dispatcher（优先 `dispatcher_workflow`）
-  - `task1`：coordinator（优先 `coordinator_workflow`）
-- 默认 session、预创建 session、动态 session 均采用同一 task0/task1 初始化策略。
+- 每个由 `agent.json` 声明的 session 使用显式任务列表初始化，基础任务通常为：
+  - `0`：dispatcher
+  - `1`：coordinator
+  - `2`：contextkeeper
+- `skill` 任务可继续扩展，并按实例池创建 `..._pool_<index>` 形式的任务实例。
+- 当消息未指定 `session_id` 时，默认路由到 0 号 talker session。
 
 ### 7.2 多轮对话样例（WebSocket + 多 Session 协作）
 
@@ -734,11 +759,12 @@ sequenceDiagram
   - `examples/multi_session_chat/server/chat_server.cpp`
   - `examples/multi_session_chat/server/webui/index.html`
   - `examples/multi_session_chat/package/`
-- 样例采用 Agent 包驱动，`agent.json` 配置 `precreate_session_count=4`，并通过:
-  - `dispatcher_workflow`（task0）
-  - `coordinator_workflow`（task1）
-  - `session_context_workflow`
-  组织多 session 协作对话。
+- 样例采用 Agent 包驱动，`agent.json` 直接声明 0 号 talker session 与 1~4 号 thinker session，并通过:
+  - `default_dispatcher_workflow.json`
+  - `default_coordinator_workflow.json`
+  - `session_context_workflow.json`
+  - 多个 `skill_*_workflow.json`
+  组织多 session 协作对话与 skill 任务池。
 - LLM 调用约定为 OpenAI Chat Completions 兼容协议，支持 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL` 环境变量。
 - 对话管理模块将消息持久化到 session 文件，用于后续 context 汇总与压缩。
 

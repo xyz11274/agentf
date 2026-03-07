@@ -36,8 +36,19 @@ MMAgent 运行时元数据，至少包含：
 - `name`：MMAgent 名称
 - `version`：MMAgent 版本（应与 `$AGTVER` 一致）
 - `description`：功能概述
-- `workflows`：工作流文件列表
-- `precreate_session_count`：默认 session 初始化时预创建 session 数量（可选，默认 `0`）
+- `sessions`：session 拓扑定义，至少包含 1 个 session
+  - `session.id`：从 `0` 开始连续编号
+  - `session.type`：`talker` / `thinker`，且必须且只能存在 1 个 `talker`
+  - `session.description`
+  - `session.task_count`
+  - `session.tasks`
+- `task.id`：从 `0` 开始连续编号
+- `task.type`：`dispatcher` / `coordinator` / `contextkeeper` / `skill`
+- `task.workflow_file`：任务绑定的 workflow 文件
+- `skill` 任务额外包含：
+  - `skill.name`
+  - `skill.config_dir`
+  - `skill.instance_pool_size`（>= 1）
 
 ### 3.2 `agentCard.md`
 MMAgent Prompt/能力卡片，供其他模型或 MMAgent 读取。
@@ -46,7 +57,8 @@ MMAgent Prompt/能力卡片，供其他模型或 MMAgent 读取。
 工作流定义文件，包含 `node` 与 `edge`：
 - node 负责动作执行
 - edge 负责流程控制（包含 if/loop/fork/join/async/goto）
-- coordinator workflow 推荐包含 session 创建节点与 task 创建节点，作为 task0 的固定编排入口
+- talker session 的 dispatcher / coordinator workflow 推荐分别承担请求分发与结果编排入口
+- context workflow 应收敛到 `contextkeeper` 任务
 
 ### 3.4 `node_xxx.$TYPE`
 节点可执行实现，支持后缀示例：`.so`、`.sh`、`.py`、`.jar`。
@@ -57,10 +69,10 @@ MMAgent Prompt/能力卡片，供其他模型或 MMAgent 读取。
 - agent 版本
 - 功能说明
 - 文件清单（manifest）
-- `coordinator_workflow`：固定指定 coordinator（task0）默认 workflow
-- `task_workflows`：任务类型到 workflow 的默认映射（用于非 task0 或兼容场景）
+- `coordinator_workflow`：可作为 coordinator 任务的默认 workflow
+- `task_workflows`：任务类型到 workflow 的默认映射（如 `dispatcher` / `coordinator` / `contextkeeper` / `skill:<name>`）
 
-> 说明：`precreate_session_count` 仅从 `agent.json` 读取，不从 `package.json` 读取。
+> 说明：session / task / skill 的主拓扑定义应放在 `agent.json`，`package.json` 负责包级元数据与默认 workflow 映射。
 
 ## 4. 校验清单
 

@@ -13,6 +13,13 @@ namespace agentflow {
 namespace tests {
 
 namespace {
+void write_workflow_json(const std::filesystem::path& path, const std::string& workflow_id) {
+  std::ofstream wf(path);
+  wf << R"({"id":")" << workflow_id
+     << R"(","name":")" << workflow_id
+     << R"(","version":"1.0.0","nodes":[{"id":"n1","name":"n1","type":"TASK"}],"edges":[]})";
+}
+
 std::shared_ptr<framework::MMAgentTask> find_task_by_type(
     const std::vector<std::shared_ptr<framework::MMAgentTask>>& tasks, const std::string& task_type) {
   for(const auto& task : tasks) {
@@ -125,7 +132,7 @@ TEST_F(AgentTest, CoordinatorBuildsSessionOwnedTaskWithWorkflowMapping) {
   auto session = agent->get_session_by_key("u2:c2");
   ASSERT_NE(session, nullptr);
   auto tasks = session->get_tasks();
-  ASSERT_EQ(tasks.size(), 3);
+  ASSERT_EQ(tasks.size(), 4);
   auto collaboration_task = find_task_by_type(tasks, "collaboration");
   ASSERT_NE(collaboration_task, nullptr);
   EXPECT_EQ(collaboration_task->get_session_id(), "u2:c2");
@@ -141,7 +148,7 @@ TEST_F(AgentTest, CoordinatorBuildsSessionOwnedTaskWithWorkflowMapping) {
   EXPECT_FALSE(message_data_ref.empty());
 }
 
-TEST_F(AgentTest, CoordinatorDefaultsToTask0Type) {
+TEST_F(AgentTest, CoordinatorDefaultsToDispatcherType) {
   auto agent = std::make_shared<framework::MMAgent>(base_config());
   framework::MMWorkflow::Config wf_cfg;
   wf_cfg.id = "wf_default";
@@ -149,7 +156,7 @@ TEST_F(AgentTest, CoordinatorDefaultsToTask0Type) {
   agent->add_workflow(std::make_shared<framework::MMWorkflow>(wf_cfg));
 
   framework::MMAgentMsgQue::Message req;
-  req.message_id = "req_task0";
+  req.message_id = "req_dispatcher";
   req.metadata["user_id"] = "u3";
   req.metadata["client_id"] = "c3";
   ASSERT_TRUE(agent->route_request_message(req));
@@ -158,59 +165,76 @@ TEST_F(AgentTest, CoordinatorDefaultsToTask0Type) {
   auto session = agent->get_session_by_key("u3:c3");
   ASSERT_NE(session, nullptr);
   auto tasks = session->get_tasks();
-  ASSERT_EQ(tasks.size(), 3);
-  auto dispatcher_task0 = session->get_task("u3:c3_task_0");
-  auto coordinator_task1 = session->get_task("u3:c3_task_1");
-  auto generated_task0 = find_task_by_message_id(tasks, "req_task0");
-  ASSERT_NE(dispatcher_task0, nullptr);
-  ASSERT_NE(coordinator_task1, nullptr);
-  ASSERT_NE(generated_task0, nullptr);
-  EXPECT_EQ(dispatcher_task0->get_task_type(), "task0");
-  EXPECT_EQ(coordinator_task1->get_task_type(), "task1");
-  EXPECT_EQ(generated_task0->get_task_type(), "task0");
+  ASSERT_EQ(tasks.size(), 4);
+  auto dispatcher_task = session->get_task("u3:c3_task_0");
+  auto coordinator_task = session->get_task("u3:c3_task_1");
+  auto contextkeeper_task = session->get_task("u3:c3_task_2");
+  auto generated_dispatcher_task = find_task_by_message_id(tasks, "req_dispatcher");
+  ASSERT_NE(dispatcher_task, nullptr);
+  ASSERT_NE(coordinator_task, nullptr);
+  ASSERT_NE(contextkeeper_task, nullptr);
+  ASSERT_NE(generated_dispatcher_task, nullptr);
+  EXPECT_EQ(dispatcher_task->get_task_type(), "dispatcher");
+  EXPECT_EQ(coordinator_task->get_task_type(), "coordinator");
+  EXPECT_EQ(contextkeeper_task->get_task_type(), "contextkeeper");
+  EXPECT_EQ(generated_dispatcher_task->get_task_type(), "dispatcher");
 }
 
-TEST_F(AgentTest, PackageTask0WorkflowMappingIsApplied) {
+TEST_F(AgentTest, PackageDispatcherWorkflowMappingIsApplied) {
   namespace fs = std::filesystem;
-  const fs::path tmp = fs::path("build/test_task0_pkg");
+  const fs::path tmp = fs::path("build/test_dispatcher_pkg");
   fs::create_directories(tmp);
 
   {
     std::ofstream pkg(tmp / "package.json");
     pkg << R"({
-      "name": "task0-test-agent",
+      "name": "dispatcher-test-agent",
       "version": "1.0.0",
       "workflows": ["workflow_a.json", "workflow_b.json"],
-      "coordinator_workflow": "wf_b"
+      "task_context_workflow": "task-context.json"
     })";
   }
   {
-    std::ofstream wf(tmp / "workflow_a.json");
-    wf << R"({"id":"wf_a","name":"wf_a","version":"1.0.0","nodes":[{"id":"n1","name":"n1","type":"TASK"}],"edges":[]})";
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "sessions": [
+        {
+          "id": 0,
+          "type": "talker",
+          "description": "Primary talker session",
+          "task_count": 3,
+          "tasks": [
+            { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflow_a.json" },
+            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflow_b.json" },
+            { "id": 2, "type": "contextkeeper", "description": "Keep context", "workflow_file": "task-context.json" }
+          ]
+        }
+      ]
+    })";
   }
-  {
-    std::ofstream wf(tmp / "workflow_b.json");
-    wf << R"({"id":"wf_b","name":"wf_b","version":"1.0.0","nodes":[{"id":"n2","name":"n2","type":"TASK"}],"edges":[]})";
-  }
+  write_workflow_json(tmp / "workflow_a.json", "wf_a");
+  write_workflow_json(tmp / "workflow_b.json", "wf_b");
+  write_workflow_json(tmp / "task-context.json", "wf_context");
 
   auto agent = framework::MMAgent::create_from_package(tmp.string());
   ASSERT_NE(agent, nullptr);
 
   framework::MMAgentMsgQue::Message req;
-  req.message_id = "req_task0_map";
+  req.message_id = "req_dispatcher_map";
   req.metadata["user_id"] = "u4";
   req.metadata["client_id"] = "c4";
+  req.metadata["session_id"] = "0";
   ASSERT_TRUE(agent->route_request_message(req));
-  EXPECT_EQ(agent->process_session_messages("u4:c4"), 1);
+  EXPECT_EQ(agent->process_session_messages("0"), 1);
 
-  auto session = agent->get_session_by_key("u4:c4");
+  auto session = agent->get_session_by_key("0");
   ASSERT_NE(session, nullptr);
   auto tasks = session->get_tasks();
-  ASSERT_EQ(tasks.size(), 3);
-  auto mapped_task = find_task_by_message_id(tasks, "req_task0_map");
+  ASSERT_EQ(tasks.size(), 4);
+  auto mapped_task = find_task_by_message_id(tasks, "req_dispatcher_map");
   ASSERT_NE(mapped_task, nullptr);
-  EXPECT_EQ(mapped_task->get_task_type(), "task0");
-  EXPECT_EQ(mapped_task->get_workflow_id(), "wf_b");
+  EXPECT_EQ(mapped_task->get_task_type(), "dispatcher");
+  EXPECT_EQ(mapped_task->get_workflow_id(), "wf_a");
 
   fs::remove_all(tmp);
 }
@@ -225,18 +249,31 @@ TEST_F(AgentTest, WorkflowIdMetadataHasHigherPriorityThanCoordinatorWorkflow) {
     pkg << R"({
       "name": "coordinator-override-agent",
       "version": "1.0.0",
-      "workflows": ["workflow_a.json", "workflow_b.json"],
-      "coordinator_workflow": "wf_b"
+      "workflows": ["workflow_a.json", "workflow_b.json", "task-context.json"],
+      "task_context_workflow": "task-context.json"
     })";
   }
   {
-    std::ofstream wf(tmp / "workflow_a.json");
-    wf << R"({"id":"wf_a","name":"wf_a","version":"1.0.0","nodes":[{"id":"n1","name":"n1","type":"TASK"}],"edges":[]})";
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "sessions": [
+        {
+          "id": 0,
+          "type": "talker",
+          "description": "Primary talker session",
+          "task_count": 3,
+          "tasks": [
+            { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflow_b.json" },
+            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflow_b.json" },
+            { "id": 2, "type": "contextkeeper", "description": "Keep context", "workflow_file": "task-context.json" }
+          ]
+        }
+      ]
+    })";
   }
-  {
-    std::ofstream wf(tmp / "workflow_b.json");
-    wf << R"({"id":"wf_b","name":"wf_b","version":"1.0.0","nodes":[{"id":"n2","name":"n2","type":"TASK"}],"edges":[]})";
-  }
+  write_workflow_json(tmp / "workflow_a.json", "wf_a");
+  write_workflow_json(tmp / "workflow_b.json", "wf_b");
+  write_workflow_json(tmp / "task-context.json", "wf_context");
 
   auto agent = framework::MMAgent::create_from_package(tmp.string());
   ASSERT_NE(agent, nullptr);
@@ -245,11 +282,12 @@ TEST_F(AgentTest, WorkflowIdMetadataHasHigherPriorityThanCoordinatorWorkflow) {
   req.message_id = "req_workflow_override";
   req.metadata["user_id"] = "u6";
   req.metadata["client_id"] = "c6";
+  req.metadata["session_id"] = "0";
   req.metadata["workflow_id"] = "wf_a";
   ASSERT_TRUE(agent->route_request_message(req));
-  EXPECT_EQ(agent->process_session_messages("u6:c6"), 1);
+  EXPECT_EQ(agent->process_session_messages("0"), 1);
 
-  auto session = agent->get_session_by_key("u6:c6");
+  auto session = agent->get_session_by_key("0");
   ASSERT_NE(session, nullptr);
   auto task = find_task_by_message_id(session->get_tasks(), "req_workflow_override");
   ASSERT_NE(task, nullptr);
@@ -258,72 +296,128 @@ TEST_F(AgentTest, WorkflowIdMetadataHasHigherPriorityThanCoordinatorWorkflow) {
   fs::remove_all(tmp);
 }
 
-TEST_F(AgentTest, DefaultAndDynamicSessionsContainTask0DispatcherAndTask1Coordinator) {
+TEST_F(AgentTest, DefaultAndDynamicSessionsContainDispatcherCoordinatorAndContextkeeper) {
   auto agent = std::make_shared<framework::MMAgent>(base_config());
   auto default_session = agent->get_default_session();
   ASSERT_NE(default_session, nullptr);
   EXPECT_EQ(default_session->get_session_id(), "0");
+  EXPECT_EQ(default_session->get_session_type(), "talker");
   ASSERT_NE(default_session->get_task_coordinator(), nullptr);
   ASSERT_NE(default_session->get_task_dispatcher(), nullptr);
-  auto default_task0 = default_session->get_task("0_task_0");
-  auto default_task1 = default_session->get_task("0_task_1");
-  ASSERT_NE(default_task0, nullptr);
-  ASSERT_NE(default_task1, nullptr);
-  EXPECT_EQ(default_task0->get_task_type(), "task0");
-  EXPECT_EQ(default_task1->get_task_type(), "task1");
+  auto default_dispatcher = default_session->get_task("0_task_0");
+  auto default_coordinator = default_session->get_task("0_task_1");
+  auto default_contextkeeper = default_session->get_task("0_task_2");
+  ASSERT_NE(default_dispatcher, nullptr);
+  ASSERT_NE(default_coordinator, nullptr);
+  ASSERT_NE(default_contextkeeper, nullptr);
+  EXPECT_EQ(default_dispatcher->get_task_type(), "dispatcher");
+  EXPECT_EQ(default_coordinator->get_task_type(), "coordinator");
+  EXPECT_EQ(default_contextkeeper->get_task_type(), "contextkeeper");
 
   auto user_session = agent->get_or_create_session("u5", "c5");
   ASSERT_NE(user_session, nullptr);
-  auto session_task0 = user_session->get_task("u5:c5_task_0");
-  auto session_task1 = user_session->get_task("u5:c5_task_1");
-  ASSERT_NE(session_task0, nullptr);
-  ASSERT_NE(session_task1, nullptr);
-  EXPECT_EQ(session_task0->get_task_type(), "task0");
-  EXPECT_EQ(session_task1->get_task_type(), "task1");
+  auto session_dispatcher = user_session->get_task("u5:c5_task_0");
+  auto session_coordinator = user_session->get_task("u5:c5_task_1");
+  auto session_contextkeeper = user_session->get_task("u5:c5_task_2");
+  ASSERT_NE(session_dispatcher, nullptr);
+  ASSERT_NE(session_coordinator, nullptr);
+  ASSERT_NE(session_contextkeeper, nullptr);
+  EXPECT_EQ(session_dispatcher->get_task_type(), "dispatcher");
+  EXPECT_EQ(session_coordinator->get_task_type(), "coordinator");
+  EXPECT_EQ(session_contextkeeper->get_task_type(), "contextkeeper");
 }
 
-TEST_F(AgentTest, AgentJsonPrecreatesSessionsWithCoordinatorTask0) {
+TEST_F(AgentTest, AgentJsonInstantiatesConfiguredSessionsAndSkillPools) {
   namespace fs = std::filesystem;
-  const fs::path tmp = fs::path("build/test_precreate_sessions_pkg");
+  const fs::path tmp = fs::path("build/test_structured_sessions_pkg");
   fs::create_directories(tmp);
 
   {
     std::ofstream pkg(tmp / "package.json");
     pkg << R"({
-      "name": "precreate-session-agent",
+      "name": "structured-session-agent",
       "version": "1.0.0",
-      "workflows": ["workflow_main.json"]
+      "workflows": ["workflow_main.json", "workflow_skill.json", "task-context.json"],
+      "task_context_workflow": "task-context.json"
     })";
   }
   {
     std::ofstream agent_json(tmp / "agent.json");
     agent_json << R"({
-      "precreate_session_count": 3
+      "sessions": [
+        {
+          "id": 0,
+          "type": "talker",
+          "description": "Primary talker session",
+          "task_count": 3,
+          "tasks": [
+            { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflow_main.json" },
+            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflow_main.json" },
+            { "id": 2, "type": "contextkeeper", "description": "Keep context", "workflow_file": "task-context.json" }
+          ]
+        },
+        {
+          "id": 1,
+          "type": "thinker",
+          "description": "Skill thinker session",
+          "task_count": 4,
+          "tasks": [
+            { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflow_main.json" },
+            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflow_main.json" },
+            { "id": 2, "type": "contextkeeper", "description": "Keep context", "workflow_file": "task-context.json" },
+            {
+              "id": 3,
+              "type": "skill",
+              "description": "Search skill",
+              "workflow_file": "workflow_skill.json",
+              "skill": {
+                "name": "search",
+                "config_dir": "skills/search",
+                "instance_pool_size": 2
+              }
+            }
+          ]
+        }
+      ]
     })";
   }
-  {
-    std::ofstream wf(tmp / "workflow_main.json");
-    wf << R"({"id":"wf_main","name":"wf_main","version":"1.0.0","nodes":[{"id":"n1","name":"n1","type":"TASK"}],"edges":[]})";
-  }
+  write_workflow_json(tmp / "workflow_main.json", "wf_main");
+  write_workflow_json(tmp / "workflow_skill.json", "wf_skill");
+  write_workflow_json(tmp / "task-context.json", "wf_context");
 
   auto agent = framework::MMAgent::create_from_package(tmp.string());
   ASSERT_NE(agent, nullptr);
 
   auto sessions = agent->get_sessions();
-  ASSERT_EQ(sessions.size(), 4);
+  ASSERT_EQ(sessions.size(), 2);
 
-  for(int i = 1; i <= 3; ++i) {
-    const std::string session_id = "precreated_session_" + std::to_string(i);
-    auto session = agent->get_session_by_key(session_id);
-    ASSERT_NE(session, nullptr);
-    EXPECT_NE(session->get_task_coordinator(), nullptr);
-    auto task0 = session->get_task(session_id + "_task_0");
-    auto task1 = session->get_task(session_id + "_task_1");
-    ASSERT_NE(task0, nullptr);
-    ASSERT_NE(task1, nullptr);
-    EXPECT_EQ(task0->get_task_type(), "task0");
-    EXPECT_EQ(task1->get_task_type(), "task1");
-  }
+  auto talker_session = agent->get_session_by_key("0");
+  auto thinker_session = agent->get_session_by_key("1");
+  ASSERT_NE(talker_session, nullptr);
+  ASSERT_NE(thinker_session, nullptr);
+  EXPECT_EQ(talker_session->get_session_type(), "talker");
+  EXPECT_EQ(thinker_session->get_session_type(), "thinker");
+
+  auto contextkeeper_task = thinker_session->get_task("1_task_2");
+  auto skill_task = thinker_session->get_task("1_task_3");
+  auto skill_pool_0 = thinker_session->get_task("1_task_3_pool_0");
+  auto skill_pool_1 = thinker_session->get_task("1_task_3_pool_1");
+  ASSERT_NE(contextkeeper_task, nullptr);
+  ASSERT_NE(skill_task, nullptr);
+  ASSERT_NE(skill_pool_0, nullptr);
+  ASSERT_NE(skill_pool_1, nullptr);
+  EXPECT_EQ(contextkeeper_task->get_task_type(), "contextkeeper");
+  EXPECT_EQ(contextkeeper_task->get_context_workflow(), "task-context.json");
+  EXPECT_EQ(contextkeeper_task->get_workflow_file(), "task-context.json");
+  EXPECT_EQ(skill_task->get_task_type(), "skill");
+  EXPECT_EQ(skill_task->get_skill_name(), "search");
+  EXPECT_EQ(skill_task->get_skill_config_dir(), "skills/search");
+  EXPECT_EQ(skill_task->get_instance_pool_size(), 2);
+  EXPECT_FALSE(skill_task->is_skill_instance());
+  EXPECT_TRUE(skill_pool_0->is_skill_instance());
+  EXPECT_TRUE(skill_pool_1->is_skill_instance());
+  EXPECT_EQ(skill_pool_0->get_skill_instance_index(), 0);
+  EXPECT_EQ(skill_pool_1->get_skill_instance_index(), 1);
 
   fs::remove_all(tmp);
 }

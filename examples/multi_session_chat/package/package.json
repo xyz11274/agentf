@@ -15,12 +15,13 @@
   "dispatcher_workflow": "default-dispatcher-workflow",
   "coordinator_workflow": "default-coordinator-workflow",
   "task_workflows": {
-    "0": "session-dispatcher-workflow",
-    "1": "default-coordinator-workflow",
-    "skill_search": "skill-search-workflow",
-    "skill_summary": "skill-summary-workflow",
-    "skill_date": "skill-date-workflow",
-    "skill_delegate": "skill-delegate-workflow"
+    "dispatcher": "session-dispatcher-workflow",
+    "coordinator": "default-coordinator-workflow",
+    "contextkeeper": "session-context-workflow",
+    "skill:search": "skill-search-workflow",
+    "skill:summary": "skill-summary-workflow",
+    "skill:date": "skill-date-workflow",
+    "skill:delegate": "skill-delegate-workflow"
   },
   "session_context_workflow": "session-context-workflow",
   "metadata": {

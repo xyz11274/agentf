@@ -32,7 +32,10 @@ public:
   };
 
   struct Config {
+    int         session_index = -1;
     std::string session_id;
+    std::string session_type = "talker";
+    std::string description;
     int         max_queue_size = 1024;
     int64_t     timeout_ms = 30000;  // 30 seconds default
     int         max_retries = 3;
@@ -48,6 +51,9 @@ public:
 
   // Getters
   const std::string& get_session_id() const { return config_.session_id; }
+  int                get_session_index() const { return config_.session_index; }
+  const std::string& get_session_type() const { return config_.session_type; }
+  const std::string& get_description() const { return config_.description; }
   SessionState       get_state() const { return state_; }
   const Config&      get_config() const { return config_; }
   int64_t            get_created_time() const { return created_time_; }

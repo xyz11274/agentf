@@ -22,6 +22,197 @@ int64_t get_current_time_ms() {
   return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
+bool parse_string_member(const rapidjson::Value& object, const char* name, std::string& value) {
+  if(!object.HasMember(name)) {
+    return false;
+  }
+  const auto& member = object[name];
+  if(!member.IsString()) {
+    return false;
+  }
+  value = member.GetString();
+  return true;
+}
+
+bool parse_int_member(const rapidjson::Value& object, const char* name, int& value) {
+  if(!object.HasMember(name)) {
+    return false;
+  }
+  const auto& member = object[name];
+  if(!member.IsInt()) {
+    return false;
+  }
+  value = member.GetInt();
+  return true;
+}
+
+bool fail_agent_json_parse(const std::string& message) {
+  std::cerr << "Invalid agent.json: " << message << std::endl;
+  return false;
+}
+
+bool parse_task_definition(const rapidjson::Value& task_value,
+                           int expected_index,
+                           AgentPackage::TaskDefinition& task_definition) {
+  if(!task_value.IsObject()) {
+    return fail_agent_json_parse("task entries must be objects");
+  }
+
+  if(!task_value.HasMember("id") || !task_value["id"].IsInt()) {
+    return fail_agent_json_parse("task.id must be an integer");
+  }
+  task_definition.task_index = task_value["id"].GetInt();
+  if(task_definition.task_index != expected_index) {
+    return fail_agent_json_parse("task ids must be contiguous and start from 0");
+  }
+
+  if(!parse_string_member(task_value, "type", task_definition.task_type)) {
+    return fail_agent_json_parse("task.type must be a string");
+  }
+  if(task_definition.task_type != "dispatcher" && task_definition.task_type != "coordinator"
+      && task_definition.task_type != "contextkeeper" && task_definition.task_type != "skill") {
+    return fail_agent_json_parse("task.type must be dispatcher, coordinator, contextkeeper, or skill");
+  }
+
+  if(!parse_string_member(task_value, "description", task_definition.description)
+      || task_definition.description.empty()) {
+    return fail_agent_json_parse("task.description must be a non-empty string");
+  }
+
+  if(!parse_string_member(task_value, "workflow_file", task_definition.workflow_file)
+      || task_definition.workflow_file.empty()) {
+    return fail_agent_json_parse("task.workflow_file must be a non-empty string");
+  }
+
+  if(task_definition.task_type == "skill") {
+    if(!task_value.HasMember("skill") || !task_value["skill"].IsObject()) {
+      return fail_agent_json_parse("skill tasks must define a skill object");
+    }
+    const auto& skill_object = task_value["skill"];
+    if(!parse_string_member(skill_object, "name", task_definition.skill.skill_name)
+        || task_definition.skill.skill_name.empty()) {
+      return fail_agent_json_parse("skill.name must be a non-empty string");
+    }
+    if(!parse_string_member(skill_object, "config_dir", task_definition.skill.skill_config_dir)
+        || task_definition.skill.skill_config_dir.empty()) {
+      return fail_agent_json_parse("skill.config_dir must be a non-empty string");
+    }
+    if(!parse_int_member(skill_object, "instance_pool_size", task_definition.skill.instance_pool_size)
+        || task_definition.skill.instance_pool_size < 1) {
+      return fail_agent_json_parse("skill.instance_pool_size must be an integer >= 1");
+    }
+  }
+
+  return true;
+}
+
+bool parse_session_definition(const rapidjson::Value& session_value,
+                              int expected_index,
+                              AgentPackage::SessionDefinition& session_definition) {
+  if(!session_value.IsObject()) {
+    return fail_agent_json_parse("session entries must be objects");
+  }
+
+  if(!session_value.HasMember("id") || !session_value["id"].IsInt()) {
+    return fail_agent_json_parse("session.id must be an integer");
+  }
+  session_definition.session_index = session_value["id"].GetInt();
+  if(session_definition.session_index != expected_index) {
+    return fail_agent_json_parse("session ids must be contiguous and start from 0");
+  }
+
+  if(!parse_string_member(session_value, "type", session_definition.session_type)) {
+    return fail_agent_json_parse("session.type must be a string");
+  }
+  if(session_definition.session_type != "talker" && session_definition.session_type != "thinker") {
+    return fail_agent_json_parse("session.type must be talker or thinker");
+  }
+
+  if(!parse_string_member(session_value, "description", session_definition.description)
+      || session_definition.description.empty()) {
+    return fail_agent_json_parse("session.description must be a non-empty string");
+  }
+
+  if(!parse_int_member(session_value, "task_count", session_definition.task_count)
+      || session_definition.task_count < 1) {
+    return fail_agent_json_parse("session.task_count must be an integer >= 1");
+  }
+  if(!session_value.HasMember("tasks") || !session_value["tasks"].IsArray()) {
+    return fail_agent_json_parse("session.tasks must be an array");
+  }
+
+  const auto& tasks = session_value["tasks"];
+  if(static_cast<int>(tasks.Size()) != session_definition.task_count) {
+    return fail_agent_json_parse("session.task_count must match the number of tasks");
+  }
+
+  int dispatcher_count = 0;
+  int coordinator_count = 0;
+  int contextkeeper_count = 0;
+  for(rapidjson::SizeType i = 0; i < tasks.Size(); ++i) {
+    AgentPackage::TaskDefinition task_definition;
+    if(!parse_task_definition(tasks[i], static_cast<int>(i), task_definition)) {
+      return false;
+    }
+    if(task_definition.task_type == "dispatcher") {
+      ++dispatcher_count;
+    } else if(task_definition.task_type == "coordinator") {
+      ++coordinator_count;
+    } else if(task_definition.task_type == "contextkeeper") {
+      ++contextkeeper_count;
+    }
+    session_definition.tasks.push_back(task_definition);
+  }
+
+  if(dispatcher_count != 1) {
+    return fail_agent_json_parse("each session must define exactly one dispatcher task");
+  }
+  if(coordinator_count != 1) {
+    return fail_agent_json_parse("each session must define exactly one coordinator task");
+  }
+  if(contextkeeper_count != 1) {
+    return fail_agent_json_parse("each session must define exactly one contextkeeper task");
+  }
+
+  return true;
+}
+
+bool parse_agent_sessions(const rapidjson::Document& agent_doc,
+                          std::vector<AgentPackage::SessionDefinition>& sessions) {
+  if(!agent_doc.HasMember("sessions")) {
+    return true;
+  }
+  if(!agent_doc["sessions"].IsArray()) {
+    return fail_agent_json_parse("sessions must be an array");
+  }
+
+  const auto& session_array = agent_doc["sessions"];
+  if(session_array.Empty()) {
+    return fail_agent_json_parse("sessions must contain at least one configured session");
+  }
+
+  int talker_count = 0;
+  for(rapidjson::SizeType i = 0; i < session_array.Size(); ++i) {
+    AgentPackage::SessionDefinition session_definition;
+    if(!parse_session_definition(session_array[i], static_cast<int>(i), session_definition)) {
+      return false;
+    }
+    if(session_definition.session_type == "talker") {
+      ++talker_count;
+    }
+    sessions.push_back(session_definition);
+  }
+
+  if(talker_count != 1) {
+    return fail_agent_json_parse("sessions must contain exactly one talker session");
+  }
+  if(sessions.front().session_type != "talker") {
+    return fail_agent_json_parse("session 0 must be the talker session");
+  }
+
+  return true;
+}
+
 std::string resolve_builtin_workflow_file(const std::filesystem::path& root_path,
                                           const std::string& builtin_name) {
   namespace fs = std::filesystem;
@@ -155,7 +346,7 @@ std::shared_ptr<AgentPackage> AgentPackage::load_from_directory(const std::strin
     config.node_context_workflow = doc["node_context_workflow"].GetString();
   }
 
-  // precreate_session_count is only sourced from agent.json.
+  // precreate_session_count and structured session topology are sourced from agent.json.
   fs::path agent_json_path = root_path / "agent.json";
   if (fs::exists(agent_json_path)) {
     std::ifstream agent_ifs(agent_json_path);
@@ -169,6 +360,10 @@ std::shared_ptr<AgentPackage> AgentPackage::load_from_directory(const std::strin
     agent_doc.ParseStream(agent_isw);
     if (agent_doc.HasParseError()) {
       std::cerr << "Failed to parse agent.json" << std::endl;
+      return nullptr;
+    }
+
+    if(!parse_agent_sessions(agent_doc, config.sessions)) {
       return nullptr;
     }
 

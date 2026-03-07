@@ -30,6 +30,28 @@ public:
     std::string version;
   };
 
+  struct SkillTaskConfig {
+    std::string skill_name;
+    std::string skill_config_dir;
+    int         instance_pool_size = 1;
+  };
+
+  struct TaskDefinition {
+    int         task_index = -1;
+    std::string task_type;
+    std::string description;
+    std::string workflow_file;
+    SkillTaskConfig skill;
+  };
+
+  struct SessionDefinition {
+    int                         session_index = -1;
+    std::string                 session_type;
+    std::string                 description;
+    int                         task_count = 0;
+    std::vector<TaskDefinition> tasks;
+  };
+
   struct Config {
     std::string package_id;
     std::string package_name;
@@ -48,6 +70,7 @@ public:
     std::string task_context_workflow;
     std::string node_context_workflow;
     int         precreate_session_count = 0;
+    std::vector<SessionDefinition> sessions;
   };
 
   explicit AgentPackage(const Config& config);

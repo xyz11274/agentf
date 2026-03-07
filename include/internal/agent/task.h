@@ -28,14 +28,22 @@ public:
   };
 
   struct Config {
+    int         task_index = -1;
     std::string task_id;
     std::string task_type;
     std::string description;
     std::string session_id;
     std::string workflow_id;
     std::string workflow_file;
+    std::string context_workflow;
     std::string task_context_workflow;
     std::string collaboration_so_path;
+    std::string skill_name;
+    std::string skill_config_dir;
+    int         instance_pool_size = 1;
+    bool        is_skill_instance = false;
+    int         skill_instance_index = -1;
+    bool        disable_context = false;
     int64_t     priority = 0;
     int         max_retries = 3;
   };
@@ -46,10 +54,17 @@ public:
   // Getters
   const std::string& get_task_id() const { return config_.task_id; }
   const std::string& get_task_type() const { return config_.task_type; }
+  int                get_task_index() const { return config_.task_index; }
   const std::string& get_session_id() const { return config_.session_id; }
   const std::string& get_workflow_id() const { return config_.workflow_id; }
   const std::string& get_workflow_file() const { return config_.workflow_file; }
+  const std::string& get_context_workflow() const { return config_.context_workflow; }
   const std::string& get_collaboration_so_path() const { return config_.collaboration_so_path; }
+  const std::string& get_skill_name() const { return config_.skill_name; }
+  const std::string& get_skill_config_dir() const { return config_.skill_config_dir; }
+  int                get_instance_pool_size() const { return config_.instance_pool_size; }
+  bool               is_skill_instance() const { return config_.is_skill_instance; }
+  int                get_skill_instance_index() const { return config_.skill_instance_index; }
   std::shared_ptr<AgentContext> get_context() const { return context_; }
   TaskState          get_state() const { return state_; }
   const Config&      get_config() const { return config_; }

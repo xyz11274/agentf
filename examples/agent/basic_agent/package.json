@@ -16,7 +16,8 @@
   ],
   "coordinator_workflow": "basic-coordinator-workflow",
   "task_workflows": {
-    "0": "basic-coordinator-workflow"
+    "dispatcher": "basic-coordinator-workflow",
+    "coordinator": "basic-coordinator-workflow"
   },
   "dependencies": {
     "core-lib": "1.0.0"

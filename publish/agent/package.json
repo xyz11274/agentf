@@ -14,6 +14,7 @@
   ],
   "coordinator_workflow": "coordinator-workflow-v1",
   "task_workflows": {
-    "0": "coordinator-workflow-v1"
+    "dispatcher": "coordinator-workflow-v1",
+    "coordinator": "coordinator-workflow-v1"
   }
 }

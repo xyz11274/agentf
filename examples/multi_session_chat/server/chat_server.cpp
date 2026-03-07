@@ -243,7 +243,8 @@ class ChatAgentBridge {
     msg.content   = user_text;
     msg.metadata["user_id"]    = "chat_user";
     msg.metadata["client_id"]  = client_session_id;
-    msg.metadata["task_type"]  = "task0";
+    msg.metadata["session_id"] = "0";
+    msg.metadata["task_type"]  = "dispatcher";
     agent_->route_request_message(msg);
     // Drive session message queue → creates task in generated_tasks_
     agent_->process_all_sessions_until_idle();

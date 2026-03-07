@@ -26,7 +26,7 @@ public:
 
   struct Config {
     std::string coordinator_id;
-    std::string default_task_type = "task1";
+    std::string default_task_type = "coordinator";
     InputQueueType input_queue_type = InputQueueType::OUTPUT_RESULT;
     std::string dispatcher_workflow;
     std::string coordinator_workflow;

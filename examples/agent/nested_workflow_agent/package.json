@@ -15,7 +15,8 @@
   "builtin_workflows": [],
   "coordinator_workflow": "main-workflow",
   "task_workflows": {
-    "0": "main-workflow"
+    "dispatcher": "main-workflow",
+    "coordinator": "main-workflow"
   },
   "dependencies": {
     "core-lib": "1.0.0"

@@ -11,9 +11,13 @@ AgentContext::AgentContext(const Config& config)
     : config_(config), is_valid_(true) {
   MMAgentTask::Config updater_config;
   updater_config.task_id = config_.context_id + "_context_updater";
-  updater_config.task_type = "context_updater";
+  updater_config.task_type = "contextkeeper";
+  updater_config.description = "Context workflow keeper";
   updater_config.session_id = config_.agent_id;
+  updater_config.context_workflow = config_.context_workflow;
+  updater_config.workflow_id = config_.context_workflow;
   updater_config.workflow_file = config_.context_workflow;
+  updater_config.disable_context = true;
   context_updater_task_ = std::make_shared<MMAgentTask>(updater_config);
 }
 

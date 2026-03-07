@@ -13,7 +13,8 @@
   ],
   "coordinator_workflow": "calculator-coordinator-workflow",
   "task_workflows": {
-    "0": "calculator-coordinator-workflow"
+    "dispatcher": "calculator-coordinator-workflow",
+    "coordinator": "calculator-coordinator-workflow"
   },
   "dependencies": {
     "core-lib": "1.0.0"

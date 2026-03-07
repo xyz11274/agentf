@@ -2,8 +2,32 @@
   "name": "CalculatorAgent",
   "version": "1.0.0",
   "description": "Calculator agent example",
-  "workflows": [
-    "workflow_01.json",
-    "coordinator_workflow.json"
+  "sessions": [
+    {
+      "id": 0,
+      "type": "talker",
+      "description": "Primary talker session",
+      "task_count": 3,
+      "tasks": [
+        {
+          "id": 0,
+          "type": "dispatcher",
+          "description": "Dispatch calculator requests",
+          "workflow_file": "workflow_01.json"
+        },
+        {
+          "id": 1,
+          "type": "coordinator",
+          "description": "Coordinate calculator outputs",
+          "workflow_file": "coordinator_workflow.json"
+        },
+        {
+          "id": 2,
+          "type": "contextkeeper",
+          "description": "Maintain calculator context",
+          "workflow_file": "workflow_01.json"
+        }
+      ]
+    }
   ]
 }
