@@ -18,17 +18,16 @@ MMAgentMsgQue::~MMAgentMsgQue() {
 MMAgentMsgQue::MessageQueueType MMAgentMsgQue::resolve_queue_type(const Message& message) const {
   const auto header_type_it = message.metadata.find("message_type");
   if(header_type_it != message.metadata.end()) {
-    if(header_type_it->second == "output_result") {
-      return MessageQueueType::OUTPUT_RESULT;
-    }
-    if(header_type_it->second == "extensible_reserved") {
-      return MessageQueueType::EXTENSIBLE_RESERVED;
+    if(header_type_it->second == "data_exchange" || header_type_it->second == "output_result"
+       || header_type_it->second == "notification" || header_type_it->second == "error") {
+      return MessageQueueType::DATA_EXCHANGE;
     }
     return MessageQueueType::INTENT_REQUEST;
   }
 
-  if(message.type == MessageType::TASK_RESPONSE) {
-    return MessageQueueType::OUTPUT_RESULT;
+  if(message.type == MessageType::TASK_RESPONSE || message.type == MessageType::NOTIFICATION
+     || message.type == MessageType::ERROR) {
+    return MessageQueueType::DATA_EXCHANGE;
   }
   return MessageQueueType::INTENT_REQUEST;
 }
@@ -36,10 +35,8 @@ MMAgentMsgQue::MessageQueueType MMAgentMsgQue::resolve_queue_type(const Message&
 bool MMAgentMsgQue::enqueue_to_type_queue(const Message& message) {
   std::vector<Message>* target = &intent_request_queue_;
   const auto queue_type = resolve_queue_type(message);
-  if(queue_type == MessageQueueType::OUTPUT_RESULT) {
-    target = &output_result_queue_;
-  } else if(queue_type == MessageQueueType::EXTENSIBLE_RESERVED) {
-    target = &extensible_reserved_queue_;
+  if(queue_type == MessageQueueType::DATA_EXCHANGE) {
+    target = &data_exchange_queue_;
   }
   target->push_back(message);
   total_messages_processed_++;
@@ -66,10 +63,8 @@ bool MMAgentMsgQue::enqueue_message(const Message& message) {
 
 bool MMAgentMsgQue::dequeue_from_type_queue(MessageQueueType queue_type, Message& message) {
   std::vector<Message>* queue = &intent_request_queue_;
-  if(queue_type == MessageQueueType::OUTPUT_RESULT) {
-    queue = &output_result_queue_;
-  } else if(queue_type == MessageQueueType::EXTENSIBLE_RESERVED) {
-    queue = &extensible_reserved_queue_;
+  if(queue_type == MessageQueueType::DATA_EXCHANGE) {
+    queue = &data_exchange_queue_;
   }
   if(!queue->empty()) {
     message = queue->front();
@@ -84,10 +79,7 @@ bool MMAgentMsgQue::dequeue_message(Message& message) {
   if(dequeue_from_type_queue(MessageQueueType::INTENT_REQUEST, message)) {
     return true;
   }
-  if(dequeue_from_type_queue(MessageQueueType::OUTPUT_RESULT, message)) {
-    return true;
-  }
-  return dequeue_from_type_queue(MessageQueueType::EXTENSIBLE_RESERVED, message);
+  return dequeue_from_type_queue(MessageQueueType::DATA_EXCHANGE, message);
 }
 
 bool MMAgentMsgQue::dequeue_message_by_type(MessageQueueType queue_type, Message& message) {
@@ -101,29 +93,21 @@ bool MMAgentMsgQue::peek_message(Message& message) const {
     message = intent_request_queue_.front();
     return true;
   }
-  if(!output_result_queue_.empty()) {
-    message = output_result_queue_.front();
-    return true;
-  }
-  if(!extensible_reserved_queue_.empty()) {
-    message = extensible_reserved_queue_.front();
+  if(!data_exchange_queue_.empty()) {
+    message = data_exchange_queue_.front();
     return true;
   }
   return false;
 }
 
 int MMAgentMsgQue::get_queue_size() const {
-  return static_cast<int>(intent_request_queue_.size() + output_result_queue_.size() +
-                          extensible_reserved_queue_.size());
+  return static_cast<int>(intent_request_queue_.size() + data_exchange_queue_.size());
 }
 
 int MMAgentMsgQue::get_queue_size(MessageQueueType queue_type) const {
   std::lock_guard<std::mutex> lock(mutex_);
-  if(queue_type == MessageQueueType::OUTPUT_RESULT) {
-    return static_cast<int>(output_result_queue_.size());
-  }
-  if(queue_type == MessageQueueType::EXTENSIBLE_RESERVED) {
-    return static_cast<int>(extensible_reserved_queue_.size());
+  if(queue_type == MessageQueueType::DATA_EXCHANGE) {
+    return static_cast<int>(data_exchange_queue_.size());
   }
   return static_cast<int>(intent_request_queue_.size());
 }
@@ -141,8 +125,7 @@ bool MMAgentMsgQue::is_queue_full() const {
 void MMAgentMsgQue::clear_queue() {
   std::lock_guard<std::mutex> lock(mutex_);
   intent_request_queue_.clear();
-  output_result_queue_.clear();
-  extensible_reserved_queue_.clear();
+  data_exchange_queue_.clear();
 }
 
 bool MMAgentMsgQue::route_message(const std::string& receiver_id, const Message& message) {
@@ -163,8 +146,7 @@ std::vector<MMAgentMsgQue::Message> MMAgentMsgQue::get_messages_for_receiver(
     }
   };
   collect(intent_request_queue_);
-  collect(output_result_queue_);
-  collect(extensible_reserved_queue_);
+  collect(data_exchange_queue_);
   return result;
 }
 

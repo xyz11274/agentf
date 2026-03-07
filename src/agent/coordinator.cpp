@@ -142,8 +142,8 @@ std::vector<std::shared_ptr<MMAgentTask>> SessionTaskCoordinator::process_sessio
   MMAgentMsgQue::Message                    message;
   int64_t                                 counter = static_cast<int64_t>(session.get_tasks().size());
   while(config_.input_queue_type == InputQueueType::INTENT_REQUEST
-            ? session.dequeue_intent_request_message(message)
-            : session.dequeue_output_result_message(message)) {
+             ? session.dequeue_intent_request_message(message)
+            : session.dequeue_data_exchange_message(message)) {
     auto task = build_task_for_message(session.get_session_id(), message, workflows, ++counter);
     session.add_task(task);
     tasks.push_back(task);

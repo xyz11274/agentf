@@ -17,8 +17,16 @@ def load_local_env():
     return env
 
 local_env = load_local_env()
-base = os.environ.get('LLM_BASE_URL', local_env.get('LLM_BASE_URL', 'https://api.openai.com/v1'))
+base = (
+    os.environ.get('AF_LLM_BASE_URL', '')
+    or os.environ.get('LLM_BASE_URL', local_env.get('LLM_BASE_URL', 'https://api.openai.com/v1'))
+)
 api_key = (
+    os.environ.get('AF_LLM_API_KEY', '')
+    or os.environ.get('LLM_API_KEY', '')
+    or os.environ.get('OPENAI_API_KEY', '')
+    or os.environ.get('API_KEY', '')
+    or local_env.get('AF_LLM_API_KEY', '')
     os.environ.get('LLM_API_KEY', '')
     or os.environ.get('OPENAI_API_KEY', '')
     or os.environ.get('API_KEY', '')
@@ -26,8 +34,14 @@ api_key = (
     or local_env.get('OPENAI_API_KEY', '')
     or local_env.get('API_KEY', '')
 )
-model = os.environ.get('LLM_MODEL', local_env.get('LLM_MODEL', 'gpt-4o-mini'))
-timeout = float(os.environ.get('LLM_TIMEOUT_SEC', local_env.get('LLM_TIMEOUT_SEC', '3')))
+model = (
+    os.environ.get('AF_LLM_MODEL', '')
+    or os.environ.get('LLM_MODEL', local_env.get('LLM_MODEL', 'gpt-4o-mini'))
+)
+timeout = float(
+    os.environ.get('AF_LLM_TIMEOUT_SEC', '')
+    or os.environ.get('LLM_TIMEOUT_SEC', local_env.get('LLM_TIMEOUT_SEC', '3'))
+)
 prompt = sys.stdin.read()
 if not api_key:
     print(json.dumps({"text":"[mock] no api key; fallback response","raw":{}}))

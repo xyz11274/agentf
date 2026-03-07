@@ -18,7 +18,6 @@ tests/
 │   │   ├── test_workflow_gtest.cpp        # Workflow测试
 │   │   ├── test_node_gtest.cpp            # Node测试
 │   │   ├── test_databus_gtest.cpp         # DataBus测试
-│   │   ├── test_event_gtest.cpp           # Event测试
 │   │   └── test_hot_reload.cpp            # 热更新测试
 │   └── data/                   # 测试数据
 │       ├── lib/                # SO库测试源码
@@ -99,20 +98,6 @@ tests/
 运行:
 ```bash
 ./build/bin/test_databus_gtest
-```
-
-#### Event 测试
-**文件**: `unit/legacy_src/test_event_gtest.cpp`
-
-测试内容:
-- 事件创建和分发
-- 事件监听器管理
-- 事件队列
-- 异步事件处理
-
-运行:
-```bash
-./build/bin/test_event_gtest
 ```
 
 ---
@@ -396,7 +381,6 @@ ctest --output-on-failure
 | AgentTests | ✅ 通过 | 12 | 所有测试通过 |
 | WorkflowTests | ✅ 通过 | 18 | 所有测试通过 |
 | DataBusTests | ✅ 通过 | 10 | 所有测试通过 |
-| EventTests | ✅ 通过 | 8 | 所有测试通过 |
 | AdapterIsolationTests | ✅ 通过 | 5 | 所有测试通过 |
 | AgentFlowGoogleTests | ⚠️ 失败 | - | SEGFAULT (预存在) |
 | HotReloadTests | ⚠️ 失败 | - | 时序问题 (预存在) |

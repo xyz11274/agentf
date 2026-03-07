@@ -21,13 +21,13 @@ class SessionTaskCoordinator {
 public:
   enum class InputQueueType {
     INTENT_REQUEST = 0,
-    OUTPUT_RESULT  = 1,
+    DATA_EXCHANGE  = 1,
   };
 
   struct Config {
     std::string coordinator_id;
     std::string default_task_type = "coordinator";
-    InputQueueType input_queue_type = InputQueueType::OUTPUT_RESULT;
+    InputQueueType input_queue_type = InputQueueType::DATA_EXCHANGE;
     std::string dispatcher_workflow;
     std::string coordinator_workflow;
     std::map<std::string, std::string> task_workflows;

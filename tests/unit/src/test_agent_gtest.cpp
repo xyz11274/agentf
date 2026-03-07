@@ -68,11 +68,12 @@ TEST_F(AgentTest, MsgQueRoutesMessagesByTypeHeader) {
 
   framework::MMAgentMsgQue::Message output;
   output.message_id = "output";
-  output.metadata["message_type"] = "output_result";
+  output.metadata["message_type"] = "data_exchange";
   ASSERT_TRUE(queue.enqueue_message(output));
 
   framework::MMAgentMsgQue::Message out;
-  ASSERT_TRUE(queue.dequeue_message_by_type(framework::MMAgentMsgQue::MessageQueueType::OUTPUT_RESULT, out));
+  ASSERT_TRUE(
+      queue.dequeue_message_by_type(framework::MMAgentMsgQue::MessageQueueType::DATA_EXCHANGE, out));
   EXPECT_EQ(out.message_id, "output");
   ASSERT_TRUE(queue.dequeue_message_by_type(framework::MMAgentMsgQue::MessageQueueType::INTENT_REQUEST, out));
   EXPECT_EQ(out.message_id, "intent");
@@ -110,6 +111,61 @@ TEST_F(AgentTest, RouteRequestAssignsPooledSessionByUserAndClient) {
   ASSERT_NE(pooled_session, nullptr);
   EXPECT_EQ(routed_session, pooled_session);
   EXPECT_EQ(routed_session->get_receive_queue_size(), 1);
+}
+
+TEST_F(AgentTest, AgentBackgroundThreadsProcessIntentAndDataExchangeMessages) {
+  auto agent = std::make_shared<framework::MMAgent>(base_config());
+
+  framework::MMWorkflow::Config wf_cfg;
+  wf_cfg.id = "wf_auto";
+  wf_cfg.name = "wf_auto";
+  wf_cfg.dsl_file = "wf_auto.json";
+  agent->add_workflow(std::make_shared<framework::MMWorkflow>(wf_cfg));
+  ASSERT_TRUE(agent->initialize());
+  ASSERT_TRUE(agent->start());
+
+  framework::MMAgentMsgQue::Message intent;
+  intent.message_id = "intent-auto";
+  intent.metadata["user_id"] = "u-auto";
+  intent.metadata["client_id"] = "c-auto";
+  intent.metadata["task_type"] = "dispatcher";
+  intent.metadata["workflow_id"] = "wf_auto";
+  ASSERT_TRUE(agent->route_request_message(intent));
+
+  std::shared_ptr<framework::MMAgentTask> generated;
+  bool                                    saw_intent = false;
+  for(int i = 0; i < 50; ++i) {
+    if(agent->pop_generated_task(generated)) {
+      saw_intent = (generated && generated->get_task_type() == "dispatcher");
+      if(saw_intent) {
+        break;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_TRUE(saw_intent);
+
+  framework::MMAgentMsgQue::Message data;
+  data.message_id = "data-auto";
+  data.metadata["user_id"] = "u-auto";
+  data.metadata["client_id"] = "c-auto";
+  data.metadata["message_type"] = "data_exchange";
+  data.metadata["task_type"] = "coordinator";
+  data.metadata["workflow_id"] = "wf_auto";
+  ASSERT_TRUE(agent->route_request_message(data));
+
+  bool saw_data = false;
+  for(int i = 0; i < 50; ++i) {
+    if(agent->pop_generated_task(generated)) {
+      saw_data = (generated && generated->get_task_type() == "coordinator");
+      if(saw_data) {
+        break;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_TRUE(saw_data);
+  EXPECT_TRUE(agent->stop());
 }
 
 TEST_F(AgentTest, CoordinatorBuildsSessionOwnedTaskWithWorkflowMapping) {
@@ -367,6 +423,8 @@ TEST_F(AgentTest, AgentJsonInstantiatesConfiguredSessionPoolAndSkillPools) {
     std::ofstream agent_json(tmp / "agent.json");
     agent_json << R"({
       "session_pool_size": 2,
+      "max_workflows": 12,
+      "max_concurrent_workflows": 4,
       "tasks": [
         {
           "id": 0,
@@ -404,6 +462,8 @@ TEST_F(AgentTest, AgentJsonInstantiatesConfiguredSessionPoolAndSkillPools) {
 
   auto agent = framework::MMAgent::create_from_package(tmp.string());
   ASSERT_NE(agent, nullptr);
+  EXPECT_EQ(agent->get_config().max_workflows, 12);
+  EXPECT_EQ(agent->get_config().max_concurrent_workflows, 4);
 
   auto sessions = agent->get_sessions();
   ASSERT_EQ(sessions.size(), 2u);

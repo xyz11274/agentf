@@ -452,7 +452,9 @@ classDiagram
 | skill-date-workflow | Python | `python_script` | `nodes/python/skill_date_node.py` |
 | skill-delegate-workflow | Java | `java_jar` | `nodes/java/skill_delegate.jar` |
 
-脚本节点通过 `json_output: true` 协议将 stdout JSON 直接映射到 DataBus，替代早期的文件传递方式。详见 `docs/multi-session-chat-example.md`。
+脚本节点通过 `json_output: true` 协议将 stdout JSON 直接映射到 DataBus，替代早期的文件传递方式。除此之外，worker 还会为外部节点创建文件型 DataBus 桥接目录，并注入 `AF_DATABUS_DIR / AF_DATABUS_KV_DIR / AF_DATABUS_EVENTS_DIR`，供 shell / Go / Java / Python / C++ SDK 执行 Set/Get/Sub/Pub。详见 `docs/multi-session-chat-example.md`。
+
+runtime 统一流式推理接口也挂在这一层：节点向 `agentflow.llm.request` 发布请求后，worker 内部的 `StreamingLLMClient` 会按 `AF_LLM_BASE_URL / AF_LLM_API_KEY / AF_LLM_MODEL` 配置访问兼容服务，并把 chunk / done / error 事件重新发布到同一个文件桥与 MMDataBus 语义中。
 
 #### 测试策略
 - 单元测试：MMAgent/MMWorkflow/MMNode/MMDataBus/Event。

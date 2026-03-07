@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include "runtime/databus/databus.h"
+#include "runtime/databus/file_databus_bridge.h"
 
 class DataBusTest : public ::testing::Test {
 protected:
@@ -46,4 +47,24 @@ TEST_F(DataBusTest, FindRefsByOwner) {
 
   auto refs = databus_.find_refs_by_owner("user_id", "user-42");
   ASSERT_FALSE(refs.empty());
+}
+
+TEST_F(DataBusTest, FileBridgeSupportsSetGetAndPublish) {
+  auto root = agentflow::runtime::FileDataBusBridge::make_temp_root();
+  agentflow::runtime::FileDataBusBridge bridge(root);
+  ASSERT_TRUE(bridge.initialize());
+  ASSERT_TRUE(bridge.put("session.message", std::string("hello")));
+
+  agentflow::DataVariant value;
+  ASSERT_TRUE(bridge.get("session.message", value));
+  ASSERT_EQ(std::get<std::string>(value), "hello");
+
+  ASSERT_TRUE(bridge.publish("stream.chunk", std::string("chunk-1")));
+  std::set<std::string> seen;
+  auto                  events = bridge.poll_events(seen);
+  ASSERT_FALSE(events.empty());
+  EXPECT_EQ(events.back().topic, "stream.chunk");
+  EXPECT_EQ(std::get<std::string>(events.back().value), "chunk-1");
+
+  bridge.cleanup();
 }

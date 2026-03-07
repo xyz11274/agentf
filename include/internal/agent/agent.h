@@ -1,11 +1,13 @@
 #ifndef AGENTFLOW_FRAMEWORK_AGENT_H
 #define AGENTFLOW_FRAMEWORK_AGENT_H
 
+#include <atomic>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <queue>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "agent/common.h"
@@ -153,6 +155,15 @@ class MMAgent {
 
   std::queue<std::shared_ptr<MMAgentTask>> generated_tasks_;
   std::mutex                               generated_tasks_mutex_;
+  std::atomic<bool>                        message_threads_running_{false};
+  std::thread                              intent_request_thread_;
+  std::thread                              data_exchange_thread_;
+
+  int  process_intent_request_messages();
+  int  process_data_exchange_messages();
+  void process_intent_request_loop();
+  void process_data_exchange_loop();
+  void flush_session_send_queue(const std::shared_ptr<MMAgentSession>& session);
 };
 
 }  // namespace framework

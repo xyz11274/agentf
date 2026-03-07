@@ -171,8 +171,7 @@ std::shared_ptr<MMAgent> MMAgent::create_from_package(const std::string& package
     config.version = package->get_version();
     config.description = package->get_config().description;
     config.policy = MMAgent::LifecyclePolicy::PER_REQUEST;
-    config.max_workflows = 10;
-    config.max_concurrent_workflows = 5;
+    // max_workflows / max_concurrent_workflows 由 agent.json 提供
 
     // 3. 创建 MMAgent 实例
     auto agent = std::make_shared<MMAgent>(config);
@@ -225,11 +224,7 @@ bool MMAgent::initialize_components(std::shared_ptr<AgentPackage> package) {
     context_config.agent_id = config_.id;
     context_ = std::make_shared<AgentContext>(context_config);
 
-    // 6. 事件组件 - 事件分发处理
-    MMAgentEvent::Config event_config;
-    event_config.handler_id = config_.id + "_event_handler";
-    event_config.async_dispatch = false;
-    event_ = std::make_shared<MMAgentEvent>(event_config);
+    // 6. agent 仅保留消息队列与 DataBus 路径，不再初始化事件组件
 
     // 7. 包组件 - 包元数据管理
     if (package) {
@@ -761,7 +756,7 @@ sequenceDiagram
 
 - Session 接收队列由优先级模型调整为消息类型模型：
   - `intent_request`
-  - `output_result`
+  - `data_exchange`
   - `extensible_reserved`
 - 消息根据消息头 `metadata["message_type"]` 路由；缺失该头时默认按 `intent_request` 处理。
 - 每个由 `agent.json` 声明的 session 使用显式任务列表初始化，基础任务通常为：
@@ -780,11 +775,11 @@ sequenceDiagram
   - `examples/multi_session_chat/package/`
 - 样例采用 Agent 包驱动，`agent.json` 只声明 1 份同质化 session 模板，并通过 `session_pool_size` 预创建 5 个 pooled session；模板内通过:
   - `default_dispatcher_workflow.json`
-  - `default_coordinator_workflow.json`
+  - `session_coordinator_workflow.json`
   - `session_context_workflow.json`
   - 多个 `skill_*_workflow.json`
   组织多 session 协作对话与 skill 任务池。
-- LLM 调用约定为 OpenAI Chat Completions 兼容协议，支持 `LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL` 环境变量。
+- LLM 调用约定为 OpenAI Chat Completions 兼容协议，支持 `AF_LLM_BASE_URL`、`AF_LLM_API_KEY`、`AF_LLM_MODEL` 环境变量。
 - 对话管理模块将消息持久化到 session 文件，用于后续 context 汇总与压缩。
 
 ---

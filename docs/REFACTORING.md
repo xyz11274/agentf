@@ -141,7 +141,7 @@ E2E 测试引用的 `examples/agent/basic_agent` 和 `examples/agent/nested_work
 - 若 dispatcher 直接写入 `final_response`（legacy 模式），立即返回（向后兼容）。
 
 **Phase 3 — Coordinator 编排**
-- 调用 `runtime_->execute_workflow(agent_id, "default-coordinator-workflow", {})` 驱动三节点协调器（collect → plan → apply）；
+- 调用 `runtime_->execute_workflow(agent_id, "session-coordinator-workflow", {})` 驱动三节点协调器（collect → plan → apply）；
 - 等待 `orchestration_plan` 出现在 DataBus（最长 15s）；
 - `orchestration_plan` 是 JSON 数组，每个条目含 `action`、`skill`、`session_id` 字段。
 
@@ -423,7 +423,7 @@ target_link_libraries(multi_session_nodes PRIVATE agentflow)
 - MMDataBus 增强为“本地缓存优先 + 远端服务同步”模型：支持进程内、跨进程、跨节点共享链路。
 - 新增 DataRef 流程：`store_with_ref / resolve_ref / find_refs_by_owner`。
 - owner 维度索引支持：`request_id/user_id/client_id/agent_id/session_id/task_id/workflow_id/node_id/master_id/worker_id`。
-- `msgque/event` 协同增强：控制面仅携带 `data_ref`，payload 由 MMDataBus 本地缓存读取，本地 miss 自动回源并回填。
+- `msgque` 控制面仅携带 `data_ref`，payload 由 MMDataBus 本地缓存读取，本地 miss 自动回源并回填。
 - Redis 依赖接入：`vendor/vendor.conf` 增加 redis 仓库条目，新增 `vendor/adapter/cache/redis_adapter.cpp` 适配实现。
 - 回归结果：
   - `./build.sh build` 通过；
@@ -1684,13 +1684,13 @@ All examples have been validated:
 
 1. **运行时清理**：
    - 移除了未使用的 `src/runtime/network` 目录。
-   - 删除了旧的 `src/runtime/event.cpp` 和 `include/internal/vendor/event/event.h`，将事件管理逻辑合并至 `MMAgentEvent`。
+   - 删除了旧的 `src/runtime/event.cpp` 和 `include/internal/vendor/event/event.h`。
    - 删除了 `Testing` 目录及冗余的测试目录 (`tests/unit/workflow`, `tests/unit/runtime`, `tests/unit/agent`)。
 
-2. **事件系统增强**：
-   - 基于 `libevent` 实现了 `EventAdapter` (`vendor/adapter/event/libevent_adapter.cpp`)。
-   - `MMAgentEvent` 集成了适配器模式，支持同步和基于 `libevent` 的异步事件分发。
-   - 更新了 `tests/unit/src/test_event_gtest.cpp` 以测试新的 `MMAgentEvent` 类。
+2. **消息链路收敛**：
+   - agent 侧不再保留独立事件机制，统一走 `msgque + databus` 协同链路。
+   - 控制面消息仅承载路由与 `data_ref` 等元信息，payload 通过 MMDataBus 读取。
+   - 相关 `test_event_gtest.cpp` 已移除，验证收敛到 agent/runtime 集成测试。
 
 3. **MMAgent 核心组件增强**：
    - 实现了 `MMAgentSession` (会话管理), `MMAgentTask` (任务管理), `AgentMessages` (消息队列), `AgentContext` (上下文管理)。
@@ -1709,7 +1709,7 @@ All examples have been validated:
 - `src/agent/task.cpp` / `include/internal/agent/task.h` (新增/更新)
 - `src/agent/messages.cpp` / `include/internal/agent/messages.h` (新增/更新)
 - `src/agent/context.cpp` / `include/internal/agent/context.h` (新增/更新)
-- `src/agent/event.cpp` / `include/internal/agent/event.h` (更新)
+- `src/agent/event.cpp` / `include/internal/agent/event.h` (删除)
 - `src/agent/agent.cpp` (更新)
 - `CMakeLists.txt` (更新)
 

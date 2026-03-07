@@ -30,7 +30,7 @@ multi_session_chat/
 | Workflow | 节点 | 语言 |
 |---|---|---|
 | `default-dispatcher-workflow` | `pipeline` | **C++** SO 库 |
-| `default-coordinator-workflow` | `collect`, `plan`, `apply` | **C++** SO 库 |
+| `session-coordinator-workflow` | `collect`, `plan`, `apply` | **C++** SO 库 |
 | `session-dispatcher-workflow` | `load_context`, `select_skill`, `create_task` | **C++** SO 库 |
 | `session-context-workflow` | `read_prompt`, `read_history`, `summarize`, `fill_context` | **Go** |
 | `skill-search-workflow` | `online-search` | **Shell** |
@@ -55,9 +55,9 @@ bash examples/multi_session_chat/scripts/build_and_run.sh
 
 ## LLM 配置
 ```bash
-export LLM_BASE_URL="https://api.openai.com/v1"
-export LLM_API_KEY="sk-..."
-export LLM_MODEL="gpt-4o-mini"
+export AF_LLM_BASE_URL="https://api.openai.com/v1"
+export AF_LLM_API_KEY="sk-..."
+export AF_LLM_MODEL="gpt-4o-mini"
 ```
 未设置时返回 mock 文本，但完整的 agent + skills 流程仍会执行。
 

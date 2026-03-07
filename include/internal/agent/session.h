@@ -75,7 +75,7 @@ class MMAgentSession {
   bool enqueue_received_message(const MMAgentMsgQue::Message& message);
   bool dequeue_received_message(MMAgentMsgQue::Message& message);
   bool dequeue_intent_request_message(MMAgentMsgQue::Message& message);
-  bool dequeue_output_result_message(MMAgentMsgQue::Message& message);
+  bool dequeue_data_exchange_message(MMAgentMsgQue::Message& message);
   bool enqueue_send_message(const MMAgentMsgQue::Message& message);
   bool dequeue_send_message(MMAgentMsgQue::Message& message);
   int  get_receive_queue_size() const;

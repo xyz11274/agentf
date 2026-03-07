@@ -4,7 +4,7 @@
 // multi_session_nodes.cpp
 // C++ SO library implementing nodes for:
 //   - default-dispatcher-workflow  (node: pipeline)
-//   - default-coordinator-workflow (nodes: collect, plan, apply)
+//   - session-coordinator-workflow (nodes: collect, plan, apply)
 //   - session-dispatcher-workflow  (nodes: load_context, select_skill, create_task)
 //
 // Each exported function follows the SoFunction signature:
@@ -233,7 +233,7 @@ extern "C" void node_pipeline(const DataMap& inputs, DataMap& outputs) {
 }
 
 // ============================================================================
-// default-coordinator-workflow: node "collect"
+// session-coordinator-workflow: node "collect"
 // ============================================================================
 // Collects skill selection results from all session inboxes into a unified JSONL.
 // Prefers DataBus-injected per-session keys (session:<sid>:skill_selected) written
@@ -291,7 +291,7 @@ extern "C" void node_collect_skills(const DataMap& inputs, DataMap& outputs) {
 }
 
 // ============================================================================
-// default-coordinator-workflow: node "plan"
+// session-coordinator-workflow: node "plan"
 // ============================================================================
 // Generates a task dependency plan using the LLM (or a local heuristic).
 // Inputs:  selected_skills (JSONL), package_root
@@ -343,7 +343,7 @@ extern "C" void node_plan_dependencies(const DataMap& inputs, DataMap& outputs) 
 }
 
 // ============================================================================
-// default-coordinator-workflow: node "apply"  (COORDINATOR ORCHESTRATION)
+// session-coordinator-workflow: node "apply"  (COORDINATOR ORCHESTRATION)
 // ============================================================================
 // Evaluates the task dependency graph and makes start/stop/skip decisions.
 // This node implements the core multi-session orchestration logic:

@@ -660,7 +660,7 @@ $xxxAgent_$PKGTYPE_$PKGVER.tar.gz     # Agent发布包，$xxxAgent为名称，$P
 
 九、完成以下重构，并记录到docs下合适文档中，确保构建和测试成功：
 src/runtime/databus提供的数据总线需要支持进程内共享、跨进程数据共享以及跨节点（不同OS、容器等）数据共享，需要支持数据的存储、获取、订阅/通知等功能，需要支持跨Agent实例、跨workflow实例、跨node实例共享和传输数据。
-1、需要与Agent的msgque（src/agent/msgque.cpp）、event（src/agent/event.cpp）机制配合使用，msgque、event只起到共享数据的控制作用，本身不携带数据本身，只携带数据的访问地址（数据是全局存放的，重复数据全局唯一），需要增强event和msgque，实现与databus协同。
+1、需要与 Agent 的 msgque（src/agent/msgque.cpp）机制配合使用；msgque 只起到共享数据的控制作用，本身不携带数据本身，只携带数据的访问地址（数据是全局存放的，重复数据全局唯一），并与 databus 协同。
 2、databus需要支持全局共享数据，除了runtime本地有数据缓存外，还需要有独立的缓存服务来提供数据的全局共享以及持久化存储，需要选型数据缓存系统，比如redis等，请完成数据缓存的选型，并实现databus和数据缓存服务协同工作。
 3、数据缓存服务需要存储原始的数据内容，同时也需要把数据与所属者关联起来，需要与request_id、user_id、client_id、agent_id、session_id、task_id、workflow_id、node_id、master_id、worker_id等关联，以支持使用不同的xxx_id均可以获取对应的数据
 4、不要只是打桩依赖redis，而是真实引入redis作为三方依赖（redis的代码仓地址：https://github.com/redis/redis.git），在vendor中增加对redis 的依赖和适配；所有message、event携带的数据都访问databus的本地缓存，本地缓存可以按照dataref访问，本地缓存和数据服务之间可以进行同步，数据消费方不感知数据服务，不直接使用数据服务，本地缓存没有需要的数据时才自动从数据服务上拉取，Agent收到的第一个消息中已经包含了原始数据，默认需要进行数据转储到databus的本地缓存，由本地缓存自动转储到数据服务上。

@@ -13,9 +13,8 @@ namespace framework {
 class MMAgentMsgQue {
 public:
   enum class MessageQueueType {
-    INTENT_REQUEST     = 0,
-    OUTPUT_RESULT      = 1,
-    EXTENSIBLE_RESERVED = 2,
+    INTENT_REQUEST = 0,
+    DATA_EXCHANGE  = 1,
   };
 
   enum class MessageType {
@@ -38,11 +37,10 @@ public:
   };
 
   struct Config {
-    int     max_queue_size          = 1024;
-    int64_t message_timeout_ms      = 5000;
-    int     intent_request_queues   = 1;
-    int     output_result_queues    = 1;
-    int     extensible_queues       = 1;
+     int     max_queue_size          = 1024;
+     int64_t message_timeout_ms      = 5000;
+     int     intent_request_queues   = 1;
+     int     data_exchange_queues    = 1;
   };
 
   explicit MMAgentMsgQue(const Config& config);
@@ -72,8 +70,7 @@ private:
 
   Config                    config_;
   std::vector<Message>      intent_request_queue_;
-  std::vector<Message>      output_result_queue_;
-  std::vector<Message>      extensible_reserved_queue_;
+  std::vector<Message>      data_exchange_queue_;
   int64_t                   total_messages_processed_ = 0;
   mutable std::mutex        mutex_;
 };

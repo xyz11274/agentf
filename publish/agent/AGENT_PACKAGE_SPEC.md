@@ -37,6 +37,8 @@ MMAgent 运行时元数据，至少包含：
 - `version`：MMAgent 版本（应与 `$AGTVER` 一致）
 - `description`：功能概述
 - `session_pool_size`：预创建 session 池大小（>= 1），按同一份 session 模板实例化
+- `max_workflows`：agent 允许装载的 workflow 上限（>= 1）
+- `max_concurrent_workflows`：agent 允许的并发 workflow 上限（>= 1）
 - `tasks`：agent 级任务列表；当前要求包含 1 个 `contextupdater` 任务
 - `sessions`：同质化 session 模板定义，固定只配置 1 个 session
   - `session.id`：固定为 `0`，表示模板编号

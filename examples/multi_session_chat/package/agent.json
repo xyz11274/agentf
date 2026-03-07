@@ -27,7 +27,7 @@
           "id": 1,
           "type": "coordinator",
           "description": "Coordinate outputs",
-          "workflow_file": "default_coordinator_workflow.json"
+          "workflow_file": "session_coordinator_workflow.json"
         },
         {
           "id": 2,
@@ -75,5 +75,7 @@
         }
       ]
     }
-  ]
+  ],
+  "max_workflows": 10,
+  "max_concurrent_workflows": 5
 }

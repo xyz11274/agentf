@@ -584,7 +584,6 @@ git push origin feature/my-feature
 | `test_workflow_gtest.cpp` | MMWorkflow 测试 |
 | `test_node_gtest.cpp` | MMNode 测试 |
 | `test_databus_gtest.cpp` | MMDataBus 测试 |
-| `test_event_gtest.cpp` | Event 系统测试 |
 | `test_hot_reload.cpp` | 热重载测试 |
 
 ---
@@ -1032,7 +1031,6 @@ tests/
 ├── test_workflow_gtest.cpp      # MMWorkflow 测试
 ├── test_node_gtest.cpp          # MMNode 测试
 ├── test_databus_gtest.cpp       # MMDataBus 测试
-├── test_event_gtest.cpp         # Event 系统测试
 ├── test_workflow_json_gtest.cpp # MMWorkflow JSON 解析测试
 ├── test_agent_json_gtest.cpp    # MMAgent JSON 解析测试
 ├── test_local_channel_gtest.cpp # LocalChannel 测试

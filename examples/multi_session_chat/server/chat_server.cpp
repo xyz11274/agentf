@@ -223,7 +223,7 @@ class ChatAgentBridge {
              "dispatcher_done", "coordinator_done", "orchestration_plan",
              "selected_skills", "task_plan",
              "default-dispatcher-workflow.pipeline.final_response",
-             "default-coordinator-workflow.apply.orchestration_plan"}) {
+             "session-coordinator-workflow.apply.orchestration_plan"}) {
       bus.remove(key);
     }
     std::filesystem::remove(
@@ -297,7 +297,7 @@ class ChatAgentBridge {
     // Phase 3: Run coordinator workflow to build orchestration plan
     // -------------------------------------------------------------------------
     bus.remove("orchestration_plan");
-    runtime_->execute_workflow(agent_id, "default-coordinator-workflow", {});
+    runtime_->execute_workflow(agent_id, "session-coordinator-workflow", {});
 
     auto coord_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
     std::string orchestration_plan;

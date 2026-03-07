@@ -53,5 +53,7 @@
         }
       ]
     }
-  ]
+  ],
+  "max_workflows": 10,
+  "max_concurrent_workflows": 5
 }

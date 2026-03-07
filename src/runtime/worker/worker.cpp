@@ -4,9 +4,14 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <map>
 #include <sstream>
+#include <thread>
 #include <type_traits>
 
+#include "runtime/databus/file_databus_bridge.h"
+#include "runtime/llm/streaming_client.h"
 #include "utils/logger.h"
 
 namespace agentflow {
@@ -50,13 +55,101 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
             return oss.str();
           }
           return "";
-        },
-        value);
+      },
+      value);
   };
+
+  FileDataBusBridge file_databus(
+      request.databus_root_dir.empty() ? FileDataBusBridge::make_temp_root() : request.databus_root_dir);
+  if(file_databus.initialize()) {
+    exec_config.env_vars.push_back("AF_DATABUS_DIR=" + file_databus.root_dir().string());
+    exec_config.env_vars.push_back("AF_DATABUS_KV_DIR=" + file_databus.kv_dir().string());
+    exec_config.env_vars.push_back("AF_DATABUS_EVENTS_DIR=" + file_databus.events_dir().string());
+    if(!request.llm_config.base_url.empty()) {
+      exec_config.env_vars.push_back("AF_LLM_BASE_URL=" + request.llm_config.base_url);
+    }
+    if(!request.llm_config.api_key.empty()) {
+      exec_config.env_vars.push_back("AF_LLM_API_KEY=" + request.llm_config.api_key);
+    }
+    if(!request.llm_config.model.empty()) {
+      exec_config.env_vars.push_back("AF_LLM_MODEL=" + request.llm_config.model);
+    }
+  }
   for(const auto& pair : request.inputs) {
     std::string env_key = "AF_" + to_env_suffix(pair.first);
     exec_config.env_vars.push_back(env_key + "=" + variant_to_string(pair.second));
+    file_databus.put(pair.first, pair.second);
   }
+
+  std::atomic<bool>                  monitor_running{true};
+  std::set<std::string>              seen_event_files;
+  std::set<std::string>              handled_llm_requests;
+  std::mutex                         llm_mutex;
+  std::vector<std::thread>           llm_threads;
+  std::thread                        event_monitor_thread([&]() {
+    while(monitor_running.load()) {
+      auto events = file_databus.poll_events(seen_event_files);
+      for(const auto& event : events) {
+        if(event.topic != "agentflow.llm.request") {
+          continue;
+        }
+        const auto* payload = std::get_if<std::string>(&event.value);
+        if(payload == nullptr) {
+          continue;
+        }
+        std::map<std::string, std::string> request_fields;
+        if(!FileDataBusBridge::parse_scalar_json_object(*payload, request_fields)) {
+          continue;
+        }
+        const std::string request_id =
+            request_fields.count("request_id") > 0 ? request_fields["request_id"] : "";
+        if(request_id.empty() || handled_llm_requests.count(request_id) > 0) {
+          continue;
+        }
+        handled_llm_requests.insert(request_id);
+        const std::string prompt =
+            request_fields.count("prompt") > 0 ? request_fields["prompt"] : "";
+        const std::string channel = request_fields.count("channel") > 0
+                                        ? request_fields["channel"]
+                                        : "agentflow.llm.chunk." + request_id;
+        const std::string done_channel = request_fields.count("done_channel") > 0
+                                             ? request_fields["done_channel"]
+                                             : "agentflow.llm.done." + request_id;
+        const std::string error_channel = request_fields.count("error_channel") > 0
+                                              ? request_fields["error_channel"]
+                                              : "agentflow.llm.error." + request_id;
+
+        std::lock_guard<std::mutex> lock(llm_mutex);
+        llm_threads.emplace_back([=, &file_databus, &request]() {
+          StreamingLLMClient        client;
+          StreamingLLMClient::Config cfg;
+          cfg.base_url   = request.llm_config.base_url;
+          cfg.api_key    = request.llm_config.api_key;
+          cfg.model      = request.llm_config.model;
+          cfg.timeout_ms = request.llm_config.timeout_ms;
+          std::string final_text;
+          const bool ok = client.stream_prompt(
+              prompt, cfg,
+              [&](const std::string& chunk) {
+                final_text += chunk;
+                file_databus.publish(channel, chunk);
+              },
+              [&](const std::string& content) {
+                file_databus.put("agentflow.llm.response." + request_id, content);
+                file_databus.publish(done_channel, content.empty() ? final_text : content);
+              },
+              [&](const std::string& error_message) {
+                file_databus.put("agentflow.llm.error." + request_id, error_message);
+                file_databus.publish(error_channel, error_message);
+              });
+          if(!ok) {
+            file_databus.publish(error_channel, std::string("llm stream failed"));
+          }
+        });
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+  });
 
   auto& code_loader = runtime::global_code_loader();
   if(request.enable_hot_reload) {
@@ -95,6 +188,19 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
       break;
   }
 
+  monitor_running = false;
+  if(event_monitor_thread.joinable()) {
+    event_monitor_thread.join();
+  }
+  {
+    std::lock_guard<std::mutex> lock(llm_mutex);
+    for(auto& thread : llm_threads) {
+      if(thread.joinable()) {
+        thread.join();
+      }
+    }
+  }
+
   response.success        = result.success;
   response.stdout_content = result.stdout;
   response.stderr_content = result.stderr;
@@ -119,11 +225,15 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
       response.outputs[line.substr(0, pos)] = line.substr(pos + 1);
     }
   }
+  response.outputs["databus_dir"] = file_databus.root_dir().string();
   if(request.enable_hot_reload) {
     auto version = code_loader.get_current_version(request.command);
     if(version) {
       response.active_version_id = version->version_id;
     }
+  }
+  if(!request.keep_databus_files) {
+    file_databus.cleanup();
   }
   return response;
 }

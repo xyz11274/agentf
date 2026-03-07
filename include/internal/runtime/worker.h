@@ -44,8 +44,16 @@ public:
     std::vector<std::string>  args;
     int                       timeout_ms = 30000;
     DataMap                   inputs;
+    std::string               databus_root_dir;
+    bool                      keep_databus_files = false;
     bool                      enable_hot_reload = false;
     HotReloadConfig           hot_reload_config;
+    struct LLMServiceConfig {
+      std::string base_url;
+      std::string api_key;
+      std::string model = "gpt-4.1";
+      int         timeout_ms = 30000;
+    } llm_config;
   };
 
   struct ExecutionResponse {

@@ -16,13 +16,13 @@
 2. **多轮对话包 + 同质化 session 池 + 顶层 contextupdater**
    - `agent.json` 设置 `session_pool_size: 5`，并只保留 1 份同质化 session 模板
    - 顶层 `tasks[0]` 使用 `contextupdater`，绑定 `session-context-workflow`
-   - 每个 pooled session 都包含 `session-dispatcher-workflow`、`default-coordinator-workflow` 与 4 个 skill workflow
-   - `default-coordinator-workflow`（C++ SO 节点）负责跨 session 编排
+   - 每个 pooled session 都包含 `session-dispatcher-workflow`、`session-coordinator-workflow` 与 4 个 skill workflow
+   - `session-coordinator-workflow`（C++ SO 节点）负责跨 session 编排
 
 3. **session_context_workflow**
-   `session-context-workflow` 节点链路（**Go 实现**）：  
-   读取 prompt 模板 → 读取历史 → LLM 摘要 → 填充 context  
-   各节点通过 `AF_*` 环境变量接收 DataBus 输入，以 JSON 形式输出到 DataBus。
+    `session-context-workflow` 节点链路（**Go 实现**）：  
+    读取 prompt 模板 → 读取历史 → LLM 摘要 → 填充 context  
+    各节点通过 `AF_*` 环境变量接收 DataBus 输入，以 JSON 形式输出到 DataBus；如需跨语言共享运行态数据，还可以使用 `AF_DATABUS_DIR` 指向的文件桥接接口。
 
 4. **4个不同 skill**
    - `skill-search-workflow`（shell_script）
@@ -31,7 +31,7 @@
    - `skill-delegate-workflow`（**Java** 实现）
 
 5. **默认 session 响应编排（真实回复）**  
-   `default-coordinator-workflow` 通过 C++ SO 节点 `node_apply_task_plan` 实现任务依赖图评估：
+   `session-coordinator-workflow` 通过 C++ SO 节点 `node_apply_task_plan` 实现任务依赖图评估：
    - 分析跨 session 的技能选择结果
    - 对每个任务作 `start / waiting / skip / stop` 决策
    - 将编排计划写入 DataBus（键 `coordinator:orchestration_plan`）
@@ -45,7 +45,7 @@
 | Workflow | 节点 | 实现语言 | 执行模式 |
 |---|---|---|---|
 | `default-dispatcher-workflow` | `pipeline` | **C++** | `so_library` |
-| `default-coordinator-workflow` | `collect`, `plan`, `apply` | **C++** | `so_library` |
+| `session-coordinator-workflow` | `collect`, `plan`, `apply` | **C++** | `so_library` |
 | `session-dispatcher-workflow` | `load_context`, `select_skill`, `create_task` | **C++** | `so_library` |
 | `session-context-workflow` | `read_prompt`, `read_history`, `summarize`, `fill_context` | **Go** | `go_script` |
 | `skill-date-workflow` | `date-calc` | **Python** | `python_script` |
@@ -73,12 +73,12 @@ extern "C" void node_create_task(const DataMap& inputs, DataMap& outputs);
 ### Go 节点（session-context-workflow）
 文件：`nodes/go/session_context/main.go`  
 节点名通过第一个 CLI 参数传入（`go run main.go <node_name>`）。  
-输入通过 `AF_<KEY>` 环境变量注入；输出以 JSON 对象写入 stdout（`json_output: true`）。
+输入通过 `AF_<KEY>` 环境变量注入；输出以 JSON 对象写入 stdout（`json_output: true`）。如需主动访问共享总线，可使用 `publish/sdk/go/agentflow_databus.go`。
 
 ### Python 节点（skill-date-workflow）
 文件：`nodes/python/skill_date_node.py`  
 实现了完整的中文日期 NLP 解析（本周/下周 + 第N周），无需外部依赖。  
-设置 `AF_OUTPUT_FORMAT=json` 时输出 `{"date_result": "...", "status": "ok"}`。
+设置 `AF_OUTPUT_FORMAT=json` 时输出 `{"date_result": "...", "status": "ok"}`。若接入统一 LLM 服务，可直接读取 `AF_LLM_BASE_URL / AF_LLM_API_KEY / AF_LLM_MODEL`。
 
 ### Java 节点（skill-delegate-workflow）
 文件：`nodes/java/SkillDelegateNode.java`  
@@ -94,6 +94,25 @@ bash examples/multi_session_chat/nodes/java/build.sh
 
 所有节点间的数据共享通过 **AgentFlow DataBus** 完成，用户请求通过 **agent msgque 消息队列**驱动，workflow 侧已切换到 typed node I/O + `value/ref` 传递模型。
 
+### 文件型 DataBus SDK
+
+- Shell：`publish/sdk/shell/agentflow_databus.sh`
+- Python：`publish/sdk/python/agentflow_databus.py`
+- Go：`publish/sdk/go/agentflow_databus.go`
+- Java：`publish/sdk/java/AgentFlowDataBus.java`
+- C++：`include/external/runtime/databus_sdk.h`
+
+worker 在执行脚本/外部进程节点时会自动准备 `AF_DATABUS_DIR` 目录：
+
+- `kv/*.kv`：最新键值快照（Set/Get）
+- `events/*.evt`：发布/订阅事件（Sub/Pub）
+
+统一流式推理走 DataBus 事件：
+
+1. 节点发布 `agentflow.llm.request`
+2. payload 是 JSON 字符串，至少包含 `request_id`、`prompt`、`channel`
+3. runtime 发布 `agentflow.llm.chunk.<id>`、`agentflow.llm.done.<id>`、`agentflow.llm.error.<id>`
+
 ### 请求流水线（ChatAgentBridge）
 
 ```
@@ -108,7 +127,7 @@ Phase 1: route_request_message(TASK_REQUEST)
     ↓
 Phase 2: 等待 dispatcher_done=1 出现在 DataBus
     ↓
-Phase 3: execute_workflow("default-coordinator-workflow")
+Phase 3: execute_workflow("session-coordinator-workflow")
          → collect → plan → apply
          → 等待 orchestration_plan 出现在 DataBus
     ↓
@@ -171,11 +190,11 @@ ChatAgentBridge 根据 `orchestration_plan` 中每条 `action="start"` 的记录
 
 ## LLM配置
 采用 OpenAI Chat Completions 兼容接口，环境变量：
-- `LLM_BASE_URL`
-- `LLM_API_KEY`
-- `LLM_MODEL`
+- `AF_LLM_BASE_URL`
+- `AF_LLM_API_KEY`
+- `AF_LLM_MODEL`
 
-默认无 `LLM_API_KEY` 时会返回 mock 文本，但仍走完整 agent+skills 流程。
+默认无 `AF_LLM_API_KEY` 时会返回 mock 文本，但仍走完整 agent+skills 流程。
 
 ---
 
@@ -209,7 +228,7 @@ bash examples/multi_session_chat/nodes/java/build.sh
 ### Linux 注意事项
 Linux 上 SO 库后缀为 `.so`，需将以下 workflow JSON 中的 `command` 字段路径从 `.dylib` 改为 `.so`：
 - `default_dispatcher_workflow.json`
-- `default_coordinator_workflow.json`
+- `session_coordinator_workflow.json`
 - `session_dispatcher_workflow.json`
 
 ---

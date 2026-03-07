@@ -62,10 +62,12 @@ class AgentPackage {
     std::map<std::string, std::string> task_workflows;
     std::string agent_context_workflow;
     std::string session_context_workflow;
-    std::string task_context_workflow;
-    std::string node_context_workflow;
-    int         precreate_session_count = 0;
-    int         session_pool_size = 0;
+     std::string task_context_workflow;
+     std::string node_context_workflow;
+     int         max_workflows = 10;
+     int         max_concurrent_workflows = 5;
+     int         precreate_session_count = 0;
+     int         session_pool_size = 0;
     bool        has_contextupdater = false;
     TaskDefinition               contextupdater_task;
     std::vector<SessionDefinition> sessions;

@@ -277,7 +277,6 @@ set(AGENTFLOW_AGENT_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/agent/dataref_bridge.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/coordinator.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/context.cpp
-    ${AGENTFLOW_SOURCE_DIR}/agent/event.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/package.cpp
 )
 
@@ -311,8 +310,10 @@ set(AGENTFLOW_RUNTIME_SOURCES
     ${AGENTFLOW_TEST_DIR}/unit/data/lib/performance_metrics.cpp
     # Databus (Communication)
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/databus.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/databus/file_databus_bridge.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/local_databus.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/remote_databus.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/llm/streaming_client.cpp
     # Event & Trace/Metrics
     ${AGENTFLOW_SOURCE_DIR}/runtime/trace/metrics.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/trace/trace_context.cpp
@@ -556,7 +557,6 @@ if(AGENTFLOW_BUILD_TESTS)
       ${AGENTFLOW_TEST_DIR}/unit/src/test_workflow_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_node_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_databus_gtest.cpp
-      ${AGENTFLOW_TEST_DIR}/unit/src/test_event_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_workflow_json_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_agent_json_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_local_channel_gtest.cpp

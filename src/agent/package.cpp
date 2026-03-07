@@ -204,8 +204,8 @@ bool parse_agent_sessions(const rapidjson::Document& agent_doc,
 }
 
 bool parse_top_level_tasks(const rapidjson::Document& agent_doc,
-                           AgentPackage::TaskDefinition& task_definition,
-                           bool& has_contextupdater) {
+                            AgentPackage::TaskDefinition& task_definition,
+                            bool& has_contextupdater) {
   has_contextupdater = false;
   if(agent_doc.HasMember("tasks")) {
     if(!agent_doc["tasks"].IsArray()) {
@@ -241,6 +241,31 @@ bool parse_top_level_tasks(const rapidjson::Document& agent_doc,
       return fail_agent_json_parse("contextupdater.type must be contextupdater");
     }
     has_contextupdater = true;
+  }
+  return true;
+}
+
+bool parse_agent_limits(const rapidjson::Document& agent_doc, AgentPackage::Config& config) {
+  config.max_workflows = 10;
+  if(agent_doc.HasMember("max_workflows")) {
+    if(!agent_doc["max_workflows"].IsInt()) {
+      return fail_agent_json_parse("max_workflows must be an integer");
+    }
+    config.max_workflows = agent_doc["max_workflows"].GetInt();
+    if(config.max_workflows < 1) {
+      return fail_agent_json_parse("max_workflows must be >= 1");
+    }
+  }
+
+  config.max_concurrent_workflows = 5;
+  if(agent_doc.HasMember("max_concurrent_workflows")) {
+    if(!agent_doc["max_concurrent_workflows"].IsInt()) {
+      return fail_agent_json_parse("max_concurrent_workflows must be an integer");
+    }
+    config.max_concurrent_workflows = agent_doc["max_concurrent_workflows"].GetInt();
+    if(config.max_concurrent_workflows < 1) {
+      return fail_agent_json_parse("max_concurrent_workflows must be >= 1");
+    }
   }
   return true;
 }
@@ -383,6 +408,9 @@ std::shared_ptr<AgentPackage> AgentPackage::load_from_directory(const std::strin
     }
 
     if(!parse_agent_sessions(agent_doc, config.sessions, config.session_pool_size)) {
+      return nullptr;
+    }
+    if(!parse_agent_limits(agent_doc, config)) {
       return nullptr;
     }
     if(!parse_top_level_tasks(agent_doc, config.contextupdater_task, config.has_contextupdater)) {

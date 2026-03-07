@@ -17,7 +17,7 @@
 - 包内 coordinator 固定映射：`package.json.coordinator_workflow` 可配置 task0 默认 workflow
 - 共享数据：`publish_data/get_data`
 - 包加载：`create_from_package`
-- 控制面协同：`msgque/event` 仅传 `data_ref`，payload 通过 MMDataBus 获取
+- 控制面协同：`msgque` 仅传 `data_ref`，payload 通过 MMDataBus 获取
 - **跨 session 查询**（2026-03-06 新增）：
   - `get_all_session_ids() -> std::vector<std::string>`：返回当前 agent 所有 session ID
   - `get_session_output(session_id, key, value) -> bool`：从 agent DataBus 读取指定 session 的输出值，key 格式为 `session:<session_id>:<key>`
@@ -40,7 +40,7 @@
 DSL 关键字段：
 - `nodes[]`：执行节点定义。
 - `edges[]`：依赖与控制流定义。
-- `edge.control.type`：`if/loop/fork/join/async/goto`。
+- `edge.control.type`：`if/switch-case`。
 - `includes[]`：引用外部 workflow 片段。
 - `node.type=workflow + workflow_ref`：嵌套 workflow。
 
@@ -60,13 +60,15 @@ DSL 关键字段：
 - `SO_LIBRARY`
 
 配置重点：
-- 输入输出：`input_params/output_params`（DSL 字段 `inputs`/`outputs`）
+- 输入输出：`input_params/output_params`（DSL 字段 `inputs`/`outputs`，字段类型支持 `string/int/float/bool/list/map`）
 - 执行入口：`command/function_name/main_class/args`
 - 可靠性：`timeout_ms/max_retries/retry_delay_ms`
 - 热更新：`enable_hot_reload/hot_reload_config`（默认生效，无需显式调用 `enable_code_reload`）
 - 嵌套 workflow 引用：`workflow_ref`（当 `type=workflow`）
 - **结构化输出**（2026-03-06 新增）：`json_output: true` — 脚本节点（Go/Python/Java）输出 JSON 时框架自动将每个键映射到 DataBus，无需文件中转
 - **节点运行时自动注册**（2026-03-06 新增）：`node_runtime` 对象 — 在 workflow `start_runtime()` 时自动启动指定执行器，在 `stop_runtime()` 时自动停止
+- **文件总线桥接**（2026-03-07 新增）：worker 执行脚本/二进制节点时会注入 `AF_DATABUS_DIR / AF_DATABUS_KV_DIR / AF_DATABUS_EVENTS_DIR`，多语言节点可通过 `publish/sdk/{shell,python,go,java}` 或 `include/external/runtime/databus_sdk.h` 访问 Set/Get/Sub/Pub
+- **统一 LLM 配置**（2026-03-07 新增）：worker 注入 `AF_LLM_BASE_URL / AF_LLM_API_KEY / AF_LLM_MODEL`，脚本节点可通过 DataBus 发布 `agentflow.llm.request` 请求流式推理
 
 SO 库节点开发约定（`execution_mode: so_library`）：
 ```cpp
@@ -87,7 +89,7 @@ MMNode 规范与模板：
 核心能力：
 - 数据映射：`source_outputs -> target_inputs`
 - 传输模式：`SHARED_MEMORY/MESSAGE_QUEUE/REMOTE_TRANSFER`
-- 控制流：`control.type` 及附加参数（如 `expression/goto_target/loop_id/fork_group/join_group/callback_node`）
+- 控制流：`control.type` 及附加参数（`expression` 或 `switch-case` 的 `variable/cases/default_target`）
 
 ---
 
@@ -137,6 +139,8 @@ MMNode 规范与模板：
 职责：
 - 通过 `MMWorkerEngine::execute_code` 统一执行节点多语言任务。
 - 通过 `check_and_reload_code/get_code_version/rollback_code_version` 统一处理热更新与回退。
+- 为外部节点准备文件型 DataBus 桥接目录，并向进程注入 `AF_DATABUS_*`。
+- 监听 `agentflow.llm.request` 事件，并通过 runtime 统一的流式 LLM 客户端把 chunk / done / error 重新发布回 DataBus。
 - 上报执行状态。
 - 配合 runtime 推进 workflow 状态机。
 
@@ -156,6 +160,7 @@ MMNode 规范与模板：
 实现组件：
 - `LocalDatabus`（本地共享）
 - `RemoteDatabus`（跨节点/远端，默认 Redis 适配）
+- `FileDataBusBridge`（面向 shell / Go / Java / Python / C++ 节点的共享目录桥接）
 - 统一封装类型：`MMDataBus`（兼容别名 `HighSpeedDataBus`）
 
 使用建议：
@@ -163,3 +168,4 @@ MMNode 规范与模板：
 - 对大对象优先使用可复用键并控制生命周期。
 - 在控制流条件读取与节点输出写入之间保持键语义一致。
 - 首条请求原始数据应先落本地缓存并生成 `data_ref`，再由 MMDataBus 自动同步远端服务。
+- 需要流式推理时，节点向 `agentflow.llm.request` 发布 JSON 字符串：`{"request_id":"...","prompt":"...","channel":"agentflow.llm.chunk.<id>"}`；runtime 会继续发布 `agentflow.llm.done.<id>` / `agentflow.llm.error.<id>`

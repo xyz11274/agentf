@@ -484,7 +484,7 @@ MMAgentRuntime::schedule_task()
 ### 问题4：DataBus与消息队列协同
 
 **现状：**
-- 文档要求msgque/event只携带DataRef，实际数据走DataBus
+- 文档要求 msgque 只携带 DataRef，实际数据走 DataBus
 - 需验证集成的完整性
 
 **建议：**

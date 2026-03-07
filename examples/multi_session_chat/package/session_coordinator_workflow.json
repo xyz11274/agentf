@@ -1,7 +1,7 @@
 {
-  "id": "default-coordinator-workflow",
+  "id": "session-coordinator-workflow",
   "version": "1.0",
-  "name": "default-coordinator-workflow",
+  "name": "session-coordinator-workflow",
   "nodes": [
     {
       "id": "collect",

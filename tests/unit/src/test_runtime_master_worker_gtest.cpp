@@ -11,6 +11,22 @@
 namespace agentflow {
 namespace tests {
 
+namespace {
+std::filesystem::path repo_root_path() {
+  auto root = std::filesystem::path(__FILE__);
+  for(int i = 0; i < 4; ++i) {
+    root = root.parent_path();
+  }
+  return std::filesystem::weakly_canonical(root);
+}
+
+std::filesystem::path unique_build_script_path(const std::string& stem) {
+  const auto suffix = std::to_string(
+      std::chrono::steady_clock::now().time_since_epoch().count());
+  return repo_root_path() / "build" / (stem + "_" + suffix + ".sh");
+}
+}  // namespace
+
 TEST(RuntimeMasterWorkerTest, DeployerRegisterHeartbeatAndDeployWorkflowInstance) {
   runtime::MMAgentRuntime runtime;
   runtime.set_role(runtime::MMAgentRuntime::RuntimeRole::MASTER);
@@ -80,7 +96,7 @@ TEST(RuntimeMasterWorkerTest, SchedulerPrefersSameAgentInstanceThenSharedInstanc
 
 TEST(RuntimeMasterWorkerTest, WorkerExecutesShellScriptViaEngine) {
   namespace fs = std::filesystem;
-  const fs::path script = fs::path("build/test_worker_shell.sh");
+  const fs::path script = unique_build_script_path("test_worker_shell");
   {
     std::ofstream ofs(script);
     ofs << "#!/bin/sh\n";
@@ -112,7 +128,7 @@ TEST(RuntimeMasterWorkerTest, WorkerExecutesShellScriptViaEngine) {
 
 TEST(RuntimeMasterWorkerTest, WorkerHotReloadAndRollback) {
   namespace fs = std::filesystem;
-  const fs::path script = fs::path("build/test_worker_hot_reload.sh");
+  const fs::path script = unique_build_script_path("test_worker_hot_reload");
   {
     std::ofstream ofs(script);
     ofs << "#!/bin/sh\n";
@@ -147,6 +163,49 @@ TEST(RuntimeMasterWorkerTest, WorkerHotReloadAndRollback) {
   ASSERT_NE(current, nullptr);
   EXPECT_EQ(current->version_id, version1->version_id);
   runtime::MMWorkerEngine::stop_hot_reload(script.string());
+  fs::remove(script);
+}
+
+TEST(RuntimeMasterWorkerTest, WorkerProvidesFileDatabusAndMockLlmStreaming) {
+  namespace fs = std::filesystem;
+  const fs::path script = unique_build_script_path("test_worker_llm_stream");
+  const fs::path sdk    = repo_root_path() / "publish" / "sdk" / "shell" / "agentflow_databus.sh";
+  {
+    std::ofstream ofs(script);
+    ofs << "#!/bin/sh\n";
+    ofs << ". '" << sdk.string() << "'\n";
+    ofs << "af_databus_set runtime.status ready\n";
+    ofs << "af_databus_request_llm req-1 'hello from runtime' 'agentflow.llm.chunk.req-1'\n";
+    ofs << "c1=\"$(af_databus_next_event sub-1 agentflow.llm.chunk.req-1 3000)\"\n";
+    ofs << "c2=\"$(af_databus_next_event sub-1 agentflow.llm.chunk.req-1 3000)\"\n";
+    ofs << "done_text=\"$(af_databus_next_event sub-1 agentflow.llm.done.req-1 3000)\"\n";
+    ofs << "printf '{\"reply\":\"%s %s\",\"done\":\"%s\"}\\n' \"$c1\" \"$c2\" \"$done_text\"\n";
+  }
+  fs::permissions(script, fs::perms::owner_exec | fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::add);
+
+  runtime::MMWorkerEngine::ExecutionRequest request;
+  request.mode                   = runtime::MMWorkerEngine::ExecutionMode::SHELL_SCRIPT;
+  request.command                = script.string();
+  request.keep_databus_files     = false;
+  request.llm_config.base_url    = "mock://stream";
+  request.llm_config.model       = "mock-model";
+  request.llm_config.timeout_ms  = 1000;
+  auto response = runtime::MMWorkerEngine::execute_code(request);
+  ASSERT_TRUE(response.success) << response.error_message;
+
+  ASSERT_TRUE(response.outputs.count("stdout") > 0);
+  const std::string output = std::visit(
+      [](const auto& v) -> std::string {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr(std::is_same_v<T, std::string>) {
+          return v;
+        }
+        return "";
+      },
+      response.outputs["stdout"]);
+  EXPECT_NE(output.find("hello from"), std::string::npos);
+  EXPECT_NE(output.find("hello from runtime"), std::string::npos);
   fs::remove(script);
 }
 

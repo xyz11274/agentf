@@ -173,9 +173,9 @@ bool MMAgentSession::dequeue_intent_request_message(MMAgentMsgQue::Message& mess
   return ok;
 }
 
-bool MMAgentSession::dequeue_output_result_message(MMAgentMsgQue::Message& message) {
+bool MMAgentSession::dequeue_data_exchange_message(MMAgentMsgQue::Message& message) {
   const bool ok =
-      receive_queue_.dequeue_message_by_type(MMAgentMsgQue::MessageQueueType::OUTPUT_RESULT, message);
+      receive_queue_.dequeue_message_by_type(MMAgentMsgQue::MessageQueueType::DATA_EXCHANGE, message);
   if(ok) {
     update_activity();
   }
