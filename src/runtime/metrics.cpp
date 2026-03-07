@@ -119,25 +119,50 @@ std::string MetricsCollector::export_json() const {
       ss << ",\n";
     first = false;
 
-    ss << "    {\n";
-    ss << "      \"name\": \"" << metric->get_name() << "\",\n";
-    ss << "      \"description\": \"" << metric->get_description() << "\",\n";
-
     std::string type_str;
     switch(metric->get_type()) {
-      case MetricType::COUNTER:
-        type_str = "counter";
-        break;
-      case MetricType::GAUGE:
-        type_str = "gauge";
-        break;
-      case MetricType::HISTOGRAM:
-        type_str = "histogram";
-        break;
+      case MetricType::COUNTER:   type_str = "counter";   break;
+      case MetricType::GAUGE:     type_str = "gauge";     break;
+      case MetricType::HISTOGRAM: type_str = "histogram"; break;
     }
-    ss << "      \"type\": \"" << type_str << "\",\n";
-    ss << "      \"value\": \"" << metric->to_string() << "\"\n";
-    ss << "    }";
+
+    ss << "    {\n";
+    ss << "      \"name\": \""        << metric->get_name()        << "\",\n";
+    ss << "      \"description\": \"" << metric->get_description() << "\",\n";
+    ss << "      \"type\": \""        << type_str                  << "\"";
+
+    // Labels
+    const auto& labels = metric->get_labels();
+    if(!labels.empty()) {
+      ss << ",\n      \"labels\": {";
+      bool fl = true;
+      for(const auto& lp : labels) {
+        if(!fl) ss << ", ";
+        ss << "\"" << lp.first << "\": \"" << lp.second << "\"";
+        fl = false;
+      }
+      ss << "}";
+    }
+
+    // Type-specific fields
+    if(metric->get_type() == MetricType::COUNTER) {
+      auto* c = static_cast<const CounterMetric*>(metric.get());
+      ss << ",\n      \"value\": " << c->get_value();
+    } else if(metric->get_type() == MetricType::GAUGE) {
+      auto* g = static_cast<const GaugeMetric*>(metric.get());
+      ss << ",\n      \"value\": " << g->get_value();
+    } else if(metric->get_type() == MetricType::HISTOGRAM) {
+      auto* h = static_cast<const HistogramMetric*>(metric.get());
+      ss << ",\n      \"count\": "   << h->get_count();
+      ss << ",\n      \"sum\": "     << h->get_sum();
+      ss << ",\n      \"avg\": "     << h->get_average();
+      ss << ",\n      \"p50\": "     << h->get_p50();
+      ss << ",\n      \"p90\": "     << h->get_p90();
+      ss << ",\n      \"p95\": "     << h->get_p95();
+      ss << ",\n      \"p99\": "     << h->get_p99();
+    }
+
+    ss << "\n    }";
   }
 
   ss << "\n  ]\n";

@@ -7,6 +7,8 @@
 #include <thread>
 
 #include "agent/task.h"
+#include "runtime/trace/trace_context.h"
+#include "runtime/trace/trace_manager.h"
 #include "utils/logger.h"
 
 namespace agentflow {
@@ -318,6 +320,16 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
   Logger::instance().info_f("Starting workflow execution: %s (execution_id: %s)",
                             workflow->get_name().c_str(), execution_id.c_str());
 
+  // Trace: open a WORKFLOW span (no-op if no active trace on this thread)
+  {
+    using namespace trace;
+    ScopedSpan wf_span(SpanKind::WORKFLOW, workflow_id,
+                       {{"agent_id", agent_id},
+                        {"workflow_name", workflow->get_name()},
+                        {"execution_id", execution_id}});
+    (void)wf_span;  // span closes immediately; node spans will be children
+  }
+
   // Initialize all nodes to READY state
   for(const auto& node : workflow->get_nodes()) {
     if(node->get_state() != NodeState::READY) {
@@ -375,6 +387,15 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
     }
   }
 
+  // Trace: open a NODE span (RAII — records to TraceManager on scope exit)
+  trace::ScopedSpan node_span(
+      trace::SpanKind::NODE,
+      node->get_name(),
+      {{"agent_id",    agent->get_id()},
+       {"workflow_id", workflow ? workflow->get_id() : ""},
+       {"node_id",     node->get_id()},
+       {"node_name",   node->get_name()}});
+
   // Execute node
   auto start_time       = std::chrono::steady_clock::now();
   bool execution_result = node->execute();
@@ -384,6 +405,8 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
 
   // [DEBUG] Log node processing result
   if(!execution_result) {
+    node_span.set_status(trace::SpanStatus::ERROR, "node execute() returned false");
+    node_span.add_event("node_failed", {{"duration_ms", std::to_string(duration)}});
     Logger::instance().error_f(
         "[PROCESS_NODE_FAILED] ThreadId=%zu, AgentId=%s, WorkflowId=%s, NodeId=%s, NodeName=%s, "
         "Duration=%ldms, RetryCount=%d",
@@ -391,6 +414,8 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
         workflow ? workflow->get_id().c_str() : "unknown", node->get_id().c_str(),
         node->get_name().c_str(), duration, node->get_retry_count());
   } else {
+    node_span.set_status(trace::SpanStatus::OK);
+    node_span.add_event("node_success", {{"duration_ms", std::to_string(duration)}});
     Logger::instance().info_f(
         "[PROCESS_NODE_SUCCESS] ThreadId=%zu, AgentId=%s, WorkflowId=%s, NodeId=%s, NodeName=%s, "
         "Duration=%ldms",

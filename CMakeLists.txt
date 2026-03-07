@@ -314,6 +314,10 @@ set(AGENTFLOW_RUNTIME_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/remote_databus.cpp
     # Event & Metrics
     ${AGENTFLOW_SOURCE_DIR}/runtime/metrics.cpp
+    # Trace system
+    ${AGENTFLOW_SOURCE_DIR}/runtime/trace/trace_context.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/trace/trace_manager.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/trace/trace_exporter.cpp
 )
 
 # Utils sources

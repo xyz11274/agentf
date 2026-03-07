@@ -21,6 +21,9 @@
 #include "agent/event.h"
 #include "agent/package.h"
 
+#include "runtime/trace/trace_manager.h"
+#include "runtime/trace/trace_context.h"
+
 #ifdef AGENTFLOW_WITH_RAPIDJSON
 #include <rapidjson/document.h>
 #include <rapidjson/prettywriter.h>
@@ -704,17 +707,47 @@ void MMAgent::handle_request_event(const MMAgentMsgQue::Message& message) {
     return;
   }
 
-  const auto user_it = received.metadata.find("user_id");
+  const auto user_it   = received.metadata.find("user_id");
   const auto client_it = received.metadata.find("client_id");
   if(user_it == received.metadata.end() || client_it == received.metadata.end()) {
     return;
   }
 
+  // Check if any TraceTask is interested in this request
+  runtime::trace::SamplingContext sampling_ctx;
+  sampling_ctx.agent_id   = get_id();
+  sampling_ctx.session_id = received.metadata.count("session_id")
+                                ? received.metadata.at("session_id")
+                                : "";
+  sampling_ctx.message_id = received.message_id;
+  sampling_ctx.user_id    = user_it->second;
+  sampling_ctx.client_id  = client_it->second;
+
+  std::string trace_task_id =
+      runtime::trace::TraceManager::instance().find_task(sampling_ctx);
+  std::string trace_id;
+  if(!trace_task_id.empty()) {
+    trace_id = runtime::trace::TraceManager::instance().begin_session(
+        trace_task_id, received.message_id, user_it->second, client_it->second,
+        sampling_ctx.session_id);
+    // begin_session already calls inject() on the current thread's TraceContext
+  }
+
   auto target_session = get_or_create_session(user_it->second, client_it->second);
   if(!target_session) {
+    if(!trace_id.empty()) {
+      runtime::trace::TraceContext::current().clear();
+      runtime::trace::TraceManager::instance().end_session(trace_id);
+    }
     return;
   }
   target_session->enqueue_received_message(received);
+
+  // Close session after routing
+  if(!trace_id.empty()) {
+    runtime::trace::TraceContext::current().clear();
+    runtime::trace::TraceManager::instance().end_session(trace_id);
+  }
 }
 
 storage::StorageResult MMAgent::save(const storage::StorageConfig& config,
