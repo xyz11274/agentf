@@ -2,7 +2,57 @@
 
 本文档说明了 AgentFlow 项目目录结构的优化工作。
 
-## 2026-03-07 multi_session_chat 消息驱动 + DataBus + 协调编排重构
+## 2026-03-07 examples 目录结构整理
+
+### 背景
+
+`examples/` 根目录下存在多个松散的 `.cpp/.h/.md` 文件，`examples/agent/` 下存在不属于任何 agent 示例的零散 workflow JSON 和空包目录，影响目录可读性。
+
+### 变更内容
+
+#### 1. 新建 `examples/features/` — 单点功能 C++ 示例归集
+
+将以下文件从 `examples/` 根目录移入 `examples/features/`：
+
+| 文件 | 用途 |
+|---|---|
+| `adapter_example.cpp` | Actor 适配器调用示例 |
+| `databus_example.cpp` | MMDataBus 读写/订阅示例 |
+| `metrics_example.cpp` | 指标采集导出示例 |
+| `storage_example.cpp` | 存储读写示例 |
+| `agent_runner.cpp` | Agent 包加载运行工具主体 |
+| `interactive_runner.cpp` / `interactive_runner.h` | 交互式运行器实现 |
+| `agent_runner_design.md` | Agent Runner 设计文档 |
+| `interactive_runner_demo.md` | 交互式运行器演示文档 |
+
+#### 2. 新建 `examples/agent/workflow_patterns/` — 零散 workflow JSON 归集
+
+将 `examples/agent/` 下的零散 workflow 模式文件归集到新 agent 示例目录：
+
+| 文件 | 原位置 |
+|---|---|
+| `conditional_workflow.json` | `examples/agent/conditional_workflow.json` |
+| `loop_workflow.json` | `examples/agent/loop_workflow.json` |
+| `sample_workflow.json` | `examples/agent/sample_workflow.json` |
+
+新增目录文件：`agent.json`（包含3个 workflow 的 agent 配置）、`package.json`（合并原 `sample_package/package.json` 内容）、`agentCard.md`。
+
+删除 `examples/agent/sample_package/`（原仅含孤立 package.json，内容已并入 workflow_patterns）。
+
+#### 3. CMakeLists.txt 更新
+
+`example_adapter`、`example_metrics`、`example_databus`、`example_storage`、`agent_runner` 的源文件路径从 `${AGENTFLOW_EXAMPLE_DIR}/` 更新为 `${AGENTFLOW_EXAMPLE_DIR}/features/`。
+
+### 测试兼容性
+
+E2E 测试引用的 `examples/agent/basic_agent` 和 `examples/agent/nested_workflow_agent` 路径**保持不变**，无需修改测试代码。
+
+### 验证结果
+
+- `./build.sh build`：通过
+- `ctest --test-dir build -R AgentFlowGoogleTests`：通过
+
+
 
 ### 背景
 

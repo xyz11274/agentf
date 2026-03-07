@@ -1,0 +1,10 @@
+{
+  "name": "WorkflowPatternsAgent",
+  "version": "1.0.0",
+  "description": "Agent demonstrating common workflow patterns: conditional branching, loop iteration, and sequential processing",
+  "workflows": [
+    "conditional_workflow.json",
+    "loop_workflow.json",
+    "sample_workflow.json"
+  ]
+}

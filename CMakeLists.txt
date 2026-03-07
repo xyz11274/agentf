@@ -427,25 +427,25 @@ endif()
 # Examples
 # ============================================================================
 # Adapter example
-add_executable(example_adapter ${AGENTFLOW_EXAMPLE_DIR}/adapter_example.cpp)
+add_executable(example_adapter ${AGENTFLOW_EXAMPLE_DIR}/features/adapter_example.cpp)
 target_link_libraries(example_adapter PRIVATE agentflow)
 
 # Metrics collector example
-add_executable(example_metrics ${AGENTFLOW_EXAMPLE_DIR}/metrics_example.cpp)
+add_executable(example_metrics ${AGENTFLOW_EXAMPLE_DIR}/features/metrics_example.cpp)
 target_link_libraries(example_metrics PRIVATE agentflow)
 
 # Databus example
-add_executable(example_databus ${AGENTFLOW_EXAMPLE_DIR}/databus_example.cpp)
+add_executable(example_databus ${AGENTFLOW_EXAMPLE_DIR}/features/databus_example.cpp)
 target_link_libraries(example_databus PRIVATE agentflow)
 
 # Storage example
-add_executable(example_storage ${AGENTFLOW_EXAMPLE_DIR}/storage_example.cpp)
+add_executable(example_storage ${AGENTFLOW_EXAMPLE_DIR}/features/storage_example.cpp)
 target_link_libraries(example_storage PRIVATE agentflow)
 
 # Agent Runner - Standalone executable for loading and executing Agent packages
 add_executable(agent_runner
-    ${AGENTFLOW_EXAMPLE_DIR}/agent_runner.cpp
-    ${AGENTFLOW_EXAMPLE_DIR}/interactive_runner.cpp
+    ${AGENTFLOW_EXAMPLE_DIR}/features/agent_runner.cpp
+    ${AGENTFLOW_EXAMPLE_DIR}/features/interactive_runner.cpp
 )
 target_link_libraries(agent_runner PRIVATE agentflow)
 

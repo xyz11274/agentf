@@ -1,0 +1,21 @@
+{
+  "name": "workflow-patterns-agent",
+  "version": "1.0.0",
+  "description": "Sample agent package demonstrating workflow patterns for AgentFlow",
+  "author": "AgentFlow Team",
+  "entry_point": "workflow_patterns_agent.so",
+  "dependencies": {
+    "core-lib": "1.0.0",
+    "utils-lib": "2.0.0"
+  },
+  "resources": [
+    "conditional_workflow.json",
+    "loop_workflow.json",
+    "sample_workflow.json"
+  ],
+  "metadata": {
+    "type": "workflow",
+    "category": "patterns",
+    "tags": ["conditional", "loop", "sample", "patterns", "example"]
+  }
+}
