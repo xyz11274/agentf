@@ -173,6 +173,33 @@ class WorkflowJsonTest : public ::testing::Test {
       {"id": "edge_c_a", "source": "node_c", "target": "node_a"}
     ]
   })";
+
+  const char* risk_level_workflow_json_ = R"({
+    "id": "workflow_risk_001",
+    "name": "Risk Workflow",
+    "version": "1.0.0",
+    "nodes": [
+      {
+        "id": "green_node",
+        "name": "Green Node",
+        "type": "TASK",
+        "execution_risk_level": "green"
+      },
+      {
+        "id": "red_node",
+        "name": "Red Node",
+        "type": "TASK",
+        "execution_risk_level": "red"
+      }
+    ],
+    "edges": [
+      {
+        "id": "risk_edge",
+        "source": "green_node",
+        "target": "red_node"
+      }
+    ]
+  })";
 };
 
 TEST_F(WorkflowJsonTest, ParseValidWorkflowWithTypedIo) {
@@ -224,6 +251,21 @@ TEST_F(WorkflowJsonTest, ParseSwitchCaseWorkflow) {
     EXPECT_EQ(edge->get_control_config().expression, "route");
   }
   EXPECT_TRUE(result.workflow->validate());
+}
+
+TEST_F(WorkflowJsonTest, ParseExecutionRiskLevelsAndWorkflowRedLight) {
+  auto result = parser_->parse_workflow(risk_level_workflow_json_);
+  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
+  ASSERT_NE(result.workflow, nullptr);
+
+  auto green_node = result.workflow->get_node("green_node");
+  auto red_node = result.workflow->get_node("red_node");
+  ASSERT_NE(green_node, nullptr);
+  ASSERT_NE(red_node, nullptr);
+  EXPECT_EQ(green_node->get_execution_risk_level(),
+            framework::MMNode::ExecutionRiskLevel::GREEN);
+  EXPECT_EQ(red_node->get_execution_risk_level(), framework::MMNode::ExecutionRiskLevel::RED);
+  EXPECT_TRUE(result.workflow->is_red_light());
 }
 
 TEST_F(WorkflowJsonTest, SwitchCaseSelectsMatchingAndDefaultBranches) {

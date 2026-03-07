@@ -1,12 +1,19 @@
 #ifndef AGENTFLOW_INTERNAL_AGENT_TASK_H
 #define AGENTFLOW_INTERNAL_AGENT_TASK_H
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
+
+#include "agent/msgque.h"
 
 namespace agentflow {
 namespace framework {
@@ -82,7 +89,37 @@ class MMAgentTask {
   int get_retry_count() const { return retry_count_; }
   int increment_retry_count();
 
+  using MessageHandler = std::function<void(const MMAgentMsgQue::Message&)>;
+
+  void configure_message_handlers(MessageHandler intent_handler, MessageHandler data_handler);
+  bool start_message_threads(MessageHandler intent_handler, MessageHandler data_handler);
+  void stop_message_threads();
+  bool are_message_threads_running() const { return message_threads_running_; }
+
+  bool enqueue_intent_request_message(const MMAgentMsgQue::Message& message);
+  bool enqueue_data_exchange_message(const MMAgentMsgQue::Message& message);
+  int  process_pending_messages_once();
+  int  get_intent_request_queue_size() const;
+  int  get_data_exchange_queue_size() const;
+
+  void register_dispatch_record(const MMAgentMsgQue::Message& message);
+  void acknowledge_dispatch_record(const std::string& message_id);
+
  private:
+  struct DispatchRecord {
+    MMAgentMsgQue::Message message;
+    int64_t                last_sent_time_ms = 0;
+    bool                   awaiting_response = false;
+    int                    resend_count = 0;
+  };
+
+  static int64_t now_ms();
+  void           intent_request_loop();
+  void           data_exchange_loop();
+  void           monitor_loop();
+  int            process_intent_request_queue_once();
+  int            process_data_exchange_queue_once();
+
   Config                             config_;
   TaskState                          state_ = TaskState::PENDING;
   int64_t                            created_time_ = 0;
@@ -92,6 +129,16 @@ class MMAgentTask {
   std::string                        result_;
   int                                retry_count_ = 0;
   std::map<std::string, std::string> parameters_;
+  std::deque<MMAgentMsgQue::Message> intent_request_messages_;
+  std::deque<MMAgentMsgQue::Message> data_exchange_messages_;
+  std::map<std::string, DispatchRecord> dispatch_records_;
+  MessageHandler                     intent_request_handler_;
+  MessageHandler                     data_exchange_handler_;
+  std::atomic<bool>                  message_threads_running_{false};
+  std::thread                        intent_request_thread_;
+  std::thread                        data_exchange_thread_;
+  std::thread                        monitor_thread_;
+  std::condition_variable            queue_cv_;
   mutable std::mutex                 mutex_;
 };
 

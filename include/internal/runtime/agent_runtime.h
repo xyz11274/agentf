@@ -44,7 +44,8 @@ public:
     int         worker_threads = 4;
     std::string local_worker_id = "runtime-local-worker";
     int         worker_default_workflow_threads = 1;
-    int         worker_event_threads = 1;
+    int         worker_control_threads = 1;
+    int         worker_business_threads = 1;
     size_t      worker_queue_size = 1024;
   };
 

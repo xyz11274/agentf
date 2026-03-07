@@ -35,7 +35,8 @@ MMAgentRuntime::MMAgentRuntime() {
       [this]() { return shared_state_ ? shared_state_->list_workflow_instances() : std::vector<WorkflowInstanceInfo>{}; });
   local_worker_ = std::make_shared<MMWorkerEngine>(
       MMWorkerEngine::Config{config_.local_worker_id, true, config_.worker_default_workflow_threads,
-                           config_.worker_event_threads, config_.worker_queue_size});
+                           config_.worker_control_threads, config_.worker_business_threads,
+                           config_.worker_queue_size});
   local_worker_->set_status(MMWorkerEngine::WorkerStatus::RUNNING);
 }
 
@@ -48,9 +49,10 @@ MMAgentRuntime::MMAgentRuntime(const Config& config) : config_(config), role_(co
       [this]() { return shared_state_ ? shared_state_->list_workflow_instances() : std::vector<WorkflowInstanceInfo>{}; });
   local_worker_ =
       std::make_shared<MMWorkerEngine>(MMWorkerEngine::Config{config.local_worker_id, true,
-                                                           config.worker_default_workflow_threads,
-                                                           config.worker_event_threads,
-                                                           config.worker_queue_size});
+                                                            config.worker_default_workflow_threads,
+                                                            config.worker_control_threads,
+                                                            config.worker_business_threads,
+                                                            config.worker_queue_size});
   local_worker_->set_status(MMWorkerEngine::WorkerStatus::RUNNING);
 }
 
@@ -782,7 +784,21 @@ void MMAgentRuntime::agent_task_poller_loop() {
             "[TASK_POLLER] Dispatching task=%s workflow=%s agent=%s",
             task->get_config().task_id.c_str(), workflow_id.c_str(),
             agent->get_id().c_str());
-        execute_workflow(agent->get_id(), workflow_id, inputs);
+        const bool scheduled = execute_workflow(agent->get_id(), workflow_id, inputs);
+        framework::MMAgentMsgQue::Message response;
+        std::string response_message_id;
+        if(!task->get_parameter("message_id", response_message_id) || response_message_id.empty()) {
+          response_message_id = task->get_config().task_id;
+        }
+        response.message_id = response_message_id;
+        response.type = framework::MMAgentMsgQue::MessageType::TASK_RESPONSE;
+        response.sender_id = "runtime-worker";
+        response.receiver_id = task->get_config().task_id;
+        response.metadata["task_type"] = task->get_task_type();
+        response.metadata["workflow_id"] = workflow_id;
+        response.metadata["message_type"] = "data_exchange";
+        response.content = scheduled ? "workflow_scheduled" : "workflow_schedule_failed";
+        task->enqueue_data_exchange_message(response);
       }
     }
   }

@@ -101,6 +101,18 @@ const char* node_transfer_mode_to_string(MMNode::TransferMode mode) {
   }
 }
 
+const char* node_execution_risk_level_to_string(MMNode::ExecutionRiskLevel level) {
+  switch(level) {
+    case MMNode::ExecutionRiskLevel::RED:
+      return "red";
+    case MMNode::ExecutionRiskLevel::YELLOW:
+      return "yellow";
+    case MMNode::ExecutionRiskLevel::GREEN:
+    default:
+      return "green";
+  }
+}
+
 MMNode::TransferMode node_transfer_mode_from_string(const std::string& mode) {
   if(mode == "ref") {
     return MMNode::TransferMode::REFERENCE;
@@ -242,6 +254,10 @@ std::string workflow_config_to_json(const MMWorkflow::Config&                   
     node_obj.AddMember("memory_limit_mb", node_cfg.memory_limit_mb, allocator);
     node_obj.AddMember("cpu_limit", node_cfg.cpu_limit, allocator);
     node_obj.AddMember("enable_hot_reload", node_cfg.enable_hot_reload, allocator);
+    node_obj.AddMember("execution_risk_level",
+                       rapidjson::StringRef(
+                           node_execution_risk_level_to_string(node_cfg.execution_risk_level)),
+                       allocator);
 
     // Input parameters
     rapidjson::Value inputs_array(rapidjson::kArrayType);
@@ -637,13 +653,10 @@ bool MMWorkflow::start_runtime(const RuntimeConfig& config) {
   runtime_config_ = config;
   message_worker_pool_ = std::make_unique<basic::ThreadPool>(
       static_cast<size_t>(std::max(1, runtime_config_.message_threads)));
-  event_worker_pool_ = std::make_unique<basic::ThreadPool>(
-      static_cast<size_t>(std::max(1, runtime_config_.event_threads)));
   node_executor_pool_ = std::make_unique<basic::ThreadPool>(
       static_cast<size_t>(std::max(1, runtime_config_.node_executor_threads)));
 
   message_thread_ = std::thread(&MMWorkflow::message_dispatch_loop, this);
-  event_thread_   = std::thread(&MMWorkflow::event_dispatch_loop, this);
 
   // Auto-start per-node runtime loops for nodes that declare node_runtime config.
   for(auto& node : nodes_) {
@@ -669,13 +682,9 @@ void MMWorkflow::stop_runtime() {
   }
 
   message_cv_.notify_all();
-  event_cv_.notify_all();
 
   if(message_thread_.joinable()) {
     message_thread_.join();
-  }
-  if(event_thread_.joinable()) {
-    event_thread_.join();
   }
 
   {
@@ -683,15 +692,7 @@ void MMWorkflow::stop_runtime() {
     high_priority_messages_.clear();
     normal_priority_messages_.clear();
   }
-  {
-    std::lock_guard<std::mutex> lock(event_queue_mutex_);
-    while(!event_queue_.empty()) {
-      event_queue_.pop();
-    }
-  }
-
   message_worker_pool_.reset();
-  event_worker_pool_.reset();
   node_executor_pool_.reset();
 }
 
@@ -712,18 +713,13 @@ bool MMWorkflow::enqueue_message(const Message& message) {
 }
 
 bool MMWorkflow::enqueue_event(const WorkflowEvent& event) {
-  std::lock_guard<std::mutex> lock(event_queue_mutex_);
-  if(event_queue_.size() >= runtime_config_.max_queue_size) {
-    return false;
-  }
-  event_queue_.push(event);
-  event_cv_.notify_all();
+  (void)event;
   return true;
 }
 
 void MMWorkflow::register_event_handler(const std::string& event_type, WorkflowEventHandler handler) {
-  std::lock_guard<std::mutex> lock(event_handler_mutex_);
-  event_handlers_[event_type].push_back(std::move(handler));
+  (void)event_type;
+  (void)handler;
 }
 
 void MMWorkflow::message_dispatch_loop() {
@@ -759,35 +755,7 @@ void MMWorkflow::message_dispatch_loop() {
 }
 
 void MMWorkflow::event_dispatch_loop() {
-  while(runtime_running_) {
-    WorkflowEvent event;
-    {
-      std::unique_lock<std::mutex> lock(event_queue_mutex_);
-      event_cv_.wait(lock, [this]() { return !event_queue_.empty() || !runtime_running_; });
-      if(!runtime_running_) {
-        break;
-      }
-      event = event_queue_.front();
-      event_queue_.pop();
-    }
-
-    std::vector<WorkflowEventHandler> handlers;
-    {
-      std::lock_guard<std::mutex> lock(event_handler_mutex_);
-      auto                        it = event_handlers_.find(event.type);
-      if(it != event_handlers_.end()) {
-        handlers = it->second;
-      }
-    }
-
-    for(const auto& handler : handlers) {
-      if(event_worker_pool_) {
-        event_worker_pool_->submit([handler, event]() { handler(event); });
-      } else {
-        handler(event);
-      }
-    }
-  }
+  // Workflow event dispatch has been retired in favor of worker control/business queues.
 }
 
 std::vector<std::string> MMWorkflow::get_start_nodes() const {

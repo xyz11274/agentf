@@ -136,11 +136,8 @@ bool MMNode::start_runtime(const RuntimeConfig& config) {
   runtime_config_ = config;
   executor_pool_  = std::make_unique<basic::ThreadPool>(
       static_cast<size_t>(std::max(1, runtime_config_.executor_threads)));
-  event_pool_ = std::make_unique<basic::ThreadPool>(
-      static_cast<size_t>(std::max(1, runtime_config_.event_threads)));
 
   message_thread_ = std::thread(&MMNode::message_dispatch_loop, this);
-  event_thread_   = std::thread(&MMNode::event_dispatch_loop, this);
   return true;
 }
 
@@ -151,26 +148,18 @@ void MMNode::stop_runtime() {
   }
 
   message_cv_.notify_all();
-  event_cv_.notify_all();
 
   if(message_thread_.joinable()) {
     message_thread_.join();
-  }
-  if(event_thread_.joinable()) {
-    event_thread_.join();
   }
 
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     high_priority_messages_.clear();
     normal_priority_messages_.clear();
-    while(!event_queue_.empty()) {
-      event_queue_.pop();
-    }
   }
 
   executor_pool_.reset();
-  event_pool_.reset();
 }
 
 bool MMNode::enqueue_message(const Message& message) {
@@ -190,18 +179,13 @@ bool MMNode::enqueue_message(const Message& message) {
 }
 
 bool MMNode::enqueue_event(const NodeEvent& event) {
-  std::lock_guard<std::mutex> lock(queue_mutex_);
-  if(event_queue_.size() >= runtime_config_.max_queue_size) {
-    return false;
-  }
-  event_queue_.push(event);
-  event_cv_.notify_all();
+  (void)event;
   return true;
 }
 
 void MMNode::register_event_handler(const std::string& event_type, NodeEventHandler handler) {
-  std::lock_guard<std::mutex> lock(event_handler_mutex_);
-  event_handlers_[event_type].push_back(std::move(handler));
+  (void)event_type;
+  (void)handler;
 }
 
 void MMNode::bind_context_workflow(const std::string& workflow_file) {
@@ -241,36 +225,7 @@ void MMNode::message_dispatch_loop() {
 }
 
 void MMNode::event_dispatch_loop() {
-  while(runtime_running_) {
-    NodeEvent event;
-    {
-      std::unique_lock<std::mutex> lock(queue_mutex_);
-      event_cv_.wait(lock, [this]() { return !event_queue_.empty() || !runtime_running_; });
-      if(!runtime_running_) {
-        break;
-      }
-
-      event = event_queue_.front();
-      event_queue_.pop();
-    }
-
-    std::vector<NodeEventHandler> handlers;
-    {
-      std::lock_guard<std::mutex> lock(event_handler_mutex_);
-      auto                        it = event_handlers_.find(event.type);
-      if(it != event_handlers_.end()) {
-        handlers = it->second;
-      }
-    }
-
-    for(const auto& handler : handlers) {
-      if(event_pool_) {
-        event_pool_->submit([handler, event]() { handler(event); });
-      } else {
-        handler(event);
-      }
-    }
-  }
+  // Node event dispatch has been retired in favor of worker control/business queues.
 }
 
 void MMNode::process_message(const Message& message) {

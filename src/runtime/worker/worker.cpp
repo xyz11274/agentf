@@ -360,9 +360,11 @@ bool MMWorkerEngine::start() {
   }
 
   set_status(WorkerStatus::RUNNING);
-  const int event_threads = std::max(1, config_.event_threads);
-  event_pool_             = std::make_unique<basic::ThreadPool>(static_cast<size_t>(event_threads));
-  event_monitor_thread_   = std::thread(&MMWorkerEngine::event_monitor_loop, this);
+  const int control_threads = std::max(1, config_.control_threads);
+  control_pool_             =
+      std::make_unique<basic::ThreadPool>(static_cast<size_t>(control_threads));
+  control_thread_ = std::thread(&MMWorkerEngine::control_message_loop, this);
+  business_thread_ = std::thread(&MMWorkerEngine::business_message_loop, this);
   return true;
 }
 
@@ -373,90 +375,78 @@ void MMWorkerEngine::stop() {
   }
 
   queue_cv_.notify_all();
-  if(event_monitor_thread_.joinable()) {
-    event_monitor_thread_.join();
+  if(control_thread_.joinable()) {
+    control_thread_.join();
+  }
+  if(business_thread_.joinable()) {
+    business_thread_.join();
   }
 
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
-    while(!event_queue_.empty()) {
-      event_queue_.pop();
-    }
-    workflow_registrations_ = std::queue<WorkflowRegistration>();
-    high_priority_tasks_.clear();
-    normal_priority_tasks_.clear();
+    control_messages_.clear();
+    business_messages_.clear();
   }
 
   workflow_pools_.clear();
-  event_pool_.reset();
+  control_pool_.reset();
   set_status(WorkerStatus::STOPPED);
 }
 
 bool MMWorkerEngine::enqueue_task(const TaskItem& task) {
+  BusinessMessage message;
+  message.task = task;
+  message.created_at_ms = now_ms();
+  return enqueue_business_message(message);
+}
+
+bool MMWorkerEngine::enqueue_business_message(const BusinessMessage& message) {
   std::lock_guard<std::mutex> lock(queue_mutex_);
-  const size_t queued_tasks = high_priority_tasks_.size() + normal_priority_tasks_.size();
+  const size_t queued_tasks = business_messages_.size();
   if(queued_tasks >= config_.max_queue_size) {
     return false;
   }
-
-  if(task.priority == TaskPriority::HIGH) {
-    high_priority_tasks_.push_back(task);
+  if(message.task.priority == TaskPriority::HIGH) {
+    business_messages_.push_front(message);
   } else {
-    normal_priority_tasks_.push_back(task);
+    business_messages_.push_back(message);
   }
-
-  WorkerEvent event;
-  event.type          = "task_arrived";
-  event.created_at_ms = now_ms();
-  event.data["task_id"] = task.task_id;
-  event.data["workflow_id"] = task.workflow_id;
-  event_queue_.push(event);
   queue_cv_.notify_all();
   return true;
 }
 
 bool MMWorkerEngine::register_workflow_instance(const WorkflowRegistration& registration) {
-  std::lock_guard<std::mutex> lock(queue_mutex_);
-  if(workflow_registrations_.size() >= config_.max_queue_size) {
-    return false;
-  }
-
-  workflow_registrations_.push(registration);
-  WorkerEvent event;
-  event.type                           = "workflow_registered";
-  event.created_at_ms                  = now_ms();
-  event.data["workflow_id"]            = registration.workflow_id;
-  event.data["workflow_instance_id"]   = registration.workflow_instance_id;
-  event.data["thread_count"]           = std::to_string(registration.thread_count);
-  event_queue_.push(event);
-  queue_cv_.notify_all();
-  return true;
+  ControlMessage message;
+  message.type = "workflow_registered";
+  message.created_at_ms = now_ms();
+  message.data["workflow_id"] = registration.workflow_id;
+  message.data["workflow_instance_id"] = registration.workflow_instance_id;
+  message.data["thread_count"] = std::to_string(registration.thread_count);
+  return enqueue_control_message(message);
 }
 
 bool MMWorkerEngine::unregister_workflow_instance(const std::string& workflow_instance_id) {
-  std::lock_guard<std::mutex> lock(queue_mutex_);
-  WorkerEvent event;
-  event.type                         = "workflow_unregistered";
-  event.created_at_ms                = now_ms();
-  event.data["workflow_instance_id"] = workflow_instance_id;
-  event_queue_.push(event);
-  queue_cv_.notify_all();
-  return true;
+  ControlMessage message;
+  message.type = "workflow_unregistered";
+  message.created_at_ms = now_ms();
+  message.data["workflow_instance_id"] = workflow_instance_id;
+  return enqueue_control_message(message);
 }
 
-bool MMWorkerEngine::enqueue_event(const WorkerEvent& event) {
+bool MMWorkerEngine::enqueue_control_message(const ControlMessage& message) {
   std::lock_guard<std::mutex> lock(queue_mutex_);
-  if(event_queue_.size() >= config_.max_queue_size) {
+  if(control_messages_.size() >= config_.max_queue_size) {
     return false;
   }
-  event_queue_.push(event);
+  control_messages_.push_back(message);
   queue_cv_.notify_all();
   return true;
 }
 
-void MMWorkerEngine::register_event_handler(const std::string& event_type, WorkerEventHandler handler) {
+void MMWorkerEngine::register_control_handler(const std::string& event_type,
+                                              WorkerControlHandler handler) {
   std::lock_guard<std::mutex> lock(handler_mutex_);
-  event_handlers_[event_type].push_back(std::move(handler));
+  control_handlers_[event_type].push_back(std::move(handler));
 }
 
 std::string MMWorkerEngine::workflow_pool_key(const TaskItem& task) const {
@@ -475,48 +465,40 @@ void MMWorkerEngine::ensure_workflow_pool(const std::string& pool_key, int threa
   }
 }
 
-void MMWorkerEngine::handle_internal_event(const WorkerEvent& event) {
-  if(event.type == "task_arrived") {
-    process_task_queues();
-    return;
-  }
-
-  if(event.type == "workflow_registered") {
-    const std::string& workflow_id = event.data.count("workflow_instance_id") > 0
-                                         ? event.data.at("workflow_instance_id")
-                                         : event.data.at("workflow_id");
+void MMWorkerEngine::handle_control_message(const ControlMessage& message) {
+  if(message.type == "workflow_registered") {
+    const std::string& workflow_id = message.data.count("workflow_instance_id") > 0
+                                         ? message.data.at("workflow_instance_id")
+                                         : message.data.at("workflow_id");
     int thread_count = config_.default_workflow_threads;
-    auto thread_it = event.data.find("thread_count");
-    if(thread_it != event.data.end()) {
+    auto thread_it = message.data.find("thread_count");
+    if(thread_it != message.data.end()) {
       thread_count = std::stoi(thread_it->second);
     }
     ensure_workflow_pool(workflow_id, thread_count);
     return;
   }
 
-  if(event.type == "workflow_unregistered") {
-    auto it = event.data.find("workflow_instance_id");
-    if(it != event.data.end()) {
+  if(message.type == "workflow_unregistered") {
+    auto it = message.data.find("workflow_instance_id");
+    if(it != message.data.end()) {
       workflow_pools_.erase(it->second);
     }
   }
 }
 
-void MMWorkerEngine::process_task_queues() {
-  std::vector<TaskItem> tasks_to_run;
+void MMWorkerEngine::process_business_messages() {
+  std::vector<BusinessMessage> messages_to_run;
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
-    while(!high_priority_tasks_.empty()) {
-      tasks_to_run.push_back(high_priority_tasks_.front());
-      high_priority_tasks_.pop_front();
-    }
-    while(!normal_priority_tasks_.empty()) {
-      tasks_to_run.push_back(normal_priority_tasks_.front());
-      normal_priority_tasks_.pop_front();
+    while(!business_messages_.empty()) {
+      messages_to_run.push_back(business_messages_.front());
+      business_messages_.pop_front();
     }
   }
 
-  for(const auto& task : tasks_to_run) {
+  for(const auto& message : messages_to_run) {
+    const auto& task = message.task;
     const std::string key = workflow_pool_key(task);
     if(key.empty()) {
       continue;
@@ -540,37 +522,50 @@ void MMWorkerEngine::process_task_queues() {
   }
 }
 
-void MMWorkerEngine::event_monitor_loop() {
+void MMWorkerEngine::control_message_loop() {
   while(running_) {
-    WorkerEvent event;
+    ControlMessage message;
     {
       std::unique_lock<std::mutex> lock(queue_mutex_);
-      queue_cv_.wait(lock, [this]() { return !event_queue_.empty() || !running_; });
+      queue_cv_.wait(lock, [this]() { return !control_messages_.empty() || !running_; });
       if(!running_) {
         break;
       }
-      event = event_queue_.front();
-      event_queue_.pop();
+      message = control_messages_.front();
+      control_messages_.pop_front();
     }
 
-    handle_internal_event(event);
+    handle_control_message(message);
 
-    std::vector<WorkerEventHandler> handlers;
+    std::vector<WorkerControlHandler> handlers;
     {
       std::lock_guard<std::mutex> lock(handler_mutex_);
-      auto                        it = event_handlers_.find(event.type);
-      if(it != event_handlers_.end()) {
+      auto                        it = control_handlers_.find(message.type);
+      if(it != control_handlers_.end()) {
         handlers = it->second;
       }
     }
 
     for(const auto& handler : handlers) {
-      if(event_pool_) {
-        event_pool_->submit([handler, event]() { handler(event); });
+      if(control_pool_) {
+        control_pool_->submit([handler, message]() { handler(message); });
       } else {
-        handler(event);
+        handler(message);
       }
     }
+  }
+}
+
+void MMWorkerEngine::business_message_loop() {
+  while(running_) {
+    {
+      std::unique_lock<std::mutex> lock(queue_mutex_);
+      queue_cv_.wait(lock, [this]() { return !business_messages_.empty() || !running_; });
+      if(!running_) {
+        break;
+      }
+    }
+    process_business_messages();
   }
 }
 

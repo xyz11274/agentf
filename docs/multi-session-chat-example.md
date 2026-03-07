@@ -15,9 +15,9 @@
 
 2. **多轮对话包 + 同质化 session 池 + 顶层 contextupdater**
    - `agent.json` 设置 `session_pool_size: 5`，并只保留 1 份同质化 session 模板
-   - 顶层 `tasks[0]` 使用 `contextupdater`，绑定 `session-context-workflow`
-   - 每个 pooled session 都包含 `session-dispatcher-workflow`、`session-coordinator-workflow` 与 4 个 skill workflow
-   - `session-coordinator-workflow`（C++ SO 节点）负责跨 session 编排
+   - 顶层 `tasks[0]` 使用 `contextupdater`，绑定 `session_context_workflow.json`
+   - 每个 pooled session 固定包含 1 个 dispatcher、1 个 coordinator 与 4 个 skill 定义；每个 skill 默认展开 2 个任务池实例
+   - dispatcher / coordinator 都通过 task 级双队列（`intent_request` / `data_exchange`）与 runtime worker 协作
 
 3. **session_context_workflow**
     `session-context-workflow` 节点链路（**Go 实现**）：  
@@ -90,9 +90,9 @@ bash examples/multi_session_chat/nodes/java/build.sh
 
 ---
 
-## 消息/事件驱动与 DataBus 集成
+## 消息流与 DataBus 集成
 
-所有节点间的数据共享通过 **AgentFlow DataBus** 完成，用户请求通过 **agent msgque 消息队列**驱动，workflow 侧已切换到 typed node I/O + `value/ref` 传递模型。
+所有节点间的数据共享通过 **AgentFlow DataBus** 完成，用户请求通过 **SessionRouter + task 双队列** 驱动，workflow 侧已切换到 typed node I/O + `value/ref` 传递模型。
 
 ### 文件型 DataBus SDK
 
@@ -118,24 +118,20 @@ worker 在执行脚本/外部进程节点时会自动准备 `AF_DATABUS_DIR` 目
 ```
 用户请求
     ↓
-Phase 1: route_request_message(TASK_REQUEST)
-         process_all_sessions_until_idle()
-         → generated_tasks_ 入队
+Phase 1: SessionRouter 按 user_id + client_id 匹配/分配 pooled session
+         → 请求进入 dispatcher task.intent_request
     ↓
-后台任务轮询线程消费生成任务
-         → 根据 task/workflow 映射执行 dispatcher 或 skill workflow
+Phase 2: dispatcher workflow 在 worker 侧执行
+         → skills 选择结果通过 dispatcher task.data_exchange 回流
     ↓
-Phase 2: 等待 dispatcher_done=1 出现在 DataBus
+Phase 3: dispatcher 将 selected_skills + session context 附加信息
+         转发到 coordinator task.intent_request
     ↓
-Phase 3: execute_workflow("session-coordinator-workflow")
-         → collect → plan → apply
-         → 等待 orchestration_plan 出现在 DataBus
+Phase 4: coordinator 依据 workflow 红/黄/绿等级决定可直接启动的 skill
+         → 启动的 skill workflow 在 worker 侧执行
     ↓
-Phase 4: 遍历 orchestration_plan，对 action="start" 的任务
-         串行执行对应技能工作流
-    ↓
-Phase 5: 聚合所有 session:<sid>:skill_result
-         → 返回最终响应
+Phase 5: 各 skill 结果通过 coordinator task.data_exchange 汇总
+         → coordinator workflow 重新编排并生成最终响应
 ```
 
 ### DataBus 键约定

@@ -1,6 +1,7 @@
 #include "agent/task.h"
 
 #include <sys/time.h>
+#include <chrono>
 
 namespace agentflow {
 namespace framework {
@@ -18,8 +19,12 @@ MMAgentTask::MMAgentTask(const Config& config) : config_(config), state_(TaskSta
 }
 
 MMAgentTask::~MMAgentTask() {
+  stop_message_threads();
   std::lock_guard<std::mutex> lock(mutex_);
   parameters_.clear();
+  intent_request_messages_.clear();
+  data_exchange_messages_.clear();
+  dispatch_records_.clear();
 }
 
 bool MMAgentTask::start() {
@@ -109,6 +114,196 @@ void MMAgentTask::set_result(const std::string& result) {
 int MMAgentTask::increment_retry_count() {
   std::lock_guard<std::mutex> lock(mutex_);
   return ++retry_count_;
+}
+
+int64_t MMAgentTask::now_ms() {
+  return get_current_time_ms();
+}
+
+bool MMAgentTask::start_message_threads(MessageHandler intent_handler, MessageHandler data_handler) {
+  bool expected = false;
+  if(!message_threads_running_.compare_exchange_strong(expected, true)) {
+    return false;
+  }
+  configure_message_handlers(std::move(intent_handler), std::move(data_handler));
+  intent_request_thread_ = std::thread(&MMAgentTask::intent_request_loop, this);
+  data_exchange_thread_ = std::thread(&MMAgentTask::data_exchange_loop, this);
+  monitor_thread_ = std::thread(&MMAgentTask::monitor_loop, this);
+  return true;
+}
+
+void MMAgentTask::configure_message_handlers(MessageHandler intent_handler,
+                                             MessageHandler data_handler) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    intent_request_handler_ = std::move(intent_handler);
+    data_exchange_handler_ = std::move(data_handler);
+  }
+}
+
+void MMAgentTask::stop_message_threads() {
+  bool expected = true;
+  if(!message_threads_running_.compare_exchange_strong(expected, false)) {
+    return;
+  }
+  queue_cv_.notify_all();
+  if(intent_request_thread_.joinable()) {
+    intent_request_thread_.join();
+  }
+  if(data_exchange_thread_.joinable()) {
+    data_exchange_thread_.join();
+  }
+  if(monitor_thread_.joinable()) {
+    monitor_thread_.join();
+  }
+}
+
+bool MMAgentTask::enqueue_intent_request_message(const MMAgentMsgQue::Message& message) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    intent_request_messages_.push_back(message);
+  }
+  queue_cv_.notify_all();
+  return true;
+}
+
+bool MMAgentTask::enqueue_data_exchange_message(const MMAgentMsgQue::Message& message) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    data_exchange_messages_.push_back(message);
+    if(!message.message_id.empty()) {
+      dispatch_records_.erase(message.message_id);
+    }
+  }
+  queue_cv_.notify_all();
+  return true;
+}
+
+int MMAgentTask::get_intent_request_queue_size() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return static_cast<int>(intent_request_messages_.size());
+}
+
+int MMAgentTask::get_data_exchange_queue_size() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return static_cast<int>(data_exchange_messages_.size());
+}
+
+void MMAgentTask::register_dispatch_record(const MMAgentMsgQue::Message& message) {
+  if(message.message_id.empty()) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  DispatchRecord& record = dispatch_records_[message.message_id];
+  record.message = message;
+  record.last_sent_time_ms = now_ms();
+  record.awaiting_response = true;
+}
+
+void MMAgentTask::acknowledge_dispatch_record(const std::string& message_id) {
+  if(message_id.empty()) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  dispatch_records_.erase(message_id);
+}
+
+int MMAgentTask::process_intent_request_queue_once() {
+  MMAgentMsgQue::Message message;
+  MessageHandler handler;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if(intent_request_messages_.empty()) {
+      return 0;
+    }
+    message = intent_request_messages_.front();
+    intent_request_messages_.pop_front();
+    handler = intent_request_handler_;
+  }
+  if(handler) {
+    handler(message);
+  }
+  return 1;
+}
+
+int MMAgentTask::process_data_exchange_queue_once() {
+  MMAgentMsgQue::Message message;
+  MessageHandler handler;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if(data_exchange_messages_.empty()) {
+      return 0;
+    }
+    message = data_exchange_messages_.front();
+    data_exchange_messages_.pop_front();
+    handler = data_exchange_handler_;
+  }
+  if(handler) {
+    handler(message);
+  }
+  return 1;
+}
+
+int MMAgentTask::process_pending_messages_once() {
+  return process_intent_request_queue_once() + process_data_exchange_queue_once();
+}
+
+void MMAgentTask::intent_request_loop() {
+  while(message_threads_running_) {
+    if(process_intent_request_queue_once() == 0) {
+      std::unique_lock<std::mutex> lock(mutex_);
+      queue_cv_.wait_for(lock, std::chrono::milliseconds(20), [this]() {
+        return !message_threads_running_ || !intent_request_messages_.empty();
+      });
+    }
+  }
+}
+
+void MMAgentTask::data_exchange_loop() {
+  while(message_threads_running_) {
+    if(process_data_exchange_queue_once() == 0) {
+      std::unique_lock<std::mutex> lock(mutex_);
+      queue_cv_.wait_for(lock, std::chrono::milliseconds(20), [this]() {
+        return !message_threads_running_ || !data_exchange_messages_.empty();
+      });
+    }
+  }
+}
+
+void MMAgentTask::monitor_loop() {
+  constexpr int64_t kResendIntervalMs = 500;
+  while(message_threads_running_) {
+    std::vector<MMAgentMsgQue::Message> retries;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const int64_t current = now_ms();
+      for(auto& [message_id, record] : dispatch_records_) {
+        if(!record.awaiting_response) {
+          continue;
+        }
+        if((current - record.last_sent_time_ms) < kResendIntervalMs) {
+          continue;
+        }
+        if(record.resend_count >= config_.max_retries) {
+          continue;
+        }
+        record.last_sent_time_ms = current;
+        ++record.resend_count;
+        retries.push_back(record.message);
+      }
+    }
+    for(const auto& retry_message : retries) {
+      MessageHandler handler;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        handler = intent_request_handler_;
+      }
+      if(handler) {
+        handler(retry_message);
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
 }
 
 }  // namespace framework

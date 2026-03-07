@@ -48,6 +48,16 @@ framework::MMNode::TransferMode parse_node_transfer_mode(const std::string& mode
   }
   return framework::MMNode::TransferMode::VALUE;
 }
+
+framework::MMNode::ExecutionRiskLevel parse_node_execution_risk_level(const std::string& value) {
+  if(value == "red") {
+    return framework::MMNode::ExecutionRiskLevel::RED;
+  }
+  if(value == "yellow") {
+    return framework::MMNode::ExecutionRiskLevel::YELLOW;
+  }
+  return framework::MMNode::ExecutionRiskLevel::GREEN;
+}
 }  // namespace
 
 // ============================================================================
@@ -291,6 +301,9 @@ bool WorkflowParser::parse_workflow_root(std::shared_ptr<const IJsonValue> root,
   config.version     = JsonHelper::get_string(root, "version", "1.0");
   config.description = JsonHelper::get_string(root, "description", "");
   config.dsl_file    = JsonHelper::get_string(root, "dsl_file", "");
+  if(config.dsl_file.empty() && !current_workflow_file_.empty()) {
+    config.dsl_file = current_workflow_file_;
+  }
 
   if(!parse_workflow_metadata(root, config, result, "root")) {
     return false;
@@ -557,6 +570,10 @@ bool WorkflowParser::parse_node(std::shared_ptr<const IJsonValue> node_obj, Pars
   // Create node and add to workflow
   auto node = std::make_shared<framework::MMNode>(config);
   current_workflow_->add_node(node);
+  if(config.execution_risk_level == framework::MMNode::ExecutionRiskLevel::RED) {
+    const_cast<framework::MMWorkflow::Config&>(current_workflow_->get_config()).has_red_light_node =
+        true;
+  }
 
   // Track node ID mapping
   node_id_to_name_[config.id] = config.name;
@@ -608,6 +625,8 @@ bool WorkflowParser::parse_node_config(std::shared_ptr<const IJsonValue> node_ob
   config.working_dir      = JsonHelper::get_string(config_source, "working_dir", "");
   config.retry_delay_ms   = static_cast<int>(JsonHelper::get_int(config_source, "retry_delay_ms", 1000));
   config.enable_hot_reload = JsonHelper::get_bool(config_source, "enable_hot_reload", true);
+  config.execution_risk_level = parse_node_execution_risk_level(
+      JsonHelper::get_string(config_source, "execution_risk_level", "green"));
   config.function_name    = JsonHelper::get_string(config_source, "function_name", "");
   config.main_class       = JsonHelper::get_string(config_source, "main_class", "");
   config.workflow_ref     = JsonHelper::get_string(config_source, "workflow_ref", "");

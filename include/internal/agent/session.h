@@ -88,6 +88,10 @@ class MMAgentSession {
   int                                       get_template_task_count() const;
   void set_task_coordinator(const std::shared_ptr<SessionTaskCoordinator>& coordinator);
   void set_task_dispatcher(const std::shared_ptr<SessionTaskCoordinator>& dispatcher);
+  void set_dispatcher_task(const std::shared_ptr<MMAgentTask>& task);
+  void set_coordinator_task(const std::shared_ptr<MMAgentTask>& task);
+  std::shared_ptr<MMAgentTask> get_dispatcher_task() const;
+  std::shared_ptr<MMAgentTask> get_coordinator_task() const;
 
  private:
   Config      config_;
@@ -98,12 +102,12 @@ class MMAgentSession {
   std::string active_user_id_;
   std::string active_client_id_;
   std::map<std::string, std::string> metadata_;
-  MMAgentMsgQue receive_queue_;
-  MMAgentMsgQue send_queue_;
   std::map<std::string, std::shared_ptr<MMAgentTask>> template_tasks_;
   std::map<std::string, std::shared_ptr<MMAgentTask>> runtime_tasks_;
   std::shared_ptr<SessionTaskCoordinator> task_dispatcher_;
   std::shared_ptr<SessionTaskCoordinator> task_coordinator_;
+  std::shared_ptr<MMAgentTask> dispatcher_task_;
+  std::shared_ptr<MMAgentTask> coordinator_task_;
   mutable std::mutex mutex_;
 };
 

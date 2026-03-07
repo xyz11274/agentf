@@ -49,6 +49,7 @@ MMAgent 运行时元数据，至少包含：
 - 顶层 `tasks[].type`：当前固定为 `contextupdater`
 - `session.tasks[].type`：`dispatcher` / `coordinator` / `skill`
 - `task.workflow_file`：任务绑定的 workflow 文件
+- `workflow` 中的 node 可声明 `execution_risk_level`（`green` / `yellow` / `red`）；coordinator 可据此决定 skill 是否直接执行
 - `skill` 任务额外包含：
   - `skill.name`
   - `skill.config_dir`
@@ -78,6 +79,14 @@ MMAgent Prompt/能力卡片，供其他模型或 MMAgent 读取。
 - `task_workflows`：任务类型到 workflow 的默认映射（如 `dispatcher` / `coordinator` / `contextupdater` / `skill:<name>`）
 
 > 说明：session / task / skill 的主拓扑定义应放在 `agent.json`，`package.json` 负责包级元数据与默认 workflow 映射。
+
+### 3.6 运行时消息约定
+
+- `SessionRouter` 按 `user_id + client_id` 复用/分配 pooled session。
+- session 自身不再维护收发线程；dispatcher / coordinator task 各自拥有：
+  - `intent_request` 队列：向 runtime worker 提交 workflow 请求
+  - `data_exchange` 队列：接收 worker 回包并继续协同编排
+- worker 统一采用 `control` / `business` 双队列模型；workflow / node / edge 不再暴露独立事件线程。
 
 ## 4. 校验清单
 

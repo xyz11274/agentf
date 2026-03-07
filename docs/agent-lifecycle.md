@@ -754,10 +754,9 @@ sequenceDiagram
 
 ### 7.1 Session 消息类型队列与任务分工（2026-03）
 
-- Session 接收队列由优先级模型调整为消息类型模型：
-  - `intent_request`
-  - `data_exchange`
-  - `extensible_reserved`
+- Session 不再自建接收/发送队列；路由后的消息由 task 级双队列承接：
+  - dispatcher/coordinator `intent_request`
+  - dispatcher/coordinator `data_exchange`
 - 消息根据消息头 `metadata["message_type"]` 路由；缺失该头时默认按 `intent_request` 处理。
 - 每个由 `agent.json` 声明的 session 使用显式任务列表初始化，基础任务通常为：
   - `0`：dispatcher
@@ -765,7 +764,8 @@ sequenceDiagram
   - `2..N`：skill
 - agent 级 `contextupdater` 通过顶层 `tasks[]` 声明，不再占用 session 内任务编号。
 - `skill` 任务可继续扩展，并按实例池创建 `..._pool_<index>` 形式的任务实例；`instance_pool_size` 缺省值为 `2`。
-- 当消息未指定 `session_id` 时，默认路由到 0 号 pooled session。
+- 当消息未指定 `session_id` 时，由 `SessionRouter` 按 `user_id + client_id` 复用或分配 pooled session。
+- runtime worker 侧统一使用 `control` / `business` 双队列，workflow / node / edge 不再维护独立事件线程。
 
 ### 7.2 多轮对话样例（WebSocket + 多 Session 协作）
 
@@ -774,7 +774,7 @@ sequenceDiagram
   - `examples/multi_session_chat/server/webui/index.html`
   - `examples/multi_session_chat/package/`
 - 样例采用 Agent 包驱动，`agent.json` 只声明 1 份同质化 session 模板，并通过 `session_pool_size` 预创建 5 个 pooled session；模板内通过:
-  - `default_dispatcher_workflow.json`
+  - `session_dispatcher_workflow.json`
   - `session_coordinator_workflow.json`
   - `session_context_workflow.json`
   - 多个 `skill_*_workflow.json`

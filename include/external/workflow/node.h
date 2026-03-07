@@ -40,6 +40,12 @@ public:
     REFERENCE = 1,
   };
 
+  enum class ExecutionRiskLevel {
+    GREEN  = 0,
+    YELLOW = 1,
+    RED    = 2,
+  };
+
   struct FieldDefinition {
     std::string  name;
     FieldType    type          = FieldType::STRING;
@@ -102,6 +108,7 @@ public:
     std::string              function_name;  // Function name for SO library execution
     std::string              main_class;     // Main class for JAR execution
     std::vector<std::string> args;           // Additional arguments for script execution
+    ExecutionRiskLevel       execution_risk_level = ExecutionRiskLevel::GREEN;
 
     // C++ function callback for CPP_FUNCTION execution mode
     std::function<bool(const DataMap& inputs, DataMap& outputs)> cpp_function;
@@ -165,6 +172,9 @@ public:
   const std::string&              get_command() const { return config_.command; }
   int                             get_timeout_ms() const { return config_.timeout_ms; }
   int                             get_max_retries() const { return config_.max_retries; }
+  ExecutionRiskLevel              get_execution_risk_level() const {
+    return config_.execution_risk_level;
+  }
 
   // Retry counter
   int  get_retry_count() const { return retry_count_; }

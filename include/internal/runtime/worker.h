@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <deque>
 #include <functional>
+#include <deque>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -77,7 +78,8 @@ public:
     std::string worker_id;
     bool        preconfigured = false;
     int         default_workflow_threads = 1;
-    int         event_threads = 1;
+    int         control_threads = 1;
+    int         business_threads = 1;
     size_t      max_queue_size = 1024;
   };
 
@@ -100,13 +102,19 @@ public:
     int         thread_count = 0;
   };
 
-  struct WorkerEvent {
+  struct ControlMessage {
     std::string                        type;
     std::map<std::string, std::string> data;
     int64_t                            created_at_ms = 0;
   };
 
-  using WorkerEventHandler = std::function<void(const WorkerEvent&)>;
+  struct BusinessMessage {
+    TaskItem                           task;
+    std::map<std::string, std::string> data;
+    int64_t                            created_at_ms = 0;
+  };
+
+  using WorkerControlHandler = std::function<void(const ControlMessage&)>;
 
   explicit MMWorkerEngine(const Config& config);
   ~MMWorkerEngine();
@@ -134,8 +142,9 @@ public:
   bool enqueue_task(const TaskItem& task);
   bool register_workflow_instance(const WorkflowRegistration& registration);
   bool unregister_workflow_instance(const std::string& workflow_instance_id);
-  bool enqueue_event(const WorkerEvent& event);
-  void register_event_handler(const std::string& event_type, WorkerEventHandler handler);
+  bool enqueue_control_message(const ControlMessage& message);
+  bool enqueue_business_message(const BusinessMessage& message);
+  void register_control_handler(const std::string& message_type, WorkerControlHandler handler);
   static ExecutionResponse execute_code(const ExecutionRequest& request);
   static bool check_and_reload_code(const std::string& command,
                                     const HotReloadConfig& config = HotReloadConfig());
@@ -147,9 +156,10 @@ private:
   static int64_t now_ms();
   std::string workflow_pool_key(const TaskItem& task) const;
   void        ensure_workflow_pool(const std::string& pool_key, int thread_count);
-  void        handle_internal_event(const WorkerEvent& event);
-  void        process_task_queues();
-  void        event_monitor_loop();
+  void        handle_control_message(const ControlMessage& message);
+  void        process_business_messages();
+  void        control_message_loop();
+  void        business_message_loop();
 
   Config                 config_;
   WorkerStatus           status_ = WorkerStatus::STARTING;
@@ -160,19 +170,18 @@ private:
 
   std::atomic<bool> running_{false};
 
-  std::deque<TaskItem>             high_priority_tasks_;
-  std::deque<TaskItem>             normal_priority_tasks_;
-  std::queue<WorkflowRegistration> workflow_registrations_;
-  std::queue<WorkerEvent>          event_queue_;
+  std::deque<ControlMessage>       control_messages_;
+  std::deque<BusinessMessage>      business_messages_;
   std::mutex                       queue_mutex_;
   std::condition_variable          queue_cv_;
 
   std::unordered_map<std::string, std::unique_ptr<basic::ThreadPool>> workflow_pools_;
-  std::unique_ptr<basic::ThreadPool>                                  event_pool_;
+  std::unique_ptr<basic::ThreadPool>                                  control_pool_;
 
-  std::unordered_map<std::string, std::vector<WorkerEventHandler>> event_handlers_;
-  std::mutex                                                      handler_mutex_;
-  std::thread                                                     event_monitor_thread_;
+  std::unordered_map<std::string, std::vector<WorkerControlHandler>> control_handlers_;
+  std::mutex                                                         handler_mutex_;
+  std::thread                                                        control_thread_;
+  std::thread                                                        business_thread_;
 };
 
 }  // namespace runtime

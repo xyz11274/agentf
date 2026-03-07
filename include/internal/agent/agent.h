@@ -152,6 +152,15 @@ class MMAgent {
   std::string resolve_workflow_file(const std::string& workflow_ref) const;
   void        handle_routed_request_message(const std::shared_ptr<MMAgentSession>& session,
                                             const MMAgentMsgQue::Message& message);
+  void handle_task_intent_request(const std::shared_ptr<MMAgentSession>& session,
+                                  const std::shared_ptr<MMAgentTask>& task,
+                                  const MMAgentMsgQue::Message& message);
+  void handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& session,
+                                 const std::shared_ptr<MMAgentTask>& task,
+                                 const MMAgentMsgQue::Message& message);
+  std::shared_ptr<MMAgentTask> build_runtime_task(const std::shared_ptr<MMAgentSession>& session,
+                                                  const std::shared_ptr<MMAgentTask>& source_task,
+                                                  const MMAgentMsgQue::Message& message);
 
   std::queue<std::shared_ptr<MMAgentTask>> generated_tasks_;
   std::mutex                               generated_tasks_mutex_;
@@ -163,7 +172,6 @@ class MMAgent {
   int  process_data_exchange_messages();
   void process_intent_request_loop();
   void process_data_exchange_loop();
-  void flush_session_send_queue(const std::shared_ptr<MMAgentSession>& session);
 };
 
 }  // namespace framework

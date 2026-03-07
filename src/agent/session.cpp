@@ -17,9 +17,7 @@ int64_t get_current_time_ms() {
 
 MMAgentSession::MMAgentSession(const Config& config)
     : config_(config),
-      state_(SessionState::CREATED),
-      receive_queue_(MMAgentMsgQue::Config{config.max_queue_size}),
-      send_queue_(MMAgentMsgQue::Config{config.max_queue_size}) {
+      state_(SessionState::CREATED) {
   created_time_ = get_current_time_ms();
   last_activity_time_ = created_time_;
 }
@@ -107,8 +105,6 @@ void MMAgentSession::reset_for_pool() {
   active_client_id_.clear();
   metadata_.clear();
   runtime_tasks_.clear();
-  receive_queue_.clear_queue();
-  send_queue_.clear_queue();
   last_activity_time_ = get_current_time_ms();
 }
 
@@ -153,54 +149,50 @@ bool MMAgentSession::is_timeout_expired() const {
 
 bool MMAgentSession::enqueue_received_message(const MMAgentMsgQue::Message& message) {
   update_activity();
-  return receive_queue_.enqueue_message(message);
+  auto dispatcher = get_dispatcher_task();
+  return dispatcher ? dispatcher->enqueue_intent_request_message(message) : false;
 }
 
 bool MMAgentSession::dequeue_received_message(MMAgentMsgQue::Message& message) {
-  const bool ok = receive_queue_.dequeue_message(message);
-  if(ok) {
-    update_activity();
-  }
-  return ok;
+  return dequeue_intent_request_message(message) || dequeue_data_exchange_message(message);
 }
 
 bool MMAgentSession::dequeue_intent_request_message(MMAgentMsgQue::Message& message) {
-  const bool ok =
-      receive_queue_.dequeue_message_by_type(MMAgentMsgQue::MessageQueueType::INTENT_REQUEST, message);
-  if(ok) {
-    update_activity();
-  }
-  return ok;
+  (void)message;
+  return false;
 }
 
 bool MMAgentSession::dequeue_data_exchange_message(MMAgentMsgQue::Message& message) {
-  const bool ok =
-      receive_queue_.dequeue_message_by_type(MMAgentMsgQue::MessageQueueType::DATA_EXCHANGE, message);
-  if(ok) {
-    update_activity();
-  }
-  return ok;
+  (void)message;
+  return false;
 }
 
 bool MMAgentSession::enqueue_send_message(const MMAgentMsgQue::Message& message) {
   update_activity();
-  return send_queue_.enqueue_message(message);
+  auto coordinator = get_coordinator_task();
+  return coordinator ? coordinator->enqueue_data_exchange_message(message) : false;
 }
 
 bool MMAgentSession::dequeue_send_message(MMAgentMsgQue::Message& message) {
-  const bool ok = send_queue_.dequeue_message(message);
-  if(ok) {
-    update_activity();
-  }
-  return ok;
+  (void)message;
+  return false;
 }
 
 int MMAgentSession::get_receive_queue_size() const {
-  return receive_queue_.get_queue_size();
+  int total = 0;
+  if(auto dispatcher = get_dispatcher_task(); dispatcher) {
+    total += dispatcher->get_intent_request_queue_size();
+    total += dispatcher->get_data_exchange_queue_size();
+  }
+  if(auto coordinator = get_coordinator_task(); coordinator) {
+    total += coordinator->get_intent_request_queue_size();
+    total += coordinator->get_data_exchange_queue_size();
+  }
+  return total;
 }
 
 int MMAgentSession::get_send_queue_size() const {
-  return send_queue_.get_queue_size();
+  return 0;
 }
 
 void MMAgentSession::add_template_task(const std::shared_ptr<MMAgentTask>& task) {
@@ -258,6 +250,26 @@ void MMAgentSession::set_task_dispatcher(
     const std::shared_ptr<SessionTaskCoordinator>& dispatcher) {
   std::lock_guard<std::mutex> lock(mutex_);
   task_dispatcher_ = dispatcher;
+}
+
+void MMAgentSession::set_dispatcher_task(const std::shared_ptr<MMAgentTask>& task) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  dispatcher_task_ = task;
+}
+
+void MMAgentSession::set_coordinator_task(const std::shared_ptr<MMAgentTask>& task) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  coordinator_task_ = task;
+}
+
+std::shared_ptr<MMAgentTask> MMAgentSession::get_dispatcher_task() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return dispatcher_task_;
+}
+
+std::shared_ptr<MMAgentTask> MMAgentSession::get_coordinator_task() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return coordinator_task_;
 }
 
 }  // namespace framework

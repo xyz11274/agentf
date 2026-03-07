@@ -235,6 +235,7 @@ public:
     // MMWorkflow metadata
     std::string                        description;
     std::map<std::string, std::string> metadata;
+    bool                               has_red_light_node = false;
   };
 
   enum class MessagePriority {
@@ -270,6 +271,7 @@ public:
   const std::string& get_name() const { return config_.name; }
   const Config&      get_config() const { return config_; }
   WorkflowState      get_state() const { return state_; }
+  bool               is_red_light() const { return config_.has_red_light_node; }
 
   // MMNode and edge management
   void                                      add_node(std::shared_ptr<MMNode> node);

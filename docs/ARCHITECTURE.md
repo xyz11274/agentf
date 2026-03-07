@@ -78,7 +78,7 @@ graph TB
 - 主流程：
   1) 业务请求进入 MMAgent。
   2) MMAgent 通过 `user_id + client_id` 交给 `SessionRouter` 路由；命中失败时从预创建 session pool 分配空闲 session。
-  3) session 按消息头类型入队：`intent_request`→dispatcher，`output_result`→coordinator，`extensible_reserved`→扩展队列。
+  3) session 不再自建收发队列；路由后的请求直接进入 dispatcher task 的 `intent_request` 队列，worker 回包进入 task 的 `data_exchange` 队列，再由 coordinator 汇总编排。
   4) 若无显式 `workflow_id`，dispatcher 优先使用 session 中 dispatcher 任务对应 workflow，coordinator 优先使用 coordinator 任务对应 workflow。
 - 异常流程：metadata 缺失 user/client 时不处理业务消息。
 - 质量目标：单请求 task 生成路径 P99 < 50ms（本地基线）。
@@ -150,10 +150,10 @@ sequenceDiagram
   - Infrastructure 层：MMDataBus、Storage、Adapter。
 
 #### 组件职责
-- `MMAgent`：生命周期、会话路由、session-level coordinator 管理。
-- `SessionTaskCoordinator`：消息解析为 task，默认 `intent_request -> dispatcher`、`output_result -> coordinator`。
-- `MMWorkflow`：图结构、控制流、执行态推进。
-- `MMNode`：动作定义与状态机；外部执行统一委托 MMWorkerEngine。
+- `MMAgent`：生命周期、会话路由、session/task 实例管理以及 agent 级 context 管理。
+- `SessionTaskCoordinator`：按 session 模板生成 dispatcher / coordinator / skill task，并维护任务到 workflow 的默认绑定。
+- `MMWorkflow`：图结构、控制流、执行态推进，并聚合节点 `execution_risk_level` 推导 workflow 是否为红灯。
+- `MMNode`：动作定义与状态机；支持 `green/yellow/red` 执行等级，外部执行统一委托 MMWorkerEngine。
 - `Scheduler`：task -> workflow instance 映射。
 - `Deployer`：workflow instance -> worker 映射与重平衡。
 - `MMDataBus`：本地/远端统一数据读写与 data_ref。
@@ -499,12 +499,12 @@ graph TB
 ### 4.1 运行模型
 
 #### 并发/线程模型
-- `MMAgent`：请求事件队列线程 + session 处理循环。
+- `MMAgent`：`SessionRouter` 路由线程 + session 老化线程 + agent 级 context 管理。
 - `MMAgentRuntime`：worker thread pool + agent 注册线程 + agent 监控线程。
 - `Scheduler`：独立调度线程。
 - `Deployer`：注册线程 + 调度线程。
-- `MMWorkerEngine`：事件监控线程 + workflow 线程池 + 事件线程池。
-- `MMNode/MMEdge/MMWorkflow`：各自可选 runtime 队列与线程池。
+- `MMWorkerEngine`：控制消息队列线程 + 业务消息队列线程。
+- `MMNode/MMEdge/MMWorkflow`：不再维护独立事件线程；workflow 由 worker 统一驱动执行。
 
 #### 高可用与故障恢复
 - 心跳监测：agent/worker 心跳周期上报。

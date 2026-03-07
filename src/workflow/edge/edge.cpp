@@ -27,11 +27,8 @@ bool MMEdge::start_runtime(const RuntimeConfig& config) {
   runtime_config_ = config;
   processor_pool_ = std::make_unique<basic::ThreadPool>(
       static_cast<size_t>(std::max(1, runtime_config_.processor_threads)));
-  event_pool_ = std::make_unique<basic::ThreadPool>(
-      static_cast<size_t>(std::max(1, runtime_config_.event_threads)));
 
   message_thread_ = std::thread(&MMEdge::message_dispatch_loop, this);
-  event_thread_   = std::thread(&MMEdge::event_dispatch_loop, this);
   return true;
 }
 
@@ -42,26 +39,18 @@ void MMEdge::stop_runtime() {
   }
 
   message_cv_.notify_all();
-  event_cv_.notify_all();
 
   if(message_thread_.joinable()) {
     message_thread_.join();
-  }
-  if(event_thread_.joinable()) {
-    event_thread_.join();
   }
 
   {
     std::lock_guard<std::mutex> lock(queue_mutex_);
     high_priority_messages_.clear();
     normal_priority_messages_.clear();
-    while(!event_queue_.empty()) {
-      event_queue_.pop();
-    }
   }
 
   processor_pool_.reset();
-  event_pool_.reset();
 }
 
 bool MMEdge::enqueue_message(const Message& message) {
@@ -81,18 +70,13 @@ bool MMEdge::enqueue_message(const Message& message) {
 }
 
 bool MMEdge::enqueue_event(const EdgeEvent& event) {
-  std::lock_guard<std::mutex> lock(queue_mutex_);
-  if(event_queue_.size() >= runtime_config_.max_queue_size) {
-    return false;
-  }
-  event_queue_.push(event);
-  event_cv_.notify_all();
+  (void)event;
   return true;
 }
 
 void MMEdge::register_event_handler(const std::string& event_type, EdgeEventHandler handler) {
-  std::lock_guard<std::mutex> lock(event_handler_mutex_);
-  event_handlers_[event_type].push_back(std::move(handler));
+  (void)event_type;
+  (void)handler;
 }
 
 void MMEdge::message_dispatch_loop() {
@@ -128,35 +112,7 @@ void MMEdge::message_dispatch_loop() {
 }
 
 void MMEdge::event_dispatch_loop() {
-  while(runtime_running_) {
-    EdgeEvent event;
-    {
-      std::unique_lock<std::mutex> lock(queue_mutex_);
-      event_cv_.wait(lock, [this]() { return !event_queue_.empty() || !runtime_running_; });
-      if(!runtime_running_) {
-        break;
-      }
-      event = event_queue_.front();
-      event_queue_.pop();
-    }
-
-    std::vector<EdgeEventHandler> handlers;
-    {
-      std::lock_guard<std::mutex> lock(event_handler_mutex_);
-      auto                        it = event_handlers_.find(event.type);
-      if(it != event_handlers_.end()) {
-        handlers = it->second;
-      }
-    }
-
-    for(const auto& handler : handlers) {
-      if(event_pool_) {
-        event_pool_->submit([handler, event]() { handler(event); });
-      } else {
-        handler(event);
-      }
-    }
-  }
+  // Edge event dispatch has been retired in favor of worker control/business queues.
 }
 
 void MMEdge::process_message(const Message& message) {
