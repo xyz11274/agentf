@@ -4,25 +4,16 @@
 
 ```
 examples/
-├── features/              # 单点功能 C++ 示例（DataBus、Adapter、Metrics 等）
+├── features/              # 单点功能 C++ 示例
 ├── agent/                 # Agent 包示例
-│   ├── basic_agent/           — 基础 agent（shell_script 节点）
-│   ├── calculator_agent/      — 计算器 agent（Python 脚本节点）
-│   ├── nested_workflow_agent/ — 嵌套 workflow_ref 示例
-│   └── workflow_patterns/     — Workflow 模式参考模板（条件/循环/顺序）
+│   ├── basic_agent/
+│   ├── calculator_agent/
+│   ├── nested_workflow_agent/
+│   └── workflow_patterns/
 └── multi_session_chat/    # 多轮多 session 对话完整示例
 ```
 
-## 构建与运行
-
-```bash
-./build.sh build
-
-./build.sh example databus
-./build.sh example adapter
-./build.sh example metrics
-./build.sh example storage
-```
+---
 
 ## features/ — 单点功能示例
 
@@ -32,93 +23,61 @@ examples/
 | `adapter_example.cpp` | Actor 适配器调用示例 |
 | `metrics_example.cpp` | 指标采集与导出示例 |
 | `storage_example.cpp` | MMAgent/MMWorkflow 存储读写示例 |
-| `agent_runner.cpp` + `interactive_runner.cpp` | 加载并交互运行 Agent 包的命令行工具 |
+| `agent_runner.cpp` / `interactive_runner.cpp` | 加载并交互运行 Agent 包的命令行工具 |
 
-相关设计文档：`agent_runner_design.md`、`interactive_runner_demo.md`
-
-## agent/ — Agent 包示例
-
-### basic_agent
-基础 agent 包，含 shell_script 节点，供 E2E 测试使用。
-
-### calculator_agent
-Python 脚本节点示例，演示数学表达式计算。
-
-### nested_workflow_agent
-演示 `workflow_ref` 嵌套调用，含数据管道、验证、处理三层 workflow。
-
-### workflow_patterns
-**Workflow 模式参考模板**（不依赖外部脚本，仅演示 DSL 编排方式）：
-
-| 文件 | 模式 |
-|---|---|
-| `conditional_workflow.json` | 条件分支：按 request_type 路由到不同处理节点（A/B/C 三路 + 聚合） |
-| `loop_workflow.json` | 循环迭代：FOR_EACH 遍历集合，配置 loop_config 逐条处理 |
-| `sample_workflow.json` | 顺序处理管道：输入验证 → 数据转换 → 增强 → 过滤 → 输出（含条件边） |
-
-## MMAgent 包创建与运行（推荐）
-
-外部业务不再通过代码直接创建 `MMAgent/MMWorkflow/MMNode/MMEdge`，而是提供 MMAgent 包并由 `MMAgentActor` 自动加载。
-
-### 1) 准备 AgentService.config
-
-```json
-{
-  "package_root": "examples/agent",
-  "manifests": [
-    "basic_agent",
-    "calculator_agent"
-  ],
-  "scan_interval_ms": 1000,
-  "heartbeat_interval_ms": 1000
-}
-```
-
-### 2) 启动后自动加载
-
-`MMAgentActor` 启动后会读取上述配置，自动创建 MMAgent 实例并向 `MMRuntimeActor` 上报注册/心跳/状态。
-
-### 3) 业务请求处理
-
-业务侧通过 Actor 消息投递 `request.message`，`MMAgent` 内部事件队列触发 `AgentCoordinator` 会话处理，默认生成 `task0` 类型 task，并由 `MMAgentActor` 统一维护生命周期并继续上报 Runtime。
-
-### 4) coordinator(task0) 固定流程定制
-
-可在 MMAgent 包 `package.json` 中配置：
-
-```json
-{
-  "coordinator_workflow": "basic-coordinator-workflow"
-}
-```
-
-当请求消息未显式指定 `workflow_id` 时，系统会优先使用 `coordinator_workflow`。示例中的 `coordinator_workflow.json` 展示了 session 创建节点与 task 创建节点的编排方式。
-
-## WebSocket 对话样例（multi_session_chat）
-
-### 1) 构建 AgentFlow
+构建运行：
 
 ```bash
 ./build.sh build
+./build.sh example databus   # 或 adapter / metrics / storage
+./build/agent_runner --package examples/agent/basic_agent
 ```
 
-### 2) 启动样例进程
+设计文档：`agent_runner_design.md`、`interactive_runner_demo.md`
 
-```bash
-./build/example_chat_server \
-  --package examples/multi_session_chat/package \
-  --host 127.0.0.1 --http-port 8088 --ws-port 8765 \
-  --web-root examples/multi_session_chat/server/webui
+---
+
+## agent/ — Agent 包示例
+
+每个子目录都是一个完整的 Agent 包（含 `agent.json`、`package.json`、workflow JSON、脚本）。
+
+### basic_agent
+
+最小化 Agent 示例，含一个 shell_script 节点（`node_basic.sh`）和 coordinator workflow。  
+E2E 测试的基础数据包。
+
+### calculator_agent
+
+Python 脚本节点示例（`calc.py`），演示通过 workflow 驱动 Python 脚本执行数学表达式计算。
+
+### nested_workflow_agent
+
+演示 `workflow_ref` 嵌套 workflow 调用，三层嵌套结构：
+
+```
+main_workflow → data_pipeline (workflow_ref)
+                  └→ validation_workflow (workflow_ref)
+             → processing_workflow (workflow_ref)
 ```
 
-打开 `http://127.0.0.1:8088` 即可通过 WebUI 与进程进行 WebSocket 对话。
+E2E 测试的嵌套 workflow 数据包。
 
-### 3) 构建脚本与自动化对话测试
+### workflow_patterns
 
-```bash
-bash examples/multi_session_chat/scripts/build_and_run.sh
-bash examples/multi_session_chat/tests/auto_dialog_test.sh
-```
+Workflow 模式参考模板（DSL 示例，不依赖外部脚本）：
+
+| 文件 | 模式 |
+|---|---|
+| `conditional_workflow.json` | 条件分支：按 `request_type` 三路路由 + 聚合 |
+| `loop_workflow.json` | FOR_EACH 循环：`loop_config` 遍历集合逐条处理 |
+| `sample_workflow.json` | 顺序管道：验证 → 转换 → 增强 → 过滤 → 输出（含条件边） |
+
+---
+
+## multi_session_chat/ — 多 session 对话示例
+
+多轮对话、多语言节点、DataBus 驱动的完整示例，详见 [`multi_session_chat/README.md`](multi_session_chat/README.md)。
+
 
 
 ## MMAgent 包创建与运行（推荐）
