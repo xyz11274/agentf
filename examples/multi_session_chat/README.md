@@ -49,6 +49,19 @@ multi_session_chat/
 4. `merge_plan` 生成新的 `orchestration_plan`，同时在结果充分时输出 `final_response`。
 5. skill workflow 通过 typed input/output 与 DataBus 交互，不再依赖额外运行时文件。
 
+补充：
+
+- `chat_server` 会先处理一小类无需编排的对话意图：问候语、以及“总结上一条消息”这类可直接从会话历史回答的请求；
+- 这类请求会直接读取 `history_json` 生成回复，避免把纯会话意图误路由到 skill，属于对“能力边界”和“路由对齐”的前置保护；
+- 其余请求仍进入 dispatcher/coordinator/skill 流程。
+
+### 能力契约与拒答
+
+- skill 选择不再只看关键词，还会结合 skill catalog 中的 `handles / does_not_handle / abstain_when` 约束。
+- skill 执行结果会附带 `can_handle / status / grounded / confidence / reason` 等字段。
+- 超出能力边界时，skill 必须显式拒答，而不是返回看似正常的兜底文本。
+- coordinator 只会合并经过能力校验的结果；若没有有效结果，会回退到安全提示，而不是拼接错误结论。
+
 ## DataBus 与 LLM
 
 - Shell 节点通过 `publish/sdk/shell/agentflow_databus.sh` 调用：

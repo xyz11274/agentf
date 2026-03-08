@@ -12,10 +12,17 @@
       "json_output": true,
       "inputs": [
         {"name": "user_text", "type": "string", "required": true},
-        {"name": "session_id", "type": "string", "required": true}
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "history_json", "type": "string"}
       ],
       "outputs": [
-        {"name": "summary_result", "type": "string"}
+        {"name": "summary_result", "type": "string"},
+        {"name": "answer_text", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "can_handle", "type": "bool"},
+        {"name": "grounded", "type": "bool"},
+        {"name": "confidence", "type": "double"},
+        {"name": "reason", "type": "string"}
       ]
     }
   ],

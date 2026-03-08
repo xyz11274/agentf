@@ -116,9 +116,68 @@ bool is_greeting_text(const std::string& text) {
          std::find(kGreetings.begin(), kGreetings.end(), lowered) != kGreetings.end();
 }
 
-std::string build_direct_response(const std::string& user_text) {
+bool is_summary_request(const std::string& text) {
+  static const std::array<std::string, 8> kSummaryTokens = {
+      "总结", "概括", "摘要", "提炼", "复盘", "整理", "上条消息", "上一条"};
+  for (const auto& token : kSummaryTokens) {
+    if (text.find(token) != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+std::string summarize_previous_message(const std::string& history_json, const std::string& user_text) {
+  if (!is_summary_request(user_text) || history_json.empty()) {
+    return "";
+  }
+  std::vector<std::string> contents;
+  size_t pos = 0;
+  while (true) {
+    size_t content_key = history_json.find("\"content\":\"", pos);
+    if (content_key == std::string::npos) {
+      break;
+    }
+    pos = content_key + 11;
+    std::string content;
+    bool escaped = false;
+    while (pos < history_json.size()) {
+      char c = history_json[pos++];
+      if (escaped) {
+        content += c;
+        escaped = false;
+        continue;
+      }
+      if (c == '\\') {
+        escaped = true;
+        continue;
+      }
+      if (c == '"') {
+        break;
+      }
+      content += c;
+    }
+    if (!content.empty() && content != user_text) {
+      contents.push_back(content);
+    }
+  }
+  if (contents.empty()) {
+    return "";
+  }
+  return "上条消息主要内容是：" + contents.back();
+}
+
+std::string build_conversation_response(const std::string& user_text, const std::string& history_json) {
   if (is_greeting_text(user_text)) {
     return "你好！我可以帮你做总结、检索、日期时间计算和任务规划。";
+  }
+  return summarize_previous_message(history_json, user_text);
+}
+
+std::string build_direct_response(const std::string& user_text, const std::string& history_json) {
+  std::string conversation_response = build_conversation_response(user_text, history_json);
+  if (!conversation_response.empty()) {
+    return conversation_response;
   }
   return "我暂时没有选到合适的技能，请换一种说法，或明确告诉我要总结、检索、算日期，还是做规划。";
 }
@@ -304,7 +363,7 @@ class ChatAgentBridge {
       return "[error] dispatcher workflow timeout";
     }
     if (selected_skills.empty()) {
-      std::string direct_response = build_direct_response(user_text);
+      std::string direct_response = build_direct_response(user_text, history_json);
       bus.put("final_response", direct_response);
       return direct_response;
     }
@@ -347,7 +406,13 @@ class ChatAgentBridge {
     struct SkillExecution {
       std::string session_id;
       std::string skill;
-      std::vector<std::string> result_keys;
+      std::string workflow_id;
+      std::vector<std::string> answer_keys;
+      std::vector<std::string> status_keys;
+      std::vector<std::string> can_handle_keys;
+      std::vector<std::string> grounded_keys;
+      std::vector<std::string> confidence_keys;
+      std::vector<std::string> reason_keys;
     };
     std::vector<SkillExecution> started_skills;
     if (!orchestration_plan.empty()) {
@@ -372,30 +437,59 @@ class ChatAgentBridge {
         SkillExecution started_skill;
         started_skill.session_id = session_id;
         started_skill.skill = skill;
-        started_skill.result_keys.push_back("session:" + session_id + ":skill_result");
+        started_skill.workflow_id = wf_it->second;
+        started_skill.answer_keys.push_back(wf_it->second + ".n1.answer_text");
+        started_skill.answer_keys.push_back("answer_text");
+        started_skill.status_keys.push_back(wf_it->second + ".n1.status");
+        started_skill.status_keys.push_back("status");
+        started_skill.can_handle_keys.push_back(wf_it->second + ".n1.can_handle");
+        started_skill.can_handle_keys.push_back("can_handle");
+        started_skill.grounded_keys.push_back(wf_it->second + ".n1.grounded");
+        started_skill.grounded_keys.push_back("grounded");
+        started_skill.confidence_keys.push_back(wf_it->second + ".n1.confidence");
+        started_skill.confidence_keys.push_back("confidence");
+        started_skill.reason_keys.push_back(wf_it->second + ".n1.reason");
+        started_skill.reason_keys.push_back("reason");
         if (skill == "skill_search" || skill == "skill_summary") {
           const std::string output_key =
               skill == "skill_search" ? "search_result" : "summary_result";
-          started_skill.result_keys.push_back(wf_it->second + ".n1." + output_key);
-          started_skill.result_keys.push_back(output_key);
+          started_skill.answer_keys.push_back(wf_it->second + ".n1." + output_key);
+          started_skill.answer_keys.push_back(output_key);
         } else if (skill == "skill_date") {
-          started_skill.result_keys.push_back(wf_it->second + ".n1.date_result");
-          started_skill.result_keys.push_back("date_result");
-          started_skill.result_keys.push_back(wf_it->second + ".n1.stdout");
+          started_skill.answer_keys.push_back(wf_it->second + ".n1.date_result");
+          started_skill.answer_keys.push_back("date_result");
+          started_skill.answer_keys.push_back(wf_it->second + ".n1.stdout");
         } else if (skill == "skill_delegate") {
-          started_skill.result_keys.push_back(wf_it->second + ".n1.delegate_result");
-          started_skill.result_keys.push_back("delegate_result");
-          started_skill.result_keys.push_back(wf_it->second + ".n1.stdout");
+          started_skill.answer_keys.push_back(wf_it->second + ".n1.delegate_result");
+          started_skill.answer_keys.push_back("delegate_result");
+          started_skill.answer_keys.push_back(wf_it->second + ".n1.stdout");
         }
 
-        for (const auto& result_key : started_skill.result_keys) {
+        for (const auto& result_key : started_skill.answer_keys) {
+          bus.remove(result_key);
+        }
+        for (const auto& result_key : started_skill.status_keys) {
+          bus.remove(result_key);
+        }
+        for (const auto& result_key : started_skill.can_handle_keys) {
+          bus.remove(result_key);
+        }
+        for (const auto& result_key : started_skill.grounded_keys) {
+          bus.remove(result_key);
+        }
+        for (const auto& result_key : started_skill.confidence_keys) {
+          bus.remove(result_key);
+        }
+        for (const auto& result_key : started_skill.reason_keys) {
           bus.remove(result_key);
         }
         bus.put("session_id", session_id);
+        bus.put("session:" + session_id + ":history_json", history_json);
 
         DataMap skill_inputs;
         skill_inputs["user_text"]   = user_text;
         skill_inputs["session_id"]  = session_id;
+        skill_inputs["history_json"] = history_json;
         skill_inputs["input"]       = user_text;
         runtime_->execute_workflow(agent_id, wf_it->second, skill_inputs);
         started_skills.push_back(std::move(started_skill));
@@ -406,23 +500,104 @@ class ChatAgentBridge {
     std::vector<std::string> skill_result_jsonl;
     for (const auto& started_skill : started_skills) {
       bool found_result = false;
-      while (std::chrono::steady_clock::now() < skills_deadline) {
-        for (const auto& result_key : started_skill.result_keys) {
+      std::string answer_text;
+      std::string status;
+      std::string reason;
+      bool can_handle = false;
+      bool grounded = false;
+      bool can_handle_seen = false;
+      bool grounded_seen = false;
+      double confidence = 0.0;
+      auto read_string_from_keys = [&bus](const std::vector<std::string>& keys, std::string& value) {
+        for (const auto& key : keys) {
           DataVariant v;
-          if (bus.get(result_key, v) && std::holds_alternative<std::string>(v)) {
-            std::string r = std::get<std::string>(v);
-            if (!r.empty()) {
-              bus.put("session:" + started_skill.session_id + ":skill_result", r);
-              skill_result_jsonl.push_back(
-                  "{\"session_id\":\"" + json_escape(started_skill.session_id)
-                  + "\",\"skill\":\"" + json_escape(started_skill.skill)
-                  + "\",\"result\":\"" + json_escape(r) + "\"}");
-              found_result = true;
-              break;
+          if (bus.get(key, v) && std::holds_alternative<std::string>(v)) {
+            std::string candidate = std::get<std::string>(v);
+            if (!candidate.empty()) {
+              value = candidate;
+              return true;
             }
           }
         }
-        if (found_result) break;
+        return false;
+      };
+      auto read_bool_from_keys = [&bus](const std::vector<std::string>& keys, bool& value) {
+        for (const auto& key : keys) {
+          DataVariant v;
+          if (bus.get(key, v)) {
+            if (std::holds_alternative<bool>(v)) {
+              value = std::get<bool>(v);
+              return true;
+            }
+            if (std::holds_alternative<std::string>(v)) {
+              std::string candidate = std::get<std::string>(v);
+              if (candidate == "true" || candidate == "1") {
+                value = true;
+                return true;
+              }
+              if (candidate == "false" || candidate == "0") {
+                value = false;
+                return true;
+              }
+            }
+          }
+        }
+        return false;
+      };
+      auto read_double_from_keys = [&bus](const std::vector<std::string>& keys, double& value) {
+        for (const auto& key : keys) {
+          DataVariant v;
+          if (bus.get(key, v)) {
+            if (std::holds_alternative<double>(v)) {
+              value = std::get<double>(v);
+              return true;
+            }
+            if (std::holds_alternative<int64_t>(v)) {
+              value = static_cast<double>(std::get<int64_t>(v));
+              return true;
+            }
+            if (std::holds_alternative<std::string>(v)) {
+              try {
+                value = std::stod(std::get<std::string>(v));
+                return true;
+              } catch (...) {
+              }
+            }
+          }
+        }
+        return false;
+      };
+      while (std::chrono::steady_clock::now() < skills_deadline) {
+        read_string_from_keys(started_skill.answer_keys, answer_text);
+        read_string_from_keys(started_skill.status_keys, status);
+        read_string_from_keys(started_skill.reason_keys, reason);
+        can_handle_seen = read_bool_from_keys(started_skill.can_handle_keys, can_handle) || can_handle_seen;
+        grounded_seen = read_bool_from_keys(started_skill.grounded_keys, grounded) || grounded_seen;
+        read_double_from_keys(started_skill.confidence_keys, confidence);
+        if (!answer_text.empty() || can_handle_seen || !status.empty() || !reason.empty()) {
+          if (started_skill.skill == "skill_delegate" && !can_handle_seen && !answer_text.empty()) {
+            can_handle = true;
+            can_handle_seen = true;
+            status = status.empty() ? "ok" : status;
+            reason = reason.empty() ? "规划技能返回了执行建议。" : reason;
+          }
+          std::ostringstream item;
+          item << "{\"session_id\":\"" << json_escape(started_skill.session_id)
+               << "\",\"skill\":\"" << json_escape(started_skill.skill)
+               << "\",\"result\":\"" << json_escape(answer_text)
+               << "\",\"status\":\"" << json_escape(status.empty() ? "ok" : status)
+               << "\",\"reason\":\"" << json_escape(reason) << "\",\"can_handle\":"
+               << ((can_handle_seen ? can_handle : !answer_text.empty()) ? "true" : "false")
+               << ",\"grounded\":"
+               << ((grounded_seen ? grounded : false) ? "true" : "false")
+               << ",\"confidence\":" << confidence << "}";
+          if (!answer_text.empty()) {
+            bus.put("session:" + started_skill.session_id + ":skill_result", answer_text);
+          }
+          skill_result_jsonl.push_back(item.str());
+          found_result = true;
+          break;
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(80));
       }
     }
@@ -435,7 +610,7 @@ class ChatAgentBridge {
           if (!t.empty()) return t;
         }
       }
-      std::string direct_response = build_direct_response(user_text);
+      std::string direct_response = build_direct_response(user_text, history_json);
       bus.put("final_response", direct_response);
       return direct_response;
     }
@@ -466,14 +641,14 @@ class ChatAgentBridge {
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    if (result.empty()) {
-      std::ostringstream fallback;
-      fallback << "多技能分析结果：";
-      for (size_t i = 0; i < skill_result_jsonl.size(); ++i) {
-        if (i > 0) fallback << "；";
-        fallback << skill_result_jsonl[i];
+    if (result.rfind("当前可用技能暂不支持直接回答该问题：", 0) == 0) {
+      std::string direct_response = build_direct_response(user_text, history_json);
+      if (!direct_response.empty() && direct_response != result) {
+        result = direct_response;
       }
-      result = fallback.str();
+    }
+    if (result.empty()) {
+      result = build_direct_response(user_text, history_json);
     }
     bus.put("final_response", result);
     return result;
@@ -820,8 +995,11 @@ void run_http_server(const std::string& host, int port, const std::filesystem::p
       if (workflow_id.empty()) workflow_id = "session-dispatcher-workflow";
       store.append(session_id, "user", text);
       std::string history = store.recent_as_json(session_id, 12);
-      std::string payload = "session=" + session_id + "\nuser=" + text + "\nhistory=" + history;
-      std::string result = bridge.execute(workflow_id, payload);
+      std::string result = build_conversation_response(text, history);
+      if (result.empty()) {
+        std::string payload = "session=" + session_id + "\nuser=" + text + "\nhistory=" + history;
+        result = bridge.execute(workflow_id, payload);
+      }
       store.append(session_id, "assistant", result);
       std::ostringstream payload_json;
       payload_json << "{\"type\":\"message\",\"role\":\"assistant\",\"session_id\":\""
@@ -1025,8 +1203,11 @@ void handle_ws_client(int client_fd, ChatAgentBridge& bridge, ConversationStore&
       }
     }
     std::string history = store.recent_as_json(session_id, 12);
-    std::string payload = "session=" + session_id + "\nuser=" + text + "\nhistory=" + history;
-    std::string result = bridge.execute(workflow_id, payload);
+    std::string result = build_conversation_response(text, history);
+    if (result.empty()) {
+      std::string payload = "session=" + session_id + "\nuser=" + text + "\nhistory=" + history;
+      result = bridge.execute(workflow_id, payload);
+    }
     store.append(session_id, "assistant", result);
 
     std::ostringstream response;

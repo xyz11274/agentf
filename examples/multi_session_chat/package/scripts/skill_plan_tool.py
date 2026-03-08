@@ -4,6 +4,17 @@ import re
 import sys
 from typing import Dict, List
 
+from skill_contracts import (
+    assess_date_query,
+    assess_delegate_query,
+    assess_search_query,
+    assess_summary_query,
+    detect_date_intent,
+    detect_delegate_intent,
+    detect_search_intent,
+    detect_summary_intent,
+)
+
 SKILL_CATALOG = [
     {
         "skill": "skill_search",
@@ -32,11 +43,6 @@ SKILL_CATALOG = [
 ]
 SKILL_META = {item["skill"]: item for item in SKILL_CATALOG}
 ACTION_ORDER = {"done": 3, "start": 2, "waiting": 1, "skip": 0}
-SEARCH_PATTERN = re.compile(
-    r"新闻|热点|资讯|资料|搜索|检索|调查|最近|最新|天气|什么|如何|怎么|为何|为什么|介绍|解释|说明|告诉我")
-SUMMARY_PATTERN = re.compile(r"总结|概括|摘要|提炼|复盘|整理|上条消息|几个问题")
-DATE_PATTERN = re.compile(r"今天|明天|后天|周[一二三四五六日天]|星期|几号|日期|时间|本周|下周|月|年")
-DELEGATE_PATTERN = re.compile(r"计划|方案|安排|执行|协调|分工|代理|委托|步骤|路线|比较|分析")
 GREETING_PATTERN = re.compile(
     r"^\s*(?:hi|hello|hey|你好|您好|嗨|哈喽|早上好|中午好|下午好|晚上好|在吗)[!！,.。?？\s]*$",
     re.IGNORECASE)
@@ -112,27 +118,45 @@ def is_greeting(text: str) -> bool:
 def matched_skills(user_text: str) -> List[str]:
     text = user_text or ""
     matches: List[str] = []
-    if SEARCH_PATTERN.search(text):
+    if detect_search_intent(text):
         matches.append("skill_search")
-    if SUMMARY_PATTERN.search(text):
+    if detect_summary_intent(text):
         matches.append("skill_summary")
-    if DATE_PATTERN.search(text):
+    if detect_date_intent(text):
         matches.append("skill_date")
-    if DELEGATE_PATTERN.search(text):
+    if detect_delegate_intent(text):
         matches.append("skill_delegate")
     return matches
+
+
+def assess_skill(skill: str, user_text: str) -> Dict:
+    if skill == "skill_search":
+        return assess_search_query(user_text)
+    if skill == "skill_summary":
+        return assess_summary_query(user_text)
+    if skill == "skill_date":
+        return assess_date_query(user_text)
+    if skill == "skill_delegate":
+        return assess_delegate_query(user_text)
+    return {
+        "can_handle": False,
+        "status": "unsupported",
+        "grounded": False,
+        "confidence": 0.0,
+        "reason": "未知技能。",
+    }
 
 
 def base_scores(user_text: str) -> Dict[str, int]:
     text = user_text or ""
     scores = {skill: 10 for skill in SKILL_META}
-    if SEARCH_PATTERN.search(text):
+    if detect_search_intent(text):
         scores["skill_search"] += 60
-    if SUMMARY_PATTERN.search(text):
+    if detect_summary_intent(text):
         scores["skill_summary"] += 65
-    if DATE_PATTERN.search(text):
+    if detect_date_intent(text):
         scores["skill_date"] += 70
-    if DELEGATE_PATTERN.search(text):
+    if detect_delegate_intent(text):
         scores["skill_delegate"] += 55
     return scores
 
@@ -169,6 +193,9 @@ def choose_dispatcher_items(session_id: str, user_text: str, path_name: str,
             chosen = ordered[:1]
     items = []
     for rank, (skill, score) in enumerate(chosen, start=1):
+        assessment = assess_skill(skill, user_text)
+        if not assessment.get("can_handle"):
+            continue
         meta = SKILL_META[skill]
         items.append({
             "session_id": session_id,
@@ -176,7 +203,7 @@ def choose_dispatcher_items(session_id: str, user_text: str, path_name: str,
             "workflow_id": meta["workflow"],
             "priority": score,
             "status": "dispatch_proposed",
-            "reason": f"{path_name}路径认为该技能可处理当前请求",
+            "reason": assessment.get("reason") or f"{path_name}路径认为该技能可处理当前请求",
             "source_path": path_name,
             "rank": rank,
         })
@@ -208,7 +235,10 @@ def merge_dispatcher_lists(session_id: str, blobs: List[str]) -> List[Dict]:
 def choose_coordinator_items(session_id: str, path_name: str, selected_blob: str,
                              partial_blob: str, llm_text: str) -> List[Dict]:
     selected = parse_jsonl(selected_blob)
-    partial = {item.get("skill"): item for item in parse_jsonl(partial_blob) if item.get("skill")}
+    partial = {
+        item.get("skill"): item for item in parse_jsonl(partial_blob)
+        if item.get("skill") and item.get("can_handle") and item.get("status") != "unsupported"
+    }
     llm_hits = set(skill_from_llm(llm_text))
     decisions: List[Dict] = []
     started = 0
@@ -257,7 +287,14 @@ def choose_coordinator_items(session_id: str, path_name: str, selected_blob: str
 def merge_coordinator_lists(session_id: str, selected_blob: str, partial_blob: str,
                             blobs: List[str]) -> Dict:
     selected = parse_jsonl(selected_blob)
-    partial = {item.get("skill"): item for item in parse_jsonl(partial_blob) if item.get("skill")}
+    partial_items = [
+        item for item in parse_jsonl(partial_blob)
+        if item.get("skill")
+    ]
+    partial = {
+        item.get("skill"): item for item in partial_items
+        if item.get("can_handle") and item.get("status") != "unsupported"
+    }
     merged: Dict[str, Dict] = {}
     for blob in blobs:
         for item in parse_jsonl(blob):
@@ -313,24 +350,38 @@ def merge_coordinator_lists(session_id: str, selected_blob: str, partial_blob: s
             "rank": idx,
         })
     final_response = ""
-    if partial:
+    if partial_items:
         summary_results = []
         fragments = []
-        for item in parse_jsonl(partial_blob):
+        limitation_reasons = []
+        for item in partial_items:
             skill = item.get("skill", "")
             result = item.get("result", "")
-            if not result:
+            can_handle = bool(item.get("can_handle"))
+            status = item.get("status", "")
+            grounded = bool(item.get("grounded"))
+            if not can_handle or status == "unsupported":
+                if item.get("reason"):
+                    limitation_reasons.append(item["reason"])
                 continue
             if skill == "skill_summary":
                 summary_results.append(result)
+            if not result:
+                continue
             title = SKILL_META.get(skill, {}).get("title", skill)
-            fragments.append(f"【{title}】{result}")
+            prefix = f"【{title}】"
+            if grounded:
+                fragments.append(prefix + result)
+            else:
+                fragments.append(prefix + "有限支持：" + result)
         if summary_results:
             final_response = summary_results[-1]
         elif len(fragments) == 1:
             final_response = fragments[0].split("】", 1)[-1]
         elif fragments:
-            final_response = "我结合当前可用技能结果给出结论：" + "；".join(fragments)
+            final_response = "我结合当前可用技能结果给出回复：" + "；".join(fragments)
+        elif limitation_reasons:
+            final_response = "当前可用技能暂不支持直接回答该问题：" + limitation_reasons[-1]
     return {
         "selected_skills": dump_jsonl(plan),
         "orchestration_plan": json.dumps({"orchestration_plan": plan},

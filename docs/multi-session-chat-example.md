@@ -114,6 +114,13 @@
 
 skill workflow 统一通过 typed input/output 与 DataBus 交互，不再依赖额外的运行时中间文件。
 
+补充约束：
+
+- skill 输出除了业务结果，还会携带 `can_handle`、`status`、`grounded`、`confidence`、`reason` 等能力字段；
+- 当输入超出 skill 边界时，skill 必须返回拒答/不支持状态，而不是生成泛化兜底文本；
+- coordinator 只合并通过能力校验的 skill 结果，避免把无关 skill 的输出拼成错误答案。
+- 对于问候语、以及“总结上一条消息”这类可直接由会话历史回答的纯对话意图，`chat_server` 会在进入 skill 编排前直接返回结果，避免把历史总结错误地下发给不匹配的 skill。
+
 ### 4. session-context-workflow
 
 `session-context-workflow` 使用 Go 节点生成 session 级 context，典型链路为：

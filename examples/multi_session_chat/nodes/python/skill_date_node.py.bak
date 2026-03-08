@@ -24,8 +24,15 @@ import calendar
 import datetime as dt
 import json
 import os
+import pathlib
 import re
 import sys
+
+SCRIPT_DIR = pathlib.Path(__file__).resolve().parents[2] / "package" / "scripts"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from skill_contracts import assess_date_query  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Date NLP parsing (inlined from date_nlp_parser.py for self-contained node)
@@ -157,18 +164,29 @@ def main():
     json_mode  = os.environ.get("AF_OUTPUT_FORMAT", "") == "json"
 
     answer = ""
+    assessment = assess_date_query(user_text)
     if user_text:
         parsed = parse_date_query(user_text)
         if parsed and parsed.get("matched"):
             answer = parsed["answer"]
 
-    if not answer:
+    if not answer and assessment["can_handle"]:
         answer = current_date_answer()
 
     if json_mode:
-        print(json.dumps({"date_result": answer, "status": "ok"}, ensure_ascii=False))
+        payload = {
+            "date_result": answer,
+            "answer_text": answer,
+            "status": "ok" if answer else assessment["status"],
+            "can_handle": bool(answer),
+            "grounded": bool(answer),
+            "confidence": assessment["confidence"] if answer else 0.0,
+            "reason": "日期时间技能已生成结果。" if answer else assessment["reason"],
+        }
+        print(json.dumps(payload, ensure_ascii=False))
     else:
-        print(answer)
+        if answer:
+            print(answer)
 
 
 if __name__ == "__main__":

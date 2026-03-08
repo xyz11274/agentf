@@ -28,6 +28,10 @@ curl --noproxy "*" -sf -X POST "http://127.0.0.1:18088/api/chat" \
   -H 'Content-Type: application/json' \
   -d '{"session_id":"webui:default","text":"请帮我总结一下上条消息","workflow_id":"session-dispatcher-workflow"}' \
   >/tmp/multichat_chat2.json
+curl --noproxy "*" -sf -X POST "http://127.0.0.1:18088/api/chat" \
+  -H 'Content-Type: application/json' \
+  -d '{"session_id":"webui:default","text":"今天天气？","workflow_id":"session-dispatcher-workflow"}' \
+  >/tmp/multichat_chat3.json
 curl --noproxy "*" -sf "http://127.0.0.1:18088/api/history?session_id=webui%3Adefault&limit=20" \
   >/tmp/multichat_history.json
 
@@ -68,6 +72,26 @@ fi
 
 if grep -q '"text":"多技能分析结果："' /tmp/multichat_chat2.json; then
   echo "summary response was empty fallback"
+  exit 1
+fi
+
+if grep -q "暂不支持直接回答" /tmp/multichat_chat2.json; then
+  echo "summary response fell back to unsupported message"
+  exit 1
+fi
+
+if ! grep -q '上条消息主要内容是：' /tmp/multichat_chat2.json; then
+  echo "summary response did not summarize conversation history"
+  exit 1
+fi
+
+if grep -q "当前UTC时间" /tmp/multichat_chat3.json; then
+  echo "weather response incorrectly returned date fallback"
+  exit 1
+fi
+
+if grep -q "我结合当前可用技能结果给出" /tmp/multichat_chat3.json; then
+  echo "weather response incorrectly merged unsupported skills"
   exit 1
 fi
 

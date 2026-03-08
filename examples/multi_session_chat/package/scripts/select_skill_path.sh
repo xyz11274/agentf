@@ -23,12 +23,17 @@ phase, path_name, user_text, session_context, skill_catalog, selected, partial =
 prompt = {
     "phase": phase,
     "path": path_name,
-    "task": "从技能清单中选择0~N个可完成请求的技能，并给出优先级和状态。",
+    "task": "从技能清单中选择0~N个真正能完成请求的技能，并给出优先级和状态。若没有合适技能，返回空列表。",
     "user_text": user_text,
     "session_context": session_context,
     "skill_catalog": skill_catalog,
     "selected_skills": selected,
     "partial_skill_results": partial,
+    "rules": [
+        "严格遵守每个技能的 handles / does_not_handle / abstain_when 约束。",
+        "不要因为某个技能能输出泛化兜底文本就选择它。",
+        "如果问题需要当前示例并不具备的工具能力，应返回空 skills。",
+    ],
     "response_format": {
         "skills": [{
             "skill": "skill_search",

@@ -15,7 +15,13 @@
         {"name": "session_id", "type": "string", "required": true}
       ],
       "outputs": [
-        {"name": "date_result", "type": "string"}
+        {"name": "date_result", "type": "string"},
+        {"name": "answer_text", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "can_handle", "type": "bool"},
+        {"name": "grounded", "type": "bool"},
+        {"name": "confidence", "type": "double"},
+        {"name": "reason", "type": "string"}
       ]
     }
   ],
