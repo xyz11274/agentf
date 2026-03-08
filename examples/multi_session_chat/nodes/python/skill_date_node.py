@@ -137,11 +137,12 @@ def parse_date_query(text: str):
 # ---------------------------------------------------------------------------
 
 def current_date_answer() -> str:
-    now = dt.datetime.utcnow()
+    now = dt.datetime.now(dt.timezone.utc)
     today = dt.date.today()
     weekday_names = ["一", "二", "三", "四", "五", "六", "日"]
+    now_text = now.isoformat(timespec="seconds").replace("+00:00", "Z")
     return (
-        f"当前UTC时间：{now.isoformat(timespec='seconds')}Z；"
+        f"当前UTC时间：{now_text}；"
         f"本地日期：{today.isoformat()}（周{weekday_names[today.weekday()]}）；"
         f"7天后：{(today + dt.timedelta(days=7)).isoformat()}。"
     )

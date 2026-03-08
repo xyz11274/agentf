@@ -32,6 +32,14 @@ SKILL_CATALOG = [
 ]
 SKILL_META = {item["skill"]: item for item in SKILL_CATALOG}
 ACTION_ORDER = {"done": 3, "start": 2, "waiting": 1, "skip": 0}
+SEARCH_PATTERN = re.compile(
+    r"新闻|热点|资讯|资料|搜索|检索|调查|最近|最新|天气|什么|如何|怎么|为何|为什么|介绍|解释|说明|告诉我")
+SUMMARY_PATTERN = re.compile(r"总结|概括|摘要|提炼|复盘|整理|上条消息|几个问题")
+DATE_PATTERN = re.compile(r"今天|明天|后天|周[一二三四五六日天]|星期|几号|日期|时间|本周|下周|月|年")
+DELEGATE_PATTERN = re.compile(r"计划|方案|安排|执行|协调|分工|代理|委托|步骤|路线|比较|分析")
+GREETING_PATTERN = re.compile(
+    r"^\s*(?:hi|hello|hey|你好|您好|嗨|哈喽|早上好|中午好|下午好|晚上好|在吗)[!！,.。?？\s]*$",
+    re.IGNORECASE)
 
 
 def parse_json(value: str, default):
@@ -97,16 +105,34 @@ def skill_from_llm(raw_text: str) -> List[str]:
     return hits
 
 
+def is_greeting(text: str) -> bool:
+    return bool(GREETING_PATTERN.match((text or "").strip()))
+
+
+def matched_skills(user_text: str) -> List[str]:
+    text = user_text or ""
+    matches: List[str] = []
+    if SEARCH_PATTERN.search(text):
+        matches.append("skill_search")
+    if SUMMARY_PATTERN.search(text):
+        matches.append("skill_summary")
+    if DATE_PATTERN.search(text):
+        matches.append("skill_date")
+    if DELEGATE_PATTERN.search(text):
+        matches.append("skill_delegate")
+    return matches
+
+
 def base_scores(user_text: str) -> Dict[str, int]:
     text = user_text or ""
     scores = {skill: 10 for skill in SKILL_META}
-    if re.search(r"新闻|热点|资讯|资料|搜索|检索|调查|最近|最新|天气", text):
+    if SEARCH_PATTERN.search(text):
         scores["skill_search"] += 60
-    if re.search(r"总结|概括|摘要|提炼|复盘|整理|上条消息|几个问题", text):
+    if SUMMARY_PATTERN.search(text):
         scores["skill_summary"] += 65
-    if re.search(r"今天|明天|后天|周[一二三四五六日天]|星期|几号|日期|时间|本周|下周|月|年", text):
+    if DATE_PATTERN.search(text):
         scores["skill_date"] += 70
-    if re.search(r"计划|方案|安排|执行|协调|分工|代理|委托|步骤|路线|比较|分析", text):
+    if DELEGATE_PATTERN.search(text):
         scores["skill_delegate"] += 55
     return scores
 
@@ -125,14 +151,22 @@ def apply_dispatcher_path(scores: Dict[str, int], path_name: str):
 
 def choose_dispatcher_items(session_id: str, user_text: str, path_name: str,
                             llm_text: str) -> List[Dict]:
+    if is_greeting(user_text):
+        return []
     scores = base_scores(user_text)
+    direct_matches = set(matched_skills(user_text))
     apply_dispatcher_path(scores, path_name)
     for skill in skill_from_llm(llm_text):
-        scores[skill] += 35
+        if not direct_matches or skill in direct_matches:
+            scores[skill] += 35
     ordered = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-    chosen = [item for item in ordered if item[1] >= 55][:3]
+    chosen = [item for item in ordered if item[1] >= 55 and
+              (not direct_matches or item[0] in direct_matches)][:3]
     if not chosen:
-        chosen = ordered[:1]
+        if direct_matches:
+            chosen = [item for item in ordered if item[0] in direct_matches][:1]
+        elif ordered and ordered[0][1] >= 75:
+            chosen = ordered[:1]
     items = []
     for rank, (skill, score) in enumerate(chosen, start=1):
         meta = SKILL_META[skill]
@@ -280,15 +314,22 @@ def merge_coordinator_lists(session_id: str, selected_blob: str, partial_blob: s
         })
     final_response = ""
     if partial:
+        summary_results = []
         fragments = []
         for item in parse_jsonl(partial_blob):
             skill = item.get("skill", "")
             result = item.get("result", "")
             if not result:
                 continue
+            if skill == "skill_summary":
+                summary_results.append(result)
             title = SKILL_META.get(skill, {}).get("title", skill)
             fragments.append(f"【{title}】{result}")
-        if fragments:
+        if summary_results:
+            final_response = summary_results[-1]
+        elif len(fragments) == 1:
+            final_response = fragments[0].split("】", 1)[-1]
+        elif fragments:
             final_response = "我结合当前可用技能结果给出结论：" + "；".join(fragments)
     return {
         "selected_skills": dump_jsonl(plan),

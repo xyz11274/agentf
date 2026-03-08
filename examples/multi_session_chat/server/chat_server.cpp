@@ -83,6 +83,46 @@ std::string sanitize_session_id(const std::string& session_id) {
   return safe;
 }
 
+std::string trim_copy(const std::string& input) {
+  const auto begin = std::find_if_not(input.begin(), input.end(), [](unsigned char ch) {
+    return std::isspace(ch);
+  });
+  const auto end = std::find_if_not(input.rbegin(), input.rend(), [](unsigned char ch) {
+    return std::isspace(ch);
+  }).base();
+  if (begin >= end) {
+    return "";
+  }
+  return std::string(begin, end);
+}
+
+std::string ascii_lower_copy(const std::string& input) {
+  std::string lowered = input;
+  std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return lowered;
+}
+
+bool is_greeting_text(const std::string& text) {
+  const std::string trimmed = trim_copy(text);
+  if (trimmed.empty()) {
+    return false;
+  }
+  const std::string lowered = ascii_lower_copy(trimmed);
+  static const std::array<std::string, 9> kGreetings = {
+      "hi", "hello", "hey", "你好", "您好", "嗨", "哈喽", "在吗", "在么"};
+  return std::find(kGreetings.begin(), kGreetings.end(), trimmed) != kGreetings.end() ||
+         std::find(kGreetings.begin(), kGreetings.end(), lowered) != kGreetings.end();
+}
+
+std::string build_direct_response(const std::string& user_text) {
+  if (is_greeting_text(user_text)) {
+    return "你好！我可以帮你做总结、检索、日期时间计算和任务规划。";
+  }
+  return "我暂时没有选到合适的技能，请换一种说法，或明确告诉我要总结、检索、算日期，还是做规划。";
+}
+
 class ConversationStore {
  public:
   explicit ConversationStore(const std::string& root) : root_(root) {
@@ -235,10 +275,16 @@ class ChatAgentBridge {
 
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(max_wait_sec);
     bool dispatcher_done = false;
+    bool dispatcher_done_seen = false;
     std::string selected_skills;
+    std::chrono::steady_clock::time_point dispatcher_done_at;
     while (std::chrono::steady_clock::now() < deadline) {
       DataVariant v;
       if (bus.get("dispatcher_done", v)) {
+        if (!dispatcher_done_seen) {
+          dispatcher_done_at = std::chrono::steady_clock::now();
+          dispatcher_done_seen = true;
+        }
         dispatcher_done = true;
       }
       if (bus.get("selected_skills", v) && std::holds_alternative<std::string>(v)) {
@@ -247,11 +293,20 @@ class ChatAgentBridge {
       if (dispatcher_done && !selected_skills.empty()) {
         break;
       }
+      if (dispatcher_done_seen &&
+          (std::chrono::steady_clock::now() - dispatcher_done_at) >= std::chrono::milliseconds(250)) {
+        break;
+      }
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
-    if (!dispatcher_done || selected_skills.empty()) {
+    if (!dispatcher_done) {
       return "[error] dispatcher workflow timeout";
+    }
+    if (selected_skills.empty()) {
+      std::string direct_response = build_direct_response(user_text);
+      bus.put("final_response", direct_response);
+      return direct_response;
     }
 
     bus.remove("orchestration_plan");
@@ -380,7 +435,9 @@ class ChatAgentBridge {
           if (!t.empty()) return t;
         }
       }
-      return "已完成分析处理。";
+      std::string direct_response = build_direct_response(user_text);
+      bus.put("final_response", direct_response);
+      return direct_response;
     }
 
     std::ostringstream jsonl;

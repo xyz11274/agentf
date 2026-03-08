@@ -41,8 +41,33 @@ if grep -q "\\[ok\\] processed" /tmp/multichat_chat.json; then
   exit 1
 fi
 
+if grep -q "当前UTC时间" /tmp/multichat_chat.json; then
+  echo "greeting response leaked skill output"
+  exit 1
+fi
+
 if ! grep -q '"text":"' /tmp/multichat_chat2.json; then
   echo "second round chat failed"
+  exit 1
+fi
+
+if grep -q "DeprecationWarning" /tmp/multichat_chat2.json; then
+  echo "chat response leaked runtime warning"
+  exit 1
+fi
+
+if grep -q "当前UTC时间" /tmp/multichat_chat2.json; then
+  echo "summary response incorrectly returned date skill output"
+  exit 1
+fi
+
+if grep -q "委托规划" /tmp/multichat_chat2.json; then
+  echo "summary response incorrectly returned delegate skill output"
+  exit 1
+fi
+
+if grep -q '"text":"多技能分析结果："' /tmp/multichat_chat2.json; then
+  echo "summary response was empty fallback"
   exit 1
 fi
 
