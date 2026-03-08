@@ -259,7 +259,8 @@ TEST_F(AgentTest, PackageDispatcherWorkflowMappingIsApplied) {
           "id": 0,
           "type": "contextupdater",
           "description": "Update agent context",
-          "workflow_file": "task-context.json"
+          "workflow_file": "task-context.json",
+          "workflow_pool_size": 2
         }
       ],
       "sessions": [
@@ -336,7 +337,8 @@ TEST_F(AgentTest, WorkflowIdMetadataHasHigherPriorityThanCoordinatorWorkflow) {
           "id": 0,
           "type": "contextupdater",
           "description": "Update agent context",
-          "workflow_file": "task-context.json"
+          "workflow_file": "task-context.json",
+          "workflow_pool_size": 2
         }
       ],
       "sessions": [
@@ -430,7 +432,8 @@ TEST_F(AgentTest, AgentJsonInstantiatesConfiguredSessionPoolAndSkillPools) {
           "id": 0,
           "type": "contextupdater",
           "description": "Update agent context",
-          "workflow_file": "task-context.json"
+          "workflow_file": "task-context.json",
+          "workflow_pool_size": 2
         }
       ],
       "sessions": [
@@ -439,13 +442,14 @@ TEST_F(AgentTest, AgentJsonInstantiatesConfiguredSessionPoolAndSkillPools) {
           "description": "Homogeneous pooled session",
           "task_count": 3,
           "tasks": [
-            { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflow_main.json" },
-            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflow_main.json" },
+            { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflow_main.json", "workflow_pool_size": 3 },
+            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflow_main.json", "workflow_pool_size": 2 },
             {
               "id": 2,
               "type": "skill",
               "description": "Search skill",
               "workflow_file": "workflow_skill.json",
+              "workflow_pool_size": 4,
               "skill": {
                 "name": "search",
                 "config_dir": "skills/search"
@@ -478,6 +482,7 @@ TEST_F(AgentTest, AgentJsonInstantiatesConfiguredSessionPoolAndSkillPools) {
   auto skill_pool_1 = skill_session->get_task("1_task_2_pool_1");
   ASSERT_NE(agent->get_context(), nullptr);
   ASSERT_NE(agent->get_context()->get_context_updater_task(), nullptr);
+  EXPECT_EQ(agent->get_context()->get_context_updater_task()->get_workflow_pool_size(), 2);
   ASSERT_NE(skill_task, nullptr);
   ASSERT_NE(skill_pool_0, nullptr);
   ASSERT_NE(skill_pool_1, nullptr);
@@ -486,11 +491,139 @@ TEST_F(AgentTest, AgentJsonInstantiatesConfiguredSessionPoolAndSkillPools) {
   EXPECT_EQ(skill_task->get_skill_name(), "search");
   EXPECT_EQ(skill_task->get_skill_config_dir(), "skills/search");
   EXPECT_EQ(skill_task->get_instance_pool_size(), 2);
+  EXPECT_EQ(skill_task->get_workflow_pool_size(), 4);
   EXPECT_FALSE(skill_task->is_skill_instance());
   EXPECT_TRUE(skill_pool_0->is_skill_instance());
   EXPECT_TRUE(skill_pool_1->is_skill_instance());
   EXPECT_EQ(skill_pool_0->get_skill_instance_index(), 0);
   EXPECT_EQ(skill_pool_1->get_skill_instance_index(), 1);
+
+  auto dispatcher_task = pooled_session->get_task("0_task_0");
+  auto coordinator_task = pooled_session->get_task("0_task_1");
+  ASSERT_NE(dispatcher_task, nullptr);
+  ASSERT_NE(coordinator_task, nullptr);
+  EXPECT_EQ(dispatcher_task->get_workflow_pool_size(), 3);
+  EXPECT_EQ(coordinator_task->get_workflow_pool_size(), 2);
+
+  fs::remove_all(tmp);
+}
+
+TEST_F(AgentTest, AgentJsonRejectsInvalidWorkflowPoolSize) {
+  namespace fs = std::filesystem;
+  const fs::path tmp = fs::path("build/test_invalid_workflow_pool_pkg");
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({
+      "name": "invalid-workflow-pool-agent",
+      "version": "1.0.0",
+      "workflows": ["workflow_main.json"]
+    })";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "session_pool_size": 1,
+      "sessions": [
+        {
+          "id": 0,
+          "description": "Homogeneous pooled session",
+          "task_count": 3,
+          "tasks": [
+            { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflow_main.json", "workflow_pool_size": 0 },
+            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflow_main.json" },
+            {
+              "id": 2,
+              "type": "skill",
+              "description": "Search skill",
+              "workflow_file": "workflow_main.json",
+              "skill": {
+                "name": "search",
+                "config_dir": "skills/search"
+              }
+            }
+          ]
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow_main.json", "wf_main");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  EXPECT_EQ(agent, nullptr);
+
+  fs::remove_all(tmp);
+}
+
+TEST_F(AgentTest, AgentJsonDefaultsWorkflowPoolSizeToOneWhenOmitted) {
+  namespace fs = std::filesystem;
+  const fs::path tmp = fs::path("build/test_default_workflow_pool_pkg");
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({
+      "name": "default-workflow-pool-agent",
+      "version": "1.0.0",
+      "workflows": ["workflow_main.json", "task-context.json"]
+    })";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "session_pool_size": 1,
+      "tasks": [
+        {
+          "id": 0,
+          "type": "contextupdater",
+          "description": "Update agent context",
+          "workflow_file": "task-context.json"
+        }
+      ],
+      "sessions": [
+        {
+          "id": 0,
+          "description": "Homogeneous pooled session",
+          "task_count": 3,
+          "tasks": [
+            { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflow_main.json" },
+            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflow_main.json" },
+            {
+              "id": 2,
+              "type": "skill",
+              "description": "Search skill",
+              "workflow_file": "workflow_main.json",
+              "skill": {
+                "name": "search",
+                "config_dir": "skills/search"
+              }
+            }
+          ]
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow_main.json", "wf_main");
+  write_workflow_json(tmp / "task-context.json", "wf_context");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+  ASSERT_NE(agent->get_context(), nullptr);
+  ASSERT_NE(agent->get_context()->get_context_updater_task(), nullptr);
+  EXPECT_EQ(agent->get_context()->get_context_updater_task()->get_workflow_pool_size(), 1);
+
+  auto session = agent->get_session_by_key("0");
+  ASSERT_NE(session, nullptr);
+  auto dispatcher = session->get_task("0_task_0");
+  auto coordinator = session->get_task("0_task_1");
+  auto skill = session->get_task("0_task_2");
+  ASSERT_NE(dispatcher, nullptr);
+  ASSERT_NE(coordinator, nullptr);
+  ASSERT_NE(skill, nullptr);
+  EXPECT_EQ(dispatcher->get_workflow_pool_size(), 1);
+  EXPECT_EQ(coordinator->get_workflow_pool_size(), 1);
+  EXPECT_EQ(skill->get_workflow_pool_size(), 1);
 
   fs::remove_all(tmp);
 }

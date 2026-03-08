@@ -37,6 +37,7 @@ class AgentPackage {
     std::string task_type;
     std::string description;
     std::string workflow_file;
+    int         workflow_pool_size = 1;
     SkillTaskConfig skill;
   };
 

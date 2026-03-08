@@ -84,6 +84,12 @@ bool parse_task_definition(const rapidjson::Value& task_value, int expected_inde
       || task_definition.workflow_file.empty()) {
     return fail_agent_json_parse("task.workflow_file must be a non-empty string");
   }
+  task_definition.workflow_pool_size = 1;
+  if(task_value.HasMember("workflow_pool_size")
+     && (!parse_int_member(task_value, "workflow_pool_size", task_definition.workflow_pool_size)
+         || task_definition.workflow_pool_size < 1)) {
+    return fail_agent_json_parse("task.workflow_pool_size must be an integer >= 1");
+  }
 
   if(task_definition.task_type == "skill") {
     if(!task_value.HasMember("skill") || !task_value["skill"].IsObject()) {

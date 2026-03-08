@@ -1,5 +1,7 @@
 #include "agent/context.h"
 
+#include <algorithm>
+
 #include "agent/dataref_bridge.h"
 #include "agent/task.h"
 
@@ -22,6 +24,8 @@ AgentContext::AgentContext(const Config& config) : config_(config), is_valid_(tr
     updater_config.context_workflow = workflow;
     updater_config.workflow_id = workflow;
     updater_config.workflow_file = workflow;
+    updater_config.workflow_pool_size =
+        std::max(1, config_.contextupdater_workflow_pool_size);
     updater_config.disable_context = true;
     context_updater_task_ = std::make_shared<MMAgentTask>(updater_config);
   }

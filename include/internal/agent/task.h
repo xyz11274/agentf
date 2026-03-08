@@ -42,6 +42,7 @@ class MMAgentTask {
     std::string skill_name;
     std::string skill_config_dir;
     int         instance_pool_size = 1;
+    int         workflow_pool_size = 1;
     bool        is_skill_instance = false;
     int         skill_instance_index = -1;
     bool        disable_context = false;
@@ -63,6 +64,7 @@ class MMAgentTask {
   const std::string& get_skill_name() const { return config_.skill_name; }
   const std::string& get_skill_config_dir() const { return config_.skill_config_dir; }
   int                get_instance_pool_size() const { return config_.instance_pool_size; }
+  int                get_workflow_pool_size() const { return config_.workflow_pool_size; }
   bool               is_skill_instance() const { return config_.is_skill_instance; }
   int                get_skill_instance_index() const { return config_.skill_instance_index; }
   TaskState          get_state() const { return state_; }

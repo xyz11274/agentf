@@ -24,6 +24,7 @@ class AgentContext {
     std::string contextupdater_workflow;
     std::string contextupdater_task_id;
     std::string contextupdater_description;
+    int         contextupdater_workflow_pool_size = 1;
     int         max_context_variables = 1024;
   };
 

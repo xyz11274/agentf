@@ -6,7 +6,7 @@
 参考 `publish/agent/AGENT_PACKAGE_SPEC.md`，按规范准备 MMAgent 包内容。
 
 ### 1.1 必备文件
-- `agent.json`：MMAgent 名称、版本、session pool 拓扑以及 agent 级 contextupdater 配置
+- `agent.json`：MMAgent 名称、版本、session pool 拓扑以及 agent 级 contextupdater 配置；task 级还可通过 `workflow_pool_size` 声明 workflow 多实例池，通过 `skill.instance_pool_size` 声明 skill 任务实例池
 - `agentCard.md`：MMAgent Prompt/能力说明
 - `workflow_XX.json`：流程定义
 - `node_xxx.$TYPE`：可执行部件（`.sh/.py/.so/.jar`）

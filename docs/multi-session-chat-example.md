@@ -28,6 +28,7 @@
   - 1 个 `dispatcher`
   - 1 个 `coordinator`
   - 多个 `skill`
+- 每个 task 还可以通过 `workflow_pool_size` 声明绑定 workflow 的实例池大小；
 - `contextupdater` 作为 agent 顶层任务单独配置，不属于 session 内任务。
 
 ### workflow 映射

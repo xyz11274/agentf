@@ -8,7 +8,8 @@
       "id": 0,
       "type": "contextupdater",
       "description": "Update shared agent context",
-      "workflow_file": "session_context_workflow.json"
+      "workflow_file": "session_context_workflow.json",
+      "workflow_pool_size": 2
     }
   ],
   "sessions": [
@@ -21,13 +22,15 @@
           "id": 0,
           "type": "dispatcher",
           "description": "Dispatch requests",
-          "workflow_file": "session_dispatcher_workflow.json"
+          "workflow_file": "session_dispatcher_workflow.json",
+          "workflow_pool_size": 3
         },
         {
           "id": 1,
           "type": "coordinator",
           "description": "Coordinate outputs",
-          "workflow_file": "session_coordinator_workflow.json"
+          "workflow_file": "session_coordinator_workflow.json",
+          "workflow_pool_size": 2
         },
         {
           "id": 2,
@@ -38,7 +41,8 @@
             "name": "search",
             "config_dir": "runtime",
             "instance_pool_size": 2
-          }
+          },
+          "workflow_pool_size": 2
         },
         {
           "id": 3,
@@ -49,7 +53,8 @@
             "name": "summary",
             "config_dir": "runtime",
             "instance_pool_size": 2
-          }
+          },
+          "workflow_pool_size": 2
         },
         {
           "id": 4,
@@ -60,7 +65,8 @@
             "name": "date",
             "config_dir": "runtime",
             "instance_pool_size": 2
-          }
+          },
+          "workflow_pool_size": 2
         },
         {
           "id": 5,
@@ -71,7 +77,8 @@
             "name": "delegate",
             "config_dir": "runtime",
             "instance_pool_size": 2
-          }
+          },
+          "workflow_pool_size": 2
         }
       ]
     }

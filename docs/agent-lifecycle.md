@@ -698,7 +698,8 @@ sequenceDiagram
             "id": 0,
             "type": "contextupdater",
             "description": "Update shared agent context",
-            "workflow_file": "agent_context_workflow.json"
+            "workflow_file": "agent_context_workflow.json",
+            "workflow_pool_size": 2
         }
     ],
     "sessions": [
@@ -707,13 +708,14 @@ sequenceDiagram
             "description": "Homogeneous pooled session template",
             "task_count": 4,
             "tasks": [
-                {"id": 0, "type": "dispatcher", "description": "Dispatch requests", "workflow_file": "dispatcher_workflow.json"},
-                {"id": 1, "type": "coordinator", "description": "Coordinate results", "workflow_file": "coordinator_workflow.json"},
+                {"id": 0, "type": "dispatcher", "description": "Dispatch requests", "workflow_file": "dispatcher_workflow.json", "workflow_pool_size": 3},
+                {"id": 1, "type": "coordinator", "description": "Coordinate results", "workflow_file": "coordinator_workflow.json", "workflow_pool_size": 2},
                 {
                     "id": 2,
                     "type": "skill",
                     "description": "FAQ skill",
                     "workflow_file": "faq_skill_workflow.json",
+                    "workflow_pool_size": 2,
                     "skill": {
                         "name": "faq",
                         "config_dir": "skills/faq",
@@ -725,6 +727,7 @@ sequenceDiagram
                     "type": "skill",
                     "description": "Escalation skill",
                     "workflow_file": "escalation_skill_workflow.json",
+                    "workflow_pool_size": 2,
                     "skill": {
                         "name": "escalation",
                         "config_dir": "skills/escalation",
@@ -740,6 +743,7 @@ sequenceDiagram
 - `tasks[]`：agent 级任务列表，当前使用 `contextupdater` 负责全局上下文更新。
 - `sessions[]`：固定只配置 1 份同质化 session 模板，由 `session_pool_size` 复制出整个 session 池。
 - `session.id` / `task.id`：模板内必须从 `0` 连续编号。
+- `task.workflow_pool_size`：workflow 实例池大小，默认 `1`，用于表达某个任务模板希望预留多少个同类 workflow 实例。
 - `skill.instance_pool_size`：skill 任务实例池大小，默认 `2`，显式配置时必须大于等于 `1`。
 
 ---
@@ -763,6 +767,9 @@ sequenceDiagram
   - `1`：coordinator
   - `2..N`：skill
 - agent 级 `contextupdater` 通过顶层 `tasks[]` 声明，不再占用 session 内任务编号。
+- `workflow_pool_size` 与 `skill.instance_pool_size` 含义不同：
+  - `workflow_pool_size`：描述某个 task 绑定 workflow 的实例池规模，适用于 `contextupdater` / `dispatcher` / `coordinator` / `skill`。
+  - `skill.instance_pool_size`：描述 skill task 自身要展开多少个任务实例。
 - `skill` 任务可继续扩展，并按实例池创建 `..._pool_<index>` 形式的任务实例；`instance_pool_size` 缺省值为 `2`。
 - 当消息未指定 `session_id` 时，由 `SessionRouter` 按 `user_id + client_id` 复用或分配 pooled session。
 - runtime worker 侧统一使用 `control` / `business` 双队列，workflow / node / edge 不再维护独立事件线程。

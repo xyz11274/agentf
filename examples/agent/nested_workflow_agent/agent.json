@@ -8,7 +8,8 @@
       "id": 0,
       "type": "contextupdater",
       "description": "Update nested-workflow context",
-      "workflow_file": "data_pipeline.json"
+      "workflow_file": "data_pipeline.json",
+      "workflow_pool_size": 2
     }
   ],
   "sessions": [
@@ -21,13 +22,15 @@
           "id": 0,
           "type": "dispatcher",
           "description": "Dispatch nested workflow requests",
-          "workflow_file": "main_workflow.json"
+          "workflow_file": "main_workflow.json",
+          "workflow_pool_size": 3
         },
         {
           "id": 1,
           "type": "coordinator",
           "description": "Coordinate nested workflow outputs",
-          "workflow_file": "main_workflow.json"
+          "workflow_file": "main_workflow.json",
+          "workflow_pool_size": 2
         },
         {
           "id": 2,
@@ -38,7 +41,8 @@
             "name": "data-pipeline",
             "config_dir": "skills/data-pipeline",
             "instance_pool_size": 2
-          }
+          },
+          "workflow_pool_size": 2
         },
         {
           "id": 3,
@@ -49,7 +53,8 @@
             "name": "validation",
             "config_dir": "skills/validation",
             "instance_pool_size": 2
-          }
+          },
+          "workflow_pool_size": 2
         },
         {
           "id": 4,
@@ -60,7 +65,8 @@
             "name": "processing",
             "config_dir": "skills/processing",
             "instance_pool_size": 2
-          }
+          },
+          "workflow_pool_size": 2
         }
       ]
     }

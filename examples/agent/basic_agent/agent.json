@@ -8,7 +8,8 @@
       "id": 0,
       "type": "contextupdater",
       "description": "Update basic agent context",
-      "workflow_file": "workflow_01.json"
+      "workflow_file": "workflow_01.json",
+      "workflow_pool_size": 2
     }
   ],
   "sessions": [
@@ -21,13 +22,15 @@
           "id": 0,
           "type": "dispatcher",
           "description": "Dispatch user requests",
-          "workflow_file": "workflow_01.json"
+          "workflow_file": "workflow_01.json",
+          "workflow_pool_size": 3
         },
         {
           "id": 1,
           "type": "coordinator",
           "description": "Coordinate task outputs",
-          "workflow_file": "coordinator_workflow.json"
+          "workflow_file": "coordinator_workflow.json",
+          "workflow_pool_size": 2
         },
         {
           "id": 2,
@@ -38,7 +41,8 @@
             "name": "basic-conversation",
             "config_dir": "skills/basic-conversation",
             "instance_pool_size": 2
-          }
+          },
+          "workflow_pool_size": 2
         }
       ]
     }

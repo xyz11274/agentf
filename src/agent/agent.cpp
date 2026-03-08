@@ -320,6 +320,8 @@ bool MMAgent::initialize_components(std::shared_ptr<AgentPackage> package) {
       context_config.contextupdater_task_id = config_.id + "_contextupdater";
       context_config.contextupdater_description =
           package_->get_config().contextupdater_task.description;
+      context_config.contextupdater_workflow_pool_size =
+          package_->get_config().contextupdater_task.workflow_pool_size;
     }
   }
   context_ = std::make_shared<AgentContext>(context_config);
@@ -431,6 +433,7 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_definition(
     task_config.task_context_workflow = session_config.task_context_workflow;
     task_config.workflow_id = resolve_workflow_reference(task_definition.workflow_file);
     task_config.workflow_file = resolve_workflow_file(task_definition.workflow_file);
+    task_config.workflow_pool_size = task_definition.workflow_pool_size;
     if(task_config.workflow_file.empty()) {
       task_config.workflow_file = task_definition.workflow_file;
     }
