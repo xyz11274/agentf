@@ -6,6 +6,7 @@
 #include <random>
 #include <thread>
 
+#include "agent/session.h"
 #include "agent/task.h"
 #include "runtime/trace/trace_context.h"
 #include "runtime/trace/trace_manager.h"
@@ -798,7 +799,20 @@ void MMAgentRuntime::agent_task_poller_loop() {
         response.metadata["workflow_id"] = workflow_id;
         response.metadata["message_type"] = "data_exchange";
         response.content = scheduled ? "workflow_scheduled" : "workflow_schedule_failed";
-        task->enqueue_data_exchange_message(response);
+        std::shared_ptr<framework::MMAgentTask> response_target = task;
+        std::string source_task_id;
+        std::string session_id;
+        if(task->get_parameter("source_task_id", source_task_id)
+           && task->get_parameter("session_id", session_id) && !source_task_id.empty()
+           && !session_id.empty()) {
+          if(auto session = agent->get_session_by_key(session_id); session) {
+            if(auto source_task = session->get_task(source_task_id); source_task) {
+              response_target = source_task;
+            }
+          }
+        }
+        response.receiver_id = response_target->get_config().task_id;
+        response_target->enqueue_data_exchange_message(response);
       }
     }
   }

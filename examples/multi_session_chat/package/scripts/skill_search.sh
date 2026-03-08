@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-. "$(cd "$(dirname "$0")" && pwd)/../../../publish/sdk/shell/agentflow_databus.sh"
+. "$(cd "$(dirname "$0")" && pwd)/../../../../publish/sdk/shell/agentflow_databus.sh"
 
 SESSION_ID="${AF_SESSION_ID:-default}"
 QUERY="${AF_USER_TEXT:-$(af_databus_get user_text 2>/dev/null || true)}"

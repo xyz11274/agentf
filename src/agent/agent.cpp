@@ -801,6 +801,9 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         coordinator_message.metadata["selected_skills"] = *text;
       }
     }
+    if(coordinator_message.metadata["selected_skills"].empty()) {
+      return;
+    }
     if(context_) {
       auto reserved = context_->get_reserved_payloads();
       if(const auto reserved_it =

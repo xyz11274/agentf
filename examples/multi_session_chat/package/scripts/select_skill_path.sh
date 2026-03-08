@@ -2,7 +2,7 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-. "$SCRIPT_DIR/../../../publish/sdk/shell/agentflow_databus.sh"
+. "$SCRIPT_DIR/../../../../publish/sdk/shell/agentflow_databus.sh"
 
 PHASE="${1:-dispatcher}"
 PATH_NAME="${2:-semantic}"
