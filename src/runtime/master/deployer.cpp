@@ -85,6 +85,8 @@ bool Deployer::register_worker(const std::shared_ptr<MMWorkerEngine>& worker) {
   if(!worker) {
     return false;
   }
+  Logger::instance().info_f("[DEPLOYER_REGISTER_WORKER] worker_id=%s",
+                            worker->get_worker_id().c_str());
   {
     std::lock_guard<std::mutex> qlock(queue_mutex_);
     worker_registration_queue_.push({worker, false});
@@ -191,10 +193,23 @@ bool Deployer::deploy_workflow_internal(const WorkflowInstanceInfo& info,
 bool Deployer::deploy_workflow_instance(const std::string& workflow_instance_id,
                                         const std::string& workflow_id,
                                         const std::string& preferred_worker_id) {
+  Logger::instance().info_f("[DEPLOYER_DEPLOY_WORKFLOW] workflow_instance_id=%s workflow_id=%s preferred_worker=%s",
+                            workflow_instance_id.c_str(), workflow_id.c_str(),
+                            preferred_worker_id.empty() ? "(auto)" : preferred_worker_id.c_str());
   WorkflowInstanceInfo info;
   info.workflow_instance_id = workflow_instance_id;
   info.workflow_id = workflow_id;
-  return enqueue_deploy_request(info, preferred_worker_id) && deploy_workflow_internal(info, preferred_worker_id);
+  bool success = enqueue_deploy_request(info, preferred_worker_id) && deploy_workflow_internal(info, preferred_worker_id);
+  if(success) {
+    std::string assigned_worker;
+    get_workflow_worker(workflow_instance_id, assigned_worker);
+    Logger::instance().info_f("[DEPLOYER_DEPLOY_WORKFLOW] workflow_instance_id=%s assigned_worker=%s",
+                              workflow_instance_id.c_str(), assigned_worker.c_str());
+  } else {
+    Logger::instance().warn_f("[DEPLOYER_DEPLOY_WORKFLOW] failed to deploy workflow_instance_id=%s",
+                              workflow_instance_id.c_str());
+  }
+  return success;
 }
 
 bool Deployer::enqueue_deploy_request(const WorkflowInstanceInfo& info,

@@ -129,6 +129,12 @@ TaskScheduleResult Scheduler::schedule_task(const TaskScheduleRequest& request,
     task_to_workflow_[request.task_id] = result;
     ++workflow_task_load_[result.workflow_instance_id];
     task_status_[request.task_id] = "scheduled";
+    Logger::instance().info_f("[SCHEDULER_SCHEDULE_TASK] task_id=%s workflow_id=%s -> workflow_instance=%s worker=%s",
+                              request.task_id.c_str(), request.workflow_id.c_str(),
+                              result.workflow_instance_id.c_str(), result.worker_id.c_str());
+  } else {
+    Logger::instance().warn_f("[SCHEDULER_SCHEDULE_TASK] failed to schedule task_id=%s workflow_id=%s (no available instance)",
+                              request.task_id.c_str(), request.workflow_id.c_str());
   }
   return result;
 }
