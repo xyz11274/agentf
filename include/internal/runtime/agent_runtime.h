@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -66,7 +67,7 @@ public:
                         const DataMap& inputs);
 
   // MMNode execution (MMNode Level Worker)
-  void process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr node);
+  void process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr node, const std::string& execution_id);
 
   // Event handling
   void on_node_complete(const AgentId& agent_id, const WorkflowId& workflow_id,
@@ -129,6 +130,7 @@ private:
     AgentPtr    agent;
     WorkflowPtr workflow;
     NodePtr     node;
+    std::string execution_id;
   };
   std::queue<QueuedNodeTask> node_task_queue_;
   std::mutex                 task_queue_mutex_;
@@ -139,14 +141,16 @@ private:
 
   // MMWorkflow execution state tracking
   struct WorkflowExecutionState {
-    WorkflowId             workflow_id;
-    AgentId                agent_id;
-    std::map<NodeId, bool> completed_nodes;
-    std::map<NodeId, bool> failed_nodes;
-    int                    total_nodes     = 0;
-    int                    completed_count = 0;
-    bool                   in_progress     = false;
-  };
+     WorkflowId             workflow_id;
+     AgentId                agent_id;
+     std::map<NodeId, bool> completed_nodes;
+     std::map<NodeId, bool> failed_nodes;
+     std::set<NodeId>       queued_nodes;
+     std::set<NodeId>       running_nodes;
+     int                    total_nodes     = 0;
+     int                    completed_count = 0;
+     bool                   in_progress     = false;
+   };
   std::map<std::string, WorkflowExecutionState> workflow_states_;
   std::mutex                                    workflow_state_mutex_;
 

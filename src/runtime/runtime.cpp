@@ -351,10 +351,26 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
   return true;
 }
 
-void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr node) {
+void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr node,
+                                  const std::string& execution_id) {
   if(!agent || !node) {
     Logger::instance().error_f("[PROCESS_NODE_ERROR] Invalid agent or node pointer");
     return;
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+    auto                        state_it = workflow_states_.find(execution_id);
+    if(state_it == workflow_states_.end() || !state_it->second.in_progress) {
+      return;
+    }
+    auto& state = state_it->second;
+    if(state.completed_nodes.count(node->get_id()) || state.failed_nodes.count(node->get_id())
+       || state.running_nodes.count(node->get_id()) == 1) {
+      return;
+    }
+    state.queued_nodes.erase(node->get_id());
+    state.running_nodes.insert(node->get_id());
   }
 
   // [DEBUG] Log node processing start
@@ -451,20 +467,7 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
                              node->get_id().c_str());
 
   // Find execution state and update it
-  std::string matched_execution_id;
-  {
-    std::lock_guard<std::mutex> lock(workflow_state_mutex_);
-    for(const auto& pair : workflow_states_) {
-      if(pair.second.agent_id == agent->get_id() && pair.second.in_progress
-         && (workflow ? pair.second.workflow_id == workflow->get_id() : true)) {
-        matched_execution_id = pair.first;
-        break;
-      }
-    }
-  }
-  if(!matched_execution_id.empty()) {
-    update_workflow_state(matched_execution_id, node->get_id(), node_success);
-  }
+  update_workflow_state(execution_id, node->get_id(), node_success);
 }
 
 void MMAgentRuntime::schedule_workflow_executable_nodes(const std::string& execution_id) {
@@ -499,9 +502,15 @@ void MMAgentRuntime::schedule_workflow_executable_nodes(const std::string& execu
     std::lock_guard<std::mutex> lock(task_queue_mutex_);
     for(const auto& node_id : executable_nodes) {
       auto node = workflow->get_node(node_id);
-      if(node && node->get_state() == NodeState::READY) {
-          node_task_queue_.push({agent, workflow, node});
+      if(!node || node->get_state() != NodeState::READY) {
+        continue;
       }
+      if(state.completed_nodes.count(node_id) || state.failed_nodes.count(node_id)
+         || state.queued_nodes.count(node_id) || state.running_nodes.count(node_id)) {
+        continue;
+      }
+      state.queued_nodes.insert(node_id);
+      node_task_queue_.push({agent, workflow, node, execution_id});
     }
   }
 
@@ -528,6 +537,8 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
     }
 
     auto& state = it->second;
+    state.queued_nodes.erase(node_id);
+    state.running_nodes.erase(node_id);
 
     if(success) {
       state.completed_nodes[node_id] = true;
@@ -557,9 +568,15 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
             std::lock_guard<std::mutex> task_lock(task_queue_mutex_);
             for(const auto& next_id : next_nodes) {
               auto next_node = workflow->get_node(next_id);
-              if(next_node && next_node->get_state() == NodeState::READY) {
-                node_task_queue_.push({agent, workflow, next_node});
+              if(!next_node || next_node->get_state() != NodeState::READY) {
+                continue;
               }
+              if(state.completed_nodes.count(next_id) || state.failed_nodes.count(next_id)
+                 || state.queued_nodes.count(next_id) || state.running_nodes.count(next_id)) {
+                continue;
+              }
+              state.queued_nodes.insert(next_id);
+              node_task_queue_.push({agent, workflow, next_node, execution_id});
             }
             g_worker_cv.notify_all();
           }
@@ -584,31 +601,6 @@ void MMAgentRuntime::on_node_complete(const AgentId& agent_id, const WorkflowId&
   Logger::instance().info_f("MMNode complete event: agent=%s, workflow=%s, node=%s, success=%d",
                             agent_id.c_str(), workflow_id.c_str(), node_id.c_str(),
                             success ? 1 : 0);
-
-  // Trigger next nodes
-  auto agent = get_agent(agent_id);
-  if(!agent) {
-    return;
-  }
-
-  auto workflow = agent->get_workflow(workflow_id);
-  if(!workflow) {
-    return;
-  }
-
-  // Find next executable nodes
-  auto executable = workflow->get_executable_nodes();
-
-  if(!executable.empty()) {
-    std::lock_guard<std::mutex> lock(task_queue_mutex_);
-    for(const auto& node_id : executable) {
-      auto node = workflow->get_node(node_id);
-      if(node && node->get_state() == NodeState::READY) {
-        node_task_queue_.push({agent, workflow, node});
-      }
-    }
-    g_worker_cv.notify_all();
-  }
 }
 
 void MMAgentRuntime::on_workflow_complete(const AgentId& agent_id, const WorkflowId& workflow_id,
@@ -1017,7 +1009,7 @@ void MMAgentRuntime::worker_thread_main() {
 
       // Process node without holding task_queue_mutex_ so downstream scheduling
       // can enqueue follow-up nodes from the same workflow.
-      process_node(task.agent, task.workflow, task.node);
+      process_node(task.agent, task.workflow, task.node, task.execution_id);
 
       // Update worker load
       update_worker_load(worker_id, -1);

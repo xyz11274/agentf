@@ -236,7 +236,7 @@ class ChatAgentBridge {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(max_wait_sec);
     bool dispatcher_done = false;
     std::string selected_skills;
-    while (!dispatcher_done && std::chrono::steady_clock::now() < deadline) {
+    while (std::chrono::steady_clock::now() < deadline) {
       DataVariant v;
       if (bus.get("dispatcher_done", v)) {
         dispatcher_done = true;
