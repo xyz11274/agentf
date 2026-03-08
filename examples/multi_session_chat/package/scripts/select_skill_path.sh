@@ -46,7 +46,34 @@ af_databus_request_llm "$REQUEST_ID" "$PROMPT" "agentflow.llm.chunk.$REQUEST_ID"
 RAW="$(af_databus_next_event "${PHASE}-${PATH_NAME}-${REQUEST_ID}" "agentflow.llm.done.$REQUEST_ID" 2500 || true)"
 
 if [ "$PHASE" = "dispatcher" ]; then
-  python3 "$SCRIPT_DIR/skill_plan_tool.py" dispatcher-path "$SESSION_ID" "$USER_TEXT" "$PATH_NAME" "$RAW"
+  RESULT="$(python3 "$SCRIPT_DIR/skill_plan_tool.py" dispatcher-path "$SESSION_ID" "$USER_TEXT" "$PATH_NAME" "$RAW")"
 else
-  python3 "$SCRIPT_DIR/skill_plan_tool.py" coordinator-path "$SESSION_ID" "$PATH_NAME" "$SELECTED_SKILLS" "$PARTIAL_RESULTS" "$RAW"
+  RESULT="$(python3 "$SCRIPT_DIR/skill_plan_tool.py" coordinator-path "$SESSION_ID" "$PATH_NAME" "$SELECTED_SKILLS" "$PARTIAL_RESULTS" "$RAW")"
 fi
+
+python3 - "$PHASE" "$PATH_NAME" "$RESULT" <<'PY'
+import json
+import sys
+
+phase, path_name, raw = sys.argv[1:4]
+payload = json.loads(raw)
+candidate_list = payload.get("candidate_list", "")
+
+dispatcher_keys = {
+    "semantic": "semantic_candidates",
+    "temporal": "temporal_candidates",
+    "planner": "planner_candidates",
+}
+coordinator_keys = {
+    "result_aware": "result_aware_candidates",
+    "dependency": "dependency_candidates",
+    "finalizer": "finalizer_candidates",
+}
+
+if phase == "dispatcher":
+    key = dispatcher_keys.get(path_name, "candidate_list")
+else:
+    key = coordinator_keys.get(path_name, "candidate_list")
+
+print(json.dumps({key: candidate_list}, ensure_ascii=False))
+PY

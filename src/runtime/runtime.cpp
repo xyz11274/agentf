@@ -804,6 +804,9 @@ void MMAgentRuntime::agent_task_poller_loop() {
           }
         }
         response.receiver_id = response_target->get_config().task_id;
+        if(scheduled) {
+          response_target->acknowledge_dispatch_record(response.message_id);
+        }
         response_target->enqueue_data_exchange_message(response);
       }
     }

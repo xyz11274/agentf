@@ -637,12 +637,23 @@ bool MMNode::execute_with_worker_engine() {
   }
 
   auto response = runtime::MMWorkerEngine::execute_code(request);
+  auto apply_worker_outputs = [this](const runtime::MMWorkerEngine::ExecutionResponse& worker_response) {
+    outputs_ = worker_response.outputs;
+    if(config_.json_output && !worker_response.stdout_content.empty()) {
+      DataMap parsed;
+      if(parse_flat_json_object(worker_response.stdout_content, parsed)) {
+        for(auto& kv : parsed) {
+          outputs_[kv.first] = std::move(kv.second);
+        }
+      }
+    }
+  };
   if(response.success) {
-    outputs_ = response.outputs;
+    apply_worker_outputs(response);
     return true;
   }
   if(!response.outputs.empty()) {
-    outputs_ = response.outputs;
+    apply_worker_outputs(response);
   }
   last_error_ = response.error_message.empty() ? "Worker execution failed" : response.error_message;
   return false;
