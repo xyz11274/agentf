@@ -50,6 +50,14 @@ bool parse_flat_json_object(const std::string& json, DataMap& out) {
   };
 
   skip_ws();
+  // Find the opening brace in case there's non-JSON content before the JSON object
+  // This handles cases where debug messages or other output precedes the JSON
+  while(i < json.size() && json[i] != '{') {
+    // Skip entire lines until we find a line starting with {
+    while(i < json.size() && json[i] != '\n') ++i;
+    if(i < json.size()) ++i;  // skip newline
+    skip_ws();
+  }
   if(i >= json.size() || json[i] != '{') return false;
   ++i;
   skip_ws();

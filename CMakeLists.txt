@@ -379,9 +379,14 @@ set(AGENTFLOW_SOURCES
     ${AGENTFLOW_DSL_ADAPTER_SOURCES}
 )
 
-# Create main library
-add_library(agentflow STATIC ${AGENTFLOW_SOURCES})
+# Create main library (shared library .so)
+add_library(agentflow SHARED ${AGENTFLOW_SOURCES})
 target_include_directories(agentflow PUBLIC ${AGENTFLOW_INCLUDE_DIR})
+
+# Set library output directory
+set_target_properties(agentflow PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+)
 
 # Link with common libraries
 find_package(Threads REQUIRED)

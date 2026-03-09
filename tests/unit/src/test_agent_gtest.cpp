@@ -107,7 +107,9 @@ TEST_F(AgentTest, MsgQueStoresPayloadAsDataRef) {
 
   framework::MMAgentMsgQue::Message out;
   ASSERT_TRUE(queue.dequeue_message(out));
-  EXPECT_TRUE(out.content.empty());
+  // After dequeue, content is restored from data_ref for user convenience
+  EXPECT_EQ(out.content, "raw-payload");
+  // data_ref should still be populated (content was stored via data_ref)
   EXPECT_FALSE(out.data_ref.empty());
 }
 
