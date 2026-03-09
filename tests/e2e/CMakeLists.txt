@@ -90,3 +90,17 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/examples/openjiuwen_multi_session_chat/tests/auto
                 "${CMAKE_SOURCE_DIR}/examples/openjiuwen_multi_session_chat/tests/auto_dialog_test.sh"
     )
 endif()
+
+# Echo Agent Scenario
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/echo_agent/test_echo_agent_e2e.cpp")
+    add_executable(test_e2e_echo_agent
+        echo_agent/test_echo_agent_e2e.cpp
+    )
+    target_link_libraries(test_e2e_echo_agent
+        agentflow
+        GTest::gtest
+        GTest::gtest_main
+    )
+    add_test(NAME E2EEchoAgent COMMAND test_e2e_echo_agent)
+    add_dependencies(e2e_tests test_e2e_echo_agent)
+endif()

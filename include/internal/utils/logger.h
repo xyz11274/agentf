@@ -76,11 +76,22 @@ private:
   template <typename T, typename... Args>
   void format_string(std::ostringstream& oss, const char* fmt, T first, Args... rest) {
     while(*fmt) {
-      if(*fmt == '%' && *(fmt + 1) == 's') {
-        format_arg(oss, first);
-        fmt += 2;
-        format_string(oss, fmt, rest...);
-        return;
+      if(*fmt == '%') {
+        const char* next = fmt + 1;
+        // Skip format modifiers (l, ll, z, h, etc.)
+        while(*next == 'l' || *next == 'h' || *next == 'z' || *next == 'j' || *next == 't') {
+          next++;
+        }
+        // Check for format specifiers
+        if(*next == 'd' || *next == 'i' || *next == 'u' || *next == 'x' || *next == 'X' ||
+           *next == 'o' || *next == 'f' || *next == 'F' || *next == 'e' || *next == 'E' ||
+           *next == 'g' || *next == 'G' || *next == 'a' || *next == 'A' || *next == 'c' ||
+           *next == 's' || *next == 'p' || *next == 'n') {
+          format_arg(oss, first);
+          fmt = next + 1;
+          format_string(oss, fmt, rest...);
+          return;
+        }
       }
       oss << *fmt++;
     }

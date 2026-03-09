@@ -1,0 +1,20 @@
+{
+  "id": "echo-workflow",
+  "version": "1.0",
+  "name": "Echo Workflow",
+  "description": "Echo user input with greeting",
+  "nodes": [
+    {
+      "id": "echo",
+      "name": "Echo Node",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "./echo_node.sh",
+      "inputs": ["input"],
+      "outputs": ["response"],
+      "json_output": true,
+      "timeout_ms": 10000
+    }
+  ],
+  "edges": []
+}

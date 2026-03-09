@@ -868,6 +868,14 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
   Logger::instance().debug_f("[CODE_LOADER] Executing command: %s (timeout_ms=%d)", command.c_str(),
                              timeout_ms);
 
+  // [DEBUG] Log full command details for troubleshooting
+  Logger::instance().info_f("[CODE_LOADER_DEBUG] Command=%s, WorkingDir=%s, EnvVars=%zu",
+                            command.c_str(), working_dir.c_str(), env_vars.size());
+
+  // [DEBUG] Log full command details for troubleshooting
+  Logger::instance().info_f("[CODE_LOADER_DEBUG] Command=%s, WorkingDir=%s, EnvVars=%zu",
+                            command.c_str(), working_dir.c_str(), env_vars.size());
+
   auto shell_escape_single = [](const std::string& s) {
     std::string out;
     out.reserve(s.size() + 8);
@@ -904,7 +912,10 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
 
   // Build final command with timeout wrapper if needed.
   std::string final_command = "(" + prepared_command + ") 2>&1";
-  
+
+  // [DEBUG] Log the final command being executed
+  Logger::instance().info_f("[CODE_LOADER_DEBUG] Final command: %s", final_command.c_str());
+
   if(false && timeout_ms > 0) {
     // Use a simple bash wrapper that implements timeout using background sleep + kill
     int timeout_secs = (timeout_ms + 999) / 1000;  // Round up to seconds
@@ -950,6 +961,14 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
   result.exit_code = exit_code;
   result.stdout    = output;  // Note: stdout contains both original stdout and stderr
   result.success   = (exit_code == 0 && !killed_by_signal);
+
+  // [DEBUG] Log execution result details
+  Logger::instance().info_f("[CODE_LOADER_DEBUG] Exit code=%d, Success=%s, OutputLen=%zu, Signal=%d",
+                            exit_code, result.success ? "true" : "false", output.size(), signal_num);
+  if(!output.empty()) {
+    std::string truncated = output.length() > 200 ? output.substr(0, 200) + "..." : output;
+    Logger::instance().info_f("[CODE_LOADER_DEBUG] Output: %s", truncated.c_str());
+  }
 
   if(!result.success) {
     // Check if timeout occurred (exit code 0 means timeout killed process, or check duration)

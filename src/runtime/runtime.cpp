@@ -346,7 +346,8 @@ bool MMAgentRuntime::unload_workflow(const AgentId& agent_id, const WorkflowId& 
 }
 
 bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId& workflow_id,
-                                    const DataMap& inputs) {
+                                    const DataMap& inputs, const std::string& source_task_id,
+                                    const std::string& session_id) {
   if(draining_) {
     Logger::instance().warn("Rejecting new workflow — runtime is draining");
     return false;
@@ -374,6 +375,8 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
   WorkflowExecutionState state;
   state.workflow_id     = workflow_id;
   state.agent_id        = agent_id;
+  state.source_task_id  = source_task_id;
+  state.session_id      = session_id;
   state.total_nodes     = static_cast<int>(workflow->get_nodes().size());
   state.completed_count = 0;
   state.in_progress     = true;
@@ -451,10 +454,24 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
   {
     auto& bus = get_databus(agent->get_id());
     DataMap hydrated;
+    Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Node=%s has %zu input_params",
+                              node->get_id().c_str(), node->get_input_params().size());
     for(const auto& key : node->get_input_params()) {
       DataVariant val;
-      if(bus.get(key, val)) {
+      // First try agent's internal databus (where execute_workflow stores inputs)
+      if(agent->get_data(key, val)) {
         hydrated[key] = val;
+        if(const auto* text = std::get_if<std::string>(&val)) {
+          Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Got input '%s'='%s' from agent databus", key.c_str(), text->c_str());
+        }
+      } else if(bus.get(key, val)) {
+        // Then try runtime's databus
+        hydrated[key] = val;
+        if(const auto* text = std::get_if<std::string>(&val)) {
+          Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Got input '%s'='%s' from runtime databus", key.c_str(), text->c_str());
+        }
+      } else {
+        Logger::instance().warn_f("[PROCESS_NODE_HYDRATE] Key '%s' not found in any databus", key.c_str());
       }
     }
     // Merge with any existing inputs (e.g. set via set_inputs() or message payload)
@@ -510,7 +527,10 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
   const DataMap& node_outputs = node->get_outputs();
   if(!node_outputs.empty()) {
     auto& bus = get_databus(agent->get_id());
+    Logger::instance().info_f("[PROCESS_NODE_OUTPUTS] Node=%s has %zu outputs",
+                              node->get_id().c_str(), node_outputs.size());
     for(const auto& out : node_outputs) {
+      Logger::instance().info_f("[PROCESS_NODE_PUBLISH] Publishing key=%s to agent databus", out.first.c_str());
       agent->publish_data(out.first, out.second);
       bus.put(out.first, out.second);
       if(workflow) {
@@ -590,6 +610,8 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
   bool        complete_ok     = false;
   std::string complete_agent;
   std::string complete_workflow;
+  std::string complete_source_task_id;
+  std::string complete_session_id;
 
   {
     std::lock_guard<std::mutex> lock(workflow_state_mutex_);
@@ -620,6 +642,8 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
       complete_ok         = state.failed_nodes.empty();
       complete_agent      = state.agent_id;
       complete_workflow   = state.workflow_id;
+      complete_source_task_id = state.source_task_id;
+      complete_session_id     = state.session_id;
     } else if(success) {
       auto agent = get_agent(state.agent_id);
       if(agent) {
@@ -655,6 +679,37 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
     } else {
       Logger::instance().error_f("MMWorkflow execution failed: %s", complete_workflow.c_str());
     }
+
+    // Send data_exchange message after workflow completes
+    // This triggers the next step in the agent's task flow
+    auto agent = get_agent(complete_agent);
+    if(agent && !complete_source_task_id.empty()) {
+      Logger::instance().info_f(
+          "[WORKFLOW_COMPLETE] Sending data_exchange for agent=%s, workflow=%s, source_task=%s, session=%s, success=%d",
+          complete_agent.c_str(), complete_workflow.c_str(), complete_source_task_id.c_str(),
+          complete_session_id.c_str(), complete_ok ? 1 : 0);
+
+      // Find the source task and send data_exchange message
+      if(!complete_session_id.empty()) {
+        if(auto session = agent->get_session_by_key(complete_session_id); session) {
+          if(auto source_task = session->get_task(complete_source_task_id); source_task) {
+            framework::MMAgentMsgQue::Message response;
+            response.message_id = complete_source_task_id;
+            response.type = framework::MMAgentMsgQue::MessageType::TASK_RESPONSE;
+            response.sender_id = "runtime-worker";
+            response.receiver_id = complete_source_task_id;
+            response.metadata["task_type"] = source_task->get_task_type();
+            response.metadata["workflow_id"] = complete_workflow;
+            response.metadata["message_type"] = "data_exchange";
+            response.content = complete_ok ? "workflow_completed" : "workflow_failed";
+            source_task->enqueue_data_exchange_message(response);
+            Logger::instance().info_f(
+                "[WORKFLOW_COMPLETE] Enqueued data_exchange to task=%s", complete_source_task_id.c_str());
+          }
+        }
+      }
+    }
+
     on_workflow_complete(complete_agent, complete_workflow, complete_ok);
   }
 }
@@ -842,6 +897,9 @@ void MMAgentRuntime::agent_task_poller_loop() {
         if(task->get_parameter("message_content", msg_content) && !msg_content.empty()) {
           inputs["input"]     = msg_content;
           inputs["user_text"] = msg_content;
+          Logger::instance().info_f("[TASK_POLLER] Set inputs[input]='%s' from message_content", msg_content.c_str());
+        } else {
+          Logger::instance().warn_f("[TASK_POLLER] message_content not found or empty for task=%s", task->get_task_id().c_str());
         }
         if(!task->get_config().session_id.empty()) {
           inputs["session_id"] = task->get_config().session_id;
@@ -875,7 +933,18 @@ void MMAgentRuntime::agent_task_poller_loop() {
             "[TASK_POLLER] Dispatching task=%s workflow=%s agent=%s",
             task->get_config().task_id.c_str(), workflow_id.c_str(),
             agent->get_id().c_str());
-        const bool scheduled = execute_workflow(agent->get_id(), workflow_id, inputs);
+
+        // Get source task info for workflow completion callback
+        std::string task_source_id;
+        std::string task_session_id;
+        task->get_parameter("source_task_id", task_source_id);
+        task->get_parameter("session_id", task_session_id);
+        if(task_source_id.empty()) {
+          task_source_id = task->get_config().task_id;
+        }
+
+        const bool scheduled = execute_workflow(agent->get_id(), workflow_id, inputs,
+                                                task_source_id, task_session_id);
         framework::MMAgentMsgQue::Message response;
         std::string response_message_id;
         if(!task->get_parameter("message_id", response_message_id) || response_message_id.empty()) {

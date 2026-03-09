@@ -311,7 +311,6 @@ erDiagram
 | GoogleTest | >= 1.10 | 单元/功能测试 | 生态成熟，CTest 集成完善 |
 | RapidJSON | header-only | package/workflow JSON 解析 | 轻量、无额外运行时依赖 |
 | OpenSSL | 3.x（可选） | SSL/TLS 支持 | 安全通信基础库 |
-| libevent | 可选 | 事件适配 | 事件驱动扩展能力 |
 | RedisAdapter | 内置适配器 | 远端 MMDataBus | 支持 data_ref 跨节点协同 |
 
 ```mermaid
@@ -320,7 +319,7 @@ graph TB
     FW[Framework Layer\nAgent/MMWorkflow/MMNode/MMEdge]
     RT[Runtime Layer\nAgentRuntime/Scheduler/Deployer/Worker]
     INF[Infrastructure\nDataBus/Storage/Adapter]
-    EXT[(Redis/OpenSSL/libevent)]
+    EXT[(Redis/OpenSSL)]
 
     APP --> FW
     FW --> RT
@@ -438,7 +437,7 @@ classDiagram
 #### 构建工具链
 - 本地统一入口：`./build.sh build|test|example`。
 - 底层：CMake + Ninja/Make，CTest 统一测试执行。
-- 可选依赖通过 CMake 自动探测与 graceful fallback（Protoactor/libevent/OpenSSL/RapidJSON）。
+- 可选依赖通过 CMake 自动探测与 graceful fallback（Protoactor/OpenSSL/RapidJSON）。
 - **multi_session_chat 示例** 额外需要 Go（session-context 节点）、Java（skill-delegate 节点）、Python（skill-date 节点）。
 
 #### 多语言节点示例（multi_session_chat）

@@ -655,6 +655,11 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
     return nullptr;
   }
 
+  Logger::instance().info_f("[BUILD_RUNTIME_TASK] source_task_id=%s, source_workflow_id=%s, source_workflow_file=%s",
+                            source_task->get_task_id().c_str(),
+                            source_task->get_workflow_id().c_str(),
+                            source_task->get_workflow_file().c_str());
+
   MMAgentTask::Config task_config = source_task->get_config();
   task_config.task_index = static_cast<int>(session->get_tasks().size());
   task_config.task_id = source_task->get_task_id() + "_runtime_" + message.message_id;
@@ -663,6 +668,9 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
                                      ? source_task->get_workflow_file()
                                      : source_task->get_workflow_id());
   task_config.workflow_file = resolve_workflow_file(source_task->get_workflow_file());
+
+  Logger::instance().info_f("[BUILD_RUNTIME_TASK] resolved workflow_id=%s, workflow_file=%s",
+                            task_config.workflow_id.c_str(), task_config.workflow_file.c_str());
 
   if(const auto task_type_it = message.metadata.find("task_type");
      task_type_it != message.metadata.end() && !task_type_it->second.empty()) {
@@ -702,6 +710,8 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
 
   std::string payload = message.content;
   std::string payload_ref = message.data_ref;
+  Logger::instance().info_f("[BUILD_RUNTIME_TASK] message.content='%s', message.data_ref='%s'",
+                            message.content.c_str(), message.data_ref.c_str());
   if(payload_ref.empty() && !payload.empty()) {
     std::ostringstream logical_key;
     logical_key << "msg:" << message.message_id;
@@ -732,6 +742,9 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
   if(!session || !task) {
     return;
   }
+
+  Logger::instance().info_f("[HANDLE_INTENT_REQUEST] task_id=%s, task_type=%s",
+                            task->get_task_id().c_str(), task->get_task_type().c_str());
 
   task->register_dispatch_record(message);
   std::vector<std::shared_ptr<MMAgentTask>> generated;
@@ -780,8 +793,12 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
   }
 
   if(auto runtime_task = build_runtime_task(session, task, message); runtime_task) {
+    Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Created runtime_task: task_id=%s, workflow_id=%s",
+                              runtime_task->get_task_id().c_str(), runtime_task->get_workflow_id().c_str());
     session->add_task(runtime_task);
     generated.push_back(runtime_task);
+  } else {
+    Logger::instance().warn_f("[HANDLE_INTENT_REQUEST] build_runtime_task returned null for task=%s", task->get_task_id().c_str());
   }
 
   if(context_) {
@@ -809,21 +826,44 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
   if(!session || !task) {
     return;
   }
+  Logger::instance().info_f("[HANDLE_DATA_EXCHANGE] task_id=%s, task_type=%s, message_id=%s",
+                            task->get_task_id().c_str(), task->get_task_type().c_str(),
+                            message.message_id.c_str());
   task->acknowledge_dispatch_record(message.message_id);
 
   if(task->get_task_type() == "dispatcher") {
     MMAgentMsgQue::Message coordinator_message = message;
     coordinator_message.metadata["task_type"] = "coordinator";
+    // Clear the workflow_id from dispatcher, let coordinator use its own workflow
+    coordinator_message.metadata.erase("workflow_id");
+    coordinator_message.metadata.erase("workflow_instance_id");
+
+    // Preserve the original user input from databus
+    DataVariant original_input;
+    if(get_data("input", original_input)) {
+      if(const auto* text = std::get_if<std::string>(&original_input)) {
+        coordinator_message.content = *text;
+        Logger::instance().info_f("[DISPATCHERDataExchange] Preserved original input: %s", text->c_str());
+      }
+    }
+
     if(const auto user_id = session->get_config().session_id; !user_id.empty()) {
       coordinator_message.metadata["session_id"] = user_id;
     }
     DataVariant selected_value;
+    Logger::instance().info_f("[DISPATCHERDataExchange] Checking selected_skills from databus");
     if(get_data("selected_skills", selected_value)) {
       if(const auto* text = std::get_if<std::string>(&selected_value)) {
         coordinator_message.metadata["selected_skills"] = *text;
+        Logger::instance().info_f("[DISPATCHERDataExchange] Found selected_skills: %s", text->c_str());
+      } else {
+        Logger::instance().warn_f("[DISPATCHERDataExchange] selected_skills is not a string type");
       }
+    } else {
+      Logger::instance().warn_f("[DISPATCHERDataExchange] selected_skills not found in databus");
     }
     if(coordinator_message.metadata["selected_skills"].empty()) {
+      Logger::instance().warn_f("[DISPATCHERDataExchange] selected_skills is empty, not forwarding to coordinator");
       return;
     }
     if(context_) {
@@ -835,14 +875,33 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       }
     }
     if(auto coordinator_task = session->get_coordinator_task(); coordinator_task) {
+      Logger::instance().info_f("[DISPATCHERDataExchange] Forwarding to coordinator, task_id=%s", coordinator_task->get_task_id().c_str());
       coordinator_task->enqueue_intent_request_message(coordinator_message);
+    } else {
+      Logger::instance().warn_f("[DISPATCHERDataExchange] No coordinator task found in session");
     }
     return;
   }
 
   if(task->get_task_type() == "coordinator") {
+    // Coordinator completed - get response from databus and send to response queue
+    MMAgentMsgQue::Message response_message = message;
+
+    // Get response from databus (published by coordinator workflow)
+    DataVariant response_value;
+    if(get_data("response", response_value)) {
+      if(const auto* text = std::get_if<std::string>(&response_value)) {
+        response_message.content = *text;
+        Logger::instance().info_f("[COORDINATORDataExchange] Got response from databus: %s", text->c_str());
+      }
+    } else {
+      // Response not found in databus, try to get from message content
+      Logger::instance().warn_f("[COORDINATORDataExchange] Response not found in databus, using message content");
+    }
+
     if(session_router_) {
-      session_router_->enqueue_response_message(message);
+      Logger::instance().info_f("[COORDINATORDataExchange] Enqueueing response, content='%s'", response_message.content.c_str());
+      session_router_->enqueue_response_message(response_message);
     }
     return;
   }

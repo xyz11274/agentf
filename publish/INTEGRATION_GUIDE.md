@@ -900,6 +900,142 @@ void RemoteWorker::heartbeat_loop() {
 }
 ```
 
+### 6.4 独立 Worker 节点启动
+
+独立 Worker 节点不包含 Agent 和 Scheduler，仅负责执行任务。
+
+**Worker 节点架构**：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Worker Node                             │
+│                                                              │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────┐  │
+│  │ MMWorkerEngine  │  │ Workflow Cache  │  │ Node Cache  │  │
+│  │                 │  │                 │  │             │  │
+│  │ - Task Queue    │  │ - Workflow 解析 │  │ - SO/Script │  │
+│  │ - Control Queue │  │ - 实例管理      │  │ - 热更新    │  │
+│  └─────────────────┘  └─────────────────┘  └─────────────┘  │
+│          │                                                   │
+│          ▼                                                   │
+│  ┌─────────────────┐                                        │
+│  │ Network Client  │◄─────── Master 连接（需集成方实现）    │
+│  │                 │                                        │
+│  │ - Register      │                                        │
+│  │ - Heartbeat     │                                        │
+│  │ - Task Receive  │                                        │
+│  └─────────────────┘                                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**启动代码框架**：
+
+```cpp
+// worker_node.cpp - 独立 Worker 节点
+#include "runtime/worker.h"
+#include <iostream>
+#include <csignal>
+
+using namespace agentflow;
+
+std::atomic<bool> g_running{true};
+void signal_handler(int) { g_running = false; }
+
+int main(int argc, char* argv[]) {
+    std::signal(SIGINT, signal_handler);
+    std::signal(SIGTERM, signal_handler);
+
+    // 1. 创建 Worker Engine
+    runtime::MMWorkerEngine::Config config;
+    config.worker_id = "worker-001";
+    config.default_workflow_threads = 4;
+    config.business_threads = 8;
+
+    auto worker = std::make_shared<runtime::MMWorkerEngine>(config);
+    if (!worker->start()) {
+        std::cerr << "Failed to start Worker Engine" << std::endl;
+        return 1;
+    }
+
+    // 2. 连接 Master 并注册（需集成方实现）
+    // - 建立 TCP/gRPC/HTTP 连接到 Master
+    // - 发送注册请求（worker_id, capabilities）
+    // - 接收注册响应
+
+    // 3. 启动心跳线程（需集成方实现）
+    // - 定期向 Master 发送心跳
+    // - 包含：worker_id, load, status
+
+    // 4. 启动任务接收循环（需集成方实现）
+    // - 从 Master 接收任务
+    // - 调用 worker->enqueue_task(task)
+
+    std::cout << "Worker started: " << config.worker_id << std::endl;
+    while (g_running) {
+        worker->heartbeat();
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+    }
+
+    worker->stop();
+    return 0;
+}
+```
+
+### 6.5 Master-Worker 通信集成指南
+
+> **重要说明**：AgentFlow 框架当前版本未内置 Master-Worker 网络通信实现。
+> 集成方需要根据自身技术栈和部署环境自行实现网络通信层。
+
+**通信层职责**：
+
+| 功能 | Master 端 | Worker 端 |
+|------|-----------|-----------|
+| **注册** | 接收 Worker 注册请求，维护 Worker 列表 | 发送注册请求，包含 worker_id 和能力 |
+| **心跳** | 监控 Worker 心跳，检测故障 | 定期发送心跳，报告负载和状态 |
+| **任务分发** | 将任务分发到选定的 Worker | 接收任务并放入执行队列 |
+| **结果返回** | 接收任务执行结果 | 发送执行结果和状态更新 |
+
+**推荐的网络协议**：
+
+| 协议 | 适用场景 | 特点 |
+|------|----------|------|
+| gRPC | 生产环境 | 高性能、类型安全、支持流式传输 |
+| TCP Socket | 简单部署 | 轻量级、易于调试 |
+| WebSocket | Web 集成 | 支持浏览器、穿透防火墙 |
+| ZeroMQ | 高吞吐场景 | 低延迟、支持多种模式 |
+| HTTP/REST | 跨语言集成 | 简单易用、广泛支持 |
+
+**集成方需要实现的关键接口**：
+
+```cpp
+// Master 端接口（需集成方实现）
+class IMasterNetworkService {
+public:
+    virtual ~IMasterNetworkService() = default;
+    virtual bool start(int port) = 0;
+    virtual void stop() = 0;
+    virtual bool dispatch_task(const std::string& worker_id, const TaskData& task) = 0;
+    virtual void broadcast_workflow(const std::string& workflow_content) = 0;
+};
+
+// Worker 端接口（需集成方实现）
+class IWorkerNetworkClient {
+public:
+    virtual ~IWorkerNetworkClient() = default;
+    virtual bool connect(const std::string& master_address) = 0;
+    virtual bool register_worker(const std::string& worker_id, const WorkerCapabilities& caps) = 0;
+    virtual bool send_heartbeat(const HeartbeatData& data) = 0;
+    virtual bool send_task_result(const std::string& task_id, const TaskResult& result) = 0;
+};
+```
+
+**与 AgentFlow 框架的集成点**：
+
+- Master 端通过 `MMAgentRuntime::register_worker_engine()` 注册 Worker
+- Master 端通过 `MMAgentRuntime::heartbeat_worker()` 更新 Worker 状态
+- Worker 端通过 `MMWorkerEngine::enqueue_task()` 接收任务
+- Worker 端通过 `MMWorkerEngine::heartbeat()` 更新本地心跳
+
 ---
 
 ## 7. 消息驱动执行流程
@@ -1052,6 +1188,9 @@ private:
 
 ### 8.2 分布式部署
 
+> **说明**：分布式部署需要集成方自行实现 Master-Worker 网络通信层。
+> 详见 Section 6.5 "Master-Worker 通信集成指南"。
+
 Master 和 Worker 分离部署：
 
 ```
@@ -1061,6 +1200,12 @@ Master 和 Worker 分离部署：
 │  │   Agent     │  │  Runtime    │  │     Deployer        │  │
 │  │  (N 个)     │  │  (MASTER)   │  │     Scheduler       │  │
 │  └─────────────┘  └─────────────┘  └─────────────────────┘  │
+│                         │                                   │
+│                         ▼                                   │
+│              ┌─────────────────────┐                        │
+│              │ Network Service     │ ◄──需集成方实现        │
+│              │ (Worker 注册/心跳)   │                        │
+│              └─────────────────────┘                        │
 └─────────────────────────────────────────────────────────────┘
             │                    │                    │
             ▼                    ▼                    ▼
@@ -1068,26 +1213,63 @@ Master 和 Worker 分离部署：
      │ Worker Node 1│    │ Worker Node 2│    │ Worker Node N│
      │              │    │              │    │              │
      │ MMWorkerEngine   │ MMWorkerEngine   │ MMWorkerEngine │
+     │ Network Client   │ Network Client   │ Network Client │◄─需集成方实现
      └──────────────┘    └──────────────┘    └──────────────┘
 ```
 
-**Master 配置**：
+**Master 节点组件**：
+
+| 组件 | 状态 | 说明 |
+|------|------|------|
+| MMAgentRuntime | ✅ 框架提供 | MASTER 角色 |
+| Agent | ✅ 框架提供 | 业务逻辑 |
+| Deployer/Scheduler | ✅ 框架提供 | 任务调度 |
+| 网络服务 | ⚠️ 需集成方实现 | Worker 注册、心跳、任务分发 |
+
+**Worker 节点组件**：
+
+| 组件 | 状态 | 说明 |
+|------|------|------|
+| MMWorkerEngine | ✅ 框架提供 | 任务执行引擎 |
+| 网络客户端 | ⚠️ 需集成方实现 | 连接 Master、注册、心跳、接收任务 |
+
+**Master 配置示例**：
 
 ```cpp
 runtime::MMAgentRuntime::Config config;
 config.role = runtime::MMAgentRuntime::RuntimeRole::MASTER;
 config.worker_threads = 8;
+
+// 创建 Runtime 和 Agent
+auto runtime = std::make_unique<runtime::MMAgentRuntime>(config);
+auto agent = framework::MMAgent::create_from_package(package_path);
+agent->initialize();
+runtime->register_agent(agent);
+runtime->start();
+agent->start();
+
+// 网络服务需集成方自行实现
+// - 监听端口，接收 Worker 注册
+// - 调用 runtime->register_worker_engine() 注册 Worker
+// - 调用 runtime->heartbeat_worker() 更新心跳
 ```
 
-**Worker 配置**：
+**Worker 配置示例**：
 
 ```cpp
-runtime::MMAgentRuntime::Config config;
-config.role = runtime::MMAgentRuntime::RuntimeRole::WORKER;
+runtime::MMWorkerEngine::Config config;
+config.worker_id = "worker-node-001";
+config.default_workflow_threads = 4;
+config.business_threads = 8;
 
-runtime::MMWorkerEngine::Config worker_config;
-worker_config.worker_id = "worker-node-001";
-worker_config.default_workflow_threads = 4;
+auto worker = std::make_shared<runtime::MMWorkerEngine>(config);
+worker->start();
+
+// 网络客户端需集成方自行实现
+// - 连接 Master 地址
+// - 发送注册请求
+// - 定期发送心跳：worker->heartbeat()
+// - 接收任务：worker->enqueue_task(task)
 ```
 
 ### 8.3 容器化部署

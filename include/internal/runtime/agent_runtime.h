@@ -64,7 +64,8 @@ public:
   bool load_workflow(const AgentId& agent_id, WorkflowPtr workflow);
   bool unload_workflow(const AgentId& agent_id, const WorkflowId& workflow_id);
   bool execute_workflow(const AgentId& agent_id, const WorkflowId& workflow_id,
-                        const DataMap& inputs);
+                        const DataMap& inputs, const std::string& source_task_id = "",
+                        const std::string& session_id = "");
 
   // MMNode execution (MMNode Level Worker)
   void process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr node, const std::string& execution_id);
@@ -145,6 +146,8 @@ private:
   struct WorkflowExecutionState {
      WorkflowId             workflow_id;
      AgentId                agent_id;
+     std::string            source_task_id;    // Task that initiated this workflow
+     std::string            session_id;        // Session ID for response routing
      std::map<NodeId, bool> completed_nodes;
      std::map<NodeId, bool> failed_nodes;
      std::set<NodeId>       queued_nodes;
