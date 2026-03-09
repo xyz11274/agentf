@@ -52,14 +52,6 @@ public:
   void run();
 
   /**
-   * Execute a single workflow with given input (non-interactive mode)
-   * @param workflow_id The workflow to execute
-   * @param input The input content
-   * @return Output from workflow execution
-   */
-  std::string execute_workflow(const std::string& workflow_id, const std::string& input);
-
-  /**
    * List all available workflows in the loaded package
    * @return Formatted string listing workflows
    */
@@ -88,23 +80,11 @@ private:
   void submit_user_request(const std::string& workflow_id, const std::string& input);
 
   /**
-   * Process all pending messages and generated tasks
-   * Uses MMAgent::process_all_sessions_until_idle() and schedules tasks
+   * Poll for results from Agent response queue
+   * @param timeout_ms Maximum time to wait for results
+   * @return Collected output string, empty if timeout
    */
-  void process_pending_tasks();
-
-  /**
-   * Wait for workflow execution to complete
-   * @param timeout_ms Maximum time to wait
-   * @return true if execution completed within timeout
-   */
-  bool wait_for_completion(int timeout_ms);
-
-  /**
-   * Collect results from session send_queue
-   * @return Collected output string
-   */
-  std::string collect_results();
+  std::string poll_results(int timeout_ms);
 
   /**
    * Generate a unique message ID

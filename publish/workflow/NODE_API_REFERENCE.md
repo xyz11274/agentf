@@ -1,5 +1,7 @@
 # MMNode API 参考
 
+**详细开发指南**: [NODE_DEVELOPMENT_GUIDE.md](NODE_DEVELOPMENT_GUIDE.md) - 包含框架与 Node 的通信接口、各执行模式开发方法和场景化示例。
+
 ## 运行时 API 约定
 
 MMNode 实现应遵循以下运行时约定：
