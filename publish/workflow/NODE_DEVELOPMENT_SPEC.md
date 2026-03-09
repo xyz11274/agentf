@@ -4,6 +4,8 @@
 本文档定义 `publish/workflow` 下自定义 MMNode 的通用开发约定。
 说明：MMNode 在 DSL 中定义执行行为，运行时由 Worker 执行引擎执行多语言代码。
 
+**详细开发指南请参考**: [NODE_DEVELOPMENT_GUIDE.md](NODE_DEVELOPMENT_GUIDE.md) - 完整的 Node 开发指南，包含各执行模式的具体实现方法和场景化示例。
+
 ## 1. 通用入口契约
 
 所有 MMNode 实现建议遵循：
