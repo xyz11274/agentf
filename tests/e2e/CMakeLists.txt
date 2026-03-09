@@ -82,3 +82,11 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/blackbox/test_blackbox_interactive_runner
                 "${CMAKE_SOURCE_DIR}/examples/agent/basic_agent"
     )
 endif()
+
+if(EXISTS "${CMAKE_SOURCE_DIR}/examples/openjiuwen_multi_session_chat/tests/auto_dialog_test.sh")
+    add_test(
+        NAME E2EOpenJiuwenMultiSessionChat
+        COMMAND bash
+                "${CMAKE_SOURCE_DIR}/examples/openjiuwen_multi_session_chat/tests/auto_dialog_test.sh"
+    )
+endif()

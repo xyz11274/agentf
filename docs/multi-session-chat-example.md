@@ -1,5 +1,9 @@
 # Multi-Session Chat Example (AgentFlow)
 
+> 如果你需要查看 **Python-only + openJiuwen 兼容层** 的版本，请同时参考
+> [`docs/openjiuwen-agentflow-example.md`](./openjiuwen-agentflow-example.md)
+> 与 `examples/openjiuwen_multi_session_chat/`。
+
 ## 目录
 - 根目录：`examples/multi_session_chat/`
 - 进程入口：`examples/multi_session_chat/server/chat_server.cpp`
