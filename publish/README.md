@@ -71,3 +71,13 @@ MMNode API 手册：
 - 支持 `.json/.jsonc`，并可展示 `includes`、`workflow_ref`、`edge.control.*`。
 - 节点 `name/type` 缺省时会自动回退到 `id/unknown`，避免示例文件因字段缺失导致加载失败。
 - 可视化面向 DAG + 条件/分支边；`switch-case` 默认与普通分支边一致展示。
+
+## 5. 服务集成
+- 参考 `publish/INTEGRATION_GUIDE.md` 了解如何将 AgentFlow 框架集成到服务中。
+- 包含 Agent、Runtime、Worker 的配置与生命周期管理。
+- 提供单进程、分布式、容器化等多种部署模式示例。
+
+### 5.1 消息驱动组件
+- **MessageDispatcher**：消息驱动执行的中心枢纽，支持 Subscribe/Publish 和 Request-Response 模式。
+- **WorkflowScheduler**：处理嵌套 Workflow 执行，支持深度限制和父子关系追踪。
+- 详见 `publish/INTEGRATION_GUIDE.md` 第 4.5 节。

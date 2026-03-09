@@ -53,6 +53,8 @@ AgentFlow 采用三层 Master-Worker 架构，服务集成涉及三个核心组�
 | **MMAgentRuntime** | 三级调度引擎、Agent/Worker 注册、任务分发 | `include/internal/runtime/agent_runtime.h` |
 | **MMWorkerEngine** | Node 执行、Workflow 实例管理、热点重载 | `include/internal/runtime/worker.h` |
 | **AgentPackage** | Agent 包加载、解析、验证 | `include/internal/agent/package.h` |
+| **MessageDispatcher** | 消息驱动执行中心枢纽、消息路由与分发 | `include/internal/runtime/message_dispatcher.h` |
+| **WorkflowScheduler** | 嵌套 Workflow 执行、深度限制、父子关系追踪 | `include/internal/runtime/workflow_scheduler.h` |
 
 ---
 
@@ -375,11 +377,13 @@ runtime.register_worker_engine(worker);
 ### 4.4 Workflow 部署
 
 ```cpp
-// include/internal/runtime/agent_runtime.h:101-105
+// include/internal/runtime/agent_runtime.h:101-107
 bool deploy_workflow_instance(const WorkflowInstanceInfo& info,
                               const std::string& preferred_worker_id = "");
 bool destroy_workflow_instance(const std::string& workflow_instance_id);
 master::TaskScheduleResult schedule_task(const master::TaskScheduleRequest& request);
+std::vector<WorkflowInstanceInfo> list_workflow_instances() const;
+std::map<std::string, master::TaskScheduleResult> list_task_assignments() const;
 ```
 
 **WorkflowInstanceInfo 结构**：
@@ -391,6 +395,273 @@ struct WorkflowInstanceInfo {
     std::string agent_id;
     int thread_count;
 };
+```
+
+**查询方法说明**：
+
+| 方法 | 说明 |
+|------|------|
+| `list_workflow_instances()` | 获取所有已部署的 Workflow 实例列表 |
+| `list_task_assignments()` | 获取任务分配映射（task_id → TaskScheduleResult） |
+
+**示例**：
+
+```cpp
+// 查询已部署的 Workflow 实例
+auto instances = runtime.list_workflow_instances();
+for (const auto& info : instances) {
+    std::cout << "Workflow: " << info.workflow_id
+              << " Instance: " << info.workflow_instance_id
+              << " Agent: " << info.agent_id << std::endl;
+}
+
+// 查询任务分配情况
+auto assignments = runtime.list_task_assignments();
+for (const auto& [task_id, result] : assignments) {
+    std::cout << "Task: " << task_id
+              << " Worker: " << result.worker_id << std::endl;
+}
+```
+
+---
+
+### 4.5 消息驱动架构
+
+AgentFlow 支持消息驱动的执行模式，通过 `MessageDispatcher` 和 `WorkflowScheduler` 实现组件间的松耦合通信。
+
+#### 4.5.1 MessageDispatcher
+
+`MessageDispatcher` 是消息驱动执行的中心枢纽，负责消息的路由与分发。
+
+**配置结构**：
+
+```cpp
+// include/internal/runtime/message_dispatcher.h:31-36
+struct MessageDispatcherConfig {
+  int worker_threads = 4;              // 工作线程数
+  size_t max_queue_size = 1024;        // 最大队列大小
+  int64_t default_message_ttl_ms = 60000;  // 默认消息 TTL（毫秒）
+  bool enable_priority_queue = true;   // 启用优先级队列
+};
+```
+
+**核心接口**：
+
+```cpp
+// Subscribe/Publish 模式
+SubscriptionId subscribe(const std::string& message_type, MessageHandler handler);
+SubscriptionId subscribe(const std::string& message_type, MessageHandler handler,
+                         MessageFilter filter);
+bool unsubscribe(SubscriptionId subscription_id);
+bool publish(std::shared_ptr<MessageBase> message);
+bool publish(std::shared_ptr<MessageBase> message, MessagePriority priority);
+
+// Request-Response 模式
+std::shared_ptr<MessageBase> request(std::shared_ptr<MessageBase> message,
+                                     int64_t timeout_ms = 5000);
+void respond(std::shared_ptr<MessageBase> request, std::shared_ptr<MessageBase> response);
+
+// DataBus 集成
+DataRef store_data(const std::string& key, const DataVariant& value,
+                   const DataBus::OwnerContext& owner);
+bool resolve_data(const DataRef& ref, DataVariant& value);
+```
+
+**消息优先级**：
+
+```cpp
+enum class MessagePriority {
+  LOW    = 0,
+  NORMAL = 1,
+  HIGH   = 2,
+  URGENT = 3,
+};
+```
+
+**使用示例**：
+
+```cpp
+// 创建 MessageDispatcher
+runtime::MessageDispatcherConfig config;
+config.worker_threads = 4;
+auto dispatcher = std::make_shared<runtime::MessageDispatcher>(config);
+dispatcher->start();
+
+// 订阅 Node 完成消息
+auto sub_id = dispatcher->subscribe("node.completion",
+    [](std::shared_ptr<runtime::MessageBase> msg) {
+        auto completion = std::dynamic_pointer_cast<runtime::NodeCompletionMessage>(msg);
+        if (completion) {
+            std::cout << "Node " << completion->node_id << " completed with status: "
+                      << static_cast<int>(completion->status) << std::endl;
+        }
+    });
+
+// 发布 Node 执行消息
+auto exec_msg = std::make_shared<runtime::NodeExecutionMessage>(
+    "node_001", "workflow_instance_001");
+exec_msg->inputs["query"] = "Hello";
+dispatcher->publish(exec_msg);
+
+// 取消订阅
+dispatcher->unsubscribe(sub_id);
+```
+
+#### 4.5.2 WorkflowScheduler
+
+`WorkflowScheduler` 处理嵌套 Workflow 的执行，支持父子关系追踪和深度限制。
+
+**配置结构**：
+
+```cpp
+// include/internal/runtime/workflow_scheduler.h:36-40
+struct Config {
+  int max_depth = 10;                  // 最大嵌套深度
+  int64_t default_timeout_ms = 300000; // 默认超时（5 分钟）
+  bool enable_parallel_nested = true;  // 允许并行嵌套执行
+};
+```
+
+**核心接口**：
+
+```cpp
+// 设置依赖
+void set_dispatcher(std::shared_ptr<MessageDispatcher> dispatcher);
+void set_databus(std::shared_ptr<DataBus> databus);
+void set_workflow_factory(WorkflowFactory factory);
+
+// 处理消息
+void handle_schedule_request(const WorkflowScheduleMessage& msg);
+void handle_completion(const WorkflowCompletionMessage& msg);
+
+// 启动嵌套 Workflow
+std::string start_nested_workflow(const std::string& workflow_id,
+                                  const std::string& parent_instance_id,
+                                  const std::string& parent_node_id,
+                                  const DataMap& inputs);
+
+// 深度控制
+int get_nesting_depth(const std::string& instance_id) const;
+bool is_depth_limit_reached(const std::string& instance_id) const;
+```
+
+**使用示例**：
+
+```cpp
+// 创建 WorkflowScheduler
+runtime::WorkflowScheduler::Config config;
+config.max_depth = 5;
+auto scheduler = std::make_shared<runtime::WorkflowScheduler>(config);
+
+// 设置依赖
+scheduler->set_dispatcher(dispatcher);
+scheduler->set_databus(databus);
+scheduler->set_workflow_factory([](const std::string& workflow_id) {
+    return load_workflow_by_id(workflow_id);
+});
+
+// 启动嵌套 Workflow
+std::string child_instance_id = scheduler->start_nested_workflow(
+    "child_workflow",
+    "parent_instance_001",
+    "workflow_node_001",
+    {{"input", "data"}}
+);
+
+// 检查嵌套深度
+int depth = scheduler->get_nesting_depth(child_instance_id);
+if (scheduler->is_depth_limit_reached(child_instance_id)) {
+    std::cerr << "Maximum nesting depth reached!" << std::endl;
+}
+```
+
+#### 4.5.3 消息类型
+
+所有消息类型定义在 `include/internal/runtime/message_types.h`：
+
+| 消息类型 | 结构体 | 说明 |
+|----------|--------|------|
+| `node.execution` | `NodeExecutionMessage` | 触发 Node 执行 |
+| `node.completion` | `NodeCompletionMessage` | Node 执行完成通知 |
+| `workflow.schedule` | `WorkflowScheduleMessage` | 调度嵌套 Workflow |
+| `workflow.completion` | `WorkflowCompletionMessage` | Workflow 完成通知 |
+| `control.flow` | `ControlFlowMessage` | 控制流操作 |
+
+**NodeExecutionMessage**：
+
+```cpp
+struct NodeExecutionMessage : public MessageBase {
+  std::string node_id;               // 目标 Node ID
+  std::string workflow_instance_id;  // Workflow 实例 ID
+  DataMap inputs;                    // 输入数据
+  std::vector<DataRef> input_refs;   // DataBus 引用
+  std::map<std::string, std::string> metadata;
+};
+```
+
+**NodeCompletionMessage**：
+
+```cpp
+struct NodeCompletionMessage : public MessageBase {
+  std::string node_id;
+  std::string workflow_instance_id;
+  Status status;                     // 执行状态
+  DataMap outputs;                   // 输出数据
+  std::vector<DataRef> output_refs;  // DataBus 引用
+  int64_t execution_time_ms;         // 执行耗时
+  std::string error_message;         // 错误信息
+};
+```
+
+**ControlFlowMessage**：
+
+```cpp
+// 控制流动作类型
+enum class ControlFlowAction {
+  PROCEED,    // 继续到下一个节点
+  SKIP,       // 跳过当前分支
+  GOTO,       // 跳转到指定节点
+  LOOP_BACK,  // 返回循环起点
+  BREAK,      // 跳出循环
+  CONTINUE,   // 继续下一次迭代
+  FORK,       // 分支并行执行
+  JOIN,       // 合并并行分支
+  ABORT,      // 终止 Workflow
+};
+
+struct ControlFlowMessage : public MessageBase {
+  std::string workflow_instance_id;
+  std::string node_id;
+  std::string edge_id;
+  ControlFlowAction action;
+  std::string target_node_id;    // GOTO 目标
+  std::string loop_id;           // 循环标识
+  int iteration;                 // 当前迭代次数
+  // ... 其他字段
+};
+```
+
+#### 4.5.4 消息驱动执行流程
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  WorkflowActor  │     │MessageDispatcher│     │   NodeWorker    │
+└────────┬────────┘     └────────┬────────┘     └────────┬────────┘
+         │                       │                       │
+         │  NodeExecutionMessage │                       │
+         │──────────────────────►│                       │
+         │                       │                       │
+         │                       │  dispatch to handler  │
+         │                       │──────────────────────►│
+         │                       │                       │
+         │                       │                       │  execute
+         │                       │                       │  node
+         │                       │                       │
+         │  NodeCompletionMessage│                       │
+         │◄──────────────────────│◄──────────────────────│
+         │                       │                       │
+         │  process completion   │                       │
+         │                       │                       │
 ```
 
 ---
@@ -1088,6 +1359,9 @@ private:
 | `docs/api-reference.md` | API 参考 |
 | `publish/agent/AGENT_PACKAGE_SPEC.md` | Agent 包规范 |
 | `publish/workflow/NODE_DEVELOPMENT_SPEC.md` | Node 开发规范 |
+| `include/internal/runtime/message_dispatcher.h` | MessageDispatcher 接口定义 |
+| `include/internal/runtime/workflow_scheduler.h` | WorkflowScheduler 接口定义 |
+| `include/internal/runtime/message_types.h` | 消息类型定义 |
 | `examples/features/agent_runner.cpp` | Agent Runner 示例 |
 | `examples/features/interactive_runner.cpp` | 交互式运行器示例 |
 | `examples/multi_session_chat/server/chat_server.cpp` | WebSocket 服务示例 |
