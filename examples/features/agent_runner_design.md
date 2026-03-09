@@ -41,7 +41,7 @@ MMAgent Runner 是 AgentFlow 框架的独立可执行程序，用于加载、验
 │  │      ↓                                                   │   │
 │  │  MMWorkflow DAG 执行                                        │   │
 │  │      ↓                                                   │   │
-│  │  Session.send_queue → 输出给用户                          │   │
+│  │  Agent.response_queue → 输出给用户                       │   │
 │  └─────────────────────────────────────────────────────────┘   │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
@@ -89,10 +89,10 @@ MMAgent Runner 是 AgentFlow 框架的独立可执行程序，用于加载、验
 │     └─────────────────────────────────────────────────────┘    │
 │                         │                                       │
 │                         ▼                                       │
-│  5. InteractiveRunner::collect_results()                        │
+│  5. InteractiveRunner::poll_results()                           │
 │     ┌─────────────────────────────────────────────────────┐    │
-│     │  从 session.send_queue 收集执行结果                 │    │
-│     │  输出给用户                                          │    │
+│     │  持续轮询 Agent response queue，直到执行安静         │    │
+│     │  合并所有分批返回的响应后输出给用户                  │    │
 │     └─────────────────────────────────────────────────────┘    │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
@@ -107,7 +107,7 @@ MMAgent Runner 是 AgentFlow 框架的独立可执行程序，用于加载、验
 | 消息处理 | `MMAgent::process_all_sessions_until_idle()` | `src/agent/agent.cpp` |
 | 任务获取 | `MMAgent::pop_generated_task()` | `src/agent/agent.cpp` |
 | 任务调度 | `MMAgentRuntime::schedule_task()` | `src/runtime/runtime.cpp` |
-| 输出收集 | `MMAgentSession::dequeue_send_message()` | `src/agent/session.cpp` |
+| 输出收集 | `MMAgent::dequeue_response_message()` / `InteractiveRunner::poll_results()` | `src/agent/agent.cpp` / `examples/features/interactive_runner.cpp` |
 
 ## 运行模式
 

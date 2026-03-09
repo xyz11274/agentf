@@ -80,9 +80,9 @@ private:
   void submit_user_request(const std::string& workflow_id, const std::string& input);
 
   /**
-   * Poll for results from Agent response queue
+   * Poll for results from Agent response queue until the execution becomes quiet
    * @param timeout_ms Maximum time to wait for results
-   * @return Collected output string, empty if timeout
+   * @return Collected output string, empty if timeout before any response arrives
    */
   std::string poll_results(int timeout_ms);
 

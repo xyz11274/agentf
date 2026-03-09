@@ -123,11 +123,8 @@ std::string InteractiveRunner::execute_workflow(const std::string& workflow_id,
   // 2. 处理待处理任务
   process_pending_tasks();
 
-  // 3. 等待完成
-  wait_for_completion(config_.timeout_ms);
-
-  // 4. 收集结果
-  return collect_results();
+  // 3. 轮询响应，直到 runtime 和 response queue 都进入安静态
+  return poll_results(config_.timeout_ms);
 }
 ```
 
@@ -356,61 +353,45 @@ std::string InteractiveRunner::execute_workflow(const std::string& workflow_id,
 │  │   end   │ (跳过)                                                    │
 │  └─────────┘                                                           │
 │                                                                        │
-│  输出: 最终处理结果 → session.send_queue                               │
+│  输出: 最终处理结果 → agent.response_queue                            │
 │                                                                        │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.8 步骤3: wait_for_completion() - 等待执行完成
+### 3.8 步骤3: poll_results() - 轮询直到执行安静
 
 ```cpp
-bool InteractiveRunner::wait_for_completion(int timeout_ms) {
+std::string InteractiveRunner::poll_results(int timeout_ms) {
   auto start = std::chrono::steady_clock::now();
   const int poll_interval_ms = 50;
+  const auto quiet_window = std::chrono::milliseconds(200);
+  std::ostringstream result;
+  std::chrono::steady_clock::time_point last_response_at{};
+  bool saw_response = false;
 
   while (true) {
-    // 检查是否有正在运行的节点
-    int running_nodes = runtime_->get_running_nodes();
-
-    // 检查 session 中是否有待处理的消息
-    auto session = agent_->get_default_session();
-    int pending_receive = session->get_receive_queue_size();
-    int pending_send = session->get_send_queue_size();
-
-    // 如果没有正在运行的节点且没有待处理消息，则完成
-    if (running_nodes == 0 && pending_receive == 0 && pending_send == 0) {
-      return true;
+    MMAgentMsgQue::Message response;
+    while (agent_->dequeue_response_message(response)) {
+      saw_response = true;
+      last_response_at = std::chrono::steady_clock::now();
+      result << response.content << "\n";
     }
 
-    // 检查超时
-    if (elapsed >= timeout_ms) {
-      return false;
+    const auto now = std::chrono::steady_clock::now();
+    const bool runtime_quiet = runtime_->get_running_nodes() == 0;
+    const bool response_queue_empty = agent_->get_response_queue_size() == 0;
+    if (saw_response && runtime_quiet && response_queue_empty
+        && (now - last_response_at) >= quiet_window) {
+      return result.str();
+    }
+
+    if (std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count() >= timeout_ms) {
+      return saw_response ? result.str() : "";
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(poll_interval_ms));
   }
 }
-```
-
-### 3.9 步骤4: collect_results() - 收集执行结果
-
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                InteractiveRunner::collect_results()                     │
-├────────────────────────────────────────────────────────────────────────┤
-│                                                                        │
-│  auto session = agent_->get_default_session();                         │
-│                                                                        │
-│  MMAgentMsgQue::Message response;                                        │
-│  while (session->dequeue_send_message(response)) {                     │
-│    // response.content 包含 workflow 执行结果                          │
-│    // response.metadata 包含额外信息                                   │
-│    result << response.content << "\n";                                 │
-│  }                                                                     │
-│                                                                        │
-│  return result.str();                                                  │
-│                                                                        │
-└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## 4. 完整交互示例
@@ -514,7 +495,7 @@ Goodbye!
 │                    │                      │                      │               │
 │                    ▼                      ▼                      ▼               │
 │  ┌─────────────────────┐  ┌─────────────────────┐  ┌─────────────────────┐      │
-│  │ submit_user_request │  │ process_pending_    │  │ collect_results     │      │
+│  │ submit_user_request │  │ process_pending_    │  │ poll_results        │      │
 │  │                     │  │ tasks               │  │                     │      │
 │  └──────────┬──────────┘  └──────────┬──────────┘  └──────────┬──────────┘      │
 └─────────────┼────────────────────────┼────────────────────────┼─────────────────┘
@@ -546,7 +527,7 @@ Goodbye!
 │  │  SessionTaskCoordinator::process_session_messages()                        │  │
 │  │        │                                                                   │  │
 │  │        ▼                                                                   │  │
-│  │  send_queue_ ──▶ dequeue_send_message()                                   │  │
+│  │  response_queue_ ──▶ dequeue_response_message()                           │  │
 │  └───────────────────────────────────────────────────────────────────────────┘  │
 │                              │                                                  │
 │                              ▼                                                  │
@@ -697,7 +678,7 @@ Goodbye!
 │         │                                                                       │
 │         ▼                                                                       │
 │  ┌─────────────┐                                                                │
-│  │   Session   │  send_queue_ ◀── 响应 Message                                 │
+│  │   Agent     │  response_queue_ ◀── 响应 Message                              │
 │  │             │  response.content = "执行结果"                                │
 │  └──────┬──────┘                                                                │
 │         │                                                                       │
@@ -728,9 +709,9 @@ Goodbye!
 | `MMAgentRuntime::stop()` | MMAgentRuntime | 停止 Runtime | `src/runtime/runtime.cpp:755` |
 | `MMAgentRuntime::schedule_task()` | MMAgentRuntime | 调度任务执行 | `src/runtime/runtime.cpp:125` |
 | `MMAgentRuntime::get_running_nodes()` | MMAgentRuntime | 获取正在执行的节点数 | `src/runtime/runtime.cpp:702` |
-| `MMAgentSession::dequeue_send_message()` | MMAgentSession | 从发送队列获取消息 | `src/agent/session.cpp:146` |
-| `MMAgentSession::get_receive_queue_size()` | MMAgentSession | 获取接收队列大小 | `src/agent/session.cpp:154` |
-| `MMAgentSession::get_send_queue_size()` | MMAgentSession | 获取发送队列大小 | `src/agent/session.cpp:158` |
+| `MMAgent::dequeue_response_message()` | MMAgent | 从响应队列获取消息 | `src/agent/agent.cpp` |
+| `MMAgent::get_response_queue_size()` | MMAgent | 获取响应队列大小 | `src/agent/agent.cpp` |
+| `MMAgentRuntime::get_running_nodes()` | MMAgentRuntime | 判断 runtime 是否仍有节点在执行 | `src/runtime/runtime.cpp` |
 
 ### 8.2 消息结构
 

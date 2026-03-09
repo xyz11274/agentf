@@ -71,3 +71,14 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/workflow_execution/test_nested_workflow_e
     add_test(NAME E2ENestedWorkflow COMMAND test_e2e_nested_workflow)
     add_dependencies(e2e_tests test_e2e_nested_workflow)
 endif()
+
+# Interactive Runner black-box smoke test
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/blackbox/test_blackbox_interactive_runner.sh")
+    add_test(
+        NAME E2EInteractiveRunner
+        COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/blackbox/test_blackbox_interactive_runner.sh"
+                "${CMAKE_BINARY_DIR}/agent_runner"
+                "${CMAKE_SOURCE_DIR}/examples/agent/basic_agent"
+    )
+endif()

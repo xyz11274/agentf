@@ -206,12 +206,17 @@ void InteractiveRunner::submit_user_request(const std::string& workflow_id,
 std::string InteractiveRunner::poll_results(int timeout_ms) {
   auto start = std::chrono::steady_clock::now();
   const int poll_interval_ms = 50;
+  const auto quiet_window = std::chrono::milliseconds(200);
   std::ostringstream result;
+  std::chrono::steady_clock::time_point last_response_at{};
+  bool saw_response = false;
 
   while (true) {
     // Poll response messages from Agent
     framework::MMAgentMsgQue::Message response;
     while (agent_->dequeue_response_message(response)) {
+      saw_response = true;
+      last_response_at = std::chrono::steady_clock::now();
       if (!response.content.empty()) {
         result << response.content;
         if (response.content.back() != '\n') {
@@ -225,16 +230,18 @@ std::string InteractiveRunner::poll_results(int timeout_ms) {
       }
     }
 
-    // Check if we have results
-    if (!result.str().empty()) {
+    const auto now = std::chrono::steady_clock::now();
+    const bool runtime_quiet = runtime_ ? runtime_->get_running_nodes() == 0 : true;
+    const bool response_queue_empty = agent_->get_response_queue_size() == 0;
+    if (saw_response && runtime_quiet && response_queue_empty
+        && (now - last_response_at) >= quiet_window) {
       return result.str();
     }
 
     // Check timeout
-    auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
     if (elapsed >= timeout_ms) {
-      return "";
+      return saw_response ? result.str() : "";
     }
 
     // Sleep before next poll
