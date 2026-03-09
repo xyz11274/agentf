@@ -51,7 +51,7 @@ AF_<参数名>          - 用户定义的输入参数
 
 例如，输入参数 `user_query` 对应环境变量 `AF_USER_QUERY`。
 
-**代码位置**：`src/runtime/worker/worker.cpp:62-81`
+**代码位置**：`src/runtime/worker/worker.cpp:65-81`
 
 ```cpp
 for(const auto& pair : request.inputs) {
@@ -160,7 +160,7 @@ status=success
 af_databus_set "selected_skills" '{"skill": "search"}'
 ```
 
-**框架处理逻辑**：`src/agent/agent.cpp:719-757`
+**框架处理逻辑**：`src/agent/agent.cpp:722-761`
 
 ```cpp
 std::string selected_skills;

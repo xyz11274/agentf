@@ -165,7 +165,6 @@ enum class AgentState {
     RUNNING      = 2,  // 运行中，可处理消息
     PAUSED       = 3,  // 已暂停，停止处理新消息
     STOPPED      = 4,  // 已停止，资源已释放
-    FAILED       = 5   // 失败，发生不可恢复错误
 };
 ```
 
@@ -389,11 +388,15 @@ std::map<std::string, master::TaskScheduleResult> list_task_assignments() const;
 **WorkflowInstanceInfo 结构**：
 
 ```cpp
+// include/internal/runtime/shared_runtime_state.h
 struct WorkflowInstanceInfo {
-    std::string workflow_id;
     std::string workflow_instance_id;
-    std::string agent_id;
-    int thread_count;
+    std::string workflow_id;
+    std::string workflow_file;
+    std::string agent_object_id;
+    std::string agent_instance_id;
+    std::string worker_id;
+    int         ref_count = 0;
 };
 ```
 
@@ -412,7 +415,8 @@ auto instances = runtime.list_workflow_instances();
 for (const auto& info : instances) {
     std::cout << "Workflow: " << info.workflow_id
               << " Instance: " << info.workflow_instance_id
-              << " Agent: " << info.agent_id << std::endl;
+              << " Agent: " << info.agent_instance_id
+              << " Worker: " << info.worker_id << std::endl;
 }
 
 // 查询任务分配情况
