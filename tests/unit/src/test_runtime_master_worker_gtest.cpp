@@ -12,6 +12,13 @@ namespace agentflow {
 namespace tests {
 
 namespace {
+void write_workflow_json(const std::filesystem::path& path, const std::string& workflow_id) {
+  std::ofstream wf(path);
+  wf << R"({"id":")" << workflow_id
+     << R"(","name":")" << workflow_id
+     << R"(","version":"1.0.0","nodes":[{"id":"n1","name":"n1","type":"TASK"}],"edges":[]})";
+}
+
 std::filesystem::path repo_root_path() {
   auto root = std::filesystem::path(__FILE__);
   for(int i = 0; i < 4; ++i) {
@@ -92,6 +99,86 @@ TEST(RuntimeMasterWorkerTest, SchedulerPrefersSameAgentInstanceThenSharedInstanc
   result = runtime.schedule_task(request);
   ASSERT_TRUE(result.scheduled);
   EXPECT_EQ(result.workflow_instance_id, "wf-shared");
+}
+
+TEST(RuntimeMasterWorkerTest, RuntimeMaterializesWorkflowPoolsFromAgentTasks) {
+  namespace fs = std::filesystem;
+  const fs::path tmp = fs::path("build/test_runtime_workflow_pool_pkg");
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({
+      "name": "runtime-workflow-pool-agent",
+      "version": "1.0.0",
+      "workflows": ["dispatcher.json", "coordinator.json", "skill.json", "context.json"]
+    })";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "session_pool_size": 1,
+      "tasks": [
+        {
+          "id": 0,
+          "type": "contextupdater",
+          "description": "Context updater",
+          "workflow_file": "context.json",
+          "workflow_pool_size": 2
+        }
+      ],
+      "sessions": [
+        {
+          "id": 0,
+          "description": "Pooled session",
+          "task_count": 3,
+          "tasks": [
+            { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "dispatcher.json", "workflow_pool_size": 3 },
+            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "coordinator.json", "workflow_pool_size": 2 },
+            {
+              "id": 2,
+              "type": "skill",
+              "description": "Search skill",
+              "workflow_file": "skill.json",
+              "workflow_pool_size": 4,
+              "skill": {
+                "name": "search",
+                "config_dir": "skills/search",
+                "instance_pool_size": 2
+              }
+            }
+          ]
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "dispatcher.json", "dispatcher_wf");
+  write_workflow_json(tmp / "coordinator.json", "coordinator_wf");
+  write_workflow_json(tmp / "skill.json", "skill_wf");
+  write_workflow_json(tmp / "context.json", "context_wf");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  runtime::MMAgentRuntime runtime;
+  ASSERT_TRUE(runtime.register_agent(agent));
+  ASSERT_TRUE(runtime.start());
+
+  const auto workflow_instances = runtime.list_workflow_instances();
+  ASSERT_EQ(workflow_instances.size(), 11u);
+
+  std::map<std::string, int> counts_by_workflow;
+  for(const auto& instance : workflow_instances) {
+    ++counts_by_workflow[instance.workflow_id];
+    EXPECT_EQ(instance.worker_id, "runtime-local-worker");
+  }
+  EXPECT_EQ(counts_by_workflow["context.json"], 2);
+  EXPECT_EQ(counts_by_workflow["dispatcher_wf"], 3);
+  EXPECT_EQ(counts_by_workflow["coordinator_wf"], 2);
+  EXPECT_EQ(counts_by_workflow["skill_wf"], 4);
+
+  EXPECT_TRUE(runtime.stop());
+  fs::remove_all(tmp);
 }
 
 TEST(RuntimeMasterWorkerTest, WorkerExecutesShellScriptViaEngine) {

@@ -44,6 +44,21 @@ std::shared_ptr<framework::MMAgentTask> find_task_by_message_id(
   }
   return nullptr;
 }
+
+std::shared_ptr<framework::MMAgentTask> find_task_by_message_id_and_type(
+    const std::vector<std::shared_ptr<framework::MMAgentTask>>& tasks, const std::string& message_id,
+    const std::string& task_type) {
+  for(const auto& task : tasks) {
+    if(!task || task->get_task_type() != task_type) {
+      continue;
+    }
+    std::string value;
+    if(task->get_parameter("message_id", value) && value == message_id) {
+      return task;
+    }
+  }
+  return nullptr;
+}
 }  // namespace
 
 class AgentTest : public ::testing::Test {
@@ -405,6 +420,78 @@ TEST_F(AgentTest, DefaultPooledSessionContainsDispatcherAndCoordinator) {
   auto routed_session = agent->get_or_create_session("u5", "c5");
   ASSERT_NE(routed_session, nullptr);
   EXPECT_EQ(routed_session, pooled_session);
+}
+
+TEST_F(AgentTest, CoordinatorInstantiatesSkillTaskFromSkillTemplateWorkflow) {
+  namespace fs = std::filesystem;
+  const fs::path tmp = fs::path("build/test_selected_skill_pkg");
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({
+      "name": "selected-skill-agent",
+      "version": "1.0.0",
+      "workflows": ["workflow_dispatcher.json", "workflow_coordinator.json", "workflow_skill.json"]
+    })";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "session_pool_size": 1,
+      "sessions": [
+        {
+          "id": 0,
+          "description": "Pooled session",
+          "task_count": 3,
+          "tasks": [
+            { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflow_dispatcher.json" },
+            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflow_coordinator.json" },
+            {
+              "id": 2,
+              "type": "skill",
+              "description": "Search skill",
+              "workflow_file": "workflow_skill.json",
+              "skill": {
+                "name": "search",
+                "config_dir": "skills/search"
+              }
+            }
+          ]
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow_dispatcher.json", "wf_dispatcher");
+  write_workflow_json(tmp / "workflow_coordinator.json", "wf_coordinator");
+  write_workflow_json(tmp / "workflow_skill.json", "wf_skill");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+  auto session = agent->get_session_by_key("0");
+  ASSERT_NE(session, nullptr);
+  auto coordinator_task = session->get_coordinator_task();
+  ASSERT_NE(coordinator_task, nullptr);
+
+  framework::MMAgentMsgQue::Message response;
+  response.message_id = "req_selected_skill";
+  response.metadata["task_type"] = "coordinator";
+  response.metadata["selected_skills"] = R"({"skill":"search","session_id":"0"})";
+  ASSERT_TRUE(coordinator_task->enqueue_intent_request_message(response));
+
+  EXPECT_GE(agent->process_session_messages("0"), 1);
+
+  auto tasks = session->get_tasks();
+  auto generated_skill = find_task_by_message_id_and_type(tasks, "req_selected_skill", "skill");
+  ASSERT_NE(generated_skill, nullptr);
+  EXPECT_EQ(generated_skill->get_skill_name(), "search");
+  EXPECT_EQ(generated_skill->get_workflow_id(), "wf_skill");
+  EXPECT_NE(generated_skill->get_task_id().find("_search"), std::string::npos);
+  std::string source_task_id;
+  ASSERT_TRUE(generated_skill->get_parameter("source_task_id", source_task_id));
+  EXPECT_EQ(source_task_id, "0_task_2");
+
+  fs::remove_all(tmp);
 }
 
 TEST_F(AgentTest, AgentJsonInstantiatesConfiguredSessionPoolAndSkillPools) {

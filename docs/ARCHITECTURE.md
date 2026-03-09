@@ -686,7 +686,7 @@ graph TB
 - **日期**：2026-02-28
 - **状态**：已更新（2026-03-07）
 - **背景**：需要把 session / task / skill 拓扑前移到 `agent.json`，并让 context workflow 收敛到 agent 顶层任务。
-- **决策**：每个 agent 由 `session_pool_size + tasks + sessions` 描述；`tasks[]` 中声明 `contextupdater`，`sessions[]` 只保留 1 份同质化 session 模板，模板内固定包含 `dispatcher`、`coordinator` 和若干 `skill`，并按 `skill.instance_pool_size` 生成技能任务实例池，同时允许通过 `task.workflow_pool_size` 声明每类任务绑定 workflow 的多实例池规模。
+- **决策**：每个 agent 由 `session_pool_size + tasks + sessions` 描述；`tasks[]` 中声明 `contextupdater`，`sessions[]` 只保留 1 份同质化 session 模板，模板内固定包含 `dispatcher`、`coordinator` 和若干 `skill`，并按 `skill.instance_pool_size` 生成技能任务实例池，同时允许通过 `task.workflow_pool_size` 声明每类任务绑定 workflow 的多实例池规模；runtime 会把这些 workflow 实例池注册到 deployer/scheduler，并在 dispatcher/coordinator 输出 `selected_skills` 后继续实例化 skill task。
 - **备选方案**：
   - 方案 A（继续沿用 task0/task1 隐式约定）：改动小 / 难以表达多 session skill 池。
   - 方案 B（显式 session/task schema）：配置更长 / 但职责更清晰。

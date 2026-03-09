@@ -103,6 +103,8 @@ public:
   master::TaskScheduleResult schedule_task(const master::TaskScheduleRequest& request);
   bool report_agent_heartbeat(const AgentId& agent_id);
   bool update_task_status(const std::string& task_id, const std::string& status, int progress);
+  std::vector<WorkflowInstanceInfo> list_workflow_instances() const;
+  std::map<std::string, master::TaskScheduleResult> list_task_assignments() const;
 
   // Shared resource access
   MMDataBus& get_databus(const AgentId& agent_id);
@@ -166,6 +168,10 @@ private:
   void agent_task_poller_loop();
   void process_agent_state_change(const AgentId& agent_id, bool is_healthy);
   void check_agent_health(const AgentId& agent_id);
+  void initialize_agent_workflow_pools(const AgentPtr& agent);
+  bool ensure_workflow_pool(const std::string& agent_id, const std::string& task_owner_id,
+                            const std::string& workflow_id, const std::string& workflow_file,
+                            int workflow_pool_size);
 
   // MMWorkflow Level Master functions
   void schedule_workflow_executable_nodes(const std::string& execution_id);

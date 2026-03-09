@@ -74,6 +74,21 @@ const AgentPackage::TaskDefinition* find_task_definition(
   return nullptr;
 }
 
+std::shared_ptr<MMAgentTask> find_skill_template_task(const std::shared_ptr<MMAgentSession>& session,
+                                                      const std::string& skill_name) {
+  if(!session || skill_name.empty()) {
+    return nullptr;
+  }
+  for(const auto& task : session->get_tasks()) {
+    if(!task || task->get_task_type() != "skill" || task->get_skill_name() != skill_name
+       || task->is_skill_instance()) {
+      continue;
+    }
+    return task;
+  }
+  return nullptr;
+}
+
 std::string extract_json_field(const std::string& json_line, const std::string& key) {
   const std::string needle = "\"" + key + "\"";
   auto              pos    = json_line.find(needle);
@@ -662,12 +677,17 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
     if(const auto skill_name_it = message.metadata.find("skill_name");
        skill_name_it != message.metadata.end()) {
       task_config.skill_name = skill_name_it->second;
+      task_config.task_id += "_" + skill_name_it->second;
       if(const auto workflow_it =
              session->get_config().task_workflows.find("skill:" + skill_name_it->second);
-         workflow_it != session->get_config().task_workflows.end()) {
+          workflow_it != session->get_config().task_workflows.end()) {
         task_config.workflow_id = resolve_workflow_reference(workflow_it->second);
         task_config.workflow_file = resolve_workflow_file(workflow_it->second);
       }
+    }
+    if(const auto target_session_it = message.metadata.find("target_session_id");
+       target_session_it != message.metadata.end() && !target_session_it->second.empty()) {
+      task_config.task_id += "_" + target_session_it->second;
     }
   }
   if(const auto so_it = message.metadata.find("collaboration_so");
@@ -745,7 +765,9 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
         if(!target_session.empty()) {
           skill_message.metadata["target_session_id"] = target_session;
         }
-        auto skill_task = build_runtime_task(session, task, skill_message);
+        auto skill_template = find_skill_template_task(session, skill_name);
+        auto skill_task =
+            build_runtime_task(session, skill_template ? skill_template : task, skill_message);
         if(skill_task) {
           auto workflow = get_workflow(skill_task->get_workflow_id());
           if(!workflow || !workflow->is_red_light()) {

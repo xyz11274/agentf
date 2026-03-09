@@ -226,6 +226,12 @@ bool Deployer::get_workflow_worker(const std::string& workflow_instance_id, std:
   return true;
 }
 
+std::shared_ptr<MMWorkerEngine> Deployer::get_worker_engine(const std::string& worker_id) const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = workers_.find(worker_id);
+  return it != workers_.end() ? it->second : nullptr;
+}
+
 std::map<std::string, std::string> Deployer::get_all_deployments() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return workflow_to_worker_;

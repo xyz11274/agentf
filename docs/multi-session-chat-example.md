@@ -28,7 +28,7 @@
   - 1 个 `dispatcher`
   - 1 个 `coordinator`
   - 多个 `skill`
-- 每个 task 还可以通过 `workflow_pool_size` 声明绑定 workflow 的实例池大小；
+- 每个 task 还可以通过 `workflow_pool_size` 声明绑定 workflow 的实例池大小；runtime 会在注册/启动时为这些 task 预创建 workflow 实例池，并交给 deployer/scheduler 管理；
 - `contextupdater` 作为 agent 顶层任务单独配置，不属于 session 内任务。
 
 ### workflow 映射
@@ -44,6 +44,12 @@
 | `skill:summary` | `skill-summary-workflow` |
 | `skill:date` | `skill-date-workflow` |
 | `skill:delegate` | `skill-delegate-workflow` |
+
+dispatcher / coordinator 仍是特殊 task：
+
+- dispatcher workflow 输入意图消息，输出 `selected_skills`；
+- coordinator workflow 基于 `selected_skills` 和已有结果生成编排；
+- agent 在读取 workflow 输出后，会把被选中的 skill 实例化成 runtime task，再由 scheduler 绑定到具体 workflow 实例。
 
 ## Workflow 架构
 

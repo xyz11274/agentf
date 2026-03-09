@@ -19,7 +19,7 @@
   - `sessions[]` 固定只保留 1 份同质化 session 模板，由 `session_pool_size` 复制出整个 session 池；
   - session 只声明 `dispatcher` / `coordinator` / `skill` 三类任务，`skill.instance_pool_size` 默认值为 `2`，`task.workflow_pool_size` 默认值为 `1`。
 - `SessionRouter` 统一维护默认请求接收队列、响应发送队列、路由线程和 aging 线程；消息按 `user_id + client_id` 命中或分配预创建 session。
-- `skill` 任务新增 `skill.name`、`skill.config_dir`、`skill.instance_pool_size`，初始化时按配置创建任务实例池；所有 task 统一支持 `workflow_pool_size`，用于声明对应 workflow 的多实例池规模。
+- `skill` 任务新增 `skill.name`、`skill.config_dir`、`skill.instance_pool_size`，初始化时按配置创建任务实例池；所有 task 统一支持 `workflow_pool_size`，用于声明对应 workflow 的多实例池规模，runtime 启动时会把这些 workflow 实例池预注册到 deployer / scheduler。
 - `MMAgent::initialize_components()` 改为优先按 `agent.json.sessions` 预创建 session pool；请求先进入 router，再映射到具体 session。
 - examples / publish / tests 已同步切换到新 schema。
 

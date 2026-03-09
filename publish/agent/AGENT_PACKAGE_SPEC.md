@@ -49,15 +49,16 @@ MMAgent 运行时元数据，至少包含：
 - 顶层 `tasks[].type`：当前固定为 `contextupdater`
 - `session.tasks[].type`：`dispatcher` / `coordinator` / `skill`
 - `task.workflow_file`：任务绑定的 workflow 文件
-- `task.workflow_pool_size`：workflow 多实例池大小（>= 1，默认 1）
+- `task.workflow_pool_size`：workflow 多实例池大小（>= 1，默认 1）；runtime 会按该值预创建 workflow 实例池
 - `workflow` 中的 node 可声明 `execution_risk_level`（`green` / `yellow` / `red`）；coordinator 可据此决定 skill 是否直接执行
 - `skill` 任务额外包含：
   - `skill.name`
   - `skill.config_dir`
   - `skill.instance_pool_size`（>= 1，默认 2）
 - `workflow_pool_size` 与 `skill.instance_pool_size` 语义不同：
-  - `workflow_pool_size` 描述 task 绑定 workflow 的实例池规模；
+  - `workflow_pool_size` 描述 task 绑定 workflow 的实例池规模，并由 deployer / scheduler 在运行时建立 workflow 实例与 worker / task 的绑定；
   - `skill.instance_pool_size` 描述 skill task 自身应展开出的任务实例数。
+- `dispatcher` / `coordinator` 是特殊 task：workflow 输出 `selected_skills` 后，agent 会继续把这些 skill 具象化为 runtime task。
 - 每个 session 模板必须包含 1 个 `dispatcher`、1 个 `coordinator`，以及至少 1 个 `skill`
 
 ### 3.2 `agentCard.md`

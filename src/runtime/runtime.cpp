@@ -8,6 +8,7 @@
 
 #include "agent/session.h"
 #include "agent/task.h"
+#include "agent/context.h"
 #include "runtime/trace/trace_context.h"
 #include "runtime/trace/trace_manager.h"
 #include "utils/logger.h"
@@ -23,6 +24,36 @@ int64_t now_ms() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
+}
+
+std::vector<std::shared_ptr<framework::MMAgentTask>> collect_pool_template_tasks(const AgentPtr& agent) {
+  std::vector<std::shared_ptr<framework::MMAgentTask>> tasks;
+  if(!agent) {
+    return tasks;
+  }
+  std::set<std::string> seen_task_ids;
+  if(auto context = agent->get_context(); context) {
+    if(auto updater = context->get_context_updater_task(); updater) {
+      tasks.push_back(updater);
+      seen_task_ids.insert(updater->get_task_id());
+    }
+  }
+  for(const auto& session : agent->get_sessions()) {
+    if(!session) {
+      continue;
+    }
+    for(const auto& task : session->get_tasks()) {
+      if(!task || task->is_skill_instance() || seen_task_ids.count(task->get_task_id()) > 0) {
+        continue;
+      }
+      if(task->get_task_id().find("_runtime_") != std::string::npos) {
+        continue;
+      }
+      tasks.push_back(task);
+      seen_task_ids.insert(task->get_task_id());
+    }
+  }
+  return tasks;
 }
 }  // namespace
 
@@ -102,7 +133,7 @@ std::vector<master::WorkerSnapshot> MMAgentRuntime::list_worker_engines() const 
 }
 
 bool MMAgentRuntime::deploy_workflow_instance(const WorkflowInstanceInfo& info,
-                                            const std::string& preferred_worker_id) {
+                                             const std::string& preferred_worker_id) {
   if(!deployer_ || !shared_state_) {
     return false;
   }
@@ -116,6 +147,12 @@ bool MMAgentRuntime::deploy_workflow_instance(const WorkflowInstanceInfo& info,
   WorkflowInstanceInfo persisted = info;
   persisted.worker_id = assigned_worker;
   shared_state_->add_or_update_workflow_instance(persisted);
+  if(auto worker = deployer_->get_worker_engine(assigned_worker); worker) {
+    worker->add_supported_workflow(info.workflow_id);
+    worker->register_workflow_instance(
+        MMWorkerEngine::WorkflowRegistration{info.workflow_id, info.workflow_instance_id,
+                                             config_.worker_default_workflow_threads});
+  }
   return true;
 }
 
@@ -123,8 +160,15 @@ bool MMAgentRuntime::destroy_workflow_instance(const std::string& workflow_insta
   if(!deployer_ || !shared_state_) {
     return false;
   }
+  WorkflowInstanceInfo existing;
+  const bool has_existing = shared_state_->get_workflow_instance(workflow_instance_id, existing);
   bool removed_mapping = deployer_->remove_workflow_instance(workflow_instance_id);
   bool removed_state = shared_state_->remove_workflow_instance(workflow_instance_id);
+  if(has_existing) {
+    if(auto worker = deployer_->get_worker_engine(existing.worker_id); worker) {
+      worker->unregister_workflow_instance(workflow_instance_id);
+    }
+  }
   return removed_mapping || removed_state;
 }
 
@@ -160,7 +204,7 @@ bool MMAgentRuntime::report_agent_heartbeat(const AgentId& agent_id) {
 }
 
 bool MMAgentRuntime::update_task_status(const std::string& task_id, const std::string& status,
-                                      int progress) {
+                                       int progress) {
   if(!shared_state_ || !scheduler_) {
     return false;
   }
@@ -174,6 +218,15 @@ bool MMAgentRuntime::update_task_status(const std::string& task_id, const std::s
   return scheduler_->update_task_status(task_id, status, progress);
 }
 
+std::vector<WorkflowInstanceInfo> MMAgentRuntime::list_workflow_instances() const {
+  return shared_state_ ? shared_state_->list_workflow_instances() : std::vector<WorkflowInstanceInfo>{};
+}
+
+std::map<std::string, master::TaskScheduleResult> MMAgentRuntime::list_task_assignments() const {
+  return scheduler_ ? scheduler_->list_task_assignments()
+                    : std::map<std::string, master::TaskScheduleResult>{};
+}
+
 bool MMAgentRuntime::register_agent(AgentPtr agent) {
   if(!agent) {
     return false;
@@ -183,6 +236,13 @@ bool MMAgentRuntime::register_agent(AgentPtr agent) {
     agents_[agent->get_id()] = agent;
     databuses_[agent->get_id()] = std::unique_ptr<MMDataBus>(new MMDataBus(1024 * 1024));
     agent_heartbeats_[agent->get_id()] = now_ms();
+    if(local_worker_) {
+      for(const auto& workflow : agent->get_workflows()) {
+        if(workflow) {
+          local_worker_->add_supported_workflow(workflow->get_id());
+        }
+      }
+    }
     Logger::instance().info_f("MMAgent registered: %s (id: %s)", agent->get_name().c_str(),
                               agent->get_id().c_str());
     return true;
@@ -257,6 +317,9 @@ bool MMAgentRuntime::load_workflow(const AgentId& agent_id, WorkflowPtr workflow
     return false;
   }
 
+  if(local_worker_) {
+    local_worker_->add_supported_workflow(workflow->get_id());
+  }
   agent->add_workflow(workflow);
   if(!workflow->validate()) {
     agent->remove_workflow(workflow->get_id());
@@ -699,6 +762,16 @@ void MMAgentRuntime::agent_registration_loop() {
         ok = true;
       }
     }
+    if(ok && !request.unregister && request.agent) {
+      if(local_worker_) {
+        for(const auto& workflow : request.agent->get_workflows()) {
+          if(workflow) {
+            local_worker_->add_supported_workflow(workflow->get_id());
+          }
+        }
+      }
+      initialize_agent_workflow_pools(request.agent);
+    }
     if(request.done && request.result && request.done_cv && request.done_mutex) {
       {
         std::lock_guard<std::mutex> done_lock(*request.done_mutex);
@@ -773,6 +846,31 @@ void MMAgentRuntime::agent_task_poller_loop() {
         if(!task->get_config().session_id.empty()) {
           inputs["session_id"] = task->get_config().session_id;
         }
+        std::string task_owner_id = task->get_config().task_id;
+        task->get_parameter("source_task_id", task_owner_id);
+        if(task_owner_id.empty()) {
+          task_owner_id = task->get_config().task_id;
+        }
+        ensure_workflow_pool(agent->get_id(), task_owner_id, workflow_id, task->get_workflow_file(),
+                             task->get_workflow_pool_size());
+        master::TaskScheduleRequest schedule_request;
+        schedule_request.task_id = task->get_config().task_id;
+        schedule_request.agent_object_id = task_owner_id;
+        schedule_request.agent_instance_id = task_owner_id;
+        schedule_request.workflow_id = workflow_id;
+        schedule_request.workflow_file = task->get_workflow_file();
+        auto schedule_result = schedule_task(schedule_request);
+        if(schedule_result.scheduled) {
+          inputs["workflow_instance_id"] = schedule_result.workflow_instance_id;
+          inputs["worker_id"] = schedule_result.worker_id;
+          if(local_worker_ && schedule_result.worker_id == local_worker_->get_worker_id()) {
+            MMWorkerEngine::TaskItem task_item;
+            task_item.task_id = task->get_config().task_id;
+            task_item.workflow_id = workflow_id;
+            task_item.workflow_instance_id = schedule_result.workflow_instance_id;
+            local_worker_->enqueue_task(task_item);
+          }
+        }
         Logger::instance().info_f(
             "[TASK_POLLER] Dispatching task=%s workflow=%s agent=%s",
             task->get_config().task_id.c_str(), workflow_id.c_str(),
@@ -789,6 +887,8 @@ void MMAgentRuntime::agent_task_poller_loop() {
         response.receiver_id = task->get_config().task_id;
         response.metadata["task_type"] = task->get_task_type();
         response.metadata["workflow_id"] = workflow_id;
+        response.metadata["workflow_instance_id"] = schedule_result.workflow_instance_id;
+        response.metadata["worker_id"] = schedule_result.worker_id;
         response.metadata["message_type"] = "data_exchange";
         response.content = scheduled ? "workflow_scheduled" : "workflow_schedule_failed";
         std::shared_ptr<framework::MMAgentTask> response_target = task;
@@ -888,6 +988,13 @@ bool MMAgentRuntime::start() {
   if(deployer_ && local_worker_ && (role_ == RuntimeRole::MASTER || role_ == RuntimeRole::WORKER)) {
     deployer_->register_worker(local_worker_);
   }
+  {
+    std::lock_guard<std::mutex> lock(agents_mutex_);
+    for(const auto& [agent_id, agent] : agents_) {
+      (void)agent_id;
+      initialize_agent_workflow_pools(agent);
+    }
+  }
 
   Logger::instance().info_f("MMAgentRuntime started with %d worker threads", num_worker_threads_);
   return true;
@@ -977,6 +1084,59 @@ MMDataBus& MMAgentRuntime::get_databus(const AgentId& agent_id) {
   }
 
   return *it->second;
+}
+
+void MMAgentRuntime::initialize_agent_workflow_pools(const AgentPtr& agent) {
+  if(!agent) {
+    return;
+  }
+  for(const auto& task : collect_pool_template_tasks(agent)) {
+    if(!task) {
+      continue;
+    }
+    const std::string workflow_id =
+        !task->get_workflow_id().empty() ? task->get_workflow_id() : task->get_workflow_file();
+    if(workflow_id.empty()) {
+      continue;
+    }
+    ensure_workflow_pool(agent->get_id(), task->get_task_id(), workflow_id, task->get_workflow_file(),
+                         task->get_workflow_pool_size());
+  }
+}
+
+bool MMAgentRuntime::ensure_workflow_pool(const std::string& agent_id,
+                                          const std::string& task_owner_id,
+                                          const std::string& workflow_id,
+                                          const std::string& workflow_file,
+                                          int workflow_pool_size) {
+  (void)agent_id;
+  if(!shared_state_ || !deployer_ || task_owner_id.empty() || workflow_id.empty()) {
+    return false;
+  }
+  if(local_worker_) {
+    local_worker_->add_supported_workflow(workflow_id);
+  }
+  const int desired_size = std::max(1, workflow_pool_size);
+  for(int index = 0; index < desired_size; ++index) {
+    const std::string workflow_instance_id =
+        task_owner_id + ":workflow_instance:" + std::to_string(index);
+    WorkflowInstanceInfo existing;
+    if(shared_state_->get_workflow_instance(workflow_instance_id, existing)) {
+      continue;
+    }
+    WorkflowInstanceInfo info;
+    info.workflow_instance_id = workflow_instance_id;
+    info.workflow_id = workflow_id;
+    info.workflow_file = workflow_file;
+    info.agent_object_id = task_owner_id;
+    info.agent_instance_id = task_owner_id;
+    if(!deploy_workflow_instance(info, config_.local_worker_id)) {
+      Logger::instance().warn_f("Failed to deploy pooled workflow instance %s for workflow %s",
+                                workflow_instance_id.c_str(), workflow_id.c_str());
+      return false;
+    }
+  }
+  return true;
 }
 
 void MMAgentRuntime::worker_thread_main() {

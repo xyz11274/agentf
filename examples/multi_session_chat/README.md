@@ -21,13 +21,14 @@ multi_session_chat/
   - 顶层 `tasks[0]` 为 `contextupdater`；
   - `sessions[0]` 是唯一的同质化 session 模板；
   - 每个 session 固定包含 1 个 `dispatcher`、1 个 `coordinator` 和多个 `skill` 任务；
-  - 每个 task 还可以设置 `workflow_pool_size`，声明该任务绑定 workflow 的实例池规模；
+  - 每个 task 还可以设置 `workflow_pool_size`，声明该任务绑定 workflow 的实例池规模；runtime 启动后会为这些 task 预创建 workflow 实例池；
   - 每个 `skill` 任务通过 `instance_pool_size` 配置实例池，默认 `2`。
 - `package.json` 将任务类型映射到 workflow：
   - `dispatcher -> session-dispatcher-workflow`
   - `coordinator -> session-coordinator-workflow`
   - `contextupdater -> session-context-workflow`
   - `skill:* -> 对应 skill workflow`
+- dispatcher / coordinator 是特殊 task：workflow 先产出 `selected_skills` / 编排结果，再由 agent 把被选中的 skill 动态实例化成 runtime task，交给 scheduler 绑定到具体 workflow 实例。
 
 ## 关键 workflow
 

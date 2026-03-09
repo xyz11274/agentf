@@ -56,6 +56,7 @@ public:
                               const std::string& preferred_worker_id = "");
   bool remove_workflow_instance(const std::string& workflow_instance_id);
   bool get_workflow_worker(const std::string& workflow_instance_id, std::string& worker_id) const;
+  std::shared_ptr<MMWorkerEngine> get_worker_engine(const std::string& worker_id) const;
   std::map<std::string, std::string> get_all_deployments() const;
   bool                                rebalance(const std::vector<WorkflowInstanceInfo>& infos);
   bool                                handle_agent_state_change(const std::string& agent_instance_id,
