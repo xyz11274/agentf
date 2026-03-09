@@ -44,7 +44,7 @@ cpplint --linelength=100 src/your_file.cpp
 ## Repository-specific conventions
 
 - Respect dependency fallback design:
-  - `AGENTFLOW_WITH_PROTOACTOR`, `AGENTFLOW_WITH_RAPIDJSON`, `AGENTFLOW_WITH_OPENSSL`, `AGENTFLOW_WITH_LIBEVENT` drive conditional compilation.
+  - `AGENTFLOW_WITH_PROTOACTOR`, `AGENTFLOW_WITH_RAPIDJSON`, `AGENTFLOW_WITH_OPENSSL` drive conditional compilation.
   - If a dependency is missing, stub adapters are expected behavior (do not remove fallback paths).
 - Keep internal vs external header boundaries intact:
   - external consumer-facing APIs in `include/external/`
