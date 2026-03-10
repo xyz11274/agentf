@@ -33,7 +33,7 @@ int main(int argc, char* argv[]) {
   using agentflow::examples::ConversationStore;
   using agentflow::examples::TuiConsole;
   using agentflow::examples::build_conversation_response;
-  using agentflow::examples::trim_text;
+  using agentflow::examples::read_tui_input;
 
   const std::string session_id = "tui:default";
   const fs::path original_cwd = fs::current_path();
@@ -70,8 +70,7 @@ int main(int argc, char* argv[]) {
   ui.write_blank_line();
 
   std::string line;
-  while(std::getline(std::cin, line)) {
-    line = trim_text(line);
+  while(read_tui_input(ui, &line)) {
     if(line.empty()) {
       continue;
     }
@@ -92,8 +91,6 @@ int main(int argc, char* argv[]) {
       ui.write_blank_line();
       continue;
     }
-
-    ui.write_line("you> " + line);
     store.append(session_id, "user", line);
     const std::string history_json = store.recent_as_json(session_id, 12);
     std::string response = build_conversation_response(line, history_json);

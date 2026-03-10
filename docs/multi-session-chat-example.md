@@ -177,7 +177,7 @@ Shell 节点通过 `publish/sdk/shell/agentflow_databus.sh` 使用 Pub/Sub：
 1. TUI 先将进程级 stdout/stderr 重定向到 `package/runtime/logs/multi_session_chat_tui.log`
 2. 交互窗口仅保留 `you>` / `assistant>` / `status>` 输出
 3. 对问候语与“总结上一条消息”执行本地短路回复
-4. 其余请求通过 `InteractiveRunner` 触发 `dispatcher`
+4. 其余请求通过 `ChatAgentBridge` 触发 `dispatcher`
 5. AgentFlow runtime 继续调度 `session-coordinator-workflow` 与 skill workflows
 6. TUI 只收集最终响应文本，不把运行时日志打印回交互窗口
 

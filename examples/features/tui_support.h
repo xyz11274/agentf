@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <iostream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -162,6 +163,25 @@ class TuiConsole {
   int log_fd_ = -1;
   bool active_ = false;
 };
+
+inline bool read_tui_input(TuiConsole& ui, std::string* line,
+                           const std::string& prompt = "you> ") {
+  if(line == nullptr) {
+    return false;
+  }
+  const bool interactive_input = ::isatty(STDIN_FILENO);
+  if(interactive_input) {
+    ui.write_text(prompt);
+  }
+  if(!std::getline(std::cin, *line)) {
+    return false;
+  }
+  *line = trim_text(*line);
+  if(!interactive_input && !line->empty()) {
+    ui.write_line(prompt + *line);
+  }
+  return true;
+}
 
 }  // namespace agentflow::examples
 

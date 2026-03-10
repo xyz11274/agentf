@@ -1471,66 +1471,30 @@ private:
 };
 ```
 
-### 9.2 WebSocket 服务示例
+### 9.2 TUI 交互服务示例
 
-参考 `examples/agent/multi_session_chat/server/chat_server.cpp`：
+参考 `examples/features/chat_bridge_support.h` 与
+`examples/agent/multi_session_chat/multi_session_chat_tui.cpp`：
 
 ```cpp
-// 简化的 WebSocket 服务集成
-class WebSocketService {
+// 简化的 TUI 集成
+class TuiChatService {
 public:
     bool initialize(const std::string& package_path) {
-        // 初始化 Agent 和 Runtime
-        agent_ = framework::MMAgent::create_from_package(package_path);
-        agent_->initialize();
-
-        runtime_ = std::make_unique<runtime::MMAgentRuntime>();
-        runtime_->register_agent(agent_);
-        runtime_->start();
-        agent_->start();
-
-        return true;
+        bridge_ = std::make_unique<agentflow::examples::ChatAgentBridge>(package_path);
+        return bridge_->initialize();
     }
 
-    void on_websocket_message(int client_fd,
-                              const std::string& user_id,
-                              const std::string& message) {
-        // 构造请求
-        framework::MMAgentMsgQue::Message request;
-        request.message_id = generate_message_id();
-        request.type = framework::MMAgentMsgQue::MessageType::TASK_REQUEST;
-        request.metadata["message_type"] = "intent_request";
-        request.metadata["user_id"] = user_id;
-        request.metadata["client_id"] = std::to_string(client_fd);
-        request.metadata["workflow_id"] = "coordinator_workflow";
-        request.content = message;
-
-        // 路由请求
-        agent_->route_request_message(request);
-
-        // 启动响应轮询线程
-        std::thread([this, client_fd]() {
-            poll_and_send_response(client_fd);
-        }).detach();
+    std::string handle_user_message(const std::string& session_id,
+                                    const std::string& message,
+                                    const std::string& history_json) {
+        const std::string payload =
+            "session=" + session_id + "\nuser=" + message + "\nhistory=" + history_json;
+        return bridge_->execute("session-dispatcher-workflow", payload);
     }
 
 private:
-    void poll_and_send_response(int client_fd) {
-        auto deadline = std::chrono::steady_clock::now() +
-                       std::chrono::milliseconds(30000);
-
-        while (std::chrono::steady_clock::now() < deadline) {
-            framework::MMAgentMsgQue::Message response;
-            if (agent_->dequeue_response_message(response)) {
-                // 通过 WebSocket 发送响应
-                send_websocket_frame(client_fd, response.content);
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-    }
-
-    std::shared_ptr<framework::MMAgent> agent_;
-    std::unique_ptr<runtime::MMAgentRuntime> runtime_;
+    std::unique_ptr<agentflow::examples::ChatAgentBridge> bridge_;
 };
 ```
 

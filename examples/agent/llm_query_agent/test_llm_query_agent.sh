@@ -51,11 +51,11 @@ fi
 # Change to agent directory (required for shell scripts to be found)
 cd "${AGENT_DIR}"
 
-# Run interactive runner and send user message through agent message interface
+# Run the dedicated TUI and send the user message through the agent message interface
 # The agent will route through dispatcher -> coordinator -> skill
 OUTPUT=$(
-    echo "${INPUT}" | \
-    "${BUILD_DIR}/agent_runner" . --interactive 2>&1
+    printf '%s\n/quit\n' "${INPUT}" | \
+    "${BUILD_DIR}/example_llm_query_agent_tui" . 2>&1
 )
 
 # Print OUTPUT

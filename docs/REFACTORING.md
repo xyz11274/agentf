@@ -152,7 +152,8 @@ E2E 测试引用的 `examples/agent/basic_agent` 和 `examples/agent/nested_work
 
 #### 2. ChatAgentBridge：msgque 消息驱动 + 多阶段编排
 
-**`server/chat_server.cpp`** — `execute()` 方法全面重构为五阶段流水线：
+**`examples/features/chat_bridge_support.h`**（由 `multi_session_chat_tui.cpp` / `openjiuwen_multi_session_chat_tui.cpp` 复用）
+— `execute()` 方法全面重构为五阶段流水线：
 
 **Phase 1 — 消息路由（msgque）**
 - 从 `payload` 解析 `user_text` 和 `client_session_id`；

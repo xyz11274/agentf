@@ -81,6 +81,10 @@ Workflow 模式参考模板（DSL 示例，不依赖外部脚本）：
 
 将 agent-studio 编排结果作为 bundled artifact 装入 AgentFlow 包，并通过包内 Python 适配器 node 运行。包含专用 TUI 和 E2E 冒烟测试。
 
+## agent/llm_query_agent/ — LLM Query 示例
+
+依赖 `llm-query` 动态库的 LLM 查询示例，现提供专用 TUI 入口；运行时日志与交互窗口隔离。
+
 ## agent/multi_session_chat/ — 多 session 对话示例
 
 多轮对话、多语言节点、DataBus 驱动的完整示例，现以专用 TUI 作为交互入口，详见 [`agent/multi_session_chat/README.md`](agent/multi_session_chat/README.md)。
@@ -125,7 +129,7 @@ Workflow 模式参考模板（DSL 示例，不依赖外部脚本）：
 
 当请求消息未显式指定 `workflow_id` 时，系统会优先使用 session 中 dispatcher / coordinator 任务绑定的 workflow。示例中的 `coordinator_workflow.json` 展示了结果编排方式。
 
-## TUI 对话样例（multi_session_chat / openjiuwen_multi_session_chat）
+## TUI 对话样例（multi_session_chat / openjiuwen_multi_session_chat / llm_query_agent）
 
 ### 1) 构建 AgentFlow
 
@@ -145,7 +149,14 @@ Workflow 模式参考模板（DSL 示例，不依赖外部脚本）：
 ./build/example_openjiuwen_multi_session_chat_tui examples/agent/openjiuwen_multi_session_chat/package
 ```
 
-### 4) 样例能力说明
+### 4) 启动 llm_query_agent TUI
+
+```bash
+LD_LIBRARY_PATH=/root/projects/llm-query/build/src/lib:$LD_LIBRARY_PATH \
+  ./build/example_llm_query_agent_tui examples/agent/llm_query_agent
+```
+
+### 5) 样例能力说明
 
 - 对话管理模块将消息按 `session_id` 追加保存到 `examples/agent/multi_session_chat/package/history/*.jsonl`。
 - 主 dispatcher workflow 会把请求广播到可复用 skill session。
@@ -153,8 +164,9 @@ Workflow 模式参考模板（DSL 示例，不依赖外部脚本）：
 - agent 级 `contextupdater` 对应的 `session_context_workflow` 示例节点包含：模板读取、历史读取、LLM 摘要、context 填充。
 - 四类 skill workflow：联网搜索、结果总结、日期计算、Agent 分发（样例脚本可替换为真实实现）。
 - 主 coordinator 示例节点会收集已选 skill、调用 LLM 规划依赖并落盘 task 状态编排结果。
+- `llm_query_agent` 提供独立 TUI，可直接验证 dispatcher/coordinator/skill 到 `llm_query_node` 的完整链路。
 
-### 5) 构建脚本与自动化对话测试
+### 6) 构建脚本与自动化对话测试
 
 ```bash
 bash examples/agent/multi_session_chat/scripts/build_and_run.sh

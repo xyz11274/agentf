@@ -33,7 +33,7 @@ openjiuwen_multi_session_chat/
 - `skill_adapter.py`
   - 统一 skill catalog、能力契约、dispatcher/coordinator 合并逻辑、各 skill 的回退实现。
 - `context_adapter.py`
-  - 统一历史读取、上下文总结、会话 context 写回，并为 TUI 提供与 WebUI 时代一致的纯会话直答语义。
+  - 统一历史读取、上下文总结、会话 context 写回，并为 TUI 提供稳定的纯会话直答语义。
 
 ## 关键 workflow
 

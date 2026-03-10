@@ -71,11 +71,13 @@ ls -la build/lib/libllm_query_node.so
 # Set API key
 export LLM_API_KEY="your-api-key"
 
-# Run the agent runner with LLM query agent
-cd examples/agent/llm_query_agent
+# Start the dedicated TUI
 LD_LIBRARY_PATH=/root/projects/llm-query/build/src/lib:$LD_LIBRARY_PATH \
-  ../../../build/bin/agent_runner . "What is the capital of France?"
+  ./build/example_llm_query_agent_tui examples/agent/llm_query_agent
 ```
+
+TUI 会将运行时日志写入 `examples/agent/llm_query_agent/runtime/logs/llm_query_agent_tui.log`，
+交互窗口只保留 `you>` / `assistant>` / `status>` 输出。
 
 ## Architecture
 
@@ -116,12 +118,12 @@ User Input
 | `llm_query_workflow.json` | Main skill workflow (config → llm) |
 | `dispatcher_node.sh` | Shell node for dispatcher |
 | `coordinator_node.sh` | Shell node for coordinator |
-| `config_node.sh` | Shell node for reading config |
+| `config_node.py` | Python node for reading config |
 | `nodes/llm_node.cpp` | C++ SO library node for LLM query |
 
 ## Node Development
 
-### Config Node (Shell)
+### Config Node (Python)
 
 Reads configuration from environment variables and outputs JSON:
 ```json
@@ -156,12 +158,12 @@ The agent handles errors gracefully:
 
 ```bash
 # Test config node
-./config_node.sh
+python3 ./config_node.py
 
-# Test with curl (requires agent running)
-curl -X POST http://localhost:8080/query \
-  -H "Content-Type: application/json" \
-  -d '{"input": "Hello, AI!"}'
+# Smoke test the TUI manually
+printf 'What is 2+2?\n/quit\n' | \
+  LD_LIBRARY_PATH=/root/projects/llm-query/build/src/lib:$LD_LIBRARY_PATH \
+  ./build/example_llm_query_agent_tui examples/agent/llm_query_agent
 ```
 
 ## License

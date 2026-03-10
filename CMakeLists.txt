@@ -414,6 +414,12 @@ add_executable(example_openjiuwen_studio_agent_tui
 )
 target_link_libraries(example_openjiuwen_studio_agent_tui PRIVATE agentflow)
 
+add_executable(example_llm_query_agent_tui
+    ${AGENTFLOW_EXAMPLE_DIR}/agent/llm_query_agent/llm_query_agent_tui.cpp
+    ${AGENTFLOW_EXAMPLE_DIR}/features/interactive_runner.cpp
+)
+target_link_libraries(example_llm_query_agent_tui PRIVATE agentflow)
+
 # multi_session_chat polyglot SO library — C++ nodes for dispatcher/coordinator/session-dispatcher workflows
 add_library(multi_session_nodes SHARED
     ${AGENTFLOW_EXAMPLE_DIR}/agent/multi_session_chat/nodes/cpp/multi_session_nodes.cpp)
