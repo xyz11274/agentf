@@ -71,3 +71,36 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/workflow_execution/test_nested_workflow_e
     add_test(NAME E2ENestedWorkflow COMMAND test_e2e_nested_workflow)
     add_dependencies(e2e_tests test_e2e_nested_workflow)
 endif()
+
+# Interactive Runner black-box smoke test
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/blackbox/test_blackbox_interactive_runner.sh")
+    add_test(
+        NAME E2EInteractiveRunner
+        COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/blackbox/test_blackbox_interactive_runner.sh"
+                "${CMAKE_BINARY_DIR}/agent_runner"
+                "${CMAKE_SOURCE_DIR}/examples/agent/basic_agent"
+    )
+endif()
+
+if(EXISTS "${CMAKE_SOURCE_DIR}/examples/openjiuwen_multi_session_chat/tests/auto_dialog_test.sh")
+    add_test(
+        NAME E2EOpenJiuwenMultiSessionChat
+        COMMAND bash
+                "${CMAKE_SOURCE_DIR}/examples/openjiuwen_multi_session_chat/tests/auto_dialog_test.sh"
+    )
+endif()
+
+# Echo Agent Scenario
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/echo_agent/test_echo_agent_e2e.cpp")
+    add_executable(test_e2e_echo_agent
+        echo_agent/test_echo_agent_e2e.cpp
+    )
+    target_link_libraries(test_e2e_echo_agent
+        agentflow
+        GTest::gtest
+        GTest::gtest_main
+    )
+    add_test(NAME E2EEchoAgent COMMAND test_e2e_echo_agent)
+    add_dependencies(e2e_tests test_e2e_echo_agent)
+endif()

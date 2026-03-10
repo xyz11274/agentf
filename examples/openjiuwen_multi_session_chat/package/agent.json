@@ -1,0 +1,88 @@
+{
+  "name": "OpenJiuwenMultiSessionChatAgent",
+  "version": "1.0.0",
+  "description": "Multi-session chat orchestration agent package with openJiuwen-compatible Python nodes",
+  "session_pool_size": 5,
+  "tasks": [
+    {
+      "id": 0,
+      "type": "contextupdater",
+      "description": "Update shared agent context",
+      "workflow_file": "session_context_workflow.json",
+      "workflow_pool_size": 2
+    }
+  ],
+  "sessions": [
+    {
+      "id": 0,
+      "description": "Homogeneous pooled chat session template",
+      "task_count": 6,
+      "tasks": [
+        {
+          "id": 0,
+          "type": "dispatcher",
+          "description": "Dispatch requests",
+          "workflow_file": "session_dispatcher_workflow.json",
+          "workflow_pool_size": 3
+        },
+        {
+          "id": 1,
+          "type": "coordinator",
+          "description": "Coordinate outputs",
+          "workflow_file": "session_coordinator_workflow.json",
+          "workflow_pool_size": 2
+        },
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "Search skill task",
+          "workflow_file": "skill_search_workflow.json",
+          "skill": {
+            "name": "search",
+            "config_dir": "runtime",
+            "instance_pool_size": 2
+          },
+          "workflow_pool_size": 2
+        },
+        {
+          "id": 3,
+          "type": "skill",
+          "description": "Summary skill task",
+          "workflow_file": "skill_summary_workflow.json",
+          "skill": {
+            "name": "summary",
+            "config_dir": "runtime",
+            "instance_pool_size": 2
+          },
+          "workflow_pool_size": 2
+        },
+        {
+          "id": 4,
+          "type": "skill",
+          "description": "Date skill task",
+          "workflow_file": "skill_date_workflow.json",
+          "skill": {
+            "name": "date",
+            "config_dir": "runtime",
+            "instance_pool_size": 2
+          },
+          "workflow_pool_size": 2
+        },
+        {
+          "id": 5,
+          "type": "skill",
+          "description": "Delegate skill task",
+          "workflow_file": "skill_delegate_workflow.json",
+          "skill": {
+            "name": "delegate",
+            "config_dir": "runtime",
+            "instance_pool_size": 2
+          },
+          "workflow_pool_size": 2
+        }
+      ]
+    }
+  ],
+  "max_workflows": 10,
+  "max_concurrent_workflows": 5
+}

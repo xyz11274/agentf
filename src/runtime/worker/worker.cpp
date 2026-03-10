@@ -365,6 +365,8 @@ bool MMWorkerEngine::start() {
       std::make_unique<basic::ThreadPool>(static_cast<size_t>(control_threads));
   control_thread_ = std::thread(&MMWorkerEngine::control_message_loop, this);
   business_thread_ = std::thread(&MMWorkerEngine::business_message_loop, this);
+  Logger::instance().info_f("[WORKER_START] worker_id=%s status=RUNNING control_threads=%d",
+                            config_.worker_id.c_str(), control_threads);
   return true;
 }
 
@@ -373,6 +375,8 @@ void MMWorkerEngine::stop() {
   if(!running_.compare_exchange_strong(expected, false)) {
     return;
   }
+
+  Logger::instance().info_f("[WORKER_STOP] worker_id=%s stopping...", config_.worker_id.c_str());
 
   queue_cv_.notify_all();
   if(control_thread_.joinable()) {
@@ -391,6 +395,7 @@ void MMWorkerEngine::stop() {
   workflow_pools_.clear();
   control_pool_.reset();
   set_status(WorkerStatus::STOPPED);
+  Logger::instance().info_f("[WORKER_STOP] worker_id=%s status=STOPPED", config_.worker_id.c_str());
 }
 
 bool MMWorkerEngine::enqueue_task(const TaskItem& task) {

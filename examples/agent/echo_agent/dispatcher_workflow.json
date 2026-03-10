@@ -1,0 +1,18 @@
+{
+  "id": "echo-dispatcher-workflow",
+  "version": "1.0",
+  "name": "Echo Dispatcher",
+  "description": "Dispatch user messages to coordinator",
+  "nodes": [
+    {
+      "id": "dispatch",
+      "name": "Dispatch Node",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "./echo_node.sh",
+      "inputs": ["input"],
+      "json_output": true
+    }
+  ],
+  "edges": []
+}

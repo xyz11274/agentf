@@ -30,7 +30,6 @@ name|url|branch|target_dir
 当前配置示例：
 
 ```text
-libevent|https://github.com/libevent/libevent.git|master|libevent
 Protoactor-cpp|https://github.com/DanielKernel/Protoactor-cpp.git|main|Protoactor-cpp
 RapidJSON|https://github.com/Tencent/rapidjson.git|master|rapidjson
 redis|https://github.com/redis/redis.git|unstable|redis
@@ -59,7 +58,6 @@ redis|https://github.com/redis/redis.git|unstable|redis
 - `adapter/actor/`：Protoactor-cpp（未启用时使用 stub）
 - `adapter/dsl/`：RapidJSON（未启用时使用 stub）
 - `adapter/cache/`：Redis
-- `adapter/event/`：libevent
 
 ## 注意事项
 

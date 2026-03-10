@@ -13,6 +13,7 @@
 #define AGENTFLOW_RUNTIME_TRACE_TYPES_H
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <map>
 #include <memory>

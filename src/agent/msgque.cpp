@@ -69,6 +69,10 @@ bool MMAgentMsgQue::dequeue_from_type_queue(MessageQueueType queue_type, Message
   if(!queue->empty()) {
     message = queue->front();
     queue->erase(queue->begin());
+    // Restore content from data_ref if needed
+    if(message.content.empty() && !message.data_ref.empty()) {
+      dataref_bridge::resolve_payload(message.data_ref, message.content);
+    }
     return true;
   }
   return false;

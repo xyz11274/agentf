@@ -90,55 +90,6 @@ option(AGENTFLOW_BUILD_TESTS "Build unit tests" ON)
 # Find optional dependencies (all with graceful fallback to stub implementations)
 # ============================================================================
 
-# libevent for event management
-find_package(libevent CONFIG QUIET
-  PATHS
-    "${CMAKE_INSTALL_PREFIX}"
-    "${HOMEBREW_PREFIX}/opt/libevent"
-    "/usr/local"
-    "/usr"
-  PATH_SUFFIXES
-    lib/cmake
-    lib/cmake/libevent
-    share/cmake
-)
-if(NOT libevent_FOUND)
-  # Try pkg-config as fallback
-  if(PKG_CONFIG_FOUND)
-    pkg_check_modules(libevent libevent)
-  endif()
-  if(NOT libevent_FOUND)
-    # Check homebrew location directly
-    if(HOMEBREW_PREFIX AND EXISTS "${HOMEBREW_PREFIX}/opt/libevent")
-      set(LIBEVENT_ROOT "${HOMEBREW_PREFIX}/opt/libevent")
-      find_path(LIBEVENT_INCLUDE_DIR event.h
-        PATHS ${LIBEVENT_ROOT} /usr/local /usr
-        PATH_SUFFIXES include
-        NO_DEFAULT_PATH
-      )
-      find_library(LIBEVENT_LIB event
-        PATHS ${LIBEVENT_ROOT} /usr/local /usr
-        PATH_SUFFIXES lib
-        NO_DEFAULT_PATH
-      )
-      if(LIBEVENT_INCLUDE_DIR AND LIBEVENT_LIB)
-        set(libevent_FOUND TRUE)
-        set(libevent_INCLUDE_DIRS ${LIBEVENT_INCLUDE_DIR})
-        set(libevent_LIBRARIES ${LIBEVENT_LIB})
-        message(STATUS "libevent found (manual detection)")
-      endif()
-    endif()
-  endif()
-  if(NOT libevent_FOUND)
-    message(STATUS "libevent not found")
-    message(STATUS "  To install: brew install libevent (macOS) or sudo apt-get install libevent-dev (Ubuntu)")
-  else()
-    message(STATUS "libevent found")
-  endif()
-else()
-  message(STATUS "libevent found")
-endif()
-
 # Protoactor-cpp for Actor-based implementation
 find_package(protoactor CONFIG QUIET
   PATHS
@@ -334,11 +285,6 @@ set(AGENTFLOW_ACTOR_ADAPTER_SOURCES
     ${AGENTFLOW_VENDOR_DIR}/adapter/actor/adapter_factory.cpp
 )
 
-# Event adapter sources
-set(AGENTFLOW_EVENT_ADAPTER_SOURCES
-    ${AGENTFLOW_VENDOR_DIR}/adapter/event/libevent_adapter.cpp
-)
-
 set(AGENTFLOW_CACHE_ADAPTER_SOURCES
     ${AGENTFLOW_VENDOR_DIR}/adapter/cache/redis_adapter.cpp
 )
@@ -374,34 +320,24 @@ set(AGENTFLOW_SOURCES
     ${AGENTFLOW_RUNTIME_SOURCES}
     ${AGENTFLOW_UTILS_SOURCES}
     ${AGENTFLOW_ACTOR_ADAPTER_SOURCES}
-    ${AGENTFLOW_EVENT_ADAPTER_SOURCES}
     ${AGENTFLOW_CACHE_ADAPTER_SOURCES}
     ${AGENTFLOW_DSL_ADAPTER_SOURCES}
 )
 
-# Create main library
-add_library(agentflow STATIC ${AGENTFLOW_SOURCES})
+# Create main library (shared library .so)
+add_library(agentflow SHARED ${AGENTFLOW_SOURCES})
 target_include_directories(agentflow PUBLIC ${AGENTFLOW_INCLUDE_DIR})
+
+# Set library output directory
+set_target_properties(agentflow PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+)
 
 # Link with common libraries
 find_package(Threads REQUIRED)
 target_link_libraries(agentflow PUBLIC Threads::Threads)
 if(UNIX)
   target_link_libraries(agentflow PUBLIC ${CMAKE_DL_LIBS})
-endif()
-
-# Link with libevent if available
-if(libevent_FOUND)
-  if(TARGET libevent::core)
-    target_link_libraries(agentflow PUBLIC libevent::core)
-  elseif(libevent_LIBRARIES)
-    target_link_libraries(agentflow PUBLIC ${libevent_LIBRARIES})
-    if(libevent_INCLUDE_DIRS)
-      target_include_directories(agentflow PUBLIC ${libevent_INCLUDE_DIRS})
-    endif()
-  endif()
-  target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_LIBEVENT=1)
-  message(STATUS "libevent linked successfully")
 endif()
 
 # Link with Protoactor if available
@@ -471,13 +407,12 @@ set_target_properties(multi_session_nodes PROPERTIES
 # ============================================================================
 
 # Node adapter shared library - needs all AgentFlow sources including agent
-add_library(node_adapter_lib SHARED 
+add_library(node_adapter_lib SHARED
     ${AGENTFLOW_AGENT_SOURCES}
-    ${AGENTFLOW_WORKFLOW_SOURCES} 
-    ${AGENTFLOW_RUNTIME_SOURCES} 
-    ${AGENTFLOW_UTILS_SOURCES} 
-    ${AGENTFLOW_ACTOR_ADAPTER_SOURCES} 
-    ${AGENTFLOW_EVENT_ADAPTER_SOURCES} 
+    ${AGENTFLOW_WORKFLOW_SOURCES}
+    ${AGENTFLOW_RUNTIME_SOURCES}
+    ${AGENTFLOW_UTILS_SOURCES}
+    ${AGENTFLOW_ACTOR_ADAPTER_SOURCES}
     ${AGENTFLOW_CACHE_ADAPTER_SOURCES}
     ${AGENTFLOW_DSL_ADAPTER_SOURCES})
 target_include_directories(node_adapter_lib PUBLIC ${AGENTFLOW_INCLUDE_DIR})
@@ -485,19 +420,6 @@ find_package(Threads REQUIRED)
 target_link_libraries(node_adapter_lib PUBLIC Threads::Threads)
 if(UNIX)
   target_link_libraries(node_adapter_lib PUBLIC ${CMAKE_DL_LIBS})
-endif()
-
-# Link with libevent if available
-if(libevent_FOUND)
-  if(TARGET libevent::core)
-    target_link_libraries(node_adapter_lib PUBLIC libevent::core)
-  elseif(libevent_LIBRARIES)
-    target_link_libraries(node_adapter_lib PUBLIC ${libevent_LIBRARIES})
-    if(libevent_INCLUDE_DIRS)
-      target_include_directories(node_adapter_lib PUBLIC ${libevent_INCLUDE_DIRS})
-    endif()
-  endif()
-  target_compile_definitions(node_adapter_lib PUBLIC AGENTFLOW_WITH_LIBEVENT=1)
 endif()
 
 # Link with Protoactor if available

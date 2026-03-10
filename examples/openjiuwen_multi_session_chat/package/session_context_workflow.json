@@ -1,0 +1,90 @@
+{
+  "id": "session-context-workflow",
+  "version": "1.0",
+  "name": "session-context-workflow",
+  "nodes": [
+    {
+      "id": "read_prompt",
+      "name": "read-prompt-template",
+      "type": "task",
+      "execution_mode": "python_script",
+      "command": "examples/openjiuwen_multi_session_chat/nodes/python/context_node.py",
+      "args": ["read_prompt"],
+      "json_output": true,
+      "outputs": [
+        {"name": "prompt_template", "type": "string"}
+      ]
+    },
+    {
+      "id": "read_history",
+      "name": "read-dialog-history",
+      "type": "task",
+      "execution_mode": "python_script",
+      "command": "examples/openjiuwen_multi_session_chat/nodes/python/context_node.py",
+      "args": ["read_history"],
+      "json_output": true,
+      "inputs": [
+        {"name": "session_id", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "history_tail", "type": "string"}
+      ]
+    },
+    {
+      "id": "summarize",
+      "name": "summarize-history-via-llm",
+      "type": "task",
+      "execution_mode": "python_script",
+      "command": "examples/openjiuwen_multi_session_chat/nodes/python/context_node.py",
+      "args": ["summarize"],
+      "json_output": true,
+      "inputs": [
+        {"name": "prompt_template", "type": "string", "required": true},
+        {"name": "history_tail", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "history_summary", "type": "string"}
+      ]
+    },
+    {
+      "id": "fill_context",
+      "name": "fill-context",
+      "type": "task",
+      "execution_mode": "python_script",
+      "command": "examples/openjiuwen_multi_session_chat/nodes/python/context_node.py",
+      "args": ["fill_context"],
+      "json_output": true,
+      "inputs": [
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "history_summary", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "session_context", "type": "string"}
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "s1",
+      "source": "read_prompt",
+      "target": "read_history",
+      "transfer_mode": "value"
+    },
+    {
+      "id": "s2",
+      "source": "read_history",
+      "target": "summarize",
+      "source_outputs": ["history_tail"],
+      "target_inputs": ["history_tail"],
+      "transfer_mode": "value"
+    },
+    {
+      "id": "s3",
+      "source": "summarize",
+      "target": "fill_context",
+      "source_outputs": ["history_summary"],
+      "target_inputs": ["history_summary"],
+      "transfer_mode": "value"
+    }
+  ]
+}
