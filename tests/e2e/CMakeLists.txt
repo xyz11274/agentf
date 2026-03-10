@@ -130,7 +130,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/echo_agent/test_echo_agent_e2e.cpp")
 endif()
 
 # LLM Query Agent Scenario (black-box test through message interface)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/llm_query_agent/test_llm_query_agent_e2e.cpp")
+if(TARGET llm_query_node AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/llm_query_agent/test_llm_query_agent_e2e.cpp")
     add_executable(test_e2e_llm_query_agent
         llm_query_agent/test_llm_query_agent_e2e.cpp
     )

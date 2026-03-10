@@ -793,6 +793,12 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
   task->acknowledge_dispatch_record(message.message_id);
 
   if(task->get_task_type() == "dispatcher") {
+    if(message.content != "workflow_completed") {
+      Logger::instance().info_f(
+          "[DISPATCHERDataExchange] Ignoring non-complete event, content='%s'",
+          message.content.c_str());
+      return;
+    }
     DataVariant dispatcher_response_value;
     if(get_data("response", dispatcher_response_value)) {
       if(const auto* text = std::get_if<std::string>(&dispatcher_response_value); text && !text->empty()) {

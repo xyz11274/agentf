@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <iostream>
 #include <string>
+#include <unistd.h>
 
 #include "../../features/interactive_runner.h"
 #include "../../features/tui_support.h"
@@ -66,8 +67,15 @@ int main(int argc, char* argv[]) {
   claw_tui::print_help(ui);
   ui.write_blank_line();
 
+  const bool interactive_input = ::isatty(STDIN_FILENO);
   std::string line;
-  while(std::getline(std::cin, line)) {
+  while(true) {
+    if(interactive_input) {
+      ui.write_text("you> ");
+    }
+    if(!std::getline(std::cin, line)) {
+      break;
+    }
     line = trim_text(line);
     if(line.empty()) {
       continue;
@@ -82,7 +90,9 @@ int main(int argc, char* argv[]) {
       continue;
     }
 
-    ui.write_line("you> " + line);
+    if(!interactive_input) {
+      ui.write_line("you> " + line);
+    }
     const std::string response = runner.execute_request("claw-dispatcher-workflow", line);
     if(response.empty()) {
       ui.write_line("assistant> [timeout waiting for ClawAgent response]");

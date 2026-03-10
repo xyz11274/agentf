@@ -177,12 +177,16 @@ std::string InteractiveRunner::get_status() const {
 
 std::string InteractiveRunner::execute_request(const std::string& workflow_id,
                                                const std::string& input, int timeout_ms) {
-  submit_user_request(workflow_id, input);
-  return poll_results(timeout_ms > 0 ? timeout_ms : config_.timeout_ms);
+  const std::string message_id = submit_user_request(workflow_id, input);
+  return poll_results(message_id, timeout_ms > 0 ? timeout_ms : config_.timeout_ms);
 }
 
-void InteractiveRunner::submit_user_request(const std::string& workflow_id,
-                                            const std::string& input) {
+std::string InteractiveRunner::submit_user_request(const std::string& workflow_id,
+                                                   const std::string& input) {
+  framework::MMAgentMsgQue::Message stale_response;
+  while (agent_->dequeue_response_message(stale_response)) {
+  }
+
   // Construct message
   framework::MMAgentMsgQue::Message message;
   message.message_id = generate_message_id();
@@ -207,9 +211,11 @@ void InteractiveRunner::submit_user_request(const std::string& workflow_id,
     std::cout << "[DEBUG] Submitted request: message_id=" << message.message_id
               << ", workflow_id=" << workflow_id << std::endl;
   }
+  return message.message_id;
 }
 
-std::string InteractiveRunner::poll_results(int timeout_ms) {
+std::string InteractiveRunner::poll_results(const std::string& expected_message_id, int timeout_ms) {
+  (void)expected_message_id;
   auto start = std::chrono::steady_clock::now();
   const int poll_interval_ms = 50;
   const auto quiet_window = std::chrono::milliseconds(200);
@@ -337,10 +343,10 @@ bool InteractiveRunner::handle_command(const std::string& command_line) {
     // Message-driven execution:
     // 1. Submit request to Agent (Agent + Runtime handle the rest internally)
     // 2. Poll for results
-    submit_user_request(workflow_id, input);
+    const std::string message_id = submit_user_request(workflow_id, input);
 
     // Poll for results with timeout
-    std::string result = poll_results(config_.timeout_ms);
+    std::string result = poll_results(message_id, config_.timeout_ms);
     if (result.empty()) {
       result = "[ERROR] Execution timeout or no response\n";
     }

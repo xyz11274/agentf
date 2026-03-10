@@ -87,14 +87,15 @@ public:
    * Submit a user request through the message-driven pipeline
    * Routes the message through MMAgent::route_request_message()
    */
-  void submit_user_request(const std::string& workflow_id, const std::string& input);
+  std::string submit_user_request(const std::string& workflow_id, const std::string& input);
 
   /**
    * Poll for results from Agent response queue until the execution becomes quiet
+   * @param expected_message_id Only responses for this request are collected
    * @param timeout_ms Maximum time to wait for results
    * @return Collected output string, empty if timeout before any response arrives
    */
-  std::string poll_results(int timeout_ms);
+  std::string poll_results(const std::string& expected_message_id, int timeout_ms);
 
   /**
    * Generate a unique message ID

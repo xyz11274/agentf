@@ -73,6 +73,8 @@ class TuiConsole {
     return true;
   }
 
+  void write_text(const std::string& text) const { write_raw(text); }
+
   void write_line(const std::string& text) const { write_raw(text + "\n"); }
 
   void write_blank_line() const { write_raw("\n"); }
