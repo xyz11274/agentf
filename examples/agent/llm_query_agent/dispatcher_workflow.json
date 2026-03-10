@@ -1,0 +1,19 @@
+{
+  "id": "llm-query-dispatcher-workflow",
+  "version": "1.0",
+  "name": "LLM Query Dispatcher",
+  "description": "Dispatch user messages to coordinator for LLM processing",
+  "nodes": [
+    {
+      "id": "dispatch",
+      "name": "Dispatch Node",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "./dispatcher_node.sh",
+      "inputs": ["input"],
+      "json_output": true,
+      "timeout_ms": 5000
+    }
+  ],
+  "edges": []
+}

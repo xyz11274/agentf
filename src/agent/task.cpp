@@ -24,6 +24,7 @@ MMAgentTask::~MMAgentTask() {
   parameters_.clear();
   intent_request_messages_.clear();
   data_exchange_messages_.clear();
+  response_messages_.clear();
   dispatch_records_.clear();
 }
 
@@ -187,6 +188,30 @@ int MMAgentTask::get_intent_request_queue_size() const {
 int MMAgentTask::get_data_exchange_queue_size() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return static_cast<int>(data_exchange_messages_.size());
+}
+
+bool MMAgentTask::enqueue_response_message(const MMAgentMsgQue::Message& message) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    response_messages_.push_back(message);
+  }
+  queue_cv_.notify_all();
+  return true;
+}
+
+bool MMAgentTask::dequeue_response_message(MMAgentMsgQue::Message& message) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if(response_messages_.empty()) {
+    return false;
+  }
+  message = response_messages_.front();
+  response_messages_.pop_front();
+  return true;
+}
+
+int MMAgentTask::get_response_queue_size() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return static_cast<int>(response_messages_.size());
 }
 
 void MMAgentTask::register_dispatch_record(const MMAgentMsgQue::Message& message) {

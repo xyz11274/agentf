@@ -100,9 +100,12 @@ class MMAgentTask {
 
   bool enqueue_intent_request_message(const MMAgentMsgQue::Message& message);
   bool enqueue_data_exchange_message(const MMAgentMsgQue::Message& message);
+  bool enqueue_response_message(const MMAgentMsgQue::Message& message);
+  bool dequeue_response_message(MMAgentMsgQue::Message& message);
   int  process_pending_messages_once();
   int  get_intent_request_queue_size() const;
   int  get_data_exchange_queue_size() const;
+  int  get_response_queue_size() const;
 
   void register_dispatch_record(const MMAgentMsgQue::Message& message);
   void acknowledge_dispatch_record(const std::string& message_id);
@@ -133,6 +136,7 @@ class MMAgentTask {
   std::map<std::string, std::string> parameters_;
   std::deque<MMAgentMsgQue::Message> intent_request_messages_;
   std::deque<MMAgentMsgQue::Message> data_exchange_messages_;
+  std::deque<MMAgentMsgQue::Message> response_messages_;  // Responses from other tasks (e.g., skill -> coordinator)
   std::map<std::string, DispatchRecord> dispatch_records_;
   MessageHandler                     intent_request_handler_;
   MessageHandler                     data_exchange_handler_;

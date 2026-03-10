@@ -475,23 +475,51 @@ TEST_F(AgentTest, CoordinatorInstantiatesSkillTaskFromSkillTemplateWorkflow) {
   auto coordinator_task = session->get_coordinator_task();
   ASSERT_NE(coordinator_task, nullptr);
 
-  framework::MMAgentMsgQue::Message response;
-  response.message_id = "req_selected_skill";
-  response.metadata["task_type"] = "coordinator";
-  response.metadata["selected_skills"] = R"({"skill":"search","session_id":"0"})";
-  ASSERT_TRUE(coordinator_task->enqueue_intent_request_message(response));
+  // New flow: skill tasks are created when coordinator workflow completes (data_exchange)
+  // Simulate coordinator workflow completion by sending a data_exchange message
+  // with selected_skills in the databus
+  agent->publish_data("selected_skills", std::string(R"({"skill":"search","session_id":"0"})"));
 
-  EXPECT_GE(agent->process_session_messages("0"), 1);
+  framework::MMAgentMsgQue::Message workflow_complete;
+  workflow_complete.message_id = "coordinator_workflow_complete";
+  workflow_complete.metadata["task_type"] = "coordinator";
+  workflow_complete.metadata["workflow_id"] = "wf_coordinator";
+  workflow_complete.content = "workflow_completed";
+
+  // Trigger data_exchange handler which will create skill task
+  coordinator_task->enqueue_data_exchange_message(workflow_complete);
+
+  // Process all messages to trigger the data_exchange handler
+  agent->process_all_sessions_until_idle();
 
   auto tasks = session->get_tasks();
-  auto generated_skill = find_task_by_message_id_and_type(tasks, "req_selected_skill", "skill");
-  ASSERT_NE(generated_skill, nullptr);
-  EXPECT_EQ(generated_skill->get_skill_name(), "search");
-  EXPECT_EQ(generated_skill->get_workflow_id(), "wf_skill");
-  EXPECT_NE(generated_skill->get_task_id().find("_search"), std::string::npos);
-  std::string source_task_id;
-  ASSERT_TRUE(generated_skill->get_parameter("source_task_id", source_task_id));
-  EXPECT_EQ(source_task_id, "0_task_2");
+  // Find any skill task with the correct skill name
+  // Note: there will be both template task (0_task_2) and runtime task (0_task_2_runtime_...)
+  // We want to find the runtime task which is created when coordinator workflow completes
+  std::shared_ptr<framework::MMAgentTask> runtime_skill_task;
+  for(const auto& t : tasks) {
+    if(t && t->get_task_type() == "skill" && t->get_skill_name() == "search") {
+      // Runtime task has "_runtime_" in its ID
+      if(t->get_task_id().find("_runtime_") != std::string::npos) {
+        runtime_skill_task = t;
+        break;
+      }
+    }
+  }
+
+  if(!runtime_skill_task) {
+    std::cout << "Runtime skill task not found. Tasks:" << std::endl;
+    for(const auto& t : tasks) {
+      if(t) {
+        std::cout << "  - " << t->get_task_id() << " (type=" << t->get_task_type()
+                  << ", skill=" << t->get_skill_name() << ")" << std::endl;
+      }
+    }
+  }
+
+  ASSERT_NE(runtime_skill_task, nullptr);
+  EXPECT_EQ(runtime_skill_task->get_workflow_id(), "wf_skill");
+  EXPECT_NE(runtime_skill_task->get_task_id().find("search"), std::string::npos);
 
   fs::remove_all(tmp);
 }

@@ -410,6 +410,43 @@ set_target_properties(multi_session_nodes PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
 # ============================================================================
+# LLM Query Agent - C++ SO Library node for LLM queries
+# ============================================================================
+set(LLM_QUERY_DIR "/root/projects/llm-query")
+set(LLM_QUERY_INCLUDE_DIR "${LLM_QUERY_DIR}/include")
+set(LLM_QUERY_LIB_DIR "${LLM_QUERY_DIR}/build/src/lib")
+set(LLM_QUERY_JSON_INCLUDE_DIR "${LLM_QUERY_DIR}/build/_deps/json-src/include")
+
+# Check if llm-query library exists
+if(EXISTS "${LLM_QUERY_LIB_DIR}/libllm-query.so")
+  message(STATUS "llm-query library found - enabling LLM Query Agent node")
+
+  add_library(llm_query_node SHARED
+      ${AGENTFLOW_EXAMPLE_DIR}/agent/llm_query_agent/nodes/llm_node.cpp)
+
+  target_include_directories(llm_query_node PRIVATE
+      ${AGENTFLOW_INCLUDE_DIR}
+      ${LLM_QUERY_INCLUDE_DIR}
+      ${LLM_QUERY_JSON_INCLUDE_DIR})
+
+  # Link with agentflow (for DataMap types) and llm-query
+  target_link_libraries(llm_query_node PRIVATE
+      agentflow
+      ${LLM_QUERY_LIB_DIR}/libllm-query.so)
+
+  set_target_properties(llm_query_node PROPERTIES
+      LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
+
+  # Add RPATH for llm-query library
+  set_target_properties(llm_query_node PROPERTIES
+      BUILD_RPATH "${LLM_QUERY_LIB_DIR};${CMAKE_BINARY_DIR}/lib"
+      INSTALL_RPATH "${LLM_QUERY_LIB_DIR}")
+else()
+  message(STATUS "llm-query library not found at ${LLM_QUERY_LIB_DIR} - skipping LLM Query Agent node")
+  message(STATUS "  To enable: build llm-query library from https://github.com/your-repo/llm-query")
+endif()
+
+# ============================================================================
 # Node Adapter Library and Executable
 # ============================================================================
 
