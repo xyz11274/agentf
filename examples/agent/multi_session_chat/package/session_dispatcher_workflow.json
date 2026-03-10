@@ -1,0 +1,179 @@
+{
+  "id": "session-dispatcher-workflow",
+  "version": "1.0",
+  "name": "session-dispatcher-workflow",
+  "nodes": [
+    {
+      "id": "load_context",
+      "name": "load-session-context",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "examples/agent/multi_session_chat/package/scripts/load_session_context.sh",
+      "json_output": true,
+      "inputs": [
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "user_text", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "session_context", "type": "string"}
+      ]
+    },
+    {
+      "id": "build_catalog",
+      "name": "build-skill-catalog",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "examples/agent/multi_session_chat/package/scripts/build_skill_catalog.sh",
+      "json_output": true,
+      "outputs": [
+        {"name": "skill_catalog", "type": "string"}
+      ]
+    },
+    {
+      "id": "semantic_path",
+      "name": "semantic-selector",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "examples/agent/multi_session_chat/package/scripts/select_skill_path.sh",
+      "args": ["dispatcher", "semantic"],
+      "json_output": true,
+      "inputs": [
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "user_text", "type": "string", "required": true},
+        {"name": "session_context", "type": "string", "required": true},
+        {"name": "skill_catalog", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "candidate_list", "type": "string"}
+      ]
+    },
+    {
+      "id": "temporal_path",
+      "name": "temporal-selector",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "examples/agent/multi_session_chat/package/scripts/select_skill_path.sh",
+      "args": ["dispatcher", "temporal"],
+      "json_output": true,
+      "inputs": [
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "user_text", "type": "string", "required": true},
+        {"name": "session_context", "type": "string", "required": true},
+        {"name": "skill_catalog", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "candidate_list", "type": "string"}
+      ]
+    },
+    {
+      "id": "planner_path",
+      "name": "planner-selector",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "examples/agent/multi_session_chat/package/scripts/select_skill_path.sh",
+      "args": ["dispatcher", "planner"],
+      "json_output": true,
+      "inputs": [
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "user_text", "type": "string", "required": true},
+        {"name": "session_context", "type": "string", "required": true},
+        {"name": "skill_catalog", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "candidate_list", "type": "string"}
+      ]
+    },
+    {
+      "id": "merge_candidates",
+      "name": "merge-dispatcher-candidates",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "examples/agent/multi_session_chat/package/scripts/merge_dispatcher_candidates.sh",
+      "json_output": true,
+      "inputs": [
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "semantic_candidates", "type": "string", "required": true},
+        {"name": "temporal_candidates", "type": "string", "required": true},
+        {"name": "planner_candidates", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "selected_skills", "type": "string"},
+        {"name": "dispatcher_done", "type": "bool"}
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "id": "d1",
+      "source": "load_context",
+      "target": "semantic_path",
+      "source_outputs": ["session_context"],
+      "target_inputs": ["session_context"],
+      "transfer_mode": "value"
+    },
+    {
+      "id": "d2",
+      "source": "load_context",
+      "target": "temporal_path",
+      "source_outputs": ["session_context"],
+      "target_inputs": ["session_context"],
+      "transfer_mode": "value"
+    },
+    {
+      "id": "d3",
+      "source": "load_context",
+      "target": "planner_path",
+      "source_outputs": ["session_context"],
+      "target_inputs": ["session_context"],
+      "transfer_mode": "value"
+    },
+    {
+      "id": "d4",
+      "source": "build_catalog",
+      "target": "semantic_path",
+      "source_outputs": ["skill_catalog"],
+      "target_inputs": ["skill_catalog"],
+      "transfer_mode": "value"
+    },
+    {
+      "id": "d5",
+      "source": "build_catalog",
+      "target": "temporal_path",
+      "source_outputs": ["skill_catalog"],
+      "target_inputs": ["skill_catalog"],
+      "transfer_mode": "value"
+    },
+    {
+      "id": "d6",
+      "source": "build_catalog",
+      "target": "planner_path",
+      "source_outputs": ["skill_catalog"],
+      "target_inputs": ["skill_catalog"],
+      "transfer_mode": "value"
+    },
+    {
+      "id": "d7",
+      "source": "semantic_path",
+      "target": "merge_candidates",
+      "source_outputs": ["candidate_list"],
+      "target_inputs": ["semantic_candidates"],
+      "transfer_mode": "value"
+    },
+    {
+      "id": "d8",
+      "source": "temporal_path",
+      "target": "merge_candidates",
+      "source_outputs": ["candidate_list"],
+      "target_inputs": ["temporal_candidates"],
+      "transfer_mode": "value"
+    },
+    {
+      "id": "d9",
+      "source": "planner_path",
+      "target": "merge_candidates",
+      "source_outputs": ["candidate_list"],
+      "target_inputs": ["planner_candidates"],
+      "transfer_mode": "value"
+    }
+  ]
+}

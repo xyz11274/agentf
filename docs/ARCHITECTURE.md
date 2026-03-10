@@ -442,7 +442,7 @@ classDiagram
 
 #### 多语言节点示例（multi_session_chat）
 
-`examples/multi_session_chat` 是 AgentFlow 多语言节点能力的参考实现，各 workflow 节点分别用不同语言编写：
+`examples/agent/multi_session_chat` 是 AgentFlow 多语言节点能力的参考实现，各 workflow 节点分别用不同语言编写：
 
 | Workflow | 语言 | 执行模式 | 产物 |
 |---|---|---|---|

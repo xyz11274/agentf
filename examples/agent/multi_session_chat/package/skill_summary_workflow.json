@@ -1,0 +1,30 @@
+{
+  "id": "skill-summary-workflow",
+  "version": "1.0",
+  "name": "skill-summary-workflow",
+  "nodes": [
+    {
+      "id": "n1",
+      "name": "result-summary",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "examples/agent/multi_session_chat/package/scripts/skill_summary.sh",
+      "json_output": true,
+      "inputs": [
+        {"name": "user_text", "type": "string", "required": true},
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "history_json", "type": "string"}
+      ],
+      "outputs": [
+        {"name": "summary_result", "type": "string"},
+        {"name": "answer_text", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "can_handle", "type": "bool"},
+        {"name": "grounded", "type": "bool"},
+        {"name": "confidence", "type": "double"},
+        {"name": "reason", "type": "string"}
+      ]
+    }
+  ],
+  "edges": []
+}

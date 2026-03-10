@@ -1473,7 +1473,7 @@ private:
 
 ### 9.2 WebSocket 服务示例
 
-参考 `examples/multi_session_chat/server/chat_server.cpp`：
+参考 `examples/agent/multi_session_chat/server/chat_server.cpp`：
 
 ```cpp
 // 简化的 WebSocket 服务集成
@@ -1550,7 +1550,7 @@ private:
 | `include/internal/runtime/message_types.h` | 消息类型定义 |
 | `examples/features/agent_runner.cpp` | Agent Runner 示例 |
 | `examples/features/interactive_runner.cpp` | 交互式运行器示例 |
-| `examples/multi_session_chat/server/chat_server.cpp` | WebSocket 服务示例 |
+| `examples/agent/multi_session_chat/server/chat_server.cpp` | WebSocket 服务示例 |
 
 ---
 

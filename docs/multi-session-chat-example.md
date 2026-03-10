@@ -2,15 +2,15 @@
 
 > 如果你需要查看 **Python-only + openJiuwen 兼容层** 的版本，请同时参考
 > [`docs/openjiuwen-agentflow-example.md`](./openjiuwen-agentflow-example.md)
-> 与 `examples/openjiuwen_multi_session_chat/`。
+> 与 `examples/agent/openjiuwen_multi_session_chat/`。
 
 ## 目录
-- 根目录：`examples/multi_session_chat/`
-- 进程入口：`examples/multi_session_chat/server/chat_server.cpp`
-- WebUI：`examples/multi_session_chat/server/webui/index.html`
-- Agent 包：`examples/multi_session_chat/package/`
-- 多语言节点：`examples/multi_session_chat/nodes/`
-- 自动化测试：`examples/multi_session_chat/tests/`
+- 根目录：`examples/agent/multi_session_chat/`
+- 进程入口：`examples/agent/multi_session_chat/server/chat_server.cpp`
+- WebUI：`examples/agent/multi_session_chat/server/webui/index.html`
+- Agent 包：`examples/agent/multi_session_chat/package/`
+- 多语言节点：`examples/agent/multi_session_chat/nodes/`
+- 自动化测试：`examples/agent/multi_session_chat/tests/`
 
 ## 示例目标
 
@@ -37,7 +37,7 @@
 
 ### workflow 映射
 
-`examples/multi_session_chat/package/package.json` 中的核心映射如下：
+`examples/agent/multi_session_chat/package/package.json` 中的核心映射如下：
 
 | 任务/用途 | workflow |
 |---|---|
@@ -173,7 +173,7 @@ Shell 节点通过 `publish/sdk/shell/agentflow_databus.sh` 使用 Pub/Sub：
 
 ## ChatAgentBridge 流程
 
-`examples/multi_session_chat/server/chat_server.cpp` 中的桥接逻辑如下：
+`examples/agent/multi_session_chat/server/chat_server.cpp` 中的桥接逻辑如下：
 
 1. 从 HTTP/WS 请求中提取 `session_id`、`user_text`、`history`
 2. 将 `user_text`、`session:<sid>:history_json`、`session:<sid>:context` 写入 DataBus
@@ -213,24 +213,24 @@ export AF_LLM_MODEL="gpt-4o-mini"
 
 ### 一键启动
 ```bash
-bash examples/multi_session_chat/scripts/build_and_run.sh
+bash examples/agent/multi_session_chat/scripts/build_and_run.sh
 ```
 
 ### 手动运行
 ```bash
 ./build.sh build
-bash examples/multi_session_chat/nodes/java/build.sh
+bash examples/agent/multi_session_chat/nodes/java/build.sh
 
 ./build/example_chat_server \
-  --package examples/multi_session_chat/package \
-  --web-root examples/multi_session_chat/server/webui \
+  --package examples/agent/multi_session_chat/package \
+  --web-root examples/agent/multi_session_chat/server/webui \
   --host 127.0.0.1 --http-port 8088 --ws-port 8765
 ```
 
 ## 自动化测试
 
 ```bash
-bash examples/multi_session_chat/tests/auto_dialog_test.sh
+bash examples/agent/multi_session_chat/tests/auto_dialog_test.sh
 ```
 
 ## 说明

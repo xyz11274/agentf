@@ -58,9 +58,11 @@ redis|https://github.com/redis/redis.git|unstable|redis
 - `adapter/actor/`：Protoactor-cpp（未启用时使用 stub）
 - `adapter/dsl/`：RapidJSON（未启用时使用 stub）
 - `adapter/cache/`：Redis
+- `openjiuwen/`：仓库内 vendored Python 兼容层，覆盖 `agent-core` 风格 API 与 `jiuwenclaw` 示例运行时
 
 ## 注意事项
 
 - 下载的第三方源码不纳入 Git 版本控制；适配器代码会纳入版本控制。
 - 新克隆仓库后，需至少执行一次 `./vendor/vendor.sh`。
 - 若需切换分支或重拉依赖，建议先执行 `--list` 检查状态。
+- `vendor/openjiuwen/` 属于仓库内直接维护的 vendored 运行层，不依赖 `vendor.sh` 下载。

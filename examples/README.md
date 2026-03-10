@@ -130,16 +130,16 @@ Workflow 模式参考模板（DSL 示例，不依赖外部脚本）：
 
 ```bash
 ./build/example_chat_server \
-  --package examples/multi_session_chat/package \
+  --package examples/agent/multi_session_chat/package \
   --host 127.0.0.1 --http-port 8088 --ws-port 8765 \
-  --web-root examples/multi_session_chat/server/webui
+  --web-root examples/agent/multi_session_chat/server/webui
 ```
 
 打开 `http://127.0.0.1:8088` 即可通过 WebUI 与进程进行 WebSocket 对话。
 
 ### 4) 样例能力说明
 
-- 对话管理模块将消息按 `session_id` 追加保存到 `examples/multi_session_chat/package/history/*.jsonl`。
+- 对话管理模块将消息按 `session_id` 追加保存到 `examples/agent/multi_session_chat/package/history/*.jsonl`。
 - 主 dispatcher workflow 会把请求广播到可复用 skill session。
 - skill session 的 dispatcher 示例节点会读取 session context、执行 skill 选择并创建“未启动”的 skill task 计划文件。
 - agent 级 `contextupdater` 对应的 `session_context_workflow` 示例节点包含：模板读取、历史读取、LLM 摘要、context 填充。
@@ -149,6 +149,6 @@ Workflow 模式参考模板（DSL 示例，不依赖外部脚本）：
 ### 5) 构建脚本与自动化对话测试
 
 ```bash
-bash examples/multi_session_chat/scripts/build_and_run.sh
-bash examples/multi_session_chat/tests/auto_dialog_test.sh
+bash examples/agent/multi_session_chat/scripts/build_and_run.sh
+bash examples/agent/multi_session_chat/tests/auto_dialog_test.sh
 ```

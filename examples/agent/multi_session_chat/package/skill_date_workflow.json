@@ -1,0 +1,29 @@
+{
+  "id": "skill-date-workflow",
+  "version": "1.0",
+  "name": "skill-date-workflow",
+  "nodes": [
+    {
+      "id": "n1",
+      "name": "date-calc",
+      "type": "task",
+      "execution_mode": "python_script",
+      "command": "examples/agent/multi_session_chat/nodes/python/skill_date_node.py",
+      "json_output": true,
+      "inputs": [
+        {"name": "user_text", "type": "string", "required": true},
+        {"name": "session_id", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "date_result", "type": "string"},
+        {"name": "answer_text", "type": "string"},
+        {"name": "status", "type": "string"},
+        {"name": "can_handle", "type": "bool"},
+        {"name": "grounded", "type": "bool"},
+        {"name": "confidence", "type": "double"},
+        {"name": "reason", "type": "string"}
+      ]
+    }
+  ],
+  "edges": []
+}

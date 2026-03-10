@@ -63,7 +63,17 @@ public:
    */
   std::string get_status() const;
 
-private:
+  /**
+   * Execute one message-driven request and collect the response.
+   * @param workflow_id Target workflow id used for routing
+   * @param input User input text
+   * @param timeout_ms Optional timeout override; falls back to config when <= 0
+   * @return Collected response text, empty on timeout before any response arrives
+   */
+  std::string execute_request(const std::string& workflow_id, const std::string& input,
+                              int timeout_ms = -1);
+
+ private:
   // Core components
   std::string package_path_;
   Config config_;

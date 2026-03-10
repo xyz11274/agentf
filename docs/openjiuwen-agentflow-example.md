@@ -2,9 +2,9 @@
 
 ## 目标
 
-`examples/openjiuwen_multi_session_chat` 是一个新的 Agent 示例，目标是：
+`examples/agent/openjiuwen_multi_session_chat` 是一个新的 Agent 示例，目标是：
 
-1. 对外复刻 `examples/multi_session_chat` 的多轮对话能力；
+1. 对外复刻 `examples/agent/multi_session_chat` 的多轮对话能力；
 2. 对内将全部 workflow node 统一为 Python 实现；
 3. 在不破坏 AgentFlow runtime / worker / DataBus 契约的前提下，尽可能复用 openJiuwen 的 Workflow、Skill、Context、LLM 抽象；
 4. 在 `openjiuwen` 缺失时仍能完成仓库内构建、运行和自动化测试。
@@ -12,7 +12,7 @@
 ## 目录
 
 ```text
-examples/openjiuwen_multi_session_chat/
+examples/agent/openjiuwen_multi_session_chat/
   package/
     agent.json
     package.json
@@ -59,20 +59,21 @@ examples/openjiuwen_multi_session_chat/
 
 示例适配层不是空壳：
 
-- 若环境中安装了 `openjiuwen`，`workflow_adapter.py` 会优先尝试导入：
+- 仓库会先把 `vendor/openjiuwen/python` 加入 Python 路径，再尝试导入：
   - `openjiuwen.core.workflow`
   - `openjiuwen.core.foundation.llm`
   - `openjiuwen.core.runner.runner`
   - `openjiuwen.core.single_agent.legacy`
   - `openjiuwen.core.application.workflow_agent`
+- 若本机额外安装了上游 `openjiuwen`，也可继续用于覆盖 vendored 兼容层联调；
 - 对于技能选择和上下文总结这类需要模型能力的节点，适配层会优先尝试构建 openJiuwen 风格的最小 workflow/agent 调用链；
 - 在真实 openJiuwen 调用前后，适配层会把 request、workflow binding、response、lifecycle 事件同步回 AgentFlow DataBus；
 - 若依赖缺失、配置不完整或调用失败，再显式回退到 AgentFlow DataBus 的 LLM 请求通道或规则化实现。
 
 因此：
 
-- **有 openJiuwen 时**：节点能最大程度利用其 workflow / LLM / agent 抽象；
-- **无 openJiuwen 时**：仍能保证示例在本仓库内可验证、可测试。
+- **有 vendored / 上游 openJiuwen 时**：节点能利用其 workflow / LLM / agent 抽象；
+- **无 LLM 凭证时**：仍能保证示例在本仓库内可验证、可测试。
 
 ## Workflow 设计
 
@@ -185,13 +186,13 @@ examples/openjiuwen_multi_session_chat/
 ### 启动
 
 ```bash
-bash examples/openjiuwen_multi_session_chat/scripts/build_and_run.sh
+bash examples/agent/openjiuwen_multi_session_chat/scripts/build_and_run.sh
 ```
 
 ### 自动化验证
 
 ```bash
-bash examples/openjiuwen_multi_session_chat/tests/auto_dialog_test.sh
+bash examples/agent/openjiuwen_multi_session_chat/tests/auto_dialog_test.sh
 ```
 
 该脚本验证：

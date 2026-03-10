@@ -175,8 +175,14 @@ std::string InteractiveRunner::get_status() const {
   return oss.str();
 }
 
+std::string InteractiveRunner::execute_request(const std::string& workflow_id,
+                                               const std::string& input, int timeout_ms) {
+  submit_user_request(workflow_id, input);
+  return poll_results(timeout_ms > 0 ? timeout_ms : config_.timeout_ms);
+}
+
 void InteractiveRunner::submit_user_request(const std::string& workflow_id,
-                                             const std::string& input) {
+                                            const std::string& input) {
   // Construct message
   framework::MMAgentMsgQue::Message message;
   message.message_id = generate_message_id();

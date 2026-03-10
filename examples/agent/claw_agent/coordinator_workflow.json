@@ -1,0 +1,27 @@
+{
+  "id": "claw-coordinator-workflow",
+  "version": "1.0",
+  "name": "Claw Coordinator",
+  "description": "Pass through claw response when coordinator routing is used",
+  "nodes": [
+    {
+      "id": "coordinator_passthrough",
+      "name": "Coordinator Passthrough",
+      "type": "task",
+      "execution_mode": "python_script",
+      "command": "./nodes/python/claw_dispatch_node.py",
+      "args": ["--mode", "coordinator"],
+      "json_output": true,
+      "timeout_ms": 10000,
+      "inputs": [
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "user_text", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "response", "type": "string"},
+        {"name": "claw_trace", "type": "string"}
+      ]
+    }
+  ],
+  "edges": []
+}

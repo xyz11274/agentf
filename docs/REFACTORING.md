@@ -135,7 +135,7 @@ E2E 测试引用的 `examples/agent/basic_agent` 和 `examples/agent/nested_work
   - `start()` 中启动该线程；
   - `stop()` 中 join 该线程。
 
-### 示例层重构（examples/multi_session_chat/）
+### 示例层重构（examples/agent/multi_session_chat/）
 
 #### 1. 清理无用文件
 
@@ -219,7 +219,7 @@ E2E 测试引用的 `examples/agent/basic_agent` 和 `examples/agent/nested_work
 
 ### 背景
 
-将 `examples/multi_session_chat` 示例从纯 shell_script 节点重构为多语言节点，同时为框架补充跨 session 查询 API、结构化脚本输出协议和节点运行时自动注册等能力。
+将 `examples/agent/multi_session_chat` 示例从纯 shell_script 节点重构为多语言节点，同时为框架补充跨 session 查询 API、结构化脚本输出协议和节点运行时自动注册等能力。
 
 ### 框架增强（src/ + include/）
 
@@ -249,7 +249,7 @@ E2E 测试引用的 `examples/agent/basic_agent` 和 `examples/agent/nested_work
   - `stop_runtime()`：对应自动停止。
 - **`src/workflow/dsl/workflow_parser.cpp`**：解析 `"node_runtime"` 对象字段。
 
-### 示例多语言节点（examples/multi_session_chat/nodes/）
+### 示例多语言节点（examples/agent/multi_session_chat/nodes/）
 
 | 目录 | 语言 | 对应 workflow | 执行模式 |
 |---|---|---|---|
@@ -269,7 +269,7 @@ E2E 测试引用的 `examples/agent/basic_agent` 和 `examples/agent/nested_work
 
 **Java 节点**（`nodes/java/SkillDelegateNode.java`）内置 JSON 序列化，构建脚本：`nodes/java/build.sh`。
 
-### Workflow JSON 更新（`examples/multi_session_chat/package/`）
+### Workflow JSON 更新（`examples/agent/multi_session_chat/package/`）
 
 6 个 workflow JSON 全部从 `shell_script` 切换到对应多语言执行模式，新增 `inputs`/`outputs` DataBus 字段。
 
@@ -285,16 +285,16 @@ target_link_libraries(multi_session_nodes PRIVATE agentflow)
 ### .gitignore 更新
 
 新增排除规则：
-- `examples/multi_session_chat/nodes/java/*.class`
-- `examples/multi_session_chat/nodes/java/skill_delegate.jar`
-- `examples/multi_session_chat/nodes/python/__pycache__/`
-- `examples/multi_session_chat/package/runtime/`
+- `examples/agent/multi_session_chat/nodes/java/*.class`
+- `examples/agent/multi_session_chat/nodes/java/skill_delegate.jar`
+- `examples/agent/multi_session_chat/nodes/python/__pycache__/`
+- `examples/agent/multi_session_chat/package/runtime/`
 
 ### 文档更新
 
 - `docs/multi-session-chat-example.md`：全面重写，含多语言架构表、DataBus 键约定、编排逻辑。
 - `docs/api-reference.md`：MMAgent API 补充跨 session 查询方法；MMNode 配置补充 `json_output` 和 `node_runtime` 字段。
-- `examples/multi_session_chat/README.md`：更新目录结构与快速启动说明。
+- `examples/agent/multi_session_chat/README.md`：更新目录结构与快速启动说明。
 
 ### 验证结果
 
@@ -1775,7 +1775,7 @@ All examples have been validated:
 
 3. **样例/测试/发布资产同步**
    - 更新 `examples/`、`publish/workflow/pattern/`、`publish/workflow/workflow_sample.jsonc` 与 `tests/unit/src/test_workflow_json_gtest.cpp`。
-   - 清理 `examples/multi_session_chat` 下遗留的 `.bak` 备份文件。
+   - 清理 `examples/agent/multi_session_chat` 下遗留的 `.bak` 备份文件。
 
 ### 2026-02-22 MMWorkflow MMEdge 控制与模式化重构
 

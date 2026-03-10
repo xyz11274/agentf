@@ -776,9 +776,9 @@ sequenceDiagram
 ### 7.2 多轮对话样例（WebSocket + 多 Session 协作）
 
 - 参考样例：
-  - `examples/multi_session_chat/server/chat_server.cpp`
-  - `examples/multi_session_chat/server/webui/index.html`
-  - `examples/multi_session_chat/package/`
+  - `examples/agent/multi_session_chat/server/chat_server.cpp`
+  - `examples/agent/multi_session_chat/server/webui/index.html`
+  - `examples/agent/multi_session_chat/package/`
 - 样例采用 Agent 包驱动，`agent.json` 只声明 1 份同质化 session 模板，并通过 `session_pool_size` 预创建 5 个 pooled session；模板内通过:
   - `session_dispatcher_workflow.json`
   - `session_coordinator_workflow.json`

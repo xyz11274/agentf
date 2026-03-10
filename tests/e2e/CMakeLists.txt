@@ -83,11 +83,19 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/blackbox/test_blackbox_interactive_runner
     )
 endif()
 
-if(EXISTS "${CMAKE_SOURCE_DIR}/examples/openjiuwen_multi_session_chat/tests/auto_dialog_test.sh")
+if(EXISTS "${CMAKE_SOURCE_DIR}/examples/agent/openjiuwen_multi_session_chat/tests/auto_dialog_test.sh")
     add_test(
         NAME E2EOpenJiuwenMultiSessionChat
         COMMAND bash
-                "${CMAKE_SOURCE_DIR}/examples/openjiuwen_multi_session_chat/tests/auto_dialog_test.sh"
+                "${CMAKE_SOURCE_DIR}/examples/agent/openjiuwen_multi_session_chat/tests/auto_dialog_test.sh"
+    )
+endif()
+
+if(EXISTS "${CMAKE_SOURCE_DIR}/examples/agent/claw_agent/tests/test_claw_agent_tui.sh")
+    add_test(
+        NAME E2EClawAgentTUI
+        COMMAND bash
+                "${CMAKE_SOURCE_DIR}/examples/agent/claw_agent/tests/test_claw_agent_tui.sh"
     )
 endif()
 

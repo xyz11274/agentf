@@ -1,0 +1,32 @@
+[
+  {
+    "role": "user",
+    "text": "你好",
+    "user_id": "claw-user",
+    "client_id": "claw-tui"
+  },
+  {
+    "role": "assistant",
+    "text": "你好，我是 ClawAgent。当前示例展示 dispatcher 直连 jiuwenclaw、TUI 交互和会话记忆。"
+  },
+  {
+    "role": "user",
+    "text": "总结上一条消息",
+    "user_id": "claw-user",
+    "client_id": "claw-tui"
+  },
+  {
+    "role": "assistant",
+    "text": "你上一条消息是：你好。基于 vendored jiuwenclaw，我建议从这个意图继续细化任务。"
+  },
+  {
+    "role": "user",
+    "text": "/status",
+    "user_id": "claw-user",
+    "client_id": "claw-tui"
+  },
+  {
+    "role": "assistant",
+    "text": "ClawAgent 正在使用 vendored jiuwenclaw 运行，当前会话为 0。"
+  }
+]

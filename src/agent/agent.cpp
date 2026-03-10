@@ -832,6 +832,23 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
   task->acknowledge_dispatch_record(message.message_id);
 
   if(task->get_task_type() == "dispatcher") {
+    DataVariant dispatcher_response_value;
+    if(get_data("response", dispatcher_response_value)) {
+      if(const auto* text = std::get_if<std::string>(&dispatcher_response_value); text && !text->empty()) {
+        MMAgentMsgQue::Message response_message = message;
+        response_message.content = *text;
+        response_message.metadata["task_type"] = "dispatcher";
+        response_message.metadata["message_type"] = "dispatcher_response";
+        if(session_router_) {
+          Logger::instance().info_f(
+              "[DISPATCHERDataExchange] Enqueueing direct dispatcher response, content='%s'",
+              response_message.content.c_str());
+          session_router_->enqueue_response_message(response_message);
+        }
+        return;
+      }
+    }
+
     MMAgentMsgQue::Message coordinator_message = message;
     coordinator_message.metadata["task_type"] = "coordinator";
     // Clear the workflow_id from dispatcher, let coordinator use its own workflow

@@ -390,13 +390,20 @@ add_executable(agent_runner
 )
 target_link_libraries(agent_runner PRIVATE agentflow)
 
+add_executable(example_claw_agent_tui
+    ${AGENTFLOW_EXAMPLE_DIR}/agent/claw_agent/claw_agent_tui.cpp
+    ${AGENTFLOW_EXAMPLE_DIR}/features/interactive_runner.cpp
+)
+target_link_libraries(example_claw_agent_tui PRIVATE agentflow)
+
 # Chat server example (C++ standalone HTTP + WebSocket)
-add_executable(example_chat_server ${AGENTFLOW_EXAMPLE_DIR}/multi_session_chat/server/chat_server.cpp)
+add_executable(example_chat_server
+    ${AGENTFLOW_EXAMPLE_DIR}/agent/multi_session_chat/server/chat_server.cpp)
 target_link_libraries(example_chat_server PRIVATE agentflow)
 
 # multi_session_chat polyglot SO library — C++ nodes for dispatcher/coordinator/session-dispatcher workflows
 add_library(multi_session_nodes SHARED
-    ${AGENTFLOW_EXAMPLE_DIR}/multi_session_chat/nodes/cpp/multi_session_nodes.cpp)
+    ${AGENTFLOW_EXAMPLE_DIR}/agent/multi_session_chat/nodes/cpp/multi_session_nodes.cpp)
 target_include_directories(multi_session_nodes PRIVATE ${AGENTFLOW_INCLUDE_DIR})
 target_link_libraries(multi_session_nodes PRIVATE agentflow)
 set_target_properties(multi_session_nodes PROPERTIES

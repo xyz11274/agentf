@@ -70,7 +70,8 @@ agent->start();
 
 - `examples/agent/basic_agent`：最小可运行 Agent 包示例，适合快速熟悉 package 结构。
 - `examples/agent/echo_agent`：演示消息路由到 skill workflow 并返回响应，E2E 覆盖见 `E2EEchoAgent`。
-- `examples/openjiuwen_multi_session_chat`：Python-only 多轮对话示例，内置 openJiuwen 兼容层，详细说明见 `docs/openjiuwen-agentflow-example.md`，E2E 覆盖见 `E2EOpenJiuwenMultiSessionChat`。
+- `examples/agent/claw_agent`：dispatcher 直连 vendored `jiuwenclaw` 的聊天示例，包含专用 TUI，E2E 覆盖见 `E2EClawAgentTUI`。
+- `examples/agent/openjiuwen_multi_session_chat`：Python-only 多轮对话示例，内置 openJiuwen 兼容层，详细说明见 `docs/openjiuwen-agentflow-example.md`，E2E 覆盖见 `E2EOpenJiuwenMultiSessionChat`。
 - `examples/features/interactive_runner_demo.md`：说明消息驱动 `InteractiveRunner` 的执行与结果收集模型，黑盒覆盖见 `E2EInteractiveRunner`。
 
 ## 📚 完整文档
