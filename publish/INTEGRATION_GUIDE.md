@@ -1550,7 +1550,7 @@ private:
 | `include/internal/runtime/message_types.h` | 消息类型定义 |
 | `examples/features/agent_runner.cpp` | Agent Runner 示例 |
 | `examples/features/interactive_runner.cpp` | 交互式运行器示例 |
-| `examples/agent/multi_session_chat/server/chat_server.cpp` | WebSocket 服务示例 |
+| `examples/agent/multi_session_chat/multi_session_chat_tui.cpp` | TUI 交互示例 |
 
 ---
 

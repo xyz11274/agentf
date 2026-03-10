@@ -396,10 +396,23 @@ add_executable(example_claw_agent_tui
 )
 target_link_libraries(example_claw_agent_tui PRIVATE agentflow)
 
-# Chat server example (C++ standalone HTTP + WebSocket)
-add_executable(example_chat_server
-    ${AGENTFLOW_EXAMPLE_DIR}/agent/multi_session_chat/server/chat_server.cpp)
-target_link_libraries(example_chat_server PRIVATE agentflow)
+add_executable(example_multi_session_chat_tui
+    ${AGENTFLOW_EXAMPLE_DIR}/agent/multi_session_chat/multi_session_chat_tui.cpp
+    ${AGENTFLOW_EXAMPLE_DIR}/features/interactive_runner.cpp
+)
+target_link_libraries(example_multi_session_chat_tui PRIVATE agentflow)
+
+add_executable(example_openjiuwen_multi_session_chat_tui
+    ${AGENTFLOW_EXAMPLE_DIR}/agent/openjiuwen_multi_session_chat/openjiuwen_multi_session_chat_tui.cpp
+    ${AGENTFLOW_EXAMPLE_DIR}/features/interactive_runner.cpp
+)
+target_link_libraries(example_openjiuwen_multi_session_chat_tui PRIVATE agentflow)
+
+add_executable(example_openjiuwen_studio_agent_tui
+    ${AGENTFLOW_EXAMPLE_DIR}/agent/openjiuwen_studio_agent/openjiuwen_studio_agent_tui.cpp
+    ${AGENTFLOW_EXAMPLE_DIR}/features/interactive_runner.cpp
+)
+target_link_libraries(example_openjiuwen_studio_agent_tui PRIVATE agentflow)
 
 # multi_session_chat polyglot SO library — C++ nodes for dispatcher/coordinator/session-dispatcher workflows
 add_library(multi_session_nodes SHARED

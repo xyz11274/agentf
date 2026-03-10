@@ -25,7 +25,7 @@ examples/agent/openjiuwen_multi_session_chat/
       skill_adapter.py
       context_adapter.py
     *.py
-  server/webui/
+  openjiuwen_multi_session_chat_tui.cpp
   scripts/build_and_run.sh
   tests/auto_dialog_test.sh
 ```
@@ -142,7 +142,7 @@ examples/agent/openjiuwen_multi_session_chat/
 
 - workflow JSON 的 typed IO 保持可见；
 - runtime / worker / scheduler / deployer 的现有执行语义不变；
-- chat server 无需为 openJiuwen 单独增加一套状态协议。
+- TUI 无需为 openJiuwen 单独增加一套状态协议。
 
 ### runtime / worker / workflow-instance 绑定
 
@@ -187,6 +187,8 @@ examples/agent/openjiuwen_multi_session_chat/
 
 ```bash
 bash examples/agent/openjiuwen_multi_session_chat/scripts/build_and_run.sh
+# 或
+./build/example_openjiuwen_multi_session_chat_tui examples/agent/openjiuwen_multi_session_chat/package
 ```
 
 ### 自动化验证

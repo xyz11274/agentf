@@ -1,0 +1,27 @@
+{
+  "id": "openjiuwen-studio-skill-workflow",
+  "version": "1.0",
+  "name": "OpenJiuwen Studio Skill Workflow",
+  "description": "Default skill shell wrapping bundled agent-studio content",
+  "nodes": [
+    {
+      "id": "studio_skill",
+      "name": "Studio Skill Node",
+      "type": "task",
+      "execution_mode": "python_script",
+      "command": "./nodes/python/studio_adapter_node.py",
+      "args": ["--mode", "skill"],
+      "json_output": true,
+      "timeout_ms": 10000,
+      "inputs": [
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "user_text", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "response", "type": "string"},
+        {"name": "studio_trace", "type": "string"}
+      ]
+    }
+  ],
+  "edges": []
+}

@@ -211,7 +211,7 @@ E2E 测试引用的 `examples/agent/basic_agent` 和 `examples/agent/nested_work
 
 ### 验证结果
 
-- `./build.sh build`：通过（`libmulti_session_nodes.dylib` + `example_chat_server` 编译链接成功）。
+- `./build.sh build`：通过（`libmulti_session_nodes.dylib` + 多个示例 TUI 编译链接成功）。
 - `ctest --test-dir build -R AgentFlowGoogleTests`：通过（3.30s）。
 - `E2EBasicAgent` 超时是存量问题（重构前即已超时，与本次改动无关）。
 

@@ -773,12 +773,13 @@ sequenceDiagram
 - 当消息未指定 `session_id` 时，由 `SessionRouter` 按 `user_id + client_id` 复用或分配 pooled session。
 - runtime worker 侧统一使用 `control` / `business` 双队列，workflow / node / edge 不再维护独立事件线程。
 
-### 7.2 多轮对话样例（WebSocket + 多 Session 协作）
+### 7.2 多轮对话样例（TUI + 多 Session 协作）
 
 - 参考样例：
-  - `examples/agent/multi_session_chat/server/chat_server.cpp`
-  - `examples/agent/multi_session_chat/server/webui/index.html`
+  - `examples/agent/multi_session_chat/multi_session_chat_tui.cpp`
+  - `examples/agent/openjiuwen_multi_session_chat/openjiuwen_multi_session_chat_tui.cpp`
   - `examples/agent/multi_session_chat/package/`
+  - `examples/agent/openjiuwen_multi_session_chat/package/`
 - 样例采用 Agent 包驱动，`agent.json` 只声明 1 份同质化 session 模板，并通过 `session_pool_size` 预创建 5 个 pooled session；模板内通过:
   - `session_dispatcher_workflow.json`
   - `session_coordinator_workflow.json`
@@ -786,7 +787,8 @@ sequenceDiagram
   - 多个 `skill_*_workflow.json`
   组织多 session 协作对话与 skill 任务池。
 - LLM 调用约定为 OpenAI Chat Completions 兼容协议，支持 `AF_LLM_BASE_URL`、`AF_LLM_API_KEY`、`AF_LLM_MODEL` 环境变量。
-- 对话管理模块将消息持久化到 session 文件，用于后续 context 汇总与压缩。
+ - TUI 会将运行时日志重定向到 `package/runtime/logs/*.log`，避免将 worker/runtime 日志打到交互窗口。
+ - 对话管理模块将消息持久化到 session 文件，用于后续 context 汇总与压缩。
 
 ---
 

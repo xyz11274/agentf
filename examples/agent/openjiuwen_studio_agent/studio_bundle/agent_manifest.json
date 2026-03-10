@@ -1,0 +1,49 @@
+{
+  "agent_id": "studio-demo-agent",
+  "agent_version": "0.1.0",
+  "agent_name": "OpenJiuwen Studio Demo Agent",
+  "description": "Bundled agent-studio authored agent packaged for AgentFlow coarse-grained execution",
+  "opening_remarks": "你好，我是 OpenJiuwen Studio Demo Agent。",
+  "default_response": "OpenJiuwen Studio Demo Agent 已根据 bundled Studio workflow 生成回复。",
+  "plugins": [
+    {
+      "id": "web-search",
+      "name": "WebSearchAdapter",
+      "kind": "tool",
+      "description": "Demonstrates Studio plugin metadata passing through the adapter"
+    },
+    {
+      "id": "task-planner",
+      "name": "TaskPlannerAdapter",
+      "kind": "planner",
+      "description": "Demonstrates planner/tool metadata included in the bundle"
+    }
+  ],
+  "knowledge": [
+    "release-notes",
+    "product-docs"
+  ],
+  "memory": {
+    "strategy": "window",
+    "max_turns": 6
+  },
+  "agent_model_config": {
+    "temperature": 0.3,
+    "timeout": 30,
+    "top_p": 0.9
+  },
+  "prompt_template": [
+    {
+      "role": "system",
+      "content": "You are a Studio-authored assistant packed into AgentFlow via an adapter node."
+    }
+  ],
+  "workflows": [
+    {
+      "id": "studio-chat-workflow",
+      "name": "Studio Chat Workflow",
+      "entry": true,
+      "path": "workflows/studio-chat-workflow.json"
+    }
+  ]
+}

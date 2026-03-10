@@ -25,6 +25,6 @@
   "session_context_workflow": "session-context-workflow",
   "metadata": {
     "example": "true",
-    "websocket": "true"
+    "tui": "true"
   }
 }

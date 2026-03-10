@@ -1,0 +1,27 @@
+{
+  "id": "openjiuwen-studio-contextupdater-workflow",
+  "version": "1.0",
+  "name": "OpenJiuwen Studio ContextUpdater",
+  "description": "Default context updater shell for bundled Studio session summaries",
+  "nodes": [
+    {
+      "id": "studio_context",
+      "name": "Studio Context Node",
+      "type": "task",
+      "execution_mode": "python_script",
+      "command": "./nodes/python/studio_adapter_node.py",
+      "args": ["--mode", "contextupdater"],
+      "json_output": true,
+      "timeout_ms": 10000,
+      "inputs": [
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "user_text", "type": "string", "required": false}
+      ],
+      "outputs": [
+        {"name": "context_summary", "type": "string"},
+        {"name": "studio_trace", "type": "string"}
+      ]
+    }
+  ],
+  "edges": []
+}

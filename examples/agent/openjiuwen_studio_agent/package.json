@@ -1,0 +1,27 @@
+{
+  "name": "openjiuwen-studio-agent",
+  "version": "1.0.0",
+  "package_type": "release",
+  "agent_version": "1.0.0",
+  "description": "Coarse-grained agent-studio bundle integration example packaged for AgentFlow",
+  "author": "AgentFlow Team",
+  "workflows": [
+    "dispatcher_workflow.json",
+    "coordinator_workflow.json",
+    "studio_skill_workflow.json",
+    "context_workflow.json"
+  ],
+  "coordinator_workflow": "openjiuwen-studio-coordinator-workflow",
+  "session_context_workflow": "openjiuwen-studio-contextupdater-workflow",
+  "task_workflows": {
+    "dispatcher": "openjiuwen-studio-dispatcher-workflow",
+    "coordinator": "openjiuwen-studio-coordinator-workflow",
+    "contextupdater": "openjiuwen-studio-contextupdater-workflow",
+    "skill:studio-bundle": "openjiuwen-studio-skill-workflow"
+  },
+  "metadata": {
+    "type": "example",
+    "category": "demo",
+    "tags": ["openjiuwen", "agent-studio", "adapter", "tui"]
+  }
+}

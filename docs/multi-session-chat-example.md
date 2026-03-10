@@ -6,8 +6,7 @@
 
 ## 目录
 - 根目录：`examples/agent/multi_session_chat/`
-- 进程入口：`examples/agent/multi_session_chat/server/chat_server.cpp`
-- WebUI：`examples/agent/multi_session_chat/server/webui/index.html`
+- TUI 入口：`examples/agent/multi_session_chat/multi_session_chat_tui.cpp`
 - Agent 包：`examples/agent/multi_session_chat/package/`
 - 多语言节点：`examples/agent/multi_session_chat/nodes/`
 - 自动化测试：`examples/agent/multi_session_chat/tests/`
@@ -129,7 +128,7 @@ skill workflow 统一通过 typed input/output 与 DataBus 交互，不再依赖
 - skill 输出除了业务结果，还会携带 `can_handle`、`status`、`grounded`、`confidence`、`reason` 等能力字段；
 - 当输入超出 skill 边界时，skill 必须返回拒答/不支持状态，而不是生成泛化兜底文本；
 - coordinator 只合并通过能力校验的 skill 结果，避免把无关 skill 的输出拼成错误答案。
-- 对于问候语、以及“总结上一条消息”这类可直接由会话历史回答的纯对话意图，`chat_server` 会在进入 skill 编排前直接返回结果，避免把历史总结错误地下发给不匹配的 skill。
+- 对于问候语、以及“总结上一条消息”这类可直接由会话历史回答的纯对话意图，TUI 会在进入 skill 编排前直接返回结果，避免把历史总结错误地下发给不匹配的 skill。
 
 ### 4. session-context-workflow
 
@@ -171,21 +170,18 @@ Shell 节点通过 `publish/sdk/shell/agentflow_databus.sh` 使用 Pub/Sub：
 
 当前示例中的 `select_skill_path.sh` 即采用该机制完成 dispatcher/coordinator 各路径的 LLM 选择。
 
-## ChatAgentBridge 流程
+## TUI 交互流程
 
-`examples/agent/multi_session_chat/server/chat_server.cpp` 中的桥接逻辑如下：
+`examples/agent/multi_session_chat/multi_session_chat_tui.cpp` 中的桥接逻辑如下：
 
-1. 从 HTTP/WS 请求中提取 `session_id`、`user_text`、`history`
-2. 将 `user_text`、`session:<sid>:history_json`、`session:<sid>:context` 写入 DataBus
-3. 通过 agent 请求队列触发 `dispatcher`
-4. 等待 `selected_skills` 与 `dispatcher_done`
-5. 运行 `session-coordinator-workflow` 获取第一版 `orchestration_plan`
-6. 对 `action=start` 的 skill workflow 逐个执行
-7. 收集 `partial_skill_results`
-8. 再次运行 `session-coordinator-workflow`
-9. 返回 `final_response`
+1. TUI 先将进程级 stdout/stderr 重定向到 `package/runtime/logs/multi_session_chat_tui.log`
+2. 交互窗口仅保留 `you>` / `assistant>` / `status>` 输出
+3. 对问候语与“总结上一条消息”执行本地短路回复
+4. 其余请求通过 `InteractiveRunner` 触发 `dispatcher`
+5. AgentFlow runtime 继续调度 `session-coordinator-workflow` 与 skill workflows
+6. TUI 只收集最终响应文本，不把运行时日志打印回交互窗口
 
-这条链路已经移除旧的 `default-dispatcher-workflow` 和运行时中间文件依赖，统一走 DataBus。
+这条链路继续走 AgentFlow DataBus 与运行时调度，但不再暴露 WebUI/HTTP/WebSocket 前端。
 
 ## 多语言节点与 SDK
 
@@ -220,11 +216,7 @@ bash examples/agent/multi_session_chat/scripts/build_and_run.sh
 ```bash
 ./build.sh build
 bash examples/agent/multi_session_chat/nodes/java/build.sh
-
-./build/example_chat_server \
-  --package examples/agent/multi_session_chat/package \
-  --web-root examples/agent/multi_session_chat/server/webui \
-  --host 127.0.0.1 --http-port 8088 --ws-port 8765
+./build/example_multi_session_chat_tui examples/agent/multi_session_chat/package
 ```
 
 ## 自动化测试

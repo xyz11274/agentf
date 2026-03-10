@@ -1,0 +1,4 @@
+runtime/
+nodes/python/__pycache__/
+nodes/python/*.pyc
+nodes/python/*.bak

@@ -8,9 +8,12 @@ examples/
 ├── agent/                 # Agent 包示例
 │   ├── basic_agent/
 │   ├── calculator_agent/
+│   ├── claw_agent/
+│   ├── multi_session_chat/
+│   ├── openjiuwen_multi_session_chat/
+│   ├── openjiuwen_studio_agent/
 │   ├── nested_workflow_agent/
 │   └── workflow_patterns/
-└── multi_session_chat/    # 多轮多 session 对话完整示例
 ```
 
 ---
@@ -74,9 +77,13 @@ Workflow 模式参考模板（DSL 示例，不依赖外部脚本）：
 
 ---
 
-## multi_session_chat/ — 多 session 对话示例
+## agent/openjiuwen_studio_agent/ — Studio bundle 适配示例
 
-多轮对话、多语言节点、DataBus 驱动的完整示例，详见 [`multi_session_chat/README.md`](multi_session_chat/README.md)。
+将 agent-studio 编排结果作为 bundled artifact 装入 AgentFlow 包，并通过包内 Python 适配器 node 运行。包含专用 TUI 和 E2E 冒烟测试。
+
+## agent/multi_session_chat/ — 多 session 对话示例
+
+多轮对话、多语言节点、DataBus 驱动的完整示例，现以专用 TUI 作为交互入口，详见 [`agent/multi_session_chat/README.md`](agent/multi_session_chat/README.md)。
 
 
 
@@ -118,7 +125,7 @@ Workflow 模式参考模板（DSL 示例，不依赖外部脚本）：
 
 当请求消息未显式指定 `workflow_id` 时，系统会优先使用 session 中 dispatcher / coordinator 任务绑定的 workflow。示例中的 `coordinator_workflow.json` 展示了结果编排方式。
 
-## WebSocket 对话样例（multi_session_chat）
+## TUI 对话样例（multi_session_chat / openjiuwen_multi_session_chat）
 
 ### 1) 构建 AgentFlow
 
@@ -126,16 +133,17 @@ Workflow 模式参考模板（DSL 示例，不依赖外部脚本）：
 ./build.sh build
 ```
 
-### 2) 启动样例进程
+### 2) 启动 multi_session_chat TUI
 
 ```bash
-./build/example_chat_server \
-  --package examples/agent/multi_session_chat/package \
-  --host 127.0.0.1 --http-port 8088 --ws-port 8765 \
-  --web-root examples/agent/multi_session_chat/server/webui
+./build/example_multi_session_chat_tui examples/agent/multi_session_chat/package
 ```
 
-打开 `http://127.0.0.1:8088` 即可通过 WebUI 与进程进行 WebSocket 对话。
+### 3) 启动 openjiuwen_multi_session_chat TUI
+
+```bash
+./build/example_openjiuwen_multi_session_chat_tui examples/agent/openjiuwen_multi_session_chat/package
+```
 
 ### 4) 样例能力说明
 

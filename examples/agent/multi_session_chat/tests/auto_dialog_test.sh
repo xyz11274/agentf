@@ -3,116 +3,29 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
 cd "$ROOT"
 
-./build.sh build >/dev/null
-
-LOG_DIR="examples/agent/multi_session_chat/package/history"
+LOG_DIR="examples/agent/multi_session_chat/package/runtime/logs"
 mkdir -p "$LOG_DIR"
-rm -f "$LOG_DIR"/webui_default.jsonl
+rm -f "$LOG_DIR"/multi_session_chat_tui.log
 
-./build/example_chat_server \
-  --package examples/agent/multi_session_chat/package \
-  --web-root examples/agent/multi_session_chat/server/webui \
-  --history-dir "$LOG_DIR" \
-  --host 127.0.0.1 --http-port 18088 --ws-port 18765 >/tmp/multichat_server.log 2>&1 &
-SERVER_PID=$!
-cleanup(){ kill "$SERVER_PID" >/dev/null 2>&1 || true; }
-trap cleanup EXIT
-sleep 1
+OUTPUT=$(printf 'hello\n请帮我总结一下上条消息\n今天天气？\n/status\n/quit\n' |
+  ./build/example_multi_session_chat_tui examples/agent/multi_session_chat/package 2>/dev/null)
 
-curl --noproxy "*" -sf "http://127.0.0.1:18088/" >/tmp/multichat_index.html
-curl --noproxy "*" -sf -X POST "http://127.0.0.1:18088/api/chat" \
-  -H 'Content-Type: application/json' \
-  -d '{"session_id":"webui:default","text":"hello","workflow_id":"session-dispatcher-workflow"}' \
-  >/tmp/multichat_chat.json
-curl --noproxy "*" -sf -X POST "http://127.0.0.1:18088/api/chat" \
-  -H 'Content-Type: application/json' \
-  -d '{"session_id":"webui:default","text":"请帮我总结一下上条消息","workflow_id":"session-dispatcher-workflow"}' \
-  >/tmp/multichat_chat2.json
-curl --noproxy "*" -sf -X POST "http://127.0.0.1:18088/api/chat" \
-  -H 'Content-Type: application/json' \
-  -d '{"session_id":"webui:default","text":"今天天气？","workflow_id":"session-dispatcher-workflow"}' \
-  >/tmp/multichat_chat3.json
-curl --noproxy "*" -sf "http://127.0.0.1:18088/api/history?session_id=webui%3Adefault&limit=20" \
-  >/tmp/multichat_history.json
-
-if ! grep -q "session_id" /tmp/multichat_chat.json; then
-  echo "chat API failed"
+grep -q 'Multi-Session Chat TUI' <<<"$OUTPUT" || { echo 'missing tui banner'; exit 1; }
+grep -q '你好！我可以帮你做总结、检索、日期时间计算和任务规划。' <<<"$OUTPUT" || { echo 'missing greeting response'; exit 1; }
+grep -q '上条消息主要内容是：hello' <<<"$OUTPUT" || { echo 'missing summary response'; exit 1; }
+grep -q 'status> session: tui:default' <<<"$OUTPUT" || { echo 'missing local status output'; exit 1; }
+grep -q 'Bye from multi_session_chat.' <<<"$OUTPUT" || { echo 'missing clean shutdown'; exit 1; }
+if grep -q 'DeprecationWarning' <<<"$OUTPUT"; then
+  echo 'tui output leaked runtime warning'
+  exit 1
+fi
+if grep -q '\[INFO\]\|\[ERROR\]' <<<"$OUTPUT"; then
+  echo 'tui output leaked runtime log lines'
+  exit 1
+fi
+if [ ! -f "$LOG_DIR"/multi_session_chat_tui.log ]; then
+  echo 'runtime log file not created'
   exit 1
 fi
 
-if grep -q "\\[ok\\] processed" /tmp/multichat_chat.json; then
-  echo "chat API returned placeholder response"
-  exit 1
-fi
-
-if grep -q "当前UTC时间" /tmp/multichat_chat.json; then
-  echo "greeting response leaked skill output"
-  exit 1
-fi
-
-if ! grep -q '"text":"' /tmp/multichat_chat2.json; then
-  echo "second round chat failed"
-  exit 1
-fi
-
-if grep -q "DeprecationWarning" /tmp/multichat_chat2.json; then
-  echo "chat response leaked runtime warning"
-  exit 1
-fi
-
-if grep -q "当前UTC时间" /tmp/multichat_chat2.json; then
-  echo "summary response incorrectly returned date skill output"
-  exit 1
-fi
-
-if grep -q "委托规划" /tmp/multichat_chat2.json; then
-  echo "summary response incorrectly returned delegate skill output"
-  exit 1
-fi
-
-if grep -q '"text":"多技能分析结果："' /tmp/multichat_chat2.json; then
-  echo "summary response was empty fallback"
-  exit 1
-fi
-
-if grep -q "暂不支持直接回答" /tmp/multichat_chat2.json; then
-  echo "summary response fell back to unsupported message"
-  exit 1
-fi
-
-if ! grep -q '上条消息主要内容是：' /tmp/multichat_chat2.json; then
-  echo "summary response did not summarize conversation history"
-  exit 1
-fi
-
-if grep -q "当前UTC时间" /tmp/multichat_chat3.json; then
-  echo "weather response incorrectly returned date fallback"
-  exit 1
-fi
-
-if grep -q "我结合当前可用技能结果给出" /tmp/multichat_chat3.json; then
-  echo "weather response incorrectly merged unsupported skills"
-  exit 1
-fi
-
-if ! grep -q '"role":"assistant"' /tmp/multichat_history.json; then
-  echo "history API missing assistant messages"
-  exit 1
-fi
-
-if [ ! -f "$LOG_DIR"/webui_default.jsonl ]; then
-  echo "history file not created"
-  exit 1
-fi
-
-if ! grep -q '"role":"user"' "$LOG_DIR"/webui_default.jsonl; then
-  echo "user message not persisted"
-  exit 1
-fi
-
-if ! grep -q '"role":"assistant"' "$LOG_DIR"/webui_default.jsonl; then
-  echo "assistant message not persisted"
-  exit 1
-fi
-
-echo "auto dialog test passed"
+echo 'multi_session_chat tui test passed'

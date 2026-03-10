@@ -36,6 +36,8 @@ depend.mk
 # Temporary files
 *.tmp
 *.log
+__pycache__/
+*.pyc
 
 # Test coverage
 coverage/
@@ -49,6 +51,10 @@ Thumbs.db
 # Local config
 local_config.txt
 debug_output.txt
+
+# Vendored Python example/runtime caches
+vendor/openjiuwen/python/**/__pycache__/
+vendor/openjiuwen/python/**/*.pyc
 
 # Claude Code config
 CLAUDE.md
