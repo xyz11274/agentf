@@ -43,6 +43,7 @@
 | 文档 | 用途 |
 |------|------|
 | **[claw-agent-example.md](claw-agent-example.md)** | vendored `jiuwenclaw` + ClawAgent TUI 示例说明 |
+| **[databus-file-types.md](databus-file-types.md)** | DataBus `FILE` / `FILE_LIST` 文件描述符类型说明 |
 | **[openjiuwen-studio-agent-example.md](openjiuwen-studio-agent-example.md)** | 大颗粒 `agent-studio` -> AgentFlow 适配样例说明 |
 | **[multi-session-chat-example.md](multi-session-chat-example.md)** | 多语言 `multi_session_chat` 示例拆解 |
 | **[openjiuwen-agentflow-example.md](openjiuwen-agentflow-example.md)** | Python-only + openJiuwen 兼容层集成示例说明 |
@@ -186,6 +187,7 @@
 **变更记录**：
 - 2026-03-10: 新增 OpenJiuwen Studio Agent 大颗粒适配样例文档与导航
 - 2026-03-10: 新增 ClawAgent 示例文档，并补充 vendored openJiuwen / jiuwenclaw 导航
+- 2026-03-10: 新增 DataBus `FILE` / `FILE_LIST` 文件类型文档
 - 2026-03-10: 补充 multi_session_chat / openjiuwen 示例文档入口，刷新目录导航
 - 2026-02-28: 同步刷新 MMNode 执行引擎下沉到 Worker、Coordinator task0 默认处理与 `coordinator_workflow` 配置说明
 - 2026-02-21: 刷新 ARCHITECTURE.md 与 REFACTORING.md，补充 MMAgent/Runtime/MMWorkflow 当日优化落地与下一步优化方向

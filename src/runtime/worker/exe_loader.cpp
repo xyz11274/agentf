@@ -1,5 +1,7 @@
 #include "runtime/exe_loader.h"
 
+#include "agent/data_variant_utils.h"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -490,18 +492,7 @@ ExecutionResult CodeLoader::load_and_execute_so(const std::string&     file_path
 
     // Convert outputs to string
     for(const auto& pair : outputs) {
-      std::string value_str = std::visit(
-          [](auto&& arg) -> std::string {
-            using T = std::decay_t<decltype(arg)>;
-            if constexpr(std::is_same_v<T, std::string>) {
-              return arg;
-            } else if constexpr(std::is_same_v<T, bool>) {
-              return arg ? "true" : "false";
-            } else {
-              return std::to_string(arg);
-            }
-          },
-          pair.second);
+      std::string value_str = data_variant_to_string(pair.second);
 
       result.stdout += pair.first + "=" + value_str + "\n";
     }

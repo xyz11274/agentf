@@ -200,6 +200,28 @@ class WorkflowJsonTest : public ::testing::Test {
       }
     ]
   })";
+
+  const char* file_typed_workflow_json_ = R"({
+    "id": "workflow_file_io_001",
+    "name": "File IO Workflow",
+    "version": "1.0.0",
+    "nodes": [
+      {
+        "id": "file_node",
+        "name": "File Node",
+        "type": "TASK",
+        "inputs": [
+          {"name": "source", "type": "file", "required": true},
+          {"name": "attachments", "type": "file_list", "transfer_mode": "ref"}
+        ],
+        "outputs": [
+          {"name": "artifact", "type": "file"},
+          {"name": "artifacts", "type": "file_list"}
+        ]
+      }
+    ],
+    "edges": []
+  })";
 };
 
 TEST_F(WorkflowJsonTest, ParseValidWorkflowWithTypedIo) {
@@ -239,6 +261,21 @@ TEST_F(WorkflowJsonTest, ParseObjectStyleIoAsTypedDefinitions) {
             framework::MMNode::TransferMode::REFERENCE);
   ASSERT_EQ(node->get_output_definitions().size(), 1u);
   EXPECT_EQ(node->get_output_definitions()[0].type, framework::MMNode::FieldType::FLOAT);
+}
+
+TEST_F(WorkflowJsonTest, ParseWorkflowWithFileTypedIo) {
+  auto result = parser_->parse_workflow(file_typed_workflow_json_);
+  ASSERT_TRUE(result.is_valid()) << result.get_error_summary();
+  auto node = result.workflow->get_node("file_node");
+  ASSERT_NE(node, nullptr);
+  ASSERT_EQ(node->get_input_definitions().size(), 2u);
+  EXPECT_EQ(node->get_input_definitions()[0].type, framework::MMNode::FieldType::FILE);
+  EXPECT_EQ(node->get_input_definitions()[1].type, framework::MMNode::FieldType::FILE_LIST);
+  EXPECT_EQ(node->get_input_definitions()[1].transfer_mode,
+            framework::MMNode::TransferMode::REFERENCE);
+  ASSERT_EQ(node->get_output_definitions().size(), 2u);
+  EXPECT_EQ(node->get_output_definitions()[0].type, framework::MMNode::FieldType::FILE);
+  EXPECT_EQ(node->get_output_definitions()[1].type, framework::MMNode::FieldType::FILE_LIST);
 }
 
 TEST_F(WorkflowJsonTest, ParseSwitchCaseWorkflow) {

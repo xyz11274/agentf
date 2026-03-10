@@ -1,5 +1,7 @@
 #include "workflow/workflow.h"
 
+#include "agent/data_variant_utils.h"
+
 #include <sys/time.h>
 
 #include <algorithm>
@@ -66,6 +68,10 @@ const char* field_type_to_string(MMNode::FieldType type) {
       return "list";
     case MMNode::FieldType::MAP:
       return "map";
+    case MMNode::FieldType::FILE:
+      return "file";
+    case MMNode::FieldType::FILE_LIST:
+      return "file_list";
     case MMNode::FieldType::STRING:
     default:
       return "string";
@@ -87,6 +93,12 @@ MMNode::FieldType field_type_from_string(const std::string& type) {
   }
   if(type == "map") {
     return MMNode::FieldType::MAP;
+  }
+  if(type == "file") {
+    return MMNode::FieldType::FILE;
+  }
+  if(type == "file_list") {
+    return MMNode::FieldType::FILE_LIST;
   }
   return MMNode::FieldType::STRING;
 }
@@ -1456,16 +1468,7 @@ std::string MMWorkflow::resolve_value(const std::string& name, const ControlCont
 
   auto it = node_outputs.find(name);
   if(it != node_outputs.end()) {
-    return std::visit(
-        [](auto&& arg) -> std::string {
-          using T = std::decay_t<decltype(arg)>;
-          if constexpr(std::is_same_v<T, std::string>) return arg;
-          else if constexpr(std::is_same_v<T, int64_t>) return std::to_string(arg);
-          else if constexpr(std::is_same_v<T, double>) return std::to_string(arg);
-          else if constexpr(std::is_same_v<T, bool>) return arg ? "true" : "false";
-          return "";
-        },
-        it->second);
+    return data_variant_to_string(it->second);
   }
 
   return name;

@@ -1,5 +1,7 @@
 #include "workflow/node.h"
 
+#include "agent/data_variant_utils.h"
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -18,100 +20,8 @@ namespace agentflow {
 namespace framework {
 
 namespace {
-// Lightweight flat-JSON-object parser: parses {"key":"value","key2":42,...}
-// Handles string, number (int/double), and bool values at the top level only.
-// Returns false if the input is not a valid JSON object.
 bool parse_flat_json_object(const std::string& json, DataMap& out) {
-  size_t i = 0;
-  auto skip_ws = [&]() { while(i < json.size() && std::isspace((unsigned char)json[i])) ++i; };
-  auto read_string = [&](std::string& s) -> bool {
-    if(i >= json.size() || json[i] != '"') return false;
-    ++i;
-    s.clear();
-    while(i < json.size() && json[i] != '"') {
-      if(json[i] == '\\' && i + 1 < json.size()) {
-        char esc = json[++i];
-        switch(esc) {
-          case '"': s += '"'; break;
-          case '\\': s += '\\'; break;
-          case 'n': s += '\n'; break;
-          case 'r': s += '\r'; break;
-          case 't': s += '\t'; break;
-          default: s += esc; break;
-        }
-      } else {
-        s += json[i];
-      }
-      ++i;
-    }
-    if(i >= json.size()) return false;
-    ++i;  // consume closing '"'
-    return true;
-  };
-
-  skip_ws();
-  // Find the opening brace in case there's non-JSON content before the JSON object
-  // This handles cases where debug messages or other output precedes the JSON
-  while(i < json.size() && json[i] != '{') {
-    // Skip entire lines until we find a line starting with {
-    while(i < json.size() && json[i] != '\n') ++i;
-    if(i < json.size()) ++i;  // skip newline
-    skip_ws();
-  }
-  if(i >= json.size() || json[i] != '{') return false;
-  ++i;
-  skip_ws();
-  if(i < json.size() && json[i] == '}') return true;  // empty object
-
-  while(i < json.size()) {
-    skip_ws();
-    std::string key;
-    if(!read_string(key)) return false;
-    skip_ws();
-    if(i >= json.size() || json[i] != ':') return false;
-    ++i;
-    skip_ws();
-
-    if(i < json.size() && json[i] == '"') {
-      std::string val;
-      if(!read_string(val)) return false;
-      out[key] = val;
-    } else if(i + 4 <= json.size() && json.substr(i, 4) == "true") {
-      out[key] = true; i += 4;
-    } else if(i + 5 <= json.size() && json.substr(i, 5) == "false") {
-      out[key] = false; i += 5;
-    } else if(i + 4 <= json.size() && json.substr(i, 4) == "null") {
-      out[key] = std::string(""); i += 4;
-    } else {
-      // number
-      size_t start = i;
-      bool is_float = false;
-      if(i < json.size() && (json[i] == '-' || json[i] == '+')) ++i;
-      while(i < json.size() && (std::isdigit((unsigned char)json[i]) ||
-                                  json[i] == '.' || json[i] == 'e' || json[i] == 'E' ||
-                                  json[i] == '+' || json[i] == '-')) {
-        if(json[i] == '.' || json[i] == 'e' || json[i] == 'E') is_float = true;
-        ++i;
-      }
-      if(i == start) return false;
-      std::string numstr = json.substr(start, i - start);
-      try {
-        if(is_float) {
-          out[key] = std::stod(numstr);
-        } else {
-          out[key] = static_cast<int64_t>(std::stoll(numstr));
-        }
-      } catch(...) {
-        out[key] = numstr;
-      }
-    }
-    skip_ws();
-    if(i >= json.size()) break;
-    if(json[i] == '}') { ++i; return true; }
-    if(json[i] == ',') { ++i; continue; }
-    return false;
-  }
-  return false;
+  return parse_json_object_to_datamap(json, out);
 }
 }  // namespace
 
@@ -308,18 +218,7 @@ bool MMNode::execute() {
   Logger::instance().debug_f("[NODE_EXECUTE_START] NodeId=%s, Inputs: %zu entries",
                              config_.id.c_str(), inputs_.size());
   for(const auto& pair : inputs_) {
-    std::string value_str = std::visit(
-        [](auto&& arg) -> std::string {
-          using T = std::decay_t<decltype(arg)>;
-          if constexpr(std::is_same_v<T, std::string>) {
-            return arg;
-          } else if constexpr(std::is_same_v<T, bool>) {
-            return arg ? "true" : "false";
-          } else {
-            return std::to_string(arg);
-          }
-        },
-        pair.second);
+    std::string value_str = data_variant_to_string(pair.second);
     Logger::instance().debug_f("[NODE_EXECUTE_START] NodeId=%s, Input[%s]=%s", config_.id.c_str(),
                                pair.first.c_str(), value_str.c_str());
   }
@@ -376,18 +275,7 @@ bool MMNode::execute() {
   Logger::instance().debug_f("[NODE_EXECUTE_END] NodeId=%s, Outputs: %zu entries",
                              config_.id.c_str(), outputs_.size());
   for(const auto& pair : outputs_) {
-    std::string value_str = std::visit(
-        [](auto&& arg) -> std::string {
-          using T = std::decay_t<decltype(arg)>;
-          if constexpr(std::is_same_v<T, std::string>) {
-            return arg;
-          } else if constexpr(std::is_same_v<T, bool>) {
-            return arg ? "true" : "false";
-          } else {
-            return std::to_string(arg);
-          }
-        },
-        pair.second);
+    std::string value_str = data_variant_to_string(pair.second);
     Logger::instance().debug_f("[NODE_EXECUTE_END] NodeId=%s, Output[%s]=%s", config_.id.c_str(),
                                pair.first.c_str(), value_str.c_str());
   }
@@ -883,26 +771,9 @@ bool MMNode::execute_script(runtime::ExecutableType type) {
       }
       return out;
     };
-    auto variant_to_string = [](const DataVariant& value) -> std::string {
-      return std::visit(
-          [](const auto& arg) -> std::string {
-            using T = std::decay_t<decltype(arg)>;
-            if constexpr(std::is_same_v<T, std::string>) {
-              return arg;
-            } else if constexpr(std::is_same_v<T, bool>) {
-              return arg ? "true" : "false";
-            } else if constexpr(std::is_arithmetic_v<T>) {
-              std::ostringstream oss;
-              oss << arg;
-              return oss.str();
-            }
-            return "";
-          },
-          value);
-    };
     for(const auto& pair : inputs_) {
       std::string env_key = "AF_" + to_env_suffix(pair.first);
-      exec_config.env_vars.push_back(env_key + "=" + variant_to_string(pair.second));
+      exec_config.env_vars.push_back(env_key + "=" + data_variant_to_string(pair.second));
     }
     if(config_.json_output) {
       exec_config.env_vars.push_back("AF_OUTPUT_FORMAT=json");

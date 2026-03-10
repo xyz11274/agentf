@@ -2,6 +2,8 @@
 // Licensed under MIT License
 
 #include "runtime/databus/remote_databus.h"
+
+#include "agent/data_variant_utils.h"
 #include "utils/logger.h"
 #include "vendor/cache/redis_adapter.h"
 #include <type_traits>
@@ -14,20 +16,6 @@ agentflow::vendor::adapter::RedisAdapter& redis_adapter_instance() {
   return adapter;
 }
 
-std::string variant_to_string(const DataVariant& value) {
-  return std::visit(
-      [](auto&& arg) -> std::string {
-        using T = std::decay_t<decltype(arg)>;
-        if constexpr(std::is_same_v<T, std::string>) {
-          return arg;
-        } else if constexpr(std::is_same_v<T, bool>) {
-          return arg ? "true" : "false";
-        } else {
-          return std::to_string(arg);
-        }
-      },
-      value);
-}
 }  // namespace
 
 RemoteDatabus::RemoteDatabus() {
@@ -70,7 +58,7 @@ bool RemoteDatabus::publish(const std::string& key, const DataVariant& value) {
     return false;
   }
   data_store_[key] = value;
-  redis_adapter_instance().set(key, variant_to_string(value));
+  redis_adapter_instance().set(key, data_variant_to_string(value));
   auto sub_it = subscriptions_.find(key);
   if(sub_it != subscriptions_.end()) {
     sub_it->second(key, value);

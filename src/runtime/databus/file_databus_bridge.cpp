@@ -1,5 +1,7 @@
 #include "runtime/databus/file_databus_bridge.h"
 
+#include "agent/data_variant_utils.h"
+
 #include <atomic>
 #include <algorithm>
 #include <chrono>
@@ -314,48 +316,12 @@ std::string FileDataBusBridge::decode_key(const std::string& encoded) {
 }
 
 FileDataBusBridge::EncodedValue FileDataBusBridge::encode_value(const DataVariant& value) {
-  return std::visit(
-      [](const auto& arg) -> EncodedValue {
-        using T = std::decay_t<decltype(arg)>;
-        if constexpr(std::is_same_v<T, std::string>) {
-          return {"string", base64_encode(arg)};
-        } else if constexpr(std::is_same_v<T, bool>) {
-          return {"bool", base64_encode(arg ? "true" : "false")};
-        } else if constexpr(std::is_same_v<T, double>) {
-          std::ostringstream oss;
-          oss << arg;
-          return {"float", base64_encode(oss.str())};
-        } else {
-          return {"int", base64_encode(std::to_string(arg))};
-        }
-      },
-      value);
+  return {data_variant_type_name(value), base64_encode(data_variant_to_string(value))};
 }
 
 bool FileDataBusBridge::decode_value(const std::string& type, const std::string& encoded_value,
                                      DataVariant& value) {
-  const std::string decoded = base64_decode(encoded_value);
-  try {
-    if(type == "string") {
-      value = decoded;
-      return true;
-    }
-    if(type == "bool") {
-      value = (decoded == "true" || decoded == "1");
-      return true;
-    }
-    if(type == "float") {
-      value = std::stod(decoded);
-      return true;
-    }
-    if(type == "int") {
-      value = static_cast<int64_t>(std::stoll(decoded));
-      return true;
-    }
-  } catch(...) {
-    return false;
-  }
-  return false;
+  return data_variant_from_encoded_value(type, base64_decode(encoded_value), value);
 }
 
 std::string FileDataBusBridge::base64_encode(const std::string& input) {

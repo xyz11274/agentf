@@ -27,12 +27,14 @@ namespace framework {
 class MMNode {
 public:
   enum class FieldType {
-    STRING = 0,
-    INT    = 1,
-    FLOAT  = 2,
-    BOOL   = 3,
-    LIST   = 4,
-    MAP    = 5,
+    STRING    = 0,
+    INT       = 1,
+    FLOAT     = 2,
+    BOOL      = 3,
+    LIST      = 4,
+    MAP       = 5,
+    FILE      = 6,
+    FILE_LIST = 7,
   };
 
   enum class TransferMode {

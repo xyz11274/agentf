@@ -5,6 +5,8 @@
 
 #include "runtime/databus/local_databus.h"
 
+#include "agent/data_variant_utils.h"
+
 #include <algorithm>
 #include <cstring>
 #include <fcntl.h>
@@ -485,8 +487,9 @@ size_t estimate_variant_size(const DataVariant& data) {
           return sizeof(double);
         } else if constexpr(std::is_same_v<T, bool>) {
           return sizeof(bool);
+        } else {
+          return data_variant_to_string(DataVariant(arg)).size();
         }
-        return 0;
       },
       data);
 }

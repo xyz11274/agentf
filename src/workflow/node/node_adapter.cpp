@@ -11,6 +11,8 @@
 #include <variant>
 
 #include "workflow/node.h"
+
+#include "agent/data_variant_utils.h"
 #include "agent/common.h"
 #include "utils/logger.h"
 
@@ -18,6 +20,7 @@
 #include "rapidjson/document.h"
 #include "rapidjson/istreamwrapper.h"
 #include "rapidjson/ostreamwrapper.h"
+#include "rapidjson/stringbuffer.h"
 #include "rapidjson/writer.h"
 #endif
 
@@ -138,6 +141,129 @@ bool parse_node_config(const std::string& config_file, MMNode::Config& config) {
 #endif
 }
 
+
+#ifdef AGENTFLOW_WITH_RAPIDJSON
+namespace {
+rapidjson::Value make_json_string(const std::string& value,
+                                  rapidjson::Document::AllocatorType& allocator) {
+  return rapidjson::Value(value.c_str(), value.length(), allocator);
+}
+
+rapidjson::Value file_descriptor_to_rapidjson(const FileDescriptor& descriptor,
+                                              rapidjson::Document::AllocatorType& allocator) {
+  rapidjson::Value object(rapidjson::kObjectType);
+  object.AddMember("file_id", make_json_string(descriptor.file_id, allocator), allocator);
+  object.AddMember("uri", make_json_string(descriptor.uri, allocator), allocator);
+  object.AddMember("storage_backend", make_json_string(descriptor.storage_backend, allocator), allocator);
+  object.AddMember("media_type", make_json_string(descriptor.media_type, allocator), allocator);
+  object.AddMember("size_bytes", descriptor.size_bytes, allocator);
+  object.AddMember("checksum", make_json_string(descriptor.checksum, allocator), allocator);
+  object.AddMember("created_at", descriptor.created_at, allocator);
+  object.AddMember("ttl_seconds", descriptor.ttl_seconds, allocator);
+  object.AddMember("owner", make_json_string(descriptor.owner, allocator), allocator);
+  if(descriptor.metadata_json.empty()) {
+    object.AddMember("metadata", rapidjson::Value(rapidjson::kObjectType), allocator);
+  } else {
+    rapidjson::Document metadata_doc;
+    metadata_doc.Parse(descriptor.metadata_json.c_str());
+    if(metadata_doc.HasParseError()) {
+      object.AddMember("metadata", make_json_string(descriptor.metadata_json, allocator), allocator);
+    } else {
+      rapidjson::Value metadata_value;
+      metadata_value.CopyFrom(metadata_doc, allocator);
+      object.AddMember("metadata", metadata_value, allocator);
+    }
+  }
+  return object;
+}
+
+bool rapidjson_to_file_descriptor(const rapidjson::Value& value, FileDescriptor& descriptor) {
+  if(!value.IsObject()) {
+    return false;
+  }
+  FileDescriptor parsed;
+  if(value.HasMember("file_id") && value["file_id"].IsString()) parsed.file_id = value["file_id"].GetString();
+  if(value.HasMember("uri") && value["uri"].IsString()) parsed.uri = value["uri"].GetString();
+  if(value.HasMember("storage_backend") && value["storage_backend"].IsString()) parsed.storage_backend = value["storage_backend"].GetString();
+  if(value.HasMember("media_type") && value["media_type"].IsString()) parsed.media_type = value["media_type"].GetString();
+  if(value.HasMember("size_bytes") && value["size_bytes"].IsInt64()) parsed.size_bytes = value["size_bytes"].GetInt64();
+  if(value.HasMember("checksum") && value["checksum"].IsString()) parsed.checksum = value["checksum"].GetString();
+  if(value.HasMember("created_at") && value["created_at"].IsInt64()) parsed.created_at = value["created_at"].GetInt64();
+  if(value.HasMember("ttl_seconds") && value["ttl_seconds"].IsInt64()) parsed.ttl_seconds = value["ttl_seconds"].GetInt64();
+  else if(value.HasMember("ttl") && value["ttl"].IsInt64()) parsed.ttl_seconds = value["ttl"].GetInt64();
+  if(value.HasMember("owner") && value["owner"].IsString()) parsed.owner = value["owner"].GetString();
+  if(value.HasMember("metadata")) {
+    rapidjson::StringBuffer buffer;
+    rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+    value["metadata"].Accept(writer);
+    parsed.metadata_json = buffer.GetString();
+  }
+  if(!is_file_descriptor_value(parsed)) {
+    return false;
+  }
+  descriptor = std::move(parsed);
+  return true;
+}
+
+bool rapidjson_to_data_variant(const rapidjson::Value& value, DataVariant& output) {
+  if(value.IsInt64()) { output = value.GetInt64(); return true; }
+  if(value.IsDouble()) { output = value.GetDouble(); return true; }
+  if(value.IsBool()) { output = value.GetBool(); return true; }
+  if(value.IsString()) { output = std::string(value.GetString()); return true; }
+  if(value.IsObject()) {
+    FileDescriptor descriptor;
+    if(rapidjson_to_file_descriptor(value, descriptor)) {
+      output = std::move(descriptor);
+      return true;
+    }
+  }
+  if(value.IsArray()) {
+    FileDescriptorList descriptors;
+    for(auto it = value.Begin(); it != value.End(); ++it) {
+      FileDescriptor descriptor;
+      if(!rapidjson_to_file_descriptor(*it, descriptor)) {
+        return false;
+      }
+      descriptors.push_back(std::move(descriptor));
+    }
+    output = std::move(descriptors);
+    return true;
+  }
+  return false;
+}
+
+rapidjson::Value data_variant_to_rapidjson(const DataVariant& value,
+                                           rapidjson::Document::AllocatorType& allocator) {
+  return std::visit(
+      [&allocator](const auto& arg) -> rapidjson::Value {
+        using T = std::decay_t<decltype(arg)>;
+        rapidjson::Value out;
+        if constexpr(std::is_same_v<T, int64_t>) {
+          out.SetInt64(arg);
+          return out;
+        } else if constexpr(std::is_same_v<T, double>) {
+          out.SetDouble(arg);
+          return out;
+        } else if constexpr(std::is_same_v<T, bool>) {
+          out.SetBool(arg);
+          return out;
+        } else if constexpr(std::is_same_v<T, std::string>) {
+          return make_json_string(arg, allocator);
+        } else if constexpr(std::is_same_v<T, FileDescriptor>) {
+          return file_descriptor_to_rapidjson(arg, allocator);
+        } else {
+          out.SetArray();
+          for(const auto& descriptor : arg) {
+            out.PushBack(file_descriptor_to_rapidjson(descriptor, allocator), allocator);
+          }
+          return out;
+        }
+      },
+      value);
+}
+}  // namespace
+#endif
+
 // Parse JSON inputs file
 DataMap parse_inputs(const std::string& inputs_file) {
   DataMap inputs;
@@ -158,22 +284,12 @@ DataMap parse_inputs(const std::string& inputs_file) {
     return inputs;
   }
 
-  // Parse inputs object
   if(doc.IsObject()) {
     for(auto it = doc.MemberBegin(); it != doc.MemberEnd(); ++it) {
-      std::string key = it->name.GetString();
-      const auto& val = it->value;
-
-      if(val.IsInt64()) {
-        inputs[key] = val.GetInt64();
-      } else if(val.IsDouble()) {
-        inputs[key] = val.GetDouble();
-      } else if(val.IsBool()) {
-        inputs[key] = val.GetBool();
-      } else if(val.IsString()) {
-        inputs[key] = std::string(val.GetString());
+      DataVariant parsed;
+      if(rapidjson_to_data_variant(it->value, parsed)) {
+        inputs[it->name.GetString()] = std::move(parsed);
       }
-      // For now, we only support basic types
     }
   }
 
@@ -192,30 +308,10 @@ bool write_outputs(const std::string& output_file, const DataMap& outputs) {
   auto& allocator = doc.GetAllocator();
 
   for(const auto& pair : outputs) {
-    const std::string& key = pair.first;
-    const auto& val = pair.second;
-
-    // Create key as Value with allocator
-    rapidjson::Value key_val(key.c_str(), key.length(), allocator);
-
-    std::visit(
-        [&doc, &key_val, &allocator](auto&& arg) {
-          using T = std::decay_t<decltype(arg)>;
-          if constexpr(std::is_same_v<T, int64_t>) {
-            doc.AddMember(key_val, arg, allocator);
-          } else if constexpr(std::is_same_v<T, double>) {
-            doc.AddMember(key_val, arg, allocator);
-          } else if constexpr(std::is_same_v<T, bool>) {
-            doc.AddMember(key_val, arg, allocator);
-          } else if constexpr(std::is_same_v<T, std::string>) {
-            rapidjson::Value str_val(arg.c_str(), arg.length(), allocator);
-            doc.AddMember(key_val, str_val, allocator);
-          }
-        },
-        val);
+    rapidjson::Value key_val(pair.first.c_str(), pair.first.length(), allocator);
+    doc.AddMember(key_val, data_variant_to_rapidjson(pair.second, allocator), allocator);
   }
 
-  // Write to file
   std::ofstream file(output_file);
   if(!file.is_open()) {
     Logger::instance().error("Failed to open output file: " + output_file);

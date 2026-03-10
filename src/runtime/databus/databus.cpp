@@ -3,6 +3,8 @@
 
 #include "runtime/databus/databus.h"
 
+#include "agent/data_variant_utils.h"
+
 #include <chrono>
 #include <sstream>
 #include <type_traits>
@@ -10,21 +12,6 @@
 namespace agentflow {
 namespace runtime {
 namespace {
-std::string variant_to_string(const DataVariant& value) {
-  return std::visit(
-      [](auto&& arg) -> std::string {
-        using T = std::decay_t<decltype(arg)>;
-        if constexpr(std::is_same_v<T, std::string>) {
-          return arg;
-        } else if constexpr(std::is_same_v<T, bool>) {
-          return arg ? "true" : "false";
-        } else {
-          return std::to_string(arg);
-        }
-      },
-      value);
-}
-
 void add_owner_index(RemoteDatabus* remote, const std::string& owner_key, const std::string& owner_value,
                      const std::string& ref) {
   if(remote == nullptr || owner_value.empty()) {
@@ -173,7 +160,7 @@ std::string MMDataBus::build_data_id(const DataVariant& value) {
                           std::chrono::system_clock::now().time_since_epoch())
                           .count();
   std::hash<std::string> hasher;
-  const auto digest = hasher(variant_to_string(value));
+  const auto digest = hasher(data_variant_to_string(value));
   std::ostringstream oss;
   oss << std::hex << digest << "-" << now_ns;
   return oss.str();

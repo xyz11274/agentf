@@ -56,10 +56,34 @@ enum class WorkflowState {
   FAILED    = 5,
 };
 
+struct FileDescriptor {
+  std::string file_id;
+  std::string uri;
+  std::string storage_backend;
+  std::string media_type;
+  int64_t     size_bytes  = 0;
+  std::string checksum;
+  int64_t     created_at  = 0;
+  int64_t     ttl_seconds = 0;
+  std::string owner;
+  std::string metadata_json;
+
+  bool operator==(const FileDescriptor& other) const {
+    return file_id == other.file_id && uri == other.uri &&
+           storage_backend == other.storage_backend && media_type == other.media_type &&
+           size_bytes == other.size_bytes && checksum == other.checksum &&
+           created_at == other.created_at && ttl_seconds == other.ttl_seconds &&
+           owner == other.owner && metadata_json == other.metadata_json;
+  }
+};
+
+using FileDescriptorList = std::vector<FileDescriptor>;
+
 // Shared data types
-using DataVariant = std::variant<int64_t, double, std::string, bool>;
-using DataValue   = DataVariant;  // Alias for consistency
-using DataMap     = std::map<std::string, DataVariant>;
+using DataVariant =
+    std::variant<int64_t, double, std::string, bool, FileDescriptor, FileDescriptorList>;
+using DataValue = DataVariant;  // Alias for consistency
+using DataMap   = std::map<std::string, DataVariant>;
 // Event types for control flow
 enum class EventType {
   NODE_START       = 0,

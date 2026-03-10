@@ -1,5 +1,7 @@
 #include "runtime/worker.h"
 
+#include "agent/data_variant_utils.h"
+
 #include <sys/time.h>
 
 #include <algorithm>
@@ -41,23 +43,6 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
     }
     return out;
   };
-  auto variant_to_string = [](const DataVariant& value) -> std::string {
-    return std::visit(
-        [](const auto& arg) -> std::string {
-          using T = std::decay_t<decltype(arg)>;
-          if constexpr(std::is_same_v<T, std::string>) {
-            return arg;
-          } else if constexpr(std::is_same_v<T, bool>) {
-            return arg ? "true" : "false";
-          } else if constexpr(std::is_arithmetic_v<T>) {
-            std::ostringstream oss;
-            oss << arg;
-            return oss.str();
-          }
-          return "";
-      },
-      value);
-  };
 
   FileDataBusBridge file_databus(
       request.databus_root_dir.empty() ? FileDataBusBridge::make_temp_root() : request.databus_root_dir);
@@ -77,7 +62,7 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
   }
   for(const auto& pair : request.inputs) {
     std::string env_key = "AF_" + to_env_suffix(pair.first);
-    exec_config.env_vars.push_back(env_key + "=" + variant_to_string(pair.second));
+    exec_config.env_vars.push_back(env_key + "=" + data_variant_to_string(pair.second));
     file_databus.put(pair.first, pair.second);
   }
 

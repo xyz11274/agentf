@@ -39,6 +39,8 @@ framework::MMNode::FieldType parse_node_field_type(const std::string& type) {
   if(type == "bool") return framework::MMNode::FieldType::BOOL;
   if(type == "list") return framework::MMNode::FieldType::LIST;
   if(type == "map") return framework::MMNode::FieldType::MAP;
+  if(type == "file") return framework::MMNode::FieldType::FILE;
+  if(type == "file_list") return framework::MMNode::FieldType::FILE_LIST;
   return framework::MMNode::FieldType::STRING;
 }
 
