@@ -748,49 +748,10 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
 
   task->register_dispatch_record(message);
   std::vector<std::shared_ptr<MMAgentTask>> generated;
-  if(task->get_task_type() == "coordinator") {
-    std::string selected_skills;
-    if(const auto it = message.metadata.find("selected_skills"); it != message.metadata.end()) {
-      selected_skills = it->second;
-    } else {
-      DataVariant selected_value;
-      if(get_data("selected_skills", selected_value)) {
-        if(const auto* text = std::get_if<std::string>(&selected_value)) {
-          selected_skills = *text;
-        }
-      }
-    }
-    if(!selected_skills.empty()) {
-      std::istringstream lines(selected_skills);
-      std::string        line;
-      while(std::getline(lines, line)) {
-        if(line.empty()) {
-          continue;
-        }
-        MMAgentMsgQue::Message skill_message = message;
-        skill_message.metadata["task_type"] = "skill";
-        const std::string skill_name = extract_json_field(line, "skill");
-        const std::string target_session = extract_json_field(line, "session_id");
-        if(skill_name.empty()) {
-          continue;
-        }
-        skill_message.metadata["skill_name"] = skill_name;
-        if(!target_session.empty()) {
-          skill_message.metadata["target_session_id"] = target_session;
-        }
-        auto skill_template = find_skill_template_task(session, skill_name);
-        auto skill_task =
-            build_runtime_task(session, skill_template ? skill_template : task, skill_message);
-        if(skill_task) {
-          auto workflow = get_workflow(skill_task->get_workflow_id());
-          if(!workflow || !workflow->is_red_light()) {
-            session->add_task(skill_task);
-            generated.push_back(skill_task);
-          }
-        }
-      }
-    }
-  }
+
+  // Note: skill tasks are NOT created here anymore.
+  // They will be created when coordinator workflow completes (in handle_task_data_exchange).
+  // This ensures proper skill -> coordinator response flow.
 
   if(auto runtime_task = build_runtime_task(session, task, message); runtime_task) {
     Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Created runtime_task: task_id=%s, workflow_id=%s",
@@ -901,32 +862,194 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
   }
 
   if(task->get_task_type() == "coordinator") {
-    // Coordinator completed - get response from databus and send to response queue
-    MMAgentMsgQue::Message response_message = message;
+    // Check if this is a response from skill (in coordinator's response_queue)
+    MMAgentMsgQue::Message skill_response;
+    if(task->dequeue_response_message(skill_response)) {
+      // Skill completed - get result from databus and send to client
+      Logger::instance().info_f("[COORDINATORDataExchange] Received skill response, message_id=%s",
+                                skill_response.message_id.c_str());
 
-    // Get response from databus (published by coordinator workflow)
+      MMAgentMsgQue::Message response_message = skill_response;
+
+      // Get response from databus (published by skill workflow)
+      DataVariant response_value;
+      if(get_data("response", response_value)) {
+        if(const auto* text = std::get_if<std::string>(&response_value)) {
+          response_message.content = *text;
+          Logger::instance().info_f("[COORDINATORDataExchange] Got skill response from databus: %s",
+                                    text->c_str());
+        }
+      }
+
+      if(session_router_) {
+        Logger::instance().info_f("[COORDINATORDataExchange] Enqueueing final response to client, content='%s'",
+                                  response_message.content.c_str());
+        session_router_->enqueue_response_message(response_message);
+      }
+      return;
+    }
+
+    // Coordinator workflow completed - check if need to start skill tasks
+    // This happens when coordinator workflow outputs selected_skills
+    DataVariant selected_skills_value;
+    std::string selected_skills;
+    if(get_data("selected_skills", selected_skills_value)) {
+      if(const auto* text = std::get_if<std::string>(&selected_skills_value)) {
+        selected_skills = *text;
+      }
+    }
+
+    if(!selected_skills.empty()) {
+      Logger::instance().info_f("[COORDINATORDataExchange] Coordinator workflow completed, starting skill tasks: %s",
+                                selected_skills.c_str());
+
+      // Clear selected_skills to prevent re-creating skill tasks on subsequent data_exchange
+      publish_data("selected_skills", std::string(""));
+
+      // Parse selected_skills and create skill tasks
+      // Supports two formats:
+      // 1. JSON format: {"skill":"skill-name", "session_id":"0"}
+      // 2. Simple string: skill-name
+      std::istringstream lines(selected_skills);
+      std::string line;
+      while(std::getline(lines, line)) {
+        if(line.empty()) {
+          continue;
+        }
+
+        // Try to extract skill name from JSON format first
+        std::string skill_name = extract_json_field(line, "skill");
+
+        // If not found, treat the entire line as skill name (simple string format)
+        if(skill_name.empty()) {
+          // Remove quotes if present
+          std::string trimmed = line;
+          if(!trimmed.empty() && trimmed.front() == '"') {
+            trimmed = trimmed.substr(1);
+          }
+          if(!trimmed.empty() && trimmed.back() == '"') {
+            trimmed = trimmed.substr(0, trimmed.size() - 1);
+          }
+          // Remove any whitespace
+          size_t start = trimmed.find_first_not_of(" \t\n\r");
+          size_t end = trimmed.find_last_not_of(" \t\n\r");
+          if(start != std::string::npos && end != std::string::npos) {
+            skill_name = trimmed.substr(start, end - start + 1);
+          } else if(!trimmed.empty()) {
+            skill_name = trimmed;
+          }
+        }
+
+        if(skill_name.empty()) {
+          continue;
+        }
+
+        // Create skill task message
+        MMAgentMsgQue::Message skill_message;
+        skill_message.message_id = "skill-" + skill_name + "-" + message.message_id;
+        skill_message.metadata["task_type"] = "skill";
+        skill_message.metadata["skill_name"] = skill_name;
+        skill_message.metadata["coordinator_task_id"] = task->get_task_id();  // Link skill to coordinator
+        skill_message.metadata["session_id"] = session->get_session_id();
+
+        // Get prompt from databus (set by coordinator workflow)
+        DataVariant prompt_value;
+        if(get_data("prompt", prompt_value)) {
+          if(const auto* text = std::get_if<std::string>(&prompt_value)) {
+            skill_message.content = *text;
+            skill_message.metadata["prompt"] = *text;
+          }
+        }
+
+        // Find skill template and build runtime task
+        auto skill_template = find_skill_template_task(session, skill_name);
+        if(skill_template) {
+          auto skill_task = build_runtime_task(session, skill_template, skill_message);
+          if(skill_task) {
+            // Store coordinator task ID so skill can notify coordinator when done
+            // This is used for skill -> coordinator response routing
+            skill_task->set_parameter("coordinator_task_id", task->get_task_id());
+
+            // Set source_task_id to coordinator task so workflow completion
+            // triggers coordinator's data_exchange (which will check for skill response)
+            skill_task->set_parameter("source_task_id", task->get_task_id());
+            skill_task->set_parameter("session_id", session->get_session_id());
+
+            session->add_task(skill_task);
+
+            // Add to generated tasks queue for runtime scheduling
+            {
+              std::lock_guard<std::mutex> lock(generated_tasks_mutex_);
+              generated_tasks_.push(skill_task);
+            }
+
+            Logger::instance().info_f("[COORDINATORDataExchange] Created skill task: %s for skill: %s",
+                                      skill_task->get_task_id().c_str(), skill_name.c_str());
+          }
+        } else {
+          Logger::instance().warn_f("[COORDINATORDataExchange] Skill template not found: %s", skill_name.c_str());
+        }
+      }
+      return;  // Don't send response to client yet, wait for skill
+    }
+
+    // No selected_skills - coordinator is done, send response to client
+    Logger::instance().info_f("[COORDINATORDataExchange] Coordinator completed without skill, sending response");
+
+    MMAgentMsgQue::Message response_message = message;
     DataVariant response_value;
     if(get_data("response", response_value)) {
       if(const auto* text = std::get_if<std::string>(&response_value)) {
         response_message.content = *text;
-        Logger::instance().info_f("[COORDINATORDataExchange] Got response from databus: %s", text->c_str());
       }
-    } else {
-      // Response not found in databus, try to get from message content
-      Logger::instance().warn_f("[COORDINATORDataExchange] Response not found in databus, using message content");
     }
 
     if(session_router_) {
-      Logger::instance().info_f("[COORDINATORDataExchange] Enqueueing response, content='%s'", response_message.content.c_str());
       session_router_->enqueue_response_message(response_message);
     }
     return;
   }
 
-  if(auto coordinator_task = session->get_coordinator_task(); coordinator_task) {
-    MMAgentMsgQue::Message coordinator_data = message;
-    coordinator_data.metadata["task_type"] = "coordinator";
-    coordinator_task->enqueue_data_exchange_message(coordinator_data);
+  if(task->get_task_type() == "skill") {
+    // Skill workflow completed - notify coordinator
+    Logger::instance().info_f("[SKILLDataExchange] Skill workflow completed: %s", task->get_task_id().c_str());
+
+    // Get coordinator task ID from skill task parameters
+    std::string coordinator_task_id;
+    if(task->get_parameter("coordinator_task_id", coordinator_task_id) && !coordinator_task_id.empty()) {
+      // Find coordinator task
+      auto coordinator_task = session->get_task(coordinator_task_id);
+      if(coordinator_task) {
+        // Send response to coordinator's response_queue
+        MMAgentMsgQue::Message coordinator_response;
+        coordinator_response.message_id = task->get_task_id();
+        coordinator_response.sender_id = task->get_task_id();
+        coordinator_response.receiver_id = coordinator_task_id;
+        coordinator_response.metadata["task_type"] = "skill_response";
+        coordinator_response.metadata["skill_name"] = task->get_skill_name();
+        coordinator_response.metadata["message_type"] = "skill_completed";
+
+        // The actual response content is already in databus
+        coordinator_response.content = "skill_completed";
+
+        coordinator_task->enqueue_response_message(coordinator_response);
+
+        // Also trigger coordinator's data exchange to process the response
+        MMAgentMsgQue::Message trigger_message;
+        trigger_message.message_id = "trigger-" + task->get_task_id();
+        trigger_message.metadata["task_type"] = "coordinator";
+        trigger_message.metadata["trigger_type"] = "skill_response";
+        coordinator_task->enqueue_data_exchange_message(trigger_message);
+
+        Logger::instance().info_f("[SKILLDataExchange] Notified coordinator %s of skill completion",
+                                  coordinator_task_id.c_str());
+      } else {
+        Logger::instance().warn_f("[SKILLDataExchange] Coordinator task not found: %s", coordinator_task_id.c_str());
+      }
+    } else {
+      Logger::instance().warn_f("[SKILLDataExchange] No coordinator_task_id set for skill task");
+    }
+    return;
   }
 }
 

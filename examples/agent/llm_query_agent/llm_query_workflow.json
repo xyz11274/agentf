@@ -1,0 +1,38 @@
+{
+  "id": "llm-query-workflow",
+  "version": "1.0",
+  "name": "LLM Query Workflow",
+  "description": "Query LLM with user prompt - config node -> llm node pipeline",
+  "nodes": [
+    {
+      "id": "config_node",
+      "name": "Config Node",
+      "type": "task",
+      "execution_mode": "python_script",
+      "command": "./config_node.py",
+      "outputs": ["api_key", "model", "base_url"],
+      "json_output": true,
+      "timeout_ms": 5000
+    },
+    {
+      "id": "llm_node",
+      "name": "LLM Query Node",
+      "type": "task",
+      "execution_mode": "so_library",
+      "command": "lib/libllm_query_node.so",
+      "function_name": "llm_query_node",
+      "inputs": ["api_key", "model", "base_url", "prompt"],
+      "outputs": ["status", "response", "error"],
+      "timeout_ms": 120000
+    }
+  ],
+  "edges": [
+    {
+      "id": "config_to_llm",
+      "source": "config_node",
+      "target": "llm_node",
+      "source_outputs": ["api_key", "model", "base_url"],
+      "target_inputs": ["api_key", "model", "base_url"]
+    }
+  ]
+}

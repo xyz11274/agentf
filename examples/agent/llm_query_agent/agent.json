@@ -1,0 +1,52 @@
+{
+  "name": "LLMQueryAgent",
+  "version": "1.0.0",
+  "description": "LLM query agent that responds to user prompts using AI",
+  "session_pool_size": 1,
+  "tasks": [
+    {
+      "id": 0,
+      "type": "contextupdater",
+      "description": "Update agent context",
+      "workflow_file": "llm_query_workflow.json",
+      "workflow_pool_size": 1
+    }
+  ],
+  "sessions": [
+    {
+      "id": 0,
+      "description": "LLM Query session template",
+      "task_count": 3,
+      "tasks": [
+        {
+          "id": 0,
+          "type": "dispatcher",
+          "description": "Dispatch user requests",
+          "workflow_file": "dispatcher_workflow.json",
+          "workflow_pool_size": 1
+        },
+        {
+          "id": 1,
+          "type": "coordinator",
+          "description": "Coordinate LLM queries",
+          "workflow_file": "coordinator_workflow.json",
+          "workflow_pool_size": 1
+        },
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "LLM query skill",
+          "workflow_file": "llm_query_workflow.json",
+          "skill": {
+            "name": "llm-query-skill",
+            "config_dir": "skills/llm_query",
+            "instance_pool_size": 1
+          },
+          "workflow_pool_size": 1
+        }
+      ]
+    }
+  ],
+  "max_workflows": 10,
+  "max_concurrent_workflows": 5
+}

@@ -1,0 +1,32 @@
+{
+  "name": "llm-query-agent",
+  "version": "1.0.0",
+  "package_type": "release",
+  "agent_version": "1.0.0",
+  "description": "LLM query agent that responds to user prompts using AI",
+  "author": "AgentFlow Team",
+  "workflows": [
+    "llm_query_workflow.json",
+    "dispatcher_workflow.json",
+    "coordinator_workflow.json"
+  ],
+  "coordinator_workflow": "llm-query-coordinator-workflow",
+  "task_workflows": {
+    "dispatcher": "llm-query-dispatcher-workflow",
+    "coordinator": "llm-query-coordinator-workflow",
+    "skill:llm-query-skill": "llm-query-workflow"
+  },
+  "metadata": {
+    "type": "example",
+    "category": "llm",
+    "tags": ["llm", "ai", "query", "openai-compatible"]
+  },
+  "dependencies": {
+    "llm-query": ">=0.1.0"
+  },
+  "environment_variables": {
+    "LLM_API_KEY": "Required: API key for LLM service",
+    "LLM_MODEL": "Optional: Model name (default: qwen3.5-plus)",
+    "LLM_BASE_URL": "Optional: API base URL (default: Alibaba Cloud DashScope)"
+  }
+}
