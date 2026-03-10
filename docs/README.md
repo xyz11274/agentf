@@ -38,6 +38,13 @@
 |------|------|
 | **[REFACTORING.md](REFACTORING.md)** | 代码重构记录和说明 |
 
+### 示例与集成文档
+
+| 文档 | 用途 |
+|------|------|
+| **[multi-session-chat-example.md](multi-session-chat-example.md)** | 多语言 `multi_session_chat` 示例拆解 |
+| **[openjiuwen-agentflow-example.md](openjiuwen-agentflow-example.md)** | Python-only + openJiuwen 兼容层集成示例说明 |
+
 ---
 
 ## 快速导航
@@ -172,9 +179,10 @@
 
 ---
 
-**最后更新**：2026 年 2 月 28 日
+**最后更新**：2026 年 3 月 10 日
 **维护者**：@DanielKernel
 **变更记录**：
+- 2026-03-10: 补充 multi_session_chat / openjiuwen 示例文档入口，刷新目录导航
 - 2026-02-28: 同步刷新 MMNode 执行引擎下沉到 Worker、Coordinator task0 默认处理与 `coordinator_workflow` 配置说明
 - 2026-02-21: 刷新 ARCHITECTURE.md 与 REFACTORING.md，补充 MMAgent/Runtime/MMWorkflow 当日优化落地与下一步优化方向
 - 2026-02-18: 合并 roadmap.md 和 code-review.md 到 planning.md，合并 dependencies.md 到 development.md

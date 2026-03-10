@@ -66,6 +66,13 @@ agent->initialize();
 agent->start();
 ```
 
+### 示例与验证
+
+- `examples/agent/basic_agent`：最小可运行 Agent 包示例，适合快速熟悉 package 结构。
+- `examples/agent/echo_agent`：演示消息路由到 skill workflow 并返回响应，E2E 覆盖见 `E2EEchoAgent`。
+- `examples/openjiuwen_multi_session_chat`：Python-only 多轮对话示例，内置 openJiuwen 兼容层，详细说明见 `docs/openjiuwen-agentflow-example.md`，E2E 覆盖见 `E2EOpenJiuwenMultiSessionChat`。
+- `examples/features/interactive_runner_demo.md`：说明消息驱动 `InteractiveRunner` 的执行与结果收集模型，黑盒覆盖见 `E2EInteractiveRunner`。
+
 ## 📚 完整文档
 
 ### 📖 新用户入门
@@ -106,7 +113,7 @@ AgentFlow/
 │   └── adapter/         # 三方适配器实现
 ├── tests/               # 测试
 │   ├── unit/            # 单元测试
-│   └── functional/      # 功能测试
+│   └── e2e/             # 端到端 / 黑盒测试
 ├── examples/            # 示例
 ├── docs/                # 文档
 └── build/               # 构建输出和CMake配置
@@ -166,5 +173,5 @@ AgentFlow/
 ---
 
 **维护者**: @DanielKernel
-**文档最后更新**: 2026-02-18
+**文档最后更新**: 2026-03-10
 **快速设置**: `./build.sh build && ./build.sh test` 验证所有组件是否正确安装

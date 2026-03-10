@@ -1,6 +1,6 @@
 /**
  * @file test_echo_agent.cpp
- * @brief Manual test for Echo Agent - validates message routing and response
+ * @brief E2E smoke test for Echo Agent message routing and response delivery
  */
 
 #include <iostream>
@@ -28,9 +28,7 @@ std::string find_echo_agent_path() {
         // From build/tests/e2e directory
         "../../examples/agent/echo_agent",
         // From build/tests directory
-        "../../../examples/agent/echo_agent",
-        // Absolute path check
-        "/root/projects/AgentFlow/examples/agent/echo_agent"
+        "../../../examples/agent/echo_agent"
     };
 
     for (const auto& path : search_paths) {

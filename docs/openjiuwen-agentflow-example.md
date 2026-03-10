@@ -18,7 +18,6 @@ examples/openjiuwen_multi_session_chat/
     package.json
     *.json
     prompts/
-    runtime/
   nodes/python/
     compat/
       runtime_bridge.py
@@ -201,6 +200,10 @@ bash examples/openjiuwen_multi_session_chat/tests/auto_dialog_test.sh
 - “总结上一条消息”能从会话历史得到正确回复
 - 不支持的天气问题不会被日期 skill 或错误聚合结果污染
 - 历史消息会正确落盘
+
+该示例对应的仓库级 CTest 名称为 `E2EOpenJiuwenMultiSessionChat`，可通过
+`ctest --test-dir build -R E2EOpenJiuwenMultiSessionChat --output-on-failure`
+单独执行。
 
 ## 与原 `multi_session_chat` 的关系
 
