@@ -1,4 +1,5 @@
 {
+  "_comment": "DEPRECATED: This workflow is no longer used. Dispatcher now uses built-in next_skills mechanism.",
   "id": "echo-dispatcher-workflow",
   "version": "1.0",
   "name": "Echo Dispatcher",

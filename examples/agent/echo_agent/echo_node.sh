@@ -3,9 +3,9 @@
 # Input: AF_INPUT environment variable
 # Output: JSON to stdout
 #
-# For dispatcher task: output selected_skills to trigger coordinator
+# For skill task: output skill result with response
 # For coordinator task: output final response
-# For skill task: output skill result
+# Note: Dispatcher now uses built-in next_skills mechanism (no workflow execution)
 
 set -e
 
@@ -23,8 +23,8 @@ else
 fi
 
 # Output JSON result
-# Include 'selected_skills' for dispatcher workflow to trigger coordinator
-# The framework checks if selected_skills is set to route message to coordinator
-echo "{\"status\": \"SUCCESS\", \"selected_skills\": \"echo-skill\", \"response\": \"${RESPONSE}\", \"input\": \"${INPUT}\"}"
+# For skill: output 'response' field (framework forwards to Coordinator)
+# For coordinator: output final response
+echo "{\"status\": \"SUCCESS\", \"response\": \"${RESPONSE}\", \"input\": \"${INPUT}\"}"
 
 exit 0

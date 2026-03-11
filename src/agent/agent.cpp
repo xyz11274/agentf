@@ -767,6 +767,33 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
   task->register_dispatch_record(message);
   std::vector<std::shared_ptr<MMAgentTask>> generated;
 
+  // ============================================================
+  // DISPATCHER WITH PRE-CONFIGURED next_skills (no workflow)
+  // ============================================================
+  // If dispatcher has pre-configured next_skills and no workflow_file,
+  // directly launch skill tasks without creating a runtime task
+  if(task->get_task_type() == "dispatcher") {
+    const auto& configured_next_skills = task->get_next_skills();
+    const auto& workflow_file = task->get_workflow_file();
+
+    if(!configured_next_skills.empty() && workflow_file.empty()) {
+      Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Dispatcher with pre-configured next_skills, launching %d skills",
+                                static_cast<int>(configured_next_skills.size()));
+
+      // Launch skills based on pre-configured next_skills
+      for(const auto& skill_name : configured_next_skills) {
+        if(!task->can_launch_more_skills()) {
+          Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Reached max concurrent skills limit");
+          break;
+        }
+        if(launch_skill_task(session, skill_name, message, task)) {
+          Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Launched skill: %s", skill_name.c_str());
+        }
+      }
+      return;  // Skip runtime task creation
+    }
+  }
+
   // Note: skill tasks are NOT created here anymore.
   // They will be created when coordinator workflow completes (in handle_task_data_exchange).
   // This ensures proper skill -> coordinator response flow.
@@ -848,6 +875,79 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
   // DISPATCHER HANDLING
   // ============================================================
   if(task->get_task_type() == "dispatcher") {
+    // Check if this is a skill completion message
+    // Skill completions have source_task_id pointing to this dispatcher
+    // but workflow_id from the skill workflow
+    bool is_skill_completion = false;
+    std::string skill_name;
+    std::string source_workflow_id;
+
+    if(message.metadata.count("workflow_id")) {
+      source_workflow_id = message.metadata.at("workflow_id");
+    }
+    if(message.metadata.count("skill_name")) {
+      skill_name = message.metadata.at("skill_name");
+      is_skill_completion = true;
+    }
+
+    // Also check if source_task_id indicates this came from a skill task
+    if(message.metadata.count("source_task_id")) {
+      const auto& source_id = message.metadata.at("source_task_id");
+      // If source_task_id contains "skill" marker, it's a skill completion
+      if(source_id.find("_skill-") != std::string::npos ||
+         source_id.find("skill-") != std::string::npos) {
+        is_skill_completion = true;
+      }
+    }
+
+    if(is_skill_completion) {
+      // Skill completed - forward response to coordinator and decrement skill count
+      Logger::instance().info_f("[DISPATCHERDataExchange] Skill completion detected, skill=%s",
+                               skill_name.empty() ? "unknown" : skill_name.c_str());
+
+      // Decrement skill count
+      if(!skill_name.empty()) {
+        task->on_skill_completed(skill_name);
+      } else {
+        // Fallback: try to extract skill name from workflow_id
+        task->on_skill_completed("echo-skill");  // default for echo agent
+      }
+
+      // Forward response to coordinator
+      if(auto coordinator_task = session->get_coordinator_task(); coordinator_task) {
+        MMAgentMsgQue::Message response_message = message;
+        response_message.metadata["task_type"] = "coordinator";
+        response_message.metadata["source_task_type"] = "dispatcher";
+        if(!skill_name.empty()) {
+          response_message.metadata["skill_name"] = skill_name;
+        }
+
+        // Get response from databus
+        DataVariant response_value;
+        if(get_data("response", response_value)) {
+          if(const auto* text = std::get_if<std::string>(&response_value)) {
+            response_message.content = *text;
+            Logger::instance().info_f("[DISPATCHERDataExchange] Got skill response from databus: %s",
+                                     text->c_str());
+          }
+        }
+
+        coordinator_task->enqueue_response_message(response_message);
+
+        // Trigger coordinator's data exchange
+        MMAgentMsgQue::Message trigger_message;
+        trigger_message.message_id = "trigger-" + message.message_id;
+        trigger_message.metadata["task_type"] = "coordinator";
+        trigger_message.metadata["trigger_type"] = "skill_response";
+        coordinator_task->enqueue_data_exchange_message(trigger_message);
+
+        Logger::instance().info_f("[DISPATCHERDataExchange] Forwarded skill response to coordinator");
+      } else {
+        Logger::instance().warn_f("[DISPATCHERDataExchange] No coordinator task found");
+      }
+      return;
+    }
+
     if(message.content != "workflow_completed") {
       Logger::instance().info_f(
           "[DISPATCHERDataExchange] Ignoring non-complete event, content='%s'",
@@ -855,10 +955,12 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       return;
     }
 
-    // Check if dispatcher has pre-configured next_skills
+    // Check if dispatcher has pre-configured next_skills (and has its own workflow)
+    // This is for dispatcher WITH workflow - launches skills after workflow completes
     const auto& configured_next_skills = task->get_next_skills();
-    if(!configured_next_skills.empty()) {
-      Logger::instance().info_f("[DISPATCHERDataExchange] Using pre-configured next_skills, count=%d",
+    const auto& workflow_file = task->get_workflow_file();
+    if(!configured_next_skills.empty() && !workflow_file.empty()) {
+      Logger::instance().info_f("[DISPATCHERDataExchange] Using pre-configured next_skills after workflow, count=%d",
                                static_cast<int>(configured_next_skills.size()));
 
       // Launch skills based on pre-configured next_skills
