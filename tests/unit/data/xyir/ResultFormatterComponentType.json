@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "0.6",
+  "type": "ResultFormatter",
+  "version": "1.0",
+  "componentCatalog": "baseComponent",
+  "description": "Result formatter component for formatting calculation results",
+  "classInfo": {
+    "programLanguage": "shell",
+    "filePath": "./components/format_result.sh"
+  },
+  "inputs": [
+    {
+      "id": "result",
+      "type": "Float",
+      "description": "Calculation result to format"
+    },
+    {
+      "id": "operation",
+      "type": "String",
+      "description": "Operation type for display"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "formatted_output",
+      "type": "String",
+      "description": "Formatted result string"
+    }
+  ],
+  "configs": [
+    {
+      "id": "format_template",
+      "type": "String",
+      "description": "Template string for formatting output"
+    }
+  ]
+}

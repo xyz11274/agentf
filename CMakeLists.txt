@@ -240,6 +240,7 @@ set(AGENTFLOW_WORKFLOW_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/runtime/worker/exe_loader.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/edge/edge.cpp
     ${AGENTFLOW_SOURCE_DIR}/workflow/dsl/workflow_parser.cpp
+    ${AGENTFLOW_SOURCE_DIR}/workflow/dsl/dsl_adapter.cpp
     ${AGENTFLOW_VENDOR_DIR}/adapter/json/json_adapter_factory.cpp
 )
 
@@ -382,6 +383,10 @@ target_link_libraries(example_databus PRIVATE agentflow)
 # Storage example
 add_executable(example_storage ${AGENTFLOW_EXAMPLE_DIR}/features/storage_example.cpp)
 target_link_libraries(example_storage PRIVATE agentflow)
+
+# DSL Adapter example
+add_executable(example_dsl_adapter ${AGENTFLOW_EXAMPLE_DIR}/features/dsl_adapter_example.cpp)
+target_link_libraries(example_dsl_adapter PRIVATE agentflow)
 
 # Agent Runner - Standalone executable for loading and executing Agent packages
 add_executable(agent_runner
@@ -547,6 +552,7 @@ if(AGENTFLOW_BUILD_TESTS)
       ${AGENTFLOW_TEST_DIR}/unit/src/test_local_channel_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_runtime_master_worker_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_builtin_workflow_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_dsl_adapter_gtest.cpp
   )
   if(TARGET GTest::gtest)
     target_link_libraries(test_agentflow_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)

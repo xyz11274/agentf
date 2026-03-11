@@ -1,0 +1,66 @@
+{
+  "schemaVersion": "0.6",
+  "agentID": "MathAgent",
+  "agentVersion": "1.0.0",
+  "description": "A simple math agent that performs basic calculations",
+  "workflow": {
+    "schemaVersion": "0.6",
+    "workflowId": "math_workflow",
+    "workflowName": "Math Calculation Workflow",
+    "workflowVersion": "1.0",
+    "description": "Workflow for performing math operations",
+    "components": [
+      {
+        "id": "input_parser",
+        "type": "InputParser",
+        "typeVersion": "1.0",
+        "name": "Input Parser",
+        "inputs": {
+          "raw_input": "user query string"
+        },
+        "outputs": {
+          "operation": "add",
+          "operand1": 10,
+          "operand2": 20
+        }
+      },
+      {
+        "id": "calculator",
+        "type": "Calculator",
+        "typeVersion": "1.0",
+        "name": "Calculator",
+        "inputs": {
+          "operation": "${input_parser.operation}",
+          "operand1": "${input_parser.operand1}",
+          "operand2": "${input_parser.operand2}"
+        },
+        "outputs": {
+          "result": 0
+        }
+      },
+      {
+        "id": "result_formatter",
+        "type": "ResultFormatter",
+        "typeVersion": "1.0",
+        "name": "Result Formatter",
+        "inputs": {
+          "result": "${calculator.result}",
+          "operation": "${input_parser.operation}"
+        },
+        "outputs": {
+          "formatted_output": ""
+        }
+      }
+    ],
+    "connections": [
+      {
+        "source": {"componentId": "input_parser"},
+        "target": {"componentId": "calculator"}
+      },
+      {
+        "source": {"componentId": "calculator"},
+        "target": {"componentId": "result_formatter"}
+      }
+    ]
+  }
+}

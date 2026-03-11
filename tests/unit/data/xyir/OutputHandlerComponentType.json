@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "0.6",
+  "type": "OutputHandler",
+  "version": "1.0",
+  "componentCatalog": "baseComponent",
+  "description": "Output handler component for formatting final responses",
+  "classInfo": {
+    "programLanguage": "python",
+    "modulePath": "./handlers/output.py",
+    "className": "OutputHandler",
+    "filePath": "./handlers/output.py"
+  },
+  "inputs": [
+    {
+      "id": "processed_data",
+      "type": "String",
+      "description": "Processed data to output"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "response",
+      "type": "String",
+      "description": "Final response string"
+    }
+  ],
+  "configs": [
+    {
+      "id": "output_format",
+      "type": "String",
+      "description": "Output format: json, text, markdown"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "0.6",
+  "type": "NormalProcessor",
+  "version": "1.0",
+  "componentCatalog": "baseComponent",
+  "description": "Normal processor component for standard-priority request processing",
+  "classInfo": {
+    "programLanguage": "python",
+    "modulePath": "./processors/normal_processor.py",
+    "className": "NormalProcessor",
+    "filePath": "./processors/normal_processor.py"
+  },
+  "inputs": [
+    {
+      "id": "data",
+      "type": "String",
+      "description": "Input data to process"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "result",
+      "type": "String",
+      "description": "Processing result"
+    }
+  ],
+  "configs": [
+    {
+      "id": "timeout_ms",
+      "type": "Int",
+      "description": "Processing timeout in milliseconds",
+      "constraint": {"min": 100, "max": 60000}
+    }
+  ]
+}

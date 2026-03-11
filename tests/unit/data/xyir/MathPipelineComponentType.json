@@ -1,0 +1,58 @@
+{
+  "schemaVersion": "0.6",
+  "type": "MathPipeline",
+  "version": "1.0",
+  "componentCatalog": "compositeComponent",
+  "description": "Composite component that chains input parsing, calculation, and result formatting",
+  "classInfo": {
+    "programLanguage": "python",
+    "modulePath": "./components/math_pipeline.py",
+    "className": "MathPipeline",
+    "filePath": "./components/math_pipeline.py"
+  },
+  "inputs": [
+    {
+      "id": "raw_input",
+      "type": "String",
+      "description": "Raw user input string"
+    },
+    {
+      "id": "config",
+      "type": "Map",
+      "description": "Configuration options",
+      "schema": [
+        {"id": "precision", "type": "Int"},
+        {"id": "format", "type": "String"}
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "id": "formatted_output",
+      "type": "String",
+      "description": "Formatted calculation result"
+    },
+    {
+      "id": "metrics",
+      "type": "Map",
+      "description": "Processing metrics",
+      "schema": [
+        {"id": "processing_time_ms", "type": "Int"},
+        {"id": "operation_count", "type": "Int"}
+      ]
+    }
+  ],
+  "configs": [
+    {
+      "id": "enable_logging",
+      "type": "Boolean",
+      "description": "Enable detailed logging"
+    },
+    {
+      "id": "max_retries",
+      "type": "Int",
+      "description": "Maximum retry attempts",
+      "constraint": {"min": 0, "max": 5}
+    }
+  ]
+}
