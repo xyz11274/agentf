@@ -22,8 +22,8 @@
           "id": 0,
           "type": "dispatcher",
           "description": "Dispatch user requests",
-          "workflow_file": "dispatcher_workflow.json",
-          "workflow_pool_size": 1
+          "next_skills": ["echo-skill"],
+          "max_concurrent_skills": 1
         },
         {
           "id": 1,

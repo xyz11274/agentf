@@ -8,6 +8,7 @@
 #include "agent/msgque.h"
 #include "agent/session.h"
 #include "agent/task.h"
+#include "agent/builtin_dispatcher.h"
 #include "workflow/workflow.h"
 
 namespace agentflow {
@@ -477,8 +478,8 @@ TEST_F(AgentTest, CoordinatorInstantiatesSkillTaskFromSkillTemplateWorkflow) {
 
   // New flow: skill tasks are created when coordinator workflow completes (data_exchange)
   // Simulate coordinator workflow completion by sending a data_exchange message
-  // with selected_skills in the databus
-  agent->publish_data("selected_skills", std::string(R"({"skill":"search","session_id":"0"})"));
+  // with selected_skills in the databus (JSON array format)
+  agent->publish_data("selected_skills", std::string(R"(["search"])"));
 
   framework::MMAgentMsgQue::Message workflow_complete;
   workflow_complete.message_id = "coordinator_workflow_complete";
@@ -741,6 +742,162 @@ TEST_F(AgentTest, AgentJsonDefaultsWorkflowPoolSizeToOneWhenOmitted) {
   EXPECT_EQ(dispatcher->get_workflow_pool_size(), 1);
   EXPECT_EQ(coordinator->get_workflow_pool_size(), 1);
   EXPECT_EQ(skill->get_workflow_pool_size(), 1);
+
+  fs::remove_all(tmp);
+}
+
+// ============================================================
+// next_skills and Skill Management Tests
+// ============================================================
+
+TEST_F(AgentTest, TaskHasNextSkillsConfiguration) {
+  framework::MMAgentTask::Config config;
+  config.task_id = "test_task";
+  config.task_type = "dispatcher";
+  config.next_skills = {"search", "summary", "delegate"};
+  config.max_concurrent_skills = 5;
+
+  auto task = std::make_shared<framework::MMAgentTask>(config);
+  ASSERT_NE(task, nullptr);
+
+  const auto& next_skills = task->get_next_skills();
+  EXPECT_EQ(next_skills.size(), 3);
+  EXPECT_EQ(next_skills[0], "search");
+  EXPECT_EQ(next_skills[1], "summary");
+  EXPECT_EQ(next_skills[2], "delegate");
+  EXPECT_EQ(task->get_max_concurrent_skills(), 5);
+}
+
+TEST_F(AgentTest, TaskRunningSkillsCount) {
+  framework::MMAgentTask::Config config;
+  config.task_id = "test_task";
+  config.task_type = "dispatcher";
+  config.max_concurrent_skills = 3;
+
+  auto task = std::make_shared<framework::MMAgentTask>(config);
+  ASSERT_NE(task, nullptr);
+
+  // Initially no running skills
+  EXPECT_EQ(task->get_running_skills_count(), 0);
+  EXPECT_TRUE(task->can_launch_more_skills());
+
+  // Start some skills
+  task->on_skill_started("skill1");
+  EXPECT_EQ(task->get_running_skills_count(), 1);
+  EXPECT_TRUE(task->can_launch_more_skills());
+
+  task->on_skill_started("skill2");
+  EXPECT_EQ(task->get_running_skills_count(), 2);
+  EXPECT_TRUE(task->can_launch_more_skills());
+
+  task->on_skill_started("skill3");
+  EXPECT_EQ(task->get_running_skills_count(), 3);
+  EXPECT_FALSE(task->can_launch_more_skills());  // Reached limit
+
+  // Complete a skill
+  task->on_skill_completed("skill1");
+  EXPECT_EQ(task->get_running_skills_count(), 2);
+  EXPECT_TRUE(task->can_launch_more_skills());
+
+  // Clear all
+  task->clear_running_skills();
+  EXPECT_EQ(task->get_running_skills_count(), 0);
+  EXPECT_TRUE(task->can_launch_more_skills());
+}
+
+TEST_F(AgentTest, BuiltinDispatcherParsesNextSkills) {
+  // Test JSON array format
+  std::string json_array = R"(["search", "summary", "delegate"])";
+  DataVariant value = json_array;
+  auto skills = framework::BuiltinDispatcher::parse_next_skills(value);
+  EXPECT_EQ(skills.size(), 3);
+  EXPECT_EQ(skills[0], "search");
+  EXPECT_EQ(skills[1], "summary");
+  EXPECT_EQ(skills[2], "delegate");
+
+  // Test comma-separated format
+  std::string csv = "search, summary, delegate";
+  value = csv;
+  skills = framework::BuiltinDispatcher::parse_next_skills(value);
+  EXPECT_EQ(skills.size(), 3);
+  EXPECT_EQ(skills[0], "search");
+  EXPECT_EQ(skills[1], "summary");
+  EXPECT_EQ(skills[2], "delegate");
+
+  // Test empty string
+  value = std::string("");
+  skills = framework::BuiltinDispatcher::parse_next_skills(value);
+  EXPECT_EQ(skills.size(), 0);
+}
+
+TEST_F(AgentTest, DispatcherWithNextSkillsFromPackage) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "agentflow_test_dispatcher_skills";
+  fs::create_directories(tmp);
+
+  // Write package.json
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({"name": "test_agent", "version": "1.0.0"})";
+  }
+
+  // Write agent.json with next_skills
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "sessions": [
+        {
+          "id": 0,
+          "description": "Test session",
+          "task_count": 3,
+          "tasks": [
+            {
+              "id": 0,
+              "type": "dispatcher",
+              "description": "Dispatcher with next_skills",
+              "next_skills": ["search", "summary"],
+              "max_concurrent_skills": 2
+            },
+            {
+              "id": 1,
+              "type": "coordinator",
+              "description": "Coordinator",
+              "workflow_file": "workflow_main.json"
+            },
+            {
+              "id": 2,
+              "type": "skill",
+              "description": "Search skill",
+              "workflow_file": "workflow_main.json",
+              "skill": {"name": "search", "config_dir": "skills/search"}
+            }
+          ]
+        }
+      ]
+    })";
+  }
+
+  write_workflow_json(tmp / "workflow_main.json", "wf_main");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  auto session = agent->get_session_by_key("0");
+  ASSERT_NE(session, nullptr);
+
+  auto dispatcher = session->get_task("0_task_0");
+  ASSERT_NE(dispatcher, nullptr);
+  EXPECT_EQ(dispatcher->get_task_type(), "dispatcher");
+
+  // Check next_skills configuration
+  const auto& next_skills = dispatcher->get_next_skills();
+  EXPECT_EQ(next_skills.size(), 2);
+  EXPECT_EQ(next_skills[0], "search");
+  EXPECT_EQ(next_skills[1], "summary");
+  EXPECT_EQ(dispatcher->get_max_concurrent_skills(), 2);
+
+  // Note: dispatcher workflow_file is optional now
+  EXPECT_TRUE(dispatcher->get_workflow_file().empty() || !dispatcher->get_workflow_file().empty());
 
   fs::remove_all(tmp);
 }

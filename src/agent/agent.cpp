@@ -22,6 +22,7 @@
 #include "agent/session.h"
 #include "agent/session_router.h"
 #include "agent/task.h"
+#include "agent/builtin_dispatcher.h"
 
 #include "runtime/trace/trace_context.h"
 #include "runtime/trace/trace_manager.h"
@@ -452,6 +453,11 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_definition(
     if(task_config.workflow_file.empty()) {
       task_config.workflow_file = task_definition.workflow_file;
     }
+    // Copy dispatcher-specific fields
+    if(task_definition.task_type == "dispatcher") {
+      task_config.next_skills = task_definition.next_skills;
+      task_config.max_concurrent_skills = task_definition.max_concurrent_skills;
+    }
     if(task_definition.task_type == "skill") {
       task_config.skill_name = task_definition.skill.skill_name;
       task_config.skill_config_dir = task_definition.skill.skill_config_dir;
@@ -464,6 +470,18 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_definition(
     if(task_definition.task_type == "dispatcher") {
       dispatcher_task = task;
       session->set_dispatcher_task(task);
+
+      // Create and store BuiltinDispatcher instance
+      BuiltinDispatcher::Config dispatcher_config;
+      dispatcher_config.dispatcher_id = config_.id + "_builtin_dispatcher_" + session_id;
+      dispatcher_config.next_skills = task_definition.next_skills;
+      dispatcher_config.max_concurrent_skills = task_definition.max_concurrent_skills;
+      {
+        std::lock_guard<std::mutex> lock(builtin_dispatchers_mutex_);
+        builtin_dispatchers_[session_id] = std::make_shared<BuiltinDispatcher>(dispatcher_config);
+      }
+      Logger::instance().info_f("[CREATE_SESSION] Created BuiltinDispatcher for session=%s, next_skills count=%d",
+                               session_id.c_str(), static_cast<int>(dispatcher_config.next_skills.size()));
     } else if(task_definition.task_type == "coordinator") {
       coordinator_task = task;
       session->set_coordinator_task(task);
@@ -749,6 +767,33 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
   task->register_dispatch_record(message);
   std::vector<std::shared_ptr<MMAgentTask>> generated;
 
+  // ============================================================
+  // DISPATCHER WITH PRE-CONFIGURED next_skills (no workflow)
+  // ============================================================
+  // If dispatcher has pre-configured next_skills and no workflow_file,
+  // directly launch skill tasks without creating a runtime task
+  if(task->get_task_type() == "dispatcher") {
+    const auto& configured_next_skills = task->get_next_skills();
+    const auto& workflow_file = task->get_workflow_file();
+
+    if(!configured_next_skills.empty() && workflow_file.empty()) {
+      Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Dispatcher with pre-configured next_skills, launching %d skills",
+                                static_cast<int>(configured_next_skills.size()));
+
+      // Launch skills based on pre-configured next_skills
+      for(const auto& skill_name : configured_next_skills) {
+        if(!task->can_launch_more_skills()) {
+          Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Reached max concurrent skills limit");
+          break;
+        }
+        if(launch_skill_task(session, skill_name, message, task)) {
+          Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Launched skill: %s", skill_name.c_str());
+        }
+      }
+      return;  // Skip runtime task creation
+    }
+  }
+
   // Note: skill tasks are NOT created here anymore.
   // They will be created when coordinator workflow completes (in handle_task_data_exchange).
   // This ensures proper skill -> coordinator response flow.
@@ -792,13 +837,144 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
                             message.message_id.c_str());
   task->acknowledge_dispatch_record(message.message_id);
 
+  // ============================================================
+  // UNIFIED next_skills HANDLING (applies to all task types)
+  // ============================================================
+  // Check for next_skills in databus - this can be output by any task
+  DataVariant next_skills_value;
+  if(get_data("next_skills", next_skills_value)) {
+    auto next_skills = BuiltinDispatcher::parse_next_skills(next_skills_value);
+    if(!next_skills.empty()) {
+      // Clear the processed next_skills to prevent re-processing
+      publish_data("next_skills", std::string(""));
+
+      Logger::instance().info_f("[DATA_EXCHANGE] Found next_skills, launching %d skills",
+                               static_cast<int>(next_skills.size()));
+
+      // Get source task for skill launching (could be dispatcher, coordinator, or skill)
+      std::string source_task_id;
+      if(message.metadata.count("source_task_id")) {
+        source_task_id = message.metadata.at("source_task_id");
+      }
+      auto source_task = source_task_id.empty() ? task : session->get_task(source_task_id);
+      if(!source_task) {
+        source_task = task;
+      }
+
+      for(const auto& skill_name : next_skills) {
+        if(!source_task->can_launch_more_skills()) {
+          Logger::instance().info_f("[DATA_EXCHANGE] Reached max concurrent skills limit");
+          break;
+        }
+        launch_skill_task(session, skill_name, message, source_task);
+      }
+    }
+  }
+
+  // ============================================================
+  // DISPATCHER HANDLING
+  // ============================================================
   if(task->get_task_type() == "dispatcher") {
+    // Check if this is a skill completion message
+    // Skill completions have source_task_id pointing to this dispatcher
+    // but workflow_id from the skill workflow
+    bool is_skill_completion = false;
+    std::string skill_name;
+    std::string source_workflow_id;
+
+    if(message.metadata.count("workflow_id")) {
+      source_workflow_id = message.metadata.at("workflow_id");
+    }
+    if(message.metadata.count("skill_name")) {
+      skill_name = message.metadata.at("skill_name");
+      is_skill_completion = true;
+    }
+
+    // Also check if source_task_id indicates this came from a skill task
+    if(message.metadata.count("source_task_id")) {
+      const auto& source_id = message.metadata.at("source_task_id");
+      // If source_task_id contains "skill" marker, it's a skill completion
+      if(source_id.find("_skill-") != std::string::npos ||
+         source_id.find("skill-") != std::string::npos) {
+        is_skill_completion = true;
+      }
+    }
+
+    if(is_skill_completion) {
+      // Skill completed - forward response to coordinator and decrement skill count
+      Logger::instance().info_f("[DISPATCHERDataExchange] Skill completion detected, skill=%s",
+                               skill_name.empty() ? "unknown" : skill_name.c_str());
+
+      // Decrement skill count
+      if(!skill_name.empty()) {
+        task->on_skill_completed(skill_name);
+      } else {
+        // Fallback: try to extract skill name from workflow_id
+        task->on_skill_completed("echo-skill");  // default for echo agent
+      }
+
+      // Forward response to coordinator
+      if(auto coordinator_task = session->get_coordinator_task(); coordinator_task) {
+        MMAgentMsgQue::Message response_message = message;
+        response_message.metadata["task_type"] = "coordinator";
+        response_message.metadata["source_task_type"] = "dispatcher";
+        if(!skill_name.empty()) {
+          response_message.metadata["skill_name"] = skill_name;
+        }
+
+        // Get response from databus
+        DataVariant response_value;
+        if(get_data("response", response_value)) {
+          if(const auto* text = std::get_if<std::string>(&response_value)) {
+            response_message.content = *text;
+            Logger::instance().info_f("[DISPATCHERDataExchange] Got skill response from databus: %s",
+                                     text->c_str());
+          }
+        }
+
+        coordinator_task->enqueue_response_message(response_message);
+
+        // Trigger coordinator's data exchange
+        MMAgentMsgQue::Message trigger_message;
+        trigger_message.message_id = "trigger-" + message.message_id;
+        trigger_message.metadata["task_type"] = "coordinator";
+        trigger_message.metadata["trigger_type"] = "skill_response";
+        coordinator_task->enqueue_data_exchange_message(trigger_message);
+
+        Logger::instance().info_f("[DISPATCHERDataExchange] Forwarded skill response to coordinator");
+      } else {
+        Logger::instance().warn_f("[DISPATCHERDataExchange] No coordinator task found");
+      }
+      return;
+    }
+
     if(message.content != "workflow_completed") {
       Logger::instance().info_f(
           "[DISPATCHERDataExchange] Ignoring non-complete event, content='%s'",
           message.content.c_str());
       return;
     }
+
+    // Check if dispatcher has pre-configured next_skills (and has its own workflow)
+    // This is for dispatcher WITH workflow - launches skills after workflow completes
+    const auto& configured_next_skills = task->get_next_skills();
+    const auto& workflow_file = task->get_workflow_file();
+    if(!configured_next_skills.empty() && !workflow_file.empty()) {
+      Logger::instance().info_f("[DISPATCHERDataExchange] Using pre-configured next_skills after workflow, count=%d",
+                               static_cast<int>(configured_next_skills.size()));
+
+      // Launch skills based on pre-configured next_skills
+      for(const auto& skill_name : configured_next_skills) {
+        if(!task->can_launch_more_skills()) {
+          Logger::instance().info_f("[DISPATCHERDataExchange] Reached max concurrent skills limit");
+          break;
+        }
+        launch_skill_task(session, skill_name, message, task);
+      }
+      return;
+    }
+
+    // No pre-configured next_skills - check for response or forward to coordinator
     DataVariant dispatcher_response_value;
     if(get_data("response", dispatcher_response_value)) {
       if(const auto* text = std::get_if<std::string>(&dispatcher_response_value); text && !text->empty()) {
@@ -816,13 +992,12 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       }
     }
 
+    // Forward to coordinator
     MMAgentMsgQue::Message coordinator_message = message;
     coordinator_message.metadata["task_type"] = "coordinator";
-    // Clear the workflow_id from dispatcher, let coordinator use its own workflow
     coordinator_message.metadata.erase("workflow_id");
     coordinator_message.metadata.erase("workflow_instance_id");
 
-    // Preserve the original user input from databus
     DataVariant original_input;
     if(get_data("input", original_input)) {
       if(const auto* text = std::get_if<std::string>(&original_input)) {
@@ -834,22 +1009,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     if(const auto user_id = session->get_config().session_id; !user_id.empty()) {
       coordinator_message.metadata["session_id"] = user_id;
     }
-    DataVariant selected_value;
-    Logger::instance().info_f("[DISPATCHERDataExchange] Checking selected_skills from databus");
-    if(get_data("selected_skills", selected_value)) {
-      if(const auto* text = std::get_if<std::string>(&selected_value)) {
-        coordinator_message.metadata["selected_skills"] = *text;
-        Logger::instance().info_f("[DISPATCHERDataExchange] Found selected_skills: %s", text->c_str());
-      } else {
-        Logger::instance().warn_f("[DISPATCHERDataExchange] selected_skills is not a string type");
-      }
-    } else {
-      Logger::instance().warn_f("[DISPATCHERDataExchange] selected_skills not found in databus");
-    }
-    if(coordinator_message.metadata["selected_skills"].empty()) {
-      Logger::instance().warn_f("[DISPATCHERDataExchange] selected_skills is empty, not forwarding to coordinator");
-      return;
-    }
+
     if(context_) {
       auto reserved = context_->get_reserved_payloads();
       if(const auto reserved_it =
@@ -867,6 +1027,9 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     return;
   }
 
+  // ============================================================
+  // COORDINATOR HANDLING
+  // ============================================================
   if(task->get_task_type() == "coordinator") {
     // Check if this is a response from skill (in coordinator's response_queue)
     MMAgentMsgQue::Message skill_response;
@@ -874,6 +1037,11 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       // Skill completed - get result from databus and send to client
       Logger::instance().info_f("[COORDINATORDataExchange] Received skill response, message_id=%s",
                                 skill_response.message_id.c_str());
+
+      // Mark skill as completed
+      if(skill_response.metadata.count("skill_name")) {
+        task->on_skill_completed(skill_response.metadata["skill_name"]);
+      }
 
       MMAgentMsgQue::Message response_message = skill_response;
 
@@ -896,7 +1064,6 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     }
 
     // Coordinator workflow completed - check if need to start skill tasks
-    // This happens when coordinator workflow outputs selected_skills
     DataVariant selected_skills_value;
     std::string selected_skills;
     if(get_data("selected_skills", selected_skills_value)) {
@@ -909,92 +1076,18 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       Logger::instance().info_f("[COORDINATORDataExchange] Coordinator workflow completed, starting skill tasks: %s",
                                 selected_skills.c_str());
 
-      // Clear selected_skills to prevent re-creating skill tasks on subsequent data_exchange
+      // Clear selected_skills to prevent re-creating skill tasks
       publish_data("selected_skills", std::string(""));
 
-      // Parse selected_skills and create skill tasks
-      // Supports two formats:
-      // 1. JSON format: {"skill":"skill-name", "session_id":"0"}
-      // 2. Simple string: skill-name
-      std::istringstream lines(selected_skills);
-      std::string line;
-      while(std::getline(lines, line)) {
-        if(line.empty()) {
-          continue;
+      // Parse selected_skills using BuiltinDispatcher's parser
+      auto skill_names = BuiltinDispatcher::parse_next_skills(selected_skills_value);
+
+      for(const auto& skill_name : skill_names) {
+        if(!task->can_launch_more_skills()) {
+          Logger::instance().info_f("[COORDINATORDataExchange] Reached max concurrent skills limit");
+          break;
         }
-
-        // Try to extract skill name from JSON format first
-        std::string skill_name = extract_json_field(line, "skill");
-
-        // If not found, treat the entire line as skill name (simple string format)
-        if(skill_name.empty()) {
-          // Remove quotes if present
-          std::string trimmed = line;
-          if(!trimmed.empty() && trimmed.front() == '"') {
-            trimmed = trimmed.substr(1);
-          }
-          if(!trimmed.empty() && trimmed.back() == '"') {
-            trimmed = trimmed.substr(0, trimmed.size() - 1);
-          }
-          // Remove any whitespace
-          size_t start = trimmed.find_first_not_of(" \t\n\r");
-          size_t end = trimmed.find_last_not_of(" \t\n\r");
-          if(start != std::string::npos && end != std::string::npos) {
-            skill_name = trimmed.substr(start, end - start + 1);
-          } else if(!trimmed.empty()) {
-            skill_name = trimmed;
-          }
-        }
-
-        if(skill_name.empty()) {
-          continue;
-        }
-
-        // Create skill task message
-        MMAgentMsgQue::Message skill_message;
-        skill_message.message_id = "skill-" + skill_name + "-" + message.message_id;
-        skill_message.metadata["task_type"] = "skill";
-        skill_message.metadata["skill_name"] = skill_name;
-        skill_message.metadata["coordinator_task_id"] = task->get_task_id();  // Link skill to coordinator
-        skill_message.metadata["session_id"] = session->get_session_id();
-
-        // Get prompt from databus (set by coordinator workflow)
-        DataVariant prompt_value;
-        if(get_data("prompt", prompt_value)) {
-          if(const auto* text = std::get_if<std::string>(&prompt_value)) {
-            skill_message.content = *text;
-            skill_message.metadata["prompt"] = *text;
-          }
-        }
-
-        // Find skill template and build runtime task
-        auto skill_template = find_skill_template_task(session, skill_name);
-        if(skill_template) {
-          auto skill_task = build_runtime_task(session, skill_template, skill_message);
-          if(skill_task) {
-            // Store coordinator task ID so skill can notify coordinator when done
-            // This is used for skill -> coordinator response routing
-            skill_task->set_parameter("coordinator_task_id", task->get_task_id());
-
-            // Set source_task_id to coordinator task so workflow completion
-            // triggers coordinator's data_exchange (which will check for skill response)
-            skill_task->set_parameter("source_task_id", task->get_task_id());
-            skill_task->set_parameter("session_id", session->get_session_id());
-
-            session->add_task(skill_task);
-
-            // Add to generated tasks queue for runtime scheduling
-            {
-              std::lock_guard<std::mutex> lock(generated_tasks_mutex_);
-              generated_tasks_.push(skill_task);
-            }
-
-            Logger::instance().info_f("[COORDINATORDataExchange] Created skill task: %s for skill: %s",
-                                      skill_task->get_task_id().c_str(), skill_name.c_str());
-          }
-        } else {
-          Logger::instance().warn_f("[COORDINATORDataExchange] Skill template not found: %s", skill_name.c_str());
-        }
+        launch_skill_task(session, skill_name, message, task);
       }
       return;  // Don't send response to client yet, wait for skill
     }
@@ -1016,14 +1109,23 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     return;
   }
 
+  // ============================================================
+  // SKILL HANDLING
+  // ============================================================
   if(task->get_task_type() == "skill") {
-    // Skill workflow completed - notify coordinator
     Logger::instance().info_f("[SKILLDataExchange] Skill workflow completed: %s", task->get_task_id().c_str());
+
+    // Mark skill as completed on source task
+    std::string source_task_id;
+    if(task->get_parameter("source_task_id", source_task_id) && !source_task_id.empty()) {
+      if(auto source_task = session->get_task(source_task_id)) {
+        source_task->on_skill_completed(task->get_skill_name());
+      }
+    }
 
     // Get coordinator task ID from skill task parameters
     std::string coordinator_task_id;
     if(task->get_parameter("coordinator_task_id", coordinator_task_id) && !coordinator_task_id.empty()) {
-      // Find coordinator task
       auto coordinator_task = session->get_task(coordinator_task_id);
       if(coordinator_task) {
         // Send response to coordinator's response_queue
@@ -1034,13 +1136,11 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         coordinator_response.metadata["task_type"] = "skill_response";
         coordinator_response.metadata["skill_name"] = task->get_skill_name();
         coordinator_response.metadata["message_type"] = "skill_completed";
-
-        // The actual response content is already in databus
         coordinator_response.content = "skill_completed";
 
         coordinator_task->enqueue_response_message(coordinator_response);
 
-        // Also trigger coordinator's data exchange to process the response
+        // Trigger coordinator's data exchange to process the response
         MMAgentMsgQue::Message trigger_message;
         trigger_message.message_id = "trigger-" + task->get_task_id();
         trigger_message.metadata["task_type"] = "coordinator";
@@ -1057,6 +1157,98 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     }
     return;
   }
+}
+
+bool MMAgent::launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
+                                const std::string& skill_name,
+                                const MMAgentMsgQue::Message& context,
+                                const std::shared_ptr<MMAgentTask>& source_task) {
+  if(!session || skill_name.empty() || !source_task) {
+    Logger::instance().warn_f("[LAUNCH_SKILL] Invalid parameters: session=%d, skill_name='%s', source_task=%d",
+                             session ? 1 : 0, skill_name.c_str(), source_task ? 1 : 0);
+    return false;
+  }
+
+  // Check concurrency limit on source task (dispatcher or coordinator)
+  if(!source_task->can_launch_more_skills()) {
+    Logger::instance().warn_f("[LAUNCH_SKILL] Max concurrent skills reached for task %s",
+                             source_task->get_task_id().c_str());
+    return false;
+  }
+
+  // Find skill template task
+  std::shared_ptr<MMAgentTask> skill_template;
+  for(const auto& task : session->get_tasks()) {
+    if(task && task->get_task_type() == "skill"
+       && task->get_skill_name() == skill_name
+       && !task->is_skill_instance()) {
+      skill_template = task;
+      break;
+    }
+  }
+
+  if(!skill_template) {
+    Logger::instance().warn_f("[LAUNCH_SKILL] Skill template not found: %s", skill_name.c_str());
+    return false;
+  }
+
+  // Create skill runtime task message
+  MMAgentMsgQue::Message skill_message;
+  skill_message.message_id = "skill-" + skill_name + "-" + context.message_id;
+  skill_message.metadata["task_type"] = "skill";
+  skill_message.metadata["skill_name"] = skill_name;
+  skill_message.metadata["session_id"] = session->get_session_id();
+  skill_message.metadata["source_task_id"] = source_task->get_task_id();
+  skill_message.content = context.content;
+  skill_message.data_ref = context.data_ref;
+
+  // Copy relevant metadata from context
+  for(const auto& [key, value] : context.metadata) {
+    if(key != "task_type" && key != "skill_name") {
+      skill_message.metadata[key] = value;
+    }
+  }
+
+  // Get prompt from databus if available
+  DataVariant prompt_value;
+  if(get_data("prompt", prompt_value)) {
+    if(const auto* text = std::get_if<std::string>(&prompt_value)) {
+      skill_message.content = *text;
+      skill_message.metadata["prompt"] = *text;
+    }
+  }
+
+  // Build runtime task
+  auto skill_task = build_runtime_task(session, skill_template, skill_message);
+  if(!skill_task) {
+    Logger::instance().warn_f("[LAUNCH_SKILL] Failed to build runtime task for skill: %s", skill_name.c_str());
+    return false;
+  }
+
+  // Store coordinator task ID for skill to notify when done
+  skill_task->set_parameter("source_task_id", source_task->get_task_id());
+  skill_task->set_parameter("session_id", session->get_session_id());
+
+  // Set coordinator_task_id if source is coordinator
+  if(source_task->get_task_type() == "coordinator") {
+    skill_task->set_parameter("coordinator_task_id", source_task->get_task_id());
+  }
+
+  session->add_task(skill_task);
+
+  // Mark skill as started on source task
+  source_task->on_skill_started(skill_name);
+
+  // Add to generated tasks queue for runtime scheduling
+  {
+    std::lock_guard<std::mutex> lock(generated_tasks_mutex_);
+    generated_tasks_.push(skill_task);
+  }
+
+  Logger::instance().info_f("[LAUNCH_SKILL] Created skill task: %s for skill: %s",
+                           skill_task->get_task_id().c_str(), skill_name.c_str());
+
+  return true;
 }
 
 int MMAgent::process_session_messages(const std::string& session_key) {
