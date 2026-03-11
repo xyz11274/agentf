@@ -695,6 +695,26 @@ graph TB
   - ⚠️ examples / publish / tests / 文档都需一起迁移。
   - 📌 需保证 metadata 显式 `workflow_id` 的最高优先级不被破坏。
 
+### ADR-004：内置 Dispatcher 与 next_skills 机制
+- **日期**：2026-03-11
+- **状态**：已接受
+- **背景**：需要优化 task-workflow 调度机制，实现基于内建队列的任务流转系统，使 Dispatcher 成为框架内置的常驻 Task，所有 skill task 的结果统一流转到 Coordinator。
+- **决策**：
+  - Dispatcher 作为框架内置 workflow，用户仅通过 DSL 配置 `next_skills` 和 `max_concurrent_skills`。
+  - Task 间交互通过内建的 request/response 队列完成。
+  - 统一的 `next_skills` 处理机制：无论是 Dispatcher 还是 Coordinator 输出的 `next_skills`，都由框架统一检测并拉起对应的 skill task。
+  - 并发控制：Dispatcher 级别限制 `max_concurrent_skills`。
+  - Skill workflow 输出约定：`response`、`next_skills`、`skill_completed`。
+- **备选方案**：
+  - 方案 A（用户定义 dispatcher workflow）：灵活性高 / 配置复杂 / 维护成本高。
+  - 方案 B（内置 Dispatcher + next_skills）：配置简化 / 职责清晰 / 易于维护。
+- **后果**：
+  - ✅ 用户配置简化，只需指定 `next_skills` 数组。
+  - ✅ 统一的 skill 拉起机制，无论是 Dispatcher 还是 Coordinator 输出。
+  - ✅ 并发控制内置，无需用户额外实现。
+  - ⚠️ 现有使用自定义 dispatcher workflow 的用户需要迁移。
+  - 📌 Dispatcher workflow_file 变为可选字段。
+
 ---
 
 ## 七、横切关注点（Cross-Cutting Concerns）

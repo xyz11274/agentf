@@ -105,6 +105,13 @@ void MMAgentSession::reset_for_pool() {
   active_client_id_.clear();
   metadata_.clear();
   runtime_tasks_.clear();
+  // Clear running skills count on dispatcher and coordinator
+  if(dispatcher_task_) {
+    dispatcher_task_->clear_running_skills();
+  }
+  if(coordinator_task_) {
+    coordinator_task_->clear_running_skills();
+  }
   last_activity_time_ = get_current_time_ms();
 }
 
@@ -270,6 +277,16 @@ std::shared_ptr<MMAgentTask> MMAgentSession::get_dispatcher_task() const {
 std::shared_ptr<MMAgentTask> MMAgentSession::get_coordinator_task() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return coordinator_task_;
+}
+
+void MMAgentSession::clear_running_skills() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if(dispatcher_task_) {
+    dispatcher_task_->clear_running_skills();
+  }
+  if(coordinator_task_) {
+    coordinator_task_->clear_running_skills();
+  }
 }
 
 }  // namespace framework

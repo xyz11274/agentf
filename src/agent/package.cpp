@@ -80,15 +80,42 @@ bool parse_task_definition(const rapidjson::Value& task_value, int expected_inde
       || task_definition.description.empty()) {
     return fail_agent_json_parse("task.description must be a non-empty string");
   }
-  if(!parse_string_member(task_value, "workflow_file", task_definition.workflow_file)
-      || task_definition.workflow_file.empty()) {
-    return fail_agent_json_parse("task.workflow_file must be a non-empty string");
+
+  // Dispatcher is built-in, so workflow_file is optional for dispatcher type
+  if(task_definition.task_type == "dispatcher") {
+    parse_string_member(task_value, "workflow_file", task_definition.workflow_file);
+    // workflow_file can be empty for built-in dispatcher
+  } else {
+    if(!parse_string_member(task_value, "workflow_file", task_definition.workflow_file)
+        || task_definition.workflow_file.empty()) {
+      return fail_agent_json_parse("task.workflow_file must be a non-empty string");
+    }
   }
+
   task_definition.workflow_pool_size = 1;
   if(task_value.HasMember("workflow_pool_size")
      && (!parse_int_member(task_value, "workflow_pool_size", task_definition.workflow_pool_size)
          || task_definition.workflow_pool_size < 1)) {
     return fail_agent_json_parse("task.workflow_pool_size must be an integer >= 1");
+  }
+
+  // Parse next_skills for dispatcher type
+  if(task_definition.task_type == "dispatcher") {
+    if(task_value.HasMember("next_skills") && task_value["next_skills"].IsArray()) {
+      const auto& next_skills_array = task_value["next_skills"];
+      for(rapidjson::SizeType i = 0; i < next_skills_array.Size(); ++i) {
+        if(next_skills_array[i].IsString()) {
+          task_definition.next_skills.push_back(next_skills_array[i].GetString());
+        }
+      }
+    }
+    // Parse max_concurrent_skills (default is 10)
+    task_definition.max_concurrent_skills = 10;
+    if(task_value.HasMember("max_concurrent_skills")
+       && (!parse_int_member(task_value, "max_concurrent_skills", task_definition.max_concurrent_skills)
+           || task_definition.max_concurrent_skills < 1)) {
+      return fail_agent_json_parse("task.max_concurrent_skills must be an integer >= 1");
+    }
   }
 
   if(task_definition.task_type == "skill") {

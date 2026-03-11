@@ -1,0 +1,113 @@
+#ifndef AGENTFLOW_INTERNAL_AGENT_BUILTIN_DISPATCHER_H
+#define AGENTFLOW_INTERNAL_AGENT_BUILTIN_DISPATCHER_H
+
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "agent/msgque.h"
+#include "agent/common.h"
+
+namespace agentflow {
+namespace framework {
+
+class MMAgentTask;
+class MMAgentSession;
+class MMAgent;
+class MMWorkflow;
+
+/**
+ * @brief Built-in Dispatcher for task-workflow scheduling.
+ *
+ * The BuiltinDispatcher is a framework-internal component that handles:
+ * 1. Receiving external requests from the request queue
+ * 2. Launching skill tasks based on next_skills configuration
+ * 3. Supporting max_concurrent_skills concurrency limits
+ * 4. Forwarding skill results and next_skills to Coordinator
+ */
+class BuiltinDispatcher {
+ public:
+  struct Config {
+    std::string dispatcher_id;
+    std::vector<std::string> next_skills;
+    int max_concurrent_skills = 10;
+  };
+
+  explicit BuiltinDispatcher(const Config& config);
+  ~BuiltinDispatcher() = default;
+
+  /**
+   * @brief Process an incoming request message.
+   *
+   * This method is called when a new request arrives at the dispatcher's request queue.
+   * It will launch skill tasks based on the next_skills configuration.
+   *
+   * @param agent The agent instance
+   * @param session The session that owns this dispatcher
+   * @param task The dispatcher task
+   * @param message The incoming request message
+   * @param workflows Available workflows for task creation
+   */
+  void process_request(MMAgent& agent,
+                       const std::shared_ptr<MMAgentSession>& session,
+                       const std::shared_ptr<MMAgentTask>& task,
+                       const MMAgentMsgQue::Message& message,
+                       const std::vector<std::shared_ptr<MMWorkflow>>& workflows);
+
+  /**
+   * @brief Process a skill completion response.
+   *
+   * This method is called when a skill task completes and sends its result
+   * to the coordinator. The dispatcher may forward this to the coordinator.
+   *
+   * @param agent The agent instance
+   * @param session The session that owns this dispatcher
+   * @param task The dispatcher task
+   * @param response The skill response message
+   */
+  void process_skill_response(MMAgent& agent,
+                              const std::shared_ptr<MMAgentSession>& session,
+                              const std::shared_ptr<MMAgentTask>& task,
+                              const MMAgentMsgQue::Message& response);
+
+  /**
+   * @brief Launch a skill task.
+   *
+   * Creates and enqueues a skill task for execution.
+   *
+   * @param agent The agent instance
+   * @param session The session context
+   * @param skill_name The name of the skill to launch
+   * @param context The context message for the skill
+   * @param source_task The task that initiated the skill launch (dispatcher or coordinator)
+   * @return true if skill was launched successfully
+   */
+  bool launch_skill_task(MMAgent& agent,
+                         const std::shared_ptr<MMAgentSession>& session,
+                         const std::string& skill_name,
+                         const MMAgentMsgQue::Message& context,
+                         const std::shared_ptr<MMAgentTask>& source_task);
+
+  /**
+   * @brief Parse next_skills from a DataVariant value.
+   *
+   * Supports JSON array format: ["skill1", "skill2"]
+   * or comma-separated string: "skill1,skill2"
+   *
+   * @param value The DataVariant containing next_skills
+   * @return Vector of skill names
+   */
+  static std::vector<std::string> parse_next_skills(const DataVariant& value);
+
+  const Config& get_config() const { return config_; }
+  const std::string& get_dispatcher_id() const { return config_.dispatcher_id; }
+
+ private:
+  Config config_;
+};
+
+}  // namespace framework
+}  // namespace agentflow
+
+#endif  // AGENTFLOW_INTERNAL_AGENT_BUILTIN_DISPATCHER_H

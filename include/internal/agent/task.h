@@ -48,6 +48,9 @@ class MMAgentTask {
     bool        disable_context = false;
     int64_t     priority = 0;
     int         max_retries = 3;
+    // Dispatcher and skill management fields
+    std::vector<std::string> next_skills;           // Pre-configured skills to launch
+    int         max_concurrent_skills = 10;          // Maximum concurrent skills for dispatcher
   };
 
   explicit MMAgentTask(const Config& config);
@@ -73,6 +76,9 @@ class MMAgentTask {
   int64_t            get_completed_time() const { return completed_time_; }
   double             get_progress() const { return progress_; }
   const std::string& get_error_message() const { return error_message_; }
+  // Dispatcher and skill management getters
+  const std::vector<std::string>& get_next_skills() const { return config_.next_skills; }
+  int                get_max_concurrent_skills() const { return config_.max_concurrent_skills; }
 
   bool start();
   bool complete(const std::string& result = "");
@@ -110,6 +116,13 @@ class MMAgentTask {
   void register_dispatch_record(const MMAgentMsgQue::Message& message);
   void acknowledge_dispatch_record(const std::string& message_id);
 
+  // Skill management methods (for dispatcher and coordinator tasks)
+  int                get_running_skills_count() const;
+  bool               can_launch_more_skills() const;
+  void               on_skill_started(const std::string& skill_name);
+  void               on_skill_completed(const std::string& skill_name);
+  void               clear_running_skills();
+
  private:
   struct DispatchRecord {
     MMAgentMsgQue::Message message;
@@ -146,6 +159,8 @@ class MMAgentTask {
   std::thread                        monitor_thread_;
   std::condition_variable            queue_cv_;
   mutable std::mutex                 mutex_;
+  // Skill management for dispatcher/coordinator tasks
+  std::atomic<int>                   running_skills_count_{0};
 };
 
 }  // namespace framework

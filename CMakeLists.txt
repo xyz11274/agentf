@@ -229,6 +229,7 @@ set(AGENTFLOW_AGENT_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/agent/coordinator.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/context.cpp
     ${AGENTFLOW_SOURCE_DIR}/agent/package.cpp
+    ${AGENTFLOW_SOURCE_DIR}/agent/builtin_dispatcher.cpp
 )
 
 # Workflow sources (includes node, edge, dsl)

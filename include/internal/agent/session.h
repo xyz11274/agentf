@@ -93,6 +93,9 @@ class MMAgentSession {
   std::shared_ptr<MMAgentTask> get_dispatcher_task() const;
   std::shared_ptr<MMAgentTask> get_coordinator_task() const;
 
+  // Clear running skills count on dispatcher/coordinator tasks (for session pool reuse)
+  void clear_running_skills();
+
  private:
   Config      config_;
   SessionState state_ = SessionState::CREATED;

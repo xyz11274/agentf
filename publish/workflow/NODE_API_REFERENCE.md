@@ -33,3 +33,55 @@ MMNode 热更新也由 Worker 处理，默认按 `enable_hot_reload/hot_reload_c
   }
 }
 ```
+
+## Skill Workflow 输出约定
+
+当 workflow 作为 skill task 执行时，应输出以下字段到 DataBus：
+
+### 必需字段
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `response` | string | skill 执行结果文本，最终返回给客户端 |
+
+### 可选字段
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `next_skills` | string | 后续要拉起的 skill 名称列表，格式为 JSON 数组或逗号分隔字符串 |
+| `skill_completed` | bool | 表示 skill 是否完成，默认为 true |
+
+### next_skills 格式
+
+支持两种格式：
+
+1. **JSON 数组格式**（推荐）：
+```json
+["search", "summary", "delegate"]
+```
+
+2. **逗号分隔字符串格式**：
+```
+search, summary, delegate
+```
+
+### 示例
+
+Skill workflow 完成后，将结果写入 DataBus：
+
+```json
+{
+  "response": "搜索完成，找到 5 个相关结果",
+  "next_skills": "[\"summary\", \"delegate\"]",
+  "skill_completed": true
+}
+```
+
+### 处理流程
+
+1. Skill workflow 执行完成
+2. 框架检测 DataBus 中的 `next_skills` 字段
+3. 解析 skill 名称列表
+4. 检查并发限制（`max_concurrent_skills`）
+5. 拉起对应的 skill task
+6. 清除已处理的 `next_skills` 防止重复处理

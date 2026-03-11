@@ -15,6 +15,7 @@
 #include "agent/package.h"
 #include "workflow/workflow.h"
 #include "utils/file_storage.h"
+#include <memory>
 
 namespace agentflow {
 namespace framework {
@@ -25,6 +26,7 @@ class AgentContext;
 class AgentPackage;
 class SessionTaskCoordinator;
 class SessionRouter;
+class BuiltinDispatcher;
 
 struct AgentMetadata {
   AgentId                 id;
@@ -162,11 +164,21 @@ class MMAgent {
                                                   const std::shared_ptr<MMAgentTask>& source_task,
                                                   const MMAgentMsgQue::Message& message);
 
+  // Skill task launching helper (used by builtin dispatcher and coordinator)
+  bool launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
+                         const std::string& skill_name,
+                         const MMAgentMsgQue::Message& context,
+                         const std::shared_ptr<MMAgentTask>& source_task);
+
   std::queue<std::shared_ptr<MMAgentTask>> generated_tasks_;
   std::mutex                               generated_tasks_mutex_;
   std::atomic<bool>                        message_threads_running_{false};
   std::thread                              intent_request_thread_;
   std::thread                              data_exchange_thread_;
+
+  // Builtin dispatcher instances per session
+  std::map<std::string, std::shared_ptr<BuiltinDispatcher>> builtin_dispatchers_;
+  std::mutex                               builtin_dispatchers_mutex_;
 
   int  process_intent_request_messages();
   int  process_data_exchange_messages();

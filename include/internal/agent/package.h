@@ -39,6 +39,9 @@ class AgentPackage {
     std::string workflow_file;
     int         workflow_pool_size = 1;
     SkillTaskConfig skill;
+    // Dispatcher and skill management fields
+    std::vector<std::string> next_skills;       // Skills to launch (for dispatcher type)
+    int         max_concurrent_skills = 10;      // Max concurrent skills for dispatcher
   };
 
   struct SessionDefinition {

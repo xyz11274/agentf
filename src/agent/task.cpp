@@ -233,6 +233,28 @@ void MMAgentTask::acknowledge_dispatch_record(const std::string& message_id) {
   dispatch_records_.erase(message_id);
 }
 
+int MMAgentTask::get_running_skills_count() const {
+  return running_skills_count_.load();
+}
+
+bool MMAgentTask::can_launch_more_skills() const {
+  return running_skills_count_.load() < config_.max_concurrent_skills;
+}
+
+void MMAgentTask::on_skill_started(const std::string& skill_name) {
+  (void)skill_name;
+  running_skills_count_.fetch_add(1);
+}
+
+void MMAgentTask::on_skill_completed(const std::string& skill_name) {
+  (void)skill_name;
+  running_skills_count_.fetch_sub(1);
+}
+
+void MMAgentTask::clear_running_skills() {
+  running_skills_count_.store(0);
+}
+
 int MMAgentTask::process_intent_request_queue_once() {
   MMAgentMsgQue::Message message;
   MessageHandler handler;
