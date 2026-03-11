@@ -1,0 +1,94 @@
+{
+  "schemaVersion": "0.6",
+  "workflowId": "conditional_workflow",
+  "workflowName": "Conditional Processing Workflow",
+  "workflowVersion": "1.0",
+  "description": "Workflow with conditional branching",
+  "components": [
+    {
+      "id": "router",
+      "type": "switchCase",
+      "typeVersion": "1.0",
+      "name": "Request Router",
+      "branches": [
+        {"id": "fast_path", "boolExpression": "${request.priority} == 'high'"},
+        {"id": "normal_path", "boolExpression": "${request.priority} == 'normal'"},
+        {"id": "default", "boolExpression": ""}
+      ]
+    },
+    {
+      "id": "fast_processor",
+      "type": "FastProcessor",
+      "typeVersion": "1.0",
+      "name": "Fast Processor",
+      "inputs": {
+        "data": "${router.data}"
+      },
+      "outputs": {
+        "result": ""
+      }
+    },
+    {
+      "id": "normal_processor",
+      "type": "NormalProcessor",
+      "typeVersion": "1.0",
+      "name": "Normal Processor",
+      "inputs": {
+        "data": "${router.data}"
+      },
+      "outputs": {
+        "result": ""
+      }
+    },
+    {
+      "id": "fallback_processor",
+      "type": "FallbackProcessor",
+      "typeVersion": "1.0",
+      "name": "Fallback Processor",
+      "inputs": {
+        "data": "${router.data}"
+      },
+      "outputs": {
+        "result": ""
+      }
+    },
+    {
+      "id": "output_node",
+      "type": "OutputHandler",
+      "typeVersion": "1.0",
+      "name": "Output Handler",
+      "inputs": {
+        "processed_data": "${fast_processor.result}"
+      },
+      "outputs": {
+        "response": ""
+      }
+    }
+  ],
+  "connections": [
+    {
+      "source": {"componentId": "router", "branchId": "fast_path"},
+      "target": {"componentId": "fast_processor"}
+    },
+    {
+      "source": {"componentId": "router", "branchId": "normal_path"},
+      "target": {"componentId": "normal_processor"}
+    },
+    {
+      "source": {"componentId": "router", "branchId": "default"},
+      "target": {"componentId": "fallback_processor"}
+    },
+    {
+      "source": {"componentId": "fast_processor"},
+      "target": {"componentId": "output_node"}
+    },
+    {
+      "source": {"componentId": "normal_processor"},
+      "target": {"componentId": "output_node"}
+    },
+    {
+      "source": {"componentId": "fallback_processor"},
+      "target": {"componentId": "output_node"}
+    }
+  ]
+}

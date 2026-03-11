@@ -1,0 +1,45 @@
+{
+  "schemaVersion": "0.6",
+  "type": "Calculator",
+  "version": "1.0",
+  "componentCatalog": "baseComponent",
+  "description": "Calculator component for performing arithmetic operations",
+  "classInfo": {
+    "programLanguage": "c++",
+    "modulePath": "./components/libcalculator.so",
+    "className": "Calculator",
+    "filePath": "./components/libcalculator.so"
+  },
+  "inputs": [
+    {
+      "id": "operation",
+      "type": "String",
+      "description": "Operation type: add, subtract, multiply, divide"
+    },
+    {
+      "id": "operand1",
+      "type": "Float",
+      "description": "First operand"
+    },
+    {
+      "id": "operand2",
+      "type": "Float",
+      "description": "Second operand"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "result",
+      "type": "Float",
+      "description": "Calculation result"
+    }
+  ],
+  "configs": [
+    {
+      "id": "precision",
+      "type": "Int",
+      "description": "Decimal precision for result",
+      "constraint": {"min": 0, "max": 10}
+    }
+  ]
+}

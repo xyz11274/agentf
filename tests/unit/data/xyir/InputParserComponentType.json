@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "0.6",
+  "type": "InputParser",
+  "version": "1.0",
+  "componentCatalog": "baseComponent",
+  "description": "Input parser component for parsing user input and extracting operation parameters",
+  "classInfo": {
+    "programLanguage": "python",
+    "modulePath": "./components/input_parser.py",
+    "className": "InputParser",
+    "filePath": "./components/input_parser.py"
+  },
+  "inputs": [
+    {
+      "id": "raw_input",
+      "type": "String",
+      "description": "Raw user input string"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "operation",
+      "type": "String",
+      "description": "Operation type: add, subtract, multiply, divide"
+    },
+    {
+      "id": "operand1",
+      "type": "Float",
+      "description": "First operand for calculation"
+    },
+    {
+      "id": "operand2",
+      "type": "Float",
+      "description": "Second operand for calculation"
+    }
+  ],
+  "configs": []
+}

@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "0.6",
+  "type": "FastProcessor",
+  "version": "1.0",
+  "componentCatalog": "baseComponent",
+  "description": "Fast processor component for high-priority request processing",
+  "classInfo": {
+    "programLanguage": "go",
+    "filePath": "./processors/fast_processor.go"
+  },
+  "inputs": [
+    {
+      "id": "data",
+      "type": "String",
+      "description": "Input data to process"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "result",
+      "type": "String",
+      "description": "Processing result"
+    }
+  ],
+  "configs": [
+    {
+      "id": "timeout_ms",
+      "type": "Int",
+      "description": "Processing timeout in milliseconds",
+      "constraint": {"min": 100, "max": 10000}
+    }
+  ]
+}

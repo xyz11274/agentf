@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "0.6",
+  "type": "FallbackProcessor",
+  "version": "1.0",
+  "componentCatalog": "baseComponent",
+  "description": "Fallback processor component for handling unspecified priority requests",
+  "classInfo": {
+    "programLanguage": "shell",
+    "filePath": "./processors/fallback.sh"
+  },
+  "inputs": [
+    {
+      "id": "data",
+      "type": "String",
+      "description": "Input data to process"
+    }
+  ],
+  "outputs": [
+    {
+      "id": "result",
+      "type": "String",
+      "description": "Processing result"
+    }
+  ],
+  "configs": []
+}
