@@ -16,6 +16,10 @@ namespace framework {
 class MMAgentTask;
 class SessionTaskCoordinator;
 
+/// Generate a UUID format string for session IDs.
+/// Returns a string in format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+std::string generate_session_uuid();
+
 class MMAgentSession {
  public:
   enum class SessionState {

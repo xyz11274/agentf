@@ -266,6 +266,8 @@ set(AGENTFLOW_RUNTIME_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/file_databus_bridge.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/local_databus.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/remote_databus.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/databus/namespace_client.cpp
+    ${AGENTFLOW_SOURCE_DIR}/runtime/databus/node_databus_client.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/llm/streaming_client.cpp
     # Event & Trace/Metrics
     ${AGENTFLOW_SOURCE_DIR}/runtime/trace/metrics.cpp
@@ -556,6 +558,7 @@ if(AGENTFLOW_BUILD_TESTS)
       ${AGENTFLOW_TEST_DIR}/unit/src/test_runtime_master_worker_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_builtin_workflow_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_dsl_adapter_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_databus_session_isolation.cpp
   )
   if(TARGET GTest::gtest)
     target_link_libraries(test_agentflow_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)

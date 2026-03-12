@@ -11,6 +11,8 @@
 #include "agent/context.h"
 #include "runtime/trace/trace_context.h"
 #include "runtime/trace/trace_manager.h"
+#include "runtime/databus/node_databus_adapter.h"
+#include "runtime/databus/node_databus_client.h"
 #include "utils/logger.h"
 
 namespace agentflow {
@@ -494,6 +496,18 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
 
   // Inject DataBus for SO library V2 signature support
   node->set_databus(&get_databus(agent->get_id()));
+
+  // Inject session-isolated DataBus client for V3 signature support
+  {
+    std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+    auto state_it = workflow_states_.find(execution_id);
+    if(state_it != workflow_states_.end() && !state_it->second.session_id.empty()) {
+      // Create client with internal adapter - lifetime managed by shared_ptr
+      auto client = std::make_shared<NodeDataBusClientImpl>(
+          &get_databus(agent->get_id()), state_it->second.session_id);
+      node->set_databus_client(client);
+    }
+  }
 
   // Trace: open a NODE span (RAII — records to TraceManager on scope exit)
   trace::ScopedSpan node_span(

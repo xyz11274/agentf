@@ -1,6 +1,8 @@
 #include "agent/session.h"
 
 #include <sys/time.h>
+#include <chrono>
+#include <random>
 
 #include "agent/task.h"
 
@@ -15,9 +17,47 @@ int64_t get_current_time_ms() {
 }
 }  // namespace
 
+/// Generate a UUID v4 format string.
+/// Uses random number generation to create a UUID-like identifier.
+/// Format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx where:
+/// - 4 indicates UUID version 4
+/// - y is one of 8, 9, a, or b
+std::string generate_session_uuid() {
+  // Use random device for seed
+  std::random_device rd;
+  std::mt19937_64 gen(rd());
+  std::uniform_int_distribution<uint64_t> dis;
+
+  // Generate two 64-bit random numbers for the UUID
+  uint64_t part1 = dis(gen);
+  uint64_t part2 = dis(gen);
+
+  // Format as UUID v4: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
+  // Set version bits (4 in position 48-51 of part1)
+  part1 = (part1 & 0xFFFFFFFFFFFF0FFFULL) | 0x0000000000004000ULL;
+  // Set variant bits (10xx in position 62-63 of part2)
+  part2 = (part2 & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;
+
+  // Convert to hex string
+  char buf[37];
+  snprintf(buf, sizeof(buf),
+           "%08x-%04x-%04x-%04x-%012llx",
+           static_cast<uint32_t>(part1 >> 32),
+           static_cast<uint16_t>((part1 >> 16) & 0xFFFF),
+           static_cast<uint16_t>(part1 & 0xFFFF),
+           static_cast<uint16_t>(part2 >> 48),
+           static_cast<unsigned long long>(part2 & 0xFFFFFFFFFFFFULL));
+
+  return std::string(buf);
+}
+
 MMAgentSession::MMAgentSession(const Config& config)
     : config_(config),
       state_(SessionState::CREATED) {
+  // Generate UUID session_id if not provided
+  if (config_.session_id.empty()) {
+    config_.session_id = generate_session_uuid();
+  }
   created_time_ = get_current_time_ms();
   last_activity_time_ = created_time_;
 }

@@ -150,6 +150,124 @@ using SoNodeFunctionV1 = void (*)(const SoDataMap& inputs, SoDataMap& outputs);
 using SoNodeFunctionV2 = void (*)(const SoDataMap& inputs, SoDataMap& outputs, INodeDataBus* databus);
 
 // ============================================================================
+// DataBus Namespace and Session Isolation (V3)
+// ============================================================================
+
+/// Namespaces for session-isolated data storage.
+/// Each namespace provides a separate key space within a session.
+enum class DataBusNamespace {
+  SYS,   ///< Framework communication (response, api_key, config)
+  CTX,   ///< Context storage (history, state) - reserved
+  LLM,   ///< LLM service interaction (last_prompt, last_response) - reserved
+  TOOL,  ///< Tool call information (call_result, tool_list) - reserved
+  USER   ///< User-defined node data (custom keys)
+};
+
+/// Forward declaration for INodeDataBusClient
+class INodeDataBusClient;
+
+/// Namespace-scoped client for a specific DataBus namespace.
+/// Provides key-value operations with automatic namespace prefix.
+///
+/// All keys are automatically prefixed with /session/{session-id}/{namespace}/
+///
+/// Usage:
+/// \code
+/// // Store data in user namespace
+/// client->put("my_key", SoDataVariant(std::string("value")));
+/// // Actual key: /session/{id}/user/my_key
+/// \endcode
+class INamespaceClient {
+public:
+  virtual ~INamespaceClient() = default;
+
+  /// Store a value with the given key.
+  /// Returns true if successful.
+  virtual bool put(const std::string& key, const SoDataVariant& value) = 0;
+
+  /// Retrieve a value by key.
+  /// Returns true if the key exists and value is set.
+  virtual bool get(const std::string& key, SoDataVariant& value) const = 0;
+
+  /// Check if a key exists.
+  virtual bool contains(const std::string& key) const = 0;
+
+  /// Remove a key-value pair.
+  /// Returns true if the key was removed.
+  virtual bool remove(const std::string& key) = 0;
+
+  /// Subscribe to data changes for a specific key.
+  /// Returns a handle that can be used to unsubscribe.
+  virtual SubscriptionHandle subscribe(const std::string& key, SoDataBusCallback callback) = 0;
+
+  /// Unsubscribe using a previously returned handle.
+  virtual void unsubscribe(const SubscriptionHandle& handle) = 0;
+};
+
+/// Client interface for session-isolated DataBus access.
+/// Provides namespace-scoped access with automatic session prefix.
+///
+/// Key structure: /session/{session-id}/{namespace}/{key}
+///
+/// Usage:
+/// \code
+/// extern "C" void my_node_v3(const SoDataMap& inputs, SoDataMap& outputs, INodeDataBusClient* client) {
+///     // Store user data
+///     client->user()->put("result", SoDataVariant(std::string("success")));
+///
+///     // Read framework config
+///     SoDataVariant api_key;
+///     if (client->sys()->get("api_key", api_key)) {
+///         // Use API key...
+///     }
+///
+///     // Access raw DataBus (bypasses session isolation)
+///     INodeDataBus* raw = client->raw();
+///     raw->put("global_key", SoDataVariant(std::string("value")));
+/// }
+/// \endcode
+class INodeDataBusClient {
+public:
+  virtual ~INodeDataBusClient() = default;
+
+  /// Access sys namespace (framework communication).
+  /// Framework messages and configuration like response, api_key.
+  virtual INamespaceClient* sys() = 0;
+
+  /// Access ctx namespace (context storage).
+  /// Reserved for future use: history, state.
+  virtual INamespaceClient* ctx() = 0;
+
+  /// Access llm namespace (LLM service).
+  /// Reserved for LLM interaction: last_prompt, last_response.
+  virtual INamespaceClient* llm() = 0;
+
+  /// Access tool namespace (tool calls).
+  /// Reserved for tool information: call_result, tool_list.
+  virtual INamespaceClient* tool() = 0;
+
+  /// Access user namespace (custom data).
+  /// User-defined node data with custom keys.
+  virtual INamespaceClient* user() = 0;
+
+  /// Get current session ID.
+  virtual const std::string& session_id() const = 0;
+
+  /// Get raw DataBus access (bypasses session isolation).
+  /// Use with caution - keys are not prefixed.
+  /// Primarily for reading global configuration.
+  virtual INodeDataBus* raw() = 0;
+};
+
+/// V3 signature: Node with session-isolated DataBus client.
+/// Recommended for new nodes requiring session isolation.
+///
+/// \param inputs Input data from the framework
+/// \param outputs Output data to return to the framework
+/// \param client Session-isolated DataBus client (may be null)
+using SoNodeFunctionV3 = void (*)(const SoDataMap& inputs, SoDataMap& outputs, INodeDataBusClient* client);
+
+// ============================================================================
 // Helper Functions for SoDataVariant
 // ============================================================================
 

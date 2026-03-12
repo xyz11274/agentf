@@ -508,6 +508,12 @@ bool MMNode::execute_with_worker_engine() {
   request.enable_hot_reload = hot_reload_enabled_;
   request.hot_reload_config = config_.hot_reload_config;
 
+  // Pass DataBus and session_id for V2/V3 signature support
+  request.databus = databus_;
+  if (databus_client_) {
+    request.session_id = databus_client_->session_id();
+  }
+
   switch(config_.execution_mode) {
     case ExecutionMode::SHELL_SCRIPT:
       request.mode = runtime::MMWorkerEngine::ExecutionMode::SHELL_SCRIPT;

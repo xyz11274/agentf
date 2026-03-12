@@ -16,6 +16,9 @@ namespace agentflow {
 // Forward declaration for INodeDataBus (defined in agentflow/so_node.h)
 class INodeDataBus;
 
+// Forward declaration for INodeDataBusClient (defined in agentflow/so_node.h)
+class INodeDataBusClient;
+
 namespace runtime {
 
 /**
@@ -139,6 +142,11 @@ struct ExecutionConfig {
   // INodeDataBus is forward declared in agentflow namespace
   INodeDataBus* databus = nullptr;
 
+  // Optional session-isolated DataBus client for V3 signature
+  // When set, SO library functions get session-isolated DataBus access
+  // Recommended over databus for new nodes
+  INodeDataBusClient* databus_client = nullptr;
+
   ExecutionConfig() = default;
 };
 
@@ -152,6 +160,13 @@ using SoFunction = void (*)(const DataMap& inputs, DataMap& outputs);
  * Uses INodeDataBus from agentflow namespace (defined in agentflow/so_node.h)
  */
 using SoFunctionV2 = void (*)(const DataMap& inputs, DataMap& outputs, INodeDataBus* databus);
+
+/**
+ * SO library function signature (V3 - with session-isolated DataBus client)
+ * Uses INodeDataBusClient for session-isolated DataBus access.
+ * Recommended for new nodes requiring session isolation.
+ */
+using SoFunctionV3 = void (*)(const DataMap& inputs, DataMap& outputs, INodeDataBusClient* client);
 
 /**
  * CodeLoader handles loading and executing different types of executable code
@@ -190,6 +205,19 @@ public:
                                          const std::string&     function_name,
                                          const ExecutionConfig& config,
                                          INodeDataBus*          databus);
+
+  /**
+   * Load and execute a shared object library with session-isolated DataBus client (V3 signature)
+   * @param file_path Path to the .so/.dylib file
+   * @param function_name Name of the function to call
+   * @param config Execution configuration
+   * @param client Session-isolated DataBus client for the SO function
+   * @return Execution result
+   */
+  ExecutionResult load_and_execute_so_v3(const std::string&     file_path,
+                                         const std::string&     function_name,
+                                         const ExecutionConfig& config,
+                                         INodeDataBusClient*    client);
 
   /**
    * Execute a JAR file
@@ -388,6 +416,7 @@ private:
   SoLibraryPtr load_so_library(const std::string& file_path);
   SoFunction   get_so_function(const SoLibraryPtr& handle, const std::string& function_name);
   SoFunctionV2 get_so_function_v2(const SoLibraryPtr& handle, const std::string& function_name);
+  SoFunctionV3 get_so_function_v3(const SoLibraryPtr& handle, const std::string& function_name);
   bool         unload_so_library(const std::string& file_path);
 
   std::string build_command_string(const std::string&              executable,

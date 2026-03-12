@@ -1,0 +1,187 @@
+# DataBus Session Isolation
+
+This document describes the session isolation mechanism for AgentFlow's DataBus.
+
+## Overview
+
+AgentFlow's DataBus provides session-level data isolation, ensuring that data from different sessions (conversations/interactions) are completely separated. This enables multi-tenant scenarios where multiple users or conversations can run concurrently without data leakage.
+
+## Architecture
+
+### Isolation Levels
+
+| Level | Scope | Implementation |
+|-------|-------|----------------|
+| Agent | Per agent instance | Separate MMDataBus instances per agent_id |
+| Session | Per conversation/session | Key prefix `/session/{session-id}/` |
+| Namespace | Per data category | Key prefix `/session/{session-id}/{namespace}/` |
+
+### Session ID
+
+Session IDs are generated as UUID format (e.g., `550e8400-e29b-41d4-a716-446655440000`) by the framework. The session_id is independent from user_id and client_id, which are stored as metadata within the session.
+
+### Key Structure
+
+All session-isolated data follows the key structure:
+
+```
+/session/{session-id}/{namespace}/{key}
+```
+
+Example: `/session/550e8400-e29b-41d4-a716-446655440000/user/my_data`
+
+## Namespaces
+
+Namespaces categorize data by purpose:
+
+| Namespace | Purpose | Example Keys |
+|-----------|---------|--------------|
+| `sys` | Framework messages and configuration | `response`, `api_key`, `config` |
+| `ctx` | Context storage (reserved) | `history`, `state` |
+| `llm` | LLM service interaction (reserved) | `last_prompt`, `last_response` |
+| `tool` | Tool call information (reserved) | `call_result`, `tool_list` |
+| `user` | User-defined node data | Any custom keys |
+
+### Important Notes
+
+- **All namespaces are session-isolated**, including `sys`. This means framework configuration like `api_key` must be injected per-session.
+- Framework configuration should be injected into `sys` namespace at session creation time.
+- Node developers should typically use `user` namespace for custom data.
+
+## API Usage
+
+### INodeDataBusClient Interface
+
+The `INodeDataBusClient` provides session-isolated access to DataBus:
+
+```cpp
+// Access different namespaces
+client->sys()->put("my_key", value);     // /session/{id}/sys/my_key
+client->user()->put("my_data", value);   // /session/{id}/user/my_data
+
+// Get current session ID
+const std::string& session_id = client->session_id();
+
+// Bypass session isolation (use with caution)
+INodeDataBus* raw = client->raw();
+raw->put("global_key", value);  // Global key, no session prefix
+```
+
+### V3 Node Signature
+
+SO library nodes can use the V3 signature for session-isolated DataBus access:
+
+```cpp
+extern "C" void my_node_v3(
+    const SoDataMap& inputs,
+    SoDataMap& outputs,
+    INodeDataBusClient* client) {
+
+  // Store user data
+  client->user()->put("result", SoDataVariant(std::string("success")));
+
+  // Read framework configuration
+  SoDataVariant api_key;
+  if (client->sys()->get("api_key", api_key)) {
+    // Use API key...
+  }
+
+  // Access previous response from sys namespace
+  SoDataVariant response;
+  if (client->sys()->get("response", response)) {
+    // Process response...
+  }
+}
+```
+
+### V2 Signature (Backward Compatible)
+
+The V2 signature still works but provides raw DataBus access without session isolation:
+
+```cpp
+extern "C" void my_node_v2(
+    const SoDataMap& inputs,
+    SoDataMap& outputs,
+    INodeDataBus* databus) {
+  // Raw DataBus access - must manually handle session keys
+}
+```
+
+### Function Loading Priority
+
+The framework loads node functions with the following priority:
+1. `{function_name}_v3` - Session-isolated DataBus client
+2. `{function_name}_v2` - Raw DataBus access
+3. `{function_name}` - Basic inputs/outputs only
+
+## Cross-Session Data Sharing
+
+To share data across sessions, use the `raw()` method to bypass session isolation:
+
+```cpp
+extern "C" void my_node_v3(
+    const SoDataMap& inputs,
+    SoDataMap& outputs,
+    INodeDataBusClient* client) {
+
+  // Write to global namespace
+  INodeDataBus* raw = client->raw();
+  raw->put("shared_config", SoDataVariant(std::string("value")));
+
+  // Read from global namespace
+  SoDataVariant val;
+  raw->get("shared_config", val);
+}
+```
+
+**Warning**: Use `raw()` sparingly and primarily for reading global configuration. Writing to global keys can affect other sessions.
+
+## Implementation Details
+
+### NamespaceClientImpl
+
+`NamespaceClientImpl` implements `INamespaceClient` and provides:
+- Automatic key prefix construction (`/session/{id}/{namespace}/`)
+- All standard DataBus operations (put/get/remove/contains/subscribe)
+
+### NodeDataBusClientImpl
+
+`NodeDataBusClientImpl` implements `INodeDataBusClient` and provides:
+- Lazy initialization of namespace clients
+- Access to raw DataBus via `raw()` method
+- Session ID retrieval
+
+### Session ID Generation
+
+Session IDs are generated using UUID format:
+- Generated by `MMAgentSession` during activation
+- Stored in session metadata
+- Passed to nodes via `INodeDataBusClient`
+
+## Migration Guide
+
+### From V2 to V3
+
+1. Change function signature to V3
+2. Replace `INodeDataBus*` with `INodeDataBusClient*`
+3. Use namespace-specific access instead of raw keys
+
+```cpp
+// V2
+extern "C" void my_node_v2(const SoDataMap& inputs, SoDataMap& outputs, INodeDataBus* databus) {
+  databus->put("my_key", value);
+}
+
+// V3
+extern "C" void my_node_v3(const SoDataMap& inputs, SoDataMap& outputs, INodeDataBusClient* client) {
+  client->user()->put("my_key", value);
+}
+```
+
+## Best Practices
+
+1. **Use V3 signature for new nodes** - Session isolation is automatic and safer
+2. **Use appropriate namespaces** - Store framework data in `sys`, user data in `user`
+3. **Avoid raw() for writes** - Only use for reading global configuration
+4. **Clean up subscriptions** - Always unsubscribe when done
+5. **Handle missing keys gracefully** - Use contains() or check get() return value

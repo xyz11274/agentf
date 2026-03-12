@@ -52,6 +52,9 @@ public:
     HotReloadConfig           hot_reload_config;
     // Injected DataBus for SO library nodes (V2 signature)
     MMDataBus*                databus = nullptr;
+    // Session ID for session-isolated DataBus access (V3 signature)
+    // When provided, V3 signature will be used with session isolation
+    std::string               session_id;
     struct LLMServiceConfig {
       std::string base_url;
       std::string api_key;

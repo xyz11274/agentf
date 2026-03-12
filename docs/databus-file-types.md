@@ -2,6 +2,8 @@
 
 本文档说明 AgentFlow 当前新增的 `FILE` / `FILE_LIST` 一等类型，以及它们在 Workflow DSL、DataBus 和节点 JSON I/O 中的使用方式。
 
+**相关文档**: [DataBus Session 隔离机制](databus-session-isolation.md) - 详细说明 session 级别的数据隔离设计。
+
 ## 概述
 
 AgentFlow 现在支持以下文件相关数据类型：
@@ -10,6 +12,47 @@ AgentFlow 现在支持以下文件相关数据类型：
 - `file_list`：文件描述符列表
 
 这里传递的是**文件描述符**，不是音频、图片、视频的原始二进制字节。推荐将文件内容保存在文件系统或对象存储中，通过 DataBus 传递引用和元数据。
+
+## Session 隔离机制
+
+DataBus 提供 session 级别的数据隔离，确保不同会话（对话/交互）的数据完全分离。
+
+### Key 结构
+
+所有 session 隔离的数据遵循以下 key 结构：
+
+```
+/session/{session-id}/{namespace}/{key}
+```
+
+### 命名空间
+
+| Namespace | 用途 | 示例 Key |
+|-----------|------|----------|
+| `sys` | 框架消息通信（session 隔离） | `response`, `api_key` |
+| `ctx` | 上下文存储（预留） | `history`, `state` |
+| `llm` | LLM 服务交互（预留） | `last_prompt` |
+| `tool` | 工具调用信息（预留） | `call_result` |
+| `user` | 用户自定义 node 数据 | 任意 key |
+
+### 使用方式
+
+Node 代码通过 `INodeDataBusClient` 访问 session 隔离的 DataBus：
+
+```cpp
+extern "C" void my_node_v3(const SoDataMap& inputs, SoDataMap& outputs, INodeDataBusClient* client) {
+  // 存储用户数据到 user namespace
+  client->user()->put("my_result", SoDataVariant(std::string("hello")));
+
+  // 从 sys namespace 读取框架配置
+  SoDataVariant api_key;
+  if (client->sys()->get("api_key", api_key)) {
+    // 使用 API key...
+  }
+}
+```
+
+详细信息请参考 [databus-session-isolation.md](databus-session-isolation.md)。
 
 ## 文件描述符结构
 
