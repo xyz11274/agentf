@@ -4,10 +4,17 @@
 // Google Test tests for LocalChannel functionality
 
 #include <chrono>
+#include <cerrno>
 #include <gtest/gtest.h>
 #include <thread>
 
 #include "runtime/databus/local_databus.h"
+
+#ifdef __linux__
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 namespace agentflow {
 namespace tests {
@@ -246,6 +253,26 @@ TEST_F(LocalChannelTest, MultipleSubscribers) {
   EXPECT_EQ(count1, 1);
   EXPECT_EQ(count2, 1);
 }
+
+#ifdef __linux__
+TEST(SharedMemoryFactoryTest, PosixFallbackUnlinksSharedMemoryName) {
+  const std::string name =
+      "/agentflow_test_shm_" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+  shm_unlink(name.c_str());
+
+  auto block = runtime::SharedMemoryFactory::create_posix_shared(4096, name);
+  ASSERT_NE(block, nullptr);
+
+  errno = 0;
+  const int shm_fd = shm_open(name.c_str(), O_RDWR, 0666);
+  EXPECT_EQ(shm_fd, -1);
+  EXPECT_EQ(errno, ENOENT);
+  if(shm_fd != -1) {
+    close(shm_fd);
+  }
+}
+#endif
 
 // ============================================================================
 // Queue Capacity Tests

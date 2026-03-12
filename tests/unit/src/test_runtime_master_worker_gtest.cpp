@@ -3,10 +3,17 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 #include <thread>
 #include <type_traits>
 
 #include "runtime/agent_runtime.h"
+#include "runtime/llm/streaming_client.h"
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 namespace agentflow {
 namespace tests {
@@ -32,6 +39,103 @@ std::filesystem::path unique_build_script_path(const std::string& stem) {
       std::chrono::steady_clock::now().time_since_epoch().count());
   return repo_root_path() / "build" / (stem + "_" + suffix + ".sh");
 }
+
+class SingleRequestSseServer {
+ public:
+  explicit SingleRequestSseServer(std::string response_body)
+      : response_body_(std::move(response_body)) {}
+
+  ~SingleRequestSseServer() {
+    join();
+    if(server_fd_ != -1) {
+      close(server_fd_);
+    }
+  }
+
+  bool start() {
+    server_fd_ = socket(AF_INET, SOCK_STREAM, 0);
+    if(server_fd_ == -1) {
+      return false;
+    }
+
+    int reuse = 1;
+    setsockopt(server_fd_, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+    sockaddr_in addr{};
+    addr.sin_family      = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port        = 0;
+    if(bind(server_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == -1) {
+      return false;
+    }
+    if(listen(server_fd_, 1) == -1) {
+      return false;
+    }
+
+    socklen_t addr_len = sizeof(addr);
+    if(getsockname(server_fd_, reinterpret_cast<sockaddr*>(&addr), &addr_len) == -1) {
+      return false;
+    }
+    port_ = ntohs(addr.sin_port);
+    server_thread_ = std::thread([this]() { serve_once(); });
+    return true;
+  }
+
+  uint16_t port() const { return port_; }
+
+  void join() {
+    if(server_thread_.joinable()) {
+      server_thread_.join();
+    }
+  }
+
+ private:
+  void serve_once() {
+    int client_fd = accept(server_fd_, nullptr, nullptr);
+    if(client_fd == -1) {
+      return;
+    }
+
+    char request_buffer[2048];
+    std::string request;
+    while(true) {
+      const ssize_t bytes_read = read(client_fd, request_buffer, sizeof(request_buffer));
+      if(bytes_read <= 0) {
+        break;
+      }
+      request.append(request_buffer, static_cast<size_t>(bytes_read));
+      if(request.find("\r\n\r\n") != std::string::npos) {
+        break;
+      }
+    }
+
+    std::string response = "HTTP/1.1 200 OK\r\n";
+    response += "Content-Type: text/event-stream\r\n";
+    response += "Connection: close\r\n";
+    response += "Content-Length: " + std::to_string(response_body_.size()) + "\r\n";
+    response += "\r\n";
+    response += response_body_;
+
+    const char* data      = response.data();
+    size_t      remaining = response.size();
+    while(remaining > 0) {
+      const ssize_t written = write(client_fd, data, remaining);
+      if(written <= 0) {
+        break;
+      }
+      data += written;
+      remaining -= static_cast<size_t>(written);
+    }
+
+    shutdown(client_fd, SHUT_RDWR);
+    close(client_fd);
+  }
+
+  int         server_fd_ = -1;
+  uint16_t    port_      = 0;
+  std::string response_body_;
+  std::thread server_thread_;
+};
 }  // namespace
 
 TEST(RuntimeMasterWorkerTest, DeployerRegisterHeartbeatAndDeployWorkflowInstance) {
@@ -294,6 +398,36 @@ TEST(RuntimeMasterWorkerTest, WorkerProvidesFileDatabusAndMockLlmStreaming) {
   EXPECT_NE(output.find("hello from"), std::string::npos);
   EXPECT_NE(output.find("hello from runtime"), std::string::npos);
   fs::remove(script);
+}
+
+TEST(RuntimeMasterWorkerTest, StreamingClientRemovesTempBodyFileWhenCallbackThrows) {
+  const std::string prompt =
+      "streaming-client-cleanup-" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+  const auto expected_body_path =
+      std::filesystem::temp_directory_path()
+      / ("agentflow_llm_body_" + std::to_string(std::hash<std::string>{}(prompt)) + ".json");
+  std::error_code ec;
+  std::filesystem::remove(expected_body_path, ec);
+
+  SingleRequestSseServer server(
+      "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n"
+      "data: [DONE]\n\n");
+  ASSERT_TRUE(server.start());
+
+  runtime::StreamingLLMClient         client;
+  runtime::StreamingLLMClient::Config config;
+  config.base_url   = "http://127.0.0.1:" + std::to_string(server.port());
+  config.model      = "mock-model";
+  config.timeout_ms = 2000;
+
+  EXPECT_THROW(
+      client.stream_prompt(prompt, config,
+                           [](const std::string&) { throw std::runtime_error("chunk failure"); }),
+      std::runtime_error);
+
+  server.join();
+  EXPECT_FALSE(std::filesystem::exists(expected_body_path));
 }
 
 }  // namespace tests

@@ -3,10 +3,55 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <system_error>
 #include <sstream>
 
 namespace agentflow {
 namespace runtime {
+
+namespace {
+
+class TempFileGuard {
+ public:
+  explicit TempFileGuard(std::filesystem::path path) : path_(std::move(path)) {}
+
+  ~TempFileGuard() {
+    if(path_.empty()) {
+      return;
+    }
+    std::error_code ec;
+    std::filesystem::remove(path_, ec);
+  }
+
+ private:
+  std::filesystem::path path_;
+};
+
+class PipeGuard {
+ public:
+  explicit PipeGuard(FILE* pipe) : pipe_(pipe) {}
+
+  ~PipeGuard() {
+    if(pipe_ != nullptr) {
+      pclose(pipe_);
+    }
+  }
+
+  FILE* get() const { return pipe_; }
+
+  explicit operator bool() const { return pipe_ != nullptr; }
+
+  int close() {
+    FILE* raw = pipe_;
+    pipe_     = nullptr;
+    return raw != nullptr ? pclose(raw) : 0;
+  }
+
+ private:
+  FILE* pipe_ = nullptr;
+};
+
+}  // namespace
 
 bool StreamingLLMClient::stream_prompt(const std::string& prompt, const Config& config,
                                        const ChunkCallback& on_chunk,
@@ -47,13 +92,27 @@ bool StreamingLLMClient::stream_prompt(const std::string& prompt, const Config& 
   const auto tmp_dir = std::filesystem::temp_directory_path();
   const auto body_path =
       tmp_dir / ("agentflow_llm_body_" + std::to_string(std::hash<std::string>{}(prompt)) + ".json");
+  TempFileGuard body_file_guard(body_path);
   {
     std::ofstream body(body_path, std::ios::trunc);
+    if(!body.is_open()) {
+      if(on_error) {
+        on_error("Failed to create streaming request body");
+      }
+      return false;
+    }
     body << "{"
          << "\"model\":\"" << json_escape(config.model) << "\","
          << "\"stream\":true,"
          << "\"messages\":[{\"role\":\"user\",\"content\":\"" << json_escape(prompt) << "\"}]"
          << "}";
+    body.close();
+    if(!body) {
+      if(on_error) {
+        on_error("Failed to write streaming request body");
+      }
+      return false;
+    }
   }
 
   std::ostringstream cmd;
@@ -64,11 +123,10 @@ bool StreamingLLMClient::stream_prompt(const std::string& prompt, const Config& 
     cmd << " -H " << shell_quote("Authorization: Bearer " + config.api_key);
   }
   cmd << " --data @" << shell_quote(body_path.string()) << " "
-      << shell_quote(build_endpoint(config.base_url));
+       << shell_quote(build_endpoint(config.base_url));
 
-  FILE* pipe = popen(cmd.str().c_str(), "r");
-  if(pipe == nullptr) {
-    std::filesystem::remove(body_path);
+  PipeGuard pipe(popen(cmd.str().c_str(), "r"));
+  if(!pipe) {
     if(on_error) {
       on_error("Failed to execute curl for streaming request");
     }
@@ -78,7 +136,7 @@ bool StreamingLLMClient::stream_prompt(const std::string& prompt, const Config& 
   bool        saw_stream_data = false;
   std::string final_text;
   char        buffer[4096];
-  while(fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+  while(fgets(buffer, sizeof(buffer), pipe.get()) != nullptr) {
     std::string line(buffer);
     if(line.rfind("data:", 0) == 0) {
       saw_stream_data = true;
@@ -103,8 +161,7 @@ bool StreamingLLMClient::stream_prompt(const std::string& prompt, const Config& 
     }
     final_text += line;
   }
-  const int rc = pclose(pipe);
-  std::filesystem::remove(body_path);
+  const int rc = pipe.close();
   if(rc != 0) {
     if(on_error) {
       on_error("curl returned non-zero exit status");

@@ -793,10 +793,17 @@ int MMAgentRuntime::get_least_loaded_worker() {
 
 void MMAgentRuntime::monitor_agents() {
   // MMAgent Level Master: monitor agent health
-  std::lock_guard<std::mutex> lock(agents_mutex_);
+  std::vector<AgentId> agent_ids;
+  {
+    std::lock_guard<std::mutex> lock(agents_mutex_);
+    agent_ids.reserve(agents_.size());
+    for(const auto& pair : agents_) {
+      agent_ids.push_back(pair.first);
+    }
+  }
 
-  for(const auto& pair : agents_) {
-    check_agent_health(pair.first);
+  for(const auto& agent_id : agent_ids) {
+    check_agent_health(agent_id);
   }
 }
 
@@ -1245,11 +1252,17 @@ void MMAgentRuntime::worker_thread_main() {
   int worker_id = next_worker_id.fetch_add(1) % num_worker_threads_;
 
   while(is_running_) {
-    std::unique_lock<std::mutex> lock(g_worker_mutex);
+    std::unique_lock<std::mutex> wake_lock(g_worker_mutex);
 
     // Wait for tasks or shutdown signal
-    g_worker_cv.wait_for(lock, std::chrono::milliseconds(100),
-                         [this]() { return !node_task_queue_.empty() || !is_running_; });
+    g_worker_cv.wait_for(wake_lock, std::chrono::milliseconds(100), [this]() {
+      if(!is_running_) {
+        return true;
+      }
+      std::lock_guard<std::mutex> task_lock(task_queue_mutex_);
+      return !node_task_queue_.empty();
+    });
+    wake_lock.unlock();
 
     if(!is_running_) {
       break;

@@ -8,6 +8,7 @@
 #include "agent/data_variant_utils.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
@@ -25,6 +26,19 @@
 
 namespace agentflow {
 namespace runtime {
+
+namespace {
+#ifdef __linux__
+void cleanup_posix_shared_memory_name(const std::string& name) {
+  if(name.empty()) {
+    return;
+  }
+  if(shm_unlink(name.c_str()) == -1 && errno != ENOENT) {
+    Logger::instance().warn_f("Failed to unlink POSIX shared memory: %s", name.c_str());
+  }
+}
+#endif
+}  // namespace
 
 // ============================================================================
 // LocalChannel Implementation
@@ -712,6 +726,7 @@ std::unique_ptr<SharedMemoryBlock> SharedMemoryFactory::create_posix_shared(
   if(ftruncate(shm_fd, capacity) == -1) {
     Logger::instance().error_f("Failed to truncate shared memory: %s", name.c_str());
     close(shm_fd);
+    cleanup_posix_shared_memory_name(name);
     return nullptr;
   }
 
@@ -720,12 +735,14 @@ std::unique_ptr<SharedMemoryBlock> SharedMemoryFactory::create_posix_shared(
 
   if(shm_addr == MAP_FAILED) {
     Logger::instance().error("Failed to map shared memory");
+    cleanup_posix_shared_memory_name(name);
     return nullptr;
   }
 
   // InProcessSharedMemoryBlock uses C++ STL containers that cannot span process boundaries.
   // Release the OS segment and fall back to the in-process block.
   munmap(shm_addr, capacity);
+  cleanup_posix_shared_memory_name(name);
   Logger::instance().warn_f(
       "POSIX shared memory allocated (%s, %zu bytes) but cross-process layout is not yet "
       "implemented; falling back to in-process block.",
