@@ -1,7 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// Unit tests for DSL Adapter - XY IR to AF DSL conversion
+// Unit tests for DSL Adapter - THIRD IR to AF DSL conversion
 
 #include <filesystem>
 #include <fstream>
@@ -24,13 +24,13 @@ class DSLAdapterTest : public ::testing::Test {
 
   std::unique_ptr<agentflow::dsl::DSLAdapter> adapter_;
 
-  // Valid XY IR Workflow JSON (Component Instance format - inputs/outputs are Map)
-  const char* valid_xyir_workflow_json_ = R"xyir({
+  // Valid THIRD IR Workflow JSON (Component Instance format - inputs/outputs are Map)
+  const char* valid_thirdir_workflow_json_ = R"thirdir({
     "schemaVersion": "0.6",
-    "workflowId": "xy_workflow_001",
-    "workflowName": "XY Test Workflow",
+    "workflowId": "third_workflow_001",
+    "workflowName": "THIRD Test Workflow",
     "workflowVersion": "1.0",
-    "description": "A test workflow in XY IR format",
+    "description": "A test workflow in THIRD IR format",
     "config": {
       "timeout": 30000,
       "retry_count": 3
@@ -98,14 +98,14 @@ class DSLAdapterTest : public ::testing::Test {
         "target": {"componentId": "end_node"}
       }
     ]
-  })xyir";
+  })thirdir";
 
-  // Valid XY IR Agent JSON
-  const char* valid_xyir_agent_json_ = R"xyir({
+  // Valid THIRD IR Agent JSON
+  const char* valid_thirdir_agent_json_ = R"thirdir({
     "schemaVersion": "0.6",
-    "agentID": "xy_agent_001",
+    "agentID": "third_agent_001",
     "agentVersion": "1.0",
-    "description": "A test agent in XY IR format",
+    "description": "A test agent in THIRD IR format",
     "workflow": {
       "workflowId": "agent_workflow_001",
       "workflowName": "Agent Workflow",
@@ -148,10 +148,10 @@ class DSLAdapterTest : public ::testing::Test {
         }
       ]
     }
-  })xyir";
+  })thirdir";
 
-  // XY IR with switchCase component
-  const char* xyir_switchcase_workflow_json_ = R"xyir({
+  // THIRD IR with switchCase component
+  const char* thirdir_switchcase_workflow_json_ = R"thirdir({
     "schemaVersion": "0.6",
     "workflowId": "switch_workflow_001",
     "workflowName": "SwitchCase Workflow",
@@ -207,39 +207,39 @@ class DSLAdapterTest : public ::testing::Test {
         "target": {"componentId": "path_default"}
       }
     ]
-  })xyir";
+  })thirdir";
 
-  // Invalid XY IR workflow (missing required fields)
-  const char* invalid_xyir_workflow_json_ = R"xyir({
+  // Invalid THIRD IR workflow (missing required fields)
+  const char* invalid_thirdir_workflow_json_ = R"thirdir({
     "schemaVersion": "0.6",
     "workflowName": "Invalid Workflow",
     "components": []
-  })xyir";
+  })thirdir";
 };
 
 // =============================================================================
 // Format Detection Tests
 // =============================================================================
 
-TEST_F(DSLAdapterTest, DetectXYIRFormat) {
-  EXPECT_EQ("xyir", agentflow::dsl::DSLAdapter::detect_format(valid_xyir_workflow_json_));
-  EXPECT_EQ("xyir", agentflow::dsl::DSLAdapter::detect_format(valid_xyir_agent_json_));
+TEST_F(DSLAdapterTest, DetectTHIRDIRFormat) {
+  EXPECT_EQ("thirdir", agentflow::dsl::DSLAdapter::detect_format(valid_thirdir_workflow_json_));
+  EXPECT_EQ("thirdir", agentflow::dsl::DSLAdapter::detect_format(valid_thirdir_agent_json_));
 }
 
 TEST_F(DSLAdapterTest, DetectAFDSLFormat) {
-  const char* afdsl_json = R"xyir({
+  const char* afdsl_json = R"thirdir({
     "id": "workflow_001",
     "name": "Test",
     "nodes": [],
     "edges": []
-  })xyir";
+  })thirdir";
   EXPECT_EQ("afdsl", agentflow::dsl::DSLAdapter::detect_format(afdsl_json));
 }
 
 TEST_F(DSLAdapterTest, DetectUnknownFormat) {
-  const char* unknown_json = R"xyir({
+  const char* unknown_json = R"thirdir({
     "foo": "bar"
-  })xyir";
+  })thirdir";
   EXPECT_EQ("unknown", agentflow::dsl::DSLAdapter::detect_format(unknown_json));
 }
 
@@ -247,19 +247,19 @@ TEST_F(DSLAdapterTest, DetectUnknownFormat) {
 // Workflow Conversion Tests
 // =============================================================================
 
-TEST_F(DSLAdapterTest, ConvertValidXYIRWorkflow) {
-  auto result = adapter_->convert_workflow(valid_xyir_workflow_json_);
+TEST_F(DSLAdapterTest, ConvertValidTHIRDIRWorkflow) {
+  auto result = adapter_->convert_workflow(valid_thirdir_workflow_json_);
 
   EXPECT_TRUE(result.is_valid()) << result.get_error_summary();
   EXPECT_NE(nullptr, result.workflow);
-  EXPECT_EQ("xy_workflow_001", result.workflow->get_id());
-  EXPECT_EQ("XY Test Workflow", result.workflow->get_name());
+  EXPECT_EQ("third_workflow_001", result.workflow->get_id());
+  EXPECT_EQ("THIRD Test Workflow", result.workflow->get_name());
   EXPECT_EQ("1.0", result.workflow->get_config().version);
-  EXPECT_EQ("A test workflow in XY IR format", result.workflow->get_config().description);
+  EXPECT_EQ("A test workflow in THIRD IR format", result.workflow->get_config().description);
 }
 
 TEST_F(DSLAdapterTest, ConvertWorkflowNodes) {
-  auto result = adapter_->convert_workflow(valid_xyir_workflow_json_);
+  auto result = adapter_->convert_workflow(valid_thirdir_workflow_json_);
 
   ASSERT_TRUE(result.is_valid());
   const auto& nodes = result.workflow->get_nodes();
@@ -291,7 +291,7 @@ TEST_F(DSLAdapterTest, ConvertWorkflowNodes) {
 }
 
 TEST_F(DSLAdapterTest, ConvertWorkflowEdges) {
-  auto result = adapter_->convert_workflow(valid_xyir_workflow_json_);
+  auto result = adapter_->convert_workflow(valid_thirdir_workflow_json_);
 
   ASSERT_TRUE(result.is_valid());
   const auto& edges = result.workflow->get_edges();
@@ -308,7 +308,7 @@ TEST_F(DSLAdapterTest, ConvertWorkflowEdges) {
 }
 
 TEST_F(DSLAdapterTest, ConvertNodeInputsOutputs) {
-  auto result = adapter_->convert_workflow(valid_xyir_workflow_json_);
+  auto result = adapter_->convert_workflow(valid_thirdir_workflow_json_);
 
   ASSERT_TRUE(result.is_valid());
 
@@ -326,7 +326,7 @@ TEST_F(DSLAdapterTest, ConvertNodeInputsOutputs) {
 }
 
 TEST_F(DSLAdapterTest, ConvertSwitchCaseWorkflow) {
-  auto result = adapter_->convert_workflow(xyir_switchcase_workflow_json_);
+  auto result = adapter_->convert_workflow(thirdir_switchcase_workflow_json_);
 
   EXPECT_TRUE(result.is_valid()) << result.get_error_summary();
   ASSERT_NE(nullptr, result.workflow);
@@ -355,19 +355,19 @@ TEST_F(DSLAdapterTest, ConvertSwitchCaseWorkflow) {
 // Agent Conversion Tests
 // =============================================================================
 
-TEST_F(DSLAdapterTest, ConvertValidXYIRAgent) {
-  auto result = adapter_->convert_agent(valid_xyir_agent_json_);
+TEST_F(DSLAdapterTest, ConvertValidTHIRDIRAgent) {
+  auto result = adapter_->convert_agent(valid_thirdir_agent_json_);
 
   EXPECT_TRUE(result.is_valid()) << result.get_error_summary();
   EXPECT_NE(nullptr, result.agent);
-  EXPECT_EQ("xy_agent_001", result.agent->get_id());
-  EXPECT_EQ("xy_agent_001", result.agent->get_name());
+  EXPECT_EQ("third_agent_001", result.agent->get_id());
+  EXPECT_EQ("third_agent_001", result.agent->get_name());
   EXPECT_EQ("1.0", result.agent->get_config().version);
-  EXPECT_EQ("A test agent in XY IR format", result.agent->get_config().description);
+  EXPECT_EQ("A test agent in THIRD IR format", result.agent->get_config().description);
 }
 
 TEST_F(DSLAdapterTest, ConvertAgentWithWorkflow) {
-  auto result = adapter_->convert_agent(valid_xyir_agent_json_);
+  auto result = adapter_->convert_agent(valid_thirdir_agent_json_);
 
   ASSERT_TRUE(result.is_valid());
 
@@ -383,27 +383,27 @@ TEST_F(DSLAdapterTest, ConvertAgentWithWorkflow) {
 // =============================================================================
 
 TEST_F(DSLAdapterTest, ConvertWorkflowToJSON) {
-  auto result = adapter_->convert_workflow_to_json(valid_xyir_workflow_json_);
+  auto result = adapter_->convert_workflow_to_json(valid_thirdir_workflow_json_);
 
   EXPECT_TRUE(result.is_valid()) << result.get_error_summary();
   EXPECT_FALSE(result.workflow_json.empty());
 
   // Check that output JSON contains expected fields
-  EXPECT_TRUE(result.workflow_json.find("\"id\": \"xy_workflow_001\"") != std::string::npos);
-  EXPECT_TRUE(result.workflow_json.find("\"name\": \"XY Test Workflow\"") != std::string::npos);
+  EXPECT_TRUE(result.workflow_json.find("\"id\": \"third_workflow_001\"") != std::string::npos);
+  EXPECT_TRUE(result.workflow_json.find("\"name\": \"THIRD Test Workflow\"") != std::string::npos);
   EXPECT_TRUE(result.workflow_json.find("\"nodes\":") != std::string::npos);
   EXPECT_TRUE(result.workflow_json.find("\"edges\":") != std::string::npos);
 }
 
 TEST_F(DSLAdapterTest, ConvertAgentToJSON) {
-  auto result = adapter_->convert_agent_to_json(valid_xyir_agent_json_);
+  auto result = adapter_->convert_agent_to_json(valid_thirdir_agent_json_);
 
   EXPECT_TRUE(result.is_valid()) << result.get_error_summary();
   EXPECT_FALSE(result.agent_json.empty());
 
   // Check that output JSON contains expected fields
-  EXPECT_TRUE(result.agent_json.find("\"id\": \"xy_agent_001\"") != std::string::npos);
-  EXPECT_TRUE(result.agent_json.find("\"name\": \"xy_agent_001\"") != std::string::npos);
+  EXPECT_TRUE(result.agent_json.find("\"id\": \"third_agent_001\"") != std::string::npos);
+  EXPECT_TRUE(result.agent_json.find("\"name\": \"third_agent_001\"") != std::string::npos);
   EXPECT_TRUE(result.agent_json.find("\"workflows\":") != std::string::npos);
 }
 
@@ -412,7 +412,7 @@ TEST_F(DSLAdapterTest, ConvertAgentToJSON) {
 // =============================================================================
 
 TEST_F(DSLAdapterTest, ConvertInvalidWorkflow) {
-  auto result = adapter_->convert_workflow(invalid_xyir_workflow_json_);
+  auto result = adapter_->convert_workflow(invalid_thirdir_workflow_json_);
 
   EXPECT_FALSE(result.is_valid());
   EXPECT_FALSE(result.errors.empty());
@@ -436,17 +436,17 @@ TEST_F(DSLAdapterTest, ConvertEmptyJSON) {
 // Validation Tests
 // =============================================================================
 
-TEST_F(DSLAdapterTest, ValidateXYIRContent) {
+TEST_F(DSLAdapterTest, ValidateTHIRDIRContent) {
   agentflow::dsl::AdapterResult result;
-  bool valid = adapter_->validate_xyir(valid_xyir_workflow_json_, result);
+  bool valid = adapter_->validate_thirdir(valid_thirdir_workflow_json_, result);
 
   EXPECT_TRUE(valid);
   EXPECT_TRUE(result.errors.empty());
 }
 
-TEST_F(DSLAdapterTest, ValidateXYIRContentInvalid) {
+TEST_F(DSLAdapterTest, ValidateTHIRDIRContentInvalid) {
   agentflow::dsl::AdapterResult result;
-  bool valid = adapter_->validate_xyir("invalid json", result);
+  bool valid = adapter_->validate_thirdir("invalid json", result);
 
   EXPECT_FALSE(valid);
   EXPECT_FALSE(result.errors.empty());
@@ -457,20 +457,20 @@ TEST_F(DSLAdapterTest, ValidateXYIRContentInvalid) {
 // =============================================================================
 
 TEST_F(DSLAdapterTest, ConvertWorkflowFromFile) {
-  // Create a temporary file with XY IR content
+  // Create a temporary file with THIRD IR content
   namespace fs = std::filesystem;
   fs::path temp_dir = fs::temp_directory_path();
-  fs::path temp_file = temp_dir / "test_xyir_workflow.json";
+  fs::path temp_file = temp_dir / "test_thirdir_workflow.json";
 
   std::ofstream ofs(temp_file);
-  ofs << valid_xyir_workflow_json_;
+  ofs << valid_thirdir_workflow_json_;
   ofs.close();
 
   auto result = adapter_->convert_workflow_file(temp_file.string());
 
   EXPECT_TRUE(result.is_valid()) << result.get_error_summary();
   EXPECT_NE(nullptr, result.workflow);
-  EXPECT_EQ("xy_workflow_001", result.workflow->get_id());
+  EXPECT_EQ("third_workflow_001", result.workflow->get_id());
 
   // Cleanup
   fs::remove(temp_file);
@@ -479,17 +479,17 @@ TEST_F(DSLAdapterTest, ConvertWorkflowFromFile) {
 TEST_F(DSLAdapterTest, ConvertAgentFromFile) {
   namespace fs = std::filesystem;
   fs::path temp_dir = fs::temp_directory_path();
-  fs::path temp_file = temp_dir / "test_xyir_agent.json";
+  fs::path temp_file = temp_dir / "test_thirdir_agent.json";
 
   std::ofstream ofs(temp_file);
-  ofs << valid_xyir_agent_json_;
+  ofs << valid_thirdir_agent_json_;
   ofs.close();
 
   auto result = adapter_->convert_agent_file(temp_file.string());
 
   EXPECT_TRUE(result.is_valid()) << result.get_error_summary();
   EXPECT_NE(nullptr, result.agent);
-  EXPECT_EQ("xy_agent_001", result.agent->get_id());
+  EXPECT_EQ("third_agent_001", result.agent->get_id());
 
   // Cleanup
   fs::remove(temp_file);
@@ -501,7 +501,7 @@ TEST_F(DSLAdapterTest, ConvertAgentFromFile) {
 
 TEST_F(DSLAdapterTest, MapExecutionModes) {
   // Test Python execution mode
-  const char* python_workflow = R"xyir({
+  const char* python_workflow = R"thirdir({
     "workflowId": "python_test",
     "workflowName": "Python Test",
     "workflowVersion": "1.0",
@@ -515,7 +515,7 @@ TEST_F(DSLAdapterTest, MapExecutionModes) {
       }
     ],
     "connections": []
-  })xyir";
+  })thirdir";
 
   auto result = adapter_->convert_workflow(python_workflow);
   ASSERT_TRUE(result.is_valid());
@@ -525,7 +525,7 @@ TEST_F(DSLAdapterTest, MapExecutionModes) {
 }
 
 TEST_F(DSLAdapterTest, MapExecutionModesGo) {
-  const char* go_workflow = R"xyir({
+  const char* go_workflow = R"thirdir({
     "workflowId": "go_test",
     "workflowName": "Go Test",
     "workflowVersion": "1.0",
@@ -539,7 +539,7 @@ TEST_F(DSLAdapterTest, MapExecutionModesGo) {
       }
     ],
     "connections": []
-  })xyir";
+  })thirdir";
 
   auto result = adapter_->convert_workflow(go_workflow);
   ASSERT_TRUE(result.is_valid());
@@ -549,7 +549,7 @@ TEST_F(DSLAdapterTest, MapExecutionModesGo) {
 }
 
 TEST_F(DSLAdapterTest, MapExecutionModesJava) {
-  const char* java_workflow = R"xyir({
+  const char* java_workflow = R"thirdir({
     "workflowId": "java_test",
     "workflowName": "Java Test",
     "workflowVersion": "1.0",
@@ -563,7 +563,7 @@ TEST_F(DSLAdapterTest, MapExecutionModesJava) {
       }
     ],
     "connections": []
-  })xyir";
+  })thirdir";
 
   auto result = adapter_->convert_workflow(java_workflow);
   ASSERT_TRUE(result.is_valid());
@@ -582,10 +582,10 @@ TEST_F(DSLAdapterTest, FactoryCreate) {
 }
 
 TEST_F(DSLAdapterTest, FactoryVersions) {
-  std::string xyir_version = agentflow::dsl::DSLAdapterFactory::get_supported_xyir_version();
+  std::string thirdir_version = agentflow::dsl::DSLAdapterFactory::get_supported_thirdir_version();
   std::string afdsl_version = agentflow::dsl::DSLAdapterFactory::get_output_afdsl_version();
 
-  EXPECT_FALSE(xyir_version.empty());
+  EXPECT_FALSE(thirdir_version.empty());
   EXPECT_FALSE(afdsl_version.empty());
 }
 

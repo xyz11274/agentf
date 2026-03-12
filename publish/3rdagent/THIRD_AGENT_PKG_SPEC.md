@@ -40,7 +40,7 @@ package.json为包描述文件，内容如下
 }
 ```
 
-其中MathAgent_XY/FM_x.x.x.tar.gz为Agent包，支持xy格式与fm格式，其中xy格式定义见4.1，fm格式见4.2。
+其中 `MathAgent_3RD_x.x.x.tar.gz` / `MathAgent_FM_x.x.x.tar.gz` 为Agent包，支持3rd格式与fm格式，其中3rd格式定义见4.1，fm格式见4.2。
 
 其中MathAgent_sign.tar.gz为签名文件，对config和package文件一起进行签名MathAgent_description.json为配置文件，内容如下：
 
@@ -62,27 +62,27 @@ package.json为包描述文件，内容如下
 }
 ```
 
-## 4.1 xy格式Agent包
+## 4.1 3rd格式Agent包
 
-### 4.1.1 xy格式Agent包结构
+### 4.1.1 3rd格式Agent包结构
 
-MathAgent_XY_x.x.x.tar.gz为FM格式的低码化Agent包，其解压后为MathAgent_XY_x.x.x，内容如下：
+MathAgent_3RD_x.x.x.tar.gz为3rd格式的低码化Agent包，其解压后为MathAgent_3RD_x.x.x，内容如下：
 
 ````
-MathAgent_XY_x.x.x   # 由MathAgent_XY_x.x.x.tar.gz解压而来
-├ MathAgentIR.json    #  xy格式描述的低码化MathAgent 
-└ MathComponent_x.x.x.tar.gz   # xy格式的节点代码````
+MathAgent_3RD_x.x.x   # 由MathAgent_3RD_x.x.x.tar.gz解压而来
+├ MathAgentIR.json    #  3rd格式描述的低码化MathAgent 
+└ MathComponent_x.x.x.tar.gz   # 3rd格式的节点代码````
 
-其中MathComponent_x.x.x.tar.gz为节点实现，MathComponent_x.x.x对应xy ir中的节点类型字段。节点支持C++、Python，其中C++的节点实现见4.1.2章节
+其中MathComponent_x.x.x.tar.gz为节点实现，MathComponent_x.x.x对应THIRD IR中的节点类型字段。节点支持C++、Python，其中C++的节点实现见4.1.2章节
 ````
 
 ### 4.1.2 C++ Component结构描述
 
-如Agent包中描述，其中MathComponent_x.x.x.tar.gz为C++ Node，其xy格式的定义如下：
+如Agent包中描述，其中MathComponent_x.x.x.tar.gz为C++ Node，其3rd格式的定义如下：
 
 ```
 MathComponent_x.x.x  # 为MathComponent_x.x.x.tar.gz解压后的目录
-├ MathComponentTypeIR.json  # MathComponent Type的描述文件，具体格式参考：《xyir规范》第4章。
+├ MathComponentTypeIR.json  # MathComponent Type的描述文件，具体格式参考：《THIRD IR规范》第4章。
 ├ MathComponent_x.x.x.so
 └ 其他依赖的so文件
 ```
@@ -163,8 +163,7 @@ MathNode_x.x.x  # 为MathNode_x.x.x.tar.gz解压后的目录
 
 ### 4.2.3 C++ Node so接口定义
 
-C++节点so的接口定义，同xy格式节点定义，参考4.1.3章节
+C++节点so的接口定义，同3rd格式节点定义，参考4.1.3章节
 
 ### 4.2.2 Python Node结构描述
-
 

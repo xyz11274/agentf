@@ -2,7 +2,7 @@
 
 ## 1.1 目的
 
-描述xy ir开发规范，指导低码化Agent开发
+描述THIRD IR开发规范，指导低码化Agent开发
 
 ## 1.2 范围
 
@@ -10,7 +10,7 @@
 
 ## 1.3 术语
 
-**IR**（Intermediate Representation），即中间表示的概念。在XY平台中，IR用来描述Agent、workflow开发态以及运行态的相关信息。
+**IR**（Intermediate Representation），即中间表示的概念。在3rd平台中，IR用来描述Agent、workflow开发态以及运行态的相关信息。
 **Agent**：是一种能够自主理解、规划决策、执行复杂任务的智能体。workflow是实现Agent的一种方式。
 **workflow**：通过对插件、大语言模型等功能进行组合，从而实现复杂、稳定的业务流程编排。
 **组件（component）**：提供独立功能的节点，为workflow提供原子能力。包含组件类型及组件实例。

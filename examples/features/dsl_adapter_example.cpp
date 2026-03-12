@@ -1,10 +1,10 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// Example: DSLAdapter Usage - Converting XY IR to AF DSL format
+// Example: DSLAdapter Usage - Converting THIRD IR to AF DSL format
 //
 // This example demonstrates how to use the DSLAdapter module to convert
-// Agent definitions from XY IR format to AgentFlow DSL format.
+// Agent definitions from THIRD IR format to AgentFlow DSL format.
 
 #include <iostream>
 #include <memory>
@@ -16,8 +16,8 @@
 
 using namespace agentflow;
 
-// Example XY IR Agent JSON (as would be loaded from a file)
-const char* EXAMPLE_XYIR_AGENT = R"xyir({
+// Example THIRD IR Agent JSON (as would be loaded from a file)
+const char* EXAMPLE_THIRDIR_AGENT = R"thirdir({
   "schemaVersion": "0.6",
   "agentID": "MathAgent",
   "agentVersion": "1.0.0",
@@ -97,10 +97,10 @@ const char* EXAMPLE_XYIR_AGENT = R"xyir({
       }
     ]
   }
-})xyir";
+})thirdir";
 
-// Example XY IR Workflow with switch-case (conditional branches)
-const char* EXAMPLE_XYIR_WORKFLOW_SWITCH = R"xyir({
+// Example THIRD IR Workflow with switch-case (conditional branches)
+const char* EXAMPLE_THIRDIR_WORKFLOW_SWITCH = R"thirdir({
   "schemaVersion": "0.6",
   "workflowId": "conditional_workflow",
   "workflowName": "Conditional Processing Workflow",
@@ -191,7 +191,7 @@ const char* EXAMPLE_XYIR_WORKFLOW_SWITCH = R"xyir({
       "target": {"componentId": "output_node"}
     }
   ]
-})xyir";
+})thirdir";
 
 void printSeparator(const std::string& title) {
   std::cout << "\n" << std::string(60, '=') << "\n";
@@ -200,15 +200,15 @@ void printSeparator(const std::string& title) {
 }
 
 void demonstrateBasicConversion() {
-  printSeparator("1. Basic XY IR Agent Conversion");
+  printSeparator("1. Basic THIRD IR Agent Conversion");
 
   // Create adapter
   auto adapter = dsl::DSLAdapterFactory::create();
 
-  std::cout << "Converting XY IR Agent to AF DSL format...\n\n";
+  std::cout << "Converting THIRD IR Agent to AF DSL format...\n\n";
 
   // Convert agent
-  auto result = adapter->convert_agent(EXAMPLE_XYIR_AGENT);
+  auto result = adapter->convert_agent(EXAMPLE_THIRDIR_AGENT);
 
   if(!result.is_valid()) {
     std::cerr << "Conversion failed:\n" << result.get_error_summary() << "\n";
@@ -269,10 +269,10 @@ void demonstrateJSONOutput() {
 
   auto adapter = dsl::DSLAdapterFactory::create();
 
-  std::cout << "Converting XY IR to AF DSL JSON format...\n\n";
+  std::cout << "Converting THIRD IR to AF DSL JSON format...\n\n";
 
   // Convert and get JSON output
-  auto result = adapter->convert_agent_to_json(EXAMPLE_XYIR_AGENT);
+  auto result = adapter->convert_agent_to_json(EXAMPLE_THIRDIR_AGENT);
 
   if(!result.is_valid()) {
     std::cerr << "Conversion failed:\n" << result.get_error_summary() << "\n";
@@ -288,9 +288,9 @@ void demonstrateSwitchCaseConversion() {
 
   auto adapter = dsl::DSLAdapterFactory::create();
 
-  std::cout << "Converting XY IR Workflow with switch-case components...\n\n";
+  std::cout << "Converting THIRD IR Workflow with switch-case components...\n\n";
 
-  auto result = adapter->convert_workflow(EXAMPLE_XYIR_WORKFLOW_SWITCH);
+  auto result = adapter->convert_workflow(EXAMPLE_THIRDIR_WORKFLOW_SWITCH);
 
   if(!result.is_valid()) {
     std::cerr << "Conversion failed:\n" << result.get_error_summary() << "\n";
@@ -321,22 +321,22 @@ void demonstrateFormatDetection() {
 
   std::cout << "Detecting input format...\n\n";
 
-  // Detect XY IR format
-  std::string xyir_format = dsl::DSLAdapter::detect_format(EXAMPLE_XYIR_AGENT);
-  std::cout << "EXAMPLE_XYIR_AGENT format: " << xyir_format << "\n";
+  // Detect THIRD IR format
+  std::string thirdir_format = dsl::DSLAdapter::detect_format(EXAMPLE_THIRDIR_AGENT);
+  std::cout << "EXAMPLE_THIRDIR_AGENT format: " << thirdir_format << "\n";
 
   // Detect AF DSL format
-  const char* afdsl_json = R"xyir({
+  const char* afdsl_json = R"thirdir({
     "id": "test_workflow",
     "name": "Test",
     "nodes": [],
     "edges": []
-  })xyir";
+  })thirdir";
   std::string afdsl_format = dsl::DSLAdapter::detect_format(afdsl_json);
   std::cout << "AF DSL JSON format: " << afdsl_format << "\n";
 
   // Unknown format
-  const char* unknown_json = R"xyir({"foo": "bar"})xyir";
+  const char* unknown_json = R"thirdir({"foo": "bar"})thirdir";
   std::string unknown_format = dsl::DSLAdapter::detect_format(unknown_json);
   std::cout << "Unknown JSON format: " << unknown_format << "\n";
 }
@@ -349,10 +349,10 @@ void demonstrateErrorHandling() {
   // Try to convert invalid JSON
   std::cout << "Attempting to convert invalid JSON...\n\n";
 
-  const char* invalid_json = R"xyir({
+  const char* invalid_json = R"thirdir({
     "schemaVersion": "0.6",
     "workflowName": "Invalid Workflow"
-  })xyir";
+  })thirdir";
 
   auto result = adapter->convert_workflow(invalid_json);
 
@@ -367,28 +367,28 @@ void demonstrateFileConversion() {
 
   std::cout << "To convert from a file:\n\n";
   std::cout << "  auto adapter = dsl::DSLAdapterFactory::create();\n";
-  std::cout << "  auto result = adapter->convert_agent_file(\"path/to/xy_agent.json\");\n";
+  std::cout << "  auto result = adapter->convert_agent_file(\"path/to/third_agent.json\");\n";
   std::cout << "  if (result.is_valid()) {\n";
   std::cout << "      auto agent = result.agent;\n";
   std::cout << "      // Use the converted agent...\n";
   std::cout << "  }\n\n";
 
   std::cout << "Supported file formats:\n";
-  std::cout << "  - XY IR Agent JSON (MathAgent_XY_1.0.0.tar.gz -> MathAgentIR.json)\n";
-  std::cout << "  - XY IR Workflow JSON (workflow_XX.json)\n";
+  std::cout << "  - THIRD IR Agent JSON (MathAgent_3RD_1.0.0.tar.gz -> MathAgentIR.json)\n";
+  std::cout << "  - THIRD IR Workflow JSON (workflow_XX.json)\n";
 }
 
 int main() {
   std::cout << R"(
 ================================================================================
                        DSLAdapter Usage Example
-           Converting XY IR format to AgentFlow DSL format
+           Converting THIRD IR format to AgentFlow DSL format
 ================================================================================
 
 This example demonstrates how to use the DSLAdapter module to convert
-Agent definitions from XY IR format to AgentFlow DSL format.
+Agent definitions from THIRD IR format to AgentFlow DSL format.
 
-XY IR Format Features:
+THIRD IR Format Features:
   - Uses 'components' and 'connections' concepts
   - Components have type, typeVersion, classInfo, inputs, outputs
   - Connections have source (componentId, branchId) and target
@@ -413,17 +413,17 @@ AF DSL Format Features:
   printSeparator("Summary");
 
   std::cout << "Key DSLAdapter APIs:\n\n";
-  std::cout << "  // Convert XY IR to objects\n";
-  std::cout << "  convert_workflow(xyir_json) -> AdapterResult { workflow }\n";
-  std::cout << "  convert_agent(xyir_json) -> AdapterResult { agent }\n\n";
-  std::cout << "  // Convert XY IR to AF DSL JSON\n";
-  std::cout << "  convert_workflow_to_json(xyir_json) -> AdapterResult { workflow_json }\n";
-  std::cout << "  convert_agent_to_json(xyir_json) -> AdapterResult { agent_json }\n\n";
+  std::cout << "  // Convert THIRD IR to objects\n";
+  std::cout << "  convert_workflow(thirdir_json) -> AdapterResult { workflow }\n";
+  std::cout << "  convert_agent(thirdir_json) -> AdapterResult { agent }\n\n";
+  std::cout << "  // Convert THIRD IR to AF DSL JSON\n";
+  std::cout << "  convert_workflow_to_json(thirdir_json) -> AdapterResult { workflow_json }\n";
+  std::cout << "  convert_agent_to_json(thirdir_json) -> AdapterResult { agent_json }\n\n";
   std::cout << "  // File-based conversion\n";
   std::cout << "  convert_workflow_file(path) -> AdapterResult { workflow }\n";
   std::cout << "  convert_agent_file(path) -> AdapterResult { agent }\n\n";
   std::cout << "  // Format detection\n";
-  std::cout << "  detect_format(json) -> \"xyir\" | \"afdsl\" | \"unknown\"\n";
+  std::cout << "  detect_format(json) -> \"thirdir\" | \"afdsl\" | \"unknown\"\n";
 
   std::cout << "\nExample completed successfully!\n";
 

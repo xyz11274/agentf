@@ -21,13 +21,13 @@ Agent DSL、Workflow DSL、Node DSL均为json文件，其组合关系如下：
 
 ## 3.1 整体思路
 
-1）按照XY IR规范，或者AF DSL方式，以json文件方式，描述低码化Agent
-2）如果是XY IR规范开发的低码化Agent，则需要转换为AF DSL格式，由DSLAdapter模块完成
+1）按照THIRD IR规范，或者AF DSL方式，以json文件方式，描述低码化Agent
+2）如果是THIRD IR规范开发的低码化Agent，则需要转换为AF DSL格式，由DSLAdapter模块完成
 3）AgentFlow代码，解析AF DSL文件，根据文件描述逐步执行各节点，最后输出
 
 ## 3.2 按照af dsl规范开发Agent
 
-备注：如果需要按照xy ir规范开发Agent，可以参考xy ir规范描述，此处不作额外说明
+备注：如果需要按照THIRD IR规范开发Agent，可以参考THIRD IR规范描述，此处不作额外说明
 1）定义Node类型，Node中制定要执行的代码段，及输入、输出信息
 2）定义edges结构体，其定义了Node间的DAG关系
 3）将已定义的nodes和edges，写入到workflow中，补齐workflow其他字段
