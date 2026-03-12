@@ -1,4 +1,5 @@
 {
+  "_comment": "DEPRECATED: This file is no longer used. Coordinator now forwards responses without custom workflow.",
   "id": "llm-query-coordinator-workflow",
   "version": "1.0",
   "name": "LLM Query Coordinator",

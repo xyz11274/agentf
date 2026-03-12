@@ -1,4 +1,6 @@
 #!/bin/bash
+# DEPRECATED: This file is no longer used. Dispatcher now uses built-in functionality with next_skills configuration.
+#
 # Dispatcher Node - Routes user requests to coordinator
 # Input: AF_INPUT environment variable (user message)
 # Output: JSON with selected_skills to trigger coordinator -> skill
