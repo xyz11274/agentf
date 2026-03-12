@@ -3,6 +3,7 @@
 #include "agent/data_variant_utils.h"
 #include "agentflow/so_node.h"
 #include "runtime/databus/node_databus_adapter.h"
+#include "runtime/databus/node_databus_client.h"
 
 #include <sys/time.h>
 
@@ -165,13 +166,22 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
       result = code_loader.execute_jar(request.command, request.main_class, request.args, exec_config);
       break;
     case ExecutionMode::SO_LIBRARY: {
-      // Use V2 signature with DataBus if available
-      if(request.databus) {
+      // Use V3 signature with session-isolated DataBus client if session_id is provided
+      if(request.databus && !request.session_id.empty()) {
+        // V3 signature - session-isolated DataBus client (recommended)
+        NodeDataBusAdapter adapter(request.databus);
+        NodeDataBusClientImpl client(&adapter, request.session_id);
+        result = code_loader.load_and_execute_so_v3(
+            request.command, request.function_name.empty() ? "execute" : request.function_name,
+            exec_config, &client);
+      } else if(request.databus) {
+        // V2 signature - raw DataBus access (backward compatibility)
         NodeDataBusAdapter adapter(request.databus);
         result = code_loader.load_and_execute_so_v2(
             request.command, request.function_name.empty() ? "execute" : request.function_name,
             exec_config, &adapter);
       } else {
+        // V1 signature - no DataBus access
         result = code_loader.load_and_execute_so(
             request.command, request.function_name.empty() ? "execute" : request.function_name,
             exec_config);
