@@ -109,6 +109,25 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // Inject LLM configuration from environment into the agent's DataBus
+    // This allows SO library nodes to access LLM config via INodeDataBus
+    {
+        auto& bus = runtime->get_databus(agent->get_id());
+        const char* llm_api_key = std::getenv("LLM_API_KEY");
+        if (llm_api_key && llm_api_key[0] != '\0') {
+            bus.put("api_key", DataVariant(std::string(llm_api_key)));
+            std::cout << "Injected LLM_API_KEY into agent databus" << std::endl;
+        }
+        const char* llm_model = std::getenv("LLM_MODEL");
+        if (llm_model && llm_model[0] != '\0') {
+            bus.put("model", DataVariant(std::string(llm_model)));
+        }
+        const char* llm_base_url = std::getenv("LLM_BASE_URL");
+        if (llm_base_url && llm_base_url[0] != '\0') {
+            bus.put("base_url", DataVariant(std::string(llm_base_url)));
+        }
+    }
+
     // Start agent
     if (!agent->start()) {
         std::cerr << "ERROR: Failed to start agent" << std::endl;

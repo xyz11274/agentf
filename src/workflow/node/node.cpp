@@ -1,6 +1,7 @@
 #include "workflow/node.h"
 
 #include "agent/data_variant_utils.h"
+#include "runtime/databus/node_databus_adapter.h"
 
 #include <algorithm>
 #include <cctype>
@@ -679,9 +680,20 @@ bool MMNode::execute_so_library() {
     exec_config.working_dir = config_.working_dir;
     exec_config.timeout_ms  = config_.timeout_ms > 0 ? config_.timeout_ms : 30000;
 
+    // Pass DataBus if available for V2 signature support
+    if(databus_) {
+      exec_config.databus = new runtime::NodeDataBusAdapter(databus_);
+    }
+
     auto result = code_loader_->load_and_execute_so(
         config_.command, config_.function_name.empty() ? "execute" : config_.function_name,
         exec_config);
+
+    // Clean up adapter if created
+    if(exec_config.databus) {
+      delete static_cast<runtime::NodeDataBusAdapter*>(exec_config.databus);
+      exec_config.databus = nullptr;
+    }
 
     if(result.success) {
       // Parse outputs

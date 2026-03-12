@@ -1,6 +1,7 @@
 #include "runtime/exe_loader.h"
 
 #include "agent/data_variant_utils.h"
+#include "agentflow/so_node.h"
 
 #include <algorithm>
 #include <atomic>
@@ -404,6 +405,11 @@ ExecutableType CodeLoader::detect_executable_type(const std::string& file_path) 
 ExecutionResult CodeLoader::load_and_execute_so(const std::string&     file_path,
                                                 const std::string&     function_name,
                                                 const ExecutionConfig& config) {
+  // If databus is provided in config, delegate to V2 version
+  if(config.databus) {
+    return load_and_execute_so_v2(file_path, function_name, config, config.databus);
+  }
+
   auto start_time = std::chrono::steady_clock::now();
 
   log_execution_start(file_path, ExecutableType::SO_LIBRARY);
@@ -489,6 +495,133 @@ ExecutionResult CodeLoader::load_and_execute_so(const std::string&     file_path
   try {
     DataMap outputs;
     func(config.inputs, outputs);
+
+    // Convert outputs to string
+    for(const auto& pair : outputs) {
+      std::string value_str = data_variant_to_string(pair.second);
+
+      result.stdout += pair.first + "=" + value_str + "\n";
+    }
+
+    result.success   = true;
+    result.exit_code = 0;
+  } catch(const std::exception& e) {
+    result.success       = false;
+    result.error_message = "SO function exception: " + std::string(e.what());
+    result.exit_code     = -1;
+  } catch(...) {
+    result.success       = false;
+    result.error_message = "SO function: unknown exception";
+    result.exit_code     = -1;
+  }
+
+  auto end_time = std::chrono::steady_clock::now();
+  result.duration_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+  log_execution_result(file_path, result);
+
+  return result;
+}
+
+ExecutionResult CodeLoader::load_and_execute_so_v2(const std::string&     file_path,
+                                                   const std::string&     function_name,
+                                                   const ExecutionConfig& config,
+                                                   INodeDataBus*          databus) {
+  auto start_time = std::chrono::steady_clock::now();
+
+  log_execution_start(file_path, ExecutableType::SO_LIBRARY);
+
+  ExecutionResult result;
+
+  // Check if hot reload is enabled and we need to reload
+  bool needs_reload = false;
+  if(is_watching(file_path)) {
+    auto current_version = get_current_version(file_path);
+    auto latest_version  = get_current_version(file_path);
+
+    if(!current_version || !latest_version
+       || current_version->version_id != latest_version->version_id) {
+      needs_reload = true;
+    }
+  }
+
+  // Load or reload the SO library
+  SoLibraryPtr   so_handle;
+  SoFunctionV2   func_v2 = nullptr;
+  SoFunction     func_v1 = nullptr;
+
+  {
+    std::lock_guard<std::mutex> lock(so_cache_mutex_);
+
+    if(needs_reload) {
+      unload_so_library(file_path);
+    }
+
+    auto it = so_library_cache_.find(file_path);
+    if(it != so_library_cache_.end()) {
+      // Try V2 signature first
+      func_v2 = get_so_function_v2(it->second.handle, function_name);
+      if(!func_v2) {
+        // Fall back to V1 signature
+        func_v1 = get_so_function(it->second.handle, function_name);
+      }
+      if(!func_v2 && !func_v1) {
+        result.success       = false;
+        result.error_message = "Function not found: " + function_name;
+        result.exit_code     = -1;
+        return result;
+      }
+      Logger::instance().info_f("[CODE_LOADER] Using cached SO library: %s (V2=%s)",
+                                file_path.c_str(), func_v2 ? "yes" : "no");
+    } else {
+      auto loaded_handle = load_so_library(file_path);
+      if(!loaded_handle) {
+        result.success       = false;
+        result.error_message = "Failed to load SO library";
+        result.exit_code     = -1;
+        return result;
+      }
+
+      // Try V2 signature first
+      func_v2 = get_so_function_v2(loaded_handle, function_name);
+      if(!func_v2) {
+        // Fall back to V1 signature
+        func_v1 = get_so_function(loaded_handle, function_name);
+      }
+      if(!func_v2 && !func_v1) {
+        result.success       = false;
+        result.error_message = "Function not found: " + function_name;
+        result.exit_code     = -1;
+        return result;
+      }
+
+      // Cache the library
+      CachedSoLibrary cached;
+      cached.handle    = std::move(loaded_handle);
+      cached.load_time = std::chrono::system_clock::now();
+      cached.file_path = file_path;
+
+      auto version = get_current_version(file_path);
+      if(version) {
+        cached.version_id = version->version_id;
+      }
+
+      so_library_cache_[file_path] = std::move(cached);
+    }
+  }
+
+  // Execute the function (prefer V2 if available)
+  try {
+    DataMap outputs;
+
+    if(func_v2) {
+      // V2 signature with DataBus
+      func_v2(config.inputs, outputs, databus);
+    } else if(func_v1) {
+      // V1 signature without DataBus
+      func_v1(config.inputs, outputs);
+    }
 
     // Convert outputs to string
     for(const auto& pair : outputs) {
@@ -1014,6 +1147,39 @@ SoFunction CodeLoader::get_so_function(const SoLibraryPtr& handle,
   }
 
   return reinterpret_cast<SoFunction>(func_ptr);
+}
+
+SoFunctionV2 CodeLoader::get_so_function_v2(const SoLibraryPtr& handle,
+                                            const std::string&  function_name) {
+  if(!handle || !handle->handle) {
+    return nullptr;
+  }
+
+  // First try the V2 function name (function_name_v2)
+  std::string v2_name = function_name + "_v2";
+  dlerror();  // Clear any existing error
+  void* func_ptr = dlsym(handle->handle, v2_name.c_str());
+
+  const char* error = dlerror();
+  if(!error && func_ptr) {
+    Logger::instance().info_f("[CODE_LOADER] Found V2 function: %s", v2_name.c_str());
+    return reinterpret_cast<SoFunctionV2>(func_ptr);
+  }
+
+  // Try the original function name for V2 signature
+  dlerror();
+  func_ptr = dlsym(handle->handle, function_name.c_str());
+
+  error = dlerror();
+  if(error) {
+    Logger::instance().debug_f("[CODE_LOADER] V2 function %s not found: %s",
+                               function_name.c_str(), error);
+    return nullptr;
+  }
+
+  // Note: We can't verify the signature at runtime, but the function exists
+  // The caller should try V2 first, then fall back to V1
+  return reinterpret_cast<SoFunctionV2>(func_ptr);
 }
 
 bool CodeLoader::unload_so_library(const std::string& file_path) {

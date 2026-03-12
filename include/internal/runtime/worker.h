@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "agent/common.h"
+#include "runtime/databus/databus.h"
 #include "runtime/exe_loader.h"
 #include "utils/thread_pool.h"
 
@@ -49,6 +50,8 @@ public:
     bool                      keep_databus_files = false;
     bool                      enable_hot_reload = false;
     HotReloadConfig           hot_reload_config;
+    // Injected DataBus for SO library nodes (V2 signature)
+    MMDataBus*                databus = nullptr;
     struct LLMServiceConfig {
       std::string base_url;
       std::string api_key;
@@ -135,6 +138,11 @@ public:
   bool                     supports_workflow(const std::string& workflow_id) const;
   std::set<std::string>    get_supported_workflows() const;
 
+  // DataBus injection for in-process sharing with Runtime
+  void                     set_databus(const std::string& agent_id, MMDataBus* databus);
+  MMDataBus*               get_databus(const std::string& agent_id) const;
+  void                     remove_databus(const std::string& agent_id);
+
   bool start();
   void stop();
   bool is_running() const { return running_; }
@@ -167,6 +175,11 @@ private:
   int64_t                last_heartbeat_ms_ = 0;
   std::set<std::string>  supported_workflows_;
   mutable std::mutex     mutex_;
+
+  // Injected DataBus collection from Runtime (for in-process sharing)
+  // Key: AgentId, Value: pointer to Runtime's MMDataBus
+  std::map<std::string, MMDataBus*> databuses_;
+  mutable std::mutex                 databus_mutex_;
 
   std::atomic<bool> running_{false};
 
