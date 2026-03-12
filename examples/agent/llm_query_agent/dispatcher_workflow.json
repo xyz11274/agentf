@@ -1,4 +1,5 @@
 {
+  "_comment": "DEPRECATED: This file is no longer used. Dispatcher now uses built-in functionality with next_skills configuration.",
   "id": "llm-query-dispatcher-workflow",
   "version": "1.0",
   "name": "LLM Query Dispatcher",

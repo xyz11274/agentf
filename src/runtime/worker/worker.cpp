@@ -1,6 +1,8 @@
 #include "runtime/worker.h"
 
 #include "agent/data_variant_utils.h"
+#include "agentflow/so_node.h"
+#include "runtime/databus/node_databus_adapter.h"
 
 #include <sys/time.h>
 
@@ -162,11 +164,20 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
     case ExecutionMode::JAVA_JAR:
       result = code_loader.execute_jar(request.command, request.main_class, request.args, exec_config);
       break;
-    case ExecutionMode::SO_LIBRARY:
-      result = code_loader.load_and_execute_so(
-          request.command, request.function_name.empty() ? "execute" : request.function_name,
-          exec_config);
+    case ExecutionMode::SO_LIBRARY: {
+      // Use V2 signature with DataBus if available
+      if(request.databus) {
+        NodeDataBusAdapter adapter(request.databus);
+        result = code_loader.load_and_execute_so_v2(
+            request.command, request.function_name.empty() ? "execute" : request.function_name,
+            exec_config, &adapter);
+      } else {
+        result = code_loader.load_and_execute_so(
+            request.command, request.function_name.empty() ? "execute" : request.function_name,
+            exec_config);
+      }
       break;
+    }
     case ExecutionMode::CPP_FUNCTION:
     default:
       result = code_loader.execute(request.command, exec_config);
@@ -336,6 +347,31 @@ bool MMWorkerEngine::supports_workflow(const std::string& workflow_id) const {
 std::set<std::string> MMWorkerEngine::get_supported_workflows() const {
   std::lock_guard<std::mutex> lock(mutex_);
   return supported_workflows_;
+}
+
+void MMWorkerEngine::set_databus(const std::string& agent_id, MMDataBus* databus) {
+  std::lock_guard<std::mutex> lock(databus_mutex_);
+  if(databus) {
+    databuses_[agent_id] = databus;
+    Logger::instance().debug_f("[WORKER_DATABUS] Set databus for agent=%s", agent_id.c_str());
+  } else {
+    databuses_.erase(agent_id);
+  }
+}
+
+MMDataBus* MMWorkerEngine::get_databus(const std::string& agent_id) const {
+  std::lock_guard<std::mutex> lock(databus_mutex_);
+  auto it = databuses_.find(agent_id);
+  if(it != databuses_.end()) {
+    return it->second;
+  }
+  return nullptr;
+}
+
+void MMWorkerEngine::remove_databus(const std::string& agent_id) {
+  std::lock_guard<std::mutex> lock(databus_mutex_);
+  databuses_.erase(agent_id);
+  Logger::instance().debug_f("[WORKER_DATABUS] Removed databus for agent=%s", agent_id.c_str());
 }
 
 bool MMWorkerEngine::start() {

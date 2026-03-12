@@ -12,6 +12,10 @@
 #include "agent/common.h"
 
 namespace agentflow {
+
+// Forward declaration for INodeDataBus (defined in agentflow/so_node.h)
+class INodeDataBus;
+
 namespace runtime {
 
 /**
@@ -130,13 +134,24 @@ struct ExecutionConfig {
   std::vector<std::string> env_vars;            // Additional environment variables
   DataMap                  inputs;              // Input data (use DataMap from common.h)
 
+  // Optional DataBus for SO library V2 signature
+  // When set, SO library functions can access the DataBus
+  // INodeDataBus is forward declared in agentflow namespace
+  INodeDataBus* databus = nullptr;
+
   ExecutionConfig() = default;
 };
 
 /**
- * SO library function signature
+ * SO library function signature (V1 - basic)
  */
 using SoFunction = void (*)(const DataMap& inputs, DataMap& outputs);
+
+/**
+ * SO library function signature (V2 - with DataBus access)
+ * Uses INodeDataBus from agentflow namespace (defined in agentflow/so_node.h)
+ */
+using SoFunctionV2 = void (*)(const DataMap& inputs, DataMap& outputs, INodeDataBus* databus);
 
 /**
  * CodeLoader handles loading and executing different types of executable code
@@ -162,6 +177,19 @@ public:
   ExecutionResult load_and_execute_so(const std::string&     file_path,
                                       const std::string&     function_name,
                                       const ExecutionConfig& config = ExecutionConfig());
+
+  /**
+   * Load and execute a shared object library with DataBus access (V2 signature)
+   * @param file_path Path to the .so/.dylib file
+   * @param function_name Name of the function to call
+   * @param config Execution configuration
+   * @param databus Optional DataBus interface for the SO function
+   * @return Execution result
+   */
+  ExecutionResult load_and_execute_so_v2(const std::string&     file_path,
+                                         const std::string&     function_name,
+                                         const ExecutionConfig& config,
+                                         INodeDataBus*          databus);
 
   /**
    * Execute a JAR file
@@ -359,6 +387,7 @@ private:
 
   SoLibraryPtr load_so_library(const std::string& file_path);
   SoFunction   get_so_function(const SoLibraryPtr& handle, const std::string& function_name);
+  SoFunctionV2 get_so_function_v2(const SoLibraryPtr& handle, const std::string& function_name);
   bool         unload_so_library(const std::string& file_path);
 
   std::string build_command_string(const std::string&              executable,

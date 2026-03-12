@@ -82,9 +82,10 @@ bool parse_task_definition(const rapidjson::Value& task_value, int expected_inde
   }
 
   // Dispatcher is built-in, so workflow_file is optional for dispatcher type
-  if(task_definition.task_type == "dispatcher") {
+  // Coordinator can also use built-in functionality
+  if(task_definition.task_type == "dispatcher" || task_definition.task_type == "coordinator") {
     parse_string_member(task_value, "workflow_file", task_definition.workflow_file);
-    // workflow_file can be empty for built-in dispatcher
+    // workflow_file can be empty for built-in dispatcher/coordinator
   } else {
     if(!parse_string_member(task_value, "workflow_file", task_definition.workflow_file)
         || task_definition.workflow_file.empty()) {

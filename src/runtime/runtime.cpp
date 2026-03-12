@@ -242,6 +242,8 @@ bool MMAgentRuntime::register_agent(AgentPtr agent) {
           local_worker_->add_supported_workflow(workflow->get_id());
         }
       }
+      // Inject this agent's DataBus to the local worker
+      local_worker_->set_databus(agent->get_id(), databuses_[agent->get_id()].get());
     }
     Logger::instance().info_f("MMAgent registered: %s (id: %s)", agent->get_name().c_str(),
                               agent->get_id().c_str());
@@ -274,6 +276,10 @@ bool MMAgentRuntime::unregister_agent(const AgentId& agent_id) {
       agents_.erase(it);
       databuses_.erase(agent_id);
       agent_heartbeats_.erase(agent_id);
+      // Remove DataBus from local worker
+      if(local_worker_) {
+        local_worker_->remove_databus(agent_id);
+      }
       Logger::instance().info_f("MMAgent unregistered: %s", agent_id.c_str());
       return true;
     }
@@ -485,6 +491,9 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
       node->set_inputs(hydrated);
     }
   }
+
+  // Inject DataBus for SO library V2 signature support
+  node->set_databus(&get_databus(agent->get_id()));
 
   // Trace: open a NODE span (RAII — records to TraceManager on scope exit)
   trace::ScopedSpan node_span(
@@ -808,12 +817,20 @@ void MMAgentRuntime::agent_registration_loop() {
           agents_.erase(it);
           databuses_.erase(agent_id);
           agent_heartbeats_.erase(agent_id);
+          // Remove DataBus from local worker
+          if(local_worker_) {
+            local_worker_->remove_databus(agent_id);
+          }
           ok = true;
         }
       } else {
         agents_[agent_id] = request.agent;
         databuses_[agent_id] = std::unique_ptr<MMDataBus>(new MMDataBus(1024 * 1024));
         agent_heartbeats_[agent_id] = now_ms();
+        // Inject DataBus to local worker
+        if(local_worker_) {
+          local_worker_->set_databus(agent_id, databuses_[agent_id].get());
+        }
         ok = true;
       }
     }

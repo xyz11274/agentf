@@ -21,7 +21,7 @@
       "execution_mode": "so_library",
       "command": "lib/libllm_query_node.so",
       "function_name": "llm_query_node",
-      "inputs": ["api_key", "model", "base_url", "prompt"],
+      "inputs": ["api_key", "model", "base_url", "prompt", "input"],
       "outputs": ["status", "response", "error"],
       "timeout_ms": 120000
     }

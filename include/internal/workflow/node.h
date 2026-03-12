@@ -14,6 +14,7 @@
 
 #include "agent/common.h"
 #include "runtime/exe_loader.h"
+#include "runtime/databus/databus.h"
 #include "utils/thread_pool.h"
 
 namespace agentflow {
@@ -203,6 +204,10 @@ public:
   // Code loader access
   runtime::ExecutionResult execute_with_code_loader();
 
+  // DataBus injection for SO library V2 signature
+  void set_databus(runtime::MMDataBus* databus) { databus_ = databus; }
+  runtime::MMDataBus* get_databus() const { return databus_; }
+
   // MMNode runtime queue + event loop
   bool start_runtime();
   bool start_runtime(const RuntimeConfig& config);
@@ -250,6 +255,9 @@ private:
   std::unique_ptr<basic::ThreadPool> event_pool_;
   std::unordered_map<std::string, std::vector<NodeEventHandler>> event_handlers_;
   std::mutex event_handler_mutex_;
+
+  // Injected DataBus for SO library V2 signature
+  runtime::MMDataBus* databus_ = nullptr;
 
   // Helper methods for execution
   bool execute_cpp_function();

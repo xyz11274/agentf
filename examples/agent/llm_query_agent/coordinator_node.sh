@@ -1,4 +1,6 @@
 #!/bin/bash
+# DEPRECATED: This file is no longer used. Coordinator now forwards responses without custom workflow.
+#
 # Coordinator Node - Coordinates LLM queries and forwards to skill
 # Input: AF_INPUT environment variable (user message from dispatcher)
 # Output: JSON with prompt to trigger skill execution
