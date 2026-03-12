@@ -87,7 +87,7 @@ public:
   // Lifecycle management
   bool start();
   bool stop();
-  bool is_running() const { return is_running_; }
+  bool is_running() const { return is_running_.load(); }
   RuntimeRole get_role() const { return role_; }
 
   // Runtime role and global deployment/scheduling
@@ -125,7 +125,7 @@ private:
   // Execution thread pool for nodes
   int                      num_worker_threads_ = 4;
   std::vector<std::thread> worker_threads_;
-  bool                     is_running_ = false;
+  std::atomic<bool>        is_running_{false};
   std::atomic<bool>        draining_{false};
 
   // MMNode task queue

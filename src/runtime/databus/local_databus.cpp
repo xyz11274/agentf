@@ -76,10 +76,7 @@ void LocalChannel::close() {
     }
   }
 
-  // Clean up key condition variables
-  for(auto& [key, cv_ptr] : key_cvs_) {
-    delete cv_ptr;
-  }
+  // unique_ptr entries are destroyed automatically when key_cvs_ is cleared
   key_cvs_.clear();
 
   // Notify subscribers
@@ -392,10 +389,10 @@ void LocalChannel::notify_subscribers(ChannelEvent event, const DataPacket& pack
 std::condition_variable* LocalChannel::get_key_cv(const std::string& key) {
   auto it = key_cvs_.find(key);
   if(it == key_cvs_.end()) {
-    key_cvs_[key] = new std::condition_variable();
-    return key_cvs_[key];
+    key_cvs_[key] = std::make_unique<std::condition_variable>();
+    return key_cvs_[key].get();
   }
-  return it->second;
+  return it->second.get();
 }
 
 // ============================================================================
@@ -501,10 +498,10 @@ size_t estimate_variant_size(const DataVariant& data) {
 class InProcessSharedMemoryBlock : public SharedMemoryBlock {
 public:
   explicit InProcessSharedMemoryBlock(size_t capacity) : capacity_(capacity), used_capacity_(0) {
-    data_ = new std::map<std::string, DataVariant>();
+    data_ = std::make_unique<std::map<std::string, DataVariant>>();
   }
 
-  virtual ~InProcessSharedMemoryBlock() { delete data_; }
+  virtual ~InProcessSharedMemoryBlock() = default;
 
   bool write(const std::string& key, const DataVariant& value) override {
     size_t value_size = estimate_variant_size(value);
@@ -560,9 +557,9 @@ public:
   size_t get_total_capacity() const override { return capacity_; }
 
 private:
-  std::map<std::string, DataVariant>* data_;
-  size_t                              capacity_;
-  size_t                              used_capacity_;
+  std::unique_ptr<std::map<std::string, DataVariant>> data_;
+  size_t                                              capacity_;
+  size_t                                              used_capacity_;
 };
 
 ZeroCopyDataBus::ZeroCopyDataBus(size_t capacity) : capacity_(capacity) {
@@ -726,9 +723,14 @@ std::unique_ptr<SharedMemoryBlock> SharedMemoryFactory::create_posix_shared(
     return nullptr;
   }
 
-  Logger::instance().info_f("Created POSIX shared memory: %s (size: %zu bytes)", name.c_str(),
-                            capacity);
-  return std::unique_ptr<SharedMemoryBlock>(nullptr);
+  // InProcessSharedMemoryBlock uses C++ STL containers that cannot span process boundaries.
+  // Release the OS segment and fall back to the in-process block.
+  munmap(shm_addr, capacity);
+  Logger::instance().warn_f(
+      "POSIX shared memory allocated (%s, %zu bytes) but cross-process layout is not yet "
+      "implemented; falling back to in-process block.",
+      name.c_str(), capacity);
+  return create_in_process(capacity);
 #else
   Logger::instance().error("POSIX shared memory not supported on this platform");
   return nullptr;
@@ -738,7 +740,7 @@ std::unique_ptr<SharedMemoryBlock> SharedMemoryFactory::create_posix_shared(
 std::unique_ptr<SharedMemoryBlock> SharedMemoryFactory::create_systemv_shared(
     size_t capacity, const std::string& name) {
 #ifdef __linux__
-  key_t key = ftok(name.c_str(), IPC_CREAT | 0666);
+  key_t key = ftok(name.c_str(), 1);
   if(key == -1) {
     Logger::instance().error_f("Failed to create System V key: %s", name.c_str());
     return nullptr;
@@ -756,9 +758,15 @@ std::unique_ptr<SharedMemoryBlock> SharedMemoryFactory::create_systemv_shared(
     return nullptr;
   }
 
-  Logger::instance().info_f("Created System V shared memory: %s (size: %zu bytes)", name.c_str(),
-                            capacity);
-  return std::unique_ptr<SharedMemoryBlock>(nullptr);
+  // InProcessSharedMemoryBlock uses C++ STL containers that cannot span process boundaries.
+  // Detach and release the OS segment, then fall back to the in-process block.
+  shmdt(shm_addr);
+  shmctl(shm_id, IPC_RMID, nullptr);
+  Logger::instance().warn_f(
+      "System V shared memory allocated (%s, %zu bytes) but cross-process layout is not yet "
+      "implemented; falling back to in-process block.",
+      name.c_str(), capacity);
+  return create_in_process(capacity);
 #else
   Logger::instance().error("System V shared memory not supported on this platform");
   return nullptr;

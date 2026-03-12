@@ -45,7 +45,7 @@ bool MMAgentMsgQue::enqueue_to_type_queue(const Message& message) {
 
 bool MMAgentMsgQue::enqueue_message(const Message& message) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if(get_queue_size() >= config_.max_queue_size) {
+  if(get_queue_size_unlocked() >= config_.max_queue_size) {
     return false;
   }
   Message control_message = message;
@@ -105,6 +105,11 @@ bool MMAgentMsgQue::peek_message(Message& message) const {
 }
 
 int MMAgentMsgQue::get_queue_size() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return get_queue_size_unlocked();
+}
+
+int MMAgentMsgQue::get_queue_size_unlocked() const {
   return static_cast<int>(intent_request_queue_.size() + data_exchange_queue_.size());
 }
 
@@ -118,12 +123,12 @@ int MMAgentMsgQue::get_queue_size(MessageQueueType queue_type) const {
 
 bool MMAgentMsgQue::is_queue_empty() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return get_queue_size() == 0;
+  return get_queue_size_unlocked() == 0;
 }
 
 bool MMAgentMsgQue::is_queue_full() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return get_queue_size() >= config_.max_queue_size;
+  return get_queue_size_unlocked() >= config_.max_queue_size;
 }
 
 void MMAgentMsgQue::clear_queue() {

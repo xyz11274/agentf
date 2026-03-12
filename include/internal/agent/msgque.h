@@ -1,6 +1,7 @@
 #ifndef AGENTFLOW_INTERNAL_AGENT_MSGQUE_H
 #define AGENTFLOW_INTERNAL_AGENT_MSGQUE_H
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <mutex>
@@ -67,11 +68,12 @@ private:
   MessageQueueType resolve_queue_type(const Message& message) const;
   bool enqueue_to_type_queue(const Message& message);
   bool dequeue_from_type_queue(MessageQueueType queue_type, Message& message);
+  int  get_queue_size_unlocked() const;
 
   Config                    config_;
   std::vector<Message>      intent_request_queue_;
   std::vector<Message>      data_exchange_queue_;
-  int64_t                   total_messages_processed_ = 0;
+  std::atomic<int64_t>      total_messages_processed_{0};
   mutable std::mutex        mutex_;
 };
 

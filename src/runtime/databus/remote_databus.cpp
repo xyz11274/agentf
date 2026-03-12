@@ -31,7 +31,10 @@ bool RemoteDatabus::connect(const std::string& address) {
     return true;
   }
   address_ = address;
-  redis_adapter_instance().connect(address_);
+  if (!redis_adapter_instance().connect(address_)) {
+    Logger::instance().error("RemoteDatabus failed to connect to " + address);
+    return false;
+  }
   connected_ = true;
   Logger::instance().info("RemoteDatabus connected to " + address);
   return true;

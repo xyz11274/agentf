@@ -114,7 +114,7 @@ private:
 
   std::vector<DataPacket>                        queue_;
   std::map<std::string, std::vector<DataPacket>> key_data_;
-  std::map<std::string, std::condition_variable*> key_cvs_;
+  std::map<std::string, std::unique_ptr<std::condition_variable>> key_cvs_;
 
   std::map<size_t, EventCallback> subscribers_;
   size_t                          next_subscription_id_ = 1;
