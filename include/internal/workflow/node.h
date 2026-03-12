@@ -15,6 +15,7 @@
 #include "agent/common.h"
 #include "runtime/exe_loader.h"
 #include "runtime/databus/databus.h"
+#include "agentflow/so_node.h"
 #include "utils/thread_pool.h"
 
 namespace agentflow {
@@ -208,6 +209,10 @@ public:
   void set_databus(runtime::MMDataBus* databus) { databus_ = databus; }
   runtime::MMDataBus* get_databus() const { return databus_; }
 
+  // Session-isolated DataBus client for V3 signature
+  void set_databus_client(std::shared_ptr<INodeDataBusClient> client) { databus_client_ = std::move(client); }
+  INodeDataBusClient* get_databus_client() const { return databus_client_.get(); }
+
   // MMNode runtime queue + event loop
   bool start_runtime();
   bool start_runtime(const RuntimeConfig& config);
@@ -258,6 +263,9 @@ private:
 
   // Injected DataBus for SO library V2 signature
   runtime::MMDataBus* databus_ = nullptr;
+
+  // Session-isolated DataBus client for V3 signature
+  std::shared_ptr<INodeDataBusClient> databus_client_;
 
   // Helper methods for execution
   bool execute_cpp_function();

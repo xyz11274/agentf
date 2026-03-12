@@ -2,6 +2,84 @@
 
 **详细开发指南**: [NODE_DEVELOPMENT_GUIDE.md](NODE_DEVELOPMENT_GUIDE.md) - 包含框架与 Node 的通信接口、各执行模式开发方法和场景化示例。
 
+## SO Library 函数签名
+
+SO library 节点支持三种函数签名，框架按优先级加载：
+
+### V3 签名（推荐）
+
+Session 隔离的 DataBus 访问，推荐新节点使用：
+
+```cpp
+#include "agentflow/so_node.h"
+
+extern "C" void my_node_v3(
+    const SoDataMap& inputs,
+    SoDataMap& outputs,
+    INodeDataBusClient* client) {
+
+  // 存储用户数据到 user namespace
+  client->user()->put("my_result", SoDataVariant(std::string("hello")));
+
+  // 从 sys namespace 读取框架配置
+  SoDataVariant api_key;
+  if (client->sys()->get("api_key", api_key)) {
+    // 使用 API key...
+  }
+
+  // 获取当前 session ID
+  const std::string& session_id = client->session_id();
+}
+```
+
+**DataBus Namespace 说明**：
+
+| Namespace | 用途 | 示例 |
+|-----------|------|------|
+| `sys` | 框架消息通信（session 隔离） | `response`, `api_key` |
+| `ctx` | 上下文存储（预留） | `history`, `state` |
+| `llm` | LLM 服务交互（预留） | `last_prompt` |
+| `tool` | 工具调用信息（预留） | `call_result` |
+| `user` | 用户自定义 node 数据 | 任意 key |
+
+**跨 Session 数据共享**：使用 `client->raw()` 获取原始 DataBus 访问，用于读取全局配置。
+
+### V2 签名（向后兼容）
+
+原始 DataBus 访问，无 session 隔离：
+
+```cpp
+extern "C" void my_node_v2(
+    const SoDataMap& inputs,
+    SoDataMap& outputs,
+    INodeDataBus* databus) {
+
+  if (databus) {
+    databus->put("my_key", SoDataVariant(std::string("value")));
+  }
+}
+```
+
+### V1 签名（基础）
+
+仅输入输出，无 DataBus 访问：
+
+```cpp
+extern "C" void my_node(
+    const SoDataMap& inputs,
+    SoDataMap& outputs) {
+
+  // 处理 inputs，填充 outputs
+}
+```
+
+### 函数加载优先级
+
+框架按以下顺序尝试加载函数符号：
+1. `{function_name}_v3` - Session 隔离的 DataBus client
+2. `{function_name}_v2` - 原始 DataBus 访问
+3. `{function_name}` - 基础输入输出
+
 ## 运行时 API 约定
 
 MMNode 实现应遵循以下运行时约定：
