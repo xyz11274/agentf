@@ -4,11 +4,12 @@ An AgentFlow agent that queries Large Language Models (LLM) using the llm-query 
 
 ## Overview
 
-This agent demonstrates the complete dispatcher/coordinator/skill architecture:
+This agent demonstrates the complete dispatcher/coordinator/skill architecture, and now also bundles a local echo workflow for no-dependency smoke coverage:
 
 - **Dispatcher**: Receives user requests, routes to coordinator
 - **Coordinator**: Coordinates processing, forwards to skill
 - **Skill (LLM Query)**: Executes the actual LLM query
+- **Local Echo Workflow**: Provides a shell-only fallback path for simple routing and response tests
 
 The skill workflow uses a two-node pipeline:
 1. **Config Node** (Shell) - Reads configuration from environment variables
@@ -116,6 +117,7 @@ User Input
 | `dispatcher_workflow.json` | Dispatcher workflow definition |
 | `coordinator_workflow.json` | Coordinator workflow definition |
 | `llm_query_workflow.json` | Main skill workflow (config → llm) |
+| `echo_workflow.json` | Local shell-only echo workflow for smoke coverage |
 | `dispatcher_node.sh` | Shell node for dispatcher |
 | `coordinator_node.sh` | Shell node for coordinator |
 | `config_node.py` | Python node for reading config |
@@ -169,3 +171,7 @@ printf 'What is 2+2?\n/quit\n' | \
 ## License
 
 Part of the AgentFlow project.
+
+## Local Echo Smoke Path
+
+For no-dependency smoke validation, this package also contains `echo_workflow.json`. Tests can route requests with `workflow_id=echo-workflow` to verify dispatcher response delivery without requiring the `llm-query` dynamic library.

@@ -7,8 +7,8 @@ examples/
 ├── features/              # 单点功能 C++ 示例
 ├── agent/                 # Agent 包示例
 │   ├── basic_agent/
-│   ├── calculator_agent/
 │   ├── claw_agent/
+│   ├── llm_query_agent/
 │   ├── multi_session_chat/
 │   ├── openjiuwen_multi_session_chat/
 │   ├── openjiuwen_studio_agent/
@@ -38,6 +38,15 @@ examples/
 
 设计文档：`agent_runner_design.md`、`interactive_runner_demo.md`
 
+公共基础设施：
+
+- `agent_runner.cpp` 提供通用 Agent 包加载、校验和执行 CLI。
+- `interactive_runner.cpp` 提供消息驱动交互执行逻辑，现通过共享对象库复用于多个示例二进制，避免重复编译。
+- `agent_tui_main.h` 将高重复 TUI 入口收敛为两类共享实现：
+  - 简单 dispatcher 型：`claw_agent`、`llm_query_agent`、`openjiuwen_studio_agent`
+  - 多 session chat 型：`multi_session_chat`、`openjiuwen_multi_session_chat`
+- 各示例仍保留原有二进制名称，兼容现有文档、脚本和测试入口。
+
 ---
 
 ## agent/ — Agent 包示例
@@ -46,12 +55,8 @@ examples/
 
 ### basic_agent
 
-最小化 Agent 示例，含一个 shell_script 节点（`node_basic.sh`）和 coordinator workflow。  
-E2E 测试的基础数据包。
-
-### calculator_agent
-
-Python 脚本节点示例（`calc.py`），演示通过 workflow 驱动 Python 脚本执行数学表达式计算。
+基础执行 Agent 示例，覆盖最小 package 结构、shell_script 节点（`node_basic.sh`）以及 Python 节点（`calc.py`）。  
+同时承担基础 E2E 与功能测试的数据包。
 
 ### nested_workflow_agent
 
@@ -83,7 +88,7 @@ Workflow 模式参考模板（DSL 示例，不依赖外部脚本）：
 
 ## agent/llm_query_agent/ — LLM Query 示例
 
-依赖 `llm-query` 动态库的 LLM 查询示例，现提供专用 TUI 入口；运行时日志与交互窗口隔离。
+任务编排示例，现提供本地 echo workflow 与依赖 `llm-query` 动态库的 LLM workflow，并保留专用 TUI 入口；运行时日志与交互窗口隔离。
 
 ## agent/multi_session_chat/ — 多 session 对话示例
 
@@ -101,8 +106,7 @@ Workflow 模式参考模板（DSL 示例，不依赖外部脚本）：
 {
   "package_root": "examples/agent",
   "manifests": [
-    "basic_agent",
-    "calculator_agent"
+    "basic_agent"
   ],
   "scan_interval_ms": 1000,
   "heartbeat_interval_ms": 1000

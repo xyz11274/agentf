@@ -1,7 +1,7 @@
 {
   "name": "BasicAgent",
   "version": "1.0.0",
-  "description": "Basic agent example",
+  "description": "Basic execution agent example with shell and Python workflows",
   "session_pool_size": 1,
   "tasks": [
     {
@@ -16,7 +16,7 @@
     {
       "id": 0,
       "description": "Homogeneous pooled session template",
-      "task_count": 3,
+      "task_count": 4,
       "tasks": [
         {
           "id": 0,
@@ -43,6 +43,18 @@
             "instance_pool_size": 2
           },
           "workflow_pool_size": 2
+        },
+        {
+          "id": 3,
+          "type": "skill",
+          "description": "Run calculator execution skill",
+          "workflow_file": "calculator_workflow.json",
+          "skill": {
+            "name": "calculator-executor",
+            "config_dir": "skills/calculator-executor",
+            "instance_pool_size": 1
+          },
+          "workflow_pool_size": 1
         }
       ]
     }

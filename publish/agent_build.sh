@@ -29,6 +29,7 @@ Commands:
 Examples:
     ./agent_build.sh build publish/agent build
     ./agent_build.sh build examples/agent/basic_agent build
+# basic_agent now also includes the merged calculator example workflows
 EOF2
 }
 

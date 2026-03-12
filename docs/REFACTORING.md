@@ -1589,7 +1589,7 @@ examples/agent/
 ├── basic_agent/
 │   ├── package.json          # MMAgent metadata
 │   └── workflow.json         # Basic workflow DSL example
-├── calculator_agent/
+├── basic_agent/
 │   ├── package.json          # MMAgent metadata
 │   ├── workflow.json         # Calculator workflow DSL
 │   └── calc.py              # Python implementation
@@ -1603,12 +1603,12 @@ examples/agent/
 - Package metadata in JSON format
 - Supports easy extension with new nodes
 
-**`calculator_agent` Example**
+**`basic_agent` Example**
 - Advanced example with data flow and validation
 - Demonstrates multi-step workflow: validate input → add numbers → end
 - Includes Python implementation (`calc.py`) for actual computation
 - Shows parameter passing between workflow nodes
-- Example usage: `./examples/agent/calculator_agent/calc.py 5 3` → Output: `5 + 3 = 8`
+- Example usage: `./examples/agent/basic_agent/calc.py 5 3` → Output: `5 + 3 = 8`
 
 #### 4. Build System Integration
 
@@ -1622,12 +1622,12 @@ examples/agent/
 
 # Package agents
 ./publish/agent_build.sh build examples/agent/basic_agent build/basic_agent.zip
-./publish/agent_build.sh build examples/agent/calculator_agent build/calculator_agent.zip
+./publish/agent_build.sh build examples/agent/basic_agent build/basic_agent.zip
 ```
 
 **Generated Artifacts:**
 - `build/basic_agent.zip` - Packaged basic agent (785 bytes)
-- `build/calculator_agent.zip` - Packaged calculator agent (1.3 KB)
+- `build/basic_agent.zip` - Packaged calculator agent (1.3 KB)
 
 ### Documentation Updates
 
@@ -1644,7 +1644,7 @@ examples/agent/
 - `src/agent/task.h/cc` - Task execution
 - `publish/agent_build.sh` - Enhanced build script
 - `examples/agent/basic_agent/*` - Basic agent example
-- `examples/agent/calculator_agent/*` - Calculator agent example
+- `examples/agent/basic_agent/*` - Merged basic execution example
 - `docs/REFACTORING.md` - This documentation
 
 ### Testing
@@ -1695,7 +1695,7 @@ All examples have been validated:
    - 新增 `tests/functional/src/test_agent_loading.cpp` 功能测试，验证 MMAgent 包加载、生命周期管理和工作流执行。
    - 修复了 `AgentState` 命名空间引用的编译错误。
 5. **示例增强**：
-   - 在 `examples/agent` 目录下新增 `basic_agent` 和 `calculator_agent` 示例包，包含完整的 `package.json` 和 `workflow.json`。
+   - 在 `examples/agent` 目录下新增 `basic_agent` 和 `basic_agent` 示例包，包含完整的 `package.json` 和 `workflow.json`。
 
 ### 文件变更
 - `include/internal/agent/package.h` (新增)
@@ -1705,7 +1705,7 @@ All examples have been validated:
 - `CMakeLists.txt` (修改)
 - `tests/functional/src/test_agent_loading.cpp` (新增)
 - `examples/agent/basic_agent/workflow.json` (新增)
-- `examples/agent/calculator_agent/workflow.json` (新增)
+- `examples/agent/basic_agent/workflow.json` (新增)
 
 ### 2026-06-25 Agent核心重构与事件系统合并
 
@@ -1727,7 +1727,7 @@ All examples have been validated:
 4. **示例与目录重构**：
    - 将 `examples/dsl` 目录重构为 `examples/workflow`，包含原来的 DSL 示例和 JSON 工作流文件。
    - 将 `visualizer.html` 移至 `publish/agent` 目录。
-   - 确保 `examples/agent` 包含 MMAgent 包示例 (`basic_agent`, `calculator_agent`)。
+   - 确保 `examples/agent` 包含 MMAgent 包示例 (`basic_agent`, `basic_agent`)。
 
 ### 文件变更
 - `src/runtime/event.cpp` (删除)
@@ -1762,7 +1762,7 @@ All examples have been validated:
    - `src/workflow/dsl/README.md` 已更新引用路径。
 
 5. **示例刷新**
-   - 更新 `examples/agent/basic_agent` 与 `examples/agent/calculator_agent`，补充规范化示例文件并保留现有加载兼容字段。
+   - 更新 `examples/agent/basic_agent` 与 `examples/agent/basic_agent`，补充规范化示例文件并保留现有加载兼容字段。
 
 ### 2026-03-07 MMWorkflow edge/node typed IO 重构
 

@@ -53,7 +53,8 @@ TEST_F(AgentLoadingTest, LoadBasicAgentPackage) {
     // Basic checks
     EXPECT_EQ(agent->get_name(), "basic-agent");
     EXPECT_EQ(agent->get_config().version, "1.0.0");
-    EXPECT_EQ(agent->get_config().description, "Basic agent example for AgentFlow");
+    EXPECT_EQ(agent->get_config().description,
+              "Basic execution agent example for AgentFlow with shell and Python workflows");
     
     // Check if workflows are loaded
     // basic_agent/workflow.json has id "basic-workflow"
@@ -70,12 +71,12 @@ TEST_F(AgentLoadingTest, LoadBasicAgentPackage) {
 }
 
 TEST_F(AgentLoadingTest, LoadCalculatorAgentPackage) {
-    std::string package_path = "examples/agent/calculator_agent";
+    std::string package_path = "examples/agent/basic_agent";
     if (!std::filesystem::exists(package_path)) {
-        package_path = "../examples/agent/calculator_agent";
+        package_path = "../examples/agent/basic_agent";
     }
     if (!std::filesystem::exists(package_path)) {
-        package_path = "../../examples/agent/calculator_agent";
+        package_path = "../../examples/agent/basic_agent";
     }
     
     ASSERT_TRUE(std::filesystem::exists(package_path)) << "Package path not found: " << package_path;
@@ -83,9 +84,9 @@ TEST_F(AgentLoadingTest, LoadCalculatorAgentPackage) {
     auto agent = framework::MMAgent::create_from_package(package_path);
     ASSERT_NE(agent, nullptr);
 
-    EXPECT_EQ(agent->get_id(), "calculator-agent");
+    EXPECT_EQ(agent->get_id(), "basic-agent");
     
-    // Check if workflows are loaded
+    // Check merged calculator workflow is still available in basic_agent
     auto workflow = agent->get_workflow("calculator-workflow");
     ASSERT_NE(workflow, nullptr);
 }

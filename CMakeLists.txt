@@ -369,6 +369,8 @@ endif()
 # ============================================================================
 # Examples
 # ============================================================================
+add_subdirectory(examples)
+
 # Adapter example
 add_executable(example_adapter ${AGENTFLOW_EXAMPLE_DIR}/features/adapter_example.cpp)
 target_link_libraries(example_adapter PRIVATE agentflow)
@@ -392,37 +394,37 @@ target_link_libraries(example_dsl_adapter PRIVATE agentflow)
 # Agent Runner - Standalone executable for loading and executing Agent packages
 add_executable(agent_runner
     ${AGENTFLOW_EXAMPLE_DIR}/features/agent_runner.cpp
-    ${AGENTFLOW_EXAMPLE_DIR}/features/interactive_runner.cpp
+    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
 )
 target_link_libraries(agent_runner PRIVATE agentflow)
 
 add_executable(example_claw_agent_tui
     ${AGENTFLOW_EXAMPLE_DIR}/agent/claw_agent/claw_agent_tui.cpp
-    ${AGENTFLOW_EXAMPLE_DIR}/features/interactive_runner.cpp
+    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
 )
 target_link_libraries(example_claw_agent_tui PRIVATE agentflow)
 
 add_executable(example_multi_session_chat_tui
     ${AGENTFLOW_EXAMPLE_DIR}/agent/multi_session_chat/multi_session_chat_tui.cpp
-    ${AGENTFLOW_EXAMPLE_DIR}/features/interactive_runner.cpp
+    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
 )
 target_link_libraries(example_multi_session_chat_tui PRIVATE agentflow)
 
 add_executable(example_openjiuwen_multi_session_chat_tui
     ${AGENTFLOW_EXAMPLE_DIR}/agent/openjiuwen_multi_session_chat/openjiuwen_multi_session_chat_tui.cpp
-    ${AGENTFLOW_EXAMPLE_DIR}/features/interactive_runner.cpp
+    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
 )
 target_link_libraries(example_openjiuwen_multi_session_chat_tui PRIVATE agentflow)
 
 add_executable(example_openjiuwen_studio_agent_tui
     ${AGENTFLOW_EXAMPLE_DIR}/agent/openjiuwen_studio_agent/openjiuwen_studio_agent_tui.cpp
-    ${AGENTFLOW_EXAMPLE_DIR}/features/interactive_runner.cpp
+    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
 )
 target_link_libraries(example_openjiuwen_studio_agent_tui PRIVATE agentflow)
 
 add_executable(example_llm_query_agent_tui
     ${AGENTFLOW_EXAMPLE_DIR}/agent/llm_query_agent/llm_query_agent_tui.cpp
-    ${AGENTFLOW_EXAMPLE_DIR}/features/interactive_runner.cpp
+    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
 )
 target_link_libraries(example_llm_query_agent_tui PRIVATE agentflow)
 

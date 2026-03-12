@@ -1,6 +1,6 @@
 /**
  * @file test_echo_agent.cpp
- * @brief E2E smoke test for Echo Agent message routing and response delivery
+ * @brief E2E smoke test for the merged echo workflow routing and response delivery
  */
 
 #include <iostream>
@@ -14,7 +14,7 @@
 
 using namespace agentflow;
 
-std::string find_echo_agent_path() {
+std::string find_echo_workflow_package_path() {
     // Get the directory where the test executable is located
     std::string exe_dir;
     std::filesystem::path current_exe = std::filesystem::current_path();
@@ -22,13 +22,13 @@ std::string find_echo_agent_path() {
     // Try multiple search strategies
     std::vector<std::string> search_paths = {
         // From project root
-        "examples/agent/echo_agent",
+        "examples/agent/llm_query_agent",
         // From build directory
-        "../examples/agent/echo_agent",
+        "../examples/agent/llm_query_agent",
         // From build/tests/e2e directory
-        "../../examples/agent/echo_agent",
+        "../../examples/agent/llm_query_agent",
         // From build/tests directory
-        "../../../examples/agent/echo_agent"
+        "../../../examples/agent/llm_query_agent"
     };
 
     for (const auto& path : search_paths) {
@@ -45,13 +45,13 @@ int main() {
     std::cout << "=== Echo Agent Test ===" << std::endl;
 
     // 1. Find echo agent package path (already returns canonical path)
-    std::string package_path = find_echo_agent_path();
+    std::string package_path = find_echo_workflow_package_path();
     if (package_path.empty()) {
-        std::cerr << "ERROR: echo_agent package not found" << std::endl;
+        std::cerr << "ERROR: merged echo workflow package not found" << std::endl;
         return 1;
     }
 
-    std::cout << "Found echo_agent at: " << package_path << std::endl;
+    std::cout << "Found merged echo workflow package at: " << package_path << std::endl;
 
     // Save current directory and change to package directory
     // This is needed so that shell scripts in workflows can be found
@@ -105,6 +105,7 @@ int main() {
     message.metadata["user_id"] = "test_user";
     message.metadata["client_id"] = "test_client";
     message.content = "Foo";
+    message.metadata["workflow_id"] = "echo-workflow";
 
     std::cout << "\nSending message: '" << message.content << "'" << std::endl;
 
@@ -121,17 +122,26 @@ int main() {
     std::cout << "\nWaiting for response..." << std::endl;
 
     bool got_response = false;
-    for (int i = 0; i < 20; ++i) {
+    const int max_wait_iterations = 100;
+    for (int i = 0; i < max_wait_iterations; ++i) {
         // Process session messages
         agent->process_all_sessions_until_idle();
 
-        // Try to dequeue response
+        // Drain any available responses; the merged package can take a couple of
+        // seconds because workflow execution still goes through dispatcher plumbing.
         framework::MMAgentMsgQue::Message response;
-        if (agent->dequeue_response_message(response)) {
+        while (agent->dequeue_response_message(response)) {
+            if (response.content.empty()) {
+                continue;
+            }
             std::cout << "\n=== Response Received ===" << std::endl;
             std::cout << "Message ID: " << response.message_id << std::endl;
             std::cout << "Content: " << response.content << std::endl;
             got_response = true;
+            break;
+        }
+
+        if (got_response) {
             break;
         }
 

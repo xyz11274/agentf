@@ -3,13 +3,16 @@
   "version": "1.0.0",
   "package_type": "release",
   "agent_version": "1.0.0",
-  "description": "Basic agent example for AgentFlow",
+  "description": "Basic execution agent example for AgentFlow with shell and Python workflows",
   "author": "AgentFlow Team",
   "entry_point": "basic_agent.so",
   "workflows": [
     "workflow.json",
     "workflow_01.json",
-    "coordinator_workflow.json"
+    "coordinator_workflow.json",
+    "calculator_workflow.json",
+    "calculator_workflow_v2.json",
+    "calculator_coordinator_workflow.json"
   ],
   "builtin_workflows": [
     "memory"
@@ -29,6 +32,11 @@
   "metadata": {
     "type": "agent",
     "category": "example",
-    "tags": ["basic", "example"]
+    "tags": [
+      "basic",
+      "python",
+      "shell",
+      "example"
+    ]
   }
 }

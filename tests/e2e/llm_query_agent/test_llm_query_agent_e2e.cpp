@@ -126,6 +126,7 @@ int main(int argc, char* argv[]) {
     message.metadata["user_id"] = "test_user";
     message.metadata["client_id"] = "test_client";
     message.content = prompt;
+    message.metadata["workflow_id"] = "llm-query-dispatcher-workflow";
 
     std::cout << "=== Sending Message ===" << std::endl;
     std::cout << "Content: " << message.content << std::endl;
