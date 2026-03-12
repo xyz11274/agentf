@@ -11,6 +11,7 @@
 
 #include "agentflow/so_node.h"
 #include "runtime/databus/namespace_client.h"
+#include "runtime/databus/node_databus_adapter.h"
 
 namespace agentflow {
 namespace runtime {
@@ -25,7 +26,7 @@ namespace runtime {
  *
  * Usage:
  * \code
- * INodeDataBus* databus = ...;
+ * MMDataBus* databus = ...;
  * NodeDataBusClientImpl client(databus, "550e8400-e29b-41d4-a716-446655440000");
  *
  * // Store user data
@@ -39,9 +40,13 @@ namespace runtime {
  */
 class NodeDataBusClientImpl : public INodeDataBusClient {
 public:
-  /// Construct a session-isolated client with the given DataBus and session ID.
+  /// Construct a session-isolated client with the given MMDataBus and session ID.
   /// The session_id should be a UUID format string.
   /// The databus pointer must remain valid for the lifetime of this client.
+  /// This constructor creates an internal NodeDataBusAdapter.
+  NodeDataBusClientImpl(MMDataBus* databus, const std::string& session_id);
+
+  /// Construct with an existing INodeDataBus adapter (for advanced use cases).
   NodeDataBusClientImpl(INodeDataBus* databus, const std::string& session_id);
 
   ~NodeDataBusClientImpl() override = default;
@@ -67,6 +72,8 @@ private:
   INamespaceClient* get_or_create_client(std::unique_ptr<NamespaceClientImpl>& client,
                                          DataBusNamespace ns);
 
+  // Either we own the adapter (owned_adapter_) or use external one (databus_)
+  std::shared_ptr<NodeDataBusAdapter> owned_adapter_;
   INodeDataBus* databus_;
   std::string session_id_;
 

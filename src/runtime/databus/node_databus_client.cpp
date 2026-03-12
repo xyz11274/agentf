@@ -30,6 +30,11 @@ const char* namespace_to_string(DataBusNamespace ns) {
 
 }  // anonymous namespace
 
+NodeDataBusClientImpl::NodeDataBusClientImpl(MMDataBus* databus, const std::string& session_id)
+    : owned_adapter_(std::make_shared<NodeDataBusAdapter>(databus)),
+      databus_(owned_adapter_.get()),
+      session_id_(session_id) {}
+
 NodeDataBusClientImpl::NodeDataBusClientImpl(INodeDataBus* databus, const std::string& session_id)
     : databus_(databus), session_id_(session_id) {}
 
