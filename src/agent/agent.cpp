@@ -363,14 +363,16 @@ bool MMAgent::initialize_components(std::shared_ptr<AgentPackage> package) {
     for(int session_index = 0; session_index < session_pool_size; ++session_index) {
       auto session_definition = session_template;
       session_definition.session_index = session_index;
-      // Use empty session_id to trigger auto UUID generation
-      auto session = create_session_from_definition("", session_definition);
+      // For pool-based sessions, use index as ID for backward compatibility
+      // This allows tests and code to find sessions by their pool index
+      auto session = create_session_from_definition(std::to_string(session_index), session_definition);
       if(session) {
         session_pool.push_back(session);
       }
     }
   } else {
     // Create session with empty session_id to trigger auto UUID generation
+    // Only use UUID when there's no explicit session configuration
     auto session = create_session_with_defaults("");  // Empty string triggers UUID generation
     if(session) {
       session_pool.push_back(session);
@@ -444,13 +446,16 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_definition(
   std::shared_ptr<MMAgentTask> dispatcher_task;
   std::shared_ptr<MMAgentTask> coordinator_task;
 
+  // Get the actual session_id (may have been auto-generated as UUID)
+  const std::string& actual_session_id = session->get_session_id();
+
   for(const auto& task_definition : session_definition.tasks) {
     MMAgentTask::Config task_config;
     task_config.task_index = task_definition.task_index;
-    task_config.task_id = session_id + "_task_" + std::to_string(task_definition.task_index);
+    task_config.task_id = actual_session_id + "_task_" + std::to_string(task_definition.task_index);
     task_config.task_type = task_definition.task_type;
     task_config.description = task_definition.description;
-    task_config.session_id = session_id;
+    task_config.session_id = actual_session_id;
     task_config.task_context_workflow = session_config.task_context_workflow;
     task_config.workflow_id = resolve_workflow_reference(task_definition.workflow_file);
     task_config.workflow_file = resolve_workflow_file(task_definition.workflow_file);
