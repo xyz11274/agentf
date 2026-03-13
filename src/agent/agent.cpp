@@ -855,8 +855,9 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
   if(get_data("next_skills", next_skills_value)) {
     auto next_skills = BuiltinDispatcher::parse_next_skills(next_skills_value);
     if(!next_skills.empty()) {
-      // Clear the processed next_skills to prevent re-processing
+      // Clear both next_skills and selected_skills to prevent re-processing
       publish_data("next_skills", std::string(""));
+      publish_data("selected_skills", std::string(""));  // Backward compatibility
 
       Logger::instance().info_f("[DATA_EXCHANGE] Found next_skills, launching %d skills",
                                static_cast<int>(next_skills.size()));
