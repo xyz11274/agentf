@@ -142,3 +142,25 @@ if(TARGET llm_query_node AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/llm_query_agent
     add_test(NAME E2ELLMQueryAgent COMMAND test_e2e_llm_query_agent)
     add_dependencies(e2e_tests test_e2e_llm_query_agent)
 endif()
+
+# SystemAgentMock Scenario (dispatcher-skill-coordinator flow demonstration)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/system_agent_mock/test_system_agent_mock_e2e.cpp")
+    add_executable(test_e2e_system_agent_mock
+        system_agent_mock/test_system_agent_mock_e2e.cpp
+    )
+    target_link_libraries(test_e2e_system_agent_mock
+        agentflow
+        GTest::gtest
+        GTest::gtest_main
+    )
+    add_test(NAME E2ESystemAgentMock COMMAND test_e2e_system_agent_mock)
+    add_dependencies(e2e_tests test_e2e_system_agent_mock)
+    # Ensure SO libraries are built before the test runs
+    add_dependencies(test_e2e_system_agent_mock
+        skill_selection_node
+        travel_node
+        shopping_node
+        foodie_node
+        coordinator_node
+    )
+endif()

@@ -1074,23 +1074,45 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     }
 
     // Coordinator workflow completed - check if need to start skill tasks
-    DataVariant selected_skills_value;
-    std::string selected_skills;
-    if(get_data("selected_skills", selected_skills_value)) {
-      if(const auto* text = std::get_if<std::string>(&selected_skills_value)) {
-        selected_skills = *text;
+    // Check next_skills first (preferred), then selected_skills for backward compatibility
+    DataVariant next_skills_value;
+    std::string next_skills_str;
+    bool found_next_skills = false;
+
+    if(get_data("next_skills", next_skills_value)) {
+      if(const auto* text = std::get_if<std::string>(&next_skills_value)) {
+        if(!text->empty()) {
+          next_skills_str = *text;
+          found_next_skills = true;
+        }
       }
     }
 
-    if(!selected_skills.empty()) {
+    // Backward compatibility: also check selected_skills
+    if(!found_next_skills) {
+      DataVariant selected_skills_value;
+      if(get_data("selected_skills", selected_skills_value)) {
+        if(const auto* text = std::get_if<std::string>(&selected_skills_value)) {
+          if(!text->empty()) {
+            next_skills_str = *text;
+            next_skills_value = selected_skills_value;
+            found_next_skills = true;
+            Logger::instance().info_f("[COORDINATORDataExchange] Using legacy 'selected_skills' (consider migrating to 'next_skills')");
+          }
+        }
+      }
+    }
+
+    if(found_next_skills && !next_skills_str.empty()) {
       Logger::instance().info_f("[COORDINATORDataExchange] Coordinator workflow completed, starting skill tasks: %s",
-                                selected_skills.c_str());
+                                next_skills_str.c_str());
 
-      // Clear selected_skills to prevent re-creating skill tasks
-      publish_data("selected_skills", std::string(""));
+      // Clear next_skills/selected_skills to prevent re-creating skill tasks
+      publish_data("next_skills", std::string(""));
+      publish_data("selected_skills", std::string(""));  // Also clear for backward compatibility
 
-      // Parse selected_skills using BuiltinDispatcher's parser
-      auto skill_names = BuiltinDispatcher::parse_next_skills(selected_skills_value);
+      // Parse skills using BuiltinDispatcher's parser
+      auto skill_names = BuiltinDispatcher::parse_next_skills(next_skills_value);
 
       for(const auto& skill_name : skill_names) {
         if(!task->can_launch_more_skills()) {
@@ -1102,7 +1124,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       return;  // Don't send response to client yet, wait for skill
     }
 
-    // No selected_skills - coordinator is done, send response to client
+    // No next_skills - coordinator is done, send response to client
     Logger::instance().info_f("[COORDINATORDataExchange] Coordinator completed without skill, sending response");
 
     MMAgentMsgQue::Message response_message = message;

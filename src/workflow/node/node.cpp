@@ -686,8 +686,12 @@ bool MMNode::execute_so_library() {
     exec_config.working_dir = config_.working_dir;
     exec_config.timeout_ms  = config_.timeout_ms > 0 ? config_.timeout_ms : 30000;
 
-    // Pass DataBus if available for V2 signature support
-    if(databus_) {
+    // Pass DataBus client for V3 signature support (preferred)
+    if(databus_client_) {
+      exec_config.databus_client = databus_client_.get();
+    }
+    // Fall back to DataBus for V2 signature support
+    else if(databus_) {
       exec_config.databus = new runtime::NodeDataBusAdapter(databus_);
     }
 
@@ -695,7 +699,7 @@ bool MMNode::execute_so_library() {
         config_.command, config_.function_name.empty() ? "execute" : config_.function_name,
         exec_config);
 
-    // Clean up adapter if created
+    // Clean up adapter if created (only for V2 fallback)
     if(exec_config.databus) {
       delete static_cast<runtime::NodeDataBusAdapter*>(exec_config.databus);
       exec_config.databus = nullptr;

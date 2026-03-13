@@ -1,0 +1,26 @@
+{
+  "id": "skill-selection-workflow",
+  "version": "1.0",
+  "name": "Skill Selection Workflow",
+  "nodes": [
+    {
+      "id": "select_skills",
+      "name": "Random Skill Selector",
+      "type": "task",
+      "execution_mode": "so_library",
+      "command": "lib/libskill_selection_node.so",
+      "function_name": "skill_selection_node",
+      "inputs": [
+        {"name": "user_text", "type": "string", "required": true},
+        {"name": "session_id", "type": "string", "required": true}
+      ],
+      "outputs": [
+        {"name": "next_skills", "type": "string"},
+        {"name": "selected_skills", "type": "string"},
+        {"name": "selection_reason", "type": "string"}
+      ],
+      "timeout_ms": 5000
+    }
+  ],
+  "edges": []
+}

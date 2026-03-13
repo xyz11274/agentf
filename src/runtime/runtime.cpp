@@ -501,11 +501,21 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
   {
     std::lock_guard<std::mutex> lock(workflow_state_mutex_);
     auto state_it = workflow_states_.find(execution_id);
-    if(state_it != workflow_states_.end() && !state_it->second.session_id.empty()) {
-      // Create client with internal adapter - lifetime managed by shared_ptr
-      auto client = std::make_shared<NodeDataBusClientImpl>(
-          &get_databus(agent->get_id()), state_it->second.session_id);
-      node->set_databus_client(client);
+    if(state_it != workflow_states_.end()) {
+      Logger::instance().info_f("[PROCESS_NODE] Found workflow state for execution_id=%s, session_id='%s'",
+                                execution_id.c_str(), state_it->second.session_id.c_str());
+      if(!state_it->second.session_id.empty()) {
+        // Create client with internal adapter - lifetime managed by shared_ptr
+        auto client = std::make_shared<NodeDataBusClientImpl>(
+            &get_databus(agent->get_id()), state_it->second.session_id);
+        node->set_databus_client(client);
+        Logger::instance().info_f("[PROCESS_NODE] Set databus_client for node=%s, session_id='%s'",
+                                  node->get_id().c_str(), state_it->second.session_id.c_str());
+      } else {
+        Logger::instance().warn_f("[PROCESS_NODE] Session ID is empty for execution_id=%s", execution_id.c_str());
+      }
+    } else {
+      Logger::instance().warn_f("[PROCESS_NODE] No workflow state found for execution_id=%s", execution_id.c_str());
     }
   }
 

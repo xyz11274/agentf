@@ -476,6 +476,54 @@ else()
 endif()
 
 # ============================================================================
+# SystemAgentMock Nodes (demo agent for dispatcher-skill-coordinator flow)
+# ============================================================================
+
+set(SYSTEM_AGENT_MOCK_DIR "${AGENTFLOW_EXAMPLE_DIR}/agent/system_agent_mock")
+
+# Skill Selection Node
+add_library(skill_selection_node SHARED
+    ${SYSTEM_AGENT_MOCK_DIR}/nodes/skill_selection_node.cpp)
+target_include_directories(skill_selection_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+set_target_properties(skill_selection_node PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${SYSTEM_AGENT_MOCK_DIR}/lib
+    PREFIX "lib")
+
+# Travel Node
+add_library(travel_node SHARED
+    ${SYSTEM_AGENT_MOCK_DIR}/nodes/travel_node.cpp)
+target_include_directories(travel_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+set_target_properties(travel_node PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${SYSTEM_AGENT_MOCK_DIR}/lib
+    PREFIX "lib")
+
+# Shopping Node
+add_library(shopping_node SHARED
+    ${SYSTEM_AGENT_MOCK_DIR}/nodes/shopping_node.cpp)
+target_include_directories(shopping_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+set_target_properties(shopping_node PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${SYSTEM_AGENT_MOCK_DIR}/lib
+    PREFIX "lib")
+
+# Foodie Node
+add_library(foodie_node SHARED
+    ${SYSTEM_AGENT_MOCK_DIR}/nodes/foodie_node.cpp)
+target_include_directories(foodie_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+set_target_properties(foodie_node PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${SYSTEM_AGENT_MOCK_DIR}/lib
+    PREFIX "lib")
+
+# Coordinator Node
+add_library(coordinator_node SHARED
+    ${SYSTEM_AGENT_MOCK_DIR}/nodes/coordinator_node.cpp)
+target_include_directories(coordinator_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+set_target_properties(coordinator_node PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${SYSTEM_AGENT_MOCK_DIR}/lib
+    PREFIX "lib")
+
+message(STATUS "SystemAgentMock nodes configured")
+
+# ============================================================================
 # Node Adapter Library and Executable
 # ============================================================================
 

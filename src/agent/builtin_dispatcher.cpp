@@ -88,12 +88,36 @@ void BuiltinDispatcher::process_skill_response(MMAgent& agent,
   }
 
   // Check for next_skills in the response and launch more skills
+  // Check next_skills first (preferred), then selected_skills for backward compatibility
   DataVariant next_skills_value;
+  bool found_next_skills = false;
+
   if(agent.get_data("next_skills", next_skills_value)) {
     auto next_skills = parse_next_skills(next_skills_value);
     if(!next_skills.empty()) {
-      // Clear the processed next_skills to prevent re-processing
+      found_next_skills = true;
+    }
+  }
+
+  // Backward compatibility: also check selected_skills
+  if(!found_next_skills) {
+    DataVariant selected_skills_value;
+    if(agent.get_data("selected_skills", selected_skills_value)) {
+      auto selected_skills = parse_next_skills(selected_skills_value);
+      if(!selected_skills.empty()) {
+        next_skills_value = selected_skills_value;
+        found_next_skills = true;
+        Logger::instance().info_f("[BuiltinDispatcher] Using legacy 'selected_skills' (consider migrating to 'next_skills')");
+      }
+    }
+  }
+
+  if(found_next_skills) {
+    auto next_skills = parse_next_skills(next_skills_value);
+    if(!next_skills.empty()) {
+      // Clear both next_skills and selected_skills to prevent re-processing
       agent.publish_data("next_skills", std::string(""));
+      agent.publish_data("selected_skills", std::string(""));
 
       Logger::instance().info_f("[BuiltinDispatcher] Found next_skills in response, launching %d more skills",
                                static_cast<int>(next_skills.size()));
