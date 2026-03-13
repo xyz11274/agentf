@@ -13,8 +13,12 @@
 #include <cstdlib>
 
 #include "agent/agent.h"
+#include "agent/session.h"
 #include "agent/package.h"
 #include "runtime/agent_runtime.h"
+#include "runtime/databus/node_databus_adapter.h"
+#include "runtime/databus/node_databus_client.h"
+#include "agentflow/so_node.h"
 
 using namespace agentflow;
 
@@ -109,26 +113,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Inject LLM configuration from environment into the agent's DataBus
-    // This allows SO library nodes to access LLM config via INodeDataBus
-    {
-        auto& bus = runtime->get_databus(agent->get_id());
-        const char* llm_api_key = std::getenv("LLM_API_KEY");
-        if (llm_api_key && llm_api_key[0] != '\0') {
-            bus.put("api_key", DataVariant(std::string(llm_api_key)));
-            std::cout << "Injected LLM_API_KEY into agent databus" << std::endl;
-        }
-        const char* llm_model = std::getenv("LLM_MODEL");
-        if (llm_model && llm_model[0] != '\0') {
-            bus.put("model", DataVariant(std::string(llm_model)));
-        }
-        const char* llm_base_url = std::getenv("LLM_BASE_URL");
-        if (llm_base_url && llm_base_url[0] != '\0') {
-            bus.put("base_url", DataVariant(std::string(llm_base_url)));
-        }
-    }
-
-    // Start agent
+    // Start agent first to initialize session pool
     if (!agent->start()) {
         std::cerr << "ERROR: Failed to start agent" << std::endl;
         runtime->stop();
@@ -136,6 +121,45 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     std::cout << "Agent started" << std::endl;
+
+    // Inject LLM configuration into session's sys namespace
+    // This follows the session isolation design: config is stored under /session/{session-id}/sys/
+    {
+        auto sessions = agent->get_sessions();
+        if (!sessions.empty()) {
+            auto& session = sessions.front();
+            std::string session_id = session->get_session_id();
+            std::cout << "[TEST] Got session with ID: " << session_id << std::endl;
+
+            // Create session-isolated DataBus client
+            auto& bus = runtime->get_databus(agent->get_id());
+            auto adapter = std::make_shared<runtime::NodeDataBusAdapter>(&bus);
+            auto client = std::make_shared<runtime::NodeDataBusClientImpl>(adapter.get(), session_id);
+
+            // Inject config into sys namespace
+            const char* llm_api_key = std::getenv("LLM_API_KEY");
+            if (llm_api_key && llm_api_key[0] != '\0') {
+                client->sys()->put("api_key", SoDataVariant(std::string(llm_api_key)));
+                std::cout << "[TEST] Injected api_key into /session/" << session_id << "/sys/" << std::endl;
+            }
+            const char* llm_model = std::getenv("LLM_MODEL");
+            if (llm_model && llm_model[0] != '\0') {
+                client->sys()->put("model", SoDataVariant(std::string(llm_model)));
+            }
+            const char* llm_base_url = std::getenv("LLM_BASE_URL");
+            if (llm_base_url && llm_base_url[0] != '\0') {
+                client->sys()->put("base_url", SoDataVariant(std::string(llm_base_url)));
+            }
+        } else {
+            std::cerr << "[TEST] Warning: No sessions available, falling back to global databus" << std::endl;
+            auto& bus = runtime->get_databus(agent->get_id());
+            const char* llm_api_key = std::getenv("LLM_API_KEY");
+            if (llm_api_key && llm_api_key[0] != '\0') {
+                bus.put("api_key", DataVariant(std::string(llm_api_key)));
+            }
+        }
+    }
+
     std::cout << std::endl;
 
     // Construct user request message (black-box test through message interface)

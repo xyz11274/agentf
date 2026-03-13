@@ -78,22 +78,45 @@ static std::string get_string_from_databus(INodeDataBus* databus, const std::str
 
 // V3 signature - with session-isolated DataBus client (recommended)
 extern "C" void llm_query_node_v3(const DataMap& inputs, DataMap& outputs, INodeDataBusClient* client) {
-    // Get namespace clients
-    INamespaceClient* sys = client ? client->sys() : nullptr;
+    // Debug: show session info
+    std::cerr << "[LLM_NODE_V3] Session ID: " << (client ? client->session_id() : "N/A") << std::endl;
 
-    // Try to get configuration from sys namespace first (injected by framework),
-    // then fall back to inputs map
-    std::string api_key = get_string_from_namespace(sys, "api_key");
-    if (api_key.empty()) {
-        api_key = get_string_from_map(inputs, "api_key");
+    // Get configuration from sys namespace (injected by framework or test code)
+    // Key path: /session/{session-id}/sys/api_key
+    std::string api_key;
+    std::string model;
+    std::string base_url;
+
+    if (client && client->sys()) {
+        SoDataVariant value;
+
+        // Get api_key from sys namespace
+        if (client->sys()->get("api_key", value)) {
+            if (auto* s = std::get_if<std::string>(&value)) {
+                api_key = *s;
+            }
+        }
+        std::cerr << "[LLM_NODE_V3] sys->get('api_key'): " << (api_key.empty() ? "NOT FOUND" : "FOUND") << std::endl;
+
+        // Get model from sys namespace
+        if (client->sys()->get("model", value)) {
+            if (auto* s = std::get_if<std::string>(&value)) {
+                model = *s;
+            }
+        }
+
+        // Get base_url from sys namespace
+        if (client->sys()->get("base_url", value)) {
+            if (auto* s = std::get_if<std::string>(&value)) {
+                base_url = *s;
+            }
+        }
     }
 
-    std::string model = get_string_from_namespace(sys, "model");
+    // Fallback to inputs map
     if (model.empty()) {
         model = get_string_from_map(inputs, "model", "gpt-4.1");
     }
-
-    std::string base_url = get_string_from_namespace(sys, "base_url");
     if (base_url.empty()) {
         base_url = get_string_from_map(inputs, "base_url");
     }
@@ -105,7 +128,6 @@ extern "C" void llm_query_node_v3(const DataMap& inputs, DataMap& outputs, INode
     }
 
     // Debug output
-    std::cerr << "[LLM_NODE_V3] Session ID: " << (client ? client->session_id() : "N/A") << std::endl;
     std::cerr << "[LLM_NODE_V3] Calling LLM with model: " << model << std::endl;
     std::cerr << "[LLM_NODE_V3] Prompt: " << prompt << std::endl;
     std::cerr << "[LLM_NODE_V3] API Key present: " << (!api_key.empty() ? "yes" : "no") << std::endl;
@@ -129,8 +151,8 @@ extern "C" void llm_query_node_v3(const DataMap& inputs, DataMap& outputs, INode
         outputs["response"] = response;
 
         // Also store response in sys namespace for framework access
-        if (sys) {
-            sys->put("response", SoDataVariant(response));
+        if (client && client->sys()) {
+            client->sys()->put("response", SoDataVariant(response));
         }
 
         std::cerr << "[LLM_NODE_V3] Response received successfully" << std::endl;
@@ -152,10 +174,10 @@ extern "C" void llm_query_node_v3(const DataMap& inputs, DataMap& outputs, INode
         }
 
         // Also store error in sys namespace
-        if (sys) {
+        if (client && client->sys()) {
             std::string* err_str = std::get_if<std::string>(&outputs["error"]);
             if (err_str) {
-                sys->put("error", SoDataVariant(*err_str));
+                client->sys()->put("error", SoDataVariant(*err_str));
             }
         }
 
@@ -166,8 +188,8 @@ extern "C" void llm_query_node_v3(const DataMap& inputs, DataMap& outputs, INode
         std::cerr << "[LLM_NODE_V3] Error: " << e.what() << std::endl;
 
         // Also store error in sys namespace
-        if (sys) {
-            sys->put("error", SoDataVariant(std::string(e.what())));
+        if (client && client->sys()) {
+            client->sys()->put("error", SoDataVariant(std::string(e.what())));
         }
     }
 }
