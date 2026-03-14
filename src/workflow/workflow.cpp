@@ -2,7 +2,7 @@
 
 #include "agent/data_variant_utils.h"
 
-#include <sys/time.h>
+#include <chrono>
 
 #include <algorithm>
 #include <future>
@@ -31,9 +31,9 @@ namespace {
  * Get current timestamp in milliseconds
  */
 int64_t get_current_timestamp_ms() {
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::system_clock::now().time_since_epoch()
+  ).count();
 }
 
 const char* control_type_to_string(MMEdge::ControlType type) {

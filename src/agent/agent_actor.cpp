@@ -114,34 +114,51 @@ bool MMAgentActor::should_reload(const std::string& package_path, int64_t& out_m
 }
 
 bool MMAgentActor::create_agent_from_package(const std::string& package_path) {
-  int64_t mtime_ms = 0;
-  if(!should_reload(package_path, mtime_ms)) {
+  try {
+    int64_t mtime_ms = 0;
+    if(!should_reload(package_path, mtime_ms)) {
+      return false;
+    }
+
+    auto agent = framework::MMAgent::create_from_package(package_path);
+    if(!agent) {
+      Logger::instance().error("Failed to create agent from package: " + package_path);
+      return false;
+    }
+
+    if(!agent->initialize()) {
+      Logger::instance().error("Failed to initialize agent: " + package_path);
+      return false;
+    }
+
+    if(!agent->start()) {
+      Logger::instance().error("Failed to start agent: " + package_path);
+      return false;
+    }
+
+    ManagedAgent managed;
+    managed.package_id = agent->get_id();
+    managed.version = agent->get_config().version;
+    managed.package_path = package_path;
+    managed.instance_id =
+        managed.package_id + ":" + managed.version + ":" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+    managed.agent = agent;
+    managed.last_mtime_ms = mtime_ms;
+
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      managed_agents_[managed.instance_id] = managed;
+    }
+    report_agent_registered(managed);
+    report_agent_status(managed);
+    return true;
+  } catch(const std::exception& e) {
+    Logger::instance().error("Exception in create_agent_from_package: " + std::string(e.what()));
+    return false;
+  } catch(...) {
+    Logger::instance().error("Unknown exception in create_agent_from_package");
     return false;
   }
-
-  auto agent = framework::MMAgent::create_from_package(package_path);
-  if(!agent) {
-    return false;
-  }
-  agent->initialize();
-  agent->start();
-
-  ManagedAgent managed;
-  managed.package_id = agent->get_id();
-  managed.version = agent->get_config().version;
-  managed.package_path = package_path;
-  managed.instance_id =
-      managed.package_id + ":" + managed.version + ":" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-  managed.agent = agent;
-  managed.last_mtime_ms = mtime_ms;
-
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    managed_agents_[managed.instance_id] = managed;
-  }
-  report_agent_registered(managed);
-  report_agent_status(managed);
-  return true;
 }
 
 void MMAgentActor::load_agents_from_config() {

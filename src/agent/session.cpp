@@ -1,6 +1,5 @@
 #include "agent/session.h"
 
-#include <sys/time.h>
 #include <chrono>
 #include <random>
 
@@ -11,9 +10,9 @@ namespace framework {
 
 namespace {
 int64_t get_current_time_ms() {
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  return static_cast<int64_t>(tv.tv_sec) * 1000 + tv.tv_usec / 1000;
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::system_clock::now().time_since_epoch()
+  ).count();
 }
 }  // namespace
 
