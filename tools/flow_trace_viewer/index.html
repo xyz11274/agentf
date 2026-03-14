@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flow Trace Viewer - AgentFlow</title>
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Mermaid for diagrams -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+<body>
+    <header>
+        <h1>Flow Trace Viewer</h1>
+        <p>Visualize Agent scheduling flow with sequence diagrams and flow charts</p>
+    </header>
+
+    <main>
+        <!-- Status Messages -->
+        <div id="status" class="status"></div>
+
+        <!-- File Drop Zone -->
+        <div id="drop-zone">
+            <p>Drag and drop a trace log file here, or</p>
+            <div class="file-input-wrapper">
+                <input type="file" id="file-input" accept=".log,.json,.jsonl,.txt">
+                <label for="file-input">Choose File</label>
+            </div>
+            <button id="load-sample">Load Sample Data</button>
+        </div>
+
+        <!-- Stats Overview -->
+        <div class="controls">
+            <div class="control-group">
+                <label>Session</label>
+                <select id="session-select">
+                    <option value="">All Sessions</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label>Dialogue</label>
+                <select id="dialogue-select">
+                    <option value="">All Dialogues</option>
+                </select>
+            </div>
+            <div class="control-group stats" id="stats">
+                <div class="stat-item">
+                    <span class="stat-label">Events</span>
+                    <span class="stat-value">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filtered Stats -->
+        <div id="filtered-stats" class="stats">
+            <div class="stat-item">
+                <span class="stat-label">Showing</span>
+                <span class="stat-value">0 events</span>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="sequence">Sequence Diagram</button>
+            <button class="tab-btn" data-tab="flow">Flow Diagram</button>
+            <button class="tab-btn" data-tab="table">Timing Table</button>
+        </div>
+
+        <!-- Tab Content: Sequence Diagram -->
+        <div id="tab-sequence" class="tab-content active">
+            <div class="diagram-container">
+                <div id="sequence-diagram">Load a trace file to see the sequence diagram</div>
+            </div>
+            <details>
+                <summary>Mermaid Code</summary>
+                <pre id="sequence-code" class="code-block"></pre>
+            </details>
+        </div>
+
+        <!-- Tab Content: Flow Diagram -->
+        <div id="tab-flow" class="tab-content">
+            <div class="diagram-container">
+                <div id="flow-diagram">Load a trace file to see the flow diagram</div>
+            </div>
+            <details>
+                <summary>Mermaid Code</summary>
+                <pre id="flow-code" class="code-block"></pre>
+            </details>
+        </div>
+
+        <!-- Tab Content: Timing Table -->
+        <div id="tab-table" class="tab-content">
+            <div class="diagram-container">
+                <div id="timing-table">
+                    <p>Load a trace file to see the timing table</p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer style="text-align: center; padding: 2rem; color: #666;">
+        <p>AgentFlow Flow Trace Viewer | Part of the AgentFlow framework</p>
+        <p>Log Format: JSON Lines | Visualization: <a href="https://mermaid.js.org/" target="_blank">Mermaid</a></p>
+    </footer>
+
+    <!-- Application Scripts -->
+    <script src="js/parser.js"></script>
+    <script src="js/visualizer.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

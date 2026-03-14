@@ -274,6 +274,8 @@ set(AGENTFLOW_RUNTIME_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/runtime/trace/trace_context.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/trace/trace_manager.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/trace/trace_exporter.cpp
+    # Flow Trace (scheduling visualization)
+    ${AGENTFLOW_SOURCE_DIR}/runtime/flow_trace.cpp
 )
 
 # Utils sources

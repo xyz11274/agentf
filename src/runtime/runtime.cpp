@@ -11,6 +11,7 @@
 #include "agent/context.h"
 #include "runtime/trace/trace_context.h"
 #include "runtime/trace/trace_manager.h"
+#include "runtime/flow_trace.h"
 #include "runtime/databus/node_databus_adapter.h"
 #include "runtime/databus/node_databus_client.h"
 #include "utils/logger.h"
@@ -398,6 +399,10 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
   Logger::instance().info_f("Starting workflow execution: %s (execution_id: %s)",
                             workflow->get_name().c_str(), execution_id.c_str());
 
+  // Flow trace: workflow started
+  FLOW_TRACE_WORKFLOW(session_id, dialogue_id, source_task_id, workflow_id,
+                       FlowEventType::WORKFLOW_STARTED);
+
   // Trace: open a WORKFLOW span (no-op if no active trace on this thread)
   {
     using namespace trace;
@@ -554,12 +559,35 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
        {"node_id",     node->get_id()},
        {"node_name",   node->get_name()}});
 
+  // Get session_id and dialogue_id for flow trace
+  std::string flow_session_id;
+  std::string flow_dialogue_id;
+  {
+    std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+    auto state_it = workflow_states_.find(execution_id);
+    if(state_it != workflow_states_.end()) {
+      flow_session_id = state_it->second.session_id;
+      flow_dialogue_id = state_it->second.dialogue_id;
+    }
+  }
+
+  // Flow trace: node started
+  FLOW_TRACE_NODE(flow_session_id, flow_dialogue_id,
+                   workflow ? workflow->get_id() : "", node->get_name(),
+                   FlowEventType::NODE_STARTED);
+
   // Execute node
   auto start_time       = std::chrono::steady_clock::now();
   bool execution_result = node->execute();
   auto end_time         = std::chrono::steady_clock::now();
   auto duration =
       std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
+
+  // Flow trace: node completed
+  FLOW_TRACE_NODE_WITH_DATA(flow_session_id, flow_dialogue_id,
+                              workflow ? workflow->get_id() : "", node->get_name(),
+                              FlowEventType::NODE_COMPLETED,
+                              "", "", duration * 1000);  // duration in microseconds
 
   // [DEBUG] Log node processing result
   if(!execution_result) {
@@ -734,6 +762,11 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
   }
 
   if(invoke_complete) {
+    // Flow trace: workflow completed
+    FLOW_TRACE_WORKFLOW(complete_session_id, complete_dialogue_id,
+                         complete_source_task_id, complete_workflow,
+                         FlowEventType::WORKFLOW_COMPLETED);
+
     if(complete_ok) {
       Logger::instance().info_f("MMWorkflow execution completed successfully: %s",
                                 complete_workflow.c_str());

@@ -26,6 +26,7 @@
 
 #include "runtime/trace/trace_context.h"
 #include "runtime/trace/trace_manager.h"
+#include "runtime/flow_trace.h"
 
 #ifdef AGENTFLOW_WITH_RAPIDJSON
 #include <rapidjson/document.h>
@@ -761,6 +762,15 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
      selected_skills_it != message.metadata.end()) {
     task->set_parameter("selected_skills", selected_skills_it->second);
   }
+
+  // Pass dialogue_id from message metadata to task parameters for workflow propagation
+  if(const auto dialogue_id_it = message.metadata.find("dialogue_id");
+     dialogue_id_it != message.metadata.end() && !dialogue_id_it->second.empty()) {
+    task->set_parameter("dialogue_id", dialogue_id_it->second);
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set dialogue_id=%s for task=%s",
+                              dialogue_id_it->second.c_str(), task_config.task_id.c_str());
+  }
+
   return task;
 }
 
@@ -803,6 +813,11 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
       // This enables multi-dialogue parallel processing in the same session
       publish_data(dialogue_id + "/dialogue_id", dialogue_id);
       publish_data(dialogue_id + "/user_prompt", user_text);
+
+      // Flow trace: task created
+      FLOW_TRACE_TASK(session->get_session_id(), dialogue_id,
+                      "external", "dispatcher",
+                      runtime::FlowEventType::TASK_CREATED);
 
       // Create a message copy with dialogue_id in metadata for skill tasks
       MMAgentMsgQue::Message message_with_dialogue = message;
@@ -1406,6 +1421,17 @@ bool MMAgent::launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
 
   // Mark skill as started on source task
   source_task->on_skill_started(skill_name);
+
+  // Flow trace: skill launched
+  {
+    std::string dialogue_id;
+    if(context.metadata.count("dialogue_id")) {
+      dialogue_id = context.metadata.at("dialogue_id");
+    }
+    FLOW_TRACE_SKILL(session->get_session_id(), dialogue_id,
+                     source_task->get_task_type(), skill_name,
+                     runtime::FlowEventType::SKILL_LAUNCHED);
+  }
 
   // Add to generated tasks queue for runtime scheduling
   {
