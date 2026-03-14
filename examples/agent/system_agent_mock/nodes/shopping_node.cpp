@@ -3,6 +3,7 @@
 //
 // Shopping Skill Node - Mock shopping skill that returns simulated results
 // Uses V3 signature with session-isolated DataBus client
+// Supports multi-dialogue with dialogue_id isolation
 
 #include <random>
 #include <string>
@@ -37,6 +38,7 @@ extern "C" void shopping_node_v3(const DataMap& inputs, DataMap& outputs,
   // Get input parameters
   std::string user_text = get_string(inputs, "user_text", "");
   std::string session_id = get_string(inputs, "session_id", "");
+  std::string dialogue_id = get_string(inputs, "dialogue_id", "");
 
   // Generate mock result
   std::string result =
@@ -57,8 +59,12 @@ extern "C" void shopping_node_v3(const DataMap& inputs, DataMap& outputs,
   outputs["confidence"] = DataVariant(confidence);
 
   // Store result in user namespace for coordinator to aggregate
+  // With dialogue_id support, the key is: {dialogue_id}/shopping_result
   if (client && client->user()) {
-    client->user()->put("shopping_result", SoDataVariant(result));
-    client->user()->put("shopping_confidence", SoDataVariant(confidence));
+    std::string result_key = dialogue_id.empty() ? "shopping_result" : dialogue_id + "/shopping_result";
+    std::string confidence_key = dialogue_id.empty() ? "shopping_confidence" : dialogue_id + "/shopping_confidence";
+
+    client->user()->put(result_key, SoDataVariant(result));
+    client->user()->put(confidence_key, SoDataVariant(confidence));
   }
 }

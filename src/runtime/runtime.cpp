@@ -355,7 +355,7 @@ bool MMAgentRuntime::unload_workflow(const AgentId& agent_id, const WorkflowId& 
 
 bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId& workflow_id,
                                     const DataMap& inputs, const std::string& source_task_id,
-                                    const std::string& session_id) {
+                                    const std::string& session_id, const std::string& dialogue_id) {
   if(draining_) {
     Logger::instance().warn("Rejecting new workflow — runtime is draining");
     return false;
@@ -385,6 +385,7 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
   state.agent_id        = agent_id;
   state.source_task_id  = source_task_id;
   state.session_id      = session_id;
+  state.dialogue_id     = dialogue_id;  // Store for multi-dialogue support
   state.total_nodes     = static_cast<int>(workflow->get_nodes().size());
   state.completed_count = 0;
   state.in_progress     = true;
@@ -464,7 +465,32 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
     DataMap hydrated;
     Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Node=%s has %zu input_params",
                               node->get_id().c_str(), node->get_input_params().size());
+
+    // Get dialogue_id from workflow state for multi-dialogue support
+    // This avoids the concurrency issue with agent databus
+    std::string workflow_dialogue_id;
+    {
+      std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+      auto state_it = workflow_states_.find(execution_id);
+      if(state_it != workflow_states_.end() && !state_it->second.dialogue_id.empty()) {
+        workflow_dialogue_id = state_it->second.dialogue_id;
+        // Add dialogue_id to hydrated inputs if node needs it
+        for(const auto& key : node->get_input_params()) {
+          if(key == "dialogue_id") {
+            hydrated["dialogue_id"] = workflow_dialogue_id;
+            Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Got input 'dialogue_id'='%s' from workflow state",
+                                     workflow_dialogue_id.c_str());
+            break;
+          }
+        }
+      }
+    }
+
     for(const auto& key : node->get_input_params()) {
+      // Skip if already hydrated from workflow state
+      if(hydrated.find(key) != hydrated.end()) {
+        continue;
+      }
       DataVariant val;
       // First try agent's internal databus (where execute_workflow stores inputs)
       if(agent->get_data(key, val)) {
@@ -645,6 +671,7 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
   std::string complete_workflow;
   std::string complete_source_task_id;
   std::string complete_session_id;
+  std::string complete_dialogue_id;
 
   {
     std::lock_guard<std::mutex> lock(workflow_state_mutex_);
@@ -677,6 +704,7 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
       complete_workflow   = state.workflow_id;
       complete_source_task_id = state.source_task_id;
       complete_session_id     = state.session_id;
+      complete_dialogue_id    = state.dialogue_id;
     } else if(success) {
       auto agent = get_agent(state.agent_id);
       if(agent) {
@@ -734,10 +762,12 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
             response.metadata["task_type"] = source_task->get_task_type();
             response.metadata["workflow_id"] = complete_workflow;
             response.metadata["message_type"] = "data_exchange";
+            response.metadata["dialogue_id"] = complete_dialogue_id;
             response.content = complete_ok ? "workflow_completed" : "workflow_failed";
             source_task->enqueue_data_exchange_message(response);
             Logger::instance().info_f(
-                "[WORKFLOW_COMPLETE] Enqueued data_exchange to task=%s", complete_source_task_id.c_str());
+                "[WORKFLOW_COMPLETE] Enqueued data_exchange to task=%s, dialogue_id=%s",
+                complete_source_task_id.c_str(), complete_dialogue_id.c_str());
           }
         }
       }
@@ -952,6 +982,12 @@ void MMAgentRuntime::agent_task_poller_loop() {
         if(!task->get_config().session_id.empty()) {
           inputs["session_id"] = task->get_config().session_id;
         }
+        // Propagate dialogue_id for multi-dialogue support
+        std::string dialogue_id;
+        if(task->get_parameter("dialogue_id", dialogue_id) && !dialogue_id.empty()) {
+          inputs["dialogue_id"] = dialogue_id;
+          Logger::instance().info_f("[TASK_POLLER] Set inputs[dialogue_id]='%s'", dialogue_id.c_str());
+        }
         std::string task_owner_id = task->get_config().task_id;
         task->get_parameter("source_task_id", task_owner_id);
         if(task_owner_id.empty()) {
@@ -991,8 +1027,12 @@ void MMAgentRuntime::agent_task_poller_loop() {
           task_source_id = task->get_config().task_id;
         }
 
+        // Get dialogue_id from task parameters for multi-dialogue support
+        std::string task_dialogue_id;
+        task->get_parameter("dialogue_id", task_dialogue_id);
+
         const bool scheduled = execute_workflow(agent->get_id(), workflow_id, inputs,
-                                                task_source_id, task_session_id);
+                                                task_source_id, task_session_id, task_dialogue_id);
         framework::MMAgentMsgQue::Message response;
         std::string response_message_id;
         if(!task->get_parameter("message_id", response_message_id) || response_message_id.empty()) {
@@ -1007,6 +1047,7 @@ void MMAgentRuntime::agent_task_poller_loop() {
         response.metadata["workflow_instance_id"] = schedule_result.workflow_instance_id;
         response.metadata["worker_id"] = schedule_result.worker_id;
         response.metadata["message_type"] = "data_exchange";
+        response.metadata["dialogue_id"] = task_dialogue_id;
         response.content = scheduled ? "workflow_scheduled" : "workflow_schedule_failed";
         std::shared_ptr<framework::MMAgentTask> response_target = task;
         std::string source_task_id;

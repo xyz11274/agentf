@@ -9,12 +9,19 @@
  * 4. Selected skills execute and store results in DataBus
  * 5. Coordinator aggregates results from all skills
  * 6. User receives aggregated response
+ *
+ * Multi-dialogue support:
+ * 7. Multiple dialogues can be processed in parallel in the same session
+ * 8. Each dialogue has a unique dialogue_id generated from hash(user_text + message_id)
+ * 9. Data is isolated per dialogue using dialogue_id prefix
  */
 
 #include <iostream>
 #include <chrono>
 #include <thread>
 #include <filesystem>
+#include <future>
+#include <mutex>
 
 #include "agent/agent.h"
 #include "agent/session.h"
@@ -42,6 +49,56 @@ std::string find_agent_path() {
         }
     }
     return "";
+}
+
+struct TestResult {
+    bool success = false;
+    std::string response;
+    std::string error;
+};
+
+TestResult run_single_dialogue_test(
+    const std::shared_ptr<framework::MMAgent>& agent,
+    const std::string& message_id,
+    const std::string& content) {
+
+    TestResult result;
+
+    // Construct user request message
+    framework::MMAgentMsgQue::Message message;
+    message.message_id = message_id;
+    message.metadata["message_type"] = "intent_request";
+    message.metadata["user_id"] = "test_user";
+    message.metadata["client_id"] = "test_client";
+    message.content = content;
+
+    // Route message through agent's message interface
+    if (!agent->route_request_message(message)) {
+        result.error = "Failed to route message";
+        return result;
+    }
+
+    // Wait for response
+    const int max_wait_seconds = 30;
+    for (int i = 0; i < max_wait_seconds * 10; ++i) {
+        // Process messages to drive workflow forward
+        agent->process_all_sessions_until_idle();
+
+        // Check for response
+        framework::MMAgentMsgQue::Message response;
+        while (agent->dequeue_response_message(response)) {
+            if (!response.content.empty()) {
+                result.response = response.content;
+                result.success = true;
+                return result;
+            }
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    result.error = "No response received within " + std::to_string(max_wait_seconds) + " seconds";
+    return result;
 }
 
 int main() {
@@ -120,6 +177,15 @@ int main() {
     }
     std::cout << "Agent started" << std::endl;
 
+    int tests_passed = 0;
+    int tests_failed = 0;
+
+    // ============================================================
+    // Test 1: Basic single dialogue flow
+    // ============================================================
+    std::cout << std::endl;
+    std::cout << "=== Test 1: Single Dialogue Flow ===" << std::endl;
+
     // Construct user request message
     framework::MMAgentMsgQue::Message message;
     message.message_id = "test-msg-system-mock-001";
@@ -196,11 +262,107 @@ int main() {
         int skills_contributed = (has_travel ? 1 : 0) + (has_shopping ? 1 : 0) + (has_foodie ? 1 : 0);
         std::cout << "Skills contributed: " << skills_contributed << std::endl;
 
-        if (skills_contributed < 2) {
+        if (skills_contributed >= 2) {
+            std::cout << "Test 1: PASSED" << std::endl;
+            tests_passed++;
+        } else {
             std::cerr << "WARNING: Expected at least 2 skills to contribute, got " << skills_contributed << std::endl;
+            std::cout << "Test 1: FAILED" << std::endl;
+            tests_failed++;
         }
     } else {
         std::cerr << "ERROR: No response received within " << max_wait_seconds << " seconds" << std::endl;
+        std::cout << "Test 1: FAILED" << std::endl;
+        tests_failed++;
+    }
+
+    // ============================================================
+    // Test 2: Multi-dialogue parallel processing
+    // ============================================================
+    std::cout << std::endl;
+    std::cout << "=== Test 2: Multi-Dialogue Parallel Processing ===" << std::endl;
+    std::cout << "Sending two different queries in parallel..." << std::endl;
+
+    // Launch two dialogues in parallel using async
+    auto future1 = std::async(std::launch::async, [&]() {
+        return run_single_dialogue_test(agent, "msg-parallel-001", "I want to travel to Paris");
+    });
+
+    auto future2 = std::async(std::launch::async, [&]() {
+        return run_single_dialogue_test(agent, "msg-parallel-002", "Find me the best shopping deals");
+    });
+
+    // Process both dialogues
+    for (int i = 0; i < max_wait_seconds * 10; ++i) {
+        agent->process_all_sessions_until_idle();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+
+    // Get results
+    auto result1 = future1.get();
+    auto result2 = future2.get();
+
+    std::cout << std::endl;
+    std::cout << "=== Parallel Dialogue Results ===" << std::endl;
+
+    if (result1.success) {
+        std::cout << "Dialogue 1 (travel) response:" << std::endl;
+        std::cout << result1.response.substr(0, 100) << "..." << std::endl;
+        std::cout << "Test 2a: PASSED" << std::endl;
+        tests_passed++;
+    } else {
+        std::cerr << "Dialogue 1 failed: " << result1.error << std::endl;
+        std::cout << "Test 2a: FAILED" << std::endl;
+        tests_failed++;
+    }
+
+    if (result2.success) {
+        std::cout << "Dialogue 2 (shopping) response:" << std::endl;
+        std::cout << result2.response.substr(0, 100) << "..." << std::endl;
+        std::cout << "Test 2b: PASSED" << std::endl;
+        tests_passed++;
+    } else {
+        std::cerr << "Dialogue 2 failed: " << result2.error << std::endl;
+        std::cout << "Test 2b: FAILED" << std::endl;
+        tests_failed++;
+    }
+
+    // ============================================================
+    // Test 3: Sequential dialogues in same session
+    // ============================================================
+    std::cout << std::endl;
+    std::cout << "=== Test 3: Sequential Dialogues ===" << std::endl;
+    std::cout << "Sending sequential queries..." << std::endl;
+
+    auto seq_result1 = run_single_dialogue_test(agent, "msg-seq-001", "First query about travel");
+    auto seq_result2 = run_single_dialogue_test(agent, "msg-seq-002", "Second query about food");
+
+    // Process both dialogues
+    for (int i = 0; i < max_wait_seconds * 10; ++i) {
+        agent->process_all_sessions_until_idle();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+        // Check if we got both responses
+        framework::MMAgentMsgQue::Message response;
+        while (agent->dequeue_response_message(response)) {
+            // Drain responses
+        }
+    }
+
+    if (seq_result1.success) {
+        std::cout << "Sequential dialogue 1: PASSED" << std::endl;
+        tests_passed++;
+    } else {
+        std::cout << "Sequential dialogue 1: FAILED - " << seq_result1.error << std::endl;
+        tests_failed++;
+    }
+
+    if (seq_result2.success) {
+        std::cout << "Sequential dialogue 2: PASSED" << std::endl;
+        tests_passed++;
+    } else {
+        std::cout << "Sequential dialogue 2: FAILED - " << seq_result2.error << std::endl;
+        tests_failed++;
     }
 
     // Cleanup
@@ -211,6 +373,12 @@ int main() {
     std::filesystem::current_path(original_dir);
 
     std::cout << std::endl;
-    std::cout << "=== Test " << (got_response ? "PASSED" : "FAILED") << " ===" << std::endl;
-    return got_response ? 0 : 1;
+    std::cout << "=== Test Summary ===" << std::endl;
+    std::cout << "Tests passed: " << tests_passed << std::endl;
+    std::cout << "Tests failed: " << tests_failed << std::endl;
+
+    bool all_passed = tests_failed == 0;
+    std::cout << std::endl;
+    std::cout << "=== Overall: " << (all_passed ? "PASSED" : "FAILED") << " ===" << std::endl;
+    return all_passed ? 0 : 1;
 }

@@ -3,6 +3,7 @@
 //
 // Coordinator Node - Aggregates results from all skills and produces final response
 // Uses V3 signature with session-isolated DataBus client
+// Supports multi-dialogue with dialogue_id isolation
 
 #include <string>
 
@@ -50,11 +51,17 @@ extern "C" void coordinator_node_v3(const DataMap& inputs, DataMap& outputs,
   // Get input parameters
   std::string session_id = get_string(inputs, "session_id", "");
   std::string user_text = get_string(inputs, "user_text", "");
+  std::string dialogue_id = get_string(inputs, "dialogue_id", "");
 
   // Collect results from all skills via DataBus user namespace
-  std::string travel_result = get_optional_string(client ? client->user() : nullptr, "travel_result");
-  std::string shopping_result = get_optional_string(client ? client->user() : nullptr, "shopping_result");
-  std::string foodie_result = get_optional_string(client ? client->user() : nullptr, "foodie_result");
+  // With dialogue_id support, keys are prefixed: {dialogue_id}/travel_result
+  std::string travel_key = dialogue_id.empty() ? "travel_result" : dialogue_id + "/travel_result";
+  std::string shopping_key = dialogue_id.empty() ? "shopping_result" : dialogue_id + "/shopping_result";
+  std::string foodie_key = dialogue_id.empty() ? "foodie_result" : dialogue_id + "/foodie_result";
+
+  std::string travel_result = get_optional_string(client ? client->user() : nullptr, travel_key);
+  std::string shopping_result = get_optional_string(client ? client->user() : nullptr, shopping_key);
+  std::string foodie_result = get_optional_string(client ? client->user() : nullptr, foodie_key);
 
   // Aggregate results
   std::string aggregated = "Aggregated response for query: '" + user_text + "'\n\n";
@@ -81,7 +88,9 @@ extern "C" void coordinator_node_v3(const DataMap& inputs, DataMap& outputs,
   outputs["coordinator_done"] = DataVariant(std::string("true"));
 
   // Write response to sys namespace for framework to return to user
+  // With dialogue_id support, the key is: {dialogue_id}/response
   if (client && client->sys()) {
-    client->sys()->put("response", SoDataVariant(aggregated));
+    std::string response_key = dialogue_id.empty() ? "response" : dialogue_id + "/response";
+    client->sys()->put(response_key, SoDataVariant(aggregated));
   }
 }

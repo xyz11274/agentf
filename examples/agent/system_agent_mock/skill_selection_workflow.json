@@ -12,7 +12,8 @@
       "function_name": "skill_selection_node",
       "inputs": [
         {"name": "user_text", "type": "string", "required": true},
-        {"name": "session_id", "type": "string", "required": true}
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "dialogue_id", "type": "string", "required": false}
       ],
       "outputs": [
         {"name": "next_skills", "type": "string"},

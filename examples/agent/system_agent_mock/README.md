@@ -12,6 +12,76 @@ SystemAgentMock 旨在演示 AgentFlow 中 dispatcher-skill-coordinator 消息�
 
 4. **支持多轮对话**：支持在单个会话中进行多轮问答，跨对话维护上下文。
 
+5. **支持多对话并行处理**：支持同一 Session 中并行处理多条外部对话，通过 `dialogue_id` 实现数据隔离。
+
+## 多对话支持
+
+### 核心问题
+
+一个 Session 可能同时处理多条外部对话，不同对话的数据需要隔离存储，防止并行对话的数据互相覆盖（如 `next_skills`）。
+
+### 解决方案
+
+- 引入 **dialogue_id** 作为数据隔离层级
+- `dialogue_id` 由 Dispatcher 生成：`hash(user_text + message_id)`
+- 所有数据按 `dialogue_id` 组织存储
+
+### DataBus 数据层级设计
+
+```
+/session/{session-id}/
+├── sys/{dialogue-id}/
+│   ├── dialogue_id      # 对话标识
+│   ├── user_prompt      # 原始外部消息
+│   ├── next_skills      # 动态技能选择
+│   ├── skills_scheduled # 防重复消费标志
+│   └── response         # 最终响应
+├── user/{dialogue-id}/
+│   └── *_result         # 技能执行结果
+└── ctx/{dialogue-id}/
+    ├── history          # 对话历史
+    └── state            # 对话状态
+```
+
+### Namespace 职责
+
+| Namespace | 用途 | 写入者 |
+|-----------|------|--------|
+| sys | 框架通信数据 | Dispatcher, Coordinator |
+| user | 用户自定义数据 | Skill Nodes |
+| ctx | 对话上下文 | Framework |
+
+### Dialogue 生命周期
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Dialogue 生命周期                             │
+├─────────────────────────────────────────────────────────────────────┤
+│  1. Dispatcher 收到用户消息                                         │
+│     └─ 创建 sys/{dialogue_id}/dialogue_id                           │
+│                                                                     │
+│  2. skill-selection 执行                                            │
+│     └─ 创建 sys/{dialogue_id}/next_skills                           │
+│                                                                     │
+│  3. DATA_EXCHANGE 检测 next_skills                                  │
+│     ├─ 检查 skills_scheduled 是否为 true                            │
+│     ├─ 若为 false:                                                  │
+│     │   ├─ 设置 skills_scheduled = true                             │
+│     │   └─ 启动技能                                                  │
+│     └─ 若为 true: 跳过（防止重复启动）                                │
+│                                                                     │
+│  4. 技能执行完成                                                     │
+│     └─ 结果写入 user/{dialogue_id}/xxx_result                       │
+│                                                                     │
+│  5. Coordinator 执行                                                │
+│     ├─ 读取 user/{dialogue_id}/*_result                             │
+│     └─ 写入 sys/{dialogue_id}/response                              │
+│                                                                     │
+│  6. Agent 返回响应给用户                                             │
+│     └─ 删除 sys/{dialogue_id}/ 和 user/{dialogue_id}/               │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
 ## 架构概览
 
 ```
@@ -23,6 +93,7 @@ SystemAgentMock 旨在演示 AgentFlow 中 dispatcher-skill-coordinator 消息�
 ┌─────────────────────────────────────────────────────────────────────┐
 │                     BuiltinDispatcher                               │
 │                  (next_skills: ["skill-selection"])                 │
+│                  生成 dialogue_id = hash(user_text + message_id)   │
 └────────────────────────────────┬────────────────────────────────────┘
                                  │
                                  ▼
@@ -30,11 +101,11 @@ SystemAgentMock 旨在演示 AgentFlow 中 dispatcher-skill-coordinator 消息�
 │                   skill-selection 技能                              │
 │  ┌─────────────────────────────────────────────────────────────┐   │
 │  │     从 [travel, shopping, foodie] 中随机选择 2 个技能        │   │
-│  │     将 selected_skills 写入 DataBus (sys 命名空间)           │   │
+│  │     将 next_skills 写入 DataBus (sys/{dialogue_id}/)        │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 └────────────────────────────────┬────────────────────────────────────┘
                                  │
-                    框架检测到 selected_skills
+                    框架检测到 next_skills (带 dialogue_id)
                                  │
               ┌──────────────────┴──────────────────┐
               ▼                                     ▼
@@ -43,7 +114,7 @@ SystemAgentMock 旨在演示 AgentFlow 中 dispatcher-skill-coordinator 消息�
 │    (例如: travel)        │           │    (例如: shopping)      │
 │                         │           │                         │
 │  将结果写入 DataBus      │           │  将结果写入 DataBus      │
-│  (user 命名空间)         │           │  (user 命名空间)         │
+│  (user/{dialogue_id}/)  │           │  (user/{dialogue_id}/)  │
 └───────────┬─────────────┘           └───────────┬─────────────┘
             │                                     │
             └──────────────────┬──────────────────┘
@@ -52,15 +123,16 @@ SystemAgentMock 旨在演示 AgentFlow 中 dispatcher-skill-coordinator 消息�
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        协调器 (Coordinator)                         │
 │  ┌─────────────────────────────────────────────────────────────┐   │
-│  │     从 DataBus (user 命名空间) 读取技能结果                  │   │
+│  │     从 DataBus (user/{dialogue_id}/) 读取技能结果           │   │
 │  │     聚合结果生成最终响应                                     │   │
-│  │     将响应写入 DataBus (sys 命名空间)                        │   │
+│  │     将响应写入 DataBus (sys/{dialogue_id}/response)         │   │
 │  └─────────────────────────────────────────────────────────────┘   │
 └────────────────────────────────┬────────────────────────────────────┘
                                  │
                                  ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          用户响应                                   │
+│                (清理 dialogue_id 相关数据)                          │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -69,31 +141,32 @@ SystemAgentMock 旨在演示 AgentFlow 中 dispatcher-skill-coordinator 消息�
 ### 阶段 1: 初始分发
 1. 用户消息到达 agent 的请求队列
 2. 调用 `BuiltinDispatcher::process_request()`
-3. Dispatcher 启动 `skill-selection` 技能（来自 `next_skills` 配置）
+3. Dispatcher 生成 `dialogue_id = hash(user_text + message_id)`
+4. Dispatcher 启动 `skill-selection` 技能（来自 `next_skills` 配置），inputs 包含 `dialogue_id`
 
 ### 阶段 2: 技能选择
 1. `skill-selection` 技能执行
 2. 从 [travel, shopping, foodie] 中随机选择 2 个技能
-3. 将 `selected_skills` 写入 DataBus sys 命名空间：`["travel", "shopping"]`
+3. 将 `next_skills` 写入 DataBus：`sys/{dialogue_id}/next_skills`
 4. 技能完成，通知协调器
 
 ### 阶段 3: 技能执行
-1. 框架检测到 DataBus 中的 `selected_skills`
-2. 框架启动被选中的技能（例如 `travel` 和 `shopping`）
-3. 每个技能执行并将结果写入 DataBus user 命名空间
-4. 技能完成后通知协调器
+1. 框架检测到 DataBus 中的 `{dialogue_id}/next_skills`
+2. 框架检查 `{dialogue_id}/skills_scheduled` 标志，防止重复启动
+3. 框架启动被选中的技能（例如 `travel` 和 `shopping`），inputs 包含 `dialogue_id`
+4. 每个技能执行并将结果写入 DataBus：`user/{dialogue_id}/xxx_result`
+5. 技能完成后通知协调器
 
 ### 阶段 4: 协调处理
 1. 协调器收到所有技能的通知
 2. 协调器工作流执行
-3. 从 DataBus user 命名空间读取技能结果
-4. 聚合并输出：
-   - 将 `response` 写入 DataBus sys 命名空间（给用户）
-   - 结果写入输出映射
+3. 从 DataBus `user/{dialogue_id}/` 命名空间读取技能结果
+4. 聚合并输出：将 `response` 写入 `sys/{dialogue_id}/response`
 
 ### 阶段 5: 响应返回
-1. Dispatcher 检测到 DataBus 中的 `response`
+1. Dispatcher 检测到 DataBus 中的 `{dialogue_id}/response`
 2. 将响应返回给用户
+3. 清理 `dialogue_id` 相关的 DataBus 数据
 
 ## 工作流定义
 
@@ -113,6 +186,7 @@ SystemAgentMock 旨在演示 AgentFlow 中 dispatcher-skill-coordinator 消息�
 |------|------|------|
 | user_text | string | 用户查询文本 |
 | session_id | string | 上下文隔离的会话标识符 |
+| dialogue_id | string | 对话隔离标识符（多对话支持） |
 
 | 输出 | 类型 | 描述 |
 |------|------|------|
@@ -121,8 +195,8 @@ SystemAgentMock 旨在演示 AgentFlow 中 dispatcher-skill-coordinator 消息�
 | selection_reason | string | 选择原因说明 |
 
 **DataBus 副作用:**
-- 将 `next_skills` 写入 sys 命名空间（首选）
-- 将 `selected_skills` 写入 sys 命名空间（向后兼容）
+- 将 `next_skills` 写入 `sys/{dialogue_id}/` 命名空间（首选）
+- 将 `selected_skills` 写入 `sys/{dialogue_id}/` 命名空间（向后兼容）
 
 ### travel-workflow / shopping-workflow / foodie-workflow
 
@@ -130,6 +204,7 @@ SystemAgentMock 旨在演示 AgentFlow 中 dispatcher-skill-coordinator 消息�
 |------|------|------|
 | user_text | string | 用户查询文本 |
 | session_id | string | 会话标识符 |
+| dialogue_id | string | 对话隔离标识符 |
 
 | 输出 | 类型 | 描述 |
 |------|------|------|
@@ -138,8 +213,8 @@ SystemAgentMock 旨在演示 AgentFlow 中 dispatcher-skill-coordinator 消息�
 | confidence | double | 置信度分数 (0.7-0.95) |
 
 **DataBus 副作用:**
-- 将 `{skill_name}_result` 写入 user 命名空间
-- 将 `{skill_name}_confidence` 写入 user 命名空间
+- 将 `{skill_name}_result` 写入 `user/{dialogue_id}/` 命名空间
+- 将 `{skill_name}_confidence` 写入 `user/{dialogue_id}/` 命名空间
 
 ### coordinator-workflow
 
@@ -147,6 +222,7 @@ SystemAgentMock 旨在演示 AgentFlow 中 dispatcher-skill-coordinator 消息�
 |------|------|------|
 | session_id | string | 会话标识符 |
 | user_text | string | 用户查询文本 |
+| dialogue_id | string | 对话隔离标识符 |
 
 | 输出 | 类型 | 描述 |
 |------|------|------|
@@ -155,8 +231,8 @@ SystemAgentMock 旨在演示 AgentFlow 中 dispatcher-skill-coordinator 消息�
 | coordinator_done | bool | 完成标志 |
 
 **DataBus 副作用:**
-- 从 user 命名空间读取 `travel_result`, `shopping_result`, `foodie_result`
-- 将 `response` 写入 sys 命名空间
+- 从 `user/{dialogue_id}/` 命名空间读取 `travel_result`, `shopping_result`, `foodie_result`
+- 将 `response` 写入 `sys/{dialogue_id}/` 命名空间
 
 ## 运行 Agent
 
@@ -199,8 +275,10 @@ Total 2 skills contributed to this response.
 
 | 机制 | 描述 |
 |------|------|
+| `dialogue_id` | 对话隔离标识符，由 Dispatcher 生成，用于多对话并行处理 |
 | `next_skills` | **首选** - DataBus 键，触发框架启动更多技能 |
 | `selected_skills` | **已弃用** - 为向后兼容保留，建议迁移到 `next_skills` |
+| `skills_scheduled` | 防重复消费标志，防止同一对话的技能被重复启动 |
 | `next_skills` (Dispatcher配置) | Dispatcher 配置，指定初始启动的技能 |
 | 会话隔离 DataBus | V3 签名提供数据存储的会话隔离 |
 | Sys 命名空间 | 框架通信通道，用于配置和响应 |
@@ -211,16 +289,32 @@ Total 2 skills contributed to this response.
 技能可以通过在 DataBus 的 sys 命名空间中写入 `next_skills` 来动态触发其他技能的执行：
 
 ```cpp
-// 推荐：使用 next_skills
-client->sys()->put("next_skills", SoDataVariant("[\"travel\", \"shopping\"]"));
+// 推荐：使用 next_skills 带 dialogue_id 前缀
+std::string key = dialogue_id + "/next_skills";
+client->sys()->put(key, SoDataVariant("[\"travel\", \"shopping\"]"));
 
 // 向后兼容：同时写入 selected_skills
-client->sys()->put("selected_skills", SoDataVariant("[\"travel\", \"shopping\"]"));
+client->sys()->put(dialogue_id + "/selected_skills", SoDataVariant("[\"travel\", \"shopping\"]"));
 ```
 
 框架会按以下优先级检查：
-1. 首先检查 `next_skills`（推荐）
-2. 如果未找到，检查 `selected_skills`（向后兼容）
+1. 首先检查 `{dialogue_id}/next_skills`（推荐）
+2. 如果未找到，检查 `{dialogue_id}/selected_skills`（向后兼容）
+3. 同时检查 `skills_scheduled` 标志防止重复启动
+
+### 多对话数据隔离
+
+```cpp
+// Dispatcher 生成 dialogue_id
+std::string dialogue_id = std::to_string(
+    std::hash<std::string>{}(user_text + message_id)
+);
+
+// 数据按 dialogue_id 隔离存储
+// sys/{dialogue_id}/next_skills
+// user/{dialogue_id}/travel_result
+// sys/{dialogue_id}/response
+```
 
 ## 文件结构
 
@@ -229,6 +323,7 @@ examples/agent/system_agent_mock/
 ├── agent.json                    # Agent 配置
 ├── package.json                  # 包元数据
 ├── README.md                     # 本文档
+├── FLOW_ANALYSIS.md              # 调度流程分析
 ├── skill_selection_workflow.json # 技能选择工作流
 ├── travel_workflow.json          # 旅行技能工作流
 ├── shopping_workflow.json        # 购物技能工作流

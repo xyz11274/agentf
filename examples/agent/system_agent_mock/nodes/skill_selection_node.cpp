@@ -3,6 +3,7 @@
 //
 // Skill Selection Node - Randomly selects 2 skills from available skills
 // Uses V3 signature with session-isolated DataBus client
+// Supports multi-dialogue with dialogue_id isolation
 
 #include <algorithm>
 #include <random>
@@ -51,6 +52,7 @@ extern "C" void skill_selection_node_v3(const DataMap& inputs, DataMap& outputs,
   // Get input parameters
   std::string user_text = get_string(inputs, "user_text", "");
   std::string session_id = get_string(inputs, "session_id", "");
+  std::string dialogue_id = get_string(inputs, "dialogue_id", "");
 
   // Available skills to choose from
   std::vector<std::string> all_skills = {"travel", "shopping", "foodie"};
@@ -71,10 +73,18 @@ extern "C" void skill_selection_node_v3(const DataMap& inputs, DataMap& outputs,
                   " skills for demo based on user query: " + user_text);
 
   // Write next_skills to sys namespace for framework to launch more skills
-  // Use next_skills (preferred) with selected_skills for backward compatibility
+  // With dialogue_id support, the key is: {dialogue_id}/next_skills
   if (client && client->sys()) {
-    client->sys()->put("next_skills", SoDataVariant(selected_json));
+    std::string next_skills_key = dialogue_id.empty() ? "next_skills" : dialogue_id + "/next_skills";
+    std::string selected_skills_key = dialogue_id.empty() ? "selected_skills" : dialogue_id + "/selected_skills";
+
+    client->sys()->put(next_skills_key, SoDataVariant(selected_json));
     // Also write to selected_skills for backward compatibility
-    client->sys()->put("selected_skills", SoDataVariant(selected_json));
+    client->sys()->put(selected_skills_key, SoDataVariant(selected_json));
+
+    // Store user_prompt in dialogue namespace if dialogue_id is provided
+    if (!dialogue_id.empty()) {
+      client->sys()->put(dialogue_id + "/user_prompt", SoDataVariant(user_text));
+    }
   }
 }
