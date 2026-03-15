@@ -266,6 +266,10 @@ public:
   explicit MMWorkflow(const Config& config);
   ~MMWorkflow();
 
+  // Create a deep copy of this workflow with fresh node states
+  // Each execution should use a cloned workflow to avoid state conflicts
+  std::shared_ptr<MMWorkflow> clone() const;
+
   // Getters
   const WorkflowId&  get_id() const { return config_.id; }
   const std::string& get_name() const { return config_.name; }

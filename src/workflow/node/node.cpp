@@ -42,6 +42,29 @@ MMNode::~MMNode() {
   }
 }
 
+std::shared_ptr<MMNode> MMNode::clone(bool inherit_databus) const {
+  // Create a new node with the same configuration
+  auto cloned = std::make_shared<MMNode>(config_);
+
+  // Fresh state - start in WAITING state (will be set to READY by workflow execution)
+  cloned->state_ = NodeState::WAITING;
+  cloned->retry_count_ = 0;
+  cloned->inputs_.clear();
+  cloned->outputs_.clear();
+  cloned->last_error_.clear();
+
+  // Optionally inherit databus references for session isolation
+  if(inherit_databus) {
+    cloned->databus_ = databus_;
+    cloned->databus_client_ = databus_client_;
+  }
+
+  // Note: code_loader_ is already set in constructor via global_code_loader()
+  // Note: Runtime state (threads, pools) is not cloned - fresh node doesn't need runtime
+
+  return cloned;
+}
+
 bool MMNode::start_runtime() {
   return start_runtime(RuntimeConfig{});
 }

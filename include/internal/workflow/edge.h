@@ -94,6 +94,9 @@ public:
   explicit MMEdge(const Config& config);
   ~MMEdge();
 
+  // Create a deep copy of this edge with fresh state
+  std::shared_ptr<MMEdge> clone() const;
+
   // Getters
   const std::string& get_id() const { return config_.id; }
   const std::string& get_source() const { return config_.source_node; }

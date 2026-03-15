@@ -153,6 +153,10 @@ public:
   explicit MMNode(const Config& config);
   ~MMNode();
 
+  // Create a deep copy of this node with fresh state (READY)
+  // Optionally inherit databus and databus_client from source
+  std::shared_ptr<MMNode> clone(bool inherit_databus = false) const;
+
   // Getters
   const NodeId&      get_id() const { return config_.id; }
   const std::string& get_name() const { return config_.name; }

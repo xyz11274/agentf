@@ -74,7 +74,8 @@ public:
   // Event handling
   void on_node_complete(const AgentId& agent_id, const WorkflowId& workflow_id,
                         const NodeId& node_id, bool success);
-  void on_workflow_complete(const AgentId& agent_id, const WorkflowId& workflow_id, bool success);
+  void on_workflow_complete(const AgentId& agent_id, const WorkflowId& workflow_id,
+                            const std::string& execution_id, bool success);
 
   // Load balancing
   void update_worker_load(int worker_id, int load_change);
@@ -162,6 +163,11 @@ private:
    };
   std::map<std::string, WorkflowExecutionState> workflow_states_;
   std::mutex                                    workflow_state_mutex_;
+
+  // Cloned workflows for concurrent execution isolation
+  // Each execution gets its own workflow copy with independent node states
+  std::map<std::string, WorkflowPtr>            cloned_workflows_;
+  std::mutex                                    cloned_workflows_mutex_;
 
   // Worker thread main loop
   void worker_thread_main();

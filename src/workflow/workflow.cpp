@@ -652,6 +652,44 @@ MMWorkflow::~MMWorkflow() {
   stop_runtime();
 }
 
+std::shared_ptr<MMWorkflow> MMWorkflow::clone() const {
+  // Create a new workflow with the same configuration
+  auto cloned = std::make_shared<MMWorkflow>(config_);
+
+  // Clone all nodes (each node gets fresh state)
+  cloned->nodes_.reserve(nodes_.size());
+  for(const auto& node : nodes_) {
+    auto cloned_node = node->clone(true);  // Inherit databus references
+    cloned->nodes_.push_back(cloned_node);
+    cloned->node_map_[cloned_node->get_id()] = cloned_node;
+  }
+
+  // Clone all edges
+  cloned->edges_.reserve(edges_.size());
+  for(const auto& edge : edges_) {
+    cloned->edges_.push_back(edge->clone());
+  }
+
+  // Copy the cached topological order (it's based on node IDs, which are the same)
+  cloned->topological_order_ = topological_order_;
+  cloned->topological_order_valid_ = topological_order_valid_;
+
+  // Fresh execution state - clear all tracking
+  cloned->executed_nodes_.clear();
+  cloned->node_retry_counts_.clear();
+  cloned->error_handlers_ = error_handlers_;  // Configuration is OK to share
+  cloned->active_loops_.clear();
+  cloned->control_context_.clear_variables();
+
+  // Note: Runtime state (threads, pools) is not cloned
+  // The cloned workflow can start its own runtime if needed
+
+  Logger::instance().debug_f("Cloned workflow %s with %zu nodes and %zu edges",
+                              config_.id.c_str(), cloned->nodes_.size(), cloned->edges_.size());
+
+  return cloned;
+}
+
 bool MMWorkflow::start_runtime() {
   return start_runtime(RuntimeConfig{});
 }

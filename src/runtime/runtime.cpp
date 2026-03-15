@@ -364,11 +364,18 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
   }
 
   auto agent    = get_agent(agent_id);
-  auto workflow = agent ? agent->get_workflow(workflow_id) : nullptr;
+  auto workflow_template = agent ? agent->get_workflow(workflow_id) : nullptr;
 
-  if(!agent || !workflow) {
+  if(!agent || !workflow_template) {
     Logger::instance().error_f("Cannot execute workflow: agent=%s, workflow=%s", agent_id.c_str(),
                                workflow_id.c_str());
+    return false;
+  }
+
+  // Clone the workflow for this execution to avoid state conflicts with concurrent executions
+  auto workflow = workflow_template->clone();
+  if(!workflow) {
+    Logger::instance().error_f("Failed to clone workflow: %s", workflow_id.c_str());
     return false;
   }
 
@@ -381,6 +388,12 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
   std::string execution_id =
       agent_id + ":" + workflow_id + ":"
       + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+
+  // Store the cloned workflow indexed by execution_id
+  {
+    std::lock_guard<std::mutex> lock(cloned_workflows_mutex_);
+    cloned_workflows_[execution_id] = workflow;
+  }
 
   WorkflowExecutionState state;
   state.workflow_id     = workflow_id;
@@ -416,7 +429,7 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
     (void)wf_span;  // span closes immediately; node spans will be children
   }
 
-  // Initialize all nodes to READY state
+  // Initialize all nodes to READY state (these are the cloned nodes, not shared)
   for(const auto& node : workflow->get_nodes()) {
     if(node->get_state() != NodeState::READY) {
       node->set_state(NodeState::READY);
@@ -674,14 +687,24 @@ void MMAgentRuntime::schedule_workflow_executable_nodes(const std::string& execu
     return;
   }
 
-  // Find the agent and workflow
+  // Find the agent
   auto agent = get_agent(state.agent_id);
   if(!agent) {
     return;
   }
 
-  auto workflow = agent->get_workflow(state.workflow_id);
+  // Get the cloned workflow for this execution
+  WorkflowPtr workflow;
+  {
+    std::lock_guard<std::mutex> wf_lock(cloned_workflows_mutex_);
+    auto wf_it = cloned_workflows_.find(execution_id);
+    if(wf_it != cloned_workflows_.end()) {
+      workflow = wf_it->second;
+    }
+  }
+
   if(!workflow) {
+    Logger::instance().error_f("No cloned workflow found for execution_id: %s", execution_id.c_str());
     return;
   }
 
@@ -759,28 +782,34 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
       complete_task_type      = state.task_type;
       complete_skill_task_id  = state.skill_task_id;
     } else if(success) {
-      auto agent = get_agent(state.agent_id);
-      if(agent) {
-        auto workflow = agent->get_workflow(state.workflow_id);
-        if(workflow) {
-          workflow->mark_node_executed(node_id, true);
-          auto next_nodes = workflow->get_executable_nodes();
-          if(!next_nodes.empty()) {
-            std::lock_guard<std::mutex> task_lock(task_queue_mutex_);
-            for(const auto& next_id : next_nodes) {
-              auto next_node = workflow->get_node(next_id);
-              if(!next_node || next_node->get_state() != NodeState::READY) {
-                continue;
-              }
-              if(state.completed_nodes.count(next_id) || state.failed_nodes.count(next_id)
-                 || state.queued_nodes.count(next_id) || state.running_nodes.count(next_id)) {
-                continue;
-              }
-              state.queued_nodes.insert(next_id);
-              node_task_queue_.push({agent, workflow, next_node, execution_id});
+      // Get the cloned workflow for this execution
+      WorkflowPtr workflow;
+      {
+        std::lock_guard<std::mutex> wf_lock(cloned_workflows_mutex_);
+        auto wf_it = cloned_workflows_.find(execution_id);
+        if(wf_it != cloned_workflows_.end()) {
+          workflow = wf_it->second;
+        }
+      }
+      if(workflow) {
+        workflow->mark_node_executed(node_id, true);
+        auto next_nodes = workflow->get_executable_nodes();
+        if(!next_nodes.empty()) {
+          auto agent = get_agent(state.agent_id);
+          std::lock_guard<std::mutex> task_lock(task_queue_mutex_);
+          for(const auto& next_id : next_nodes) {
+            auto next_node = workflow->get_node(next_id);
+            if(!next_node || next_node->get_state() != NodeState::READY) {
+              continue;
             }
-            g_worker_cv.notify_all();
+            if(state.completed_nodes.count(next_id) || state.failed_nodes.count(next_id)
+               || state.queued_nodes.count(next_id) || state.running_nodes.count(next_id)) {
+              continue;
+            }
+            state.queued_nodes.insert(next_id);
+            node_task_queue_.push({agent, workflow, next_node, execution_id});
           }
+          g_worker_cv.notify_all();
         }
       }
     }
@@ -836,7 +865,7 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
       }
     }
 
-    on_workflow_complete(complete_agent, complete_workflow, complete_ok);
+    on_workflow_complete(complete_agent, complete_workflow, execution_id, complete_ok);
   }
 }
 
@@ -848,18 +877,24 @@ void MMAgentRuntime::on_node_complete(const AgentId& agent_id, const WorkflowId&
 }
 
 void MMAgentRuntime::on_workflow_complete(const AgentId& agent_id, const WorkflowId& workflow_id,
-                                        bool success) {
-  Logger::instance().info_f("MMWorkflow complete event: agent=%s, workflow=%s, success=%d",
-                            agent_id.c_str(), workflow_id.c_str(), success ? 1 : 0);
+                                        const std::string& execution_id, bool success) {
+  Logger::instance().info_f("MMWorkflow complete event: agent=%s, workflow=%s, execution_id=%s, success=%d",
+                            agent_id.c_str(), workflow_id.c_str(), execution_id.c_str(), success ? 1 : 0);
 
-  // Clean up execution states matching this agent+workflow
-  std::lock_guard<std::mutex> lock(workflow_state_mutex_);
-  for(auto it = workflow_states_.begin(); it != workflow_states_.end();) {
-    if(it->second.agent_id == agent_id && it->second.workflow_id == workflow_id) {
-      it = workflow_states_.erase(it);
-    } else {
-      ++it;
+  // Clean up the specific cloned workflow
+  {
+    std::lock_guard<std::mutex> lock(cloned_workflows_mutex_);
+    auto it = cloned_workflows_.find(execution_id);
+    if(it != cloned_workflows_.end()) {
+      cloned_workflows_.erase(it);
+      Logger::instance().debug_f("Cleaned up cloned workflow for execution_id: %s", execution_id.c_str());
     }
+  }
+
+  // Clean up the execution state
+  {
+    std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+    workflow_states_.erase(execution_id);
   }
 }
 

@@ -14,6 +14,12 @@ MMEdge::~MMEdge() {
   stop_runtime();
 }
 
+std::shared_ptr<MMEdge> MMEdge::clone() const {
+  // Create a new edge with the same configuration
+  // Runtime state is not cloned - the new edge starts fresh
+  return std::make_shared<MMEdge>(config_);
+}
+
 bool MMEdge::start_runtime() {
   return start_runtime(RuntimeConfig{});
 }
