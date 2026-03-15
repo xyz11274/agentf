@@ -69,7 +69,7 @@ agent->start();
 ### 示例与验证
 
 - `examples/agent/basic_agent`：基础执行 Agent 包示例，现同时覆盖最小 package 结构、shell 节点与 Python 节点能力。
-- `examples/agent/llm_query_agent`：任务编排示例，现同时包含本地 echo workflow 与依赖 `llm-query` 动态库的 LLM workflow；E2E 覆盖见 `E2EEchoAgent` 与条件注册的 `E2ELLMQueryAgent`。
+- `examples/agent/llm_query_agent`：任务编排示例，包含依赖 `llm-query` 动态库的 LLM workflow；E2E 覆盖见条件注册的 `E2ELLMQueryAgent`。
 - `examples/agent/claw_agent`：dispatcher 直连 vendored `jiuwenclaw` 的聊天示例，包含专用 TUI，E2E 覆盖见 `E2EClawAgentTUI`。
 - `examples/agent/openjiuwen_studio_agent`：将 agent-studio 编排结果以 bundled artifact 打入 AgentFlow 包的适配器示例，包含专用 TUI，详细说明见 `docs/openjiuwen-studio-agent-example.md`，E2E 覆盖见 `E2EOpenJiuwenStudioAgentTUI`。
 - `examples/agent/multi_session_chat`：多轮对话与多语言节点示例，现提供专用 TUI 入口，测试覆盖见 `E2EMultiSessionChatTUI`。

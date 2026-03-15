@@ -115,20 +115,6 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/examples/agent/openjiuwen_studio_agent/tests/test
     )
 endif()
 
-# Echo Agent Scenario
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/echo_agent/test_echo_agent_e2e.cpp")
-    add_executable(test_e2e_echo_agent
-        echo_agent/test_echo_agent_e2e.cpp
-    )
-    target_link_libraries(test_e2e_echo_agent
-        agentflow
-        GTest::gtest
-        GTest::gtest_main
-    )
-    add_test(NAME E2EEchoAgent COMMAND test_e2e_echo_agent)
-    add_dependencies(e2e_tests test_e2e_echo_agent)
-endif()
-
 # LLM Query Agent Scenario (black-box test through message interface)
 if(TARGET llm_query_node AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/llm_query_agent/test_llm_query_agent_e2e.cpp")
     add_executable(test_e2e_llm_query_agent
