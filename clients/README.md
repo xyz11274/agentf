@@ -17,6 +17,7 @@ The UDS-based DataBus access provides:
 |-----|-----------|-------------|
 | Python | `python/` | Pure Python SDK with chain-call API |
 | Go | `golang/` | Go module with chain-call API |
+| Java | `java/` | Java 17+ SDK with chain-call API |
 | CLI | `cli/` | Command-line tool for shell access |
 
 ## Quick Start
@@ -59,6 +60,22 @@ value, _ := client.User().Get("my_key")
 
 // With dialogue_id
 client.UserWithDialogue("dialogue-123").Put("result", map[string]any{"status": "ok"})
+```
+
+### Java
+
+```java
+import com.agentflow.databus.DataBusClient;
+
+// Connect via environment variable
+try (DataBusClient client = DataBusClient.fromEnv()) {
+    // Chain-call style
+    client.user().put("my_key", "value");
+    String value = (String) client.user().get("my_key");
+
+    // With dialogue_id
+    client.user("dialogue-123").put("result", Map.of("status", "ok"));
+}
 ```
 
 ### CLI
@@ -133,7 +150,7 @@ Worker Process
 │       └── Unix Domain Socket: /tmp/agentflow_worker_{worker_id}.sock
 │           └── JSON-RPC 2.0 Protocol
 │
-External Process (Python/Go/Shell)
+External Process (Python/Go/Java/Shell)
 └── Client SDK
     └── Connect to UDS via AF_DATABUS_UDS_FILE env var
 ```

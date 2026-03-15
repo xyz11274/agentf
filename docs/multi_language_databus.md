@@ -51,6 +51,7 @@ External Process (Python/Go/Shell/Other)
 3. **Client SDKs**
    - Python: `clients/python/agentflow_databus.py`
    - Go: `clients/golang/databus/client.go`
+   - Java: `clients/java/src/main/java/com/agentflow/databus/`
    - CLI: `clients/cli/databus_cli.py`
 
 ## Protocol
