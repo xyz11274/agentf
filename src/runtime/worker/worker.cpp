@@ -4,6 +4,7 @@
 #include "agentflow/so_node.h"
 #include "runtime/databus/node_databus_adapter.h"
 #include "runtime/databus/node_databus_client.h"
+#include "runtime/databus/uds_server.h"
 
 #include <sys/time.h>
 
@@ -63,6 +64,25 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
       exec_config.env_vars.push_back("AF_LLM_MODEL=" + request.llm_config.model);
     }
   }
+
+  // Create UDS server for real-time DataBus access when databus and session_id are provided
+  // This enables Python/Go/Shell SDKs to access DataBus via Unix Domain Socket
+  std::unique_ptr<UDSServer> uds_server;
+  if(request.databus && !request.session_id.empty()) {
+    // Generate unique socket path based on session_id
+    std::string uds_socket_path = "/tmp/agentflow_" + request.session_id + ".sock";
+    uds_server = std::make_unique<UDSServer>(request.databus, uds_socket_path);
+    if(uds_server->start()) {
+      exec_config.env_vars.push_back("AF_DATABUS_UDS_FILE=" + uds_socket_path);
+      Logger::instance().info_f("[WORKER] UDS server started for session %s at %s",
+                               request.session_id.c_str(), uds_socket_path.c_str());
+    } else {
+      Logger::instance().warn_f("[WORKER] Failed to start UDS server for session %s",
+                               request.session_id.c_str());
+      uds_server.reset();
+    }
+  }
+
   for(const auto& pair : request.inputs) {
     std::string env_key = "AF_" + to_env_suffix(pair.first);
     exec_config.env_vars.push_back(env_key + "=" + data_variant_to_string(pair.second));
@@ -238,6 +258,14 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
       response.active_version_id = version->version_id;
     }
   }
+
+  // Stop UDS server before cleanup
+  if(uds_server) {
+    uds_server->stop();
+    uds_server.reset();
+    Logger::instance().debug_f("[WORKER] UDS server stopped for session %s", request.session_id.c_str());
+  }
+
   if(!request.keep_databus_files) {
     file_databus.cleanup();
   }
