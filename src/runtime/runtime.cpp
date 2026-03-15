@@ -611,20 +611,38 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
   }
 
   // Publish node outputs for downstream consumers (bridge/UI/orchestration scripts).
+  // With multi-dialogue support, prefix keys with dialogue_id when available.
   const DataMap& node_outputs = node->get_outputs();
   if(!node_outputs.empty()) {
     auto& bus = get_databus(agent->get_id());
-    Logger::instance().info_f("[PROCESS_NODE_OUTPUTS] Node=%s has %zu outputs",
-                              node->get_id().c_str(), node_outputs.size());
+    Logger::instance().info_f("[PROCESS_NODE_OUTPUTS] Node=%s has %zu outputs, dialogue_id=%s",
+                              node->get_id().c_str(), node_outputs.size(),
+                              flow_dialogue_id.c_str());
     for(const auto& out : node_outputs) {
-      Logger::instance().info_f("[PROCESS_NODE_PUBLISH] Publishing key=%s to agent databus", out.first.c_str());
-      agent->publish_data(out.first, out.second);
-      bus.put(out.first, out.second);
+      // Build the output key with dialogue_id prefix for multi-dialogue support
+      std::string output_key = out.first;
+      if(!flow_dialogue_id.empty()) {
+        output_key = flow_dialogue_id + "/" + out.first;
+      }
+
+      Logger::instance().info_f("[PROCESS_NODE_PUBLISH] Publishing key=%s to agent databus", output_key.c_str());
+      agent->publish_data(output_key, out.second);
+      bus.put(output_key, out.second);
+
+      // Also publish with workflow.node prefix for scoped access
       if(workflow) {
         std::string scoped_key = workflow->get_id() + "." + node->get_id() + "." + out.first;
+        if(!flow_dialogue_id.empty()) {
+          scoped_key = flow_dialogue_id + "/" + scoped_key;
+        }
         agent->publish_data(scoped_key, out.second);
         bus.put(scoped_key, out.second);
       }
+
+      // Also publish without dialogue_id prefix for backward compatibility
+      // This ensures older code that doesn't use dialogue_id still works
+      agent->publish_data(out.first, out.second);
+      bus.put(out.first, out.second);
     }
   }
 
