@@ -4,6 +4,10 @@
 // Coordinator Node - Aggregates results from all skills and produces final response
 // Uses V3 signature with session-isolated DataBus client
 // Supports multi-dialogue with dialogue_id isolation
+//
+// This node is triggered after each skill completion.
+// It checks if all skills have completed (pending_skills_count == 0) before
+// aggregating results and sending the final response.
 
 #include <string>
 
@@ -43,6 +47,22 @@ std::string get_optional_string(INamespaceClient* ns, const std::string& key) {
   return "";
 }
 
+long get_pending_skills_count(INamespaceClient* ns, const std::string& dialogue_id) {
+  if (!ns) {
+    return 0;
+  }
+  std::string pending_key = dialogue_id.empty() ? "pending_skills_count" : dialogue_id + "/pending_skills_count";
+  SoDataVariant value;
+  if (ns->get(pending_key, value)) {
+    if (const auto* count = std::get_if<long>(&value)) {
+      return *count;
+    } else if (const auto* count_str = std::get_if<std::string>(&value)) {
+      return std::stol(*count_str);
+    }
+  }
+  return 0;
+}
+
 }  // namespace
 
 // V3 signature with session-isolated DataBus client
@@ -53,7 +73,17 @@ extern "C" void coordinator_node_v3(const DataMap& inputs, DataMap& outputs,
   std::string user_text = get_string(inputs, "user_text", "");
   std::string dialogue_id = get_string(inputs, "dialogue_id", "");
 
-  // Collect results from all skills via DataBus user namespace
+  // Check if all skills have completed
+  long pending_count = get_pending_skills_count(client ? client->sys() : nullptr, dialogue_id);
+  if (pending_count > 0) {
+    // Not all skills have completed yet - don't send response
+    // The workflow will be triggered again when the next skill completes
+    outputs["status"] = DataVariant(std::string("waiting_for_skills"));
+    outputs["pending_skills"] = DataVariant(pending_count);
+    return;
+  }
+
+  // All skills completed - collect results from all skills via DataBus user namespace
   // With dialogue_id support, keys are prefixed: {dialogue_id}/travel_result
   std::string travel_key = dialogue_id.empty() ? "travel_result" : dialogue_id + "/travel_result";
   std::string shopping_key = dialogue_id.empty() ? "shopping_result" : dialogue_id + "/shopping_result";

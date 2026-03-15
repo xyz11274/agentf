@@ -1159,42 +1159,52 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         task->on_skill_completed(skill_response.metadata["skill_name"]);
       }
 
-      MMAgentMsgQue::Message response_message = skill_response;
-
-      // Get response from databus (with dialogue_id prefix for multi-dialogue support)
-      std::string response_key = coord_dialogue_id.empty() ? "response" : coord_dialogue_id + "/response";
-      DataVariant response_value;
-      if(get_data(response_key, response_value)) {
-        if(const auto* text = std::get_if<std::string>(&response_value)) {
-          response_message.content = *text;
-          Logger::instance().info_f("[COORDINATORDataExchange] Got skill response from databus: %s",
-                                    text->c_str());
+      // Decrement pending skills count in databus
+      std::string pending_count_key = coord_dialogue_id.empty() ? "pending_skills_count" : coord_dialogue_id + "/pending_skills_count";
+      DataVariant pending_count_value;
+      long pending_count = 0;
+      if(get_data(pending_count_key, pending_count_value)) {
+        if(const auto* count_ptr = std::get_if<long>(&pending_count_value)) {
+          pending_count = *count_ptr;
+        } else if(const auto* count_str = std::get_if<std::string>(&pending_count_value)) {
+          pending_count = std::stol(*count_str);
         }
       }
 
-      if(session_router_) {
-        Logger::instance().info_f("[COORDINATORDataExchange] Enqueueing final response to client, content='%s'",
-                                  response_message.content.c_str());
-        session_router_->enqueue_response_message(response_message);
+      if(pending_count > 0) {
+        pending_count--;
+        publish_data(pending_count_key, DataVariant(pending_count));
+        Logger::instance().info_f("[COORDINATORDataExchange] Decremented pending_skills_count to %ld for dialogue_id=%s",
+                                  pending_count, coord_dialogue_id.c_str());
+      }
 
-        // Clean up dialogue data after response is sent
-        if(!coord_dialogue_id.empty()) {
-          Logger::instance().info_f("[COORDINATORDataExchange] Cleaning up dialogue_id=%s", coord_dialogue_id.c_str());
-          // Remove sys/{dialogue_id}/ data
-          publish_data(coord_dialogue_id + "/dialogue_id", DataVariant());
-          publish_data(coord_dialogue_id + "/user_prompt", DataVariant());
-          publish_data(coord_dialogue_id + "/next_skills", DataVariant());
-          publish_data(coord_dialogue_id + "/skills_scheduled", DataVariant());
-          publish_data(coord_dialogue_id + "/response", DataVariant());
-          // Remove user/{dialogue_id}/ data
-          publish_data(coord_dialogue_id + "/travel_result", DataVariant());
-          publish_data(coord_dialogue_id + "/travel_confidence", DataVariant());
-          publish_data(coord_dialogue_id + "/shopping_result", DataVariant());
-          publish_data(coord_dialogue_id + "/shopping_confidence", DataVariant());
-          publish_data(coord_dialogue_id + "/foodie_result", DataVariant());
-          publish_data(coord_dialogue_id + "/foodie_confidence", DataVariant());
+      // Only send final response when all skills have completed
+      if(pending_count > 0) {
+        Logger::instance().info_f("[COORDINATORDataExchange] Still have %ld pending skills, triggering coordinator workflow to check results",
+                                  pending_count);
+      }
+
+      // Trigger coordinator workflow for each skill completion
+      // The workflow will check if all results are ready and decide whether to respond
+      MMAgentMsgQue::Message coordinator_trigger;
+      coordinator_trigger.message_id = "coordinator-trigger-" + skill_response.message_id;
+      coordinator_trigger.metadata["task_type"] = "coordinator";
+      coordinator_trigger.metadata["trigger_type"] = "skill_completion";
+      if(!coord_dialogue_id.empty()) {
+        coordinator_trigger.metadata["dialogue_id"] = coord_dialogue_id;
+      }
+      if(skill_response.metadata.count("skill_name")) {
+        coordinator_trigger.metadata["completed_skill_name"] = skill_response.metadata["skill_name"];
+      }
+      // Get the original user prompt
+      std::string user_prompt_key = coord_dialogue_id.empty() ? "user_prompt" : coord_dialogue_id + "/user_prompt";
+      DataVariant user_prompt_value;
+      if(get_data(user_prompt_key, user_prompt_value)) {
+        if(const auto* text = std::get_if<std::string>(&user_prompt_value)) {
+          coordinator_trigger.content = *text;
         }
       }
+      task->enqueue_intent_request_message(coordinator_trigger);
       return;
     }
 
@@ -1242,10 +1252,52 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         }
       }
 
+      // If skills are already scheduled, skip launching skills again
+      // Instead, check if coordinator node wrote a response (all skills completed)
       if(already_scheduled) {
-        Logger::instance().info_f("[COORDINATORDataExchange] Skills already scheduled for dialogue_id=%s, skipping",
-                                 dialogue_id.c_str());
-        return;
+        Logger::instance().info_f("[COORDINATORDataExchange] Skills already scheduled, checking if response is ready");
+
+        // Check if coordinator node wrote a response (all skills completed)
+        std::string response_key = dialogue_id.empty() ? "response" : dialogue_id + "/response";
+        DataVariant response_value;
+        if(get_data(response_key, response_value)) {
+          // Response exists - send it to client
+          Logger::instance().info_f("[COORDINATORDataExchange] Response ready, sending to client");
+          MMAgentMsgQue::Message response_message = message;
+          if(const auto* text = std::get_if<std::string>(&response_value)) {
+            response_message.content = *text;
+          }
+
+          if(session_router_) {
+            session_router_->enqueue_response_message(response_message);
+
+            // Clean up dialogue data after response is sent
+            if(!dialogue_id.empty()) {
+              Logger::instance().info_f("[COORDINATORDataExchange] Cleaning up dialogue_id=%s", dialogue_id.c_str());
+              // Remove sys/{dialogue_id}/ data
+              publish_data(dialogue_id + "/dialogue_id", DataVariant());
+              publish_data(dialogue_id + "/user_prompt", DataVariant());
+              publish_data(dialogue_id + "/next_skills", DataVariant());
+              publish_data(dialogue_id + "/skills_scheduled", DataVariant());
+              publish_data(dialogue_id + "/response", DataVariant());
+              // Remove user/{dialogue_id}/ data
+              publish_data(dialogue_id + "/travel_result", DataVariant());
+              publish_data(dialogue_id + "/travel_confidence", DataVariant());
+              publish_data(dialogue_id + "/shopping_result", DataVariant());
+              publish_data(dialogue_id + "/shopping_confidence", DataVariant());
+              publish_data(dialogue_id + "/foodie_result", DataVariant());
+              publish_data(dialogue_id + "/foodie_confidence", DataVariant());
+              // Clean up pending skills count and coord_forwarded
+              publish_data(dialogue_id + "/pending_skills_count", DataVariant());
+              publish_data(dialogue_id + "/coord_forwarded", DataVariant());
+            }
+          }
+          return;
+        } else {
+          // Response not ready yet - more skills still running
+          Logger::instance().info_f("[COORDINATORDataExchange] Response not ready yet, more skills pending");
+          return;
+        }
       }
 
       Logger::instance().info_f("[COORDINATORDataExchange] Coordinator workflow completed, starting skill tasks: %s",
@@ -1304,6 +1356,8 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         publish_data(dialogue_id + "/shopping_confidence", DataVariant());
         publish_data(dialogue_id + "/foodie_result", DataVariant());
         publish_data(dialogue_id + "/foodie_confidence", DataVariant());
+        // Clean up pending skills count
+        publish_data(dialogue_id + "/pending_skills_count", DataVariant());
       }
     }
     return;
@@ -1443,6 +1497,28 @@ bool MMAgent::launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
 
   // Mark skill as started on source task
   source_task->on_skill_started(skill_name);
+
+  // Increment pending skills count in databus for coordinator to track
+  {
+    std::string dialogue_id;
+    if(context.metadata.count("dialogue_id")) {
+      dialogue_id = context.metadata.at("dialogue_id");
+    }
+    std::string pending_count_key = dialogue_id.empty() ? "pending_skills_count" : dialogue_id + "/pending_skills_count";
+    DataVariant pending_count_value;
+    long pending_count = 0;
+    if(get_data(pending_count_key, pending_count_value)) {
+      if(const auto* count_ptr = std::get_if<long>(&pending_count_value)) {
+        pending_count = *count_ptr;
+      } else if(const auto* count_str = std::get_if<std::string>(&pending_count_value)) {
+        pending_count = std::stol(*count_str);
+      }
+    }
+    pending_count++;
+    publish_data(pending_count_key, DataVariant(pending_count));
+    Logger::instance().info_f("[LAUNCH_SKILL] Incremented pending_skills_count to %ld for dialogue_id=%s",
+                              pending_count, dialogue_id.c_str());
+  }
 
   // Flow trace: skill launched
   {
