@@ -889,6 +889,39 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
   }
 
   // ============================================================
+  // SKILL COMPLETION DETECTION (MUST RUN BEFORE next_skills HANDLING)
+  // ============================================================
+  // Detect skill completion and decrement counter before we try to launch new skills
+  // NOTE: Concurrency control only applies to skill-type tasks (task_type == "skill").
+  // Dispatcher and coordinator tasks do NOT use the counter.
+  bool is_skill_completion = false;
+  std::string skill_name_for_counter;
+
+  // Check task_type from message metadata to determine if this is a skill task
+  if(message.content == "workflow_completed" && message.metadata.count("task_type")) {
+    const std::string& source_task_type = message.metadata.at("task_type");
+    if(source_task_type == "skill") {
+      // This is a skill task completion - decrement the counter
+      is_skill_completion = true;
+      // Get skill name from metadata
+      if(message.metadata.count("skill_name")) {
+        skill_name_for_counter = message.metadata.at("skill_name");
+      }
+      Logger::instance().info_f("[SKILL_COMPLETION] Detected skill task completion, skill=%s, decrementing counter",
+                               skill_name_for_counter.empty() ? "unknown" : skill_name_for_counter.c_str());
+    }
+  }
+
+  // Decrement counter if this is a skill completion
+  if(is_skill_completion) {
+    if(!skill_name_for_counter.empty()) {
+      task->on_skill_completed(skill_name_for_counter);
+    } else {
+      task->on_skill_completed("unknown-skill");  // fallback
+    }
+  }
+
+  // ============================================================
   // UNIFIED next_skills HANDLING (applies to all task types)
   // ============================================================
   // Check for next_skills in databus - this can be output by any task
@@ -955,51 +988,20 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
   // DISPATCHER HANDLING
   // ============================================================
   if(task->get_task_type() == "dispatcher") {
-    // Check if this is a skill completion message
-    // Skill completions have source_task_id pointing to this dispatcher
-    // but workflow_id from the skill workflow
-    bool is_skill_completion = false;
-    std::string skill_name;
-    std::string source_workflow_id;
-
-    if(message.metadata.count("workflow_id")) {
-      source_workflow_id = message.metadata.at("workflow_id");
-    }
-    if(message.metadata.count("skill_name")) {
-      skill_name = message.metadata.at("skill_name");
-      is_skill_completion = true;
-    }
-
-    // Also check if source_task_id indicates this came from a skill task
-    if(message.metadata.count("source_task_id")) {
-      const auto& source_id = message.metadata.at("source_task_id");
-      // If source_task_id contains "skill" marker, it's a skill completion
-      if(source_id.find("_skill-") != std::string::npos ||
-         source_id.find("skill-") != std::string::npos) {
-        is_skill_completion = true;
-      }
-    }
-
+    // Use the skill completion detection from the top section
+    // Counter was already decremented there
     if(is_skill_completion) {
-      // Skill completed - forward response to coordinator and decrement skill count
-      Logger::instance().info_f("[DISPATCHERDataExchange] Skill completion detected, skill=%s",
-                               skill_name.empty() ? "unknown" : skill_name.c_str());
-
-      // Decrement skill count
-      if(!skill_name.empty()) {
-        task->on_skill_completed(skill_name);
-      } else {
-        // Fallback: try to extract skill name from workflow_id
-        task->on_skill_completed("echo-skill");  // default for echo agent
-      }
+      // Skill completed - forward response to coordinator
+      Logger::instance().info_f("[DISPATCHERDataExchange] Skill completion detected, skill=%s, forwarding to coordinator",
+                               skill_name_for_counter.empty() ? "unknown" : skill_name_for_counter.c_str());
 
       // Forward response to coordinator
       if(auto coordinator_task = session->get_coordinator_task(); coordinator_task) {
         MMAgentMsgQue::Message response_message = message;
         response_message.metadata["task_type"] = "coordinator";
         response_message.metadata["source_task_type"] = "dispatcher";
-        if(!skill_name.empty()) {
-          response_message.metadata["skill_name"] = skill_name;
+        if(!skill_name_for_counter.empty()) {
+          response_message.metadata["skill_name"] = skill_name_for_counter;
         }
         // Preserve dialogue_id
         if(!dialogue_id.empty()) {
@@ -1079,6 +1081,26 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         return;
       }
     }
+
+    // Check coord_forwarded flag to prevent duplicate coordinator forwards
+    // (multiple skill completions can each trigger this path)
+    std::string coord_forwarded_key = dialogue_id.empty() ? "coord_forwarded" : dialogue_id + "/coord_forwarded";
+    DataVariant coord_forwarded_value;
+    bool already_forwarded = false;
+    if(get_data(coord_forwarded_key, coord_forwarded_value)) {
+      if(const auto* text = std::get_if<std::string>(&coord_forwarded_value)) {
+        already_forwarded = (*text == "true");
+      }
+    }
+
+    if(already_forwarded) {
+      Logger::instance().info_f("[DISPATCHERDataExchange] Coordinator already forwarded for dialogue_id=%s, skipping",
+                               dialogue_id.c_str());
+      return;
+    }
+
+    // Set coord_forwarded flag before forwarding to prevent race condition
+    publish_data(coord_forwarded_key, std::string("true"));
 
     // Forward to coordinator
     MMAgentMsgQue::Message coordinator_message = message;

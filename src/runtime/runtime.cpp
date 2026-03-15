@@ -356,7 +356,8 @@ bool MMAgentRuntime::unload_workflow(const AgentId& agent_id, const WorkflowId& 
 
 bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId& workflow_id,
                                     const DataMap& inputs, const std::string& source_task_id,
-                                    const std::string& session_id, const std::string& dialogue_id) {
+                                    const std::string& session_id, const std::string& dialogue_id,
+                                    const std::string& task_type, const std::string& skill_task_id) {
   if(draining_) {
     Logger::instance().warn("Rejecting new workflow — runtime is draining");
     return false;
@@ -387,6 +388,8 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
   state.source_task_id  = source_task_id;
   state.session_id      = session_id;
   state.dialogue_id     = dialogue_id;  // Store for multi-dialogue support
+  state.task_type       = task_type;    // Store for correct task_type in completion message
+  state.skill_task_id   = skill_task_id;  // Store actual skill task id for completion tracking
   state.total_nodes     = static_cast<int>(workflow->get_nodes().size());
   state.completed_count = 0;
   state.in_progress     = true;
@@ -718,6 +721,8 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
   std::string complete_source_task_id;
   std::string complete_session_id;
   std::string complete_dialogue_id;
+  std::string complete_task_type;
+  std::string complete_skill_task_id;
 
   {
     std::lock_guard<std::mutex> lock(workflow_state_mutex_);
@@ -751,6 +756,8 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
       complete_source_task_id = state.source_task_id;
       complete_session_id     = state.session_id;
       complete_dialogue_id    = state.dialogue_id;
+      complete_task_type      = state.task_type;
+      complete_skill_task_id  = state.skill_task_id;
     } else if(success) {
       auto agent = get_agent(state.agent_id);
       if(agent) {
@@ -810,15 +817,20 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
             response.type = framework::MMAgentMsgQue::MessageType::TASK_RESPONSE;
             response.sender_id = "runtime-worker";
             response.receiver_id = complete_source_task_id;
-            response.metadata["task_type"] = source_task->get_task_type();
+            // Use the stored task_type from the workflow execution state
+            // This ensures correct task_type for skill tasks launched by dispatcher
+            response.metadata["task_type"] = complete_task_type.empty() ? source_task->get_task_type() : complete_task_type;
             response.metadata["workflow_id"] = complete_workflow;
             response.metadata["message_type"] = "data_exchange";
             response.metadata["dialogue_id"] = complete_dialogue_id;
+            // Pass skill_name for skill completion tracking
+            // Use skill_task_id if available, otherwise fall back to source_task_id
+            response.metadata["skill_name"] = complete_skill_task_id.empty() ? complete_source_task_id : complete_skill_task_id;
             response.content = complete_ok ? "workflow_completed" : "workflow_failed";
             source_task->enqueue_data_exchange_message(response);
             Logger::instance().info_f(
-                "[WORKFLOW_COMPLETE] Enqueued data_exchange to task=%s, dialogue_id=%s",
-                complete_source_task_id.c_str(), complete_dialogue_id.c_str());
+                "[WORKFLOW_COMPLETE] Enqueued data_exchange to task=%s, task_type=%s, dialogue_id=%s",
+                complete_source_task_id.c_str(), complete_task_type.c_str(), complete_dialogue_id.c_str());
           }
         }
       }
@@ -1070,6 +1082,8 @@ void MMAgentRuntime::agent_task_poller_loop() {
             agent->get_id().c_str());
 
         // Get source task info for workflow completion callback
+        // source_task_id is the task that launched this workflow (for tracing)
+        // task_type is the type of the task executing this workflow
         std::string task_source_id;
         std::string task_session_id;
         task->get_parameter("source_task_id", task_source_id);
@@ -1077,13 +1091,18 @@ void MMAgentRuntime::agent_task_poller_loop() {
         if(task_source_id.empty()) {
           task_source_id = task->get_config().task_id;
         }
+        std::string task_type = task->get_task_type();
 
         // Get dialogue_id from task parameters for multi-dialogue support
         std::string task_dialogue_id;
         task->get_parameter("dialogue_id", task_dialogue_id);
 
+        // Get skill task id for completion tracking (the actual task id of this skill)
+        std::string skill_task_id = task->get_config().task_id;
+
         const bool scheduled = execute_workflow(agent->get_id(), workflow_id, inputs,
-                                                task_source_id, task_session_id, task_dialogue_id);
+                                                task_source_id, task_session_id, task_dialogue_id,
+                                                task_type, skill_task_id);
         framework::MMAgentMsgQue::Message response;
         std::string response_message_id;
         if(!task->get_parameter("message_id", response_message_id) || response_message_id.empty()) {
