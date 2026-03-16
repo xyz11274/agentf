@@ -331,6 +331,7 @@ void MMAgentSession::clear_running_skills() {
 void MMAgentSession::clear_all_tasks() {
   std::lock_guard<std::mutex> lock(mutex_);
   runtime_tasks_.clear();
+  template_tasks_.clear();
   dispatcher_task_.reset();
   coordinator_task_.reset();
 }
