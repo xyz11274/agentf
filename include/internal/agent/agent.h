@@ -2,6 +2,8 @@
 #define AGENTFLOW_FRAMEWORK_AGENT_H
 
 #include <atomic>
+#include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -27,6 +29,26 @@ class AgentPackage;
 class SessionTaskCoordinator;
 class SessionRouter;
 class BuiltinDispatcher;
+
+/// Context callback function type.
+/// Called when a new dialogue is created to inject user context.
+/// @param user_id The user identifier
+/// @param agent_id The agent identifier
+/// @param user_input The user's input text
+/// @param previous_context The previous context string (may be empty for new dialogues)
+/// @return The new context string to be stored in DataBus
+using ContextCallback = std::function<std::string(
+    const std::string& user_id,
+    const std::string& agent_id,
+    const std::string& user_input,
+    const std::string& previous_context)>;
+
+/// Configuration for context callback behavior
+struct ContextCallbackConfig {
+  ContextCallback callback;           ///< The callback function
+  bool async = true;                  ///< Whether to call asynchronously (default: true)
+  int timeout_ms = 5000;              ///< Timeout for synchronous calls (ms)
+};
 
 struct AgentMetadata {
   AgentId                 id;
@@ -130,6 +152,12 @@ class MMAgent {
 
   static std::shared_ptr<MMAgent> create_from_package(const std::string& package_path);
 
+  // Context callback configuration
+  void set_context_callback(const ContextCallbackConfig& config);
+  void set_context_callback(ContextCallback callback, bool async = true);
+  void clear_context_callback();
+  bool has_context_callback() const;
+
  private:
   Config config_;
   AgentState state_ = AgentState::CREATED;
@@ -184,6 +212,10 @@ class MMAgent {
   int  process_data_exchange_messages();
   void process_intent_request_loop();
   void process_data_exchange_loop();
+
+  // Context callback configuration
+  ContextCallbackConfig context_callback_config_;
+  mutable std::mutex   context_callback_mutex_;
 };
 
 }  // namespace framework

@@ -1144,6 +1144,196 @@ void MMAgentRuntime::agent_task_poller_loop() {
 }
 ```
 
+### 7.4 上下文回调机制
+
+AgentFlow 提供上下文回调机制，允许服务在对话创建时注入自定义上下文。这对于以下场景非常有用：
+- 用户画像注入
+- 历史会话上下文加载
+- 动态上下文生成
+
+#### 7.4.1 回调函数签名
+
+```cpp
+using ContextCallback = std::function<std::string(
+    const std::string& user_id,      // 用户标识
+    const std::string& agent_id,     // Agent 标识
+    const std::string& user_input,   // 用户输入文本
+    const std::string& previous_context  // 上一轮上下文（可能为空）
+)>;
+```
+
+#### 7.4.2 回调配置
+
+```cpp
+// 配置结构
+struct ContextCallbackConfig {
+  ContextCallback callback;  // 回调函数
+  bool async = true;         // 是否异步调用（默认 true）
+  int timeout_ms = 5000;     // 同步调用超时时间（毫秒）
+};
+```
+
+#### 7.4.3 设置回调
+
+**同步模式**（推荐用于快速上下文生成）：
+
+```cpp
+auto agent = std::make_shared<framework::MMAgent>(config);
+
+// 设置同步回调
+agent->set_context_callback(
+    [](const std::string& user_id,
+       const std::string& agent_id,
+       const std::string& user_input,
+       const std::string& previous_context) -> std::string {
+        // 从数据库或缓存加载用户上下文
+        std::string user_profile = load_user_profile(user_id);
+        std::string session_history = load_recent_history(user_id);
+
+        // 构建上下文字符串
+        return "UserProfile: " + user_profile + "\n"
+               "RecentHistory: " + session_history + "\n"
+               "PreviousContext: " + previous_context;
+    },
+    false  // async=false，同步模式
+);
+```
+
+**异步模式**（适用于耗时操作，如外部 API 调用）：
+
+```cpp
+agent->set_context_callback(
+    [](const std::string& user_id,
+       const std::string& agent_id,
+       const std::string& user_input,
+       const std::string& previous_context) -> std::string {
+        // 注意：异步模式下，回调结果不会自动存储到 DataBus
+        // 回调函数应自行处理上下文存储
+        std::string context = fetch_context_from_external_api(user_id);
+
+        // 可选：存储到外部系统
+        store_context_to_cache(user_id, context);
+
+        return context;
+    },
+    true  // async=true，异步模式（默认）
+);
+```
+
+#### 7.4.4 上下文存储位置
+
+同步模式下，生成的上下文会自动存储到 DataBus：
+
+| 键 | 说明 |
+|----|------|
+| `/session/{session-id}/ctx/{dialogue-id}/content` | 上下文内容 |
+| `/session/{session-id}/ctx/{dialogue-id}/time-created` | 创建时间戳（毫秒） |
+
+#### 7.4.5 在 Skill 节点中访问上下文
+
+Skill 节点可以通过 DataBus 访问上下文：
+
+```cpp
+// 在 Node 实现中
+std::string get_context_from_databus(
+    const std::string& session_id,
+    const std::string& dialogue_id,
+    DataBus& databus) {
+
+    std::string ctx_key = "/session/" + session_id +
+                          "/ctx/" + dialogue_id + "/content";
+
+    DataVariant value;
+    if (databus.get(ctx_key, value)) {
+        if (std::holds_alternative<std::string>(value)) {
+            return std::get<std::string>(value);
+        }
+    }
+    return "";
+}
+```
+
+#### 7.4.6 清除回调
+
+```cpp
+agent->clear_context_callback();
+```
+
+#### 7.4.7 完整示例
+
+```cpp
+class ContextAwareAgentService {
+public:
+    bool initialize(const std::string& package_path) {
+        agent_ = framework::MMAgent::create_from_package(package_path);
+        if (!agent_ || !agent_->initialize()) {
+            return false;
+        }
+
+        // 设置上下文回调
+        agent_->set_context_callback(
+            [this](const std::string& user_id,
+                   const std::string& agent_id,
+                   const std::string& user_input,
+                   const std::string& previous_context) {
+                return this->build_user_context(user_id, previous_context);
+            },
+            false  // 同步模式，确保上下文在对话处理前可用
+        );
+
+        return true;
+    }
+
+private:
+    std::string build_user_context(
+        const std::string& user_id,
+        const std::string& previous_context) {
+
+        // 加载用户画像
+        auto profile = user_profile_service_.get_profile(user_id);
+
+        // 加载最近对话摘要
+        auto summary = conversation_service_.get_summary(user_id);
+
+        // 构建上下文
+        std::ostringstream ctx;
+        ctx << "=== User Context ===\n";
+        ctx << "Name: " << profile.name << "\n";
+        ctx << "Preferences: " << profile.preferences << "\n";
+        ctx << "Recent Topics: " << summary.topics << "\n";
+
+        if (!previous_context.empty()) {
+            ctx << "\n=== Previous Context ===\n";
+            ctx << previous_context << "\n";
+        }
+
+        return ctx.str();
+    }
+
+    std::shared_ptr<framework::MMAgent> agent_;
+    UserProfileService user_profile_service_;
+    ConversationService conversation_service_;
+};
+```
+
+#### 7.4.8 注意事项
+
+1. **同步 vs 异步选择**：
+   - 同步模式：上下文在对话处理前可用，但会阻塞请求处理
+   - 异步模式：不阻塞请求处理，但上下文可能无法立即用于当前对话
+
+2. **异步模式限制**：
+   - 异步回调的结果不会自动存储到 DataBus
+   - 回调函数应自行处理上下文的存储和分发
+
+3. **线程安全**：
+   - 回调函数可能在不同线程中执行
+   - 确保回调中访问的共享资源是线程安全的
+
+4. **错误处理**：
+   - 回调抛出异常时，框架会记录错误日志并继续处理对话
+   - 建议在回调内部捕获并处理所有异常
+
 ---
 
 ## 8. 部署模式

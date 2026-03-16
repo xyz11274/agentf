@@ -54,6 +54,8 @@ class MMAgentSession {
   int64_t            get_created_time() const { return created_time_; }
   int64_t            get_last_activity_time() const { return last_activity_time_; }
   const std::string& get_active_route_key() const { return active_route_key_; }
+  const std::string& get_user_id() const { return active_user_id_; }
+  const std::string& get_client_id() const { return active_client_id_; }
   bool               is_assigned() const { return !active_route_key_.empty(); }
   bool               is_available() const { return active_route_key_.empty(); }
   std::shared_ptr<SessionTaskCoordinator> get_task_coordinator() const { return task_coordinator_; }

@@ -39,7 +39,8 @@ enum class FlowEventType {
   SKILL_COMPLETED,
   RESPONSE_SENT,
   DIALOGUE_CREATED,
-  DIALOGUE_COMPLETED
+  DIALOGUE_COMPLETED,
+  EXTERNAL_CALL
 };
 
 inline std::string flow_event_type_name(FlowEventType t) {
@@ -70,6 +71,8 @@ inline std::string flow_event_type_name(FlowEventType t) {
       return "dialogue-created";
     case FlowEventType::DIALOGUE_COMPLETED:
       return "dialogue-completed";
+    case FlowEventType::EXTERNAL_CALL:
+      return "external-call";
     default:
       return "unknown";
   }
@@ -244,6 +247,27 @@ FlowTraceEvent make_node_event(const std::string& session_id,
       _e.inputs      = in;                                                            \
       _e.outputs     = out;                                                           \
       _e.duration_us = duration;                                                      \
+      agentflow::runtime::FlowTraceWriter::instance().write_event(_e);                \
+    }                                                                                 \
+  } while (0)
+
+/// Trace external callback invocation
+/// @param session_id Session identifier
+/// @param dialogue_id Dialogue identifier
+/// @param from Source entity (typically agent-id)
+/// @param to Target entity (e.g., "ctx-callback")
+/// @param event Event name ("enter-callback" or "exit-callback")
+/// @param in_data Input to callback (user_id|agent_id|user_input|previous_context)
+/// @param out_data Output from callback (generated context or error message)
+#define FLOW_TRACE_EXTERNAL_CALL(session, dialogue, from, to, event, in_data, out_data) \
+  do {                                                                                \
+    if (agentflow::runtime::FlowTraceWriter::instance().is_enabled()) {               \
+      auto _e = agentflow::runtime::make_flow_event(                                  \
+          "external-call", session, dialogue, from, to,                               \
+          agentflow::runtime::FlowEventType::EXTERNAL_CALL);                          \
+      _e.inputs = in_data;                                                            \
+      _e.outputs = out_data;                                                          \
+      _e.attributes["event"] = event;                                                 \
       agentflow::runtime::FlowTraceWriter::instance().write_event(_e);                \
     }                                                                                 \
   } while (0)

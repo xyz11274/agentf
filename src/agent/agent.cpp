@@ -814,6 +814,128 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
       publish_data(dialogue_id + "/dialogue_id", dialogue_id);
       publish_data(dialogue_id + "/user_prompt", user_text);
 
+      // ============================================================
+      // CONTEXT CALLBACK INVOCATION
+      // ============================================================
+      // Invoke context callback to inject user context into the dialogue
+      if(has_context_callback()) {
+        ContextCallbackConfig config;
+        {
+          std::lock_guard<std::mutex> lock(context_callback_mutex_);
+          config = context_callback_config_;
+        }
+
+        if(config.callback) {
+          // Get user_id and agent_id for callback
+          std::string user_id = session->get_user_id();
+          std::string agent_id = config_.id;
+
+          // Get previous context from ctx namespace (if exists)
+          std::string previous_context;
+          {
+            DataVariant prev_ctx;
+            std::string prev_ctx_key = "/session/" + session->get_session_id() +
+                                       "/ctx/" + dialogue_id + "/content";
+            if(get_data(prev_ctx_key, prev_ctx)) {
+              if(std::holds_alternative<std::string>(prev_ctx)) {
+                previous_context = std::get<std::string>(prev_ctx);
+              }
+            }
+          }
+
+          // Build inputs for flow trace: user_id|agent_id|user_input|previous_context
+          std::string trace_inputs = user_id + "|" + agent_id + "|" +
+                                     user_text + "|" + previous_context;
+
+          if(config.async) {
+            // Asynchronous invocation
+            // Capture all needed data by value for the detached thread
+            std::string session_id_val = session->get_session_id();
+            ContextCallback callback_fn = config.callback;
+            std::string user_text_val = user_text;
+            std::string prev_ctx_val = previous_context;
+            std::string dialogue_id_val = dialogue_id;
+            std::string agent_id_val = agent_id;
+            std::string user_id_val = user_id;
+
+            // Flow trace: enter callback
+            FLOW_TRACE_EXTERNAL_CALL(session_id_val, dialogue_id_val,
+                                     agent_id_val, "ctx-callback",
+                                     "enter-callback", trace_inputs, "");
+
+            // Note: For async callbacks, the context is not stored in DataBus
+            // because we can't safely access the agent from a detached thread.
+            // The callback should either:
+            // 1. Store context externally (recommended)
+            // 2. Use sync mode (async=false) for automatic DataBus storage
+            std::thread([callback_fn, user_id_val, agent_id_val, user_text_val,
+                         prev_ctx_val, dialogue_id_val, session_id_val,
+                         trace_inputs]() {
+              try {
+                std::string new_context = callback_fn(user_id_val, agent_id_val,
+                                                      user_text_val, prev_ctx_val);
+
+                // Flow trace: exit callback
+                FLOW_TRACE_EXTERNAL_CALL(session_id_val, dialogue_id_val,
+                                         agent_id_val, "ctx-callback",
+                                         "exit-callback", trace_inputs, new_context);
+
+                Logger::instance().info_f("[CONTEXT_CALLBACK] Async context generated for dialogue=%s, length=%zu. "
+                                          "Note: Context not stored in DataBus - callback should handle storage.",
+                                          dialogue_id_val.c_str(), new_context.length());
+              } catch(const std::exception& e) {
+                std::string error_msg = std::string("error: ") + e.what();
+                Logger::instance().error_f("[CONTEXT_CALLBACK] Async callback failed: %s", e.what());
+                // Flow trace: exit callback with error
+                FLOW_TRACE_EXTERNAL_CALL(session_id_val, dialogue_id_val,
+                                         agent_id_val, "ctx-callback",
+                                         "exit-callback", trace_inputs, error_msg);
+              }
+            }).detach();
+          } else {
+            // Synchronous invocation
+            std::string new_context;
+            bool success = false;
+
+            // Flow trace: enter callback
+            FLOW_TRACE_EXTERNAL_CALL(session->get_session_id(), dialogue_id,
+                                     agent_id, "ctx-callback",
+                                     "enter-callback", trace_inputs, "");
+
+            try {
+              new_context = config.callback(user_id, agent_id, user_text, previous_context);
+              success = true;
+            } catch(const std::exception& e) {
+              Logger::instance().error_f("[CONTEXT_CALLBACK] Sync callback failed: %s", e.what());
+            }
+
+            // Flow trace: exit callback
+            std::string trace_outputs = success ? new_context : std::string("error");
+            FLOW_TRACE_EXTERNAL_CALL(session->get_session_id(), dialogue_id,
+                                     agent_id, "ctx-callback",
+                                     "exit-callback", trace_inputs, trace_outputs);
+
+            if(success && !new_context.empty()) {
+              // Store result in ctx namespace with timestamp
+              auto now = std::chrono::system_clock::now();
+              auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                  now.time_since_epoch()).count();
+
+              std::string ctx_key = "/session/" + session->get_session_id() +
+                                   "/ctx/" + dialogue_id + "/content";
+              std::string time_key = "/session/" + session->get_session_id() +
+                                    "/ctx/" + dialogue_id + "/time-created";
+
+              publish_data(ctx_key, new_context);
+              publish_data(time_key, std::to_string(timestamp));
+
+              Logger::instance().info_f("[CONTEXT_CALLBACK] Sync context stored for dialogue=%s, key=%s",
+                                        dialogue_id.c_str(), ctx_key.c_str());
+            }
+          }
+        }
+      }
+
       // Flow trace: task created
       FLOW_TRACE_TASK(session->get_session_id(), dialogue_id,
                       "external", "dispatcher",
@@ -1976,6 +2098,36 @@ utils::storage::StorageResult MMAgent::get_active_version(const AgentId&        
                                    "Version storage not initialized" };
   }
   return version_storage->get_active_version(agent_id, version);
+}
+
+// ============================================================================
+// Context Callback Configuration
+// ============================================================================
+
+void MMAgent::set_context_callback(const ContextCallbackConfig& config) {
+  std::lock_guard<std::mutex> lock(context_callback_mutex_);
+  context_callback_config_ = config;
+  Logger::instance().info_f("[CONTEXT_CALLBACK] Set context callback, async=%s",
+                            config.async ? "true" : "false");
+}
+
+void MMAgent::set_context_callback(ContextCallback callback, bool async) {
+  ContextCallbackConfig config;
+  config.callback = std::move(callback);
+  config.async = async;
+  set_context_callback(config);
+}
+
+void MMAgent::clear_context_callback() {
+  std::lock_guard<std::mutex> lock(context_callback_mutex_);
+  context_callback_config_.callback = nullptr;
+  context_callback_config_.async = true;
+  Logger::instance().info_f("[CONTEXT_CALLBACK] Cleared context callback");
+}
+
+bool MMAgent::has_context_callback() const {
+  std::lock_guard<std::mutex> lock(context_callback_mutex_);
+  return static_cast<bool>(context_callback_config_.callback);
 }
 
 }  // namespace framework
