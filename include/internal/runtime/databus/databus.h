@@ -49,6 +49,11 @@ public:
   bool remove(const std::string& key);
   bool contains(const std::string& key) const;
 
+  // Remove all keys matching prefix
+  int remove_by_prefix(const std::string& prefix);
+  // Get all keys matching prefix
+  std::vector<std::string> list_keys_by_prefix(const std::string& prefix) const;
+
   // Subscription mechanism
   void subscribe(const std::string& key, const DataChangeCallback& callback);
   void unsubscribe(const std::string& key);

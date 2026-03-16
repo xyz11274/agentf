@@ -16,6 +16,7 @@ public:
   enum class MessageQueueType {
     INTENT_REQUEST = 0,
     DATA_EXCHANGE  = 1,
+    CONTROL        = 2,   // For control commands (interrupt, destroy)
   };
 
   enum class MessageType {
@@ -24,6 +25,7 @@ public:
     EVENT         = 2,
     NOTIFICATION  = 3,
     ERROR         = 4,
+    CONTROL       = 5,   // Control command
   };
 
   struct Message {
@@ -35,6 +37,19 @@ public:
     std::string                        data_ref;   // Databus reference for payload
     int64_t                            timestamp = 0;
     std::map<std::string, std::string> metadata;
+  };
+
+  // Control command content values
+  struct ControlCommand {
+    static constexpr const char* SESSION_DESTROY   = "SESSION-DESTROY";
+    static constexpr const char* SESSION_INTERRUPT = "SESSION-INTERRUPT";
+  };
+
+  // Metadata keys for control messages
+  struct ControlMetadata {
+    static constexpr const char* USER_ID    = "user_id";
+    static constexpr const char* CLIENT_ID  = "client_id";
+    static constexpr const char* SESSION_ID = "session_id";
   };
 
   struct Config {
@@ -73,6 +88,7 @@ private:
   Config                    config_;
   std::vector<Message>      intent_request_queue_;
   std::vector<Message>      data_exchange_queue_;
+  std::vector<Message>      control_queue_;
   std::atomic<int64_t>      total_messages_processed_{0};
   mutable std::mutex        mutex_;
 };

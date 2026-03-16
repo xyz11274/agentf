@@ -69,6 +69,16 @@ bool MMAgentTask::cancel() {
   return true;
 }
 
+bool MMAgentTask::interrupt() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if(state_ == TaskState::COMPLETED || state_ == TaskState::CANCELLED) {
+    return false;
+  }
+  state_ = TaskState::INTERRUPTED;
+  completed_time_ = get_current_time_ms();
+  return true;
+}
+
 bool MMAgentTask::retry() {
   std::lock_guard<std::mutex> lock(mutex_);
   if(retry_count_ >= config_.max_retries) {

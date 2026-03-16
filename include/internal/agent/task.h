@@ -26,6 +26,7 @@ class MMAgentTask {
     COMPLETED = 2,
     FAILED = 3,
     CANCELLED = 4,
+    INTERRUPTED = 5,   // Task interrupted by external control
   };
 
   struct Config {
@@ -84,6 +85,7 @@ class MMAgentTask {
   bool complete(const std::string& result = "");
   bool fail(const std::string& error_message);
   bool cancel();
+  bool interrupt();  // Set state to INTERRUPTED and stop message threads
   bool retry();
 
   void set_progress(double progress);

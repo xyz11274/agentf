@@ -102,6 +102,9 @@ class MMAgentSession {
   // Clear running skills count on dispatcher/coordinator tasks (for session pool reuse)
   void clear_running_skills();
 
+  // Clear all runtime tasks (for session destroy)
+  void clear_all_tasks();
+
  private:
   Config      config_;
   SessionState state_ = SessionState::CREATED;

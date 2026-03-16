@@ -66,6 +66,14 @@ bool MMDataBus::contains(const std::string& key) const {
   return local_bus_->get_shared_memory()->contains(key);
 }
 
+int MMDataBus::remove_by_prefix(const std::string& prefix) {
+  return local_bus_->get_shared_memory()->remove_by_prefix(prefix);
+}
+
+std::vector<std::string> MMDataBus::list_keys_by_prefix(const std::string& prefix) const {
+  return local_bus_->get_shared_memory()->list_keys_by_prefix(prefix);
+}
+
 void MMDataBus::subscribe(const std::string& key, const DataChangeCallback& callback) {
   local_bus_->get_shared_memory()->subscribe(key, callback);
 

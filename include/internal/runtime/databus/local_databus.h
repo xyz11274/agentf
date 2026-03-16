@@ -160,6 +160,8 @@ public:
   virtual const DataVariant* get_data_ptr(const std::string& key) const              = 0;
   virtual bool               contains(const std::string& key) const                  = 0;
   virtual bool               remove(const std::string& key)                          = 0;
+  virtual int                remove_by_prefix(const std::string& prefix)             = 0;
+  virtual std::vector<std::string> list_keys_by_prefix(const std::string& prefix) const = 0;
   virtual size_t             get_data_count() const                                  = 0;
   virtual size_t             get_used_capacity() const                               = 0;
   virtual size_t             get_total_capacity() const                              = 0;
@@ -180,6 +182,11 @@ public:
   bool get(const std::string& key, DataVariant& value) const;
   bool remove(const std::string& key);
   bool contains(const std::string& key) const;
+
+  // Remove all keys matching prefix
+  int remove_by_prefix(const std::string& prefix);
+  // Get all keys matching prefix
+  std::vector<std::string> list_keys_by_prefix(const std::string& prefix) const;
 
   const DataVariant* get_data_ptr(const std::string& key) const;
   bool               get_data_ref(const std::string& key, DataVariant& ref) const;

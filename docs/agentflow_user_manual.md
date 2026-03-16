@@ -280,7 +280,8 @@ enum class MessageType {
     TASK_RESPONSE = 1,   // 任务响应
     EVENT         = 2,   // 事件
     NOTIFICATION  = 3,   // 通知
-    ERROR         = 4    // 错误
+    ERROR         = 4,   // 错误
+    CONTROL       = 5    // 控制命令（会话管理）
 };
 ```
 
@@ -289,11 +290,75 @@ enum class MessageType {
 ```cpp
 enum class MessageQueueType {
     INTENT_REQUEST = 0,  // 意图请求队列
-    DATA_EXCHANGE  = 1   // 数据交换队列
+    DATA_EXCHANGE  = 1,  // 数据交换队列
+    CONTROL        = 2   // 控制命令队列（最高优先级）
 };
 ```
 
-### 4.3 发送请求消息
+### 4.3 控制命令
+
+控制命令（CONTROL）用于会话生命周期管理，支持以下命令：
+
+| 命令 | 说明 | 使用场景 |
+|------|------|----------|
+| `SESSION-INTERRUPT` | 中断会话中正在运行的技能任务 | 用户取消请求、超时中断 |
+| `SESSION-DESTROY` | 销毁会话并清理所有资源 | 用户退出、会话结束 |
+
+#### 控制命令常量
+
+```cpp
+// 控制命令内容值
+struct ControlCommand {
+    static constexpr const char* SESSION_DESTROY   = "SESSION-DESTROY";
+    static constexpr const char* SESSION_INTERRUPT = "SESSION-INTERRUPT";
+};
+
+// 控制命令元数据键
+struct ControlMetadata {
+    static constexpr const char* USER_ID    = "user_id";
+    static constexpr const char* CLIENT_ID  = "client_id";
+    static constexpr const char* SESSION_ID = "session_id";
+};
+```
+
+#### 发送控制命令示例
+
+```cpp
+// 发送 SESSION-INTERRUPT 命令
+agentflow::framework::MMAgentMsgQue::Message interrupt_msg;
+interrupt_msg.message_id = "ctrl_001";
+interrupt_msg.type = agentflow::framework::MMAgentMsgQue::MessageType::CONTROL;
+interrupt_msg.content = agentflow::framework::MMAgentMsgQue::ControlCommand::SESSION_INTERRUPT;
+interrupt_msg.metadata["session_id"] = "session_123";
+interrupt_msg.metadata["user_id"] = "user_456";
+
+agent->route_request_message(interrupt_msg);
+
+// 发送 SESSION-DESTROY 命令
+agentflow::framework::MMAgentMsgQue::Message destroy_msg;
+destroy_msg.message_id = "ctrl_002";
+destroy_msg.type = agentflow::framework::MMAgentMsgQue::MessageType::CONTROL;
+destroy_msg.content = agentflow::framework::MMAgentMsgQue::ControlCommand::SESSION_DESTROY;
+destroy_msg.metadata["session_id"] = "session_123";
+
+agent->route_request_message(destroy_msg);
+```
+
+#### SESSION-INTERRUPT 行为
+
+1. 停止所有正在运行的技能任务
+2. 将任务状态设置为 `INTERRUPTED`
+3. 向协调器发送中断状态消息
+4. 协调器决定后续处理（重试、通知用户等）
+
+#### SESSION-DESTROY 行为
+
+1. 停止所有正在运行的任务
+2. 停止调度器和协调器任务
+3. 清理 DataBus 中 `/session/{session-id}/*` 下的所有数据
+4. 清空会话任务映射
+
+### 4.4 发送请求消息
 
 ```cpp
 // 构造请求消息
@@ -433,9 +498,28 @@ session->terminate();
 bool is_assigned = session->is_assigned();
 bool is_available = session->is_available();
 bool is_timeout = session->is_timeout_expired();
+
+// Session 任务管理
+session->clear_running_skills();  // 清除运行中的技能计数（用于会话池重用）
+session->clear_all_tasks();        // 清除所有运行时任务（用于会话销毁）
 ```
 
-### 5.3 Session 元数据管理
+### 5.3 Session 任务状态
+
+任务状态枚举（TaskState）：
+
+```cpp
+enum class TaskState {
+    PENDING     = 0,  // 待处理
+    RUNNING     = 1,  // 运行中
+    COMPLETED   = 2,  // 已完成
+    FAILED      = 3,  // 已失败
+    CANCELLED   = 4,  // 已取消
+    INTERRUPTED = 5   // 已中断（外部控制命令触发）
+};
+```
+
+### 5.4 Session 元数据管理
 
 ```cpp
 // 设置元数据

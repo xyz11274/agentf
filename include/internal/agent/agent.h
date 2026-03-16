@@ -182,6 +182,12 @@ class MMAgent {
   std::string resolve_workflow_file(const std::string& workflow_ref) const;
   void        handle_routed_request_message(const std::shared_ptr<MMAgentSession>& session,
                                             const MMAgentMsgQue::Message& message);
+  void handle_control_message(const std::shared_ptr<MMAgentSession>& session,
+                              const MMAgentMsgQue::Message& message);
+  void handle_session_interrupt(const std::shared_ptr<MMAgentSession>& session,
+                                const MMAgentMsgQue::Message& message);
+  void handle_session_destroy(const std::shared_ptr<MMAgentSession>& session,
+                              const MMAgentMsgQue::Message& message);
   void handle_task_intent_request(const std::shared_ptr<MMAgentSession>& session,
                                   const std::shared_ptr<MMAgentTask>& task,
                                   const MMAgentMsgQue::Message& message);

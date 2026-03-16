@@ -564,6 +564,33 @@ public:
     return false;
   }
 
+  int remove_by_prefix(const std::string& prefix) override {
+    int count = 0;
+    auto it = data_->begin();
+    while(it != data_->end()) {
+      if(it->first.compare(0, prefix.size(), prefix) == 0) {
+        size_t key_size   = it->first.size();
+        size_t value_size = estimate_variant_size(it->second);
+        used_capacity_ -= (key_size + value_size);
+        it = data_->erase(it);
+        ++count;
+      } else {
+        ++it;
+      }
+    }
+    return count;
+  }
+
+  std::vector<std::string> list_keys_by_prefix(const std::string& prefix) const override {
+    std::vector<std::string> keys;
+    for(const auto& [key, value] : *data_) {
+      if(key.compare(0, prefix.size(), prefix) == 0) {
+        keys.push_back(key);
+      }
+    }
+    return keys;
+  }
+
   size_t get_data_count() const override { return data_->size(); }
 
   size_t get_used_capacity() const override { return used_capacity_; }
@@ -608,6 +635,16 @@ bool ZeroCopyDataBus::remove(const std::string& key) {
 bool ZeroCopyDataBus::contains(const std::string& key) const {
   std::shared_lock<std::shared_mutex> lock(data_mutex_);
   return shared_memory_->contains(key);
+}
+
+int ZeroCopyDataBus::remove_by_prefix(const std::string& prefix) {
+  std::unique_lock<std::shared_mutex> lock(data_mutex_);
+  return shared_memory_->remove_by_prefix(prefix);
+}
+
+std::vector<std::string> ZeroCopyDataBus::list_keys_by_prefix(const std::string& prefix) const {
+  std::shared_lock<std::shared_mutex> lock(data_mutex_);
+  return shared_memory_->list_keys_by_prefix(prefix);
 }
 
 const DataVariant* ZeroCopyDataBus::get_data_ptr(const std::string& key) const {

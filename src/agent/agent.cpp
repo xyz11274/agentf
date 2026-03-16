@@ -645,6 +645,12 @@ void MMAgent::handle_routed_request_message(const std::shared_ptr<MMAgentSession
     return;
   }
 
+  // Check for CONTROL message type
+  if(message.type == MMAgentMsgQue::MessageType::CONTROL) {
+    handle_control_message(session, message);
+    return;
+  }
+
   if(context_) {
     context_->reserve_session_payload(session->get_session_id(), message);
   }
@@ -675,6 +681,119 @@ void MMAgent::handle_routed_request_message(const std::shared_ptr<MMAgentSession
     runtime::trace::TraceContext::current().clear();
     runtime::trace::TraceManager::instance().end_session(trace_id);
   }
+}
+
+void MMAgent::handle_control_message(const std::shared_ptr<MMAgentSession>& session,
+                                     const MMAgentMsgQue::Message& message) {
+  if(!session) {
+    Logger::instance().warn_f("[CONTROL] No session for control message");
+    return;
+  }
+
+  const std::string& command = message.content;
+
+  if(command == MMAgentMsgQue::ControlCommand::SESSION_INTERRUPT) {
+    handle_session_interrupt(session, message);
+  } else if(command == MMAgentMsgQue::ControlCommand::SESSION_DESTROY) {
+    handle_session_destroy(session, message);
+  } else {
+    Logger::instance().warn_f("[CONTROL] Unknown command: %s", command.c_str());
+  }
+}
+
+void MMAgent::handle_session_interrupt(const std::shared_ptr<MMAgentSession>& session,
+                                       const MMAgentMsgQue::Message& message) {
+  Logger::instance().info_f("[CONTROL] SESSION-INTERRUPT for session=%s",
+                            session->get_session_id().c_str());
+
+  // Get all running skill tasks
+  auto tasks = session->get_tasks();
+  for(auto& task : tasks) {
+    if(task->get_state() == MMAgentTask::TaskState::RUNNING &&
+       task->get_task_type() == "skill") {
+      // Interrupt the skill task
+      task->interrupt();
+      task->stop_message_threads();
+
+      // Get coordinator task to send interrupted status
+      auto coordinator_task = session->get_coordinator_task();
+      if(coordinator_task) {
+        // Send interrupted status message to coordinator
+        MMAgentMsgQue::Message interrupt_msg;
+        interrupt_msg.message_id = "interrupt-" + task->get_task_id();
+        interrupt_msg.type = MMAgentMsgQue::MessageType::TASK_RESPONSE;
+        interrupt_msg.content = "INTERRUPTED";
+        interrupt_msg.metadata["task_id"] = task->get_task_id();
+        interrupt_msg.metadata["skill_name"] = task->get_skill_name();
+        interrupt_msg.metadata["status"] = "interrupted";
+
+        std::string dialogue_id;
+        if(task->get_parameter("dialogue_id", dialogue_id)) {
+          interrupt_msg.metadata["dialogue_id"] = dialogue_id;
+        }
+        interrupt_msg.metadata["session_id"] = session->get_session_id();
+
+        // Enqueue to coordinator's data exchange queue
+        coordinator_task->enqueue_data_exchange_message(interrupt_msg);
+      }
+
+      Logger::instance().info_f("[CONTROL] Interrupted skill task: %s",
+                                task->get_task_id().c_str());
+    }
+  }
+}
+
+void MMAgent::handle_session_destroy(const std::shared_ptr<MMAgentSession>& session,
+                                     const MMAgentMsgQue::Message& message) {
+  Logger::instance().info_f("[CONTROL] SESSION-DESTROY for session=%s",
+                            session->get_session_id().c_str());
+
+  // 1. Stop all running tasks
+  auto tasks = session->get_tasks();
+  for(auto& task : tasks) {
+    auto state = task->get_state();
+    if(state == MMAgentTask::TaskState::RUNNING ||
+       state == MMAgentTask::TaskState::PENDING) {
+      task->interrupt();
+      task->stop_message_threads();
+    }
+  }
+
+  // 2. Stop dispatcher and coordinator tasks
+  auto dispatcher_task = session->get_dispatcher_task();
+  auto coordinator_task = session->get_coordinator_task();
+  if(dispatcher_task) {
+    dispatcher_task->interrupt();
+    dispatcher_task->stop_message_threads();
+  }
+  if(coordinator_task) {
+    coordinator_task->interrupt();
+    coordinator_task->stop_message_threads();
+  }
+
+  // 3. Clear all DataBus data under /session/{session-id}
+  std::string session_prefix = "/session/" + session->get_session_id();
+  int cleared_count = 0;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = data_bus_.begin();
+    while(it != data_bus_.end()) {
+      if(it->first.compare(0, session_prefix.size(), session_prefix) == 0) {
+        it = data_bus_.erase(it);
+        ++cleared_count;
+      } else {
+        ++it;
+      }
+    }
+  }
+  Logger::instance().info_f("[CONTROL] Cleared %d DataBus keys with prefix: %s",
+                            cleared_count, session_prefix.c_str());
+
+  // 4. Clear session task maps
+  session->clear_all_tasks();
+
+  Logger::instance().info_f("[CONTROL] Session destroyed: %s",
+                            session->get_session_id().c_str());
 }
 
 std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(

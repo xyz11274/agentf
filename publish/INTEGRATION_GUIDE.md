@@ -278,6 +278,54 @@ std::string poll_results(int timeout_ms) {
 }
 ```
 
+#### 3.3.3 发送控制命令
+
+控制命令（CONTROL）用于会话生命周期管理，包括中断运行中的任务和销毁会话。
+
+**控制命令类型**：
+
+```cpp
+// 控制命令常量
+struct ControlCommand {
+    static constexpr const char* SESSION_DESTROY   = "SESSION-DESTROY";   // 销毁会话
+    static constexpr const char* SESSION_INTERRUPT = "SESSION-INTERRUPT"; // 中断任务
+};
+```
+
+**SESSION-INTERRUPT 示例**：
+
+```cpp
+// 中断会话中正在运行的技能任务
+framework::MMAgentMsgQue::Message interrupt_msg;
+interrupt_msg.message_id = generate_message_id();
+interrupt_msg.type = framework::MMAgentMsgQue::MessageType::CONTROL;
+interrupt_msg.content = framework::MMAgentMsgQue::ControlCommand::SESSION_INTERRUPT;
+interrupt_msg.metadata["session_id"] = session_id;
+interrupt_msg.metadata["user_id"] = user_id;
+
+agent->route_request_message(interrupt_msg);
+```
+
+**SESSION-DESTROY 示例**：
+
+```cpp
+// 销毁会话并清理所有资源
+framework::MMAgentMsgQue::Message destroy_msg;
+destroy_msg.message_id = generate_message_id();
+destroy_msg.type = framework::MMAgentMsgQue::MessageType::CONTROL;
+destroy_msg.content = framework::MMAgentMsgQue::ControlCommand::SESSION_DESTROY;
+destroy_msg.metadata["session_id"] = session_id;
+
+agent->route_request_message(destroy_msg);
+```
+
+**行为说明**：
+
+| 命令 | 行为 |
+|------|------|
+| `SESSION-INTERRUPT` | 停止所有运行中的技能任务，向协调器发送中断状态，任务状态设为 `INTERRUPTED` |
+| `SESSION-DESTROY` | 停止所有任务（包括调度器和协调器），清理 DataBus 中 `/session/{session-id}/*` 数据 |
+
 ### 3.4 Session 管理
 
 ```cpp
