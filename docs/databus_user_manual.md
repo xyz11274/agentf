@@ -1,7 +1,7 @@
 # DataBus 用户手册
 
 > AgentFlow 数据总线完整指南
-> 版本：v1.0 | 更新日期：2026-03-16
+> 版本：v1.1 | 更新日期：2026-03-16
 
 ---
 
@@ -38,6 +38,7 @@ DataBus 是 AgentFlow 框架的核心数据共享组件，提供高性能的键�
 | 特性 | 说明 |
 |------|------|
 | 数据操作 | `put`、`get`、`remove`、`contains` |
+| 批量操作 | `remove_by_prefix`、`list_keys_by_prefix` |
 | 订阅机制 | `subscribe`、`unsubscribe` |
 | 命名空间 | 自动隔离不同类型的数据 |
 | 会话隔离 | 多租户场景下的数据安全 |
@@ -337,6 +338,46 @@ databus.subscribe("/session/abc123/user/my_key",
 
 // 连接远程 DataBus（Redis）
 databus.connect_remote("redis://127.0.0.1:6379");
+
+// 按前缀删除数据（用于会话清理）
+int removed = databus.remove_by_prefix("/session/abc123");
+std::cout << "Removed " << removed << " keys" << std::endl;
+
+// 按前缀列出键
+auto keys = databus.list_keys_by_prefix("/session/abc123/user");
+for (const auto& key : keys) {
+    std::cout << "Found key: " << key << std::endl;
+}
+```
+
+### 5.5 按前缀操作方法
+
+DataBus 提供两个按前缀操作的方法，主要用于会话生命周期管理：
+
+| 方法 | 说明 | 返回值 |
+|------|------|--------|
+| `remove_by_prefix(prefix)` | 删除所有匹配前缀的键 | 删除的键数量 |
+| `list_keys_by_prefix(prefix)` | 列出所有匹配前缀的键 | 键名列表 |
+
+**使用场景**：
+
+```cpp
+// 场景1：SESSION-DESTROY 时清理会话数据
+void destroy_session(const std::string& session_id) {
+    std::string prefix = "/session/" + session_id;
+    int removed = databus.remove_by_prefix(prefix);
+    std::cout << "Cleaned up " << removed << " keys for session " << session_id << std::endl;
+}
+
+// 场景2：查看会话中的用户数据
+void list_user_data(const std::string& session_id) {
+    std::string prefix = "/session/" + session_id + "/user";
+    auto keys = databus.list_keys_by_prefix(prefix);
+    std::cout << "User data keys:" << std::endl;
+    for (const auto& key : keys) {
+        std::cout << "  " << key << std::endl;
+    }
+}
 ```
 
 ---
