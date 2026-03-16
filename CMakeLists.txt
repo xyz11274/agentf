@@ -527,6 +527,30 @@ set_target_properties(coordinator_node PROPERTIES
 message(STATUS "SystemAgentMock nodes configured")
 
 # ============================================================================
+# Multi-Language DataBus Test Agent (C++ -> Python -> Go -> Shell chain)
+# ============================================================================
+
+set(MULTI_LANG_AGENT_DIR "${AGENTFLOW_EXAMPLE_DIR}/agent/multi_language_databus")
+
+# C++ Chain Producer Node
+add_library(chain_cpp_node SHARED
+    ${MULTI_LANG_AGENT_DIR}/nodes/chain_cpp_node.cpp)
+target_include_directories(chain_cpp_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+set_target_properties(chain_cpp_node PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${MULTI_LANG_AGENT_DIR}/lib
+    PREFIX "lib")
+
+# C++ Chain Coordinator Node
+add_library(chain_coordinator_node SHARED
+    ${MULTI_LANG_AGENT_DIR}/nodes/chain_coordinator_node.cpp)
+target_include_directories(chain_coordinator_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+set_target_properties(chain_coordinator_node PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${MULTI_LANG_AGENT_DIR}/lib
+    PREFIX "lib")
+
+message(STATUS "Multi-Language DataBus Test Agent nodes configured")
+
+# ============================================================================
 # Node Adapter Library and Executable
 # ============================================================================
 
