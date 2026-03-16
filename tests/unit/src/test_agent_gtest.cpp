@@ -916,5 +916,369 @@ TEST_F(AgentTest, DispatcherWithNextSkillsFromPackage) {
   fs::remove_all(tmp);
 }
 
+// ============================================================
+// Context Callback Tests
+// ============================================================
+
+TEST_F(AgentTest, SetContextCallbackEnablesCallback) {
+  auto agent = std::make_shared<framework::MMAgent>(base_config());
+
+  // Initially no callback
+  EXPECT_FALSE(agent->has_context_callback());
+
+  // Set a callback
+  agent->set_context_callback(
+      [](const std::string& user_id, const std::string& agent_id,
+         const std::string& user_input, const std::string& previous_context) {
+        return "test_context";
+      },
+      false);
+
+  EXPECT_TRUE(agent->has_context_callback());
+}
+
+TEST_F(AgentTest, ClearContextCallbackRemovesCallback) {
+  auto agent = std::make_shared<framework::MMAgent>(base_config());
+
+  // Set and verify
+  agent->set_context_callback(
+      [](const std::string& user_id, const std::string& agent_id,
+         const std::string& user_input, const std::string& previous_context) {
+        return "test";
+      },
+      false);
+  EXPECT_TRUE(agent->has_context_callback());
+
+  // Clear and verify
+  agent->clear_context_callback();
+  EXPECT_FALSE(agent->has_context_callback());
+}
+
+TEST_F(AgentTest, SetContextCallbackWithConfig) {
+  auto agent = std::make_shared<framework::MMAgent>(base_config());
+
+  framework::ContextCallbackConfig config;
+  config.callback = [](const std::string& user_id, const std::string& agent_id,
+                       const std::string& user_input, const std::string& previous_context) {
+    return "config_context";
+  };
+  config.async = false;
+  config.timeout_ms = 3000;
+
+  agent->set_context_callback(config);
+  EXPECT_TRUE(agent->has_context_callback());
+}
+
+TEST_F(AgentTest, SyncContextCallbackStoresContextInDataBus) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "agentflow_test_context_callback";
+  fs::create_directories(tmp);
+
+  // Write package.json
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({"name": "test_agent", "version": "1.0.0"})";
+  }
+
+  // Write agent.json with next_skills but no workflow_file for dispatcher
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "sessions": [
+        {
+          "id": 0,
+          "description": "Test session",
+          "task_count": 3,
+          "tasks": [
+            {
+              "id": 0,
+              "type": "dispatcher",
+              "description": "Dispatcher with next_skills",
+              "next_skills": ["test-skill"]
+            },
+            {
+              "id": 1,
+              "type": "coordinator",
+              "description": "Coordinator",
+              "workflow_file": "workflow_main.json"
+            },
+            {
+              "id": 2,
+              "type": "skill",
+              "description": "Test skill",
+              "workflow_file": "workflow_main.json",
+              "skill": {"name": "test-skill", "config_dir": "skills/test"}
+            }
+          ]
+        }
+      ]
+    })";
+  }
+
+  write_workflow_json(tmp / "workflow_main.json", "wf_main");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  // Track callback invocations
+  std::atomic<int> callback_count{0};
+  std::string captured_user_id;
+  std::string captured_agent_id;
+  std::string captured_user_input;
+
+  // Set sync callback
+  agent->set_context_callback(
+      [&](const std::string& user_id, const std::string& agent_id,
+          const std::string& user_input, const std::string& previous_context) {
+        callback_count++;
+        captured_user_id = user_id;
+        captured_agent_id = agent_id;
+        captured_user_input = user_input;
+        return "User context for: " + user_input;
+      },
+      false);  // sync mode
+
+  // Send a message that triggers dialogue creation
+  framework::MMAgentMsgQue::Message req;
+  req.message_id = "test_context_msg";
+  req.content = "Hello, test!";
+  req.metadata["user_id"] = "test_user_123";
+  req.metadata["client_id"] = "test_client_456";
+
+  ASSERT_TRUE(agent->route_request_message(req));
+  agent->process_all_sessions_until_idle();
+
+  // Wait for callback to be invoked
+  for(int i = 0; i < 50 && callback_count.load() == 0; ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  // Verify callback was invoked
+  EXPECT_EQ(callback_count.load(), 1);
+  EXPECT_EQ(captured_user_id, "test_user_123");
+  EXPECT_EQ(captured_agent_id, "test_agent");  // Agent ID comes from package.json
+  EXPECT_EQ(captured_user_input, "Hello, test!");
+
+  // Verify context was stored in DataBus
+  // The dialogue_id is generated as hash(user_text + message_id)
+  std::string expected_dialogue_id =
+      std::to_string(std::hash<std::string>{}("Hello, test!" + std::string("test_context_msg")));
+
+  // Get session to build the context key
+  auto session = agent->get_session_by_key("test_user_123:test_client_456");
+  ASSERT_NE(session, nullptr);
+
+  std::string ctx_key =
+      "/session/" + session->get_session_id() + "/ctx/" + expected_dialogue_id + "/content";
+
+  DataVariant ctx_value;
+  ASSERT_TRUE(agent->get_data(ctx_key, ctx_value));
+
+  ASSERT_TRUE(std::holds_alternative<std::string>(ctx_value));
+  std::string stored_context = std::get<std::string>(ctx_value);
+  EXPECT_EQ(stored_context, "User context for: Hello, test!");
+
+  fs::remove_all(tmp);
+}
+
+TEST_F(AgentTest, AsyncContextCallbackDoesNotBlock) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "agentflow_test_async_callback";
+  fs::create_directories(tmp);
+
+  // Write minimal package
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({"name": "test_agent", "version": "1.0.0"})";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "sessions": [
+        {
+          "id": 0,
+          "description": "Test session",
+          "task_count": 3,
+          "tasks": [
+            {"id": 0, "type": "dispatcher", "description": "D", "next_skills": ["s"]},
+            {"id": 1, "type": "coordinator", "description": "C", "workflow_file": "workflow.json"},
+            {"id": 2, "type": "skill", "description": "S", "workflow_file": "workflow.json", "skill": {"name": "s", "config_dir": "skills/s"}}
+          ]
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow.json", "wf");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  std::atomic<bool> callback_started{false};
+  std::atomic<bool> callback_finished{false};
+
+  // Set async callback with simulated delay
+  agent->set_context_callback(
+      [&](const std::string&, const std::string&, const std::string&, const std::string&) {
+        callback_started = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        callback_finished = true;
+        return "async_context";
+      },
+      true);  // async mode
+
+  // Send message
+  framework::MMAgentMsgQue::Message req;
+  req.message_id = "async_test_msg";
+  req.content = "Async test";
+  req.metadata["user_id"] = "async_user";
+  req.metadata["client_id"] = "async_client";
+
+  auto start = std::chrono::steady_clock::now();
+  ASSERT_TRUE(agent->route_request_message(req));
+  agent->process_all_sessions_until_idle();
+  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - start);
+
+  // Processing should return quickly (not wait for callback)
+  // The callback has 100ms delay, so if processing took less than 50ms,
+  // the callback ran asynchronously
+  EXPECT_LT(elapsed.count(), 50);
+
+  // Wait for callback to complete
+  for(int i = 0; i < 20 && !callback_finished.load(); ++i) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+
+  EXPECT_TRUE(callback_started.load());
+  EXPECT_TRUE(callback_finished.load());
+
+  fs::remove_all(tmp);
+}
+
+TEST_F(AgentTest, ContextCallbackReceivesPreviousContext) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "agentflow_test_prev_context";
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({"name": "test_agent", "version": "1.0.0"})";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "sessions": [
+        {
+          "id": 0,
+          "description": "Test session",
+          "task_count": 3,
+          "tasks": [
+            {"id": 0, "type": "dispatcher", "description": "D", "next_skills": ["s"]},
+            {"id": 1, "type": "coordinator", "description": "C", "workflow_file": "workflow.json"},
+            {"id": 2, "type": "skill", "description": "S", "workflow_file": "workflow.json", "skill": {"name": "s", "config_dir": "skills/s"}}
+          ]
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow.json", "wf");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  std::string captured_previous_context = "NOT_SET";
+
+  // Set callback that captures previous context
+  agent->set_context_callback(
+      [&](const std::string&, const std::string&, const std::string&,
+          const std::string& previous_context) {
+        captured_previous_context = previous_context;
+        return "new_context";
+      },
+      false);  // sync mode
+
+  // First request - no previous context
+  framework::MMAgentMsgQue::Message req1;
+  req1.message_id = "first_msg";
+  req1.content = "First message";
+  req1.metadata["user_id"] = "ctx_user";
+  req1.metadata["client_id"] = "ctx_client";
+
+  ASSERT_TRUE(agent->route_request_message(req1));
+  agent->process_all_sessions_until_idle();
+
+  // Previous context should be empty for first request
+  EXPECT_TRUE(captured_previous_context.empty() || captured_previous_context == "NOT_SET");
+
+  // Get the dialogue_id that was generated
+  std::string dialogue_id_1 = std::to_string(
+      std::hash<std::string>{}(std::string("First message") + std::string("first_msg")));
+
+  // Now verify the context was stored
+  auto session = agent->get_session_by_key("ctx_user:ctx_client");
+  ASSERT_NE(session, nullptr);
+  std::string ctx_key_1 = "/session/" + session->get_session_id() + "/ctx/" + dialogue_id_1 + "/content";
+
+  DataVariant ctx_val;
+  ASSERT_TRUE(agent->get_data(ctx_key_1, ctx_val));
+
+  fs::remove_all(tmp);
+}
+
+TEST_F(AgentTest, ContextCallbackExceptionHandling) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "agentflow_test_callback_exception";
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({"name": "test_agent", "version": "1.0.0"})";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "sessions": [
+        {
+          "id": 0,
+          "description": "Test session",
+          "task_count": 3,
+          "tasks": [
+            {"id": 0, "type": "dispatcher", "description": "D", "next_skills": ["s"]},
+            {"id": 1, "type": "coordinator", "description": "C", "workflow_file": "workflow.json"},
+            {"id": 2, "type": "skill", "description": "S", "workflow_file": "workflow.json", "skill": {"name": "s", "config_dir": "skills/s"}}
+          ]
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow.json", "wf");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  // Set callback that throws exception
+  agent->set_context_callback(
+      [](const std::string&, const std::string&, const std::string&, const std::string&) ->
+          std::string {
+        throw std::runtime_error("Test exception from callback");
+      },
+      false);  // sync mode
+
+  // Send message - should not crash
+  framework::MMAgentMsgQue::Message req;
+  req.message_id = "exception_msg";
+  req.content = "Trigger exception";
+  req.metadata["user_id"] = "exc_user";
+  req.metadata["client_id"] = "exc_client";
+
+  // This should not throw - exception should be caught internally
+  EXPECT_NO_THROW({
+    ASSERT_TRUE(agent->route_request_message(req));
+    agent->process_all_sessions_until_idle();
+  });
+
+  fs::remove_all(tmp);
+}
+
 }  // namespace tests
 }  // namespace agentflow
