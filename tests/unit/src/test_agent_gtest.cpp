@@ -1280,5 +1280,623 @@ TEST_F(AgentTest, ContextCallbackExceptionHandling) {
   fs::remove_all(tmp);
 }
 
+// ============================================================
+// Skill Parameter Validation Tests
+// ============================================================
+
+TEST_F(AgentTest, SkillWithEmptyExpectedParametersSkipsValidation) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "agentflow_test_empty_params";
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({"name": "test_agent", "version": "1.0.0"})";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    // Skill with NO expected_parameters (empty)
+    agent_json << R"({
+      "session_pool_size": 1,
+      "tasks": [
+        {"id": 0, "type": "dispatcher", "description": "D", "next_skills": ["travel"]},
+        {"id": 1, "type": "coordinator", "description": "C", "workflow_file": "workflow.json"},
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "Travel skill without expected_parameters",
+          "workflow_file": "workflow.json",
+          "skill": {"name": "travel", "config_dir": "skills/travel", "instance_pool_size": 1}
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow.json", "wf");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  auto session = get_first_pooled_session(agent);
+  ASSERT_NE(session, nullptr);
+
+  // Find the skill task
+  auto skill_task = find_task_by_type(session->get_tasks(), "skill");
+  ASSERT_NE(skill_task, nullptr);
+  EXPECT_EQ(skill_task->get_skill_name(), "travel");
+
+  // expected_parameters should be empty
+  const auto& expected_params = skill_task->get_expected_parameters();
+  EXPECT_TRUE(expected_params.empty());
+
+  fs::remove_all(tmp);
+}
+
+TEST_F(AgentTest, SkillWithExpectedParametersParsesCorrectly) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "agentflow_test_expected_params";
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({"name": "test_agent", "version": "1.0.0"})";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    // Skill WITH expected_parameters
+    agent_json << R"({
+      "session_pool_size": 1,
+      "tasks": [
+        {"id": 0, "type": "dispatcher", "description": "D", "next_skills": ["travel"]},
+        {"id": 1, "type": "coordinator", "description": "C", "workflow_file": "workflow.json"},
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "Travel skill with expected_parameters",
+          "workflow_file": "workflow.json",
+          "skill": {
+            "name": "travel",
+            "config_dir": "skills/travel",
+            "instance_pool_size": 1,
+            "expected_parameters": ["destination", "date", "travelers"]
+          }
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow.json", "wf");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  auto session = get_first_pooled_session(agent);
+  ASSERT_NE(session, nullptr);
+
+  // Find the skill task
+  auto skill_task = find_task_by_type(session->get_tasks(), "skill");
+  ASSERT_NE(skill_task, nullptr);
+  EXPECT_EQ(skill_task->get_skill_name(), "travel");
+
+  // Verify expected_parameters were parsed correctly
+  const auto& expected_params = skill_task->get_expected_parameters();
+  ASSERT_EQ(expected_params.size(), 3);
+  EXPECT_EQ(expected_params[0], "destination");
+  EXPECT_EQ(expected_params[1], "date");
+  EXPECT_EQ(expected_params[2], "travelers");
+
+  fs::remove_all(tmp);
+}
+
+TEST_F(AgentTest, ParameterValidationPassesWhenAllParametersAvailableInMetadata) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "agentflow_test_params_metadata";
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({"name": "test_agent", "version": "1.0.0"})";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "session_pool_size": 1,
+      "tasks": [
+        {"id": 0, "type": "dispatcher", "description": "D", "next_skills": ["travel"]},
+        {"id": 1, "type": "coordinator", "description": "C", "workflow_file": "workflow.json"},
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "Travel skill",
+          "workflow_file": "workflow.json",
+          "skill": {
+            "name": "travel",
+            "config_dir": "skills/travel",
+            "expected_parameters": ["destination", "date"]
+          }
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow.json", "wf");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  // Send a request with available_parameters in metadata
+  framework::MMAgentMsgQue::Message req;
+  req.message_id = "test_params_msg";
+  req.content = "Book a trip to Beijing";
+  req.metadata["user_id"] = "params_user";
+  req.metadata["client_id"] = "params_client";
+  req.metadata["available_parameters"] = R"({
+    "travel": {
+      "destination": "Beijing",
+      "date": "2024-03-20"
+    }
+  })";
+
+  ASSERT_TRUE(agent->route_request_message(req));
+  agent->process_all_sessions_until_idle();
+
+  // The skill should be launched since all parameters are available
+  // Check that a skill task was generated
+  std::shared_ptr<framework::MMAgentTask> generated;
+  bool found_skill = false;
+  for(int i = 0; i < 10; ++i) {
+    while(agent->pop_generated_task(generated)) {
+      if(generated && generated->get_task_type() == "skill") {
+        found_skill = true;
+        break;
+      }
+    }
+    if(found_skill) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  EXPECT_TRUE(found_skill);
+
+  fs::remove_all(tmp);
+}
+
+TEST_F(AgentTest, ParameterValidationFailsWhenParametersMissing) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "agentflow_test_missing_params";
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({"name": "test_agent", "version": "1.0.0"})";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    // Skill requires destination, date, AND travelers
+    agent_json << R"({
+      "session_pool_size": 1,
+      "tasks": [
+        {"id": 0, "type": "dispatcher", "description": "D", "next_skills": ["travel"]},
+        {"id": 1, "type": "coordinator", "description": "C", "workflow_file": "workflow.json"},
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "Travel skill",
+          "workflow_file": "workflow.json",
+          "skill": {
+            "name": "travel",
+            "config_dir": "skills/travel",
+            "expected_parameters": ["destination", "date", "travelers"]
+          }
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow.json", "wf");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  // Send a request with PARTIAL available_parameters (missing "travelers")
+  framework::MMAgentMsgQue::Message req;
+  req.message_id = "test_missing_params_msg";
+  req.content = "Book a trip to Beijing";
+  req.metadata["user_id"] = "missing_params_user";
+  req.metadata["client_id"] = "missing_params_client";
+  req.metadata["available_parameters"] = R"({
+    "travel": {
+      "destination": "Beijing",
+      "date": "2024-03-20"
+    }
+  })";
+
+  ASSERT_TRUE(agent->route_request_message(req));
+  agent->process_all_sessions_until_idle();
+
+  // The skill should NOT be launched since "travelers" is missing
+  // No skill task should be generated
+  std::shared_ptr<framework::MMAgentTask> generated;
+  bool found_skill = false;
+  for(int i = 0; i < 10; ++i) {
+    while(agent->pop_generated_task(generated)) {
+      if(generated && generated->get_task_type() == "skill") {
+        found_skill = true;
+        break;
+      }
+    }
+    if(found_skill) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  // Skill should NOT be launched due to missing parameter
+  EXPECT_FALSE(found_skill);
+
+  fs::remove_all(tmp);
+}
+
+TEST_F(AgentTest, ParameterValidationFailsWhenNoParametersAvailable) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "agentflow_test_no_params";
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({"name": "test_agent", "version": "1.0.0"})";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "session_pool_size": 1,
+      "tasks": [
+        {"id": 0, "type": "dispatcher", "description": "D", "next_skills": ["travel"]},
+        {"id": 1, "type": "coordinator", "description": "C", "workflow_file": "workflow.json"},
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "Travel skill",
+          "workflow_file": "workflow.json",
+          "skill": {
+            "name": "travel",
+            "config_dir": "skills/travel",
+            "expected_parameters": ["destination"]
+          }
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow.json", "wf");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  // Send a request WITHOUT any available_parameters
+  framework::MMAgentMsgQue::Message req;
+  req.message_id = "test_no_params_msg";
+  req.content = "Book a trip";
+  req.metadata["user_id"] = "no_params_user";
+  req.metadata["client_id"] = "no_params_client";
+  // No available_parameters in metadata or databus
+
+  ASSERT_TRUE(agent->route_request_message(req));
+  agent->process_all_sessions_until_idle();
+
+  // The skill should NOT be launched since no parameters are available
+  std::shared_ptr<framework::MMAgentTask> generated;
+  bool found_skill = false;
+  for(int i = 0; i < 10; ++i) {
+    while(agent->pop_generated_task(generated)) {
+      if(generated && generated->get_task_type() == "skill") {
+        found_skill = true;
+        break;
+      }
+    }
+    if(found_skill) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  EXPECT_FALSE(found_skill);
+
+  fs::remove_all(tmp);
+}
+
+TEST_F(AgentTest, ExtraParametersDoNotAffectValidation) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "agentflow_test_extra_params";
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({"name": "test_agent", "version": "1.0.0"})";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "session_pool_size": 1,
+      "tasks": [
+        {"id": 0, "type": "dispatcher", "description": "D", "next_skills": ["travel"]},
+        {"id": 1, "type": "coordinator", "description": "C", "workflow_file": "workflow.json"},
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "Travel skill",
+          "workflow_file": "workflow.json",
+          "skill": {
+            "name": "travel",
+            "config_dir": "skills/travel",
+            "expected_parameters": ["destination"]
+          }
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow.json", "wf");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  // Send a request with available_parameters containing EXTRA parameters
+  framework::MMAgentMsgQue::Message req;
+  req.message_id = "test_extra_params_msg";
+  req.content = "Book a trip";
+  req.metadata["user_id"] = "extra_params_user";
+  req.metadata["client_id"] = "extra_params_client";
+  req.metadata["available_parameters"] = R"({
+    "travel": {
+      "destination": "Beijing",
+      "date": "2024-03-20",
+      "travelers": "2",
+      "class": "business",
+      "extra_field": "extra_value"
+    }
+  })";
+
+  ASSERT_TRUE(agent->route_request_message(req));
+  agent->process_all_sessions_until_idle();
+
+  // The skill SHOULD be launched since all expected params are present
+  // Extra parameters should not affect validation
+  std::shared_ptr<framework::MMAgentTask> generated;
+  bool found_skill = false;
+  for(int i = 0; i < 10; ++i) {
+    while(agent->pop_generated_task(generated)) {
+      if(generated && generated->get_task_type() == "skill") {
+        found_skill = true;
+        break;
+      }
+    }
+    if(found_skill) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  EXPECT_TRUE(found_skill);
+
+  fs::remove_all(tmp);
+}
+
+TEST_F(AgentTest, MetadataTakesPriorityOverDataBusForAvailableParameters) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "agentflow_test_priority";
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({"name": "test_agent", "version": "1.0.0"})";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "session_pool_size": 1,
+      "tasks": [
+        {"id": 0, "type": "dispatcher", "description": "D", "next_skills": ["travel"]},
+        {"id": 1, "type": "coordinator", "description": "C", "workflow_file": "workflow.json"},
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "Travel skill",
+          "workflow_file": "workflow.json",
+          "skill": {
+            "name": "travel",
+            "config_dir": "skills/travel",
+            "expected_parameters": ["destination"]
+          }
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow.json", "wf");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  // Put DIFFERENT values in DataBus
+  agent->publish_data("available_parameters", std::string(R"({
+    "travel": {
+      "destination": "Shanghai"
+    }
+  })"));
+
+  // Send request with available_parameters in metadata (should take priority)
+  framework::MMAgentMsgQue::Message req;
+  req.message_id = "test_priority_msg";
+  req.content = "Book a trip";
+  req.metadata["user_id"] = "priority_user";
+  req.metadata["client_id"] = "priority_client";
+  req.metadata["available_parameters"] = R"({
+    "travel": {
+      "destination": "Beijing"
+    }
+  })";
+
+  ASSERT_TRUE(agent->route_request_message(req));
+  agent->process_all_sessions_until_idle();
+
+  // The skill should be launched using metadata values
+  std::shared_ptr<framework::MMAgentTask> generated;
+  bool found_skill = false;
+  for(int i = 0; i < 10; ++i) {
+    while(agent->pop_generated_task(generated)) {
+      if(generated && generated->get_task_type() == "skill") {
+        found_skill = true;
+        break;
+      }
+    }
+    if(found_skill) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  EXPECT_TRUE(found_skill);
+
+  fs::remove_all(tmp);
+}
+
+TEST_F(AgentTest, DataBusFallbackWhenNoMetadataAvailableParameters) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "agentflow_test_databus_fallback";
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({"name": "test_agent", "version": "1.0.0"})";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "session_pool_size": 1,
+      "tasks": [
+        {"id": 0, "type": "dispatcher", "description": "D", "next_skills": ["travel"]},
+        {"id": 1, "type": "coordinator", "description": "C", "workflow_file": "workflow.json"},
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "Travel skill",
+          "workflow_file": "workflow.json",
+          "skill": {
+            "name": "travel",
+            "config_dir": "skills/travel",
+            "expected_parameters": ["destination"]
+          }
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow.json", "wf");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  // Calculate the expected dialogue_id: hash(content + message_id)
+  const std::string content = "Book a trip";
+  const std::string message_id = "test_databus_fallback_msg";
+  std::string expected_dialogue_id = std::to_string(std::hash<std::string>{}(content + message_id));
+
+  // Put available_parameters in DataBus with the calculated dialogue_id prefix
+  agent->publish_data(expected_dialogue_id + "/available_parameters", std::string(R"({
+    "travel": {
+      "destination": "Shanghai"
+    }
+  })"));
+
+  // Send request WITHOUT available_parameters in metadata
+  framework::MMAgentMsgQue::Message req;
+  req.message_id = message_id;
+  req.content = content;
+  req.metadata["user_id"] = "fallback_user";
+  req.metadata["client_id"] = "fallback_client";
+  // No available_parameters in metadata - should use DataBus
+
+  ASSERT_TRUE(agent->route_request_message(req));
+  agent->process_all_sessions_until_idle();
+
+  // The skill should be launched using DataBus values (fallback)
+  std::shared_ptr<framework::MMAgentTask> generated;
+  bool found_skill = false;
+  for(int i = 0; i < 10; ++i) {
+    while(agent->pop_generated_task(generated)) {
+      if(generated && generated->get_task_type() == "skill") {
+        found_skill = true;
+        break;
+      }
+    }
+    if(found_skill) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  EXPECT_TRUE(found_skill);
+
+  fs::remove_all(tmp);
+}
+
+TEST_F(AgentTest, DialogueIdPrefixedAvailableParametersKey) {
+  namespace fs = std::filesystem;
+  auto tmp = fs::temp_directory_path() / "agentflow_test_dialogue_params";
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({"name": "test_agent", "version": "1.0.0"})";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "session_pool_size": 1,
+      "tasks": [
+        {"id": 0, "type": "dispatcher", "description": "D", "next_skills": ["travel"]},
+        {"id": 1, "type": "coordinator", "description": "C", "workflow_file": "workflow.json"},
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "Travel skill",
+          "workflow_file": "workflow.json",
+          "skill": {
+            "name": "travel",
+            "config_dir": "skills/travel",
+            "expected_parameters": ["destination"]
+          }
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow.json", "wf");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  // Calculate the expected dialogue_id: hash(content + message_id)
+  const std::string content = "Book a trip";
+  const std::string message_id = "test_dialogue_params_msg";
+  std::string expected_dialogue_id = std::to_string(std::hash<std::string>{}(content + message_id));
+
+  // Put available_parameters in DataBus with the calculated dialogue_id prefix
+  agent->publish_data(expected_dialogue_id + "/available_parameters", std::string(R"({
+    "travel": {
+      "destination": "Tokyo"
+    }
+  })"));
+
+  // Send request - the framework will generate the same dialogue_id
+  framework::MMAgentMsgQue::Message req;
+  req.message_id = message_id;
+  req.content = content;
+  req.metadata["user_id"] = "dialogue_user";
+  req.metadata["client_id"] = "dialogue_client";
+
+  ASSERT_TRUE(agent->route_request_message(req));
+  agent->process_all_sessions_until_idle();
+
+  // The skill should be launched using dialogue-scoped DataBus values
+  std::shared_ptr<framework::MMAgentTask> generated;
+  bool found_skill = false;
+  for(int i = 0; i < 10; ++i) {
+    while(agent->pop_generated_task(generated)) {
+      if(generated && generated->get_task_type() == "skill") {
+        found_skill = true;
+        break;
+      }
+    }
+    if(found_skill) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  EXPECT_TRUE(found_skill);
+
+  fs::remove_all(tmp);
+}
+
 }  // namespace tests
 }  // namespace agentflow
