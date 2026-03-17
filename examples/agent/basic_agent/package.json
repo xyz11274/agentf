@@ -1,8 +1,6 @@
 {
   "name": "basic-agent",
   "version": "1.0.0",
-  "package_type": "release",
-  "agent_version": "1.0.0",
   "description": "Basic execution agent example for AgentFlow with shell and Python workflows",
   "author": "AgentFlow Team",
   "entry_point": "basic_agent.so",
@@ -17,18 +15,9 @@
   "builtin_workflows": [
     "memory"
   ],
-  "coordinator_workflow": "basic-coordinator-workflow",
-  "task_workflows": {
-    "dispatcher": "basic-coordinator-workflow",
-    "coordinator": "basic-coordinator-workflow"
-  },
   "dependencies": {
     "core-lib": "1.0.0"
   },
-  "file_manifest": [
-    "package.json",
-    "basic-agentAgent_1.0.0.tar.gz"
-  ],
   "metadata": {
     "type": "agent",
     "category": "example",

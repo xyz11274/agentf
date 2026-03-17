@@ -9,42 +9,34 @@
       "type": "contextupdater",
       "description": "Update workflow-pattern context",
       "workflow_file": "loop_workflow.json",
-      "workflow_pool_size": 2
-    }
-  ],
-  "sessions": [
+      "workflow_pool_size": 2,
+      "scope": "agent"
+    },
     {
       "id": 0,
-      "description": "Homogeneous pooled session template",
-      "task_count": 3,
-      "tasks": [
-        {
-          "id": 0,
-          "type": "dispatcher",
-          "description": "Dispatch workflow pattern requests",
-          "workflow_file": "sample_workflow.json",
-          "workflow_pool_size": 3
-        },
-        {
-          "id": 1,
-          "type": "coordinator",
-          "description": "Coordinate workflow pattern outputs",
-          "workflow_file": "conditional_workflow.json",
-          "workflow_pool_size": 2
-        },
-        {
-          "id": 2,
-          "type": "skill",
-          "description": "Run switch-case routing skill",
-          "workflow_file": "loop_workflow.json",
-          "skill": {
-            "name": "switch-router",
-            "config_dir": "skills/switch-router",
-            "instance_pool_size": 2
-          },
-          "workflow_pool_size": 2
-        }
-      ]
+      "type": "dispatcher",
+      "description": "Dispatch workflow pattern requests",
+      "workflow_file": "sample_workflow.json",
+      "workflow_pool_size": 3
+    },
+    {
+      "id": 1,
+      "type": "coordinator",
+      "description": "Coordinate workflow pattern outputs",
+      "workflow_file": "conditional_workflow.json",
+      "workflow_pool_size": 2
+    },
+    {
+      "id": 2,
+      "type": "skill",
+      "description": "Run switch-case routing skill",
+      "workflow_file": "loop_workflow.json",
+      "skill": {
+        "name": "switch-router",
+        "config_dir": "skills/switch-router",
+        "instance_pool_size": 2
+      },
+      "workflow_pool_size": 2
     }
   ],
   "max_workflows": 10,

@@ -11,18 +11,6 @@
     "skill_date_workflow.json",
     "skill_delegate_workflow.json"
   ],
-  "dispatcher_workflow": "session-dispatcher-workflow",
-  "coordinator_workflow": "session-coordinator-workflow",
-  "task_workflows": {
-    "dispatcher": "session-dispatcher-workflow",
-    "coordinator": "session-coordinator-workflow",
-    "contextupdater": "session-context-workflow",
-    "skill:search": "skill-search-workflow",
-    "skill:summary": "skill-summary-workflow",
-    "skill:date": "skill-date-workflow",
-    "skill:delegate": "skill-delegate-workflow"
-  },
-  "session_context_workflow": "session-context-workflow",
   "metadata": {
     "example": "true",
     "tui": "true"

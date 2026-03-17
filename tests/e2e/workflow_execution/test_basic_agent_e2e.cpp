@@ -88,9 +88,6 @@ TEST_F(BasicAgentE2ETest, PackageLoading) {
     // 4. 验证 workflow 文件列表
     EXPECT_GE(config.workflow_files.size(), 2)
         << "At least 2 workflow files should be defined";
-
-    // 5. 验证 coordinator_workflow 配置
-    EXPECT_EQ(config.coordinator_workflow, "basic-coordinator-workflow");
 }
 
 /**

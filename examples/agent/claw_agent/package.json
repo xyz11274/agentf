@@ -1,8 +1,6 @@
 {
   "name": "claw-agent",
   "version": "1.0.0",
-  "package_type": "release",
-  "agent_version": "1.0.0",
   "description": "Dispatcher-first claw agent example integrated with vendored jiuwenclaw",
   "author": "AgentFlow Team",
   "workflows": [
@@ -10,12 +8,6 @@
     "coordinator_workflow.json",
     "claw_skill_workflow.json"
   ],
-  "coordinator_workflow": "claw-coordinator-workflow",
-  "task_workflows": {
-    "dispatcher": "claw-dispatcher-workflow",
-    "coordinator": "claw-coordinator-workflow",
-    "skill:claw-direct": "claw-skill-workflow"
-  },
   "metadata": {
     "type": "example",
     "category": "demo",

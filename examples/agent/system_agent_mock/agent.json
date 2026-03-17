@@ -3,71 +3,64 @@
   "version": "1.0.0",
   "description": "Mock agent demonstrating dispatcher-skill-coordinator flow with dynamic skill selection",
   "session_pool_size": 1,
-  "sessions": [
+  "tasks": [
     {
       "id": 0,
-      "description": "Default session template",
-      "task_count": 6,
-      "tasks": [
-        {
-          "id": 0,
-          "type": "dispatcher",
-          "description": "Default dispatcher with skill-selection",
-          "next_skills": ["skill-selection"],
-          "max_concurrent_skills": 10
-        },
-        {
-          "id": 1,
-          "type": "coordinator",
-          "description": "Custom coordinator for aggregating skill results",
-          "workflow_file": "coordinator_workflow.json",
-          "workflow_pool_size": 1
-        },
-        {
-          "id": 2,
-          "type": "skill",
-          "description": "Skill selection skill",
-          "workflow_file": "skill_selection_workflow.json",
-          "skill": {
-            "name": "skill-selection",
-            "config_dir": "skills/skill_selection",
-            "instance_pool_size": 1
-          }
-        },
-        {
-          "id": 3,
-          "type": "skill",
-          "description": "Travel skill",
-          "workflow_file": "travel_workflow.json",
-          "skill": {
-            "name": "travel",
-            "config_dir": "skills/travel",
-            "instance_pool_size": 1
-          }
-        },
-        {
-          "id": 4,
-          "type": "skill",
-          "description": "Shopping skill",
-          "workflow_file": "shopping_workflow.json",
-          "skill": {
-            "name": "shopping",
-            "config_dir": "skills/shopping",
-            "instance_pool_size": 1
-          }
-        },
-        {
-          "id": 5,
-          "type": "skill",
-          "description": "Foodie skill",
-          "workflow_file": "foodie_workflow.json",
-          "skill": {
-            "name": "foodie",
-            "config_dir": "skills/foodie",
-            "instance_pool_size": 1
-          }
-        }
-      ]
+      "type": "dispatcher",
+      "description": "Default dispatcher with skill-selection",
+      "next_skills": ["skill-selection"],
+      "max_concurrent_skills": 10
+    },
+    {
+      "id": 1,
+      "type": "coordinator",
+      "description": "Custom coordinator for aggregating skill results",
+      "workflow_file": "coordinator_workflow.json",
+      "workflow_pool_size": 1
+    },
+    {
+      "id": 2,
+      "type": "skill",
+      "description": "Skill selection skill",
+      "workflow_file": "skill_selection_workflow.json",
+      "skill": {
+        "name": "skill-selection",
+        "config_dir": "skills/skill_selection",
+        "instance_pool_size": 1
+      }
+    },
+    {
+      "id": 3,
+      "type": "skill",
+      "description": "Travel skill",
+      "workflow_file": "travel_workflow.json",
+      "skill": {
+        "name": "travel",
+        "config_dir": "skills/travel",
+        "instance_pool_size": 1
+      }
+    },
+    {
+      "id": 4,
+      "type": "skill",
+      "description": "Shopping skill",
+      "workflow_file": "shopping_workflow.json",
+      "skill": {
+        "name": "shopping",
+        "config_dir": "skills/shopping",
+        "instance_pool_size": 1
+      }
+    },
+    {
+      "id": 5,
+      "type": "skill",
+      "description": "Foodie skill",
+      "workflow_file": "foodie_workflow.json",
+      "skill": {
+        "name": "foodie",
+        "config_dir": "skills/foodie",
+        "instance_pool_size": 1
+      }
     }
   ],
   "max_workflows": 10,

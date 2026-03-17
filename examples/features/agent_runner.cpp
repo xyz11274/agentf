@@ -41,7 +41,7 @@ void print_usage(const char* program) {
               << "\n"
               << "Options:\n"
               << "  --list-workflows    List all workflows in the package\n"
-              << "  --execute [wf_id]   Execute workflow (default: coordinator_workflow)\n"
+              << "  --execute [wf_id]   Execute workflow (default: first workflow)\n"
               << "  --interactive       Start interactive mode (message-driven execution)\n"
               << "  --validate          Validate package structure\n"
               << "  --output-file FILE  Write output to file\n"
@@ -162,7 +162,7 @@ int main(int argc, char* argv[]) {
             capture_output("    - " + wf);
         }
         capture_output("  Entry Point: " + pkg_config.entry_point);
-        capture_output("  Coordinator: " + pkg_config.coordinator_workflow);
+        capture_output("  Session Tasks: " + std::to_string(pkg_config.session_tasks.size()));
         capture_output("\n[OK] Package validation passed");
         return 0;
     }
@@ -201,9 +201,12 @@ int main(int argc, char* argv[]) {
 
     // 5. Execute mode
     if (execute) {
-        // Default to coordinator workflow if not specified
+        // Default to first workflow if not specified
         if (workflow_id.empty()) {
-            workflow_id = pkg_config.coordinator_workflow;
+            if (!pkg_config.workflow_files.empty()) {
+                // Use first workflow file name as default
+                workflow_id = std::filesystem::path(pkg_config.workflow_files[0]).stem().string();
+            }
         }
 
         capture_output("\n=== Executing MMWorkflow: " + workflow_id + " ===");

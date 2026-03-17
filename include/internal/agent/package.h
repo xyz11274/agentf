@@ -35,6 +35,7 @@ class AgentPackage {
   struct TaskDefinition {
     int         task_index = -1;
     std::string task_type;
+    std::string scope;  // "agent" or "session" (default: "session")
     std::string description;
     std::string workflow_file;
     int         workflow_pool_size = 1;
@@ -61,19 +62,15 @@ class AgentPackage {
     std::string package_root;
     std::vector<std::string> workflow_files;
     std::vector<std::string> builtin_workflows;
-    std::string dispatcher_workflow;
-    std::string coordinator_workflow;
-    std::map<std::string, std::string> task_workflows;
-    std::string agent_context_workflow;
-    std::string session_context_workflow;
-     std::string task_context_workflow;
-     std::string node_context_workflow;
-     int         max_workflows = 10;
-     int         max_concurrent_workflows = 5;
-     int         precreate_session_count = 0;
-     int         session_pool_size = 0;
+    int         max_workflows = 10;
+    int         max_concurrent_workflows = 5;
+    int         precreate_session_count = 0;
+    int         session_pool_size = 0;
+    // Flattened task structure (new format)
+    std::vector<TaskDefinition> session_tasks;  // Tasks for session template
     bool        has_contextupdater = false;
     TaskDefinition               contextupdater_task;
+    // Legacy format (backward compatibility)
     std::vector<SessionDefinition> sessions;
   };
 

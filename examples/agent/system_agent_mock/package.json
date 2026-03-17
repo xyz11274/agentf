@@ -9,16 +9,6 @@
     "foodie_workflow.json",
     "coordinator_workflow.json"
   ],
-  "dispatcher_workflow": "builtin-dispatcher",
-  "coordinator_workflow": "coordinator-workflow",
-  "task_workflows": {
-    "dispatcher": "builtin-dispatcher",
-    "coordinator": "coordinator-workflow",
-    "skill:skill-selection": "skill-selection-workflow",
-    "skill:travel": "travel-workflow",
-    "skill:shopping": "shopping-workflow",
-    "skill:foodie": "foodie-workflow"
-  },
   "metadata": {
     "example": "true",
     "test": "true"

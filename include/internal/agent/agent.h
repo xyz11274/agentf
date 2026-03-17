@@ -174,9 +174,9 @@ class MMAgent {
   std::shared_ptr<SessionRouter> session_router_;
 
   bool initialize_components(std::shared_ptr<AgentPackage> package = nullptr);
-  AgentPackage::SessionDefinition build_default_session_definition() const;
-  std::shared_ptr<MMAgentSession> create_session_from_definition(
-      const std::string& session_id, const AgentPackage::SessionDefinition& session_definition);
+  std::vector<AgentPackage::TaskDefinition> build_default_session_tasks() const;
+  std::shared_ptr<MMAgentSession> create_session_from_tasks(
+      const std::string& session_id, const std::vector<AgentPackage::TaskDefinition>& session_tasks);
   std::shared_ptr<MMAgentSession> create_session_with_defaults(const std::string& session_id);
   std::string resolve_workflow_reference(const std::string& workflow_ref) const;
   std::string resolve_workflow_file(const std::string& workflow_ref) const;

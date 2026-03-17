@@ -50,9 +50,9 @@ int64_t get_current_timestamp_ms() {
 }
 
 std::map<std::string, std::string> build_task_workflow_map(
-    const AgentPackage::SessionDefinition& session_definition) {
+    const std::vector<AgentPackage::TaskDefinition>& session_tasks) {
   std::map<std::string, std::string> task_workflows;
-  for(const auto& task_definition : session_definition.tasks) {
+  for(const auto& task_definition : session_tasks) {
     if(task_definition.workflow_file.empty()) {
       continue;
     }
@@ -67,8 +67,8 @@ std::map<std::string, std::string> build_task_workflow_map(
 }
 
 const AgentPackage::TaskDefinition* find_task_definition(
-    const AgentPackage::SessionDefinition& session_definition, const std::string& task_type) {
-  for(const auto& task_definition : session_definition.tasks) {
+    const std::vector<AgentPackage::TaskDefinition>& session_tasks, const std::string& task_type) {
+  for(const auto& task_definition : session_tasks) {
     if(task_definition.task_type == task_type) {
       return &task_definition;
     }
@@ -250,14 +250,6 @@ std::shared_ptr<MMAgent> MMAgent::create_from_package(const std::string& package
     if(fs::exists(wf_path)) {
       auto result = parser->parse_workflow_file(wf_path.string());
       if(result.is_valid() && result.workflow) {
-        const auto& node_context_workflow = package->get_config().node_context_workflow;
-        if(!node_context_workflow.empty()) {
-          for(const auto& node : result.workflow->get_nodes()) {
-            if(node && node->get_config().node_context_workflow.empty()) {
-              node->bind_context_workflow(node_context_workflow);
-            }
-          }
-        }
         loaded_workflows.push_back(result.workflow);
       } else {
         std::cerr << "Failed to load workflow from: " << wf_path.string() << std::endl;
@@ -331,7 +323,6 @@ bool MMAgent::initialize_components(std::shared_ptr<AgentPackage> package) {
   context_config.context_id = config_.id + "_context";
   context_config.agent_id = config_.id;
   if(package_) {
-    context_config.context_workflow = package_->get_config().agent_context_workflow;
     if(package_->get_config().has_contextupdater) {
       context_config.contextupdater_workflow = package_->get_config().contextupdater_task.workflow_file;
       context_config.contextupdater_task_id = config_.id + "_contextupdater";
@@ -353,20 +344,29 @@ bool MMAgent::initialize_components(std::shared_ptr<AgentPackage> package) {
   });
 
   std::vector<std::shared_ptr<MMAgentSession>> session_pool;
-  bool has_session_template = package_ && !package_->get_config().sessions.empty();
-  Logger::instance().info_f("[AGENT_INIT] has_session_template=%s, sessions_count=%zu",
+  bool has_session_template = package_ && (!package_->get_config().session_tasks.empty()
+                                            || !package_->get_config().sessions.empty());
+  Logger::instance().info_f("[AGENT_INIT] has_session_template=%s, session_tasks_count=%zu, sessions_count=%zu",
                             has_session_template ? "true" : "false",
+                            package_ ? package_->get_config().session_tasks.size() : 0,
                             package_ ? package_->get_config().sessions.size() : 0);
+
   if(has_session_template) {
-    const auto& session_template = package_->get_config().sessions.front();
+    // Get session tasks from new flattened format or legacy sessions format
+    std::vector<AgentPackage::TaskDefinition> session_tasks;
+    if(!package_->get_config().session_tasks.empty()) {
+      // New flattened format
+      session_tasks = package_->get_config().session_tasks;
+    } else if(!package_->get_config().sessions.empty()) {
+      // Legacy format: extract tasks from sessions[0]
+      session_tasks = package_->get_config().sessions.front().tasks;
+    }
+
     const int session_pool_size =
         std::max(1, package_->get_config().session_pool_size);
     for(int session_index = 0; session_index < session_pool_size; ++session_index) {
-      auto session_definition = session_template;
-      session_definition.session_index = session_index;
-      // For pool-based sessions, use index as ID for backward compatibility
-      // This allows tests and code to find sessions by their pool index
-      auto session = create_session_from_definition(std::to_string(session_index), session_definition);
+      // Create session from flattened tasks
+      auto session = create_session_from_tasks(std::to_string(session_index), session_tasks);
       if(session) {
         session_pool.push_back(session);
       }
@@ -383,64 +383,48 @@ bool MMAgent::initialize_components(std::shared_ptr<AgentPackage> package) {
   return true;
 }
 
-AgentPackage::SessionDefinition MMAgent::build_default_session_definition() const {
-  AgentPackage::SessionDefinition session_definition;
-  session_definition.session_index = 0;
-  session_definition.description = "Default pooled session";
-  session_definition.task_count = 2;
+std::vector<AgentPackage::TaskDefinition> MMAgent::build_default_session_tasks() const {
+  std::vector<AgentPackage::TaskDefinition> session_tasks;
 
   AgentPackage::TaskDefinition dispatcher_task;
   dispatcher_task.task_index = 0;
   dispatcher_task.task_type = "dispatcher";
+  dispatcher_task.scope = "session";
   dispatcher_task.description = "Session dispatcher";
-  if(package_) {
-    dispatcher_task.workflow_file = package_->get_config().dispatcher_workflow.empty()
-                                        ? package_->get_config().coordinator_workflow
-                                        : package_->get_config().dispatcher_workflow;
-  }
 
   AgentPackage::TaskDefinition coordinator_task;
   coordinator_task.task_index = 1;
   coordinator_task.task_type = "coordinator";
+  coordinator_task.scope = "session";
   coordinator_task.description = "Session coordinator";
-  coordinator_task.workflow_file =
-      package_ ? package_->get_config().coordinator_workflow : std::string();
 
-  session_definition.tasks = {dispatcher_task, coordinator_task};
-  return session_definition;
+  session_tasks = {dispatcher_task, coordinator_task};
+  return session_tasks;
 }
 
-std::shared_ptr<MMAgentSession> MMAgent::create_session_from_definition(
-    const std::string& session_id, const AgentPackage::SessionDefinition& session_definition) {
+std::shared_ptr<MMAgentSession> MMAgent::create_session_from_tasks(
+    const std::string& session_id, const std::vector<AgentPackage::TaskDefinition>& session_tasks) {
   MMAgentSession::Config session_config;
-  session_config.session_index = session_definition.session_index;
+  session_config.session_index = 0;  // Will be set by pool index
   session_config.session_id = session_id;
-  session_config.description = session_definition.description;
-  session_config.task_workflows = build_task_workflow_map(session_definition);
-  if(package_) {
-    session_config.task_context_workflow = package_->get_config().task_context_workflow;
-  }
-  if(const auto* dispatcher_definition = find_task_definition(session_definition, "dispatcher");
+  session_config.description = "Pooled session";
+  session_config.task_workflows = build_task_workflow_map(session_tasks);
+
+  if(const auto* dispatcher_definition = find_task_definition(session_tasks, "dispatcher");
      dispatcher_definition != nullptr) {
     session_config.dispatcher_workflow =
         resolve_workflow_reference(dispatcher_definition->workflow_file);
     if(!session_config.dispatcher_workflow.empty()) {
       session_config.task_workflows["dispatcher"] = session_config.dispatcher_workflow;
     }
-  } else if(package_) {
-    session_config.dispatcher_workflow =
-        resolve_workflow_reference(package_->get_config().dispatcher_workflow);
   }
-  if(const auto* coordinator_definition = find_task_definition(session_definition, "coordinator");
+  if(const auto* coordinator_definition = find_task_definition(session_tasks, "coordinator");
      coordinator_definition != nullptr) {
     session_config.coordinator_workflow =
         resolve_workflow_reference(coordinator_definition->workflow_file);
     if(!session_config.coordinator_workflow.empty()) {
       session_config.task_workflows["coordinator"] = session_config.coordinator_workflow;
     }
-  } else if(package_) {
-    session_config.coordinator_workflow =
-        resolve_workflow_reference(package_->get_config().coordinator_workflow);
   }
 
   auto session = std::make_shared<MMAgentSession>(session_config);
@@ -450,14 +434,13 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_definition(
   // Get the actual session_id (may have been auto-generated as UUID)
   const std::string& actual_session_id = session->get_session_id();
 
-  for(const auto& task_definition : session_definition.tasks) {
+  for(const auto& task_definition : session_tasks) {
     MMAgentTask::Config task_config;
     task_config.task_index = task_definition.task_index;
     task_config.task_id = actual_session_id + "_task_" + std::to_string(task_definition.task_index);
     task_config.task_type = task_definition.task_type;
     task_config.description = task_definition.description;
     task_config.session_id = actual_session_id;
-    task_config.task_context_workflow = session_config.task_context_workflow;
     task_config.workflow_id = resolve_workflow_reference(task_definition.workflow_file);
     task_config.workflow_file = resolve_workflow_file(task_definition.workflow_file);
     task_config.workflow_pool_size = task_definition.workflow_pool_size;
@@ -518,7 +501,6 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_definition(
     dispatcher_config.dispatcher_workflow = session_config.dispatcher_workflow;
     dispatcher_config.coordinator_workflow = session_config.coordinator_workflow;
     dispatcher_config.task_workflows = session_config.task_workflows;
-    dispatcher_config.task_context_workflow = session_config.task_context_workflow;
     session->set_task_dispatcher(
         std::make_shared<SessionTaskCoordinator>(dispatcher_config, dispatcher_task));
     dispatcher_task->configure_message_handlers(
@@ -538,7 +520,6 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_definition(
     coordinator_config.dispatcher_workflow = session_config.dispatcher_workflow;
     coordinator_config.coordinator_workflow = session_config.coordinator_workflow;
     coordinator_config.task_workflows = session_config.task_workflows;
-    coordinator_config.task_context_workflow = session_config.task_context_workflow;
     session->set_task_coordinator(
         std::make_shared<SessionTaskCoordinator>(coordinator_config, coordinator_task));
     coordinator_task->configure_message_handlers(
@@ -558,7 +539,7 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_definition(
 }
 
 std::shared_ptr<MMAgentSession> MMAgent::create_session_with_defaults(const std::string& session_id) {
-  return create_session_from_definition(session_id, build_default_session_definition());
+  return create_session_from_tasks(session_id, build_default_session_tasks());
 }
 
 std::string MMAgent::resolve_workflow_reference(const std::string& workflow_ref) const {

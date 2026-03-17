@@ -9,66 +9,58 @@
       "type": "contextupdater",
       "description": "Update nested-workflow context",
       "workflow_file": "data_pipeline.json",
-      "workflow_pool_size": 2
-    }
-  ],
-  "sessions": [
+      "workflow_pool_size": 2,
+      "scope": "agent"
+    },
     {
       "id": 0,
-      "description": "Homogeneous pooled session template",
-      "task_count": 5,
-      "tasks": [
-        {
-          "id": 0,
-          "type": "dispatcher",
-          "description": "Dispatch nested workflow requests",
-          "workflow_file": "main_workflow.json",
-          "workflow_pool_size": 3
-        },
-        {
-          "id": 1,
-          "type": "coordinator",
-          "description": "Coordinate nested workflow outputs",
-          "workflow_file": "main_workflow.json",
-          "workflow_pool_size": 2
-        },
-        {
-          "id": 2,
-          "type": "skill",
-          "description": "Run data pipeline skill",
-          "workflow_file": "data_pipeline.json",
-          "skill": {
-            "name": "data-pipeline",
-            "config_dir": "skills/data-pipeline",
-            "instance_pool_size": 2
-          },
-          "workflow_pool_size": 2
-        },
-        {
-          "id": 3,
-          "type": "skill",
-          "description": "Run validation skill",
-          "workflow_file": "validation_workflow.json",
-          "skill": {
-            "name": "validation",
-            "config_dir": "skills/validation",
-            "instance_pool_size": 2
-          },
-          "workflow_pool_size": 2
-        },
-        {
-          "id": 4,
-          "type": "skill",
-          "description": "Run processing skill",
-          "workflow_file": "processing_workflow.json",
-          "skill": {
-            "name": "processing",
-            "config_dir": "skills/processing",
-            "instance_pool_size": 2
-          },
-          "workflow_pool_size": 2
-        }
-      ]
+      "type": "dispatcher",
+      "description": "Dispatch nested workflow requests",
+      "workflow_file": "main_workflow.json",
+      "workflow_pool_size": 3
+    },
+    {
+      "id": 1,
+      "type": "coordinator",
+      "description": "Coordinate nested workflow outputs",
+      "workflow_file": "main_workflow.json",
+      "workflow_pool_size": 2
+    },
+    {
+      "id": 2,
+      "type": "skill",
+      "description": "Run data pipeline skill",
+      "workflow_file": "data_pipeline.json",
+      "skill": {
+        "name": "data-pipeline",
+        "config_dir": "skills/data-pipeline",
+        "instance_pool_size": 2
+      },
+      "workflow_pool_size": 2
+    },
+    {
+      "id": 3,
+      "type": "skill",
+      "description": "Run validation skill",
+      "workflow_file": "validation_workflow.json",
+      "skill": {
+        "name": "validation",
+        "config_dir": "skills/validation",
+        "instance_pool_size": 2
+      },
+      "workflow_pool_size": 2
+    },
+    {
+      "id": 4,
+      "type": "skill",
+      "description": "Run processing skill",
+      "workflow_file": "processing_workflow.json",
+      "skill": {
+        "name": "processing",
+        "config_dir": "skills/processing",
+        "instance_pool_size": 2
+      },
+      "workflow_pool_size": 2
     }
   ],
   "max_workflows": 10,

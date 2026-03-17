@@ -2166,3 +2166,32 @@ if(session_array.Size() != 1) {
 1. 修改解析代码后运行单元测试
 2. 更新所有示例 agent.json 和 package.json
 3. 运行 `./build.sh test` 验证全量测试通过
+
+### 实施状态（2026-03-17）
+
+**已完成实施**
+
+1. **源码修改**：
+   - `include/internal/agent/package.h`：`TaskDefinition` 新增 `scope` 字段，`Config` 新增 `session_tasks` 字段，移除冗余字段
+   - `src/agent/package.cpp`：新增 `parse_flattened_tasks()` 和 `validate_session_tasks()` 函数，支持新旧格式向后兼容
+   - `src/agent/agent.cpp`：新增 `create_session_from_tasks()` 函数，移除对 package.json 冗余字段的依赖
+   - `include/internal/agent/agent.h`：更新函数声明
+
+2. **测试更新**：
+   - `tests/unit/src/test_builtin_workflow_gtest.cpp`：移除对已删除字段的断言
+   - `tests/e2e/workflow_execution/test_basic_agent_e2e.cpp`：移除对 `coordinator_workflow` 的断言
+   - `examples/features/agent_runner.cpp`：移除对 `coordinator_workflow` 的依赖
+
+3. **配置文件更新**：
+   - 10 个 agent.json 文件已转换为扁平化格式
+   - 9 个 package.json 文件已移除冗余字段
+   - `publish/agent/agent.json` 和 `publish/agent/package.json` 已同步更新
+
+4. **向后兼容**：
+   - 解析代码同时支持新旧格式
+   - 旧格式（`sessions` 数组）仍可正常解析
+   - 新格式（扁平化 `tasks` + `scope` 属性）为推荐格式
+
+5. **验证结果**：
+   - `./build.sh build`：通过
+   - `ctest --test-dir build --output-on-failure`：18/19 测试通过（E2ELLMQueryAgent 因 API Key 缺失失败，与本次修改无关）

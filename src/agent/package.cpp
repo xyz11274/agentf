@@ -68,6 +68,16 @@ bool parse_task_definition(const rapidjson::Value& task_value, int expected_inde
     return fail_agent_json_parse("task.type must be a string");
   }
 
+  // Parse scope field (default: "session")
+  if(task_value.HasMember("scope") && task_value["scope"].IsString()) {
+    task_definition.scope = task_value["scope"].GetString();
+    if(task_definition.scope != "agent" && task_definition.scope != "session") {
+      return fail_agent_json_parse("task.scope must be 'agent' or 'session'");
+    }
+  } else {
+    task_definition.scope = "session";  // Default scope
+  }
+
   const bool is_session_task = task_definition.task_type == "dispatcher"
                                || task_definition.task_type == "coordinator"
                                || task_definition.task_type == "skill";
@@ -304,6 +314,75 @@ bool parse_agent_limits(const rapidjson::Document& agent_doc, AgentPackage::Conf
   return true;
 }
 
+// Parse flattened tasks with scope attribute (new format)
+// Supports both new flattened format and legacy sessions format
+bool parse_flattened_tasks(const rapidjson::Document& agent_doc,
+                           std::vector<AgentPackage::TaskDefinition>& session_tasks,
+                           AgentPackage::TaskDefinition& contextupdater_task,
+                           bool& has_contextupdater) {
+  if(!agent_doc.HasMember("tasks") || !agent_doc["tasks"].IsArray()) {
+    return true;  // No flattened tasks, will use legacy format
+  }
+
+  const auto& tasks = agent_doc["tasks"];
+  has_contextupdater = false;
+
+  int session_task_index = 0;
+  for(rapidjson::SizeType i = 0; i < tasks.Size(); ++i) {
+    AgentPackage::TaskDefinition task_definition;
+    if(!parse_task_definition(tasks[i], static_cast<int>(i), task_definition, true)) {
+      return false;
+    }
+
+    if(task_definition.scope == "agent") {
+      // Agent-level task (e.g., contextupdater)
+      if(task_definition.task_type != "contextupdater") {
+        return fail_agent_json_parse("agent-scope tasks currently only support contextupdater");
+      }
+      if(has_contextupdater) {
+        return fail_agent_json_parse("only one agent-scope contextupdater allowed");
+      }
+      contextupdater_task = task_definition;
+      has_contextupdater = true;
+    } else {
+      // Session-level task (scope == "session")
+      // Re-index session tasks to be contiguous starting from 0
+      task_definition.task_index = session_task_index++;
+      session_tasks.push_back(task_definition);
+    }
+  }
+
+  return true;
+}
+
+// Validate session tasks: must have exactly 1 dispatcher, 1 coordinator, and at least 1 skill
+bool validate_session_tasks(const std::vector<AgentPackage::TaskDefinition>& session_tasks) {
+  int dispatcher_count = 0;
+  int coordinator_count = 0;
+  int skill_count = 0;
+
+  for(const auto& task : session_tasks) {
+    if(task.task_type == "dispatcher") {
+      ++dispatcher_count;
+    } else if(task.task_type == "coordinator") {
+      ++coordinator_count;
+    } else if(task.task_type == "skill") {
+      ++skill_count;
+    }
+  }
+
+  if(dispatcher_count != 1) {
+    return fail_agent_json_parse("session tasks must contain exactly one dispatcher task");
+  }
+  if(coordinator_count != 1) {
+    return fail_agent_json_parse("session tasks must contain exactly one coordinator task");
+  }
+  if(skill_count < 1) {
+    return fail_agent_json_parse("session tasks must contain at least one skill task");
+  }
+  return true;
+}
+
 std::string resolve_builtin_workflow_file(const std::filesystem::path& root_path,
                                           const std::string& builtin_name) {
   namespace fs = std::filesystem;
@@ -399,32 +478,6 @@ std::shared_ptr<AgentPackage> AgentPackage::load_from_directory(const std::strin
     }
   }
 
-  if(doc.HasMember("dispatcher_workflow") && doc["dispatcher_workflow"].IsString()) {
-    config.dispatcher_workflow = doc["dispatcher_workflow"].GetString();
-  }
-  if(doc.HasMember("coordinator_workflow") && doc["coordinator_workflow"].IsString()) {
-    config.coordinator_workflow = doc["coordinator_workflow"].GetString();
-  }
-  if(doc.HasMember("task_workflows") && doc["task_workflows"].IsObject()) {
-    for(auto& m : doc["task_workflows"].GetObject()) {
-      if(m.value.IsString()) {
-        config.task_workflows[m.name.GetString()] = m.value.GetString();
-      }
-    }
-  }
-  if(doc.HasMember("agent_context_workflow") && doc["agent_context_workflow"].IsString()) {
-    config.agent_context_workflow = doc["agent_context_workflow"].GetString();
-  }
-  if(doc.HasMember("session_context_workflow") && doc["session_context_workflow"].IsString()) {
-    config.session_context_workflow = doc["session_context_workflow"].GetString();
-  }
-  if(doc.HasMember("task_context_workflow") && doc["task_context_workflow"].IsString()) {
-    config.task_context_workflow = doc["task_context_workflow"].GetString();
-  }
-  if(doc.HasMember("node_context_workflow") && doc["node_context_workflow"].IsString()) {
-    config.node_context_workflow = doc["node_context_workflow"].GetString();
-  }
-
   const fs::path agent_json_path = root_path / "agent.json";
   if(fs::exists(agent_json_path)) {
     std::ifstream agent_ifs(agent_json_path);
@@ -441,20 +494,43 @@ std::shared_ptr<AgentPackage> AgentPackage::load_from_directory(const std::strin
       return nullptr;
     }
 
-    if(!parse_agent_sessions(agent_doc, config.sessions, config.session_pool_size)) {
-      return nullptr;
+    // Try new flattened format first (tasks with scope attribute)
+    bool has_flattened_tasks = agent_doc.HasMember("tasks") && agent_doc["tasks"].IsArray()
+                               && !agent_doc.HasMember("sessions");
+
+    if(has_flattened_tasks) {
+      // New flattened format: tasks with scope attribute
+      if(!parse_flattened_tasks(agent_doc, config.session_tasks, config.contextupdater_task,
+                                 config.has_contextupdater)) {
+        return nullptr;
+      }
+      if(!validate_session_tasks(config.session_tasks)) {
+        return nullptr;
+      }
+      if(agent_doc.HasMember("session_pool_size")) {
+        if(!agent_doc["session_pool_size"].IsInt()) {
+          std::cerr << "Invalid agent.json: session_pool_size must be an integer" << std::endl;
+          return nullptr;
+        }
+        config.session_pool_size = agent_doc["session_pool_size"].GetInt();
+        if(config.session_pool_size < 1) {
+          std::cerr << "Invalid agent.json: session_pool_size must be >= 1" << std::endl;
+          return nullptr;
+        }
+      } else {
+        config.session_pool_size = 1;
+      }
+    } else {
+      // Legacy format: sessions array
+      if(!parse_agent_sessions(agent_doc, config.sessions, config.session_pool_size)) {
+        return nullptr;
+      }
+      if(!parse_top_level_tasks(agent_doc, config.contextupdater_task, config.has_contextupdater)) {
+        return nullptr;
+      }
     }
     if(!parse_agent_limits(agent_doc, config)) {
       return nullptr;
-    }
-    if(!parse_top_level_tasks(agent_doc, config.contextupdater_task, config.has_contextupdater)) {
-      return nullptr;
-    }
-    if(agent_doc.HasMember("dispatcher_workflow") && agent_doc["dispatcher_workflow"].IsString()) {
-      config.dispatcher_workflow = agent_doc["dispatcher_workflow"].GetString();
-    }
-    if(agent_doc.HasMember("coordinator_workflow") && agent_doc["coordinator_workflow"].IsString()) {
-      config.coordinator_workflow = agent_doc["coordinator_workflow"].GetString();
     }
   }
 

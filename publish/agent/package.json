@@ -1,8 +1,6 @@
 {
   "name": "SampleAgent",
   "version": "1.0.0",
-  "package_type": "release",
-  "agent_version": "1.0.0",
   "description": "Sample AgentFlow agent package",
   "file_manifest": [
     "package.json",
@@ -11,10 +9,5 @@
   "builtin_workflows": [
     "memory",
     "tools"
-  ],
-  "coordinator_workflow": "coordinator-workflow-v1",
-  "task_workflows": {
-    "dispatcher": "coordinator-workflow-v1",
-    "coordinator": "coordinator-workflow-v1"
-  }
+  ]
 }

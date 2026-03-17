@@ -1,8 +1,6 @@
 {
   "name": "llm-query-agent",
   "version": "1.0.0",
-  "package_type": "release",
-  "agent_version": "1.0.0",
   "description": "Dispatcher/coordinator/skill example with local echo and optional llm-query execution",
   "author": "AgentFlow Team",
   "workflows": [
@@ -11,12 +9,6 @@
     "coordinator_workflow.json",
     "echo_workflow.json"
   ],
-  "coordinator_workflow": "llm-query-coordinator-workflow",
-  "task_workflows": {
-    "dispatcher": "llm-query-dispatcher-workflow",
-    "coordinator": "llm-query-coordinator-workflow",
-    "skill:llm-query-skill": "llm-query-workflow"
-  },
   "metadata": {
     "type": "example",
     "category": "llm",
