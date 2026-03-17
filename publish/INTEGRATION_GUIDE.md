@@ -1,8 +1,8 @@
 # AgentFlow 服务集成指南
 
 > 本文档面向服务开发者，说明如何将 AgentFlow 框架集成到一个服务中。
-> - 文档版本：v1.1
-> - 更新日期：2026-03-16
+> - 文档版本：v1.2
+> - 更新日期：2026-03-17
 
 ---
 
@@ -1381,6 +1381,181 @@ private:
 4. **错误处理**：
    - 回调抛出异常时，框架会记录错误日志并继续处理对话
    - 建议在回调内部捕获并处理所有异常
+
+### 7.5 Skill 参数槽位校验
+
+框架提供参数槽位校验机制，允许在 skill 启动前验证其执行所需的参数是否可用。
+
+#### 7.5.1 配置 expected_parameters
+
+在 `agent.json` 中为 skill 任务声明预期参数：
+
+```json
+{
+  "tasks": [
+    {
+      "id": 3,
+      "type": "skill",
+      "description": "Travel booking skill",
+      "workflow_file": "skill_travel_workflow.json",
+      "skill": {
+        "name": "travel",
+        "config_dir": "runtime",
+        "instance_pool_size": 2,
+        "expected_parameters": ["destination", "date", "travelers"]
+      }
+    }
+  ]
+}
+```
+
+**字段说明**：
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `expected_parameters` | `string[]` | 否 | `[]` | Skill 执行所需的参数名列表 |
+
+#### 7.5.2 输出 available_parameters
+
+Workflow 完成时输出 `available_parameters`，提供当前可用的参数值：
+
+**优先级策略**：
+
+1. **消息 metadata（推荐）**：放入 workflow 完成消息的 metadata 中
+2. **DataBus（向后兼容）**：存入 DataBus，用于兼容旧版本
+
+**消息 metadata 方式**：
+
+```cpp
+// 在 workflow 完成时设置
+MMAgentMsgQue::Message completion_message;
+completion_message.content = "workflow_completed";
+completion_message.metadata["next_skills"] = R"(["travel"])";
+completion_message.metadata["available_parameters"] = R"({
+  "travel": {
+    "destination": "Beijing",
+    "date": "2024-03-20",
+    "travelers": "2"
+  }
+})";
+```
+
+**DataBus 方式**：
+
+```cpp
+// 存储到 DataBus
+std::string dialogue_id = "abc123";
+std::string params_json = R"({
+  "travel": {
+    "destination": "Beijing",
+    "date": "2024-03-20"
+  }
+})";
+databus.put(dialogue_id + "/available_parameters", params_json);
+```
+
+**数据结构**：
+
+```typescript
+// available_parameters 结构（参数值仅支持 string 类型）
+{
+  [skill_name: string]: {
+    [parameter_name: string]: string
+  }
+}
+```
+
+#### 7.5.3 校验流程
+
+框架在启动 skill 前自动执行校验：
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Skill Launch with Validation                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. Get skill template's expected_parameters                    │
+│                                                                  │
+│  2. If expected_parameters is empty                             │
+│     └─> Skip validation, launch skill directly                  │
+│                                                                  │
+│  3. Get available_parameters (priority: metadata > DataBus)     │
+│                                                                  │
+│  4. For each expected_parameter:                                │
+│     └─> Check if exists in available_parameters[skill_name]     │
+│                                                                  │
+│  5. If all expected parameters are covered:                     │
+│     └─> Launch skill task                                       │
+│                                                                  │
+│  6. If any expected parameter is missing:                       │
+│     └─> Skip skill launch                                       │
+│     └─> Send failure message to coordinator                     │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### 7.5.4 失败消息格式
+
+参数校验失败时，框架向 coordinator 发送失败消息：
+
+```cpp
+MMAgentMsgQue::Message failure_message;
+failure_message.message_id = "skill-failure-travel-abc123";
+failure_message.sender_id = "framework";
+failure_message.receiver_id = coordinator_task_id;
+failure_message.content = "skill_launch_failed";
+
+// Metadata fields
+failure_message.metadata["task_type"] = "skill_response";
+failure_message.metadata["message_type"] = "skill_launch_failed";
+failure_message.metadata["skill_name"] = "travel";
+failure_message.metadata["failure_reason"] = "parameter_validation_failed";
+failure_message.metadata["expected_parameters"] = R"(["destination", "date", "travelers"])";
+failure_message.metadata["available_parameters"] = R"({"destination": "Beijing", "date": "2024-03-20"})";
+failure_message.metadata["missing_parameters"] = R"(["travelers"])";
+```
+
+**Metadata 字段说明**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `task_type` | string | 固定为 `"skill_response"` |
+| `message_type` | string | `"skill_launch_failed"` 标识启动失败 |
+| `skill_name` | string | 失败的 skill 名称 |
+| `failure_reason` | string | 失败原因，此处为 `"parameter_validation_failed"` |
+| `expected_parameters` | string | JSON 序列化的预期参数列表 |
+| `available_parameters` | string | JSON 序列化的可用参数对象 |
+| `missing_parameters` | string | JSON 序列化的缺失参数列表 |
+
+#### 7.5.5 Coordinator 处理示例
+
+Coordinator 可以处理失败消息并采取相应行动：
+
+```cpp
+void handle_skill_launch_failure(const MMAgentMsgQue::Message& message) {
+    if (message.metadata.at("message_type") == "skill_launch_failed") {
+        std::string skill_name = message.metadata.at("skill_name");
+        std::string missing_params = message.metadata.at("missing_parameters");
+
+        // 选项1：向用户请求补充信息
+        std::string prompt = "Please provide the following information: " + missing_params;
+        send_user_prompt(prompt);
+
+        // 选项2：记录日志并降级处理
+        LOG(INFO) << "Skill " << skill_name << " launch failed. Missing: " << missing_params;
+
+        // 选项3：尝试使用默认值重试
+        // ...
+    }
+}
+```
+
+#### 7.5.6 向后兼容性
+
+- `expected_parameters` 为可选字段，未配置时行为与当前一致
+- `available_parameters` 为可选输出，未提供时视为空对象
+- 框架优先从消息 metadata 读取，DataBus 作为 fallback
+- 完全向后兼容现有 agent.json 和 workflow
 
 ---
 
