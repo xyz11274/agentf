@@ -357,6 +357,7 @@ struct Config {
     int worker_control_threads = 1;           // 控制线程数
     int worker_business_threads = 1;          // 业务线程数
     size_t worker_queue_size = 1024;          // Worker 队列大小
+    std::string plugin_uds_path;              // Plugin UDS 路径（注入到节点进程）
 };
 ```
 
@@ -731,6 +732,7 @@ struct Config {
     int control_threads = 1;                  // 控制线程数
     int business_threads = 1;                 // 业务线程数
     size_t max_queue_size = 1024;             // 最大队列大小
+    std::string plugin_uds_path;              // Plugin UDS 路径（注入到节点进程）
 };
 ```
 
@@ -804,6 +806,7 @@ struct ExecutionRequest {
     bool keep_databus_files = false;  // 保留 DataBus 文件
     bool enable_hot_reload = false;   // 启用热点重载
     HotReloadConfig hot_reload_config; // 热点重载配置
+    std::string plugin_uds_path;      // Plugin UDS 路径（注入为 AF_PLUGIN_UDS_FILE）
     struct LLMServiceConfig {
         std::string base_url;
         std::string api_key;
@@ -824,6 +827,121 @@ struct ExecutionRequest {
 | `PYTHON_SCRIPT` | Python 脚本 |
 | `JAVA_JAR` | Java JAR |
 | `SO_LIBRARY` | 动态库 |
+
+### 5.5 Plugin UDS 注入机制
+
+框架支持将插件 Unix Domain Socket (UDS) 路径注入到节点进程中，使节点能够通过 UDS 与外部插件服务通信。
+
+#### 5.5.1 配置方式
+
+**方式一：Runtime 配置（推荐）**
+
+在初始化 Runtime 时配置 `plugin_uds_path`：
+
+```cpp
+runtime::MMAgentRuntime::Config config;
+config.worker_threads = 4;
+config.plugin_uds_path = "/var/run/my_plugin.sock";
+
+auto runtime = std::make_shared<runtime::MMAgentRuntime>(config);
+```
+
+**方式二：环境变量覆盖**
+
+框架启动时检查 `AF_PLUGIN_UDS_FILE` 环境变量：
+
+```bash
+export AF_PLUGIN_UDS_FILE=/var/run/my_plugin.sock
+./my_agent_service
+```
+
+#### 5.5.2 配置传递链路
+
+```
+MMAgentRuntime::Config.plugin_uds_path
+         ↓
+MMWorkerEngine::Config.plugin_uds_path
+         ↓
+ExecutionRequest.plugin_uds_path
+         ↓
+AF_PLUGIN_UDS_FILE 环境变量 (注入到节点进程)
+```
+
+#### 5.5.3 节点进程访问
+
+节点进程通过环境变量 `AF_PLUGIN_UDS_FILE` 获取插件 UDS 路径：
+
+**Shell Script**：
+
+```bash
+#!/bin/bash
+PLUGIN_UDS="${AF_PLUGIN_UDS_FILE:-}"
+if [ -n "$PLUGIN_UDS" ]; then
+  echo "Plugin UDS path: $PLUGIN_UDS"
+  # 通过 socat 或 nc 与插件服务通信
+fi
+```
+
+**Python Script**：
+
+```python
+import os
+
+plugin_uds = os.environ.get('AF_PLUGIN_UDS_FILE')
+if plugin_uds:
+    import socket
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.connect(plugin_uds)
+    # 与插件服务通信...
+```
+
+**Go Script**：
+
+```go
+package main
+
+import (
+    "os"
+    "net"
+)
+
+func main() {
+    pluginUDS := os.Getenv("AF_PLUGIN_UDS_FILE")
+    if pluginUDS != "" {
+        conn, err := net.Dial("unix", pluginUDS)
+        if err == nil {
+            defer conn.Close()
+            // 与插件服务通信...
+        }
+    }
+}
+```
+
+#### 5.5.4 SO Library 节点
+
+SO Library 节点可通过 `getenv` 获取插件 UDS 路径：
+
+```cpp
+#include <cstdlib>
+
+extern "C" void my_node_v3(
+    const SoDataMap& inputs,
+    SoDataMap& outputs,
+    INodeDataBusClient* client) {
+
+  // 通过环境变量获取插件 UDS 路径
+  const char* plugin_uds = std::getenv("AF_PLUGIN_UDS_FILE");
+  if(plugin_uds) {
+    // 连接插件服务...
+  }
+}
+```
+
+#### 5.5.5 向后兼容性
+
+- `plugin_uds_path` 为可选配置，未配置时不注入 `AF_PLUGIN_UDS_FILE` 环境变量
+- 现有节点代码无需修改，`AF_PLUGIN_UDS_FILE` 环境变量不存在时节点正常运行
+- 完全向后兼容现有 Runtime、Worker 和节点实现
 
 ---
 

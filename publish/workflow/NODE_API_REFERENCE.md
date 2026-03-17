@@ -44,6 +44,47 @@ extern "C" void my_node_v3(
 
 **跨 Session 数据共享**：使用 `client->raw()` 获取原始 DataBus 访问，用于读取全局配置。
 
+### Plugin UDS 访问
+
+SO Library 节点可通过环境变量获取插件 UDS 路径，用于与外部插件服务通信：
+
+```cpp
+#include <cstdlib>
+
+extern "C" void my_node_v3(
+    const SoDataMap& inputs,
+    SoDataMap& outputs,
+    INodeDataBusClient* client) {
+
+  // 通过环境变量获取插件 UDS 路径
+  const char* plugin_uds = std::getenv("AF_PLUGIN_UDS_FILE");
+  if(plugin_uds) {
+    // 连接插件服务...
+    // int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    // struct sockaddr_un addr;
+    // addr.sun_family = AF_UNIX;
+    // strncpy(addr.sun_path, plugin_uds, sizeof(addr.sun_path) - 1);
+    // connect(fd, (struct sockaddr*)&addr, sizeof(addr));
+  }
+}
+```
+
+**环境变量说明**：
+
+| 变量名 | 说明 |
+|--------|------|
+| `AF_PLUGIN_UDS_FILE` | 插件 UDS 路径，由 Runtime 配置的 `plugin_uds_path` 注入 |
+| `AF_DATABUS_UDS_FILE` | DataBus UDS 路径，用于实时 DataBus 访问 |
+
+**配置方式**：在 Runtime 初始化时设置：
+
+```cpp
+runtime::MMAgentRuntime::Config config;
+config.plugin_uds_path = "/var/run/my_plugin.sock";
+```
+
+详见 [INTEGRATION_GUIDE.md](../INTEGRATION_GUIDE.md#55-plugin-uds-注入机制)。
+
 ### V2 签名（向后兼容）
 
 原始 DataBus 访问，无 session 隔离：

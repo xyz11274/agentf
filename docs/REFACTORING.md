@@ -2915,8 +2915,8 @@ struct ExecutionRequest {
 
 | 文档 | 更新内容 | 状态 |
 |------|----------|------|
-| `publish/INTEGRATION_GUIDE.md` | 新增 `AF_PLUGIN_UDS_FILE` 环境变量说明、配置方式和节点访问示例 | 待实施 |
-| `publish/workflow/NODE_API_REFERENCE.md` | 新增 SO Library 节点获取插件 UDS 路径的方法说明 | 待实施 |
+| `publish/INTEGRATION_GUIDE.md` | 新增 `AF_PLUGIN_UDS_FILE` 环境变量说明、配置方式和节点访问示例 | ✅ 已完成 |
+| `publish/workflow/NODE_API_REFERENCE.md` | 新增 SO Library 节点获取插件 UDS 路径的方法说明 | ✅ 已完成 |
 | `docs/REFACTORING.md` | 本设计文档 | ✅ 已完成 |
 
 ---
@@ -2966,5 +2966,6 @@ struct ExecutionRequest {
 - `./build.sh build`：✅ 通过
 - `ctest --test-dir build --output-on-failure`：✅ 18/19 测试通过（E2ELLMQueryAgent 因 API Key 缺失失败，与本次修改无关）
 
-**待实施**：
-- 文档更新（INTEGRATION_GUIDE.md, NODE_API_REFERENCE.md）
+**文档更新**：✅ 已完成
+- `publish/INTEGRATION_GUIDE.md` - 新增 Plugin UDS 注入机制说明
+- `publish/workflow/NODE_API_REFERENCE.md` - 新增 SO Library 节点获取插件 UDS 路径方法
