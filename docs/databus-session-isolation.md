@@ -14,6 +14,7 @@ AgentFlow's DataBus provides session-level data isolation, ensuring that data fr
 |-------|-------|----------------|
 | Agent | Per agent instance | Separate MMDataBus instances per agent_id |
 | Session | Per conversation/session | Key prefix `/session/{session-id}/` |
+| Dialogue | Per parallel dialogue within session | Workflow input key prefix `{dialogue_id}/` |
 | Namespace | Per data category | Key prefix `/session/{session-id}/{namespace}/` |
 
 ### Session ID
@@ -29,6 +30,53 @@ All session-isolated data follows the key structure:
 ```
 
 Example: `/session/550e8400-e29b-41d4-a716-446655440000/user/my_data`
+
+## Dialogue-Level Isolation for Workflow Inputs
+
+### Problem
+
+When multiple dialogues execute in parallel within a single session (e.g., multi-turn conversations or concurrent skill tasks), workflow inputs stored without dialogue isolation could collide, causing nodes to receive incorrect input data.
+
+### Solution
+
+Workflow inputs are stored with a `{dialogue_id}/` prefix on the agent's internal DataBus:
+
+```
+{dialogue_id}/{input_key}
+```
+
+Example: `4929870447123124133/user_text`
+
+### Implementation Details
+
+**Storage (execute_workflow)**:
+```cpp
+// In src/runtime/runtime.cpp
+std::string input_prefix = dialogue_id.empty() ? "" : dialogue_id + "/";
+for(const auto& pair : inputs) {
+  agent->publish_data(input_prefix + pair.first, pair.second);
+}
+```
+
+**Retrieval (process_node)**:
+```cpp
+// In src/runtime/runtime.cpp
+std::string input_prefix = workflow_dialogue_id.empty() ? "" : workflow_dialogue_id + "/";
+for(const auto& key : node->get_input_params()) {
+  if(agent->get_data(input_prefix + key, val)) {
+    hydrated[key] = val;
+  } else if(agent->get_data(key, val)) {
+    // Fallback: try without prefix for backward compatibility
+    hydrated[key] = val;
+  }
+}
+```
+
+### Backward Compatibility
+
+- If `dialogue_id` is empty, inputs are stored without prefix (legacy behavior)
+- Retrieval falls back to unprefixed keys if prefixed key not found
+- Existing code continues to work without modification
 
 ## Namespaces
 
