@@ -1,5 +1,265 @@
 # 项目目录结构优化说明
 
+## 2026-03-18 Node 输出数据冲突问题修复（待实施）
+
+### 背景
+
+当同一 workflow 下多个 node 并行执行时（如 fork 模式），如果不同 node 输出同名 key，会导致 DataBus 数据冲突。
+
+### 问题分析
+
+**当前实现**（`src/runtime/runtime.cpp:655-679`）：
+
+```cpp
+for(const auto& out : node_outputs) {
+  // 1. 带 dialogue_id 前缀
+  output_key = flow_dialogue_id + "/" + out.first;  // dialogue_123/result
+
+  // 2. 带 workflow.node 前缀（安全）
+  scoped_key = flow_dialogue_id + "/" + workflow->get_id() + "." + node->get_id() + "." + out.first;
+
+  // 3. 不带前缀（向后兼容）- 问题所在
+  agent->publish_data(out.first, out.second);  // result
+}
+```
+
+**冲突场景**：
+
+**场景一：并行 node 输出同名 key 覆盖**
+
+```
+Workflow: fork_workflow
+  ├── node_a (并行执行，输出 result="A")
+  └── node_b (并行执行，输出 result="B")
+
+DataBus keys:
+  dialogue_123/result              → A 或 B（冲突！）
+  dialogue_123/fork_workflow.node_a.result → "A" ✅
+  dialogue_123/fork_workflow.node_b.result → "B" ✅
+  result                           → A 或 B（冲突！）
+```
+
+**场景二：多入边 node 消费多个源 node 输出（关键场景）**
+
+```
+Workflow: fork_join_workflow
+  ├── node_a (并行执行，输出 result="A")
+  │
+  ├── node_b (并行执行，输出 result="B")
+  │
+  └── node_c (被 node_a 和 node_b 同时指向，需要消费两者的输出)
+
+问题：
+  - node_a 和 node_b 都输出 `result` key
+  - node_c 如何区分并消费两个源 node 的输出？
+  - 当前实现：node_c 读取 `result` 只能拿到一个值（被覆盖）
+```
+
+这是更本质的问题：**下游 node 需要同时消费多个上游 node 的同名输出**。
+
+**影响范围**：
+- 串行 workflow：无影响
+- Fork 并行 + 相同输出 key：下游 node 可能读到错误数据
+- **Fork-Join 模式**：下游 node 无法正确消费多个上游输出
+
+### 备选方案
+
+#### 方案一：Edge 数据映射（推荐）
+
+**思路**：利用 Edge 的 `source_outputs` / `target_inputs` 配置，实现显式数据映射。
+
+**场景二解决方案**：
+
+```json
+// Workflow 配置
+{
+  "nodes": [
+    {"id": "node_a", ...},
+    {"id": "node_b", ...},
+    {"id": "node_c", ...}
+  ],
+  "edges": [
+    {
+      "id": "edge_a_c",
+      "source_node": "node_a",
+      "target_node": "node_c",
+      "source_outputs": ["result"],
+      "target_inputs": ["result_from_a"]
+    },
+    {
+      "id": "edge_b_c",
+      "source_node": "node_b",
+      "target_node": "node_c",
+      "source_outputs": ["result"],
+      "target_inputs": ["result_from_b"]
+    }
+  ]
+}
+```
+
+**数据流**：
+
+```
+node_a 输出 result="A"
+  → Edge edge_a_c 映射
+  → node_c.inputs["result_from_a"] = "A"
+
+node_b 输出 result="B"
+  → Edge edge_b_c 映射
+  → node_c.inputs["result_from_b"] = "B"
+
+最终 node_c.inputs = { "result_from_a": "A", "result_from_b": "B" }
+```
+
+**当前 Edge 配置**（已解析但未使用）：
+
+```json
+{
+  "id": "edge_a_to_b",
+  "source_node": "node_a",
+  "target_node": "node_b",
+  "source_outputs": ["result"],
+  "target_inputs": ["input_data"],
+  "transfer_mode": "copy"
+}
+```
+
+**实现路径**：
+
+1. 在 `process_node()` 中查找当前 node 的入边
+2. 对每个入边调用 `edge->transfer_data(source_outputs, target_inputs)`
+3. 将映射后的数据注入 node inputs
+
+**优点**：
+- ✅ **完美解决多入边场景**：每条边可映射到不同 key
+- 数据流显式声明，workflow 更清晰
+- 支持 key 重命名（`result` → `input_data`）
+- 支持 `REFERENCE` 模式（传递 DataBus URI 而非值）
+
+**缺点**：
+- 实现复杂度中等，需修改 `process_node()` 逻辑
+- 现有 workflow 需补充 Edge 的 `source_outputs` / `target_inputs` 配置
+
+**代码变更示意**：
+
+```cpp
+// process_node() 中的新增逻辑
+for(const auto& edge : workflow->get_edges()) {
+  if(edge->get_target() != node->get_id()) continue;
+
+  auto source_node = workflow->get_node(edge->get_source());
+  if(!source_node) continue;
+
+  DataMap source_data = source_node->get_outputs();
+  DataMap target_data;
+  edge->transfer_data(source_data, target_data);
+
+  // 将映射后的数据注入 node inputs
+  for(const auto& kv : target_data) {
+    hydrated[kv.first] = kv.second;
+  }
+}
+```
+
+#### 方案二：DataBus Key 加前缀（移除无前缀发布）
+
+**思路**：移除不带前缀的发布，仅保留带前缀的安全格式。
+
+**当前发布格式**：
+
+| 格式 | 示例 | 是否安全 |
+|------|------|----------|
+| `{dialogue_id}/{key}` | `dialogue_123/result` | ❌ 并行 node 冲突 |
+| `{dialogue_id}/{workflow}.{node}.{key}` | `dialogue_123/wf.node_a.result` | ✅ |
+| `{key}` (无前缀) | `result` | ❌ 并行 node 冲突 |
+
+**场景二解决方案**：
+
+```
+node_a 发布: dialogue_123/fork_join.node_a.result = "A"
+node_b 发布: dialogue_123/fork_join.node_b.result = "B"
+
+node_c 需要知道上游 node 名称，主动读取：
+  - inputs["node_a.result"] 或
+  - inputs["node_b.result"]
+```
+
+**问题**：
+- ❌ node_c 需要硬编码上游 node 名称
+- ❌ 无法通过 `input_params` 简单声明
+- ❌ workflow 耦合度高，修改上游 node 名称会影响下游
+
+**优点**：
+- 实现简单，仅需删除代码
+- 完全消除冲突风险
+- 保持现有 DataBus 驱动机制
+
+**缺点**：
+- 破坏向后兼容性
+- 下游 node 需知道上游 node 的输出路径
+- 简单 workflow 也需使用完整路径
+
+**代码变更示意**：
+
+```cpp
+// 简化 process_node() 输出发布
+for(const auto& out : node_outputs) {
+  // 仅保留带 workflow.node 前缀的格式
+  std::string scoped_key = flow_dialogue_id + "/" + workflow->get_id() + "." + node->get_id() + "." + out.first;
+  agent->publish_data(scoped_key, out.second);
+  bus.put(scoped_key, out.second);
+
+  // 移除：不带前缀的发布
+  // agent->publish_data(out.first, out.second);  // 删除
+}
+```
+
+#### 方案三：混合方案
+
+**思路**：保留无前缀发布，但下游 node 优先通过 Edge 映射获取数据，无配置时 fallback 到当前逻辑。
+
+**场景二解决方案**：
+
+- 有 Edge 配置时：使用方案一的映射逻辑
+- 无 Edge 配置时：fallback 到当前 DataBus 读取逻辑
+
+**问题**：
+- ⚠️ 无法解决多入边场景：如果 Edge 无 `target_inputs` 配置，仍然会覆盖
+- ⚠️ 优先级逻辑复杂，容易出错
+
+### 方案对比
+
+| 维度 | 方案一：Edge 映射 | 方案二：移除无前缀 | 方案三：混合方案 |
+|------|------------------|-------------------|-----------------|
+| 实现复杂度 | 中 | 低 | 高 |
+| 向后兼容 | ⚠️ 需补充 Edge 配置 | ❌ 破坏兼容 | ✅ 完全兼容 |
+| 数据流清晰度 | ✅ 显式声明 | ⚠️ 隐式约定 | ⚠️ 优先级约定 |
+| **多入边场景** | ✅ **完美解决** | ❌ 下游需硬编码上游名称 | ❌ 未解决 |
+| 冲突解决 | ✅ 完全解决 | ✅ 完全解决 | ⚠️ 部分解决 |
+| 迁移成本 | 中 | 高 | 低 |
+
+### 结论
+
+**推荐方案一（Edge 数据映射）**，理由：
+
+1. **唯一能正确解决多入边场景**：下游 node 通过不同 key 消费多个上游输出
+2. **数据流显式声明**：Edge 配置清晰表达数据流向
+3. **已有基础设施**：`transfer_data()` 已实现，仅需调用
+
+**实施步骤**：
+
+1. 修改 `process_node()` 在 input hydration 前增加 Edge 数据映射逻辑
+2. 遍历入边，调用 `edge->transfer_data()` 获取映射后的数据
+3. 将映射数据合并到 hydrated inputs
+4. 如果 Edge 无 `source_outputs` / `target_inputs` 配置，保持当前行为（fallback）
+5. 补充单元测试验证多入边场景
+
+### 状态
+
+- [ ] 待实施
+
+---
+
 ## 2026-03-18 Workflow Input Dialogue 级别隔离
 
 ### 背景
