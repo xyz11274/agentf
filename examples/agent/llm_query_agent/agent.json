@@ -13,20 +13,20 @@
       "scope": "agent"
     },
     {
-      "id": 0,
+      "id": 1,
       "type": "dispatcher",
       "description": "Dispatch user requests",
       "next_skills": ["llm-query-skill"],
       "max_concurrent_skills": 1
     },
     {
-      "id": 1,
+      "id": 2,
       "type": "coordinator",
       "description": "Coordinate responses",
       "workflow_pool_size": 1
     },
     {
-      "id": 2,
+      "id": 3,
       "type": "skill",
       "description": "LLM query skill",
       "workflow_file": "llm_query_workflow.json",

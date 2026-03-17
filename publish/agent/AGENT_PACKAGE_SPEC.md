@@ -39,15 +39,14 @@ MMAgent 运行时元数据，至少包含：
 - `session_pool_size`：预创建 session 池大小（>= 1），按同一份 session 模板实例化
 - `max_workflows`：agent 允许装载的 workflow 上限（>= 1）
 - `max_concurrent_workflows`：agent 允许的并发 workflow 上限（>= 1）
-- `tasks`：agent 级任务列表；当前要求包含 1 个 `contextupdater` 任务
-- `sessions`：同质化 session 模板定义，固定只配置 1 个 session
-  - `session.id`：固定为 `0`，表示模板编号
-  - `session.description`
-  - `session.task_count`
-  - `session.tasks`
+- `tasks`：任务列表，通过 `scope` 属性区分层级：
+  - `scope: "agent"`：Agent 级任务（如 `contextupdater`）
+  - `scope: "session"` 或缺省：Session 级任务（`dispatcher` / `coordinator` / `skill`）
 - `task.id`：从 `0` 开始连续编号
-- 顶层 `tasks[].type`：当前固定为 `contextupdater`
-- `session.tasks[].type`：`dispatcher` / `coordinator` / `skill`
+- `task.scope`：任务作用域，`"agent"` 或 `"session"`（默认 `"session"`）
+- `task.type`：任务类型
+  - Agent 级：`contextupdater`
+  - Session 级：`dispatcher` / `coordinator` / `skill`
 - `task.workflow_file`：任务绑定的 workflow 文件
   - 对于 `dispatcher` 类型，`workflow_file` 为可选字段（Dispatcher 是框架内置 workflow）
 - `task.workflow_pool_size`：workflow 多实例池大小（>= 1，默认 1）；runtime 会按该值预创建 workflow 实例池
@@ -73,6 +72,82 @@ MMAgent 运行时元数据，至少包含：
 - `dispatcher` / `coordinator` 是特殊 task：workflow 输出 `selected_skills` 后，agent 会继续把这些 skill 具象化为 runtime task。
 - 每个 session 模板必须包含 1 个 `dispatcher`、1 个 `coordinator`，以及至少 1 个 `skill`
 
+#### 3.1.1 扁平化结构示例
+
+```json
+{
+  "name": "BasicAgent",
+  "version": "1.0.0",
+  "description": "Basic execution agent example",
+  "session_pool_size": 2,
+  "max_workflows": 10,
+  "max_concurrent_workflows": 5,
+  "tasks": [
+    {
+      "id": 0,
+      "type": "contextupdater",
+      "scope": "agent",
+      "description": "Update agent-level context",
+      "workflow_file": "workflow_01.json",
+      "workflow_pool_size": 2
+    },
+    {
+      "id": 1,
+      "type": "dispatcher",
+      "description": "Dispatch user requests",
+      "workflow_file": "dispatcher_workflow.json",
+      "workflow_pool_size": 3,
+      "next_skills": ["skill1", "skill2"],
+      "max_concurrent_skills": 10
+    },
+    {
+      "id": 2,
+      "type": "coordinator",
+      "description": "Coordinate task outputs",
+      "workflow_file": "coordinator_workflow.json",
+      "workflow_pool_size": 2
+    },
+    {
+      "id": 3,
+      "type": "skill",
+      "description": "Knowledge skill",
+      "workflow_file": "knowledge_workflow.json",
+      "skill": {
+        "name": "knowledge",
+        "config_dir": "skills/knowledge",
+        "instance_pool_size": 2
+      },
+      "workflow_pool_size": 2
+    }
+  ]
+}
+```
+
+#### 3.1.2 向后兼容
+
+框架支持旧版 `sessions` 数组格式的向后兼容解析：
+- 如果存在顶层 `sessions` 数组，则按旧格式解析
+- 如果不存在 `sessions` 数组，则按新的扁平化格式解析
+
+旧格式示例（已废弃，仅用于向后兼容）：
+```json
+{
+  "tasks": [
+    { "id": 0, "type": "contextupdater", "scope": "agent", ... }
+  ],
+  "sessions": [
+    {
+      "id": 0,
+      "tasks": [
+        { "type": "dispatcher", ... },
+        { "type": "coordinator", ... },
+        { "type": "skill", ... }
+      ]
+    }
+  ]
+}
+```
+
 ### 3.2 `agentCard.md`
 MMAgent Prompt/能力卡片，供其他模型或 MMAgent 读取。
 
@@ -88,14 +163,17 @@ MMAgent Prompt/能力卡片，供其他模型或 MMAgent 读取。
 
 ### 3.5 `package.json`
 外层发布包描述文件，建议包含：
-- 包名/版本/类型
-- agent 版本
-- 功能说明
-- 文件清单（manifest）
-- `coordinator_workflow`：可作为 coordinator 任务的默认 workflow
-- `task_workflows`：任务类型到 workflow 的默认映射（如 `dispatcher` / `coordinator` / `contextupdater` / `skill:<name>`）
+- `name`：包名
+- `version`：包版本
+- `description`：功能说明
+- `author`：作者信息
+- `entry_point`：入口 SO 文件名
+- `workflows`：要加载的 workflow 文件列表
+- `builtin_workflows`：内置 workflow 名称列表（如 `memory`）
+- `dependencies`：依赖声明
+- `metadata`：自定义元数据
 
-> 说明：session / task / skill 的主拓扑定义应放在 `agent.json`，`package.json` 负责包级元数据与默认 workflow 映射。
+> 说明：session / task / skill 的主拓扑定义放在 `agent.json`，`package.json` 负责包级元数据与 workflow 文件加载列表。task 与 workflow 的绑定关系由 `agent.json` 的 `tasks[].workflow_file` 定义，运行时自动构建映射。
 
 ### 3.6 运行时消息约定
 

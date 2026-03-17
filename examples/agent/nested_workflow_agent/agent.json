@@ -13,21 +13,21 @@
       "scope": "agent"
     },
     {
-      "id": 0,
+      "id": 1,
       "type": "dispatcher",
       "description": "Dispatch nested workflow requests",
       "workflow_file": "main_workflow.json",
       "workflow_pool_size": 3
     },
     {
-      "id": 1,
+      "id": 2,
       "type": "coordinator",
       "description": "Coordinate nested workflow outputs",
       "workflow_file": "main_workflow.json",
       "workflow_pool_size": 2
     },
     {
-      "id": 2,
+      "id": 3,
       "type": "skill",
       "description": "Run data pipeline skill",
       "workflow_file": "data_pipeline.json",
@@ -39,7 +39,7 @@
       "workflow_pool_size": 2
     },
     {
-      "id": 3,
+      "id": 4,
       "type": "skill",
       "description": "Run validation skill",
       "workflow_file": "validation_workflow.json",
@@ -51,7 +51,7 @@
       "workflow_pool_size": 2
     },
     {
-      "id": 4,
+      "id": 5,
       "type": "skill",
       "description": "Run processing skill",
       "workflow_file": "processing_workflow.json",

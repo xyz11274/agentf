@@ -13,21 +13,21 @@
       "scope": "agent"
     },
     {
-      "id": 0,
+      "id": 1,
       "type": "dispatcher",
       "description": "Dispatch user input into Studio adapter bundle",
       "workflow_file": "dispatcher_workflow.json",
       "workflow_pool_size": 2
     },
     {
-      "id": 1,
+      "id": 2,
       "type": "coordinator",
       "description": "Normalize Studio adapter responses",
       "workflow_file": "coordinator_workflow.json",
       "workflow_pool_size": 1
     },
     {
-      "id": 2,
+      "id": 3,
       "type": "skill",
       "description": "Wrapped Studio bundle skill task",
       "workflow_file": "studio_skill_workflow.json",

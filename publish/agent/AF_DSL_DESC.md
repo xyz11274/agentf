@@ -46,37 +46,36 @@ Agent DSL、Workflow DSL、Node DSL均为json文件，其组合关系如下：
 |session_pool_size|uint|可选|预创建session池大小（>=1）,按同一份session模板实例化|
 |max_workflows|int|必选|agent允许装载的workflow上限（>=1）|
 |max_concurrent_workflows|int|必选|agent允许并发的workflow上限（>=1）|
-|tasks|Task[]|必选|任务数组，Task定义见下文；当前要求包含1各contextupdater任务|
-|sessions|Session[]|必选|同质化session模板定义，固定只配置1个session|
+|tasks|Task[]|必选|任务数组，通过`scope`属性区分Agent级任务和Session级任务|
 
-## 4.2 Session字段描述
-
-|字段|类型|是否必选|说明|
-|-|-|-|-|
-|id|int|必选|从0开始连续编号|
-|description|String|可选|session描述信息|
-|task_count|int|必选|任务数量|
-|tasks|Task[]|任务数组，Task定义见下文，长度和task_count保持一致|
-
-## 4.3 Task字段描述
+## 4.2 Task字段描述
 
 |字段|类型|是否必选|说明|
 |-|-|-|-|
-|id|int|必选|task唯一标识，长度1-128，只能包含以下3种类型：1）字母（A-Z或a-z）；2)数字（0-9）；3)特殊字符：-_|
-|type|string|必选|如果在Agent DSL中，则固定为contextupdater；如果在session中，则可取值：dispatcher/coordinator/skill；|
-|description|String|必选|描述信息|
+|id|int|必选|task唯一标识，从0开始连续编号|
+|scope|string|可选|任务作用域：`"agent"` 或 `"session"`（默认 `"session"`）|
+|type|string|必选|任务类型：`contextupdater`（Agent级）/ `dispatcher` / `coordinator` / `skill`（Session级）|
+|description|String|可选|描述信息|
 |workflow_file|String|必选|任务绑定的workflow文件|
 |skill|Skill|当type==skill时必选|skill描述信息|
-|workflow_pool_size|int|必选|workflow多实例池大小（>=1，默认1）；runtime会按该值预创建workflow实例池|
+|workflow_pool_size|int|可选|workflow多实例池大小（>=1，默认1）；runtime会按该值预创建workflow实例池|
 
-* `workflow_pool_size` 与 `skill.instance_pool_size` 语义不同：
-  * `workflow_pool_size` 描述 task 绑定 workflow 的实例池规模，并由 deployer / scheduler 在运行时建立 workflow 实例与 worker / task 的绑定；
-  * `skill.instance_pool_size` 描述 skill task 自身应展开出的任务实例数。
- 
-* `dispatcher` / `coordinator` 是特殊 task：workflow 输出 `selected_skills` 后，agent 会继续把这些 skill 具象化为 runtime task。
-* 每个 session 模板必须包含 1 个 `dispatcher`、1 个 `coordinator`，以及至少 1 个 `skill`
+**scope 字段说明**：
+- `scope: "agent"`：Agent 级任务，在整个 Agent 生命周期内运行一次（如 `contextupdater`）
+- `scope: "session"` 或缺省：Session 级任务，每个 Session 实例都会创建对应的任务实例
 
-## 4.4 Skill字段描述
+**任务类型与 scope 对应关系**：
+- Agent 级任务（`scope: "agent"`）：`contextupdater`
+- Session 级任务（`scope: "session"` 或缺省）：`dispatcher`、`coordinator`、`skill`
+
+**重要说明**：
+- `workflow_pool_size` 与 `skill.instance_pool_size` 语义不同：
+  - `workflow_pool_size` 描述 task 绑定 workflow 的实例池规模，并由 deployer / scheduler 在运行时建立 workflow 实例与 worker / task 的绑定；
+  - `skill.instance_pool_size` 描述 skill task 自身应展开出的任务实例数。
+- `dispatcher` / `coordinator` 是特殊 task：workflow 输出 `selected_skills` 后，agent 会继续把这些 skill 具象化为 runtime task。
+- 每个 session 模板必须包含 1 个 `dispatcher`、1 个 `coordinator`，以及至少 1 个 `skill`
+
+## 4.3 Skill字段描述
 
 |字段|类型|是否必选|说明|
 |-|-|-|-|
