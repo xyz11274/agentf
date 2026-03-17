@@ -1,8 +1,8 @@
 # AgentFlow 使用手册
 
 > 本手册面向 AgentFlow 开发者，涵盖 Agent 集成指导和 Node 开发指导两大主题。
-> - 文档版本：v1.1
-> - 更新日期：2026-03-16
+> - 文档版本：v1.2
+> - 更新日期：2026-03-17
 
 ---
 
@@ -883,6 +883,7 @@ extern "C" void my_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
 |--------|------|----------|----------|------|
 | `response` | string | sys | Skill 执行结果 | 框架检测到此字段后，将其作为响应返回给用户 |
 | `next_skills` | string | sys | 后续要拉起的 skill 列表 | 框架解析此字段并启动指定的 skills |
+| `available_parameters` | string | sys | 当前可用的参数值 | 框架用于校验 skill 的 expected_parameters |
 | `selected_skills` | string | sys | 已选择的 skill 列表 | 向后兼容字段，同 next_skills |
 | `skill_completed` | bool | sys | Skill 是否完成 | 标记 skill 完成状态，默认 true |
 | `status` | string | - | 节点执行状态 | 用于流程控制和日志 |
@@ -932,6 +933,7 @@ client->sys()->put(dialogue_id + "/next_skills", SoDataVariant(std::string("[\"s
 | `dialogue_id` | sys | `{dialogue_id}/dialogue_id` | 对话唯一标识 | 框架写入，Node 读取 |
 | `user_prompt` | sys | `{dialogue_id}/user_prompt` | 用户输入提示词 | 框架写入，Node 读取 |
 | `next_skills` | sys | `{dialogue_id}/next_skills` | 待拉起的 skill 列表 | Node 写入，框架读取并调度 |
+| `available_parameters` | sys | `{dialogue_id}/available_parameters` | 当前可用的参数值 | Node 写入，框架读取校验 skill 参数 |
 | `skills_scheduled` | sys | `{dialogue_id}/skills_scheduled` | 防止重复调度标志 | 框架读写，Node 可读取 |
 | `pending_skills_count` | sys | `{dialogue_id}/pending_skills_count` | 正在执行的 skill 计数 | 框架读写，Coordinator 读取判断 |
 | `content` | ctx | `/session/{sid}/ctx/{did}/content` | 对话上下文内容 | 回调写入，Node 读取 |
@@ -1115,9 +1117,162 @@ extern "C" void coordinator_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
 
 ---
 
-## 15. Workflow DSL 示例
+## 15. Skill 参数槽位校验
 
-### 15.1 基础节点定义
+### 15.1 功能概述
+
+框架提供参数槽位校验机制，允许在 skill 启动前验证其执行所需的参数是否可用。这可以避免 skill 因缺少必要参数而执行失败。
+
+### 15.2 配置 expected_parameters
+
+在 `agent.json` 中为 skill 任务声明预期参数：
+
+```json
+{
+  "tasks": [
+    {
+      "id": 3,
+      "type": "skill",
+      "description": "Travel booking skill",
+      "workflow_file": "skill_travel_workflow.json",
+      "skill": {
+        "name": "travel",
+        "config_dir": "runtime",
+        "instance_pool_size": 2,
+        "expected_parameters": ["destination", "date", "travelers"]
+      }
+    }
+  ]
+}
+```
+
+**字段说明**：
+
+| 字段 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| `expected_parameters` | `string[]` | 否 | `[]` | Skill 执行所需的参数名列表 |
+
+### 15.3 输出 available_parameters
+
+Workflow 完成时，节点需要输出 `available_parameters`，提供当前可用的参数值：
+
+```cpp
+extern "C" void dispatcher_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
+                                   INodeDataBusClient* client) {
+    std::string dialogue_id = agentflow::so_node::get_string(inputs, "dialogue_id", "");
+
+    // 构建可用参数
+    std::string available_params = R"({
+        "travel": {
+            "destination": "Beijing",
+            "date": "2024-03-20",
+            "travelers": "2"
+        }
+    })";
+
+    // 写入 DataBus（向后兼容）
+    std::string params_key = dialogue_id.empty() ? "available_parameters" : dialogue_id + "/available_parameters";
+    client->sys()->put(params_key, SoDataVariant(available_params));
+
+    // 同时设置输出（可选，某些场景下框架会从输出读取）
+    outputs["available_parameters"] = SoDataVariant(available_params);
+
+    // 设置 next_skills
+    outputs["next_skills"] = SoDataVariant(std::string("[\"travel\"]"));
+}
+```
+
+**数据结构**：
+
+```typescript
+// available_parameters 结构（参数值仅支持 string 类型）
+{
+  [skill_name: string]: {
+    [parameter_name: string]: string
+  }
+}
+```
+
+**优先级策略**：
+
+1. **消息 metadata（推荐）**：放入 workflow 完成消息的 metadata 中
+2. **DataBus（向后兼容）**：存入 DataBus，用于兼容旧版本
+
+### 15.4 校验流程
+
+框架在启动 skill 前自动执行校验：
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Skill Launch with Validation                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. Get skill template's expected_parameters                    │
+│                                                                  │
+│  2. If expected_parameters is empty                             │
+│     └─> Skip validation, launch skill directly                  │
+│                                                                  │
+│  3. Get available_parameters (priority: metadata > DataBus)     │
+│                                                                  │
+│  4. For each expected_parameter:                                │
+│     └─> Check if exists in available_parameters[skill_name]     │
+│                                                                  │
+│  5. If all expected parameters are covered:                     │
+│     └─> Launch skill task                                       │
+│                                                                  │
+│  6. If any expected parameter is missing:                       │
+│     └─> Skip skill launch                                       │
+│     └─> Send failure message to coordinator                     │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 15.5 处理校验失败
+
+参数校验失败时，框架向 coordinator 发送失败消息：
+
+```cpp
+// Coordinator 节点处理失败消息
+extern "C" void coordinator_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
+                                    INodeDataBusClient* client) {
+    // 检查是否有 skill 启动失败的消息
+    // 失败消息 metadata 包含：
+    // - message_type: "skill_launch_failed"
+    // - skill_name: 失败的 skill 名称
+    // - failure_reason: "parameter_validation_failed"
+    // - missing_parameters: JSON 序列化的缺失参数列表
+
+    // Coordinator 可以：
+    // 1. 向用户请求补充信息
+    // 2. 记录日志并降级处理
+    // 3. 尝试使用默认值重试
+}
+```
+
+**失败消息 Metadata 字段**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `task_type` | string | 固定为 `"skill_response"` |
+| `message_type` | string | `"skill_launch_failed"` 标识启动失败 |
+| `skill_name` | string | 失败的 skill 名称 |
+| `failure_reason` | string | `"parameter_validation_failed"` |
+| `expected_parameters` | string | JSON 序列化的预期参数列表 |
+| `available_parameters` | string | JSON 序列化的可用参数对象 |
+| `missing_parameters` | string | JSON 序列化的缺失参数列表 |
+
+### 15.6 向后兼容性
+
+- `expected_parameters` 为可选字段，未配置时行为与当前一致
+- `available_parameters` 为可选输出，未提供时视为空对象
+- 框架优先从消息 metadata 读取，DataBus 作为 fallback
+- 完全向后兼容现有 agent.json 和 workflow
+
+---
+
+## 16. Workflow DSL 示例
+
+### 16.1 基础节点定义
 
 ```json
 {
@@ -1137,7 +1292,7 @@ extern "C" void coordinator_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
 }
 ```
 
-### 15.2 Skill Workflow 完整示例
+### 16.2 Skill Workflow 完整示例
 
 ```json
 {
@@ -1167,15 +1322,15 @@ extern "C" void coordinator_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
 
 ---
 
-## 16. 最佳实践
+## 17. 最佳实践
 
-### 16.1 命名规范
+### 17.1 命名规范
 
 - 使用 snake_case 命名变量和字段
 - 名称应具有描述性
 - 避免使用框架保留关键字作为自定义字段名
 
-### 16.2 错误处理
+### 17.2 错误处理
 
 ```cpp
 extern "C" void my_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
@@ -1193,13 +1348,13 @@ extern "C" void my_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
 }
 ```
 
-### 16.3 数据大小建议
+### 17.3 数据大小建议
 
 - 小于 1MB：直接使用值传递
 - 大于 1MB：使用引用传递或文件路径
 - 大数据传输：考虑使用 UDS 或共享内存
 
-### 16.4 日志记录
+### 17.4 日志记录
 
 ```cpp
 #include "utils/logger.h"
@@ -1232,6 +1387,7 @@ extern "C" void my_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
 | **消息** | message_id | string | 消息标识 | 输入 |
 | **响应** | response | string | 最终响应 | 输出 |
 | **调度** | next_skills | string | 后续 skills | 输出 |
+| **校验** | available_parameters | string | 可用参数 | 输出 |
 | **状态** | skill_completed | bool | 完成标志 | 输出 |
 | **执行** | status | string | 执行状态 | 输出 |
 
