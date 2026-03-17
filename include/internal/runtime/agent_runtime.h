@@ -48,6 +48,7 @@ public:
     int         worker_control_threads = 1;
     int         worker_business_threads = 1;
     size_t      worker_queue_size = 1024;
+    std::string plugin_uds_path;  // Plugin UDS path to inject into node processes
   };
 
   MMAgentRuntime();

@@ -71,7 +71,7 @@ MMAgentRuntime::MMAgentRuntime() {
   local_worker_ = std::make_shared<MMWorkerEngine>(
       MMWorkerEngine::Config{config_.local_worker_id, true, config_.worker_default_workflow_threads,
                            config_.worker_control_threads, config_.worker_business_threads,
-                           config_.worker_queue_size});
+                           config_.worker_queue_size, config_.plugin_uds_path});
   local_worker_->set_status(MMWorkerEngine::WorkerStatus::RUNNING);
 }
 
@@ -87,7 +87,8 @@ MMAgentRuntime::MMAgentRuntime(const Config& config) : config_(config), role_(co
                                                             config.worker_default_workflow_threads,
                                                             config.worker_control_threads,
                                                             config.worker_business_threads,
-                                                            config.worker_queue_size});
+                                                            config.worker_queue_size,
+                                                            config.plugin_uds_path});
   local_worker_->set_status(MMWorkerEngine::WorkerStatus::RUNNING);
 }
 
@@ -564,6 +565,11 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
     } else {
       Logger::instance().warn_f("[PROCESS_NODE] No workflow state found for execution_id=%s", execution_id.c_str());
     }
+  }
+
+  // Inject plugin UDS path if configured
+  if(!config_.plugin_uds_path.empty()) {
+    node->set_plugin_uds_path(config_.plugin_uds_path);
   }
 
   // Trace: open a NODE span (RAII — records to TraceManager on scope exit)

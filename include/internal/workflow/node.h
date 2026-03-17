@@ -217,6 +217,10 @@ public:
   void set_databus_client(std::shared_ptr<INodeDataBusClient> client) { databus_client_ = std::move(client); }
   INodeDataBusClient* get_databus_client() const { return databus_client_.get(); }
 
+  // Plugin UDS path for external plugin communication
+  void set_plugin_uds_path(const std::string& path) { plugin_uds_path_ = path; }
+  const std::string& get_plugin_uds_path() const { return plugin_uds_path_; }
+
   // MMNode runtime queue + event loop
   bool start_runtime();
   bool start_runtime(const RuntimeConfig& config);
@@ -270,6 +274,9 @@ private:
 
   // Session-isolated DataBus client for V3 signature
   std::shared_ptr<INodeDataBusClient> databus_client_;
+
+  // Plugin UDS path for external plugin communication
+  std::string plugin_uds_path_;
 
   // Helper methods for execution
   bool execute_cpp_function();

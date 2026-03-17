@@ -57,6 +57,7 @@ std::shared_ptr<MMNode> MMNode::clone(bool inherit_databus) const {
   if(inherit_databus) {
     cloned->databus_ = databus_;
     cloned->databus_client_ = databus_client_;
+    cloned->plugin_uds_path_ = plugin_uds_path_;
   }
 
   // Note: code_loader_ is already set in constructor via global_code_loader()
@@ -536,6 +537,9 @@ bool MMNode::execute_with_worker_engine() {
   if (databus_client_) {
     request.session_id = databus_client_->session_id();
   }
+
+  // Pass plugin UDS path for external plugin communication
+  request.plugin_uds_path = plugin_uds_path_;
 
   switch(config_.execution_mode) {
     case ExecutionMode::SHELL_SCRIPT:

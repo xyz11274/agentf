@@ -65,6 +65,11 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
     }
   }
 
+  // Inject plugin UDS path if configured
+  if(!request.plugin_uds_path.empty()) {
+    exec_config.env_vars.push_back("AF_PLUGIN_UDS_FILE=" + request.plugin_uds_path);
+  }
+
   // Create UDS server for real-time DataBus access when databus and session_id are provided
   // This enables Python/Go/Shell SDKs to access DataBus via Unix Domain Socket
   std::unique_ptr<UDSServer> uds_server;

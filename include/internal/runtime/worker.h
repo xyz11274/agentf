@@ -55,6 +55,8 @@ public:
     // Session ID for session-isolated DataBus access (V3 signature)
     // When provided, V3 signature will be used with session isolation
     std::string               session_id;
+    // Plugin UDS path - injected as AF_PLUGIN_UDS_FILE environment variable
+    std::string               plugin_uds_path;
     struct LLMServiceConfig {
       std::string base_url;
       std::string api_key;
@@ -87,6 +89,7 @@ public:
     int         control_threads = 1;
     int         business_threads = 1;
     size_t      max_queue_size = 1024;
+    std::string plugin_uds_path;  // Plugin UDS path to inject into node processes
   };
 
   enum class TaskPriority {
