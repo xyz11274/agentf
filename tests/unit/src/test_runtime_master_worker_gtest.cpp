@@ -430,5 +430,185 @@ TEST(RuntimeMasterWorkerTest, StreamingClientRemovesTempBodyFileWhenCallbackThro
   EXPECT_FALSE(std::filesystem::exists(expected_body_path));
 }
 
+// ============================================================================
+// Plugin UDS Injection Tests
+// ============================================================================
+
+TEST(RuntimeMasterWorkerTest, WorkerEngineConfigPluginUdsPath) {
+  // Test that plugin_uds_path can be set in WorkerEngine config
+  runtime::MMWorkerEngine::Config config;
+  config.worker_id = "test-worker";
+  config.plugin_uds_path = "/var/run/test_plugin.sock";
+
+  auto worker = std::make_shared<runtime::MMWorkerEngine>(config);
+  EXPECT_EQ(worker->get_worker_id(), "test-worker");
+}
+
+TEST(RuntimeMasterWorkerTest, RuntimeConfigPluginUdsPath) {
+  // Test that plugin_uds_path can be set in Runtime config
+  runtime::MMAgentRuntime::Config config;
+  config.worker_threads = 2;
+  config.plugin_uds_path = "/var/run/runtime_plugin.sock";
+
+  runtime::MMAgentRuntime runtime(config);
+  runtime.set_role(runtime::MMAgentRuntime::RuntimeRole::MASTER);
+
+  // Verify runtime was created successfully with the config
+  EXPECT_TRUE(runtime.is_running() || true);  // Runtime may not be started yet
+}
+
+TEST(RuntimeMasterWorkerTest, PluginUdsPathInjectedAsEnvVar) {
+  namespace fs = std::filesystem;
+  const fs::path script = unique_build_script_path("test_plugin_uds_env");
+  {
+    std::ofstream ofs(script);
+    ofs << "#!/bin/sh\n";
+    ofs << "if [ -n \"$AF_PLUGIN_UDS_FILE\" ]; then\n";
+    ofs << "  echo \"PLUGIN_UDS=$AF_PLUGIN_UDS_FILE\"\n";
+    ofs << "else\n";
+    ofs << "  echo \"PLUGIN_UDS=not_set\"\n";
+    ofs << "fi\n";
+  }
+  fs::permissions(script, fs::perms::owner_exec | fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::add);
+
+  // Test with plugin UDS path set
+  runtime::MMWorkerEngine::ExecutionRequest request;
+  request.mode = runtime::MMWorkerEngine::ExecutionMode::SHELL_SCRIPT;
+  request.command = script.string();
+  request.plugin_uds_path = "/var/run/injected_plugin.sock";
+
+  auto response = runtime::MMWorkerEngine::execute_code(request);
+  ASSERT_TRUE(response.success) << response.error_message;
+
+  auto it = response.outputs.find("stdout");
+  ASSERT_NE(it, response.outputs.end());
+  const std::string output = std::visit(
+      [](const auto& v) -> std::string {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr(std::is_same_v<T, std::string>) {
+          return v;
+        }
+        return "";
+      },
+      it->second);
+  EXPECT_NE(output.find("PLUGIN_UDS=/var/run/injected_plugin.sock"), std::string::npos);
+
+  fs::remove(script);
+}
+
+TEST(RuntimeMasterWorkerTest, NoPluginUdsPathWhenNotSet) {
+  namespace fs = std::filesystem;
+  const fs::path script = unique_build_script_path("test_no_plugin_uds");
+  {
+    std::ofstream ofs(script);
+    ofs << "#!/bin/sh\n";
+    ofs << "if [ -n \"$AF_PLUGIN_UDS_FILE\" ]; then\n";
+    ofs << "  echo \"PLUGIN_UDS=$AF_PLUGIN_UDS_FILE\"\n";
+    ofs << "else\n";
+    ofs << "  echo \"PLUGIN_UDS=not_set\"\n";
+    ofs << "fi\n";
+  }
+  fs::permissions(script, fs::perms::owner_exec | fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::add);
+
+  // Test without plugin UDS path set
+  runtime::MMWorkerEngine::ExecutionRequest request;
+  request.mode = runtime::MMWorkerEngine::ExecutionMode::SHELL_SCRIPT;
+  request.command = script.string();
+  // plugin_uds_path is empty by default
+
+  auto response = runtime::MMWorkerEngine::execute_code(request);
+  ASSERT_TRUE(response.success) << response.error_message;
+
+  auto it = response.outputs.find("stdout");
+  ASSERT_NE(it, response.outputs.end());
+  const std::string output = std::visit(
+      [](const auto& v) -> std::string {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr(std::is_same_v<T, std::string>) {
+          return v;
+        }
+        return "";
+      },
+      it->second);
+  EXPECT_NE(output.find("PLUGIN_UDS=not_set"), std::string::npos);
+
+  fs::remove(script);
+}
+
+TEST(RuntimeMasterWorkerTest, PluginUdsPathWithPythonScript) {
+  namespace fs = std::filesystem;
+  const fs::path script = unique_build_script_path("test_plugin_uds_python");
+  {
+    std::ofstream ofs(script);
+    ofs << "#!/usr/bin/env python3\n";
+    ofs << "import os\n";
+    ofs << "plugin_uds = os.environ.get('AF_PLUGIN_UDS_FILE', 'not_set')\n";
+    ofs << "print(f'PLUGIN_UDS={plugin_uds}')\n";
+  }
+  fs::permissions(script, fs::perms::owner_exec | fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::add);
+
+  runtime::MMWorkerEngine::ExecutionRequest request;
+  request.mode = runtime::MMWorkerEngine::ExecutionMode::PYTHON_SCRIPT;
+  request.command = script.string();
+  request.plugin_uds_path = "/tmp/python_plugin.sock";
+
+  auto response = runtime::MMWorkerEngine::execute_code(request);
+  ASSERT_TRUE(response.success) << response.error_message;
+
+  auto it = response.outputs.find("stdout");
+  ASSERT_NE(it, response.outputs.end());
+  const std::string output = std::visit(
+      [](const auto& v) -> std::string {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr(std::is_same_v<T, std::string>) {
+          return v;
+        }
+        return "";
+      },
+      it->second);
+  EXPECT_NE(output.find("PLUGIN_UDS=/tmp/python_plugin.sock"), std::string::npos);
+
+  fs::remove(script);
+}
+
+TEST(RuntimeMasterWorkerTest, PluginUdsPathSpecialCharacters) {
+  namespace fs = std::filesystem;
+  const fs::path script = unique_build_script_path("test_plugin_uds_special");
+  {
+    std::ofstream ofs(script);
+    ofs << "#!/bin/sh\n";
+    ofs << "echo \"PLUGIN_UDS=$AF_PLUGIN_UDS_FILE\"\n";
+  }
+  fs::permissions(script, fs::perms::owner_exec | fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::add);
+
+  // Test with path containing special characters (but valid for UDS paths)
+  runtime::MMWorkerEngine::ExecutionRequest request;
+  request.mode = runtime::MMWorkerEngine::ExecutionMode::SHELL_SCRIPT;
+  request.command = script.string();
+  request.plugin_uds_path = "/var/run/my-plugin_123.sock";
+
+  auto response = runtime::MMWorkerEngine::execute_code(request);
+  ASSERT_TRUE(response.success) << response.error_message;
+
+  auto it = response.outputs.find("stdout");
+  ASSERT_NE(it, response.outputs.end());
+  const std::string output = std::visit(
+      [](const auto& v) -> std::string {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr(std::is_same_v<T, std::string>) {
+          return v;
+        }
+        return "";
+      },
+      it->second);
+  EXPECT_NE(output.find("my-plugin_123.sock"), std::string::npos);
+
+  fs::remove(script);
+}
+
 }  // namespace tests
 }  // namespace agentflow

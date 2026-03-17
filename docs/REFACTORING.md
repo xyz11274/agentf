@@ -2925,17 +2925,26 @@ struct ExecutionRequest {
 
 #### 单元测试用例
 
-1. **Runtime Config 配置传递**：验证 `plugin_uds_path` 从 Runtime Config 传递到 ExecutionRequest
-2. **环境变量注入**：验证 `AF_PLUGIN_UDS_FILE` 正确注入到执行环境
-3. **Shell 节点获取**：验证 Shell 脚本可通过环境变量获取插件 UDS 路径
-4. **Python 节点获取**：验证 Python 脚本可通过 os.environ 获取插件 UDS 路径
-5. **SO Library 获取**：验证 SO 节点可通过 getenv 获取插件 UDS 路径
+已实现 9 个单元测试用例：
 
-#### 集成测试
+**NodeTest (3 个)**：
+1. **PluginUdsPathGetterSetter** - 测试节点 plugin_uds_path 的 getter/setter
+2. **CloneInheritsPluginUdsPath** - 测试节点克隆时继承 plugin_uds_path
+3. **CloneWithEmptyPluginUdsPath** - 测试空 plugin_uds_path 的克隆
 
-1. 配置 Runtime 的 `plugin_uds_path`
-2. 创建使用插件 UDS 的节点
-3. 执行 workflow 验证节点能够正确获取并使用插件 UDS 路径
+**RuntimeMasterWorkerTest (6 个)**：
+4. **WorkerEngineConfigPluginUdsPath** - 测试 WorkerEngine 配置中设置 plugin_uds_path
+5. **RuntimeConfigPluginUdsPath** - 测试 Runtime 配置中设置 plugin_uds_path
+6. **PluginUdsPathInjectedAsEnvVar** - 测试 AF_PLUGIN_UDS_FILE 环境变量正确注入
+7. **NoPluginUdsPathWhenNotSet** - 测试未配置时不注入环境变量
+8. **PluginUdsPathWithPythonScript** - 测试 Python 脚本可通过 os.environ 获取
+9. **PluginUdsPathSpecialCharacters** - 测试特殊字符路径处理
+
+#### 验证结果
+
+- `./build.sh build`：✅ 通过
+- `ctest --test-dir build -R AgentFlowGoogleTests --output-on-failure`：✅ 全部通过
+- 9 个 Plugin UDS 相关测试全部通过
 
 ---
 

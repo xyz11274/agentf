@@ -130,3 +130,66 @@ TEST_F(NodeTest, MultipleNodes) {
   EXPECT_EQ(node2.get_state(), NodeState::WAITING);
   EXPECT_EQ(node3.get_state(), NodeState::WAITING);
 }
+
+// ============================================================================
+// Plugin UDS Path Tests
+// ============================================================================
+
+TEST_F(NodeTest, PluginUdsPathGetterSetter) {
+  MMNode::Config config;
+  config.id = "plugin_node";
+  config.name = "plugin_node";
+  config.type = "PluginTest";
+
+  MMNode node(config);
+
+  // Initially empty
+  EXPECT_TRUE(node.get_plugin_uds_path().empty());
+
+  // Set plugin UDS path
+  node.set_plugin_uds_path("/var/run/my_plugin.sock");
+  EXPECT_EQ(node.get_plugin_uds_path(), "/var/run/my_plugin.sock");
+
+  // Can be changed
+  node.set_plugin_uds_path("/tmp/another_plugin.sock");
+  EXPECT_EQ(node.get_plugin_uds_path(), "/tmp/another_plugin.sock");
+
+  // Can be cleared
+  node.set_plugin_uds_path("");
+  EXPECT_TRUE(node.get_plugin_uds_path().empty());
+}
+
+TEST_F(NodeTest, CloneInheritsPluginUdsPath) {
+  MMNode::Config config;
+  config.id = "original_node";
+  config.name = "original_node";
+  config.type = "CloneTest";
+  config.execution_mode = MMNode::ExecutionMode::CPP_FUNCTION;
+  config.cpp_function = [](const DataMap&, DataMap&) -> bool { return true; };
+
+  auto original = std::make_shared<MMNode>(config);
+  original->set_plugin_uds_path("/var/run/plugin.sock");
+
+  // Clone with inherit_databus = true should inherit plugin_uds_path
+  auto cloned_with_inherit = original->clone(true);
+  EXPECT_EQ(cloned_with_inherit->get_plugin_uds_path(), "/var/run/plugin.sock");
+
+  // Clone with inherit_databus = false should not inherit plugin_uds_path
+  auto cloned_without_inherit = original->clone(false);
+  EXPECT_TRUE(cloned_without_inherit->get_plugin_uds_path().empty());
+}
+
+TEST_F(NodeTest, CloneWithEmptyPluginUdsPath) {
+  MMNode::Config config;
+  config.id = "empty_plugin_node";
+  config.name = "empty_plugin_node";
+  config.type = "EmptyPluginTest";
+  config.execution_mode = MMNode::ExecutionMode::CPP_FUNCTION;
+  config.cpp_function = [](const DataMap&, DataMap&) -> bool { return true; };
+
+  auto original = std::make_shared<MMNode>(config);
+  // Don't set plugin_uds_path - it should remain empty
+
+  auto cloned = original->clone(true);
+  EXPECT_TRUE(cloned->get_plugin_uds_path().empty());
+}
