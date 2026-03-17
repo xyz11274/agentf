@@ -55,6 +55,7 @@ MMAgent 运行时元数据，至少包含：
   - `skill.name`
   - `skill.config_dir`
   - `skill.instance_pool_size`（>= 1，默认 2）
+  - `skill.expected_parameters`（可选，字符串数组，声明 skill 执行所需的参数名列表）
 - **`dispatcher` 任务特定字段**（Dispatcher 为框架内置 workflow）：
   - `next_skills`：字符串数组，指定 Dispatcher 默认拉起的 skill 名称列表
   - `max_concurrent_skills`：最大并发 skill 数（>= 1，默认 10）
@@ -66,6 +67,25 @@ MMAgent 运行时元数据，至少包含：
   - `response`：skill 执行结果文本
   - `next_skills`：后续要拉起的 skill 名称列表
   - `skill_completed`：布尔值，表示 skill 是否完成
+- **参数槽位校验机制**：
+  - skill 任务可通过 `skill.expected_parameters` 声明执行所需的参数名列表
+  - workflow 完成时输出 `available_parameters`，提供当前可用的参数值
+  - 框架在启动 skill 前校验 `expected_parameters` 是否在 `available_parameters` 中存在
+  - 校验失败时跳过 skill 启动，并向 coordinator 发送失败消息
+- **available_parameters 输出格式**：
+  - 优先从 workflow 完成消息的 `metadata["available_parameters"]` 读取
+  - 若 metadata 不存在，则从 DataBus `{dialogue_id}/available_parameters` 读取（向后兼容）
+  - 数据结构：`{ "skill_name": { "param_name": "param_value", ... }, ... }`
+  - 参数值仅支持 string 类型
+- **参数校验失败消息格式**：
+  - `content`: `"skill_launch_failed"`
+  - `metadata["task_type"]`: `"skill_response"`
+  - `metadata["message_type"]`: `"skill_launch_failed"`
+  - `metadata["skill_name"]`: 失败的 skill 名称
+  - `metadata["failure_reason"]`: `"parameter_validation_failed"`
+  - `metadata["expected_parameters"]`: JSON 序列化的预期参数列表
+  - `metadata["available_parameters"]`: JSON 序列化的可用参数对象
+  - `metadata["missing_parameters"]`: JSON 序列化的缺失参数列表
 - `workflow_pool_size` 与 `skill.instance_pool_size` 语义不同：
   - `workflow_pool_size` 描述 task 绑定 workflow 的实例池规模，并由 deployer / scheduler 在运行时建立 workflow 实例与 worker / task 的绑定；
   - `skill.instance_pool_size` 描述 skill task 自身应展开出的任务实例数。
@@ -115,7 +135,8 @@ MMAgent 运行时元数据，至少包含：
       "skill": {
         "name": "knowledge",
         "config_dir": "skills/knowledge",
-        "instance_pool_size": 2
+        "instance_pool_size": 2,
+        "expected_parameters": ["query", "context"]
       },
       "workflow_pool_size": 2
     }
