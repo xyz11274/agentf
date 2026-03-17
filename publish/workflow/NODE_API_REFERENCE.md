@@ -127,6 +127,7 @@ MMNode 热更新也由 Worker 处理，默认按 `enable_hot_reload/hot_reload_c
 | 字段名 | 类型 | 说明 |
 |--------|------|------|
 | `next_skills` | string | 后续要拉起的 skill 名称列表，格式为 JSON 数组或逗号分隔字符串 |
+| `available_parameters` | string | 当前可用的参数值，JSON 对象格式，用于 skill 参数校验 |
 | `skill_completed` | bool | 表示 skill 是否完成，默认为 true |
 
 ### next_skills 格式
@@ -163,3 +164,150 @@ Skill workflow 完成后，将结果写入 DataBus：
 4. 检查并发限制（`max_concurrent_skills`）
 5. 拉起对应的 skill task
 6. 清除已处理的 `next_skills` 防止重复处理
+
+## Skill 参数校验
+
+### 概述
+
+框架支持在 skill 启动前校验其所需的参数是否可用。Skill 在 `agent.json` 中通过 `expected_parameters` 声明所需参数，Workflow 在输出 `next_skills` 时同时输出 `available_parameters` 提供参数值。
+
+### available_parameters 格式
+
+`available_parameters` 为 JSON 对象格式，结构如下：
+
+```json
+{
+  "skill_name_1": {
+    "param_1": "value_1",
+    "param_2": "value_2"
+  },
+  "skill_name_2": {
+    "param_a": "value_a"
+  }
+}
+```
+
+**说明**：
+- 外层 key 为 skill 名称
+- 内层 key-value 为该 skill 的参数名和参数值
+- 参数值仅支持 string 类型
+
+### 输出方式
+
+`available_parameters` 支持两种输出方式：
+
+**方式一：消息 metadata（推荐）**
+
+在 workflow 完成消息的 metadata 中设置：
+
+```cpp
+// SO Library Node 中设置
+outputs["available_parameters"] = SoDataVariant(std::string(R"({
+  "travel": {
+    "destination": "Beijing",
+    "date": "2024-03-20"
+  }
+})"));
+```
+
+**方式二：DataBus 存储（向后兼容）**
+
+写入 DataBus 的 sys namespace：
+
+```cpp
+extern "C" void my_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
+                           INodeDataBusClient* client) {
+    std::string dialogue_id = agentflow::so_node::get_string(inputs, "dialogue_id", "");
+
+    // 构建可用参数
+    std::string params = R"({
+        "travel": {
+            "destination": "Beijing",
+            "date": "2024-03-20"
+        }
+    })";
+
+    // 写入 DataBus
+    std::string key = dialogue_id.empty() ? "available_parameters" : dialogue_id + "/available_parameters";
+    client->sys()->put(key, SoDataVariant(params));
+
+    // 设置 next_skills
+    outputs["next_skills"] = SoDataVariant(std::string("[\"travel\"]"));
+}
+```
+
+### 优先级策略
+
+框架按以下优先级读取 `available_parameters`：
+
+1. **消息 metadata**：优先从 workflow 完成消息的 `metadata["available_parameters"]` 读取
+2. **DataBus**：若 metadata 不存在，从 DataBus 的 `{dialogue_id}/available_parameters` 读取
+
+### 校验流程
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                   Skill Parameter Validation                    │
+├─────────────────────────────────────────────────────────────────┤
+│  1. 检查 skill 的 expected_parameters 配置                      │
+│  2. 若为空，跳过校验，直接启动 skill                             │
+│  3. 获取 available_parameters（metadata 优先）                  │
+│  4. 校验所有 expected_parameters 是否存在                       │
+│  5. 校验通过 → 启动 skill task                                  │
+│  6. 校验失败 → 跳过 skill，发送失败消息给 coordinator            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 失败消息格式
+
+参数校验失败时，框架向 coordinator 发送消息：
+
+```json
+{
+  "content": "skill_launch_failed",
+  "metadata": {
+    "task_type": "skill_response",
+    "message_type": "skill_launch_failed",
+    "skill_name": "travel",
+    "failure_reason": "parameter_validation_failed",
+    "expected_parameters": "[\"destination\", \"date\", \"travelers\"]",
+    "available_parameters": "{\"destination\": \"Beijing\", \"date\": \"2024-03-20\"}",
+    "missing_parameters": "[\"travelers\"]"
+  }
+}
+```
+
+### 完整示例
+
+Dispatcher workflow 完成时输出 `next_skills` 和 `available_parameters`：
+
+```cpp
+extern "C" void dispatcher_output_v3(const SoDataMap& inputs, SoDataMap& outputs,
+                                     INodeDataBusClient* client) {
+    std::string dialogue_id = agentflow::so_node::get_string(inputs, "dialogue_id", "");
+
+    // 解析用户意图，确定目标 skill 和可用参数
+    std::string intent = parse_user_intent(inputs);
+    std::string destination = extract_destination(inputs);
+    std::string date = extract_date(inputs);
+
+    // 设置后续 skill
+    outputs["next_skills"] = SoDataVariant(std::string("[\"travel\"]"));
+
+    // 设置可用参数
+    std::string available_params = "{\"travel\": {\"destination\": \"" + destination +
+                                   "\", \"date\": \"" + date + "\"}}";
+    outputs["available_parameters"] = SoDataVariant(available_params);
+
+    // 同时写入 DataBus（向后兼容）
+    std::string params_key = dialogue_id.empty() ? "available_parameters"
+                                                  : dialogue_id + "/available_parameters";
+    client->sys()->put(params_key, SoDataVariant(available_params));
+}
+```
+
+### 向后兼容性
+
+- `expected_parameters` 为可选配置，未配置时跳过校验
+- `available_parameters` 为可选输出，未提供时视为空对象
+- 现有 workflow 无需修改即可继续工作
