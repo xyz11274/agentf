@@ -8,7 +8,7 @@
 
 ## 1. 设计概述
 
-> 2026-03-07 更新：`src/agent` 已切换到显式的 session pool / task 配置模型。`agent.json` 通过 `session_pool_size` + `tasks` + `sessions` 预创建可复用 session，并通过顶层 `tasks[]` 中的 `contextupdater` 任务维护上下文；session 内只保留 `dispatcher` / `coordinator` / `skill`。
+> 2026-03-17 更新：`src/agent` 已切换到扁平化的 task 配置模型。`agent.json` 通过 `session_pool_size` + `tasks`（使用 `scope` 属性区分层级）预创建可复用 session。Agent 级任务（`scope: "agent"`）如 `contextupdater` 维护全局上下文；Session 级任务（`scope: "session"` 或缺省）包括 `dispatcher` / `coordinator` / `skill`。
 
 ### 1.1 架构位置
 
@@ -691,56 +691,63 @@ sequenceDiagram
     "version": "1.2.0",
     "description": "Handles customer inquiries",
     "session_pool_size": 4,
+    "max_workflows": 10,
+    "max_concurrent_workflows": 5,
     "tasks": [
         {
             "id": 0,
             "type": "contextupdater",
+            "scope": "agent",
             "description": "Update shared agent context",
             "workflow_file": "agent_context_workflow.json",
             "workflow_pool_size": 2
-        }
-    ],
-    "sessions": [
+        },
         {
-            "id": 0,
-            "description": "Homogeneous pooled session template",
-            "task_count": 4,
-            "tasks": [
-                {"id": 0, "type": "dispatcher", "description": "Dispatch requests", "workflow_file": "dispatcher_workflow.json", "workflow_pool_size": 3},
-                {"id": 1, "type": "coordinator", "description": "Coordinate results", "workflow_file": "coordinator_workflow.json", "workflow_pool_size": 2},
-                {
-                    "id": 2,
-                    "type": "skill",
-                    "description": "FAQ skill",
-                    "workflow_file": "faq_skill_workflow.json",
-                    "workflow_pool_size": 2,
-                    "skill": {
-                        "name": "faq",
-                        "config_dir": "skills/faq",
-                        "instance_pool_size": 2
-                    }
-                },
-                {
-                    "id": 3,
-                    "type": "skill",
-                    "description": "Escalation skill",
-                    "workflow_file": "escalation_skill_workflow.json",
-                    "workflow_pool_size": 2,
-                    "skill": {
-                        "name": "escalation",
-                        "config_dir": "skills/escalation",
-                        "instance_pool_size": 2
-                    }
-                }
-            ]
+            "id": 1,
+            "type": "dispatcher",
+            "description": "Dispatch requests",
+            "workflow_file": "dispatcher_workflow.json",
+            "workflow_pool_size": 3
+        },
+        {
+            "id": 2,
+            "type": "coordinator",
+            "description": "Coordinate results",
+            "workflow_file": "coordinator_workflow.json",
+            "workflow_pool_size": 2
+        },
+        {
+            "id": 3,
+            "type": "skill",
+            "description": "FAQ skill",
+            "workflow_file": "faq_skill_workflow.json",
+            "workflow_pool_size": 2,
+            "skill": {
+                "name": "faq",
+                "config_dir": "skills/faq",
+                "instance_pool_size": 2
+            }
+        },
+        {
+            "id": 4,
+            "type": "skill",
+            "description": "Escalation skill",
+            "workflow_file": "escalation_skill_workflow.json",
+            "workflow_pool_size": 2,
+            "skill": {
+                "name": "escalation",
+                "config_dir": "skills/escalation",
+                "instance_pool_size": 2
+            }
         }
     ]
 }
 ```
 
-- `tasks[]`：agent 级任务列表，当前使用 `contextupdater` 负责全局上下文更新。
-- `sessions[]`：固定只配置 1 份同质化 session 模板，由 `session_pool_size` 复制出整个 session 池。
-- `session.id` / `task.id`：模板内必须从 `0` 连续编号。
+- `tasks[]`：任务列表，通过 `scope` 属性区分层级：
+  - `scope: "agent"`：Agent 级任务（如 `contextupdater`），负责全局上下文更新
+  - `scope: "session"` 或缺省：Session 级任务（`dispatcher` / `coordinator` / `skill`）
+- `task.id`：从 `0` 开始连续编号。
 - `task.workflow_pool_size`：workflow 实例池大小，默认 `1`；runtime 在 agent 注册/启动时会按该值为任务模板预创建 workflow 实例池。
 - `skill.instance_pool_size`：skill 任务实例池大小，默认 `2`，显式配置时必须大于等于 `1`。
 
@@ -760,11 +767,11 @@ sequenceDiagram
   - dispatcher/coordinator `intent_request`
   - dispatcher/coordinator `data_exchange`
 - 消息根据消息头 `metadata["message_type"]` 路由；缺失该头时默认按 `intent_request` 处理。
-- 每个由 `agent.json` 声明的 session 使用显式任务列表初始化，基础任务通常为：
-  - `0`：dispatcher
-  - `1`：coordinator
-  - `2..N`：skill
-- agent 级 `contextupdater` 通过顶层 `tasks[]` 声明，不再占用 session 内任务编号。
+- 每个 Session 使用 `agent.json` 中 `scope: "session"` 或缺省 scope 的任务列表初始化，基础任务通常为：
+  - `dispatcher`：请求分发
+  - `coordinator`：结果协调
+  - `skill`：技能执行
+- Agent 级任务（`scope: "agent"`）如 `contextupdater` 在顶层 `tasks[]` 中声明，不再占用 Session 内任务编号。
 - `workflow_pool_size` 与 `skill.instance_pool_size` 含义不同：
   - `workflow_pool_size`：描述某个 task 绑定 workflow 的实例池规模，适用于 `contextupdater` / `dispatcher` / `coordinator` / `skill`；deployer 将这些 workflow 实例绑定到 worker，scheduler 再把 task 实例绑定到对应 workflow 实例。
   - `skill.instance_pool_size`：描述 skill task 自身要展开多少个任务实例。
@@ -780,7 +787,7 @@ sequenceDiagram
   - `examples/agent/openjiuwen_multi_session_chat/openjiuwen_multi_session_chat_tui.cpp`
   - `examples/agent/multi_session_chat/package/`
   - `examples/agent/openjiuwen_multi_session_chat/package/`
-- 样例采用 Agent 包驱动，`agent.json` 只声明 1 份同质化 session 模板，并通过 `session_pool_size` 预创建 5 个 pooled session；模板内通过:
+- 样例采用 Agent 包驱动，`agent.json` 使用扁平化 `tasks` 结构（通过 `scope` 区分层级），并通过 `session_pool_size` 预创建 5 个 pooled session；配置包含：
   - `session_dispatcher_workflow.json`
   - `session_coordinator_workflow.json`
   - `session_context_workflow.json`

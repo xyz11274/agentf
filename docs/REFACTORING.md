@@ -2,6 +2,8 @@
 
 ## 2026-03-07 src/agent session/task 配置模型重构
 
+> **已废弃**：此配置模型已被 2026-03-17 的扁平化结构取代。参见下方章节。
+
 ### 背景
 
 `src/agent` 原先依赖隐式约定：
@@ -12,7 +14,7 @@
 
 这使得多 session 协作、skill 扩容、context 任务演进都不够直观。
 
-### 本次重构
+### 本次重构（已被扁平化结构取代）
 
 - `agent.json` 改为 `session_pool_size + tasks + sessions` 组合：
   - `tasks[]` 中使用 `contextupdater` 声明 agent 级上下文更新任务；
