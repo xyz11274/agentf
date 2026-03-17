@@ -149,6 +149,15 @@ bool parse_task_definition(const rapidjson::Value& task_value, int expected_inde
            || task_definition.skill.instance_pool_size < 1)) {
       return fail_agent_json_parse("skill.instance_pool_size must be an integer >= 1");
     }
+    // Parse expected_parameters array (optional, default: empty)
+    if(skill_object.HasMember("expected_parameters") && skill_object["expected_parameters"].IsArray()) {
+      const auto& params_array = skill_object["expected_parameters"];
+      for(rapidjson::SizeType i = 0; i < params_array.Size(); ++i) {
+        if(params_array[i].IsString()) {
+          task_definition.skill.expected_parameters.push_back(params_array[i].GetString());
+        }
+      }
+    }
   }
 
   return true;

@@ -120,6 +120,71 @@ std::string extract_json_field(const std::string& json_line, const std::string& 
   return value;
 }
 
+/// Parse available_parameters from JSON string for a specific skill.
+/// @param json_str JSON string in format: {"skill_name": {"param": "value"}}
+/// @param skill_name The skill name to extract parameters for
+/// @return Map of parameter name to value for the specified skill
+std::map<std::string, std::string> parse_available_parameters_for_skill(
+    const std::string& json_str, const std::string& skill_name) {
+  std::map<std::string, std::string> result;
+  if(json_str.empty() || skill_name.empty()) {
+    return result;
+  }
+#ifdef AGENTFLOW_WITH_RAPIDJSON
+  rapidjson::Document doc;
+  doc.Parse(json_str.c_str());
+  if(doc.HasParseError() || !doc.IsObject()) {
+    return result;
+  }
+  if(!doc.HasMember(skill_name.c_str()) || !doc[skill_name.c_str()].IsObject()) {
+    return result;
+  }
+  const auto& skill_params = doc[skill_name.c_str()];
+  for(auto it = skill_params.MemberBegin(); it != skill_params.MemberEnd(); ++it) {
+    if(it->value.IsString()) {
+      result[it->name.GetString()] = it->value.GetString();
+    }
+  }
+#else
+  // Fallback: simple string parsing without full JSON parser
+  // This is a basic implementation for stub mode
+  const std::string skill_key = "\"" + skill_name + "\"";
+  auto pos = json_str.find(skill_key);
+  if(pos == std::string::npos) {
+    return result;
+  }
+  pos = json_str.find('{', pos + skill_key.size());
+  if(pos == std::string::npos) {
+    return result;
+  }
+  // Find matching closing brace
+  int brace_count = 1;
+  size_t end_pos = pos + 1;
+  while(end_pos < json_str.size() && brace_count > 0) {
+    if(json_str[end_pos] == '{') ++brace_count;
+    else if(json_str[end_pos] == '}') --brace_count;
+    ++end_pos;
+  }
+  // Parse key-value pairs within the skill object
+  std::string params_str = json_str.substr(pos, end_pos - pos);
+  size_t key_start = 0;
+  while((key_start = params_str.find('"', key_start)) != std::string::npos) {
+    size_t key_end = params_str.find('"', key_start + 1);
+    if(key_end == std::string::npos) break;
+    std::string key = params_str.substr(key_start + 1, key_end - key_start - 1);
+    size_t colon = params_str.find(':', key_end);
+    if(colon == std::string::npos) break;
+    size_t val_start = params_str.find('"', colon);
+    if(val_start == std::string::npos) break;
+    size_t val_end = params_str.find('"', val_start + 1);
+    if(val_end == std::string::npos) break;
+    result[key] = params_str.substr(val_start + 1, val_end - val_start - 1);
+    key_start = val_end + 1;
+  }
+#endif
+  return result;
+}
+
 std::string agent_config_to_json(const MMAgent::Config& config,
                                  const std::vector<std::shared_ptr<MMWorkflow>>& workflows) {
 #ifdef AGENTFLOW_WITH_RAPIDJSON
@@ -456,6 +521,7 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_tasks(
       task_config.skill_name = task_definition.skill.skill_name;
       task_config.skill_config_dir = task_definition.skill.skill_config_dir;
       task_config.instance_pool_size = task_definition.skill.instance_pool_size;
+      task_config.expected_parameters = task_definition.skill.expected_parameters;
     }
 
     auto task = std::make_shared<MMAgentTask>(task_config);
@@ -1666,6 +1732,159 @@ bool MMAgent::launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
   if(!skill_template) {
     Logger::instance().warn_f("[LAUNCH_SKILL] Skill template not found: %s", skill_name.c_str());
     return false;
+  }
+
+  // ========================================
+  // PARAMETER VALIDATION
+  // ========================================
+  const auto& expected_params = skill_template->get_expected_parameters();
+
+  if(!expected_params.empty()) {
+    // Get dialogue_id for DataBus key prefix
+    std::string dialogue_id;
+    if(context.metadata.count("dialogue_id")) {
+      dialogue_id = context.metadata.at("dialogue_id");
+    }
+
+    // Get available_parameters (priority: metadata > DataBus)
+    std::map<std::string, std::string> available_params;
+
+    // Try metadata first (recommended path)
+    if(context.metadata.count("available_parameters")) {
+      available_params = parse_available_parameters_for_skill(
+          context.metadata.at("available_parameters"), skill_name);
+    } else {
+      // Fallback to DataBus
+      std::string params_key = dialogue_id.empty()
+          ? "available_parameters"
+          : dialogue_id + "/available_parameters";
+
+      DataVariant params_value;
+      if(get_data(params_key, params_value)) {
+        if(const auto* text = std::get_if<std::string>(&params_value)) {
+          available_params = parse_available_parameters_for_skill(*text, skill_name);
+        }
+      }
+    }
+
+    // Validate: check if all expected parameters are available
+    std::vector<std::string> missing_params;
+    for(const auto& expected : expected_params) {
+      if(available_params.find(expected) == available_params.end()) {
+        missing_params.push_back(expected);
+      }
+    }
+
+    // If validation fails, notify coordinator and return
+    if(!missing_params.empty()) {
+      Logger::instance().info_f("[LAUNCH_SKILL] Parameter validation failed for skill '%s': %zu missing parameters",
+                               skill_name.c_str(), missing_params.size());
+
+      // Send failure message to coordinator
+      MMAgentMsgQue::Message failure_message;
+      failure_message.message_id = "skill-failure-" + skill_name + "-" + context.message_id;
+      failure_message.sender_id = "framework";
+      failure_message.receiver_id = source_task->get_task_id();  // coordinator or dispatcher
+      failure_message.content = "skill_launch_failed";
+
+      failure_message.metadata["task_type"] = "skill_response";
+      failure_message.metadata["message_type"] = "skill_launch_failed";
+      failure_message.metadata["skill_name"] = skill_name;
+      failure_message.metadata["failure_reason"] = "parameter_validation_failed";
+      failure_message.metadata["dialogue_id"] = dialogue_id;
+
+      // Serialize expected_parameters as JSON array
+#ifdef AGENTFLOW_WITH_RAPIDJSON
+      {
+        rapidjson::Document doc;
+        doc.SetArray();
+        rapidjson::Document::AllocatorType& allocator = doc.GetAllocator();
+        for(const auto& param : expected_params) {
+          rapidjson::Value v(param.c_str(), allocator);
+          doc.PushBack(v, allocator);
+        }
+        rapidjson::StringBuffer buffer;
+        rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+        doc.Accept(writer);
+        failure_message.metadata["expected_parameters"] = buffer.GetString();
+      }
+      // Serialize available_parameters as JSON object
+      {
+        rapidjson::Document doc;
+        doc.SetObject();
+        rapidjson::Document::AllocatorType& allocator = doc.GetAllocator();
+        for(const auto& [k, v] : available_params) {
+          rapidjson::Value key(k.c_str(), allocator);
+          rapidjson::Value val(v.c_str(), allocator);
+          doc.AddMember(key, val, allocator);
+        }
+        rapidjson::StringBuffer buffer;
+        rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+        doc.Accept(writer);
+        failure_message.metadata["available_parameters"] = buffer.GetString();
+      }
+      // Serialize missing_parameters as JSON array
+      {
+        rapidjson::Document doc;
+        doc.SetArray();
+        rapidjson::Document::AllocatorType& allocator = doc.GetAllocator();
+        for(const auto& param : missing_params) {
+          rapidjson::Value v(param.c_str(), allocator);
+          doc.PushBack(v, allocator);
+        }
+        rapidjson::StringBuffer buffer;
+        rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+        doc.Accept(writer);
+        failure_message.metadata["missing_parameters"] = buffer.GetString();
+      }
+#else
+      // Stub: simple format without JSON
+      std::ostringstream oss;
+      oss << "[";
+      for(size_t i = 0; i < expected_params.size(); ++i) {
+        if(i > 0) oss << ",";
+        oss << "\"" << expected_params[i] << "\"";
+      }
+      oss << "]";
+      failure_message.metadata["expected_parameters"] = oss.str();
+
+      oss.str("");
+      oss << "{";
+      size_t i = 0;
+      for(const auto& [k, v] : available_params) {
+        if(i > 0) oss << ",";
+        oss << "\"" << k << "\":\"" << v << "\"";
+        ++i;
+      }
+      oss << "}";
+      failure_message.metadata["available_parameters"] = oss.str();
+
+      oss.str("");
+      oss << "[";
+      for(size_t j = 0; j < missing_params.size(); ++j) {
+        if(j > 0) oss << ",";
+        oss << "\"" << missing_params[j] << "\"";
+      }
+      oss << "]";
+      failure_message.metadata["missing_parameters"] = oss.str();
+#endif
+
+      // Enqueue failure message to source task's data_exchange queue
+      if(source_task->get_task_type() == "coordinator") {
+        source_task->enqueue_data_exchange_message(failure_message);
+        Logger::instance().info_f("[LAUNCH_SKILL] Sent skill_launch_failed message to coordinator for skill '%s'",
+                                 skill_name.c_str());
+      } else {
+        source_task->enqueue_data_exchange_message(failure_message);
+        Logger::instance().info_f("[LAUNCH_SKILL] Sent skill_launch_failed message to task '%s' for skill '%s'",
+                                 source_task->get_task_id().c_str(), skill_name.c_str());
+      }
+
+      return false;
+    }
+
+    Logger::instance().info_f("[LAUNCH_SKILL] Parameter validation passed for skill '%s'",
+                             skill_name.c_str());
   }
 
   // Create skill runtime task message

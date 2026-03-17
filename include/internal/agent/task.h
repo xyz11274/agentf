@@ -52,6 +52,8 @@ class MMAgentTask {
     // Dispatcher and skill management fields
     std::vector<std::string> next_skills;           // Pre-configured skills to launch
     int         max_concurrent_skills = 10;          // Maximum concurrent skills for dispatcher
+    // Skill parameter validation
+    std::vector<std::string> expected_parameters;   // Required parameters for skill execution
   };
 
   explicit MMAgentTask(const Config& config);
@@ -80,6 +82,8 @@ class MMAgentTask {
   // Dispatcher and skill management getters
   const std::vector<std::string>& get_next_skills() const { return config_.next_skills; }
   int                get_max_concurrent_skills() const { return config_.max_concurrent_skills; }
+  // Skill parameter validation getters
+  const std::vector<std::string>& get_expected_parameters() const { return config_.expected_parameters; }
 
   bool start();
   bool complete(const std::string& result = "");
