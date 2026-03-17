@@ -380,9 +380,11 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
     return false;
   }
 
-  // Set input data to agent
+  // Set input data to agent with dialogue_id prefix for concurrency isolation
+  // When multiple dialogues execute in parallel, each dialogue's inputs are isolated
+  std::string input_prefix = dialogue_id.empty() ? "" : dialogue_id + "/";
   for(const auto& pair : inputs) {
-    agent->publish_data(pair.first, pair.second);
+    agent->publish_data(input_prefix + pair.first, pair.second);
   }
 
   // Create execution state for this workflow
@@ -508,17 +510,27 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
       }
     }
 
+    // Build input prefix for dialogue isolation
+    std::string input_prefix = workflow_dialogue_id.empty() ? "" : workflow_dialogue_id + "/";
+
     for(const auto& key : node->get_input_params()) {
       // Skip if already hydrated from workflow state
       if(hydrated.find(key) != hydrated.end()) {
         continue;
       }
       DataVariant val;
-      // First try agent's internal databus (where execute_workflow stores inputs)
-      if(agent->get_data(key, val)) {
+      // First try agent's internal databus with dialogue_id prefix (where execute_workflow stores inputs)
+      if(agent->get_data(input_prefix + key, val)) {
         hydrated[key] = val;
         if(const auto* text = std::get_if<std::string>(&val)) {
-          Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Got input '%s'='%s' from agent databus", key.c_str(), text->c_str());
+          Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Got input '%s'='%s' from agent databus (prefix: %s)",
+                                   key.c_str(), text->c_str(), input_prefix.c_str());
+        }
+      } else if(agent->get_data(key, val)) {
+        // Fallback: try without prefix for backward compatibility
+        hydrated[key] = val;
+        if(const auto* text = std::get_if<std::string>(&val)) {
+          Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Got input '%s'='%s' from agent databus (no prefix)", key.c_str(), text->c_str());
         }
       } else if(bus.get(key, val)) {
         // Then try runtime's databus
