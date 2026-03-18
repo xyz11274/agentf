@@ -1122,6 +1122,9 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
                                    skill_name.c_str(), dialogue_id.c_str());
         }
       }
+      // Acknowledge the message to prevent monitor_loop from resending it
+      // Dispatcher has completed its job (launched skills), no need to wait for response
+      task->acknowledge_dispatch_record(message.message_id);
       return;  // Skip runtime task creation
     }
   }
@@ -1135,8 +1138,18 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
                               runtime_task->get_task_id().c_str(), runtime_task->get_workflow_id().c_str());
     session->add_task(runtime_task);
     generated.push_back(runtime_task);
+
+    // If the runtime_task has no valid workflow, acknowledge the message now
+    // since there will be no workflow execution to trigger data_exchange
+    if(runtime_task->get_workflow_id().empty()) {
+      Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Runtime task has no workflow, acknowledging message_id=%s",
+                                message.message_id.c_str());
+      task->acknowledge_dispatch_record(message.message_id);
+    }
   } else {
     Logger::instance().warn_f("[HANDLE_INTENT_REQUEST] build_runtime_task returned null for task=%s", task->get_task_id().c_str());
+    // Acknowledge the message since no runtime task was created
+    task->acknowledge_dispatch_record(message.message_id);
   }
 
   if(context_) {
