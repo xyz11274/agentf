@@ -279,6 +279,128 @@ Edge(A'→C) 从 A'.outputs 直接读取 "result" → C.inputs["result"]
 ✅ 天然隔离，不会产生并发问题
 ```
 
+**输出路由策略（框架自动判断）**：
+
+Node 输出按是否有下游节点自动路由，Node 代码无需任何修改：
+
+| 条件 | 路由方式 | 说明 |
+|------|---------|------|
+| 有下游 Node | Edge ✅ | 点对点传递，天然隔离并行干扰 |
+| 无下游 Node | DataBus ✅ | 广播发布，供框架/外部消费 |
+
+**处理逻辑**：
+
+```cpp
+// process_node_outputs()
+for(const auto& out : node_outputs) {
+  if(has_downstream_edge(workflow, node, out.first)) {
+    // 有下游 → Edge 点对点传递
+    transfer_via_edge(workflow, node, out.first, out.second);
+  } else {
+    // 无下游 → DataBus 发布（遵循 session 隔离格式）
+    publish_to_databus(session_id, dialogue_id, workflow->get_id(), out.first, out.second);
+  }
+}
+```
+
+**DataBus Key 格式（遵循 Session 隔离）**：
+
+```
+/session/{session-id}/sys/{dialogue-id}/{workflow-id}.{key}
+```
+
+示例：
+```
+/session/550e8400.../sys/17411565830363972300/skill-selection-workflow.next_skills
+```
+
+**发布逻辑**：
+
+```cpp
+void publish_to_databus(const std::string& session_id,
+                        const std::string& dialogue_id,
+                        const std::string& workflow_id,
+                        const std::string& key,
+                        const DataVariant& value) {
+  // 构建 session 隔离格式的 key
+  std::string bus_key = "/session/" + session_id + "/sys/";
+
+  if(!dialogue_id.empty()) {
+    bus_key += dialogue_id + "/";
+  }
+
+  bus_key += workflow_id + "." + key;
+
+  agent->publish_data(bus_key, value);
+  bus.put(bus_key, value);
+}
+```
+
+**接收端适配（框架组件读取）**：
+
+Dispatcher / Coordinator 读取框架数据时，需适配新的 key 格式：
+
+```cpp
+// agent.cpp - 读取 next_skills
+std::string build_framework_key(const std::string& session_id,
+                                const std::string& dialogue_id,
+                                const std::string& key) {
+  std::string bus_key = "/session/" + session_id + "/sys/";
+  if(!dialogue_id.empty()) {
+    bus_key += dialogue_id + "/";
+  }
+  bus_key += key;  // 或 workflow.key，取决于发布端
+  return bus_key;
+}
+
+// 查找 key（支持多种格式 fallback）
+bool get_framework_data(const std::string& session_id,
+                        const std::string& dialogue_id,
+                        const std::string& key,
+                        DataVariant& value) {
+  // 1. 尝试新格式（带 workflow 前缀）
+  std::string key_with_workflow = build_framework_key(session_id, dialogue_id, "unknown_workflow." + key);
+  if(get_data(key_with_workflow, value)) return true;
+
+  // 2. 尝试新格式（不带 workflow 前缀）
+  std::string key_no_workflow = build_framework_key(session_id, dialogue_id, key);
+  if(get_data(key_no_workflow, value)) return true;
+
+  // 3. Fallback: 旧格式（dialogue_id/key）
+  std::string legacy_key = dialogue_id.empty() ? key : dialogue_id + "/" + key;
+  if(get_data(legacy_key, value)) return true;
+
+  return false;
+}
+```
+
+**隔离层级**：
+
+| 层级 | Key 组成 | 隔离效果 |
+|------|---------|---------|
+| Session | `/session/{session-id}/` | 多租户隔离 |
+| Namespace | `/sys/` | 框架数据命名空间 |
+| Dialogue | `{dialogue-id}/` | 多对话隔离 |
+| Workflow | `{workflow-id}.{key}` | 多 workflow 隔离 |
+
+**示例**：
+
+```
+skill_selection_node (output: selected_skills, next_skills)
+    │
+    ├── selected_skills ──Edge──→ downstream_node
+    │
+    └── next_skills ──无下游──→ DataBus
+        Key: /session/550e8400.../sys/1741156.../skill-selection-workflow.next_skills
+        Consumer: dispatcher
+```
+
+**优势**：
+- ✅ **Node 代码零改动**：现有 C++/Python/Shell/Go 节点无需修改
+- ✅ **规则简单**：有下游走 Edge，无下游走 DataBus
+- ✅ **完整隔离**：Session → Dialogue → Workflow 多层隔离
+- ✅ **向后兼容**：接收端 fallback 支持旧格式
+
 ### 状态
 
 - [ ] 待实施
