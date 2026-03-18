@@ -256,7 +256,14 @@ std::vector<std::string> BuiltinDispatcher::parse_next_skills(const DataVariant&
 #endif
 
     // Fall back to comma-separated format
-    std::istringstream iss(*text);
+    std::string text_copy = *text;
+
+    // Handle JSON array format: strip outer brackets and quotes
+    if(text_copy.size() >= 2 && text_copy.front() == '[' && text_copy.back() == ']') {
+      text_copy = text_copy.substr(1, text_copy.size() - 2);
+    }
+
+    std::istringstream iss(text_copy);
     std::string token;
     while(std::getline(iss, token, ',')) {
       // Trim whitespace
@@ -264,6 +271,10 @@ std::vector<std::string> BuiltinDispatcher::parse_next_skills(const DataVariant&
       size_t end = token.find_last_not_of(" \t\n\r");
       if(start != std::string::npos && end != std::string::npos) {
         std::string skill = token.substr(start, end - start + 1);
+        // Strip surrounding quotes if present (JSON string elements)
+        if(skill.size() >= 2 && skill.front() == '"' && skill.back() == '"') {
+          skill = skill.substr(1, skill.size() - 2);
+        }
         if(!skill.empty()) {
           result.push_back(skill);
         }
