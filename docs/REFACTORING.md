@@ -132,13 +132,14 @@ node_b 输出 result="B"
 
 **优点**：
 - ✅ **完美解决多入边场景**：每条边可映射到不同 key
+- ✅ **单上游场景零配置**：Edge 点对点传递，天然隔离并行干扰，无需任何参数
 - 数据流显式声明，workflow 更清晰
 - 支持 key 重命名（`result` → `input_data`）
 - 支持 `REFERENCE` 模式（传递 DataBus URI 而非值）
 
 **缺点**：
 - 实现复杂度中等，需修改 `process_node()` 逻辑
-- 现有 workflow 需补充 Edge 的 `source_outputs` / `target_inputs` 配置
+- 多上游汇聚场景需补充 Edge 的 `source_outputs` / `target_inputs` 配置
 
 **代码变更示意**：
 
@@ -232,11 +233,11 @@ for(const auto& out : node_outputs) {
 | 维度 | 方案一：Edge 映射 | 方案二：移除无前缀 | 方案三：混合方案 |
 |------|------------------|-------------------|-----------------|
 | 实现复杂度 | 中 | 低 | 高 |
-| 向后兼容 | ⚠️ 需补充 Edge 配置 | ❌ 破坏兼容 | ✅ 完全兼容 |
+| 向后兼容 | ✅ 单上游零配置 | ❌ 破坏兼容 | ✅ 完全兼容 |
 | 数据流清晰度 | ✅ 显式声明 | ⚠️ 隐式约定 | ⚠️ 优先级约定 |
 | **多入边场景** | ✅ **完美解决** | ❌ 下游需硬编码上游名称 | ❌ 未解决 |
-| 冲突解决 | ✅ 完全解决 | ✅ 完全解决 | ⚠️ 部分解决 |
-| 迁移成本 | 中 | 高 | 低 |
+| 并行 node 隔离 | ✅ 点对点天然隔离 | ✅ 前缀区分 | ⚠️ 部分解决 |
+| 迁移成本 | 低（仅多上游需配置） | 高 | 低 |
 
 ### 结论
 
@@ -245,14 +246,38 @@ for(const auto& out : node_outputs) {
 1. **唯一能正确解决多入边场景**：下游 node 通过不同 key 消费多个上游输出
 2. **数据流显式声明**：Edge 配置清晰表达数据流向
 3. **已有基础设施**：`transfer_data()` 已实现，仅需调用
+4. **单上游零配置**：Edge 点对点传递天然隔离并行干扰，大多数 workflow 无需修改
 
 **实施步骤**：
 
 1. 修改 `process_node()` 在 input hydration 前增加 Edge 数据映射逻辑
-2. 遍历入边，调用 `edge->transfer_data()` 获取映射后的数据
-3. 将映射数据合并到 hydrated inputs
-4. 如果 Edge 无 `source_outputs` / `target_inputs` 配置，保持当前行为（fallback）
-5. 补充单元测试验证多入边场景
+2. 遍历入边，获取源 node 输出：
+   - **无 `source_outputs` / `target_inputs` 配置**：直接传递同名 key（单上游场景）
+   - **有配置**：调用 `edge->transfer_data()` 进行映射重命名（多上游汇聚场景）
+3. 将传递/映射后的数据合并到 hydrated inputs
+4. 补充单元测试验证单上游和多上游汇聚场景
+
+**Edge 配置策略**：
+
+| 场景 | 是否需要配置 | 说明 |
+|------|-------------|------|
+| 单上游 + key 匹配 | ❌ 不需要 | Edge 直接传递 `source.outputs[key]` → `target.inputs[key]` |
+| 单上游 + key 重命名 | ⚠️ 可选 | 配置 `source_outputs`/`target_inputs` 实现重命名 |
+| 多上游汇聚 | ✅ 必须 | 必须配置区分不同来源的同名输出 |
+
+**单上游零配置示例**：
+
+```
+并行执行场景（无需任何 Edge 参数）：
+
+Node A (output: result) ──Edge──→ Node B (input: result)
+Node A' (output: result) ──Edge──→ Node C (input: result)
+
+Edge(A→B) 从 A.outputs 直接读取 "result" → B.inputs["result"]
+Edge(A'→C) 从 A'.outputs 直接读取 "result" → C.inputs["result"]
+
+✅ 天然隔离，不会产生并发问题
+```
 
 ### 状态
 
