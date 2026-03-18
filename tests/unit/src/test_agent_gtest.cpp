@@ -844,6 +844,55 @@ TEST_F(AgentTest, BuiltinDispatcherParsesNextSkills) {
   EXPECT_EQ(skills.size(), 0);
 }
 
+// Test JSON array parsing fallback (works with or without RapidJSON)
+TEST_F(AgentTest, BuiltinDispatcherParsesNextSkillsJsonArrayFallback) {
+  // Test compact JSON array (no spaces)
+  std::string compact = R"(["shopping","foodie"])";
+  DataVariant value = compact;
+  auto skills = framework::BuiltinDispatcher::parse_next_skills(value);
+  EXPECT_EQ(skills.size(), 2);
+  EXPECT_EQ(skills[0], "shopping");
+  EXPECT_EQ(skills[1], "foodie");
+
+  // Test JSON array with spaces
+  std::string with_spaces = R"([  "travel" ,  "search"  ])";
+  value = with_spaces;
+  skills = framework::BuiltinDispatcher::parse_next_skills(value);
+  EXPECT_EQ(skills.size(), 2);
+  EXPECT_EQ(skills[0], "travel");
+  EXPECT_EQ(skills[1], "search");
+
+  // Test JSON array with newlines
+  std::string with_newlines = "[\n  \"skill1\",\n  \"skill2\"\n]";
+  value = with_newlines;
+  skills = framework::BuiltinDispatcher::parse_next_skills(value);
+  EXPECT_EQ(skills.size(), 2);
+  EXPECT_EQ(skills[0], "skill1");
+  EXPECT_EQ(skills[1], "skill2");
+
+  // Test single element JSON array
+  std::string single = R"(["only_one"])";
+  value = single;
+  skills = framework::BuiltinDispatcher::parse_next_skills(value);
+  EXPECT_EQ(skills.size(), 1);
+  EXPECT_EQ(skills[0], "only_one");
+
+  // Test empty JSON array
+  std::string empty_array = R"([])";
+  value = empty_array;
+  skills = framework::BuiltinDispatcher::parse_next_skills(value);
+  EXPECT_EQ(skills.size(), 0);
+
+  // Test JSON array with mixed whitespace
+  std::string mixed = R"([ "first","second" , "third"])";
+  value = mixed;
+  skills = framework::BuiltinDispatcher::parse_next_skills(value);
+  EXPECT_EQ(skills.size(), 3);
+  EXPECT_EQ(skills[0], "first");
+  EXPECT_EQ(skills[1], "second");
+  EXPECT_EQ(skills[2], "third");
+}
+
 TEST_F(AgentTest, DispatcherWithNextSkillsFromPackage) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "agentflow_test_dispatcher_skills";
