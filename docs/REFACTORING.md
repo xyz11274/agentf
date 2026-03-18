@@ -57,10 +57,54 @@ Workflow: fork_join_workflow
 
 这是更本质的问题：**下游 node 需要同时消费多个上游 node 的同名输出**。
 
+**场景三：同 dialogue 下不同 workflow 输出到 DataBus 的字段冲突**
+
+```
+Session: session_0
+Dialogue: dialogue_123
+
+并行执行的 Workflow:
+  ├── skill-selection-workflow (输出 next_skills = ["travel", "shopping"])
+  ├── travel-workflow (输出 response = "Travel result", next_skills = [])
+  └── shopping-workflow (输出 response = "Shopping result", next_skills = [])
+
+DataBus keys (当前实现):
+  dialogue_123/next_skills      → 被覆盖！最终是哪个 workflow 的值？
+  dialogue_123/response         → 被覆盖！最终是哪个 workflow 的值？
+  result                        → 被覆盖！
+
+问题：
+  - 多个 skill workflow 并行执行（由 skill-selection 触发）
+  - 每个 workflow 都输出 response, next_skills 等通用字段
+  - 这些字段在 DataBus 上相互覆盖
+  - Coordinator 无法正确读取各 skill 的响应
+```
+
+**实际案例（SystemAgentMock）**：
+
+```
+skill-selection-workflow 完成 → 发布 next_skills=["travel"] 到 DataBus
+travel-workflow 完成          → 发布 response="Travel..." 到 DataBus
+                               → 发布 next_skills=[] 到 DataBus（覆盖！）
+
+此时 Coordinator 读取 next_skills=[] 而非 ["travel"]，
+可能导致后续 skill 无法正确调度。
+```
+
+**根因分析**：
+
+| 层级 | 当前隔离 | 缺失隔离 |
+|------|---------|---------|
+| Session | ✅ `/session/{session-id}/` | - |
+| Dialogue | ✅ `{dialogue-id}/` | - |
+| **Workflow** | ❌ 无 | **不同 workflow 输出相同 key 会冲突** |
+| Node | ⚠️ 部分 | 同 workflow 内 node 冲突 |
+
 **影响范围**：
-- 串行 workflow：无影响
-- Fork 并行 + 相同输出 key：下游 node 可能读到错误数据
+- 单 workflow 串行执行：无影响
+- 同 workflow Fork 并行 + 相同输出 key：下游 node 可能读到错误数据
 - **Fork-Join 模式**：下游 node 无法正确消费多个上游输出
+- **多 workflow 并行**：DataBus 字段冲突，框架组件读取错误数据
 
 ### 备选方案
 
@@ -236,17 +280,19 @@ for(const auto& out : node_outputs) {
 | 向后兼容 | ✅ 单上游零配置 | ❌ 破坏兼容 | ✅ 完全兼容 |
 | 数据流清晰度 | ✅ 显式声明 | ⚠️ 隐式约定 | ⚠️ 优先级约定 |
 | **多入边场景** | ✅ **完美解决** | ❌ 下游需硬编码上游名称 | ❌ 未解决 |
+| **多 workflow 并行** | ✅ **DataBus 加 workflow 前缀** | ✅ 前缀区分 | ⚠️ 部分解决 |
 | 并行 node 隔离 | ✅ 点对点天然隔离 | ✅ 前缀区分 | ⚠️ 部分解决 |
 | 迁移成本 | 低（仅多上游需配置） | 高 | 低 |
 
 ### 结论
 
-**推荐方案一（Edge 数据映射）**，理由：
+**推荐方案一（Edge 数据映射 + DataBus workflow 前缀）**，理由：
 
 1. **唯一能正确解决多入边场景**：下游 node 通过不同 key 消费多个上游输出
-2. **数据流显式声明**：Edge 配置清晰表达数据流向
-3. **已有基础设施**：`transfer_data()` 已实现，仅需调用
-4. **单上游零配置**：Edge 点对点传递天然隔离并行干扰，大多数 workflow 无需修改
+2. **完美解决多 workflow 并行**：DataBus key 加 workflow 前缀，天然隔离不同 workflow 输出
+3. **数据流显式声明**：Edge 配置清晰表达数据流向
+4. **已有基础设施**：`transfer_data()` 已实现，仅需调用
+5. **单上游零配置**：Edge 点对点传递天然隔离并行干扰，大多数 workflow 无需修改
 
 **实施步骤**：
 
@@ -394,6 +440,233 @@ skill_selection_node (output: selected_skills, next_skills)
         Key: /session/550e8400.../sys/1741156.../skill-selection-workflow.next_skills
         Consumer: dispatcher
 ```
+
+**场景三解决方案示例**：
+
+```
+同 dialogue 下多 workflow 并行执行：
+
+skill-selection-workflow 输出 next_skills:
+  Key: /session/session_0/sys/dialogue_123/skill-selection-workflow.next_skills
+  Value: ["travel", "shopping"]
+
+travel-workflow 输出 response:
+  Key: /session/session_0/sys/dialogue_123/travel-workflow.response
+  Value: "Travel booking confirmed..."
+
+shopping-workflow 输出 response:
+  Key: /session/session_0/sys/dialogue_123/shopping-workflow.response
+  Value: "Shopping list generated..."
+
+Coordinator 读取各 skill 响应：
+  - 读取 /session/session_0/sys/dialogue_123/travel-workflow.response ✅
+  - 读取 /session/session_0/sys/dialogue_123/shopping-workflow.response ✅
+  - 各 workflow 输出完全隔离，无覆盖冲突
+```
+
+**场景对比**：
+
+| 场景 | 冲突原因 | 解决方式 |
+|------|---------|---------|
+| 场景一：同 workflow 并行 node | 无前缀发布 | Edge 点对点传递 |
+| 场景二：多入边汇聚 | DataBus key 相同 | Edge 映射重命名 |
+| **场景三：多 workflow 并行** | **无 workflow 前缀** | **DataBus key 加 workflow 前缀** |
+
+### 场景三代码适配方案
+
+#### 1. Key 生产端适配（runtime.cpp）
+
+**当前代码**（`src/runtime/runtime.cpp:656-679`）：
+
+```cpp
+// 发布 node 输出到 DataBus
+for(const auto& out : node_outputs) {
+  // 1. 带 dialogue_id 前缀
+  std::string output_key = flow_dialogue_id + "/" + out.first;
+  agent->publish_data(output_key, out.second);
+  bus.put(output_key, out.second);
+
+  // 2. 带 workflow.node 前缀
+  std::string scoped_key = workflow->get_id() + "." + node->get_id() + "." + out.first;
+  if(!flow_dialogue_id.empty()) {
+    scoped_key = flow_dialogue_id + "/" + scoped_key;
+  }
+  agent->publish_data(scoped_key, out.second);
+  bus.put(scoped_key, out.second);
+
+  // 3. 无前缀（问题所在 - 导致多 workflow 冲突）
+  agent->publish_data(out.first, out.second);
+  bus.put(out.first, out.second);
+}
+```
+
+**适配方案**：
+
+```cpp
+// 新增辅助函数
+static std::string build_framework_key(const std::string& session_id,
+                                       const std::string& dialogue_id,
+                                       const std::string& workflow_id,
+                                       const std::string& key) {
+  std::string bus_key = "/session/" + session_id + "/sys/";
+  if(!dialogue_id.empty()) {
+    bus_key += dialogue_id + "/";
+  }
+  bus_key += workflow_id + "." + key;
+  return bus_key;
+}
+
+// 修改发布逻辑
+for(const auto& out : node_outputs) {
+  // 检查是否有下游节点
+  if(has_downstream_edge(workflow, node)) {
+    // 有下游 → Edge 点对点传递（已在其他地方实现）
+    continue;
+  }
+
+  // 无下游 → DataBus 发布（带完整隔离前缀）
+  std::string bus_key = build_framework_key(
+      session_id, dialogue_id, workflow->get_id(), out.first);
+
+  agent->publish_data(bus_key, out.second);
+  bus.put(bus_key, out.second);
+
+  // 保留旧格式向后兼容（可选，建议移除）
+  // agent->publish_data(out.first, out.second);
+}
+```
+
+#### 2. Key 消费端适配（agent.cpp / builtin_dispatcher.cpp）
+
+**当前代码**（消费 next_skills / response）：
+
+```cpp
+// agent.cpp:1229-1234 - 读取 next_skills
+std::string next_skills_key = dialogue_id.empty() ? "next_skills" : dialogue_id + "/next_skills";
+DataVariant next_skills_value;
+if(get_data(next_skills_key, next_skills_value)) { ... }
+
+// agent.cpp:1562-1564 - 读取 response
+std::string response_key = dialogue_id.empty() ? "response" : dialogue_id + "/response";
+DataVariant response_value;
+if(get_data(response_key, response_value)) { ... }
+
+// builtin_dispatcher.cpp:95 - 读取 next_skills（无前缀）
+if(agent.get_data("next_skills", next_skills_value)) { ... }
+```
+
+**适配方案**：
+
+```cpp
+// 新增辅助函数 - 支持多格式 fallback
+bool get_framework_data(MMAgent& agent,
+                        const std::string& session_id,
+                        const std::string& dialogue_id,
+                        const std::string& workflow_id,
+                        const std::string& key,
+                        DataVariant& value) {
+  // 1. 尝试新格式（带 workflow 前缀）
+  std::string new_key = "/session/" + session_id + "/sys/";
+  if(!dialogue_id.empty()) {
+    new_key += dialogue_id + "/";
+  }
+  new_key += workflow_id + "." + key;
+
+  if(agent.get_data(new_key, value)) {
+    Logger::instance().info_f("[GET_FRAMEWORK_DATA] Found key=%s (new format)", new_key.c_str());
+    return true;
+  }
+
+  // 2. Fallback: 旧格式（dialogue_id/key）
+  std::string legacy_key = dialogue_id.empty() ? key : dialogue_id + "/" + key;
+  if(agent.get_data(legacy_key, value)) {
+    Logger::instance().info_f("[GET_FRAMEWORK_DATA] Found key=%s (legacy format)", legacy_key.c_str());
+    return true;
+  }
+
+  // 3. Fallback: 无前缀
+  if(agent.get_data(key, value)) {
+    Logger::instance().info_f("[GET_FRAMEWORK_DATA] Found key=%s (no prefix)", key.c_str());
+    return true;
+  }
+
+  return false;
+}
+```
+
+**消费端调用示例**：
+
+```cpp
+// agent.cpp - Coordinator 读取 skill workflow 的响应
+std::string skill_workflow_id = "travel-workflow";  // 从上下文获取
+DataVariant response_value;
+
+if(get_framework_data(*this, session_id, dialogue_id, skill_workflow_id, "response", response_value)) {
+  // 成功读取
+}
+
+// builtin_dispatcher.cpp - 读取 next_skills
+// 需要知道是哪个 workflow 输出的 next_skills
+// 通常由 skill-selection-workflow 输出
+std::string source_workflow_id = "skill-selection-workflow";
+if(get_framework_data(agent, session_id, dialogue_id, source_workflow_id, "next_skills", next_skills_value)) {
+  // 成功读取
+}
+```
+
+#### 3. 适配难点
+
+| 难点 | 描述 | 解决方案 |
+|------|------|---------|
+| **消费端需知道 workflow_id** | 读取时需指定来源 workflow | 通过上下文或配置传递 workflow_id |
+| **向后兼容** | 旧代码使用无前缀 key | Fallback 机制支持旧格式 |
+| **多 skill 响应汇聚** | Coordinator 需读取多个 skill 的响应 | 遍历已执行的 skill workflow 列表 |
+| **session_id 获取** | 新格式需要 session_id | 从 WorkflowExecutionState 获取 |
+
+#### 4. 消费端适配（Coordinator 汇聚多 skill 响应）
+
+**当前实现**（读取单一 response）：
+
+```cpp
+// agent.cpp:1562-1564
+std::string response_key = dialogue_id.empty() ? "response" : dialogue_id + "/response";
+DataVariant response_value;
+if(get_data(response_key, response_value)) { ... }
+```
+
+**适配方案**（读取多个 skill 响应）：
+
+```cpp
+// 获取已执行的 skill 列表
+std::vector<std::string> executed_skills = get_executed_skills(dialogue_id);
+
+// 汇聚各 skill 的响应
+std::string aggregated_response;
+for(const auto& skill_name : executed_skills) {
+  std::string skill_workflow_id = skill_name + "-workflow";
+
+  DataVariant skill_response;
+  if(get_framework_data(*this, session_id, dialogue_id, skill_workflow_id, "response", skill_response)) {
+    if(const auto* text = std::get_if<std::string>(&skill_response)) {
+      aggregated_response += "[" + skill_name + "] " + *text + "\n";
+    }
+  }
+}
+
+// 发布汇聚后的响应
+std::string final_response_key = build_framework_key(session_id, dialogue_id, "coordinator-workflow", "response");
+publish_data(final_response_key, aggregated_response);
+```
+
+#### 5. 代码变更清单
+
+| 文件 | 变更类型 | 描述 |
+|------|---------|------|
+| `src/runtime/runtime.cpp` | 修改 | 输出发布逻辑，添加 workflow 前缀 |
+| `src/agent/agent.cpp` | 新增 | `get_framework_data()` 辅助函数 |
+| `src/agent/agent.cpp` | 修改 | Coordinator 读取响应逻辑 |
+| `src/agent/builtin_dispatcher.cpp` | 修改 | 读取 next_skills 逻辑 |
+| `include/internal/agent/agent.h` | 新增 | `get_framework_data()` 声明 |
 
 **优势**：
 - ✅ **Node 代码零改动**：现有 C++/Python/Shell/Go 节点无需修改
