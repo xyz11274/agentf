@@ -173,16 +173,66 @@ MMNode 热更新也由 Worker 处理，默认按 `enable_hot_reload/hot_reload_c
 
 ### next_skills 格式
 
-支持两种格式：
+支持多种格式：
 
-1. **JSON 数组格式**（推荐）：
+1. **JSON 字符串数组格式**（旧格式，向后兼容）：
 ```json
 ["search", "summary", "delegate"]
 ```
 
-2. **逗号分隔字符串格式**：
+2. **JSON 对象数组格式**（新格式，支持 exec_skill_key）：
+```json
+[
+  {"name": "travel", "exec_skill_key": "travel_data"},
+  {"name": "shopping", "exec_skill_key": "shopping_data"},
+  {"name": "foodie"}
+]
+```
+
+3. **混合格式**：
+```json
+["skill1", {"name": "skill2", "exec_skill_key": "key2"}, "skill3"]
+```
+
+4. **逗号分隔字符串格式**：
 ```
 search, summary, delegate
+```
+
+#### exec_skill_key 说明
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | string | 是 | Skill 名称 |
+| `exec_skill_key` | string | 否 | DataBus key，用于读取该 skill 的专属数据 |
+
+当指定 `exec_skill_key` 时，框架会将其注入到 skill node 的 `inputs["exec_skill_key"]`，
+node 可据此从 DataBus 读取专属数据，实现 skill 输入的精准分发。
+
+#### 访问 exec_skill_key
+
+```cpp
+// C++ SO Node
+std::string exec_skill_key;
+if(inputs.count("exec_skill_key")) {
+  exec_skill_key = std::get<std::string>(inputs["exec_skill_key"]);
+  // 从 DataBus 读取 skill 专属数据
+}
+```
+
+```bash
+# Shell Node
+EXEC_SKILL_KEY="${inputs[exec_skill_key]}"
+if [ -n "$EXEC_SKILL_KEY" ]; then
+  SKILL_DATA=$(af_databus_get "$EXEC_SKILL_KEY")
+fi
+```
+
+```python
+# Python Node
+exec_skill_key = inputs.get("exec_skill_key", "")
+if exec_skill_key:
+    skill_data = af_databus_get(exec_skill_key)
 ```
 
 ### 示例

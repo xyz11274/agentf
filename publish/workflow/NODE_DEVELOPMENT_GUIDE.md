@@ -175,6 +175,76 @@ if(const auto it = message.metadata.find("selected_skills"); it != message.metad
 // 按行解析，路由到对应 skill task
 ```
 
+#### next_skills（后续技能拉起）
+
+`next_skills` 用于在当前 workflow 完成后拉起后续的 skill task。相比 `selected_skills`，`next_skills` 支持为每个 skill 指定专属数据源。
+
+**数据格式**：
+
+1. **字符串数组格式**（向后兼容）：
+```json
+["skill1", "skill2", "skill3"]
+```
+
+2. **对象数组格式**（新格式，支持 exec_skill_key）：
+```json
+[
+  {"name": "travel", "exec_skill_key": "travel_data"},
+  {"name": "shopping", "exec_skill_key": "shopping_data"},
+  {"name": "foodie"}
+]
+```
+
+3. **混合格式**：
+```json
+["skill1", {"name": "skill2", "exec_skill_key": "key2"}]
+```
+
+**exec_skill_key 用途**：
+- 指定 DataBus key，用于读取该 skill 的专属数据
+- 框架将 `exec_skill_key` 注入到 skill node 的 `inputs["exec_skill_key"]`
+- Node 可据此从 DataBus 读取专属数据，实现输入精准分发
+
+**设置方式**：
+
+```bash
+# Shell 脚本设置 next_skills
+af_databus_set "next_skills" '[{"name": "travel", "exec_skill_key": "travel_data"}]'
+
+# 存储各 skill 的专属数据
+af_databus_set "travel_data" "北京-上海行程规划..."
+```
+
+```python
+# Python 设置 next_skills
+import json
+next_skills = [
+    {"name": "travel", "exec_skill_key": "travel_data"},
+    {"name": "foodie"}
+]
+af_databus_set("next_skills", json.dumps(next_skills))
+af_databus_set("travel_data", "行程数据...")
+```
+
+**在 Skill Node 中访问 exec_skill_key**：
+
+```bash
+# Shell Node
+EXEC_SKILL_KEY="${inputs[exec_skill_key]}"
+if [ -n "$EXEC_SKILL_KEY" ]; then
+  SKILL_DATA=$(af_databus_get "$EXEC_SKILL_KEY")
+  echo "专属数据: $SKILL_DATA"
+fi
+```
+
+```python
+# Python Node
+exec_skill_key = inputs.get("exec_skill_key", "")
+if exec_skill_key:
+    skill_data = af_databus_get(exec_skill_key)
+    print(f"专属数据: {skill_data}")
+```
+
 #### DataBus 控制消息
 
 Node 可以通过 DataBus 发布事件消息，实现异步通信和状态通知：

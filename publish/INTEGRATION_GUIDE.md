@@ -1,8 +1,8 @@
 # AgentFlow 服务集成指南
 
 > 本文档面向服务开发者，说明如何将 AgentFlow 框架集成到一个服务中。
-> - 文档版本：v1.2
-> - 更新日期：2026-03-17
+> - 文档版本：v1.3
+> - 更新日期：2026-03-19
 
 ---
 
@@ -1726,6 +1726,125 @@ set_output("responses", "这是响应内容");  // done 默认为 false
 - 单响应 `response` key 继续工作
 - 多响应 `responses` 为新增功能
 - 两者可同时使用，框架优先处理多响应
+
+### 7.7 next_skills 格式扩展
+
+`next_skills` 支持为每个 skill 指定专属数据源，实现 skill 输入数据的精准分发。
+
+#### 格式对比
+
+**旧格式（向后兼容）**：
+
+```json
+["skill1", "skill2"]
+```
+
+**新格式**：
+
+```json
+[
+  {"name": "skill1", "exec_skill_key": "travel_data"},
+  {"name": "skill2", "exec_skill_key": "shopping_data"},
+  {"name": "skill3"}
+]
+```
+
+**混合格式**：
+
+```json
+["skill1", {"name": "skill2", "exec_skill_key": "key2"}, "skill3"]
+```
+
+#### 字段说明
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | string | 是 | Skill 名称 |
+| `exec_skill_key` | string | 否 | DataBus key，用于读取该 skill 的专属数据 |
+
+#### 使用场景
+
+Dispatcher 解析用户输入后，将不同类型的数据存入 DataBus 不同 key，每个被调用的 skill 从各自的 `exec_skill_key` 读取其专属数据：
+
+```
+用户输入: "帮我规划北京-上海行程，顺便推荐一些当地美食"
+
+Dispatcher 解析后存入 DataBus:
+  /session/{id}/sys/{dialogue}/travel_data = "北京-上海行程规划..."
+  /session/{id}/sys/{dialogue}/foodie_data = "当地美食推荐..."
+
+Dispatcher 输出 next_skills:
+  [
+    {"name": "travel", "exec_skill_key": "travel_data"},
+    {"name": "foodie", "exec_skill_key": "foodie_data"}
+  ]
+
+Skill Node 通过 inputs["exec_skill_key"] 读取各自的专属数据
+```
+
+#### Node 访问 exec_skill_key
+
+在 skill node 中，通过 `inputs["exec_skill_key"]` 获取数据源 key，再从 DataBus 读取数据：
+
+```cpp
+// SO Library Node 示例
+std::string exec_skill_key;
+if(inputs.count("exec_skill_key")) {
+  exec_skill_key = std::get<std::string>(inputs["exec_skill_key"]);
+  // 从 DataBus 读取 skill 专属数据
+  DataVariant skill_data;
+  if(get_data(exec_skill_key, skill_data)) {
+    // 处理数据...
+  }
+}
+```
+
+```bash
+# Shell Node 示例
+EXEC_SKILL_KEY="${inputs[exec_skill_key]}"
+if [ -n "$EXEC_SKILL_KEY" ]; then
+  SKILL_DATA=$(af_databus_get "$EXEC_SKILL_KEY")
+  # 处理数据...
+fi
+```
+
+```python
+# Python Node 示例
+exec_skill_key = inputs.get("exec_skill_key", "")
+if exec_skill_key:
+    skill_data = af_databus_get(exec_skill_key)
+    # 处理数据...
+```
+
+#### 数据流
+
+```
+Dispatcher Node 输出:
+  │
+  ├── next_skills = [{"name": "travel", "exec_skill_key": "travel_data"}, ...]
+  │
+  └── DataBus:
+        /session/{id}/sys/{dialogue}/travel_data = "..."
+        /session/{id}/sys/{dialogue}/shopping_data = "..."
+
+框架处理:
+  │
+  ├── parse_next_skills() 解析为 SkillSpec 列表
+  │
+  ├── launch_skill_task(travel, "travel_data", ...)
+  │     └── skill_message.metadata["exec_skill_key"] = "travel_data"
+  │     └── skill_task->set_parameter("exec_skill_key", "travel_data")
+  │
+  └── runtime.cpp:
+        inputs["exec_skill_key"] = "travel_data"
+        // Node 可通过 inputs 访问
+```
+
+#### 向后兼容性
+
+- 旧格式字符串数组继续工作
+- `exec_skill_key` 为可选字段，默认为空
+- 混合格式（字符串和对象并存）完全支持
 
 ---
 

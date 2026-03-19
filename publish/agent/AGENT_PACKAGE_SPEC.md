@@ -57,12 +57,21 @@ MMAgent 运行时元数据，至少包含：
   - `skill.instance_pool_size`（>= 1，默认 2）
   - `skill.expected_parameters`（可选，字符串数组，声明 skill 执行所需的参数名列表）
 - **`dispatcher` 任务特定字段**（Dispatcher 为框架内置 workflow）：
-  - `next_skills`：字符串数组，指定 Dispatcher 默认拉起的 skill 名称列表
+  - `next_skills`：数组，指定 Dispatcher 默认拉起的 skill（支持字符串数组或对象数组格式）
   - `max_concurrent_skills`：最大并发 skill 数（>= 1，默认 10）
 - **next_skills 机制**：
   - 任何 task（dispatcher/coordinator/skill）都可以输出 `next_skills` 到 DataBus
   - 框架会统一检测并拉起对应的 skill task
-  - 输出格式：JSON 数组 `["skill1", "skill2"]` 或逗号分隔字符串 `"skill1,skill2"`
+  - **旧格式**：JSON 字符串数组 `["skill1", "skill2"]` 或逗号分隔字符串 `"skill1,skill2"`
+  - **新格式**：JSON 对象数组，支持为每个 skill 指定 `exec_skill_key`
+    ```json
+    [
+      {"name": "skill1", "exec_skill_key": "travel_data"},
+      {"name": "skill2"}
+    ]
+    ```
+  - `exec_skill_key`：可选字段，指定 DataBus key，用于 skill 专属数据分发
+  - 混合格式（字符串和对象并存）完全支持
 - **skill workflow 输出约定**：
   - `response`：skill 执行结果文本
   - `next_skills`：后续要拉起的 skill 名称列表
