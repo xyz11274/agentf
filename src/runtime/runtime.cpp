@@ -15,6 +15,7 @@
 #include "runtime/databus/node_databus_adapter.h"
 #include "runtime/databus/node_databus_client.h"
 #include "utils/logger.h"
+#include "workflow/dsl/json_adapter.h"
 
 namespace agentflow {
 namespace runtime {
@@ -790,15 +791,105 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
     } else {
       // No downstream → DataBus publish (session isolation format)
       for(const auto& out : node_outputs) {
-        std::string bus_key = build_framework_key(
-            flow_session_id, flow_dialogue_id,
-            workflow ? workflow->get_id() : "unknown",
-            out.first);
+        // Special handling for multi-response key
+        if(out.first == "responses") {
+          // Parse response content
+          std::string response_content;
+          bool is_done = false;
 
-        agent->publish_data(bus_key, out.second);
-        bus.put(bus_key, out.second);
+          if(const auto* text = std::get_if<std::string>(&out.second)) {
+            // Try to parse as JSON for content and done flag
+            auto json_doc = dsl::JsonDocumentFactory::create();
+            if(json_doc->parse(*text) && json_doc->is_valid()) {
+              auto root = json_doc->root();
+              if(root && root->is_object()) {
+                // Extract content
+                response_content = dsl::JsonHelper::get_string(root, "content", *text);
+                // Extract done flag
+                is_done = dsl::JsonHelper::get_bool(root, "done", false);
+              } else {
+                // Not an object, use raw text as content
+                response_content = *text;
+              }
+            } else {
+              // Not valid JSON, use raw text as content
+              response_content = *text;
+            }
+          }
 
-        Logger::instance().info_f("[DATABUS_PUBLISH] Key=%s", bus_key.c_str());
+          // Read total_count as next index (default 0)
+          std::string count_key = build_framework_key(
+              flow_session_id, flow_dialogue_id,
+              workflow ? workflow->get_id() : "unknown",
+              "responses/total_count");
+          int next_index = 0;
+          DataVariant count_val;
+          if(bus.get(count_key, count_val)) {
+            if(const auto* count_str = std::get_if<std::string>(&count_val)) {
+              try {
+                next_index = std::stoi(*count_str);
+              } catch(...) {
+                next_index = 0;
+              }
+            }
+          }
+
+          // Write response content
+          std::string content_key = build_framework_key(
+              flow_session_id, flow_dialogue_id,
+              workflow ? workflow->get_id() : "unknown",
+              "responses/" + std::to_string(next_index) + "/content");
+          bus.put(content_key, response_content);
+          agent->publish_data(content_key, response_content);
+
+          // Set consumed = false
+          std::string consumed_key = build_framework_key(
+              flow_session_id, flow_dialogue_id,
+              workflow ? workflow->get_id() : "unknown",
+              "responses/" + std::to_string(next_index) + "/consumed");
+          bus.put(consumed_key, std::string("false"));
+          agent->publish_data(consumed_key, std::string("false"));
+
+          // Increment and write total_count
+          bus.put(count_key, std::to_string(next_index + 1));
+          agent->publish_data(count_key, std::to_string(next_index + 1));
+
+          // Initialize consumed_count if not exists
+          std::string consumed_count_key = build_framework_key(
+              flow_session_id, flow_dialogue_id,
+              workflow ? workflow->get_id() : "unknown",
+              "responses/consumed_count");
+          DataVariant consumed_count_val;
+          if(!bus.get(consumed_count_key, consumed_count_val)) {
+            bus.put(consumed_count_key, std::string("0"));
+            agent->publish_data(consumed_count_key, std::string("0"));
+          }
+
+          // If done = true, set completion flag
+          if(is_done) {
+            std::string done_key = build_framework_key(
+                flow_session_id, flow_dialogue_id,
+                workflow ? workflow->get_id() : "unknown",
+                "responses/done");
+            bus.put(done_key, std::string("true"));
+            agent->publish_data(done_key, std::string("true"));
+          }
+
+          Logger::instance().info_f(
+              "[MULTI_RESPONSE_PUBLISH] Published response index=%d, done=%d, dialogue_id=%s",
+              next_index, is_done ? 1 : 0, flow_dialogue_id.c_str());
+        } else {
+          // Standard key: publish directly
+          std::string bus_key = build_framework_key(
+              flow_session_id, flow_dialogue_id,
+              workflow ? workflow->get_id() : "unknown",
+              out.first);
+
+          agent->publish_data(bus_key, out.second);
+          bus.put(bus_key, out.second);
+
+          Logger::instance().info_f("[DATABUS_PUBLISH] Key=%s", bus_key.c_str());
+        }
       }
     }
   }

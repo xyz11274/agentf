@@ -1675,6 +1675,58 @@ void handle_skill_launch_failure(const MMAgentMsgQue::Message& message) {
 - 框架优先从消息 metadata 读取，DataBus 作为 fallback
 - 完全向后兼容现有 agent.json 和 workflow
 
+### 7.6 Multi-Response 流式输出
+
+当 coordinator 需要返回多条响应时（如流式输出、渐进式结果推送），使用 `responses` 输出：
+
+#### Node 实现
+
+```cpp
+// 第一次输出
+set_output("responses", R"({"content": "处理中...", "done": false})");
+
+// 第二次输出
+set_output("responses", R"({"content": "中间结果", "done": false})");
+
+// 最终输出
+set_output("responses", R"({"content": "完成！", "done": true})");
+```
+
+也可以使用简化字符串格式（框架自动处理）：
+
+```cpp
+set_output("responses", "这是响应内容");  // done 默认为 false
+```
+
+#### DataBus Key 结构
+
+```
+/session/{session-id}/sys/{dialogue-id}/
+├── response                    # 单响应（向后兼容）
+├── responses/                  # 多响应
+│   ├── total_count = N         # 当前响应总数
+│   ├── consumed_count = M      # 已消费响应数
+│   ├── done = true/false       # 会话是否完成
+│   ├── 0/
+│   │   ├── content = "响应1"
+│   │   └── consumed = false
+│   └── ...
+```
+
+#### 消费流程
+
+框架自动消费多响应，每次 `data_exchange` 触发时：
+1. 读取 `consumed_count` 定位下一个响应
+2. 发送 `responses/{consumed_count}/content` 给客户端
+3. 标记 `consumed=true`，递增 `consumed_count`
+4. 若所有响应已消费且 `done=true`，清理 dialogue 数据
+
+#### 向后兼容性
+
+- 单响应 `response` key 继续工作
+- 多响应 `responses` 为新增功能
+- 两者可同时使用，框架优先处理多响应
+
 ---
 
 ## 8. 部署模式

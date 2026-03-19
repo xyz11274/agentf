@@ -14,6 +14,7 @@
 #include "utils/file_storage.h"
 #include "utils/logger.h"
 #include "workflow/dsl/workflow_parser.h"
+#include "workflow/dsl/json_adapter.h"
 
 #include "agent/context.h"
 #include "agent/coordinator.h"
@@ -280,6 +281,151 @@ bool agent_config_from_json(const std::string& json_str, MMAgent::Config& config
   return true;
 #endif
 }
+
+/// Helper struct for multi-response consumption result
+struct MultiResponseResult {
+  bool has_response = false;         // Whether a response was found
+  std::string content;               // Response content
+  bool is_done = false;              // Whether session is done
+  bool all_consumed = false;         // Whether all responses have been consumed
+  int consumed_index = -1;           // Index of consumed response
+};
+
+/// Consume a single multi-response from the responses queue.
+/// Uses consumed_count for O(1) positioning instead of iteration.
+/// @param agent The agent to read data from
+/// @param session_id Session ID
+/// @param dialogue_id Dialogue ID
+/// @return MultiResponseResult with consumption details
+MultiResponseResult consume_multi_response(MMAgent& agent,
+                                            const std::string& session_id,
+                                            const std::string& dialogue_id) {
+  MultiResponseResult result;
+
+  // Check if responses/done exists (indicates multi-response mode)
+  DataVariant done_val;
+  if(!BuiltinDispatcher::get_framework_data(agent, session_id, dialogue_id, "", "responses/done", done_val)) {
+    return result;  // Not in multi-response mode
+  }
+
+  // Read consumed_count (next to consume)
+  std::string consumed_count_key = "/session/" + session_id + "/sys/" + dialogue_id + "/responses/consumed_count";
+  DataVariant consumed_count_val;
+  int consumed_count = 0;
+  if(agent.get_data(consumed_count_key, consumed_count_val)) {
+    if(const auto* count_str = std::get_if<std::string>(&consumed_count_val)) {
+      try {
+        consumed_count = std::stoi(*count_str);
+      } catch(...) {
+        consumed_count = 0;
+      }
+    }
+  }
+
+  // Read total_count
+  std::string total_count_key = "/session/" + session_id + "/sys/" + dialogue_id + "/responses/total_count";
+  DataVariant total_count_val;
+  int total_count = 0;
+  if(agent.get_data(total_count_key, total_count_val)) {
+    if(const auto* count_str = std::get_if<std::string>(&total_count_val)) {
+      try {
+        total_count = std::stoi(*count_str);
+      } catch(...) {
+        total_count = 0;
+      }
+    }
+  }
+
+  // Check if there are still unconsumed responses
+  if(consumed_count >= total_count) {
+    result.all_consumed = true;
+    // Check done flag
+    if(const auto* done_str = std::get_if<std::string>(&done_val); done_str && *done_str == "true") {
+      result.is_done = true;
+    }
+    return result;
+  }
+
+  // Read the content at consumed_count
+  std::string content_key = "/session/" + session_id + "/sys/" + dialogue_id +
+                            "/responses/" + std::to_string(consumed_count) + "/content";
+  DataVariant content_val;
+  if(agent.get_data(content_key, content_val)) {
+    if(const auto* text = std::get_if<std::string>(&content_val)) {
+      result.has_response = true;
+      result.content = *text;
+      result.consumed_index = consumed_count;
+    }
+  }
+
+  // Check done flag
+  if(const auto* done_str = std::get_if<std::string>(&done_val); done_str && *done_str == "true") {
+    result.is_done = true;
+  }
+
+  return result;
+}
+
+/// Mark a multi-response as consumed and increment consumed_count.
+/// @param agent The agent to update
+/// @param session_id Session ID
+/// @param dialogue_id Dialogue ID
+/// @param index The index that was consumed
+void mark_response_consumed(MMAgent& agent,
+                             const std::string& session_id,
+                             const std::string& dialogue_id,
+                             int index) {
+  // Mark the specific response as consumed
+  std::string consumed_key = "/session/" + session_id + "/sys/" + dialogue_id +
+                             "/responses/" + std::to_string(index) + "/consumed";
+  agent.publish_data(consumed_key, std::string("true"));
+
+  // Increment consumed_count
+  std::string consumed_count_key = "/session/" + session_id + "/sys/" + dialogue_id + "/responses/consumed_count";
+  agent.publish_data(consumed_count_key, std::to_string(index + 1));
+
+  Logger::instance().info_f("[MULTI_RESPONSE_CONSUME] Marked index=%d as consumed, consumed_count=%d",
+                            index, index + 1);
+}
+
+/// Clean up all multi-response data for a dialogue.
+/// @param agent The agent to clean up
+/// @param session_id Session ID
+/// @param dialogue_id Dialogue ID
+void cleanup_multi_responses(MMAgent& agent,
+                              const std::string& session_id,
+                              const std::string& dialogue_id) {
+  // Read total_count to know how many responses to clean
+  std::string total_count_key = "/session/" + session_id + "/sys/" + dialogue_id + "/responses/total_count";
+  DataVariant total_count_val;
+  int total_count = 0;
+  if(agent.get_data(total_count_key, total_count_val)) {
+    if(const auto* count_str = std::get_if<std::string>(&total_count_val)) {
+      try {
+        total_count = std::stoi(*count_str);
+      } catch(...) {
+        total_count = 0;
+      }
+    }
+  }
+
+  // Clean each response entry
+  for(int i = 0; i < total_count; ++i) {
+    agent.publish_data("/session/" + session_id + "/sys/" + dialogue_id +
+                       "/responses/" + std::to_string(i) + "/content", DataVariant());
+    agent.publish_data("/session/" + session_id + "/sys/" + dialogue_id +
+                       "/responses/" + std::to_string(i) + "/consumed", DataVariant());
+  }
+
+  // Clean control keys
+  agent.publish_data(total_count_key, DataVariant());
+  agent.publish_data("/session/" + session_id + "/sys/" + dialogue_id + "/responses/consumed_count", DataVariant());
+  agent.publish_data("/session/" + session_id + "/sys/" + dialogue_id + "/responses/done", DataVariant());
+
+  Logger::instance().info_f("[MULTI_RESPONSE_CLEANUP] Cleaned %d responses for dialogue_id=%s",
+                            total_count, dialogue_id.c_str());
+}
+
 }  // namespace
 
 MMAgent::MMAgent(const Config& config) : config_(config), state_(AgentState::CREATED) {
@@ -1562,8 +1708,52 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       if(already_scheduled) {
         Logger::instance().info_f("[COORDINATORDataExchange] Skills already scheduled, checking if response is ready");
 
-        // Check if coordinator node wrote a response (all skills completed)
-        // Use get_framework_data for new format with fallback support
+        // First check for multi-responses (streaming mode)
+        auto multi_result = consume_multi_response(*this, session->get_session_id(), dialogue_id);
+        if(multi_result.has_response) {
+          // Multi-response found - send it to client
+          Logger::instance().info_f("[COORDINATORDataExchange] Multi-response index=%d ready, sending to client",
+                                    multi_result.consumed_index);
+          MMAgentMsgQue::Message response_message = message;
+          response_message.content = multi_result.content;
+
+          if(session_router_) {
+            session_router_->enqueue_response_message(response_message);
+
+            // Mark as consumed
+            mark_response_consumed(*this, session->get_session_id(), dialogue_id, multi_result.consumed_index);
+
+            // If all consumed and done, clean up dialogue data
+            if(multi_result.is_done && multi_result.consumed_index + 1 >= /* total_count checked via all_consumed */ 0) {
+              // Re-check if we've consumed all responses
+              auto check_result = consume_multi_response(*this, session->get_session_id(), dialogue_id);
+              if(check_result.all_consumed && check_result.is_done) {
+                Logger::instance().info_f("[COORDINATORDataExchange] All multi-responses consumed, cleaning up dialogue_id=%s",
+                                          dialogue_id.c_str());
+                // Clean up dialogue data
+                if(!dialogue_id.empty()) {
+                  publish_data(dialogue_id + "/dialogue_id", DataVariant());
+                  publish_data(dialogue_id + "/user_prompt", DataVariant());
+                  publish_data(dialogue_id + "/next_skills", DataVariant());
+                  publish_data(dialogue_id + "/skills_scheduled", DataVariant());
+                  publish_data(dialogue_id + "/response", DataVariant());
+                  publish_data(dialogue_id + "/travel_result", DataVariant());
+                  publish_data(dialogue_id + "/travel_confidence", DataVariant());
+                  publish_data(dialogue_id + "/shopping_result", DataVariant());
+                  publish_data(dialogue_id + "/shopping_confidence", DataVariant());
+                  publish_data(dialogue_id + "/foodie_result", DataVariant());
+                  publish_data(dialogue_id + "/foodie_confidence", DataVariant());
+                  publish_data(dialogue_id + "/pending_skills_count", DataVariant());
+                  publish_data(dialogue_id + "/coord_forwarded", DataVariant());
+                  cleanup_multi_responses(*this, session->get_session_id(), dialogue_id);
+                }
+              }
+            }
+          }
+          return;
+        }
+
+        // Check for single response (backward compatibility)
         DataVariant response_value;
         if(BuiltinDispatcher::get_framework_data(*this, session->get_session_id(), dialogue_id, "", "response", response_value)) {
           // Response exists - send it to client
@@ -1633,6 +1823,51 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     // No next_skills - coordinator is done, send response to client
     Logger::instance().info_f("[COORDINATORDataExchange] Coordinator completed without skill, sending response");
 
+    // First check for multi-responses (streaming mode)
+    auto multi_result = consume_multi_response(*this, session->get_session_id(), dialogue_id);
+    if(multi_result.has_response) {
+      // Multi-response found - send it to client
+      Logger::instance().info_f("[COORDINATORDataExchange] Multi-response index=%d ready, sending to client",
+                                multi_result.consumed_index);
+      MMAgentMsgQue::Message response_message = message;
+      response_message.content = multi_result.content;
+
+      if(session_router_) {
+        session_router_->enqueue_response_message(response_message);
+
+        // Mark as consumed
+        mark_response_consumed(*this, session->get_session_id(), dialogue_id, multi_result.consumed_index);
+
+        // If all consumed and done, clean up dialogue data
+        if(multi_result.is_done) {
+          // Re-check if we've consumed all responses after incrementing consumed_count
+          auto check_result = consume_multi_response(*this, session->get_session_id(), dialogue_id);
+          if(check_result.all_consumed && check_result.is_done) {
+            Logger::instance().info_f("[COORDINATORDataExchange] All multi-responses consumed, cleaning up dialogue_id=%s",
+                                      dialogue_id.c_str());
+            // Clean up dialogue data
+            if(!dialogue_id.empty()) {
+              publish_data(dialogue_id + "/dialogue_id", DataVariant());
+              publish_data(dialogue_id + "/user_prompt", DataVariant());
+              publish_data(dialogue_id + "/next_skills", DataVariant());
+              publish_data(dialogue_id + "/skills_scheduled", DataVariant());
+              publish_data(dialogue_id + "/response", DataVariant());
+              publish_data(dialogue_id + "/travel_result", DataVariant());
+              publish_data(dialogue_id + "/travel_confidence", DataVariant());
+              publish_data(dialogue_id + "/shopping_result", DataVariant());
+              publish_data(dialogue_id + "/shopping_confidence", DataVariant());
+              publish_data(dialogue_id + "/foodie_result", DataVariant());
+              publish_data(dialogue_id + "/foodie_confidence", DataVariant());
+              publish_data(dialogue_id + "/pending_skills_count", DataVariant());
+              cleanup_multi_responses(*this, session->get_session_id(), dialogue_id);
+            }
+          }
+        }
+      }
+      return;
+    }
+
+    // Single response (backward compatibility)
     MMAgentMsgQue::Message response_message = message;
     // Use get_framework_data for new format with fallback support
     DataVariant response_value;
