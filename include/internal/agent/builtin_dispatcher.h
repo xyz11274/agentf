@@ -18,6 +18,20 @@ class MMAgent;
 class MMWorkflow;
 
 /**
+ * @brief Skill specification for next_skills format extension.
+ *
+ * Supports both old format (string array) and new format (object array with exec_skill_key).
+ */
+struct SkillSpec {
+  std::string name;            ///< Skill name
+  std::string exec_skill_key;  ///< Optional: DataBus key for skill-specific data
+
+  SkillSpec() = default;
+  explicit SkillSpec(const std::string& n) : name(n) {}
+  SkillSpec(const std::string& n, const std::string& key) : name(n), exec_skill_key(key) {}
+};
+
+/**
  * @brief Built-in Dispatcher for task-workflow scheduling.
  *
  * The BuiltinDispatcher is a framework-internal component that handles:
@@ -30,7 +44,7 @@ class BuiltinDispatcher {
  public:
   struct Config {
     std::string dispatcher_id;
-    std::vector<std::string> next_skills;
+    std::vector<std::string> next_skills;  ///< Legacy: skill names only (for backward compat)
     int max_concurrent_skills = 10;
   };
 
@@ -79,6 +93,7 @@ class BuiltinDispatcher {
    * @param agent The agent instance
    * @param session The session context
    * @param skill_name The name of the skill to launch
+   * @param exec_skill_key Optional DataBus key for skill-specific data
    * @param context The context message for the skill
    * @param source_task The task that initiated the skill launch (dispatcher or coordinator)
    * @return true if skill was launched successfully
@@ -86,19 +101,22 @@ class BuiltinDispatcher {
   bool launch_skill_task(MMAgent& agent,
                          const std::shared_ptr<MMAgentSession>& session,
                          const std::string& skill_name,
+                         const std::string& exec_skill_key,
                          const MMAgentMsgQue::Message& context,
                          const std::shared_ptr<MMAgentTask>& source_task);
 
   /**
    * @brief Parse next_skills from a DataVariant value.
    *
-   * Supports JSON array format: ["skill1", "skill2"]
+   * Supports JSON array formats:
+   * - Old format: ["skill1", "skill2"]
+   * - New format: [{"name": "skill1", "exec_skill_key": "key1"}, {"name": "skill2"}]
    * or comma-separated string: "skill1,skill2"
    *
    * @param value The DataVariant containing next_skills
-   * @return Vector of skill names
+   * @return Vector of SkillSpec with name and optional exec_skill_key
    */
-  static std::vector<std::string> parse_next_skills(const DataVariant& value);
+  static std::vector<SkillSpec> parse_next_skills(const DataVariant& value);
 
   /**
    * @brief Get framework data with fallback support for multiple key formats.

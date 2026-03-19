@@ -1318,6 +1318,12 @@ void MMAgentRuntime::agent_task_poller_loop() {
           inputs["dialogue_id"] = dialogue_id;
           Logger::instance().info_f("[TASK_POLLER] Set inputs[dialogue_id]='%s'", dialogue_id.c_str());
         }
+        // Propagate exec_skill_key for skill-specific data routing
+        std::string exec_skill_key;
+        if(task->get_parameter("exec_skill_key", exec_skill_key) && !exec_skill_key.empty()) {
+          inputs["exec_skill_key"] = exec_skill_key;
+          Logger::instance().info_f("[TASK_POLLER] Set inputs[exec_skill_key]='%s'", exec_skill_key.c_str());
+        }
         std::string task_owner_id = task->get_config().task_id;
         task->get_parameter("source_task_id", task_owner_id);
         if(task_owner_id.empty()) {

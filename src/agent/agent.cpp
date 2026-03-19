@@ -1293,7 +1293,7 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
           Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Reached max concurrent skills limit");
           break;
         }
-        if(launch_skill_task(session, skill_name, message_with_dialogue, task)) {
+        if(launch_skill_task(session, skill_name, "", message_with_dialogue, task)) {
           Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Launched skill: %s with dialogue_id=%s",
                                    skill_name.c_str(), dialogue_id.c_str());
         }
@@ -1452,12 +1452,12 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
           message_with_dialogue.metadata["dialogue_id"] = dialogue_id;
         }
 
-        for(const auto& skill_name : next_skills) {
+        for(const auto& spec : next_skills) {
           if(!source_task->can_launch_more_skills()) {
             Logger::instance().info_f("[DATA_EXCHANGE] Reached max concurrent skills limit");
             break;
           }
-          launch_skill_task(session, skill_name, message_with_dialogue, source_task);
+          launch_skill_task(session, spec.name, spec.exec_skill_key, message_with_dialogue, source_task);
         }
       }
       // Note: We don't clear next_skills here - it's kept for coordinator to access
@@ -1540,7 +1540,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
           Logger::instance().info_f("[DISPATCHERDataExchange] Reached max concurrent skills limit");
           break;
         }
-        launch_skill_task(session, skill_name, message, task);
+        launch_skill_task(session, skill_name, "", message, task);
       }
       return;
     }
@@ -1840,12 +1840,12 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         message_with_dialogue.metadata["dialogue_id"] = dialogue_id;
       }
 
-      for(const auto& skill_name : skill_names) {
+      for(const auto& spec : skill_names) {
         if(!task->can_launch_more_skills()) {
           Logger::instance().info_f("[COORDINATORDataExchange] Reached max concurrent skills limit");
           break;
         }
-        launch_skill_task(session, skill_name, message_with_dialogue, task);
+        launch_skill_task(session, spec.name, spec.exec_skill_key, message_with_dialogue, task);
       }
       return;  // Don't send response to client yet, wait for skill
     }
@@ -1985,6 +1985,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
 
 bool MMAgent::launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
                                 const std::string& skill_name,
+                                const std::string& exec_skill_key,
                                 const MMAgentMsgQue::Message& context,
                                 const std::shared_ptr<MMAgentTask>& source_task) {
   if(!session || skill_name.empty() || !source_task) {
@@ -2176,6 +2177,12 @@ bool MMAgent::launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
   skill_message.metadata["skill_name"] = skill_name;
   skill_message.metadata["session_id"] = session->get_session_id();
   skill_message.metadata["source_task_id"] = source_task->get_task_id();
+
+  // Add exec_skill_key if provided
+  if(!exec_skill_key.empty()) {
+    skill_message.metadata["exec_skill_key"] = exec_skill_key;
+  }
+
   skill_message.content = context.content;
   skill_message.data_ref = context.data_ref;
 
@@ -2205,6 +2212,11 @@ bool MMAgent::launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
   // Store coordinator task ID for skill to notify when done
   skill_task->set_parameter("source_task_id", source_task->get_task_id());
   skill_task->set_parameter("session_id", session->get_session_id());
+
+  // Pass exec_skill_key if provided
+  if(!exec_skill_key.empty()) {
+    skill_task->set_parameter("exec_skill_key", exec_skill_key);
+  }
 
   // Pass dialogue_id as task parameter for workflow input propagation
   if(context.metadata.count("dialogue_id")) {

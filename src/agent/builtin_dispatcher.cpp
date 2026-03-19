@@ -61,7 +61,7 @@ void BuiltinDispatcher::process_request(MMAgent& agent,
       break;
     }
 
-    if(launch_skill_task(agent, session, skill_name, message, task)) {
+    if(launch_skill_task(agent, session, skill_name, "", message, task)) {
       task->on_skill_started(skill_name);
       ++launched;
       Logger::instance().info_f("[BuiltinDispatcher] Launched skill: %s", skill_name.c_str());
@@ -135,15 +135,17 @@ void BuiltinDispatcher::process_skill_response(MMAgent& agent,
       Logger::instance().info_f("[BuiltinDispatcher] Found next_skills in response, launching %d more skills",
                                static_cast<int>(next_skills.size()));
 
-      for(const auto& skill_name : next_skills) {
+      for(const auto& spec : next_skills) {
         if(!task->can_launch_more_skills()) {
           Logger::instance().info_f("[BuiltinDispatcher] Reached max concurrent skills limit during next_skills processing");
           break;
         }
 
-        if(launch_skill_task(agent, session, skill_name, response, task)) {
-          task->on_skill_started(skill_name);
-          Logger::instance().info_f("[BuiltinDispatcher] Launched next skill: %s", skill_name.c_str());
+        if(launch_skill_task(agent, session, spec.name, spec.exec_skill_key, response, task)) {
+          task->on_skill_started(spec.name);
+          Logger::instance().info_f("[BuiltinDispatcher] Launched next skill: %s%s",
+                                   spec.name.c_str(),
+                                   spec.exec_skill_key.empty() ? "" : (" with exec_skill_key=" + spec.exec_skill_key).c_str());
         }
       }
     }
@@ -169,6 +171,7 @@ void BuiltinDispatcher::process_skill_response(MMAgent& agent,
 bool BuiltinDispatcher::launch_skill_task(MMAgent& agent,
                                           const std::shared_ptr<MMAgentSession>& session,
                                           const std::string& skill_name,
+                                          const std::string& exec_skill_key,
                                           const MMAgentMsgQue::Message& context,
                                           const std::shared_ptr<MMAgentTask>& source_task) {
   if(!session || skill_name.empty()) {
@@ -198,6 +201,12 @@ bool BuiltinDispatcher::launch_skill_task(MMAgent& agent,
   skill_message.metadata["skill_name"] = skill_name;
   skill_message.metadata["session_id"] = session->get_session_id();
   skill_message.metadata["source_task_id"] = source_task->get_task_id();
+
+  // Add exec_skill_key if provided
+  if(!exec_skill_key.empty()) {
+    skill_message.metadata["exec_skill_key"] = exec_skill_key;
+  }
+
   skill_message.content = context.content;
   skill_message.data_ref = context.data_ref;
 
@@ -231,6 +240,11 @@ bool BuiltinDispatcher::launch_skill_task(MMAgent& agent,
   skill_task->set_parameter("source_task_id", source_task->get_task_id());
   skill_task->set_parameter("session_id", session->get_session_id());
 
+  // Add exec_skill_key if provided
+  if(!exec_skill_key.empty()) {
+    skill_task->set_parameter("exec_skill_key", exec_skill_key);
+  }
+
   if(!skill_message.content.empty()) {
     skill_task->set_parameter("message_content", skill_message.content);
   }
@@ -243,8 +257,8 @@ bool BuiltinDispatcher::launch_skill_task(MMAgent& agent,
   return true;
 }
 
-std::vector<std::string> BuiltinDispatcher::parse_next_skills(const DataVariant& value) {
-  std::vector<std::string> result;
+std::vector<SkillSpec> BuiltinDispatcher::parse_next_skills(const DataVariant& value) {
+  std::vector<SkillSpec> result;
 
   if(const auto* text = std::get_if<std::string>(&value)) {
     if(text->empty()) {
@@ -257,11 +271,25 @@ std::vector<std::string> BuiltinDispatcher::parse_next_skills(const DataVariant&
     doc.Parse(text->c_str());
     if(!doc.HasParseError() && doc.IsArray()) {
       for(rapidjson::SizeType i = 0; i < doc.Size(); ++i) {
-        if(doc[i].IsString()) {
-          std::string skill = doc[i].GetString();
-          if(!skill.empty()) {
-            result.push_back(skill);
+        SkillSpec spec;
+
+        // New format: object with name and optional exec_skill_key
+        if(doc[i].IsObject()) {
+          if(doc[i].HasMember("name") && doc[i]["name"].IsString()) {
+            spec.name = doc[i]["name"].GetString();
           }
+          if(doc[i].HasMember("exec_skill_key") && doc[i]["exec_skill_key"].IsString()) {
+            spec.exec_skill_key = doc[i]["exec_skill_key"].GetString();
+          }
+        }
+        // Old format: string (backward compatibility)
+        else if(doc[i].IsString()) {
+          spec.name = doc[i].GetString();
+          // exec_skill_key remains empty for old format
+        }
+
+        if(!spec.name.empty()) {
+          result.push_back(spec);
         }
       }
       return result;
@@ -289,7 +317,7 @@ std::vector<std::string> BuiltinDispatcher::parse_next_skills(const DataVariant&
           skill = skill.substr(1, skill.size() - 2);
         }
         if(!skill.empty()) {
-          result.push_back(skill);
+          result.push_back(SkillSpec(skill));
         }
       }
     }

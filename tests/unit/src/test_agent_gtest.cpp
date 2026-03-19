@@ -835,18 +835,18 @@ TEST_F(AgentTest, BuiltinDispatcherParsesNextSkills) {
   DataVariant value = json_array;
   auto skills = framework::BuiltinDispatcher::parse_next_skills(value);
   EXPECT_EQ(skills.size(), 3);
-  EXPECT_EQ(skills[0], "search");
-  EXPECT_EQ(skills[1], "summary");
-  EXPECT_EQ(skills[2], "delegate");
+  EXPECT_EQ(skills[0].name, "search");
+  EXPECT_EQ(skills[1].name, "summary");
+  EXPECT_EQ(skills[2].name, "delegate");
 
   // Test comma-separated format
   std::string csv = "search, summary, delegate";
   value = csv;
   skills = framework::BuiltinDispatcher::parse_next_skills(value);
   EXPECT_EQ(skills.size(), 3);
-  EXPECT_EQ(skills[0], "search");
-  EXPECT_EQ(skills[1], "summary");
-  EXPECT_EQ(skills[2], "delegate");
+  EXPECT_EQ(skills[0].name, "search");
+  EXPECT_EQ(skills[1].name, "summary");
+  EXPECT_EQ(skills[2].name, "delegate");
 
   // Test empty string
   value = std::string("");
@@ -861,31 +861,31 @@ TEST_F(AgentTest, BuiltinDispatcherParsesNextSkillsJsonArrayFallback) {
   DataVariant value = compact;
   auto skills = framework::BuiltinDispatcher::parse_next_skills(value);
   EXPECT_EQ(skills.size(), 2);
-  EXPECT_EQ(skills[0], "shopping");
-  EXPECT_EQ(skills[1], "foodie");
+  EXPECT_EQ(skills[0].name, "shopping");
+  EXPECT_EQ(skills[1].name, "foodie");
 
   // Test JSON array with spaces
   std::string with_spaces = R"([  "travel" ,  "search"  ])";
   value = with_spaces;
   skills = framework::BuiltinDispatcher::parse_next_skills(value);
   EXPECT_EQ(skills.size(), 2);
-  EXPECT_EQ(skills[0], "travel");
-  EXPECT_EQ(skills[1], "search");
+  EXPECT_EQ(skills[0].name, "travel");
+  EXPECT_EQ(skills[1].name, "search");
 
   // Test JSON array with newlines
   std::string with_newlines = "[\n  \"skill1\",\n  \"skill2\"\n]";
   value = with_newlines;
   skills = framework::BuiltinDispatcher::parse_next_skills(value);
   EXPECT_EQ(skills.size(), 2);
-  EXPECT_EQ(skills[0], "skill1");
-  EXPECT_EQ(skills[1], "skill2");
+  EXPECT_EQ(skills[0].name, "skill1");
+  EXPECT_EQ(skills[1].name, "skill2");
 
   // Test single element JSON array
   std::string single = R"(["only_one"])";
   value = single;
   skills = framework::BuiltinDispatcher::parse_next_skills(value);
   EXPECT_EQ(skills.size(), 1);
-  EXPECT_EQ(skills[0], "only_one");
+  EXPECT_EQ(skills[0].name, "only_one");
 
   // Test empty JSON array
   std::string empty_array = R"([])";
@@ -898,9 +898,44 @@ TEST_F(AgentTest, BuiltinDispatcherParsesNextSkillsJsonArrayFallback) {
   value = mixed;
   skills = framework::BuiltinDispatcher::parse_next_skills(value);
   EXPECT_EQ(skills.size(), 3);
-  EXPECT_EQ(skills[0], "first");
-  EXPECT_EQ(skills[1], "second");
-  EXPECT_EQ(skills[2], "third");
+  EXPECT_EQ(skills[0].name, "first");
+  EXPECT_EQ(skills[1].name, "second");
+  EXPECT_EQ(skills[2].name, "third");
+}
+
+// Test new SkillSpec format with exec_skill_key
+TEST_F(AgentTest, BuiltinDispatcherParsesNextSkillsWithExecSkillKey) {
+  // Test new object format with exec_skill_key
+  std::string json_with_keys = R"([
+    {"name": "travel", "exec_skill_key": "travel_data"},
+    {"name": "shopping", "exec_skill_key": "shopping_data"},
+    {"name": "foodie"}
+  ])";
+  DataVariant value = json_with_keys;
+  auto skills = framework::BuiltinDispatcher::parse_next_skills(value);
+  EXPECT_EQ(skills.size(), 3);
+  EXPECT_EQ(skills[0].name, "travel");
+  EXPECT_EQ(skills[0].exec_skill_key, "travel_data");
+  EXPECT_EQ(skills[1].name, "shopping");
+  EXPECT_EQ(skills[1].exec_skill_key, "shopping_data");
+  EXPECT_EQ(skills[2].name, "foodie");
+  EXPECT_EQ(skills[2].exec_skill_key, "");  // Optional field, should be empty
+
+  // Test mixed format: string and object
+  std::string mixed_format = R"([
+    "skill1",
+    {"name": "skill2", "exec_skill_key": "skill2_data"},
+    "skill3"
+  ])";
+  value = mixed_format;
+  skills = framework::BuiltinDispatcher::parse_next_skills(value);
+  EXPECT_EQ(skills.size(), 3);
+  EXPECT_EQ(skills[0].name, "skill1");
+  EXPECT_EQ(skills[0].exec_skill_key, "");
+  EXPECT_EQ(skills[1].name, "skill2");
+  EXPECT_EQ(skills[1].exec_skill_key, "skill2_data");
+  EXPECT_EQ(skills[2].name, "skill3");
+  EXPECT_EQ(skills[2].exec_skill_key, "");
 }
 
 TEST_F(AgentTest, DispatcherWithNextSkillsFromPackage) {

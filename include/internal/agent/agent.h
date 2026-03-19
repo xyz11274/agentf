@@ -202,6 +202,7 @@ class MMAgent {
   // Skill task launching helper (used by builtin dispatcher and coordinator)
   bool launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
                          const std::string& skill_name,
+                         const std::string& exec_skill_key,
                          const MMAgentMsgQue::Message& context,
                          const std::shared_ptr<MMAgentTask>& source_task);
 
