@@ -1947,5 +1947,356 @@ TEST_F(AgentTest, DialogueIdPrefixedAvailableParametersKey) {
   fs::remove_all(tmp);
 }
 
+// =============================================================================
+// Multi-Response Tests
+// =============================================================================
+
+class MultiResponseTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    agent = std::make_shared<framework::MMAgent>(base_config());
+  }
+
+  void TearDown() override {
+    agent.reset();
+  }
+
+  framework::MMAgent::Config base_config() {
+    framework::MMAgent::Config cfg;
+    cfg.id = "multi_response_test";
+    cfg.name = "multi_response_test";
+    return cfg;
+  }
+
+  // Helper to setup multi-response data in DataBus (simulating runtime.cpp behavior)
+  void setup_multi_response(const std::string& session_id, const std::string& dialogue_id,
+                            const std::vector<std::pair<std::string, bool>>& responses) {
+    std::string base_key = "/session/" + session_id + "/sys/" + dialogue_id + "/responses";
+
+    int index = 0;
+    for(const auto& [content, is_done] : responses) {
+      // Write content
+      agent->publish_data(base_key + "/" + std::to_string(index) + "/content", content);
+      // Set consumed = false
+      agent->publish_data(base_key + "/" + std::to_string(index) + "/consumed", std::string("false"));
+      index++;
+    }
+
+    // Set total_count
+    agent->publish_data(base_key + "/total_count", std::to_string(index));
+    // Set consumed_count = 0
+    agent->publish_data(base_key + "/consumed_count", std::string("0"));
+    // Set done flag (always set, either true or false based on last response)
+    if(!responses.empty()) {
+      agent->publish_data(base_key + "/done", responses.back().second ? std::string("true") : std::string("false"));
+    }
+  }
+
+  // Helper to consume a multi-response (simulating agent.cpp consume_multi_response)
+  struct ConsumeResult {
+    bool has_response = false;
+    std::string content;
+    bool is_done = false;
+    bool all_consumed = false;
+    int consumed_index = -1;
+  };
+
+  ConsumeResult consume_multi_response(const std::string& session_id, const std::string& dialogue_id) {
+    ConsumeResult result;
+    std::string base_key = "/session/" + session_id + "/sys/" + dialogue_id + "/responses";
+
+    // Check if responses/done exists (indicates multi-response mode)
+    DataVariant done_val;
+    if(!agent->get_data(base_key + "/done", done_val)) {
+      return result;  // Not in multi-response mode
+    }
+
+    // Read consumed_count
+    DataVariant consumed_count_val;
+    int consumed_count = 0;
+    if(agent->get_data(base_key + "/consumed_count", consumed_count_val)) {
+      if(const auto* count_str = std::get_if<std::string>(&consumed_count_val)) {
+        consumed_count = std::stoi(*count_str);
+      }
+    }
+
+    // Read total_count
+    DataVariant total_count_val;
+    int total_count = 0;
+    if(agent->get_data(base_key + "/total_count", total_count_val)) {
+      if(const auto* count_str = std::get_if<std::string>(&total_count_val)) {
+        total_count = std::stoi(*count_str);
+      }
+    }
+
+    // Check if there are still unconsumed responses
+    if(consumed_count >= total_count) {
+      result.all_consumed = true;
+      if(const auto* done_str = std::get_if<std::string>(&done_val); done_str && *done_str == "true") {
+        result.is_done = true;
+      }
+      return result;
+    }
+
+    // Read the content at consumed_count
+    DataVariant content_val;
+    if(agent->get_data(base_key + "/" + std::to_string(consumed_count) + "/content", content_val)) {
+      if(const auto* text = std::get_if<std::string>(&content_val)) {
+        result.has_response = true;
+        result.content = *text;
+        result.consumed_index = consumed_count;
+      }
+    }
+
+    // Check done flag
+    if(const auto* done_str = std::get_if<std::string>(&done_val); done_str && *done_str == "true") {
+      result.is_done = true;
+    }
+
+    return result;
+  }
+
+  // Helper to mark a response as consumed
+  void mark_consumed(const std::string& session_id, const std::string& dialogue_id, int index) {
+    std::string base_key = "/session/" + session_id + "/sys/" + dialogue_id + "/responses";
+    agent->publish_data(base_key + "/" + std::to_string(index) + "/consumed", std::string("true"));
+    agent->publish_data(base_key + "/consumed_count", std::to_string(index + 1));
+  }
+
+  std::shared_ptr<framework::MMAgent> agent;
+};
+
+TEST_F(MultiResponseTest, DataBusKeyStructure) {
+  std::string session_id = "test-session-1";
+  std::string dialogue_id = "test-dialogue-1";
+
+  setup_multi_response(session_id, dialogue_id, {
+    {"First response", false},
+    {"Second response", false},
+    {"Final response", true}
+  });
+
+  std::string base_key = "/session/" + session_id + "/sys/" + dialogue_id + "/responses";
+
+  // Verify total_count
+  DataVariant total_count;
+  ASSERT_TRUE(agent->get_data(base_key + "/total_count", total_count));
+  EXPECT_EQ(std::get<std::string>(total_count), "3");
+
+  // Verify consumed_count initial value
+  DataVariant consumed_count;
+  ASSERT_TRUE(agent->get_data(base_key + "/consumed_count", consumed_count));
+  EXPECT_EQ(std::get<std::string>(consumed_count), "0");
+
+  // Verify done flag
+  DataVariant done;
+  ASSERT_TRUE(agent->get_data(base_key + "/done", done));
+  EXPECT_EQ(std::get<std::string>(done), "true");
+
+  // Verify each response
+  for(int i = 0; i < 3; i++) {
+    DataVariant content;
+    ASSERT_TRUE(agent->get_data(base_key + "/" + std::to_string(i) + "/content", content));
+    if(i == 0) EXPECT_EQ(std::get<std::string>(content), "First response");
+    else if(i == 1) EXPECT_EQ(std::get<std::string>(content), "Second response");
+    else EXPECT_EQ(std::get<std::string>(content), "Final response");
+
+    DataVariant consumed;
+    ASSERT_TRUE(agent->get_data(base_key + "/" + std::to_string(i) + "/consumed", consumed));
+    EXPECT_EQ(std::get<std::string>(consumed), "false");
+  }
+}
+
+TEST_F(MultiResponseTest, ConsumeResponsesInOrder) {
+  std::string session_id = "test-session-2";
+  std::string dialogue_id = "test-dialogue-2";
+
+  setup_multi_response(session_id, dialogue_id, {
+    {"Response A", false},
+    {"Response B", false},
+    {"Response C", true}
+  });
+
+  // Consume first response
+  auto result1 = consume_multi_response(session_id, dialogue_id);
+  EXPECT_TRUE(result1.has_response);
+  EXPECT_EQ(result1.content, "Response A");
+  EXPECT_EQ(result1.consumed_index, 0);
+  EXPECT_TRUE(result1.is_done);  // done flag is true (last response)
+
+  mark_consumed(session_id, dialogue_id, 0);
+
+  // Consume second response
+  auto result2 = consume_multi_response(session_id, dialogue_id);
+  EXPECT_TRUE(result2.has_response);
+  EXPECT_EQ(result2.content, "Response B");
+  EXPECT_EQ(result2.consumed_index, 1);
+
+  mark_consumed(session_id, dialogue_id, 1);
+
+  // Consume third response
+  auto result3 = consume_multi_response(session_id, dialogue_id);
+  EXPECT_TRUE(result3.has_response);
+  EXPECT_EQ(result3.content, "Response C");
+  EXPECT_EQ(result3.consumed_index, 2);
+
+  mark_consumed(session_id, dialogue_id, 2);
+
+  // All consumed
+  auto result4 = consume_multi_response(session_id, dialogue_id);
+  EXPECT_FALSE(result4.has_response);
+  EXPECT_TRUE(result4.all_consumed);
+  EXPECT_TRUE(result4.is_done);
+}
+
+TEST_F(MultiResponseTest, NotInMultiResponseModeWhenNoData) {
+  std::string session_id = "test-session-3";
+  std::string dialogue_id = "test-dialogue-3";
+
+  // No multi-response data set up
+  auto result = consume_multi_response(session_id, dialogue_id);
+  EXPECT_FALSE(result.has_response);
+  EXPECT_FALSE(result.is_done);
+  EXPECT_FALSE(result.all_consumed);
+}
+
+TEST_F(MultiResponseTest, SingleResponseBackwardCompatibility) {
+  std::string session_id = "test-session-4";
+  std::string dialogue_id = "test-dialogue-4";
+
+  // Set up single response (old format)
+  std::string response_key = "/session/" + session_id + "/sys/" + dialogue_id + "/response";
+  agent->publish_data(response_key, std::string("Single response content"));
+
+  // Multi-response should not detect anything
+  auto result = consume_multi_response(session_id, dialogue_id);
+  EXPECT_FALSE(result.has_response);
+
+  // But single response should be available
+  DataVariant response_val;
+  ASSERT_TRUE(agent->get_data(response_key, response_val));
+  EXPECT_EQ(std::get<std::string>(response_val), "Single response content");
+}
+
+TEST_F(MultiResponseTest, IncompleteSessionNotDone) {
+  std::string session_id = "test-session-5";
+  std::string dialogue_id = "test-dialogue-5";
+
+  // Set up responses with done=false (incomplete session)
+  setup_multi_response(session_id, dialogue_id, {
+    {"Partial response 1", false},
+    {"Partial response 2", false}
+    // Note: last response has is_done = false, so done flag is set to "false"
+  });
+
+  std::string base_key = "/session/" + session_id + "/sys/" + dialogue_id + "/responses";
+
+  // Verify done flag is set to "false" (last response had is_done=false)
+  DataVariant done;
+  ASSERT_TRUE(agent->get_data(base_key + "/done", done));
+  EXPECT_EQ(std::get<std::string>(done), "false");
+
+  // Consume responses
+  auto result1 = consume_multi_response(session_id, dialogue_id);
+  EXPECT_TRUE(result1.has_response);
+  EXPECT_FALSE(result1.is_done);  // Session not complete (done="false")
+
+  mark_consumed(session_id, dialogue_id, 0);
+
+  auto result2 = consume_multi_response(session_id, dialogue_id);
+  EXPECT_TRUE(result2.has_response);
+  EXPECT_FALSE(result2.is_done);
+
+  mark_consumed(session_id, dialogue_id, 1);
+
+  // All consumed but session not done
+  auto result3 = consume_multi_response(session_id, dialogue_id);
+  EXPECT_FALSE(result3.has_response);
+  EXPECT_TRUE(result3.all_consumed);
+  EXPECT_FALSE(result3.is_done);  // done="false", so is_done should be false
+}
+
+TEST_F(MultiResponseTest, CleanupMultiResponses) {
+  std::string session_id = "test-session-6";
+  std::string dialogue_id = "test-dialogue-6";
+
+  setup_multi_response(session_id, dialogue_id, {
+    {"Response 1", false},
+    {"Response 2", true}
+  });
+
+  std::string base_key = "/session/" + session_id + "/sys/" + dialogue_id + "/responses";
+
+  // Verify data exists
+  DataVariant total_count;
+  ASSERT_TRUE(agent->get_data(base_key + "/total_count", total_count));
+  EXPECT_EQ(std::get<std::string>(total_count), "2");
+
+  // Clean up (simulate cleanup_multi_responses)
+  // Note: publish_data with empty DataVariant sets value to default (int64_t(0))
+  agent->publish_data(base_key + "/0/content", DataVariant());
+  agent->publish_data(base_key + "/0/consumed", DataVariant());
+  agent->publish_data(base_key + "/1/content", DataVariant());
+  agent->publish_data(base_key + "/1/consumed", DataVariant());
+  agent->publish_data(base_key + "/total_count", DataVariant());
+  agent->publish_data(base_key + "/consumed_count", DataVariant());
+  agent->publish_data(base_key + "/done", DataVariant());
+
+  // Verify data is cleared (keys still exist but values are default int64_t(0))
+  DataVariant total_count_check;
+  ASSERT_TRUE(agent->get_data(base_key + "/total_count", total_count_check));
+  // Empty DataVariant defaults to int64_t(0)
+  EXPECT_TRUE(std::holds_alternative<int64_t>(total_count_check));
+  EXPECT_EQ(std::get<int64_t>(total_count_check), 0);
+
+  DataVariant done_check;
+  ASSERT_TRUE(agent->get_data(base_key + "/done", done_check));
+  EXPECT_TRUE(std::holds_alternative<int64_t>(done_check));
+  EXPECT_EQ(std::get<int64_t>(done_check), 0);
+}
+
+TEST_F(MultiResponseTest, EmptyResponsesList) {
+  std::string session_id = "test-session-7";
+  std::string dialogue_id = "test-dialogue-7";
+
+  // Set up empty responses with done=true
+  std::string base_key = "/session/" + session_id + "/sys/" + dialogue_id + "/responses";
+  agent->publish_data(base_key + "/total_count", std::string("0"));
+  agent->publish_data(base_key + "/consumed_count", std::string("0"));
+  agent->publish_data(base_key + "/done", std::string("true"));
+
+  // Should report all consumed immediately
+  auto result = consume_multi_response(session_id, dialogue_id);
+  EXPECT_FALSE(result.has_response);
+  EXPECT_TRUE(result.all_consumed);
+  EXPECT_TRUE(result.is_done);
+}
+
+TEST_F(MultiResponseTest, LargeNumberOfResponses) {
+  std::string session_id = "test-session-8";
+  std::string dialogue_id = "test-dialogue-8";
+
+  // Create 10 responses
+  std::vector<std::pair<std::string, bool>> responses;
+  for(int i = 0; i < 10; i++) {
+    responses.emplace_back("Response " + std::to_string(i), i == 9);
+  }
+  setup_multi_response(session_id, dialogue_id, responses);
+
+  // Consume all 10 responses
+  for(int i = 0; i < 10; i++) {
+    auto result = consume_multi_response(session_id, dialogue_id);
+    EXPECT_TRUE(result.has_response) << "Expected response at index " << i;
+    EXPECT_EQ(result.content, "Response " + std::to_string(i));
+    mark_consumed(session_id, dialogue_id, i);
+  }
+
+  // Verify all consumed
+  auto final_result = consume_multi_response(session_id, dialogue_id);
+  EXPECT_FALSE(final_result.has_response);
+  EXPECT_TRUE(final_result.all_consumed);
+  EXPECT_TRUE(final_result.is_done);
+}
+
 }  // namespace tests
 }  // namespace agentflow
