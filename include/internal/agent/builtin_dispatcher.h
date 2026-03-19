@@ -100,6 +100,29 @@ class BuiltinDispatcher {
    */
   static std::vector<std::string> parse_next_skills(const DataVariant& value);
 
+  /**
+   * @brief Get framework data with fallback support for multiple key formats.
+   *
+   * Tries the following key formats in order:
+   * 1. New format: /session/{session_id}/sys/{dialogue_id}/{workflow_id}.{key}
+   * 2. Legacy format: {dialogue_id}/{key}
+   * 3. No prefix: {key}
+   *
+   * @param agent The agent instance
+   * @param session_id The session ID (can be empty)
+   * @param dialogue_id The dialogue ID (can be empty)
+   * @param workflow_id The source workflow ID (can be empty)
+   * @param key The data key to read
+   * @param value Output parameter for the retrieved value
+   * @return true if data was found
+   */
+  static bool get_framework_data(MMAgent& agent,
+                                 const std::string& session_id,
+                                 const std::string& dialogue_id,
+                                 const std::string& workflow_id,
+                                 const std::string& key,
+                                 DataVariant& value);
+
   const Config& get_config() const { return config_; }
   const std::string& get_dispatcher_id() const { return config_.dispatcher_id; }
 

@@ -1226,12 +1226,16 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
   // UNIFIED next_skills HANDLING (applies to all task types)
   // ============================================================
   // Check for next_skills in databus - this can be output by any task
-  // With dialogue_id support, the key is: {dialogue_id}/next_skills
-  std::string next_skills_key = dialogue_id.empty() ? "next_skills" : dialogue_id + "/next_skills";
+  // Use new format with session isolation and fallback to legacy formats
   std::string scheduled_key = dialogue_id.empty() ? "skills_scheduled" : dialogue_id + "/skills_scheduled";
 
   DataVariant next_skills_value;
-  if(get_data(next_skills_key, next_skills_value)) {
+  // Use get_framework_data helper for new format with fallback support
+  // workflow_id is typically "skill-selection-workflow" for next_skills, but we try all formats
+  bool found_next_skills = BuiltinDispatcher::get_framework_data(
+      *this, session->get_session_id(), dialogue_id, "", "next_skills", next_skills_value);
+
+  if(found_next_skills) {
     auto next_skills = BuiltinDispatcher::parse_next_skills(next_skills_value);
     if(!next_skills.empty()) {
       // Check skills_scheduled flag to prevent duplicate skill launches
@@ -1511,15 +1515,15 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
 
     // Coordinator workflow completed - check if need to start skill tasks
     // Check next_skills first (preferred), then selected_skills for backward compatibility
-    // With dialogue_id support, keys are prefixed: {dialogue_id}/next_skills
-    std::string coord_next_skills_key = dialogue_id.empty() ? "next_skills" : dialogue_id + "/next_skills";
+    // Use new format with session isolation and fallback to legacy formats
     std::string coord_scheduled_key = dialogue_id.empty() ? "skills_scheduled" : dialogue_id + "/skills_scheduled";
 
     DataVariant next_skills_value;
     std::string next_skills_str;
     bool found_next_skills = false;
 
-    if(get_data(coord_next_skills_key, next_skills_value)) {
+    // Use get_framework_data helper for new format with fallback support
+    if(BuiltinDispatcher::get_framework_data(*this, session->get_session_id(), dialogue_id, "", "next_skills", next_skills_value)) {
       if(const auto* text = std::get_if<std::string>(&next_skills_value)) {
         if(!text->empty()) {
           next_skills_str = *text;
@@ -1528,10 +1532,10 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       }
     }
 
-    // Backward compatibility: also check selected_skills (without dialogue_id prefix)
-    if(!found_next_skills && dialogue_id.empty()) {
+    // Backward compatibility: also check selected_skills
+    if(!found_next_skills) {
       DataVariant selected_skills_value;
-      if(get_data("selected_skills", selected_skills_value)) {
+      if(BuiltinDispatcher::get_framework_data(*this, session->get_session_id(), dialogue_id, "", "selected_skills", selected_skills_value)) {
         if(const auto* text = std::get_if<std::string>(&selected_skills_value)) {
           if(!text->empty()) {
             next_skills_str = *text;
@@ -1559,9 +1563,9 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         Logger::instance().info_f("[COORDINATORDataExchange] Skills already scheduled, checking if response is ready");
 
         // Check if coordinator node wrote a response (all skills completed)
-        std::string response_key = dialogue_id.empty() ? "response" : dialogue_id + "/response";
+        // Use get_framework_data for new format with fallback support
         DataVariant response_value;
-        if(get_data(response_key, response_value)) {
+        if(BuiltinDispatcher::get_framework_data(*this, session->get_session_id(), dialogue_id, "", "response", response_value)) {
           // Response exists - send it to client
           Logger::instance().info_f("[COORDINATORDataExchange] Response ready, sending to client");
           MMAgentMsgQue::Message response_message = message;
@@ -1630,9 +1634,9 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     Logger::instance().info_f("[COORDINATORDataExchange] Coordinator completed without skill, sending response");
 
     MMAgentMsgQue::Message response_message = message;
-    std::string response_key = dialogue_id.empty() ? "response" : dialogue_id + "/response";
+    // Use get_framework_data for new format with fallback support
     DataVariant response_value;
-    if(get_data(response_key, response_value)) {
+    if(BuiltinDispatcher::get_framework_data(*this, session->get_session_id(), dialogue_id, "", "response", response_value)) {
       if(const auto* text = std::get_if<std::string>(&response_value)) {
         response_message.content = *text;
       }

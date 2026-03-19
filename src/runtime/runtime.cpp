@@ -29,6 +29,52 @@ int64_t now_ms() {
       .count();
 }
 
+// =============================================================================
+// Edge Data Transfer Helper Functions (Scenario 1 Fix)
+// =============================================================================
+
+// Check if a node has any downstream edge
+static bool has_downstream_edge(const std::shared_ptr<framework::MMWorkflow>& workflow,
+                                const std::shared_ptr<framework::MMNode>& node) {
+  if(!workflow || !node) return false;
+  for(const auto& edge : workflow->get_edges()) {
+    if(edge && edge->get_source() == node->get_id()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Get all outgoing edges from a node
+static std::vector<std::shared_ptr<framework::MMEdge>> get_outgoing_edges(
+    const std::shared_ptr<framework::MMWorkflow>& workflow,
+    const std::shared_ptr<framework::MMNode>& node) {
+  std::vector<std::shared_ptr<framework::MMEdge>> result;
+  if(!workflow || !node) return result;
+  for(const auto& edge : workflow->get_edges()) {
+    if(edge && edge->get_source() == node->get_id()) {
+      result.push_back(edge);
+    }
+  }
+  return result;
+}
+
+// Build session-isolated DataBus key for framework data (no downstream scenario)
+// Note: workflow_id is NOT included in the key to support cross-workflow communication
+// (e.g., skill-selection-workflow outputs next_skills, coordinator reads it)
+static std::string build_framework_key(const std::string& session_id,
+                                       const std::string& dialogue_id,
+                                       const std::string& workflow_id,
+                                       const std::string& key) {
+  (void)workflow_id;  // Explicitly unused - workflow_id excluded for cross-workflow access
+  std::string bus_key = "/session/" + session_id + "/sys/";
+  if(!dialogue_id.empty()) {
+    bus_key += dialogue_id + "/";
+  }
+  bus_key += key;
+  return bus_key;
+}
+
 std::vector<std::shared_ptr<framework::MMAgentTask>> collect_pool_template_tasks(const AgentPtr& agent) {
   std::vector<std::shared_ptr<framework::MMAgentTask>> tasks;
   if(!agent) {
@@ -644,39 +690,73 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
         node->get_name().c_str(), duration);
   }
 
-  // Publish node outputs for downstream consumers (bridge/UI/orchestration scripts).
-  // With multi-dialogue support, prefix keys with dialogue_id when available.
+  // =========================================================================
+  // Edge-based Output Routing (Scenario 1 Fix)
+  // =========================================================================
+  // Core rules:
+  // - Has downstream Node → Edge point-to-point transfer to downstream inputs
+  // - No downstream Node → DataBus broadcast (with session isolation format)
+  // This naturally isolates parallel node outputs without node code changes.
   const DataMap& node_outputs = node->get_outputs();
   if(!node_outputs.empty()) {
     auto& bus = get_databus(agent->get_id());
     Logger::instance().info_f("[PROCESS_NODE_OUTPUTS] Node=%s has %zu outputs, dialogue_id=%s",
                               node->get_id().c_str(), node_outputs.size(),
                               flow_dialogue_id.c_str());
-    for(const auto& out : node_outputs) {
-      // Build the output key with dialogue_id prefix for multi-dialogue support
-      std::string output_key = out.first;
-      if(!flow_dialogue_id.empty()) {
-        output_key = flow_dialogue_id + "/" + out.first;
-      }
 
-      Logger::instance().info_f("[PROCESS_NODE_PUBLISH] Publishing key=%s to agent databus", output_key.c_str());
-      agent->publish_data(output_key, out.second);
-      bus.put(output_key, out.second);
+    // Check if this node has downstream edges
+    bool has_downstream = has_downstream_edge(workflow, node);
 
-      // Also publish with workflow.node prefix for scoped access
-      if(workflow) {
-        std::string scoped_key = workflow->get_id() + "." + node->get_id() + "." + out.first;
-        if(!flow_dialogue_id.empty()) {
-          scoped_key = flow_dialogue_id + "/" + scoped_key;
+    if(has_downstream) {
+      // Has downstream → Edge point-to-point transfer
+      auto outgoing_edges = get_outgoing_edges(workflow, node);
+
+      for(const auto& edge : outgoing_edges) {
+        // Get target node
+        auto target_node = workflow->get_node(edge->get_target());
+        if(!target_node) {
+          Logger::instance().warn_f("[EDGE_TRANSFER] Target node not found: %s",
+                                    edge->get_target().c_str());
+          continue;
         }
-        agent->publish_data(scoped_key, out.second);
-        bus.put(scoped_key, out.second);
-      }
 
-      // Also publish without dialogue_id prefix for backward compatibility
-      // This ensures older code that doesn't use dialogue_id still works
-      agent->publish_data(out.first, out.second);
-      bus.put(out.first, out.second);
+        // Calculate data to transfer
+        DataMap transferred;
+        if(!edge->get_source_outputs().empty()) {
+          // Has config: use edge mapping
+          edge->transfer_data(node_outputs, transferred);
+        } else {
+          // Zero-config: pass all outputs directly
+          for(const auto& out : node_outputs) {
+            transferred[out.first] = out.second;
+          }
+        }
+
+        // Merge transferred data into target node inputs
+        DataMap target_inputs = target_node->get_inputs();
+        for(const auto& [key, value] : transferred) {
+          target_inputs[key] = value;
+        }
+        target_node->set_inputs(target_inputs);
+
+        Logger::instance().info_f("[EDGE_TRANSFER] %s -> %s: %zu keys transferred",
+                                  node->get_id().c_str(),
+                                  edge->get_target().c_str(),
+                                  transferred.size());
+      }
+    } else {
+      // No downstream → DataBus publish (session isolation format)
+      for(const auto& out : node_outputs) {
+        std::string bus_key = build_framework_key(
+            flow_session_id, flow_dialogue_id,
+            workflow ? workflow->get_id() : "unknown",
+            out.first);
+
+        agent->publish_data(bus_key, out.second);
+        bus.put(bus_key, out.second);
+
+        Logger::instance().info_f("[DATABUS_PUBLISH] Key=%s", bus_key.c_str());
+      }
     }
   }
 

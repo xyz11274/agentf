@@ -87,12 +87,25 @@ void BuiltinDispatcher::process_skill_response(MMAgent& agent,
     task->on_skill_completed(response.metadata.at("skill_name"));
   }
 
+  // Get context for new format key reading
+  std::string session_id = session->get_session_id();
+  std::string dialogue_id;
+  std::string workflow_id;
+
+  if(response.metadata.count("dialogue_id")) {
+    dialogue_id = response.metadata.at("dialogue_id");
+  }
+  if(response.metadata.count("workflow_id")) {
+    workflow_id = response.metadata.at("workflow_id");
+  }
+
   // Check for next_skills in the response and launch more skills
   // Check next_skills first (preferred), then selected_skills for backward compatibility
   DataVariant next_skills_value;
   bool found_next_skills = false;
 
-  if(agent.get_data("next_skills", next_skills_value)) {
+  // Try reading next_skills with new format and fallback support
+  if(get_framework_data(agent, session_id, dialogue_id, workflow_id, "next_skills", next_skills_value)) {
     auto next_skills = parse_next_skills(next_skills_value);
     if(!next_skills.empty()) {
       found_next_skills = true;
@@ -102,7 +115,7 @@ void BuiltinDispatcher::process_skill_response(MMAgent& agent,
   // Backward compatibility: also check selected_skills
   if(!found_next_skills) {
     DataVariant selected_skills_value;
-    if(agent.get_data("selected_skills", selected_skills_value)) {
+    if(get_framework_data(agent, session_id, dialogue_id, workflow_id, "selected_skills", selected_skills_value)) {
       auto selected_skills = parse_next_skills(selected_skills_value);
       if(!selected_skills.empty()) {
         next_skills_value = selected_skills_value;
@@ -283,6 +296,47 @@ std::vector<std::string> BuiltinDispatcher::parse_next_skills(const DataVariant&
   }
 
   return result;
+}
+
+bool BuiltinDispatcher::get_framework_data(MMAgent& agent,
+                                            const std::string& session_id,
+                                            const std::string& dialogue_id,
+                                            const std::string& workflow_id,
+                                            const std::string& key,
+                                            DataVariant& value) {
+  // Note: workflow_id is not used in key building to support cross-workflow communication
+  (void)workflow_id;  // Explicitly unused
+
+  // 1. Try new format (with session isolation)
+  if(!session_id.empty()) {
+    std::string new_key = "/session/" + session_id + "/sys/";
+    if(!dialogue_id.empty()) {
+      new_key += dialogue_id + "/";
+    }
+    new_key += key;
+
+    if(agent.get_data(new_key, value)) {
+      Logger::instance().info_f("[GET_FRAMEWORK_DATA] Found key=%s (new format)", new_key.c_str());
+      return true;
+    }
+  }
+
+  // 2. Fallback: legacy format (dialogue_id/key)
+  if(!dialogue_id.empty()) {
+    std::string legacy_key = dialogue_id + "/" + key;
+    if(agent.get_data(legacy_key, value)) {
+      Logger::instance().info_f("[GET_FRAMEWORK_DATA] Found key=%s (legacy format)", legacy_key.c_str());
+      return true;
+    }
+  }
+
+  // 3. Fallback: no prefix
+  if(agent.get_data(key, value)) {
+    Logger::instance().info_f("[GET_FRAMEWORK_DATA] Found key=%s (no prefix)", key.c_str());
+    return true;
+  }
+
+  return false;
 }
 
 }  // namespace framework
