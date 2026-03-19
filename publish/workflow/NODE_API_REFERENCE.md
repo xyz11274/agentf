@@ -129,6 +129,40 @@ MMNode 实现应遵循以下运行时约定：
 2. 输入输出数据通过 JSON `payload` 交互，并与 workflow 的 `inputs/outputs` 对齐。
 3. 重试与超时由 workflow node 配置控制（`max_retries`、`retry_delay_ms`、`timeout_ms`）。
 
+## 框架注入字段
+
+除了用户定义的输入参数，框架还会自动注入以下字段到 node inputs：
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `self_task_id` | string | 当前 task 的唯一标识 |
+| `session_id` | string | 当前 session 的唯一标识 |
+| `dialogue_id` | string | 当前 dialogue 的唯一标识（如适用） |
+| `exec_skill_key` | string | skill 专属数据源 key（如配置） |
+
+**访问方式**：
+
+```cpp
+// C++ SO Node
+std::string task_id;
+if(inputs.count("self_task_id")) {
+    task_id = std::get<std::string>(inputs["self_task_id"]);
+}
+```
+
+```bash
+# Shell Node - 通过环境变量访问
+echo "Task ID: $AF_SELF_TASK_ID"
+echo "Session ID: $AF_SESSION_ID"
+```
+
+```python
+# Python Node - 通过环境变量访问
+import os
+task_id = os.environ.get("AF_SELF_TASK_ID", "")
+session_id = os.environ.get("AF_SESSION_ID", "")
+```
+
 ## 执行模式映射
 
 - `shell_script`：通过 shell 执行命令

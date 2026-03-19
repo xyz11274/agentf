@@ -51,6 +51,39 @@ AF_<参数名>          - 用户定义的输入参数
 
 例如，输入参数 `user_query` 对应环境变量 `AF_USER_QUERY`。
 
+**框架标识变量**：
+
+以下环境变量由框架自动设置，用于标识当前执行上下文：
+
+| 环境变量 | 说明 | 示例 |
+|---------|------|------|
+| `AF_SELF_TASK_ID` | 当前 task 的唯一标识 | `sess-123_dispatcher` |
+| `AF_SESSION_ID` | 当前 session 的唯一标识 | `sess-123` |
+
+**使用示例**：
+
+```bash
+# Shell Node - 获取自身 task_id
+echo "Current task: $AF_SELF_TASK_ID"
+
+# 回调外部服务时携带 task_id，用于后续定向通信
+curl -X POST http://external-service/callback \
+  -d "{\"task_id\": \"$AF_SELF_TASK_ID\", \"session_id\": \"$AF_SESSION_ID\"}"
+```
+
+```python
+# Python Node - 获取自身 task_id
+import os
+
+task_id = os.environ.get("AF_SELF_TASK_ID", "")
+session_id = os.environ.get("AF_SESSION_ID", "")
+
+print(f"My task_id: {task_id}")
+
+# 保存到输出，供外部服务后续定向通信
+outputs["self_task_id"] = task_id
+```
+
 **代码位置**：`src/runtime/worker/worker.cpp:65-81`
 
 ```cpp
@@ -1074,6 +1107,8 @@ if not required_param:
 
 | 环境变量 | 说明 | 来源 |
 |---------|------|------|
+| `AF_SELF_TASK_ID` | 当前 task 的唯一标识 | 框架自动设置 |
+| `AF_SESSION_ID` | 当前 session 的唯一标识 | 框架自动设置 |
 | `AF_DATABUS_DIR` | DataBus 根目录 | 框架自动设置 |
 | `AF_DATABUS_KV_DIR` | KV 存储目录 | 框架自动设置 |
 | `AF_DATABUS_EVENTS_DIR` | 事件存储目录 | 框架自动设置 |

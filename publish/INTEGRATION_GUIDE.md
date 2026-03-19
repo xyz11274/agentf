@@ -1846,6 +1846,85 @@ Dispatcher Node 输出:
 - `exec_skill_key` 为可选字段，默认为空
 - 混合格式（字符串和对象并存）完全支持
 
+### 7.8 消息定向路由
+
+默认情况下，外部消息经过 SessionRouter 路由到 session 的 dispatcher 队列，然后由框架遍历分发到目标 task。
+
+如果外部消息携带了 `dialogue_id` 和 `task_id`，框架会直接将消息发送到目标 task 队列，跳过中间遍历，实现精确定向。
+
+#### 消息格式
+
+```json
+{
+  "session_id": "sess-123",
+  "dialogue_id": "dialogue-456",
+  "task_id": "sess-123_coordinator",
+  "user_id": "user-001",
+  "client_id": "client-001",
+  "content": "消息内容"
+}
+```
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `session_id` | 否 | Session ID，用于快速定位 session |
+| `dialogue_id` | 是 | Dialogue ID，用于 dialogue 隔离 |
+| `task_id` | 是 | 目标 task 的 ID |
+| `user_id` | 否 | 用户标识 |
+| `client_id` | 否 | 客户端标识 |
+
+#### task_id 获取方式
+
+**dispatcher / coordinator**：约定命名，可直接构造
+
+```cpp
+std::string dispatcher_task_id = session_id + "_dispatcher";
+std::string coordinator_task_id = session_id + "_coordinator";
+```
+
+| Task 类型 | task_id 命名规则 | 示例 |
+|-----------|-----------------|------|
+| Dispatcher | `{session_id}_dispatcher` | `sess-123_dispatcher` |
+| Coordinator | `{session_id}_coordinator` | `sess-123_coordinator` |
+
+**runtime skill**：从 node 输出获取
+
+Skill node 执行时可通过环境变量 `AF_SELF_TASK_ID` 获取自身 task_id，并在输出中返回给外部服务：
+
+```json
+{
+  "outputs": {
+    "self_task_id": "sess-123_task_3_runtime_abc_travel",
+    "result": "执行结果"
+  }
+}
+```
+
+#### 使用示例
+
+```cpp
+// 外部服务向 coordinator 发送定向消息
+MMAgentMsgQue::Message message;
+message.message_id = "msg-001";
+message.content = "用户输入";
+message.metadata["session_id"] = session_id;
+message.metadata["dialogue_id"] = dialogue_id;
+message.metadata["task_id"] = session_id + "_coordinator";
+
+agent->route_request_message(message);
+```
+
+#### 消息类型与队列选择
+
+| MessageType | 目标队列 |
+|-------------|---------|
+| TASK_REQUEST, CONTROL | intent_request 队列 |
+| TASK_RESPONSE, EVENT, NOTIFICATION, ERROR | data_exchange 队列 |
+
+#### 降级策略
+
+如果定向路由失败（task 不存在或未运行），框架自动降级到默认路由流程，保证消息不会丢失。
+
 ---
 
 ## 8. 部署模式
