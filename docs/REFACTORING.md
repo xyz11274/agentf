@@ -3995,7 +3995,18 @@ void MMAgent::handle_route_message(const std::shared_ptr<MMAgentSession>& sessio
 
 **设计阶段**：✅ 已完成
 
-**代码变更**：待实施
+**代码变更**：✅ 已完成
+- `src/agent/agent.cpp` - 实现消息定向路由逻辑和 task_id 约定命名
+- `src/runtime/runtime.cpp` - 注入 `self_task_id` 到 node inputs
+
+**测试验证**：✅ 已完成
+- 192 个单元测试全部通过
+- 更新测试用例适配新的 task_id 格式
+
+**文档更新**：✅ 已完成
+- `publish/INTEGRATION_GUIDE.md` - 新增 7.8 消息定向路由章节
+- `publish/workflow/NODE_DEVELOPMENT_GUIDE.md` - 新增 AF_SELF_TASK_ID 说明
+- `publish/workflow/NODE_API_REFERENCE.md` - 新增框架注入字段表
 
 
 ### 外部获取 task_id 方案分析
@@ -4004,13 +4015,15 @@ void MMAgent::handle_route_message(const std::shared_ptr<MMAgentSession>& sessio
 
 | Task 类型 | task_id 格式 | 示例 |
 |-----------|-------------|------|
-| Template Task | `{session_id}_task_{index}` | `sess-123_task_0`, `sess-123_task_1` |
+| Dispatcher | `{session_id}_dispatcher` | `sess-123_dispatcher` |
+| Coordinator | `{session_id}_coordinator` | `sess-123_coordinator` |
+| Skill Template | `{session_id}_task_{index}` | `sess-123_task_2` |
 | Runtime Skill Task | `{template_id}_runtime_{message_id}` | `sess-123_task_3_runtime_skill-travel-abc` |
 | Runtime Skill (带 skill_name) | `{template_id}_runtime_{message_id}_{skill_name}` | `sess-123_task_3_runtime_abc_travel` |
 | Pooled Task | `{task_id}_pool_{instance_index}` | `sess-123_task_3_pool_0` |
 
 **代码位置**：
-- Template Task: `src/agent/agent.cpp:681`
+- Dispatcher/Coordinator: `src/agent/agent.cpp:681`
 - Runtime Task: `src/agent/agent.cpp:1036`
 - Skill Runtime: `src/agent/builtin_dispatcher.cpp:235`, `src/agent/agent.cpp:2242`
 
