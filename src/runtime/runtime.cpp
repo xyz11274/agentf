@@ -1324,6 +1324,8 @@ void MMAgentRuntime::agent_task_poller_loop() {
           inputs["exec_skill_key"] = exec_skill_key;
           Logger::instance().info_f("[TASK_POLLER] Set inputs[exec_skill_key]='%s'", exec_skill_key.c_str());
         }
+        // Inject self_task_id for node self-identification
+        inputs["self_task_id"] = task->get_config().task_id;
         std::string task_owner_id = task->get_config().task_id;
         task->get_parameter("source_task_id", task_owner_id);
         if(task_owner_id.empty()) {

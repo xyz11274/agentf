@@ -261,8 +261,8 @@ TEST_F(AgentTest, CoordinatorDefaultsToDispatcherType) {
   std::string session_id = session->get_session_id();
   auto tasks = session->get_tasks();
   ASSERT_EQ(tasks.size(), 3u);
-  auto dispatcher_task = session->get_task(session_id + "_task_0");
-  auto coordinator_task = session->get_task(session_id + "_task_1");
+  auto dispatcher_task = session->get_task(session_id + "_dispatcher");
+  auto coordinator_task = session->get_task(session_id + "_coordinator");
   auto generated_dispatcher_task = find_task_by_message_id(tasks, "req_dispatcher");
   ASSERT_NE(dispatcher_task, nullptr);
   ASSERT_NE(coordinator_task, nullptr);
@@ -432,8 +432,8 @@ TEST_F(AgentTest, DefaultPooledSessionContainsDispatcherAndCoordinator) {
   ASSERT_NE(session->get_task_coordinator(), nullptr);
   ASSERT_NE(session->get_task_dispatcher(), nullptr);
   std::string session_id = session->get_session_id();
-  auto default_dispatcher = session->get_task(session_id + "_task_0");
-  auto default_coordinator = session->get_task(session_id + "_task_1");
+  auto default_dispatcher = session->get_task(session_id + "_dispatcher");
+  auto default_coordinator = session->get_task(session_id + "_coordinator");
   ASSERT_NE(default_dispatcher, nullptr);
   ASSERT_NE(default_coordinator, nullptr);
   EXPECT_EQ(default_dispatcher->get_task_type(), "dispatcher");
@@ -640,8 +640,8 @@ TEST_F(AgentTest, AgentJsonInstantiatesConfiguredSessionPoolAndSkillPools) {
   EXPECT_EQ(skill_pool_0->get_skill_instance_index(), 0);
   EXPECT_EQ(skill_pool_1->get_skill_instance_index(), 1);
 
-  auto dispatcher_task = pooled_session->get_task("0_task_0");
-  auto coordinator_task = pooled_session->get_task("0_task_1");
+  auto dispatcher_task = pooled_session->get_task("0_dispatcher");
+  auto coordinator_task = pooled_session->get_task("0_coordinator");
   ASSERT_NE(dispatcher_task, nullptr);
   ASSERT_NE(coordinator_task, nullptr);
   EXPECT_EQ(dispatcher_task->get_workflow_pool_size(), 3);
@@ -757,8 +757,8 @@ TEST_F(AgentTest, AgentJsonDefaultsWorkflowPoolSizeToOneWhenOmitted) {
 
   auto session = get_or_create_first_session(agent);
   ASSERT_NE(session, nullptr);
-  auto dispatcher = session->get_task("0_task_0");
-  auto coordinator = session->get_task("0_task_1");
+  auto dispatcher = session->get_task("0_dispatcher");
+  auto coordinator = session->get_task("0_coordinator");
   auto skill = session->get_task("0_task_2");
   ASSERT_NE(dispatcher, nullptr);
   ASSERT_NE(coordinator, nullptr);
@@ -993,7 +993,7 @@ TEST_F(AgentTest, DispatcherWithNextSkillsFromPackage) {
   auto session = get_or_create_first_session(agent);
   ASSERT_NE(session, nullptr);
 
-  auto dispatcher = session->get_task("0_task_0");
+  auto dispatcher = session->get_task("0_dispatcher");
   ASSERT_NE(dispatcher, nullptr);
   EXPECT_EQ(dispatcher->get_task_type(), "dispatcher");
 

@@ -678,7 +678,14 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_tasks(
   for(const auto& task_definition : session_tasks) {
     MMAgentTask::Config task_config;
     task_config.task_index = task_definition.task_index;
-    task_config.task_id = actual_session_id + "_task_" + std::to_string(task_definition.task_index);
+    // Use agreed naming for dispatcher/coordinator, enabling direct routing
+    if(task_definition.task_type == "dispatcher") {
+      task_config.task_id = actual_session_id + "_dispatcher";
+    } else if(task_definition.task_type == "coordinator") {
+      task_config.task_id = actual_session_id + "_coordinator";
+    } else {
+      task_config.task_id = actual_session_id + "_task_" + std::to_string(task_definition.task_index);
+    }
     task_config.task_type = task_definition.task_type;
     task_config.description = task_definition.description;
     task_config.session_id = actual_session_id;
@@ -873,6 +880,49 @@ void MMAgent::handle_routed_request_message(const std::shared_ptr<MMAgentSession
     handle_control_message(session, message);
     return;
   }
+
+  // === Direct Routing: Check if message carries dialogue_id and task_id ===
+  const auto dialogue_it = message.metadata.find("dialogue_id");
+  const auto task_id_it = message.metadata.find("task_id");
+
+  if(dialogue_it != message.metadata.end() && task_id_it != message.metadata.end()) {
+    const std::string& dialogue_id = dialogue_it->second;
+    const std::string& task_id = task_id_it->second;
+
+    if(!task_id.empty()) {
+      // Look up the target task
+      auto target_task = session->get_task(task_id);
+      if(target_task && target_task->are_message_threads_running()) {
+        // Determine queue based on MessageType
+        // TASK_RESPONSE, EVENT, NOTIFICATION, ERROR → data_exchange queue
+        // TASK_REQUEST, CONTROL → intent_request queue
+        bool use_data_exchange = (message.type == MMAgentMsgQue::MessageType::TASK_RESPONSE ||
+                                  message.type == MMAgentMsgQue::MessageType::EVENT ||
+                                  message.type == MMAgentMsgQue::MessageType::NOTIFICATION ||
+                                  message.type == MMAgentMsgQue::MessageType::ERROR);
+
+        bool routed = false;
+        if(use_data_exchange) {
+          routed = target_task->enqueue_data_exchange_message(message);
+        } else {
+          routed = target_task->enqueue_intent_request_message(message);
+        }
+
+        if(routed) {
+          Logger::instance().info_f("[DIRECT_ROUTE] Message routed directly to task=%s, dialogue_id=%s",
+                                   task_id.c_str(), dialogue_id.c_str());
+          return;  // Skip default routing
+        }
+
+        Logger::instance().warn_f("[DIRECT_ROUTE] Failed to enqueue to task=%s, falling back to default routing",
+                                 task_id.c_str());
+      } else {
+        Logger::instance().info_f("[DIRECT_ROUTE] Task not found or not running: %s, falling back to default routing",
+                                 task_id.c_str());
+      }
+    }
+  }
+  // === End Direct Routing ===
 
   if(context_) {
     context_->reserve_session_payload(session->get_session_id(), message);
