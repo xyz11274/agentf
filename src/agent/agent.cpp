@@ -583,11 +583,42 @@ bool MMAgent::initialize_components(std::shared_ptr<AgentPackage> package) {
     return session;
   });
 
+  // Create session pool based on configuration
   std::vector<std::shared_ptr<MMAgentSession>> session_pool;
-  // Don't pre-create sessions - sessions will be created on-demand via the session factory
-  // when a new route (user_id:client_id) is encountered. This ensures each route gets
-  // a unique UUID-based session_id.
-  Logger::instance().info_f("[AGENT_INIT] Sessions will be created on-demand with UUID for each user_id:client_id route");
+  bool has_session_template = package_ && (!package_->get_config().session_tasks.empty()
+                                            || !package_->get_config().sessions.empty());
+  Logger::instance().info_f("[AGENT_INIT] has_session_template=%s, session_tasks_count=%zu, sessions_count=%zu",
+                            has_session_template ? "true" : "false",
+                            package_ ? package_->get_config().session_tasks.size() : 0,
+                            package_ ? package_->get_config().sessions.size() : 0);
+
+  if(has_session_template) {
+    // Get session tasks from new flattened format or legacy sessions format
+    std::vector<AgentPackage::TaskDefinition> session_tasks;
+    if(!package_->get_config().session_tasks.empty()) {
+      // New flattened format
+      session_tasks = package_->get_config().session_tasks;
+    } else if(!package_->get_config().sessions.empty()) {
+      // Legacy format: extract tasks from sessions[0]
+      session_tasks = package_->get_config().sessions.front().tasks;
+    }
+
+    const int session_pool_size =
+        std::max(1, package_->get_config().session_pool_size);
+    for(int session_index = 0; session_index < session_pool_size; ++session_index) {
+      // Create session with numeric ID for configured sessions
+      auto session = create_session_from_tasks(std::to_string(session_index), session_tasks);
+      if(session) {
+        session_pool.push_back(session);
+      }
+    }
+    Logger::instance().info_f("[AGENT_INIT] Pre-created %zu sessions from session template", session_pool.size());
+  } else {
+    // No explicit session configuration - sessions will be created on-demand via the session factory
+    // when a new route (user_id:client_id) is encountered. This ensures each route gets
+    // a unique UUID-based session_id.
+    Logger::instance().info_f("[AGENT_INIT] Sessions will be created on-demand with UUID for each user_id:client_id route");
+  }
 
   session_router_->set_session_pool(session_pool);
   return true;

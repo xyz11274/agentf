@@ -61,12 +61,17 @@ std::shared_ptr<framework::MMAgentTask> find_task_by_message_id_and_type(
   return nullptr;
 }
 
-// Helper to get the first pooled session from an agent
-// Session IDs are now UUIDs, so we can't use get_session_by_key("0")
-std::shared_ptr<framework::MMAgentSession> get_first_pooled_session(
+// Helper to get or create the first session from an agent
+// Sessions are now created on-demand with UUID, so we need to trigger creation
+// by calling get_or_create_session with a user_id:client_id route
+std::shared_ptr<framework::MMAgentSession> get_or_create_first_session(
     const std::shared_ptr<framework::MMAgent>& agent) {
   auto sessions = agent->get_sessions();
-  return sessions.empty() ? nullptr : sessions.front();
+  if(!sessions.empty()) {
+    return sessions.front();
+  }
+  // No sessions exist - create one on-demand
+  return agent->get_or_create_session("test_user", "test_client");
 }
 }  // namespace
 
@@ -335,7 +340,7 @@ TEST_F(AgentTest, PackageDispatcherWorkflowMappingIsApplied) {
   ASSERT_TRUE(agent->route_request_message(req));
   EXPECT_EQ(agent->process_session_messages("0"), 1);
 
-  auto session = get_first_pooled_session(agent);
+  auto session = get_or_create_first_session(agent);
   ASSERT_NE(session, nullptr);
   auto mapped_task = find_task_by_message_id(session->get_tasks(), "req_dispatcher_map");
   ASSERT_NE(mapped_task, nullptr);
@@ -411,7 +416,7 @@ TEST_F(AgentTest, WorkflowIdMetadataHasHigherPriorityThanCoordinatorWorkflow) {
   ASSERT_TRUE(agent->route_request_message(req));
   EXPECT_EQ(agent->process_session_messages("0"), 1);
 
-  auto session = get_first_pooled_session(agent);
+  auto session = get_or_create_first_session(agent);
   ASSERT_NE(session, nullptr);
   auto task = find_task_by_message_id(session->get_tasks(), "req_workflow_override");
   ASSERT_NE(task, nullptr);
@@ -422,21 +427,26 @@ TEST_F(AgentTest, WorkflowIdMetadataHasHigherPriorityThanCoordinatorWorkflow) {
 
 TEST_F(AgentTest, DefaultPooledSessionContainsDispatcherAndCoordinator) {
   auto agent = std::make_shared<framework::MMAgent>(base_config());
-  auto pooled_session = get_first_pooled_session(agent);
-  ASSERT_NE(pooled_session, nullptr);
-  ASSERT_NE(pooled_session->get_task_coordinator(), nullptr);
-  ASSERT_NE(pooled_session->get_task_dispatcher(), nullptr);
-  std::string session_id = pooled_session->get_session_id();
-  auto default_dispatcher = pooled_session->get_task(session_id + "_task_0");
-  auto default_coordinator = pooled_session->get_task(session_id + "_task_1");
+  auto session = get_or_create_first_session(agent);
+  ASSERT_NE(session, nullptr);
+  ASSERT_NE(session->get_task_coordinator(), nullptr);
+  ASSERT_NE(session->get_task_dispatcher(), nullptr);
+  std::string session_id = session->get_session_id();
+  auto default_dispatcher = session->get_task(session_id + "_task_0");
+  auto default_coordinator = session->get_task(session_id + "_task_1");
   ASSERT_NE(default_dispatcher, nullptr);
   ASSERT_NE(default_coordinator, nullptr);
   EXPECT_EQ(default_dispatcher->get_task_type(), "dispatcher");
   EXPECT_EQ(default_coordinator->get_task_type(), "coordinator");
 
+  // Different user_id:client_id route should get a DIFFERENT session (on-demand creation)
   auto routed_session = agent->get_or_create_session("u5", "c5");
   ASSERT_NE(routed_session, nullptr);
-  EXPECT_EQ(routed_session, pooled_session);
+  EXPECT_NE(routed_session, session);  // Different route = different session
+
+  // Same route should reuse existing session
+  auto reused_session = agent->get_or_create_session("test_user", "test_client");
+  EXPECT_EQ(reused_session, session);  // Same route = same session
 }
 
 TEST_F(AgentTest, CoordinatorInstantiatesSkillTaskFromSkillTemplateWorkflow) {
@@ -485,7 +495,7 @@ TEST_F(AgentTest, CoordinatorInstantiatesSkillTaskFromSkillTemplateWorkflow) {
 
   auto agent = framework::MMAgent::create_from_package(tmp.string());
   ASSERT_NE(agent, nullptr);
-  auto session = get_first_pooled_session(agent);
+  auto session = get_or_create_first_session(agent);
   ASSERT_NE(session, nullptr);
   auto coordinator_task = session->get_coordinator_task();
   ASSERT_NE(coordinator_task, nullptr);
@@ -604,7 +614,7 @@ TEST_F(AgentTest, AgentJsonInstantiatesConfiguredSessionPoolAndSkillPools) {
   auto sessions = agent->get_sessions();
   ASSERT_EQ(sessions.size(), 2u);
 
-  auto pooled_session = get_first_pooled_session(agent);
+  auto pooled_session = get_or_create_first_session(agent);
   auto skill_session = agent->get_session_by_key("1");
   ASSERT_NE(pooled_session, nullptr);
   ASSERT_NE(skill_session, nullptr);
@@ -745,7 +755,7 @@ TEST_F(AgentTest, AgentJsonDefaultsWorkflowPoolSizeToOneWhenOmitted) {
   ASSERT_NE(agent->get_context()->get_context_updater_task(), nullptr);
   EXPECT_EQ(agent->get_context()->get_context_updater_task()->get_workflow_pool_size(), 1);
 
-  auto session = get_first_pooled_session(agent);
+  auto session = get_or_create_first_session(agent);
   ASSERT_NE(session, nullptr);
   auto dispatcher = session->get_task("0_task_0");
   auto coordinator = session->get_task("0_task_1");
@@ -945,7 +955,7 @@ TEST_F(AgentTest, DispatcherWithNextSkillsFromPackage) {
   auto agent = framework::MMAgent::create_from_package(tmp.string());
   ASSERT_NE(agent, nullptr);
 
-  auto session = get_first_pooled_session(agent);
+  auto session = get_or_create_first_session(agent);
   ASSERT_NE(session, nullptr);
 
   auto dispatcher = session->get_task("0_task_0");
@@ -1365,7 +1375,7 @@ TEST_F(AgentTest, SkillWithEmptyExpectedParametersSkipsValidation) {
   auto agent = framework::MMAgent::create_from_package(tmp.string());
   ASSERT_NE(agent, nullptr);
 
-  auto session = get_first_pooled_session(agent);
+  auto session = get_or_create_first_session(agent);
   ASSERT_NE(session, nullptr);
 
   // Find the skill task
@@ -1417,7 +1427,7 @@ TEST_F(AgentTest, SkillWithExpectedParametersParsesCorrectly) {
   auto agent = framework::MMAgent::create_from_package(tmp.string());
   ASSERT_NE(agent, nullptr);
 
-  auto session = get_first_pooled_session(agent);
+  auto session = get_or_create_first_session(agent);
   ASSERT_NE(session, nullptr);
 
   // Find the skill task
