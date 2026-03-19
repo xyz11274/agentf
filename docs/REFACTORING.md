@@ -3784,4 +3784,9 @@ struct ExecutionRequest {
 
 **代码变更**：✅ 已完成
 
-**文档更新**：进行中
+**文档更新**：✅ 已完成
+- `publish/INTEGRATION_GUIDE.md` - 新增 Section 7.6 Multi-Response 流式输出
+
+**测试验证**：✅ 已完成
+- `tests/unit/src/test_multi_response_gtest.cpp` - 单元测试通过
+- 所有 191 个 GoogleTest 测试通过
