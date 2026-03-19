@@ -93,6 +93,7 @@ class MMAgent {
   std::shared_ptr<MMAgentTask>    get_current_task() const { return current_task_; }
   std::shared_ptr<AgentContext>   get_context() const { return context_; }
   std::shared_ptr<AgentPackage>   get_package() const { return package_; }
+  std::shared_ptr<SessionRouter>  get_session_router() const { return session_router_; }
 
   std::shared_ptr<MMAgentSession> get_or_create_session(const std::string& user_id,
                                                         const std::string& client_id);

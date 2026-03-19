@@ -554,42 +554,41 @@ bool MMAgent::initialize_components(std::shared_ptr<AgentPackage> package) {
     handle_routed_request_message(session, message);
   });
 
-  std::vector<std::shared_ptr<MMAgentSession>> session_pool;
-  bool has_session_template = package_ && (!package_->get_config().session_tasks.empty()
-                                            || !package_->get_config().sessions.empty());
-  Logger::instance().info_f("[AGENT_INIT] has_session_template=%s, session_tasks_count=%zu, sessions_count=%zu",
-                            has_session_template ? "true" : "false",
-                            package_ ? package_->get_config().session_tasks.size() : 0,
-                            package_ ? package_->get_config().sessions.size() : 0);
-
-  if(has_session_template) {
-    // Get session tasks from new flattened format or legacy sessions format
+  // Set up session factory for on-demand session creation with UUID
+  // When a new route (user_id:client_id) is encountered, this factory creates
+  // a new session with a UUID as session_id
+  session_router_->set_session_factory([this](const std::string& user_id,
+                                               const std::string& client_id) {
+    // Determine which session tasks to use
     std::vector<AgentPackage::TaskDefinition> session_tasks;
-    if(!package_->get_config().session_tasks.empty()) {
-      // New flattened format
-      session_tasks = package_->get_config().session_tasks;
-    } else if(!package_->get_config().sessions.empty()) {
-      // Legacy format: extract tasks from sessions[0]
-      session_tasks = package_->get_config().sessions.front().tasks;
+    bool has_session_template = package_ && (!package_->get_config().session_tasks.empty()
+                                              || !package_->get_config().sessions.empty());
+    if(has_session_template) {
+      if(!package_->get_config().session_tasks.empty()) {
+        session_tasks = package_->get_config().session_tasks;
+      } else if(!package_->get_config().sessions.empty()) {
+        session_tasks = package_->get_config().sessions.front().tasks;
+      }
+    } else {
+      session_tasks = build_default_session_tasks();
     }
 
-    const int session_pool_size =
-        std::max(1, package_->get_config().session_pool_size);
-    for(int session_index = 0; session_index < session_pool_size; ++session_index) {
-      // Create session from flattened tasks
-      auto session = create_session_from_tasks(std::to_string(session_index), session_tasks);
-      if(session) {
-        session_pool.push_back(session);
-      }
-    }
-  } else {
-    // Create session with empty session_id to trigger auto UUID generation
-    // Only use UUID when there's no explicit session configuration
-    auto session = create_session_with_defaults("");  // Empty string triggers UUID generation
+    // Create session with empty session_id to trigger UUID generation
+    // This ensures each user_id:client_id gets a unique UUID-based session
+    auto session = create_session_from_tasks("", session_tasks);
     if(session) {
-      session_pool.push_back(session);
+      Logger::instance().info_f("[AGENT_SESSION_FACTORY] Created session for user_id=%s, client_id=%s, session_id=%s",
+                               user_id.c_str(), client_id.c_str(), session->get_session_id().c_str());
     }
-  }
+    return session;
+  });
+
+  std::vector<std::shared_ptr<MMAgentSession>> session_pool;
+  // Don't pre-create sessions - sessions will be created on-demand via the session factory
+  // when a new route (user_id:client_id) is encountered. This ensures each route gets
+  // a unique UUID-based session_id.
+  Logger::instance().info_f("[AGENT_INIT] Sessions will be created on-demand with UUID for each user_id:client_id route");
+
   session_router_->set_session_pool(session_pool);
   return true;
 }
@@ -679,15 +678,15 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_tasks(
 
       // Create and store BuiltinDispatcher instance
       BuiltinDispatcher::Config dispatcher_config;
-      dispatcher_config.dispatcher_id = config_.id + "_builtin_dispatcher_" + session_id;
+      dispatcher_config.dispatcher_id = config_.id + "_builtin_dispatcher_" + actual_session_id;
       dispatcher_config.next_skills = task_definition.next_skills;
       dispatcher_config.max_concurrent_skills = task_definition.max_concurrent_skills;
       {
         std::lock_guard<std::mutex> lock(builtin_dispatchers_mutex_);
-        builtin_dispatchers_[session_id] = std::make_shared<BuiltinDispatcher>(dispatcher_config);
+        builtin_dispatchers_[actual_session_id] = std::make_shared<BuiltinDispatcher>(dispatcher_config);
       }
       Logger::instance().info_f("[CREATE_SESSION] Created BuiltinDispatcher for session=%s, next_skills count=%d",
-                               session_id.c_str(), static_cast<int>(dispatcher_config.next_skills.size()));
+                               actual_session_id.c_str(), static_cast<int>(dispatcher_config.next_skills.size()));
     } else if(task_definition.task_type == "coordinator") {
       coordinator_task = task;
       session->set_coordinator_task(task);
@@ -707,7 +706,7 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_tasks(
 
   if(dispatcher_task) {
     SessionTaskCoordinator::Config dispatcher_config;
-    dispatcher_config.coordinator_id = config_.id + "_dispatcher_" + session_id;
+    dispatcher_config.coordinator_id = config_.id + "_dispatcher_" + actual_session_id;
     dispatcher_config.default_task_type = "dispatcher";
     dispatcher_config.input_queue_type = SessionTaskCoordinator::InputQueueType::INTENT_REQUEST;
     dispatcher_config.dispatcher_workflow = session_config.dispatcher_workflow;
@@ -726,7 +725,7 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_tasks(
 
   if(coordinator_task) {
     SessionTaskCoordinator::Config coordinator_config;
-    coordinator_config.coordinator_id = config_.id + "_coordinator_" + session_id;
+    coordinator_config.coordinator_id = config_.id + "_coordinator_" + actual_session_id;
     coordinator_config.default_task_type = "coordinator";
     coordinator_config.input_queue_type = SessionTaskCoordinator::InputQueueType::DATA_EXCHANGE;
     coordinator_config.dispatcher_workflow = session_config.dispatcher_workflow;
@@ -745,7 +744,7 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_tasks(
 
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    sessions_[session_id] = session;
+    sessions_[actual_session_id] = session;
   }
   return session;
 }

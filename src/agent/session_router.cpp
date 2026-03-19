@@ -3,6 +3,7 @@
 #include <chrono>
 
 #include "agent/session.h"
+#include "utils/logger.h"
 
 namespace agentflow {
 namespace framework {
@@ -35,6 +36,11 @@ void SessionRouter::set_session_pool(const std::vector<std::shared_ptr<MMAgentSe
 void SessionRouter::set_route_handler(RouteHandler handler) {
   std::lock_guard<std::mutex> lock(mutex_);
   route_handler_ = std::move(handler);
+}
+
+void SessionRouter::set_session_factory(SessionFactory factory) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  session_factory_ = std::move(factory);
 }
 
 bool SessionRouter::start() {
@@ -183,14 +189,22 @@ bool SessionRouter::handle_route_message(const MMAgentMsgQue::Message& message) 
 std::shared_ptr<MMAgentSession> SessionRouter::allocate_session_for_route(
     const std::string& route_key, const std::string& user_id, const std::string& client_id,
     const std::string& session_hint) {
-  std::lock_guard<std::mutex> lock(mutex_);
+  // First, try to find a session without holding the lock (for factory call)
+  SessionFactory factory_copy;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    factory_copy = session_factory_;
+  }
+
   std::shared_ptr<MMAgentSession> session;
   if(!session_hint.empty()) {
+    std::lock_guard<std::mutex> lock(mutex_);
     if(const auto it = physical_sessions_.find(session_hint); it != physical_sessions_.end()) {
       session = it->second;
     }
   }
   if(!session) {
+    std::lock_guard<std::mutex> lock(mutex_);
     for(const auto& candidate : session_pool_) {
       if(candidate && candidate->is_available()) {
         session = candidate;
@@ -198,13 +212,29 @@ std::shared_ptr<MMAgentSession> SessionRouter::allocate_session_for_route(
       }
     }
   }
+
+  // If no pool session available, use factory to create a new session
+  if(!session && factory_copy) {
+    // Create session outside of lock to avoid potential deadlock
+    session = factory_copy(user_id, client_id);
+    if(session) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      // Register the new session
+      physical_sessions_[session->get_session_id()] = session;
+      Logger::instance().info_f("[SessionRouter] Created new session via factory: session_id=%s for route=%s",
+                               session->get_session_id().c_str(), route_key.c_str());
+    }
+  }
+
   if(!session) {
     return nullptr;
   }
+
   session->reset_for_pool();
   session->activate();
   if(!route_key.empty()) {
     session->bind_route(user_id, client_id);
+    std::lock_guard<std::mutex> lock(mutex_);
     active_routes_[route_key] = session;
     session_to_route_[session->get_session_id()] = route_key;
   }

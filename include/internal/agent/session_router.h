@@ -29,11 +29,24 @@ class SessionRouter {
   using RouteHandler =
       std::function<void(const std::shared_ptr<MMAgentSession>&, const MMAgentMsgQue::Message&)>;
 
+  /// Session factory callback for creating sessions on-demand.
+  /// Called when a new route (user_id:client_id) needs a session.
+  /// The factory should create a new session with a UUID as session_id.
+  using SessionFactory =
+      std::function<std::shared_ptr<MMAgentSession>(
+          const std::string& user_id,
+          const std::string& client_id)>;
+
   explicit SessionRouter(const Config& config);
   ~SessionRouter();
 
   void set_session_pool(const std::vector<std::shared_ptr<MMAgentSession>>& sessions);
   void set_route_handler(RouteHandler handler);
+
+  /// Set the session factory for on-demand session creation.
+  /// When a new route is encountered and no pool session is available,
+  /// the factory will be called to create a new session.
+  void set_session_factory(SessionFactory factory);
 
   bool start();
   void stop();
@@ -67,6 +80,7 @@ class SessionRouter {
   MMAgentMsgQue request_queue_;
   MMAgentMsgQue response_queue_;
   RouteHandler route_handler_;
+  SessionFactory session_factory_;
 
   std::vector<std::shared_ptr<MMAgentSession>> session_pool_;
   std::map<std::string, std::shared_ptr<MMAgentSession>> active_routes_;

@@ -22,9 +22,12 @@
 #include <filesystem>
 #include <future>
 #include <mutex>
+#include <set>
+#include <map>
 
 #include "agent/agent.h"
 #include "agent/session.h"
+#include "agent/session_router.h"
 #include "agent/package.h"
 #include "runtime/agent_runtime.h"
 #include "runtime/databus/node_databus_adapter.h"
@@ -363,6 +366,98 @@ int main() {
     } else {
         std::cout << "Sequential dialogue 2: FAILED - " << seq_result2.error << std::endl;
         tests_failed++;
+    }
+
+    // ============================================================
+    // Test 4: Multi-user session isolation
+    // ============================================================
+    std::cout << std::endl;
+    std::cout << "=== Test 4: Multi-User Session Isolation ===" << std::endl;
+    std::cout << "Testing that different users get different session-ids..." << std::endl;
+
+    // Get session router to check active routes
+    auto session_router = agent->get_session_router();
+    if (!session_router) {
+        std::cerr << "ERROR: Session router is null" << std::endl;
+        tests_failed++;
+    } else {
+        // Clear existing routes for clean test
+        std::cout << "Active routes before test: " << session_router->get_active_route_keys().size() << std::endl;
+
+        // Test: Different user_id:client_id should get different session-ids
+        std::vector<std::pair<std::string, std::string>> users = {
+            {"user_alice", "mobile_app"},
+            {"user_bob", "web_client"},
+            {"user_alice", "web_client"},  // Same user, different client
+            {"user_alice", "mobile_app"}   // Same user+client as first (should reuse)
+        };
+
+        std::map<std::string, std::string> route_to_session;
+
+        for (const auto& [user_id, client_id] : users) {
+            std::string route_key = user_id + ":" + client_id;
+
+            // Get or create session for this route
+            auto session = session_router->get_or_create_session(user_id, client_id);
+            if (!session) {
+                std::cerr << "ERROR: Failed to get session for " << route_key << std::endl;
+                tests_failed++;
+                continue;
+            }
+
+            std::string session_id = session->get_session_id();
+            std::cout << "Route: " << route_key << " -> Session: " << session_id << std::endl;
+
+            // Check if this route was seen before
+            if (route_to_session.count(route_key)) {
+                // Same route should get same session-id
+                if (route_to_session[route_key] == session_id) {
+                    std::cout << "  [PASS] Reused existing session for " << route_key << std::endl;
+                } else {
+                    std::cerr << "  [FAIL] Different session-id for same route! "
+                              << "Expected: " << route_to_session[route_key]
+                              << ", Got: " << session_id << std::endl;
+                    tests_failed++;
+                }
+            } else {
+                // New route should get new unique session-id
+                route_to_session[route_key] = session_id;
+
+                // Verify session-id is UUID format (not numeric)
+                if (session_id.find('-') != std::string::npos && session_id.length() == 36) {
+                    std::cout << "  [PASS] New UUID session-id for " << route_key << std::endl;
+                } else {
+                    std::cerr << "  [FAIL] Session-id is not UUID format: " << session_id << std::endl;
+                    tests_failed++;
+                }
+            }
+        }
+
+        std::cout << std::endl;
+        std::cout << "Active routes after test: " << session_router->get_active_route_keys().size() << std::endl;
+        std::cout << "Unique routes created: " << route_to_session.size() << std::endl;
+
+        // Verify we have 3 unique routes (user_alice:mobile_app, user_bob:web_client, user_alice:web_client)
+        if (route_to_session.size() == 3) {
+            std::cout << "Test 4a: PASSED (3 unique routes created)" << std::endl;
+            tests_passed++;
+        } else {
+            std::cerr << "Test 4a: FAILED (expected 3 unique routes, got " << route_to_session.size() << ")" << std::endl;
+            tests_failed++;
+        }
+
+        // Verify all session-ids are unique
+        std::set<std::string> unique_session_ids;
+        for (const auto& [route, sid] : route_to_session) {
+            unique_session_ids.insert(sid);
+        }
+        if (unique_session_ids.size() == 3) {
+            std::cout << "Test 4b: PASSED (3 unique session-ids)" << std::endl;
+            tests_passed++;
+        } else {
+            std::cerr << "Test 4b: FAILED (expected 3 unique session-ids, got " << unique_session_ids.size() << ")" << std::endl;
+            tests_failed++;
+        }
     }
 
     // Cleanup
