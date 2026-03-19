@@ -30,7 +30,7 @@ int64_t now_ms() {
 }
 
 // =============================================================================
-// Edge Data Transfer Helper Functions (Scenario 1 Fix)
+// Edge Data Transfer Helper Functions (Scenario 1 & Scenario 2 Fix)
 // =============================================================================
 
 // Check if a node has any downstream edge
@@ -53,6 +53,33 @@ static std::vector<std::shared_ptr<framework::MMEdge>> get_outgoing_edges(
   if(!workflow || !node) return result;
   for(const auto& edge : workflow->get_edges()) {
     if(edge && edge->get_source() == node->get_id()) {
+      result.push_back(edge);
+    }
+  }
+  return result;
+}
+
+// Count incoming edges to a target node (Scenario 2 helper)
+static int count_incoming_edges(const std::shared_ptr<framework::MMWorkflow>& workflow,
+                                const std::string& target_node_id) {
+  if(!workflow) return 0;
+  int count = 0;
+  for(const auto& edge : workflow->get_edges()) {
+    if(edge && edge->get_target() == target_node_id) {
+      ++count;
+    }
+  }
+  return count;
+}
+
+// Get all incoming edges to a target node (Scenario 2 helper)
+static std::vector<std::shared_ptr<framework::MMEdge>> get_incoming_edges(
+    const std::shared_ptr<framework::MMWorkflow>& workflow,
+    const std::string& target_node_id) {
+  std::vector<std::shared_ptr<framework::MMEdge>> result;
+  if(!workflow) return result;
+  for(const auto& edge : workflow->get_edges()) {
+    if(edge && edge->get_target() == target_node_id) {
       result.push_back(edge);
     }
   }
@@ -691,11 +718,12 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
   }
 
   // =========================================================================
-  // Edge-based Output Routing (Scenario 1 Fix)
+  // Edge-based Output Routing (Scenario 1 & Scenario 2 Fix)
   // =========================================================================
   // Core rules:
   // - Has downstream Node → Edge point-to-point transfer to downstream inputs
   // - No downstream Node → DataBus broadcast (with session isolation format)
+  // - Multi-incoming edges (Scenario 2): auto-prefix keys with source node ID
   // This naturally isolates parallel node outputs without node code changes.
   const DataMap& node_outputs = node->get_outputs();
   if(!node_outputs.empty()) {
@@ -723,12 +751,27 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
         // Calculate data to transfer
         DataMap transferred;
         if(!edge->get_source_outputs().empty()) {
-          // Has config: use edge mapping
+          // Has config: use edge mapping (explicit renaming)
           edge->transfer_data(node_outputs, transferred);
         } else {
-          // Zero-config: pass all outputs directly
-          for(const auto& out : node_outputs) {
-            transferred[out.first] = out.second;
+          // Zero-config: check if target has multiple incoming edges
+          int incoming_count = count_incoming_edges(workflow, edge->get_target());
+
+          if(incoming_count > 1) {
+            // Scenario 2: Multi-incoming edges without config
+            // Auto-prefix keys with source node ID to avoid conflicts
+            // e.g., node_a.result → "node_a.result", node_b.result → "node_b.result"
+            for(const auto& out : node_outputs) {
+              std::string prefixed_key = node->get_id() + "." + out.first;
+              transferred[prefixed_key] = out.second;
+              Logger::instance().info_f("[EDGE_TRANSFER] Multi-incoming: prefixed key '%s' -> '%s'",
+                                        out.first.c_str(), prefixed_key.c_str());
+            }
+          } else {
+            // Single incoming edge: pass all outputs directly without prefix
+            for(const auto& out : node_outputs) {
+              transferred[out.first] = out.second;
+            }
           }
         }
 
