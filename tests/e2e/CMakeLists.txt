@@ -83,6 +83,18 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/blackbox/test_blackbox_interactive_runner
     )
 endif()
 
+# DataBus Client SDK black-box integration test (Python SDK + CLI)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/blackbox/test_blackbox_databus_clients.sh")
+    add_test(
+        NAME E2EDataBusClients
+        COMMAND bash
+                "${CMAKE_CURRENT_SOURCE_DIR}/blackbox/test_blackbox_databus_clients.sh"
+                "${CMAKE_BINARY_DIR}/agent_runner"
+                "${CMAKE_SOURCE_DIR}/examples/agent/multi_language_databus"
+    )
+endif()
+
+
 if(EXISTS "${CMAKE_SOURCE_DIR}/examples/agent/multi_session_chat/tests/auto_dialog_test.sh")
     add_test(
         NAME E2EMultiSessionChatTUI

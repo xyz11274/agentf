@@ -42,7 +42,7 @@ try:
     from agentflow_databus import DataBusClient, DataBusError, JSONRPCError
 except ImportError:
     print("Error: agentflow_databus module not found", file=sys.stderr)
-    print("Make sure clients/python/agentflow_databus.py is available", file=sys.stderr)
+    print("Make sure src/runtime/databus/clients/python/agentflow_databus.py is available", file=sys.stderr)
     sys.exit(1)
 
 

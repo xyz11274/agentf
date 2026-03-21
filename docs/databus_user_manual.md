@@ -387,7 +387,7 @@ void list_user_data(const std::string& session_id) {
 ### 6.1 安装与导入
 
 ```python
-# SDK 位于 clients/python/agentflow_databus.py
+# SDK 位于 src/runtime/databus/clients/python/agentflow_databus.py
 from agentflow_databus import DataBusClient, DataBusError
 ```
 
@@ -618,7 +618,7 @@ try {
 ### 8.1 包导入
 
 ```go
-import "agentflow/clients/golang/databus"
+import "agentflow/src/runtime/databus/clients/golang/databus"
 ```
 
 ### 8.2 连接 DataBus
@@ -749,10 +749,10 @@ if err != nil {
 
 ```bash
 # CLI 工具位于
-clients/cli/databus_cli.py
+src/runtime/databus/clients/cli/databus_cli.py
 
 # 添加执行权限
-chmod +x clients/cli/databus_cli.py
+chmod +x src/runtime/databus/clients/cli/databus_cli.py
 ```
 
 ### 9.2 基本使用

@@ -1,4 +1,4 @@
-module github.com/agentflow/clients/golang
+module github.com/agentflow/databus/clients/golang
 
 go 1.21
 

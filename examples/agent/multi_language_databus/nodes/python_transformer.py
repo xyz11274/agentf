@@ -12,7 +12,7 @@ import time
 
 # Add the clients directory to path for importing the SDK
 script_dir = os.path.dirname(os.path.abspath(__file__))
-clients_dir = os.path.join(os.path.dirname(os.path.dirname(script_dir)), "..", "..", "clients", "python")
+clients_dir = os.path.join(os.path.dirname(os.path.dirname(script_dir)), "..", "..", "src", "runtime", "databus", "clients", "python")
 sys.path.insert(0, clients_dir)
 
 try:

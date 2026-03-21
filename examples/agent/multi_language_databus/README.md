@@ -147,7 +147,7 @@ If nodes cannot connect to the UDS socket:
 
 If `agentflow_databus` cannot be imported:
 
-1. Add the SDK to PYTHONPATH: `export PYTHONPATH=/path/to/AgentFlow/clients/python:$PYTHONPATH`
+1. Add the SDK to PYTHONPATH: `export PYTHONPATH=/path/to/AgentFlow/src/runtime/databus/clients/python:$PYTHONPATH`
 2. Or use the fallback minimal client included in the script
 
 ### Go Execution Failed
@@ -160,6 +160,6 @@ If the Go script fails to run:
 ## Related Documentation
 
 - [UDS Protocol Specification](../../../docs/UDS_PROTOCOL.md)
-- [Python SDK](../../../clients/python/README.md)
-- [Go SDK](../../../clients/golang/README.md)
-- [CLI Tool](../../../clients/cli/README.md)
+- [Python SDK](../../../src/runtime/databus/clients/python/README.md)
+- [Go SDK](../../../src/runtime/databus/clients/golang/README.md)
+- [CLI Tool](../../../src/runtime/databus/clients/cli/README.md)

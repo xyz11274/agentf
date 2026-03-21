@@ -75,3 +75,6 @@ vendor/googletest/
 vendor/openssl/
 vendor/protoactor/
 # Add other downloaded dependencies here as needed
+
+# CTest temporary artifacts
+Testing/Temporary/

@@ -49,10 +49,10 @@ External Process (Python/Go/Shell/Other)
    - Cleans up server after execution
 
 3. **Client SDKs**
-   - Python: `clients/python/agentflow_databus.py`
-   - Go: `clients/golang/databus/client.go`
-   - Java: `clients/java/src/main/java/com/agentflow/databus/`
-   - CLI: `clients/cli/databus_cli.py`
+   - Python: `src/runtime/databus/clients/python/agentflow_databus.py`
+   - Go: `src/runtime/databus/clients/golang/databus/client.go`
+   - Java: `src/runtime/databus/clients/java/src/main/java/com/agentflow/databus/`
+   - CLI: `src/runtime/databus/clients/cli/databus_cli.py`
 
 ## Protocol
 
