@@ -79,7 +79,7 @@ func main() {
 
 	// For this test, we'll use environment variables to get the data
 	// since the actual UDS client requires more implementation
-	// In production, use the full clients/golang/databus SDK
+	// In production, use the full src/runtime/databus/clients/golang/databus SDK
 
 	// Read data from previous step (passed via environment or file)
 	chainData := getInput("CHAIN_DATA", "test_data")

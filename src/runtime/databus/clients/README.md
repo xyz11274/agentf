@@ -219,7 +219,7 @@ client.user("dialogue-123").put("result", {"status": "ok"})
 ### Go
 
 ```go
-import "github.com/agentflow/clients/golang/databus"
+import "github.com/agentflow/databus/clients/golang/databus"
 
 // Connect via environment variable
 client, err := databus.NewClientFromEnv()
