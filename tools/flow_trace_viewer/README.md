@@ -1,101 +1,130 @@
-# Flow Trace Viewer
+# 调度流追踪可视化工具（Flow Trace Viewer）
 
-A browser-based visualization tool for AgentFlow scheduling traces.
+基于浏览器的可视化工具，用于查看 AgentFlow 调度流追踪日志（FlowTrace 系统）。
 
-## Features
+## 功能特性
 
-- **Sequence Diagram**: Visualize the temporal flow of events between components
-- **Flow Diagram**: See the overall flow transitions between entities
-- **Timing Table**: Detailed view of each event with timestamps and durations
-- **Filtering**: Filter by session and dialogue ID
-- **Drag & Drop**: Easy file loading
+- **时序图**：以 Mermaid 时序图展示组件间消息流转时序
+- **流程图**：展示各实体间的全局调度流向及消息频次/耗时汇总
+- **事件明细表**：完整事件列表，含时间戳、来源、目标、耗时、输入/输出、扩展属性
+- **会话/对话过滤**：按 Session 和 Dialogue 维度筛选事件
+- **拖拽加载**：直接将日志文件拖入浏览器即可加载
+- **示例数据**：内置示例，一键加载演示
 
-## Usage
+## 使用方法
 
-1. Open `index.html` in a modern browser (Chrome, Firefox, Safari, Edge)
-2. Either:
-   - Drag and drop a trace log file onto the drop zone
-   - Click "Choose File" to select a file
-   - Click "Load Sample Data" to see a demo
+1. 在现代浏览器（Chrome / Firefox / Safari / Edge 90+）中打开 `index.html`
+2. 选择以下任一方式加载数据：
+   - 将 `.ndjson` / `.log` 文件拖入拖放区
+   - 点击"选择文件"手动选取
+   - 点击"加载示例数据"查看演示
 
-## Log Format
+## 日志格式
 
-The viewer expects JSON Lines (NDJSON) format, where each line is a JSON object:
+本工具读取 JSON Lines（NDJSON）格式，每行一个 JSON 对象：
 
 ```json
 {"time":"2026-03-13 18:23:55.660","type":"task-exec","session":"session-001","dialogue":"12345678","from":"external","to":"dispatcher","event":"task-created","inputs":"{\"user_text\":\"帮我订一张去北京的机票\"}"}
-{"time":"2026-03-13 18:23:55.661","type":"task-exec","session":"session-001","dialogue":"12345678","from":"dispatcher","to":"skill-selection","event":"workflow-scheduled"}
-...
+{"time":"2026-03-13 18:23:55.670","type":"node-exec","session":"session-001","dialogue":"12345678","from":"skill-selection-workflow","to":"select_skills","event":"node-completed","duration_us":7000,"outputs":"{\"next_skills\":[\"travel\"]}"}
 ```
 
-### Required Fields
+### 必填字段
 
-| Field | Description |
-|-------|-------------|
-| `time` | Timestamp in format `YYYY-MM-DD HH:MM:SS.mmm` |
-| `type` | Event category: `task-exec`, `workflow-exec`, `node-exec`, `skill-exec` |
-| `session` | Session ID for grouping |
-| `dialogue` | Dialogue ID for multi-dialogue support |
-| `from` | Source entity name |
-| `to` | Target entity name |
-| `event` | Event type name |
+| 字段 | 说明 |
+|------|------|
+| `time` | 时间戳，格式 `YYYY-MM-DD HH:MM:SS.mmm` |
+| `type` | 事件分类：`task-exec` / `workflow-exec` / `node-exec` / `skill-exec` / `external-call` |
+| `from` | 来源实体名称 |
+| `to` | 目标实体名称 |
+| `event` | 事件类型名称 |
 
-### Optional Fields
+### 可选字段
 
-| Field | Description |
-|-------|-------------|
-| `inputs` | JSON string of input data |
-| `outputs` | JSON string of output data |
-| `duration_us` | Duration in microseconds (for completion events) |
+| 字段 | 说明 |
+|------|------|
+| `session` | Session ID，用于会话级过滤 |
+| `dialogue` | Dialogue ID，用于对话级过滤 |
+| `inputs` | 输入数据（JSON 字符串或任意字符串） |
+| `outputs` | 输出数据（JSON 字符串或任意字符串） |
+| `duration_us` | 耗时（微秒） |
+| `task_id` | 关联的 TraceTask ID（可选） |
+| `trace_id` | 关联的全链路 trace_id（可选） |
+| `attrs` | 扩展键值对，格式 `{"key": "value"}` |
 
-## Event Types
+### 事件类型说明
 
-| Event | Description |
-|-------|-------------|
-| `task-created` | New task created by external request |
-| `workflow-scheduled` | Workflow execution scheduled |
-| `workflow-started` | Workflow execution started |
-| `workflow-completed` | Workflow execution finished |
-| `node-started` | Node execution started |
-| `node-completed` | Node execution finished |
-| `skill-launched` | Skill task launched |
-| `skill-completed` | Skill execution finished |
-| `data-exchange` | Data exchanged between components |
-| `response-sent` | Response sent to external |
+| 事件名 | 说明 |
+|--------|------|
+| `task-created` | 外部请求创建新任务 |
+| `task-dispatched` | 任务分发给 Dispatcher |
+| `workflow-scheduled` | Workflow 调度完成 |
+| `workflow-started` | Workflow 开始执行 |
+| `workflow-completed` | Workflow 执行完成 |
+| `node-started` | Node 开始执行 |
+| `node-completed` | Node 执行完成 |
+| `skill-launched` | Skill 任务启动 |
+| `skill-completed` | Skill 执行完成 |
+| `data-exchange` | 组件间数据交换 |
+| `dialogue-created` | 新对话创建 |
+| `dialogue-completed` | 对话结束 |
+| `external-call` | 外部回调调用 |
+| `response-sent` | 响应发送给外部 |
 
-## Generating Traces
+## 生成追踪日志
 
-Set the environment variable `FLOW_TRACE_FILE` to enable file output:
+### 方式一：环境变量（文件输出）
 
 ```bash
-export FLOW_TRACE_FILE=/path/to/trace.log
+export FLOW_TRACE_FILE=/path/to/trace.ndjson
 ./your_agent_program
 ```
 
-Or programmatically:
+### 方式二：C++ API
 
 ```cpp
 #include "runtime/flow_trace.h"
 
-// Enable file output
-agentflow::runtime::FlowTraceWriter::instance().set_output_file("/path/to/trace.log");
+// 启用文件输出
+agentflow::runtime::FlowTraceWriter::instance().set_output_file("/path/to/trace.ndjson");
 
-// Or disable tracing
+// 关闭标准输出（默认开启）
+agentflow::runtime::FlowTraceWriter::instance().set_stdout_enabled(false);
+
+// 禁用追踪
 agentflow::runtime::FlowTraceWriter::instance().set_enabled(false);
 ```
 
-## Dependencies
+### 代码打点宏（C++ 内部使用）
 
-- **Mermaid.js** (loaded from CDN): For diagram rendering
-- No build step required - just open `index.html` in a browser
+```cpp
+// 任务级事件
+FLOW_TRACE_TASK(session_id, dialogue_id, from, to, FlowEventType::TASK_CREATED);
 
-## Browser Support
+// Workflow 级事件（含输入输出和耗时）
+FLOW_TRACE_WORKFLOW_WITH_DATA(session_id, dialogue_id, from, to,
+    FlowEventType::WORKFLOW_COMPLETED, inputs_json, outputs_json, duration_us);
 
-- Chrome 90+
-- Firefox 88+
-- Safari 14+
-- Edge 90+
+// Node 级事件（含输入输出和耗时）
+FLOW_TRACE_NODE_WITH_DATA(session_id, dialogue_id, from, to,
+    FlowEventType::NODE_COMPLETED, inputs_json, outputs_json, duration_us);
 
-## License
+// 外部回调事件
+FLOW_TRACE_EXTERNAL_CALL(session_id, dialogue_id, from, to,
+    "enter-callback", in_data, out_data);
+```
 
-Part of the AgentFlow project. See main repository for license details.
+## 与 Span Trace Viewer 的区别
+
+| 维度 | Flow Trace Viewer（本工具）| Span Trace Viewer |
+|------|--------------------------|-------------------|
+| 数据来源 | `FlowTraceWriter` | `TraceManager` |
+| 关注点 | 调度流、消息流转 | 性能、调用链耗时 |
+| 可视化 | 时序图 + 流程图 | 甘特图 + 火焰图 |
+| 日志字段 | `time`, `from`, `to`, `event` | `trace_id`, `span_id`, `kind` |
+
+如需可视化 Span 性能跟踪数据，请使用 `tools/span_trace_viewer/`。
+
+## 依赖
+
+- **Mermaid.js**（CDN 加载）：用于时序图和流程图渲染
+- 无构建步骤，直接在浏览器中打开即用

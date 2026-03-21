@@ -8,7 +8,7 @@ AgentFlow 全链路跟踪系统提供从请求进入 Agent 到执行完整个 No
 - **全链路时序追踪**：完整的 parent-child span 树，每个 span 包含时延、线程 ID、标签、事件
 - **按需采样**：仅当存在匹配的 TraceTask 时才记录数据，默认开销为零
 - **NDJSON 持久化**：每行一个 span，方便流式处理和外部工具接入
-- **可视化工具**：内置 Web UI（`publish/tools/trace/index.html`）
+- **可视化工具**：内置 Web UI（`tools/span_trace_viewer/index.html`）
 
 ---
 
@@ -43,7 +43,7 @@ AgentFlow 全链路跟踪系统提供从请求进入 Agent 到执行完整个 No
 | `src/runtime/trace/trace_context.cpp` | TraceContext & ScopedSpan 实现 |
 | `src/runtime/trace/trace_manager.cpp` | TraceManager 完整实现 |
 | `src/runtime/trace/trace_exporter.cpp` | 导出格式实现 |
-| `publish/tools/trace/index.html` | 单文件 Web 可视化工具 |
+| `tools/span_trace_viewer/index.html` | 单文件 Web 可视化工具 |
 
 ---
 
@@ -80,7 +80,7 @@ TraceManager::instance().start_task(task_id);
 ls trace_output/task_<task_id>.ndjson
 
 # 在浏览器中打开可视化工具
-open publish/tools/trace/index.html
+open tools/span_trace_viewer/index.html
 # 拖入 .ndjson 文件即可可视化
 ```
 
@@ -141,7 +141,7 @@ sp.set_status(SpanStatus::OK);
 
 ## Web UI 使用说明
 
-`publish/tools/trace/index.html` 为零依赖单文件 Web 工具，直接在浏览器打开：
+`tools/span_trace_viewer/index.html` 为零依赖单文件 Web 工具，直接在浏览器打开：
 
 | 功能 | 说明 |
 |------|------|
@@ -215,7 +215,7 @@ TraceManager::end_session(trace_id)
 
 ### Web UI 统计指标页
 
-1. 打开 `publish/tools/trace/index.html`
+1. 打开 `tools/span_trace_viewer/index.html`
 2. 点击侧边栏"📊 加载 metrics.json"按钮，选择 `trace_output/metrics.json`
 3. 页面切换到**统计指标**视图：
    - **计数器 & 瞬时值**：卡片展示每个 Counter/Gauge 的当前值

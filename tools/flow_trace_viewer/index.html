@@ -1,17 +1,17 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Flow Trace Viewer - AgentFlow</title>
+    <title>调度流追踪可视化工具 - AgentFlow</title>
     <link rel="stylesheet" href="css/style.css">
     <!-- Mermaid for diagrams -->
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 </head>
 <body>
     <header>
-        <h1>Flow Trace Viewer</h1>
-        <p>Visualize Agent scheduling flow with sequence diagrams and flow charts</p>
+        <h1>调度流追踪可视化工具（Flow Trace Viewer）</h1>
+        <p>以时序图、流程图和事件表格可视化 AgentFlow 调度流追踪日志</p>
     </header>
 
     <main>
@@ -20,31 +20,31 @@
 
         <!-- File Drop Zone -->
         <div id="drop-zone">
-            <p>Drag and drop a trace log file here, or</p>
+            <p>将追踪日志文件拖入此处，或</p>
             <div class="file-input-wrapper">
-                <input type="file" id="file-input" accept=".log,.json,.jsonl,.txt">
-                <label for="file-input">Choose File</label>
+                <input type="file" id="file-input" accept=".log,.json,.jsonl,.txt,.ndjson">
+                <label for="file-input">选择文件</label>
             </div>
-            <button id="load-sample">Load Sample Data</button>
+            <button id="load-sample">加载示例数据</button>
         </div>
 
         <!-- Stats Overview -->
         <div class="controls">
             <div class="control-group">
-                <label>Session</label>
+                <label>会话（Session）</label>
                 <select id="session-select">
-                    <option value="">All Sessions</option>
+                    <option value="">全部会话</option>
                 </select>
             </div>
             <div class="control-group">
-                <label>Dialogue</label>
+                <label>对话（Dialogue）</label>
                 <select id="dialogue-select">
-                    <option value="">All Dialogues</option>
+                    <option value="">全部对话</option>
                 </select>
             </div>
             <div class="control-group stats" id="stats">
                 <div class="stat-item">
-                    <span class="stat-label">Events</span>
+                    <span class="stat-label">事件总数</span>
                     <span class="stat-value">0</span>
                 </div>
             </div>
@@ -53,25 +53,25 @@
         <!-- Filtered Stats -->
         <div id="filtered-stats" class="stats">
             <div class="stat-item">
-                <span class="stat-label">Showing</span>
-                <span class="stat-value">0 events</span>
+                <span class="stat-label">显示事件</span>
+                <span class="stat-value">0 条</span>
             </div>
         </div>
 
         <!-- Tabs -->
         <div class="tabs">
-            <button class="tab-btn active" data-tab="sequence">Sequence Diagram</button>
-            <button class="tab-btn" data-tab="flow">Flow Diagram</button>
-            <button class="tab-btn" data-tab="table">Timing Table</button>
+            <button class="tab-btn active" data-tab="sequence">时序图</button>
+            <button class="tab-btn" data-tab="flow">流程图</button>
+            <button class="tab-btn" data-tab="table">事件明细表</button>
         </div>
 
         <!-- Tab Content: Sequence Diagram -->
         <div id="tab-sequence" class="tab-content active">
             <div class="diagram-container">
-                <div id="sequence-diagram">Load a trace file to see the sequence diagram</div>
+                <div id="sequence-diagram">请加载追踪日志文件以查看时序图</div>
             </div>
             <details>
-                <summary>Mermaid Code</summary>
+                <summary>Mermaid 源码</summary>
                 <pre id="sequence-code" class="code-block"></pre>
             </details>
         </div>
@@ -79,10 +79,10 @@
         <!-- Tab Content: Flow Diagram -->
         <div id="tab-flow" class="tab-content">
             <div class="diagram-container">
-                <div id="flow-diagram">Load a trace file to see the flow diagram</div>
+                <div id="flow-diagram">请加载追踪日志文件以查看流程图</div>
             </div>
             <details>
-                <summary>Mermaid Code</summary>
+                <summary>Mermaid 源码</summary>
                 <pre id="flow-code" class="code-block"></pre>
             </details>
         </div>
@@ -91,15 +91,14 @@
         <div id="tab-table" class="tab-content">
             <div class="diagram-container">
                 <div id="timing-table">
-                    <p>Load a trace file to see the timing table</p>
+                    <p>请加载追踪日志文件以查看事件明细表</p>
                 </div>
             </div>
         </div>
     </main>
 
     <footer style="text-align: center; padding: 2rem; color: #666;">
-        <p>AgentFlow Flow Trace Viewer | Part of the AgentFlow framework</p>
-        <p>Log Format: JSON Lines | Visualization: <a href="https://mermaid.js.org/" target="_blank">Mermaid</a></p>
+        <p>AgentFlow 调度流追踪可视化工具 | 日志格式：JSON Lines（NDJSON）| 图表渲染：<a href="https://mermaid.js.org/" target="_blank">Mermaid</a></p>
     </footer>
 
     <!-- Application Scripts -->

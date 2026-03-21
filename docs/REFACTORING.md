@@ -2624,8 +2624,8 @@ All examples have been validated:
 | `src/runtime/trace/trace_context.cpp` | TraceContext & ScopedSpan 完整实现 |
 | `src/runtime/trace/trace_manager.cpp` | TraceManager 完整实现 |
 | `src/runtime/trace/trace_exporter.cpp` | 导出格式实现 |
-| `publish/tools/trace/index.html` | 零依赖单文件 Web 可视化工具（甘特图 + 火焰图 + Span 列表 + 任务管理）|
-| `publish/tools/trace/README.md` | Web 工具使用说明 |
+| `tools/span_trace_viewer/index.html` | 零依赖单文件 Web 可视化工具（甘特图 + 火焰图 + Span 列表 + 任务管理）|
+| `tools/span_trace_viewer/README.md` | Web 工具使用说明 |
 | `docs/TRACING.md` | 全链路跟踪系统完整文档 |
 
 ### 修改文件

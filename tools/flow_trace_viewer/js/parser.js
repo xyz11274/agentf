@@ -57,6 +57,20 @@ class FlowTraceParser {
     }
 
     /**
+     * Get total count of unique dialogues across all sessions
+     * @returns {number}
+     */
+    getDialogueCount() {
+        const dialogues = new Set();
+        for (const event of this.events) {
+            if (event.session && event.dialogue) {
+                dialogues.add(`${event.session}::${event.dialogue}`);
+            }
+        }
+        return dialogues.size;
+    }
+
+    /**
      * Filter events by session ID
      * @param {string} sessionId
      * @returns {object[]}

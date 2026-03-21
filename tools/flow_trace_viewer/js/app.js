@@ -112,9 +112,9 @@ class FlowTraceViewer {
             this.updateStats();
             this.updateSelectors();
             this.displayCurrentView();
-            this.showSuccess(`Loaded ${this.parser.events.length} events from ${filename}`);
+            this.showSuccess(`已加载 ${this.parser.events.length} 条事件（来自 ${filename}）`);
         } catch (e) {
-            this.showError(`Failed to parse file: ${e.message}`);
+            this.showError(`文件解析失败: ${e.message}`);
         }
     }
 
@@ -128,15 +128,19 @@ class FlowTraceViewer {
         if (statsEl) {
             statsEl.innerHTML = `
                 <div class="stat-item">
-                    <span class="stat-label">Total Events</span>
+                    <span class="stat-label">事件总数</span>
                     <span class="stat-value">${stats.totalEvents}</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">Sessions</span>
+                    <span class="stat-label">会话数</span>
                     <span class="stat-value">${this.parser.getSessions().length}</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">Total Duration</span>
+                    <span class="stat-label">对话数</span>
+                    <span class="stat-value">${this.parser.getDialogueCount()}</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">总耗时</span>
                     <span class="stat-value">${stats.duration.totalMs}ms</span>
                 </div>
             `;
@@ -296,11 +300,11 @@ class FlowTraceViewer {
         if (statsEl) {
             statsEl.innerHTML = `
                 <div class="stat-item">
-                    <span class="stat-label">Showing</span>
-                    <span class="stat-value">${events.length} events</span>
+                    <span class="stat-label">显示事件</span>
+                    <span class="stat-value">${events.length} 条</span>
                 </div>
                 <div class="stat-item">
-                    <span class="stat-label">Duration</span>
+                    <span class="stat-label">耗时合计</span>
                     <span class="stat-value">${stats.duration.totalMs}ms</span>
                 </div>
             `;
@@ -311,20 +315,22 @@ class FlowTraceViewer {
      * Load sample data for demo
      */
     loadSampleData() {
-        const sampleData = `{"time":"2026-03-13 18:23:55.660","type":"task-exec","session":"session-001","dialogue":"12345678","from":"external","to":"dispatcher","event":"task-created","inputs":"{\\"user_text\\":\\"帮我订一张去北京的机票\\"}"}
-{"time":"2026-03-13 18:23:55.661","type":"task-exec","session":"session-001","dialogue":"12345678","from":"dispatcher","to":"skill-selection","event":"workflow-scheduled"}
+        const sampleData = `{"time":"2026-03-13 18:23:55.658","type":"task-exec","session":"session-001","dialogue":"12345678","from":"external","to":"dispatcher","event":"dialogue-created"}
+{"time":"2026-03-13 18:23:55.659","type":"external-call","session":"session-001","dialogue":"12345678","from":"agent-1","to":"ctx-callback","event":"enter-callback","inputs":"user_id=u001|user_input=帮我订一张去北京的机票","outputs":"上下文：用户偏好商务舱"}
+{"time":"2026-03-13 18:23:55.660","type":"task-exec","session":"session-001","dialogue":"12345678","from":"external","to":"dispatcher","event":"task-created","inputs":"{\\"user_text\\":\\"帮我订一张去北京的机票\\"}"}
+{"time":"2026-03-13 18:23:55.661","type":"task-exec","session":"session-001","dialogue":"12345678","from":"dispatcher","to":"skill-selection","event":"task-dispatched"}
 {"time":"2026-03-13 18:23:55.662","type":"workflow-exec","session":"session-001","dialogue":"12345678","from":"task","to":"skill-selection-workflow","event":"workflow-started"}
 {"time":"2026-03-13 18:23:55.663","type":"node-exec","session":"session-001","dialogue":"12345678","from":"skill-selection-workflow","to":"select_skills","event":"node-started"}
 {"time":"2026-03-13 18:23:55.670","type":"node-exec","session":"session-001","dialogue":"12345678","from":"skill-selection-workflow","to":"select_skills","event":"node-completed","duration_us":7000,"outputs":"{\\"next_skills\\":[\\"travel\\",\\"shopping\\"]}"}
 {"time":"2026-03-13 18:23:55.671","type":"workflow-exec","session":"session-001","dialogue":"12345678","from":"task","to":"skill-selection-workflow","event":"workflow-completed","duration_us":9000}
 {"time":"2026-03-13 18:23:55.672","type":"task-exec","session":"session-001","dialogue":"12345678","from":"skill-selection","to":"dispatcher","event":"data-exchange"}
 {"time":"2026-03-13 18:23:55.673","type":"skill-exec","session":"session-001","dialogue":"12345678","from":"dispatcher","to":"travel","event":"skill-launched"}
-{"time":"2026-03-13 18:23:55.673","type":"skill-exec","session":"session-001","dialogue":"12345678","from":"dispatcher","to":"shopping","event":"skill-launched"}
 {"time":"2026-03-13 18:23:55.674","type":"workflow-exec","session":"session-001","dialogue":"12345678","from":"task","to":"travel-workflow","event":"workflow-started"}
 {"time":"2026-03-13 18:23:55.675","type":"node-exec","session":"session-001","dialogue":"12345678","from":"travel-workflow","to":"travel_node","event":"node-started"}
 {"time":"2026-03-13 18:23:55.680","type":"node-exec","session":"session-001","dialogue":"12345678","from":"travel-workflow","to":"travel_node","event":"node-completed","duration_us":5000,"outputs":"{\\"travel_result\\":\\"查询到3个航班...\\"}"}
 {"time":"2026-03-13 18:23:55.681","type":"workflow-exec","session":"session-001","dialogue":"12345678","from":"task","to":"travel-workflow","event":"workflow-completed","duration_us":7000}
-{"time":"2026-03-13 18:23:55.700","type":"task-exec","session":"session-001","dialogue":"12345678","from":"coordinator","to":"external","event":"response-sent","outputs":"{\\"response\\":\\"已为您查询到航班信息...\\"}"}`;
+{"time":"2026-03-13 18:23:55.700","type":"task-exec","session":"session-001","dialogue":"12345678","from":"coordinator","to":"external","event":"response-sent","outputs":"{\\"response\\":\\"已为您查询到航班信息...\\"}"}
+{"time":"2026-03-13 18:23:55.701","type":"task-exec","session":"session-001","dialogue":"12345678","from":"external","to":"dispatcher","event":"dialogue-completed","duration_us":41000}`;
 
         this.parseAndDisplay(sampleData, 'sample_data.json');
     }

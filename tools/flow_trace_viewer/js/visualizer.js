@@ -193,24 +193,32 @@ class FlowTraceVisualizer {
      */
     generateTimingTable(events) {
         if (events.length === 0) {
-            return '<p>No events to display</p>';
+            return '<p>暂无事件可显示</p>';
         }
 
         const timeline = this.buildTimeline(events);
 
         let html = '<table class="timing-table">\n';
         html += '<thead><tr>';
-        html += '<th>Time</th>';
-        html += '<th>Relative</th>';
-        html += '<th>Type</th>';
-        html += '<th>From</th>';
-        html += '<th>To</th>';
-        html += '<th>Event</th>';
-        html += '<th>Duration</th>';
+        html += '<th>时间</th>';
+        html += '<th>相对时间</th>';
+        html += '<th>类型</th>';
+        html += '<th>来源</th>';
+        html += '<th>目标</th>';
+        html += '<th>事件</th>';
+        html += '<th>耗时</th>';
+        html += '<th>输入</th>';
+        html += '<th>输出</th>';
+        html += '<th>扩展属性</th>';
+        html += '<th>task_id</th>';
+        html += '<th>trace_id</th>';
         html += '</tr></thead>\n';
         html += '<tbody>\n';
 
         for (const event of timeline) {
+            const attrStr = this.formatAttrs(event.attrs);
+            const inputStr = this.truncateCell(event.inputs, 80);
+            const outputStr = this.truncateCell(event.outputs, 80);
             html += '<tr>';
             html += `<td class="time">${event.time}</td>`;
             html += `<td class="relative">${event.relativeMs}ms</td>`;
@@ -219,11 +227,39 @@ class FlowTraceVisualizer {
             html += `<td class="to">${event.to}</td>`;
             html += `<td class="event">${event.event}</td>`;
             html += `<td class="duration">${event.duration_us ? Math.round(event.duration_us / 1000) + 'ms' : '-'}</td>`;
+            html += `<td class="data-cell" title="${this.escapeHtml(event.inputs || '')}">${inputStr}</td>`;
+            html += `<td class="data-cell" title="${this.escapeHtml(event.outputs || '')}">${outputStr}</td>`;
+            html += `<td class="attrs-cell">${attrStr}</td>`;
+            html += `<td class="id-cell">${event.task_id || '-'}</td>`;
+            html += `<td class="id-cell">${event.trace_id || '-'}</td>`;
             html += '</tr>\n';
         }
 
         html += '</tbody></table>\n';
         return html;
+    }
+
+    /** Format attrs map as compact key=value list */
+    formatAttrs(attrs) {
+        if (!attrs || typeof attrs !== 'object') return '-';
+        const pairs = Object.entries(attrs).map(([k, v]) => `<span class="attr-pill">${k}=${v}</span>`);
+        return pairs.length > 0 ? pairs.join(' ') : '-';
+    }
+
+    /** Truncate cell content for display */
+    truncateCell(str, maxLen) {
+        if (!str) return '-';
+        const escaped = this.escapeHtml(str);
+        return str.length > maxLen ? escaped.substring(0, maxLen) + '…' : escaped;
+    }
+
+    /** Escape HTML special chars */
+    escapeHtml(str) {
+        return String(str)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
     }
 
     /**
@@ -282,9 +318,13 @@ class FlowTraceVisualizer {
             case 'workflow-completed':
             case 'node-completed':
             case 'skill-completed':
+            case 'dialogue-completed':
                 return '-->>';
             case 'data-exchange':
+            case 'external-call':
                 return '-->';
+            case 'task-dispatched':
+                return '->>+';
             default:
                 return '->>';
         }

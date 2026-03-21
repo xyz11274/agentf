@@ -268,6 +268,45 @@ select {
 .type-workflow-exec { background: #e8f5e9; color: #2e7d32; }
 .type-node-exec { background: #fff3e0; color: #e65100; }
 .type-skill-exec { background: #fce4ec; color: #c2185b; }
+.type-external-call { background: #ede7f6; color: #4527a0; }
+
+/* Data/attrs table cells */
+.timing-table .data-cell {
+    max-width: 200px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: monospace;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.timing-table .attrs-cell {
+    max-width: 180px;
+    font-size: 0.8rem;
+}
+
+.timing-table .id-cell {
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: monospace;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+}
+
+.attr-pill {
+    display: inline-block;
+    background: #f0f4ff;
+    border: 1px solid #c5cae9;
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-size: 0.72rem;
+    font-family: monospace;
+    margin: 1px;
+    color: #3949ab;
+}
 
 /* Status Messages */
 .status {
