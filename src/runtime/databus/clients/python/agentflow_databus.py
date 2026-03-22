@@ -287,19 +287,22 @@ class DataBusClient:
     Key structure: /session/{session_id}/{namespace}/{key}
     """
 
-    def __init__(self, socket_path: str, session_id: Optional[str] = None):
+    def __init__(self, socket_path: str, session_id: Optional[str] = None,
+                 timeout_seconds: float = 30.0):
         """
         Initialize the DataBus client.
 
         Args:
             socket_path: Path to the Unix Domain Socket
             session_id: Session ID (extracted from socket path if not provided)
+            timeout_seconds: Socket timeout in seconds (default: 30.0)
         """
         self._socket_path = socket_path
         self._socket: Optional[socket.socket] = None
         self._lock = threading.Lock()
         self._request_id = 0
         self._connected = False
+        self._timeout_seconds = timeout_seconds
 
         # Extract session_id from socket path if not provided
         if session_id:
@@ -325,9 +328,12 @@ class DataBusClient:
         self._connect()
 
     @classmethod
-    def from_env(cls) -> 'DataBusClient':
+    def from_env(cls, timeout_seconds: float = 30.0) -> 'DataBusClient':
         """
         Create a client using the AF_DATABUS_UDS_FILE environment variable.
+
+        Args:
+            timeout_seconds: Socket timeout in seconds (default: 30.0)
 
         Returns:
             DataBusClient instance
@@ -338,7 +344,7 @@ class DataBusClient:
         socket_path = os.environ.get("AF_DATABUS_UDS_FILE")
         if not socket_path:
             raise DataBusError("AF_DATABUS_UDS_FILE environment variable not set")
-        return cls(socket_path)
+        return cls(socket_path, timeout_seconds=timeout_seconds)
 
     @property
     def session_id(self) -> str:
@@ -407,6 +413,9 @@ class DataBusClient:
             }
 
             try:
+                # Set socket timeout
+                self._socket.settimeout(self._timeout_seconds)
+
                 # Send request
                 message = json.dumps(request) + "\n"
                 self._socket.sendall(message.encode('utf-8'))
@@ -434,6 +443,8 @@ class DataBusClient:
 
                 return response.get("result", {})
 
+            except socket.timeout:
+                raise DataBusError(f"Request timeout after {self._timeout_seconds}s")
             except socket.error as e:
                 self._connected = False
                 raise DataBusError(f"Socket error: {e}")

@@ -272,7 +272,12 @@ namespace agentflow {
 namespace runtime {
 
 UDSServer::UDSServer(MMDataBus* databus, const std::string& socket_path)
-    : databus_(databus), socket_path_(socket_path) {
+    : UDSServer(databus, socket_path, Config{}) {
+}
+
+UDSServer::UDSServer(MMDataBus* databus, const std::string& socket_path, const Config& config)
+    : databus_(databus), socket_path_(socket_path), config_(config) {
+  task_queue_.max_size = config_.max_queue_size;
 }
 
 UDSServer::~UDSServer() {
@@ -332,9 +337,15 @@ bool UDSServer::start() {
   }
 
   running_ = true;
-  server_thread_ = std::thread(&UDSServer::server_loop, this);
 
-  Logger::instance().info_f("[UDS_SERVER] Started on %s", socket_path_.c_str());
+  // Start worker threads for client handling
+  start_worker_threads();
+
+  // Start accept thread
+  accept_thread_ = std::thread(&UDSServer::server_loop, this);
+
+  Logger::instance().info_f("[UDS_SERVER] Started on %s with %zu worker threads",
+                            socket_path_.c_str(), config_.thread_pool_size);
   return true;
 }
 
@@ -345,18 +356,29 @@ void UDSServer::stop() {
 
   Logger::instance().info("[UDS_SERVER] Stopping...");
 
-  // Close server socket to wake up accept()
+  // 1. Stop task queue to unblock worker threads
+  task_queue_.stop();
+
+  // 2. Close server socket to wake up accept()
   if (server_fd_ >= 0) {
     close(server_fd_);
     server_fd_ = -1;
   }
 
-  // Wait for server thread to finish
-  if (server_thread_.joinable()) {
-    server_thread_.join();
+  // 3. Wait for accept thread to finish
+  if (accept_thread_.joinable()) {
+    accept_thread_.join();
   }
 
-  // Close all client connections
+  // 4. Wait for worker threads to finish
+  for (auto& thread : worker_threads_) {
+    if (thread.joinable()) {
+      thread.join();
+    }
+  }
+  worker_threads_.clear();
+
+  // 5. Close all client connections
   {
     std::lock_guard<std::mutex> lock(clients_mutex_);
     for (auto& [fd, _] : active_clients_) {
@@ -365,17 +387,46 @@ void UDSServer::stop() {
     active_clients_.clear();
   }
 
-  // Unsubscribe all subscriptions
+  // 6. Unsubscribe all subscriptions
   {
     std::lock_guard<std::mutex> lock(subscription_mutex_);
     subscriptions_.clear();
     key_to_subscriptions_.clear();
   }
 
-  // Clean up socket file
+  // 7. Clean up socket file
   cleanup_socket();
 
   Logger::instance().info("[UDS_SERVER] Stopped");
+}
+
+void UDSServer::start_worker_threads() {
+  for (size_t i = 0; i < config_.thread_pool_size; ++i) {
+    worker_threads_.emplace_back(&UDSServer::worker_thread_func, this, i);
+  }
+}
+
+void UDSServer::worker_thread_func(size_t thread_id) {
+  Logger::instance().debug_f("[UDS_SERVER] Worker %zu started", thread_id);
+
+  while (running_.load()) {
+    int client_fd;
+    if (task_queue_.pop(client_fd, 100)) {  // 100ms timeout
+      // Record active client
+      {
+        std::lock_guard<std::mutex> lock(clients_mutex_);
+        active_clients_[client_fd] = true;
+      }
+
+      Logger::instance().debug_f("[UDS_SERVER] Worker %zu handling client fd=%d", thread_id, client_fd);
+
+      handle_client(client_fd);
+
+      // Client cleanup is done in handle_client
+    }
+  }
+
+  Logger::instance().debug_f("[UDS_SERVER] Worker %zu exiting", thread_id);
 }
 
 void UDSServer::server_loop() {
@@ -404,18 +455,25 @@ void UDSServer::server_loop() {
       continue;
     }
 
-    // Add to active clients
-    {
-      std::lock_guard<std::mutex> lock(clients_mutex_);
-      active_clients_[client_fd] = true;
+    // Push to task queue for worker thread handling
+    if (!task_queue_.push(client_fd)) {
+      // Queue full, send error and close
+      send_error_and_close(client_fd, -32000, "Server busy: task queue full");
+      Logger::instance().warn("[UDS_SERVER] Task queue full, rejected connection");
+      continue;
     }
 
-    Logger::instance().debug_f("[UDS_SERVER] Client connected: fd=%d", client_fd);
-
-    // Handle client in the main loop (single-threaded for simplicity)
-    // For higher throughput, spawn a thread per client
-    handle_client(client_fd);
+    Logger::instance().debug_f("[UDS_SERVER] Client queued: fd=%d, queue_size=%zu",
+                               client_fd, task_queue_.size());
   }
+}
+
+void UDSServer::send_error_and_close(int client_fd, int code, const std::string& message) {
+  std::string error_response = build_error_response(code, message, -1);
+  error_response += "\n";
+  send(client_fd, error_response.c_str(), error_response.size(), MSG_NOSIGNAL);
+  usleep(1000);  // Brief delay to ensure data is sent
+  close(client_fd);
 }
 
 void UDSServer::handle_client(int client_fd) {
@@ -788,6 +846,44 @@ void UDSServer::cleanup_socket() {
   if (!socket_path_.empty()) {
     unlink(socket_path_.c_str());
   }
+}
+
+// TaskQueue implementation
+bool UDSServer::TaskQueue::push(int client_fd) {
+  std::unique_lock<std::mutex> lock(mutex);
+  if (queue.size() >= max_size) {
+    return false;
+  }
+  queue.push(client_fd);
+  cv.notify_one();
+  return true;
+}
+
+bool UDSServer::TaskQueue::pop(int& out_client_fd, int timeout_ms) {
+  std::unique_lock<std::mutex> lock(mutex);
+  if (!cv.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                   [this] { return !queue.empty() || stopped.load(); })) {
+    return false;  // timeout
+  }
+  if (stopped.load() && queue.empty()) {
+    return false;
+  }
+  if (queue.empty()) {
+    return false;
+  }
+  out_client_fd = queue.front();
+  queue.pop();
+  return true;
+}
+
+void UDSServer::TaskQueue::stop() {
+  stopped.store(true);
+  cv.notify_all();
+}
+
+size_t UDSServer::TaskQueue::size() const {
+  std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(mutex));
+  return queue.size();
 }
 
 }  // namespace runtime

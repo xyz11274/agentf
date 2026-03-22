@@ -7,14 +7,17 @@
 #define AGENTFLOW_RUNTIME_UDS_SERVER_H
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include "runtime/databus/databus.h"
 
@@ -27,6 +30,10 @@ namespace runtime {
  * This server implements a JSON-RPC 2.0 protocol for external processes
  * (Python, Go, Shell, etc.) to access the DataBus in real-time with
  * session/dialogue isolation.
+ *
+ * The server uses a thread pool pattern for concurrent client handling:
+ * - Accept thread: Accepts new connections and queues client FDs
+ * - Worker threads: Process client requests from the task queue
  *
  * Protocol:
  * - Request:  {"jsonrpc": "2.0", "method": "...", "params": {...}, "id": N}
@@ -51,7 +58,10 @@ namespace runtime {
  * Usage:
  * \code
  * MMDataBus databus;
- * UDSServer server(&databus, "/tmp/agentflow_session_123.sock");
+ * UDSServer::Config config;
+ * config.thread_pool_size = 10;
+ * config.max_queue_size = 100;
+ * UDSServer server(&databus, "/tmp/agentflow_session_123.sock", config);
  * if (server.start()) {
  *     // Server is running, clients can connect
  *     // Pass AF_DATABUS_UDS_FILE env var to external processes
@@ -65,9 +75,19 @@ public:
   /// Callback type for data change notifications to clients
   using ClientNotificationCallback = std::function<void(const std::string& json)>;
 
+  /// Server configuration
+  struct Config {
+    size_t thread_pool_size = 10;  ///< Number of worker threads for client handling
+    size_t max_queue_size = 100;   ///< Maximum number of queued client connections
+  };
+
   /// Construct a UDS server with the given DataBus and socket path.
   /// The databus pointer must remain valid for the lifetime of this server.
+  /// Uses default configuration (10 worker threads, 100 max queue size).
   UDSServer(MMDataBus* databus, const std::string& socket_path);
+
+  /// Construct a UDS server with custom configuration.
+  UDSServer(MMDataBus* databus, const std::string& socket_path, const Config& config);
 
   /// Destructor stops the server and cleans up the socket file.
   ~UDSServer();
@@ -90,11 +110,34 @@ public:
   const std::string& socket_path() const { return socket_path_; }
 
 private:
-  /// Main server loop (runs in separate thread)
+  /// Task queue for client connections
+  struct TaskQueue {
+    std::queue<int> queue;
+    mutable std::mutex mutex;
+    std::condition_variable cv;
+    std::atomic<bool> stopped{false};
+    size_t max_size = 100;
+
+    bool push(int client_fd);
+    bool pop(int& out_client_fd, int timeout_ms);
+    void stop();
+    size_t size() const;
+  };
+
+  /// Main server loop (runs in accept thread)
   void server_loop();
+
+  /// Worker thread function
+  void worker_thread_func(size_t thread_id);
+
+  /// Start worker threads
+  void start_worker_threads();
 
   /// Handle a connected client
   void handle_client(int client_fd);
+
+  /// Send error response and close connection
+  void send_error_and_close(int client_fd, int code, const std::string& message);
 
   /// Process a single JSON-RPC request and return the response
   std::string handle_request(const std::string& request_json);
@@ -142,8 +185,17 @@ private:
 
   MMDataBus* databus_;
   std::string socket_path_;
+  Config config_;
   std::atomic<bool> running_{false};
-  std::thread server_thread_;
+
+  /// Accept thread
+  std::thread accept_thread_;
+
+  /// Worker threads
+  std::vector<std::thread> worker_threads_;
+
+  /// Task queue for client connections
+  TaskQueue task_queue_;
 
   int server_fd_{-1};
 
