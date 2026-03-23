@@ -51,6 +51,7 @@
 | 025 | 2026-03-20 | [2026-03-20 Session 老化 DataBus 清理问题](025-feature-session-老化-databus-清理问题-260320-tbd.md) | feature | tbd |
 | 026 | 2026-03-20 | [2026-03-20 Master-Worker 架构边界问题](026-feature-master-worker-架构边界问题-260320-tbd.md) | feature | tbd |
 | 027 | 2026-03-22 | [2026-03-22 UDSServer 线程池改造](027-feature-udsserver-线程池改造-260322-tbd.md) | feature | tbd |
+| 028 | 2026-03-23 | [2026-03-23 Node 模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md) | feature | tbd |
 
 ## 按状态分类
 
@@ -60,6 +61,7 @@
 - [2026-03-20 - 2026-03-20 Session 老化 DataBus 清理问题](025-feature-session-老化-databus-清理问题-260320-tbd.md)
 - [2026-03-20 - 2026-03-20 Master-Worker 架构边界问题](026-feature-master-worker-架构边界问题-260320-tbd.md)
 - [2026-03-22 - 2026-03-22 UDSServer 线程池改造](027-feature-udsserver-线程池改造-260322-tbd.md)
+- [2026-03-23 - 2026-03-23 Node 模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md)
 
 ### 进行中 (wip)
 

@@ -7,7 +7,7 @@
 项目根目录保留最关键的三个文件：
 - **[README.md](../README.md)** - 项目主导航和快速入门
 - **[CONTRIBUTING.md](../CONTRIBUTING.md)** - 贡献指南（GitHub标准文件）
-- **[REFACTORING.md](REFACTORING.md)** - 项目规划和功能状态
+- **[enhancements/](enhancements/README.md)** - 功能增强、重构与设计文档（含 27 个按日期编号的记录）
 
 **建议首先阅读 [根目录 README.md](../README.md)，它包含了所有文档导航。**
 
@@ -20,7 +20,7 @@
 | 文档 | 用途 |
 |------|------|
 | **[ARCHITECTURE.md](ARCHITECTURE.md)** | Framework/Runtime/MMDataBus 架构设计 |
-| **[REFACTORING.md](REFACTORING.md)** | 功能规划、路线图和代码完备性评估 |
+| **[enhancements/README.md](enhancements/README.md)** | 功能增强、重构记录与设计文档索引 |
 | **[api-reference.md](api-reference.md)** | API 参考手册 |
 | **[../CONTRIBUTING.md](../CONTRIBUTING.md)** | 贡献流程、开发规范与提交流程 |
 | **[README.md](README.md)** | 测试指南和方法 |
@@ -32,11 +32,11 @@
 | **[../CONTRIBUTING.md](../CONTRIBUTING.md)** | 贡献指南 |
 | **[README.md](README.md)** | CI/CD 自动化管线 |
 
-### 重构文档
+### 重构与设计文档
 
 | 文档 | 用途 |
 |------|------|
-| **[REFACTORING.md](REFACTORING.md)** | 代码重构记录和说明 |
+| **[enhancements/README.md](enhancements/README.md)** | 功能增强、重构与设计文档索引（001–027+） |
 
 ### 示例与集成文档
 
@@ -67,8 +67,8 @@
 
 ### 了解项目规划
 
-1. 查看 [REFACTORING.md](REFACTORING.md) - 功能实现状态、路线图和代码评估
-2. 查看 [REFACTORING.md](REFACTORING.md) - 快速规划导航
+1. 查看 [enhancements/README.md](enhancements/README.md) - 功能增强与重构记录索引
+2. 查看 [enhancements/README.md](enhancements/README.md) - 按状态（tbd/wip/implemented）快速过滤
 
 ### CI/CD 和部署
 
@@ -77,7 +77,7 @@
 ### 运维和系统
 
 1. 查看 [../CONTRIBUTING.md](../CONTRIBUTING.md) - 开发与贡献规则
-2. 查看 [REFACTORING.md](REFACTORING.md) - 构建和部署目标
+2. 查看 [enhancements/README.md](enhancements/README.md) - 构建和部署相关增强记录
 
 ---
 
@@ -86,15 +86,15 @@
 | 我想... | 查看文档 |
 |--------|--------|
 | 学习系统架构 | [ARCHITECTURE.md](ARCHITECTURE.md) |
-| 了解代码现状和优化点 | [REFACTORING.md](REFACTORING.md) - 代码完备性评估章节 |
+| 了解代码现状和优化点 | [enhancements/README.md](enhancements/README.md) - 按状态查看 tbd/wip 条目 |
 | 查看 API 使用方法 | [api-reference.md](api-reference.md) |
 | 开始开发 | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | 了解依赖库 | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | 贡献代码 | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
-| 了解项目规划 | [REFACTORING.md](REFACTORING.md) |
+| 了解项目规划 | [enhancements/README.md](enhancements/README.md) |
 | 查询 CI/CD | [README.md](README.md) |
 | 运行测试 | [README.md](README.md) |
-| 了解重构进展 | [REFACTORING.md](REFACTORING.md) |
+| 了解重构进展 | [enhancements/README.md](enhancements/README.md) |
 
 ---
 
@@ -105,19 +105,10 @@
 - 模块设计详解
 - 设计模式说明
 
-### REFACTORING.md（合并版）
-- 功能实现状态概览
-- 待实现功能（按优先级）
-- 版本规划
-- **代码完备性评估**（原 code-review.md 内容）
-  - 文档与代码一致性审查
-  - 代码 Bug 清单
-  - 测试覆盖度评估
-  - 代码优化建议
-  - 优化实施路线
-- 代码质量目标
-- 文档目标
-- 构建和部署目标
+### enhancements/（重构与设计文档）
+- 按日期编号的功能增强、重构、bugfix 记录（001 起）
+- 每条记录包含背景、方案设计、实施步骤
+- 通过 [enhancements/README.md](enhancements/README.md) 可按状态（tbd/wip/implemented）和类型（feature/refactor/bugfix）检索
 
 ### api-reference.md
 - 核心 API 使用指南
@@ -158,7 +149,7 @@
 ### 文档命名规范
 - 使用小写字母和连字符（lowercase-hyphen）
 - 例如：`api-reference.md`, `README.md`
-- 例外：`README.md`（GitHub 标准）, `REFACTORING.md`（历史保留）
+- 例外：`README.md`（GitHub 标准）
 
 ### 文档标准
 - 使用 Markdown 格式
@@ -190,7 +181,7 @@
 - 2026-03-10: 新增 DataBus `FILE` / `FILE_LIST` 文件类型文档
 - 2026-03-10: 补充 multi_session_chat / openjiuwen 示例文档入口，刷新目录导航
 - 2026-02-28: 同步刷新 MMNode 执行引擎下沉到 Worker、Coordinator task0 默认处理与 `coordinator_workflow` 配置说明
-- 2026-02-21: 刷新 ARCHITECTURE.md 与 REFACTORING.md，补充 MMAgent/Runtime/MMWorkflow 当日优化落地与下一步优化方向
+- 2026-02-21: 刷新 ARCHITECTURE.md，补充 MMAgent/Runtime/MMWorkflow 当日优化落地与下一步优化方向
 - 2026-02-18: 合并 roadmap.md 和 code-review.md 到 planning.md，合并 dependencies.md 到 development.md
 - 2026-02-18: 合并 CI/CD 文档，统一命名规范为 lowercase-hyphen
 - 2026-02-17: 添加 API 参考和代码审查文档
