@@ -1,0 +1,22 @@
+## Runtime Master 自主调度重构（2026-02-23）
+
+- `src/runtime/runtime.cpp` 增强全局 MMAgent 管理能力：
+  - 新增 MMAgent 注册请求队列与注册处理线程（`agent_registration_loop`）；
+  - 新增 MMAgent 心跳上报与监控线程（`report_agent_heartbeat` / `agent_monitor_loop`）；
+  - MMAgent 故障时联动 Deployer/Scheduler 执行 workflow 注销与 task 映射刷新。
+- `include/internal/runtime/shared_runtime_state.h` 扩展共享状态：
+  - 增加 `TaskInstanceInfo`；
+  - 增加 workflow 按 agent/workflow 检索接口；
+  - 增加 task 实例增删改查接口，支撑调度状态追踪。
+- `src/runtime/master/deployer.cpp` / `include/internal/runtime/master/deployer.h` 重构：
+  - 增加 worker 注册队列与处理线程、部署调度线程、心跳超时故障隔离；
+  - 支持 workflow 增量部署与 `rebalance`；
+  - 增加 so 可插拔部署算法加载（失败自动回退内置算法）。
+- `src/runtime/master/scheduler.cpp` / `include/internal/runtime/master/scheduler.h` 重构：
+  - 增加 task 注册队列与调度线程、task->workflow 映射缓存和生命周期状态更新；
+  - 默认调度策略优先同 agent instance，再同 agent object，最后全局最小负载；
+  - 增加 so 可插拔调度算法加载（失败自动回退内置算法）。
+- 验证结果：
+  - `./build.sh build` 通过；
+  - `./build.sh test` 受既有 HotReload 并行抖动影响失败；
+  - `ctest --test-dir build --output-on-failure -j 1` 串行回归 10/10 通过。

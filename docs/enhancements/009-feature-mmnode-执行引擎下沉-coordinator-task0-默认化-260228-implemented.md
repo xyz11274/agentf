@@ -1,0 +1,21 @@
+## MMNode 执行引擎下沉 + Coordinator Task0 默认化（2026-02-28）
+
+- MMNode 多语言执行引擎下沉到 Worker：
+  - `include/internal/runtime/worker.h` 增加 Worker 执行请求/结果模型与 `execute_code` 入口；
+  - `src/runtime/worker/worker.cpp` 实现 shell/python/go/jar/so/executable 分发执行；
+  - `src/workflow/node/node.cpp` 的外部执行模式统一改为委托 worker 执行，MMNode 保留状态机与输入输出管理。
+- Coordinator 默认 task 语义统一为 task0：
+  - `include/internal/agent/coordinator.h` / `src/agent/coordinator.cpp` 增加默认 task 类型配置，缺省改为 `task0`；
+  - 新增 task0 workflow 解析逻辑：优先使用 `coordinator_workflow`，未配置时兼容回退 `task_workflows["0"]`，支持按 workflow id 或 name 匹配。
+- Session/Coordinator 语义对齐：
+  - 默认会话统一为 `0` 号 `MMAgentSession`；
+  - 每个 session 创建时默认注入 `task0`（`<session_id>_task_0`）并创建该 session 专属 coordinator；
+  - session 消息处理改为使用 session 级 coordinator，确保 coordinator 归属 session。
+- MMAgent 包新增 task0 workflow 定制能力：
+  - `include/internal/agent/package.h` / `src/agent/package.cpp` 新增 `coordinator_workflow` 配置解析；
+  - `src/agent/agent.cpp` 初始化 coordinator 时注入包配置中的固定 workflow；
+  - `publish/agent/package.json` 与 examples 增加 `coordinator_workflow.json`，用于演示 session 创建节点与 task 创建节点编排。
+- 测试增强：
+  - `tests/unit/src/test_agent_gtest.cpp` 新增 task0 默认行为和 package task0 workflow 映射测试；
+  - `tests/unit/src/test_builtin_workflow_gtest.cpp` 增加 `coordinator_workflow` 解析断言；
+  - `tests/unit/src/test_runtime_master_worker_gtest.cpp` 新增 worker 执行引擎 shell 路径测试。
