@@ -2,6 +2,37 @@
 
 本目录包含 AgentFlow 项目的各类功能增强、缺陷修复和重构记录。
 
+## 文件命名规范
+
+**格式**：`{编号}-{类型}-{名称}-{YYMMDD}-{状态}.md`
+
+**示例**：`020-feature-multi-response-260319-implemented.md`
+
+### 命名规则
+
+| 组成部分 | 说明 | 可选值 |
+|---------|------|--------|
+| 编号 | 三位数字，按日期升序排列 | 001, 002, ... |
+| 类型 | 变更类型 | `feature`, `bugfix`, `refactor` |
+| 名称 | 小写英文，连字符分隔 | `session-isolation`, `multi-response` |
+| 日期 | YYMMDD 格式 | 260323 表示 2026-03-23 |
+| 状态 | 实施状态 | `tbd`, `wip`, `implemented` |
+
+### 新建 Enhancement 流程
+
+**创建前准备**：
+1. 分析已有 enhancement 方案，避免重复设计
+2. 分析整体架构，理解变更影响范围
+3. 分析关联代码，识别依赖关系
+
+**创建流程**：
+1. 创建新文件，编号取当前最大编号 +1
+2. 状态初始为 `tbd`（待实施）
+3. **按照文档模板编写内容**（参见下方"Enhancement 文档模板"）
+4. 实施开始时改为 `wip`（进行中）
+5. 完成并验证后改为 `implemented`（已完成）
+6. 更新 README.md 索引
+
 ## 状态说明
 
 | 状态 | 说明 |
@@ -24,44 +55,44 @@
 
 | 编号 | 日期 | 标题 | 类型 | 状态 |
 |------|------|------|------|------|
-| 001 | 2026-02-21 | [MMAgent 包管理与加载重构 (2026-02-21)](001-refactor-mmagent-包管理与加载重构-260221-implemented.md) | refactor | implemented |
-| 002 | 2026-02-22 | [文档治理与架构/API 对齐（2026-02-22）](002-feature-文档治理与架构api-对齐-260222-implemented.md) | feature | implemented |
-| 003 | 2026-02-22 | [MMDataBus 全局共享重构（2026-02-22）](003-refactor-mmdatabus-全局共享重构-260222-implemented.md) | refactor | implemented |
-| 004 | 2026-02-23 | [Runtime Master 自主调度重构（2026-02-23）](004-refactor-runtime-master-自主调度重构-260223-implemented.md) | refactor | implemented |
-| 005 | 2026-02-23 | [Visualizer GOTO 环路可视化修复（2026-02-23）](005-bugfix-visualizer-goto-环路可视化修复-260223-implemented.md) | bugfix | implemented |
-| 006 | 2026-02-23 | [Worker/MMWorkflow/MMNode/MMEdge 自主执行重构（2026-02-23）](006-refactor-workermmworkflowmmnodemmedge-自主执行重构-260223-implemented.md) | refactor | implemented |
-| 007 | 2026-02-23 | [Vendor 依赖配置与文档刷新（2026-02-23）](007-feature-vendor-依赖配置与文档刷新-260223-implemented.md) | feature | implemented |
-| 008 | 2026-02-23 | [示例与对外接口收敛重构（2026-02-23）](008-refactor-示例与对外接口收敛重构-260223-implemented.md) | refactor | implemented |
-| 009 | 2026-02-28 | [MMNode 执行引擎下沉 + Coordinator Task0 默认化（2026-02-28）](009-feature-mmnode-执行引擎下沉-coordinator-task0-默认化-260228-implemented.md) | feature | implemented |
-| 010 | 2026-02-28 | [MMNode 热更新能力下沉到 Worker（2026-02-28）](010-feature-mmnode-热更新能力下沉到-worker-260228-implemented.md) | feature | implemented |
-| 011 | 2026-03-01 | [2026-03-01 SessionTaskCoordinator & Context 分层重构](011-refactor-sessiontaskcoordinator-context-分层重构-260301-implemented.md) | refactor | implemented |
-| 012 | 2026-03-06 | [2026-03-06 multi_session_chat 多语言节点重构](012-refactor-multi-session-chat-多语言节点重构-260306-implemented.md) | refactor | implemented |
-| 013 | 2026-03-07 | [2026-03-07 src/agent session/task 配置模型重构](013-refactor-srcagent-sessiontask-配置模型重构-260307-implemented.md) | refactor | implemented |
-| 014 | 2026-03-07 | [2026-03-07 agent/runtime 双队列与执行风险等级重构](014-refactor-agentruntime-双队列与执行风险等级重构-260307-implemented.md) | refactor | implemented |
-| 015 | 2026-03-07 | [2026-03-07 examples 目录结构整理](015-feature-examples-目录结构整理-260307-implemented.md) | feature | implemented |
-| 016 | 2026-03-07 | [2026-03-07 全链路跟踪系统（TraceSystem）](016-feature-全链路跟踪系统tracesystem-260307-implemented.md) | feature | implemented |
-| 017 | 2026-03-17 | [2026-03-17 agent.json 配置结构冗余分析](017-feature-agentjson-配置结构冗余分析-260317-implemented.md) | feature | implemented |
-| 018 | 2026-03-17 | [2026-03-17 Skill 参数槽位校验功能](018-feature-skill-参数槽位校验功能-260317-implemented.md) | feature | implemented |
-| 019 | 2026-03-17 | [2026-03-17 Plugin UDS 注入机制设计](019-feature-plugin-uds-注入机制设计-260317-implemented.md) | feature | implemented |
-| 020 | 2026-03-18 | [2026-03-18 Node 输出数据冲突问题修复](020-bugfix-node-输出数据冲突问题修复-260318-tbd.md) | bugfix | tbd |
-| 021 | 2026-03-18 | [2026-03-18 Workflow Input Dialogue 级别隔离](021-feature-workflow-input-dialogue-级别隔离-260318-implemented.md) | feature | implemented |
-| 022 | 2026-03-19 | [2026-03-19 Multi-Response 机制设计](022-feature-multi-response-机制设计-260319-implemented.md) | feature | implemented |
-| 023 | 2026-03-19 | [2026-03-19 next_skills 格式扩展](023-feature-next-skills-格式扩展-260319-implemented.md) | feature | implemented |
-| 024 | 2026-03-19 | [2026-03-19 消息定向路由机制设计](024-feature-消息定向路由机制设计-260319-implemented.md) | feature | implemented |
-| 025 | 2026-03-20 | [2026-03-20 Session 老化 DataBus 清理问题](025-feature-session-老化-databus-清理问题-260320-tbd.md) | feature | tbd |
-| 026 | 2026-03-20 | [2026-03-20 Master-Worker 架构边界问题](026-feature-master-worker-架构边界问题-260320-tbd.md) | feature | tbd |
-| 027 | 2026-03-22 | [2026-03-22 UDSServer 线程池改造](027-feature-udsserver-线程池改造-260322-tbd.md) | feature | tbd |
-| 028 | 2026-03-23 | [2026-03-23 Node 模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md) | feature | tbd |
+| 001 | 2026-02-21 | [MMAgent 包管理与加载重构](001-refactor-mmagent-包管理与加载重构-260221-implemented.md) | refactor | implemented |
+| 002 | 2026-02-22 | [文档治理与架构/API 对齐](002-feature-文档治理与架构api-对齐-260222-implemented.md) | feature | implemented |
+| 003 | 2026-02-22 | [MMDataBus 全局共享重构](003-refactor-mmdatabus-全局共享重构-260222-implemented.md) | refactor | implemented |
+| 004 | 2026-02-23 | [Runtime Master 自主调度重构](004-refactor-runtime-master-自主调度重构-260223-implemented.md) | refactor | implemented |
+| 005 | 2026-02-23 | [Visualizer GOTO 环路可视化修复](005-bugfix-visualizer-goto-环路可视化修复-260223-implemented.md) | bugfix | implemented |
+| 006 | 2026-02-23 | [Worker/MMWorkflow/MMNode/MMEdge 自主执行重构](006-refactor-workermmworkflowmmnodemmedge-自主执行重构-260223-implemented.md) | refactor | implemented |
+| 007 | 2026-02-23 | [Vendor 依赖配置与文档刷新](007-feature-vendor-依赖配置与文档刷新-260223-implemented.md) | feature | implemented |
+| 008 | 2026-02-23 | [示例与对外接口收敛重构](008-refactor-示例与对外接口收敛重构-260223-implemented.md) | refactor | implemented |
+| 009 | 2026-02-28 | [MMNode 执行引擎下沉 + Coordinator Task0 默认化](009-feature-mmnode-执行引擎下沉-coordinator-task0-默认化-260228-implemented.md) | feature | implemented |
+| 010 | 2026-02-28 | [MMNode 热更新能力下沉到 Worker](010-feature-mmnode-热更新能力下沉到-worker-260228-implemented.md) | feature | implemented |
+| 011 | 2026-03-01 | [SessionTaskCoordinator & Context 分层重构](011-refactor-sessiontaskcoordinator-context-分层重构-260301-implemented.md) | refactor | implemented |
+| 012 | 2026-03-06 | [multi_session_chat 多语言节点重构](012-refactor-multi-session-chat-多语言节点重构-260306-implemented.md) | refactor | implemented |
+| 013 | 2026-03-07 | [src/agent session/task 配置模型重构](013-refactor-srcagent-sessiontask-配置模型重构-260307-implemented.md) | refactor | implemented |
+| 014 | 2026-03-07 | [agent/runtime 双队列与执行风险等级重构](014-refactor-agentruntime-双队列与执行风险等级重构-260307-implemented.md) | refactor | implemented |
+| 015 | 2026-03-07 | [examples 目录结构整理](015-feature-examples-目录结构整理-260307-implemented.md) | feature | implemented |
+| 016 | 2026-03-07 | [全链路跟踪系统（TraceSystem）](016-feature-全链路跟踪系统tracesystem-260307-implemented.md) | feature | implemented |
+| 017 | 2026-03-17 | [agent.json 配置结构冗余分析](017-feature-agentjson-配置结构冗余分析-260317-implemented.md) | feature | implemented |
+| 018 | 2026-03-17 | [Skill 参数槽位校验功能](018-feature-skill-参数槽位校验功能-260317-implemented.md) | feature | implemented |
+| 019 | 2026-03-17 | [Plugin UDS 注入机制设计](019-feature-plugin-uds-注入机制设计-260317-implemented.md) | feature | implemented |
+| 020 | 2026-03-18 | [Node 输出数据冲突问题修复](020-bugfix-node-输出数据冲突问题修复-260318-tbd.md) | bugfix | tbd |
+| 021 | 2026-03-18 | [Workflow Input Dialogue 级别隔离](021-feature-workflow-input-dialogue-级别隔离-260318-implemented.md) | feature | implemented |
+| 022 | 2026-03-19 | [Multi-Response 机制设计](022-feature-multi-response-机制设计-260319-implemented.md) | feature | implemented |
+| 023 | 2026-03-19 | [next_skills 格式扩展](023-feature-next-skills-格式扩展-260319-implemented.md) | feature | implemented |
+| 024 | 2026-03-19 | [消息定向路由机制设计](024-feature-消息定向路由机制设计-260319-implemented.md) | feature | implemented |
+| 025 | 2026-03-20 | [Session 老化 DataBus 清理问题](025-feature-session-老化-databus-清理问题-260320-tbd.md) | feature | tbd |
+| 026 | 2026-03-20 | [Master-Worker 架构边界问题](026-feature-master-worker-架构边界问题-260320-tbd.md) | feature | tbd |
+| 027 | 2026-03-22 | [UDSServer 线程池改造](027-feature-udsserver-线程池改造-260322-tbd.md) | feature | tbd |
+| 028 | 2026-03-23 | [Node 模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md) | feature | tbd |
 
 ## 按状态分类
 
 ### 待实施 (tbd)
 
-- [2026-03-18 - 2026-03-18 Node 输出数据冲突问题修复](020-bugfix-node-输出数据冲突问题修复-260318-tbd.md)
-- [2026-03-20 - 2026-03-20 Session 老化 DataBus 清理问题](025-feature-session-老化-databus-清理问题-260320-tbd.md)
-- [2026-03-20 - 2026-03-20 Master-Worker 架构边界问题](026-feature-master-worker-架构边界问题-260320-tbd.md)
-- [2026-03-22 - 2026-03-22 UDSServer 线程池改造](027-feature-udsserver-线程池改造-260322-tbd.md)
-- [2026-03-23 - 2026-03-23 Node 模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md)
+- [2026-03-18] [Node 输出数据冲突问题修复](020-bugfix-node-输出数据冲突问题修复-260318-tbd.md)
+- [2026-03-20] [Session 老化 DataBus 清理问题](025-feature-session-老化-databus-清理问题-260320-tbd.md)
+- [2026-03-20] [Master-Worker 架构边界问题](026-feature-master-worker-架构边界问题-260320-tbd.md)
+- [2026-03-22] [UDSServer 线程池改造](027-feature-udsserver-线程池改造-260322-tbd.md)
+- [2026-03-23] [Node 模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md)
 
 ### 进行中 (wip)
 
@@ -69,26 +100,117 @@
 
 ### 已完成 (implemented)
 
-- [2026-02-21 - MMAgent 包管理与加载重构 (2026-02-21)](001-refactor-mmagent-包管理与加载重构-260221-implemented.md)
-- [2026-02-22 - 文档治理与架构/API 对齐（2026-02-22）](002-feature-文档治理与架构api-对齐-260222-implemented.md)
-- [2026-02-22 - MMDataBus 全局共享重构（2026-02-22）](003-refactor-mmdatabus-全局共享重构-260222-implemented.md)
-- [2026-02-23 - Runtime Master 自主调度重构（2026-02-23）](004-refactor-runtime-master-自主调度重构-260223-implemented.md)
-- [2026-02-23 - Visualizer GOTO 环路可视化修复（2026-02-23）](005-bugfix-visualizer-goto-环路可视化修复-260223-implemented.md)
-- [2026-02-23 - Worker/MMWorkflow/MMNode/MMEdge 自主执行重构（2026-02-23）](006-refactor-workermmworkflowmmnodemmedge-自主执行重构-260223-implemented.md)
-- [2026-02-23 - Vendor 依赖配置与文档刷新（2026-02-23）](007-feature-vendor-依赖配置与文档刷新-260223-implemented.md)
-- [2026-02-23 - 示例与对外接口收敛重构（2026-02-23）](008-refactor-示例与对外接口收敛重构-260223-implemented.md)
-- [2026-02-28 - MMNode 执行引擎下沉 + Coordinator Task0 默认化（2026-02-28）](009-feature-mmnode-执行引擎下沉-coordinator-task0-默认化-260228-implemented.md)
-- [2026-02-28 - MMNode 热更新能力下沉到 Worker（2026-02-28）](010-feature-mmnode-热更新能力下沉到-worker-260228-implemented.md)
-- [2026-03-01 - 2026-03-01 SessionTaskCoordinator & Context 分层重构](011-refactor-sessiontaskcoordinator-context-分层重构-260301-implemented.md)
-- [2026-03-06 - 2026-03-06 multi_session_chat 多语言节点重构](012-refactor-multi-session-chat-多语言节点重构-260306-implemented.md)
-- [2026-03-07 - 2026-03-07 src/agent session/task 配置模型重构](013-refactor-srcagent-sessiontask-配置模型重构-260307-implemented.md)
-- [2026-03-07 - 2026-03-07 agent/runtime 双队列与执行风险等级重构](014-refactor-agentruntime-双队列与执行风险等级重构-260307-implemented.md)
-- [2026-03-07 - 2026-03-07 examples 目录结构整理](015-feature-examples-目录结构整理-260307-implemented.md)
-- [2026-03-07 - 2026-03-07 全链路跟踪系统（TraceSystem）](016-feature-全链路跟踪系统tracesystem-260307-implemented.md)
-- [2026-03-17 - 2026-03-17 agent.json 配置结构冗余分析](017-feature-agentjson-配置结构冗余分析-260317-implemented.md)
-- [2026-03-17 - 2026-03-17 Skill 参数槽位校验功能](018-feature-skill-参数槽位校验功能-260317-implemented.md)
-- [2026-03-17 - 2026-03-17 Plugin UDS 注入机制设计](019-feature-plugin-uds-注入机制设计-260317-implemented.md)
-- [2026-03-18 - 2026-03-18 Workflow Input Dialogue 级别隔离](021-feature-workflow-input-dialogue-级别隔离-260318-implemented.md)
-- [2026-03-19 - 2026-03-19 Multi-Response 机制设计](022-feature-multi-response-机制设计-260319-implemented.md)
-- [2026-03-19 - 2026-03-19 next_skills 格式扩展](023-feature-next-skills-格式扩展-260319-implemented.md)
-- [2026-03-19 - 2026-03-19 消息定向路由机制设计](024-feature-消息定向路由机制设计-260319-implemented.md)
+- [2026-02-21] [MMAgent 包管理与加载重构](001-refactor-mmagent-包管理与加载重构-260221-implemented.md)
+- [2026-02-22] [文档治理与架构/API 对齐](002-feature-文档治理与架构api-对齐-260222-implemented.md)
+- [2026-02-22] [MMDataBus 全局共享重构](003-refactor-mmdatabus-全局共享重构-260222-implemented.md)
+- [2026-02-23] [Runtime Master 自主调度重构](004-refactor-runtime-master-自主调度重构-260223-implemented.md)
+- [2026-02-23] [Visualizer GOTO 环路可视化修复](005-bugfix-visualizer-goto-环路可视化修复-260223-implemented.md)
+- [2026-02-23] [Worker/MMWorkflow/MMNode/MMEdge 自主执行重构](006-refactor-workermmworkflowmmnodemmedge-自主执行重构-260223-implemented.md)
+- [2026-02-23] [Vendor 依赖配置与文档刷新](007-feature-vendor-依赖配置与文档刷新-260223-implemented.md)
+- [2026-02-23] [示例与对外接口收敛重构](008-refactor-示例与对外接口收敛重构-260223-implemented.md)
+- [2026-02-28] [MMNode 执行引擎下沉 + Coordinator Task0 默认化](009-feature-mmnode-执行引擎下沉-coordinator-task0-默认化-260228-implemented.md)
+- [2026-02-28] [MMNode 热更新能力下沉到 Worker](010-feature-mmnode-热更新能力下沉到-worker-260228-implemented.md)
+- [2026-03-01] [SessionTaskCoordinator & Context 分层重构](011-refactor-sessiontaskcoordinator-context-分层重构-260301-implemented.md)
+- [2026-03-06] [multi_session_chat 多语言节点重构](012-refactor-multi-session-chat-多语言节点重构-260306-implemented.md)
+- [2026-03-07] [src/agent session/task 配置模型重构](013-refactor-srcagent-sessiontask-配置模型重构-260307-implemented.md)
+- [2026-03-07] [agent/runtime 双队列与执行风险等级重构](014-refactor-agentruntime-双队列与执行风险等级重构-260307-implemented.md)
+- [2026-03-07] [examples 目录结构整理](015-feature-examples-目录结构整理-260307-implemented.md)
+- [2026-03-07] [全链路跟踪系统（TraceSystem）](016-feature-全链路跟踪系统tracesystem-260307-implemented.md)
+- [2026-03-17] [agent.json 配置结构冗余分析](017-feature-agentjson-配置结构冗余分析-260317-implemented.md)
+- [2026-03-17] [Skill 参数槽位校验功能](018-feature-skill-参数槽位校验功能-260317-implemented.md)
+- [2026-03-17] [Plugin UDS 注入机制设计](019-feature-plugin-uds-注入机制设计-260317-implemented.md)
+- [2026-03-18] [Workflow Input Dialogue 级别隔离](021-feature-workflow-input-dialogue-级别隔离-260318-implemented.md)
+- [2026-03-19] [Multi-Response 机制设计](022-feature-multi-response-机制设计-260319-implemented.md)
+- [2026-03-19] [next_skills 格式扩展](023-feature-next-skills-格式扩展-260319-implemented.md)
+- [2026-03-19] [消息定向路由机制设计](024-feature-消息定向路由机制设计-260319-implemented.md)
+
+## Enhancement 文档模板
+
+新增 Enhancement 必须包含以下章节：
+
+### 1. 背景
+
+说明为什么要做这个优化，优化希望达到的效果。
+
+### 2. 方案简述
+
+整体的思路和对方案要解决问题的拆解。
+
+### 3. 约束与假设
+
+方案的生效场景/条件，是否对其他功能有依赖，是否要考虑兼容性。
+
+### 4. 当前实现分析
+
+**代码分析**：现有架构图、类图和相关的核心代码片段及解释，识别关键变更点。
+
+**Examples 分析**：分析 examples 目录下相关示例的实现，识别需要同步修改的内容。
+
+**缺失功能分析**：
+- 相对目标效果缺失的功能列表
+- 行业实践研究：
+  - 各类实现方案及其优劣分析
+  - 对于当前方案的参考意义
+  - 具体参考点总结
+
+### 5. 数据结构设计
+
+如果涉及变更，给出已有实现和新的方案，并给出设计思路和兼容性分析。
+
+### 6. 流程设计
+
+包括时序图；如果涉及变更，给出已有实现和新的方案，并给出设计思路和兼容性分析，要用调用流程和时序图呈现设计内容。
+
+### 7. 接口设计
+
+函数接口、消息接口、配置（DSL）接口设计，解释接口和参数的作用，如果涉及变更，给出已有实现和新的方案，并给出设计思路和兼容性分析。
+
+### 8. 实现方案
+
+根据对待解决问题的拆解，分小节描述实现方案，包括关键代码片段和实现思路（如何保持性能、可维护性、安全相好，保证软件架构优雅、影响最小），方案的优点，如果有潜在的问题要给出问题消减思路。如果有多个备选方案要给出方案对比的总结。
+
+**必须包含待修改文件清单**：
+
+| 文件 | 修改类型 | 说明 |
+|------|---------|------|
+| `path/to/file.h` | 新增/修改/删除 | 变更说明 |
+
+### 9. 测试方案
+
+针对变更范围制定测试方案和测试用例设计。
+
+### 10. 文档
+
+**需要变更的文档**：分析 docs 下和 publish 下的架构文档和手册，描述需要变更的文档和内容。
+
+| 文档 | 变更说明 |
+|------|---------|
+| `docs/xxx.md` | 变更内容描述 |
+
+**关联方案**：整理本方案参考或依赖的其他 enhancement，给出引用。
+
+| 关联方案 | 关系说明 |
+|---------|---------|
+| `enhancement/xxx.md` | 参考/依赖说明 |
+
+### 11. 进展跟踪
+
+给出任务 checklist，包含代码实现、验证结果、文档更新的进展，任务都完成后 enhancement 才能标注 implemented。
+
+```markdown
+### 进展跟踪
+
+- [ ] 代码实现
+- [ ] 单元测试
+- [ ] 集成测试
+- [ ] 文档更新
+- [ ] 验证通过
+```
+
+### 12. 后续计划（可选）
+
+描述满足当前需求的情况下，还有哪些内容可以优化，给出效果和方案的简述。
+
+| 优化项 | 预期效果 | 方案简述 |
+|--------|---------|---------|
+| 优化名称 | 效果描述 | 方案概述 |
