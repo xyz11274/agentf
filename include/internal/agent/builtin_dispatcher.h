@@ -175,6 +175,39 @@ class BuiltinDispatcher {
                                     const std::string& dialogue_id,
                                     const std::string& key);
 
+  /**
+   * @brief Remove user data from MMDataBus (skill results namespace).
+   *
+   * Key format: /session/{session_id}/user/{dialogue_id}/{key}
+   *
+   * @param agent The agent instance
+   * @param session_id The session ID
+   * @param dialogue_id The dialogue ID
+   * @param key The data key to remove
+   * @return true if successful
+   */
+  static bool remove_user_data(MMAgent& agent,
+                               const std::string& session_id,
+                               const std::string& dialogue_id,
+                               const std::string& key);
+
+  /**
+   * @brief Clean up all dialogue data from MMDataBus.
+   *
+   * Cleans both sys and user namespaces for a dialogue:
+   * - Framework keys: dialogue_id, user_prompt, next_skills, skills_scheduled,
+   *   launched_skills, response, pending_skills_count
+   * - Skill result keys: dynamically read from launched_skills list
+   *   ({skill_name}_result, {skill_name}_confidence)
+   *
+   * @param agent The agent instance
+   * @param session_id The session ID
+   * @param dialogue_id The dialogue ID
+   */
+  static void cleanup_dialogue_data(MMAgent& agent,
+                                    const std::string& session_id,
+                                    const std::string& dialogue_id);
+
   const Config& get_config() const { return config_; }
   const std::string& get_dispatcher_id() const { return config_.dispatcher_id; }
 

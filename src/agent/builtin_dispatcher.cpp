@@ -415,5 +415,74 @@ bool BuiltinDispatcher::remove_framework_data(MMAgent& agent,
   return false;
 }
 
+bool BuiltinDispatcher::remove_user_data(MMAgent& agent,
+                                         const std::string& session_id,
+                                         const std::string& dialogue_id,
+                                         const std::string& key) {
+  // Build key in user namespace: /session/{session_id}/user/{dialogue_id}/{key}
+  std::string new_key;
+  if(!session_id.empty()) {
+    new_key = "/session/" + session_id + "/user/";
+    if(!dialogue_id.empty()) {
+      new_key += dialogue_id + "/";
+    }
+  } else if(!dialogue_id.empty()) {
+    new_key = dialogue_id + "/";
+  }
+  new_key += key;
+
+  // Publish empty DataVariant to remove
+  if(agent.publish_data(new_key, DataVariant())) {
+    Logger::instance().info_f("[REMOVE_USER_DATA] Removed key=%s", new_key.c_str());
+    return true;
+  }
+  return false;
+}
+
+void BuiltinDispatcher::cleanup_dialogue_data(MMAgent& agent,
+                                               const std::string& session_id,
+                                               const std::string& dialogue_id) {
+  if(dialogue_id.empty()) {
+    return;
+  }
+
+  Logger::instance().info_f("[CLEANUP_DIALOGUE] Cleaning up dialogue_id=%s", dialogue_id.c_str());
+
+  // Read launched_skills list to know which skill result keys to clean
+  std::string launched_key = "/session/" + session_id + "/sys/" + dialogue_id + "/launched_skills";
+  DataVariant launched_value;
+  std::set<std::string> launched_skills;
+
+  if(agent.get_data(launched_key, launched_value)) {
+    if(const auto* text = std::get_if<std::string>(&launched_value)) {
+      std::istringstream iss(*text);
+      std::string skill_name;
+      while(std::getline(iss, skill_name, ',')) {
+        if(!skill_name.empty()) {
+          launched_skills.insert(skill_name);
+        }
+      }
+    }
+  }
+
+  // Clean up framework-managed keys in sys namespace
+  remove_framework_data(agent, session_id, dialogue_id, "dialogue_id");
+  remove_framework_data(agent, session_id, dialogue_id, "user_prompt");
+  remove_framework_data(agent, session_id, dialogue_id, "next_skills");
+  remove_framework_data(agent, session_id, dialogue_id, "skills_scheduled");
+  remove_framework_data(agent, session_id, dialogue_id, "launched_skills");
+  remove_framework_data(agent, session_id, dialogue_id, "response");
+  remove_framework_data(agent, session_id, dialogue_id, "pending_skills_count");
+
+  // Clean up skill result keys in user namespace (dynamic based on launched_skills)
+  for(const auto& skill_name : launched_skills) {
+    remove_user_data(agent, session_id, dialogue_id, skill_name + "_result");
+    remove_user_data(agent, session_id, dialogue_id, skill_name + "_confidence");
+  }
+
+  Logger::instance().info_f("[CLEANUP_DIALOGUE] Cleaned up %zu skills for dialogue_id=%s",
+                            launched_skills.size(), dialogue_id.c_str());
+}
+
 }  // namespace framework
 }  // namespace agentflow

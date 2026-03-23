@@ -1880,23 +1880,8 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
                 Logger::instance().info_f("[COORDINATORDataExchange] All multi-responses consumed, cleaning up dialogue_id=%s",
                                           dialogue_id.c_str());
                 // Clean up dialogue data
-                if(!dialogue_id.empty()) {
-                  publish_data(dialogue_id + "/dialogue_id", DataVariant());
-                  publish_data(dialogue_id + "/user_prompt", DataVariant());
-                  publish_data(dialogue_id + "/next_skills", DataVariant());
-                  publish_data(dialogue_id + "/skills_scheduled", DataVariant());
-                  publish_data(dialogue_id + "/launched_skills", DataVariant());
-                  publish_data(dialogue_id + "/response", DataVariant());
-                  publish_data(dialogue_id + "/travel_result", DataVariant());
-                  publish_data(dialogue_id + "/travel_confidence", DataVariant());
-                  publish_data(dialogue_id + "/shopping_result", DataVariant());
-                  publish_data(dialogue_id + "/shopping_confidence", DataVariant());
-                  publish_data(dialogue_id + "/foodie_result", DataVariant());
-                  publish_data(dialogue_id + "/foodie_confidence", DataVariant());
-                  publish_data(dialogue_id + "/pending_skills_count", DataVariant());
-                  publish_data(dialogue_id + "/coord_forwarded", DataVariant());
-                  cleanup_multi_responses(*this, session->get_session_id(), dialogue_id);
-                }
+                BuiltinDispatcher::cleanup_dialogue_data(*this, session->get_session_id(), dialogue_id);
+                cleanup_multi_responses(*this, session->get_session_id(), dialogue_id);
               }
             }
           }
@@ -1917,26 +1902,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
             session_router_->enqueue_response_message(response_message);
 
             // Clean up dialogue data after response is sent
-            if(!dialogue_id.empty()) {
-              Logger::instance().info_f("[COORDINATORDataExchange] Cleaning up dialogue_id=%s", dialogue_id.c_str());
-              // Remove sys/{dialogue_id}/ data
-              publish_data(dialogue_id + "/dialogue_id", DataVariant());
-              publish_data(dialogue_id + "/user_prompt", DataVariant());
-              publish_data(dialogue_id + "/next_skills", DataVariant());
-              publish_data(dialogue_id + "/skills_scheduled", DataVariant());
-              publish_data(dialogue_id + "/launched_skills", DataVariant());
-              publish_data(dialogue_id + "/response", DataVariant());
-              // Remove user/{dialogue_id}/ data
-              publish_data(dialogue_id + "/travel_result", DataVariant());
-              publish_data(dialogue_id + "/travel_confidence", DataVariant());
-              publish_data(dialogue_id + "/shopping_result", DataVariant());
-              publish_data(dialogue_id + "/shopping_confidence", DataVariant());
-              publish_data(dialogue_id + "/foodie_result", DataVariant());
-              publish_data(dialogue_id + "/foodie_confidence", DataVariant());
-              // Clean up pending skills count and coord_forwarded
-              publish_data(dialogue_id + "/pending_skills_count", DataVariant());
-              publish_data(dialogue_id + "/coord_forwarded", DataVariant());
-            }
+            BuiltinDispatcher::cleanup_dialogue_data(*this, session->get_session_id(), dialogue_id);
           }
           return;
         } else {
@@ -2054,22 +2020,8 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
             Logger::instance().info_f("[COORDINATORDataExchange] All multi-responses consumed, cleaning up dialogue_id=%s",
                                       dialogue_id.c_str());
             // Clean up dialogue data
-            if(!dialogue_id.empty()) {
-              publish_data(dialogue_id + "/dialogue_id", DataVariant());
-              publish_data(dialogue_id + "/user_prompt", DataVariant());
-              publish_data(dialogue_id + "/next_skills", DataVariant());
-              publish_data(dialogue_id + "/skills_scheduled", DataVariant());
-              publish_data(dialogue_id + "/launched_skills", DataVariant());
-              publish_data(dialogue_id + "/response", DataVariant());
-              publish_data(dialogue_id + "/travel_result", DataVariant());
-              publish_data(dialogue_id + "/travel_confidence", DataVariant());
-              publish_data(dialogue_id + "/shopping_result", DataVariant());
-              publish_data(dialogue_id + "/shopping_confidence", DataVariant());
-              publish_data(dialogue_id + "/foodie_result", DataVariant());
-              publish_data(dialogue_id + "/foodie_confidence", DataVariant());
-              publish_data(dialogue_id + "/pending_skills_count", DataVariant());
-              cleanup_multi_responses(*this, session->get_session_id(), dialogue_id);
-            }
+            BuiltinDispatcher::cleanup_dialogue_data(*this, session->get_session_id(), dialogue_id);
+            cleanup_multi_responses(*this, session->get_session_id(), dialogue_id);
           }
         }
       }
@@ -2092,22 +2044,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       // Clean up dialogue data after response is sent
       if(!dialogue_id.empty()) {
         Logger::instance().info_f("[COORDINATORDataExchange] Cleaning up dialogue_id=%s", dialogue_id.c_str());
-        // Remove sys/{dialogue_id}/ data
-        publish_data(dialogue_id + "/dialogue_id", DataVariant());
-        publish_data(dialogue_id + "/user_prompt", DataVariant());
-        publish_data(dialogue_id + "/next_skills", DataVariant());
-        publish_data(dialogue_id + "/skills_scheduled", DataVariant());
-        publish_data(dialogue_id + "/launched_skills", DataVariant());
-        publish_data(dialogue_id + "/response", DataVariant());
-        // Remove user/{dialogue_id}/ data
-        publish_data(dialogue_id + "/travel_result", DataVariant());
-        publish_data(dialogue_id + "/travel_confidence", DataVariant());
-        publish_data(dialogue_id + "/shopping_result", DataVariant());
-        publish_data(dialogue_id + "/shopping_confidence", DataVariant());
-        publish_data(dialogue_id + "/foodie_result", DataVariant());
-        publish_data(dialogue_id + "/foodie_confidence", DataVariant());
-        // Clean up pending skills count
-        publish_data(dialogue_id + "/pending_skills_count", DataVariant());
+        BuiltinDispatcher::cleanup_dialogue_data(*this, session->get_session_id(), dialogue_id);
       }
     }
     return;
