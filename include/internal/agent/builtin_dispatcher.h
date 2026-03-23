@@ -141,6 +141,40 @@ class BuiltinDispatcher {
                                  const std::string& key,
                                  DataVariant& value);
 
+  /**
+   * @brief Publish framework data to MMDataBus with proper key format.
+   *
+   * Writes to: /session/{session_id}/sys/{dialogue_id}/{key}
+   * This ensures data is stored in the same location as node outputs,
+   * enabling unified management and cleanup.
+   *
+   * @param agent The agent instance
+   * @param session_id The session ID
+   * @param dialogue_id The dialogue ID (can be empty)
+   * @param key The data key
+   * @param value The value to write
+   * @return true if successful
+   */
+  static bool publish_framework_data(MMAgent& agent,
+                                     const std::string& session_id,
+                                     const std::string& dialogue_id,
+                                     const std::string& key,
+                                     const DataVariant& value);
+
+  /**
+   * @brief Remove framework data from MMDataBus.
+   *
+   * @param agent The agent instance
+   * @param session_id The session ID
+   * @param dialogue_id The dialogue ID (can be empty)
+   * @param key The data key to remove
+   * @return true if successful
+   */
+  static bool remove_framework_data(MMAgent& agent,
+                                    const std::string& session_id,
+                                    const std::string& dialogue_id,
+                                    const std::string& key);
+
   const Config& get_config() const { return config_; }
   const std::string& get_dispatcher_id() const { return config_.dispatcher_id; }
 

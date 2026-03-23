@@ -123,6 +123,40 @@ TaskScheduleResult Scheduler::run_default_algorithm(
 TaskScheduleResult Scheduler::schedule_task(const TaskScheduleRequest& request,
                                             const std::vector<WorkflowInstanceInfo>& workflow_instances) {
   std::lock_guard<std::mutex> lock(mapping_mutex_);
+
+  // Check if task is already actively scheduled (running or pending)
+  // Allow re-scheduling if task was completed or cancelled, or if the workflow instance was destroyed
+  auto status_it = task_status_.find(request.task_id);
+  if(status_it != task_status_.end()) {
+    const std::string& status = status_it->second;
+    if(status == "scheduled") {
+      auto existing_it = task_to_workflow_.find(request.task_id);
+      if(existing_it != task_to_workflow_.end()) {
+        // Verify that the workflow instance still exists
+        const std::string& existing_instance_id = existing_it->second.workflow_instance_id;
+        bool instance_exists = false;
+        for(const auto& info : workflow_instances) {
+          if(info.workflow_instance_id == existing_instance_id) {
+            instance_exists = true;
+            break;
+          }
+        }
+        if(instance_exists) {
+          Logger::instance().debug_f("[SCHEDULER_SCHEDULE_TASK] task_id=%s already scheduled to workflow_instance=%s, skipping duplicate",
+                                     request.task_id.c_str(), existing_instance_id.c_str());
+          return existing_it->second;
+        } else {
+          // Workflow instance was destroyed, allow re-scheduling
+          Logger::instance().info_f("[SCHEDULER_SCHEDULE_TASK] task_id=%s previous instance %s destroyed, allowing re-schedule",
+                                    request.task_id.c_str(), existing_instance_id.c_str());
+        }
+      }
+    }
+    // Task was completed/cancelled - allow re-scheduling, clean up old state
+    Logger::instance().debug_f("[SCHEDULER_SCHEDULE_TASK] task_id=%s previous status=%s, allowing re-schedule",
+                              request.task_id.c_str(), status.c_str());
+  }
+
   auto result = algorithm_ ? algorithm_(request, workflow_instances, task_to_workflow_)
                            : run_default_algorithm(request, workflow_instances, task_to_workflow_);
   if(result.scheduled) {

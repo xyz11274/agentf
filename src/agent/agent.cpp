@@ -28,6 +28,7 @@
 #include "runtime/trace/trace_context.h"
 #include "runtime/trace/trace_manager.h"
 #include "runtime/flow_trace.h"
+#include "runtime/databus/databus.h"
 
 #ifdef AGENTFLOW_WITH_RAPIDJSON
 #include <rapidjson/document.h>
@@ -1464,24 +1465,40 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
   if(found_next_skills) {
     auto next_skills = BuiltinDispatcher::parse_next_skills(next_skills_value);
     if(!next_skills.empty()) {
-      // Check skills_scheduled flag to prevent duplicate skill launches
-      DataVariant scheduled_flag;
-      bool already_scheduled = false;
-      if(get_data(scheduled_key, scheduled_flag)) {
-        if(const auto* text = std::get_if<std::string>(&scheduled_flag)) {
-          already_scheduled = (*text == "true");
+      // Check launched_skills list to prevent duplicate skill launches
+      // We track which skills have been launched, not just a simple true/false flag
+      std::string launched_key = dialogue_id.empty() ? "launched_skills" : dialogue_id + "/launched_skills";
+      std::set<std::string> launched_skills;
+      DataVariant launched_value;
+      if(get_data(launched_key, launched_value)) {
+        if(const auto* text = std::get_if<std::string>(&launched_value)) {
+          // Parse comma-separated list of launched skill names
+          std::istringstream iss(*text);
+          std::string skill_name;
+          while(std::getline(iss, skill_name, ',')) {
+            if(!skill_name.empty()) {
+              launched_skills.insert(skill_name);
+            }
+          }
         }
       }
 
-      if(already_scheduled) {
-        Logger::instance().info_f("[DATA_EXCHANGE] Skills already scheduled for dialogue_id=%s, skipping",
+      // Filter out already launched skills
+      std::vector<SkillSpec> skills_to_launch;
+      for(const auto& spec : next_skills) {
+        if(launched_skills.find(spec.name) == launched_skills.end()) {
+          skills_to_launch.push_back(spec);
+        }
+      }
+
+      if(skills_to_launch.empty()) {
+        // All skills have been launched
+        Logger::instance().info_f("[DATA_EXCHANGE] All skills already launched for dialogue_id=%s, checking response",
                                  dialogue_id.c_str());
       } else {
-        // Set skills_scheduled flag to prevent duplicate launches
-        publish_data(scheduled_key, std::string("true"));
-
-        Logger::instance().info_f("[DATA_EXCHANGE] Found next_skills for dialogue_id=%s, launching %d skills",
-                                 dialogue_id.c_str(), static_cast<int>(next_skills.size()));
+        Logger::instance().info_f("[DATA_EXCHANGE] Found %d skills to launch for dialogue_id=%s (%d already launched)",
+                                 static_cast<int>(skills_to_launch.size()), dialogue_id.c_str(),
+                                 static_cast<int>(launched_skills.size()));
 
         // Get source task for skill launching (could be dispatcher, coordinator, or skill)
         std::string source_task_id;
@@ -1496,22 +1513,54 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         // Create message copy with dialogue_id for skill tasks
         MMAgentMsgQue::Message message_with_dialogue = message;
         if(dialogue_id.empty() && message.metadata.count("dialogue_id")) {
-          // Preserve dialogue_id if it was in original message but we somehow lost it
           message_with_dialogue.metadata["dialogue_id"] = message.metadata.at("dialogue_id");
         } else if(!dialogue_id.empty()) {
           message_with_dialogue.metadata["dialogue_id"] = dialogue_id;
         }
 
-        for(const auto& spec : next_skills) {
+        // Launch skills that haven't been launched yet
+        int launched_count = 0;
+        for(const auto& spec : skills_to_launch) {
           if(!source_task->can_launch_more_skills()) {
-            Logger::instance().info_f("[DATA_EXCHANGE] Reached max concurrent skills limit");
+            Logger::instance().info_f("[DATA_EXCHANGE] Reached max concurrent skills limit, %d skills still pending",
+                                     static_cast<int>(skills_to_launch.size()) - launched_count);
             break;
           }
-          launch_skill_task(session, spec.name, spec.exec_skill_key, message_with_dialogue, source_task);
+          if(launch_skill_task(session, spec.name, spec.exec_skill_key, message_with_dialogue, source_task)) {
+            launched_skills.insert(spec.name);
+            launched_count++;
+          }
+        }
+
+        // Update launched_skills list
+        std::string launched_list;
+        for(const auto& name : launched_skills) {
+          if(!launched_list.empty()) launched_list += ",";
+          launched_list += name;
+        }
+        publish_data(launched_key, launched_list);
+
+        // Check if all skills have been launched
+        bool all_launched = true;
+        for(const auto& spec : next_skills) {
+          if(launched_skills.find(spec.name) == launched_skills.end()) {
+            all_launched = false;
+            break;
+          }
+        }
+
+        if(all_launched) {
+          // Set skills_scheduled flag for backward compatibility with coordinator handling
+          publish_data(scheduled_key, std::string("true"));
+          Logger::instance().info_f("[DATA_EXCHANGE] All skills launched for dialogue_id=%s", dialogue_id.c_str());
+        } else {
+          Logger::instance().info_f("[DATA_EXCHANGE] %d/%d skills launched for dialogue_id=%s, will retry remaining on next trigger",
+                                   static_cast<int>(launched_skills.size()), static_cast<int>(next_skills.size()),
+                                   dialogue_id.c_str());
         }
       }
       // Note: We don't clear next_skills here - it's kept for coordinator to access
-      // The skills_scheduled flag prevents duplicate launches
+      // The launched_skills list prevents duplicate launches
     }
   }
 
@@ -1788,6 +1837,26 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       if(already_scheduled) {
         Logger::instance().info_f("[COORDINATORDataExchange] Skills already scheduled, checking if response is ready");
 
+        // First check pending_skills_count to ensure all skills have completed
+        std::string pending_count_key = dialogue_id.empty() ? "pending_skills_count" : dialogue_id + "/pending_skills_count";
+        DataVariant pending_count_value;
+        long pending_count = 0;
+        if(get_data(pending_count_key, pending_count_value)) {
+          if(const auto* count_ptr = std::get_if<long>(&pending_count_value)) {
+            pending_count = *count_ptr;
+          } else if(const auto* count_str = std::get_if<std::string>(&pending_count_value)) {
+            pending_count = std::stol(*count_str);
+          }
+        }
+
+        if(pending_count > 0) {
+          // Skills still running - don't send response yet
+          Logger::instance().info_f("[COORDINATORDataExchange] %ld skills still pending, waiting for completion",
+                                    pending_count);
+          return;
+        }
+
+        // All skills completed - check for response
         // First check for multi-responses (streaming mode)
         auto multi_result = consume_multi_response(*this, session->get_session_id(), dialogue_id);
         if(multi_result.has_response) {
@@ -1816,6 +1885,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
                   publish_data(dialogue_id + "/user_prompt", DataVariant());
                   publish_data(dialogue_id + "/next_skills", DataVariant());
                   publish_data(dialogue_id + "/skills_scheduled", DataVariant());
+                  publish_data(dialogue_id + "/launched_skills", DataVariant());
                   publish_data(dialogue_id + "/response", DataVariant());
                   publish_data(dialogue_id + "/travel_result", DataVariant());
                   publish_data(dialogue_id + "/travel_confidence", DataVariant());
@@ -1854,6 +1924,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
               publish_data(dialogue_id + "/user_prompt", DataVariant());
               publish_data(dialogue_id + "/next_skills", DataVariant());
               publish_data(dialogue_id + "/skills_scheduled", DataVariant());
+              publish_data(dialogue_id + "/launched_skills", DataVariant());
               publish_data(dialogue_id + "/response", DataVariant());
               // Remove user/{dialogue_id}/ data
               publish_data(dialogue_id + "/travel_result", DataVariant());
@@ -1875,27 +1946,84 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         }
       }
 
-      Logger::instance().info_f("[COORDINATORDataExchange] Coordinator workflow completed, starting skill tasks: %s",
+      Logger::instance().info_f("[COORDINATORDataExchange] Coordinator workflow completed, checking skill tasks: %s",
                                 next_skills_str.c_str());
-
-      // Set skills_scheduled flag to prevent duplicate launches
-      publish_data(coord_scheduled_key, std::string("true"));
 
       // Parse skills using BuiltinDispatcher's parser
       auto skill_names = BuiltinDispatcher::parse_next_skills(next_skills_value);
 
-      // Create message with dialogue_id for skill tasks
-      MMAgentMsgQue::Message message_with_dialogue = message;
-      if(!dialogue_id.empty()) {
-        message_with_dialogue.metadata["dialogue_id"] = dialogue_id;
+      // Check launched_skills list to prevent duplicate skill launches
+      std::string launched_key = dialogue_id.empty() ? "launched_skills" : dialogue_id + "/launched_skills";
+      std::set<std::string> launched_skills;
+      DataVariant launched_value;
+      if(get_data(launched_key, launched_value)) {
+        if(const auto* text = std::get_if<std::string>(&launched_value)) {
+          std::istringstream iss(*text);
+          std::string skill_name;
+          while(std::getline(iss, skill_name, ',')) {
+            if(!skill_name.empty()) {
+              launched_skills.insert(skill_name);
+            }
+          }
+        }
       }
 
+      // Filter out already launched skills
+      std::vector<SkillSpec> skills_to_launch;
       for(const auto& spec : skill_names) {
-        if(!task->can_launch_more_skills()) {
-          Logger::instance().info_f("[COORDINATORDataExchange] Reached max concurrent skills limit");
-          break;
+        if(launched_skills.find(spec.name) == launched_skills.end()) {
+          skills_to_launch.push_back(spec);
         }
-        launch_skill_task(session, spec.name, spec.exec_skill_key, message_with_dialogue, task);
+      }
+
+      if(skills_to_launch.empty()) {
+        Logger::instance().info_f("[COORDINATORDataExchange] All skills already launched, checking response");
+        // Fall through to response checking below
+      } else {
+        // Create message with dialogue_id for skill tasks
+        MMAgentMsgQue::Message message_with_dialogue = message;
+        if(!dialogue_id.empty()) {
+          message_with_dialogue.metadata["dialogue_id"] = dialogue_id;
+        }
+
+        // Launch skills that haven't been launched yet
+        int launched_count = 0;
+        for(const auto& spec : skills_to_launch) {
+          if(!task->can_launch_more_skills()) {
+            Logger::instance().info_f("[COORDINATORDataExchange] Reached max concurrent skills limit, %d skills pending",
+                                      static_cast<int>(skills_to_launch.size()) - launched_count);
+            break;
+          }
+          if(launch_skill_task(session, spec.name, spec.exec_skill_key, message_with_dialogue, task)) {
+            launched_skills.insert(spec.name);
+            launched_count++;
+          }
+        }
+
+        // Update launched_skills list
+        std::string launched_list;
+        for(const auto& name : launched_skills) {
+          if(!launched_list.empty()) launched_list += ",";
+          launched_list += name;
+        }
+        publish_data(launched_key, launched_list);
+
+        // Check if all skills have been launched
+        bool all_launched = true;
+        for(const auto& spec : skill_names) {
+          if(launched_skills.find(spec.name) == launched_skills.end()) {
+            all_launched = false;
+            break;
+          }
+        }
+
+        if(all_launched) {
+          publish_data(coord_scheduled_key, std::string("true"));
+          Logger::instance().info_f("[COORDINATORDataExchange] All skills launched for dialogue_id=%s", dialogue_id.c_str());
+        } else {
+          Logger::instance().info_f("[COORDINATORDataExchange] %d/%d skills launched, will retry remaining on next trigger",
+                                    static_cast<int>(launched_skills.size()), static_cast<int>(skill_names.size()));
+        }
       }
       return;  // Don't send response to client yet, wait for skill
     }
@@ -1931,6 +2059,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
               publish_data(dialogue_id + "/user_prompt", DataVariant());
               publish_data(dialogue_id + "/next_skills", DataVariant());
               publish_data(dialogue_id + "/skills_scheduled", DataVariant());
+              publish_data(dialogue_id + "/launched_skills", DataVariant());
               publish_data(dialogue_id + "/response", DataVariant());
               publish_data(dialogue_id + "/travel_result", DataVariant());
               publish_data(dialogue_id + "/travel_confidence", DataVariant());
@@ -1968,6 +2097,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         publish_data(dialogue_id + "/user_prompt", DataVariant());
         publish_data(dialogue_id + "/next_skills", DataVariant());
         publish_data(dialogue_id + "/skills_scheduled", DataVariant());
+        publish_data(dialogue_id + "/launched_skills", DataVariant());
         publish_data(dialogue_id + "/response", DataVariant());
         // Remove user/{dialogue_id}/ data
         publish_data(dialogue_id + "/travel_result", DataVariant());
@@ -2438,12 +2568,27 @@ bool MMAgent::get_session_output(const std::string& session_id, const std::strin
 
 bool MMAgent::publish_data(const std::string& key, const DataVariant& value) {
   std::lock_guard<std::mutex> lock(mutex_);
+
+  // Prefer MMDataBus if available (unified storage with nodes)
+  if(runtime_databus_) {
+    runtime_databus_->put(key, value);
+    return true;
+  }
+
+  // Fallback to internal map
   data_bus_[key] = value;
   return true;
 }
 
 bool MMAgent::get_data(const std::string& key, DataVariant& value) {
   std::lock_guard<std::mutex> lock(mutex_);
+
+  // Prefer MMDataBus if available (unified storage with nodes)
+  if(runtime_databus_) {
+    return runtime_databus_->get(key, value);
+  }
+
+  // Fallback to internal map
   const auto it = data_bus_.find(key);
   if(it == data_bus_.end()) {
     return false;

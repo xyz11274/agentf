@@ -28,6 +28,13 @@ class AgentContext;
 class AgentPackage;
 class SessionTaskCoordinator;
 class SessionRouter;
+}  // namespace framework
+
+namespace runtime {
+class MMDataBus;  // Forward declaration
+}  // namespace runtime
+
+namespace framework {
 class BuiltinDispatcher;
 
 /// Context callback function type.
@@ -116,6 +123,10 @@ class MMAgent {
   bool publish_data(const std::string& key, const DataVariant& value);
   bool get_data(const std::string& key, DataVariant& value);
 
+  // Access to Runtime's MMDataBus for unified data storage with nodes
+  void set_runtime_databus(runtime::MMDataBus* databus) { runtime_databus_ = databus; }
+  runtime::MMDataBus* get_runtime_databus() const { return runtime_databus_; }
+
   std::vector<std::string> get_all_session_ids() const;
   bool get_session_output(const std::string& session_id, const std::string& key,
                           DataVariant& value) const;
@@ -166,6 +177,7 @@ class MMAgent {
   std::map<WorkflowId, std::shared_ptr<MMWorkflow>> workflow_map_;
 
   DataMap            data_bus_;
+  runtime::MMDataBus* runtime_databus_ = nullptr;  // Pointer to Runtime's MMDataBus for unified storage
   mutable std::mutex mutex_;
 
   std::map<std::string, std::shared_ptr<MMAgentSession>> sessions_;

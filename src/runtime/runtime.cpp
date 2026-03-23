@@ -254,7 +254,7 @@ master::TaskScheduleResult MMAgentRuntime::schedule_task(const master::TaskSched
   if(!scheduler_ || !shared_state_) {
     return {};
   }
-  scheduler_->enqueue_task(request);
+  // Only use synchronous scheduling - the caller needs the result immediately
   auto result = scheduler_->schedule_task(request, shared_state_->list_workflow_instances());
   if(result.scheduled) {
     shared_state_->increment_workflow_ref(result.workflow_instance_id);
@@ -314,6 +314,10 @@ bool MMAgentRuntime::register_agent(AgentPtr agent) {
     agents_[agent->get_id()] = agent;
     databuses_[agent->get_id()] = std::unique_ptr<MMDataBus>(new MMDataBus(1024 * 1024));
     agent_heartbeats_[agent->get_id()] = now_ms();
+
+    // Set the agent's runtime_databus pointer for unified data storage
+    agent->set_runtime_databus(databuses_[agent->get_id()].get());
+
     if(local_worker_) {
       for(const auto& workflow : agent->get_workflows()) {
         if(workflow) {

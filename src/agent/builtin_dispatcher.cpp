@@ -367,5 +367,53 @@ bool BuiltinDispatcher::get_framework_data(MMAgent& agent,
   return false;
 }
 
+bool BuiltinDispatcher::publish_framework_data(MMAgent& agent,
+                                               const std::string& session_id,
+                                               const std::string& dialogue_id,
+                                               const std::string& key,
+                                               const DataVariant& value) {
+  // Build key in new format: /session/{session_id}/sys/{dialogue_id}/{key}
+  std::string new_key;
+  if(!session_id.empty()) {
+    new_key = "/session/" + session_id + "/sys/";
+    if(!dialogue_id.empty()) {
+      new_key += dialogue_id + "/";
+    }
+  } else if(!dialogue_id.empty()) {
+    new_key = dialogue_id + "/";
+  }
+  new_key += key;
+
+  if(agent.publish_data(new_key, value)) {
+    Logger::instance().info_f("[PUBLISH_FRAMEWORK_DATA] Published key=%s", new_key.c_str());
+    return true;
+  }
+  return false;
+}
+
+bool BuiltinDispatcher::remove_framework_data(MMAgent& agent,
+                                              const std::string& session_id,
+                                              const std::string& dialogue_id,
+                                              const std::string& key) {
+  // Build key in new format: /session/{session_id}/sys/{dialogue_id}/{key}
+  std::string new_key;
+  if(!session_id.empty()) {
+    new_key = "/session/" + session_id + "/sys/";
+    if(!dialogue_id.empty()) {
+      new_key += dialogue_id + "/";
+    }
+  } else if(!dialogue_id.empty()) {
+    new_key = dialogue_id + "/";
+  }
+  new_key += key;
+
+  // Publish empty DataVariant to remove
+  if(agent.publish_data(new_key, DataVariant())) {
+    Logger::instance().info_f("[REMOVE_FRAMEWORK_DATA] Removed key=%s", new_key.c_str());
+    return true;
+  }
+  return false;
+}
+
 }  // namespace framework
 }  // namespace agentflow
