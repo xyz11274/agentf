@@ -10,6 +10,7 @@
       "execution_mode": "so_library",
       "command": "lib/libskill_selection_node.so",
       "function_name": "skill_selection_node",
+      "candidate_skills": ["travel", "shopping", "foodie"],
       "inputs": [
         {"name": "user_text", "type": "string", "required": true},
         {"name": "session_id", "type": "string", "required": true},
