@@ -666,6 +666,18 @@ bool WorkflowParser::parse_node_config(std::shared_ptr<const IJsonValue> node_ob
     }
   }
 
+  // Parse candidate_skills array for skill access control
+  auto candidate_skills_array = JsonHelper::get_array(config_source, "candidate_skills");
+  if(candidate_skills_array) {
+    size_t num_skills = candidate_skills_array->array_size();
+    for(size_t i = 0; i < num_skills; ++i) {
+      auto skill = candidate_skills_array->array_at(i);
+      if(skill && skill->is_string()) {
+        config.candidate_skills.push_back(skill->as_string());
+      }
+    }
+  }
+
   return true;
 }
 

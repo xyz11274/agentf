@@ -17,6 +17,87 @@
 namespace agentflow {
 namespace framework {
 
+namespace {
+/**
+ * @brief Validate that a skill is in the candidate_skills list.
+ *
+ * @param skill_name The skill name to validate
+ * @param candidate_skills The list of allowed skills (empty means all skills allowed)
+ * @return true if skill is allowed, false if explicitly restricted
+ */
+bool validate_skill_against_candidates(const std::string& skill_name,
+                                       const std::vector<std::string>& candidate_skills) {
+  // Empty candidate_skills means no restrictions (all skills allowed)
+  if(candidate_skills.empty()) {
+    return true;
+  }
+
+  // Check if skill_name is in the candidate_skills list
+  return std::find(candidate_skills.begin(), candidate_skills.end(), skill_name) != candidate_skills.end();
+}
+
+/**
+ * @brief Parse candidate_skills from a DataVariant value.
+ *
+ * Supports JSON array format: ["skill1", "skill2"]
+ * or comma-separated string: "skill1,skill2"
+ *
+ * @param value The DataVariant containing candidate_skills
+ * @return Vector of candidate skill names
+ */
+std::vector<std::string> parse_candidate_skills(const DataVariant& value) {
+  std::vector<std::string> result;
+
+  if(const auto* text = std::get_if<std::string>(&value)) {
+    if(text->empty()) {
+      return result;
+    }
+
+#ifdef AGENTFLOW_WITH_RAPIDJSON
+    // Try JSON array format first
+    rapidjson::Document doc;
+    doc.Parse(text->c_str());
+    if(!doc.HasParseError() && doc.IsArray()) {
+      for(rapidjson::SizeType i = 0; i < doc.Size(); ++i) {
+        if(doc[i].IsString()) {
+          result.push_back(doc[i].GetString());
+        }
+      }
+      return result;
+    }
+#endif
+
+    // Fall back to comma-separated format
+    std::string text_copy = *text;
+
+    // Handle JSON array format: strip outer brackets and quotes
+    if(text_copy.size() >= 2 && text_copy.front() == '[' && text_copy.back() == ']') {
+      text_copy = text_copy.substr(1, text_copy.size() - 2);
+    }
+
+    std::istringstream iss(text_copy);
+    std::string token;
+    while(std::getline(iss, token, ',')) {
+      // Trim whitespace
+      size_t start = token.find_first_not_of(" \t\n\r");
+      size_t end = token.find_last_not_of(" \t\n\r");
+      if(start != std::string::npos && end != std::string::npos) {
+        std::string skill = token.substr(start, end - start + 1);
+        // Strip surrounding quotes if present (JSON string elements)
+        if(skill.size() >= 2 && skill.front() == '"' && skill.back() == '"') {
+          skill = skill.substr(1, skill.size() - 2);
+        }
+        if(!skill.empty()) {
+          result.push_back(skill);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+}  // namespace
+
 BuiltinDispatcher::BuiltinDispatcher(const Config& config) : config_(config) {}
 
 void BuiltinDispatcher::process_request(MMAgent& agent,
@@ -176,6 +257,47 @@ bool BuiltinDispatcher::launch_skill_task(MMAgent& agent,
                                           const std::shared_ptr<MMAgentTask>& source_task) {
   if(!session || skill_name.empty()) {
     return false;
+  }
+
+  // Validate skill against candidate_skills if present in context metadata
+  if(context.metadata.count("candidate_skills")) {
+    DataVariant candidate_skills_value;
+    candidate_skills_value = context.metadata.at("candidate_skills");
+
+    // Try to parse as JSON array or comma-separated string
+    std::vector<std::string> candidate_skills = parse_candidate_skills(candidate_skills_value);
+
+    if(!validate_skill_against_candidates(skill_name, candidate_skills)) {
+      Logger::instance().warn_f("[BuiltinDispatcher] Skill '%s' not in candidate_skills list. "
+                               "Allowed skills: [%s]. Skill launch blocked.",
+                               skill_name.c_str(),
+                               context.metadata.at("candidate_skills").c_str());
+      return false;
+    }
+  }
+
+  // Also check candidate_skills from DataBus (new format key)
+  std::string session_id = session->get_session_id();
+  std::string dialogue_id;
+  std::string workflow_id;
+
+  if(context.metadata.count("dialogue_id")) {
+    dialogue_id = context.metadata.at("dialogue_id");
+  }
+  if(context.metadata.count("workflow_id")) {
+    workflow_id = context.metadata.at("workflow_id");
+  }
+
+  DataVariant databus_candidate_skills;
+  if(get_framework_data(agent, session_id, dialogue_id, workflow_id,
+                        "candidate_skills", databus_candidate_skills)) {
+    std::vector<std::string> candidate_skills = parse_candidate_skills(databus_candidate_skills);
+
+    if(!validate_skill_against_candidates(skill_name, candidate_skills)) {
+      Logger::instance().warn_f("[BuiltinDispatcher] Skill '%s' not in candidate_skills from DataBus. "
+                               "Skill launch blocked.", skill_name.c_str());
+      return false;
+    }
   }
 
   // Find skill template task

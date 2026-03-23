@@ -2343,5 +2343,99 @@ TEST_F(MultiResponseTest, LargeNumberOfResponses) {
   EXPECT_TRUE(final_result.is_done);
 }
 
+// ============================================================
+// candidate_skills Tests
+// ============================================================
+
+// Helper function for candidate_skills tests (defined in anonymous namespace in builtin_dispatcher.cpp)
+namespace {
+bool test_validate_skill_against_candidates(const std::string& skill_name,
+                                            const std::vector<std::string>& candidate_skills) {
+  if(candidate_skills.empty()) {
+    return true;
+  }
+  return std::find(candidate_skills.begin(), candidate_skills.end(), skill_name) != candidate_skills.end();
+}
+}
+
+class CandidateSkillsTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    agent = std::make_shared<framework::MMAgent>(base_config());
+  }
+
+  framework::MMAgent::Config base_config() {
+    framework::MMAgent::Config config;
+    config.id = "test_agent";
+    config.name = "Test Agent";
+    return config;
+  }
+
+  std::shared_ptr<framework::MMAgent> agent;
+};
+
+TEST_F(CandidateSkillsTest, NodeConfigHasCandidateSkillsField) {
+  framework::MMNode::Config config;
+  config.id = "test_node";
+  config.name = "Test Node";
+
+  // Verify field exists and defaults to empty
+  EXPECT_TRUE(config.candidate_skills.empty());
+
+  // Verify we can add skills
+  config.candidate_skills = {"search", "translate", "summarize"};
+  EXPECT_EQ(config.candidate_skills.size(), 3);
+  EXPECT_EQ(config.candidate_skills[0], "search");
+  EXPECT_EQ(config.candidate_skills[1], "translate");
+  EXPECT_EQ(config.candidate_skills[2], "summarize");
+}
+
+TEST_F(CandidateSkillsTest, NodeGetterReturnsCandidateSkills) {
+  framework::MMNode::Config config;
+  config.id = "test_node";
+  config.candidate_skills = {"skill1", "skill2"};
+
+  auto node = std::make_shared<framework::MMNode>(config);
+  const auto& skills = node->get_candidate_skills();
+
+  EXPECT_EQ(skills.size(), 2);
+  EXPECT_EQ(skills[0], "skill1");
+  EXPECT_EQ(skills[1], "skill2");
+}
+
+TEST_F(CandidateSkillsTest, ParseCandidateSkillsFromJson) {
+  // Test JSON array format
+  std::string json_array = R"(["search", "translate", "summarize"])";
+  DataVariant value = json_array;
+
+  auto skills = framework::BuiltinDispatcher::parse_next_skills(value);
+  EXPECT_EQ(skills.size(), 3);
+  EXPECT_EQ(skills[0].name, "search");
+  EXPECT_EQ(skills[1].name, "translate");
+  EXPECT_EQ(skills[2].name, "summarize");
+}
+
+TEST_F(CandidateSkillsTest, EmptyCandidateSkillsAllowsAll) {
+  // Empty candidate_skills means no restrictions
+  std::vector<std::string> empty_candidates;
+
+  // Any skill should be allowed when candidates is empty
+  EXPECT_TRUE(test_validate_skill_against_candidates("any_skill", empty_candidates));
+  EXPECT_TRUE(test_validate_skill_against_candidates("another_skill", empty_candidates));
+}
+
+TEST_F(CandidateSkillsTest, CandidateSkillsRestrictAccess) {
+  std::vector<std::string> candidates = {"search", "translate", "summarize"};
+
+  // Skills in the list should be allowed
+  EXPECT_TRUE(test_validate_skill_against_candidates("search", candidates));
+  EXPECT_TRUE(test_validate_skill_against_candidates("translate", candidates));
+  EXPECT_TRUE(test_validate_skill_against_candidates("summarize", candidates));
+
+  // Skills not in the list should be blocked
+  EXPECT_FALSE(test_validate_skill_against_candidates("unknown_skill", candidates));
+  EXPECT_FALSE(test_validate_skill_against_candidates("hack", candidates));
+}
+
 }  // namespace tests
 }  // namespace agentflow

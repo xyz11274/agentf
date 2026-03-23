@@ -130,6 +130,11 @@ public:
     // MMWorkflow reference for nested workflow node (type == "workflow")
     std::string workflow_ref;
     std::string node_context_workflow;
+
+    // Candidate skills for skill access control
+    // When non-empty, restricts which skills this node can request via next_skills.
+    // An empty list means no restrictions (all skills allowed).
+    std::vector<std::string> candidate_skills;
   };
 
   enum class MessagePriority {
@@ -183,6 +188,7 @@ public:
   ExecutionRiskLevel              get_execution_risk_level() const {
     return config_.execution_risk_level;
   }
+  const std::vector<std::string>& get_candidate_skills() const { return config_.candidate_skills; }
 
   // Retry counter
   int  get_retry_count() const { return retry_count_; }

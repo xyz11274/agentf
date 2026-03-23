@@ -175,6 +175,11 @@
       "inputs": ["plain_text"],
       "outputs": ["category", "confidence"],
 
+      // Candidate skills restricts which skills this node can request to launch.
+      // Empty or omitted means no restrictions (all skills allowed).
+      // This is useful for dispatcher-type nodes that output next_skills.
+      // "candidate_skills": ["search", "translate", "summarize"],
+
       "max_retries": 1,
       "retry_delay_ms": 3000,
       "timeout_ms": 120000,

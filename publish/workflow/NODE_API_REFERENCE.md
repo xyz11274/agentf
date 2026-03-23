@@ -436,3 +436,72 @@ extern "C" void dispatcher_output_v3(const SoDataMap& inputs, SoDataMap& outputs
 - `expected_parameters` 为可选配置，未配置时跳过校验
 - `available_parameters` 为可选输出，未提供时视为空对象
 - 现有 workflow 无需修改即可继续工作
+
+## Candidate Skills 限制
+
+### 概述
+
+`candidate_skills` 是 node 级别的 skill 访问控制机制，用于限制该节点可以请求调用的 skill 范围。通过声明 `candidate_skills`，可以增强系统的安全性和可控性，防止节点调用未授权的 skill。
+
+### 配置方式
+
+在 workflow JSON 的 node 定义中添加 `candidate_skills` 字段：
+
+```json
+{
+  "id": "skill_selector",
+  "name": "Skill Selection Node",
+  "type": "dispatcher",
+  "candidate_skills": ["search", "translate", "summarize"]
+}
+```
+
+### 行为规则
+
+| candidate_skills 状态 | 行为 |
+|----------------------|------|
+| 未配置或为空 | 无限制，允许调用任何 skill（向后兼容） |
+| 配置了 skill 列表 | 仅允许调用列表中的 skill |
+
+当节点尝试调用不在 `candidate_skills` 列表中的 skill 时：
+- 框架记录警告日志
+- Skill 启动被阻止
+- 返回失败消息给 coordinator
+
+### 使用场景
+
+1. **权限隔离**：限制 dispatcher 节点只能调用特定的 skill 集合
+2. **安全审计**：明确声明节点的 skill 依赖，便于系统审计
+3. **防止误用**：避免节点意外调用未授权的 skill
+
+### 与 next_skills 的关系
+
+`candidate_skills` 用于校验节点输出的 `next_skills`：
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                 Candidate Skills Validation                      │
+├─────────────────────────────────────────────────────────────────┤
+│  1. 节点输出 next_skills                                         │
+│  2. 框架检查节点的 candidate_skills 配置                         │
+│  3. 若 candidate_skills 为空，允许所有 skill                     │
+│  4. 若 candidate_skills 非空，校验每个 skill 是否在列表中        │
+│  5. 校验通过 → 启动 skill task                                  │
+│  6. 校验失败 → 阻止 skill 启动，记录警告日志                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 完整示例
+
+```json
+{
+  "id": "smart_dispatcher",
+  "name": "Smart Dispatcher",
+  "type": "dispatcher",
+  "candidate_skills": ["search", "translate", "summarize", "weather"],
+  "inputs": ["user_prompt"],
+  "outputs": ["next_skills", "response"]
+}
+```
+
+该 dispatcher 节点只能调用 `search`、`translate`、`summarize`、`weather` 四个 skill，尝试调用其他 skill 将被阻止。
