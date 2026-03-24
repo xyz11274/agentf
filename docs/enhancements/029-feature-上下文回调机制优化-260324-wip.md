@@ -389,7 +389,7 @@ private:
 
 - [x] 代码实现
 - [x] 单元测试
-- [ ] 集成测试
+- [x] 集成测试
 - [ ] 文档更新
 - [ ] 验证通过
 
@@ -415,7 +415,27 @@ private:
 |--------|------|------|
 | 编译验证 | ✅通过 | 无编译错误 |
 | 单元测试 | ✅通过 | 25 tests passed |
-| 集成测试 | ⏳待验证 | - |
+| 集成测试 | ✅通过 | 7 tests passed |
+
+### 集成测试设计
+
+**测试文件**: `tests/functional/src/test_event_handler_integration.cpp`
+
+| 测试用例 | 验证内容 |
+|----------|----------|
+| `AgentRegisteredEvent` | Agent 注册后触发 AGENT_REGISTERED 事件 |
+| `AgentUnregisteredEvent` | Agent 注销后触发 AGENT_UNREGISTERED 事件 |
+| `SessionCreatedEvent` | Session 创建后触发 SESSION_CREATED 事件 |
+| `SessionDestroyedEvent` | Session 销毁后触发 SESSION_DESTROYED 事件 |
+| `AsyncCallbackExecution` | 回调在线程池中异步执行，与主线程分离 |
+| `MultipleEventTypesInSequence` | 多种事件类型按序触发并正确记录 |
+| `HandlerRegistrationUnregistration` | 动态注册/注销 handler 后事件分发正确 |
+
+**测试关键验证点**:
+- 事件类型与 EventType 枚举值匹配
+- 事件数据完整（agent_id, session_id, user_id 等）
+- 回调在独立线程执行（非主线程）
+- 多 handler 时事件正确分发给所有 handler
 
 ## 12. 后续计划（可选）
 
