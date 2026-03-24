@@ -405,8 +405,8 @@ private:
 | AGENT_REGISTERED/UNREGISTERED 事件推送 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
 | SESSION_CREATED/DESTROYED 事件推送 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
 | Session 事件回调机制 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
-| DIALOGUE_CREATED/DESTROYED 事件推送 | ⏳待实施 | ⏳待实施 | ⏳待实施 | 待开始 |
-| TASK_CREATED/DESTROYED 事件推送 | ⏳待实施 | ⏳待实施 | ⏳待实施 | 待开始 |
+| DIALOGUE_CREATED/DESTROYED 事件推送 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
+| TASK_CREATED/DESTROYED 事件推送 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
 | 线程池异步执行 | ⏳待实施 | ⏳待实施 | ⏳待实施 | 待开始 |
 
 ### 验证结果
@@ -430,5 +430,3 @@ private:
 | 版本 | 刷新时间 | 刷新人 | 刷新内容 |
 |------|---------|--------|---------|
 | v1.0 | 2026-03-24 | xl4872 | 初始版本：定义事件类型、事件结构体（AgentEvent 含展开的 workflow 拓扑）、IEventHandler 接口、线程池异步执行机制 |
-| v1.1 | 2026-03-24 | xl4872 | 实现完成：EventType 枚举、事件结构体、IEventHandler 接口、Runtime 注册接口、Session 事件回调集成、单元测试（25 tests） |
-| v1.2 | 2026-03-24 | xl4872 | 刷新进展跟踪：细化功能点列表，区分已完成（AGENT/SESSION）和待实施（DIALOGUE/TASK/线程池）功能 |

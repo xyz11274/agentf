@@ -1213,6 +1213,12 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
       publish_data(dialogue_id + "/dialogue_id", dialogue_id);
       publish_data(dialogue_id + "/user_prompt", user_text);
 
+      // Emit DIALOGUE_CREATED event
+      if(has_dialogue_event_callback()) {
+        dialogue_event_callback_(config_.id, session->get_session_id(),
+                                  dialogue_id, user_text, DialogueEventType::CREATED);
+      }
+
       // ============================================================
       // CONTEXT CALLBACK INVOCATION
       // ============================================================
@@ -1371,6 +1377,20 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
                               runtime_task->get_task_id().c_str(), runtime_task->get_workflow_id().c_str());
     session->add_task(runtime_task);
     generated.push_back(runtime_task);
+
+    // Emit TASK_CREATED event
+    if(has_task_event_callback()) {
+      std::string dialogue_id_for_task;
+      // Try to get dialogue_id from message metadata
+      auto it = message.metadata.find("dialogue_id");
+      if(it != message.metadata.end()) {
+        dialogue_id_for_task = it->second;
+      }
+      task_event_callback_(config_.id, session->get_session_id(),
+                            dialogue_id_for_task, runtime_task->get_task_id(),
+                            runtime_task->get_workflow_id(), runtime_task->get_task_type(),
+                            "", TaskEventType::CREATED);
+    }
 
     // If the runtime_task has no valid workflow, acknowledge the message now
     // since there will be no workflow execution to trigger data_exchange
@@ -1885,6 +1905,11 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
               if(check_result.all_consumed && check_result.is_done) {
                 Logger::instance().info_f("[COORDINATORDataExchange] All multi-responses consumed, cleaning up dialogue_id=%s",
                                           dialogue_id.c_str());
+                // Emit DIALOGUE_DESTROYED event before cleanup
+                if(has_dialogue_event_callback()) {
+                  dialogue_event_callback_(config_.id, session->get_session_id(),
+                                            dialogue_id, "", DialogueEventType::DESTROYED);
+                }
                 // Clean up dialogue data
                 BuiltinDispatcher::cleanup_dialogue_data(*this, session->get_session_id(), dialogue_id);
                 cleanup_multi_responses(*this, session->get_session_id(), dialogue_id);
@@ -1907,6 +1932,11 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
           if(session_router_) {
             session_router_->enqueue_response_message(response_message);
 
+            // Emit DIALOGUE_DESTROYED event before cleanup
+            if(has_dialogue_event_callback()) {
+              dialogue_event_callback_(config_.id, session->get_session_id(),
+                                        dialogue_id, "", DialogueEventType::DESTROYED);
+            }
             // Clean up dialogue data after response is sent
             BuiltinDispatcher::cleanup_dialogue_data(*this, session->get_session_id(), dialogue_id);
           }
@@ -2025,6 +2055,11 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
           if(check_result.all_consumed && check_result.is_done) {
             Logger::instance().info_f("[COORDINATORDataExchange] All multi-responses consumed, cleaning up dialogue_id=%s",
                                       dialogue_id.c_str());
+            // Emit DIALOGUE_DESTROYED event before cleanup
+            if(has_dialogue_event_callback()) {
+              dialogue_event_callback_(config_.id, session->get_session_id(),
+                                        dialogue_id, "", DialogueEventType::DESTROYED);
+            }
             // Clean up dialogue data
             BuiltinDispatcher::cleanup_dialogue_data(*this, session->get_session_id(), dialogue_id);
             cleanup_multi_responses(*this, session->get_session_id(), dialogue_id);
@@ -2050,6 +2085,11 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       // Clean up dialogue data after response is sent
       if(!dialogue_id.empty()) {
         Logger::instance().info_f("[COORDINATORDataExchange] Cleaning up dialogue_id=%s", dialogue_id.c_str());
+        // Emit DIALOGUE_DESTROYED event before cleanup
+        if(has_dialogue_event_callback()) {
+          dialogue_event_callback_(config_.id, session->get_session_id(),
+                                    dialogue_id, "", DialogueEventType::DESTROYED);
+        }
         BuiltinDispatcher::cleanup_dialogue_data(*this, session->get_session_id(), dialogue_id);
       }
     }
@@ -2352,6 +2392,18 @@ bool MMAgent::launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
   }
 
   session->add_task(skill_task);
+
+  // Emit TASK_CREATED event for skill task
+  if(has_task_event_callback()) {
+    std::string dialogue_id_for_task;
+    if(context.metadata.count("dialogue_id")) {
+      dialogue_id_for_task = context.metadata.at("dialogue_id");
+    }
+    task_event_callback_(config_.id, session->get_session_id(),
+                          dialogue_id_for_task, skill_task->get_task_id(),
+                          skill_task->get_workflow_id(), skill_task->get_task_type(),
+                          skill_name, TaskEventType::CREATED);
+  }
 
   // Mark skill as started on source task
   source_task->on_skill_started(skill_name);
@@ -2907,6 +2959,30 @@ void MMAgent::clear_session_event_callback() {
       }
     }
   }
+}
+
+void MMAgent::set_dialogue_event_callback(DialogueEventCallback callback) {
+  dialogue_event_callback_ = std::move(callback);
+}
+
+void MMAgent::clear_dialogue_event_callback() {
+  dialogue_event_callback_ = nullptr;
+}
+
+bool MMAgent::has_dialogue_event_callback() const {
+  return static_cast<bool>(dialogue_event_callback_);
+}
+
+void MMAgent::set_task_event_callback(TaskEventCallback callback) {
+  task_event_callback_ = std::move(callback);
+}
+
+void MMAgent::clear_task_event_callback() {
+  task_event_callback_ = nullptr;
+}
+
+bool MMAgent::has_task_event_callback() const {
+  return static_cast<bool>(task_event_callback_);
 }
 
 }  // namespace framework

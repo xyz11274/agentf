@@ -358,6 +358,54 @@ bool MMAgentRuntime::register_agent(AgentPtr agent) {
           }
         });
 
+    // Set up dialogue event callback to emit DIALOGUE_CREATED/DESTROYED events
+    agent->set_dialogue_event_callback(
+        [this](
+            const std::string& agent_id,
+            const std::string& session_id,
+            const std::string& dialogue_id,
+            const std::string& user_input,
+            framework::DialogueEventType event_type) {
+          if(event_type == framework::DialogueEventType::CREATED) {
+            auto agent = get_agent(agent_id);
+            std::string user_id = agent && agent->get_session(session_id)
+                                        ? agent->get_session(session_id)->get_user_id() : "";
+            std::string client_id = agent && agent->get_session(session_id)
+                                        ? agent->get_session(session_id)->get_client_id() : "";
+            DialogueEvent event = EventBuilder::build_dialogue_created_event(
+                agent_id, user_id, client_id, session_id, dialogue_id, user_input);
+            emit_dialogue_event(event);
+          } else if(event_type == framework::DialogueEventType::DESTROYED) {
+            DialogueEvent event = EventBuilder::build_dialogue_destroyed_event(
+                agent_id, session_id, dialogue_id);
+            emit_dialogue_event(event);
+          }
+        });
+
+    // Set up task event callback to emit TASK_CREATED events
+    agent->set_task_event_callback(
+        [this](
+            const std::string& agent_id,
+            const std::string& session_id,
+            const std::string& dialogue_id,
+            const std::string& task_id,
+            const std::string& workflow_id,
+            const std::string& task_type,
+            const std::string& skill_name,
+            framework::TaskEventType event_type) {
+          if(event_type == framework::TaskEventType::CREATED) {
+            auto agent = get_agent(agent_id);
+            std::string user_id = agent && agent->get_session(session_id)
+                                        ? agent->get_session(session_id)->get_user_id() : "";
+            std::string client_id = agent && agent->get_session(session_id)
+                                        ? agent->get_session(session_id)->get_client_id() : "";
+            TaskEvent event = EventBuilder::build_task_created_event(
+                agent_id, user_id, client_id, session_id, dialogue_id,
+                task_id, workflow_id, task_type, skill_name, "");
+            emit_task_event(event);
+          }
+        });
+
     return true;
   }
 
@@ -1161,10 +1209,20 @@ void MMAgentRuntime::on_workflow_complete(const AgentId& agent_id, const Workflo
     }
   }
 
-  // Clean up the execution state
+  // Emit TASK_DESTROYED event before cleaning up execution state
   {
     std::lock_guard<std::mutex> lock(workflow_state_mutex_);
-    workflow_states_.erase(execution_id);
+    auto it = workflow_states_.find(execution_id);
+    if(it != workflow_states_.end()) {
+      const auto& state = it->second;
+      TaskEvent event = EventBuilder::build_task_destroyed_event(
+          agent_id,
+          state.session_id,
+          state.dialogue_id,
+          state.source_task_id);
+      emit_task_event(event);
+      workflow_states_.erase(it);
+    }
   }
 }
 
@@ -1298,6 +1356,54 @@ void MMAgentRuntime::agent_registration_loop() {
               SessionEvent event = EventBuilder::build_session_destroyed_event(
                   agent_id, session_id);
               emit_session_event(event);
+            }
+          });
+
+      // Set up dialogue event callback to emit DIALOGUE_CREATED/DESTROYED events
+      request.agent->set_dialogue_event_callback(
+          [this](
+              const std::string& agent_id,
+              const std::string& session_id,
+              const std::string& dialogue_id,
+              const std::string& user_input,
+              framework::DialogueEventType event_type) {
+            if(event_type == framework::DialogueEventType::CREATED) {
+              auto agent = get_agent(agent_id);
+              std::string user_id = agent && agent->get_session(session_id)
+                                          ? agent->get_session(session_id)->get_user_id() : "";
+              std::string client_id = agent && agent->get_session(session_id)
+                                          ? agent->get_session(session_id)->get_client_id() : "";
+              DialogueEvent event = EventBuilder::build_dialogue_created_event(
+                  agent_id, user_id, client_id, session_id, dialogue_id, user_input);
+              emit_dialogue_event(event);
+            } else if(event_type == framework::DialogueEventType::DESTROYED) {
+              DialogueEvent event = EventBuilder::build_dialogue_destroyed_event(
+                  agent_id, session_id, dialogue_id);
+              emit_dialogue_event(event);
+            }
+          });
+
+      // Set up task event callback to emit TASK_CREATED events
+      request.agent->set_task_event_callback(
+          [this](
+              const std::string& agent_id,
+              const std::string& session_id,
+              const std::string& dialogue_id,
+              const std::string& task_id,
+              const std::string& workflow_id,
+              const std::string& task_type,
+              const std::string& skill_name,
+              framework::TaskEventType event_type) {
+            if(event_type == framework::TaskEventType::CREATED) {
+              auto agent = get_agent(agent_id);
+              std::string user_id = agent && agent->get_session(session_id)
+                                          ? agent->get_session(session_id)->get_user_id() : "";
+              std::string client_id = agent && agent->get_session(session_id)
+                                          ? agent->get_session(session_id)->get_client_id() : "";
+              TaskEvent event = EventBuilder::build_task_created_event(
+                  agent_id, user_id, client_id, session_id, dialogue_id,
+                  task_id, workflow_id, task_type, skill_name, "");
+              emit_task_event(event);
             }
           });
     }

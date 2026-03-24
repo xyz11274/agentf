@@ -35,6 +35,39 @@ using SessionEventCallback = std::function<void(
     const std::string& client_id,
     SessionEventType event_type)>;
 
+/// Dialogue event type for lifecycle callbacks
+enum class DialogueEventType {
+  CREATED,    // Dialogue created (dialogue_id generated)
+  DESTROYED,  // Dialogue cleaned up
+};
+
+/// Dialogue event callback signature
+/// Parameters: agent_id, session_id, dialogue_id, user_input, event_type
+using DialogueEventCallback = std::function<void(
+    const std::string& agent_id,
+    const std::string& session_id,
+    const std::string& dialogue_id,
+    const std::string& user_input,
+    DialogueEventType event_type)>;
+
+/// Task event type for lifecycle callbacks
+enum class TaskEventType {
+  CREATED,    // Task added to session
+  DESTROYED,  // Task completed/removed
+};
+
+/// Task event callback signature
+/// Parameters: agent_id, session_id, dialogue_id, task_id, workflow_id, task_type, skill_name, event_type
+using TaskEventCallback = std::function<void(
+    const std::string& agent_id,
+    const std::string& session_id,
+    const std::string& dialogue_id,
+    const std::string& task_id,
+    const std::string& workflow_id,
+    const std::string& task_type,
+    const std::string& skill_name,
+    TaskEventType event_type)>;
+
 class MMAgentSession {
  public:
   enum class SessionState {

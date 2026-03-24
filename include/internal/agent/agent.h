@@ -175,6 +175,16 @@ class MMAgent {
   void set_session_event_callback(SessionEventCallback callback);
   void clear_session_event_callback();
 
+  // Dialogue event callback for lifecycle notifications (used by runtime)
+  void set_dialogue_event_callback(DialogueEventCallback callback);
+  void clear_dialogue_event_callback();
+  bool has_dialogue_event_callback() const;
+
+  // Task event callback for lifecycle notifications (used by runtime)
+  void set_task_event_callback(TaskEventCallback callback);
+  void clear_task_event_callback();
+  bool has_task_event_callback() const;
+
  private:
   Config config_;
   AgentState state_ = AgentState::CREATED;
@@ -244,6 +254,12 @@ class MMAgent {
 
   // Session event callback for lifecycle notifications
   SessionEventCallback session_event_callback_;
+
+  // Dialogue event callback for lifecycle notifications
+  DialogueEventCallback dialogue_event_callback_;
+
+  // Task event callback for lifecycle notifications
+  TaskEventCallback task_event_callback_;
 };
 
 }  // namespace framework
