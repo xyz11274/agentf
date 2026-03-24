@@ -416,6 +416,7 @@ private:
 | 编译验证 | ✅通过 | 无编译错误 |
 | 单元测试 | ✅通过 | 25 tests passed |
 | 集成测试 | ✅通过 | 7 tests passed |
+| 黑盒测试 | ✅通过 | 4 tests passed (E2E with SystemAgentMock) |
 
 ### 集成测试设计
 
@@ -436,6 +437,26 @@ private:
 - 事件数据完整（agent_id, session_id, user_id 等）
 - 回调在独立线程执行（非主线程）
 - 多 handler 时事件正确分发给所有 handler
+
+### 黑盒测试设计
+
+**测试文件**: `tests/e2e/event_handler/test_event_handler_blackbox.cpp`
+
+使用 SystemAgentMock 进行端到端黑盒测试，验证真实对话流程中的事件推送。
+
+| 测试用例 | 验证内容 |
+|----------|----------|
+| `AgentLifecycleEvents` | Agent 注册时触发 AGENT_REGISTERED |
+| `SessionLifecycleEvents` | Session 创建时触发 SESSION_CREATED |
+| `FullDialogueFlow` | 完整对话流程中触发所有事件（SESSION/DIALOGUE/TASK） |
+| `EventOrderConsistency` | 事件时序正确（AGENT < SESSION < DIALOGUE） |
+
+**测试流程**:
+1. 加载 SystemAgentMock
+2. 注册事件处理器
+3. 发送用户消息触发对话
+4. 等待响应完成
+5. 验证事件记录和时序
 
 ## 12. 后续计划（可选）
 

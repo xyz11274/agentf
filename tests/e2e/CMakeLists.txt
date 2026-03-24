@@ -162,3 +162,25 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/system_agent_mock/test_system_agent_mock_
         coordinator_node
     )
 endif()
+
+# Event Handler Blackbox Test (using SystemAgentMock)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/event_handler/test_event_handler_blackbox.cpp")
+    add_executable(test_e2e_event_handler_blackbox
+        event_handler/test_event_handler_blackbox.cpp
+    )
+    target_link_libraries(test_e2e_event_handler_blackbox
+        agentflow
+        GTest::gtest
+        GTest::gtest_main
+    )
+    add_test(NAME E2EEventHandlerBlackbox COMMAND test_e2e_event_handler_blackbox)
+    add_dependencies(e2e_tests test_e2e_event_handler_blackbox)
+    # Ensure SO libraries are built before the test runs
+    add_dependencies(test_e2e_event_handler_blackbox
+        skill_selection_node
+        travel_node
+        shopping_node
+        foodie_node
+        coordinator_node
+    )
+endif()
