@@ -785,6 +785,12 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_tasks(
     std::lock_guard<std::mutex> lock(mutex_);
     sessions_[actual_session_id] = session;
   }
+
+  // Set session event callback if configured
+  if(session_event_callback_) {
+    session->set_session_event_callback(session_event_callback_);
+  }
+
   return session;
 }
 
@@ -2873,6 +2879,34 @@ void MMAgent::clear_context_callback() {
 bool MMAgent::has_context_callback() const {
   std::lock_guard<std::mutex> lock(context_callback_mutex_);
   return static_cast<bool>(context_callback_config_.callback);
+}
+
+void MMAgent::set_session_event_callback(SessionEventCallback callback) {
+  session_event_callback_ = std::move(callback);
+
+  // Set the callback on all existing sessions
+  if(session_router_) {
+    auto sessions = get_sessions();
+    for(auto& session : sessions) {
+      if(session) {
+        session->set_session_event_callback(session_event_callback_);
+      }
+    }
+  }
+}
+
+void MMAgent::clear_session_event_callback() {
+  session_event_callback_ = nullptr;
+
+  // Clear the callback on all existing sessions
+  if(session_router_) {
+    auto sessions = get_sessions();
+    for(auto& session : sessions) {
+      if(session) {
+        session->clear_session_event_callback();
+      }
+    }
+  }
 }
 
 }  // namespace framework

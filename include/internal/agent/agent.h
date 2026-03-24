@@ -15,6 +15,7 @@
 #include "agent/common.h"
 #include "agent/msgque.h"
 #include "agent/package.h"
+#include "agent/session.h"
 #include "workflow/workflow.h"
 #include "utils/file_storage.h"
 #include <memory>
@@ -170,6 +171,10 @@ class MMAgent {
   void clear_context_callback();
   bool has_context_callback() const;
 
+  // Session event callback for lifecycle notifications (used by runtime)
+  void set_session_event_callback(SessionEventCallback callback);
+  void clear_session_event_callback();
+
  private:
   Config config_;
   AgentState state_ = AgentState::CREATED;
@@ -236,6 +241,9 @@ class MMAgent {
   // Context callback configuration
   ContextCallbackConfig context_callback_config_;
   mutable std::mutex   context_callback_mutex_;
+
+  // Session event callback for lifecycle notifications
+  SessionEventCallback session_event_callback_;
 };
 
 }  // namespace framework

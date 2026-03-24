@@ -119,39 +119,59 @@ bool MMAgentSession::terminate() {
 }
 
 void MMAgentSession::bind_route(const std::string& user_id, const std::string& client_id) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  active_user_id_ = user_id;
-  active_client_id_ = client_id;
-  active_route_key_ = user_id.empty() && client_id.empty() ? std::string() : user_id + ":" + client_id;
-  if(!user_id.empty()) {
-    metadata_["user_id"] = user_id;
+  SessionEventCallback callback_copy;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    active_user_id_ = user_id;
+    active_client_id_ = client_id;
+    active_route_key_ = user_id.empty() && client_id.empty() ? std::string() : user_id + ":" + client_id;
+    if(!user_id.empty()) {
+      metadata_["user_id"] = user_id;
+    }
+    if(!client_id.empty()) {
+      metadata_["client_id"] = client_id;
+    }
+    if(!active_route_key_.empty()) {
+      metadata_["route_key"] = active_route_key_;
+    }
+    state_ = SessionState::ACTIVE;
+    last_activity_time_ = get_current_time_ms();
+    callback_copy = session_event_callback_;
   }
-  if(!client_id.empty()) {
-    metadata_["client_id"] = client_id;
+  // Call callback outside the lock to avoid potential deadlocks
+  if(callback_copy) {
+    callback_copy(config_.session_id, user_id, client_id, SessionEventType::CREATED);
   }
-  if(!active_route_key_.empty()) {
-    metadata_["route_key"] = active_route_key_;
-  }
-  state_ = SessionState::ACTIVE;
-  last_activity_time_ = get_current_time_ms();
 }
 
 void MMAgentSession::reset_for_pool() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  state_ = SessionState::CREATED;
-  active_route_key_.clear();
-  active_user_id_.clear();
-  active_client_id_.clear();
-  metadata_.clear();
-  runtime_tasks_.clear();
-  // Clear running skills count on dispatcher and coordinator
-  if(dispatcher_task_) {
-    dispatcher_task_->clear_running_skills();
+  std::string user_id_copy;
+  std::string client_id_copy;
+  SessionEventCallback callback_copy;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    user_id_copy = active_user_id_;
+    client_id_copy = active_client_id_;
+    state_ = SessionState::CREATED;
+    active_route_key_.clear();
+    active_user_id_.clear();
+    active_client_id_.clear();
+    metadata_.clear();
+    runtime_tasks_.clear();
+    // Clear running skills count on dispatcher and coordinator
+    if(dispatcher_task_) {
+      dispatcher_task_->clear_running_skills();
+    }
+    if(coordinator_task_) {
+      coordinator_task_->clear_running_skills();
+    }
+    last_activity_time_ = get_current_time_ms();
+    callback_copy = session_event_callback_;
   }
-  if(coordinator_task_) {
-    coordinator_task_->clear_running_skills();
+  // Call callback outside the lock to avoid potential deadlocks
+  if(callback_copy && !user_id_copy.empty()) {
+    callback_copy(config_.session_id, user_id_copy, client_id_copy, SessionEventType::DESTROYED);
   }
-  last_activity_time_ = get_current_time_ms();
 }
 
 void MMAgentSession::set_metadata(const std::string& key, const std::string& value) {

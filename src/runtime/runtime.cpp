@@ -329,6 +329,35 @@ bool MMAgentRuntime::register_agent(AgentPtr agent) {
     }
     Logger::instance().info_f("MMAgent registered: %s (id: %s)", agent->get_name().c_str(),
                               agent->get_id().c_str());
+
+    // Emit AGENT_REGISTERED event
+    auto workflows_info = build_workflow_infos(agent);
+    AgentEvent event = EventBuilder::build_agent_registered_event(
+        agent->get_id(),
+        agent->get_name(),
+        agent->get_config().version,
+        agent->get_config().description,
+        workflows_info);
+    emit_agent_event(event);
+
+    // Set up session event callback to emit SESSION_CREATED/SESSION_DESTROYED events
+    agent->set_session_event_callback(
+        [this, agent_id = agent->get_id()](
+            const std::string& session_id,
+            const std::string& user_id,
+            const std::string& client_id,
+            framework::SessionEventType event_type) {
+          if(event_type == framework::SessionEventType::CREATED) {
+            SessionEvent event = EventBuilder::build_session_created_event(
+                agent_id, user_id, client_id, session_id);
+            emit_session_event(event);
+          } else if(event_type == framework::SessionEventType::DESTROYED) {
+            SessionEvent event = EventBuilder::build_session_destroyed_event(
+                agent_id, session_id);
+            emit_session_event(event);
+          }
+        });
+
     return true;
   }
 
@@ -363,6 +392,11 @@ bool MMAgentRuntime::unregister_agent(const AgentId& agent_id) {
         local_worker_->remove_databus(agent_id);
       }
       Logger::instance().info_f("MMAgent unregistered: %s", agent_id.c_str());
+
+      // Emit AGENT_UNREGISTERED event
+      AgentEvent event = EventBuilder::build_agent_unregistered_event(agent_id);
+      emit_agent_event(event);
+
       return true;
     }
     return false;
@@ -1238,6 +1272,39 @@ void MMAgentRuntime::agent_registration_loop() {
         }
       }
       initialize_agent_workflow_pools(request.agent);
+
+      // Emit AGENT_REGISTERED event
+      auto workflows_info = build_workflow_infos(request.agent);
+      AgentEvent event = EventBuilder::build_agent_registered_event(
+          request.agent->get_id(),
+          request.agent->get_name(),
+          request.agent->get_config().version,
+          request.agent->get_config().description,
+          workflows_info);
+      emit_agent_event(event);
+
+      // Set up session event callback to emit SESSION_CREATED/SESSION_DESTROYED events
+      request.agent->set_session_event_callback(
+          [this, agent_id = request.agent->get_id()](
+              const std::string& session_id,
+              const std::string& user_id,
+              const std::string& client_id,
+              framework::SessionEventType event_type) {
+            if(event_type == framework::SessionEventType::CREATED) {
+              SessionEvent event = EventBuilder::build_session_created_event(
+                  agent_id, user_id, client_id, session_id);
+              emit_session_event(event);
+            } else if(event_type == framework::SessionEventType::DESTROYED) {
+              SessionEvent event = EventBuilder::build_session_destroyed_event(
+                  agent_id, session_id);
+              emit_session_event(event);
+            }
+          });
+    }
+    if(ok && request.unregister && request.agent) {
+      // Emit AGENT_UNREGISTERED event
+      AgentEvent event = EventBuilder::build_agent_unregistered_event(request.agent->get_id());
+      emit_agent_event(event);
     }
     if(request.done && request.result && request.done_cv && request.done_mutex) {
       {
@@ -1591,6 +1658,162 @@ MMDataBus& MMAgentRuntime::get_databus(const AgentId& agent_id) {
   }
 
   return *it->second;
+}
+
+// =============================================================================
+// Event Handler Management
+// =============================================================================
+
+void MMAgentRuntime::register_event_handler(std::shared_ptr<IEventHandler> handler) {
+  if(!handler) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(event_handlers_mutex_);
+  event_handlers_.push_back(handler);
+}
+
+void MMAgentRuntime::unregister_event_handler(std::shared_ptr<IEventHandler> handler) {
+  if(!handler) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(event_handlers_mutex_);
+  event_handlers_.erase(
+      std::remove(event_handlers_.begin(), event_handlers_.end(), handler),
+      event_handlers_.end());
+}
+
+void MMAgentRuntime::clear_event_handlers() {
+  std::lock_guard<std::mutex> lock(event_handlers_mutex_);
+  event_handlers_.clear();
+}
+
+size_t MMAgentRuntime::get_event_handler_count() const {
+  std::lock_guard<std::mutex> lock(event_handlers_mutex_);
+  return event_handlers_.size();
+}
+
+void MMAgentRuntime::set_callback_thread_pool_size(size_t size) {
+  callback_thread_pool_size_ = size > 0 ? size : 5;
+}
+
+size_t MMAgentRuntime::get_callback_thread_pool_size() const {
+  return callback_thread_pool_size_;
+}
+
+// =============================================================================
+// Event Emission
+// =============================================================================
+
+void MMAgentRuntime::emit_agent_event(const AgentEvent& event) {
+  if(role_ != RuntimeRole::MASTER) {
+    return;
+  }
+  std::vector<std::shared_ptr<IEventHandler>> handlers_copy;
+  {
+    std::lock_guard<std::mutex> lock(event_handlers_mutex_);
+    handlers_copy = event_handlers_;
+  }
+  for(const auto& handler : handlers_copy) {
+    if(handler) {
+      handler->handle_agent_event(event);
+    }
+  }
+}
+
+void MMAgentRuntime::emit_session_event(const SessionEvent& event) {
+  if(role_ != RuntimeRole::MASTER) {
+    return;
+  }
+  std::vector<std::shared_ptr<IEventHandler>> handlers_copy;
+  {
+    std::lock_guard<std::mutex> lock(event_handlers_mutex_);
+    handlers_copy = event_handlers_;
+  }
+  for(const auto& handler : handlers_copy) {
+    if(handler) {
+      handler->handle_session_event(event);
+    }
+  }
+}
+
+void MMAgentRuntime::emit_dialogue_event(const DialogueEvent& event) {
+  if(role_ != RuntimeRole::MASTER) {
+    return;
+  }
+  std::vector<std::shared_ptr<IEventHandler>> handlers_copy;
+  {
+    std::lock_guard<std::mutex> lock(event_handlers_mutex_);
+    handlers_copy = event_handlers_;
+  }
+  for(const auto& handler : handlers_copy) {
+    if(handler) {
+      handler->handle_dialogue_event(event);
+    }
+  }
+}
+
+void MMAgentRuntime::emit_task_event(const TaskEvent& event) {
+  if(role_ != RuntimeRole::MASTER) {
+    return;
+  }
+  std::vector<std::shared_ptr<IEventHandler>> handlers_copy;
+  {
+    std::lock_guard<std::mutex> lock(event_handlers_mutex_);
+    handlers_copy = event_handlers_;
+  }
+  for(const auto& handler : handlers_copy) {
+    if(handler) {
+      handler->handle_task_event(event);
+    }
+  }
+}
+
+std::vector<WorkflowInfo> MMAgentRuntime::build_workflow_infos(const AgentPtr& agent) {
+  std::vector<WorkflowInfo> result;
+  if(!agent) {
+    return result;
+  }
+  for(const auto& workflow : agent->get_workflows()) {
+    if(!workflow) {
+      continue;
+    }
+    WorkflowInfo wf_info;
+    wf_info.id          = workflow->get_id();
+    wf_info.name        = workflow->get_name();
+    wf_info.version     = workflow->get_config().version;
+    wf_info.description = workflow->get_config().description;
+
+    // Build node infos
+    for(const auto& node : workflow->get_nodes()) {
+      if(!node) {
+        continue;
+      }
+      NodeInfo node_info;
+      node_info.id       = node->get_id();
+      node_info.name     = node->get_name();
+      node_info.type     = node->get_type();
+      node_info.priority = node->get_priority();
+      // Note: input_params and output_params would need to be extracted from node config
+      // This is a placeholder for future expansion
+      wf_info.nodes.push_back(node_info);
+    }
+
+    // Build edge infos
+    for(const auto& edge : workflow->get_edges()) {
+      if(!edge) {
+        continue;
+      }
+      EdgeInfo edge_info;
+      edge_info.id             = edge->get_id();
+      edge_info.source_node_id = edge->get_source();
+      edge_info.target_node_id = edge->get_target();
+      edge_info.condition      = edge->get_condition_expression();
+      wf_info.edges.push_back(edge_info);
+    }
+
+    result.push_back(wf_info);
+  }
+  return result;
 }
 
 void MMAgentRuntime::initialize_agent_workflow_pools(const AgentPtr& agent) {

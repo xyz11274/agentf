@@ -12,6 +12,7 @@
 
 #include "agent/common.h"
 #include "agent/agent.h"
+#include "runtime/event_handler.h"
 #include "runtime/master/deployer.h"
 #include "runtime/master/scheduler.h"
 #include "runtime/shared_runtime_state.h"
@@ -113,6 +114,14 @@ public:
   // Shared resource access
   MMDataBus& get_databus(const AgentId& agent_id);
 
+  // Event handler management (Master only)
+  void register_event_handler(std::shared_ptr<IEventHandler> handler);
+  void unregister_event_handler(std::shared_ptr<IEventHandler> handler);
+  void clear_event_handlers();
+  size_t get_event_handler_count() const;
+  void set_callback_thread_pool_size(size_t size);
+  size_t get_callback_thread_pool_size() const;
+
 private:
   Config                                              config_;
   RuntimeRole                                         role_ = RuntimeRole::MASTER;
@@ -170,6 +179,11 @@ private:
   std::map<std::string, WorkflowPtr>            cloned_workflows_;
   std::mutex                                    cloned_workflows_mutex_;
 
+  // Event handlers (Master only)
+  std::vector<std::shared_ptr<IEventHandler>>   event_handlers_;
+  mutable std::mutex                            event_handlers_mutex_;
+  size_t                                        callback_thread_pool_size_ = 5;
+
   // Worker thread main loop
   void worker_thread_main();
 
@@ -186,6 +200,13 @@ private:
   bool ensure_workflow_pool(const std::string& agent_id, const std::string& task_owner_id,
                             const std::string& workflow_id, const std::string& workflow_file,
                             int workflow_pool_size);
+
+  // Event emission methods
+  void emit_agent_event(const AgentEvent& event);
+  void emit_session_event(const SessionEvent& event);
+  void emit_dialogue_event(const DialogueEvent& event);
+  void emit_task_event(const TaskEvent& event);
+  std::vector<WorkflowInfo> build_workflow_infos(const AgentPtr& agent);
 
   // MMWorkflow Level Master functions
   void schedule_workflow_executable_nodes(const std::string& execution_id);

@@ -2,6 +2,7 @@
 #define AGENTFLOW_INTERNAL_AGENT_SESSION_H
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -19,6 +20,20 @@ class SessionTaskCoordinator;
 /// Generate a UUID format string for session IDs.
 /// Returns a string in format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 std::string generate_session_uuid();
+
+/// Session event type for lifecycle callbacks
+enum class SessionEventType {
+  CREATED,    // Session bound to user/client (bind_route called)
+  DESTROYED,  // Session returned to pool (reset_for_pool called)
+};
+
+/// Session event callback signature
+/// Parameters: session_id, user_id, client_id, event_type
+using SessionEventCallback = std::function<void(
+    const std::string& session_id,
+    const std::string& user_id,
+    const std::string& client_id,
+    SessionEventType event_type)>;
 
 class MMAgentSession {
  public:
@@ -105,6 +120,14 @@ class MMAgentSession {
   // Clear all runtime tasks (for session destroy)
   void clear_all_tasks();
 
+  // Session event callback for lifecycle notifications
+  void set_session_event_callback(SessionEventCallback callback) {
+    session_event_callback_ = std::move(callback);
+  }
+  void clear_session_event_callback() {
+    session_event_callback_ = nullptr;
+  }
+
  private:
   Config      config_;
   SessionState state_ = SessionState::CREATED;
@@ -120,6 +143,7 @@ class MMAgentSession {
   std::shared_ptr<SessionTaskCoordinator> task_coordinator_;
   std::shared_ptr<MMAgentTask> dispatcher_task_;
   std::shared_ptr<MMAgentTask> coordinator_task_;
+  SessionEventCallback          session_event_callback_;
   mutable std::mutex mutex_;
 };
 
