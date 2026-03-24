@@ -1653,6 +1653,9 @@ bool MMAgentRuntime::start() {
     worker_loads_.resize(num_worker_threads_, 0);
   }
 
+  // Start callback thread pool for async event handling
+  start_callback_threads();
+
   // Start worker threads
   for(int i = 0; i < num_worker_threads_; ++i) {
     worker_threads_.emplace_back(&MMAgentRuntime::worker_thread_main, this);
@@ -1721,6 +1724,9 @@ bool MMAgentRuntime::stop() {
   // Phase 3: Shutdown workers
   is_running_ = false;
   g_shutdown  = true;
+
+  // Stop callback thread pool
+  stop_callback_threads();
 
   // Notify all worker threads
   g_worker_cv.notify_all();
@@ -1810,6 +1816,62 @@ size_t MMAgentRuntime::get_callback_thread_pool_size() const {
 // Event Emission
 // =============================================================================
 
+void MMAgentRuntime::start_callback_threads() {
+  if(callback_threads_running_) {
+    return;
+  }
+  callback_threads_running_ = true;
+  size_t num_threads = callback_thread_pool_size_ > 0 ? callback_thread_pool_size_ : 5;
+  for(size_t i = 0; i < num_threads; ++i) {
+    callback_threads_.emplace_back(&MMAgentRuntime::callback_thread_main, this);
+  }
+  Logger::instance().info_f("Callback thread pool started with %zu threads", num_threads);
+}
+
+void MMAgentRuntime::stop_callback_threads() {
+  if(!callback_threads_running_) {
+    return;
+  }
+  callback_threads_running_ = false;
+  callback_queue_cv_.notify_all();
+
+  for(auto& thread : callback_threads_) {
+    if(thread.joinable()) {
+      thread.join();
+    }
+  }
+  callback_threads_.clear();
+  Logger::instance().info("Callback thread pool stopped");
+}
+
+void MMAgentRuntime::callback_thread_main() {
+  while(callback_threads_running_) {
+    std::function<void()> task;
+    {
+      std::unique_lock<std::mutex> lock(callback_queue_mutex_);
+      callback_queue_cv_.wait(lock, [this]() {
+        return !callback_queue_.empty() || !callback_threads_running_;
+      });
+      if(!callback_threads_running_ && callback_queue_.empty()) {
+        break;
+      }
+      if(!callback_queue_.empty()) {
+        task = std::move(callback_queue_.front());
+        callback_queue_.pop();
+      }
+    }
+    if(task) {
+      try {
+        task();
+      } catch(const std::exception& e) {
+        Logger::instance().error_f("Exception in callback thread: %s", e.what());
+      } catch(...) {
+        Logger::instance().error("Unknown exception in callback thread");
+      }
+    }
+  }
+}
+
 void MMAgentRuntime::emit_agent_event(const AgentEvent& event) {
   if(role_ != RuntimeRole::MASTER) {
     return;
@@ -1819,11 +1881,21 @@ void MMAgentRuntime::emit_agent_event(const AgentEvent& event) {
     std::lock_guard<std::mutex> lock(event_handlers_mutex_);
     handlers_copy = event_handlers_;
   }
-  for(const auto& handler : handlers_copy) {
-    if(handler) {
-      handler->handle_agent_event(event);
-    }
+  if(handlers_copy.empty()) {
+    return;
   }
+  // Dispatch to callback thread pool
+  {
+    std::lock_guard<std::mutex> lock(callback_queue_mutex_);
+    callback_queue_.emplace([handlers_copy = std::move(handlers_copy), event]() {
+      for(const auto& handler : handlers_copy) {
+        if(handler) {
+          handler->handle_agent_event(event);
+        }
+      }
+    });
+  }
+  callback_queue_cv_.notify_one();
 }
 
 void MMAgentRuntime::emit_session_event(const SessionEvent& event) {
@@ -1835,11 +1907,21 @@ void MMAgentRuntime::emit_session_event(const SessionEvent& event) {
     std::lock_guard<std::mutex> lock(event_handlers_mutex_);
     handlers_copy = event_handlers_;
   }
-  for(const auto& handler : handlers_copy) {
-    if(handler) {
-      handler->handle_session_event(event);
-    }
+  if(handlers_copy.empty()) {
+    return;
   }
+  // Dispatch to callback thread pool
+  {
+    std::lock_guard<std::mutex> lock(callback_queue_mutex_);
+    callback_queue_.emplace([handlers_copy = std::move(handlers_copy), event]() {
+      for(const auto& handler : handlers_copy) {
+        if(handler) {
+          handler->handle_session_event(event);
+        }
+      }
+    });
+  }
+  callback_queue_cv_.notify_one();
 }
 
 void MMAgentRuntime::emit_dialogue_event(const DialogueEvent& event) {
@@ -1851,11 +1933,21 @@ void MMAgentRuntime::emit_dialogue_event(const DialogueEvent& event) {
     std::lock_guard<std::mutex> lock(event_handlers_mutex_);
     handlers_copy = event_handlers_;
   }
-  for(const auto& handler : handlers_copy) {
-    if(handler) {
-      handler->handle_dialogue_event(event);
-    }
+  if(handlers_copy.empty()) {
+    return;
   }
+  // Dispatch to callback thread pool
+  {
+    std::lock_guard<std::mutex> lock(callback_queue_mutex_);
+    callback_queue_.emplace([handlers_copy = std::move(handlers_copy), event]() {
+      for(const auto& handler : handlers_copy) {
+        if(handler) {
+          handler->handle_dialogue_event(event);
+        }
+      }
+    });
+  }
+  callback_queue_cv_.notify_one();
 }
 
 void MMAgentRuntime::emit_task_event(const TaskEvent& event) {
@@ -1867,11 +1959,21 @@ void MMAgentRuntime::emit_task_event(const TaskEvent& event) {
     std::lock_guard<std::mutex> lock(event_handlers_mutex_);
     handlers_copy = event_handlers_;
   }
-  for(const auto& handler : handlers_copy) {
-    if(handler) {
-      handler->handle_task_event(event);
-    }
+  if(handlers_copy.empty()) {
+    return;
   }
+  // Dispatch to callback thread pool
+  {
+    std::lock_guard<std::mutex> lock(callback_queue_mutex_);
+    callback_queue_.emplace([handlers_copy = std::move(handlers_copy), event]() {
+      for(const auto& handler : handlers_copy) {
+        if(handler) {
+          handler->handle_task_event(event);
+        }
+      }
+    });
+  }
+  callback_queue_cv_.notify_one();
 }
 
 std::vector<WorkflowInfo> MMAgentRuntime::build_workflow_infos(const AgentPtr& agent) {

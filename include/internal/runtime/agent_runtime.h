@@ -184,6 +184,13 @@ private:
   mutable std::mutex                            event_handlers_mutex_;
   size_t                                        callback_thread_pool_size_ = 5;
 
+  // Callback thread pool for async event execution
+  std::vector<std::thread>                       callback_threads_;
+  std::queue<std::function<void()>>              callback_queue_;
+  std::mutex                                     callback_queue_mutex_;
+  std::condition_variable                        callback_queue_cv_;
+  std::atomic<bool>                              callback_threads_running_{false};
+
   // Worker thread main loop
   void worker_thread_main();
 
@@ -207,6 +214,11 @@ private:
   void emit_dialogue_event(const DialogueEvent& event);
   void emit_task_event(const TaskEvent& event);
   std::vector<WorkflowInfo> build_workflow_infos(const AgentPtr& agent);
+
+  // Callback thread pool methods
+  void start_callback_threads();
+  void stop_callback_threads();
+  void callback_thread_main();
 
   // MMWorkflow Level Master functions
   void schedule_workflow_executable_nodes(const std::string& execution_id);
