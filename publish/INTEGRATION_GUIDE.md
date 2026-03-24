@@ -1,8 +1,8 @@
 # AgentFlow 服务集成指南
 
 > 本文档面向服务开发者，说明如何将 AgentFlow 框架集成到一个服务中。
-> - 文档版本：v1.3
-> - 更新日期：2026-03-19
+> - 文档版本：v1.4
+> - 更新日期：2026-03-24
 
 ---
 
@@ -716,6 +716,137 @@ struct ControlFlowMessage : public MessageBase {
          │  process completion   │                       │
          │                       │                       │
 ```
+
+---
+
+### 4.6 事件处理器集成
+
+AgentFlow 提供事件处理器机制，允许服务开发者监听 Agent、Session、Dialogue、Task 的生命周期事件。
+
+#### 4.6.1 事件类型
+
+| 事件类型 | 触发时机 | 用途 |
+|----------|----------|------|
+| `AGENT_REGISTERED` | Agent 注册成功 | 初始化 Agent 相关资源 |
+| `AGENT_UNREGISTERED` | Agent 注销成功 | 清理 Agent 相关资源 |
+| `SESSION_CREATED` | Session 绑定路由 | 记录会话创建日志 |
+| `SESSION_DESTROYED` | Session 返回池 | 清理会话资源 |
+| `DIALOGUE_CREATED` | Dialogue 创建 | 追踪对话开始 |
+| `DIALOGUE_DESTROYED` | Dialogue 清理 | 追踪对话结束 |
+| `TASK_CREATED` | Task 创建 | 监控任务启动 |
+| `TASK_DESTROYED` | Task 完成 | 监控任务结束 |
+
+#### 4.6.2 实现 IEventHandler 接口
+
+```cpp
+#include "runtime/event_handler.h"
+
+class MyEventHandler : public agentflow::runtime::IEventHandler {
+public:
+  void handle_agent_event(const AgentEvent& event) override {
+    if (event.event_type == EventType::AGENT_REGISTERED) {
+      // Agent 注册时的处理逻辑
+      std::cout << "Agent registered: " << event.name
+                << " (id=" << event.agent_id << ")" << std::endl;
+
+      // event.workflows 包含完整的 workflow 拓扑信息
+      for (const auto& wf : event.workflows) {
+        std::cout << "  Workflow: " << wf.name << std::endl;
+      }
+    }
+  }
+
+  void handle_session_event(const SessionEvent& event) override {
+    if (event.event_type == EventType::SESSION_CREATED) {
+      std::cout << "Session created: " << event.session_id
+                << " user=" << event.user_id << std::endl;
+    }
+  }
+
+  void handle_dialogue_event(const DialogueEvent& event) override {
+    // 追踪对话生命周期
+  }
+
+  void handle_task_event(const TaskEvent& event) override {
+    // 追踪任务执行
+    std::cout << "Task: " << event.task_id
+              << " type=" << event.task_type
+              << " skill=" << event.skill_name << std::endl;
+  }
+};
+```
+
+#### 4.6.3 注册事件处理器
+
+```cpp
+// 1. 创建事件处理器
+auto handler = std::make_shared<MyEventHandler>();
+
+// 2. 配置回调线程池大小（可选，默认 5 个线程）
+runtime->set_callback_thread_pool_size(10);
+
+// 3. 注册处理器（必须在 runtime->start() 之前注册）
+runtime->register_event_handler(handler);
+
+// 4. 启动 runtime
+runtime->start();
+
+// 5. 注销处理器（可选）
+runtime->unregister_event_handler(handler);
+
+// 6. 清除所有处理器
+runtime->clear_event_handlers();
+```
+
+#### 4.6.4 完整集成示例
+
+```cpp
+class MonitoringService {
+public:
+  bool initialize(const std::string& package_path) {
+    // 创建 runtime
+    runtime_ = std::make_unique<runtime::MMAgentRuntime>();
+
+    // 注册事件处理器
+    event_handler_ = std::make_shared<MonitoringEventHandler>();
+    runtime_->register_event_handler(event_handler_);
+    runtime_->set_callback_thread_pool_size(4);
+
+    // 启动 runtime
+    if (!runtime_->start()) return false;
+
+    // 创建并注册 agent
+    agent_ = framework::MMAgent::create_from_package(package_path);
+    if (!agent_ || !agent_->initialize()) return false;
+
+    runtime_->register_agent(agent_);
+    agent_->start();
+
+    return true;
+  }
+
+  void shutdown() {
+    if (agent_) agent_->stop();
+    if (runtime_) {
+      runtime_->clear_event_handlers();  // 清理事件处理器
+      runtime_->stop();
+    }
+  }
+
+private:
+  std::unique_ptr<runtime::MMAgentRuntime> runtime_;
+  std::shared_ptr<framework::MMAgent> agent_;
+  std::shared_ptr<MonitoringEventHandler> event_handler_;
+};
+```
+
+#### 4.6.5 注意事项
+
+1. **异步执行**：事件回调在独立线程池中异步执行，不会阻塞主流程
+2. **线程安全**：回调中访问共享资源需使用互斥锁保护
+3. **避免阻塞**：回调应避免长时间阻塞操作，以免影响事件分发
+4. **注册时机**：建议在 `runtime->start()` 之前注册事件处理器
+5. **生命周期**：事件处理器生命周期应长于 runtime
 
 ---
 

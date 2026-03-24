@@ -133,7 +133,7 @@ MMNode 规范与模板：
 
 ### 2.4 Worker 执行
 
-头文件：`include/internal/runtime/worker.h`  
+头文件：`include/internal/runtime/worker.h`
 实现：`src/runtime/worker/worker.cpp`
 
 职责：
@@ -143,6 +143,114 @@ MMNode 规范与模板：
 - 监听 `agentflow.llm.request` 事件，并通过 runtime 统一的流式 LLM 客户端把 chunk / done / error 重新发布回 DataBus。
 - 上报执行状态。
 - 配合 runtime 推进 workflow 状态机。
+
+### 2.5 事件处理器
+
+头文件：`include/internal/runtime/event_handler.h`
+命名空间：`agentflow::runtime`
+
+**事件类型**：
+
+```cpp
+enum class EventType {
+  // Agent 生命周期事件 (0-9)
+  AGENT_REGISTERED = 0,
+  AGENT_UNREGISTERED = 1,
+
+  // Session 生命周期事件 (10-19)
+  SESSION_CREATED = 10,
+  SESSION_DESTROYED = 11,
+
+  // Dialogue 生命周期事件 (20-29)
+  DIALOGUE_CREATED = 20,
+  DIALOGUE_DESTROYED = 21,
+
+  // Task 生命周期事件 (30-39)
+  TASK_CREATED = 30,
+  TASK_DESTROYED = 31,
+};
+```
+
+**事件结构体**：
+
+| 结构体 | 说明 | 关键字段 |
+|--------|------|----------|
+| `AgentEvent` | Agent 注册/注销事件 | agent_id, name, version, workflows |
+| `SessionEvent` | Session 创建/销毁事件 | agent_id, session_id, user_id, client_id |
+| `DialogueEvent` | Dialogue 创建/销毁事件 | agent_id, session_id, dialogue_id, user_input |
+| `TaskEvent` | Task 创建/销毁事件 | agent_id, session_id, task_id, workflow_id, task_type, skill_name |
+
+**IEventHandler 接口**：
+
+```cpp
+class IEventHandler {
+public:
+  virtual ~IEventHandler() = default;
+  virtual void handle_agent_event(const AgentEvent& event) = 0;
+  virtual void handle_session_event(const SessionEvent& event) = 0;
+  virtual void handle_dialogue_event(const DialogueEvent& event) = 0;
+  virtual void handle_task_event(const TaskEvent& event) = 0;
+};
+```
+
+**Runtime 注册接口**：
+
+```cpp
+// MMAgentRuntime 方法
+void register_event_handler(std::shared_ptr<IEventHandler> handler);
+void unregister_event_handler(std::shared_ptr<IEventHandler> handler);
+void clear_event_handlers();
+size_t get_event_handler_count() const;
+void set_callback_thread_pool_size(size_t size);
+```
+
+**使用示例**：
+
+```cpp
+// 1. 实现 IEventHandler 接口
+class MyEventHandler : public runtime::IEventHandler {
+public:
+  void handle_agent_event(const runtime::AgentEvent& event) override {
+    if (event.event_type == runtime::EventType::AGENT_REGISTERED) {
+      std::cout << "Agent registered: " << event.name << std::endl;
+    }
+  }
+  void handle_session_event(const runtime::SessionEvent& event) override {
+    // 处理 session 事件
+  }
+  void handle_dialogue_event(const runtime::DialogueEvent& event) override {
+    // 处理 dialogue 事件
+  }
+  void handle_task_event(const runtime::TaskEvent& event) override {
+    // 处理 task 事件
+  }
+};
+
+// 2. 注册事件处理器
+auto handler = std::make_shared<MyEventHandler>();
+runtime->register_event_handler(handler);
+
+// 3. 配置线程池大小（默认 5 个线程）
+runtime->set_callback_thread_pool_size(10);
+```
+
+**事件触发时机**：
+
+| 事件 | 触发时机 |
+|------|----------|
+| AGENT_REGISTERED | `runtime->register_agent()` 成功后 |
+| AGENT_UNREGISTERED | `runtime->unregister_agent()` 成功后 |
+| SESSION_CREATED | `session->bind_route()` 时 |
+| SESSION_DESTROYED | `session->reset_for_pool()` 时 |
+| DIALOGUE_CREATED | dialogue_id 生成时 |
+| DIALOGUE_DESTROYED | `cleanup_dialogue_data()` 时 |
+| TASK_CREATED | `session->add_task()` 时 |
+| TASK_DESTROYED | workflow 完成时 |
+
+**注意事项**：
+- 事件回调在独立线程池中异步执行
+- 回调中应避免长时间阻塞操作
+- 回调中访问共享资源需注意线程安全
 
 ---
 

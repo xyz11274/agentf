@@ -374,40 +374,41 @@ private:
 
 | 文档 | 变更说明 |
 |------|---------|
-| `docs/api-reference.md` | 添加 IEventHandler 接口文档 |
-| `publish/INTEGRATION_GUIDE.md` | 更新上下文回调章节 |
-| `docs/ARCHITECTURE.md` | 添加事件机制架构说明 |
+| [docs/api-reference.md](../../api-reference.md) | 添加 IEventHandler 接口文档 |
+| [publish/INTEGRATION_GUIDE.md](../../../publish/INTEGRATION_GUIDE.md) | 更新上下文回调章节 |
+| [docs/ARCHITECTURE.md](../../ARCHITECTURE.md) | 添加事件机制架构说明 |
 
 ### 关联方案
 
 | 关联方案 | 关系说明 |
 |---------|---------|
-| `011-refactor-sessiontaskcoordinator-context-分层重构-260301-implemented.md` | Session/Task 生命周期参考 |
-| `016-feature-全链路跟踪系统tracesystem-260307-implemented.md` | 事件追踪模式参考 |
+| [Session/Task 生命周期参考](011-refactor-sessiontaskcoordinator-context-分层重构-260301-implemented.md) | Session/Task 生命周期定义 |
+| [事件追踪模式参考](016-feature-全链路跟踪系统tracesystem-260307-implemented.md) | FlowTrace 事件追踪模式 |
 
 ## 11. 进展跟踪
 
 - [x] 代码实现
 - [x] 单元测试
 - [x] 集成测试
-- [ ] 文档更新
+- [x] 黑盒测试
+- [x] 文档更新
 - [ ] 验证通过
 
 ### 详细进度
 
 | 功能点 | 功能 | 用例 | 文档 | 状态 |
 |--------|------|------|------|------|
-| EventType 枚举 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
-| NodeInfo/EdgeInfo/WorkflowInfo 结构体 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
-| IEventHandler 接口 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
-| Runtime 注册接口 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
-| EventBuilder 辅助类 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
-| AGENT_REGISTERED/UNREGISTERED 事件推送 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
-| SESSION_CREATED/DESTROYED 事件推送 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
-| Session 事件回调机制 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
-| DIALOGUE_CREATED/DESTROYED 事件推送 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
-| TASK_CREATED/DESTROYED 事件推送 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
-| 线程池异步执行 | ✅已就绪 | ✅已就绪 | ⏳待实施 | ✅已完成 |
+| EventType 枚举 | ✅已就绪 | ✅已就绪 | ✅已就绪 | ✅已完成 |
+| NodeInfo/EdgeInfo/WorkflowInfo 结构体 | ✅已就绪 | ✅已就绪 | ✅已就绪 | ✅已完成 |
+| IEventHandler 接口 | ✅已就绪 | ✅已就绪 | ✅已就绪 | ✅已完成 |
+| Runtime 注册接口 | ✅已就绪 | ✅已就绪 | ✅已就绪 | ✅已完成 |
+| EventBuilder 辅助类 | ✅已就绪 | ✅已就绪 | ✅已就绪 | ✅已完成 |
+| AGENT_REGISTERED/UNREGISTERED 事件推送 | ✅已就绪 | ✅已就绪 | ✅已就绪 | ✅已完成 |
+| SESSION_CREATED/DESTROYED 事件推送 | ✅已就绪 | ✅已就绪 | ✅已就绪 | ✅已完成 |
+| Session 事件回调机制 | ✅已就绪 | ✅已就绪 | ✅已就绪 | ✅已完成 |
+| DIALOGUE_CREATED/DESTROYED 事件推送 | ✅已就绪 | ✅已就绪 | ✅已就绪 | ✅已完成 |
+| TASK_CREATED/DESTROYED 事件推送 | ✅已就绪 | ✅已就绪 | ✅已就绪 | ✅已完成 |
+| 线程池异步执行 | ✅已就绪 | ✅已就绪 | ✅已就绪 | ✅已完成 |
 
 ### 验证结果
 
