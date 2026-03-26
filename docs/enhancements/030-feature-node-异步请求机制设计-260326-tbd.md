@@ -148,6 +148,272 @@ public:
 };
 ```
 
+#### 4. 异步回调消息结构
+
+**消息格式**：回调消息使用`MMAgentMsgQue::Message`结构，通过metadata字段携带路由信息。
+
+```cpp
+// 回调消息结构
+struct AsyncCallbackMessage {
+  // Message标准字段
+  std::string message_id;    // "async-callback-{uuid}"
+  std::string content;       // 回调内容（chunk数据）
+  std::string receiver;      // 目标node_id
+
+  // Metadata路由字段
+  std::string async_call_key;     // 调用标识（node设置的key）
+  std::string execution_id;       // workflow执行ID
+  std::string session_id;         // 会话ID
+  std::string dialogue_id;        // 对话ID
+  std::string task_id;            // 任务ID
+  std::string node_id;            // 目标node ID
+  std::string message_type;       // "async_callback"
+};
+```
+
+**消息入队**：
+```cpp
+// SendToSelf实现
+bool SendToSelf(const std::string& key, const std::string& msg) {
+  MMAgentMsgQue::Message message;
+  message.message_id = "async-callback-" + generate_uuid();
+  message.content = msg;
+  message.receiver = node_id_;
+
+  // 路由元数据
+  message.metadata["async_call_key"] = key;
+  message.metadata["execution_id"] = execution_id_;
+  message.metadata["session_id"] = session_id_;
+  message.metadata["dialogue_id"] = dialogue_id_;
+  message.metadata["task_id"] = task_id_;
+  message.metadata["node_id"] = node_id_;
+  message.metadata["message_type"] = "async_callback";
+
+  // 直接入队到目标task
+  return runtime_->enqueue_async_callback(message);
+}
+```
+
+#### 5. 回调消息路由机制（短路路由）
+
+**设计目标**：回调消息直接触发目标node执行，不走workflow的node调度链条。
+
+```
+正常workflow调度：
+  workflow.schedule() -> select_ready_nodes() -> enqueue_node_task() -> process_node()
+
+回调消息短路路由：
+  task_queue收到async_callback消息 -> 直接触发目标node重新执行 -> process_node()
+```
+
+**路由流程**：
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         短路路由流程                                      │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  async_thread                                                            │
+│      │                                                                   │
+│      │ SendToSelf(key, chunk)                                            │
+│      ▼                                                                   │
+│  ┌───────────────────┐                                                   │
+│  │ 构造回调消息       │                                                   │
+│  │ - message_type    │                                                   │
+│  │ - async_call_key  │                                                   │
+│  │ - execution_id    │                                                   │
+│  │ - node_id         │                                                   │
+│  └─────────┬─────────┘                                                   │
+│            │                                                             │
+│            ▼                                                             │
+│  ┌───────────────────┐                                                   │
+│  │ Task消息队列       │ ◄── 跳过workflow调度，直接入队                     │
+│  │ data_exchange_q   │                                                   │
+│  └─────────┬─────────┘                                                   │
+│            │                                                             │
+│            │ agent_task_poller_loop() 检测到消息                          │
+│            ▼                                                             │
+│  ┌───────────────────────────────────────────────────────────────┐       │
+│  │ runtime.enqueue_async_node_execution()                         │       │
+│  │ 1. 从metadata提取execution_id, node_id                         │       │
+│  │ 2. 查找WorkflowExecutionState                                  │       │
+│  │ 3. 验证node处于ASYNC_PENDING状态                               │       │
+│  │ 4. 直接将node加入执行队列（不经过workflow调度）                  │       │
+│  └─────────┬─────────────────────────────────────────────────────┘       │
+│            │                                                             │
+│            ▼                                                             │
+│  ┌───────────────────┐                                                   │
+│  │ worker_thread     │                                                   │
+│  │ process_node()    │                                                   │
+│  └───────────────────┘                                                   │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**关键实现点**：
+
+1. **消息识别**：通过`message.metadata["message_type"] == "async_callback"`识别
+2. **目标定位**：通过`execution_id`和`node_id`定位目标node
+3. **状态验证**：确认node处于`ASYNC_PENDING`状态才触发重新执行
+4. **直接入队**：跳过`workflow.schedule()`，直接构造`QueuedNodeTask`入队
+
+```cpp
+// runtime.cpp - agent_task_poller_loop()
+void MMAgentRuntime::agent_task_poller_loop() {
+  while (is_running_) {
+    // ... 检查task消息队列 ...
+    auto msg = task->dequeue_data_exchange_message();
+
+    // 检查是否为异步回调消息
+    if (msg.metadata.count("message_type") &&
+        msg.metadata["message_type"] == "async_callback") {
+      handle_async_callback(msg);
+      continue;  // 不走正常消息处理流程
+    }
+
+    // ... 正常消息处理 ...
+  }
+}
+
+void MMAgentRuntime::handle_async_callback(const Message& msg) {
+  auto execution_id = msg.metadata.at("execution_id");
+  auto node_id = msg.metadata.at("node_id");
+
+  std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+  auto it = workflow_states_.find(execution_id);
+  if (it == workflow_states_.end()) return;
+
+  auto& state = it->second;
+  auto node_it = cloned_workflows_[execution_id]->get_node(node_id);
+  if (!node_it) return;
+
+  // 验证node状态
+  if (node_it->get_state() != NodeState::ASYNC_PENDING) return;
+
+  // 存储回调数据到databus（供node读取）
+  auto& databus = get_databus(state.agent_id);
+  std::string callback_key = "/async_callback/" + node_id + "/" + msg.metadata["async_call_key"];
+  databus.put(callback_key + "/msg", msg.content);
+  databus.put(callback_key + "/key", msg.metadata["async_call_key"]);
+
+  // 直接触发node重新执行
+  QueuedNodeTask task;
+  task.agent = get_agent(state.agent_id);
+  task.workflow = cloned_workflows_[execution_id];
+  task.node = node_it;
+  task.execution_id = execution_id;
+
+  {
+    std::lock_guard<std::mutex> queue_lock(task_queue_mutex_);
+    node_task_queue_.push(task);
+  }
+}
+```
+
+#### 6. Node回调入口设计
+
+**设计目标**：node能识别这是回调调用，并获取回调的key和消息内容。
+
+**方案**：通过`inputs`参数注入回调信息。
+
+```cpp
+// process_node() 注入回调信息
+void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow,
+                                   NodePtr node, const std::string& execution_id) {
+  DataMap inputs;
+  DataMap outputs;
+
+  // ... 正常inputs填充 ...
+
+  // 检查是否为异步回调触发
+  if (node->get_state() == NodeState::ASYNC_PENDING) {
+    auto& databus = get_databus(agent->get_id());
+    std::string callback_prefix = "/async_callback/" + node->get_id();
+
+    SoDataVariant key, msg;
+    if (databus.get(callback_prefix + "/key", key) &&
+        databus.get(callback_prefix + "/msg", msg)) {
+      // 注入回调信息到inputs
+      inputs["__async_callback__"] = true;
+      inputs["__async_key__"] = std::get<std::string>(key);
+      inputs["__async_msg__"] = std::get<std::string>(msg);
+
+      // 清理回调数据
+      databus.remove(callback_prefix + "/key");
+      databus.remove(callback_prefix + "/msg");
+    }
+  }
+
+  // 执行node
+  node->set_state(NodeState::EXECUTING);
+  bool success = node->execute(inputs, outputs, databus_client.get());
+
+  // 处理异步pending状态
+  if (outputs.count("__async_pending__") &&
+      std::holds_alternative<bool>(outputs["__async_pending__"]) &&
+      std::get<bool>(outputs["__async_pending__"])) {
+    node->set_state(NodeState::ASYNC_PENDING);
+    // 保存call_key用于后续回调匹配
+    node->set_async_call_key(std::get<std::string>(outputs["call_key"]));
+    return;  // 不标记为完成
+  }
+
+  // ... 正常完成处理 ...
+}
+```
+
+**Node处理回调示例**：
+
+```cpp
+extern "C" void skill_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
+                               INodeDataBusClient* client) {
+  // 检查是否为回调调用
+  if (so_node::get_bool(inputs, "__async_callback__", false)) {
+    // 这是回调
+    std::string key = so_node::get_string(inputs, "__async_key__");
+    std::string msg = so_node::get_string(inputs, "__async_msg__");
+
+    if (key == "llm-query") {
+      if (msg == "[DONE]") {
+        // 流式响应完成
+        outputs["response"] = accumulated_response;
+        // 不再设置__async_pending__，workflow将继续
+      } else {
+        // 处理chunk，继续等待更多回调
+        accumulated_response += msg;
+        outputs["__async_pending__"] = SoDataVariant(true);
+        outputs["call_key"] = SoDataVariant(std::string("llm-query"));
+      }
+    }
+    return;
+  }
+
+  // 首次调用：发起异步请求
+  client->async()->AsyncCall("llm-query", [&]() {
+    StreamingLLMClient llm;
+    llm.stream_prompt(prompt, config,
+      on_chunk = [&](const std::string& chunk) {
+        client->async()->SendToSelf("llm-query", chunk);
+      },
+      on_finish = [&](const std::string&) {
+        client->async()->SendToSelf("llm-query", "[DONE]");
+      }
+    );
+  });
+
+  outputs["__async_pending__"] = SoDataVariant(true);
+  outputs["call_key"] = SoDataVariant(std::string("llm-query"));
+}
+```
+
+**inputs字段说明**：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `__async_callback__` | bool | true表示这是回调调用 |
+| `__async_key__` | string | 回调的key（node在AsyncCall时设置） |
+| `__async_msg__` | string | 回调消息内容（chunk或[DONE]） |
+
 ### 流程设计
 
 #### 异步调用流程时序图
@@ -334,11 +600,12 @@ private:
 | 文件 | 修改类型 | 说明 |
 |------|---------|------|
 | `include/external/agentflow/so_node.h` | 修改 | 新增IAsyncCallSDK接口 |
-| `include/internal/runtime/agent_runtime.h` | 修改 | WorkflowExecutionState新增字段 |
-| `include/internal/workflow/node.h` | 修改 | 新增ASYNC_PENDING状态 |
+| `include/internal/runtime/agent_runtime.h` | 修改 | WorkflowExecutionState新增async_pending_count |
+| `include/internal/agent/common.h` | 修改 | 新增ASYNC_PENDING状态 |
+| `include/internal/workflow/node.h` | 修改 | 新增async_call_key_成员和setter/getter |
 | `src/runtime/async_call.cpp` | 新增 | NodeAsyncCallSDK实现 |
 | `src/runtime/databus/node_databus_client.cpp` | 修改 | 实现async()方法 |
-| `src/runtime/runtime.cpp` | 修改 | 注入SDK，处理异步状态 |
+| `src/runtime/runtime.cpp` | 修改 | 注入SDK、处理异步状态、handle_async_callback()、短路路由 |
 | `src/runtime/worker/worker.cpp` | 修改 | 注入AF_ASYNC_*环境变量 |
 
 ### 功能点实现优先级
@@ -421,3 +688,4 @@ TEST(AsyncCallTest, SendToSelfRouting) {
 | 版本 | 刷新时间 | 刷新人 | 刷新内容 |
 |------|---------|--------|---------|
 | v1.0 | 2026-03-26 | Claude | 初始版本 |
+| v1.1 | 2026-03-26 | Claude | 补充短路路由设计和回调入口设计 |
