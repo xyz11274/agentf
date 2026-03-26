@@ -89,6 +89,7 @@
 | 027 | 2026-03-22 | [UDSServer 线程池改造](027-feature-udsserver-线程池改造-260322-tbd.md) | feature | tbd |
 | 028 | 2026-03-23 | [Node 模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md) | feature | tbd |
 | 029 | 2026-03-24 | [上下文回调机制优化](029-feature-上下文回调机制优化-260324-implemented.md) | feature | implemented |
+| 030 | 2026-03-26 | [Node 异步请求外部资源机制设计](030-feature-node-异步请求机制设计-260326-tbd.md) | feature | tbd |
 
 ## 按状态分类
 
@@ -99,6 +100,7 @@
 - [2026-03-20] [Master-Worker 架构边界问题](026-feature-master-worker-架构边界问题-260320-tbd.md)
 - [2026-03-22] [UDSServer 线程池改造](027-feature-udsserver-线程池改造-260322-tbd.md)
 - [2026-03-23] [Node 模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md)
+- [2026-03-26] [Node 异步请求外部资源机制设计](030-feature-node-异步请求机制设计-260326-tbd.md)
 
 ### 进行中 (wip)
 
