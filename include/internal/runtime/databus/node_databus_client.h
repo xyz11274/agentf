@@ -63,6 +63,11 @@ public:
 
   INodeDataBus* raw() override;
 
+  IAsyncCallSDK* async() override;
+
+  /// Set the AsyncCall SDK instance (called by runtime during node injection)
+  void set_async_sdk(std::shared_ptr<IAsyncCallSDK> async_sdk);
+
 private:
   /// Build namespace prefix for the given namespace.
   /// Returns /session/{session-id}/{namespace}/
@@ -83,6 +88,9 @@ private:
   std::unique_ptr<NamespaceClientImpl> llm_client_;
   std::unique_ptr<NamespaceClientImpl> tool_client_;
   std::unique_ptr<NamespaceClientImpl> user_client_;
+
+  // AsyncCall SDK (injected by runtime)
+  std::shared_ptr<IAsyncCallSDK> async_sdk_;
 };
 
 }  // namespace runtime

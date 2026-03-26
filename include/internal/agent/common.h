@@ -31,12 +31,13 @@ enum class Status {
 };
 
 enum class NodeState {
-  WAITING   = 0,
-  READY     = 1,
-  EXECUTING = 2,
-  SUCCESS   = 3,
-  FAILED    = 4,
-  RETRYING  = 5,
+  WAITING       = 0,
+  READY         = 1,
+  EXECUTING     = 2,
+  SUCCESS       = 3,
+  FAILED        = 4,
+  RETRYING      = 5,
+  ASYNC_PENDING = 6,  // Node is waiting for async callback
 };
 
 enum class AgentState {

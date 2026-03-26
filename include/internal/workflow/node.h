@@ -227,6 +227,10 @@ public:
   void set_plugin_uds_path(const std::string& path) { plugin_uds_path_ = path; }
   const std::string& get_plugin_uds_path() const { return plugin_uds_path_; }
 
+  // Async call key for tracking async callbacks
+  void set_async_call_key(const std::string& key) { async_call_key_ = key; }
+  const std::string& get_async_call_key() const { return async_call_key_; }
+
   // MMNode runtime queue + event loop
   bool start_runtime();
   bool start_runtime(const RuntimeConfig& config);
@@ -283,6 +287,9 @@ private:
 
   // Plugin UDS path for external plugin communication
   std::string plugin_uds_path_;
+
+  // Async call key for tracking async callbacks
+  std::string async_call_key_;
 
   // Helper methods for execution
   bool execute_cpp_function();

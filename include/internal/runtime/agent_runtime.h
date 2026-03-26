@@ -114,6 +114,15 @@ public:
   // Shared resource access
   MMDataBus& get_databus(const AgentId& agent_id);
 
+  // AsyncCall SDK support
+  /// Send an async message to a target task via standard routing.
+  /// Used by SendMsg() for cross-task communication.
+  bool send_async_message(const framework::MMAgentMsgQue::Message& message);
+
+  /// Enqueue an async callback message directly to the node execution queue.
+  /// Used by SendToSelf() for short-circuit routing.
+  bool enqueue_async_callback(const framework::MMAgentMsgQue::Message& message);
+
   // Event handler management (Master only)
   void register_event_handler(std::shared_ptr<IEventHandler> handler);
   void unregister_event_handler(std::shared_ptr<IEventHandler> handler);
@@ -170,6 +179,19 @@ private:
      int                    total_nodes     = 0;
      int                    completed_count = 0;
      bool                   in_progress     = false;
+
+     // Async operation tracking - shared_ptr to atomic for thread-safe access from async threads
+     std::shared_ptr<std::atomic<int>> async_pending_count = std::make_shared<std::atomic<int>>(0);
+     bool                   has_async_pending() const { return async_pending_count && async_pending_count->load() > 0; }
+     void                   increment_async_pending() { if(async_pending_count) async_pending_count->fetch_add(1); }
+     void                   decrement_async_pending() {
+       if(async_pending_count) {
+         int expected = async_pending_count->load();
+         while (expected > 0 && !async_pending_count->compare_exchange_weak(expected, expected - 1)) {
+           // CAS loop for thread-safe decrement
+         }
+       }
+     }
    };
   std::map<std::string, WorkflowExecutionState> workflow_states_;
   std::mutex                                    workflow_state_mutex_;

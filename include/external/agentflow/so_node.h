@@ -204,6 +204,9 @@ public:
   virtual void unsubscribe(const SubscriptionHandle& handle) = 0;
 };
 
+/// Forward declaration for IAsyncCallSDK
+class IAsyncCallSDK;
+
 /// Client interface for session-isolated DataBus access.
 /// Provides namespace-scoped access with automatic session prefix.
 ///
@@ -257,6 +260,21 @@ public:
   /// Use with caution - keys are not prefixed.
   /// Primarily for reading global configuration.
   virtual INodeDataBus* raw() = 0;
+
+  /// Access AsyncCall SDK for non-blocking external resource access.
+  /// Returns nullptr if async operations are not available.
+  ///
+  /// Usage:
+  /// \code
+  /// IAsyncCallSDK* async = client->async();
+  /// if (async) {
+  ///     async->AsyncCall("my-op", [&]() {
+  ///         // Async work...
+  ///         async->SendToSelf("my-op", result);
+  ///     });
+  /// }
+  /// \endcode
+  virtual IAsyncCallSDK* async() = 0;
 };
 
 /// V3 signature: Node with session-isolated DataBus client.
@@ -266,6 +284,98 @@ public:
 /// \param outputs Output data to return to the framework
 /// \param client Session-isolated DataBus client (may be null)
 using SoNodeFunctionV3 = void (*)(const SoDataMap& inputs, SoDataMap& outputs, INodeDataBusClient* client);
+
+// ============================================================================
+// AsyncCall SDK for Non-blocking External Resource Access
+// ============================================================================
+
+/// Forward declaration for IAsyncCallSDK
+class IAsyncCallSDK;
+
+/// AsyncCall SDK interface for non-blocking external resource access.
+///
+/// Provides asynchronous call mechanism that allows nodes to:
+/// 1. Spawn async operations without blocking worker threads
+/// 2. Receive streaming chunks via SendToSelf callbacks
+/// 3. Keep workflow alive during async operations
+///
+/// Usage:
+/// \code
+/// extern "C" void my_node_v3(const SoDataMap& inputs, SoDataMap& outputs, INodeDataBusClient* client) {
+///     // Get async SDK
+///     IAsyncCallSDK* async = client->async();
+///     if (!async) {
+///         outputs["error"] = SoDataVariant(std::string("Async SDK not available"));
+///         return;
+///     }
+///
+///     // Spawn async LLM call
+///     async->AsyncCall("llm-query", [&]() {
+///         // This runs in a separate thread
+///         StreamingLLMClient llm;
+///         llm.stream_prompt(prompt, config,
+///             /*on_chunk=*/[&](const std::string& chunk) {
+///                 async->SendToSelf("llm-query", chunk);
+///             },
+///             /*on_finish=*/[&](const std::string&) {
+///                 async->SendToSelf("llm-query", "[DONE]");
+///             }
+///         );
+///     });
+///
+///     // Mark as async pending - node will be called again with callbacks
+///     outputs["__async_pending__"] = SoDataVariant(true);
+///     outputs["call_key"] = SoDataVariant(std::string("llm-query"));
+/// }
+/// \endcode
+class IAsyncCallSDK {
+public:
+  virtual ~IAsyncCallSDK() = default;
+
+  /// Spawn an asynchronous operation.
+  /// The async_func runs in a separate thread and can use SendToSelf to
+  /// send streaming chunks back to this node.
+  ///
+  /// \param key A unique identifier for this async call (e.g., "llm-query")
+  /// \param async_func The function to run asynchronously
+  /// \return true if the async operation was started successfully
+  virtual bool AsyncCall(const std::string& key, std::function<void()> async_func) = 0;
+
+  /// Send a message to a specific node in another task.
+  /// Uses the standard message routing mechanism.
+  ///
+  /// \param session_id Target session ID
+  /// \param dialogue_id Target dialogue ID
+  /// \param target_task_id Target task ID
+  /// \param target_node_id Target node ID
+  /// \param key The async call key for context
+  /// \param msg The message content
+  /// \return true if the message was sent successfully
+  virtual bool SendMsg(const std::string& session_id, const std::string& dialogue_id,
+                       const std::string& target_task_id, const std::string& target_node_id,
+                       const std::string& key, const std::string& msg) = 0;
+
+  /// Send a message to this node itself.
+  /// Uses short-circuit routing - message goes directly to task queue,
+  /// bypassing the agent routing layer for minimal latency.
+  ///
+  /// \param key The async call key for context matching
+  /// \param msg The message content (e.g., streaming chunk)
+  /// \return true if the message was sent successfully
+  virtual bool SendToSelf(const std::string& key, const std::string& msg) = 0;
+
+  /// Get the session ID for this async context.
+  virtual const std::string& session_id() const = 0;
+
+  /// Get the dialogue ID for this async context.
+  virtual const std::string& dialogue_id() const = 0;
+
+  /// Get the task ID for this async context.
+  virtual const std::string& task_id() const = 0;
+
+  /// Get the node ID for this async context.
+  virtual const std::string& node_id() const = 0;
+};
 
 // ============================================================================
 // Helper Functions for SoDataVariant

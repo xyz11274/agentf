@@ -78,5 +78,13 @@ INodeDataBus* NodeDataBusClientImpl::raw() {
   return databus_;
 }
 
+IAsyncCallSDK* NodeDataBusClientImpl::async() {
+  return async_sdk_.get();
+}
+
+void NodeDataBusClientImpl::set_async_sdk(std::shared_ptr<IAsyncCallSDK> async_sdk) {
+  async_sdk_ = std::move(async_sdk);
+}
+
 }  // namespace runtime
 }  // namespace agentflow

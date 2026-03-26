@@ -269,6 +269,8 @@ set(AGENTFLOW_RUNTIME_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/namespace_client.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/node_databus_client.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/databus/uds_server.cpp
+    # AsyncCall SDK
+    ${AGENTFLOW_SOURCE_DIR}/runtime/async_call.cpp
     ${AGENTFLOW_SOURCE_DIR}/runtime/llm/streaming_client.cpp
     # Event & Trace/Metrics
     ${AGENTFLOW_SOURCE_DIR}/runtime/trace/metrics.cpp

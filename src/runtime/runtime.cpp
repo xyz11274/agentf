@@ -9,6 +9,7 @@
 #include "agent/session.h"
 #include "agent/task.h"
 #include "agent/context.h"
+#include "runtime/async_call.h"
 #include "runtime/trace/trace_context.h"
 #include "runtime/trace/trace_manager.h"
 #include "runtime/flow_trace.h"
@@ -572,7 +573,45 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
 
   {
     std::lock_guard<std::mutex> lock(workflow_state_mutex_);
-    workflow_states_[execution_id] = state;
+    // Update existing entry or create new one
+    auto it = workflow_states_.find(execution_id);
+    if (it != workflow_states_.end()) {
+      // Update existing entry field by field
+      it->second.workflow_id = std::move(state.workflow_id);
+      it->second.agent_id = std::move(state.agent_id);
+      it->second.source_task_id = std::move(state.source_task_id);
+      it->second.session_id = std::move(state.session_id);
+      it->second.dialogue_id = std::move(state.dialogue_id);
+      it->second.task_type = std::move(state.task_type);
+      it->second.skill_task_id = std::move(state.skill_task_id);
+      it->second.total_nodes = state.total_nodes;
+      it->second.completed_count = state.completed_count;
+      it->second.in_progress = state.in_progress;
+    } else {
+      // Create new entry - need to construct in place
+      workflow_states_.emplace(
+          std::piecewise_construct,
+          std::forward_as_tuple(execution_id),
+          std::forward_as_tuple(
+              WorkflowExecutionState{
+                  std::move(state.workflow_id),
+                  std::move(state.agent_id),
+                  std::move(state.source_task_id),
+                  std::move(state.session_id),
+                  std::move(state.dialogue_id),
+                  std::move(state.task_type),
+                  std::move(state.skill_task_id),
+                  {},
+                  {},
+                  {},
+                  {},
+                  state.total_nodes,
+                  state.completed_count,
+                  state.in_progress
+              }
+          )
+      );
+    }
   }
 
   Logger::instance().info_f("Starting workflow execution: %s (execution_id: %s)",
@@ -731,6 +770,65 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
         node->set_databus_client(client);
         Logger::instance().info_f("[PROCESS_NODE] Set databus_client for node=%s, session_id='%s'",
                                   node->get_id().c_str(), state_it->second.session_id.c_str());
+
+        // Inject AsyncCall SDK for async operation support
+        if(!state_it->second.dialogue_id.empty()) {
+          // Get task_id from workflow state (skill_task_id for skill tasks)
+          std::string task_id = state_it->second.skill_task_id;
+
+          auto async_sdk = create_async_call_sdk(
+              this,
+              execution_id,
+              state_it->second.session_id,
+              state_it->second.dialogue_id,
+              task_id,
+              node->get_id(),
+              state_it->second.async_pending_count);
+
+          client->set_async_sdk(async_sdk);
+          Logger::instance().info_f("[PROCESS_NODE] Set async_sdk for node=%s, task_id='%s'",
+                                    node->get_id().c_str(), task_id.c_str());
+        }
+
+        // Check if this is an async callback re-execution
+        if (node->get_state() == NodeState::ASYNC_PENDING) {
+          // Read callback data from DataBus
+          auto& databus = get_databus(agent->get_id());
+          std::string callback_key = "/async_callback/" + node->get_id();
+
+          DataVariant msg_val, key_val;
+          std::string async_msg, async_key;
+
+          if (databus.get(callback_key + "/msg", msg_val)) {
+            if (const auto* msg_str = std::get_if<std::string>(&msg_val)) {
+              async_msg = *msg_str;
+            }
+          }
+          if (databus.get(callback_key + "/key", key_val)) {
+            if (const auto* key_str = std::get_if<std::string>(&key_val)) {
+              async_key = *key_str;
+            }
+          }
+
+          if (!async_msg.empty()) {
+            // Inject callback info into node inputs
+            DataMap inputs = node->get_inputs();
+            inputs["__async_callback__"] = true;
+            inputs["__async_key__"] = async_key;
+            inputs["__async_msg__"] = async_msg;
+            node->set_inputs(inputs);
+
+            Logger::instance().info_f("[PROCESS_NODE] Injected async callback: node=%s, key=%s, msg_len=%zu",
+                                      node->get_id().c_str(), async_key.c_str(), async_msg.size());
+
+            // Clean up callback data from DataBus
+            databus.remove(callback_key + "/msg");
+            databus.remove(callback_key + "/key");
+          } else {
+            Logger::instance().warn_f("[PROCESS_NODE] No callback data found for ASYNC_PENDING node=%s",
+                                      node->get_id().c_str());
+          }
+        }
       } else {
         Logger::instance().warn_f("[PROCESS_NODE] Session ID is empty for execution_id=%s", execution_id.c_str());
       }
@@ -981,6 +1079,48 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
   }
 
   bool node_success = (node->get_state() == NodeState::SUCCESS);
+
+  // Check for async pending state
+  const DataMap& outputs = node->get_outputs();
+  bool is_async_pending = false;
+  std::string async_call_key;
+
+  if (outputs.count("__async_pending__")) {
+    const auto& pending_val = outputs.at("__async_pending__");
+    if (const auto* pending_bool = std::get_if<bool>(&pending_val)) {
+      is_async_pending = *pending_bool;
+    }
+  }
+
+  if (is_async_pending) {
+    // Node is waiting for async callback
+    node->set_state(NodeState::ASYNC_PENDING);
+
+    // Get the call_key for callback matching
+    if (outputs.count("call_key")) {
+      const auto& key_val = outputs.at("call_key");
+      if (const auto* key_str = std::get_if<std::string>(&key_val)) {
+        async_call_key = *key_str;
+        node->set_async_call_key(async_call_key);
+      }
+    }
+
+    // Update workflow state to track async pending (but don't mark as completed)
+    {
+      std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+      auto state_it = workflow_states_.find(execution_id);
+      if (state_it != workflow_states_.end()) {
+        state_it->second.running_nodes.erase(node->get_id());
+        // Node stays in async pending, not marked as completed
+        Logger::instance().info_f("[PROCESS_NODE_ASYNC] Node=%s set to ASYNC_PENDING, call_key=%s",
+                                  node->get_id().c_str(), async_call_key.c_str());
+      }
+    }
+
+    node->cleanup();
+    return;  // Don't call update_workflow_state
+  }
+
   node->cleanup();
 
   // [DEBUG] Log node cleanup
@@ -1088,7 +1228,11 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
                               execution_id.c_str(), state.completed_count, state.total_nodes,
                               state.failed_nodes.size());
 
-    if(state.completed_count + static_cast<int>(state.failed_nodes.size()) >= state.total_nodes) {
+    // Check if workflow can complete (all nodes done AND no async pending)
+    bool all_nodes_done = state.completed_count + static_cast<int>(state.failed_nodes.size()) >= state.total_nodes;
+    bool can_complete = all_nodes_done && !state.has_async_pending();
+
+    if(can_complete) {
       state.in_progress   = false;
       invoke_complete     = true;
       complete_ok         = state.failed_nodes.empty();
@@ -2124,6 +2268,143 @@ void MMAgentRuntime::worker_thread_main() {
   }
 
   Logger::instance().info_f("Worker thread %d exiting", worker_id);
+}
+
+// ============================================================================
+// AsyncCall SDK Support Methods
+// ============================================================================
+
+bool MMAgentRuntime::send_async_message(const framework::MMAgentMsgQue::Message& message) {
+  // Use agent's message routing for cross-task communication
+  // Find the agent by session_id
+  auto session_id_it = message.metadata.find("session_id");
+  if (session_id_it == message.metadata.end()) {
+    Logger::instance().warn_f("[send_async_message] Missing session_id in message metadata");
+    return false;
+  }
+
+  // Find the agent that owns this session
+  AgentPtr agent;
+  {
+    std::lock_guard<std::mutex> lock(agents_mutex_);
+    for (const auto& [id, ag] : agents_) {
+      if (ag && ag->get_session(session_id_it->second)) {
+        agent = ag;
+        break;
+      }
+    }
+  }
+
+  if (!agent) {
+    Logger::instance().warn_f("[send_async_message] Agent not found for session %s",
+                              session_id_it->second.c_str());
+    return false;
+  }
+
+  // Route the message through the agent's message handling
+  agent->route_request_message(message);
+  return true;
+}
+
+bool MMAgentRuntime::enqueue_async_callback(const framework::MMAgentMsgQue::Message& message) {
+  // Short-circuit routing: directly enqueue to the target node's workflow execution
+
+  auto execution_id_it = message.metadata.find("execution_id");
+  auto node_id_it = message.metadata.find("node_id");
+
+  if (execution_id_it == message.metadata.end() || node_id_it == message.metadata.end()) {
+    Logger::instance().warn_f("[enqueue_async_callback] Missing execution_id or node_id in message metadata");
+    return false;
+  }
+
+  const std::string& execution_id = execution_id_it->second;
+  const std::string& node_id = node_id_it->second;
+
+  Logger::instance().info_f("[enqueue_async_callback] Received callback for execution=%s, node=%s",
+                            execution_id.c_str(), node_id.c_str());
+
+  std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+
+  // Find workflow execution state
+  auto state_it = workflow_states_.find(execution_id);
+  if (state_it == workflow_states_.end()) {
+    Logger::instance().warn_f("[enqueue_async_callback] Workflow state not found for execution_id=%s",
+                              execution_id.c_str());
+    return false;
+  }
+
+  auto& state = state_it->second;
+
+  // Find the cloned workflow
+  WorkflowPtr workflow;
+  {
+    std::lock_guard<std::mutex> wf_lock(cloned_workflows_mutex_);
+    auto wf_it = cloned_workflows_.find(execution_id);
+    if (wf_it != cloned_workflows_.end()) {
+      workflow = wf_it->second;
+    }
+  }
+
+  if (!workflow) {
+    Logger::instance().warn_f("[enqueue_async_callback] Cloned workflow not found for execution_id=%s",
+                              execution_id.c_str());
+    return false;
+  }
+
+  // Find the target node
+  auto node = workflow->get_node(node_id);
+  if (!node) {
+    Logger::instance().warn_f("[enqueue_async_callback] Node not found: %s", node_id.c_str());
+    return false;
+  }
+
+  // Check if node is in ASYNC_PENDING state
+  if (node->get_state() != NodeState::ASYNC_PENDING) {
+    Logger::instance().warn_f("[enqueue_async_callback] Node %s is not in ASYNC_PENDING state (state=%d)",
+                              node_id.c_str(), static_cast<int>(node->get_state()));
+    return false;
+  }
+
+  // Store callback data in DataBus for node to read
+  auto& databus = get_databus(state.agent_id);
+  std::string callback_key = "/async_callback/" + node_id;
+  std::string async_call_key = message.metadata.count("async_call_key") ? message.metadata.at("async_call_key") : "";
+
+  // Store callback info as JSON-like structure
+  DataMap callback_data;
+  callback_data["msg"] = message.content;
+  callback_data["key"] = async_call_key;
+
+  // Store in databus
+  databus.put(callback_key + "/msg", DataVariant(message.content));
+  databus.put(callback_key + "/key", DataVariant(async_call_key));
+
+  Logger::instance().info_f("[enqueue_async_callback] Stored callback data at %s, key=%s, msg_len=%zu",
+                            callback_key.c_str(), async_call_key.c_str(), message.content.size());
+
+  // Reset node state to READY so it can be executed again
+  node->set_state(NodeState::READY);
+
+  // Get agent for task execution
+  auto agent = get_agent(state.agent_id);
+  if (!agent) {
+    Logger::instance().warn_f("[enqueue_async_callback] Agent not found: %s", state.agent_id.c_str());
+    return false;
+  }
+
+  // Enqueue the node for re-execution
+  {
+    std::lock_guard<std::mutex> task_lock(task_queue_mutex_);
+    state.queued_nodes.insert(node_id);
+    state.running_nodes.erase(node_id);
+    node_task_queue_.push({agent, workflow, node, execution_id});
+  }
+
+  g_worker_cv.notify_all();
+
+  Logger::instance().info_f("[enqueue_async_callback] Node %s enqueued for re-execution", node_id.c_str());
+
+  return true;
 }
 
 }  // namespace runtime
