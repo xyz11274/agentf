@@ -191,9 +191,14 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
       result = code_loader.execute_jar(request.command, request.main_class, request.args, exec_config);
       break;
     case ExecutionMode::SO_LIBRARY: {
-      // Use V3 signature with session-isolated DataBus client if session_id is provided
-      if(request.databus && !request.session_id.empty()) {
-        // V3 signature - session-isolated DataBus client (recommended)
+      // Use V3 signature with session-isolated DataBus client if available
+      if(request.databus_client) {
+        // V3 signature - use the pre-configured client with async_sdk (preferred)
+        result = code_loader.load_and_execute_so_v3(
+            request.command, request.function_name.empty() ? "execute" : request.function_name,
+            exec_config, request.databus_client);
+      } else if(request.databus && !request.session_id.empty()) {
+        // V3 signature - session-isolated DataBus client without async_sdk (fallback)
         NodeDataBusAdapter adapter(request.databus);
         NodeDataBusClientImpl client(&adapter, request.session_id);
         result = code_loader.load_and_execute_so_v3(
@@ -253,7 +258,16 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
       if(pos == std::string::npos) {
         continue;
       }
-      response.outputs[line.substr(0, pos)] = line.substr(pos + 1);
+      const std::string key = line.substr(0, pos);
+      const std::string value = line.substr(pos + 1);
+
+      // Convert special keys to their proper types
+      if(key == "__async_pending__") {
+        // Convert string "true"/"1" to bool
+        response.outputs[key] = (value == "true" || value == "1");
+      } else {
+        response.outputs[key] = value;
+      }
     }
   }
   response.outputs["databus_dir"] = file_databus.root_dir().string();

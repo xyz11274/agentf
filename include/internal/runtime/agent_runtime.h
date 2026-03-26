@@ -192,6 +192,8 @@ private:
          }
        }
      }
+     // Pending callback count per node (for handling race condition where callbacks arrive before ASYNC_PENDING)
+     std::map<std::string, int> pending_callbacks;
    };
   std::map<std::string, WorkflowExecutionState> workflow_states_;
   std::mutex                                    workflow_state_mutex_;

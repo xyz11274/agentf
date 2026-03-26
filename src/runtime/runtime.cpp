@@ -692,19 +692,24 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
     // Get dialogue_id from workflow state for multi-dialogue support
     // This avoids the concurrency issue with agent databus
     std::string workflow_dialogue_id;
+    std::string workflow_session_id;
     {
       std::lock_guard<std::mutex> lock(workflow_state_mutex_);
       auto state_it = workflow_states_.find(execution_id);
-      if(state_it != workflow_states_.end() && !state_it->second.dialogue_id.empty()) {
+      if(state_it != workflow_states_.end()) {
         workflow_dialogue_id = state_it->second.dialogue_id;
-        // Add dialogue_id to hydrated inputs if node needs it
-        for(const auto& key : node->get_input_params()) {
-          if(key == "dialogue_id") {
-            hydrated["dialogue_id"] = workflow_dialogue_id;
-            Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Got input 'dialogue_id'='%s' from workflow state",
-                                     workflow_dialogue_id.c_str());
-            break;
-          }
+        workflow_session_id = state_it->second.session_id;
+
+        // Add session_id to hydrated inputs (always available)
+        if(!workflow_session_id.empty()) {
+          hydrated["session_id"] = workflow_session_id;
+        }
+
+        // Add dialogue_id to hydrated inputs if available
+        if(!workflow_dialogue_id.empty()) {
+          hydrated["dialogue_id"] = workflow_dialogue_id;
+          Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Got input 'dialogue_id'='%s' from workflow state",
+                                   workflow_dialogue_id.c_str());
         }
       }
     }
@@ -790,9 +795,8 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
                                     node->get_id().c_str(), task_id.c_str());
         }
 
-        // Check if this is an async callback re-execution
-        if (node->get_state() == NodeState::ASYNC_PENDING) {
-          // Read callback data from DataBus
+        // Check for async callback data (regardless of state - might have been reset to READY for re-execution)
+        {
           auto& databus = get_databus(agent->get_id());
           std::string callback_key = "/async_callback/" + node->get_id();
 
@@ -810,13 +814,22 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
             }
           }
 
-          if (!async_msg.empty()) {
+          if (!async_msg.empty() || !async_key.empty()) {
             // Inject callback info into node inputs
             DataMap inputs = node->get_inputs();
             inputs["__async_callback__"] = true;
             inputs["__async_key__"] = async_key;
             inputs["__async_msg__"] = async_msg;
+            // Also inject session_id and dialogue_id for SendMsg
+            inputs["session_id"] = state_it->second.session_id;
+            inputs["dialogue_id"] = state_it->second.dialogue_id;
             node->set_inputs(inputs);
+
+            // Decrement pending callback count
+            auto pending_it = state_it->second.pending_callbacks.find(node->get_id());
+            if (pending_it != state_it->second.pending_callbacks.end() && pending_it->second > 0) {
+              pending_it->second--;
+            }
 
             Logger::instance().info_f("[PROCESS_NODE] Injected async callback: node=%s, key=%s, msg_len=%zu",
                                       node->get_id().c_str(), async_key.c_str(), async_msg.size());
@@ -824,9 +837,6 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
             // Clean up callback data from DataBus
             databus.remove(callback_key + "/msg");
             databus.remove(callback_key + "/key");
-          } else {
-            Logger::instance().warn_f("[PROCESS_NODE] No callback data found for ASYNC_PENDING node=%s",
-                                      node->get_id().c_str());
           }
         }
       } else {
@@ -1085,11 +1095,32 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
   bool is_async_pending = false;
   std::string async_call_key;
 
+  // Debug: log all outputs for async node
+  Logger::instance().info_f("[ASYNC_CHECK] Node=%s has %zu outputs",
+                              node->get_id().c_str(), outputs.size());
+  for (const auto& [key, val] : outputs) {
+    Logger::instance().info_f("[ASYNC_CHECK] Output key=%s, type_index=%s",
+                                key.c_str(), val.index() == 0 ? "monostate" :
+                                val.index() == 1 ? "bool" :
+                                val.index() == 2 ? "int64" :
+                                val.index() == 3 ? "double" :
+                                val.index() == 4 ? "string" : "other");
+  }
+
   if (outputs.count("__async_pending__")) {
     const auto& pending_val = outputs.at("__async_pending__");
+    Logger::instance().info_f("[ASYNC_CHECK] Found __async_pending__, type_index=%zu", pending_val.index());
     if (const auto* pending_bool = std::get_if<bool>(&pending_val)) {
       is_async_pending = *pending_bool;
+      Logger::instance().info_f("[ASYNC_CHECK] Bool value=%s", *pending_bool ? "true" : "false");
+    } else if (const auto* pending_str = std::get_if<std::string>(&pending_val)) {
+      // Handle string "true" from SO library serialization
+      is_async_pending = (*pending_str == "true" || *pending_str == "1");
+      Logger::instance().info_f("[ASYNC_CHECK] String value='%s', is_async_pending=%s",
+                                  pending_str->c_str(), is_async_pending ? "true" : "false");
     }
+  } else {
+    Logger::instance().info_f("[ASYNC_CHECK] __async_pending__ not found in outputs");
   }
 
   if (is_async_pending) {
@@ -1114,10 +1145,28 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
         // Node stays in async pending, not marked as completed
         Logger::instance().info_f("[PROCESS_NODE_ASYNC] Node=%s set to ASYNC_PENDING, call_key=%s",
                                   node->get_id().c_str(), async_call_key.c_str());
+
+        // Check for buffered callbacks (arrived before we transitioned to ASYNC_PENDING)
+        auto pending_it = state_it->second.pending_callbacks.find(node->get_id());
+        if (pending_it != state_it->second.pending_callbacks.end() && pending_it->second > 0) {
+          Logger::instance().info_f("[PROCESS_NODE_ASYNC] Found %d buffered callbacks for node=%s, scheduling re-execution",
+                                    pending_it->second, node->get_id().c_str());
+
+          // Reset node state to READY and schedule re-execution
+          node->set_state(NodeState::READY);
+
+          // Enqueue the node for re-execution
+          {
+            std::lock_guard<std::mutex> task_lock(task_queue_mutex_);
+            state_it->second.queued_nodes.insert(node->get_id());
+            node_task_queue_.push({agent, workflow, node, execution_id});
+          }
+          g_worker_cv.notify_all();
+        }
       }
     }
 
-    node->cleanup();
+    // Don't call cleanup() for async pending nodes - preserve state and data for callbacks
     return;  // Don't call update_workflow_state
   }
 
@@ -1127,6 +1176,22 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
   Logger::instance().debug_f("[PROCESS_NODE_CLEANUP] ThreadId=%zu, AgentId=%s, NodeId=%s",
                              std::hash<std::thread::id>{}(thread_id), agent->get_id().c_str(),
                              node->get_id().c_str());
+
+  // If this node was previously in ASYNC_PENDING state, decrement the async_pending_count
+  // This happens when a node completes after processing all async callbacks
+  {
+    std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+    auto state_it = workflow_states_.find(execution_id);
+    if(state_it != workflow_states_.end()) {
+      // Check if this node was in ASYNC_PENDING (by checking if it had async callbacks)
+      if(state_it->second.pending_callbacks.count(node->get_id()) > 0 ||
+         !node->get_async_call_key().empty()) {
+        state_it->second.decrement_async_pending();
+        Logger::instance().info_f("[PROCESS_NODE] Decremented async_pending_count for node=%s, new count=%d",
+                                  node->get_id().c_str(), state_it->second.async_pending_count->load());
+      }
+    }
+  }
 
   // Find execution state and update it
   update_workflow_state(execution_id, node->get_id(), node_success);
@@ -1217,11 +1282,18 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
     state.queued_nodes.erase(node_id);
     state.running_nodes.erase(node_id);
 
+    // Only count node as completed once (not on callback re-executions)
+    bool already_completed = state.completed_nodes.count(node_id) > 0;
+
     if(success) {
-      state.completed_nodes[node_id] = true;
-      state.completed_count++;
+      if(!already_completed) {
+        state.completed_nodes[node_id] = true;
+        state.completed_count++;
+      }
     } else {
-      state.failed_nodes[node_id] = true;
+      if(state.failed_nodes.count(node_id) == 0) {
+        state.failed_nodes[node_id] = true;
+      }
     }
 
     Logger::instance().info_f("MMWorkflow progress: %s - %d/%d completed, %zu failed",
@@ -1232,7 +1304,14 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
     bool all_nodes_done = state.completed_count + static_cast<int>(state.failed_nodes.size()) >= state.total_nodes;
     bool can_complete = all_nodes_done && !state.has_async_pending();
 
+    Logger::instance().info_f("WORKFLOW_PROGRESS: %s - all_nodes_done=%s, has_async_pending=%s, can_complete=%s",
+                              execution_id.c_str(),
+                              all_nodes_done ? "true" : "false",
+                              state.has_async_pending() ? "true" : "false",
+                              can_complete ? "true" : "false");
+
     if(can_complete) {
+      Logger::instance().info_f("[WORKFLOW_COMPLETE] Workflow %s completing successfully", execution_id.c_str());
       state.in_progress   = false;
       invoke_complete     = true;
       complete_ok         = state.failed_nodes.empty();
@@ -2358,29 +2437,31 @@ bool MMAgentRuntime::enqueue_async_callback(const framework::MMAgentMsgQue::Mess
     return false;
   }
 
-  // Check if node is in ASYNC_PENDING state
-  if (node->get_state() != NodeState::ASYNC_PENDING) {
-    Logger::instance().warn_f("[enqueue_async_callback] Node %s is not in ASYNC_PENDING state (state=%d)",
-                              node_id.c_str(), static_cast<int>(node->get_state()));
-    return false;
-  }
-
-  // Store callback data in DataBus for node to read
+  // Store callback data in DataBus for node to read (regardless of current state)
+  // This handles the race condition where callback arrives before node transitions to ASYNC_PENDING
   auto& databus = get_databus(state.agent_id);
   std::string callback_key = "/async_callback/" + node_id;
   std::string async_call_key = message.metadata.count("async_call_key") ? message.metadata.at("async_call_key") : "";
-
-  // Store callback info as JSON-like structure
-  DataMap callback_data;
-  callback_data["msg"] = message.content;
-  callback_data["key"] = async_call_key;
 
   // Store in databus
   databus.put(callback_key + "/msg", DataVariant(message.content));
   databus.put(callback_key + "/key", DataVariant(async_call_key));
 
-  Logger::instance().info_f("[enqueue_async_callback] Stored callback data at %s, key=%s, msg_len=%zu",
-                            callback_key.c_str(), async_call_key.c_str(), message.content.size());
+  Logger::instance().info_f("[enqueue_async_callback] Stored callback data at %s, key=%s, msg_len=%zu, node_state=%d",
+                            callback_key.c_str(), async_call_key.c_str(), message.content.size(),
+                            static_cast<int>(node->get_state()));
+
+  // Check if node is in ASYNC_PENDING state - if so, schedule re-execution
+  // If not, the callback data is buffered in DataBus and will be processed when node becomes ASYNC_PENDING
+  if (node->get_state() != NodeState::ASYNC_PENDING) {
+    Logger::instance().info_f("[enqueue_async_callback] Node %s not yet ASYNC_PENDING (state=%d), callback buffered in DataBus",
+                              node_id.c_str(), static_cast<int>(node->get_state()));
+    // Increment a pending callback count so we know there's buffered data
+    state.pending_callbacks[node_id]++;
+    return true;  // Callback buffered, will be processed when node is ready
+  }
+
+  Logger::instance().info_f("[enqueue_async_callback] Node %s is ASYNC_PENDING, scheduling re-execution", node_id.c_str());
 
   // Reset node state to READY so it can be executed again
   node->set_state(NodeState::READY);

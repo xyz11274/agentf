@@ -1,7 +1,7 @@
 {
   "name": "LLMQueryAgent",
   "version": "1.0.0",
-  "description": "LLM query agent that responds to user prompts using AI",
+  "description": "LLM query agent that responds to user prompts using AI with async streaming",
   "session_pool_size": 1,
   "tasks": [
     {
@@ -16,7 +16,7 @@
       "id": 1,
       "type": "dispatcher",
       "description": "Dispatch user requests",
-      "next_skills": ["llm-query-skill"],
+      "next_skills": ["llm-query-async-skill"],
       "max_concurrent_skills": 1
     },
     {
@@ -28,10 +28,10 @@
     {
       "id": 3,
       "type": "skill",
-      "description": "LLM query skill",
-      "workflow_file": "llm_query_workflow.json",
+      "description": "LLM query async skill with streaming",
+      "workflow_file": "llm_query_async_workflow.json",
       "skill": {
-        "name": "llm-query-skill",
+        "name": "llm-query-async-skill",
         "config_dir": "skills/llm_query",
         "instance_pool_size": 1
       },

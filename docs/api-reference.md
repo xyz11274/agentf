@@ -252,6 +252,91 @@ runtime->set_callback_thread_pool_size(10);
 - 回调中应避免长时间阻塞操作
 - 回调中访问共享资源需注意线程安全
 
+### 2.6 异步调用 SDK（AsyncCall）
+
+头文件：`include/external/agentflow/so_node.h`
+命名空间：`agentflow`
+
+**用途**：SO Library 节点发起异步操作（如 LLM 流式调用），避免阻塞 worker thread。
+
+#### IAsyncCallSDK 接口
+
+```cpp
+class IAsyncCallSDK {
+public:
+  virtual ~IAsyncCallSDK() = default;
+
+  // 发起异步调用，async_func 在独立线程执行
+  virtual bool AsyncCall(const std::string& key,
+                         std::function<void()> async_func) = 0;
+
+  // 发送消息给自己（短路路由，直接入队到当前 task）
+  virtual bool SendToSelf(const std::string& key,
+                          const std::string& msg) = 0;
+
+  // 发送消息给指定 node（跨 task）
+  virtual bool SendMsg(const std::string& session_id,
+                       const std::string& dialogue_id,
+                       const std::string& target_task_id,
+                       const std::string& target_node_id,
+                       const std::string& key,
+                       const std::string& msg) = 0;
+};
+```
+
+#### 使用方式
+
+通过 `INodeDataBusClient::async()` 获取 SDK 实例：
+
+```cpp
+extern "C" void my_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
+                           INodeDataBusClient* client) {
+  auto async_sdk = client->async();
+
+  // 发起异步操作
+  async_sdk->AsyncCall("my-op", [&]() {
+    // 在独立线程执行耗时操作
+    auto result = external_service_call();
+
+    // 发送结果给自己
+    async_sdk->SendToSelf("my-op", result);
+  });
+
+  // 设置异步 pending 状态
+  outputs["__async_pending__"] = SoDataVariant(std::string("true"));
+  outputs["__async_key__"] = SoDataVariant(std::string("my-op"));
+}
+```
+
+#### 异步回调处理
+
+当异步消息到达时，框架会重新执行 node，并在 inputs 中注入：
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `__async_callback__` | string | "true" 表示这是异步回调 |
+| `__async_key__` | string | 对应 AsyncCall 时指定的 key |
+| `__async_msg__` | string | 回调消息内容 |
+
+```cpp
+// 判断是否为异步回调
+bool is_callback = inputs.count("__async_callback__") &&
+                   std::get<std::string>(inputs.at("__async_callback__")) == "true";
+
+if (is_callback) {
+  std::string key = std::get<std::string>(inputs.at("__async_key__"));
+  std::string msg = std::get<std::string>(inputs.at("__async_msg__"));
+  // 处理回调消息
+}
+```
+
+#### Workflow 生命周期
+
+- `async_pending_count`：WorkflowExecutionState 中的计数器
+- workflow 完成条件：`completed_count >= total_nodes && async_pending_count == 0`
+- 每次节点设置 `__async_pending__` 时，计数器 +1
+- 节点完成（不再设置 pending）时，计数器 -1
+
 ---
 
 ## 3. 高速数据总线（MMDataBus）

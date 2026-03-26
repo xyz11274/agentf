@@ -124,11 +124,13 @@ public:
     message.metadata["async_call_key"] = key;
     message.metadata["message_type"] = "async_callback";
 
-    Logger::instance().debug_f("[AsyncCallSDK] SendToSelf: node=%s, key=%s, msg_len=%zu",
-                               node_id_.c_str(), key.c_str(), msg.size());
+    Logger::instance().info_f("[AsyncCallSDK::SendToSelf] node=%s, key=%s, msg_len=%zu, execution_id=%s, session_id=%s",
+                               node_id_.c_str(), key.c_str(), msg.size(), execution_id_.c_str(), session_id_.c_str());
 
     // Use short-circuit routing - directly enqueue to task queue
-    return runtime_->enqueue_async_callback(message);
+    bool result = runtime_->enqueue_async_callback(message);
+    Logger::instance().info_f("[AsyncCallSDK::SendToSelf] result=%s", result ? "true" : "false");
+    return result;
   }
 
   const std::string& session_id() const override { return session_id_; }

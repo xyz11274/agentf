@@ -44,6 +44,131 @@ extern "C" void my_node_v3(
 
 **跨 Session 数据共享**：使用 `client->raw()` 获取原始 DataBus 访问，用于读取全局配置。
 
+### AsyncCall SDK（异步回调）
+
+V3 签名的 `INodeDataBusClient` 提供 `async()` 方法获取异步调用 SDK，用于发起异步操作并通过回调接收结果。
+
+#### 接口定义
+
+```cpp
+class IAsyncCallSDK {
+public:
+  virtual ~IAsyncCallSDK() = default;
+
+  // 发起异步调用，async_func 在独立线程执行
+  virtual bool AsyncCall(const std::string& key,
+                         std::function<void()> async_func) = 0;
+
+  // 发送消息给自己（短路路由，直接入队到当前 task）
+  virtual bool SendToSelf(const std::string& key,
+                          const std::string& msg) = 0;
+
+  // 发送消息给指定 node（跨 task）
+  virtual bool SendMsg(const std::string& session_id,
+                       const std::string& dialogue_id,
+                       const std::string& target_task_id,
+                       const std::string& target_node_id,
+                       const std::string& key,
+                       const std::string& msg) = 0;
+};
+```
+
+#### 使用示例：流式 LLM 调用
+
+```cpp
+#include "agentflow/so_node.h"
+#include <thread>
+
+extern "C" void llm_stream_node_v3(
+    const SoDataMap& inputs,
+    SoDataMap& outputs,
+    INodeDataBusClient* client) {
+
+  std::string session_id = so_node::get_string(inputs, "session_id", "");
+  std::string dialogue_id = so_node::get_string(inputs, "dialogue_id", "");
+  std::string prompt = so_node::get_string(inputs, "prompt", "");
+
+  // 获取 AsyncCall SDK
+  auto async_sdk = client->async();
+
+  // 发起异步 LLM 调用
+  async_sdk->AsyncCall("llm-stream", [&]() {
+    // 在独立线程中执行流式请求
+    StreamingLLMClient llm;
+    llm.stream(prompt, [&](const std::string& chunk, bool done) {
+      // 每个 chunk 发送给自己
+      nlohmann::json msg;
+      msg["chunk"] = chunk;
+      msg["done"] = done;
+      async_sdk->SendToSelf("llm-stream", msg.dump());
+
+      // 如果需要转发给 coordinator（流式输出场景）
+      if (!session_id.empty()) {
+        std::string coord_task = session_id + "_coordinator";
+        async_sdk->SendMsg(session_id, dialogue_id, coord_task,
+                          "coordinator", "llm-stream", msg.dump());
+      }
+    });
+  });
+
+  // 设置异步 pending 状态
+  outputs["__async_pending__"] = SoDataVariant(std::string("true"));
+  outputs["__async_key__"] = SoDataVariant(std::string("llm-stream"));
+}
+```
+
+#### 异步回调处理流程
+
+```
+node.execute()
+  │
+  ├── async()->AsyncCall("key", [&]() {
+  │     // 独立线程执行耗时操作
+  │     streaming_request(...);
+  │     async()->SendToSelf("key", chunk);  // 每个 chunk 回调
+  │   })
+  │
+  ├── outputs["__async_pending__"] = "true"
+  └── return  // 函数返回，但 workflow 等待异步完成
+
+异步回调到达:
+  │
+  ├── 消息入队到 task.data_exchange_queue
+  │
+  ├── node 收到回调消息，inputs 包含：
+  │   - "__async_callback__": "true"
+  │   - "__async_key__": "llm-stream"
+  │   - "__async_msg__": chunk 内容
+  │
+  └── 处理 chunk，累积或转发
+```
+
+#### 框架注入字段
+
+异步回调时，框架会向 node inputs 注入以下字段：
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `__async_callback__` | string | "true" 表示这是一次异步回调 |
+| `__async_key__` | string | 对应 AsyncCall 时指定的 key |
+| `__async_msg__` | string | 回调消息内容 |
+
+**判断是否为回调**：
+
+```cpp
+bool is_callback = false;
+if (inputs.count("__async_callback__")) {
+  auto val = std::get_if<std::string>(&inputs.at("__async_callback__"));
+  is_callback = val && *val == "true";
+}
+```
+
+#### 线程安全说明
+
+- `SendToSelf` 和 `SendMsg` 是线程安全的，可在异步线程中调用
+- 回调消息直接入队到 task 消息队列，跳过 agent 路由层
+- `session_id` 和 `dialogue_id` 从 node inputs 获取，不从 SDK 获取
+
 ### Plugin UDS 访问
 
 SO Library 节点可通过环境变量获取插件 UDS 路径，用于与外部插件服务通信：

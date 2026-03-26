@@ -5,6 +5,7 @@
   "author": "AgentFlow Team",
   "workflows": [
     "llm_query_workflow.json",
+    "llm_query_async_workflow.json",
     "dispatcher_workflow.json",
     "coordinator_workflow.json",
     "echo_workflow.json"

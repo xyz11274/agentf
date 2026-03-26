@@ -536,6 +536,8 @@ bool MMNode::execute_with_worker_engine() {
   request.databus = databus_;
   if (databus_client_) {
     request.session_id = databus_client_->session_id();
+    // Pass the full client for V3 async operations
+    request.databus_client = databus_client_.get();
   }
 
   // Pass plugin UDS path for external plugin communication
@@ -741,7 +743,14 @@ bool MMNode::execute_so_library() {
         if(pos != std::string::npos) {
           std::string key   = line.substr(0, pos);
           std::string value = line.substr(pos + 1);
-          outputs_[key]     = value;
+
+          // Convert special keys to their proper types
+          if(key == "__async_pending__") {
+            // Convert string "true"/"1" to bool
+            outputs_[key] = (value == "true" || value == "1");
+          } else {
+            outputs_[key] = value;
+          }
         }
       }
 

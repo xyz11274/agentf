@@ -1021,7 +1021,113 @@ if __name__ == "__main__":
 }
 ```
 
-### 5.4 外部响应 Node
+### 5.5 异步流式 Node
+
+**场景**：异步调用外部服务并流式处理响应（如 LLM streaming）
+
+SO Library 节点可通过 `AsyncCall` SDK 发起异步操作，避免阻塞 worker thread。
+
+```cpp
+// nodes/llm_stream_node.cpp
+#include "agentflow/so_node.h"
+#include <thread>
+#include <atomic>
+
+namespace {
+  // 线程局部存储，用于跨回调累积响应
+  thread_local std::string accumulated_response;
+}
+
+extern "C" void llm_stream_node_v3(
+    const SoDataMap& inputs,
+    SoDataMap& outputs,
+    INodeDataBusClient* client) {
+
+  // 判断是否为异步回调
+  bool is_callback = false;
+  if (inputs.count("__async_callback__")) {
+    auto* val = std::get_if<std::string>(&inputs.at("__async_callback__"));
+    is_callback = val && *val == "true";
+  }
+
+  if (is_callback) {
+    // 处理异步回调
+    std::string key = so_node::get_string(inputs, "__async_key__", "");
+    std::string msg = so_node::get_string(inputs, "__async_msg__", "");
+
+    if (key == "llm-stream") {
+      // 解析 chunk
+      auto json = nlohmann::json::parse(msg);
+      std::string chunk = json["chunk"];
+      bool done = json["done"];
+
+      // 累积响应
+      accumulated_response += chunk;
+
+      // 转发给 coordinator（流式输出）
+      std::string session_id = so_node::get_string(inputs, "session_id", "");
+      std::string dialogue_id = so_node::get_string(inputs, "dialogue_id", "");
+      if (client && client->async() && !session_id.empty()) {
+        std::string coord_task = session_id + "_coordinator";
+        client->async()->SendMsg(session_id, dialogue_id, coord_task,
+                                 "coordinator", "llm-stream", msg);
+      }
+
+      if (done) {
+        // 完成时输出最终结果
+        outputs["response"] = SoDataVariant(accumulated_response);
+        accumulated_response.clear();
+      } else {
+        // 继续等待下一个 chunk
+        outputs["__async_pending__"] = SoDataVariant(std::string("true"));
+        outputs["__async_key__"] = SoDataVariant(std::string("llm-stream"));
+      }
+    }
+  } else {
+    // 首次执行：发起异步请求
+    std::string prompt = so_node::get_string(inputs, "prompt", "");
+    auto async_sdk = client->async();
+
+    async_sdk->AsyncCall("llm-stream", [&]() {
+      // 在独立线程中执行流式 LLM 请求
+      StreamingLLMClient llm;
+      llm.stream(prompt, [&](const std::string& chunk, bool done) {
+        nlohmann::json msg;
+        msg["chunk"] = chunk;
+        msg["done"] = done;
+        async_sdk->SendToSelf("llm-stream", msg.dump());
+      });
+    });
+
+    // 设置异步 pending 状态
+    outputs["__async_pending__"] = SoDataVariant(std::string("true"));
+    outputs["__async_key__"] = SoDataVariant(std::string("llm-stream"));
+  }
+}
+```
+
+**DSL**：
+
+```json
+{
+  "id": "llm_stream_node",
+  "execution_mode": "so_library",
+  "command": "lib/libllm_stream_node.so",
+  "function_name": "llm_stream_node_v3",
+  "inputs": ["prompt", "session_id", "dialogue_id"],
+  "outputs": ["response"]
+}
+```
+
+**流程说明**：
+
+1. **首次执行**：`AsyncCall` 在独立线程发起 LLM 请求，设置 `__async_pending__` 标志
+2. **流式回调**：每个 chunk 通过 `SendToSelf` 发回，触发 node 重新执行
+3. **响应累积**：使用 `thread_local` 变量跨回调累积完整响应
+4. **流式转发**：通过 `SendMsg` 将 chunk 转发给 coordinator 实现流式输出
+5. **完成标记**：`done=true` 时输出最终结果，workflow 继续执行
+
+### 5.6 外部响应 Node
 
 **场景**：处理完成后向外部系统发送响应
 

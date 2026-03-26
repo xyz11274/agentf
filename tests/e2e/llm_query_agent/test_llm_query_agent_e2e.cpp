@@ -198,7 +198,18 @@ int main(int argc, char* argv[]) {
         // Process messages to drive workflow forward
         agent->process_all_sessions_until_idle();
 
-        // Check if skill workflow has published a response to databus
+        // Try to dequeue response message from agent's response queue
+        framework::MMAgentMsgQue::Message response_msg;
+        if (agent->dequeue_response_message(response_msg)) {
+            if (!response_msg.content.empty()) {
+                response_content = response_msg.content;
+                got_response = true;
+                std::cout << "[TEST] Received response via dequeue_response_message" << std::endl;
+                break;
+            }
+        }
+
+        // Also check for single response in databus as fallback
         DataVariant response_value;
         if (agent->get_data("response", response_value)) {
             if (auto* text = std::get_if<std::string>(&response_value)) {

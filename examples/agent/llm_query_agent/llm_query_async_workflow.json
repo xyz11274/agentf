@@ -1,0 +1,38 @@
+{
+  "id": "llm-query-async-workflow",
+  "version": "1.0",
+  "name": "LLM Query Async Workflow",
+  "description": "Query LLM with async streaming - config node -> llm async node pipeline",
+  "nodes": [
+    {
+      "id": "config_node",
+      "name": "Config Node",
+      "type": "task",
+      "execution_mode": "python_script",
+      "command": "./config_node.py",
+      "outputs": ["api_key", "model", "base_url"],
+      "json_output": true,
+      "timeout_ms": 5000
+    },
+    {
+      "id": "llm_node",
+      "name": "LLM Query Node (Async)",
+      "type": "task",
+      "execution_mode": "so_library",
+      "command": "lib/libllm_query_node.so",
+      "function_name": "llm_query_node_async",
+      "inputs": ["api_key", "model", "base_url", "prompt", "input", "dialogue_id"],
+      "outputs": ["status", "response", "error", "current_chunk"],
+      "timeout_ms": 120000
+    }
+  ],
+  "edges": [
+    {
+      "id": "config_to_llm",
+      "source": "config_node",
+      "target": "llm_node",
+      "source_outputs": ["api_key", "model", "base_url"],
+      "target_inputs": ["api_key", "model", "base_url"]
+    }
+  ]
+}

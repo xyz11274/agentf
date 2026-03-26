@@ -55,6 +55,9 @@ public:
     // Session ID for session-isolated DataBus access (V3 signature)
     // When provided, V3 signature will be used with session isolation
     std::string               session_id;
+    // Full DataBus client with async_sdk for V3 signature
+    // This is required for async operations (AsyncCall SDK)
+    INodeDataBusClient*       databus_client = nullptr;
     // Plugin UDS path - injected as AF_PLUGIN_UDS_FILE environment variable
     std::string               plugin_uds_path;
     struct LLMServiceConfig {
