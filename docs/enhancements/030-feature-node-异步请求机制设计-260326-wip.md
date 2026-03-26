@@ -414,6 +414,269 @@ extern "C" void skill_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
 | `__async_key__` | string | 回调的key（node在AsyncCall时设置） |
 | `__async_msg__` | string | 回调消息内容（chunk或[DONE]） |
 
+#### 7. Skill Node向Coordinator透传Chunk机制
+
+**机制说明**：利用已有的消息定向路由机制（Enhancement 024），skill node可通过`SendMsg()`将每个chunk直接发送给coordinator。
+
+**前提条件**：
+- Coordinator task_id采用约定命名：`{session_id}_coordinator`
+- Skill node通过`client->async()`获取的上下文信息
+
+**数据流**：
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Skill Node 透传 Chunk 到 Coordinator                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  skill_node                                                                  │
+│      │                                                                       │
+│      │ 1. AsyncCall("llm-query", [&]() {                                    │
+│      │      llm.stream_prompt(...,                                          │
+│      │          on_chunk = [&](chunk) {                                     │
+│      │              // 发送给自己处理                                        │
+│      │              SendToSelf("llm-query", chunk);                          │
+│      │                                                                       │
+│      │              // 透传给coordinator                                     │
+│      │              SendMsg(session_id, dialogue_id,                         │
+│      │                    coordinator_task_id, "coordinator",                │
+│      │                    "stream-chunk", chunk);                            │
+│      │          });                                                          │
+│      │    })                                                                 │
+│      │                                                                       │
+│      ▼                                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │ SendMsg 实现细节                                                     │    │
+│  │                                                                      │    │
+│  │ bool SendMsg(session_id, dialogue_id, target_task_id,               │    │
+│  │             target_node_id, key, msg) {                              │    │
+│  │   MMAgentMsgQue::Message message;                                    │    │
+│  │   message.message_id = "stream-chunk-" + uuid();                     │    │
+│  │   message.content = msg;  // chunk内容                               │    │
+│  │   message.receiver = target_node_id;  // "coordinator"               │    │
+│  │   message.metadata["session_id"] = session_id;                       │    │
+│  │   message.metadata["dialogue_id"] = dialogue_id;                     │    │
+│  │   message.metadata["task_id"] = target_task_id;                      │    │
+│  │   message.metadata["stream_key"] = key;  // "llm-query"              │    │
+│  │   message.metadata["message_type"] = "stream_chunk";                 │    │
+│  │   return runtime_->send_routed_message(message);                     │    │
+│  │ }                                                                    │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│      │                                                                       │
+│      │ 消息定向路由（Enhancement 024）                                       │
+│      ▼                                                                       │
+│  ┌───────────────────┐                                                       │
+│  │ Coordinator Task  │ ◄── 直接入队到coordinator的data_exchange_queue       │
+│  │ Message Queue     │                                                       │
+│  └─────────┬─────────┘                                                       │
+│            │                                                                 │
+│            ▼                                                                 │
+│  ┌───────────────────┐                                                       │
+│  │ coordinator_node  │                                                       │
+│  │ 接收chunk消息      │                                                       │
+│  └───────────────────┘                                                       │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**完整示例：Skill Node异步LLM调用 + 透传Coordinator**
+
+```cpp
+// skill_node.cpp - 完整的异步LLM调用示例
+extern "C" void skill_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
+                               INodeDataBusClient* client) {
+
+  // ===== 1. 检查是否为回调调用 =====
+  if (so_node::get_bool(inputs, "__async_callback__", false)) {
+    std::string key = so_node::get_string(inputs, "__async_key__");
+    std::string msg = so_node::get_string(inputs, "__async_msg__");
+
+    if (key == "llm-query") {
+      if (msg == "[DONE]") {
+        // 流式响应完成
+        outputs["response"] = accumulated_response;
+        outputs["done"] = SoDataVariant(true);
+        // 不再设置__async_pending__，workflow将继续
+      } else {
+        // 处理chunk
+        accumulated_response += msg;
+
+        // 透传chunk给coordinator（可选）
+        std::string coordinator_task_id =
+            client->async()->session_id() + "_coordinator";
+        client->async()->SendMsg(
+            client->async()->session_id(),
+            client->async()->dialogue_id(),
+            coordinator_task_id,
+            "coordinator",  // 目标node_id
+            "llm-stream",   // key
+            msg             // chunk
+        );
+
+        // 继续等待更多回调
+        outputs["__async_pending__"] = SoDataVariant(true);
+        outputs["call_key"] = SoDataVariant(std::string("llm-query"));
+      }
+    }
+    return;
+  }
+
+  // ===== 2. 首次调用：发起异步LLM请求 =====
+  std::string prompt = so_node::get_string(inputs, "user_text");
+  std::string coordinator_task_id =
+      so_node::get_string(inputs, "session_id") + "_coordinator";
+
+  // 通知coordinator：开始流式响应
+  client->async()->SendMsg(
+      client->async()->session_id(),
+      client->async()->dialogue_id(),
+      coordinator_task_id,
+      "coordinator",
+      "llm-stream",
+      "[START]"  // 流式开始标记
+  );
+
+  // 发起异步LLM调用
+  client->async()->AsyncCall("llm-query", [&]() {
+    StreamingLLMClient llm;
+    llm.stream_prompt(prompt, {},
+      /* on_chunk */ [&](const std::string& chunk) {
+        // 发送给自己处理
+        client->async()->SendToSelf("llm-query", chunk);
+      },
+      /* on_finish */ [&](const std::string&) {
+        client->async()->SendToSelf("llm-query", "[DONE]");
+      }
+    );
+  });
+
+  // 设置异步等待状态
+  outputs["__async_pending__"] = SoDataVariant(true);
+  outputs["call_key"] = SoDataVariant(std::string("llm-query"));
+}
+```
+
+**Coordinator Node接收流式消息**：
+
+```cpp
+// coordinator_node.cpp - 接收skill透传的chunk
+extern "C" void coordinator_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
+                                     INodeDataBusClient* client) {
+
+  // 检查是否收到流式chunk消息
+  std::string stream_key = so_node::get_string(inputs, "stream_key", "");
+  if (!stream_key.empty()) {
+    // 这是skill透传的chunk消息
+    std::string chunk = so_node::get_string(inputs, "message_content");
+
+    if (chunk == "[START]") {
+      // 开始流式响应
+      client->user()->put("stream_buffer", SoDataVariant(std::string("")));
+      outputs["stream_status"] = SoDataVariant(std::string("started"));
+    } else if (chunk == "[DONE]") {
+      // 流式响应完成
+      SoDataVariant buffer;
+      if (client->user()->get("stream_buffer", buffer)) {
+        std::string full_response = std::get<std::string>(buffer);
+        outputs["final_response"] = SoDataVariant(full_response);
+      }
+      outputs["stream_status"] = SoDataVariant(std::string("completed"));
+    } else {
+      // 中间chunk，累积或转发
+      SoDataVariant buffer;
+      std::string current = "";
+      if (client->user()->get("stream_buffer", buffer)) {
+        current = std::get<std::string>(buffer);
+      }
+      client->user()->put("stream_buffer", SoDataVariant(current + chunk));
+
+      // 可选：实时输出到用户
+      outputs["stream_chunk"] = SoDataVariant(chunk);
+      outputs["stream_status"] = SoDataVariant(std::string("streaming"));
+    }
+    return;
+  }
+
+  // 正常coordinator逻辑...
+}
+```
+
+**关键设计点**：
+
+| 设计点 | 说明 |
+|--------|------|
+| Coordinator Task ID | 采用约定命名`{session_id}_coordinator`，skill可直接构造 |
+| 消息类型 | `message_type = "stream_chunk"`，coordinator据此识别 |
+| 流程标记 | `[START]` / chunk / `[DONE]` 三阶段标记 |
+| 数据隔离 | 使用`dialogue_id`确保多对话场景的chunk不会混淆 |
+
+**Skill Node Output样例（每次收到chunk回调时）**：
+
+```cpp
+// ===== 回调时 outputs 示例 =====
+// 当 skill_node 收到一个 chunk 回调时，典型的 outputs 内容：
+
+outputs = {
+    // 必需：标记继续异步等待
+    "__async_pending__": true,
+    "call_key": "llm-query",
+
+    // 可选：当前chunk内容（用于调试或本地累积）
+    "current_chunk": "这是LLM返回的一个文本片段",
+
+    // 可选：已累积的响应（如果需要在本地维护状态）
+    "accumulated_response": "这是LLM返回的一个文本片段...之前累积的内容",
+
+    // 注意：透传给 coordinator 是通过 SendMsg() 完成，不走 outputs
+};
+
+// ===== 透传给 coordinator 的消息结构 =====
+// 通过 SendMsg() 发送的消息：
+{
+    "message_id": "stream-chunk-uuid-xxx",
+    "content": "这是LLM返回的一个文本片段",  // chunk内容
+    "receiver": "coordinator",
+    "metadata": {
+        "session_id": "session-123",
+        "dialogue_id": "dialogue-456",
+        "task_id": "session-123_coordinator",
+        "stream_key": "llm-stream",
+        "message_type": "stream_chunk"
+    }
+}
+```
+
+**完整数据流示例**：
+
+```
+LLM Service
+    │
+    │ stream: ["你", "好", "，", "我", "是", "AI", "助手", "[DONE]"]
+    ▼
+async_thread (skill_node内部)
+    │
+    │ SendToSelf("llm-query", chunk) × 8次
+    ▼
+skill_node (回调入口)
+    │
+    ├── outputs["__async_pending__"] = true
+    ├── outputs["current_chunk"] = "你"
+    │
+    └── SendMsg(..., "你") ──────────────────────┐
+                                                  │
+    (重复7次，每个chunk触发一次回调)              │
+                                                  ▼
+                              coordinator_task.data_exchange_queue
+                                                  │
+                                                  ▼
+                              coordinator_node
+                                  │
+                                  ├── 收到 "你": outputs["stream_chunk"] = "你"
+                                  ├── 收到 "好": outputs["stream_chunk"] = "好"
+                                  ├── ... (累积每个chunk)
+                                  └── 收到 "[DONE]": outputs["final_response"] = "你好，我是AI助手"
+```
+
 ### 流程设计
 
 #### 异步调用流程时序图
@@ -659,9 +922,9 @@ TEST(AsyncCallTest, SendToSelfRouting) {
 
 | 文档 | 变更说明 |
 |------|---------|
-| `publish/workflow/NODE_DEVELOPMENT_GUIDE.md` | 新增异步调用章节 |
-| `publish/workflow/NODE_API_REFERENCE.md` | 新增async() API参考 |
-| `src/runtime/databus/clients/python/README.md` | 新增Python异步SDK说明 |
+| [NODE_DEVELOPMENT_GUIDE.md](../../publish/workflow/NODE_DEVELOPMENT_GUIDE.md) | 新增异步调用章节 |
+| [NODE_API_REFERENCE.md](../../publish/workflow/NODE_API_REFERENCE.md) | 新增async() API参考 |
+| [Python SDK README.md](../../src/runtime/databus/clients/python/README.md) | 新增Python异步SDK说明 |
 
 ### 关联方案
 
@@ -688,4 +951,3 @@ TEST(AsyncCallTest, SendToSelfRouting) {
 | 版本 | 刷新时间 | 刷新人 | 刷新内容 |
 |------|---------|--------|---------|
 | v1.0 | 2026-03-26 | Claude | 初始版本 |
-| v1.1 | 2026-03-26 | Claude | 补充短路路由设计和回调入口设计 |
