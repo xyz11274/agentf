@@ -921,6 +921,16 @@ private:
 };
 ```
 
+#### Phase 4: 多语言SDK设计（复用DataBus UDS）
+
+多语言节点（Python/Shell/Go）是独立进程，无法直接访问 C++ runtime 内存，需要通过 UDS 跨进程通信。
+
+**核心设计**：
+- 新增 UDS JSON-RPC 方法 `async_callback`，让 runtime 代为入队消息到 task 消息队列
+- 各语言 SDK 通过环境变量获取上下文信息，调用 `async_callback` 发送回调消息
+
+**详细设计见文档末尾：[多语言SDK设计（复用DataBus UDS）](#多语言sdk设计复用databus-uds)**
+
 ### 待修改文件清单
 
 | 文件 | 修改类型 | 说明 |
@@ -931,8 +941,13 @@ private:
 | `include/internal/workflow/node.h` | 修改 | 新增async_call_key_成员和setter/getter |
 | `src/runtime/async_call.cpp` | 新增 | NodeAsyncCallSDK实现 |
 | `src/runtime/databus/node_databus_client.cpp` | 修改 | 实现async()方法 |
-| `src/runtime/runtime.cpp` | 修改 | 注入SDK、处理异步状态、handle_async_callback()、短路路由 |
-| `src/runtime/worker/worker.cpp` | 修改 | 注入AF_ASYNC_*环境变量 |
+| `src/runtime/runtime.cpp` | 修改 | 注入SDK、处理异步状态、handle_async_callback()、短路路由；注入node_id到inputs |
+| `src/runtime/databus/uds_server.cpp` | 修改 | 新增 `handle_async_callback` 方法 |
+| `src/runtime/databus/clients/python/agentflow_databus.py` | 修改 | 新增 `AsyncCallSDK` 类 |
+| `src/runtime/databus/clients/python/README.md` | 修改 | 新增环境变量说明、AsyncCallSDK文档 |
+| `src/runtime/databus/clients/README.md` | 修改 | 新增 `async_callback` 方法、环境变量说明 |
+| `src/runtime/databus/clients/shell/agentflow_async.sh` | 新增 | Shell异步调用SDK |
+| `src/runtime/databus/clients/golang/async/async.go` | 新增 | Go异步调用SDK |
 
 ### 功能点实现优先级
 
@@ -1429,24 +1444,12 @@ std::string UDSServer::handle_async_callback(const std::string& params, int64_t 
 }
 ```
 
-### 多语言SDK文件清单
-
-| 文件 | 修改类型 | 说明 |
-|------|---------|------|
-| `src/runtime/databus/uds_server.cpp` | 修改 | 新增 `handle_async_callback` 方法 |
-| `src/runtime/runtime.cpp` | 修改 | 提供 `enqueue_async_callback` 接口 |
-| `src/runtime/worker/worker.cpp` | 修改 | 注入 `AF_ASYNC_*` 环境变量 |
-| `src/runtime/databus/clients/python/agentflow_databus.py` | 修改 | 新增 `AsyncCallSDK` 类 |
-| `src/runtime/databus/clients/shell/agentflow_async.sh` | 新增 | Shell异步调用SDK |
-| `src/runtime/databus/clients/golang/async/async.go` | 新增 | Go异步调用SDK |
-| `docs/UDS_PROTOCOL.md` | 修改 | 新增 `async_callback` 方法文档 |
-
 ### 多语言SDK实现优先级
 
 | 优先级 | 功能点 | 说明 |
 |--------|--------|------|
 | P1 | UDSServer新增async_callback方法 | 核心协议支持 |
-| P2 | Worker环境变量注入 | 所有语言需要 |
+| P2 | runtime.cpp注入node_id到inputs | 所有语言需要 |
 | P2 | Python SDK AsyncCallSDK | 最常用 |
 | P3 | Shell SDK | 轻量级脚本节点 |
 | P3 | Go SDK | 高性能节点 |
