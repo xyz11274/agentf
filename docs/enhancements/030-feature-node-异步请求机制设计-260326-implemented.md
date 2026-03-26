@@ -1015,3 +1015,398 @@ TEST(AsyncCallTest, SendToSelfRouting) {
 |------|---------|--------|---------|
 | v1.0 | 2026-03-26 | Claude | 初始版本 |
 | v1.1 | 2026-03-26 | Claude | 更新示例代码与实际实现一致，移除无关细节 |
+| v1.2 | 2026-03-26 | Claude | 新增多语言SDK设计方案（Python/Shell/Go复用DataBus UDS） |
+
+---
+
+## 多语言SDK设计（复用DataBus UDS）
+
+### 背景
+
+C++ SO节点的异步调用机制已实现，但Python/Shell/Go等多语言节点尚不支持异步回调。
+
+**当前状况**：
+- 多语言节点通过 `AF_DATABUS_UDS_FILE` 环境变量访问DataBus UDS服务
+- UDS服务已实现JSON-RPC 2.0协议，支持 `put/get/subscribe/publish` 等方法
+- 缺少异步回调机制，多语言节点无法实现非阻塞流式响应
+
+**目标**：
+复用现有DataBus UDS通道，为Python/Shell/Go节点提供异步回调能力。
+
+### 整体架构
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Multi-Language Async SDK Architecture                     │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐              │
+│  │ Python Node     │  │ Shell Node      │  │ Go Node         │              │
+│  │                 │  │                 │  │                 │              │
+│  │ AsyncCallSDK    │  │ async_call.sh   │  │ AsyncCallSDK    │              │
+│  │  - send_to_self │  │  - send_to_self │  │  - SendToSelf   │              │
+│  │  - send_msg     │  │  - send_msg     │  │  - SendMsg      │              │
+│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘              │
+│           │                    │                    │                        │
+│           └────────────────────┼────────────────────┘                        │
+│                                │                                             │
+│                                ▼                                             │
+│           ┌──────────────────────────────────────┐                          │
+│           │        UDS JSON-RPC 2.0              │                          │
+│           │    (AF_DATABUS_UDS_FILE)             │                          │
+│           │                                      │                          │
+│           │    Methods:                          │                          │
+│           │    - put/get/remove/contains         │                          │
+│           │    - subscribe/unsubscribe           │                          │
+│           │    - publish                         │                          │
+│           │    - async_callback (NEW)            │◄── 扩展方法              │
+│           └──────────────┬───────────────────────┘                          │
+│                          │                                                   │
+│                          ▼                                                   │
+│           ┌──────────────────────────────────────┐                          │
+│           │         MMAgentRuntime               │                          │
+│           │    - handle_async_callback()         │                          │
+│           │    - 触发节点重新执行                 │                          │
+│           └──────────────────────────────────────┘                          │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### UDS协议扩展
+
+#### 新增方法：`async_callback`
+
+**用途**：异步回调消息路由，将消息发送到目标节点的Task队列。
+
+**Request:**
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "async_callback",
+  "params": {
+    "session_id": "<session_id>",
+    "dialogue_id": "<dialogue_id>",
+    "task_id": "<task_id>",
+    "node_id": "<node_id>",
+    "call_key": "<call_key>",
+    "content": "<message_content>"
+  },
+  "id": 1
+}
+```
+
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "success": true,
+    "queued": true
+  },
+  "id": 1
+}
+```
+
+**参数说明**：
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `session_id` | string | 是 | Session ID，从环境变量获取 |
+| `dialogue_id` | string | 是 | Dialogue ID，从环境变量获取 |
+| `task_id` | string | 是 | Task ID，从环境变量获取 |
+| `node_id` | string | 是 | Node ID，从环境变量获取 |
+| `call_key` | string | 是 | 异步调用标识，node设置 |
+| `content` | string | 是 | 回调消息内容 |
+
+### 环境变量注入
+
+Worker在执行多语言节点时注入：
+
+```bash
+AF_SESSION_ID=<session_id>
+AF_DIALOGUE_ID=<dialogue_id>
+AF_TASK_ID=<task_id>
+AF_NODE_ID=<node_id>
+AF_DATABUS_UDS_FILE=/tmp/agentflow_<session_id>.sock
+```
+
+### Python SDK实现
+
+**文件**: `src/runtime/databus/clients/python/agentflow_databus.py`
+
+```python
+class AsyncCallSDK:
+    """Async call SDK for Python nodes using DataBus UDS channel."""
+
+    def __init__(self, client: 'DataBusClient'):
+        self._client = client
+        self._session_id = os.environ.get("AF_SESSION_ID", "")
+        self._dialogue_id = os.environ.get("AF_DIALOGUE_ID", "")
+        self._task_id = os.environ.get("AF_TASK_ID", "")
+        self._node_id = os.environ.get("AF_NODE_ID", "")
+
+    def send_to_self(self, call_key: str, content: str) -> bool:
+        """Send a callback message to the current node."""
+        params = {
+            "session_id": self._session_id,
+            "dialogue_id": self._dialogue_id,
+            "task_id": self._task_id,
+            "node_id": self._node_id,
+            "call_key": call_key,
+            "content": content
+        }
+        result = self._client._call("async_callback", params)
+        return result.get("success", False)
+
+    def send_msg(self, target_task_id: str, target_node_id: str,
+                 call_key: str, content: str) -> bool:
+        """Send a message to another node."""
+        params = {
+            "session_id": self._session_id,
+            "dialogue_id": self._dialogue_id,
+            "task_id": target_task_id,
+            "node_id": target_node_id,
+            "call_key": call_key,
+            "content": content
+        }
+        result = self._client._call("async_callback", params)
+        return result.get("success", False)
+```
+
+**Python Node使用示例**：
+
+```python
+#!/usr/bin/env python3
+"""LLM Streaming Node - Python with async callbacks"""
+
+import json
+import os
+import httpx
+from agentflow_databus import DataBusClient
+
+_accumulated_response = ""
+
+def llm_stream_node(inputs: dict, outputs: dict, client: DataBusClient):
+    global _accumulated_response
+    async_sdk = client.async_sdk()
+
+    # 1. Check if callback
+    is_callback = inputs.get("__async_callback__", "false") == "true"
+
+    if is_callback:
+        callback_key = inputs.get("__async_key__", "")
+        callback_msg = inputs.get("__async_msg__", "")
+
+        if callback_key == "llm-stream":
+            if callback_msg == "[DONE]":
+                outputs["status"] = "success"
+                outputs["response"] = _accumulated_response
+                _accumulated_response = ""
+            else:
+                _accumulated_response += callback_msg
+                outputs["__async_pending__"] = "true"
+                outputs["call_key"] = callback_key
+        return
+
+    # 2. Initial invocation - start async LLM call
+    api_key = client.sys().get("api_key", "")
+    prompt = inputs.get("prompt") or inputs.get("input", "")
+
+    def async_llm_call():
+        with httpx.Client() as http:
+            with http.stream("POST", llm_url, json=request) as resp:
+                for line in resp.iter_lines():
+                    if line.startswith("data: "):
+                        chunk = parse_chunk(line)
+                        if chunk:
+                            async_sdk.send_to_self("llm-stream", chunk)
+                async_sdk.send_to_self("llm-stream", "[DONE]")
+
+    import threading
+    threading.Thread(target=async_llm_call, daemon=True).start()
+
+    outputs["__async_pending__"] = "true"
+    outputs["call_key"] = "llm-stream"
+```
+
+### Shell SDK实现
+
+**文件**: `src/runtime/databus/clients/shell/agentflow_async.sh`
+
+```bash
+#!/bin/bash
+# AgentFlow Async Call SDK for Shell nodes
+
+# Send callback message to current node
+# Usage: send_to_self <call_key> <content>
+send_to_self() {
+    local call_key="$1"
+    local content="$2"
+    local uds_path="${AF_DATABUS_UDS_FILE}"
+
+    local params="{\"session_id\":\"${AF_SESSION_ID}\",\"dialogue_id\":\"${AF_DIALOGUE_ID}\",\"task_id\":\"${AF_TASK_ID}\",\"node_id\":\"${AF_NODE_ID}\",\"call_key\":\"${call_key}\",\"content\":\"${content}\"}"
+
+    local request="{\"jsonrpc\":\"2.0\",\"method\":\"async_callback\",\"params\":${params},\"id\":$$}"
+    echo "$request" | nc -U "$uds_path"
+}
+
+# Output async pending state
+# Usage: async_pending <call_key>
+async_pending() {
+    echo "__async_pending__=true"
+    echo "call_key=$1"
+}
+
+# Check if callback
+is_async_callback() {
+    [[ "${__async_callback__}" == "true" ]]
+}
+```
+
+**Shell Node使用示例**：
+
+```bash
+#!/bin/bash
+source "${AF_SDK_DIR}/agentflow_async.sh"
+
+ACCUMULATOR="/tmp/llm_acc_${AF_TASK_ID}.txt"
+
+if is_async_callback; then
+    if [[ "$CALLBACK_MSG" == "[DONE]" ]]; then
+        echo "status=success"
+        echo "response=$(cat $ACCUMULATOR)"
+        rm -f "$ACCUMULATOR"
+    else
+        echo -n "$CALLBACK_MSG" >> "$ACCUMULATOR"
+        async_pending "llm-stream"
+    fi
+    exit 0
+fi
+
+# Start background LLM streaming
+(
+    curl -sS -N "$LLM_URL" | while read line; do
+        send_to_self "llm-stream" "$chunk"
+    done
+    send_to_self "llm-stream" "[DONE]"
+) &
+
+async_pending "llm-stream"
+```
+
+### Go SDK实现
+
+**文件**: `src/runtime/databus/clients/golang/async/async.go`
+
+```go
+package async
+
+import (
+	"encoding/json"
+	"net"
+	"os"
+)
+
+type AsyncCallSDK struct {
+	sessionID  string
+	dialogueID string
+	taskID     string
+	nodeID     string
+	udsPath    string
+}
+
+func NewAsyncCallSDK() *AsyncCallSDK {
+	return &AsyncCallSDK{
+		sessionID:  os.Getenv("AF_SESSION_ID"),
+		dialogueID: os.Getenv("AF_DIALOGUE_ID"),
+		taskID:     os.Getenv("AF_TASK_ID"),
+		nodeID:     os.Getenv("AF_NODE_ID"),
+		udsPath:    os.Getenv("AF_DATABUS_UDS_FILE"),
+	}
+}
+
+func (s *AsyncCallSDK) SendToSelf(callKey, content string) error {
+	return s.sendAsyncCallback(s.taskID, s.nodeID, callKey, content)
+}
+
+func (s *AsyncCallSDK) SendMsg(targetTaskID, targetNodeID, callKey, content string) error {
+	return s.sendAsyncCallback(targetTaskID, targetNodeID, callKey, content)
+}
+
+func (s *AsyncCallSDK) sendAsyncCallback(taskID, nodeID, callKey, content string) error {
+	params := map[string]interface{}{
+		"session_id":  s.sessionID,
+		"dialogue_id": s.dialogueID,
+		"task_id":     taskID,
+		"node_id":     nodeID,
+		"call_key":    callKey,
+		"content":     content,
+	}
+	request := map[string]interface{}{
+		"jsonrpc": "2.0",
+		"method":  "async_callback",
+		"params":  params,
+		"id":      1,
+	}
+
+	conn, _ := net.Dial("unix", s.udsPath)
+	defer conn.Close()
+	json.NewEncoder(conn).Encode(request)
+	return nil
+}
+```
+
+### UDSServer实现
+
+**文件**: `src/runtime/databus/uds_server.cpp`
+
+```cpp
+std::string UDSServer::handle_async_callback(const std::string& params, int64_t id) {
+  // 1. 解析参数
+  std::string session_id = extract_string_param(params, "session_id");
+  std::string dialogue_id = extract_string_param(params, "dialogue_id");
+  std::string task_id = extract_string_param(params, "task_id");
+  std::string node_id = extract_string_param(params, "node_id");
+  std::string call_key = extract_string_param(params, "call_key");
+  std::string content = extract_string_param(params, "content");
+
+  // 2. 构造回调消息
+  MMAgentMsgQue::Message message;
+  message.message_id = "async-callback-" + generate_uuid();
+  message.content = content;
+  message.metadata["message_type"] = "async_callback";
+  message.metadata["async_call_key"] = call_key;
+  message.metadata["session_id"] = session_id;
+  message.metadata["dialogue_id"] = dialogue_id;
+  message.metadata["task_id"] = task_id;
+  message.metadata["node_id"] = node_id;
+
+  // 3. 通过Runtime路由
+  bool success = runtime_->enqueue_async_callback(message);
+
+  return success ? build_success_response(R"({"success": true})", id)
+                 : build_error_response(-100, "Task not found", id);
+}
+```
+
+### 多语言SDK文件清单
+
+| 文件 | 修改类型 | 说明 |
+|------|---------|------|
+| `src/runtime/databus/uds_server.cpp` | 修改 | 新增 `handle_async_callback` 方法 |
+| `src/runtime/runtime.cpp` | 修改 | 提供 `enqueue_async_callback` 接口 |
+| `src/runtime/worker/worker.cpp` | 修改 | 注入 `AF_ASYNC_*` 环境变量 |
+| `src/runtime/databus/clients/python/agentflow_databus.py` | 修改 | 新增 `AsyncCallSDK` 类 |
+| `src/runtime/databus/clients/shell/agentflow_async.sh` | 新增 | Shell异步调用SDK |
+| `src/runtime/databus/clients/golang/async/async.go` | 新增 | Go异步调用SDK |
+| `docs/UDS_PROTOCOL.md` | 修改 | 新增 `async_callback` 方法文档 |
+
+### 多语言SDK实现优先级
+
+| 优先级 | 功能点 | 说明 |
+|--------|--------|------|
+| P1 | UDSServer新增async_callback方法 | 核心协议支持 |
+| P2 | Worker环境变量注入 | 所有语言需要 |
+| P2 | Python SDK AsyncCallSDK | 最常用 |
+| P3 | Shell SDK | 轻量级脚本节点 |
+| P3 | Go SDK | 高性能节点 |
