@@ -1013,9 +1013,9 @@ TEST(AsyncCallTest, SendToSelfRouting) {
 
 | 版本 | 刷新时间 | 刷新人 | 刷新内容 |
 |------|---------|--------|---------|
-| v1.0 | 2026-03-26 | Claude | 初始版本 |
-| v1.1 | 2026-03-26 | Claude | 更新示例代码与实际实现一致，移除无关细节 |
-| v1.2 | 2026-03-26 | Claude | 新增多语言SDK设计方案（Python/Shell/Go复用DataBus UDS） |
+| v1.0 | 2026-03-26 | xl4872 | 初始版本 |
+| v1.1 | 2026-03-26 | xl4872 | 更新示例代码与实际实现一致，移除无关细节 |
+| v1.2 | 2026-03-26 | xl4872 | 新增多语言SDK设计方案；标注环境变量注入状态，修正命名 |
 
 ---
 
@@ -1120,15 +1120,55 @@ C++ SO节点的异步调用机制已实现，但Python/Shell/Go等多语言节�
 
 ### 环境变量注入
 
-Worker在执行多语言节点时注入：
+Worker在执行多语言节点时注入环境变量，分两类：
 
-```bash
-AF_SESSION_ID=<session_id>
-AF_DIALOGUE_ID=<dialogue_id>
-AF_TASK_ID=<task_id>
-AF_NODE_ID=<node_id>
-AF_DATABUS_UDS_FILE=/tmp/agentflow_<session_id>.sock
+#### 已有注入 - 直接注入（worker.cpp）
+
+| 变量名 | 说明 | 来源 |
+|--------|------|------|
+| `AF_DATABUS_DIR` | DataBus文件根目录 | worker.cpp:54 |
+| `AF_DATABUS_KV_DIR` | DataBus KV目录 | worker.cpp:55 |
+| `AF_DATABUS_EVENTS_DIR` | DataBus事件目录 | worker.cpp:56 |
+| `AF_LLM_BASE_URL` | LLM服务地址 | worker.cpp:58 |
+| `AF_LLM_API_KEY` | LLM API密钥 | worker.cpp:61 |
+| `AF_LLM_MODEL` | LLM模型名称 | worker.cpp:64 |
+| `AF_PLUGIN_UDS_FILE` | 插件UDS路径 | worker.cpp:70 |
+| `AF_DATABUS_UDS_FILE` | DataBus UDS路径 | worker.cpp:81 |
+
+#### 已有注入 - inputs自动转换（worker.cpp:91-95）
+
+Worker 会将 `request.inputs` 中的所有字段自动转换为环境变量 `AF_<KEY>`：
+
+| 变量名 | 说明 | inputs来源 |
+|--------|------|------------|
+| `AF_SESSION_ID` | 当前Session ID | inputs["session_id"] (runtime.cpp:1713) |
+| `AF_DIALOGUE_ID` | 当前Dialogue ID | inputs["dialogue_id"] (runtime.cpp:1718) |
+| `AF_SELF_TASK_ID` | 当前Task ID | inputs["self_task_id"] (runtime.cpp:1728) |
+
+**转换逻辑**（worker.cpp:91-95）：
+```cpp
+for(const auto& pair : request.inputs) {
+    std::string env_key = "AF_" + to_env_suffix(pair.first);
+    exec_config.env_vars.push_back(env_key + "=" + data_variant_to_string(pair.second));
+}
 ```
+
+#### 新增注入（需修改代码）
+
+| 变量名 | 说明 | 修改位置 |
+|--------|------|----------|
+| `AF_NODE_ID` | 当前Node ID | runtime.cpp: 注入到inputs；worker.cpp: 自动转换 |
+
+**修改方案**：
+
+在 `src/runtime/runtime.cpp` 中注入 `node_id` 到 inputs：
+
+```cpp
+// 在 inputs 注入部分（约1730行附近）新增：
+inputs["node_id"] = node->get_id();  // 当前执行节点ID
+```
+
+Worker 会自动将其转换为 `AF_NODE_ID` 环境变量。
 
 ### Python SDK实现
 
@@ -1142,7 +1182,7 @@ class AsyncCallSDK:
         self._client = client
         self._session_id = os.environ.get("AF_SESSION_ID", "")
         self._dialogue_id = os.environ.get("AF_DIALOGUE_ID", "")
-        self._task_id = os.environ.get("AF_TASK_ID", "")
+        self._task_id = os.environ.get("AF_SELF_TASK_ID", "")  # 注意：使用 AF_SELF_TASK_ID
         self._node_id = os.environ.get("AF_NODE_ID", "")
 
     def send_to_self(self, call_key: str, content: str) -> bool:
@@ -1244,7 +1284,7 @@ send_to_self() {
     local content="$2"
     local uds_path="${AF_DATABUS_UDS_FILE}"
 
-    local params="{\"session_id\":\"${AF_SESSION_ID}\",\"dialogue_id\":\"${AF_DIALOGUE_ID}\",\"task_id\":\"${AF_TASK_ID}\",\"node_id\":\"${AF_NODE_ID}\",\"call_key\":\"${call_key}\",\"content\":\"${content}\"}"
+    local params="{\"session_id\":\"${AF_SESSION_ID}\",\"dialogue_id\":\"${AF_DIALOGUE_ID}\",\"task_id\":\"${AF_SELF_TASK_ID}\",\"node_id\":\"${AF_NODE_ID}\",\"call_key\":\"${call_key}\",\"content\":\"${content}\"}"
 
     local request="{\"jsonrpc\":\"2.0\",\"method\":\"async_callback\",\"params\":${params},\"id\":$$}"
     echo "$request" | nc -U "$uds_path"
@@ -1269,7 +1309,7 @@ is_async_callback() {
 #!/bin/bash
 source "${AF_SDK_DIR}/agentflow_async.sh"
 
-ACCUMULATOR="/tmp/llm_acc_${AF_TASK_ID}.txt"
+ACCUMULATOR="/tmp/llm_acc_${AF_SELF_TASK_ID}.txt"
 
 if is_async_callback; then
     if [[ "$CALLBACK_MSG" == "[DONE]" ]]; then
@@ -1319,7 +1359,7 @@ func NewAsyncCallSDK() *AsyncCallSDK {
 	return &AsyncCallSDK{
 		sessionID:  os.Getenv("AF_SESSION_ID"),
 		dialogueID: os.Getenv("AF_DIALOGUE_ID"),
-		taskID:     os.Getenv("AF_TASK_ID"),
+		taskID:     os.Getenv("AF_SELF_TASK_ID"),  // 注意：使用 AF_SELF_TASK_ID
 		nodeID:     os.Getenv("AF_NODE_ID"),
 		udsPath:    os.Getenv("AF_DATABUS_UDS_FILE"),
 	}
