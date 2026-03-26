@@ -184,3 +184,24 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/event_handler/test_event_handler_blackbox
         coordinator_node
     )
 endif()
+
+# Multi-Session Concurrent Blackbox Test
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/system_agent_mock/test_multi_session_concurrent.cpp")
+    add_executable(test_e2e_multi_session_concurrent
+        system_agent_mock/test_multi_session_concurrent.cpp
+    )
+    target_link_libraries(test_e2e_multi_session_concurrent
+        agentflow
+        GTest::gtest
+        GTest::gtest_main
+    )
+    add_test(NAME E2EMultiSessionConcurrent COMMAND test_e2e_multi_session_concurrent)
+    add_dependencies(e2e_tests test_e2e_multi_session_concurrent)
+    add_dependencies(test_e2e_multi_session_concurrent
+        skill_selection_node
+        travel_node
+        shopping_node
+        foodie_node
+        coordinator_node
+    )
+endif()
