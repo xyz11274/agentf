@@ -58,38 +58,38 @@
 
 按日期升序排列：
 
-| 编号 | 日期 | 标题 | 类型 | 状态 | 背景 | 更新内容 |
-|------|------|------|------|------|------|----------|
-| 001 | 2026-02-21 | [MMAgent 包管理与加载重构](001-refactor-mmagent-包管理与加载重构-260221-implemented.md) | refactor | implemented | Agent实例生命周期管理需要统一的包管理机制 | 重构MMAgent包加载流程，支持动态加载和热更新 |
-| 002 | 2026-02-22 | [文档治理与架构/API 对齐](002-feature-文档治理与架构api-对齐-260222-implemented.md) | feature | implemented | 文档与代码实现存在不一致，需要系统性治理 | 整理文档结构，确保API文档与实际代码对齐 |
-| 003 | 2026-02-22 | [MMDataBus 全局共享重构](003-refactor-mmdatabus-全局共享重构-260222-implemented.md) | refactor | implemented | DataBus实例分散在各处，缺乏统一管理 | 实现全局共享的MMDataBus，统一数据访问入口 |
-| 004 | 2026-02-23 | [Runtime Master 自主调度重构](004-refactor-runtime-master-自主调度重构-260223-implemented.md) | refactor | implemented | Master调度逻辑分散，难以维护和扩展 | 重构为Master自主调度模型，清晰分层架构 |
-| 005 | 2026-02-23 | [Visualizer GOTO 环路可视化修复](005-bugfix-visualizer-goto-环路可视化修复-260223-implemented.md) | bugfix | implemented | GOTO节点形成环路时可视化显示异常 | 修复环路检测和可视化渲染逻辑 |
-| 006 | 2026-02-23 | [Worker/MMWorkflow/MMNode/MMEdge 自主执行重构](006-refactor-workermmworkflowmmnodemmedge-自主执行重构-260223-implemented.md) | refactor | implemented | 节点执行逻辑耦合度高，难以独立测试 | 实现各组件自主执行能力，降低耦合 |
-| 007 | 2026-02-23 | [Vendor 依赖配置与文档刷新](007-feature-vendor-依赖配置与文档刷新-260223-implemented.md) | feature | implemented | 第三方依赖管理混乱，文档缺失 | 统一依赖配置，补充依赖说明文档 |
-| 008 | 2026-02-23 | [示例与对外接口收敛重构](008-refactor-示例与对外接口收敛重构-260223-implemented.md) | refactor | implemented | 对外接口过于分散，示例代码不够清晰 | 收敛对外接口，重构示例代码结构 |
-| 009 | 2026-02-28 | [MMNode 执行引擎下沉 + Coordinator Task0 默认化](009-feature-mmnode-执行引擎下沉-coordinator-task0-默认化-260228-implemented.md) | feature | implemented | 执行引擎层级过高，Coordinator初始化复杂 | 执行引擎下沉到Worker层，Coordinator默认创建Task0 |
-| 010 | 2026-02-28 | [MMNode 热更新能力下沉到 Worker](010-feature-mmnode-热更新能力下沉到-worker-260228-implemented.md) | feature | implemented | 热更新能力仅在Runtime层，Worker无法独立更新 | 将热更新能力下沉到Worker，支持节点级更新 |
-| 011 | 2026-03-01 | [SessionTaskCoordinator & Context 分层重构](011-refactor-sessiontaskcoordinator-context-分层重构-260301-implemented.md) | refactor | implemented | Session/Task/Coordinator职责边界模糊 | 重新划分职责，实现清晰的分层架构 |
-| 012 | 2026-03-06 | [multi_session_chat 多语言节点重构](012-refactor-multi-session-chat-多语言节点重构-260306-implemented.md) | refactor | implemented | 多语言节点实现不统一，维护困难 | 统一多语言节点实现范式，重构multi_session_chat |
-| 013 | 2026-03-07 | [src/agent session/task 配置模型重构](013-refactor-srcagent-sessiontask-配置模型重构-260307-implemented.md) | refactor | implemented | Session/Task配置模型分散，扩展性差 | 统一配置模型，支持灵活扩展 |
-| 014 | 2026-03-07 | [agent/runtime 双队列与执行风险等级重构](014-refactor-agentruntime-双队列与执行风险等级重构-260307-implemented.md) | refactor | implemented | 消息队列单一，无法区分优先级和风险 | 实现双队列机制，支持执行风险分级 |
-| 015 | 2026-03-07 | [examples 目录结构整理](015-feature-examples-目录结构整理-260307-implemented.md) | feature | implemented | examples目录结构混乱，示例难以理解 | 重新组织目录结构，按功能分类示例 |
-| 016 | 2026-03-07 | [全链路跟踪系统（TraceSystem）](016-feature-全链路跟踪系统tracesystem-260307-implemented.md) | feature | implemented | 缺乏全链路跟踪能力，问题定位困难 | 实现TraceSystem，支持端到端跟踪 |
-| 017 | 2026-03-17 | [agent.json 配置结构冗余分析](017-feature-agentjson-配置结构冗余分析-260317-implemented.md) | feature | implemented | agent.json配置存在冗余字段 | 分析并清理冗余配置，优化配置结构 |
-| 018 | 2026-03-17 | [Skill 参数槽位校验功能](018-feature-skill-参数槽位校验功能-260317-implemented.md) | feature | implemented | Skill调用时参数校验不足，容易出错 | 实现参数槽位校验机制，提前发现参数问题 |
-| 019 | 2026-03-17 | [Plugin UDS 注入机制设计](019-feature-plugin-uds-注入机制设计-260317-implemented.md) | feature | implemented | Plugin无法访问DataBus，限制了扩展能力 | 设计UDS注入机制，让Plugin能访问DataBus |
-| 020 | 2026-03-18 | [Node 输出数据冲突问题修复](020-bugfix-node-输出数据冲突问题修复-260318-tbd.md) | bugfix | tbd | 多节点并行执行时输出数据可能冲突 | 待实施 |
-| 021 | 2026-03-18 | [Workflow Input Dialogue 级别隔离](021-feature-workflow-input-dialogue-级别隔离-260318-implemented.md) | feature | implemented | 多对话场景下输入数据未隔离，可能串话 | 实现dialogue级别的输入数据隔离 |
-| 022 | 2026-03-19 | [Multi-Response 机制设计](022-feature-multi-response-机制设计-260319-implemented.md) | feature | implemented | 流式响应场景需要多次返回结果 | 设计Multi-Response机制，支持分块响应 |
-| 023 | 2026-03-19 | [next_skills 格式扩展](023-feature-next-skills-格式扩展-260319-implemented.md) | feature | implemented | next_skills无法携带技能特定数据 | 扩展格式支持exec_skill_key字段 |
-| 024 | 2026-03-19 | [消息定向路由机制设计](024-feature-消息定向路由机制设计-260319-implemented.md) | feature | implemented | 消息路由经过多层转发，延迟高 | 实现基于task_id的定向路由，短路转发 |
-| 025 | 2026-03-20 | [Session 老化 DataBus 清理问题](025-feature-session-老化-databus-清理问题-260320-tbd.md) | feature | tbd | Session老化后DataBus数据未及时清理 | 待实施 |
-| 026 | 2026-03-20 | [Master-Worker 架构边界问题](026-feature-master-worker-架构边界问题-260320-tbd.md) | feature | tbd | Master和Worker职责边界不清晰 | 待实施 |
-| 027 | 2026-03-22 | [UDSServer 线程池改造](027-feature-udsserver-线程池改造-260322-tbd.md) | feature | tbd | UDSServer单线程处理，高并发性能不足 | 待实施 |
-| 028 | 2026-03-23 | [Node 模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md) | feature | tbd | LLM流式调用阻塞Worker线程 | 待实施 |
-| 029 | 2026-03-24 | [上下文回调机制优化](029-feature-上下文回调机制优化-260324-implemented.md) | feature | implemented | 用户上下文注入时机和方式不够灵活 | 实现可配置的上下文回调机制 |
-| 030 | 2026-03-27 | [Node 异步请求机制设计](030-feature-node-异步请求机制设计-260326-implemented.md) | feature | implemented | Node同步阻塞调用外部资源，并发能力受限 | 实现AsyncCallSDK支持非阻塞异步回调，包含多语言SDK |
+| 编号 | 日期 | 标题 | 类型 | 状态 | 背景 |
+|------|------|------|------|------|------|
+| 001 | 2026-02-21 | [MMAgent 包管理与加载重构](001-refactor-mmagent-包管理与加载重构-260221-implemented.md) | refactor | implemented | Agent实例生命周期管理需要统一的包管理机制 |
+| 002 | 2026-02-22 | [文档治理与架构/API 对齐](002-feature-文档治理与架构api-对齐-260222-implemented.md) | feature | implemented | 文档与代码实现存在不一致，需要系统性治理 |
+| 003 | 2026-02-22 | [MMDataBus 全局共享重构](003-refactor-mmdatabus-全局共享重构-260222-implemented.md) | refactor | implemented | DataBus实例分散在各处，缺乏统一管理 |
+| 004 | 2026-02-23 | [Runtime Master 自主调度重构](004-refactor-runtime-master-自主调度重构-260223-implemented.md) | refactor | implemented | Master调度逻辑分散，难以维护和扩展 |
+| 005 | 2026-02-23 | [Visualizer GOTO 环路可视化修复](005-bugfix-visualizer-goto-环路可视化修复-260223-implemented.md) | bugfix | implemented | GOTO节点形成环路时可视化显示异常 |
+| 006 | 2026-02-23 | [Worker/MMWorkflow/MMNode/MMEdge 自主执行重构](006-refactor-workermmworkflowmmnodemmedge-自主执行重构-260223-implemented.md) | refactor | implemented | 节点执行逻辑耦合度高，难以独立测试 |
+| 007 | 2026-02-23 | [Vendor 依赖配置与文档刷新](007-feature-vendor-依赖配置与文档刷新-260223-implemented.md) | feature | implemented | 第三方依赖管理混乱，文档缺失 |
+| 008 | 2026-02-23 | [示例与对外接口收敛重构](008-refactor-示例与对外接口收敛重构-260223-implemented.md) | refactor | implemented | 对外接口过于分散，示例代码不够清晰 |
+| 009 | 2026-02-28 | [MMNode 执行引擎下沉 + Coordinator Task0 默认化](009-feature-mmnode-执行引擎下沉-coordinator-task0-默认化-260228-implemented.md) | feature | implemented | 执行引擎层级过高，Coordinator初始化复杂 |
+| 010 | 2026-02-28 | [MMNode 热更新能力下沉到 Worker](010-feature-mmnode-热更新能力下沉到-worker-260228-implemented.md) | feature | implemented | 热更新能力仅在Runtime层，Worker无法独立更新 |
+| 011 | 2026-03-01 | [SessionTaskCoordinator & Context 分层重构](011-refactor-sessiontaskcoordinator-context-分层重构-260301-implemented.md) | refactor | implemented | Session/Task/Coordinator职责边界模糊 |
+| 012 | 2026-03-06 | [multi_session_chat 多语言节点重构](012-refactor-multi-session-chat-多语言节点重构-260306-implemented.md) | refactor | implemented | 多语言节点实现不统一，维护困难 |
+| 013 | 2026-03-07 | [src/agent session/task 配置模型重构](013-refactor-srcagent-sessiontask-配置模型重构-260307-implemented.md) | refactor | implemented | Session/Task配置模型分散，扩展性差 |
+| 014 | 2026-03-07 | [agent/runtime 双队列与执行风险等级重构](014-refactor-agentruntime-双队列与执行风险等级重构-260307-implemented.md) | refactor | implemented | 消息队列单一，无法区分优先级和风险 |
+| 015 | 2026-03-07 | [examples 目录结构整理](015-feature-examples-目录结构整理-260307-implemented.md) | feature | implemented | examples目录结构混乱，示例难以理解 |
+| 016 | 2026-03-07 | [全链路跟踪系统（TraceSystem）](016-feature-全链路跟踪系统tracesystem-260307-implemented.md) | feature | implemented | 缺乏全链路跟踪能力，问题定位困难 |
+| 017 | 2026-03-17 | [agent.json 配置结构冗余分析](017-feature-agentjson-配置结构冗余分析-260317-implemented.md) | feature | implemented | agent.json配置存在冗余字段 |
+| 018 | 2026-03-17 | [Skill 参数槽位校验功能](018-feature-skill-参数槽位校验功能-260317-implemented.md) | feature | implemented | Skill调用时参数校验不足，容易出错 |
+| 019 | 2026-03-17 | [Plugin UDS 注入机制设计](019-feature-plugin-uds-注入机制设计-260317-implemented.md) | feature | implemented | Plugin无法访问DataBus，限制了扩展能力 |
+| 020 | 2026-03-18 | [Node 输出数据冲突问题修复](020-bugfix-node-输出数据冲突问题修复-260318-tbd.md) | bugfix | tbd | 多节点并行执行时输出数据可能冲突 |
+| 021 | 2026-03-18 | [Workflow Input Dialogue 级别隔离](021-feature-workflow-input-dialogue-级别隔离-260318-implemented.md) | feature | implemented | 多对话场景下输入数据未隔离，可能串话 |
+| 022 | 2026-03-19 | [Multi-Response 机制设计](022-feature-multi-response-机制设计-260319-implemented.md) | feature | implemented | 流式响应场景需要多次返回结果 |
+| 023 | 2026-03-19 | [next_skills 格式扩展](023-feature-next-skills-格式扩展-260319-implemented.md) | feature | implemented | next_skills无法携带技能特定数据 |
+| 024 | 2026-03-19 | [消息定向路由机制设计](024-feature-消息定向路由机制设计-260319-implemented.md) | feature | implemented | 消息路由经过多层转发，延迟高 |
+| 025 | 2026-03-20 | [Session 老化 DataBus 清理问题](025-feature-session-老化-databus-清理问题-260320-tbd.md) | feature | tbd | Session老化后DataBus数据未及时清理 |
+| 026 | 2026-03-20 | [Master-Worker 架构边界问题](026-feature-master-worker-架构边界问题-260320-tbd.md) | feature | tbd | Master和Worker职责边界不清晰 |
+| 027 | 2026-03-22 | [UDSServer 线程池改造](027-feature-udsserver-线程池改造-260322-tbd.md) | feature | tbd | UDSServer单线程处理，高并发性能不足 |
+| 028 | 2026-03-23 | [Node 模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md) | feature | tbd | LLM流式调用阻塞Worker线程 |
+| 029 | 2026-03-24 | [上下文回调机制优化](029-feature-上下文回调机制优化-260324-implemented.md) | feature | implemented | 用户上下文注入时机和方式不够灵活 |
+| 030 | 2026-03-27 | [Node 异步请求机制设计](030-feature-node-异步请求机制设计-260326-implemented.md) | feature | implemented | Node同步阻塞调用外部资源，并发能力受限 |
 
 ## 按状态分类
 
@@ -109,33 +109,33 @@
 
 ### 已完成 (implemented)
 
-| 编号 | 日期 | 标题 | 背景 | 更新内容 |
-|------|------|------|------|----------|
-| 001 | 2026-02-21 | [MMAgent 包管理与加载重构](001-refactor-mmagent-包管理与加载重构-260221-implemented.md) | Agent实例生命周期管理需要统一的包管理机制 | 重构MMAgent包加载流程，支持动态加载和热更新 |
-| 002 | 2026-02-22 | [文档治理与架构/API 对齐](002-feature-文档治理与架构api-对齐-260222-implemented.md) | 文档与代码实现存在不一致 | 整理文档结构，确保API文档与实际代码对齐 |
-| 003 | 2026-02-22 | [MMDataBus 全局共享重构](003-refactor-mmdatabus-全局共享重构-260222-implemented.md) | DataBus实例分散在各处，缺乏统一管理 | 实现全局共享的MMDataBus，统一数据访问入口 |
-| 004 | 2026-02-23 | [Runtime Master 自主调度重构](004-refactor-runtime-master-自主调度重构-260223-implemented.md) | Master调度逻辑分散，难以维护和扩展 | 重构为Master自主调度模型，清晰分层架构 |
-| 005 | 2026-02-23 | [Visualizer GOTO 环路可视化修复](005-bugfix-visualizer-goto-环路可视化修复-260223-implemented.md) | GOTO节点形成环路时可视化显示异常 | 修复环路检测和可视化渲染逻辑 |
-| 006 | 2026-02-23 | [Worker/MMWorkflow/MMNode/MMEdge 自主执行重构](006-refactor-workermmworkflowmmnodemmedge-自主执行重构-260223-implemented.md) | 节点执行逻辑耦合度高，难以独立测试 | 实现各组件自主执行能力，降低耦合 |
-| 007 | 2026-02-23 | [Vendor 依赖配置与文档刷新](007-feature-vendor-依赖配置与文档刷新-260223-implemented.md) | 第三方依赖管理混乱，文档缺失 | 统一依赖配置，补充依赖说明文档 |
-| 008 | 2026-02-23 | [示例与对外接口收敛重构](008-refactor-示例与对外接口收敛重构-260223-implemented.md) | 对外接口过于分散，示例代码不够清晰 | 收敛对外接口，重构示例代码结构 |
-| 009 | 2026-02-28 | [MMNode 执行引擎下沉 + Coordinator Task0 默认化](009-feature-mmnode-执行引擎下沉-coordinator-task0-默认化-260228-implemented.md) | 执行引擎层级过高，Coordinator初始化复杂 | 执行引擎下沉到Worker层，Coordinator默认创建Task0 |
-| 010 | 2026-02-28 | [MMNode 热更新能力下沉到 Worker](010-feature-mmnode-热更新能力下沉到-worker-260228-implemented.md) | 热更新能力仅在Runtime层，Worker无法独立更新 | 将热更新能力下沉到Worker，支持节点级更新 |
-| 011 | 2026-03-01 | [SessionTaskCoordinator & Context 分层重构](011-refactor-sessiontaskcoordinator-context-分层重构-260301-implemented.md) | Session/Task/Coordinator职责边界模糊 | 重新划分职责，实现清晰的分层架构 |
-| 012 | 2026-03-06 | [multi_session_chat 多语言节点重构](012-refactor-multi-session-chat-多语言节点重构-260306-implemented.md) | 多语言节点实现不统一，维护困难 | 统一多语言节点实现范式，重构multi_session_chat |
-| 013 | 2026-03-07 | [src/agent session/task 配置模型重构](013-refactor-srcagent-sessiontask-配置模型重构-260307-implemented.md) | Session/Task配置模型分散，扩展性差 | 统一配置模型，支持灵活扩展 |
-| 014 | 2026-03-07 | [agent/runtime 双队列与执行风险等级重构](014-refactor-agentruntime-双队列与执行风险等级重构-260307-implemented.md) | 消息队列单一，无法区分优先级和风险 | 实现双队列机制，支持执行风险分级 |
-| 015 | 2026-03-07 | [examples 目录结构整理](015-feature-examples-目录结构整理-260307-implemented.md) | examples目录结构混乱，示例难以理解 | 重新组织目录结构，按功能分类示例 |
-| 016 | 2026-03-07 | [全链路跟踪系统（TraceSystem）](016-feature-全链路跟踪系统tracesystem-260307-implemented.md) | 缺乏全链路跟踪能力，问题定位困难 | 实现TraceSystem，支持端到端跟踪 |
-| 017 | 2026-03-17 | [agent.json 配置结构冗余分析](017-feature-agentjson-配置结构冗余分析-260317-implemented.md) | agent.json配置存在冗余字段 | 分析并清理冗余配置，优化配置结构 |
-| 018 | 2026-03-17 | [Skill 参数槽位校验功能](018-feature-skill-参数槽位校验功能-260317-implemented.md) | Skill调用时参数校验不足，容易出错 | 实现参数槽位校验机制，提前发现参数问题 |
-| 019 | 2026-03-17 | [Plugin UDS 注入机制设计](019-feature-plugin-uds-注入机制设计-260317-implemented.md) | Plugin无法访问DataBus，限制了扩展能力 | 设计UDS注入机制，让Plugin能访问DataBus |
-| 021 | 2026-03-18 | [Workflow Input Dialogue 级别隔离](021-feature-workflow-input-dialogue-级别隔离-260318-implemented.md) | 多对话场景下输入数据未隔离，可能串话 | 实现dialogue级别的输入数据隔离 |
-| 022 | 2026-03-19 | [Multi-Response 机制设计](022-feature-multi-response-机制设计-260319-implemented.md) | 流式响应场景需要多次返回结果 | 设计Multi-Response机制，支持分块响应 |
-| 023 | 2026-03-19 | [next_skills 格式扩展](023-feature-next-skills-格式扩展-260319-implemented.md) | next_skills无法携带技能特定数据 | 扩展格式支持exec_skill_key字段 |
-| 024 | 2026-03-19 | [消息定向路由机制设计](024-feature-消息定向路由机制设计-260319-implemented.md) | 消息路由经过多层转发，延迟高 | 实现基于task_id的定向路由，短路转发 |
-| 029 | 2026-03-24 | [上下文回调机制优化](029-feature-上下文回调机制优化-260324-implemented.md) | 用户上下文注入时机和方式不够灵活 | 实现可配置的上下文回调机制 |
-| 030 | 2026-03-27 | [Node 异步请求机制设计](030-feature-node-异步请求机制设计-260326-implemented.md) | Node同步阻塞调用外部资源，并发能力受限 | 实现AsyncCallSDK支持非阻塞异步回调，包含多语言SDK |
+| 编号 | 日期 | 标题 | 背景 |
+|------|------|------|------|
+| 001 | 2026-02-21 | [MMAgent 包管理与加载重构](001-refactor-mmagent-包管理与加载重构-260221-implemented.md) | Agent实例生命周期管理需要统一的包管理机制 |
+| 002 | 2026-02-22 | [文档治理与架构/API 对齐](002-feature-文档治理与架构api-对齐-260222-implemented.md) | 文档与代码实现存在不一致 |
+| 003 | 2026-02-22 | [MMDataBus 全局共享重构](003-refactor-mmdatabus-全局共享重构-260222-implemented.md) | DataBus实例分散在各处，缺乏统一管理 |
+| 004 | 2026-02-23 | [Runtime Master 自主调度重构](004-refactor-runtime-master-自主调度重构-260223-implemented.md) | Master调度逻辑分散，难以维护和扩展 |
+| 005 | 2026-02-23 | [Visualizer GOTO 环路可视化修复](005-bugfix-visualizer-goto-环路可视化修复-260223-implemented.md) | GOTO节点形成环路时可视化显示异常 |
+| 006 | 2026-02-23 | [Worker/MMWorkflow/MMNode/MMEdge 自主执行重构](006-refactor-workermmworkflowmmnodemmedge-自主执行重构-260223-implemented.md) | 节点执行逻辑耦合度高，难以独立测试 |
+| 007 | 2026-02-23 | [Vendor 依赖配置与文档刷新](007-feature-vendor-依赖配置与文档刷新-260223-implemented.md) | 第三方依赖管理混乱，文档缺失 |
+| 008 | 2026-02-23 | [示例与对外接口收敛重构](008-refactor-示例与对外接口收敛重构-260223-implemented.md) | 对外接口过于分散，示例代码不够清晰 |
+| 009 | 2026-02-28 | [MMNode 执行引擎下沉 + Coordinator Task0 默认化](009-feature-mmnode-执行引擎下沉-coordinator-task0-默认化-260228-implemented.md) | 执行引擎层级过高，Coordinator初始化复杂 |
+| 010 | 2026-02-28 | [MMNode 热更新能力下沉到 Worker](010-feature-mmnode-热更新能力下沉到-worker-260228-implemented.md) | 热更新能力仅在Runtime层，Worker无法独立更新 |
+| 011 | 2026-03-01 | [SessionTaskCoordinator & Context 分层重构](011-refactor-sessiontaskcoordinator-context-分层重构-260301-implemented.md) | Session/Task/Coordinator职责边界模糊 |
+| 012 | 2026-03-06 | [multi_session_chat 多语言节点重构](012-refactor-multi-session-chat-多语言节点重构-260306-implemented.md) | 多语言节点实现不统一，维护困难 |
+| 013 | 2026-03-07 | [src/agent session/task 配置模型重构](013-refactor-srcagent-sessiontask-配置模型重构-260307-implemented.md) | Session/Task配置模型分散，扩展性差 |
+| 014 | 2026-03-07 | [agent/runtime 双队列与执行风险等级重构](014-refactor-agentruntime-双队列与执行风险等级重构-260307-implemented.md) | 消息队列单一，无法区分优先级和风险 |
+| 015 | 2026-03-07 | [examples 目录结构整理](015-feature-examples-目录结构整理-260307-implemented.md) | examples目录结构混乱，示例难以理解 |
+| 016 | 2026-03-07 | [全链路跟踪系统（TraceSystem）](016-feature-全链路跟踪系统tracesystem-260307-implemented.md) | 缺乏全链路跟踪能力，问题定位困难 |
+| 017 | 2026-03-17 | [agent.json 配置结构冗余分析](017-feature-agentjson-配置结构冗余分析-260317-implemented.md) | agent.json配置存在冗余字段 |
+| 018 | 2026-03-17 | [Skill 参数槽位校验功能](018-feature-skill-参数槽位校验功能-260317-implemented.md) | Skill调用时参数校验不足，容易出错 |
+| 019 | 2026-03-17 | [Plugin UDS 注入机制设计](019-feature-plugin-uds-注入机制设计-260317-implemented.md) | Plugin无法访问DataBus，限制了扩展能力 |
+| 021 | 2026-03-18 | [Workflow Input Dialogue 级别隔离](021-feature-workflow-input-dialogue-级别隔离-260318-implemented.md) | 多对话场景下输入数据未隔离，可能串话 |
+| 022 | 2026-03-19 | [Multi-Response 机制设计](022-feature-multi-response-机制设计-260319-implemented.md) | 流式响应场景需要多次返回结果 |
+| 023 | 2026-03-19 | [next_skills 格式扩展](023-feature-next-skills-格式扩展-260319-implemented.md) | next_skills无法携带技能特定数据 |
+| 024 | 2026-03-19 | [消息定向路由机制设计](024-feature-消息定向路由机制设计-260319-implemented.md) | 消息路由经过多层转发，延迟高 |
+| 029 | 2026-03-24 | [上下文回调机制优化](029-feature-上下文回调机制优化-260324-implemented.md) | 用户上下文注入时机和方式不够灵活 |
+| 030 | 2026-03-27 | [Node 异步请求机制设计](030-feature-node-异步请求机制设计-260326-implemented.md) | Node同步阻塞调用外部资源，并发能力受限 |
 
 ## Enhancement 文档模板
 
