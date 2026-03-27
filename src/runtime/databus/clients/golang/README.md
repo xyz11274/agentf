@@ -135,6 +135,10 @@ func main() {
 | 变量名 | 说明 |
 |--------|------|
 | `AF_DATABUS_UDS_FILE` | Unix 域套接字路径 |
+| `AF_SESSION_ID` | 当前会话 ID（AsyncSDK 使用） |
+| `AF_DIALOGUE_ID` | 当前对话 ID（AsyncSDK 使用） |
+| `AF_SELF_TASK_ID` | 当前任务 ID（AsyncSDK 使用） |
+| `AF_NODE_ID` | 当前节点 ID（AsyncSDK 使用） |
 
 ## API 参考
 
@@ -158,6 +162,7 @@ func main() {
 - `ToolWithDialogue(dialogueID string) *NamespaceClient` - 带 dialogue ID 的 tool
 - `UserWithDialogue(dialogueID string) *NamespaceClient` - 带 dialogue ID 的 user
 - `Raw() *RawClient` - 原始访问（无前缀）
+- `AsyncSDK() *AsyncCallSDK` - 获取异步回调 SDK
 - `Close() error` - 关闭连接
 
 #### 属性
@@ -189,6 +194,40 @@ func main() {
 - `Get(key string) (any, error)` - 读取值（无前缀）
 - `Contains(key string) (bool, error)` - 检查存在（无前缀）
 - `Remove(key string) error` - 删除键（无前缀）
+
+### AsyncCallSDK
+
+用于多语言节点发送异步回调消息。
+
+#### 获取实例
+
+```go
+asyncSDK := client.AsyncSDK()
+```
+
+#### 方法
+
+- `SendToSelf(callKey, content string) (bool, error)` - 发送异步消息到当前任务（短路路由）
+- `SendMsg(targetTaskID, targetNodeID, callKey, content string) (bool, error)` - 发送异步消息到指定任务
+
+#### 属性
+
+- `SessionID() string` - 当前会话 ID
+- `DialogueID() string` - 当前对话 ID
+- `TaskID() string` - 当前任务 ID
+- `NodeID() string` - 当前节点 ID
+
+#### 使用示例
+
+```go
+asyncSDK := client.AsyncSDK()
+
+// 发送消息到当前任务
+success, err := asyncSDK.SendToSelf("callback_event", `{"status": "completed"}`)
+
+// 发送消息到其他任务
+success, err := asyncSDK.SendMsg("task-456", "node-789", "cross_task_event", `{"action": "notify"}`)
+```
 
 ## 使用示例
 

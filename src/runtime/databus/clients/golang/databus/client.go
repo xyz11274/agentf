@@ -319,6 +319,75 @@ func (r *RawClient) Remove(key string) error {
 	return errors.New("remove operation failed")
 }
 
+// AsyncCallSDK provides async callback support for multi-language nodes.
+// It enables sending async messages back to the runtime without blocking.
+//
+// Environment variables required:
+//   - AF_SESSION_ID: Current session ID
+//   - AF_DIALOGUE_ID: Current dialogue ID
+//   - AF_SELF_TASK_ID: Current task ID
+//   - AF_NODE_ID: Current node ID
+type AsyncCallSDK struct {
+	client     *Client
+	sessionID  string
+	dialogueID string
+	taskID     string
+	nodeID     string
+}
+
+// SessionID returns the session ID
+func (a *AsyncCallSDK) SessionID() string { return a.sessionID }
+
+// DialogueID returns the dialogue ID
+func (a *AsyncCallSDK) DialogueID() string { return a.dialogueID }
+
+// TaskID returns the task ID
+func (a *AsyncCallSDK) TaskID() string { return a.taskID }
+
+// NodeID returns the node ID
+func (a *AsyncCallSDK) NodeID() string { return a.nodeID }
+
+// SendToSelf sends an async message to the current task.
+// This enables short-circuit routing directly to the task queue.
+func (a *AsyncCallSDK) SendToSelf(callKey, content string) (bool, error) {
+	params := map[string]any{
+		"session_id":  a.sessionID,
+		"dialogue_id": a.dialogueID,
+		"task_id":     a.taskID,
+		"node_id":     a.nodeID,
+		"call_key":    callKey,
+		"content":     content,
+	}
+	result, err := a.client.call("async_callback", params)
+	if err != nil {
+		return false, err
+	}
+	if success, ok := result["success"].(bool); ok {
+		return success, nil
+	}
+	return false, nil
+}
+
+// SendMsg sends an async message to a different task/node.
+func (a *AsyncCallSDK) SendMsg(targetTaskID, targetNodeID, callKey, content string) (bool, error) {
+	params := map[string]any{
+		"session_id":  a.sessionID,
+		"dialogue_id": a.dialogueID,
+		"task_id":     targetTaskID,
+		"node_id":     targetNodeID,
+		"call_key":    callKey,
+		"content":     content,
+	}
+	result, err := a.client.call("async_callback", params)
+	if err != nil {
+		return false, err
+	}
+	if success, ok := result["success"].(bool); ok {
+		return success, nil
+	}
+	return false, nil
+}
+
 // Client is the main DataBus client
 type Client struct {
 	socketPath string
@@ -335,6 +404,7 @@ type Client struct {
 	toolClient *NamespaceClient
 	userClient *NamespaceClient
 	rawClient  *RawClient
+	asyncSDK   *AsyncCallSDK
 }
 
 // NewClient creates a new DataBus client
@@ -540,6 +610,21 @@ func (c *Client) Raw() *RawClient {
 		c.rawClient = &RawClient{client: c}
 	}
 	return c.rawClient
+}
+
+// AsyncSDK returns the AsyncCallSDK for async callback operations.
+// It reads environment variables AF_SESSION_ID, AF_DIALOGUE_ID, AF_SELF_TASK_ID, AF_NODE_ID.
+func (c *Client) AsyncSDK() *AsyncCallSDK {
+	if c.asyncSDK == nil {
+		c.asyncSDK = &AsyncCallSDK{
+			client:     c,
+			sessionID:  os.Getenv("AF_SESSION_ID"),
+			dialogueID: os.Getenv("AF_DIALOGUE_ID"),
+			taskID:     os.Getenv("AF_SELF_TASK_ID"),
+			nodeID:     os.Getenv("AF_NODE_ID"),
+		}
+	}
+	return c.asyncSDK
 }
 
 // Helper function to convert string to int64

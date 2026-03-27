@@ -26,6 +26,16 @@ Usage:
 
     # Subscribe (blocking)
     databus-cli -s {session-id} -ns user subscribe "my_key"
+
+    # Async callback (send to current task)
+    databus-cli -S /tmp/agentflow_session_xxx.sock async-callback "callback_key" '{"status":"ok"}'
+
+    # Async callback (send to specific task/node)
+    databus-cli -S /tmp/agentflow_session_xxx.sock async-callback "callback_key" '{"status":"ok"}' \\
+        --target-task "task-123" --target-node "node-456"
+
+Environment variables for async-callback:
+    AF_SESSION_ID, AF_DIALOGUE_ID, AF_SELF_TASK_ID, AF_NODE_ID
 """
 
 import argparse
@@ -232,6 +242,37 @@ def cmd_subscribe(args):
         client.close()
 
 
+def cmd_async_callback(args):
+    """Send an async callback message."""
+    client = get_client_from_env_or_args(args)
+
+    try:
+        async_sdk = client.async_sdk()
+
+        if args.target_task and args.target_node:
+            # Send to specific task/node
+            success = async_sdk.send_msg(
+                args.target_task,
+                args.target_node,
+                args.call_key,
+                args.content
+            )
+        else:
+            # Send to self (current task)
+            success = async_sdk.send_to_self(args.call_key, args.content)
+
+        if success:
+            print(f"OK: Async callback sent (call_key: {args.call_key})")
+        else:
+            print("Error: Failed to send async callback", file=sys.stderr)
+            sys.exit(1)
+    except DataBusError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        client.close()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="DataBus CLI - Command-line tool for DataBus access",
@@ -286,6 +327,14 @@ def main():
     subscribe_parser = subparsers.add_parser("subscribe", help="Subscribe to key changes")
     subscribe_parser.add_argument("key", help="Key name")
     subscribe_parser.set_defaults(func=cmd_subscribe)
+
+    # async-callback command
+    async_parser = subparsers.add_parser("async-callback", help="Send async callback message")
+    async_parser.add_argument("call_key", help="Call key for message routing")
+    async_parser.add_argument("content", help="Message content (JSON or string)")
+    async_parser.add_argument("--target-task", help="Target task ID (default: current task)")
+    async_parser.add_argument("--target-node", help="Target node ID (default: current node)")
+    async_parser.set_defaults(func=cmd_async_callback)
 
     args = parser.parse_args()
 

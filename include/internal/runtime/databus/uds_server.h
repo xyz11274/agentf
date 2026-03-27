@@ -75,6 +75,16 @@ public:
   /// Callback type for data change notifications to clients
   using ClientNotificationCallback = std::function<void(const std::string& json)>;
 
+  /// Callback type for async_callback method (multi-language async SDK support)
+  /// Called when a Python/Shell/Go node sends an async callback message.
+  /// Returns true if the message was successfully enqueued.
+  using AsyncCallback = std::function<bool(const std::string& session_id,
+                                            const std::string& dialogue_id,
+                                            const std::string& task_id,
+                                            const std::string& node_id,
+                                            const std::string& call_key,
+                                            const std::string& content)>;
+
   /// Server configuration
   struct Config {
     size_t thread_pool_size = 10;  ///< Number of worker threads for client handling
@@ -85,6 +95,10 @@ public:
   /// The databus pointer must remain valid for the lifetime of this server.
   /// Uses default configuration (10 worker threads, 100 max queue size).
   UDSServer(MMDataBus* databus, const std::string& socket_path);
+
+  /// Construct a UDS server with async callback support for multi-language nodes.
+  /// The async_callback enables Python/Shell/Go nodes to send async messages.
+  UDSServer(MMDataBus* databus, const std::string& socket_path, AsyncCallback async_callback);
 
   /// Construct a UDS server with custom configuration.
   UDSServer(MMDataBus* databus, const std::string& socket_path, const Config& config);
@@ -157,6 +171,7 @@ private:
   std::string handle_unsubscribe(const std::string& params, int64_t id);
   std::string handle_publish(const std::string& method, const std::string& params, int64_t id);
   std::string handle_list_keys(const std::string& params, int64_t id);
+  std::string handle_async_callback(const std::string& params, int64_t id);
 
   /// Build JSON-RPC success response
   std::string build_success_response(const std::string& result, int64_t id) const;
@@ -208,6 +223,9 @@ private:
   /// Client file descriptors for notifications (protected by mutex)
   mutable std::mutex clients_mutex_;
   std::map<int, bool> active_clients_;
+
+  /// Async callback for multi-language nodes (Python/Shell/Go)
+  AsyncCallback async_callback_;
 };
 
 }  // namespace runtime

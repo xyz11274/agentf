@@ -86,6 +86,19 @@ databus-cli -ns user subscribe "key"
 # 按 Ctrl+C 停止
 ```
 
+### async-callback
+
+发送异步回调消息。
+
+```bash
+# 发送到当前任务（需要设置 AF_SELF_TASK_ID 和 AF_NODE_ID 环境变量）
+databus-cli -S /tmp/agentflow_session_xxx.sock async-callback "callback_key" '{"status":"ok"}'
+
+# 发送到指定任务/节点
+databus-cli -S /tmp/agentflow_session_xxx.sock async-callback "callback_key" '{"status":"ok"}' \
+    --target-task "task-123" --target-node "node-456"
+```
+
 ## 选项说明
 
 ### 全局选项
@@ -218,6 +231,10 @@ fi
 | 变量名 | 说明 |
 |--------|------|
 | `AF_DATABUS_UDS_FILE` | Unix 域套接字路径 |
+| `AF_SESSION_ID` | 当前会话 ID（async-callback 使用） |
+| `AF_DIALOGUE_ID` | 当前对话 ID（async-callback 使用） |
+| `AF_SELF_TASK_ID` | 当前任务 ID（async-callback 使用） |
+| `AF_NODE_ID` | 当前节点 ID（async-callback 使用） |
 
 ## 退出码
 

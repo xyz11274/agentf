@@ -107,6 +107,10 @@ except JSONRPCError as e:
 | 变量名 | 说明 |
 |--------|------|
 | `AF_DATABUS_UDS_FILE` | Unix 域套接字路径 |
+| `AF_SESSION_ID` | 当前会话 ID（异步 SDK 使用） |
+| `AF_DIALOGUE_ID` | 当前对话 ID（异步 SDK 使用） |
+| `AF_SELF_TASK_ID` | 当前任务 ID（异步 SDK 使用） |
+| `AF_NODE_ID` | 当前节点 ID（异步 SDK 使用） |
 
 ## API 参考
 
@@ -124,6 +128,7 @@ except JSONRPCError as e:
 - `tool(dialogue_id=None)` - 访问 tool 命名空间
 - `user(dialogue_id=None)` - 访问 user 命名空间
 - `raw()` - 原始访问（无前缀）
+- `async_sdk()` - 获取异步回调 SDK
 - `close()` - 关闭连接
 
 #### 属性
@@ -142,6 +147,55 @@ except JSONRPCError as e:
 - `subscribe(key, callback)` - 订阅数据变更
 - `unsubscribe(subscription_id)` - 取消订阅
 - `publish(topic, value)` - 发布事件
+
+### AsyncCallSDK
+
+用于多语言节点（Python/Shell/Go）发送异步回调消息。
+
+#### 获取实例
+
+```python
+async_sdk = client.async_sdk()
+```
+
+#### 方法
+
+- `send_to_self(call_key, content)` - 发送异步消息到当前任务（短路路由，低延迟）
+- `send_msg(target_task_id, target_node_id, call_key, content)` - 发送异步消息到指定任务
+
+#### 属性
+
+- `session_id` - 当前会话 ID
+- `dialogue_id` - 当前对话 ID
+- `task_id` - 当前任务 ID
+- `node_id` - 当前节点 ID
+
+#### 使用示例
+
+```python
+from agentflow_databus import DataBusClient
+
+def main():
+    with DataBusClient.from_env() as client:
+        async_sdk = client.async_sdk()
+
+        # 发送消息到当前任务
+        success = async_sdk.send_to_self(
+            call_key="callback_event",
+            content='{"status": "completed", "result": "ok"}'
+        )
+
+        # 发送消息到其他任务
+        success = async_sdk.send_msg(
+            target_task_id="task-456",
+            target_node_id="node-789",
+            call_key="cross_task_event",
+            content='{"action": "notify"}'
+        )
+
+if __name__ == "__main__":
+    main()
+```
 
 ## 使用示例
 

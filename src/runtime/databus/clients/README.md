@@ -115,6 +115,7 @@ UDS 服务端使用 JSON-RPC 2.0 协议：
 | `unsubscribe` | 取消订阅 |
 | `publish` | 发布事件 |
 | `list_keys` | 列出键名 |
+| `async_callback` | 异步回调（多语言节点） |
 
 ### 命名空间
 
@@ -285,6 +286,7 @@ The UDS server uses JSON-RPC 2.0 protocol:
 | `unsubscribe` | Cancel subscription |
 | `publish` | Publish event |
 | `list_keys` | List keys |
+| `async_callback` | Async callback for multi-language nodes |
 
 ### Namespaces
 

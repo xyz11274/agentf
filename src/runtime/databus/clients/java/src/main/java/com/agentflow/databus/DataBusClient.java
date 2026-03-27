@@ -57,6 +57,7 @@ public class DataBusClient implements AutoCloseable {
     private NamespaceClient toolClient;
     private NamespaceClient userClient;
     private RawClient rawClient;
+    private AsyncCallSDK asyncSDK;
 
     /**
      * Create a new DataBus client.
@@ -235,6 +236,24 @@ public class DataBusClient implements AutoCloseable {
             rawClient = new RawClient(this);
         }
         return rawClient;
+    }
+
+    /**
+     * Get the AsyncCall SDK for async callback operations.
+     *
+     * <p>Provides multi-language nodes the ability to send async messages
+     * back to the runtime without blocking.
+     *
+     * <p>Environment variables required:
+     * AF_SESSION_ID, AF_DIALOGUE_ID, AF_SELF_TASK_ID, AF_NODE_ID
+     *
+     * @return AsyncCallSDK instance
+     */
+    public AsyncCallSDK asyncSDK() {
+        if (asyncSDK == null) {
+            asyncSDK = new AsyncCallSDK(this);
+        }
+        return asyncSDK;
     }
 
     @SuppressWarnings("unchecked")

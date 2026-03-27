@@ -711,6 +711,9 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
           Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Got input 'dialogue_id'='%s' from workflow state",
                                    workflow_dialogue_id.c_str());
         }
+
+        // Add node_id for multi-language async SDK support
+        hydrated["node_id"] = node->get_id();
       }
     }
 
@@ -820,9 +823,10 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
             inputs["__async_callback__"] = true;
             inputs["__async_key__"] = async_key;
             inputs["__async_msg__"] = async_msg;
-            // Also inject session_id and dialogue_id for SendMsg
+            // Also inject session_id, dialogue_id, node_id for SendMsg
             inputs["session_id"] = state_it->second.session_id;
             inputs["dialogue_id"] = state_it->second.dialogue_id;
+            inputs["node_id"] = node->get_id();
             node->set_inputs(inputs);
 
             // Decrement pending callback count

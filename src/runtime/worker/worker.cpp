@@ -76,7 +76,29 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
   if(request.databus && !request.session_id.empty()) {
     // Generate unique socket path based on session_id
     std::string uds_socket_path = "/tmp/agentflow_" + request.session_id + ".sock";
-    uds_server = std::make_unique<UDSServer>(request.databus, uds_socket_path);
+
+    // Create async callback for multi-language nodes if async SDK is available
+    UDSServer::AsyncCallback async_cb;
+    if(request.databus_client && request.databus_client->async()) {
+      IAsyncCallSDK* async_sdk = request.databus_client->async();
+      async_cb = [async_sdk](const std::string& session_id,
+                           const std::string& dialogue_id,
+                           const std::string& task_id,
+                           const std::string& node_id,
+                           const std::string& call_key,
+                           const std::string& content) {
+        // Unused parameters kept for API consistency
+        (void)session_id;
+        (void)dialogue_id;
+        (void)task_id;
+        (void)node_id;
+        // Use SendToSelf for short-circuit routing
+        return async_sdk->SendToSelf(call_key, content);
+      };
+      Logger::instance().info_f("[WORKER] Async callback configured for session %s", request.session_id.c_str());
+    }
+
+    uds_server = std::make_unique<UDSServer>(request.databus, uds_socket_path, async_cb);
     if(uds_server->start()) {
       exec_config.env_vars.push_back("AF_DATABUS_UDS_FILE=" + uds_socket_path);
       Logger::instance().info_f("[WORKER] UDS server started for session %s at %s",

@@ -275,6 +275,11 @@ UDSServer::UDSServer(MMDataBus* databus, const std::string& socket_path)
     : UDSServer(databus, socket_path, Config{}) {
 }
 
+UDSServer::UDSServer(MMDataBus* databus, const std::string& socket_path, AsyncCallback async_callback)
+    : UDSServer(databus, socket_path, Config{}) {
+  async_callback_ = std::move(async_callback);
+}
+
 UDSServer::UDSServer(MMDataBus* databus, const std::string& socket_path, const Config& config)
     : databus_(databus), socket_path_(socket_path), config_(config) {
   task_queue_.max_size = config_.max_queue_size;
@@ -596,6 +601,8 @@ std::string UDSServer::handle_request(const std::string& request_json) {
     return handle_publish(method, params, id);
   } else if (method == "list_keys") {
     return handle_list_keys(params, id);
+  } else if (method == "async_callback") {
+    return handle_async_callback(params, id);
   }
 
   return build_error_response(-32601, "Method not found: " + method, id);
@@ -804,6 +811,38 @@ std::string UDSServer::handle_list_keys(const std::string& params, int64_t id) {
   // For now, return empty list (full implementation would iterate keys)
   // The DataBus interface doesn't have a list_keys method yet
   return build_success_response("{\"keys\":[]}", id);
+}
+
+std::string UDSServer::handle_async_callback(const std::string& params, int64_t id) {
+  // Check if async callback is configured
+  if (!async_callback_) {
+    return build_error_response(-1, "Async callback not configured", id);
+  }
+
+  // Extract parameters
+  std::string session_id = extract_json_string(params, "session_id");
+  std::string dialogue_id = extract_json_string(params, "dialogue_id");
+  std::string task_id = extract_json_string(params, "task_id");
+  std::string node_id = extract_json_string(params, "node_id");
+  std::string call_key = extract_json_string(params, "call_key");
+  std::string content = extract_json_string(params, "content");
+
+  // Validate required parameters
+  if (session_id.empty() || task_id.empty() || node_id.empty() || call_key.empty()) {
+    return build_error_response(-32602,
+        "Invalid params: missing session_id, task_id, node_id, or call_key", id);
+  }
+
+  Logger::instance().info_f("[UDS_SERVER] async_callback: session=%s, task=%s, node=%s, key=%s",
+                            session_id.c_str(), task_id.c_str(), node_id.c_str(), call_key.c_str());
+
+  // Call the registered callback
+  bool success = async_callback_(session_id, dialogue_id, task_id, node_id, call_key, content);
+
+  if (success) {
+    return build_success_response("{\"success\":true,\"queued\":true}", id);
+  }
+  return build_success_response("{\"success\":false}", id);
 }
 
 std::string UDSServer::build_success_response(const std::string& result, int64_t id) const {

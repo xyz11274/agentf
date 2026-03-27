@@ -933,21 +933,29 @@ private:
 
 ### 待修改文件清单
 
-| 文件 | 修改类型 | 说明 |
-|------|---------|------|
-| `include/external/agentflow/so_node.h` | 修改 | 新增IAsyncCallSDK接口 |
-| `include/internal/runtime/agent_runtime.h` | 修改 | WorkflowExecutionState新增async_pending_count |
-| `include/internal/agent/common.h` | 修改 | 新增ASYNC_PENDING状态 |
-| `include/internal/workflow/node.h` | 修改 | 新增async_call_key_成员和setter/getter |
-| `src/runtime/async_call.cpp` | 新增 | NodeAsyncCallSDK实现 |
-| `src/runtime/databus/node_databus_client.cpp` | 修改 | 实现async()方法 |
-| `src/runtime/runtime.cpp` | 修改 | 注入SDK、处理异步状态、handle_async_callback()、短路路由；注入node_id到inputs |
-| `src/runtime/databus/uds_server.cpp` | 修改 | 新增 `handle_async_callback` 方法 |
-| `src/runtime/databus/clients/python/agentflow_databus.py` | 修改 | 新增 `AsyncCallSDK` 类 |
-| `src/runtime/databus/clients/python/README.md` | 修改 | 新增环境变量说明、AsyncCallSDK文档 |
-| `src/runtime/databus/clients/README.md` | 修改 | 新增 `async_callback` 方法、环境变量说明 |
-| `src/runtime/databus/clients/shell/agentflow_async.sh` | 新增 | Shell异步调用SDK |
-| `src/runtime/databus/clients/golang/async/async.go` | 新增 | Go异步调用SDK |
+| 文件 | 修改类型 | 说明 | 状态 |
+|------|---------|------|------|
+| `include/external/agentflow/so_node.h` | 修改 | 新增IAsyncCallSDK接口 | ✅ |
+| `include/internal/runtime/agent_runtime.h` | 修改 | WorkflowExecutionState新增async_pending_count | ✅ |
+| `include/internal/agent/common.h` | 修改 | 新增ASYNC_PENDING状态 | ✅ |
+| `include/internal/workflow/node.h` | 修改 | 新增async_call_key_成员和setter/getter | ✅ |
+| `include/internal/runtime/databus/uds_server.h` | 修改 | 新增AsyncCallback类型和构造函数 | ✅ |
+| `src/runtime/async_call.cpp` | 新增 | NodeAsyncCallSDK实现 | ✅ |
+| `src/runtime/databus/node_databus_client.cpp` | 修改 | 实现async()方法 | ✅ |
+| `src/runtime/runtime.cpp` | 修改 | 注入SDK、处理异步状态、handle_async_callback()、短路路由；注入node_id到inputs | ✅ |
+| `src/runtime/worker/worker.cpp` | 修改 | 创建AsyncCallback传入UDSServer | ✅ |
+| `src/runtime/databus/uds_server.cpp` | 修改 | 新增 `handle_async_callback` 方法 | ✅ |
+| `src/runtime/databus/clients/python/agentflow_databus.py` | 修改 | 新增 `AsyncCallSDK` 类 | ✅ |
+| `src/runtime/databus/clients/python/README.md` | 修改 | 新增环境变量说明、AsyncCallSDK文档 | ✅ |
+| `src/runtime/databus/clients/golang/databus/client.go` | 修改 | 新增 `AsyncCallSDK` 结构体 | ✅ |
+| `src/runtime/databus/clients/golang/README.md` | 修改 | 新增环境变量说明、AsyncCallSDK文档 | ✅ |
+| `src/runtime/databus/clients/java/.../AsyncCallSDK.java` | 新增 | Java异步回调SDK | ✅ |
+| `src/runtime/databus/clients/java/.../DataBusClient.java` | 修改 | 新增 `asyncSDK()` 方法 | ✅ |
+| `src/runtime/databus/clients/cli/databus_cli.py` | 修改 | 新增 `async-callback` 命令 | ✅ |
+| `src/runtime/databus/clients/cli/README.md` | 修改 | 新增 async-callback 命令说明 | ✅ |
+| `src/runtime/databus/clients/README.md` | 修改 | 新增 `async_callback` 方法、环境变量说明 | ✅ |
+| `tests/integration/test_sdk_uds_protocol.py` | 新增 | SDK集成测试框架 | ✅ |
+| `tests/integration/README_SDK_TESTS.md` | 新增 | 测试设计文档 | ✅ |
 
 ### 功能点实现优先级
 
@@ -1018,11 +1026,12 @@ TEST(AsyncCallTest, SendToSelfRouting) {
   - [x] Phase 2: 生命周期管理 (async_pending_count)
   - [x] Phase 3: SDK实现 (NodeAsyncCallSDK)
   - [x] Phase 4: 回调处理 (短路路由, inputs注入)
-  - [ ] 多语言SDK (Python/Shell/Go - 待实现)
+  - [x] 多语言SDK (Python/Go/Java/CLI - 已实现)
+  - [x] SDK集成测试框架
 - [x] 单元测试 (编译通过)
 - [x] 集成测试 (LLM Query Agent E2E测试通过)
 - [x] 文档更新 (示例代码已同步)
-- [x] 验证通过 (2026-03-26)
+- [x] 验证通过 (2026-03-26 C++核心, 2026-03-27 多语言SDK)
 
 ### 修订记录
 
@@ -1446,10 +1455,80 @@ std::string UDSServer::handle_async_callback(const std::string& params, int64_t 
 
 ### 多语言SDK实现优先级
 
-| 优先级 | 功能点 | 说明 |
-|--------|--------|------|
-| P1 | UDSServer新增async_callback方法 | 核心协议支持 |
-| P2 | runtime.cpp注入node_id到inputs | 所有语言需要 |
-| P2 | Python SDK AsyncCallSDK | 最常用 |
-| P3 | Shell SDK | 轻量级脚本节点 |
-| P3 | Go SDK | 高性能节点 |
+| 优先级 | 功能点 | 说明 | 状态 |
+|--------|--------|------|------|
+| P1 | UDSServer新增async_callback方法 | 核心协议支持 | ✅ 已实现 |
+| P2 | runtime.cpp注入node_id到inputs | 所有语言需要 | ✅ 已实现 |
+| P2 | worker.cpp传入AsyncCallback到UDSServer | 连接SDK与Runtime | ✅ 已实现 |
+| P2 | Python SDK AsyncCallSDK | 最常用 | ✅ 已实现 |
+| P3 | Go SDK AsyncCallSDK | 高性能节点 | ✅ 已实现 |
+| P3 | Java SDK AsyncCallSDK | 企业级节点 | ✅ 已实现 |
+| P3 | CLI async-callback命令 | 调试工具 | ✅ 已实现 |
+| P4 | SDK集成测试框架 | 协议验证 | ✅ 已实现 |
+
+---
+
+## 多语言SDK实现记录（2026-03-27）
+
+### 已实现文件
+
+| 文件 | 修改类型 | 说明 |
+|------|---------|------|
+| `include/internal/runtime/databus/uds_server.h` | 修改 | 添加 `AsyncCallback` 类型和构造函数 |
+| `src/runtime/databus/uds_server.cpp` | 修改 | 实现 `handle_async_callback()` 方法 |
+| `src/runtime/runtime.cpp` | 修改 | 注入 `node_id` 到 inputs（两处：hydrated inputs 和 async callback injection） |
+| `src/runtime/worker/worker.cpp` | 修改 | 创建 AsyncCallback 并传入 UDSServer |
+| `src/runtime/databus/clients/python/agentflow_databus.py` | 修改 | 新增 `AsyncCallSDK` 类 |
+| `src/runtime/databus/clients/golang/databus/client.go` | 修改 | 新增 `AsyncCallSDK` 结构体和方法 |
+| `src/runtime/databus/clients/java/.../AsyncCallSDK.java` | 新增 | Java 异步回调 SDK |
+| `src/runtime/databus/clients/java/.../DataBusClient.java` | 修改 | 新增 `asyncSDK()` 方法 |
+| `src/runtime/databus/clients/cli/databus_cli.py` | 修改 | 新增 `async-callback` 命令 |
+| `src/runtime/databus/clients/python/README.md` | 修改 | 新增环境变量说明和 AsyncCallSDK 文档 |
+| `src/runtime/databus/clients/golang/README.md` | 修改 | 新增环境变量说明和 AsyncCallSDK 文档 |
+| `src/runtime/databus/clients/cli/README.md` | 修改 | 新增 async-callback 命令说明 |
+| `src/runtime/databus/clients/README.md` | 修改 | 新增 `async_callback` 方法到方法列表 |
+
+### SDK API 对比
+
+| 语言 | 获取方式 | 发送到当前任务 | 发送到指定任务 |
+|------|---------|---------------|---------------|
+| Python | `client.async_sdk()` | `send_to_self(call_key, content)` | `send_msg(task_id, node_id, call_key, content)` |
+| Go | `client.AsyncSDK()` | `SendToSelf(callKey, content)` | `SendMsg(taskID, nodeID, callKey, content)` |
+| Java | `client.asyncSDK()` | `sendToSelf(callKey, content)` | `sendMsg(taskId, nodeId, callKey, content)` |
+| CLI | `async-callback` 命令 | 默认行为 | `--target-task --target-node` |
+
+### 环境变量
+
+| 变量名 | 说明 | 注入位置 |
+|--------|------|----------|
+| `AF_SESSION_ID` | 当前会话 ID | runtime.cpp → inputs → worker.cpp 自动转换 |
+| `AF_DIALOGUE_ID` | 当前对话 ID | runtime.cpp → inputs → worker.cpp 自动转换 |
+| `AF_SELF_TASK_ID` | 当前任务 ID | runtime.cpp → inputs → worker.cpp 自动转换 |
+| `AF_NODE_ID` | 当前节点 ID | runtime.cpp → inputs → worker.cpp 自动转换 |
+
+### SDK集成测试
+
+**测试框架位置**: `tests/integration/test_sdk_uds_protocol.py`
+
+**测试结果** (2026-03-27):
+```
+============================================================
+DataBus SDK UDS Protocol Integration Tests
+============================================================
+Results: PASSED=24 FAILED=0
+============================================================
+```
+
+| SDK | 测试项 | 结果 |
+|-----|-------|------|
+| Python | 13 项 | 全部通过 |
+| CLI | 6 项 | 全部通过 |
+| Go | 5 项 | 全部通过 |
+| Java | - | 跳过（需要 JVM） |
+
+**测试覆盖**:
+- JSON-RPC 2.0 格式验证
+- UDS 方法参数完整性验证
+- `async_callback` 方法参数正确性验证
+- Namespace 参数正确性验证
+- 环境变量正确读取验证

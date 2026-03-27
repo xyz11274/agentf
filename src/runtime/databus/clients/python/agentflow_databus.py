@@ -277,6 +277,104 @@ class RawDataBusClient:
         return result.get("success", False)
 
 
+class AsyncCallSDK:
+    """
+    Async call SDK for Python nodes using DataBus UDS channel.
+
+    Provides async callback support for multi-language nodes (Python/Shell/Go)
+    to send messages back to the runtime without blocking.
+
+    Environment variables required:
+        AF_SESSION_ID: Current session ID
+        AF_DIALOGUE_ID: Current dialogue ID
+        AF_SELF_TASK_ID: Current task ID
+        AF_NODE_ID: Current node ID
+    """
+
+    def __init__(self, client: 'DataBusClient'):
+        """
+        Initialize the async call SDK.
+
+        Args:
+            client: The parent DataBusClient
+        """
+        self._client = client
+        self._session_id = os.environ.get("AF_SESSION_ID", "")
+        self._dialogue_id = os.environ.get("AF_DIALOGUE_ID", "")
+        self._task_id = os.environ.get("AF_SELF_TASK_ID", "")
+        self._node_id = os.environ.get("AF_NODE_ID", "")
+
+    @property
+    def session_id(self) -> str:
+        """Get the session ID."""
+        return self._session_id
+
+    @property
+    def dialogue_id(self) -> str:
+        """Get the dialogue ID."""
+        return self._dialogue_id
+
+    @property
+    def task_id(self) -> str:
+        """Get the task ID."""
+        return self._task_id
+
+    @property
+    def node_id(self) -> str:
+        """Get the node ID."""
+        return self._node_id
+
+    def send_to_self(self, call_key: str, content: str) -> bool:
+        """
+        Send an async message to the current task (self).
+
+        This enables short-circuit routing directly to the task queue,
+        bypassing the agent routing layer for lower latency.
+
+        Args:
+            call_key: The call key for message routing
+            content: The message content
+
+        Returns:
+            True if the message was successfully enqueued
+        """
+        params = {
+            "session_id": self._session_id,
+            "dialogue_id": self._dialogue_id,
+            "task_id": self._task_id,
+            "node_id": self._node_id,
+            "call_key": call_key,
+            "content": content
+        }
+        result = self._client._call("async_callback", params)
+        return result.get("success", False)
+
+    def send_msg(self, target_task_id: str, target_node_id: str,
+                 call_key: str, content: str) -> bool:
+        """
+        Send an async message to a different task/node.
+
+        Args:
+            target_task_id: Target task ID
+            target_node_id: Target node ID
+            call_key: The call key for message routing
+            content: The message content
+
+        Returns:
+            True if the message was successfully enqueued
+        """
+        params = {
+            "session_id": self._session_id,
+            "dialogue_id": self._dialogue_id,
+            "task_id": target_task_id,
+            "node_id": target_node_id,
+            "call_key": call_key,
+            "content": content
+        }
+        result = self._client._call("async_callback", params)
+        return result.get("success", False)
+
+
 class DataBusClient:
     """
     Main DataBus client for multi-language access via Unix Domain Socket.
@@ -323,6 +421,7 @@ class DataBusClient:
         self._tool_client: Optional[NamespaceClient] = None
         self._user_client: Optional[NamespaceClient] = None
         self._raw_client: Optional[RawDataBusClient] = None
+        self._async_sdk: Optional[AsyncCallSDK] = None
 
         # Connect immediately
         self._connect()
@@ -544,6 +643,23 @@ class DataBusClient:
         if not self._raw_client:
             self._raw_client = RawDataBusClient(self)
         return self._raw_client
+
+    def async_sdk(self) -> AsyncCallSDK:
+        """
+        Get the AsyncCall SDK for async callback operations.
+
+        Provides multi-language nodes the ability to send async messages
+        back to the runtime without blocking.
+
+        Environment variables required:
+            AF_SESSION_ID, AF_DIALOGUE_ID, AF_SELF_TASK_ID, AF_NODE_ID
+
+        Returns:
+            AsyncCallSDK instance
+        """
+        if not self._async_sdk:
+            self._async_sdk = AsyncCallSDK(self)
+        return self._async_sdk
 
 
 # Convenience function for quick access
