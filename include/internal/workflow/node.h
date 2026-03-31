@@ -227,6 +227,10 @@ public:
   void set_plugin_uds_path(const std::string& path) { plugin_uds_path_ = path; }
   const std::string& get_plugin_uds_path() const { return plugin_uds_path_; }
 
+  // DataBus UDS path for workflow-level DataBus access (lifecycle tied to workflow execution)
+  void set_databus_uds_path(const std::string& path) { databus_uds_path_ = path; }
+  const std::string& get_databus_uds_path() const { return databus_uds_path_; }
+
   // Async call key for tracking async callbacks
   void set_async_call_key(const std::string& key) { async_call_key_ = key; }
   const std::string& get_async_call_key() const { return async_call_key_; }
@@ -287,6 +291,9 @@ private:
 
   // Plugin UDS path for external plugin communication
   std::string plugin_uds_path_;
+
+  // DataBus UDS path for workflow-level DataBus access (lifecycle tied to workflow execution)
+  std::string databus_uds_path_;
 
   // Async call key for tracking async callbacks
   std::string async_call_key_;

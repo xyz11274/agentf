@@ -543,6 +543,9 @@ bool MMNode::execute_with_worker_engine() {
   // Pass plugin UDS path for external plugin communication
   request.plugin_uds_path = plugin_uds_path_;
 
+  // Pass DataBus UDS path for workflow-level DataBus access
+  request.databus_uds_path = databus_uds_path_;
+
   switch(config_.execution_mode) {
     case ExecutionMode::SHELL_SCRIPT:
       request.mode = runtime::MMWorkerEngine::ExecutionMode::SHELL_SCRIPT;

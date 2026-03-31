@@ -70,11 +70,17 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
     exec_config.env_vars.push_back("AF_PLUGIN_UDS_FILE=" + request.plugin_uds_path);
   }
 
-  // Create UDS server for real-time DataBus access when databus and session_id are provided
-  // This enables Python/Go/Shell SDKs to access DataBus via Unix Domain Socket
+  // Handle DataBus UDS for real-time access
+  // If databus_uds_path is provided (workflow-level UDS), use it directly
+  // Otherwise, create a node-level UDS server (backward compatibility)
   std::unique_ptr<UDSServer> uds_server;
-  if(request.databus && !request.session_id.empty()) {
-    // Generate unique socket path based on session_id
+  if(!request.databus_uds_path.empty()) {
+    // Use workflow-level UDS server (created by runtime, lifecycle tied to workflow execution)
+    exec_config.env_vars.push_back("AF_DATABUS_UDS_FILE=" + request.databus_uds_path);
+    Logger::instance().info_f("[WORKER] Using workflow-level UDS for session %s at %s",
+                              request.session_id.c_str(), request.databus_uds_path.c_str());
+  } else if(request.databus && !request.session_id.empty()) {
+    // Fallback: create node-level UDS server (backward compatibility)
     std::string uds_socket_path = "/tmp/agentflow_" + request.session_id + ".sock";
 
     // Create async callback for multi-language nodes if async SDK is available

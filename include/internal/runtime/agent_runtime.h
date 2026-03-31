@@ -17,6 +17,7 @@
 #include "runtime/master/scheduler.h"
 #include "runtime/shared_runtime_state.h"
 #include "runtime/databus/databus.h"
+#include "runtime/databus/uds_server.h"
 #include "runtime/worker.h"
 #include "workflow/workflow.h"
 
@@ -179,6 +180,10 @@ private:
      int                    total_nodes     = 0;
      int                    completed_count = 0;
      bool                   in_progress     = false;
+
+     // UDS server for DataBus access - lifecycle tied to workflow execution
+     std::string            uds_socket_path;     // Socket file path
+     std::shared_ptr<UDSServer> uds_server;      // UDS server instance
 
      // Async operation tracking - shared_ptr to atomic for thread-safe access from async threads
      std::shared_ptr<std::atomic<int>> async_pending_count = std::make_shared<std::atomic<int>>(0);

@@ -617,6 +617,33 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
     }
   }
 
+  // Create UDS server for this workflow execution (lifecycle tied to execution)
+  // This enables Python/Go/Shell SDKs to access DataBus via Unix Domain Socket
+  if(!session_id.empty()) {
+    std::string uds_socket_path = "/tmp/agentflow_" + session_id + "_" + execution_id + ".sock";
+
+    // Create async callback for multi-language nodes
+    UDSServer::AsyncCallback async_cb;
+
+    std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+    auto state_it = workflow_states_.find(execution_id);
+    if(state_it != workflow_states_.end()) {
+      MMDataBus& databus = get_databus(agent_id);
+
+      // Create UDS server with async callback support
+      auto uds_server = std::make_shared<UDSServer>(&databus, uds_socket_path, async_cb);
+      if(uds_server->start()) {
+        state_it->second.uds_socket_path = uds_socket_path;
+        state_it->second.uds_server = uds_server;
+        Logger::instance().info_f("[WORKFLOW] UDS server started for execution_id=%s at %s",
+                                  execution_id.c_str(), uds_socket_path.c_str());
+      } else {
+        Logger::instance().warn_f("[WORKFLOW] Failed to start UDS server for execution_id=%s",
+                                  execution_id.c_str());
+      }
+    }
+  }
+
   Logger::instance().info_f("Starting workflow execution: %s (execution_id: %s)",
                             workflow->get_name().c_str(), execution_id.c_str());
 
@@ -857,6 +884,17 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
   // Inject plugin UDS path if configured
   if(!config_.plugin_uds_path.empty()) {
     node->set_plugin_uds_path(config_.plugin_uds_path);
+  }
+
+  // Inject DataBus UDS path from workflow execution state
+  {
+    std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+    auto state_it = workflow_states_.find(execution_id);
+    if(state_it != workflow_states_.end() && !state_it->second.uds_socket_path.empty()) {
+      node->set_databus_uds_path(state_it->second.uds_socket_path);
+      Logger::instance().debug_f("[PROCESS_NODE] Injected DataBus UDS path for node=%s: %s",
+                                 node->get_id().c_str(), state_it->second.uds_socket_path.c_str());
+    }
   }
 
   // Trace: open a NODE span (RAII — records to TraceManager on scope exit)
@@ -1445,6 +1483,14 @@ void MMAgentRuntime::on_workflow_complete(const AgentId& agent_id, const Workflo
     auto it = workflow_states_.find(execution_id);
     if(it != workflow_states_.end()) {
       const auto& state = it->second;
+
+      // Stop and clean up UDS server (lifecycle tied to workflow execution)
+      if(state.uds_server) {
+        state.uds_server->stop();
+        Logger::instance().info_f("[WORKFLOW] UDS server stopped for execution_id=%s, socket=%s",
+                                  execution_id.c_str(), state.uds_socket_path.c_str());
+      }
+
       TaskEvent event = EventBuilder::build_task_destroyed_event(
           agent_id,
           state.session_id,

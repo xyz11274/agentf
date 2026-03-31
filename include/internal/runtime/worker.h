@@ -60,6 +60,9 @@ public:
     INodeDataBusClient*       databus_client = nullptr;
     // Plugin UDS path - injected as AF_PLUGIN_UDS_FILE environment variable
     std::string               plugin_uds_path;
+    // DataBus UDS path - pre-created by runtime for workflow execution lifecycle
+    // When provided, worker will use this path instead of creating its own UDS server
+    std::string               databus_uds_path;
     struct LLMServiceConfig {
       std::string base_url;
       std::string api_key;
