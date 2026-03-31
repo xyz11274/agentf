@@ -37,6 +37,7 @@ std::string extract_json_string(const std::string& json, const std::string& key)
   if (pos == std::string::npos) {
     return "";
   }
+  pos++;  // Skip ':'
   // Skip whitespace
   while (pos < json.size() && std::isspace(json[pos])) {
     pos++;
@@ -77,6 +78,7 @@ std::string extract_json_object(const std::string& json, const std::string& key)
   if (pos == std::string::npos) {
     return "";
   }
+  pos++;  // Skip ':'
   // Skip whitespace
   while (pos < json.size() && std::isspace(json[pos])) {
     pos++;
@@ -110,6 +112,7 @@ std::string extract_json_array(const std::string& json, const std::string& key) 
   if (pos == std::string::npos) {
     return "";
   }
+  pos++;  // Skip ':'
   // Skip whitespace
   while (pos < json.size() && std::isspace(json[pos])) {
     pos++;
@@ -190,7 +193,16 @@ std::string json_escape(const std::string& s) {
 // Convert DataVariant to JSON string
 std::string variant_to_json(const DataVariant& var) {
   if (std::holds_alternative<std::string>(var)) {
-    return "\"" + json_escape(std::get<std::string>(var)) + "\"";
+    const std::string& str = std::get<std::string>(var);
+    // Check if string is already a JSON object or array
+    size_t first_char_pos = str.find_first_not_of(" \t\n\r");
+    if (first_char_pos != std::string::npos &&
+        (str[first_char_pos] == '{' || str[first_char_pos] == '[')) {
+      // Already JSON format, return directly without escaping
+      return str;
+    }
+    // Normal string, escape and add quotes
+    return "\"" + json_escape(str) + "\"";
   } else if (std::holds_alternative<int64_t>(var)) {
     return std::to_string(std::get<int64_t>(var));
   } else if (std::holds_alternative<double>(var)) {
