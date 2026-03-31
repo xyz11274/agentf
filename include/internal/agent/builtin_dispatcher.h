@@ -25,10 +25,12 @@ class MMWorkflow;
 struct SkillSpec {
   std::string name;            ///< Skill name
   std::string exec_skill_key;  ///< Optional: DataBus key for skill-specific data
+  bool        force = false;   ///< Force re-launch: clear previous result and re-schedule
 
   SkillSpec() = default;
   explicit SkillSpec(const std::string& n) : name(n) {}
   SkillSpec(const std::string& n, const std::string& key) : name(n), exec_skill_key(key) {}
+  SkillSpec(const std::string& n, const std::string& key, bool f) : name(n), exec_skill_key(key), force(f) {}
 };
 
 /**

@@ -992,7 +992,7 @@ bool DSLAdapter::parse_thirdir_agent_config(std::shared_ptr<const IJsonValue> ob
   // Use defaults
   config.max_workflows            = JsonHelper::get_int(obj, "max_workflows", 10);
   config.max_concurrent_workflows = JsonHelper::get_int(obj, "max_concurrent_workflows", 5);
-  config.data_bus_capacity        = JsonHelper::get_int(obj, "data_bus_capacity", 1024 * 1024);
+  config.data_bus_capacity_mb     = JsonHelper::get_int(obj, "data_bus_capacity_mb", 1);  // Default 1MB
 
   // Parse lifecycle policy if present
   std::string policy_str = JsonHelper::get_string(obj, "lifecycle_policy", "factory");

@@ -313,7 +313,10 @@ bool MMAgentRuntime::register_agent(AgentPtr agent) {
   if(!is_running_) {
     std::lock_guard<std::mutex> lock(agents_mutex_);
     agents_[agent->get_id()] = agent;
-    databuses_[agent->get_id()] = std::unique_ptr<MMDataBus>(new MMDataBus(1024 * 1024));
+    size_t databus_capacity = static_cast<size_t>(agent->get_config().data_bus_capacity_mb) * 1024 * 1024;
+    databuses_[agent->get_id()] = std::unique_ptr<MMDataBus>(new MMDataBus(databus_capacity));
+    Logger::instance().info_f("DataBus initialized for agent_id=%s, capacity=%zu bytes (%d MB)",
+                              agent->get_id().c_str(), databus_capacity, agent->get_config().data_bus_capacity_mb);
     agent_heartbeats_[agent->get_id()] = now_ms();
 
     // Set the agent's runtime_databus pointer for unified data storage
@@ -1539,7 +1542,10 @@ void MMAgentRuntime::agent_registration_loop() {
         }
       } else {
         agents_[agent_id] = request.agent;
-        databuses_[agent_id] = std::unique_ptr<MMDataBus>(new MMDataBus(1024 * 1024));
+        size_t databus_capacity = static_cast<size_t>(request.agent->get_config().data_bus_capacity_mb) * 1024 * 1024;
+        databuses_[agent_id] = std::unique_ptr<MMDataBus>(new MMDataBus(databus_capacity));
+        Logger::instance().info_f("DataBus initialized for agent_id=%s, capacity=%zu bytes (%d MB)",
+                                  agent_id.c_str(), databus_capacity, request.agent->get_config().data_bus_capacity_mb);
         agent_heartbeats_[agent_id] = now_ms();
         // Inject DataBus to local worker
         if(local_worker_) {
@@ -1990,9 +1996,18 @@ MMDataBus& MMAgentRuntime::get_databus(const AgentId& agent_id) {
 
   auto it = databuses_.find(agent_id);
   if(it == databuses_.end()) {
-    // If databus doesn't exist, create one (this shouldn't happen for registered agents)
-    // But for safety, we create a new one
-    databuses_[agent_id] = std::unique_ptr<MMDataBus>(new MMDataBus(1024 * 1024));
+    // If databus doesn't exist, create one with agent's configured capacity
+    // or default 1MB if agent not found
+    size_t capacity = 1024 * 1024;  // Default 1MB
+    int capacity_mb = 1;
+    auto agent_it = agents_.find(agent_id);
+    if(agent_it != agents_.end() && agent_it->second) {
+      capacity_mb = agent_it->second->get_config().data_bus_capacity_mb;
+      capacity = static_cast<size_t>(capacity_mb) * 1024 * 1024;
+    }
+    databuses_[agent_id] = std::unique_ptr<MMDataBus>(new MMDataBus(capacity));
+    Logger::instance().info_f("DataBus initialized for agent_id=%s, capacity=%zu bytes (%d MB)",
+                              agent_id.c_str(), capacity, capacity_mb);
     return *databuses_[agent_id];
   }
 

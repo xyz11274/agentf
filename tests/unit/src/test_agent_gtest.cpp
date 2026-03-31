@@ -938,6 +938,46 @@ TEST_F(AgentTest, BuiltinDispatcherParsesNextSkillsWithExecSkillKey) {
   EXPECT_EQ(skills[2].exec_skill_key, "");
 }
 
+TEST_F(AgentTest, BuiltinDispatcherParsesNextSkillsWithForceField) {
+  // Test new object format with force field for re-launch
+  std::string json_with_force = R"([
+    {"name": "travel", "exec_skill_key": "travel_data", "force": true},
+    {"name": "shopping", "force": true},
+    {"name": "foodie"}
+  ])";
+  DataVariant value = json_with_force;
+  auto skills = framework::BuiltinDispatcher::parse_next_skills(value);
+  EXPECT_EQ(skills.size(), 3);
+  EXPECT_EQ(skills[0].name, "travel");
+  EXPECT_EQ(skills[0].exec_skill_key, "travel_data");
+  EXPECT_TRUE(skills[0].force);  // Force re-launch enabled
+  EXPECT_EQ(skills[1].name, "shopping");
+  EXPECT_EQ(skills[1].exec_skill_key, "");
+  EXPECT_TRUE(skills[1].force);  // Force re-launch enabled
+  EXPECT_EQ(skills[2].name, "foodie");
+  EXPECT_EQ(skills[2].exec_skill_key, "");
+  EXPECT_FALSE(skills[2].force);  // Default false, no force
+
+  // Test mixed format with force field
+  std::string mixed_with_force = R"([
+    "skill1",
+    {"name": "skill2", "exec_skill_key": "skill2_data", "force": true},
+    {"name": "skill3", "force": false}
+  ])";
+  value = mixed_with_force;
+  skills = framework::BuiltinDispatcher::parse_next_skills(value);
+  EXPECT_EQ(skills.size(), 3);
+  EXPECT_EQ(skills[0].name, "skill1");
+  EXPECT_EQ(skills[0].exec_skill_key, "");
+  EXPECT_FALSE(skills[0].force);  // String format defaults to false
+  EXPECT_EQ(skills[1].name, "skill2");
+  EXPECT_EQ(skills[1].exec_skill_key, "skill2_data");
+  EXPECT_TRUE(skills[1].force);
+  EXPECT_EQ(skills[2].name, "skill3");
+  EXPECT_EQ(skills[2].exec_skill_key, "");
+  EXPECT_FALSE(skills[2].force);
+}
+
 TEST_F(AgentTest, DispatcherWithNextSkillsFromPackage) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "agentflow_test_dispatcher_skills";

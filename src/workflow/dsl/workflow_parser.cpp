@@ -460,9 +460,9 @@ bool WorkflowParser::parse_agent_root(std::shared_ptr<const IJsonValue> root, Pa
     return false;
   }
 
-  config.data_bus_capacity        = JsonHelper::get_int(root, "data_bus_capacity", 1024 * 1024);
-  if(config.data_bus_capacity <= 0) {
-    result.errors.emplace_back("data_bus_capacity must be positive", "root.data_bus_capacity");
+  config.data_bus_capacity_mb     = JsonHelper::get_int(root, "data_bus_capacity_mb", 1);  // Default 1MB
+  if(config.data_bus_capacity_mb <= 0) {
+    result.errors.emplace_back("data_bus_capacity_mb must be positive", "root.data_bus_capacity_mb");
     return false;
   }
 

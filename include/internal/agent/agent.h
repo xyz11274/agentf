@@ -85,7 +85,7 @@ class MMAgent {
     LifecyclePolicy policy = LifecyclePolicy::PER_REQUEST;
     int max_workflows = 10;
     int max_concurrent_workflows = 5;
-    int data_bus_capacity = 1024 * 1024;
+    int data_bus_capacity_mb = 1;  ///< DataBus capacity in megabytes (default: 1MB)
   };
 
   explicit MMAgent(const Config& config);

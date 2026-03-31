@@ -395,13 +395,16 @@ std::vector<SkillSpec> BuiltinDispatcher::parse_next_skills(const DataVariant& v
       for(rapidjson::SizeType i = 0; i < doc.Size(); ++i) {
         SkillSpec spec;
 
-        // New format: object with name and optional exec_skill_key
+        // New format: object with name and optional exec_skill_key, force
         if(doc[i].IsObject()) {
           if(doc[i].HasMember("name") && doc[i]["name"].IsString()) {
             spec.name = doc[i]["name"].GetString();
           }
           if(doc[i].HasMember("exec_skill_key") && doc[i]["exec_skill_key"].IsString()) {
             spec.exec_skill_key = doc[i]["exec_skill_key"].GetString();
+          }
+          if(doc[i].HasMember("force") && doc[i]["force"].IsBool()) {
+            spec.force = doc[i]["force"].GetBool();
           }
         }
         // Old format: string (backward compatibility)

@@ -228,7 +228,7 @@ TEST_F(AgentJsonTest, ParseAgentConfiguration) {
   auto config = result.agent->get_config();
   EXPECT_EQ(config.max_workflows, 10);
   EXPECT_EQ(config.max_concurrent_workflows, 5);
-  EXPECT_EQ(config.data_bus_capacity, 1048576);
+  EXPECT_EQ(config.data_bus_capacity_mb, 1);  // 1MB default
   EXPECT_EQ(config.description, "A test agent for unit testing");
 }
 
@@ -326,7 +326,7 @@ TEST_F(AgentJsonTest, ResourceConfigurationParsing) {
   auto config = result.agent->get_config();
   EXPECT_GT(config.max_workflows, 0) << "Max workflows should be positive";
   EXPECT_GT(config.max_concurrent_workflows, 0) << "Max concurrent workflows should be positive";
-  EXPECT_GT(config.data_bus_capacity, 0) << "Data bus capacity should be positive";
+  EXPECT_GT(config.data_bus_capacity_mb, 0) << "Data bus capacity should be positive";
 }
 
 TEST_F(AgentJsonTest, ResourceCapacityValidation) {
