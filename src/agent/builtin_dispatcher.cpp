@@ -332,9 +332,9 @@ bool BuiltinDispatcher::launch_skill_task(MMAgent& agent,
   skill_message.content = context.content;
   skill_message.data_ref = context.data_ref;
 
-  // Copy relevant metadata from context
+  // Copy relevant metadata from context (exclude keys that are set specifically for this skill)
   for(const auto& [key, value] : context.metadata) {
-    if(key != "task_type" && key != "skill_name") {
+    if(key != "task_type" && key != "skill_name" && key != "exec_skill_key") {
       skill_message.metadata[key] = value;
     }
   }
