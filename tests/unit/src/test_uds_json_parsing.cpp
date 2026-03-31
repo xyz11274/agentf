@@ -184,3 +184,27 @@ TEST_F(UDSJsonParsingTest, DeeplyNestedJson) {
   EXPECT_NE(get_response.find("[1,2,3]"), std::string::npos)
       << "Missing items array in: " << get_response;
 }
+
+// Test single JSON object (not array) with comma inside
+TEST_F(UDSJsonParsingTest, SingleJsonObjectWithComma) {
+  ASSERT_TRUE(connect_to_server()) << "Failed to connect to UDS server";
+
+  // Test with a single JSON object value (not wrapped in array)
+  // This is the exact case the user asked about:
+  // {"exec_skill_key":"aggregate_search", "name":"search"}
+  std::string request = R"({"jsonrpc":"2.0","method":"put","params":{"session_id":"test","namespace":"sys","key":"single_object","value":{"exec_skill_key":"aggregate_search","name":"search"}},"id":1})";
+
+  std::string response = send_request(request);
+  EXPECT_NE(response.find("\"success\":true"), std::string::npos)
+      << "Put failed: " << response;
+
+  // Get and verify
+  std::string get_request = R"({"jsonrpc":"2.0","method":"get","params":{"session_id":"test","namespace":"sys","key":"single_object"},"id":2})";
+  std::string get_response = send_request(get_request);
+
+  // Both fields should be present (not truncated at comma)
+  EXPECT_NE(get_response.find("aggregate_search"), std::string::npos)
+      << "Missing exec_skill_key in: " << get_response;
+  EXPECT_NE(get_response.find("\"name\":\"search\""), std::string::npos)
+      << "Missing name field (truncated at comma?): " << get_response;
+}
