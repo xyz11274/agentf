@@ -25,7 +25,7 @@ namespace {
 
 using agentflow::DataVariant;
 
-// Simple JSON value extraction (handles basic types)
+// Simple JSON value extraction (handles basic types and nested JSON)
 std::string extract_json_string(const std::string& json, const std::string& key) {
   // Look for "key": "value" or "key": value pattern
   std::string search = "\"" + key + "\"";
@@ -45,7 +45,7 @@ std::string extract_json_string(const std::string& json, const std::string& key)
   if (pos >= json.size()) {
     return "";
   }
-  // Check if string value
+  // Check if string value (quoted)
   if (json[pos] == '"') {
     pos++;
     size_t end = json.find('"', pos);
@@ -54,7 +54,37 @@ std::string extract_json_string(const std::string& json, const std::string& key)
     }
     return json.substr(pos, end - pos);
   }
-  // Check if number or other value
+  // Check if JSON array - find matching bracket with nesting
+  if (json[pos] == '[') {
+    int depth = 0;
+    size_t start = pos;
+    for (; pos < json.size(); pos++) {
+      if (json[pos] == '[') depth++;
+      else if (json[pos] == ']') {
+        depth--;
+        if (depth == 0) {
+          return json.substr(start, pos - start + 1);
+        }
+      }
+    }
+    return "";  // Unmatched bracket
+  }
+  // Check if JSON object - find matching brace with nesting
+  if (json[pos] == '{') {
+    int depth = 0;
+    size_t start = pos;
+    for (; pos < json.size(); pos++) {
+      if (json[pos] == '{') depth++;
+      else if (json[pos] == '}') {
+        depth--;
+        if (depth == 0) {
+          return json.substr(start, pos - start + 1);
+        }
+      }
+    }
+    return "";  // Unmatched brace
+  }
+  // Check if number or other simple value (no nesting)
   size_t end = pos;
   while (end < json.size() && json[end] != ',' && json[end] != '}' && json[end] != ']') {
     end++;

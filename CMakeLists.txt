@@ -636,6 +636,7 @@ if(AGENTFLOW_BUILD_TESTS)
       ${AGENTFLOW_TEST_DIR}/unit/src/test_builtin_workflow_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_dsl_adapter_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_databus_session_isolation.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_uds_json_parsing.cpp
   )
   if(TARGET GTest::gtest)
     target_link_libraries(test_agentflow_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)
