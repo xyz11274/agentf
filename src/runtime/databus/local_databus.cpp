@@ -6,6 +6,7 @@
 #include "runtime/databus/local_databus.h"
 
 #include "agent/data_variant_utils.h"
+#include "utils/logger.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -605,6 +606,8 @@ private:
 
 ZeroCopyDataBus::ZeroCopyDataBus(size_t capacity) : capacity_(capacity) {
   shared_memory_ = SharedMemoryFactory::create_best(capacity);
+  Logger::instance().info_f("[ZeroCopyDataBus] Initialized with capacity=%zu bytes (%zu MB)",
+                            capacity, capacity / (1024 * 1024));
 }
 
 ZeroCopyDataBus::~ZeroCopyDataBus() {
