@@ -1598,6 +1598,8 @@ void MMAgentRuntime::agent_registration_loop() {
         Logger::instance().info_f("DataBus initialized for agent_id=%s, capacity=%zu bytes (%d MB)",
                                   agent_id.c_str(), databus_capacity, request.agent->get_config().data_bus_capacity_mb);
         agent_heartbeats_[agent_id] = now_ms();
+        // Set the agent's runtime_databus pointer for unified data storage
+        request.agent->set_runtime_databus(databuses_[agent_id].get());
         // Inject DataBus to local worker
         if(local_worker_) {
           local_worker_->set_databus(agent_id, databuses_[agent_id].get());
