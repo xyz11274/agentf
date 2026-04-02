@@ -84,7 +84,7 @@
 | 022 | 2026-03-19 | [Multi-Response 机制设计](022-feature-multi-response-机制设计-260319-implemented.md) | feature | implemented | 流式响应场景需要多次返回结果 |
 | 023 | 2026-03-19 | [next_skills 格式扩展](023-feature-next-skills-格式扩展-260319-implemented.md) | feature | implemented | next_skills无法携带技能特定数据 |
 | 024 | 2026-03-19 | [消息定向路由机制设计](024-feature-消息定向路由机制设计-260319-implemented.md) | feature | implemented | 消息路由经过多层转发，延迟高 |
-| 025 | 2026-03-20 | [Session 老化 DataBus 清理问题](025-feature-session-老化-databus-清理问题-260320-tbd.md) | feature | tbd | Session老化后DataBus数据未及时清理 |
+| 025 | 2026-03-20 | [Session 老化 DataBus 清理问题](025-feature-session-老化-databus-清理问题-260320-implemented.md) | feature | implemented | Session老化后DataBus数据未及时清理 |
 | 026 | 2026-03-20 | [Master-Worker 架构边界问题](026-feature-master-worker-架构边界问题-260320-tbd.md) | feature | tbd | Master和Worker职责边界不清晰 |
 | 027 | 2026-03-22 | [UDSServer 线程池改造](027-feature-udsserver-线程池改造-260322-tbd.md) | feature | tbd | UDSServer单线程处理，高并发性能不足 |
 | 028 | 2026-03-23 | [Node 模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md) | feature | tbd | LLM流式调用阻塞Worker线程 |
@@ -98,7 +98,6 @@
 | 编号 | 日期 | 标题 | 背景 |
 |------|------|------|------|
 | 020 | 2026-03-18 | [Node 输出数据冲突问题修复](020-bugfix-node-输出数据冲突问题修复-260318-tbd.md) | 多节点并行执行时输出数据可能冲突 |
-| 025 | 2026-03-20 | [Session 老化 DataBus 清理问题](025-feature-session-老化-databus-清理问题-260320-tbd.md) | Session老化后DataBus数据未及时清理 |
 | 026 | 2026-03-20 | [Master-Worker 架构边界问题](026-feature-master-worker-架构边界问题-260320-tbd.md) | Master和Worker职责边界不清晰 |
 | 027 | 2026-03-22 | [UDSServer 线程池改造](027-feature-udsserver-线程池改造-260322-tbd.md) | UDSServer单线程处理，高并发性能不足 |
 | 028 | 2026-03-23 | [Node 模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md) | LLM流式调用阻塞Worker线程 |
@@ -134,6 +133,7 @@
 | 022 | 2026-03-19 | [Multi-Response 机制设计](022-feature-multi-response-机制设计-260319-implemented.md) | 流式响应场景需要多次返回结果 |
 | 023 | 2026-03-19 | [next_skills 格式扩展](023-feature-next-skills-格式扩展-260319-implemented.md) | next_skills无法携带技能特定数据 |
 | 024 | 2026-03-19 | [消息定向路由机制设计](024-feature-消息定向路由机制设计-260319-implemented.md) | 消息路由经过多层转发，延迟高 |
+| 025 | 2026-03-20 | [Session 老化 DataBus 清理问题](025-feature-session-老化-databus-清理问题-260320-implemented.md) | Session老化后DataBus数据未及时清理 |
 | 029 | 2026-03-24 | [上下文回调机制优化](029-feature-上下文回调机制优化-260324-implemented.md) | 用户上下文注入时机和方式不够灵活 |
 | 030 | 2026-03-27 | [Node 异步请求机制设计](030-feature-node-异步请求机制设计-260326-implemented.md) | Node同步阻塞调用外部资源，并发能力受限 |
 
