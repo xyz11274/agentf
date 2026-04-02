@@ -978,6 +978,56 @@ TEST_F(AgentTest, BuiltinDispatcherParsesNextSkillsWithForceField) {
   EXPECT_FALSE(skills[2].force);
 }
 
+TEST_F(AgentTest, BuiltinDispatcherResetForceFlags) {
+  // Test resetting force flags for specified skills
+  std::string json_with_force = R"([
+    {"name": "travel", "exec_skill_key": "travel_data", "force": true},
+    {"name": "shopping", "force": true},
+    {"name": "foodie"}
+  ])";
+
+  // Reset force for "travel" only
+  std::vector<std::string> skills_to_reset = {"travel"};
+  std::string updated = framework::BuiltinDispatcher::reset_force_flags(json_with_force, skills_to_reset);
+
+  // Parse the updated JSON to verify
+  DataVariant value = updated;
+  auto skills = framework::BuiltinDispatcher::parse_next_skills(value);
+  EXPECT_EQ(skills.size(), 3);
+  EXPECT_EQ(skills[0].name, "travel");
+  EXPECT_FALSE(skills[0].force);  // Reset to false
+  EXPECT_EQ(skills[0].exec_skill_key, "travel_data");  // Other fields preserved
+  EXPECT_EQ(skills[1].name, "shopping");
+  EXPECT_TRUE(skills[1].force);  // Still true (not in reset list)
+  EXPECT_EQ(skills[2].name, "foodie");
+  EXPECT_FALSE(skills[2].force);  // Default false
+
+  // Reset force for multiple skills
+  std::string json_multi_force = R"([
+    {"name": "travel", "force": true},
+    {"name": "shopping", "force": true},
+    {"name": "foodie", "force": true}
+  ])";
+  skills_to_reset = {"travel", "shopping", "foodie"};
+  updated = framework::BuiltinDispatcher::reset_force_flags(json_multi_force, skills_to_reset);
+  skills = framework::BuiltinDispatcher::parse_next_skills(updated);
+  EXPECT_EQ(skills.size(), 3);
+  EXPECT_FALSE(skills[0].force);
+  EXPECT_FALSE(skills[1].force);
+  EXPECT_FALSE(skills[2].force);
+
+  // Test empty skill list (no change)
+  skills_to_reset = {};
+  updated = framework::BuiltinDispatcher::reset_force_flags(json_multi_force, skills_to_reset);
+  EXPECT_EQ(updated, json_multi_force);  // Unchanged
+
+  // Test skill not in JSON (no change)
+  skills_to_reset = {"nonexistent"};
+  updated = framework::BuiltinDispatcher::reset_force_flags(json_multi_force, skills_to_reset);
+  skills = framework::BuiltinDispatcher::parse_next_skills(updated);
+  EXPECT_TRUE(skills[0].force);  // Still true (skill not found)
+}
+
 TEST_F(AgentTest, DispatcherWithNextSkillsFromPackage) {
   namespace fs = std::filesystem;
   auto tmp = fs::temp_directory_path() / "agentflow_test_dispatcher_skills";

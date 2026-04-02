@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <set>
 #include <sstream>
 
 #include "agent/agent.h"
@@ -12,6 +13,8 @@
 
 #ifdef AGENTFLOW_WITH_RAPIDJSON
 #include <rapidjson/document.h>
+#include <rapidjson/stringbuffer.h>
+#include <rapidjson/writer.h>
 #endif
 
 namespace agentflow {
@@ -449,6 +452,47 @@ std::vector<SkillSpec> BuiltinDispatcher::parse_next_skills(const DataVariant& v
   }
 
   return result;
+}
+
+std::string BuiltinDispatcher::reset_force_flags(const std::string& next_skills_json,
+                                                  const std::vector<std::string>& skill_names) {
+  if(next_skills_json.empty() || skill_names.empty()) {
+    return next_skills_json;
+  }
+
+  // Build a set for quick lookup
+  std::set<std::string> skills_to_reset(skill_names.begin(), skill_names.end());
+
+#ifdef AGENTFLOW_WITH_RAPIDJSON
+  rapidjson::Document doc;
+  doc.Parse(next_skills_json.c_str());
+
+  if(!doc.HasParseError() && doc.IsArray()) {
+    bool modified = false;
+    for(rapidjson::SizeType i = 0; i < doc.Size(); ++i) {
+      if(doc[i].IsObject() && doc[i].HasMember("name") && doc[i]["name"].IsString()) {
+        std::string name = doc[i]["name"].GetString();
+        if(skills_to_reset.count(name) && doc[i].HasMember("force") && doc[i]["force"].IsBool()) {
+          if(doc[i]["force"].GetBool()) {
+            doc[i]["force"].SetBool(false);
+            modified = true;
+            Logger::instance().info_f("[RESET_FORCE] Reset force=false for skill=%s", name.c_str());
+          }
+        }
+      }
+    }
+
+    if(modified) {
+      rapidjson::StringBuffer buffer;
+      rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+      doc.Accept(writer);
+      return buffer.GetString();
+    }
+  }
+#endif
+
+  // Return unchanged if no modification or no RapidJSON
+  return next_skills_json;
 }
 
 bool BuiltinDispatcher::get_framework_data(MMAgent& agent,

@@ -1514,9 +1514,11 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       // ============================================================
       // For skills with force=true, clear previous results and allow re-launch
       bool has_force_skills = false;
+      std::vector<std::string> force_skill_names;  // Track force skills to reset their flag
       for(const auto& spec : next_skills) {
         if(spec.force && launched_skills.count(spec.name)) {
           has_force_skills = true;
+          force_skill_names.push_back(spec.name);  // Track for later reset
 
           // Remove from launched_skills set
           launched_skills.erase(spec.name);
@@ -1618,6 +1620,21 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
           launched_list += name;
         }
         publish_data(launched_key, launched_list);
+
+        // Reset force flags in next_skills to prevent infinite re-launch loops
+        // After force skills are launched, set their force=false in databus
+        if(!force_skill_names.empty()) {
+          if(const auto* json_str = std::get_if<std::string>(&next_skills_value)) {
+            std::string updated_next_skills = BuiltinDispatcher::reset_force_flags(*json_str, force_skill_names);
+            if(updated_next_skills != *json_str) {
+              BuiltinDispatcher::publish_framework_data(*this, session->get_session_id(),
+                                                         dialogue_id, "next_skills",
+                                                         DataVariant(updated_next_skills));
+              Logger::instance().info_f("[DATA_EXCHANGE] Reset force flags for %zu skills in next_skills",
+                                        force_skill_names.size());
+            }
+          }
+        }
 
         // Check if all skills have been launched
         bool all_launched = true;
@@ -1926,9 +1943,11 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       // ============================================================
       // For skills with force=true, clear previous results and allow re-launch
       bool has_force_skills = false;
+      std::vector<std::string> force_skill_names;  // Track force skills to reset their flag
       for(const auto& spec : skill_names) {
         if(spec.force && launched_skills.count(spec.name)) {
           has_force_skills = true;
+          force_skill_names.push_back(spec.name);  // Track for later reset
 
           // Remove from launched_skills set
           launched_skills.erase(spec.name);
@@ -2119,6 +2138,19 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
           launched_list += name;
         }
         publish_data(launched_key, launched_list);
+
+        // Reset force flags in next_skills to prevent infinite re-launch loops
+        // After force skills are launched, set their force=false in databus
+        if(!force_skill_names.empty()) {
+          std::string updated_next_skills = BuiltinDispatcher::reset_force_flags(next_skills_str, force_skill_names);
+          if(updated_next_skills != next_skills_str) {
+            BuiltinDispatcher::publish_framework_data(*this, session->get_session_id(),
+                                                       dialogue_id, "next_skills",
+                                                       DataVariant(updated_next_skills));
+            Logger::instance().info_f("[COORDINATORDataExchange] Reset force flags for %zu skills in next_skills",
+                                      force_skill_names.size());
+          }
+        }
 
         // Check if all skills have been launched
         bool all_launched = true;

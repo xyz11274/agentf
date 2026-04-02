@@ -210,6 +210,22 @@ class BuiltinDispatcher {
                                     const std::string& session_id,
                                     const std::string& dialogue_id);
 
+  /**
+   * @brief Reset force flag to false for specified skills in next_skills JSON.
+   *
+   * Modifies the next_skills JSON string to set force=false for skills
+   * that have been re-launched, preventing infinite re-launch loops.
+   *
+   * For object format skills: {"name": "skill1", "force": true} -> {"name": "skill1", "force": false}
+   * For string format skills: no change (force is implicit false)
+   *
+   * @param next_skills_json The original next_skills JSON string
+   * @param skill_names Skills to reset force flag for
+   * @return Updated JSON string with force=false for specified skills
+   */
+  static std::string reset_force_flags(const std::string& next_skills_json,
+                                       const std::vector<std::string>& skill_names);
+
   const Config& get_config() const { return config_; }
   const std::string& get_dispatcher_id() const { return config_.dispatcher_id; }
 
