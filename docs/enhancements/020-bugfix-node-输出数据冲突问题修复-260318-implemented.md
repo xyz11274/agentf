@@ -1,4 +1,127 @@
-## 2026-03-18 Node 输出数据冲突问题修复（待实施）
+## 2026-03-18 Node 输出数据冲突问题修复（已完成）
+
+### 实施状态
+
+**状态**：✅ 已实施
+
+**提交记录**：
+- Edge-based Output Routing 实现于 `src/runtime/runtime.cpp:960-1030`
+- Helper functions: `has_downstream_edge()`, `get_outgoing_edges()`, `count_incoming_edges()` (runtime.cpp:35-85)
+
+**单元测试**：
+- `EdgeTransferDataMapping` - 测试显式 source_outputs/target_inputs 映射
+- `EdgeTransferZeroConfigPassthrough` - 测试零配置透传
+- `MultiIncomingEdgeCount` - 测试多入边计数
+
+### 实际实现方案
+
+采用**方案一：Edge 数据映射**，但有以下关键调整：
+
+#### 1. DataBus Key 格式（不含 workflow_id）
+
+**实际实现**：
+
+```cpp
+// runtime.cpp:94-105
+static std::string build_framework_key(const std::string& session_id,
+                                       const std::string& dialogue_id,
+                                       const std::string& workflow_id,
+                                       const std::string& key) {
+  (void)workflow_id;  // Explicitly unused - workflow_id excluded for cross-workflow access
+  std::string bus_key = "/session/" + session_id + "/sys/";
+  if(!dialogue_id.empty()) {
+    bus_key += dialogue_id + "/";
+  }
+  bus_key += key;
+  return bus_key;
+}
+```
+
+**Key 格式**：`/session/{session_id}/sys/{dialogue_id}/{key}`
+
+**设计决策**：workflow_id **故意不包含**在 key 中，理由：
+- 允许跨 workflow 通信（如 skill-selection-workflow 输出 next_skills，dispatcher 直接读取）
+- 简化消费端逻辑，无需知道数据来源 workflow
+- Session + Dialogue + Namespace 三层隔离已足够区分不同 workflow 输出
+
+#### 2. Edge-based Output Routing（runtime.cpp:960-1030）
+
+```cpp
+// Core rules:
+// - Has downstream Node → Edge point-to-point transfer to downstream inputs
+// - No downstream Node → DataBus broadcast (with session isolation format)
+// - Multi-incoming edges (Scenario 2): auto-prefix keys with source node ID
+
+const DataMap& node_outputs = node->get_outputs();
+if(!node_outputs.empty()) {
+  bool has_downstream = has_downstream_edge(workflow, node);
+
+  if(has_downstream) {
+    // Has downstream → Edge point-to-point transfer
+    for(const auto& edge : get_outgoing_edges(workflow, node)) {
+      DataMap transferred;
+      if(!edge->get_source_outputs().empty()) {
+        // Has config: use edge mapping (explicit renaming)
+        edge->transfer_data(node_outputs, transferred);
+      } else {
+        // Zero-config: check if target has multiple incoming edges
+        int incoming_count = count_incoming_edges(workflow, edge->get_target());
+        if(incoming_count > 1) {
+          // Scenario 2: Auto-prefix keys with source node ID
+          for(const auto& out : node_outputs) {
+            std::string prefixed_key = node->get_id() + "." + out.first;
+            transferred[prefixed_key] = out.second;
+          }
+        } else {
+          // Single incoming edge: pass all outputs directly
+          for(const auto& out : node_outputs) {
+            transferred[out.first] = out.second;
+          }
+        }
+      }
+      // Merge into target node inputs
+      DataMap target_inputs = target_node->get_inputs();
+      for(const auto& [key, value] : transferred) {
+        target_inputs[key] = value;
+      }
+      target_node->set_inputs(target_inputs);
+    }
+  } else {
+    // No downstream → DataBus publish (session isolation format)
+    for(const auto& out : node_outputs) {
+      std::string bus_key = build_framework_key(session_id, dialogue_id, workflow->get_id(), out.first);
+      bus.put(bus_key, out.second);
+    }
+  }
+}
+```
+
+#### 3. 场景覆盖
+
+| 场景 | 解决方式 | 实现状态 |
+|------|---------|---------|
+| 场景一：并行 node 同名输出 | Edge 点对点传递，天然隔离 | ✅ 已实现 |
+| 场景二：多入边汇聚 | 自动加 source node ID 前缀 | ✅ 已实现 |
+| 场景三：多 workflow 并行 | Session + Dialogue 隔离（不含 workflow_id） | ✅ 已实现 |
+
+#### 4. 与原方案差异
+
+| 项目 | 原方案设计 | 实际实现 | 原因 |
+|------|----------|---------|------|
+| DataBus Key | 含 workflow_id | **不含 workflow_id** | 支持跨 workflow 通信 |
+| 零配置多入边 | 需手动配置 | **自动加前缀** | 减少配置负担 |
+
+### 相关代码
+
+| 文件 | 关键代码 |
+|------|---------|
+| `src/runtime/runtime.cpp:35-85` | Helper functions: has_downstream_edge, get_outgoing_edges, count_incoming_edges |
+| `src/runtime/runtime.cpp:94-105` | build_framework_key (不含 workflow_id) |
+| `src/runtime/runtime.cpp:960-1030` | Edge-based Output Routing |
+| `tests/unit/src/test_workflow_gtest.cpp:41-89` | EdgeTransferDataMapping, EdgeTransferZeroConfigPassthrough |
+| `tests/unit/src/test_workflow_gtest.cpp:91` | MultiIncomingEdgeCount |
+
+---
 
 ### 背景
 
@@ -669,11 +792,24 @@ publish_data(final_response_key, aggregated_response);
 **优势**：
 - ✅ **Node 代码零改动**：现有 C++/Python/Shell/Go 节点无需修改
 - ✅ **规则简单**：有下游走 Edge，无下游走 DataBus
-- ✅ **完整隔离**：Session → Dialogue → Workflow 多层隔离
+- ✅ **完整隔离**：Session → Dialogue → Namespace 三层隔离（不含 workflow_id 以支持跨 workflow 通信）
 - ✅ **向后兼容**：接收端 fallback 支持旧格式
+- ✅ **零配置多入边**：自动加 source node ID 前缀，无需手动配置 Edge
 
-### 状态
+### 进展跟踪
 
-- [ ] 待实施
+- [x] 代码实现（Edge-based Output Routing）
+- [x] 单元测试（EdgeTransferDataMapping, EdgeTransferZeroConfigPassthrough, MultiIncomingEdgeCount）
+- [x] 文档更新（标记为 implemented）
+- [x] 验证通过
+
+---
+
+### 修订记录
+
+| 版本 | 刷新时间 | 刷新人 | 刷新内容 |
+|------|---------|--------|---------|
+| v1.0 | 2026-03-18 | - | 初始方案设计 |
+| v1.1 | 2026-04-02 | Claude | 标记为已实施，记录实际实现方案和与原方案差异 |
 
 ---

@@ -79,7 +79,7 @@
 | 017 | 2026-03-17 | [agent.json 配置结构冗余分析](017-feature-agentjson-配置结构冗余分析-260317-implemented.md) | feature | implemented | agent.json配置存在冗余字段 |
 | 018 | 2026-03-17 | [Skill 参数槽位校验功能](018-feature-skill-参数槽位校验功能-260317-implemented.md) | feature | implemented | Skill调用时参数校验不足，容易出错 |
 | 019 | 2026-03-17 | [Plugin UDS 注入机制设计](019-feature-plugin-uds-注入机制设计-260317-implemented.md) | feature | implemented | Plugin无法访问DataBus，限制了扩展能力 |
-| 020 | 2026-03-18 | [Node 输出数据冲突问题修复](020-bugfix-node-输出数据冲突问题修复-260318-tbd.md) | bugfix | tbd | 多节点并行执行时输出数据可能冲突 |
+| 020 | 2026-03-18 | [Node 输出数据冲突问题修复](020-bugfix-node-输出数据冲突问题修复-260318-implemented.md) | bugfix | implemented | 多节点并行执行时输出数据可能冲突 |
 | 021 | 2026-03-18 | [Workflow Input Dialogue 级别隔离](021-feature-workflow-input-dialogue-级别隔离-260318-implemented.md) | feature | implemented | 多对话场景下输入数据未隔离，可能串话 |
 | 022 | 2026-03-19 | [Multi-Response 机制设计](022-feature-multi-response-机制设计-260319-implemented.md) | feature | implemented | 流式响应场景需要多次返回结果 |
 | 023 | 2026-03-19 | [next_skills 格式扩展](023-feature-next-skills-格式扩展-260319-implemented.md) | feature | implemented | next_skills无法携带技能特定数据 |
@@ -97,7 +97,6 @@
 
 | 编号 | 日期 | 标题 | 背景 |
 |------|------|------|------|
-| 020 | 2026-03-18 | [Node 输出数据冲突问题修复](020-bugfix-node-输出数据冲突问题修复-260318-tbd.md) | 多节点并行执行时输出数据可能冲突 |
 | 026 | 2026-03-20 | [Master-Worker 架构边界问题](026-feature-master-worker-架构边界问题-260320-tbd.md) | Master和Worker职责边界不清晰 |
 | 028 | 2026-03-23 | [Node 模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md) | LLM流式调用阻塞Worker线程 |
 
@@ -128,6 +127,7 @@
 | 017 | 2026-03-17 | [agent.json 配置结构冗余分析](017-feature-agentjson-配置结构冗余分析-260317-implemented.md) | agent.json配置存在冗余字段 |
 | 018 | 2026-03-17 | [Skill 参数槽位校验功能](018-feature-skill-参数槽位校验功能-260317-implemented.md) | Skill调用时参数校验不足，容易出错 |
 | 019 | 2026-03-17 | [Plugin UDS 注入机制设计](019-feature-plugin-uds-注入机制设计-260317-implemented.md) | Plugin无法访问DataBus，限制了扩展能力 |
+| 020 | 2026-03-18 | [Node 输出数据冲突问题修复](020-bugfix-node-输出数据冲突问题修复-260318-implemented.md) | 多节点并行执行时输出数据可能冲突 |
 | 021 | 2026-03-18 | [Workflow Input Dialogue 级别隔离](021-feature-workflow-input-dialogue-级别隔离-260318-implemented.md) | 多对话场景下输入数据未隔离，可能串话 |
 | 022 | 2026-03-19 | [Multi-Response 机制设计](022-feature-multi-response-机制设计-260319-implemented.md) | 流式响应场景需要多次返回结果 |
 | 023 | 2026-03-19 | [next_skills 格式扩展](023-feature-next-skills-格式扩展-260319-implemented.md) | next_skills无法携带技能特定数据 |
