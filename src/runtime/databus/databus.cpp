@@ -22,9 +22,8 @@ void add_owner_index(RemoteDatabus* remote, const std::string& owner_key, const 
 }  // namespace
 
 MMDataBus::MMDataBus(size_t capacity) {
-  local_bus_  = std::make_shared<LocalDatabus>();
+  local_bus_  = std::make_shared<LocalDatabus>(capacity);
   remote_bus_ = std::make_shared<RemoteDatabus>();
-  (void)capacity;
 }
 
 bool MMDataBus::put(const std::string& key, const DataVariant& value) {

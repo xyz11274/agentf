@@ -240,7 +240,7 @@ public:
 
 class LocalDatabus {
 public:
-  LocalDatabus();
+  explicit LocalDatabus(size_t capacity = 1024 * 1024);
   ~LocalDatabus();
 
   std::shared_ptr<LocalChannel>    get_channel(const std::string& id);

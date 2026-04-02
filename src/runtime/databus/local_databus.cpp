@@ -851,8 +851,8 @@ std::unique_ptr<SharedMemoryBlock> SharedMemoryFactory::create_best(size_t      
 // LocalDatabus Implementation
 // ============================================================================
 
-LocalDatabus::LocalDatabus() {
-  shared_memory_ = std::make_shared<ZeroCopyDataBus>();
+LocalDatabus::LocalDatabus(size_t capacity) {
+  shared_memory_ = std::make_shared<ZeroCopyDataBus>(capacity);
 }
 
 LocalDatabus::~LocalDatabus() {
