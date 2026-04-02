@@ -3095,5 +3095,45 @@ bool MMAgent::has_task_event_callback() const {
   return static_cast<bool>(task_event_callback_);
 }
 
+int MMAgent::clear_session_data(const std::string& session_id) {
+  if(!runtime_databus_) {
+    Logger::instance().warn_f("[MMAgent] No runtime databus for session cleanup");
+    return 0;
+  }
+
+  std::string prefix = "/session/" + session_id + "/";
+  int count = runtime_databus_->remove_by_prefix(prefix);
+
+  Logger::instance().info_f("[MMAgent] Cleared %d keys for session_id=%s",
+                            count, session_id.c_str());
+  return count;
+}
+
+int MMAgent::clear_dialogue_data(const std::string& session_id,
+                                  const std::string& dialogue_id) {
+  if(!runtime_databus_) {
+    Logger::instance().warn_f("[MMAgent] No runtime databus for dialogue cleanup");
+    return 0;
+  }
+
+  int total_count = 0;
+
+  // Clean sys namespace
+  std::string sys_prefix = "/session/" + session_id + "/sys/" + dialogue_id + "/";
+  total_count += runtime_databus_->remove_by_prefix(sys_prefix);
+
+  // Clean user namespace
+  std::string user_prefix = "/session/" + session_id + "/user/" + dialogue_id + "/";
+  total_count += runtime_databus_->remove_by_prefix(user_prefix);
+
+  // Clean ctx namespace
+  std::string ctx_prefix = "/session/" + session_id + "/ctx/" + dialogue_id + "/";
+  total_count += runtime_databus_->remove_by_prefix(ctx_prefix);
+
+  Logger::instance().info_f("[MMAgent] Cleared %d keys for session_id=%s, dialogue_id=%s",
+                            total_count, session_id.c_str(), dialogue_id.c_str());
+  return total_count;
+}
+
 }  // namespace framework
 }  // namespace agentflow

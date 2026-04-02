@@ -115,6 +115,22 @@ public:
   // Shared resource access
   MMDataBus& get_databus(const AgentId& agent_id);
 
+  // DataBus cleanup functions
+  /// Clear all DataBus data for a session.
+  /// @param agent_id The agent ID
+  /// @param session_id The session ID to clear
+  /// @return Number of keys removed, or -1 if agent not found
+  int clear_session_data(const AgentId& agent_id, const std::string& session_id);
+
+  /// Clear DataBus data for a specific dialogue within a session.
+  /// @param agent_id The agent ID
+  /// @param session_id The session ID
+  /// @param dialogue_id The dialogue ID to clear
+  /// @return Number of keys removed, or -1 if agent not found
+  int clear_dialogue_data(const AgentId& agent_id,
+                           const std::string& session_id,
+                           const std::string& dialogue_id);
+
   // AsyncCall SDK support
   /// Send an async message to a target task via standard routing.
   /// Used by SendMsg() for cross-task communication.

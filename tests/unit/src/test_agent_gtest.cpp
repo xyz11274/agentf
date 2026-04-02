@@ -2477,5 +2477,110 @@ TEST_F(CandidateSkillsTest, CandidateSkillsRestrictAccess) {
   EXPECT_FALSE(test_validate_skill_against_candidates("hack", candidates));
 }
 
+// =============================================================================
+// DataBus Cleanup Tests
+// =============================================================================
+
+class DataBusCleanupTest : public ::testing::Test {
+protected:
+  void SetUp() override {
+    databus_ = std::make_unique<runtime::MMDataBus>(1024 * 1024);
+    framework::MMAgent::Config config;
+    config.id = "test-agent";
+    agent_ = std::make_unique<framework::MMAgent>(config);
+    agent_->set_runtime_databus(databus_.get());
+  }
+
+  std::unique_ptr<runtime::MMDataBus> databus_;
+  std::unique_ptr<framework::MMAgent> agent_;
+};
+
+TEST_F(DataBusCleanupTest, ClearSessionData) {
+  // Put test data for different sessions
+  databus_->put("/session/s1/sys/key1", DataVariant("value1"));
+  databus_->put("/session/s1/user/key2", DataVariant("value2"));
+  databus_->put("/session/s1/ctx/key3", DataVariant("value3"));
+  databus_->put("/session/s2/sys/key4", DataVariant("value4"));
+
+  // Verify data exists
+  DataVariant value;
+  EXPECT_TRUE(databus_->get("/session/s1/sys/key1", value));
+  EXPECT_TRUE(databus_->get("/session/s2/sys/key4", value));
+
+  // Clear session s1
+  int count = agent_->clear_session_data("s1");
+
+  // Should have removed 3 keys from s1
+  EXPECT_EQ(count, 3);
+
+  // s1 data should be gone
+  EXPECT_FALSE(databus_->get("/session/s1/sys/key1", value));
+  EXPECT_FALSE(databus_->get("/session/s1/user/key2", value));
+  EXPECT_FALSE(databus_->get("/session/s1/ctx/key3", value));
+
+  // s2 data should still exist
+  EXPECT_TRUE(databus_->get("/session/s2/sys/key4", value));
+}
+
+TEST_F(DataBusCleanupTest, ClearDialogueData) {
+  // Put test data for different dialogues
+  databus_->put("/session/s1/sys/d1/key1", DataVariant("value1"));
+  databus_->put("/session/s1/sys/d1/key2", DataVariant("value2"));
+  databus_->put("/session/s1/user/d1/key3", DataVariant("value3"));
+  databus_->put("/session/s1/ctx/d1/key4", DataVariant("value4"));
+  databus_->put("/session/s1/sys/d2/key5", DataVariant("value5"));
+  databus_->put("/session/s1/user/d2/key6", DataVariant("value6"));
+
+  // Clear dialogue d1
+  int count = agent_->clear_dialogue_data("s1", "d1");
+
+  // Should have removed 4 keys from d1 (sys, user, ctx namespaces)
+  EXPECT_EQ(count, 4);
+
+  // d1 data should be gone
+  DataVariant value;
+  EXPECT_FALSE(databus_->get("/session/s1/sys/d1/key1", value));
+  EXPECT_FALSE(databus_->get("/session/s1/user/d1/key3", value));
+  EXPECT_FALSE(databus_->get("/session/s1/ctx/d1/key4", value));
+
+  // d2 data should still exist
+  EXPECT_TRUE(databus_->get("/session/s1/sys/d2/key5", value));
+  EXPECT_TRUE(databus_->get("/session/s1/user/d2/key6", value));
+}
+
+TEST_F(DataBusCleanupTest, ClearSessionDataNoDatabus) {
+  // Test when no databus is set
+  framework::MMAgent::Config config;
+  config.id = "test-agent-no-databus";
+  auto agent_no_databus = std::make_unique<framework::MMAgent>(config);
+  // Don't set runtime databus
+
+  int count = agent_no_databus->clear_session_data("s1");
+  EXPECT_EQ(count, 0);  // Should return 0 when no databus
+}
+
+TEST_F(DataBusCleanupTest, ClearDialogueDataNoDatabus) {
+  // Test when no databus is set
+  framework::MMAgent::Config config;
+  config.id = "test-agent-no-databus";
+  auto agent_no_databus = std::make_unique<framework::MMAgent>(config);
+  // Don't set runtime databus
+
+  int count = agent_no_databus->clear_dialogue_data("s1", "d1");
+  EXPECT_EQ(count, 0);  // Should return 0 when no databus
+}
+
+TEST_F(DataBusCleanupTest, ClearNonExistentSession) {
+  // Clear a session that doesn't exist - should return 0
+  int count = agent_->clear_session_data("nonexistent");
+  EXPECT_EQ(count, 0);
+}
+
+TEST_F(DataBusCleanupTest, ClearNonExistentDialogue) {
+  // Clear a dialogue that doesn't exist - should return 0
+  int count = agent_->clear_dialogue_data("s1", "nonexistent");
+  EXPECT_EQ(count, 0);
+}
+
 }  // namespace tests
 }  // namespace agentflow

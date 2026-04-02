@@ -2060,6 +2060,32 @@ MMDataBus& MMAgentRuntime::get_databus(const AgentId& agent_id) {
   return *it->second;
 }
 
+int MMAgentRuntime::clear_session_data(const AgentId& agent_id, const std::string& session_id) {
+  std::lock_guard<std::mutex> lock(agents_mutex_);
+
+  auto agent_it = agents_.find(agent_id);
+  if(agent_it == agents_.end() || !agent_it->second) {
+    Logger::instance().warn_f("[Runtime] Agent not found for session cleanup: %s", agent_id.c_str());
+    return -1;
+  }
+
+  return agent_it->second->clear_session_data(session_id);
+}
+
+int MMAgentRuntime::clear_dialogue_data(const AgentId& agent_id,
+                                          const std::string& session_id,
+                                          const std::string& dialogue_id) {
+  std::lock_guard<std::mutex> lock(agents_mutex_);
+
+  auto agent_it = agents_.find(agent_id);
+  if(agent_it == agents_.end() || !agent_it->second) {
+    Logger::instance().warn_f("[Runtime] Agent not found for dialogue cleanup: %s", agent_id.c_str());
+    return -1;
+  }
+
+  return agent_it->second->clear_dialogue_data(session_id, dialogue_id);
+}
+
 // =============================================================================
 // Event Handler Management
 // =============================================================================

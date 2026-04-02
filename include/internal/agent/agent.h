@@ -128,6 +128,20 @@ class MMAgent {
   void set_runtime_databus(runtime::MMDataBus* databus) { runtime_databus_ = databus; }
   runtime::MMDataBus* get_runtime_databus() const { return runtime_databus_; }
 
+  // DataBus cleanup functions
+  /// Clear all DataBus data for a session.
+  /// Uses remove_by_prefix to batch delete all keys under /session/{session_id}/
+  /// @param session_id The session ID to clear
+  /// @return Number of keys removed
+  int clear_session_data(const std::string& session_id);
+
+  /// Clear DataBus data for a specific dialogue within a session.
+  /// Clears sys, user, and ctx namespaces for the dialogue.
+  /// @param session_id The session ID
+  /// @param dialogue_id The dialogue ID to clear
+  /// @return Number of keys removed
+  int clear_dialogue_data(const std::string& session_id, const std::string& dialogue_id);
+
   std::vector<std::string> get_all_session_ids() const;
   bool get_session_output(const std::string& session_id, const std::string& key,
                           DataVariant& value) const;
