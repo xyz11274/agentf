@@ -1,12 +1,13 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 //
-// Skill Selection Node - Randomly selects 2 skills from available skills
+// Skill Selection Node - Fixed selection of travel and shopping for E2E testing
 // Uses V3 signature with session-isolated DataBus client
 // Supports multi-dialogue with dialogue_id isolation
+//
+// Test scenario: Always selects travel and shopping (fixed, not random)
+// Coordinator will add foodie and force-launch shopping
 
-#include <algorithm>
-#include <random>
 #include <string>
 #include <vector>
 
@@ -54,23 +55,17 @@ extern "C" void skill_selection_node_v3(const DataMap& inputs, DataMap& outputs,
   std::string session_id = get_string(inputs, "session_id", "");
   std::string dialogue_id = get_string(inputs, "dialogue_id", "");
 
-  // Available skills to choose from
-  std::vector<std::string> all_skills = {"travel", "shopping", "foodie"};
-
-  // Randomly shuffle and pick 2 skills
-  std::random_device rd;
-  std::mt19937 gen(rd());
-  std::shuffle(all_skills.begin(), all_skills.end(), gen);
-
-  std::vector<std::string> selected(all_skills.begin(), all_skills.begin() + 2);
+  // Fixed selection for E2E test: travel and shopping
+  // Coordinator will add foodie and force-launch shopping
+  std::vector<std::string> selected = {"travel", "shopping"};
   std::string selected_json = format_json_array(selected);
 
   // Output next_skills (preferred) and selected_skills (backward compatibility)
   outputs["next_skills"] = DataVariant(selected_json);
   outputs["selected_skills"] = DataVariant(selected_json);
   outputs["selection_reason"] =
-      DataVariant("Randomly selected " + std::to_string(selected.size()) +
-                  " skills for demo based on user query: " + user_text);
+      DataVariant("Fixed selection for E2E test: travel and shopping. "
+                  "Coordinator will add foodie and force-launch shopping.");
 
   // Write next_skills to sys namespace for framework to launch more skills
   // With dialogue_id support, the key is: {dialogue_id}/next_skills
