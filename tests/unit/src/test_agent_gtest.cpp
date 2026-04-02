@@ -2573,29 +2573,33 @@ TEST_F(DataBusCleanupTest, ClearSessionData) {
 }
 
 TEST_F(DataBusCleanupTest, ClearDialogueData) {
-  // Put test data for different dialogues
+  // Put test data for different dialogues in all 5 namespaces
   databus_->put("/session/s1/sys/d1/key1", DataVariant("value1"));
   databus_->put("/session/s1/sys/d1/key2", DataVariant("value2"));
   databus_->put("/session/s1/user/d1/key3", DataVariant("value3"));
   databus_->put("/session/s1/ctx/d1/key4", DataVariant("value4"));
-  databus_->put("/session/s1/sys/d2/key5", DataVariant("value5"));
-  databus_->put("/session/s1/user/d2/key6", DataVariant("value6"));
+  databus_->put("/session/s1/llm/d1/key5", DataVariant("value5"));
+  databus_->put("/session/s1/tool/d1/key6", DataVariant("value6"));
+  databus_->put("/session/s1/sys/d2/key7", DataVariant("value7"));
+  databus_->put("/session/s1/user/d2/key8", DataVariant("value8"));
 
   // Clear dialogue d1
   int count = agent_->clear_dialogue_data("s1", "d1");
 
-  // Should have removed 4 keys from d1 (sys, user, ctx namespaces)
-  EXPECT_EQ(count, 4);
+  // Should have removed 6 keys from d1 (sys, user, ctx, llm, tool namespaces)
+  EXPECT_EQ(count, 6);
 
   // d1 data should be gone
   DataVariant value;
   EXPECT_FALSE(databus_->get("/session/s1/sys/d1/key1", value));
   EXPECT_FALSE(databus_->get("/session/s1/user/d1/key3", value));
   EXPECT_FALSE(databus_->get("/session/s1/ctx/d1/key4", value));
+  EXPECT_FALSE(databus_->get("/session/s1/llm/d1/key5", value));
+  EXPECT_FALSE(databus_->get("/session/s1/tool/d1/key6", value));
 
   // d2 data should still exist
-  EXPECT_TRUE(databus_->get("/session/s1/sys/d2/key5", value));
-  EXPECT_TRUE(databus_->get("/session/s1/user/d2/key6", value));
+  EXPECT_TRUE(databus_->get("/session/s1/sys/d2/key7", value));
+  EXPECT_TRUE(databus_->get("/session/s1/user/d2/key8", value));
 }
 
 TEST_F(DataBusCleanupTest, ClearSessionDataNoDatabus) {

@@ -51,6 +51,9 @@ int64_t get_current_timestamp_ms() {
   return static_cast<int64_t>(tv.tv_sec) * 1000 + tv.tv_usec / 1000;
 }
 
+/// DataBus namespaces for dialogue-level data isolation
+constexpr const char* DIALOGUE_NAMESPACES[] = {"sys", "user", "ctx", "llm", "tool"};
+
 std::map<std::string, std::string> build_task_workflow_map(
     const std::vector<AgentPackage::TaskDefinition>& session_tasks) {
   std::map<std::string, std::string> task_workflows;
@@ -3150,17 +3153,11 @@ int MMAgent::clear_dialogue_data(const std::string& session_id,
 
   int total_count = 0;
 
-  // Clean sys namespace
-  std::string sys_prefix = "/session/" + session_id + "/sys/" + dialogue_id + "/";
-  total_count += runtime_databus_->remove_by_prefix(sys_prefix);
-
-  // Clean user namespace
-  std::string user_prefix = "/session/" + session_id + "/user/" + dialogue_id + "/";
-  total_count += runtime_databus_->remove_by_prefix(user_prefix);
-
-  // Clean ctx namespace
-  std::string ctx_prefix = "/session/" + session_id + "/ctx/" + dialogue_id + "/";
-  total_count += runtime_databus_->remove_by_prefix(ctx_prefix);
+  // Clean all dialogue namespaces: sys, user, ctx, llm, tool
+  for(const auto& ns : DIALOGUE_NAMESPACES) {
+    std::string prefix = "/session/" + session_id + "/" + ns + "/" + dialogue_id + "/";
+    total_count += runtime_databus_->remove_by_prefix(prefix);
+  }
 
   Logger::instance().info_f("[MMAgent] Cleared %d keys for session_id=%s, dialogue_id=%s",
                             total_count, session_id.c_str(), dialogue_id.c_str());

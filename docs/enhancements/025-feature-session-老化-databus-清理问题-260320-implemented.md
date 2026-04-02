@@ -128,6 +128,8 @@ void MMAgentSession::reset_for_pool() {
 | Dialogue | `/session/{session_id}/sys/{dialogue_id}/` | 单个 dialogue 的框架数据 |
 | Dialogue | `/session/{session_id}/user/{dialogue_id}/` | 单个 dialogue 的用户数据 |
 | Dialogue | `/session/{session_id}/ctx/{dialogue_id}/` | 单个 dialogue 的上下文数据 |
+| Dialogue | `/session/{session_id}/llm/{dialogue_id}/` | 单个 dialogue 的 LLM 数据 |
+| Dialogue | `/session/{session_id}/tool/{dialogue_id}/` | 单个 dialogue 的工具数据 |
 
 ### API 设计
 
@@ -180,6 +182,9 @@ int MMAgent::clear_session_data(const std::string& session_id) {
 ### MMAgent::clear_dialogue_data
 
 ```cpp
+// DataBus namespaces for dialogue-level data isolation
+constexpr const char* DIALOGUE_NAMESPACES[] = {"sys", "user", "ctx", "llm", "tool"};
+
 int MMAgent::clear_dialogue_data(const std::string& session_id,
                                   const std::string& dialogue_id) {
   if(!runtime_databus_) {
@@ -189,17 +194,11 @@ int MMAgent::clear_dialogue_data(const std::string& session_id,
 
   int total_count = 0;
 
-  // Clean sys namespace
-  std::string sys_prefix = "/session/" + session_id + "/sys/" + dialogue_id + "/";
-  total_count += runtime_databus_->remove_by_prefix(sys_prefix);
-
-  // Clean user namespace
-  std::string user_prefix = "/session/" + session_id + "/user/" + dialogue_id + "/";
-  total_count += runtime_databus_->remove_by_prefix(user_prefix);
-
-  // Clean ctx namespace
-  std::string ctx_prefix = "/session/" + session_id + "/ctx/" + dialogue_id + "/";
-  total_count += runtime_databus_->remove_by_prefix(ctx_prefix);
+  // Clean all dialogue namespaces: sys, user, ctx, llm, tool
+  for(const auto& ns : DIALOGUE_NAMESPACES) {
+    std::string prefix = "/session/" + session_id + "/" + ns + "/" + dialogue_id + "/";
+    total_count += runtime_databus_->remove_by_prefix(prefix);
+  }
 
   Logger::instance().info_f("[MMAgent] Cleared %d keys for session_id=%s, dialogue_id=%s",
                             total_count, session_id.c_str(), dialogue_id.c_str());
