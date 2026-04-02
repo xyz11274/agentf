@@ -304,10 +304,10 @@ TEST(DataBusCleanup, ClearDialogueData) {
 |------|------|------|
 | 问题识别 | ✅ 已完成 | 确认 DataBus 数据残留问题 |
 | remove_by_prefix 实现 | ✅ 已完成 | ZeroCopyDataBus 已实现 |
-| MMAgent 清理函数 | 🔄 进行中 | clear_session_data, clear_dialogue_data |
-| Runtime 封装 | ⏳ 待实施 | 封装到 MMAgentRuntime |
-| 自动清理集成 | ⏳ 待定 | SessionRouter 老化时自动清理 |
-| 单元测试 | ⏳ 待实施 | 验证清理功能 |
+| MMAgent 清理函数 | ✅ 已完成 | clear_session_data, clear_dialogue_data |
+| Runtime 封装 | ✅ 已完成 | 封装到 MMAgentRuntime |
+| 自动清理集成 | ⏳ 待定 | SessionRouter 老化时自动清理（可选） |
+| 单元测试 | ✅ 已完成 | 6个测试用例验证清理功能 |
 
 ## 10. 相关文件
 
@@ -318,3 +318,27 @@ TEST(DataBusCleanup, ClearDialogueData) {
 | `include/internal/runtime/agent_runtime.h` | 新增 Runtime 层封装 |
 | `src/runtime/runtime.cpp` | 实现 Runtime 层封装 |
 | `tests/unit/src/test_agent_gtest.cpp` | 新增清理功能测试 |
+
+## 11. 文档
+
+### 需要变更的文档
+
+| 文档 | 变更说明 |
+|------|---------|
+| [docs/api-reference.md](../api-reference.md) | 在 MMAgent API 和 MMAgentRuntime API 章节添加 clear_session_data/clear_dialogue_data 接口说明 |
+| [docs/databus-session-isolation.md](../databus-session-isolation.md) | 在"Implementation Details"章节添加 DataBus 清理机制说明，包括清理时机和清理范围 |
+
+### 关联方案
+
+| 关联方案 | 关系说明 |
+|---------|---------|
+| [003-MMDataBus 全局共享重构](003-refactor-mmdatabus-全局共享重构-260222-implemented.md) | DataBus 基础架构，remove_by_prefix 接口依赖 |
+| [021-Workflow Input Dialogue 级别隔离](021-feature-workflow-input-dialogue-级别隔离-260318-implemented.md) | Dialogue 级别数据隔离设计，清理范围定义依赖 |
+
+## 12. 进展跟踪
+
+- [x] 代码实现
+- [x] 单元测试
+- [ ] 集成测试（可选）
+- [ ] 文档更新（api-reference.md, databus-session-isolation.md）
+- [x] 验证通过
