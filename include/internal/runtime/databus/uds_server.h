@@ -59,8 +59,8 @@ namespace runtime {
  * \code
  * MMDataBus databus;
  * UDSServer::Config config;
- * config.thread_pool_size = 10;
- * config.max_queue_size = 100;
+ * config.thread_pool_size = 3;   // Optimized for execution-level UDS
+ * config.max_queue_size = 20;
  * UDSServer server(&databus, "/tmp/agentflow_session_123.sock", config);
  * if (server.start()) {
  *     // Server is running, clients can connect
@@ -87,13 +87,13 @@ public:
 
   /// Server configuration
   struct Config {
-    size_t thread_pool_size = 10;  ///< Number of worker threads for client handling
-    size_t max_queue_size = 100;   ///< Maximum number of queued client connections
+    size_t thread_pool_size = 3;   ///< Number of worker threads for client handling (optimized for execution-level UDS)
+    size_t max_queue_size = 20;    ///< Maximum number of queued client connections
   };
 
   /// Construct a UDS server with the given DataBus and socket path.
   /// The databus pointer must remain valid for the lifetime of this server.
-  /// Uses default configuration (10 worker threads, 100 max queue size).
+  /// Uses default configuration (3 worker threads, 20 max queue size).
   UDSServer(MMDataBus* databus, const std::string& socket_path);
 
   /// Construct a UDS server with async callback support for multi-language nodes.

@@ -81,8 +81,8 @@ UDS 生命周期跟随 WorkflowExecutionState，不再是 Worker 级别共享：
 ```
 
 **默认配置**：
-- `thread_pool_size = 10` 个工作线程
-- `max_queue_size = 100` 最大排队连接数
+- `thread_pool_size = 3` 个工作线程（优化后）
+- `max_queue_size = 20` 最大排队连接数
 
 ### 3. 客户端连接生命周期
 
@@ -238,15 +238,15 @@ size_t pool_size = std::min(
 - 有大量使用 fork/parallel 的 workflow
 - 线程资源充足
 
-则保持 `thread_pool_size = 10`。
+则可调高 `thread_pool_size` 至 5-10。
 
 #### 4.3 配置对比
 
 | 场景 | 线程数 | 队列容量 | 预期效果 |
 |------|--------|---------|---------|
 | 简单 workflow (串行) | 1-2 | 10 | 足够 |
-| 中等复杂度 (少量并行) | 3-4 | 20 | 足够 |
-| 复杂 workflow (大量并行) | 5-10 | 50-100 | 当前配置 |
+| 中等复杂度 (少量并行) | 3-4 | 20 | 默认配置 |
+| 复杂 workflow (大量并行) | 5-10 | 50-100 | 需调高配置 |
 
 ### 5. 线程安全分析
 
