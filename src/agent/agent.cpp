@@ -1476,6 +1476,49 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     } else {
       task->on_skill_completed("unknown-skill");  // fallback
     }
+
+    // Decrement pending_skills_count in DataBus for coordinator to track
+    std::string pending_count_key = dialogue_id.empty() ? "pending_skills_count" : dialogue_id + "/pending_skills_count";
+    DataVariant pending_count_value;
+    long pending_count = 0;
+    if(get_data(pending_count_key, pending_count_value)) {
+      if(const auto* count_ptr = std::get_if<long>(&pending_count_value)) {
+        pending_count = *count_ptr;
+      } else if(const auto* count_str = std::get_if<std::string>(&pending_count_value)) {
+        pending_count = std::stol(*count_str);
+      }
+      if(pending_count > 0) {
+        pending_count--;
+        publish_data(pending_count_key, DataVariant(pending_count));
+      }
+    }
+    Logger::instance().info_f("[SKILL_COMPLETION] Decremented pending_skills_count to %ld for dialogue_id=%s",
+                              pending_count, dialogue_id.c_str());
+
+    // If task is coordinator, trigger coordinator workflow to check results
+    if(task->get_task_type() == "coordinator") {
+      MMAgentMsgQue::Message coordinator_trigger;
+      coordinator_trigger.message_id = "coordinator-trigger-" + message.message_id;
+      coordinator_trigger.metadata["task_type"] = "coordinator";
+      coordinator_trigger.metadata["trigger_type"] = "skill_completion";
+      if(!dialogue_id.empty()) {
+        coordinator_trigger.metadata["dialogue_id"] = dialogue_id;
+      }
+      if(!skill_name_for_counter.empty()) {
+        coordinator_trigger.metadata["completed_skill_name"] = skill_name_for_counter;
+      }
+      // Get the original user prompt
+      std::string user_prompt_key = dialogue_id.empty() ? "user_prompt" : dialogue_id + "/user_prompt";
+      DataVariant user_prompt_value;
+      if(get_data(user_prompt_key, user_prompt_value)) {
+        if(const auto* text = std::get_if<std::string>(&user_prompt_value)) {
+          coordinator_trigger.content = *text;
+        }
+      }
+      task->enqueue_intent_request_message(coordinator_trigger);
+      Logger::instance().info_f("[SKILL_COMPLETION] Triggered coordinator workflow for skill completion");
+      return;
+    }
   }
 
   // ============================================================
