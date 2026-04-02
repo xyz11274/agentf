@@ -320,6 +320,17 @@ bool parse_agent_limits(const rapidjson::Document& agent_doc, AgentPackage::Conf
       return fail_agent_json_parse("max_concurrent_workflows must be >= 1");
     }
   }
+
+  config.data_bus_capacity_mb = 1;
+  if(agent_doc.HasMember("data_bus_capacity_mb")) {
+    if(!agent_doc["data_bus_capacity_mb"].IsInt()) {
+      return fail_agent_json_parse("data_bus_capacity_mb must be an integer");
+    }
+    config.data_bus_capacity_mb = agent_doc["data_bus_capacity_mb"].GetInt();
+    if(config.data_bus_capacity_mb < 1) {
+      return fail_agent_json_parse("data_bus_capacity_mb must be >= 1");
+    }
+  }
   return true;
 }
 

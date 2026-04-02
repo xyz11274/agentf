@@ -65,6 +65,7 @@ class AgentPackage {
     std::vector<std::string> builtin_workflows;
     int         max_workflows = 10;
     int         max_concurrent_workflows = 5;
+    int         data_bus_capacity_mb = 1;  // Default 1MB
     int         precreate_session_count = 0;
     int         session_pool_size = 0;
     // Flattened task structure (new format)

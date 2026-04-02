@@ -64,5 +64,6 @@
     }
   ],
   "max_workflows": 10,
-  "max_concurrent_workflows": 5
+  "max_concurrent_workflows": 5,
+  "data_bus_capacity_mb": 5
 }

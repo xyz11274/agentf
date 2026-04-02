@@ -451,6 +451,7 @@ std::shared_ptr<MMAgent> MMAgent::create_from_package(const std::string& package
   config.policy = MMAgent::LifecyclePolicy::PER_REQUEST;
   config.max_workflows = package->get_config().max_workflows;
   config.max_concurrent_workflows = package->get_config().max_concurrent_workflows;
+  config.data_bus_capacity_mb = package->get_config().data_bus_capacity_mb;
 
   auto agent = std::make_shared<MMAgent>(config);
   namespace fs = std::filesystem;
