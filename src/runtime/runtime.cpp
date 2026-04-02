@@ -522,7 +522,8 @@ bool MMAgentRuntime::unload_workflow(const AgentId& agent_id, const WorkflowId& 
 bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId& workflow_id,
                                     const DataMap& inputs, const std::string& source_task_id,
                                     const std::string& session_id, const std::string& dialogue_id,
-                                    const std::string& task_type, const std::string& skill_task_id) {
+                                    const std::string& task_type, const std::string& skill_task_id,
+                                    const std::string& skill_name) {
   if(draining_) {
     Logger::instance().warn("Rejecting new workflow — runtime is draining");
     return false;
@@ -570,6 +571,7 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
   state.dialogue_id     = dialogue_id;  // Store for multi-dialogue support
   state.task_type       = task_type;    // Store for correct task_type in completion message
   state.skill_task_id   = skill_task_id;  // Store actual skill task id for completion tracking
+  state.skill_name      = skill_name;      // Store skill name for completion notification
   state.total_nodes     = static_cast<int>(workflow->get_nodes().size());
   state.completed_count = 0;
   state.in_progress     = true;
@@ -587,6 +589,7 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
       it->second.dialogue_id = std::move(state.dialogue_id);
       it->second.task_type = std::move(state.task_type);
       it->second.skill_task_id = std::move(state.skill_task_id);
+      it->second.skill_name = std::move(state.skill_name);
       it->second.total_nodes = state.total_nodes;
       it->second.completed_count = state.completed_count;
       it->second.in_progress = state.in_progress;
@@ -604,6 +607,7 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
                   std::move(state.dialogue_id),
                   std::move(state.task_type),
                   std::move(state.skill_task_id),
+                  std::move(state.skill_name),
                   {},
                   {},
                   {},
@@ -1314,6 +1318,7 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
   std::string complete_dialogue_id;
   std::string complete_task_type;
   std::string complete_skill_task_id;
+  std::string complete_skill_name;
 
   {
     std::lock_guard<std::mutex> lock(workflow_state_mutex_);
@@ -1367,6 +1372,7 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
       complete_dialogue_id    = state.dialogue_id;
       complete_task_type      = state.task_type;
       complete_skill_task_id  = state.skill_task_id;
+      complete_skill_name     = state.skill_name;
     } else if(success) {
       // Get the cloned workflow for this execution
       WorkflowPtr workflow;
@@ -1439,8 +1445,7 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
             response.metadata["message_type"] = "data_exchange";
             response.metadata["dialogue_id"] = complete_dialogue_id;
             // Pass skill_name for skill completion tracking
-            // Use skill_task_id if available, otherwise fall back to source_task_id
-            response.metadata["skill_name"] = complete_skill_task_id.empty() ? complete_source_task_id : complete_skill_task_id;
+            response.metadata["skill_name"] = complete_skill_name;
             response.content = complete_ok ? "workflow_completed" : "workflow_failed";
             source_task->enqueue_data_exchange_message(response);
             Logger::instance().info_f(
@@ -1774,6 +1779,12 @@ void MMAgentRuntime::agent_task_poller_loop() {
           inputs["dialogue_id"] = dialogue_id;
           Logger::instance().info_f("[TASK_POLLER] Set inputs[dialogue_id]='%s'", dialogue_id.c_str());
         }
+        // Propagate completed_skill_name for coordinator to track skill completion
+        std::string completed_skill_name;
+        if(task->get_parameter("completed_skill_name", completed_skill_name) && !completed_skill_name.empty()) {
+          inputs["completed_skill_name"] = completed_skill_name;
+          Logger::instance().info_f("[TASK_POLLER] Set inputs[completed_skill_name]='%s'", completed_skill_name.c_str());
+        }
         // Propagate exec_skill_key for skill-specific data routing
         std::string exec_skill_key;
         if(task->get_parameter("exec_skill_key", exec_skill_key) && !exec_skill_key.empty()) {
@@ -1831,9 +1842,15 @@ void MMAgentRuntime::agent_task_poller_loop() {
         // Get skill task id for completion tracking (the actual task id of this skill)
         std::string skill_task_id = task->get_config().task_id;
 
+        // Get skill name for skill completion notification
+        std::string skill_name;
+        if(task_type == "skill") {
+          skill_name = task->get_skill_name();
+        }
+
         const bool scheduled = execute_workflow(agent->get_id(), workflow_id, inputs,
                                                 task_source_id, task_session_id, task_dialogue_id,
-                                                task_type, skill_task_id);
+                                                task_type, skill_task_id, skill_name);
         framework::MMAgentMsgQue::Message response;
         std::string response_message_id;
         if(!task->get_parameter("message_id", response_message_id) || response_message_id.empty()) {

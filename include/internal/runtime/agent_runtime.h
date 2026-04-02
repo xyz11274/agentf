@@ -69,7 +69,8 @@ public:
   bool execute_workflow(const AgentId& agent_id, const WorkflowId& workflow_id,
                         const DataMap& inputs, const std::string& source_task_id = "",
                         const std::string& session_id = "", const std::string& dialogue_id = "",
-                        const std::string& task_type = "", const std::string& skill_task_id = "");
+                        const std::string& task_type = "", const std::string& skill_task_id = "",
+                        const std::string& skill_name = "");
 
   // MMNode execution (MMNode Level Worker)
   void process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr node, const std::string& execution_id);
@@ -189,6 +190,7 @@ private:
      std::string            dialogue_id;       // Dialogue ID for multi-dialogue support
      std::string            task_type;         // Type of the task executing this workflow (skill, dispatcher, coordinator)
      std::string            skill_task_id;     // Actual task id of the skill (for skill completion tracking)
+     std::string            skill_name;        // Skill name (for skill completion notification)
      std::map<NodeId, bool> completed_nodes;
      std::map<NodeId, bool> failed_nodes;
      std::set<NodeId>       queued_nodes;

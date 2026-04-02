@@ -1174,6 +1174,14 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
                               dialogue_id_it->second.c_str(), task_config.task_id.c_str());
   }
 
+  // Pass completed_skill_name from message metadata for coordinator tracking
+  if(const auto skill_name_it = message.metadata.find("completed_skill_name");
+     skill_name_it != message.metadata.end() && !skill_name_it->second.empty()) {
+    task->set_parameter("completed_skill_name", skill_name_it->second);
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set completed_skill_name=%s for task=%s",
+                              skill_name_it->second.c_str(), task_config.task_id.c_str());
+  }
+
   return task;
 }
 
@@ -1877,12 +1885,12 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         coord_dialogue_id = skill_response.metadata.at("dialogue_id");
       }
 
-      // Mark skill as completed
+      // Mark skill as completed (for running count tracking)
       if(skill_response.metadata.count("skill_name")) {
         task->on_skill_completed(skill_response.metadata["skill_name"]);
       }
 
-      // Decrement pending skills count in databus
+      // Decrement pending skills count for reference
       std::string pending_count_key = coord_dialogue_id.empty() ? "pending_skills_count" : coord_dialogue_id + "/pending_skills_count";
       DataVariant pending_count_value;
       long pending_count = 0;
@@ -1901,14 +1909,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
                                   pending_count, coord_dialogue_id.c_str());
       }
 
-      // Only send final response when all skills have completed
-      if(pending_count > 0) {
-        Logger::instance().info_f("[COORDINATORDataExchange] Still have %ld pending skills, triggering coordinator workflow to check results",
-                                  pending_count);
-      }
-
-      // Trigger coordinator workflow for each skill completion
-      // The workflow will check if all results are ready and decide whether to respond
+      // Trigger coordinator workflow - coordinator will decide based on available results
       MMAgentMsgQue::Message coordinator_trigger;
       coordinator_trigger.message_id = "coordinator-trigger-" + skill_response.message_id;
       coordinator_trigger.metadata["task_type"] = "coordinator";
