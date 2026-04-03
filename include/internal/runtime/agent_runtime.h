@@ -191,6 +191,7 @@ private:
      std::string            task_type;         // Type of the task executing this workflow (skill, dispatcher, coordinator)
      std::string            skill_task_id;     // Actual task id of the skill (for skill completion tracking)
      std::string            skill_name;        // Skill name (for skill completion notification)
+     DataMap                inputs;            // Workflow inputs (passed via state, not databus, for concurrency isolation)
      std::map<NodeId, bool> completed_nodes;
      std::map<NodeId, bool> failed_nodes;
      std::set<NodeId>       queued_nodes;

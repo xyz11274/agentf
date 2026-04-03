@@ -545,13 +545,6 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
     return false;
   }
 
-  // Set input data to agent with dialogue_id prefix for concurrency isolation
-  // When multiple dialogues execute in parallel, each dialogue's inputs are isolated
-  std::string input_prefix = dialogue_id.empty() ? "" : dialogue_id + "/";
-  for(const auto& pair : inputs) {
-    agent->publish_data(input_prefix + pair.first, pair.second);
-  }
-
   // Create execution state for this workflow
   std::string execution_id =
       agent_id + ":" + workflow_id + ":"
@@ -572,6 +565,7 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
   state.task_type       = task_type;    // Store for correct task_type in completion message
   state.skill_task_id   = skill_task_id;  // Store actual skill task id for completion tracking
   state.skill_name      = skill_name;      // Store skill name for completion notification
+  state.inputs          = inputs;          // Store inputs in state for node hydration (concurrency safe)
   state.total_nodes     = static_cast<int>(workflow->get_nodes().size());
   state.completed_count = 0;
   state.in_progress     = true;
@@ -590,6 +584,7 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
       it->second.task_type = std::move(state.task_type);
       it->second.skill_task_id = std::move(state.skill_task_id);
       it->second.skill_name = std::move(state.skill_name);
+      it->second.inputs = std::move(state.inputs);
       it->second.total_nodes = state.total_nodes;
       it->second.completed_count = state.completed_count;
       it->second.in_progress = state.in_progress;
@@ -608,6 +603,7 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
                   std::move(state.task_type),
                   std::move(state.skill_task_id),
                   std::move(state.skill_name),
+                  std::move(state.inputs),
                   {},
                   {},
                   {},
@@ -723,16 +719,18 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
     Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Node=%s has %zu input_params",
                               node->get_id().c_str(), node->get_input_params().size());
 
-    // Get dialogue_id from workflow state for multi-dialogue support
-    // This avoids the concurrency issue with agent databus
+    // Get dialogue_id and inputs from workflow state for concurrency-safe isolation
+    // Each workflow execution has its own state with isolated inputs
     std::string workflow_dialogue_id;
     std::string workflow_session_id;
+    DataMap workflow_inputs;
     {
       std::lock_guard<std::mutex> lock(workflow_state_mutex_);
       auto state_it = workflow_states_.find(execution_id);
       if(state_it != workflow_states_.end()) {
         workflow_dialogue_id = state_it->second.dialogue_id;
         workflow_session_id = state_it->second.session_id;
+        workflow_inputs = state_it->second.inputs;  // Copy inputs from state
 
         // Add session_id to hydrated inputs (always available)
         if(!workflow_session_id.empty()) {
@@ -751,36 +749,37 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
       }
     }
 
-    // Build input prefix for dialogue isolation
-    std::string input_prefix = workflow_dialogue_id.empty() ? "" : workflow_dialogue_id + "/";
-
     for(const auto& key : node->get_input_params()) {
       // Skip if already hydrated from workflow state
       if(hydrated.find(key) != hydrated.end()) {
         continue;
       }
-      DataVariant val;
-      // First try agent's internal databus with dialogue_id prefix (where execute_workflow stores inputs)
-      if(agent->get_data(input_prefix + key, val)) {
-        hydrated[key] = val;
-        if(const auto* text = std::get_if<std::string>(&val)) {
-          Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Got input '%s'='%s' from agent databus (prefix: %s)",
-                                   key.c_str(), text->c_str(), input_prefix.c_str());
+
+      // First try workflow state inputs (concurrency-safe, each execution has its own copy)
+      auto input_it = workflow_inputs.find(key);
+      if(input_it != workflow_inputs.end()) {
+        hydrated[key] = input_it->second;
+        if(const auto* text = std::get_if<std::string>(&input_it->second)) {
+          Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Got input '%s'='%s' from workflow state inputs",
+                                   key.c_str(), text->c_str());
         }
-      } else if(agent->get_data(key, val)) {
-        // Fallback: try without prefix for backward compatibility
+        continue;
+      }
+
+      // Fallback to databus for keys not in workflow inputs
+      DataVariant val;
+      if(agent->get_data(key, val)) {
         hydrated[key] = val;
         if(const auto* text = std::get_if<std::string>(&val)) {
-          Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Got input '%s'='%s' from agent databus (no prefix)", key.c_str(), text->c_str());
+          Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Got input '%s'='%s' from agent databus", key.c_str(), text->c_str());
         }
       } else if(bus.get(key, val)) {
-        // Then try runtime's databus
         hydrated[key] = val;
         if(const auto* text = std::get_if<std::string>(&val)) {
           Logger::instance().info_f("[PROCESS_NODE_HYDRATE] Got input '%s'='%s' from runtime databus", key.c_str(), text->c_str());
         }
       } else {
-        Logger::instance().warn_f("[PROCESS_NODE_HYDRATE] Key '%s' not found in any databus", key.c_str());
+        Logger::instance().warn_f("[PROCESS_NODE_HYDRATE] Key '%s' not found in workflow inputs or databus", key.c_str());
       }
     }
     // Merge with any existing inputs (e.g. set via set_inputs() or message payload)
