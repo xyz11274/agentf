@@ -151,6 +151,89 @@ C++ 层缺乏统一的状态机模型来描述 coordinator 的生命周期状态
 
 skill 执行失败时，框架通过 `skill_launch_failed` 消息通知 coordinator，但 coordinator 侧缺乏系统性的失败处理策略（如重试、降级、跳过）。
 
+#### 4.6 三种代码实现的流程图（Mermaid）
+
+以下流程图分别概括 **AgentFlow**、**OpenClaw**、**Claude Code** 中与「一轮用户意图 → 多步执行 → 产出结果」相关的主路径，便于对照架构差异（细节以各仓库源码为准）。
+
+**AgentFlow：dispatcher / coordinator / skill + DataBus**
+
+```mermaid
+flowchart TD
+  subgraph ingress["入站"]
+    U[用户请求]
+    SR[SessionRouter]
+    U --> SR
+  end
+  subgraph disp["Dispatcher"]
+    IR[intent_request 队列]
+    HIR[handle_task_intent_request]
+    DW[Dispatcher Workflow]
+    SR --> IR --> HIR --> DW
+  end
+  subgraph dex["data_exchange 汇合"]
+    HDE[handle_task_data_exchange]
+    DW --> HDE
+  end
+  subgraph skills["Skill 层"]
+    NS{DataBus: next_skills / selected_skills}
+    LS[launch_skill_task]
+    SW[Skill Workflow 实例 ×N]
+    HDE --> NS
+    NS -->|有| LS --> SW
+  end
+  subgraph coord["Coordinator"]
+    TR[trigger: skill_response 等]
+    RQ[response 队列]
+    CW[Coordinator Workflow]
+    SW --> TR --> RQ
+    HDE --> CW
+    RQ --> CW
+    RP{response / multi_response 且 pending=0?}
+    CW --> RP
+    RP -->|再规划| NS
+    RP -->|可回包| OUT[SessionRouter 用户响应]
+  end
+```
+
+**OpenClaw：外层重试 + Pi SDK 内层工具循环**
+
+```mermaid
+flowchart TD
+  U[用户消息 / 渠道] --> RR[runReplyAgent]
+  RR --> FB[runAgentTurnWithFallback]
+  FB --> EP[runEmbeddedPiAgent<br/>while 重试循环]
+  EP --> AT[runEmbeddedAttempt]
+  AT --> T[createOpenClawCodingTools 等]
+  T --> P[activeSession.prompt]
+  P --> PI[Pi SDK 内部:<br/>LLM ↔ tool_calls ↔ 执行]
+  PI --> SUB[subscribeEmbeddedPiSession]
+  SUB --> BP[buildEmbeddedRunPayloads]
+  BP --> FU[Followup / 渠道回包]
+  EP -->|溢出/超时/失败| RET[compaction / profile 轮换 / fallback]
+  RET --> EP
+```
+
+**Claude Code：queryLoop 单循环 + 工具执行**
+
+```mermaid
+flowchart TD
+  QE[QueryEngine / 入口] --> Q[query]
+  Q --> QL[queryLoop: while true]
+  QL --> PREP[消息预处理:<br/>budget / snip / micro / collapse / autocompact]
+  PREP --> BL{blocking token?}
+  BL -->|是| BLR[return blocking_limit]
+  BL -->|否| CM[callModel 流式 + fallback]
+  CM --> TU{assistant 含 tool_use?}
+  TU -->|是| EX[StreamingToolExecutor<br/>或 runTools 批处理]
+  EX --> QL
+  TU -->|否| NH[handleStopHooks / tokenBudget 等]
+  NH --> CMP[return completed 等]
+  subgraph coordmode["可选: Coordinator 模式"]
+    CMF[isCoordinatorMode + 工具白名单]
+  end
+  CM -.-> CMF
+```
+
 ### 5. 对标项目分析
 
 #### 5.1 OpenClaw Agent Loop 实现分析
@@ -300,6 +383,55 @@ QueryEngine → query()
 - **Claude Code**：`maxTurns` 对子代理设置轮次上限（`max_turns_reached` 时 break）。`blocking_limit` 在 token 达到硬上限时直接终止。但无显式的"工具循环检测"。
 
 **差距分析**：AgentFlow 需要引入 **coordinator 最大轮次限制**和 **skill 调度循环检测**。
+
+#### 6.4 任务成功率保证、并发与时延：AgentFlow 是否有优势
+
+本节从**任务成功率保证**、**任务并发**、**时延优化**三个维度，对比 AgentFlow 与 OpenClaw、Claude Code 的相对优劣，并给出 AgentFlow 侧应补齐的优化方向。三者目标场景不同（服务化多语言工作流 vs 客户端 LLM 工具循环），对比结论侧重**机制能力**，而非单一产品优劣。
+
+##### 6.4.1 任务成功率保证
+
+| 维度 | AgentFlow 相对位置 | OpenClaw / Claude Code | 结论 |
+|------|-------------------|------------------------|------|
+| **执行失败后的自动恢复** | 框架层以 `skill_launch_failed`、workflow 状态为主；**无**与 OC 同级的「认证/模型/context 多层重试链」 | OC：超时、overflow、模型失败均有路径；CC：fallback、compact、output recovery | AgentFlow **不弱在 skill 执行本身**（Worker 隔离、可重试节点），但 **弱在编排层的统一成功率策略**（轮次上限、循环检测、失败策略枚举） |
+| **语义/结果质量** | 完成条件由 DataBus 键约定，**无** CC 式 stopHooks、**无** OC 式 tool-loop 阻断 | CC：stopHooks、token 硬上限；OC：tool-loop-detection | **无优势**；若业务依赖 LLM 自判终止，须在 coordinator workflow 内自建逻辑 |
+| **无限循环 / 失控规划** | **无**框架级 coordinator 轮次上限与循环检测（见 4.5） | OC：外层迭代上限 + 工具循环检测；CC：maxTurns、blocking_limit | **明显劣势**，需按第 7 章补齐 |
+| **数据一致性与隔离** | dialogue 级 DataBus 键、`cleanup_dialogue_data`、`candidate_skills` | 主要依赖 transcript / session 文件与策略 | AgentFlow 在 **多对话隔离与可清理性** 上**有结构性优势**（适合长会话服务） |
+
+**小结**：AgentFlow **并非**在「端到端任务成功率」上整体优于 OpenClaw / Claude Code；在 **隔离与清理** 上有优势，在 **编排层防失控、统一重试与质量闸门** 上弱于二者。**建议优化**（与第 7、8 章对齐）：
+
+1. 引入 **max_coordination_rounds**、**coordinator 级超时**、**循环/重复 skill 检测**，对齐 OC/CC 的「硬边界」。
+2. 标准化 **failure_policy**（重试 / 跳过 / 中止）与 **skill 级重试计数**，减少 silent failure。
+3. 可选 **CoordinatorStopHook**（或等价扩展点），在回包前做完整性/策略检查，靠近 CC 的 stopHooks 能力。
+4. 观测面：将 coordinator 状态转换、pending 计数、回包原因写入 TraceSystem，便于线上成功率归因。
+
+##### 6.4.2 任务并发
+
+| 维度 | AgentFlow 相对位置 | OpenClaw / Claude Code | 结论 |
+|------|-------------------|------------------------|------|
+| **Skill / 工具并行度** | `max_concurrent_skills` + 多 Worker；多个 skill **workflow 实例可并行**（受池大小与调度限制） | OC：依赖 Pi/SDK；CC：只读可并行、默认并发上限约 10，独占工具串行 | AgentFlow 在 **异构、重计算、多 skill 流水线并行** 场景下**潜力更大**（多进程/多语言 Worker） |
+| **协调路径串行化** | dispatcher → coordinator 的判定与 `handle_task_data_exchange` 链路易形成 **逻辑上的串行瓶颈**（非指 Worker 不能并行跑 skill） | 模型一轮可出多个 tool_use，CC 流式合并执行 | 并行 **skill** 有优势时，**协调决策**仍可能拖尾；需避免 coordinator workflow 过重 |
+| **资源与背压** | 有并发计数，但缺少与 OC 类似的 **全局队列 + lane** 的显式文档化模型 | OC：`enqueueSession` / global lane 防 transcript 乱序 | AgentFlow 需在 **高并发 session** 下关注 **同一 dialogue 内顺序**与 **池耗尽** 行为（依赖现有 session_pool、workflow_pool） |
+
+**小结**：AgentFlow 在 **多 skill 并行执行、多语言 Worker** 上**可以**相对 OC/CC **更有优势**，前提是产品形态是「编排 + 外部计算」而非「单会话紧耦合 LLM 小步循环」。**建议优化**：
+
+1. 文档与示例中明确 **max_concurrent_skills**、**workflow_pool_size**、**instance_pool_size** 的推荐配置与背压语义。
+2. 评估 coordinator 节点是否为 **轻量决策**（重逻辑下沉到独立 skill），减少协调路径 CPU/IO 占用。
+3. 对「同 dialogue 多 skill 并行写 DataBus」的键冲突场景增加测试（见 9.2）。
+
+##### 6.4.3 时延优化
+
+| 维度 | AgentFlow 相对位置 | OpenClaw / Claude Code | 结论 |
+|------|-------------------|------------------------|------|
+| **交互轮次链长** | 用户请求 → dispatcher workflow →（可能多轮）skill → coordinator → 回包；**消息队列 + 调度 + 多 workflow** | 用户 → 模型 → 工具 → 模型… **路径更短**（同进程异步） | 对 **纯 LLM+轻工具** 闭环，AgentFlow **通常时延更高** |
+| **重 skill / 远程 IO** | skill 可在 Worker 上跑，Master 不阻塞在单次 SO/Python 执行上（架构上可重叠） | 工具执行仍在 Node/Bun 进程内（可异步但同栈） | **重任务**若拆成独立 skill，AgentFlow **有机会**通过并行与 Worker 分摊 **降低端到端时间** |
+| **流式体验** | `multi_response`、部分示例向 coordinator 转发 chunk（如 `llm_query_agent`） | OC/CC 流式成熟 | **无整体优势**；流式路径需与 022 enhancement 与节点实现持续对齐 |
+
+**小结**：AgentFlow **一般不具备**相对 OpenClaw / Claude Code 的 **纯时延优势**（尤其在以 LLM 为主循环的产品里）；优势更多体现在 **可并行重任务与资源隔离**。**建议优化**：
+
+1. **热路径**：减少不必要的 coordinator 触发次数、合并 DataBus 读、避免 coordinator workflow 空转。
+2. **可选短路**：dispatcher 已产出 `response` 时直出（`claw_agent` 文档已提及类似能力），减少必经 coordinator 的延迟。
+3. **异步与流式**：延续 `llm_query_agent` 等模式，明确 chunk → coordinator → 客户端的契约，降低首字节时间（TTFB）。
+4. **调度**：结合 runtime 负载均衡，避免 skill 全挤在同一 Worker（见 Master-Worker 026 enhancement）。
 
 ### 7. 改进分类与建议
 
@@ -542,16 +674,78 @@ struct Config {
 
 ### 9. 测试方案
 
-**Examples 黑盒测试覆盖分析**：
+#### 9.1 Examples 与 coordinator / agent loop 覆盖审视
+
+仓库内 **多数带 `agent.json` 的示例** 均包含 `type: "coordinator"` 任务与 `coordinator_workflow.json`（或等价命名），但**完整度差异大**：有的仅透传，有的覆盖多轮 `next_skills`、force、多 skill 聚合与流式转发。
+
+**代表性示例（与 coordinator 机制相关）**：
+
+| 示例路径 | 覆盖要点 | 完整度（相对「完整 agent loop 演示」） |
+|---------|----------|----------------------------------------|
+| `examples/agent/system_agent_mock/` | dispatcher 动态选 skill、coordinator 补 skill、`force` 重跑、DataBus 聚合；README / FLOW_ANALYSIS 文档齐全 | **高**（最接近「教科书级」闭环） |
+| `examples/agent/multi_session_chat/` | `session-coordinator-workflow` 多路径 merge、`selected_skills`、shell 编排 | **高**（偏会话与编排复杂度） |
+| `examples/agent/openjiuwen_multi_session_chat/` | 与上类似，Python 节点实现 merge | **高** |
+| `examples/agent/multi_language_databus/` | `chain_coordinator_node`、跨语言链路与 coordinator workflow | **中高** |
+| `examples/agent/basic_agent/` | `basic-coordinator-workflow`、`calculator_coordinator_workflow` | **中**（偏入门） |
+| `examples/agent/llm_query_agent/` | dispatcher → coordinator → skill、异步 LLM chunk / `[DONE]` 转发 coordinator | **中高**（流式 + 完整三类 task） |
+| `examples/agent/claw_agent/` | coordinator 多为透传；dispatcher 可直接 `response` 短路 | **低**（框架契约满足，非编排演示） |
+| `examples/agent/openjiuwen_studio_agent/`、`nested_workflow_agent/`、`workflow_patterns/` | 具备 coordinator 占位或变体 | **中到低**（视具体 workflow） |
+
+**结论**：**存在**较完整的 coordinator/agent loop 演示（**首推 `system_agent_mock`、`multi_session_chat`、`llm_query_agent`**），但**缺少**面向框架能力的**专项**示例矩阵（见下表缺口）。
+
+**Examples 缺口与优化建议**：
+
+| 缺口 | 说明 | 建议 |
+|------|------|------|
+| **max_concurrent_skills 压测与行为展示** | 示例多未突出并发阈值与排队语义 | 新增小型 example：故意配置较小 `max_concurrent_skills`，多 skill 同时 `next_skills`，验证顺序/背压（文档 + 可脚本化跑法） |
+| **skill_launch_failed / 执行失败** | 无标准「失败 → coordinator 决策」演示 | 新增 example：故意错误 skill 配置或节点返回失败，配合预期 `failure_policy`（待框架实现后接线） |
+| **无限 next_skills / 恶意循环** | 无负例或防护演示 | 待框架轮次上限实现后，增加 `coordinator_loop_protection` 示例或集成测试场景 |
+| **multi_response 全链路** | `llm_query_agent` 有部分实践，文档分散 | 在 `docs/` 或示例 README 增加「流式 chunk → coordinator → 客户端」单一入口说明，并与 022 enhancement 对齐 |
+| **SessionTaskCoordinator::process_session_messages** | 与 session dequeue stub 相关能力未在示例中验证 | 代码治理后，用最小 example 或单测证明「session 队列 → task 构造」路径（若保留该 API） |
+
+#### 9.2 Tests 覆盖审视
+
+**单元测试**（`tests/unit/`）：
+
+| 文件 / 区域 | 与 coordinator 相关内容 | 缺口 |
+|-------------|---------------------------|------|
+| `test_agent_gtest.cpp` | coordinator task 创建、`get_coordinator_task`、`SessionTaskCoordinator`、workflow_pool、模拟 `data_exchange` 后 skill 任务生成等 | **偏配置与消息入队**，对 **多轮 next_skills、pending 归零、response 回包** 的**状态机级断言较少** |
+| `test_control_message_gtest.cpp` | dispatcher/coordinator task 与 session 绑定 | 非端到端编排 |
+| `test_runtime_master_worker_gtest.cpp` | coordinator workflow 池大小与调度计数 | 不覆盖 agent 层协调语义 |
+
+**E2E / 黑盒**（`tests/e2e/`）：
+
+| 测试 | 覆盖要点 | 缺口 |
+|------|----------|------|
+| `system_agent_mock/test_system_agent_mock_e2e.cpp` | **dispatcher-skill-coordinator** 完整场景（含 coordinator 补 skill、force） | **强**，但仅此一条「深度」链路；未覆盖流式、multi_response、失败策略 |
+| `test_basic_agent_e2e.cpp` | `basic-coordinator-workflow` 加载与执行相关 | **中** |
+| `message_routing/test_message_routing.cpp` | coordinator_workflow 默认路由 | **路由层** |
+| `event_handler/test_event_handler_blackbox.cpp` | 引用 coordinator SO，TASK_CREATED 等 | **事件面** |
+| `blackbox/test_blackbox_basic_agent.sh` | CLI 执行 coordinator workflow | **冒烟** |
+
+**结论**：**具备**基础到中等强度的 **单元测试 + 一条高质量 E2E（system_agent_mock）**，**不足以**称为对「coordinator 实现的 agent loop 机制」的**完整**测试矩阵；**流式、失败恢复、并发边界、循环保护、多 dialogue 竞态** 等仍薄弱。
+
+**Tests 优化建议**：
+
+1. **单元测试**：在 `test_agent_gtest.cpp` 或新建 `test_coordinator_gtest.cpp` 中增加 **最小状态机用例**：模拟两轮 `next_skills` → 验证 `pending_skills_count`、`launched_skills`、最终 `response` 出队（可用 Mock DataBus / 固定 workflow 桩，避免全量 runtime）。
+2. **E2E**：在 `system_agent_mock` 之外增加 **轻量** E2E：**skill 启动失败**、**仅 dispatcher 直出 response**（若框架支持），与 **multi_response** 消费路径（可与现有 LLM 示例二进制或脚本配合）。
+3. **回归**：将 `max_concurrent_skills=1` 与 `=N` 的行为差异纳入 CTest，防止调度回归。
+4. **属性 / 模糊**：中长期可对 `parse_next_skills`、键解析（`get_framework_data`）做边界输入测试（与 023 enhancement 一致）。
+
+#### 9.3 Examples 黑盒矩阵（更新版）
 
 | 功能点 | 现有 Examples 覆盖 | 更新建议 |
 |--------|-------------------|---------|
-| 基础 coordinator 流程 | ⚠️ `basic_agent`/`multi_session_chat` 部分覆盖 | 增加明确的 coordinator 多轮协调 example |
-| 循环检测 | ❌ 未覆盖 | 新增 `coordinator_loop_protection` example |
-| 失败恢复 | ❌ 未覆盖 | 新增 skill 失败场景 example |
-| Stop Hooks | ❌ 未覆盖 | 新增自定义 stop hook example |
+| 基础 coordinator 流程 | ✅ `basic_agent`；⚠️ 深度见 `system_agent_mock` | 在 `examples/README.md` 用表格指向「首推示例」 |
+| 多轮 next_skills + force | ✅ `system_agent_mock` | 保持为 CI 推荐 E2E 依赖 |
+| 会话级复杂 coordinator | ✅ `multi_session_chat` / `openjiuwen_multi_session_chat` | 文档链路与测试对齐 |
+| 流式 → coordinator | ⚠️ `llm_query_agent` | 补统一说明 + 可选 E2E |
+| max_concurrent_skills | ❌ 未专项展示 | 新增小型 example 或扩展现有 |
+| 循环检测 | ❌ 未覆盖 | 框架实现后新增 `coordinator_loop_protection` |
+| 失败恢复 | ❌ 未覆盖 | 框架 failure_policy 后新增 |
+| Stop Hooks | ❌ 未覆盖 | 扩展点落地后新增 |
 
-**测试用例设计**：
+**测试用例设计**（与 9.2 呼应，保留原表）：
 
 | 测试场景 | 验证点 | 预期结果 |
 |----------|--------|---------|
@@ -572,6 +766,7 @@ struct Config {
 | [ARCHITECTURE.md](../ARCHITECTURE.md) | 补充 coordinator 状态机模型、安全防护机制的描述 |
 | [agent-lifecycle.md](../agent-lifecycle.md) | 增加 coordinator 多轮协调的生命周期说明 |
 | [AGENT_PACKAGE_SPEC.md](../../publish/agent/AGENT_PACKAGE_SPEC.md) | 增加 coordinator 配置字段说明（max_rounds/timeout/failure_policy） |
+| [examples/README.md](../../examples/README.md) | 增加「coordinator / agent loop 首推示例」索引表，与 9.1 对齐 |
 
 **关联方案**：
 
@@ -627,3 +822,4 @@ struct Config {
 | 版本 | 刷新时间 | 刷新人 | 刷新内容 |
 |------|---------|--------|---------|
 | v1.0 | 2026-04-05 | AI | 初始版本：当前实现分析 + OpenClaw/Claude Code 对标分析 + 改进建议 |
+| v1.1 | 2026-04-05 | AI | 补充三种实现 Mermaid 流程图；6.4 成功率/并发/时延对比与优化项；9.1–9.3 examples/tests 审视与测试优化建议 |
