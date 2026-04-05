@@ -91,6 +91,7 @@
 | 029 | 2026-03-24 | [上下文回调机制优化](029-feature-上下文回调机制优化-260324-implemented.md) | feature | implemented | 用户上下文注入时机和方式不够灵活 |
 | 030 | 2026-03-27 | [Node 异步请求机制设计](030-feature-node-异步请求机制设计-260326-implemented.md) | feature | implemented | Node同步阻塞调用外部资源，并发能力受限 |
 | 031 | 2026-04-05 | [Coordinator 协同机制设计分析](031-feature-coordinator-协同机制设计分析-260405-tbd.md) | feature | tbd | Coordinator协同判定与多轮规划机制需增强 |
+| 032 | 2026-04-05 | [Dispatcher Coordinator Skill 与 DataBus 可观测性分析](032-feature-dispatcher-coordinator-databus-observability-260405-tbd.md) | feature | tbd | 多任务协同与DataBus并发场景下日志与运维定界能力不足 |
 
 ## 按状态分类
 
@@ -101,6 +102,7 @@
 | 026 | 2026-03-20 | [Master-Worker 架构边界问题](026-feature-master-worker-架构边界问题-260320-tbd.md) | Master和Worker职责边界不清晰 |
 | 028 | 2026-03-23 | [Node 模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md) | LLM流式调用阻塞Worker线程 |
 | 031 | 2026-04-05 | [Coordinator 协同机制设计分析](031-feature-coordinator-协同机制设计分析-260405-tbd.md) | Coordinator协同判定与多轮规划机制需增强 |
+| 032 | 2026-04-05 | [Dispatcher Coordinator Skill 与 DataBus 可观测性分析](032-feature-dispatcher-coordinator-databus-observability-260405-tbd.md) | 多任务协同与DataBus并发场景下日志与运维定界能力不足 |
 
 ### 进行中 (wip)
 

@@ -10,9 +10,10 @@ Coordinator 是 AgentFlow 框架 dispatcher-coordinator-skill 三层协同架构
 
 当前 coordinator 机制已具备基本的框架骨架和数据流通路，但在策略层面的实现完整性、与业界 agent loop 实践的对齐程度上仍有较大提升空间。
 
-本文档从三个维度展开分析：
+本文档从四个维度展开分析：
 - **当前实现分析**：审视现有 coordinator 实现的完整性和问题
 - **对标分析**：对比 OpenClaw 和 Claude Code 的 agent loop 实现
+- **ReAct 与 Agentic Loop**：结合 OC/CC 说明从经典 ReAct 到现代 agentic loop 的演进、效果变好的机制原因，及对 AgentFlow 的映射
 - **改进建议**：识别待优化和待实现的能力，给出改进方案
 
 ### 2. 方案简述
@@ -21,7 +22,8 @@ Coordinator 是 AgentFlow 框架 dispatcher-coordinator-skill 三层协同架构
 
 1. 对当前 coordinator 实现的全面审计报告
 2. 与 OpenClaw、Claude Code 的 agent loop 实现的详细对比矩阵
-3. 分层次的改进建议（已实现/需优化/待实现）
+3. **ReAct 与 Agentic Loop** 的概念对照、OC/CC 中的体现、以及「相对 ReAct 进步在何处」的归纳
+4. 分层次的改进建议（已实现/需优化/待实现），并与上述演进缺口对齐
 
 改进方向覆盖以下关键能力维度：
 - 任务完成判定机制
@@ -30,6 +32,7 @@ Coordinator 是 AgentFlow 框架 dispatcher-coordinator-skill 三层协同架构
 - 上下文管理与压缩
 - 循环检测与死锁防护
 - 并发控制与资源管理
+- **与 ReAct 时代相比 agentic 层已证明有效的机制**（外层循环、策略层、完成语义、可恢复性）在 AgentFlow 侧的补齐
 
 ### 3. 约束与假设
 
@@ -433,7 +436,121 @@ QueryEngine → query()
 3. **异步与流式**：延续 `llm_query_agent` 等模式，明确 chunk → coordinator → 客户端的契约，降低首字节时间（TTFB）。
 4. **调度**：结合 runtime 负载均衡，避免 skill 全挤在同一 Worker（见 Master-Worker 026 enhancement）。
 
+#### 6.5 ReAct 与 Agentic Loop：异同、进步点与三项目映射
+
+本节从 **经典 ReAct**（Reasoning + Acting）到 **现代 Agentic Loop**（以 OpenClaw、Claude Code 的实现为代表）做概念对齐，说明二者**并非互斥命名**，而是**同一抽象循环在不同工程成熟度下的形态**；并归纳 **agentic 相对「朴素 ReAct」进步在哪些方面、为何常带来更好效果**，最后映射到 **AgentFlow** 与后续优化（与第 7、8 章衔接）。
+
+##### 6.5.1 经典 ReAct 模式（狭义）
+
+**原始范式**（论文与早期提示工程常见形态）可概括为：
+
+1. 模型在**自然语言轨迹**中交替产出 **Thought（推理）**、**Action（动作描述）**、环境返回 **Observation（观察）**；
+2. **单线程、线性**扩展上下文：每一步都追加到同一条 transcript；
+3. **动作落地**依赖解析文本中的 Action → 调用工具 → 将 Observation 拼回 prompt；
+4. **终止**常依赖模型自行输出「结束」类陈述，或固定最大步数，**缺少**统一的结构化完成语义与框架级恢复。
+
+**典型薄弱点**（与效果直接相关）：
+
+- **上下文腐蚀**：Thought/Observation 无限堆叠 → token 膨胀、早期关键信息被挤出、模型注意力漂移；
+- **错误传播**：一次工具失败或格式错误 → 仅作为字符串进入下一轮，**无**标准化的错误块、模型切换、压缩与重试链；
+- **原地循环**：重复调用同一工具或无效动作，**无**显式 loop detection 与分级阻断；
+- **并发与编排**：多为严格串行；复杂任务缺少 **子代理 / 协调者 / 显式规划-执行分层**；
+- **完成判定模糊**：仅靠自然语言「我认为做完了」→ 易出现假完成或冗长不收尾。
+
+##### 6.5.2 现代 Agentic Loop（OpenClaw / Claude Code 共性）
+
+OpenClaw 与 Claude Code 的实现在细节上不同（见 §5、§6.1），但在「相对朴素 ReAct」上共享一层 **工程化的 agentic 外壳**：
+
+| 机制类别 | OpenClaw 中的体现 | Claude Code 中的体现 |
+|----------|-------------------|----------------------|
+| **结构化行动接口** | Pi SDK：`tool_calls` / 执行结果进入会话状态，而非纯自由文本 Action | `tool_use` / `tool_result` 块、流式与非流式统一管线 |
+| **内层循环** | `session.prompt` 内多轮「模型 ↔ 工具」 | `queryLoop` 内「callModel ↔ runTools」 |
+| **外层控制循环** | `runEmbeddedPiAgent` 的 `while(true)`：overflow、超时、profile、failover | 模型 fallback、`yieldMissingToolResultBlocks`、streaming fallback 重建执行器 |
+| **上下文工程** | `contextEngine.compact`、截断、与重试联动 | snip / microcompact / collapse / autocompact 链 |
+| **防失控** | `MAX_RUN_LOOP_ITERATIONS`、`tool-loop-detection` | `maxTurns`、`blocking_limit`、tokenBudget 续跑或停 |
+| **策略与安全** | `before_tool_call`、工具策略 pipeline、渠道/模型裁剪 | coordinator 工具白名单、`applyCoordinatorToolFilter`、权限 hooks |
+| **完成语义** | `stopReason`、`yieldDetected`、不完整 turn 处理 | `needsFollowUp`（不盲信 `stop_reason`）、`handleStopHooks` |
+| **层次化** | `sessions_spawn`、`subagentRole` | `runAgent` 子代理、`coordinatorMode` |
+
+**一句话**：**Agentic loop = 仍以「模型—工具—反馈」为核，但把循环、状态、失败、并发、终止与策略从「纯 prompt 约定」提升为「运行时的一等公民」。**
+
+##### 6.5.3 ReAct 与 Agentic Loop 对照（异同）
+
+| 维度 | 经典 ReAct（狭义） | 现代 Agentic Loop（OC/CC 代表） |
+|------|-------------------|--------------------------------|
+| **推理-行动关系** | Thought/Action/Observation 常混在同一文本流 | 推理多在模型侧；**行动**以 **结构化 tool 调用**为主，Observation 以 **标准 tool_result** 回填 |
+| **循环边界** | 依赖步数或模型自觉 | **显式**外层迭代上限、多种 `return reason`、子代理独立 `maxTurns` |
+| **状态存放** | 几乎全在对话 transcript | **外部状态**：session 文件、DataBus、执行器内部队列（AF）；压缩后的摘要 |
+| **失败与抖动** | 下一轮「读错字」式消化 | **合成 tool_result**、换模型、compact、session reset（OC） |
+| **并发** | 少见 | 只读工具并行、多 `tool_use` 批处理（CC）；多 skill 并行（AF 潜力） |
+| **子任务** | 隐含在长 CoT 中 | **显式**子会话 / subagent / coordinator 模式 |
+| **「谁在协调」** | 单一 LM 线程 | LM + **运行时策略层**（hooks、检测器、白名单） |
+
+**相同点**：二者核心仍是 **迭代式「决策 → 执行环境 → 观测 → 再决策」**；改进主要来自 **循环外围与状态管理**，而非否定 ReAct 思想本身。
+
+##### 6.5.4 Agentic 相对 ReAct「效果变好」的机制归纳（因果链）
+
+以下条目对应业界常见失败模式与 OC/CC 中已验证的缓解手段，可作为 AgentFlow 优化的**目标函数**：
+
+1. **上下文可控 → 推理更稳**  
+   ReAct 易因 transcript 过长导致幻觉与遗忘；agentic 通过 **compact / 摘要 / 外部存储**（OC `contextEngine`，CC 多级压缩）降低噪声，**等效提升「有效推理窗口」内的信噪比**。
+
+2. **结构化反馈 → 错误可恢复**  
+   朴素 ReAct 把错误当普通字符串；agentic 用 **标准 tool 结果块、fallback、补全缺失块**（CC）使模型在下一轮获得 **类型一致、可解析** 的信号，**减少级联胡编**。
+
+3. **硬边界 + 循环检测 → 减少无效探索**  
+   ReAct 常见「同一工具空转」；agentic 用 **迭代上限、tool-loop-detection（OC）、blocking_limit（CC）** 强制止损或改策略，**降低 token 浪费与用户感知卡顿**。
+
+4. **并发与批处理 → 更少轮次完成等价工作**  
+   串行 ReAct 需多轮对话才能完成多步只读查询；agentic 允许 **安全并行**（CC `StreamingToolExecutor` / 分区并发），**降低端到端轮次与总延迟**（在 IO 允许时）。
+
+5. **显式完成与钩子 → 减少假完成/滥尾**  
+   ReAct 终止模糊；agentic 用 **stopHooks、stopReason 族、needsFollowUp** 等形成 **可测试的终止语义**，**提高任务完整率与用户可预期性**。
+
+6. **策略层与协调分层 → 复杂任务可分解**  
+   单线程 ReAct 难以约束「谁能调什么」；agentic 的 **coordinator 模式、工具白名单、子代理** 把 **权限与职责** 从 prompt 搬到架构，**降低越权与任务纠缠**。
+
+##### 6.5.5 AgentFlow 在 ReAct—Agentic 谱系上的位置
+
+- **与 OC/CC 的差异**：AgentFlow 的 **dispatcher / coordinator / skill** 不必每步都经过 LLM；`next_skills`、DataBus、`candidate_skills` 使系统可以是 **「规则/工作流主导的 agentic 编排」+ 可选 LLM 节点**，属于 **混合 agentic**：外层仍是 **消息驱动循环**，内层 skill 可以是代码、SO、脚本或模型调用。
+- **与朴素 ReAct 的关系**：若仅用「单会话 + 单 workflow 里 LLM 反复写 Thought/Action」，则 AgentFlow **可以退化为 ReAct 风格**；框架价值在于 **把「行动」拆成可并行、可隔离的 skill，并把协调状态外置到 DataBus**，这已经具备部分 agentic 特征（**外置状态 + 分层**）。
+- **相对 OC/CC 的 agentic 缺口**：AgentFlow **强在**执行隔离与多 skill 拓扑；**弱在**与 §6.5.4 对齐的 **外层硬边界、循环检测、压缩/预算、标准化失败恢复、stop 语义**——这些正是「从 ReAct 走向成熟 agentic」时在 **编排层**仍需补齐的部分。
+
+##### 6.5.6 面向「ReAct → Agentic」差距的优化措施（与第 7、8 章对齐）
+
+将 §6.5.4 的因果链映射为 AgentFlow **下一步优先动作**（不重复展开实现细节时指向第 7、8、9 章）：
+
+| ReAct / 早期 agent 痛点 | OC/CC 已验证手段 | AgentFlow 建议动作（文档内章节） |
+|-------------------------|------------------|----------------------------------|
+| 上下文无限膨胀 | compact、多级压缩 | 接线 **task_context_workflow**、对话级摘要策略（§7.3 待实现 6）；长期对齐 **028** 流式与节点异步 |
+| 工具/API 抖动不可恢复 | fallback、合成 tool_result | **failure_policy**、skill 级重试与 `skill_execution_failed` 统一语义（§7.2 优化项 4、§7.3） |
+| 空转与死循环 | 迭代上限、loop detection | **max_coordination_rounds**、coordinator **循环检测**（§7.3 待实现 2、3） |
+| 终止不可审计 | stopHooks、明确 reason | **CoordinatorStopHook**、回包原因写入 Trace（§7.3 待实现 4、§6.4.1） |
+| 协调与执行缠在一起 | coordinator 模式、子代理 | 保持 **轻量 coordinator**；中长期 **子 session / 子代理**（§7.3 待实现 7）；代码上收敛 **BuiltinDispatcher**（§7.2） |
+| 纯 LLM 路径时延高 | 流式、批处理、短路 | **dispatcher response 短路**、**multi_response** 契约与示例（§6.4.3、§9） |
+
+**小结**：**Agentic loop 相对经典 ReAct 的进步，主要来自「循环外围」：状态外置、压缩与预算、失败可恢复、防循环、并发与策略分层、可审计的完成语义。** OpenClaw 与 Claude Code 分别在 **外层重试+loop 检测** 与 **压缩链+stopHooks+并发工具** 上体现了这些原则。AgentFlow 已在 **分层编排与执行隔离** 上领先于「单条 ReAct 文本链」，要在 **成功率与可控性** 上进一步接近 OC/CC，需按上表补齐 **编排层 agentic 能力**（与 §7、§8 已有条目一致，本小节提供 **ReAct→Agentic 视角下的优先级叙事**）。
+
+```mermaid
+flowchart LR
+  subgraph react["狭义 ReAct"]
+    T[Thought 文本]
+    A[Action 文本]
+    O[Observation 拼回]
+    T --> A --> O --> T
+  end
+  subgraph agentic["Agentic Loop 外围增强"]
+    S[状态外置 / 压缩]
+    P[策略层 / 白名单 / hooks]
+    B[硬边界 / 循环检测]
+    R[失败恢复 / fallback]
+  end
+  react -.->|叠加| agentic
+```
+
 ### 7. 改进分类与建议
+
+第 7、8 章中的具体项可视为 **§6.5.6 映射表**在实现层的展开；优先补齐 **硬边界、失败语义、完成钩子、上下文策略**，与 ReAct 时代最易失效的环节对齐。
 
 #### 7.1 已实现且运行良好的能力
 
@@ -777,6 +894,7 @@ struct Config {
 | [023-feature-next-skills-格式扩展](023-feature-next-skills-格式扩展-260319-implemented.md) | next_skills 格式扩展（含 force 标记） |
 | [022-feature-multi-response-机制设计](022-feature-multi-response-机制设计-260319-implemented.md) | multi_response 流式响应机制 |
 | [025-feature-session-老化-databus-清理问题](025-feature-session-老化-databus-清理问题-260320-implemented.md) | DataBus 数据清理与 coordinator 生命周期相关 |
+| [028-feature-node-模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md) | 与 §6.5.6 上下文/流式能力长期对齐 |
 
 ### 11. 进展跟踪
 
@@ -823,3 +941,4 @@ struct Config {
 |------|---------|--------|---------|
 | v1.0 | 2026-04-05 | AI | 初始版本：当前实现分析 + OpenClaw/Claude Code 对标分析 + 改进建议 |
 | v1.1 | 2026-04-05 | AI | 补充三种实现 Mermaid 流程图；6.4 成功率/并发/时延对比与优化项；9.1–9.3 examples/tests 审视与测试优化建议 |
+| v1.2 | 2026-04-05 | AI | 新增 §6.5：ReAct 与 Agentic Loop 异同、效果变好的机制归纳、三项目映射及与 §7–§9 对齐的优化措施表；背景/方案简述/关联方案同步更新 |
