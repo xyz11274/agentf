@@ -247,6 +247,24 @@ class MMAgent {
                          const MMAgentMsgQue::Message& context,
                          const std::shared_ptr<MMAgentTask>& source_task);
 
+  // Result structure for next_skills processing
+  struct NextSkillsLaunchResult {
+    bool found_next_skills = false;     // Whether next_skills was found in databus
+    bool launched_any = false;          // Whether any skills were launched
+    bool all_launched = false;          // Whether all skills in next_skills are now launched
+    std::set<std::string> launched_skills;  // Updated set of launched skill names
+    int launched_count = 0;             // Number of skills launched in this call
+  };
+
+  // Unified next_skills processing (used by both UNIFIED and COORDINATOR sections)
+  // Fetches next_skills from databus with selected_skills backward compat
+  NextSkillsLaunchResult process_next_skills_launch(
+      const std::shared_ptr<MMAgentSession>& session,
+      const std::shared_ptr<MMAgentTask>& task,
+      const std::string& dialogue_id,
+      const MMAgentMsgQue::Message& message,
+      const std::string& log_prefix);
+
   std::queue<std::shared_ptr<MMAgentTask>> generated_tasks_;
   std::mutex                               generated_tasks_mutex_;
   std::atomic<bool>                        message_threads_running_{false};
