@@ -1182,6 +1182,14 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
                               skill_name_it->second.c_str(), task_config.task_id.c_str());
   }
 
+  // Pass skill_success from message metadata for coordinator workflow
+  if(const auto skill_success_it = message.metadata.find("skill_success");
+     skill_success_it != message.metadata.end() && !skill_success_it->second.empty()) {
+    task->set_parameter("skill_success", skill_success_it->second);
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set skill_success=%s for task=%s",
+                              skill_success_it->second.c_str(), task_config.task_id.c_str());
+  }
+
   return task;
 }
 
@@ -1460,11 +1468,14 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
   // Detect skill completion and decrement counter before we try to launch new skills
   // NOTE: Concurrency control only applies to skill-type tasks (task_type == "skill").
   // Dispatcher and coordinator tasks do NOT use the counter.
+  // IMPORTANT: Both success and failure should trigger completion handling
   bool is_skill_completion = false;
   std::string skill_name_for_counter;
 
   // Check task_type from message metadata to determine if this is a skill task
-  if(message.content == "workflow_completed" && message.metadata.count("task_type")) {
+  // Handle both workflow_completed and workflow_failed
+  if((message.content == "workflow_completed" || message.content == "workflow_failed")
+     && message.metadata.count("task_type")) {
     const std::string& source_task_type = message.metadata.at("task_type");
     if(source_task_type == "skill") {
       // This is a skill task completion - decrement the counter
@@ -1473,7 +1484,8 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       if(message.metadata.count("skill_name")) {
         skill_name_for_counter = message.metadata.at("skill_name");
       }
-      Logger::instance().info_f("[SKILL_COMPLETION] Detected skill task completion, skill=%s, decrementing counter",
+      Logger::instance().info_f("[SKILL_COMPLETION] Detected skill task completion (success=%s), skill=%s, decrementing counter",
+                               message.content == "workflow_completed" ? "true" : "false",
                                skill_name_for_counter.empty() ? "unknown" : skill_name_for_counter.c_str());
     }
   }
@@ -1510,6 +1522,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       coordinator_trigger.message_id = "coordinator-trigger-" + message.message_id;
       coordinator_trigger.metadata["task_type"] = "coordinator";
       coordinator_trigger.metadata["trigger_type"] = "skill_completion";
+      coordinator_trigger.metadata["skill_success"] = message.content == "workflow_completed" ? "true" : "false";
       if(!dialogue_id.empty()) {
         coordinator_trigger.metadata["dialogue_id"] = dialogue_id;
       }
@@ -1525,7 +1538,9 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         }
       }
       task->enqueue_intent_request_message(coordinator_trigger);
-      Logger::instance().info_f("[SKILL_COMPLETION] Triggered coordinator workflow for skill completion");
+      Logger::instance().info_f("[SKILL_COMPLETION] Triggered coordinator workflow for skill completion, skill=%s, success=%s",
+                               skill_name_for_counter.c_str(),
+                               message.content == "workflow_completed" ? "true" : "false");
       return;
     }
   }
@@ -1553,6 +1568,9 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         MMAgentMsgQue::Message response_message = message;
         response_message.metadata["task_type"] = "coordinator";
         response_message.metadata["source_task_type"] = "dispatcher";
+        // Include skill success/failure status for coordinator workflow
+        bool skill_success = (message.content == "workflow_completed");
+        response_message.metadata["skill_success"] = skill_success ? "true" : "false";
         if(!skill_name_for_counter.empty()) {
           response_message.metadata["skill_name"] = skill_name_for_counter;
         }
@@ -1741,6 +1759,10 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       }
       if(skill_response.metadata.count("skill_name")) {
         coordinator_trigger.metadata["completed_skill_name"] = skill_response.metadata["skill_name"];
+      }
+      // Include skill success/failure status from skill response
+      if(skill_response.metadata.count("skill_success")) {
+        coordinator_trigger.metadata["skill_success"] = skill_response.metadata["skill_success"];
       }
       // Get the original user prompt
       std::string user_prompt_key = coord_dialogue_id.empty() ? "user_prompt" : coord_dialogue_id + "/user_prompt";
@@ -1933,7 +1955,10 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         coordinator_response.metadata["task_type"] = "skill_response";
         coordinator_response.metadata["skill_name"] = task->get_skill_name();
         coordinator_response.metadata["message_type"] = "skill_completed";
-        coordinator_response.content = "skill_completed";
+        // Include skill success/failure status from the original workflow completion message
+        bool skill_success = (message.content == "workflow_completed");
+        coordinator_response.metadata["skill_success"] = skill_success ? "true" : "false";
+        coordinator_response.content = skill_success ? "skill_completed" : "skill_failed";
 
         coordinator_task->enqueue_response_message(coordinator_response);
 

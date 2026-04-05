@@ -1786,6 +1786,12 @@ void MMAgentRuntime::agent_task_poller_loop() {
           inputs["completed_skill_name"] = completed_skill_name;
           Logger::instance().info_f("[TASK_POLLER] Set inputs[completed_skill_name]='%s'", completed_skill_name.c_str());
         }
+        // Propagate skill_success for coordinator workflow to know skill execution result
+        std::string skill_success;
+        if(task->get_parameter("skill_success", skill_success) && !skill_success.empty()) {
+          inputs["skill_success"] = skill_success;
+          Logger::instance().info_f("[TASK_POLLER] Set inputs[skill_success]='%s'", skill_success.c_str());
+        }
         // Propagate exec_skill_key for skill-specific data routing
         std::string exec_skill_key;
         if(task->get_parameter("exec_skill_key", exec_skill_key) && !exec_skill_key.empty()) {
