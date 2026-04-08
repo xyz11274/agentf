@@ -10,10 +10,11 @@ Coordinator 是 AgentFlow 框架 dispatcher-coordinator-skill 三层协同架构
 
 当前 coordinator 机制已具备基本的框架骨架和数据流通路，但在策略层面的实现完整性、与业界 agent loop 实践的对齐程度上仍有较大提升空间。
 
-本文档从四个维度展开分析：
+本文档从下列维度展开分析：
 - **当前实现分析**：审视现有 coordinator 实现的完整性和问题
 - **对标分析**：对比 OpenClaw 和 Claude Code 的 agent loop 实现
 - **ReAct 与 Agentic Loop**：结合 OC/CC 说明从经典 ReAct 到现代 agentic loop 的演进、效果变好的机制原因，及对 AgentFlow 的映射
+- **效率、Token 与防循环（§6.6）**：在准确率可验收前提下优化闭环效率与 token；coordinator 兜底时的多层防死循环、OC 官方 loop detection 映射与可审计退出契约
 - **改进建议**：识别待优化和待实现的能力，给出改进方案
 
 ### 2. 方案简述
@@ -23,7 +24,8 @@ Coordinator 是 AgentFlow 框架 dispatcher-coordinator-skill 三层协同架构
 1. 对当前 coordinator 实现的全面审计报告
 2. 与 OpenClaw、Claude Code 的 agent loop 实现的详细对比矩阵
 3. **ReAct 与 Agentic Loop** 的概念对照、OC/CC 中的体现、以及「相对 ReAct 进步在何处」的归纳
-4. 分层次的改进建议（已实现/需优化/待实现），并与上述演进缺口对齐
+4. **§6.6 专章**：在**准确率可验收**前提下提升闭环效率与降低 token；以及 coordinator 作为编排兜底时的**多层防死循环**策略、OpenClaw 官方 loop detection 映射与**可审计退出契约**
+5. 分层次的改进建议（已实现/需优化/待实现），并与上述演进缺口对齐
 
 改进方向覆盖以下关键能力维度：
 - 任务完成判定机制
@@ -344,7 +346,7 @@ QueryEngine → query()
 | **终止判定** | ⚠️ 仅 DataBus 键检查 | ✅ 模型 end_turn + 框架侧检查 | ✅ needsFollowUp + stopHooks |
 | **多轮 skill 规划** | ✅ next_skills 循环 | ✅ 模型自主多轮 | ✅ 模型自主多轮 |
 | **循环上限** | ❌ 无保护 | ✅ MAX_RUN_LOOP_ITERATIONS=160 | ✅ maxTurns 可配置 |
-| **循环检测** | ❌ 无 | ✅ tool-loop-detection（warning/critical） | ❌ 无显式循环检测 |
+| **循环检测** | ❌ 无 | ✅ tool-loop-detection（warning/critical）[^loop-66] | ❌ 无显式循环检测 |
 | **模型 fallback** | ❌ 不涉及 | ✅ runWithModelFallback | ✅ FallbackTriggeredError 切换 |
 | **上下文压缩** | ❌ 无 | ✅ contextEngine.compact | ✅ 四级压缩链 |
 | **Token 预算** | ❌ 无 | ❌ 无显式 | ✅ tokenBudget 控制 |
@@ -358,6 +360,8 @@ QueryEngine → query()
 | **数据清理** | ✅ cleanup_dialogue_data | ❌ 依赖 session 生命周期 | ❌ 依赖 context 压缩 |
 | **多 session 聚合** | ✅ aggregate_session_results | ⚠️ 子代理通信 | ❌ 单会话 |
 | **状态机模型** | ❌ 隐式状态 | ❌ 无显式状态机 | ⚠️ QueryGuard idle/dispatching/running |
+
+[^loop-66]: OpenClaw 侧检测器分级、阈值顺序与 dampen/block 行为详见 **§6.6-B**；官方说明见 [Tool-loop detection](https://docs.openclaw.ai/tools/loop-detection)。
 
 **图例**：✅ 已实现 | ⚠️ 部分实现 | ❌ 未实现
 
@@ -548,9 +552,80 @@ flowchart LR
   react -.->|叠加| agentic
 ```
 
+#### 6.6 准确率约束下的效率与 Token，以及兜底防循环（策略专章）
+
+本节与 §7 分工：**§6.6** 给出可操作的策略、对标归纳与契约；**§7** 给出代码路径与配置项落地。循环护栏的分级思路与 OpenClaw 官方 loop detection 的对应关系见 **§6.6-B**；`SkillExecutionRecord`、轮次计数等实现骨架见 **§7.3 待实现 2、3**。
+
+##### 6.6-A 准确率不变前提下：闭环效率与 Token 优化
+
+**「准确率不变」的可操作含义**：在可验收的不变量下优化——例如用户意图满足度（含拒答/澄清策略）、关键业务约束（权限、格式、工具契约）、以及回归用例 / 黄金对话集通过率。以下手段均应在上述门禁下做 A/B 或离线回放验证，避免「省 token」以砍掉关键证据链为代价。
+
+**1）分解成本来源（AgentFlow 语境）**
+
+- **Coordinator workflow 内含 LLM 节点**：主要成本来自每轮协调输入中的 **全量 transcript / DataBus 大段快照**，以及多轮 `next_skills` 规划带来的 **模型往返次数**。
+- **Coordinator 以规则、代码或轻量节点为主**：框架侧成本更多体现为 **coordinator 触发次数、workflow 调度、DataBus I/O**；此时「省 token」的重点转为 **减少不必要的 LLM skill 唤醒**，以及 **压缩传入 LLM skill 的上下文**（与 skill 侧节点设计相关）。
+
+**2）闭环效率（少轮次、少协调）——与准确率兼容**
+
+- **批量化规划**：在依赖图允许时，单次协调产出更大粒度的 `next_skills`，减少「skill 完成 → 再次唤醒 coordinator」的次数（思想对齐 Claude Code 单轮多 `tool_use` 的批处理，见 §5.2、§6.2）。
+- **热路径短路**：dispatcher 已能产出最终 `response` 时直出，避免无意义的 coordinator 往返（§6.4.3、`claw_agent` 等示例）。
+- **轻量 coordinator / 重 skill**：重推理、重 IO、重模型调用下沉到 skill；coordinator 聚焦 **阶段门控、终止条件、合并策略**，降低协调链上的调度与序列化开销。
+- **并行只读或可交换 skill**：在 §6.4.2 的多 skill 并行基础上，仅当 **无写冲突、无顺序敏感副作用** 时并行，避免为提速牺牲确定性。
+- **结构化中间态**：用 DataBus **小键**（计划 ID、阶段、校验位、摘要指针）承载进度，避免每轮把大段中间结果重复注入下一轮 LLM（与 §7.3 待实现 6 `task_context_workflow` / 摘要策略衔接）。
+
+**3）Token 优化（不降低准确率的关键杠杆）**
+
+- **增量上下文**：相对上一轮只传递 **delta**（新 observation、diff、短摘要），而非全量历史。
+- **摘要与外部化**：长结果写入 DataBus 或对象存储；协调层只传 **引用 + 短摘要**，保证模型仍能通过引用取回完整内容（对齐 §6.5.4「上下文可控」因果链）。
+- **幂等与缓存**：对相同 `(意图签名, skill, 输入哈希)` 的重复规划，在失效条件明确（TTL、版本、用户显式刷新）时复用已验证输出，减少重复推理。
+- **必须经 LLM 协调时**：为每 dialogue 或每协调回合设 **token / 轮次预算**；逼近预算时触发 **压缩或强制收尾**（对标 §5.2 `tokenBudget`、`blocking_limit` 的硬边界思想）。落地职责可放在 **coordinator workflow 节点**（业务可控）或未来 **框架级配置**（跨产品一致），文档层面需二选其一或分层组合并在 agent 包中写明。
+
+**4）可观测性作为「不损准确率」的前提**
+
+建议在 Trace 中记录：**协调轮次**、**每次 coordinator 触发原因**（dispatcher 转发 / skill_completion / data_exchange）、**本轮 `next_skills` 规模**、以及（若存在）**LLM 输入输出 token 估算**。调参时据此证明压缩与短路没有移除完成任务所必需的信息。
+
+##### 6.6-B Coordinator 兜底：防死循环与快速明确退出
+
+**原则**：采用 **纵深防御**，优先使用 **低成本确定性判定**（计数、哈希、状态快照），避免依赖「再问模型该不该停」作为唯一护栏（贵且不稳定）。每层明确 **判定信号**、**动作**（block / dampen / escalate）、以及 **用户可见的退出原因**。
+
+**1）对标：OpenClaw 与 Claude Code（与 §5–§6.3 互补）**
+
+- **OpenClaw**  
+  - **外层**：`runEmbeddedPiAgent` 的 `while(true)` 与 `MAX_RUN_LOOP_ITERATIONS`（§5.1）提供 **宏观迭代上限**。  
+  - **工具/动作层**：[Tool-loop detection](https://docs.openclaw.ai/tools/loop-detection) 描述的配置包括：`historySize`；阈值满足 **`warningThreshold` < `criticalThreshold` < `globalCircuitBreakerThreshold`**；检测器 **genericRepeat**（同工具 + 同参数重复）、**knownPollNoProgress**（已知轮询类调用无状态进展）、**pingPong**（交替重复模式）。功能默认 **关闭**，启用后按严重度 **告警、抑制或阻断下一轮 tool-cycle**。源码路径仍见 §5.1 `tool-loop-detection.ts`。  
+  - **诚实边界**：社区 issue 中曾报告部分场景（如特定 `exec` 重复）**漏检**，说明 **单一启发式不足**；AgentFlow 侧应叠加 **L0 硬上限** 与 **L2 状态无进展**（见下表），而非只移植一种检测器。
+
+- **Claude Code**（§5.2）  
+  - **maxTurns**：子代理 / 循环 **硬切断**。  
+  - **blocking_limit**：token **硬上限** 直接终止。  
+  - **needsFollowUp**：无 `tool_use` 则进入完成链（stopHooks、预算等）。  
+  - **Coordinator 模式**：工具 **白名单** 收缩动作空间，从架构上降低无意义循环概率。
+
+**一句话对照**：OpenClaw = **外层迭代上限 + 工具层多检测器 loop guard**；Claude Code = **轮次/token 硬边界 + 完成链 + 策略收缩**。
+
+**2）映射到 AgentFlow：推荐护栏栈**
+
+| 层级 | 判定（低成本） | 动作 | 退出语义示例（建议写入契约，见下节） |
+|------|----------------|------|--------------------------------------|
+| **L0 硬上限** | `coordination_round_count`、`skill_launch_count`、wall-clock 总时长 | 停止调度 `next_skills`，写入最终 `response` 或结构化错误 | `max_rounds` / `timeout` |
+| **L1 重复模式** | 滑动窗口内 `(skill_name, input_hash)` 频次；可选 **ping-pong**（A→B→A→B） | 日志 warning →（可选）向协调上下文注入 meta → critical **阻断 launch** | `loop_repeat` |
+| **L2 无进展** | 连续 K 次协调后 **关键 DataBus 状态快照 hash** 不变，或业务 **progress_token** 未前进 | 触发 **global circuit breaker**（类比 OpenClaw `globalCircuitBreakerThreshold`） | `no_progress` |
+| **L3 失败风暴** | 同一 **失败签名** 连续 N 次（与 §7.2 `failure_policy` 对齐） | `abort` 或 `skip` + 用户可读说明 | `failure_loop` |
+| **L4（可选）语义闸** | 仅在 L0–L2 未触发且 **临近上限** 时，做一次低成本 LLM 或规则检查「是否强制收尾」 | 写入明确 `coordination_exit_reason`，避免无声失败 | `forced_wrap_up` |
+
+**3）快速明确退出的工程契约**
+
+- 约定单一 **DataBus 键**（例如 `coordination_exit_reason`）或等价 metadata，取值枚举建议：**`completed` / `max_rounds` / `loop_detected` / `no_progress` / `timeout` / `aborted`**（可按产品增删）。  
+- **用户可见消息**：说明 **为何停止**、**已取得的部分结果**、**建议的下一步**（人工接管、重试、缩小任务范围），与 §7.3 待实现 5「超时部分响应」一致。  
+- **`force` 与检测的交互**（与 §7.3 待实现 3 协同）：`force=true` 可 **跳过 L1** 以避免阻断合法重跑，但 **默认不应绕过 L0 与 L2**（全局轮次与无进展断路器）；若业务要求「强制到底」，应 **显式配置**并接受失控风险，文档中写明权衡。
+
+**4）与 §7.3 的关系**
+
+§6.6-B **不重复** §7.3 中的 `SkillExecutionRecord` 代码块；§6.6 补充的是 **OpenClaw 三级阈值 + 多检测器 + dampen/block 行为** 与 **AgentFlow 分层映射**。具体实现仍按 **§7.3 待实现 2、3、5** 推进。
+
 ### 7. 改进分类与建议
 
-第 7、8 章中的具体项可视为 **§6.5.6 映射表**在实现层的展开；优先补齐 **硬边界、失败语义、完成钩子、上下文策略**，与 ReAct 时代最易失效的环节对齐。
+第 7、8 章中的具体项可视为 **§6.5.6 映射表**与 **§6.6**（效率/token、防循环策略与退出契约）在实现层的展开；优先补齐 **硬边界、失败语义、完成钩子、上下文策略**，与 ReAct 时代最易失效的环节对齐。
 
 #### 7.1 已实现且运行良好的能力
 
@@ -605,6 +680,8 @@ flowchart LR
 - 在 `agent.json` 的 coordinator 配置中增加 `failure_policy` 字段
 
 #### 7.3 待实现的能力
+
+**策略先行说明**：最大轮次、循环检测、超时与 `coordination_exit_reason` 等 **分级护栏与契约** 的设计依据见 **§6.6**（尤其 §6.6-B）；本节以下为 **实现要点与代码骨架**。
 
 **待实现 1：Coordinator 状态机模型**
 
@@ -942,3 +1019,4 @@ struct Config {
 | v1.0 | 2026-04-05 | AI | 初始版本：当前实现分析 + OpenClaw/Claude Code 对标分析 + 改进建议 |
 | v1.1 | 2026-04-05 | AI | 补充三种实现 Mermaid 流程图；6.4 成功率/并发/时延对比与优化项；9.1–9.3 examples/tests 审视与测试优化建议 |
 | v1.2 | 2026-04-05 | AI | 新增 §6.5：ReAct 与 Agentic Loop 异同、效果变好的机制归纳、三项目映射及与 §7–§9 对齐的优化措施表；背景/方案简述/关联方案同步更新 |
+| v1.3 | 2026-04-08 | AI | 新增 §6.6：准确率约束下闭环效率与 token 优化（6.6-A）；coordinator 兜底多层防循环、OpenClaw 官方 loop detection 引用与 AF 护栏栈、退出契约及与 §7.3 交叉引用；§2 / §6.2 脚注 / §7 引言同步更新 |
