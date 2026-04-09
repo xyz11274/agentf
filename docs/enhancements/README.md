@@ -92,6 +92,7 @@
 | 030 | 2026-03-27 | [Node 异步请求机制设计](030-feature-node-异步请求机制设计-260326-implemented.md) | feature | implemented | Node同步阻塞调用外部资源，并发能力受限 |
 | 031 | 2026-04-05 | [Coordinator 协同机制设计分析](031-feature-coordinator-协同机制设计分析-260405-tbd.md) | feature | tbd | Coordinator协同判定与多轮规划机制需增强 |
 | 032 | 2026-04-05 | [Dispatcher Coordinator Skill 与 DataBus 可观测性分析](032-feature-dispatcher-coordinator-databus-observability-260405-tbd.md) | feature | tbd | 多任务协同与DataBus并发场景下日志与运维定界能力不足 |
+| 033 | 2026-04-08 | [虚拟 Skill（意图分类）编排能力](033-feature-virtual-skill-intent-classification-260408-tbd.md) | feature | tbd | 意图分类不落重工具链路，结构化结果交给 coordinator 驱动下一阶段 loop |
 
 ## 按状态分类
 
@@ -103,6 +104,7 @@
 | 028 | 2026-03-23 | [Node 模型推理服务流式访问设计](028-feature-node-模型推理服务流式访问设计-260323-tbd.md) | LLM流式调用阻塞Worker线程 |
 | 031 | 2026-04-05 | [Coordinator 协同机制设计分析](031-feature-coordinator-协同机制设计分析-260405-tbd.md) | Coordinator协同判定与多轮规划机制需增强 |
 | 032 | 2026-04-05 | [Dispatcher Coordinator Skill 与 DataBus 可观测性分析](032-feature-dispatcher-coordinator-databus-observability-260405-tbd.md) | 多任务协同与DataBus并发场景下日志与运维定界能力不足 |
+| 033 | 2026-04-08 | [虚拟 Skill（意图分类）编排能力](033-feature-virtual-skill-intent-classification-260408-tbd.md) | 意图分类不落重工具链路，结构化结果交给 coordinator 驱动下一阶段 loop |
 
 ### 进行中 (wip)
 
