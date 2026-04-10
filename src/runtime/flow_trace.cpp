@@ -48,7 +48,7 @@ std::string format_timestamp(int64_t timestamp_us) {
 // JSON escaping utility
 // ============================================================================
 
-static std::string escape_json_string(const std::string& s) {
+std::string escape_json_string(const std::string& s) {
   std::ostringstream oss;
   for (char c : s) {
     switch (c) {

@@ -67,6 +67,10 @@ extern "C" void skill_selection_node_v3(const DataMap& inputs, DataMap& outputs,
       DataVariant("Fixed selection for E2E test: travel and shopping. "
                   "Coordinator will add foodie and force-launch shopping.");
 
+  // Flow trace: output input/output for trace logging
+  outputs["af_trace_node_input"] = DataVariant("user_text=" + user_text + "|session=" + session_id + "|dialogue=" + dialogue_id);
+  outputs["af_trace_node_output"] = DataVariant("selected_skills=" + selected_json);
+
   // Write next_skills to sys namespace for framework to launch more skills
   // With dialogue_id support, the key is: {dialogue_id}/next_skills
   if (client && client->sys()) {

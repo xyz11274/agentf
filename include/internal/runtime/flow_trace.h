@@ -114,6 +114,9 @@ struct FlowTraceEvent {
 // Convert event to JSON line (for output)
 std::string to_json_line(const FlowTraceEvent& event);
 
+// Escape string for safe JSON embedding
+std::string escape_json_string(const std::string& s);
+
 // Format timestamp to human-readable string
 std::string format_timestamp(int64_t timestamp_us);
 

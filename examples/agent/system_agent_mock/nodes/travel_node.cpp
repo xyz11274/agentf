@@ -58,6 +58,10 @@ extern "C" void travel_node_v3(const DataMap& inputs, DataMap& outputs,
   outputs["status"] = DataVariant(std::string("success"));
   outputs["confidence"] = DataVariant(confidence);
 
+  // Flow trace: output input/output for trace logging
+  outputs["af_trace_node_input"] = DataVariant("user_text=" + user_text);
+  outputs["af_trace_node_output"] = DataVariant("result=" + result.substr(0, 50) + "...|confidence=" + std::to_string(confidence));
+
   // Store result in user namespace for coordinator to aggregate
   // With dialogue_id support, the key is: {dialogue_id}/travel_result
   if (client && client->user()) {

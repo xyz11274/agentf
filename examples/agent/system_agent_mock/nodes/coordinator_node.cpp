@@ -251,6 +251,10 @@ extern "C" void coordinator_node_v3(const DataMap& inputs, DataMap& outputs,
   outputs["final_answer"] = DataVariant(aggregated);
   outputs["coordinator_done"] = DataVariant(std::string("true"));
 
+  // Flow trace: output input/output for trace logging
+  outputs["af_trace_node_input"] = DataVariant("user_text=" + user_text + "|completed_skill=" + completed_skill_name + "|available_results=" + std::to_string(available_results));
+  outputs["af_trace_node_output"] = DataVariant("response_ready=true|skills_count=" + std::to_string(skill_count));
+
   // Write response to sys namespace
   if (sys_ns) {
     std::string response_key = dialogue_id.empty() ? "response" : dialogue_id + "/response";

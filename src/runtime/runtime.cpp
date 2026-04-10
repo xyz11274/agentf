@@ -934,10 +934,43 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
       std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
 
   // Flow trace: node completed
+  // Get trace inputs/outputs from node outputs if specified
+  const auto& node_outputs = node->get_outputs();
+  std::string trace_input;
+  std::string trace_output;
+
+  // Keys for node to specify trace data (case-insensitive, lowercase priority)
+  static const std::string kTraceInputKeyLower  = "af_trace_node_input";
+  static const std::string kTraceInputKeyUpper  = "AF_TRACE_NODE_INPUT";
+  static const std::string kTraceOutputKeyLower = "af_trace_node_output";
+  static const std::string kTraceOutputKeyUpper = "AF_TRACE_NODE_OUTPUT";
+
+  // Extract trace input: lowercase key has priority over uppercase
+  auto input_it = node_outputs.find(kTraceInputKeyLower);
+  if(input_it == node_outputs.end()) {
+    input_it = node_outputs.find(kTraceInputKeyUpper);
+  }
+  if(input_it != node_outputs.end()) {
+    if(const std::string* str_val = std::get_if<std::string>(&input_it->second)) {
+      trace_input = escape_json_string(*str_val);
+    }
+  }
+
+  // Extract trace output: lowercase key has priority over uppercase
+  auto output_it = node_outputs.find(kTraceOutputKeyLower);
+  if(output_it == node_outputs.end()) {
+    output_it = node_outputs.find(kTraceOutputKeyUpper);
+  }
+  if(output_it != node_outputs.end()) {
+    if(const std::string* str_val = std::get_if<std::string>(&output_it->second)) {
+      trace_output = escape_json_string(*str_val);
+    }
+  }
+
   FLOW_TRACE_NODE_WITH_DATA(flow_session_id, flow_dialogue_id,
                               workflow ? workflow->get_id() : "", node->get_name(),
                               FlowEventType::NODE_COMPLETED,
-                              "", "", duration * 1000);  // duration in microseconds
+                              trace_input, trace_output, duration * 1000);  // duration in microseconds
 
   // [DEBUG] Log node processing result
   if(!execution_result) {
@@ -968,7 +1001,7 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
   // - No downstream Node → DataBus broadcast (with session isolation format)
   // - Multi-incoming edges (Scenario 2): auto-prefix keys with source node ID
   // This naturally isolates parallel node outputs without node code changes.
-  const DataMap& node_outputs = node->get_outputs();
+  // node_outputs already declared above for trace logging
   if(!node_outputs.empty()) {
     auto& bus = get_databus(agent->get_id());
     Logger::instance().info_f("[PROCESS_NODE_OUTPUTS] Node=%s has %zu outputs, dialogue_id=%s",
