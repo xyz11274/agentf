@@ -69,6 +69,7 @@ public:
   bool execute_workflow(const AgentId& agent_id, const WorkflowId& workflow_id,
                         const DataMap& inputs, const std::string& source_task_id = "",
                         const std::string& session_id = "", const std::string& dialogue_id = "",
+                        const std::string& trace_labels = "",
                         const std::string& task_type = "", const std::string& skill_task_id = "",
                         const std::string& skill_name = "");
 
@@ -188,6 +189,7 @@ private:
      std::string            source_task_id;    // Task that initiated this workflow (for tracing/response routing)
      std::string            session_id;        // Session ID for response routing
      std::string            dialogue_id;       // Dialogue ID for multi-dialogue support
+     std::string            trace_labels;      // Labels for flow trace correlation (from message.metadata["trace_labels"])
      std::string            task_type;         // Type of the task executing this workflow (skill, dispatcher, coordinator)
      std::string            skill_task_id;     // Actual task id of the skill (for skill completion tracking)
      std::string            skill_name;        // Skill name (for skill completion notification)

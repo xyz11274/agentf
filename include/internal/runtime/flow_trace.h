@@ -103,6 +103,9 @@ struct FlowTraceEvent {
   std::string inputs;   // JSON string or empty
   std::string outputs;  // JSON string or empty
 
+  // Labels for correlation (from external message.metadata["trace_labels"])
+  std::string labels;
+
   // Timing (for duration calculation)
   int64_t timestamp_us = 0;  // raw microsecond timestamp
   int64_t duration_us  = 0;  // duration if this is a completion event
@@ -216,6 +219,30 @@ FlowTraceEvent make_node_event(const std::string& session_id,
 #define FLOW_TRACE_SKILL(session, dialogue, from, to, event_type)                     \
   FLOW_TRACE_EVENT("skill-exec", session, dialogue, from, to, event_type, {})
 
+// Macros with labels support (for external message.metadata["trace_labels"])
+#define FLOW_TRACE_EVENT_L(type, session, dialogue, from, to, event_type, attrs, lbls) \
+  do {                                                                                \
+    if (agentflow::runtime::FlowTraceWriter::instance().is_enabled()) {               \
+      auto _e = agentflow::runtime::make_flow_event(                                  \
+          type, session, dialogue, from, to, event_type);                             \
+      _e.attributes = attrs;                                                          \
+      _e.labels = lbls;                                                               \
+      agentflow::runtime::FlowTraceWriter::instance().write_event(_e);                \
+    }                                                                                 \
+  } while (0)
+
+#define FLOW_TRACE_WORKFLOW_L(session, dialogue, lbls, from, to, event_type)        \
+  FLOW_TRACE_EVENT_L("workflow-exec", session, dialogue, from, to, event_type, {}, lbls)
+
+#define FLOW_TRACE_NODE_L(session, dialogue, lbls, from, to, event_type)            \
+  FLOW_TRACE_EVENT_L("node-exec", session, dialogue, from, to, event_type, {}, lbls)
+
+#define FLOW_TRACE_TASK_L(session, dialogue, lbls, from, to, event_type)            \
+  FLOW_TRACE_EVENT_L("task-exec", session, dialogue, from, to, event_type, {}, lbls)
+
+#define FLOW_TRACE_SKILL_L(session, dialogue, lbls, from, to, event_type)           \
+  FLOW_TRACE_EVENT_L("skill-exec", session, dialogue, from, to, event_type, {}, lbls)
+
 // Macros with inputs/outputs
 #define FLOW_TRACE_TASK_WITH_DATA(session, dialogue, from, to, event_type, in, out)   \
   do {                                                                                \
@@ -237,6 +264,20 @@ FlowTraceEvent make_node_event(const std::string& session_id,
       _e.inputs      = in;                                                            \
       _e.outputs     = out;                                                           \
       _e.duration_us = duration;                                                      \
+      agentflow::runtime::FlowTraceWriter::instance().write_event(_e);                \
+    }                                                                                 \
+  } while (0)
+
+#define FLOW_TRACE_NODE_WITH_DATA_L(session, dialogue, lbls, from, to, event_type, in, out, \
+                                   duration)                                          \
+  do {                                                                                \
+    if (agentflow::runtime::FlowTraceWriter::instance().is_enabled()) {               \
+      auto _e = agentflow::runtime::make_node_event(                                  \
+          session, dialogue, from, to, event_type);                                   \
+      _e.inputs      = in;                                                            \
+      _e.outputs     = out;                                                           \
+      _e.duration_us = duration;                                                      \
+      _e.labels      = lbls;                                                          \
       agentflow::runtime::FlowTraceWriter::instance().write_event(_e);                \
     }                                                                                 \
   } while (0)

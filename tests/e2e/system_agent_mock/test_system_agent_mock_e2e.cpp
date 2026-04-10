@@ -197,6 +197,7 @@ int main() {
     message.metadata["message_type"] = "intent_request";
     message.metadata["user_id"] = "test_user";
     message.metadata["client_id"] = "test_client";
+    message.metadata["trace_labels"] = "test_flow=e2e_basic|env=dev";  // Labels for flow trace correlation
     message.content = "What are the best travel, shopping, and food options?";
 
     std::cout << std::endl;

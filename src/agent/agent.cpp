@@ -1174,6 +1174,14 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
                               dialogue_id_it->second.c_str(), task_config.task_id.c_str());
   }
 
+  // Pass trace_labels from message metadata to task parameters for flow trace correlation
+  if(const auto trace_labels_it = message.metadata.find("trace_labels");
+     trace_labels_it != message.metadata.end() && !trace_labels_it->second.empty()) {
+    task->set_parameter("trace_labels", trace_labels_it->second);
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set trace_labels=%s for task=%s",
+                              trace_labels_it->second.c_str(), task_config.task_id.c_str());
+  }
+
   // Pass completed_skill_name from message metadata for coordinator tracking
   if(const auto skill_name_it = message.metadata.find("completed_skill_name");
      skill_name_it != message.metadata.end() && !skill_name_it->second.empty()) {
@@ -1362,13 +1370,20 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
       }
 
       // Flow trace: task created
-      FLOW_TRACE_TASK(session->get_session_id(), dialogue_id,
+      std::string trace_labels;
+      if(message.metadata.count("trace_labels")) {
+        trace_labels = message.metadata.at("trace_labels");
+      }
+      FLOW_TRACE_TASK_L(session->get_session_id(), dialogue_id, trace_labels,
                       "external", "dispatcher",
                       runtime::FlowEventType::TASK_CREATED);
 
       // Create a message copy with dialogue_id in metadata for skill tasks
       MMAgentMsgQue::Message message_with_dialogue = message;
       message_with_dialogue.metadata["dialogue_id"] = dialogue_id;
+      if(!trace_labels.empty()) {
+        message_with_dialogue.metadata["trace_labels"] = trace_labels;
+      }
 
       // Launch skills based on pre-configured next_skills
       for(const auto& skill_name : configured_next_skills) {
@@ -2221,6 +2236,11 @@ bool MMAgent::launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
     skill_task->set_parameter("dialogue_id", context.metadata.at("dialogue_id"));
   }
 
+  // Pass trace_labels as task parameter for flow trace correlation
+  if(context.metadata.count("trace_labels")) {
+    skill_task->set_parameter("trace_labels", context.metadata.at("trace_labels"));
+  }
+
   // Set coordinator_task_id if source is coordinator
   if(source_task->get_task_type() == "coordinator") {
     skill_task->set_parameter("coordinator_task_id", source_task->get_task_id());
@@ -2271,7 +2291,11 @@ bool MMAgent::launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
     if(context.metadata.count("dialogue_id")) {
       dialogue_id = context.metadata.at("dialogue_id");
     }
-    FLOW_TRACE_SKILL(session->get_session_id(), dialogue_id,
+    std::string trace_labels;
+    if(context.metadata.count("trace_labels")) {
+      trace_labels = context.metadata.at("trace_labels");
+    }
+    FLOW_TRACE_SKILL_L(session->get_session_id(), dialogue_id, trace_labels,
                      source_task->get_task_type(), skill_name,
                      runtime::FlowEventType::SKILL_LAUNCHED);
   }

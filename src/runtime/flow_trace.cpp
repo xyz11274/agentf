@@ -125,6 +125,11 @@ std::string to_json_line(const FlowTraceEvent& event) {
     oss << ",\"outputs\":\"" << escape_json_string(event.outputs) << "\"";
   }
 
+  // Optional labels (for correlation from external message.metadata["trace_labels"])
+  if (!event.labels.empty()) {
+    oss << ",\"labels\":\"" << escape_json_string(event.labels) << "\"";
+  }
+
   // Duration (only for completion events)
   if (event.duration_us > 0) {
     oss << ",\"duration_us\":" << event.duration_us;
