@@ -1544,6 +1544,10 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       if(!skill_name_for_counter.empty()) {
         coordinator_trigger.metadata["completed_skill_name"] = skill_name_for_counter;
       }
+      // Pass trace_labels for flow trace correlation
+      if(message.metadata.count("trace_labels")) {
+        coordinator_trigger.metadata["trace_labels"] = message.metadata.at("trace_labels");
+      }
       // Get the original user prompt
       std::string user_prompt_key = dialogue_id.empty() ? "user_prompt" : dialogue_id + "/user_prompt";
       DataVariant user_prompt_value;
@@ -1618,6 +1622,10 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         trigger_message.metadata["trigger_type"] = "skill_response";
         if(!dialogue_id.empty()) {
           trigger_message.metadata["dialogue_id"] = dialogue_id;
+        }
+        // Pass trace_labels for flow trace correlation
+        if(message.metadata.count("trace_labels")) {
+          trigger_message.metadata["trace_labels"] = message.metadata.at("trace_labels");
         }
         coordinator_task->enqueue_data_exchange_message(trigger_message);
 
