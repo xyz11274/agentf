@@ -209,6 +209,7 @@ class FlowTraceVisualizer {
         html += '<th>耗时</th>';
         html += '<th>输入</th>';
         html += '<th>输出</th>';
+        html += '<th>标签</th>';
         html += '<th>扩展属性</th>';
         html += '<th>task_id</th>';
         html += '<th>trace_id</th>';
@@ -219,6 +220,7 @@ class FlowTraceVisualizer {
             const attrStr = this.formatAttrs(event.attrs);
             const inputStr = this.truncateCell(event.inputs, 80);
             const outputStr = this.truncateCell(event.outputs, 80);
+            const labelStr = this.formatLabels(event.labels);
             html += '<tr>';
             html += `<td class="time">${event.time}</td>`;
             html += `<td class="relative">${event.relativeMs}ms</td>`;
@@ -229,6 +231,7 @@ class FlowTraceVisualizer {
             html += `<td class="duration">${event.duration_us ? Math.round(event.duration_us / 1000) + 'ms' : '-'}</td>`;
             html += `<td class="data-cell" title="${this.escapeHtml(event.inputs || '')}">${inputStr}</td>`;
             html += `<td class="data-cell" title="${this.escapeHtml(event.outputs || '')}">${outputStr}</td>`;
+            html += `<td class="labels-cell">${labelStr}</td>`;
             html += `<td class="attrs-cell">${attrStr}</td>`;
             html += `<td class="id-cell">${event.task_id || '-'}</td>`;
             html += `<td class="id-cell">${event.trace_id || '-'}</td>`;
@@ -237,6 +240,18 @@ class FlowTraceVisualizer {
 
         html += '</tbody></table>\n';
         return html;
+    }
+
+    /** Format labels as colored pills */
+    formatLabels(labels) {
+        if (!labels) return '-';
+        // Labels format: "test_flow=e2e_basic|env=dev"
+        const parts = labels.split('|');
+        const pills = parts.map(part => {
+            const trimmed = part.trim();
+            return `<span class="label-pill">${this.escapeHtml(trimmed)}</span>`;
+        });
+        return pills.join(' ');
     }
 
     /** Format attrs map as compact key=value list */

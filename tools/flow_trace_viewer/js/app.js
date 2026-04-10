@@ -7,6 +7,7 @@ class FlowTraceViewer {
         this.visualizer = new FlowTraceVisualizer();
         this.currentSession = null;
         this.currentDialogue = null;
+        this.currentLabels = [];
     }
 
     /**
@@ -38,6 +39,12 @@ class FlowTraceViewer {
         const dialogueSelect = document.getElementById('dialogue-select');
         if (dialogueSelect) {
             dialogueSelect.addEventListener('change', (e) => this.handleDialogueChange(e));
+        }
+
+        // Label selector (multi-select)
+        const labelSelect = document.getElementById('label-select');
+        if (labelSelect) {
+            labelSelect.addEventListener('change', (e) => this.handleLabelChange(e));
         }
 
         // View tabs
@@ -168,8 +175,19 @@ class FlowTraceViewer {
             dialogueSelect.innerHTML = '<option value="">All Dialogues</option>';
         }
 
+        // Update label selector (multi-select)
+        const labels = this.parser.getLabels();
+        const labelSelect = document.getElementById('label-select');
+        if (labelSelect) {
+            labelSelect.innerHTML = '';
+            for (const label of labels) {
+                labelSelect.innerHTML += `<option value="${label}">${label}</option>`;
+            }
+        }
+
         this.currentSession = null;
         this.currentDialogue = null;
+        this.currentLabels = [];
     }
 
     /**
@@ -203,6 +221,16 @@ class FlowTraceViewer {
     }
 
     /**
+     * Handle label selection change (multi-select)
+     */
+    handleLabelChange(event) {
+        const select = event.target;
+        const selectedOptions = Array.from(select.selectedOptions).map(opt => opt.value);
+        this.currentLabels = selectedOptions;
+        this.displayCurrentView();
+    }
+
+    /**
      * Handle tab change
      */
     handleTabChange(event) {
@@ -224,14 +252,12 @@ class FlowTraceViewer {
      * Display current view based on selections
      */
     async displayCurrentView() {
-        let events;
-        if (this.currentSession && this.currentDialogue) {
-            events = this.parser.filterByDialogue(this.currentSession, this.currentDialogue);
-        } else if (this.currentSession) {
-            events = this.parser.filterBySession(this.currentSession);
-        } else {
-            events = this.parser.getAllEvents();
-        }
+        // Use unified filter method that handles session, dialogue, and labels
+        const events = this.parser.filterEvents(
+            this.currentSession,
+            this.currentDialogue,
+            this.currentLabels
+        );
 
         // Get active tab
         const activeTab = document.querySelector('.tab-btn.active');

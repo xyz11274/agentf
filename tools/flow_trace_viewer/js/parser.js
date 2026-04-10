@@ -57,6 +57,57 @@ class FlowTraceParser {
     }
 
     /**
+     * Get all unique labels from events (full label strings)
+     * @returns {string[]}
+     */
+    getLabels() {
+        const labels = new Set();
+        for (const event of this.events) {
+            if (event.labels) {
+                labels.add(event.labels);
+            }
+        }
+        return Array.from(labels).sort();
+    }
+
+    /**
+     * Filter events by multiple labels (OR logic - event matches any of the selected labels)
+     * @param {string[]} selectedLabels - Array of label strings to filter by
+     * @returns {object[]}
+     */
+    filterByLabels(selectedLabels) {
+        if (!selectedLabels || selectedLabels.length === 0) {
+            return this.events;
+        }
+        return this.events.filter(e => {
+            if (!e.labels) return false;
+            return selectedLabels.some(label => e.labels === label);
+        });
+    }
+
+    /**
+     * Filter events by session, dialogue, and labels combined
+     * @param {string} sessionId
+     * @param {string} dialogueId
+     * @param {string[]} selectedLabels
+     * @returns {object[]}
+     */
+    filterEvents(sessionId, dialogueId, selectedLabels) {
+        return this.events.filter(e => {
+            // Session filter
+            if (sessionId && e.session !== sessionId) return false;
+            // Dialogue filter
+            if (dialogueId && e.dialogue !== dialogueId) return false;
+            // Labels filter (OR logic)
+            if (selectedLabels && selectedLabels.length > 0) {
+                if (!e.labels) return false;
+                if (!selectedLabels.some(label => e.labels === label)) return false;
+            }
+            return true;
+        });
+    }
+
+    /**
      * Get total count of unique dialogues across all sessions
      * @returns {number}
      */

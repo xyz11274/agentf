@@ -81,6 +81,22 @@ select {
     min-width: 200px;
 }
 
+/* Multi-select for labels */
+select[multiple] {
+    min-width: 220px;
+    max-width: 300px;
+    background: white;
+}
+
+select[multiple] option {
+    padding: 4px 8px;
+}
+
+select[multiple] option:checked {
+    background: var(--primary-color);
+    color: white;
+}
+
 /* File Input */
 .file-input-wrapper {
     position: relative;
@@ -306,6 +322,24 @@ select {
     font-family: monospace;
     margin: 1px;
     color: #3949ab;
+}
+
+/* Label pills for trace labels */
+.label-pill {
+    display: inline-block;
+    background: #e8f5e9;
+    border: 1px solid #a5d6a7;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-size: 0.72rem;
+    font-family: monospace;
+    margin: 1px;
+    color: #2e7d32;
+}
+
+.timing-table .labels-cell {
+    max-width: 180px;
+    font-size: 0.8rem;
 }
 
 /* Status Messages */
