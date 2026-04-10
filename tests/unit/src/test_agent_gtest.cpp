@@ -1043,6 +1043,7 @@ TEST_F(AgentTest, DispatcherWithNextSkillsFromPackage) {
   {
     std::ofstream agent_json(tmp / "agent.json");
     agent_json << R"({
+      "session_pool_size": 1,
       "sessions": [
         {
           "id": 0,
@@ -1168,6 +1169,7 @@ TEST_F(AgentTest, SyncContextCallbackStoresContextInDataBus) {
   {
     std::ofstream agent_json(tmp / "agent.json");
     agent_json << R"({
+      "session_pool_size": 1,
       "sessions": [
         {
           "id": 0,
@@ -1278,6 +1280,7 @@ TEST_F(AgentTest, AsyncContextCallbackDoesNotBlock) {
   {
     std::ofstream agent_json(tmp / "agent.json");
     agent_json << R"({
+      "session_pool_size": 1,
       "sessions": [
         {
           "id": 0,
@@ -1351,6 +1354,7 @@ TEST_F(AgentTest, ContextCallbackReceivesPreviousContext) {
   {
     std::ofstream agent_json(tmp / "agent.json");
     agent_json << R"({
+      "session_pool_size": 1,
       "sessions": [
         {
           "id": 0,
@@ -1421,6 +1425,7 @@ TEST_F(AgentTest, ContextCallbackExceptionHandling) {
   {
     std::ofstream agent_json(tmp / "agent.json");
     agent_json << R"({
+      "session_pool_size": 1,
       "sessions": [
         {
           "id": 0,

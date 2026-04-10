@@ -2,7 +2,7 @@
   "name": "SystemAgentMock",
   "version": "1.0.0",
   "description": "Mock agent demonstrating dispatcher-skill-coordinator flow with dynamic skill selection",
-  "session_pool_size": 1,
+  "session_pool_size": 0,
   "tasks": [
     {
       "id": 0,

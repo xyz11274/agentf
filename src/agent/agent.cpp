@@ -608,8 +608,7 @@ bool MMAgent::initialize_components(std::shared_ptr<AgentPackage> package) {
       session_tasks = package_->get_config().sessions.front().tasks;
     }
 
-    const int session_pool_size =
-        std::max(1, package_->get_config().session_pool_size);
+    const int session_pool_size = package_->get_config().session_pool_size;
     for(int session_index = 0; session_index < session_pool_size; ++session_index) {
       // Create session with numeric ID for configured sessions
       auto session = create_session_from_tasks(std::to_string(session_index), session_tasks);

@@ -247,11 +247,11 @@ bool parse_agent_sessions(const rapidjson::Document& agent_doc,
       return fail_agent_json_parse("session_pool_size must be an integer");
     }
     session_pool_size = agent_doc["session_pool_size"].GetInt();
-    if(session_pool_size < 1) {
-      return fail_agent_json_parse("session_pool_size must be >= 1");
+    if(session_pool_size < 0) {
+      return fail_agent_json_parse("session_pool_size must be >= 0");
     }
   } else {
-    session_pool_size = 1;
+    session_pool_size = 0;
   }
   return true;
 }
@@ -533,12 +533,12 @@ std::shared_ptr<AgentPackage> AgentPackage::load_from_directory(const std::strin
           return nullptr;
         }
         config.session_pool_size = agent_doc["session_pool_size"].GetInt();
-        if(config.session_pool_size < 1) {
-          std::cerr << "Invalid agent.json: session_pool_size must be >= 1" << std::endl;
+        if(config.session_pool_size < 0) {
+          std::cerr << "Invalid agent.json: session_pool_size must be >= 0" << std::endl;
           return nullptr;
         }
       } else {
-        config.session_pool_size = 1;
+        config.session_pool_size = 0;
       }
     } else {
       // Legacy format: sessions array
