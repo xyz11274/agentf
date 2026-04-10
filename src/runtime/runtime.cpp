@@ -1486,6 +1486,10 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
             response.metadata["dialogue_id"] = complete_dialogue_id;
             // Pass skill_name for skill completion tracking
             response.metadata["skill_name"] = complete_skill_name;
+            // Pass trace_labels for flow trace correlation across workflow boundaries
+            if(!complete_trace_labels.empty()) {
+              response.metadata["trace_labels"] = complete_trace_labels;
+            }
             response.content = complete_ok ? "workflow_completed" : "workflow_failed";
             source_task->enqueue_data_exchange_message(response);
             Logger::instance().info_f(

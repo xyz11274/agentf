@@ -1593,6 +1593,10 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         if(!dialogue_id.empty()) {
           response_message.metadata["dialogue_id"] = dialogue_id;
         }
+        // Pass trace_labels for flow trace correlation
+        if(message.metadata.count("trace_labels")) {
+          response_message.metadata["trace_labels"] = message.metadata.at("trace_labels");
+        }
 
         // Get response from databus (with dialogue_id prefix for multi-dialogue support)
         std::string response_key = dialogue_id.empty() ? "response" : dialogue_id + "/response";
@@ -1778,6 +1782,10 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       // Include skill success/failure status from skill response
       if(skill_response.metadata.count("skill_success")) {
         coordinator_trigger.metadata["skill_success"] = skill_response.metadata["skill_success"];
+      }
+      // Pass trace_labels for flow trace correlation
+      if(skill_response.metadata.count("trace_labels")) {
+        coordinator_trigger.metadata["trace_labels"] = skill_response.metadata["trace_labels"];
       }
       // Get the original user prompt
       std::string user_prompt_key = coord_dialogue_id.empty() ? "user_prompt" : coord_dialogue_id + "/user_prompt";
@@ -2467,6 +2475,10 @@ MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
     message_with_dialogue.metadata["dialogue_id"] = message.metadata.at("dialogue_id");
   } else if(!dialogue_id.empty()) {
     message_with_dialogue.metadata["dialogue_id"] = dialogue_id;
+  }
+  // Preserve trace_labels for flow trace correlation across skill boundaries
+  if(message.metadata.count("trace_labels")) {
+    message_with_dialogue.metadata["trace_labels"] = message.metadata.at("trace_labels");
   }
 
   // Launch skills
