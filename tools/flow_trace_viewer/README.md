@@ -72,19 +72,30 @@
 
 ## 生成追踪日志
 
-### 方式一：环境变量（文件输出）
+### 方式一：环境变量（目录输出）
+
+设置 `FLOW_TRACE_DIR` 为**目录**路径（不是单个文件）。运行时会将 NDJSON 写入该目录，文件名形如：
+
+`flow_trace_<YYYY-MM-DD>_<clientSessionId>.ndjson`
+
+其中 `clientSessionId` 来自事件 `labels` 中的 `clientSessionId`（与打点里 `trace_labels` 一致）；若缺失则为 `unknown_client_session`。
 
 ```bash
-export FLOW_TRACE_FILE=/path/to/trace.ndjson
+export FLOW_TRACE_DIR=/path/to/flow_trace_logs
 ./your_agent_program
 ```
+
+未设置 `FLOW_TRACE_DIR` 时不会因此报错；默认仍会向标准输出打印追踪行（可用 API 关闭）。
 
 ### 方式二：C++ API
 
 ```cpp
 #include "runtime/flow_trace.h"
 
-// 启用文件输出
+// 与 FLOW_TRACE_DIR 等价的目录输出
+agentflow::runtime::FlowTraceWriter::instance().set_output_dir("/path/to/flow_trace_logs");
+
+// 或写入单个文件（与目录模式互斥，由最后一次配置决定）
 agentflow::runtime::FlowTraceWriter::instance().set_output_file("/path/to/trace.ndjson");
 
 // 关闭标准输出（默认开启）

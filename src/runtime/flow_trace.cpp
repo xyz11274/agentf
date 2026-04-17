@@ -6,14 +6,158 @@
 #include "runtime/flow_trace.h"
 
 #include <chrono>
+#include <cctype>
+#include <cstdlib>
 #include <cstdio>
 #include <ctime>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
 
 namespace agentflow {
 namespace runtime {
+namespace {
+
+/**
+ * @brief 对 trace label token 做反转义（兼容 \|、\=、\\、\n、\r）。
+ */
+std::string unescape_trace_token(const std::string& token) {
+  std::string result;
+  result.reserve(token.size());
+  bool escaping = false;
+  for (char ch : token) {
+    if (escaping) {
+      switch (ch) {
+        case 'n':
+          result.push_back('\n');
+          break;
+        case 'r':
+          result.push_back('\r');
+          break;
+        default:
+          result.push_back(ch);
+          break;
+      }
+      escaping = false;
+      continue;
+    }
+    if (ch == '\\') {
+      escaping = true;
+      continue;
+    }
+    result.push_back(ch);
+  }
+  if (escaping) {
+    result.push_back('\\');
+  }
+  return result;
+}
+
+/**
+ * @brief 从 key=value|key=value 文本中提取指定 key 的值，支持反斜杠转义。
+ */
+std::string extract_label_value(const std::string& labels, const std::string& key) {
+  std::string token;
+  token.reserve(labels.size());
+  bool escaping = false;
+
+  auto parse_token = [&key](const std::string& raw_token) -> std::string {
+    bool local_escaping = false;
+    size_t split_pos = std::string::npos;
+    for (size_t i = 0; i < raw_token.size(); ++i) {
+      const char ch = raw_token[i];
+      if (local_escaping) {
+        local_escaping = false;
+        continue;
+      }
+      if (ch == '\\') {
+        local_escaping = true;
+        continue;
+      }
+      if (ch == '=') {
+        split_pos = i;
+        break;
+      }
+    }
+
+    if (split_pos == std::string::npos) {
+      return "";
+    }
+    const std::string raw_key = raw_token.substr(0, split_pos);
+    const std::string raw_value = raw_token.substr(split_pos + 1);
+    if (unescape_trace_token(raw_key) != key) {
+      return "";
+    }
+    return unescape_trace_token(raw_value);
+  };
+
+  for (char ch : labels) {
+    if (escaping) {
+      token.push_back(ch);
+      escaping = false;
+      continue;
+    }
+    if (ch == '\\') {
+      token.push_back(ch);
+      escaping = true;
+      continue;
+    }
+    if (ch == '|') {
+      std::string value = parse_token(token);
+      if (!value.empty()) {
+        return value;
+      }
+      token.clear();
+      continue;
+    }
+    token.push_back(ch);
+  }
+  if (!token.empty()) {
+    return parse_token(token);
+  }
+  return "";
+}
+
+/**
+ * @brief 从事件时间文本中提取 YYYY-MM-DD；异常时回退当前日期。
+ */
+std::string extract_event_date(const FlowTraceEvent& event) {
+  if (event.time.size() >= 10) {
+    bool looks_like_date = true;
+    for (int i = 0; i < 10; ++i) {
+      const char ch = event.time[static_cast<size_t>(i)];
+      if ((i == 4 || i == 7)) {
+        if (ch != '-') {
+          looks_like_date = false;
+          break;
+        }
+      } else if (!std::isdigit(static_cast<unsigned char>(ch))) {
+        looks_like_date = false;
+        break;
+      }
+    }
+    if (looks_like_date) {
+      return event.time.substr(0, 10);
+    }
+  }
+  return format_timestamp(now_us()).substr(0, 10);
+}
+
+/**
+ * @brief 将 clientSessionId 清洗为可用于文件名的安全片段。
+ */
+std::string sanitize_for_filename(const std::string& text) {
+  std::string result;
+  result.reserve(text.size());
+  for (char ch : text) {
+    const bool safe = std::isalnum(static_cast<unsigned char>(ch)) || ch == '-' || ch == '_';
+    result.push_back(safe ? ch : '_');
+  }
+  return result;
+}
+
+}  // namespace
 
 // ============================================================================
 // Time utilities
@@ -178,12 +322,12 @@ FlowTraceWriter::~FlowTraceWriter() {
 FlowTraceWriter& FlowTraceWriter::instance() {
   static FlowTraceWriter instance;
 
-  // Check environment variable for output file on first access
+  // 首次访问时从环境变量初始化：仅支持目录模式（FLOW_TRACE_DIR）。
   static bool initialized = false;
   if (!initialized) {
-    const char* env_file = std::getenv("FLOW_TRACE_FILE");
-    if (env_file && env_file[0] != '\0') {
-      instance.set_output_file(env_file);
+    const char* env_dir = std::getenv("FLOW_TRACE_DIR");
+    if (env_dir && env_dir[0] != '\0') {
+      instance.set_output_dir(env_dir);
     }
     initialized = true;
   }
@@ -196,6 +340,9 @@ void FlowTraceWriter::set_output_file(const std::string& path) {
   if (output_file_.is_open()) {
     output_file_.close();
   }
+  output_dir_.clear();
+  dir_enabled_ = false;
+
   output_file_.open(path, std::ios::app);
   if (output_file_.is_open()) {
     file_enabled_ = true;
@@ -203,6 +350,28 @@ void FlowTraceWriter::set_output_file(const std::string& path) {
     std::cerr << "[FlowTrace] Failed to open output file: " << path << std::endl;
     file_enabled_ = false;
   }
+}
+
+void FlowTraceWriter::set_output_dir(const std::string& dir_path) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (output_file_.is_open()) {
+    output_file_.close();
+  }
+
+  std::error_code ec;
+  std::filesystem::create_directories(dir_path, ec);
+  if (ec) {
+    std::cerr << "[FlowTrace] Failed to create output directory: " << dir_path
+              << ", error: " << ec.message() << std::endl;
+    file_enabled_ = false;
+    dir_enabled_ = false;
+    output_dir_.clear();
+    return;
+  }
+
+  output_dir_ = dir_path;
+  file_enabled_ = false;
+  dir_enabled_ = true;
 }
 
 void FlowTraceWriter::set_stdout_enabled(bool enabled) {
@@ -230,6 +399,39 @@ void FlowTraceWriter::write_event(const FlowTraceEvent& event) {
 
   if (file_enabled_ && output_file_.is_open()) {
     output_file_ << json_line << std::endl;
+  }
+
+  if (dir_enabled_) {
+    // 目录模式：直接在 FLOW_TRACE_DIR 下按“日期 + clientSessionId”命名文件，不再创建日期子目录。
+    const std::string event_date = extract_event_date(event);
+    std::string client_session_id = extract_label_value(event.labels, "clientSessionId");
+    if (client_session_id.empty()) {
+      client_session_id = "unknown_client_session";
+    }
+    client_session_id = sanitize_for_filename(client_session_id);
+    if (client_session_id.empty()) {
+      client_session_id = "unknown_client_session";
+    }
+
+    const std::filesystem::path output_dir_path = std::filesystem::path(output_dir_);
+    std::error_code dir_ec;
+    std::filesystem::create_directories(output_dir_path, dir_ec);
+    if (dir_ec) {
+      std::cerr << "[FlowTrace] Failed to create output directory: " << output_dir_path.string()
+                << ", error: " << dir_ec.message() << std::endl;
+      return;
+    }
+
+    const std::string file_name = "flow_trace_" + event_date + "_" + client_session_id + ".ndjson";
+    const std::filesystem::path file_path = output_dir_path / file_name;
+    // 目录模式下按事件写入后立即关闭，避免高并发会话导致文件句柄持续累积。
+    std::ofstream output_stream(file_path.string(), std::ios::app);
+    if (!output_stream.is_open()) {
+      std::cerr << "[FlowTrace] Failed to open output file: " << file_path.string()
+                << std::endl;
+      return;
+    }
+    output_stream << json_line << std::endl;
   }
 }
 

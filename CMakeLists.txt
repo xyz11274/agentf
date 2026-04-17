@@ -654,6 +654,39 @@ if(AGENTFLOW_BUILD_TESTS)
     set_tests_properties(AgentFlowGoogleTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
   endif()
 
+  set(_flow_trace_ut_dir "${CMAKE_BINARY_DIR}/flow_trace_ut_out")
+  file(MAKE_DIRECTORY "${_flow_trace_ut_dir}")
+
+  add_executable(test_flow_trace_gtest
+    ${AGENTFLOW_TEST_DIR}/unit/src/test_flow_trace_gtest.cpp
+  )
+  if(TARGET GTest::gtest)
+    target_link_libraries(test_flow_trace_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)
+  else()
+    target_link_libraries(test_flow_trace_gtest PRIVATE agentflow ${GTEST_LIBRARIES})
+    if(GTEST_INCLUDE_DIRS)
+      target_include_directories(test_flow_trace_gtest PRIVATE ${GTEST_INCLUDE_DIRS})
+    endif()
+  endif()
+  if(NOT MSVC)
+    target_compile_options(test_flow_trace_gtest PRIVATE -Wno-non-virtual-dtor)
+  endif()
+
+  add_test(NAME FlowTraceWriter_NoFlowTraceDir
+    COMMAND test_flow_trace_gtest --gtest_filter=FlowTraceWriterTest.WriteWithoutConfiguredDir)
+  add_test(NAME FlowTraceWriter_WithFlowTraceDir
+    COMMAND test_flow_trace_gtest --gtest_filter=FlowTraceWriterTest.WriteWithFlowTraceDirEnv)
+  if(AGENTFLOW_TEST_ENV)
+    set_tests_properties(FlowTraceWriter_NoFlowTraceDir PROPERTIES
+      ENVIRONMENT "${AGENTFLOW_TEST_ENV};FLOW_TRACE_DIR=")
+    set_tests_properties(FlowTraceWriter_WithFlowTraceDir PROPERTIES
+      ENVIRONMENT "${AGENTFLOW_TEST_ENV};FLOW_TRACE_DIR=${_flow_trace_ut_dir}")
+  else()
+    set_tests_properties(FlowTraceWriter_NoFlowTraceDir PROPERTIES ENVIRONMENT "FLOW_TRACE_DIR=")
+    set_tests_properties(FlowTraceWriter_WithFlowTraceDir PROPERTIES
+      ENVIRONMENT "FLOW_TRACE_DIR=${_flow_trace_ut_dir}")
+  endif()
+
   # Add tests subdirectory
   add_subdirectory(tests)
 
@@ -732,6 +765,33 @@ if(AGENTFLOW_BUILD_TESTS)
       set_tests_properties(AgentFlowSimpleTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
     endif()
     # Note: test_adapter_isolation requires Google Test and is skipped when GTest is not available
+
+    set(_flow_trace_ut_dir "${CMAKE_BINARY_DIR}/flow_trace_ut_out")
+    file(MAKE_DIRECTORY "${_flow_trace_ut_dir}")
+
+    add_executable(test_flow_trace_simple
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_flow_trace_simple.cpp
+    )
+    target_link_libraries(test_flow_trace_simple PRIVATE agentflow)
+    if(NOT MSVC)
+      target_compile_options(test_flow_trace_simple PRIVATE -Wno-non-virtual-dtor)
+    endif()
+
+    add_test(NAME FlowTraceWriter_NoFlowTraceDir
+      COMMAND test_flow_trace_simple)
+    add_test(NAME FlowTraceWriter_WithFlowTraceDir
+      COMMAND test_flow_trace_simple)
+    if(AGENTFLOW_TEST_ENV)
+      set_tests_properties(FlowTraceWriter_NoFlowTraceDir PROPERTIES
+        ENVIRONMENT "${AGENTFLOW_TEST_ENV};FLOW_TRACE_DIR=;FLOW_TRACE_TEST_MODE=noenv")
+      set_tests_properties(FlowTraceWriter_WithFlowTraceDir PROPERTIES
+        ENVIRONMENT "${AGENTFLOW_TEST_ENV};FLOW_TRACE_DIR=${_flow_trace_ut_dir};FLOW_TRACE_TEST_MODE=withenv")
+    else()
+      set_tests_properties(FlowTraceWriter_NoFlowTraceDir PROPERTIES
+        ENVIRONMENT "FLOW_TRACE_DIR=;FLOW_TRACE_TEST_MODE=noenv")
+      set_tests_properties(FlowTraceWriter_WithFlowTraceDir PROPERTIES
+        ENVIRONMENT "FLOW_TRACE_DIR=${_flow_trace_ut_dir};FLOW_TRACE_TEST_MODE=withenv")
+    endif()
   endif()
 else()
   message(STATUS "Tests disabled (AGENTFLOW_BUILD_TESTS=OFF)")

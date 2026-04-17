@@ -19,11 +19,11 @@
 **数据来源**：`FlowTraceWriter`（`include/internal/runtime/flow_trace.h`）
 
 ```bash
-# 通过环境变量启用文件输出
-export FLOW_TRACE_FILE=/path/to/trace.ndjson
+# 通过环境变量启用目录输出（每个会话/客户端一条 NDJSON，文件名含日期与 clientSessionId）
+export FLOW_TRACE_DIR=/path/to/flow_trace_logs
 ./your_agent_program
 
-# 然后在浏览器中打开
+# 然后在浏览器中打开 flow_trace_viewer，加载目录下生成的 .ndjson 文件
 open tools/flow_trace_viewer/index.html
 ```
 

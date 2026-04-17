@@ -135,6 +135,7 @@ class FlowTraceWriter {
 
   // Configuration
   void set_output_file(const std::string& path);
+  void set_output_dir(const std::string& dir_path);
   void set_stdout_enabled(bool enabled);
   void set_enabled(bool enabled);
 
@@ -155,9 +156,11 @@ class FlowTraceWriter {
 
   mutable std::mutex mutex_;
   std::ofstream output_file_;
+  std::string output_dir_;
   bool enabled_        = true;
   bool stdout_enabled_ = true;
   bool file_enabled_   = false;
+  bool dir_enabled_    = false;
 };
 
 // ============================================================================

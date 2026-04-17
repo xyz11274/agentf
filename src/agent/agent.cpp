@@ -1517,7 +1517,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     DataVariant pending_count_value;
     long pending_count = 0;
     if(get_data(pending_count_key, pending_count_value)) {
-      if(const auto* count_ptr = std::get_if<long>(&pending_count_value)) {
+      if(const auto* count_ptr = std::get_if<int64_t>(&pending_count_value)) {
         pending_count = *count_ptr;
       } else if(const auto* count_str = std::get_if<std::string>(&pending_count_value)) {
         pending_count = std::stol(*count_str);
@@ -1761,7 +1761,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       DataVariant pending_count_value;
       long pending_count = 0;
       if(get_data(pending_count_key, pending_count_value)) {
-        if(const auto* count_ptr = std::get_if<long>(&pending_count_value)) {
+        if(const auto* count_ptr = std::get_if<int64_t>(&pending_count_value)) {
           pending_count = *count_ptr;
         } else if(const auto* count_str = std::get_if<std::string>(&pending_count_value)) {
           pending_count = std::stol(*count_str);
@@ -1821,7 +1821,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         DataVariant pending_count_value;
         long pending_count = 0;
         if(get_data(pending_count_key, pending_count_value)) {
-          if(const auto* count_ptr = std::get_if<long>(&pending_count_value)) {
+          if(const auto* count_ptr = std::get_if<int64_t>(&pending_count_value)) {
             pending_count = *count_ptr;
           } else if(const auto* count_str = std::get_if<std::string>(&pending_count_value)) {
             pending_count = std::stol(*count_str);
@@ -2288,7 +2288,7 @@ bool MMAgent::launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
     DataVariant pending_count_value;
     long pending_count = 0;
     if(get_data(pending_count_key, pending_count_value)) {
-      if(const auto* count_ptr = std::get_if<long>(&pending_count_value)) {
+      if(const auto* count_ptr = std::get_if<int64_t>(&pending_count_value)) {
         pending_count = *count_ptr;
       } else if(const auto* count_str = std::get_if<std::string>(&pending_count_value)) {
         pending_count = std::stol(*count_str);
@@ -2422,7 +2422,7 @@ MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
         DataVariant pending_value;
         long pending_count = 0;
         if(get_data(pending_key, pending_value)) {
-          if(const auto* count_ptr = std::get_if<long>(&pending_value)) {
+          if(const auto* count_ptr = std::get_if<int64_t>(&pending_value)) {
             pending_count = *count_ptr;
           } else if(const auto* count_str = std::get_if<std::string>(&pending_value)) {
             pending_count = std::stol(*count_str);
