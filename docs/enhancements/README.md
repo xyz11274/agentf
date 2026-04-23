@@ -93,6 +93,7 @@
 | 031 | 2026-04-05 | [Coordinator 协同机制设计分析](031-feature-coordinator-协同机制设计分析-260405-tbd.md) | feature | tbd | Coordinator协同判定与多轮规划机制需增强 |
 | 032 | 2026-04-05 | [Dispatcher Coordinator Skill 与 DataBus 可观测性分析](032-feature-dispatcher-coordinator-databus-observability-260405-tbd.md) | feature | tbd | 多任务协同与DataBus并发场景下日志与运维定界能力不足 |
 | 033 | 2026-04-08 | [虚拟 Skill（意图分类）编排能力](033-feature-virtual-skill-intent-classification-260408-tbd.md) | feature | tbd | 意图分类不落重工具链路，结构化结果交给 coordinator 驱动下一阶段 loop |
+| 034 | 2026-04-23 | [AgentFlow 双集成与跨节点 DataBus 适配层设计](034-feature-agentflow-双集成与跨节点databus适配层设计-260423-tbd.md) | feature | tbd | 统一 so/in-process 与进程集成接口，并将跨节点 DataBus 升级为多中间件适配层 |
 
 ## 按状态分类
 
@@ -105,6 +106,7 @@
 | 031 | 2026-04-05 | [Coordinator 协同机制设计分析](031-feature-coordinator-协同机制设计分析-260405-tbd.md) | Coordinator协同判定与多轮规划机制需增强 |
 | 032 | 2026-04-05 | [Dispatcher Coordinator Skill 与 DataBus 可观测性分析](032-feature-dispatcher-coordinator-databus-observability-260405-tbd.md) | 多任务协同与DataBus并发场景下日志与运维定界能力不足 |
 | 033 | 2026-04-08 | [虚拟 Skill（意图分类）编排能力](033-feature-virtual-skill-intent-classification-260408-tbd.md) | 意图分类不落重工具链路，结构化结果交给 coordinator 驱动下一阶段 loop |
+| 034 | 2026-04-23 | [AgentFlow 双集成与跨节点 DataBus 适配层设计](034-feature-agentflow-双集成与跨节点databus适配层设计-260423-tbd.md) | 统一 so/in-process 与进程集成接口，并将跨节点 DataBus 升级为多中间件适配层 |
 
 ### 进行中 (wip)
 
