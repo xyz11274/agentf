@@ -1,5 +1,7 @@
 # AgentFlow C++ Repository Analysis
 
+> **合并说明（2026-04-23）**：构建命令、架构分层、DSL/测试目录等摘要已并入 [`docs/enhancements/034-feature-agentflow-双集成与跨节点databus适配层设计-260423-tbd.md`](docs/enhancements/034-feature-agentflow-双集成与跨节点databus适配层设计-260423-tbd.md) **§14 附录 B**；其中对 `docs/REFACTORING.md` 路径的表述以 `docs/enhancements/README.md` 为准。下文保留英文原文便于对照。
+
 ## 1. BUILD, TEST, AND LINT COMMANDS
 
 ### Build Commands

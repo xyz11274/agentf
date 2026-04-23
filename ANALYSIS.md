@@ -1,5 +1,7 @@
 # AgentFlow C++ Repository - Comprehensive Analysis
 
+> **合并说明（2026-04-23）**：与本文件主题（DataBus、SO 节点 API、MMNode/Worker 执行链等）直接相关的结论已并入 [`docs/enhancements/034-feature-agentflow-双集成与跨节点databus适配层设计-260423-tbd.md`](docs/enhancements/034-feature-agentflow-双集成与跨节点databus适配层设计-260423-tbd.md) **§13 附录 A**。下文保留英文原文便于对照，新增设计请以 enhancement 为准。
+
 ## 1. REFACTORING.md Structure Analysis
 
 **File Status**: The old `docs/REFACTORING.md` (5427 lines) has been moved to `/docs/enhancements/` directory structure with individual enhancement files.

@@ -282,9 +282,82 @@ flowchart LR
 | 远程写入批处理 | 提升跨节点吞吐 | 增加批量 put/get 与压缩选项 |
 | 多租户鉴权 | 增强安全隔离 | UDS 与远程存储统一接入 token/ACL |
 
-### 13. 修订记录
+### 13. 附录 A：仓库代码与 DataBus / Node / Worker 链综合分析（合并自 `ANALYSIS.md`）
+
+以下将仓库根目录 `ANALYSIS.md` 中与**本 issue（双集成、DataBus、进程侧执行）**直接相关的结论并入，便于评审时单文档闭环；原文仍为英文长文，可作细节对照。
+
+#### 13.1 对外 DataBus 与 SO 节点 API（`include/external/agentflow/so_node.h`）
+
+- **V1**：`void node(const SoDataMap& inputs, SoDataMap& outputs)`
+- **V2**：增加 `INodeDataBus*`，KV + topic 订阅 + `kv_dir`/`events_dir`
+- **V3（推荐）**：`INodeDataBusClient*`（`sys/ctx/llm/tool/user` 命名空间 + `session_id()` + `raw()`），键前缀形如 `/session/{session-id}/{namespace}/{key}`
+
+#### 13.2 内部 MMNode 与 Worker 委托（`include/internal/workflow/node.h` 等）
+
+- `MMNode::execute_with_worker_engine()` 组装 `MMWorkerEngine::ExecutionRequest`（含 `databus_`、`databus_client_->session_id()`、`plugin_uds_path_`），调用 **`MMWorkerEngine::execute_code(request)`** 静态入口。
+- `MMWorkerEngine` 对 SO 库按 V1/V2/V3 符号加载执行；脚本/可执行文件子进程注入环境变量：`AF_DATABUS_UDS_FILE`、`AF_SESSION_ID`、`AF_SELF_TASK_ID`、`AF_PLUGIN_UDS_FILE`、`AF_SELF_NODE_ID` 等。
+
+#### 13.3 MMDataBus 混合架构（与 §4、§5 对齐）
+
+- **本地**：`LocalDatabus` / `ZeroCopyDataBus`（共享内存工厂：`create_in_process`、`create_posix_shared`、`create_systemv_shared`、`create_best`）。
+- **远程**：`RemoteDatabus::connect(address)`；读写语义为 **写穿本地 + 可选远程同步；读穿本地，miss 则远程回填**；订阅在本地与远程侧均需挂接。
+- **大对象**：`store_with_ref` / `resolve_ref`；多响应：`index_data_ref` / `find_indexed_refs`（与 enhancement 020/022 文档一致）。
+
+#### 13.4 `vendor/adapter` 现状与本 issue 的缺口
+
+- `vendor/adapter/network/` **为空**：无通用 HTTP/gRPC 适配；与本 issue「统一服务语义 + 可插拔远程存储」的动机一致。
+- `StreamingLLMClient`：基于 curl 的 SSE，**非通用流式 RPC**；若未来统一「服务层流式」，需单独纳入 API 设计，不在本 issue 首阶段强制范围。
+
+#### 13.5 规划向文档结构的建议（来自原 `ANALYSIS.md` §11）
+
+- 架构决策 → `docs/architecture/`；跟踪项 → `docs/enhancements/`（已落实）；开发指南 / API 参考 / 示例说明可按需拆分，避免再出现单文件数千行难以维护的情况。
+
+### 14. 附录 B：构建、架构分层、DSL 与工程约定（合并自 `AGENTFLOW_ANALYSIS.md`）
+
+以下内容将仓库根目录 `AGENTFLOW_ANALYSIS.md` 中与**集成方、CI、新人上手**相关的条目并入本 issue，便于与 `publish/INTEGRATION_GUIDE.md`、`docs/ARCHITECTURE.md` 交叉引用。
+
+#### 14.1 构建与测试命令（摘要）
+
+- 构建：`./build.sh build` / `Release` / `RelWithDebInfo` / `clean` / `rebuild`
+- 测试：`./build.sh test` 或 `ctest --test-dir build --output-on-failure`；单测过滤示例：`ctest --test-dir build -R NodeTests`
+- 示例：`./build.sh example <name>`
+- 代码质量：项目无统一 lint target；可用 `clang-format`、`clang-tidy`、`cppcheck` 等（详见原文）
+
+#### 14.2 高层架构与本 issue 的映射
+
+- **Framework 层**：MMAgent / MMWorkflow / MMNode（编排与图）
+- **Runtime 层**：`MMAgentRuntime`（Scheduler + Deployer）、`MMWorkerEngine`
+- **基础设施**：`MMDataBus` + `vendor/adapter`（ProtoActor、Redis、RapidJSON 等）
+- **三层调度表述**：`MMAgent(Master) → MMWorkflow(Master) → MMNode(Worker)` — 与 enhancement **026**（Master/Worker 职责边界）及新增 **035**（分进程部署）直接相关：当前代码路径上仍存在 Master 侧直接操作 Node 的历史问题，分进程化必须以 **RPC/消息边界** 收口。
+
+#### 14.3 头文件布局与对外 API 面
+
+- `include/external/`：集成方可见的稳定 API（含 `agentflow/so_node.h`）
+- `include/internal/`：仅框架内部实现
+
+#### 14.4 DSL 与 `agent.json` 参考路径
+
+- Workflow DSL：`publish/workflow/workflow_sample.jsonc`，解析 `src/workflow/dsl/workflow_parser.cpp`
+- Agent 包：`publish/agent/agent.json`、`publish/agent/AGENT_PACKAGE_SPEC.md`
+
+#### 14.5 CMake 可选特性标志（与远程存储相关）
+
+- `AGENTFLOW_WITH_REDIS`：Redis 适配；**本 issue 目标**是运行时可选仍保留，但 **RemoteDatabus 不再硬编码依赖 Redis 头文件**（见 §8）。
+- 其他：`AGENTFLOW_WITH_PROTOACTOR`、`AGENTFLOW_WITH_RAPIDJSON`、`AGENTFLOW_WITH_OPENSSL` 等；依赖缺失时期望走 stub — 合并文档强调勿随意删除 fallback 路径。
+
+#### 14.6 示例与测试目录（摘录）
+
+- `examples/agent/`：`basic_agent`、`multi_session_chat`、`llm_query_agent` 等；`examples/features/` 含 runner 设计文档
+- `tests/unit/src/`：`test_agent_gtest`、`test_workflow_gtest`、`test_node_gtest`、`test_databus_gtest` 等
+
+#### 14.7 原 `AGENTFLOW_ANALYSIS.md` 中已过时表述的勘误
+
+- 原文档表格仍列 `docs/REFACTORING.md` 为路线图主入口；实际 **大块内容已拆分为 `docs/enhancements/` 多文件**（与附录 A §1 所述一致）。以本目录 README 与单条 enhancement 为准。
+
+### 15. 修订记录
 
 | 版本 | 刷新时间 | 刷新人 | 刷新内容 |
 |------|---------|--------|---------|
 | v1.0 | 2026-04-23 | AI | 初始版本：双集成统一接口与跨节点 DataBus 适配层设计，含业界调研、分阶段实施与测试方案 |
+| v1.1 | 2026-04-23 | AI | 合并仓库根目录 `ANALYSIS.md`、`AGENTFLOW_ANALYSIS.md` 与本 issue 相关章节为附录 A/B；勘误 REFACTORING 路径表述 |
 
