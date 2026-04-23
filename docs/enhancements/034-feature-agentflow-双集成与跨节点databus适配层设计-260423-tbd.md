@@ -284,7 +284,7 @@ flowchart LR
 
 ### 13. 附录 A：仓库代码与 DataBus / Node / Worker 链综合分析（合并自 `ANALYSIS.md`）
 
-以下将仓库根目录 `ANALYSIS.md` 中与**本 issue（双集成、DataBus、进程侧执行）**直接相关的结论并入，便于评审时单文档闭环；原文仍为英文长文，可作细节对照。
+以下内容来自已删除的仓库根目录 `ANALYSIS.md`（2026-04-23 合并后删除），仅保留与本 issue（双集成、DataBus、进程侧执行）直接相关的结论，便于评审时单文档闭环。
 
 #### 13.1 对外 DataBus 与 SO 节点 API（`include/external/agentflow/so_node.h`）
 
@@ -314,7 +314,7 @@ flowchart LR
 
 ### 14. 附录 B：构建、架构分层、DSL 与工程约定（合并自 `AGENTFLOW_ANALYSIS.md`）
 
-以下内容将仓库根目录 `AGENTFLOW_ANALYSIS.md` 中与**集成方、CI、新人上手**相关的条目并入本 issue，便于与 `publish/INTEGRATION_GUIDE.md`、`docs/ARCHITECTURE.md` 交叉引用。
+以下内容来自已删除的仓库根目录 `AGENTFLOW_ANALYSIS.md`（2026-04-23 合并后删除），仅保留与**集成方、CI、新人上手**相关的条目，便于与 `publish/INTEGRATION_GUIDE.md`、`docs/ARCHITECTURE.md` 交叉引用。
 
 #### 14.1 构建与测试命令（摘要）
 
@@ -360,4 +360,5 @@ flowchart LR
 |------|---------|--------|---------|
 | v1.0 | 2026-04-23 | AI | 初始版本：双集成统一接口与跨节点 DataBus 适配层设计，含业界调研、分阶段实施与测试方案 |
 | v1.1 | 2026-04-23 | AI | 合并仓库根目录 `ANALYSIS.md`、`AGENTFLOW_ANALYSIS.md` 与本 issue 相关章节为附录 A/B；勘误 REFACTORING 路径表述 |
+| v1.2 | 2026-04-23 | AI | 根目录 `ANALYSIS.md`、`AGENTFLOW_ANALYSIS.md` 已删除；附录 A/B 为唯一留存正文 |
 
