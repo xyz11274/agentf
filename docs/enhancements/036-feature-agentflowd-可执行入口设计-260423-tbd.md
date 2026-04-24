@@ -118,7 +118,8 @@ main()
 struct DaemonConfig {
   // Server
   std::string listen = "0.0.0.0:7890";        // TCP 监听地址
-  std::string uds_path = "/tmp/agentflowd.sock"; // UDS 业务套接字（本地客户端）
+  std::string uds_biz_path = "/tmp/agentflowd_biz.sock";   // UDS 业务套接字（请求执行、响应推送）
+  std::string uds_ctrl_path = "/tmp/agentflowd_ctrl.sock";  // UDS 控制套接字（状态查询、Agent 管理、关机等）
   int         max_connections = 1024;           // 最大并发客户端连接
 
   // Runtime
@@ -154,7 +155,8 @@ struct DaemonConfig {
 {
   "server": {
     "listen": "0.0.0.0:7890",
-    "uds_path": "/tmp/agentflowd.sock",
+    "uds_biz_path": "/tmp/agentflowd_biz.sock",
+    "uds_ctrl_path": "/tmp/agentflowd_ctrl.sock",
     "max_connections": 1024
   },
   "runtime": {
@@ -196,7 +198,8 @@ struct DaemonConfig {
 | DaemonConfig 字段 | CLI 参数 | 环境变量 | JSON 配置键 | 默认值 | 备注 |
 |---|---|---|---|---|---|
 | `listen` | `--listen` | `AF_LISTEN` | `server.listen` | `0.0.0.0:7890` | |
-| `uds_path` | `--uds-path` | `AF_UDS_PATH` | `server.uds_path` | `/tmp/agentflowd.sock` | |
+| `uds_biz_path` | `--uds-biz-path` | `AF_UDS_BIZ_PATH` | `server.uds_biz_path` | `/tmp/agentflowd_biz.sock` | 业务 UDS |
+| `uds_ctrl_path` | `--uds-ctrl-path` | `AF_UDS_CTRL_PATH` | `server.uds_ctrl_path` | `/tmp/agentflowd_ctrl.sock` | 控制 UDS |
 | `max_connections` | `--max-connections` | — | `server.max_connections` | `1024` | 无环境变量 |
 | `runtime_config.role` | `--role` | — | `runtime.role` | `master` | 无环境变量 |
 | `runtime_config.worker_threads` | `--worker-threads` | — | `runtime.worker_threads` | `4` | |
@@ -296,7 +299,7 @@ main()
   │     （必须在 runtime->start() 之后，否则 task poller 未就绪）
   ├── 10. 创建 EventBroker → register_event_handler
   ├── 11. 创建 ResponsePoller → 启动轮询线程
-  ├── 12. 启动 RPC Server（TCP listener + UDS listener）
+  ├── 12. 启动 RPC Server（TCP listener + UDS 业务 listener + UDS 控制 listener）
   ├── 13. 写 PID 文件
   └── 14. 主线程阻塞等待关机信号
 ```
@@ -372,7 +375,7 @@ Phase 2: STOPPING
   ├── agent_->stop() 逐个停止
   ├── runtime_->stop()
   ├── 关闭所有客户端连接
-  ├── 清理 UDS socket 文件
+  ├── 清理 UDS socket 文件（biz + ctrl）
   └── 删除 PID 文件
       │
       v
@@ -396,7 +399,8 @@ Agent 加载:
 
 服务:
   --listen ADDR:PORT       TCP 监听地址（默认 0.0.0.0:7890）
-  --uds-path PATH          UDS 业务套接字路径（默认 /tmp/agentflowd.sock）
+  --uds-biz-path PATH      UDS 业务套接字路径（默认 /tmp/agentflowd_biz.sock）
+  --uds-ctrl-path PATH     UDS 控制套接字路径（默认 /tmp/agentflowd_ctrl.sock）
   --max-connections N      最大并发客户端连接（默认 1024）
 
 Runtime:
@@ -415,20 +419,42 @@ Runtime:
   --version / --help
 ```
 
-环境变量沿用 `AF_` 前缀：`AF_CONFIG_FILE`, `AF_LISTEN`, `AF_UDS_PATH`, `AF_LOG_LEVEL`, `AF_LOG_FILE`
+环境变量沿用 `AF_` 前缀：`AF_CONFIG_FILE`, `AF_LISTEN`, `AF_UDS_BIZ_PATH`, `AF_UDS_CTRL_PATH`, `AF_LOG_LEVEL`, `AF_LOG_FILE`
 
 #### 7.2 RPC 方法接口
 
 协议：JSON-RPC 2.0 over TCP/UDS，换行符分隔帧。可选 WebSocket 升级。
 
-**双通道设计**：
+**三通道设计**：
 
-| 通道 | 用途 | 说明 |
-|------|------|------|
-| TCP (`--listen`) | 业务请求 + 远程访问 | 支持跨机器访问，可选 WebSocket 升级 |
-| UDS (`--uds-path`) | 业务请求 + 本地访问 | 本地客户端零网络开销，同进程级延迟 |
+| 通道 | 用途 | 允许的 RPC 方法 | 说明 |
+|------|------|----------------|------|
+| TCP (`--listen`) | 业务请求 + 远程访问 | 全部 | 支持跨机器访问，可选 WebSocket 升级 |
+| UDS 业务 (`--uds-biz-path`) | 业务请求 + 本地服务集成 | `agent.execute`, `agent.poll_response`, `agent.send_control`, `databus.*`, `event.*` | 本地零网络开销，af-broker 等本地适配层连接此通道 |
+| UDS 控制 (`--uds-ctrl-path`) | 运维管理 + 本地管理 | `agent.load`, `agent.unload`, `agent.list`, `agent.info`, `agent.pause`, `agent.resume`, `session.*`, `workflow.*`, `worker.*`, `runtime.*`, `metrics.*`, `health` | 仅本地访问，不暴露到网络；控制操作与业务流量隔离，互不影响 |
 
-两个通道提供**完全相同的 RPC 方法集**，客户端根据部署场景选择：本地服务集成用 UDS，远程/跨语言客户端用 TCP。不再区分"管理通道"和"业务通道"——所有方法在两个通道上均可调用。
+**设计理由**：
+
+1. **业务/控制隔离** — 高频业务请求（`agent.execute`）和低频管理操作（`agent.load`、`runtime.shutdown`）走不同通道，避免管理操作被业务流量挤占或阻塞
+2. **安全边界** — 控制 UDS 仅本地可访问（文件权限控制），不暴露到网络；业务 UDS 可通过 af-broker 等适配层转换为 WebSocket/HTTP 对外
+3. **适配层模式** — 外部平台（Web 应用、移动端、第三方系统）不直接连 agentflowd，而是通过 af-broker 等中间适配层，适配层连接本地 UDS 通道
+
+**af-broker 适配示意**：
+
+```
+┌──────────────┐    WebSocket     ┌──────────────┐    UDS 业务    ┌──────────────┐
+│  Web/移动端   │ ◄─────────────► │  af-broker   │ ◄────────────► │  agentflowd  │
+│  外部客户端   │    (业务流量)    │  (Go 进程)   │   (JSON-RPC)   │  (C++ 守护)  │
+└──────────────┘                  └──────┬───────┘                └──────────────┘
+                                         │
+                                         │ UDS 控制
+                                         │ (JSON-RPC)
+                                         ▼
+                                  ┌──────────────┐    HTTP       ┌──────────────┐
+                                  │  af-broker   │ ◄─────────── │  运维/管理    │
+                                  │  (HTTP API)  │   (管理操作)  │  工具/脚本    │
+                                  └──────────────┘              └──────────────┘
+```
 
 **Agent 管理**
 
@@ -572,20 +598,34 @@ private:
 };
 ```
 
-**RpcServer** — TCP/UDS 监听 + JSON-RPC 分发
+**RpcServer** — TCP + 双 UDS 监听 + JSON-RPC 分发，三通道方法访问控制
 
 ```cpp
+// 通道类型，用于方法访问控制
+enum class ChannelType {
+  TCP,       // 全部方法
+  UDS_BIZ,   // 业务方法: agent.execute/poll_response/send_control, databus.*, event.*
+  UDS_CTRL   // 控制方法: agent.load/unload/list/info/pause/resume, session.*, workflow.*, worker.*, runtime.*, metrics.*, health
+};
+
 class RpcServer {
 public:
-  bool start(const std::string& listen_addr, const std::string& uds_path);
+  bool start(const std::string& listen_addr,
+             const std::string& uds_biz_path,
+             const std::string& uds_ctrl_path);
   void stop();
   void register_handler(const std::string& method, RpcMethodHandler handler);
   void send_notification(int client_fd, const std::string& method, const std::string& params_json);
 
+  // 方法访问控制：每个通道维护允许的方法集合
+  static bool is_method_allowed(ChannelType channel, const std::string& method);
+
 private:
-  void accept_loop();     // TCP accept 线程
-  void uds_accept_loop(); // UDS accept 线程
-  void client_handler(int fd);  // 客户端读写循环
+  void tcp_accept_loop();
+  void uds_biz_accept_loop();
+  void uds_ctrl_accept_loop();
+  void client_handler(int fd, ChannelType channel);
+  // 三个监听线程，共享 handler 注册表和 notification 通道
 };
 ```
 
@@ -707,7 +747,166 @@ std::string ws_handshake_response(const std::string& sec_ws_key);
 // WebSocket 帧解包/打包（mask/unmask，~50 行代码）
 ```
 
-#### 8.5 待修改文件清单
+#### 8.5 af-broker 适配层服务
+
+af-broker 是一个 Go 语言实现的适配层服务，演示外部平台如何通过标准 Web 协议接入 agentflowd。其核心职责是将外部平台的请求翻译为 agentflowd 的 JSON-RPC 调用。
+
+**设计目标**：
+1. **外部接入** — 对外暴露 WebSocket（业务流量）和 HTTP（管理操作），使浏览器/移动端/第三方系统能使用 AgentFlow
+2. **协议转换** — WebSocket ↔ JSON-RPC over UDS-biz，HTTP ↔ JSON-RPC over UDS-ctrl
+3. **会话映射** — 将 WebSocket 连接映射为 agentflowd 的 user_id + client_id，维持会话亲和性
+4. **流式推送** — agentflowd 的 JSON-RPC notification 通过 WebSocket 推送到对应客户端
+
+**项目结构**：
+
+```
+examples/features/service/af-broker/
+  go.mod                   # module github.com/agentflow/af-broker
+  main.go                  # 入口: 配置加载, 启动 WebSocket + HTTP 服务
+  config.go                # BrokerConfig: 监听地址, UDS 路径, 日志等
+  uds_client.go            # UDS JSON-RPC 2.0 客户端（连接管理, 换行符帧, 请求/响应/通知）
+  ws_handler.go            # WebSocket 连接处理, 会话映射, 消息转发
+  http_handler.go          # HTTP API 路由, 参数转换, JSON-RPC 调用
+  session_map.go           # WebSocket 连接 ↔ agentflowd session 映射
+```
+
+**配置**（`BrokerConfig`）：
+
+```go
+type BrokerConfig struct {
+    // 对外监听
+    WSListen   string // WebSocket 监听地址 (默认 "0.0.0.0:8080")
+    HTTPListen string // HTTP 监听地址 (默认 "127.0.0.1:8081")
+
+    // agentflowd UDS 连接
+    UDSBizPath  string // 业务 UDS 路径 (默认 "/tmp/agentflowd_biz.sock")
+    UDSCtrlPath string // 控制 UDS 路径 (默认 "/tmp/agentflowd_ctrl.sock")
+
+    // 转发配置
+    AgentID      string // 默认 Agent ID (多 Agent 时按需指定)
+    PollTimeout  int    // agent.poll_response 超时 ms (默认 5000)
+    QuietWindow  int    // quiet window ms (默认 200)
+
+    // 会话配置
+    SessionTTL   int    // WebSocket 断开后 session 保留秒数 (默认 300)
+}
+```
+
+**WebSocket 协议（业务通道）**：
+
+WebSocket 连接用于双向业务通信，消息格式为 JSON，映射到 agentflowd 的 JSON-RPC 方法：
+
+| 客户端 → af-broker (WebSocket JSON) | af-broker → agentflowd (UDS-biz JSON-RPC) | 说明 |
+|-------------------------------------|-------------------------------------------|------|
+| `{"type": "execute", "content": "...", "trace_labels?": "...", "dialogue_id?": "..."}` | `agent.execute` | 提交用户请求 |
+| `{"type": "poll", "timeout_ms?": N}` | `agent.poll_response` | 主动轮询响应 |
+| `{"type": "control", "command": "SESSION_INTERRUPT", "session_id": "..."}` | `agent.send_control` | 控制命令 |
+| `{"type": "subscribe", "event_types": [...]}` | `event.subscribe` | 事件订阅 |
+| `{"type": "databus.put", ...}` | `databus.put` | DataBus 操作 |
+
+af-broker → 客户端推送：
+
+| af-broker ← agentflowd (UDS-biz notification) | 客户端 ← af-broker (WebSocket JSON) | 说明 |
+|-----------------------------------------------|-------------------------------------|------|
+| `agent.response` notification | `{"type": "response", "content": "...", "metadata": {...}, "final": true/false}` | 响应推送 |
+| `event.*` notification | `{"type": "event", "event_type": "task", "params": {...}}` | 事件推送 |
+
+**HTTP API（控制通道）**：
+
+| HTTP 方法 | 路径 | 映射到 UDS-ctrl JSON-RPC | 说明 |
+|-----------|------|--------------------------|------|
+| GET | `/api/agents` | `agent.list` | 列出 Agent |
+| GET | `/api/agents/{id}` | `agent.info` | Agent 详情 |
+| POST | `/api/agents` | `agent.load` | 加载 Agent |
+| DELETE | `/api/agents/{id}` | `agent.unload` | 卸载 Agent |
+| POST | `/api/agents/{id}/pause` | `agent.pause` | 暂停 |
+| POST | `/api/agents/{id}/resume` | `agent.resume` | 恢复 |
+| GET | `/api/agents/{id}/sessions` | `session.list` | 列出 Session |
+| DELETE | `/api/agents/{id}/sessions/{sid}` | `session.destroy` | 销毁 Session |
+| DELETE | `/api/agents/{id}/sessions/{sid}/dialogues/{did}` | `session.clear_dialogue` | 清理 Dialogue |
+| GET | `/api/agents/{id}/workflows` | `workflow.list` | 列出 Workflow |
+| GET | `/api/agents/{id}/workflows/{wid}` | `workflow.info` | Workflow 详情 |
+| GET | `/api/workflow-instances` | `workflow.list_instances` | 已部署实例 |
+| GET | `/api/workers` | `worker.list` | Worker 列表 |
+| GET | `/api/runtime/status` | `runtime.status` | 运行状态 |
+| POST | `/api/runtime/shutdown` | `runtime.shutdown` | 优雅关机 |
+| GET | `/api/health` | `health` | 健康检查 |
+| GET | `/api/metrics` | `metrics.get` (format=json) | Metrics |
+| GET | `/api/metrics/prometheus` | `metrics.get` (format=prometheus) | Prometheus 格式 |
+
+**会话映射**：
+
+```go
+// SessionMap 维护 WebSocket 连接与 agentflowd session 的映射
+type SessionMap struct {
+    mu       sync.RWMutex
+    connMap  map[string]*SessionInfo  // ws_conn_id → SessionInfo
+}
+
+type SessionInfo struct {
+    WsConnID   string           // WebSocket 连接 ID
+    AgentID    string           // 目标 Agent ID
+    UserID     string           // 由 af-broker 分配（如 ws_conn_id 或客户端指定）
+    ClientID   string           // 由 af-broker 分配（标识 af-broker 实例）
+    SessionID  string           // agentflowd 返回的 session ID
+    DialogueID string           // 当前对话 ID
+    UDSConn    *UDSConnection   // 对应的 UDS-biz 连接（可复用）
+    LastActive time.Time        // 最后活跃时间
+}
+```
+
+**映射策略**：
+- 每个 WebSocket 连接自动分配 `user_id = "ws-{conn_id}"`，`client_id = "af-broker-{instance}"`
+- 同一 WebSocket 连接的多次 `execute` 请求复用同一 session（通过 `get_or_create_session` 自动实现）
+- `dialogue_id` 可由客户端指定（多对话隔离），不指定时使用默认对话
+- WebSocket 断开后 session 保留 `SessionTTL` 秒，超时后通过 `session.destroy` 清理
+
+**UDS 客户端连接管理**：
+
+```go
+// UDSConnection 管理 JSON-RPC 2.0 over UDS 连接
+type UDSConnection struct {
+    conn       net.Conn           // UDS 连接
+    encoder    *json.Encoder      // JSON 编码器（写入请求）
+    scanner    *bufio.Scanner     // 换行符分隔扫描器（读取响应/通知）
+    pending    map[int64]chan *RPCResponse  // id → 等待通道
+    notifyChan chan *RPCNotification         // notification 广播通道
+    mu         sync.Mutex
+    nextID     int64
+}
+
+// Connect 建立到 UDS 的连接，启动读取 goroutine
+func Connect(udsPath string) (*UDSConnection, error)
+
+// Call 发送 JSON-RPC 请求并等待响应
+func (c *UDSConnection) Call(method string, params interface{}) (*RPCResponse, error)
+
+// Notifications 返回 notification 通道（用于推送）
+func (c *UDSConnection) Notifications() <-chan *RPCNotification
+```
+
+**业务 UDS 连接池**：多个 WebSocket 客户端共享少量 UDS-biz 连接（默认 1 个，可配置），notification 从共享连接广播到对应 WebSocket 客户端。UDS-ctrl 连接按需创建（HTTP 请求到达时调用，无状态）。
+
+**部署示意**：
+
+```
+┌──────────────┐  WebSocket      ┌──────────────────┐  UDS-biz     ┌──────────────┐
+│  Web 应用     │ ◄────────────► │  af-broker       │ ◄──────────► │  agentflowd  │
+│  (浏览器)     │  :8080         │  (Go 进程)       │  JSON-RPC    │  (C++ 守护)  │
+└──────────────┘                 │                  │              └──────────────┘
+                                 │                  │
+┌──────────────┐  WebSocket      │                  │  UDS-ctrl    ┌──────────────┐
+│  移动端 SDK   │ ◄────────────► │                  │ ◄──────────► │  agentflowd  │
+│              │  :8080         │                  │  JSON-RPC    │  (同上)       │
+└──────────────┘                 │                  │              └──────────────┘
+                                 │                  │
+┌──────────────┐  HTTP           │                  │
+│  运维脚本     │ ◄────────────► │                  │
+│  curl/监控    │  :8081         │                  │
+└──────────────┘                 └──────────────────┘
+```
+
+#### 8.6 待修改文件清单
 
 | 文件 | 修改类型 | 说明 |
 |------|---------|------|
@@ -731,8 +930,15 @@ std::string ws_handshake_response(const std::string& sec_ws_key);
 | `src/daemon/ws_upgrade.h` | 新增 | WebSocket 升级握手（可选） |
 | `src/daemon/ws_upgrade.cpp` | 新增 | HTTP 升级 + frame masking |
 | `CMakeLists.txt` | 修改 | 新增 agentflowd 可执行目标 |
+| `examples/features/service/af-broker/go.mod` | 新增 | Go module 定义 |
+| `examples/features/service/af-broker/main.go` | 新增 | af-broker 入口，配置加载，服务启动 |
+| `examples/features/service/af-broker/config.go` | 新增 | BrokerConfig 结构体与配置加载 |
+| `examples/features/service/af-broker/uds_client.go` | 新增 | UDS JSON-RPC 2.0 客户端，连接管理，换行符帧 |
+| `examples/features/service/af-broker/ws_handler.go` | 新增 | WebSocket 连接处理，会话映射，消息转发 |
+| `examples/features/service/af-broker/http_handler.go` | 新增 | HTTP API 路由，参数转换，JSON-RPC 调用 |
+| `examples/features/service/af-broker/session_map.go` | 新增 | WebSocket 连接 ↔ agentflowd session 映射 |
 
-#### 8.6 功能点实现优先级排序
+#### 8.7 功能点实现优先级排序
 
 | 优先级 | 功能点 | 副作用分析 | 验证策略 |
 |--------|--------|-----------|---------|
@@ -748,6 +954,7 @@ std::string ws_handshake_response(const std::string& sec_ws_key);
 | P4 | metrics.get | 无副作用 | Metrics 导出测试 |
 | P5 | WebSocket 升级 | 无副作用 | 浏览器客户端测试 |
 | P5 | Daemonization + PID 文件 | 无副作用 | 守护进程模式测试 |
+| P5 | af-broker (Go) | 有依赖 P3 | WebSocket + HTTP → UDS 转发测试 |
 
 ---
 
@@ -785,6 +992,7 @@ std::string ws_handshake_response(const std::string& sec_ws_key);
 | GracefulShutdownTest | 执行中 SIGTERM → 等待完成 → 退出 |
 | EventSubscriptionTest | subscribe → 触发事件 → 收到 notification |
 | WebSocketTest | WS 升级 → JSON-RPC 调用 → notification 推送 |
+| af-broker Test | WebSocket → UDS-biz → agentflowd execute/response 全链路；HTTP → UDS-ctrl → agent.list/info 全链路 |
 
 **独立性要求**：所有测试通过启动/停止 agentflowd 子进程进行，不修改框架核心代码。
 
@@ -796,8 +1004,8 @@ std::string ws_handshake_response(const std::string& sec_ws_key);
 
 | 文档 | 变更说明 |
 |------|---------|
-| [INTEGRATION_GUIDE.md](../../publish/INTEGRATION_GUIDE.md) | 新增 "使用 agentflowd 守护进程" 章节，说明 JSON-RPC 集成方式 |
-| [ARCHITECTURE.md](../../docs/ARCHITECTURE.md) | 部署视图新增 agentflowd 进程架构；逻辑视图新增 RPC Server 组件 |
+| [INTEGRATION_GUIDE.md](../../publish/INTEGRATION_GUIDE.md) | 新增 "使用 agentflowd 守护进程" 章节，说明 JSON-RPC 集成方式；新增 "使用 af-broker 接入" 章节 |
+| [ARCHITECTURE.md](../../docs/ARCHITECTURE.md) | 部署视图新增 agentflowd 进程架构 + af-broker 适配层；逻辑视图新增 RPC Server 组件 |
 | [README.md](../../README.md) | 快速开始新增 agentflowd 使用示例 |
 
 #### 关联方案
@@ -808,6 +1016,8 @@ std::string ws_handshake_response(const std::string& sec_ws_key);
 | [022-Multi-Response 机制设计](022-feature-multi-response-机制设计-260319-implemented.md) | agent.execute 的响应通过 notification 推送，支持 multi-response 流式返回 |
 | [030-Node 异步请求机制设计](030-feature-node-异步请求机制设计-260326-implemented.md) | async callback 的结果通过 ResponsePoller 路由到客户端 |
 | [019-Plugin UDS 注入机制设计](019-feature-plugin-uds-注入机制设计-260317-implemented.md) | agentflowd 通过 `runtime_config.plugin_uds_path` 传递 Plugin UDS 路径 |
+
+**af-broker 适配层**（`examples/features/service/af-broker/`）：Go 语言实现的服务化适配层，演示外部平台如何接入 agentflowd。对外开放 WebSocket 接口（连接 agentflowd 业务 UDS），本地开放 HTTP 接口（连接 agentflowd 控制 UDS），负责协议转换和会话映射。
 
 ---
 
@@ -835,6 +1045,7 @@ std::string ws_handshake_response(const std::string& sec_ws_key);
 | agent.execute + ResponsePoller | ⏳待实施 | ⏳待实施 | — | 待实施 |
 | EventBroker | ⏳待实施 | ⏳待实施 | — | 待实施 |
 | WebSocket 升级 | ⏳待实施 | ⏳待实施 | — | 待实施 |
+| af-broker (Go) | ⏳待实施 | ⏳待实施 | ⏳待实施 | 待实施 |
 
 ---
 
@@ -857,3 +1068,4 @@ std::string ws_handshake_response(const std::string& sec_ws_key);
 | v1.0 | 2026-04-23 | xi | 初始版本 |
 | v1.1 | 2026-04-23 | xi | 基于 system_agent_mock e2e 测试修正：1) agent.execute 移除 workflow_id，明确 intent_request 语义；2) UDS 改为业务通道（与 TCP 双通道对等）；3) 启动顺序约束 + CWD 切换；4) 响应完成判定（final 标记 + quiet window）；5) 事件订阅映射到 IEventHandler 调度事件回调；6) process_all_sessions_until_idle 分析 |
 | v1.2 | 2026-04-23 | xi | 补充三路配置交叉映射表、合并规则（逐字段覆盖）、单源配置项说明、agents[] 追加合并规则、冲突示例 |
+| v1.3 | 2026-04-23 | xi | 补充三通道设计：UDS 拆分为业务 UDS + 控制 UDS，RpcServer 支持三通道方法访问控制；新增 af-broker Go 适配层服务设计（WebSocket 业务接口 + HTTP 管理接口，会话映射，UDS 客户端连接管理） |
