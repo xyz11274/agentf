@@ -29,6 +29,7 @@ class RpcServer;
 class RpcHandler;
 class AgentRegistry;
 class ResponsePoller;
+class EventBroker;
 
 enum class ShutdownPhase {
   NONE = 0,

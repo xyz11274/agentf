@@ -770,3 +770,50 @@ graph TB
 
 
 - 2026-03-01：补充 MMAgent/Session/Task/MMNode 四级 context 与 SessionTaskCoordinator（session 0号任务单元）设计说明。
+
+---
+
+## agentflowd — Daemon Service Architecture
+
+`agentflowd` is the standalone daemon executable that wraps the AgentFlow framework as a long-running service, exposing all agent management and execution capabilities via JSON-RPC 2.0 over TCP and dual Unix Domain Sockets.
+
+### Three-Channel RPC
+
+| Channel | Socket | Methods |
+|---------|--------|---------|
+| TCP | `0.0.0.0:7890` | All methods |
+| UDS-BIZ | `/tmp/agentflowd_biz.sock` | Business: `agent.execute`, `agent.poll_response`, `agent.send_control`, `databus.*`, `event.*` |
+| UDS-CTRL | `/tmp/agentflowd_ctrl.sock` | Control: `agent.load/unload/list/info/pause/resume`, `session.*`, `workflow.*`, `worker.*`, `runtime.*`, `health`, `metrics.get` |
+
+Channel isolation enforces the principle of least privilege: business clients connect via UDS-BIZ and can only submit requests and read data, while management tooling connects via UDS-CTRL to load agents and manage sessions.
+
+### Request Execution Pipeline
+
+```
+Client → agent.execute → AgentRegistry::find → MMAgent::route_request_message
+                                                      ↓
+                                               SessionRouter → MMAgentSession
+                                                      ↓
+                                               MMAgentRuntime::execute_workflow
+                                                      ↓
+                                               Scheduler → Deployer → MMWorkerEngine
+                                                      ↓
+                                               Node execution (shell/python/SO/...)
+                                                      ↓
+                                               ResponsePoller (50ms) → client notification
+```
+
+The `ResponsePoller` runs a background thread polling `dequeue_response_message()` on all loaded agents every 50ms, matching in-flight requests by `message_id` and pushing `agent.response` notifications back to the originating RPC client.
+
+### Component Overview
+
+- **DaemonConfig**: Three-way merge (CLI > ENV > File > Default) with per-field override
+- **AgentRegistry**: Thread-safe multi-agent load/unload with CWD switching for package loading
+- **RpcServer**: Three accept threads (TCP, UDS-BIZ, UDS-CTRL) with shared handler dispatch
+- **RpcHandler**: Method routing with channel-based access control
+- **ResponsePoller**: Async response routing from agent queues to RPC client fds
+- **EventBroker**: Pub/sub event notification (subscribe/unsubscribe, type-filtered dispatch)
+
+### Shutdown
+
+Three-phase graceful shutdown: DRAINING (wait for in-flight nodes, up to `drain_timeout_ms`) → STOPPING (stop poller, RPC server, agents, runtime) → EXIT. Second signal forces immediate exit.

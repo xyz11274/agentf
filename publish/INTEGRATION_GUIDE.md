@@ -2430,4 +2430,98 @@ private:
 
 ---
 
+## agentflowd — Daemon Integration
+
+### Starting the Daemon
+
+```bash
+# Foreground mode (for development)
+./agentflowd --listen 0.0.0.0:7890
+
+# Daemon mode (for production)
+./agentflowd --listen 0.0.0.0:7890 --daemonize --pid-file /var/run/agentflowd.pid
+
+# With agent package pre-loaded
+./agentflowd --listen 0.0.0.0:7890 --package /path/to/agent/package
+
+# Validate configuration
+./agentflowd --config /etc/agentflowd.json --validate
+```
+
+### Configuration
+
+agentflowd supports three-way configuration merge: **CLI flags > Environment variables > Config file > Defaults**.
+
+Key environment variables:
+- `AF_CONFIG_FILE` — Path to JSON config file
+- `AF_LISTEN` — TCP listen address (default: `0.0.0.0:7890`)
+- `AF_UDS_BIZ_PATH` — UDS business socket path
+- `AF_UDS_CTRL_PATH` — UDS control socket path
+- `AF_LOG_LEVEL` — Log level (trace/debug/info/warn/error)
+
+### JSON-RPC 2.0 API
+
+All methods use JSON-RPC 2.0 over newline-delimited TCP or UDS:
+
+```
+→ {"jsonrpc":"2.0","method":"health","id":1}
+← {"jsonrpc":"2.0","result":{"status":"ok","version":"0.1.0","uptime_ms":12345},"id":1}
+```
+
+#### Business Methods (UDS-BIZ + TCP)
+
+| Method | Description |
+|--------|-------------|
+| `agent.execute` | Submit a request to an agent |
+| `agent.poll_response` | Poll for response messages |
+| `agent.send_control` | Send control command (interrupt/destroy session) |
+| `databus.put` | Store a value in the DataBus |
+| `databus.get` | Retrieve a value from the DataBus |
+| `databus.remove` | Remove a key from the DataBus |
+| `databus.contains` | Check if a key exists |
+| `databus.list_keys` | List all keys in a namespace |
+| `event.subscribe` | Subscribe to event notifications |
+| `event.unsubscribe` | Unsubscribe from events |
+
+#### Control Methods (UDS-CTRL + TCP)
+
+| Method | Description |
+|--------|-------------|
+| `agent.load` | Load an agent package |
+| `agent.unload` | Unload an agent |
+| `agent.list` | List loaded agents |
+| `agent.info` | Get agent details |
+| `agent.pause` | Pause an agent |
+| `agent.resume` | Resume a paused agent |
+| `session.list` | List sessions |
+| `session.destroy` | Destroy a session |
+| `session.clear_dialogue` | Clear dialogue history |
+| `workflow.list` | List workflows |
+| `workflow.info` | Get workflow details |
+| `worker.list` | List worker engines |
+| `runtime.status` | Get runtime status |
+| `runtime.shutdown` | Graceful shutdown |
+| `health` | Health check |
+| `metrics.get` | Get metrics (json/prometheus) |
+
+### Go Client (af-broker)
+
+```go
+import "github.com/agentflow/af-broker"
+
+client := afbroker.NewClient("localhost:7890", afbroker.ChannelTCP)
+client.Connect(context.Background())
+defer client.Close()
+
+client.SetNotificationHandler(func(n *afbroker.Notification) {
+    log.Printf("Event: %s", n.Method)
+})
+
+agentID, _ := client.AgentLoad(ctx, "/path/to/agent")
+msgID, _ := client.AgentExecute(ctx, agentID, "user1", "client1", "hello")
+resp, _ := client.AgentPollResponse(ctx, agentID, 5000)
+```
+
+---
+
 *文档生成时间：2026-03-09*

@@ -7,34 +7,21 @@
 #define AGENTFLOW_DAEMON_RPC_HANDLER_H
 
 #include <atomic>
-#include <memory>
 #include <string>
 
 #include "daemon/rpc_server.h"
 
 namespace agentflow {
+
 namespace runtime {
 class MMAgentRuntime;
 }
 
 namespace daemon {
 
-class RpcServer;
 class AgentRegistry;
 class ResponsePoller;
 class EventBroker;
-
-namespace agentflow {
-
-namespace runtime {
-class MMAgentRuntime;
-}
-
-namespace daemon {
-
-class RpcServer;
-class AgentRegistry;
-class ResponsePoller;
 
 class RpcHandler {
 public:
@@ -53,7 +40,6 @@ private:
   int64_t start_time_ms_;
   std::atomic<int64_t> message_counter_{0};
 
-  // Helper: escape string for JSON
   static std::string json_escape(const std::string& s);
 
   // Query methods
