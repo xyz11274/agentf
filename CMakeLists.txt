@@ -405,6 +405,21 @@ add_executable(agent_runner
 )
 target_link_libraries(agent_runner PRIVATE agentflow)
 
+# ============================================================================
+# agentflowd - Daemon executable for running AgentFlow as a service
+# ============================================================================
+add_executable(agentflowd
+    ${AGENTFLOW_SOURCE_DIR}/daemon/agentflowd_main.cpp
+    ${AGENTFLOW_SOURCE_DIR}/daemon/config.cpp
+    ${AGENTFLOW_SOURCE_DIR}/daemon/daemon.cpp
+    ${AGENTFLOW_SOURCE_DIR}/daemon/rpc_server.cpp
+    ${AGENTFLOW_SOURCE_DIR}/daemon/rpc_handler.cpp
+    ${AGENTFLOW_SOURCE_DIR}/daemon/agent_registry.cpp
+    ${AGENTFLOW_SOURCE_DIR}/daemon/response_poller.cpp
+    ${AGENTFLOW_SOURCE_DIR}/daemon/event_broker.cpp
+)
+target_link_libraries(agentflowd PRIVATE agentflow)
+
 add_executable(example_claw_agent_tui
     ${AGENTFLOW_EXAMPLE_DIR}/agent/claw_agent/claw_agent_tui.cpp
     $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
