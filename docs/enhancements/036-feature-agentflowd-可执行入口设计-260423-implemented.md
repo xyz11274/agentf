@@ -1026,26 +1026,26 @@ func (c *UDSConnection) Notifications() <-chan *RPCNotification
 ```markdown
 ### 进展跟踪
 
-- [ ] 代码实现
-- [ ] 单元测试
-- [ ] 集成测试
-- [ ] 文档更新
-- [ ] 验证通过
+- [x] 代码实现
+- [x] 单元测试
+- [x] 集成测试
+- [x] 文档更新
+- [x] 验证通过
 ```
 
 **详细进度**：
 
 | 功能点 | 功能 | 用例 | 文档 | 状态 |
 |--------|------|------|------|------|
-| DaemonConfig + CLI | ⏳待实施 | ⏳待实施 | ⏳待实施 | 进行中 |
-| Daemon 骨架 | ⏳待实施 | ⏳待实施 | ⏳待实施 | 进行中 |
-| RpcServer | ⏳待实施 | ⏳待实施 | — | 待实施 |
-| RpcHandler (查询类) | ⏳待实施 | ⏳待实施 | — | 待实施 |
-| AgentRegistry | ⏳待实施 | ⏳待实施 | — | 待实施 |
-| agent.execute + ResponsePoller | ⏳待实施 | ⏳待实施 | — | 待实施 |
-| EventBroker | ⏳待实施 | ⏳待实施 | — | 待实施 |
-| WebSocket 升级 | ⏳待实施 | ⏳待实施 | — | 待实施 |
-| af-broker (Go) | ⏳待实施 | ⏳待实施 | ⏳待实施 | 待实施 |
+| DaemonConfig + CLI | ✅已完成 | ✅5个GTest用例 | ✅已完成 | ✅已验证 |
+| Daemon 骨架 | ✅已完成 | ✅已覆盖 | ✅已完成 | ✅已验证 |
+| RpcServer | ✅已完成 | ✅4个GTest用例 | ✅已完成 | ✅已验证 |
+| RpcHandler (查询类) | ✅已完成 | ✅已覆盖 | ✅已完成 | ✅已验证 |
+| AgentRegistry | ✅已完成 | ✅6个GTest用例 | ✅已完成 | ✅已验证 |
+| agent.execute + ResponsePoller | ✅已完成 | ✅集成测试通过 | ✅已完成 | ✅已验证 |
+| EventBroker | ✅已完成 | ✅5个GTest用例 | ✅已完成 | ✅已验证 |
+| WebSocket 升级 | ✅已完成 | ✅WS握手+JSON-RPC集成测试 | ✅已完成 | ✅已验证 |
+| af-broker (Go) | ✅已完成 | — | ✅已完成 | ✅已验证 |
 
 ---
 
