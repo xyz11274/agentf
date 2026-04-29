@@ -9,6 +9,17 @@ Logger& Logger::instance() {
   return logger;
 }
 
+void Logger::set_log_file(const std::string& path) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (log_file_.is_open()) {
+    log_file_.close();
+  }
+  log_file_.open(path, std::ios::out | std::ios::app);
+  if (!log_file_.is_open()) {
+    std::cerr << "[LOGGER] Failed to open log file: " << path << std::endl;
+  }
+}
+
 void Logger::log(Level level, const std::string& message) {
   if(level < level_) {
     return;
@@ -17,7 +28,13 @@ void Logger::log(Level level, const std::string& message) {
   std::string timestamp = get_timestamp();
   std::string level_str = get_level_string(level);
 
-  std::cout << "[" << timestamp << "] [" << level_str << "] " << message << std::endl;
+  std::string line = "[" + timestamp + "] [" + level_str + "] " + message;
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  std::cout << line << std::endl;
+  if (log_file_.is_open()) {
+    log_file_ << line << std::endl;
+  }
 }
 
 std::string Logger::get_timestamp() const {

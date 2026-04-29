@@ -24,6 +24,7 @@
 #include "daemon/response_poller.h" // NOLINT
 #include "daemon/event_broker.h"    // NOLINT // NOLINT
 #include "runtime/agent_runtime.h"
+#include "runtime/flow_trace.h"
 #include "utils/logger.h"
 
 namespace agentflow {
@@ -80,7 +81,23 @@ bool Daemon::initialize() {
     else if (config_.log_level == "error")
       lvl = Logger::Level::ERROR;
     Logger::instance().set_level(lvl);
+    if (!config_.log_file.empty()) {
+      Logger::instance().set_log_file(config_.log_file);
+    }
   }
+
+  // 1b. Initialize flow trace
+  {
+    auto& flow_trace = runtime::FlowTraceWriter::instance();
+    if (!config_.flow_trace_dir.empty()) {
+      flow_trace.set_output_dir(config_.flow_trace_dir);
+      flow_trace.set_stdout_enabled(false);
+    } else if (!config_.flow_trace_file.empty()) {
+      flow_trace.set_output_file(config_.flow_trace_file);
+      flow_trace.set_stdout_enabled(false);
+    }
+  }
+
   Logger::instance().info("[DAEMON] agentflowd starting...");
 
   // 2. Daemonize if requested

@@ -2,7 +2,9 @@
 #define AGENTFLOW_BASIC_LOGGER_H
 
 #include <chrono>
+#include <fstream>
 #include <iostream>
+#include <mutex>
 #include <sstream>
 #include <string>
 
@@ -26,6 +28,7 @@ public:
   void  set_level(Level level) { level_ = level; }
   Level get_level() const { return level_; }
 
+  void set_log_file(const std::string& path);
   void log(Level level, const std::string& message);
 
   // Convenience methods
@@ -57,6 +60,9 @@ public:
 private:
   Logger()     = default;
   Level level_ = Level::INFO;
+
+  std::ofstream log_file_;
+  std::mutex    mutex_;
 
   std::string get_timestamp() const;
   std::string get_level_string(Level level) const;

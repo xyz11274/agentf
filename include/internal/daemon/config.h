@@ -37,7 +37,11 @@ struct DaemonConfig {
 
   // Logging
   std::string log_level = "info";
-  std::string log_file;  // empty = stderr
+  std::string log_file;  // empty = stdout only
+
+  // Flow trace
+  std::string flow_trace_file;  // single .ndjson file (all events appended)
+  std::string flow_trace_dir;   // per-session .ndjson files under this directory
 
   // Daemon
   std::string pid_file;

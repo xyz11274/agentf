@@ -72,7 +72,9 @@ bool parse_cli_args(int argc, char* argv[], DaemonConfig& config) {
              "  --daemonize              Run as daemon\n"
              "  --pid-file FILE          PID file path\n"
              "  --log-level LEVEL        trace|debug|info|warn|error (default info)\n"
-             "  --log-file FILE          Log file (default stderr)\n"
+             "  --log-file FILE          Log file (default stdout only)\n"
+             "  --flow-trace-file FILE   Flow trace output file (single .ndjson)\n"
+             "  --flow-trace-dir DIR     Flow trace output directory (per-session .ndjson)\n"
              "  --drain-timeout MS       Graceful shutdown timeout (default 30000)\n"
              "\n"
              "  --version / --help\n";
@@ -148,6 +150,12 @@ bool parse_cli_args(int argc, char* argv[], DaemonConfig& config) {
       config.log_level = take_value(i);
     } else if (arg == "--log-file") {
       config.log_file = take_value(i);
+    } else if (arg == "--flow-trace-file") {
+      config.flow_trace_file = take_value(i);
+      if (config.flow_trace_file.empty()) return false;
+    } else if (arg == "--flow-trace-dir") {
+      config.flow_trace_dir = take_value(i);
+      if (config.flow_trace_dir.empty()) return false;
     } else if (arg == "--drain-timeout") {
       config.drain_timeout_ms = std::stoi(take_value(i));
     } else {
@@ -172,6 +180,8 @@ void apply_env_overrides(DaemonConfig& config) {
   env_if("AF_PLUGIN_UDS_FILE", config.runtime_config.plugin_uds_path);
   env_if("AF_LOG_LEVEL", config.log_level);
   env_if("AF_LOG_FILE", config.log_file);
+  env_if("AF_FLOW_TRACE_FILE", config.flow_trace_file);
+  env_if("AF_FLOW_TRACE_DIR", config.flow_trace_dir);
   env_if("AF_CONFIG_FILE", config.config_file);
 }
 
@@ -276,6 +286,15 @@ bool load_config_file(DaemonConfig& config) {
     if (is_set(ll)) config.log_level = ll;
     std::string lf = dsl::JsonHelper::get_string(logging, "file");
     if (is_set(lf)) config.log_file = lf;
+  }
+
+  // Trace section
+  auto trace = dsl::JsonHelper::get_object(root, "trace");
+  if (trace) {
+    std::string ftf = dsl::JsonHelper::get_string(trace, "flow_file");
+    if (is_set(ftf)) config.flow_trace_file = ftf;
+    std::string ftd = dsl::JsonHelper::get_string(trace, "flow_dir");
+    if (is_set(ftd)) config.flow_trace_dir = ftd;
   }
 
   // Daemon section
