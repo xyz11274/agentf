@@ -6,7 +6,7 @@ Go client adapter for agentflowd JSON-RPC 2.0 daemon.
 
 ```bash
 # Build
-go build -o af-broker .
+go build -o af-broker ./cmd/af-broker/
 
 # Health check
 ./af-broker localhost:7890 health

@@ -1,8 +1,8 @@
 # AgentFlow 使用手册
 
 > 本手册面向 AgentFlow 开发者，涵盖 Agent 集成指导和 Node 开发指导两大主题。
-> - 文档版本：v1.2
-> - 更新日期：2026-03-17
+> - 文档版本：v1.3
+> - 更新日期：2026-04-29
 
 ---
 
@@ -1354,7 +1354,103 @@ extern "C" void my_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
 - 大于 1MB：使用引用传递或文件路径
 - 大数据传输：考虑使用 UDS 或共享内存
 
-### 17.4 日志记录
+### 17.4 日志与 Trace 配置
+
+AgentFlow 提供两套日志系统：**普通日志（Logger）** 和 **Flow Trace（FlowTraceWriter）**。Daemon 启动时通过 CLI 参数、环境变量或 JSON 配置文件指定输出路径。
+
+#### 17.4.1 普通日志配置
+
+普通日志输出级别和文件路径：
+
+| 配置来源 | 级别参数 | 文件参数 |
+|----------|----------|----------|
+| CLI | `--log-level LEVEL` | `--log-file FILE` |
+| 环境变量 | `AF_LOG_LEVEL` | `AF_LOG_FILE` |
+| JSON | `logging.level` | `logging.file` |
+
+级别取值：`trace`（等同 debug）、`debug`、`info`（默认）、`warn`、`error`。
+
+**CLI 示例：**
+```bash
+./agentflowd --log-level debug --log-file /var/log/agentflow/agentflowd.log
+```
+
+**环境变量示例：**
+```bash
+export AF_LOG_LEVEL=debug
+export AF_LOG_FILE=/var/log/agentflow/agentflowd.log
+./agentflowd
+```
+
+**JSON 配置示例：**
+```json
+{
+  "logging": {
+    "level": "debug",
+    "file": "/var/log/agentflow/agentflowd.log"
+  }
+}
+```
+
+配置优先级：CLI > 环境变量 > JSON。不指定 `log-file` 时仅输出到 stdout；指定后同时输出到 stdout 和文件。
+
+#### 17.4.2 Flow Trace 配置
+
+Flow Trace 记录调度流程事件（task/node/workflow/skill 的创建、调度、完成），以 `.ndjson` 格式输出，可通过 `tools/span_trace_viewer/index.html` 可视化。
+
+支持两种输出模式（互斥，目录优先）：
+
+| 配置来源 | 单文件模式 | 目录模式 |
+|----------|------------|----------|
+| CLI | `--flow-trace-file FILE` | `--flow-trace-dir DIR` |
+| 环境变量 | `AF_FLOW_TRACE_FILE` | `AF_FLOW_TRACE_DIR` |
+| JSON | `trace.flow_file` | `trace.flow_dir` |
+
+- **单文件模式**：所有事件追加到一个 `.ndjson` 文件
+- **目录模式**：按日期 + 客户端 session 自动拆分为 `flow_trace_<date>_<clientSessionId>.ndjson`
+
+**CLI 示例：**
+```bash
+# 单文件模式
+./agentflowd --flow-trace-file /var/log/agentflow/trace.ndjson
+
+# 目录模式（推荐）
+./agentflowd --flow-trace-dir /var/log/agentflow/trace
+```
+
+**JSON 配置示例：**
+```json
+{
+  "trace": {
+    "flow_dir": "/var/log/agentflow/trace"
+  }
+}
+```
+
+配置后自动关闭 stdout 输出，仅写入指定文件或目录。
+
+#### 17.4.3 完整配置示例
+
+```json
+{
+  "logging": {
+    "level": "info",
+    "file": "/var/log/agentflow/agentflowd.log"
+  },
+  "trace": {
+    "flow_dir": "/var/log/agentflow/trace"
+  }
+}
+```
+
+```bash
+./agentflowd \
+  --log-level info \
+  --log-file /var/log/agentflow/agentflowd.log \
+  --flow-trace-dir /var/log/agentflow/trace
+```
+
+#### 17.4.4 在 Node 中使用 Logger
 
 ```cpp
 #include "utils/logger.h"
@@ -1363,12 +1459,12 @@ extern "C" void my_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
                            INodeDataBusClient* client) {
     std::string dialogue_id = agentflow::so_node::get_string(inputs, "dialogue_id", "");
 
-    agentflow::utils::Logger::instance().info_f(
+    agentflow::Logger::instance().info_f(
         "[MY_NODE] Processing for dialogue_id=%s", dialogue_id.c_str());
 
     // 处理逻辑...
 
-    agentflow::utils::Logger::instance().info_f(
+    agentflow::Logger::instance().info_f(
         "[MY_NODE] Completed for dialogue_id=%s", dialogue_id.c_str());
 }
 ```

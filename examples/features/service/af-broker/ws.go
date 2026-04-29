@@ -170,7 +170,6 @@ func readWsFrame(conn net.Conn) ([]byte, error) {
 	payloadLen := int(header[1] & 0x7F)
 
 	var maskKey []byte
-	headerSize := 0
 
 	if payloadLen == 126 {
 		ext := make([]byte, 2)
@@ -178,7 +177,6 @@ func readWsFrame(conn net.Conn) ([]byte, error) {
 			return nil, err
 		}
 		payloadLen = int(ext[0])<<8 | int(ext[1])
-		headerSize = 4
 	} else if payloadLen == 127 {
 		ext := make([]byte, 8)
 		if _, err := readExact(conn, ext); err != nil {
@@ -188,9 +186,6 @@ func readWsFrame(conn net.Conn) ([]byte, error) {
 		for i := 0; i < 8; i++ {
 			payloadLen = payloadLen<<8 | int(ext[i])
 		}
-		headerSize = 10
-	} else {
-		headerSize = 2
 	}
 
 	if masked {
@@ -230,3 +225,7 @@ func readExact(conn net.Conn, buf []byte) (int, error) {
 var _ http.ResponseWriter = (*responseCheck)(nil)
 
 type responseCheck struct{}
+
+func (r *responseCheck) Header() http.Header           { return nil }
+func (r *responseCheck) Write(b []byte) (int, error)   { return len(b), nil }
+func (r *responseCheck) WriteHeader(statusCode int)     {}

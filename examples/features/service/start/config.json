@@ -1,0 +1,49 @@
+{
+  "server": {
+    "listen": "0.0.0.0:7890",
+    "uds_biz_path": "/tmp/agentflowd_biz.sock",
+    "uds_ctrl_path": "/tmp/agentflowd_ctrl.sock",
+    "max_connections": 1024
+  },
+
+  "runtime": {
+    "role": "master",
+    "worker_threads": 4,
+    "local_worker_id": "runtime-local-worker",
+    "worker_default_workflow_threads": 1,
+    "worker_control_threads": 1,
+    "worker_business_threads": 1,
+    "worker_queue_size": 1024,
+    "plugin_uds_path": ""
+  },
+
+  "deployer": {
+    "schedule_interval_ms": 200,
+    "heartbeat_timeout_ms": 10000,
+    "plugin_so_path": ""
+  },
+
+  "scheduler": {
+    "schedule_interval_ms": 100,
+    "plugin_so_path": ""
+  },
+
+  "agents": [
+  ],
+
+  "logging": {
+    "level": "info",
+    "file": ""
+  },
+
+  "trace": {
+    "flow_file": "",
+    "flow_dir": ""
+  },
+
+  "daemon": {
+    "pid_file": "",
+    "daemonize": false,
+    "drain_timeout_ms": 30000
+  }
+}
