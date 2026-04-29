@@ -9,6 +9,12 @@ Logger& Logger::instance() {
   return logger;
 }
 
+void Logger::set_sink(std::unique_ptr<ILogSink> sink) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (sink_) sink_->flush();
+  sink_ = std::move(sink);
+}
+
 void Logger::set_log_file(const std::string& path) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (log_file_.is_open()) {
@@ -28,12 +34,29 @@ void Logger::log(Level level, const std::string& message) {
   std::string timestamp = get_timestamp();
   std::string level_str = get_level_string(level);
 
-  std::string line = "[" + timestamp + "] [" + level_str + "] " + message;
-
   std::lock_guard<std::mutex> lock(mutex_);
+
+  if (sink_) {
+    sink_->write(static_cast<int>(level), timestamp, message);
+    return;
+  }
+
+  std::string line = "[" + timestamp + "] [" + level_str + "] " + message;
   std::cout << line << std::endl;
   if (log_file_.is_open()) {
     log_file_ << line << std::endl;
+  }
+}
+
+void Logger::flush() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (sink_) {
+    sink_->flush();
+  } else {
+    std::cout.flush();
+    if (log_file_.is_open()) {
+      log_file_.flush();
+    }
   }
 }
 

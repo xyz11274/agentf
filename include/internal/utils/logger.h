@@ -4,9 +4,12 @@
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <sstream>
 #include <string>
+
+#include "utils/log_sink.h"
 
 namespace agentflow {
 
@@ -28,7 +31,9 @@ public:
   void  set_level(Level level) { level_ = level; }
   Level get_level() const { return level_; }
 
+  void set_sink(std::unique_ptr<ILogSink> sink);
   void set_log_file(const std::string& path);
+  void flush();
   void log(Level level, const std::string& message);
 
   // Convenience methods
@@ -61,8 +66,9 @@ private:
   Logger()     = default;
   Level level_ = Level::INFO;
 
-  std::ofstream log_file_;
-  std::mutex    mutex_;
+  std::unique_ptr<ILogSink> sink_;
+  std::ofstream             log_file_;
+  std::mutex                mutex_;
 
   std::string get_timestamp() const;
   std::string get_level_string(Level level) const;
