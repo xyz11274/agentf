@@ -1,7 +1,7 @@
 # AgentFlow 使用手册
 
 > 本手册面向 AgentFlow 开发者，涵盖 Agent 集成指导和 Node 开发指导两大主题。
-> - 文档版本：v1.3
+> - 文档版本：v1.4
 > - 更新日期：2026-04-29
 
 ---
@@ -1450,7 +1450,7 @@ Flow Trace 记录调度流程事件（task/node/workflow/skill 的创建、调�
   --flow-trace-dir /var/log/agentflow/trace
 ```
 
-#### 17.4.4 在 Node 中使用 Logger
+#### 17.4.4 在代码中使用 Logger
 
 ```cpp
 #include "utils/logger.h"
@@ -1468,6 +1468,103 @@ extern "C" void my_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
         "[MY_NODE] Completed for dialogue_id=%s", dialogue_id.c_str());
 }
 ```
+
+#### 17.4.5 注入外部日志组件（ILogSink）
+
+框架支持将内置日志输出替换为任意外部日志库（spdlog、glog 等）。实现 `ILogSink` 接口并在 Logger 初始化前注入即可，所有现有调用点无需修改。
+
+**接口定义**（`include/internal/utils/log_sink.h`）：
+
+```cpp
+class ILogSink {
+public:
+  virtual ~ILogSink() = default;
+
+  // 写一条日志。Logger 已做级别过滤，timestamp 格式为 "YYYY-MM-DD HH:MM:SS.mmm"
+  // level: 0=DEBUG, 1=INFO, 2=WARN, 3=ERROR
+  virtual void write(int level, const std::string& timestamp,
+                     const std::string& message) = 0;
+
+  // 刷新缓冲输出。Logger::flush() 时调用。
+  virtual void flush() = 0;
+};
+```
+
+**示例：接入 spdlog**
+
+```cpp
+#include "utils/log_sink.h"
+#include "utils/logger.h"
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/basic_file_sink.h>
+
+class SpdlogSink : public agentflow::ILogSink {
+public:
+  SpdlogSink(const std::string& path) {
+    logger_ = spdlog::basic_logger_mt("agentflow", path);
+    logger_->set_pattern("[%Y-%m-%d %H:%M:%S.%e] [%l] %v");
+  }
+
+  void write(int level, const std::string& /*timestamp*/,
+             const std::string& message) override {
+    // spdlog 自行管理格式，直接透传消息
+    auto lvl = [](int af_level) {
+      switch (af_level) {
+        case 0:  return spdlog::level::debug;
+        case 1:  return spdlog::level::info;
+        case 2:  return spdlog::level::warn;
+        case 3:  return spdlog::level::err;
+        default: return spdlog::level::info;
+      }
+    }(level);
+    logger_->log(lvl, message);
+  }
+
+  void flush() override { logger_->flush(); }
+
+private:
+  std::shared_ptr<spdlog::logger> logger_;
+};
+
+// 在 daemon 初始化之前注入
+int main() {
+  agentflow::Logger::instance().set_sink(
+      std::make_unique<SpdlogSink>("/var/log/agentflow/agentflowd.log"));
+
+  // ... daemon 启动，所有 Logger::instance().info() 等调用自动走 spdlog
+}
+```
+
+**示例：接入 glog**
+
+```cpp
+#include <glog/logging.h>
+
+class GlogSink : public agentflow::ILogSink {
+public:
+  GlogSink() {
+    google::InitGoogleLogging("agentflow");
+    google::InstallFailureSignalHandler();
+  }
+
+  void write(int level, const std::string& timestamp,
+             const std::string& message) override {
+    google::LogSeverity sev;
+    switch (level) {
+      case 0:  sev = google::GLOG_INFO;     break;
+      case 1:  sev = google::GLOG_INFO;     break;
+      case 2:  sev = google::GLOG_WARNING;  break;
+      case 3:  sev = google::GLOG_ERROR;    break;
+      default: sev = google::GLOG_INFO;
+    }
+    google::LogMessage(timestamp.c_str(), 0, sev).stream() << message;
+  }
+
+  void flush() override {}
+};
+```
+
+**注入时机**：必须在 Logger 首次产生日志之前调用 `set_sink()`，推荐在 `Daemon::initialize()` 的第一步（日志初始化块）中完成。传入 `nullptr` 可恢复内置默认输出。
 
 ---
 
