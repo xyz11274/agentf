@@ -19,6 +19,7 @@
 #include <iostream>
 
 #include "utils/logger.h"
+#include "daemon/ws_upgrade.h"
 
 namespace agentflow {
 namespace daemon {
@@ -402,6 +403,7 @@ void RpcServer::client_handler(int fd, ChannelType channel) {
 
   std::string recv_buffer;
   char buf[4096];
+  bool ws_mode = false;
 
   while (running_.load()) {
     struct pollfd pfd;
@@ -420,23 +422,75 @@ void RpcServer::client_handler(int fd, ChannelType channel) {
     buf[n] = '\0';
     recv_buffer += buf;
 
-    // Process newline-delimited JSON messages
-    size_t pos;
-    while ((pos = recv_buffer.find('\n')) != std::string::npos) {
-      std::string msg = recv_buffer.substr(0, pos);
-      recv_buffer = recv_buffer.substr(pos + 1);
-      if (msg.empty()) continue;
+    // On first data, check for WebSocket upgrade (TCP only)
+    if (!ws_mode && channel == ChannelType::TCP) {
+      WsUpgradeResult ws_result = try_ws_upgrade(fd, recv_buffer);
+      if (ws_result == WsUpgradeResult::UPGRADE_OK) {
+        ws_mode = true;
+        recv_buffer.clear();
+        continue;
+      } else if (ws_result == WsUpgradeResult::UPGRADE_FAIL) {
+        break;  // Close on failed upgrade
+      }
+      // NOT_WS: proceed with normal JSON-RPC parsing
+    }
 
-      std::string response = handle_request(msg, fd, channel);
-      if (!response.empty()) {
-        response += "\n";
-        ssize_t sent = send(fd, response.c_str(), response.size(), MSG_NOSIGNAL);
-        if (sent < 0) {
-          Logger::instance().error_f("[RPC_SERVER] Send failed: %s", strerror(errno));
+    if (ws_mode) {
+      // WebSocket frame mode
+      uint8_t opcode = 0;
+      std::string payload;
+      while (ws_decode_frame(recv_buffer, payload, opcode)) {
+        if (opcode == WS_OPCODE_CLOSE) {
+          // Send close frame and exit
+          std::string close_frame;
+          close_frame += static_cast<char>(0x80 | WS_OPCODE_CLOSE);
+          close_frame += static_cast<char>(0);
+          send(fd, close_frame.c_str(), close_frame.size(), MSG_NOSIGNAL);
+          recv_buffer.clear();
+          goto cleanup;
+        }
+        if (opcode == WS_OPCODE_PING) {
+          // Respond with pong
+          std::string pong;
+          pong += static_cast<char>(0x80 | WS_OPCODE_PONG);
+          if (payload.size() <= 125) {
+            pong += static_cast<char>(payload.size());
+          }
+          pong += payload;
+          send(fd, pong.c_str(), pong.size(), MSG_NOSIGNAL);
+          continue;
+        }
+        if (opcode == WS_OPCODE_TEXT) {
+          // Remove trailing newline if present (JSON-RPC compatibility)
+          if (!payload.empty() && payload.back() == '\n') payload.pop_back();
+          std::string response = handle_request(payload, fd, channel);
+          if (!response.empty()) {
+            std::string frame = ws_encode_text_frame(response);
+            send(fd, frame.c_str(), frame.size(), MSG_NOSIGNAL);
+          }
+        }
+      }
+    } else {
+      // Process newline-delimited JSON messages
+      size_t pos;
+      while ((pos = recv_buffer.find('\n')) != std::string::npos) {
+        std::string msg = recv_buffer.substr(0, pos);
+        recv_buffer = recv_buffer.substr(pos + 1);
+        if (msg.empty()) continue;
+
+        std::string response = handle_request(msg, fd, channel);
+        if (!response.empty()) {
+          response += "\n";
+          ssize_t sent = send(fd, response.c_str(), response.size(), MSG_NOSIGNAL);
+          if (sent < 0) {
+            Logger::instance().error_f("[RPC_SERVER] Send failed: %s", strerror(errno));
+          }
         }
       }
     }
   }
+
+cleanup:
 
   // Cleanup
   {

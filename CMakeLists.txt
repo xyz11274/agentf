@@ -417,6 +417,7 @@ add_executable(agentflowd
     ${AGENTFLOW_SOURCE_DIR}/daemon/agent_registry.cpp
     ${AGENTFLOW_SOURCE_DIR}/daemon/response_poller.cpp
     ${AGENTFLOW_SOURCE_DIR}/daemon/event_broker.cpp
+    ${AGENTFLOW_SOURCE_DIR}/daemon/ws_upgrade.cpp
 )
 target_link_libraries(agentflowd PRIVATE agentflow)
 
@@ -763,6 +764,38 @@ if(AGENTFLOW_BUILD_TESTS)
   add_test(NAME EventHandlerIntegrationTests COMMAND test_event_handler_integration)
   if(AGENTFLOW_TEST_ENV)
     set_tests_properties(EventHandlerIntegrationTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
+  endif()
+
+  # Daemon unit tests
+  add_executable(test_daemon_gtest
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_daemon_config_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_rpc_handler_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_agent_registry_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_event_broker_gtest.cpp
+      ${AGENTFLOW_SOURCE_DIR}/daemon/config.cpp
+      ${AGENTFLOW_SOURCE_DIR}/daemon/daemon.cpp
+      ${AGENTFLOW_SOURCE_DIR}/daemon/rpc_server.cpp
+      ${AGENTFLOW_SOURCE_DIR}/daemon/rpc_handler.cpp
+      ${AGENTFLOW_SOURCE_DIR}/daemon/agent_registry.cpp
+      ${AGENTFLOW_SOURCE_DIR}/daemon/response_poller.cpp
+      ${AGENTFLOW_SOURCE_DIR}/daemon/event_broker.cpp
+      ${AGENTFLOW_SOURCE_DIR}/daemon/ws_upgrade.cpp
+  )
+  if(TARGET GTest::gtest)
+    target_link_libraries(test_daemon_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)
+  else()
+    target_link_libraries(test_daemon_gtest PRIVATE agentflow ${GTEST_LIBRARIES})
+    if(GTEST_INCLUDE_DIRS)
+      target_include_directories(test_daemon_gtest PRIVATE ${GTEST_INCLUDE_DIRS})
+    endif()
+  endif()
+  if(NOT MSVC)
+    target_compile_options(test_daemon_gtest PRIVATE -Wno-non-virtual-dtor)
+  endif()
+  target_compile_definitions(test_daemon_gtest PRIVATE EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
+  add_test(NAME DaemonUnitTests COMMAND test_daemon_gtest)
+  if(AGENTFLOW_TEST_ENV)
+    set_tests_properties(DaemonUnitTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
   endif()
   else()
     message(STATUS "Google Test not found. Using simple test harness.")

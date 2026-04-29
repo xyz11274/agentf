@@ -143,6 +143,10 @@ bool Daemon::initialize() {
   response_poller_->start(*registry_, *rpc_server_);
   event_broker_->start(*rpc_server_);
 
+  // 10. Register EventBroker as IEventHandler with runtime
+  runtime_->register_event_handler(
+      std::shared_ptr<runtime::IEventHandler>(event_broker_.get(), [](auto*) {}));
+
   // 8. Write PID file
   if (!config_.pid_file.empty()) {
     std::ofstream pf(config_.pid_file);

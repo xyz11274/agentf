@@ -2,6 +2,7 @@
 // Licensed under MIT License
 //
 // EventBroker - Event subscription and notification for agentflowd
+// Implements IEventHandler to receive framework events and route to RPC clients
 
 #ifndef AGENTFLOW_DAEMON_EVENT_BROKER_H
 #define AGENTFLOW_DAEMON_EVENT_BROKER_H
@@ -14,6 +15,8 @@
 #include <thread>
 #include <vector>
 
+#include "runtime/event_handler.h"
+
 namespace agentflow {
 namespace daemon {
 
@@ -24,10 +27,10 @@ struct EventSubscription {
   std::set<std::string> event_types;
 };
 
-class EventBroker {
+class EventBroker : public runtime::IEventHandler {
 public:
   EventBroker();
-  ~EventBroker();
+  ~EventBroker() override;
 
   void start(RpcServer& server);
   void stop();
@@ -44,8 +47,15 @@ public:
 
   bool is_running() const { return running_.load(); }
 
+  // IEventHandler implementation — receives framework events
+  void handle_agent_event(const runtime::AgentEvent& event) override;
+  void handle_session_event(const runtime::SessionEvent& event) override;
+  void handle_dialogue_event(const runtime::DialogueEvent& event) override;
+  void handle_task_event(const runtime::TaskEvent& event) override;
+
 private:
   void poll_loop();
+  std::string event_type_to_string(runtime::EventType type);
 
   RpcServer* rpc_server_ = nullptr;
   std::atomic<bool> running_{false};
