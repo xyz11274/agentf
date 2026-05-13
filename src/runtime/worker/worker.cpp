@@ -498,7 +498,10 @@ void MMWorkerEngine::stop() {
     business_messages_.clear();
   }
 
-  workflow_pools_.clear();
+  {
+    std::lock_guard<std::mutex> lock(workflow_pool_mutex_);
+    workflow_pools_.clear();
+  }
   control_pool_.reset();
   set_status(WorkerStatus::STOPPED);
   Logger::instance().info_f("[WORKER_STOP] worker_id=%s status=STOPPED", config_.worker_id.c_str());
@@ -568,6 +571,7 @@ std::string MMWorkerEngine::workflow_pool_key(const TaskItem& task) const {
 }
 
 void MMWorkerEngine::ensure_workflow_pool(const std::string& pool_key, int thread_count) {
+  std::lock_guard<std::mutex> lock(workflow_pool_mutex_);
   const int effective_threads = std::max(1, thread_count <= 0 ? config_.default_workflow_threads : thread_count);
   auto      it                = workflow_pools_.find(pool_key);
   if(it == workflow_pools_.end()) {
@@ -593,6 +597,7 @@ void MMWorkerEngine::handle_control_message(const ControlMessage& message) {
   if(message.type == "workflow_unregistered") {
     auto it = message.data.find("workflow_instance_id");
     if(it != message.data.end()) {
+      std::lock_guard<std::mutex> lock(workflow_pool_mutex_);
       workflow_pools_.erase(it->second);
     }
   }
@@ -616,12 +621,18 @@ void MMWorkerEngine::process_business_messages() {
     }
 
     ensure_workflow_pool(key, config_.default_workflow_threads);
-    auto pool_it = workflow_pools_.find(key);
-    if(pool_it == workflow_pools_.end()) {
+    basic::ThreadPool* pool = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(workflow_pool_mutex_);
+      auto pool_it = workflow_pools_.find(key);
+      if(pool_it != workflow_pools_.end()) {
+        pool = pool_it->second.get();
+      }
+    }
+    if(!pool) {
       continue;
     }
 
-    auto* pool = pool_it->second.get();
     pool->submit([this, task]() {
       set_load(get_load() + 1);
       heartbeat();

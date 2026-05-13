@@ -201,6 +201,7 @@ private:
   std::condition_variable          queue_cv_;
 
   std::unordered_map<std::string, std::unique_ptr<basic::ThreadPool>> workflow_pools_;
+  mutable std::mutex                                                   workflow_pool_mutex_;
   std::unique_ptr<basic::ThreadPool>                                  control_pool_;
 
   std::unordered_map<std::string, std::vector<WorkerControlHandler>> control_handlers_;
