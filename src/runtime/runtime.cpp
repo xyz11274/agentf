@@ -32,6 +32,71 @@ int64_t now_ms() {
 }
 
 // =============================================================================
+// UDS Path Helper — avoid Linux sun_path 108-byte limit
+// =============================================================================
+
+// FNV-1a 64-bit hash — deterministic, portable, good distribution.
+// Used to generate a fixed-length unique suffix for UDS socket paths.
+std::string hex_hash_uds(const std::string& input) {
+  uint64_t h = 0xcbf29ce484222325ULL;
+  for (unsigned char c : input) {
+    h ^= c;
+    h *= 0x100000001b3ULL;
+  }
+  char buf[17];
+  snprintf(buf, sizeof(buf), "%016llx", static_cast<unsigned long long>(h));
+  return std::string(buf);
+}
+
+// Build a UDS socket path safe for Linux sun_path limit (107 usable chars + null).
+// New format: /tmp/agentflow_{agent_name}_{workflow_id}_{hash}.sock
+//   - agent_name:  kept readable for identification in logs / ls output
+//   - workflow_id: kept readable for identification in logs / ls output
+//   - hash: 16-char hex(original_full_path) guarantees uniqueness per execution
+// Logs the original→safe mapping so operators can correlate old and new paths.
+std::string build_safe_uds_path(const std::string& agent_name,
+                                const std::string& workflow_id,
+                                const std::string& session_id,
+                                const std::string& execution_id) {
+  // The original concatenation (may exceed 107 chars)
+  std::string original_path =
+      "/tmp/agentflow_" + session_id + "_" + execution_id + ".sock";
+
+  std::string hash_hex = hex_hash_uds(original_path);
+
+  // Fixed overhead:
+  //   "/tmp/agentflow_" (16) + "_" (1) + "_" (1) + hash (16) + ".sock" (5) = 39
+  // Available for agent_name + workflow_id: 107 - 39 = 68 chars
+  constexpr size_t kMaxPathLen    = 107;  // Linux sun_path limit
+  constexpr size_t kFixedOverhead = 39;
+
+  std::string safe_agent = agent_name;
+  std::string safe_wf    = workflow_id;
+  size_t      full_len   = 16 + safe_agent.size() + 1 + safe_wf.size() + 1 + 16 + 5;
+  if (full_len > kMaxPathLen) {
+    // Split remaining space equally between agent_name and workflow_id
+    size_t excess    = full_len - kMaxPathLen;
+    size_t avail     = safe_agent.size() + safe_wf.size() - excess;
+    size_t half      = avail / 2;
+    if (half < 1) half = 1;
+    if (safe_agent.size() > half)
+      safe_agent = safe_agent.substr(0, half);
+    if (safe_wf.size() > avail - half)
+      safe_wf = safe_wf.substr(0, avail - half);
+  }
+
+  std::string safe_path =
+      "/tmp/agentflow_" + safe_agent + "_" + safe_wf + "_" + hash_hex + ".sock";
+
+  Logger::instance().info_f(
+      "[WORKFLOW] UDS path mapping: original=%s (len=%zu) -> safe=%s (len=%zu)",
+      original_path.c_str(), original_path.size(),
+      safe_path.c_str(), safe_path.size());
+
+  return safe_path;
+}
+
+// =============================================================================
 // Edge Data Transfer Helper Functions (Scenario 1 & Scenario 2 Fix)
 // =============================================================================
 
@@ -624,7 +689,10 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
   // Create UDS server for this workflow execution (lifecycle tied to execution)
   // This enables Python/Go/Shell SDKs to access DataBus via Unix Domain Socket
   if(!session_id.empty()) {
-    std::string uds_socket_path = "/tmp/agentflow_" + session_id + "_" + execution_id + ".sock";
+    std::string agent_name = agent->get_name();
+    if (agent_name.empty()) agent_name = agent_id;
+    std::string uds_socket_path =
+        build_safe_uds_path(agent_name, workflow_id, session_id, execution_id);
 
     // Create async callback for multi-language nodes
     UDSServer::AsyncCallback async_cb;
