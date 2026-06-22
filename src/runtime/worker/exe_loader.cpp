@@ -80,7 +80,8 @@ struct CodeLoader::FileWatcherImpl {
       auto fs_time_sys  = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
           fs_time - std::filesystem::file_time_type::clock::now() + current_time);
 
-      if(!ec && fs_time_sys > last_modified) {
+      // 容忍 1 秒的时钟漂移，避免容器环境下 system_clock 和 filesystem_clock不同步导致的误检（K8s 镜像部署时文件不会变更）
+      if(!ec && fs_time_sys > last_modified + std::chrono::seconds(1)) {
         last_modified = fs_time_sys;
 
         FileChange change;
