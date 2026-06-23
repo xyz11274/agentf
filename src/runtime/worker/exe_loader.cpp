@@ -979,6 +979,23 @@ ReloadResult CodeLoader::reload_code(const std::string& file_path) {
     }
   }
 
+  // 去重检查：比对文件 checksum，未变更则跳过
+  auto current = get_current_version(file_path);
+  if(current) {
+    bool is_new_file = current->checksum.empty();
+    std::string new_checksum = calculate_checksum(file_path);
+    if(!is_new_file && !new_checksum.empty() && new_checksum == current->checksum) {
+      result.success    = true;
+      result.version_id = current->version_id;
+      result.message    = "File unchanged, skipped reload";
+      result.duration   = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - start_time);
+      Logger::instance().info_f("[HOT_RELOAD] File unchanged, skipped: %s (checksum=%s)",
+                                file_path.c_str(), new_checksum.substr(0, 16).c_str());
+      return result;
+    }
+  }
+
   // Create backup if required
   if(config_.backup_before_reload) {
     std::string backup_path =
