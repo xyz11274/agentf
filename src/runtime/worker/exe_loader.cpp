@@ -421,18 +421,6 @@ ExecutionResult CodeLoader::load_and_execute_so(const std::string&     file_path
 
   ExecutionResult result;
 
-  // Check if hot reload is enabled and we need to reload
-  bool needs_reload = false;
-  if(is_watching(file_path)) {
-    auto current_version = get_current_version(file_path);
-    auto latest_version  = get_current_version(file_path);
-
-    if(!current_version || !latest_version
-       || current_version->version_id != latest_version->version_id) {
-      needs_reload = true;
-    }
-  }
-
   // Load or reload the SO library
   SoLibraryPtr so_handle;
   SoFunction   func = nullptr;
@@ -440,8 +428,16 @@ ExecutionResult CodeLoader::load_and_execute_so(const std::string&     file_path
   {
     std::lock_guard<std::mutex> lock(so_cache_mutex_);
 
-    if(needs_reload) {
-      unload_so_library(file_path);
+    // 检查是否需要重新加载（比对缓存的 version_id 与当前版本，修复版本比对 bug）
+    if(is_watching(file_path)) {
+      auto it = so_library_cache_.find(file_path);
+      if(it != so_library_cache_.end()) {
+        auto current_version = get_current_version(file_path);
+        if(current_version && !it->second.version_id.empty()
+           && it->second.version_id != current_version->version_id) {
+          unload_so_library(file_path);
+        }
+      }
     }
 
     auto it = so_library_cache_.find(file_path);
@@ -539,18 +535,6 @@ ExecutionResult CodeLoader::load_and_execute_so_v2(const std::string&     file_p
 
   ExecutionResult result;
 
-  // Check if hot reload is enabled and we need to reload
-  bool needs_reload = false;
-  if(is_watching(file_path)) {
-    auto current_version = get_current_version(file_path);
-    auto latest_version  = get_current_version(file_path);
-
-    if(!current_version || !latest_version
-       || current_version->version_id != latest_version->version_id) {
-      needs_reload = true;
-    }
-  }
-
   // Load or reload the SO library
   SoLibraryPtr   so_handle;
   SoFunctionV2   func_v2 = nullptr;
@@ -559,8 +543,16 @@ ExecutionResult CodeLoader::load_and_execute_so_v2(const std::string&     file_p
   {
     std::lock_guard<std::mutex> lock(so_cache_mutex_);
 
-    if(needs_reload) {
-      unload_so_library(file_path);
+    // 检查是否需要重新加载（比对缓存的 version_id 与当前版本，修复版本比对 bug）
+    if(is_watching(file_path)) {
+      auto it = so_library_cache_.find(file_path);
+      if(it != so_library_cache_.end()) {
+        auto current_version = get_current_version(file_path);
+        if(current_version && !it->second.version_id.empty()
+           && it->second.version_id != current_version->version_id) {
+          unload_so_library(file_path);
+        }
+      }
     }
 
     auto it = so_library_cache_.find(file_path);
@@ -666,18 +658,6 @@ ExecutionResult CodeLoader::load_and_execute_so_v3(const std::string&     file_p
 
   ExecutionResult result;
 
-  // Check if hot reload is enabled and we need to reload
-  bool needs_reload = false;
-  if(is_watching(file_path)) {
-    auto current_version = get_current_version(file_path);
-    auto latest_version  = get_current_version(file_path);
-
-    if(!current_version || !latest_version
-       || current_version->version_id != latest_version->version_id) {
-      needs_reload = true;
-    }
-  }
-
   // Load or reload the SO library
   SoLibraryPtr   so_handle;
   SoFunctionV3   func_v3 = nullptr;
@@ -687,8 +667,16 @@ ExecutionResult CodeLoader::load_and_execute_so_v3(const std::string&     file_p
   {
     std::lock_guard<std::mutex> lock(so_cache_mutex_);
 
-    if(needs_reload) {
-      unload_so_library(file_path);
+    // 检查是否需要重新加载（比对缓存的 version_id 与当前版本，修复版本比对 bug）
+    if(is_watching(file_path)) {
+      auto it = so_library_cache_.find(file_path);
+      if(it != so_library_cache_.end()) {
+        auto current_version = get_current_version(file_path);
+        if(current_version && !it->second.version_id.empty()
+           && it->second.version_id != current_version->version_id) {
+          unload_so_library(file_path);
+        }
+      }
     }
 
     auto it = so_library_cache_.find(file_path);
@@ -1350,8 +1338,8 @@ SoFunctionV3 CodeLoader::get_so_function_v3(const SoLibraryPtr& handle,
 }
 
 bool CodeLoader::unload_so_library(const std::string& file_path) {
-  std::lock_guard<std::mutex> lock(so_cache_mutex_);
-
+  // 调用方必须持有 so_cache_mutex_，此处不再加锁
+  // 修复：移除内部 lock_guard，避免与 load_and_execute_so 系列函数的外层锁形成死锁
   auto it = so_library_cache_.find(file_path);
   if(it != so_library_cache_.end()) {
     Logger::instance().info_f("[CODE_LOADER] Unloading SO library: %s", file_path.c_str());

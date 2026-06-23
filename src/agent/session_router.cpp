@@ -3,6 +3,7 @@
 #include <chrono>
 
 #include "agent/session.h"
+#include "agent/task.h"
 #include "utils/logger.h"
 
 namespace agentflow {
