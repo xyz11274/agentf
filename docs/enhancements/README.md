@@ -96,6 +96,7 @@
 | 034 | 2026-04-23 | [AgentFlow 双集成与跨节点 DataBus 适配层设计](034-feature-agentflow-双集成与跨节点databus适配层设计-260423-tbd.md) | feature | tbd | 统一 so/in-process 与进程集成接口，并将跨节点 DataBus 升级为多中间件适配层 |
 | 035 | 2026-04-23 | [Runtime Master/Worker 分进程部署与跨进程边界](035-feature-runtime-master-worker-分进程部署与跨进程边界-260423-tbd.md) | feature | tbd | Master 与 Worker 可分进程部署，消除二者之间直接函数级调用依赖 |
 | 036 | 2026-04-23 | [agentflowd 可执行入口设计](036-feature-agentflowd-可执行入口设计-260423-implemented.md) | feature | implemented | AgentFlow 无独立可执行入口，需守护进程形式对外暴露 RPC 接口 |
+| 037 | 2026-06-25 | [Managed Agent 平台架构借鉴：Brain / Skills / Session-Context 解耦与 Harness 托管运行时设计](037-feature-managed-agent-runtime-decoupling-260625-tbd.md) | feature | tbd | 借鉴 Anthropic Managed Agents，梳理本项目在 brain、skills、session/context 与 harness 托管运行时上的解耦设计与落地策略 |
 
 ## 按状态分类
 
@@ -110,6 +111,7 @@
 | 033 | 2026-04-08 | [虚拟 Skill（意图分类）编排能力](033-feature-virtual-skill-intent-classification-260408-tbd.md) | 意图分类不落重工具链路，结构化结果交给 coordinator 驱动下一阶段 loop |
 | 034 | 2026-04-23 | [AgentFlow 双集成与跨节点 DataBus 适配层设计](034-feature-agentflow-双集成与跨节点databus适配层设计-260423-tbd.md) | 统一 so/in-process 与进程集成接口，并将跨节点 DataBus 升级为多中间件适配层 |
 | 035 | 2026-04-23 | [Runtime Master/Worker 分进程部署与跨进程边界](035-feature-runtime-master-worker-分进程部署与跨进程边界-260423-tbd.md) | Master 与 Worker 可分进程部署，消除二者之间直接函数级调用依赖 |
+| 037 | 2026-06-25 | [Managed Agent 平台架构借鉴：Brain / Skills / Session-Context 解耦与 Harness 托管运行时设计](037-feature-managed-agent-runtime-decoupling-260625-tbd.md) | 借鉴 Anthropic Managed Agents，梳理本项目在 brain、skills、session/context 与 harness 托管运行时上的解耦设计与落地策略 |
 
 ### 进行中 (wip)
 
