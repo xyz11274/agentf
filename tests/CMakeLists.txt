@@ -102,6 +102,16 @@ target_link_libraries(test_codeloader_fix_gtest PRIVATE
     ${CMAKE_DL_LIBS}
 )
 
+add_executable(test_worker_threadpool_gtest
+    unit/src/test_worker_threadpool_gtest.cpp
+)
+target_link_libraries(test_worker_threadpool_gtest PRIVATE
+    agentflow
+    GTest::gtest
+    GTest::gtest_main
+    pthread
+)
+
 # Compiler options
 if(NOT MSVC)
     target_compile_options(test_agent_gtest PRIVATE -Wno-non-virtual-dtor)
@@ -112,6 +122,7 @@ if(NOT MSVC)
     target_compile_options(test_control_message_gtest PRIVATE -Wno-non-virtual-dtor)
     target_compile_options(test_event_handler_gtest PRIVATE -Wno-non-virtual-dtor)
     target_compile_options(test_codeloader_fix_gtest PRIVATE -Wno-non-virtual-dtor)
+    target_compile_options(test_worker_threadpool_gtest PRIVATE -Wno-non-virtual-dtor)
 endif()
 
 # Add subdirectories
@@ -128,6 +139,7 @@ add_test(NAME DSLAdapterTests COMMAND test_dsl_adapter_gtest)
 add_test(NAME ControlMessageTests COMMAND test_control_message_gtest)
 add_test(NAME EventHandlerTests COMMAND test_event_handler_gtest)
 add_test(NAME CodeLoaderFixTests COMMAND test_codeloader_fix_gtest)
+add_test(NAME WorkerThreadPoolTests COMMAND test_worker_threadpool_gtest)
 
 if(AGENTFLOW_TEST_ENV)
     set_tests_properties(AgentTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
@@ -163,7 +175,8 @@ endif()
 if(_test_rpath)
   foreach(_tgt test_agent_gtest test_workflow_gtest test_node_gtest
                test_databus_gtest test_dsl_adapter_gtest test_control_message_gtest
-               test_event_handler_gtest test_codeloader_fix_gtest)
+               test_event_handler_gtest test_codeloader_fix_gtest
+               test_worker_threadpool_gtest)
     if(TARGET ${_tgt})
       set_target_properties(${_tgt} PROPERTIES BUILD_RPATH "${_test_rpath}")
     endif()
@@ -174,4 +187,5 @@ endif()
 install(TARGETS test_agent_gtest test_workflow_gtest test_node_gtest
         test_databus_gtest test_dsl_adapter_gtest test_control_message_gtest
         test_event_handler_gtest test_codeloader_fix_gtest
+        test_worker_threadpool_gtest
         RUNTIME DESTINATION bin)
