@@ -1,0 +1,26 @@
+{
+  "id": "harness-context-workflow",
+  "version": "1.0",
+  "name": "harness-context-workflow",
+  "description": "Assembles and fills the prompt/context before model access (requirement #2).",
+  "nodes": [
+    {
+      "id": "fill_context",
+      "name": "fill-context",
+      "type": "task",
+      "execution_mode": "python_script",
+      "command": "examples/agent/harness_agent/package/nodes/python/context_node.py",
+      "json_output": true,
+      "inputs": [
+        {"name": "session_id", "type": "string", "required": false},
+        {"name": "dialogue_id", "type": "string", "required": false},
+        {"name": "user_text", "type": "string", "required": false}
+      ],
+      "outputs": [
+        {"name": "session_context", "type": "string"},
+        {"name": "filled_prompt", "type": "string"}
+      ]
+    }
+  ],
+  "edges": []
+}

@@ -1,0 +1,82 @@
+{
+  "name": "HarnessAgent",
+  "version": "1.0.0",
+  "description": "General harness-style agent: context-filled prompt + coordinator-driven agent loop that re-selects skills based on results until none remain.",
+  "session_pool_size": 2,
+  "tasks": [
+    {
+      "id": 0,
+      "type": "contextupdater",
+      "scope": "agent",
+      "description": "Assemble and fill prompt/context before model access",
+      "workflow_file": "harness_context_workflow.json",
+      "workflow_pool_size": 2
+    },
+    {
+      "id": 1,
+      "type": "dispatcher",
+      "description": "Entry point: launches the first harness skill (retrieve)",
+      "next_skills": [
+        "retrieve"
+      ],
+      "max_concurrent_skills": 1
+    },
+    {
+      "id": 2,
+      "type": "coordinator",
+      "description": "Drives the harness loop and decides termination",
+      "workflow_file": "harness_coordinator_workflow.json",
+      "workflow_pool_size": 2
+    },
+    {
+      "id": 3,
+      "type": "skill",
+      "description": "Retrieve skill",
+      "workflow_file": "harness_skill_retrieve_workflow.json",
+      "skill": {
+        "name": "retrieve",
+        "config_dir": "runtime",
+        "instance_pool_size": 2
+      },
+      "workflow_pool_size": 2
+    },
+    {
+      "id": 4,
+      "type": "skill",
+      "description": "Analyze skill",
+      "workflow_file": "harness_skill_analyze_workflow.json",
+      "skill": {
+        "name": "analyze",
+        "config_dir": "runtime",
+        "instance_pool_size": 2
+      },
+      "workflow_pool_size": 2
+    },
+    {
+      "id": 5,
+      "type": "skill",
+      "description": "Compose skill",
+      "workflow_file": "harness_skill_compose_workflow.json",
+      "skill": {
+        "name": "compose",
+        "config_dir": "runtime",
+        "instance_pool_size": 2
+      },
+      "workflow_pool_size": 2
+    },
+    {
+      "id": 6,
+      "type": "skill",
+      "description": "Finalize skill",
+      "workflow_file": "harness_skill_finalize_workflow.json",
+      "skill": {
+        "name": "finalize",
+        "config_dir": "runtime",
+        "instance_pool_size": 2
+      },
+      "workflow_pool_size": 2
+    }
+  ],
+  "max_workflows": 12,
+  "max_concurrent_workflows": 6
+}

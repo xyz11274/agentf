@@ -97,6 +97,7 @@
 | 035 | 2026-04-23 | [Runtime Master/Worker 分进程部署与跨进程边界](035-feature-runtime-master-worker-分进程部署与跨进程边界-260423-tbd.md) | feature | tbd | Master 与 Worker 可分进程部署，消除二者之间直接函数级调用依赖 |
 | 036 | 2026-04-23 | [agentflowd 可执行入口设计](036-feature-agentflowd-可执行入口设计-260423-implemented.md) | feature | implemented | AgentFlow 无独立可执行入口，需守护进程形式对外暴露 RPC 接口 |
 | 037 | 2026-06-25 | [Managed Agent 平台架构借鉴：Brain / Skills / Session-Context 解耦与 Harness 托管运行时设计](037-feature-managed-agent-runtime-decoupling-260625-tbd.md) | feature | tbd | 借鉴 Anthropic Managed Agents，梳理本项目在 brain、skills、session/context 与 harness 托管运行时上的解耦设计与落地策略 |
+| 038 | 2026-06-27 | [harness_agent 通用 Agent Loop 样例](038-feature-harness-agent-通用agent-loop样例-260627-implemented.md) | feature | implemented | 在 examples/agent 下新增通用 harness 样例：dispatcher/coordinator 驱动的结果感知 skill 循环 + 模型前上下文填充 + 可配置技能候选清单 + 专项测试 |
 
 ## 按状态分类
 
@@ -150,6 +151,7 @@
 | 029 | 2026-03-24 | [上下文回调机制优化](029-feature-上下文回调机制优化-260324-implemented.md) | 用户上下文注入时机和方式不够灵活 |
 | 030 | 2026-03-27 | [Node 异步请求机制设计](030-feature-node-异步请求机制设计-260326-implemented.md) | Node同步阻塞调用外部资源，并发能力受限 |
 | 036 | 2026-04-23 | [agentflowd 可执行入口设计](036-feature-agentflowd-可执行入口设计-260423-implemented.md) | AgentFlow 无独立可执行入口，需守护进程形式对外暴露 RPC 接口 |
+| 038 | 2026-06-27 | [harness_agent 通用 Agent Loop 样例](038-feature-harness-agent-通用agent-loop样例-260627-implemented.md) | 在 examples/agent 下新增通用 harness 样例：dispatcher/coordinator 驱动的结果感知 skill 循环 + 模型前上下文填充 + 可配置技能候选清单 + 专项测试 |
 
 ## Enhancement 文档模板
 

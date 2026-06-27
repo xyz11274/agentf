@@ -1,0 +1,9 @@
+# transient runtime artifacts (created by the driver/nodes at run time)
+package/runtime/logs/
+package/runtime/state/
+package/runtime/markers/
+# compiled standalone driver
+build/
+# misc
+**/*.bak
+**/__pycache__/
