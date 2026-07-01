@@ -429,13 +429,9 @@ bool MMNode::execute_shell_command() {
         "[SHELL_CMD_SUCCESS] NodeId=%s, NodeName=%s, Duration=%ldms, ExitCode=%d",
         config_.id.c_str(), config_.name.c_str(), duration, exit_code);
 
-    // Log output (truncated if too long)
-    std::string truncated_output = output;
-    if(truncated_output.length() > 200) {
-      truncated_output = truncated_output.substr(0, 200) + "...";
-    }
+    // Log output
     Logger::instance().debug_f("[SHELL_CMD_OUTPUT] NodeId=%s, Output=%s", config_.id.c_str(),
-                               truncated_output.c_str());
+                               output.c_str());
 
     return true;
   } else {

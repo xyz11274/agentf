@@ -576,8 +576,10 @@ bool BuiltinDispatcher::remove_framework_data(MMAgent& agent,
   }
   new_key += key;
 
-  // Publish empty DataVariant to remove
-  if(agent.publish_data(new_key, DataVariant())) {
+  // Use DataBus remove to truly delete the key (empty DataVariant leaves
+  // a trace that get_framework_data still finds — a bug we fixed).
+  auto* databus = agent.get_runtime_databus();
+  if(databus && databus->remove(new_key)) {
     Logger::instance().info_f("[REMOVE_FRAMEWORK_DATA] Removed key=%s", new_key.c_str());
     return true;
   }

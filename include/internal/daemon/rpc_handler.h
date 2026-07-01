@@ -81,6 +81,10 @@ private:
 
   // Metrics
   std::string handle_metrics_get(const std::string& params, int64_t id);
+
+  // DataBus proxy
+  std::string handle_databus_get(const std::string& params, int64_t id);
+  std::string handle_databus_list_keys(const std::string& params, int64_t id);
 };
 
 }  // namespace daemon

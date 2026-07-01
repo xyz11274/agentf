@@ -43,6 +43,54 @@ inline bool parse_json_string_token(const std::string& text, size_t& index, std:
         case 'n': output.push_back('\n'); break;
         case 'r': output.push_back('\r'); break;
         case 't': output.push_back('\t'); break;
+        case 'u': {
+          // Parse \uXXXX unicode escape to UTF-8
+          if (index + 4 > text.size()) return false;
+          auto read_hex4 = [&](unsigned long& cp) -> bool {
+            unsigned long v = 0;
+            for (int i = 0; i < 4; ++i) {
+              char c = text[index++];
+              v <<= 4;
+              if (c >= '0' && c <= '9')       v |= static_cast<unsigned long>(c - '0');
+              else if (c >= 'a' && c <= 'f')  v |= static_cast<unsigned long>(c - 'a' + 10);
+              else if (c >= 'A' && c <= 'F')  v |= static_cast<unsigned long>(c - 'A' + 10);
+              else return false;
+            }
+            cp = v;
+            return true;
+          };
+          unsigned long cp = 0;
+          if (!read_hex4(cp)) return false;
+          // Handle surrogate pairs (high surrogate + low surrogate)
+          if (cp >= 0xD800 && cp <= 0xDBFF) {
+            if (index + 6 > text.size() || text[index] != '\\' || text[index + 1] != 'u')
+              return false;
+            index += 2;  // skip \u
+            unsigned long low_cp = 0;
+            if (!read_hex4(low_cp) || low_cp < 0xDC00 || low_cp > 0xDFFF)
+              return false;
+            cp = 0x10000 + (cp - 0xD800) * 0x400 + (low_cp - 0xDC00);
+          } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+            return false;  // lonely low surrogate
+          }
+          // Encode code point as UTF-8
+          if (cp <= 0x7F) {
+            output.push_back(static_cast<char>(cp));
+          } else if (cp <= 0x7FF) {
+            output.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+            output.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+          } else if (cp <= 0xFFFF) {
+            output.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+            output.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+            output.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+          } else {
+            output.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+            output.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+            output.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+            output.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+          }
+          break;
+        }
         default: output.push_back(esc); break;
       }
       continue;

@@ -15,7 +15,9 @@
 #include "daemon/response_poller.h"
 #include "daemon/rpc_server.h"
 #include "agent/agent.h"
+#include "agent/session_router.h"
 #include "runtime/agent_runtime.h"
+#include "agent/data_variant_utils.h"
 #include "utils/logger.h"
 
 namespace agentflow {
@@ -45,6 +47,27 @@ std::string extract_json_string_local(const std::string& json, const std::string
   return val;
 }
 
+// DataVariant → JSON string (mirrors uds_server.cpp variant_to_json)
+std::string variant_to_json_local(const DataVariant& var) {
+  if (std::holds_alternative<std::string>(var)) {
+    const std::string& str = std::get<std::string>(var);
+    size_t first_char_pos = str.find_first_not_of(" \t\n\r");
+    if (first_char_pos != std::string::npos &&
+        (str[first_char_pos] == '{' || str[first_char_pos] == '[')) {
+      return str;  // Already JSON, pass through
+    }
+    // Use json_escape from the RpcHandler instance
+    return "\"" + std::get<std::string>(var) + "\"";
+  } else if (std::holds_alternative<int64_t>(var)) {
+    return std::to_string(std::get<int64_t>(var));
+  } else if (std::holds_alternative<double>(var)) {
+    return std::to_string(std::get<double>(var));
+  } else if (std::holds_alternative<bool>(var)) {
+    return std::get<bool>(var) ? "true" : "false";
+  }
+  return "null";
+}
+
 std::string build_success(const std::string& result, int64_t id) {
   return "{\"jsonrpc\":\"2.0\",\"result\":" + result + ",\"id\":" + std::to_string(id) + "}";
 }
@@ -68,6 +91,25 @@ int64_t now_ms() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
+}
+
+// Resolve session_id: prefer (user_id, client_id) via SessionRouter,
+// fallback to session_id param (for internal tools/testing).
+// Returns the resolved session_id, or empty string if neither works.
+std::string resolve_session_id(
+    const std::string& user_id,
+    const std::string& client_id,
+    const std::string& session_id,
+    const std::shared_ptr<framework::MMAgent>& agent)
+{
+  if (!user_id.empty() && !client_id.empty()) {
+    auto router = agent->get_session_router();
+    if (router) {
+      auto session = router->get_session_by_route_key(user_id + ":" + client_id);
+      if (session) return session->get_session_id();
+    }
+  }
+  return session_id;
 }
 
 }  // namespace
@@ -161,6 +203,12 @@ void RpcHandler::register_all(RpcServer& server) {
   // Metrics
   server.register_handler("metrics.get",
       [this](const std::string& p, int64_t id, int, ChannelType) { return handle_metrics_get(p, id); });
+
+  // DataBus proxy (LLM Trace & general DataBus queries)
+  server.register_handler("databus.get",
+      [this](const std::string& p, int64_t id, int, ChannelType) { return handle_databus_get(p, id); });
+  server.register_handler("databus.list_keys",
+      [this](const std::string& p, int64_t id, int, ChannelType) { return handle_databus_list_keys(p, id); });
 }
 
 // --- Query methods ---
@@ -324,6 +372,8 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
 
 std::string RpcHandler::handle_agent_poll_response(const std::string& params, int64_t id) {
   std::string agent_id = extract_json_string_local(params, "agent_id");
+  std::string user_id = extract_json_string_local(params, "user_id");
+  std::string client_id = extract_json_string_local(params, "client_id");
   int timeout_ms = 5000;
   std::string timeout_str = extract_json_string_local(params, "timeout_ms");
   if (!timeout_str.empty()) {
@@ -370,7 +420,10 @@ std::string RpcHandler::handle_agent_poll_response(const std::string& params, in
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 
-  result_oss << "],\"complete\":" << (has_final || (msg_count > 0 && runtime_.get_running_nodes() == 0) ? "true" : "false") << "}";
+  result_oss << "],\"complete\":"
+             << (has_final || (msg_count > 0 && runtime_.get_running_nodes() == 0) ? "true" : "false");
+
+  result_oss << "}";
   return build_success(result_oss.str(), id);
 }
 
@@ -409,10 +462,50 @@ std::string RpcHandler::handle_agent_send_control(const std::string& params, int
 
 std::string RpcHandler::handle_session_list(const std::string& params, int64_t id) {
   std::string agent_id = extract_json_string_local(params, "agent_id");
+  std::string filter_user_id = extract_json_string_local(params, "user_id");
   if (agent_id.empty()) return build_error(-32602, "Invalid params: missing agent_id", id);
   auto agent = registry_.find(agent_id);
   if (!agent) return build_error(-2, "Agent not found: " + agent_id, id);
-  return build_success("{\"sessions\":[]}", id);
+
+  auto router = agent->get_session_router();
+  if (!router) return build_success("{\"sessions\":[]}", id);
+
+  auto route_keys = router->get_active_route_keys();
+  int64_t now = now_ms();
+
+  std::ostringstream oss;
+  bool first_entry = true;
+  oss << "{\"sessions\":[";
+  for (const auto& route_key : route_keys) {
+    auto session = router->get_session_by_route_key(route_key);
+    if (!session) continue;
+
+    // Filter by user_id if requested.
+    if (!filter_user_id.empty() && session->get_user_id() != filter_user_id) continue;
+
+    int64_t age_ms = now - session->get_created_time();
+    std::string status;
+    switch (session->get_state()) {
+      case framework::MMAgentSession::SessionState::CREATED:    status = "created"; break;
+      case framework::MMAgentSession::SessionState::ACTIVE:     status = "active"; break;
+      case framework::MMAgentSession::SessionState::PAUSED:     status = "paused"; break;
+      case framework::MMAgentSession::SessionState::COMPLETED:  status = "completed"; break;
+      case framework::MMAgentSession::SessionState::TERMINATED: status = "terminated"; break;
+      default: status = "unknown"; break;
+    }
+
+    if (!first_entry) oss << ",";
+    first_entry = false;
+    oss << "{\"session_id\":\"" << json_escape(session->get_session_id())
+        << "\",\"user_id\":\"" << json_escape(session->get_user_id())
+        << "\",\"client_id\":\"" << json_escape(session->get_client_id())
+        << "\",\"age_ms\":" << age_ms
+        << ",\"status\":\"" << json_escape(status)
+        << "\"}";
+  }
+  oss << "]}";
+
+  return build_success(oss.str(), id);
 }
 
 std::string RpcHandler::handle_session_destroy(const std::string& params, int64_t id) {
@@ -629,6 +722,87 @@ std::string RpcHandler::handle_metrics_get(const std::string& params, int64_t id
   for (size_t i = 0; i < entries.size(); ++i) {
     if (i > 0) oss << ",";
     oss << "{\"agent_id\":\"" << json_escape(entries[i].agent_id) << "\"}";
+  }
+  oss << "]}";
+  return build_success(oss.str(), id);
+}
+
+// ---------------------------------------------------------------------------
+// DataBus proxy
+// ---------------------------------------------------------------------------
+
+std::string RpcHandler::handle_databus_get(const std::string& params, int64_t id) {
+  std::string agent_id = extract_json_string_local(params, "agent_id");
+  std::string user_id = extract_json_string_local(params, "user_id");
+  std::string client_id = extract_json_string_local(params, "client_id");
+  std::string session_id = extract_json_string_local(params, "session_id");
+  std::string key = extract_json_string_local(params, "key");
+
+  if (agent_id.empty() || key.empty()) {
+    return build_error(-32602, "Invalid params: missing agent_id or key", id);
+  }
+
+  auto agent = runtime_.get_agent(agent_id);
+  if (!agent) {
+    return build_error(-32001, "Agent not found: " + agent_id, id);
+  }
+
+  session_id = resolve_session_id(user_id, client_id, session_id, agent);
+  if (session_id.empty()) {
+    return build_error(-32602, "Invalid params: provide (user_id+client_id) or session_id", id);
+  }
+
+  std::string full_key = "/session/" + session_id + "/" + key;
+  auto& databus = runtime_.get_databus(agent_id);
+  DataVariant value;
+  bool exists = databus.get(full_key, value);
+
+  std::ostringstream oss;
+  if (exists) {
+    std::string value_str = data_variant_to_string(value);
+    oss << "{\"exists\":true,\"value\":" << value_str << "}";
+  } else {
+    oss << "{\"exists\":false,\"value\":null}";
+  }
+  return build_success(oss.str(), id);
+}
+
+std::string RpcHandler::handle_databus_list_keys(const std::string& params, int64_t id) {
+  std::string agent_id = extract_json_string_local(params, "agent_id");
+  std::string user_id = extract_json_string_local(params, "user_id");
+  std::string client_id = extract_json_string_local(params, "client_id");
+  std::string session_id = extract_json_string_local(params, "session_id");
+  std::string prefix = extract_json_string_local(params, "prefix");
+
+  if (agent_id.empty()) {
+    return build_error(-32602, "Invalid params: missing agent_id", id);
+  }
+
+  auto agent = runtime_.get_agent(agent_id);
+  if (!agent) {
+    return build_error(-32001, "Agent not found: " + agent_id, id);
+  }
+
+  session_id = resolve_session_id(user_id, client_id, session_id, agent);
+  if (session_id.empty()) {
+    return build_error(-32602, "Invalid params: provide (user_id+client_id) or session_id", id);
+  }
+
+  std::string full_prefix = "/session/" + session_id + "/" + prefix;
+  auto& databus = runtime_.get_databus(agent_id);
+  auto keys = databus.list_keys_by_prefix(full_prefix);
+
+  // Strip the "/session/{session_id}/" prefix from each key before returning
+  std::string strip_prefix = "/session/" + session_id + "/";
+  std::ostringstream oss;
+  oss << "{\"keys\":[";
+  for (size_t i = 0; i < keys.size(); ++i) {
+    if (i > 0) oss << ",";
+    std::string rel = keys[i];
+    if (rel.compare(0, strip_prefix.size(), strip_prefix) == 0) {
+      rel = rel.substr(strip_prefix.size());
+    }
+    oss << "\"" << json_escape(rel) << "\"";
   }
   oss << "]}";
   return build_success(oss.str(), id);

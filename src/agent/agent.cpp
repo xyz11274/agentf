@@ -1935,13 +1935,20 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     MMAgentMsgQue::Message response_message = message;
     // Use get_framework_data for new format with fallback support
     DataVariant response_value;
+    bool has_response = false;
     if(BuiltinDispatcher::get_framework_data(*this, session->get_session_id(), dialogue_id, "", "response", response_value)) {
       if(const auto* text = std::get_if<std::string>(&response_value)) {
         response_message.content = *text;
+        has_response = true;
       }
     }
 
-    if(session_router_) {
+    // Mark as final so the bridge knows this is the complete response
+    response_message.metadata["final"] = "true";
+    // Only send if we actually found a response
+    if(session_router_ && has_response) {
+      Logger::instance().info_f("[COORDINATOR_SEND] Enqueueing response via session_router, content_len=%zu, msg_id=%s",
+                               response_message.content.size(), response_message.message_id.c_str());
       session_router_->enqueue_response_message(response_message);
 
       // Clean up dialogue data after response is sent

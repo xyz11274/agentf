@@ -89,6 +89,14 @@ private:
   std::map<int, ChannelType> active_clients_;
   std::mutex clients_mutex_;
   std::atomic<int> connection_count_{0};
+
+  // WebSocket client tracking: fd → ws_mode
+  // send_notification() needs this to wrap push notifications in WebSocket frames
+  // for clients connected via WebSocket. BUG FIX: send_notification() previously
+  // always sent raw bytes + "\n", which broke WebSocket framing for async pushes
+  // like "agent.response" and "event.notification".
+  std::map<int, bool> ws_clients_;
+  std::mutex ws_clients_mutex_;
 };
 
 }  // namespace daemon

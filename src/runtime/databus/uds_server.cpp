@@ -45,14 +45,61 @@ std::string extract_json_string(const std::string& json, const std::string& key)
   if (pos >= json.size()) {
     return "";
   }
-  // Check if string value (quoted)
+  // Check if string value (quoted) — scan with escape awareness
   if (json[pos] == '"') {
     pos++;
-    size_t end = json.find('"', pos);
-    if (end == std::string::npos) {
-      return "";
+    std::string result;
+    result.reserve(256);
+    while (pos < json.size()) {
+      if (json[pos] == '\\' && pos + 1 < json.size()) {
+        char next = json[pos + 1];
+        switch (next) {
+          case '"':  result += '"';  break;
+          case '\\': result += '\\'; break;
+          case '/':  result += '/';  break;
+          case 'n':  result += '\n'; break;
+          case 'r':  result += '\r'; break;
+          case 't':  result += '\t'; break;
+          case 'b':  result += '\b'; break;
+          case 'f':  result += '\f'; break;
+          case 'u': {
+            if (pos + 5 < json.size()) {
+              std::string hex = json.substr(pos + 2, 4);
+              unsigned int cp = 0;
+              for (char c : hex) {
+                cp <<= 4;
+                if (c >= '0' && c <= '9') cp |= (c - '0');
+                else if (c >= 'a' && c <= 'f') cp |= (c - 'a' + 10);
+                else if (c >= 'A' && c <= 'F') cp |= (c - 'A' + 10);
+              }
+              if (cp < 0x80) {
+                result += static_cast<char>(cp);
+              } else if (cp < 0x800) {
+                result += static_cast<char>(0xC0 | (cp >> 6));
+                result += static_cast<char>(0x80 | (cp & 0x3F));
+              } else {
+                result += static_cast<char>(0xE0 | (cp >> 12));
+                result += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+                result += static_cast<char>(0x80 | (cp & 0x3F));
+              }
+              pos += 4;
+            }
+            break;
+          }
+          default:
+            result += '\\';
+            result += next;
+            break;
+        }
+        pos += 2;
+      } else if (json[pos] == '"') {
+        return result;
+      } else {
+        result += json[pos];
+        pos++;
+      }
     }
-    return json.substr(pos, end - pos);
+    return result;
   }
   // Check if JSON array - find matching bracket with nesting
   if (json[pos] == '[') {

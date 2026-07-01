@@ -295,6 +295,11 @@ void RpcServer::stop() {
     active_clients_.clear();
     connection_count_ = 0;
   }
+  // BUG FIX: Clear WebSocket tracking map on shutdown.
+  {
+    std::lock_guard<std::mutex> lock(ws_clients_mutex_);
+    ws_clients_.clear();
+  }
 
   // Wait for client handler threads
   {
@@ -319,7 +324,22 @@ void RpcServer::register_handler(const std::string& method, RpcMethodHandler han
 
 void RpcServer::send_notification(int client_fd, const std::string& method, const std::string& params_json) {
   std::string notification = build_notification(method, params_json);
-  notification += "\n";
+  // BUG FIX: Check if this client is in WebSocket mode.
+  // send_notification() is called asynchronously from ResponsePoller and
+  // EventBroker background threads, which do not have access to the per-
+  // connection ws_mode flag. Without this check, WebSocket clients receive
+  // raw bytes instead of RFC 6455 frames, causing connection drops.
+  bool is_ws = false;
+  {
+    std::lock_guard<std::mutex> lock(ws_clients_mutex_);
+    auto it = ws_clients_.find(client_fd);
+    if (it != ws_clients_.end()) is_ws = it->second;
+  }
+  if (is_ws) {
+    notification = ws_encode_text_frame(notification);
+  } else {
+    notification += "\n";
+  }
   ssize_t sent = send(client_fd, notification.c_str(), notification.size(), MSG_NOSIGNAL);
   if (sent < 0) {
     Logger::instance().error_f("[RPC_SERVER] Notification send failed: %s", strerror(errno));
@@ -427,6 +447,15 @@ void RpcServer::client_handler(int fd, ChannelType channel) {
       WsUpgradeResult ws_result = try_ws_upgrade(fd, recv_buffer);
       if (ws_result == WsUpgradeResult::UPGRADE_OK) {
         ws_mode = true;
+        // BUG FIX: Record this client as WebSocket so send_notification()
+        // (called asynchronously from ResponsePoller / EventBroker threads)
+        // can wrap push notifications in WS frames instead of sending raw bytes.
+        // Without this, "agent.response" and "event.notification" streams
+        // arrive as invalid WebSocket frames and get dropped by the client.
+        {
+          std::lock_guard<std::mutex> lock(ws_clients_mutex_);
+          ws_clients_[fd] = true;
+        }
         recv_buffer.clear();
         continue;
       } else if (ws_result == WsUpgradeResult::UPGRADE_FAIL) {
@@ -496,6 +525,11 @@ cleanup:
   {
     std::lock_guard<std::mutex> lock(clients_mutex_);
     active_clients_.erase(fd);
+  }
+  // BUG FIX: Clean up WebSocket tracking entry when client disconnects.
+  {
+    std::lock_guard<std::mutex> lock(ws_clients_mutex_);
+    ws_clients_.erase(fd);
   }
   connection_count_--;
   close(fd);

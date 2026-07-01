@@ -78,3 +78,7 @@ vendor/protoactor/
 
 # CTest temporary artifacts
 Testing/Temporary/
+
+# user files
+ar_scripts
+.atomcode

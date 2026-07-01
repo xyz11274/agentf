@@ -1234,8 +1234,7 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
   Logger::instance().info_f("[CODE_LOADER_DEBUG] Exit code=%d, Success=%s, OutputLen=%zu, Signal=%d",
                             exit_code, result.success ? "true" : "false", output.size(), signal_num);
   if(!output.empty()) {
-    std::string truncated = output.length() > 200 ? output.substr(0, 200) + "..." : output;
-    Logger::instance().info_f("[CODE_LOADER_DEBUG] Output: %s", truncated.c_str());
+    Logger::instance().info_f("[CODE_LOADER_DEBUG] Output: %s", output.c_str());
   }
 
   if(!result.success) {

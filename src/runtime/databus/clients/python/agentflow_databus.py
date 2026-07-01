@@ -402,17 +402,20 @@ class DataBusClient:
         self._connected = False
         self._timeout_seconds = timeout_seconds
 
-        # Extract session_id from socket path if not provided
+        # Extract session_id from socket path if not provided.
+        # Prefer AF_SESSION_ID env var (correct) over parsing from socket path
+        # (which may contain extra segments like agent/task/timestamp).
         if session_id:
             self._session_id = session_id
         else:
-            # Extract from socket path: /tmp/agentflow_{session_id}.sock
-            import os
-            basename = os.path.basename(socket_path)
-            if basename.startswith("agentflow_") and basename.endswith(".sock"):
-                self._session_id = basename[10:-5]  # Remove "agentflow_" and ".sock"
-            else:
-                self._session_id = ""
+            self._session_id = os.environ.get("AF_SESSION_ID", "")
+            if not self._session_id:
+                # Fallback: extract from socket path: /tmp/agentflow_{session_id}.sock
+                basename = os.path.basename(socket_path)
+                if basename.startswith("agentflow_") and basename.endswith(".sock"):
+                    self._session_id = basename[10:-5]  # Remove "agentflow_" and ".sock"
+                else:
+                    self._session_id = ""
 
         # Cached namespace clients
         self._sys_client: Optional[NamespaceClient] = None

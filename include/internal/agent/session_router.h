@@ -22,7 +22,7 @@ class SessionRouter {
   struct Config {
     std::string router_id;
     int         max_queue_size = 1024;
-    int64_t     session_timeout_ms = 30000;
+    int64_t     session_timeout_ms = 3600000;  // 1 hour (was 30s — too short for chat UI)
     int64_t     aging_interval_ms = 250;
   };
 

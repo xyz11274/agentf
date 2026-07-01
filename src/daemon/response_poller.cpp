@@ -84,6 +84,9 @@ void ResponsePoller::poll_loop() {
     for (auto& entry : entries) {
       framework::MMAgentMsgQue::Message response;
       while (entry.agent->dequeue_response_message(response)) {
+        Logger::instance().info_f("[RESPONSE_POLLER] Dequeued response: msg_id=%s, content_len=%zu, agent=%s",
+                                 response.message_id.c_str(), response.content.size(),
+                                 entry.agent_id.c_str());
         // Find matching InFlightRequest by message_id or agent_id
         std::lock_guard<std::mutex> lock(in_flight_mutex_);
 
