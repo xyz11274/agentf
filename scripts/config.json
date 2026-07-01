@@ -1,0 +1,19 @@
+{
+  "server": {
+    "listen": "127.0.0.1:17891",
+    "uds_biz_path": "/tmp/agentflowd_biz.sock",
+    "uds_ctrl_path": "/tmp/agentflowd_ctrl.sock",
+    "max_connections": 1024
+  },
+  "runtime": {
+    "role": "master",
+    "worker_threads": 4,
+    "worker_queue_size": 1024
+  },
+  "logging": {
+    "level": "info"
+  },
+  "daemon": {
+    "drain_timeout_ms": 30000
+  }
+}
