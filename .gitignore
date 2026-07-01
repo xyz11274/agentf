@@ -83,4 +83,5 @@ Testing/Temporary/
 ar_scripts
 .atomcode
 .venv
+node_modules
 .env
