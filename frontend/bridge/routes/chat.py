@@ -1,0 +1,462 @@
+"""AgentFlow Bridge — WebSocket streaming chat endpoint.
+
+Exposes ``/ws/chat/{agent_id}`` for streaming agent conversations to the
+Vue frontend. The protocol is a thin envelope around the daemon's
+``agent.execute`` / notification-pair:
+
+* Client sends ``{"user_id": "...", "client_id": "...", "content": "..."}`` to start a turn.
+* Bridge calls ``agent.execute`` to obtain a ``task_id``.
+* Bridge polls ``wait_for_response`` until the daemon reports done or the
+  client sends ``{"type": "stop"}``.
+* Each poll result becomes a ``chunk`` frame; the terminal frame is ``done``.
+
+Key design decision: ``session_id`` is a daemon-internal concept. The client
+identifies itself via ``user_id`` + ``client_id``; the daemon maps these
+internally to a session via its ``SessionRouter``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
+
+from client import DaemonClient, DaemonError
+from models import ChatChunk, ChatDone, ChatRequest
+
+logger = logging.getLogger("agentflow.bridge.routes.chat")
+
+router = APIRouter(tags=["chat"])
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+CLOSE_CODE_NORMAL = 1000
+CLOSE_CODE_INTERNAL_ERROR = 1011
+
+HEARTBEAT_SECONDS = 30
+TURN_TIMEOUT_SECONDS = 120.0
+
+# ---------------------------------------------------------------------------
+# Endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.websocket("/ws/chat/{agent_id}")
+async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
+    """Stream agent turns over WebSocket.
+
+    Protocol summary (see module docstring for the full contract):
+
+    * Inbound (client -> bridge): ``{"user_id": "...", "client_id": "...", "content": "..."}``
+    * Inbound stop: ``{"type": "stop"}``
+    * Outbound chunk: ``{"type": "chunk", "content": "...", "final": bool}``
+    * Outbound done:  ``{"type": "done", "final": true}``
+    * Outbound error: ``{"type": "error", "message": "...", "code": int}``
+
+    The endpoint accepts the connection first, then validates ``agent_id``.
+    Connection errors and daemon errors are forwarded to the frontend as
+    ``error`` frames before closing the socket with a meaningful code.
+    """
+    await websocket.accept()
+
+    daemon_client: DaemonClient | None = getattr(
+        websocket.app.state, "daemon_client", None
+    )
+    if daemon_client is None:
+        logger.error(
+            "ws chat: DaemonClient not attached to app.state (lifespan not wired?)"
+        )
+        await _send_error_and_close(
+            websocket,
+            message="bridge is not fully initialized",
+            code=CLOSE_CODE_INTERNAL_ERROR,
+        )
+        return
+
+    if not agent_id or not agent_id.strip():
+        await _send_error_and_close(
+            websocket,
+            message="agent_id path parameter is required",
+            code=CLOSE_CODE_INTERNAL_ERROR,
+        )
+        return
+
+    # Track user_id + client_id across multiple turns on the same connection.
+    current_user_id: str | None = None
+    current_client_id: str | None = None
+
+    # ``stop_event`` is set when the frontend sends ``{"type": "stop"}``;
+    # the polling loop inside ``_run_turn`` watches it and exits early.
+    stop_event = asyncio.Event()
+
+    logger.info("ws chat connected agent_id=%s peer=%s", agent_id, _peer(websocket))
+
+    try:
+        # Keep-alive: ping every HEARTBEAT_SECONDS so a half-dead peer is
+        # detected quickly.
+        heartbeat_task = asyncio.create_task(
+            _heartbeat_loop(websocket), name="ws-chat.heartbeat"
+        )
+
+        async def run_one_turn(req: ChatRequest) -> None:
+            stop_event.clear()
+            await _run_turn(
+                websocket=websocket,
+                daemon_client=daemon_client,
+                agent_id=agent_id,
+                request=req,
+                stop_event=stop_event,
+            )
+
+        turn_task: asyncio.Task[None] | None = None
+        recv_task: asyncio.Task[dict[str, Any]] = asyncio.create_task(
+            websocket.receive_json(), name="ws-chat.recv"
+        )
+
+        while True:
+            pending: set[asyncio.Task[Any]] = {recv_task}
+            if turn_task is not None:
+                pending.add(turn_task)
+            done, _ = await asyncio.wait(
+                pending, return_when=asyncio.FIRST_COMPLETED
+            )
+
+            if turn_task is not None and turn_task in done:
+                # Drain the recv task if it also finished.
+                if recv_task in done:
+                    recv_task = asyncio.create_task(
+                        websocket.receive_json(), name="ws-chat.recv"
+                    )
+                try:
+                    turn_task.result()  # re-raise if the turn crashed
+                except DaemonError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("ws chat turn task crashed: %s", exc)
+                    await _send_error_and_close(
+                        websocket,
+                        message=f"internal error: {exc}",
+                        code=CLOSE_CODE_INTERNAL_ERROR,
+                    )
+                    return
+                turn_task = None
+                continue
+
+            # recv completed — process the new frame.
+            try:
+                inbound_raw = recv_task.result()
+            except WebSocketDisconnect:
+                logger.info("ws chat disconnected agent_id=%s", agent_id)
+                if turn_task is not None:
+                    stop_event.set()
+                    turn_task.cancel()
+                break
+
+            inbound = _coerce_inbound(inbound_raw)
+
+            # Stop signal: set the flag so the polling loop breaks, ack
+            # with a done frame, but do NOT cancel the turn task.
+            if isinstance(inbound, _StopSignal):
+                logger.debug("ws chat stop signal received agent_id=%s", agent_id)
+                if turn_task is not None:
+                    stop_event.set()
+                await _safe_send(websocket, ChatDone().model_dump())
+                recv_task = asyncio.create_task(
+                    websocket.receive_json(), name="ws-chat.recv"
+                )
+                continue
+
+            # Heartbeat ping — silently ignore.
+            if isinstance(inbound, _PingSignal):
+                recv_task = asyncio.create_task(
+                    websocket.receive_json(), name="ws-chat.recv"
+                )
+                continue
+
+            if not isinstance(inbound, ChatRequest):
+                await _safe_send(
+                    websocket,
+                    _error_frame(
+                        "invalid message: expected object with 'user_id', 'client_id', 'content' fields",
+                        code=-32600,
+                    ),
+                )
+                recv_task = asyncio.create_task(
+                    websocket.receive_json(), name="ws-chat.recv"
+                )
+                continue
+
+            # Reject concurrent execute: only one turn may run at a time.
+            if turn_task is not None and not turn_task.done():
+                await _safe_send(
+                    websocket,
+                    _error_frame(
+                        "another turn is already in flight",
+                        code=-32000,
+                    ),
+                )
+                recv_task = asyncio.create_task(
+                    websocket.receive_json(), name="ws-chat.recv"
+                )
+                continue
+
+            # Track user_id + client_id for the connection.
+            current_user_id = inbound.user_id
+            current_client_id = inbound.client_id
+
+            turn_task = asyncio.create_task(
+                run_one_turn(inbound), name="ws-chat.turn"
+            )
+            recv_task = asyncio.create_task(
+                websocket.receive_json(), name="ws-chat.recv"
+            )
+    except WebSocketDisconnect:
+        logger.info("ws chat client closed connection agent_id=%s", agent_id)
+    except DaemonError as exc:
+        logger.warning(
+            "ws chat daemon error agent_id=%s code=%s msg=%s",
+            agent_id,
+            getattr(exc, "code", None),
+            exc,
+        )
+        await _send_error_and_close(
+            websocket,
+            message=f"daemon error: {exc}",
+            code=getattr(exc, "code", None) or CLOSE_CODE_INTERNAL_ERROR,
+        )
+    except Exception as exc:  # noqa: BLE001 — last-resort safety net
+        logger.exception("ws chat unexpected failure agent_id=%s", agent_id)
+        await _send_error_and_close(
+            websocket,
+            message=f"internal error: {exc}",
+            code=CLOSE_CODE_INTERNAL_ERROR,
+        )
+    finally:
+        await _cleanup(websocket, agent_id)
+
+
+# ---------------------------------------------------------------------------
+# Internals
+# ---------------------------------------------------------------------------
+
+
+async def _run_turn(
+    *,
+    websocket: WebSocket,
+    daemon_client: DaemonClient,
+    agent_id: str,
+    request: ChatRequest,
+    stop_event: asyncio.Event,
+) -> None:
+    """Execute a single turn: agent.execute -> poll loop -> done frame.
+
+    Uses ``user_id`` + ``client_id`` from the request to identify the session
+    (daemon internally maps these to a session via SessionRouter).
+    """
+    # Generate unique dialogue_id per turn.
+    dialogue_id = (
+        f"{datetime.now(timezone.utc).strftime('%m%d%H%M%S')}"
+        f"-{uuid.uuid4().hex[:12]}"
+    )
+
+    try:
+        execute_result = await asyncio.wait_for(
+            daemon_client.agent_execute(
+                agent_id,
+                session_id="",  # daemon does not accept session_id; pass empty
+                content=request.content,
+                user_id=request.user_id,
+                client_id=request.client_id,
+                dialogue_id=dialogue_id,
+            ),
+            timeout=TURN_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        await _safe_send(
+            websocket,
+            _error_frame(
+                f"agent.execute timed out after {TURN_TIMEOUT_SECONDS}s",
+                code=-32000,
+            ),
+        )
+        await _safe_send(websocket, ChatDone().model_dump())
+        return
+    except DaemonError:
+        raise
+
+    task_id = _extract_task_id(execute_result)
+    if not task_id:
+        await _safe_send(
+            websocket,
+            _error_frame(
+                "agent.execute did not return a task_id",
+                code=-32000,
+            ),
+        )
+        await _safe_send(websocket, ChatDone().model_dump())
+        return
+
+    # Poll for response notifications.
+    final_payload: dict[str, Any] | None = None
+    deadline = asyncio.get_running_loop().time() + TURN_TIMEOUT_SECONDS
+
+    while True:
+        if stop_event.is_set():
+            logger.debug("ws chat turn aborted by stop event agent_id=%s", agent_id)
+            break
+
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            await _safe_send(
+                websocket,
+                _error_frame(
+                    f"turn timed out after {TURN_TIMEOUT_SECONDS}s",
+                    code=-32000,
+                ),
+            )
+            break
+
+        try:
+            notification = await asyncio.wait_for(
+                daemon_client.wait_for_response(
+                    agent_id, timeout=remaining,
+                ),
+                timeout=remaining,
+            )
+        except (asyncio.TimeoutError, DaemonError):
+            logger.warning(
+                "ws chat wait_for_response timed out after %.1fs for agent=%s",
+                remaining, agent_id,
+            )
+            break
+
+        if not notification:
+            continue
+
+        is_final = _extract_final(notification)
+        chunk_content = _extract_content(notification)
+
+        chunk = ChatChunk(content=chunk_content, final=is_final)
+        await _safe_send(websocket, chunk.model_dump())
+
+        if is_final:
+            final_payload = notification
+            break
+
+    await _safe_send(websocket, ChatDone().model_dump())
+
+
+async def _heartbeat_loop(websocket: WebSocket) -> None:
+    """Send a ping frame every ``HEARTBEAT_SECONDS`` seconds."""
+    while True:
+        await asyncio.sleep(HEARTBEAT_SECONDS)
+        try:
+            await websocket.send_json({"type": "ping"})
+        except Exception:
+            break
+
+
+def _coerce_inbound(raw: Any) -> ChatRequest | _StopSignal | _PingSignal | None:
+    """Parse an inbound WebSocket JSON message into the appropriate type."""
+    if not isinstance(raw, dict):
+        return None
+
+    # Stop signal.
+    if raw.get("type") == "stop":
+        return _StopSignal()
+
+    # Ping signal.
+    if raw.get("type") == "ping":
+        return _PingSignal()
+
+    # ChatRequest: must have user_id, client_id, and content.
+    user_id = raw.get("user_id")
+    client_id = raw.get("client_id")
+    content = raw.get("content")
+    if isinstance(user_id, str) and isinstance(client_id, str) and isinstance(content, str):
+        return ChatRequest(user_id=user_id, client_id=client_id, content=content)
+
+    return None
+
+
+class _StopSignal:
+    """Sentinel for a ``{"type": "stop"}`` inbound frame."""
+
+
+class _PingSignal:
+    """Sentinel for a ``{"type": "ping"}`` inbound frame."""
+
+
+async def _send_error_and_close(
+    websocket: WebSocket,
+    *,
+    message: str,
+    code: int,
+) -> None:
+    """Send an error frame and then close the WebSocket."""
+    try:
+        await _safe_send(websocket, _error_frame(message, code=code))
+        await websocket.close(code=code)
+    except Exception:
+        pass
+
+
+def _error_frame(message: str, *, code: int) -> dict[str, Any]:
+    return {"type": "error", "message": message, "code": code}
+
+
+async def _safe_send(websocket: WebSocket, payload: dict[str, Any]) -> None:
+    """Best-effort send; swallow errors so a single failed send doesn't crash the loop."""
+    try:
+        await websocket.send_json(payload)
+    except Exception:
+        pass
+
+
+def _peer(websocket: WebSocket) -> str:
+    """Return a human-readable peer identifier."""
+    try:
+        client = websocket.client
+        if client and client.host:
+            return f"{client.host}:{client.port}"
+    except Exception:
+        pass
+    return "unknown"
+
+
+def _extract_task_id(execute_result: Any) -> str | None:
+    """Pull ``message_id`` out of an ``agent.execute`` result payload."""
+    if isinstance(execute_result, dict):
+        return execute_result.get("task_id") or execute_result.get("message_id")
+    return None
+
+
+def _extract_final(payload: Any) -> bool:
+    if isinstance(payload, dict):
+        return bool(payload.get("final", False))
+    return False
+
+
+def _extract_content(payload: Any) -> str:
+    if isinstance(payload, dict):
+        content = payload.get("content") or payload.get("text") or ""
+        return str(content)
+    return ""
+
+
+async def _cleanup(websocket: WebSocket, agent_id: str) -> None:
+    """Defensive cleanup when the endpoint exits."""
+    try:
+        await websocket.close(code=CLOSE_CODE_NORMAL)
+    except Exception:
+        pass
+
+
+__all__ = ["router"]

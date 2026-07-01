@@ -82,3 +82,5 @@ Testing/Temporary/
 # user files
 ar_scripts
 .atomcode
+.venv
+.env

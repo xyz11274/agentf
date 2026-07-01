@@ -1,0 +1,75 @@
+html,
+body,
+#app {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  font-family:
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  background: linear-gradient(135deg, #f0f2f5 0%, #f5f7fa 100%);
+  color: #303133;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #c0c4cc;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #909399;
+}
+
+/* Element Plus 卡片悬停效果强化 */
+.el-card {
+  transition: box-shadow 0.25s ease, transform 0.25s ease !important;
+}
+
+/* 全局过渡动画 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+/* Element Plus 全局个性化 */
+.el-button {
+  border-radius: 6px !important;
+  font-weight: 500 !important;
+  letter-spacing: 0.3px !important;
+}
+
+.el-button--primary {
+  --el-button-bg-color: #409eff;
+  --el-button-border-color: #409eff;
+}
+
+.el-divider {
+  margin: 16px 0 !important;
+}
+
+.el-tag {
+  border-radius: 4px !important;
+}
+
+.el-empty__description p {
+  font-size: 14px !important;
+  color: #909399 !important;
+}
