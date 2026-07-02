@@ -1,18 +1,29 @@
 #!/bin/bash
 # Start AgentFlow Bridge (FastAPI)
-# Usage: ./ar_scripts/start_bridge.sh [port]
+# Usage: ./ar_scripts/start_bridge.sh [port] [--keep-logs]
+#
+#   --keep-logs   保留旧日志文件，默认每次启动会清理前一次的日志
 set -euo pipefail
 
-# PORT="${1:-8199}"
-PORT="${1:-23767}"
+KEEP_LOGS=false
+ARGS=()
+for arg in "$@"; do
+  if [ "$arg" = "--keep-logs" ]; then
+    KEEP_LOGS=true
+  else
+    ARGS+=("$arg")
+  fi
+done
+
+PORT="${ARGS[0]:-8199}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 echo "=== Starting AgentFlow Bridge ==="
 echo "  Port: $PORT"
-echo "  CWD:  $PROJECT_ROOT/bridge"
+echo "  CWD:  $PROJECT_ROOT/frontend/bridge"
 
-cd "$PROJECT_ROOT/bridge"
+cd "$PROJECT_ROOT/frontend/bridge"
 
 # Activate virtual environment if it exists
 if [ -d ".venv_unix" ]; then
@@ -30,12 +41,19 @@ fi
 # Prepare logs directory
 LOG_DIR="$PROJECT_ROOT/logs"
 mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/bridge.log"
 
-echo "[INFO] Logging to $LOG_DIR/bridge.log"
+# Clean previous logs (unless --keep-logs)
+if [ "$KEEP_LOGS" = false ] && [ -f "$LOG_FILE" ]; then
+  mv "$LOG_FILE" "${LOG_FILE}.$(date +%Y%m%d-%H%M%S)" 2>/dev/null && \
+    echo "[INFO] Archived previous log to ${LOG_FILE}.$(date +%Y%m%d-%H%M%S)"
+fi
+
+echo "[INFO] Logging to $LOG_FILE"
 
 exec uvicorn main:app \
-    --host 172.82.1.5 \
+    --host 0.0.0.0 \
     --port "$PORT" \
     --reload \
     --log-level info \
-    2>&1 | tee -a "$LOG_DIR/bridge.log"
+    2>&1 | tee -a "$LOG_FILE"

@@ -11,7 +11,7 @@ echo "=== Starting AgentFlow Web Frontend ==="
 echo "  Port: $PORT"
 echo "  CWD:  $PROJECT_ROOT/web"
 
-cd "$PROJECT_ROOT/web"
+cd "$PROJECT_ROOT/frontend/web"
 
 # Check node_modules
 if [ ! -d node_modules ]; then
