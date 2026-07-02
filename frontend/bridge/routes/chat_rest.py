@@ -31,7 +31,7 @@ from dependencies import get_daemon_client
 
 logger = logging.getLogger("agentflow.bridge.routes.chat_rest")
 
-router = APIRouter(prefix="/api/chat", tags=["chat"])
+router = APIRouter(prefix="/aisf/healthagent/api/chat", tags=["chat"])
 
 _TURN_TIMEOUT_SECONDS = 120.0
 
