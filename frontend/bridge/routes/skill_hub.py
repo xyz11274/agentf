@@ -32,7 +32,7 @@ from config import settings
 
 logger = logging.getLogger("agentflow.bridge.routes.skill_hub")
 
-router = APIRouter(prefix="/api/skill-hub", tags=["skill-hub"])
+router = APIRouter(prefix="/aisf/healthagent/api/skill-hub", tags=["skill-hub"])
 
 # ---------------------------------------------------------------------------
 # Allowed upload suffixes

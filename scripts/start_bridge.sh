@@ -3,7 +3,8 @@
 # Usage: ./ar_scripts/start_bridge.sh [port]
 set -euo pipefail
 
-PORT="${1:-8199}"
+# PORT="${1:-8199}"
+PORT="${1:-23767}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -33,7 +34,7 @@ mkdir -p "$LOG_DIR"
 echo "[INFO] Logging to $LOG_DIR/bridge.log"
 
 exec uvicorn main:app \
-    --host 0.0.0.0 \
+    --host 172.82.1.5 \
     --port "$PORT" \
     --reload \
     --log-level info \
