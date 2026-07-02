@@ -228,6 +228,11 @@ export interface ChatDone {
 
 /**
  * A single LLM call trace summary (returned by the list endpoint).
+ *
+ * Task-context fields (dialogue_id, session_id, task_id, skill_name,
+ * completed_skill, task_type) are written by the node-side
+ * ``_TraceRecorder._task_context`` and passed through by the bridge. They
+ * are empty strings when absent — treat empty as "unknown", not error.
  */
 export interface LlmTraceSummary {
   call_id: string;
@@ -241,6 +246,20 @@ export interface LlmTraceSummary {
     completion_tokens: number;
     total_tokens: number;
   };
+  /** Current dialogue ID — groups all LLM calls in one conversation. */
+  dialogue_id: string;
+  /** Agent session ID. */
+  session_id: string;
+  /** Node ID (reliable caller identifier, e.g. "coordinator_decide" / "skill_executor"). */
+  node_id: string;
+  /** ID of the task that issued this LLM call. Currently always "" (framework gap — AF_SELF_TASK_ID not injected). */
+  task_id: string;
+  /** Skill name when task_type === 'skill'; currently always "" (framework gap — AF_SKILL_NAME not injected). */
+  skill_name: string;
+  /** Name of the skill that just completed; non-empty ⇒ control returned to coordinator. */
+  completed_skill: string;
+  /** Inferred caller type: 'skill' | 'coordinator' | '' (unknown). Inferred from node_id + completed_skill. */
+  task_type: string;
 }
 
 /**

@@ -15,6 +15,9 @@ Three modes:
 
 API: POST https://api.minimax.io/v1/chat/completions (OpenAI-compatible)
 Docs: https://platform.minimax.io/docs/guides/text-generation
+
+Image size limit: files > 5 MB will be rejected (base64 encoding of very
+large images causes OOM / curl timeout on the LLM proxy).
 """
 
 import argparse
@@ -28,6 +31,7 @@ import urllib.request
 
 ENDPOINT = "https://api.minimax.io/v1/chat/completions"
 VISION_MODEL = "MiniMax-M3"
+MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB
 
 GARMENT_PROMPT = (
     "你是服装识别助手。识别这张图片里的服饰单品，只输出一个 JSON 对象，不要任何额外文字或代码块标记。"
@@ -73,7 +77,19 @@ def _get_api_key() -> str:
 
 
 def _encode_image(image_path: str) -> str:
-    """Read an image file and return a base64 data URI."""
+    """Read an image file and return a base64 data URI.
+    
+    Raises VisionError if the file exceeds MAX_IMAGE_BYTES (5 MB) to prevent
+    OOM / curl timeout on the upstream LLM proxy.
+    """
+    size = os.path.getsize(image_path)
+    if size > MAX_IMAGE_BYTES:
+        mb = size / (1024 * 1024)
+        limit_mb = MAX_IMAGE_BYTES / (1024 * 1024)
+        raise VisionError(
+            f"Image too large: {mb:.1f} MB (max {limit_mb:.0f} MB). "
+            f"Please resize or compress before uploading."
+        )
     with open(image_path, "rb") as f:
         img_bytes = f.read()
     mime = mimetypes.guess_type(image_path)[0] or "image/jpeg"
@@ -81,8 +97,8 @@ def _encode_image(image_path: str) -> str:
 
 
 def _call_vision(image_data: str, system_prompt: str, model: str = VISION_MODEL,
-                 timeout: int = 30) -> dict:
-    """Call Minimax-M3 with an image + system prompt."""
+                 timeout: int = 120) -> dict:
+    """Call MiniMax-M3 with an image + system prompt."""
     api_key = _get_api_key()
     payload = {
         "model": model,

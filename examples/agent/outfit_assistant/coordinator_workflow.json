@@ -11,19 +11,21 @@
       "command": "./nodes/coordinator_decide.py",
       "working_dir": "examples/agent/outfit_assistant",
       "json_output": true,
+      "enable_hot_reload": false,
       "inputs": [
         {"name": "input",               "type": "string", "required": true},
         {"name": "session_id",          "type": "string", "required": true},
         {"name": "dialogue_id",         "type": "string", "required": false},
         {"name": "completed_skill_name", "type": "string", "required": false},
-        {"name": "skill_success",       "type": "string", "required": false}
+        {"name": "skill_success",       "type": "string", "required": false},
+        {"name": "skill_result",        "type": "string", "required": false}
       ],
       "outputs": [
         {"name": "response", "type": "string"},
         {"name": "next_skills", "type": "string"},
         {"name": "coordinator_status", "type": "string"}
       ],
-      "timeout_ms": 60000
+      "timeout_ms": 180000
     }
   ],
   "edges": []

@@ -440,7 +440,11 @@ void RpcServer::client_handler(int fd, ChannelType channel) {
     ssize_t n = recv(fd, buf, sizeof(buf) - 1, 0);
     if (n <= 0) break;
     buf[n] = '\0';
-    recv_buffer += buf;
+    // WARNING: recv_buffer += buf treats buf as C-string, stopping at '\0'.
+    // WebSocket frames commonly contain 0x00 bytes (e.g. extended length
+    // high byte for 126-255 byte payloads, mask key bytes, masked payload).
+    // Using append() with explicit length n preserves all data.
+    recv_buffer.append(buf, static_cast<size_t>(n));
 
     // On first data, check for WebSocket upgrade (TCP only)
     if (!ws_mode && channel == ChannelType::TCP) {

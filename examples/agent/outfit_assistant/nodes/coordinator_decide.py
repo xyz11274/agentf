@@ -21,6 +21,8 @@ import json
 import os
 import re
 import sys
+import time
+
 import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -41,9 +43,56 @@ if os.path.isfile(_DOTENV_PATH):
     except Exception:
         pass
 
+
+# ── Helper functions (must be defined before module-level code below) ──
+
+RE_ENV_VAR = re.compile(r"\$\{(\w+)\}")
+
+
+def _expand_env(value):
+    if isinstance(value, str):
+        return RE_ENV_VAR.sub(lambda m: os.environ.get(m.group(1), m.group(0)), value)
+    if isinstance(value, dict):
+        return {k: _expand_env(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_expand_env(v) for v in value]
+    return value
+
+
+def parse_agent_md(path: str) -> tuple:
+    if not os.path.isfile(path):
+        return {}, ""
+    with open(path, encoding="utf-8") as f:
+        raw = f.read()
+    parts = raw.split("---", 2)
+    if len(parts) < 3:
+        return {}, raw.strip()
+    try:
+        frontmatter = yaml.safe_load(parts[1]) or {}
+        frontmatter = _expand_env(frontmatter)
+    except Exception:
+        frontmatter = {}
+    body = parts[2].strip()
+    return frontmatter, body
+
+
+def get_env(key: str, default: str = "") -> str:
+    return os.environ.get(key, default)
+
+
 # ---------------------------------------------------------------------------
 # Framework protocol — auto-injected into coordinator system prompt
 # ---------------------------------------------------------------------------
+
+# ── Build available-skills list from agent.md ──
+_AVAILABLE_SKILLS: list[str] = []
+_frontmatter, _ = parse_agent_md(AGENT_MD_PATH)
+_raw_skills = _frontmatter.get("skills", [])
+if isinstance(_raw_skills, list):
+    for _s in _raw_skills:
+        _name = _s if isinstance(_s, str) else _s.get("name", "")
+        if _name and _name not in _AVAILABLE_SKILLS:
+            _AVAILABLE_SKILLS.append(_name)
 
 COORDINATOR_PROTOCOL = """## 你的工作方式
 
@@ -53,7 +102,7 @@ COORDINATOR_PROTOCOL = """## 你的工作方式
 ## run_skills 使用方式
 
 调用 run_skills 时，为每个 skill 指定：
-- name (必填): skill 名称，对应 harness/skills/ 下的目录
+- name (必填): skill 名称，可用选项：""" + ", ".join(_AVAILABLE_SKILLS) + """
 - prompt (必填): 给这个 skill 的任务指令，告诉它应该做什么
 - load_skills (可选): skill 应加载的技能文档名称列表
 - exec_skill_key (可选): 结构化输入数据的 DataBus key
@@ -105,7 +154,8 @@ RUN_SKILLS_TOOL = {
                         "properties": {
                             "name": {
                                 "type": "string",
-                                "description": "Skill 名称，对应 harness/skills/ 下的目录名"
+                                "enum": _AVAILABLE_SKILLS,
+                                "description": "Skill 名称，要从可用列表中选择"
                             },
                             "prompt": {
                                 "type": "string",
@@ -139,47 +189,6 @@ RUN_SKILLS_TOOL = {
         }
     }
 }
-
-# ---------------------------------------------------------------------------
-# agent.md parsing
-# ---------------------------------------------------------------------------
-
-RE_ENV_VAR = re.compile(r"\$\{(\w+)\}")
-
-
-def _expand_env(value):
-    if isinstance(value, str):
-        return RE_ENV_VAR.sub(lambda m: os.environ.get(m.group(1), m.group(0)), value)
-    if isinstance(value, dict):
-        return {k: _expand_env(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_expand_env(v) for v in value]
-    return value
-
-
-def parse_agent_md(path: str) -> tuple:
-    if not os.path.isfile(path):
-        return {}, ""
-    with open(path, encoding="utf-8") as f:
-        raw = f.read()
-    parts = raw.split("---", 2)
-    if len(parts) < 3:
-        return {}, raw.strip()
-    try:
-        frontmatter = yaml.safe_load(parts[1]) or {}
-        frontmatter = _expand_env(frontmatter)
-    except Exception:
-        frontmatter = {}
-    body = parts[2].strip()
-    return frontmatter, body
-
-
-# ---------------------------------------------------------------------------
-# LLM interaction
-# ---------------------------------------------------------------------------
-
-def get_env(key: str, default: str = "") -> str:
-    return os.environ.get(key, default)
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +266,7 @@ def collect_skill_results(databus: DataBusClient, skill_names: list) -> list:
 # ---------------------------------------------------------------------------
 
 def execute():
+    _t0 = time.time()
     user_input = get_env("AF_INPUT", "")
     dialogue_id = get_env("AF_DIALOGUE_ID", "")
     session_id = get_env("AF_SESSION_ID", "")
@@ -264,10 +274,11 @@ def execute():
     # Framework-injected skill completion info (from node inputs → AF_ env vars)
     completed_skill = get_env("AF_COMPLETED_SKILL_NAME", "")
     skill_success = get_env("AF_SKILL_SUCCESS", "")
+    completed_skill_result = get_env("AF_SKILL_RESULT", "")
 
     frontmatter, agent_md_body = parse_agent_md(AGENT_MD_PATH)
     model_cfg = frontmatter.get("model", {})
-    # model can be a plain string (e.g. "Minimax-M3") or a dict {name: "..."}
+    # model can be a plain string (e.g. "MiniMax-M3") or a dict {name: "..."}
     model_name = model_cfg if isinstance(model_cfg, str) else model_cfg.get("name", "gpt-4o-mini")
 
     # API key and base URL come from env vars (not agent.md frontmatter).
@@ -280,6 +291,7 @@ def execute():
 
     # ── flow debug ──
     print(f"[flow] coordinator_decide triggered: session={session_id} dialogue={dialogue_id} model={model_name}", file=sys.stderr)
+    _t1 = time.time()
     if completed_skill:
         print(f"[flow]   trigger_type=skill_completion completed_skill={completed_skill} success={skill_success}", file=sys.stderr)
     else:
@@ -287,6 +299,8 @@ def execute():
 
     databus = DataBusClient()
     recorder = get_recorder()
+    _t2 = time.time()
+    print(f"[timing] init={_t2-_t1:.1f}s", file=sys.stderr)
 
     # Restore cross-trigger conversation history (llm namespace, session-persistent)
     history = recorder.read_session_messages() if recorder.is_connected else []
@@ -297,12 +311,21 @@ def execute():
 
     messages = [{"role": "system", "content": system_prompt}]
     messages.extend(history)
+    _t3 = time.time()
+    print(f"[timing] messages_ready={_t3-_t0:.1f}s", file=sys.stderr)
 
     # Construct this trigger's input
     # dummy_pre_skill is a passthrough hook — treat as first trigger (no result to evaluate)
     if completed_skill and completed_skill != "dummy_pre_skill":
         # Re-trigger: skill completion notification
-        skill_results = collect_skill_results(databus, [completed_skill])
+        if completed_skill_result:
+            try:
+                parsed_result = json.loads(completed_skill_result)
+            except (json.JSONDecodeError, TypeError):
+                parsed_result = completed_skill_result
+            skill_results = [{"skill": completed_skill, "result": parsed_result}]
+        else:
+            skill_results = collect_skill_results(databus, [completed_skill])
         messages.append({"role": "user", "content":
             f"Skill '{completed_skill}' 已完成 (success={skill_success})。\n"
             f"结果: {json.dumps(skill_results, ensure_ascii=False, indent=2)}\n"
@@ -313,17 +336,33 @@ def execute():
 
     # Single LLM decision (tools: [run_skills])
     # 4000 tokens to avoid finish=length truncation on long responses
+    _t4 = time.time()
+    print(f"[timing] llm_call_start={_t4-_t0:.1f}s", file=sys.stderr)
     raw = call_llm(
         messages, tools=[RUN_SKILLS_TOOL],
         model=model_name,
         base_url=base_url,
         api_key=api_key,
         max_completion_tokens=4000)
+    _t5 = time.time()
+    print(f"[timing] llm_call_end={_t5-_t0:.1f}s (llm={_t5-_t4:.1f}s)", file=sys.stderr)
 
     if raw.get("_llm_error"):
-        print(json.dumps({"error": raw.get("error", "LLM call failed")},
-                          ensure_ascii=False))
-        sys.exit(1)
+        err_msg = raw.get("error", "LLM call failed")
+        print(f"[flow]   ⚠️  LLM error (non-fatal): {err_msg}", file=sys.stderr)
+        # Return fallback response instead of crashing — user gets something,
+        # workflow completes, coordinator can be re-triggered.
+        response_text = f"抱歉，我暂时无法处理您的请求（LLM 调用超时）。请稍后再试。"
+        output = {"response": response_text}
+        if databus.is_connected():
+            try:
+                databus._client.raw().put("_e2e_response", response_text)
+            except Exception:
+                pass
+        _t6 = time.time()
+        print(f"[timing] output={_t6-_t0:.1f}s total", file=sys.stderr)
+        print(json.dumps(output, ensure_ascii=False))
+        return
 
     choice = raw.get("choices", [{}])[0]
     msg = choice.get("message", {})
@@ -341,8 +380,16 @@ def execute():
 
             if name == "run_skills":
                 skill_names = args.get("skills", [])
-                print(f"[flow]   LLM decision: run_skills skills={[s.get('name','?') for s in skill_names]} reason={args.get('reason','')[:60]}", file=sys.stderr)
+                # Log full per-skill parameters
+                for i, s in enumerate(skill_names, 1):
+                    p = s.get("prompt", "")[:100]
+                    ls = s.get("load_skills", [])
+                    print(f"[flow]   skill[{i}]: name={s.get('name','?')} prompt='{p}' load_skills={ls}", file=sys.stderr)
+                print(f"[flow]   LLM decision: run_skills reason={args.get('reason','')[:80]}", file=sys.stderr)
                 result_str = handle_run_skills_call(args, databus, session_id, dialogue_id)
+                # Log dispatch result
+                result_json = json.loads(result_str)
+                print(f"[flow]   dispatch result: status={result_json.get('status')} skills={result_json.get('skills')}", file=sys.stderr)
             else:
                 print(f"[flow]   LLM decision: unknown_tool={name}", file=sys.stderr)
                 result_str = json.dumps({"error": f"Unknown tool: {name}"})
@@ -359,6 +406,8 @@ def execute():
             recorder.write_session_messages(messages_to_save)
 
         # Output coordinator_status (don't write "response" — avoid overwriting skill results)
+        _t6 = time.time()
+        print(f"[timing] skill_dispatched={_t6-_t0:.1f}s", file=sys.stderr)
         print(json.dumps({"coordinator_status": "skills_dispatched"},
                          ensure_ascii=False))
     else:
@@ -373,19 +422,28 @@ def execute():
         else:
             response_text = raw_response
         print(json.dumps({"response": response_text}, ensure_ascii=False))
+        _t6 = time.time()
+        print(f"[timing] final_output={_t6-_t0:.1f}s total", file=sys.stderr)
 
         # Write to persistent DataBus key for e2e tests (bypasses RESPONSE_POLLER
         # which immediately removes the "response" key). Raw client writes to
         # global namespace, not dialogue-scoped, so any session can read it.
         if databus.is_connected():
             try:
+                _t7 = time.time()
                 databus._client.raw().put("_e2e_response", response_text)
+                print(f"[timing] e2e_put={time.time()-_t7:.1f}s", file=sys.stderr)
             except Exception:
                 pass
 
         messages_to_save = messages[1:]
         if recorder.is_connected:
+            _t8 = time.time()
             recorder.write_session_messages(messages_to_save)
+            print(f"[timing] session_save={time.time()-_t8:.1f}s", file=sys.stderr)
+
+        _t9 = time.time()
+        print(f"[timing] script_exit={_t9-_t0:.1f}s", file=sys.stderr)
 
 
 if __name__ == "__main__":

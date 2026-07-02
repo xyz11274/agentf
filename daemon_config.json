@@ -1,0 +1,26 @@
+{
+  "server": {
+    "listen": "0.0.0.0:17891",
+    "uds_biz_path": "/tmp/agentflowd_biz.sock",
+    "uds_ctrl_path": "/tmp/agentflowd_ctrl.sock",
+    "max_connections": 1024
+  },
+  "runtime": {
+    "role": "master",
+    "worker_threads": 4,
+    "local_worker_id": "worker-1",
+    "worker_default_workflow_threads": 2,
+    "worker_control_threads": 1,
+    "worker_business_threads": 2,
+    "worker_queue_size": 1024
+  },
+  "logging": {
+    "level": "info",
+    "file": ""
+  },
+  "agents": [
+    {
+      "package_path": "./examples/agent/harness_agent"
+    }
+  ]
+}

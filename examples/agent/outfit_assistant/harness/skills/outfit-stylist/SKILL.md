@@ -1,6 +1,6 @@
 ---
 name: outfit-stylist
-description: 根据天气、场合、性别和个人风格给出可落地的穿搭建议。用于用户问「今天穿什么」「约会/通勤/运动/聚会怎么穿」「这件怎么搭」，上传整身照想听风格点评。会真实查询当地天气(Open-Meteo, 免key)、用 Minimax-M3 多模态能力识别上传图片里的单品/整体造型/人物特征、读取并更新用户的风格档案与历史，按用户意图以纯文字或可搭配图呈现；配置了 API_KEY 时默认附上穿搭效果图。
+description: 根据天气、场合、性别和个人风格给出可落地的穿搭建议。用于用户问「今天穿什么」「约会/通勤/运动/聚会怎么穿」「这件怎么搭」，上传整身照想听风格点评。会真实查询当地天气(Open-Meteo, 免key)、用 MiniMax-M3 多模态能力识别上传图片里的单品/整体造型/人物特征、读取并更新用户的风格档案与历史，按用户意图以纯文字或可搭配图呈现；配置了 API_KEY 时默认附上穿搭效果图。
 version: 1.0.0
 requires_secrets: API_KEY
 requires_network: api.minimax.io
@@ -34,7 +34,7 @@ python3 ${SKILL_DIR}/weather.py "<城市>"
 ```
 
 ### 3. 分析上传图片（如有）
-若用户上传了照片，用 Minimax-M3 多模态能力识别：
+若用户上传了照片，用 MiniMax-M3 多模态能力识别：
 ```bash
 python3 ${SKILL_DIR}/scripts/outfit_vision.py --image <path> --mode garment
 ```

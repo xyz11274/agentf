@@ -117,6 +117,14 @@ async function showDetail(trace: LlmTraceSummary): Promise<void> {
         <!-- Summary row -->
         <div class="llm-trace__item-header">
           <span class="llm-trace__item-num">#{{ idx + 1 }}</span>
+          <span
+            v-if="trace.task_type"
+            class="llm-trace__item-tag"
+            :class="`llm-trace__item-tag--${trace.task_type}`"
+            :title="trace.completed_skill ? `控制权回流（${trace.completed_skill} 完成）` : trace.task_type === 'skill' ? `subagent 执行（node: ${trace.node_id}）` : 'coordinator 决策'"
+          >
+            {{ trace.task_type === 'skill' ? (trace.node_id || 'skill') : (trace.completed_skill ? `coord←${trace.completed_skill}` : 'coord') }}
+          </span>
           <span class="llm-trace__item-model">{{ trace.model || '-' }}</span>
           <span class="llm-trace__item-latency">
             <el-icon><Clock /></el-icon>{{ trace.latency_ms }}ms
@@ -268,6 +276,23 @@ async function showDetail(trace: LlmTraceSummary): Promise<void> {
   font-weight: 600;
   color: #409eff;
   min-width: 24px;
+}
+/* Task-type tag — distinguishes coordinator vs skill control flow */
+.llm-trace__item-tag {
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.llm-trace__item-tag--skill {
+  background: #ecf5ff;
+  color: #409eff;
+}
+.llm-trace__item-tag--coordinator {
+  background: #f0f9eb;
+  color: #67c23a;
 }
 .llm-trace__item-model {
   font-weight: 600;

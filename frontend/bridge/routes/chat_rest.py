@@ -33,7 +33,7 @@ logger = logging.getLogger("agentflow.bridge.routes.chat_rest")
 
 router = APIRouter(prefix="/aisf/healthagent/api/chat", tags=["chat"])
 
-_TURN_TIMEOUT_SECONDS = 120.0
+_TURN_TIMEOUT_SECONDS = 360.0
 
 
 class ChatRestRequest(BaseModel):

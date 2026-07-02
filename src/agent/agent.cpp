@@ -1197,6 +1197,14 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
                               skill_success_it->second.c_str(), task_config.task_id.c_str());
   }
 
+  // Carry the completed skill payload across the workflow boundary. The UDS
+  // server that produced it is destroyed with the skill workflow, so the
+  // coordinator must not try to read it from that old workflow afterwards.
+  if(const auto skill_result_it = message.metadata.find("skill_result");
+     skill_result_it != message.metadata.end() && !skill_result_it->second.empty()) {
+    task->set_parameter("skill_result", skill_result_it->second);
+  }
+
   return task;
 }
 
@@ -1543,6 +1551,10 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       if(!skill_name_for_counter.empty()) {
         coordinator_trigger.metadata["completed_skill_name"] = skill_name_for_counter;
       }
+      if(const auto result_it = message.metadata.find("skill_result");
+         result_it != message.metadata.end() && !result_it->second.empty()) {
+        coordinator_trigger.metadata["skill_result"] = result_it->second;
+      }
       // Pass trace_labels for flow trace correlation
       if(message.metadata.count("trace_labels")) {
         coordinator_trigger.metadata["trace_labels"] = message.metadata.at("trace_labels");
@@ -1841,6 +1853,9 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
                                     multi_result.consumed_index);
           MMAgentMsgQue::Message response_message = message;
           response_message.content = multi_result.content;
+          if(multi_result.is_done) {
+            response_message.metadata["final"] = "true";
+          }
 
           if(session_router_) {
             session_router_->enqueue_response_message(response_message);
@@ -1871,6 +1886,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
           if(const auto* text = std::get_if<std::string>(&response_value)) {
             response_message.content = *text;
           }
+          response_message.metadata["final"] = "true";
 
           if(session_router_) {
             session_router_->enqueue_response_message(response_message);

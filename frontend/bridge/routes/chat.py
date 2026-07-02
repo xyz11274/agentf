@@ -41,7 +41,7 @@ CLOSE_CODE_NORMAL = 1000
 CLOSE_CODE_INTERNAL_ERROR = 1011
 
 HEARTBEAT_SECONDS = 30
-TURN_TIMEOUT_SECONDS = 120.0
+TURN_TIMEOUT_SECONDS = 360.0
 
 # ---------------------------------------------------------------------------
 # Endpoint

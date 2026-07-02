@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(AgentFlow VERSION 0.1.0 LANGUAGES CXX)
+project(AgentFlow VERSION 0.1.0 LANGUAGES C CXX)
 
 # Set C++ standard
 set(CMAKE_CXX_STANDARD 17)
@@ -140,6 +140,7 @@ if(NOT DEFINED RAPIDJSON_INCLUDE_DIR)
       "/usr/include"
       "/opt/homebrew/include"
       "/usr/include/x86_64-linux-gnu"
+      ${CMAKE_SOURCE_DIR}/vendor/rapidjson/include
     PATH_SUFFIXES rapidjson
     NO_DEFAULT_PATH
     NO_CMAKE_ENVIRONMENT_PATH
@@ -286,6 +287,8 @@ set(AGENTFLOW_UTILS_SOURCES
     ${AGENTFLOW_SOURCE_DIR}/utils/logger.cpp
     ${AGENTFLOW_SOURCE_DIR}/utils/thread_pool.cpp
     ${AGENTFLOW_SOURCE_DIR}/utils/file_storage.cpp
+    # miniz: single-file zip/deflate library (public domain), used by file_storage
+    ${AGENTFLOW_VENDOR_DIR}/miniz/miniz.c
 )
 
 # Actor adapter sources
@@ -335,7 +338,7 @@ set(AGENTFLOW_SOURCES
 
 # Create main library (shared library .so)
 add_library(agentflow SHARED ${AGENTFLOW_SOURCES})
-target_include_directories(agentflow PUBLIC ${AGENTFLOW_INCLUDE_DIR})
+target_include_directories(agentflow PUBLIC ${AGENTFLOW_INCLUDE_DIR} ${AGENTFLOW_VENDOR_DIR}/miniz)
 
 # Set library output directory
 set_target_properties(agentflow PROPERTIES
@@ -775,8 +778,8 @@ if(AGENTFLOW_BUILD_TESTS)
       ${AGENTFLOW_SOURCE_DIR}/daemon/config.cpp
       ${AGENTFLOW_SOURCE_DIR}/daemon/daemon.cpp
       ${AGENTFLOW_SOURCE_DIR}/daemon/rpc_server.cpp
-      ${AGENTFLOW_SOURCE_DIR}/daemon/rpc_handler.cpp
-      ${AGENTFLOW_SOURCE_DIR}/daemon/agent_registry.cpp
+    ${AGENTFLOW_SOURCE_DIR}/daemon/rpc_handler.cpp
+    ${AGENTFLOW_SOURCE_DIR}/daemon/agent_registry.cpp
       ${AGENTFLOW_SOURCE_DIR}/daemon/response_poller.cpp
       ${AGENTFLOW_SOURCE_DIR}/daemon/event_broker.cpp
       ${AGENTFLOW_SOURCE_DIR}/daemon/ws_upgrade.cpp
