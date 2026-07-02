@@ -45,7 +45,14 @@ def _build_trace_summary(
     call_id: str,
     meta: Optional[dict],
 ) -> dict[str, Any]:
-    """Build the summary dict for a single trace entry."""
+    """Build the summary dict for a single trace entry.
+
+    Task-context fields (dialogue_id, session_id, task_id, skill_name,
+    completed_skill, task_type) are pass-through from the node-side
+    ``_TraceRecorder`` meta. They are empty strings when absent (older trace
+    records or non-LLM-framework nodes) — downstream consumers should treat
+    empty as "unknown", not error.
+    """
     if meta is None:
         meta = {}
     return {
@@ -60,6 +67,14 @@ def _build_trace_summary(
             "completion_tokens": meta.get("completion_tokens", 0),
             "total_tokens": meta.get("total_tokens", 0),
         },
+        # Task context (written by node-side _TraceRecorder._task_context)
+        "dialogue_id": meta.get("dialogue_id", ""),
+        "session_id": meta.get("session_id", ""),
+        "node_id": meta.get("node_id", ""),
+        "task_id": meta.get("task_id", ""),
+        "skill_name": meta.get("skill_name", ""),
+        "completed_skill": meta.get("completed_skill", ""),
+        "task_type": meta.get("task_type", ""),
     }
 
 

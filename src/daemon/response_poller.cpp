@@ -93,7 +93,23 @@ void ResponsePoller::poll_loop() {
         // Try exact message_id match first
         auto it = in_flight_.find(response.message_id);
         if (it == in_flight_.end()) {
-          // Try matching by agent_id — find any request for this agent
+          // Workflow responses use task ids rather than the original RPC
+          // message id. Match the stable per-turn dialogue id before falling
+          // back to agent id, otherwise concurrent turns can cross routes.
+          const auto dialogue_it = response.metadata.find("dialogue_id");
+          if (dialogue_it != response.metadata.end() && !dialogue_it->second.empty()) {
+            for (auto request_it = in_flight_.begin(); request_it != in_flight_.end();
+                 ++request_it) {
+              if (request_it->second.agent_id == entry.agent_id &&
+                  request_it->second.dialogue_id == dialogue_it->second) {
+                it = request_it;
+                break;
+              }
+            }
+          }
+        }
+        if (it == in_flight_.end()) {
+          // Legacy fallback for responses that do not carry a dialogue id.
           for (auto& [mid, req] : in_flight_) {
             if (req.agent_id == entry.agent_id) {
               it = in_flight_.find(mid);

@@ -168,7 +168,7 @@ class _TraceRecorder:
     def trace_call(self, messages: list, model: str, base_url: str,
                    api_key: str, tools: list | None = None,
                    max_completion_tokens: int = 2000,
-                   timeout: int = 60) -> dict:
+                   timeout: int = 120) -> dict:
         """Execute LLM call via curl with full trace recording.
 
         Returns OpenAI-compatible response dict, or
@@ -265,7 +265,9 @@ class _TraceRecorder:
         try:
             self._client.llm().put(key, value)
         except Exception as exc:
-            _log_warn(f"put '{key}' failed: {exc}")
+            # Log diagnostic info for missing-params errors
+            sid = self._client.session_id if self._client else "no-client"
+            _log_warn(f"put '{key}' failed: {exc} (session_id={sid!r})")
 
     def _append_to_index(self, call_id: str) -> None:
         if not self._client:
@@ -327,7 +329,7 @@ def call_llm(messages: list, model: str = "gpt-4o-mini",
              base_url: str = "", api_key: str = "",
              tools: list | None = None,
              max_completion_tokens: int = 2000,
-             timeout: int = 60) -> dict:
+             timeout: int = 120) -> dict:
     """Call LLM API with full trace recording. Returns OpenAI-compatible dict."""
     return get_recorder().trace_call(
         messages, model, base_url, api_key, tools,

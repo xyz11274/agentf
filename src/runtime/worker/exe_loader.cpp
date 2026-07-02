@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cerrno>
 #include <cstring>
 #include <dlfcn.h>
+#include <fcntl.h>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -20,6 +22,7 @@
 #include <vector>
 
 #include <sys/stat.h>
+#include <sys/poll.h>
 #include <sys/wait.h>
 
 #include "utils/logger.h"
@@ -1140,10 +1143,6 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
   Logger::instance().info_f("[CODE_LOADER_DEBUG] Command=%s, WorkingDir=%s, EnvVars=%zu",
                             command.c_str(), working_dir.c_str(), env_vars.size());
 
-  // [DEBUG] Log full command details for troubleshooting
-  Logger::instance().info_f("[CODE_LOADER_DEBUG] Command=%s, WorkingDir=%s, EnvVars=%zu",
-                            command.c_str(), working_dir.c_str(), env_vars.size());
-
   auto shell_escape_single = [](const std::string& s) {
     std::string out;
     out.reserve(s.size() + 8);
@@ -1158,8 +1157,20 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
   };
   std::string prepared_command = command;
   if(!working_dir.empty()) {
+    // Resolve to an absolute path IMMEDIATELY before use, because the
+    // daemon's process-level CWD (getcwd) is NOT thread-safe — another
+    // thread may call chdir() concurrently, making a subsequent `cd <rel>`
+    // resolve to the wrong directory (observed as intermittent "exit code 2"
+    // from the shell: the Python script file isn't found at the wrong CWD).
+    // An absolute path is immune to CWD changes regardless of timing.
+    std::string abs_wd;
+    try {
+      abs_wd = fs::absolute(fs::path(working_dir)).string();
+    } catch(...) {
+      abs_wd = working_dir;  // fallback — let cd fail naturally if invalid
+    }
     prepared_command =
-        "cd '" + shell_escape_single(working_dir) + "' && (" + prepared_command + ")";
+        "cd '" + shell_escape_single(abs_wd) + "' && (" + prepared_command + ")";
   }
   if(!env_vars.empty()) {
     std::ostringstream env_prefix;
@@ -1178,57 +1189,116 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
     }
   }
 
-  // Build final command with timeout wrapper if needed.
-  std::string final_command = "(" + prepared_command + ") 2>&1";
+  Logger::instance().info_f("[CODE_LOADER_DEBUG] Final command: %s", prepared_command.c_str());
 
-  // [DEBUG] Log the final command being executed
-  Logger::instance().info_f("[CODE_LOADER_DEBUG] Final command: %s", final_command.c_str());
-
-  if(false && timeout_ms > 0) {
-    // Use a simple bash wrapper that implements timeout using background sleep + kill
-    int timeout_secs = (timeout_ms + 999) / 1000;  // Round up to seconds
-
-    std::ostringstream oss;
-    // Wrapper: run command in background and kill it if timeout expires
-    // Note: stderr is already redirected to stdout in the command above
-    oss << "sh -c '( " << prepared_command << " ) & PID=$!; "
-        << "(sleep " << timeout_secs << "; kill -KILL $PID 2>/dev/null) & SLEEP_PID=$!; "
-        << "wait $PID; "
-        << "exit_code=$?; "
-        << "kill -TERM $SLEEP_PID 2>/dev/null; "
-        << "wait $SLEEP_PID 2>/dev/null; "
-        << "exit $exit_code'";
-    
-    final_command = oss.str();
-
-    Logger::instance().debug_f("[CODE_LOADER] Applied timeout wrapper: timeout=%ds",
-                               timeout_secs);
-  }
-
-  // Use popen for simple execution
-  FILE* pipe = popen(final_command.c_str(), "r");
-  if(!pipe) {
+  int output_pipe[2];
+  if(pipe(output_pipe) != 0) {
     result.success       = false;
-    result.error_message = "Failed to execute command";
+    result.error_message = "Failed to create command output pipe";
     result.exit_code     = -1;
     return result;
   }
 
-  // Read output (includes stderr due to 2>&1 redirection)
-  char        buffer[4096];
-  std::string output;
-  while(fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-    output += buffer;
+  pid_t child_pid = fork();
+  if(child_pid < 0) {
+    close(output_pipe[0]);
+    close(output_pipe[1]);
+    result.success       = false;
+    result.error_message = "Failed to fork command process";
+    result.exit_code     = -1;
+    return result;
   }
 
-  int status       = pclose(pipe);
-  int exit_code    = WEXITSTATUS(status);
-  int signal_num   = WTERMSIG(status);
+  if(child_pid == 0) {
+    // A dedicated process group lets the parent terminate the shell and every
+    // descendant it launches. This is essential for Python/tool subprocesses.
+    setpgid(0, 0);
+    dup2(output_pipe[1], STDOUT_FILENO);
+    dup2(output_pipe[1], STDERR_FILENO);
+    close(output_pipe[0]);
+    close(output_pipe[1]);
+
+    // Do not leak daemon listeners/client sockets into node subprocesses.
+    long max_fd = sysconf(_SC_OPEN_MAX);
+    if(max_fd < 0) max_fd = 1024;
+    // macOS commonly reports an extremely large OPEN_MAX. Walking the full
+    // range delays exec long enough to race short command timeouts; descriptors
+    // above this practical ceiling are not opened by the daemon.
+    max_fd = std::min<long>(max_fd, 65536);
+    for(int fd = 3; fd < max_fd; ++fd) close(fd);
+
+    execl("/bin/sh", "sh", "-c", prepared_command.c_str(), static_cast<char*>(nullptr));
+    _exit(127);
+  }
+
+  // Close the child side and make reads non-blocking so timeout enforcement
+  // never depends on a descendant closing the output pipe.
+  close(output_pipe[1]);
+  setpgid(child_pid, child_pid);
+  int flags = fcntl(output_pipe[0], F_GETFL, 0);
+  if(flags >= 0) fcntl(output_pipe[0], F_SETFL, flags | O_NONBLOCK);
+
+  char buffer[4096];
+  std::string output;
+  int status = 0;
+  bool child_running = true;
+  bool timed_out = false;
+
+  auto drain_output = [&]() {
+    while(true) {
+      ssize_t n = read(output_pipe[0], buffer, sizeof(buffer));
+      if(n > 0) {
+        output.append(buffer, static_cast<size_t>(n));
+      } else if(n < 0 && errno == EINTR) {
+        continue;
+      } else {
+        break;
+      }
+    }
+  };
+
+  while(child_running) {
+    drain_output();
+
+    pid_t waited = waitpid(child_pid, &status, WNOHANG);
+    if(waited == child_pid) {
+      child_running = false;
+      break;
+    }
+    if(waited < 0 && errno != EINTR) {
+      child_running = false;
+      break;
+    }
+
+    const auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start_time).count();
+    if(timeout_ms > 0 && elapsed_ms >= timeout_ms) {
+      timed_out = true;
+      kill(-child_pid, SIGKILL);
+      while(waitpid(child_pid, &status, 0) < 0 && errno == EINTR) {}
+      child_running = false;
+      break;
+    }
+
+    int wait_ms = 20;
+    if(timeout_ms > 0) {
+      wait_ms = static_cast<int>(std::min<int64_t>(wait_ms, timeout_ms - elapsed_ms));
+      if(wait_ms < 1) wait_ms = 1;
+    }
+    struct pollfd pfd { output_pipe[0], POLLIN, 0 };
+    poll(&pfd, 1, wait_ms);
+  }
+
+  drain_output();
+  close(output_pipe[0]);
+
+  int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+  int signal_num = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
   bool killed_by_signal = WIFSIGNALED(status);
 
   result.exit_code = exit_code;
   result.stdout    = output;  // Note: stdout contains both original stdout and stderr
-  result.success   = (exit_code == 0 && !killed_by_signal);
+  result.success   = (!timed_out && exit_code == 0 && !killed_by_signal);
 
   // [DEBUG] Log execution result details
   Logger::instance().info_f("[CODE_LOADER_DEBUG] Exit code=%d, Success=%s, OutputLen=%zu, Signal=%d",
@@ -1238,8 +1308,7 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
   }
 
   if(!result.success) {
-    // Check if timeout occurred (exit code 0 means timeout killed process, or check duration)
-    if(timeout_ms > 0 && killed_by_signal && signal_num == 9) {
+    if(timed_out) {
       result.error_message = "Command execution timeout";
       result.exit_code     = -1;
     } else if(killed_by_signal) {

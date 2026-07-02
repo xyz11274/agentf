@@ -1,13 +1,19 @@
-"""AgentFlow Bridge — daemon JSON-RPC client over raw TCP.
+"""AgentFlow Bridge — daemon JSON-RPC client over WebSocket.
 
-Transport: raw TCP (newline-delimited JSON-RPC 2.0).
-We use raw TCP instead of WebSocket because the daemon's ``send_notification()``
-does not wrap push notifications in WebSocket frames, which corrupts the WS
-stream. See ``docs/gaps/09-WebSocket推送.md``.
+Transport: WebSocket (RFC 6455), JSON-RPC 2.0.
+
+This replaced the old raw-TCP transport because the daemon's TCP port
+handles both raw TCP and WebSocket connections.  The daemon now correctly
+wraps ``send_notification()`` push messages in WebSocket frames, so the
+original reason for using raw TCP (Gap 09) no longer applies.
 
 The wire format is:
-  Request:  ``{jsonrpc..."method":"...","params":{...},"id":N}\n``
-  Response: ``{jsonrpc..."result":...,"id":N}\n``
+  Request:  ``{"jsonrpc":"2.0","method":"...","params":{...},"id":N}``
+  Response: ``{"jsonrpc":"2.0","result":...,"id":N}``
+  Notif:    ``{"jsonrpc":"2.0","method":"agent.response",...}``
+
+All messages travel as WebSocket text frames.  No the ``\\n`` delimiter or
+manual frame reassembly is needed.
 """
 
 from __future__ import annotations
@@ -18,6 +24,8 @@ import json
 import logging
 from typing import Any, Awaitable, Callable, Optional
 
+import websockets
+
 from config import BridgeSettings, settings as _default_settings
 
 logger = logging.getLogger(__name__)
@@ -26,6 +34,31 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
+
+
+def _looks_like_complete_json(text: str) -> bool:
+    """Is ``text`` a complete JSON value?
+
+    Uses ``json.JSONDecoder.raw_decode`` as the authoritative check.
+    The old brace-balance heuristic caused false positives when a TCP
+    fragment happened to have balanced braces but was missing trailing fields;
+    the orphaned tail (e.g. ``',"id":52}'``) then failed to parse
+    (see ``test_truncated_tail_from_logs`` for the exact shape).
+
+    Retained for backward compatibility with existing tests; no longer used
+    internally by ``DaemonClient`` (WebSocket provides complete frames).
+    """
+    t = text.strip()
+    if not t:
+        return True
+    if t[0] not in '{["':
+        return False
+    try:
+        decoder = json.JSONDecoder()
+        _, end = decoder.raw_decode(t, 0)  # type: ignore[arg-type]
+        return end == len(t)
+    except (TypeError, ValueError):
+        return False
 
 
 class DaemonError(Exception):
@@ -41,7 +74,7 @@ class DaemonError(Exception):
 
 
 class DaemonConnectionError(DaemonError):
-    """Raised when the underlying TCP connection cannot be opened."""
+    """Raised when the underlying WebSocket connection cannot be opened."""
 
 
 class DaemonTimeoutError(DaemonError):
@@ -69,9 +102,12 @@ _ERROR_MAP: dict[int, type[DaemonError]] = {
 
 
 class DaemonClient:
-    """Raw-TCP JSON-RPC 2.0 client for the agentflowd daemon.
+    """WebSocket JSON-RPC 2.0 client for the agentflowd daemon.
 
-    Uses newline-delimited JSON over a plain TCP socket (not WebSocket).
+    Uses a single persistent WebSocket connection for all requests and
+    receives push notifications (``agent.response``, etc.) via the same
+    connection.  The background reader task handles incoming frames and
+    dispatches them to pending futures or the notification queue.
     """
 
     def __init__(
@@ -79,12 +115,17 @@ class DaemonClient:
         host: Optional[str] = None,
         port: Optional[int] = None,
         *,
+        ws_url: Optional[str] = None,
         timeout: Optional[float] = None,
         bridge_settings: Optional[BridgeSettings] = None,
     ) -> None:
         self._bridge_settings = bridge_settings or _default_settings
-        self._host = host or self._bridge_settings.daemon_host
-        self._port = port or self._bridge_settings.daemon_port
+        if ws_url:
+            self._ws_url = ws_url
+        else:
+            h = host or self._bridge_settings.daemon_host
+            p = port or self._bridge_settings.daemon_port
+            self._ws_url = f"ws://{h}:{p}"
         self._timeout = (
             timeout if timeout is not None else self._bridge_settings.request_timeout_seconds
         )
@@ -92,8 +133,7 @@ class DaemonClient:
         self._id_counter = itertools.count(1)
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._notification_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        self._reader: Optional[asyncio.StreamReader] = None
-        self._writer: Optional[asyncio.StreamWriter] = None
+        self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._connected = False
         self._closing = False
         self._reader_task: Optional[asyncio.Task[None]] = None
@@ -103,35 +143,34 @@ class DaemonClient:
     # ------------------------------------------------------------------
 
     async def connect(self) -> None:
-        """Open a raw TCP connection and start the reader task."""
+        """Open a WebSocket connection and start the reader task."""
         if self._connected:
             return
         if self._reader_task is not None and not self._reader_task.done():
             return
-        # Prevent creating a second reader task while the existing one is
-        # still alive (e.g. during its own reconnection logic).  The
-        # background status-poll loop calls ``connect()``, and if the
-        # reader loop is in the middle of reconnecting internally we must
-        # not orphan a second reader on the same underlying stream.
-        if self._reader_task is not None and not self._reader_task.done():
-            return
+
         try:
-            self._reader, self._writer = await asyncio.wait_for(
-                asyncio.open_connection(self._host, self._port),
+            self._ws = await asyncio.wait_for(
+                websockets.connect(
+                    self._ws_url,
+                    ping_interval=20,
+                    ping_timeout=10,
+                    max_size=2 ** 20,  # 1 MB frame limit
+                ),
                 timeout=self._timeout,
             )
         except Exception as exc:
             self._connected = False
             raise DaemonConnectionError(
-                f"failed to connect to {self._host}:{self._port}: {exc}"
+                f"failed to connect to {self._ws_url}: {exc}"
             ) from exc
 
         self._connected = True
         self._closing = False
         self._reader_task = asyncio.create_task(
-            self._reader_loop(), name="DaemonClient.reader"
+            self._ws_reader(), name="DaemonClient.ws-reader"
         )
-        logger.info("DaemonClient connected %s:%s", self._host, self._port)
+        logger.info("DaemonClient connected %s", self._ws_url)
 
     async def close(self) -> None:
         """Gracefully shut down the client."""
@@ -149,15 +188,13 @@ class DaemonClient:
 
         self._fail_all_pending(DaemonConnectionError("client closed"))
 
-        if self._writer is not None:
+        if self._ws is not None:
             try:
-                self._writer.close()
-                await self._writer.wait_closed()
+                await self._ws.close()
             except Exception:
-                logger.debug("ignoring close() error", exc_info=True)
+                logger.debug("ignoring ws.close() error", exc_info=True)
 
-        self._reader = None
-        self._writer = None
+        self._ws = None
         self._connected = False
         logger.info("DaemonClient closed")
 
@@ -177,9 +214,9 @@ class DaemonClient:
     ) -> Any:
         """Send a JSON-RPC 2.0 request and return the daemon's ``result`` payload.
 
-        Serialises the request as newline-delimited JSON over the raw TCP socket.
+        Serialises the request as a WebSocket text frame.
         """
-        if not self._connected or self._writer is None:
+        if not self._connected or self._ws is None:
             raise DaemonConnectionError("client is not connected")
 
         request_id = next(self._id_counter)
@@ -189,9 +226,7 @@ class DaemonClient:
 
         frame = self._encode_request(request_id, method, params or {})
         try:
-            self._writer.write(frame.encode("utf-8"))
-            self._writer.write(b"\n")
-            await self._writer.drain()
+            await self._ws.send(frame)
         except Exception as exc:
             self._pending.pop(request_id, None)
             raise DaemonConnectionError(
@@ -286,10 +321,10 @@ class DaemonClient:
     ) -> dict[str, Any]:
         """Wait for an ``agent.response`` notification pushed by the daemon.
 
-        The daemon pushes ``{\"jsonrpc\":\"2.0\",\"method\":\"agent.response\",...}``
-        as a newline-delimited JSON line on the same TCP connection after a
-        workflow completes. The background reader loop places such notifications
-        on an internal queue that this method reads from.
+        The daemon pushes ``{"jsonrpc":"2.0","method":"agent.response",...}``
+        as a WebSocket text frame after a workflow completes.  The background
+        reader task places such notifications on an internal queue that this
+        method reads from.
         """
         try:
             msg = await asyncio.wait_for(
@@ -339,94 +374,41 @@ class DaemonClient:
         return await self.send_request("runtime.status", {})
 
     # ------------------------------------------------------------------
-    # Background reader loop
+    # Background WebSocket reader
     # ------------------------------------------------------------------
 
-    async def _reader_loop(self) -> None:
-        """Read newline-delimited JSON responses and dispatch to pending futures."""
-        retry_delay = 1.0
-        buf = b""
-        while not self._closing:
-            if self._reader is None:
-                # Attempt reconnection instead of sleeping forever.
-                await asyncio.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, 30.0)
-                try:
-                    self._reader, self._writer = await asyncio.wait_for(
-                        asyncio.open_connection(self._host, self._port),
-                        timeout=self._timeout,
-                    )
-                    self._connected = True
-                    retry_delay = 1.0
-                    logger.info("DaemonClient reconnected %s:%s", self._host, self._port)
-                except Exception:
-                    self._reader = None
-                    self._writer = None
-                continue
+    async def _ws_reader(self) -> None:
+        """Read WebSocket text frames and dispatch to pending futures."""
+        ws = self._ws
+        if ws is None:
+            return
 
-            try:
-                while True:
-                    line = await asyncio.wait_for(
-                        self._reader.readline(), timeout=self._timeout * 2
-                    )
-                    if not line:
-                        logger.info("daemon connection closed")
-                        break
-                    text = line.decode("utf-8").strip()
-                    if not text:
-                        continue
-                    await self._dispatch_frame(text)
-                # Connection closed — break out to reconnect
-                self._connected = False
-                self._fail_all_pending(
-                    DaemonConnectionError("daemon connection closed")
-                )
-            except asyncio.TimeoutError:
-                # No data for a while — the connection may still be alive;
-                # send a health check to probe liveness.
-                try:
-                    if self._writer is not None:
-                        await self.health()
-                except Exception:
-                    logger.debug("liveness probe failed", exc_info=True)
-                continue
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.exception("reader loop crashed: %s", exc)
-                self._connected = False
-                self._fail_all_pending(
-                    DaemonConnectionError(f"reader loop error: {exc}")
-                )
-
-            # Reconnection
-            logger.info("reconnecting in %.1fs", retry_delay)
-            await asyncio.sleep(retry_delay)
-            retry_delay = min(retry_delay * 2, 30.0)
-            try:
-                self._reader, self._writer = await asyncio.wait_for(
-                    asyncio.open_connection(self._host, self._port),
-                    timeout=self._timeout,
-                )
-                self._connected = True
-                retry_delay = 1.0
-                logger.info("DaemonClient reconnected %s:%s", self._host, self._port)
-            except Exception as exc:
-                logger.warning("reconnect failed: %s", exc)
-                self._reader = None
-                self._writer = None
-
-    async def _dispatch_frame(self, text: str) -> None:
-        """Parse a single JSON-RPC response line and resolve the matching future."""
         try:
-            message = json.loads(text)
-        except (TypeError, ValueError) as exc:
-            logger.warning("malformed frame from daemon: %r (%s)", text, exc)
-            return
-        if not isinstance(message, dict):
-            logger.warning("non-object frame from daemon: %r", message)
-            return
+            async for raw in ws:
+                try:
+                    message = json.loads(raw)
+                except json.JSONDecodeError:
+                    logger.warning("non-JSON frame from daemon: %r", raw[:200])
+                    continue
+                if not isinstance(message, dict):
+                    logger.warning("non-object frame from daemon: %r", message)
+                    continue
+                await self._handle_message(message)
 
+        except websockets.exceptions.ConnectionClosed:
+            logger.info("daemon WebSocket closed")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("ws reader error: %s", exc)
+        finally:
+            self._connected = False
+            self._fail_all_pending(
+                DaemonConnectionError("daemon WebSocket closed")
+            )
+
+    async def _handle_message(self, message: dict) -> None:
+        """Resolve a single parsed JSON-RPC message (response or notification)."""
         # Notifications (no id) — push to queue for wait_for_response to consume
         if "id" not in message:
             event = message.get("method")

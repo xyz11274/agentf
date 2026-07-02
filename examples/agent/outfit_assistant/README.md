@@ -48,13 +48,13 @@
 │  │                                                                       │  │
 │  │  ① 读 .env → API_KEY / AF_LLM_BASE_URL                               │  │
 │  │                                                                       │  │
-│  │  ② 读 agent.md frontmatter → model_name = "Minimax-M3"                │  │
+│  │  ② 读 agent.md frontmatter → model_name = "MiniMax-M3"                │  │
 │  │                                                                       │  │
 │  │  ③ 构建 system prompt =                                                │  │
 │  │     COORDINATOR_PROTOCOL + agent.md body                               │  │
 │  │     (描述：可用 weather_query / outfit-advisor / occasion-guide skill) │  │
 │  │                                                                       │  │
-│  │  ④ LLM 调用 (Minimax-M3, tools=[run_skills])                          │  │
+│  │  ④ LLM 调用 (MiniMax-M3, tools=[run_skills])                          │  │
 │  │     ├─ finish=tool_calls → 调 run_skills → 走 STEP 4                   │  │
 │  │     └─ finish=stop → 直接回复用户 → 输出 {"response": "..."}           │  │
 │  │                                                                       │  │

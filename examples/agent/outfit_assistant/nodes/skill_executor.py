@@ -18,12 +18,13 @@ Environment variables (injected by the worker):
   AF_EXEC_SKILL_KEY      — DataBus key for structured input
 """
 
-import json
-import os
 import importlib as _importlib
 import importlib.util as _importlib_util
+import json
+import os
 import re
 import sys
+
 import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -245,7 +246,7 @@ def execute():
     # ⑨ Read model config
     frontmatter, _ = parse_agent_md(AGENT_MD_PATH)
     model_cfg = frontmatter.get("model", {})
-    # model can be a plain string (e.g. "Minimax-M3") or a dict {name: "..."}
+    # model can be a plain string (e.g. "MiniMax-M3") or a dict {name: "..."}
     model_name = model_cfg if isinstance(model_cfg, str) else model_cfg.get("name", "gpt-4o-mini")
 
     # API key and base URL come from env vars (not agent.md frontmatter).
@@ -272,12 +273,25 @@ def execute():
             model=model_name,
             base_url=base_url,
             api_key=api_key,
-            max_completion_tokens=4000)  # avoid finish=length truncation on long skill outputs
+            max_completion_tokens=4000)
 
         if raw.get("_llm_error"):
-            print(json.dumps({"error": raw.get("error", "LLM call failed")},
-                              ensure_ascii=False))
-            sys.exit(1)
+            err_msg = raw.get("error", "LLM call failed")
+            print(f"[flow]   ⚠️  LLM error (non-fatal): {err_msg}", file=sys.stderr)
+            # Don't sys.exit — return partial result so coordinator can decide
+            output = {
+                "skill_result": f"LLM call failed: {err_msg}",
+                "status": "llm_error",
+                "skill_name": skill_name,
+                "rounds_used": round_i + 1,
+                "error": err_msg,
+            }
+            if databus.is_connected():
+                result_json = json.dumps(output, ensure_ascii=True)
+                databus.put(f"skill_result:{skill_name}", result_json)
+                databus.put("skill_result:skill-runner", result_json)
+            print(json.dumps(output, ensure_ascii=False))
+            return
 
         choice = raw.get("choices", [{}])[0]
         msg = choice.get("message", {})
@@ -294,7 +308,13 @@ def execute():
                     args = json.loads(func.get("arguments", "{}"))
                 except json.JSONDecodeError:
                     args = {}
+                # Log tool call params (truncate to 200 chars)
+                args_preview = json.dumps(args, ensure_ascii=False)[:200]
+                print(f"[flow]   tool_call: {name} args={args_preview}", file=sys.stderr)
                 result = tool_registry.execute(name, args)
+                # Log tool result (truncate to 300 chars)
+                result_preview = result[:300]
+                print(f"[flow]   tool_result: {name} => {result_preview}", file=sys.stderr)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.get("id", name),

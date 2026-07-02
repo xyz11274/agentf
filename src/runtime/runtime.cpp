@@ -1486,6 +1486,24 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
             response.metadata["dialogue_id"] = complete_dialogue_id;
             // Pass skill_name for skill completion tracking
             response.metadata["skill_name"] = complete_skill_name;
+            // Terminal node outputs are stored under the session-isolated framework
+            // key. Carry the skill result on the completion event so it survives the
+            // workflow boundary and does not depend on legacy, unqualified lookups.
+            if(complete_task_type == "skill") {
+              DataVariant skill_result;
+              const std::string skill_result_key = build_framework_key(
+                  complete_session_id, complete_dialogue_id, complete_workflow,
+                  "skill_result");
+              if(get_databus(complete_agent).get(skill_result_key, skill_result)) {
+                if(const auto* text = std::get_if<std::string>(&skill_result);
+                   text && !text->empty()) {
+                  response.metadata["skill_result"] = *text;
+                  Logger::instance().info_f(
+                      "[WORKFLOW_COMPLETE] Attached skill_result (%zu bytes)",
+                      text->size());
+                }
+              }
+            }
             // Pass trace_labels for flow trace correlation across workflow boundaries
             if(!complete_trace_labels.empty()) {
               response.metadata["trace_labels"] = complete_trace_labels;
@@ -1836,6 +1854,12 @@ void MMAgentRuntime::agent_task_poller_loop() {
         if(task->get_parameter("skill_success", skill_success) && !skill_success.empty()) {
           inputs["skill_success"] = skill_success;
           Logger::instance().info_f("[TASK_POLLER] Set inputs[skill_success]='%s'", skill_success.c_str());
+        }
+        std::string skill_result;
+        if(task->get_parameter("skill_result", skill_result) && !skill_result.empty()) {
+          inputs["skill_result"] = skill_result;
+          Logger::instance().info_f("[TASK_POLLER] Propagated skill_result (%zu bytes)",
+                                    skill_result.size());
         }
         // Propagate exec_skill_key for skill-specific data routing
         std::string exec_skill_key;

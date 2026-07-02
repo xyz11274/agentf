@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>今日穿搭 · 上海 · 2026-07-02 (v2 城市漫步休闲风)</title>
+<style>
+  :root{
+    --bg:#f7f5f1;
+    --card:#ffffff;
+    --ink:#1a1a1a;
+    --muted:#6b6b6b;
+    --accent:#2c3a4a;
+    --line:#e7e3dc;
+    --tag:#f1ede4;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:880px;margin:0 auto;padding:40px 24px 80px}
+
+  /* Header */
+  header.hero{border-bottom:1px solid var(--line);padding-bottom:28px;margin-bottom:32px;display:flex;align-items:flex-end;justify-content:space-between;gap:24px;flex-wrap:wrap}
+  .hero-left h1{font-size:32px;font-weight:600;letter-spacing:-0.5px;margin-bottom:6px}
+  .hero-left .sub{color:var(--muted);font-size:14px}
+  .weather-pill{display:inline-flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);padding:10px 16px;border-radius:999px;font-size:13px;color:var(--ink)}
+  .weather-pill .emoji{font-size:18px}
+
+  /* Section title */
+  h2{font-size:20px;font-weight:600;margin:32px 0 16px;letter-spacing:-0.3px}
+  h2 .num{display:inline-block;width:24px;height:24px;line-height:24px;text-align:center;background:var(--accent);color:#fff;border-radius:50%;font-size:12px;margin-right:10px;vertical-align:middle}
+
+  /* Style summary */
+  .style-box{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:24px 28px;font-size:15px;color:#333}
+  .style-box .quote{font-style:italic;color:var(--muted);margin-bottom:12px}
+  .style-box .swatches{display:flex;gap:8px;margin-top:14px}
+  .swatches span{width:32px;height:32px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 1px var(--line);display:inline-block}
+
+  /* Item cards */
+  .items{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+  .item{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px}
+  .item .cat{font-size:11px;text-transform:uppercase;letter-spacing:1.5px;color:var(--muted);margin-bottom:6px}
+  .item .name{font-size:16px;font-weight:600;margin-bottom:8px}
+  .item .why{font-size:13px;color:#444}
+  .item .why b{color:var(--accent)}
+
+  /* Accessories */
+  .acc-row{display:flex;flex-wrap:wrap;gap:12px}
+  .acc{background:var(--tag);padding:10px 16px;border-radius:999px;font-size:13px;color:#333}
+
+  /* Tips */
+  .tips{background:var(--card);border-left:3px solid var(--accent);padding:16px 20px;border-radius:8px;font-size:13px;color:#444}
+  .tips ul{padding-left:18px;margin-top:6px}
+  .tips li{margin-bottom:4px}
+
+  /* Profile reminder */
+  .profile-hint{background:#fffaf0;border:1px dashed #d6c69a;border-radius:10px;padding:14px 18px;font-size:13px;color:#7a6635;margin-top:24px}
+
+  /* Download */
+  .actions{margin-top:32px;display:flex;gap:12px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:10px 18px;background:var(--accent);color:#fff;border-radius:8px;text-decoration:none;font-size:13px;cursor:pointer;border:none}
+  .btn.ghost{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+  #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--accent);color:#fff;padding:10px 20px;border-radius:999px;font-size:13px;opacity:0;transition:opacity .3s;pointer-events:none}
+  #toast.show{opacity:1}
+
+  footer{margin-top:48px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:12px;text-align:center}
+
+  @media print{
+    .actions{display:none}
+    body{background:#fff}
+    .item,.style-box,.tips{break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="hero-left">
+      <h1>今日穿搭 · 城市漫步休闲风</h1>
+      <div class="sub">上海 · 2026-07-02 周四 · 第二次推荐（侧重舒适+防冰雹）</div>
+    </div>
+    <span class="weather-pill"><span class="emoji">⛈️</span> 28°C / 体感 33°C · 雷阵雨伴冰雹 · 湿度 73%</span>
+  </header>
+
+  <h2><span class="num">1</span>整体风格</h2>
+  <div class="style-box">
+    <div class="quote">"Outdoor 城市漫步休闲风 — 以浅色速干 T 恤为视觉锚点，深卡其中裤与白色运动鞋稳视觉重心，深灰冲锋衣兜住冰雹的不确定性。"</div>
+    <div style="font-size:13px;color:#555;margin-top:6px">
+      整体三色（白 / 卡其 / 深灰）低调清爽，加上便携防雨配饰，是为上海 7 月湿热雷暴天气专门调过参数的"会呼吸的城市休闲穿搭"。比起昨日 v1 把焦点放在"皮肤衣防泼水"，v2 重点升级到<strong>硬质挡冰雹+全日防水+防滑</strong>。
+    </div>
+    <div class="swatches" aria-label="主色板">
+      <span style="background:#f5f5f0" title="白"></span>
+      <span style="background:#bfac8a" title="卡其"></span>
+      <span style="background:#2c3a4a" title="深灰"></span>
+    </div>
+  </div>
+
+  <h2><span class="num">2</span>单品清单</h2>
+  <div class="items">
+    <div class="item">
+      <div class="cat">上装 · Top</div>
+      <div class="name">白色 / 雾霾蓝速干棉 T 恤</div>
+      <div class="why">速干棉 <b>吸汗快干</b>，浅色 <b>反射阳光</b> 降低体感温度；合身微落肩契合你档案里"合身"偏好，不紧绷也不松垮。</div>
+    </div>
+    <div class="item">
+      <div class="cat">外套 · Outerwear</div>
+      <div class="name">深灰轻量三合一冲锋衣（防泼水）</div>
+      <div class="why">v2 的关键升级：硬质外壳 + <b>可调帽兜</b>挡冰雹；面料防泼水应对雷阵雨；地铁空调房能挡冷风；薄款不影响散热。</div>
+    </div>
+    <div class="item">
+      <div class="cat">下装 · Bottom</div>
+      <div class="name">深 / 浅卡其速干直筒中裤（膝上 1-2 指）</div>
+      <div class="why">速干面料被雨淋了<b>不易留水痕</b>；中裤露出小腿利于散热；卡其与白/灰上装都好搭，是休闲风万能色。</div>
+    </div>
+    <div class="item">
+      <div class="cat">鞋履 · Shoes</div>
+      <div class="name">白 / 浅灰网面运动鞋（橡胶防滑大底）</div>
+      <div class="why">网面 <b>应对高温高湿</b>；橡胶大底加深纹应付<b>湿滑路面+积水</b>；浅色与 T 恤呼应，整体视觉更干净。</div>
+    </div>
+  </div>
+
+  <h2><span class="num">3</span>配饰</h2>
+  <div class="acc-row">
+    <div class="acc">☂️ 折叠防风伞（6骨/8骨抗风）—— 冰雹天气兜底</div>
+    <div class="acc">🧢 棒球帽 —— 防雨滴 + 遮阳</div>
+    <div class="acc">🧦 速干低帮船袜（棉+Coolmax）</div>
+    <div class="acc">👜 迷你斜挎包 —— 解放双手应对突发天气</div>
+  </div>
+
+  <h2><span class="num">4</span>贴士</h2>
+  <div class="tips">
+    <ul>
+      <li>出门前查实时雷达：冰雹多发于午后到傍晚，避开雷暴高峰外出。</li>
+      <li>冲锋衣+伞 <b>双保险</b>：冲锋衣护上半身，伞防正面大风带冰雹。</li>
+      <li>鞋内可塞<b>一次性鞋套</b>或备用袜子，避免长时间踩水。</li>
+      <li>手机 / 充电宝放入斜挎包内层防水袋。</li>
+      <li>今天 29°C 高温，体感 33°C，少在外面晒，每 1 小时补水一次。</li>
+    </ul>
+  </div>
+
+  <h2><span class="num">5</span>档案与建议</h2>
+  <div class="profile-hint">
+    <b>📌 你的档案目前仅记录"风格=休闲、版型=合身"</b>，这次推荐基于通用模板。若补全以下信息，下次会更精准：
+    <ul style="margin-top:6px;padding-left:18px">
+      <li>身高 / 体重 → 我能给定具体肩宽、裤长、衣长</li>
+      <li>肤色 → 我能挑最衬你的色（冷皮适合雾霾蓝/灰，暖皮适合米白/驼色）</li>
+      <li>已有单品 → 避免重复推荐，组合思路更连贯</li>
+    </ul>
+  </div>
+
+  <div class="actions">
+    <button class="btn" onclick="downloadHTML()">⬇️ 下载本页面</button>
+    <button class="btn ghost" onclick="window.print()">🖨️ 打印 / 存为 PDF</button>
+  </div>
+
+  <footer>
+    Outfit Stylist · 基于 outfit-stylist v1.0.0 · 数据源：Open-Meteo · 生成时间 2026-07-02
+  </footer>
+</div>
+
+<div id="toast">已下载 ✓</div>
+
+<script>
+function downloadHTML(){
+  const html = document.documentElement.outerHTML;
+  const blob = new Blob([html], {type:'text/html;charset=utf-8'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'outfit_2026-07-02_v2_上海_休闲.html';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  const t = document.getElementById('toast');
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 1800);
+}
+</script>
+</body>
+</html>
