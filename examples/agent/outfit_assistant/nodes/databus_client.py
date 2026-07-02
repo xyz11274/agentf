@@ -99,3 +99,35 @@ class DataBusClient:
         except Exception as exc:
             _log_warn(f"get failed for key={scoped_key}: {exc}")
             return None
+
+    def put_global(self, key: str, value: str) -> bool:
+        """Write to sys namespace WITHOUT dialogue_id prefix.
+
+        Used for cross-dialogue data sharing like dispatch manifests
+        (coordinator writes → skill-runner reads with different dialogue_ids).
+        Uses sys() directly (not raw()) because raw() lacks session context.
+        Key is stored as /session/{sid}/sys/{key} (no dialogue prefix).
+        """
+        if not self._client:
+            return False
+        try:
+            self._client.sys().put(key, value)
+            return True
+        except Exception as exc:
+            _log_warn(f"put_global '{key}' failed: {exc}")
+            return False
+
+    def get_global(self, key: str) -> str | None:
+        """Read from sys namespace WITHOUT dialogue_id prefix."""
+        if not self._client:
+            return None
+        try:
+            raw = self._client.sys().get(key)
+            if raw is None:
+                return None
+            if isinstance(raw, bytes):
+                return raw.decode("utf-8", errors="replace")
+            return raw
+        except Exception as exc:
+            _log_warn(f"get_global '{key}' failed: {exc}")
+            return None

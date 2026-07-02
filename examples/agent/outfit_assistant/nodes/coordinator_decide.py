@@ -31,6 +31,16 @@ NODES_DIR = os.path.dirname(os.path.abspath(__file__))
 AGENT_PACKAGE_DIR = os.path.dirname(NODES_DIR)
 AGENT_MD_PATH = os.path.join(AGENT_PACKAGE_DIR, "agent.md")
 
+# ── Load .env from package root (business env vars: API_KEY, AF_LLM_*) ──
+# Framework has no mechanism for business env; dotenv fills the gap.
+_DOTENV_PATH = os.path.join(AGENT_PACKAGE_DIR, ".env")
+if os.path.isfile(_DOTENV_PATH):
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_DOTENV_PATH)
+    except Exception:
+        pass
+
 # ---------------------------------------------------------------------------
 # Framework protocol — auto-injected into coordinator system prompt
 # ---------------------------------------------------------------------------
@@ -56,6 +66,20 @@ COORDINATOR_PROTOCOL = """## 你的工作方式
 - 结果不完整或有新需求 → 再次调用 run_skills 补充
 - 可以在一次 run_skills 中委派多个独立子任务（并行执行）
 - 每次只做一轮决策，等待 skill 结果后再做下一轮
+
+## 输出格式
+
+当你决定直接回复用户时（finish=stop），必须使用以下格式：
+
+<think>
+你的推理过程（评估 skill 结果、判断依据、决策原因等）
+</think>
+给用户的最终回复内容（markdown 格式）
+
+注意：
+- <think> 标签内的内容不会展示给用户，仅用于 trace 记录
+- <think> 标签外的内容才是用户看到的最终回复
+- 不要在最终回复中重复推理过程的内容
 """
 
 # ---------------------------------------------------------------------------
@@ -182,7 +206,7 @@ def handle_run_skills_call(args: dict, databus: DataBusClient,
             "prompt": spec.get("prompt", ""),
             "load_skills": spec.get("load_skills", []),
         }
-        databus.put(dispatch_key, json.dumps(dispatch_data, ensure_ascii=False))
+        databus.put_global(dispatch_key, json.dumps(dispatch_data, ensure_ascii=False))
 
         # ② All skills go through 'skill-runner', differentiated by exec_skill_key
         next_skills_specs.append({
@@ -243,11 +267,23 @@ def execute():
 
     frontmatter, agent_md_body = parse_agent_md(AGENT_MD_PATH)
     model_cfg = frontmatter.get("model", {})
+    # model can be a plain string (e.g. "Minimax-M3") or a dict {name: "..."}
+    model_name = model_cfg if isinstance(model_cfg, str) else model_cfg.get("name", "gpt-4o-mini")
 
-    api_key = model_cfg.get("api_key", "")
+    # API key and base URL come from env vars (not agent.md frontmatter).
+    # Priority: AF_LLM_API_KEY > API_KEY, AF_LLM_BASE_URL > default.
+    api_key = get_env("AF_LLM_API_KEY") or get_env("API_KEY", "")
     if not api_key or "${" in api_key:
         print(json.dumps({"error": "API key not resolved"}, ensure_ascii=False))
         sys.exit(1)
+    base_url = get_env("AF_LLM_BASE_URL", "")
+
+    # ── flow debug ──
+    print(f"[flow] coordinator_decide triggered: session={session_id} dialogue={dialogue_id} model={model_name}", file=sys.stderr)
+    if completed_skill:
+        print(f"[flow]   trigger_type=skill_completion completed_skill={completed_skill} success={skill_success}", file=sys.stderr)
+    else:
+        print(f"[flow]   trigger_type=first user_input={user_input[:80]}", file=sys.stderr)
 
     databus = DataBusClient()
     recorder = get_recorder()
@@ -279,9 +315,9 @@ def execute():
     # 4000 tokens to avoid finish=length truncation on long responses
     raw = call_llm(
         messages, tools=[RUN_SKILLS_TOOL],
-        model=model_cfg.get("name", "gpt-4o-mini"),
-        base_url=model_cfg.get("base_url", ""),
-        api_key=model_cfg.get("api_key", ""),
+        model=model_name,
+        base_url=base_url,
+        api_key=api_key,
         max_completion_tokens=4000)
 
     if raw.get("_llm_error"):
@@ -304,8 +340,11 @@ def execute():
                 args = {}
 
             if name == "run_skills":
+                skill_names = args.get("skills", [])
+                print(f"[flow]   LLM decision: run_skills skills={[s.get('name','?') for s in skill_names]} reason={args.get('reason','')[:60]}", file=sys.stderr)
                 result_str = handle_run_skills_call(args, databus, session_id, dialogue_id)
             else:
+                print(f"[flow]   LLM decision: unknown_tool={name}", file=sys.stderr)
                 result_str = json.dumps({"error": f"Unknown tool: {name}"})
 
             messages.append({
@@ -324,7 +363,15 @@ def execute():
                          ensure_ascii=False))
     else:
         # LLM made no tool_call → final response
-        response_text = msg.get("content", "")
+        print(f"[flow]   LLM decision: final_response (no tool_call)", file=sys.stderr)
+        raw_response = msg.get("content", "")
+        # Strip <think> tags: keep reasoning in trace, only show user-facing content
+        import re as _re
+        think_match = _re.search(r"</think>\s*", raw_response)
+        if think_match:
+            response_text = raw_response[think_match.end():].strip()
+        else:
+            response_text = raw_response
         print(json.dumps({"response": response_text}, ensure_ascii=False))
 
         # Write to persistent DataBus key for e2e tests (bypasses RESPONSE_POLLER

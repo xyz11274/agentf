@@ -1,13 +1,6 @@
 #!/usr/bin/env python3
 """
 Dummy Pre Skill — pre-processing hook placeholder.
-
-Sits between dispatcher and coordinator as the first next_skills target.
-Pure passthrough: no processing, no DataBus writes, no next_skills output.
-Framework auto-forwards skill completion to coordinator task, which recovers
-the original user input from {dialogue_id}/user_prompt (agent.cpp:1796).
-
-Reserved as a hook point for future pre-processing (validation, auth, etc.).
 """
 
 import json
@@ -15,10 +8,18 @@ import os
 import sys
 
 
+def log(msg: str):
+    print(f"[flow] dummy_pre_skill: {msg}", file=sys.stderr)
+
+
 def execute():
-    # Pure passthrough — empty output.
-    # Framework sees no next_skills → forward to coordinator task.
-    # coordinator task recovers original input from user_prompt key.
+    user_input = os.environ.get("AF_INPUT", "")
+    dialogue_id = os.environ.get("AF_DIALOGUE_ID", "")
+    session_id = os.environ.get("AF_SESSION_ID", "")
+
+    log(f"triggered session={session_id} dialogue={dialogue_id}")
+    log(f"AF_INPUT={user_input[:80]}")
+    log("passthrough — empty output, framework auto-forwards to coordinator")
     print(json.dumps({}, ensure_ascii=False))
 
 

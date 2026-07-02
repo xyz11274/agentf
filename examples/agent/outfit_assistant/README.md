@@ -2,6 +2,264 @@
 
 穿搭助手 — 基于 AgentFlow 框架的 coordinator-driven agent，结合天气、场合和用户画像提供穿搭建议。
 
+## 完整执行全景图
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          用 户 请 求                                         │
+│              "北京今天天气如何，适合穿什么"                                      │
+└────────────────────────┬────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  ┌─ agent.json ───────────────────────────────────────────────────────────┐ │
+│  │  id=0 dispatcher  → next_skills=["dummy_pre_skill"]                   │ │
+│  │  id=1 coordinator (coordinator_workflow.json)                          │ │
+│  │  id=2 skill: dummy_pre_skill (dummy_pre_skill_workflow.json)           │ │
+│  │  id=3 skill: skill-runner (skill_workflow.json)                        │ │
+│  └─────────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  daemon (C++) → 接收 JSON-RPC → 创建 session → 路由给 dispatcher task       │
+└────────────────────────┬────────────────────────────────────────────────────┘
+                         │
+          ┌──────────────┴──────────────┐
+          │                             │
+          ▼                             ▼
+┌─────────────────────┐   ┌─────────────────────────────┐
+│  STEP 1              │   │  STEP 2                     │
+│  dispatcher (id=0)   │──▶│  dummy_pre_skill (id=2)     │
+│  task_type=dispatcher │   │  task_type=skill            │
+│  (框架内置，无节点)    │   │  ↓                          │
+│                     │   │  dummy_pre_skill.py          │
+│  next_skills:       │   │  ─────────────────           │
+│  ["dummy_pre_skill"]│   │  纯 passthrough              │
+│                     │   │  无任何处理，无 next_skills   │
+│  生成 dialogue_id   │   │  框架自动 forward 给        │
+│  写 user_prompt 到  │   │  coordinator task            │
+│  DataBus            │   │                              │
+└─────────────────────┘   └──────────┬───────────────────┘
+                                     │
+                                     ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 3: coordinator (id=1) — coordinator_workflow.json                     │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │  coordinator_decide.py                                                │  │
+│  │  ─────────────────────                                                │  │
+│  │                                                                       │  │
+│  │  ① 读 .env → API_KEY / AF_LLM_BASE_URL                               │  │
+│  │                                                                       │  │
+│  │  ② 读 agent.md frontmatter → model_name = "Minimax-M3"                │  │
+│  │                                                                       │  │
+│  │  ③ 构建 system prompt =                                                │  │
+│  │     COORDINATOR_PROTOCOL + agent.md body                               │  │
+│  │     (描述：可用 weather_query / outfit-advisor / occasion-guide skill) │  │
+│  │                                                                       │  │
+│  │  ④ LLM 调用 (Minimax-M3, tools=[run_skills])                          │  │
+│  │     ├─ finish=tool_calls → 调 run_skills → 走 STEP 4                   │  │
+│  │     └─ finish=stop → 直接回复用户 → 输出 {"response": "..."}           │  │
+│  │                                                                       │  │
+│  │  ⑤ 若 run_skills:                                                      │  │
+│  │     写 dispatch manifest 到 DataBus (put_global, 无 dialogue 前缀)     │  │
+│  │     输出 next_skills=[{name:"skill-runner", exec_skill_key:"dispatch:1"}]│ │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+└────────────────────────┬────────────────────────────────────────────────────┘
+                         │ 输出 next_skills
+                         ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 4: skill-runner (id=3) — skill_workflow.json                         │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │  skill_executor.py                                                    │  │
+│  │  ──────────────────                                                   │  │
+│  │                                                                       │  │
+│  │  ① 读 AF_EXEC_SKILL_KEY = "dispatch:1"                                │  │
+│  │     → databus.get_global("dispatch:1") 获取 dispatch manifest          │  │
+│  │     → 得到 {skill_name:"weather_query", prompt:"...", load_skills:[]}  │  │
+│  │                                                                       │  │
+│  │  ② 加载工具 (skill-scoped + global):                                   │  │
+│  │     全局: bash, echo, read_file, write_file, web_fetch                 │  │
+│  │     skill 自有: weather_query.py (scripts/ 下的 TOOL_NAME 模块)        │  │
+│  │                                                                       │  │
+│  │  ③ 读 SKILL.md → 构建 system prompt                                    │  │
+│  │                                                                       │  │
+│  │  ④ LLM while-loop (最多 8 轮):                                         │  │
+│  │     ├─ finish=tool_calls → 执行工具（如 weather_query tool）            │  │
+│  │     └─ finish=stop → 整理结果 → 输出                                   │  │
+│  │                                                                       │  │
+│  │  ⑤ 写 skill_result 到 DataBus (skill_result:skill-runner)              │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+│  框架自动重触发 coordinator (completed_skill_name=skill-runner)              │
+└────────────────────────┬────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  STEP 5: coordinator 再次执行 (skill 完成通知)                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │  coordinator_decide.py (第二次被触发)                                  │  │
+│  │                                                                       │  │
+│  │  ① 收到 AF_COMPLETED_SKILL_NAME='skill-runner'                        │  │
+│  │     AF_SKILL_SUCCESS='true'                                            │  │
+│  │                                                                       │  │
+│  │  ② collect_skill_results → 读 DataBus skill_result                    │  │
+│  │     → 得到天气数据（29°C、多云、湿度 58%）                              │  │
+│  │                                                                       │  │
+│  │  ③ 读对话历史 (trace)                                                  │  │
+│  │     recorder.read_session_messages() → llm/session_messages           │  │
+│  │                                                                       │  │
+│  │  ④ 追加用户消息：                                                       │  │
+│  │     "Skill 'skill-runner'已完成...结果:{天气数据}...请评估结果..."       │  │
+│  │                                                                       │  │
+│  │  ⑤ LLM 再次调用 → trace 记录 (#3)                                     │  │
+│  │     ├─ finish=tool_calls → 再 dispatch（结果不满意）→ 回 STEP 4         │  │
+│  │     └─ finish=stop → 最终回复                                          │  │
+│  │                                                                       │  │
+│  │  ⑥ 写对话历史 (trace)                                                  │  │
+│  │     recorder.write_session_messages() → llm/session_messages          │  │
+│  │                                                                       │  │
+│  │  ⑦ 输出 {"response": "最终给用户的穿搭建议"} → 回客户端                  │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+└────────────────────────┬────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│  客 户 端 收 到 响 应                                                       │
+│                                                                              │
+│  ┌─ 已知问题 ────────────────────────────────────────────────────────────┐  │
+│  │  ① agent.poll_response JSON-RPC 不可靠（RESPONSE_POLLER 10ms 内删除   │  │
+│  │     DataBus response key），需通过 bridge WebSocket 或 REST 获取        │  │
+│  │                                                                       │  │
+│  │  ② LLM 的推理过程（<think>、评估结果、判定）和最终回复都写在 content    │  │
+│  │     同一个字段，coordinator_decide 没有过滤就发出去了（待修复）          │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 关键数据流
+
+```
+┌─────────────┐    put_global("dispatch:1")    ┌──────────────┐
+│ coordinator │ ───────────────────────────────▶│    DataBus    │
+│  _decide    │                                  │  (global)     │
+│             │◀───────────────────────────────│              │
+│             │    get_global("dispatch:1")      │              │
+└─────────────┘                                  └──────┬───────┘
+       │                                                │
+       │  sys().put({dialogue}/next_skills,...)          │
+       │                                                │
+       │  框架 launch skill-runner                        │
+       │  (AF_EXEC_SKILL_KEY="dispatch:1")                │
+       │                                                │
+       ▼                                                ▼
+┌─────────────┐                                  ┌──────────────┐
+│  skill      │  put("skill_result:skill-runner") │    DataBus    │
+│  _executor  │ ────────────────────────────────▶│  (sys scoped) │
+│             │                                   │              │
+│  读 dispatch manifest → weather_query tool      │              │
+│  调 QWeather API → 29°C / 多云                  │              │
+└─────────────┘                                   └──────────────┘
+```
+
+### Trace 数据流（写入 / 读取 / 消费）
+
+Trace 使用独立的 `llm` 命名空间（`/session/{sid}/llm/...`），与业务数据的 `sys` 命名空间隔离。
+
+```
+                        写 入（Write）
+┌─────────────────────────────────────────────────────────────────────────┐
+│  llm_call.py: _TraceRecorder.trace_call()                               │
+│                                                                         │
+│  每次 LLM 调用（coordinator_decide 或 skill_executor）都会记录：          │
+│                                                                         │
+│  ① HTTP 调用前写入 request                                               │
+│     llm().put("traces/{call_id}/request", request_body)                 │
+│                                                                         │
+│  ② HTTP 返回后写入 response + meta                                      │
+│     llm().put("traces/{call_id}/response", response_data)               │
+│     llm().put("traces/{call_id}/meta", {                                │
+│       model, latency_ms, finish_reason, tokens, ...                     │
+│     })                                                                  │
+│                                                                         │
+│  ③ 维护索引                                                             │
+│     llm().put("traces/index", [call_id, ...])                           │
+│                                                                         │
+│  ④ 写对话历史（coordinator_decide 在每轮决策后调用）                     │
+│     recorder.write_session_messages(messages)                           │
+│     → llm/session_messages                                              │
+└─────────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                      读 取（Read）
+┌─────────────────────────────────────────────────────────────────────────┐
+│  ① coordinator_decide.py（节点内读取对话历史）                            │
+│     recorder = get_recorder()                                           │
+│     history = recorder.read_session_messages()                          │
+│     → llm/session_messages → 恢复跨触发对话上下文                        │
+│                                                                         │
+│  ② bridge REST API（外部读取 trace）                                     │
+│     GET /api/agents/{agent_id}/llm-traces?user_id=&client_id=           │
+│       → daemon JSON-RPC databus.list_keys(prefix="llm/traces/")         │
+│       → 返回 traces/index 中的 call_id 列表                             │
+│       → 逐个 databus.get("llm/traces/{call_id}/meta")                   │
+│                                                                         │
+│     GET /api/agents/{agent_id}/llm-traces/{call_id}                     │
+│       → databus.get("llm/traces/{call_id}/request")                    │
+│       → databus.get("llm/traces/{call_id}/response")                   │
+│       → databus.get("llm/traces/{call_id}/meta")                       │
+│       → 返回三条记录（完整请求/响应/元数据）                              │
+└─────────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                      消 费（Consume）
+┌─────────────────────────────────────────────────────────────────────────┐
+│  消费者             用途                     读取方式                    │
+│ ─────────────────────────────────────────────────────────────────────  │
+│  web UI            展示 LLM 调用链、延迟、      bridge REST API           │
+│                    tokens、finish_reason                                 │
+│                                                                         │
+│  web UI            查看完整请求/响应体        bridge REST API             │
+│                    （调试/审计）              ({call_id}/detail)          │
+│                                                                         │
+│  coordinator_decide 恢复跨触发对话历史         llm/session_messages       │
+│                                                                         │
+│  E2E 测试           验证 skill 是否执行        bridge REST API           │
+│                     （通过 trace 判断）        (test_concurrency_guard)   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Trace 在各执行步骤中的位置
+
+```
+用户请求
+  ↓
+STEP 1-2: dispatcher → dummy_pre_skill     [无 LLM 调用，无 trace]
+  ↓
+STEP 3: coordinator_decide 首次 LLM 决策    [Trace #1]
+  ↓  ↓ 若 run_skills
+STEP 4: skill_executor LLM while-loop       [Trace #2 ~ #N，每轮 LLM 调用写一次]
+  ↓  skill 完成
+STEP 5: coordinator_decide 评估             [Trace #N+1]
+  ↓  ↓ 写对话历史                           [Trace: session_messages]
+最终响应 → 客户端
+```
+
+```
+DataBus 存储结构（llm 命名空间）:
+
+/session/{sid}/llm/
+├── traces/
+│   ├── index                              → ["a1b2c3", "d4e5f6", ...]
+│   ├── a1b2c3/
+│   │   ├── request                        → {messages: [...], tools: [...], model: "..."}
+│   │   ├── response                       → {choices: [...], usage: {...}}
+│   │   └── meta                           → {latency_ms: 3821, finish_reason: "stop", ...}
+│   ├── d4e5f6/
+│   │   ├── request                        → {...}
+│   │   ├── response                       → {...}
+│   │   └── meta                           → {...}
+│   └── ...
+└── session_messages                       → [{role: "user", content: "..."}, ...]
+```
+
 ## 架构总览 (V3)
 
 ```
@@ -32,10 +290,28 @@ coordinator [type=coordinator] ── coordinator_decide.py
 
 | task | type | 节点 | 职责 |
 |------|------|------|------|
-| dispatcher (id=0) | dispatcher | 无（仅路由） | next_skills 指向 dummy_pre_skill，生成 dialogue_id，写 user_prompt 到 DataBus |
+| dispatcher (id=0) | dispatcher | 无（仅路由） | next_skills 指向 dummy_pre_skill，生成 dialogue_id，写 user_prompt |
 | dummy_pre_skill (id=2) | skill | dummy_pre_skill.py | 前置 hook 点，纯 passthrough，完成后 framework forward 给 coordinator |
 | coordinator (id=1) | coordinator | coordinator_decide.py | LLM 决策核心：首次规划、评估 skill 结果、决定再 dispatch 或回复 |
 | skill-runner (id=3) | skill | skill_executor.py | 通用 skill 执行器，通过 exec_skill_key 路由到任意 skill |
+
+## 各层职责
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  agent.json  定义 task 拓扑、workflow 关联、pool 大小                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│  agent.md    提供 model 配置 + 业务描述（给 LLM 的 system prompt）        │
+├─────────────────────────────────────────────────────────────────────────┤
+│  workflows/  定义节点执行顺序、input/output 映射                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│  nodes/      Python 节点脚本（coordinator_decide / skill_executor / …） │
+├─────────────────────────────────────────────────────────────────────────┤
+│  harness/    技能文档（SKILL.md）+ 工具脚本（scripts/）+ 全局工具（tools/）│
+├─────────────────────────────────────────────────────────────────────────┤
+│  .env        环境变量（API keys、模型配置、业务密钥）                     │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ## 设计决策
 
@@ -55,40 +331,37 @@ AgentFlow 框架的 dispatcher→coordinator 路径有两条：
 2. 完成后走路径 B（forward to coordinator），coordinator 从 `user_prompt` 恢复原始输入
 3. 作为 hook 点，未来可扩展输入校验、鉴权、富化、遥测等前置处理
 
-### 2. 为什么 LLM 决策放在 coordinator task 而非 coordinator-skill 中间层？
-
-**结论：消除了 V2 架构的 coordinator-skill 中间层，coordinator task 直接承载 LLM 决策。**
-
-V2 架构因框架限制（dispatcher 无法直接把原始输入传给 coordinator task）而引入 `coordinator-skill`（type=skill）中间层。V3 通过 dummy_pre_skill → forward 路径解决了输入传递问题，coordinator task 直接运行 `coordinator_decide.py`，不再需要中间层。
-
-### 3. 为什么只有一个 skill-runner task（而非每个 skill 一个 task）？
+### 2. 为什么只有一个 skill-runner task（而非每个 skill 一个 task）？
 
 **结论：exec_skill_key 路由 + DataBus dispatch manifest 实现"一个 task 跑任意 skill"。**
 
 coordinator_decide 调 run_skills 时：
-1. 把每个 skill 的真实 `skill_name` + `prompt` + `load_skills` 写入 DataBus `dispatch:{N}` manifest
+1. 把每个 skill 的真实 `skill_name` + `prompt` + `load_skills` 写入 DataBus `dispatch:{N}` manifest（`put_global`，无 dialogue 前缀）
 2. 输出 `next_skills: [{name:"skill-runner", exec_skill_key:"dispatch:N", force:true}]`
 
 框架通过 `AF_EXEC_SKILL_KEY` 环境变量把每个 skill-runner 实例路由到不同的 dispatch manifest。`force=true` 绕过框架的同名 skill 去重，允许并行多个 skill-runner 实例。
 
 **新增 skill = 只加 SKILL.md + agent.md 注册一行，不改 agent.json。**
 
-### 4. 为什么 tool 放在 skill 的 scripts/ 下（而非全局 harness/tools/）？
+### 3. 为什么 tool 放在 skill 的 scripts/ 下（而非全局 harness/tools/）？
 
-**结论：单一职责 + skill 自包含。**
+**结论：单一职责 + skill 自包含 + 全局工具兜底。**
 
-每个 skill 自带 tool，co-located 在 `harness/skills/{skill_name}/scripts/`：
+当前架构支持两层工具加载：
 
 ```
-harness/skills/weather_query/
-├── SKILL.md                    # skill 文档（LLM 读这个理解 skill 能力）
+harness/tools/                    ← 全局工具，所有 skill 可见
+  bash.py, read_file.py, write_file.py, web_fetch.py, ...
+
+harness/skills/{skill_name}/
+├── SKILL.md                      ← skill 文档（LLM 读这个理解 skill 能力）
 └── scripts/
-    └── weather_query.py        # skill 专属 tool（skill_executor 从这里加载）
+    └── weather_query.py          ← skill 专属 tool（skill_executor 从这里加载）
 ```
 
-skill_executor.py 的 `_LocalToolRegistry(skill_name)` 按当前 skill_name 从对应 `scripts/` 目录加载 tool。skill 间 tool 隔离，避免串扰。
+`_LocalToolRegistry(skill_name)` 先加载全局工具，再加载当前 skill 的 `scripts/` 下的工具。同名时 skill-scoped 覆盖全局。
 
-### 5. trace 可观测性
+### 4. trace 可观测性
 
 每次 LLM 调用通过 `llm_call.py` 的 `_TraceRecorder` 写入 DataBus `llm` 命名空间：
 
@@ -96,13 +369,32 @@ skill_executor.py 的 `_LocalToolRegistry(skill_name)` 按当前 skill_name 从�
 |-------------|------|
 | `llm/traces/{call_id}/request` | 完整 HTTP 请求体（messages + tools） |
 | `llm/traces/{call_id}/response` | 完整 HTTP 响应体 |
-| `llm/traces/{call_id}/meta` | latency、tokens、finish_reason、摘要 |
+| `llm/traces/{call_id}/meta` | latency、tokens、finish_reason、摘要、**任务上下文** |
 | `llm/traces/index` | call_id 有序列表，供枚举 |
 | `llm/session_messages` | 跨触发的对话历史（session 级持久化） |
 
 HTTP 传输用 `curl` 子进程（绕过 miniconda Python SSL 证书问题，curl 用系统钥匙串）。
 
-### 6. 跨触发对话历史
+#### meta 中的任务上下文字段
+
+`_TraceRecorder.trace_call` 在写 meta 时从框架注入的 `AF_*` 环境变量采集调用方身份，使每条 LLM trace 记录都能被归属到 coordinator / skill 的控制流中，无需框架侧改动：
+
+| meta 字段 | 来源环境变量 | 含义 |
+|-----------|-------------|------|
+| `dialogue_id` | `AF_DIALOGUE_ID` | 当前对话 ID，用于把一次对话的所有 LLM 调用聚成一组 |
+| `session_id` | `AF_SESSION_ID` | 当前 agent session ID |
+| `task_id` | `AF_SELF_TASK_ID` | 当前 task 的 ID（coordinator task / skill task 各自不同） |
+| `skill_name` | `AF_SKILL_NAME` | 当前执行的 skill 名（仅 skill task 非空） |
+| `completed_skill` | `AF_COMPLETED_SKILL_NAME` | 刚完成的 skill 名（仅 coordinator 回流触发时非空，是控制权回到 coordinator 的显式信号） |
+| `task_type` | 推断 | `"skill"` / `"coordinator"`（无 `AF_TASK_TYPE` 环境变量，按 skill_name / completed_skill 推断） |
+
+下游分析还原控制流的判据：
+- `skill_name` 非空 → subagent 正在执行
+- `completed_skill` 非空 → coordinator 重新拿到控制权（skill 完成回流）
+- 同一 `dialogue_id` 下按时序排列 → 完整的 coordinator → skill → coordinator 调用链
+
+
+### 5. 跨触发对话历史
 
 coordinator_decide 每次触发只做一轮 LLM 决策，然后 yield control 等待 skill 完成。对话历史通过 `llm/session_messages` 在 DataBus 跨触发持久化：
 
@@ -125,8 +417,8 @@ outfit_assistant/
 ├── nodes/
 │   ├── dummy_pre_skill.py              # 前置 hook 占位节点
 │   ├── coordinator_decide.py           # LLM 决策核心（run_skills 工具）
-│   ├── skill_executor.py               # 通用 skill 执行器 + skill-scoped tool 加载
-│   ├── databus_client.py               # DataBus 封装（dialogue_id 前缀对齐）
+│   ├── skill_executor.py               # 通用 skill 执行器 + 双层 tool 加载
+│   ├── databus_client.py               # DataBus 封装（dialogue_id 前缀对齐 + global 方法）
 │   └── llm_call.py                     # LLM 调用 (curl) + trace 记录
 ├── harness/
 │   ├── skills/
@@ -135,14 +427,32 @@ outfit_assistant/
 │   │   │   └── scripts/weather_query.py    # QWeather API tool
 │   │   ├── outfit-advisor/SKILL.md
 │   │   ├── occasion-guide/SKILL.md
-│   │   ├── dummy_pre_skill/SKILL.md        # hook 占位
-│   │   └── skill-runner/SKILL.md           # 占位
+│   │   ├── outfit-stylist/SKILL.md         # V1 遗留（含 terminal_command 指令）
+│   │   ├── forge-image-gen/                 # 图片生成（DashScope / MiniMax）
+│   │   ├── video-gen/                       # 视频生成（DashScope / MiniMax）
+│   │   ├── dummy_pre_skill/SKILL.md         # hook 占位
+│   │   └── skill-runner/SKILL.md            # 占位
 │   └── tools/
-│       ├── echo.py
-│       └── profile_manager.py
+│       ├── bash.py                           # bash 执行
+│       ├── echo.py                           # echo 测试
+│       ├── read_file.py                      # 读文件
+│       ├── write_file.py                     # 写文件
+│       ├── web_fetch.py                      # 网页抓取
+│       ├── list_skills.py                    # 列出技能
+│       ├── load_skill.py                     # 加载技能文档
+│       └── mcp_bridge.py                     # MCP 桥接
 └── data/
     └── occasion_guide.json
 ```
+
+## 当前已知问题
+
+| 问题 | 影响 | 状态 |
+|------|------|------|
+| LLM 推理泄漏到最终回复 | 用户看到"评估结果""原因分析"等内部推理 | ❌ 待修复 |
+| `agent.poll_response` 不可靠 | test_client 超时（RESPONSE_POLLER 10ms 内删除 DataBus key） | ⚠️ 框架层问题 |
+| daemon 约 5 请求后退化 | `mutex lock failed: Invalid argument` 崩溃 | ⚠️ 框架层问题 |
+| `outfit-stylist` SKILL.md 仍描述 V1 能力 | LLM 尝试用 `terminal_command`（已不存在的工具） | ✅ 已补 `harness/tools/` |
 
 ## 快速开始
 
@@ -168,7 +478,7 @@ set -a; . examples/agent/outfit_assistant/.env; set +a
 # 启动 daemon（PYTHON_PATH 必须用绝对路径，指向 .venv）
 PYTHON_PATH="$(pwd)/examples/agent/outfit_assistant/.venv" \
   ./build/agentflowd \
-  --listen 0.0.0.0:7891 \
+  --listen 0.0.0.0:17891 \
   --package "$(pwd)/examples/agent/outfit_assistant"
 ```
 
@@ -178,7 +488,7 @@ PYTHON_PATH="$(pwd)/examples/agent/outfit_assistant/.venv" \
 
 ```bash
 python3 examples/agent/harness_agent_v2/test_client.py \
-  --port 7891 \
+  --port 17891 \
   --agent-id outfit-assistant \
   --message "今天北京天气如何"
 ```
@@ -249,6 +559,7 @@ def execute():
 | `QWEATHER_API_HOST` | 和风天气 API host | weather_query skill 需要 |
 | `AF_LLM_BASE_URL` | LLM base URL（覆盖 agent.md） | 否 |
 | `AF_LLM_MODEL` | LLM 模型名（覆盖 agent.md） | 否 |
+| `AF_SKILL_MAX_ROUNDS` | skill LLM while-loop 最大轮数 | 否 |
 | `PYTHON_PATH` | .venv 目录（框架 worker 用） | 启动 daemon 时必填 |
 
 ## 依赖

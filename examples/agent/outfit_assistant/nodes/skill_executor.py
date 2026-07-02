@@ -46,53 +46,69 @@ if os.path.isfile(_DOTENV_PATH):
     except Exception:
         pass  # dotenv not installed; fall through silently
 SKILLS_BASE = os.path.join(AGENT_PACKAGE_DIR, "harness", "skills")
-
-# Skill-scoped tool loading: each skill's scripts/ dir provides its own tools.
-# A global harness/tools/ dir is no longer used for skill tools — tools live
-# co-located with the skill that owns them (single responsibility + packaging).
+TOOLS_DIR = os.path.join(AGENT_PACKAGE_DIR, "harness", "tools")
 
 class _LocalToolRegistry:
-    """Loads domain tools from a specific skill's scripts/ directory.
+    """Loads domain tools from global harness/tools/ AND skill-specific scripts/.
 
-    Tools are co-located with their owning skill:
-      harness/skills/{skill_name}/scripts/*.py
+    Global tools (harness/tools/*.py) provide atomic capabilities like bash,
+    read_file, write_file, web_fetch — available to ALL skills.
+
+    Skill-scoped tools (harness/skills/{skill_name}/scripts/*.py) provide
+    domain-specific tools — only available to the owning skill.
 
     Each tool module must expose: TOOL_NAME, TOOL_DESCRIPTION, TOOL_PARAMS, execute(args).
+    Global tools are loaded first; skill-scoped tools override same-named globals.
     """
     def __init__(self, skill_name: str = ""):
         self._tools = []
         self._modules = {}
-        if not skill_name:
-            return
-        scripts_dir = os.path.join(SKILLS_BASE, skill_name, "scripts")
-        if not os.path.isdir(scripts_dir):
-            return
-        for entry in sorted(os.listdir(scripts_dir)):
-            if not entry.endswith(".py") or entry.startswith("_"):
-                continue
-            mod_name = entry[:-3]
-            try:
-                # Load by file path to avoid polluting sys.modules / name clashes
-                spec = _importlib_util.spec_from_file_location(
-                    f"_skill_tool_{skill_name}_{mod_name}",
-                    os.path.join(scripts_dir, entry))
-                if spec is None or spec.loader is None:
-                    continue
-                _mod = _importlib_util.module_from_spec(spec)
-                spec.loader.exec_module(_mod)
-            except Exception:
-                continue
-            if not all(hasattr(_mod, a) for a in ("TOOL_NAME","TOOL_DESCRIPTION","TOOL_PARAMS","execute")):
-                continue
-            self._modules[_mod.TOOL_NAME] = _mod
-            self._tools.append({"type":"function","function":{
-                "name":_mod.TOOL_NAME,"description":_mod.TOOL_DESCRIPTION,"parameters":_mod.TOOL_PARAMS}})
-    def get_tools(self): return list(self._tools)
+
+        # 1. Load global tools from harness/tools/
+        if os.path.isdir(TOOLS_DIR):
+            _load_dir(self, TOOLS_DIR)
+
+        # 2. Load skill-scoped tools from harness/skills/{skill_name}/scripts/
+        if skill_name:
+            scripts_dir = os.path.join(SKILLS_BASE, skill_name, "scripts")
+            if os.path.isdir(scripts_dir):
+                _load_dir(self, scripts_dir, prefix=f"_skill_{skill_name}_")
+
+    def get_tools(self):
+        return list(self._tools)
+
     def execute(self, name, args):
         _mod = self._modules.get(name)
-        if _mod is None: return json.dumps({"error":f"Unknown tool: {name}"})
-        try: return _mod.execute(args)
-        except Exception as e: return json.dumps({"error":f"Tool '{name}' failed: {e}"})
+        if _mod is None:
+            return json.dumps({"error": f"Unknown tool: {name}"})
+        try:
+            return _mod.execute(args)
+        except Exception as e:
+            return json.dumps({"error": f"Tool '{name}' failed: {e}"})
+
+
+def _load_dir(registry: _LocalToolRegistry, directory: str, prefix: str = ""):
+    """Load all valid tool modules from a directory into the registry."""
+    for entry in sorted(os.listdir(directory)):
+        if not entry.endswith(".py") or entry.startswith("_"):
+            continue
+        mod_name = entry[:-3]
+        try:
+            spec = _importlib_util.spec_from_file_location(
+                f"_tool_{prefix}{mod_name}",
+                os.path.join(directory, entry))
+            if spec is None or spec.loader is None:
+                continue
+            _mod = _importlib_util.module_from_spec(spec)
+            spec.loader.exec_module(_mod)
+        except Exception:
+            continue
+        if not all(hasattr(_mod, a) for a in ("TOOL_NAME", "TOOL_DESCRIPTION", "TOOL_PARAMS", "execute")):
+            continue
+        registry._modules[_mod.TOOL_NAME] = _mod
+        registry._tools.append({"type": "function", "function": {
+            "name": _mod.TOOL_NAME, "description": _mod.TOOL_DESCRIPTION, "parameters": _mod.TOOL_PARAMS}})
+
 
 # ---------------------------------------------------------------------------
 # agent.md parsing
@@ -132,12 +148,22 @@ def parse_agent_md(path: str) -> tuple:
 # ---------------------------------------------------------------------------
 
 def load_skill_md(skill_name: str) -> str | None:
-    """Read harness/skills/{skill_name}/SKILL.md"""
+    """Read harness/skills/{skill_name}/SKILL.md and replace AgentFoundry template vars.
+
+    AgentFoundry materializes placeholders like ${SKILL_DIR} and ${SKILLS_DIR}
+    at mount time.  Our V3 coordinator doesn't have a materialization step,
+    so we substitute them here with the actual filesystem paths.
+    """
     path = os.path.join(SKILLS_BASE, skill_name, "SKILL.md")
     if not os.path.isfile(path):
         return None
     with open(path, encoding="utf-8") as f:
-        return f.read()
+        content = f.read()
+    # Replace AgentFoundry template variables
+    skill_dir = os.path.join(SKILLS_BASE, skill_name)
+    content = content.replace("${SKILL_DIR}", skill_dir)
+    content = content.replace("${SKILLS_DIR}", SKILLS_BASE)
+    return content
 
 
 def load_skills_from_list(skill_names: list) -> dict:
@@ -177,7 +203,7 @@ def execute():
     load_skill_names = []
 
     if exec_skill_key and databus.is_connected():
-        raw = databus.get(exec_skill_key)
+        raw = databus.get_global(exec_skill_key)
         if raw:
             try:
                 manifest = raw if isinstance(raw, dict) else json.loads(raw)
@@ -219,19 +245,33 @@ def execute():
     # ⑨ Read model config
     frontmatter, _ = parse_agent_md(AGENT_MD_PATH)
     model_cfg = frontmatter.get("model", {})
-    api_key = model_cfg.get("api_key", "")
+    # model can be a plain string (e.g. "Minimax-M3") or a dict {name: "..."}
+    model_name = model_cfg if isinstance(model_cfg, str) else model_cfg.get("name", "gpt-4o-mini")
+
+    # API key and base URL come from env vars (not agent.md frontmatter).
+    # Priority: AF_LLM_API_KEY > API_KEY, AF_LLM_BASE_URL > default.
+    api_key = get_env("AF_LLM_API_KEY") or get_env("API_KEY", "")
     if not api_key or "${" in api_key:
         print(json.dumps({"error": "API key not resolved"}, ensure_ascii=False))
         sys.exit(1)
+    base_url = get_env("AF_LLM_BASE_URL", "")
+
+    # ── flow debug ──
+    print(f"[flow] skill_executor triggered: session={session_id} dialogue={dialogue_id}", file=sys.stderr)
+    print(f"[flow]   exec_skill_key={exec_skill_key} skill_name={skill_name}", file=sys.stderr)
+    print(f"[flow]   skill_prompt={skill_prompt[:80] if skill_prompt else '(none)'}", file=sys.stderr)
+    print(f"[flow]   load_skills={load_skill_names}", file=sys.stderr)
+    print(f"[flow]   tools_available={[t['function']['name'] for t in available_tools]}", file=sys.stderr)
 
     # ⑩ LLM while-loop
     max_rounds = int(get_env("AF_SKILL_MAX_ROUNDS", "8"))
     for round_i in range(max_rounds):
+        print(f"[flow]   LLM round={round_i+1}/{max_rounds} msgs={len(messages)} tools={bool(available_tools)}", file=sys.stderr)
         raw = call_llm(
             messages, tools=available_tools,
-            model=model_cfg.get("name", "gpt-4o-mini"),
-            base_url=model_cfg.get("base_url", ""),
-            api_key=model_cfg.get("api_key", ""),
+            model=model_name,
+            base_url=base_url,
+            api_key=api_key,
             max_completion_tokens=4000)  # avoid finish=length truncation on long skill outputs
 
         if raw.get("_llm_error"):
@@ -244,6 +284,8 @@ def execute():
         tool_calls = msg.get("tool_calls")
 
         if tool_calls:
+            tool_names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
+            print(f"[flow]   round={round_i+1} → tool_calls: {tool_names}", file=sys.stderr)
             messages.append(msg)
             for tc in tool_calls:
                 func = tc.get("function", {})
@@ -274,6 +316,7 @@ def execute():
             # Coordinator's collect_skill_results reads by completed_skill name ("skill-runner"),
             # so the generic key MUST be written or coordinator gets empty result → false "not found".
             # Use ensure_ascii=True to avoid DataBus SDK UTF-8 decode failures on Chinese/emoji content.
+            print(f"[flow]   result: skill={skill_name} status={output.get('status','completed')} rounds={round_i+1}", file=sys.stderr)
             if databus.is_connected():
                 result_json = json.dumps(output, ensure_ascii=True)
                 databus.put(f"skill_result:{skill_name}", result_json)

@@ -42,6 +42,70 @@ def _log_warn(msg: str) -> None:
     print(f"[llm_call] WARN: {msg}", file=sys.stderr)
 
 
+# ── Task context (read once per call from framework-injected env vars) ──
+#
+# The framework injects node inputs as AF_<KEY> environment variables
+# (worker.cpp: to_env_suffix + env_vars.push_back). We read them here so each
+# LLM trace record carries its caller identity, enabling downstream analysis
+# to reconstruct the coordinator → skill → coordinator control flow WITHOUT
+# any framework-side change.
+#
+# Verified env vars actually injected (confirmed via agentflowd CODE_LOADER_DEBUG
+# logs, 2026-07-02):
+#   coordinator_decide node receives:
+#     AF_NODE_ID=coordinator_decide, AF_DIALOGUE_ID, AF_SESSION_ID,
+#     AF_COMPLETED_SKILL_NAME (non-empty on re-entry), AF_SKILL_SUCCESS
+#   skill_executor node receives:
+#     AF_NODE_ID=skill_executor, AF_DIALOGUE_ID, AF_SESSION_ID,
+#     AF_EXEC_SKILL_KEY=dispatch:N
+#
+# Known framework gaps (env vars NOT injected despite node authors expecting them):
+#   - AF_SELF_TASK_ID  — runtime.cpp:1847 sets inputs["self_task_id"] but it
+#                        does not reach the node env (only 11 vars injected,
+#                        self_task_id missing). task_id left empty.
+#   - AF_SKILL_NAME    — skill_executor.py docstring claims "injected by
+#                        framework" but it is NOT. Infer task_type from
+#                        AF_NODE_ID instead.
+#
+# task_type inference (no AF_TASK_TYPE env var exists):
+#   - AF_NODE_ID contains "skill_executor"  → "skill"        (subagent executing)
+#   - AF_COMPLETED_SKILL_NAME non-empty      → "coordinator"  (control returned after skill)
+#   - AF_NODE_ID contains "coordinator"      → "coordinator"  (first dispatch / final reply)
+#   - otherwise                              → ""             (unknown)
+def _infer_task_type(node_id: str, completed_skill: str) -> str:
+    nid = (node_id or "").lower()
+    if "skill_executor" in nid or "skill" in nid:
+        return "skill"
+    if completed_skill:
+        return "coordinator"
+    if "coordinator" in nid:
+        return "coordinator"
+    return ""
+
+
+def _task_context() -> dict:
+    """Collect framework-injected task identity from environment.
+
+    Returns a dict with keys: dialogue_id, session_id, node_id, task_id,
+    skill_name, completed_skill, task_type. Empty string for any missing
+    field — downstream consumers should treat empty as "unknown", not error.
+
+    Note: task_id is currently always empty (AF_SELF_TASK_ID not injected by
+    framework — known gap). Use node_id + dialogue_id for caller correlation.
+    """
+    node_id = os.environ.get("AF_NODE_ID", "")
+    completed_skill = os.environ.get("AF_COMPLETED_SKILL_NAME", "")
+    return {
+        "dialogue_id": os.environ.get("AF_DIALOGUE_ID", ""),
+        "session_id": os.environ.get("AF_SESSION_ID", ""),
+        "node_id": node_id,                          # reliable caller identifier
+        "task_id": os.environ.get("AF_SELF_TASK_ID", ""),  # currently always "" (framework gap)
+        "skill_name": os.environ.get("AF_SKILL_NAME", ""), # currently always "" (framework gap)
+        "completed_skill": completed_skill,          # non-empty ⇒ control returned to coordinator
+        "task_type": _infer_task_type(node_id, completed_skill),
+    }
+
+
 class _TraceRecorder:
     """Records LLM call traces to DataBus ``llm`` namespace.
 
@@ -173,6 +237,7 @@ class _TraceRecorder:
                     "msg_count": len(messages),
                     "tools_enabled": bool(tools),
                 }
+                meta.update(_task_context())
                 self._put(f"traces/{call_id}/meta", meta)
                 self._append_to_index(call_id)
 
@@ -186,6 +251,7 @@ class _TraceRecorder:
                     "model": model, "latency_ms": latency_ms, "timestamp": timestamp,
                     "error": str(e),
                 }
+                error_meta.update(_task_context())
                 self._put(f"traces/{call_id}/meta", error_meta)
                 self._append_to_index(call_id)
             _log_warn(f"[#{seq}] {call_id} FAILED after {latency_ms}ms: {e}")

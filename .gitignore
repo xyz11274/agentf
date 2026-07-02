@@ -85,3 +85,8 @@ ar_scripts
 .venv
 node_modules
 .env
+
+**/outfit_assistant/docs
+**/outfit_assistant/.agentfoundry
+**/outfit_assistant/.backup
+**/outfit_assistant/.output
