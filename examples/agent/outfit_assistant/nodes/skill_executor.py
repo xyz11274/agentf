@@ -184,6 +184,54 @@ def get_env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
 
 
+def validate_tool_calls(choice: dict) -> tuple[bool, str]:
+    """Reject truncated or syntactically broken tool calls before execution."""
+    if choice.get("finish_reason") == "length":
+        return False, "completion_truncated"
+
+    for tool_call in choice.get("message", {}).get("tool_calls") or []:
+        function = tool_call.get("function", {})
+        name = function.get("name", "unknown")
+        try:
+            arguments = json.loads(function.get("arguments", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            return False, f"invalid_tool_arguments:{name}"
+        if not isinstance(arguments, dict):
+            return False, f"invalid_tool_arguments:{name}"
+    return True, ""
+
+
+def remove_invalid_tool_turns(messages: list) -> list:
+    """Remove malformed assistant tool calls and their paired tool results."""
+    invalid_ids = set()
+    cleaned = []
+    for message in messages:
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            choice = {"finish_reason": "tool_calls", "message": message}
+            valid, _ = validate_tool_calls(choice)
+            if not valid:
+                invalid_ids.update(
+                    call.get("id") for call in message.get("tool_calls", [])
+                    if call.get("id")
+                )
+                continue
+        if (message.get("role") == "tool" and
+                message.get("tool_call_id") in invalid_ids):
+            continue
+        cleaned.append(message)
+    return cleaned
+
+
+def extract_artifact_paths(text: str) -> list[str]:
+    """Extract generated image URLs/paths from a tool result."""
+    pattern = r"(?:https?://[^\s\"'\\]+|/[^\s\"'\\]+)\.(?:png|jpe?g|webp|gif)"
+    candidates = re.findall(pattern, text, flags=re.IGNORECASE)
+    return list(dict.fromkeys(
+        item for item in candidates
+        if item.startswith(("http://", "https://")) or os.path.isfile(item)
+    ))
+
+
 # ---------------------------------------------------------------------------
 # Main — LLM while-loop with domain tools
 # ---------------------------------------------------------------------------
@@ -266,6 +314,10 @@ def execute():
 
     # ⑩ LLM while-loop
     max_rounds = int(get_env("AF_SKILL_MAX_ROUNDS", "8"))
+    completion_budget = int(get_env("AF_SKILL_MAX_COMPLETION_TOKENS", "8192"))
+    recovery_attempts = 0
+    max_recovery_attempts = int(get_env("AF_SKILL_LLM_RECOVERY_ATTEMPTS", "2"))
+    generated_artifacts = extract_artifact_paths(task_instruction)
     for round_i in range(max_rounds):
         print(f"[flow]   LLM round={round_i+1}/{max_rounds} msgs={len(messages)} tools={bool(available_tools)}", file=sys.stderr)
         raw = call_llm(
@@ -273,18 +325,37 @@ def execute():
             model=model_name,
             base_url=base_url,
             api_key=api_key,
-            max_completion_tokens=4000)
+            max_completion_tokens=completion_budget)
 
         if raw.get("_llm_error"):
             err_msg = raw.get("error", "LLM call failed")
             print(f"[flow]   ⚠️  LLM error (non-fatal): {err_msg}", file=sys.stderr)
-            # Don't sys.exit — return partial result so coordinator can decide
+            if recovery_attempts < max_recovery_attempts:
+                recovery_attempts += 1
+                messages = remove_invalid_tool_turns(messages)
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "上一轮工具调用未被 API 接受。请继续当前任务，重新生成一个"
+                        "完整、简短且 JSON 参数合法的工具调用；不要重复解释。"
+                    ),
+                })
+                print(
+                    f"[flow]   recovering LLM error attempt="
+                    f"{recovery_attempts}/{max_recovery_attempts}",
+                    file=sys.stderr,
+                )
+                continue
+
+            # Recovery exhausted: return a structured result instead of raising
+            # or terminating the worker process.
             output = {
                 "skill_result": f"LLM call failed: {err_msg}",
                 "status": "llm_error",
                 "skill_name": skill_name,
                 "rounds_used": round_i + 1,
                 "error": err_msg,
+                "artifacts_json": json.dumps(generated_artifacts, ensure_ascii=False),
             }
             if databus.is_connected():
                 result_json = json.dumps(output, ensure_ascii=True)
@@ -297,6 +368,42 @@ def execute():
         msg = choice.get("message", {})
         tool_calls = msg.get("tool_calls")
 
+        valid_tool_calls, invalid_reason = validate_tool_calls(choice)
+        if not valid_tool_calls:
+            if recovery_attempts < max_recovery_attempts:
+                recovery_attempts += 1
+                completion_budget = min(completion_budget * 2, 16384)
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "上一轮输出在工具参数完成前被截断。不要执行上一轮调用。"
+                        "请用更短内容重新生成完整、合法的 JSON 工具参数；"
+                        "较长正文可拆分成多次工具调用。"
+                    ),
+                })
+                print(
+                    f"[flow]   recovering {invalid_reason} attempt="
+                    f"{recovery_attempts}/{max_recovery_attempts} "
+                    f"budget={completion_budget}",
+                    file=sys.stderr,
+                )
+                continue
+
+            output = {
+                "skill_result": f"Tool call recovery exhausted: {invalid_reason}",
+                "status": "tool_call_error",
+                "skill_name": skill_name,
+                "rounds_used": round_i + 1,
+                "error": invalid_reason,
+                "artifacts_json": json.dumps(generated_artifacts, ensure_ascii=False),
+            }
+            if databus.is_connected():
+                result_json = json.dumps(output, ensure_ascii=True)
+                databus.put(f"skill_result:{skill_name}", result_json)
+                databus.put("skill_result:skill-runner", result_json)
+            print(json.dumps(output, ensure_ascii=False))
+            return
+
         if tool_calls:
             tool_names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
             print(f"[flow]   round={round_i+1} → tool_calls: {tool_names}", file=sys.stderr)
@@ -304,14 +411,14 @@ def execute():
             for tc in tool_calls:
                 func = tc.get("function", {})
                 name = func.get("name", "")
-                try:
-                    args = json.loads(func.get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    args = {}
+                args = json.loads(func.get("arguments", "{}"))
                 # Log tool call params (truncate to 200 chars)
                 args_preview = json.dumps(args, ensure_ascii=False)[:200]
                 print(f"[flow]   tool_call: {name} args={args_preview}", file=sys.stderr)
                 result = tool_registry.execute(name, args)
+                for artifact in extract_artifact_paths(result):
+                    if artifact not in generated_artifacts:
+                        generated_artifacts.append(artifact)
                 # Log tool result (truncate to 300 chars)
                 result_preview = result[:300]
                 print(f"[flow]   tool_result: {name} => {result_preview}", file=sys.stderr)
@@ -328,6 +435,7 @@ def execute():
                 "status": "completed",
                 "skill_name": skill_name,
                 "rounds_used": round_i + 1,
+                "artifacts_json": json.dumps(generated_artifacts, ensure_ascii=False),
             }
             # Write result to DataBus for coordinator to read.
             # Write under TWO keys:
@@ -350,6 +458,7 @@ def execute():
         "status": "max_rounds_reached",
         "skill_name": skill_name,
         "rounds_used": max_rounds,
+        "artifacts_json": json.dumps(generated_artifacts, ensure_ascii=False),
     }
     if databus.is_connected():
         result_json = json.dumps(output, ensure_ascii=True)

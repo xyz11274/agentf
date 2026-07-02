@@ -18,7 +18,8 @@
         {"name": "dialogue_id",         "type": "string", "required": false},
         {"name": "completed_skill_name", "type": "string", "required": false},
         {"name": "skill_success",       "type": "string", "required": false},
-        {"name": "skill_result",        "type": "string", "required": false}
+        {"name": "skill_result",        "type": "string", "required": false},
+        {"name": "skill_artifacts",     "type": "string", "required": false}
       ],
       "outputs": [
         {"name": "response", "type": "string"},

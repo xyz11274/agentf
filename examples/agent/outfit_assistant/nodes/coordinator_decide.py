@@ -22,6 +22,8 @@ import os
 import re
 import sys
 import time
+import uuid
+from urllib.parse import quote
 
 import yaml
 
@@ -208,8 +210,9 @@ def handle_run_skills_call(args: dict, databus: DataBusClient,
     # ① Write per-skill dispatch manifest to DataBus (must be BEFORE next_skills)
     #    Key: dispatch:{N} → value: {skill_name, prompt, load_skills}
     next_skills_specs = []
+    dispatch_round = uuid.uuid4().hex[:12]
     for i, spec in enumerate(skills, 1):
-        dispatch_key = f"dispatch:{i}"
+        dispatch_key = f"dispatch:{dialogue_id}:{dispatch_round}:{i}"
         dispatch_data = {
             "skill_name": spec["name"],
             "prompt": spec.get("prompt", ""),
@@ -261,6 +264,46 @@ def collect_skill_results(databus: DataBusClient, skill_names: list) -> list:
     return results
 
 
+def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
+    """Append browser-accessible Markdown for generated image artifacts."""
+    try:
+        artifacts = json.loads(artifacts_json) if artifacts_json else []
+    except (json.JSONDecodeError, TypeError):
+        artifacts = []
+    images = [item for item in artifacts if isinstance(item, str)]
+    content = rewrite_local_image_links(content)
+    if not images:
+        return content
+    blocks = []
+    for index, path in enumerate(images, 1):
+        url = path if path.startswith(("http://", "https://")) else local_artifact_url(path)
+        blocks.append(f"![生成图片 {index}]({url})")
+    return content.rstrip() + "\n\n## 生成图片\n\n" + "\n\n".join(blocks)
+
+
+def rewrite_local_image_links(content: str) -> str:
+    """Rewrite absolute local Markdown image paths to the artifact endpoint."""
+    pattern = re.compile(r"(!\[[^\]]*\]\()(/[^)]+\.(?:png|jpe?g|webp|gif))(\))", re.I)
+
+    def replace(match: re.Match) -> str:
+        path = match.group(2)
+        if not os.path.isfile(path):
+            return match.group(0)
+        url = local_artifact_url(path)
+        return f"{match.group(1)}{url}{match.group(3)}"
+
+    return pattern.sub(replace, content)
+
+
+def local_artifact_url(path: str) -> str:
+    """Map a package-local path to a hierarchy-preserving HTTP URL."""
+    packages_root = os.path.dirname(AGENT_PACKAGE_DIR)
+    relative = os.path.relpath(os.path.realpath(path), packages_root)
+    if relative.startswith(".."):
+        return f"/api/artifacts/outfit-assistant?path={quote(path, safe='')}"
+    return f"/api/artifacts/outfit-assistant/files/{quote(relative, safe='/')}"
+
+
 # ---------------------------------------------------------------------------
 # Main — single LLM decision per trigger
 # ---------------------------------------------------------------------------
@@ -275,6 +318,7 @@ def execute():
     completed_skill = get_env("AF_COMPLETED_SKILL_NAME", "")
     skill_success = get_env("AF_SKILL_SUCCESS", "")
     completed_skill_result = get_env("AF_SKILL_RESULT", "")
+    completed_skill_artifacts = get_env("AF_SKILL_ARTIFACTS", "")
 
     frontmatter, agent_md_body = parse_agent_md(AGENT_MD_PATH)
     model_cfg = frontmatter.get("model", {})
@@ -352,7 +396,10 @@ def execute():
         print(f"[flow]   ⚠️  LLM error (non-fatal): {err_msg}", file=sys.stderr)
         # Return fallback response instead of crashing — user gets something,
         # workflow completes, coordinator can be re-triggered.
-        response_text = f"抱歉，我暂时无法处理您的请求（LLM 调用超时）。请稍后再试。"
+        response_text = append_artifacts_markdown(
+            "抱歉，文本整理暂时失败，但已经生成的图片仍可查看。",
+            completed_skill_artifacts,
+        )
         output = {"response": response_text}
         if databus.is_connected():
             try:
@@ -421,6 +468,9 @@ def execute():
             response_text = raw_response[think_match.end():].strip()
         else:
             response_text = raw_response
+        response_text = append_artifacts_markdown(
+            response_text, completed_skill_artifacts
+        )
         print(json.dumps({"response": response_text}, ensure_ascii=False))
         _t6 = time.time()
         print(f"[timing] final_output={_t6-_t0:.1f}s total", file=sys.stderr)
