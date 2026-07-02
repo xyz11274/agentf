@@ -20,7 +20,8 @@
       ],
       "outputs": [
         {"name": "response", "type": "string"},
-        {"name": "status",   "type": "string"}
+        {"name": "status",   "type": "string"},
+        {"name": "artifacts_json", "type": "string"}
       ],
       "timeout_ms": 240000
     }

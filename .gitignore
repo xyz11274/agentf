@@ -89,4 +89,5 @@ node_modules
 **/outfit_assistant/docs
 **/outfit_assistant/.agentfoundry
 **/outfit_assistant/.backup
-**/outfit_assistant/.output
+**/outfit_assistant/**/outfit-stylist/output/*
+**/outfit_assistant/assets/*
