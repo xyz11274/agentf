@@ -49,7 +49,10 @@ std::shared_ptr<MMNode> MMNode::clone(bool inherit_databus) const {
   // Fresh state - start in WAITING state (will be set to READY by workflow execution)
   cloned->state_ = NodeState::WAITING;
   cloned->retry_count_ = 0;
-  cloned->inputs_.clear();
+  {
+    std::lock_guard<std::mutex> lock(inputs_mutex_);
+    cloned->inputs_.clear();
+  }
   cloned->outputs_.clear();
   cloned->last_error_.clear();
 
@@ -64,6 +67,23 @@ std::shared_ptr<MMNode> MMNode::clone(bool inherit_databus) const {
   // Note: Runtime state (threads, pools) is not cloned - fresh node doesn't need runtime
 
   return cloned;
+}
+
+const DataMap& MMNode::get_inputs() const {
+  std::lock_guard<std::mutex> lock(inputs_mutex_);
+  return inputs_;
+}
+
+void MMNode::set_inputs(const DataMap& inputs) {
+  std::lock_guard<std::mutex> lock(inputs_mutex_);
+  inputs_ = inputs;
+}
+
+void MMNode::merge_inputs(const DataMap& data) {
+  std::lock_guard<std::mutex> lock(inputs_mutex_);
+  for(const auto& kv : data) {
+    inputs_[kv.first] = kv.second;
+  }
 }
 
 bool MMNode::start_runtime() {

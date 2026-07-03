@@ -787,7 +787,7 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
       }
     }
     // Merge with any existing inputs (e.g. set via set_inputs() or message payload)
-    const DataMap& existing = node->get_inputs();
+    DataMap existing = node->get_inputs();
     for(const auto& kv : existing) {
       if(hydrated.find(kv.first) == hydrated.end()) {
         hydrated[kv.first] = kv.second;
@@ -1057,12 +1057,8 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
           }
         }
 
-        // Merge transferred data into target node inputs
-        DataMap target_inputs = target_node->get_inputs();
-        for(const auto& [key, value] : transferred) {
-          target_inputs[key] = value;
-        }
-        target_node->set_inputs(target_inputs);
+        // Merge transferred data into target node inputs (thread-safe)
+        target_node->merge_inputs(transferred);
 
         Logger::instance().info_f("[EDGE_TRANSFER] %s -> %s: %zu keys transferred",
                                   node->get_id().c_str(),

@@ -60,7 +60,7 @@ TEST_F(NodeTest, NodeDataHandling) {
   input["key2"] = std::string("value2");
   node.set_inputs(input);
 
-  const DataMap& retrieved_input = node.get_inputs();
+  DataMap retrieved_input = node.get_inputs();
   EXPECT_EQ(retrieved_input.size(), 2);
   auto compare_variant = [](const DataVariant& v, const std::string& expected) {
     return std::visit(
