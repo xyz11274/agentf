@@ -210,13 +210,15 @@ class _TraceRecorder:
                    api_key: str, tools: list | None = None,
                    max_completion_tokens: int = 2000,
                    timeout: int = 120,
-                   connect_timeout: int = 10) -> dict:
+                   connect_timeout: int = 5) -> dict:
         """Execute LLM call via curl with full trace recording.
 
         Two-stage timeout (curl native):
           connect_timeout  — TCP connect + TLS handshake (network layer).
-                             10s is enough; SSL_ERROR_SYSCALL before this
-                             means the network is down → retry fast.
+                             5s is ~25x normal handshake (~0.2s实测 minimaxi),
+                             enough for cross-border jitter; network-down
+                             fails fast at 5s instead of hanging 60s on
+                             SSL_ERROR_SYSCALL.
           timeout          — Whole request including LLM generation.
                              Kept generous (120s) for slow streaming responses.
 
@@ -465,7 +467,7 @@ def call_llm(messages: list, model: str = "gpt-4o-mini",
              tools: list | None = None,
              max_completion_tokens: int = 2000,
              timeout: int = 120,
-             connect_timeout: int = 10) -> dict:
+             connect_timeout: int = 5) -> dict:
     """Call LLM API with full trace recording. Returns OpenAI-compatible dict.
 
     Two-stage timeout (see trace_call docstring):

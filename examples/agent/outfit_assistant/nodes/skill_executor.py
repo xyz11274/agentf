@@ -361,7 +361,10 @@ def execute():
     frontmatter, _ = parse_agent_md(AGENT_MD_PATH)
     model_cfg = frontmatter.get("model", {})
     # model can be a plain string (e.g. "MiniMax-M3") or a dict {name: "..."}
-    model_name = model_cfg if isinstance(model_cfg, str) else model_cfg.get("name", "gpt-4o-mini")
+    model_name = model_cfg if isinstance(model_cfg, str) else model_cfg.get("name", "")
+    # agent.md 为模型名第一来源，未声明时 fallback 到 AF_LLM_MODEL env，再兜底 gpt-4o-mini
+    if not model_name:
+        model_name = get_env("AF_LLM_MODEL") or "gpt-4o-mini"
 
     # API key and base URL come from env vars (not agent.md frontmatter).
     # Priority: AF_LLM_API_KEY > API_KEY, AF_LLM_BASE_URL > default.

@@ -108,4 +108,4 @@ venv
 **/outfit_assistant/.backup
 **/outfit_assistant/**/outfit-stylist/output/*
 **/outfit_assistant/assets/*
-**/.env
+# **/.env
