@@ -27,8 +27,8 @@ from client import (
     InvalidParamsError,
     NotFoundError,
 )
-from dependencies import get_daemon_client
 from config import settings
+from dependencies import get_daemon_client
 
 logger = logging.getLogger("agentflow.bridge.routes.chat_rest")
 

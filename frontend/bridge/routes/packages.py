@@ -31,7 +31,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Path as PathParam, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import Path as PathParam
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
