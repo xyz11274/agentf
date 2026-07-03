@@ -23,7 +23,7 @@ except ImportError:
     print("Install websockets: pip install websockets")
     sys.exit(1)
 
-BRIDGE_WS_URL = "ws://127.0.0.1:8199/ws/chat/harness-agent"
+BRIDGE_WS_URL = "ws://127.0.0.1:8199/health/ws/chat/harness-agent"
 TIMEOUT = 30
 
 

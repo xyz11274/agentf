@@ -42,6 +42,47 @@ def _log_warn(msg: str) -> None:
     print(f"[llm_call] WARN: {msg}", file=sys.stderr)
 
 
+class _ApiError(RuntimeError):
+    """Deterministic API-level error (auth/400/quota/payload-too-large).
+
+    Distinct from transient transport errors so the retry loop can skip
+    these without inspecting error strings.
+    """
+
+
+# curl exit codes that indicate TRANSIENT network failures worth retrying.
+# Source: https://curl.se/docs/manpage.html (EXIT CODES)
+#   6  — Couldn't resolve host (DNS hiccup)
+#   7  — Failed to connect() to host (connection refused / ECONNREFUSED)
+#   28 — Operation timeout (--max-time reached)
+#   35 — SSL connect error (TLS handshake failed — the one we just hit)
+#   52 — Got nothing; server returned nothing (no headers, no body)
+#   56 — Failure with receiving network data (connection reset mid-stream)
+# Not retried (deterministic):
+#   3  — URL malformed, 4 — feature missing, 5 — proxy resolution,
+#   22 — HTTP page not retrieved (4xx/5xx in --fail mode — but we don't
+#        use --fail, so 4xx/5xx bodies come through as JSON API errors),
+#   60 — peer cert cannot be authenticated (CA trust — won't recover)
+_TRANSIENT_CURL_RCS = {6, 7, 28, 35, 52, 56}
+
+
+def _is_transient_curl_error(exc: Exception) -> bool:
+    """Return True if `exc` looks like a transient network error worth retrying.
+
+    Inspects curl's "curl rc=N" marker in the RuntimeError message. Any
+    non-curl error (e.g. JSONDecodeError from a garbled but HTTP-200 body)
+    is conservatively treated as non-transient — retrying won't help and
+    may loop on a deterministic parse failure.
+    """
+    msg = str(exc)
+    # Match "curl rc=NN" — only the numeric rc tells us if it's transient.
+    import re as _re
+    m = _re.search(r"curl rc=(\d+)", msg)
+    if not m:
+        return False
+    return int(m.group(1)) in _TRANSIENT_CURL_RCS
+
+
 # ── Task context (read once per call from framework-injected env vars) ──
 #
 # The framework injects node inputs as AF_<KEY> environment variables
@@ -168,8 +209,16 @@ class _TraceRecorder:
     def trace_call(self, messages: list, model: str, base_url: str,
                    api_key: str, tools: list | None = None,
                    max_completion_tokens: int = 2000,
-                   timeout: int = 120) -> dict:
+                   timeout: int = 120,
+                   connect_timeout: int = 10) -> dict:
         """Execute LLM call via curl with full trace recording.
+
+        Two-stage timeout (curl native):
+          connect_timeout  — TCP connect + TLS handshake (network layer).
+                             10s is enough; SSL_ERROR_SYSCALL before this
+                             means the network is down → retry fast.
+          timeout          — Whole request including LLM generation.
+                             Kept generous (120s) for slow streaming responses.
 
         Returns OpenAI-compatible response dict, or
         ``{"error": ..., "_llm_error": true}`` on failure.
@@ -199,63 +248,149 @@ class _TraceRecorder:
         if not url.endswith("/chat/completions"):
             url += "/chat/completions"
 
-        _log_warn(f"[#{seq}] call_id={call_id} model={model} msgs={len(messages)} tools={bool(tools)}")
+        # Unified entry log — one line per model call, visible across ALL nodes
+        # (coordinator_decide + skill_executor). This is the single source of
+        # truth for "which node called the LLM when". Captures node_id from
+        # framework-injected AF_NODE_ID so callers don't need to log it themselves.
+        ctx = _task_context()
+        _log_warn(
+            f"[#{seq}] >>> call_id={call_id} node={ctx.get('node_id','?')} "
+            f"task_type={ctx.get('task_type','?')} model={model} "
+            f"msgs={len(messages)} tools={bool(tools)} "
+            f"budget={max_completion_tokens} "
+            f"connect_timeout={connect_timeout}s timeout={timeout}s"
+        )
 
-        try:
-            result = subprocess.run(
-                ["curl", "-s", "-X", "POST", url,
-                 "-H", "Content-Type: application/json",
-                 "-H", f"Authorization: Bearer {api_key}",
-                 "-d", json.dumps(request_body, ensure_ascii=False),
-                 "--max-time", str(timeout)],
-                capture_output=True, text=True, timeout=timeout + 5,
-            )
-            if result.returncode != 0:
-                raise RuntimeError(f"curl rc={result.returncode}: {result.stderr[:200]}")
+        # ── Transport-layer retry ──
+        #
+        # Single source of truth for HTTP retry. Transient network errors
+        # (SSL_ERROR_SYSCALL, connection reset, DNS hiccup, curl timeouts)
+        # are retried here with exponential backoff. Deterministic errors
+        # (auth/400/payload-too-large/business API errors) are NOT retried —
+        # they will fail identically on every attempt.
+        #
+        # Callers' outer "recovery" loops handle SEMANTIC issues (truncated
+        # tool args, invalid JSON) by rewriting messages — those must NOT
+        # touch messages on pure network errors, since the messages are fine.
+        # Network errors that survive all retries bubble up as _llm_error and
+        # callers fall back without corrupting conversation history.
+        max_retries = int(os.environ.get("AF_LLM_MAX_RETRIES", "2"))
+        base_delay = float(os.environ.get("AF_LLM_RETRY_BASE_DELAY", "1.0"))
 
-            response_data = json.loads(result.stdout)
-            if "error" in response_data and "choices" not in response_data:
-                raise RuntimeError(f"API error: {response_data['error']}")
+        response_data = None
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                result = subprocess.run(
+                    ["curl", "-sS", "-X", "POST", url,
+                     "-H", "Content-Type: application/json",
+                     "-H", f"Authorization: Bearer {api_key}",
+                     "-d", json.dumps(request_body, ensure_ascii=False),
+                     "--connect-timeout", str(connect_timeout),
+                     "--max-time", str(timeout)],
+                    capture_output=True, text=True, timeout=timeout + 5,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"curl rc={result.returncode}: {result.stderr}")
 
-            latency_ms = int((time.time() - start_time) * 1000)
+                response_data = json.loads(result.stdout)
+                if "error" in response_data and "choices" not in response_data:
+                    # Business/API error (auth, bad request, quota) — NOT
+                    # transient. Capture the error text BEFORE nulling
+                    # response_data (so the post-loop `response_data is None`
+                    # guard routes to the error path), then raise to break.
+                    api_err_text = response_data.get("error")
+                    response_data = None
+                    raise _ApiError(f"API error: {api_err_text}")
 
-            # Record full response + meta to DataBus
-            if self._client:
-                self._put(f"traces/{call_id}/response", response_data)
-                usage = response_data.get("usage", {})
-                choice = response_data.get("choices", [{}])[0]
-                meta = {
-                    "model": model,
-                    "latency_ms": latency_ms,
-                    "timestamp": timestamp,
-                    "request_summary": self._summarize_messages(messages),
-                    "response_summary": self._summarize_response(response_data),
-                    "prompt_tokens": usage.get("prompt_tokens", 0),
-                    "completion_tokens": usage.get("completion_tokens", 0),
-                    "total_tokens": usage.get("total_tokens", 0),
-                    "finish_reason": choice.get("finish_reason", "unknown"),
-                    "msg_count": len(messages),
-                    "tools_enabled": bool(tools),
-                }
-                meta.update(_task_context())
-                self._put(f"traces/{call_id}/meta", meta)
-                self._append_to_index(call_id)
+                break  # success
 
-            _log_warn(f"[#{seq}] {call_id} OK latency={latency_ms}ms finish={response_data.get('choices',[{}])[0].get('finish_reason','?')}")
-            return response_data
+            except _ApiError as e:
+                # Deterministic API error — do not retry, do not mask as transient.
+                last_error = e
+                _log_warn(
+                    f"[#{seq}] <<< {call_id} API_ERROR (non-retriable) "
+                    f"attempt={attempt+1}/{max_retries+1}: {e}"
+                )
+                break
 
-        except Exception as e:
+            except Exception as e:
+                last_error = e
+                retriable = _is_transient_curl_error(e)
+                if attempt < max_retries and retriable:
+                    backoff = min(base_delay * (2 ** attempt), 8.0)
+                    _log_warn(
+                        f"[#{seq}] <<< {call_id} transient error "
+                        f"attempt={attempt+1}/{max_retries+1}, "
+                        f"retrying in {backoff:.1f}s: {e}"
+                    )
+                    time.sleep(backoff)
+                    continue
+                # Either non-retriable, or retries exhausted.
+                _log_warn(
+                    f"[#{seq}] <<< {call_id} FAILED "
+                    f"attempt={attempt+1}/{max_retries+1} "
+                    f"retriable={retriable} node={ctx.get('node_id','?')} "
+                    f"url={url} err={e}"
+                )
+                break
+
+        if response_data is None:
             latency_ms = int((time.time() - start_time) * 1000)
             if self._client:
                 error_meta = {
-                    "model": model, "latency_ms": latency_ms, "timestamp": timestamp,
-                    "error": str(e),
+                    "model": model, "latency_ms": latency_ms,
+                    "timestamp": timestamp, "error": str(last_error),
+                    "retries_attempted": attempt + 1,
                 }
                 error_meta.update(_task_context())
                 self._put(f"traces/{call_id}/meta", error_meta)
                 self._append_to_index(call_id)
-            _log_warn(f"[#{seq}] {call_id} FAILED after {latency_ms}ms: {e}")
-            return {"error": f"LLM call failed: {e}", "_llm_error": True}
+            return {"error": f"LLM call failed: {last_error}",
+                    "_llm_error": True}
+
+        latency_ms = int((time.time() - start_time) * 1000)
+
+        # Record full response + meta to DataBus
+        if self._client:
+            self._put(f"traces/{call_id}/response", response_data)
+            usage = response_data.get("usage", {})
+            choice = response_data.get("choices", [{}])[0]
+            meta = {
+                "model": model,
+                "latency_ms": latency_ms,
+                "timestamp": timestamp,
+                "request_summary": self._summarize_messages(messages),
+                "response_summary": self._summarize_response(response_data),
+                "prompt_tokens": usage.get("prompt_tokens", 0),
+                "completion_tokens": usage.get("completion_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
+                "finish_reason": choice.get("finish_reason", "unknown"),
+                "msg_count": len(messages),
+                "tools_enabled": bool(tools),
+                "retries_used": attempt,
+            }
+            meta.update(_task_context())
+            self._put(f"traces/{call_id}/meta", meta)
+            self._append_to_index(call_id)
+
+        # Unified success log — tool_calls name list + token usage + finish
+        _choice = response_data.get("choices", [{}])[0]
+        _msg = _choice.get("message", {})
+        _tcs = _msg.get("tool_calls") or []
+        _tc_names = [tc.get("function", {}).get("name", "?") for tc in _tcs] if _tcs else []
+        _usage = response_data.get("usage", {}) or {}
+        _log_warn(
+            f"[#{seq}] <<< {call_id} OK latency={latency_ms}ms "
+            f"finish={_choice.get('finish_reason','?')} "
+            f"tool_calls={_tc_names or 'none'} "
+            f"tok=prompt:{_usage.get('prompt_tokens',0)}/"
+            f"completion:{_usage.get('completion_tokens',0)}/"
+            f"total:{_usage.get('total_tokens',0)} "
+            f"retries={attempt}"
+        )
+        return response_data
 
     # ── DataBus helpers ──
 
@@ -329,8 +464,27 @@ def call_llm(messages: list, model: str = "gpt-4o-mini",
              base_url: str = "", api_key: str = "",
              tools: list | None = None,
              max_completion_tokens: int = 2000,
-             timeout: int = 120) -> dict:
-    """Call LLM API with full trace recording. Returns OpenAI-compatible dict."""
+             timeout: int = 120,
+             connect_timeout: int = 10) -> dict:
+    """Call LLM API with full trace recording. Returns OpenAI-compatible dict.
+
+    Two-stage timeout (see trace_call docstring):
+      connect_timeout — TCP+TLS handshake, fast-fail when network is down
+      timeout         — whole request, generous for slow LLM generation
+    Both overrideable via env vars AF_LLM_CONNECT_TIMEOUT / AF_LLM_TIMEOUT.
+    """
+    # Env override (M3: configurable, no hidden config). Callers passing
+    # explicit args win; env vars fill the default for callers that don't.
+    if "AF_LLM_CONNECT_TIMEOUT" in os.environ:
+        try:
+            connect_timeout = int(os.environ["AF_LLM_CONNECT_TIMEOUT"])
+        except ValueError:
+            pass
+    if "AF_LLM_TIMEOUT" in os.environ:
+        try:
+            timeout = int(os.environ["AF_LLM_TIMEOUT"])
+        except ValueError:
+            pass
     return get_recorder().trace_call(
         messages, model, base_url, api_key, tools,
-        max_completion_tokens, timeout)
+        max_completion_tokens, timeout, connect_timeout)

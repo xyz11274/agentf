@@ -31,7 +31,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import config as config_module
-from main import app
+from main import bridge_app as app
 
 
 # ---------------------------------------------------------------------------

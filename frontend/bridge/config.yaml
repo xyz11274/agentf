@@ -1,0 +1,56 @@
+# AgentFlow Bridge — 统一配置
+#
+# 所有 runtime 配置集中在此文件。修改配置后重启 bridge 生效。
+# 环境变量可覆盖此文件中的值（优先级: 环境变量 > config.yaml > 代码默认值）。
+#
+# 字段说明见 inline 注释，无需看代码即可了解所有可配项。
+
+# ── Daemon（agentflowd）连接 ──────────────────────────────────────
+daemon:
+  host: "127.0.0.1"        # agentflowd 监听地址
+  port: 17891              # agentflowd 监听端口
+
+# ── Bridge 服务绑定 ───────────────────────────────────────────────
+bridge:
+  listen: "0.0.0.0:8199"       # Bridge 监听地址（可用 BRIDGE_LISTEN 覆盖）
+
+# ── Sidecar（对外入口，仅生产环境） ────────────────────────────────
+sidecar:
+  enabled: false           # 生产环境设为 true
+  listen: "0.0.0.0:23767"  # 对外暴露的地址端口
+  aisf_adapter_url: "http://127.0.0.1:18080"  # 内部 aisf_adapter 地址
+
+# ── AISF Adapter（已接入主 Bridge） ─────────────────────────────────
+# 对外接收端点：POST /health/v1/tasks（由 routes/aisf_tasks.py 提供）
+# 上游 SysAgent 通过此端点下发 TaskAssignment 请求
+aisf_adapter:
+  agent_id: "outfit-assistant"   # agentflowd 中的 agent 标识
+  mode: "async"                   # async | sync（默认异步，符合 AISF 协议）
+  timeout: 360.0                  # 单次任务超时（秒）
+
+  # 上游 SysAgent 回调地址（任务完成后 Bridge 主动 POST 回传结果）
+  # URL: http://{Header.SysAgentEntity}:{port}{path}
+  upstream:
+    callback_port: 23767
+    callback_path: "/coremind/systemagent/v1/callback"
+
+# ── Artifact 公网地址 ─────────────────────────────────────────────
+# 空字符串 = 使用相对路径（仅内网可用）
+# 线上部署时填公网可访问的 URL，如 https://agent.example.com
+artifact_public_base_url: "http://localhost:8199"
+
+# ── 文件路径 ──────────────────────────────────────────────────────
+# 相对路径基于项目根目录解析
+agent_packages_dir: "examples/agent"
+skill_hub_dir: "resource/skill_hub"
+
+# ── 日志与超时 ────────────────────────────────────────────────────
+log_level: "INFO"
+request_timeout_seconds: 5.0
+chat_turn_timeout_seconds: 900.0  # 聊天单轮总超时（秒，可用 CHAT_TURN_TIMEOUT_SECONDS 覆盖）
+daemon_status_refresh_interval: 10.0
+
+# ── CORS ──────────────────────────────────────────────────────────
+cors_allowed_origins:
+  - "http://localhost:15173"
+  - "http://127.0.0.1:15173"

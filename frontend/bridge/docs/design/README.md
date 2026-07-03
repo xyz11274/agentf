@@ -1,7 +1,7 @@
 # Bridge 设计文档索引
 
 > **层级**: L2 · `docs/design/`
-> **更新日期**: 2026-06-25
+> **更新日期**: 2026-07-02
 > **状态**: 已填充
 
 ---
@@ -15,14 +15,14 @@
 | 产品需求 | L1 | [配置系统 PRD](../requirements/prd/config-system-prd.md) | 🟡 草案 |
 | 总体架构 | L2 | [Bridge 总览](features/bridge-overview.md) | ✅ 已填充（含 4+1 视图） |
 | 功能设计 | L2 | [Agent 管理](features/agent-management.md) | ✅ 已填充 |
-| 功能设计 | L2 | [聊天功能](features/chat.md) | ✅ 已填充（含双模式） |
+| 功能设计 | L2 | [聊天功能](features/chat.md) | ✅ 已填充（含双模式与多模态 Artifact） |
 | 功能设计 | L2 | [Daemon 监控](features/daemon-monitoring.md) | ✅ 已填充 |
 | 功能设计 | L2 | [包管理](features/package-management.md) | ✅ 已填充 |
 | 功能设计 | L2 | [会话管理](features/session-management.md) | ✅ 已填充 |
 | 功能设计 | L2 | [Skill Hub](features/skill-hub.md) | 🟡 草案 |
 | 功能设计 | L2 | [配置系统](features/config-system.md) | 🟡 草案 |
 | 接口契约 | L4 | [Agent API 契约](architecture/modules/agent-api.md) | ✅ 已填充 |
-| 接口契约 | L4 | [Chat API 契约](architecture/modules/chat-api.md) | ✅ 已填充（含 WS + REST） |
+| 接口契约 | L4 | [Chat API 契约](architecture/modules/chat-api.md) | ✅ 已填充（含 WS + REST + Artifact） |
 | 接口契约 | L4 | [Daemon API 契约](architecture/modules/daemon-api.md) | ✅ 已填充 |
 | 接口契约 | L4 | [Package API 契约](architecture/modules/package-api.md) | ✅ 已填充 |
 | 接口契约 | L4 | [Session API 契约](architecture/modules/session-api.md) | ✅ 已填充 |
@@ -58,6 +58,9 @@
 | WS 帧格式 | `architecture/modules/chat-api.md` | §1.2 |
 | REST 请求/响应 Schema | `architecture/modules/chat-api.md` | §2.2–2.3 |
 | 聊天双模式选择依据 | `features/chat.md` | How |
+| 多模态 Artifact 交付规则 | `features/chat.md` | 多模态 Artifact 交付 |
+| Artifact 文件端点与安全约束 | `architecture/modules/chat-api.md` | §5 |
+| Artifact 公网地址配置 | `architecture/modules/config-system.md` | §2.2 / §3 |
 | Package API 端点定义 | `architecture/modules/package-api.md` | §2 / §3 |
 | Package 安全校验规则 | `architecture/modules/package-api.md` | §1.2 |
 | Session API 参数映射 | `architecture/modules/session-api.md` | §2 |

@@ -181,13 +181,18 @@ protected:
     package_path_ = find_agent_path();
     ASSERT_FALSE(package_path_.empty()) << "SystemAgentMock package not found";
 
-    // Check required libraries
+    // Check required libraries (platform-aware: .so on Linux, .dylib on macOS)
+#ifdef __APPLE__
+    const std::string lib_ext = ".dylib";
+#else
+    const std::string lib_ext = ".so";
+#endif
     std::vector<std::string> required_libs = {
-        "lib/libskill_selection_node.so",
-        "lib/libtravel_node.so",
-        "lib/libshopping_node.so",
-        "lib/libfoodie_node.so",
-        "lib/libcoordinator_node.so"
+        "lib/libskill_selection_node" + lib_ext,
+        "lib/libtravel_node" + lib_ext,
+        "lib/libshopping_node" + lib_ext,
+        "lib/libfoodie_node" + lib_ext,
+        "lib/libcoordinator_node" + lib_ext
     };
     for (const auto& lib : required_libs) {
       ASSERT_TRUE(std::filesystem::exists(std::filesystem::path(package_path_) / lib))

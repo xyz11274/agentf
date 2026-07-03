@@ -204,7 +204,7 @@ llm_config.base_urls = ["http://replica1:8000/v1", "http://replica2:8000/v1"]
 
 #### 3. 各节点类型接入方式
 
-**SO 节点（V3）**：已由 Worker 完整实现，无需修改。参考 `examples/agent/llm_query_agent/`。
+**SO 节点（V3）**：已由 Worker 完整实现，无需修改。参考 `examples/agent/llm-query-agent/`。
 
 **Shell 节点**：
 
@@ -285,7 +285,7 @@ outputs["response"] = "".join(chunks)
 - [x] 规范化 chunk channel 命名（`agentflow.llm.{chunk|done|error|response}.{request_id}`）
 - [x] 文档化 SO 节点现有调用路径
 - [x] 提供 Shell/Python 参考代码
-- [ ] 在 `examples/agent/llm_query_agent/` 中补充脚本节点示例
+- [ ] 在 `examples/agent/llm-query-agent/` 中补充脚本节点示例
 
 #### 阶段 2：工具化（后续）
 

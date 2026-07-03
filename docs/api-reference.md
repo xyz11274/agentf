@@ -63,7 +63,7 @@ DSL 关键字段：
 - 输入输出：`input_params/output_params`（DSL 字段 `inputs`/`outputs`，字段类型支持 `string/int/float/bool/list/map`）
 - 执行入口：`command/function_name/main_class/args`
 - 可靠性：`timeout_ms/max_retries/retry_delay_ms`
-- 热更新：`enable_hot_reload/hot_reload_config`（默认生效，无需显式调用 `enable_code_reload`）
+- Worker 可执行文件热更新：`enable_hot_reload/hot_reload_config`（默认关闭；仅在节点显式配置 `enable_hot_reload: true` 时生效）
 - 嵌套 workflow 引用：`workflow_ref`（当 `type=workflow`）
 - **结构化输出**（2026-03-06 新增）：`json_output: true` — 脚本节点（Go/Python/Java）输出 JSON 时框架自动将每个键映射到 DataBus，无需文件中转
 - **节点运行时自动注册**（2026-03-06 新增）：`node_runtime` 对象 — 在 workflow `start_runtime()` 时自动启动指定执行器，在 `stop_runtime()` 时自动停止

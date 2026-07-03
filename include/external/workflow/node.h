@@ -104,8 +104,9 @@ public:
     // Retry configuration
     int retry_delay_ms = 1000;  // Delay between retries
 
-    // Hot reload configuration (worker-side; enabled by default for executable nodes)
-    bool                     enable_hot_reload = true;  // Legacy compatibility flag
+    // Worker-side executable hot reload is opt-in. Agent package replacement uses
+    // daemon unload/load and does not depend on this file watcher.
+    bool                     enable_hot_reload = false;
     runtime::HotReloadConfig hot_reload_config;         // Hot reload settings
 
     // Code execution configuration
@@ -171,6 +172,7 @@ public:
   const DataMap&     get_inputs() const { return inputs_; }
   const DataMap&     get_outputs() const { return outputs_; }
   const Config&      get_config() const { return config_; }
+  const std::string& get_last_error() const { return last_error_; }
 
   // Config getters for storage
   const std::vector<FieldDefinition>& get_input_definitions() const {

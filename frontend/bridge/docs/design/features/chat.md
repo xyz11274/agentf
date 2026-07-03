@@ -1,7 +1,7 @@
 # 聊天功能设计
 
 > **层级**: L2 · `docs/design/features/chat.md`
-> **状态**: 已更新 · 2026-06-26 重构: 用 `user_id` + `client_id` 替换 `session_id`
+> **状态**: 已更新 · 2026-07-02 增加多模态 Artifact 交付设计
 > **创建者**: `design-doc-organizer`
 
 ---
@@ -140,6 +140,19 @@ Bridge 提供两种聊天模式：
 > 5. Daemon→Bridge: agent.response（final=true）
 > 6. Bridge→前端: 200 {content}
 
+### 多模态 Artifact 交付
+
+Agent 的最终响应仍以文本消息为统一载体。图片、HTML 等生成产物不内嵌为 Base64，也不增加独立二进制消息帧；Agent 在 Markdown 内容中返回由 Bridge 提供的可访问 URL，客户端按普通 Markdown 图片或链接渲染。
+
+交付流程遵循以下规则：
+
+1. Skill 一旦生成有效文件，即把产物元数据随执行结果传回 Coordinator；后续模型调用失败时，已生成的产物仍保留并可进入最终响应。
+2. Coordinator 把本地绝对路径改写为 Bridge Artifact URL，避免把仅在服务端有效的文件系统路径暴露给客户端。
+3. Bridge 按 Agent Package 根目录发布完整产物目录树，保留 HTML 与图片、CSS、JavaScript 等文件之间的相对路径关系。因此 HTML 中的 `assets/look.png` 可相对于 HTML URL 正常加载。
+4. 内置 UI 使用 `/api/artifacts/...` 相对 URL，由当前 Bridge 提供文件；外部服务调用 Agent 时，部署方必须配置 Bridge 的公网基地址，响应中才会返回可从外部访问的绝对 URL。
+
+这一设计只负责“产物如何交付”，不改变 WS 与 REST 的会话、流式和错误语义。具体端点、安全约束和配置项由 L4 文档定义。
+
 ### 不支持项 / 边界
 
 | 场景 | 状态 | 说明 |
@@ -149,6 +162,8 @@ Bridge 提供两种聊天模式：
 | 消息编辑/撤回 | ❌ 不支持 | 无此能力 |
 | 前端暴露 session_id | ❌ 不支持 | session_id 是 daemon 内部概念，外部不感知 |
 | 并发多 turn | ❌ 不支持 | 同一连接同一时刻只能有一个 in-flight turn |
+| Artifact 二进制内嵌 | ❌ 不支持 | 消息仅返回 Markdown URL，不返回 Base64 或二进制帧 |
+| Artifact 签名 URL / 生命周期管理 | ⏳ 待实现 | 当前使用包内路径 URL，尚无签名、过期和自动清理机制 |
 
 ---
 

@@ -88,6 +88,15 @@ target_link_libraries(test_event_handler_gtest PRIVATE
     GTest::gtest_main
 )
 
+add_executable(test_exe_loader_gtest
+    unit/src/test_exe_loader_gtest.cpp
+)
+target_link_libraries(test_exe_loader_gtest PRIVATE
+    agentflow
+    GTest::gtest
+    GTest::gtest_main
+)
+
 # Compiler options
 if(NOT MSVC)
     target_compile_options(test_agent_gtest PRIVATE -Wno-non-virtual-dtor)
@@ -97,6 +106,7 @@ if(NOT MSVC)
     target_compile_options(test_dsl_adapter_gtest PRIVATE -Wno-non-virtual-dtor)
     target_compile_options(test_control_message_gtest PRIVATE -Wno-non-virtual-dtor)
     target_compile_options(test_event_handler_gtest PRIVATE -Wno-non-virtual-dtor)
+    target_compile_options(test_exe_loader_gtest PRIVATE -Wno-non-virtual-dtor)
 endif()
 
 # Add subdirectories
@@ -112,6 +122,7 @@ add_test(NAME DataBusTests COMMAND test_databus_gtest)
 add_test(NAME DSLAdapterTests COMMAND test_dsl_adapter_gtest)
 add_test(NAME ControlMessageTests COMMAND test_control_message_gtest)
 add_test(NAME EventHandlerTests COMMAND test_event_handler_gtest)
+add_test(NAME ExeLoaderTests COMMAND test_exe_loader_gtest)
 
 if(AGENTFLOW_TEST_ENV)
     set_tests_properties(AgentTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
@@ -121,6 +132,7 @@ if(AGENTFLOW_TEST_ENV)
     set_tests_properties(DSLAdapterTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
     set_tests_properties(ControlMessageTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
     set_tests_properties(EventHandlerTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
+    set_tests_properties(ExeLoaderTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
 endif()
 
 # Set RPATH for test executables so they can find shared libs at runtime
@@ -147,7 +159,7 @@ endif()
 if(_test_rpath)
   foreach(_tgt test_agent_gtest test_workflow_gtest test_node_gtest
                test_databus_gtest test_dsl_adapter_gtest test_control_message_gtest
-               test_event_handler_gtest)
+               test_event_handler_gtest test_exe_loader_gtest)
     if(TARGET ${_tgt})
       set_target_properties(${_tgt} PROPERTIES BUILD_RPATH "${_test_rpath}")
     endif()
@@ -157,5 +169,5 @@ endif()
 # Install targets
 install(TARGETS test_agent_gtest test_workflow_gtest test_node_gtest
         test_databus_gtest test_dsl_adapter_gtest test_control_message_gtest
-        test_event_handler_gtest
+        test_event_handler_gtest test_exe_loader_gtest
         RUNTIME DESTINATION bin)

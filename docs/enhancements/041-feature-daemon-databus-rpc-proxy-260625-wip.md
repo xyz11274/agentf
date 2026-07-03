@@ -341,7 +341,7 @@ std::string RpcHandler::handle_databus_get(const std::string& params, int64_t id
 
 ### 9.3 Bridge 侧
 
-`bridge/routes/llm_trace.py` 中调用 daemon RPC 时，传入 `user_id` 和 `client_id` 参数替代 `session_id`。调用方从当前聊天的上下文中获取 `user_id`+`client_id`：
+`frontend/bridge/routes/llm_trace.py` 中调用 daemon RPC 时，传入 `user_id` 和 `client_id` 参数替代 `session_id`。调用方从当前聊天的上下文中获取 `user_id`+`client_id`：
 
 ```python
 result = await daemon.send_request("databus.list_keys", {
@@ -358,7 +358,7 @@ result = await daemon.send_request("databus.list_keys", {
 |------|---------|------|
 | `src/daemon/rpc_handler.cpp` | 修改 | 新增 `resolve_session_id`；修改 `handle_databus_get/list_keys` 支持用户身份寻址；撤回 `poll_response` 的 session_id 字段 |
 | `src/daemon/rpc_handler.h` | 修改 | 新增 `resolve_session_id` 方法声明 |
-| `bridge/routes/llm_trace.py` | 修改 | 传入 `(user_id, client_id)` 替代 `session_id` |
+| `frontend/bridge/routes/llm_trace.py` | 修改 | 传入 `(user_id, client_id)` 替代 `session_id` |
 | `examples/agent/outfit-assistant/tests/test_e2e.py` | 修改 | 使用 `(user_id, client_id)` 查询 trace，移除 session_id 依赖 |
 
 ### 9.5 功能点实现优先级
@@ -391,8 +391,8 @@ result = await daemon.send_request("databus.list_keys", {
 | 文档 | 变更说明 |
 |------|---------|
 | 本文档 | 当前修改 |
-| `bridge/docs/design/adrs/0004-llm-trace-data-bus-bridge.md` | 已更新：取消阶段 1，统一为 daemon 代理 |
-| `bridge/docs/design/architecture/modules/llm-trace.md` | 已更新：新增 daemon RPC 协议定义（§5.2） |
+| `frontend/bridge/docs/design/adrs/0004-llm-trace-data-bus-bridge.md` | 已更新：取消阶段 1，统一为 daemon 代理 |
+| `frontend/bridge/docs/design/architecture/modules/llm-trace.md` | 已更新：新增 daemon RPC 协议定义（§5.2） |
 | `docs/enhancements/README.md` | 追加此 enhancement 的索引行 |
 
 ### 11.2 关联方案

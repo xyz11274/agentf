@@ -190,7 +190,7 @@ if(session_array.Size() != 1) {
   "version": "1.0.0",
   "description": "...",
   "author": "AgentFlow Team",
-  "entry_point": "basic_agent.so",
+  "entry_point": "basic-agent.so",
   "workflows": [
     "workflow.json",
     "coordinator_workflow.json"
@@ -219,25 +219,25 @@ if(session_array.Size() != 1) {
 **需更新的配置文件**：
 
 **agent.json 文件（10个）**：
-- `examples/agent/basic_agent/agent.json`
-- `examples/agent/nested_workflow_agent/agent.json`
-- `examples/agent/workflow_patterns/agent.json`
-- `examples/agent/claw_agent/agent.json`
-- `examples/agent/llm_query_agent/agent.json`
-- `examples/agent/system_agent_mock/agent.json`
-- `examples/agent/openjiuwen_studio_agent/agent.json`
+- `examples/agent/basic-agent/agent.json`
+- `examples/agent/nested-workflow-agent/agent.json`
+- `examples/agent/workflow-patterns-agent/agent.json`
+- `examples/agent/claw-agent/agent.json`
+- `examples/agent/llm-query-agent/agent.json`
+- `examples/agent/system-agent-mock/agent.json`
+- `examples/agent/openjiuwen-studio-agent/agent.json`
 - `examples/agent/multi_session_chat/package/agent.json`
 - `examples/agent/openjiuwen_multi_session_chat/package/agent.json`
 - `examples/agent/multi_language_databus/agent.json`
 
 **package.json 文件（9个）**：
-- `examples/agent/basic_agent/package.json`
-- `examples/agent/nested_workflow_agent/package.json`
-- `examples/agent/workflow_patterns/package.json`
-- `examples/agent/claw_agent/package.json`
-- `examples/agent/llm_query_agent/package.json`
-- `examples/agent/system_agent_mock/package.json`
-- `examples/agent/openjiuwen_studio_agent/package.json`
+- `examples/agent/basic-agent/package.json`
+- `examples/agent/nested-workflow-agent/package.json`
+- `examples/agent/workflow-patterns-agent/package.json`
+- `examples/agent/claw-agent/package.json`
+- `examples/agent/llm-query-agent/package.json`
+- `examples/agent/system-agent-mock/package.json`
+- `examples/agent/openjiuwen-studio-agent/package.json`
 - `examples/agent/multi_session_chat/package/package.json`
 - `examples/agent/openjiuwen_multi_session_chat/package/package.json`
 
@@ -271,7 +271,7 @@ if(session_array.Size() != 1) {
 
 2. **测试更新**：
    - `tests/unit/src/test_builtin_workflow_gtest.cpp`：移除对已删除字段的断言
-   - `tests/e2e/workflow_execution/test_basic_agent_e2e.cpp`：移除对 `coordinator_workflow` 的断言
+   - `tests/e2e/workflow_execution/test_basic-agent_e2e.cpp`：移除对 `coordinator_workflow` 的断言
    - `examples/features/agent_runner.cpp`：移除对 `coordinator_workflow` 的依赖
 
 3. **配置文件更新**：

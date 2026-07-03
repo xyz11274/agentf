@@ -11,7 +11,8 @@
 
 本文档定义 Agent Package 管理模块的完整 API 接口契约，包括所有 CRUD 端点、上传/下载接口、构建接口的请求/响应体 Schema 和安全校验规则。
 
-与前几个模块不同，本模块直接操作文件系统，不经过 daemon。
+本模块的 CRUD、上传和构建主体直接操作文件系统。更新已加载的 Package 时，完成磁盘替换后
+通过 daemon `agent.unload → agent.load` 切换运行实例。
 
 ---
 
@@ -351,6 +352,28 @@ POST /api/packages/upload
 
 ---
 
+### 2.12a 更新已有 Package
+
+```
+PUT /api/packages/{name}/update
+```
+
+归档覆盖磁盘内容后，仅当同名 Agent 已在 daemon 中加载时，Bridge 执行
+`agent.unload → agent.load(package_path)`。该运行实例更新路径不依赖 MMNode
+`enable_hot_reload`；关闭 Worker 文件热加载不会影响 Package 上传更新。
+
+| 状态码 | 条件 |
+|--------|------|
+| 200 | 磁盘更新完成；已加载 Agent 已尝试切换运行实例 |
+| 400 | 格式、更新模式或归档内容非法 |
+| 404 | 目标 Package 不存在 |
+| 500 | 文件保存或目录替换失败 |
+
+daemon 切换当前为 best-effort：失败写入 Bridge 日志，但 HTTP 仍表达磁盘更新结果。调用方不得
+把 200 解释成 daemon 运行实例必然切换成功；后续应评审是否扩展响应模型暴露 reload 状态。
+
+---
+
 ### 2.13 构建 Package
 
 ```
@@ -442,6 +465,7 @@ GET /api/packages/{name}/download/{tarball}
 |------|------|------|
 | POST | `/api/packages/create` | 创建空 Package |
 | POST | `/api/packages/upload` | 上传归档解压 |
+| PUT | `/api/packages/{name}/update` | 更新已有 Package，并 best-effort 重载已加载实例 |
 | POST | `/api/packages/{name}/build` | 构建分发包 |
 | GET | `/api/packages/{name}/download/{tarball}` | 下载构建产物 |
 

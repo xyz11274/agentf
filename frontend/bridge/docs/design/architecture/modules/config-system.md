@@ -1,7 +1,7 @@
 # Bridge 配置系统 — 详细设计
 
 > **层级**: L4 · `architecture/modules/config-system.md`
-> **状态**: 草案
+> **状态**: 已更新 · 2026-07-02 增加 Artifact 公网基地址配置
 > **创建日期**: 2026-06-25
 
 ---
@@ -44,6 +44,9 @@ class BridgeSettings(BaseSettings):
     bridge_host: str = Field(default="0.0.0.0")
     bridge_port: int = Field(default=8199, ge=1, le=65535)
 
+    # --- public artifact URL ---
+    artifact_public_base_url: str = Field(default="")
+
     # --- filesystem ---
     agent_packages_dir: str = Field(default="examples/agent")
     skill_hub_dir: str = Field(default="resource/skill_hub")
@@ -74,6 +77,14 @@ class BridgeSettings(BaseSettings):
 | 8 | `request_timeout_seconds` | float | > 0 | `5.0` | `REQUEST_TIMEOUT_SECONDS` | 🚦 | `client.py` 单次 RPC |
 | 9 | `daemon_status_refresh_interval` | float | > 0 | `10.0` | `DAEMON_STATUS_REFRESH_INTERVAL` | 🚦 | `main.py` 后台轮询 |
 | 10 | `cors_allowed_origins` | list[str] | JSON 数组 | `["localhost:15173", "127.0.0.1:15173"]` | `CORS_ALLOWED_ORIGINS` | 🌍 | `main.py` CORSMiddleware |
+| 11 | `artifact_public_base_url` | str | 当前无 URL 格式校验 | `""` | `ARTIFACT_PUBLIC_BASE_URL` | 🌐 | `routes/chat.py`, `routes/chat_rest.py` |
+
+`artifact_public_base_url` 的语义：
+
+- 空字符串：聊天响应保留 `/api/artifacts/...` 相对 URL，适用于内置 UI、同源部署或前端开发代理。
+- 非空：去除末尾 `/` 后作为前缀，把聊天响应中的 Artifact URL 转换为绝对 URL。
+- 该值应为外部调用方实际可达的 Bridge Origin（必要时包含反向代理子路径），例如 `https://agent.example.com`。
+- 当前字段仅按字符串读取，不校验协议、域名或可达性；部署验证必须覆盖真实外部网络路径。
 
 ### 2.3 派生属性
 
@@ -161,6 +172,11 @@ DAEMON_PORT=17891
 BRIDGE_HOST=0.0.0.0
 BRIDGE_PORT=8199
 
+# --- public artifact URL -----------------------------------------------
+# Optional public URL of this Bridge, e.g. https://agent.example.com.
+# Set this when external services must open generated images/HTML artifacts.
+ARTIFACT_PUBLIC_BASE_URL=
+
 # --- filesystem paths ---------------------------------------------------
 # Relative paths are resolved relative to the project root
 # (the parent directory of frontend/bridge/).
@@ -196,6 +212,9 @@ CORS_ALLOWED_ORIGINS=["http://localhost:15173","http://127.0.0.1:15173"]
 | Unit | 路径解析（绝对） | `agent_packages_dir="/data/agents"` → `/data/agents` |
 | Unit | `.env` 加载 | 设置 `.env` 文件后读取其中的值 |
 | Unit | CORS 解析 | 环境变量 JSON 数组 → Python list |
+| Unit | Artifact URL 默认值 | 未配置时为 `""`，聊天响应保留相对 URL |
+| Unit | Artifact URL 覆盖 | 环境变量可配置公网地址，并去除拼接处多余的 `/` |
+| Integration | 外部 Artifact 访问 | WS/REST 返回绝对 URL，外部客户端可获取图片和 HTML 相对资源 |
 | Unit | 单例 | 多次调用 `get_settings()` 返回同一对象 |
 | Regression | 现有配置 | 所有现有 `settings.*` 使用点不受影响 |
 
@@ -209,6 +228,7 @@ CORS_ALLOWED_ORIGINS=["http://localhost:15173","http://127.0.0.1:15173"]
 | 派生属性实现 | 本文档 §2.3 |
 | 校验规则 | 本文档 §2.4 |
 | .env 文件格式 | 本文档 §3 |
+| Artifact 公网基地址 | 本文档 §2.2，§3 |
 | 测试设计 | 本文档 §4 |
 | 配置分组与功能设计 | `features/config-system.md` L2 |
 

@@ -1,0 +1,5 @@
+{
+  "name": "coremind-context-agent",
+  "version": "1.0.0",
+  "workflows": ["context_workflow.json"]
+}

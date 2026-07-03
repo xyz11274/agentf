@@ -372,7 +372,7 @@ private:
 
 需更新的 `agent.json` 示例（按需添加 `expected_parameters`）：
 
-- `examples/agent/system_agent_mock/agent.json`
+- `examples/agent/system-agent-mock/agent.json`
 - 其他包含 skill task 的 agent.json
 
 ---

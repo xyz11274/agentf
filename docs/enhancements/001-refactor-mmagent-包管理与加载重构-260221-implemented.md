@@ -15,7 +15,7 @@
    - 新增 `tests/functional/src/test_agent_loading.cpp` 功能测试，验证 MMAgent 包加载、生命周期管理和工作流执行。
    - 修复了 `AgentState` 命名空间引用的编译错误。
 5. **示例增强**：
-   - 在 `examples/agent` 目录下新增 `basic_agent` 和 `basic_agent` 示例包，包含完整的 `package.json` 和 `workflow.json`。
+   - 在 `examples/agent` 目录下新增 `basic-agent` 和 `basic-agent` 示例包，包含完整的 `package.json` 和 `workflow.json`。
 
 ### 文件变更
 - `include/internal/agent/package.h` (新增)
@@ -24,8 +24,8 @@
 - `src/agent/agent.cpp` (修改)
 - `CMakeLists.txt` (修改)
 - `tests/functional/src/test_agent_loading.cpp` (新增)
-- `examples/agent/basic_agent/workflow.json` (新增)
-- `examples/agent/basic_agent/workflow.json` (新增)
+- `examples/agent/basic-agent/workflow.json` (新增)
+- `examples/agent/basic-agent/workflow.json` (新增)
 
 ### 2026-06-25 Agent核心重构与事件系统合并
 
@@ -47,7 +47,7 @@
 4. **示例与目录重构**：
    - 将 `examples/dsl` 目录重构为 `examples/workflow`，包含原来的 DSL 示例和 JSON 工作流文件。
    - 将 `visualizer.html` 移至 `publish/agent` 目录。
-   - 确保 `examples/agent` 包含 MMAgent 包示例 (`basic_agent`, `basic_agent`)。
+   - 确保 `examples/agent` 包含 MMAgent 包示例 (`basic-agent`, `basic-agent`)。
 
 ### 文件变更
 - `src/runtime/event.cpp` (删除)
@@ -82,7 +82,7 @@
    - `src/workflow/dsl/README.md` 已更新引用路径。
 
 5. **示例刷新**
-   - 更新 `examples/agent/basic_agent` 与 `examples/agent/basic_agent`，补充规范化示例文件并保留现有加载兼容字段。
+   - 更新 `examples/agent/basic-agent` 与 `examples/agent/basic-agent`，补充规范化示例文件并保留现有加载兼容字段。
 
 ### 2026-03-07 MMWorkflow edge/node typed IO 重构
 

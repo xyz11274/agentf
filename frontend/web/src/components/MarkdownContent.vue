@@ -228,6 +228,15 @@ function isThinkCollapsed(uid: number): boolean {
   text-decoration: underline;
 }
 
+.markdown-content :deep(img) {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 12px 0;
+  border-radius: 10px;
+  object-fit: contain;
+}
+
 /* Horizontal rule */
 .markdown-content :deep(hr) {
   border: none;

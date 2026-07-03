@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi import FastAPI
@@ -78,13 +78,14 @@ def mock_daemon() -> AsyncMock:
     daemon = AsyncMock()
     daemon.agent_execute = AsyncMock()
     daemon.wait_for_response = AsyncMock()
+    daemon.discard_response_queue = Mock()
     return daemon
 
 
 @pytest.fixture(autouse=True)
 def _fast_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
     """Shrink poll timers so tests don't wait on real time."""
-    monkeypatch.setattr(chat_module, "TURN_TIMEOUT_SECONDS", 2.0)
+    monkeypatch.setattr(chat_module.settings, "chat_turn_timeout_seconds", 2.0)
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +199,9 @@ class TestRunTurnErrors:
             )
 
     @pytest.mark.asyncio
-    async def test_wait_for_response_timeout_emits_done(self, mock_daemon: AsyncMock) -> None:
+    async def test_wait_for_response_timeout_emits_error_then_done(
+        self, mock_daemon: AsyncMock
+    ) -> None:
         mock_daemon.agent_execute.return_value = {"task_id": "t1"}
         mock_daemon.wait_for_response.side_effect = asyncio.TimeoutError()
         ws = _FakeWebSocket()
@@ -209,8 +212,11 @@ class TestRunTurnErrors:
             agent_id="agent_a", request=req, stop_event=asyncio.Event(),
         )
 
-        frames = _drain_sent(ws, 1)
-        assert frames[0]["type"] == "done"
+        frames = _drain_sent(ws, 2)
+        assert [frame["type"] for frame in frames] == ["error", "done"]
+        assert frames[0]["code"] == -32000
+        assert "2.0s" in frames[0]["message"]
+        mock_daemon.discard_response_queue.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_empty_notification_continues_loop(self, mock_daemon: AsyncMock) -> None:
@@ -253,7 +259,7 @@ class TestRunTurnErrors:
         mock_daemon.wait_for_response.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_daemon_error_on_wait_for_response_emits_done(
+    async def test_daemon_error_on_wait_for_response_emits_error_then_done(
         self, mock_daemon: AsyncMock,
     ) -> None:
         """DaemonError from wait_for_response is caught (timeout-like)."""
@@ -267,8 +273,10 @@ class TestRunTurnErrors:
             agent_id="agent_a", request=req, stop_event=asyncio.Event(),
         )
 
-        frames = _drain_sent(ws, 1)
-        assert frames[0]["type"] == "done"
+        frames = _drain_sent(ws, 2)
+        assert [frame["type"] for frame in frames] == ["error", "done"]
+        assert "daemon down" in frames[0]["message"]
+        mock_daemon.discard_response_queue.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

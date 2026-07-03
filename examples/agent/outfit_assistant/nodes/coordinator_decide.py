@@ -239,6 +239,31 @@ def handle_run_skills_call(args: dict, databus: DataBusClient,
     }, ensure_ascii=False)
 
 
+def build_skill_completion_message(completed_skill: str, skill_success: str,
+                                   completed_skill_result: str,
+                                   collected_results: list) -> str:
+    """Build the coordinator model input, preserving structured failure evidence."""
+    if completed_skill_result:
+        try:
+            parsed_result = json.loads(completed_skill_result)
+        except (json.JSONDecodeError, TypeError):
+            parsed_result = completed_skill_result
+        skill_results = [{"skill": completed_skill, "result": parsed_result}]
+    else:
+        skill_results = collected_results
+
+    decision = (
+        "请根据失败原因判断：直接回复用户并说明失败，或在尝试次数允许时重新委派 skill。"
+        if str(skill_success).lower() != "true"
+        else "请评估结果，决定是否需要再委派 skill 或直接回复用户。"
+    )
+    return (
+        f"Skill '{completed_skill}' 已完成 (success={skill_success})。\n"
+        f"结果: {json.dumps(skill_results, ensure_ascii=False, indent=2)}\n"
+        f"{decision}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Skill result collection
 # ---------------------------------------------------------------------------
@@ -281,6 +306,21 @@ def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
     return content.rstrip() + "\n\n## 生成图片\n\n" + "\n\n".join(blocks)
 
 
+def llm_error_response(artifacts_json: str) -> str:
+    """Build an honest fallback based on artifacts actually reported by a skill."""
+    try:
+        artifacts = json.loads(artifacts_json) if artifacts_json else []
+    except (json.JSONDecodeError, TypeError):
+        artifacts = []
+    has_artifacts = any(isinstance(item, str) and item for item in artifacts)
+    if has_artifacts:
+        return append_artifacts_markdown(
+            "文本整理暂时失败，已生成的产物仍可查看。",
+            artifacts_json,
+        )
+    return "抱歉，本次模型调用失败，任务未能完成，请稍后重试。"
+
+
 def rewrite_local_image_links(content: str) -> str:
     """Rewrite absolute local Markdown image paths to the artifact endpoint."""
     pattern = re.compile(r"(!\[[^\]]*\]\()(/[^)]+\.(?:png|jpe?g|webp|gif))(\))", re.I)
@@ -319,6 +359,8 @@ def execute():
     skill_success = get_env("AF_SKILL_SUCCESS", "")
     completed_skill_result = get_env("AF_SKILL_RESULT", "")
     completed_skill_artifacts = get_env("AF_SKILL_ARTIFACTS", "")
+
+    max_completion_tokens = int(get_env("AF_MAX_COMPLETION_TOKENS", "8192"))
 
     frontmatter, agent_md_body = parse_agent_md(AGENT_MD_PATH)
     model_cfg = frontmatter.get("model", {})
@@ -362,24 +404,23 @@ def execute():
     # dummy_pre_skill is a passthrough hook — treat as first trigger (no result to evaluate)
     if completed_skill and completed_skill != "dummy_pre_skill":
         # Re-trigger: skill completion notification
-        if completed_skill_result:
-            try:
-                parsed_result = json.loads(completed_skill_result)
-            except (json.JSONDecodeError, TypeError):
-                parsed_result = completed_skill_result
-            skill_results = [{"skill": completed_skill, "result": parsed_result}]
-        else:
-            skill_results = collect_skill_results(databus, [completed_skill])
-        messages.append({"role": "user", "content":
-            f"Skill '{completed_skill}' 已完成 (success={skill_success})。\n"
-            f"结果: {json.dumps(skill_results, ensure_ascii=False, indent=2)}\n"
-            f"请评估结果，决定是否需要再委派 skill 或直接回复用户。"})
+        messages.append({"role": "user", "content": build_skill_completion_message(
+            completed_skill,
+            skill_success,
+            completed_skill_result,
+            collect_skill_results(databus, [completed_skill]),
+        )})
     else:
         # First trigger (or dummy_pre_skill hook): user's original request
         messages.append({"role": "user", "content": user_input})
 
     # Single LLM decision (tools: [run_skills])
-    # 4000 tokens to avoid finish=length truncation on long responses
+    # 4000 tokens to avoid finish=length truncation on long responses.
+    #
+    # Transport-layer retry (SSL/DNS/timeout) lives INSIDE call_llm — see
+    # llm_call.py:_is_transient_curl_error. Coordinator does NOT duplicate
+    # network retry here; it only handles _llm_error as a final fallback
+    # (after call_llm has exhausted its own retries).
     _t4 = time.time()
     print(f"[timing] llm_call_start={_t4-_t0:.1f}s", file=sys.stderr)
     raw = call_llm(
@@ -393,13 +434,13 @@ def execute():
 
     if raw.get("_llm_error"):
         err_msg = raw.get("error", "LLM call failed")
-        print(f"[flow]   ⚠️  LLM error (non-fatal): {err_msg}", file=sys.stderr)
+        print(
+            f"[flow]   ⚠️  LLM error after call_llm internal retries, returning fallback: {err_msg}",
+            file=sys.stderr,
+        )
         # Return fallback response instead of crashing — user gets something,
         # workflow completes, coordinator can be re-triggered.
-        response_text = append_artifacts_markdown(
-            "抱歉，文本整理暂时失败，但已经生成的图片仍可查看。",
-            completed_skill_artifacts,
-        )
+        response_text = llm_error_response(completed_skill_artifacts)
         output = {"response": response_text}
         if databus.is_connected():
             try:
@@ -414,9 +455,9 @@ def execute():
     choice = raw.get("choices", [{}])[0]
     msg = choice.get("message", {})
     tool_calls = msg.get("tool_calls")
+    messages.append(msg)
 
     if tool_calls:
-        messages.append(msg)
         for tc in tool_calls:
             func = tc.get("function", {})
             name = func.get("name", "")

@@ -188,3 +188,60 @@ class TestMessageDispatch:
         notifs = await _drain_notifications(cli, 1, timeout=0.3)
         assert len(notifs) == 1
         assert notifs[0]["method"] == "agent.response"
+
+    @pytest.mark.asyncio
+    async def test_concurrent_notifications_are_demultiplexed_by_dialogue(self):
+        """Concurrent turns must not consume each other's agent.response."""
+        cli = DaemonClient.__new__(DaemonClient)
+        cli._notification_queue = asyncio.Queue()
+        cli._response_queues = {
+            "dialogue-a": asyncio.Queue(),
+            "dialogue-b": asyncio.Queue(),
+        }
+        cli._pending = {}
+
+        await cli._handle_message({
+            "jsonrpc": "2.0",
+            "method": "agent.response",
+            "params": {
+                "content": "response-b",
+                "final": True,
+                "metadata": {"dialogue_id": "dialogue-b"},
+            },
+        })
+        await cli._handle_message({
+            "jsonrpc": "2.0",
+            "method": "agent.response",
+            "params": {
+                "content": "response-a",
+                "final": True,
+                "metadata": {"dialogue_id": "dialogue-a"},
+            },
+        })
+
+        a = await cli._response_queues["dialogue-a"].get()
+        b = await cli._response_queues["dialogue-b"].get()
+        assert a["params"]["content"] == "response-a"
+        assert b["params"]["content"] == "response-b"
+        assert cli._notification_queue.empty()
+
+    @pytest.mark.asyncio
+    async def test_late_correlated_notification_is_dropped_after_queue_discard(self):
+        cli = DaemonClient.__new__(DaemonClient)
+        cli._notification_queue = asyncio.Queue()
+        cli._response_queues = {"expired-dialogue": asyncio.Queue()}
+        cli._pending = {}
+
+        cli.discard_response_queue("expired-dialogue")
+        await cli._handle_message({
+            "jsonrpc": "2.0",
+            "method": "agent.response",
+            "params": {
+                "content": "late",
+                "final": True,
+                "metadata": {"dialogue_id": "expired-dialogue"},
+            },
+        })
+
+        assert "expired-dialogue" not in cli._response_queues
+        assert cli._notification_queue.empty()

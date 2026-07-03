@@ -979,16 +979,28 @@ bool CodeLoader::rollback_to_version(const std::string& file_path, const std::st
 ReloadResult CodeLoader::reload_code(const std::string& file_path) {
   auto start_time = std::chrono::steady_clock::now();
 
-  Logger::instance().info_f("[HOT_RELOAD] Reloading: %s", file_path.c_str());
+  // Resolve actual file path: try alternate extension if original doesn't exist
+  std::string actual_path = file_path;
+  if(!fs::exists(actual_path)) {
+    if(file_path.size() > 3 && file_path.substr(file_path.size() - 3) == ".so") {
+      std::string alt = file_path.substr(0, file_path.size() - 3) + ".dylib";
+      if(fs::exists(alt)) { actual_path = alt; }
+    } else if(file_path.size() > 6 && file_path.substr(file_path.size() - 6) == ".dylib") {
+      std::string alt = file_path.substr(0, file_path.size() - 6) + ".so";
+      if(fs::exists(alt)) { actual_path = alt; }
+    }
+  }
+
+  Logger::instance().info_f("[HOT_RELOAD] Reloading: %s", actual_path.c_str());
 
   ReloadResult result;
 
   // Validate file if required
   if(config_.validate_before_reload) {
-    if(!validate_file(file_path)) {
+    if(!validate_file(actual_path)) {
       result.success = false;
       result.message = "File validation failed";
-      Logger::instance().error_f("[HOT_RELOAD] Validation failed: %s", file_path.c_str());
+      Logger::instance().error_f("[HOT_RELOAD] Validation failed: %s", actual_path.c_str());
       return result;
     }
   }
@@ -997,10 +1009,10 @@ ReloadResult CodeLoader::reload_code(const std::string& file_path) {
   if(config_.backup_before_reload) {
     std::string backup_path =
         config_.backup_dir.empty()
-            ? file_path + ".bak"
-            : config_.backup_dir + "/" + fs::path(file_path).filename().string() + ".bak";
+            ? actual_path + ".bak"
+            : config_.backup_dir + "/" + fs::path(actual_path).filename().string() + ".bak";
 
-    if(!create_backup(file_path, backup_path)) {
+    if(!create_backup(actual_path, backup_path)) {
       Logger::instance().warn_f("[HOT_RELOAD] Failed to create backup: %s", backup_path.c_str());
     }
   }
@@ -1224,7 +1236,7 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
     // macOS commonly reports an extremely large OPEN_MAX. Walking the full
     // range delays exec long enough to race short command timeouts; descriptors
     // above this practical ceiling are not opened by the daemon.
-    max_fd = std::min<long>(max_fd, 65536);
+    max_fd = std::min<long>(max_fd, 4096);
     for(int fd = 3; fd < max_fd; ++fd) close(fd);
 
     execl("/bin/sh", "sh", "-c", prepared_command.c_str(), static_cast<char*>(nullptr));
@@ -1331,6 +1343,19 @@ CodeLoader::SoLibraryPtr CodeLoader::load_so_library(const std::string& file_pat
   Logger::instance().info_f("[CODE_LOADER] Loading SO library: %s", file_path.c_str());
 
   void* handle = dlopen(file_path.c_str(), RTLD_LAZY);
+  if(!handle) {
+    // Try alternate extension: .so ↔ .dylib (cross-platform)
+    std::string alt_path;
+    if(file_path.size() > 3 && file_path.substr(file_path.size() - 3) == ".so") {
+      alt_path = file_path.substr(0, file_path.size() - 3) + ".dylib";
+    } else if(file_path.size() > 6 && file_path.substr(file_path.size() - 6) == ".dylib") {
+      alt_path = file_path.substr(0, file_path.size() - 6) + ".so";
+    }
+    if(!alt_path.empty()) {
+      Logger::instance().info_f("[CODE_LOADER] Trying alternate extension: %s", alt_path.c_str());
+      handle = dlopen(alt_path.c_str(), RTLD_LAZY);
+    }
+  }
   if(!handle) {
     const char* error = dlerror();
     Logger::instance().error_f("[CODE_LOADER] Failed to load %s: %s", file_path.c_str(),

@@ -3,7 +3,9 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <random>
+#include <sstream>
 #include <thread>
 
 #include "agent/session.h"
@@ -29,6 +31,18 @@ int64_t now_ms() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
+}
+
+std::string make_workflow_uds_socket_path(const std::string& session_id,
+                                          const std::string& execution_id) {
+  // sockaddr_un::sun_path is only 104 bytes on macOS. Session UUIDs plus
+  // agent/workflow/execution names exceeded that limit and silently disabled
+  // node DataBus access. A hash keeps the path short while retaining
+  // per-execution uniqueness within the process.
+  const auto hash = std::hash<std::string>{}(session_id + "\n" + execution_id);
+  std::ostringstream path;
+  path << "/tmp/afdb_" << std::hex << hash << ".sock";
+  return path.str();
 }
 
 // =============================================================================
@@ -614,7 +628,8 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
                   {},
                   state.total_nodes,
                   state.completed_count,
-                  state.in_progress
+                  state.in_progress,
+                  {}
               }
           )
       );
@@ -624,7 +639,7 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
   // Create UDS server for this workflow execution (lifecycle tied to execution)
   // This enables Python/Go/Shell SDKs to access DataBus via Unix Domain Socket
   if(!session_id.empty()) {
-    std::string uds_socket_path = "/tmp/agentflow_" + session_id + "_" + execution_id + ".sock";
+    std::string uds_socket_path = make_workflow_uds_socket_path(session_id, execution_id);
 
     // Create async callback for multi-language nodes
     UDSServer::AsyncCallback async_cb;
@@ -672,7 +687,8 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
       if(!node->initialize()) {
         Logger::instance().error_f("Failed to initialize node: %s", node->get_name().c_str());
         node->set_state(NodeState::FAILED);
-        update_workflow_state(execution_id, node->get_id(), false);
+        update_workflow_state(execution_id, node->get_id(), false,
+                              "Failed to initialize node: " + node->get_name());
       }
     }
   }
@@ -1257,6 +1273,25 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
     return;  // Don't call update_workflow_state
   }
 
+  std::string failure_details;
+  if(!node_success) {
+    failure_details = node->get_last_error();
+    for(const auto* key : {"stderr", "stdout"}) {
+      const auto output_it = outputs.find(key);
+      if(output_it == outputs.end()) continue;
+      if(const auto* text = std::get_if<std::string>(&output_it->second);
+         text && !text->empty()) {
+        if(!failure_details.empty()) failure_details += "\n";
+        failure_details += std::string(key) + ":\n" + *text;
+      }
+    }
+    constexpr std::size_t kMaxFailureDetails = 12000;
+    if(failure_details.size() > kMaxFailureDetails) {
+      failure_details = "...[truncated]\n" +
+          failure_details.substr(failure_details.size() - kMaxFailureDetails);
+    }
+  }
+
   node->cleanup();
 
   // [DEBUG] Log node cleanup
@@ -1281,7 +1316,7 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
   }
 
   // Find execution state and update it
-  update_workflow_state(execution_id, node->get_id(), node_success);
+  update_workflow_state(execution_id, node->get_id(), node_success, failure_details);
 }
 
 void MMAgentRuntime::schedule_workflow_executable_nodes(const std::string& execution_id) {
@@ -1346,7 +1381,7 @@ void MMAgentRuntime::schedule_workflow_executable_nodes(const std::string& execu
 }
 
 void MMAgentRuntime::update_workflow_state(const std::string& execution_id, const NodeId& node_id,
-                                         bool success) {
+                                         bool success, const std::string& failure_details) {
   bool        invoke_complete = false;
   bool        complete_ok     = false;
   std::string complete_agent;
@@ -1358,6 +1393,7 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
   std::string complete_task_type;
   std::string complete_skill_task_id;
   std::string complete_skill_name;
+  std::string complete_failure_details;
 
   {
     std::lock_guard<std::mutex> lock(workflow_state_mutex_);
@@ -1380,6 +1416,9 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
         state.completed_count++;
       }
     } else {
+      if(!failure_details.empty()) {
+        state.failure_details = failure_details;
+      }
       if(state.failed_nodes.count(node_id) == 0) {
         state.failed_nodes[node_id] = true;
       }
@@ -1413,6 +1452,7 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
       complete_task_type      = state.task_type;
       complete_skill_task_id  = state.skill_task_id;
       complete_skill_name     = state.skill_name;
+      complete_failure_details = state.failure_details;
     } else if(success) {
       // Get the cloned workflow for this execution
       WorkflowPtr workflow;
@@ -1501,6 +1541,41 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
                   Logger::instance().info_f(
                       "[WORKFLOW_COMPLETE] Attached skill_result (%zu bytes)",
                       text->size());
+                }
+              }
+              if(!complete_ok && !response.metadata.count("skill_result")) {
+                response.metadata["skill_result"] =
+                    "{\"status\":\"failed\",\"error\":\"" +
+                    escape_json_string(complete_failure_details.empty()
+                                           ? "workflow failed"
+                                           : complete_failure_details) +
+                    "\"}";
+                Logger::instance().info_f(
+                    "[WORKFLOW_COMPLETE] Attached synthesized failure result (%zu bytes)",
+                    response.metadata["skill_result"].size());
+              }
+              DataVariant business_skill_name;
+              const std::string business_skill_name_key = build_framework_key(
+                  complete_session_id, complete_dialogue_id, complete_workflow,
+                  "skill_name");
+              if(get_databus(complete_agent).get(business_skill_name_key,
+                                                 business_skill_name)) {
+                if(const auto* text = std::get_if<std::string>(&business_skill_name);
+                   text && !text->empty()) {
+                  response.metadata["business_skill_name"] = *text;
+                  Logger::instance().info_f(
+                      "[WORKFLOW_COMPLETE] Attached business_skill_name=%s",
+                      text->c_str());
+                }
+              }
+              DataVariant artifacts_json;
+              const std::string artifacts_key = build_framework_key(
+                  complete_session_id, complete_dialogue_id, complete_workflow,
+                  "artifacts_json");
+              if(get_databus(complete_agent).get(artifacts_key, artifacts_json)) {
+                if(const auto* text = std::get_if<std::string>(&artifacts_json);
+                   text && !text->empty() && *text != "[]") {
+                  response.metadata["artifacts_json"] = *text;
                 }
               }
             }
@@ -1861,11 +1936,25 @@ void MMAgentRuntime::agent_task_poller_loop() {
           Logger::instance().info_f("[TASK_POLLER] Propagated skill_result (%zu bytes)",
                                     skill_result.size());
         }
+        std::string skill_artifacts;
+        if(task->get_parameter("skill_artifacts", skill_artifacts) &&
+           !skill_artifacts.empty()) {
+          inputs["skill_artifacts"] = skill_artifacts;
+        }
         // Propagate exec_skill_key for skill-specific data routing
         std::string exec_skill_key;
         if(task->get_parameter("exec_skill_key", exec_skill_key) && !exec_skill_key.empty()) {
           inputs["exec_skill_key"] = exec_skill_key;
           Logger::instance().info_f("[TASK_POLLER] Set inputs[exec_skill_key]='%s'", exec_skill_key.c_str());
+        }
+        std::string platform_context;
+        if(task->get_parameter("platform_context", platform_context) &&
+           !platform_context.empty()) {
+          inputs["platform_context"] = platform_context;
+        }
+        std::string request_id;
+        if(task->get_parameter("request_id", request_id) && !request_id.empty()) {
+          inputs["request_id"] = request_id;
         }
         // Inject self_task_id for node self-identification
         inputs["self_task_id"] = task->get_config().task_id;

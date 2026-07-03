@@ -83,7 +83,7 @@ ContextCallbackConfig context_callback_config_;  // 在 MMAgent 类中
 
 ### Examples 分析
 
-- `examples/agent/system_agent_mock/` - 使用 agent.json 配置
+- `examples/agent/system-agent-mock/` - 使用 agent.json 配置
 - 需要验证新回调机制在该示例中的集成
 
 ### 缺失功能分析
@@ -336,7 +336,7 @@ private:
 | `src/runtime/event_handler.cpp` | 新增 | WorkflowInfo 构建逻辑（从 AgentPackage 提取 workflow 节点/边信息） |
 | `src/agent/agent.cpp` | 修改 | 在 session/dialogue/task 生命周期调用 runtime 事件推送 |
 | `include/internal/agent/agent.h` | 修改 | 标记旧接口废弃 |
-| `examples/agent/system_agent_mock/` | 修改 | 添加事件处理器示例 |
+| `examples/agent/system-agent-mock/` | 修改 | 添加事件处理器示例 |
 
 ## 9. 测试方案
 

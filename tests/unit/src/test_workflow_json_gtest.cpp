@@ -247,6 +247,33 @@ TEST_F(WorkflowJsonTest, ParseValidWorkflowWithTypedIo) {
   EXPECT_EQ(edge->get_condition_expression(), "status == 'ok'");
 }
 
+TEST_F(WorkflowJsonTest, WorkerHotReloadIsOptIn) {
+  auto default_result = parser_->parse_workflow(valid_workflow_json_);
+  ASSERT_TRUE(default_result.is_valid()) << default_result.get_error_summary();
+  auto default_node = default_result.workflow->get_node("node_start");
+  ASSERT_NE(default_node, nullptr);
+  EXPECT_FALSE(default_node->get_config().enable_hot_reload);
+
+  const char* explicitly_enabled = R"({
+    "id": "hot_reload_workflow",
+    "name": "Hot Reload Workflow",
+    "nodes": [{
+      "id": "script",
+      "name": "Script",
+      "type": "TASK",
+      "config": {
+        "enable_hot_reload": true
+      }
+    }],
+    "edges": []
+  })";
+  auto enabled_result = parser_->parse_workflow(explicitly_enabled);
+  ASSERT_TRUE(enabled_result.is_valid()) << enabled_result.get_error_summary();
+  auto enabled_node = enabled_result.workflow->get_node("script");
+  ASSERT_NE(enabled_node, nullptr);
+  EXPECT_TRUE(enabled_node->get_config().enable_hot_reload);
+}
+
 TEST_F(WorkflowJsonTest, ParseObjectStyleIoAsTypedDefinitions) {
   auto result = parser_->parse_workflow(legacy_object_io_workflow_json_);
   ASSERT_TRUE(result.is_valid()) << result.get_error_summary();

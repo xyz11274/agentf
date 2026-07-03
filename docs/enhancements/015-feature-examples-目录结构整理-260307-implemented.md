@@ -21,7 +21,7 @@
 | `agent_runner_design.md` | Agent Runner 设计文档 |
 | `interactive_runner_demo.md` | 交互式运行器演示文档 |
 
-#### 2. 新建 `examples/agent/workflow_patterns/` — 零散 workflow JSON 归集
+#### 2. 新建 `examples/agent/workflow-patterns-agent/` — 零散 workflow JSON 归集
 
 将 `examples/agent/` 下的零散 workflow 模式文件归集到新 agent 示例目录：
 
@@ -41,7 +41,7 @@
 
 ### 测试兼容性
 
-E2E 测试引用的 `examples/agent/basic_agent` 和 `examples/agent/nested_workflow_agent` 路径**保持不变**，无需修改测试代码。
+E2E 测试引用的 `examples/agent/basic-agent` 和 `examples/agent/nested-workflow-agent` 路径**保持不变**，无需修改测试代码。
 
 ### 验证结果
 

@@ -2,8 +2,8 @@
 
 Provides:
     * CORS middleware (configured for the Vue dev server on :15173).
-    * ``GET /health`` liveness probe used by the frontend daemonStore and
-      any external uptime monitor.
+    * All business routes mounted under ``/health`` prefix on
+      ``bridge_app``, with ``/api/health`` for gateway health checks.
     * ``GET /ws/chat/{agent_id}`` WebSocket endpoint for streaming agent
       conversations to the Vue frontend (mounted by ``routes.chat``).
 
@@ -25,12 +25,15 @@ from client import DaemonClient
 from config import settings
 from routes import agents as agents_routes
 from routes import chat as chat_routes
-from routes.chat_rest import router as chat_rest_router
-from routes.skill_hub import router as skill_hub_router
 from routes import daemon as daemon_routes
 from routes import llm_trace as llm_trace_routes
 from routes import sessions as sessions_routes
+from routes.artifacts import router as artifacts_router
+from routes.aisf_tasks import router as aisf_tasks_router
+from routes.chat_rest import router as chat_rest_router
+from routes.coremind_internal import router as coremind_internal_router
 from routes.packages import router as packages_router
+from routes.skill_hub import router as skill_hub_router
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -81,16 +84,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 1011 close frame. We never want a daemon outage to wedge the
         # bridge HTTP server itself.
         logger.warning("DaemonClient initial connect failed: %s", exc)
+    # Mounted sub-app lifespans aren't driven by the parent ASGI server.
+    # Own the process lifecycle on the outer app, but attach shared runtime
+    # state to bridge_app because routed requests/WebSockets see that app.
+    runtime_state = bridge_app.state
+    runtime_state.daemon_client = daemon_client
     app.state.daemon_client = daemon_client
 
-    app.state.daemon_status_cache = dict(daemon_routes.EMPTY_CACHE)
+    runtime_state.daemon_status_cache = dict(daemon_routes.EMPTY_CACHE)
     try:
-        await daemon_routes.update_daemon_status_cache(app.state, daemon_client)
+        await daemon_routes.update_daemon_status_cache(runtime_state, daemon_client)
     except Exception as exc:  # noqa: BLE001
         logger.debug("initial daemon status prime failed (suppressed): %s", exc)
 
     poll_task = asyncio.create_task(
-        _daemon_status_poll_loop(app.state, daemon_client),
+        _daemon_status_poll_loop(runtime_state, daemon_client),
         name="bridge.daemon_status_poll",
     )
 
@@ -149,10 +157,10 @@ async def _daemon_status_poll_loop(state, client: DaemonClient) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Application
+# Application (internal — all business routes)
 # ---------------------------------------------------------------------------
 
-app = FastAPI(
+bridge_app = FastAPI(
     title="AgentFlow Bridge",
     version="0.1.0",
     description=(
@@ -160,89 +168,90 @@ app = FastAPI(
         "the local agentflowd daemon. Proxies agent/session JSON-RPC and "
         "reads Agent Package files directly from the filesystem."
     ),
-    lifespan=lifespan,
 )
 
 # --- CORS -------------------------------------------------------------------
 # Allow the Vite dev server (and its 127.0.0.1 alias) to call the bridge
 # during local development. Production deployments should tighten this list
 # via the AGENTFLOW_CORS_ALLOWED_ORIGINS env var.
-app.add_middleware(
+bridge_app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+bridge_app.include_router(artifacts_router)
+bridge_app.include_router(coremind_internal_router)
+# AISF SysAgent 调度入口：POST /v1/tasks → 对外 /health/v1/tasks
+bridge_app.include_router(aisf_tasks_router)
 
 
 # ---------------------------------------------------------------------------
-# Routes
+# Routes (on bridge_app)
 # ---------------------------------------------------------------------------
 
-
-@app.get("/health", tags=["meta"])
-async def health() -> dict[str, str]:
-    """Liveness probe (legacy path).
-
-    Returns a small, fixed JSON document. The frontend ``daemonStore``
-    polls this endpoint to decide whether the bridge is reachable.
-    """
-    return {"status": "ok", "service": "agentflow-bridge"}
-
-
-@app.get("/api/health", tags=["meta"])
-async def api_health() -> dict[str, str]:
-    """Liveness probe — API-prefixed path.
-
-    The Vue frontend proxies ``/api/*`` through Vite to the bridge,
-    so the health check must be reachable at ``/api/health`` as well as
-    the legacy ``/health`` path.
-    """
-    return {"status": "ok", "service": "agentflow-bridge"}
-
-
-# ---------------------------------------------------------------------------
-# Routers
-# ---------------------------------------------------------------------------
 
 # WebSocket chat router reads the shared DaemonClient from
 # ``app.state.daemon_client``, which is set by the lifespan hook above.
-app.include_router(chat_routes.router)
+bridge_app.include_router(chat_routes.router)
 
 
 # REST chat router — synchronous request/response alternative to the
 # WebSocket streaming endpoint above.
-app.include_router(chat_rest_router)
+bridge_app.include_router(chat_rest_router)
 
 
 # Skill Hub router — skill central repository CRUD + install.
-app.include_router(skill_hub_router)
+bridge_app.include_router(skill_hub_router)
 
 
 # --- API routers -------------------------------------------------------------
 # The agent and session routers are pure HTTP-to-JSON-RPC proxies. They are
 # registered with their own ``prefix`` so the full mount path is already
 # ``/api/agents`` and ``/api/sessions`` — do NOT wrap with another ``/api``.
-app.include_router(agents_routes.router)
-app.include_router(sessions_routes.router)
+bridge_app.include_router(agents_routes.router)
+bridge_app.include_router(sessions_routes.router)
 
 
 # Mount the agent package router. T5 (CRUD) and T8 (packaging) live in
 # the same module so they share the ``/api/packages`` prefix and the
 # read-only surface can be extended in one place.
-app.include_router(packages_router)
+bridge_app.include_router(packages_router)
 
 
 # Daemon monitoring routes. The router ships with its own ``/api/daemon``
 # prefix, so the full mount path is ``/api/daemon/status`` and
 # ``/api/daemon/uptime`` — no extra wrapping needed.
-app.include_router(daemon_routes.router)
+bridge_app.include_router(daemon_routes.router)
 
 
 # LLM Trace routes — Phase 1, reads DataBus UDS directly (bypasses daemon).
 # These are mounted with their own ``/api/agents/…`` prefix inside the module.
-app.include_router(llm_trace_routes.router)
+bridge_app.include_router(llm_trace_routes.router)
+
+
+# Health check (accessible at /health/api/health)
+@bridge_app.get("/api/health", tags=["meta"], include_in_schema=False)
+async def bridge_health() -> dict[str, str]:
+    return {"status": "ok", "service": "agentflow-bridge"}
+
+
+# ---------------------------------------------------------------------------
+# Application (external — entrypoint with prefix mount)
+# ---------------------------------------------------------------------------
+# The outer ``app`` exposes only health probes at the root; all business
+# routes live on ``bridge_app`` mounted at ``/health``.
+
+app = FastAPI(title="AgentFlow Bridge (external)", lifespan=lifespan)
+
+
+# Health check callers go through the gateway which adds the
+# /health prefix, so only bridge_app serves /api/health.
+# The outer app has no business routes — everything is mounted below.
+
+##最新修改
+app.mount("/health", bridge_app)
 
 
 # ---------------------------------------------------------------------------

@@ -1181,6 +1181,15 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
                               trace_labels_it->second.c_str(), task_config.task_id.c_str());
   }
 
+  if(const auto platform_context_it = message.metadata.find("platform_context");
+     platform_context_it != message.metadata.end() && !platform_context_it->second.empty()) {
+    task->set_parameter("platform_context", platform_context_it->second);
+  }
+  if(const auto request_id_it = message.metadata.find("request_id");
+     request_id_it != message.metadata.end() && !request_id_it->second.empty()) {
+    task->set_parameter("request_id", request_id_it->second);
+  }
+
   // Pass completed_skill_name from message metadata for coordinator tracking
   if(const auto skill_name_it = message.metadata.find("completed_skill_name");
      skill_name_it != message.metadata.end() && !skill_name_it->second.empty()) {
@@ -1203,6 +1212,10 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
   if(const auto skill_result_it = message.metadata.find("skill_result");
      skill_result_it != message.metadata.end() && !skill_result_it->second.empty()) {
     task->set_parameter("skill_result", skill_result_it->second);
+  }
+  if(const auto artifacts_it = message.metadata.find("artifacts_json");
+     artifacts_it != message.metadata.end() && !artifacts_it->second.empty()) {
+    task->set_parameter("skill_artifacts", artifacts_it->second);
   }
 
   return task;
@@ -1234,13 +1247,20 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
       Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Dispatcher with pre-configured next_skills, launching %d skills",
                                 static_cast<int>(configured_next_skills.size()));
 
-      // Generate dialogue_id for multi-dialogue support
-      // dialogue_id = hash(user_text + message_id) for unique identification
+      // Preserve a caller-provided dialogue_id so daemon notifications can be
+      // correlated with the originating Bridge turn. Generate one only for
+      // legacy callers that omitted it.
       std::string user_text = message.content;
-      std::string dialogue_id = std::to_string(
-          std::hash<std::string>{}(user_text + message.message_id));
+      std::string dialogue_id;
+      const auto dialogue_it = message.metadata.find("dialogue_id");
+      if(dialogue_it != message.metadata.end() && !dialogue_it->second.empty()) {
+        dialogue_id = dialogue_it->second;
+      } else {
+        dialogue_id = std::to_string(
+            std::hash<std::string>{}(user_text + message.message_id));
+      }
 
-      Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Generated dialogue_id=%s for message_id=%s",
+      Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Using dialogue_id=%s for message_id=%s",
                                dialogue_id.c_str(), message.message_id.c_str());
 
       // Store dialogue_id and user_prompt in sys namespace with dialogue_id prefix
@@ -1544,16 +1564,33 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       coordinator_trigger.message_id = "coordinator-trigger-" + message.message_id;
       coordinator_trigger.metadata["task_type"] = "coordinator";
       coordinator_trigger.metadata["trigger_type"] = "skill_completion";
-      coordinator_trigger.metadata["skill_success"] = message.content == "workflow_completed" ? "true" : "false";
+      const bool skill_ok = (message.content == "workflow_completed");
+      coordinator_trigger.metadata["skill_success"] = skill_ok ? "true" : "false";
+      // Track skill failure in DataBus so the final response can carry error status
+      if(!skill_ok) {
+        publish_data("/session/" + session->get_session_id() + "/sys/"
+                         + (dialogue_id.empty() ? "" : dialogue_id + "/")
+                         + "skill_failed",
+                     std::string("true"));
+        Logger::instance().warn_f("[SKILL_COMPLETION] Skill failed, setting skill_failed flag, skill=%s",
+                                  skill_name_for_counter.c_str());
+      }
       if(!dialogue_id.empty()) {
         coordinator_trigger.metadata["dialogue_id"] = dialogue_id;
       }
-      if(!skill_name_for_counter.empty()) {
+      if(const auto business_name_it = message.metadata.find("business_skill_name");
+         business_name_it != message.metadata.end() && !business_name_it->second.empty()) {
+        coordinator_trigger.metadata["completed_skill_name"] = business_name_it->second;
+      } else if(!skill_name_for_counter.empty()) {
         coordinator_trigger.metadata["completed_skill_name"] = skill_name_for_counter;
       }
       if(const auto result_it = message.metadata.find("skill_result");
          result_it != message.metadata.end() && !result_it->second.empty()) {
         coordinator_trigger.metadata["skill_result"] = result_it->second;
+      }
+      if(const auto artifacts_it = message.metadata.find("artifacts_json");
+         artifacts_it != message.metadata.end() && !artifacts_it->second.empty()) {
+        coordinator_trigger.metadata["artifacts_json"] = artifacts_it->second;
       }
       // Pass trace_labels for flow trace correlation
       if(message.metadata.count("trace_labels")) {
@@ -1648,9 +1685,21 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     }
 
     if(message.content != "workflow_completed") {
-      Logger::instance().info_f(
-          "[DISPATCHERDataExchange] Ignoring non-complete event, content='%s'",
-          message.content.c_str());
+      // Dispatcher workflow failed — forward error to coordinator so caller gets error response
+      if(message.content == "workflow_failed") {
+        Logger::instance().error_f(
+            "[DISPATCHERDataExchange] Dispatcher workflow failed, forwarding error to coordinator");
+        publish_data("/session/" + session->get_session_id() + "/sys/"
+                         + (dialogue_id.empty() ? "" : dialogue_id + "/")
+                         + "skill_failed",
+                     std::string("true"));
+        if(auto coordinator_task = session->get_coordinator_task(); coordinator_task) {
+          MMAgentMsgQue::Message error_msg = message;
+          error_msg.metadata["task_type"] = "coordinator";
+          error_msg.metadata["error"] = "true";
+          coordinator_task->enqueue_intent_request_message(error_msg);
+        }
+      }
       return;
     }
 
@@ -1821,6 +1870,18 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     // Coordinator workflow completed - check if need to start skill tasks
     // Check next_skills first (preferred), then selected_skills for backward compatibility
     // Use new format with session isolation and fallback to legacy formats
+    bool has_skill_error = false;
+    {
+      DataVariant skill_error_val;
+      std::string skill_error_key = "/session/" + session->get_session_id() + "/sys/"
+          + (dialogue_id.empty() ? "" : dialogue_id + "/")
+          + "skill_failed";
+      if(get_data(skill_error_key, skill_error_val)) {
+        if(const auto* text = std::get_if<std::string>(&skill_error_val)) {
+          has_skill_error = (*text == "true");
+        }
+      }
+    }
     auto result = process_next_skills_launch(session, task, dialogue_id, message, "COORDINATORDataExchange");
 
     if(result.found_next_skills) {
@@ -1856,6 +1917,9 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
           if(multi_result.is_done) {
             response_message.metadata["final"] = "true";
           }
+          if(has_skill_error) {
+            response_message.metadata["error"] = "true";
+          }
 
           if(session_router_) {
             session_router_->enqueue_response_message(response_message);
@@ -1887,6 +1951,9 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
             response_message.content = *text;
           }
           response_message.metadata["final"] = "true";
+          if(has_skill_error) {
+            response_message.metadata["error"] = "true";
+          }
 
           if(session_router_) {
             session_router_->enqueue_response_message(response_message);
@@ -1919,6 +1986,12 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
                                 multi_result.consumed_index);
       MMAgentMsgQue::Message response_message = message;
       response_message.content = multi_result.content;
+      if(multi_result.is_done) {
+        response_message.metadata["final"] = "true";
+      }
+      if(has_skill_error) {
+        response_message.metadata["error"] = "true";
+      }
 
       if(session_router_) {
         session_router_->enqueue_response_message(response_message);
@@ -1959,12 +2032,19 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       }
     }
 
+    if(has_skill_error) {
+      response_message.metadata["error"] = "true";
+    }
+
     // Mark as final so the bridge knows this is the complete response
     response_message.metadata["final"] = "true";
-    // Only send if we actually found a response
-    if(session_router_ && has_response) {
-      Logger::instance().info_f("[COORDINATOR_SEND] Enqueueing response via session_router, content_len=%zu, msg_id=%s",
-                               response_message.content.size(), response_message.message_id.c_str());
+    if(session_router_ && (has_response || has_skill_error)) {
+      if(!has_response) {
+        response_message.content = "error: skill execution failed";
+      }
+      Logger::instance().info_f("[COORDINATOR_SEND] Enqueueing response via session_router, content_len=%zu, msg_id=%s, error=%s",
+                               response_message.content.size(), response_message.message_id.c_str(),
+                               has_skill_error ? "true" : "false");
       session_router_->enqueue_response_message(response_message);
 
       // Clean up dialogue data after response is sent

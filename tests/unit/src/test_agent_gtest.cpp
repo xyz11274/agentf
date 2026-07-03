@@ -242,6 +242,38 @@ TEST_F(AgentTest, CoordinatorBuildsSessionOwnedTaskWithWorkflowMapping) {
   EXPECT_FALSE(message_data_ref.empty());
 }
 
+TEST_F(AgentTest, TrustedPlatformContextPropagatesToRuntimeTask) {
+  auto agent = std::make_shared<framework::MMAgent>(base_config());
+  framework::MMWorkflow::Config wf_cfg;
+  wf_cfg.id = "wf_platform";
+  wf_cfg.name = "wf_platform";
+  agent->add_workflow(std::make_shared<framework::MMWorkflow>(wf_cfg));
+
+  framework::MMAgentMsgQue::Message req;
+  req.message_id = "req-platform";
+  req.content = "user-input";
+  req.metadata["user_id"] = "platform-user";
+  req.metadata["client_id"] = "platform-client";
+  req.metadata["workflow_id"] = "wf_platform";
+  req.metadata["request_id"] = "request-001";
+  req.metadata["platform_context"] =
+      R"({"services":{"IMInferScheduler":{"status":"resolved","instances":[{"host":"10.0.0.5","port":27321}]}}})";
+
+  ASSERT_TRUE(agent->route_request_message(req));
+  EXPECT_EQ(agent->process_session_messages("platform-user:platform-client"), 1);
+  const auto session = agent->get_session_by_key("platform-user:platform-client");
+  ASSERT_NE(session, nullptr);
+  const auto runtime_task = find_task_by_message_id(session->get_tasks(), "req-platform");
+  ASSERT_NE(runtime_task, nullptr);
+
+  std::string platform_context;
+  std::string request_id;
+  EXPECT_TRUE(runtime_task->get_parameter("platform_context", platform_context));
+  EXPECT_TRUE(runtime_task->get_parameter("request_id", request_id));
+  EXPECT_EQ(platform_context, req.metadata["platform_context"]);
+  EXPECT_EQ(request_id, "request-001");
+}
+
 TEST_F(AgentTest, CoordinatorDefaultsToDispatcherType) {
   auto agent = std::make_shared<framework::MMAgent>(base_config());
   framework::MMWorkflow::Config wf_cfg;

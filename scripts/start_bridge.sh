@@ -1,59 +1,44 @@
 #!/bin/bash
-# Start AgentFlow Bridge (FastAPI)
-# Usage: ./ar_scripts/start_bridge.sh [port] [--keep-logs]
-#
-#   --keep-logs   保留旧日志文件，默认每次启动会清理前一次的日志
+# Start the Python Bridge in development or internal production mode.
+
 set -euo pipefail
-
-KEEP_LOGS=false
-ARGS=()
-for arg in "$@"; do
-  if [ "$arg" = "--keep-logs" ]; then
-    KEEP_LOGS=true
-  else
-    ARGS+=("$arg")
-  fi
-done
-
-PORT="${ARGS[0]:-8199}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
 
-echo "=== Starting AgentFlow Bridge ==="
-echo "  Port: $PORT"
-echo "  CWD:  $PROJECT_ROOT/frontend/bridge"
+MODE="dev"
+PORT="8199"
+if [ "${1:-}" = "dev" ] || [ "${1:-}" = "production" ]; then
+    MODE="$1"
+    PORT="${2:-8199}"
+elif [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+    echo "Usage: $0 [dev|production] [port]"
+    exit 0
+elif [ -n "${1:-}" ]; then
+    PORT="$1"
+fi
+case "$MODE" in
+    dev)
+        HOST="0.0.0.0"
+        RELOAD=(--reload --reload-dir "$AR_PROJECT_ROOT/frontend/bridge")
+        ;;
+    production) HOST="127.0.0.1"; RELOAD=() ;;
+    *) echo "[ERROR] Mode must be dev or production" >&2; exit 2 ;;
+esac
 
-cd "$PROJECT_ROOT/frontend/bridge"
-
-# Activate virtual environment if it exists
-if [ -d ".venv_unix" ]; then
-    source .venv_unix/bin/activate
-    echo "[INFO] Virtual environment activated (.venv_unix)"
+ar_load_env
+if [ "$MODE" = "production" ] && [ -z "${AISF_INTERNAL_TOKEN:-}" ]; then
+    echo "[ERROR] AISF_INTERNAL_TOKEN is required in production" >&2
+    exit 1
+fi
+ar_require_command python3
+if ! PYTHONPATH="$AR_PROJECT_ROOT/frontend/bridge" python3 -c "import fastapi, uvicorn" 2>/dev/null; then
+    echo "[ERROR] Bridge dependencies are missing; install frontend/bridge/requirements.txt" >&2
+    exit 1
 fi
 
-# Check if bridge dependencies are installed
-if ! python3 -c "import fastapi" 2>/dev/null; then
-    echo "[INFO] Installing bridge dependencies..."
-    python3 -m pip install -r requirements.txt 2>/dev/null || \
-        python3 -m pip install fastapi uvicorn httpx websockets 2>&1 | tail -1
-fi
-
-# Prepare logs directory
-LOG_DIR="$PROJECT_ROOT/logs"
-mkdir -p "$LOG_DIR"
-LOG_FILE="$LOG_DIR/bridge.log"
-
-# Clean previous logs (unless --keep-logs)
-if [ "$KEEP_LOGS" = false ] && [ -f "$LOG_FILE" ]; then
-  mv "$LOG_FILE" "${LOG_FILE}.$(date +%Y%m%d-%H%M%S)" 2>/dev/null && \
-    echo "[INFO] Archived previous log to ${LOG_FILE}.$(date +%Y%m%d-%H%M%S)"
-fi
-
-echo "[INFO] Logging to $LOG_FILE"
-
-exec uvicorn main:app \
-    --host 0.0.0.0 \
-    --port "$PORT" \
-    --reload \
-    --log-level info \
-    2>&1 | tee -a "$LOG_FILE"
+export BRIDGE_HOST="$HOST" BRIDGE_PORT="$PORT"
+exec python3 -m uvicorn main:app \
+    --app-dir "$AR_PROJECT_ROOT/frontend/bridge" \
+    --host "$HOST" --port "$PORT" \
+    "${RELOAD[@]}" --log-level info

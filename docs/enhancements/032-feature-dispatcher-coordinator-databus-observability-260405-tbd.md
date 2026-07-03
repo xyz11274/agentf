@@ -112,8 +112,8 @@ dispatcher、coordinator、skill 多任务协同与 **MMDataBus** 共享数据�
 | **system_agent_mock** | dispatcher 选 skill → 多 skill 写 user/sys → coordinator 聚合 / `next_skills` / `force`；E2E 覆盖较全 |
 | **multi_session_chat** | `session-coordinator-workflow` 多分支 merge；shell + DataBus；**dialogue_id** 明显 |
 | **multi_language_databus** | 链式 coordinator + 多语言共享 DataBus |
-| **basic_agent** | 入门：`basic-coordinator-workflow` |
-| **llm_query_agent** | 异步 chunk / `[DONE]` 与 coordinator 消息联动 |
+| **basic-agent** | 入门：`basic-coordinator-workflow` |
+| **llm-query-agent** | 异步 chunk / `[DONE]` 与 coordinator 消息联动 |
 
 **结论**：**happy path** 与契约验证较强；**并发同键、bridge/runtime 混用、队列积压** 等 **负例与压测** 在 examples 中不足。
 
@@ -178,7 +178,7 @@ dispatcher、coordinator、skill 多任务协同与 **MMDataBus** 共享数据�
 | 措施 | 说明 |
 |------|------|
 | **Span 覆盖消息路径** | `handle_task_intent_request` / `handle_task_data_exchange` 子 span |
-| **与 flow_trace 对齐** | `session`、`dialogue`、`from`、`to`（参考 `examples/agent/system_agent_mock/testing/flow_trace`） |
+| **与 flow_trace 对齐** | `session`、`dialogue`、`from`、`to`（参考 `examples/agent/system-agent-mock/testing/flow_trace`） |
 
 **Metrics（建议名）**
 
@@ -231,7 +231,7 @@ dispatcher、coordinator、skill 多任务协同与 **MMDataBus** 共享数据�
 | [031-feature-coordinator-协同机制设计分析-260405-tbd.md](./031-feature-coordinator-协同机制设计分析-260405-tbd.md) | 协调层策略与收敛 |
 | [025-feature-session-老化-databus-清理问题-260320-implemented.md](./025-feature-session-老化-databus-清理问题-260320-implemented.md) | 清理与生命周期 |
 | [016-feature-全链路跟踪系统tracesystem-260307-implemented.md](./016-feature-全链路跟踪系统tracesystem-260307-implemented.md) | Trace 基础 |
-| `examples/agent/system_agent_mock/FLOW_ANALYSIS.md` | 消息流参考 |
+| `examples/agent/system-agent-mock/FLOW_ANALYSIS.md` | 消息流参考 |
 
 ### 11. 进展跟踪
 

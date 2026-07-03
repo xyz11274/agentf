@@ -1,0 +1,32 @@
+{
+  "name": "CoreMindContextAgent",
+  "version": "1.0.0",
+  "session_pool_size": 1,
+  "tasks": [
+    {
+      "id": 0,
+      "type": "dispatcher",
+      "description": "Echo trusted platform context for E2E verification",
+      "workflow_file": "context_workflow.json",
+      "workflow_pool_size": 1
+    },
+    {
+      "id": 1,
+      "type": "coordinator",
+      "description": "Return the deterministic Node response",
+      "workflow_file": "context_workflow.json",
+      "workflow_pool_size": 1
+    },
+    {
+      "id": 2,
+      "type": "skill",
+      "description": "Package validation placeholder",
+      "workflow_file": "context_workflow.json",
+      "skill": {
+        "name": "context-echo",
+        "config_dir": "skills/context-echo",
+        "instance_pool_size": 1
+      }
+    }
+  ]
+}

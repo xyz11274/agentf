@@ -347,7 +347,7 @@ flowchart LR
 
 #### 14.6 示例与测试目录（摘录）
 
-- `examples/agent/`：`basic_agent`、`multi_session_chat`、`llm_query_agent` 等；`examples/features/` 含 runner 设计文档
+- `examples/agent/`：`basic-agent`、`multi_session_chat`、`llm-query-agent` 等；`examples/features/` 含 runner 设计文档
 - `tests/unit/src/`：`test_agent_gtest`、`test_workflow_gtest`、`test_node_gtest`、`test_databus_gtest` 等
 
 #### 14.7 原 `AGENTFLOW_ANALYSIS.md` 中已过时表述的勘误

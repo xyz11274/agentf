@@ -1,8 +1,0 @@
-{
-  "version": "1.0",
-  "description": "Harness loop guard configuration. All values are read by harness_lib at runtime; change them to tune loop behavior without editing code.",
-  "max_iterations": 8,
-  "max_observation_length": 600,
-  "stuck_repeat_threshold": 2,
-  "skill_order": ["retrieve", "analyze", "compose", "finalize"]
-}

@@ -28,7 +28,7 @@ except ImportError:
     print("Install websockets: pip install websockets")
     sys.exit(1)
 
-BRIDGE_WS_URL = "ws://127.0.0.1:8199/ws/chat/outfit-assistant"
+BRIDGE_WS_URL = "ws://127.0.0.1:8199/health/ws/chat/outfit-assistant"
 TIMEOUT = 90
 PASS = 0
 FAIL = 0

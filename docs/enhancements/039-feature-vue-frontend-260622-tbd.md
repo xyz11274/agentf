@@ -331,7 +331,7 @@ daemonStore.checkHealth()（每 15s 轮询 /api/daemon/status）
 ### 7.1 项目结构
 
 ```
-bridge/                            ← Python FastAPI 桥接服务
+frontend/bridge/                            ← Python FastAPI 桥接服务
 ├── main.py                       ← FastAPI app 入口 + CORS
 ├── config.py                     ← 配置（DAEMON_HOST/PORT, PACKAGES_DIR）
 ├── requirements.txt              ← Python 依赖
@@ -348,7 +348,7 @@ bridge/                            ← Python FastAPI 桥接服务
 └── tests/
     └── test_bridge.py
 
-web/                               ← Vue 3 前端
+frontend/web/                               ← Vue 3 前端
 ├── package.json
 ├── vite.config.ts                 ← Vite 配置（含 proxy）
 ├── tsconfig.json
@@ -393,30 +393,30 @@ verify.sh                          ← 端到端验收脚本
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `bridge/main.py` | 新建 | FastAPI app 入口 |
-| `bridge/config.py` | 新建 | 配置管理 |
-| `bridge/clients/daemon_client.py` | 新建 | JSON-RPC over TCP 客户端 |
-| `bridge/routes/packages.py` | 新建 | 文件系统 CRUD API |
-| `bridge/routes/agents.py` | 新建 | Agent API 代理 |
-| `bridge/routes/sessions.py` | 新建 | Session API 代理 |
-| `bridge/routes/chat.py` | 新建 | WebSocket 聊天端点 |
-| `bridge/routes/daemon.py` | 新建 | 健康检查路由 |
-| `bridge/monitor.py` | 新建 | Daemon 连接监控 |
-| `web/src/App.vue` | 新建 | Vue 根组件 |
-| `web/src/layouts/MainLayout.vue` | 新建 | 全局布局 |
-| `web/src/router/index.ts` | 新建 | 路由配置 |
-| `web/src/pages/PackagePage.vue` | 新建 | Package 编辑页 |
-| `web/src/pages/ChatPage.vue` | 新建 | 聊天页 |
-| `web/src/components/FileTree.vue` | 新建 | 文件树 |
-| `web/src/components/CodeEditor.vue` | 新建 | 代码编辑器 |
-| `web/src/components/WorkflowDAG.vue` | 新建 | DAG 可视化 |
-| `web/src/components/AgentList.vue` | 新建 | Agent 列表 |
-| `web/src/components/SessionList.vue` | 新建 | Session 列表 |
-| `web/src/components/ChatView.vue` | 新建 | 聊天界面 |
-| `web/src/components/DaemonStatus.vue` | 新建 | 连接状态 |
-| `web/src/stores/*.ts` | 新建 | 5 个 Pinia store |
-| `web/src/composables/useChatWebSocket.ts` | 新建 | WebSocket composable |
-| `web/src/utils/workflow-parser.ts` | 新建 | Workflow JSON 解析 |
+| `frontend/bridge/main.py` | 新建 | FastAPI app 入口 |
+| `frontend/bridge/config.py` | 新建 | 配置管理 |
+| `frontend/bridge/clients/daemon_client.py` | 新建 | JSON-RPC over TCP 客户端 |
+| `frontend/bridge/routes/packages.py` | 新建 | 文件系统 CRUD API |
+| `frontend/bridge/routes/agents.py` | 新建 | Agent API 代理 |
+| `frontend/bridge/routes/sessions.py` | 新建 | Session API 代理 |
+| `frontend/bridge/routes/chat.py` | 新建 | WebSocket 聊天端点 |
+| `frontend/bridge/routes/daemon.py` | 新建 | 健康检查路由 |
+| `frontend/bridge/monitor.py` | 新建 | Daemon 连接监控 |
+| `frontend/web/src/App.vue` | 新建 | Vue 根组件 |
+| `frontend/web/src/layouts/MainLayout.vue` | 新建 | 全局布局 |
+| `frontend/web/src/router/index.ts` | 新建 | 路由配置 |
+| `frontend/web/src/pages/PackagePage.vue` | 新建 | Package 编辑页 |
+| `frontend/web/src/pages/ChatPage.vue` | 新建 | 聊天页 |
+| `frontend/web/src/components/FileTree.vue` | 新建 | 文件树 |
+| `frontend/web/src/components/CodeEditor.vue` | 新建 | 代码编辑器 |
+| `frontend/web/src/components/WorkflowDAG.vue` | 新建 | DAG 可视化 |
+| `frontend/web/src/components/AgentList.vue` | 新建 | Agent 列表 |
+| `frontend/web/src/components/SessionList.vue` | 新建 | Session 列表 |
+| `frontend/web/src/components/ChatView.vue` | 新建 | 聊天界面 |
+| `frontend/web/src/components/DaemonStatus.vue` | 新建 | 连接状态 |
+| `frontend/web/src/stores/*.ts` | 新建 | 5 个 Pinia store |
+| `frontend/web/src/composables/useChatWebSocket.ts` | 新建 | WebSocket composable |
+| `frontend/web/src/utils/workflow-parser.ts` | 新建 | Workflow JSON 解析 |
 | `verify.sh` | 新建 | 验收脚本 |
 
 **不修改的文件**：

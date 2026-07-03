@@ -143,7 +143,7 @@ def main():
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
-    out_path = Path(args.output)
+    out_path = Path(args.output).resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if len(images) == 1:

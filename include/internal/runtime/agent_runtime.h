@@ -201,6 +201,7 @@ private:
      int                    total_nodes     = 0;
      int                    completed_count = 0;
      bool                   in_progress     = false;
+     std::string            failure_details;   // Failed node error/stderr for coordinator judgment
 
      // UDS server for DataBus access - lifecycle tied to workflow execution
      std::string            uds_socket_path;     // Socket file path
@@ -272,7 +273,8 @@ private:
 
   // MMWorkflow Level Master functions
   void schedule_workflow_executable_nodes(const std::string& execution_id);
-  void update_workflow_state(const std::string& execution_id, const NodeId& node_id, bool success);
+  void update_workflow_state(const std::string& execution_id, const NodeId& node_id, bool success,
+                             const std::string& failure_details = "");
 
   struct AgentRegistrationRequest {
     AgentPtr                 agent;

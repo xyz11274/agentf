@@ -1,7 +1,7 @@
 # Chat API 接口契约
 
 > **层级**: L4 · `architecture/modules/chat-api.md`
-> **状态**: 已更新 · 2026-06-26 重构: 用 `user_id` + `client_id` 替换 `session_id`
+> **状态**: 已更新 · 2026-07-02 增加 Artifact 文件访问契约
 > **创建者**: `design-doc-organizer`
 
 ---
@@ -69,7 +69,7 @@
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `type` | string | 固定值 `"chunk"` |
-| `content` | string | 本次推送的文本片段 |
+| `content` | string | 本次推送的文本片段；可包含 Markdown Artifact URL |
 | `final` | bool | `true` 表示本轮最后一块 |
 
 **ChatDone**（本轮结束信号）：
@@ -177,7 +177,7 @@ ChatRestResponse：
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `task_id` | string | daemon 侧的任务 ID |
-| `content` | string | 完整响应文本（已拼接所有 chunk） |
+| `content` | string | 完整响应文本（已拼接所有 chunk）；可包含 Markdown Artifact URL |
 
 ### 2.4 执行流程
 
@@ -249,6 +249,73 @@ ChatRestResponse：
 
 此规则确保每轮对话的 `dialogue_id` 唯一，避免 `coord_forwarded` 冲突。
 
+## 5. Artifact 文件访问契约
+
+### 5.1 推荐端点
+
+| 项目 | 值 |
+|------|-----|
+| 方法 | `GET` |
+| 路径 | `/api/artifacts/{agent_id}/files/{relative_path:path}` |
+| 路径参数 | `agent_id` — 生成产物的 Agent 标识；`relative_path` — 相对于 Agent Package 根目录的文件路径 |
+| 成功响应 | `200` 文件流 |
+
+示例：
+
+```text
+GET /api/artifacts/outfit-assistant/files/outfit_assistant/outputs/task-123/report.html
+GET /api/artifacts/outfit-assistant/files/outfit_assistant/outputs/task-123/assets/look.png
+```
+
+Bridge 保留目录层级。若 `report.html` 使用 `assets/look.png`，浏览器会请求同级目录下的 `assets/look.png`，无需重写 HTML 内容。
+
+兼容端点 `GET /api/artifacts/{agent_id}?path=...` 仍可读取包根目录内文件，但它允许传入服务端路径，仅用于兼容已有调用，不应作为新的外部集成契约。
+
+### 5.2 路径与文件类型约束
+
+- 服务根目录固定为 `settings.agent_packages_path`；Bridge 对目标路径做规范化并验证其仍位于该根目录内。
+- `agent_id` 当前仅用于 URL 语义，不是授权边界；不能依赖它隔离不同租户或 Agent 的文件。
+- 支持图片以及 `html`、`htm`、`css`、`js`、`json`、`svg` 等网页产物类型。
+- 图片响应优先按文件魔数识别 MIME，避免扩展名与实际编码不一致导致浏览器无法显示。
+
+| 条件 | HTTP | 说明 |
+|------|------|------|
+| 文件存在且位于包根目录 | 200 | 返回文件流与对应 Content-Type |
+| 路径逃逸包根目录 | 403 | 拒绝目录穿越和根目录外文件 |
+| 文件不存在或不是普通文件 | 404 | 不暴露宿主机其他路径信息 |
+| 文件类型不允许 | 415 | 拒绝未列入白名单的类型 |
+
+### 5.3 聊天消息中的 URL
+
+WS 与 REST 不新增结构化 `artifacts` 字段，Artifact URL 直接包含在 `content` Markdown 中：
+
+```json
+{
+  "type": "chunk",
+  "content": "搭配结果：![look](https://agent.example.com/api/artifacts/outfit-assistant/files/outfit_assistant/outputs/task-123/look.png)",
+  "final": true
+}
+```
+
+URL 生成规则：
+
+- `ARTIFACT_PUBLIC_BASE_URL` 为空：保留 `/api/artifacts/...` 相对 URL，适用于内置 UI 或同源反向代理。
+- `ARTIFACT_PUBLIC_BASE_URL` 非空：WS 与 REST 在返回前补全为绝对 URL，适用于外部服务调用。
+- 公网基地址应指向外部客户端实际可访问的 Bridge 入口；如反向代理挂载在子路径，配置中需包含该路径前缀。
+
+外部客户端能否访问图片取决于 Bridge 是否真正对该客户端可达。仅配置 URL 不会自动建立公网入口、防火墙规则或反向代理。
+
+### 5.4 安全与生命周期
+
+当前实现的安全边界是“只允许读取 Agent Package 根目录内的白名单文件”，尚未实现以下生产能力：
+
+- Artifact 身份认证与按用户/Agent 授权；
+- 不透明 Artifact ID 与签名、限时 URL；
+- 产物保留期限、配额和自动清理；
+- 独立对象存储或 CDN 分发。
+
+因此，公网部署时应由反向代理或 API Gateway 增加认证和访问控制；不能把当前 `agent_id` 路径参数视为权限校验。
+
 ---
 
 **权威章节映射**：
@@ -259,6 +326,7 @@ ChatRestResponse：
 | REST 请求/响应 Schema | 本文档 §2.2–2.3 |
 | 错误码映射 | 本文档 §2.5，§4.1 |
 | dialogue_id 生成规则 | 本文档 §4.2 |
+| Artifact 文件端点与安全约束 | 本文档 §5.1–5.4 |
 | 双模式选择依据 | `features/chat.md` L2 |
 | Pydantic 模型定义 | `frontend/bridge/models.py` |
 

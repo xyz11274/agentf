@@ -20,11 +20,13 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8199',
         changeOrigin: true,
+        rewrite: (path) => `/health${path}`,
       },
       '/ws': {
         target: 'ws://localhost:8199',
         ws: true,
         changeOrigin: true,
+        rewrite: (path) => `/health${path}`,
       },
     },
   },

@@ -995,7 +995,7 @@ TEST(AsyncCallTest, SendToSelfRouting) {
 
 #### 集成测试
 
-在`examples/agent/system_agent_mock`中新增`async_skill_node.cpp`:
+在`examples/agent/system-agent-mock`中新增`async_skill_node.cpp`:
 - 模拟异步LLM流式响应
 - 验证chunk回调流程
 

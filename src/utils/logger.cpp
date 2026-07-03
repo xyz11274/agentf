@@ -5,8 +5,11 @@
 namespace agentflow {
 
 Logger& Logger::instance() {
-  static Logger logger;
-  return logger;
+  // Logger is used by other process-lifetime singletons from their
+  // destructors. Intentionally keep it alive until process termination to
+  // avoid cross-translation-unit static destruction order races.
+  static Logger* logger = new Logger();
+  return *logger;
 }
 
 void Logger::set_sink(std::unique_ptr<ILogSink> sink) {

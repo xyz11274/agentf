@@ -41,6 +41,20 @@ def test_dispatch_keys_are_unique_and_dialogue_scoped():
     assert all(key.startswith("dispatch:dialogue-a:") for key in keys)
 
 
+def test_failed_skill_context_contains_original_error_for_model():
+    message = coordinator.build_skill_completion_message(
+        "outfit-stylist",
+        "false",
+        '{"status":"failed","error":"curl rc=28 timeout"}',
+        [],
+    )
+
+    assert "success=false" in message
+    assert "curl rc=28 timeout" in message
+    assert "直接回复用户" in message
+    assert "重新委派" in message
+
+
 def test_image_paths_are_collected_from_tool_results(tmp_path):
     image = tmp_path / "look.png"
     image.write_bytes(b"image")
@@ -54,6 +68,39 @@ def test_image_paths_are_collected_from_tool_results(tmp_path):
         str(image),
         "https://cdn.example/look.jpg",
     ]
+
+
+def test_relative_artifact_path_is_resolved_against_package_root(tmp_path):
+    """Relative paths like .agentfoundry/.../file.png are resolved against AGENT_PACKAGE_DIR."""
+    # Create a file under AGENT_PACKAGE_DIR (simulating LLM saving to .agentfoundry/)
+    sub = ROOT / ".agentfoundry" / "assets"
+    sub.mkdir(parents=True, exist_ok=True)
+    image = sub / "hiking_outfit.png"
+    image.write_bytes(b"image")
+    text = (
+        '{"stdout": "效果图已生成\\n",'
+        '"file_path": ".agentfoundry/assets/hiking_outfit.png"}'
+    )
+
+    result = executor.extract_artifact_paths(text)
+
+    assert len(result) == 1
+    assert result[0] == str(image.resolve())
+
+
+
+def test_relative_artifact_path_with_dot_slash(tmp_path):
+    """Relative paths like ./assets/outfit.png are resolved against AGENT_PACKAGE_DIR."""
+    sub = ROOT / "assets"
+    sub.mkdir(parents=True, exist_ok=True)
+    image = sub / "outfit.png"
+    image.write_bytes(b"image")
+    text = f'{{"stdout": "./assets/outfit.png\\n"}}'
+
+    result = executor.extract_artifact_paths(text)
+
+    assert len(result) == 1
+    assert result[0] == str(image.resolve())
 
 
 def test_local_artifact_becomes_bridge_markdown_url():
@@ -88,3 +135,18 @@ def test_package_artifact_url_preserves_directory_hierarchy():
         "/api/artifacts/outfit-assistant/files/"
         "outfit_assistant/output/report/index.html"
     )
+
+
+def test_llm_failure_does_not_claim_an_artifact_without_evidence():
+    response = coordinator.llm_error_response("")
+
+    assert "任务未能完成" in response
+    assert "产物仍可查看" not in response
+    assert "图片仍可查看" not in response
+
+
+def test_llm_failure_preserves_artifacts_that_were_actually_reported():
+    response = coordinator.llm_error_response('["/tmp/output/look.png"]')
+
+    assert "产物仍可查看" in response
+    assert "/api/artifacts/outfit-assistant?path=" in response

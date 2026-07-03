@@ -1,50 +1,63 @@
 #!/bin/bash
-# Start AgentFlow Daemon
-# Usage: ./ar_scripts/start_daemon.sh [agent_package] [port] [--keep-logs]
-#
-#   --keep-logs   保留旧日志文件，默认每次启动会清理前一次的日志
-set -euo pipefail
+# Start agentflowd. Build is explicit; pass --build when desired.
 
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
+
+PACKAGE="examples/agent/agentflow_assistant"
+PORT="17891"
+PROFILE="release"
 KEEP_LOGS=false
-ARGS=()
-for arg in "$@"; do
-  if [ "$arg" = "--keep-logs" ]; then
-    KEEP_LOGS=true
-  else
-    ARGS+=("$arg")
-  fi
+BUILD_FIRST=false
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --package) PACKAGE="$2"; shift 2 ;;
+        --port) PORT="$2"; shift 2 ;;
+        --profile) PROFILE="$2"; shift 2 ;;
+        --keep-logs) KEEP_LOGS=true; shift ;;
+        --build) BUILD_FIRST=true; shift ;;
+        -h|--help)
+            echo "Usage: $0 [--package PATH] [--port PORT] [--profile dev|release|production] [--build] [--keep-logs]"
+            exit 0 ;;
+        *)
+            if [ "$PACKAGE" = "examples/agent/agentflow_assistant" ]; then PACKAGE="$1"
+            elif [ "$PORT" = "17891" ]; then PORT="$1"
+            else echo "[ERROR] Unknown argument: $1" >&2; exit 2
+            fi
+            shift
+            ;;
+    esac
 done
 
-AGENT_PACKAGE="${ARGS[0]:-examples/agent/agentflow_assistant}"
-PORT="${ARGS[1]:-17891}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+case "$PROFILE" in
+    dev) BUILD_DIR="$AR_PROJECT_ROOT/build/dev" ;;
+    release) BUILD_DIR="$AR_PROJECT_ROOT/build" ;;
+    production) BUILD_DIR="$AR_PROJECT_ROOT/build/production" ;;
+    *) echo "[ERROR] Invalid profile: $PROFILE" >&2; exit 2 ;;
+esac
 
-echo "=== Starting AgentFlow Daemon ==="
-echo "  Package: $AGENT_PACKAGE"
-echo "  Port:    $PORT"
-
-cd "$PROJECT_ROOT"
-
-# Auto-build all targets before starting
-echo "[INFO] Building all targets..."
-bash "$SCRIPT_DIR/build.sh" 2>&1
-
-# Prepare logs directory
-LOG_DIR="$PROJECT_ROOT/logs"
-mkdir -p "$LOG_DIR"
-LOG_FILE="$LOG_DIR/agentflowd.log"
-
-# Clean previous logs (unless --keep-logs)
-if [ "$KEEP_LOGS" = false ] && [ -f "$LOG_FILE" ]; then
-  mv "$LOG_FILE" "${LOG_FILE}.$(date +%Y%m%d-%H%M%S)" 2>/dev/null && \
-    echo "[INFO] Archived previous log to ${LOG_FILE}.$(date +%Y%m%d-%H%M%S)"
+if $BUILD_FIRST; then
+    "$SCRIPT_DIR/build.sh" "$PROFILE" agentflowd
+fi
+DAEMON="$BUILD_DIR/agentflowd"
+if [ ! -x "$DAEMON" ]; then
+    echo "[ERROR] Missing daemon binary: $DAEMON" >&2
+    echo "        Run: ./ar_scripts/build.sh $PROFILE agentflowd" >&2
+    exit 1
 fi
 
-echo "[INFO] Logging to $LOG_FILE"
+ar_load_env
+LOG_FILE="$AR_PROJECT_ROOT/logs/agentflowd.log"
+ar_archive_log "$LOG_FILE" "$KEEP_LOGS"
 
-./build/agentflowd \
-    --package "$(pwd)/$AGENT_PACKAGE" \
+if [[ "$PACKAGE" = /* ]]; then PACKAGE_PATH="$PACKAGE"
+else PACKAGE_PATH="$AR_PROJECT_ROOT/$PACKAGE"
+fi
+
+exec "$DAEMON" \
+    --package "$PACKAGE_PATH" \
     --listen "127.0.0.1:$PORT" \
-    --log-file "$LOG_FILE" \
-    2>&1
+    --log-file "$LOG_FILE"

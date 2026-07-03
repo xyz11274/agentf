@@ -24,6 +24,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -223,13 +224,78 @@ def remove_invalid_tool_turns(messages: list) -> list:
 
 
 def extract_artifact_paths(text: str) -> list[str]:
-    """Extract generated image URLs/paths from a tool result."""
-    pattern = r"(?:https?://[^\s\"'\\]+|/[^\s\"'\\]+)\.(?:png|jpe?g|webp|gif)"
+    """Extract generated image URLs/paths from a tool result.
+
+    Handles three formats:
+      - HTTP(S) URLs:         https://cdn.example/look.jpg
+      - Absolute paths:       /home/user/outfit.png
+      - Relative paths:       .agentfoundry/.../file.png, assets/outfit.png
+
+    Relative paths are resolved against AGENT_PACKAGE_DIR (the cwd for tool execution).
+    """
+    pattern = (
+        r"(?:"
+        r"https?://[^\s\"'\\]+"          # http(s) URLs
+        r"|/[^\s\"'\\]+"                 # absolute paths
+        r"|(?:\.\.?)?[^\s\"'\\:]+/[^\s\"'\\]+"  # relative paths with at least one /
+        r")"
+        r"\.(?:png|jpe?g|webp|gif)"
+    )
     candidates = re.findall(pattern, text, flags=re.IGNORECASE)
-    return list(dict.fromkeys(
-        item for item in candidates
-        if item.startswith(("http://", "https://")) or os.path.isfile(item)
-    ))
+    seen: list[str] = []
+    for item in candidates:
+        if item.startswith(("http://", "https://")):
+            seen.append(item)
+        elif item.startswith("/"):
+            # Absolute path — use as-is
+            if os.path.isfile(item):
+                seen.append(item)
+        else:
+            # Relative path — resolve against AGENT_PACKAGE_DIR
+            abs_path = os.path.normpath(os.path.join(AGENT_PACKAGE_DIR, item))
+            if os.path.isfile(abs_path):
+                seen.append(abs_path)
+    return list(dict.fromkeys(seen))
+
+
+def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
+    """Copy artifacts into package outputs/ and return updated paths.
+
+    The Bridge artifact endpoint only serves files under agent_packages_path.
+    This function copies ALL artifact files (whether inside or outside the
+    package) to AGENT_PACKAGE_DIR/outputs/, giving a single predictable
+    location regardless of where the LLM saved them. Avoids issues with:
+      - Hidden directories (.agentfoundry/) in the URL path
+      - Files saved outside the package (/tmp/...)
+      - Path resolution mismatches between daemon and Bridge processes
+    """
+    result = []
+    pkg_root = Path(AGENT_PACKAGE_DIR).resolve()
+    outputs_dir = pkg_root / "outputs"
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    for path in artifacts:
+        p = Path(path).resolve()
+        if not p.is_file():
+            continue  # skip non-existent files rather than returning dead URLs
+        dest = outputs_dir / p.name
+        # Deduplicate: if same filename already copied, add a suffix
+        if dest.exists() and dest.read_bytes() != p.read_bytes():
+            stem = dest.stem
+            suffix = dest.suffix
+            counter = 1
+            while True:
+                alt = outputs_dir / f"{stem}_{counter}{suffix}"
+                if not alt.exists():
+                    dest = alt
+                    break
+                counter += 1
+        if not dest.exists():
+            try:
+                dest.write_bytes(p.read_bytes())
+            except OSError:
+                continue  # skip files that can't be copied
+        result.append(str(dest))
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -318,8 +384,13 @@ def execute():
     recovery_attempts = 0
     max_recovery_attempts = int(get_env("AF_SKILL_LLM_RECOVERY_ATTEMPTS", "2"))
     generated_artifacts = extract_artifact_paths(task_instruction)
+    generated_artifacts = _ensure_artifacts_in_package(generated_artifacts)
     for round_i in range(max_rounds):
-        print(f"[flow]   LLM round={round_i+1}/{max_rounds} msgs={len(messages)} tools={bool(available_tools)}", file=sys.stderr)
+        print(
+            f"[flow]   LLM round={round_i+1}/{max_rounds} msgs={len(messages)} "
+            f"tools={bool(available_tools)} model={model_name} budget={completion_budget}",
+            file=sys.stderr,
+        )
         raw = call_llm(
             messages, tools=available_tools,
             model=model_name,
@@ -329,26 +400,12 @@ def execute():
 
         if raw.get("_llm_error"):
             err_msg = raw.get("error", "LLM call failed")
-            print(f"[flow]   ⚠️  LLM error (non-fatal): {err_msg}", file=sys.stderr)
-            if recovery_attempts < max_recovery_attempts:
-                recovery_attempts += 1
-                messages = remove_invalid_tool_turns(messages)
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "上一轮工具调用未被 API 接受。请继续当前任务，重新生成一个"
-                        "完整、简短且 JSON 参数合法的工具调用；不要重复解释。"
-                    ),
-                })
-                print(
-                    f"[flow]   recovering LLM error attempt="
-                    f"{recovery_attempts}/{max_recovery_attempts}",
-                    file=sys.stderr,
-                )
-                continue
-
-            # Recovery exhausted: return a structured result instead of raising
-            # or terminating the worker process.
+            print(f"[flow]   ⚠️  LLM error after call_llm internal retries: {err_msg}", file=sys.stderr)
+            # Transport-layer retry is handled INSIDE call_llm (SSL/DNS/timeout).
+            # If we reach here, call_llm has exhausted its retries — the network
+            # is genuinely down. Do NOT rewrite messages (the conversation is
+            # fine; the failure was transport-only). Just bail out with a
+            # structured result so the framework can re-trigger later.
             output = {
                 "skill_result": f"LLM call failed: {err_msg}",
                 "status": "llm_error",
@@ -370,6 +427,9 @@ def execute():
 
         valid_tool_calls, invalid_reason = validate_tool_calls(choice)
         if not valid_tool_calls:
+            # SEMANTIC recovery (truncated tool args / invalid JSON) — this is
+            # the legitimate outer-loop recovery: rewrite messages to ask the
+            # LLM for shorter, valid tool args. Distinct from transport retry.
             if recovery_attempts < max_recovery_attempts:
                 recovery_attempts += 1
                 completion_budget = min(completion_budget * 2, 16384)
@@ -419,6 +479,8 @@ def execute():
                 for artifact in extract_artifact_paths(result):
                     if artifact not in generated_artifacts:
                         generated_artifacts.append(artifact)
+                # Relocate artifacts written outside agent package into package outputs/
+                generated_artifacts = _ensure_artifacts_in_package(generated_artifacts)
                 # Log tool result (truncate to 300 chars)
                 result_preview = result[:300]
                 print(f"[flow]   tool_result: {name} => {result_preview}", file=sys.stderr)

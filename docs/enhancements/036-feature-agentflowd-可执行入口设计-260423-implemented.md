@@ -81,7 +81,7 @@ main()
 | `agent_runner` | CLI 工具，单 Agent | 基础集成模式 |
 | `interactive_runner` | 交互式消息驱动 | 请求/响应轮询模式 |
 | `multi_session_chat` | TUI 多轮对话 | 多 Session 并发 |
-| `llm_query_agent` | LLM 集成 | 长耗时 workflow 模式 |
+| `llm-query-agent` | LLM 集成 | 长耗时 workflow 模式 |
 
 #### 缺失功能分析
 

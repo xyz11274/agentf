@@ -133,6 +133,7 @@ class DaemonClient:
         self._id_counter = itertools.count(1)
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._notification_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._response_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
         self._ws: Optional[websockets.WebSocketClientProtocol] = None
         self._connected = False
         self._closing = False
@@ -283,6 +284,8 @@ class DaemonClient:
         user_id: str = "",
         client_id: str = "bridge",
         dialogue_id: str = "",
+        platform_context: dict[str, Any] | None = None,
+        request_id: str = "",
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "agent_id": agent_id,
@@ -292,9 +295,23 @@ class DaemonClient:
         }
         if dialogue_id:
             params["dialogue_id"] = dialogue_id
+            # Register before sending agent.execute: a fast daemon may push the
+            # final notification immediately after the RPC response.
+            self._response_queues.setdefault(dialogue_id, asyncio.Queue())
         elif session_id:
             params["dialogue_id"] = session_id
-        return await self.send_request("agent.execute", params)
+            self._response_queues.setdefault(session_id, asyncio.Queue())
+        if platform_context is not None:
+            params["platform_context"] = platform_context
+        if request_id:
+            params["request_id"] = request_id
+        try:
+            return await self.send_request("agent.execute", params)
+        except Exception:
+            response_key = dialogue_id or session_id
+            if response_key:
+                self._response_queues.pop(response_key, None)
+            raise
 
     async def agent_poll_response(
         self,
@@ -317,6 +334,7 @@ class DaemonClient:
         self,
         agent_id: str,
         *,
+        dialogue_id: str = "",
         timeout: float = 30.0,
     ) -> dict[str, Any]:
         """Wait for an ``agent.response`` notification pushed by the daemon.
@@ -327,15 +345,26 @@ class DaemonClient:
         method reads from.
         """
         try:
-            msg = await asyncio.wait_for(
-                self._notification_queue.get(), timeout=timeout
+            queue = (
+                self._response_queues.setdefault(dialogue_id, asyncio.Queue())
+                if dialogue_id
+                else self._notification_queue
             )
-            return msg.get("params", {})
+            msg = await asyncio.wait_for(queue.get(), timeout=timeout)
+            params = msg.get("params", {})
+            if dialogue_id and bool(params.get("final", False)):
+                self._response_queues.pop(dialogue_id, None)
+            return params
         except asyncio.TimeoutError as exc:
             raise DaemonTimeoutError(
                 f"timeout waiting for agent.response after {timeout}s",
                 code=-32000,
             ) from exc
+
+    def discard_response_queue(self, dialogue_id: str) -> None:
+        """Stop tracking a dialogue after its caller has timed out or aborted."""
+        if dialogue_id:
+            self._response_queues.pop(dialogue_id, None)
 
     async def session_list(self, agent_id: str, user_id: str = "") -> list[dict[str, Any]]:
         return await self.send_request("session.list", {"agent_id": agent_id, "user_id": user_id})
@@ -413,8 +442,32 @@ class DaemonClient:
         if "id" not in message:
             event = message.get("method")
             if event in ("agent.response",):
-                logger.debug("queuing notification: method=%s", event)
-                await self._notification_queue.put(message)
+                params = message.get("params", {})
+                metadata = params.get("metadata", {}) if isinstance(params, dict) else {}
+                dialogue_id = (
+                    metadata.get("dialogue_id", "")
+                    if isinstance(metadata, dict)
+                    else ""
+                )
+                response_queues = getattr(self, "_response_queues", {})
+                if dialogue_id:
+                    queue = response_queues.get(dialogue_id)
+                    if queue is None:
+                        logger.info(
+                            "dropping late or unregistered notification: method=%s dialogue_id=%s",
+                            event,
+                            dialogue_id,
+                        )
+                    else:
+                        logger.debug(
+                            "queuing notification: method=%s dialogue_id=%s",
+                            event,
+                            dialogue_id,
+                        )
+                        await queue.put(message)
+                else:
+                    logger.debug("queuing uncorrelated notification: method=%s", event)
+                    await self._notification_queue.put(message)
             else:
                 logger.debug("ignoring notification from daemon: %r", message)
             return

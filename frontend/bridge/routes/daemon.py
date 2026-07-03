@@ -49,7 +49,7 @@ from client import DaemonClient, DaemonError
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/aisf/healthagent/api/daemon", tags=["daemon"])
+router = APIRouter(prefix="/api/daemon", tags=["daemon"])
 
 
 EMPTY_CACHE: dict[str, Any] = {

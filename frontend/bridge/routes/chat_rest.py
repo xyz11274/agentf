@@ -28,13 +28,11 @@ from client import (
     NotFoundError,
 )
 from dependencies import get_daemon_client
+from config import settings
 
 logger = logging.getLogger("agentflow.bridge.routes.chat_rest")
 
-router = APIRouter(prefix="/aisf/healthagent/api/chat", tags=["chat"])
-
-_TURN_TIMEOUT_SECONDS = 360.0
-
+router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 class ChatRestRequest(BaseModel):
     """REST chat request body."""
@@ -108,6 +106,13 @@ def _extract_content(payload: Any) -> str:
     return ""
 
 
+def _publicize_artifact_urls(content: str) -> str:
+    base = settings.artifact_public_base_url.rstrip("/")
+    if not base:
+        return content
+    return content.replace("(/api/artifacts/", f"({base}/api/artifacts/")
+
+
 # --------------------------------------------------------------------------
 # Endpoint
 # --------------------------------------------------------------------------
@@ -151,6 +156,7 @@ async def chat_rest(
         f"{datetime.now(timezone.utc).strftime('%m%d%H%M%S')}"
         f"-{uuid.uuid4().hex[:12]}"
     )
+    turn_timeout = settings.chat_turn_timeout_seconds
 
     # --- Step 1: execute --------------------------------------------------
     try:
@@ -163,12 +169,13 @@ async def chat_rest(
                 client_id=body.client_id,
                 dialogue_id=dialogue_id,
             ),
-            timeout=_TURN_TIMEOUT_SECONDS,
+            timeout=turn_timeout,
         )
     except asyncio.TimeoutError:
+        client.discard_response_queue(dialogue_id)
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
-            detail=f"agent.execute timed out after {_TURN_TIMEOUT_SECONDS}s",
+            detail=f"agent.execute timed out after {turn_timeout}s",
         )
     except DaemonError as exc:
         raise _raise_daemon_error(exc) from exc
@@ -176,6 +183,7 @@ async def chat_rest(
     task_id = _extract_task_id(execute_result)
 
     if not task_id:
+        client.discard_response_queue(dialogue_id)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="agent.execute did not return a task_id",
@@ -183,36 +191,49 @@ async def chat_rest(
 
     # --- Step 2: wait for response notifications --------------------------
     accumulated_content: list[str] = []
-    deadline = asyncio.get_running_loop().time() + _TURN_TIMEOUT_SECONDS
+    deadline = asyncio.get_running_loop().time() + turn_timeout
 
     while True:
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
             logger.warning(
                 "chat rest turn timed out after %ss for agent=%s",
-                _TURN_TIMEOUT_SECONDS,
+                turn_timeout,
                 agent_id,
             )
-            break
+            client.discard_response_queue(dialogue_id)
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail=f"turn timed out after {turn_timeout}s",
+            )
 
         try:
             notification = await asyncio.wait_for(
-                client.wait_for_response(agent_id, timeout=remaining),
+                client.wait_for_response(
+                    agent_id, dialogue_id=dialogue_id, timeout=remaining
+                ),
                 timeout=remaining,
             )
-        except (asyncio.TimeoutError, DaemonError):
+        except asyncio.TimeoutError as exc:
             logger.warning(
                 "chat rest wait_for_response timed out after %.1fs for agent=%s",
                 remaining,
                 agent_id,
             )
-            break
+            client.discard_response_queue(dialogue_id)
+            raise HTTPException(
+                status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+                detail=f"turn timed out after {turn_timeout}s",
+            ) from exc
+        except DaemonError as exc:
+            client.discard_response_queue(dialogue_id)
+            raise _raise_daemon_error(exc) from exc
 
         if not notification:
             continue
 
         is_final = _extract_final(notification)
-        chunk_content = _extract_content(notification)
+        chunk_content = _publicize_artifact_urls(_extract_content(notification))
         if chunk_content:
             accumulated_content.append(chunk_content)
 

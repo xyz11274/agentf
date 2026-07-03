@@ -644,6 +644,7 @@ void BuiltinDispatcher::cleanup_dialogue_data(MMAgent& agent,
   remove_framework_data(agent, session_id, dialogue_id, "launched_skills");
   remove_framework_data(agent, session_id, dialogue_id, "response");
   remove_framework_data(agent, session_id, dialogue_id, "pending_skills_count");
+  remove_framework_data(agent, session_id, dialogue_id, "skill_failed");
 
   // Clean up skill result keys in user namespace (dynamic based on launched_skills)
   for(const auto& skill_name : launched_skills) {

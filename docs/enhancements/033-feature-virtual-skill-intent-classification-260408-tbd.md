@@ -62,9 +62,9 @@
 
 | 示例路径 | 与 dispatcher/coordinator/skill 链的关系 | 插入「意图分类 hop」的现况 |
 |---------|-------------------------------------------|---------------------------|
-| `examples/agent/system_agent_mock/` | 完整 dispatcher → skill → coordinator，含 `next_skills`、force | 仅能通过 **再增一个真实 skill** 或 **dispatcher workflow 内联分类** |
+| `examples/agent/system-agent-mock/` | 完整 dispatcher → skill → coordinator，含 `next_skills`、force | 仅能通过 **再增一个真实 skill** 或 **dispatcher workflow 内联分类** |
 | `examples/agent/multi_session_chat/`、`openjiuwen_multi_session_chat/` | session 级 coordinator merge、`selected_skills` | 同上；无虚拟 skill 概念 |
-| `examples/agent/basic_agent/` | 入门 coordinator | 适合未来最小 `intent_router` 演示 |
+| `examples/agent/basic-agent/` | 入门 coordinator | 适合未来最小 `intent_router` 演示 |
 
 **同步修改预期**：待框架支持后，新增或扩展示例 `examples/agent/intent_router_mock/`（名称待定），演示虚拟 skill → coordinator 按 `intent` 写不同 `next_skills`。
 

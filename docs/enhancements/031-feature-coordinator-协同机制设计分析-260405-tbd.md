@@ -431,13 +431,13 @@ QueryEngine → query()
 |------|-------------------|------------------------|------|
 | **交互轮次链长** | 用户请求 → dispatcher workflow →（可能多轮）skill → coordinator → 回包；**消息队列 + 调度 + 多 workflow** | 用户 → 模型 → 工具 → 模型… **路径更短**（同进程异步） | 对 **纯 LLM+轻工具** 闭环，AgentFlow **通常时延更高** |
 | **重 skill / 远程 IO** | skill 可在 Worker 上跑，Master 不阻塞在单次 SO/Python 执行上（架构上可重叠） | 工具执行仍在 Node/Bun 进程内（可异步但同栈） | **重任务**若拆成独立 skill，AgentFlow **有机会**通过并行与 Worker 分摊 **降低端到端时间** |
-| **流式体验** | `multi_response`、部分示例向 coordinator 转发 chunk（如 `llm_query_agent`） | OC/CC 流式成熟 | **无整体优势**；流式路径需与 022 enhancement 与节点实现持续对齐 |
+| **流式体验** | `multi_response`、部分示例向 coordinator 转发 chunk（如 `llm-query-agent`） | OC/CC 流式成熟 | **无整体优势**；流式路径需与 022 enhancement 与节点实现持续对齐 |
 
 **小结**：AgentFlow **一般不具备**相对 OpenClaw / Claude Code 的 **纯时延优势**（尤其在以 LLM 为主循环的产品里）；优势更多体现在 **可并行重任务与资源隔离**。**建议优化**：
 
 1. **热路径**：减少不必要的 coordinator 触发次数、合并 DataBus 读、避免 coordinator workflow 空转。
-2. **可选短路**：dispatcher 已产出 `response` 时直出（`claw_agent` 文档已提及类似能力），减少必经 coordinator 的延迟。
-3. **异步与流式**：延续 `llm_query_agent` 等模式，明确 chunk → coordinator → 客户端的契约，降低首字节时间（TTFB）。
+2. **可选短路**：dispatcher 已产出 `response` 时直出（`claw-agent` 文档已提及类似能力），减少必经 coordinator 的延迟。
+3. **异步与流式**：延续 `llm-query-agent` 等模式，明确 chunk → coordinator → 客户端的契约，降低首字节时间（TTFB）。
 4. **调度**：结合 runtime 负载均衡，避免 skill 全挤在同一 Worker（见 Master-Worker 026 enhancement）。
 
 #### 6.5 ReAct 与 Agentic Loop：异同、进步点与三项目映射
@@ -568,7 +568,7 @@ flowchart LR
 **2）闭环效率（少轮次、少协调）——与准确率兼容**
 
 - **批量化规划**：在依赖图允许时，单次协调产出更大粒度的 `next_skills`，减少「skill 完成 → 再次唤醒 coordinator」的次数（思想对齐 Claude Code 单轮多 `tool_use` 的批处理，见 §5.2、§6.2）。
-- **热路径短路**：dispatcher 已能产出最终 `response` 时直出，避免无意义的 coordinator 往返（§6.4.3、`claw_agent` 等示例）。
+- **热路径短路**：dispatcher 已能产出最终 `response` 时直出，避免无意义的 coordinator 往返（§6.4.3、`claw-agent` 等示例）。
 - **轻量 coordinator / 重 skill**：重推理、重 IO、重模型调用下沉到 skill；coordinator 聚焦 **阶段门控、终止条件、合并策略**，降低协调链上的调度与序列化开销。
 - **并行只读或可交换 skill**：在 §6.4.2 的多 skill 并行基础上，仅当 **无写冲突、无顺序敏感副作用** 时并行，避免为提速牺牲确定性。
 - **结构化中间态**：用 DataBus **小键**（计划 ID、阶段、校验位、摘要指针）承载进度，避免每轮把大段中间结果重复注入下一轮 LLM（与 §7.3 待实现 6 `task_context_workflow` / 摘要策略衔接）。
@@ -876,16 +876,16 @@ struct Config {
 
 | 示例路径 | 覆盖要点 | 完整度（相对「完整 agent loop 演示」） |
 |---------|----------|----------------------------------------|
-| `examples/agent/system_agent_mock/` | dispatcher 动态选 skill、coordinator 补 skill、`force` 重跑、DataBus 聚合；README / FLOW_ANALYSIS 文档齐全 | **高**（最接近「教科书级」闭环） |
+| `examples/agent/system-agent-mock/` | dispatcher 动态选 skill、coordinator 补 skill、`force` 重跑、DataBus 聚合；README / FLOW_ANALYSIS 文档齐全 | **高**（最接近「教科书级」闭环） |
 | `examples/agent/multi_session_chat/` | `session-coordinator-workflow` 多路径 merge、`selected_skills`、shell 编排 | **高**（偏会话与编排复杂度） |
 | `examples/agent/openjiuwen_multi_session_chat/` | 与上类似，Python 节点实现 merge | **高** |
 | `examples/agent/multi_language_databus/` | `chain_coordinator_node`、跨语言链路与 coordinator workflow | **中高** |
-| `examples/agent/basic_agent/` | `basic-coordinator-workflow`、`calculator_coordinator_workflow` | **中**（偏入门） |
-| `examples/agent/llm_query_agent/` | dispatcher → coordinator → skill、异步 LLM chunk / `[DONE]` 转发 coordinator | **中高**（流式 + 完整三类 task） |
-| `examples/agent/claw_agent/` | coordinator 多为透传；dispatcher 可直接 `response` 短路 | **低**（框架契约满足，非编排演示） |
-| `examples/agent/openjiuwen_studio_agent/`、`nested_workflow_agent/`、`workflow_patterns/` | 具备 coordinator 占位或变体 | **中到低**（视具体 workflow） |
+| `examples/agent/basic-agent/` | `basic-coordinator-workflow`、`calculator_coordinator_workflow` | **中**（偏入门） |
+| `examples/agent/llm-query-agent/` | dispatcher → coordinator → skill、异步 LLM chunk / `[DONE]` 转发 coordinator | **中高**（流式 + 完整三类 task） |
+| `examples/agent/claw-agent/` | coordinator 多为透传；dispatcher 可直接 `response` 短路 | **低**（框架契约满足，非编排演示） |
+| `examples/agent/openjiuwen-studio-agent/`、`nested_workflow_agent/`、`workflow_patterns/` | 具备 coordinator 占位或变体 | **中到低**（视具体 workflow） |
 
-**结论**：**存在**较完整的 coordinator/agent loop 演示（**首推 `system_agent_mock`、`multi_session_chat`、`llm_query_agent`**），但**缺少**面向框架能力的**专项**示例矩阵（见下表缺口）。
+**结论**：**存在**较完整的 coordinator/agent loop 演示（**首推 `system_agent_mock`、`multi_session_chat`、`llm-query-agent`**），但**缺少**面向框架能力的**专项**示例矩阵（见下表缺口）。
 
 **Examples 缺口与优化建议**：
 
@@ -894,7 +894,7 @@ struct Config {
 | **max_concurrent_skills 压测与行为展示** | 示例多未突出并发阈值与排队语义 | 新增小型 example：故意配置较小 `max_concurrent_skills`，多 skill 同时 `next_skills`，验证顺序/背压（文档 + 可脚本化跑法） |
 | **skill_launch_failed / 执行失败** | 无标准「失败 → coordinator 决策」演示 | 新增 example：故意错误 skill 配置或节点返回失败，配合预期 `failure_policy`（待框架实现后接线） |
 | **无限 next_skills / 恶意循环** | 无负例或防护演示 | 待框架轮次上限实现后，增加 `coordinator_loop_protection` 示例或集成测试场景 |
-| **multi_response 全链路** | `llm_query_agent` 有部分实践，文档分散 | 在 `docs/` 或示例 README 增加「流式 chunk → coordinator → 客户端」单一入口说明，并与 022 enhancement 对齐 |
+| **multi_response 全链路** | `llm-query-agent` 有部分实践，文档分散 | 在 `docs/` 或示例 README 增加「流式 chunk → coordinator → 客户端」单一入口说明，并与 022 enhancement 对齐 |
 | **SessionTaskCoordinator::process_session_messages** | 与 session dequeue stub 相关能力未在示例中验证 | 代码治理后，用最小 example 或单测证明「session 队列 → task 构造」路径（若保留该 API） |
 
 #### 9.2 Tests 覆盖审视
@@ -912,10 +912,10 @@ struct Config {
 | 测试 | 覆盖要点 | 缺口 |
 |------|----------|------|
 | `system_agent_mock/test_system_agent_mock_e2e.cpp` | **dispatcher-skill-coordinator** 完整场景（含 coordinator 补 skill、force） | **强**，但仅此一条「深度」链路；未覆盖流式、multi_response、失败策略 |
-| `test_basic_agent_e2e.cpp` | `basic-coordinator-workflow` 加载与执行相关 | **中** |
+| `test_basic-agent_e2e.cpp` | `basic-coordinator-workflow` 加载与执行相关 | **中** |
 | `message_routing/test_message_routing.cpp` | coordinator_workflow 默认路由 | **路由层** |
 | `event_handler/test_event_handler_blackbox.cpp` | 引用 coordinator SO，TASK_CREATED 等 | **事件面** |
-| `blackbox/test_blackbox_basic_agent.sh` | CLI 执行 coordinator workflow | **冒烟** |
+| `blackbox/test_blackbox_basic-agent.sh` | CLI 执行 coordinator workflow | **冒烟** |
 
 **结论**：**具备**基础到中等强度的 **单元测试 + 一条高质量 E2E（system_agent_mock）**，**不足以**称为对「coordinator 实现的 agent loop 机制」的**完整**测试矩阵；**流式、失败恢复、并发边界、循环保护、多 dialogue 竞态** 等仍薄弱。
 
@@ -930,10 +930,10 @@ struct Config {
 
 | 功能点 | 现有 Examples 覆盖 | 更新建议 |
 |--------|-------------------|---------|
-| 基础 coordinator 流程 | ✅ `basic_agent`；⚠️ 深度见 `system_agent_mock` | 在 `examples/README.md` 用表格指向「首推示例」 |
+| 基础 coordinator 流程 | ✅ `basic-agent`；⚠️ 深度见 `system_agent_mock` | 在 `examples/README.md` 用表格指向「首推示例」 |
 | 多轮 next_skills + force | ✅ `system_agent_mock` | 保持为 CI 推荐 E2E 依赖 |
 | 会话级复杂 coordinator | ✅ `multi_session_chat` / `openjiuwen_multi_session_chat` | 文档链路与测试对齐 |
-| 流式 → coordinator | ⚠️ `llm_query_agent` | 补统一说明 + 可选 E2E |
+| 流式 → coordinator | ⚠️ `llm-query-agent` | 补统一说明 + 可选 E2E |
 | max_concurrent_skills | ❌ 未专项展示 | 新增小型 example 或扩展现有 |
 | 循环检测 | ❌ 未覆盖 | 框架实现后新增 `coordinator_loop_protection` |
 | 失败恢复 | ❌ 未覆盖 | 框架 failure_policy 后新增 |

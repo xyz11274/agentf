@@ -47,6 +47,42 @@ std::string extract_json_string_local(const std::string& json, const std::string
   return val;
 }
 
+std::string extract_json_object_local(const std::string& json, const std::string& key) {
+  const std::string search = "\"" + key + "\"";
+  auto pos = json.find(search);
+  if(pos == std::string::npos) return "";
+  pos = json.find(':', pos + search.size());
+  if(pos == std::string::npos) return "";
+  pos = json.find_first_not_of(" \t\n\r", pos + 1);
+  if(pos == std::string::npos || json[pos] != '{') return "";
+
+  const auto begin = pos;
+  int depth = 0;
+  bool in_string = false;
+  bool escaped = false;
+  for(; pos < json.size(); ++pos) {
+    const char ch = json[pos];
+    if(in_string) {
+      if(escaped) {
+        escaped = false;
+      } else if(ch == '\\') {
+        escaped = true;
+      } else if(ch == '"') {
+        in_string = false;
+      }
+      continue;
+    }
+    if(ch == '"') {
+      in_string = true;
+    } else if(ch == '{') {
+      ++depth;
+    } else if(ch == '}' && --depth == 0) {
+      return json.substr(begin, pos - begin + 1);
+    }
+  }
+  return "";
+}
+
 // DataVariant → JSON string (mirrors uds_server.cpp variant_to_json)
 std::string variant_to_json_local(const DataVariant& var) {
   if (std::holds_alternative<std::string>(var)) {
@@ -332,6 +368,8 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
   std::string trace_labels = extract_json_string_local(params, "trace_labels");
   std::string dialogue_id = extract_json_string_local(params, "dialogue_id");
   std::string skill_name = extract_json_string_local(params, "skill_name");
+  std::string request_id = extract_json_string_local(params, "request_id");
+  std::string platform_context = extract_json_object_local(params, "platform_context");
 
   if (agent_id.empty() || user_id.empty() || client_id.empty() || content.empty()) {
     return build_error(-32602, "Invalid params: missing agent_id, user_id, client_id, or content", id);
@@ -358,6 +396,8 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
   if (!trace_labels.empty()) message.metadata["trace_labels"] = trace_labels;
   if (!dialogue_id.empty()) message.metadata["dialogue_id"] = dialogue_id;
   if (!skill_name.empty()) message.metadata["skill_name"] = skill_name;
+  if (!request_id.empty()) message.metadata["request_id"] = request_id;
+  if (!platform_context.empty()) message.metadata["platform_context"] = platform_context;
 
   if (!agent->route_request_message(message)) {
     return build_error(-1, "Failed to route request message", id);
@@ -402,6 +442,12 @@ std::string RpcHandler::handle_agent_poll_response(const std::string& params, in
       if (final_it != response.metadata.end() && final_it->second == "true") {
         has_final = true;
         result_oss << ",\"final\":true";
+      }
+
+      // Check for error flag
+      auto error_it = response.metadata.find("error");
+      if (error_it != response.metadata.end() && error_it->second == "true") {
+        result_oss << ",\"error\":true";
       }
 
       result_oss << "}";

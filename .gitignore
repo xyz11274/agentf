@@ -80,14 +80,32 @@ vendor/protoactor/
 Testing/Temporary/
 
 # user files
-ar_scripts
+.agents
+.codex
+.claude
+.atomcode/graph.bin
+.atomcode.md
 .atomcode
+.opencode
+opencode.jsonc
+.omo
+frontend/bridge/agentflow_bridge.egg-info
+tmp
+
+.ruff_cache
+.pytest_cache
+logs/*
+**/.agentfoundry/*
+venv
 .venv
-node_modules
-.env
+.venv_win
+.venv_unix
+.cache
+
 
 **/outfit_assistant/docs
 **/outfit_assistant/.agentfoundry
 **/outfit_assistant/.backup
 **/outfit_assistant/**/outfit-stylist/output/*
 **/outfit_assistant/assets/*
+**/.env

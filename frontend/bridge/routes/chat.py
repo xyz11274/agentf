@@ -27,6 +27,7 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 
 from client import DaemonClient, DaemonError
+from config import settings
 from models import ChatChunk, ChatDone, ChatRequest
 
 logger = logging.getLogger("agentflow.bridge.routes.chat")
@@ -41,8 +42,6 @@ CLOSE_CODE_NORMAL = 1000
 CLOSE_CODE_INTERNAL_ERROR = 1011
 
 HEARTBEAT_SECONDS = 30
-TURN_TIMEOUT_SECONDS = 360.0
-
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
@@ -195,6 +194,10 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
 
             # Reject concurrent execute: only one turn may run at a time.
             if turn_task is not None and not turn_task.done():
+                logger.info(
+                    "ws chat concurrent execute rejected agent_id=%s user_id=%s",
+                    agent_id, inbound.user_id,
+                )
                 await _safe_send(
                     websocket,
                     _error_frame(
@@ -210,6 +213,11 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
             # Track user_id + client_id for the connection.
             current_user_id = inbound.user_id
             current_client_id = inbound.client_id
+
+            logger.info(
+                "ws chat turn start agent_id=%s user_id=%s client_id=%s content_len=%d",
+                agent_id, inbound.user_id, inbound.client_id, len(inbound.content),
+            )
 
             turn_task = asyncio.create_task(
                 run_one_turn(inbound), name="ws-chat.turn"
@@ -265,6 +273,7 @@ async def _run_turn(
         f"{datetime.now(timezone.utc).strftime('%m%d%H%M%S')}"
         f"-{uuid.uuid4().hex[:12]}"
     )
+    turn_timeout = settings.chat_turn_timeout_seconds
 
     try:
         execute_result = await asyncio.wait_for(
@@ -276,16 +285,17 @@ async def _run_turn(
                 client_id=request.client_id,
                 dialogue_id=dialogue_id,
             ),
-            timeout=TURN_TIMEOUT_SECONDS,
+            timeout=turn_timeout,
         )
     except asyncio.TimeoutError:
         await _safe_send(
             websocket,
             _error_frame(
-                f"agent.execute timed out after {TURN_TIMEOUT_SECONDS}s",
+                f"agent.execute timed out after {turn_timeout}s",
                 code=-32000,
             ),
         )
+        daemon_client.discard_response_queue(dialogue_id)
         await _safe_send(websocket, ChatDone().model_dump())
         return
     except DaemonError:
@@ -293,6 +303,7 @@ async def _run_turn(
 
     task_id = _extract_task_id(execute_result)
     if not task_id:
+        daemon_client.discard_response_queue(dialogue_id)
         await _safe_send(
             websocket,
             _error_frame(
@@ -305,11 +316,12 @@ async def _run_turn(
 
     # Poll for response notifications.
     final_payload: dict[str, Any] | None = None
-    deadline = asyncio.get_running_loop().time() + TURN_TIMEOUT_SECONDS
+    deadline = asyncio.get_running_loop().time() + turn_timeout
 
     while True:
         if stop_event.is_set():
             logger.debug("ws chat turn aborted by stop event agent_id=%s", agent_id)
+            daemon_client.discard_response_queue(dialogue_id)
             break
 
         remaining = deadline - asyncio.get_running_loop().time()
@@ -317,31 +329,51 @@ async def _run_turn(
             await _safe_send(
                 websocket,
                 _error_frame(
-                    f"turn timed out after {TURN_TIMEOUT_SECONDS}s",
+                    f"turn timed out after {turn_timeout}s",
                     code=-32000,
                 ),
             )
+            daemon_client.discard_response_queue(dialogue_id)
             break
 
         try:
             notification = await asyncio.wait_for(
                 daemon_client.wait_for_response(
-                    agent_id, timeout=remaining,
+                    agent_id, dialogue_id=dialogue_id, timeout=remaining,
                 ),
                 timeout=remaining,
             )
-        except (asyncio.TimeoutError, DaemonError):
+        except asyncio.TimeoutError as exc:
             logger.warning(
                 "ws chat wait_for_response timed out after %.1fs for agent=%s",
                 remaining, agent_id,
             )
+            await _safe_send(
+                websocket,
+                _error_frame(
+                    f"turn timed out after {turn_timeout}s: {exc}",
+                    code=-32000,
+                ),
+            )
+            daemon_client.discard_response_queue(dialogue_id)
+            break
+        except DaemonError as exc:
+            logger.warning(
+                "ws chat wait_for_response failed for agent=%s: %s",
+                agent_id, exc,
+            )
+            await _safe_send(
+                websocket,
+                _error_frame(f"daemon error while waiting for response: {exc}", code=-32000),
+            )
+            daemon_client.discard_response_queue(dialogue_id)
             break
 
         if not notification:
             continue
 
         is_final = _extract_final(notification)
-        chunk_content = _extract_content(notification)
+        chunk_content = _publicize_artifact_urls(_extract_content(notification))
 
         chunk = ChatChunk(content=chunk_content, final=is_final)
         await _safe_send(websocket, chunk.model_dump())
@@ -351,6 +383,18 @@ async def _run_turn(
             break
 
     await _safe_send(websocket, ChatDone().model_dump())
+
+
+def _publicize_artifact_urls(content: str) -> str:
+    base = settings.artifact_public_base_url.rstrip("/")
+    if not base:
+        return content
+    return content.replace("(/api/artifacts/", f"({base}/api/artifacts/")
+
+    logger.info(
+        "ws chat turn complete agent_id=%s task_id=%s final_payload=%s",
+        agent_id, task_id, bool(final_payload),
+    )
 
 
 async def _heartbeat_loop(websocket: WebSocket) -> None:

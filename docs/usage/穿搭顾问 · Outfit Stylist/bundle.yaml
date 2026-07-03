@@ -1,0 +1,8 @@
+format_version: 1
+agent: agent.md
+checksum_sha256:
+  agent.md: d0fab37d81b98ac723a476df34d30fe90e06285db819057531ff0d84ed9c72d8
+skills:
+  - outfit-stylist
+  - forge-image-gen
+  - video-gen

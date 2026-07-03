@@ -1,0 +1,10 @@
+{
+  "name": "agentflow-assistant",
+  "version": "1.0.0",
+  "description": "AgentFlow Assistant — Q&A guided agent package creator for the Agent Flow UI",
+  "author": "AgentFlow Team",
+  "workflows": [
+    "assistant_workflow.json",
+    "coordinator_collect.json"
+  ]
+}
