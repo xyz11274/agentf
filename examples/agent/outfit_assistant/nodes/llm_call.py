@@ -284,7 +284,7 @@ class _TraceRecorder:
         for attempt in range(max_retries + 1):
             try:
                 result = subprocess.run(
-                    ["curl", "-sS", "-X", "POST", url,
+                    ["curl", "-sS", "-k", "-X", "POST", url,
                      "-H", "Content-Type: application/json",
                      "-H", f"Authorization: Bearer {api_key}",
                      "-d", json.dumps(request_body, ensure_ascii=False),
