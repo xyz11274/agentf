@@ -1974,6 +1974,16 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     }
 
     if(session_router_) {
+      // 检测 Coordinator 的 is_done 标记，设置到 response metadata
+      // 使 AgentFlowManager 的 StartListeningDataBus 能正确退出轮询循环
+      std::string done_key = dialogue_id.empty() ? "is_done" : dialogue_id + "/is_done";
+      DataVariant done_val;
+      if(get_data(done_key, done_val)) {
+        response_message.metadata["is_done"] = "true";
+        publish_data(done_key, DataVariant());  // 清理标记
+        Logger::instance().info_f("[COORDINATORDataExchange] is_done detected, setting is_done=true for dialogue_id=%s",
+                                 dialogue_id.c_str());
+      }
       session_router_->enqueue_response_message(response_message);
 
       // Clean up dialogue data after response is sent
