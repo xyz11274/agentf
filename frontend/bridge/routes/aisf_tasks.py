@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -66,15 +67,15 @@ async def receive_task(request: Request) -> JSONResponse:
     task_id = header.get("taskID", "")
 
     logger.info(
-        "→ /v1/tasks: eventType=%s taskID=%s sender=%s input=%s",
+        "fulfill_task.accept eventType=%s taskID=%s sender=%s user=%s input=%.80s",
         event_type, task_id, header.get("sender", ""),
-        parsed.get("data", {}).get("userInputText", "")[:80],
+        header.get("userName", ""), parsed.get("data", {}).get("userInputText", ""),
     )
 
     # 仅处理 TASKASSIGNMENT；其他事件类型暂不支持
     if event_type != "TASKASSIGNMENT":
         logger.warning(
-            "unsupported eventType=%s taskID=%s (only TASKASSIGNMENT handled)",
+            "fulfill_task.ignore eventType=%s taskID=%s (only TASKASSIGNMENT handled)",
             event_type, task_id,
         )
         return JSONResponse(
@@ -84,7 +85,7 @@ async def receive_task(request: Request) -> JSONResponse:
 
     daemon = getattr(request.app.state, "daemon_client", None)
     if daemon is None or not daemon.is_connected:
-        logger.error("daemon client not available for taskID=%s", task_id)
+        logger.error("fulfill_task.reject taskID=%s reason=daemon_unavailable", task_id)
         return JSONResponse(
             status_code=503,
             content={"error": "daemon_unavailable", "task_id": task_id},
@@ -102,6 +103,8 @@ async def receive_task(request: Request) -> JSONResponse:
         clientSessionId=header.get("clientSessionId", ""),
         acmSessionId=header.get("acmSessionId", ""),
         teamEnvironmentID=header.get("teamEnvironmentID", ""),
+        eventTimeStamp=header.get("eventTimeStamp", ""),
+        clientExField=header.get("clientExField", ""),
     )
     await _ha_store.save(task_id, ctx)
 
@@ -156,6 +159,12 @@ async def _execute_and_callback(
 
     timeout = settings.aisf_adapter_timeout
     chunks: list[str] = []
+    start_ts = time.time()
+
+    logger.info(
+        "fulfill_task.start taskID=%s dialogue=%s agent=%s user=%s input_len=%d",
+        task_id, dialogue_id, agent_id, user_id, len(user_input),
+    )
 
     try:
         await daemon.agent_execute(
@@ -188,13 +197,15 @@ async def _execute_and_callback(
         await _ha_store.set_last_dialogue_id(user_id, client_id, dialogue_id)
 
         full_content = "".join(chunks)
+        elapsed = time.time() - start_ts
         logger.info(
-            "task done: taskID=%s dialogue_id=%s content_len=%d",
-            task_id, dialogue_id, len(full_content),
+            "fulfill_task.complete taskID=%s dialogue=%s elapsed=%.1fs content_len=%d chunks=%d",
+            task_id, dialogue_id, elapsed, len(full_content), len(chunks),
         )
 
         # 回调上游：先 TaskStatusReport(0=完成)，再 UserOutput
         if ctx.sysAgentEntity:
+            cb_start = time.time()
             await http_post_to_upstream(
                 ctx.sysAgentEntity,
                 build_task_status_report(ctx, 0, "TaskCompleted"),
@@ -203,19 +214,24 @@ async def _execute_and_callback(
                 ctx.sysAgentEntity,
                 build_user_output(ctx, full_content),
             )
-            logger.info("callback posted to upstream: taskID=%s", task_id)
+            logger.info(
+                "fulfill_task.callback taskID=%s upstream=%s cb_elapsed=%.1fs",
+                task_id, ctx.sysAgentEntity, time.time() - cb_start,
+            )
 
         return {
             "status": "completed",
             "task_id": task_id,
             "dialogue_id": dialogue_id,
             "content_len": len(full_content),
+            "elapsed": round(elapsed, 1),
         }
 
     except Exception as exc:
+        elapsed = time.time() - start_ts
         logger.error(
-            "task failed: taskID=%s dialogue_id=%s error=%s",
-            task_id, dialogue_id, exc,
+            "fulfill_task.error taskID=%s dialogue=%s elapsed=%.1fs error=%s",
+            task_id, dialogue_id, elapsed, exc,
         )
         # 失败回调上游
         if ctx.sysAgentEntity:

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -27,8 +28,8 @@ from client import (
     InvalidParamsError,
     NotFoundError,
 )
-from config import settings
 from dependencies import get_daemon_client
+from config import settings
 
 logger = logging.getLogger("agentflow.bridge.routes.chat_rest")
 
@@ -152,11 +153,17 @@ async def chat_rest(
           "error": null
         }
     """
+    start_ts = time.time()
     dialogue_id = (
         f"{datetime.now(timezone.utc).strftime('%m%d%H%M%S')}"
         f"-{uuid.uuid4().hex[:12]}"
     )
     turn_timeout = settings.chat_turn_timeout_seconds
+
+    logger.info(
+        "chat_turn.start agent=%s user=%s client=%s dialogue=%s content_len=%d",
+        agent_id, body.user_id, body.client_id, dialogue_id, len(body.content),
+    )
 
     # --- Step 1: execute --------------------------------------------------
     try:
@@ -173,6 +180,10 @@ async def chat_rest(
         )
     except asyncio.TimeoutError:
         client.discard_response_queue(dialogue_id)
+        logger.warning(
+            "chat_turn.timeout agent=%s dialogue=%s execute_timeout=%ss",
+            agent_id, dialogue_id, turn_timeout,
+        )
         raise HTTPException(
             status_code=status.HTTP_504_GATEWAY_TIMEOUT,
             detail=f"agent.execute timed out after {turn_timeout}s",
@@ -241,6 +252,11 @@ async def chat_rest(
             break
 
     full_content = "".join(accumulated_content)
+    elapsed = time.time() - start_ts
+    logger.info(
+        "chat_turn.complete agent=%s user=%s dialogue=%s task=%s elapsed=%.1fs content_len=%d",
+        agent_id, body.user_id, dialogue_id, task_id, elapsed, len(full_content),
+    )
 
     return _ok(
         ChatRestResponse(

@@ -1,0 +1,30 @@
+{
+  "id": "skill-workflow",
+  "version": "2.0",
+  "name": "Generic Skill Executor",
+  "nodes": [
+    {
+      "id": "skill_executor",
+      "name": "Universal Skill Executor",
+      "type": "task",
+      "execution_mode": "python_script",
+      "command": "./nodes/skill_executor.py",
+      "working_dir": "examples/agent/outfit_assistant",
+      "json_output": true,
+      "enable_hot_reload": false,
+      "inputs": [
+        {"name": "input",               "type": "string", "required": true},
+        {"name": "session_id",          "type": "string", "required": true},
+        {"name": "dialogue_id",         "type": "string", "required": false},
+        {"name": "exec_skill_key",      "type": "string", "required": false}
+      ],
+      "outputs": [
+        {"name": "response", "type": "string"},
+        {"name": "status",   "type": "string"},
+        {"name": "artifacts_json", "type": "string"}
+      ],
+      "timeout_ms": 240000
+    }
+  ],
+  "edges": []
+}

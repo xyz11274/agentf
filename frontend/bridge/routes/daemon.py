@@ -92,7 +92,7 @@ async def update_daemon_status_cache(state: Any, client: DaemonClient) -> None:
     try:
         health = await client.health()
     except DaemonError as exc:
-        logger.warning("daemon health probe failed: %s", exc)
+        logger.warning("daemon_health.probe_failed error=%s", exc)
         cache["running"] = False
         cache["daemon"] = None
         cache["active_agents"] = 0
@@ -104,7 +104,7 @@ async def update_daemon_status_cache(state: Any, client: DaemonClient) -> None:
     try:
         runtime = await client.runtime_status()
     except DaemonError as exc:
-        logger.warning("daemon runtime.status failed: %s", exc)
+        logger.warning("daemon_health.runtime_failed error=%s", exc)
         cache["running"] = False
         cache["daemon"] = None
         cache["active_agents"] = 0

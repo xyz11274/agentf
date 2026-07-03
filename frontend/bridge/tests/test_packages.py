@@ -1048,3 +1048,333 @@ def test_t5_router_has_all_required_endpoints() -> None:
     assert expected.issubset(methods_paths), (
         f"missing endpoints: {expected - methods_paths}"
     )
+
+
+# ---------------------------------------------------------------------------
+# create-from-template e2e tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_template_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Create a minimal harness_agent template stub under a temp dir.
+
+    The stub is enough to verify merge behaviour without copying the real
+    (hundreds-of-KB) template directory.
+    """
+    root = tmp_path / "agent_templates"
+    tmpl = root / "harness_agent"
+    tmpl.mkdir(parents=True)
+
+    # agent.json — 4 infra tasks
+    (tmpl / "agent.json").write_text(json.dumps({
+        "name": "TemplateAgent",
+        "version": "1.0.0",
+        "description": "Template base",
+        "session_pool_size": 1,
+        "max_workflows": 5,
+        "max_concurrent_workflows": 3,
+        "data_bus_capacity_mb": 5,
+        "tasks": [
+            {"id": 0, "type": "dispatcher", "description": "infra dispatcher"},
+            {"id": 1, "type": "coordinator", "description": "infra coordinator"},
+            {"id": 2, "type": "skill", "description": "infra pre-skill"},
+            {"id": 3, "type": "skill", "description": "infra skill-runner"},
+        ],
+    }))
+
+    # agent.md — stub
+    (tmpl / "agent.md").write_text("---\nname: TemplateAgent\n---\n\nTemplate stub")
+
+    # package.json — stub
+    (tmpl / "package.json").write_text('{"name": "template", "version": "0.0.0"}')
+
+    # A workflow file with working_dir to test rewriting
+    (tmpl / "coordinator_workflow.json").write_text(json.dumps({
+        "id": "coordinator-workflow",
+        "nodes": [{
+            "id": "decide",
+            "type": "task",
+            "command": "./nodes/coordinator_decide.py",
+            "working_dir": "examples/agent/outfit_assistant",
+        }],
+        "edges": [],
+    }))
+
+    # Template-owned infra directory
+    (tmpl / "harness/tools").mkdir(parents=True)
+    (tmpl / "harness/tools/bash.py").write_text("# template tool")
+
+    # Template-owned nodes
+    (tmpl / "nodes").mkdir()
+    (tmpl / "nodes/databus_client.py").write_text("# template databus")
+    (tmpl / "nodes/dummy_pre_skill.py").write_text("# template pre-skill")
+
+    # Template-owned tests
+    (tmpl / "tests").mkdir()
+    (tmpl / "tests/test_template.py").write_text("# template test")
+
+    # Point settings at our stub template root
+    monkeypatch.setattr(config_module.settings, "agent_template_dir", str(root))
+
+    return tmpl
+
+
+@pytest.fixture
+def template_client(
+    fake_packages_root: Path,
+    fake_template_root: Path,
+) -> TestClient:
+    return TestClient(app)
+
+
+def _make_user_archive(
+    tmp_path: Path,
+    files: dict[str, str],
+    fmt: str = "tar.gz",
+) -> tuple[bytes, str]:
+    """Create a temporary archive and return ``(content_bytes, filename)``."""
+    if fmt == "tar.gz":
+        archive = tmp_path / "user_agent.tar.gz"
+        with tarfile.open(archive, "w:gz") as tf:
+            for rel, content in files.items():
+                info = tarfile.TarInfo(name=rel)
+                encoded = content.encode("utf-8")
+                info.size = len(encoded)
+                tf.addfile(info, io.BytesIO(encoded))
+    else:
+        archive = tmp_path / "user_agent.zip"
+        import zipfile
+        with zipfile.ZipFile(archive, "w") as zf:
+            for rel, content in files.items():
+                zf.writestr(rel, content)
+
+    return archive.read_bytes(), archive.name
+
+
+def test_create_from_template_happy_path(
+    template_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Happy path: minimal user archive + template = merged package."""
+    content, filename = _make_user_archive(tmp_path, {
+        "agent.md": "---\nname: MyAgent\n---\n\nMy custom agent",
+    })
+    resp = template_client.post(
+        "/api/packages/create-from-template",
+        files={"file": (filename, content, "application/gzip")},
+        data={"name": "my-agent"},
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["name"] == "my-agent"
+    assert body["file_count"] > 0
+
+    # Verify template infra files survived merge
+    get = template_client.get("/api/packages/my-agent/file/harness/tools/bash.py")
+    assert get.status_code == 200
+    get = template_client.get("/api/packages/my-agent/file/nodes/databus_client.py")
+    assert get.status_code == 200
+    get = template_client.get("/api/packages/my-agent/file/tests/test_template.py")
+    assert get.status_code == 200
+
+    # Verify user's agent.md won
+    get = template_client.get("/api/packages/my-agent/file/agent.md")
+    assert get.status_code == 200
+    assert get.json()["content"].startswith("---\nname: MyAgent")
+
+    # Verify working_dir was rewritten
+    get = template_client.get(
+        "/api/packages/my-agent/file/coordinator_workflow.json"
+    )
+    assert get.status_code == 200
+    wf = json.loads(get.json()["content"])
+    assert wf["nodes"][0]["working_dir"] == "my-agent"
+
+
+def test_create_from_template_agent_json_deep_merge(
+    template_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """User top-level fields override template; infra tasks preserved."""
+    content, filename = _make_user_archive(tmp_path, {
+        "agent.json": json.dumps({
+            "name": "CustomAgent",
+            "version": "2.0.0",
+            "description": "Customized",
+            "session_pool_size": 5,
+        }),
+    })
+    resp = template_client.post(
+        "/api/packages/create-from-template",
+        files={"file": (filename, content, "application/gzip")},
+        data={"name": "custom-merged"},
+    )
+    assert resp.status_code == 201, resp.text
+
+    get = template_client.get("/api/packages/custom-merged/file/agent.json")
+    assert get.status_code == 200
+    cfg = json.loads(get.json()["content"])
+
+    # User's top-level fields win
+    assert cfg["name"] == "CustomAgent"
+    assert cfg["version"] == "2.0.0"
+    assert cfg["description"] == "Customized"
+    assert cfg["session_pool_size"] == 5
+
+    # Template infra tasks preserved (4 tasks)
+    assert len(cfg["tasks"]) == 4
+    assert cfg["tasks"][0]["id"] == 0
+    assert cfg["tasks"][0]["type"] == "dispatcher"
+
+    # User's custom fields that are not in the override allowlist are preserved
+    # data_bus_capacity_mb comes from template
+    assert cfg["data_bus_capacity_mb"] == 5
+
+
+def test_create_from_template_user_task_appended(
+    template_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """User-provided tasks with new IDs are appended after template tasks."""
+    content, filename = _make_user_archive(tmp_path, {
+        "agent.json": json.dumps({
+            "name": "WithExtraTasks",
+            "tasks": [
+                {"id": 10, "type": "skill", "description": "user custom skill"},
+                {"id": 11, "type": "skill", "description": "another skill"},
+            ],
+        }),
+    })
+    resp = template_client.post(
+        "/api/packages/create-from-template",
+        files={"file": (filename, content, "application/gzip")},
+        data={"name": "extra-tasks"},
+    )
+    assert resp.status_code == 201, resp.text
+
+    get = template_client.get("/api/packages/extra-tasks/file/agent.json")
+    assert get.status_code == 200
+    cfg = json.loads(get.json()["content"])
+
+    # 4 template tasks + 2 user tasks = 6
+    assert len(cfg["tasks"]) == 6
+    task_ids = [t["id"] for t in cfg["tasks"]]
+    assert task_ids == [0, 1, 2, 3, 10, 11]
+
+
+def test_create_from_template_rejects_bad_archive(
+    template_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Unsupported archive format returns 400."""
+    bad = tmp_path / "bad.exe"
+    bad.write_bytes(b"not an archive")
+    resp = template_client.post(
+        "/api/packages/create-from-template",
+        files={"file": ("bad.exe", bad.read_bytes(), "application/octet-stream")},
+        data={"name": "bad-archive"},
+    )
+    assert resp.status_code == 400
+    assert "Unsupported archive format" in resp.text
+
+
+def test_create_from_template_rejects_unknown_template(
+    template_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Non-existent template name returns 400 with available list."""
+    content, filename = _make_user_archive(tmp_path, {"agent.md": "---\n---"})
+    resp = template_client.post(
+        "/api/packages/create-from-template",
+        files={"file": (filename, content, "application/gzip")},
+        data={"name": "no-tmpl", "template": "does_not_exist"},
+    )
+    assert resp.status_code == 400
+    assert "Template 'does_not_exist'" in resp.text
+    assert "harness_agent" in resp.text  # Available templates listed
+
+
+def test_create_from_template_rejects_duplicate_name(
+    template_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Uploading with a package name that already exists returns 409."""
+    content, filename = _make_user_archive(tmp_path, {"agent.md": "---\n---"})
+
+    # First call succeeds
+    resp1 = template_client.post(
+        "/api/packages/create-from-template",
+        files={"file": (filename, content, "application/gzip")},
+        data={"name": "dup-test"},
+    )
+    assert resp1.status_code == 201
+
+    # Second call for same name returns 409
+    content2, filename2 = _make_user_archive(tmp_path, {"agent.md": "---\n---"})
+    resp2 = template_client.post(
+        "/api/packages/create-from-template",
+        files={"file": (filename2, content2, "application/gzip")},
+        data={"name": "dup-test"},
+    )
+    assert resp2.status_code == 409
+    assert "already exists" in resp2.text
+
+
+def test_create_from_template_preserves_template_only_files(
+    template_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Template-owned infra files are restored even if user archive overwrites them."""
+    content, filename = _make_user_archive(tmp_path, {
+        "agent.md": "---\n---",
+        # User tries to overwrite template-owned files
+        "nodes/databus_client.py": "# malicious override",
+        "harness/tools/bash.py": "# malicious override",
+        "tests/test_template.py": "# malicious override",
+    })
+    resp = template_client.post(
+        "/api/packages/create-from-template",
+        files={"file": (filename, content, "application/gzip")},
+        data={"name": "secure-pkg"},
+    )
+    assert resp.status_code == 201, resp.text
+
+    # Template files must NOT be user's version
+    get = template_client.get("/api/packages/secure-pkg/file/nodes/databus_client.py")
+    assert get.status_code == 200
+    assert get.json()["content"] == "# template databus"
+
+    get = template_client.get("/api/packages/secure-pkg/file/harness/tools/bash.py")
+    assert get.status_code == 200
+    assert get.json()["content"] == "# template tool"
+
+    get = template_client.get("/api/packages/secure-pkg/file/tests/test_template.py")
+    assert get.status_code == 200
+    assert get.json()["content"] == "# template test"
+
+    # User's agent.md should survive (user wins)
+    get = template_client.get("/api/packages/secure-pkg/file/agent.md")
+    assert get.status_code == 200
+    assert "---\n---" in get.json()["content"]
+
+
+def test_create_from_template_zip_format(
+    template_client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Compressed upload (.zip) also works."""
+    content, filename = _make_user_archive(
+        tmp_path, {"agent.md": "---\nname: ZipAgent\n---\n"}, fmt="zip",
+    )
+    resp = template_client.post(
+        "/api/packages/create-from-template",
+        files={"file": (filename, content, "application/zip")},
+        data={"name": "zip-agent"},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == "zip-agent"
+
+    get = template_client.get("/api/packages/zip-agent/file/agent.md")
+    assert get.status_code == 200
+    assert "ZipAgent" in get.json()["content"]

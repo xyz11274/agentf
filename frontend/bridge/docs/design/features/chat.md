@@ -1,7 +1,7 @@
 # 聊天功能设计
 
 > **层级**: L2 · `docs/design/features/chat.md`
-> **状态**: 已更新 · 2026-07-02 增加多模态 Artifact 交付设计
+> **状态**: 目标设计已更新 · 2026-07-03 补充 Skill 无侵入 Artifact 交付约束
 > **创建者**: `design-doc-organizer`
 
 ---
@@ -142,16 +142,19 @@ Bridge 提供两种聊天模式：
 
 ### 多模态 Artifact 交付
 
-Agent 的最终响应仍以文本消息为统一载体。图片、HTML 等生成产物不内嵌为 Base64，也不增加独立二进制消息帧；Agent 在 Markdown 内容中返回由 Bridge 提供的可访问 URL，客户端按普通 Markdown 图片或链接渲染。
+Agent 的最终响应仍以文本消息为统一载体。图片、HTML 等生成产物不内嵌为 Base64，也不增加独立二进制消息帧；平台把响应中的本地文件引用归一化为由 Bridge 提供的可访问 URL，客户端按普通 Markdown、HTML 图片或文件链接消费。
 
 交付流程遵循以下规则：
 
-1. Skill 一旦生成有效文件，即把产物元数据随执行结果传回 Coordinator；后续模型调用失败时，已生成的产物仍保留并可进入最终响应。
-2. Coordinator 把本地绝对路径改写为 Bridge Artifact URL，避免把仅在服务端有效的文件系统路径暴露给客户端。
-3. Bridge 按 Agent Package 根目录发布完整产物目录树，保留 HTML 与图片、CSS、JavaScript 等文件之间的相对路径关系。因此 HTML 中的 `assets/look.png` 可相对于 HTML URL 正常加载。
-4. 内置 UI 使用 `/api/artifacts/...` 相对 URL，由当前 Bridge 提供文件；外部服务调用 Agent 时，部署方必须配置 Bridge 的公网基地址，响应中才会返回可从外部访问的绝对 URL。
+1. **Skill 无侵入**：平台不得要求用户修改 Skill 提示词、输出格式、工具调用或接入专用 Artifact API。Skill 可以继续在自身工作目录生成文件，并在 Markdown、HTML 或普通文本中使用相对路径。
+2. **平台自动发现**：运行时在 Skill/工具执行边界记录工作目录和文件变化，根据“本轮新增或修改文件 + 返回内容中的文件引用”生成内部 Artifact Manifest。Manifest 是平台内部中间模型，不是 Skill 对外契约。
+3. **基准目录明确**：每段返回内容携带其运行时来源目录；相对引用只能相对此目录解析，禁止相对 Bridge 进程目录、前端页面地址或 Agent Package 根目录猜测。
+4. **目录树保真**：平台把本轮产物发布到独立目录，并保留相对目录层级。HTML 中的 `assets/look.png`、CSS 中的 `url(...)` 等引用依靠同一 URL 目录树自然解析，不对文件内容做破坏性全文替换。
+5. **聊天引用归一化**：对于直接进入聊天正文的 Markdown 图片、Markdown 链接和 HTML `src`/`href`，平台根据内部 Manifest 将本地相对或绝对路径改写为 Artifact URL；远程 HTTP(S) URL 与 `data:` URL不改写。
+6. **单点 URL 生成**：Agent、Skill 与 Coordinator 不拼接公网域名。Bridge 统一生成同源相对 URL 或带公网基地址的绝对 URL，分别服务内置 UI 和远程调用方。
+7. **失败不丢产物**：文件一旦被本轮 Manifest 接纳，后续模型整理失败不得删除或覆盖已确认的 Artifact；最终结果可以退化为平台生成的产物链接。
 
-这一设计只负责“产物如何交付”，不改变 WS 与 REST 的会话、流式和错误语义。具体端点、安全约束和配置项由 L4 文档定义。
+当前实现已完成第一阶段：包内 Artifact 不再扁平复制，Outfit Assistant 通用执行器收集到文件后可保留原目录树；Coordinator 可依据已收集文件改写相对 Markdown 图片和 HTML `src`/`href`。执行边界自动快照、平台级 Manifest、新隔离端点和跨 Agent 通用化仍是目标能力。具体状态、解析、发布端点、安全约束和兼容策略以 L4 `architecture/modules/chat-api.md` §5 为准。
 
 ### 不支持项 / 边界
 
@@ -163,6 +166,7 @@ Agent 的最终响应仍以文本消息为统一载体。图片、HTML 等生成
 | 前端暴露 session_id | ❌ 不支持 | session_id 是 daemon 内部概念，外部不感知 |
 | 并发多 turn | ❌ 不支持 | 同一连接同一时刻只能有一个 in-flight turn |
 | Artifact 二进制内嵌 | ❌ 不支持 | 消息仅返回 Markdown URL，不返回 Base64 或二进制帧 |
+| 要求 Skill 主动注册 Artifact | ❌ 不允许 | 可支持显式注册作为优化，但自动发现必须独立成立 |
 | Artifact 签名 URL / 生命周期管理 | ⏳ 待实现 | 当前使用包内路径 URL，尚无签名、过期和自动清理机制 |
 
 ---

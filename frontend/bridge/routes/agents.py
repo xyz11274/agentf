@@ -27,8 +27,8 @@ from client import (
     InvalidParamsError,
     NotFoundError,
 )
-from config import settings
 from dependencies import get_daemon_client
+from config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -81,8 +81,11 @@ async def list_agents(
 ) -> dict[str, Any]:
     """``GET /api/agents`` — list all loaded agents (``agent.list``)."""
     try:
-        return _ok(await client.agent_list())
+        result = await client.agent_list()
+        logger.info("agent_lifecycle.list ok count=%d", len(result) if isinstance(result, list) else 0)
+        return _ok(result)
     except DaemonError as exc:
+        logger.warning("agent_lifecycle.list error=%s", exc)
         raise _raise_daemon_error(exc) from exc
 
 
@@ -95,6 +98,7 @@ async def get_agent(
     try:
         return _ok(await client.agent_info(agent_id))
     except DaemonError as exc:
+        logger.warning("agent_lifecycle.info agent=%s error=%s", agent_id, exc)
         raise _raise_daemon_error(exc) from exc
 
 
@@ -105,23 +109,15 @@ async def load_agent(
     client: DaemonClient = Depends(get_daemon_client),
 ) -> dict[str, Any]:
     """``POST /api/agents/{id}/load`` — load an agent (``agent.load``).
-
-    The path ``{id}`` is the canonical agent id; the underlying daemon
-    ``agent.load`` RPC requires a ``package_path`` pointing to the agent
-    package directory on disk. When the body omits ``package_path`` the
-    bridge falls back to ``{agent_packages_dir}/{agent_id}`` — this
-    allows the frontend to pass the package directory name (e.g.
-    ``harness_agent``) without knowing the project root layout.
     """
-    # NOTE: agent directory names use underscores (e.g. harness_agent/)
-    # while package.json ``name`` (which becomes the daemon's agent_id) uses
-    # hyphens (e.g. ``harness-agent``).  Two naming conventions exist without
-    # a single authoritative source — see docs/decisions/naming-convention.md.
     pkg_name = (body.package_path if body else None) or agent_id.replace("-", "_")
     package_path = str(settings.agent_packages_path / pkg_name)
     try:
-        return _ok(await client.agent_load(package_path))
+        result = await client.agent_load(package_path)
+        logger.info("agent_lifecycle.load agent=%s pkg=%s ok", agent_id, pkg_name)
+        return _ok(result)
     except DaemonError as exc:
+        logger.warning("agent_lifecycle.load agent=%s pkg=%s error=%s", agent_id, pkg_name, exc)
         raise _raise_daemon_error(exc) from exc
 
 
@@ -132,8 +128,11 @@ async def unload_agent(
 ) -> dict[str, Any]:
     """``POST /api/agents/{id}/unload`` — unload an agent (``agent.unload``)."""
     try:
-        return _ok(await client.agent_unload(agent_id))
+        result = await client.agent_unload(agent_id)
+        logger.info("agent_lifecycle.unload agent=%s ok", agent_id)
+        return _ok(result)
     except DaemonError as exc:
+        logger.warning("agent_lifecycle.unload agent=%s error=%s", agent_id, exc)
         raise _raise_daemon_error(exc) from exc
 
 
@@ -144,8 +143,11 @@ async def pause_agent(
 ) -> dict[str, Any]:
     """``POST /api/agents/{id}/pause`` — pause a running agent (``agent.pause``)."""
     try:
-        return _ok(await client.agent_pause(agent_id))
+        result = await client.agent_pause(agent_id)
+        logger.info("agent_lifecycle.pause agent=%s ok", agent_id)
+        return _ok(result)
     except DaemonError as exc:
+        logger.warning("agent_lifecycle.pause agent=%s error=%s", agent_id, exc)
         raise _raise_daemon_error(exc) from exc
 
 
@@ -156,8 +158,11 @@ async def resume_agent(
 ) -> dict[str, Any]:
     """``POST /api/agents/{id}/resume`` — resume a paused agent (``agent.resume``)."""
     try:
-        return _ok(await client.agent_resume(agent_id))
+        result = await client.agent_resume(agent_id)
+        logger.info("agent_lifecycle.resume agent=%s ok", agent_id)
+        return _ok(result)
     except DaemonError as exc:
+        logger.warning("agent_lifecycle.resume agent=%s error=%s", agent_id, exc)
         raise _raise_daemon_error(exc) from exc
 
 

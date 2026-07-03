@@ -15,11 +15,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+from starlette.responses import Response
 
 from client import DaemonClient
 from config import settings
@@ -181,6 +185,24 @@ bridge_app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# --- 请求计时中间件 -----------------------------------------------------------
+# 记录所有 HTTP 请求耗时和响应状态，排除 WebSocket 和健康检查的噪音
+class _RequestTimingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next) -> Response:
+        if request.url.path in ("/api/health",) or request.url.path.startswith("/ws/"):
+            return await call_next(request)
+        start = time.time()
+        response = await call_next(request)
+        elapsed = time.time() - start
+        if elapsed > 1.0 or response.status_code >= 400:
+            logger.info(
+                "http_request %s %s status=%d elapsed=%.2fs",
+                request.method, request.url.path, response.status_code, elapsed,
+            )
+        return response
+
+bridge_app.add_middleware(_RequestTimingMiddleware)
 bridge_app.include_router(artifacts_router)
 bridge_app.include_router(coremind_internal_router)
 # AISF SysAgent 调度入口：POST /v1/tasks → 对外 /health/v1/tasks
@@ -269,6 +291,7 @@ def run() -> None:
         port=settings.bridge_port,
         log_level=settings.log_level.lower(),
         reload=False,
+        max_request_body_size=settings.upload_max_body_size_mb * 1024 * 1024,
     )
 
 

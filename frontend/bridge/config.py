@@ -201,12 +201,20 @@ class BridgeSettings(BaseSettings):
         default="resource/skill_hub",
         description="Directory containing the Skill Hub central repository.",
     )
+    agent_template_dir: str = Field(
+        default="templates",
+        description="Directory containing agent creation templates (e.g. harness_agent).",
+    )
 
     # --- 🪵 observability / behavior --------------------------------------------
     log_level: str = Field(default="INFO", description="Logging level name.")
     request_timeout_seconds: float = Field(
         default=5.0, gt=0,
         description="Per-request timeout (seconds) for outbound daemon calls.",
+    )
+    upload_max_body_size_mb: int = Field(
+        default=100, ge=1,
+        description="Max HTTP request body size in MB for file uploads.",
     )
     chat_turn_timeout_seconds: float = Field(
         default=900.0, gt=0,
@@ -241,6 +249,13 @@ class BridgeSettings(BaseSettings):
     @property
     def skill_hub_path(self) -> Path:
         p = Path(self.skill_hub_dir)
+        if p.is_absolute():
+            return p.resolve()
+        return (_PROJECT_ROOT / p).resolve()
+
+    @property
+    def agent_template_path(self) -> Path:
+        p = Path(self.agent_template_dir)
         if p.is_absolute():
             return p.resolve()
         return (_PROJECT_ROOT / p).resolve()

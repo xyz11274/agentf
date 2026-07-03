@@ -171,7 +171,7 @@ class DaemonClient:
         self._reader_task = asyncio.create_task(
             self._ws_reader(), name="DaemonClient.ws-reader"
         )
-        logger.info("DaemonClient connected %s", self._ws_url)
+        logger.info("daemon_connect.connected url=%s", self._ws_url)
 
     async def close(self) -> None:
         """Gracefully shut down the client."""
@@ -193,10 +193,11 @@ class DaemonClient:
             try:
                 await self._ws.close()
             except Exception:
-                logger.debug("ignoring ws.close() error", exc_info=True)
+                logger.debug("daemon_connect.close_error", exc_info=True)
 
         self._ws = None
         self._connected = False
+        logger.info("daemon_connect.closed url=%s", self._ws_url)
         logger.info("DaemonClient closed")
 
     @property

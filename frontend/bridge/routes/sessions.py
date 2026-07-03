@@ -63,13 +63,13 @@ async def list_sessions(
     user_id: str | None = Query(None, description="Optional: filter sessions by user_id."),
     client: DaemonClient = Depends(get_daemon_client),
 ) -> dict[str, Any]:
-    """``GET /api/sessions?agent_id=X[&user_id=Y]`` — list sessions for an agent (``session.list``).
-
-    If ``user_id`` is provided, only sessions matching that user are returned.
-    """
+    """``GET /api/sessions?agent_id=X[&user_id=Y]`` — list sessions for an agent (``session.list``)."""
     try:
-        return _ok(await client.session_list(agent_id, user_id or ""))
+        result = await client.session_list(agent_id, user_id or "")
+        logger.info("session_mgmt.list agent=%s user=%s ok", agent_id, user_id)
+        return _ok(result)
     except DaemonError as exc:
+        logger.warning("session_mgmt.list agent=%s user=%s error=%s", agent_id, user_id, exc)
         raise _raise_daemon_error(exc) from exc
 
 
@@ -81,8 +81,11 @@ async def destroy_session(
 ) -> dict[str, Any]:
     """``DELETE /api/sessions/{id}?agent_id=X`` — destroy a session (``session.destroy``)."""
     try:
-        return _ok(await client.session_destroy(agent_id, session_id))
+        result = await client.session_destroy(agent_id, session_id)
+        logger.info("session_mgmt.destroy agent=%s session=%s ok", agent_id, session_id)
+        return _ok(result)
     except DaemonError as exc:
+        logger.warning("session_mgmt.destroy agent=%s session=%s error=%s", agent_id, session_id, exc)
         raise _raise_daemon_error(exc) from exc
 
 
@@ -93,10 +96,13 @@ async def clear_session_dialogue(
     dialogue_id: str = Query("", description="Optional dialogue id; empty clears all."),
     client: DaemonClient = Depends(get_daemon_client),
 ) -> dict[str, Any]:
-    """``DELETE /api/sessions/{id}/dialogue?agent_id=X&dialogue_id=Y`` — clear dialogue (``session.clear_dialogue``)."""
+    """``DELETE /api/sessions/{id}/dialogue?agent_id=X&dialogue_id=Y`` — clear dialogue."""
     try:
-        return _ok(await client.session_clear_dialogue(agent_id, session_id, dialogue_id))
+        result = await client.session_clear_dialogue(agent_id, session_id, dialogue_id)
+        logger.info("session_mgmt.clear_dialogue agent=%s session=%s dialogue=%s ok", agent_id, session_id, dialogue_id or "(all)")
+        return _ok(result)
     except DaemonError as exc:
+        logger.warning("session_mgmt.clear_dialogue agent=%s session=%s error=%s", agent_id, session_id, exc)
         raise _raise_daemon_error(exc) from exc
 
 

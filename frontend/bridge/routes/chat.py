@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
@@ -70,7 +71,7 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
     )
     if daemon_client is None:
         logger.error(
-            "ws chat: DaemonClient not attached to app.state (lifespan not wired?)"
+            "chat_turn.init_error: DaemonClient not attached to app.state",
         )
         await _send_error_and_close(
             websocket,
@@ -95,7 +96,7 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
     # the polling loop inside ``_run_turn`` watches it and exits early.
     stop_event = asyncio.Event()
 
-    logger.info("ws chat connected agent_id=%s peer=%s", agent_id, _peer(websocket))
+    logger.info("chat_turn.connect agent=%s peer=%s", agent_id, _peer(websocket))
 
     try:
         # Keep-alive: ping every HEARTBEAT_SECONDS so a half-dead peer is
@@ -138,7 +139,7 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
                 except DaemonError:
                     raise
                 except Exception as exc:  # noqa: BLE001
-                    logger.exception("ws chat turn task crashed: %s", exc)
+                    logger.exception("chat_turn.error agent=%s task_crashed: %s", agent_id, exc)
                     await _send_error_and_close(
                         websocket,
                         message=f"internal error: {exc}",
@@ -152,7 +153,7 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
             try:
                 inbound_raw = recv_task.result()
             except WebSocketDisconnect:
-                logger.info("ws chat disconnected agent_id=%s", agent_id)
+                logger.info("chat_turn.disconnect agent=%s", agent_id)
                 if turn_task is not None:
                     stop_event.set()
                     turn_task.cancel()
@@ -163,7 +164,7 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
             # Stop signal: set the flag so the polling loop breaks, ack
             # with a done frame, but do NOT cancel the turn task.
             if isinstance(inbound, _StopSignal):
-                logger.debug("ws chat stop signal received agent_id=%s", agent_id)
+                logger.debug("chat_turn.stop agent=%s", agent_id)
                 if turn_task is not None:
                     stop_event.set()
                 await _safe_send(websocket, ChatDone().model_dump())
@@ -195,7 +196,7 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
             # Reject concurrent execute: only one turn may run at a time.
             if turn_task is not None and not turn_task.done():
                 logger.info(
-                    "ws chat concurrent execute rejected agent_id=%s user_id=%s",
+                    "chat_turn.reject agent=%s user=%s (concurrent turn rejected)",
                     agent_id, inbound.user_id,
                 )
                 await _safe_send(
@@ -215,7 +216,7 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
             current_client_id = inbound.client_id
 
             logger.info(
-                "ws chat turn start agent_id=%s user_id=%s client_id=%s content_len=%d",
+                "chat_turn.start agent=%s user=%s client=%s content_len=%d",
                 agent_id, inbound.user_id, inbound.client_id, len(inbound.content),
             )
 
@@ -226,10 +227,10 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
                 websocket.receive_json(), name="ws-chat.recv"
             )
     except WebSocketDisconnect:
-        logger.info("ws chat client closed connection agent_id=%s", agent_id)
+        logger.info("chat_turn.disconnect agent=%s (client closed)", agent_id)
     except DaemonError as exc:
         logger.warning(
-            "ws chat daemon error agent_id=%s code=%s msg=%s",
+            "chat_turn.error agent=%s code=%s msg=%s",
             agent_id,
             getattr(exc, "code", None),
             exc,
@@ -240,7 +241,7 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
             code=getattr(exc, "code", None) or CLOSE_CODE_INTERNAL_ERROR,
         )
     except Exception as exc:  # noqa: BLE001 — last-resort safety net
-        logger.exception("ws chat unexpected failure agent_id=%s", agent_id)
+        logger.exception("chat_turn.error agent=%s unexpected: %s", agent_id, exc)
         await _send_error_and_close(
             websocket,
             message=f"internal error: {exc}",
@@ -317,15 +318,24 @@ async def _run_turn(
     # Poll for response notifications.
     final_payload: dict[str, Any] | None = None
     deadline = asyncio.get_running_loop().time() + turn_timeout
+    chunk_count = 0
+    turn_start = time.time()
 
     while True:
         if stop_event.is_set():
-            logger.debug("ws chat turn aborted by stop event agent_id=%s", agent_id)
+            logger.info(
+                "chat_turn.abort agent=%s dialogue=%s task=%s elapsed=%.1fs chunks=%d",
+                agent_id, dialogue_id, task_id, time.time() - turn_start, chunk_count,
+            )
             daemon_client.discard_response_queue(dialogue_id)
             break
 
         remaining = deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
+            logger.warning(
+                "chat_turn.timeout agent=%s dialogue=%s task=%s timeout=%ss elapsed=%.1fs",
+                agent_id, dialogue_id, task_id, turn_timeout, time.time() - turn_start,
+            )
             await _safe_send(
                 websocket,
                 _error_frame(
@@ -344,9 +354,9 @@ async def _run_turn(
                 timeout=remaining,
             )
         except asyncio.TimeoutError as exc:
-            logger.warning(
-                "ws chat wait_for_response timed out after %.1fs for agent=%s",
-                remaining, agent_id,
+            logger.debug(
+                "chat_turn.poll_retry agent=%s dialogue=%s task=%s remaining=%.1fs",
+                agent_id, dialogue_id, task_id, remaining,
             )
             await _safe_send(
                 websocket,
@@ -358,9 +368,9 @@ async def _run_turn(
             daemon_client.discard_response_queue(dialogue_id)
             break
         except DaemonError as exc:
-            logger.warning(
-                "ws chat wait_for_response failed for agent=%s: %s",
-                agent_id, exc,
+            logger.error(
+                "chat_turn.error agent=%s dialogue=%s task=%s error=%s",
+                agent_id, dialogue_id, task_id, exc,
             )
             await _safe_send(
                 websocket,
@@ -374,6 +384,7 @@ async def _run_turn(
 
         is_final = _extract_final(notification)
         chunk_content = _publicize_artifact_urls(_extract_content(notification))
+        chunk_count += 1
 
         chunk = ChatChunk(content=chunk_content, final=is_final)
         await _safe_send(websocket, chunk.model_dump())
@@ -382,6 +393,11 @@ async def _run_turn(
             final_payload = notification
             break
 
+    elapsed = time.time() - turn_start
+    logger.info(
+        "chat_turn.complete agent=%s dialogue=%s task=%s elapsed=%.1fs chunks=%d final=%s",
+        agent_id, dialogue_id, task_id, elapsed, chunk_count, bool(final_payload),
+    )
     await _safe_send(websocket, ChatDone().model_dump())
 
 
@@ -390,11 +406,6 @@ def _publicize_artifact_urls(content: str) -> str:
     if not base:
         return content
     return content.replace("(/api/artifacts/", f"({base}/api/artifacts/")
-
-    logger.info(
-        "ws chat turn complete agent_id=%s task_id=%s final_payload=%s",
-        agent_id, task_id, bool(final_payload),
-    )
 
 
 async def _heartbeat_loop(websocket: WebSocket) -> None:

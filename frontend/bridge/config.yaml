@@ -43,10 +43,12 @@ artifact_public_base_url: "http://localhost:8199"
 # 相对路径基于项目根目录解析
 agent_packages_dir: "examples/agent"
 skill_hub_dir: "resource/skill_hub"
+agent_template_dir: "templates"
 
 # ── 日志与超时 ────────────────────────────────────────────────────
 log_level: "INFO"
-request_timeout_seconds: 5.0
+request_timeout_seconds: 5.0     # daemon RPC 超时
+upload_max_body_size_mb: 100     # 上传 body 上限（同步 main.py 的 max_request_body_size）
 chat_turn_timeout_seconds: 900.0  # 聊天单轮总超时（秒，可用 CHAT_TURN_TIMEOUT_SECONDS 覆盖）
 daemon_status_refresh_interval: 10.0
 

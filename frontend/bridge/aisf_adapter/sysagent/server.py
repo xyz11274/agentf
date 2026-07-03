@@ -222,6 +222,8 @@ class HaContext:
     clientSessionId: str = ""
     acmSessionId: str = ""
     teamEnvironmentID: str = ""
+    eventTimeStamp: str = ""
+    clientExField: str = ""
 
 
 class HaContextStore:
@@ -295,7 +297,14 @@ ha_store = HaContextStore()
 
 
 def make_header(ctx: HaContext, message_type: str) -> dict:
-    """构建 AccessCtrl Header（对标 HealthAgent 的 header 构造逻辑）。"""
+    """构建 AccessCtrl Header（对标 HealthAgent 的 header 构造逻辑）。
+
+    协议字段定义见 docs/contracts/2.AISF-interface.md §2.1/§2.2。
+    """
+    # EventTimeStamp：优先复用请求时间戳，兜底当前时间
+    ts = ctx.eventTimeStamp or datetime.now(timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
     return {
         "MessageType": message_type,
         "Sender": "HealthAgent",
@@ -307,9 +316,10 @@ def make_header(ctx: HaContext, message_type: str) -> dict:
         "ClientSessionId": ctx.clientSessionId,
         "AcmSessionId": ctx.acmSessionId,
         "TaskID": ctx.parentTaskID,
-        "EventTimeStamp": datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        ),
+        "EventTimeStamp": ts,
+        "TeamEnvironmentID": ctx.teamEnvironmentID,
+        "SysAgentEntity": ctx.sysAgentEntity,
+        "ClientExField": ctx.clientExField,
     }
 
 
@@ -335,9 +345,15 @@ def build_user_output(ctx: HaContext, text: str, stream_status: str = "Completed
 
 
 def build_task_status_report(ctx: HaContext, code: int, report: str) -> dict:
-    """构建 TaskStatusReport 报文（对标 BuildTaskStatusReportMsg）。"""
+    """构建 TaskStatusReport 报文（对标 BuildTaskStatusReportMsg）。
+
+    协议 §2.2 要求 Header.Receiver 固定为 "SystemAgent"，
+    与 UserOutput（Receiver=请求 Sender）不同，需独立覆盖。
+    """
+    header = make_header(ctx, "TaskStatusManagement")
+    header["Receiver"] = "SystemAgent"
     return {
-        "Header": make_header(ctx, "TaskStatusManagement"),
+        "Header": header,
         "Data": {
             "MessageType": "TaskStatusReport",
             "TaskStatusCode": code,

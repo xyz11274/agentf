@@ -1,0 +1,25 @@
+{
+  "id": "dummy-pre-skill-workflow",
+  "version": "2.0",
+  "name": "Dummy Pre Skill",
+  "nodes": [
+    {
+      "id": "dummy_pre_skill",
+      "name": "Dummy Pre Skill",
+      "type": "task",
+      "execution_mode": "python_script",
+      "command": "./nodes/dummy_pre_skill.py",
+      "working_dir": "examples/agent/outfit_assistant",
+      "json_output": true,
+      "enable_hot_reload": false,
+      "inputs": [
+        {"name": "input",      "type": "string", "required": true},
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "dialogue_id","type": "string", "required": false}
+      ],
+      "outputs": [],
+      "timeout_ms": 5000
+    }
+  ],
+  "edges": []
+}

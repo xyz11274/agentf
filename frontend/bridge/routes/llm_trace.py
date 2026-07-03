@@ -167,6 +167,7 @@ async def list_llm_traces(
             "prefix": prefix,
         })
     except DaemonError as exc:
+        logger.warning("trace_query.list_keys agent=%s user=%s error=%s", agent_id, user_id, exc)
         _raise_daemon_error(exc, agent_id, user_id)
 
     raw_keys: list[str] = list_result.get("keys", [])

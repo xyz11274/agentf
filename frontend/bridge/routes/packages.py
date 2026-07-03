@@ -31,8 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, List
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi import Path as PathParam
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Path as PathParam, status
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -40,6 +39,7 @@ from client import DaemonClient, DaemonError
 from config import settings
 from dependencies import get_daemon_client
 from models import FileNode, PackageInfo
+from templates.agent_template.merger import merge_template_with_user_upload
 
 logger = logging.getLogger("agentflow.bridge.routes.packages")
 
@@ -666,10 +666,173 @@ async def upload_package(
 
     now = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
     logger.info(
-        "Uploaded & extracted package '%s' (%d files) from archive %s",
-        safe_name,
-        file_count,
-        file.filename,
+        "package_upload.complete name=%s files=%d archive=%s",
+        safe_name, file_count, file.filename,
+    )
+    return PackageInfo(
+        name=safe_name,
+        path=str(pkg_dir.resolve()),
+        file_count=file_count,
+        last_modified=now,
+    )
+
+
+# --- template-supported agent creation --------------------------------------
+
+
+@router.post(
+    "/create-from-template",
+    status_code=status.HTTP_201_CREATED,
+    summary="Create an agent by merging a user upload with a template",
+)
+async def create_from_template(
+    file: UploadFile = File(..., description="User's agent archive (.zip / .tar.gz)."),
+    name: str | None = Form(None),
+    template: str = Form("harness_agent"),
+) -> PackageInfo:
+    """Upload a user's agent archive and merge it with the harness template.
+
+    The merge is one-directional — the template provides runtime infrastructure
+    (``harness/tools/``, ``nodes/databus*``, ``tests/``, …) while the user
+    provides identity (``agent.md``, ``package.json``) and business logic
+    (custom skills under ``harness/skills/``). See ``merger.py`` for the
+    full ownership table.
+
+    ``multipart/form-data`` fields:
+
+    * ``file`` — the user's archive (.zip / .tar.gz). This should contain
+      at minimum an ``agent.md`` with the agent's identity.
+    * ``name`` (optional) — package name. Defaults to the archive stem.
+    * ``template`` (optional) — template directory under ``agent_template_dir``.
+      Default: ``"harness_agent"``.
+
+    Returns the ``PackageInfo`` of the newly created, merged package.
+    """
+    # --- validate file extension ------------------------------------------------
+    if not file.filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Upload filename is required",
+        )
+
+    lower_name = file.filename.lower()
+    if not lower_name.endswith(_ALLOWED_UPLOAD_SUFFIXES):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Unsupported archive format: {file.filename!r}. "
+                f"Allowed: {', '.join(_ALLOWED_UPLOAD_SUFFIXES)}"
+            ),
+        )
+
+    is_tar = lower_name.endswith((".tar.gz", ".tgz"))
+
+    # --- infer / determine package name -----------------------------------------
+    stem: str
+    if name:
+        _validate_package_name(name)
+        stem = name
+    else:
+        stem = file.filename.rsplit(".", 2 if is_tar else 1)[0]
+        name = stem
+
+    safe_name = _validate_package_name(name)
+    base = settings.agent_packages_path
+    pkg_dir = base / safe_name
+    try:
+        pkg_dir.resolve().relative_to(base.resolve())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Invalid package name: {safe_name!r}",
+        ) from exc
+
+    if pkg_dir.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Package '{safe_name}' already exists",
+        )
+
+    # --- validate template ------------------------------------------------------
+    tmpl_root = settings.agent_template_path
+    tmpl_dir = tmpl_root / template
+    if not tmpl_dir.is_dir():
+        # List available templates for the error message
+        available = ", ".join(
+            d.name for d in tmpl_root.iterdir() if d.is_dir() and not d.name.startswith(".")
+        ) if tmpl_root.is_dir() else "(none)"
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Template '{template}' not found in {tmpl_root.resolve()}. "
+                f"Available: {available}"
+            ),
+        )
+
+    # --- compute relative working_dir for workflow files -----------------------
+    # Workflow files reference working_dir relative to the project root.
+    # E.g. if agent_packages_dir = "examples/agent" and name = "my-agent",
+    # the working_dir is "examples/agent/my-agent".
+    # Falls back to bare package name when pkg_dir isn't under the project root
+    # (e.g. in tests with temp directories).
+    try:
+        pkg_workdir = str(
+            pkg_dir.resolve().relative_to(
+                Path(__file__).resolve().parent.parent.parent.parent
+            )
+        )
+    except ValueError:
+        # Fall back to just the package name (test environments, …)
+        pkg_workdir = safe_name
+        logger.warning(
+            "working_dir fallback to '%s' (pkg_dir not under project root: %s)",
+            safe_name, pkg_dir.resolve(),
+        )
+
+    # --- read uploaded file content --------------------------------------------
+    try:
+        content = await file.read()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to read uploaded file: {exc}",
+        ) from exc
+
+    # --- perform merge ---------------------------------------------------------
+    try:
+        merge_template_with_user_upload(
+            template_dir=tmpl_dir.resolve(),
+            user_archive=content,
+            archive_filename=file.filename,
+            package_name=safe_name,
+            target_dir=pkg_dir,
+            package_workdir=pkg_workdir,
+        )
+    except ValueError as exc:
+        # Clean up partial directory on validation failure
+        shutil.rmtree(pkg_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    except OSError as exc:
+        shutil.rmtree(pkg_dir, ignore_errors=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Filesystem error during merge: {exc}",
+        ) from exc
+
+    # --- build PackageInfo ------------------------------------------------------
+    file_count = 0
+    try:
+        file_count = sum(1 for p in pkg_dir.rglob("*") if p.is_file())
+    except OSError:
+        pass
+
+    now = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+    logger.info(
+        "package_create_from_template.complete name=%s template=%s files=%d",
+        safe_name, template, file_count,
     )
     return PackageInfo(
         name=safe_name,
@@ -807,11 +970,8 @@ async def update_package(
 
     now = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
     logger.info(
-        "Updated package '%s' (mode=%s, %d files) from archive %s",
-        safe_name,
-        mode_lower,
-        file_count,
-        file.filename,
+        "package_update.complete name=%s mode=%s files=%d archive=%s",
+        safe_name, mode_lower, file_count, file.filename,
     )
 
     # --- hot-reload (only if already loaded in daemon) ---------------------------

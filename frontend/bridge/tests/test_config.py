@@ -91,6 +91,7 @@ def _pydantic_field_to_yaml_path(field_name: str) -> str:
         "sidecar_enabled": "sidecar.enabled",
         "sidecar_listen": "sidecar.listen",
         "sidecar_aisf_adapter_url": "sidecar.aisf_adapter_url",
+        "aisf_adapter_agent_id": "aisf_adapter.agent_id",
         "aisf_adapter_mode": "aisf_adapter.mode",
         "aisf_adapter_timeout": "aisf_adapter.timeout",
     }
@@ -173,6 +174,7 @@ def test_all_pydantic_fields_have_yaml_keys(pydantic_fields, flat_yaml):
         ("sidecar_enabled", "SIDECAR_ENABLED", True),
         ("sidecar_listen", "SIDECAR_LISTEN", "0.0.0.0:12345"),
         ("sidecar_aisf_adapter_url", "SIDECAR_AISF_ADAPTER_URL", "http://aisf_adapter:8080"),
+        ("aisf_adapter_agent_id", "AISF_ADAPTER_AGENT_ID", "custom-agent"),
         ("aisf_adapter_mode", "AISF_ADAPTER_MODE", "sync"),
         ("aisf_adapter_timeout", "AISF_ADAPTER_TIMEOUT", 600),
         ("aisf_adapter_upstream_callback_port", "AISF_ADAPTER_UPSTREAM_CALLBACK_PORT", 12345),
@@ -299,6 +301,7 @@ def test_code_defaults_match_yaml_defaults():
         "sidecar_enabled": False,
         "sidecar_listen": "0.0.0.0:23767",
         "sidecar_aisf_adapter_url": "http://127.0.0.1:18080",
+        "aisf_adapter_agent_id": "outfit-assistant",
         "aisf_adapter_mode": "async",
         "aisf_adapter_timeout": 360.0,
         "aisf_adapter_upstream_callback_port": 23767,
