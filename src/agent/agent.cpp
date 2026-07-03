@@ -584,6 +584,30 @@ bool MMAgent::initialize_components(std::shared_ptr<AgentPackage> package) {
     if(session) {
       Logger::instance().info_f("[AGENT_SESSION_FACTORY] Created session for user_id=%s, client_id=%s, session_id=%s",
                                user_id.c_str(), client_id.c_str(), session->get_session_id().c_str());
+
+      // Start message threads for factory-created sessions.
+      // Pre-created pool sessions get their threads started in MMAgent::start(),
+      // but factory sessions are created after start() has already run.
+      // Without this, are_message_threads_running() stays false forever,
+      // breaking direct routing and forcing all messages through the dispatcher.
+      if(auto dispatcher_task = session->get_dispatcher_task(); dispatcher_task) {
+        dispatcher_task->start_message_threads(
+            [this, session, dispatcher_task](const MMAgentMsgQue::Message& message) {
+              handle_task_intent_request(session, dispatcher_task, message);
+            },
+            [this, session, dispatcher_task](const MMAgentMsgQue::Message& message) {
+              handle_task_data_exchange(session, dispatcher_task, message);
+            });
+      }
+      if(auto coordinator_task = session->get_coordinator_task(); coordinator_task) {
+        coordinator_task->start_message_threads(
+            [this, session, coordinator_task](const MMAgentMsgQue::Message& message) {
+              handle_task_intent_request(session, coordinator_task, message);
+            },
+            [this, session, coordinator_task](const MMAgentMsgQue::Message& message) {
+              handle_task_data_exchange(session, coordinator_task, message);
+            });
+      }
     }
     return session;
   });
@@ -1226,14 +1250,22 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
       Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Dispatcher with pre-configured next_skills, launching %d skills",
                                 static_cast<int>(configured_next_skills.size()));
 
-      // Generate dialogue_id for multi-dialogue support
-      // dialogue_id = hash(user_text + message_id) for unique identification
+      // 优先复用 message metadata 中已有的 dialogue_id（如 Agent 回复的
+      // TASKSTATUSMANAGEMENT 等消息），避免重新生成导致无法匹配原有的 workflow_context。
+      // 仅在 metadata 无 dialogue_id 时才按 hash(user_text + message_id) 新建。
       std::string user_text = message.content;
-      std::string dialogue_id = std::to_string(
-          std::hash<std::string>{}(user_text + message.message_id));
-
-      Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Generated dialogue_id=%s for message_id=%s",
-                               dialogue_id.c_str(), message.message_id.c_str());
+      std::string dialogue_id;
+      auto existing_dialogue = message.metadata.find("dialogue_id");
+      if(existing_dialogue != message.metadata.end() && !existing_dialogue->second.empty()) {
+        dialogue_id = existing_dialogue->second;
+        Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Reusing existing dialogue_id=%s from message metadata",
+                                 dialogue_id.c_str());
+      } else {
+        dialogue_id = std::to_string(
+            std::hash<std::string>{}(user_text + message.message_id));
+        Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Generated dialogue_id=%s for message_id=%s",
+                                 dialogue_id.c_str(), message.message_id.c_str());
+      }
 
       // Store dialogue_id and user_prompt in sys namespace with dialogue_id prefix
       // This enables multi-dialogue parallel processing in the same session
