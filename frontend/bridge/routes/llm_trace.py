@@ -33,7 +33,7 @@ from dependencies import get_daemon_client
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/aisf/healthagent/api/agents", tags=["llm-traces"])
+router = APIRouter(prefix="/health/api/agents", tags=["llm-traces"])
 
 
 # ---------------------------------------------------------------------------

@@ -27,7 +27,7 @@ from dependencies import get_daemon_client
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/aisf/healthagent/api/sessions", tags=["sessions"])
+router = APIRouter(prefix="/health/api/sessions", tags=["sessions"])
 
 
 def _ok(data: Any) -> dict[str, Any]:

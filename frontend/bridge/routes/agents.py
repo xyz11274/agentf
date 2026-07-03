@@ -32,7 +32,7 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/aisf/healthagent/api/agents", tags=["agents"])
+router = APIRouter(prefix="/health/api/agents", tags=["agents"])
 
 
 class _LoadAgentBody(BaseModel):

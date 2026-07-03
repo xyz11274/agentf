@@ -42,7 +42,7 @@ from models import FileNode, PackageInfo
 
 logger = logging.getLogger("agentflow.bridge.routes.packages")
 
-router = APIRouter(prefix="/aisf/healthagent/api/packages", tags=["packages"])
+router = APIRouter(prefix="/health/api/packages", tags=["packages"])
 
 # --- constants --------------------------------------------------------------
 
