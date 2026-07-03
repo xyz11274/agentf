@@ -1,24 +1,38 @@
 #!/usr/bin/env python3
-"""Analyze an uploaded outfit/garment or full-body photo with MiniMax-M3 vision.
+"""Analyze an uploaded outfit/garment or full-body photo with Qwen-VL (DashScope).
 
-Uses MiniMax-M3's multimodal chat completion to identify and describe clothing
-items. Reads API_KEY from the environment. Zero pip dependencies.
+Unlike a generic describe-the-image call, this emits STRUCTURED JSON tuned for
+outfit recommendation, so the stylist agent gets schema-stable fields instead of
+free prose. Three modes:
 
-Three modes:
-  --mode garment  (default) — identify the clothing item(s):
+  --mode garment  (default) — identify the clothing item(s) in the picture:
       {"items":[{"category","subtype","colors","pattern","material","fit",
                  "formality","season","notes"}], "summary"}
-  --mode person   — coarse, RESPECTFUL personalization cues:
-      {"body_shape_hint","height_impression","skin_undertone","disclaimer"}
-  --mode outfit   — complete worn look analysis:
-      {"items":[...], "palette","style_tags","formality","summary"}
+  --mode person   — coarse, RESPECTFUL personalization cues from a full-body
+      photo (NOT a judgement; the model is told to be tentative):
+      {"body_shape_hint","height_impression","skin_undertone","coloring_notes",
+       "disclaimer"}
+  --mode outfit   — a COMPLETE worn look (for style critique): all visible
+      items + overall styling cues (NOT a judgement — the agent critiques):
+      {"items":[{"category","subtype","colors","fit"}], "palette","style_tags",
+       "formality","layering","proportion_notes","summary"}
 
-API: POST https://api.minimax.io/v1/chat/completions (OpenAI-compatible)
-Docs: https://platform.minimax.io/docs/guides/text-generation
+Reads DASHSCOPE_API_KEY from the environment (inject it via the Environment's
+secrets / a Vault — the sandbox drops *_API_KEY from the per-call env path).
+Zero pip dependencies; uses DashScope's OpenAI-compatible endpoint.
 
-Image size limit: files > 5 MB will be rejected (base64 encoding of very
-large images causes OOM / curl timeout on the LLM proxy).
+Usage:
+  python3 outfit_vision.py --image uploads/coat.jpg
+  python3 outfit_vision.py --image uploads/me.jpg --mode person
+  python3 outfit_vision.py --image uploads/x.png --mode garment --model qwen-vl-plus
+
+Prints one JSON object to stdout. Exit 0 on success; non-zero (message on
+stderr) on a missing key / unreadable image / API error. If the model's reply
+can't be parsed as JSON it is still returned under {"raw": "..."} so the agent
+can fall back to it rather than failing hard.
 """
+
+from __future__ import annotations
 
 import argparse
 import base64
@@ -29,15 +43,14 @@ import sys
 import urllib.error
 import urllib.request
 
-ENDPOINT = "https://api.minimax.io/v1/chat/completions"
-VISION_MODEL = "MiniMax-M3"
-MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB
+ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+DEFAULT_MODEL = "qwen-vl-max"
 
 GARMENT_PROMPT = (
     "你是服装识别助手。识别这张图片里的服饰单品，只输出一个 JSON 对象，不要任何额外文字或代码块标记。"
     "结构：{\"items\":[{\"category\":\"上装/外套/下装/连衣裙/鞋/包/配饰 等\","
     "\"subtype\":\"更具体的款式，如 风衣/针织衫/直筒牛仔裤/乐福鞋\",\"colors\":[\"主要颜色，中文\"],"
-    "\"pattern\":\"纯色/条纹/格纹/印花/拼接 等\",\"material\":\"看的材质，如 棉/牛仔/针织/皮，不确定填 unknown\","
+    "\"pattern\":\"纯色/条纹/格纹/印花/拼接 等\",\"material\":\"看起来的材质，如 棉/牛仔/针织/皮，不确定填 unknown\","
     "\"fit\":\"修身/合身/宽松/oversize 等\",\"formality\":\"休闲/商务休闲/正式/运动\","
     "\"season\":[\"适合季节：春/夏/秋/冬\"],\"notes\":\"搭配相关的简短观察\"}],"
     "\"summary\":\"一句话概述这些单品\"}。"
@@ -45,148 +58,153 @@ GARMENT_PROMPT = (
 )
 
 PERSON_PROMPT = (
-    "你是一个穿搭顾问的辅助 AI。从这张全身/半身照中提取与穿搭相关的特征，"
+    "你是穿搭个性化助手。基于这张全身/人物照，给出用于穿搭建议的【粗略】视觉线索，"
     "只输出一个 JSON 对象，不要任何额外文字或代码块标记。"
-    "注意：这是为穿搭推荐服务的，不是外貌评判，语气要 tentative（可能/看起来）。"
-    "结构：{\"body_shape_hint\":\"偏瘦/匀称/梨形/苹果形 等，不确定填 null\","
-    "\"height_impression\":\"看起来偏高/中等/娇小，不推测具体数字，不确定填 null\","
-    "\"skin_undertone\":\"暖调/冷调/中性，不确定填 null\","
-    "\"coloring_notes\":\"额外的颜色建议（如：适合暖色系）\","
-    "\"disclaimer\":\"以上是基于照片的粗估，实际以用户自述为准\"}"
+    "结构：{\"body_shape_hint\":\"对整体身形轮廓的中性、试探性描述（如 偏直筒/偏沙漏/上宽下窄/不确定）\","
+    "\"height_impression\":\"高挑/中等/娇小/不确定\",\"skin_undertone\":\"冷调/暖调/中性/不确定\","
+    "\"coloring_notes\":\"发色、肤色明度等与配色相关的观察\","
+    "\"disclaimer\":\"这些是基于单张照片的粗略推测，可能不准，仅供搭配参考。\"}。"
+    "措辞必须尊重、不评判身材；看不清就填『不确定』。不要描述或推断与穿搭无关的个人身份信息。"
 )
 
 OUTFIT_PROMPT = (
-    "你是时尚点评助手。分析这张图片里的完整穿搭，只输出一个 JSON 对象，不要任何额外文字或代码块标记。"
-    "结构：{\"items\":[{\"category\":\"上装/外套/下装/连衣裙/鞋/包/配饰\","
-    "\"subtype\":\"具体款式\",\"colors\":[\"主要颜色\"],\"fit\":\"修身/合身/宽松\"}],"
-    "\"palette\":\"整体配色描述\",\"style_tags\":[\"简约\",\"休闲\",\"商务\" 等风格标签],"
-    "\"formality\":\"休闲/商务休闲/正式\",\"layering\":\"叠穿情况描述\","
-    "\"proportion_notes\":\"比例和剪裁的观察\",\"summary\":\"一句话总结\"}"
+    "你是穿搭识别助手。识别这张【整体穿搭/上身照】里的全部服饰单品和整体造型线索，"
+    "只输出一个 JSON 对象，不要任何额外文字或代码块标记。"
+    "结构：{\"items\":[{\"category\":\"上装/外套/下装/连衣裙/鞋/包/配饰 等\",\"subtype\":\"具体款式\","
+    "\"colors\":[\"颜色，中文\"],\"fit\":\"修身/合身/宽松/oversize\"}],"
+    "\"palette\":[\"整体主要配色，中文\"],\"style_tags\":[\"风格词，如 简约/通勤/休闲/复古/街头/甜美/运动\"],"
+    "\"formality\":\"休闲/商务休闲/正式/运动\",\"layering\":\"层次与廓形的简短观察\","
+    "\"proportion_notes\":\"上下比例、廓形的中性观察（不评判身材）\","
+    "\"summary\":\"一句话概述这套造型\"}。"
+    "只描述真实可见的内容，不臆造看不清的细节；措辞中性、不评判身材，不输出对人物外貌的主观评价。"
 )
 
+# A direct opener that ignores environment proxies — inside a container a
+# host loopback proxy (127.0.0.1:7890) is unreachable, so fall back to direct.
+_DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-class VisionError(Exception):
-    """A user-actionable vision API failure."""
+
+def _urlopen(req_or_url, timeout):
+    """urlopen that retries WITHOUT the env proxy on a transport-level failure.
+    A real HTTP 4xx/5xx is never retried."""
+    try:
+        return urllib.request.urlopen(req_or_url, timeout=timeout)
+    except urllib.error.HTTPError:
+        raise
+    except urllib.error.URLError:
+        if isinstance(req_or_url, urllib.request.Request):
+            req_or_url = urllib.request.Request(
+                req_or_url.full_url,
+                data=req_or_url.data,
+                headers=dict(req_or_url.header_items()),
+                method=req_or_url.get_method(),
+            )
+        return _DIRECT_OPENER.open(req_or_url, timeout=timeout)
 
 
-def _get_api_key() -> str:
-    key = os.environ.get("API_KEY", "")
+def _image_url(src: str) -> str:
+    """Remote URL passes through; a local file is base64-encoded into a data: URL."""
+    if src.startswith(("http://", "https://", "data:")):
+        return src
+    if not os.path.exists(src):
+        raise SystemExit(f"error: image not found: {src}")
+    mime = mimetypes.guess_type(src)[0] or "image/jpeg"
+    with open(src, "rb") as fh:
+        b64 = base64.b64encode(fh.read()).decode("ascii")
+    return f"data:{mime};base64,{b64}"
+
+
+def _extract_json(text: str):
+    """The model is told to emit bare JSON, but be defensive: strip ``` fences
+    and slice to the outermost {...} before parsing. Returns the parsed object,
+    or {"raw": text} if it still isn't valid JSON."""
+    s = text.strip()
+    if s.startswith("```"):
+        s = s.split("\n", 1)[-1] if "\n" in s else s
+        if s.endswith("```"):
+            s = s[: -3]
+        if s.lstrip().startswith("json"):
+            s = s.lstrip()[4:]
+    start, end = s.find("{"), s.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        s = s[start : end + 1]
+    try:
+        return json.loads(s)
+    except (json.JSONDecodeError, ValueError):
+        return {"raw": text.strip()}
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="outfit_vision", description="structured outfit/person image analysis via Qwen-VL")
+    ap.add_argument("--image", required=True, help="image file path or http(s) URL")
+    ap.add_argument("--mode", choices=("garment", "person", "outfit"), default="garment")
+    ap.add_argument("--model", default=os.environ.get("DASHSCOPE_VL_MODEL") or DEFAULT_MODEL)
+    ap.add_argument("--max-tokens", type=int, default=1200)
+    args = ap.parse_args(argv)
+
+    key = os.environ.get("DASHSCOPE_API_KEY")
     if not key:
-        raise VisionError("API_KEY not set in environment")
-    return key
-
-
-def _encode_image(image_path: str) -> str:
-    """Read an image file and return a base64 data URI.
-    
-    Raises VisionError if the file exceeds MAX_IMAGE_BYTES (5 MB) to prevent
-    OOM / curl timeout on the upstream LLM proxy.
-    """
-    size = os.path.getsize(image_path)
-    if size > MAX_IMAGE_BYTES:
-        mb = size / (1024 * 1024)
-        limit_mb = MAX_IMAGE_BYTES / (1024 * 1024)
-        raise VisionError(
-            f"Image too large: {mb:.1f} MB (max {limit_mb:.0f} MB). "
-            f"Please resize or compress before uploading."
+        print(
+            "error: DASHSCOPE_API_KEY not set in this environment. Set it to a "
+            "DashScope key (sk-...) — e.g. via the Environment's secrets.",
+            file=sys.stderr,
         )
-    with open(image_path, "rb") as f:
-        img_bytes = f.read()
-    mime = mimetypes.guess_type(image_path)[0] or "image/jpeg"
-    return f"data:{mime};base64,{base64.b64encode(img_bytes).decode('utf-8')}"
+        return 2
 
+    try:
+        image_url = _image_url(args.image)
+    except SystemExit as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
 
-def _call_vision(image_data: str, system_prompt: str, model: str = VISION_MODEL,
-                 timeout: int = 120) -> dict:
-    """Call MiniMax-M3 with an image + system prompt."""
-    api_key = _get_api_key()
+    prompt = (
+        OUTFIT_PROMPT
+        if args.mode == "outfit"
+        else (PERSON_PROMPT if args.mode == "person" else GARMENT_PROMPT)
+    )
     payload = {
-        "model": model,
+        "model": args.model,
         "messages": [
-            {"role": "system", "content": system_prompt},
             {
                 "role": "user",
                 "content": [
-                    {"type": "image_url", "image_url": {"url": image_data}},
-                    {"type": "text", "text": "请分析这张图片"},
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": image_url}},
                 ],
-            },
+            }
         ],
-        "max_completion_tokens": 1024,
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
+        "max_tokens": args.max_tokens,
     }
     req = urllib.request.Request(
         ENDPOINT,
-        data=json.dumps(payload).encode("utf-8"),
-        headers=headers,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")[:300]
-        raise VisionError(f"HTTP {e.code}: {body}")
-    except urllib.error.URLError as e:
-        raise VisionError(f"Connection failed: {e.reason}")
-
-    # Extract content from OpenAI-compatible response
-    choice = (data.get("choices") or [{}])[0]
-    content = (choice.get("message") or {}).get("content", "")
-
-    # Try to parse as JSON; fall back to raw text
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        return {"raw": content}
-
-
-def analyze_image(image_path: str, mode: str = "garment",
-                  model: str = VISION_MODEL) -> dict:
-    """Analyze a clothing/outfit image.
-
-    Args:
-        image_path: Path to image file, or an http(s):// URL
-        mode: "garment", "person", or "outfit"
-
-    Returns:
-        Parsed JSON dict with mode-specific structure.
-    """
-    if image_path.startswith(("http://", "https://")):
-        image_data = image_path  # URL passthrough
-    else:
-        image_data = _encode_image(image_path)
-
-    prompt_map = {
-        "garment": GARMENT_PROMPT,
-        "person": PERSON_PROMPT,
-        "outfit": OUTFIT_PROMPT,
-    }
-    system_prompt = prompt_map.get(mode, GARMENT_PROMPT)
-    return _call_vision(image_data, system_prompt, model)
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="Analyze outfit/garment image with MiniMax-M3 vision",
-    )
-    parser.add_argument("--image", required=True, help="Image file path or URL")
-    parser.add_argument("--mode", choices=["garment", "person", "outfit"],
-                        default="garment", help="Analysis mode")
-    parser.add_argument("--model", default=VISION_MODEL, help="Vision model")
-    args = parser.parse_args()
+        with _urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors="replace")
+        print(f"error: HTTP {exc.code} from DashScope: {body[:500]}", file=sys.stderr)
+        return 1
+    except urllib.error.URLError as exc:
+        print(f"error: network error calling DashScope: {exc.reason}", file=sys.stderr)
+        return 1
 
     try:
-        result = analyze_image(args.image, args.mode, args.model)
-    except VisionError as e:
-        print(str(e), file=sys.stderr)
-        sys.exit(1)
+        text = data["choices"][0]["message"]["content"]
+        if isinstance(text, list):  # some VL models return content parts
+            text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
+    except (KeyError, IndexError, TypeError):
+        print(f"error: unexpected response shape: {json.dumps(data)[:400]}", file=sys.stderr)
+        return 1
 
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    result = _extract_json(text)
+    result["mode"] = args.mode
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
