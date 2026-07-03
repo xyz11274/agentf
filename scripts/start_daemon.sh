@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
-PACKAGE="examples/agent/agentflow_assistant"
+PACKAGE="examples/agent/outfit_assistant"
 PORT="17891"
 PROFILE="release"
 KEEP_LOGS=false
@@ -23,7 +23,7 @@ while [ "$#" -gt 0 ]; do
             echo "Usage: $0 [--package PATH] [--port PORT] [--profile dev|release|production] [--build] [--keep-logs]"
             exit 0 ;;
         *)
-            if [ "$PACKAGE" = "examples/agent/agentflow_assistant" ]; then PACKAGE="$1"
+            if [ "$PACKAGE" = "examples/agent/outfit_assistant" ]; then PACKAGE="$1"
             elif [ "$PORT" = "17891" ]; then PORT="$1"
             else echo "[ERROR] Unknown argument: $1" >&2; exit 2
             fi
