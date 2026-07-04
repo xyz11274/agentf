@@ -19,340 +19,127 @@
 
 #include "utils/logger.h"
 
-// JSON parsing helper (minimal implementation without external dependencies)
-// For production, this should use RapidJSON when available
+#include <rapidjson/document.h>
+#include <rapidjson/writer.h>
+#include <rapidjson/stringbuffer.h>
+
+// JSON parsing — uses RapidJSON (header-only, vendored at vendor/rapidjson/).
+// Replaced the hand-written parser to eliminate edge-case bugs in manual
+// brace matching and string scanning.
 namespace {
 
 using agentflow::DataVariant;
 
-// Simple JSON value extraction (handles basic types and nested JSON)
+// ── Helpers ──────────────────────────────────────────────────────────
+
+static std::string rj_stringify(const rapidjson::Value& val) {
+  rapidjson::StringBuffer buf;
+  rapidjson::Writer<rapidjson::StringBuffer> w(buf);
+  val.Accept(w);
+  return buf.GetString();
+}
+
+// ── Extraction ───────────────────────────────────────────────────────
+
 std::string extract_json_string(const std::string& json, const std::string& key) {
-  // Look for "key": "value" or "key": value pattern
-  std::string search = "\"" + key + "\"";
-  size_t pos = json.find(search);
-  if (pos == std::string::npos) {
-    return "";
-  }
-  pos = json.find(':', pos);
-  if (pos == std::string::npos) {
-    return "";
-  }
-  pos++;  // Skip ':'
-  // Skip whitespace
-  while (pos < json.size() && std::isspace(json[pos])) {
-    pos++;
-  }
-  if (pos >= json.size()) {
-    return "";
-  }
-  // Check if string value (quoted) — scan with escape awareness
-  if (json[pos] == '"') {
-    pos++;
-    std::string result;
-    result.reserve(256);
-    while (pos < json.size()) {
-      if (json[pos] == '\\' && pos + 1 < json.size()) {
-        char next = json[pos + 1];
-        switch (next) {
-          case '"':  result += '"';  break;
-          case '\\': result += '\\'; break;
-          case '/':  result += '/';  break;
-          case 'n':  result += '\n'; break;
-          case 'r':  result += '\r'; break;
-          case 't':  result += '\t'; break;
-          case 'b':  result += '\b'; break;
-          case 'f':  result += '\f'; break;
-          case 'u': {
-            if (pos + 5 < json.size()) {
-              std::string hex = json.substr(pos + 2, 4);
-              unsigned int cp = 0;
-              for (char c : hex) {
-                cp <<= 4;
-                if (c >= '0' && c <= '9') cp |= (c - '0');
-                else if (c >= 'a' && c <= 'f') cp |= (c - 'a' + 10);
-                else if (c >= 'A' && c <= 'F') cp |= (c - 'A' + 10);
-              }
-              if (cp < 0x80) {
-                result += static_cast<char>(cp);
-              } else if (cp < 0x800) {
-                result += static_cast<char>(0xC0 | (cp >> 6));
-                result += static_cast<char>(0x80 | (cp & 0x3F));
-              } else {
-                result += static_cast<char>(0xE0 | (cp >> 12));
-                result += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-                result += static_cast<char>(0x80 | (cp & 0x3F));
-              }
-              pos += 4;
-            }
-            break;
-          }
-          default:
-            result += '\\';
-            result += next;
-            break;
-        }
-        pos += 2;
-      } else if (json[pos] == '"') {
-        return result;
-      } else {
-        result += json[pos];
-        pos++;
-      }
-    }
-    return result;
-  }
-  // Check if JSON array - find matching bracket with nesting
-  if (json[pos] == '[') {
-    int depth = 0;
-    size_t start = pos;
-    for (; pos < json.size(); pos++) {
-      if (json[pos] == '[') depth++;
-      else if (json[pos] == ']') {
-        depth--;
-        if (depth == 0) {
-          return json.substr(start, pos - start + 1);
-        }
-      }
-    }
-    return "";  // Unmatched bracket
-  }
-  // Check if JSON object - find matching brace with nesting
-  if (json[pos] == '{') {
-    int depth = 0;
-    size_t start = pos;
-    for (; pos < json.size(); pos++) {
-      if (json[pos] == '{') depth++;
-      else if (json[pos] == '}') {
-        depth--;
-        if (depth == 0) {
-          return json.substr(start, pos - start + 1);
-        }
-      }
-    }
-    return "";  // Unmatched brace
-  }
-  // Check if number or other simple value (no nesting)
-  size_t end = pos;
-  while (end < json.size() && json[end] != ',' && json[end] != '}' && json[end] != ']') {
-    end++;
-  }
-  std::string value = json.substr(pos, end - pos);
-  // Trim trailing whitespace
-  while (!value.empty() && std::isspace(value.back())) {
-    value.pop_back();
-  }
-  return value;
+  rapidjson::Document d;
+  d.Parse(json.c_str());
+  if (d.HasParseError() || !d.HasMember(key.c_str())) return "";
+  const auto& v = d[key.c_str()];
+  if (v.IsString()) return v.GetString();
+  return rj_stringify(v);
 }
 
-// Extract nested JSON object
 std::string extract_json_object(const std::string& json, const std::string& key) {
-  std::string search = "\"" + key + "\"";
-  size_t pos = json.find(search);
-  if (pos == std::string::npos) {
-    return "";
-  }
-  pos = json.find(':', pos);
-  if (pos == std::string::npos) {
-    return "";
-  }
-  pos++;  // Skip ':'
-  // Skip whitespace
-  while (pos < json.size() && std::isspace(json[pos])) {
-    pos++;
-  }
-  if (pos >= json.size() || json[pos] != '{') {
-    return "";
-  }
-  // Find matching brace
-  int depth = 0;
-  size_t start = pos;
-  for (; pos < json.size(); pos++) {
-    if (json[pos] == '{') depth++;
-    else if (json[pos] == '}') {
-      depth--;
-      if (depth == 0) {
-        return json.substr(start, pos - start + 1);
-      }
-    }
-  }
-  return "";
+  rapidjson::Document d;
+  d.Parse(json.c_str());
+  if (d.HasParseError() || !d.HasMember(key.c_str()) || !d[key.c_str()].IsObject()) return "";
+  return rj_stringify(d[key.c_str()]);
 }
 
-// Extract nested JSON array
 std::string extract_json_array(const std::string& json, const std::string& key) {
-  std::string search = "\"" + key + "\"";
-  size_t pos = json.find(search);
-  if (pos == std::string::npos) {
-    return "";
-  }
-  pos = json.find(':', pos);
-  if (pos == std::string::npos) {
-    return "";
-  }
-  pos++;  // Skip ':'
-  // Skip whitespace
-  while (pos < json.size() && std::isspace(json[pos])) {
-    pos++;
-  }
-  if (pos >= json.size() || json[pos] != '[') {
-    return "";
-  }
-  // Find matching bracket
-  int depth = 0;
-  size_t start = pos;
-  for (; pos < json.size(); pos++) {
-    if (json[pos] == '[') depth++;
-    else if (json[pos] == ']') {
-      depth--;
-      if (depth == 0) {
-        return json.substr(start, pos - start + 1);
-      }
-    }
-  }
-  return "";
+  rapidjson::Document d;
+  d.Parse(json.c_str());
+  if (d.HasParseError() || !d.HasMember(key.c_str()) || !d[key.c_str()].IsArray()) return "";
+  return rj_stringify(d[key.c_str()]);
 }
 
-// Extract id from JSON-RPC request
 int64_t extract_json_id(const std::string& json) {
-  std::string id_str = extract_json_string(json, "id");
-  if (id_str.empty()) {
-    return -1;
-  }
-  try {
-    return std::stoll(id_str);
-  } catch (...) {
-    return -1;
-  }
+  rapidjson::Document d;
+  d.Parse(json.c_str());
+  if (d.HasParseError() || !d.HasMember("id")) return -1;
+  const auto& v = d["id"];
+  if (v.IsInt64())  return v.GetInt64();
+  if (v.IsInt())    return v.GetInt();
+  if (v.IsUint64()) return static_cast<int64_t>(v.GetUint64());
+  return -1;
 }
 
-// Extract method from JSON-RPC request
 std::string extract_json_method(const std::string& json) {
-  return extract_json_string(json, "method");
+  rapidjson::Document d;
+  d.Parse(json.c_str());
+  if (d.HasParseError() || !d.HasMember("method") || !d["method"].IsString()) return "";
+  return d["method"].GetString();
 }
 
-// Extract params from JSON-RPC request
 std::string extract_json_params(const std::string& json) {
-  // Try object first
-  std::string params = extract_json_object(json, "params");
-  if (!params.empty()) {
-    return params;
-  }
-  // Try array
-  return extract_json_array(json, "params");
+  return extract_json_object(json, "params");
 }
 
-// Escape string for JSON
+// ── DataVariant conversion ───────────────────────────────────────────
+
 std::string json_escape(const std::string& s) {
-  std::string result;
-  result.reserve(s.size() + 16);
+  std::string r;
+  r.reserve(s.size() + 16);
   for (char c : s) {
     switch (c) {
-      case '"': result += "\\\""; break;
-      case '\\': result += "\\\\"; break;
-      case '\b': result += "\\b"; break;
-      case '\f': result += "\\f"; break;
-      case '\n': result += "\\n"; break;
-      case '\r': result += "\\r"; break;
-      case '\t': result += "\\t"; break;
+      case '"':  r += "\\\""; break;
+      case '\\': r += "\\\\"; break;
+      case '\b': r += "\\b";  break;
+      case '\f': r += "\\f";  break;
+      case '\n': r += "\\n";  break;
+      case '\r': r += "\\r";  break;
+      case '\t': r += "\\t";  break;
       default:
         if (static_cast<unsigned char>(c) < 0x20) {
           char buf[8];
           snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
-          result += buf;
-        } else {
-          result += c;
-        }
+          r += buf;
+        } else { r += c; }
     }
   }
-  return result;
+  return r;
 }
 
-// Convert DataVariant to JSON string
-std::string variant_to_json(const DataVariant& var) {
-  if (std::holds_alternative<std::string>(var)) {
-    const std::string& str = std::get<std::string>(var);
-    // Check if string is already a JSON object or array
-    size_t first_char_pos = str.find_first_not_of(" \t\n\r");
-    if (first_char_pos != std::string::npos &&
-        (str[first_char_pos] == '{' || str[first_char_pos] == '[')) {
-      // Already JSON format, return directly without escaping
-      return str;
-    }
-    // Normal string, escape and add quotes
-    return "\"" + json_escape(str) + "\"";
-  } else if (std::holds_alternative<int64_t>(var)) {
-    return std::to_string(std::get<int64_t>(var));
-  } else if (std::holds_alternative<double>(var)) {
-    return std::to_string(std::get<double>(var));
-  } else if (std::holds_alternative<bool>(var)) {
-    return std::get<bool>(var) ? "true" : "false";
+std::string variant_to_json(const DataVariant& v) {
+  if (auto* s = std::get_if<std::string>(&v)) {
+    size_t p = s->find_first_not_of(" \t\n\r");
+    if (p != std::string::npos && ((*s)[p] == '{' || (*s)[p] == '[')) return *s;
+    return "\"" + json_escape(*s) + "\"";
   }
+  if (auto* i = std::get_if<int64_t>(&v)) return std::to_string(*i);
+  if (auto* d = std::get_if<double>(&v))  return std::to_string(*d);
+  if (auto* b = std::get_if<bool>(&v))    return *b ? "true" : "false";
   return "null";
 }
 
-// Parse JSON value to DataVariant
-DataVariant json_to_variant(const std::string& json) {
-  // Trim whitespace
-  std::string trimmed = json;
-  size_t start = trimmed.find_first_not_of(" \t\n\r");
-  size_t end = trimmed.find_last_not_of(" \t\n\r");
-  if (start == std::string::npos || end == std::string::npos) {
-    return DataVariant{};
-  }
-  trimmed = trimmed.substr(start, end - start + 1);
-
-  if (trimmed.empty() || trimmed == "null") {
-    return DataVariant{};
-  }
-  if (trimmed == "true") {
-    return DataVariant{true};
-  }
-  if (trimmed == "false") {
-    return DataVariant{false};
-  }
-  if (trimmed.front() == '"') {
-    // String value
-    if (trimmed.size() >= 2 && trimmed.back() == '"') {
-      std::string value = trimmed.substr(1, trimmed.size() - 2);
-      // Unescape basic sequences
-      std::string unescaped;
-      for (size_t i = 0; i < value.size(); i++) {
-        if (value[i] == '\\' && i + 1 < value.size()) {
-          switch (value[i + 1]) {
-            case '"': unescaped += '"'; i++; break;
-            case '\\': unescaped += '\\'; i++; break;
-            case 'n': unescaped += '\n'; i++; break;
-            case 'r': unescaped += '\r'; i++; break;
-            case 't': unescaped += '\t'; i++; break;
-            default: unescaped += value[i]; break;
-          }
-        } else {
-          unescaped += value[i];
-        }
-      }
-      return DataVariant{unescaped};
-    }
-    return DataVariant{};
-  }
-  // Try number
-  try {
-    if (trimmed.find('.') != std::string::npos) {
-      return DataVariant{std::stod(trimmed)};
-    }
-    return DataVariant{static_cast<int64_t>(std::stoll(trimmed))};
-  } catch (...) {
-    return DataVariant{};
-  }
+DataVariant json_to_variant(const std::string& s) {
+  rapidjson::Document d;
+  d.Parse(s.c_str());
+  if (d.HasParseError() || d.IsNull()) return DataVariant{};
+  if (d.IsString()) return DataVariant{d.GetString()};
+  if (d.IsTrue())   return DataVariant{true};
+  if (d.IsFalse())  return DataVariant{false};
+  if (d.IsInt64())  return DataVariant{d.GetInt64()};
+  if (d.IsDouble()) return DataVariant{d.GetDouble()};
+  if (d.IsInt())    return DataVariant{static_cast<int64_t>(d.GetInt())};
+  if (d.IsUint64()) return DataVariant{static_cast<int64_t>(d.GetUint64())};
+  return DataVariant{};
 }
 
-// Extract value from params JSON
 DataVariant extract_json_value(const std::string& params) {
-  std::string value_str = extract_json_string(params, "value");
-  if (value_str.empty()) {
-    // Try to get the raw value (could be number/bool)
-    return json_to_variant(extract_json_string(params, "value"));
-  }
-  return DataVariant{value_str};
+  std::string s = extract_json_string(params, "value");
+  return s.empty() ? DataVariant{} : DataVariant{s};
 }
 
 }  // anonymous namespace
@@ -709,6 +496,13 @@ std::string UDSServer::handle_put(const std::string& method, const std::string& 
   std::string namespace_str = extract_json_string(params, "namespace");
   std::string key = extract_json_string(params, "key");
   std::string value_str = extract_json_string(params, "value");
+
+  // DEBUG: log extracted params to diagnose -32602 / extraction issues
+  Logger::instance().info_f(
+      "[UDS_PUT_DEBUG] session_id=%s namespace=%s key=%s value_len=%zu "
+      "sid_empty=%d ns_empty=%d key_empty=%d",
+      session_id.c_str(), namespace_str.c_str(), key.c_str(), value_str.size(),
+      session_id.empty(), namespace_str.empty(), key.empty());
 
   if (session_id.empty() || namespace_str.empty() || key.empty()) {
     return build_error_response(-32602, "Invalid params: missing session_id, namespace, or key", id);

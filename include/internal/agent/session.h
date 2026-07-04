@@ -83,7 +83,7 @@ class MMAgentSession {
     std::string session_id;
     std::string description;
     int         max_queue_size = 1024;
-    int64_t     timeout_ms = 30000;
+    int64_t     timeout_ms = 300000;
     int         max_retries = 3;
     std::string dispatcher_workflow;
     std::string coordinator_workflow;

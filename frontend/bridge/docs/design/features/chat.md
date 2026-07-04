@@ -42,13 +42,13 @@ Bridge 提供两种聊天模式：
 
 两种模式的交互流程存在以下区别：
 
-| 维度 | WebSocket 模式 | REST 模式 |
-|------|---------------|-----------|
-| 连接持久性 | 长连接（多轮复用） | 无状态（每轮独立请求） |
-| 流式输出 | 支持（逐帧推送 ChatChunk） | 不支持（等完整返回） |
-| 心跳保活 | 支持（ping/pong） | 不需要 |
-| 中断本轮 | 支持（stop 信号） | 不支持 |
-| 适用客户端 | Vue 前端交互 | 程序化调用、测试 |
+| 维度 | WebSocket 模式 | REST 模式（同步） | REST 模式（SSE 流式） |
+|------|---------------|------------------|---------------------|
+| 连接持久性 | 长连接（多轮复用） | 无状态（每轮独立请求） | 无状态（每轮独立请求） |
+| 流式输出 | 支持（逐帧推送 ChatChunk） | 不支持（等完整返回） | 支持（SSE event stream） |
+| 心跳保活 | 支持（ping/pong） | 不需要 | 不需要 |
+| 中断本轮 | 支持（stop 信号） | 不支持 | 不支持 |
+| 适用客户端 | Vue 前端交互 | 程序化调用、测试 | 支持流式消费的程序化调用 |
 
 ### WebSocket 模式 — 协议流程
 
@@ -79,6 +79,7 @@ Bridge 提供两种聊天模式：
 
 ### REST 模式 — 协议流程
 
+**同步模式（默认）**：
 1. 客户端发送 `POST /api/chat/{agent_id}` 请求（JSON body，含 `user_id`、`client_id`、`content`）
 2. Bridge 调用 daemon 的 `agent.execute` RPC，传入 `user_id`、`client_id`、`content`
 3. Bridge 进入轮询模式：循环调用 `wait_for_response` 从 notification 队列中消费所有 `agent.response` 通知
@@ -92,6 +93,42 @@ Bridge 提供两种聊天模式：
 - `dialogue_id` 可选：省略时 Bridge 自动生成（同上格式）
 - 不支持中断——请求发起后必须等 daemon 完成或超时
 - 错误通过 HTTP 状态码表达（400/404/502/504/500）
+
+**SSE 流式模式（`?stream=true`）**：
+1. 客户端发送 `POST /api/chat/{agent_id}?stream=true` 请求
+2. Bridge 调用 `agent.execute` RPC 后，边轮询边以 `text/event-stream` 格式逐个推送 SSE 事件
+
+   SSE 事件格式：
+
+   ```
+   event: message
+   data: {"content": "...", "final": false}
+
+   event: message
+   data: {"content": "...", "final": true}
+
+   event: done
+   data: {"final": true}
+   ```
+
+3. 客户端通过 `ReadableStream` 或 `EventSource` 逐 event 消费
+4. 响应头包含 `Cache-Control: no-cache`、`X-Accel-Buffering: no`
+5. 服务端推送完 `done` 事件后关闭连接
+6. 错误事件类型（会被 `done` 事件跟随）：
+
+   ```
+   event: error
+   data: {"message": "...", "code": -32000}
+
+   event: done
+   data: {"final": true}
+   ```
+
+**关键设计点**：
+
+- 与同步模式共享同一个 `_chat_turn_events` 异步生成器
+- 流式和非流式共享相同的 timeout、错误处理和队列清理逻辑
+- SSE 不对 daemon 做任何修改，所有流式逻辑在 Bridge 侧完成
 
 ### Daemon 通信抽象
 
@@ -160,7 +197,7 @@ Agent 的最终响应仍以文本消息为统一载体。图片、HTML 等生成
 
 | 场景 | 状态 | 说明 |
 |------|------|------|
-| REST 模式流式返回 | ❌ 不支持 | REST 模式始终等待完整响应后一次性返回 |
+| REST 模式流式返回 | ✅ 支持 | REST 模式支持 SSE 流式（`?stream=true`），默认仍为同步模式 |
 | 多 Agent 合并聊天 | ❌ 不支持 | 每个端点绑定单一 agent_id |
 | 消息编辑/撤回 | ❌ 不支持 | 无此能力 |
 | 前端暴露 session_id | ❌ 不支持 | session_id 是 daemon 内部概念，外部不感知 |

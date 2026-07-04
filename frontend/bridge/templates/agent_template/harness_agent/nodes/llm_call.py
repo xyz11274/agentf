@@ -284,7 +284,7 @@ class _TraceRecorder:
         for attempt in range(max_retries + 1):
             try:
                 result = subprocess.run(
-                    ["curl", "-sS", "-X", "POST", url,
+                    ["curl", "-k","-sS", "-X", "POST", url,
                      "-H", "Content-Type: application/json",
                      "-H", f"Authorization: Bearer {api_key}",
                      "-d", json.dumps(request_body, ensure_ascii=False),
@@ -348,6 +348,7 @@ class _TraceRecorder:
                 }
                 error_meta.update(_task_context())
                 self._put(f"traces/{call_id}/meta", error_meta)
+                self._verify_meta_written(call_id)
                 self._append_to_index(call_id)
             return {"error": f"LLM call failed: {last_error}",
                     "_llm_error": True}
@@ -375,6 +376,7 @@ class _TraceRecorder:
             }
             meta.update(_task_context())
             self._put(f"traces/{call_id}/meta", meta)
+            self._verify_meta_written(call_id)
             self._append_to_index(call_id)
 
         # Unified success log — tool_calls name list + token usage + finish
@@ -419,6 +421,25 @@ class _TraceRecorder:
         except Exception as exc:
             _log_warn(f"update traces/index failed: {exc}")
 
+    def _verify_meta_written(self, call_id: str) -> None:
+        """Read-back check: confirm ``traces/{call_id}/meta`` was written.
+
+        Catches the case where a ``_put`` creates the DataBus key but the
+        value ends up empty ({}), which causes blank entries in the trace UI.
+        Logs a CRITICAL warning so the root cause can be traced in runtime logs.
+        """
+        if not self._client:
+            return
+        try:
+            stored = self._client.llm().get(f"traces/{call_id}/meta")
+            if stored is None or stored == {}:
+                _log_warn(
+                    f"CRITICAL: meta for call_id={call_id} appears empty after write! "
+                    f"stored={stored!r} node_id={os.environ.get('AF_NODE_ID', '?')}"
+                )
+        except Exception as exc:
+            _log_warn(f"verify meta for call_id={call_id} failed: {exc}")
+
     @staticmethod
     def _summarize_messages(messages: list) -> str:
         parts = []
@@ -447,6 +468,87 @@ class _TraceRecorder:
             names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
             content = f"tool_calls: {names}"
         return f"finish={choice.get('finish_reason','?')} | {content}"
+
+
+# ── Token estimation & message compaction ──
+
+def estimate_message_tokens(messages: list) -> int:
+    """Estimate total tokens in a message list (conservative overestimate).
+
+    Each message carries ~8 tokens of structural overhead (role key, newlines).
+    Content tokens estimated at 2 chars/token for mixed Chinese/English.
+    Tool-call arguments add extra token cost.
+
+    The estimate is intentionally conservative (over-counts) to trigger
+    compaction slightly earlier than strictly necessary — safer for preventing
+    finish=length truncation.
+    """
+    total = 0
+    for msg in messages:
+        total += 8  # structural overhead
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            # ~2 chars per token for mixed Chinese/English (conservative)
+            total += len(content) // 2
+        # Tool calls content
+        for tc in msg.get("tool_calls") or []:
+            fn = tc.get("function", {})
+            total += len(fn.get("name", "")) // 2
+            total += len(str(fn.get("arguments", ""))) // 3
+    return total
+
+
+def compact_messages(messages: list, max_tokens: int,
+                     compaction_threshold: float = 0.8) -> list:
+    """Compact message list by dropping oldest non-system messages.
+
+    Keeps all system messages, then keeps as many of the newest non-system
+    messages as fit within ``max_tokens * compaction_threshold``.
+
+    Returns the compacted list (original message objects, not copies).
+    If no compaction is needed, returns the original list unchanged.
+    """
+    budget = int(max_tokens * compaction_threshold)
+    current = estimate_message_tokens(messages)
+    if current <= budget:
+        return messages
+
+    # Separate system vs non-system
+    system_msgs = [m for m in messages if m.get("role") == "system"]
+    other_msgs = [m for m in messages if m.get("role") != "system"]
+
+    # Build result: start with system, add as many newest non-system messages
+    # as fit within budget. Skip (don't break) messages that exceed budget
+    # so smaller older messages can still be kept.
+    kept = list(system_msgs)
+    for msg in reversed(other_msgs):
+        candidate = kept + [msg]
+        if estimate_message_tokens(candidate) <= budget:
+            kept = candidate
+
+    # kept is [system, newest_msg, ...] — reverse non-system part to
+    # restore chronological order: [system, oldest_kept, ..., newest]
+    kept_system = [m for m in kept if m.get("role") == "system"]
+    kept_other  = [m for m in kept if m.get("role") != "system"]
+    kept_other.reverse()
+    return kept_system + kept_other
+
+
+def get_model_max_tokens() -> int:
+    """Read AF_MODEL_MAX_TOKENS env var, defaulting to a safe 128k."""
+    try:
+        return int(os.environ.get("AF_MODEL_MAX_TOKENS", "128000"))
+    except (ValueError, TypeError):
+        return 128000
+
+
+def get_compaction_threshold() -> float:
+    """Read AF_COMPACTION_THRESHOLD env var (0.0–1.0), default 0.8."""
+    try:
+        val = float(os.environ.get("AF_COMPACTION_THRESHOLD", "0.8"))
+        return max(0.1, min(1.0, val))
+    except (ValueError, TypeError):
+        return 0.8
 
 
 # ── Public API ──

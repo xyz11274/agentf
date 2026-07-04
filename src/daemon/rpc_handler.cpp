@@ -20,67 +20,37 @@
 #include "agent/data_variant_utils.h"
 #include "utils/logger.h"
 
+#include <rapidjson/document.h>
+#include <rapidjson/writer.h>
+#include <rapidjson/stringbuffer.h>
+
 namespace agentflow {
 namespace daemon {
 
 namespace {
 
+// RapidJSON-based JSON helpers (replaced hand-written parser)
+static std::string rj_stringify(const rapidjson::Value& v) {
+  rapidjson::StringBuffer buf;
+  rapidjson::Writer<rapidjson::StringBuffer> w(buf);
+  v.Accept(w);
+  return buf.GetString();
+}
+
 std::string extract_json_string_local(const std::string& json, const std::string& key) {
-  std::string search = "\"" + key + "\"";
-  size_t pos = json.find(search);
-  if (pos == std::string::npos) return "";
-  pos = json.find(':', pos);
-  if (pos == std::string::npos) return "";
-  pos++;
-  while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) pos++;
-  if (pos >= json.size()) return "";
-  if (json[pos] == '"') {
-    pos++;
-    size_t end = json.find('"', pos);
-    if (end == std::string::npos) return "";
-    return json.substr(pos, end - pos);
-  }
-  size_t end = pos;
-  while (end < json.size() && json[end] != ',' && json[end] != '}' && json[end] != ']') end++;
-  std::string val = json.substr(pos, end - pos);
-  while (!val.empty() && std::isspace(static_cast<unsigned char>(val.back()))) val.pop_back();
-  return val;
+  rapidjson::Document d;
+  d.Parse(json.c_str());
+  if (d.HasParseError() || !d.HasMember(key.c_str())) return "";
+  const auto& v = d[key.c_str()];
+  if (v.IsString()) return v.GetString();
+  return rj_stringify(v);
 }
 
 std::string extract_json_object_local(const std::string& json, const std::string& key) {
-  const std::string search = "\"" + key + "\"";
-  auto pos = json.find(search);
-  if(pos == std::string::npos) return "";
-  pos = json.find(':', pos + search.size());
-  if(pos == std::string::npos) return "";
-  pos = json.find_first_not_of(" \t\n\r", pos + 1);
-  if(pos == std::string::npos || json[pos] != '{') return "";
-
-  const auto begin = pos;
-  int depth = 0;
-  bool in_string = false;
-  bool escaped = false;
-  for(; pos < json.size(); ++pos) {
-    const char ch = json[pos];
-    if(in_string) {
-      if(escaped) {
-        escaped = false;
-      } else if(ch == '\\') {
-        escaped = true;
-      } else if(ch == '"') {
-        in_string = false;
-      }
-      continue;
-    }
-    if(ch == '"') {
-      in_string = true;
-    } else if(ch == '{') {
-      ++depth;
-    } else if(ch == '}' && --depth == 0) {
-      return json.substr(begin, pos - begin + 1);
-    }
-  }
-  return "";
+  rapidjson::Document d;
+  d.Parse(json.c_str());
+  if (d.HasParseError() || !d.HasMember(key.c_str()) || !d[key.c_str()].IsObject()) return "";
+  return rj_stringify(d[key.c_str()]);
 }
 
 // DataVariant → JSON string (mirrors uds_server.cpp variant_to_json)

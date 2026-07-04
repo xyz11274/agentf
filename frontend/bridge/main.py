@@ -21,9 +21,10 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import Response, StreamingResponse
+from starlette.types import Message
 
 from client import DaemonClient
 from config import settings
@@ -38,6 +39,7 @@ from routes.chat_rest import router as chat_rest_router
 from routes.coremind_internal import router as coremind_internal_router
 from routes.packages import router as packages_router
 from routes.skill_hub import router as skill_hub_router
+from routes.conversations_api import router as conversations_router
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -48,6 +50,18 @@ logging.basicConfig(
     level=settings.log_level,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+
+# Suppress noisy websocket keepalive DEBUG logs (module-level, runs early).
+# Kept here as a baseline; lifespan hook re-suppresses after uvicorn overrides.
+for _name in (
+    "uvicorn.protocols.websockets",
+    "uvicorn.protocols",
+    "wsproto",
+    "websockets",
+    "websockets.client",
+    "websockets.server",
+):
+    logging.getLogger(_name).setLevel(logging.INFO)
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +82,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     poller that refreshes it every ``settings.daemon_status_refresh_interval``
     seconds, so the ``/api/daemon/*`` endpoints never block on the daemon.
     """
+    # Re-suppress noisy websocket keepalive DEBUG logs after uvicorn has
+    # overridden log levels (uvicorn --log-level debug overrides module-level
+    # config, so we must re-apply here in the lifespan hook).
+    for _name in (
+        "uvicorn.protocols.websockets",
+        "uvicorn.protocols",
+        "wsproto",
+        "websockets",
+        "websockets.client",
+        "websockets.server",
+    ):
+        logging.getLogger(_name).setLevel(logging.INFO)
     logger.info(
         "AgentFlow Bridge starting | bridge=%s:%s daemon=%s:%s packages=%s",
         settings.bridge_host,
@@ -188,6 +214,85 @@ bridge_app.add_middleware(
 
 # --- 请求计时中间件 -----------------------------------------------------------
 # 记录所有 HTTP 请求耗时和响应状态，排除 WebSocket 和健康检查的噪音
+_SENSITIVE_HEADERS = {"authorization", "api-key", "x-api-key", "cookie"}
+_MAX_BODY_LOG = 2048  # 最大请求体打印长度
+_MAX_RESP_LOG = 4096  # 最大响应体打印长度
+
+def _mask_headers(headers: dict) -> dict:
+    """脱敏敏感 header 值，仅保留前 8 字符。"""
+    masked = {}
+    for k, v in headers.items():
+        if k.lower() in _SENSITIVE_HEADERS and v:
+            masked[k] = v[:8] + "..."
+        else:
+            masked[k] = v
+    return masked
+
+class _RequestDebugMiddleware(BaseHTTPMiddleware):
+    """DEBUG 级别打印请求/响应详细内容（body + headers）。
+
+    仅在 root logger 的 level ≤ DEBUG 时生效，避免生产环境性能开销。
+    响应体通过包装 StreamingResponse 捕获，不影响下游流式传输。
+    """
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if not logger.isEnabledFor(logging.DEBUG):
+            return await call_next(request)
+
+        if request.url.path.startswith("/ws/"):
+            return await call_next(request)
+
+        # ── 读取请求体（需 buffer 后重新注入） ──
+        body_bytes = await request.body()
+        body_preview = body_bytes[:_MAX_BODY_LOG].decode("utf-8", errors="replace")
+        if len(body_bytes) > _MAX_BODY_LOG:
+            body_preview += f" … (truncated, {len(body_bytes)} bytes total)"
+
+        logger.debug(
+            ">>> %s %s headers=%s body=%s",
+            request.method, request.url.path,
+            _mask_headers(dict(request.headers)),
+            body_preview,
+        )
+
+        # ── 包装响应以捕获 body ──
+        response = await call_next(request)
+
+        if isinstance(response, StreamingResponse):
+            # 对于流式响应，收集 body chunks 后重组
+            chunks: list[bytes] = []
+            async for chunk in response.body_iterator:
+                chunks.append(chunk)
+            resp_body = b"".join(chunks)
+            resp_preview = resp_body[:_MAX_RESP_LOG].decode("utf-8", errors="replace")
+            if len(resp_body) > _MAX_RESP_LOG:
+                resp_preview += f" … (truncated, {len(resp_body)} bytes total)"
+            logger.debug(
+                "<<< %s %s status=%d body=%s",
+                request.method, request.url.path, response.status_code, resp_preview,
+            )
+            # 重新构造 StreamingResponse 让下游消费
+            return StreamingResponse(
+                iter([resp_body]),
+                status_code=response.status_code,
+                headers=dict(response.headers),
+                media_type=response.media_type,
+            )
+
+        # 非流式响应直接读取
+        resp_body = b""
+        if hasattr(response, "body"):
+            resp_body = response.body or b""
+        resp_preview = resp_body[:_MAX_RESP_LOG].decode("utf-8", errors="replace")
+        if len(resp_body) > _MAX_RESP_LOG:
+            resp_preview += f" … (truncated, {len(resp_body)} bytes total)"
+        logger.debug(
+            "<<< %s %s status=%d body=%s",
+            request.method, request.url.path, response.status_code, resp_preview,
+        )
+        return response
+
+# --- 请求计时中间件 -----------------------------------------------------------
 class _RequestTimingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         if request.url.path in ("/api/health",) or request.url.path.startswith("/ws/"):
@@ -202,11 +307,11 @@ class _RequestTimingMiddleware(BaseHTTPMiddleware):
             )
         return response
 
+# 注册顺序：debug 在外层（先经过），timing 在内层
+bridge_app.add_middleware(_RequestDebugMiddleware)
 bridge_app.add_middleware(_RequestTimingMiddleware)
 bridge_app.include_router(artifacts_router)
 bridge_app.include_router(coremind_internal_router)
-# AISF SysAgent 调度入口：POST /v1/tasks → 对外 /health/v1/tasks
-bridge_app.include_router(aisf_tasks_router)
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +358,12 @@ bridge_app.include_router(daemon_routes.router)
 bridge_app.include_router(llm_trace_routes.router)
 
 
+# Conversation history — persists completed turn responses keyed by
+# ``(user_id, client_id)`` so the frontend can list past conversations
+# independently of the daemon's ephemeral dialogue lifecycle.
+bridge_app.include_router(conversations_router)
+
+
 # Health check (accessible at /health/api/health)
 @bridge_app.get("/api/health", tags=["meta"], include_in_schema=False)
 async def bridge_health() -> dict[str, str]:
@@ -274,6 +385,9 @@ app = FastAPI(title="AgentFlow Bridge (external)", lifespan=lifespan)
 
 ##最新修改
 app.mount("/health", bridge_app)
+
+# AISF SysAgent 调度入口（独立路由，不经过 /health 挂载前缀）
+app.include_router(aisf_tasks_router)
 
 
 # ---------------------------------------------------------------------------

@@ -43,6 +43,7 @@ import asyncio
 import json
 import logging
 import os
+import ssl
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -647,20 +648,16 @@ async def post_result_to_upstream(ctx: HaContext, text: str) -> None:
     """将结果通过 UserOutput + TaskStatusReport 回传给上游 SysAgent。
 
     对标 HealthAgent:
-      - BuildTaskStatusReportMsg (taskStatusCode=0 表示完成)
       - BuildUserOutputMsg (带最终输出文本)
-      - HttpPostToSysAgent (HTTP/2 POST 回上游)
+      - BuildTaskStatusReportMsg (taskStatusCode=200 表示完成)
+
+    顺序：先发 UserOutput（结果正文），再发 TaskStatusReport（任务完成信号）。
     """
     if not ctx.sysAgentEntity:
         logger.warning("no sysAgentEntity, cannot post result back")
         return
 
-    # 先发 TaskStatusReport (status=0 = 完成)
-    status_msg = build_task_status_report(ctx, 0, "TaskCompleted")
-    await http_post_to_upstream(ctx.sysAgentEntity, status_msg)
-    logger.info("TaskStatusReport sent: taskID=%s code=0", ctx.parentTaskID)
-
-    # 再发 UserOutput (最终结果)
+    # 先发 UserOutput（最终结果）
     output_msg = build_user_output(ctx, text)
     await http_post_to_upstream(ctx.sysAgentEntity, output_msg)
     logger.info(
@@ -668,25 +665,34 @@ async def post_result_to_upstream(ctx: HaContext, text: str) -> None:
         ctx.parentTaskID, len(text),
     )
 
+    # 再发 TaskStatusReport (code=200 = 完成)
+    status_msg = build_task_status_report(ctx, 200, "TaskCompleted")
+    await http_post_to_upstream(ctx.sysAgentEntity, status_msg)
+    logger.info("TaskStatusReport sent: taskID=%s code=200", ctx.parentTaskID)
+
 
 async def http_post_to_upstream(sys_agent_entity: str, body: dict) -> bool:
-    """HTTP POST 回传结果到上游 SysAgent（对标 HttpPostToSysAgent）。
+    """HTTP(S) POST 回传结果到上游 SysAgent（对标 HttpPostToSysAgent）。
 
-    回调 URL 由 settings.aisf_adapter_upstream_callback_port/path 决定，
-    默认 ``http://{sysAgentEntity}:23767/coremind/systemagent/v1/callback``，
-    即 AISF 协议规定的 SysAgent 接收回调端点。
+    回调 URL 由 settings 决定：
+      ``{scheme}://{sysAgentEntity}:{port}{path}``
+
+    scheme 默认为 ``http``，设为 ``https`` 时自动启用 TLS。
+    支持 mTLS 客户端证书（PEM 格式，可选密码）、自定义 CA 及跳过验证。
     """
     # 延迟导入避免与 routes/aisf_tasks.py 形成循环依赖
     from config import settings
 
-    port = settings.aisf_adapter_upstream_callback_port
-    path = settings.aisf_adapter_upstream_callback_path
-    url = f"http://{sys_agent_entity}:{port}{path}"
+    scheme = settings.aisf_adapter_upstream_scheme
+    port   = settings.aisf_adapter_upstream_callback_port
+    path   = settings.aisf_adapter_upstream_callback_path
+    url    = f"{scheme}://{sys_agent_entity}:{port}{path}"
     payload = json.dumps(body, ensure_ascii=False)
     logger.debug("POST → %s (%d bytes)", url, len(payload))
 
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        ssl_ctx = _build_upstream_ssl_context(settings)
+        async with httpx.AsyncClient(timeout=10.0, verify=ssl_ctx) as client:
             resp = await client.post(
                 url,
                 content=payload,
@@ -698,6 +704,60 @@ async def http_post_to_upstream(sys_agent_entity: str, body: dict) -> bool:
     except Exception as e:
         logger.error("POST failed: url=%s error=%s", url, e)
         return False
+
+
+def _build_upstream_ssl_context(settings) -> ssl.SSLContext | bool:
+    """根据配置构造上游回调的 SSLContext。
+
+    返回 ``ssl.SSLContext``（推荐）或 ``True``/``False``（httpx 原生语义）。
+
+    支持：
+    - scheme=http → 不构建 SSLContext，返回 True（httpx 默认）
+    - 自定义 CA 证书
+    - 跳过服务端验证（verify=False）
+    - mTLS 客户端证书（PEM，可选密码）
+    """
+    scheme = settings.aisf_adapter_upstream_scheme
+
+    # HTTP → 无需 SSL
+    if scheme != "https":
+        return True
+
+    has_client_cert = bool(settings.aisf_adapter_upstream_client_cert_path)
+    has_ca_cert     = bool(settings.aisf_adapter_upstream_ca_cert_path)
+    has_password    = bool(settings.aisf_adapter_upstream_client_key_password)
+    skip_verify     = not settings.aisf_adapter_upstream_verify
+
+    # 没有任何定制 → 使用系统默认 CA（True）
+    if not has_client_cert and not has_ca_cert and not skip_verify:
+        return True
+
+    ctx = ssl.create_default_context()
+
+    # 1) 服务端证书验证
+    if skip_verify:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+    elif has_ca_cert:
+        ctx.load_verify_locations(settings.aisf_adapter_upstream_ca_cert_path)
+    # else: 使用系统默认 CA
+
+    # 2) 客户端证书（mTLS）
+    if has_client_cert:
+        key_path = settings.aisf_adapter_upstream_client_key_path or None
+        if has_password:
+            ctx.load_cert_chain(
+                settings.aisf_adapter_upstream_client_cert_path,
+                key_path,
+                password=settings.aisf_adapter_upstream_client_key_password,
+            )
+        else:
+            ctx.load_cert_chain(
+                settings.aisf_adapter_upstream_client_cert_path,
+                key_path,
+            )
+
+    return ctx
 
 
 # ═══════════════════════════════════════════════════════════════════

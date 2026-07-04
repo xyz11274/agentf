@@ -29,7 +29,9 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 
 from client import DaemonClient, DaemonError
 from config import settings
+from content_serializer import prepare_content_for_daemon
 from models import ChatChunk, ChatDone, ChatRequest
+from routes.conversations import get_store, ConversationRecord
 
 logger = logging.getLogger("agentflow.bridge.routes.chat")
 
@@ -152,6 +154,9 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
             # recv completed — process the new frame.
             try:
                 inbound_raw = recv_task.result()
+                if logger.isEnabledFor(logging.DEBUG):
+                    preview = json.dumps(inbound_raw, ensure_ascii=False)[:1024]
+                    logger.debug("ws_recv agent=%s data=%s", agent_id, preview)
             except WebSocketDisconnect:
                 logger.info("chat_turn.disconnect agent=%s", agent_id)
                 if turn_task is not None:
@@ -281,7 +286,7 @@ async def _run_turn(
             daemon_client.agent_execute(
                 agent_id,
                 session_id="",  # daemon does not accept session_id; pass empty
-                content=request.content,
+                content=prepare_content_for_daemon(request.content, agent_id=agent_id),
                 user_id=request.user_id,
                 client_id=request.client_id,
                 dialogue_id=dialogue_id,
@@ -320,6 +325,7 @@ async def _run_turn(
     deadline = asyncio.get_running_loop().time() + turn_timeout
     chunk_count = 0
     turn_start = time.time()
+    chunks_accumulated: list[str] = []
 
     while True:
         if stop_event.is_set():
@@ -383,21 +389,68 @@ async def _run_turn(
             continue
 
         is_final = _extract_final(notification)
-        chunk_content = _publicize_artifact_urls(_extract_content(notification))
-        chunk_count += 1
 
-        chunk = ChatChunk(content=chunk_content, final=is_final)
-        await _safe_send(websocket, chunk.model_dump())
-
+        # ── 检测 daemon 侧的执行错误 ────────────────────────────
+        # workflow 失败时，daemon 将错误详情写入 metadata.skill_result
+        # 格式: {"status":"failed","error":"Command execution timeout"}
         if is_final:
             final_payload = notification
+            err_msg = _extract_workflow_error(notification)
+            if err_msg:
+                logger.warning(
+                    "chat_turn.workflow_error agent=%s dialogue=%s task=%s "
+                    "elapsed=%.1fs error=%s",
+                    agent_id, dialogue_id, task_id,
+                    time.time() - turn_start, err_msg,
+                )
+                await _safe_send(
+                    websocket,
+                    _error_frame(err_msg, code=-32000),
+                )
+                break
+
+        chunk_content = _publicize_artifact_urls(_extract_content(notification))
+        is_progress = False
+        # [PROGRESS] prefix signals a system progress message, not model output.
+        # Strip the prefix and mark the chunk so the frontend can style it.
+        if chunk_content.startswith("[PROGRESS]"):
+            chunk_content = chunk_content[len("[PROGRESS]"):].lstrip()
+            is_progress = True
+        chunk_count += 1
+        chunks_accumulated.append(chunk_content)
+        chunk = ChatChunk(content=chunk_content, final=is_final, progress=is_progress)
+        await _safe_send(websocket, chunk.model_dump())
+
+        if is_final and not is_progress:
+            # Defensive guard: a progress notification should never end a turn,
+            # even if the daemon mistakenly marks it as final.  Progress updates
+            # are intermediate — the real final chunk will follow once the
+            # coordinator node actually completes.
             break
+        if is_final and is_progress:
+            logger.warning(
+                "chat_turn.defense agent=%s dialogue=%s task=%s "
+                "progress chunk marked final=False — ignoring final flag",
+                agent_id, dialogue_id, task_id,
+            )
 
     elapsed = time.time() - turn_start
     logger.info(
         "chat_turn.complete agent=%s dialogue=%s task=%s elapsed=%.1fs chunks=%d final=%s",
         agent_id, dialogue_id, task_id, elapsed, chunk_count, bool(final_payload),
     )
+
+    # Persist to conversation store so the frontend can list past
+    # conversations independently of the daemon's dialogue lifecycle.
+    if chunks_accumulated:
+        get_store().save(ConversationRecord(
+            agent_id=agent_id,
+            user_id=request.user_id,
+            client_id=request.client_id,
+            dialogue_id=dialogue_id,
+            content="".join(chunks_accumulated),
+        ))
+
     await _safe_send(websocket, ChatDone().model_dump())
 
 
@@ -431,11 +484,13 @@ def _coerce_inbound(raw: Any) -> ChatRequest | _StopSignal | _PingSignal | None:
     if raw.get("type") == "ping":
         return _PingSignal()
 
-    # ChatRequest: must have user_id, client_id, and content.
+    # ChatRequest: must have user_id, client_id, and content (string or array).
     user_id = raw.get("user_id")
     client_id = raw.get("client_id")
     content = raw.get("content")
-    if isinstance(user_id, str) and isinstance(client_id, str) and isinstance(content, str):
+    if isinstance(user_id, str) and isinstance(client_id, str) and (
+        isinstance(content, str) or isinstance(content, list)
+    ):
         return ChatRequest(user_id=user_id, client_id=client_id, content=content)
 
     return None
@@ -469,6 +524,9 @@ def _error_frame(message: str, *, code: int) -> dict[str, Any]:
 
 async def _safe_send(websocket: WebSocket, payload: dict[str, Any]) -> None:
     """Best-effort send; swallow errors so a single failed send doesn't crash the loop."""
+    if logger.isEnabledFor(logging.DEBUG):
+        preview = json.dumps(payload, ensure_ascii=False)[:1024]
+        logger.debug("ws_send type=%s preview=%s", payload.get("type", "?"), preview)
     try:
         await websocket.send_json(payload)
     except Exception:
@@ -495,7 +553,19 @@ def _extract_task_id(execute_result: Any) -> str | None:
 
 def _extract_final(payload: Any) -> bool:
     if isinstance(payload, dict):
-        return bool(payload.get("final", False))
+        val = payload.get("final", False)
+        # metadata["final"] may arrive as Python bool (True/False) from
+        # Python clients, or as the string "true"/"false" from the C++
+        # daemon (std::map<std::string, std::string> serialized to JSON).
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val == "true"
+        # Unexpected type — log a warning and treat as not-final (safe default).
+        # bool(val) would silently accept any non-zero / non-empty value, masking
+        # upstream serialization bugs.
+        logger.warning("_extract_final: unexpected type for 'final': %s", type(val).__name__)
+        return False
     return False
 
 
@@ -503,6 +573,34 @@ def _extract_content(payload: Any) -> str:
     if isinstance(payload, dict):
         content = payload.get("content") or payload.get("text") or ""
         return str(content)
+    return ""
+
+
+def _extract_workflow_error(payload: Any) -> str:
+    """Extract workflow-level error from a daemon notification, or empty string.
+
+    When a workflow node fails (e.g. Command execution timeout), the runtime
+    writes ``metadata.skill_result`` as a JSON blob::
+
+        {"status":"failed","error":"Command execution timeout"}
+
+    Returns the error string, or ``""`` if the notification carries no error.
+    """
+    if not isinstance(payload, dict):
+        return ""
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        return ""
+    skill_result_raw = metadata.get("skill_result", "")
+    if not isinstance(skill_result_raw, str) or not skill_result_raw:
+        return ""
+    try:
+        parsed = json.loads(skill_result_raw)
+        if isinstance(parsed, dict) and parsed.get("status") == "failed":
+            err = parsed.get("error", "")
+            return str(err) if err else ""
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
     return ""
 
 

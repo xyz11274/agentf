@@ -100,6 +100,18 @@ class DataBusClient:
             _log_warn(f"get failed for key={scoped_key}: {exc}")
             return None
 
+    def delete(self, key: str) -> bool:
+        """Delete from sys namespace WITH dialogue_id prefix."""
+        if not self._client:
+            return False
+        scoped_key = f"{self._dialogue_id}/{key}" if self._dialogue_id else key
+        try:
+            self._client.sys().remove(scoped_key)
+            return True
+        except Exception as exc:
+            _log_warn(f"delete failed for key={scoped_key}: {exc}")
+            return False
+
     def put_global(self, key: str, value: str) -> bool:
         """Write to sys namespace WITHOUT dialogue_id prefix.
 

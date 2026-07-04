@@ -15,8 +15,9 @@
  *   - localStorage persistence
  *   - Search / export
  */
-import { computed, nextTick, ref, watch } from 'vue'
-import { Download, Promotion, Refresh } from '@element-plus/icons-vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { Download, PictureFilled, Promotion, Refresh } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 import { useChatStore } from '../stores/chatStore'
 import type { ChatMessage } from '../types/agentflow'
 import MarkdownContent from './MarkdownContent.vue'
@@ -25,7 +26,7 @@ import { getLlmTraceDetail } from '../api/llmTraceClient'
 import * as yaml from 'js-yaml'
 
 const emit = defineEmits<{
-  (e: 'send', content: string): void
+  (e: 'send', content: string, images?: string[]): void
   (e: 'stop'): void
 }>()
 
@@ -34,6 +35,10 @@ const chatStore = useChatStore()
 // ── Local UI state ----------------------------------------------------
 const inputText = ref('')
 const messageListRef = ref<HTMLElement | null>(null)
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const selectedImages = ref<string[]>([])
+const MAX_IMAGES = 10
+const MAX_IMAGE_SIZE_MB = 20
 
 // ── Derived state -----------------------------------------------------
 /** "Connecting" only makes sense before the first connect() call. */
@@ -50,7 +55,9 @@ const connectionTone = computed<'on' | 'off' | 'pending'>(() => {
 })
 
 const canSend = computed<boolean>(
-  () => chatStore.isConnected && inputText.value.trim().length > 0 && !chatStore.isStreaming,
+  () => chatStore.isConnected
+    && (inputText.value.trim().length > 0 || selectedImages.value.length > 0)
+    && !chatStore.isStreaming,
 )
 
 const showEmptyState = computed<boolean>(
@@ -60,6 +67,11 @@ const showEmptyState = computed<boolean>(
 /** True when the assistant placeholder is empty (typing dots) vs has content. */
 function isPendingAssistant(msg: ChatMessage): boolean {
   return msg.role === 'assistant' && msg.content.length === 0
+}
+
+/** True when the assistant placeholder is both empty and being replaced by progress info. */
+function shouldHideAssistantBubble(msg: ChatMessage): boolean {
+  return isPendingAssistant(msg) && !!chatStore.progressMessage
 }
 
 /** Check whether a message has associated LLM traces. */
@@ -107,17 +119,57 @@ watch(
   },
 )
 
+// ── 图片上传 ──────────────────────────────────────────────
+function handleImageSelect(event: Event): void {
+  const input = event.target as HTMLInputElement
+  if (!input.files || input.files.length === 0) return
+
+  for (const file of input.files) {
+    if (selectedImages.value.length >= MAX_IMAGES) {
+      ElMessage.warning(`最多上传 ${MAX_IMAGES} 张图片`)
+      break
+    }
+    if (file.size > MAX_IMAGE_SIZE_MB * 1024 * 1024) {
+      ElMessage.warning(`图片 ${file.name} 超过 ${MAX_IMAGE_SIZE_MB}MB 限制`)
+      continue
+    }
+    if (!file.type.startsWith('image/')) {
+      ElMessage.warning(`文件 ${file.name} 不是图片格式`)
+      continue
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        selectedImages.value.push(reader.result)
+      }
+    }
+    reader.readAsDataURL(file)
+  }
+  // Reset input so same file can be re-selected
+  input.value = ''
+}
+
+function removeImage(index: number): void {
+  selectedImages.value.splice(index, 1)
+}
+
+function triggerFileInput(): void {
+  fileInputRef.value?.click()
+}
+
 // --- Actions -----------------------------------------------------------
 function handleSend(): void {
   const text = inputText.value.trim()
-  if (text.length === 0) return
+  if (text.length === 0 && selectedImages.value.length === 0) return
   if (!chatStore.isConnected) {
     pushSystemError('无法发送: 未连接到 Agent。')
     return
   }
   try {
-    emit('send', text)
+    const images = selectedImages.value.length > 0 ? [...selectedImages.value] : undefined
+    emit('send', text, images)
     inputText.value = ''
+    selectedImages.value = []
     void scrollToBottom()
   } catch (e) {
     pushSystemError(e instanceof Error ? e.message : String(e))
@@ -164,6 +216,47 @@ function formatTime(ts: number): string {
   const mm = String(d.getMinutes()).padStart(2, '0')
   return `${hh}:${mm}`
 }
+
+// ── 加载耗时计时器 ───────────────────────────────────
+const streamStartTime = ref(0)           // ms timestamp when streaming started
+const elapsedMs = ref(0)                 // ms elapsed since start
+let elapsedTimer: ReturnType<typeof setInterval> | null = null
+
+function formatElapsed(ms: number): string {
+  const totalSec = Math.floor(ms / 1000)
+  const min = Math.floor(totalSec / 60)
+  const sec = totalSec % 60
+  return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
+}
+
+function startElapsedTimer(): void {
+  stopElapsedTimer()
+  streamStartTime.value = Date.now()
+  elapsedMs.value = 0
+  elapsedTimer = setInterval(() => {
+    elapsedMs.value = Date.now() - streamStartTime.value
+  }, 1000)
+}
+
+function stopElapsedTimer(): void {
+  if (elapsedTimer !== null) {
+    clearInterval(elapsedTimer)
+    elapsedTimer = null
+  }
+}
+
+onBeforeUnmount(stopElapsedTimer)
+
+watch(
+  () => chatStore.isStreaming,
+  (streaming) => {
+    if (streaming) {
+      startElapsedTimer()
+    } else {
+      stopElapsedTimer()
+    }
+  },
+)
 
 // ── 导出对话 ──────────────────────────────────────────────
 const exporting = ref(false)
@@ -264,6 +357,7 @@ function toggleExportMenu(): void {
           <span /><span /><span />
         </span>
         <span class="chat-view__streaming-text">生成中…</span>
+        <span v-if="elapsedMs > 0" class="chat-view__elapsed">{{ formatElapsed(elapsedMs) }}</span>
       </span>
       <span class="chat-view__export">
         <el-dropdown
@@ -322,7 +416,9 @@ function toggleExportMenu(): void {
             <span class="chat-view__time">{{ formatTime(msg.timestamp) }}</span>
           </div>
 
+          <!-- Assistant pending bubble: completely hidden when progress is active -->
           <el-card
+            v-if="!shouldHideAssistantBubble(msg)"
             class="chat-view__bubble"
             :class="`chat-view__bubble--${msg.role}`"
             shadow="never"
@@ -334,6 +430,17 @@ function toggleExportMenu(): void {
               </span>
             </template>
             <template v-else>
+              <!-- Image previews for user messages -->
+              <div v-if="msg.images && msg.images.length > 0" class="chat-view__msg-images">
+                <img
+                  v-for="(img, i) in msg.images"
+                  :key="i"
+                  :src="img"
+                  class="chat-view__msg-image"
+                  alt="用户上传的图片"
+                  loading="lazy"
+                />
+              </div>
               <MarkdownContent :content="msg.content" />
               <!-- LLM trace panel (inline below assistant response) -->
               <LlmTracePanel
@@ -364,41 +471,88 @@ function toggleExportMenu(): void {
             @close="dismissSystemMessage(sys.id)"
           />
         </li>
+
+        <!-- Progress indicator (while skills are executing) -->
+        <li
+          v-if="chatStore.progressMessage"
+          class="chat-view__item chat-view__item--progress"
+          data-testid="chat-progress"
+        >
+          <div class="chat-view__progress">
+            <span class="chat-view__progress-spinner" />
+            <span class="chat-view__progress-text">{{ chatStore.progressMessage }}</span>
+            <span v-if="elapsedMs > 0" class="chat-view__elapsed chat-view__elapsed--progress">{{ formatElapsed(elapsedMs) }}</span>
+          </div>
+        </li>
       </ul>
     </div>
 
     <!-- Input area -->
     <footer class="chat-view__composer">
+      <!-- Image preview chips -->
+      <div v-if="selectedImages.length > 0" class="chat-view__image-previews">
+        <div
+          v-for="(img, i) in selectedImages"
+          :key="i"
+          class="chat-view__image-chip"
+          @click="removeImage(i)"
+        >
+          <img :src="img" class="chat-view__image-chip-img" alt="预览" />
+          <span class="chat-view__image-chip-remove">&times;</span>
+        </div>
+      </div>
+
       <el-input
         v-model="inputText"
         type="textarea"
-        :rows="3"
-        :autosize="{ minRows: 3, maxRows: 8 }"
+        :rows="2"
+        :autosize="{ minRows: 2, maxRows: 6 }"
         placeholder="输入消息… (Enter 发送, Shift+Enter 换行)"
         resize="none"
         data-testid="chat-input"
         @keydown="handleKeydown"
       />
       <div class="chat-view__actions">
-        <el-button
-          v-if="!chatStore.isStreaming"
-          type="primary"
-          :icon="Promotion"
-          :disabled="!canSend"
-          data-testid="chat-send"
-          @click="handleSend"
-        >
-          发送
-        </el-button>
-        <el-button
-          v-else
-          type="danger"
-          :icon="Refresh"
-          data-testid="chat-stop"
-          @click="handleStop"
-        >
-          停止
-        </el-button>
+        <div class="chat-view__actions-left">
+          <!-- Hidden file input -->
+          <input
+            ref="fileInputRef"
+            type="file"
+            accept="image/*"
+            multiple
+            class="chat-view__file-input"
+            data-testid="chat-image-input"
+            @change="handleImageSelect"
+          />
+          <el-button
+            :icon="PictureFilled"
+            :disabled="chatStore.isStreaming"
+            data-testid="chat-image-btn"
+            @click="triggerFileInput"
+            title="上传图片"
+          />
+        </div>
+        <div class="chat-view__actions-right">
+          <el-button
+            v-if="!chatStore.isStreaming"
+            type="primary"
+            :icon="Promotion"
+            :disabled="!canSend"
+            data-testid="chat-send"
+            @click="handleSend"
+          >
+            发送
+          </el-button>
+          <el-button
+            v-else
+            type="danger"
+            :icon="Refresh"
+            data-testid="chat-stop"
+            @click="handleStop"
+          >
+            停止
+          </el-button>
+        </div>
       </div>
     </footer>
   </section>
@@ -464,6 +618,20 @@ function toggleExportMenu(): void {
   gap: 8px;
   color: #409eff;
   font-size: 12px;
+}
+.chat-view__elapsed {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.2px;
+  color: #909399;
+  font-size: 11px;
+}
+.chat-view__elapsed--progress {
+  margin-left: auto;
+  font-size: 12px;
+  color: #606266;
+  background: #e6f7ff;
+  padding: 1px 6px;
+  border-radius: 4px;
 }
 .chat-view__streaming-text {
   letter-spacing: 0.2px;
@@ -650,9 +818,119 @@ function toggleExportMenu(): void {
   background: #ffffff;
   flex-shrink: 0;
 }
+
+/* ── Image preview chips ── */
+.chat-view__image-previews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.chat-view__image-chip {
+  position: relative;
+  width: 72px;
+  height: 72px;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  border: 1px solid #e4e7ed;
+  flex-shrink: 0;
+}
+.chat-view__image-chip-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.chat-view__image-chip-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-size: 14px;
+  line-height: 18px;
+  text-align: center;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+.chat-view__image-chip:hover .chat-view__image-chip-remove {
+  opacity: 1;
+}
+
+/* ── Hidden file input ── */
+.chat-view__file-input {
+  display: none;
+}
+
+/* ── Actions row ── */
 .chat-view__actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  align-items: center;
   gap: 8px;
+}
+.chat-view__actions-left {
+  display: flex;
+  gap: 4px;
+}
+.chat-view__actions-right {
+  display: flex;
+  gap: 8px;
+}
+
+/* ── Images in message bubbles ── */
+.chat-view__msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.chat-view__msg-image {
+  max-width: 240px;
+  max-height: 240px;
+  border-radius: 8px;
+  object-fit: contain;
+  border: 1px solid #e4e7ed;
+  background: #f5f7fa;
+}
+
+/* ── Progress indicator ── */
+.chat-view__item--progress {
+  align-self: flex-start;
+  align-items: flex-start;
+  max-width: 100%;
+}
+.chat-view__progress {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 14px;
+  background: #f0f9ff;
+  border: 1px solid #d9ecff;
+  border-radius: 8px;
+  font-size: 13px;
+  color: #409eff;
+}
+.chat-view__progress-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #d9ecff;
+  border-top-color: #409eff;
+  border-radius: 50%;
+  animation: chat-view-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+.chat-view__progress-text {
+  white-space: pre-wrap;
+  overflow: hidden;
+  max-height: 3.6em;
+  line-height: 1.4;
+  word-break: break-word;
+}
+@keyframes chat-view-spin {
+  to { transform: rotate(360deg); }
 }
 </style>

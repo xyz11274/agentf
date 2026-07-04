@@ -211,7 +211,7 @@ const displayCount = computed(() => agentStore.agents.length)
               type="danger"
               plain
               :loading="loadingAction === agent.id"
-              :disabled="agent.status !== 'running'"
+              :disabled="agent.status === 'unloaded'"
               @click="handleUnload(agent)"
             >
               卸载

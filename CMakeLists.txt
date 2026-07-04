@@ -772,6 +772,7 @@ if(AGENTFLOW_BUILD_TESTS)
   # Daemon unit tests
   add_executable(test_daemon_gtest
       ${AGENTFLOW_TEST_DIR}/unit/src/test_daemon_config_gtest.cpp
+      ${AGENTFLOW_TEST_DIR}/unit/src/test_daemon_init_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_rpc_handler_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_agent_registry_gtest.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_event_broker_gtest.cpp

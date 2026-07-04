@@ -52,6 +52,7 @@ _TEMPLATE_ONLY: tuple[str, ...] = (
     "nodes/llm_call.py",
     "nodes/llm_call.pyc",
     "nodes/dummy_pre_skill.py",
+    "nodes/parse_af_input.py",
     # Tests — always template-owned
     "tests/",
 )

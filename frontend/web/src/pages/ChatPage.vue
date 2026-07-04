@@ -101,13 +101,13 @@ async function connectChat() {
   }
 }
 
-async function sendMessage(content: string) {
+async function sendMessage(content: string, images?: string[]) {
   if (!ws.isConnected.value) {
     ElMessage.error('发送失败: WebSocket 未连接')
     return
   }
   try {
-    ws.send(content)
+    ws.send(content, images)
   } catch (e) {
     ElMessage.error(`发送失败: ${e instanceof Error ? e.message : e}`)
   }

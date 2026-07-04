@@ -559,7 +559,7 @@ def execute():
 | `QWEATHER_API_HOST` | 和风天气 API host | weather_query skill 需要 |
 | `AF_LLM_BASE_URL` | LLM base URL（覆盖 agent.md） | 否 |
 | `AF_LLM_MODEL` | LLM 模型名（覆盖 agent.md） | 否 |
-| `AF_SKILL_MAX_ROUNDS` | skill LLM while-loop 最大轮数 | 否 |
+| `AF_MAX_SKILL_TASK_ITERATIONS` | skill LLM while-loop 最大轮数 | 否 |
 | `PYTHON_PATH` | .venv 目录（框架 worker 用） | 启动 daemon 时必填 |
 
 ## 依赖

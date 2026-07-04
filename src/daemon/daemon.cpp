@@ -65,6 +65,11 @@ Daemon::Daemon(const DaemonConfig& config) : config_(config) {}
 Daemon::~Daemon() {
   if (g_daemon == this) g_daemon = nullptr;
   shutdown();
+  // Properly clean up services that were partially started.
+  // This ensures threads are joined before static destruction begins —
+  // preventing "mutex lock failed: Invalid argument" on macOS/libc++
+  // (F-20260704-001).
+  shutdown_services();
 }
 
 bool Daemon::initialize() {
@@ -115,12 +120,14 @@ bool Daemon::initialize() {
   registry_ = std::make_unique<AgentRegistry>();
   if (!load_agents()) {
     Logger::instance().error("[DAEMON] Failed to load agents");
+    runtime_.reset();  // never started, safe to discard
     return false;
   }
 
   // 5. Start Runtime (before agents)
   if (!runtime_->start()) {
     Logger::instance().error("[DAEMON] Failed to start runtime");
+    runtime_.reset();
     return false;
   }
   Logger::instance().info("[DAEMON] Runtime started");
@@ -130,6 +137,8 @@ bool Daemon::initialize() {
   for (auto& agent : agents) {
     if (!agent->start()) {
       Logger::instance().error_f("[DAEMON] Failed to start agent: %s", agent->get_id().c_str());
+      // Runtime + partial agents need cleanup
+      shutdown_services();
       return false;
     }
     Logger::instance().info_f("[DAEMON] Agent started: %s (%s)", agent->get_id().c_str(),
@@ -153,10 +162,12 @@ bool Daemon::initialize() {
 
   if (!rpc_server_->start(rpc_config)) {
     Logger::instance().error("[DAEMON] Failed to start RPC server");
+    // Runtime + agents started, need full cleanup
+    shutdown_services();
     return false;
   }
 
-  // 9. Start ResponsePoller and EventBroker
+  // 9. Start ResponsePoller and EventBroker (after RPC server)
   response_poller_->start(*registry_, *rpc_server_);
   event_broker_->start(*rpc_server_);
 
@@ -164,7 +175,7 @@ bool Daemon::initialize() {
   runtime_->register_event_handler(
       std::shared_ptr<runtime::IEventHandler>(event_broker_.get(), [](auto*) {}));
 
-  // 8. Write PID file
+  // 11. Write PID file
   if (!config_.pid_file.empty()) {
     std::ofstream pf(config_.pid_file);
     if (pf.is_open()) {
@@ -202,25 +213,37 @@ int Daemon::run() {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
 
-  // Phase 2: STOPPING
+  shutdown_services();
+
+  Logger::instance().info("[DAEMON] agentflowd shutdown complete");
+  return 0;
+}
+
+void Daemon::shutdown_services() {
+  // Order matters: stop accepting new work first, then drain, then tear down.
+
   // Stop ResponsePoller
   if (response_poller_) {
     response_poller_->stop();
     Logger::instance().info("[DAEMON] ResponsePoller stopped");
+    response_poller_.reset();
   }
 
   // Stop EventBroker
   if (event_broker_) {
     event_broker_->stop();
     Logger::instance().info("[DAEMON] EventBroker stopped");
+    event_broker_.reset();
   }
 
   // Stop RPC server first (no new requests)
   if (rpc_server_) {
     rpc_server_->stop();
     Logger::instance().info("[DAEMON] RPC server stopped");
+    rpc_server_.reset();
   }
 
+  // Stop agents then runtime
   if (runtime_) {
     auto agents = runtime_->list_agents();
     for (auto& agent : agents) {
@@ -230,6 +253,7 @@ int Daemon::run() {
 
     runtime_->stop();
     Logger::instance().info("[DAEMON] Runtime stopped");
+    runtime_.reset();
   }
 
   // Clean up UDS socket files
@@ -238,9 +262,6 @@ int Daemon::run() {
 
   // Remove PID file
   if (!config_.pid_file.empty()) unlink(config_.pid_file.c_str());
-
-  Logger::instance().info("[DAEMON] agentflowd shutdown complete");
-  return 0;
 }
 
 void Daemon::shutdown() {

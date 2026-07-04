@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 MODULE_PATH = Path(__file__).parents[1] / "nodes" / "llm_call.py"
-SPEC = importlib.util.spec_from_file_location("outfit_llm_call", MODULE_PATH)
+SPEC = importlib.util.spec_from_file_location("harness_llm_call", MODULE_PATH)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
 SPEC.loader.exec_module(MODULE)

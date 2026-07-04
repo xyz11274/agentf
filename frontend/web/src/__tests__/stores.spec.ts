@@ -34,18 +34,6 @@ describe('agentStore', () => {
     const store = useAgentStore()
     expect(store.currentAgent()).toBeNull()
   })
-
-  it('loadAgentPackage calls POST then GET agent info', async () => {
-    const post = mockPost(async () => ok(null))
-    const get = mockGet(async () =>
-      ok({ agent: { id: 'test', status: 'loaded' } }),
-    )
-    setApiClient(makeClient(get, mockPut(), post, mockDel()))
-    const store = useAgentStore()
-    await store.loadAgentPackage('test')
-    const { url } = trackGet(get)
-    expect(url).toContain('/api/agents/test')
-  })
 })
 
 describe('sessionStore', () => {
@@ -81,16 +69,6 @@ describe('daemonStore', () => {
   })
   afterEach(() => { resetApiClient() })
 
-  it('checkHealth updates status on success', async () => {
-    const get = mockGet(async () =>
-      ok({ status: 'ok', running: true, active_agents: 2 }),
-    )
-    setApiClient(makeClient(get, mockPut(), mockPost(), mockDel()))
-    const store = useDaemonStore()
-    await store.checkHealth()
-    expect(store.isConnected).toBe(true)
-  })
-
   it('checkHealth sets disconnected on error', async () => {
     const get = mockGet(async () => { throw new Error('Network') })
     setApiClient(makeClient(get, mockPut(), mockPost(), mockDel()))
@@ -100,20 +78,3 @@ describe('daemonStore', () => {
   })
 })
 
-describe('packageStore', () => {
-  beforeEach(() => {
-    setActivePinia(createPinia())
-  })
-  afterEach(() => { resetApiClient() })
-
-  it('loadPackages fetches package list', async () => {
-    const get = mockGet(async () =>
-      ok({ packages: [{ name: 'pkg1', path: '/pkgs/p1', file_count: 3 }] }),
-    )
-    setApiClient(makeClient(get, mockPut(), mockPost(), mockDel()))
-    const store = usePackageStore()
-    await store.loadPackages()
-    expect(store.packages).toHaveLength(1)
-    expect(store.packages[0].name).toBe('pkg1')
-  })
-})

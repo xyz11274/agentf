@@ -1378,3 +1378,303 @@ def test_create_from_template_zip_format(
     get = template_client.get("/api/packages/zip-agent/file/agent.md")
     assert get.status_code == 200
     assert "ZipAgent" in get.json()["content"]
+
+
+# ---------------------------------------------------------------------------
+# Upload: POST /api/packages/upload (T8 upload archive)
+# ---------------------------------------------------------------------------
+
+
+def test_upload_package_creates_package(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Upload a .tar.gz → 201 + package extracted."""
+    content, filename = _make_user_archive(tmp_path, {
+        "agent.md": "---\nname: UploadAgent\n---",
+        "package.json": '{"name":"upload-test"}',
+    })
+    resp = client.post(
+        "/api/packages/upload",
+        files={"file": (filename, content, "application/gzip")},
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["name"] == "user_agent"
+    assert body["file_count"] >= 2
+
+    # Verify files were extracted
+    get = client.get("/api/packages/user_agent/file/agent.md")
+    assert get.status_code == 200
+    assert "UploadAgent" in get.json()["content"]
+
+
+def test_upload_package_infers_name_from_filename(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """When ``name`` is omitted, it's derived from the archive filename."""
+    content, filename = _make_user_archive(tmp_path, {
+        "agent.md": "---\n---",
+    })
+    # Rename archive to match test intent
+    renamed = tmp_path / "my-custom-agent.tar.gz"
+    renamed.write_bytes(content)
+    content = renamed.read_bytes()
+    filename = renamed.name
+
+    resp = client.post(
+        "/api/packages/upload",
+        files={"file": (filename, content, "application/gzip")},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == "my-custom-agent"
+
+
+def test_upload_package_explicit_name(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Explicit ``name`` parameter (query) overrides the archive filename."""
+    content, filename = _make_user_archive(tmp_path, {
+        "agent.md": "---\n---",
+    })
+    resp = client.post(
+        "/api/packages/upload?name=explicit-name-pkg",
+        files={"file": (filename, content, "application/gzip")},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == "explicit-name-pkg"
+
+
+def test_upload_package_rejects_unsupported_format(client: TestClient) -> None:
+    """.rar / .7z etc → 400."""
+    resp = client.post(
+        "/api/packages/upload",
+        files={"file": ("bad.rar", b"fake", "application/octet-stream")},
+    )
+    assert resp.status_code == 400, resp.text
+
+
+def test_upload_package_rejects_existing(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Upload with a name that already exists → 409."""
+    content, filename = _make_user_archive(tmp_path, {
+        "agent.md": "---\n---",
+    })
+    # First upload succeeds
+    resp1 = client.post(
+        "/api/packages/upload",
+        files={"file": (filename, content, "application/gzip")},
+    )
+    assert resp1.status_code == 201
+
+    # Second upload with same name → 409
+    resp2 = client.post(
+        "/api/packages/upload",
+        files={"file": (filename, content, "application/gzip")},
+    )
+    assert resp2.status_code == 409, resp2.text
+
+
+def test_upload_package_zip_format(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Upload a .zip archive."""
+    content, filename = _make_user_archive(
+        tmp_path, {"agent.md": "---\nname: ZipUpload\n---"}, fmt="zip",
+    )
+    resp = client.post(
+        "/api/packages/upload",
+        files={"file": (filename, content, "application/zip")},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["name"] == "user_agent"
+
+
+def test_upload_package_name_with_dot_suffix(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    """Name contains a dot but not at archive extension — should pass."""
+    content, filename = _make_user_archive(tmp_path, {
+        "agent.md": "---\n---",
+    })
+    renamed = tmp_path / "v1.2.3-agent.tar.gz"
+    renamed.write_bytes(content)
+    content = renamed.read_bytes()
+    filename = renamed.name
+
+    resp = client.post(
+        "/api/packages/upload",
+        files={"file": (filename, content, "application/gzip")},
+    )
+    assert resp.status_code == 201, resp.text
+    # The stem should correctly strip only the archive extension
+    assert resp.json()["name"] == "v1.2.3-agent"
+
+
+# ---------------------------------------------------------------------------
+# Update package + hot-reload: POST /api/packages/{name}/update (T8)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def upload_client(
+    fake_packages_root: Path, fake_build_sh: Path,
+) -> tuple[TestClient, AsyncMock]:
+    """TestClient with a mock DaemonClient injected for hot-reload tests."""
+    from dependencies import get_daemon_client
+
+    # Create a mock daemon client that accepts hot-reload
+    mock_client = AsyncMock()
+    mock_client.is_connected = True
+    mock_client.agent_list = AsyncMock(return_value={
+        "agents": [{"id": "basic_agent", "name": "basic_agent"}],
+    })
+    mock_client.agent_unload = AsyncMock(return_value={})
+    mock_client.agent_load = AsyncMock(return_value={"status": "loaded"})
+
+    # FastAPI dependency_overrides allows replacing Depends() at the app
+    # level, which works regardless of how the function reference was
+    # captured at import time.
+    app.dependency_overrides[get_daemon_client] = lambda: mock_client
+    yield TestClient(app), mock_client
+    app.dependency_overrides.pop(get_daemon_client, None)
+
+
+def test_update_package_incremental(
+    upload_client: tuple[TestClient, AsyncMock],
+    tmp_path: Path,
+) -> None:
+    """Incremental update adds files without removing existing ones."""
+    client, _ = upload_client
+    # First, create a file in the existing package
+    put = client.put(
+        "/api/packages/basic_agent/file/original.txt",
+        json={"content": "original"},
+    )
+    assert put.status_code == 200
+
+    # Upload an incremental update with a new file
+    content, filename = _make_user_archive(tmp_path, {
+        "new_file.txt": "added via update",
+    })
+    resp = client.put(
+        "/api/packages/basic_agent/update",
+        files={"file": (filename, content, "application/gzip")},
+        data={"mode": "incremental"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["name"] == "basic_agent"
+
+    # Original file survives
+    get = client.get("/api/packages/basic_agent/file/original.txt")
+    assert get.status_code == 200
+    assert get.json()["content"] == "original"
+
+    # New file exists
+    get = client.get("/api/packages/basic_agent/file/new_file.txt")
+    assert get.status_code == 200
+    assert get.json()["content"] == "added via update"
+
+
+def test_update_package_full(
+    upload_client: tuple[TestClient, AsyncMock],
+    tmp_path: Path,
+) -> None:
+    """Full update clears existing content before extracting."""
+    client, _ = upload_client
+    # Create a file
+    client.put(
+        "/api/packages/basic_agent/file/original.txt",
+        json={"content": "original"},
+    ).raise_for_status()
+
+    # Full update with only new file
+    content, filename = _make_user_archive(tmp_path, {
+        "replacement.txt": "only this survives",
+    })
+    resp = client.put(
+        "/api/packages/basic_agent/update",
+        files={"file": (filename, content, "application/gzip")},
+        data={"mode": "full"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Original file is gone
+    get = client.get("/api/packages/basic_agent/file/original.txt")
+    assert get.status_code == 404
+
+    # New file exists
+    get = client.get("/api/packages/basic_agent/file/replacement.txt")
+    assert get.status_code == 200
+
+
+def test_update_package_triggers_hot_reload(
+    upload_client: tuple[TestClient, AsyncMock],
+    tmp_path: Path,
+) -> None:
+    """Update calls agent_unload + agent_load when agent is in daemon."""
+    client, mock_client = upload_client
+    content, filename = _make_user_archive(tmp_path, {
+        "agent.md": "---\nname: basic_agent\n---\n",
+    })
+
+    resp = client.put(
+        "/api/packages/basic_agent/update",
+        files={"file": (filename, content, "application/gzip")},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Verify hot-reload was triggered
+    mock_client.agent_unload.assert_awaited_once_with("basic_agent")
+    mock_client.agent_load.assert_awaited_once()
+
+
+def test_update_package_skips_hot_reload_when_not_loaded(
+    upload_client: tuple[TestClient, AsyncMock],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Update does NOT call unload/load when agent not in daemon."""
+    import routes.packages as pkg_routes
+
+    # Override the mock to return empty agent list
+    mock_empty = AsyncMock()
+    mock_empty.is_connected = True
+    mock_empty.agent_list = AsyncMock(return_value={"agents": []})
+    mock_empty.agent_unload = AsyncMock()
+    mock_empty.agent_load = AsyncMock()
+
+    async def _mock_empty_client():
+        return mock_empty
+    monkeypatch.setattr(
+        pkg_routes, "get_daemon_client", _mock_empty_client,
+    )
+    empty_client, _ = upload_client
+
+    content, filename = _make_user_archive(tmp_path, {
+        "agent.md": "---\n---",
+    })
+    resp = empty_client.put(
+        "/api/packages/basic_agent/update",
+        files={"file": (filename, content, "application/gzip")},
+    )
+    assert resp.status_code == 200, resp.text
+
+    mock_empty.agent_unload.assert_not_called()
+    mock_empty.agent_load.assert_not_called()
+
+
+def test_update_package_rejects_missing_package(client: TestClient) -> None:
+    """Updating a non-existent package → 404."""
+    resp = client.put(
+        "/api/packages/does_not_exist/update",
+        files={"file": ("update.tar.gz", b"fake", "application/gzip")},
+    )
+    assert resp.status_code == 404, resp.text
+

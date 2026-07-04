@@ -13,16 +13,14 @@ describe('useChatStore', () => {
     expect(store.isConnected).toBe(false)
     expect(store.isStreaming).toBe(false)
     expect(store.currentAgentId).toBeNull()
-    expect(store.currentSessionId).toBeNull()
     expect(store.streamingMessageId).toBeNull()
   })
 
-  it('connect sets connection state and remembers agent/session', () => {
+  it('connect sets connection state and remembers agent', () => {
     const store = useChatStore()
-    store.connect('a1', 's1')
+    store.connect('a1')
     expect(store.isConnected).toBe(true)
     expect(store.currentAgentId).toBe('a1')
-    expect(store.currentSessionId).toBe('s1')
     expect(store.error).toBeNull()
   })
 
@@ -121,13 +119,37 @@ describe('useChatStore', () => {
     expect(store.isStreaming).toBe(false)
   })
 
+  it('endAssistantTurn drops an empty assistant placeholder (symmetric with stop)', () => {
+    // P0 #4 invariant: both terminal paths must treat empty turns identically.
+    const store = useChatStore()
+    store.connect('a1')
+    store.send('hi')
+    store.beginAssistantTurn() // empty assistant placeholder
+    expect(store.messages).toHaveLength(2)
+    store.endAssistantTurn()
+    expect(store.isStreaming).toBe(false)
+    expect(store.streamingMessageId).toBeNull()
+    expect(store.messages).toHaveLength(1)
+    expect(store.messages[0]?.role).toBe('user')
+  })
+
+  it('endAssistantTurn preserves a non-empty assistant turn', () => {
+    const store = useChatStore()
+    store.connect('a1')
+    store.send('hi')
+    const a = store.beginAssistantTurn()
+    store.appendChunk(a.id, 'reply')
+    store.endAssistantTurn()
+    expect(store.messages).toHaveLength(2)
+    expect(store.messages[1]?.content).toBe('reply')
+  })
+
   it('disconnect clears connection state without dropping messages', () => {
     const store = useChatStore()
-    store.connect('a1', 's1')
+    store.connect('a1')
     store.send('hi')
     store.disconnect()
     expect(store.isConnected).toBe(false)
-    expect(store.currentSessionId).toBeNull()
     expect(store.messages).toHaveLength(1)
   })
 
@@ -143,7 +165,7 @@ describe('useChatStore', () => {
 
   it('reset clears every piece of state', () => {
     const store = useChatStore()
-    store.connect('a1', 's1')
+    store.connect('a1')
     store.send('hi')
     store.beginAssistantTurn()
     store.setError('x')
@@ -151,7 +173,6 @@ describe('useChatStore', () => {
     expect(store.messages).toEqual([])
     expect(store.isConnected).toBe(false)
     expect(store.currentAgentId).toBeNull()
-    expect(store.currentSessionId).toBeNull()
     expect(store.error).toBeNull()
   })
 })

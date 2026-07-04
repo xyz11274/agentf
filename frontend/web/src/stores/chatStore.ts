@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { ChatMessage, LlmTraceSummary } from '@/types/agentflow'
+import type { ChatMessage, ContentPart, LlmTraceSummary } from '@/types/agentflow'
 import { getLlmTraces } from '@/api/llmTraceClient'
 
 let messageSeq = 0
@@ -18,6 +18,8 @@ export const useChatStore = defineStore('chat', () => {
   const currentUserId = ref<string | null>(null)
   const error = ref<string | null>(null)
   const streamingMessageId = ref<string | null>(null)
+  /** Current progress/status message displayed while skills are executing. */
+  const progressMessage = ref<string | null>(null)
 
   /**
    * LLM execution traces keyed by assistant-message ID.
@@ -46,7 +48,7 @@ export const useChatStore = defineStore('chat', () => {
     currentClientId.value = null
   }
 
-  function send(content: string): ChatMessage {
+  function send(content: string, images?: string[]): ChatMessage {
     if (!isConnected.value) {
       throw new Error('chat: cannot send while disconnected')
     }
@@ -55,6 +57,7 @@ export const useChatStore = defineStore('chat', () => {
       role: 'user',
       content,
       timestamp: Date.now(),
+      images,
     }
     messages.value.push(msg)
     return msg
@@ -81,6 +84,16 @@ export const useChatStore = defineStore('chat', () => {
 
   function endAssistantTurn(): void {
     isStreaming.value = false
+    progressMessage.value = null
+    // Symmetric with stop(): drop an empty assistant placeholder so the
+    // timeline doesn't show a stray empty bubble when the daemon returned
+    // no content. Non-empty turns are preserved.
+    if (streamingMessageId.value !== null) {
+      const target = messages.value.find((m) => m.id === streamingMessageId.value)
+      if (target && target.content.length === 0) {
+        messages.value = messages.value.filter((m) => m.id !== target.id)
+      }
+    }
     streamingMessageId.value = null
   }
 
@@ -120,9 +133,18 @@ export const useChatStore = defineStore('chat', () => {
     }
   }
 
+  function setProgress(msg: string): void {
+    progressMessage.value = msg
+  }
+
+  function clearProgress(): void {
+    progressMessage.value = null
+  }
+
   function stop(): void {
     if (!isStreaming.value) return
     isStreaming.value = false
+    progressMessage.value = null
     if (streamingMessageId.value !== null) {
       const target = messages.value.find((m) => m.id === streamingMessageId.value)
       if (target && target.content.length === 0) {
@@ -140,6 +162,7 @@ export const useChatStore = defineStore('chat', () => {
     messages.value = []
     isStreaming.value = false
     streamingMessageId.value = null
+    progressMessage.value = null
     llmTraces.value = {}
   }
 
@@ -152,6 +175,7 @@ export const useChatStore = defineStore('chat', () => {
     currentUserId.value = null
     error.value = null
     streamingMessageId.value = null
+    progressMessage.value = null
     llmTraces.value = {}
   }
 
@@ -164,6 +188,7 @@ export const useChatStore = defineStore('chat', () => {
     currentUserId,
     error,
     streamingMessageId,
+    progressMessage,
     llmTraces,
     isFetchingTraces,
     connect,
@@ -173,6 +198,8 @@ export const useChatStore = defineStore('chat', () => {
     appendChunk,
     endAssistantTurn,
     fetchLlmTraces,
+    setProgress,
+    clearProgress,
     stop,
     setError,
     clearMessages,

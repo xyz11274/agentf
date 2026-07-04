@@ -13,6 +13,40 @@
  */
 
 // ---------------------------------------------------------------------------
+// Multimodal content parts (OpenAI-compatible, Phase A: text + inline image_url)
+// Mirrored from Python models.py — any change MUST be reflected on both sides.
+// ---------------------------------------------------------------------------
+
+/**
+ * A text fragment in a multimodal content array.
+ */
+export interface TextPart {
+  type: 'text';
+  text: string;
+}
+
+/**
+ * The ``image_url`` payload inside an ImagePart.
+ * ``url`` accepts ``data:image/...;base64,...`` (inline) or ``file:///`` (already-landed).
+ */
+export interface ImageURLBody {
+  url: string;
+}
+
+/**
+ * An image fragment in a multimodal content array.
+ */
+export interface ImagePart {
+  type: 'image_url';
+  image_url: ImageURLBody;
+}
+
+/**
+ * Discriminated union of supported content part types.
+ */
+export type ContentPart = TextPart | ImagePart;
+
+// ---------------------------------------------------------------------------
 // Agent
 // ---------------------------------------------------------------------------
 
@@ -165,12 +199,15 @@ export interface SkillInstallResponse {
 
 /**
  * A single chat message exchanged with the agent.
+ * For user messages, ``images`` contains preview-ready data URLs.
  */
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  /** Data URLs for inline image previews (user messages only). */
+  images?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +248,8 @@ export interface ChatChunk {
   type: 'chunk';
   content: string;
   final: boolean;
+  /** True when this is a system progress message, not model output. */
+  progress?: boolean;
 }
 
 /**

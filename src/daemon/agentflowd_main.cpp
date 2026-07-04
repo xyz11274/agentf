@@ -4,7 +4,9 @@
 // agentflowd - AgentFlow daemon entry point
 // Standalone executable that runs AgentFlow as a service with JSON-RPC 2.0 interface
 
+#include <cstdlib>
 #include <iostream>
+#include <system_error>
 
 #include "daemon/config.h"   // NOLINT
 #include "daemon/daemon.h"   // NOLINT
@@ -44,12 +46,28 @@ int main(int argc, char* argv[]) {
   }
 
   // Step 5: Create and initialize Daemon
-  Daemon daemon(config);
-  if (!daemon.initialize()) {
-    std::cerr << "Error: failed to initialize agentflowd" << std::endl;
+  //
+  // Wrap in try-catch to prevent uncaught exceptions (e.g.
+  // std::system_error from mutex operations during static destruction)
+  // from terminating the process — a known issue on macOS/libc++
+  // when daemon fails to initialize after partial runtime start
+  // (F-20260704-001).
+  try {
+    Daemon daemon(config);
+    if (!daemon.initialize()) {
+      std::cerr << "Error: failed to initialize agentflowd" << std::endl;
+      return 1;
+    }
+
+    // Step 6: Run (blocks until shutdown)
+    return daemon.run();
+  } catch (const std::system_error& e) {
+    std::cerr << "Fatal: system error in agentflowd lifecycle: " << e.what()
+              << " (code=" << e.code() << ")" << std::endl;
+    return 1;
+  } catch (const std::exception& e) {
+    std::cerr << "Fatal: unhandled exception in agentflowd lifecycle: "
+              << e.what() << std::endl;
     return 1;
   }
-
-  // Step 6: Run (blocks until shutdown)
-  return daemon.run();
 }

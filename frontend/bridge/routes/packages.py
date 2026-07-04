@@ -22,8 +22,8 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import os
 import shutil
-import stat
 import tarfile
 import tempfile
 import zipfile
@@ -417,21 +417,74 @@ def _delete_dir_sync(target: Path) -> None:
     target.rmdir()
 
 
-def _make_scripts_executable(pkg_dir: Path) -> None:
-    """Recursively set execute permission on ``.sh`` files under ``pkg_dir``.
+def _normalize_permissions(pkg_dir: Path) -> None:
+    """Normalise file and directory permissions and owner under ``pkg_dir``.
 
     ``tarfile`` with ``filter="data"`` (Python ≥3.12) strips the executable
     bit from all regular files as a security measure, and ``ZipFile`` does
     not preserve Unix permissions at all.  Without this step, shell-script
     workflow nodes (``execution_mode: shell_script``) would fail with
-    ``exit code 126`` / ``Permission denied`` at runtime.
+    ``exit code 126`` / ``Permission denied`` at runtime, and directories
+    with missing +x bits would be inaccessible.
+
+    Applied permissions::
+
+        Directories                  drwxr-xr-x  (755)
+        Regular files                -rw-r--r--  (644)
+        Shell scripts (.sh / .bash)  -rwxr-xr-x  (755)
+
+    Owner is also normalised to the current process user so that files
+    originating from an archive owned by (e.g.) ``root:root`` do not
+    become inaccessible after extraction.  On non-POSIX platforms or when
+    running as a non-root user, the chown silently succeeds or is skipped.
+
+    Order matters: **chown first, then chmod**.  On Linux, a non-owner
+    cannot ``chmod`` a file — if the archive carried a foreign uid/gid
+    (e.g. ``root:root`` from a container-built tar), chmod would fail
+    with ``EPERM`` (Operation not permitted).  By chown'ing first we
+    become the owner and chmod succeeds.
+
+    Failures on individual entries are logged as warnings (not silently
+    swallowed) so operators can diagnose permission issues without the
+    whole upload being blocked.
     """
+    # ── Owner normalisation (先于 chmod，避免非属主无法 chmod) ──
+    uid: int | None = None
+    gid: int | None = None
+    try:
+        uid = os.getuid()
+        gid = os.getgid()
+    except AttributeError:
+        pass  # non-POSIX (e.g. Windows — no os.getuid)
+
+    # ── Permission bits + owner (单次遍历) ──
     for f in pkg_dir.rglob("*"):
-        if f.is_file() and f.suffix in (".sh", ".bash"):
-            mode = f.stat().st_mode
-            # Add owner/group/other execute if the file is at least owner-readable
-            if mode & stat.S_IRUSR:
-                f.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+        # Skip symlinks — chown/chmod on a symlink operates on its target,
+        # which may escape the package directory (see P1 #3 in review).
+        if f.is_symlink():
+            continue
+
+        # Owner normalisation
+        if uid is not None:
+            try:
+                st = f.stat()
+                if st.st_uid != uid or st.st_gid != gid:
+                    os.chown(f, uid, gid)
+            except OSError as exc:
+                logger.warning(
+                    "normalize: cannot chown %s to %d:%d — %s",
+                    f, uid, gid, exc,
+                )
+
+        # Permission bits
+        try:
+            target = 0o755 if f.is_dir() or (f.is_file() and f.suffix in (".sh", ".bash")) else 0o644
+            f.chmod(target)
+        except OSError as exc:
+            logger.warning(
+                "normalize: cannot chmod %s to %o — %s",
+                f, target, exc,
+            )
 
 
 async def _run_agent_build(source_dir: Path, output_dir: Path) -> None:
@@ -653,9 +706,10 @@ async def upload_package(
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    # --- restore execute permission on shell scripts ---------------------------
+    # --- normalise file & directory permissions -------------------------------
     # tarfile's "data" filter strips execute bits; zip doesn't preserve them.
-    _make_scripts_executable(pkg_dir)
+    # Directories missing +x are inaccessible; scripts without +x fail at runtime.
+    _normalize_permissions(pkg_dir)
 
     # --- build PackageInfo ------------------------------------------------------
     file_count = 0
@@ -822,6 +876,9 @@ async def create_from_template(
             detail=f"Filesystem error during merge: {exc}",
         ) from exc
 
+    # --- normalise file & directory permissions -------------------------------
+    _normalize_permissions(pkg_dir)
+
     # --- build PackageInfo ------------------------------------------------------
     file_count = 0
     try:
@@ -957,9 +1014,10 @@ async def update_package(
     finally:
         tmp_path.unlink(missing_ok=True)
 
-    # --- restore execute permission on shell scripts ---------------------------
+    # --- normalise file & directory permissions -------------------------------
     # tarfile's "data" filter strips execute bits; zip doesn't preserve them.
-    _make_scripts_executable(pkg_dir)
+    # Directories missing +x are inaccessible; scripts without +x fail at runtime.
+    _normalize_permissions(pkg_dir)
 
     # --- build PackageInfo ------------------------------------------------------
     file_count = 0

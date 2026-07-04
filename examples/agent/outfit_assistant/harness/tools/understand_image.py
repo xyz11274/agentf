@@ -1,0 +1,236 @@
+"""understand_image — 通用多模态图片理解工具。
+
+读取本地图片文件，调用 VL（Vision-Language）模型 API 理解图片内容，
+返回文本分析结果。不依赖主 LLM 是否支持多模态，由工具自身保证图片理解能力。
+
+底层实现标准：
+  - 遵循 OpenAI-compatible chat completions 接口
+  - 图片以 data URI（base64）或 HTTP(S) URL 形式传入
+  - 消息结构：user → [image_url → text]
+
+配置（环境变量，.env 文件）：
+  VISION_BASE_URL    VL 模型 API 地址（必填）
+                     示例: https://api.minimax.io/v1/chat/completions
+                            https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+  VISION_MODEL       VL 模型名（必填）
+                     示例: MiniMax-M3, qwen-vl-max, gpt-4o
+  VISION_API_KEY     VL 模型 API Key（可选，默认复用 API_KEY 或 MINIMAX_API_KEY）
+
+支持：
+  - 本地文件路径（自动 base64 编码）
+  - HTTP(S) URL（直接透传）
+  - 自定义 prompt
+
+约束：
+  - 图片 ≤ 5 MB（超过会被拒绝）
+  - 零 pip 依赖（仅标准库）
+"""
+
+import base64
+import json
+import mimetypes
+import os
+import ssl
+import urllib.error
+import urllib.request
+
+TOOL_NAME = "understand_image"
+TOOL_DESCRIPTION = (
+    "理解/分析/描述一张图片的内容。"
+    "传入图片文件路径（本地绝对路径）和描述性的 prompt（你想问什么），"
+    "工具调用多模态模型分析图片并返回结果。"
+    "当 agent 需要查看用户上传的图片、理解刚刚生成的图片内容、"
+    "或需要从图片中提取信息时使用此工具。"
+)
+TOOL_PARAMS = {
+    "type": "object",
+    "properties": {
+        "image_path": {
+            "type": "string",
+            "description": "图片文件路径（本地绝对路径，如 /path/to/image.png）或 http(s) URL"
+        },
+        "prompt": {
+            "type": "string",
+            "description": "描述性问题，告诉模型你希望从图片中了解什么（如：'描述这张图片'，'图中是什么穿搭风格'，'提取文字内容'）"
+        }
+    },
+    "required": ["image_path", "prompt"]
+}
+
+MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB
+
+
+class _VisionError(Exception):
+    """User-actionable vision API failure."""
+
+
+# ---------------------------------------------------------------------------
+# 配置：从环境变量读取 VL 模型三件套
+# ---------------------------------------------------------------------------
+
+def _get_config() -> dict:
+    """Return {base_url, model, api_key} from environment, or raise."""
+    base_url = os.environ.get("VISION_BASE_URL", "").strip()
+    model = os.environ.get("VISION_MODEL", "").strip()
+    api_key = (
+        os.environ.get("VISION_API_KEY", "")
+        or os.environ.get("API_KEY", "")
+        or os.environ.get("MINIMAX_API_KEY", "")
+    )
+
+    missing = []
+    if not base_url:
+        missing.append("VISION_BASE_URL")
+    if not model:
+        missing.append("VISION_MODEL")
+    if not api_key:
+        missing.append("VISION_API_KEY / API_KEY / MINIMAX_API_KEY")
+
+    if missing:
+        raise _VisionError(
+            f"VL 模型配置不完整，缺少: {', '.join(missing)}。"
+            f"请在 .env 文件中设置。"
+        )
+
+    return {"base_url": base_url, "model": model, "api_key": api_key}
+
+
+# ---------------------------------------------------------------------------
+# 图片编码
+# ---------------------------------------------------------------------------
+
+def _encode_image(image_path: str) -> str:
+    """Read an image file and return a base64 data URI.
+    
+    Raises _VisionError if the file exceeds MAX_IMAGE_BYTES or doesn't exist.
+    """
+    if not os.path.isfile(image_path):
+        raise _VisionError(f"Image file not found: {image_path}")
+
+    size = os.path.getsize(image_path)
+    if size > MAX_IMAGE_BYTES:
+        mb = size / (1024 * 1024)
+        limit_mb = MAX_IMAGE_BYTES / (1024 * 1024)
+        raise _VisionError(
+            f"Image too large: {mb:.1f} MB (max {limit_mb:.0f} MB). "
+            f"Please resize or compress before uploading."
+        )
+
+    with open(image_path, "rb") as f:
+        img_bytes = f.read()
+    mime = mimetypes.guess_type(image_path)[0] or "image/jpeg"
+    return f"data:{mime};base64,{base64.b64encode(img_bytes).decode('utf-8')}"
+
+
+# ---------------------------------------------------------------------------
+# VL 模型调用（OpenAI-compatible chat completions）
+# ---------------------------------------------------------------------------
+
+def _call_vision(image_data: str, user_prompt: str,
+                 timeout: int = 120) -> str:
+    """Call the VL model with an image + user prompt.
+
+    Follows the OpenAI-compatible chat completions pattern:
+      POST {base_url}
+      Authorization: Bearer {api_key}
+      Content-Type: application/json
+      {
+        "model": "...",
+        "messages": [{
+          "role": "user",
+          "content": [
+            {"type": "image_url", "image_url": {"url": "data:..."}},
+            {"type": "text", "text": "..."}
+          ]
+        }],
+        "max_completion_tokens": 1024
+      }
+    """
+    cfg = _get_config()
+    payload = {
+        "model": cfg["model"],
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": image_data}},
+                    {"type": "text", "text": user_prompt},
+                ],
+            },
+        ],
+        "max_completion_tokens": 1024,
+    }
+    headers = {
+        "Authorization": f"Bearer {cfg['api_key']}",
+        "Content-Type": "application/json",
+    }
+    # Skip SSL certificate verification to avoid issues in various environments
+    ssl_ctx = ssl._create_unverified_context()
+    req = urllib.request.Request(
+        cfg["base_url"],
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=ssl_ctx) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:300]
+        raise _VisionError(f"HTTP {e.code}: {body}")
+    except urllib.error.URLError as e:
+        raise _VisionError(f"Connection failed: {e.reason}")
+
+    choice = (data.get("choices") or [{}])[0]
+    content = (choice.get("message") or {}).get("content", "")
+
+    # Try to parse as JSON; fall back to raw text
+    try:
+        parsed = json.loads(content)
+        return json.dumps(parsed, ensure_ascii=False, indent=2)
+    except json.JSONDecodeError:
+        return content
+
+
+# ---------------------------------------------------------------------------
+# 工具入口
+# ---------------------------------------------------------------------------
+
+def execute(tool_input: dict) -> str:
+    """Tool entry point — understand an image with multimodal AI."""
+    image_path = tool_input.get("image_path", "").strip()
+    prompt = tool_input.get("prompt", "").strip()
+
+    if not image_path:
+        return json.dumps({"error": "image_path is required"}, ensure_ascii=False)
+    if not prompt:
+        prompt = "请详细描述这张图片的内容"
+
+    try:
+        if image_path.startswith(("http://", "https://")):
+            image_data = image_path  # URL passthrough
+        else:
+            image_data = _encode_image(image_path)
+
+        result_text = _call_vision(image_data, prompt)
+
+        return json.dumps({
+            "image_path": image_path,
+            "analysis": result_text,
+        }, ensure_ascii=False)
+
+    except _VisionError as e:
+        return json.dumps({
+            "error": str(e),
+            "image_path": image_path,
+        }, ensure_ascii=False)
+    except FileNotFoundError as e:
+        return json.dumps({
+            "error": f"File not found: {e}",
+            "image_path": image_path,
+        }, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({
+            "error": f"Unexpected error: {e}",
+            "image_path": image_path,
+        }, ensure_ascii=False)

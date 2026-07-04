@@ -523,14 +523,21 @@ public:
     size_t key_size   = key.size();
     size_t total_size = value_size + key_size;
 
-    if(used_capacity_ + total_size > capacity_) {
-      Logger::instance().error_f("Shared memory full: used=%zu, need=%zu", used_capacity_,
-                                 total_size);
+    // If the key already exists, its old capacity must be freed first
+    size_t old_size = 0;
+    auto it = data_->find(key);
+    if(it != data_->end()) {
+      old_size = it->first.size() + estimate_variant_size(it->second);
+    }
+
+    if(used_capacity_ - old_size + total_size > capacity_) {
+      Logger::instance().error_f("Shared memory full: used=%zu, freed=%zu, need=%zu",
+                                 used_capacity_, old_size, total_size);
       return false;
     }
 
     (*data_)[key] = value;
-    used_capacity_ += total_size;
+    used_capacity_ = used_capacity_ - old_size + total_size;
     return true;
   }
 

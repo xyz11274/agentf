@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "agent/common.h"
+#include "utils/logger.h"
 
 namespace agentflow {
 namespace detail {
@@ -585,95 +586,128 @@ inline bool data_variant_from_encoded_value(const std::string& type, const std::
 
 inline bool parse_json_object_to_datamap(const std::string& json, DataMap& out) {
   size_t index = 0;
-  while(index < json.size() && json[index] != '{') {
+  size_t parsed_count = 0;
+
+  // Iterate through ALL JSON objects in the output (supports multi-object streaming).
+  // Each JSON object is parsed independently; later fields overwrite earlier ones
+  // ("last value wins").  This allows nodes with json_output=true to emit
+  // intermediate progress lines before the final result.
+  while(index < json.size()) {
+    // Skip non-JSON content (whitespace, newlines, non-JSON text) before the next '{'
+    while(index < json.size() && json[index] != '{') {
+      if(json[index] == '\n') {
+        ++index;
+        detail::skip_json_ws(json, index);
+      } else {
+        ++index;
+      }
+    }
+    if(index >= json.size() || json[index] != '{') {
+      break;
+    }
+    ++index;
+    detail::skip_json_ws(json, index);
+    if(index < json.size() && json[index] == '}') {
+      ++parsed_count;
+      continue;  // empty object
+    }
+
+    bool object_completed = false;
+    while(index < json.size()) {
+      detail::skip_json_ws(json, index);
+      std::string key;
+      if(!detail::parse_json_string_token(json, index, key)) {
+        break;
+      }
+      detail::skip_json_ws(json, index);
+      if(index >= json.size() || json[index] != ':') {
+        break;
+      }
+      ++index;
+
+      std::string raw_value;
+      if(!detail::extract_json_value(json, index, raw_value)) {
+        break;
+      }
+
+      const std::string trimmed = detail::trim_copy(raw_value);
+      if(!trimmed.empty() && trimmed.front() == '"') {
+        std::string parsed;
+        if(!detail::parse_json_string_value(trimmed, parsed)) {
+          break;
+        }
+        out[key] = parsed;
+      } else if(trimmed == "true") {
+        out[key] = true;
+      } else if(trimmed == "false") {
+        out[key] = false;
+      } else if(trimmed == "null") {
+        out[key] = std::string("");
+      } else if(!trimmed.empty() && trimmed.front() == '{') {
+        FileDescriptor descriptor;
+        if(parse_file_descriptor_json(trimmed, descriptor)) {
+          out[key] = std::move(descriptor);
+        } else {
+          out[key] = trimmed;
+        }
+      } else if(!trimmed.empty() && trimmed.front() == '[') {
+        FileDescriptorList descriptors;
+        if(parse_file_descriptor_list_json(trimmed, descriptors)) {
+          out[key] = std::move(descriptors);
+        } else {
+          out[key] = trimmed;
+        }
+      } else {
+        bool is_float = trimmed.find('.') != std::string::npos ||
+                        trimmed.find('e') != std::string::npos ||
+                        trimmed.find('E') != std::string::npos;
+        try {
+          if(is_float) {
+            out[key] = std::stod(trimmed);
+          } else {
+            out[key] = static_cast<int64_t>(std::stoll(trimmed));
+          }
+        } catch(...) {
+          out[key] = trimmed;
+        }
+      }
+
+      detail::skip_json_ws(json, index);
+      if(index >= json.size()) {
+        break;
+      }
+      if(json[index] == '}') {
+        ++parsed_count;
+        ++index;
+        object_completed = true;
+        break;  // end of this object → look for next
+      }
+      if(json[index] != ',') {
+        break;
+      }
+      ++index;
+    }
+
+    if(!object_completed) {
+      Logger::instance().warn_f(
+          "parse_json_object_to_datamap: incomplete JSON object at byte %zu "
+          "(partial keys may remain in output — use distinct keys per object)",
+          index);
+    }
+
+    // After parsing one JSON object (or failing mid-object), skip the rest
+    // of the current line before looking for the next one.  This prevents
+    // corrupt/malformed output on one line from leaking into the next
+    // object's parse by ensuring we always start from a clean line boundary.
     while(index < json.size() && json[index] != '\n') {
       ++index;
     }
     if(index < json.size()) {
-      ++index;
+      ++index;  // skip '\n'
     }
-    detail::skip_json_ws(json, index);
-  }
-  if(index >= json.size() || json[index] != '{') {
-    return false;
-  }
-  ++index;
-  detail::skip_json_ws(json, index);
-  if(index < json.size() && json[index] == '}') {
-    return true;
   }
 
-  while(index < json.size()) {
-    detail::skip_json_ws(json, index);
-    std::string key;
-    if(!detail::parse_json_string_token(json, index, key)) {
-      return false;
-    }
-    detail::skip_json_ws(json, index);
-    if(index >= json.size() || json[index] != ':') {
-      return false;
-    }
-    ++index;
-
-    std::string raw_value;
-    if(!detail::extract_json_value(json, index, raw_value)) {
-      return false;
-    }
-
-    const std::string trimmed = detail::trim_copy(raw_value);
-    if(!trimmed.empty() && trimmed.front() == '"') {
-      std::string parsed;
-      if(!detail::parse_json_string_value(trimmed, parsed)) {
-        return false;
-      }
-      out[key] = parsed;
-    } else if(trimmed == "true") {
-      out[key] = true;
-    } else if(trimmed == "false") {
-      out[key] = false;
-    } else if(trimmed == "null") {
-      out[key] = std::string("");
-    } else if(!trimmed.empty() && trimmed.front() == '{') {
-      FileDescriptor descriptor;
-      if(parse_file_descriptor_json(trimmed, descriptor)) {
-        out[key] = std::move(descriptor);
-      } else {
-        out[key] = trimmed;
-      }
-    } else if(!trimmed.empty() && trimmed.front() == '[') {
-      FileDescriptorList descriptors;
-      if(parse_file_descriptor_list_json(trimmed, descriptors)) {
-        out[key] = std::move(descriptors);
-      } else {
-        out[key] = trimmed;
-      }
-    } else {
-      bool is_float = trimmed.find('.') != std::string::npos || trimmed.find('e') != std::string::npos ||
-                      trimmed.find('E') != std::string::npos;
-      try {
-        if(is_float) {
-          out[key] = std::stod(trimmed);
-        } else {
-          out[key] = static_cast<int64_t>(std::stoll(trimmed));
-        }
-      } catch(...) {
-        out[key] = trimmed;
-      }
-    }
-
-    detail::skip_json_ws(json, index);
-    if(index >= json.size()) {
-      return false;
-    }
-    if(json[index] == '}') {
-      return true;
-    }
-    if(json[index] != ',') {
-      return false;
-    }
-    ++index;
-  }
-  return false;
+  return parsed_count > 0;
 }
 
 }  // namespace agentflow

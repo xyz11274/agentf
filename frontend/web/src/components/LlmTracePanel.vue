@@ -32,10 +32,10 @@ const detailContent = ref<Record<string, Record<string, unknown>>>({})
 
 // ── Derived ─────────────────────────────────────────────────
 const count = computed(() => props.traces.length)
-const avgLatency = computed(() => {
-  if (count.value === 0) return 0
+const avgLatencySec = computed(() => {
+  if (count.value === 0) return '0s'
   const total = props.traces.reduce((s, t) => s + t.latency_ms, 0)
-  return Math.round(total / count.value)
+  return (total / count.value / 1000).toFixed(1) + 's'
 })
 const totalTokens = computed(() => {
   return props.traces.reduce(
@@ -43,10 +43,22 @@ const totalTokens = computed(() => {
     0,
   )
 })
+const totalTokensFormatted = computed(() => formatTokens(totalTokens.value))
 const models = computed(() => {
   const set = new Set(props.traces.map((t) => t.model).filter(Boolean))
   return [...set].join(', ')
 })
+
+function formatLatency(ms: number): string {
+  return (ms / 1000).toFixed(1) + 's'
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1000) {
+    return (n / 1000).toFixed(1) + 'k'
+  }
+  return String(n)
+}
 
 function toggle(): void {
   expanded.value = !expanded.value
@@ -97,9 +109,9 @@ async function showDetail(trace: LlmTraceSummary): Promise<void> {
       <span v-if="models" class="llm-trace__trigger-models">{{ models }}</span>
       <span class="llm-trace__trigger-stats">
         <el-icon><Clock /></el-icon>
-        {{ avgLatency }}ms
+        {{ avgLatencySec }}
         <template v-if="totalTokens > 0">
-          · {{ totalTokens }} tokens
+          · {{ totalTokensFormatted }} tokens
         </template>
       </span>
       <el-icon class="llm-trace__trigger-arrow">
@@ -127,10 +139,10 @@ async function showDetail(trace: LlmTraceSummary): Promise<void> {
           </span>
           <span class="llm-trace__item-model">{{ trace.model || '-' }}</span>
           <span class="llm-trace__item-latency">
-            <el-icon><Clock /></el-icon>{{ trace.latency_ms }}ms
+            <el-icon><Clock /></el-icon>{{ formatLatency(trace.latency_ms) }}
           </span>
           <span v-if="trace.token_usage" class="llm-trace__item-tokens">
-            {{ trace.token_usage.prompt_tokens }} + {{ trace.token_usage.completion_tokens }} = {{ trace.token_usage.total_tokens }}
+            {{ trace.token_usage.prompt_tokens }} + {{ trace.token_usage.completion_tokens }} = {{ formatTokens(trace.token_usage.total_tokens) }}
           </span>
           <el-button
             size="small"

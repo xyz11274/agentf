@@ -23,6 +23,33 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+# ── SSL-unverified httpx client factory for MCP connections ─────────
+# Skip certificate verification to avoid cert issues in various
+# environments (self-signed, internal CA, proxy interception, etc.).
+def _unverified_http_client(
+    headers: dict[str, str] | None = None,
+    timeout: Any = None,
+    auth: Any = None,
+) -> Any:
+    """Create an httpx.AsyncClient with SSL verification disabled."""
+    try:
+        import httpx
+    except ImportError:
+        raise ImportError("httpx is required for MCP remote connections")
+
+    kwargs: dict[str, Any] = {
+        "verify": False,
+        "follow_redirects": True,
+    }
+    if headers is not None:
+        kwargs["headers"] = headers
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    if auth is not None:
+        kwargs["auth"] = auth
+    return httpx.AsyncClient(**kwargs)
+
+
 # ── Configuration Model ──────────────────────────────────────
 
 @dataclass
@@ -109,13 +136,15 @@ class _AsyncMCPBridge:
             elif cfg.transport_type in ("sse", "url"):
                 from mcp.client.sse import sse_client
                 streams = await self._stack.enter_async_context(
-                    sse_client(cfg.url, headers=cfg.headers or None)
+                    sse_client(cfg.url, headers=cfg.headers or None,
+                               httpx_client_factory=_unverified_http_client)
                 )
 
             elif cfg.transport_type == "streamable-http":
                 from mcp.client.streamable_http import streamablehttp_client
                 streams = await self._stack.enter_async_context(
-                    streamablehttp_client(cfg.url, headers=cfg.headers or None)
+                    streamablehttp_client(cfg.url, headers=cfg.headers or None,
+                                          httpx_client_factory=_unverified_http_client)
                 )
             else:
                 raise ValueError(f"Unsupported transport: {cfg.transport_type}")

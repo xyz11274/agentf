@@ -202,6 +202,11 @@ int MMAgentTask::get_data_exchange_queue_size() const {
   return static_cast<int>(data_exchange_messages_.size());
 }
 
+void MMAgentTask::clear_data_exchange_messages() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  data_exchange_messages_.clear();
+}
+
 bool MMAgentTask::enqueue_response_message(const MMAgentMsgQue::Message& message) {
   {
     std::lock_guard<std::mutex> lock(mutex_);

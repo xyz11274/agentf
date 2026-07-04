@@ -183,8 +183,14 @@ class BridgeSettings(BaseSettings):
     aisf_adapter_agent_id: str = Field(default="outfit-assistant", description="agentflowd 中 agent 标识. Set via AISF_ADAPTER_AGENT_ID.")
     aisf_adapter_mode: str = Field(default="async", description="AISF Adapter mode: async | sync. Set via AISF_ADAPTER_MODE.")
     aisf_adapter_timeout: float = Field(default=360.0, gt=0, description="Per-task timeout (seconds). Set via AISF_ADAPTER_TIMEOUT.")
+    aisf_adapter_upstream_scheme: str = Field(default="http", description="Upstream callback scheme: http | https. Set via AISF_ADAPTER_UPSTREAM_SCHEME.")
     aisf_adapter_upstream_callback_port: int = Field(default=23767, description="Upstream SysAgent callback port. Set via AISF_ADAPTER_UPSTREAM_CALLBACK_PORT.")
     aisf_adapter_upstream_callback_path: str = Field(default="/coremind/systemagent/v1/callback", description="Upstream callback path. Set via AISF_ADAPTER_UPSTREAM_CALLBACK_PATH.")
+    aisf_adapter_upstream_client_cert_path: str = Field(default="", description="Client cert PEM path for mTLS. Set via AISF_ADAPTER_UPSTREAM_CLIENT_CERT_PATH.")
+    aisf_adapter_upstream_client_key_path: str = Field(default="", description="Client key PEM path for mTLS. Set via AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PATH.")
+    aisf_adapter_upstream_client_key_password: str = Field(default="", description="Client key PEM password (if encrypted). Set via AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PASSWORD.")
+    aisf_adapter_upstream_ca_cert_path: str = Field(default="", description="Custom CA cert path for server verification. Set via AISF_ADAPTER_UPSTREAM_CA_CERT_PATH.")
+    aisf_adapter_upstream_verify: bool = Field(default=True, description="Verify server TLS cert. Set via AISF_ADAPTER_UPSTREAM_VERIFY.")
 
     # --- artifact ------------------------------------------------------------
     artifact_public_base_url: str = Field(
@@ -215,6 +221,16 @@ class BridgeSettings(BaseSettings):
     upload_max_body_size_mb: int = Field(
         default=100, ge=1,
         description="Max HTTP request body size in MB for file uploads.",
+    )
+
+    # --- 🖼️ multimodal content (Phase A) ---------------------------------------
+    content_image_inline_threshold_kb: int = Field(
+        default=256, ge=1,
+        description="Images with base64 payload ≥ this KB are landed to disk by the bridge.",
+    )
+    uploads_dir: str = Field(
+        default="/tmp/agentflow/uploads",
+        description="Directory where bridge lands large inline images before forwarding to daemon.",
     )
     chat_turn_timeout_seconds: float = Field(
         default=900.0, gt=0,
@@ -259,6 +275,11 @@ class BridgeSettings(BaseSettings):
         if p.is_absolute():
             return p.resolve()
         return (_PROJECT_ROOT / p).resolve()
+
+    @property
+    def uploads_path(self) -> Path:
+        p = Path(self.uploads_dir)
+        return p.resolve()
 
 
 def _is_pydantic_type(key: str) -> bool:

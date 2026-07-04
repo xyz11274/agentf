@@ -1,11 +1,11 @@
 {
-  "name": "OutfitAssistantAgent",
+  "name": "GeneralHarnessAgent",
   "version": "3.0.0",
-  "description": "穿搭助手 — dispatcher → dummy_pre_skill hook → coordinator loop",
+  "description": "通用 Harness Agent — dispatcher → dummy_pre_skill hook → coordinator loop",
   "session_pool_size": 3,
   "max_workflows": 10,
   "max_concurrent_workflows": 5,
-  "data_bus_capacity_mb": 5,
+  "data_bus_capacity_mb": 50,
   "tasks": [
     {
       "id": 0,

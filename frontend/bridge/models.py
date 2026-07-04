@@ -13,10 +13,51 @@ Design principles:
 
 from __future__ import annotations
 
-from typing import Generic, List, Optional, TypeVar, Union
+from typing import Generic, List, Literal, Optional, TypeVar, Union
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import Literal
+from typing_extensions import Literal as _Literal  # alias for clarity
+
+
+# ---------------------------------------------------------------------------
+# Multimodal content parts (Phase A: text + image_url inline base64)
+# ---------------------------------------------------------------------------
+
+
+class TextPart(BaseModel):
+    """A text fragment in a multimodal content array (OpenAI-compatible)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    type: Literal["text"]
+    text: str
+
+
+class ImageURLBody(BaseModel):
+    """The ``image_url`` payload inside an :class:`ImagePart`.
+
+    ``url`` accepts either:
+    * ``data:image/...;base64,...`` — inline base64 (Phase A primary path)
+    * ``file:///abs/path`` — already-landed file URL (Phase B, or bridge output)
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    url: str
+
+
+class ImagePart(BaseModel):
+    """An image fragment in a multimodal content array (OpenAI-compatible)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    type: Literal["image_url"]
+    image_url: ImageURLBody
+
+
+ContentPart = Union[TextPart, ImagePart]
+"""Discriminated union of supported content part types."""
+
 
 # ---------------------------------------------------------------------------
 # Agent
@@ -32,7 +73,6 @@ class AgentInfo(BaseModel):
     name: str
     workflow_count: int
     status: Literal["loaded", "running", "paused", "unloaded"]
-
 
 # ---------------------------------------------------------------------------
 # Session
@@ -199,7 +239,7 @@ class ChatMessage(BaseModel):
 
     id: str
     role: Literal["user", "assistant"]
-    content: str
+    content: Union[str, List[ContentPart]]
     timestamp: int
 
 
@@ -240,7 +280,7 @@ class ChatRequest(BaseModel):
 
     user_id: str
     client_id: str
-    content: str
+    content: Union[str, List[ContentPart]]
 
 
 class ChatChunk(BaseModel):
@@ -248,6 +288,9 @@ class ChatChunk(BaseModel):
 
     ``type`` is fixed by the wire contract and defaults to ``"chunk"``;
     ``final: True`` means this is the last chunk for the current turn.
+    ``progress: True`` means this is a progress/status message, not model output.
+    The frontend can style it differently (e.g. grey text + spinner) to
+    distinguish it from the LLM's final response.
     """
 
     model_config = ConfigDict(from_attributes=True)
@@ -255,6 +298,7 @@ class ChatChunk(BaseModel):
     type: Literal["chunk"] = "chunk"
     content: str
     final: bool
+    progress: bool = False
 
 
 class ChatDone(BaseModel):

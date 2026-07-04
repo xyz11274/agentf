@@ -17,6 +17,7 @@
 | 功能设计 | L2 | [Agent 管理](features/agent-management.md) | ✅ 已填充 |
 | 功能设计 | L2 | [聊天功能](features/chat.md) | ✅ 已填充（含双模式与多模态 Artifact） |
 | 功能设计 | L2 | [Daemon 监控](features/daemon-monitoring.md) | ✅ 已填充 |
+| 功能设计 | L2 | [日志系统](features/logging-system.md) | 🟡 草案 |
 | 功能设计 | L2 | [包管理](features/package-management.md) | ✅ 已填充 |
 | 功能设计 | L2 | [会话管理](features/session-management.md) | ✅ 已填充 |
 | 功能设计 | L2 | [Skill Hub](features/skill-hub.md) | 🟡 草案 |

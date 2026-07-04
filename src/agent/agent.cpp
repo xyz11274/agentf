@@ -1604,6 +1604,12 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
           coordinator_trigger.content = *text;
         }
       }
+      // Clear stale data exchange messages from previous rounds.
+      // When a new coordinator workflow is triggered, any WORKFLOW_COMPLETE
+      // messages still in the queue from an older round are now stale and
+      // would cause the handler to prematurely read the current DataBus state
+      // (which may already have a "response" key from a completed skill).
+      task->clear_data_exchange_messages();
       task->enqueue_intent_request_message(coordinator_trigger);
       Logger::instance().info_f("[SKILL_COMPLETION] Triggered coordinator workflow for skill completion, skill=%s, success=%s",
                                skill_name_for_counter.c_str(),
@@ -1863,6 +1869,12 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
           coordinator_trigger.content = *text;
         }
       }
+      // Clear stale data exchange messages from previous rounds.
+      // When a new coordinator workflow is triggered, any WORKFLOW_COMPLETE
+      // messages still in the queue from an older round are now stale and
+      // would cause the handler to prematurely read the current DataBus state
+      // (which may already have a "response" key from a completed skill).
+      task->clear_data_exchange_messages();
       task->enqueue_intent_request_message(coordinator_trigger);
       return;
     }
@@ -1885,8 +1897,37 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     auto result = process_next_skills_launch(session, task, dialogue_id, message, "COORDINATORDataExchange");
 
     if(result.found_next_skills) {
-      // If all skills are already launched, check for response
+      // ── Progress push (non-final) ───────────────────────────────────
+      // When the coordinator has dispatched all skills AND a "response" key
+      // exists in the databus, push a non-final notification to the frontend
+      // so the user sees progress immediately.  The response key is preserved
+      // so the final response path can still send it when skills complete.
+      // This MUST NOT call cleanup_dialogue_data or emit DIALOGUE_DESTROYED.
       if(result.all_launched) {
+        DataVariant progress_value;
+        if(BuiltinDispatcher::get_framework_data(*this, session->get_session_id(),
+                                                  dialogue_id, "", "response", progress_value)) {
+          if(const auto* text = std::get_if<std::string>(&progress_value)) {
+            MMAgentMsgQue::Message progress_msg = message;
+            progress_msg.content = *text;
+            // Non-final — bridge keeps polling, response_poller keeps in_flight
+            progress_msg.metadata["final"] = "false";
+            if(session_router_) {
+              session_router_->enqueue_response_message(progress_msg);
+              Logger::instance().info_f(
+                  "[COORDINATORDataExchange] Pushed progress notification (non-final), "
+                  "content_len=%zu",
+                  progress_msg.content.size());
+            }
+          }
+        }
+      }
+
+      // If all skills are already launched AND no new skills were just launched
+      // in THIS round, check for response. If we just launched new skills
+      // (launched_count > 0), wait for them to complete — the pending_skills_count
+      // may be stale from a previous round.
+      if(result.all_launched && result.launched_count == 0) {
         Logger::instance().info_f("[COORDINATORDataExchange] All skills already launched, checking if response is ready");
 
         // Check pending_skills_count to ensure all skills have completed

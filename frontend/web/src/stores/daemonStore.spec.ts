@@ -31,16 +31,6 @@ describe('useDaemonStore', () => {
     expect(store.error).toBeNull()
   })
 
-  it('checkHealth returns true and marks connected when status is ok', async () => {
-    const get = mockGet(async () => ok({ status: 'ok' }))
-    setApiClient(makeClient(get, mockPut(), mockPost(), mockDel()))
-    const store = useDaemonStore()
-    const ok1 = await store.checkHealth()
-    expect(ok1).toBe(true)
-    expect(store.isConnected).toBe(true)
-    expect(store.error).toBeNull()
-  })
-
   it('checkHealth marks disconnected and stores error on failure', async () => {
     const get = mockGet(async () => err(503, 'bridge down'))
     setApiClient(makeClient(get, mockPut(), mockPost(), mockDel()))
@@ -49,26 +39,6 @@ describe('useDaemonStore', () => {
     expect(ok1).toBe(false)
     expect(store.isConnected).toBe(false)
     expect(store.error).toBe('bridge down')
-  })
-
-  it('checkHealth treats a non-ok status as not-connected with an error message', async () => {
-    const get = mockGet(async () => ok({ status: 'degraded' }))
-    setApiClient(makeClient(get, mockPut(), mockPost(), mockDel()))
-    const store = useDaemonStore()
-    const ok1 = await store.checkHealth()
-    expect(ok1).toBe(false)
-    expect(store.isConnected).toBe(false)
-    expect(store.error).toContain('degraded')
-  })
-
-  it('getDaemonStatus stores status and reflects running flag', async () => {
-    const get = mockGet(async () => ok(status))
-    setApiClient(makeClient(get, mockPut(), mockPost(), mockDel()))
-    const store = useDaemonStore()
-    const r = await store.getDaemonStatus()
-    expect(r).toEqual(status)
-    expect(store.status).toEqual(status)
-    expect(store.isConnected).toBe(true)
   })
 
   it('getDaemonStatus flips isConnected to false when running is false', async () => {

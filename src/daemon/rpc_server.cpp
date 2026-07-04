@@ -21,57 +21,48 @@
 #include "utils/logger.h"
 #include "daemon/ws_upgrade.h"
 
+#include <rapidjson/document.h>
+#include <rapidjson/writer.h>
+#include <rapidjson/stringbuffer.h>
+
 namespace agentflow {
 namespace daemon {
 
 namespace {
 
-// Minimal JSON helpers (same pattern as UDSServer)
+// RapidJSON-based JSON helpers (replaced hand-written parser)
+std::string rj_stringify(const rapidjson::Value& v) {
+  rapidjson::StringBuffer buf;
+  rapidjson::Writer<rapidjson::StringBuffer> w(buf);
+  v.Accept(w);
+  return buf.GetString();
+}
+
 std::string extract_json_string(const std::string& json, const std::string& key) {
-  std::string search = "\"" + key + "\"";
-  size_t pos = json.find(search);
-  if (pos == std::string::npos) return "";
-  pos = json.find(':', pos);
-  if (pos == std::string::npos) return "";
-  pos++;
-  while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) pos++;
-  if (pos >= json.size()) return "";
-  if (json[pos] == '"') {
-    pos++;
-    size_t end = json.find('"', pos);
-    if (end == std::string::npos) return "";
-    return json.substr(pos, end - pos);
-  }
-  // Simple unquoted value
-  size_t end = pos;
-  while (end < json.size() && json[end] != ',' && json[end] != '}' && json[end] != ']') end++;
-  std::string val = json.substr(pos, end - pos);
-  while (!val.empty() && std::isspace(static_cast<unsigned char>(val.back()))) val.pop_back();
-  return val;
+  rapidjson::Document d;
+  d.Parse(json.c_str());
+  if (d.HasParseError() || !d.HasMember(key.c_str())) return "";
+  const auto& v = d[key.c_str()];
+  if (v.IsString()) return v.GetString();
+  return rj_stringify(v);
 }
 
 std::string extract_json_method(const std::string& json) {
-  return extract_json_string(json, "method");
+  rapidjson::Document d;
+  d.Parse(json.c_str());
+  if (d.HasParseError() || !d.HasMember("method") || !d["method"].IsString()) return "";
+  return d["method"].GetString();
 }
 
 int64_t extract_json_id(const std::string& json) {
-  std::string id_str = extract_json_string(json, "id");
-  if (id_str.empty()) {
-    // Try unquoted number
-    std::string search = "\"id\"";
-    size_t pos = json.find(search);
-    if (pos == std::string::npos) return -1;
-    pos = json.find(':', pos);
-    if (pos == std::string::npos) return -1;
-    pos++;
-    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) pos++;
-    size_t end = pos;
-    while (end < json.size() && json[end] != ',' && json[end] != '}') end++;
-    try { return std::stoll(json.substr(pos, end - pos)); }
-    catch (...) { return -1; }
-  }
-  try { return std::stoll(id_str); }
-  catch (...) { return -1; }
+  rapidjson::Document d;
+  d.Parse(json.c_str());
+  if (d.HasParseError() || !d.HasMember("id")) return -1;
+  const auto& v = d["id"];
+  if (v.IsInt64())  return v.GetInt64();
+  if (v.IsInt())    return v.GetInt();
+  if (v.IsUint64()) return static_cast<int64_t>(v.GetUint64());
+  return -1;
 }
 
 std::string extract_json_params(const std::string& json) {

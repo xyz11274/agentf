@@ -1,4 +1,4 @@
-"""集成测试：AISF 调度入口 /v1/tasks（对外 /health/v1/tasks）。
+"""集成测试：AISF 调度入口 /aisf/healthagent/v1/tasks。
 
 覆盖场景：
   - 异步模式返回 202 + 正确 task_id
@@ -132,7 +132,7 @@ async def _fire_and_wait_background(
         return t
 
     with patch.object(asyncio, "create_task", side_effect=_capture_task):
-        resp = await client.post("/v1/tasks", json=json_body)
+        resp = await client.post("/aisf/healthagent/v1/tasks", json=json_body)
         for t in tasks:
             await asyncio.wait_for(t, timeout=timeout)
     return resp, tasks[0] if tasks else None
@@ -140,9 +140,18 @@ async def _fire_and_wait_background(
 
 @pytest.fixture
 def upstream_mock() -> AsyncMock:
-    """Mock `routes.aisf_tasks.http_post_to_upstream` 捕获回调报文。"""
-    with patch("routes.aisf_tasks.http_post_to_upstream") as mock:
-        mock.return_value = True
+    """Mock 所有 `http_post_to_upstream` 引用，捕获回调报文。
+
+    post_result_to_upstream 内部调用 server 模块的 http_post_to_upstream，
+    而失败路径直接调用 routes 模块的 http_post_to_upstream（也是 server 的引用），
+    因此需要两个补丁指向同一个 mock。
+    """
+    mock = AsyncMock()
+    mock.return_value = True
+    with (
+        patch("aisf_adapter.sysagent.server.http_post_to_upstream", mock),
+        patch("routes.aisf_tasks.http_post_to_upstream", mock),
+    ):
         yield mock
 
 
@@ -152,7 +161,7 @@ def upstream_mock() -> AsyncMock:
 
 
 class TestReceiveTask:
-    """POST /v1/tasks 接收任务"""
+    """POST /aisf/healthagent/v1/tasks 接收任务"""
 
     async def test_async_mode_returns_202(self, client: AsyncClient, daemon: AsyncMock) -> None:
         """TC-aisf-001: 异步模式返回 202 accepted + 正确 task_id。"""
@@ -169,7 +178,7 @@ class TestReceiveTask:
     async def test_invalid_json_returns_400(self, client: AsyncClient) -> None:
         """TC-aisf-002: 无效 JSON → 400。"""
         resp = await client.post(
-            "/v1/tasks",
+            "/aisf/healthagent/v1/tasks",
             content="not valid json",
             headers={"Content-Type": "application/json"},
         )
@@ -182,7 +191,7 @@ class TestReceiveTask:
             "Header": {"MessageType": "UserTaskManagement", "TaskID": "t2", "Sender": "SystemAgent"},
             "Data": {"MessageType": "TaskStop", "TaskStatusCode": 100},
         }
-        resp = await client.post("/v1/tasks", json=body)
+        resp = await client.post("/aisf/healthagent/v1/tasks", json=body)
         assert resp.status_code == 202
         assert resp.json()["status"] == "ignored"
         assert resp.json()["task_id"] == "t2"
@@ -197,7 +206,7 @@ class TestReceiveTask:
             transport=ASGITransport(app=app), base_url="http://bridge"
         ) as http:
             req = _task_request()
-            resp = await http.post("/v1/tasks", json=req)
+            resp = await http.post("/aisf/healthagent/v1/tasks", json=req)
         assert resp.status_code == 503
         assert resp.json()["error"] == "daemon_unavailable"
         assert resp.json()["task_id"] == "task-001"
@@ -248,24 +257,13 @@ class TestBackgroundExecution:
             _task_request(task_id="ha_001", content="肚子疼咨询"),
         )
 
-        # 应有 2 次回调：TaskStatusReport + UserOutput
+        # 应有 2 次回调：UserOutput → TaskStatusReport
         assert upstream_mock.call_count == 2, (
             f"expected 2 upstream callbacks, got {upstream_mock.call_count}"
         )
-        status_call, output_call = upstream_mock.call_args_list
+        output_call, status_call = upstream_mock.call_args_list
 
-        # --- TaskStatusReport ---
-        assert status_call.args[0] == "127.0.0.1"  # sysAgentEntity
-        status_body = status_call.args[1]
-        assert status_body["Header"]["MessageType"] == "TaskStatusManagement"
-        assert status_body["Header"]["TaskID"] == "ha_001", (
-            "TaskStatusReport.Header.TaskID 必须与请求一致"
-        )
-        assert status_body["Data"]["MessageType"] == "TaskStatusReport"
-        assert status_body["Data"]["TaskStatusCode"] == 0
-        assert status_body["Data"]["TaskStatusReport"] == "TaskCompleted"
-
-        # --- UserOutput ---
+        # --- 第 1 次：UserOutput ---
         assert output_call.args[0] == "127.0.0.1"  # sysAgentEntity
         output_body = output_call.args[1]
         assert output_body["Header"]["MessageType"] == "DataExchange"
@@ -292,6 +290,17 @@ class TestBackgroundExecution:
         assert output_body["Data"]["IsVoiceBroadcast"] == 0
         assert output_body["Data"]["UserOutputFlag"] == 0
 
+        # --- 第 2 次：TaskStatusReport ---
+        assert status_call.args[0] == "127.0.0.1"  # sysAgentEntity
+        status_body = status_call.args[1]
+        assert status_body["Header"]["MessageType"] == "TaskStatusManagement"
+        assert status_body["Header"]["TaskID"] == "ha_001", (
+            "TaskStatusReport.Header.TaskID 必须与请求一致"
+        )
+        assert status_body["Data"]["MessageType"] == "TaskStatusReport"
+        assert status_body["Data"]["TaskStatusCode"] == 200
+        assert status_body["Data"]["TaskStatusReport"] == "TaskCompleted"
+
     async def test_upstream_callback_fields_roundtrip(
         self, client: AsyncClient, daemon: AsyncMock, upstream_mock: AsyncMock
     ) -> None:
@@ -306,7 +315,7 @@ class TestBackgroundExecution:
         )
         await _fire_and_wait_background(client, daemon, req)
 
-        _, output_call = upstream_mock.call_args_list
+        output_call, _ = upstream_mock.call_args_list
         output_body = output_call.args[1]
 
         # ── Header 回传完整性 ──
@@ -356,8 +365,8 @@ class TestBackgroundExecution:
             return t
 
         with patch.object(asyncio, "create_task", side_effect=_capture_tasks):
-            resp_a = await client.post("/v1/tasks", json=req_a)
-            resp_b = await client.post("/v1/tasks", json=req_b)
+            resp_a = await client.post("/aisf/healthagent/v1/tasks", json=req_a)
+            resp_b = await client.post("/aisf/healthagent/v1/tasks", json=req_b)
 
             assert resp_a.status_code == 202
             assert resp_a.json()["task_id"] == "task-a"

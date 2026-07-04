@@ -25,19 +25,18 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import routes.chat as chat_module
-from client import DaemonConnectionError, DaemonError, NotFoundError
+from client import DaemonError, NotFoundError
 from routes.chat import (
-    ChatDone,
     ChatRequest,
     _coerce_inbound,
     _error_frame,
     _extract_content,
     _extract_final,
     _extract_task_id,
+    _extract_workflow_error,
     _run_turn,
     router,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fake WebSocket — captures sent frames
@@ -278,6 +277,82 @@ class TestRunTurnErrors:
         assert "daemon down" in frames[0]["message"]
         mock_daemon.discard_response_queue.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_workflow_error_in_metadata_emits_error_frame(
+        self, mock_daemon: AsyncMock,
+    ) -> None:
+        """Daemon 返回 final=true 且 metadata.skill_result 包含错误 → 发送 error 帧。"""
+        mock_daemon.agent_execute.return_value = {"task_id": "t1"}
+        mock_daemon.wait_for_response.side_effect = [
+            {
+                "content": "",
+                "final": True,
+                "metadata": {
+                    "skill_result": (
+                        '{"status":"failed","error":"Command execution timeout"}'
+                    ),
+                },
+            },
+        ]
+        ws = _FakeWebSocket()
+        req = ChatRequest(user_id="u1", client_id="bridge", content="hi")
+
+        await _run_turn(
+            websocket=ws, daemon_client=mock_daemon,
+            agent_id="agent_a", request=req, stop_event=asyncio.Event(),
+        )
+
+        frames = _drain_sent(ws, 2)
+        assert len(frames) == 2
+        assert frames[0]["type"] == "error", (
+            f"expected error frame, got {frames[0]}"
+        )
+        assert "Command execution timeout" in frames[0]["message"], (
+            frames[0]["message"]
+        )
+        assert frames[1]["type"] == "done"
+
+
+class TestRunTurnProgressDefense:
+    """[PROGRESS] prefix chunks should never end a turn, even with final=True."""
+
+    @pytest.mark.asyncio
+    async def test_progress_chunk_with_final_true_does_not_break(
+        self, mock_daemon: AsyncMock,
+    ) -> None:
+        """Daemon sends [PROGRESS]+final=True then real content+final=True.
+        The bridge must NOT break on the progress chunk."""
+        call_count = 0
+
+        async def _wait(*_: Any, **__: Any) -> dict[str, Any]:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return {"content": "[PROGRESS]正在执行 outfit-stylist", "final": True}
+            return {"content": "这是真正的回复", "final": True}
+
+        mock_daemon.agent_execute.return_value = {"task_id": "t1"}
+        mock_daemon.wait_for_response.side_effect = _wait
+        ws = _FakeWebSocket()
+        req = ChatRequest(user_id="u1", client_id="bridge", content="hi")
+
+        await _run_turn(
+            websocket=ws, daemon_client=mock_daemon,
+            agent_id="agent_a", request=req, stop_event=asyncio.Event(),
+        )
+
+        frames = _drain_sent(ws, 3)
+        # First chunk: progress (stripped prefix, progress=True, not final)
+        assert frames[0]["type"] == "chunk"
+        assert frames[0]["content"] == "正在执行 outfit-stylist"
+        assert frames[0]["progress"] is True
+        # Second chunk: real content
+        assert frames[1]["type"] == "chunk"
+        assert frames[1]["content"] == "这是真正的回复"
+        assert frames[1]["progress"] is False
+        # Done frame
+        assert frames[2]["type"] == "done"
+
 
 # ---------------------------------------------------------------------------
 # _run_turn — session_id propagation
@@ -356,6 +431,40 @@ class TestHelpers:
         assert _extract_content({}) == ""
         assert _extract_content(None) == ""
 
+    def test_extract_workflow_error_success(self) -> None:
+        """No error when skill_result indicates success."""
+        payload = {"metadata": {"skill_result": '{"status":"success","data":"ok"}'}}
+        assert _extract_workflow_error(payload) == ""
+
+    def test_extract_workflow_error_failed(self) -> None:
+        """Return the error string when skill_result has status=failed."""
+        payload = {
+            "metadata": {
+                "skill_result": '{"status":"failed","error":"Command execution timeout"}',
+            },
+        }
+        assert _extract_workflow_error(payload) == "Command execution timeout"
+
+    def test_extract_workflow_error_empty_metadata(self) -> None:
+        """No crash when metadata is missing."""
+        assert _extract_workflow_error({}) == ""
+
+    def test_extract_workflow_error_non_dict_payload(self) -> None:
+        """No crash on non-dict payload."""
+        assert _extract_workflow_error(None) == ""
+        assert _extract_workflow_error("string") == ""
+        assert _extract_workflow_error(42) == ""
+
+    def test_extract_workflow_error_missing_key(self) -> None:
+        """No error when skill_result key is absent."""
+        payload = {"metadata": {"other": "val"}}
+        assert _extract_workflow_error(payload) == ""
+
+    def test_extract_workflow_error_bad_json(self) -> None:
+        """No crash on malformed JSON in skill_result."""
+        payload = {"metadata": {"skill_result": "not-json"}}
+        assert _extract_workflow_error(payload) == ""
+
 
 # ---------------------------------------------------------------------------
 # E2E — WebSocket endpoint outer loop (minimal smoke)
@@ -415,3 +524,111 @@ class TestWebSocketEndpoint:
             err = ws.receive_json()
             assert err["type"] == "error"
             assert err["code"] == -32600
+
+    def test_stop_signal_aborts_turn_and_sends_done(self) -> None:
+        """Integration for #6: client sends {type:'stop'} mid-stream.
+
+        Verifies the outer-loop contract:
+          1. outer loop recognises {type:'stop'} and sends a done frame
+          2. no further chunk frames arrive after stop
+
+        The _run_turn-level stop semantics (stop_event propagation,
+        discard_response_queue cleanup) are covered by
+        TestRunTurnHappyPath.test_stop_during_poll_aborts_and_sends_done.
+        This test focuses on the outer loop's frame routing, which is
+        the layer this review identified as unverified.
+
+        Uses a mock that returns a final chunk immediately so the turn
+        completes; we verify stop is acked with done even when sent
+        right after a chunk.
+        """
+        app = FastAPI()
+        app.include_router(router)
+
+        mock = AsyncMock()
+        mock.agent_execute = AsyncMock(return_value={"task_id": "t1", "session_id": "ses_1"})
+        mock.wait_for_response = AsyncMock(
+            return_value={"content": "partial", "final": True}
+        )
+        mock.discard_response_queue = Mock()
+        app.state.daemon_client = mock
+
+        with TestClient(app).websocket_connect("/ws/chat/agent_a") as ws:
+            # Start a turn.
+            ws.send_json({"content": "hi", "user_id": "u1", "client_id": "c1"})
+            chunk = ws.receive_json()
+            assert chunk["type"] == "chunk"
+            # Turn already finalised (final=True); send stop — outer loop
+            # must still ack with a done frame.
+            ws.send_json({"type": "stop"})
+            done = ws.receive_json()
+            assert done["type"] == "done"
+
+    def test_stop_without_active_turn_is_acked(self) -> None:
+        """A stop frame with no turn in flight still gets a done ack.
+
+        The outer loop sends done regardless of whether a turn is running,
+        so the client always sees a terminal signal. This is the key
+        contract the frontend stop() relies on: after sending {type:'stop'},
+        a done frame will arrive.
+        """
+        app = FastAPI()
+        app.include_router(router)
+        mock = AsyncMock()
+        mock.agent_execute = AsyncMock()
+        mock.wait_for_response = AsyncMock()
+        mock.discard_response_queue = Mock()
+        app.state.daemon_client = mock
+
+        with TestClient(app).websocket_connect("/ws/chat/agent_a") as ws:
+            ws.send_json({"type": "stop"})
+            done = ws.receive_json()
+            assert done["type"] == "done"
+            # No turn was started, so agent_execute must not have been called.
+            mock.agent_execute.assert_not_called()
+
+    def test_stop_then_new_turn_works(self) -> None:
+        """After a turn completes, a stop frame, then a new turn works.
+
+        This verifies the outer loop correctly resets turn_task tracking
+        after a turn finishes, so a subsequent turn is not rejected as
+        "already in flight". (The case where stop interrupts an in-flight
+        hanging turn is covered by the _run_turn unit test; here we test
+        the outer loop's turn_task lifecycle.)
+        """
+        app = FastAPI()
+        app.include_router(router)
+
+        turn = {"n": 0}
+
+        async def _wait(*a, **kw):
+            turn["n"] += 1
+            return {"content": f"reply-{turn['n']}", "final": True}
+
+        mock = AsyncMock()
+        mock.agent_execute = AsyncMock(return_value={"task_id": "t1", "session_id": "ses_1"})
+        mock.wait_for_response = AsyncMock(side_effect=_wait)
+        mock.discard_response_queue = Mock()
+        app.state.daemon_client = mock
+
+        with TestClient(app).websocket_connect("/ws/chat/agent_a") as ws:
+            # Turn 1 — completes normally.
+            ws.send_json({"content": "hi", "user_id": "u1", "client_id": "c1"})
+            chunk = ws.receive_json()
+            assert chunk["type"] == "chunk"
+            assert chunk["content"] == "reply-1"
+            done = ws.receive_json()
+            assert done["type"] == "done"
+
+            # Send a stray stop (no turn in flight).
+            ws.send_json({"type": "stop"})
+            done = ws.receive_json()
+            assert done["type"] == "done"
+
+            # Turn 2 — must succeed (not rejected as concurrent).
+            ws.send_json({"content": "again", "user_id": "u1", "client_id": "c1"})
+            chunk = ws.receive_json()
+            assert chunk["type"] == "chunk", f"expected chunk, got {chunk}"
+            assert chunk["content"] == "reply-2"
+            done = ws.receive_json()
+            assert done["type"] == "done"

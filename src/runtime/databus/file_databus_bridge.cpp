@@ -2,6 +2,8 @@
 
 #include "agent/data_variant_utils.h"
 
+#include <rapidjson/document.h>
+
 #include <atomic>
 #include <algorithm>
 #include <chrono>
@@ -210,78 +212,21 @@ std::string FileDataBusBridge::make_temp_root() {
 
 bool FileDataBusBridge::parse_scalar_json_object(const std::string&               json,
                                                  std::map<std::string, std::string>& out) {
-  size_t i = 0;
-  auto skip_ws = [&]() {
-    while(i < json.size() && std::isspace(static_cast<unsigned char>(json[i]))) {
-      ++i;
-    }
-  };
-  auto read_string = [&](std::string& s) -> bool {
-    if(i >= json.size() || json[i] != '"') {
-      return false;
-    }
-    ++i;
-    std::string raw;
-    while(i < json.size() && json[i] != '"') {
-      if(json[i] == '\\' && i + 1 < json.size()) {
-        raw.push_back(json[i++]);
-      }
-      raw.push_back(json[i++]);
-    }
-    if(i >= json.size()) {
-      return false;
-    }
-    ++i;
-    s = json_unescape(raw);
-    return true;
-  };
+  rapidjson::Document d;
+  d.Parse(json.c_str());
+  if (d.HasParseError() || !d.IsObject()) return false;
 
-  skip_ws();
-  if(i >= json.size() || json[i] != '{') {
-    return false;
+  for (auto it = d.MemberBegin(); it != d.MemberEnd(); ++it) {
+    const auto& val = it->value;
+    if (val.IsString())         out[it->name.GetString()] = val.GetString();
+    else if (val.IsInt64())     out[it->name.GetString()] = std::to_string(val.GetInt64());
+    else if (val.IsInt())       out[it->name.GetString()] = std::to_string(val.GetInt());
+    else if (val.IsDouble())    out[it->name.GetString()] = std::to_string(val.GetDouble());
+    else if (val.IsBool())      out[it->name.GetString()] = val.GetBool() ? "true" : "false";
+    else if (val.IsNull())      out[it->name.GetString()] = "null";
+    else                        return false; // nested objects/arrays not allowed
   }
-  ++i;
-  skip_ws();
-  if(i < json.size() && json[i] == '}') {
-    return true;
-  }
-  while(i < json.size()) {
-    std::string key;
-    skip_ws();
-    if(!read_string(key)) {
-      return false;
-    }
-    skip_ws();
-    if(i >= json.size() || json[i] != ':') {
-      return false;
-    }
-    ++i;
-    skip_ws();
-
-    std::string value;
-    if(i < json.size() && json[i] == '"') {
-      if(!read_string(value)) {
-        return false;
-      }
-    } else {
-      const size_t start = i;
-      while(i < json.size() && json[i] != ',' && json[i] != '}') {
-        ++i;
-      }
-      value = trim_copy(json.substr(start, i - start));
-    }
-    out[key] = value;
-    skip_ws();
-    if(i < json.size() && json[i] == ',') {
-      ++i;
-      continue;
-    }
-    if(i < json.size() && json[i] == '}') {
-      return true;
-    }
-    return false;
-  }
-  return false;
+  return true;
 }
 
 std::string FileDataBusBridge::encode_key(const std::string& key) {

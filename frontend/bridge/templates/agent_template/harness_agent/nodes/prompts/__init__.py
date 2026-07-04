@@ -1,0 +1,22 @@
+"""Prompts — shared message templates for coordinator and skill executor nodes."""
+
+from .common import (
+    ARTIFACTS_SECTION_HEADER,
+    ARTIFACT_IMAGE_TEMPLATE,
+    LLM_ERROR_NO_ARTIFACTS,
+    LLM_ERROR_WITH_ARTIFACTS,
+)
+from .coordinator import (
+    COORDINATOR_FALLBACK_SYSTEM,
+    DECISION_FAILURE_PROMPT,
+    DECISION_SUCCESS_PROMPT,
+    PROTOCOL_TEMPLATE,
+    RUN_SKILLS_TOOL_DEFINITION,
+    SKILL_COMPLETION_TEMPLATE,
+)
+from .skill import (
+    SKILL_FALLBACK_SYSTEM,
+    SKILL_NOT_FOUND_TEMPLATE,
+    SKILL_RECOVERY_PROMPT,
+    SKILL_SECTION_TEMPLATE,
+)

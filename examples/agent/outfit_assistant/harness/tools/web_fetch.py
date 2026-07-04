@@ -77,8 +77,9 @@ def execute(tool_input: dict) -> str:
         import urllib.request
         import ssl
 
-        # Create SSL context (verify certificates)
-        ssl_ctx = ssl.create_default_context()
+        # Create SSL context (skip certificate verification to avoid
+        # certificate issues in various environments)
+        ssl_ctx = ssl._create_unverified_context()
 
         req = urllib.request.Request(
             url,

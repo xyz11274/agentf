@@ -1,4 +1,0 @@
-runtime/
-history/*.jsonl
-scripts/__pycache__/
-scripts/*.bak

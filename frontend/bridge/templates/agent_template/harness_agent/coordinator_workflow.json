@@ -9,7 +9,7 @@
       "type": "task",
       "execution_mode": "python_script",
       "command": "./nodes/coordinator_decide.py",
-      "working_dir": "examples/agent/outfit_assistant",
+      "working_dir": "./",
       "json_output": true,
       "enable_hot_reload": false,
       "inputs": [

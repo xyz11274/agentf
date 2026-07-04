@@ -10,7 +10,7 @@
 
 import { onBeforeUnmount, ref, type Ref } from 'vue'
 import { useChatStore } from '@/stores/chatStore'
-import type { ChatDone } from '@/types/agentflow'
+import type { ChatDone, ContentPart } from '@/types/agentflow'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -32,11 +32,12 @@ export interface ChatWebSocketLike {
 /**
  * Client -> bridge frame sent over the WebSocket.
  * Uses ``user_id`` + ``client_id`` instead of ``session_id``.
+ * ``content`` is either a plain string or an array of multimodal content parts.
  */
 export interface ChatClientFrame {
   user_id: string
   client_id: string
-  content: string
+  content: string | ContentPart[]
 }
 
 export interface UseChatWebSocketOptions {
@@ -228,14 +229,23 @@ export function useChatWebSocket(options: UseChatWebSocketOptions = {}): UseChat
     const type = frame.type
     if (type === 'chunk') {
       const content = typeof frame.content === 'string' ? frame.content : ''
-      // Lazily allocate the assistant message on first chunk so empty turns
-      // don't pollute the message list before streaming begins.
-      if (!chatStore.streamingMessageId) {
-        chatStore.beginAssistantTurn()
+      const isProgress = frame.progress === true
+
+      if (isProgress) {
+        // Progress status message — display separately from model output.
+        chatStore.setProgress(content)
+      } else {
+        // The assistant placeholder is created eagerly in send(), so
+        // streamingMessageId is always set by the time chunks arrive.
+        // (No lazy allocation here — single source of truth in chatStore.)
+        if (chatStore.streamingMessageId) {
+          chatStore.appendChunk(chatStore.streamingMessageId, content)
+        }
+        // Clear any previous progress message once real content arrives.
+        chatStore.clearProgress()
       }
-      if (chatStore.streamingMessageId) {
-        chatStore.appendChunk(chatStore.streamingMessageId, content)
-      }
+      // isStreaming local ref mirrors chatStore.isStreaming for the
+      // composable's public API contract; the store is the source of truth.
       isStreaming.value = true
       return
     }
@@ -281,15 +291,34 @@ export function useChatWebSocket(options: UseChatWebSocketOptions = {}): UseChat
     await openSocket(agentId, userId, clientId)
   }
 
-  function send(content: string): void {
+  function send(text: string, images?: string[]): void {
     if (!isOpen(socket)) {
       throw new Error('chat ws: cannot send while disconnected')
     }
-    const userMessage = chatStore.send(content)
+    // Build content parts: text + images as data URL parts
+    const contentParts: ContentPart[] = []
+    if (text.trim()) {
+      contentParts.push({ type: 'text', text })
+    }
+    if (images && images.length > 0) {
+      for (const url of images) {
+        contentParts.push({ type: 'image_url', image_url: { url } })
+      }
+    }
+    // If only text, keep plain string for backward compatibility
+    const wireContent: string | ContentPart[] =
+      contentParts.length === 1 && contentParts[0]!.type === 'text'
+        ? (contentParts[0] as { type: 'text'; text: string }).text
+        : contentParts
+
+    chatStore.send(text, images)
+    // Immediately create assistant placeholder so send button → stop button,
+    // and typing animation shows, without waiting for first chunk.
+    chatStore.beginAssistantTurn()
     const frame: ChatClientFrame = {
       user_id: chatStore.currentUserId ?? '',
       client_id: chatStore.currentClientId ?? '',
-      content: userMessage.content,
+      content: wireContent,
     }
     socket!.send(JSON.stringify(frame))
   }
@@ -312,6 +341,7 @@ export function useChatWebSocket(options: UseChatWebSocketOptions = {}): UseChat
 
   function stop(): void {
     if (!isOpen(socket)) return
+    chatStore.stop()
     socket!.send(JSON.stringify({ type: 'stop' }))
   }
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# OutfitAssistant 环境初始化
+# Harness Agent 环境初始化
 #
 # 做三件事：
 #   1. 创建 Python 虚拟环境 .venv
@@ -8,12 +8,10 @@
 #
 # 用法：
 #   bash setup.sh                  # 初始化环境
-#   PYTHON_PATH=.venv ./build/agentflowd --listen 0.0.0.0:7891 --package examples/agent/outfit_assistant
+#   PYTHON_PATH=.venv ./build/agentflowd --listen 0.0.0.0:7891 --package <agent_package_dir>
 #
 # 环境变量（可从 .env 加载）：
 #   API_KEY             — LLM API key
-#   QWEATHER_API_KEY    — 和风天气 API key
-#   QWEATHER_API_HOST   — 和风天气 API host
 #   AF_LLM_BASE_URL     — LLM API base URL（可选，覆盖 agent.md）
 #   AF_LLM_MODEL        — LLM 模型名（可选，覆盖 agent.md）
 
@@ -69,16 +67,16 @@ cat <<EOF
 
 启动 daemon（在项目根目录执行）：
 
-  # 加载 .env 环境变量（QWeather / LLM key）
-  set -a; . examples/agent/outfit_assistant/.env; set +a
+  # 加载 .env 环境变量
+  set -a; . <agent_package_dir>/.env; set +a
 
   # 用 .venv 的 python3 执行节点脚本
-  PYTHON_PATH=examples/agent/outfit_assistant/.venv \\
+  PYTHON_PATH=<agent_package_dir>/.venv \\
     ./build/agentflowd \\
     --listen 0.0.0.0:7891 \\
-    --package examples/agent/outfit_assistant
+    --package <agent_package_dir>
 
 关键点：
   - PYTHON_PATH 指向 .venv 目录（框架 worker 会自动找 .venv/bin/python3）
-  - .env 里的 QWEATHER_API_KEY / QWEATHER_API_HOST 会被 export 到 worker 子进程
+  - .env 里的业务 API key 会被 export 到 worker 子进程
 EOF

@@ -119,6 +119,10 @@ class MMAgentTask {
   int  get_data_exchange_queue_size() const;
   int  get_response_queue_size() const;
 
+  /// Clear all pending data exchange messages for this task.
+  /// Used to discard stale messages when a new coordinator workflow is triggered.
+  void clear_data_exchange_messages();
+
   void register_dispatch_record(const MMAgentMsgQue::Message& message);
   void acknowledge_dispatch_record(const std::string& message_id);
 

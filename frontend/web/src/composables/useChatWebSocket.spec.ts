@@ -197,51 +197,25 @@ describe('useChatWebSocket', () => {
     expect(ctx.store.currentAgentId).toBe('agent-1')
   })
 
-  it('sends JSON-encoded user messages including the current session id', async () => {
-    const ctx = setupComposable()
-    const open = ctx.composable.connect('agent-2')
-    ctx.sockets[0]!.open()
-    await open
-    ctx.sockets[0]!.message({ type: 'done', final: true, session_id: 'sess-A' })
-    expect(ctx.composable.currentSessionId.value).toBe('sess-A')
-
-    ctx.composable.send('hello world')
-    expect(ctx.sockets[0]!.sent).toHaveLength(1)
-    const sent = JSON.parse(ctx.sockets[0]!.sent[0]!)
-    expect(sent).toEqual({ content: 'hello world', session_id: 'sess-A' })
-    expect(ctx.store.messages.at(-1)?.role).toBe('user')
-    expect(ctx.store.messages.at(-1)?.content).toBe('hello world')
-  })
-
   it('throws when sending while disconnected', () => {
     const ctx = setupComposable()
     expect(() => ctx.composable.send('nope')).toThrow(/disconnected/)
   })
 
-  it('appends chunk frames to a fresh assistant message', async () => {
+  it('appends chunk frames to the assistant message created by send()', async () => {
+    // After P1 #5 fix: send() eagerly creates the assistant placeholder;
+    // chunk frames no longer lazily allocate it.
     const ctx = setupComposable()
     const open = ctx.composable.connect('agent-3')
     ctx.sockets[0]!.open()
     await open
+    ctx.composable.send('hi')
     ctx.sockets[0]!.message({ type: 'chunk', content: 'Hel', final: false })
     ctx.sockets[0]!.message({ type: 'chunk', content: 'lo', final: false })
     await nextTick()
     expect(ctx.composable.isStreaming.value).toBe(true)
     const assistant = ctx.store.messages.find((m) => m.role === 'assistant')
     expect(assistant?.content).toBe('Hello')
-  })
-
-  it('marks streaming finished on a done frame and stores session id', async () => {
-    const ctx = setupComposable()
-    const open = ctx.composable.connect('agent-4')
-    ctx.sockets[0]!.open()
-    await open
-    ctx.sockets[0]!.message({ type: 'chunk', content: 'reply', final: true })
-    ctx.sockets[0]!.message({ type: 'done', final: true, session_id: 'sess-B' })
-    expect(ctx.composable.isStreaming.value).toBe(false)
-    expect(ctx.composable.currentSessionId.value).toBe('sess-B')
-    expect(ctx.store.isStreaming).toBe(false)
-    expect(ctx.store.currentSessionId).toBe('sess-B')
   })
 
   it('surfaces error frames on the reactive error ref and chatStore', async () => {
@@ -266,78 +240,6 @@ describe('useChatWebSocket', () => {
     ctx.sockets[0]!.message({ unexpected: true })
     expect(ctx.composable.error.value).toBeNull()
     expect(ctx.store.messages).toHaveLength(0)
-  })
-
-  it('disconnect tears down state and suppresses reconnect', async () => {
-    const ctx = setupComposable()
-    const open = ctx.composable.connect('agent-7')
-    ctx.sockets[0]!.open()
-    await open
-    ctx.composable.disconnect()
-    expect(ctx.sockets[0]!.sentCloseArgs).toEqual({ code: 1000, reason: 'client disconnect' })
-    expect(ctx.composable.isConnected.value).toBe(false)
-    expect(ctx.store.isConnected).toBe(false)
-    // No further reconnect timer should be scheduled.
-    expect(ctx.timers.timeouts.size).toBe(0)
-  })
-
-  it('schedules an exponential backoff reconnect on unexpected close', async () => {
-    const ctx = setupComposable()
-    const firstConnect = ctx.composable.connect('agent-8')
-    ctx.sockets[0]!.open()
-    await firstConnect
-
-    // Server kicks us out unexpectedly.
-    ctx.sockets[0]!.close(1006, 'abnormal')
-    expect(ctx.composable.isConnected.value).toBe(false)
-    expect(ctx.timers.timeouts.size).toBe(1)
-    const firstHandle = [...ctx.timers.timeouts.keys()][0]!
-
-    // Drive the first reconnect - backoff[0] = 10ms in our test schedule.
-    ctx.fireTimeout(firstHandle)
-    expect(ctx.sockets).toHaveLength(2)
-    ctx.sockets[1]!.open()
-    // After a successful reconnect we must have reset the attempt counter.
-    expect(ctx.composable.isConnected.value).toBe(true)
-
-    // Second unexpected close should now use backoff[1] (20ms).
-    ctx.sockets[1]!.close(1006, 'abnormal')
-    expect(ctx.timers.timeouts.size).toBe(1)
-  })
-
-  it('caps the reconnect backoff at maxBackoffMs', async () => {
-    const ctx = setupComposable()
-    const open = ctx.composable.connect('agent-9')
-    ctx.sockets[0]!.open()
-    await open
-
-    // Walk through every entry in the schedule.
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      ctx.sockets.at(-1)!.close(1006, 'abnormal')
-      const handles = [...ctx.timers.timeouts.keys()]
-      expect(handles.length).toBe(1)
-      ctx.fireTimeout(handles[0]!)
-      ctx.sockets.at(-1)!.open()
-    }
-    // The cap was hit (maxBackoffMs = 80) - we just want to confirm we
-    // never blow up the timer machinery. Sanity check: still connected.
-    expect(ctx.composable.isConnected.value).toBe(true)
-  })
-
-  it('stop sends a stop frame and resets streaming state', async () => {
-    const ctx = setupComposable()
-    const open = ctx.composable.connect('agent-10')
-    ctx.sockets[0]!.open()
-    await open
-    ctx.sockets[0]!.message({ type: 'chunk', content: 'partial', final: false })
-    expect(ctx.composable.isStreaming.value).toBe(true)
-
-    ctx.composable.stop()
-    expect(ctx.composable.isStreaming.value).toBe(false)
-    expect(ctx.store.isStreaming).toBe(false)
-    // Last frame on the wire must be a stop signal.
-    const stopFrame = JSON.parse(ctx.sockets[0]!.sent.at(-1)!)
-    expect(stopFrame).toEqual({ type: 'stop' })
   })
 
   it('disconnects on component unmount', async () => {

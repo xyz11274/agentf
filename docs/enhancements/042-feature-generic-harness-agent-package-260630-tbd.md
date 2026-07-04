@@ -1105,7 +1105,7 @@ def execute():
         sys.exit(1)
 
     # ⑪ LLM while-loop 执行任务
-    max_rounds = int(get_env("AF_SKILL_MAX_ROUNDS", "8"))
+    max_rounds = int(get_env("AF_MAX_SKILL_TASK_ITERATIONS", "8"))
     for round_i in range(max_rounds):
         raw = call_llm(
             messages, tools=available_tools,

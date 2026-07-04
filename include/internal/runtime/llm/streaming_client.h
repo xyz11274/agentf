@@ -20,6 +20,17 @@ public:
   using FinishCallback = std::function<void(const std::string&)>;
   using ErrorCallback  = std::function<void(const std::string&)>;
 
+  /// Parsed result from a single SSE chat-completion chunk payload.
+  struct SseChunk {
+    std::string content;         ///< delta.content (empty if absent)
+    std::string finish_reason;   ///< "stop", "length", "content_filter", "tool_calls", or ""
+  };
+
+  /// Parse one SSE "data: <json>" payload line into an SseChunk.
+  /// Uses RapidJSON when available (AGENTFLOW_WITH_RAPIDJSON); falls back to
+  /// string-search for content only when RapidJSON is absent.
+  static SseChunk parse_sse_payload(const std::string& json);
+
   bool stream_prompt(const std::string& prompt, const Config& config, const ChunkCallback& on_chunk,
                      const FinishCallback& on_finish = FinishCallback(),
                      const ErrorCallback&  on_error  = ErrorCallback()) const;

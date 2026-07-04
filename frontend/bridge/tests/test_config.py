@@ -77,6 +77,12 @@ def _pydantic_field_to_yaml_path(field_name: str) -> str:
     special_map = {
         "aisf_adapter_upstream_callback_port": "aisf_adapter.upstream.callback_port",
         "aisf_adapter_upstream_callback_path": "aisf_adapter.upstream.callback_path",
+        "aisf_adapter_upstream_scheme": "aisf_adapter.upstream.scheme",
+        "aisf_adapter_upstream_client_cert_path": "aisf_adapter.upstream.client_cert_path",
+        "aisf_adapter_upstream_client_key_path": "aisf_adapter.upstream.client_key_path",
+        "aisf_adapter_upstream_client_key_password": "aisf_adapter.upstream.client_key_password",
+        "aisf_adapter_upstream_ca_cert_path": "aisf_adapter.upstream.ca_cert_path",
+        "aisf_adapter_upstream_verify": "aisf_adapter.upstream.verify",
         "daemon_status_refresh_interval": "daemon_status_refresh_interval",
         "request_timeout_seconds": "request_timeout_seconds",
         "chat_turn_timeout_seconds": "chat_turn_timeout_seconds",
@@ -231,10 +237,10 @@ def test_env_overrides_yaml():
 
 def test_yaml_overrides_code_default():
     """YAML 值必须覆盖代码默认值（中优先级）。"""
-    # artifact_public_base_url 代码默认是 ""，config.yaml 中是 "http://localhost:8199"
+    # artifact_public_base_url 代码默认是 ""，config.yaml 中是 "http://localhost:8199/health"
     s = BridgeSettings()
-    assert s.artifact_public_base_url == "http://localhost:8199", (
-        f"YAML 应覆盖代码默认值, 期望 'http://localhost:8199', "
+    assert s.artifact_public_base_url == "http://localhost:8199/health", (
+        f"YAML 应覆盖代码默认值, 期望 'http://localhost:8199/health', "
         f"实际 '{s.artifact_public_base_url}'"
     )
 
@@ -304,8 +310,14 @@ def test_code_defaults_match_yaml_defaults():
         "aisf_adapter_agent_id": "outfit-assistant",
         "aisf_adapter_mode": "async",
         "aisf_adapter_timeout": 360.0,
+        "aisf_adapter_upstream_scheme": "http",
         "aisf_adapter_upstream_callback_port": 23767,
         "aisf_adapter_upstream_callback_path": "/coremind/systemagent/v1/callback",
+        "aisf_adapter_upstream_client_cert_path": "",
+        "aisf_adapter_upstream_client_key_path": "",
+        "aisf_adapter_upstream_client_key_password": "",
+        "aisf_adapter_upstream_ca_cert_path": "",
+        "aisf_adapter_upstream_verify": True,
         "log_level": "INFO",
         "request_timeout_seconds": 5.0,
         "chat_turn_timeout_seconds": 900.0,

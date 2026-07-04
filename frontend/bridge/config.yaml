@@ -29,15 +29,25 @@ aisf_adapter:
   timeout: 360.0                  # 单次任务超时（秒）
 
   # 上游 SysAgent 回调地址（任务完成后 Bridge 主动 POST 回传结果）
-  # URL: http://{Header.SysAgentEntity}:{port}{path}
+  # URL: {scheme}://{Header.SysAgentEntity}:{port}{path}
   upstream:
+    scheme: "http"   # http | https
     callback_port: 23767
     callback_path: "/coremind/systemagent/v1/callback"
+
+    # --- TLS / mTLS 证书（仅 scheme=https 时生效） ---
+    # 客户端证书（mTLS），留空则不发送客户端证书
+    client_cert_path: ""       # PEM 格式客户端证书路径
+    client_key_path: ""        # PEM 格式客户端私钥路径
+    client_key_password: ""    # 私钥密码（如果加密）
+    # 服务端证书验证
+    ca_cert_path: ""           # 自定义 CA 证书路径，空=使用系统 CA
+    verify: true               # false=跳过服务端证书验证（仅测试/自签名用）
 
 # ── Artifact 公网地址 ─────────────────────────────────────────────
 # 空字符串 = 使用相对路径（仅内网可用）
 # 线上部署时填公网可访问的 URL，如 https://agent.example.com
-artifact_public_base_url: "http://localhost:8199"
+artifact_public_base_url: "http://localhost:8199/health"
 
 # ── 文件路径 ──────────────────────────────────────────────────────
 # 相对路径基于项目根目录解析
@@ -49,6 +59,11 @@ agent_template_dir: "templates"
 log_level: "INFO"
 request_timeout_seconds: 5.0     # daemon RPC 超时
 upload_max_body_size_mb: 100     # 上传 body 上限（同步 main.py 的 max_request_body_size）
+
+# ── 多模态内容（Phase A） ─────────────────────────────────────────
+# base64 内联图 ≥ 此 KB 阈值时，bridge 落盘并替换为 file_url
+content_image_inline_threshold_kb: 256
+uploads_dir: "/tmp/agentflow/uploads"  # 大图落盘目录
 chat_turn_timeout_seconds: 900.0  # 聊天单轮总超时（秒，可用 CHAT_TURN_TIMEOUT_SECONDS 覆盖）
 daemon_status_refresh_interval: 10.0
 

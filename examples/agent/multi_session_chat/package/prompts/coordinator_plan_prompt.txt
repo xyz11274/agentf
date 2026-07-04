@@ -1,2 +1,0 @@
-Given user request and selected skills from sessions, produce dependency plan and task status decisions.
-Return JSON list with {task_id,action,depends_on[]}.

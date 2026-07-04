@@ -1,4 +1,5 @@
 import importlib.util
+import json
 from pathlib import Path
 
 
@@ -103,13 +104,61 @@ def test_relative_artifact_path_with_dot_slash(tmp_path):
     assert result[0] == str(image.resolve())
 
 
+def test_package_artifact_keeps_its_original_directory_tree(tmp_path, monkeypatch):
+    package = tmp_path / "custom-agent"
+    image = package / "reports" / "lookbook" / "assets" / "look.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"image")
+    monkeypatch.setattr(executor, "AGENT_PACKAGE_DIR", str(package))
+
+    result = executor._ensure_artifacts_in_package([str(image)])
+
+    assert result == [str(image.resolve())]
+    assert not (package / "outputs" / "look.png").exists()
+
+
+def test_relative_markdown_image_is_rewritten_without_modifying_skill(tmp_path, monkeypatch):
+    package = tmp_path / "custom-agent"
+    image = package / "assets" / "look.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"image")
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
+
+    rendered = coordinator.append_artifacts_markdown(
+        "搭配完成：![look](assets/look.png)",
+        json.dumps([str(image)]),
+    )
+
+    expected = "/api/artifacts/outfit-assistant/files/custom-agent/assets/look.png"
+    assert expected in rendered
+    assert "(assets/look.png)" not in rendered
+    assert rendered.count(expected) == 1
+
+
+def test_relative_html_image_is_rewritten_without_modifying_skill(tmp_path, monkeypatch):
+    package = tmp_path / "custom-agent"
+    image = package / "assets" / "look.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"image")
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
+
+    rendered = coordinator.append_artifacts_markdown(
+        '<section><img src="assets/look.png" alt="look"></section>',
+        json.dumps([str(image)]),
+    )
+
+    expected = "/api/artifacts/outfit-assistant/files/custom-agent/assets/look.png"
+    assert f'src="{expected}"' in rendered
+    assert rendered.count(expected) == 1
+
+
 def test_local_artifact_becomes_bridge_markdown_url():
     rendered = coordinator.append_artifacts_markdown(
         "完成",
         '["/tmp/output/look.png"]',
     )
 
-    assert "## 生成图片" in rendered
+    assert "## 生成产物" in rendered
     assert "/api/artifacts/outfit-assistant?path=%2Ftmp%2Foutput%2Flook.png" in rendered
 
 

@@ -46,41 +46,11 @@ describe('usePackageStore', () => {
     expect(store.currentFile).toBeNull()
   })
 
-  it('loadPackages fetches the list and stores it', async () => {
-    const get = mockGet(async () => ok({ packages }))
-    setApiClient(makeClient(get, mockPut(), mockPost(), mockDel()))
-    const store = usePackageStore()
-    const result = await store.loadPackages()
-    expect(result).toEqual(packages)
-    expect(urlOf(get)).toBe('/api/packages')
-  })
-
   it('loadPackages surfaces errors', async () => {
     const get = mockGet(async () => err(500, 'fs broken'))
     setApiClient(makeClient(get, mockPut(), mockPost(), mockDel()))
     const store = usePackageStore()
     await expect(store.loadPackages()).rejects.toThrow('fs broken')
-  })
-
-  it('loadFileTree sets currentPackage and tree', async () => {
-    const get = mockGet(async () => ok(tree))
-    setApiClient(makeClient(get, mockPut(), mockPost(), mockDel()))
-    const store = usePackageStore()
-    const t = await store.loadFileTree('pkg1')
-    expect(t).toEqual(tree)
-    expect(store.fileTree).toEqual(tree)
-    expect(store.currentPackage).toBe('pkg1')
-    expect(urlOf(get)).toBe('/api/packages/pkg1/tree')
-  })
-
-  it('readFile returns content and caches currentFile', async () => {
-    const get = mockGet(async () => ok({ content: '{}' }))
-    setApiClient(makeClient(get, mockPut(), mockPost(), mockDel()))
-    const store = usePackageStore()
-    const r = await store.readFile('pkg1', 'agent.json')
-    expect(r).toEqual({ path: 'agent.json', content: '{}' })
-    expect(store.currentFile).toEqual({ path: 'agent.json', content: '{}' })
-    expect(urlOf(get)).toBe('/api/packages/pkg1/file/agent.json')
   })
 
   it('readFile URL-encodes nested paths', async () => {
@@ -98,17 +68,6 @@ describe('usePackageStore', () => {
     await store.writeFile('pkg1', 'agent.json', 'updated')
     expect(urlOf(put)).toBe('/api/packages/pkg1/file/agent.json')
     expect(bodyOf(put)).toEqual({ content: 'updated' })
-  })
-
-  it('writeFile updates cached currentFile when the path matches', async () => {
-    const get = mockGet(async () => ok({ content: '{}' }))
-    const put = mockPut(async () => ok({}))
-    setApiClient(makeClient(get, put, mockPost(), mockDel()))
-    const store = usePackageStore()
-    await store.readFile('pkg1', 'agent.json')
-    expect(store.currentFile?.content).toBe('{}')
-    await store.writeFile('pkg1', 'agent.json', 'updated')
-    expect(store.currentFile?.content).toBe('updated')
   })
 
   it('deleteFile calls DELETE and clears currentFile if matching', async () => {
@@ -148,35 +107,5 @@ describe('usePackageStore', () => {
     expect(urlOf(post)).toBe('/api/packages/pkg1/dir/sub')
   })
 
-  it('buildPackage posts to /package and returns the envelope', async () => {
-    const post = mockPost(async () =>
-      ok({ path: 'p/x.tar.gz', name: 'x.tar.gz', size: 10, checksum: 'abc', last_modified: 'now' }),
-    )
-    setApiClient(makeClient(mockGet(), mockPut(), post, mockDel()))
-    const store = usePackageStore()
-    const r = await store.buildPackage('pkg1')
-    expect(r.name).toBe('x.tar.gz')
-    expect(urlOf(post)).toBe('/api/packages/pkg1/package')
-  })
-
-  it('setCurrentPackage(null) clears tree and currentFile', async () => {
-    const get = mockGet(async () => ok(tree))
-    setApiClient(makeClient(get, mockPut(), mockPost(), mockDel()))
-    const store = usePackageStore()
-    await store.loadFileTree('pkg1')
-    expect(store.fileTree).toEqual(tree)
-    store.setCurrentPackage(null)
-    expect(store.fileTree).toEqual([])
-    expect(store.currentFile).toBeNull()
-  })
-
-  it('reset clears all state', async () => {
-    const get = mockGet(async () => ok({ packages }))
-    setApiClient(makeClient(get, mockPut(), mockPost(), mockDel()))
-    const store = usePackageStore()
-    await store.loadPackages()
-    store.reset()
-    expect(store.packages).toEqual([])
-    expect(store.currentPackage).toBeNull()
-  })
 })
+

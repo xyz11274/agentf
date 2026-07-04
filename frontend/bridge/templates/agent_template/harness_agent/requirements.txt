@@ -1,4 +1,4 @@
-# OutfitAssistant Python 依赖
+# Harness Agent Python 依赖
 # 安装：bash setup.sh
 #
 # 框架 daemon worker 通过 PYTHON_PATH 环境变量找到 .venv 的 python3，

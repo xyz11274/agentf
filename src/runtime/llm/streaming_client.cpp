@@ -6,6 +6,11 @@
 #include <system_error>
 #include <sstream>
 
+// Use RapidJSON for structured SSE payload parsing when available.
+#ifdef AGENTFLOW_WITH_RAPIDJSON
+#include "rapidjson/document.h"
+#endif
+
 namespace agentflow {
 namespace runtime {
 
@@ -150,12 +155,12 @@ bool StreamingLLMClient::stream_prompt(const std::string& prompt, const Config& 
       if(payload == "[DONE]") {
         continue;
       }
-      const std::string chunk = extract_content_field(payload);
-      if(!chunk.empty()) {
+      const auto parsed = parse_sse_payload(payload);
+      if(!parsed.content.empty()) {
         if(on_chunk) {
-          on_chunk(chunk);
+          on_chunk(parsed.content);
         }
-        final_text += chunk;
+        final_text += parsed.content;
       }
       continue;
     }
@@ -169,8 +174,8 @@ bool StreamingLLMClient::stream_prompt(const std::string& prompt, const Config& 
     return false;
   }
   if(!saw_stream_data && !final_text.empty()) {
-    const std::string extracted = extract_content_field(final_text);
-    const std::string content   = extracted.empty() ? final_text : extracted;
+    const auto parsed = parse_sse_payload(final_text);
+    const std::string content = parsed.content.empty() ? final_text : parsed.content;
     if(on_chunk) {
       on_chunk(content);
     }
@@ -233,46 +238,79 @@ std::string StreamingLLMClient::shell_quote(const std::string& input) {
   return output;
 }
 
-std::string StreamingLLMClient::extract_content_field(const std::string& json) {
-  const std::string needle = "\"content\":\"";
-  size_t            pos    = json.find(needle);
-  if(pos == std::string::npos) {
-    return "";
+// ---------------------------------------------------------------------------
+// parse_sse_payload — structured SSE chunk parser
+// ---------------------------------------------------------------------------
+
+StreamingLLMClient::SseChunk StreamingLLMClient::parse_sse_payload(const std::string& json) {
+  if(json.empty()) {
+    return {};
   }
-  pos += needle.size();
-  std::string output;
-  while(pos < json.size()) {
-    const char ch = json[pos++];
-    if(ch == '\\' && pos < json.size()) {
-      const char next = json[pos++];
-      switch(next) {
-        case 'n':
-          output.push_back('\n');
-          break;
-        case 'r':
-          output.push_back('\r');
-          break;
-        case 't':
-          output.push_back('\t');
-          break;
-        case '\\':
-          output.push_back('\\');
-          break;
-        case '"':
-          output.push_back('"');
-          break;
-        default:
-          output.push_back(next);
-          break;
+
+#ifdef AGENTFLOW_WITH_RAPIDJSON
+  rapidjson::Document doc;
+  doc.Parse(json.c_str());
+  if(doc.HasParseError() || !doc.IsObject()) {
+    return {};
+  }
+
+  // Error response — no content to extract
+  if(doc.HasMember("error")) {
+    return {};
+  }
+
+  // Navigate to choices[0]
+  if(!doc.HasMember("choices") || !doc["choices"].IsArray() || doc["choices"].Empty()) {
+    return {};
+  }
+  const auto& choice0 = doc["choices"][0];
+  if(!choice0.IsObject()) {
+    return {};
+  }
+
+  SseChunk result;
+
+  // Extract delta.content
+  if(choice0.HasMember("delta") && choice0["delta"].IsObject()) {
+    const auto& delta = choice0["delta"];
+    if(delta.HasMember("content") && delta["content"].IsString()) {
+      result.content = delta["content"].GetString();
+    }
+  }
+
+  // Extract finish_reason
+  if(choice0.HasMember("finish_reason") && choice0["finish_reason"].IsString()) {
+    result.finish_reason = choice0["finish_reason"].GetString();
+  }
+
+  return result;
+
+#else
+  // Fallback: string-search path (content only, no finish_reason).
+  SseChunk result;
+  auto it = json.find("\"content\":\"");
+  if(it != std::string::npos) {
+    it += 11; // skip past "\"content\":\""
+    while(it < json.size()) {
+      const char ch = json[it++];
+      if(ch == '\\' && it < json.size()) {
+        const char next = json[it++];
+        switch(next) {
+          case 'n':  result.content.push_back('\n'); break;
+          case 'r':  result.content.push_back('\r'); break;
+          case 't':  result.content.push_back('\t'); break;
+          case '\\': result.content.push_back('\\'); break;
+          case '"':  result.content.push_back('"');  break;
+          default:   result.content.push_back(next); break;
+        }
+        continue;
       }
-      continue;
+      if(ch == '"') break;
+      result.content.push_back(ch);
     }
-    if(ch == '"') {
-      break;
-    }
-    output.push_back(ch);
   }
-  return output;
+  return result;
+#endif
 }
 
 }  // namespace runtime

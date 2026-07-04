@@ -1,15 +1,14 @@
 """AISF SysAgent 调度入口 — 接收上游 SysAgent 的 TaskAssignment 请求。
 
-对外暴露 ``POST /v1/tasks``（经 main.py 的 ``app.mount("/health", bridge_app)``
-挂载后，完整路径为 ``/health/v1/tasks``），即 AISF 协议规定的 Bridge 被调度端点。
+对外暴露 ``POST /aisf/healthagent/v1/tasks``，即 AISF 协议规定的 Bridge 被调度端点。
 
 工作模式（默认 async）：
   1. 接收 AccessCtrl 请求体（PascalCase）
   2. 解析 → 建 HaContext → 立即返回 202 accepted
   3. 后台执行 agentflowd 任务（复用 app.state.daemon_client 长连接）
-  4. 完成后主动 POST 回上游 ``http://{SysAgentEntity}:23767/coremind/systemagent/v1/callback``
-     - 先发 TaskStatusReport (code=0 完成 / 500 失败)
-     - 再发 UserOutput (最终文本)
+  4. 完成后主动 POST 回上游 ``{scheme}://{SysAgentEntity}:23767/coremind/systemagent/v1/callback``
+     - 先发 UserOutput (最终文本)
+     - 再发 TaskStatusReport (code=200 完成 / 500 失败)
 
 对标 HealthAgent 的 TaskRouter + HaContext + ForwardToExternalSysAgent。
 协议字段定义见 docs/contracts/2.AISF-interface.md。
@@ -34,13 +33,14 @@ from aisf_adapter.sysagent.server import (
     build_user_output,
     http_post_to_upstream,
     parse_accessctrl,
+    post_result_to_upstream,
 )
 from client import DaemonClient
 from config import settings
 
 logger = logging.getLogger("routes.aisf_tasks")
 
-router = APIRouter(prefix="/v1", tags=["aisf-tasks"])
+router = APIRouter(prefix="/aisf/healthagent/v1", tags=["aisf-tasks"])
 
 # 进程级 HaContext 存储（按上游 TaskID 索引）
 _ha_store = HaContextStore()
@@ -203,17 +203,10 @@ async def _execute_and_callback(
             task_id, dialogue_id, elapsed, len(full_content), len(chunks),
         )
 
-        # 回调上游：先 TaskStatusReport(0=完成)，再 UserOutput
+        # 回调上游：先 UserOutput，再 TaskStatusReport(code=200)
         if ctx.sysAgentEntity:
             cb_start = time.time()
-            await http_post_to_upstream(
-                ctx.sysAgentEntity,
-                build_task_status_report(ctx, 0, "TaskCompleted"),
-            )
-            await http_post_to_upstream(
-                ctx.sysAgentEntity,
-                build_user_output(ctx, full_content),
-            )
+            await post_result_to_upstream(ctx, full_content)
             logger.info(
                 "fulfill_task.callback taskID=%s upstream=%s cb_elapsed=%.1fs",
                 task_id, ctx.sysAgentEntity, time.time() - cb_start,

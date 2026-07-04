@@ -53,6 +53,10 @@ private:
   bool load_agents();
   bool do_daemonize();
 
+  // Tear down services in the correct order (reverse of initialization).
+  // Called from run(), initialize() on failure, and ~Daemon().
+  void shutdown_services();
+
   DaemonConfig config_;
   std::unique_ptr<runtime::MMAgentRuntime> runtime_;
   std::unique_ptr<AgentRegistry> registry_;

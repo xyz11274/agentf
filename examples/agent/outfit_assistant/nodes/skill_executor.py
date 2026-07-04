@@ -24,13 +24,21 @@ import json
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from databus_client import DataBusClient
-from llm_call import call_llm
+from llm_call import call_llm, estimate_message_tokens, compact_messages, get_model_max_tokens, get_compaction_threshold
+from round_reminder import build_round_reminder
+from prompts import (
+    SKILL_FALLBACK_SYSTEM,
+    SKILL_SECTION_TEMPLATE,
+    SKILL_NOT_FOUND_TEMPLATE,
+    SKILL_RECOVERY_PROMPT,
+)
 
 NODES_DIR = os.path.dirname(os.path.abspath(__file__))
 AGENT_PACKAGE_DIR = os.path.dirname(NODES_DIR)
@@ -173,7 +181,7 @@ def load_skills_from_list(skill_names: list) -> dict:
     result = {}
     for name in skill_names:
         content = load_skill_md(name)
-        result[name] = content if content else f"[Skill '{name}' 文档未找到]"
+        result[name] = content if content else SKILL_NOT_FOUND_TEMPLATE.format(name=name)
     return result
 
 
@@ -277,6 +285,16 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
         p = Path(path).resolve()
         if not p.is_file():
             continue  # skip non-existent files rather than returning dead URLs
+        try:
+            p.relative_to(pkg_root)
+        except ValueError:
+            pass
+        else:
+            # Package-local artifacts are already publishable by Bridge. Keep
+            # their directory hierarchy so HTML/CSS relative references and
+            # same-named files remain stable.
+            result.append(str(p))
+            continue
         dest = outputs_dir / p.name
         # Deduplicate: if same filename already copied, add a suffix
         if dest.exists() and dest.read_bytes() != p.read_bytes():
@@ -343,9 +361,9 @@ def execute():
     skill_docs = load_skills_from_list(load_skill_names)
     system_parts = []
     for name, content in skill_docs.items():
-        system_parts.append(f"## Skill: {name}\n\n{content}")
+        system_parts.append(SKILL_SECTION_TEMPLATE.format(name=name, content=content))
     system_prompt = "\n\n---\n\n".join(system_parts) if system_parts else \
-                    "你是一个任务执行 agent。完成指派给你的任务。"
+                    SKILL_FALLBACK_SYSTEM
 
     # ⑦ Construct LLM messages
     messages = [
@@ -382,18 +400,56 @@ def execute():
     print(f"[flow]   tools_available={[t['function']['name'] for t in available_tools]}", file=sys.stderr)
 
     # ⑩ LLM while-loop
-    max_rounds = int(get_env("AF_SKILL_MAX_ROUNDS", "8"))
+    max_rounds = int(get_env("AF_MAX_SKILL_TASK_ITERATIONS",
+                    get_env("AF_SKILL_MAX_ROUNDS", "8")))
+    # Node-level timeout (injected by framework as AF_NODE_EXECUTION_TIMEOUT);
+    # fallback to node default 240s if absent.
+    node_timeout_sec = int(get_env("AF_NODE_EXECUTION_TIMEOUT", "240"))
     completion_budget = int(get_env("AF_SKILL_MAX_COMPLETION_TOKENS", "8192"))
     recovery_attempts = 0
     max_recovery_attempts = int(get_env("AF_SKILL_LLM_RECOVERY_ATTEMPTS", "2"))
     generated_artifacts = extract_artifact_paths(task_instruction)
     generated_artifacts = _ensure_artifacts_in_package(generated_artifacts)
+
+    _turn_start = time.time()
     for round_i in range(max_rounds):
+        elapsed = time.time() - _turn_start
         print(
             f"[flow]   LLM round={round_i+1}/{max_rounds} msgs={len(messages)} "
-            f"tools={bool(available_tools)} model={model_name} budget={completion_budget}",
+            f"tools={bool(available_tools)} model={model_name} budget={completion_budget} "
+            f"elapsed={elapsed:.0f}s",
             file=sys.stderr,
         )
+
+        # ── Progress: push round info to frontend ──
+        # "第 X 轮：调用 LLM…" → 用户看到"正在等 API"而非"卡了"
+        _round_start = time.time()
+        print(json.dumps({
+            "response": f"[PROGRESS]{skill_name} 第 {round_i+1}/{max_rounds} 轮：调用 LLM…",
+        }, ensure_ascii=False))
+
+        # ── Per-round budget reminder (delegated to shared module) ──
+        reminder = build_round_reminder(
+            round_i=round_i,
+            max_rounds=max_rounds,
+            elapsed=elapsed,
+            node_timeout_sec=node_timeout_sec,
+        )
+        if reminder:
+            messages.append(reminder)
+
+        # ── Token budget: compact messages if exceeding threshold ──
+        model_max_tokens = get_model_max_tokens()
+        compaction_threshold = get_compaction_threshold()
+        before_tok = estimate_message_tokens(messages)
+        compacted = compact_messages(messages, model_max_tokens, compaction_threshold)
+        after_tok = estimate_message_tokens(compacted)
+        if compacted is not messages:
+            print(f"[flow]   compaction: {before_tok}→{after_tok} tok "
+                  f"(threshold={int(model_max_tokens * compaction_threshold)}), "
+                  f"dropped {len(messages) - len(compacted)} msgs", file=sys.stderr)
+            messages = compacted
+
         raw = call_llm(
             messages, tools=available_tools,
             model=model_name,
@@ -438,11 +494,7 @@ def execute():
                 completion_budget = min(completion_budget * 2, 16384)
                 messages.append({
                     "role": "user",
-                    "content": (
-                        "上一轮输出在工具参数完成前被截断。不要执行上一轮调用。"
-                        "请用更短内容重新生成完整、合法的 JSON 工具参数；"
-                        "较长正文可拆分成多次工具调用。"
-                    ),
+                    "content": SKILL_RECOVERY_PROMPT,
                 })
                 print(
                     f"[flow]   recovering {invalid_reason} attempt="
@@ -450,6 +502,9 @@ def execute():
                     f"budget={completion_budget}",
                     file=sys.stderr,
                 )
+                print(json.dumps({
+                    "response": f"[PROGRESS]{skill_name} 正在恢复第 {round_i+1} 轮…",
+                }, ensure_ascii=False))
                 continue
 
             output = {
@@ -470,6 +525,10 @@ def execute():
         if tool_calls:
             tool_names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
             print(f"[flow]   round={round_i+1} → tool_calls: {tool_names}", file=sys.stderr)
+            # ── Progress: tool call details ──
+            print(json.dumps({
+                "response": f"[PROGRESS]{skill_name} → 正在调用 {', '.join(tool_names)}",
+            }, ensure_ascii=False))
             messages.append(msg)
             for tc in tool_calls:
                 func = tc.get("function", {})
@@ -494,6 +553,10 @@ def execute():
                 })
         else:
             # Task complete → output result
+            # ── Progress: LLM returned final answer ──
+            print(json.dumps({
+                "response": f"[PROGRESS]{skill_name} 汇总结果…",
+            }, ensure_ascii=False))
             response_text = msg.get("content", "")
             output = {
                 "skill_result": response_text,
