@@ -142,6 +142,18 @@ bool MMAgentTask::start_message_threads(MessageHandler intent_handler, MessageHa
   return true;
 }
 
+bool MMAgentTask::start_message_threads() {
+  // 无参重载：复用已有 handler，用于空闲 session 重新激活时拉起线程
+  bool expected = false;
+  if(!message_threads_running_.compare_exchange_strong(expected, true)) {
+    return false;
+  }
+  intent_request_thread_ = std::thread(&MMAgentTask::intent_request_loop, this);
+  data_exchange_thread_ = std::thread(&MMAgentTask::data_exchange_loop, this);
+  monitor_thread_ = std::thread(&MMAgentTask::monitor_loop, this);
+  return true;
+}
+
 void MMAgentTask::configure_message_handlers(MessageHandler intent_handler,
                                              MessageHandler data_handler) {
   {

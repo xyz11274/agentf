@@ -107,6 +107,7 @@ class MMAgentTask {
 
   void configure_message_handlers(MessageHandler intent_handler, MessageHandler data_handler);
   bool start_message_threads(MessageHandler intent_handler, MessageHandler data_handler);
+  bool start_message_threads();  // 无参：复用已有 handler 重新拉起线程
   void stop_message_threads();
   bool are_message_threads_running() const { return message_threads_running_; }
 

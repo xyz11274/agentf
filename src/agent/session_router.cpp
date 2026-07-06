@@ -232,6 +232,9 @@ std::shared_ptr<MMAgentSession> SessionRouter::allocate_session_for_route(
 
   session->reset_for_pool();
   session->activate();
+  // 激活时重新拉起任务线程（空闲时已被 release_route_locked 停止）
+  if(auto dt = session->get_dispatcher_task()) dt->start_message_threads();
+  if(auto ct = session->get_coordinator_task()) ct->start_message_threads();
   if(!route_key.empty()) {
     session->bind_route(user_id, client_id);
     std::lock_guard<std::mutex> lock(mutex_);
@@ -260,8 +263,12 @@ void SessionRouter::release_route_locked(const std::string& route_key) {
     return;
   }
   if(it->second) {
-    session_to_route_.erase(it->second->get_session_id());
-    it->second->reset_for_pool();
+    auto session = it->second;
+    session_to_route_.erase(session->get_session_id());
+    // 空闲时释放任务线程，避免线程泄漏；下次激活时重新拉起
+    if(auto dt = session->get_dispatcher_task()) dt->stop_message_threads();
+    if(auto ct = session->get_coordinator_task()) ct->stop_message_threads();
+    session->reset_for_pool();
   }
   active_routes_.erase(it);
 }
