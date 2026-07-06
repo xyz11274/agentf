@@ -80,8 +80,11 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
     Logger::instance().info_f("[WORKER] Using workflow-level UDS for session %s at %s",
                               request.session_id.c_str(), request.databus_uds_path.c_str());
   } else if(request.databus && !request.session_id.empty()) {
-    // Fallback: create node-level UDS server (backward compatibility)
-    std::string uds_socket_path = "/tmp/agentflow_" + request.session_id + ".sock";
+    // Fallback: create node-level UDS server (backward compatibility).
+    // The path is inherently short (max ~57 chars with UUID session_id),
+    // well within Linux sun_path 108-byte limit — no hash needed.
+    std::string uds_socket_path =
+        "/tmp/agentflow_" + request.session_id + ".sock";
 
     // Create async callback for multi-language nodes if async SDK is available
     UDSServer::AsyncCallback async_cb;
