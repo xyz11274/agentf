@@ -2414,19 +2414,24 @@ MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
   std::string launched_key = dialogue_id.empty() ? "launched_skills" : dialogue_id + "/launched_skills";
   std::string scheduled_key = dialogue_id.empty() ? "skills_scheduled" : dialogue_id + "/skills_scheduled";
 
-  // Load launched_skills from databus
+  // Load launched_skills from databus (keyed by exec_skill_key, fallback to skill name)
   DataVariant launched_value;
   if(get_data(launched_key, launched_value)) {
     if(const auto* text = std::get_if<std::string>(&launched_value)) {
       std::istringstream iss(*text);
-      std::string skill_name;
-      while(std::getline(iss, skill_name, ',')) {
-        if(!skill_name.empty()) {
-          result.launched_skills.insert(skill_name);
+      std::string skillKey;
+      while(std::getline(iss, skillKey, ',')) {
+        if(!skillKey.empty()) {
+          result.launched_skills.insert(skillKey);
         }
       }
     }
   }
+
+  // 去重 key：优先用 exec_skill_key（实例唯一），fallback 到 skill name
+  auto skillKey = [](const SkillSpec& s) -> const std::string& {
+    return s.exec_skill_key.empty() ? s.name : s.exec_skill_key;
+  };
 
   // ============================================================
   // FORCE RE-LAUNCH HANDLING
@@ -2436,12 +2441,12 @@ MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
   bool has_force_skills = false;
 
   for(const auto& spec : next_skills) {
-    if(spec.force && result.launched_skills.count(spec.name)) {
+    if(spec.force && result.launched_skills.count(skillKey(spec))) {
       has_force_skills = true;
       force_skill_names_set.insert(spec.name);
 
       // Remove from launched_skills set
-      result.launched_skills.erase(spec.name);
+      result.launched_skills.erase(skillKey(spec));
 
       // Check if skill has result (completed) or is still pending
       std::string result_key = dialogue_id.empty()
@@ -2490,10 +2495,10 @@ MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
                              log_prefix.c_str(), dialogue_id.c_str());
   }
 
-  // Filter out already launched skills
+  // Filter out already launched skills (dedup by exec_skill_key, fallback to name)
   std::vector<SkillSpec> skills_to_launch;
   for(const auto& spec : next_skills) {
-    if(result.launched_skills.find(spec.name) == result.launched_skills.end()) {
+    if(result.launched_skills.find(skillKey(spec)) == result.launched_skills.end()) {
       skills_to_launch.push_back(spec);
     }
   }
@@ -2546,7 +2551,7 @@ MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
       break;
     }
     if(launch_skill_task(session, spec.name, spec.exec_skill_key, message_with_dialogue, task)) {
-      result.launched_skills.insert(spec.name);
+      result.launched_skills.insert(skillKey(spec));
       result.launched_count++;
       result.launched_any = true;
       // Collect force skills to reset their flags (set avoids duplicates)
@@ -2558,9 +2563,9 @@ MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
 
   // Update launched_skills list in databus
   std::string launched_list;
-  for(const auto& name : result.launched_skills) {
+  for(const auto& key : result.launched_skills) {
     if(!launched_list.empty()) launched_list += ",";
-    launched_list += name;
+    launched_list += key;
   }
   publish_data(launched_key, launched_list);
 
@@ -2582,7 +2587,7 @@ MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
   // Check if all skills have been launched
   result.all_launched = true;
   for(const auto& spec : next_skills) {
-    if(result.launched_skills.find(spec.name) == result.launched_skills.end()) {
+    if(result.launched_skills.find(skillKey(spec)) == result.launched_skills.end()) {
       result.all_launched = false;
       break;
     }
