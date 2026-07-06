@@ -168,7 +168,7 @@ public:
   const std::string& get_type() const { return config_.type; }
   int                get_priority() const { return config_.priority; }
   NodeState          get_state() const { return state_; }
-  const DataMap&     get_inputs() const { return inputs_; }
+  const DataMap&     get_inputs() const;
   const DataMap&     get_outputs() const { return outputs_; }
   const Config&      get_config() const { return config_; }
 
@@ -196,7 +196,8 @@ public:
 
   // State management
   void set_state(NodeState state) { state_ = state; }
-  void set_inputs(const DataMap& inputs) { inputs_ = inputs; }
+  void set_inputs(const DataMap& inputs);
+  void merge_inputs(const DataMap& data);
   void set_outputs(const DataMap& outputs) { outputs_ = outputs; }
 
   // Control plane operations
@@ -253,8 +254,9 @@ private:
 
   Config    config_;
   NodeState state_ = NodeState::WAITING;
-  DataMap   inputs_;
-  DataMap   outputs_;
+  DataMap               inputs_;
+  mutable std::mutex     inputs_mutex_;
+  DataMap                outputs_;
   int       retry_count_ = 0;
 
   // Execution result tracking
