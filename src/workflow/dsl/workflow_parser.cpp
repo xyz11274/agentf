@@ -626,7 +626,7 @@ bool WorkflowParser::parse_node_config(std::shared_ptr<const IJsonValue> node_ob
   config.command          = JsonHelper::get_string(config_source, "command", "");
   config.working_dir      = JsonHelper::get_string(config_source, "working_dir", "");
   config.retry_delay_ms   = static_cast<int>(JsonHelper::get_int(config_source, "retry_delay_ms", 1000));
-  config.enable_hot_reload = JsonHelper::get_bool(config_source, "enable_hot_reload", true);
+  config.enable_hot_reload = JsonHelper::get_bool(config_source, "enable_hot_reload", false);
   config.execution_risk_level = parse_node_execution_risk_level(
       JsonHelper::get_string(config_source, "execution_risk_level", "green"));
   config.function_name    = JsonHelper::get_string(config_source, "function_name", "");

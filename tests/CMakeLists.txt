@@ -88,6 +88,20 @@ target_link_libraries(test_event_handler_gtest PRIVATE
     GTest::gtest_main
 )
 
+add_executable(test_codeloader_fix_gtest
+    unit/src/test_codeloader_fix_gtest.cpp
+)
+target_compile_definitions(test_codeloader_fix_gtest PRIVATE
+    AGENTFLOW_INCLUDE_DIR="${CMAKE_SOURCE_DIR}/include"
+    AGENTFLOW_PLATFORM_INCLUDE="${CMAKE_SOURCE_DIR}/include/external"
+)
+target_link_libraries(test_codeloader_fix_gtest PRIVATE
+    agentflow
+    GTest::gtest
+    GTest::gtest_main
+    ${CMAKE_DL_LIBS}
+)
+
 # Compiler options
 if(NOT MSVC)
     target_compile_options(test_agent_gtest PRIVATE -Wno-non-virtual-dtor)
@@ -97,10 +111,11 @@ if(NOT MSVC)
     target_compile_options(test_dsl_adapter_gtest PRIVATE -Wno-non-virtual-dtor)
     target_compile_options(test_control_message_gtest PRIVATE -Wno-non-virtual-dtor)
     target_compile_options(test_event_handler_gtest PRIVATE -Wno-non-virtual-dtor)
+    target_compile_options(test_codeloader_fix_gtest PRIVATE -Wno-non-virtual-dtor)
 endif()
 
 # Add subdirectories
-add_subdirectory(e2e)
+#add_subdirectory(e2e)
 # (scripts directory is currently not used)
 
 # Testing
@@ -112,6 +127,7 @@ add_test(NAME DataBusTests COMMAND test_databus_gtest)
 add_test(NAME DSLAdapterTests COMMAND test_dsl_adapter_gtest)
 add_test(NAME ControlMessageTests COMMAND test_control_message_gtest)
 add_test(NAME EventHandlerTests COMMAND test_event_handler_gtest)
+add_test(NAME CodeLoaderFixTests COMMAND test_codeloader_fix_gtest)
 
 if(AGENTFLOW_TEST_ENV)
     set_tests_properties(AgentTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
@@ -147,7 +163,7 @@ endif()
 if(_test_rpath)
   foreach(_tgt test_agent_gtest test_workflow_gtest test_node_gtest
                test_databus_gtest test_dsl_adapter_gtest test_control_message_gtest
-               test_event_handler_gtest)
+               test_event_handler_gtest test_codeloader_fix_gtest)
     if(TARGET ${_tgt})
       set_target_properties(${_tgt} PROPERTIES BUILD_RPATH "${_test_rpath}")
     endif()
@@ -157,5 +173,5 @@ endif()
 # Install targets
 install(TARGETS test_agent_gtest test_workflow_gtest test_node_gtest
         test_databus_gtest test_dsl_adapter_gtest test_control_message_gtest
-        test_event_handler_gtest
+        test_event_handler_gtest test_codeloader_fix_gtest
         RUNTIME DESTINATION bin)

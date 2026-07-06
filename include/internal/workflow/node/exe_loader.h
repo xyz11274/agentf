@@ -53,8 +53,8 @@ struct ExecutableVersion {
  * Hot reload configuration
  */
 struct HotReloadConfig {
-  bool        enabled                = true;  // Enable hot reload
-  bool        auto_reload            = true;  // Automatically reload on file change
+  bool        enabled                = false; // Enable hot reload (生产环境默认关闭)
+  bool        auto_reload            = false; // Automatically reload on file change
   int         max_versions           = 5;     // Maximum number of versions to keep
   int         check_interval_ms      = 1000;  // File check interval (milliseconds)
   bool        validate_before_reload = true;  // Validate file before reloading

@@ -80,7 +80,8 @@ struct CodeLoader::FileWatcherImpl {
       auto fs_time_sys  = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
           fs_time - std::filesystem::file_time_type::clock::now() + current_time);
 
-      if(!ec && fs_time_sys > last_modified) {
+      // 容忍 1 秒的时钟漂移，避免容器环境下 system_clock 和 filesystem_clock不同步导致的误检（K8s 镜像部署时文件不会变更）
+      if(!ec && fs_time_sys > last_modified + std::chrono::seconds(1)) {
         last_modified = fs_time_sys;
 
         FileChange change;
@@ -420,18 +421,6 @@ ExecutionResult CodeLoader::load_and_execute_so(const std::string&     file_path
 
   ExecutionResult result;
 
-  // Check if hot reload is enabled and we need to reload
-  bool needs_reload = false;
-  if(is_watching(file_path)) {
-    auto current_version = get_current_version(file_path);
-    auto latest_version  = get_current_version(file_path);
-
-    if(!current_version || !latest_version
-       || current_version->version_id != latest_version->version_id) {
-      needs_reload = true;
-    }
-  }
-
   // Load or reload the SO library
   SoLibraryPtr so_handle;
   SoFunction   func = nullptr;
@@ -439,8 +428,16 @@ ExecutionResult CodeLoader::load_and_execute_so(const std::string&     file_path
   {
     std::lock_guard<std::mutex> lock(so_cache_mutex_);
 
-    if(needs_reload) {
-      unload_so_library(file_path);
+    // 检查是否需要重新加载（比对缓存的 version_id 与当前版本，修复版本比对 bug）
+    if(is_watching(file_path)) {
+      auto it = so_library_cache_.find(file_path);
+      if(it != so_library_cache_.end()) {
+        auto current_version = get_current_version(file_path);
+        if(current_version && !it->second.version_id.empty()
+           && it->second.version_id != current_version->version_id) {
+          unload_so_library(file_path);
+        }
+      }
     }
 
     auto it = so_library_cache_.find(file_path);
@@ -538,18 +535,6 @@ ExecutionResult CodeLoader::load_and_execute_so_v2(const std::string&     file_p
 
   ExecutionResult result;
 
-  // Check if hot reload is enabled and we need to reload
-  bool needs_reload = false;
-  if(is_watching(file_path)) {
-    auto current_version = get_current_version(file_path);
-    auto latest_version  = get_current_version(file_path);
-
-    if(!current_version || !latest_version
-       || current_version->version_id != latest_version->version_id) {
-      needs_reload = true;
-    }
-  }
-
   // Load or reload the SO library
   SoLibraryPtr   so_handle;
   SoFunctionV2   func_v2 = nullptr;
@@ -558,8 +543,16 @@ ExecutionResult CodeLoader::load_and_execute_so_v2(const std::string&     file_p
   {
     std::lock_guard<std::mutex> lock(so_cache_mutex_);
 
-    if(needs_reload) {
-      unload_so_library(file_path);
+    // 检查是否需要重新加载（比对缓存的 version_id 与当前版本，修复版本比对 bug）
+    if(is_watching(file_path)) {
+      auto it = so_library_cache_.find(file_path);
+      if(it != so_library_cache_.end()) {
+        auto current_version = get_current_version(file_path);
+        if(current_version && !it->second.version_id.empty()
+           && it->second.version_id != current_version->version_id) {
+          unload_so_library(file_path);
+        }
+      }
     }
 
     auto it = so_library_cache_.find(file_path);
@@ -665,18 +658,6 @@ ExecutionResult CodeLoader::load_and_execute_so_v3(const std::string&     file_p
 
   ExecutionResult result;
 
-  // Check if hot reload is enabled and we need to reload
-  bool needs_reload = false;
-  if(is_watching(file_path)) {
-    auto current_version = get_current_version(file_path);
-    auto latest_version  = get_current_version(file_path);
-
-    if(!current_version || !latest_version
-       || current_version->version_id != latest_version->version_id) {
-      needs_reload = true;
-    }
-  }
-
   // Load or reload the SO library
   SoLibraryPtr   so_handle;
   SoFunctionV3   func_v3 = nullptr;
@@ -686,8 +667,16 @@ ExecutionResult CodeLoader::load_and_execute_so_v3(const std::string&     file_p
   {
     std::lock_guard<std::mutex> lock(so_cache_mutex_);
 
-    if(needs_reload) {
-      unload_so_library(file_path);
+    // 检查是否需要重新加载（比对缓存的 version_id 与当前版本，修复版本比对 bug）
+    if(is_watching(file_path)) {
+      auto it = so_library_cache_.find(file_path);
+      if(it != so_library_cache_.end()) {
+        auto current_version = get_current_version(file_path);
+        if(current_version && !it->second.version_id.empty()
+           && it->second.version_id != current_version->version_id) {
+          unload_so_library(file_path);
+        }
+      }
     }
 
     auto it = so_library_cache_.find(file_path);
@@ -986,6 +975,23 @@ ReloadResult CodeLoader::reload_code(const std::string& file_path) {
       result.success = false;
       result.message = "File validation failed";
       Logger::instance().error_f("[HOT_RELOAD] Validation failed: %s", file_path.c_str());
+      return result;
+    }
+  }
+
+  // 去重检查：比对文件 checksum，未变更则跳过
+  auto current = get_current_version(file_path);
+  if(current) {
+    bool is_new_file = current->checksum.empty();
+    std::string new_checksum = calculate_checksum(file_path);
+    if(!is_new_file && !new_checksum.empty() && new_checksum == current->checksum) {
+      result.success    = true;
+      result.version_id = current->version_id;
+      result.message    = "File unchanged, skipped reload";
+      result.duration   = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - start_time);
+      Logger::instance().info_f("[HOT_RELOAD] File unchanged, skipped: %s (checksum=%s)",
+                                file_path.c_str(), new_checksum.substr(0, 16).c_str());
       return result;
     }
   }
@@ -1349,8 +1355,8 @@ SoFunctionV3 CodeLoader::get_so_function_v3(const SoLibraryPtr& handle,
 }
 
 bool CodeLoader::unload_so_library(const std::string& file_path) {
-  std::lock_guard<std::mutex> lock(so_cache_mutex_);
-
+  // 调用方必须持有 so_cache_mutex_，此处不再加锁
+  // 修复：移除内部 lock_guard，避免与 load_and_execute_so 系列函数的外层锁形成死锁
   auto it = so_library_cache_.find(file_path);
   if(it != so_library_cache_.end()) {
     Logger::instance().info_f("[CODE_LOADER] Unloading SO library: %s", file_path.c_str());
