@@ -1,29 +1,95 @@
 #!/bin/bash
-# Start the Python Bridge in development or internal production mode.
+# Bridge lifecycle manager — start / stop / restart the Python Bridge (uvicorn).
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
+PID_FILE="/tmp/agentflow-bridge.pid"
+
+# ── Helper: resolve running PID ─────────────────────────────────────
+_resolve_pid() {
+    local pid=""
+    if [ -f "$PID_FILE" ]; then
+        pid=$(cat "$PID_FILE")
+        if ! kill -0 "$pid" 2>/dev/null; then
+            rm -f "$PID_FILE"
+            pid=""
+        fi
+    fi
+    if [ -z "$pid" ]; then
+        pid=$(pgrep -f "uvicorn.*main:app.*frontend/bridge" 2>/dev/null || true)
+    fi
+    echo "$pid"
+}
+
+# ── Helper: stop bridge ─────────────────────────────────────────────
+_stop_bridge() {
+    local pid="$1"
+    echo "[INFO] Stopping bridge (PID=$pid)..."
+    kill "$pid" 2>/dev/null
+    for _ in $(seq 1 10); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            break
+        fi
+        sleep 0.3
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -9 "$pid" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
+    echo "[INFO] Bridge stopped"
+}
+
+# ── Parse arguments ─────────────────────────────────────────────────
+ACTION="start"
 MODE="dev"
 PORT="8199"
-if [ "${1:-}" = "dev" ] || [ "${1:-}" = "production" ]; then
-    MODE="$1"
-    PORT="${2:-8199}"
-elif [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
-    echo "Usage: $0 [dev|production] [port]"
-    exit 0
-elif [ -n "${1:-}" ]; then
-    PORT="$1"
-fi
+LOG_LEVEL="debug"
+NO_RELOAD=false
+KEEP_LOGS=false
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        start|stop|restart)     ACTION="$1"; shift ;;
+        --port|-p)              PORT="${2:?Missing port value}"; shift 2 ;;
+        --log-level|-l)         LOG_LEVEL="${2:?Missing log level}"; shift 2 ;;
+        --no-reload|-r)         NO_RELOAD=true; shift ;;
+        --keep-logs)            KEEP_LOGS=true; shift ;;
+        -h|--help)
+            echo "Usage: $0 [start|stop|restart] [options]"
+            echo ""
+            echo "Commands:"
+            echo "  start    Start bridge (default; fails if already running)"
+            echo "  stop     Stop running bridge"
+            echo "  restart  Stop then start"
+            echo ""
+            echo "Options:"
+            echo "  --port|-p PORT         Listen port (default: 8199)"
+            echo "  --log-level|-l LEVEL   uvicorn log level: debug|info|warning (default: info)"
+            echo "  --no-reload|-r         Disable hot-reload (dev mode only)"
+            echo "  --keep-logs            Keep previous log instead of archiving"
+            echo "  dev|production         Run mode (default: dev)"
+            exit 0 ;;
+        dev|production)         MODE="$1"; shift ;;
+        *)                      echo "[ERROR] Unknown argument: $1" >&2; exit 2 ;;
+    esac
+done
+
 case "$MODE" in
     dev)
         HOST="0.0.0.0"
-        RELOAD=(--reload --reload-dir "$AR_PROJECT_ROOT/frontend/bridge")
+        if [ "$NO_RELOAD" = false ]; then
+            RELOAD=(--reload --reload-dir "$AR_PROJECT_ROOT/frontend/bridge")
+        else
+            RELOAD=()
+        fi
         ;;
-    production) HOST="127.0.0.1"; RELOAD=() ;;
-    *) echo "[ERROR] Mode must be dev or production" >&2; exit 2 ;;
+    production)
+        HOST="127.0.0.1"
+        RELOAD=()
+        ;;
 esac
 
 ar_load_env
@@ -38,7 +104,60 @@ if ! PYTHONPATH="$AR_PROJECT_ROOT/frontend/bridge" python3 -c "import fastapi, u
 fi
 
 export BRIDGE_HOST="$HOST" BRIDGE_PORT="$PORT"
-exec python3 -m uvicorn main:app \
+
+# ═══════════════════════════════════════════════════════════════════
+#  stop
+# ═══════════════════════════════════════════════════════════════════
+if [ "$ACTION" = "stop" ]; then
+    PID=$(_resolve_pid)
+    if [ -z "$PID" ]; then
+        echo "[INFO] No running bridge found"
+        exit 0
+    fi
+    _stop_bridge "$PID"
+    exit 0
+fi
+
+# ═══════════════════════════════════════════════════════════════════
+#  restart → stop first, then fall through to start
+# ═══════════════════════════════════════════════════════════════════
+if [ "$ACTION" = "restart" ]; then
+    PID=$(_resolve_pid)
+    if [ -n "$PID" ]; then
+        _stop_bridge "$PID"
+    fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════
+#  start
+# ═══════════════════════════════════════════════════════════════════
+
+# ── Guard: already running? ───────────────────────────────────────
+PID=$(_resolve_pid)
+if [ -n "$PID" ]; then
+    echo "[WARN] Bridge is already running (PID=$PID)"
+    echo "       To restart, use:  $0 restart"
+    echo "       To stop, use:     $0 stop"
+    exit 1
+fi
+
+# ── 日志文件 ─────────────────────────────────────────────────────────
+LOG_DIR="$AR_PROJECT_ROOT/logs"
+LOG_FILE="$LOG_DIR/bridge.log"
+mkdir -p "$LOG_DIR"
+ar_archive_log "$LOG_FILE" "$KEEP_LOGS"
+
+# ── 后台运行 ─────────────────────────────────────────────────────────
+echo "[INFO] Starting bridge in background..."
+echo "[INFO] Bridge logs → $LOG_FILE"
+echo "[INFO] View live: tail -f $LOG_FILE"
+nohup python3 -m uvicorn main:app \
     --app-dir "$AR_PROJECT_ROOT/frontend/bridge" \
     --host "$HOST" --port "$PORT" \
-    "${RELOAD[@]}" --log-level info
+    "${RELOAD[@]+"${RELOAD[@]}"}" \
+    --log-level "$LOG_LEVEL" \
+    >> "$LOG_FILE" 2>&1 &
+BRIDGE_PID=$!
+echo "$BRIDGE_PID" > "$PID_FILE"
+echo "[INFO] Bridge started (PID=$BRIDGE_PID)"
+echo "[INFO] Stop: $0 stop"

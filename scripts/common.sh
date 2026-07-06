@@ -8,6 +8,8 @@ AR_PROJECT_ROOT="$(cd "$AR_SCRIPT_DIR/.." && pwd)"
 ar_detect_cores() {
     if command -v nproc >/dev/null 2>&1; then
         nproc
+    elif [ -f /proc/cpuinfo ]; then
+        grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 4
     elif command -v sysctl >/dev/null 2>&1; then
         sysctl -n hw.logicalcpu 2>/dev/null || echo 4
     else

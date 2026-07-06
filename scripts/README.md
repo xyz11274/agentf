@@ -118,6 +118,43 @@ Bridge，也不会因此断开浏览器 WebSocket。
 
 ## 旧入口
 
-- 根目录 `build.sh` 仍作为通用开发/CTest 工具保留，不作为生产构建入口。
+- 根目录 `build.sh`：已废弃，不再维护。原因是该脚本用字符串拼接 cmake 参数，当 generator 名为 `"Unix Makefiles"`（无 Ninja 时）会产生 shell 参数分裂 bug。所有功能已被 `ar_scripts/build.sh` 替代。新人直接忽略即可。
 - `run_agent.sh` 仍指向 `examples/agent/harness_agent`，属于示例工具，不参与生产启动。
 - `frontend/bridge/coremind_bridge/build.sh` 是 SideCar 模块级构建入口；统一生产构建应使用 `ar_scripts/build.sh production`。
+
+---
+
+## 脚本关系全景
+
+```text
+项目根
+├── build.sh               ← 已废弃，勿用（参数分裂 bug）
+├── ar_scripts/
+│   ├── build.sh            ← 权威构建入口（dev / release / production）
+│   ├── start_daemon.sh      ── 启动 agentflowd 守护进程
+│   ├── start_bridge.sh      ── 启动 Python Bridge（dev / production）
+│   ├── start_sidecar.sh     ── 启动 C++ SideCar
+│   ├── start_production.sh  ── 统一启动 daemon + Bridge + SideCar
+│   ├── start_web.sh         ── 启动 Vue/Vite 开发服务器
+│   ├── run_agent.sh         ── harness_agent 示例演示（开发用）
+│   ├── common.sh            ── 被以上脚本 source 的公共函数
+│   ├── .env / .env.example  ── 部署配置（密钥、服务地址）
+│   └── tests/
+│       ├── regression_test.sh          ← 回归测试入口（C++ unit + E2E + daemon E2E）
+│       └── test_skills_upload_e2e.sh   ← Skill 上传 E2E 测试
+└── (其他目录)
+```
+
+### 构建 vs 启动 vs 测试
+
+| 操作 | 入口 |
+|------|------|
+| **编译项目** | `ar_scripts/build.sh [dev\|release\|production]` |
+| **启动开发栈** | `start_daemon.sh → start_bridge.sh dev → start_web.sh` |
+| **启动生产栈** | `start_production.sh`（统一管理三进程生命周期） |
+| **运行回归测试** | `ar_scripts/tests/regression_test.sh` |
+| **运行指定测试** | `build/tests/test_databus_concurrent`（直接运行二进制） |
+
+### 为什么有两个 `build.sh`？
+
+历史上根目录 `build.sh` 是先写的简易版本，`ar_scripts/build.sh` 是后续重构的项目级构建入口。由于文档和 CI 历史原因两者并存，但根目录版本存在已知 shell 参数分裂 bug，**所有日常开发请使用 `ar_scripts/build.sh`**。
