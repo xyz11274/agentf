@@ -192,6 +192,14 @@ class BridgeSettings(BaseSettings):
     aisf_adapter_upstream_ca_cert_path: str = Field(default="", description="Custom CA cert path for server verification. Set via AISF_ADAPTER_UPSTREAM_CA_CERT_PATH.")
     aisf_adapter_upstream_verify: bool = Field(default=True, description="Verify server TLS cert. Set via AISF_ADAPTER_UPSTREAM_VERIFY.")
 
+    # --- agent_defaults — LLM 配置降级链路 (from config.yaml) ----------
+    agent_defaults_llm_api_key: str = Field(default="", description="Default LLM API key. From config.yaml agent_defaults.llm.api_key.")
+    agent_defaults_llm_base_url: str = Field(default="", description="Default LLM base URL. From config.yaml agent_defaults.llm.base_url.")
+    agent_defaults_llm_model: str = Field(default="gpt-4o", description="Default LLM model. From config.yaml agent_defaults.llm.model.")
+    agent_defaults_llm_fallback_api_key: str = Field(default="", description="Fallback LLM API key. From config.yaml agent_defaults.llm_fallback.api_key.")
+    agent_defaults_llm_fallback_base_url: str = Field(default="", description="Fallback LLM base URL. From config.yaml agent_defaults.llm_fallback.base_url.")
+    agent_defaults_llm_fallback_model: str = Field(default="", description="Fallback LLM model. From config.yaml agent_defaults.llm_fallback.model.")
+
     # --- artifact ------------------------------------------------------------
     artifact_public_base_url: str = Field(
         default="",
@@ -241,6 +249,37 @@ class BridgeSettings(BaseSettings):
         description="Seconds between background daemon status cache refreshes.",
     )
 
+    # --- 💾 session persistence (Bridge sessions) ------------------------------
+    session_provider: str = Field(
+        default="local",
+        description=(
+            "Session persistence backend: 'local' (SQLite file) or 'kmm' "
+            "(aisf platform KMM service, Phase 3). Set via SESSION_PROVIDER."
+        ),
+    )
+    session_db_path: str = Field(
+        default="/tmp/agentflow/sessions.db",
+        description=(
+            "SQLite database path used by LocalSessionProvider. "
+            "Set via SESSION_DB_PATH."
+        ),
+    )
+    session_context_limit_rounds: int = Field(
+        default=5, ge=1,
+        description=(
+            "Default number of past dialogue rounds injected into the next "
+            "chat turn as history context. Set via SESSION_CONTEXT_LIMIT_ROUNDS."
+        ),
+    )
+    session_sync_interval: float = Field(
+        default=30.0, gt=0,
+        description=(
+            "Seconds between background agentflow→Bridge session status "
+            "syncs. Set via SESSION_SYNC_INTERVAL. 0 disables the poller "
+            "(sync runs only on lifespan start)."
+        ),
+    )
+
     # --- 🌍 CORS ---------------------------------------------------------------
     cors_allowed_origins: list[str] = Field(
         default_factory=lambda: [
@@ -280,6 +319,18 @@ class BridgeSettings(BaseSettings):
     def uploads_path(self) -> Path:
         p = Path(self.uploads_dir)
         return p.resolve()
+
+    @property
+    def session_db_path_resolved(self) -> Path:
+        """Absolute path to the SQLite session database.
+
+        Resolves relative ``session_db_path`` against the project root,
+        matching the pattern of ``agent_packages_path`` and ``skill_hub_path``.
+        """
+        p = Path(self.session_db_path)
+        if p.is_absolute():
+            return p.resolve()
+        return (_PROJECT_ROOT / p).resolve()
 
 
 def _is_pydantic_type(key: str) -> bool:

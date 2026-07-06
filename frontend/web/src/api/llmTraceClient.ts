@@ -10,19 +10,24 @@ import type { LlmTraceDetail, LlmTraceListData } from '@/types/agentflow'
 
 /**
  * Fetch the LLM trace list for a given agent + user identity.
+ * Optionally filter by ``dialogueId`` to scope to a single dialogue turn.
  */
 export async function getLlmTraces(
   agentId: string,
   userId: string,
   clientId: string,
+  dialogueId?: string,
   limit = 50,
   offset = 0,
 ): Promise<LlmTraceListData> {
-  const path =
+  let path =
     `/api/agents/${encodeURIComponent(agentId)}/llm-traces` +
     `?user_id=${encodeURIComponent(userId)}` +
     `&client_id=${encodeURIComponent(clientId)}` +
     `&limit=${limit}&offset=${offset}`
+  if (dialogueId) {
+    path += `&dialogue_id=${encodeURIComponent(dialogueId)}`
+  }
   const res = await apiClient.get<LlmTraceListData>(path)
   if (!res.success) {
     throw new Error(res.error ?? 'failed to fetch LLM traces')

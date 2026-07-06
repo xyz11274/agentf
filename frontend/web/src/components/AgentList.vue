@@ -182,7 +182,7 @@ const displayCount = computed(() => agentStore.agents.length)
           <div class="agent-list__card-header">
             <div class="agent-list__card-name" @click="emit('agent-click', agent.id)">{{ agent.id }}</div>
             <el-tag :type="statusType(agent.status)" size="small" effect="dark">
-              {{ agent.status === 'running' ? '运行中' : agent.status === 'paused' ? '已暂停' : agent.status === 'error' ? '错误' : '未知' }}
+              {{ agent.status === 'running' ? '运行中' : agent.status === 'paused' ? '已暂停' : agent.status === 'loaded' ? '已加载' : agent.status === 'unloaded' ? '未加载' : agent.status === 'error' ? '错误' : '未知' }}
             </el-tag>
           </div>
 

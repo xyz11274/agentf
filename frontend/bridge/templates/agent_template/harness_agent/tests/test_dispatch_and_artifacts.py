@@ -14,8 +14,8 @@ def load(name: str, path: Path):
     return module
 
 
-coordinator = load("harness_coordinator", ROOT / "nodes/coordinator_decide.py")
-executor = load("harness_executor_artifacts", ROOT / "nodes/skill_executor.py")
+coordinator = load("outfit_coordinator", ROOT / "nodes/coordinator_decide.py")
+executor = load("outfit_executor_artifacts", ROOT / "nodes/skill_executor.py")
 
 
 class FakeDataBus:
@@ -32,7 +32,7 @@ class FakeDataBus:
 
 def test_dispatch_keys_are_unique_and_dialogue_scoped():
     bus = FakeDataBus()
-    args = {"skills": [{"name": "my-skill", "prompt": "p"}]}
+    args = {"skills": [{"name": "outfit-stylist", "prompt": "p"}]}
 
     coordinator.handle_run_skills_call(args, bus, "s1", "dialogue-a")
     coordinator.handle_run_skills_call(args, bus, "s1", "dialogue-a")
@@ -44,7 +44,7 @@ def test_dispatch_keys_are_unique_and_dialogue_scoped():
 
 def test_failed_skill_context_contains_original_error_for_model():
     message = coordinator.build_skill_completion_message(
-        "my-skill",
+        "outfit-stylist",
         "false",
         '{"status":"failed","error":"curl rc=28 timeout"}',
         [],
@@ -73,14 +73,14 @@ def test_image_paths_are_collected_from_tool_results(tmp_path):
 
 def test_relative_artifact_path_is_resolved_against_package_root(tmp_path):
     """Relative paths like .agentfoundry/.../file.png are resolved against AGENT_PACKAGE_DIR."""
-    # Create a file under AGENT_PACKAGE_DIR (simulating LLM saving to local storage)
-    sub = ROOT / ".local" / "assets"
+    # Create a file under AGENT_PACKAGE_DIR (simulating LLM saving to .agentfoundry/)
+    sub = ROOT / ".agentfoundry" / "assets"
     sub.mkdir(parents=True, exist_ok=True)
-    image = sub / "result.png"
+    image = sub / "hiking_outfit.png"
     image.write_bytes(b"image")
     text = (
-        '{"stdout": "完成\\n",'
-        '"file_path": ".local/assets/result.png"}'
+        '{"stdout": "效果图已生成\\n",'
+        '"file_path": ".agentfoundry/assets/hiking_outfit.png"}'
     )
 
     result = executor.extract_artifact_paths(text)
@@ -91,12 +91,12 @@ def test_relative_artifact_path_is_resolved_against_package_root(tmp_path):
 
 
 def test_relative_artifact_path_with_dot_slash(tmp_path):
-    """Relative paths like ./assets/result.png are resolved against AGENT_PACKAGE_DIR."""
+    """Relative paths like ./assets/outfit.png are resolved against AGENT_PACKAGE_DIR."""
     sub = ROOT / "assets"
     sub.mkdir(parents=True, exist_ok=True)
-    image = sub / "result.png"
+    image = sub / "outfit.png"
     image.write_bytes(b"image")
-    text = f'{{"stdout": "./assets/result.png\\n"}}'
+    text = f'{{"stdout": "./assets/outfit.png\\n"}}'
 
     result = executor.extract_artifact_paths(text)
 
@@ -129,7 +129,7 @@ def test_relative_markdown_image_is_rewritten_without_modifying_skill(tmp_path, 
         json.dumps([str(image)]),
     )
 
-    expected = "/api/artifacts/test-agent/files/custom-agent/assets/look.png"
+    expected = "/api/artifacts/outfit-assistant/files/custom-agent/assets/look.png"
     assert expected in rendered
     assert "(assets/look.png)" not in rendered
     assert rendered.count(expected) == 1
@@ -141,15 +141,13 @@ def test_relative_html_image_is_rewritten_without_modifying_skill(tmp_path, monk
     image.parent.mkdir(parents=True)
     image.write_bytes(b"image")
     monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
-    # Override the artifact host for testing
-    monkeypatch.setattr(coordinator, "AGENT_ARTIFACT_HOST", "test-agent")
 
     rendered = coordinator.append_artifacts_markdown(
         '<section><img src="assets/look.png" alt="look"></section>',
         json.dumps([str(image)]),
     )
 
-    expected = "/api/artifacts/test-agent/files/custom-agent/assets/look.png"
+    expected = "/api/artifacts/outfit-assistant/files/custom-agent/assets/look.png"
     assert f'src="{expected}"' in rendered
     assert rendered.count(expected) == 1
 
@@ -160,8 +158,8 @@ def test_local_artifact_becomes_bridge_markdown_url():
         '["/tmp/output/look.png"]',
     )
 
-    assert "## 生成图片" in rendered
-    assert "/api/artifacts/{agent}?path=%2Ftmp%2Foutput%2Flook.png".format(agent=coordinator.AGENT_ARTIFACT_HOST) in rendered
+    assert "## 生成产物" in rendered
+    assert "/api/artifacts/outfit-assistant?path=%2Ftmp%2Foutput%2Flook.png" in rendered
 
 
 def test_existing_absolute_markdown_image_is_rewritten(tmp_path):
@@ -174,7 +172,7 @@ def test_existing_absolute_markdown_image_is_rewritten(tmp_path):
     )
 
     assert str(image) not in rendered
-    assert "/api/artifacts/" in rendered
+    assert "/api/artifacts/outfit-assistant?path=" in rendered
 
 
 def test_package_artifact_url_preserves_directory_hierarchy():
@@ -183,8 +181,8 @@ def test_package_artifact_url_preserves_directory_hierarchy():
     url = coordinator.local_artifact_url(str(path))
 
     assert url == (
-        f"/api/artifacts/{coordinator.AGENT_ARTIFACT_HOST}/files/"
-        f"harness_agent/output/report/index.html"
+        "/api/artifacts/outfit-assistant/files/"
+        "outfit_assistant/output/report/index.html"
     )
 
 
@@ -200,4 +198,4 @@ def test_llm_failure_preserves_artifacts_that_were_actually_reported():
     response = coordinator.llm_error_response('["/tmp/output/look.png"]')
 
     assert "产物仍可查看" in response
-    assert "/api/artifacts/" in response
+    assert "/api/artifacts/outfit-assistant?path=" in response

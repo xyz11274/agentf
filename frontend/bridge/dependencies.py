@@ -36,7 +36,8 @@ def get_daemon_client(request: Request) -> DaemonClient:
     Resolution order
     ----------------
     1. ``request.app.state.daemon_client`` (set by ``main.lifespan``).
-    2. A freshly-constructed :class:`DaemonClient` (test-only fallback).
+    2. A freshly-constructed :class:`DaemonClient` that auto-connects
+       on first use (test-only fallback, no lifespan context).
 
     FastAPI's dependency-injection machinery will call this once per
     request, but the underlying client object is shared across all
@@ -45,6 +46,7 @@ def get_daemon_client(request: Request) -> DaemonClient:
     client: DaemonClient | None = getattr(request.app.state, "daemon_client", None)
     if client is None:
         client = DaemonClient()
+        request.app.state.daemon_client = client
     return client
 
 

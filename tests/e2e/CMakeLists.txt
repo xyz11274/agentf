@@ -141,67 +141,86 @@ if(TARGET llm_query_node AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/llm_query_agent
     add_dependencies(e2e_tests test_e2e_llm_query_agent)
 endif()
 
-# SystemAgentMock Scenario (dispatcher-skill-coordinator flow demonstration)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/system_agent_mock/test_system_agent_mock_e2e.cpp")
-    add_executable(test_e2e_system_agent_mock
-        system_agent_mock/test_system_agent_mock_e2e.cpp
-    )
-    target_link_libraries(test_e2e_system_agent_mock
-        agentflow
-        GTest::gtest
-        GTest::gtest_main
-    )
-    add_test(NAME E2ESystemAgentMock COMMAND test_e2e_system_agent_mock)
-    add_dependencies(e2e_tests test_e2e_system_agent_mock)
-    # Ensure SO libraries are built before the test runs
-    add_dependencies(test_e2e_system_agent_mock
-        skill_selection_node
-        travel_node
-        shopping_node
-        foodie_node
-        coordinator_node
-    )
-endif()
-
-# Event Handler Blackbox Test (using SystemAgentMock)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/event_handler/test_event_handler_blackbox.cpp")
-    add_executable(test_e2e_event_handler_blackbox
-        event_handler/test_event_handler_blackbox.cpp
-    )
-    target_link_libraries(test_e2e_event_handler_blackbox
-        agentflow
-        GTest::gtest
-        GTest::gtest_main
-    )
-    add_test(NAME E2EEventHandlerBlackbox COMMAND test_e2e_event_handler_blackbox)
-    add_dependencies(e2e_tests test_e2e_event_handler_blackbox)
-    # Ensure SO libraries are built before the test runs
-    add_dependencies(test_e2e_event_handler_blackbox
-        skill_selection_node
-        travel_node
-        shopping_node
-        foodie_node
-        coordinator_node
-    )
-endif()
-
-# Multi-Session Concurrent Blackbox Test
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/system_agent_mock/test_multi_session_concurrent.cpp")
-    add_executable(test_e2e_multi_session_concurrent
-        system_agent_mock/test_multi_session_concurrent.cpp
-    )
-    target_link_libraries(test_e2e_multi_session_concurrent
-        agentflow
-        GTest::gtest
-        GTest::gtest_main
-    )
-    add_test(NAME E2EMultiSessionConcurrent COMMAND test_e2e_multi_session_concurrent)
-    add_dependencies(e2e_tests test_e2e_multi_session_concurrent)
-    add_dependencies(test_e2e_multi_session_concurrent
-        skill_selection_node
-        travel_node
-        shopping_node
-        foodie_node
-        coordinator_node
-    )
-endif()
+# [REMOVED] SystemAgentMock Scenario — depends on removed SO libraries (skill_selection_node etc.)
+#if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/system_agent_mock/test_system_agent_mock_e2e.cpp")
+#    add_executable(test_e2e_system_agent_mock
+#        system_agent_mock/test_system_agent_mock_e2e.cpp
+#    )
+#    target_link_libraries(test_e2e_system_agent_mock
+#        agentflow
+#        GTest::gtest
+#        GTest::gtest_main
+#    )
+#    add_test(NAME E2ESystemAgentMock COMMAND test_e2e_system_agent_mock)
+#    add_dependencies(e2e_tests test_e2e_system_agent_mock)
+#    add_dependencies(test_e2e_system_agent_mock
+#        skill_selection_node
+#        travel_node
+#        shopping_node
+#        foodie_node
+#        coordinator_node
+#    )
+#endif()
+#
+# [REMOVED] Stale WORKFLOW_COMPLETE regression E2E — depends on removed SO libraries
+#if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/system_agent_mock/test_stale_workflow_completion_e2e.cpp")
+#    add_executable(test_e2e_stale_workflow_completion
+#        system_agent_mock/test_stale_workflow_completion_e2e.cpp
+#    )
+#    target_link_libraries(test_e2e_stale_workflow_completion
+#        agentflow
+#        GTest::gtest
+#        GTest::gtest_main
+#    )
+#    add_test(NAME E2EStaleWorkflowCompletion COMMAND test_e2e_stale_workflow_completion)
+#    add_dependencies(e2e_tests test_e2e_stale_workflow_completion)
+#    add_dependencies(test_e2e_stale_workflow_completion
+#        skill_selection_node
+#        travel_node
+#        shopping_node
+#        foodie_node
+#        coordinator_node
+#    )
+#endif()
+#
+# [REMOVED] Event Handler Blackbox Test — depends on removed SO libraries
+#if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/event_handler/test_event_handler_blackbox.cpp")
+#    add_executable(test_e2e_event_handler_blackbox
+#        event_handler/test_event_handler_blackbox.cpp
+#    )
+#    target_link_libraries(test_e2e_event_handler_blackbox
+#        agentflow
+#        GTest::gtest
+#        GTest::gtest_main
+#    )
+#    add_test(NAME E2EEventHandlerBlackbox COMMAND test_e2e_event_handler_blackbox)
+#    add_dependencies(e2e_tests test_e2e_event_handler_blackbox)
+#    add_dependencies(test_e2e_event_handler_blackbox
+#        skill_selection_node
+#        travel_node
+#        shopping_node
+#        foodie_node
+#        coordinator_node
+#    )
+#endif()
+#
+# [REMOVED] Multi-Session Concurrent Blackbox Test — depends on removed SO libraries
+#if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/system_agent_mock/test_multi_session_concurrent.cpp")
+#    add_executable(test_e2e_multi_session_concurrent
+#        system_agent_mock/test_multi_session_concurrent.cpp
+#    )
+#    target_link_libraries(test_e2e_multi_session_concurrent
+#        agentflow
+#        GTest::gtest
+#        GTest::gtest_main
+#    )
+#    add_test(NAME E2EMultiSessionConcurrent COMMAND test_e2e_multi_session_concurrent)
+#    add_dependencies(e2e_tests test_e2e_multi_session_concurrent)
+#    add_dependencies(test_e2e_multi_session_concurrent
+#        skill_selection_node
+#        travel_node
+#        shopping_node
+#        foodie_node
+#        coordinator_node
+#    )
+#endif()

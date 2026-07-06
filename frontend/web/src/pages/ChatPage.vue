@@ -4,24 +4,25 @@
  *
  * 左侧：AgentList（可折叠）+ SessionList
  * 右侧：ChatView
- * 流程：选择 Agent → 选择/新建 Session → WebSocket 连接 → 发送消息
+ * 流程：选择 Agent → 选择/新建 Session → 加载历史消息 → SSE 连接 → 发送消息
  *
- * 核心设计：
- * - user_id 内置固定值（"web-user"），不对外暴露 session_id
- * - session 由 daemon 内部按 user_id:client_id 自动管理
- * - 前端通过 client_id 标识"会话"，必须先选择/创建会话才能聊天
+ * 核心设计（Phase 1）：
+ * - 会话列表从 Bridge 持久化 API（GET /api/sessions/persistent）读取
+ * - 选择会话后加载历史消息（GET /api/sessions/persistent/{id}/messages）
+ * - user_id 内置固定值（"web-user"）
+ * - 前端控制 SSE 连接生命周期
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { useAgentStore } from '@/stores/agentStore'
 import { useSessionStore } from '@/stores/sessionStore'
 import { useChatStore } from '@/stores/chatStore'
 import { useDaemonStore } from '@/stores/daemonStore'
-import { useChatWebSocket } from '@/composables/useChatWebSocket'
+import { useChatSse } from '@/composables/useChatSse'
 import AgentList from '@/components/AgentList.vue'
 import SessionList from '@/components/SessionList.vue'
 import ChatView from '@/components/ChatView.vue'
+import NewSessionDialog from '@/components/NewSessionDialog.vue'
 
 /** 内置 user_id，所有前端聊天使用此值 */
 const BUILTIN_USER_ID = 'web-user'
@@ -30,11 +31,13 @@ const agentStore = useAgentStore()
 const sessionStore = useSessionStore()
 const chatStore = useChatStore()
 const daemonStore = useDaemonStore()
-const ws = useChatWebSocket()
-const router = useRouter()
+const sse = useChatSse()
 
 const currentSessionId = ref<string | null>(null)
 const currentClientId = ref<string | null>(null)
+
+/** 新建会话对话框可见性 */
+const showNewSessionDialog = ref(false)
 
 /** 是否已选择 session（控制聊天输入框是否可用） */
 const hasActiveSession = computed(() => currentClientId.value !== null)
@@ -47,47 +50,65 @@ function selectAgent(agentId: string) {
   agentStore.setCurrentAgent(agentId)
   currentSessionId.value = null
   currentClientId.value = null
-  if (ws.isConnected.value) {
-    ws.disconnect()
+  if (sse.isConnected.value) {
+    sse.disconnect()
   }
 }
 
 // ── Session selection ─────────────────────────────────────
 
 /**
- * 选择已有会话。参数是 daemon 内部的 session_id，
- * 我们从 sessionStore 中查找对应的 client_id。
+ * 选择已有持久化会话。参数是 Bridge session ID（UUID hex）。
+ * 加载历史消息后 WebSocket 连接。
  */
-function selectSession(sessionId: string) {
-  const session = sessionStore.sessions.find((s) => s.session_id === sessionId)
-  if (session) {
-    currentSessionId.value = session.session_id
-    currentClientId.value = session.client_id
-    chatStore.currentUserId = session.user_id
-    chatStore.currentClientId = session.client_id
-    // 切换会话时清空当前消息列表
-    chatStore.clearMessages()
-    connectChat()
-  }
+async function selectSession(sessionId: string) {
+  // 在 sessions 中查找
+  const session = sessionStore.sessions.find((s) => s.id === sessionId)
+  if (!session) return
+
+  currentSessionId.value = session.id
+  currentClientId.value = session.client_id
+  chatStore.currentUserId = session.user_id
+  chatStore.currentClientId = session.client_id
+  chatStore.currentSessionId = session.id
+
+  // 切换会话时清空当前消息列表
+  chatStore.clearMessages()
+
+  // 连接聊天（chatStore.connect 在切换 agent 时会清 messages）
+  connectChat()
+
+  // 加载历史消息（在 connect 之后，避免被 connect 的清空逻辑冲掉）
+  await chatStore.loadHistoryMessages(session.id).catch(() => {
+    // loadHistoryMessages 内部已静默
+  })
+
+  // 加载历史消息的 trace（从 Bridge 持久化 trace API）
+  await chatStore.loadHistoryTraces(session.id).catch(() => {
+    // loadHistoryTraces 内部已静默
+  })
 }
 
 /**
- * 新建会话：生成一个新的 client_id（UUID），
- * 用 user_id + 新 client_id 连接 WebSocket，
- * 并在会话列表中立即显示该条目。
+ * 打开新建会话对话框，让用户输入 client_id 和 user_id。
  */
-function createSession() {
-  const newClientId = 'client_' + generateShortId()
-  if (selectedAgentId.value) {
-    sessionStore.addPendingSession(selectedAgentId.value, BUILTIN_USER_ID, newClientId)
-  }
-  currentSessionId.value = null
-  currentClientId.value = newClientId
-  connectChat()
+function openNewSessionDialog() {
+  showNewSessionDialog.value = true
 }
 
-function generateShortId(): string {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
+/**
+ * 根据用户输入的 client_id 和 user_id 创建会话。
+ */
+function createSessionWithParams(clientId: string, userId: string) {
+  showNewSessionDialog.value = false
+  if (selectedAgentId.value) {
+    sessionStore.addPendingSession(userId, clientId)
+  }
+  currentSessionId.value = null
+  currentClientId.value = clientId
+  chatStore.currentUserId = userId
+  chatStore.currentClientId = clientId
+  connectChat()
 }
 
 // ── WebSocket connection ──────────────────────────────────
@@ -95,27 +116,34 @@ function generateShortId(): string {
 async function connectChat() {
   if (!selectedAgentId.value || !currentClientId.value) return
   try {
-    await ws.connect(selectedAgentId.value, BUILTIN_USER_ID, currentClientId.value)
+    const uid = chatStore.currentUserId || BUILTIN_USER_ID
+    await sse.connect(selectedAgentId.value, uid, currentClientId.value)
   } catch (e) {
     ElMessage.error(`连接聊天失败: ${e instanceof Error ? e.message : e}`)
   }
 }
 
 async function sendMessage(content: string, images?: string[]) {
-  if (!ws.isConnected.value) {
-    ElMessage.error('发送失败: WebSocket 未连接')
+  if (!sse.isConnected.value) {
+    ElMessage.error('发送失败: 未连接')
     return
   }
   try {
-    ws.send(content, images)
+    sse.send(content, images)
   } catch (e) {
     ElMessage.error(`发送失败: ${e instanceof Error ? e.message : e}`)
   }
 }
 
-// ── Auto-connect on mount (if navigated from AgentList) ───
+// ── Auto-restore from persistence + connect on mount ─────
 
 onMounted(() => {
+  // 从 Bridge 持久化 API 加载会话列表
+  if (selectedAgentId.value) {
+    sessionStore.loadSessions().catch(() => {
+      // loadSessions 内部已记录 error
+    })
+  }
   if (selectedAgentId.value && currentClientId.value) {
     connectChat()
   }
@@ -137,8 +165,8 @@ watch(selectedAgentId, (newId, oldId) => {
 // ── Cleanup ───────────────────────────────────────────────
 
 onBeforeUnmount(() => {
-  if (ws.isConnected.value) {
-    ws.disconnect()
+  if (sse.isConnected.value) {
+    sse.disconnect()
   }
 })
 </script>
@@ -158,10 +186,10 @@ onBeforeUnmount(() => {
         v-else
         :key="selectedAgentId"
         :agent-id="selectedAgentId"
-        :user-id="BUILTIN_USER_ID"
+        :user-id="''"
         :current-session-id="currentSessionId"
         @session-selected="selectSession"
-        @new-session="createSession"
+        @new-session="openNewSessionDialog"
         @session-destroyed="() => { currentSessionId = null; currentClientId = null }"
       />
     </aside>
@@ -177,23 +205,31 @@ onBeforeUnmount(() => {
         Daemon 未连接 — 聊天不可用
       </div>
       <div
-        v-else-if="ws.error.value"
+        v-else-if="sse.error.value"
         class="chat-page__banner chat-page__banner--error"
-        data-testid="chat-ws-error"
+        data-testid="chat-sse-error"
       >
-        WebSocket 错误: {{ ws.error.value }}
+        SSE 错误: {{ sse.error.value }}
       </div>
       <div
-        v-else-if="ws.isConnected.value"
+        v-else-if="sse.isConnected.value"
         class="chat-page__banner chat-page__banner--success"
       >
-        聊天已连接
+        聊天已连接 ({{ sse.streamingEnabled.value ? '流式' : '同步' }})
         <span v-if="selectedAgentId" class="chat-page__banner-agent">
           · {{ selectedAgentId }}
         </span>
         <span v-if="currentClientId" class="chat-page__banner-session">
           · 会话: {{ currentClientId.slice(0, 8) }}…
         </span>
+        <el-switch
+          v-model="sse.streamingEnabled.value"
+          class="chat-page__streaming-toggle"
+          size="small"
+          active-text="流式"
+          inactive-text="同步"
+          inline-prompt
+        />
       </div>
 
       <!-- Empty state: no agent selected -->
@@ -210,7 +246,7 @@ onBeforeUnmount(() => {
         class="chat-page__empty"
       >
         <el-empty description="请先选择或新建一个会话" :image-size="80">
-          <el-button type="primary" @click="createSession">
+          <el-button type="primary" @click="openNewSessionDialog">
             新建会话
           </el-button>
         </el-empty>
@@ -221,12 +257,20 @@ onBeforeUnmount(() => {
         v-else
         :agent-id="selectedAgentId"
         :session-id="currentSessionId ?? undefined"
-        :connected="ws.isConnected.value"
-        :streaming="ws.isStreaming.value"
+        :connected="sse.isConnected.value"
+        :streaming="sse.isStreaming.value"
         @send="sendMessage"
-        @stop="ws.stop()"
+        @stop="sse.stop()"
       />
     </main>
+
+    <!-- 新建会话对话框 -->
+    <NewSessionDialog
+      :visible="showNewSessionDialog"
+      :default-user-id="BUILTIN_USER_ID"
+      @create="createSessionWithParams"
+      @close="showNewSessionDialog = false"
+    />
   </div>
 </template>
 
@@ -278,6 +322,9 @@ onBeforeUnmount(() => {
 .chat-page__banner-agent,
 .chat-page__banner-session {
   font-weight: 600;
+}
+.chat-page__streaming-toggle {
+  margin-left: 12px;
 }
 .chat-page__empty {
   flex: 1;

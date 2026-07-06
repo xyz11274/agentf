@@ -208,3 +208,149 @@ TEST_F(UDSJsonParsingTest, SingleJsonObjectWithComma) {
   EXPECT_NE(get_response.find("\"name\":\"search\""), std::string::npos)
       << "Missing name field (truncated at comma?): " << get_response;
 }
+
+// ── Regression tests for -32602 "missing session_id, namespace, or key" ──
+// These test the bug where extract_json_string fails to find top-level keys
+// when the nested `value` object also contains fields with the same name.
+// All requests use single-line JSON to match what json.dumps() produces.
+
+// Test: value dict contains "session_id" (like _task_context does in meta)
+TEST_F(UDSJsonParsingTest, PutValueContainsSessionIdKey) {
+  ASSERT_TRUE(connect_to_server()) << "Failed to connect to UDS server";
+
+  // Simulates meta dict that includes session_id via _task_context():
+  //   meta = {"model": "...", ...}
+  //   meta.update(_task_context())  → adds "session_id":"0"
+  // This creates a nested "session_id" inside the value object that could
+  // confuse extract_json_string("params", "session_id").
+  std::string request = std::string(
+      "{\"jsonrpc\":\"2.0\",\"method\":\"put\",\"params\":{")
+      + "\"session_id\":\"0\",\"namespace\":\"llm\",\"key\":\"traces/test123/meta\","
+      + "\"value\":{\"model\":\"MiniMax-M3\",\"latency_ms\":1234,\"session_id\":\"0\",\"node_id\":\"skill_executor\"}"
+      + "},\"id\":1}";
+
+  std::string response = send_request(request);
+  EXPECT_NE(response.find("\"success\":true"), std::string::npos)
+      << "Put failed (session_id in value confused extraction): " << response;
+}
+
+// Test: value dict contains "key" field (from LLM response or request)
+TEST_F(UDSJsonParsingTest, PutValueContainsKeyField) {
+  ASSERT_TRUE(connect_to_server()) << "Failed to connect to UDS server";
+
+  // Simulates a value that happens to contain a "key" field
+  std::string request = std::string(
+      "{\"jsonrpc\":\"2.0\",\"method\":\"put\",\"params\":{")
+      + "\"session_id\":\"0\",\"namespace\":\"llm\",\"key\":\"traces/test456/request\","
+      + "\"value\":{\"model\":\"test\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"key\":\"some_value\"}"
+      + "},\"id\":1}";
+
+  std::string response = send_request(request);
+  EXPECT_NE(response.find("\"success\":true"), std::string::npos)
+      << "Put failed (key in value confused extraction): " << response;
+}
+
+// Test: the exact _TraceRecorder put sequence (request + meta + response)
+TEST_F(UDSJsonParsingTest, TraceRecorderPutSequence) {
+  ASSERT_TRUE(connect_to_server()) << "Failed to connect to UDS server";
+
+  // Step 1: put request body (messages list with tools) – %zu stops at first comma.
+  // Build programmatically to avoid newlines in R"()".
+  std::string req1 = std::string(
+      "{\"jsonrpc\":\"2.0\",\"method\":\"put\",\"params\":{")
+      + "\"session_id\":\"0\",\"namespace\":\"llm\",\"key\":\"traces/seq001/request\","
+      + "\"value\":{\"model\":\"MiniMax-M3\",\"messages\":["
+      + "{\"role\":\"system\",\"content\":\"you are a helper\"},"
+      + "{\"role\":\"user\",\"content\":\"hi\"}"
+      + "],\"max_completion_tokens\":2000,"
+      + "\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"run_skills\",\"description\":\"run\",\"parameters\":{\"type\":\"object\",\"properties\":{}}}}],"
+      + "\"tool_choice\":\"auto\"}"
+      + "},\"id\":1}";
+  std::string r1 = send_request(req1);
+  EXPECT_NE(r1.find("\"success\":true"), std::string::npos)
+      << "Step1 put request failed: " << r1;
+
+  // Step 2: put response (LLM API response with choices/usage)
+  std::string req2 = std::string(
+      "{\"jsonrpc\":\"2.0\",\"method\":\"put\",\"params\":{")
+      + "\"session_id\":\"0\",\"namespace\":\"llm\",\"key\":\"traces/seq001/response\","
+      + "\"value\":{\"id\":\"chatcmpl-x\",\"object\":\"chat.completion\",\"created\":12345,"
+      + "\"model\":\"MiniMax-M3\","
+      + "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"hello\"},\"finish_reason\":\"stop\"}],"
+      + "\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}"
+      + "},\"id\":2}";
+  std::string r2 = send_request(req2);
+  EXPECT_NE(r2.find("\"success\":true"), std::string::npos)
+      << "Step2 put response failed: " << r2;
+
+  // Step 3: put meta (with task_context fields including session_id)
+  std::string req3 = std::string(
+      "{\"jsonrpc\":\"2.0\",\"method\":\"put\",\"params\":{")
+      + "\"session_id\":\"0\",\"namespace\":\"llm\",\"key\":\"traces/seq001/meta\","
+      + "\"value\":{"
+      + "\"model\":\"MiniMax-M3\",\"latency_ms\":1234,\"timestamp\":\"2026-01-01T00:00:00Z\","
+      + "\"request_summary\":\"system:..., user:...\",\"response_summary\":\"finish=stop\","
+      + "\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15,"
+      + "\"finish_reason\":\"stop\",\"msg_count\":2,\"tools_enabled\":true,\"retries_used\":0,"
+      + "\"dialogue_id\":\"test-dlg\",\"session_id\":\"0\",\"node_id\":\"skill_executor\","
+      + "\"task_id\":\"\",\"skill_name\":\"\",\"completed_skill\":\"\",\"task_type\":\"skill\""
+      + "}"
+      + "},\"id\":3}";
+  std::string r3 = send_request(req3);
+  EXPECT_NE(r3.find("\"success\":true"), std::string::npos)
+      << "Step3 put meta failed: " << r3;
+
+  // Step 4: get the meta back to verify it's stored correctly
+  std::string req4 = std::string(
+      "{\"jsonrpc\":\"2.0\",\"method\":\"get\",\"params\":{")
+      + "\"session_id\":\"0\",\"namespace\":\"llm\",\"key\":\"traces/seq001/meta\""
+      + "},\"id\":4}";
+  std::string r4 = send_request(req4);
+  EXPECT_NE(r4.find("\"exists\":true"), std::string::npos)
+      << "Step4 get meta failed (key not found): " << r4;
+  EXPECT_NE(r4.find("\"node_id\":\"skill_executor\""), std::string::npos)
+      << "Step4 get meta missing expected content: " << r4;
+}
+
+// Test: put with empty string values (edge case)
+TEST_F(UDSJsonParsingTest, PutWithEmptyStringValues) {
+  ASSERT_TRUE(connect_to_server()) << "Failed to connect to UDS server";
+
+  std::string request = std::string(
+      "{\"jsonrpc\":\"2.0\",\"method\":\"put\",\"params\":{")
+      + "\"session_id\":\"0\",\"namespace\":\"llm\",\"key\":\"traces/empty/meta\","
+      + "\"value\":{"
+      + "\"model\":\"\",\"latency_ms\":0,\"timestamp\":\"\","
+      + "\"request_summary\":\"\",\"response_summary\":\"\","
+      + "\"finish_reason\":\"\",\"session_id\":\"\",\"node_id\":\"\",\"task_type\":\"\""
+      + "}"
+      + "},\"id\":1}";
+
+  std::string response = send_request(request);
+  // Should succeed because session_id is "0", not empty
+  EXPECT_NE(response.find("\"success\":true"), std::string::npos)
+      << "Put with empty string values failed: " << response;
+}
+
+// Test: large messages list (stress the parser)
+TEST_F(UDSJsonParsingTest, PutWithLargeMessagesList) {
+  ASSERT_TRUE(connect_to_server()) << "Failed to connect to UDS server";
+
+  // Build a large messages list programmatically (single-line compact JSON)
+  std::string value = "{\"model\":\"MiniMax-M3\",\"messages\":[";
+  for (int i = 0; i < 20; i++) {
+    if (i > 0) value += ",";
+    value += "{\"role\":\"user\",\"content\":\"This is message " + std::to_string(i) + " with some Chinese text 中文测试 that exercises the parser\"}";
+  }
+  value += "],\"max_completion_tokens\":2000}";
+
+  std::string request = std::string(
+      "{\"jsonrpc\":\"2.0\",\"method\":\"put\",\"params\":{")
+      + "\"session_id\":\"0\",\"namespace\":\"llm\",\"key\":\"traces/large/request\","
+      + "\"value\":" + value
+      + "},\"id\":1}";
+
+  std::string response = send_request(request);
+  EXPECT_NE(response.find("\"success\":true"), std::string::npos)
+      << "Put with large messages failed: " << response;
+}

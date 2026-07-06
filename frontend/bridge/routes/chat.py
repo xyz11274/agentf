@@ -30,8 +30,11 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from client import DaemonClient, DaemonError
 from config import settings
 from content_serializer import prepare_content_for_daemon
-from models import ChatChunk, ChatDone, ChatRequest
+from models import ChatChunk, ChatDone, ChatRequest, ContentPart
+from providers import SessionProvider
 from routes.conversations import get_store, ConversationRecord
+from routes.artifact_extractor import extract_artifact_infos, publicize_artifact_urls, serialize_artifacts
+from services import _pull_and_save_traces
 
 logger = logging.getLogger("agentflow.bridge.routes.chat")
 
@@ -65,6 +68,10 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
     The endpoint accepts the connection first, then validates ``agent_id``.
     Connection errors and daemon errors are forwarded to the frontend as
     ``error`` frames before closing the socket with a meaningful code.
+
+    Phase-1 (Bridge session persistence): history context is injected from
+    the configured ``SessionProvider`` before each turn, following the same
+    messages-list protocol as ``chat_rest.py``.
     """
     await websocket.accept()
 
@@ -81,6 +88,11 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
             code=CLOSE_CODE_INTERNAL_ERROR,
         )
         return
+
+    # Read SessionProvider from app.state (set up in main.lifespan).
+    provider: SessionProvider | None = getattr(
+        websocket.app.state, "session_provider", None
+    )
 
     if not agent_id or not agent_id.strip():
         await _send_error_and_close(
@@ -115,6 +127,7 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
                 agent_id=agent_id,
                 request=req,
                 stop_event=stop_event,
+                provider=provider,
             )
 
         turn_task: asyncio.Task[None] | None = None
@@ -268,11 +281,17 @@ async def _run_turn(
     agent_id: str,
     request: ChatRequest,
     stop_event: asyncio.Event,
+    provider: SessionProvider | None = None,
 ) -> None:
     """Execute a single turn: agent.execute -> poll loop -> done frame.
 
     Uses ``user_id`` + ``client_id`` from the request to identify the session
     (daemon internally maps these to a session via SessionRouter).
+
+    Phase-1 (Bridge session persistence): if ``provider`` is supplied, history
+    context is injected from the SessionProvider before the turn, following the
+    same messages-list protocol as ``chat_rest.py`` (§2.4 / §3.1).
+    Persist to the provider after the turn completes.
     """
     # Generate unique dialogue_id per turn.
     dialogue_id = (
@@ -281,12 +300,54 @@ async def _run_turn(
     )
     turn_timeout = settings.chat_turn_timeout_seconds
 
+    # ── 上下文注入（设计文档 §2.4 / §3.1）──────────────────────
+    logger = logging.getLogger("agentflow.bridge.routes.chat")
+    history_messages: list[dict] = []
+    bsession: dict | None = None
+    if provider is not None:
+        try:
+            bsession = await provider.get_or_create_session(
+                request.user_id, request.client_id,
+            )
+            ctx = await provider.get_context(
+                bsession["id"], request.user_id,
+                query=_content_to_text(request.content),
+                limit_rounds=settings.session_context_limit_rounds,
+            )
+            history_messages = ctx.messages
+            if ctx.memories:
+                memory_text = "用户相关信息：\n" + "\n".join(ctx.memories)
+                history_messages = [
+                    {"role": "system", "content": memory_text},
+                    *history_messages,
+                ]
+            logger.info(
+                "ws_chat.context agent=%s session=%s history_msgs=%d memories=%d",
+                agent_id, bsession["id"], len(history_messages), len(ctx.memories),
+            )
+        except Exception as exc:  # noqa: BLE101
+            logger.warning(
+                "ws_chat.context_failed agent=%s dialogue=%s: %s (proceeding without history)",
+                agent_id, dialogue_id, exc,
+            )
+
+    this_turn_text = prepare_content_for_daemon(request.content, agent_id=agent_id)
+    messages_payload = (
+        [*history_messages, {"role": "user", "content": this_turn_text}]
+        if history_messages
+        else [{"role": "user", "content": this_turn_text}]
+    )
+    daemon_content = json.dumps({
+        "stream": False,
+        "messages": messages_payload,
+    }, ensure_ascii=False)
+
     try:
         execute_result = await asyncio.wait_for(
             daemon_client.agent_execute(
                 agent_id,
-                session_id="",  # daemon does not accept session_id; pass empty
-                content=prepare_content_for_daemon(request.content, agent_id=agent_id),
+                session_id="",
+                content=daemon_content,
                 user_id=request.user_id,
                 client_id=request.client_id,
                 dialogue_id=dialogue_id,
@@ -333,6 +394,26 @@ async def _run_turn(
                 "chat_turn.abort agent=%s dialogue=%s task=%s elapsed=%.1fs chunks=%d",
                 agent_id, dialogue_id, task_id, time.time() - turn_start, chunk_count,
             )
+            # Notify daemon to interrupt the in-flight dialogue so its
+            # session-level serialization lock is released and the next
+            # queued dialogue can proceed.  Best-effort: failures are
+            # logged but do not block the local abort path.
+            daemon_session_id = ""
+            if isinstance(execute_result, dict):
+                daemon_session_id = execute_result.get("session_id") or ""
+            try:
+                await daemon_client.agent_send_control(
+                    agent_id=agent_id,
+                    command="DIALOGUE-INTERRUPT",
+                    session_id=daemon_session_id,
+                    user_id=request.user_id,
+                    dialogue_id=dialogue_id,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "chat_turn.abort.send_control_failed agent=%s dialogue=%s err=%s",
+                    agent_id, dialogue_id, exc,
+                )
             daemon_client.discard_response_queue(dialogue_id)
             break
 
@@ -353,12 +434,31 @@ async def _run_turn(
             break
 
         try:
-            notification = await asyncio.wait_for(
+            # Race wait_for_response against stop_event so a client stop
+            # interrupts the poll immediately instead of waiting for the
+            # daemon's response timeout.
+            wait_task = asyncio.create_task(
                 daemon_client.wait_for_response(
                     agent_id, dialogue_id=dialogue_id, timeout=remaining,
-                ),
-                timeout=remaining,
+                )
             )
+            stop_task = asyncio.create_task(stop_event.wait())
+            done, pending = await asyncio.wait(
+                {wait_task, stop_task},
+                timeout=remaining,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            for p in pending:
+                p.cancel()
+            if stop_task in done or stop_event.is_set():
+                # Stop fired — fall through to the stop check at loop top.
+                continue
+            if wait_task not in done:
+                # asyncio.wait timeout — retry.
+                raise asyncio.TimeoutError()
+            notification = wait_task.result()
+        except asyncio.CancelledError:
+            raise
         except asyncio.TimeoutError as exc:
             logger.debug(
                 "chat_turn.poll_retry agent=%s dialogue=%s task=%s remaining=%.1fs",
@@ -409,16 +509,27 @@ async def _run_turn(
                 )
                 break
 
-        chunk_content = _publicize_artifact_urls(_extract_content(notification))
-        is_progress = False
-        # [PROGRESS] prefix signals a system progress message, not model output.
-        # Strip the prefix and mark the chunk so the frontend can style it.
-        if chunk_content.startswith("[PROGRESS]"):
-            chunk_content = chunk_content[len("[PROGRESS]"):].lstrip()
-            is_progress = True
+        chunk_content = publicize_artifact_urls(_extract_content(notification))
+
+        # ── Unified type field ────────────────────────────────────
+        # daemon 通知携带 type 字段: text | llm_chunk | progress
+        # text:      完整响应（非流式/流式结束时）, 直接作为 content
+        # llm_chunk: OpenAI SSE 格式的 choices JSON, content 原样透传
+        # progress:  进度通知, 标记 progress=True
+        msg_type = _extract_metadata_value(notification, "type", "")
+        is_progress = (msg_type == "progress")
+        is_llm_chunk = (msg_type == "llm_chunk")
+
         chunk_count += 1
-        chunks_accumulated.append(chunk_content)
-        chunk = ChatChunk(content=chunk_content, final=is_final, progress=is_progress)
+        chunks_accumulated.append(chunk_content if msg_type == "text" else "")
+        artifacts = extract_artifact_infos(chunk_content) if is_final else []
+        chunk = ChatChunk(content=chunk_content, final=is_final,
+                          progress=is_progress, artifacts=artifacts,
+                          type="chunk",
+                          chunk_type=msg_type if msg_type in ("llm_chunk", "progress", "text") else "",
+                          progress_skill=_extract_metadata_value(notification, "skill", ""),
+                          progress_round=_extract_metadata_value(notification, "round", ""),
+                          progress_status=_extract_metadata_value(notification, "status", ""))
         await _safe_send(websocket, chunk.model_dump())
 
         if is_final and not is_progress:
@@ -451,14 +562,45 @@ async def _run_turn(
             content="".join(chunks_accumulated),
         ))
 
+    # ── 持久化到 Bridge SessionProvider（Phase 1）──────────────
+    if provider is not None and chunks_accumulated:
+        agentflow_session_id = ""
+        if isinstance(execute_result, dict):
+            agentflow_session_id = execute_result.get("session_id") or ""
+        try:
+            sess = bsession if bsession is not None else await provider.get_or_create_session(
+                request.user_id, request.client_id,
+            )
+            await provider.update_agentflow_session_ref(sess["id"], agentflow_session_id)
+            full_content = "".join(chunks_accumulated)
+            artifacts_json = serialize_artifacts(full_content)
+            await provider.save_dialogue(
+                session_id=sess["id"],
+                user_input=_content_to_text(request.content),
+                agent_response=full_content,
+                dialogue_id=dialogue_id,
+                agent_name=agent_id,
+                artifacts=artifacts_json,
+            )
+            logger.info(
+                "ws_chat.trace_pull agent=%s dialogue=%s user=%s client=%s sess=%s",
+                agent_id, dialogue_id, request.user_id, request.client_id, sess["id"],
+            )
+            await _pull_and_save_traces(
+                daemon_client, provider,
+                agent_id=agent_id,
+                user_id=request.user_id,
+                client_id=request.client_id,
+                dialogue_id=dialogue_id,
+                session_id=sess["id"],
+            )
+        except Exception as exc:  # noqa: BLE101
+            logger.warning(
+                "ws_chat.persist_failed agent=%s dialogue=%s: %s",
+                agent_id, dialogue_id, exc,
+            )
+
     await _safe_send(websocket, ChatDone().model_dump())
-
-
-def _publicize_artifact_urls(content: str) -> str:
-    base = settings.artifact_public_base_url.rstrip("/")
-    if not base:
-        return content
-    return content.replace("(/api/artifacts/", f"({base}/api/artifacts/")
 
 
 async def _heartbeat_loop(websocket: WebSocket) -> None:
@@ -551,6 +693,33 @@ def _extract_task_id(execute_result: Any) -> str | None:
     return None
 
 
+def _content_to_text(content: str | list[ContentPart]) -> str:
+    """Flatten a chat request's ``content`` field to plain text.
+
+    Mirrors ``routes.chat_rest._content_to_text`` — used for SessionProvider
+    storage (user_input) and context-injection query text.
+    """
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for p in content:
+        text = getattr(p, "text", None)
+        if text:
+            parts.append(text)
+            continue
+        url = getattr(p, "image_url", None)
+        url_str = getattr(url, "url", "") if url else ""
+        if url_str:
+            if url_str.startswith("data:"):
+                name = url_str.split(";")[0].replace("data:", "")[:20]
+            else:
+                name = url_str.rstrip("/").split("/")[-1] or "image"
+        else:
+            name = "image"
+        parts.append(f"[image:{name}]")
+    return "".join(parts)
+
+
 def _extract_final(payload: Any) -> bool:
     if isinstance(payload, dict):
         val = payload.get("final", False)
@@ -574,6 +743,26 @@ def _extract_content(payload: Any) -> str:
         content = payload.get("content") or payload.get("text") or ""
         return str(content)
     return ""
+
+
+def _extract_metadata_value(payload: Any, key: str, default: str = "") -> str:
+    """Extract a value from a daemon notification's metadata dict."""
+    if isinstance(payload, dict):
+        meta = payload.get("metadata")
+        if isinstance(meta, dict):
+            val = meta.get(key)
+            if val is not None:
+                return str(val)
+        elif isinstance(meta, str):
+            try:
+                parsed = json.loads(meta)
+                if isinstance(parsed, dict):
+                    val = parsed.get(key)
+                    if val is not None:
+                        return str(val)
+            except json.JSONDecodeError:
+                pass
+    return default
 
 
 def _extract_workflow_error(payload: Any) -> str:

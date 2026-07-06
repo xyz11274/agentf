@@ -77,6 +77,7 @@ def mock_daemon() -> AsyncMock:
     daemon = AsyncMock()
     daemon.agent_execute = AsyncMock()
     daemon.wait_for_response = AsyncMock()
+    daemon.agent_send_control = AsyncMock()
     daemon.discard_response_queue = Mock()
     return daemon
 
@@ -159,6 +160,14 @@ class TestRunTurnHappyPath:
         assert len(ws.sent) >= 2
         assert ws.sent[0]["type"] == "chunk"
         assert ws.sent[-1]["type"] == "done"
+        # Stop must also notify the daemon to interrupt the in-flight
+        # dialogue so the session-level serialization lock is released
+        # and queued dialogues can proceed.
+        mock_daemon.agent_send_control.assert_awaited_once()
+        _, kwargs = mock_daemon.agent_send_control.await_args
+        assert kwargs["command"] == "DIALOGUE-INTERRUPT"
+        assert kwargs["session_id"] == "ses_1"
+        assert kwargs["dialogue_id"]  # non-empty
 
 
 # ---------------------------------------------------------------------------
@@ -314,13 +323,13 @@ class TestRunTurnErrors:
 
 
 class TestRunTurnProgressDefense:
-    """[PROGRESS] prefix chunks should never end a turn, even with final=True."""
+    """Progress type chunks should never end a turn, even with final=True."""
 
     @pytest.mark.asyncio
     async def test_progress_chunk_with_final_true_does_not_break(
         self, mock_daemon: AsyncMock,
     ) -> None:
-        """Daemon sends [PROGRESS]+final=True then real content+final=True.
+        """Daemon sends type=progress+final=True then real content+final=True.
         The bridge must NOT break on the progress chunk."""
         call_count = 0
 
@@ -328,7 +337,8 @@ class TestRunTurnProgressDefense:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return {"content": "[PROGRESS]正在执行 outfit-stylist", "final": True}
+                return {"content": "正在执行 outfit-stylist",
+                        "metadata": {"type": "progress"}, "final": True}
             return {"content": "这是真正的回复", "final": True}
 
         mock_daemon.agent_execute.return_value = {"task_id": "t1"}
@@ -342,7 +352,7 @@ class TestRunTurnProgressDefense:
         )
 
         frames = _drain_sent(ws, 3)
-        # First chunk: progress (stripped prefix, progress=True, not final)
+        # First chunk: progress (type=progress, not final)
         assert frames[0]["type"] == "chunk"
         assert frames[0]["content"] == "正在执行 outfit-stylist"
         assert frames[0]["progress"] is True

@@ -230,16 +230,47 @@ export function useChatWebSocket(options: UseChatWebSocketOptions = {}): UseChat
     if (type === 'chunk') {
       const content = typeof frame.content === 'string' ? frame.content : ''
       const isProgress = frame.progress === true
+      const chunkType = typeof frame.chunk_type === 'string' ? frame.chunk_type : ''
 
-      if (isProgress) {
+      if (isProgress || chunkType === 'progress') {
         // Progress status message — display separately from model output.
         chatStore.setProgress(content)
+      } else if (chunkType === 'llm_chunk') {
+        // LLM streaming chunk — 节点推送的是原始 OpenAI SSE chunk JSON（见
+        // streaming-response.md §3.4），前端解析 delta.content 取 token，
+        // 按 (skill, round) 分组存储供 ChatView 独立卡片渲染。
+        // 与 SSE 路径行为对齐（不变量 S-4：WS/SSE 同一 chunk 处理一致）。
+        if (content) {
+          let token = content
+          try {
+            const parsed = JSON.parse(content)
+            const delta = parsed?.choices?.[0]?.delta
+            if (delta?.content) {
+              token = delta.content
+            }
+          } catch {
+            // content 不是合法 JSON — 降级为原样追加（节点契约偏离时不丢数据）
+          }
+          // WS chunk 携带 skill/round 元数据时按分组存储；缺元数据时
+          // 用空串占位但保留 token（addLlmChunk 严格拒空，需本地兜底）。
+          const skill = typeof frame.progress_skill === 'string' ? frame.progress_skill : ''
+          const round = typeof frame.progress_round === 'string' ? frame.progress_round : ''
+          if (skill && round) {
+            chatStore.addLlmChunk(skill, round, token)
+          } else if (chatStore.streamingMessageId) {
+            // 元数据缺失的兜底：追加到主 streaming bubble，避免数据丢失（I-1）。
+            chatStore.appendChunk(chatStore.streamingMessageId, token)
+          }
+        }
       } else {
         // The assistant placeholder is created eagerly in send(), so
         // streamingMessageId is always set by the time chunks arrive.
         // (No lazy allocation here — single source of truth in chatStore.)
         if (chatStore.streamingMessageId) {
-          chatStore.appendChunk(chatStore.streamingMessageId, content)
+          const artifacts = Array.isArray(frame.artifacts)
+            ? (frame.artifacts as Array<{type:string;url:string;name:string;mime_type:string}>)
+            : undefined
+          chatStore.appendChunk(chatStore.streamingMessageId, content, artifacts)
         }
         // Clear any previous progress message once real content arrives.
         chatStore.clearProgress()

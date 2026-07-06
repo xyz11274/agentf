@@ -373,7 +373,7 @@ harness/skills/{skill_name}/
 | `llm/traces/index` | call_id 有序列表，供枚举 |
 | `llm/session_messages` | 跨触发的对话历史（session 级持久化） |
 
-HTTP 传输用 `curl` 子进程（绕过 miniconda Python SSL 证书问题，curl 用系统钥匙串）。
+HTTP 传输用 Python `requests` 库（`verify=False` 跳过 SSL 证书验证，等效于旧版 curl `-k` 行为）。
 
 #### meta 中的任务上下文字段
 
@@ -419,7 +419,7 @@ outfit_assistant/
 │   ├── coordinator_decide.py           # LLM 决策核心（run_skills 工具）
 │   ├── skill_executor.py               # 通用 skill 执行器 + 双层 tool 加载
 │   ├── databus_client.py               # DataBus 封装（dialogue_id 前缀对齐 + global 方法）
-│   └── llm_call.py                     # LLM 调用 (curl) + trace 记录
+│   └── llm_call.py                     # LLM 调用 (requests) + trace 记录
 ├── harness/
 │   ├── skills/
 │   │   ├── weather_query/

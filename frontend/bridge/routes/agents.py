@@ -14,6 +14,8 @@ will break the Vue UI.
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -109,9 +111,17 @@ async def load_agent(
     client: DaemonClient = Depends(get_daemon_client),
 ) -> dict[str, Any]:
     """``POST /api/agents/{id}/load`` — load an agent (``agent.load``).
+
+    Before loading, injects default agent configuration into the agent's
+    ``.env`` file from Bridge ``config.yaml → agent_defaults``.
+    Only writes values that are not already set (empty or placeholder).
     """
     pkg_name = (body.package_path if body else None) or agent_id.replace("-", "_")
     package_path = str(settings.agent_packages_path / pkg_name)
+
+    # 注入默认配置到 .env（不覆盖用户已有值）
+    _inject_agent_env_defaults(pkg_name)
+
     try:
         result = await client.agent_load(package_path)
         logger.info("agent_lifecycle.load agent=%s pkg=%s ok", agent_id, pkg_name)
@@ -164,6 +174,146 @@ async def resume_agent(
     except DaemonError as exc:
         logger.warning("agent_lifecycle.resume agent=%s error=%s", agent_id, exc)
         raise _raise_daemon_error(exc) from exc
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Agent .env 默认配置注入
+# ═══════════════════════════════════════════════════════════════════
+
+# 从 config.yaml → agent_defaults 映射到 .env 变量名和默认值
+_AGENT_ENV_DEFAULTS: dict[str, str] = {
+    # LLM 主模型
+    "AF_LLM_API_KEY":       "agent_defaults.llm.api_key",
+    "AF_LLM_BASE_URL":      "agent_defaults.llm.base_url",
+    "AF_LLM_MODEL":         "agent_defaults.llm.model",
+    # LLM 降级
+    "AF_FALLBACK_LLM_API_KEY":  "agent_defaults.llm_fallback.api_key",
+    "AF_FALLBACK_LLM_BASE_URL": "agent_defaults.llm_fallback.base_url",
+    "AF_FALLBACK_LLM_MODEL":    "agent_defaults.llm_fallback.model",
+    # Coordinator
+    "AF_MAX_COORDINATOR_ITERATIONS":  "agent_defaults.coordinator.max_iterations",
+    "AF_MAX_COMPLETION_TOKENS":       "agent_defaults.coordinator.max_completion_tokens",
+    # Skill
+    "AF_MAX_SKILL_TASK_ITERATIONS":     "agent_defaults.skill.max_iterations",
+    "AF_SKILL_MAX_COMPLETION_TOKENS":   "agent_defaults.skill.max_completion_tokens",
+    "AF_SKILL_LLM_RECOVERY_ATTEMPTS":   "agent_defaults.skill.llm_recovery_attempts",
+    "AF_NODE_EXECUTION_TIMEOUT":        "agent_defaults.skill.node_timeout_sec",
+    # Token 预算
+    "AF_MODEL_MAX_TOKENS":      "agent_defaults.model_max_tokens",
+    "AF_COMPACTION_THRESHOLD":  "agent_defaults.compaction_threshold",
+    # HTTP
+    "AF_LLM_TIMEOUT":           "agent_defaults.llm_timeout",
+    "AF_LLM_CONNECT_TIMEOUT":   "agent_defaults.llm_connect_timeout",
+    "AF_LLM_MAX_RETRIES":       "agent_defaults.llm_max_retries",
+    "AF_LLM_RETRY_BASE_DELAY":  "agent_defaults.llm_retry_base_delay",
+    # VL
+    "VISION_BASE_URL":  "agent_defaults.vision.base_url",
+    "VISION_MODEL":     "agent_defaults.vision.model",
+    "VISION_API_KEY":   "agent_defaults.vision.api_key",
+    # VL 降级
+    "VISION_FALLBACK_BASE_URL": "agent_defaults.vision_fallback.base_url",
+    "VISION_FALLBACK_MODEL":    "agent_defaults.vision_fallback.model",
+    "VISION_FALLBACK_API_KEY":  "agent_defaults.vision_fallback.api_key",
+}
+
+
+def _resolve_yaml_path(cfg: dict[str, Any], dotted: str) -> str | None:
+    """Resolve a dotted YAML path like ``agent_defaults.llm.model``."""
+    current: Any = cfg
+    for part in dotted.split("."):
+        if not isinstance(current, dict):
+            return None
+        current = current.get(part)
+    if current is None:
+        return None
+    # Normalise: bool/int → str
+    if isinstance(current, (bool, int, float)):
+        return str(current)
+    return str(current)
+
+
+def _inject_agent_env_defaults(pkg_name: str) -> None:
+    """Merge Bridge ``agent_defaults`` into the agent's ``.env``.
+
+    Only writes values that are currently empty, missing, or hold a
+    placeholder (``${...}``).  Never overwrites a user-configured value.
+    """
+    pkg_dir = settings.agent_packages_path / pkg_name
+    env_file = pkg_dir / ".env"
+    if not pkg_dir.is_dir():
+        logger.warning("agent_env_inject.skip pkg=%s (directory not found)", pkg_name)
+        return
+
+    # Read current .env
+    current_env: dict[str, str] = {}
+    if env_file.is_file():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line:
+                k, _, v = line.partition("=")
+                current_env[k.strip()] = v.strip()
+
+    # Resolve agent_defaults from config.yaml
+    raw_cfg = getattr(settings, "_yaml_source", {})
+    if not raw_cfg:
+        return
+
+    # Build injection candidates
+    candidates: dict[str, str] = {}
+    for env_key, yaml_path in _AGENT_ENV_DEFAULTS.items():
+        val = _resolve_yaml_path(raw_cfg, yaml_path)
+        if val is not None:
+            candidates[env_key] = val
+
+    if not candidates:
+        return
+
+    # Merge: only write values not set / empty / placeholder in current .env
+    _PLACEHOLDER_PREFIXES = ("${", "sk-your-", "your-")
+    lines: list[str] = []
+    written_keys: set[str] = set()
+    separator_done = False
+
+    #   a) Preserve existing non-empty, non-placeholder lines
+    if env_file.is_file():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                lines.append(line)
+                continue
+            if "=" in stripped:
+                k = stripped.split("=", 1)[0].strip()
+                if k in candidates:
+                    v = current_env.get(k, "")
+                    if v and not v.startswith(_PLACEHOLDER_PREFIXES):
+                        # User has a real value — keep it, don't override
+                        written_keys.add(k)
+                        lines.append(line)
+                        continue
+            # Regular line, or key not in candidates — preserve
+            lines.append(line)
+
+    #   b) Append defaults for keys not yet set
+    for env_key, val in candidates.items():
+        if env_key in written_keys:
+            continue
+        if not val:
+            continue  # skip empty defaults
+        if not separator_done:
+            lines.append("")
+            lines.append("# ── Bridge-injected defaults ──")
+            separator_done = True
+        lines.append(f"{env_key}={val}")
+        written_keys.add(env_key)
+
+    if separator_done:
+        env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        logger.info(
+            "agent_env_inject.inject pkg=%s keys=%d",
+            pkg_name, len(written_keys),
+        )
 
 
 __all__ = ["router"]

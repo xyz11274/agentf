@@ -1,0 +1,37 @@
+{
+  "name": "AgentFlowAssistant",
+  "version": "1.0.0",
+  "description": "Assistant agent — Q&A guided agent package creator. Helps users progressively create agent packages through conversation, saving results to examples/agent/",
+  "session_pool_size": 1,
+  "max_workflows": 10,
+  "max_concurrent_workflows": 5,
+  "data_bus_capacity_mb": 5,
+  "tasks": [
+    {
+      "id": 0,
+      "type": "dispatcher",
+      "description": "Routes to assistant skill via next_skills",
+      "next_skills": ["agentflow_assistant_run"],
+      "workflow_pool_size": 1
+    },
+    {
+      "id": 1,
+      "type": "coordinator",
+      "description": "Collects assistant result and returns to client",
+      "workflow_file": "coordinator_collect.json",
+      "workflow_pool_size": 1
+    },
+    {
+      "id": 2,
+      "type": "skill",
+      "description": "Runs the LLM think-and-act loop for assistant guidance",
+      "workflow_file": "assistant_workflow.json",
+      "skill": {
+        "name": "agentflow_assistant_run",
+        "config_dir": "assistant",
+        "instance_pool_size": 1
+      },
+      "workflow_pool_size": 1
+    }
+  ]
+}

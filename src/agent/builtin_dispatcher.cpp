@@ -602,8 +602,11 @@ bool BuiltinDispatcher::remove_user_data(MMAgent& agent,
   }
   new_key += key;
 
-  // Publish empty DataVariant to remove
-  if(agent.publish_data(new_key, DataVariant())) {
+  // Use DataBus remove to truly delete the key (empty DataVariant leaves
+  // a trace that get_framework_data still finds — same bug as the one
+  // fixed in remove_framework_data).
+  auto* databus = agent.get_runtime_databus();
+  if(databus && databus->remove(new_key)) {
     Logger::instance().info_f("[REMOVE_USER_DATA] Removed key=%s", new_key.c_str());
     return true;
   }
@@ -650,6 +653,31 @@ void BuiltinDispatcher::cleanup_dialogue_data(MMAgent& agent,
   for(const auto& skill_name : launched_skills) {
     remove_user_data(agent, session_id, dialogue_id, skill_name + "_result");
     remove_user_data(agent, session_id, dialogue_id, skill_name + "_confidence");
+  }
+
+  // Clean up stream chunks from response_push (if runtime DataBus is available)
+  // These are stored under /session/{session_id}/stream/{dialogue_id}/
+  if(auto* rt = agent.get_runtime_databus()) {
+    std::string stream_prefix = "/session/" + session_id + "/stream/" + dialogue_id + "/";
+    int cleared = rt->remove_by_prefix(stream_prefix);
+    if(cleared > 0) {
+      Logger::instance().info_f("[CLEANUP_DIALOGUE] Cleaned %d stream keys for dialogue_id=%s",
+                                cleared, dialogue_id.c_str());
+    }
+  }
+
+  // Clean up ctx, llm, tool namespaces (accumulated by dialogue execution)
+  // These are NOT cleaned by remove_framework/remove_user_data above.
+  constexpr const char* EXTRA_NAMESPACES[] = {"ctx", "llm", "tool"};
+  if(auto* rt = agent.get_runtime_databus()) {
+    for(const auto& ns : EXTRA_NAMESPACES) {
+      std::string ns_prefix = "/session/" + session_id + "/" + ns + "/" + dialogue_id + "/";
+      int ns_cleared = rt->remove_by_prefix(ns_prefix);
+      if(ns_cleared > 0) {
+        Logger::instance().info_f("[CLEANUP_DIALOGUE] Cleaned %d keys in %s namespace for dialogue_id=%s",
+                                  ns_cleared, ns, dialogue_id.c_str());
+      }
+    }
   }
 
   Logger::instance().info_f("[CLEANUP_DIALOGUE] Cleaned up %zu skills for dialogue_id=%s",

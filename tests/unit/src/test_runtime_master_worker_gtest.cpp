@@ -610,5 +610,111 @@ TEST(RuntimeMasterWorkerTest, PluginUdsPathSpecialCharacters) {
   fs::remove(script);
 }
 
+// ============================================================================
+// ParseSsePayload unit tests (pure function, no network)
+// ============================================================================
+
+using SseChunk = runtime::StreamingLLMClient::SseChunk;
+
+static SseChunk parse(const std::string& json) {
+  return runtime::StreamingLLMClient::parse_sse_payload(json);
+}
+
+TEST(ParseSsePayloadTest, EmptyInput) {
+  auto r = parse("");
+  EXPECT_EQ(r.content, "");
+  EXPECT_EQ(r.finish_reason, "");
+}
+
+TEST(ParseSsePayloadTest, MalformedJson) {
+  auto r = parse("not json at all");
+  EXPECT_EQ(r.content, "");
+  EXPECT_EQ(r.finish_reason, "");
+}
+
+TEST(ParseSsePayloadTest, TruncatedJson) {
+  auto r = parse(R"({"choices":[{"delta":{"content":"hello")");
+  EXPECT_EQ(r.content, "");
+  EXPECT_EQ(r.finish_reason, "");
+}
+
+TEST(ParseSsePayloadTest, NormalContent) {
+  auto r = parse(R"({"choices":[{"delta":{"content":"Hello"}}]})");
+  EXPECT_EQ(r.content, "Hello");
+  EXPECT_EQ(r.finish_reason, "");
+}
+
+TEST(ParseSsePayloadTest, PartialWord) {
+  auto r = parse(R"({"choices":[{"delta":{"content":" flav"}}]})");
+  EXPECT_EQ(r.content, " flav");
+  EXPECT_EQ(r.finish_reason, "");
+}
+
+TEST(ParseSsePayloadTest, EmptyDelta) {
+  auto r = parse(R"({"choices":[{"delta":{}}]})");
+  EXPECT_EQ(r.content, "");
+  EXPECT_EQ(r.finish_reason, "");
+}
+
+TEST(ParseSsePayloadTest, NewlineEscape) {
+  auto r = parse(R"({"choices":[{"delta":{"content":"line1\nline2"}}]})");
+  EXPECT_EQ(r.content, "line1\nline2");
+}
+
+TEST(ParseSsePayloadTest, EscapedQuote) {
+  auto r = parse(R"({"choices":[{"delta":{"content":"say \"hi\""}}]})");
+  EXPECT_EQ(r.content, "say \"hi\"");
+}
+
+TEST(ParseSsePayloadTest, FinishReasonStop) {
+  auto r = parse(R"({"choices":[{"delta":{},"finish_reason":"stop"}]})");
+  EXPECT_EQ(r.content, "");
+  EXPECT_EQ(r.finish_reason, "stop");
+}
+
+TEST(ParseSsePayloadTest, FinishReasonLength) {
+  auto r = parse(R"({"choices":[{"delta":{},"finish_reason":"length"}]})");
+  EXPECT_EQ(r.finish_reason, "length");
+}
+
+TEST(ParseSsePayloadTest, ContentWithFinishReason) {
+  auto r = parse(R"({"choices":[{"delta":{"content":"done"},"finish_reason":"stop"}]})");
+  EXPECT_EQ(r.content, "done");
+  EXPECT_EQ(r.finish_reason, "stop");
+}
+
+TEST(ParseSsePayloadTest, MultipleChoicesTakesFirst) {
+  auto r = parse(R"({"choices":[{"delta":{"content":"first"}},{"delta":{"content":"second"}}]})");
+  EXPECT_EQ(r.content, "first");
+}
+
+TEST(ParseSsePayloadTest, NoChoicesArray) {
+  auto r = parse(R"({"model":"gpt-4"})");
+  EXPECT_EQ(r.content, "");
+}
+
+TEST(ParseSsePayloadTest, EmptyChoicesArray) {
+  auto r = parse(R"({"choices":[]})");
+  EXPECT_EQ(r.content, "");
+}
+
+TEST(ParseSsePayloadTest, ErrorResponse) {
+  auto r = parse(R"({"error":{"message":"Rate limit"}})");
+  EXPECT_EQ(r.content, "");
+  EXPECT_EQ(r.finish_reason, "");
+}
+
+TEST(ParseSsePayloadTest, NonStringContent) {
+  // content field exists but is not a string (e.g. null or number)
+  auto r = parse(R"({"choices":[{"delta":{"content":123}}]})");
+  EXPECT_EQ(r.content, "");
+}
+
+TEST(ParseSsePayloadTest, NonObjectChoice) {
+  auto r = parse(R"({"choices":[null]})");
+  EXPECT_EQ(r.content, "");
+  EXPECT_EQ(r.finish_reason, "");
+}
+
 }  // namespace tests
 }  // namespace agentflow

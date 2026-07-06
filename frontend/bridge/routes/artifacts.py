@@ -19,7 +19,8 @@ logger = logging.getLogger("agentflow.bridge.routes.artifacts")
 
 router = APIRouter(prefix="/api/artifacts", tags=["artifacts"])
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-_ARTIFACT_SUFFIXES = _IMAGE_SUFFIXES | {".html", ".htm", ".css", ".js", ".json", ".svg"}
+_DOCUMENT_SUFFIXES = {".pptx", ".ppt", ".docx", ".doc", ".xlsx", ".xls", ".pdf"}
+_ARTIFACT_SUFFIXES = _IMAGE_SUFFIXES | _DOCUMENT_SUFFIXES | {".html", ".htm", ".css", ".js", ".json", ".svg"}
 
 
 def _image_media_type(path: Path) -> str:

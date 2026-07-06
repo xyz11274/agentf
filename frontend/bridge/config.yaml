@@ -56,13 +56,21 @@ skill_hub_dir: "resource/skill_hub"
 agent_template_dir: "templates"
 
 # ── 日志与超时 ────────────────────────────────────────────────────
-log_level: "INFO"
+log_level: "DEBUG"
 request_timeout_seconds: 5.0     # daemon RPC 超时
 upload_max_body_size_mb: 100     # 上传 body 上限（同步 main.py 的 max_request_body_size）
 
+# ── 会话持久化（Bridge session） ──────────────────────────────────
+# Bridge 维护自己的会话/消息/trace 表，独立于 agentflow daemon 的瞬时 session
+# 详见 docs/design/features/bridge-session-persistence.md
+session_provider: "local"        # local | kmm（Phase 3，暂未实现）
+session_db_path: "data/sessions.db"  # LocalSessionProvider SQLite 文件路径
+session_context_limit_rounds: 5  # 注入到下一轮 chat 的历史对话轮数
+session_sync_interval: 30.0      # agentflow→Bridge session 状态同步轮询间隔（秒）
+
 # ── 多模态内容（Phase A） ─────────────────────────────────────────
 # base64 内联图 ≥ 此 KB 阈值时，bridge 落盘并替换为 file_url
-content_image_inline_threshold_kb: 256
+content_image_inline_threshold_kb: 5120
 uploads_dir: "/tmp/agentflow/uploads"  # 大图落盘目录
 chat_turn_timeout_seconds: 900.0  # 聊天单轮总超时（秒，可用 CHAT_TURN_TIMEOUT_SECONDS 覆盖）
 daemon_status_refresh_interval: 10.0
@@ -71,3 +79,53 @@ daemon_status_refresh_interval: 10.0
 cors_allowed_origins:
   - "http://localhost:15173"
   - "http://127.0.0.1:15173"
+
+# ── Agent 默认配置（load_agent 时自动注入到 .env） ──────────────
+# 当 load_agent 发现 agent 的 .env 中缺少以下配置项时，
+# 自动按此处的值写入。用户已在 .env 中手动设置的值不会被覆盖。
+agent_defaults:
+  # ── LLM 主模型 ──
+  llm:
+    api_key: "${AF_LLM_API_KEY:-}"
+    base_url: "${AF_LLM_BASE_URL:-}"
+    model: "${AF_LLM_MODEL:-gpt-4o}"
+
+  # ── LLM 降级模型（主模型不可用时自动尝试） ──
+  llm_fallback:
+    api_key: ""
+    base_url: "https://api.minimax.com/v1"
+    model: "MiniMax-M3"
+
+  # ── Coordinator 循环 ──
+  coordinator:
+    max_iterations: 10
+    max_completion_tokens: 8192
+
+  # ── Skill 执行器 ──
+  skill:
+    max_iterations: 8
+    max_completion_tokens: 8192
+    llm_recovery_attempts: 2
+    node_timeout_sec: 240
+
+  # ── Token 预算与压缩 ──
+    model_max_tokens: 128000
+    compaction_threshold: 0.8
+
+  # ── LLM 请求调优 ──
+  llm_timeout: 120
+  llm_connect_timeout: 5
+  llm_max_retries: 2
+  llm_retry_base_delay: 1.0
+
+  # ── VL 多模态模型（图片理解） ──
+  vision:
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    model: "qwen-vl-max"
+    api_key: ""
+
+  # ── VL 降级模型 ──
+  vision_fallback:
+    base_url: ""
+    model: ""
+    api_key: ""

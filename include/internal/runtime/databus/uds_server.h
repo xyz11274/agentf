@@ -85,6 +85,17 @@ public:
                                             const std::string& call_key,
                                             const std::string& content)>;
 
+  /// Callback type for response_push method (streaming push from Python nodes).
+  /// Called when a Python node pushes a streaming chunk via response_push.
+  /// The callback enqueues the message to session_router_->enqueue_response_message().
+  using ResponsePushCallback = std::function<bool(const std::string& session_id,
+                                                   const std::string& dialogue_id,
+                                                   const std::string& content,
+                                                   const std::string& type,
+                                                   const std::string& skill,
+                                                   const std::string& round_str,
+                                                   const std::string& status)>;
+
   /// Server configuration
   struct Config {
     size_t thread_pool_size = 3;   ///< Number of worker threads for client handling (optimized for execution-level UDS)
@@ -99,6 +110,12 @@ public:
   /// Construct a UDS server with async callback support for multi-language nodes.
   /// The async_callback enables Python/Shell/Go nodes to send async messages.
   UDSServer(MMDataBus* databus, const std::string& socket_path, AsyncCallback async_callback);
+
+  /// Construct a UDS server with both async callback and response_push support.
+  /// The response_push_callback enables Python nodes to push streaming chunks
+  /// directly to the Bridge without waiting for a coordinator round.
+  UDSServer(MMDataBus* databus, const std::string& socket_path,
+            AsyncCallback async_callback, ResponsePushCallback response_push_callback);
 
   /// Construct a UDS server with custom configuration.
   UDSServer(MMDataBus* databus, const std::string& socket_path, const Config& config);
@@ -172,6 +189,7 @@ private:
   std::string handle_publish(const std::string& method, const std::string& params, int64_t id);
   std::string handle_list_keys(const std::string& params, int64_t id);
   std::string handle_async_callback(const std::string& params, int64_t id);
+  std::string handle_response_push(const std::string& params, int64_t id);
 
   /// Build JSON-RPC success response
   std::string build_success_response(const std::string& result, int64_t id) const;
@@ -226,6 +244,9 @@ private:
 
   /// Async callback for multi-language nodes (Python/Shell/Go)
   AsyncCallback async_callback_;
+
+  /// Response push callback for Python node streaming chunks
+  ResponsePushCallback response_push_callback_;
 };
 
 }  // namespace runtime

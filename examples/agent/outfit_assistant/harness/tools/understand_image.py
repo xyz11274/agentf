@@ -31,8 +31,19 @@ import json
 import mimetypes
 import os
 import ssl
+import sys
 import urllib.error
 import urllib.request
+
+# 添加节点目录到 sys.path，复用 llm_call 的 fallback 解析函数
+_NODES_DIR = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "..", "..", "nodes"
+))
+if _NODES_DIR not in sys.path:
+    sys.path.insert(0, _NODES_DIR)
+
+from llm_call import resolve_vision_config
 
 TOOL_NAME = "understand_image"
 TOOL_DESCRIPTION = (
@@ -69,14 +80,11 @@ class _VisionError(Exception):
 # ---------------------------------------------------------------------------
 
 def _get_config() -> dict:
-    """Return {base_url, model, api_key} from environment, or raise."""
-    base_url = os.environ.get("VISION_BASE_URL", "").strip()
-    model = os.environ.get("VISION_MODEL", "").strip()
-    api_key = (
-        os.environ.get("VISION_API_KEY", "")
-        or os.environ.get("API_KEY", "")
-        or os.environ.get("MINIMAX_API_KEY", "")
-    )
+    """Return {base_url, model, api_key} from environment with fallback chain."""
+    cfg = resolve_vision_config()
+    base_url = cfg.get("base_url", "").strip()
+    model = cfg.get("model", "").strip()
+    api_key = cfg.get("api_key", "").strip()
 
     missing = []
     if not base_url:

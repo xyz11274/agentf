@@ -105,6 +105,56 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
     }
 
     uds_server = std::make_unique<UDSServer>(request.databus, uds_socket_path, async_cb);
+
+    // Register response_push callback for streaming chunk forwarding.
+    // When a Python node pushes a streaming chunk via response_push,
+    // the callback writes the chunk to the DataBus under the session namespace
+    // using key format: "<dialogue_id>/stream/<seq>".
+    // The agent's COORDINATORDataExchange handler picks these up on each
+    // coordinator round and enqueues them to session_router_->enqueue_response_message().
+    if(request.databus) {
+      static std::atomic<uint64_t> stream_seq{0};
+      UDSServer::ResponsePushCallback push_cb =
+          [databus = request.databus](const std::string& session_id,
+                                       const std::string& dialogue_id,
+                                       const std::string& content,
+                                       const std::string& type,
+                                       const std::string& skill,
+                                       const std::string& round_str,
+                                       const std::string& status) -> bool {
+        // Store in DataBus for the agent's COORDINATORDataExchange to pick up
+        uint64_t seq = stream_seq.fetch_add(1);
+        std::string payload = "{\"content\":\"";
+        for (char c : content) {
+          switch (c) {
+            case '\\': payload += "\\\\"; break;
+            case '"':  payload += "\\\""; break;
+            case '\n': payload += "\\n";  break;
+            case '\r': payload += "\\r";  break;
+            case '\t': payload += "\\t";  break;
+            default:
+              if (static_cast<unsigned char>(c) < 0x20) {
+                char buf[8];
+                snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+                payload += buf;
+              } else {
+                payload += c;
+              }
+              break;
+          }
+        }
+        payload += "\",\"type\":\"" + type + "\",\"seq\":" + std::to_string(seq);
+        if(!skill.empty())  payload += ",\"skill\":\"" + skill + "\"";
+        if(!round_str.empty()) payload += ",\"round\":\"" + round_str + "\"";
+        if(!status.empty()) payload += ",\"status\":\"" + status + "\"";
+        payload += "}";
+        return databus->put("/session/" + session_id + "/stream/" + dialogue_id + "/chunk_" + std::to_string(seq),
+                           DataVariant(payload));
+      };
+      // Re-create UDSServer with both callbacks
+      uds_server = std::make_unique<UDSServer>(request.databus, uds_socket_path, async_cb, push_cb);
+    }
+
     if(uds_server->start()) {
       exec_config.env_vars.push_back("AF_DATABUS_UDS_FILE=" + uds_socket_path);
       Logger::instance().info_f("[WORKER] UDS server started for session %s at %s",

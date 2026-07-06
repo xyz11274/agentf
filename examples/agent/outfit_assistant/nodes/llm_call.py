@@ -8,8 +8,8 @@ Each call produces 3 keys under DataBus ``llm`` namespace:
   traces/{call_id}/meta      — latency, tokens, finish_reason, summaries
 Plus traces/index — ordered list of call_ids for enumeration.
 
-HTTP transport: curl subprocess (bypasses miniconda Python SSL cert issues;
-curl uses the system keychain which trusts the LLM API's CA).
+HTTP transport: requests library (verify=False bypasses miniconda Python
+SSL cert issues, matching the old curl -k behavior).
 
 No mock mode — always calls the real LLM. For offline testing, point
 base_url at a local stub server.
@@ -17,11 +17,16 @@ base_url at a local stub server.
 
 import json
 import os
-import subprocess
 import sys
 import time
 import traceback
 import uuid
+
+import requests
+import urllib3
+
+# Suppress InsecureRequestWarning when verify=False (intentional, matches old curl -k)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 _SDK_DIR = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -50,37 +55,21 @@ class _ApiError(RuntimeError):
     """
 
 
-# curl exit codes that indicate TRANSIENT network failures worth retrying.
-# Source: https://curl.se/docs/manpage.html (EXIT CODES)
-#   6  — Couldn't resolve host (DNS hiccup)
-#   7  — Failed to connect() to host (connection refused / ECONNREFUSED)
-#   28 — Operation timeout (--max-time reached)
-#   35 — SSL connect error (TLS handshake failed — the one we just hit)
-#   52 — Got nothing; server returned nothing (no headers, no body)
-#   56 — Failure with receiving network data (connection reset mid-stream)
-# Not retried (deterministic):
-#   3  — URL malformed, 4 — feature missing, 5 — proxy resolution,
-#   22 — HTTP page not retrieved (4xx/5xx in --fail mode — but we don't
-#        use --fail, so 4xx/5xx bodies come through as JSON API errors),
-#   60 — peer cert cannot be authenticated (CA trust — won't recover)
-_TRANSIENT_CURL_RCS = {6, 7, 28, 35, 52, 56}
-
-
-def _is_transient_curl_error(exc: Exception) -> bool:
+def _is_transient_http_error(exc: Exception) -> bool:
     """Return True if `exc` looks like a transient network error worth retrying.
 
-    Inspects curl's "curl rc=N" marker in the RuntimeError message. Any
-    non-curl error (e.g. JSONDecodeError from a garbled but HTTP-200 body)
-    is conservatively treated as non-transient — retrying won't help and
-    may loop on a deterministic parse failure.
+    Transient: ConnectionError (DNS/connection reset, excluding SSLError),
+    Timeout (connect/read timeouts).
+    Non-transient: SSLError (cert trust — identical to old curl rc=60),
+    or any non-requests exception (e.g. JSONDecodeError from garbled body).
     """
-    msg = str(exc)
-    # Match "curl rc=NN" — only the numeric rc tells us if it's transient.
-    import re as _re
-    m = _re.search(r"curl rc=(\d+)", msg)
-    if not m:
-        return False
-    return int(m.group(1)) in _TRANSIENT_CURL_RCS
+    import requests as _requests
+    if isinstance(exc, _requests.exceptions.SSLError):
+        return False  # cert trust — won't recover on retry
+    if isinstance(exc, (_requests.exceptions.ConnectionError,
+                        _requests.exceptions.Timeout)):
+        return True  # DNS hiccup, connection reset, read timeout
+    return False
 
 
 # ── Task context (read once per call from framework-injected env vars) ──
@@ -210,10 +199,11 @@ class _TraceRecorder:
                    api_key: str, tools: list | None = None,
                    max_completion_tokens: int = 2000,
                    timeout: int = 120,
-                   connect_timeout: int = 5) -> dict:
-        """Execute LLM call via curl with full trace recording.
+                   connect_timeout: int = 5,
+                   stream: bool = False) -> dict:
+        """Execute LLM call via requests with full trace recording.
 
-        Two-stage timeout (curl native):
+        Two-stage timeout (requests ``timeout=(connect, read)`` tuple):
           connect_timeout  — TCP connect + TLS handshake (network layer).
                              5s is ~25x normal handshake (~0.2s实测 minimaxi),
                              enough for cross-border jitter; network-down
@@ -222,9 +212,21 @@ class _TraceRecorder:
           timeout          — Whole request including LLM generation.
                              Kept generous (120s) for slow streaming responses.
 
+        **Streaming** — controlled by the ``stream`` parameter (passed from
+        the bridge's ``?stream=true`` query param via the messages payload).
+        When enabled:
+          * Uses ``requests.post(..., stream=True)`` (SSE chunked transfer).
+          * Each non-empty ``delta.content`` token is pushed in near real-time
+            via ``response_push(type="llm_chunk")`` so the Bridge can forward
+            it to the frontend before the full response is assembled.
+          * ``timeout`` still guards the *entire* stream — if the provider
+            hangs mid-stream the connection is abandoned after ``timeout`` s.
+
         Returns OpenAI-compatible response dict, or
         ``{"error": ..., "_llm_error": true}`` on failure.
         """
+        stream_enabled = stream
+        _log_warn(f"[STREAM_DEBUG] stream={stream} → stream_enabled={stream_enabled}")
         self._call_count += 1
         seq = self._call_count
         call_id = uuid.uuid4().hex[:12]
@@ -245,7 +247,7 @@ class _TraceRecorder:
         if self._client:
             self._put(f"traces/{call_id}/request", request_body)
 
-        # ── HTTP call via curl ──
+        # ── HTTP call via requests ──
         url = base_url.rstrip("/")
         if not url.endswith("/chat/completions"):
             url += "/chat/completions"
@@ -266,10 +268,10 @@ class _TraceRecorder:
         # ── Transport-layer retry ──
         #
         # Single source of truth for HTTP retry. Transient network errors
-        # (SSL_ERROR_SYSCALL, connection reset, DNS hiccup, curl timeouts)
-        # are retried here with exponential backoff. Deterministic errors
-        # (auth/400/payload-too-large/business API errors) are NOT retried —
-        # they will fail identically on every attempt.
+        # (ConnectionError: DNS/connection reset; Timeout: read timeout)
+        # are retried here with exponential backoff. SSLError (cert trust)
+        # and deterministic API errors (auth/400/business errors) are NOT
+        # retried — they will fail identically on every attempt.
         #
         # Callers' outer "recovery" loops handle SEMANTIC issues (truncated
         # tool args, invalid JSON) by rewriting messages — those must NOT
@@ -279,33 +281,146 @@ class _TraceRecorder:
         max_retries = int(os.environ.get("AF_LLM_MAX_RETRIES", "2"))
         base_delay = float(os.environ.get("AF_LLM_RETRY_BASE_DELAY", "1.0"))
 
+        if stream_enabled:
+            request_body["stream"] = True
+
         response_data = None
+        accumulated_content: list[str] = []
+        _finish_reason: str = "stop"
         last_error = None
-        for attempt in range(max_retries + 1):
+        max_attempts = 1 if stream_enabled else (max_retries + 1)
+        # 流式模式下禁止重试：已通过 response_push 推送的 token 无法撤回，
+        # 重试会导致前端收到重复内容。
+        for attempt in range(max_attempts):
             try:
-                result = subprocess.run(
-                    ["curl", "-k","-sS", "-X", "POST", url,
-                     "-H", "Content-Type: application/json",
-                     "-H", f"Authorization: Bearer {api_key}",
-                     "-d", json.dumps(request_body, ensure_ascii=False),
-                     "--connect-timeout", str(connect_timeout),
-                     "--max-time", str(timeout)],
-                    capture_output=True, text=True, timeout=timeout + 5,
+                resp = requests.post(
+                    url,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {api_key}",
+                    },
+                    json=request_body,
+                    stream=stream_enabled,
+                    timeout=(connect_timeout, timeout),
+                    verify=False,  # ignore SSL cert (curl -k equivalent)
                 )
-                if result.returncode != 0:
-                    raise RuntimeError(
-                        f"curl rc={result.returncode}: {result.stderr}")
 
-                response_data = json.loads(result.stdout)
-                if "error" in response_data and "choices" not in response_data:
-                    # Business/API error (auth, bad request, quota) — NOT
-                    # transient. Capture the error text BEFORE nulling
-                    # response_data (so the post-loop `response_data is None`
-                    # guard routes to the error path), then raise to break.
-                    api_err_text = response_data.get("error")
-                    response_data = None
-                    raise _ApiError(f"API error: {api_err_text}")
+                if not stream_enabled:
+                    # ── 非流式：原有行为，等待完整 JSON 响应 ──
+                    resp_data = resp.json()
+                    if "error" in resp_data and "choices" not in resp_data:
+                        api_err_text = resp_data.get("error")
+                        resp_data = None
+                        raise _ApiError(f"API error: {api_err_text}")
+                    response_data = resp_data
+                    break  # success
 
+                # ── 流式：逐行解析 SSE，逐 token 推送 ──
+                accumulated_content.clear()
+                _finish_reason = "stop"
+                usage = None  # guard: SSE 流可能返回零行，循环体永不执行
+                # Accumulate tool_calls by index across SSE chunks.
+                # Key: tool_call_index, Value: {"id":..., "type":..., "function":{...}}
+                _accum_tool_calls: dict[int, dict] = {}
+                resp.encoding = "utf-8"
+                for sse_line in resp.iter_lines(decode_unicode=True):
+                    if not sse_line:
+                        continue
+                    if not sse_line.startswith("data: "):
+                        continue
+                    payload = sse_line[6:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(payload)
+                    except json.JSONDecodeError:
+                        continue
+                    # API-level error embedded in the SSE stream
+                    if "error" in chunk:
+                        raise _ApiError(f"API error: {chunk['error']}")
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {}) or {}
+                    token = delta.get("content", "")
+                    if token:
+                        accumulated_content.append(token)
+                        # Push the raw OpenAI SSE chunk JSON to the Bridge so the
+                        # frontend can parse `choices[0].delta` (including `content`
+                        # AND `tool_calls`) directly — see streaming-response.md §3.4.
+                        # We must NOT剥壳 to bare token: that would drop `delta.tool_calls`
+                        # and force the bridge to re-wrap a fake OpenAI envelope.
+                        # Include skill (node_id) and round (call_id) metadata so the
+                        # frontend can group chunks from different LLM calls correctly.
+                        try:
+                            if self._client:
+                                nid = _task_context().get("node_id", "")
+                                # 调用方分流：skill_executor 的 LLM 输出是过程信息
+                                # （思辨、工具调用、产物汇总），推为 progress 类型，
+                                # 前端归过程展示通道，被 coordinator 的 final 回答覆盖。
+                                # coordinator_decide 的 LLM 输出是对话 token，推为 llm_chunk。
+                                # 守设计不变量 I-1（final=true 的 chunk 只出现一次）：
+                                # skill 的产物不应被前端当作对话最终回答渲染。
+                                push_type = "progress" if nid == "skill_executor" else "llm_chunk"
+                                self._client.response_push(
+                                    payload, type=push_type,
+                                    skill=nid, round=call_id,
+                                )
+                        except Exception:
+                            _log_warn("response_push failed (skip)")
+                    # ── Accumulate tool_calls from streaming deltas ──
+                    tc_deltas = delta.get("tool_calls")
+                    if tc_deltas:
+                        for tc in tc_deltas:
+                            idx = tc.get("index", 0)
+                            if idx not in _accum_tool_calls:
+                                _accum_tool_calls[idx] = {
+                                    "id": tc.get("id", ""),
+                                    "type": tc.get("type", "function"),
+                                    "function": {"name": "", "arguments": ""},
+                                }
+                            # Merge partial fields from streaming chunks
+                            existing = _accum_tool_calls[idx]
+                            if tc.get("id"):
+                                existing["id"] = tc["id"]
+                            if tc.get("type"):
+                                existing["type"] = tc["type"]
+                            fn = tc.get("function", {})
+                            if fn.get("name"):
+                                existing["function"]["name"] = fn["name"]
+                            if fn.get("arguments"):
+                                existing["function"]["arguments"] += fn["arguments"]
+                    fr = choices[0].get("finish_reason")
+                    if fr:
+                        _finish_reason = fr
+                    # 部分 LLM 提供商会将 usage 放在最后一个 SSE chunk 中
+                    if "usage" in chunk and chunk["usage"]:
+                        usage = chunk["usage"]
+                    else:
+                        usage = None
+                # Build the final OpenAI-compatible response dict from accumulated
+                # content so the rest of the code path (trace recording, callers)
+                # sees the same shape as a non-streaming response.
+                full_text = "".join(accumulated_content)
+                if usage:
+                    response_usage = usage
+                else:
+                    response_usage = {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                    }
+                response_message: dict = {"content": full_text, "role": "assistant"}
+                if _accum_tool_calls:
+                    response_message["tool_calls"] = list(_accum_tool_calls.values())
+                response_data = {
+                    "choices": [{
+                        "message": response_message,
+                        "finish_reason": _finish_reason,
+                        "index": 0,
+                    }],
+                    "usage": response_usage,
+                }
                 break  # success
 
             except _ApiError as e:
@@ -319,7 +434,7 @@ class _TraceRecorder:
 
             except Exception as e:
                 last_error = e
-                retriable = _is_transient_curl_error(e)
+                retriable = _is_transient_http_error(e)
                 if attempt < max_retries and retriable:
                     backoff = min(base_delay * (2 ** attempt), 8.0)
                     _log_warn(
@@ -551,6 +666,85 @@ def get_compaction_threshold() -> float:
         return 0.8
 
 
+# ═══════════════════════════════════════════════════════════════════
+# Fallback LLM config resolution
+# ═══════════════════════════════════════════════════════════════════
+#
+# Priority chain for each setting (high → low):
+#
+#   LLM model:    agent.md frontmatter > AF_LLM_MODEL > AF_FALLBACK_LLM_MODEL
+#   LLM key:      AF_LLM_API_KEY > API_KEY > AF_FALLBACK_LLM_API_KEY
+#   LLM base_url: AF_LLM_BASE_URL > AF_FALLBACK_LLM_BASE_URL
+#
+#   VL model:    VISION_MODEL > VISION_FALLBACK_MODEL
+#   VL key:      VISION_API_KEY > API_KEY > VISION_FALLBACK_API_KEY
+#   VL base_url: VISION_BASE_URL > VISION_FALLBACK_BASE_URL
+
+_PLACEHOLDER_PREFIXES = ("${", "sk-your-", "your-")
+
+
+def _is_placeholder(val: str) -> bool:
+    """Check if a value is empty or a placeholder template."""
+    if not val:
+        return True
+    return any(val.startswith(p) for p in _PLACEHOLDER_PREFIXES)
+
+
+def resolve_llm_config(agent_md_model: str = "") -> dict[str, str]:
+    """Resolve LLM config (model, base_url, api_key) with fallback chain.
+
+    Returns a dict with keys ``model``, ``base_url``, ``api_key``,
+    all guaranteed to be non-empty placeholders at minimum.
+    """
+    # Model: agent.md → AF_LLM_MODEL → AF_FALLBACK_LLM_MODEL
+    model = agent_md_model
+    if _is_placeholder(model):
+        model = os.environ.get("AF_LLM_MODEL", "")
+    if _is_placeholder(model):
+        model = os.environ.get("AF_FALLBACK_LLM_MODEL", "gpt-4o-mini")
+
+    # API key: AF_LLM_API_KEY → API_KEY → AF_FALLBACK_LLM_API_KEY
+    api_key = os.environ.get("AF_LLM_API_KEY", "")
+    if _is_placeholder(api_key):
+        api_key = os.environ.get("API_KEY", "")
+    if _is_placeholder(api_key):
+        api_key = os.environ.get("AF_FALLBACK_LLM_API_KEY", "")
+
+    # Base URL: AF_LLM_BASE_URL → AF_FALLBACK_LLM_BASE_URL
+    base_url = os.environ.get("AF_LLM_BASE_URL", "")
+    if _is_placeholder(base_url):
+        base_url = os.environ.get("AF_FALLBACK_LLM_BASE_URL", "")
+
+    return {"model": model, "base_url": base_url, "api_key": api_key}
+
+
+def resolve_vision_config() -> dict[str, str]:
+    """Resolve Vision model config (model, base_url, api_key) with fallback.
+
+    Returns a dict with keys ``model``, ``base_url``, ``api_key``.
+    """
+    # Model: VISION_MODEL → VISION_FALLBACK_MODEL
+    model = os.environ.get("VISION_MODEL", "")
+    if _is_placeholder(model):
+        model = os.environ.get("VISION_FALLBACK_MODEL", "")
+
+    # Key: VISION_API_KEY → API_KEY → MINIMAX_API_KEY → VISION_FALLBACK_API_KEY
+    api_key = os.environ.get("VISION_API_KEY", "")
+    if _is_placeholder(api_key):
+        api_key = os.environ.get("API_KEY", "")
+    if _is_placeholder(api_key):
+        api_key = os.environ.get("MINIMAX_API_KEY", "")
+    if _is_placeholder(api_key):
+        api_key = os.environ.get("VISION_FALLBACK_API_KEY", "")
+
+    # Base URL: VISION_BASE_URL → VISION_FALLBACK_BASE_URL
+    base_url = os.environ.get("VISION_BASE_URL", "")
+    if _is_placeholder(base_url):
+        base_url = os.environ.get("VISION_FALLBACK_BASE_URL", "")
+
+    return {"model": model, "base_url": base_url, "api_key": api_key}
+
+
 # ── Public API ──
 
 _recorder: _TraceRecorder | None = None
@@ -569,13 +763,19 @@ def call_llm(messages: list, model: str = "gpt-4o-mini",
              tools: list | None = None,
              max_completion_tokens: int = 2000,
              timeout: int = 120,
-             connect_timeout: int = 5) -> dict:
+             connect_timeout: int = 5,
+             stream: bool = False) -> dict:
     """Call LLM API with full trace recording. Returns OpenAI-compatible dict.
 
     Two-stage timeout (see trace_call docstring):
       connect_timeout — TCP+TLS handshake, fast-fail when network is down
       timeout         — whole request, generous for slow LLM generation
     Both overrideable via env vars AF_LLM_CONNECT_TIMEOUT / AF_LLM_TIMEOUT.
+
+    ``stream`` is passed from the parsed input payload — the bridge includes
+    it in the ``{stream, messages}`` wrapper object.  The callee
+    (coordinator_decide / skill_executor) extracts ``stream`` via
+    ``parse_stream(AF_INPUT)`` and passes it here.
     """
     # Env override (M3: configurable, no hidden config). Callers passing
     # explicit args win; env vars fill the default for callers that don't.
@@ -591,4 +791,4 @@ def call_llm(messages: list, model: str = "gpt-4o-mini",
             pass
     return get_recorder().trace_call(
         messages, model, base_url, api_key, tools,
-        max_completion_tokens, timeout, connect_timeout)
+        max_completion_tokens, timeout, connect_timeout, stream)

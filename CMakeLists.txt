@@ -424,43 +424,48 @@ add_executable(agentflowd
 )
 target_link_libraries(agentflowd PRIVATE agentflow)
 
-add_executable(example_claw_agent_tui
-    ${AGENTFLOW_EXAMPLE_DIR}/agent/claw_agent/claw_agent_tui.cpp
-    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
-)
-target_link_libraries(example_claw_agent_tui PRIVATE agentflow)
-
-add_executable(example_multi_session_chat_tui
-    ${AGENTFLOW_EXAMPLE_DIR}/agent/multi_session_chat/multi_session_chat_tui.cpp
-    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
-)
-target_link_libraries(example_multi_session_chat_tui PRIVATE agentflow)
-
-add_executable(example_openjiuwen_multi_session_chat_tui
-    ${AGENTFLOW_EXAMPLE_DIR}/agent/openjiuwen_multi_session_chat/openjiuwen_multi_session_chat_tui.cpp
-    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
-)
-target_link_libraries(example_openjiuwen_multi_session_chat_tui PRIVATE agentflow)
-
-add_executable(example_openjiuwen_studio_agent_tui
-    ${AGENTFLOW_EXAMPLE_DIR}/agent/openjiuwen_studio_agent/openjiuwen_studio_agent_tui.cpp
-    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
-)
-target_link_libraries(example_openjiuwen_studio_agent_tui PRIVATE agentflow)
-
-add_executable(example_llm_query_agent_tui
-    ${AGENTFLOW_EXAMPLE_DIR}/agent/llm_query_agent/llm_query_agent_tui.cpp
-    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
-)
-target_link_libraries(example_llm_query_agent_tui PRIVATE agentflow)
-
-# multi_session_chat polyglot SO library — C++ nodes for dispatcher/coordinator/session-dispatcher workflows
-add_library(multi_session_nodes SHARED
-    ${AGENTFLOW_EXAMPLE_DIR}/agent/multi_session_chat/nodes/cpp/multi_session_nodes.cpp)
-target_include_directories(multi_session_nodes PRIVATE ${AGENTFLOW_INCLUDE_DIR})
-target_link_libraries(multi_session_nodes PRIVATE agentflow)
-set_target_properties(multi_session_nodes PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+# [REMOVED] example_claw_agent_tui — source file removed
+#add_executable(example_claw_agent_tui
+#    ${AGENTFLOW_EXAMPLE_DIR}/agent/claw_agent/claw_agent_tui.cpp
+#    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
+#)
+#target_link_libraries(example_claw_agent_tui PRIVATE agentflow)
+#
+# [REMOVED] example_multi_session_chat_tui — source file removed
+#add_executable(example_multi_session_chat_tui
+#    ${AGENTFLOW_EXAMPLE_DIR}/agent/multi_session_chat/multi_session_chat_tui.cpp
+#    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
+#)
+#target_link_libraries(example_multi_session_chat_tui PRIVATE agentflow)
+#
+# [REMOVED] example_openjiuwen_multi_session_chat_tui — source file removed
+#add_executable(example_openjiuwen_multi_session_chat_tui
+#    ${AGENTFLOW_EXAMPLE_DIR}/agent/openjiuwen_multi_session_chat/openjiuwen_multi_session_chat_tui.cpp
+#    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
+#)
+#target_link_libraries(example_openjiuwen_multi_session_chat_tui PRIVATE agentflow)
+#
+# [REMOVED] example_openjiuwen_studio_agent_tui — source file removed
+#add_executable(example_openjiuwen_studio_agent_tui
+#    ${AGENTFLOW_EXAMPLE_DIR}/agent/openjiuwen_studio_agent/openjiuwen_studio_agent_tui.cpp
+#    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
+#)
+#target_link_libraries(example_openjiuwen_studio_agent_tui PRIVATE agentflow)
+#
+# [REMOVED] example_llm_query_agent_tui — source file removed
+#add_executable(example_llm_query_agent_tui
+#    ${AGENTFLOW_EXAMPLE_DIR}/agent/llm_query_agent/llm_query_agent_tui.cpp
+#    $<TARGET_OBJECTS:agentflow_examples_interactive_runner_obj>
+#)
+#target_link_libraries(example_llm_query_agent_tui PRIVATE agentflow)
+#
+# [REMOVED] multi_session_nodes (polyglot SO) — source file removed
+#add_library(multi_session_nodes SHARED
+#    ${AGENTFLOW_EXAMPLE_DIR}/agent/multi_session_chat/nodes/cpp/multi_session_nodes.cpp)
+#target_include_directories(multi_session_nodes PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+#target_link_libraries(multi_session_nodes PRIVATE agentflow)
+#set_target_properties(multi_session_nodes PROPERTIES
+#    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
 # ============================================================================
 # LLM Query Agent - C++ SO Library node for LLM queries
@@ -500,76 +505,74 @@ else()
 endif()
 
 # ============================================================================
-# SystemAgentMock Nodes (demo agent for dispatcher-skill-coordinator flow)
+# [REMOVED] SystemAgentMock Nodes — source files removed
 # ============================================================================
-
-set(SYSTEM_AGENT_MOCK_DIR "${AGENTFLOW_EXAMPLE_DIR}/agent/system_agent_mock")
-
+#set(SYSTEM_AGENT_MOCK_DIR "${AGENTFLOW_EXAMPLE_DIR}/agent/system_agent_mock")
+#
 # Skill Selection Node
-add_library(skill_selection_node SHARED
-    ${SYSTEM_AGENT_MOCK_DIR}/nodes/skill_selection_node.cpp)
-target_include_directories(skill_selection_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
-set_target_properties(skill_selection_node PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${SYSTEM_AGENT_MOCK_DIR}/lib
-    PREFIX "lib")
-
+#add_library(skill_selection_node SHARED
+#    ${SYSTEM_AGENT_MOCK_DIR}/nodes/skill_selection_node.cpp)
+#target_include_directories(skill_selection_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+#set_target_properties(skill_selection_node PROPERTIES
+#    LIBRARY_OUTPUT_DIRECTORY ${SYSTEM_AGENT_MOCK_DIR}/lib
+#    PREFIX "lib")
+#
 # Travel Node
-add_library(travel_node SHARED
-    ${SYSTEM_AGENT_MOCK_DIR}/nodes/travel_node.cpp)
-target_include_directories(travel_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
-set_target_properties(travel_node PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${SYSTEM_AGENT_MOCK_DIR}/lib
-    PREFIX "lib")
-
+#add_library(travel_node SHARED
+#    ${SYSTEM_AGENT_MOCK_DIR}/nodes/travel_node.cpp)
+#target_include_directories(travel_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+#set_target_properties(travel_node PROPERTIES
+#    LIBRARY_OUTPUT_DIRECTORY ${SYSTEM_AGENT_MOCK_DIR}/lib
+#    PREFIX "lib")
+#
 # Shopping Node
-add_library(shopping_node SHARED
-    ${SYSTEM_AGENT_MOCK_DIR}/nodes/shopping_node.cpp)
-target_include_directories(shopping_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
-set_target_properties(shopping_node PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${SYSTEM_AGENT_MOCK_DIR}/lib
-    PREFIX "lib")
-
+#add_library(shopping_node SHARED
+#    ${SYSTEM_AGENT_MOCK_DIR}/nodes/shopping_node.cpp)
+#target_include_directories(shopping_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+#set_target_properties(shopping_node PROPERTIES
+#    LIBRARY_OUTPUT_DIRECTORY ${SYSTEM_AGENT_MOCK_DIR}/lib
+#    PREFIX "lib")
+#
 # Foodie Node
-add_library(foodie_node SHARED
-    ${SYSTEM_AGENT_MOCK_DIR}/nodes/foodie_node.cpp)
-target_include_directories(foodie_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
-set_target_properties(foodie_node PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${SYSTEM_AGENT_MOCK_DIR}/lib
-    PREFIX "lib")
-
+#add_library(foodie_node SHARED
+#    ${SYSTEM_AGENT_MOCK_DIR}/nodes/foodie_node.cpp)
+#target_include_directories(foodie_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+#set_target_properties(foodie_node PROPERTIES
+#    LIBRARY_OUTPUT_DIRECTORY ${SYSTEM_AGENT_MOCK_DIR}/lib
+#    PREFIX "lib")
+#
 # Coordinator Node
-add_library(coordinator_node SHARED
-    ${SYSTEM_AGENT_MOCK_DIR}/nodes/coordinator_node.cpp)
-target_include_directories(coordinator_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
-set_target_properties(coordinator_node PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${SYSTEM_AGENT_MOCK_DIR}/lib
-    PREFIX "lib")
-
-message(STATUS "SystemAgentMock nodes configured")
+#add_library(coordinator_node SHARED
+#    ${SYSTEM_AGENT_MOCK_DIR}/nodes/coordinator_node.cpp)
+#target_include_directories(coordinator_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+#set_target_properties(coordinator_node PROPERTIES
+#    LIBRARY_OUTPUT_DIRECTORY ${SYSTEM_AGENT_MOCK_DIR}/lib
+#    PREFIX "lib")
+#
+#message(STATUS "SystemAgentMock nodes configured")
 
 # ============================================================================
-# Multi-Language DataBus Test Agent (C++ -> Python -> Go -> Shell chain)
+# [REMOVED] Multi-Language DataBus Test Agent — source files removed
 # ============================================================================
-
-set(MULTI_LANG_AGENT_DIR "${AGENTFLOW_EXAMPLE_DIR}/agent/multi_language_databus")
-
+#set(MULTI_LANG_AGENT_DIR "${AGENTFLOW_EXAMPLE_DIR}/agent/multi_language_databus")
+#
 # C++ Chain Producer Node
-add_library(chain_cpp_node SHARED
-    ${MULTI_LANG_AGENT_DIR}/nodes/chain_cpp_node.cpp)
-target_include_directories(chain_cpp_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
-set_target_properties(chain_cpp_node PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${MULTI_LANG_AGENT_DIR}/lib
-    PREFIX "lib")
-
+#add_library(chain_cpp_node SHARED
+#    ${MULTI_LANG_AGENT_DIR}/nodes/chain_cpp_node.cpp)
+#target_include_directories(chain_cpp_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+#set_target_properties(chain_cpp_node PROPERTIES
+#    LIBRARY_OUTPUT_DIRECTORY ${MULTI_LANG_AGENT_DIR}/lib
+#    PREFIX "lib")
+#
 # C++ Chain Coordinator Node
-add_library(chain_coordinator_node SHARED
-    ${MULTI_LANG_AGENT_DIR}/nodes/chain_coordinator_node.cpp)
-target_include_directories(chain_coordinator_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
-set_target_properties(chain_coordinator_node PROPERTIES
-    LIBRARY_OUTPUT_DIRECTORY ${MULTI_LANG_AGENT_DIR}/lib
-    PREFIX "lib")
-
-message(STATUS "Multi-Language DataBus Test Agent nodes configured")
+#add_library(chain_coordinator_node SHARED
+#    ${MULTI_LANG_AGENT_DIR}/nodes/chain_coordinator_node.cpp)
+#target_include_directories(chain_coordinator_node PRIVATE ${AGENTFLOW_INCLUDE_DIR})
+#set_target_properties(chain_coordinator_node PROPERTIES
+#    LIBRARY_OUTPUT_DIRECTORY ${MULTI_LANG_AGENT_DIR}/lib
+#    PREFIX "lib")
+#
+#message(STATUS "Multi-Language DataBus Test Agent nodes configured")
 
 # ============================================================================
 # Node Adapter Library and Executable

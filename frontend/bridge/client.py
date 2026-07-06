@@ -143,28 +143,48 @@ class DaemonClient:
     # Lifecycle
     # ------------------------------------------------------------------
 
-    async def connect(self) -> None:
-        """Open a WebSocket connection and start the reader task."""
+    async def connect(self, max_retries: int = 3, retry_delay: float = 0.5) -> None:
+        """Open a WebSocket connection with retries and start the reader task.
+
+        Retries up to ``max_retries`` times with exponential backoff starting
+        at ``retry_delay`` seconds, so that a daemon that is still starting up
+        (lifespan race) does not permanently wedge the bridge.
+        """
         if self._connected:
             return
         if self._reader_task is not None and not self._reader_task.done():
             return
 
-        try:
-            self._ws = await asyncio.wait_for(
-                websockets.connect(
-                    self._ws_url,
-                    ping_interval=20,
-                    ping_timeout=10,
-                    max_size=2 ** 20,  # 1 MB frame limit
-                ),
-                timeout=self._timeout,
-            )
-        except Exception as exc:
+        last_error: Exception | None = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                self._ws = await asyncio.wait_for(
+                    websockets.connect(
+                        self._ws_url,
+                        ping_interval=20,
+                        ping_timeout=10,
+                        max_size=2 ** 20,  # 1 MB frame limit
+                    ),
+                    timeout=self._timeout,
+                )
+                last_error = None
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt < max_retries:
+                    delay = retry_delay * (2 ** (attempt - 1))
+                    logger.warning(
+                        "daemon_connect.retry attempt=%d/%d url=%s delay=%.1fs err=%s",
+                        attempt, max_retries, self._ws_url, delay, exc,
+                    )
+                    await asyncio.sleep(delay)
+
+        if last_error is not None:
             self._connected = False
             raise DaemonConnectionError(
-                f"failed to connect to {self._ws_url}: {exc}"
-            ) from exc
+                f"failed to connect to {self._ws_url} "
+                f"after {max_retries} attempts: {last_error}"
+            ) from last_error
 
         self._connected = True
         self._closing = False
@@ -216,10 +236,16 @@ class DaemonClient:
     ) -> Any:
         """Send a JSON-RPC 2.0 request and return the daemon's ``result`` payload.
 
-        Serialises the request as a WebSocket text frame.
+        Auto-connects if not already connected (lazy connect), so callers
+        don't have to manage the lifecycle manually.
         """
         if not self._connected or self._ws is None:
-            raise DaemonConnectionError("client is not connected")
+            try:
+                await self.connect(max_retries=2, retry_delay=0.3)
+            except DaemonConnectionError:
+                raise DaemonConnectionError("client is not connected")
+            if not self._connected or self._ws is None:
+                raise DaemonConnectionError("client is not connected")
 
         request_id = next(self._id_counter)
         loop = asyncio.get_running_loop()
@@ -287,6 +313,7 @@ class DaemonClient:
         dialogue_id: str = "",
         platform_context: dict[str, Any] | None = None,
         request_id: str = "",
+        stream: bool = False,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "agent_id": agent_id,
@@ -306,6 +333,8 @@ class DaemonClient:
             params["platform_context"] = platform_context
         if request_id:
             params["request_id"] = request_id
+        if stream:
+            params["stream"] = True
         try:
             return await self.send_request("agent.execute", params)
         except Exception:
@@ -313,6 +342,32 @@ class DaemonClient:
             if response_key:
                 self._response_queues.pop(response_key, None)
             raise
+
+    async def agent_send_control(
+        self,
+        agent_id: str,
+        command: str,
+        session_id: str,
+        user_id: str = "",
+        dialogue_id: str = "",
+    ) -> dict[str, Any]:
+        """Send a control command to a session (e.g. DIALOGUE-INTERRUPT).
+
+        Used by chat.py to abort an in-flight dialogue when the client sends
+        ``{"type":"stop"}``.  The daemon routes the command to the agent's
+        handle_control_message, which dispatches to handle_dialogue_interrupt
+        when command == "DIALOGUE-INTERRUPT".
+        """
+        params: dict[str, Any] = {
+            "agent_id": agent_id,
+            "command": command,
+            "session_id": session_id,
+        }
+        if user_id:
+            params["user_id"] = user_id
+        if dialogue_id:
+            params["dialogue_id"] = dialogue_id
+        return await self.send_request("agent.send_control", params)
 
     async def agent_poll_response(
         self,

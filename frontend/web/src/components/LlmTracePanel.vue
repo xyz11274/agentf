@@ -9,14 +9,16 @@
  * -----
  * - ``traces`` — list of ``LlmTraceSummary`` objects to render.
  *
- * Expand / collapse behaviour is local state so each instance is independent.
+ * The full trace detail (request/response/meta) is read from
+ * ``chatStore.llmTraceDetailCache`` (keyed by ``call_id``) which is
+ * populated automatically when traces are fetched from the Bridge
+ * persistent API — no additional daemon round-trip is needed.
  */
 import { computed, ref } from 'vue'
 import { ArrowRight, Clock, Cpu, Loading } from '@element-plus/icons-vue'
 import VueJsonPretty from 'vue-json-pretty'
 import 'vue-json-pretty/lib/styles.css'
 import type { LlmTraceSummary } from '@/types/agentflow'
-import { getLlmTraceDetail } from '@/api/llmTraceClient'
 import { useChatStore } from '@/stores/chatStore'
 
 const props = defineProps<{
@@ -73,18 +75,21 @@ async function showDetail(trace: LlmTraceSummary): Promise<void> {
 
   loadingDetail.value = trace.call_id
   try {
-    const detail = await getLlmTraceDetail(
-      chatStore.currentAgentId ?? '',
-      chatStore.currentUserId ?? '',
-      chatStore.currentClientId ?? '',
-      trace.call_id,
-    )
+    // Read full detail from the chatStore's cache (populated by
+    // fetchLlmTraces / loadHistoryTraces from the Bridge persistent API).
+    const cached = chatStore.llmTraceDetailCache[trace.call_id]
+    if (!cached) {
+      // Detail not available — silently skip (trace data may have
+      // been fetched before cache was introduced).
+      loadingDetail.value = null
+      return
+    }
     detailContent.value = {
       ...detailContent.value,
       [trace.call_id]: {
-        request: detail.request as Record<string, unknown>,
-        response: detail.response as Record<string, unknown>,
-        meta: detail.meta as Record<string, unknown>,
+        request: cached.request as Record<string, unknown>,
+        response: cached.response as Record<string, unknown>,
+        meta: cached.meta as Record<string, unknown>,
       },
     }
   } catch {
@@ -133,9 +138,9 @@ async function showDetail(trace: LlmTraceSummary): Promise<void> {
             v-if="trace.task_type"
             class="llm-trace__item-tag"
             :class="`llm-trace__item-tag--${trace.task_type}`"
-            :title="trace.completed_skill ? `控制权回流（${trace.completed_skill} 完成）` : trace.task_type === 'skill' ? `subagent 执行（node: ${trace.node_id}）` : 'coordinator 决策'"
+            :title="trace.completed_skill ? `控制权回流（${trace.completed_skill} 完成后 coord 重新决策）` : trace.task_type === 'skill' ? `subagent 执行（node: ${trace.node_id}）` : 'coordinator 决策'"
           >
-            {{ trace.task_type === 'skill' ? (trace.node_id || 'skill') : (trace.completed_skill ? `coord←${trace.completed_skill}` : 'coord') }}
+            {{ trace.task_type === 'skill' ? (trace.node_id || 'skill') : 'coord' }}
           </span>
           <span class="llm-trace__item-model">{{ trace.model || '-' }}</span>
           <span class="llm-trace__item-latency">

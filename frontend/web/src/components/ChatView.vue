@@ -15,15 +15,15 @@
  *   - localStorage persistence
  *   - Search / export
  */
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { Download, PictureFilled, Promotion, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import * as yaml from 'js-yaml'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useChatStore } from '../stores/chatStore'
 import type { ChatMessage } from '../types/agentflow'
-import MarkdownContent from './MarkdownContent.vue'
+import ArtifactList from './ArtifactList.vue'
 import LlmTracePanel from './LlmTracePanel.vue'
-import { getLlmTraceDetail } from '../api/llmTraceClient'
-import * as yaml from 'js-yaml'
+import MarkdownContent from './MarkdownContent.vue'
 
 const emit = defineEmits<{
   (e: 'send', content: string, images?: string[]): void
@@ -107,14 +107,8 @@ watch(
   (streaming) => {
     // Streaming just ended → turn completed → fetch traces.
     if (!streaming &&
-        chatStore.currentAgentId &&
-        chatStore.currentUserId &&
-        chatStore.currentClientId) {
-      void chatStore.fetchLlmTraces(
-        chatStore.currentAgentId,
-        chatStore.currentUserId,
-        chatStore.currentClientId,
-      )
+        chatStore.currentAgentId) {
+      void chatStore.fetchLlmTraces()
     }
   },
 )
@@ -217,6 +211,16 @@ function formatTime(ts: number): string {
   return `${hh}:${mm}`
 }
 
+function statusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    running: '执行中',
+    completed: '已完成',
+    error: '失败',
+    skipped: '跳过',
+  }
+  return labels[status] || status
+}
+
 // ── 加载耗时计时器 ───────────────────────────────────
 const streamStartTime = ref(0)           // ms timestamp when streaming started
 const elapsedMs = ref(0)                 // ms elapsed since start
@@ -273,15 +277,13 @@ async function exportConversation(format: 'json' | 'yaml'): Promise<void> {
         const summaries = chatStore.llmTraces[msg.id]
         if (!summaries?.length) continue
 
-        // 并行拉取每条 trace 的完整详情
-        const details = await Promise.allSettled(
-          summaries.map((t) =>
-            getLlmTraceDetail(
-              chatStore.currentAgentId ?? '',
-              chatStore.currentUserId ?? '',
-              chatStore.currentClientId ?? '',
-              t.call_id,
-            ).then((detail) => ({
+        // 从 llmTraceDetailCache 读取完整详情（由 fetchLlmTraces /
+        // loadHistoryTraces 从 Bridge 持久化 API 预填充），无需额外 API 调用。
+        const details: unknown[] = []
+        for (const t of summaries) {
+          const cached = chatStore.llmTraceDetailCache[t.call_id]
+          if (cached) {
+            details.push({
               call_id: t.call_id,
               model: t.model,
               latency_ms: t.latency_ms,
@@ -289,17 +291,13 @@ async function exportConversation(format: 'json' | 'yaml'): Promise<void> {
               token_usage: t.token_usage,
               request_summary: t.request_summary,
               response_summary: t.response_summary,
-              // 完整请求/响应数据（含 system prompt 等）
-              request: detail.request ?? null,
-              response: detail.response ?? null,
-              meta: detail.meta ?? null,
-            })),
-          ),
-        )
-
+              request: cached.request ?? null,
+              response: cached.response ?? null,
+              meta: cached.meta ?? null,
+            })
+          }
+        }
         tracesMap[msg.id] = details
-          .filter((r) => r.status === 'fulfilled')
-          .map((r) => (r as PromiseFulfilledResult<unknown>).value)
       }
     }
 
@@ -412,7 +410,7 @@ function toggleExportMenu(): void {
           <!-- Assistant: avatar + name on top -->
           <div v-if="msg.role === 'assistant'" class="chat-view__meta">
             <span class="chat-view__avatar" aria-hidden="true">A</span>
-            <span class="chat-view__author">AI 助手</span>
+            <span class="chat-view__author">{{ chatStore.currentAgentId || 'AI 助手' }}</span>
             <span class="chat-view__time">{{ formatTime(msg.timestamp) }}</span>
           </div>
 
@@ -424,12 +422,7 @@ function toggleExportMenu(): void {
             shadow="never"
             :body-style="{ padding: '10px 14px' }"
           >
-            <template v-if="isPendingAssistant(msg)">
-              <span class="chat-view__typing" aria-label="Assistant is typing">
-                <span /><span /><span />
-              </span>
-            </template>
-            <template v-else>
+            <template v-if="!isPendingAssistant(msg)">
               <!-- Image previews for user messages -->
               <div v-if="msg.images && msg.images.length > 0" class="chat-view__msg-images">
                 <img
@@ -442,12 +435,29 @@ function toggleExportMenu(): void {
                 />
               </div>
               <MarkdownContent :content="msg.content" />
+              <!-- Three dots below newly generated text while still streaming -->
+              <div v-if="chatStore.streamingMessageId === msg.id" class="chat-view__streaming-footer">
+                <span class="chat-view__typing" aria-label="Assistant is typing">
+                  <span /><span /><span />
+                </span>
+              </div>
+              <!-- Generated artifacts (images, HTML, downloads) -->
+              <ArtifactList
+                v-if="msg.role === 'assistant' && msg.artifacts && msg.artifacts.length > 0"
+                :artifacts="msg.artifacts"
+              />
               <!-- LLM trace panel (inline below assistant response) -->
               <LlmTracePanel
                 v-if="hasTraces(msg)"
                 :traces="chatStore.llmTraces[msg.id]"
               />
             </template>
+            <!-- Streaming dot: below content (or bottom of bubble when pending) -->
+            <div v-if="chatStore.streamingMessageId === msg.id" class="chat-view__streaming-footer">
+              <span class="chat-view__typing" aria-label="Assistant is typing">
+                <span /><span /><span />
+              </span>
+            </div>
           </el-card>
 
           <!-- User: timestamp on the right -->
@@ -482,6 +492,58 @@ function toggleExportMenu(): void {
             <span class="chat-view__progress-spinner" />
             <span class="chat-view__progress-text">{{ chatStore.progressMessage }}</span>
             <span v-if="elapsedMs > 0" class="chat-view__elapsed chat-view__elapsed--progress">{{ formatElapsed(elapsedMs) }}</span>
+          </div>
+        </li>
+
+        <!-- LLM streaming chunks (grouped by source) -->
+        <li
+          v-if="Object.keys(chatStore.llmChunks).length > 0"
+          class="chat-view__item chat-view__item--llm-chunks"
+          data-testid="chat-llm-chunks"
+        >
+          <div class="chat-view__llm-chunks">
+            <div
+              v-for="(content, key) in chatStore.llmChunks"
+              :key="key"
+              class="chat-view__llm-chunk"
+            >
+              <div class="chat-view__llm-chunk-label">
+                <span class="chat-view__llm-chunk-node">{{ key.split(':')[0] }}</span>
+              </div>
+              <div class="chat-view__llm-chunk-content">
+                <span class="chat-view__streaming-dot" />
+                <MarkdownContent :content="content" />
+              </div>
+            </div>
+          </div>
+        </li>
+
+        <!-- Skill execution status cards -->
+        <li
+          v-if="Object.keys(chatStore.skillStatus).length > 0"
+          class="chat-view__item chat-view__item--skills"
+          data-testid="chat-skill-cards"
+        >
+          <div class="chat-view__skill-cards">
+            <div
+              v-for="(info, skillName) in chatStore.skillStatus"
+              :key="skillName"
+              class="chat-view__skill-card"
+              :class="`chat-view__skill-card--${info.status}`"
+            >
+              <div class="chat-view__skill-card-header">
+                <span
+                  class="chat-view__skill-card-icon"
+                  :class="`chat-view__skill-card-icon--${info.status}`"
+                />
+                <span class="chat-view__skill-card-name">{{ skillName }}</span>
+                <span class="chat-view__skill-card-round" v-if="info.round">第 {{ info.round }} 轮</span>
+                <span class="chat-view__skill-card-status">{{ statusLabel(info.status) }}</span>
+              </div>
+              <div class="chat-view__skill-card-body" v-if="info.message">
+                {{ info.message }}
+              </div>
+            </div>
           </div>
         </li>
       </ul>
@@ -670,7 +732,14 @@ function toggleExportMenu(): void {
 .chat-view__item {
   display: flex;
   flex-direction: column;
+}
+.chat-view__item--assistant {
   max-width: 80%;
+}
+.chat-view__item--user {
+  max-width: 75%;
+  align-self: flex-end;
+  align-items: flex-end;
 }
 .chat-view__item--user {
   align-self: flex-end;
@@ -727,6 +796,7 @@ function toggleExportMenu(): void {
   border: 1px solid transparent;
   border-radius: 10px;
   overflow-wrap: break-word;
+  width: 100%;
 }
 .chat-view__bubble :deep(.el-card__body) {
   padding: 10px 14px;
@@ -755,6 +825,11 @@ function toggleExportMenu(): void {
   align-items: center;
   gap: 4px;
   height: 18px;
+}
+.chat-view__streaming-footer {
+  display: flex;
+  align-items: center;
+  padding-top: 8px;
 }
 .chat-view__typing > span {
   width: 6px;
@@ -932,5 +1007,134 @@ function toggleExportMenu(): void {
 }
 @keyframes chat-view-spin {
   to { transform: rotate(360deg); }
+}
+
+/* ------------------------------------------------------------------
+   Skill execution status cards
+   ------------------------------------------------------------------ */
+.chat-view__item--skills {
+  align-self: flex-start;
+  align-items: flex-start;
+  max-width: 100%;
+  width: 100%;
+}
+.chat-view__skill-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: 100%;
+}
+.chat-view__skill-card {
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  background: #ffffff;
+  overflow: hidden;
+  font-size: 13px;
+}
+.chat-view__skill-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f8f9fb;
+  border-bottom: 1px solid #f0f0f0;
+}
+.chat-view__skill-card-icon {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.chat-view__skill-card-icon--running {
+  background: #409eff;
+  animation: chat-view-pulse 1.2s ease-in-out infinite;
+}
+.chat-view__skill-card-icon--completed {
+  background: #67c23a;
+}
+.chat-view__skill-card-icon--error {
+  background: #f56c6c;
+}
+.chat-view__skill-card-icon--skipped {
+  background: #c0c4cc;
+}
+.chat-view__skill-card-name {
+  font-weight: 600;
+  color: #303133;
+  flex: 1;
+}
+.chat-view__skill-card-round {
+  font-size: 11px;
+  color: #909399;
+  background: #f0f0f0;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.chat-view__skill-card-status {
+  font-size: 11px;
+  color: #909399;
+}
+.chat-view__skill-card-body {
+  padding: 8px 12px;
+  color: #606266;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+@keyframes chat-view-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ── LLM streaming chunks ── */
+.chat-view__llm-chunks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  max-width: 100%;
+}
+.chat-view__llm-chunk {
+  border: 1px solid #e4e7ed;
+  border-radius: 8px;
+  background: #fafafa;
+  overflow: hidden;
+  font-size: 12px;
+}
+.chat-view__llm-chunk-label {
+  padding: 4px 10px;
+  font-size: 11px;
+  color: #909399;
+  background: #f5f5f5;
+  border-bottom: 1px solid #eee;
+}
+.chat-view__llm-chunk-node {
+  font-family: monospace;
+}
+.chat-view__llm-chunk-content {
+  padding: 8px 10px;
+  color: #606266;
+  line-height: 1.5;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  min-width: 0;
+}
+.chat-view__llm-chunk-content .markdown-content {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.chat-view__streaming-dot {
+  width: 6px;
+  height: 6px;
+  min-width: 6px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: #409eff;
+  animation: chat-view-pulse 1.2s ease-in-out infinite;
 }
 </style>

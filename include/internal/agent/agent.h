@@ -230,6 +230,8 @@ class MMAgent {
                                 const MMAgentMsgQue::Message& message);
   void handle_session_destroy(const std::shared_ptr<MMAgentSession>& session,
                               const MMAgentMsgQue::Message& message);
+  void handle_dialogue_interrupt(const std::shared_ptr<MMAgentSession>& session,
+                                 const MMAgentMsgQue::Message& message);
   void handle_task_intent_request(const std::shared_ptr<MMAgentSession>& session,
                                   const std::shared_ptr<MMAgentTask>& task,
                                   const MMAgentMsgQue::Message& message);

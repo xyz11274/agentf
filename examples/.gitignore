@@ -3,3 +3,5 @@
 **/*.pyc
 
 **/outfit_assistant/output
+examples/agent/outfit_assistant/assets
+examples/agent/outfit_assistant/harness/skills/outfit-stylist/output

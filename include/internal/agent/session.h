@@ -1,6 +1,8 @@
 #ifndef AGENTFLOW_INTERNAL_AGENT_SESSION_H
 #define AGENTFLOW_INTERNAL_AGENT_SESSION_H
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -68,8 +70,40 @@ using TaskEventCallback = std::function<void(
     const std::string& skill_name,
     TaskEventType event_type)>;
 
+/// Forward declaration for RAII guard (defined after MMAgentSession).
+class MMAgentSession;
+
+/// RAII guard for session-level dialogue serialization lock.
+///
+/// Returned by MMAgentSession::acquire_dialogue_lock.  Holding this guard
+/// means the calling dialogue owns the session's single execution slot;
+/// destroying it releases the slot and wakes the next queued dialogue.
+///
+/// Invariants:
+/// - Destroying the guard exactly once releases the lock (RAII).
+/// - is_cancelled() == true means the session was destroyed while waiting;
+///   the caller must NOT proceed with dialogue execution.
+class DialogueLockGuard {
+ public:
+  DialogueLockGuard(MMAgentSession& session, std::string dialogue_id);
+  ~DialogueLockGuard();
+  DialogueLockGuard(const DialogueLockGuard&)            = delete;
+  DialogueLockGuard& operator=(const DialogueLockGuard&) = delete;
+  DialogueLockGuard(DialogueLockGuard&&)                 = delete;
+  DialogueLockGuard& operator=(DialogueLockGuard&&)      = delete;
+
+  bool is_cancelled() const { return cancelled_; }
+  const std::string& dialogue_id() const { return dialogue_id_; }
+
+ private:
+  MMAgentSession& session_;
+  std::string     dialogue_id_;
+  bool            cancelled_ = false;
+};
+
 class MMAgentSession {
  public:
+  friend class DialogueLockGuard;
   enum class SessionState {
     CREATED = 0,
     ACTIVE = 1,
@@ -153,6 +187,37 @@ class MMAgentSession {
   // Clear all runtime tasks (for session destroy)
   void clear_all_tasks();
 
+  // ── Dialogue serialization lock ──────────────────────────────────
+  // Acquire the session's single dialogue execution slot.  Blocks until
+  // the previous dialogue releases the lock OR the session is cancelled.
+  // Returns nullptr if the session was cancelled while waiting (caller
+  // must NOT proceed).  The returned guard is transferred to
+  // hold_dialogue_lock() — the caller does NOT keep it on the stack
+  // because dialogue workflow execution outlives handle_intent_request().
+  std::unique_ptr<DialogueLockGuard> acquire_dialogue_lock(const std::string& dialogue_id);
+
+  // Take ownership of a lock guard for the given dialogue_id.  The lock
+  // will be released when release_dialogue_lock(dialogue_id) is called
+  // (from cleanup_dialogue_data) OR when cancel_all_dialogues() clears
+  // the entire map.  Pass nullptr to abort a dialogue before it starts.
+  void hold_dialogue_lock(const std::string& dialogue_id,
+                           std::unique_ptr<DialogueLockGuard> guard);
+
+  // Release the lock held for dialogue_id, if any.  Idempotent.
+  // Called from cleanup_dialogue_data (the single dialogue-completion
+  // convergence point).
+  void release_dialogue_lock(const std::string& dialogue_id);
+
+  // Cancel the dialogue currently holding the lock (if any) and mark the
+  // session as cancelled so any blocked acquire_dialogue_lock waiters
+  // wake and return nullptr.  Called by handle_session_destroy /
+  // handle_session_interrupt.  Idempotent.
+  void cancel_all_dialogues();
+
+  // Returns the dialogue_id currently holding the serialization lock, or
+  // empty string if the slot is free.  Test/diagnostic helper.
+  std::string get_active_dialogue_id() const;
+
   // Session event callback for lifecycle notifications
   void set_session_event_callback(SessionEventCallback callback) {
     session_event_callback_ = std::move(callback);
@@ -177,6 +242,25 @@ class MMAgentSession {
   std::shared_ptr<MMAgentTask> dispatcher_task_;
   std::shared_ptr<MMAgentTask> coordinator_task_;
   SessionEventCallback          session_event_callback_;
+
+  // ── Dialogue serialization lock state ────────────────────────────
+  // At most one dialogue may execute in this session at a time.  Waiters
+  // block on dialogue_serialize_cv_ until the holder releases or the
+  // session is cancelled (session_cancelled_ flips to true).
+  mutable std::mutex      dialogue_serialize_mutex_;
+  std::condition_variable dialogue_serialize_cv_;
+  std::string             active_dialogue_id_;   // empty = slot free
+  std::atomic<bool>       session_cancelled_{false};
+
+  // Locks held across async workflow execution.  Keyed by dialogue_id.
+  // The guard's destructor releases the serialize slot when erase()d.
+  std::map<std::string, std::unique_ptr<DialogueLockGuard>> held_locks_;
+
+  // Release the slot held by the given dialogue_id.  Called by
+  // ~DialogueLockGuard.  No-op if the slot is already free or held by a
+  // different dialogue (defensive against double-release).
+  void release_dialogue_slot(const std::string& dialogue_id);
+
   mutable std::mutex mutex_;
 };
 

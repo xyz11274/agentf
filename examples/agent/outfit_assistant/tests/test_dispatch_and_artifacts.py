@@ -46,12 +46,12 @@ def test_failed_skill_context_contains_original_error_for_model():
     message = coordinator.build_skill_completion_message(
         "outfit-stylist",
         "false",
-        '{"status":"failed","error":"curl rc=28 timeout"}',
+        '{"status":"failed","error":"http request timeout"}',
         [],
     )
 
     assert "success=false" in message
-    assert "curl rc=28 timeout" in message
+    assert "http request timeout" in message
     assert "直接回复用户" in message
     assert "重新委派" in message
 
@@ -199,3 +199,87 @@ def test_llm_failure_preserves_artifacts_that_were_actually_reported():
 
     assert "产物仍可查看" in response
     assert "/api/artifacts/outfit-assistant?path=" in response
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Non-image artifact extraction (PPT, DOCX, PDF, XLSX)
+# ═══════════════════════════════════════════════════════════════════
+
+def test_pptx_path_is_extracted(tmp_path):
+    """Extract artifact paths should discover .pptx files from tool output."""
+    pptx = tmp_path / "presentation.pptx"
+    pptx.write_bytes(b"pptx content")
+    text = f'{{"result": "{pptx}"}}'
+
+    result = executor.extract_artifact_paths(text)
+
+    assert str(pptx) in result
+
+
+def test_docx_path_is_extracted(tmp_path):
+    """.docx files should be extracted from tool output."""
+    docx = tmp_path / "report.docx"
+    docx.write_bytes(b"docx content")
+    text = f'{{"result": "{docx}"}}'
+
+    result = executor.extract_artifact_paths(text)
+
+    assert str(docx) in result
+
+
+def test_pdf_path_is_extracted(tmp_path):
+    """.pdf files should be extracted from tool output."""
+    pdf = tmp_path / "document.pdf"
+    pdf.write_bytes(b"pdf content")
+    text = f'{{"result": "{pdf}"}}'
+
+    result = executor.extract_artifact_paths(text)
+
+    assert str(pdf) in result
+
+
+def test_xlsx_path_is_extracted(tmp_path):
+    """.xlsx files should be extracted from tool output."""
+    xlsx = tmp_path / "data.xlsx"
+    xlsx.write_bytes(b"xlsx content")
+    text = f'{{"result": "{xlsx}"}}'
+
+    result = executor.extract_artifact_paths(text)
+
+    assert str(xlsx) in result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Non-image artifact UI rendering
+# ═══════════════════════════════════════════════════════════════════
+
+def test_pptx_artifact_adds_download_link():
+    """append_artifacts_markdown should produce a download link for .pptx."""
+    rendered = coordinator.append_artifacts_markdown(
+        "PPT 生成完成",
+        '["/tmp/output/presentation.pptx"]',
+    )
+
+    assert "## 生成产物" in rendered
+    assert "📥" in rendered or "下载" in rendered
+    assert "presentation.pptx" in rendered
+    assert "/api/artifacts/outfit-assistant?path=%2Ftmp%2Foutput%2Fpresentation.pptx" in rendered
+    # .pptx 不应被误渲染为图片（不应有 ![]  markdown 图片语法）
+    assert "![" not in rendered
+
+
+def test_mixed_image_and_download_artifacts(tmp_path):
+    """Mixed image + non-image artifacts both appear in output."""
+    image = tmp_path / "look.png"
+    image.write_bytes(b"image")
+    pptx = tmp_path / "deck.pptx"
+    pptx.write_bytes(b"pptx")
+
+    rendered = coordinator.append_artifacts_markdown(
+        "完成",
+        json.dumps([str(image), str(pptx)]),
+    )
+
+    assert "## 生成产物" in rendered
+    assert "![生成图片" in rendered
+    assert "📥" in rendered or "deck.pptx" in rendered

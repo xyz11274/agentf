@@ -119,3 +119,87 @@ TEST_F(DataBusTest, FileDescriptorRoundTripsThroughRefsAndFileBridge) {
 
   bridge.cleanup();
 }
+
+// ── parse_scalar_json_object tests ─────────────────────────────
+
+TEST(ParseScalarJson, EmptyObject) {
+  std::map<std::string, std::string> out;
+  EXPECT_TRUE(agentflow::runtime::FileDataBusBridge::parse_scalar_json_object("{}", out));
+  EXPECT_TRUE(out.empty());
+}
+
+TEST(ParseScalarJson, SimpleStringValues) {
+  std::map<std::string, std::string> out;
+  EXPECT_TRUE(agentflow::runtime::FileDataBusBridge::parse_scalar_json_object(
+      R"({"name":"Alice","role":"admin"})", out));
+  EXPECT_EQ(out["name"], "Alice");
+  EXPECT_EQ(out["role"], "admin");
+}
+
+TEST(ParseScalarJson, NumericBoolNullValues) {
+  std::map<std::string, std::string> out;
+  EXPECT_TRUE(agentflow::runtime::FileDataBusBridge::parse_scalar_json_object(
+      R"({"count":42,"ratio":3.14,"active":true,"nothing":null})", out));
+  EXPECT_EQ(out["count"], "42");
+  // std::to_string formats double as "3.140000"
+  EXPECT_EQ(out["ratio"], "3.140000");
+  EXPECT_EQ(out["active"], "true");
+  EXPECT_EQ(out["nothing"], "null");
+}
+
+TEST(ParseScalarJson, EscapedAndUnicodeValues) {
+  std::map<std::string, std::string> out;
+  EXPECT_TRUE(agentflow::runtime::FileDataBusBridge::parse_scalar_json_object(
+      R"({"msg":"say \"hello\"","name":"中文测试"})", out));
+  EXPECT_EQ(out["msg"], "say \"hello\"");
+  EXPECT_EQ(out["name"], "中文测试");
+}
+
+TEST(ParseScalarJson, MultipleEntries) {
+  std::map<std::string, std::string> out;
+  EXPECT_TRUE(agentflow::runtime::FileDataBusBridge::parse_scalar_json_object(
+      R"({"a":"1","b":"2","c":"3","d":"4","e":"5"})", out));
+  EXPECT_EQ(out.size(), 5u);
+  EXPECT_EQ(out["e"], "5");
+}
+
+TEST(ParseScalarJson, NestedObjectReturnsFalse) {
+  std::map<std::string, std::string> out;
+  EXPECT_FALSE(agentflow::runtime::FileDataBusBridge::parse_scalar_json_object(
+      R"({"k":{"nested":"v"}})", out));
+}
+
+TEST(ParseScalarJson, InvalidJsonReturnsFalse) {
+  std::map<std::string, std::string> out;
+  EXPECT_FALSE(agentflow::runtime::FileDataBusBridge::parse_scalar_json_object(
+      "{invalid", out));
+}
+
+// ── DataBus capacity tracking — overwrite same key ──────────────────
+
+TEST_F(DataBusTest, OverwriteSameKeyTracksCapacityCorrectly) {
+  // Write a key once
+  ASSERT_TRUE(databus_.put("k1", std::string("hello")));
+  size_t after_first = databus_.get_used_capacity();
+
+  // Overwrite with a LARGER value — capacity should grow by the delta
+  std::string bigger(1000, 'x');
+  ASSERT_TRUE(databus_.put("k1", bigger));
+  size_t after_bigger = databus_.get_used_capacity();
+  EXPECT_GT(after_bigger, after_first);
+  EXPECT_LT(after_bigger, after_first + 2000);  // sanity: not 10x overhead
+
+  // Overwrite with a SMALLER value — capacity should shrink
+  ASSERT_TRUE(databus_.put("k1", std::string("hi")));
+  size_t after_smaller = databus_.get_used_capacity();
+  EXPECT_LT(after_smaller, after_bigger);
+
+  // Verify data is correct after overwrites
+  agentflow::DataVariant val;
+  ASSERT_TRUE(databus_.get("k1", val));
+  EXPECT_EQ(std::get<std::string>(val), "hi");
+
+  // Remove and verify capacity drops
+  ASSERT_TRUE(databus_.remove("k1"));
+  EXPECT_EQ(databus_.get_data_count(), 0);
+}

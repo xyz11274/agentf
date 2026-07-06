@@ -54,29 +54,6 @@ detect_generator() {
     fi
 }
 
-# Build the cmake command with cross-platform flags
-build_cmake_args() {
-    local build_type="${1:-Debug}"
-    local generator
-    generator="$(detect_generator)"
-
-    local cmake_args=(
-        -G "$generator"
-        -DCMAKE_BUILD_TYPE="$build_type"
-        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-    )
-
-    # Conda environment detection (works on both macOS and Linux)
-    if [ -n "$CONDA_PREFIX" ]; then
-        print_info "Detected conda environment: $CONDA_PREFIX"
-        cmake_args+=(
-            -DCMAKE_PREFIX_PATH="$CONDA_PREFIX"
-        )
-    fi
-
-    echo "${cmake_args[@]}"
-}
-
 # Set dynamic library search path for running test/example binaries
 setup_runtime_library_path() {
     local extra_paths=("${BUILD_DIR}" "${BUILD_DIR}/lib")
@@ -145,11 +122,19 @@ case $ACTION in
         print_platform_info
         print_info "Building AgentFlow (${BUILD_TYPE})..."
         mkdir -p "${BUILD_DIR}"
-        cd "${BUILD_DIR}"
 
-        local_cmake_args=$(build_cmake_args "$BUILD_TYPE")
-        # shellcheck disable=SC2086
-        cmake .. $local_cmake_args
+        # Build cmake arguments as array (preserves spaces in generator name)
+        cmake_args=(
+            -G "$(detect_generator)"
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}"
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+        )
+        if [ -n "$CONDA_PREFIX" ]; then
+            cmake_args+=(-DCMAKE_PREFIX_PATH="${CONDA_PREFIX}")
+        fi
+
+        cd "${BUILD_DIR}"
+        cmake .. "${cmake_args[@]}"
 
         run_build
         print_info "Build completed successfully"

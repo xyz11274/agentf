@@ -340,6 +340,7 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
   std::string skill_name = extract_json_string_local(params, "skill_name");
   std::string request_id = extract_json_string_local(params, "request_id");
   std::string platform_context = extract_json_object_local(params, "platform_context");
+  std::string stream_str = extract_json_string_local(params, "stream");
 
   if (agent_id.empty() || user_id.empty() || client_id.empty() || content.empty()) {
     return build_error(-32602, "Invalid params: missing agent_id, user_id, client_id, or content", id);
@@ -368,6 +369,7 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
   if (!skill_name.empty()) message.metadata["skill_name"] = skill_name;
   if (!request_id.empty()) message.metadata["request_id"] = request_id;
   if (!platform_context.empty()) message.metadata["platform_context"] = platform_context;
+  if (stream_str == "true") message.metadata["stream"] = "true";
 
   if (!agent->route_request_message(message)) {
     return build_error(-1, "Failed to route request message", id);
@@ -448,6 +450,7 @@ std::string RpcHandler::handle_agent_send_control(const std::string& params, int
   std::string command = extract_json_string_local(params, "command");
   std::string session_id = extract_json_string_local(params, "session_id");
   std::string user_id = extract_json_string_local(params, "user_id");
+  std::string dialogue_id = extract_json_string_local(params, "dialogue_id");
 
   if (agent_id.empty() || command.empty() || session_id.empty()) {
     return build_error(-32602, "Invalid params: missing agent_id, command, or session_id", id);
@@ -466,6 +469,7 @@ std::string RpcHandler::handle_agent_send_control(const std::string& params, int
   ctrl_msg.metadata["message_type"] = "control";
   ctrl_msg.metadata["session_id"] = session_id;
   if (!user_id.empty()) ctrl_msg.metadata["user_id"] = user_id;
+  if (!dialogue_id.empty()) ctrl_msg.metadata["dialogue_id"] = dialogue_id;
 
   if (!agent->route_request_message(ctrl_msg)) {
     return build_error(-1, "Failed to route control message", id);

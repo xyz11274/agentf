@@ -45,6 +45,45 @@ router = APIRouter(prefix="/aisf/healthagent/v1", tags=["aisf-tasks"])
 # 进程级 HaContext 存储（按上游 TaskID 索引）
 _ha_store = HaContextStore()
 
+# Per-(user, client) serialization queue.
+# Key: f"{user_id}:{client_id}", Value: asyncio.Queue of pending tasks.
+# Ensures that concurrent TaskAssignment requests for the same user+client
+# are executed sequentially, preventing daemon session lock contention.
+_serial_queues: dict[str, asyncio.Queue] = {}
+_serial_queue_lock = asyncio.Lock()
+
+
+async def _get_or_create_queue(user_id: str, client_id: str) -> asyncio.Queue:
+    """Get or create a serialization queue for the given user+client pair."""
+    key = f"{user_id}:{client_id}"
+    async with _serial_queue_lock:
+        if key not in _serial_queues:
+            _serial_queues[key] = asyncio.Queue()
+        return _serial_queues[key]
+
+
+async def _serial_executor(user_id: str, client_id: str) -> None:
+    """Background worker: drain the serial queue for one user+client pair.
+
+    Processes tasks one at a time, in FIFO order.
+    """
+    key = f"{user_id}:{client_id}"
+    queue = _serial_queues.get(key)
+    if not queue:
+        return
+    while not queue.empty():
+        coro = await queue.get()
+        try:
+            await coro
+        except Exception as exc:
+            logger.error("serial_executor.error user=%s client=%s err=%s", user_id, client_id, exc)
+        finally:
+            queue.task_done()
+    # Clean up empty queue
+    async with _serial_queue_lock:
+        if key in _serial_queues and _serial_queues[key].empty():
+            del _serial_queues[key]
+
 
 @router.post("/tasks")
 async def receive_task(request: Request) -> JSONResponse:
@@ -123,11 +162,15 @@ async def receive_task(request: Request) -> JSONResponse:
         return JSONResponse(status_code=200, content=result)
 
     # 异步模式（默认）：后台执行，立即返回 202
-    asyncio.create_task(
+    # 但按 (userName, deviceId) 串行化排队，避免 daemon session 锁竞争
+    queue = await _get_or_create_queue(ctx.userName, ctx.deviceId)
+    await queue.put(
         _execute_and_callback(
             daemon, parsed, ctx, prev_dialogue_id, agent_id
         )
     )
+    # 如果没有正在运行的 executor，启动一个
+    asyncio.create_task(_serial_executor(ctx.userName, ctx.deviceId))
     return JSONResponse(
         status_code=202,
         content={"status": "accepted", "task_id": task_id, "mode": "async"},

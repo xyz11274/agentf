@@ -9,6 +9,7 @@
 #include "agent/session.h"
 #include "agent/task.h"
 #include "agent/builtin_dispatcher.h"
+#include "agent/session_router.h"
 #include "workflow/workflow.h"
 
 namespace agentflow {
@@ -577,6 +578,99 @@ TEST_F(AgentTest, CoordinatorInstantiatesSkillTaskFromSkillTemplateWorkflow) {
   ASSERT_NE(runtime_skill_task, nullptr);
   EXPECT_EQ(runtime_skill_task->get_workflow_id(), "wf_skill");
   EXPECT_NE(runtime_skill_task->get_task_id().find("search"), std::string::npos);
+
+  fs::remove_all(tmp);
+}
+
+TEST_F(AgentTest, CoordinatorSkipsStaleWorkflowCompleteWhenNewerWorkflowPending) {
+  namespace fs = std::filesystem;
+  const fs::path tmp = fs::path("build/test_stale_coordinator_pkg");
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({
+      "name": "stale-coord-agent",
+      "version": "1.0.0",
+      "workflows": ["wf_coordinator.json"]
+    })";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "session_pool_size": 1,
+      "sessions": [
+        {
+          "id": 0,
+          "description": "Pooled session",
+          "task_count": 3,
+          "tasks": [
+            { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "wf_coordinator.json" },
+            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "wf_coordinator.json" },
+            { "id": 2, "type": "skill", "description": "Dummy skill", "workflow_file": "wf_coordinator.json", "skill": { "name": "dummy", "config_dir": "skills/dummy" } }
+          ]
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "wf_coordinator.json", "wf_coordinator");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+  auto session = get_or_create_first_session(agent);
+  ASSERT_NE(session, nullptr);
+  auto coordinator_task = session->get_coordinator_task();
+  ASSERT_NE(coordinator_task, nullptr);
+
+  // ── Simulate bug scenario ───────────────────────────────────
+  // 1. Publish a "response" in DataBus (as if a skill already wrote its result)
+  std::string dialogue_id = "dialogue_test_stale";
+  agent->publish_data(dialogue_id + "/response", std::string("skill_execution_result_content"));
+
+  // 2. Enqueue a stale WORKFLOW_COMPLETE data exchange message first.
+  //    This simulates a completion from a PREVIOUS coordinator round that is
+  //    still in the queue when a new workflow is triggered.
+  framework::MMAgentMsgQue::Message stale_completion;
+  stale_completion.message_id = "stale_coordinator_completion";
+  stale_completion.metadata["task_type"] = "coordinator";
+  stale_completion.metadata["workflow_id"] = "wf_coordinator";
+  stale_completion.metadata["dialogue_id"] = dialogue_id;
+  stale_completion.content = "workflow_completed";
+  coordinator_task->enqueue_data_exchange_message(stale_completion);
+  ASSERT_EQ(coordinator_task->get_data_exchange_queue_size(), 1);
+
+  // 3. Enqueue a skill response + trigger to the coordinator's data_exchange queue.
+  //    This simulates the dispatcher forwarding skill completion to the coordinator.
+  //    When the handler processes this trigger, it dequeues the skill response and
+  //    triggers a new coordinator workflow.  Before doing so, it calls
+  //    clear_data_exchange_messages() to discard the stale WORKFLOW_COMPLETE.
+  framework::MMAgentMsgQue::Message skill_resp;
+  skill_resp.message_id = "skill_response_msg";
+  skill_resp.metadata["task_type"] = "coordinator";
+  skill_resp.metadata["skill_name"] = "dummy_skill";
+  skill_resp.metadata["skill_success"] = "true";
+  skill_resp.metadata["dialogue_id"] = dialogue_id;
+  coordinator_task->enqueue_response_message(skill_resp);
+
+  framework::MMAgentMsgQue::Message trigger;
+  trigger.message_id = "trigger-skill_response_msg";
+  trigger.metadata["task_type"] = "coordinator";
+  trigger.metadata["trigger_type"] = "skill_response";
+  trigger.metadata["dialogue_id"] = dialogue_id;
+  coordinator_task->enqueue_data_exchange_message(trigger);
+
+  // 4. Process all messages - the stale completion should be cleared
+  //    when the trigger is processed (clear_data_exchange_messages).
+  agent->process_all_sessions_until_idle();
+
+  // 5. Verify the "response" key is STILL in DataBus (stale completion was
+  //    cleared before it could consume the response).
+  DataVariant response_after;
+  bool response_still_present = agent->get_data(dialogue_id + "/response", response_after);
+  EXPECT_TRUE(response_still_present)
+      << "The 'response' key should still be in DataBus because the stale "
+         "WORKFLOW_COMPLETE was cleared by clear_data_exchange_messages() "
+         "when the new coordinator workflow was triggered.";
 
   fs::remove_all(tmp);
 }
@@ -2671,6 +2765,449 @@ TEST_F(DataBusCleanupTest, ClearNonExistentDialogue) {
   // Clear a dialogue that doesn't exist - should return 0
   int count = agent_->clear_dialogue_data("s1", "nonexistent");
   EXPECT_EQ(count, 0);
+}
+
+// =============================================================================
+// Coordinator Progress Push Test
+// =============================================================================
+//
+// Verifies that when the coordinator's workflow completes AND a "response" key
+// exists alongside "next_skills", the framework pushes a non-final progress
+// notification to the agent's response queue BEFORE the final response.
+//
+// Invariant: non-final progress MUST NOT trigger cleanup_dialogue_data or
+// DIALOGUE_DESTROYED, and the final response MUST still be deliverable.
+
+TEST_F(AgentTest, CoordinatorPushesNonFinalProgressBeforeFinalResponse) {
+  // 1. Create agent with a coordinator workflow
+  auto agent = std::make_shared<framework::MMAgent>(base_config());
+  framework::MMWorkflow::Config wf_cfg;
+  wf_cfg.id = "wf_coord";
+  wf_cfg.name = "wf_coord";
+  agent->add_workflow(std::make_shared<framework::MMWorkflow>(wf_cfg));
+
+  ASSERT_TRUE(agent->initialize());
+  ASSERT_TRUE(agent->start());
+
+  // 2. Route a message to instantiate a session (creates dispatcher+coordinator tasks)
+  framework::MMAgentMsgQue::Message req;
+  req.message_id = "progress-test-msg";
+  req.content = "test request";
+  req.metadata["user_id"] = "progress-user";
+  req.metadata["client_id"] = "progress-client";
+  req.metadata["task_type"] = "dispatcher";
+  req.metadata["workflow_id"] = "wf_coord";
+  ASSERT_TRUE(agent->route_request_message(req));
+
+  // Wait for session creation with coordinator task
+  std::shared_ptr<framework::MMAgentSession> session;
+  for (int i = 0; i < 50; ++i) {
+    session = agent->get_session_by_key("progress-user:progress-client");
+    if (session) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_NE(session, nullptr);
+  std::string sid = session->get_session_id();
+
+  // 3. Find the coordinator task
+  auto tasks = session->get_tasks();
+  auto coordinator_task = find_task_by_type(tasks, "coordinator");
+  ASSERT_NE(coordinator_task, nullptr) << "Session must have a coordinator task";
+
+  // 4. Pre-populate launched_skills so process_next_skills_launch sees
+  //    all skills as launched (avoids needing a real skill workflow template).
+  agent->publish_data("test-dialogue-progress/launched_skills",
+                      DataVariant(std::string("test-skill")));
+  agent->publish_data("test-dialogue-progress/skills_scheduled",
+                      DataVariant(std::string("true")));
+
+  // Write response and next_skills to agent's internal data store
+  // (simulating what coordinator_decide.py outputs to the DataBus)
+  std::string dialogue_id = "test-dialogue-progress";
+  std::string response_val = "正在执行 test-skill…";
+  std::string next_skills_val = R"([{"name":"test-skill","prompt":"do work"}])";
+
+  agent->publish_data("/session/" + sid + "/sys/" + dialogue_id + "/response",
+                      DataVariant(response_val));
+  agent->publish_data("/session/" + sid + "/sys/" + dialogue_id + "/next_skills",
+                      DataVariant(next_skills_val));
+
+  // 5. Enqueue a data_exchange message directly on the coordinator task
+  //    to trigger COORDINATORDataExchange handler (bypassing dispatcher routing)
+  framework::MMAgentMsgQue::Message trigger_msg;
+  trigger_msg.message_id = "coord-trigger-progress";
+  trigger_msg.metadata["dialogue_id"] = dialogue_id;
+  trigger_msg.metadata["task_type"] = "coordinator";
+  trigger_msg.metadata["message_type"] = "data_exchange";
+  ASSERT_TRUE(coordinator_task->enqueue_data_exchange_message(trigger_msg));
+
+  // 6. Wait for the coordinator's data_exchange_loop to process the message
+  //    and push a non-final progress notification to the session router's queue.
+  framework::MMAgentMsgQue::Message progress_msg;
+  bool got_progress = false;
+  for (int i = 0; i < 100; ++i) {
+    if (agent->dequeue_response_message(progress_msg)) {
+      got_progress = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  // RED: this FAILS because no non-final progress is pushed before the fix.
+  //      The only way a response appears is via the "Response ready" path
+  //      which marks final=true and triggers cleanup.
+  // GREEN: after the fix, the progress notification IS pushed.
+  EXPECT_TRUE(got_progress)
+      << "Non-final progress notification should be pushed when response key "
+         "exists alongside next_skills";
+
+  if (got_progress) {
+    // Verify the message is NON-FINAL
+    auto final_it = progress_msg.metadata.find("final");
+    bool is_final = (final_it != progress_msg.metadata.end() && final_it->second == "true");
+    EXPECT_FALSE(is_final) << "Progress must be non-final (final=false)";
+
+    // Verify content contains progress text
+    EXPECT_TRUE(progress_msg.content.find("正在执行") != std::string::npos);
+  }
+
+  agent->stop();
+}
+
+// =============================================================================
+// Coordinator Multi-Round Loop Tests
+// =============================================================================
+//
+// Tests the skill-completion → coordinator-re-trigger path.
+// Round 1: coordinator dispatches skills, pushes progress.
+// Skill completes → C++ decrements pending_skills_count → re-triggers coordinator.
+// Round 2: coordinator outputs final response (no next_skills).
+//
+// Invariant: skill completion must re-trigger coordinator via intent_request.
+
+TEST_F(AgentTest, CoordinatorSkillCompletionTriggersReTrigger) {
+  // 1. Create agent with a coordinator workflow
+  auto agent = std::make_shared<framework::MMAgent>(base_config());
+  framework::MMWorkflow::Config wf_cfg;
+  wf_cfg.id = "wf_coord";
+  wf_cfg.name = "wf_coord";
+  agent->add_workflow(std::make_shared<framework::MMWorkflow>(wf_cfg));
+
+  ASSERT_TRUE(agent->initialize());
+  ASSERT_TRUE(agent->start());
+
+  // 2. Route a message to instantiate a session
+  framework::MMAgentMsgQue::Message req;
+  req.message_id = "multi-round-test-msg";
+  req.content = "test request";
+  req.metadata["user_id"] = "multi-round-user";
+  req.metadata["client_id"] = "multi-round-client";
+  req.metadata["task_type"] = "dispatcher";
+  req.metadata["workflow_id"] = "wf_coord";
+  ASSERT_TRUE(agent->route_request_message(req));
+
+  // Wait for session creation
+  std::shared_ptr<framework::MMAgentSession> session;
+  for (int i = 0; i < 50; ++i) {
+    session = agent->get_session_by_key("multi-round-user:multi-round-client");
+    if (session) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_NE(session, nullptr);
+  std::string sid = session->get_session_id();
+
+  // 3. Find the coordinator task
+  auto tasks = session->get_tasks();
+  auto coordinator_task = find_task_by_type(tasks, "coordinator");
+  ASSERT_NE(coordinator_task, nullptr) << "Session must have a coordinator task";
+
+  // 4. Set up databus for round 1: pre-populate pending_skills_count and launched_skills
+  std::string dialogue_id = "test-multi-round";
+  agent->publish_data(dialogue_id + "/pending_skills_count", DataVariant(static_cast<int64_t>(1)));
+  agent->publish_data(dialogue_id + "/launched_skills",
+                      DataVariant(std::string("test-skill")));
+  agent->publish_data(dialogue_id + "/skills_scheduled",
+                      DataVariant(std::string("true")));
+
+  // Write next_skills and response (simulating coordinator_decide.py output)
+  std::string response_val = "正在执行 test-skill…";
+  std::string next_skills_val = R"([{"name":"test-skill","prompt":"do work"}])";
+  agent->publish_data("/session/" + sid + "/sys/" + dialogue_id + "/response",
+                      DataVariant(response_val));
+  agent->publish_data("/session/" + sid + "/sys/" + dialogue_id + "/next_skills",
+                      DataVariant(next_skills_val));
+
+  // 5. Trigger round 1: send data_exchange to coordinator to process next_skills
+  framework::MMAgentMsgQue::Message trigger_msg;
+  trigger_msg.message_id = "coord-trigger-round1";
+  trigger_msg.metadata["dialogue_id"] = dialogue_id;
+  trigger_msg.metadata["task_type"] = "coordinator";
+  ASSERT_TRUE(coordinator_task->enqueue_data_exchange_message(trigger_msg));
+
+  // 6. Verify round 1: progress notification is pushed
+  framework::MMAgentMsgQue::Message progress_msg;
+  bool got_progress = false;
+  for (int i = 0; i < 100; ++i) {
+    if (agent->dequeue_response_message(progress_msg)) {
+      got_progress = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  EXPECT_TRUE(got_progress)
+      << "Round 1: Non-final progress notification should be pushed";
+  if (got_progress) {
+    auto final_it = progress_msg.metadata.find("final");
+    bool is_final = (final_it != progress_msg.metadata.end() && final_it->second == "true");
+    EXPECT_FALSE(is_final) << "Round 1: Progress must be non-final (final=false)";
+  }
+
+  // 7. Simulate skill completion: send workflow_completed with skill metadata
+  //    to the coordinator task's data_exchange queue.
+  //    The handler detects skill completion (lines 1519-1533), decrements the
+  //    pending_skills_count and re-triggers coordinator via intent_request.
+  framework::MMAgentMsgQue::Message skill_complete_msg;
+  skill_complete_msg.message_id = "skill-complete-test-skill";
+  skill_complete_msg.content = "workflow_completed";
+  skill_complete_msg.metadata["task_type"] = "skill";
+  skill_complete_msg.metadata["skill_name"] = "test-skill";
+  skill_complete_msg.metadata["dialogue_id"] = dialogue_id;
+  ASSERT_TRUE(coordinator_task->enqueue_data_exchange_message(skill_complete_msg));
+
+  // 8. Wait briefly for processing
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  // 9. Verify pending_skills_count was decremented to 0
+  DataVariant pending_count_value;
+  bool found_pending = agent->get_data(dialogue_id + "/pending_skills_count",
+                                        pending_count_value);
+  EXPECT_TRUE(found_pending) << "pending_skills_count should still exist";
+  if (found_pending) {
+    if (const auto* count_ptr = std::get_if<int64_t>(&pending_count_value)) {
+      EXPECT_EQ(*count_ptr, 0) << "pending_skills_count should be 0 after skill completion";
+    }
+  }
+
+  // 10. Verify coordinator was re-triggered after skill completion.
+  //     The re-trigger creates a new runtime_task via build_runtime_task →
+  //     session->add_task() → session task count increases.
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  auto tasks_after = session->get_tasks();
+  // The re-trigger should have created 1 additional runtime task
+  int new_task_count = static_cast<int>(tasks_after.size());
+  EXPECT_GE(new_task_count, static_cast<int>(tasks.size()) + 1)
+      << "Session must have at least " << (tasks.size() + 1)
+      << " tasks after skill completion re-trigger (was " << tasks.size() << ")";
+
+  // 11. Verify skill_failed flag was NOT written (skill succeeded)
+  DataVariant skill_failed_value;
+  std::string skill_failed_key = "/session/" + sid + "/sys/"
+      + dialogue_id + "/" + "skill_failed";
+  bool found_failed = agent->get_data(skill_failed_key, skill_failed_value);
+  EXPECT_FALSE(found_failed)
+      << "skill_failed flag should NOT exist for successful skill";
+
+  agent->stop();
+}
+
+// =============================================================================
+// Skill Failure → skill_failed Flag Test
+// =============================================================================
+//
+// When a skill task fails (workflow_failed), the C++ handler must write
+// skill_failed=true to the databus and still re-trigger the coordinator.
+// This flag is consumed by the Python coordinator_decide.py.
+
+TEST_F(AgentTest, SkillFailureWritesSkillFailedFlag) {
+  // 1. Create agent with a coordinator workflow
+  auto agent = std::make_shared<framework::MMAgent>(base_config());
+  framework::MMWorkflow::Config wf_cfg;
+  wf_cfg.id = "wf_coord";
+  wf_cfg.name = "wf_coord";
+  agent->add_workflow(std::make_shared<framework::MMWorkflow>(wf_cfg));
+
+  ASSERT_TRUE(agent->initialize());
+  ASSERT_TRUE(agent->start());
+
+  // 2. Route a message to instantiate a session
+  framework::MMAgentMsgQue::Message req;
+  req.message_id = "skill-fail-test-msg";
+  req.content = "test request";
+  req.metadata["user_id"] = "skill-fail-user";
+  req.metadata["client_id"] = "skill-fail-client";
+  req.metadata["task_type"] = "dispatcher";
+  req.metadata["workflow_id"] = "wf_coord";
+  ASSERT_TRUE(agent->route_request_message(req));
+
+  // Wait for session creation
+  std::shared_ptr<framework::MMAgentSession> session;
+  for (int i = 0; i < 50; ++i) {
+    session = agent->get_session_by_key("skill-fail-user:skill-fail-client");
+    if (session) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_NE(session, nullptr);
+  std::string sid = session->get_session_id();
+
+  // 3. Find the coordinator task
+  auto tasks = session->get_tasks();
+  auto coordinator_task = find_task_by_type(tasks, "coordinator");
+  ASSERT_NE(coordinator_task, nullptr) << "Session must have a coordinator task";
+
+  std::string dialogue_id = "test-skill-fail";
+
+  // 4. Set up pending_skills_count so it can be decremented
+  agent->publish_data(dialogue_id + "/pending_skills_count", DataVariant(static_cast<int64_t>(1)));
+
+  // 5. Send workflow_failed message simulating skill failure
+  framework::MMAgentMsgQue::Message skill_fail_msg;
+  skill_fail_msg.message_id = "skill-fail-failed-skill";
+  skill_fail_msg.content = "workflow_failed";
+  skill_fail_msg.metadata["task_type"] = "skill";
+  skill_fail_msg.metadata["skill_name"] = "failed-skill";
+  skill_fail_msg.metadata["dialogue_id"] = dialogue_id;
+  ASSERT_TRUE(coordinator_task->enqueue_data_exchange_message(skill_fail_msg));
+
+  // 6. Wait briefly for processing
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+  // 7. Verify skill_failed=true was written to databus
+  DataVariant skill_failed_value;
+  std::string skill_failed_key = "/session/" + sid + "/sys/"
+      + dialogue_id + "/" + "skill_failed";
+  bool found_failed = agent->get_data(skill_failed_key, skill_failed_value);
+  EXPECT_TRUE(found_failed) << "skill_failed flag must be written to databus";
+  if (found_failed) {
+    if (const auto* text = std::get_if<std::string>(&skill_failed_value)) {
+      EXPECT_EQ(*text, "true") << "skill_failed must equal 'true'";
+    }
+  }
+
+  // 8. Verify pending_skills_count was decremented
+  DataVariant pending_count_value;
+  bool found_pending = agent->get_data(dialogue_id + "/pending_skills_count",
+                                        pending_count_value);
+  EXPECT_TRUE(found_pending) << "pending_skills_count should still exist";
+  if (found_pending) {
+    if (const auto* count_ptr = std::get_if<int64_t>(&pending_count_value)) {
+      EXPECT_EQ(*count_ptr, 0) << "pending_skills_count should be 0 after skill failure";
+    }
+  }
+
+  // 9. Verify coordinator was re-triggered even for failed skill.
+  //     The re-trigger creates a new runtime_task via build_runtime_task →
+  //     session->add_task() → session task count increases.
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  auto tasks_after = session->get_tasks();
+  int new_task_count = static_cast<int>(tasks_after.size());
+  EXPECT_GE(new_task_count, static_cast<int>(tasks.size()) + 1)
+      << "Session must have at least " << (tasks.size() + 1)
+      << " tasks after skill failure re-trigger (was " << tasks.size() << ")";
+
+  agent->stop();
+}
+
+// ════════════════════════════════════════════════════════════════════
+// Dialogue serialization lock tests (session-level)
+// ════════════════════════════════════════════════════════════════════
+
+class DialogueSerialLockTest : public ::testing::Test {
+ protected:
+  framework::MMAgentSession::Config session_cfg() {
+    framework::MMAgentSession::Config cfg;
+    cfg.session_id = "test-ses-serial";
+    cfg.max_queue_size = 16;
+    return cfg;
+  }
+};
+
+TEST_F(DialogueSerialLockTest, AcquireReleasesOnGuardDestroy) {
+  framework::MMAgentSession ses(session_cfg());
+  EXPECT_EQ(ses.get_active_dialogue_id(), "");
+
+  // Acquire and immediately release by destroying the guard.
+  {
+    auto g = ses.acquire_dialogue_lock("d1");
+    ASSERT_NE(g, nullptr);
+    EXPECT_EQ(ses.get_active_dialogue_id(), "d1");
+    EXPECT_FALSE(g->is_cancelled());
+    ses.hold_dialogue_lock("d1", std::move(g));
+  }
+  // Slot still held (held_locks_ owns it).
+  EXPECT_EQ(ses.get_active_dialogue_id(), "d1");
+
+  ses.release_dialogue_lock("d1");
+  EXPECT_EQ(ses.get_active_dialogue_id(), "");
+}
+
+TEST_F(DialogueSerialLockTest, SecondAcquireBlocksUntilFirstReleases) {
+  framework::MMAgentSession ses(session_cfg());
+
+  ses.hold_dialogue_lock("d1", ses.acquire_dialogue_lock("d1"));
+  EXPECT_EQ(ses.get_active_dialogue_id(), "d1");
+
+  // Launch a thread that tries to acquire d2 — should block.
+  std::atomic<bool> got_d2{false};
+  std::thread waiter([&]() {
+    auto g2 = ses.acquire_dialogue_lock("d2");
+    if (g2) {
+      ses.hold_dialogue_lock("d2", std::move(g2));
+      got_d2.store(true);
+    }
+  });
+
+  // Give the waiter time to block on the cv.
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  EXPECT_FALSE(got_d2.load()) << "d2 must block while d1 holds the lock";
+  EXPECT_EQ(ses.get_active_dialogue_id(), "d1");
+
+  // Release d1 — waiter should wake and acquire.
+  ses.release_dialogue_lock("d1");
+  waiter.join();
+  EXPECT_TRUE(got_d2.load()) << "d2 must acquire after d1 released";
+  EXPECT_EQ(ses.get_active_dialogue_id(), "d2");
+
+  ses.release_dialogue_lock("d2");
+  EXPECT_EQ(ses.get_active_dialogue_id(), "");
+}
+
+TEST_F(DialogueSerialLockTest, CancelAllDialoguesWakesBlockedWaiters) {
+  framework::MMAgentSession ses(session_cfg());
+  ses.hold_dialogue_lock("d1", ses.acquire_dialogue_lock("d1"));
+
+  std::atomic<bool> waiter_returned{false};
+  std::thread waiter([&]() {
+    auto g2 = ses.acquire_dialogue_lock("d2");
+    // After cancel_all_dialogues, acquire must return nullptr.
+    EXPECT_EQ(g2, nullptr);
+    waiter_returned.store(true);
+  });
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  EXPECT_FALSE(waiter_returned.load());
+
+  ses.cancel_all_dialogues();
+  waiter.join();
+  EXPECT_TRUE(waiter_returned.load()) << "blocked waiter must wake on cancel";
+  // active_dialogue_id_ cleared by ~DialogueLockGuard of the held d1 lock.
+  EXPECT_EQ(ses.get_active_dialogue_id(), "");
+}
+
+TEST_F(DialogueSerialLockTest, ReleaseUnknownDialogueIdIsIdempotent) {
+  framework::MMAgentSession ses(session_cfg());
+  // Releasing a dialogue that was never locked must not throw or deadlock.
+  ses.release_dialogue_lock("nonexistent");
+  EXPECT_EQ(ses.get_active_dialogue_id(), "");
+}
+
+TEST_F(DialogueSerialLockTest, DoubleReleaseIsSafe) {
+  framework::MMAgentSession ses(session_cfg());
+  ses.hold_dialogue_lock("d1", ses.acquire_dialogue_lock("d1"));
+  ses.release_dialogue_lock("d1");
+  EXPECT_EQ(ses.get_active_dialogue_id(), "");
+  // Second release must be a no-op.
+  ses.release_dialogue_lock("d1");
+  EXPECT_EQ(ses.get_active_dialogue_id(), "");
 }
 
 }  // namespace tests

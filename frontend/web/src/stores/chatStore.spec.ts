@@ -1,6 +1,9 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useChatStore } from '@/stores/chatStore'
+import { setApiClient, resetApiClient } from '@/api/context'
+import { ApiClient } from '@/api/client'
+import type { LlmTraceSummary } from '@/types/agentflow'
 
 describe('useChatStore', () => {
   beforeEach(() => {
@@ -174,5 +177,231 @@ describe('useChatStore', () => {
     expect(store.isConnected).toBe(false)
     expect(store.currentAgentId).toBeNull()
     expect(store.error).toBeNull()
+  })
+
+  // ── loadHistoryTraces ──────────────────────────────────────────
+
+  describe('loadHistoryTraces', () => {
+    /** Build a fake Bridge persistent-trace response entry matching
+     *  LocalSessionProvider.get_traces() schema. */
+    function makePersistentTrace(
+      callId: string,
+      model = 'gpt-4o',
+      latencyMs = 1234,
+    ): Record<string, unknown> {
+      return {
+        id: 1,
+        session_id: 'sess-001',
+        dialogue_id: '0625152345-abc123def456',
+        trace_type: 'llm_call',
+        trace_data: {
+          call_id: callId,
+          request: { model, messages: [{ role: 'user', content: 'Hello' }] },
+          response: { choices: [{ message: { content: 'Hi!' } }] },
+          meta: {
+            model,
+            latency_ms: latencyMs,
+            request_summary: 'Hello',
+            response_summary: 'Hi!',
+            timestamp: '2026-07-05T12:00:00Z',
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            total_tokens: 15,
+            dialogue_id: 'd-1',
+            session_id: 'mock-ses-001',
+            node_id: 'coordinator_decide',
+            task_id: 'task-001',
+            skill_name: '',
+            completed_skill: '',
+            task_type: 'coordinator',
+          },
+        },
+        created_at: '2026-07-05T12:00:00Z',
+      }
+    }
+
+    function makeSummaryExpectation(
+      callId: string,
+      model = 'gpt-4o',
+      latencyMs = 1234,
+    ): LlmTraceSummary {
+      return {
+        call_id: callId,
+        model,
+        latency_ms: latencyMs,
+        request_summary: 'Hello',
+        response_summary: 'Hi!',
+        timestamp: '2026-07-05T12:00:00Z',
+        token_usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        dialogue_id: 'd-1',
+        session_id: 'mock-ses-001',
+        node_id: 'coordinator_decide',
+        task_id: 'task-001',
+        skill_name: '',
+        completed_skill: '',
+        task_type: 'coordinator',
+      }
+    }
+
+    beforeEach(() => {
+      setActivePinia(createPinia())
+    })
+
+    afterEach(() => {
+      resetApiClient()
+    })
+
+    it('transforms bridge persistent trace entries to LlmTraceSummary', async () => {
+      const store = useChatStore()
+
+      // Arrange: seed messages (simulating loadHistoryMessages output).
+      store.messages.push({
+        id: 'hist-0625152345-abc123def456-user-0',
+        role: 'user' as const,
+        content: 'Hello',
+        timestamp: 1000,
+        dialogueId: '0625152345-abc123def456',
+      })
+      store.messages.push({
+        id: 'hist-0625152345-abc123def456-assistant-1',
+        role: 'assistant' as const,
+        content: 'Hi!',
+        timestamp: 2000,
+        dialogueId: '0625152345-abc123def456',
+      })
+
+      // Mock the API to return persistent-trace format.
+      const mockClient = new ApiClient()
+      vi.spyOn(mockClient, 'listPersistentTraces').mockResolvedValue({
+        success: true,
+        data: {
+          traces: [makePersistentTrace('call-001'), makePersistentTrace('call-002', 'gpt-4o-mini', 567)],
+          total: 2,
+        },
+        error: null,
+      })
+      setApiClient(mockClient)
+
+      await store.loadHistoryTraces('sess-001')
+
+      // Assert: llmTraces keyed by assistant message id with transformed data.
+      const key = 'hist-0625152345-abc123def456-assistant-1'
+      expect(store.llmTraces[key]).toHaveLength(2)
+
+      expect(store.llmTraces[key][0]).toEqual(makeSummaryExpectation('call-001'))
+      expect(store.llmTraces[key][1]).toEqual(makeSummaryExpectation('call-002', 'gpt-4o-mini', 567))
+    })
+
+    it('handles empty trace response gracefully', async () => {
+      const store = useChatStore()
+      store.messages.push({
+        id: 'hist-d1-user-0',
+        role: 'user' as const,
+        content: 'Q',
+        timestamp: 1000,
+        dialogueId: 'd1',
+      })
+      store.messages.push({
+        id: 'hist-d1-assistant-1',
+        role: 'assistant' as const,
+        content: 'A',
+        timestamp: 2000,
+        dialogueId: 'd1',
+      })
+
+      const mockClient = new ApiClient()
+      vi.spyOn(mockClient, 'listPersistentTraces').mockResolvedValue({
+        success: true,
+        data: { traces: [], total: 0 },
+        error: null,
+      })
+      setApiClient(mockClient)
+
+      await store.loadHistoryTraces('sess-001')
+
+      // No traces → llmTraces should remain empty.
+      expect(Object.keys(store.llmTraces)).toHaveLength(0)
+    })
+
+    it('skips messages without dialogueId', async () => {
+      const store = useChatStore()
+      // Inject a message without dialogueId (e.g. from real-time chat).
+      store.messages.push({
+        id: 'm-123',
+        role: 'assistant' as const,
+        content: 'Real-time reply',
+        timestamp: 999,
+      })
+
+      const mockClient = new ApiClient()
+      const spy = vi.spyOn(mockClient, 'listPersistentTraces')
+      setApiClient(mockClient)
+
+      await store.loadHistoryTraces('sess-001')
+
+      // No call to listPersistentTraces since no dialogueId was present.
+      expect(spy).not.toHaveBeenCalled()
+      expect(Object.keys(store.llmTraces)).toHaveLength(0)
+    })
+
+    it('handles API error gracefully (swallows silently)', async () => {
+      const store = useChatStore()
+      store.messages.push({
+        id: 'hist-d1-assistant-1',
+        role: 'assistant' as const,
+        content: 'A',
+        timestamp: 2000,
+        dialogueId: 'd1',
+      })
+
+      const mockClient = new ApiClient()
+      vi.spyOn(mockClient, 'listPersistentTraces').mockRejectedValue(
+        new Error('network error'),
+      )
+      setApiClient(mockClient)
+
+      // Should not throw.
+      await expect(store.loadHistoryTraces('sess-001')).resolves.toBeUndefined()
+      expect(Object.keys(store.llmTraces)).toHaveLength(0)
+    })
+
+    it('reads dialogueId field (not parsed from msg.id)', async () => {
+      const store = useChatStore()
+      // dialogueId contains '-' (e.g. "0625152345-abc123def456") — this
+      // was the root cause of the "refresh doesn't load traces" bug.
+      store.messages.push({
+        id: 'hist-0625152345-abc123def456-user-0',
+        role: 'user' as const,
+        content: 'Q',
+        timestamp: 1000,
+        dialogueId: '0625152345-abc123def456',
+      })
+      store.messages.push({
+        id: 'hist-0625152345-abc123def456-assistant-1',
+        role: 'assistant' as const,
+        content: 'A',
+        timestamp: 2000,
+        dialogueId: '0625152345-abc123def456',
+      })
+
+      const mockClient = new ApiClient()
+      vi.spyOn(mockClient, 'listPersistentTraces').mockImplementation(
+        async (_sessionId: string, dialogueId?: string) => {
+          // Verify the FULL dialogue_id is passed to the API (not truncated).
+          expect(dialogueId).toBe('0625152345-abc123def456')
+          return {
+            success: true,
+            data: { traces: [makePersistentTrace('c1')], total: 1 },
+            error: null,
+          }
+        },
+      )
+      setApiClient(mockClient)
+
+      await store.loadHistoryTraces('sess-001')
+
+      const key = 'hist-0625152345-abc123def456-assistant-1'
+      expect(store.llmTraces[key]).toHaveLength(1)
+    })
   })
 })

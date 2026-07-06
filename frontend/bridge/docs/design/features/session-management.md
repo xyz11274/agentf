@@ -35,9 +35,9 @@
 ```
 前端会话管理流程:
 
-1. 页面加载 → 调用 GET /api/sessions?agent_id=X&user_id=web-user
+1. 页面加载 → 调用 GET /api/sessions?agent_id=X（不传 user_id，返回该 agent 全部会话）
                                   → daemon session.list → 返回活跃会话列表
-2. 用户点击"新建会话" → 生成新 client_id → 自动选中 → 启用聊天
+2. 用户点击"新建会话" → 弹出对话框，填写 client_id 和 user_id（可选，有默认值）→ 选中 → 启用聊天
 3. 用户选择已有会话 → 选中 → 启用聊天
 4. 用户点击"销毁" → DELETE /api/sessions/{session_id}?agent_id=X
                                      → daemon session.destroy

@@ -41,8 +41,9 @@ public:
 
   // Control command content values
   struct ControlCommand {
-    static constexpr const char* SESSION_DESTROY   = "SESSION-DESTROY";
-    static constexpr const char* SESSION_INTERRUPT = "SESSION-INTERRUPT";
+    static constexpr const char* SESSION_DESTROY    = "SESSION-DESTROY";
+    static constexpr const char* SESSION_INTERRUPT  = "SESSION-INTERRUPT";
+    static constexpr const char* DIALOGUE_INTERRUPT = "DIALOGUE-INTERRUPT";
   };
 
   // Metadata keys for control messages

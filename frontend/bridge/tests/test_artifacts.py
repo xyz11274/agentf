@@ -185,3 +185,82 @@ def test_unsupported_artifact_type_is_rejected(
 
     assert response.status_code == 415
     assert b"API_KEY" not in response.content
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Non-image artifact delivery (PPT, DOCX, PDF, XLSX)
+# ═══════════════════════════════════════════════════════════════════
+
+def test_pptx_is_served(client: TestClient, artifact_root: Path) -> None:
+    """Bridge 应能服务 .pptx 文件下载。"""
+    pptx = artifact_root / "outfit_assistant" / "outputs" / "presentation.pptx"
+    pptx.parent.mkdir(parents=True)
+    pptx.write_bytes(b"PK\x03\x04\x00" + b"fake-pptx-content")
+
+    response = client.get(
+        "/api/artifacts/outfit-assistant/files/"
+        "outfit_assistant/outputs/presentation.pptx"
+    )
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"PK")
+
+
+def test_docx_is_served(client: TestClient, artifact_root: Path) -> None:
+    """Bridge 应能服务 .docx 文件下载。"""
+    docx = artifact_root / "outfit_assistant" / "outputs" / "report.docx"
+    docx.parent.mkdir(parents=True)
+    docx.write_bytes(b"PK\x03\x04\x00" + b"fake-docx-content")
+
+    response = client.get(
+        "/api/artifacts/outfit-assistant/files/"
+        "outfit_assistant/outputs/report.docx"
+    )
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"PK")
+
+
+def test_pdf_is_served(client: TestClient, artifact_root: Path) -> None:
+    """Bridge 应能服务 .pdf 文件下载。"""
+    pdf = artifact_root / "outfit_assistant" / "outputs" / "document.pdf"
+    pdf.parent.mkdir(parents=True)
+    pdf.write_bytes(b"%PDF-1.4" + b"fake-pdf-content")
+
+    response = client.get(
+        "/api/artifacts/outfit-assistant/files/"
+        "outfit_assistant/outputs/document.pdf"
+    )
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"%PDF")
+
+
+def test_xlsx_is_served(client: TestClient, artifact_root: Path) -> None:
+    """Bridge 应能服务 .xlsx 文件下载。"""
+    xlsx = artifact_root / "outfit_assistant" / "outputs" / "data.xlsx"
+    xlsx.parent.mkdir(parents=True)
+    xlsx.write_bytes(b"PK\x03\x04\x00" + b"fake-xlsx-content")
+
+    response = client.get(
+        "/api/artifacts/outfit-assistant/files/"
+        "outfit_assistant/outputs/data.xlsx"
+    )
+
+    assert response.status_code == 200
+    assert response.content.startswith(b"PK")
+
+
+def test_pptx_in_package_root_is_served(client: TestClient, artifact_root: Path) -> None:
+    """包根目录内有效路径的 .pptx 应被正常服务。"""
+    secret = artifact_root / "outfit_assistant" / "secret.pptx"
+    secret.parent.mkdir(parents=True, exist_ok=True)
+    secret.write_bytes(b"valid-pptx-content")
+
+    response = client.get(
+        "/api/artifacts/outfit-assistant/files/"
+        "outfit_assistant/secret.pptx"
+    )
+
+    assert response.status_code == 200
+    assert b"valid-pptx-content" in response.content

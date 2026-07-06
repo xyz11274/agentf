@@ -450,6 +450,16 @@ bool MMAgentRuntime::unregister_agent(const AgentId& agent_id) {
     std::lock_guard<std::mutex> lock(agents_mutex_);
     auto                        it = agents_.find(agent_id);
     if(it != agents_.end()) {
+      // Cascade: clear all session data before destroying the DataBus
+      auto session_ids = it->second->get_all_session_ids();
+      Logger::instance().info_f("[Runtime] unregister_agent %s: cleaning %zu sessions before DataBus teardown",
+                                agent_id.c_str(), session_ids.size());
+      for(const auto& sid : session_ids) {
+        int cleared = it->second->clear_session_data(sid);
+        Logger::instance().debug_f("[Runtime] unregister_agent %s: cleared session=%s keys=%d",
+                                   agent_id.c_str(), sid.c_str(), cleared);
+      }
+
       agents_.erase(it);
       databuses_.erase(agent_id);
       agent_heartbeats_.erase(agent_id);
@@ -649,8 +659,48 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
     if(state_it != workflow_states_.end()) {
       MMDataBus& databus = get_databus(agent_id);
 
-      // Create UDS server with async callback support
-      auto uds_server = std::make_shared<UDSServer>(&databus, uds_socket_path, async_cb);
+      // Create UDS server with async callback + response_push support
+      // The response_push callback stores streaming chunks in DataBus under
+      // /session/{session_id}/stream/{dialogue_id}/chunk_{seq} so the
+      // coordinator's COORDINATORDataExchange can drain them on each round.
+      static std::atomic<uint64_t> workflow_stream_seq{0};
+      UDSServer::ResponsePushCallback push_cb =
+          [&databus](const std::string& sid,
+                     const std::string& did,
+                     const std::string& content,
+                     const std::string& type,
+                     const std::string& skill,
+                     const std::string& round_str,
+                     const std::string& status) -> bool {
+        uint64_t seq = workflow_stream_seq.fetch_add(1);
+        std::string payload = "{\"content\":\"";
+        for(char c : content) {
+          switch(c) {
+            case '\\': payload += "\\\\"; break;
+            case '"':  payload += "\\\""; break;
+            case '\n': payload += "\\n";  break;
+            case '\r': payload += "\\r";  break;
+            case '\t': payload += "\\t";  break;
+            default:
+              if(static_cast<unsigned char>(c) < 0x20) {
+                char buf[8];
+                snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+                payload += buf;
+              } else {
+                payload += c;
+              }
+              break;
+          }
+        }
+        payload += "\",\"type\":\"" + type + "\",\"seq\":" + std::to_string(seq);
+        if(!skill.empty())    payload += ",\"skill\":\"" + skill + "\"";
+        if(!round_str.empty()) payload += ",\"round\":\"" + round_str + "\"";
+        if(!status.empty())   payload += ",\"status\":\"" + status + "\"";
+        payload += "}";
+        return databus.put("/session/" + sid + "/stream/" + did + "/chunk_" + std::to_string(seq),
+                           DataVariant(payload));
+      };
+      auto uds_server = std::make_shared<UDSServer>(&databus, uds_socket_path, async_cb, push_cb);
       if(uds_server->start()) {
         state_it->second.uds_socket_path = uds_socket_path;
         state_it->second.uds_server = uds_server;
@@ -1719,6 +1769,16 @@ void MMAgentRuntime::agent_registration_loop() {
       if(request.unregister) {
         auto it = agents_.find(agent_id);
         if(it != agents_.end()) {
+          // Cascade: clear all session data before destroying the DataBus
+          auto session_ids = it->second->get_all_session_ids();
+          Logger::instance().info_f("[Runtime] worker unregister %s: cleaning %zu sessions before DataBus teardown",
+                                    agent_id.c_str(), session_ids.size());
+          for(const auto& sid : session_ids) {
+            int cleared = it->second->clear_session_data(sid);
+            Logger::instance().debug_f("[Runtime] worker unregister %s: cleared session=%s keys=%d",
+                                       agent_id.c_str(), sid.c_str(), cleared);
+          }
+
           agents_.erase(it);
           databuses_.erase(agent_id);
           agent_heartbeats_.erase(agent_id);
@@ -1917,6 +1977,12 @@ void MMAgentRuntime::agent_task_poller_loop() {
         if(task->get_parameter("dialogue_id", dialogue_id) && !dialogue_id.empty()) {
           inputs["dialogue_id"] = dialogue_id;
           Logger::instance().info_f("[TASK_POLLER] Set inputs[dialogue_id]='%s'", dialogue_id.c_str());
+        }
+        // Propagate stream flag from task parameter to node inputs
+        std::string stream_str;
+        if(task->get_parameter("stream", stream_str) && stream_str == "true") {
+          inputs["stream"] = "true";
+          Logger::instance().info_f("[TASK_POLLER] Set inputs[stream]=true from task parameter");
         }
         // Propagate completed_skill_name for coordinator to track skill completion
         std::string completed_skill_name;

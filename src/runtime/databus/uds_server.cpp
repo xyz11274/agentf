@@ -156,6 +156,13 @@ UDSServer::UDSServer(MMDataBus* databus, const std::string& socket_path, AsyncCa
   async_callback_ = std::move(async_callback);
 }
 
+UDSServer::UDSServer(MMDataBus* databus, const std::string& socket_path,
+                     AsyncCallback async_callback, ResponsePushCallback response_push_callback)
+    : UDSServer(databus, socket_path, Config{}) {
+  async_callback_ = std::move(async_callback);
+  response_push_callback_ = std::move(response_push_callback);
+}
+
 UDSServer::UDSServer(MMDataBus* databus, const std::string& socket_path, const Config& config)
     : databus_(databus), socket_path_(socket_path), config_(config) {
   task_queue_.max_size = config_.max_queue_size;
@@ -479,6 +486,8 @@ std::string UDSServer::handle_request(const std::string& request_json) {
     return handle_list_keys(params, id);
   } else if (method == "async_callback") {
     return handle_async_callback(params, id);
+  } else if (method == "response_push") {
+    return handle_response_push(params, id);
   }
 
   return build_error_response(-32601, "Method not found: " + method, id);
@@ -722,6 +731,42 @@ std::string UDSServer::handle_async_callback(const std::string& params, int64_t 
   // Call the registered callback
   bool success = async_callback_(session_id, dialogue_id, task_id, node_id, call_key, content);
 
+  if (success) {
+    return build_success_response("{\"success\":true,\"queued\":true}", id);
+  }
+  return build_success_response("{\"success\":false}", id);
+}
+
+std::string UDSServer::handle_response_push(const std::string& params, int64_t id) {
+  std::string session_id = extract_json_string(params, "session_id");
+  std::string dialogue_id = extract_json_string(params, "dialogue_id");
+  std::string content = extract_json_string(params, "content");
+  std::string type_str = extract_json_string(params, "type");
+  std::string final_str = extract_json_string(params, "final");
+  std::string skill = extract_json_string(params, "skill");
+  std::string round_str = extract_json_string(params, "round");
+  std::string status = extract_json_string(params, "status");
+
+  if (dialogue_id.empty() || content.empty()) {
+    return build_error_response(-32602,
+        "Invalid params: missing dialogue_id or content", id);
+  }
+
+  // final=true is NOT allowed via response_push — lifecycle must go through coordinator
+  if (final_str == "true") {
+    return build_error_response(-32601,
+        "final=true not allowed via response_push", id);
+  }
+
+  if (!response_push_callback_) {
+    return build_error_response(-1, "response_push callback not configured", id);
+  }
+
+  Logger::instance().info_f("[UDS_SERVER] response_push: session=%s, dialogue=%s, type=%s, skill=%s, content_len=%zu",
+                            session_id.c_str(), dialogue_id.c_str(), type_str.c_str(),
+                            skill.c_str(), content.size());
+
+  bool success = response_push_callback_(session_id, dialogue_id, content, type_str, skill, round_str, status);
   if (success) {
     return build_success_response("{\"success\":true,\"queued\":true}", id);
   }

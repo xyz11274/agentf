@@ -356,5 +356,98 @@ void MMAgentSession::clear_all_tasks() {
   coordinator_task_.reset();
 }
 
+// ── Dialogue serialization lock ─────────────────────────────────────
+
+std::unique_ptr<DialogueLockGuard> MMAgentSession::acquire_dialogue_lock(
+    const std::string& dialogue_id) {
+  std::unique_lock<std::mutex> lk(dialogue_serialize_mutex_);
+  dialogue_serialize_cv_.wait(lk, [this]() {
+    return active_dialogue_id_.empty() || session_cancelled_.load();
+  });
+  if (session_cancelled_.load()) {
+    // Session being destroyed — caller must NOT proceed.
+    return nullptr;
+  }
+  active_dialogue_id_ = dialogue_id;
+  return std::unique_ptr<DialogueLockGuard>(
+      new DialogueLockGuard(*this, dialogue_id));
+}
+
+void MMAgentSession::cancel_all_dialogues() {
+  // Drain all held locks so each guard's destructor releases the slot.
+  std::vector<std::unique_ptr<DialogueLockGuard>> victims;
+  {
+    std::lock_guard<std::mutex> lk(dialogue_serialize_mutex_);
+    session_cancelled_.store(true);
+    victims.reserve(held_locks_.size());
+    for (auto& [did, guard] : held_locks_) {
+      victims.push_back(std::move(guard));
+    }
+    held_locks_.clear();
+  }
+  // Destroying victims outside the lock clears active_dialogue_id_ (only
+  // the first matching one wins; others are no-ops) and notifies waiters.
+  victims.clear();
+  // Wake all waiters so they observe session_cancelled_ and return nullptr.
+  dialogue_serialize_cv_.notify_all();
+}
+
+std::string MMAgentSession::get_active_dialogue_id() const {
+  std::lock_guard<std::mutex> lk(dialogue_serialize_mutex_);
+  return active_dialogue_id_;
+}
+
+void MMAgentSession::hold_dialogue_lock(
+    const std::string& dialogue_id,
+    std::unique_ptr<DialogueLockGuard> guard) {
+  if (!guard) {
+    // Caller aborted before start — nothing to hold.
+    return;
+  }
+  std::lock_guard<std::mutex> lk(dialogue_serialize_mutex_);
+  // If a lock is already held for this dialogue_id, the prior one is
+  // overwritten and its destructor releases the slot.  This should not
+  // happen in normal flow (dialogue_id is unique per request), but the
+  // defensive erase keeps the map bounded.
+  held_locks_[dialogue_id] = std::move(guard);
+}
+
+void MMAgentSession::release_dialogue_lock(const std::string& dialogue_id) {
+  std::unique_ptr<DialogueLockGuard> victim;
+  {
+    std::lock_guard<std::mutex> lk(dialogue_serialize_mutex_);
+    auto it = held_locks_.find(dialogue_id);
+    if (it == held_locks_.end()) {
+      return;  // Nothing held — idempotent.
+    }
+    victim = std::move(it->second);
+    held_locks_.erase(it);
+  }
+  // Destroying victim outside the lock runs ~DialogueLockGuard which
+  // clears active_dialogue_id_ and notifies the next waiter.
+}
+
+void MMAgentSession::release_dialogue_slot(const std::string& dialogue_id) {
+  {
+    std::lock_guard<std::mutex> lk(dialogue_serialize_mutex_);
+    // Only clear if we still own the slot (defensive against double-release).
+    if (active_dialogue_id_ == dialogue_id) {
+      active_dialogue_id_.clear();
+    }
+  }
+  dialogue_serialize_cv_.notify_one();
+}
+
+// ── DialogueLockGuard ───────────────────────────────────────────────
+
+DialogueLockGuard::DialogueLockGuard(MMAgentSession& session,
+                                     std::string dialogue_id)
+    : session_(session), dialogue_id_(std::move(dialogue_id)),
+      cancelled_(session.session_cancelled_.load()) {}
+
+DialogueLockGuard::~DialogueLockGuard() {
+  session_.release_dialogue_slot(dialogue_id_);
+}
+
 }  // namespace framework
 }  // namespace agentflow

@@ -100,6 +100,12 @@ def _pydantic_field_to_yaml_path(field_name: str) -> str:
         "aisf_adapter_agent_id": "aisf_adapter.agent_id",
         "aisf_adapter_mode": "aisf_adapter.mode",
         "aisf_adapter_timeout": "aisf_adapter.timeout",
+        "agent_defaults_llm_api_key": "agent_defaults.llm.api_key",
+        "agent_defaults_llm_base_url": "agent_defaults.llm.base_url",
+        "agent_defaults_llm_model": "agent_defaults.llm.model",
+        "agent_defaults_llm_fallback_api_key": "agent_defaults.llm_fallback.api_key",
+        "agent_defaults_llm_fallback_base_url": "agent_defaults.llm_fallback.base_url",
+        "agent_defaults_llm_fallback_model": "agent_defaults.llm_fallback.model",
     }
 
     if field_name in special_map:
@@ -132,6 +138,10 @@ def test_all_yaml_keys_have_pydantic_fields(flat_yaml, pydantic_fields):
     for yaml_path in flat_yaml:
         # Skip items that don't map to Pydantic fields
         if yaml_path in ("#", "sidecar", "aisf_adapter", "llm", "daemon", "bridge"):
+            continue
+        # agent_defaults subtree is injected directly into agent environment
+        # via YAML injection, not consumed by BridgeSettings Pydantic model
+        if yaml_path.startswith("agent_defaults."):
             continue
 
         # Find matching Pydantic field

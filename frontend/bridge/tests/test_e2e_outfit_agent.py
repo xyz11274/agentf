@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from .e2e_helpers import outfit_daemon, send_user_message, jsonrpc_call
+from .e2e_helpers import outfit_daemon, send_user_message, jsonrpc_call, poll_agent_response
 
 
 def _response_received(resp: dict) -> bool:
@@ -33,21 +33,9 @@ def _response_received(resp: dict) -> bool:
 
 def _wait_response(host: str, port: int, task_id: str,
                    timeout: int = 120) -> dict[str, Any]:
-    """轮询 daemon 的 RESPONSE 方法，等待 task 完成。"""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        resp = jsonrpc_call(host, port, "RESPONSE",
-                            {"TaskID": task_id}, req_id=2)
-        result = resp.get("result", {})
-        if result.get("MessageType") == "UserOutput":
-            return result
-        # TaskStatusReport (code=200) 也视为完成
-        if result.get("MessageType") == "TaskStatusManagement":
-            data = result.get("Data", {})
-            if data.get("TaskStatusCode") == 200:
-                return result
-        time.sleep(0.5)
-    raise TimeoutError(f"task {task_id} not completed within {timeout}s")
+    """轮询 daemon 的 agent.poll_response，等待 task 完成。"""
+    content = poll_agent_response(host, port, task_id, timeout)
+    return {"Data": {"UserOutputText": content}}
 
 
 # ═══════════════════════════════════════════════════════════════════

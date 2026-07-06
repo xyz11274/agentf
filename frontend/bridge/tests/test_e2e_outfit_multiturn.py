@@ -14,63 +14,20 @@ from typing import Any
 
 import pytest
 
-from .e2e_helpers import outfit_daemon, jsonrpc_call
+from .e2e_helpers import outfit_daemon, jsonrpc_call, send_user_message, poll_agent_response
 
 
 def _poll_response(port: int, task_id: str,
                    timeout: int = 120) -> dict[str, Any]:
-    """轮询 daemon 的 RESPONSE 方法，等待 task 完成。"""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        resp = jsonrpc_call("127.0.0.1", port, "RESPONSE",
-                            {"TaskID": task_id}, req_id=2)
-        result = resp.get("result", {})
-        if result.get("MessageType") == "UserOutput":
-            return result
-        if result.get("MessageType") == "TaskStatusManagement":
-            data = result.get("Data", {})
-            if data.get("TaskStatusCode") == 200:
-                return result
-        time.sleep(0.5)
-    raise TimeoutError(f"task {task_id} not completed within {timeout}s")
+    """轮询 daemon 的 agent.poll_response，等待 task 完成。"""
+    content = poll_agent_response("127.0.0.1", port, task_id, timeout)
+    return {"Data": {"UserOutputText": content}}
 
 
 def _send_turn(port: int, content: str, task_id: str,
                user_id: str = "e2e-mt-user") -> dict:
     """发送用户消息并等待响应。"""
-    jsonrpc_call("127.0.0.1", port, "TASKASSIGNMENT", {
-        "Header": {
-            "MessageType": "UserTaskManagement",
-            "TaskID": task_id,
-            "Sender": "SystemAgent",
-            "Receiver": "HealthAgent",
-            "UserName": user_id,
-            "DeviceId": "e2e-device",
-            "ClientSessionId": "e2e-mt-session",
-            "DeviceCategory": "2",
-            "UUID": f"uuid-{task_id}",
-            "ClientSessionId": f"session-{task_id}",
-            "AcmSessionId": "",
-            "DialogueId": "",
-            "SessionId": "",
-            "EventTimeStamp": "2026-07-04T12:00:00Z",
-            "SysAgentEntity": "127.0.0.1",
-            "TeamEnvironmentID": "te_test_001",
-            "ClientExField": "",
-        },
-        "Data": {
-            "MessageType": "TaskAssignment",
-            "UserInputText": content,
-            "RewriteQ": content,
-            "UserIntent": "",
-            "UserInputObject": '{"code":200003,"data":{"intent":"","params":null}}',
-            "UserSpecifiedAgent": "",
-            "APPName": "",
-            "ToolName": "",
-            "IsHaveSendHuoShan": "0",
-            "LongHistory": "",
-        },
-    }, task_id=task_id)
+    send_user_message("127.0.0.1", port, content, task_id)
     return _poll_response(port, task_id)
 
 

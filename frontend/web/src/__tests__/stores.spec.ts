@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useAgentStore } from '@/stores/agentStore'
-import { useSessionStore } from '@/stores/sessionStore'
 import { useDaemonStore } from '@/stores/daemonStore'
 import { usePackageStore } from '@/stores/packageStore'
 import { resetApiClient, setApiClient } from '@/api/context'
@@ -34,32 +33,13 @@ describe('agentStore', () => {
     const store = useAgentStore()
     expect(store.currentAgent()).toBeNull()
   })
-})
 
-describe('sessionStore', () => {
-  beforeEach(() => {
-    setActivePinia(createPinia())
-  })
-  afterEach(() => { resetApiClient() })
-
-  it('loadSessions fetches sessions for agent', async () => {
-    const get = mockGet(async () =>
-      ok({ sessions: [{ session_id: 's1', user_id: 'u1', status: 'active' }] }),
-    )
-    setApiClient(makeClient(get, mockPut(), mockPost(), mockDel()))
-    const store = useSessionStore()
-    await store.loadSessions('test-agent')
-    expect(store.sessions).toHaveLength(1)
-    expect(store.sessions[0].session_id).toBe('s1')
-  })
-
-  it('destroySession calls DELETE', async () => {
-    const del = mockDel(async () => ok(null))
-    setApiClient(makeClient(mockGet(), mockPut(), mockPost(), del))
-    const store = useSessionStore()
-    await store.destroySession('test-agent', 's1')
-    const { url } = trackGet(del)
-    expect(url).toContain('s1')
+  it('reset clears agentId and state', () => {
+    const store = useAgentStore()
+    store.setCurrentAgent('agent-x')
+    store.reset()
+    expect(store.currentAgentId).toBeNull()
+    expect(store.agents).toHaveLength(0)
   })
 })
 

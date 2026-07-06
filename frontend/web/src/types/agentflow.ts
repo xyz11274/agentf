@@ -61,18 +61,51 @@ export interface AgentInfo {
 }
 
 // ---------------------------------------------------------------------------
-// Session
+// Session — Bridge persistent (Phase 1)
 // ---------------------------------------------------------------------------
 
 /**
- * Information about an active runtime session.
+ * A Bridge-side persistent session, independent of agentflow daemon pool.
+ * See `docs/design/features/bridge-session-persistence.md` §6.1.
  */
-export interface SessionInfo {
-  session_id: string;
+export interface PersistentSession {
+  id: string;
   user_id: string;
   client_id: string;
-  age_ms: number;
+  title: string;
+  created_at: string;
+  last_active_at: string;
   status: string;
+  agentflow_session_id?: string;
+}
+
+/**
+ * A single message in a Bridge persistent session.
+ * One dialogue round = one user + one assistant entry.
+ */
+export interface PersistentMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  dialogue_id: string;
+  artifacts: ArtifactInfo[];
+  created_at: string;
+  agent_name?: string;
+}
+
+/**
+ * Response wrapper for persistent session API.
+ */
+export interface PersistentSessionListResponse {
+  sessions: PersistentSession[];
+  total: number;
+}
+
+/**
+ * Response wrapper for persistent message API.
+ */
+export interface PersistentMessageListResponse {
+  messages: PersistentMessage[];
+  total: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -200,14 +233,19 @@ export interface SkillInstallResponse {
 /**
  * A single chat message exchanged with the agent.
  * For user messages, ``images`` contains preview-ready data URLs.
+ * For assistant messages, ``artifacts`` contains structured download metadata.
  */
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  /** Bridge persistent-session dialogue ID (set on history-loaded messages only). */
+  dialogueId?: string;
   /** Data URLs for inline image previews (user messages only). */
   images?: string[];
+  /** Structured artifact metadata (assistant messages only, final chunks). */
+  artifacts?: ArtifactInfo[];
 }
 
 // ---------------------------------------------------------------------------
@@ -241,15 +279,34 @@ export interface ChatRequest {
 }
 
 /**
+ * Structured artifact metadata from the bridge.
+ * Provides programmatic access to generated files without Markdown parsing.
+ */
+export interface ArtifactInfo {
+  /** Semantic type: image, html, or download */
+  type: 'image' | 'html' | 'download';
+  /** Public or relative URL to fetch the artifact */
+  url: string;
+  /** Human-readable filename */
+  name: string;
+  /** MIME type hint (e.g. image/png, application/pdf) */
+  mime_type: string;
+}
+
+/**
  * Streaming chunk emitted by the bridge during a chat turn.
  * - `final: true` means this is the last chunk for the current turn.
  */
 export interface ChatChunk {
-  type: 'chunk';
+  type: 'chunk' | 'llm_chunk';
   content: string;
   final: boolean;
   /** True when this is a system progress message, not model output. */
   progress?: boolean;
+  /** Original chunk type from daemon (llm_chunk, progress, etc.). */
+  chunk_type?: string;
+  /** Structured artifact metadata extracted from this chunk's content. */
+  artifacts?: ArtifactInfo[];
 }
 
 /**

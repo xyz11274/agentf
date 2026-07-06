@@ -617,6 +617,44 @@ class DataBusClient:
             self._tool_client = NamespaceClient(self, "tool")
         return self._tool_client
 
+    def response_push(self, content: str, type: str = "progress",
+                      dialogue_id: Optional[str] = None,
+                      skill: str = "", round: str = "",
+                      status: str = "") -> bool:
+        """Push a streaming chunk to the Bridge via the daemon's response_push UDS handler.
+
+        This bypasses the coordinator round-trip — the chunk is enqueued directly
+        to ``session_router_->enqueue_response_message()`` and pushed to the client
+        by the ResponsePoller in near real-time.
+
+        Args:
+            content: Message content (raw LLM SSE JSON for ``llm_chunk``, plain text for ``progress``).
+            type: Message type — ``"progress"`` (human-readable notification) or ``"llm_chunk"`` (raw OpenAI SSE chunk).
+            dialogue_id: Override dialogue ID (default: ``AF_DIALOGUE_ID`` env).
+            skill: Skill name for cascading progress display.
+            round: Round number for multi-round skill execution.
+            status: Progress status — ``"running"``, ``"completed"``, or ``"error"``.
+
+        Returns:
+            True if the message was successfully enqueued.
+        """
+        did = dialogue_id or os.environ.get("AF_DIALOGUE_ID", "")
+        sid = os.environ.get("AF_SESSION_ID", "")
+        if not did:
+            return False
+        params = {
+            "session_id": sid,
+            "dialogue_id": did,
+            "content": content,
+            "type": type,
+            "final": "false",
+        }
+        if skill:  params["skill"] = skill
+        if round:  params["round"] = round
+        if status: params["status"] = status
+        result = self._call("response_push", params)
+        return result.get("success", False)
+
     def user(self, dialogue_id: Optional[str] = None) -> NamespaceClient:
         """
         Access user namespace (user-defined data).

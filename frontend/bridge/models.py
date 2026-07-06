@@ -19,6 +19,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Literal as _Literal  # alias for clarity
 
 
+# ═══════════════════════════════════════════════════════════════════
+# Multimodal content parts (Phase A)
+# ═══════════════════════════════════════════════════════════════════
+
+
 # ---------------------------------------------------------------------------
 # Multimodal content parts (Phase A: text + image_url inline base64)
 # ---------------------------------------------------------------------------
@@ -283,6 +288,28 @@ class ChatRequest(BaseModel):
     content: Union[str, List[ContentPart]]
 
 
+class ArtifactInfo(BaseModel):
+    """Structured metadata for a generated artifact in a chat chunk.
+
+    Provides a programmatic alternative to parsing artifact URLs from Markdown text.
+    Aligns with OpenAI Assistants / Claude / Gemini content block patterns.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    type: Literal["image", "html", "download"]
+    """Semantic type: image (display inline), html (open in browser), download (file)."""
+
+    url: str
+    """Public or relative URL to fetch the artifact via Bridge artifact endpoint."""
+
+    name: str
+    """Human-readable filename (e.g. look.png, report.pptx)."""
+
+    mime_type: str = "application/octet-stream"
+    """MIME type hint for the HTTP response Content-Type header."""
+
+
 class ChatChunk(BaseModel):
     """Streaming chunk emitted by the bridge during a chat turn.
 
@@ -291,14 +318,32 @@ class ChatChunk(BaseModel):
     ``progress: True`` means this is a progress/status message, not model output.
     The frontend can style it differently (e.g. grey text + spinner) to
     distinguish it from the LLM's final response.
+
+    ``artifacts`` is a structured list of generated files (images, HTML, downloads)
+    extracted from the response text, providing programmatic access without
+    requiring Markdown/regex parsing.
     """
 
     model_config = ConfigDict(from_attributes=True)
 
-    type: Literal["chunk"] = "chunk"
+    type: Literal["chunk", "llm_chunk"] = "chunk"
+    chunk_type: str = ""
+    """Subtype discriminator: ``"text"`` | ``"progress"`` | ``"llm_chunk"``.
+    Always ``"text"`` when empty. Mirrors the SSE path's ``chunk_type`` field
+    so the frontend can use a unified handler for both WebSocket and SSE."""
     content: str
     final: bool
     progress: bool = False
+    progress_skill: str = ""
+    """技能名称（级联折叠展示用）。"""
+    progress_round: str = ""
+    """技能执行轮次（多轮 LLM 调用）。"""
+    progress_status: str = ""
+    """进度状态: running | completed | error。"""
+    artifacts: list[ArtifactInfo] = Field(default_factory=list)
+    """Structured artifact metadata extracted from this chunk's content.
+    Empty list when no artifacts are present.  Each entry provides type, URL,
+    filename, and MIME type for programmatic consumption."""
 
 
 class ChatDone(BaseModel):

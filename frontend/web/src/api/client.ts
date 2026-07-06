@@ -87,6 +87,63 @@ export class ApiClient {
   del<T>(path: string): Promise<ApiResponse<T>> {
     return this.request<T>('DELETE', path)
   }
+
+  // ── Bridge persistent session API ──────────────────────────
+
+  /**
+   * GET /api/sessions/persistent — list Bridge-side persistent sessions.
+   */
+  listPersistentSessions(userId?: string, limit?: number, offset?: number) {
+    const params = new URLSearchParams()
+    if (userId) params.set('user_id', userId)
+    if (limit !== undefined) params.set('limit', String(limit))
+    if (offset !== undefined) params.set('offset', String(offset))
+    const qs = params.toString()
+    return this.get<import('@/types/agentflow').PersistentSessionListResponse>(
+      `/api/sessions/persistent${qs ? `?${qs}` : ''}`,
+    )
+  }
+
+  /**
+   * GET /api/sessions/persistent/{id}/messages — list historical messages.
+   */
+  listPersistentMessages(sessionId: string, limit?: number) {
+    const params = limit !== undefined ? `?limit=${limit}` : ''
+    return this.get<import('@/types/agentflow').PersistentMessageListResponse>(
+      `/api/sessions/persistent/${encodeURIComponent(sessionId)}/messages${params}`,
+    )
+  }
+
+  /**
+   * GET /api/sessions/persistent/{id}/traces — list traces for a session.
+   */
+  listPersistentTraces(sessionId: string, dialogueId?: string) {
+    const params = dialogueId ? `?dialogue_id=${encodeURIComponent(dialogueId)}` : ''
+    return this.get<unknown>(
+      `/api/sessions/persistent/${encodeURIComponent(sessionId)}/traces${params}`,
+    )
+  }
+
+  /**
+   * DELETE /api/sessions/persistent/{id} — hard-delete a persistent session.
+   */
+  deletePersistentSession(sessionId: string) {
+    return this.del<{ deleted: string }>(
+      `/api/sessions/persistent/${encodeURIComponent(sessionId)}`,
+    )
+  }
+
+  /**
+   * PATCH /api/sessions/persistent/{id} — update session metadata.
+   */
+  updatePersistentSession(sessionId: string, data: { status?: string; title?: string }) {
+    const params = new URLSearchParams()
+    if (data.status) params.set('status', data.status)
+    if (data.title) params.set('title', data.title)
+    return this.request<unknown>('PATCH',
+      `/api/sessions/persistent/${encodeURIComponent(sessionId)}?${params.toString()}`,
+    )
+  }
 }
 
 export const apiClient = new ApiClient()

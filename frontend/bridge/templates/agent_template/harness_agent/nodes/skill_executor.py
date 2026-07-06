@@ -32,6 +32,7 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from databus_client import DataBusClient
 from llm_call import call_llm, estimate_message_tokens, compact_messages, get_model_max_tokens, get_compaction_threshold
+from observability import emit_event
 from round_reminder import build_round_reminder
 from prompts import (
     SKILL_FALLBACK_SYSTEM,
@@ -45,8 +46,7 @@ AGENT_PACKAGE_DIR = os.path.dirname(NODES_DIR)
 AGENT_MD_PATH = os.path.join(AGENT_PACKAGE_DIR, "agent.md")
 
 # ── Load .env from package root (Plan B: bypass framework for business env vars) ──
-# Framework has no mechanism to declare business env vars,
-# so we load .env here for all node processes that run this module.
+# Framework has no mechanism to declare business env (QWEATHER_API_KEY etc.),
 # so we load .env here for all node processes that run this module.
 # See design doc: agent package env → framework injection is the correct long-term fix.
 _DOTENV_PATH = os.path.join(AGENT_PACKAGE_DIR, ".env")
@@ -394,6 +394,13 @@ def execute():
     base_url = get_env("AF_LLM_BASE_URL", "")
 
     # ── flow debug ──
+    emit_event("skill_executor.trigger", {
+        "exec_skill_key": exec_skill_key,
+        "skill_name": skill_name,
+        "load_skills": load_skill_names,
+        "model": model_name,
+        "max_rounds": max_rounds,
+    })
     print(f"[flow] skill_executor triggered: session={session_id} dialogue={dialogue_id}", file=sys.stderr)
     print(f"[flow]   exec_skill_key={exec_skill_key} skill_name={skill_name}", file=sys.stderr)
     print(f"[flow]   skill_prompt={skill_prompt[:80] if skill_prompt else '(none)'}", file=sys.stderr)
@@ -415,6 +422,15 @@ def execute():
     _turn_start = time.time()
     for round_i in range(max_rounds):
         elapsed = time.time() - _turn_start
+        emit_event("skill_executor.llm_round_start", {
+            "round": round_i + 1,
+            "max_rounds": max_rounds,
+            "messages": len(messages),
+            "model": model_name,
+            "tools": bool(available_tools),
+            "budget": completion_budget,
+            "elapsed_s": round(elapsed, 1),
+        })
         print(
             f"[flow]   LLM round={round_i+1}/{max_rounds} msgs={len(messages)} "
             f"tools={bool(available_tools)} model={model_name} budget={completion_budget} "
@@ -426,7 +442,7 @@ def execute():
         # "第 X 轮：调用 LLM…" → 用户看到"正在等 API"而非"卡了"
         _round_start = time.time()
         print(json.dumps({
-            "response": f"[PROGRESS]{skill_name} 第 {round_i+1}/{max_rounds} 轮：调用 LLM…",
+            "response": f"{skill_name} 第 {round_i+1}/{max_rounds} 轮：调用 LLM…",
         }, ensure_ascii=False))
 
         # ── Per-round budget reminder (delegated to shared module) ──
@@ -504,7 +520,7 @@ def execute():
                     file=sys.stderr,
                 )
                 print(json.dumps({
-                    "response": f"[PROGRESS]{skill_name} 正在恢复第 {round_i+1} 轮…",
+                    "response": f"{skill_name} 正在恢复第 {round_i+1} 轮…",
                 }, ensure_ascii=False))
                 continue
 
@@ -528,7 +544,7 @@ def execute():
             print(f"[flow]   round={round_i+1} → tool_calls: {tool_names}", file=sys.stderr)
             # ── Progress: tool call details ──
             print(json.dumps({
-                "response": f"[PROGRESS]{skill_name} → 正在调用 {', '.join(tool_names)}",
+                "response": f"{skill_name} → 正在调用 {', '.join(tool_names)}",
             }, ensure_ascii=False))
             messages.append(msg)
             for tc in tool_calls:
@@ -556,7 +572,7 @@ def execute():
             # Task complete → output result
             # ── Progress: LLM returned final answer ──
             print(json.dumps({
-                "response": f"[PROGRESS]{skill_name} 汇总结果…",
+                "response": f"{skill_name} 汇总结果…",
             }, ensure_ascii=False))
             response_text = msg.get("content", "")
             output = {
@@ -573,6 +589,14 @@ def execute():
             # Coordinator's collect_skill_results reads by completed_skill name ("skill-runner"),
             # so the generic key MUST be written or coordinator gets empty result → false "not found".
             # Use ensure_ascii=True to avoid DataBus SDK UTF-8 decode failures on Chinese/emoji content.
+            emit_event("skill_executor.completed", {
+                "round": round_i + 1,
+                "total_rounds": round_i + 1,
+                "skill_name": skill_name,
+                "status": "completed",
+                "response_length": len(response_text),
+                "elapsed_s": round(time.time() - _turn_start, 1),
+            })
             print(f"[flow]   result: skill={skill_name} status={output.get('status','completed')} rounds={round_i+1}", file=sys.stderr)
             if databus.is_connected():
                 result_json = json.dumps(output, ensure_ascii=True)
@@ -582,6 +606,12 @@ def execute():
             return
 
     # Max rounds reached
+    emit_event("skill_executor.max_rounds_reached", {
+        "max_rounds": max_rounds,
+        "skill_name": skill_name,
+        "response_length": len(messages[-1].get("content", "")) if messages else 0,
+        "elapsed_s": round(time.time() - _turn_start, 1),
+    }, level="WARN")
     output = {
         "skill_result": messages[-1].get("content", "") if messages else "",
         "status": "max_rounds_reached",

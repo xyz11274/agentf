@@ -31,6 +31,7 @@ import yaml
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from databus_client import DataBusClient
 from llm_call import call_llm, get_recorder, estimate_message_tokens, compact_messages, get_model_max_tokens, get_compaction_threshold
+from observability import emit_event
 from round_reminder import build_round_reminder
 from prompts import (
     PROTOCOL_TEMPLATE,
@@ -43,15 +44,12 @@ from prompts import (
     LLM_ERROR_NO_ARTIFACTS,
     ARTIFACTS_SECTION_HEADER,
     ARTIFACT_IMAGE_TEMPLATE,
+    ARTIFACT_HTML_TEMPLATE,
 )
 
 NODES_DIR = os.path.dirname(os.path.abspath(__file__))
 AGENT_PACKAGE_DIR = os.path.dirname(NODES_DIR)
 AGENT_MD_PATH = os.path.join(AGENT_PACKAGE_DIR, "agent.md")
-
-# Artifact host name used in bridge API URLs (change to match the agent's
-# registered name in the bridge routing table, typically from agent.json).
-AGENT_ARTIFACT_HOST = os.path.basename(AGENT_PACKAGE_DIR)
 
 # ── Load .env from package root (business env vars: API_KEY, AF_LLM_*) ──
 # Framework has no mechanism for business env; dotenv fills the gap.
@@ -221,25 +219,36 @@ def collect_skill_results(databus: DataBusClient, skill_names: list) -> list:
 
 
 def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
-    """Append browser-accessible Markdown for generated image artifacts."""
+    """Append browser-accessible Markdown for generated artifacts (images + HTML reports)."""
     try:
         artifacts = json.loads(artifacts_json) if artifacts_json else []
     except (json.JSONDecodeError, TypeError):
         artifacts = []
-    images = [item for item in artifacts if isinstance(item, str)]
+    items = [item for item in artifacts if isinstance(item, str)]
     legacy_absolute_images = re.findall(
         r"!\[[^\]]*\]\((/[^)]+\.(?:png|jpe?g|webp|gif))\)", content, re.I
     )
     content = rewrite_local_artifact_links(
-        content, list(dict.fromkeys(images + legacy_absolute_images))
+        content, list(dict.fromkeys(items + legacy_absolute_images))
     )
-    if not images:
+    if not items:
         return content
+
+    images = [p for p in items if not p.lower().endswith(".html")]
+    html_reports = [p for p in items if p.lower().endswith(".html")]
+
     blocks = []
-    for index, path in enumerate(images, 1):
-        url = path if path.startswith(("http://", "https://")) else local_artifact_url(path)
-        if url not in content:
-            blocks.append(ARTIFACT_IMAGE_TEMPLATE.format(index=index, url=url))
+    if images:
+        for index, path in enumerate(images, 1):
+            url = path if path.startswith(("http://", "https://")) else local_artifact_url(path)
+            if url not in content:
+                blocks.append(ARTIFACT_IMAGE_TEMPLATE.format(index=index, url=url))
+    if html_reports:
+        for index, path in enumerate(html_reports, 1):
+            url = path if path.startswith(("http://", "https://")) else local_artifact_url(path)
+            if url not in content:
+                blocks.append(ARTIFACT_HTML_TEMPLATE.format(index=index, url=url))
+
     if not blocks:
         return content
     return content.rstrip() + "\n\n" + ARTIFACTS_SECTION_HEADER + "\n\n" + "\n\n".join(blocks)
@@ -318,8 +327,8 @@ def local_artifact_url(path: str) -> str:
     packages_root = os.path.dirname(AGENT_PACKAGE_DIR)
     relative = os.path.relpath(os.path.realpath(path), packages_root)
     if relative.startswith(".."):
-        return f"/api/artifacts/{AGENT_ARTIFACT_HOST}?path={quote(path, safe='')}"
-    return f"/api/artifacts/{AGENT_ARTIFACT_HOST}/files/{quote(relative, safe='/')}"
+        return f"/api/artifacts/outfit-assistant?path={quote(path, safe='')}"
+    return f"/api/artifacts/outfit-assistant/files/{quote(relative, safe='/')}"
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +337,7 @@ def local_artifact_url(path: str) -> str:
 
 def execute():
     _t0 = time.time()
-    user_input = get_env("AF_INPUT", "")
+    raw_input = get_env("AF_INPUT", "")
     dialogue_id = get_env("AF_DIALOGUE_ID", "")
     session_id = get_env("AF_SESSION_ID", "")
 
@@ -358,12 +367,19 @@ def execute():
     base_url = get_env("AF_LLM_BASE_URL", "")
 
     # ── flow debug ──
+    emit_event("coordinator.trigger", {
+        "trigger_type": "skill_completion" if completed_skill else "first",
+        "completed_skill": completed_skill,
+        "skill_success": skill_success,
+        "model": model_name,
+        "max_iterations": max_iterations,
+    })
     print(f"[flow] coordinator_decide triggered: session={session_id} dialogue={dialogue_id} model={model_name}", file=sys.stderr)
     _t1 = time.time()
     if completed_skill:
         print(f"[flow]   trigger_type=skill_completion completed_skill={completed_skill} success={skill_success}", file=sys.stderr)
     else:
-        print(f"[flow]   trigger_type=first user_input={user_input[:80]}", file=sys.stderr)
+        print(f"[flow]   trigger_type=first raw_input_preview={raw_input[:120]}", file=sys.stderr)
 
     databus = DataBusClient()
     recorder = get_recorder()
@@ -410,15 +426,31 @@ def execute():
     system_prompt = COORDINATOR_PROTOCOL + "\n\n---\n\n" + (agent_md_body or
                      COORDINATOR_FALLBACK_SYSTEM)
 
+    # Parse AF_INPUT to get the conversation messages from bridge
+    # AF_INPUT format: {"stream": bool, "messages": [{role, content}, ...]}
+    af_messages: list[dict] = []
+    stream = False
+    try:
+        parsed = json.loads(raw_input)
+        if isinstance(parsed, dict):
+            if "messages" in parsed and isinstance(parsed["messages"], list):
+                af_messages = parsed["messages"]
+            if "stream" in parsed:
+                stream = bool(parsed["stream"])
+    except (json.JSONDecodeError, TypeError):
+        pass
+
     messages = [{"role": "system", "content": system_prompt}]
-    messages.extend(history)
+    print(f"[flow]   stream={stream} af_messages_parsed={len(af_messages)}", file=sys.stderr)
     _t3 = time.time()
     print(f"[timing] messages_ready={_t3-_t0:.1f}s", file=sys.stderr)
 
     # Construct this trigger's input
     # dummy_pre_skill is a passthrough hook — treat as first trigger (no result to evaluate)
     if completed_skill and completed_skill != "dummy_pre_skill":
-        # Re-trigger: skill completion notification
+        # Re-trigger: use persisted history + skill completion message
+        print(f"[flow]   extending history={len(history)} msgs from recorder", file=sys.stderr)
+        messages.extend(history)
         # collect_skill_results is a 30s databus.get() fallback — skip when env var has the data.
         collected = [] if completed_skill_result else collect_skill_results(databus, [completed_skill])
         messages.append({"role": "user", "content": build_skill_completion_message(
@@ -428,8 +460,12 @@ def execute():
             collected,
         )})
     else:
-        # First trigger (or dummy_pre_skill hook): user's original request
-        messages.append({"role": "user", "content": user_input})
+        # First trigger: use the messages array from AF_INPUT directly
+        # (bridge has already assembled history + this turn's user input)
+        if not af_messages:
+            print(f"[flow]   ⚠️  first_trigger: af_messages is empty (AF_INPUT may be legacy plain-text format)", file=sys.stderr)
+        print(f"[flow]   first_trigger: extending af_messages={len(af_messages)} msgs from AF_INPUT", file=sys.stderr)
+        messages.extend(af_messages)
 
     # Single LLM decision (tools: [run_skills])
     # 4000 tokens to avoid finish=length truncation on long responses.
@@ -466,7 +502,7 @@ def execute():
     print(f"[timing] llm_call_start={_t4-_t0:.1f}s", file=sys.stderr)
     # ── Progress: coordinator is calling LLM (may take >60s) ──
     print(json.dumps({
-        "response": "[PROGRESS]coordinator 决策中…",
+        "response": "coordinator 决策中…",
     }, ensure_ascii=False))
     raw = call_llm(
         messages, tools=[RUN_SKILLS_TOOL],
@@ -477,8 +513,38 @@ def execute():
     _t5 = time.time()
     print(f"[timing] llm_call_end={_t5-_t0:.1f}s (llm={_t5-_t4:.1f}s)", file=sys.stderr)
 
+    # ── Observability: log raw LLM response structure ──
+    _obs_choice = raw.get("choices", [{}])[0]
+    _obs_msg = _obs_choice.get("message", {})
+    _obs_tcs = _obs_msg.get("tool_calls")
+    _obs_finish = _obs_choice.get("finish_reason", "?")
+    _obs_content = _obs_msg.get("content", "")
+    _obs_content_preview = _obs_content[:150].replace("\n", " ") if _obs_content else "(empty)"
+    _obs_tc_count = len(_obs_tcs) if _obs_tcs else 0
+    _obs_tc_names = [tc.get("function", {}).get("name", "?")
+                     for tc in (_obs_tcs or [])]
+    print(
+        f"[obs] coord_decide: finish={_obs_finish} "
+        f"tool_calls={_obs_tc_count} names={_obs_tc_names or 'none'} "
+        f"content_preview={_obs_content_preview}",
+        file=sys.stderr,
+    )
+    emit_event("coordinator.llm_result", {
+        "round": current_round,
+        "finish_reason": _obs_finish,
+        "tool_call_count": _obs_tc_count,
+        "tool_call_names": _obs_tc_names,
+        "llm_duration_s": round(_t5 - _t4, 1),
+        "total_duration_s": round(_t5 - _t0, 1),
+    })
+
     if raw.get("_llm_error"):
         err_msg = raw.get("error", "LLM call failed")
+        emit_event("coordinator.llm_error", {
+            "round": current_round,
+            "error": err_msg,
+            "duration_s": round(_t5 - _t0, 1),
+        }, level="ERROR")
         print(
             f"[flow]   ⚠️  LLM error after call_llm internal retries, returning fallback: {err_msg}",
             file=sys.stderr,
@@ -516,6 +582,11 @@ def execute():
             else:
                 response_text = raw_response or "已达协调轮次上限，基于已有结果输出。"
             response_text = append_artifacts_markdown(response_text, completed_skill_artifacts)
+            emit_event("coordinator.max_rounds_forced_output", {
+                "round": current_round,
+                "max_iterations": max_iterations,
+                "response_length": len(response_text),
+            }, level="WARN")
             print(json.dumps({"response": response_text}, ensure_ascii=False))
             if databus.is_connected():
                 try:
@@ -593,7 +664,7 @@ def execute():
 
             print(json.dumps({
                 "coordinator_status": "skills_dispatched",
-                "response": f"[PROGRESS]正在执行 {skill_labels}{llm_summary}",
+                "response": f"正在执行 {skill_labels}{llm_summary}",
             }, ensure_ascii=False))
             # Clean up "response" key to prevent stale progress message
             # from leaking into the next coordinator round.
@@ -618,6 +689,12 @@ def execute():
         response_text = append_artifacts_markdown(
             response_text, completed_skill_artifacts
         )
+        emit_event("coordinator.final_response", {
+            "round": current_round,
+            "has_tool_call": False,
+            "response_length": len(response_text),
+            "elapsed_s": round(time.time() - _t0, 1),
+        })
         print(json.dumps({"response": response_text}, ensure_ascii=False))
         _t6 = time.time()
         print(f"[timing] final_output={_t6-_t0:.1f}s total", file=sys.stderr)

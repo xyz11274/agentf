@@ -28,6 +28,8 @@ from starlette.types import Message
 
 from client import DaemonClient
 from config import settings
+from providers import LocalSessionProvider
+from services import AgentflowSessionSync
 from routes import agents as agents_routes
 from routes import chat as chat_routes
 from routes import daemon as daemon_routes
@@ -121,6 +123,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     runtime_state.daemon_client = daemon_client
     app.state.daemon_client = daemon_client
 
+    # --- Session persistence provider ---------------------------------------
+    # LocalSessionProvider is the Phase-1 default; Phase-3 will swap to
+    # KMMSessionProvider based on ``settings.session_provider``.
+    if settings.session_provider == "local":
+        session_provider = LocalSessionProvider(settings.session_db_path_resolved)
+    else:
+        # Phase 3: KMM provider — fall back to Local for now so the bridge
+        # still boots on misconfigured deployments.
+        logger.warning(
+            "session_provider=%s not yet implemented, falling back to local",
+            settings.session_provider,
+        )
+        session_provider = LocalSessionProvider(settings.session_db_path_resolved)
+    runtime_state.session_provider = session_provider
+    app.state.session_provider = session_provider
+
     runtime_state.daemon_status_cache = dict(daemon_routes.EMPTY_CACHE)
     try:
         await daemon_routes.update_daemon_status_cache(runtime_state, daemon_client)
@@ -132,16 +150,67 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         name="bridge.daemon_status_poll",
     )
 
+    # --- Session status sync (Phase 2) --------------------------------------
+    # Best-effort background sync of agentflow→Bridge session status.
+    # Interval ≤ 0 disables the poller (sync still runs once at start).
+    session_sync = AgentflowSessionSync(daemon_client, session_provider)
+    try:
+        await session_sync.sync()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("initial session sync failed (suppressed): %s", exc)
+    sync_task: asyncio.Task | None = None
+    if settings.session_sync_interval > 0:
+        sync_task = asyncio.create_task(
+            _session_sync_loop(session_sync, settings.session_sync_interval),
+            name="bridge.session_sync_poll",
+        )
+
     try:
         yield
     finally:
         poll_task.cancel()
+        if sync_task is not None:
+            sync_task.cancel()
         try:
             await poll_task
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             pass
+        if sync_task is not None:
+            try:
+                await sync_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE101
+                pass
         await daemon_client.close()
         logger.info("AgentFlow Bridge shutting down")
+
+
+async def _session_sync_loop(
+    syncer: AgentflowSessionSync, interval: float,
+) -> None:
+    """Background poll loop driving ``AgentflowSessionSync.sync()``.
+
+    Sleeps in small chunks so shutdown is prompt (mirrors
+    ``_daemon_status_poll_loop``). All sync errors are swallowed inside
+    ``sync()`` so the loop never dies on a daemon/provider outage.
+    """
+    idle = 0.5
+    try:
+        while True:
+            slept = 0.0
+            while slept < interval:
+                chunk = min(idle, interval - slept)
+                if chunk <= 0:
+                    break
+                await asyncio.sleep(chunk)
+                slept += chunk
+            try:
+                await syncer.sync()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("session sync loop error (suppressed): %s", exc)
+    except asyncio.CancelledError:
+        raise
 
 
 async def _daemon_status_poll_loop(state, client: DaemonClient) -> None:

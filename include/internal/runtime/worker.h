@@ -69,6 +69,11 @@ public:
       std::string model = "gpt-4.1";
       int         timeout_ms = 30000;
     } llm_config;
+
+    // Streaming mode flag.  When true, Python nodes may push streaming
+    // chunks via response_push; when false (default), the existing
+    // coordinator round-trip is used exclusively.
+    bool stream = false;
   };
 
   struct ExecutionResponse {

@@ -174,6 +174,7 @@ void MMNode::event_dispatch_loop() {
 void MMNode::process_message(const Message& message) {
   std::lock_guard<std::mutex> exec_lock(execution_mutex_);
   set_inputs(message.inputs);
+
   if(get_state() == NodeState::WAITING) {
     initialize();
   } else if(get_state() != NodeState::READY && get_state() != NodeState::RETRYING) {

@@ -154,7 +154,7 @@ async def list_llm_traces(
     The ``agent_id`` path parameter is passed through to the daemon so it
     can route to the correct ``MMDataBus`` instance.
     """
-    _ = dialogue_id  # reserved
+    _ = dialogue_id  # reserved — will be used for filtering below
 
     # Resolve session identity (with fallback to default session 0)
     sess_params = await _resolve_trace_session(daemon, agent_id, user_id, client_id)
@@ -181,7 +181,23 @@ async def list_llm_traces(
             call_id = k[len(prefix):-len(meta_suffix)]
             call_ids.append(call_id)
 
-    # Step 3: paginate.
+    # Step 3: if dialogue_id is provided, fetch meta for each call_id and filter.
+    if dialogue_id:
+        filtered_call_ids: list[str] = []
+        for call_id in call_ids:
+            meta_key = f"{prefix}{call_id}/meta"
+            try:
+                get_result = await daemon.send_request("databus.get", {
+                    **sess_params, "key": meta_key,
+                })
+            except DaemonError:
+                continue
+            meta = get_result.get("value") if get_result.get("exists") else None
+            if meta and meta.get("dialogue_id") == dialogue_id:
+                filtered_call_ids.append(call_id)
+        call_ids = filtered_call_ids
+
+    # Step 4: paginate.
     total = len(call_ids)
     page = call_ids[offset: offset + limit]
 

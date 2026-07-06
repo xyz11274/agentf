@@ -979,6 +979,8 @@ void MMAgent::handle_control_message(const std::shared_ptr<MMAgentSession>& sess
     handle_session_interrupt(session, message);
   } else if(command == MMAgentMsgQue::ControlCommand::SESSION_DESTROY) {
     handle_session_destroy(session, message);
+  } else if(command == MMAgentMsgQue::ControlCommand::DIALOGUE_INTERRUPT) {
+    handle_dialogue_interrupt(session, message);
   } else {
     Logger::instance().warn_f("[CONTROL] Unknown command: %s", command.c_str());
   }
@@ -1075,8 +1077,95 @@ void MMAgent::handle_session_destroy(const std::shared_ptr<MMAgentSession>& sess
   // 4. Clear session task maps
   session->clear_all_tasks();
 
+  // 5. Cancel all dialogue locks (wake any blocked acquire_dialogue_lock
+  //    waiters and release any held locks so they don't leak).
+  session->cancel_all_dialogues();
+
   Logger::instance().info_f("[CONTROL] Session destroyed: %s",
                             session->get_session_id().c_str());
+}
+
+void MMAgent::handle_dialogue_interrupt(const std::shared_ptr<MMAgentSession>& session,
+                                        const MMAgentMsgQue::Message& message) {
+  // Resolve target dialogue_id from metadata.
+  auto it = message.metadata.find("dialogue_id");
+  const std::string dialogue_id = (it != message.metadata.end()) ? it->second : "";
+  if(dialogue_id.empty()) {
+    Logger::instance().warn_f("[CONTROL] DIALOGUE-INTERRUPT missing dialogue_id, session=%s",
+                              session->get_session_id().c_str());
+    return;
+  }
+  Logger::instance().info_f("[CONTROL] DIALOGUE-INTERRUPT session=%s dialogue_id=%s",
+                            session->get_session_id().c_str(), dialogue_id.c_str());
+
+  // 1. Interrupt skill tasks whose dialogue_id matches.
+  auto tasks = session->get_tasks();
+  int interrupted = 0;
+  for(auto& task : tasks) {
+    std::string task_did;
+    if(!task->get_parameter("dialogue_id", task_did)) {
+      continue;
+    }
+    if(task_did != dialogue_id) {
+      continue;
+    }
+    auto state = task->get_state();
+    if(state == MMAgentTask::TaskState::RUNNING ||
+       state == MMAgentTask::TaskState::PENDING) {
+      task->interrupt();
+      task->stop_message_threads();
+      ++interrupted;
+
+      // Notify coordinator this skill was interrupted so it can finalize.
+      auto coordinator_task = session->get_coordinator_task();
+      if(coordinator_task) {
+        MMAgentMsgQue::Message interrupt_msg;
+        interrupt_msg.message_id = "interrupt-" + task->get_task_id();
+        interrupt_msg.type = MMAgentMsgQue::MessageType::TASK_RESPONSE;
+        interrupt_msg.content = "INTERRUPTED";
+        interrupt_msg.metadata["task_id"]        = task->get_task_id();
+        interrupt_msg.metadata["skill_name"]     = task->get_skill_name();
+        interrupt_msg.metadata["status"]         = "interrupted";
+        interrupt_msg.metadata["dialogue_id"]    = dialogue_id;
+        interrupt_msg.metadata["session_id"]     = session->get_session_id();
+        coordinator_task->enqueue_data_exchange_message(interrupt_msg);
+      }
+    }
+  }
+  Logger::instance().info_f("[CONTROL] DIALOGUE-INTERRUPT interrupted %d skill tasks for dialogue_id=%s",
+                            interrupted, dialogue_id.c_str());
+
+  // 2. Push a cancellation notification so the Bridge's SSE stream can
+  //    terminate gracefully (instead of hanging until wait_for_response
+  //    times out).  The ResponsePoller picks this up and sends an
+  //    agent.response notification with final=true, which the Bridge
+  //    DaemonClient routes to _response_queues[dialogue_id].
+  {
+    MMAgentMsgQue::Message cancel_msg;
+    cancel_msg.message_id = "cancel-" + dialogue_id;
+    cancel_msg.content = "对话已被取消";
+    cancel_msg.metadata["message_type"] = "agent_response";
+    cancel_msg.metadata["dialogue_id"]  = dialogue_id;
+    cancel_msg.metadata["session_id"]   = session->get_session_id();
+    cancel_msg.metadata["final"]        = "true";
+    if(session_router_) {
+      session_router_->enqueue_response_message(cancel_msg);
+      Logger::instance().info_f(
+          "[CONTROL] DIALOGUE-INTERRUPT enqueued cancel notification for dialogue_id=%s",
+          dialogue_id.c_str());
+    }
+  }
+
+  // 3. Clean up DataBus keys for this dialogue (forces coordinator path
+  //    to finalize and trigger cleanup_dialogue_data, which releases the
+  //    serialization lock via release_dialogue_lock).
+  BuiltinDispatcher::cleanup_dialogue_data(*this, session->get_session_id(), dialogue_id);
+  cleanup_multi_responses(*this, session->get_session_id(), dialogue_id);
+
+  // 4. Belt-and-suspenders: explicitly release the lock in case
+  //    cleanup_dialogue_data's normal path doesn't fire (e.g. no
+  //    coordinator round was triggered yet).  Idempotent.
+  session->release_dialogue_lock(dialogue_id);
 }
 
 std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
@@ -1190,6 +1279,15 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
     task->set_parameter("request_id", request_id_it->second);
   }
 
+  // Pass streaming flag from message metadata to task parameters,
+  // so the node can set AF_STREAM_ENABLED via ExecutionRequest.stream.
+  if(const auto stream_it = message.metadata.find("stream");
+     stream_it != message.metadata.end() && stream_it->second == "true") {
+    task->set_parameter("stream", "true");
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set stream=true for task=%s",
+                              task_config.task_id.c_str());
+  }
+
   // Pass completed_skill_name from message metadata for coordinator tracking
   if(const auto skill_name_it = message.metadata.find("completed_skill_name");
      skill_name_it != message.metadata.end() && !skill_name_it->second.empty()) {
@@ -1262,6 +1360,24 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
 
       Logger::instance().info_f("[HANDLE_INTENT_REQUEST] Using dialogue_id=%s for message_id=%s",
                                dialogue_id.c_str(), message.message_id.c_str());
+
+      // Acquire session-level dialogue serialization lock.  This blocks
+      // until the previous dialogue in this session completes (its
+      // cleanup_dialogue_data releases the lock).  The guard is
+      // transferred to the session via hold_dialogue_lock() and released
+      // when cleanup_dialogue_data runs for this dialogue_id.  Returns
+      // nullptr if the session was cancelled (destroyed) while waiting.
+      auto dlock = session->acquire_dialogue_lock(dialogue_id);
+      if (!dlock) {
+        Logger::instance().info_f(
+            "[HANDLE_INTENT_REQUEST] session cancelled while waiting for lock, dialogue_id=%s",
+            dialogue_id.c_str());
+        return;
+      }
+      session->hold_dialogue_lock(dialogue_id, std::move(dlock));
+      Logger::instance().info_f(
+          "[HANDLE_INTENT_REQUEST] Acquired dialogue lock, dialogue_id=%s",
+          dialogue_id.c_str());
 
       // Store dialogue_id and user_prompt in sys namespace with dialogue_id prefix
       // This enables multi-dialogue parallel processing in the same session
@@ -1729,8 +1845,14 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     }
 
     // No pre-configured next_skills - check for response or forward to coordinator
+    // Use dialogue_id-scoped key to avoid cross-dialogue contamination (a stale
+    // "response" written by a previous dialogue must NOT be read as this
+    // dialogue's response).
+    std::string dispatcher_response_key = dialogue_id.empty()
+                                              ? "response"
+                                              : dialogue_id + "/response";
     DataVariant dispatcher_response_value;
-    if(get_data("response", dispatcher_response_value)) {
+    if(get_data(dispatcher_response_key, dispatcher_response_value)) {
       if(const auto* text = std::get_if<std::string>(&dispatcher_response_value); text && !text->empty()) {
         MMAgentMsgQue::Message response_message = message;
         response_message.content = *text;
@@ -1896,6 +2018,99 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     }
     auto result = process_next_skills_launch(session, task, dialogue_id, message, "COORDINATORDataExchange");
 
+    // Lambda: drain any pending stream chunks from response_push.
+    // Defined once, called from both found_next_skills and completed branches.
+    auto drain_lambda = [&](const std::string& label) {
+      if(!runtime_databus_ || !session_router_) return;
+      std::stringstream stream_ss;
+      stream_ss << "/session/" << session->get_session_id() << "/stream/" << dialogue_id << "/";
+      std::string stream_prefix = stream_ss.str();
+      auto stream_keys = runtime_databus_->list_keys_by_prefix(stream_prefix);
+      for(const auto& key : stream_keys) {
+        DataVariant stream_val;
+        if(!runtime_databus_->get(key, stream_val)) continue;
+        const auto* text = std::get_if<std::string>(&stream_val);
+        if(!text || text->empty()) continue;
+        // Parse the wrapper JSON to extract inner fields
+        auto extract_json_field = [](const std::string& json, const std::string& field) -> std::string {
+          std::string search = "\"" + field + "\":\"";
+          auto pos = json.find(search);
+          if(pos == std::string::npos) return "";
+          pos += search.size();
+          std::string result;
+          for(; pos < json.size(); ++pos) {
+            if(json[pos] == '\\' && pos + 1 < json.size()) {
+              char next = json[pos + 1];
+              switch(next) {
+                case 'n':  result += '\n'; break;
+                case 'r':  result += '\r'; break;
+                case 't':  result += '\t'; break;
+                case '\\': result += '\\'; break;
+                case '"':  result += '"';  break;
+                case '/':  result += '/';  break;
+                case 'u': {
+                  // \uXXXX — read 4 hex digits
+                  if(pos + 5 < json.size()) {
+                    std::string hex = json.substr(pos + 2, 4);
+                    char* end = nullptr;
+                    long cp = std::strtol(hex.c_str(), &end, 16);
+                    if(end == hex.c_str() + 4 && cp > 0) {
+                      if(cp <= 0x7F) {
+                        result += static_cast<char>(cp);
+                      } else if(cp <= 0x7FF) {
+                        result += static_cast<char>(0xC0 | (cp >> 6));
+                        result += static_cast<char>(0x80 | (cp & 0x3F));
+                      } else {
+                        result += static_cast<char>(0xE0 | (cp >> 12));
+                        result += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+                        result += static_cast<char>(0x80 | (cp & 0x3F));
+                      }
+                      pos += 4; // skip the 4 hex digits (plus the initial ++pos below)
+                    }
+                  }
+                  break;
+                }
+                default: result += next; break;
+              }
+              ++pos;
+            } else if(json[pos] == '"') {
+              break;
+            } else {
+              result += json[pos];
+            }
+          }
+          return result;
+        };
+        std::string inner_content = extract_json_field(*text, "content");
+        std::string inner_type = extract_json_field(*text, "type");
+        // Empty content policy:
+        //   llm_chunk with empty content → skip (no meaningful token)
+        //   progress with empty content   → forward (clear progress indicator)
+        if(inner_type == "llm_chunk" && inner_content.empty()) {
+          runtime_databus_->remove(key);
+          continue;
+        }
+        if(inner_content.empty()) continue;
+        // Extract optional skill progress fields
+        std::string inner_skill = extract_json_field(*text, "skill");
+        std::string inner_round = extract_json_field(*text, "round");
+        std::string inner_status = extract_json_field(*text, "status");
+        MMAgentMsgQue::Message stream_msg = message;
+        stream_msg.content = inner_content;
+        stream_msg.metadata["final"] = "false";
+        stream_msg.metadata["dialogue_id"] = dialogue_id;
+        if(!inner_type.empty())   stream_msg.metadata["type"] = inner_type;
+        if(!inner_skill.empty())  stream_msg.metadata["skill"] = inner_skill;
+        if(!inner_round.empty())  stream_msg.metadata["round"] = inner_round;
+        if(!inner_status.empty()) stream_msg.metadata["status"] = inner_status;
+        session_router_->enqueue_response_message(stream_msg);
+        runtime_databus_->remove(key);
+        Logger::instance().info_f(
+            "[COORDINATORDataExchange][%s] Drained stream chunk: key=%s, type=%s, content_len=%zu",
+            label.c_str(), key.c_str(), inner_type.c_str(), inner_content.size());
+      }
+    };
+
     if(result.found_next_skills) {
       // ── Progress push (non-final) ───────────────────────────────────
       // When the coordinator has dispatched all skills AND a "response" key
@@ -1912,6 +2127,8 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
             progress_msg.content = *text;
             // Non-final — bridge keeps polling, response_poller keeps in_flight
             progress_msg.metadata["final"] = "false";
+            // Unified envelope: mark type=progress so Bridge can style it
+            progress_msg.metadata["type"] = "progress";
             if(session_router_) {
               session_router_->enqueue_response_message(progress_msg);
               Logger::instance().info_f(
@@ -1922,6 +2139,9 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
           }
         }
       }
+
+      // Drain stream chunks on this round (found_next_skills path)
+      drain_lambda("found_next_skills");
 
       // If all skills are already launched AND no new skills were just launched
       // in THIS round, check for response. If we just launched new skills
@@ -1976,6 +2196,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
                                             dialogue_id, "", DialogueEventType::DESTROYED);
                 }
                 BuiltinDispatcher::cleanup_dialogue_data(*this, session->get_session_id(), dialogue_id);
+            session->release_dialogue_lock(dialogue_id);
                 cleanup_multi_responses(*this, session->get_session_id(), dialogue_id);
               }
             }
@@ -2004,6 +2225,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
                                         dialogue_id, "", DialogueEventType::DESTROYED);
             }
             BuiltinDispatcher::cleanup_dialogue_data(*this, session->get_session_id(), dialogue_id);
+            session->release_dialogue_lock(dialogue_id);
           }
           return;
         } else {
@@ -2018,6 +2240,11 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
 
     // No next_skills - coordinator is done, send response to client
     Logger::instance().info_f("[COORDINATORDataExchange] Coordinator completed without skill, sending response");
+
+    // Final drain: flush any remaining stream chunks before final response.
+    // This catches chunks pushed between the last found_next_skills round
+    // and the coordinator wrapping up.
+    drain_lambda("completed");
 
     // First check for multi-responses (streaming mode)
     auto multi_result = consume_multi_response(*this, session->get_session_id(), dialogue_id);
@@ -2054,6 +2281,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
             }
             // Clean up dialogue data
             BuiltinDispatcher::cleanup_dialogue_data(*this, session->get_session_id(), dialogue_id);
+            session->release_dialogue_lock(dialogue_id);
             cleanup_multi_responses(*this, session->get_session_id(), dialogue_id);
           }
         }
@@ -2097,6 +2325,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
                                     dialogue_id, "", DialogueEventType::DESTROYED);
         }
         BuiltinDispatcher::cleanup_dialogue_data(*this, session->get_session_id(), dialogue_id);
+            session->release_dialogue_lock(dialogue_id);
       }
     }
     return;
@@ -2788,7 +3017,26 @@ bool MMAgent::initialize_resources() {
 }
 
 void MMAgent::cleanup_resources() {
+  // Clear internal data_bus_ map
+  size_t map_count = data_bus_.size();
   data_bus_.clear();
+
+  // Clear runtime DataBus if available (cover all session data under /session/)
+  int bus_count = 0;
+  if(runtime_databus_) {
+    // Iterate known sessions and clear their prefix data
+    for(const auto& sid : get_all_session_ids()) {
+      std::string prefix = "/session/" + sid + "/";
+      bus_count += runtime_databus_->remove_by_prefix(prefix);
+    }
+    // Also clean up entries that may belong to already-destroyed sessions
+    // (belt-and-suspenders: /session/ prefix sweep)
+    bus_count += runtime_databus_->remove_by_prefix("/session/");
+  }
+
+  Logger::instance().info_f(
+      "[MMAgent] cleanup_resources: cleared %zu data_bus_ keys, %d runtime_databus_ keys for agent=%s",
+      map_count, bus_count, config_.id.c_str());
 }
 
 std::vector<std::string> MMAgent::get_all_session_ids() const {
@@ -3238,36 +3486,113 @@ bool MMAgent::has_task_event_callback() const {
 }
 
 int MMAgent::clear_session_data(const std::string& session_id) {
-  if(!runtime_databus_) {
-    Logger::instance().warn_f("[MMAgent] No runtime databus for session cleanup");
-    return 0;
+  int total_count = 0;
+
+  // 1. Clear runtime_databus_ data under /session/{session_id}/
+  if(runtime_databus_) {
+    std::string prefix = "/session/" + session_id + "/";
+    total_count += runtime_databus_->remove_by_prefix(prefix);
+  } else {
+    Logger::instance().warn_f("[MMAgent] No runtime databus for session cleanup: %s",
+                              session_id.c_str());
   }
 
-  std::string prefix = "/session/" + session_id + "/";
-  int count = runtime_databus_->remove_by_prefix(prefix);
+  // 2. Clear data_bus_ entries with matching session prefix
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::string session_prefix = "/session/" + session_id;
+    int cleared = 0;
+    auto it = data_bus_.begin();
+    while(it != data_bus_.end()) {
+      if(it->first.compare(0, session_prefix.size(), session_prefix) == 0) {
+        it = data_bus_.erase(it);
+        ++cleared;
+      } else {
+        ++it;
+      }
+    }
+    total_count += cleared;
+  }
 
-  Logger::instance().info_f("[MMAgent] Cleared %d keys for session_id=%s",
-                            count, session_id.c_str());
-  return count;
+  // 3. Emit SESSION_DESTROYED event so external subscribers (EventBroker / Bridge)
+  //    are notified.  Look up the session to fill user_id / client_id.
+  if(session_event_callback_) {
+    std::string user_id;
+    std::string client_id;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      auto sit = sessions_.find(session_id);
+      if(sit != sessions_.end() && sit->second) {
+        user_id   = sit->second->get_user_id();
+        client_id = sit->second->get_client_id();
+      }
+    }
+    session_event_callback_(session_id, user_id, client_id, SessionEventType::DESTROYED);
+    Logger::instance().info_f("[MMAgent] Emitted SESSION_DESTROYED for session=%s user=%s client=%s",
+                              session_id.c_str(), user_id.c_str(), client_id.c_str());
+  }
+
+  Logger::instance().info_f("[MMAgent] clear_session_data: session=%s total_keys=%d",
+                            session_id.c_str(), total_count);
+  return total_count;
 }
 
 int MMAgent::clear_dialogue_data(const std::string& session_id,
                                   const std::string& dialogue_id) {
-  if(!runtime_databus_) {
-    Logger::instance().warn_f("[MMAgent] No runtime databus for dialogue cleanup");
-    return 0;
-  }
-
   int total_count = 0;
 
-  // Clean all dialogue namespaces: sys, user, ctx, llm, tool
-  for(const auto& ns : DIALOGUE_NAMESPACES) {
-    std::string prefix = "/session/" + session_id + "/" + ns + "/" + dialogue_id + "/";
-    total_count += runtime_databus_->remove_by_prefix(prefix);
+  // 1. Clear runtime_databus_ dialogue namespace keys
+  if(runtime_databus_) {
+    // Clean all dialogue namespaces: sys, user, ctx, llm, tool
+    for(const auto& ns : DIALOGUE_NAMESPACES) {
+      std::string prefix = "/session/" + session_id + "/" + ns + "/" + dialogue_id + "/";
+      total_count += runtime_databus_->remove_by_prefix(prefix);
+    }
+    // Also clean stream chunks for this dialogue
+    std::string stream_prefix = "/session/" + session_id + "/stream/" + dialogue_id + "/";
+    total_count += runtime_databus_->remove_by_prefix(stream_prefix);
+  } else {
+    Logger::instance().warn_f("[MMAgent] No runtime databus for dialogue cleanup: session=%s dialogue=%s",
+                              session_id.c_str(), dialogue_id.c_str());
   }
 
-  Logger::instance().info_f("[MMAgent] Cleared %d keys for session_id=%s, dialogue_id=%s",
-                            total_count, session_id.c_str(), dialogue_id.c_str());
+  // 2. Clear data_bus_ entries for this dialogue's namespaces and stream
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for(const auto& ns : DIALOGUE_NAMESPACES) {
+      std::string prefix = "/session/" + session_id + "/" + ns + "/" + dialogue_id;
+      auto it = data_bus_.begin();
+      while(it != data_bus_.end()) {
+        if(it->first.compare(0, prefix.size(), prefix) == 0) {
+          it = data_bus_.erase(it);
+          ++total_count;
+        } else {
+          ++it;
+        }
+      }
+    }
+    // Stream prefix
+    std::string stream_prefix = "/session/" + session_id + "/stream/" + dialogue_id;
+    auto it = data_bus_.begin();
+    while(it != data_bus_.end()) {
+      if(it->first.compare(0, stream_prefix.size(), stream_prefix) == 0) {
+        it = data_bus_.erase(it);
+        ++total_count;
+      } else {
+        ++it;
+      }
+    }
+  }
+
+  // 3. Emit DIALOGUE_DESTROYED event
+  if(dialogue_event_callback_) {
+    dialogue_event_callback_(config_.id, session_id, dialogue_id, "", DialogueEventType::DESTROYED);
+    Logger::instance().info_f("[MMAgent] Emitted DIALOGUE_DESTROYED for session=%s dialogue=%s",
+                              session_id.c_str(), dialogue_id.c_str());
+  }
+
+  Logger::instance().info_f("[MMAgent] clear_dialogue_data: session=%s dialogue=%s total_keys=%d",
+                            session_id.c_str(), dialogue_id.c_str(), total_count);
   return total_count;
 }
 

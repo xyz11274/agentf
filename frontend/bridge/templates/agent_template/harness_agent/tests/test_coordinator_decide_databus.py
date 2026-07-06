@@ -30,7 +30,7 @@ _SAMPLE_LLM_FINAL = json.dumps({
     "choices": [{
         "message": {
             "role": "assistant",
-            "content": "任务完成，这是最终结果。",
+            "content": "这是最终穿搭方案。",
             "tool_calls": None,
         },
         "finish_reason": "stop",
@@ -49,7 +49,7 @@ _SAMPLE_LLM_DISPATCH = json.dumps({
                 "function": {
                     "name": "run_skills",
                     "arguments": json.dumps({
-                        "skills": [{"name": "my-skill", "prompt": "test prompt"}],
+                        "skills": [{"name": "outfit-stylist", "prompt": "test prompt"}],
                         "reason": "test",
                     }),
                 },
@@ -97,12 +97,12 @@ def test_collect_skill_results_not_called_when_env_var_has_result(monkeypatch):
     monkeypatch.setattr(MODULE, "call_llm", _make_fake_llm(_SAMPLE_LLM_FINAL))
 
     # Simulate skill completion with env var set
-    monkeypatch.setenv("AF_INPUT", "执行任务")
+    monkeypatch.setenv("AF_INPUT", "推荐登山穿搭")
     monkeypatch.setenv("AF_DIALOGUE_ID", "test-dialogue-p0")
     monkeypatch.setenv("AF_SESSION_ID", "test-session-p0")
-    monkeypatch.setenv("AF_COMPLETED_SKILL_NAME", "my-skill")
+    monkeypatch.setenv("AF_COMPLETED_SKILL_NAME", "outfit-stylist")
     monkeypatch.setenv("AF_SKILL_SUCCESS", "true")
-    monkeypatch.setenv("AF_SKILL_RESULT", json.dumps({"status": "completed", "data": "结果A"}))
+    monkeypatch.setenv("AF_SKILL_RESULT", json.dumps({"status": "completed", "data": "方案A"}))
     monkeypatch.setenv("AF_LLM_API_KEY", "test-key")
 
     # Act: run execute() — this calls build_skill_completion_message internally
@@ -133,10 +133,10 @@ def test_collect_skill_results_called_when_env_var_empty(monkeypatch):
     monkeypatch.setattr(MODULE, "collect_skill_results", tracking)
     monkeypatch.setattr(MODULE, "call_llm", _make_fake_llm(_SAMPLE_LLM_FINAL))
 
-    monkeypatch.setenv("AF_INPUT", "执行任务")
+    monkeypatch.setenv("AF_INPUT", "推荐登山穿搭")
     monkeypatch.setenv("AF_DIALOGUE_ID", "test-dialogue-p0b")
     monkeypatch.setenv("AF_SESSION_ID", "test-session-p0b")
-    monkeypatch.setenv("AF_COMPLETED_SKILL_NAME", "my-skill")
+    monkeypatch.setenv("AF_COMPLETED_SKILL_NAME", "outfit-stylist")
     monkeypatch.setenv("AF_SKILL_SUCCESS", "true")
     # Intentionally NOT setting AF_SKILL_RESULT
     monkeypatch.setenv("AF_LLM_API_KEY", "test-key")
@@ -204,9 +204,9 @@ def test_response_key_deleted_after_dispatch(monkeypatch):
 
     # Prevent handle_run_skills_call from doing real work
     monkeypatch.setattr(MODULE, "handle_run_skills_call",
-                        lambda *a, **kw: json.dumps({"status": "dispatched", "skills": ["my-skill"]}))
+                        lambda *a, **kw: json.dumps({"status": "dispatched", "skills": ["outfit-stylist"]}))
 
-    monkeypatch.setenv("AF_INPUT", "执行任务")
+    monkeypatch.setenv("AF_INPUT", "推荐登山穿搭")
     monkeypatch.setenv("AF_DIALOGUE_ID", "test-dialogue-p1")
     monkeypatch.setenv("AF_SESSION_ID", "test-session-p1")
     # First trigger (no completed_skill) — should enter dispatch path
