@@ -10,6 +10,7 @@ websockets>=12
 
 # Outbound HTTP client
 httpx>=0.27
+requests
 
 # Settings + serialization
 pydantic>=2.6

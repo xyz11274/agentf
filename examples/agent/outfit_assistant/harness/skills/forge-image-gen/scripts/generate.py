@@ -19,11 +19,15 @@ import base64
 import json
 import mimetypes
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
+
+# ⚠️ 忽略 SSL 证书验证（自签名/代理证书场景下使用）
+ssl._create_default_https_context = ssl._create_unverified_context
 
 DEFAULT_OPENAI_MODEL = "gpt-image-1"
 
