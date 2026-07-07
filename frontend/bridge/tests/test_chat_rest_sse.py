@@ -479,9 +479,9 @@ class TestSseStreamingEndpoint:
         assert len(events) == 3, f"expected 3 events, got {len(events)}: {events}"
         # Two content chunks, then [DONE]
         # The first chunk now includes _dialogue_id (used for trace filtering).
-        assert events[0]["choices"] == [{"delta": {"content": "Hello"}, "index": 0}]
+        assert events[0]["choices"] == [{"message": {"content": "Hello"}, "index": 0}]
         assert "_dialogue_id" in events[0]
-        assert events[1] == {"choices": [{"delta": {"content": " world"}, "index": 0}]}
+        assert events[1] == {"choices": [{"message": {"content": " world"}, "index": 0}]}
         assert events[2] == "[DONE]"
 
     def test_streaming_single_final_chunk(self, mock_daemon: AsyncMock) -> None:
@@ -506,7 +506,7 @@ class TestSseStreamingEndpoint:
         assert response.status_code == 200
         events = self._parse_sse(response.text)
         assert len(events) == 2
-        assert events[0]["choices"] == [{"delta": {"content": "Complete response"}, "index": 0}]
+        assert events[0]["choices"] == [{"message": {"content": "Complete response"}, "index": 0}]
         assert "_dialogue_id" in events[0]
         assert events[1] == "[DONE]"
 

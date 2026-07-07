@@ -21,7 +21,7 @@ def start(port: int = 17891, max_retries: int = 3) -> str:
     global _DAEMON_PID
 
     project_root = os.path.join(os.path.dirname(__file__), "..", "..", "..")
-    package = os.path.join(project_root, "examples", "agent", "outfit_assistant")
+    package = os.path.join(project_root, "examples", "agent", "outfit-assistant")
     venv = os.path.join(package, ".venv")
     log_path = f"/tmp/af_e2e_t{int(time.time())}.log"
 

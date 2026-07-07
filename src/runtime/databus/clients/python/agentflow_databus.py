@@ -620,7 +620,7 @@ class DataBusClient:
     def response_push(self, content: str, type: str = "progress",
                       dialogue_id: Optional[str] = None,
                       skill: str = "", round: str = "",
-                      status: str = "") -> bool:
+                      status: str = "", source: str = "") -> bool:
         """Push a streaming chunk to the Bridge via the daemon's response_push UDS handler.
 
         This bypasses the coordinator round-trip — the chunk is enqueued directly
@@ -634,6 +634,7 @@ class DataBusClient:
             skill: Skill name for cascading progress display.
             round: Round number for multi-round skill execution.
             status: Progress status — ``"running"``, ``"completed"``, or ``"error"``.
+            source: Message source — ``"coordinator"`` or ``"skill_executor"`` (守 §3.6 显式设置).
 
         Returns:
             True if the message was successfully enqueued.
@@ -652,6 +653,7 @@ class DataBusClient:
         if skill:  params["skill"] = skill
         if round:  params["round"] = round
         if status: params["status"] = status
+        if source: params["source"] = source
         result = self._call("response_push", params)
         return result.get("success", False)
 

@@ -108,6 +108,7 @@ function createSessionWithParams(clientId: string, userId: string) {
   currentClientId.value = clientId
   chatStore.currentUserId = userId
   chatStore.currentClientId = clientId
+  chatStore.clearMessages()
   connectChat()
 }
 

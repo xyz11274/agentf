@@ -1,0 +1,857 @@
+[
+    {
+        "category": "common",
+        "categoryId": "1",
+        "intents": [
+            {
+                "intent": "INTENT_INC_VOLUME",
+                "description": "音量调大",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "audioType",
+                        "type": "int",
+                        "description": "0：系统声音；1音乐声音(背景音)；2：教练声音（课程中教练的口播）；默认值为0",
+                        "required": "0"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_DEC_VOLUME",
+                "description": "音量调小",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "audioType",
+                        "type": "int",
+                        "description": "0：系统声音；1音乐声音(背景音)；2：教练声音（课程中教练的口播）；默认值为0",
+                        "required": "1"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_SET_VOLUME",
+                "description": "音量设置为具体的值",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "audioType",
+                        "type": "int",
+                        "description": "0：系统声音；1音乐声音(背景音)；2：教练声音（课程中教练的口播）；默认值为0",
+                        "required": "1"
+                    },
+                    {
+                        "name": "percent",
+                        "type": "int",
+                        "description": "设置音量的百分比的数字，比如50,60",
+                        "required": "1"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_VOLUME_MUTE",
+                "description": "静音",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_VOLUME_UNMUTE",
+                "description": "取消静音",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_PLAY_PAUSE",
+                "description": "暂停播放",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_PLAY_RESUME",
+                "description": "播放，暂停后的继续播放",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_SELECT_EPISODE",
+                "description": "选集,选择第几个，选择第几节",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "which",
+                        "type": "int",
+                        "description": "页面展示多个节目，打开对应具体的编号节目",
+                        "required": "1"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_CONTENT_ADD_FAVOR",
+                "description": "收藏当前的节目内容;收藏联系人",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "name",
+                        "type": "string",
+                        "description": "收藏内容名称；收藏联系人姓名或者手机号码",
+                        "required": "0"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_CONTENT_OPEN_FAVOR",
+                "description": "打开个人收藏",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_CONTENT_CANCEL_FAVOR",
+                "description": "取消收藏",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "name",
+                        "type": "string",
+                        "description": "收藏内容名称",
+                        "required": "0"
+                    },
+                    {
+                        "name": "which",
+                        "type": "int",
+                        "description": "收藏页面展示多个节目，取消收藏具体的节目编号",
+                        "required": "0"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_CONTENT_THUMBS_UP",
+                "description": "点赞",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_PLAY_FROM_BEGINING",
+                "description": "重新播放",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_VIEW_DETAILS",
+                "description": "查看联系人详细；查看详情",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "contactName",
+                        "type": "string",
+                        "description": "联系人名字",
+                        "required": "0"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_CONTENT_REPLACE",
+                "description": "更换页面展示的内容;换一批新的内容",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_EXIT_APP",
+                "description": "关闭或者退出当前的应用",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "appName",
+                        "type": "string",
+                        "description": "app名称",
+                        "required": "0"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_INTRODUCE_APP",
+                "description": "介绍APP",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "appName",
+                        "type": "string",
+                        "description": "应用名称",
+                        "required": "1"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_NOTIFICATION_TURNOFF",
+                "description": "关闭当前弹窗和提醒的通知",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_PLAY_CONTINUE",
+                "description": "回到之前未看完的内容继续播放，偏向于从历史记录中找回继续播放",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "type",
+                        "type": "string",
+                        "description": "影视类型，电视剧或者电影",
+                        "required": "0"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_OPEN_APP",
+                "description": "打开应用",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "appName",
+                        "type": "string",
+                        "description": "打开的app的名字",
+                        "required": "0"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_SET_FULLSCREEN",
+                "description": "全屏",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_SET_SMALLSCREEN",
+                "description": "小屏",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_SET_FLOAT_WINDOW",
+                "description": "悬浮窗",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_PLAY_SPEED",
+                "description": "倍速播放",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "speed",
+                        "type": "int",
+                        "description": "0：2倍速；1：4倍速；2：8倍速；3：0.5倍速；4:0.25倍速",
+                        "required": "1",
+                        "transformRule": {
+                            "name": "TO_KEY_VALUE",
+                            "rule": {
+                                "2倍速":"0",
+                                "4倍速":"1",
+                                "8倍速":"2",
+                                "二倍速":"0",
+                                "四倍速":"1",
+                                "八倍速":"2",
+                                "0.5倍速":"3",
+                                "0.25倍速":"4"
+                            }
+                        }
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_BULLET_SCREEN",
+                "description": "打开弹幕；关闭弹幕",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "mode",
+                        "type": "int",
+                        "description": "0：关闭弹幕；1：打开弹幕",
+                        "required": "1"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_PLAY_NEXT",
+                "description": "下一集，下一个",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_PLAY_PREV",
+                "description": "上一集，上一个",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_CONTENT_COMMENT",
+                "description": "评价X颗星",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "star",
+                        "type": "int",
+                        "description": "评价带几颗星",
+                        "required": "1",
+                        "transformRule": {
+                            "name": "STR_CLEAN_TO_INT",
+                            "rule": {
+                            }
+                        }
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_PLAY_FORWORD",
+                "description": "快进XX分钟/XX秒；跳过片头；跳过片尾",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "relativeTime",
+                        "type": "int",
+                        "description": "快进多少时间，单位秒",
+                        "required": "0",
+                        "transformRule": {
+                            "name": "STR_TO_TIME",
+                            "rule": {
+                                "toUnit": "s"
+                            }
+                        }
+                    },
+                    {
+                        "name": "absoluteTime",
+                        "type": "int",
+                        "description": "快进到多少时间，单位秒",
+                        "required": "0"
+                    },
+                    {
+                        "name": "type",
+                        "type": "int",
+                        "description": "0：跳过片头；跳过片尾",
+                        "required": "0"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_PLAY_BACKWORD",
+                "description": "快退XX分钟/XX秒",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "relativeTime",
+                        "type": "int",
+                        "description": "快退多少时间，单位秒",
+                        "required": "0"
+                    },
+                    {
+                        "name": "absoluteTime",
+                        "type": "int",
+                        "description": "快退到多少时间，单位秒",
+                        "required": "0"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_SET_VIDEO_QUALITY",
+                "description": "播放视频清晰度设置",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "qualityType",
+                        "type": "int",
+                        "description": "0：480P；1：720P；2：1080P；3：4K",
+                        "required": "1"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_FOCUS_MODE",
+                "description": "专注模式/沉浸模式操作",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "mode",
+                        "type": "int",
+                        "description": "0：专注模式；1：沉浸模式",
+                        "required": "1"
+                    },
+                    {
+                        "name": "status",
+                        "type": "int",
+                        "description": "0：打开；1：关闭",
+                        "required": "1"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_CONTENT_VOTE",
+                "description": "给这个节目投票，投票",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_OPEN_CAMERA",
+                "description": "打开摄像头",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_CLOSE_CAMERA",
+                "description": "关闭摄像头",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_SCREEN_SHARING",
+                "description": "屏幕共享",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_SCREEN_SWITCH",
+                "description": "切换画面",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_PLAY_FROM_SPECTIME",
+                "description": "从某个具体的时间开始播放",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "time",
+                        "type": "int",
+                        "description": "开始播放的起始时间，单位秒",
+                        "required": "1"
+                    }
+                ]
+            }
+        ]
+    },
+    {
+        "category": "avcall",
+        "categoryId": "2",
+        "intents": [
+            {
+                "intent": "INTENT_AVCALL_DIAL",
+                "description": "拨打电话",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "name",
+                        "type": "string",
+                        "description": "拨打联系人电话号码或名字",
+                        "required": "1"
+                    },
+                    {
+                        "name": "callWay",
+                        "type": "string",
+                        "description": "视频：facetime;语音：voice;视频:null",
+                        "required": "0"
+                    },
+                    {
+                        "name": "callCategory",
+                        "type": "string",
+                        "description": "固话号：landline;手机号：telephone",
+                        "required": "0"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_AVCALL_CALLBACK",
+                "description": "来电回拨",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_AVCALL_OPEN_DIALPLATE",
+                "description": "打开拨号盘",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_AVCALL_ANSWER",
+                "description": "接听/挂断电话",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "pickUp",
+                        "type": "int",
+                        "description": "0：接听，1：挂断或者拒接",
+                        "required": "1"
+                    },
+                    {
+                        "name": "pickWay",
+                        "type": "string",
+                        "description": "视频：facetime;语音：voice;小窗：window;默认为视频",
+                        "required": "0"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_AVCALL_AUTOANSWER",
+                "description": "打开/关闭自动回复；自动回复内容设置",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "time",
+                        "type": "string",
+                        "description": "小时数或者天数",
+                        "required": "0"
+                    },
+                    {
+                        "name": "replyContent",
+                        "type": "string",
+                        "description": "自定义回复内容",
+                        "required": "0"
+                    },
+                    {
+                        "name": "status",
+                        "type": "int",
+                        "description": "关闭自动回复：0；打开自动回复：1",
+                        "required": "1"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_AVCALL_ADD_CONTACT",
+                "description": "新建联系人",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "name",
+                        "type": "string",
+                        "description": "联系人名字",
+                        "required": "1"
+                    },
+                    {
+                        "name": "number",
+                        "type": "string",
+                        "description": "号码:138XXX/025XXX",
+                        "required": "1"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_AVCALL_EDIT_CONTACT",
+                "description": "编辑联系人",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "name",
+                        "type": "string",
+                        "description": "联系人名字",
+                        "required": "1"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_AVCALL_DEL_CONTACT",
+                "description": "删除联系人",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "name",
+                        "type": "string",
+                        "description": "联系人名字",
+                        "required": "1"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_AVCALL_CONTACT_LIST",
+                "description": "添加/移除/查看黑名单；添加/移除/查看白名单",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "type",
+                        "type": "int",
+                        "description": "0:黑名单，1：白名单",
+                        "required": "1"
+                    },
+                    {
+                        "name": "action",
+                        "type": "int",
+                        "description": "0:移除，1：添加；2：查看",
+                        "required": "1"
+                    },
+                    {
+                        "name": "name",
+                        "type": "string",
+                        "description": "联系人名字，或者是手机号码",
+                        "required": "1"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_AVCALL_OPEN_DND",
+                "description": "打开全局勿扰模式/陌生人勿扰模式",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "timePeriod",
+                        "type": "string",
+                        "description": "上午：6-12点；下午：12-18点；晚上：18点-6点",
+                        "required": "0"
+                    },
+                    {
+                        "name": "mode",
+                        "type": "int",
+                        "description": "0:全局勿扰模式，1：陌生人勿扰模式",
+                        "required": "0"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_AVCALL_CLOSE_DND",
+                "description": "关闭全局勿扰模式/陌生人勿扰模式",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "mode",
+                        "type": "int",
+                        "description": "0:全局勿扰模式，1：陌生人勿扰模式",
+                        "required": "0"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_AVCALL_CALLRECORDS",
+                "description": "查看/删除通话记录；查看拦截电话；查看未接来电",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "mode",
+                        "type": "int",
+                        "description": "0:查看通话记录；1：删除最近通话记录；2：查看拦截电话；3：查看未接来电",
+                        "required": "0"
+                    }
+                ]
+            }
+        ]
+    },
+    {
+        "category": "fitness",
+        "categoryId": "3",
+        "intents": [
+            {
+                "intent": "INTENT_FITNESS_SEARCH",
+                "description": "健身课程搜索/推荐",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "courseType",
+                        "type": "string",
+                        "description": "健身课程类型，如瑜伽、HIIT、有氧舞、燃脂搏击等，也包括力量、阿斯汤伽、拉丁舞等瑜伽子类",
+                        "required": "0"
+                    },
+                    {
+                        "name": "bodyPart",
+                        "type": "string",
+                        "description": "健身部位，取值范围是全身、腰腹、腿部、臀部、背部、肩部、胸部、手臂、颈部等",
+                        "required": "0"
+                    },
+                    {
+                        "name": "coach",
+                        "type": "string",
+                        "description": "教练，只保留教练的名字，不包含老师、教练这类称谓",
+                        "required": "0"
+                    },
+                    {
+                        "name": "duration",
+                        "type": "string",
+                        "description": "健身课程的时间长度，取值范围5、7、10、15、20、30、45、60分钟，一定要带上单位",
+                        "required": "0"
+                    },
+                    {
+                        "name": "difficulty",
+                        "type": "string",
+                        "description": "健身难度，取值范围是高难度、低难度、动作简单、进阶、小白、爆汗、轻松等",
+                        "required": "0"
+                    },
+                    {
+                        "name": "music",
+                        "type": "string",
+                        "description": "音乐，取值范围是国语、欧美、港台、乡村音乐、周杰伦等等",
+                        "required": "0"
+                    },
+                    {
+                        "name": "equipment",
+                        "type": "string",
+                        "description": "健身设备，取值范围是沙袋、跳绳、毛巾等",
+                        "required": "0"
+                    },
+                    {
+                        "name": "scene",
+                        "type": "string",
+                        "description": "健身场景，取值范围是跑步、平衡能力、短跑、马拉松等等",
+                        "required": "0"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_FITNESS_CREATE_PLAN",
+                "description": "创建/制定健身计划；进入创建健身计划的设置页面；创建某段时间健身计划；",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_FITNESS_CANCEL_PLAN",
+                "description": "取消健身计划；删除健身计划",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_FITNESS_OPEN_COURSE",
+                "description": "根据健身的具体课程名称，打开具体的健身课程。",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "courseName",
+                        "type": "string",
+                        "description": "课程名称",
+                        "required": "1"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_FITNESS_VIEW_PLAN",
+                "description": "进入健身计划的查看界面;查看健身计划的详细信息",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_FITNESS_ENTER_SCHEDULE",
+                "description": "根据日程提醒事件，进入提醒的日程及课程",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "enterStatus",
+                        "type": "int",
+                        "description": "是否进入当前日程，0：进入健身日程；1：取消进入健身日程",
+                        "required": "1"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_FITNESS_SHOW_ACCOUNT",
+                "description": "选择子账号",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_FITNESS_COURSE_HISTORY",
+                "description": "查询最近一段时间的上课记录",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "days",
+                        "type": "int",
+                        "description": "历史几天，单位天。比如最近3天，值为3，最近一周，值为7",
+                        "required": "0"
+                    },
+                    {
+                        "name": "courseType",
+                        "type": "string",
+                        "description": "健身课程类型，如瑜伽、HIIT、有氧舞、燃脂搏击等，也包括力量、阿斯汤伽、拉丁舞等瑜伽子类",
+                        "required": "0"
+                    },
+                    {
+                        "name": "bodyPart",
+                        "type": "string",
+                        "description": "健身部位，取值范围是全身、腰腹、腿部、臀部、背部、肩部、胸部、手臂、颈部等",
+                        "required": "0"
+                    },
+                    {
+                        "name": "coach",
+                        "type": "string",
+                        "description": "教练，只保留教练的名字，不包含老师、教练这类称谓",
+                        "required": "0"
+                    }
+                ]
+            },
+            {
+                "intent": "INTENT_FITNESS_OPEN_LAST_COURSE",
+                "description": "打开上次的健身课程",
+                "noArgs": true
+            },
+            {
+                "intent": "INTENT_FITNESS_HISTORY_TOTAL_TIME",
+                "description": "查询历史一段时间的锻炼累计时间",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "days",
+                        "type": "int",
+                        "description": "历史几天，单位天。比如最近3天，值为3，最近一周，值为7",
+                        "required": "0"
+                    }
+                ]
+            }
+        ]
+    },
+    {
+        "category": "movie",
+        "categoryId": "4",
+        "intents": [
+            {
+                "intent": "INTENT_VIDEO_SEARCH_PLAY",
+                "description": "影片资源的搜索/推荐",
+                "noArgs": false,
+                "params": [
+                    {
+                        "name": "name",
+                        "type": "string",
+                        "description": "影视名称、直播频道名称",
+                        "required": "0"
+                    },
+                    {
+                        "name": "director",
+                        "type": "string",
+                        "description": "导演名称",
+                        "required": "0"
+                    },
+                    {
+                        "name": "actorTop",
+                        "type": "string",
+                        "description": "主演员名称",
+                        "required": "0"
+                    },
+                    {
+                        "name": "actor",
+                        "type": "string",
+                        "description": "演员名称",
+                        "required": "0"
+                    },
+                    {
+                        "name": "type",
+                        "type": "string",
+                        "description": "流派信息（古装、奇幻等）",
+                        "required": "0"
+                    },
+                    {
+                        "name": "category",
+                        "type": "string",
+                        "description": "电视剧或电影，如果提到xx片或影片等描述，值电影；如果提到xx剧集或xx剧，值为电视剧",
+                        "required": "0"
+                    },
+                    {
+                        "name": "region",
+                        "type": "string",
+                        "description": "地区：中国、内地、中国香港、美国等",
+                        "required": "0"
+                    },
+                    {
+                        "name": "language",
+                        "type": "string",
+                        "description": "语言：普通话、粤语、英语等",
+                        "required": "0"
+                    },
+                    {
+                        "name": " BeginDate",
+                        "type": "string",
+                        "description": "影片上映搜索起始时间，格式规范为YYYYMMDD，如果没有明确日期，默认为YYYY0101",
+                        "required": "0"
+                    },
+                    {
+                        "name": " EndDate",
+                        "type": "string",
+                        "description": "影片上映搜索截止时间，格式规范为YYYYMMDD，如果没有明确日期，默认为YYYY1231",
+                        "required": "0"
+                    },
+                    {
+                        "name": "moviePlot",
+                        "type": "string",
+                        "description": "需要搜索的电影剧情",
+                        "required": "0"
+                    },
+                    {
+                        "name": "movieDialogue",
+                        "type": "string",
+                        "description": "需要搜索的电影台词",
+                        "required": "0"
+                    },
+                    {
+                        "name": "networkSearch",
+                        "type": "int",
+                        "description": "如果提到最新、最近、最火等模糊词语或者提到的关键词不在前置参数中，需要进行联网搜索，0表示不需要，1表示需要",
+                        "required": "0"
+                    }
+                ]
+            }
+        ]
+    }
+]

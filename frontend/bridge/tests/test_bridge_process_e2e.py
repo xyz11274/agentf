@@ -24,7 +24,7 @@ import websockets
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DAEMON_BINARY = PROJECT_ROOT / "build" / "agentflowd"
-OUTFIT_AGENT = PROJECT_ROOT / "examples" / "agent" / "outfit_assistant"
+OUTFIT_AGENT = PROJECT_ROOT / "examples" / "agent" / "outfit-assistant"
 CONFIRMATION = "E2E_BRIDGE_CONFIRMATION_7F3A"
 LARGE_REQUEST_MARKER = "E2E_LARGE_RESPONSE_REQUEST"
 LARGE_RESPONSE = "LARGE_BEGIN|" + ("0123456789abcdef" * 12_000) + "|LARGE_END"
@@ -33,7 +33,7 @@ TRUNCATED_TOOL_MARKER = "E2E_TRUNCATED_TOOL_RECOVERY"
 INVALID_TOOL_MARKER = "E2E_INVALID_TOOL_EXHAUSTION"
 ARTIFACT_FAILURE_MARKER = "E2E_ARTIFACT_THEN_LLM_FAILURE"
 TRUNCATED_TOOL_TARGET = Path("/tmp/agentflow_e2e_truncated_tool_must_not_run.txt")
-ARTIFACT_RELATIVE_PATH = Path("outfit_assistant/outputs/e2e-artifact/look.png")
+ARTIFACT_RELATIVE_PATH = Path("outfit-assistant/outputs/e2e-artifact/look.png")
 ARTIFACT_FILE = PROJECT_ROOT / "examples" / "agent" / ARTIFACT_RELATIVE_PATH
 ARTIFACT_BYTES = (
     b"\x89PNG\r\n\x1a\n"

@@ -51,7 +51,7 @@ agentflowd → Node
 
 ## 4. SysAgent adapter 归属与候选集成方式
 
-候选实现已从 `examples/agent/outfit_assistant/adapter` 迁至：
+候选实现已从 `examples/agent/outfit-assistant/adapter` 迁至：
 
 ```text
 frontend/bridge/aisf_adapter/sysagent/

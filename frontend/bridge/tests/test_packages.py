@@ -1096,7 +1096,7 @@ def fake_template_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
             "id": "decide",
             "type": "task",
             "command": "./nodes/coordinator_decide.py",
-            "working_dir": "examples/agent/outfit_assistant",
+            "working_dir": "examples/agent/outfit-assistant",
         }],
         "edges": [],
     }))

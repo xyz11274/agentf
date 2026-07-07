@@ -229,8 +229,17 @@ export function useChatWebSocket(options: UseChatWebSocketOptions = {}): UseChat
     const type = frame.type
     if (type === 'chunk') {
       const content = typeof frame.content === 'string' ? frame.content : ''
-      const isProgress = frame.progress === true
-      const chunkType = typeof frame.chunk_type === 'string' ? frame.chunk_type : ''
+      // 兼容旧字段名 + 新 `_` 前缀字段（守设计文档 §3.2 统一字段命名）
+      const isProgress = frame.progress === true || frame._progress === true
+      const chunkType = typeof frame.chunk_type === 'string' ? frame.chunk_type
+        : (typeof frame._chunk_type === 'string' ? frame._chunk_type : '')
+      // skill/round/status 元数据（`_` 前缀优先，旧字段降级）
+      const metaSkill = typeof frame._skill === 'string' ? frame._skill
+        : (typeof frame.progress_skill === 'string' ? frame.progress_skill : '')
+      const metaRound = typeof frame._round === 'string' ? frame._round
+        : (typeof frame.progress_round === 'string' ? frame.progress_round : '')
+      const metaStatus = typeof frame._status === 'string' ? frame._status
+        : (typeof frame.progress_status === 'string' ? frame.progress_status : '')
 
       if (isProgress || chunkType === 'progress') {
         // Progress status message — display separately from model output.
@@ -253,10 +262,9 @@ export function useChatWebSocket(options: UseChatWebSocketOptions = {}): UseChat
           }
           // WS chunk 携带 skill/round 元数据时按分组存储；缺元数据时
           // 用空串占位但保留 token（addLlmChunk 严格拒空，需本地兜底）。
-          const skill = typeof frame.progress_skill === 'string' ? frame.progress_skill : ''
-          const round = typeof frame.progress_round === 'string' ? frame.progress_round : ''
-          if (skill && round) {
-            chatStore.addLlmChunk(skill, round, token)
+          // 优先读 `_` 前缀字段（metaSkill/metaRound），兼容旧字段名降级。
+          if (metaSkill && metaRound) {
+            chatStore.addLlmChunk(metaSkill, metaRound, token)
           } else if (chatStore.streamingMessageId) {
             // 元数据缺失的兜底：追加到主 streaming bubble，避免数据丢失（I-1）。
             chatStore.appendChunk(chatStore.streamingMessageId, token)

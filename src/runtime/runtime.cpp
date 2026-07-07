@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "agent/session.h"
+#include "agent/session_router.h"
 #include "agent/task.h"
 #include "agent/context.h"
 #include "runtime/async_call.h"
@@ -659,46 +660,60 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
     if(state_it != workflow_states_.end()) {
       MMDataBus& databus = get_databus(agent_id);
 
-      // Create UDS server with async callback + response_push support
-      // The response_push callback stores streaming chunks in DataBus under
-      // /session/{session_id}/stream/{dialogue_id}/chunk_{seq} so the
-      // coordinator's COORDINATORDataExchange can drain them on each round.
-      static std::atomic<uint64_t> workflow_stream_seq{0};
+      // Create UDS server with async callback + response_push support.
+      // response_push bypasses the coordinator round-trip: streaming chunks
+      // are enqueued directly to session_router's response queue, so the
+      // ResponsePoller picks them up in near real-time (≤50ms).
+      // Design ref: streaming-response.md §3.1 (core idea) + §3.7 S-2
+      //   (response_push does NOT enter DataBus, does NOT trigger coordinator).
       UDSServer::ResponsePushCallback push_cb =
-          [&databus](const std::string& sid,
-                     const std::string& did,
-                     const std::string& content,
-                     const std::string& type,
-                     const std::string& skill,
-                     const std::string& round_str,
-                     const std::string& status) -> bool {
-        uint64_t seq = workflow_stream_seq.fetch_add(1);
-        std::string payload = "{\"content\":\"";
-        for(char c : content) {
-          switch(c) {
-            case '\\': payload += "\\\\"; break;
-            case '"':  payload += "\\\""; break;
-            case '\n': payload += "\\n";  break;
-            case '\r': payload += "\\r";  break;
-            case '\t': payload += "\\t";  break;
-            default:
-              if(static_cast<unsigned char>(c) < 0x20) {
-                char buf[8];
-                snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
-                payload += buf;
-              } else {
-                payload += c;
-              }
-              break;
-          }
+          [this, agent_id](const std::string& sid,
+                            const std::string& did,
+                            const std::string& content,
+                            const std::string& type,
+                            const std::string& skill,
+                            const std::string& round_str,
+                            const std::string& status) -> bool {
+        // Empty-content policy: skip llm_chunk with empty content (no token)
+        if(type == "llm_chunk" && content.empty()) return true;
+
+        auto agent = get_agent(agent_id);
+        if(!agent) {
+          Logger::instance().warn_f("[RESPONSE_PUSH] Agent not found: %s",
+                                    agent_id.c_str());
+          return false;
         }
-        payload += "\",\"type\":\"" + type + "\",\"seq\":" + std::to_string(seq);
-        if(!skill.empty())    payload += ",\"skill\":\"" + skill + "\"";
-        if(!round_str.empty()) payload += ",\"round\":\"" + round_str + "\"";
-        if(!status.empty())   payload += ",\"status\":\"" + status + "\"";
-        payload += "}";
-        return databus.put("/session/" + sid + "/stream/" + did + "/chunk_" + std::to_string(seq),
-                           DataVariant(payload));
+        auto router = agent->get_session_router();
+        if(!router) {
+          Logger::instance().warn_f(
+              "[RESPONSE_PUSH] SessionRouter not available for agent: %s",
+              agent_id.c_str());
+          return false;
+        }
+
+        framework::MMAgentMsgQue::Message msg;
+        msg.content = content;
+        msg.metadata["final"] = "false";
+        msg.metadata["dialogue_id"] = did;
+        msg.metadata["session_id"] = sid;
+        if(!type.empty())      msg.metadata["type"] = type;
+        if(!skill.empty())     msg.metadata["skill"] = skill;
+        if(!round_str.empty()) msg.metadata["round"] = round_str;
+        if(!status.empty())    msg.metadata["status"] = status;
+
+        bool ok = router->enqueue_response_message(msg);
+        if(ok) {
+          Logger::instance().info_f(
+              "[RESPONSE_PUSH] Enqueued to session_router: type=%s, "
+              "content_len=%zu, dialogue=%s",
+              type.c_str(), content.size(), did.c_str());
+        } else {
+          Logger::instance().warn_f(
+              "[RESPONSE_PUSH] enqueue_response_message failed: type=%s, "
+              "dialogue=%s",
+              type.c_str(), did.c_str());
+        }
+        return ok;
       };
       auto uds_server = std::make_shared<UDSServer>(&databus, uds_socket_path, async_cb, push_cb);
       if(uds_server->start()) {

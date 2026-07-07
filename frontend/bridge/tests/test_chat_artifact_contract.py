@@ -11,7 +11,7 @@ from routes.artifact_extractor import extract_artifact_infos
 
 RELATIVE = (
     "结果：![look](/api/artifacts/outfit-assistant/files/"
-    "outfit_assistant/outputs/task-1/look.png)"
+    "outfit-assistant/outputs/task-1/look.png)"
 )
 
 
@@ -144,6 +144,38 @@ def test_publicized_urls_are_deduplicated() -> None:
     )
     artifacts = extract_artifact_infos(content)
     assert len(artifacts) == 1
+
+
+def test_custom_label_artifact_is_extracted() -> None:
+    """LLM 用自定义 label 贴的 artifact markdown 也应被提取。
+
+    边界是 url 指向 ``/api/artifacts/`` 路径，不是 label 文本（``生成图片 N``）。
+    LLM 自由 label 如 ``![居家穿搭效果图](url)`` + artifact API url = 产物；
+    用户随手 ``![表情](https://emoji.example.com/x.png)`` = 非产物（跳过）。
+    """
+    content = (
+        "方案已生成\n\n"
+        "![居家穿搭效果图](http://localhost:8199/health/api/artifacts/"
+        "outfit-assistant/files/outfit-assistant/outputs/look.png)"
+    )
+    artifacts = extract_artifact_infos(content)
+    assert len(artifacts) == 1, f"自定义 label artifact 应提取 1 个, got {len(artifacts)}"
+    assert artifacts[0].type == "image"
+    assert artifacts[0].name == "look.png"
+
+
+def test_non_artifact_url_is_not_extracted() -> None:
+    """指向非 artifact API 的 markdown 图片链接不应被提取为产物。
+
+    守 I-1：不误匹配用户正文里的随手图片引用（emoji、外部图床等），
+    只有 url 指向 ``/api/artifacts/`` 路径才是 agent 产物。
+    """
+    content = (
+        "看看这个表情 ![哈哈](https://emoji.example.com/smile.png)\n\n"
+        "外部图床 ![photo](https://images.example.com/photo.jpg)"
+    )
+    artifacts = extract_artifact_infos(content)
+    assert artifacts == [], f"非 artifact API url 不应被提取, got {artifacts}"
 
 
 def test_chatchunk_serializes_artifacts() -> None:

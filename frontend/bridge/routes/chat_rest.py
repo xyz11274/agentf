@@ -236,16 +236,21 @@ def _extract_session_id(execute_result: Any) -> str:
 
 
 def _extract_final(payload: Any) -> bool:
+    """从通知 payload 中提取 final 标记。
+
+    守设计文档 §3.2：``metadata.final`` 是唯一真相源（string "true"/"false"）。
+    daemon ``build_response_notification`` 同时注入顶层 ``final``（bool）作历史遗留，
+    但 Bridge 应只信任 ``metadata.final``。详见 streaming-response.md §3.2 历史遗留说明。
+    """
+    meta_val = _extract_metadata_value(payload, "final", "")
+    if meta_val == "true":
+        return True
+    if meta_val == "false":
+        return False
+    # 降级：如果 metadata.final 不存在，读顶层 final（兼容老 daemon）
     if isinstance(payload, dict):
         return bool(payload.get("final", False))
     return False
-
-
-def _extract_content(payload: Any) -> str:
-    if isinstance(payload, dict):
-        content = payload.get("content") or payload.get("text") or ""
-        return str(content)
-    return ""
 
 
 def _extract_metadata_value(payload: Any, key: str, default: str = "") -> str:
@@ -460,7 +465,7 @@ async def _chat_turn_events(
             "artifacts": [a.model_dump() for a in artifacts] if artifacts else None,
             "task_id": task_id if chunk_count == 1 else None,
         }
-        for meta_key in ("_skill", "_round", "_status"):
+        for meta_key in ("_source", "_skill", "_round", "_status"):
             meta_val = _extract_metadata_value(notification, meta_key.lstrip("_"))
             if meta_val:
                 event[meta_key] = meta_val
@@ -681,11 +686,11 @@ async def chat_rest(
                     # task_id is attached to the first chunk only.
                     if event.get("task_id") is not None:
                         task_id = event["task_id"]
-                    # 守不变量 I-1（final=true 的 chunk 只出现一次 = 一个对话一个最终响应）：
+                    # 守不变量 I-1（final=true 的 chunk = 一个对话一个最终响应）：
                     # 同步路径只保留 final chunk 作为 full_content，非 final chunk 全丢弃。
                     # 这样持久化到 SessionProvider 的 agent_response、返回给前端的 content、
                     # 前端刷新加载历史的渲染 三者完全一致——都是 coordinator 的唯一最终回答。
-                    # 非 final chunk（progress / skill_executor 思辨 / llm_token）的过程展示
+                    # 非 final chunk（progress / skill 思辨 / llm_token）的过程展示
                     # 仅在 SSE 流式路径透传给前端，被 final 一到即覆盖。
                     if event.get("final"):
                         accumulated_content = [
@@ -872,9 +877,11 @@ async def chat_rest(
                             raw_chunk = {}
                         payload: dict[str, Any] = raw_chunk if raw_chunk else {}
                     else:
-                        # ── text / progress: 包装 OpenAI-compatible 信封供前端 SSE parser 解析 ──
+                        # ── text / progress: 包装 OpenAI 同步响应信封 ──
+                        # 守 §3.2 核心原则 #2：text/progress 用 choices[0].message.content
+                        # （同步响应格式，完整内容），区别于 llm_chunk 的 delta.content。
                         choice: dict[str, Any] = {
-                            "delta": {"content": event["content"]},
+                            "message": {"content": event["content"]},
                             "index": 0,
                         }
                         payload: dict[str, Any] = {"choices": [choice]}
@@ -891,20 +898,26 @@ async def chat_rest(
                     # chunk 类型（progress / llm_chunk / text）— 前端据此分流
                     if chunk_type:
                         payload["_chunk_type"] = chunk_type
-                    # 技能执行元数据（来自 response_push 的 skill/round/status）
-                    for meta_key in ("_skill", "_round", "_status"):
+                    # 技能执行元数据（来自 response_push 的 source/skill/round/status）
+                    for meta_key in ("_source", "_skill", "_round", "_status"):
                         meta_val = event.get(meta_key)
                         if meta_val:
                             payload[meta_key] = meta_val
                     yield _sse_data_json(payload)
-                    # llm_chunk 的 content 是 raw OpenAI JSON 整串，累积持久化前必须剥壳
+                    # 累积到 sse_chunks 供首 chunk 检测（L887）及数据库持久化。
+                    # 守不变量 I-1：仅 final chunk 的内容入库，非 final chunk 仅作 SSE 流式展示。
+                    # 与同步路径（Fix 2, L690-695）逻辑一致。
                     sse_chunks.append(
                         _extract_token_for_persist(event["content"], event.get("chunk_type"))
                     )
                     if event["final"]:
+                        # 仅 final chunk 的内容入库（非 final 的 progress / llm_token 仅 SSE 展示）
+                        final_content = [_extract_token_for_persist(
+                            event["content"], event.get("chunk_type"),
+                        )]
                         yield _SSE_DONE
-                        _save_conversation(sse_chunks)
-                        await _persist_to_provider("".join(sse_chunks))
+                        _save_conversation(final_content)
+                        await _persist_to_provider("".join(final_content))
                         return
                 elif event["type"] == "error":
                     yield _sse_data_json({

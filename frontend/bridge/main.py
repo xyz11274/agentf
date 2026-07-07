@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import logging.handlers
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI
@@ -52,6 +54,22 @@ logging.basicConfig(
     level=settings.log_level,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+
+# FileHandler 兜底：手动启动 uvicorn 时 stdout 未重定向，日志会丢失到 /private/tmp/。
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_LOG_DIR = _PROJECT_ROOT / "logs"
+_LOG_DIR.mkdir(exist_ok=True)
+_LOG_FILE = _LOG_DIR / "bridge.log"
+
+_root_logger = logging.getLogger()
+if not any(isinstance(h, logging.FileHandler) for h in _root_logger.handlers):
+    _fh = logging.handlers.RotatingFileHandler(
+        str(_LOG_FILE), maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8",
+    )
+    _fh.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+    _root_logger.addHandler(_fh)
+    logger.info("FileHandler attached: %s", _LOG_FILE)
 
 # Suppress noisy websocket keepalive DEBUG logs (module-level, runs early).
 # Kept here as a baseline; lifespan hook re-suppresses after uvicorn overrides.

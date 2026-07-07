@@ -17,11 +17,11 @@ E2E concurrency guard test — 防护 coordinator 提前发最终响应的并发
        （不能在 skill 完成前发"没查到/暂无数据"类响应）
 
 前置条件：
-  1. agentflowd 运行 outfit_assistant:
-       set -a; . examples/agent/outfit_assistant/.env; set +a
-       PYTHON_PATH="$(pwd)/examples/agent/outfit_assistant/.venv" \
+  1. agentflowd 运行 outfit-assistant:
+       set -a; . examples/agent/outfit-assistant/.env; set +a
+       PYTHON_PATH="$(pwd)/examples/agent/outfit-assistant/.venv" \
          ./build/agentflowd --listen 0.0.0.0:7891 \
-         --package "$(pwd)/examples/agent/outfit_assistant"
+         --package "$(pwd)/examples/agent/outfit-assistant"
   2. agentflow-bridge 运行（默认 8199 端口）
 
 用法：

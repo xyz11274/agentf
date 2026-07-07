@@ -530,7 +530,17 @@ async def _run_turn(
                           progress_skill=_extract_metadata_value(notification, "skill", ""),
                           progress_round=_extract_metadata_value(notification, "round", ""),
                           progress_status=_extract_metadata_value(notification, "status", ""))
-        await _safe_send(websocket, chunk.model_dump())
+        # 注入 `_` 前缀字段 — 与 SSE 路径一致，守设计文档 §3.2 统一字段命名
+        chunk_dict = chunk.model_dump()
+        chunk_dict["_chunk_type"] = chunk.chunk_type
+        chunk_dict["_final"] = chunk.final
+        chunk_dict["_progress"] = chunk.progress
+        # _source 来自 metadata.source（coordinator/skill_executor），非技能名
+        chunk_dict["_source"] = _extract_metadata_value(notification, "source", "")
+        chunk_dict["_skill"] = chunk.progress_skill
+        chunk_dict["_round"] = chunk.progress_round
+        chunk_dict["_status"] = chunk.progress_status
+        await _safe_send(websocket, chunk_dict)
 
         if is_final and not is_progress:
             # Defensive guard: a progress notification should never end a turn,
@@ -721,19 +731,30 @@ def _content_to_text(content: str | list[ContentPart]) -> str:
 
 
 def _extract_final(payload: Any) -> bool:
+    """从通知 payload 中提取 final 标记。
+
+    守设计文档 §3.2：``metadata.final`` 是唯一真相源（string "true"/"false"）。
+    优先读 metadata.final，缺失时降级到顶层 ``final``（兼容 daemon 历史注入）。
+    """
     if isinstance(payload, dict):
+        # 尝试 metadata.final（设计文档 §3.2 唯一真相源）
+        meta = payload.get("metadata")
+        if isinstance(meta, dict):
+            meta_final = meta.get("final")
+            if meta_final == "true":
+                return True
+            if meta_final == "false":
+                return False
+        # 降级：顶层 final（daemon 历史注入的兼容 fallback）
         val = payload.get("final", False)
-        # metadata["final"] may arrive as Python bool (True/False) from
-        # Python clients, or as the string "true"/"false" from the C++
-        # daemon (std::map<std::string, std::string> serialized to JSON).
         if isinstance(val, bool):
             return val
         if isinstance(val, str):
             return val == "true"
-        # Unexpected type — log a warning and treat as not-final (safe default).
-        # bool(val) would silently accept any non-zero / non-empty value, masking
-        # upstream serialization bugs.
-        logger.warning("_extract_final: unexpected type for 'final': %s", type(val).__name__)
+        logger.warning(
+            "_extract_final: unexpected type for top-level 'final': %s",
+            type(val).__name__,
+        )
         return False
     return False
 

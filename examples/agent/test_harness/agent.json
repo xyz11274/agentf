@@ -1,0 +1,50 @@
+{
+  "name": "TestHarnessAgent",
+  "version": "1.0.0",
+  "description": "最小测试 Harness Agent",
+  "session_pool_size": 1,
+  "max_workflows": 5,
+  "max_concurrent_workflows": 3,
+  "data_bus_capacity_mb": 5,
+  "tasks": [
+    {
+      "id": 0,
+      "type": "dispatcher",
+      "description": "Routes to dummy_pre_skill hook",
+      "next_skills": ["dummy_pre_skill"],
+      "max_concurrent_skills": 3,
+      "workflow_pool_size": 1
+    },
+    {
+      "id": 1,
+      "type": "coordinator",
+      "description": "LLM decision loop",
+      "workflow_file": "coordinator_workflow.json",
+      "workflow_pool_size": 1
+    },
+    {
+      "id": 2,
+      "type": "skill",
+      "description": "Pre-processing passthrough hook",
+      "workflow_file": "dummy_pre_skill_workflow.json",
+      "skill": {
+        "name": "dummy_pre_skill",
+        "config_dir": "harness/skills/dummy_pre_skill",
+        "instance_pool_size": 1
+      },
+      "workflow_pool_size": 1
+    },
+    {
+      "id": 3,
+      "type": "skill",
+      "description": "Generic skill runner",
+      "workflow_file": "skill_workflow.json",
+      "skill": {
+        "name": "skill-runner",
+        "config_dir": "harness/skills/echo",
+        "instance_pool_size": 1
+      },
+      "workflow_pool_size": 1
+    }
+  ]
+}

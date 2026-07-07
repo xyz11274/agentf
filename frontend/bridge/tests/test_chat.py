@@ -129,6 +129,12 @@ class TestRunTurnHappyPath:
         assert types == ["chunk", "chunk", "chunk", "done"]
         assert frames[2]["content"] == "!"
         assert frames[2]["final"] is True
+        # 设计文档 §3.2 统一字段命名：`_` 前缀字段必须与旧字段同值
+        assert frames[2].get("_final") is True, f"missing _final in {frames[2]}"
+        assert frames[2].get("_chunk_type") == frames[2].get("chunk_type", "")
+        assert frames[2].get("_skill") == frames[2].get("progress_skill", "")
+        assert frames[2].get("_round") == frames[2].get("progress_round", "")
+        assert frames[2].get("_status") == frames[2].get("progress_status", "")
         # session_id is carried on the final chunk, not on ChatDone
         assert frames[3]["type"] == "done"
 
@@ -434,6 +440,17 @@ class TestHelpers:
         assert _extract_final({"final": False}) is False
         assert _extract_final({}) is False
         assert _extract_final(None) is False
+
+    def test_extract_final_from_metadata(self) -> None:
+        """设计文档 §3.2：``metadata.final`` 是唯一真相源，优于顶层 ``final``。"""
+        assert _extract_final({"metadata": {"final": "true"}}) is True
+        assert _extract_final({"metadata": {"final": "false"}}) is False
+        # metadata.final 优先于顶层 final
+        assert _extract_final({"final": True, "metadata": {"final": "false"}}) is False
+        assert _extract_final({"final": False, "metadata": {"final": "true"}}) is True
+        # metadata.final 缺失时降级读顶层 final
+        assert _extract_final({"final": True}) is True
+        assert _extract_final({"final": False}) is False
 
     def test_extract_content(self) -> None:
         assert _extract_content({"content": "hello"}) == "hello"

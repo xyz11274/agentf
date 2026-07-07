@@ -532,8 +532,8 @@ HTML Bundle 内部继续使用相对引用，因此只需把 HTML 入口 URL 公
 示例：
 
 ```text
-GET /api/artifacts/outfit-assistant/files/outfit_assistant/outputs/task-123/report.html
-GET /api/artifacts/outfit-assistant/files/outfit_assistant/outputs/task-123/assets/look.png
+GET /api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-123/report.html
+GET /api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-123/assets/look.png
 ```
 
 Bridge 保留目录层级。若 `report.html` 使用 `assets/look.png`，浏览器会请求同级目录下的 `assets/look.png`，无需重写 HTML 内容。
@@ -561,7 +561,7 @@ WS 与 REST 不新增结构化 `artifacts` 字段，Artifact URL 直接包含在
 ```json
 {
   "type": "chunk",
-  "content": "搭配结果：![look](https://agent.example.com/api/artifacts/outfit-assistant/files/outfit_assistant/outputs/task-123/look.png)",
+  "content": "搭配结果：![look](https://agent.example.com/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-123/look.png)",
   "final": true
 }
 ```

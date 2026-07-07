@@ -182,7 +182,7 @@ def test_package_artifact_url_preserves_directory_hierarchy():
 
     assert url == (
         "/api/artifacts/outfit-assistant/files/"
-        "outfit_assistant/output/report/index.html"
+        "outfit-assistant/output/report/index.html"
     )
 
 

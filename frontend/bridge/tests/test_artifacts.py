@@ -42,13 +42,13 @@ def test_image_is_fetchable_with_real_mime(client: TestClient, artifact_root: Pa
     失败意味着:
     - 聊天中虽然返回图片链接，浏览器仍可能无法显示或得到损坏文件。
     """
-    image = artifact_root / "outfit_assistant" / "outputs" / "look.png"
+    image = artifact_root / "outfit-assistant" / "outputs" / "look.png"
     image.parent.mkdir(parents=True)
     image.write_bytes(JPEG_BYTES)
 
     response = client.get(
         "/api/artifacts/outfit-assistant/files/"
-        "outfit_assistant/outputs/look.png"
+        "outfit-assistant/outputs/look.png"
     )
 
     assert response.status_code == 200
@@ -70,7 +70,7 @@ def test_html_relative_resource_tree_is_fetchable(
     失败意味着:
     - 外部服务能打开 HTML，但报告中的图片或样式缺失。
     """
-    report_dir = artifact_root / "outfit_assistant" / "outputs" / "task-1"
+    report_dir = artifact_root / "outfit-assistant" / "outputs" / "task-1"
     assets = report_dir / "assets"
     assets.mkdir(parents=True)
     (report_dir / "report.html").write_text(
@@ -79,7 +79,7 @@ def test_html_relative_resource_tree_is_fetchable(
     (assets / "look.png").write_bytes(JPEG_BYTES)
     (assets / "theme.css").write_text("img { max-width: 100%; }", encoding="utf-8")
 
-    base = "/api/artifacts/outfit-assistant/files/outfit_assistant/outputs/task-1"
+    base = "/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-1"
     html = client.get(f"{base}/report.html")
     image = client.get(f"{base}/assets/look.png")
     css = client.get(f"{base}/assets/theme.css")
@@ -99,7 +99,7 @@ def test_html_relative_resource_tree_is_fetchable(
     [
         "../secret.png",
         "%2e%2e/secret.png",
-        "outfit_assistant/../../secret.png",
+        "outfit-assistant/../../secret.png",
     ],
 )
 def test_artifact_path_escape_is_rejected(
@@ -145,7 +145,7 @@ def test_artifact_symlink_escape_is_rejected(
     """
     outside = artifact_root.parent / "outside.png"
     outside.write_bytes(JPEG_BYTES)
-    link = artifact_root / "outfit_assistant" / "outputs" / "outside.png"
+    link = artifact_root / "outfit-assistant" / "outputs" / "outside.png"
     link.parent.mkdir(parents=True)
     try:
         link.symlink_to(outside)
@@ -154,7 +154,7 @@ def test_artifact_symlink_escape_is_rejected(
 
     response = client.get(
         "/api/artifacts/outfit-assistant/files/"
-        "outfit_assistant/outputs/outside.png"
+        "outfit-assistant/outputs/outside.png"
     )
 
     assert response.status_code == 403
@@ -175,12 +175,12 @@ def test_unsupported_artifact_type_is_rejected(
     失败意味着:
     - Artifact API 退化为 Agent Package 任意文件下载接口。
     """
-    source = artifact_root / "outfit_assistant" / "agent.py"
+    source = artifact_root / "outfit-assistant" / "agent.py"
     source.parent.mkdir(parents=True)
     source.write_text("API_KEY = 'secret'", encoding="utf-8")
 
     response = client.get(
-        "/api/artifacts/outfit-assistant/files/outfit_assistant/agent.py"
+        "/api/artifacts/outfit-assistant/files/outfit-assistant/agent.py"
     )
 
     assert response.status_code == 415
@@ -193,13 +193,13 @@ def test_unsupported_artifact_type_is_rejected(
 
 def test_pptx_is_served(client: TestClient, artifact_root: Path) -> None:
     """Bridge 应能服务 .pptx 文件下载。"""
-    pptx = artifact_root / "outfit_assistant" / "outputs" / "presentation.pptx"
+    pptx = artifact_root / "outfit-assistant" / "outputs" / "presentation.pptx"
     pptx.parent.mkdir(parents=True)
     pptx.write_bytes(b"PK\x03\x04\x00" + b"fake-pptx-content")
 
     response = client.get(
         "/api/artifacts/outfit-assistant/files/"
-        "outfit_assistant/outputs/presentation.pptx"
+        "outfit-assistant/outputs/presentation.pptx"
     )
 
     assert response.status_code == 200
@@ -208,13 +208,13 @@ def test_pptx_is_served(client: TestClient, artifact_root: Path) -> None:
 
 def test_docx_is_served(client: TestClient, artifact_root: Path) -> None:
     """Bridge 应能服务 .docx 文件下载。"""
-    docx = artifact_root / "outfit_assistant" / "outputs" / "report.docx"
+    docx = artifact_root / "outfit-assistant" / "outputs" / "report.docx"
     docx.parent.mkdir(parents=True)
     docx.write_bytes(b"PK\x03\x04\x00" + b"fake-docx-content")
 
     response = client.get(
         "/api/artifacts/outfit-assistant/files/"
-        "outfit_assistant/outputs/report.docx"
+        "outfit-assistant/outputs/report.docx"
     )
 
     assert response.status_code == 200
@@ -223,13 +223,13 @@ def test_docx_is_served(client: TestClient, artifact_root: Path) -> None:
 
 def test_pdf_is_served(client: TestClient, artifact_root: Path) -> None:
     """Bridge 应能服务 .pdf 文件下载。"""
-    pdf = artifact_root / "outfit_assistant" / "outputs" / "document.pdf"
+    pdf = artifact_root / "outfit-assistant" / "outputs" / "document.pdf"
     pdf.parent.mkdir(parents=True)
     pdf.write_bytes(b"%PDF-1.4" + b"fake-pdf-content")
 
     response = client.get(
         "/api/artifacts/outfit-assistant/files/"
-        "outfit_assistant/outputs/document.pdf"
+        "outfit-assistant/outputs/document.pdf"
     )
 
     assert response.status_code == 200
@@ -238,13 +238,13 @@ def test_pdf_is_served(client: TestClient, artifact_root: Path) -> None:
 
 def test_xlsx_is_served(client: TestClient, artifact_root: Path) -> None:
     """Bridge 应能服务 .xlsx 文件下载。"""
-    xlsx = artifact_root / "outfit_assistant" / "outputs" / "data.xlsx"
+    xlsx = artifact_root / "outfit-assistant" / "outputs" / "data.xlsx"
     xlsx.parent.mkdir(parents=True)
     xlsx.write_bytes(b"PK\x03\x04\x00" + b"fake-xlsx-content")
 
     response = client.get(
         "/api/artifacts/outfit-assistant/files/"
-        "outfit_assistant/outputs/data.xlsx"
+        "outfit-assistant/outputs/data.xlsx"
     )
 
     assert response.status_code == 200
@@ -253,13 +253,13 @@ def test_xlsx_is_served(client: TestClient, artifact_root: Path) -> None:
 
 def test_pptx_in_package_root_is_served(client: TestClient, artifact_root: Path) -> None:
     """包根目录内有效路径的 .pptx 应被正常服务。"""
-    secret = artifact_root / "outfit_assistant" / "secret.pptx"
+    secret = artifact_root / "outfit-assistant" / "secret.pptx"
     secret.parent.mkdir(parents=True, exist_ok=True)
     secret.write_bytes(b"valid-pptx-content")
 
     response = client.get(
         "/api/artifacts/outfit-assistant/files/"
-        "outfit_assistant/secret.pptx"
+        "outfit-assistant/secret.pptx"
     )
 
     assert response.status_code == 200

@@ -270,49 +270,59 @@ def _inject_agent_env_defaults(pkg_name: str) -> None:
     if not candidates:
         return
 
-    # Merge: only write values not set / empty / placeholder in current .env
+    # Merge: Bridge defaults go first, user values go after so they naturally win.
+    # dotenv.load_dotenv() reads top-to-bottom — last occurrence of the same key wins.
     _PLACEHOLDER_PREFIXES = ("${", "sk-your-", "your-")
-    lines: list[str] = []
-    written_keys: set[str] = set()
-    separator_done = False
+    top_lines: list[str] = []
+    bottom_lines: list[str] = []
+    written_defaults: set[str] = set()
 
-    #   a) Preserve existing non-empty, non-placeholder lines
+    #   a) Collect bridge-default keys that the user already has a real value for.
+    #      These will NOT be written in the defaults section.
+    user_has_real: set[str] = set()
     if env_file.is_file():
         for line in env_file.read_text(encoding="utf-8").splitlines():
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
-                lines.append(line)
                 continue
             if "=" in stripped:
                 k = stripped.split("=", 1)[0].strip()
                 if k in candidates:
                     v = current_env.get(k, "")
                     if v and not v.startswith(_PLACEHOLDER_PREFIXES):
-                        # User has a real value — keep it, don't override
-                        written_keys.add(k)
-                        lines.append(line)
-                        continue
-            # Regular line, or key not in candidates — preserve
-            lines.append(line)
+                        user_has_real.add(k)
 
-    #   b) Append defaults for keys not yet set
+    #   b) Write bridge-injected defaults at the TOP (for keys user hasn't set)
+    defaults_to_write: list[str] = []
     for env_key, val in candidates.items():
-        if env_key in written_keys:
-            continue
+        if env_key in user_has_real:
+            continue  # user has a real value — skip default, user line below wins
         if not val:
-            continue  # skip empty defaults
-        if not separator_done:
-            lines.append("")
-            lines.append("# ── Bridge-injected defaults ──")
-            separator_done = True
-        lines.append(f"{env_key}={val}")
-        written_keys.add(env_key)
+            continue
+        defaults_to_write.append(f"{env_key}={val}")
+        written_defaults.add(env_key)
 
-    if separator_done:
+    if defaults_to_write:
+        top_lines.append("# ── Bridge-injected defaults (user values below override) ──")
+        top_lines.extend(defaults_to_write)
+        top_lines.append("")
+
+    #   c) Preserve all original user lines (always wins over bridge defaults)
+    if env_file.is_file():
+        bottom_lines = list(env_file.read_text(encoding="utf-8").splitlines())
+
+    # Strip trailing empty lines from bottom for clean join
+    while bottom_lines and bottom_lines[-1] == "":
+        bottom_lines.pop()
+
+    lines = top_lines + bottom_lines
+    total_written = len(written_defaults) + len(user_has_real)
+
+    if defaults_to_write:
         env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
         logger.info(
             "agent_env_inject.inject pkg=%s keys=%d",
-            pkg_name, len(written_keys),
+            pkg_name, total_written,
         )
 
 

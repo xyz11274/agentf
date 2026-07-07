@@ -47,7 +47,7 @@ aisf_adapter:
 # ── Artifact 公网地址 ─────────────────────────────────────────────
 # 空字符串 = 使用相对路径（仅内网可用）
 # 线上部署时填公网可访问的 URL，如 https://agent.example.com
-artifact_public_base_url: "https://115.120.249.45:40092/health"
+artifact_public_base_url: "http://localhost:8199/health"
 
 # ── 文件路径 ──────────────────────────────────────────────────────
 # 相对路径基于项目根目录解析
@@ -56,7 +56,7 @@ skill_hub_dir: "resource/skill_hub"
 agent_template_dir: "templates"
 
 # ── 日志与超时 ────────────────────────────────────────────────────
-log_level: "DEBUG"
+log_level: "INFO"
 request_timeout_seconds: 5.0     # daemon RPC 超时
 upload_max_body_size_mb: 100     # 上传 body 上限（同步 main.py 的 max_request_body_size）
 
@@ -70,7 +70,7 @@ session_sync_interval: 30.0      # agentflow→Bridge session 状态同步轮询
 
 # ── 多模态内容（Phase A） ─────────────────────────────────────────
 # base64 内联图 ≥ 此 KB 阈值时，bridge 落盘并替换为 file_url
-content_image_inline_threshold_kb: 5120
+content_image_inline_threshold_kb: 256
 uploads_dir: "/tmp/agentflow/uploads"  # 大图落盘目录
 chat_turn_timeout_seconds: 900.0  # 聊天单轮总超时（秒，可用 CHAT_TURN_TIMEOUT_SECONDS 覆盖）
 daemon_status_refresh_interval: 10.0
@@ -86,14 +86,14 @@ cors_allowed_origins:
 agent_defaults:
   # ── LLM 主模型 ──
   llm:
-    api_key: "${AF_LLM_API_KEY:-}"
-    base_url: "${AF_LLM_BASE_URL:-}"
-    model: "${AF_LLM_MODEL:-gpt-4o}"
+    api_key: "${AF_LLM_API_KEY:-sk-dca40208f5714152a6cf0de59cc5f1d0}"
+    base_url: "${AF_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
+    model: "${AF_LLM_MODEL:-deepseek-v4-flash}"
 
   # ── LLM 降级模型（主模型不可用时自动尝试） ──
   llm_fallback:
     api_key: ""
-    base_url: "https://api.minimax.com/v1"
+    base_url: "https://api.minimax.io/v1"
     model: "MiniMax-M3"
 
   # ── Coordinator 循环 ──
@@ -120,7 +120,7 @@ agent_defaults:
 
   # ── VL 多模态模型（图片理解） ──
   vision:
-    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model: "qwen-vl-max"
     api_key: ""
 

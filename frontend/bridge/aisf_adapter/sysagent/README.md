@@ -83,11 +83,11 @@ agentflowd → outfit-assistant workflow
 
 ```bash
 cd /path/to/aisf_agentflow
-set -a; . examples/agent/outfit_assistant/.env; set +a
-PYTHON_PATH="$(pwd)/examples/agent/outfit_assistant/.venv" \
+set -a; . examples/agent/outfit-assistant/.env; set +a
+PYTHON_PATH="$(pwd)/examples/agent/outfit-assistant/.venv" \
   ./build/agentflowd \
   --listen 0.0.0.0:17891 \
-  --package "$(pwd)/examples/agent/outfit_assistant"
+  --package "$(pwd)/examples/agent/outfit-assistant"
 ```
 
 ### 2. 历史独立启动方式（已停用）

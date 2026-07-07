@@ -1,0 +1,27 @@
+[
+  {
+    "ruleName": "算力主机场景规划",
+    "ruleType": "1",
+    "nextNode": "ParallelStartNode",
+    "conditions": [
+      {
+        "conditionName": "条件名称",
+        "conditionKey": "Sender",
+        "conditionValue": "STB_S30",
+        "conditionType": "1"
+      },
+      {
+        "conditionName": "条件名称",
+        "conditionKey": "DeviceCategory",
+        "conditionValue": "3",
+        "conditionType": "1"
+      },
+      {
+        "conditionName": "条件名称",
+        "conditionKey": "APPName",
+        "conditionValue": "STB_S30",
+        "conditionType": "1"
+      }
+    ]
+  }
+]

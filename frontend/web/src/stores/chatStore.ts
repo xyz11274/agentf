@@ -52,6 +52,13 @@ export const useChatStore = defineStore('chat', () => {
    */
   const llmChunks = ref<Record<string, string>>({})
 
+  /** Detail mode: 'coordinator' = hide skill execution details, 'all' = show everything */
+  const detailMode = ref<'coordinator' | 'all'>('coordinator')
+
+  function toggleDetailMode(): void {
+    detailMode.value = detailMode.value === 'coordinator' ? 'all' : 'coordinator'
+  }
+
   function connect(agentId: string, userId: string, clientId: string): void {
     if (currentAgentId.value !== agentId) {
       messages.value = []
@@ -120,11 +127,7 @@ export const useChatStore = defineStore('chat', () => {
    * Key = "{skill}:{round}" so chunks from different nodes/calls are kept separate.
    */
   function addLlmChunk(skill: string, round: string, token: string): void {
-    if (!skill || !round) {
-      console.warn('[chatStore] addLlmChunk dropped chunk: skill=%j round=%j token_len=%d', skill, round, token.length)
-      return
-    }
-    const key = `${skill}:${round}`
+    const key = `${skill || 'coordinator'}:${round || '0'}`
     llmChunks.value[key] = (llmChunks.value[key] || '') + token
   }
 
@@ -136,6 +139,8 @@ export const useChatStore = defineStore('chat', () => {
   function endAssistantTurn(): void {
     isStreaming.value = false
     progressMessage.value = null
+    llmChunks.value = {}
+    skillStatus.value = {}
     // Symmetric with stop(): drop an empty assistant placeholder so the
     // timeline doesn't show a stray empty bubble when the daemon returned
     // no content. Non-empty turns are preserved.
@@ -419,6 +424,8 @@ export const useChatStore = defineStore('chat', () => {
     llmTraceDetailCache,
     isFetchingTraces,
     llmChunks,
+    detailMode,
+    toggleDetailMode,
     historyLoaded,
     connect,
     disconnect,

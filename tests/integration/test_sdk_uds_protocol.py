@@ -329,6 +329,36 @@ def test_python_sdk(server: MockUDSServer, sdk_path: str):
         for k in ["AF_SESSION_ID", "AF_DIALOGUE_ID", "AF_SELF_TASK_ID", "AF_NODE_ID"]:
             os.environ.pop(k, None)
 
+        # Test response_push without source
+        server.clear()
+        os.environ["AF_SESSION_ID"] = session_id
+        os.environ["AF_DIALOGUE_ID"] = "dialogue-response-push"
+        client.response_push("test content", type="progress")
+        req = server.wait_for_request("response_push")
+        if req and validate_jsonrpc(req) and validate_required_params(req, ["session_id", "dialogue_id", "content", "type", "final"]):
+            log_pass("response_push: sends valid JSON-RPC request (no source)")
+        else:
+            log_fail("response_push: missing required params", req)
+
+        os.environ.pop("AF_DIALOGUE_ID", None)
+        os.environ.pop("AF_SESSION_ID", None)
+
+        # Test response_push with source
+        server.clear()
+        os.environ["AF_SESSION_ID"] = session_id
+        os.environ["AF_DIALOGUE_ID"] = "dialogue-response-push"
+        client.response_push("test content", type="llm_chunk", source="coordinator")
+        req = server.wait_for_request("response_push")
+        if req and validate_jsonrpc(req) and req.params.get("source") == "coordinator":
+            log_pass("response_push: source=coordinator forwarded in params")
+        else:
+            log_fail("response_push: source=coordinator not found in params", req)
+
+        os.environ.pop("AF_DIALOGUE_ID", None)
+        os.environ.pop("AF_SESSION_ID", None)
+
+        # Test response_push with skill/round/status/source
+
         # Test different namespaces
         for ns in ["sys", "ctx", "llm", "tool", "user"]:
             server.clear()

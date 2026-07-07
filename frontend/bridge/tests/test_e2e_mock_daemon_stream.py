@@ -155,6 +155,39 @@ def _parse_sse(text: str) -> list[dict[str, Any] | str]:
 # ---------------------------------------------------------------------------
 
 
+class TestExtractFinal:
+    """_extract_final 单元测试 —— 守设计文档 §3.2 ``metadata.final`` 是唯一真相源。"""
+
+    # 延迟导入，避免模块级 import 破坏 fixture 作用域
+    def _extract_final(self, payload: dict) -> bool:
+        from routes.chat_rest import _extract_final
+        return _extract_final(payload)
+
+    def test_metadata_final_true(self) -> None:
+        """metadata.final="true" → True（§3.2 唯一真相源）"""
+        assert self._extract_final({"metadata": {"final": "true"}}) is True
+
+    def test_metadata_final_false(self) -> None:
+        """metadata.final="false" → False"""
+        assert self._extract_final({"metadata": {"final": "false"}}) is False
+
+    def test_metadata_final_missing_fallback_top_level(self) -> None:
+        """metadata.final 缺失时降级读顶层 final=True → True（兼容老 daemon）"""
+        assert self._extract_final({"final": True}) is True
+
+    def test_metadata_final_missing_fallback_top_level_false(self) -> None:
+        """metadata.final 缺失时降级读顶层 final=False → False"""
+        assert self._extract_final({"final": False}) is False
+
+    def test_metadata_final_missing_no_fallback(self) -> None:
+        """metadata.final 和顶层 final 都不存在 → False"""
+        assert self._extract_final({"content": "hello"}) is False
+
+    def test_metadata_final_empty_string(self) -> None:
+        """metadata.final="" → 降级读顶层 → False"""
+        assert self._extract_final({"metadata": {"final": ""}}) is False
+
+
 class TestE2eStreamParamPropagation:
 
     def test_stream_true_when_stream_query_param(
@@ -194,8 +227,8 @@ class TestE2eStreamParamPropagation:
         assert events[0]["choices"][0]["delta"]["content"] == "Hello ", (
             f"llm_chunk must pass through raw OpenAI JSON: {events[0]}"
         )
-        # text: bridge 包装 OpenAI 信封
-        assert events[1]["choices"][0]["delta"]["content"] == "world!"
+        # text: bridge 包装 OpenAI 信封（§3.2 核心原则 #2：text 用 message.content）
+        assert events[1]["choices"][0]["message"]["content"] == "world!"
         assert events[2] == "[DONE]"
 
     def test_stream_false_when_no_query_param(
@@ -243,8 +276,10 @@ class TestE2eStreamParamPropagation:
 
         events = _parse_sse(resp.text)
         assert len(events) == 5, f"got {len(events)} events"
-        contents = [e["choices"][0]["delta"]["content"] for e in events[:-1]]
-        assert contents == ["A", "B", "C", "ABC"]
+        # llm_chunk (events 0-2) 使用 delta.content；text (event 3) 使用 message.content
+        for i in range(3):
+            assert events[i]["choices"][0]["delta"]["content"] == chr(ord("A") + i)
+        assert events[3]["choices"][0]["message"]["content"] == "ABC"
         assert events[-1] == "[DONE]"
 
     def test_stream_false_explicit(
@@ -283,7 +318,7 @@ class TestE2eStreamParamPropagation:
         assert resp.status_code == 200
         events = _parse_sse(resp.text)
         assert len(events) == 2
-        assert events[0]["choices"][0]["delta"]["content"] == "Final"
+        assert events[0]["choices"][0]["message"]["content"] == "Final"
         assert events[1] == "[DONE]"
 
     def test_dialogue_id_on_first_sse_chunk(
@@ -305,33 +340,108 @@ class TestE2eStreamParamPropagation:
         assert isinstance(events[0]["_dialogue_id"], str)
         assert len(events[0]["_dialogue_id"]) > 0
 
-    def test_sync_path_keeps_last_final_only(
+    def test_progress_chunk_sse_format(
         self, mock_daemon: MockDaemonClient, bridge_client: TestClient,
     ) -> None:
-        """同步路径不变量 I-1：多个 final chunk 时，只保留最后一个作为最终回答。
+        """progress chunk 的 SSE 帧格式验证 —— 守 §3.2.1 线格式。
 
-        守护设计约束：dialog 的稳定态 = 1 个用户问题 + 1 个最终回答。即便 daemon
-        协议错位连续推了多个 final chunk（陈旧 response key 污染场景），bridge
-        同步路径也必须用最后一个 final 覆盖前面的，content/artifacts/持久化 三者
-        一致——与前端刷新加载历史的渲染完全相同。
+        progress chunk 应有 ``_chunk_type=progress``、``_source``、``_skill``、
+        ``_round`` 字段；content 使用 ``choices[0].message.content`` 结构
+        （同步响应格式，完整内容，直接渲染）。
         """
         mock_daemon.set_responses([
-            {"content": "STALE_假final", "final": True, "metadata": {"type": "text"}},
-            {"content": "中间progress", "final": False, "metadata": {"type": "progress"}},
-            {"content": "真正最终回答", "final": True, "metadata": {"type": "text"}},
+            {"content": "coordinator 决策中…", "final": False,
+             "metadata": {"type": "progress", "source": "coordinator"}},
+            {"content": "weather_query 执行中", "final": False,
+             "metadata": {"type": "progress", "source": "skill_executor",
+                          "skill": "weather_query", "round": "1"}},
+            {"content": "最终回复", "final": True,
+             "metadata": {"type": "text", "source": "coordinator"}},
         ])
 
         resp = bridge_client.post(
-            "/api/chat/mock-agent",
-            json={"user_id": "u1", "client_id": "c1", "content": "hi"},
+            "/api/chat/mock-agent?stream=true",
+            json={"user_id": "u3", "client_id": "c3", "content": "hi"},
         )
         assert resp.status_code == 200
-        body = resp.json()
-        assert body["success"] is True
-        # 只有最后一个 final chunk 的内容作为最终回答
-        assert body["data"]["content"] == "真正最终回答", (
-            f"sync path must keep LAST final only, got: {body['data']['content']!r}"
+        events = _parse_sse(resp.text)
+        assert len(events) == 4, f"expect 3 data + [DONE], got {len(events)}"
+
+        # progress chunk 1: coordinator 决策中
+        p1 = events[0]
+        assert p1.get("_chunk_type") == "progress", f"expect progress, got {p1.get('_chunk_type')}"
+        assert p1.get("_source") == "coordinator"
+        assert p1["choices"][0]["message"]["content"] == "coordinator 决策中…"
+
+        # progress chunk 2: skill_executor 执行中
+        p2 = events[1]
+        assert p2.get("_chunk_type") == "progress"
+        assert p2.get("_source") == "skill_executor"
+        assert p2.get("_skill") == "weather_query"
+        assert p2.get("_round") == "1"
+        assert p2["choices"][0]["message"]["content"] == "weather_query 执行中"
+
+        # text: 最终回复
+        assert events[2]["choices"][0]["message"]["content"] == "最终回复"
+        assert events[3] == "[DONE]"
+
+    def test_multi_type_message_sequence(
+        self, mock_daemon: MockDaemonClient, bridge_client: TestClient,
+    ) -> None:
+        """多类型消息完整序列 —— 按 §3.3 消息序列 progress → llm_chunk → text。
+
+        验证 Bridge 逐条 SSE data: 行的 _chunk_type、content 结构和最终 [DONE]。
+        """
+        mock_daemon.set_responses([
+            # coordinator 1st round: progress
+            {"content": "coordinator 决策中…", "final": False,
+             "metadata": {"type": "progress", "source": "coordinator", "skill": ""}},
+            # skill_executor round 0: progress
+            {"content": "查询天气…", "final": False,
+             "metadata": {"type": "progress", "source": "skill_executor",
+                          "skill": "weather_query", "round": "0"}},
+            # coordinator_decide: llm_chunk (delta.content)
+            {"content": '{"choices":[{"delta":{"content":"北京"},"index":0}]}',
+             "final": False, "metadata": {"type": "llm_chunk", "source": "coordinator"}},
+            # coordinator_decide: llm_chunk
+            {"content": '{"choices":[{"delta":{"content":"25度"},"index":0}]}',
+             "final": False, "metadata": {"type": "llm_chunk", "source": "coordinator"}},
+            # coordinator 最终回复: text (message.content)
+            {"content": "北京今天25度", "final": True,
+             "metadata": {"type": "text", "source": "coordinator"}},
+        ])
+
+        resp = bridge_client.post(
+            "/api/chat/mock-agent?stream=true",
+            json={"user_id": "u4", "client_id": "c4", "content": "天气"},
         )
+        assert resp.status_code == 200
+        events = _parse_sse(resp.text)
+        assert len(events) == 6, f"expect 5 data + [DONE], got {len(events)}"
+
+        # event 0: progress (coordinator)
+        assert events[0]["_chunk_type"] == "progress"
+        assert events[0]["_source"] == "coordinator"
+        assert events[0]["choices"][0]["message"]["content"] == "coordinator 决策中…"
+
+        # event 1: progress (skill_executor)
+        assert events[1]["_chunk_type"] == "progress"
+        assert events[1]["_source"] == "skill_executor"
+        assert events[1]["_skill"] == "weather_query"
+        assert events[1]["_round"] == "0"
+
+        # event 2-3: llm_chunk (使用 delta.content 结构)
+        assert events[2]["_chunk_type"] == "llm_chunk"
+        assert events[2]["choices"][0]["delta"]["content"] == "北京"
+        assert events[3]["_chunk_type"] == "llm_chunk"
+        assert events[3]["choices"][0]["delta"]["content"] == "25度"
+
+        # event 4: text (使用 message.content 结构)
+        assert events[4]["_chunk_type"] == "text"
+        assert events[4]["choices"][0]["message"]["content"] == "北京今天25度"
+
+        # event 5: [DONE]
+        assert events[5] == "[DONE]"
 
     def test_sync_path_drops_non_final_chunks(
         self, mock_daemon: MockDaemonClient, bridge_client: TestClient,
@@ -340,7 +450,8 @@ class TestE2eStreamParamPropagation:
 
         过程信息（progress / skill 思辨 / llm_token）在同步路径丢弃，仅在 SSE
         流式路径透传给前端作过程展示。同步路径的 content 必须只含 final 部分，
-        否则持久化到 SessionProvider 的 agent_response 会夹带中间产物。
+        否则持久化到 SessionProvider 的 agent_response 会夹带中间产物——违反
+        "前端刷新加载历史 = 实时最终渲染"的稳定态约束。
         """
         mock_daemon.set_responses([
             {"content": "skill思辨片段", "final": False, "metadata": {"type": "progress"}},

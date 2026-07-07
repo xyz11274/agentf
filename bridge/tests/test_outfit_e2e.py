@@ -14,7 +14,7 @@ Each test case validates three invariants:
 
 Usage:
   # daemon must be running on 17891:
-  ./build/agentflowd --listen 127.0.0.1:17891 --package examples/agent/outfit_assistant
+  ./build/agentflowd --listen 127.0.0.1:17891 --package examples/agent/outfit-assistant
 
   # run all e2e tests (slow, ~5 min total)
   pytest bridge/tests/test_outfit_e2e.py -v -m e2e --timeout 180

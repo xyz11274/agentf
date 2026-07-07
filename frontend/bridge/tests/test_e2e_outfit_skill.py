@@ -70,7 +70,7 @@ def _send_msg(port: int, content: str, task_id: str,
             "IsHaveSendHuoShan": "0",
             "LongHistory": "",
         },
-    }, task_id=task_id)
+    })
     return _poll_response(port, task_id)
 
 

@@ -23,11 +23,16 @@ from config import settings
 from models import ArtifactInfo
 
 
-# Patterns match the output of coordinator's ``append_artifacts_markdown``.
-# Each captures the URL and infers the artifact type from the markdown format.
-_IMAGE_PATTERN = re.compile(r"!\[生成图片 \d+\]\(([^)]+)\)")
-_HTML_PATTERN = re.compile(r"\[查看报告 \d+\]\(([^)]+)\)")
-_DOWNLOAD_PATTERN = re.compile(r"\[📥 下载文件 \d+\]\(([^)]+)\)")
+# Patterns match any Markdown link/image whose URL points at the artifact API.
+# 边界是 url 指向 ``/api/artifacts/`` 路径（agent 产物），不是 label 文本——
+# LLM 自定义 label（如 ``![居家穿搭效果图](url)``）也是产物；用户随手
+# ``![表情](https://emoji.example.com/x.png)`` 不是产物（url 不指向 artifact API）。
+# 守 I-1：不误匹配用户正文里的随手图片引用。
+_ARTIFACT_URL_INFIX = "/api/artifacts/"
+# Markdown image: ![label](url) — label 任意，url 必须含 artifact API infix
+_IMAGE_PATTERN = re.compile(r"!\[[^\]]*\]\(([^)]*" + re.escape(_ARTIFACT_URL_INFIX) + r"[^)]*)\)")
+# Markdown link (non-image): [label](url) — 用 lookbehind 排除 ![...](...) 图片形式
+_LINK_PATTERN = re.compile(r"(?<!!)\[[^\]]*\]\(([^)]*" + re.escape(_ARTIFACT_URL_INFIX) + r"[^)]*)\)")
 
 # URL-based type inference for legacy artifacts without structured markers
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
@@ -78,35 +83,26 @@ def extract_artifact_infos(content: str) -> list[ArtifactInfo]:
     """Parse ChatChunk content for artifact Markdown patterns.
 
     Returns structured ``ArtifactInfo`` objects in the order they appear.
-    Uses three marker patterns in order (image → html → download).
-    Falls back to URL extension for type inference when marker is ambiguous.
+    Type is inferred from the URL extension (image → html → download),
+    not from the Markdown label — so LLM-custom labels like
+    ``![居家穿搭效果图](url)`` are extracted as long as the URL points at
+    the artifact API.
     """
     artifacts: list[ArtifactInfo] = []
 
-    # Pattern-based extraction (matches append_artifacts_markdown output)
+    # 边界是 url 指向 ``/api/artifacts/`` 路径（agent 产物），label 任意。
+    # 守 I-1：不误匹配用户正文里的随手图片引用（emoji、外部图床等）。
     seen_urls: set[str] = set()
 
-    for pattern, marker_type in [
-        (_IMAGE_PATTERN, "image"),
-        (_HTML_PATTERN, "html"),
-        (_DOWNLOAD_PATTERN, "download"),
-    ]:
+    for pattern in (_IMAGE_PATTERN, _LINK_PATTERN):
         for match in pattern.finditer(content):
             url = match.group(1).strip()
             if url in seen_urls:
                 continue
             seen_urls.add(url)
-            url_lower = url.lower()
 
-            # For image/html patterns, trust the marker; for download,
-            # double-check the extension isn't actually an image
-            art_type = marker_type
-            if marker_type == "download":
-                ext = Path(url_lower.split("?")[0]).suffix
-                if ext in _IMAGE_EXTENSIONS:
-                    art_type = "image"
-                elif ext in _HTML_EXTENSIONS:
-                    art_type = "html"
+            # Type 一律从 url 后缀分流，不信任 label 文本或 `!` 标记
+            art_type = _infer_artifact_type(url)
 
             artifacts.append(ArtifactInfo(
                 type=art_type,  # type: ignore[arg-type]

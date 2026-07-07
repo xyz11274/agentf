@@ -9,7 +9,7 @@ AgentFlow E2E — 真实 LLM + agentflow 执行 (直接 daemon JSON-RPC)
   4. 多轮对话保持上下文
 
 用法:
-  set -a; source examples/agent/outfit_assistant/.env; set +a
+  set -a; source examples/agent/outfit-assistant/.env; set +a
   python3 ar_scripts/tests/e2e_agentflow_pipeline.py
 """
 
@@ -27,7 +27,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DAEMON_BINARY = PROJECT_ROOT / "build" / "agentflowd"
-OUTFIT_AGENT = str(PROJECT_ROOT / "examples" / "agent" / "outfit_assistant")
+OUTFIT_AGENT = str(PROJECT_ROOT / "examples" / "agent" / "outfit-assistant")
 
 PASS = 0
 FAIL = 0
@@ -125,7 +125,7 @@ def main() -> int:
     base_url = os.environ.get("AF_LLM_BASE_URL", "")
     if not api_key or not base_url:
         print("\n⚠️  No AF_LLM_BASE_URL / API_KEY set — tests will fail")
-        print("  Run: set -a; source examples/agent/outfit_assistant/.env; set +a\n")
+        print("  Run: set -a; source examples/agent/outfit-assistant/.env; set +a\n")
 
     if not DAEMON_BINARY.is_file():
         print(f"❌ Daemon not built: {DAEMON_BINARY}"); return 1
@@ -136,7 +136,7 @@ def main() -> int:
     # ── Start daemon ──
     port = free_port()
     daemon_env = dict(os.environ)
-    daemon_env["PATH"] = f"{PROJECT_ROOT / 'examples' / 'agent' / 'outfit_assistant' / '.venv' / 'bin'}{os.pathsep}/usr/bin:/bin:/usr/sbin:/sbin"
+    daemon_env["PATH"] = f"{PROJECT_ROOT / 'examples' / 'agent' / 'outfit-assistant' / '.venv' / 'bin'}{os.pathsep}/usr/bin:/bin:/usr/sbin:/sbin"
 
     print(f"🚀 Daemon port {port}...", end=" ", flush=True)
     daemon = subprocess.Popen(

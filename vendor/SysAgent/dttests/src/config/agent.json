@@ -1,0 +1,119 @@
+[
+    {
+        "type": "SystemAgent",
+        "ids": [
+            "1"
+        ],
+        "name": "System Agent",
+        "description": "天气查询、地图、维基百科、查询搜索各种信息、跨端、闲聊等无明确任务的对话。包含规划路线，导航,查询信息类（新闻/路线、酒店餐厅信息等）,跨端分享保存等等操作",
+        "url": "",
+        "port": 23767,
+        "baseUrl": ""
+    },
+    {
+        "type": "GUIAgent",
+        "ids": [],
+        "name": "GUI Agent",
+        "description": "1、根据用户要完成与购买饮品/饮料相关的任务。如通过美团、饿了么等APP，购买/点/下单奶茶、咖啡等。",
+        "url": "",
+        "port": 23767,
+        "baseUrl": "/coremind/guiagent/v1/task_handle"
+    },
+    {
+        "type": "MultiDevAgent",
+        "ids": [
+            "5"
+        ],
+        "name": "MultiDev Agent",
+        "description": "1、根据用户的要求将视频、图片等分享到其他的设备上，例如电视、PAD等；2、根据要求保存视频、图片等文件，例如云盘、网盘等。",
+        "url": "",
+        "port": 23767,
+        "baseUrl": "/aisf/multidevagent/v1/query"
+    },
+    {
+        "type": "LifeAssistantAgent",
+        "ids": [
+            "2",
+            "3"
+        ],
+        "apps": [
+            "高德",
+            "携程",
+            "携程旅行"
+        ],
+        "name": "LAS Agent",
+        "description": "只涉及行程安排，行程规划；交通住宿预订：订机票、订酒店；打车",
+        "url": "",
+        "port": 23767,
+        "baseUrl": "/coremind/lifeassistantagent/v1/task_handle"
+    },
+    {
+        "type": "AnyShoppingAgent",
+        "ids": [
+            "6"
+        ],
+        "apps": [
+            "京东",
+            "淘宝"
+        ],
+        "name": "LAS Agent PlanB",
+        "description": "网上购买商品及配送，需明确商品的规格、数量、尺寸等信息，商品类型广泛，包括电子产品、衣物饰品、家居用品、宠物用品、粮油调味类、鲜花礼品类、保健品类等",
+        "url": "",
+        "port": 23767,
+        "baseUrl": "/coremind/anyshoppingagent/v1/task_handle"
+    },
+    {
+        "type": "FoodieAgent",
+        "ids": [
+            "7"
+        ],
+        "apps": [
+            "美团"
+        ],
+        "name": "Foodie Agent",
+        "description": "主要涉及商品的购买和配送，通常需要短期快速送达。主要包含：即食食品，如奶茶、小吃、熟食类以及各种新鲜肉蛋类、海鲜水产类、蔬菜、水果类、甜品烘焙蛋糕类、休闲零食类、药品类和各种牛奶饮品类。",
+        "url": "",
+        "port": 23767,
+        "baseUrl": "/coremind/FoodieAgent/v1/task_handle"
+    },
+    {
+        "type": "LTServerAgent",
+        "ids": [
+            "9"
+        ],
+        "name": "LTServer Agent",
+        "description": "1、根据用户要求完成与外卖相关的任务。",
+        "url": "",
+        "port": 23767,
+        "baseUrl": "/coremind/LTServerAgent/v1/task_handle"
+    },
+    {
+        "type": "WisdomAgent",
+        "ids": [
+            "10"
+        ],
+        "name": "Wisdom Agent",
+        "description": "娱乐、社交、影视等相关APP操控,如\"小红书\"、\"微信\"、\"爱奇艺\"、\"腾讯视频\"、\"飞猪\"等",
+        "url": "",
+        "port": 23767,
+        "baseUrl": "/coremind/WisdomAgent/v1/task_handle"
+    },
+    {
+        "type": "MovieAgent",
+        "ids": [],
+        "name": "Movie Agent",
+        "description": "娱乐、社交、影视等相关APP操控,如\"小红书\"、\"微信\"、\"爱奇艺\"、\"腾讯视频\"、\"飞猪\"等",
+        "url": "",
+        "port": 23767,
+        "baseUrl": "/coremind/MovieAgent/v1/task_handle"
+    },
+    {
+        "type": "HealthAgent",
+        "ids": [],
+        "name": "Health Agent",
+        "description": "健康、挂号等相关APP操控，如\"挂号\"、\"医疗档案\"等",
+        "url": "",
+        "port": 23767,
+        "baseUrl": "/aisf/healthagent/v1/tasks"
+    }
+]

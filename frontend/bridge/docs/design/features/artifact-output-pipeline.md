@@ -265,4 +265,4 @@ function appendChunk(messageId, chunk, artifacts?) {
 - 前端 SSE 解析: `frontend/web/src/composables/useChatSse.ts:parseSseStream()`
 - 前端 store: `frontend/web/src/stores/chatStore.ts:appendChunk()`
 - 前端展示: `frontend/web/src/components/ArtifactList.vue`
-- Agent 端标记生成: `examples/agent/outfit_assistant/nodes/coordinator_decide.py:append_artifacts_markdown()`
+- Agent 端标记生成: `examples/agent/outfit-assistant/nodes/coordinator_decide.py:append_artifacts_markdown()`

@@ -95,10 +95,10 @@ coordinator_decide.py (子进程)
 | 文件 | 变更类型 | 说明 |
 |------|---------|------|
 | `src/agent/agent.cpp` | 修改 | COORDINATORDataExchange handler 新增 progress push |
-| `examples/agent/outfit_assistant/nodes/coordinator_decide.py` | 修改 | P0条件调用collect_skill_results + P1 dispatch后删除response key |
-| `examples/agent/outfit_assistant/nodes/databus_client.py` | 修改 | 新增 delete() 方法 |
+| `examples/agent/outfit-assistant/nodes/coordinator_decide.py` | 修改 | P0条件调用collect_skill_results + P1 dispatch后删除response key |
+| `examples/agent/outfit-assistant/nodes/databus_client.py` | 修改 | 新增 delete() 方法 |
 | `tests/unit/src/test_agent_gtest.cpp` | 新增 | `CoordinatorPushesNonFinalProgressBeforeFinalResponse` 测试 |
-| `examples/agent/outfit_assistant/tests/test_coordinator_decide_databus.py` | 新增 | P0/P1 Python 单元测试 |
+| `examples/agent/outfit-assistant/tests/test_coordinator_decide_databus.py` | 新增 | P0/P1 Python 单元测试 |
 
 ## 测试覆盖
 
@@ -118,7 +118,7 @@ cd build && cmake --build . --target test_agent_gtest -j4
 ### Python 单元测试
 
 ```bash
-cd examples/agent/outfit_assistant
+cd examples/agent/outfit-assistant
 python3 -m pytest tests/
 ```
 

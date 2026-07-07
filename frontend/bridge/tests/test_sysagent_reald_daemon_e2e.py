@@ -10,7 +10,7 @@
 
 前置条件：
   - build/agentflowd 已编译
-  - examples/agent/outfit_assistant 及其 .venv 已就绪
+  - examples/agent/outfit-assistant 及其 .venv 已就绪
 
 运行：
   python3 -m pytest tests/test_sysagent_reald_daemon_e2e.py -v -m e2e
@@ -41,7 +41,7 @@ from routes.aisf_tasks import router as aisf_router
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DAEMON_BINARY = PROJECT_ROOT / "build" / "agentflowd"
-OUTFIT_AGENT = PROJECT_ROOT / "examples" / "agent" / "outfit_assistant"
+OUTFIT_AGENT = PROJECT_ROOT / "examples" / "agent" / "outfit-assistant"
 LLM_REPLY = "你好，我是服装搭配助手，很高兴为您服务！"
 
 

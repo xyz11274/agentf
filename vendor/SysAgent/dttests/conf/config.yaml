@@ -1,0 +1,38 @@
+---
+version: 1.0.0
+
+project:
+  name: "SystemTest"
+  desc: "SystemTest project"
+  prod: null
+  team: null
+
+pipeline:
+  build:
+    - task: "cmake_test"
+      args: "--compiler=clang15.0.4"
+  run:
+    - task: "run_test"
+      args: -a"--gtest_output=xml:report.xml"
+  report:
+    #- task: "gcovr_report"
+    - task: "lcov_report"
+      args: -a"-d ../build -e */src/* -r */dttests/*"
+  clean:
+    - task: "clean"
+
+components:
+  - type: "hdt_cmc_c_cpp"
+    repo: null
+    dest: null
+    manifest:
+      gtest: 1.15.0-hw.009
+      gcov: null
+      mockcpp: 2.8.0
+  - type: "hdts_cmc_c_cpp"
+    repo: null
+    dest: null
+    manifest:
+      asan: null
+      lcov: null
+      mockcpp: null

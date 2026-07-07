@@ -45,7 +45,7 @@ def _resolve_artifact(relative_path: str, agent_pkg_name: str = "") -> Path:
     Strategy:
     1. Primary: resolve inside ``agent_packages_path``.
        ``relative_path`` may already contain the agent package directory name
-       (e.g. ``outfit_assistant/.agentfoundry/...``).
+       (e.g. ``outfit-assistant/.agentfoundry/...``).
     2. Fallback: if the primary candidate does not exist AND the
        ``relative_path`` starts with the agent package directory name, strip
        that prefix and resolve the remainder inside the project root.

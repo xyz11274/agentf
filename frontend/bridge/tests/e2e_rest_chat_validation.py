@@ -3,7 +3,7 @@ Bridge REST + SSE Chat E2E 验证 — 通过 bridge 的 REST API 测试。
 覆盖：SSE 流式格式、同步 chat、session 持久化、多轮对话。
 
 用法（在项目根目录）：
-  set -a; source examples/agent/outfit_assistant/.env; set +a
+  set -a; source examples/agent/outfit-assistant/.env; set +a
   python3 frontend/bridge/tests/e2e_rest_chat_validation.py
 """
 
@@ -13,7 +13,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DAEMON_BINARY = PROJECT_ROOT / "build" / "agentflowd"
-OUTFIT_AGENT = str(PROJECT_ROOT / "examples" / "agent" / "outfit_assistant")
+OUTFIT_AGENT = str(PROJECT_ROOT / "examples" / "agent" / "outfit-assistant")
 BRIDGE_DIR = PROJECT_ROOT / "frontend" / "bridge"
 
 PASS, FAIL = 0, 0
@@ -56,7 +56,7 @@ def main():
 
     dp = free_port(); bp = free_port()
     env = dict(os.environ)
-    env["PATH"] = f"{PROJECT_ROOT / 'examples' / 'agent' / 'outfit_assistant' / '.venv' / 'bin'}{os.pathsep}/usr/bin:/bin:/usr/sbin:/sbin"
+    env["PATH"] = f"{PROJECT_ROOT / 'examples' / 'agent' / 'outfit-assistant' / '.venv' / 'bin'}{os.pathsep}/usr/bin:/bin:/usr/sbin:/sbin"
 
     d = subprocess.Popen([str(DAEMON_BINARY), "--listen", f"127.0.0.1:{dp}", "--package", OUTFIT_AGENT],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)

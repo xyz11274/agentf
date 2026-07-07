@@ -1,0 +1,42 @@
+[
+    {
+        "name": "qwen2.5-1.5B",
+        "url": "http://9.15.87.9:5013/coremind/llm/v1/chat/completions"
+    },
+    {
+        "name": "Pro/deepseek-ai/DeepSeek-R1",
+        "url": "https://api.siliconflow.cn/v1/chat/completions"
+    },
+    {
+        "name": "qwen2-7b-instruct",
+        "url": "http://9.15.87.9:8075/qwen/chat/completions"
+    },
+    {
+        "name": "qwq_32b",
+        "url": "http://9.15.87.148:6666/coremind/llm/v1/chat/completions"
+    },
+    {
+        "name": "Qwen2.5-32B-Instruct",
+        "url": "http://9.15.87.9:8075/qwen/chat/completions"
+    },
+    {
+        "name": "Qwen2.5-Coder-32B-Instruct",
+        "url": "http://9.15.87.148:7778/coremind/llm/v1/chat/completions"
+    },
+    {
+        "name": "DeepSeek-R1-w8a8",
+        "url": "http://9.15.87.225:1025/v1/chat/completions"
+    },
+    {
+        "name": "Qwen3-32B",
+        "url": "http://9.15.87.116:8084/v1/chat/completions"
+    },
+    {
+        "name": "Qwen3-8B",
+        "url": "http://9.15.87.116:8083/v1/chat/completions"
+    },
+    {
+        "name": "qwen3-1.7B",
+        "url": "http://9.15.87.225:1025/v1/chat/completions"
+    }
+]

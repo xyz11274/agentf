@@ -26,7 +26,7 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DAEMON_BINARY = PROJECT_ROOT / "build" / "agentflowd"
-OUTFIT_AGENT = PROJECT_ROOT / "examples" / "agent" / "outfit_assistant"
+OUTFIT_AGENT = PROJECT_ROOT / "examples" / "agent" / "outfit-assistant"
 OUTFIT_AGENT_STR = str(OUTFIT_AGENT)  # absolute string path for daemon CLI
 LLM_REPLY = "你好，我是服装搭配助手，很高兴为您服务！"
 

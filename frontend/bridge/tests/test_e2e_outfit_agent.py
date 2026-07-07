@@ -8,7 +8,7 @@
   4. 通过 daemon TCP JSON-RPC 发送消息，不依赖 bridge 或上游回调
 
 使用方式：
-  # 全量运行（需要已编译 agentflowd + outfit_assistant .venv）
+  # 全量运行（需要已编译 agentflowd + outfit-assistant .venv）
   python -m pytest frontend/bridge/tests/test_e2e_outfit_agent.py -v -m e2e
 
   # 单个场景

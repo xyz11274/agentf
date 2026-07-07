@@ -64,6 +64,24 @@ const showEmptyState = computed<boolean>(
   () => chatStore.messages.length === 0 && !chatStore.error,
 )
 
+const expandedSkills = ref<Set<string>>(new Set())
+
+function toggleSkillExpand(name: string): void {
+  const next = new Set(expandedSkills.value)
+  if (next.has(name)) next.delete(name)
+  else next.add(name)
+  expandedSkills.value = next
+}
+
+const visibleLlmChunks = computed<Record<string, string>>(() => {
+  if (chatStore.detailMode === 'all') return chatStore.llmChunks
+  const filtered: Record<string, string> = {}
+  for (const [key, val] of Object.entries(chatStore.llmChunks)) {
+    if (key.startsWith('coordinator:')) filtered[key] = val
+  }
+  return filtered
+})
+
 /** True when the assistant placeholder is empty (typing dots) vs has content. */
 function isPendingAssistant(msg: ChatMessage): boolean {
   return msg.role === 'assistant' && msg.content.length === 0
@@ -386,6 +404,16 @@ function toggleExportMenu(): void {
       </span>
     </header>
 
+    <div class="chat-view__toolbar">
+      <el-switch
+        :model-value="chatStore.detailMode === 'all'"
+        @update:model-value="chatStore.toggleDetailMode()"
+        active-text="全部细节"
+        inactive-text="只看 Coordinator"
+        size="small"
+      />
+    </div>
+
     <!-- Message list -->
     <div
       ref="messageListRef"
@@ -497,13 +525,13 @@ function toggleExportMenu(): void {
 
         <!-- LLM streaming chunks (grouped by source) -->
         <li
-          v-if="Object.keys(chatStore.llmChunks).length > 0"
+          v-if="Object.keys(visibleLlmChunks).length > 0"
           class="chat-view__item chat-view__item--llm-chunks"
           data-testid="chat-llm-chunks"
         >
           <div class="chat-view__llm-chunks">
             <div
-              v-for="(content, key) in chatStore.llmChunks"
+              v-for="(content, key) in visibleLlmChunks"
               :key="key"
               class="chat-view__llm-chunk"
             >
@@ -518,9 +546,9 @@ function toggleExportMenu(): void {
           </div>
         </li>
 
-        <!-- Skill execution status cards -->
+        <!-- Skill execution status cards (only in 'all' detail mode) -->
         <li
-          v-if="Object.keys(chatStore.skillStatus).length > 0"
+          v-if="chatStore.detailMode === 'all' && Object.keys(chatStore.skillStatus).length > 0"
           class="chat-view__item chat-view__item--skills"
           data-testid="chat-skill-cards"
         >
@@ -529,7 +557,11 @@ function toggleExportMenu(): void {
               v-for="(info, skillName) in chatStore.skillStatus"
               :key="skillName"
               class="chat-view__skill-card"
-              :class="`chat-view__skill-card--${info.status}`"
+              :class="[
+                `chat-view__skill-card--${info.status}`,
+                { 'chat-view__skill-card--expanded': expandedSkills.has(skillName as string) },
+              ]"
+              @click="toggleSkillExpand(skillName as string)"
             >
               <div class="chat-view__skill-card-header">
                 <span
@@ -539,8 +571,14 @@ function toggleExportMenu(): void {
                 <span class="chat-view__skill-card-name">{{ skillName }}</span>
                 <span class="chat-view__skill-card-round" v-if="info.round">第 {{ info.round }} 轮</span>
                 <span class="chat-view__skill-card-status">{{ statusLabel(info.status) }}</span>
+                <span class="chat-view__skill-card-chevron">
+                  {{ expandedSkills.has(skillName as string) ? '▼' : '▶' }}
+                </span>
               </div>
-              <div class="chat-view__skill-card-body" v-if="info.message">
+              <div
+                class="chat-view__skill-card-body"
+                v-if="expandedSkills.has(skillName as string) && info.message"
+              >
                 {{ info.message }}
               </div>
             </div>
@@ -1082,6 +1120,22 @@ function toggleExportMenu(): void {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+.chat-view__skill-card-chevron {
+  margin-left: auto;
+  font-size: 10px;
+  color: #c0c4cc;
+  cursor: pointer;
+}
+.chat-view__skill-card {
+  cursor: pointer;
+}
+.chat-view__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 4px 16px;
+  border-bottom: 1px solid #f0f0f0;
 }
 @keyframes chat-view-pulse {
   0%, 100% { opacity: 1; }

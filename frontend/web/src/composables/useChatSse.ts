@@ -88,19 +88,14 @@ async function* parseSseStream(
               const isProgress: boolean = parsed._progress === true
               const chunkType: string | undefined = parsed._chunk_type
               const delta = parsed.choices?.[0]?.delta
+              const msgContent = parsed.choices?.[0]?.message?.content
+              const content = delta?.content || msgContent || ''
               // Structured artifact metadata from the bridge (_artifacts on final chunk)
               const artifacts: Array<{type:string;url:string;name:string;mime_type:string}> | undefined =
                 Array.isArray(parsed._artifacts) ? parsed._artifacts as any : undefined
-              if (delta?.content) {
+              if (content || dialogueId) {
                 yield {
-                  type: 'content', content: delta.content,
-                  dialogue_id: dialogueId, artifacts,
-                  progress: isProgress, chunk_type: chunkType,
-                  skill: parsed._skill, round: parsed._round, status: parsed._status,
-                }
-              } else if (dialogueId) {
-                yield {
-                  type: 'content', content: '',
+                  type: 'content', content,
                   dialogue_id: dialogueId, artifacts,
                   progress: isProgress, chunk_type: chunkType,
                   skill: parsed._skill, round: parsed._round, status: parsed._status,
@@ -274,6 +269,9 @@ export function useChatSse(baseUrl?: string): UseChatSseReturn {
               chatStore.clearAllSkillStatus()
             }
           } else if (event.type === 'done') {
+            chatStore.clearProgress()
+            chatStore.clearLlmChunks()
+            chatStore.clearAllSkillStatus()
             break
           } else if (event.type === 'error') {
             chatStore.setError(event.message ?? 'SSE error')

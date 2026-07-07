@@ -201,10 +201,10 @@ class TestSseStreaming:
             text = raw.decode("utf-8")
             events = _sse_parse(text)
             assert len(events) >= 2
-            # 验证 OpenAI 兼容格式
+            # 验证 OpenAI 兼容格式（守 §3.2：text/progress 用 message.content）
             for event in events[:-1]:
                 assert "choices" in event
-                assert "delta" in event["choices"][0]
+                assert "message" in event["choices"][0]
             # 验证 [DONE] 终止
             assert events[-1] == "[DONE]"
 
