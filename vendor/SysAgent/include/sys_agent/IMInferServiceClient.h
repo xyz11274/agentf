@@ -18,6 +18,7 @@
 #include <memory>
 #include <functional>
 #include <atomic>
+#include <mutex>
 #include "framework_com/http_2_client.h"
 
 namespace SysAgent {
