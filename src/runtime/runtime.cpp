@@ -1604,6 +1604,25 @@ void MMAgentRuntime::on_workflow_complete(const AgentId& agent_id, const Workflo
                                   execution_id.c_str(), state.uds_socket_path.c_str());
       }
 
+      // Clean up per-workflow ThreadPool to prevent thread accumulation
+      std::string workflow_instance_id;
+      auto wfi_it = state.inputs.find("workflow_instance_id");
+      if(wfi_it != state.inputs.end()) {
+        if(auto* val = std::get_if<std::string>(&wfi_it->second)) {
+          workflow_instance_id = *val;
+        }
+      }
+      if(!workflow_instance_id.empty() && deployer_) {
+        std::string worker_id;
+        if(deployer_->get_workflow_worker(workflow_instance_id, worker_id)) {
+          if(auto worker = deployer_->get_worker_engine(worker_id)) {
+            worker->unregister_workflow_instance(workflow_instance_id);
+            Logger::instance().info_f("[WORKFLOW] ThreadPool unregistered for workflow_instance_id=%s",
+                                      workflow_instance_id.c_str());
+          }
+        }
+      }
+
       TaskEvent event = EventBuilder::build_task_destroyed_event(
           agent_id,
           state.session_id,
