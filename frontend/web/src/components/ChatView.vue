@@ -770,6 +770,7 @@ function toggleExportMenu(): void {
 .chat-view__item {
   display: flex;
   flex-direction: column;
+  max-width: 80%;
 }
 .chat-view__item--assistant {
   max-width: 80%;

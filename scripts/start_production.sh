@@ -17,7 +17,7 @@ elif [ "$#" -gt 0 ]; then
     exit 2
 fi
 
-PACKAGE="${AGENT_PACKAGE:-examples/agent/outfit_assistant}"
+PACKAGE="${AGENT_PACKAGE:-examples/agent/outfit-assistant}"
 DAEMON_PORT="${DAEMON_PORT:-17891}"
 BRIDGE_PORT="${PYTHON_BRIDGE_PORT:-8199}"
 SIDECAR_PORT="${COREMIND_BRIDGE_PORT:-23767}"

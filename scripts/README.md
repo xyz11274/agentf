@@ -19,9 +19,18 @@ Python Bridge 生产模式只监听 loopback；SideCar 是唯一外部入口。
 | `start_bridge.sh` | 启动开发或内部生产 Bridge |
 | `start_sidecar.sh` | 启动本地或生产 SideCar |
 | `start_production.sh` | 统一启动生产三进程栈 |
+| `start_e2e.sh` | 本地端到端调试：启动完整链路（FusionMind Mock + Mock UDS + daemon + Bridge + 前端） |
+| `start_mock_uds_server.sh` | 单独启动 Mock UDS Server（替代 UDSPluginServer，用于本地 LLM 调用调试） |
 | `start_web.sh` | 启动 Vue/Vite 开发服务器 |
 | `run_agent.sh` | 旧 harness_agent 交互演示，仅保留开发用途 |
 | `regression_test.sh` | C++ 单元与 E2E 回归 |
+
+## 配置文件
+
+| 文件 | 用途 |
+|------|------|
+| `.env` / `.env.example` | 部署配置（密钥、服务地址） |
+| `config.json` | daemon 本地开发配置文件，被 `start_daemon.sh` 和 `start_e2e.sh` 引用 |
 
 ## 构建
 
@@ -77,13 +86,61 @@ COREMIND_REQUIRED_SERVICES="IMInferScheduler"
 
 ## 启动
 
-### 开发组件
+### 端到端调试（推荐）
+
+一键启动完整本地调试链路：FusionMind Mock + Mock UDS Server + agentflowd + Bridge + 前端。
 
 ```bash
-./ar_scripts/start_daemon.sh --profile release --package examples/agent/outfit_assistant
+# 默认 Mock 模式（回显）
+./ar_scripts/start_e2e.sh
+
+# Proxy 模式（透传到真实 LLM）
+./ar_scripts/start_e2e.sh --proxy
+
+# 仅启动 Mock UDS + daemon + Bridge（无前端）
+./ar_scripts/start_e2e.sh --no-frontend
+
+# 仅启动 FusionMind Mock 和 Mock UDS Server
+./ar_scripts/start_e2e.sh --fmm-only
+```
+
+启动链路：
+
+```text
+Frontend (Vite:15173)
+  → Bridge (uvicorn:8199)
+    → AgentFlow Daemon (agentflowd:17891)
+      → Python Node
+        → LlmUdsClient (.sock)
+          → Mock UDS Server (Python UDS)     ← 模拟 UDSPluginServer
+            → [mock] FusionMind Mock (:8085)  ← 回显/固定响应/工具调用
+            → [proxy] 真实 LLM API            ← DashScope 等上游
+```
+
+停止：`Ctrl+C` 自动逆序清理所有子进程。
+
+### 单独启动组件
+
+```bash
+./ar_scripts/start_daemon.sh --profile release --package examples/agent/outfit-assistant
 ./ar_scripts/start_bridge.sh dev 8199
 ./ar_scripts/start_web.sh 15173
 ```
+
+### Mock UDS Server（单独调试 LLM 调用）
+
+```bash
+# 默认回显模式
+./ar_scripts/start_mock_uds_server.sh
+
+# 固定文本模式
+./ar_scripts/start_mock_uds_server.sh --mode fixed --response "你好世界"
+
+# 指定 socket 路径
+./ar_scripts/start_mock_uds_server.sh --socket /tmp/agentflow_plugin.sock
+```
+
+Mock UDS Server 支持 `llm.chat`（OpenAI 格式透传）、`llm.task.create/stream/destroy`、`llm.complete`、`tool.list/call` 等全部 UDS 方法，可配合 `LlmUdsClient` 做本地验证。
 
 Bridge 开发模式使用 Uvicorn reload，但监听范围固定为 `frontend/bridge/`。
 Agent package/skill 工作空间位于 `examples/agent/`，其中产生或更新源码及中间文件不会重启
@@ -109,7 +166,7 @@ Bridge，也不会因此断开浏览器 WebSocket。
 也可单独启动：
 
 ```bash
-./ar_scripts/start_daemon.sh --profile production --package examples/agent/outfit_assistant
+./ar_scripts/start_daemon.sh --profile production --package examples/agent/outfit-assistant
 ./ar_scripts/start_bridge.sh production 8199
 ./ar_scripts/start_sidecar.sh production 23767
 ```
@@ -135,9 +192,12 @@ Bridge，也不会因此断开浏览器 WebSocket。
 │   ├── start_bridge.sh      ── 启动 Python Bridge（dev / production）
 │   ├── start_sidecar.sh     ── 启动 C++ SideCar
 │   ├── start_production.sh  ── 统一启动 daemon + Bridge + SideCar
+│   ├── start_e2e.sh         ── 本地端到端调试（FMM Mock + Mock UDS + daemon + Bridge + 前端）
+│   ├── start_mock_uds_server.sh ── 单独启动 Mock UDS Server（替代 UDSPluginServer）
 │   ├── start_web.sh         ── 启动 Vue/Vite 开发服务器
 │   ├── run_agent.sh         ── harness_agent 示例演示（开发用）
 │   ├── common.sh            ── 被以上脚本 source 的公共函数
+│   ├── config.json          ── daemon 本地开发默认配置
 │   ├── .env / .env.example  ── 部署配置（密钥、服务地址）
 │   └── tests/
 │       ├── regression_test.sh          ← 回归测试入口（C++ unit + E2E + daemon E2E）

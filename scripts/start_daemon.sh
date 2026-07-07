@@ -57,7 +57,7 @@ _stop_daemon() {
 
 # ── Parse arguments ─────────────────────────────────────────────────
 ACTION="start"
-PACKAGE="examples/agent/outfit_assistant"
+PACKAGE="examples/agent/outfit-assistant"
 PORT="17891"
 PROFILE="dev"
 KEEP_LOGS=false
@@ -84,7 +84,7 @@ while [ "$#" -gt 0 ]; do
             echo "  restart  Stop, rebuild, then start (default: --build)"
             echo ""
             echo "Options:"
-            echo "  --package PATH   Agent package directory (default: examples/agent/outfit_assistant)"
+            echo "  --package PATH   Agent package directory (default: examples/agent/outfit-assistant)"
             echo "  --port PORT      Listen port (default: 17891)"
             echo "  --profile PROF   Build profile: dev|release|production (default: dev)"
             echo "  --build          Build binary first"

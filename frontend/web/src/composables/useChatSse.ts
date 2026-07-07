@@ -237,8 +237,35 @@ export function useChatSse(baseUrl?: string): UseChatSseReturn {
             //   progress → chatStore.setProgress() 显示进度条
             //   content → appendChunk + clearProgress
             if (event.progress || event.chunk_type === 'progress') {
-              // 技能执行进度消息 — 显示在独立进度指示器
-              chatStore.setProgress(event.content || '')
+            // 技能执行进度消息 — 解析内容
+            // message.content:  完整进度文本 → setProgress（替换）
+            // delta.content:    增量 LLM token → appendProgress（累积）
+            //                   同时按 skill/round 归入 llmChunks 分组卡片
+            // delta.tool_calls: 工具调用参数流 → 跳过，不显示在进度区
+            try {
+              const parsed = JSON.parse(event.content || '')
+              const msg = parsed?.choices?.[0]?.message?.content
+              const tok = parsed?.choices?.[0]?.delta?.content
+              const tcs = parsed?.choices?.[0]?.delta?.tool_calls
+              if (msg) {
+                chatStore.setProgress(msg)
+              } else if (tok) {
+                chatStore.appendProgress(tok)
+                // delta.content 也归入 llmChunks 分组，供卡片展示
+                if (event.skill && event.round) {
+                  chatStore.addLlmChunk(event.skill, event.round, tok)
+                }
+              } else if (tcs) {
+                // delta.tool_calls 不显示在进度区，静默跳过
+              } else if (event.content) {
+                chatStore.setProgress(event.content)
+              }
+            } catch {
+              if (event.content) {
+                // event.content 是已被 parseSseStream 提取的纯文本，替换显示
+                chatStore.setProgress(event.content)
+              }
+            }
               // 同时更新 skill 状态（供技能卡片 UI 使用）
               if (event.skill) {
                 chatStore.updateSkillStatus(event.skill, event.status || 'running', event.round || '')

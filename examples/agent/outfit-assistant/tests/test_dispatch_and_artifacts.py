@@ -283,3 +283,101 @@ def test_mixed_image_and_download_artifacts(tmp_path):
     assert "## 生成产物" in rendered
     assert "![生成图片" in rendered
     assert "📥" in rendered or "deck.pptx" in rendered
+
+
+# ═══════════════════════════════════════════════════════════════════
+# I-6 不变量：artifacts 必须是 skill 本次新生成的文件，
+# 不得是 skill 消费过的用户上传输入 / reference / 脚本自身路径。
+# 防止框架把任务指令里引用的原图路径误识为"生成产物"，
+# 导致最终响应末尾被强追加一段幽灵 "## 生成产物" markdown。
+# ═══════════════════════════════════════════════════════════════════
+
+def test_user_uploaded_image_is_not_collected_as_artifact(tmp_path, monkeypatch):
+    """用户上传到 workspace/upload/ 的原图落在任务指令文本里时，
+    不应被 extract_artifact_paths 收进 artifacts_json（I-6）。
+    复现日志 0707130424-4405fc2d5072 的幽灵产物 bug：
+    skill prompt 引用了原图路径让 skill 调 outfit_vision.py 去看，
+    框架不该把这个"输入"当成"产物"。
+    """
+    package = tmp_path / "agent"
+    upload_dir = package / "workspace" / "upload"
+    upload_dir.mkdir(parents=True)
+    upload = upload_dir / "23b1e30ca94b4036.jpg"
+    upload.write_bytes(b"fake jpg")
+    monkeypatch.setattr(executor, "AGENT_PACKAGE_DIR", str(package))
+
+    text = (
+        '{"messages":[{"content":"点评一下我的穿搭？ '
+        f'用户上传了图片，路径: {upload} '
+        '需要查看图片内容时请使用 read_image 工具"}]}'
+    )
+
+    result = executor.extract_artifact_paths(text)
+
+    assert result == [], (
+        f"用户上传的原图不得被收进 artifacts_json，本次却收到：{result}"
+    )
+
+
+def test_user_upload_under_uploads_dir_is_not_collected(tmp_path, monkeypatch):
+    """uploads/ 目录（另一个常见上传输入约定）同样不应被当成产物。"""
+    package = tmp_path / "agent"
+    upload_dir = package / "uploads"
+    upload_dir.mkdir(parents=True)
+    upload = upload_dir / "selfie.jpg"
+    upload.write_bytes(b"fake jpg")
+    monkeypatch.setattr(executor, "AGENT_PACKAGE_DIR", str(package))
+
+    text = f'{{"file":"uploads/selfie.jpg"}}'
+
+    result = executor.extract_artifact_paths(text)
+
+    assert result == [], (
+        f"uploads/ 下的用户输入不应被当成产物，本次却收到：{result}"
+    )
+
+
+def test_generated_image_under_outputs_is_still_collected(tmp_path, monkeypatch):
+    """守卫只排除用户上传输入目录，不能误伤 skill 真正生成的产物。
+    skill 本次新生成到 outputs/ 的效果图必须仍然被收进 artifacts_json。
+    """
+    package = tmp_path / "agent"
+    outputs_dir = package / "outputs"
+    outputs_dir.mkdir(parents=True)
+    generated = outputs_dir / "outfit-1.png"
+    generated.write_bytes(b"generated image")
+    monkeypatch.setattr(executor, "AGENT_PACKAGE_DIR", str(package))
+
+    text = f'{{"stdout":"效果图已生成: outputs/outfit-1.png"}}'
+
+    result = executor.extract_artifact_paths(text)
+
+    assert str(generated.resolve()) in result, (
+        f"outputs/ 下本次新生成的产物应被收集，本次漏了：{result}"
+    )
+
+
+def test_user_upload_and_generated_image_coexist_only_collects_generated(tmp_path, monkeypatch):
+    """混合场景：任务指令同时引用了用户上传原图 + 本次生成的效果图，
+    框架应只收生成物、不收输入。锁住 I-6 边界与正常产物收集并存。"""
+    package = tmp_path / "agent"
+    upload_dir = package / "workspace" / "upload"
+    outputs_dir = package / "outputs"
+    upload_dir.mkdir(parents=True)
+    outputs_dir.mkdir(parents=True)
+    upload = upload_dir / "user-input.jpg"
+    upload.write_bytes(b"input")
+    generated = outputs_dir / "outfit-2.png"
+    generated.write_bytes(b"generated")
+    monkeypatch.setattr(executor, "AGENT_PACKAGE_DIR", str(package))
+
+    text = (
+        f'{{"prompt":"请看这张图：{upload} 并按它生成效果图 {generated}"}}'
+    )
+
+    result = executor.extract_artifact_paths(text)
+
+    # I-6 边界：只收本次生成物，不收用户上传输入 — 长度必须恰好为 1
+    assert result == [str(generated.resolve())], (
+        f"应只收集本次生成的产物，实际收到：{result}"
+    )

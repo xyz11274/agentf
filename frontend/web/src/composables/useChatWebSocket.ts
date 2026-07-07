@@ -242,8 +242,33 @@ export function useChatWebSocket(options: UseChatWebSocketOptions = {}): UseChat
         : (typeof frame.progress_status === 'string' ? frame.progress_status : '')
 
       if (isProgress || chunkType === 'progress') {
-        // Progress status message — display separately from model output.
-        chatStore.setProgress(content)
+        // Progress status message — 解析 OpenAI JSON 提取内容
+        // message.content:  完整进度文本（如 "coordinator 决策中…"）→ setProgress（替换）
+        // delta.content:    增量 LLM token（如 "环""境"）→ appendProgress（累积）
+        //                   同时按 skill/round 归入 llmChunks 分组卡片
+        // delta.tool_calls: 工具调用参数流 → 跳过，不显示在进度区
+        try {
+          const parsed = JSON.parse(content)
+          const msg = parsed?.choices?.[0]?.message?.content
+          const tok = parsed?.choices?.[0]?.delta?.content
+          const tcs = parsed?.choices?.[0]?.delta?.tool_calls
+          if (msg) {
+            chatStore.setProgress(msg)
+          } else if (tok) {
+            chatStore.appendProgress(tok)
+            // delta.content 也归入 llmChunks 分组，供卡片展示
+            if (metaSkill && metaRound) {
+              chatStore.addLlmChunk(metaSkill, metaRound, tok)
+            }
+          } else if (tcs) {
+            // delta.tool_calls 不显示在进度区，静默跳过
+          } else {
+            chatStore.setProgress(content)
+          }
+        } catch {
+          // content 不是合法 JSON — 可能是纯文本进度消息，替换显示
+          chatStore.setProgress(content)
+        }
       } else if (chunkType === 'llm_chunk') {
         // LLM streaming chunk — 节点推送的是原始 OpenAI SSE chunk JSON（见
         // streaming-response.md §3.4），前端解析 delta.content 取 token，
@@ -275,10 +300,22 @@ export function useChatWebSocket(options: UseChatWebSocketOptions = {}): UseChat
         // streamingMessageId is always set by the time chunks arrive.
         // (No lazy allocation here — single source of truth in chatStore.)
         if (chatStore.streamingMessageId) {
+          // 解析 content，防止原始 OpenAI JSON 直接进入对话气泡
+          let displayContent = content
+          try {
+            const parsed = JSON.parse(content)
+            const msg = parsed?.choices?.[0]?.message?.content
+                      || parsed?.choices?.[0]?.delta?.content
+            if (msg) {
+              displayContent = msg
+            }
+          } catch {
+            // content 不是合法 JSON — 降级为原样显示
+          }
           const artifacts = Array.isArray(frame.artifacts)
             ? (frame.artifacts as Array<{type:string;url:string;name:string;mime_type:string}>)
             : undefined
-          chatStore.appendChunk(chatStore.streamingMessageId, content, artifacts)
+          chatStore.appendChunk(chatStore.streamingMessageId, displayContent, artifacts)
         }
         // Clear any previous progress message once real content arrives.
         chatStore.clearProgress()

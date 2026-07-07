@@ -29,6 +29,7 @@ Agent（如 outfit-assistant）在执行技能后生成各种类型的产物：�
 | G3 | artifact 路径受目录白名单保护，防止路径穿越攻击 | P0 |
 | G4 | 历史对话回放时，结构化 artifact 元数据应能从 Bridge 持久化层恢复 | P1 |
 | G5 | 产物可配置公网 CDN 或相对路径（通过 `artifact_public_base_url`） | P1 |
+| G6 | 产物收集守"本次新生成"语义边界，不收 skill 消费过的用户上传输入（`workspace/upload/` 是输入目录，见 `content_serializer._compute_upload_dir`） | P0 |
 
 ## 2. 数据流全景
 
@@ -92,6 +93,8 @@ Agent（如 outfit-assistant）在执行技能后生成各种类型的产物：�
 Agent 子进程（coordinator 或 skill）在最终响应文本中嵌入 artifact 标记。
 
 **入口函数**: `coordinator_decide.py:append_artifacts_markdown()`
+
+**产物收集边界（I-6）**: 产物清单由 `skill_executor.extract_artifact_paths` 从 skill 执行过程的文本（task_instruction / tool_result）里扫路径得出。**输入路径不得混入**：API 传入图片经 `content_serializer._compute_upload_dir` 落到 `{agent_packages}/{agent_id}/workspace/upload/`，并以文本形式注入 user message 透传到 skill prompt — 因此 `workspace/upload/`（兼容旧 `uploads/`）是输入目录，扫到时必须跳过。详见 §5 I-6。
 
 **标记格式**:
 
@@ -237,6 +240,7 @@ function appendChunk(messageId, chunk, artifacts?) {
 | I-3 | SSE 流、同步模式、历史回放三条路径的 artifact 数据格式一致 | 共用 `extract_artifact_infos` + `serialize_artifacts` |
 | I-4 | 同一对话内重复 artifact URL 只在前端显示一次 | `appendChunk` 的 `some(existing => existing.url === a.url)` 去重 |
 | I-5 | 持久化失败不应阻塞对话主流程 | `save_dialogue` 有 `try/except` 包裹（I-5 模式） |
+| I-6 | **artifacts 必须是 skill 本次新生成的文件，不得是 skill 消费过的输入** | 数据流真相源：`content_serializer._compute_upload_dir` 把 API 传入图片统一落到 `{agent_packages_path}/{agent_id}/workspace/upload/{sha}.{ext}`，并把路径以文本形式注入 user message（`"用户上传了图片，路径: {file_path} …"`）一路透传到 skill prompt。因此 `workspace/upload/` 是**输入目录**，绝非产物目录。`extract_artifact_paths` 的产物边界守卫：扫到 `workspace/upload/`（以及兼容旧约定的 `uploads/`）路径时必须跳过，无论文件是否存在。产物语义 = 本次新生成，仅凭"路径出现在文本里 + 文件存在"不足够 |
 
 ## 6. 错误模型
 

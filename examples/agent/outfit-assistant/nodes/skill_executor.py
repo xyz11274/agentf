@@ -31,16 +31,23 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from databus_client import DataBusClient
-from llm_call import call_llm, estimate_message_tokens, compact_messages, get_model_max_tokens, get_compaction_threshold, resolve_llm_config
+from llm_call import (
+    call_llm,
+    compact_messages,
+    estimate_message_tokens,
+    get_compaction_threshold,
+    get_model_max_tokens,
+    resolve_llm_config,
+)
 from observability import emit_event
 from parse_af_input import parse_stream
-from round_reminder import build_round_reminder
 from prompts import (
     SKILL_FALLBACK_SYSTEM,
-    SKILL_SECTION_TEMPLATE,
     SKILL_NOT_FOUND_TEMPLATE,
     SKILL_RECOVERY_PROMPT,
+    SKILL_SECTION_TEMPLATE,
 )
+from round_reminder import build_round_reminder
 
 NODES_DIR = os.path.dirname(os.path.abspath(__file__))
 AGENT_PACKAGE_DIR = os.path.dirname(NODES_DIR)
@@ -54,7 +61,7 @@ _DOTENV_PATH = os.path.join(AGENT_PACKAGE_DIR, ".env")
 if os.path.isfile(_DOTENV_PATH):
     try:
         from dotenv import load_dotenv
-        load_dotenv(_DOTENV_PATH)
+        load_dotenv(_DOTENV_PATH,override=True)
     except Exception:
         pass  # dotenv not installed; fall through silently
 SKILLS_BASE = os.path.join(AGENT_PACKAGE_DIR, "harness", "skills")
@@ -301,6 +308,13 @@ def extract_artifact_paths(text: str) -> list[str]:
       - Relative paths:       .agentfoundry/.../file.png, assets/outfit.png
 
     Relative paths are resolved against AGENT_PACKAGE_DIR (the cwd for tool execution).
+
+    I-6 boundary (see artifact-output-pipeline.md §5): artifacts must be files
+    the skill *generated this turn*, not inputs it consumed / referenced / read.
+    We guard by excluding known user-upload input directories
+    (workspace/upload/, uploads/). The framework copies generated files into
+    outputs/ via _ensure_artifacts_in_package, so uploads/ never legitimately
+    holds a generated artifact.
     """
     pattern = (
         r"(?:"
@@ -314,17 +328,41 @@ def extract_artifact_paths(text: str) -> list[str]:
     seen: list[str] = []
     for item in candidates:
         if item.startswith(("http://", "https://")):
+            # External URL — no upload-dir guard applies, but still skip
+            # obvious upload endpoint paths (defensive; not the main path).
+            if "/upload/" in item or "/uploads/" in item:
+                continue
             seen.append(item)
         elif item.startswith("/"):
-            # Absolute path — use as-is
+            # Absolute path — reject if it lives under an upload input directory
+            if _is_user_upload_input(item):
+                continue
             if os.path.isfile(item):
                 seen.append(item)
         else:
             # Relative path — resolve against AGENT_PACKAGE_DIR
             abs_path = os.path.normpath(os.path.join(AGENT_PACKAGE_DIR, item))
+            if _is_user_upload_input(abs_path):
+                continue
             if os.path.isfile(abs_path):
                 seen.append(abs_path)
     return list(dict.fromkeys(seen))
+
+
+# I-6 boundary: directories that hold user-uploaded inputs, never skill-generated artifacts.
+# Match against resolved absolute paths only; keep lowercase for case-insensitive compare.
+_USER_UPLOAD_INPUT_MARKERS = ("/workspace/upload/", "/uploads/")
+
+
+def _is_user_upload_input(resolved_path: str) -> bool:
+    """Return True if the given (resolved) path lives under a user-upload input directory.
+
+    Used by extract_artifact_paths to enforce I-6: skill-consumed inputs must not
+    be reported as generated artifacts. Case-insensitive on the directory markers
+    because macOS / Linux paths are not reliably canonical.
+    """
+    lowered = resolved_path.lower()
+    return any(marker in lowered for marker in _USER_UPLOAD_INPUT_MARKERS)
 
 
 def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:

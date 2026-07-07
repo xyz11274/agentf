@@ -21,10 +21,22 @@ Reads DASHSCOPE_API_KEY from the environment (inject it via the Environment's
 secrets / a Vault — the sandbox drops *_API_KEY from the per-call env path).
 Zero pip dependencies; uses DashScope's OpenAI-compatible endpoint.
 
+Two transport paths, auto-picked by model name prefix (same OpenAI multimodal
+payload — only the transport layer changes):
+
+  model "aisf/<name>"  → UDS path: send the payload through the local
+      `_uds_client` package (a self-contained copy of nodes/common/clients'
+      UDS subset) → agentflow plugin socket → SysAgent → FusionMind's OpenAI
+      endpoint. FusionMind supports VL multimodal request bodies, so image_url
+      content blocks pass through unchanged. No DASHSCOPE_API_KEY needed —
+      the server side owns credentials. Zero pip deps: UDS client is stdlib only.
+  model "<name>"       → HTTP path: POST to DashScope's OpenAI-compatible
+      endpoint, authed by DASHSCOPE_API_KEY. Zero pip deps; stdlib urllib only.
+
 Usage:
   python3 outfit_vision.py --image uploads/coat.jpg
   python3 outfit_vision.py --image uploads/me.jpg --mode person
-  python3 outfit_vision.py --image uploads/x.png --mode garment --model qwen-vl-plus
+  python3 outfit_vision.py --image uploads/x.png --model aisf/qwen-vl-max   # UDS
 
 Prints one JSON object to stdout. Exit 0 on success; non-zero (message on
 stderr) on a missing key / unreadable image / API error. If the model's reply
@@ -44,9 +56,14 @@ import sys
 import urllib.error
 import urllib.request
 
+# UDS 路径用本地 _uds_client 包（nodes/common/clients UDS 子集的自包含拷贝，
+# 不 import 框架 nodes/，守 SKILL.md "Zero pip dependencies" 约束）
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 ssl._create_default_https_context = ssl._create_unverified_context
 ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 DEFAULT_MODEL = "qwen-vl-max"
+AISF_PREFIX = "aisf/"  # 模型名带此前缀走 UDS，否则走 DashScope HTTP
 
 GARMENT_PROMPT = (
     "你是服装识别助手。识别这张图片里的服饰单品，只输出一个 JSON 对象，不要任何额外文字或代码块标记。"
@@ -140,18 +157,25 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="outfit_vision", description="structured outfit/person image analysis via Qwen-VL")
     ap.add_argument("--image", required=True, help="image file path or http(s) URL")
     ap.add_argument("--mode", choices=("garment", "person", "outfit"), default="garment")
-    ap.add_argument("--model", default=os.environ.get("DASHSCOPE_VL_MODEL") or DEFAULT_MODEL)
+    ap.add_argument("--model", default=os.environ.get("DASHSCOPE_VL_MODEL") or DEFAULT_MODEL,
+                    help="model name; 'aisf/<name>' prefix → UDS path (no key needed), "
+                         "bare name → DashScope HTTP (needs DASHSCOPE_API_KEY)")
     ap.add_argument("--max-tokens", type=int, default=1200)
     args = ap.parse_args(argv)
 
-    key = os.environ.get("DASHSCOPE_API_KEY")
-    if not key:
-        print(
-            "error: DASHSCOPE_API_KEY not set in this environment. Set it to a "
-            "DashScope key (sk-...) — e.g. via the Environment's secrets.",
-            file=sys.stderr,
-        )
-        return 2
+    use_uds = args.model.startswith(AISF_PREFIX)
+
+    key = ""
+    if not use_uds:
+        key = os.environ.get("DASHSCOPE_API_KEY")
+        if not key:
+            print(
+                "error: DASHSCOPE_API_KEY not set in this environment. Set it to a "
+                "DashScope key (sk-...) — e.g. via the Environment's secrets, "
+                "or use --model aisf/<name> to go through the agentflow plugin socket.",
+                file=sys.stderr,
+            )
+            return 2
 
     try:
         image_url = _image_url(args.image)
@@ -164,35 +188,56 @@ def main(argv=None):
         if args.mode == "outfit"
         else (PERSON_PROMPT if args.mode == "person" else GARMENT_PROMPT)
     )
-    payload = {
-        "model": args.model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": image_url}},
-                ],
-            }
-        ],
-        "max_tokens": args.max_tokens,
-    }
-    req = urllib.request.Request(
-        ENDPOINT,
-        data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
-        method="POST",
-    )
-    try:
-        with _urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read().decode())
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode(errors="replace")
-        print(f"error: HTTP {exc.code} from DashScope: {body[:500]}", file=sys.stderr)
-        return 1
-    except urllib.error.URLError as exc:
-        print(f"error: network error calling DashScope: {exc.reason}", file=sys.stderr)
-        return 1
+    # OpenAI multimodal 格式 payload —— 两条路径共用，只换传输层
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ],
+        }
+    ]
+
+    if use_uds:
+        # 用本地 _uds_client 包（nodes/common/clients UDS 子集的自包含拷贝）
+        from _uds_client import create_llm_client, LlmUdsError
+        try:
+            client = create_llm_client(model=args.model)
+            resp = client.chat_completion(
+                messages=messages,
+                max_completion_tokens=args.max_tokens,
+                stream=False,
+            )
+        except LlmUdsError as exc:
+            print(f"error: UDS LLM call failed: {exc}", file=sys.stderr)
+            return 1
+        except Exception as exc:
+            print(f"error: UDS path failed: {exc}", file=sys.stderr)
+            return 1
+        data = resp
+    else:
+        payload = {
+            "model": args.model,
+            "messages": messages,
+            "max_tokens": args.max_tokens,
+        }
+        req = urllib.request.Request(
+            ENDPOINT,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
+            method="POST",
+        )
+        try:
+            with _urlopen(req, timeout=120) as resp:
+                data = json.loads(resp.read().decode())
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode(errors="replace")
+            print(f"error: HTTP {exc.code} from DashScope: {body[:500]}", file=sys.stderr)
+            return 1
+        except urllib.error.URLError as exc:
+            print(f"error: network error calling DashScope: {exc.reason}", file=sys.stderr)
+            return 1
 
     try:
         text = data["choices"][0]["message"]["content"]

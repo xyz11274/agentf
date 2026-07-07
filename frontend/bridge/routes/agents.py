@@ -116,7 +116,7 @@ async def load_agent(
     ``.env`` file from Bridge ``config.yaml → agent_defaults``.
     Only writes values that are not already set (empty or placeholder).
     """
-    pkg_name = (body.package_path if body else None) or agent_id.replace("-", "_")
+    pkg_name = (body.package_path if body else None) or agent_id
     package_path = str(settings.agent_packages_path / pkg_name)
 
     # 注入默认配置到 .env（不覆盖用户已有值）

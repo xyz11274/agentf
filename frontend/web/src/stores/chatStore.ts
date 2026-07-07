@@ -200,6 +200,11 @@ export const useChatStore = defineStore('chat', () => {
     progressMessage.value = msg
   }
 
+  function appendProgress(token: string): void {
+    const current = progressMessage.value ?? ''
+    progressMessage.value = current + token
+  }
+
   function clearProgress(): void {
     progressMessage.value = null
   }
@@ -439,6 +444,7 @@ export const useChatStore = defineStore('chat', () => {
     loadHistoryMessages,
     loadHistoryTraces,
     setProgress,
+    appendProgress,
     clearProgress,
     updateSkillStatus,
     clearAllSkillStatus,

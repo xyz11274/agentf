@@ -118,15 +118,17 @@ async def get_artifact_file(agent_id: str, relative_path: str) -> FileResponse:
     then falls back to the project root if the file is not found there
     (handles the case where tools generate files at the project root,
     e.g. ``.agentfoundry/outputs/``).
+
+    ``relative_path`` is expected to INCLUDE the agent package directory name
+    (e.g. ``outfit-assistant/workspace/assets/review.png``) because
+    ``coordinator_decide.local_artifact_url()`` computes the path relative to
+    ``packages_root`` (parent of the agent package dir). Stripping the prefix
+    here would break resolution — ``_resolve_artifact`` already handles the
+    full path correctly.
     """
     _aid = agent_id
 
-    # Strip agent_id namespace prefix if present (e.g. "outfit-assistant/" → "")
-    search_path = relative_path
-    if search_path.startswith(agent_id + "/"):
-        search_path = search_path[len(agent_id) + 1:]
-
-    candidate = _resolve_artifact(search_path, agent_pkg_name=agent_id.replace("-", "_"))
+    candidate = _resolve_artifact(relative_path, agent_pkg_name=agent_id)
 
     if candidate is None:
         logger.warning("artifact_serve.forbidden agent=%s path=%s (blocked traversal)", _aid, relative_path)

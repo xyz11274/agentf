@@ -230,6 +230,29 @@ def collect_skill_results(databus: DataBusClient, skill_names: list) -> list:
     return results
 
 
+_VERSION_SUFFIX = re.compile(r"-(\d+)$")
+
+
+def _dedup_versioned_artifacts(paths: list[str]) -> list[str]:
+    """Keep only the highest-numbered variant when filenames share a ``-N`` stem.
+
+    ``outfit-review-1.png`` and ``outfit-review-2.png`` are treated as versions
+    of the same artifact family (base stem ``outfit-review``); only the
+    highest-numbered one survives.  Files without a ``-N`` suffix are kept
+    unchanged.
+    """
+    best: dict[str, tuple[int, str]] = {}
+    for path in paths:
+        stem = Path(path).stem
+        match = _VERSION_SUFFIX.search(stem)
+        base = stem[: match.start()] if match else stem
+        num = int(match.group(1)) if match else 0
+        prev = best.get(base)
+        if prev is None or num > prev[0]:
+            best[base] = (num, path)
+    return [path for _, path in best.values()]
+
+
 def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
     """Append browser-accessible Markdown for generated artifacts (images, HTML, downloads)."""
     try:
@@ -246,9 +269,10 @@ def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
     if not items:
         return content
 
-    # Categorize by file extension
     _image_suffixes = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-    images = [p for p in items if Path(p).suffix.lower() in _image_suffixes]
+    images = _dedup_versioned_artifacts(
+        [p for p in items if Path(p).suffix.lower() in _image_suffixes]
+    )
     html_reports = [p for p in items if p.lower().endswith(".html")]
     downloads = [p for p in items if p not in images and p not in html_reports]
 

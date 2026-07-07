@@ -92,9 +92,9 @@ agent_defaults:
 
   # ── LLM 降级模型（主模型不可用时自动尝试） ──
   llm_fallback:
-    api_key: ""
-    base_url: "https://api.minimax.io/v1"
-    model: "MiniMax-M3"
+    api_key: "sk-dca40208f5714152a6cf0de59cc5f1d0"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    model: "deepseek-v4-flash"
 
   # ── Coordinator 循环 ──
   coordinator:
@@ -114,7 +114,7 @@ agent_defaults:
 
   # ── LLM 请求调优 ──
   llm_timeout: 120
-  llm_connect_timeout: 5
+  llm_connect_timeout: 15
   llm_max_retries: 2
   llm_retry_base_delay: 1.0
 
@@ -122,7 +122,7 @@ agent_defaults:
   vision:
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model: "qwen-vl-max"
-    api_key: ""
+    api_key: "sk-dca40208f5714152a6cf0de59cc5f1d0"
 
   # ── VL 降级模型 ──
   vision_fallback:

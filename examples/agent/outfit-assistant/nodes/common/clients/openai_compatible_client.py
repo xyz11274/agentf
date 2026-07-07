@@ -92,10 +92,13 @@ class OpenAiCompatibleClient(LlmClient):
         call_id = uuid.uuid4().hex[:12]
 
         # ── Transport-layer retry ──
-        max_attempts = 1 if stream else (self.max_retries + 1)
+        # 流式模式也允许重试，但仅限于「还未收到任何 SSE chunk」的连接阶段错误。
+        # 一旦收到第一个 SSE 数据，mid-stream 错误不再重试（避免向客户端推送重复流）。
+        max_attempts = self.max_retries + 1
         response_data = None
         last_error = None
         attempt = 0
+        _data_received = False  # 流式模式：是否已收到 SSE chunk
 
         for attempt in range(max_attempts):
             try:
@@ -125,6 +128,7 @@ class OpenAiCompatibleClient(LlmClient):
                 for sse_line in resp.iter_lines(decode_unicode=True):
                     if not sse_line or not sse_line.startswith("data: "):
                         continue
+                    _data_received = True  # 已收到第一条 SSE 数据
                     payload = sse_line[6:].strip()
                     if payload == "[DONE]":
                         break
@@ -202,11 +206,11 @@ class OpenAiCompatibleClient(LlmClient):
             except Exception as e:
                 last_error = e
                 retriable = _is_transient_http_error(e)
-                if attempt < max_attempts - 1 and retriable:
+                if not _data_received and attempt < max_attempts - 1 and retriable:
                     backoff = min(self.retry_base_delay * (2 ** attempt), 8.0)
                     logger.warning(
-                        "transient error attempt=%d/%d, retry in %.1fs: %s",
-                        attempt + 1, max_attempts, backoff, e,
+                        "transient error attempt=%d/%d, retry in %.1fs: %s (data_received=%s)",
+                        attempt + 1, max_attempts, backoff, e, _data_received,
                     )
                     time.sleep(backoff)
                     continue
