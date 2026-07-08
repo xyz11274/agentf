@@ -192,6 +192,24 @@ async def _pull_and_save_traces(
                 "trace_pull.save_ok agent=%s call_id=%s persisted=%d",
                 agent_id, call_id, persisted,
             )
+            # Clean up this call's DataBus traces immediately after saving.
+            # Each call is independent — one failure never blocks the others
+            # from being freed, and there is no partial-failure data loss.
+            try:
+                cleanup_result = await daemon_client.send_request(
+                    "databus.remove_by_prefix",
+                    {**sess_params, "prefix": f"llm/traces/{call_id}/"},
+                )
+                removed = cleanup_result.get("removed", 0) if isinstance(cleanup_result, dict) else 0
+                logger.info(
+                    "trace_pull.cleanup_call agent=%s call_id=%s removed=%d",
+                    agent_id, call_id, removed,
+                )
+            except DaemonError as exc:
+                logger.warning(
+                    "trace_pull.cleanup_call_failed agent=%s call_id=%s: %s",
+                    agent_id, call_id, exc,
+                )
         except Exception as exc:  # noqa: BLE001
             # I-5: provider failures must not break the chat flow.
             logger.warning(
@@ -204,22 +222,21 @@ async def _pull_and_save_traces(
         agent_id, dialogue_id, persisted,
     )
 
-    # Trace data has been persisted to SQLite — clean up from DataBus
-    # so shared memory doesn't accumulate across dialogues.
+    # After all calls, clean up the dialogue-scoped index key.
     if persisted > 0:
         try:
-            cleanup_result = await daemon_client.send_request(
+            index_cleanup = await daemon_client.send_request(
                 "databus.remove_by_prefix",
-                {**sess_params, "prefix": "llm/traces/"},
+                {**sess_params, "prefix": f"llm/traces/index/{dialogue_id}"},
             )
-            removed_count = cleanup_result.get("removed", 0) if isinstance(cleanup_result, dict) else 0
+            removed_index = index_cleanup.get("removed", 0) if isinstance(index_cleanup, dict) else 0
             logger.info(
-                "trace_pull.cleanup agent=%s dialogue=%s removed=%d",
-                agent_id, dialogue_id, removed_count,
+                "trace_pull.cleanup_index agent=%s dialogue=%s removed=%d",
+                agent_id, dialogue_id, removed_index,
             )
         except DaemonError as exc:
             logger.warning(
-                "trace_pull.cleanup_failed agent=%s dialogue=%s: %s",
+                "trace_pull.cleanup_index_failed agent=%s dialogue=%s: %s",
                 agent_id, dialogue_id, exc,
             )
 

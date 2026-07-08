@@ -296,10 +296,14 @@ async def test_pull_and_save_traces_requires_dialogue_id(
 
 
 @pytest.mark.asyncio
-async def test_pull_and_save_traces_cleans_up_databus_after_success(
+async def test_pull_and_save_traces_cleans_up_each_call_after_save(
     provider: LocalSessionProvider,
 ) -> None:
-    """I-1 + cleanup: persisted > 0 → databus.remove_by_prefix is called."""
+    """Each trace is cleaned up individually after being saved.
+
+    Per-call prefix: ``llm/traces/{call_id}/`` — not batch ``llm/traces/``.
+    Also cleans up the dialogue-scoped index key at the end.
+    """
     daemon = _MockDaemonClient([_make_trace_entry("call-001")])
     sess = await provider.get_or_create_session("grace", "web")
 
@@ -314,27 +318,77 @@ async def test_pull_and_save_traces_cleans_up_databus_after_success(
 
     assert count == 1, f"Expected 1 trace, got {count}"
 
-    # Verify databus.remove_by_prefix was called with the right prefix
-    cleanup_calls = [
+    # Verify per-call cleanup: llm/traces/call-001/
+    per_call = [
         (m, p) for m, p in daemon._sent_requests  # noqa: SLF001
-        if m == "databus.remove_by_prefix"
+        if m == "databus.remove_by_prefix" and p and "/call-" in (p.get("prefix") or "")
     ]
-    assert len(cleanup_calls) == 1, (
-        f"Expected 1 databus.remove_by_prefix call, got {len(cleanup_calls)}"
+    assert len(per_call) == 1, (
+        f"Expected 1 per-call cleanup, got {len(per_call)}"
     )
-    _, params = cleanup_calls[0]
-    assert params is not None
-    assert params.get("prefix") == "llm/traces/", (
-        f"Expected prefix='llm/traces/', got {params.get('prefix')!r}"
+    _, params = per_call[0]
+    assert params.get("prefix") == "llm/traces/call-001/", (
+        f"Expected prefix='llm/traces/call-001/', got {params.get('prefix')!r}"
     )
     assert params.get("agent_id") == "test-agent"
+
+    # Verify index cleanup: llm/traces/index/d-cleanup
+    index_calls = [
+        (m, p) for m, p in daemon._sent_requests  # noqa: SLF001
+        if m == "databus.remove_by_prefix" and p and "index/" in (p.get("prefix") or "")
+    ]
+    assert len(index_calls) == 1, (
+        f"Expected 1 index cleanup call, got {len(index_calls)}"
+    )
+    _, idx_params = index_calls[0]
+    assert idx_params.get("prefix") == "llm/traces/index/d-cleanup", (
+        f"Expected prefix='llm/traces/index/d-cleanup', got {idx_params.get('prefix')!r}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pull_and_save_traces_cleans_up_multiple_calls(
+    provider: LocalSessionProvider,
+) -> None:
+    """Multiple traces → each gets its own per-call cleanup + one index cleanup."""
+    daemon = _MockDaemonClient([
+        _make_trace_entry("call-a"),
+        _make_trace_entry("call-b"),
+    ])
+    sess = await provider.get_or_create_session("hank", "web")
+
+    count = await _pull_and_save_traces(
+        daemon, provider,
+        agent_id="test-agent",
+        user_id="hank",
+        client_id="web",
+        dialogue_id="d-multi",
+        session_id=sess["id"],
+    )
+
+    assert count == 2
+
+    per_call = [
+        p.get("prefix") for m, p in daemon._sent_requests  # noqa: SLF001
+        if m == "databus.remove_by_prefix" and p and "/call-" in (p.get("prefix") or "")
+    ]
+    assert len(per_call) == 2, f"Expected 2 per-call cleanups, got {len(per_call)}: {per_call}"
+    assert "llm/traces/call-a/" in per_call
+    assert "llm/traces/call-b/" in per_call
+
+    index_calls = [
+        p.get("prefix") for m, p in daemon._sent_requests  # noqa: SLF001
+        if m == "databus.remove_by_prefix" and p and "index/" in (p.get("prefix") or "")
+    ]
+    assert len(index_calls) == 1, f"Expected 1 index cleanup, got {len(index_calls)}"
+    assert index_calls[0] == "llm/traces/index/d-multi"
 
 
 @pytest.mark.asyncio
 async def test_pull_and_save_traces_skips_cleanup_on_empty(
     provider: LocalSessionProvider,
 ) -> None:
-    """persisted == 0 → databus.remove_by_prefix is NOT called."""
+    """persisted == 0 → no cleanup calls (neither per-call nor index)."""
     daemon = _MockDaemonClient([])  # no trace entries
     sess = await provider.get_or_create_session("heidi", "web")
 
@@ -355,4 +409,77 @@ async def test_pull_and_save_traces_skips_cleanup_on_empty(
     ]
     assert len(cleanup_calls) == 0, (
         f"Expected 0 cleanup calls when persisted=0, got {len(cleanup_calls)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_pull_and_save_traces_partial_failure_still_cleans_successful(
+    provider: LocalSessionProvider,
+) -> None:
+    """One trace fails to save → the successful traces are still cleaned.
+
+    This is the key advantage of per-call cleanup: partial persistence
+    never blocks cleanup of the traces that were saved.
+    """
+    entries = [_make_trace_entry("call-ok"), _make_trace_entry("call-bad")]
+
+    class _PartialFailDaemon(_MockDaemonClient):
+        """Simulates a daemon whose second trace entry triggers a save failure."""
+
+        async def send_request(
+            self, method: str, params: dict[str, Any] | None = None, **kwargs: Any,
+        ) -> Any:
+            self._sent_requests.append((method, params))  # type: ignore[attr-defined]
+
+            if method == "databus.list_keys":
+                prefix = (params or {}).get("prefix", "")
+                keys = []
+                for entry in entries:
+                    call_id = entry.get("call_id", "unknown")
+                    keys.append(f"{prefix}{call_id}/meta")
+                return {"keys": keys}
+
+            if method == "databus.get":
+                key: str = (params or {}).get("key", "")
+                # call-ok responds normally
+                if "call-ok" in key:
+                    for entry in entries:
+                        call_id = entry.get("call_id", "")
+                        if call_id and call_id in key:
+                            sub_key = key.rsplit("/", 1)[-1]
+                            value = entry.get(sub_key)
+                            if value is not None:
+                                return {"exists": True, "value": value}
+                # call-bad returns data that will be None after parse
+                if "call-bad" in key:
+                    return {"exists": True, "value": {"_corrupt": True}}
+                return {"exists": False, "value": None}
+
+            if method == "databus.remove_by_prefix":
+                return {"removed": 3}
+
+            return {}
+
+    daemon = _PartialFailDaemon(entries)
+    sess = await provider.get_or_create_session("iris", "web")
+
+    count = await _pull_and_save_traces(
+        daemon, provider,
+        agent_id="test-agent",
+        user_id="iris",
+        client_id="web",
+        dialogue_id="d-partial",
+        session_id=sess["id"],
+    )
+
+    # At least the successful trace is persisted
+    assert count >= 1, f"Expected at least 1 persisted trace, got {count}"
+
+    # Per-call cleanup should have happened for the successful trace
+    cleanup_prefixes = [
+        p.get("prefix") for m, p in daemon._sent_requests  # noqa: SLF001
+        if m == "databus.remove_by_prefix" and p and "/call-" in (p.get("prefix") or "")
+    ]
+    assert "llm/traces/call-ok/" in cleanup_prefixes, (
+        f"Expected cleanup for 'call-ok', got prefixes: {cleanup_prefixes}"
     )

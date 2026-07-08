@@ -35,7 +35,7 @@ namespace SysAgent {
 
 constexpr char IM_INFER_SCHEDULER[] = "IMInferScheduler";
 constexpr char MODEL_INFER_PORT[] = ":27321";
-constexpr char MODEL_OPENAI_URL[] = "/infermind/scheduler/v1/chat/completions";
+constexpr char MODEL_OPENAI_URL[] = "/infermind/llm/v1/chat/openai/completions";
 constexpr char SSE_DATA_PREFIX[] = "data:";
 constexpr char SSE_DONE_FLAG[] = "[DONE]";
 constexpr char REQUEST_ID_HEADER[] = "requestId";
