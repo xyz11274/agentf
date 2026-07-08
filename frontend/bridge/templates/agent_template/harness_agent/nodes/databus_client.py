@@ -143,3 +143,30 @@ class DataBusClient:
         except Exception as exc:
             _log_warn(f"get_global '{key}' failed: {exc}")
             return None
+
+    def response_push(self, content: str, type: str = "progress",
+                      source: str = "", skill: str = "",
+                      round: str = "", status: str = "") -> bool:
+        """Push a streaming chunk to the Bridge via the SDK's response_push.
+
+        Delegates to the underlying ``_RealDataBusClient.response_push()``.
+        See streaming-response.md §3.2 / §3.6 for the full protocol contract.
+
+        Returns:
+            True if the message was successfully enqueued.
+        """
+        if not self._client:
+            return False
+        try:
+            # 只传非空可选参数（守 SDK 行为：if param: params[param] = val）
+            kwargs: dict = {"type": type}
+            if source: kwargs["source"] = source
+            if skill:   kwargs["skill"] = skill
+            if round:   kwargs["round"] = round
+            if status:  kwargs["status"] = status
+            if self._dialogue_id:
+                kwargs["dialogue_id"] = self._dialogue_id
+            return self._client.response_push(content, **kwargs)
+        except Exception as exc:
+            _log_warn(f"response_push failed: {exc}")
+            return False

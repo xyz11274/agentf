@@ -166,3 +166,52 @@ class TestPutGetContract:
         wrapper.put_global("_e2e_response", "done")
 
         ns_mock.put.assert_called_once_with("_e2e_response", "done")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Contract: response_push
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestResponsePushContract:
+    """Verify that ``DataBusClient.response_push()`` delegates to the SDK's ``response_push()``."""
+
+    def test_response_push_delegates_with_source(self, wrapper, mock_sdk_client):
+        """response_push(content, type=..., source=...) must call SDK's response_push with source."""
+        wrapper.response_push("test content", type="progress", source="coordinator")
+        mock_sdk_client.response_push.assert_called_once_with(
+            "test content", type="progress", source="coordinator",
+            dialogue_id="test-dialogue",
+        )
+
+    def test_response_push_delegates_with_all_params(self, wrapper, mock_sdk_client):
+        """response_push with all optional params delegates correctly."""
+        wrapper.response_push(
+            "llm chunk", type="llm_chunk", source="skill_executor",
+            skill="weather_query", round="1", status="running",
+        )
+        mock_sdk_client.response_push.assert_called_once_with(
+            "llm chunk", type="llm_chunk", source="skill_executor",
+            skill="weather_query", round="1", status="running",
+            dialogue_id="test-dialogue",
+        )
+
+    def test_response_push_without_source(self, wrapper, mock_sdk_client):
+        """response_push without source still delegates to SDK (source defaults to empty string)."""
+        wrapper.response_push("content", type="progress")
+        mock_sdk_client.response_push.assert_called_once_with(
+            "content", type="progress",
+            dialogue_id="test-dialogue",
+        )
+
+    def test_response_push_returns_sdk_result(self, wrapper, mock_sdk_client):
+        """response_push returns the SDK's return value directly."""
+        mock_sdk_client.response_push.return_value = True
+        result = wrapper.response_push("ok", type="text")
+        assert result is True
+
+    def test_response_push_not_connected(self, wrapper, mock_sdk_client):
+        """When _client is None, response_push returns False without crashing."""
+        wrapper._client = None
+        result = wrapper.response_push("x", type="progress")
+        assert result is False

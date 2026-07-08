@@ -31,15 +31,23 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from databus_client import DataBusClient
-from llm_call import call_llm, estimate_message_tokens, compact_messages, get_model_max_tokens, get_compaction_threshold
+from llm_call import (
+    call_llm,
+    compact_messages,
+    estimate_message_tokens,
+    get_compaction_threshold,
+    get_model_max_tokens,
+    resolve_llm_config,
+)
 from observability import emit_event
-from round_reminder import build_round_reminder
+from parse_af_input import parse_stream
 from prompts import (
     SKILL_FALLBACK_SYSTEM,
-    SKILL_SECTION_TEMPLATE,
     SKILL_NOT_FOUND_TEMPLATE,
     SKILL_RECOVERY_PROMPT,
+    SKILL_SECTION_TEMPLATE,
 )
+from round_reminder import build_round_reminder
 
 NODES_DIR = os.path.dirname(os.path.abspath(__file__))
 AGENT_PACKAGE_DIR = os.path.dirname(NODES_DIR)
@@ -53,7 +61,7 @@ _DOTENV_PATH = os.path.join(AGENT_PACKAGE_DIR, ".env")
 if os.path.isfile(_DOTENV_PATH):
     try:
         from dotenv import load_dotenv
-        load_dotenv(_DOTENV_PATH)
+        load_dotenv(_DOTENV_PATH,override=True)
     except Exception:
         pass  # dotenv not installed; fall through silently
 SKILLS_BASE = os.path.join(AGENT_PACKAGE_DIR, "harness", "skills")
@@ -194,11 +202,70 @@ def get_env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
 
 
+# ---------------------------------------------------------------------------
+# Runaway tool-call loop detection helpers
+# ---------------------------------------------------------------------------
+
+
+def _detect_tool_call_loop(
+    history: list[list[tuple[str, str]]],
+    new_signatures: list[tuple[str, str]],
+    threshold: int = 3,
+) -> bool:
+    """Return True when the same tool_call signatures recur `threshold` rounds in a row.
+
+    A "signature" is ``(tool_name, sorted_json_args)``. LLM陷入"反复调同一 tool 同一
+    参数"的死循环时（实测发生过 16 轮调 weather/get_user_profile 不给最终答案），
+    连续 ``threshold`` 轮签名完全一致即视为 loop，由调用方强制走完成分支。
+
+    不变量 I-4 幂等性：同一规则重复应用不应产生重复效果——重复 tool_call 即违反。
+    """
+    if not new_signatures or threshold <= 0:
+        return False
+    # threshold=1 表示"当前轮出现即触发"——第 1 次就该返回 True，
+    # 无需 history。之前漏了这行导致 threshold=1 实际要 2 轮才触发。
+    if threshold == 1:
+        return True
+    new_key = tuple(sorted(new_signatures))
+    consecutive = 1
+    for past in reversed(history):
+        if tuple(sorted(past)) == new_key:
+            consecutive += 1
+            if consecutive >= threshold:
+                return True
+        else:
+            break
+    return False
+
+
+def _summarize_tool_history(messages: list) -> str:
+    """Build a plain-text summary of tool interactions when LLM never gave a final answer.
+
+    Used as the ``skill_result`` fallback when we force-complete on loop detection,
+    so the user/coordinator sees *something* useful rather than an empty string
+    (不变量 I-1 不丢失业务数据).
+
+    输出必须是**纯文本**而非 Markdown——coordinator 把 ``skill_result`` 直接塞进
+    ``response`` key 推给前端，前端按 Markdown 渲染。若这里输出 ``### 工具 X 的输出``
+    前端会渲染成 h3 标题而非工具名，造成 UI 错位（实测发生过）。
+    所以用 ``【工具 X 的输出】`` 这种方括号标签而非 ``###`` 标题语法。
+    """
+    chunks: list[str] = []
+    for m in messages:
+        role = m.get("role", "")
+        if role == "tool":
+            name = m.get("tool_call_id", "?")
+            content = m.get("content", "")
+            chunks.append(f"【工具 {name} 的输出】\n{content}")
+        elif role == "assistant" and m.get("content"):
+            chunks.append(f"【LLM 思考】\n{m['content']}")
+    return "\n\n".join(chunks) if chunks else "(skill_executor 在工具调用循环中被强制终止，无可用输出)"
+
+
 def validate_tool_calls(choice: dict) -> tuple[bool, str]:
     """Reject truncated or syntactically broken tool calls before execution."""
     if choice.get("finish_reason") == "length":
         return False, "completion_truncated"
-
     for tool_call in choice.get("message", {}).get("tool_calls") or []:
         function = tool_call.get("function", {})
         name = function.get("name", "unknown")
@@ -241,6 +308,13 @@ def extract_artifact_paths(text: str) -> list[str]:
       - Relative paths:       .agentfoundry/.../file.png, assets/outfit.png
 
     Relative paths are resolved against AGENT_PACKAGE_DIR (the cwd for tool execution).
+
+    I-6 boundary (see artifact-output-pipeline.md §5): artifacts must be files
+    the skill *generated this turn*, not inputs it consumed / referenced / read.
+    We guard by excluding known user-upload input directories
+    (workspace/upload/, uploads/). The framework copies generated files into
+    outputs/ via _ensure_artifacts_in_package, so uploads/ never legitimately
+    holds a generated artifact.
     """
     pattern = (
         r"(?:"
@@ -248,23 +322,47 @@ def extract_artifact_paths(text: str) -> list[str]:
         r"|/[^\s\"'\\]+"                 # absolute paths
         r"|(?:\.\.?)?[^\s\"'\\:]+/[^\s\"'\\]+"  # relative paths with at least one /
         r")"
-        r"\.(?:png|jpe?g|webp|gif)"
+        r"\.(?:png|jpe?g|webp|gif|pptx?|docx?|xlsx?|pdf)"
     )
     candidates = re.findall(pattern, text, flags=re.IGNORECASE)
     seen: list[str] = []
     for item in candidates:
         if item.startswith(("http://", "https://")):
+            # External URL — no upload-dir guard applies, but still skip
+            # obvious upload endpoint paths (defensive; not the main path).
+            if "/upload/" in item or "/uploads/" in item:
+                continue
             seen.append(item)
         elif item.startswith("/"):
-            # Absolute path — use as-is
+            # Absolute path — reject if it lives under an upload input directory
+            if _is_user_upload_input(item):
+                continue
             if os.path.isfile(item):
                 seen.append(item)
         else:
             # Relative path — resolve against AGENT_PACKAGE_DIR
             abs_path = os.path.normpath(os.path.join(AGENT_PACKAGE_DIR, item))
+            if _is_user_upload_input(abs_path):
+                continue
             if os.path.isfile(abs_path):
                 seen.append(abs_path)
     return list(dict.fromkeys(seen))
+
+
+# I-6 boundary: directories that hold user-uploaded inputs, never skill-generated artifacts.
+# Match against resolved absolute paths only; keep lowercase for case-insensitive compare.
+_USER_UPLOAD_INPUT_MARKERS = ("/workspace/upload/", "/uploads/")
+
+
+def _is_user_upload_input(resolved_path: str) -> bool:
+    """Return True if the given (resolved) path lives under a user-upload input directory.
+
+    Used by extract_artifact_paths to enforce I-6: skill-consumed inputs must not
+    be reported as generated artifacts. Case-insensitive on the directory markers
+    because macOS / Linux paths are not reliably canonical.
+    """
+    lowered = resolved_path.lower()
+    return any(marker in lowered for marker in _USER_UPLOAD_INPUT_MARKERS)
 
 
 def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
@@ -329,6 +427,9 @@ def execute():
     exec_skill_key = get_env("AF_EXEC_SKILL_KEY", "")
 
     databus = DataBusClient()
+    # Read stream flag from DataBus (persisted by coordinator_decide from bridge input)
+    stream_val = databus.get("stream") or ""
+    stream = (stream_val == "true")
 
     # ② Read dispatch manifest from DataBus (key = exec_skill_key, e.g. "dispatch:1")
     #    Manifest: {"skill_name": "echo", "prompt": "...", "load_skills": [...]}
@@ -376,22 +477,18 @@ def execute():
     tool_registry = _LocalToolRegistry(skill_name)
     available_tools = tool_registry.get_tools()
 
-    # ⑨ Read model config
+    # ⑨ Read model config with fallback chain
     frontmatter, _ = parse_agent_md(AGENT_MD_PATH)
     model_cfg = frontmatter.get("model", {})
-    # model can be a plain string (e.g. "MiniMax-M3") or a dict {name: "..."}
-    model_name = model_cfg if isinstance(model_cfg, str) else model_cfg.get("name", "")
-    # agent.md 为模型名第一来源，未声明时 fallback 到 AF_LLM_MODEL env，再兜底 gpt-4o-mini
-    if not model_name:
-        model_name = get_env("AF_LLM_MODEL") or "gpt-4o-mini"
+    agent_md_model = model_cfg if isinstance(model_cfg, str) else model_cfg.get("name", "")
+    llm_cfg = resolve_llm_config(agent_md_model)
+    model_name = llm_cfg["model"]
+    api_key = llm_cfg["api_key"]
+    base_url = llm_cfg["base_url"]
 
-    # API key and base URL come from env vars (not agent.md frontmatter).
-    # Priority: AF_LLM_API_KEY > API_KEY, AF_LLM_BASE_URL > default.
-    api_key = get_env("AF_LLM_API_KEY") or get_env("API_KEY", "")
-    if not api_key or "${" in api_key:
-        print(json.dumps({"error": "API key not resolved"}, ensure_ascii=False))
-        sys.exit(1)
-    base_url = get_env("AF_LLM_BASE_URL", "")
+    # ⑩ LLM while-loop — max_rounds defined before flow debug to avoid NameError
+    max_rounds = int(get_env("AF_MAX_SKILL_TASK_ITERATIONS",
+                    get_env("AF_SKILL_MAX_ROUNDS", "8")))
 
     # ── flow debug ──
     emit_event("skill_executor.trigger", {
@@ -407,9 +504,6 @@ def execute():
     print(f"[flow]   load_skills={load_skill_names}", file=sys.stderr)
     print(f"[flow]   tools_available={[t['function']['name'] for t in available_tools]}", file=sys.stderr)
 
-    # ⑩ LLM while-loop
-    max_rounds = int(get_env("AF_MAX_SKILL_TASK_ITERATIONS",
-                    get_env("AF_SKILL_MAX_ROUNDS", "8")))
     # Node-level timeout (injected by framework as AF_NODE_EXECUTION_TIMEOUT);
     # fallback to node default 240s if absent.
     node_timeout_sec = int(get_env("AF_NODE_EXECUTION_TIMEOUT", "240"))
@@ -418,10 +512,45 @@ def execute():
     max_recovery_attempts = int(get_env("AF_SKILL_LLM_RECOVERY_ATTEMPTS", "2"))
     generated_artifacts = extract_artifact_paths(task_instruction)
     generated_artifacts = _ensure_artifacts_in_package(generated_artifacts)
+    # tool_call_history: 每轮 tool_call 签名列表，用于检测 LLM 反复调同一 tool 同一参数的死循环
+    tool_call_history: list[list[tuple[str, str]]] = []
 
     _turn_start = time.time()
     for round_i in range(max_rounds):
         elapsed = time.time() - _turn_start
+        # ── 硬超时：node_timeout_sec 是边界约束，超过必须停（不变量 I-2）──
+        # build_round_reminder 只做"提醒"，没有硬约束；之前节点跑了 3 分钟+ 不停就是这里漏了 break。
+        if elapsed > node_timeout_sec:
+            emit_event("skill_executor.node_timeout", {
+                "round": round_i + 1,
+                "max_rounds": max_rounds,
+                "skill_name": skill_name,
+                "elapsed_s": round(elapsed, 1),
+                "node_timeout_sec": node_timeout_sec,
+            }, level="WARN")
+            print(f"[flow]   ⚠️  node_timeout reached at round={round_i+1} "
+                  f"elapsed={elapsed:.0f}s > limit={node_timeout_sec}s", file=sys.stderr)
+            try:
+                databus.response_push(f"{skill_name} 节点超时，正在汇总…",
+                                    type="progress", skill=skill_name,
+                                    round=str(round_i+1), status="completed",
+                                    source="skill_executor")
+            except Exception as exc:
+                print(f"[flow]   WARN: node_timeout progress push failed: {exc}", file=sys.stderr)
+            response_text = messages[-1].get("content", "") if messages else ""
+            output = {
+                "skill_result": response_text,
+                "status": "node_timeout",
+                "skill_name": skill_name,
+                "rounds_used": round_i + 1,
+                "artifacts_json": json.dumps(generated_artifacts, ensure_ascii=False),
+            }
+            if databus.is_connected():
+                result_json = json.dumps(output, ensure_ascii=True)
+                databus.put(f"skill_result:{skill_name}", result_json)
+                databus.put("skill_result:skill-runner", result_json)
+            print(json.dumps(output, ensure_ascii=False))
+            return
         emit_event("skill_executor.llm_round_start", {
             "round": round_i + 1,
             "max_rounds": max_rounds,
@@ -441,16 +570,28 @@ def execute():
         # ── Progress: push round info to frontend ──
         # "第 X 轮：调用 LLM…" → 用户看到"正在等 API"而非"卡了"
         _round_start = time.time()
-        print(json.dumps({
-            "response": f"{skill_name} 第 {round_i+1}/{max_rounds} 轮：调用 LLM…",
-        }, ensure_ascii=False))
+        progress_msg = f"{skill_name} 第 {round_i+1}/{max_rounds} 轮：调用 LLM…"
+        # 仅通过 response_push 推流式进度，不再写 DataBus response key
+        # （response key 仅供 coordinator 最终输出使用，进度写入会污染最终结果）
+        try:
+            databus.response_push(progress_msg, type="progress",
+                                  skill=skill_name, round=str(round_i+1),
+                                  status="running", source="skill_executor")
+        except Exception as exc:
+            print(f"[flow]   WARN: llm_call progress push failed: {exc}", file=sys.stderr)
 
         # ── Per-round budget reminder (delegated to shared module) ──
+        # always=True: 从第 1 轮就注入预算遥测（剩余轮次+已用/剩余时间+进度%），
+        # 让 LLM 主动规划收敛而非只在最后 3 轮才察觉预算紧张。
+        # 与本节点硬约束（node_timeout break + tool_call_loop detection）互为兜底：
+        # 这里是软提示层，硬约束兜底在循环顶部。
         reminder = build_round_reminder(
             round_i=round_i,
             max_rounds=max_rounds,
             elapsed=elapsed,
             node_timeout_sec=node_timeout_sec,
+            always=True,
+            custom_hint="本轮必须输出：要么调用工具继续推进，要么直接给出 skill_result 文本结果交还 coordinator",
         )
         if reminder:
             messages.append(reminder)
@@ -472,10 +613,19 @@ def execute():
             model=model_name,
             base_url=base_url,
             api_key=api_key,
-            max_completion_tokens=completion_budget)
+            max_completion_tokens=completion_budget,
+            stream=stream,
+            source="skill_executor",
+            skill=skill_name,
+            round_i=round_i + 1)
 
         if raw.get("_llm_error"):
             err_msg = raw.get("error", "LLM call failed")
+            emit_event("skill_executor.llm_error", {
+                "round": round_i + 1,
+                "error": err_msg,
+                "elapsed_s": round(time.time() - _turn_start, 1),
+            }, level="ERROR")
             print(f"[flow]   ⚠️  LLM error after call_llm internal retries: {err_msg}", file=sys.stderr)
             # Transport-layer retry is handled INSIDE call_llm (SSL/DNS/timeout).
             # If we reach here, call_llm has exhausted its retries — the network
@@ -519,10 +669,14 @@ def execute():
                     f"budget={completion_budget}",
                     file=sys.stderr,
                 )
-                print(json.dumps({
-                    "response": f"{skill_name} 正在恢复第 {round_i+1} 轮…",
-                }, ensure_ascii=False))
-                continue
+                try:
+                    databus.response_push(f"{skill_name} 正在恢复第 {round_i+1} 轮…",
+                                          type="progress", skill=skill_name,
+                                          round=str(round_i+1), status="running",
+                                          source="skill_executor")
+                except Exception as exc:
+                    print(f"[flow]   WARN: recover progress push failed: {exc}", file=sys.stderr)
+                    continue
 
             output = {
                 "skill_result": f"Tool call recovery exhausted: {invalid_reason}",
@@ -541,12 +695,72 @@ def execute():
 
         if tool_calls:
             tool_names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
+            emit_event("skill_executor.tool_call", {
+                "round": round_i + 1,
+                "tool_names": tool_names,
+                "tool_count": len(tool_calls),
+            })
             print(f"[flow]   round={round_i+1} → tool_calls: {tool_names}", file=sys.stderr)
             # ── Progress: tool call details ──
-            print(json.dumps({
-                "response": f"{skill_name} → 正在调用 {', '.join(tool_names)}",
-            }, ensure_ascii=False))
+            msg_tool = f"{skill_name} → 正在调用 {', '.join(tool_names)}"
+            try:
+                databus.response_push(msg_tool, type="progress",
+                                      skill=skill_name, round=str(round_i+1),
+                                      status="running", source="skill_executor")
+            except Exception as exc:
+                print(f"[flow]   WARN: tool_call progress push failed: {exc}", file=sys.stderr)
             messages.append(msg)
+            # ── Runaway detection: track tool_call signatures to detect loops ──
+            # LLM 陷入"反复调同一 tool 同一参数"时显式打断，避免耗光 max_rounds 才停。
+            # 不变量 I-4 幂等性：同一规则重复应用不应产生重复效果——重复 tool_call 即违反。
+            new_signatures = []
+            for tc in tool_calls:
+                func = tc.get("function", {})
+                name = func.get("name", "")
+                args = json.loads(func.get("arguments", "{}"))
+                sig = (name, json.dumps(args, ensure_ascii=False, sort_keys=True))
+                new_signatures.append(sig)
+            # 连续 3 轮出现完全相同的 tool_call 签名 → 视为死循环，强制走完成分支
+            if _detect_tool_call_loop(tool_call_history, new_signatures, threshold=3):
+                emit_event("skill_executor.tool_call_loop_detected", {
+                    "round": round_i + 1,
+                    "skill_name": skill_name,
+                    "signatures": new_signatures,
+                    "elapsed_s": round(time.time() - _turn_start, 1),
+                }, level="WARN")
+                print(f"[flow]   ⚠️  tool_call loop detected at round={round_i+1}, forcing completion", file=sys.stderr)
+                try:
+                    databus.response_push(f"{skill_name} 检测到重复调用，正在汇总…",
+                                          type="progress", skill=skill_name,
+                                          status="completed", source="skill_executor")
+                except Exception as exc:
+                    print(f"[flow]   WARN: loop_detection progress push failed: {exc}", file=sys.stderr)
+                # 强制走完成分支：把最后一轮 LLM 的 content（若有）当结果
+                response_text = msg.get("content", "") or _summarize_tool_history(messages)
+                output = {
+                    "skill_result": response_text,
+                    "status": "tool_call_loop_detected",
+                    "skill_name": skill_name,
+                    "rounds_used": round_i + 1,
+                    "artifacts_json": json.dumps(generated_artifacts, ensure_ascii=False),
+                }
+                emit_event("skill_executor.completed", {
+                    "round": round_i + 1,
+                    "total_rounds": round_i + 1,
+                    "skill_name": skill_name,
+                    "status": output["status"],
+                    "response_length": len(response_text),
+                    "artifacts_count": len(generated_artifacts),
+                    "elapsed_s": round(time.time() - _turn_start, 1),
+                })
+                print(f"[flow]   result: skill={skill_name} status=tool_call_loop_detected rounds={round_i+1}", file=sys.stderr)
+                if databus.is_connected():
+                    result_json = json.dumps(output, ensure_ascii=True)
+                    databus.put(f"skill_result:{skill_name}", result_json)
+                    databus.put("skill_result:skill-runner", result_json)
+                print(json.dumps(output, ensure_ascii=False))
+                return
+            tool_call_history.append(new_signatures)
             for tc in tool_calls:
                 func = tc.get("function", {})
                 name = func.get("name", "")
@@ -571,9 +785,13 @@ def execute():
         else:
             # Task complete → output result
             # ── Progress: LLM returned final answer ──
-            print(json.dumps({
-                "response": f"{skill_name} 汇总结果…",
-            }, ensure_ascii=False))
+            msg_summary = f"{skill_name} 汇总结果…"
+            try:
+                databus.response_push(msg_summary, type="progress",
+                                      skill=skill_name, status="completed",
+                                      source="skill_executor")
+            except Exception as exc:
+                print(f"[flow]   WARN: summary progress push failed: {exc}", file=sys.stderr)
             response_text = msg.get("content", "")
             output = {
                 "skill_result": response_text,
@@ -582,6 +800,15 @@ def execute():
                 "rounds_used": round_i + 1,
                 "artifacts_json": json.dumps(generated_artifacts, ensure_ascii=False),
             }
+            if not response_text.strip():
+                emit_event("skill_executor.empty_result", {
+                    "round": round_i + 1,
+                    "skill_name": skill_name,
+                    "tool_calls_in_round": bool(tool_calls),
+                    "elapsed_s": round(time.time() - _turn_start, 1),
+                }, level="WARN")
+                print(f"[flow]   ⚠️  empty skill_result: skill={skill_name} "
+                      f"LLM returned finish=stop with no content", file=sys.stderr)
             # Write result to DataBus for coordinator to read.
             # Write under TWO keys:
             #   skill_result:{skill_name}  — real skill name (e.g. weather_query)
@@ -593,8 +820,9 @@ def execute():
                 "round": round_i + 1,
                 "total_rounds": round_i + 1,
                 "skill_name": skill_name,
-                "status": "completed",
+                "status": output.get("status", "completed"),
                 "response_length": len(response_text),
+                "artifacts_count": len(generated_artifacts),
                 "elapsed_s": round(time.time() - _turn_start, 1),
             })
             print(f"[flow]   result: skill={skill_name} status={output.get('status','completed')} rounds={round_i+1}", file=sys.stderr)

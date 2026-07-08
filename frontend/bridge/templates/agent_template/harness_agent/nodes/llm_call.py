@@ -8,8 +8,8 @@ Each call produces 3 keys under DataBus ``llm`` namespace:
   traces/{call_id}/meta      — latency, tokens, finish_reason, summaries
 Plus traces/index — ordered list of call_ids for enumeration.
 
-HTTP transport: curl subprocess (bypasses miniconda Python SSL cert issues;
-curl uses the system keychain which trusts the LLM API's CA).
+HTTP transport: requests library (verify=False bypasses miniconda Python
+SSL cert issues, matching the old curl -k behavior).
 
 No mock mode — always calls the real LLM. For offline testing, point
 base_url at a local stub server.
@@ -17,11 +17,20 @@ base_url at a local stub server.
 
 import json
 import os
-import subprocess
 import sys
 import time
 import traceback
 import uuid
+
+import urllib3
+
+# Suppress InsecureRequestWarning when verify=False (intentional, matches old curl -k)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+from common.clients import OpenAiCompatibleClient, resolve_llm_config as _resolve_llm_config
+
+# Re-export for backward compatibility
+resolve_llm_config = _resolve_llm_config
 
 _SDK_DIR = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -40,47 +49,6 @@ except ImportError:
 
 def _log_warn(msg: str) -> None:
     print(f"[llm_call] WARN: {msg}", file=sys.stderr)
-
-
-class _ApiError(RuntimeError):
-    """Deterministic API-level error (auth/400/quota/payload-too-large).
-
-    Distinct from transient transport errors so the retry loop can skip
-    these without inspecting error strings.
-    """
-
-
-# curl exit codes that indicate TRANSIENT network failures worth retrying.
-# Source: https://curl.se/docs/manpage.html (EXIT CODES)
-#   6  — Couldn't resolve host (DNS hiccup)
-#   7  — Failed to connect() to host (connection refused / ECONNREFUSED)
-#   28 — Operation timeout (--max-time reached)
-#   35 — SSL connect error (TLS handshake failed — the one we just hit)
-#   52 — Got nothing; server returned nothing (no headers, no body)
-#   56 — Failure with receiving network data (connection reset mid-stream)
-# Not retried (deterministic):
-#   3  — URL malformed, 4 — feature missing, 5 — proxy resolution,
-#   22 — HTTP page not retrieved (4xx/5xx in --fail mode — but we don't
-#        use --fail, so 4xx/5xx bodies come through as JSON API errors),
-#   60 — peer cert cannot be authenticated (CA trust — won't recover)
-_TRANSIENT_CURL_RCS = {6, 7, 28, 35, 52, 56}
-
-
-def _is_transient_curl_error(exc: Exception) -> bool:
-    """Return True if `exc` looks like a transient network error worth retrying.
-
-    Inspects curl's "curl rc=N" marker in the RuntimeError message. Any
-    non-curl error (e.g. JSONDecodeError from a garbled but HTTP-200 body)
-    is conservatively treated as non-transient — retrying won't help and
-    may loop on a deterministic parse failure.
-    """
-    msg = str(exc)
-    # Match "curl rc=NN" — only the numeric rc tells us if it's transient.
-    import re as _re
-    m = _re.search(r"curl rc=(\d+)", msg)
-    if not m:
-        return False
-    return int(m.group(1)) in _TRANSIENT_CURL_RCS
 
 
 # ── Task context (read once per call from framework-injected env vars) ──
@@ -210,10 +178,14 @@ class _TraceRecorder:
                    api_key: str, tools: list | None = None,
                    max_completion_tokens: int = 2000,
                    timeout: int = 120,
-                   connect_timeout: int = 5) -> dict:
-        """Execute LLM call via curl with full trace recording.
+                   connect_timeout: int = 5,
+                   stream: bool = False,
+                   source: str = "",
+                   skill: str = "",
+                   round_i: int = 0) -> dict:
+        """Execute LLM call via requests with full trace recording.
 
-        Two-stage timeout (curl native):
+        Two-stage timeout (requests ``timeout=(connect, read)`` tuple):
           connect_timeout  — TCP connect + TLS handshake (network layer).
                              5s is ~25x normal handshake (~0.2s实测 minimaxi),
                              enough for cross-border jitter; network-down
@@ -222,9 +194,27 @@ class _TraceRecorder:
           timeout          — Whole request including LLM generation.
                              Kept generous (120s) for slow streaming responses.
 
+        **Streaming** — controlled by the ``stream`` parameter (passed from
+        the bridge's ``?stream=true`` query param via the messages payload).
+        When enabled:
+          * Uses ``requests.post(..., stream=True)`` (SSE chunked transfer).
+          * Each non-empty ``delta.content`` token is pushed in near real-time
+            via ``response_push(type="llm_chunk"|"progress")`` so the Bridge
+            can forward it to the frontend before the full response is
+            assembled.
+          * ``timeout`` still guards the *entire* stream — if the provider
+            hangs mid-stream the connection is abandoned after ``timeout`` s.
+
+        **Streaming chunk classification** (streaming-response.md §3.6):
+          source == "coordinator"     → type="llm_chunk"  (对话 token)
+          source == "skill_executor"  → type="progress"   (中间产物)
+          other / empty source         → no chunk push
+
         Returns OpenAI-compatible response dict, or
         ``{"error": ..., "_llm_error": true}`` on failure.
         """
+        stream_enabled = stream
+        _log_warn(f"[STREAM_DEBUG] stream={stream} → stream_enabled={stream_enabled}")
         self._call_count += 1
         seq = self._call_count
         call_id = uuid.uuid4().hex[:12]
@@ -245,7 +235,7 @@ class _TraceRecorder:
         if self._client:
             self._put(f"traces/{call_id}/request", request_body)
 
-        # ── HTTP call via curl ──
+        # ── HTTP call via requests ──
         url = base_url.rstrip("/")
         if not url.endswith("/chat/completions"):
             url += "/chat/completions"
@@ -263,93 +253,63 @@ class _TraceRecorder:
             f"connect_timeout={connect_timeout}s timeout={timeout}s"
         )
 
-        # ── Transport-layer retry ──
-        #
-        # Single source of truth for HTTP retry. Transient network errors
-        # (SSL_ERROR_SYSCALL, connection reset, DNS hiccup, curl timeouts)
-        # are retried here with exponential backoff. Deterministic errors
-        # (auth/400/payload-too-large/business API errors) are NOT retried —
-        # they will fail identically on every attempt.
-        #
-        # Callers' outer "recovery" loops handle SEMANTIC issues (truncated
-        # tool args, invalid JSON) by rewriting messages — those must NOT
-        # touch messages on pure network errors, since the messages are fine.
-        # Network errors that survive all retries bubble up as _llm_error and
-        # callers fall back without corrupting conversation history.
-        max_retries = int(os.environ.get("AF_LLM_MAX_RETRIES", "2"))
-        base_delay = float(os.environ.get("AF_LLM_RETRY_BASE_DELAY", "1.0"))
+        attempt = 0
+        _http_client = OpenAiCompatibleClient(
+            model=model, base_url=base_url, api_key=api_key,
+            connect_timeout=connect_timeout,
+            request_timeout=timeout,
+        )
 
-        response_data = None
-        last_error = None
-        for attempt in range(max_retries + 1):
-            try:
-                result = subprocess.run(
-                    ["curl", "-k","-sS", "-X", "POST", url,
-                     "-H", "Content-Type: application/json",
-                     "-H", f"Authorization: Bearer {api_key}",
-                     "-d", json.dumps(request_body, ensure_ascii=False),
-                     "--connect-timeout", str(connect_timeout),
-                     "--max-time", str(timeout)],
-                    capture_output=True, text=True, timeout=timeout + 5,
-                )
-                if result.returncode != 0:
-                    raise RuntimeError(
-                        f"curl rc={result.returncode}: {result.stderr}")
+        # ── Build chunk publisher for streaming mode ──
+        # on_chunk callback fires once per non-empty SSE delta. We translate
+        # that into response_push on the DataBus so the Bridge can forward
+        # tokens to the websocket in near real-time.
+        # See streaming-response.md §3.5 / §3.6 for the full contract.
+        chunk_publisher = None
+        if stream_enabled and source and self._client:
+            _chunk_type = "llm_chunk" if source == "coordinator" else "progress"
+            _push_client = self._client
 
-                response_data = json.loads(result.stdout)
-                if "error" in response_data and "choices" not in response_data:
-                    # Business/API error (auth, bad request, quota) — NOT
-                    # transient. Capture the error text BEFORE nulling
-                    # response_data (so the post-loop `response_data is None`
-                    # guard routes to the error path), then raise to break.
-                    api_err_text = response_data.get("error")
-                    response_data = None
-                    raise _ApiError(f"API error: {api_err_text}")
+            def _on_chunk(raw_json: str) -> None:
+                # 异常全部吞掉（守 §3.7：trace 路径失败不中断主流程）
+                try:
+                    kwargs: dict = {"type": _chunk_type, "source": source}
+                    if skill:
+                        kwargs["skill"] = skill
+                    if round_i:
+                        kwargs["round"] = str(round_i)
+                    # dialogue_id 由 _RealDataBusClient 内部从 session_id 派生
+                    _push_client.response_push(raw_json, **kwargs)
+                except Exception:
+                    pass
 
-                break  # success
+            chunk_publisher = _on_chunk
 
-            except _ApiError as e:
-                # Deterministic API error — do not retry, do not mask as transient.
-                last_error = e
-                _log_warn(
-                    f"[#{seq}] <<< {call_id} API_ERROR (non-retriable) "
-                    f"attempt={attempt+1}/{max_retries+1}: {e}"
-                )
-                break
-
-            except Exception as e:
-                last_error = e
-                retriable = _is_transient_curl_error(e)
-                if attempt < max_retries and retriable:
-                    backoff = min(base_delay * (2 ** attempt), 8.0)
-                    _log_warn(
-                        f"[#{seq}] <<< {call_id} transient error "
-                        f"attempt={attempt+1}/{max_retries+1}, "
-                        f"retrying in {backoff:.1f}s: {e}"
-                    )
-                    time.sleep(backoff)
-                    continue
-                # Either non-retriable, or retries exhausted.
-                _log_warn(
-                    f"[#{seq}] <<< {call_id} FAILED "
-                    f"attempt={attempt+1}/{max_retries+1} "
-                    f"retriable={retriable} node={ctx.get('node_id','?')} "
-                    f"url={url} err={e}"
-                )
-                break
-
-        if response_data is None:
+        response_data = _http_client.chat_completion(
+            messages, tools=tools,
+            max_completion_tokens=max_completion_tokens,
+            stream=stream_enabled,
+            on_chunk=chunk_publisher,
+        )
+        # If the client returned an error, wrap it with _llm_error
+        if response_data.get("_llm_error") or "error" in response_data:
+            last_error = response_data.get("error", "Unknown error")
             latency_ms = int((time.time() - start_time) * 1000)
             if self._client:
                 error_meta = {
                     "model": model, "latency_ms": latency_ms,
-                    "timestamp": timestamp, "error": str(last_error),
-                    "retries_attempted": attempt + 1,
+                    "timestamp": timestamp, "error": last_error,
+                    "retries_attempted": 0,
                 }
                 error_meta.update(_task_context())
                 self._put(f"traces/{call_id}/meta", error_meta)
                 self._verify_meta_written(call_id)
                 self._append_to_index(call_id)
+            _log_warn(
+                f"[#{seq}] <<< {call_id} FAILED "
+                f"node={ctx.get('node_id','?')} url={_http_client.base_url} "
+                f"err={last_error}"
+            )
             return {"error": f"LLM call failed: {last_error}",
                     "_llm_error": True}
 
@@ -551,6 +511,57 @@ def get_compaction_threshold() -> float:
         return 0.8
 
 
+# ═══════════════════════════════════════════════════════════════════
+# Fallback LLM config resolution
+# ═══════════════════════════════════════════════════════════════════
+#
+# Priority chain for each setting (high → low):
+#
+#   LLM model:    agent.md frontmatter > AF_LLM_MODEL > AF_FALLBACK_LLM_MODEL
+#   LLM key:      AF_LLM_API_KEY > API_KEY > AF_FALLBACK_LLM_API_KEY
+#   LLM base_url: AF_LLM_BASE_URL > AF_FALLBACK_LLM_BASE_URL
+#
+#   VL model:    VISION_MODEL > VISION_FALLBACK_MODEL
+#   VL key:      VISION_API_KEY > API_KEY > VISION_FALLBACK_API_KEY
+#   VL base_url: VISION_BASE_URL > VISION_FALLBACK_BASE_URL
+
+_PLACEHOLDER_PREFIXES = ("${", "sk-your-", "your-")
+
+
+def _is_placeholder(val: str) -> bool:
+    """Check if a value is empty or a placeholder template."""
+    if not val:
+        return True
+    return any(val.startswith(p) for p in _PLACEHOLDER_PREFIXES)
+
+
+def resolve_vision_config() -> dict[str, str]:
+    """Resolve Vision model config (model, base_url, api_key) with fallback.
+
+    Returns a dict with keys ``model``, ``base_url``, ``api_key``.
+    """
+    # Model: VISION_MODEL → VISION_FALLBACK_MODEL
+    model = os.environ.get("VISION_MODEL", "")
+    if _is_placeholder(model):
+        model = os.environ.get("VISION_FALLBACK_MODEL", "")
+
+    # Key: VISION_API_KEY → API_KEY → MINIMAX_API_KEY → VISION_FALLBACK_API_KEY
+    api_key = os.environ.get("VISION_API_KEY", "")
+    if _is_placeholder(api_key):
+        api_key = os.environ.get("API_KEY", "")
+    if _is_placeholder(api_key):
+        api_key = os.environ.get("MINIMAX_API_KEY", "")
+    if _is_placeholder(api_key):
+        api_key = os.environ.get("VISION_FALLBACK_API_KEY", "")
+
+    # Base URL: VISION_BASE_URL → VISION_FALLBACK_BASE_URL
+    base_url = os.environ.get("VISION_BASE_URL", "")
+    if _is_placeholder(base_url):
+        base_url = os.environ.get("VISION_FALLBACK_BASE_URL", "")
+
+    return {"model": model, "base_url": base_url, "api_key": api_key}
+
+
 # ── Public API ──
 
 _recorder: _TraceRecorder | None = None
@@ -569,13 +580,28 @@ def call_llm(messages: list, model: str = "gpt-4o-mini",
              tools: list | None = None,
              max_completion_tokens: int = 2000,
              timeout: int = 120,
-             connect_timeout: int = 5) -> dict:
+             connect_timeout: int = 5,
+             stream: bool = False,
+             source: str = "",
+             skill: str = "",
+             round_i: int = 0) -> dict:
     """Call LLM API with full trace recording. Returns OpenAI-compatible dict.
 
     Two-stage timeout (see trace_call docstring):
       connect_timeout — TCP+TLS handshake, fast-fail when network is down
       timeout         — whole request, generous for slow LLM generation
     Both overrideable via env vars AF_LLM_CONNECT_TIMEOUT / AF_LLM_TIMEOUT.
+
+    ``stream`` is passed from the parsed input payload — the bridge includes
+    it in the ``{stream, messages}`` wrapper object.  The callee
+    (coordinator_decide / skill_executor) extracts ``stream`` via
+    ``parse_stream(AF_INPUT)`` and passes it here.
+
+    ``source`` / ``skill`` / ``round_i`` identify the caller for the
+    streaming chunk classification:
+      source="coordinator"    → on_chunk pushes type="llm_chunk"
+      source="skill_executor" → on_chunk pushes type="progress"
+    Empty source → no chunk push (the on_chunk callback is not wired).
     """
     # Env override (M3: configurable, no hidden config). Callers passing
     # explicit args win; env vars fill the default for callers that don't.
@@ -591,4 +617,5 @@ def call_llm(messages: list, model: str = "gpt-4o-mini",
             pass
     return get_recorder().trace_call(
         messages, model, base_url, api_key, tools,
-        max_completion_tokens, timeout, connect_timeout)
+        max_completion_tokens, timeout, connect_timeout, stream,
+        source=source, skill=skill, round_i=round_i)

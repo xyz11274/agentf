@@ -24,28 +24,39 @@ import re
 import sys
 import time
 import uuid
+from pathlib import Path
 from urllib.parse import quote
 
 import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from databus_client import DataBusClient
-from llm_call import call_llm, get_recorder, estimate_message_tokens, compact_messages, get_model_max_tokens, get_compaction_threshold
+from llm_call import (
+    call_llm,
+    compact_messages,
+    estimate_message_tokens,
+    get_compaction_threshold,
+    get_model_max_tokens,
+    get_recorder,
+    resolve_llm_config,
+)
 from observability import emit_event
-from round_reminder import build_round_reminder
+from parse_af_input import parse_af_input, parse_stream
 from prompts import (
-    PROTOCOL_TEMPLATE,
+    ARTIFACT_DOWNLOAD_TEMPLATE,
+    ARTIFACT_HTML_TEMPLATE,
+    ARTIFACT_IMAGE_TEMPLATE,
+    ARTIFACTS_SECTION_HEADER,
     COORDINATOR_FALLBACK_SYSTEM,
-    RUN_SKILLS_TOOL_DEFINITION,
-    SKILL_COMPLETION_TEMPLATE,
     DECISION_FAILURE_PROMPT,
     DECISION_SUCCESS_PROMPT,
-    LLM_ERROR_WITH_ARTIFACTS,
     LLM_ERROR_NO_ARTIFACTS,
-    ARTIFACTS_SECTION_HEADER,
-    ARTIFACT_IMAGE_TEMPLATE,
-    ARTIFACT_HTML_TEMPLATE,
+    LLM_ERROR_WITH_ARTIFACTS,
+    PROTOCOL_TEMPLATE,
+    RUN_SKILLS_TOOL_DEFINITION,
+    SKILL_COMPLETION_TEMPLATE,
 )
+from round_reminder import build_round_reminder
 
 NODES_DIR = os.path.dirname(os.path.abspath(__file__))
 AGENT_PACKAGE_DIR = os.path.dirname(NODES_DIR)
@@ -54,10 +65,11 @@ AGENT_MD_PATH = os.path.join(AGENT_PACKAGE_DIR, "agent.md")
 # ── Load .env from package root (business env vars: API_KEY, AF_LLM_*) ──
 # Framework has no mechanism for business env; dotenv fills the gap.
 _DOTENV_PATH = os.path.join(AGENT_PACKAGE_DIR, ".env")
+print(f"[flow] dotenv: path={_DOTENV_PATH} exists={os.path.isfile(_DOTENV_PATH)}", file=sys.stderr)
 if os.path.isfile(_DOTENV_PATH):
     try:
         from dotenv import load_dotenv
-        load_dotenv(_DOTENV_PATH)
+        load_dotenv(_DOTENV_PATH, override=True)
     except Exception:
         pass
 
@@ -218,8 +230,31 @@ def collect_skill_results(databus: DataBusClient, skill_names: list) -> list:
     return results
 
 
+_VERSION_SUFFIX = re.compile(r"-(\d+)$")
+
+
+def _dedup_versioned_artifacts(paths: list[str]) -> list[str]:
+    """Keep only the highest-numbered variant when filenames share a ``-N`` stem.
+
+    ``outfit-review-1.png`` and ``outfit-review-2.png`` are treated as versions
+    of the same artifact family (base stem ``outfit-review``); only the
+    highest-numbered one survives.  Files without a ``-N`` suffix are kept
+    unchanged.
+    """
+    best: dict[str, tuple[int, str]] = {}
+    for path in paths:
+        stem = Path(path).stem
+        match = _VERSION_SUFFIX.search(stem)
+        base = stem[: match.start()] if match else stem
+        num = int(match.group(1)) if match else 0
+        prev = best.get(base)
+        if prev is None or num > prev[0]:
+            best[base] = (num, path)
+    return [path for _, path in best.values()]
+
+
 def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
-    """Append browser-accessible Markdown for generated artifacts (images + HTML reports)."""
+    """Append browser-accessible Markdown for generated artifacts (images, HTML, downloads)."""
     try:
         artifacts = json.loads(artifacts_json) if artifacts_json else []
     except (json.JSONDecodeError, TypeError):
@@ -234,8 +269,12 @@ def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
     if not items:
         return content
 
-    images = [p for p in items if not p.lower().endswith(".html")]
+    _image_suffixes = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+    images = _dedup_versioned_artifacts(
+        [p for p in items if Path(p).suffix.lower() in _image_suffixes]
+    )
     html_reports = [p for p in items if p.lower().endswith(".html")]
+    downloads = [p for p in items if p not in images and p not in html_reports]
 
     blocks = []
     if images:
@@ -248,6 +287,11 @@ def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
             url = path if path.startswith(("http://", "https://")) else local_artifact_url(path)
             if url not in content:
                 blocks.append(ARTIFACT_HTML_TEMPLATE.format(index=index, url=url))
+    if downloads:
+        for index, path in enumerate(downloads, 1):
+            url = path if path.startswith(("http://", "https://")) else local_artifact_url(path)
+            if url not in content:
+                blocks.append(ARTIFACT_DOWNLOAD_TEMPLATE.format(index=index, url=url))
 
     if not blocks:
         return content
@@ -353,18 +397,13 @@ def execute():
     frontmatter, agent_md_body = parse_agent_md(AGENT_MD_PATH)
     model_cfg = frontmatter.get("model", {})
     # model can be a plain string (e.g. "MiniMax-M3") or a dict {name: "..."}
-    model_name = model_cfg if isinstance(model_cfg, str) else model_cfg.get("name", "")
-    # agent.md 为模型名第一来源，未声明时 fallback 到 AF_LLM_MODEL env，再兜底 gpt-4o-mini
-    if not model_name:
-        model_name = get_env("AF_LLM_MODEL") or "gpt-4o-mini"
+    agent_md_model = model_cfg if isinstance(model_cfg, str) else model_cfg.get("name", "")
 
-    # API key and base URL come from env vars (not agent.md frontmatter).
-    # Priority: AF_LLM_API_KEY > API_KEY, AF_LLM_BASE_URL > default.
-    api_key = get_env("AF_LLM_API_KEY") or get_env("API_KEY", "")
-    if not api_key or "${" in api_key:
-        print(json.dumps({"error": "API key not resolved"}, ensure_ascii=False))
-        sys.exit(1)
-    base_url = get_env("AF_LLM_BASE_URL", "")
+    # 使用 fallback 链解析最终 LLM 配置
+    llm_cfg = resolve_llm_config(agent_md_model)
+    model_name = llm_cfg["model"]
+    api_key = llm_cfg["api_key"]
+    base_url = llm_cfg["base_url"]
 
     # ── flow debug ──
     emit_event("coordinator.trigger", {
@@ -379,10 +418,15 @@ def execute():
     if completed_skill:
         print(f"[flow]   trigger_type=skill_completion completed_skill={completed_skill} success={skill_success}", file=sys.stderr)
     else:
-        print(f"[flow]   trigger_type=first raw_input_preview={raw_input[:120]}", file=sys.stderr)
+        print(f"[flow]   trigger_type=first", file=sys.stderr)
 
     databus = DataBusClient()
     recorder = get_recorder()
+    # Read stream flag from AF_INPUT (bridge sends {"stream": bool, "messages": [...]})
+    stream = parse_stream(get_env("AF_INPUT", ""))
+    # Persist to DataBus for downstream nodes (skill_executor, etc.)
+    if stream:
+        databus.put("stream", "true")
 
     # ── Coordinator iteration tracking ──
     # First trigger (no completed_skill or dummy_pre_skill hook) starts a new
@@ -405,6 +449,7 @@ def execute():
 
     # ── Max iterations guard: break before LLM call ──
     if current_round > max_iterations:
+        emit_event("coordinator.max_iterations", {"round": current_round, "max_iterations": max_iterations}, level="WARN")
         print(f"[flow]   ⚠️  max iterations ({max_iterations}) reached, force ending", file=sys.stderr)
         response_text = llm_error_response(completed_skill_artifacts)
         output = {"response": response_text, "status": "max_iterations_reached"}
@@ -426,30 +471,22 @@ def execute():
     system_prompt = COORDINATOR_PROTOCOL + "\n\n---\n\n" + (agent_md_body or
                      COORDINATOR_FALLBACK_SYSTEM)
 
+    messages = [{"role": "system", "content": system_prompt}]
+
     # Parse AF_INPUT to get the conversation messages from bridge
     # AF_INPUT format: {"stream": bool, "messages": [{role, content}, ...]}
     af_messages: list[dict] = []
-    stream = False
     try:
         parsed = json.loads(raw_input)
-        if isinstance(parsed, dict):
-            if "messages" in parsed and isinstance(parsed["messages"], list):
-                af_messages = parsed["messages"]
-            if "stream" in parsed:
-                stream = bool(parsed["stream"])
+        if isinstance(parsed, dict) and "messages" in parsed and isinstance(parsed["messages"], list):
+            af_messages = parsed["messages"]
     except (json.JSONDecodeError, TypeError):
         pass
-
-    messages = [{"role": "system", "content": system_prompt}]
-    print(f"[flow]   stream={stream} af_messages_parsed={len(af_messages)}", file=sys.stderr)
-    _t3 = time.time()
-    print(f"[timing] messages_ready={_t3-_t0:.1f}s", file=sys.stderr)
 
     # Construct this trigger's input
     # dummy_pre_skill is a passthrough hook — treat as first trigger (no result to evaluate)
     if completed_skill and completed_skill != "dummy_pre_skill":
         # Re-trigger: use persisted history + skill completion message
-        print(f"[flow]   extending history={len(history)} msgs from recorder", file=sys.stderr)
         messages.extend(history)
         # collect_skill_results is a 30s databus.get() fallback — skip when env var has the data.
         collected = [] if completed_skill_result else collect_skill_results(databus, [completed_skill])
@@ -462,16 +499,13 @@ def execute():
     else:
         # First trigger: use the messages array from AF_INPUT directly
         # (bridge has already assembled history + this turn's user input)
-        if not af_messages:
-            print(f"[flow]   ⚠️  first_trigger: af_messages is empty (AF_INPUT may be legacy plain-text format)", file=sys.stderr)
-        print(f"[flow]   first_trigger: extending af_messages={len(af_messages)} msgs from AF_INPUT", file=sys.stderr)
         messages.extend(af_messages)
 
     # Single LLM decision (tools: [run_skills])
     # 4000 tokens to avoid finish=length truncation on long responses.
     #
     # Transport-layer retry (SSL/DNS/timeout) lives INSIDE call_llm — see
-    # llm_call.py:_is_transient_curl_error. Coordinator does NOT duplicate
+    # llm_call.py:_is_transient_http_error. Coordinator does NOT duplicate
     # network retry here; it only handles _llm_error as a final fallback
     # (after call_llm has exhausted its own retries).
 
@@ -501,15 +535,28 @@ def execute():
     _t4 = time.time()
     print(f"[timing] llm_call_start={_t4-_t0:.1f}s", file=sys.stderr)
     # ── Progress: coordinator is calling LLM (may take >60s) ──
-    print(json.dumps({
-        "response": "coordinator 决策中…",
-    }, ensure_ascii=False))
+    try:
+        if 'databus' in dir():
+            databus.response_push("coordinator 决策中…", type="progress",
+                                  skill="coordinator", status="running",
+                                  source="coordinator")
+    except Exception as exc:
+        print(f"[flow]   WARN: coordinator progress push failed: {exc}", file=sys.stderr)
+    emit_event("coordinator.llm_call_start", {
+        "round": current_round,
+        "messages": len(messages),
+        "model": model_name,
+        "tools": True,
+        "stream": stream,
+    })
     raw = call_llm(
         messages, tools=[RUN_SKILLS_TOOL],
         model=model_name,
         base_url=base_url,
         api_key=api_key,
-        max_completion_tokens=max_completion_tokens)
+        max_completion_tokens=max_completion_tokens,
+        stream=stream,
+        source="coordinator")
     _t5 = time.time()
     print(f"[timing] llm_call_end={_t5-_t0:.1f}s (llm={_t5-_t4:.1f}s)", file=sys.stderr)
 
@@ -645,6 +692,11 @@ def execute():
         print(f"[timing] skill_dispatched={_t6-_t0:.1f}s", file=sys.stderr)
         if _dispatched_skills:
             skill_labels = "、".join(_dispatched_skills)
+            emit_event("coordinator.skills_dispatched", {
+                "round": current_round,
+                "skill_names": skill_labels,
+                "elapsed_s": round(_t6 - _t0, 1),
+            })
 
             # Extract LLM's intermediate reasoning from this round's response
             llm_before_call = msg.get("content", "")
@@ -660,16 +712,27 @@ def execute():
                 if len(llm_before_call) > 200:
                     llm_before_call = llm_before_call[:200] + "…"
                 if llm_before_call:
-                    llm_summary = f"\n分析：{llm_before_call}"
+                            llm_summary = f"\n分析：{llm_before_call}"
 
-            print(json.dumps({
-                "coordinator_status": "skills_dispatched",
-                "response": f"正在执行 {skill_labels}{llm_summary}",
-            }, ensure_ascii=False))
+                skill_progress = f"正在执行 {skill_labels}{llm_summary}"
+                try:
+                    if 'databus' in dir() and databus.is_connected():
+                        for skill_name_ in skill_labels.strip().split():
+                            sn = skill_name_.strip()
+                            if sn:
+                                databus.response_push(sn, type="progress", skill=sn, status="running",
+                                                      source="coordinator")
+                except Exception as exc:
+                    print(f"[flow]   WARN: dispatch progress push failed: {exc}", file=sys.stderr)
             # Clean up "response" key to prevent stale progress message
             # from leaking into the next coordinator round.
             if databus.is_connected():
                 databus.delete("response")
+            emit_event("coordinator.dispatch_loop_end", {
+                "round": current_round,
+                "skills_dispatched": skill_labels,
+                "elapsed_s": round(_t6 - _t0, 1),
+            })
         else:
             # All tool_calls were unknown — no skills dispatched.
             print(json.dumps({

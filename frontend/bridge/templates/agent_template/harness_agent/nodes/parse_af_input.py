@@ -1,7 +1,9 @@
 """parse_af_input — node 端统一 content 解析入口。
 
-Phase A 多模态升级：AF_INPUT env 可能是 JSON 对象字符串（{"stream", "messages"}）
+Phase A 多模态升级：AF_INPUT env 可能是 JSON 字符串（content array）
 也可能是旧版纯文本字符串。此函数统一解析，确保向后兼容。
+
+Phase B 流式升级：AF_INPUT 可能是 {"stream": bool, "messages": [...]} 包装对象。
 
 用法（在任一 node 脚本中）：
     from parse_af_input import parse_af_input, parse_stream
@@ -9,13 +11,13 @@ Phase A 多模态升级：AF_INPUT env 可能是 JSON 对象字符串（{"stream
     stream = parse_stream(os.environ.get("AF_INPUT", ""))
 
 返回值：
-    list[dict] — content array，[{type, text}, {type, image_url, image_url: {url}}]
-    空输入返回空列表 []。
+    parse_af_input(): list[dict] — content array，[{type, text}, ...]
+    parse_stream(): bool — stream 标记，默认 False
 
 Backward compatible:
     - 旧版纯字符串 → [{type: text, text: raw_str}]
     - JSON array 原样返回
-    - JSON 对象（含 messages 字段）→ 解包 message.content 为 content array
+    - JSON 对象 {stream, messages} → 提取 messages，stream 由 parse_stream() 获取
 """
 
 from __future__ import annotations
@@ -61,18 +63,10 @@ def parse_af_input(raw: str) -> list[dict[str, Any]]:
     if not raw:
         return []
 
-    # 新协议: {"stream": bool, "messages": [{role, content}, ...]}
-    # 提取每一条 message 的 content 组装为 content array
     parsed = _try_parse(raw)
-    if isinstance(parsed, dict) and "messages" in parsed:
-        parts: list[dict[str, Any]] = []
-        for msg in parsed["messages"]:
-            content = msg.get("content", "")
-            if isinstance(content, str) and content:
-                parts.append({"type": "text", "text": content})
-            elif isinstance(content, list):
-                parts.extend(content)
-        return parts
+    if parsed is None:
+        # Plain string — backward compatible
+        return [{"type": "text", "text": raw}]
 
     if isinstance(parsed, list):
         # Already a content array — validate structure minimally
@@ -85,9 +79,12 @@ def parse_af_input(raw: str) -> list[dict[str, Any]]:
         )
         return [{"type": "text", "text": raw}]
 
-    # JSON non-array — wrap as text
-    if parsed is not None:
+    if isinstance(parsed, dict):
+        # New format: {"stream": bool, "messages": [...]}
+        if "messages" in parsed and isinstance(parsed["messages"], list):
+            return parsed["messages"]
+        # Plain object — wrap as text
         return [{"type": "text", "text": raw}]
 
-    # Plain string — backward compatible
+    # Fallback
     return [{"type": "text", "text": raw}]

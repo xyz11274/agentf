@@ -220,3 +220,64 @@ def test_response_key_deleted_after_dispatch(monkeypatch):
         "dispatch path must delete the 'response' databus key to prevent stale "
         "progress messages leaking into the next coordinator round"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# P2: response_push calls carry source=coordinator
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_response_push_carries_source_coordinator(monkeypatch):
+    """P2: coordinator_decision progress and dispatch progress both carry source=coordinator.
+
+    ʖ设计文档 §3.6：``source`` 必须显式设置，coordinator 产生的消息 source="coordinator"。
+    """
+    pushed = []
+
+    class RecordingDataBus:
+        def __init__(self):
+            self._fake_client = FakeRaw()
+            self._connected = True
+
+        def is_connected(self):
+            return self._connected
+
+        def get(self, key: str) -> str | None:
+            return None
+
+        def put(self, key: str, value: str) -> bool:
+            return True
+
+        def delete(self, key: str) -> bool:
+            return True
+
+        def response_push(self, content, **kwargs):
+            pushed.append((content, kwargs))
+
+        @property
+        def _client(self):
+            return self._fake_client
+
+    class FakeRaw:
+        def raw(self):
+            return self
+
+        def put(self, key, value):
+            pass
+
+    monkeypatch.setattr(MODULE, "DataBusClient", lambda: RecordingDataBus())
+    monkeypatch.setattr(MODULE, "call_llm", _make_fake_llm(_SAMPLE_LLM_FINAL))
+    monkeypatch.setenv("AF_INPUT", "推荐登山穿搭")
+    monkeypatch.setenv("AF_DIALOGUE_ID", "test-dialogue-p2")
+    monkeypatch.setenv("AF_SESSION_ID", "test-session-p2")
+    monkeypatch.setenv("AF_LLM_API_KEY", "test-key")
+
+    # Act: execute() runs coordinator_decide — this does progress push + dispatch
+    MODULE.execute()
+
+    # Assert: every response_push call that was made carries source="coordinator"
+    assert len(pushed) > 0, "expected at least one response_push call"
+    for content, kwargs in pushed:
+        assert kwargs.get("source") == "coordinator", (
+            f"response_push({content!r}) missing source=coordinator, got {kwargs}"
+        )

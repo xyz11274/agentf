@@ -1,7 +1,7 @@
 {
-  "name": "general-harness-agent",
-  "version": "3.0.0",
-  "description": "通用 Harness Agent — dispatcher → dummy_pre_skill hook → coordinator loop",
+  "name": "harness-agent",
+  "version": "1.0.0",
+  "description": "通用 Agent Harness 模板 — dispatcher → pre_hook → coordinator loop → skill execution",
   "author": "AgentFlow",
   "workflows": [
     "dummy_pre_skill_workflow.json",
@@ -10,7 +10,7 @@
   ],
   "metadata": {
     "type": "harness-agent",
-    "category": "framework",
-    "tags": ["harness"]
+    "category": "generic",
+    "tags": ["harness", "template", "agent-base"]
   }
 }

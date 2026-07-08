@@ -13,7 +13,6 @@
 #include "sys_agent/IMInferServiceClient.h"
 
 using namespace SYSAGENT;
-using namespace AisfPlat;
 
 namespace SysAgent {
 

@@ -18,7 +18,7 @@ def execute():
     session_id = os.environ.get("AF_SESSION_ID", "")
 
     log(f"triggered session={session_id} dialogue={dialogue_id}")
-    log(f"AF_INPUT={user_input[:80]}")
+    log(f"AF_INPUT={user_input}")
     log("passthrough — empty output, framework auto-forwards to coordinator")
     print(json.dumps({}, ensure_ascii=False))
 
