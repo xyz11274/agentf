@@ -85,8 +85,10 @@ Testing/Temporary/
 .claude
 .atomcode/graph.bin
 .atomcode.md
+AGENTS.override.md
 .atomcode
 .opencode
+
 opencode.jsonc
 .omo
 frontend/bridge/agentflow_bridge.egg-info
@@ -112,7 +114,20 @@ examples/agent/outfit-assistant/assets
 examples/agent/outfit-assistant/workspace/assets
 frontend/bridge/templates/agent_template/harness_agent/workspace/assets
 examples/agent/outfit-assistant/outputs
+examples/agent/outfit-assistant/harness/output
+examples/agent/outfit-assistant/harness/skills/outfit-stylist/assets
 
 examples/agent/outfit-assistant/harness/assets
 examples/agent/outfit-assistant/workspace/upload
 # **/.env
+
+examples/agent/outfit-assistant/harness/skills/outfit-stylist/assets/
+# Persistent session database (created by LocalSessionProvider at runtime)
+data/sessions.db
+data/sessions.db-shm
+data/sessions.db-wal
+
+# tests
+examples/agent/test_harness
+examples/agent/outfit-test-agent
+trace_output

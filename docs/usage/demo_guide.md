@@ -31,7 +31,13 @@
 | Daemon (RPC) | `127.0.0.1:17891`（bridge 自动转发，不需直接连接） |
 | Agent 包存储目录 | `examples/agent/` |
 
-### 1.1 路由前缀说明
+### 1.2 认证方式
+
+> ⚠️ **当前版本无内置认证**：Bridge 本身不校验请求来源。本文所有示例均可直接访问。
+>
+> 生产部署时必须在反向代理层（Nginx / API Gateway）添加认证。当前文档的认证方案尚待设计——需要定制的对接方可联系部署方单独配置访问控制。
+
+### 1.3 路由前缀说明
 
 Bridge 通过 `app.mount("/health", bridge_app)` 将全部业务路由挂载在 `/health` 前缀下。这是对接 AISF 网关的统一入口约定，网关在转发时已自动剥离或保留该前缀（取决于网关配置）。
 
@@ -58,12 +64,92 @@ ARTIFACT_PUBLIC_BASE_URL=https://agent.example.com
 
 该地址必须能被对接方网络实际访问。配置项只负责生成绝对 URL，不会自动配置 DNS、TLS、防火墙或反向代理。
 
+### 1.4 本地前端连接远程 Bridge
+
+开发场景中，前端（Vite 开发服务器，默认 `http://localhost:5173`）需要访问部署在远程服务器上的 Bridge。需要以下配置：
+
+#### 前端侧：指定 Bridge 地址
+
+`ChatPage.vue` 中 `useChatSse(baseUrl?)` 默认连接到同源地址（`window.location.origin` 或 `http://localhost:8000`）。
+
+改为传入远程 Bridge URL：
+
+```typescript
+// ChatPage.vue 第 34 行
+const BRIDGE_URL = 'https://your-bridge-server:8199/health'  // 部署方提供的 Bridge 公网地址
+const sse = useChatSse(BRIDGE_URL)
+```
+
+`useChatSse` 内部用此 `baseUrl` 构造所有请求路径（SSE、REST API、会话列表、历史消息等）。
+
+如果使用 WebSocket 通道：
+
+```typescript
+// AssistantWidget.vue 或 ChatPage.vue
+const wsUrl = 'wss://your-bridge-server:8199'
+const ws = useChatWebSocket({ baseUrl: wsUrl })
+```
+
+#### Bridge 侧：配置 CORS
+
+Bridge 的 CORS 白名单默认只允许 `localhost:15173` 和 `127.0.0.1:15173`。前端跑在不同源时会被浏览器拦截。
+
+在 Bridge 服务器上设置环境变量：
+
+```bash
+# 方式 A：指定前端源（推荐）
+export CORS_ALLOWED_ORIGINS='["http://localhost:5173","https://your-frontend.com"]'
+
+# 方式 B：允许所有源（仅开发环境）
+export CORS_ALLOWED_ORIGINS='["*"]'
+```
+
+或在 `frontend/bridge/config.yaml` 中写入：
+
+```yaml
+cors_allowed_origins:
+  - "http://localhost:5173"
+  - "https://your-frontend.com"
+```
+
+#### 方式二：Vite proxy（无需改前端代码）
+
+在 `frontend/web/vite.config.ts` 中添加 proxy 规则，将 `/api` 和 `/ws` 代理到远程 Bridge，前端代码完全不用改：
+
+```typescript
+export default defineConfig({
+  server: {
+    proxy: {
+      '/api': {
+        target: 'https://your-bridge-server:8199',
+        changeOrigin: true,
+      },
+      '/ws': {
+        target: 'wss://your-bridge-server:8199',
+        ws: true,
+      },
+    },
+  },
+})
+```
+
+这种方式下前期开发最便捷——不需要修改任何业务代码，Bridge 也不需要额外配置 CORS（浏览器认为请求来自同源）。
+
+#### 注意事项
+
+| 项 | 说明 |
+|---|------|
+| **路由前缀** | 如果 Bridge 挂载在 `/health` 前缀下（如 `https://host:8199/health/api/...`），`baseUrl` 必须包含该前缀 |
+| **WebSocket** | WSS 需要 Bridge 服务器配置 TLS 证书（可通过反向代理如 Nginx 完成） |
+| **SSE 推荐** | SSE 走 HTTP 协议，比 WebSocket 更容易通过反向代理部署，且自带断线重连语义 |
+| **产物 URL** | 确保 `ARTIFACT_PUBLIC_BASE_URL` 配置为前端可访问的公网地址，否则图片/HTML 无法加载 |
+
 启动顺序：
 
 ```bash
-# 1. 启动 daemon（使用 outfit_assistant 自带的 Python venv）
-export PATH="$(pwd)/examples/agent/outfit_assistant/.venv_unix/bin:$PATH"
-./build/agentflowd --package "$(pwd)/examples/agent/outfit_assistant" \
+# 1. 启动 daemon（使用 outfit-assistant 自带的 Python venv）
+export PATH="$(pwd)/examples/agent/outfit-assistant/.venv_unix/bin:$PATH"
+./build/agentflowd --package "$(pwd)/examples/agent/outfit-assistant" \
   --listen 127.0.0.1:17891 --log-file "$(pwd)/logs/agentflowd.log" &
 
 # 2. 启动 bridge
@@ -76,10 +162,10 @@ cd frontend/bridge && python3 main.py &
 
 ## 2. Agent Package 格式说明
 
-一个 agent package 是磁盘上的一个目录，包含 agent 的完整定义。以 `outfit_assistant` 为例：
+一个 agent package 是磁盘上的一个目录，包含 agent 的完整定义。以 `outfit-assistant` 为例：
 
 ```
-outfit_assistant/
+outfit-assistant/
 ├── package.json                   # 包元信息
 ├── agent.json                     # agent 定义（4 个 task）
 ├── agent.md                       # 模型配置 + 业务意图 + skills 列表
@@ -156,7 +242,7 @@ outfit_assistant/
   "session_pool_size": 3,
   "max_workflows": 10,
   "max_concurrent_workflows": 5,
-  "data_bus_capacity_mb": 5,
+  "data_bus_capacity_mb": 50,
   "tasks": [
     {
       "id": 0,
@@ -236,7 +322,7 @@ outfit_assistant/
 - 必须且只能有一个 `dispatcher` 类型的 task
 - 必须且只能有一个 `coordinator` 类型的 task
 - skill 通过 `dispatcher.next_skills` 数组或 coordinator 派发的 `next_skills` 被引用，名称需与 skill 的 `skill.name` 一致
-- 目录名为下划线（`outfit_assistant`），但 `package.json` 中的 `name` 和 daemon 的 agent_id 用连字符（`outfit-assistant`）
+- 目录名为下划线（`outfit-assistant`），但 `package.json` 中的 `name` 和 daemon 的 agent_id 用连字符（`outfit-assistant`）
 
 ### 2.3 `agent.md` — 模型配置 + 业务意图 + skills 列表
 
@@ -268,7 +354,7 @@ skills:
 
 ### 2.4 Workflow 文件格式
 
-每个 workflow JSON 定义了一个工作流 DAG，包含 nodes 和 edges。当前 outfit_assistant 用 3 个 workflow：
+每个 workflow JSON 定义了一个工作流 DAG，包含 nodes 和 edges。当前 outfit-assistant 用 3 个 workflow：
 
 #### coordinator 决策 workflow（`coordinator_workflow.json`）
 
@@ -286,7 +372,7 @@ coordinator 的 LLM 决策节点，单节点 DAG：
       "type": "task",
       "execution_mode": "python_script",
       "command": "./nodes/coordinator_decide.py",
-      "working_dir": "examples/agent/outfit_assistant",
+      "working_dir": "examples/agent/outfit-assistant",
       "json_output": true,
       "enable_hot_reload": false,
       "inputs": [
@@ -330,7 +416,7 @@ coordinator 节点的两种出口：
       "type": "task",
       "execution_mode": "python_script",
       "command": "./nodes/skill_executor.py",
-      "working_dir": "examples/agent/outfit_assistant",
+      "working_dir": "examples/agent/outfit-assistant",
       "json_output": true,
       "enable_hot_reload": false,
       "inputs": [
@@ -376,7 +462,7 @@ dispatcher 首次路由的占位 hook，单节点 `dummy_pre_skill.py`，输出�
 
 | 变量 | 说明 |
 |------|------|
-| `AF_INPUT` | 用户输入文本（首次触发）或 coordinator 消息 |
+| `AF_INPUT` | JSON 字符串 `{"stream": bool, "messages": [{role, content}, ...]}`。首次触发时 Bridge 组装历史上下文 + 本次输入；skill 回流时框架注入 coordinator 消息 |
 | `AF_SESSION_ID` | 会话 ID |
 | `AF_DIALOGUE_ID` | 对话 ID |
 | `AF_DATABUS_UDS_FILE` | DataBus UDS socket 路径 |
@@ -437,8 +523,8 @@ Content-Type: multipart/form-data
 
 ```json
 {
-  "name": "outfit_assistant",
-  "path": "/path/to/agent_packages/outfit_assistant",
+  "name": "outfit-assistant",
+  "path": "/path/to/agent_packages/outfit-assistant",
   "file_count": 24,
   "last_modified": "2026-06-27T10:00:00+08:00"
 }
@@ -450,11 +536,11 @@ Content-Type: multipart/form-data
 
 ```bash
 # 正确做法：cd 到目录再打包
-cd examples/agent/outfit_assistant
-zip -r ../outfit_assistant.zip .
+cd examples/agent/outfit-assistant
+zip -r ../outfit-assistant.zip .
 
-# 错误做法：打包了外层目录（解压后多了 outfit_assistant/ 层级）
-zip -r outfit_assistant.zip examples/agent/outfit_assistant/
+# 错误做法：打包了外层目录（解压后多了 outfit-assistant/ 层级）
+zip -r outfit-assistant.zip examples/agent/outfit-assistant/
 ```
 
 ### 3.3 示例请求
@@ -462,8 +548,8 @@ zip -r outfit_assistant.zip examples/agent/outfit_assistant/
 ```bash
 # 上传 agent package
 curl -X POST http://127.0.0.1:8199/health/api/packages/upload \
-  -F "file=@outfit_assistant.zip" \
-  -F "name=outfit_assistant"
+  -F "file=@outfit-assistant.zip" \
+  -F "name=outfit-assistant"
 ```
 
 ### 3.4 加载到 Daemon
@@ -525,7 +611,7 @@ Content-Type: application/json
 | `agent_id` | path | agent 标识符（如 `outfit-assistant`） |
 | `user_id` | string | 用户标识（用于会话路由） |
 | `client_id` | string | 客户端标识 |
-| `content` | string | 用户输入文本 |
+| `content` | string 或 ContentPart[] | **用户输入**。纯文本用字符串；多模态用 content array（含 `text` + `image_url`），详见 [§4.7 实战场景](#47-实战场景上传图片获取穿搭推荐) |
 
 **响应：**
 
@@ -568,33 +654,241 @@ curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
 }
 ```
 
-### 4.3 获取图片和 HTML 产物
+### 4.3 流式聊天（WebSocket / SSE）
 
-当任务生成图片或 HTML 时，`data.content` 仍是字符串，产物以 Markdown URL 返回，不会以 Base64 或独立二进制字段返回。例如：
+除同步 REST 接口外，Bridge 还提供 **流式 WebSocket** 和 **SSE（REST 流式）** 两种实时通道。流式接口将 LLM 的回复以 chunk 形式逐段推送，并附带结构化的产物元数据。
+
+#### WebSocket
+
+```
+ws://127.0.0.1:8199/health/ws/chat/{agent_id}
+```
+
+**客户端发送（纯文本）：**
+
+```json
+{
+  "user_id": "user_demo",
+  "client_id": "client_demo",
+  "content": "帮我生成一份北京商务出差的穿搭PPT"
+}
+```
+
+**客户端发送（带图片的多模态输入）：**
+
+Content 同样支持 content array 格式，与 REST 接口一致：
+
+```json
+{
+  "user_id": "user_demo",
+  "client_id": "client_demo",
+  "content": [
+    {"type": "text", "text": "看我这张照片，帮我推荐适合上班穿的搭配"},
+    {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgoA..."}}
+  ]
+}
+```
+
+图片格式与 [§4.6 实战场景](#46-实战场景上传图片获取穿搭推荐) 完全一致：小图用 base64 data URL 内联，大图先上传再引用 `file_url`。
+
+**Bridge 逐帧推送：**
+
+```json
+{"type":"chunk","content":"正在执行 outfit-stylist…","final":false,"progress":true}
+{"type":"chunk","content":"好的，已为您生成商务出差方案。","final":false,"progress":false}
+{"type":"chunk","content":"\n\n## 生成产物","final":false,"progress":false}
+{
+  "type": "chunk",
+  "content": "\n\n[📥 下载文件 1](/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/presentation.pptx)",
+  "final": true,
+  "artifacts": [
+    {"type": "download", "url": "/api/artifacts/outfit-assistant/files/.../presentation.pptx", "name": "presentation.pptx", "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+    {"type": "image", "url": "/api/artifacts/outfit-assistant/files/.../look.png", "name": "look.png", "mime_type": "image/png"}
+  ]
+}
+{"type":"done","final":true}
+```
+
+**流式帧类型：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `type` | `"chunk"` / `"done"` / `"error"` / `"llm_chunk"` | 帧类型 |
+| `content` | string | 文本内容片段 |
+| `final` | bool | `true` 时为本轮最后一条 chunk |
+| `progress` | bool | `true` 时是系统进度消息（如"正在执行 skill…"），非模型输出 |
+| `artifacts` | ArtifactInfo[] | **结构化产物元数据**，仅 final chunk 携带（见下文） |
+
+> **ℹ️ `llm_chunk` 帧类型**：当 LLM 节点以流式输出时，Bridge 会推送 `type="llm_chunk"` 的帧，其 `content` 为原始 OpenAI SSE JSON 格式（`{"choices":[{"delta":{"content":"片段的token"}}]}`）。前端/外部客户端应解析 JSON 提取 `delta.content` 来拼接完整回复：
+>
+> ```typescript
+> function extractLlmChunk(frameContent: string): string {
+>   try {
+>     const parsed = JSON.parse(frameContent);
+>     return parsed?.choices?.[0]?.delta?.content
+>         || parsed?.choices?.[0]?.message?.content
+>         || frameContent;
+>   } catch {
+>     return frameContent; // 纯文本，直接使用
+>   }
+> }
+> ```
+>
+> `chunk` 类型帧的 `progress=true` 时，其 `content` 也可能是 OpenAI JSON 格式，同样需要上述解析逻辑。
+
+#### SSE (REST 流式)
+
+Bridge 的 SSE（Server-Sent Events）流式接口遵循 OpenAI Chat Completions SSE 格式，并扩展了 `_artifacts` / `_dialogue_id` 非标准字段。
+
+```
+POST /api/chat/{agent_id}?stream=true
+Content-Type: application/json
+```
+
+请求体与同步接口一致，加 `stream=true` 查询参数：
+
+```bash
+curl -N -X POST "http://127.0.0.1:8199/health/api/chat/outfit-assistant?stream=true" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"demo","client_id":"demo","content":"帮我生成一份北京商务出差的穿搭PPT"}'
+```
+
+SSE 事件流格式（每行以 `data: ` 开头，两条换行 `\n\n` 分隔事件）：
+
+```
+data: {"choices":[{"delta":{"content":"进度：正在查询天气…"},"index":0}],"_dialogue_id":"0705123456-abc123"}
+
+data: {"choices":[{"delta":{"content":"方案已生成，包含 PPT 文件。"},"index":0}]}
+
+data: {"choices":[{"delta":{"content":""},"index":0}],"_artifacts":[{"type":"download","url":"/api/artifacts/...","name":"presentation.pptx","mime_type":"application/vnd..."}]}
+
+data: [DONE]
+```
+
+> **ℹ️ Progress 消息的 content 格式**：Bridge 推送的 progress 消息中 `delta.content` 可能是纯文本（如 `"正在查询天气…"`），也可能是 OpenAI 格式 JSON 字符串（如 `{"choices":[{"message":{"content":"coordinator 决策中…"}}]}`）。外部客户端应按以下逻辑解析：
+>
+> ```typescript
+> function extractProgress(rawContent: string): string {
+>   try {
+>     const parsed = JSON.parse(rawContent);
+>     return parsed?.choices?.[0]?.message?.content
+>         || parsed?.choices?.[0]?.delta?.content
+>         || rawContent;
+>   } catch {
+>     return rawContent; // 纯文本，直接使用
+>   }
+> }
+> ```
+
+**SSE 事件字段：**
+
+| 字段 | 类型 | 出现时机 | 说明 |
+|------|------|---------|------|
+| `choices[].delta.content` | string | `llm_chunk` 帧 | LLM 实时 token（流式格式 `delta.content`） |
+| `choices[].message.content` | string | `text` / `progress` 帧 | 完整文本或进度消息（同步格式 `message.content`） |
+| `choices[].index` | int | 每个 chunk | 恒为 0（单 choice） |
+| `_dialogue_id` | string | **首个 chunk** | 对话 ID，可用于后续 trace 过滤 |
+| `_artifacts` | ArtifactInfo[] | **final chunk** | 结构化产物元数据（见下文） |
+| `_progress` | bool | progress 帧 | `true` 时是系统进度消息，非 LLM 输出。外部服务可据此过滤进度消息 |
+| `_chunk_type` | string | 每个 chunk | 帧子类型：`"text"`（完整响应）／`"llm_chunk"`（流式 token）／`"progress"`（进度通知） |
+| `error` | object | 错误时 | `{"message":"...","code":-32000}` |
+| `[DONE]` | 终止信号 | 对话完成 | 无 data 体，直接作为 `data: [DONE]` 发送 |
+
+**客户端解析要点：**
+
+- 按 `\n\n` 分割事件，每行去掉 `data: ` 前缀后 JSON 解析
+- 遇到 `data: [DONE]` 终止读取
+- **`_chunk_type` 决定内容位置**：`llm_chunk` 读 `choices[0].delta.content`，`text`/`progress` 读 `choices[0].message.content`
+- 首个 chunk 的 `_dialogue_id` 可用于后续 trace 查询
+- 仅 final chunk 的 `_artifacts` 非空；中间 chunk 可以通过正则从 `delta.content` 中的 Markdown `![](url)` 提取 URL
+- 进度消息可通过 `_progress===true` 或 `_chunk_type==="progress"` 识别并过滤
+
+#### 结构化产物元数据（ArtifactInfo）
+
+从 final chunk 的 `artifacts` 数组可程序化读取所有生成文件，无需解析 Markdown：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `type` | `"image"` / `"html"` / `"download"` | 语义类型 |
+| `url` | string | 文件下载 URL（相对或绝对） |
+| `name` | string | 文件名（如 `deck.pptx`） |
+| `mime_type` | string | MIME 类型（如 `application/pdf`） |
+
+```typescript
+// 外部服务消费示例
+interface ArtifactInfo {
+  type: 'image' | 'html' | 'download';
+  url: string;
+  name: string;
+  mime_type: string;
+}
+// 直接使用 url 下载文件
+// 使用 type 决定展示方式：
+//   image → 渲染 <img>
+//   html  → 打开 iframe/新窗口
+//   download → 提供下载按钮
+```
+
+### 4.4 获取图片和 HTML 产物
+
+当 Agent 生成图片、HTML 报告或 PPT/PDF 等文件时，产物的交付通道分为两层：
+
+- **聊天响应中的文本引用**：`content` 字段中嵌入 Markdown 格式的文件链接
+- **结构化产物元数据**（流式接口）：`ChatChunk.artifacts` 数组提供程序化可读的文件清单
+
+两种方式指向相同的文件，外部服务可选择任一种消费方式。
+
+### 产物示例（同步 REST）
 
 ```json
 {
   "success": true,
   "data": {
     "task_id": "task_abc123",
-    "content": "穿搭方案已生成：\n\n![穿搭效果图](https://agent.example.com/health/api/artifacts/outfit-assistant/files/outfit_assistant/outputs/task-abc123/look.png)\n\n[查看完整 HTML 报告](https://agent.example.com/health/api/artifacts/outfit-assistant/files/outfit_assistant/outputs/task-abc123/report.html)"
+    "content": "穿搭方案已生成：\n\n![穿搭效果图](https://agent.example.com/health/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-abc123/look.png)\n\n[查看完整 HTML 报告](https://agent.example.com/health/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-abc123/report.html)\n\n[📥 下载文件 1](https://agent.example.com/health/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-abc123/deck.pptx)"
   },
   "error": null
 }
 ```
 
+### 产物示例（流式接口）
+
+final chunk 附带 `artifacts` 字段：
+
+```json
+{
+  "type": "chunk",
+  "content": "…",
+  "final": true,
+  "artifacts": [
+    {"type": "image",    "url": "https://agent.example.com/health/api/artifacts/.../look.png",     "name": "look.png",     "mime_type": "image/png"},
+    {"type": "html",     "url": "https://agent.example.com/health/api/artifacts/.../report.html",  "name": "report.html",   "mime_type": "text/html"},
+    {"type": "download", "url": "https://agent.example.com/health/api/artifacts/.../deck.pptx",    "name": "deck.pptx",     "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation"}
+  ]
+}
+```
+
 外部服务的处理步骤：
 
-1. 读取 `data.content`，按 Markdown 渲染，或自行提取其中的 URL。
-2. 使用普通 HTTP `GET` 请求访问 `/api/artifacts/{agent_id}/files/{relative_path}`。
-3. 按响应的 `Content-Type` 处理图片或 HTML；不要根据文件扩展名猜测图片编码。
-4. HTML 报告引用的图片、CSS、JavaScript 等相对资源保持原目录层级，浏览器直接打开 HTML URL 即可继续加载这些资源。
+1. **同步 REST**：读取 `data.content` 中的 Markdown 链接，或直接使用流式接口获取结构化 `artifacts` 数组。
+2. **流式接口**：从 final chunk 的 `artifacts` 字段直接读取文件 URL、类型和文件名，无需正则解析 Markdown。
+3. 使用普通 HTTP `GET` 请求访问 `/api/artifacts/{agent_id}/files/{relative_path}`。
+4. 按响应的 `Content-Type` 处理文件内容；图片直接展示，HTML 打开浏览器，PPT/PDF 触发下载。
+5. HTML 报告引用的图片、CSS、JavaScript 等相对资源保持原目录层级，浏览器直接打开 HTML URL 即可继续加载这些资源。
 
-直接下载示例：
+**外部服务推荐接入方式：**
+
+| 场景 | 推荐接口 | 原因 |
+|------|---------|------|
+| 前端 UI 对话 | WebSocket (`/ws/chat/{agent_id}`) | 实时推送、支持进度提示 |
+| 后端服务调用 | SSE (`POST ...?stream=true`) | 流式拿到结构化产物，无需轮询 |
+| 简单集成/测试 | 同步 REST (`POST /api/chat/{agent_id}`) | 一次请求拿到完整回复和 Markdown URL |
+
+文件下载示例：
 
 ```bash
 curl -L \
-  "https://agent.example.com/health/api/artifacts/outfit-assistant/files/outfit_assistant/outputs/task-abc123/look.png" \
+  "https://agent.example.com/health/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-abc123/look.png" \
   -o look.png
 ```
 
@@ -607,7 +901,16 @@ Artifact 文件接口可能返回：
 | 404 | 文件不存在 |
 | 415 | 文件类型不支持 |
 
-### 4.4 外部服务接入检查
+> **ℹ️ 产物收集边界（I-6）**：Agent 技能执行时，`skill_executor.extract_artifact_paths` 负责从文本输出中扫描文件路径并收为产物。为避免将**用户上传的输入文件**误报为**本次新生成的产物**，框架对以下输入目录做排除过滤：
+>
+> | 输入目录 | 说明 |
+> |---------|------|
+> | `workspace/upload/` | Bridge 自动落盘的 API 传入图片（`content_serializer._compute_upload_dir`） |
+> | `uploads/` | 兼容旧版上传路径 |
+>
+> 这两个目录下的文件**仅作为 skill 的输入素材存在**，不会被收进 artifact 清单。外部服务的消费逻辑不受此影响——产物清单中只出现技能本次真正生成的文件。
+
+### 4.5 外部服务接入检查
 
 对接前应确认：
 
@@ -618,6 +921,334 @@ Artifact 文件接口可能返回：
 - 外部服务不要保存或拼接服务器本地文件路径，只使用聊天响应中返回的 URL。
 
 当前 Artifact URL 没有签名和过期时间，`agent_id` 也不是权限校验。公网部署必须由反向代理或 API Gateway 提供认证和访问控制；产物清理周期需由部署方另行管理。
+
+### 4.6 实战场景：上传图片获取穿搭推荐
+
+#### 场景描述
+
+用户上传一张自己穿着日常便装的全身照，附加文字 `"帮我推荐一套适合今天上班穿的搭配，并生成效果图"`，期望 Agent 分析照片中的身材和风格后返回文字推荐 + 一张穿搭效果图。
+
+#### 场景预览
+
+```
+用户输入                                  Agent 处理                                Agent 返回
+┌──────────────────┐                    ┌────────────────────┐                   ┌──────────────────┐
+│ 文本: "帮我推荐   │                    │ 1. 读图片分析身型   │                   │ 文字推荐方案      │
+│  上班穿搭+效果图" │  ─── POST ───▶     │ 2. 查天气          │  ─── response ──▶ │ + 效果图 URL     │
+│ 图片: 全身照.png  │                    │ 3. LLM 决策        │                   │                  │
+│ (转 base64)      │                    │ 4. 生成图片        │                   │                  │
+└──────────────────┘                    └────────────────────┘                   └──────────────────┘
+```
+
+#### 前提
+
+1. `outfit-assistant` agent 已加载到 daemon（如未加载，先执行 [§3 上传与加载](#3-第一步上传-agent-package)）
+2. 准备一张本地全身照（大小建议 < 5MB，太大时 Bridge 会自动落地为文件引用）
+
+#### 方式一：同步 REST（小图片，base64 内联）
+
+对于 base64 后 < 256KB 的小图片，可以直接把图片数据嵌在请求的 content array 中。
+
+将图片转为 base64 data URL：
+
+```bash
+# macOS / Linux：将图片转成 data URL 字符串
+IMAGE_B64="data:image/png;base64,$(base64 -i ~/Pictures/my_outfit.png | tr -d '\n')"
+```
+
+发送同步请求（`content` 为 content array）：
+
+```bash
+IMAGE_B64="data:image/png;base64,$(base64 -i ~/Pictures/my_outfit.png | tr -d '\n')"
+
+curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"user_id\": \"demo\",
+    \"client_id\": \"demo\",
+    \"content\": [
+      {\"type\": \"text\", \"text\": \"帮我推荐一套适合今天上班穿的搭配，并生成效果图\"},
+      {\"type\": \"image_url\", \"image_url\": {\"url\": \"$IMAGE_B64\"}}
+    ]
+  }"
+```
+
+**请求字段说明**：
+
+| 字段路径 | 类型 | 说明 |
+|---------|------|------|
+| `content` | `ContentPart[]` | 内容数组，至少包含 1 个 part |
+| `content[].type` | `"text"` / `"image_url"` | part 类型 |
+| `content[].text` | string | 文本内容（type=text 时必填） |
+| `content[].image_url.url` | string | `data:image/...;base64,...` 或 `http(s)://` URL（type=image_url 时必填） |
+
+**响应**（同步模式）：
+
+```json
+{
+  "success": true,
+  "data": {
+    "task_id": "task_abc123",
+    "content": "根据您上传的照片分析，您属于中等偏瘦体型，肤色偏暖。\n\n"
+              "今日北京 26°C 晴，推荐以下商务休闲搭配：\n\n"
+              "| 单品 | 推荐 | 理由 |\n"
+              "|------|------|------|\n"
+              "| 上装 | 浅蓝色牛津纺衬衫 | 与您的暖调肤色相配，商务感强 |\n"
+              "| 下装 | 卡其色休闲西裤 | 修饰腿型，舒适透气 |\n"
+              "| 鞋履 | 深棕色乐福鞋 | 与卡其色形成高级感配色 |\n"
+              "| 外套 | 藏青色轻薄西装（可选） | 应对空调房 |\n\n"
+              "![生成图片 1](https://agent.example.com/health/api/artifacts/outfit-assistant/files/"
+              "outfit-assistant/outputs/task-abc123/look.png)\n\n"
+              "效果图已生成，点击图片查看大图 📸",
+    "artifacts": [
+      {"type": "image", "url": "https://agent.example.com/health/api/artifacts/outfit-assistant/files/"
+       "outfit-assistant/outputs/task-abc123/look.png",
+       "name": "look.png", "mime_type": "image/png"}
+    ]
+  }
+}
+```
+
+响应中的 `content` 包含 Markdown 格式的推荐表格和图片链接，`artifacts` 数组提供结构化图片元数据。外部服务可任选一种方式消费。
+
+#### 方式二：SSE 流式（大图片，文件上传）
+
+对于 base64 后 ≥ 256KB 的大图片（如高清全身照），Bridge 自动落盘并替换为 `file_url`，但仍需注意 `POST body` 大小。推荐先上传再引用：
+
+**步骤 1：上传图片到 Bridge**
+
+```bash
+# 上传图片，返回 file_url
+curl -X POST http://127.0.0.1:8199/health/api/chat/uploads \
+  -H "Content-Type: multipart/form-data" \
+  -F "file=@~/Pictures/my_outfit_hires.png"
+
+# 响应：{"file_url": "file:///tmp/agentflow/uploads/abc123.png", "filename": "my_outfit_hires.png"}
+```
+
+> 上传接口位于 `POST /api/chat/uploads`，接受 `multipart/form-data` 格式。返回的 `file_url` 是 Bridge 本地路径，daemon 侧的 skill 通过 `bash` 工具调用 `outfit_vision.py` 来识别图片，而非虚构的 `read_image` 工具。
+
+**步骤 2：发送 SSE 流式请求，引用上传的文件**
+
+```bash
+curl -N -X POST "http://127.0.0.1:8199/health/api/chat/outfit-assistant?stream=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "demo",
+    "client_id": "demo",
+    "content": [
+      {"type": "text", "text": "帮我推荐一套适合今天上班穿的搭配，并生成效果图"},
+      {"type": "image_url", "image_url": {"url": "file:///tmp/agentflow/uploads/abc123.png"}}
+    ]
+  }'
+```
+
+**步骤 3：实时接收 SSE 事件流**
+
+```
+# 进度通知（首个 chunk 携带 _dialogue_id）
+data: {"choices":[{"delta":{"content":"进度：outfit-stylist 正在分析照片…"},"index":0}],"_dialogue_id":"0704123456-abc123def"}
+
+# LLM 流式文字（逐 chunk 推送）
+data: {"choices":[{"delta":{"content":"根据您上传的照片分析"},"index":0}]}
+data: {"choices":[{"delta":{"content":"，您属于中等偏瘦体型"},"index":0}]}
+data: {"choices":[{"delta":{"content":"。今日北京 26°C 晴，推荐以下搭配：\n\n"},"index":0}]}
+data: {"choices":[{"delta":{"content":"| 单品 | 推荐 | 理由 |\n|------|------|------|\n| 上装 | 浅蓝色牛津纺衬衫 |..."},"index":0}]}
+
+# LLM 输出完后，forge-image-gen 执行，返回进度
+data: {"choices":[{"delta":{"content":"进度：forge-image-gen 正在渲染效果图…"},"index":0}]}
+
+# final chunk：文字收尾 + 结构化 artifact 元数据
+data: {"choices":[{"delta":{"content":"\n\n效果图已生成，点击查看 📸"},"index":0}],"_artifacts":[
+       {"type":"image","url":"https://agent.example.com/health/api/artifacts/outfit-assistant/files/.../look.png",
+        "name":"look.png","mime_type":"image/png"}
+     ]}
+
+# 完成信号
+data: [DONE]
+```
+
+**SSE 事件字段**：
+
+| 字段 | 类型 | 出现时机 | 说明 |
+|------|------|---------|------|
+| `choices[].delta.content` | string | 每个 chunk | 文本内容片段（逐段推送）。可能为空字符串 |
+| `choices[].index` | int | 每个 chunk | 恒为 0（单 choice） |
+| `_dialogue_id` | string | **首个 chunk** | 对话 ID，可用于后续 trace 过滤 |
+| `_artifacts` | ArtifactInfo[] | **final chunk** | 结构化产物元数据（见下文） |
+| `error` | object | 错误时 | `{"message":"...","code":-32000}` |
+| `[DONE]` | 终止信号 | 对话完成 | 无 data 体，直接作为 `data: [DONE]` 发送 |
+
+#### 处理产物
+
+无论同步还是流式，收到响应后按同一方式处理生成的图片：
+
+```bash
+# 从 content 或 artifacts 中提取 URL，下载图片
+curl -L -o look.png \
+  "https://agent.example.com/health/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-abc123/look.png"
+
+# 查看图片
+open look.png
+```
+
+#### 场景涉及的完整协议关键点
+
+| 环节 | 关键点 |
+|------|--------|
+| 输入格式 | `content` 支持 `ContentPart[]`：`text` + `image_url`（data: / file: / http(s):） |
+| 图片阈值 | base64 < 256KB 直接内联；≥ 256KB 先上传再引用 `file_url` |
+| 进度通知 | `progress=true` 的 chunk 在技能执行期间推送，前端可展示进度条 |
+| 产物交付 | final chunk 的 `_artifacts`（SSE）或 `data.artifacts`（同步）提供结构化元数据 |
+| 产物下载 | HTTP GET `/api/artifacts/{agent_id}/files/{path}`，无需认证签名 |
+| trace 关联 | 首个 chunk 的 `_dialogue_id` 可用于后续查询 LLM trace 列表 |
+
+#### 完整场景 curl 速查
+
+##### 方式一：同步 REST + base64 内联（小图 < 256KB）
+
+```bash
+# 1. 图片转 base64（使用项目示例图片）
+IMG_DATA="data:image/jpeg;base64,$(base64 -i tmp/outfit_male_loungewear.jpeg | tr -d '\n')"
+
+# 2. 发送请求，要求 Agent 描述图片中的穿搭
+curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"user_id\":\"demo\",
+    \"client_id\":\"demo\",
+    \"content\":[
+      {\"type\":\"text\",\"text\":\"帮我点评一下我的穿搭，必须描述我的穿了什么\"},
+      {\"type\":\"image_url\",\"image_url\":{\"url\":\"$IMG_DATA\"}}
+    ]
+  }" | jq .
+
+# 3. 从响应 data.content 中提取 artifact URL → 下载效果图
+```
+
+##### 方式二：SSE 流式 + 先上传再引用（大图 ≥ 256KB）
+
+```bash
+# 1. 上传图片到 Bridge
+curl -X POST http://127.0.0.1:8199/health/api/chat/uploads \
+  -F "file=@tmp/outfit_male_loungewear.jpeg"
+
+# 响应：{"file_url": "file:///tmp/agentflow/uploads/xxx.jpeg", "filename": "outfit_male_loungewear.jpeg"}
+
+# 2. 发送 SSE 流式请求，引用上传的文件
+curl -N -X POST "http://127.0.0.1:8199/health/api/chat/outfit-assistant?stream=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "demo",
+    "client_id": "demo",
+    "content": [
+      {"type": "text", "text": "帮我点评一下我的穿搭，必须描述我的穿了什么"},
+      {"type": "image_url", "image_url": {"url": "file:///tmp/agentflow/uploads/xxx.jpeg"}}
+    ]
+  }'
+
+# 3. 实时接收 SSE 事件流，从 final chunk 的 _artifacts 提取产物 URL
+```
+
+### 4.7 对话取消与串行锁
+
+> **背景**：同一 `(user_id, client_id)` 的多个请求路由到 daemon 同一 session。
+> 为保护对话有序语义和 Task 层状态一致性，session 内对话必须串行执行——
+> 新请求排队等待前一个对话完成后才执行。
+>
+> 串行锁由 `dialogue.interrupt`（DIALOGUE-INTERRUPT 控制命令）主动释放。
+> 以下四种场景均能触发锁释放：
+
+| 触发方式 | 适用通道 | 调用方 |
+|---------|---------|--------|
+| WebSocket `{"type":"stop"}` | 前端 WebSocket | 用户在对话框点"停止" |
+| REST `POST /api/chat/{agent_id}/cancel` | REST SSE | 外部服务主动调用 |
+| SSE 连接断开 | REST SSE | 客户端意外断线或主动关闭 |
+| Daemon RPC `agent.send_control` | 直连 daemon | 管理端/调试工具 |
+
+#### 路径一：WebSocket 停止
+
+WebSocket 协议内置停止信号。用户在对话过程中发送 `{"type":"stop"}`，
+Bridge 自动下发 `DIALOGUE-INTERRUPT` 到 daemon，释放串行锁。
+
+```json
+// 客户端 → Bridge
+{"type": "stop"}
+```
+
+不需传入 `user_id` 或 `client_id`——WebSocket 连接已绑定用户标识。
+
+#### 路径二：REST 取消端点
+
+**端点**：`POST /api/chat/{agent_id}/cancel`
+
+**场景**：两个浏览器窗口使用相同 `(user_id, client_id)`。A 窗口的 SSE
+流尚未结束（模型耗时较长），B 窗口无法发起新对话。此时 B 可通过 cancel
+端点主动中断 A 的流，释放锁后 B 即可执行。
+
+**请求体**：
+
+```json
+{
+  "user_id": "demo",
+  "client_id": "demo"
+}
+```
+
+**响应**：
+
+```json
+{
+  "success": true,
+  "data": {
+    "cancelled": true,
+    "dialogue_id": "0704123456-abc123def"
+  }
+}
+```
+
+**说明**：
+
+- `cancelled: true` —— 对话被成功取消；daemon 中断技能任务、释放串行锁
+- `cancelled: false` —— 未找到活跃对话（可能已结束或从未存在）
+- 取消后，A 窗口的 SSE 流会立即收到 `data: [DONE]` 终止信号，不会继续挂等
+
+#### 路径三：SSE 断开自动取消
+
+REST SSE 流式请求的客户端意外断线（浏览器关闭、网络中断、主动断开连接等）
+时，Bridge 自动下发 `DIALOGUE-INTERRUPT`，释放串行锁。外部服务无需额外操作。
+
+#### 路径四：直连 daemon RPC（管理/调试）
+
+直接操作 daemon JSON-RPC（绕过 Bridge）：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "agent.send_control",
+  "params": {
+    "agent_id": "outfit-assistant",
+    "command": "DIALOGUE-INTERRUPT",
+    "session_id": "ses_xxx",
+    "user_id": "demo",
+    "dialogue_id": "0704123456-abc123def"
+  },
+  "id": 1
+}
+```
+
+此方式需要知晓内部 `session_id` 和 `dialogue_id`，推荐仅用于管理/调试场景。
+
+#### 取消后的行为
+
+1. daemon 中断当前运行的所有技能任务
+2. 清理该对话关联的 DataBus 数据
+3. 向 Bridge 推送一条 `final=true` 的终止通知
+4. 释放串行锁
+5. 下一个排队的对话立即开始执行
+
+A 窗口（被取消方）的 SSE 流收到 `data: [DONE]` 后正常结束，
+B 窗口（取消方）的新请求获取锁后开始流式响应。
 
 ---
 
@@ -824,13 +1455,13 @@ Content-Type: multipart/form-data
 
 ```bash
 # 更新 agent package（增量模式）
-curl -X PUT http://127.0.0.1:8199/health/api/packages/outfit_assistant/update \
-  -F "file=@outfit_assistant_v2.zip" \
+curl -X PUT http://127.0.0.1:8199/health/api/packages/outfit-assistant/update \
+  -F "file=@outfit-assistant_v2.zip" \
   -F "mode=incremental"
 
 # 更新 agent package（全量模式）
-curl -X PUT http://127.0.0.1:8199/health/api/packages/outfit_assistant/update \
-  -F "file=@outfit_assistant_v2.zip" \
+curl -X PUT http://127.0.0.1:8199/health/api/packages/outfit-assistant/update \
+  -F "file=@outfit-assistant_v2.zip" \
   -F "mode=full"
 ```
 
@@ -838,8 +1469,8 @@ curl -X PUT http://127.0.0.1:8199/health/api/packages/outfit_assistant/update \
 
 ```json
 {
-  "name": "outfit_assistant",
-  "path": "/path/to/agent_packages/outfit_assistant",
+  "name": "outfit-assistant",
+  "path": "/path/to/agent_packages/outfit-assistant",
   "file_count": 26,
   "last_modified": "2026-06-27T11:00:00+08:00"
 }
@@ -912,7 +1543,29 @@ curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/api/chat/{agent_id}` | 对话请求 |
+| `POST` | `/api/chat/{agent_id}` | 同步对话请求（返回完整回复，含 Markdown 产物链接 + `data.artifacts`） |
+| `POST` | `/api/chat/{agent_id}?stream=true` | SSE 流式对话（OpenAI-compatible 格式，final chunk 带 `_artifacts`） |
+| `WS` | `/ws/chat/{agent_id}` | WebSocket 流式对话（实时逐帧推送，含 `progress`/`artifacts` 字段） |
+| `POST` | `/api/chat/uploads` | 上传文件（大图/附件），返回 `file_url` 供后续 chat 引用（multipart/form-data） |
+
+**ChatChunk 响应格式（流式）：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `type` | `"chunk"` | 帧类型标识 |
+| `content` | string | 文本片段 |
+| `final` | bool | 是否为本轮最后一条 chunk |
+| `progress` | bool | 是否为系统进度消息（非模型输出） |
+| `artifacts` | ArtifactInfo[] | 结构化产物元数据，仅 final chunk 携带 |
+
+**ArtifactInfo：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `type` | `"image"` / `"html"` / `"download"` | 产物语义类型 |
+| `url` | string | 文件下载 URL |
+| `name` | string | 文件名 |
+| `mime_type` | string | MIME 类型 |
 
 ### 8.4 Artifact 文件
 
@@ -990,35 +1643,121 @@ HTTP 状态码映射：
 | 服务不可用 | 502 |
 | 超时 | 504 |
 
+**错误码说明（错误响应中的 `error.code`）：**
+
+| code | 含义 | 说明 |
+|------|------|------|
+| `-32000` | 超时 | agent.execute 或 turn 超时 |
+| `-32001` | daemon 错误 | daemon 返回了错误响应 |
+| `-32602` | 参数校验失败 | `content` 格式错误、缺少必填字段 |
+| `-32603` | 内部错误 | 服务器内部异常 |
+| `-32050` | artifact 不存在 | 请求的产物文件未找到 |
+| `-32051` | artifact 类型不支持 | 文件后缀不在白名单内 |
+| `-32052` | artifact 路径被拒绝 | 路径穿越尝试 |
+
+> 错误码遵循 JSON-RPC 2.0 规范中的 `Server error (-32000 to -32099)` 范围。
+
 ---
 
 ## 完整演示流程（一行一条）
+
+> 以下提供两套速查命令：**本地 Bridge** 用于开发调试，**外部 Bridge** 用于远程演示。
+> 外部地址需替换为部署方提供的实际 Bridge 公网地址。
+
+### 本地演示（`127.0.0.1:8199`）
 
 ```bash
 # 0. 确保 daemon 和 bridge 已启动
 
 # 1. 上传 agent package
-curl -X POST http://127.0.0.1:8199/health/api/packages/upload \
-  -F "file=@outfit_assistant.zip" -F "name=outfit_assistant"
+curl -k -X POST http://127.0.0.1:8199/health/api/packages/upload \
+  -F "file=@tmp/outfit-test-agent.zip" -F "name=outfit-test-agent"
 
 # 2. 加载到 daemon
-curl -X POST http://127.0.0.1:8199/health/api/agents/outfit-assistant/load \
+curl -k -X POST http://127.0.0.1:8199/health/api/agents/outfit-test-agent/load \
   -H "Content-Type: application/json" -d '{}'
 
-# 3. 触发对话
+# 3. 触发对话（文本）
+
+curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"demo","client_id":"demo","content":"你好"}'
+
 curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
   -H "Content-Type: application/json" \
   -d '{"user_id":"demo","client_id":"demo","content":"今天上海的天气适合穿什么？"}'
+
+# 3b. 图片识别：上传穿搭照并让 Agent 点评（需先有图片 base64）
+IMG_B64="data:image/jpeg;base64,$(base64 -i tmp/outfit_male_loungewear.jpeg | tr -d '\n')"
+curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"user_id\":\"demo\",
+    \"client_id\":\"demo\",
+    \"content\":[
+      {\"type\":\"text\",\"text\":\"帮我点评一下我的穿搭，必须描述我的穿了什么,需要使用视觉理解\"},
+      {\"type\":\"image_url\",\"image_url\":{\"url\":\"$IMG_B64\"}}
+    ]
+  }" | jq .
 
 # 4. 查询 trace
 curl "http://127.0.0.1:8199/health/api/agents/outfit-assistant/llm-traces?user_id=demo&client_id=demo"
 
 # 5. 更新 agent package（修改 agent.md 后重新打包）
-curl -X PUT http://127.0.0.1:8199/health/api/packages/outfit_assistant/update \
-  -F "file=@outfit_assistant_v2.zip" -F "mode=incremental"
+curl -X PUT http://127.0.0.1:8199/health/api/packages/outfit-assistant/update \
+  -F "file=@outfit-assistant_v2.zip" -F "mode=incremental"
 
 # 6. 再次触发
 curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
   -H "Content-Type: application/json" \
   -d '{"user_id":"demo","client_id":"demo","content":"今天上海的天气适合穿什么？"}'
+```
+
+### 外部演示（远程 Bridge）
+
+```bash
+# 0. 确保远程 daemon 和 bridge 已启动（外部地址替换为实际值）
+
+# 1. 上传 agent package
+curl -k -X POST https://115.120.249.45:40092/health/api/packages/upload \
+  -F "file=@tmp/outfit-test-agent.zip" -F "name=outfit-test-agent"
+
+# 2. 加载到 daemon
+curl -k -X POST https://115.120.249.45:40092/health/api/agents/outfit-test-agent/load \
+  -H "Content-Type: application/json" -d '{}'
+
+# 3. 触发对话（快速测试用简洁 prompt）
+curl -k -X POST https://115.120.249.45:40092/health/api/chat/outfit-assistant \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"demo","client_id":"demo","content":"你好"}'
+
+
+curl -k -X POST https://115.120.249.45:40092/health/api/chat/outfit-assistant \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"demo","client_id":"demo","content":"帮我推荐一套居家穿搭，男生。给我效果图，其他不要问，用于快速测试"}'
+
+# 3b. 图片识别：上传穿搭照并让 Agent 点评（需先有图片 base64）
+IMG_B64="data:image/jpeg;base64,$(base64 -i tmp/outfit_male_loungewear.jpeg | tr -d '\n')"
+curl -k -X POST https://115.120.249.45:40092/health/api/chat/outfit-assistant \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"user_id\":\"demo\",
+    \"client_id\":\"demo\",
+    \"content\":[
+      {\"type\":\"text\",\"text\":\"帮我点评一下我的穿搭，必须描述我的穿了什么\"},
+      {\"type\":\"image_url\",\"image_url\":{\"url\":\"$IMG_B64\"}}
+    ]
+  }" | jq .
+
+# 4. 查询 trace
+curl "https://115.120.249.45:40092/health/api/agents/outfit-assistant/llm-traces?user_id=demo&client_id=demo"
+
+# 5. 更新 agent package（修改 agent.md 后重新打包）
+curl -X PUT https://115.120.249.45:40092/health/api/packages/outfit-assistant/update \
+  -F "file=@outfit-assistant_v2.zip" -F "mode=incremental"
+
+# 6. 再次触发
+curl -k -X POST https://115.120.249.45:40092/health/api/chat/outfit-assistant \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"demo","client_id":"demo","content":"帮我推荐一套居家穿搭，男生。给我效果图，其他不要问，用于快速测试"}'
 ```

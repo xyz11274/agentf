@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -705,6 +706,61 @@ async def upload_package(
         ) from exc
     finally:
         tmp_path.unlink(missing_ok=True)
+
+    # --- auto-fill/merge framework files from harness template -------------
+    # Users only need to provide agent.md + their custom harness/ skills.
+    # The harness template provides the generic agent runtime foundation:
+    # tools (bash.py, read_file.py, ...), runner skills (skill-runner),
+    # and node scripts (coordinator_decide.py, skill_executor.py, ...).
+    #
+    # Merge strategy:
+    #   Single files (package.json, agent.json, workflows) → copy if missing
+    #   Directories (harness/, nodes/) → recursive merge, user files win
+    _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "agent_template" / "harness_agent"
+    if _TEMPLATE_DIR.is_dir():
+
+        def _merge_dir(src_dir: Path, dst_dir: Path) -> None:
+            """Recursively copy src_dir into dst_dir. dst files win if exist."""
+            for child in src_dir.iterdir():
+                src_child = child
+                dst_child = dst_dir / child.name
+                if child.is_dir():
+                    dst_child.mkdir(parents=True, exist_ok=True)
+                    _merge_dir(src_child, dst_child)
+                elif child.is_file() and not dst_child.exists():
+                    shutil.copy2(src_child, dst_child)
+
+        # Copy single framework files if missing
+        for name in ("package.json", "agent.json",
+                      "coordinator_workflow.json", "skill_workflow.json",
+                      "dummy_pre_skill_workflow.json"):
+            src = _TEMPLATE_DIR / name
+            dst = pkg_dir / name
+            if src.is_file() and not dst.exists():
+                shutil.copy2(src, dst)
+                logger.info("auto_fill file %s", name)
+
+        # Merge harness/ and nodes/ (recursive, user files win)
+        for name in ("harness", "nodes"):
+            src = _TEMPLATE_DIR / name
+            dst = pkg_dir / name
+            if src.is_dir():
+                dst.mkdir(parents=True, exist_ok=True)
+                _merge_dir(src, dst)
+                logger.info("auto_fill merge %s/", name)
+
+        # Override package.json name with the user-provided package name
+        pkg_json_path = pkg_dir / "package.json"
+        if pkg_json_path.exists():
+            try:
+                pkg_data = json.loads(pkg_json_path.read_text(encoding="utf-8"))
+                pkg_data["name"] = safe_name
+                pkg_json_path.write_text(
+                    json.dumps(pkg_data, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8",
+                )
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning("auto_fill.name_override pkg=%s error=%s", safe_name, exc)
 
     # --- normalise file & directory permissions -------------------------------
     # tarfile's "data" filter strips execute bits; zip doesn't preserve them.

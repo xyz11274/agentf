@@ -4,8 +4,8 @@
 # ═══════════════════════════════════════════════════════════════════════
 #
 # 用法：
-#   bash ar_scripts/prepush_check.sh          # 检查所有
-#   bash ar_scripts/prepush_check.sh --quick  # 只查改动的文件
+#   bash scripts/prepush_check.sh          # 检查所有
+#   bash scripts/prepush_check.sh --quick  # 只查改动的文件
 #
 # 检查项：
 #   1. Python 语法

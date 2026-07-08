@@ -14,14 +14,14 @@
 #               → [proxy 模式] FusionMind Mock (:8085) → 真实 LLM
 #
 # 用法：
-#   bash ar_scripts/start_e2e.sh                                    # 默认 mock 模式
-#   bash ar_scripts/start_e2e.sh --proxy                            # Proxy → DashScope
-#   bash ar_scripts/start_e2e.sh --proxy \\
+#   bash scripts/start_e2e.sh                                    # 默认 mock 模式
+#   bash scripts/start_e2e.sh --proxy                            # Proxy → DashScope
+#   bash scripts/start_e2e.sh --proxy \\
 #       --upstream-url https://dashscope.aliyuncs.com/compatible-mode/v1 \\
 #       --api-key $DASHSCOPE_API_KEY
-#   bash ar_scripts/start_e2e.sh --mode fixed --response "你好"
-#   bash ar_scripts/start_e2e.sh --no-frontend                       # 无前端
-#   bash ar_scripts/start_e2e.sh --no-mock-uds                       # 无 mock UDS
+#   bash scripts/start_e2e.sh --mode fixed --response "你好"
+#   bash scripts/start_e2e.sh --no-frontend                       # 无前端
+#   bash scripts/start_e2e.sh --no-mock-uds                       # 无 mock UDS
 #
 # 停止：Ctrl+C 自动清理所有组件（委托各组件脚本的 stop 命令）
 # ═══════════════════════════════════════════════════════════════════════

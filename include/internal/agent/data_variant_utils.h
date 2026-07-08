@@ -689,7 +689,11 @@ inline bool parse_json_object_to_datamap(const std::string& json, DataMap& out) 
     }
 
     if(!object_completed) {
-      Logger::instance().warn_f(
+      // info, not warn: partial-object warns are expected when a node is
+      // killed mid-stream (e.g. timeout); the actual error is reported by
+      // the caller (NODE_EXECUTE_FAILED). Warn here misleads readers into
+      // thinking the parser is the root cause.
+      Logger::instance().info_f(
           "parse_json_object_to_datamap: incomplete JSON object at byte %zu "
           "(partial keys may remain in output — use distinct keys per object)",
           index);

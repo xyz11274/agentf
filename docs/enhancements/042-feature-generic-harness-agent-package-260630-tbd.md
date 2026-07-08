@@ -3,7 +3,7 @@
 > **文档级别**: L4 技术设计
 > **日期**: 2026-06-30，刷新 2026-07-02
 > **状态**: implemented
-> **关联**: `examples/agent/outfit_assistant/`（实现）、031-coordinator-协同机制、038-harness-agent-能力升级、040-harness-agent-MCP-support
+> **关联**: `examples/agent/outfit-assistant/`（实现）、031-coordinator-协同机制、038-harness-agent-能力升级、040-harness-agent-MCP-support
 
 ---
 
@@ -1558,11 +1558,11 @@ examples/agent/harness_agent_v2/
 
 ### Phase 1: Python 节点层实现（零框架改动）— ✅ 已完成
 
-实现位置：`examples/agent/outfit_assistant/`
+实现位置：`examples/agent/outfit-assistant/`
 
 | 步骤 | 内容 | 状态 | 实际文件 |
 |------|------|------|---------|
-| 1 | 创建目录结构 | ✅ | `examples/agent/outfit_assistant/` |
+| 1 | 创建目录结构 | ✅ | `examples/agent/outfit-assistant/` |
 | 2 | 实现 coordinator（含 `run_skills` 工具定义 + 拦截逻辑） | ✅ | `nodes/coordinator_decide.py` — `RUN_SKILLS_TOOL` + `handle_run_skills_call()` |
 | 3 | 实现通用 skill executor（含 SKILL.md 加载 + 结构化输入解析 + LLM while-loop） | ✅ | `nodes/skill_executor.py` — 通过 `exec_skill_key` 路由 |
 | 4 | 编写 workflow + agent.json + agent.md | ✅ | `coordinator_workflow.json` + `skill_workflow.json` + `agent.json` + `agent.md` |
@@ -1598,4 +1598,4 @@ examples/agent/harness_agent_v2/
 | 版本 | 刷新时间 | 刷新人 | 刷新内容 |
 |------|---------|--------|---------|
 | v1.0 | 2026-06-30 | AtomCode | 初始版本：完整设计文档，含节点数据交互、coordinator/skill runtime、工具绑定、数据流时序、实施计划 |
-| v1.1 | 2026-07-02 | AtomCode | 状态从 tbd → implemented；实施计划更新为实施情况，指向 `outfit_assistant/` 实际实现；修复 MiniMax endpoint 域名错误（minimax.io → minimaxi.com）|
+| v1.1 | 2026-07-02 | AtomCode | 状态从 tbd → implemented；实施计划更新为实施情况，指向 `outfit-assistant/` 实际实现；修复 MiniMax endpoint 域名错误（minimax.io → minimaxi.com）|

@@ -1,7 +1,7 @@
 # SysAgent 适配层候选实现（尚未接入）
 
 > 代码归属：Python Bridge 基础设施。当前实现仅迁移保存，不注册 FastAPI 路由、
-> 不加入 `ar_scripts` 启动链，也不作为 `outfit-assistant` 的组成部分。
+> 不加入 `scripts` 启动链，也不作为 `outfit-assistant` 的组成部分。
 
 对标 HealthAgent 的 TaskRouter + AgentFlowManager + HaContext 机制的 Python 实现。
 

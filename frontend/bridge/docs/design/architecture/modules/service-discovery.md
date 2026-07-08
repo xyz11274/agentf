@@ -75,7 +75,7 @@ frontend/bridge/aisf_adapter/sysagent/
 ### 4.2 当前明确不接入
 
 - 不在 `main.py` 注册 adapter router；
-- 不加入 `ar_scripts/start_bridge.sh` 或生产启动链；
+- 不加入 `scripts/start_bridge.sh` 或生产启动链；
 - 不启用 aisf_adapter 独立监听端口；
 - 不承诺候选实现当前的数据模型与回调语义可直接用于生产。
 

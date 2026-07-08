@@ -101,6 +101,7 @@
 | 039 | 2026-06-22 | [AgentFlow Vue 前端](039-feature-vue-frontend-260622-tbd.md) | feature | tbd | AgentFlow 缺少可视化前端，需要文件编辑/DAG 可视化和聊天界面 |
 | 040 | 2026-06-22 | [Harness Agent MCP 协议集成](040-feature-harness-agent-mcp-support-260622-tbd.md) | feature | tbd | Harness Agent 无法利用 MCP 生态工具，需集成 MCP Server 调用能力 |
 | 041 | 2026-06-25 | [Daemon DataBus RPC 代理](041-feature-daemon-databus-rpc-proxy-260625-wip.md) | feature | wip | Bridge 无法通过 daemon RPC 查询 DataBus，需新增 databus.get/list_keys handler |
+| 042 | 2026-07-04 | [Coordinator Progress Push](042-feature-coordinator-progress-push-260704-tbd.md) | feature | tbd | Coordinator 启动 skill 后无中间反馈，用户需等待空白期 |
 
 ## 按状态分类
 
@@ -117,6 +118,7 @@
 | 035 | 2026-04-23 | [Runtime Master/Worker 分进程部署与跨进程边界](035-feature-runtime-master-worker-分进程部署与跨进程边界-260423-tbd.md) | Master 与 Worker 可分进程部署，消除二者之间直接函数级调用依赖 |
 | 038 | 2026-06-21 | [Harness Agent 完整能力升级](038-feature-harness-agent-能力升级-260621-tbd.md) | Harness Agent 缺失系统提示词动态读取/框架工具调度/多轮对话/会话管理能力 |
 | 039 | 2026-06-22 | [AgentFlow Vue 前端](039-feature-vue-frontend-260622-tbd.md) | AgentFlow 缺少可视化前端，需要文件编辑/DAG 可视化和聊天界面 |
+| 042 | 2026-07-04 | [Coordinator Progress Push](042-feature-coordinator-progress-push-260704-tbd.md) | Coordinator 启动 skill 后无中间反馈，用户需等待空白期 |
 
 ### 进行中 (wip)
 

@@ -28,7 +28,7 @@ from starlette.requests import Request
 from starlette.responses import Response, StreamingResponse
 from starlette.types import Message
 
-from client import DaemonClient
+from client import DaemonClient, DaemonConnectionError, DaemonTimeoutError
 from config import settings
 from providers import LocalSessionProvider
 from services import AgentflowSessionSync
@@ -179,7 +179,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     sync_task: asyncio.Task | None = None
     if settings.session_sync_interval > 0:
         sync_task = asyncio.create_task(
-            _session_sync_loop(session_sync, settings.session_sync_interval),
+            _session_sync_loop(session_sync, daemon_client, settings.session_sync_interval),
             name="bridge.session_sync_poll",
         )
 
@@ -203,13 +203,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 async def _session_sync_loop(
-    syncer: AgentflowSessionSync, interval: float,
+    syncer: AgentflowSessionSync, daemon_client: DaemonClient, interval: float,
 ) -> None:
     """Background poll loop driving ``AgentflowSessionSync.sync()``.
 
     Sleeps in small chunks so shutdown is prompt (mirrors
     ``_daemon_status_poll_loop``). All sync errors are swallowed inside
     ``sync()`` so the loop never dies on a daemon/provider outage.
+
+    When the daemon connection times out (e.g. WebSocket silently dropped),
+    the client is closed and reconnected so the next cycle doesn't hang.
     """
     idle = 0.5
     try:
@@ -225,6 +228,21 @@ async def _session_sync_loop(
                 await syncer.sync()
             except asyncio.CancelledError:
                 raise
+            except (DaemonTimeoutError, DaemonConnectionError) as exc:
+                logger.warning(
+                    "session_sync.reconnect daemon error: %s", exc,
+                )
+                try:
+                    await daemon_client.close()
+                except Exception:
+                    pass
+                try:
+                    await daemon_client.connect(max_retries=2, retry_delay=1.0)
+                    logger.info("session_sync.reconnect ok")
+                except Exception as conn_exc:
+                    logger.warning(
+                        "session_sync.reconnect_failed: %s", conn_exc,
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.debug("session sync loop error (suppressed): %s", exc)
     except asyncio.CancelledError:

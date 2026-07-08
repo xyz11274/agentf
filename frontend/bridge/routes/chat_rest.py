@@ -422,18 +422,25 @@ async def _chat_turn_events(
                 timeout=remaining,
             )
         except asyncio.TimeoutError:
+            elapsed = time.time() - turn_start
             logger.warning(
-                "chat_turn.wait_timeout agent=%s dialogue=%s remaining=%.1fs",
-                agent_id, dialogue_id, remaining,
+                "chat_turn.wait_timeout agent=%s dialogue=%s task=%s "
+                "remaining=%.1fs elapsed=%.1fs chunks=%d connected=%s",
+                agent_id, dialogue_id, task_id,
+                remaining, elapsed, chunk_count,
+                daemon_client.is_connected,
             )
             yield {"type": "error", "message": f"turn timed out after {turn_timeout}s", "code": -32000}
             daemon_client.discard_response_queue(dialogue_id)
             yield {"type": "done", "final": True}
             return
         except DaemonError as exc:
+            elapsed = time.time() - turn_start
             logger.error(
-                "chat_turn.error agent=%s dialogue=%s task=%s error=%s",
-                agent_id, dialogue_id, task_id, exc,
+                "chat_turn.error agent=%s dialogue=%s task=%s "
+                "elapsed=%.1fs chunks=%d error=%s",
+                agent_id, dialogue_id, task_id,
+                elapsed, chunk_count, exc,
             )
             yield {"type": "error", "message": f"daemon error: {exc}", "code": -32000}
             daemon_client.discard_response_queue(dialogue_id)

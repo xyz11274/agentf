@@ -1287,6 +1287,13 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
     if(timeout_ms > 0 && elapsed_ms >= timeout_ms) {
       timed_out = true;
       kill(-child_pid, SIGKILL);
+      Logger::instance().warn_f(
+          "[NODE_TIMEOUT] child_pid=%d killed after %lldms (timeout_ms=%d); "
+          "stdout buffer (%zu bytes) is residual and will not be parsed as json_output",
+          static_cast<int>(child_pid),
+          static_cast<long long>(elapsed_ms),
+          timeout_ms,
+          output.size());
       while(waitpid(child_pid, &status, 0) < 0 && errno == EINTR) {}
       child_running = false;
       break;

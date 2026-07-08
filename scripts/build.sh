@@ -2,11 +2,11 @@
 # Unified AgentFlow build entrypoint.
 #
 # Usage:
-#   ./ar_scripts/build.sh                         # release, all targets
-#   ./ar_scripts/build.sh agentflowd              # compatibility: release target
-#   ./ar_scripts/build.sh dev [target] [--clean]
-#   ./ar_scripts/build.sh release [target] [--clean]
-#   PLATFORM_DIR=/opt/coremind/platform ./ar_scripts/build.sh production [--clean]
+#   ./scripts/build.sh                         # release, all targets
+#   ./scripts/build.sh agentflowd              # compatibility: release target
+#   ./scripts/build.sh dev [target] [--clean]
+#   ./scripts/build.sh release [target] [--clean]
+#   PLATFORM_DIR=/opt/coremind/platform ./scripts/build.sh production [--clean]
 
 set -euo pipefail
 

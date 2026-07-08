@@ -372,12 +372,14 @@ class _TraceRecorder:
         if not self._client:
             return
         try:
-            raw = self._client.llm().get("traces/index", "[]")
+            dialogue_id = os.environ.get("AF_DIALOGUE_ID", "")
+            key = f"traces/index/{dialogue_id}" if dialogue_id else "traces/index"
+            raw = self._client.llm().get(key, "[]")
             index = json.loads(raw) if isinstance(raw, str) else (raw or [])
             if not isinstance(index, list):
                 index = []
             index.append(call_id)
-            self._client.llm().put("traces/index", json.dumps(index))
+            self._client.llm().put(key, json.dumps(index))
         except Exception as exc:
             _log_warn(f"update traces/index failed: {exc}")
 

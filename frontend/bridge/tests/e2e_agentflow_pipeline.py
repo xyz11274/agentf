@@ -10,7 +10,7 @@ AgentFlow E2E — 真实 LLM + agentflow 执行 (直接 daemon JSON-RPC)
 
 用法:
   set -a; source examples/agent/outfit-assistant/.env; set +a
-  python3 ar_scripts/tests/e2e_agentflow_pipeline.py
+  python3 scripts/tests/e2e_agentflow_pipeline.py
 """
 
 from __future__ import annotations

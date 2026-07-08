@@ -8,28 +8,28 @@
 #   2. UDS → SysAgent → FusionMind 转发是否一致（指定 --fusionmind-url 时）
 #
 # 用法：
-#   bash ar_scripts/check_uds_protocol.sh                # 只测 UDS 协议
-#   bash ar_scripts/check_uds_protocol.sh --full          # UDS + FusionMind 转发对比
-#   bash ar_scripts/check_uds_protocol.sh --socket /tmp/agentflow_plugin.sock --tag production
-#   bash ar_scripts/check_uds_protocol.sh --help          # 完整参数
+#   bash scripts/check_uds_protocol.sh                # 只测 UDS 协议
+#   bash scripts/check_uds_protocol.sh --full          # UDS + FusionMind 转发对比
+#   bash scripts/check_uds_protocol.sh --socket /tmp/agentflow_plugin.sock --tag production
+#   bash scripts/check_uds_protocol.sh --help          # 完整参数
 #
 # 常用场景：
 #
 #   # 场景 1：本地开发 — 对 Mock UDS Server 做基本检查
-#   bash ar_scripts/check_uds_protocol.sh
+#   bash scripts/check_uds_protocol.sh
 #
 #   # 场景 2：生产环境 — 检查 SysAgent 是否正常工作
-#   bash ar_scripts/check_uds_protocol.sh --socket /tmp/agentflow_plugin.sock --tag production
+#   bash scripts/check_uds_protocol.sh --socket /tmp/agentflow_plugin.sock --tag production
 #
 #   # 场景 3：生产环境 — 全面检查 UDS 协议 + 转发一致性
-#   bash ar_scripts/check_uds_protocol.sh \\
+#   bash scripts/check_uds_protocol.sh \\
 #       --socket /tmp/agentflow_plugin.sock \\
 #       --fusionmind-url http://127.0.0.1:27321/infermind/llm/v1/chat \\
 #       --tag production
 #
 #   # 场景 4：对比 Mock vs 生产（先分别保存报告，再 diff）
-#   bash ar_scripts/check_uds_protocol.sh --output /tmp/report_mock.json
-#   bash ar_scripts/check_uds_protocol.sh --socket /tmp/agentflow_plugin.sock \\
+#   bash scripts/check_uds_protocol.sh --output /tmp/report_mock.json
+#   bash scripts/check_uds_protocol.sh --socket /tmp/agentflow_plugin.sock \\
 #       --tag production --output /tmp/report_prod.json
 #   diff /tmp/report_mock.json /tmp/report_prod.json
 #

@@ -43,6 +43,11 @@ void SessionRouter::set_session_factory(SessionFactory factory) {
   session_factory_ = std::move(factory);
 }
 
+void SessionRouter::set_session_cleanup_callback(SessionCleanupCallback callback) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  session_cleanup_callback_ = std::move(callback);
+}
+
 bool SessionRouter::start() {
   bool expected = false;
   if(!running_.compare_exchange_strong(expected, true)) {
@@ -242,15 +247,26 @@ std::shared_ptr<MMAgentSession> SessionRouter::allocate_session_for_route(
 }
 
 void SessionRouter::release_expired_sessions() {
-  std::lock_guard<std::mutex> lock(mutex_);
-  std::vector<std::string> expired_routes;
-  for(const auto& kv : active_routes_) {
-    if(kv.second && kv.second->is_timeout_expired()) {
-      expired_routes.push_back(kv.first);
+  std::vector<std::pair<std::string, std::string>> expired;  // {route_key, session_id}
+  std::vector<SessionCleanupCallback> callbacks;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for(const auto& kv : active_routes_) {
+      if(kv.second && kv.second->is_timeout_expired()) {
+        expired.emplace_back(kv.first, kv.second->get_session_id());
+        callbacks.push_back(session_cleanup_callback_);
+      }
+    }
+    for(const auto& [route_key, session_id] : expired) {
+      release_route_locked(route_key);
     }
   }
-  for(const auto& route_key : expired_routes) {
-    release_route_locked(route_key);
+  // Run cleanup callbacks outside the lock to avoid deadlock with
+  // MMAgent::clear_session_data which takes its own mutex.
+  for(size_t i = 0; i < callbacks.size(); ++i) {
+    if(callbacks[i]) {
+      callbacks[i](expired[i].second);
+    }
   }
 }
 

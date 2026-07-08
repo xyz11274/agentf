@@ -4,9 +4,9 @@ set -e
 # ============================================================
 # run_agent.sh — 启动 harness_agent 交互模式
 # 用法:
-#   ./ar_scripts/run_agent.sh         交互模式
-#   ./ar_scripts/run_agent.sh validate 仅验证包结构
-#   ./ar_scripts/run_agent.sh list    列出 workflow
+#   ./scripts/run_agent.sh         交互模式
+#   ./scripts/run_agent.sh validate 仅验证包结构
+#   ./scripts/run_agent.sh list    列出 workflow
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -29,10 +29,10 @@ if [ ! -f "$RUNNER" ]; then
     echo "[ERROR] agent_runner not found at: $RUNNER"
     echo ""
     echo "Please build first:"
-    echo "  ./ar_scripts/build.sh agent_runner"
+    echo "  ./scripts/build.sh agent_runner"
     echo ""
     echo "Or build all:"
-    echo "  ./ar_scripts/build.sh"
+    echo "  ./scripts/build.sh"
     exit 1
 fi
 

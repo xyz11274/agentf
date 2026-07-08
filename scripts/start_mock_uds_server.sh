@@ -5,9 +5,9 @@
 # 默认使用回显模式，可通过参数修改。
 #
 # 用法：
-#   bash ar_scripts/start_mock_uds_server.sh
-#   bash ar_scripts/start_mock_uds_server.sh --mode fixed --response "hello"
-#   bash ar_scripts/start_mock_uds_server.sh --socket /tmp/agentflow_plugin.sock
+#   bash scripts/start_mock_uds_server.sh
+#   bash scripts/start_mock_uds_server.sh --mode fixed --response "hello"
+#   bash scripts/start_mock_uds_server.sh --socket /tmp/agentflow_plugin.sock
 #
 # 停止：Ctrl+C 或 kill $(cat /tmp/mock_uds_server.pid)
 

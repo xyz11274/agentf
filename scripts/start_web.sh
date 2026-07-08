@@ -1,6 +1,6 @@
 #!/bin/bash
 # Start AgentFlow Web Frontend (Vue 3 + Vite)
-# Usage: ./ar_scripts/start_web.sh [port]
+# Usage: ./scripts/start_web.sh [port]
 set -euo pipefail
 
 PORT="${1:-15173}"

@@ -547,7 +547,6 @@ def execute():
             }
             if databus.is_connected():
                 result_json = json.dumps(output, ensure_ascii=True)
-                databus.put(f"skill_result:{skill_name}", result_json)
                 databus.put("skill_result:skill-runner", result_json)
             print(json.dumps(output, ensure_ascii=False))
             return
@@ -642,7 +641,6 @@ def execute():
             }
             if databus.is_connected():
                 result_json = json.dumps(output, ensure_ascii=True)
-                databus.put(f"skill_result:{skill_name}", result_json)
                 databus.put("skill_result:skill-runner", result_json)
             print(json.dumps(output, ensure_ascii=False))
             return
@@ -688,7 +686,6 @@ def execute():
             }
             if databus.is_connected():
                 result_json = json.dumps(output, ensure_ascii=True)
-                databus.put(f"skill_result:{skill_name}", result_json)
                 databus.put("skill_result:skill-runner", result_json)
             print(json.dumps(output, ensure_ascii=False))
             return
@@ -756,7 +753,6 @@ def execute():
                 print(f"[flow]   result: skill={skill_name} status=tool_call_loop_detected rounds={round_i+1}", file=sys.stderr)
                 if databus.is_connected():
                     result_json = json.dumps(output, ensure_ascii=True)
-                    databus.put(f"skill_result:{skill_name}", result_json)
                     databus.put("skill_result:skill-runner", result_json)
                 print(json.dumps(output, ensure_ascii=False))
                 return
@@ -810,11 +806,10 @@ def execute():
                 print(f"[flow]   ⚠️  empty skill_result: skill={skill_name} "
                       f"LLM returned finish=stop with no content", file=sys.stderr)
             # Write result to DataBus for coordinator to read.
-            # Write under TWO keys:
-            #   skill_result:{skill_name}  — real skill name (e.g. weather_query)
-            #   skill_result:skill-runner  — generic key matching AF_COMPLETED_SKILL_NAME
+            # Write result to DataBus for coordinator to read.
+            #   skill_result:skill-runner — key matching AF_COMPLETED_SKILL_NAME
             # Coordinator's collect_skill_results reads by completed_skill name ("skill-runner"),
-            # so the generic key MUST be written or coordinator gets empty result → false "not found".
+            # so this key MUST be written or coordinator gets empty result → false "not found".
             # Use ensure_ascii=True to avoid DataBus SDK UTF-8 decode failures on Chinese/emoji content.
             emit_event("skill_executor.completed", {
                 "round": round_i + 1,
@@ -828,7 +823,6 @@ def execute():
             print(f"[flow]   result: skill={skill_name} status={output.get('status','completed')} rounds={round_i+1}", file=sys.stderr)
             if databus.is_connected():
                 result_json = json.dumps(output, ensure_ascii=True)
-                databus.put(f"skill_result:{skill_name}", result_json)
                 databus.put("skill_result:skill-runner", result_json)
             print(json.dumps(output, ensure_ascii=False))
             return
@@ -849,7 +843,6 @@ def execute():
     }
     if databus.is_connected():
         result_json = json.dumps(output, ensure_ascii=True)
-        databus.put(f"skill_result:{skill_name}", result_json)
         databus.put("skill_result:skill-runner", result_json)
     print(json.dumps(output, ensure_ascii=False))
 

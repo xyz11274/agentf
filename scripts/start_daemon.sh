@@ -145,7 +145,7 @@ fi
 
 # ── Resolve binary ──────────────────────────────────────────────────
 case "$PROFILE" in
-    dev) BUILD_DIR="$AR_PROJECT_ROOT/build/dev" ;;
+    dev) BUILD_DIR="$AR_PROJECT_ROOT/build" ;;
     release) BUILD_DIR="$AR_PROJECT_ROOT/build" ;;
     production) BUILD_DIR="$AR_PROJECT_ROOT/build/production" ;;
     *) echo "[ERROR] Invalid profile: $PROFILE" >&2; exit 2 ;;
@@ -157,7 +157,7 @@ fi
 DAEMON="$BUILD_DIR/agentflowd"
 if [ ! -x "$DAEMON" ]; then
     echo "[ERROR] Missing daemon binary: $DAEMON" >&2
-    echo "        Run: ./ar_scripts/build.sh $PROFILE agentflowd" >&2
+    echo "        Run: ./scripts/build.sh $PROFILE agentflowd" >&2
     exit 1
 fi
 

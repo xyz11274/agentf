@@ -412,6 +412,20 @@ class DaemonClient:
                 self._response_queues.pop(dialogue_id, None)
             return params
         except asyncio.TimeoutError as exc:
+            # ── Diagnostic: check connection health and queue state ──
+            ws_closed = self._ws is None or self._ws.close_code is not None
+            pending_count = len(self._pending)
+            queue_count = self._response_queues.get(dialogue_id).qsize() if dialogue_id else 0
+            logger.warning(
+                "notify.timeout agent=%s dialogue_id=%s timeout=%.1fs "
+                "ws_closed=%s pending=%d queue_size=%d",
+                agent_id, dialogue_id, timeout,
+                ws_closed, pending_count, queue_count,
+            )
+            # If the WebSocket is closed, mark as disconnected so callers
+            # can trigger reconnection before the next request.
+            if ws_closed:
+                self._connected = False
             raise DaemonTimeoutError(
                 f"timeout waiting for agent.response after {timeout}s",
                 code=-32000,
@@ -509,10 +523,19 @@ class DaemonClient:
                 if dialogue_id:
                     queue = response_queues.get(dialogue_id)
                     if queue is None:
-                        logger.info(
-                            "dropping late or unregistered notification: method=%s dialogue_id=%s",
-                            event,
-                            dialogue_id,
+                        # This is a critical diagnostic: a notification arrived
+                        # but nobody is listening. Likely causes:
+                        #   - WebSocket reconnect cleared _response_queues
+                        #   - The dialogue was already cleaned up (timeout/cancel)
+                        #   - Metadata.dialogue_id differs from register key
+                        final_flag = metadata.get("final", "?") if isinstance(metadata, dict) else "?"
+                        logger.warning(
+                            "notify.dropped method=%s dialogue_id=%s final=%s "
+                            "pending=%d queues=%s metadata_keys=%s",
+                            event, dialogue_id, final_flag,
+                            len(self._pending),
+                            list(response_queues.keys()),
+                            list(metadata.keys()) if isinstance(metadata, dict) else "?",
                         )
                     else:
                         logger.debug(

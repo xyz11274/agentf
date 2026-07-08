@@ -51,6 +51,7 @@ import base64
 import json
 import logging
 import mimetypes
+import time
 import os
 import ssl
 import sys
@@ -99,27 +100,11 @@ OUTFIT_PROMPT = (
     "只描述真实可见的内容，不臆造看不清的细节；措辞中性、不评判身材，不输出对人物外貌的主观评价。"
 )
 
-# A direct opener that ignores environment proxies — inside a container a
-# host loopback proxy (127.0.0.1:7890) is unreachable, so fall back to direct.
-_DIRECT_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-
-
-def _urlopen(req_or_url, timeout):
-    """urlopen that retries WITHOUT the env proxy on a transport-level failure.
-    A real HTTP 4xx/5xx is never retried."""
-    try:
-        return urllib.request.urlopen(req_or_url, timeout=timeout)
-    except urllib.error.HTTPError:
-        raise
-    except urllib.error.URLError:
-        if isinstance(req_or_url, urllib.request.Request):
-            req_or_url = urllib.request.Request(
-                req_or_url.full_url,
-                data=req_or_url.data,
-                headers=dict(req_or_url.header_items()),
-                method=req_or_url.get_method(),
-            )
-        return _DIRECT_OPENER.open(req_or_url, timeout=timeout)
+def _urlopen(req, timeout=30):
+    """Simple urlopen with no proxy-based retry.
+    Inside containers the env proxy (127.0.0.1:7890) is unreachable,
+    so we bypass it and connect directly."""
+    return urllib.request.urlopen(req, timeout=timeout)
 
 
 def _image_url(src: str) -> str:
@@ -150,19 +135,21 @@ def _extract_json(text: str):
         s = s[start : end + 1]
     try:
         return json.loads(s)
-    except (json.JSONDecodeError, ValueError):
+    except (json.JSONDecodeError, ValueError) as exc:
+        logging.getLogger("outfit_vision").warning(
+            "response JSON parse failed: %s — text=%.300r", exc, text.strip()
+        )
         return {"raw": text.strip()}
 
 
 def main(argv=None):
-    # 配置 logging，让 _uds_client 等子模块的日志打到 stderr
-    # 以及独立文件 /tmp/uds_req.log（避免被 CODE_LOADER_DEBUG 截断）
+    # 配置 logging（stderr + 独立文件，避免被 CODE_LOADER_DEBUG 截断）
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
         handlers=[
             logging.StreamHandler(sys.stderr),
-            logging.FileHandler("/tmp/uds_req.log", mode="a"),
+            logging.FileHandler("/tmp/outfit_vision.log", mode="a"),
         ],
         force=True,
     )
@@ -240,22 +227,35 @@ def main(argv=None):
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"},
             method="POST",
         )
+        logger = logging.getLogger("outfit_vision.http")
+        image_size = os.path.getsize(args.image) if os.path.exists(args.image) else -1
+        logger.debug(
+            "call start model=%s mode=%s image_size=%dB max_tokens=%d timeout=30s",
+            args.model, args.mode, image_size, args.max_tokens,
+        )
+        t0 = time.monotonic()
         try:
-            with _urlopen(req, timeout=120) as resp:
+            with _urlopen(req, timeout=30) as resp:
                 data = json.loads(resp.read().decode())
         except urllib.error.HTTPError as exc:
             body = exc.read().decode(errors="replace")
+            logger.warning("HTTP %d from DashScope: %.200s", exc.code, body)
             print(f"error: HTTP {exc.code} from DashScope: {body[:500]}", file=sys.stderr)
             return 1
         except urllib.error.URLError as exc:
+            logger.warning("network error calling DashScope: %s", exc.reason)
             print(f"error: network error calling DashScope: {exc.reason}", file=sys.stderr)
             return 1
+        logger.info("DashScope OK in %.1fs", time.monotonic() - t0)
 
     try:
         text = data["choices"][0]["message"]["content"]
         if isinstance(text, list):  # some VL models return content parts
             text = "".join(p.get("text", "") for p in text if isinstance(p, dict))
     except (KeyError, IndexError, TypeError):
+        logging.getLogger("outfit_vision").error(
+            "DashScope response shape unexpected: %.400s", json.dumps(data)
+        )
         print(f"error: unexpected response shape: {json.dumps(data)[:400]}", file=sys.stderr)
         return 1
 

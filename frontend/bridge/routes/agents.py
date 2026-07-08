@@ -117,6 +117,8 @@ async def load_agent(
     Only writes values that are not already set (empty or placeholder).
     """
     pkg_name = (body.package_path if body else None) or agent_id
+    from routes.packages import _validate_package_name
+    _validate_package_name(pkg_name)
     package_path = str(settings.agent_packages_path / pkg_name)
 
     # 注入默认配置到 .env（不覆盖用户已有值）

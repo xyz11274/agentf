@@ -2,11 +2,11 @@
 # FusionMind Mock Server lifecycle manager — start / stop / restart.
 #
 # 用法：
-#   bash ar_scripts/start_fusionmind_mock.sh start                  # 默认端口 8085，echo 模式
-#   bash ar_scripts/start_fusionmind_mock.sh start --port 8085 --mode fixed --response "你好"
-#   bash ar_scripts/start_fusionmind_mock.sh start --proxy          # 透传模式
-#   bash ar_scripts/start_fusionmind_mock.sh stop
-#   bash ar_scripts/start_fusionmind_mock.sh restart
+#   bash scripts/start_fusionmind_mock.sh start                  # 默认端口 8085，echo 模式
+#   bash scripts/start_fusionmind_mock.sh start --port 8085 --mode fixed --response "你好"
+#   bash scripts/start_fusionmind_mock.sh start --proxy          # 透传模式
+#   bash scripts/start_fusionmind_mock.sh stop
+#   bash scripts/start_fusionmind_mock.sh restart
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

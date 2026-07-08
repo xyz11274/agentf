@@ -66,3 +66,41 @@ class FileDataBus:
             {"request_id": request_id, "prompt": prompt, "channel": channel or f"agentflow.llm.chunk.{request_id}"}
         )
         self.publish("agentflow.llm.request", payload)
+
+    def response_push(self, content: str, type: str = "progress",
+                      dialogue_id: str = "", source: str = "",
+                      skill: str = "", round: str = "",
+                      status: str = "") -> bool:
+        """Push a streaming chunk to the Bridge (file-based DataBus version).
+
+        Mirrors the UDS SDK's ``response_push`` interface (see streaming-response.md §3.2).
+        Writes the chunk as a JSON-serialized event to the daemon's events directory.
+
+        Args:
+            content: Message content.
+            type: Message type — ``"progress"`` or ``"llm_chunk"``.
+            dialogue_id: Dialogue ID (defaults from env ``AF_DIALOGUE_ID``).
+            source: Message source — ``"coordinator"`` or ``"skill_executor"``.
+            skill: Skill name.
+            round: Round number.
+            status: Progress status.
+
+        Returns:
+            True if published successfully.
+        """
+        try:
+            payload = {
+                "session_id": os.environ.get("AF_SESSION_ID", ""),
+                "dialogue_id": dialogue_id or os.environ.get("AF_DIALOGUE_ID", ""),
+                "content": content,
+                "type": type,
+                "source": source,
+                "skill": skill,
+                "round": round,
+                "status": status,
+                "final": "false",
+            }
+            self.publish("agentflow.response.push", json.dumps(payload, ensure_ascii=False))
+            return True
+        except Exception:
+            return False

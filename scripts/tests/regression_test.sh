@@ -5,11 +5,11 @@
 # 自动编译并运行全量单元测试 + E2E 测试，输出彩色结果汇总。
 #
 # 用法:
-#   ./ar_scripts/regression_test.sh              # 完整回归：fix → build → unit → e2e
-#   ./ar_scripts/regression_test.sh --skip-build # 跳过编译（已有最新二进制）
-#   ./ar_scripts/regression_test.sh --skip-fix   # 跳过换行符/权限修复
-#   ./ar_scripts/regression_test.sh --unit-only  # 仅运行单元测试
-#   ./ar_scripts/regression_test.sh --e2e-only   # 仅运行 E2E 测试
+#   ./scripts/regression_test.sh              # 完整回归：fix → build → unit → e2e
+#   ./scripts/regression_test.sh --skip-build # 跳过编译（已有最新二进制）
+#   ./scripts/regression_test.sh --skip-fix   # 跳过换行符/权限修复
+#   ./scripts/regression_test.sh --unit-only  # 仅运行单元测试
+#   ./scripts/regression_test.sh --e2e-only   # 仅运行 E2E 测试
 # ============================================================================
 
 set -euo pipefail

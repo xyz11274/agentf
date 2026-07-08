@@ -109,9 +109,99 @@ async def test_load_agent_uses_explicit_package_path(
     client: AsyncClient, mock_client: AsyncMock
 ) -> None:
     mock_client.agent_load.return_value = {"loaded": True}
-    resp = await client.post("/api/agents/a1/load", json={"package_path": "/opt/a1"})
+    resp = await client.post("/api/agents/a1/load", json={"package_path": "custom-agent"})
     assert resp.status_code == 200
-    mock_client.agent_load.assert_awaited_once_with("/opt/a1")
+    from config import settings
+    expected_path = str(settings.agent_packages_path / "custom-agent")
+    mock_client.agent_load.assert_awaited_once_with(expected_path)
+
+
+# ── Regression: path traversal guard on load endpoint ──
+
+
+async def test_load_agent_rejects_path_traversal_in_agent_id(
+    client: AsyncClient, mock_client: AsyncMock
+) -> None:
+    """agent_id with ``..`` → 404 (FastAPI URL normalization catches it first)."""
+    mock_client.agent_load.return_value = {"loaded": True}
+    resp = await client.post("/api/agents/../etc/load")
+    # FastAPI/Starlette normalizes ".." in the URL path at routing layer,
+    # producing "/api/etc/load" which doesn't match "/{agent_id}/load".
+    assert resp.status_code == 404, (
+        f"Expected 404 for '..' in agent_id (FastAPI normalized), got {resp.status_code}"
+    )
+
+
+async def test_load_agent_rejects_absolute_path_in_agent_id(
+    client: AsyncClient, mock_client: AsyncMock
+) -> None:
+    """agent_id with ``/`` → 404 (FastAPI sees nested path, no route match)."""
+    mock_client.agent_load.return_value = {"loaded": True}
+    resp = await client.post("/api/agents/opt/evil/load")
+    # FastAPI matches "/api/agents/{agent_id}/load" only for single-segment agent_id.
+    # "opt/evil" is two segments → no route match → 404.
+    assert resp.status_code == 404, (
+        f"Expected 404 for '/' in agent_id (FastAPI no route), got {resp.status_code}"
+    )
+
+
+async def test_load_agent_rejects_hidden_dir_in_agent_id(
+    client: AsyncClient, mock_client: AsyncMock
+) -> None:
+    """agent_id starting with ``.`` → 403 (hidden dir)."""
+    mock_client.agent_load.return_value = {"loaded": True}
+    resp = await client.post("/api/agents/.secret/load")
+    assert resp.status_code == 403, (
+        f"Expected 403 for '.' prefix in agent_id, got {resp.status_code}"
+    )
+    assert "Invalid package name" in resp.text
+
+
+async def test_load_agent_rejects_path_traversal_in_body_package_path(
+    client: AsyncClient, mock_client: AsyncMock
+) -> None:
+    """body.package_path with ``..`` → 403."""
+    mock_client.agent_load.return_value = {"loaded": True}
+    resp = await client.post("/api/agents/a1/load", json={"package_path": "../../etc"})
+    assert resp.status_code == 403, (
+        f"Expected 403 for '..' in body.package_path, got {resp.status_code}"
+    )
+
+
+async def test_load_agent_rejects_absolute_path_in_body_package_path(
+    client: AsyncClient, mock_client: AsyncMock
+) -> None:
+    """body.package_path with ``/`` → 403."""
+    mock_client.agent_load.return_value = {"loaded": True}
+    resp = await client.post("/api/agents/a1/load", json={"package_path": "/opt/evil"})
+    assert resp.status_code == 403, (
+        f"Expected 403 for '/' in body.package_path, got {resp.status_code}"
+    )
+
+
+async def test_load_agent_rejects_dot_in_body_package_path(
+    client: AsyncClient, mock_client: AsyncMock
+) -> None:
+    """body.package_path ``.`` → 403."""
+    mock_client.agent_load.return_value = {"loaded": True}
+    resp = await client.post("/api/agents/a1/load", json={"package_path": "."})
+    assert resp.status_code == 403, (
+        f"Expected 403 for '.' in body.package_path, got {resp.status_code}"
+    )
+
+
+async def test_load_agent_still_works_with_valid_name(
+    client: AsyncClient, mock_client: AsyncMock
+) -> None:
+    """Valid agent_id still works (regression: normal path not broken)."""
+    mock_client.agent_load.return_value = {"loaded": True}
+    resp = await client.post("/api/agents/my-agent_123/load")
+    assert resp.status_code == 200, (
+        f"Expected 200 for valid agent_id, got {resp.status_code}"
+    )
+    from config import settings
+    expected_path = str(settings.agent_packages_path / "my-agent_123")
+    mock_client.agent_load.assert_awaited_once_with(expected_path)
 
 
 async def test_unload_agent_forwards_id(client: AsyncClient, mock_client: AsyncMock) -> None:

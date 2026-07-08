@@ -1,6 +1,6 @@
 # AgentFlow 构建与启动脚本
 
-`ar_scripts/` 是项目构建和服务启动的权威入口。当前生产拓扑：
+`scripts/` 是项目构建和服务启动的权威入口。当前生产拓扑：
 
 ```text
 外部请求 → C++ SideCar :23767 → Python Bridge :8199
@@ -36,17 +36,17 @@ Python Bridge 生产模式只监听 loopback；SideCar 是唯一外部入口。
 
 ```bash
 # Release 全量构建，输出 build/
-./ar_scripts/build.sh
+./scripts/build.sh
 
 # Debug 构建，输出 build/dev/
-./ar_scripts/build.sh dev
+./scripts/build.sh dev
 
 # 单目标增量构建（兼容旧用法）
-./ar_scripts/build.sh agentflowd
-./ar_scripts/build.sh dev agentflowd
+./scripts/build.sh agentflowd
+./scripts/build.sh dev agentflowd
 
 # 强制重新配置并清理旧产物
-./ar_scripts/build.sh release --clean
+./scripts/build.sh release --clean
 ```
 
 每次执行都会重新运行 CMake configure，避免已有 `build/` 时忽略新的构建选项。
@@ -57,7 +57,7 @@ Python Bridge 生产模式只监听 loopback；SideCar 是唯一外部入口。
 
 ```bash
 PLATFORM_DIR=/opt/coremind/platform \
-  ./ar_scripts/build.sh production --clean
+  ./scripts/build.sh production --clean
 ```
 
 产物：
@@ -72,7 +72,7 @@ frontend/bridge/coremind_bridge/build-production/coremind_bridge
 ## 配置
 
 ```bash
-cp ar_scripts/.env.example ar_scripts/.env
+cp scripts/.env.example scripts/.env
 ```
 
 至少设置：
@@ -92,16 +92,16 @@ COREMIND_REQUIRED_SERVICES="IMInferScheduler"
 
 ```bash
 # 默认 Mock 模式（回显）
-./ar_scripts/start_e2e.sh
+./scripts/start_e2e.sh
 
 # Proxy 模式（透传到真实 LLM）
-./ar_scripts/start_e2e.sh --proxy
+./scripts/start_e2e.sh --proxy
 
 # 仅启动 Mock UDS + daemon + Bridge（无前端）
-./ar_scripts/start_e2e.sh --no-frontend
+./scripts/start_e2e.sh --no-frontend
 
 # 仅启动 FusionMind Mock 和 Mock UDS Server
-./ar_scripts/start_e2e.sh --fmm-only
+./scripts/start_e2e.sh --fmm-only
 ```
 
 启动链路：
@@ -122,22 +122,22 @@ Frontend (Vite:15173)
 ### 单独启动组件
 
 ```bash
-./ar_scripts/start_daemon.sh --profile release --package examples/agent/outfit-assistant
-./ar_scripts/start_bridge.sh dev 8199
-./ar_scripts/start_web.sh 15173
+./scripts/start_daemon.sh --profile release --package examples/agent/outfit-assistant
+./scripts/start_bridge.sh dev 8199
+./scripts/start_web.sh 15173
 ```
 
 ### Mock UDS Server（单独调试 LLM 调用）
 
 ```bash
 # 默认回显模式
-./ar_scripts/start_mock_uds_server.sh
+./scripts/start_mock_uds_server.sh
 
 # 固定文本模式
-./ar_scripts/start_mock_uds_server.sh --mode fixed --response "你好世界"
+./scripts/start_mock_uds_server.sh --mode fixed --response "你好世界"
 
 # 指定 socket 路径
-./ar_scripts/start_mock_uds_server.sh --socket /tmp/agentflow_plugin.sock
+./scripts/start_mock_uds_server.sh --socket /tmp/agentflow_plugin.sock
 ```
 
 Mock UDS Server 支持 `llm.chat`（OpenAI 格式透传）、`llm.task.create/stream/destroy`、`llm.complete`、`tool.list/call` 等全部 UDS 方法，可配合 `LlmUdsClient` 做本地验证。
@@ -149,7 +149,7 @@ Bridge，也不会因此断开浏览器 WebSocket。
 启动脚本默认不编译。需要启动前构建时显式添加 `--build`：
 
 ```bash
-./ar_scripts/start_daemon.sh --build --profile release
+./scripts/start_daemon.sh --build --profile release
 ```
 
 ### 生产栈
@@ -157,8 +157,8 @@ Bridge，也不会因此断开浏览器 WebSocket。
 完成 production 构建和 `.env` 配置后：
 
 ```bash
-./ar_scripts/start_production.sh --check
-./ar_scripts/start_production.sh
+./scripts/start_production.sh --check
+./scripts/start_production.sh
 ```
 
 该脚本统一管理 daemon、Bridge、SideCar 生命周期；退出时清理三个子进程。
@@ -166,18 +166,18 @@ Bridge，也不会因此断开浏览器 WebSocket。
 也可单独启动：
 
 ```bash
-./ar_scripts/start_daemon.sh --profile production --package examples/agent/outfit-assistant
-./ar_scripts/start_bridge.sh production 8199
-./ar_scripts/start_sidecar.sh production 23767
+./scripts/start_daemon.sh --profile production --package examples/agent/outfit-assistant
+./scripts/start_bridge.sh production 8199
+./scripts/start_sidecar.sh production 23767
 ```
 
 `start_bridge.sh production` 不传递 `--reload`，生产 Bridge 不启动文件监控进程。
 
 ## 旧入口
 
-- 根目录 `build.sh`：已废弃，不再维护。原因是该脚本用字符串拼接 cmake 参数，当 generator 名为 `"Unix Makefiles"`（无 Ninja 时）会产生 shell 参数分裂 bug。所有功能已被 `ar_scripts/build.sh` 替代。新人直接忽略即可。
+- 根目录 `build.sh`：已废弃，不再维护。原因是该脚本用字符串拼接 cmake 参数，当 generator 名为 `"Unix Makefiles"`（无 Ninja 时）会产生 shell 参数分裂 bug。所有功能已被 `scripts/build.sh` 替代。新人直接忽略即可。
 - `run_agent.sh` 仍指向 `examples/agent/harness_agent`，属于示例工具，不参与生产启动。
-- `frontend/bridge/coremind_bridge/build.sh` 是 SideCar 模块级构建入口；统一生产构建应使用 `ar_scripts/build.sh production`。
+- `frontend/bridge/coremind_bridge/build.sh` 是 SideCar 模块级构建入口；统一生产构建应使用 `scripts/build.sh production`。
 
 ---
 
@@ -186,7 +186,7 @@ Bridge，也不会因此断开浏览器 WebSocket。
 ```text
 项目根
 ├── build.sh               ← 已废弃，勿用（参数分裂 bug）
-├── ar_scripts/
+├── scripts/
 │   ├── build.sh            ← 权威构建入口（dev / release / production）
 │   ├── start_daemon.sh      ── 启动 agentflowd 守护进程
 │   ├── start_bridge.sh      ── 启动 Python Bridge（dev / production）
@@ -209,12 +209,12 @@ Bridge，也不会因此断开浏览器 WebSocket。
 
 | 操作 | 入口 |
 |------|------|
-| **编译项目** | `ar_scripts/build.sh [dev\|release\|production]` |
+| **编译项目** | `scripts/build.sh [dev\|release\|production]` |
 | **启动开发栈** | `start_daemon.sh → start_bridge.sh dev → start_web.sh` |
 | **启动生产栈** | `start_production.sh`（统一管理三进程生命周期） |
-| **运行回归测试** | `ar_scripts/tests/regression_test.sh` |
+| **运行回归测试** | `scripts/tests/regression_test.sh` |
 | **运行指定测试** | `build/tests/test_databus_concurrent`（直接运行二进制） |
 
 ### 为什么有两个 `build.sh`？
 
-历史上根目录 `build.sh` 是先写的简易版本，`ar_scripts/build.sh` 是后续重构的项目级构建入口。由于文档和 CI 历史原因两者并存，但根目录版本存在已知 shell 参数分裂 bug，**所有日常开发请使用 `ar_scripts/build.sh`**。
+历史上根目录 `build.sh` 是先写的简易版本，`scripts/build.sh` 是后续重构的项目级构建入口。由于文档和 CI 历史原因两者并存，但根目录版本存在已知 shell 参数分裂 bug，**所有日常开发请使用 `scripts/build.sh`**。

@@ -47,6 +47,22 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data_sharing/test_data_sharing.cpp")
     add_dependencies(e2e_tests test_e2e_data_sharing)
 endif()
 
+# DataBus Cleanup Regression Scenario
+# 锁住漏洞 ①-⑧：老化清理、session_destroy 双边清、unregister 容量释放、
+# store_with_ref 索引叠加、trace span 全丢、TraceContext 跨请求串扰
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/databus_cleanup/test_databus_cleanup_e2e.cpp")
+    add_executable(test_e2e_databus_cleanup
+        databus_cleanup/test_databus_cleanup_e2e.cpp
+    )
+    target_link_libraries(test_e2e_databus_cleanup
+        agentflow
+        GTest::gtest
+        GTest::gtest_main
+    )
+    add_test(NAME E2EDataBusCleanup COMMAND test_e2e_databus_cleanup)
+    add_dependencies(e2e_tests test_e2e_databus_cleanup)
+endif()
+
 # Nested Workflow Scenario — REMOVED: test data (nested_workflow_agent) deleted in commit 61fb5cb.
 
 # Interactive Runner black-box smoke test

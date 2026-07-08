@@ -588,6 +588,16 @@ bool MMAgent::initialize_components(std::shared_ptr<AgentPackage> package) {
     return session;
   });
 
+  // Inject cleanup callback: when a session is released back to the pool
+  // (aging timeout or explicit release), clear its DataBus data under
+  // /session/{session_id}/. Without this, aged-out sessions leak their
+  // DataBus keys forever → shared memory full.
+  session_router_->set_session_cleanup_callback([this](const std::string& session_id) {
+    int cleared = clear_session_data(session_id);
+    Logger::instance().info_f("[AGENT_SESSION_AGING] Cleared %d DataBus keys for aged-out session=%s",
+                              cleared, session_id.c_str());
+  });
+
   // Create session pool based on configuration
   std::vector<std::shared_ptr<MMAgentSession>> session_pool;
   bool has_session_template = package_ && (!package_->get_config().session_tasks.empty()
@@ -1057,22 +1067,12 @@ void MMAgent::handle_session_destroy(const std::shared_ptr<MMAgentSession>& sess
   }
 
   // 3. Clear all DataBus data under /session/{session-id}
-  std::string session_prefix = "/session/" + session->get_session_id();
-  int cleared_count = 0;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    auto it = data_bus_.begin();
-    while(it != data_bus_.end()) {
-      if(it->first.compare(0, session_prefix.size(), session_prefix) == 0) {
-        it = data_bus_.erase(it);
-        ++cleared_count;
-      } else {
-        ++it;
-      }
-    }
-  }
-  Logger::instance().info_f("[CONTROL] Cleared %d DataBus keys with prefix: %s",
-                            cleared_count, session_prefix.c_str());
+  //    Reuse clear_session_data so runtime_databus_ (ZeroCopyDataBus shared memory)
+  //    AND data_bus_ are both cleaned — previously only data_bus_ was cleared,
+  //    leaking runtime_databus_ entries → shared memory full.
+  int cleared_count = clear_session_data(session->get_session_id());
+  Logger::instance().info_f("[CONTROL] Cleared %d DataBus keys for session=%s",
+                            cleared_count, session->get_session_id().c_str());
 
   // 4. Clear session task maps
   session->clear_all_tasks();

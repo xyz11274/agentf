@@ -48,6 +48,13 @@ class SessionRouter {
   /// the factory will be called to create a new session.
   void set_session_factory(SessionFactory factory);
 
+  /// Set the cleanup callback invoked when a session is released back to the pool
+  /// (either by aging or explicit release). The callback receives the session_id
+  /// and is expected to clear any DataBus data under /session/{session_id}/.
+  /// Without this, aged-out sessions leak their DataBus keys forever (shared memory full).
+  using SessionCleanupCallback = std::function<void(const std::string& session_id)>;
+  void set_session_cleanup_callback(SessionCleanupCallback callback);
+
   bool start();
   void stop();
   bool is_running() const { return running_; }
@@ -81,6 +88,7 @@ class SessionRouter {
   MMAgentMsgQue response_queue_;
   RouteHandler route_handler_;
   SessionFactory session_factory_;
+  SessionCleanupCallback session_cleanup_callback_;
 
   std::vector<std::shared_ptr<MMAgentSession>> session_pool_;
   std::map<std::string, std::shared_ptr<MMAgentSession>> active_routes_;
