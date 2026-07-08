@@ -47,8 +47,8 @@ aisf_adapter:
 # ── Artifact 公网地址 ─────────────────────────────────────────────
 # 空字符串 = 使用相对路径（仅内网可用）
 # 线上部署时填公网可访问的 URL，如 https://agent.example.com
-# artifact_public_base_url: "https://115.120.249.45:40092/health"
-artifact_public_base_url: "http://localhost:8199/health"
+artifact_public_base_url: "https://115.120.249.45:40092/health"
+# artifact_public_base_url: "http://localhost:8199/health"
 
 # ── 文件路径 ──────────────────────────────────────────────────────
 # 相对路径基于项目根目录解析

@@ -531,6 +531,9 @@ cleanup:
 }
 
 std::string RpcServer::handle_request(const std::string& request_json, int client_fd, ChannelType channel) {
+  Logger::instance().info_f("[RPC_RECV] method=%s channel=%d body_len=%zu",
+                            extract_json_method(request_json).c_str(),
+                            static_cast<int>(channel), request_json.size());
   std::string method = extract_json_method(request_json);
   int64_t id = extract_json_id(request_json);
 

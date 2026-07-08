@@ -461,13 +461,16 @@ bool MMAgentRuntime::unregister_agent(const AgentId& agent_id) {
                                    agent_id.c_str(), sid.c_str(), cleared);
       }
 
-      agents_.erase(it);
-      databuses_.erase(agent_id);
-      agent_heartbeats_.erase(agent_id);
-      // Remove DataBus from local worker
+      // P0-4 修复方案 A：析构顺序必须为 worker 解引用 -> stop agent -> erase agent -> erase databus
+      // 否则 agent 析构时 cleanup_resources 访问已释放 databus -> SIGSEGV
+      // agent 先析构（cleanup_resources 访问 databus），再释放 databus
       if(local_worker_) {
         local_worker_->remove_databus(agent_id);
       }
+      it->second->stop();
+      agents_.erase(it);
+      databuses_.erase(agent_id);
+      agent_heartbeats_.erase(agent_id);
       Logger::instance().info_f("MMAgent unregistered: %s", agent_id.c_str());
 
       // Emit AGENT_UNREGISTERED event
@@ -1794,13 +1797,14 @@ void MMAgentRuntime::agent_registration_loop() {
                                        agent_id.c_str(), sid.c_str(), cleared);
           }
 
-          agents_.erase(it);
-          databuses_.erase(agent_id);
-          agent_heartbeats_.erase(agent_id);
-          // Remove DataBus from local worker
+          // P0-4 修复方案 A：析构顺序与 unregister_agent 一致（worker 解引用 -> stop -> erase databus -> erase agent）
           if(local_worker_) {
             local_worker_->remove_databus(agent_id);
           }
+          it->second->stop();
+          databuses_.erase(agent_id);
+          agent_heartbeats_.erase(agent_id);
+          agents_.erase(it);
           ok = true;
         }
       } else {

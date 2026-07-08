@@ -213,6 +213,21 @@ def real_infra(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, A
     daemon_port = _free_port()
 
     with _scripted_llm() as llm_url, _upstream_server() as upstream:
+        # Agent nodes call load_dotenv(override=True), so the real DashScope
+        # URL in the agent .env file overrides any process env var we set.
+        # Temporarily swap .env so the scripted LLM endpoint wins.
+        agent_env_file = OUTFIT_AGENT / ".env"
+        agent_env_backup = (
+            agent_env_file.read_text() if agent_env_file.is_file() else None
+        )
+        agent_env_file.write_text(
+            f"AF_LLM_BASE_URL={llm_url}\n"
+            f"AF_LLM_API_KEY=e2e-test-key\n"
+            f"AF_LLM_MODEL=e2e-scripted\n"
+            f"AF_FALLBACK_LLM_BASE_URL={llm_url}\n"
+            f"AF_FALLBACK_LLM_API_KEY=e2e-test-key\n"
+            f"AF_FALLBACK_LLM_MODEL=e2e-scripted\n"
+        )
         env = {
             "PATH": (
                 f"{OUTFIT_AGENT / '.venv' / 'bin'}"
@@ -256,6 +271,8 @@ def real_infra(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, A
                 except subprocess.TimeoutExpired:
                     daemon.kill()
                     daemon.wait(timeout=3)
+            if agent_env_backup is not None:
+                agent_env_file.write_text(agent_env_backup)
 
 
 def _await_agent_ready(port: int, agent_id: str, process: subprocess.Popen) -> None:

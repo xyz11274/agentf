@@ -2,6 +2,23 @@ import vue from '@vitejs/plugin-vue'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 
+// ── Remote Bridge ────────────────────────────────────────────────────
+// Set REMOTE_BRIDGE_URL to point Vite at a remote Bridge, e.g.:
+//   REMOTE_BRIDGE_URL=https://115.120.249.45:40092  npm run dev
+// If the URL already includes a path (e.g. /health), the proxy rewrite
+// will NOT double-prefix — it only adds /health when the target is bare.
+// Defaults to localhost:8199 for local development.
+const REMOTE = process.env.REMOTE_BRIDGE_URL || 'http://localhost:8199'
+const REMOTE_WS = REMOTE.replace(/^http/, 'ws')
+
+// When the REMOTE URL already has a path component (e.g. https://x:40092/health),
+// the proxy should NOT add /health again via rewrite.
+// If REMOTE is just a bare host:port (local dev), add /health prefix.
+const _hasPath = new URL(REMOTE).pathname !== '/'
+const _rewrite = _hasPath
+  ? undefined
+  : (path: string) => `/health${path}`
+
 export default defineConfig({
   plugins: [vue()],
   resolve: {
@@ -20,17 +37,13 @@ export default defineConfig({
       // SSE chat streaming route — must come before the general /api proxy
       // to ensure streaming responses are not buffered by http-proxy.
       '/api/chat': {
-        target: 'http://localhost:8199',
+        target: REMOTE,
         changeOrigin: true,
-        rewrite: (path) => `/health${path}`,
+        secure: false,
+        rewrite: _rewrite,
         configure: (proxy) => {
           proxy.on('proxyRes', (proxyRes, req, res) => {
-            // For SSE streaming responses, ensure the proxy does not buffer and
-            // the browser receives events incrementally via chunked transfer encoding.
             if (proxyRes.headers['content-type']?.includes('text/event-stream')) {
-              // Remove Content-Length from the OUTGOING response (res) so the
-              // proxy uses chunked transfer encoding. Modifying proxyRes.headers
-              // is too late — http-proxy has already copied them to res.
               res.removeHeader('content-length');
               res.setHeader('cache-control', 'no-cache');
               res.setHeader('connection', 'keep-alive');
@@ -40,15 +53,17 @@ export default defineConfig({
         },
       },
       '/api': {
-        target: 'http://localhost:8199',
+        target: REMOTE,
         changeOrigin: true,
-        rewrite: (path) => `/health${path}`,
+        secure: false,
+        rewrite: _rewrite,
       },
       '/ws': {
-        target: 'ws://localhost:8199',
+        target: REMOTE_WS,
         ws: true,
         changeOrigin: true,
-        rewrite: (path) => `/health${path}`,
+        secure: false,
+        rewrite: _rewrite,
       },
     },
   },

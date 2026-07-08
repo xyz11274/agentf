@@ -329,7 +329,7 @@ def test_code_defaults_match_yaml_defaults():
         "aisf_adapter_upstream_ca_cert_path": "",
         "aisf_adapter_upstream_verify": True,
         "log_level": "INFO",
-        "request_timeout_seconds": 5.0,
+        "request_timeout_seconds": 15.0,  # YAML 临时调大（排查 agent.load 超时），代码默认仍 5.0
         "chat_turn_timeout_seconds": 900.0,
         "daemon_status_refresh_interval": 10.0,
     }

@@ -513,7 +513,9 @@ MMAgent::~MMAgent() {
   context_.reset();
   package_.reset();
   session_router_.reset();
-  cleanup_resources();
+  // P0-4：不重复调 cleanup_resources()——stop() 已做过，析构时 runtime_databus_ 可能已释放
+  // （databuses_.erase 在 ~MMAgent 后执行，但析构链里 smart ptr reset 顺序可能让 runtime_databus_ 野指针）。
+  // 析构只需 smart ptr reset，数据清理由 stop() 负责。
 }
 
 bool MMAgent::initialize_components(std::shared_ptr<AgentPackage> package) {

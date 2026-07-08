@@ -27,34 +27,69 @@ BRIDGE_PORT: int | None = None
 
 
 @pytest.fixture(scope="class")
-def bridge_daemon(request: pytest.FixtureRequest,
-                   outfit_daemon_real_llm: dict[str, Any]) -> dict[str, Any]:  # noqa: F811
-    """启动 bridge 连接到已运行的 daemon (class-scoped).
+def bridge_daemon(request: pytest.FixtureRequest) -> dict[str, Any]:  # noqa: F811
+    """启动本地 bridge 或连接远程 endpoint (class-scoped).
 
-    复用 outfit_daemon_real_llm fixture 的 daemon 实例 (优先真实 LLM),
-    在此基础上启动 bridge。
+    通过 E2E_BRIDGE_URL 环境变量切换模式：
+    - 设置 → 远程模式：不自启动 daemon/bridge，直接连接指定 URL
+    - 未设置 → 本地模式：自启动 daemon + bridge（现有逻辑）
     """
+    import os
+
+    remote_url = os.environ.get("E2E_BRIDGE_URL")
+
+    if remote_url:
+        remote_url = remote_url.rstrip("/")
+
+        import urllib3
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        _orig_request = http_requests.api.request
+        def _request_no_verify(method, url, **kw):
+            kw.setdefault("verify", False)
+            return _orig_request(method, url, **kw)
+        http_requests.api.request = _request_no_verify
+
+        try:
+            r = http_requests.get(f"{remote_url}/api/health", timeout=10)
+            r.raise_for_status()
+        except Exception as exc:
+            http_requests.api.request = _orig_request
+            pytest.skip(f"remote bridge unreachable: {exc}")
+
+        print(f"[bridge_daemon] REMOTE mode: {remote_url}")
+        try:
+            yield {
+                "bridge_url": remote_url,
+                "bridge_port": None,
+                "daemon_port": None,
+                "llm_mode": "REMOTE",
+                "remote": True,
+            }
+        finally:
+            http_requests.api.request = _orig_request
+        return
+
+    daemon_info = request.getfixturevalue("outfit_daemon_real_llm")
+    daemon_port = daemon_info["daemon_port"]
+    llm_mode = daemon_info.get("llm_mode", "MOCK")
+
+    print(f"[bridge_daemon] LOCAL mode: daemon_port={daemon_port} llm_mode={llm_mode}")
+
     global BRIDGE_PORT
-    daemon_port = outfit_daemon_real_llm["daemon_port"]
-    llm_mode = outfit_daemon_real_llm.get("llm_mode", "MOCK")
-
-    print(f"[bridge_daemon] daemon_port={daemon_port} llm_mode={llm_mode}")
-
-    # 找一个空闲端口给 bridge
     port = free_port()
     BRIDGE_PORT = port
 
     import subprocess
-    import os
     from pathlib import Path
 
     bridge_dir = Path(__file__).resolve().parents[2] / "bridge"
     env = os.environ.copy()
 
-    # 使用 uv run 确保 bridge 依赖可用，同时显式传递 daemon 地址
     env["DAEMON_HOST"] = "127.0.0.1"
     env["DAEMON_PORT"] = str(daemon_port)
     env["BRIDGE_HTTP_PORT"] = str(port)
+    env["NO_PROXY"] = "127.0.0.1,localhost"
+    env["no_proxy"] = "127.0.0.1,localhost"
 
     proc = subprocess.Popen(
         ["uv", "run", "--directory", str(bridge_dir),
@@ -66,7 +101,6 @@ def bridge_daemon(request: pytest.FixtureRequest,
         stderr=subprocess.DEVNULL,
     )
 
-    # 等待 bridge 就绪
     deadline = time.monotonic() + 15
     while time.monotonic() < deadline:
         try:
@@ -82,8 +116,14 @@ def bridge_daemon(request: pytest.FixtureRequest,
         pytest.fail("bridge failed to start")
 
     try:
-        yield {"bridge_port": port, "daemon_port": daemon_port,
-               "process": proc, "llm_mode": llm_mode}
+        yield {
+            "bridge_url": f"http://127.0.0.1:{port}",
+            "bridge_port": port,
+            "daemon_port": daemon_port,
+            "process": proc,
+            "llm_mode": llm_mode,
+            "remote": False,
+        }
     finally:
         proc.terminate()
         try:
@@ -116,9 +156,9 @@ class TestRestSseChat:
 
     def test_sse_chunk_format(self, bridge_daemon: dict[str, Any]) -> None:
         """SSE 流式返回使用 choices[].delta.content 格式."""
-        port = bridge_daemon["bridge_port"]
+        base_url = bridge_daemon["bridge_url"]
         resp = http_requests.post(
-            f"http://127.0.0.1:{port}/api/chat/outfit-assistant?stream=true",
+            f"{base_url}/api/chat/outfit-assistant?stream=true",
             json={
                 "user_id": "e2e-sse-user",
                 "client_id": "e2e-sse-client",
@@ -127,22 +167,42 @@ class TestRestSseChat:
             stream=True,
             timeout=30,
         )
-        assert resp.status_code == 200
-        assert resp.headers["content-type"].startswith("text/event-stream")
+        assert resp.status_code == 200, (
+            f"POST {base_url}/api/chat/outfit-assistant?stream=true\n"
+            f"  HTTP {resp.status_code}\n"
+            f"  Body: {resp.text[:500]}"
+        )
+        assert resp.headers["content-type"].startswith("text/event-stream"), (
+            f"Expected text/event-stream, got {resp.headers.get('content-type')}"
+        )
 
         text = resp.text
         events = _sse_parse(text)
 
-        # At least one content chunk + [DONE]
-        assert len(events) >= 2
-        assert events[-1] == "[DONE]"
+        assert len(events) >= 2, (
+            f"Expected >=2 SSE events, got {len(events)}.\n"
+            f"Raw SSE text (first 800 chars):\n{text[:800]}"
+        )
+        assert events[-1] == "[DONE]", (
+            f"Last event should be [DONE], got: {events[-1]!r}"
+        )
 
-        # All non-terminal events must be OpenAI-compatible chunks
+        # All non-terminal events must be OpenAI-compatible chunks.
+        # Bridge design (§3.2 principle #2): llm_chunk → choices[].delta.content,
+        # progress/text → choices[].message.content. Both are valid OpenAI shapes.
         for event in events[:-1]:
             assert "choices" in event
             assert len(event["choices"]) > 0
-            assert "delta" in event["choices"][0]
-            assert "content" in event["choices"][0]["delta"]
+            choice = event["choices"][0]
+            if "delta" in choice:
+                # Streaming content chunk — delta.content may be None on the
+                # first role-only chunk (OpenAI convention).
+                assert "content" in choice["delta"]
+            elif "message" in choice:
+                # progress / text event — synchronous envelope (§3.2 #2)
+                pass
+            else:
+                pytest.fail(f"Unknown SSE choice shape: {choice}")
 
 
 @pytest.mark.e2e
@@ -151,14 +211,13 @@ class TestSessionPersistence:
 
     def test_session_list_after_chat(self, bridge_daemon: dict[str, Any]) -> None:
         """发一条消息后, session.list 应返回 >=1 个活跃会话."""
-        port = bridge_daemon["bridge_port"]
-        daemon_port = bridge_daemon["daemon_port"]
+        base_url = bridge_daemon["bridge_url"]
+        daemon_port = bridge_daemon.get("daemon_port")
         uid = f"e2e-{uuid.uuid4().hex[:8]}"
         cid = f"client-{uuid.uuid4().hex[:8]}"
 
-        # 发送一条消息
         resp = http_requests.post(
-            f"http://127.0.0.1:{port}/api/chat/outfit-assistant",
+            f"{base_url}/api/chat/outfit-assistant",
             json={
                 "user_id": uid,
                 "client_id": cid,
@@ -168,7 +227,9 @@ class TestSessionPersistence:
         )
         assert resp.status_code == 200
 
-        # 查 session.list
+        if not daemon_port:
+            pytest.skip("daemon RPC not available in remote mode")
+
         result = jsonrpc_call(
             "127.0.0.1", daemon_port, "session.list",
             {"agent_id": "outfit-assistant", "user_id": uid},
@@ -187,13 +248,12 @@ class TestSessionPersistence:
 
     def test_conversation_history(self, bridge_daemon: dict[str, Any]) -> None:
         """发消息后, conversation API 应返回历史记录."""
-        port = bridge_daemon["bridge_port"]
+        base_url = bridge_daemon["bridge_url"]
         uid = f"e2e-{uuid.uuid4().hex[:8]}"
         cid = f"client-{uuid.uuid4().hex[:8]}"
 
-        # 发一条消息 (同步模式)
         resp = http_requests.post(
-            f"http://127.0.0.1:{port}/api/chat/outfit-assistant",
+            f"{base_url}/api/chat/outfit-assistant",
             json={
                 "user_id": uid,
                 "client_id": cid,
@@ -206,9 +266,8 @@ class TestSessionPersistence:
         assert data.get("success") is True
         assert len(data.get("data", {}).get("content", "")) > 0
 
-        # 查 conversation 历史
         conv_resp = http_requests.get(
-            f"http://127.0.0.1:{port}/api/conversations/outfit-assistant",
+            f"{base_url}/api/conversations/outfit-assistant",
             params={"user_id": uid, "client_id": cid},
             timeout=10,
         )
@@ -230,15 +289,14 @@ class TestAgentflowPipeline:
 
     def test_agentflow_pipeline_completes(self, bridge_daemon: dict[str, Any]) -> None:
         """验证 agentflow 执行链路完整: daemon 执行 agent -> workflow -> LLM call -> 返回内容."""
-        port = bridge_daemon["bridge_port"]
-        daemon_port = bridge_daemon["daemon_port"]
+        base_url = bridge_daemon["bridge_url"]
+        daemon_port = bridge_daemon.get("daemon_port")
         llm_mode = bridge_daemon.get("llm_mode", "MOCK")
         uid = f"e2e-pl-{uuid.uuid4().hex[:6]}"
         cid = f"cli-{uuid.uuid4().hex[:6]}"
 
-        # Step 1: 通过 REST API 发消息, 触发 agentflow 执行
         resp = http_requests.post(
-            f"http://127.0.0.1:{port}/api/chat/outfit-assistant?stream=true",
+            f"{base_url}/api/chat/outfit-assistant?stream=true",
             json={
                 "user_id": uid,
                 "client_id": cid,
@@ -247,19 +305,24 @@ class TestAgentflowPipeline:
             stream=True,
             timeout=120,
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 200, (
+            f"HTTP {resp.status_code}: {resp.text[:500]}"
+        )
 
-        # Step 2: 解析 SSE 流, 验证返回了内容
         text = resp.text
         events = _sse_parse(text)
-        assert len(events) >= 2, f"Expected >=2 SSE events, got {len(events)}"
+        assert len(events) >= 2, (
+            f"Expected >=2 SSE events, got {len(events)}.\n"
+            f"Raw (first 800 chars):\n{text[:800]}"
+        )
         assert events[-1] == "[DONE]"
 
         all_content = ""
         for event in events[:-1]:
             choices = event.get("choices", [])
             if choices and "delta" in choices[0]:
-                all_content += choices[0]["delta"].get("content", "")
+                # content may be None on the first role-only chunk
+                all_content += choices[0]["delta"].get("content") or ""
 
         assert len(all_content) > 0, (
             f"Agentflow pipeline returned empty content (llm_mode={llm_mode})"
@@ -267,7 +330,9 @@ class TestAgentflowPipeline:
         print(f"[agentflow] llm_mode={llm_mode} content_len={len(all_content)} "
               f"preview={all_content[:80]}...")
 
-        # Step 3: 验证 daemon 端会话已创建 (证明 agent.execute 被执行)
+        if not daemon_port:
+            pytest.skip("daemon RPC not available in remote mode")
+
         result = jsonrpc_call(
             "127.0.0.1", daemon_port, "session.list",
             {"agent_id": "outfit-assistant", "user_id": uid},
@@ -283,14 +348,13 @@ class TestAgentflowPipeline:
 
     def test_multi_turn_context_maintained(self, bridge_daemon: dict[str, Any]) -> None:
         """多轮对话: 同一 session 内发 3 条消息, 验证 agentflow 保持上下文."""
-        port = bridge_daemon["bridge_port"]
-        daemon_port = bridge_daemon["daemon_port"]
+        base_url = bridge_daemon["bridge_url"]
+        daemon_port = bridge_daemon.get("daemon_port")
         uid = f"e2e-mt-{uuid.uuid4().hex[:6]}"
         cid = f"cli-{uuid.uuid4().hex[:6]}"
 
-        # Turn 1: 介绍信息
         r1 = http_requests.post(
-            f"http://127.0.0.1:{port}/api/chat/outfit-assistant",
+            f"{base_url}/api/chat/outfit-assistant",
             json={
                 "user_id": uid,
                 "client_id": cid,
@@ -305,9 +369,8 @@ class TestAgentflowPipeline:
         assert len(content1) > 0, "Turn 1 response is empty"
         print(f"[multiturn] Turn 1: {len(content1)} chars")
 
-        # Turn 2: 同一 session 继续
         r2 = http_requests.post(
-            f"http://127.0.0.1:{port}/api/chat/outfit-assistant",
+            f"{base_url}/api/chat/outfit-assistant",
             json={
                 "user_id": uid,
                 "client_id": cid,
@@ -322,9 +385,8 @@ class TestAgentflowPipeline:
         assert len(content2) > 0, "Turn 2 response is empty"
         print(f"[multiturn] Turn 2: {len(content2)} chars")
 
-        # Turn 3: 同一 session 继续, 验证上下文能维持
         r3 = http_requests.post(
-            f"http://127.0.0.1:{port}/api/chat/outfit-assistant",
+            f"{base_url}/api/chat/outfit-assistant",
             json={
                 "user_id": uid,
                 "client_id": cid,
@@ -339,7 +401,9 @@ class TestAgentflowPipeline:
         assert len(content3) > 0, "Turn 3 response is empty"
         print(f"[multiturn] Turn 3: {len(content3)} chars")
 
-        # 验证: 同一 session 产生了多个对话记录
+        if not daemon_port:
+            pytest.skip("daemon RPC not available in remote mode")
+
         result = jsonrpc_call(
             "127.0.0.1", daemon_port, "session.list",
             {"agent_id": "outfit-assistant", "user_id": uid},

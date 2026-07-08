@@ -130,4 +130,5 @@ data/sessions.db-wal
 # tests
 examples/agent/test_harness
 examples/agent/outfit-test-agent
+frontend/bridge/templates/agent_template/harness_agent/harness/skills/outfit-stylist/assets
 trace_output

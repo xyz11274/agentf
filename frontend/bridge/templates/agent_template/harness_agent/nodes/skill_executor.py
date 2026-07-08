@@ -42,7 +42,10 @@ from llm_call import (
 from observability import emit_event
 from parse_af_input import parse_stream
 from prompts import (
+    SKILL_ARTIFACT_AUTO_COLLECT_PROMPT,
     SKILL_FALLBACK_SYSTEM,
+    SKILL_NETWORK_FAILURE_PROMPT,
+    SKILL_NETWORK_RESOURCE_PROMPT,
     SKILL_NOT_FOUND_TEMPLATE,
     SKILL_RECOVERY_PROMPT,
     SKILL_SECTION_TEMPLATE,
@@ -466,6 +469,16 @@ def execute():
         system_parts.append(SKILL_SECTION_TEMPLATE.format(name=name, content=content))
     system_prompt = "\n\n---\n\n".join(system_parts) if system_parts else \
                     SKILL_FALLBACK_SYSTEM
+    # Append network-failure guard: tells LLM not to retry tools that
+    # keep failing, avoiding infinite tool-call loops on network outage.
+    system_prompt += "\n\n" + SKILL_NETWORK_FAILURE_PROMPT
+    # Append network-resource guard: tells LLM not to retry downloading
+    # resources that fail, and to return error info to the user.
+    system_prompt += "\n\n" + SKILL_NETWORK_RESOURCE_PROMPT
+    # Append artifact-auto-collect instruction: tells LLM that generated
+    # artifacts are auto-collected and published; no need for self-hosted
+    # HTTP server or file service.
+    system_prompt += "\n\n" + SKILL_ARTIFACT_AUTO_COLLECT_PROMPT
 
     # ⑦ Construct LLM messages
     messages = [
@@ -805,7 +818,6 @@ def execute():
                 }, level="WARN")
                 print(f"[flow]   ⚠️  empty skill_result: skill={skill_name} "
                       f"LLM returned finish=stop with no content", file=sys.stderr)
-            # Write result to DataBus for coordinator to read.
             # Write result to DataBus for coordinator to read.
             #   skill_result:skill-runner — key matching AF_COMPLETED_SKILL_NAME
             # Coordinator's collect_skill_results reads by completed_skill name ("skill-runner"),

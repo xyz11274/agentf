@@ -60,18 +60,20 @@ SKIP_FIX=false
 UNIT_ONLY=false
 E2E_ONLY=false
 
-for arg in "$@"; do
-    case "$arg" in
-        --skip-build) SKIP_BUILD=true ;;
-        --skip-fix)   SKIP_FIX=true ;;
-        --unit-only)  UNIT_ONLY=true ;;
-        --e2e-only)   E2E_ONLY=true ;;
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --skip-build) SKIP_BUILD=true; shift ;;
+        --skip-fix)   SKIP_FIX=true; shift ;;
+        --unit-only)  UNIT_ONLY=true; shift ;;
+        --e2e-only)   E2E_ONLY=true; shift ;;
         --help|-h)
             echo "用法: $0 [--skip-build] [--skip-fix] [--unit-only] [--e2e-only]"
+            echo ""
+            echo "  远程 E2E 测试请使用: scripts/tests/remote_e2e_test.sh --bridge-url URL"
             exit 0
             ;;
         *)
-            echo "未知参数: $arg"
+            echo "未知参数: $1"
             echo "用法: $0 [--skip-build] [--skip-fix] [--unit-only] [--e2e-only]"
             exit 1
             ;;
