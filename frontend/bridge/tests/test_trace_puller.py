@@ -80,6 +80,10 @@ class _MockDaemonClient(DaemonClient):
                     return {"exists": False, "value": None}
             return {"exists": False, "value": None}
 
+        if method == "databus.remove_by_prefix":
+            # Return a canned response — we track the call via _sent_requests
+            return {"removed": len(self._trace_entries)}
+
         return {}
 
 
@@ -289,3 +293,66 @@ async def test_pull_and_save_traces_requires_dialogue_id(
     assert count == 0
     traces = await provider.get_traces(sess["id"])
     assert len(traces) == 0
+
+
+@pytest.mark.asyncio
+async def test_pull_and_save_traces_cleans_up_databus_after_success(
+    provider: LocalSessionProvider,
+) -> None:
+    """I-1 + cleanup: persisted > 0 → databus.remove_by_prefix is called."""
+    daemon = _MockDaemonClient([_make_trace_entry("call-001")])
+    sess = await provider.get_or_create_session("grace", "web")
+
+    count = await _pull_and_save_traces(
+        daemon, provider,
+        agent_id="test-agent",
+        user_id="grace",
+        client_id="web",
+        dialogue_id="d-cleanup",
+        session_id=sess["id"],
+    )
+
+    assert count == 1, f"Expected 1 trace, got {count}"
+
+    # Verify databus.remove_by_prefix was called with the right prefix
+    cleanup_calls = [
+        (m, p) for m, p in daemon._sent_requests  # noqa: SLF001
+        if m == "databus.remove_by_prefix"
+    ]
+    assert len(cleanup_calls) == 1, (
+        f"Expected 1 databus.remove_by_prefix call, got {len(cleanup_calls)}"
+    )
+    _, params = cleanup_calls[0]
+    assert params is not None
+    assert params.get("prefix") == "llm/traces/", (
+        f"Expected prefix='llm/traces/', got {params.get('prefix')!r}"
+    )
+    assert params.get("agent_id") == "test-agent"
+
+
+@pytest.mark.asyncio
+async def test_pull_and_save_traces_skips_cleanup_on_empty(
+    provider: LocalSessionProvider,
+) -> None:
+    """persisted == 0 → databus.remove_by_prefix is NOT called."""
+    daemon = _MockDaemonClient([])  # no trace entries
+    sess = await provider.get_or_create_session("heidi", "web")
+
+    count = await _pull_and_save_traces(
+        daemon, provider,
+        agent_id="test-agent",
+        user_id="heidi",
+        client_id="web",
+        dialogue_id="d-empty",
+        session_id=sess["id"],
+    )
+
+    assert count == 0
+
+    cleanup_calls = [
+        (m, p) for m, p in daemon._sent_requests  # noqa: SLF001
+        if m == "databus.remove_by_prefix"
+    ]
+    assert len(cleanup_calls) == 0, (
+        f"Expected 0 cleanup calls when persisted=0, got {len(cleanup_calls)}"
+    )

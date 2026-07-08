@@ -1,6 +1,7 @@
 import importlib.util
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import requests
 
@@ -303,3 +304,62 @@ def test_non_transient_ssl_error_not_retried(monkeypatch):
     assert result["_llm_error"] is True
     assert "certificate verify failed" in result["error"]
     assert call_count["n"] == 1, "SSL error must NOT be retried"
+
+
+# ── _append_to_index dialogue scoping ──
+
+
+def _make_recorder_with_mock_client():
+    """Create a _TraceRecorder with a mock DataBus client.
+
+    Returns (recorder, mock_client) where mock_client.llm().get/put track calls.
+    """
+    recorder = MODULE._TraceRecorder()
+    recorder._client = MagicMock()
+    # Reset singleton so next test gets a fresh instance
+    MODULE._TraceRecorder._instance = None
+    return recorder
+
+
+def test_append_to_index_uses_dialogue_scoped_key(monkeypatch):
+    """AF_DIALOGUE_ID set → key is traces/index/{dialogue_id}."""
+    monkeypatch.setenv("AF_DIALOGUE_ID", "test-dialogue-123")
+    recorder = _make_recorder_with_mock_client()
+
+    mock_llm = recorder._client.llm.return_value
+    mock_llm.get.return_value = "[]"
+
+    recorder._append_to_index("call-abc")
+
+    # Verify the key includes the dialogue_id
+    expected_key = "traces/index/test-dialogue-123"
+    mock_llm.get.assert_called_once_with(expected_key, "[]")
+    mock_llm.put.assert_called_once()
+
+
+def test_append_to_index_falls_back_to_plain_key(monkeypatch):
+    """No AF_DIALOGUE_ID → key is traces/index."""
+    monkeypatch.delenv("AF_DIALOGUE_ID", raising=False)
+    recorder = _make_recorder_with_mock_client()
+
+    mock_llm = recorder._client.llm.return_value
+    mock_llm.get.return_value = "[]"
+
+    recorder._append_to_index("call-xyz")
+
+    # Verify the key is the plain fallback
+    expected_key = "traces/index"
+    mock_llm.get.assert_called_once_with(expected_key, "[]")
+    mock_llm.put.assert_called_once()
+
+
+def test_append_to_index_no_client_does_nothing(monkeypatch):
+    """No DataBus client → _append_to_index is a no-op."""
+    monkeypatch.setenv("AF_DIALOGUE_ID", "d-1")
+    recorder = MODULE._TraceRecorder()
+    recorder._client = None
+    MODULE._TraceRecorder._instance = None
+
+    # Should not raise
+    recorder._append_to_index("call-noop")
+    # No assertion needed — the point is that no error occurred

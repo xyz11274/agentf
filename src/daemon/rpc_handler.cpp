@@ -215,6 +215,8 @@ void RpcHandler::register_all(RpcServer& server) {
       [this](const std::string& p, int64_t id, int, ChannelType) { return handle_databus_get(p, id); });
   server.register_handler("databus.list_keys",
       [this](const std::string& p, int64_t id, int, ChannelType) { return handle_databus_list_keys(p, id); });
+  server.register_handler("databus.remove_by_prefix",
+      [this](const std::string& p, int64_t id, int, ChannelType) { return handle_databus_remove_by_prefix(p, id); });
 }
 
 // --- Query methods ---
@@ -825,6 +827,38 @@ std::string RpcHandler::handle_databus_list_keys(const std::string& params, int6
     oss << "\"" << json_escape(rel) << "\"";
   }
   oss << "]}";
+  return build_success(oss.str(), id);
+}
+
+std::string RpcHandler::handle_databus_remove_by_prefix(const std::string& params, int64_t id) {
+  std::string agent_id = extract_json_string_local(params, "agent_id");
+  std::string user_id = extract_json_string_local(params, "user_id");
+  std::string client_id = extract_json_string_local(params, "client_id");
+  std::string session_id = extract_json_string_local(params, "session_id");
+  std::string prefix = extract_json_string_local(params, "prefix");
+
+  if (agent_id.empty()) {
+    return build_error(-32602, "Invalid params: missing agent_id", id);
+  }
+
+  auto agent = runtime_.get_agent(agent_id);
+  if (!agent) {
+    return build_error(-32001, "Agent not found: " + agent_id, id);
+  }
+
+  session_id = resolve_session_id(user_id, client_id, session_id, agent);
+  if (session_id.empty()) {
+    return build_error(-32602, "Invalid params: provide (user_id+client_id) or session_id", id);
+  }
+
+  std::string full_prefix = "/session/" + session_id + "/" + prefix;
+  auto& databus = runtime_.get_databus(agent_id);
+  int removed = databus.remove_by_prefix(full_prefix);
+
+  std::ostringstream oss;
+  oss << "{\"removed\":" << removed << ",\"prefix\":\"" << json_escape(prefix) << "\"}";
+  Logger::instance().info_f("[DATABUS_CLEANUP] Removed %d keys for agent=%s session=%s prefix=%s",
+                            removed, agent_id.c_str(), session_id.c_str(), prefix.c_str());
   return build_success(oss.str(), id);
 }
 

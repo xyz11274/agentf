@@ -5,7 +5,7 @@
   "session_pool_size": 3,
   "max_workflows": 10,
   "max_concurrent_workflows": 5,
-  "data_bus_capacity_mb": 50,
+  "data_bus_capacity_mb": 500,
   "tasks": [
     {
       "id": 0,

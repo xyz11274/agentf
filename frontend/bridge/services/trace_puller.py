@@ -203,6 +203,26 @@ async def _pull_and_save_traces(
         "trace_pull.done agent=%s dialogue=%s persisted=%d",
         agent_id, dialogue_id, persisted,
     )
+
+    # Trace data has been persisted to SQLite — clean up from DataBus
+    # so shared memory doesn't accumulate across dialogues.
+    if persisted > 0:
+        try:
+            cleanup_result = await daemon_client.send_request(
+                "databus.remove_by_prefix",
+                {**sess_params, "prefix": "llm/traces/"},
+            )
+            removed_count = cleanup_result.get("removed", 0) if isinstance(cleanup_result, dict) else 0
+            logger.info(
+                "trace_pull.cleanup agent=%s dialogue=%s removed=%d",
+                agent_id, dialogue_id, removed_count,
+            )
+        except DaemonError as exc:
+            logger.warning(
+                "trace_pull.cleanup_failed agent=%s dialogue=%s: %s",
+                agent_id, dialogue_id, exc,
+            )
+
     return persisted
 
 

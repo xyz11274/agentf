@@ -85,6 +85,7 @@ private:
   // DataBus proxy
   std::string handle_databus_get(const std::string& params, int64_t id);
   std::string handle_databus_list_keys(const std::string& params, int64_t id);
+  std::string handle_databus_remove_by_prefix(const std::string& params, int64_t id);
 };
 
 }  // namespace daemon
