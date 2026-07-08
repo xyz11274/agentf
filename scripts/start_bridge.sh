@@ -39,6 +39,9 @@ _stop_bridge() {
         kill -9 "$pid" 2>/dev/null || true
     fi
     rm -f "$PID_FILE"
+    # Wait for the OS to release the listening port so the next
+    # uvicorn instance doesn't get EADDRINUSE (Errno 48).
+    sleep 1
     echo "[INFO] Bridge stopped"
 }
 

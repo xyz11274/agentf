@@ -135,6 +135,18 @@ class MMAgent {
   /// @return Number of keys removed
   int clear_session_data(const std::string& session_id);
 
+  /// Clear DataBus data for a session, but only if the session has NOT been
+  /// reused since the caller captured its active_seq. This prevents the
+  /// aging-callback reuse race (P0-1): when a pooled session is handed back to
+  /// a new user between aging-timeout and the deferred cleanup callback, the
+  /// stale callback would otherwise delete the new user's data. The caller
+  /// passes the seq it observed at aging time; if the session's current seq
+  /// differs (meaning activate() was called again → reused), cleanup is skipped.
+  /// @param session_id The session ID to clear
+  /// @param expected_seq The active_seq the caller observed at aging time
+  /// @return Number of keys removed, or 0 if skipped due to reuse
+  int clear_session_data_if_unused(const std::string& session_id, uint64_t expected_seq);
+
   /// Clear DataBus data for a specific dialogue within a session.
   /// Clears sys, user, and ctx namespaces for the dialogue.
   /// @param session_id The session ID
@@ -200,6 +212,10 @@ class MMAgent {
   bool has_task_event_callback() const;
 
  private:
+  // P0-2 修复：抽不发事件版，让 handle_session_destroy 控制事件时机
+  // （先清 tasks/dialogues 再发事件，避免订阅方收到事件时状态未完全销毁）
+  int clear_session_data_internal(const std::string& session_id, bool emit_event);
+
   Config config_;
   AgentState state_ = AgentState::CREATED;
   std::vector<std::shared_ptr<MMWorkflow>> workflows_;

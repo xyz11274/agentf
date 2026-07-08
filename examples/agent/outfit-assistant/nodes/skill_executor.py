@@ -43,6 +43,7 @@ from observability import emit_event
 from parse_af_input import parse_stream
 from prompts import (
     SKILL_FALLBACK_SYSTEM,
+    SKILL_NETWORK_FAILURE_PROMPT,
     SKILL_NOT_FOUND_TEMPLATE,
     SKILL_RECOVERY_PROMPT,
     SKILL_SECTION_TEMPLATE,
@@ -466,6 +467,9 @@ def execute():
         system_parts.append(SKILL_SECTION_TEMPLATE.format(name=name, content=content))
     system_prompt = "\n\n---\n\n".join(system_parts) if system_parts else \
                     SKILL_FALLBACK_SYSTEM
+    # Append network-failure guard: tells LLM not to retry tools that
+    # keep failing, avoiding infinite tool-call loops on network outage.
+    system_prompt += "\n\n" + SKILL_NETWORK_FAILURE_PROMPT
 
     # ⑦ Construct LLM messages
     messages = [

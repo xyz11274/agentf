@@ -239,6 +239,19 @@ class DaemonClient:
         Auto-connects if not already connected (lazy connect), so callers
         don't have to manage the lifecycle manually.
         """
+        # ── Detect silently-dropped WebSocket ─────────────────────────
+        # If the connection was lost but _connected wasn't cleared
+        # (e.g. network timeout, daemon restart), proactively detect
+        # via close_code and trigger reconnection instead of hanging
+        # for effective_timeout seconds waiting for a response that
+        # will never arrive.
+        if self._ws is not None and self._ws.close_code is not None:
+            logger.warning(
+                "send_request.ws_closed method=%s close_code=%s (reconnecting)",
+                method, self._ws.close_code,
+            )
+            self._connected = False
+
         if not self._connected or self._ws is None:
             try:
                 await self.connect(max_retries=2, retry_delay=0.3)

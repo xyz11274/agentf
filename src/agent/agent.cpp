@@ -592,10 +592,12 @@ bool MMAgent::initialize_components(std::shared_ptr<AgentPackage> package) {
   // (aging timeout or explicit release), clear its DataBus data under
   // /session/{session_id}/. Without this, aged-out sessions leak their
   // DataBus keys forever → shared memory full.
-  session_router_->set_session_cleanup_callback([this](const std::string& session_id) {
-    int cleared = clear_session_data(session_id);
-    Logger::instance().info_f("[AGENT_SESSION_AGING] Cleared %d DataBus keys for aged-out session=%s",
-                              cleared, session_id.c_str());
+  // P0-1 方案 D：callback 收 seq 校验——若归还后已被新用户复用（seq 变化），跳过清理避免误删。
+  session_router_->set_session_cleanup_callback([this](const std::string& session_id, uint64_t seq) {
+    int cleared = clear_session_data_if_unused(session_id, seq);
+    Logger::instance().info_f("[AGENT_SESSION_AGING] Cleared %d DataBus keys for aged-out session=%s seq=%llu",
+                              cleared, session_id.c_str(),
+                              static_cast<unsigned long long>(seq));
   });
 
   // Create session pool based on configuration
@@ -1067,20 +1069,23 @@ void MMAgent::handle_session_destroy(const std::shared_ptr<MMAgentSession>& sess
   }
 
   // 3. Clear all DataBus data under /session/{session-id}
-  //    Reuse clear_session_data so runtime_databus_ (ZeroCopyDataBus shared memory)
-  //    AND data_bus_ are both cleaned — previously only data_bus_ was cleared,
-  //    leaking runtime_databus_ entries → shared memory full.
-  int cleared_count = clear_session_data(session->get_session_id());
-  Logger::instance().info_f("[CONTROL] Cleared %d DataBus keys for session=%s",
-                            cleared_count, session->get_session_id().c_str());
+  //    P0-2：先清 tasks/dialogues 再清 databus 再发事件，避免订阅方收到 DESTROYED 时状态未完全销毁。
+  //    clear_session_data_internal(emit_event=false) 只清 databus 不发事件，事件由本函数末尾发。
+  int cleared_count = clear_session_data_internal(session->get_session_id(), /*emit_event=*/false);
 
-  // 4. Clear session task maps
+  // 4. Clear session task maps（在发事件前清，保证订阅方收到事件时 tasks 已空）
   session->clear_all_tasks();
 
-  // 5. Cancel all dialogue locks (wake any blocked acquire_dialogue_lock
-  //    waiters and release any held locks so they don't leak).
+  // 5. Cancel all dialogue locks（在发事件前释放，保证订阅方收到事件时 dialogues 已解锁）
   session->cancel_all_dialogues();
 
+  // 6. Emit SESSION_DESTROYED event（此时 tasks/dialogues 已清空，订阅方见一致状态）
+  if(session_event_callback_) {
+    session_event_callback_(session->get_session_id(), session->get_user_id(),
+                            session->get_client_id(), SessionEventType::DESTROYED);
+  }
+  Logger::instance().info_f("[CONTROL] Cleared %d DataBus keys for session=%s",
+                            cleared_count, session->get_session_id().c_str());
   Logger::instance().info_f("[CONTROL] Session destroyed: %s",
                             session->get_session_id().c_str());
 }
@@ -3485,7 +3490,7 @@ bool MMAgent::has_task_event_callback() const {
   return static_cast<bool>(task_event_callback_);
 }
 
-int MMAgent::clear_session_data(const std::string& session_id) {
+int MMAgent::clear_session_data_internal(const std::string& session_id, bool emit_event) {
   int total_count = 0;
 
   // 1. Clear runtime_databus_ data under /session/{session_id}/
@@ -3516,7 +3521,8 @@ int MMAgent::clear_session_data(const std::string& session_id) {
 
   // 3. Emit SESSION_DESTROYED event so external subscribers (EventBroker / Bridge)
   //    are notified.  Look up the session to fill user_id / client_id.
-  if(session_event_callback_) {
+  //    P0-2：emit_event=false 时跳过，让 handle_session_destroy 控制事件时机。
+  if(emit_event && session_event_callback_) {
     std::string user_id;
     std::string client_id;
     {
@@ -3532,9 +3538,37 @@ int MMAgent::clear_session_data(const std::string& session_id) {
                               session_id.c_str(), user_id.c_str(), client_id.c_str());
   }
 
+  return total_count;
+}
+
+int MMAgent::clear_session_data(const std::string& session_id) {
+  // P0-2：公开接口保持发事件（外部主动调时订阅方应收到）
+  int total_count = clear_session_data_internal(session_id, /*emit_event=*/true);
   Logger::instance().info_f("[MMAgent] clear_session_data: session=%s total_keys=%d",
                             session_id.c_str(), total_count);
   return total_count;
+}
+
+int MMAgent::clear_session_data_if_unused(const std::string& session_id, uint64_t expected_seq) {
+  // P0-1 方案 D：aging callback 延迟到锁外执行，归还后 session 可能已被新用户复用。
+  // 若复用了（activate() 自增了 active_seq），当前 seq != expected_seq → 跳过清理，
+  // 否则会误删新用户刚写入的数据。未复用则 seq 不变，正常清理。
+  auto session = get_session_by_key(session_id);
+  if(!session) {
+    // session 不在 sessions_ map（可能尚未注册或已析构）——视为未复用，正常清
+    return clear_session_data(session_id);
+  }
+  const uint64_t current_seq = session->get_active_seq();
+  if(current_seq != expected_seq) {
+    Logger::instance().info_f(
+        "[MMAgent] clear_session_data_if_unused: SKIP session=%s (seq mismatch: expected=%llu current=%llu, "
+        "session已复用给新用户，跳过清理避免误删新数据)",
+        session_id.c_str(),
+        static_cast<unsigned long long>(expected_seq),
+        static_cast<unsigned long long>(current_seq));
+    return 0;
+  }
+  return clear_session_data(session_id);
 }
 
 int MMAgent::clear_dialogue_data(const std::string& session_id,

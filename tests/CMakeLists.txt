@@ -97,6 +97,15 @@ target_link_libraries(test_exe_loader_gtest PRIVATE
     GTest::gtest_main
 )
 
+add_executable(test_data_variant_utils_gtest
+    unit/src/test_data_variant_utils_gtest.cpp
+)
+target_link_libraries(test_data_variant_utils_gtest PRIVATE
+    agentflow
+    GTest::gtest
+    GTest::gtest_main
+)
+
 add_executable(test_databus_concurrent
     unit/src/test_databus_concurrent.cpp
 )
@@ -117,6 +126,7 @@ if(NOT MSVC)
     target_compile_options(test_control_message_gtest PRIVATE -Wno-non-virtual-dtor)
     target_compile_options(test_event_handler_gtest PRIVATE -Wno-non-virtual-dtor)
     target_compile_options(test_exe_loader_gtest PRIVATE -Wno-non-virtual-dtor)
+    target_compile_options(test_data_variant_utils_gtest PRIVATE -Wno-non-virtual-dtor)
 endif()
 
 # Add subdirectories
@@ -133,6 +143,7 @@ add_test(NAME DSLAdapterTests COMMAND test_dsl_adapter_gtest)
 add_test(NAME ControlMessageTests COMMAND test_control_message_gtest)
 add_test(NAME EventHandlerTests COMMAND test_event_handler_gtest)
 add_test(NAME ExeLoaderTests COMMAND test_exe_loader_gtest)
+add_test(NAME DataVariantUtilsTests COMMAND test_data_variant_utils_gtest)
 add_test(NAME DataBusConcurrentTests COMMAND test_databus_concurrent)
 
 if(AGENTFLOW_TEST_ENV)
@@ -144,6 +155,7 @@ if(AGENTFLOW_TEST_ENV)
     set_tests_properties(ControlMessageTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
     set_tests_properties(EventHandlerTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
     set_tests_properties(ExeLoaderTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
+    set_tests_properties(DataVariantUtilsTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
     set_tests_properties(DataBusConcurrentTests PROPERTIES ENVIRONMENT "${AGENTFLOW_TEST_ENV}")
 endif()
 
@@ -171,7 +183,8 @@ endif()
 if(_test_rpath)
   foreach(_tgt test_agent_gtest test_workflow_gtest test_node_gtest
                test_databus_gtest test_dsl_adapter_gtest test_control_message_gtest
-               test_event_handler_gtest test_exe_loader_gtest test_databus_concurrent)
+               test_event_handler_gtest test_exe_loader_gtest test_data_variant_utils_gtest
+               test_databus_concurrent)
     if(TARGET ${_tgt})
       set_target_properties(${_tgt} PROPERTIES BUILD_RPATH "${_test_rpath}")
     endif()
@@ -181,5 +194,6 @@ endif()
 # Install targets
 install(TARGETS test_agent_gtest test_workflow_gtest test_node_gtest
         test_databus_gtest test_dsl_adapter_gtest test_control_message_gtest
-        test_event_handler_gtest test_exe_loader_gtest test_databus_concurrent
+        test_event_handler_gtest test_exe_loader_gtest test_data_variant_utils_gtest
+        test_databus_concurrent
         RUNTIME DESTINATION bin)

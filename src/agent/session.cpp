@@ -74,6 +74,7 @@ bool MMAgentSession::activate() {
     return false;
   }
   state_ = SessionState::ACTIVE;
+  active_seq_.fetch_add(1);  // P0-1 方案 D：每次激活自增，用于 aging callback 校验复用竞态
   last_activity_time_ = get_current_time_ms();
   return true;
 }

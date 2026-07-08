@@ -639,15 +639,33 @@ void BuiltinDispatcher::cleanup_dialogue_data(MMAgent& agent,
     }
   }
 
-  // Clean up framework-managed keys in sys namespace
-  remove_framework_data(agent, session_id, dialogue_id, "dialogue_id");
-  remove_framework_data(agent, session_id, dialogue_id, "user_prompt");
-  remove_framework_data(agent, session_id, dialogue_id, "next_skills");
-  remove_framework_data(agent, session_id, dialogue_id, "skills_scheduled");
-  remove_framework_data(agent, session_id, dialogue_id, "launched_skills");
-  remove_framework_data(agent, session_id, dialogue_id, "response");
-  remove_framework_data(agent, session_id, dialogue_id, "pending_skills_count");
-  remove_framework_data(agent, session_id, dialogue_id, "skill_failed");
+  // Clean up ALL dialogue-scoped keys in sys namespace via prefix match.
+  // Replaces the old per-key enumeration (dialogue_id, user_prompt, next_skills, ...)
+  // which missed keys written by coordinator/skill nodes at runtime:
+  //   - {did}/_coordinator_round   (coordinator round counter)
+  //   - {did}/stream               (response_push stream chunks stored in sys ns)
+  //   - {did}/skill_result:*       (skill execution results keyed by skill name)
+  // Aligns with MMAgent::clear_dialogue_data's prefix-based approach so the
+  // production cleanup path (BuiltinDispatcher) and the tested path (MMAgent)
+  // have identical coverage — no more "tested green, prod leaks" divergence.
+  if(auto* rt = agent.get_runtime_databus()) {
+    std::string sys_prefix = "/session/" + session_id + "/sys/" + dialogue_id + "/";
+    int sys_cleared = rt->remove_by_prefix(sys_prefix);
+    if(sys_cleared > 0) {
+      Logger::instance().info_f("[CLEANUP_DIALOGUE] Cleaned %d sys keys for dialogue_id=%s",
+                                sys_cleared, dialogue_id.c_str());
+    }
+
+    // dispatch manifests: /session/{sid}/sys/dispatch:{did}:{uuid}:{N}
+    // These are written by coordinator_decide's run_skills dispatch and were
+    // never in the old per-key cleanup list.
+    std::string dispatch_prefix = "/session/" + session_id + "/sys/dispatch:" + dialogue_id + ":";
+    int dispatch_cleared = rt->remove_by_prefix(dispatch_prefix);
+    if(dispatch_cleared > 0) {
+      Logger::instance().info_f("[CLEANUP_DIALOGUE] Cleaned %d dispatch keys for dialogue_id=%s",
+                                dispatch_cleared, dialogue_id.c_str());
+    }
+  }
 
   // Clean up skill result keys in user namespace (dynamic based on launched_skills)
   for(const auto& skill_name : launched_skills) {

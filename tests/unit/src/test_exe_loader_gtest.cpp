@@ -1,15 +1,22 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
+#include <vector>
 
 #include <signal.h>
 #include <unistd.h>
 
 #include "runtime/exe_loader.h"
+#include "utils/log_sink.h"
+#include "utils/logger.h"
 
 namespace {
 
@@ -117,6 +124,157 @@ TEST_F(CodeLoaderProcessTest, TimeoutTerminatesDescendantProcesses) {
 
   // 兜底：如果测试自身失败残留了进程，清理掉避免污染后续测试。
   ::system(("pkill -f '" + marker + "' 2>/dev/null || true").c_str());
+}
+
+// ============================================================================
+// Partial-stdout pollution regression tests
+//
+// Background: when a node is killed mid-stream at timeout, the child's stdout
+// pipe typically holds a half-written JSON object. Two framework guarantees
+// must hold:
+//   I1 (execute_command layer): the kill is reported as a clean timeout
+//       failure and the residual bytes remain accessible in result.stdout
+//       (so callers can decide what to do with them). The downstream
+//       outputs_ pollution prevention lives in MMNode (node.cpp:584-595),
+//       where the failure path calls apply_worker_outputs(..., false) to
+//       skip json_output parsing — that path is verified by code inspection
+//       rather than a node-level test (see report).
+//   I2: execute_command emits a [NODE_TIMEOUT] log marker right after
+//       kill(-pgid, SIGKILL) so operators can trace timeout kills.
+// ============================================================================
+
+// ILogSink implementation that records every log record (with its numeric
+// level) into a buffer, so tests can assert on BOTH message content AND level.
+// Logger::Level mapping (see utils/logger.h): DEBUG=0, INFO=1, WARN=2, ERROR=3.
+class CapturingLogSink : public agentflow::ILogSink {
+ public:
+  void write(int level, const std::string& timestamp, const std::string& message) override {
+    (void)timestamp;
+    std::lock_guard<std::mutex> lock(mutex_);
+    records_.emplace_back(level, message);
+  }
+
+  void flush() override {}
+
+  // Concatenated message text of every captured record (for substring checks).
+  std::string combined() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::string out;
+    for (const auto& r : records_) {
+      out += r.second;
+      out += '\n';
+    }
+    return out;
+  }
+
+  // Returns the captured level for records whose message contains `needle`, or
+  // -1 if none. Used to assert that a specific message was logged at a specific
+  // level (e.g. INFO not WARN).
+  int level_for(const std::string& needle) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& r : records_) {
+      if (r.second.find(needle) != std::string::npos) {
+        return r.first;
+      }
+    }
+    return -1;
+  }
+
+ private:
+  mutable std::mutex                       mutex_;
+  std::vector<std::pair<int, std::string>> records_;
+};
+
+// Fixture that installs a capturing sink for the duration of each test and
+// restores default (cout) logging in TearDown so sibling suites are unaffected
+// by the global Logger singleton.
+class CodeLoaderLogCaptureTest : public ::testing::Test {
+ protected:
+  void SetUp() override {
+    temp_dir_ = fs::temp_directory_path() /
+                ("agentflow_exe_loader_logtest_" + std::to_string(::getpid()));
+    fs::create_directories(temp_dir_);
+    auto sink    = std::make_unique<CapturingLogSink>();
+    sink_raw_    = sink.get();
+    // Logger is a process-wide singleton; redirect it to our capturing sink.
+    agentflow::Logger::instance().set_sink(std::move(sink));
+  }
+
+  void TearDown() override {
+    // Restore default logging (nullptr sink ⇒ Logger falls back to cout).
+    agentflow::Logger::instance().set_sink(nullptr);
+    fs::remove_all(temp_dir_);
+  }
+
+  fs::path write_script(const std::string& name, const std::string& body) {
+    fs::path path = temp_dir_ / name;
+    std::ofstream out(path);
+    out << "#!/bin/sh\n" << body;
+    out.close();
+    fs::permissions(path, fs::perms::owner_all, fs::perm_options::replace);
+    return path;
+  }
+
+  CapturingLogSink* sink_raw_ = nullptr;
+  fs::path          temp_dir_;
+};
+
+// T2.1 / I1 (execute_command layer): a node that emits a partial JSON object
+// and then hangs is killed at the timeout. The framework MUST report a clean
+// timeout failure and the residual stdout that survives the kill MUST be
+// captured in result.stdout (this is the signal MMNode relies on to skip
+// json_output parsing on the failure path — see node.cpp:584-595).
+TEST_F(CodeLoaderProcessTest, ExecuteCommandTimeout_DoesNotPolluteOutputsWithPartialJson) {
+  // Print an unterminated JSON object, then hang well past the timeout.
+  // `printf` is a shell builtin that writes directly to fd 1 (no userspace
+  // buffering), so the partial bytes reach the pipe before the kill.
+  const auto script = write_script(
+      "partial_json_hang.sh",
+      "printf '{\"partial_key\":\"partial_value\",\"unterminated\":'\n"
+      "sleep 300\n");
+  ExecutionConfig config;
+  config.timeout_ms = 500;
+
+  CodeLoader loader;
+  const auto result = loader.execute_shell_script(script.string(), {}, config);
+
+  // Invariant I1 (execute_command layer): killed mid-stream ⇒ clean failure.
+  ASSERT_FALSE(result.success) << "expected timeout failure";
+  EXPECT_EQ(result.error_message, "Command execution timeout");
+
+  // The residual partial JSON MUST be present in stdout — this proves we
+  // killed the process mid-write and that the bytes are still observable to
+  // callers (MMNode uses this to decide to skip json_output parsing).
+  EXPECT_NE(result.stdout.find("partial_key"), std::string::npos)
+      << "residual stdout should contain the half-written JSON marker; got: ["
+      << result.stdout << "]";
+}
+
+// T2.2 / I2: when execute_command kills a timed-out child via kill(-pgid,
+// SIGKILL), it MUST emit a [NODE_TIMEOUT] log marker (exe_loader.cpp:1290-1296)
+// so operators can trace timeout kills. Verified at runtime via the capturing
+// sink installed by CodeLoaderLogCaptureTest.
+TEST_F(CodeLoaderLogCaptureTest, ExecuteCommandTimeout_EmitsNodeTimeoutLog) {
+  const auto script = write_script(
+      "timeout_marker.sh",
+      "echo working\n"
+      "sleep 300\n");
+  ExecutionConfig config;
+  config.timeout_ms = 500;
+
+  CodeLoader loader;
+  const auto result = loader.execute_shell_script(script.string(), {}, config);
+
+  // Precondition: the command really did time out (otherwise there would be no
+  // [NODE_TIMEOUT] marker to emit).
+  ASSERT_FALSE(result.success);
+  ASSERT_EQ(result.error_message, "Command execution timeout");
+
+  ASSERT_NE(sink_raw_, nullptr);
+  const std::string logs = sink_raw_->combined();
+  EXPECT_NE(logs.find("[NODE_TIMEOUT]"), std::string::npos)
+      << "timeout kill must emit the [NODE_TIMEOUT] log marker; captured logs:\n"
+      << logs;
 }
 
 }  // namespace

@@ -63,7 +63,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 ssl._create_default_https_context = ssl._create_unverified_context
-ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+ENDPOINT = os.environ.get("OUTFIT_VISION_ENDPOINT") or "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 DEFAULT_MODEL = "qwen-vl-max"
 AISF_PREFIX = "aisf/"  # 模型名带此前缀走 UDS，否则走 DashScope HTTP
 
@@ -242,9 +242,10 @@ def main(argv=None):
             logger.warning("HTTP %d from DashScope: %.200s", exc.code, body)
             print(f"error: HTTP {exc.code} from DashScope: {body[:500]}", file=sys.stderr)
             return 1
-        except urllib.error.URLError as exc:
-            logger.warning("network error calling DashScope: %s", exc.reason)
-            print(f"error: network error calling DashScope: {exc.reason}", file=sys.stderr)
+        except (urllib.error.URLError, TimeoutError) as exc:
+            reason = getattr(exc, "reason", str(exc))
+            logger.warning("network error calling DashScope: %s", reason)
+            print(f"error: network error calling DashScope: {reason}", file=sys.stderr)
             return 1
         logger.info("DashScope OK in %.1fs", time.monotonic() - t0)
 

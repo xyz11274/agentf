@@ -47,7 +47,8 @@ aisf_adapter:
 # ── Artifact 公网地址 ─────────────────────────────────────────────
 # 空字符串 = 使用相对路径（仅内网可用）
 # 线上部署时填公网可访问的 URL，如 https://agent.example.com
-artifact_public_base_url: "https://115.120.249.45:40092/health"
+# artifact_public_base_url: "https://115.120.249.45:40092/health"
+artifact_public_base_url: "http://localhost:8199/health"
 
 # ── 文件路径 ──────────────────────────────────────────────────────
 # 相对路径基于项目根目录解析
@@ -57,7 +58,7 @@ agent_template_dir: "templates"
 
 # ── 日志与超时 ────────────────────────────────────────────────────
 log_level: "INFO"
-request_timeout_seconds: 5.0     # daemon RPC 超时
+request_timeout_seconds: 15.0    # daemon RPC 超时（临时调大，排查 agent.load 超时问题）
 upload_max_body_size_mb: 100     # 上传 body 上限（同步 main.py 的 max_request_body_size）
 
 # ── 会话持久化（Bridge session） ──────────────────────────────────

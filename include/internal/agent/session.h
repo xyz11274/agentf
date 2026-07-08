@@ -140,6 +140,9 @@ class MMAgentSession {
   const std::string& get_client_id() const { return active_client_id_; }
   bool               is_assigned() const { return !active_route_key_.empty(); }
   bool               is_available() const { return active_route_key_.empty(); }
+  // P0-1 方案 D：active_seq 每次 activate() 自增，reset_for_pool() 不重置。
+  // 用于 aging callback 校验：若归还后已被新用户复用（seq 变化），跳过清理避免误删新数据。
+  uint64_t           get_active_seq() const { return active_seq_.load(); }
   std::shared_ptr<SessionTaskCoordinator> get_task_coordinator() const { return task_coordinator_; }
   std::shared_ptr<SessionTaskCoordinator> get_task_dispatcher() const { return task_dispatcher_; }
 
@@ -251,6 +254,10 @@ class MMAgentSession {
   std::condition_variable dialogue_serialize_cv_;
   std::string             active_dialogue_id_;   // empty = slot free
   std::atomic<bool>       session_cancelled_{false};
+
+  // P0-1 方案 D：每次 activate() 自增，reset_for_pool() 不重置。
+  // aging callback 抓 seq 副本，若归还后已被复用（seq 变化）→ 跳过清理避免误删新用户数据。
+  std::atomic<uint64_t>   active_seq_{0};
 
   // Locks held across async workflow execution.  Keyed by dialogue_id.
   // The guard's destructor releases the serialize slot when erase()d.

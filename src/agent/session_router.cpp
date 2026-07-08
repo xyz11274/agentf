@@ -247,25 +247,27 @@ std::shared_ptr<MMAgentSession> SessionRouter::allocate_session_for_route(
 }
 
 void SessionRouter::release_expired_sessions() {
-  std::vector<std::pair<std::string, std::string>> expired;  // {route_key, session_id}
+  // 三元组：route_key, session_id, active_seq（抓 seq 副本在锁内，callback 在锁外用 seq 校验复用竞态）
+  std::vector<std::tuple<std::string, std::string, uint64_t>> expired;
   std::vector<SessionCleanupCallback> callbacks;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     for(const auto& kv : active_routes_) {
       if(kv.second && kv.second->is_timeout_expired()) {
-        expired.emplace_back(kv.first, kv.second->get_session_id());
+        expired.emplace_back(kv.first, kv.second->get_session_id(), kv.second->get_active_seq());
         callbacks.push_back(session_cleanup_callback_);
       }
     }
-    for(const auto& [route_key, session_id] : expired) {
+    for(const auto& [route_key, session_id, seq] : expired) {
       release_route_locked(route_key);
     }
   }
   // Run cleanup callbacks outside the lock to avoid deadlock with
   // MMAgent::clear_session_data which takes its own mutex.
+  // seq 校验：若归还后 session 已被新用户复用（activate 自增了 seq），callback 跳过清理。
   for(size_t i = 0; i < callbacks.size(); ++i) {
     if(callbacks[i]) {
-      callbacks[i](expired[i].second);
+      callbacks[i](std::get<1>(expired[i]), std::get<2>(expired[i]));
     }
   }
 }
