@@ -36,7 +36,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("mock_uds_server")
 
-DEFAULT_SOCKET = "/tmp/mock_agentflow.sock"
+DEFAULT_SOCKET = "/tmp/agentflow_plugin.sock"
 MAX_FRAME_SIZE = 10 * 1024 * 1024
 
 # ── 帧协议：4-byte BE 长度前缀 + JSON ─────────────────────────────

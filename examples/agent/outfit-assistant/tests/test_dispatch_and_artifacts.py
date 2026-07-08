@@ -2,7 +2,6 @@ import importlib.util
 import json
 from pathlib import Path
 
-
 ROOT = Path(__file__).parents[1]
 
 
@@ -309,7 +308,7 @@ def test_user_uploaded_image_is_not_collected_as_artifact(tmp_path, monkeypatch)
     text = (
         '{"messages":[{"content":"点评一下我的穿搭？ '
         f'用户上传了图片，路径: {upload} '
-        '需要查看图片内容时请使用 read_image 工具"}]}'
+        '"}]}'
     )
 
     result = executor.extract_artifact_paths(text)

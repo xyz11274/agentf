@@ -173,6 +173,17 @@ class LlmUdsClient(LlmClient):
         if not self._transport or not self._transport.connected:
             self._try_uds()
 
+        # ── Log raw request (before UDS check, so we can see it even on failure) ──
+        msg_count = len(messages)
+        msg_chars = sum(len(json.dumps(m, ensure_ascii=False)) for m in messages) if messages else 0
+        tool_count = len(tools) if tools else 0
+        logger.info(
+            "UDS_REQ model=%s max_tokens=%s msgs=%d msgs_chars=%d "
+            "tools=%d stream=%s",
+            self.model, max_completion_tokens,
+            msg_count, msg_chars, tool_count, stream,
+        )
+
         if not self._transport or not self._transport.connected:
             raise LlmUdsError(
                 f"UDS not available: {self.sock_path}"
@@ -264,7 +275,22 @@ class LlmUdsClient(LlmClient):
                     f"UDS response mismatch: expected request_id={req_id}, "
                     f"got {resp['request_id']}"
                 )
-            return self._build_from_complete(resp)
+            result = self._build_from_complete(resp)
+            # ── Log raw response ──
+            choice = (result.get("choices") or [{}])[0]
+            msg = choice.get("message", {}) or {}
+            content = msg.get("content", "") or ""
+            finish = choice.get("finish_reason", "?")
+            usage = result.get("usage") or {}
+            tc_count = len(msg.get("tool_calls") or [])
+            logger.info(
+                "UDS_RESP finish=%s content_len=%d tool_calls=%d "
+                "prompt_tokens=%s completion_tokens=%s",
+                finish, len(content), tc_count,
+                usage.get("prompt_tokens", "?"),
+                usage.get("completion_tokens", "?"),
+            )
+            return result
 
     def _receive_chat_events(
         self,
@@ -375,6 +401,19 @@ class LlmUdsClient(LlmClient):
                     finish_reason=finish_reason,
                     tool_calls_acc=tool_calls_acc,
                     usage=usage,
+                )
+                # ── Log streaming response ──
+                choice = (result.get("choices") or [{}])[0]
+                msg = choice.get("message", {}) or {}
+                content = msg.get("content", "") or ""
+                tc_count = len(msg.get("tool_calls") or [])
+                u = usage or {}
+                logger.info(
+                    "UDS_RESP_STREAM finish=%s content_len=%d tool_calls=%d "
+                    "prompt_tokens=%s completion_tokens=%s",
+                    finish_reason, len(content), tc_count,
+                    u.get("prompt_tokens", "?"),
+                    u.get("completion_tokens", "?"),
                 )
                 return result
 

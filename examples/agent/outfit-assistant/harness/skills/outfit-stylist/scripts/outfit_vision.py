@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import logging
 import mimetypes
 import os
 import ssl
@@ -154,6 +155,17 @@ def _extract_json(text: str):
 
 
 def main(argv=None):
+    # 配置 logging，让 _uds_client 等子模块的日志打到 stderr
+    # 以及独立文件 /tmp/uds_req.log（避免被 CODE_LOADER_DEBUG 截断）
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stderr),
+            logging.FileHandler("/tmp/uds_req.log", mode="a"),
+        ],
+        force=True,
+    )
     ap = argparse.ArgumentParser(prog="outfit_vision", description="structured outfit/person image analysis via Qwen-VL")
     ap.add_argument("--image", required=True, help="image file path or http(s) URL")
     ap.add_argument("--mode", choices=("garment", "person", "outfit"), default="garment")

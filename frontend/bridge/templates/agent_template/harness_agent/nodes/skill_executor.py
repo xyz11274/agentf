@@ -774,8 +774,8 @@ def execute():
                         generated_artifacts.append(artifact)
                 # Relocate artifacts written outside agent package into package outputs/
                 generated_artifacts = _ensure_artifacts_in_package(generated_artifacts)
-                # Log tool result (truncate to 300 chars)
-                result_preview = result[:300]
+                # Log tool result (truncate to 3000 chars)
+                result_preview = result[:3000]
                 print(f"[flow]   tool_result: {name} => {result_preview}", file=sys.stderr)
                 messages.append({
                     "role": "tool",

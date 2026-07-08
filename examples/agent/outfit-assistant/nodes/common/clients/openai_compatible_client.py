@@ -11,8 +11,8 @@ import json
 import logging
 import os
 import time
-import uuid
-from typing import Any, Callable, Optional
+from collections.abc import Callable
+from typing import Any
 
 import requests
 
@@ -61,7 +61,7 @@ class OpenAiCompatibleClient(LlmClient):
         tools: list[dict[str, Any]] | None = None,
         max_completion_tokens: int = 8192,
         stream: bool = False,
-        on_chunk: Optional[Callable[[str], None]] = None,
+        on_chunk: Callable[[str], None] | None = None,
     ) -> dict[str, Any]:
         """调用 OpenAI 兼容 API，返回 OpenAI 格式响应字典。
 
@@ -82,14 +82,29 @@ class OpenAiCompatibleClient(LlmClient):
             body["tool_choice"] = "auto"
         if stream:
             body["stream"] = True
+        else:
+            # DashScope（通义千问）要求非流式请求显式关闭 enable_thinking，
+            # 否则默认 true 时 API 会拒绝非流式调用。这个参数对其他 provider
+            # 无影响（会被静默忽略）。
+            body["enable_thinking"] = False
 
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
         }
 
-        seq = id(body)  # simple unique-ish id per call
-        call_id = uuid.uuid4().hex[:12]
+        # ── Log raw request key fields ──
+        # 打印请求摘要，方便定位 max_tokens / model / tools 等参数问题
+        msg_count = len(messages)
+        msg_chars = sum(len(json.dumps(m, ensure_ascii=False)) for m in messages) if messages else 0
+        tool_count = len(tools) if tools else 0
+        logger.info(
+            "LLM_REQ url=%s model=%s max_tokens=%s msgs=%d msgs_chars=%d "
+            "tools=%d stream=%s enable_thinking=%s",
+            self.base_url, self.model, max_completion_tokens,
+            msg_count, msg_chars, tool_count, stream,
+            body.get("enable_thinking", "N/A"),
+        )
 
         # ── Transport-layer retry ──
         # 流式模式也允许重试，但仅限于「还未收到任何 SSE chunk」的连接阶段错误。
@@ -174,10 +189,7 @@ class OpenAiCompatibleClient(LlmClient):
                     fr = choices[0].get("finish_reason")
                     if fr:
                         finish_reason = fr
-                    if "usage" in chunk and chunk["usage"]:
-                        usage = chunk["usage"]
-                    else:
-                        usage = None
+                    usage = chunk["usage"] if "usage" in chunk and chunk["usage"] else None
 
                 full_text = "".join(accumulated)
                 if usage is None:
