@@ -145,7 +145,7 @@ fi
 
 # ── Resolve binary ──────────────────────────────────────────────────
 case "$PROFILE" in
-    dev) BUILD_DIR="$AR_PROJECT_ROOT/build/dev" ;;
+    dev) BUILD_DIR="$AR_PROJECT_ROOT/build/" ;;
     release) BUILD_DIR="$AR_PROJECT_ROOT/build" ;;
     production) BUILD_DIR="$AR_PROJECT_ROOT/build/production" ;;
     *) echo "[ERROR] Invalid profile: $PROFILE" >&2; exit 2 ;;
