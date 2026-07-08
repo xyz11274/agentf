@@ -16,19 +16,8 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/message_routing/test_message_routing.cpp"
     add_dependencies(e2e_tests test_e2e_message_routing)
 endif()
 
-# Workflow Execution Scenario - Basic Agent E2E
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/workflow_execution/test_basic_agent_e2e.cpp")
-    add_executable(test_e2e_basic_agent
-        workflow_execution/test_basic_agent_e2e.cpp
-    )
-    target_link_libraries(test_e2e_basic_agent
-        agentflow
-        GTest::gtest
-        GTest::gtest_main
-    )
-    add_test(NAME E2EBasicAgent COMMAND test_e2e_basic_agent)
-    add_dependencies(e2e_tests test_e2e_basic_agent)
-endif()
+# Workflow Execution Scenario — REMOVED: test_basic_agent_e2e.cpp and test_nested_workflow_e2e.cpp
+# were deleted along with their test data (basic_agent, nested_workflow_agent) in commit 61fb5cb.
 
 # Session Isolation Scenario
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/session_isolation/test_session_isolation.cpp")
@@ -58,19 +47,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/data_sharing/test_data_sharing.cpp")
     add_dependencies(e2e_tests test_e2e_data_sharing)
 endif()
 
-# Nested Workflow Scenario
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/workflow_execution/test_nested_workflow_e2e.cpp")
-    add_executable(test_e2e_nested_workflow
-        workflow_execution/test_nested_workflow_e2e.cpp
-    )
-    target_link_libraries(test_e2e_nested_workflow
-        agentflow
-        GTest::gtest
-        GTest::gtest_main
-    )
-    add_test(NAME E2ENestedWorkflow COMMAND test_e2e_nested_workflow)
-    add_dependencies(e2e_tests test_e2e_nested_workflow)
-endif()
+# Nested Workflow Scenario — REMOVED: test data (nested_workflow_agent) deleted in commit 61fb5cb.
 
 # Interactive Runner black-box smoke test
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/blackbox/test_blackbox_interactive_runner.sh")

@@ -24,6 +24,8 @@
 #include "utils/logger.h"
 #include "framework_com/http_2_client.h"
 
+#include <cstdint>
+
 using namespace SYSAGENT;
 using namespace AisfPlat;
 
@@ -36,6 +38,7 @@ constexpr char MODEL_INFER_PORT[] = ":27321";
 constexpr char MODEL_OPENAI_URL[] = "/infermind/llm/v1/chat/openai/completions";
 constexpr char SSE_DATA_PREFIX[] = "data:";
 constexpr char SSE_DONE_FLAG[] = "[DONE]";
+constexpr char REQUEST_ID_HEADER[] = "requestId";
 
 // ==================== GetOpenAIUrl ====================
 
@@ -45,6 +48,13 @@ std::string IMInferServiceClient::GetOpenAIUrl()
     std::string url = "https://" + service_ip + MODEL_INFER_PORT + MODEL_OPENAI_URL;
     LOG_INFO_EX("[IMInferClient] GetOpenAIUrl: service_ip=%s, url=%s", service_ip.c_str(), url.c_str());
     return url;
+}
+
+// ==================== NextRequestId ====================
+
+int64_t IMInferServiceClient::NextRequestId()
+{
+    return request_id_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
 // ==================== ParseOpenAIChunk ====================
@@ -180,17 +190,25 @@ bool IMInferServiceClient::ForwardOpenAIStream(
 {
     LOG_INFO_EX("[IMInferClient] ForwardOpenAIStream ENTER: body_len=%zu", request_body_json.size());
 
+    const int64_t request_id = NextRequestId();
+    LOG_INFO_EX("[IMInferClient] ForwardOpenAIStream: requestId=%lld", static_cast<long long>(request_id));
+    LOG_INFO_EX("[IMInferClient] ForwardOpenAIStream REQ body: %s", request_body_json.c_str());
+
     auto request = std::make_shared<CMFrm::COM::Http2ClientRequest>();
     request->SetMethod(CMFrm::COM::POST);
     request->SetReqUrl(GetOpenAIUrl());
     request->AddBody(request_body_json);
     request->AddJSONContentTypeHeader();
+    request->AddHeader(REQUEST_ID_HEADER, std::to_string(request_id));
     request->SetTimeoutSecond(6000);
 
     bool sendOk = HttpClient::Http2SendStreamRequest(request,
         [this, on_event](std::shared_ptr<CMFrm::COM::Http2ClientResponse> resp, void*) {
             std::string body = resp->GetStreamResponseBody();
             bool is_last = resp->IsLastStreamData();
+
+            LOG_INFO_EX("[IMInferClient] ForwardOpenAIStream RESP chunk: body=%s, is_last=%d",
+                body.c_str(), static_cast<int>(is_last));
 
             OpenAIChunkResult result;
             if (ParseOpenAIChunk(body, result)) {
@@ -228,11 +246,16 @@ OpenAIChunkResult IMInferServiceClient::ForwardOpenAIComplete(
     LOG_INFO_EX("[IMInferClient] ForwardOpenAIComplete ENTER: body_len=%zu, timeout=%ds",
         request_body_json.size(), timeout_seconds);
 
+    const int64_t request_id = NextRequestId();
+    LOG_INFO_EX("[IMInferClient] ForwardOpenAIComplete: requestId=%lld", static_cast<long long>(request_id));
+    LOG_INFO_EX("[IMInferClient] ForwardOpenAIComplete REQ body: %s", request_body_json.c_str());
+
     auto request = std::make_shared<CMFrm::COM::Http2ClientRequest>();
     request->SetMethod(CMFrm::COM::POST);
     request->SetReqUrl(GetOpenAIUrl());
     request->AddBody(request_body_json);
     request->AddJSONContentTypeHeader();
+    request->AddHeader(REQUEST_ID_HEADER, std::to_string(request_id));
     request->SetTimeoutSecond(timeout_seconds);
 
     std::string response;
@@ -243,6 +266,8 @@ OpenAIChunkResult IMInferServiceClient::ForwardOpenAIComplete(
         err.error_message = "HTTP request failed";
         return err;
     }
+
+    LOG_INFO_EX("[IMInferClient] ForwardOpenAIComplete RESP raw: %s", response.c_str());
 
     // 解析完整 SSE 响应，取最后一个非空结果（含 usage）
     OpenAIChunkResult merged;

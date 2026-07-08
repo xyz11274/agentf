@@ -3,7 +3,7 @@
 # 端到端本地调试启动脚本
 # ═══════════════════════════════════════════════════════════════════════
 #
-# 启动完整的调试链路：
+# 启动完整的调试链路（委托各独立组件脚本）：
 #   Frontend (Vite:15173)
 #     → Bridge (uvicorn:8199)
 #       → AgentFlow Daemon (agentflowd:17891)
@@ -12,10 +12,6 @@
 #             → Mock UDS Server (Python UDS)     ← 模拟 UDSPluginServer
 #               → [mock 模式] 回显/固定文本/模板
 #               → [proxy 模式] FusionMind Mock (:8085) → 真实 LLM
-#
-# FusionMind Mock Server (:8085) 始终启动，支持两种子模式：
-#   - mock 模式：返回预设响应（echo/fixed/template/tool_calls）
-#   - proxy 模式：透传到真实 LLM（需配置 --upstream-url / --api-key）
 #
 # 用法：
 #   bash ar_scripts/start_e2e.sh                                    # 默认 mock 模式
@@ -27,7 +23,7 @@
 #   bash ar_scripts/start_e2e.sh --no-frontend                       # 无前端
 #   bash ar_scripts/start_e2e.sh --no-mock-uds                       # 无 mock UDS
 #
-# 停止：Ctrl+C 自动清理所有进程
+# 停止：Ctrl+C 自动清理所有组件（委托各组件脚本的 stop 命令）
 # ═══════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -72,10 +68,8 @@ AGENTFLOWD_BIN=""
 LOG_DIR="$PROJECT_ROOT/logs"
 mkdir -p "$LOG_DIR"
 
-# PID 文件
+# PID 文件（用于各独立脚本之间共享 PID）
 PID_DIR="/tmp"
-FMM_PID_FILE="$PID_DIR/fusionmind_mock.pid"
-MOCK_UDS_PID_FILE="$PID_DIR/mock_uds_server.pid"
 
 # ── 解析参数 ──────────────────────────────────────────────────────────
 
@@ -155,43 +149,48 @@ ar_load_env
 
 # ── 帮助函数 ──────────────────────────────────────────────────────────
 
-_pids=()  # 跟踪启动的进程，按启动顺序
+_components=()   # 已启动的组件名（启动顺序），用于逆序停止
 
 _cleanup() {
     echo ""
     echo "🛑 正在停止所有组件（逆序）..."
 
-    # 逆序停止
-    for ((i = ${#_pids[@]} - 1; i >= 0; i--)); do
-        local pid="${_pids[i]}"
-        local name="${_names[i]}"
-        if kill -0 "$pid" 2>/dev/null; then
-            echo "  ⏹  停止 $name (PID=$pid)..."
-            kill "$pid" 2>/dev/null || true
-            # 等 3 秒，不行就强杀
-            for _ in $(seq 1 6); do
-                if ! kill -0 "$pid" 2>/dev/null; then
-                    break
-                fi
-                sleep 0.5
-            done
-            if kill -0 "$pid" 2>/dev/null; then
-                kill -9 "$pid" 2>/dev/null || true
-                echo "  💀 强杀 $name (PID=$pid)"
-            else
-                echo "  ✅ $name 已停止"
-            fi
-        fi
+    for ((i = ${#_components[@]} - 1; i >= 0; i--)); do
+        local name="${_components[i]}"
+        case "$name" in
+            fusionmind_mock)
+                echo "  ⏹  停止 FusionMind Mock..."
+                bash "$SCRIPT_DIR/start_fusionmind_mock.sh" stop 2>/dev/null || true ;;
+            mock_uds_server)
+                local pid
+                pid=$(cat "$PID_DIR/mock_uds_server.pid" 2>/dev/null || true)
+                if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                    echo "  ⏹  停止 Mock UDS Server (PID=$pid)..."
+                    kill "$pid" 2>/dev/null || true
+                    sleep 0.5
+                    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+                    echo "  ✅ Mock UDS Server 已停止"
+                fi ;;
+            agentflowd)
+                echo "  ⏹  停止 agentflowd..."
+                bash "$SCRIPT_DIR/start_daemon.sh" stop 2>/dev/null || true ;;
+            bridge)
+                echo "  ⏹  停止 Bridge..."
+                bash "$SCRIPT_DIR/start_bridge.sh" stop 2>/dev/null || true ;;
+            frontend)
+                local pid
+                pid=$(pgrep -f "vite.*$FRONTEND_PORT" 2>/dev/null || true)
+                if [ -n "$pid" ]; then
+                    echo "  ⏹  停止前端 (PID=$pid)..."
+                    kill "$pid" 2>/dev/null || true
+                    sleep 0.5
+                    kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
+                    echo "  ✅ 前端已停止"
+                fi ;;
+        esac
     done
 
     echo "✅ 所有组件已停止"
-}
-
-_register_pid() {
-    local pid="$1"
-    local name="$2"
-    _pids+=("$pid")
-    _names+=("$name")
 }
 
 _wait_for_port() {
@@ -221,18 +220,10 @@ trap 'echo ""; echo "收到中断信号..."; exit 0' INT TERM
 # ═══════════════════════════════════════════════════════════════════════
 
 if $RUN_FMM; then
-    FMM_SCRIPT="$PROJECT_ROOT/frontend/mocks/mocks_fusionmind/server.py"
-    if [ ! -f "$FMM_SCRIPT" ]; then
-        echo "[ERROR] FusionMind Mock 脚本不存在: $FMM_SCRIPT" >&2
-        exit 1
-    fi
-
-    FMM_ARGS=("--port" "$FMM_PORT" "--log-level" "info")
+    FMM_ARGS=("start" "--port" "$FMM_PORT")
 
     if [ "$FMM_MODE" = "proxy" ]; then
-        # Proxy 模式：透传到真实 LLM（默认 DashScope）
-        # DashScope OpenAI 兼容端点：https://dashscope.aliyuncs.com/compatible-mode/v1
-        # 支持模型：qwen-plus、qwen-turbo、qwen-max 等
+        # Proxy 模式：先解析上游地址和 API Key
         FMM_UPSTREAM="${FMM_UPSTREAM:-${AF_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}}"
         FMM_API_KEY="${FMM_API_KEY:-${AF_LLM_API_KEY:-${DASHSCOPE_API_KEY:-}}}"
         if [ -z "$FMM_API_KEY" ]; then
@@ -245,22 +236,14 @@ if $RUN_FMM; then
         FMM_ARGS+=(--proxy --upstream-url "$FMM_UPSTREAM" --api-key "$FMM_API_KEY")
         echo "🔌 FusionMind Mock → PROXY → $FMM_UPSTREAM"
     else
-        # Mock 模式
         FMM_ARGS+=(--mode "$FMM_MODE" --model "$FMM_MODEL")
         FMM_ARGS+=(--token-delay "$FMM_TOKEN_DELAY" --error-rate "$FMM_ERROR_RATE")
-        if [ -n "$FMM_RESPONSE" ]; then
-            FMM_ARGS+=(--response "$FMM_RESPONSE")
-        fi
+        [ -n "$FMM_RESPONSE" ] && FMM_ARGS+=(--response "$FMM_RESPONSE")
         echo "🧪 FusionMind Mock → MOCK 模式 ($FMM_MODE)"
     fi
 
-    echo "🚀 启动 FusionMind Mock Server (端口 $FMM_PORT)..."
-    nohup python3 "$FMM_SCRIPT" "${FMM_ARGS[@]}" \
-        >> "$LOG_DIR/fusionmind_mock.log" 2>&1 &
-    FMM_PID=$!
-    echo "$FMM_PID" > "$FMM_PID_FILE"
-    _register_pid "$FMM_PID" "fusionmind_mock"
-    echo "   PID: $FMM_PID | 日志: $LOG_DIR/fusionmind_mock.log"
+    bash "$SCRIPT_DIR/start_fusionmind_mock.sh" "${FMM_ARGS[@]}"
+    _components+=("fusionmind_mock")
     _wait_for_port "$FMM_PORT" "FusionMind Mock" 10
 fi
 
@@ -269,27 +252,17 @@ fi
 # ═══════════════════════════════════════════════════════════════════════
 
 if $RUN_MOCK_UDS; then
-    MOCK_UDS_SCRIPT="$PROJECT_ROOT/frontend/mocks/mock_uds_model_server/mock_uds_server.py"
-    if [ ! -f "$MOCK_UDS_SCRIPT" ]; then
-        echo "[ERROR] Mock UDS Server 脚本不存在: $MOCK_UDS_SCRIPT" >&2
-        exit 1
-    fi
-
     # 清理旧 socket
     if [ -e "$MOCK_UDS_SOCKET" ]; then
         rm -f "$MOCK_UDS_SOCKET"
     fi
 
     echo "🚀 启动 Mock UDS Server (socket=$MOCK_UDS_SOCKET)..."
-    nohup python3 "$MOCK_UDS_SCRIPT" \
+    bash "$SCRIPT_DIR/start_mock_uds_server.sh" \
         --socket "$MOCK_UDS_SOCKET" \
         --mode echo \
-        --token-delay "$FMM_TOKEN_DELAY" \
-        >> "$LOG_DIR/mock_uds_server.log" 2>&1 &
-    MOCK_UDS_PID=$!
-    echo "$MOCK_UDS_PID" > "$MOCK_UDS_PID_FILE"
-    _register_pid "$MOCK_UDS_PID" "mock_uds_server"
-    echo "   PID: $MOCK_UDS_PID | 日志: $LOG_DIR/mock_uds_server.log"
+        --token-delay "$FMM_TOKEN_DELAY"
+    _components+=("mock_uds_server")
 
     # 等 socket 就绪
     for i in $(seq 1 10); do
@@ -329,39 +302,17 @@ echo ""
 # ═══════════════════════════════════════════════════════════════════════
 
 if $RUN_DAEMON; then
-    if [ -n "$AGENTFLOWD_BIN" ]; then
-        DAEMON_BIN="$AGENTFLOWD_BIN"
-    else
-        # 从默认 build 目录查找
-        for dir in "$PROJECT_ROOT/build/dev" "$PROJECT_ROOT/build"; do
-            if [ -x "$dir/agentflowd" ]; then
-                DAEMON_BIN="$dir/agentflowd"
-                break
-            fi
-        done
-    fi
+    DAEMON_ARGS=("start" "--port" "$DAEMON_PORT" "--package" "$AGENT_PACKAGE")
 
-    if [ -z "${DAEMON_BIN:-}" ] || [ ! -x "${DAEMON_BIN:-}" ]; then
-        echo "[WARN] agentflowd 未找到，尝试编译..."
-        echo "   Running: bash $SCRIPT_DIR/build.sh dev agentflowd"
-        bash "$SCRIPT_DIR/build.sh" dev agentflowd 2>&1 | tail -5
-        DAEMON_BIN="$PROJECT_ROOT/build/dev/agentflowd"
-        if [ ! -x "$DAEMON_BIN" ]; then
-            echo "[ERROR] agentflowd 编译失败或不存在" >&2
-            echo "  手动编译: bash $SCRIPT_DIR/build.sh dev agentflowd" >&2
-            exit 1
-        fi
+    if [ -n "$AGENTFLOWD_BIN" ]; then
+        # 如果用户指定了二进制路径，传给 start_daemon.sh 会用它
+        # start_daemon.sh 自己会做路径解析
+        echo "🔧 使用指定 agentflowd: $AGENTFLOWD_BIN"
     fi
 
     echo "🚀 启动 AgentFlow Daemon (port $DAEMON_PORT)..."
-    nohup "$DAEMON_BIN" \
-        --package "$AGENT_PACKAGE" \
-        --listen "127.0.0.1:$DAEMON_PORT" \
-        >> "$LOG_DIR/agentflowd.log" 2>&1 &
-    DAEMON_PID=$!
-    echo "$DAEMON_PID" > /tmp/agentflowd.pid
-    _register_pid "$DAEMON_PID" "agentflowd"
-    echo "   PID: $DAEMON_PID | 日志: $LOG_DIR/agentflowd.log"
+    bash "$SCRIPT_DIR/start_daemon.sh" "${DAEMON_ARGS[@]}"
+    _components+=("agentflowd")
     sleep 2
 fi
 
@@ -372,12 +323,7 @@ fi
 if $RUN_BRIDGE; then
     echo "🚀 启动 Bridge (port $BRIDGE_PORT)..."
     bash "$SCRIPT_DIR/start_bridge.sh" start --port "$BRIDGE_PORT" --log-level info --no-reload
-    # 从中获取 PID
-    sleep 2
-    BRIDGE_PID=$(pgrep -f "uvicorn.*main:app.*frontend/bridge" 2>/dev/null || true)
-    if [ -n "$BRIDGE_PID" ]; then
-        _register_pid "$BRIDGE_PID" "bridge"
-    fi
+    _components+=("bridge")
     _wait_for_port "$BRIDGE_PORT" "Bridge" 15
 fi
 
@@ -390,9 +336,8 @@ if $RUN_FRONTEND; then
         echo "🚀 启动前端 (port $FRONTEND_PORT)..."
         nohup bash "$SCRIPT_DIR/start_web.sh" "$FRONTEND_PORT" \
             >> "$LOG_DIR/frontend.log" 2>&1 &
-        FRONTEND_PID=$!
-        _register_pid "$FRONTEND_PID" "frontend"
-        echo "   PID: $FRONTEND_PID | 日志: $LOG_DIR/frontend.log"
+        echo "   PID: $! | 日志: $LOG_DIR/frontend.log"
+        _components+=("frontend")
     else
         echo "[WARN] frontend/web 目录不存在，跳过前端"
     fi

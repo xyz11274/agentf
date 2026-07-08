@@ -252,12 +252,24 @@ class LlmUdsClient(LlmClient):
             "UDS -> llm.chat stream=%s body_keys=%s",
             is_stream, list(request_body.keys()),
         )
+
+        logger.info(
+            "→ UDS llm.chat REQ raw  %s",
+            json.dumps(chat_payload, ensure_ascii=False),
+        )
+
         t.send_json(chat_payload)
 
         if is_stream:
             return self._receive_chat_events(t, req_id, on_chunk)
         else:
             resp = t.recv_json()
+
+            logger.info(
+                "← UDS llm.chat RESP raw (non-stream)  %s",
+                json.dumps(resp, ensure_ascii=False),
+            )
+
             # 校验 request_id 配对（防并发串线）
             if resp.get("request_id") and resp["request_id"] != req_id:
                 raise LlmUdsError(
@@ -289,6 +301,11 @@ class LlmUdsClient(LlmClient):
 
         while True:
             event = t.recv_json()
+
+            logger.info(
+                "← UDS llm.chat RESP raw event  %s",
+                json.dumps(event, ensure_ascii=False),
+            )
 
             # 校验 request_id 配对：不匹配则跳过（并发安全，防串线）
             if event.get("request_id") and event["request_id"] != req_id:
@@ -376,6 +393,11 @@ class LlmUdsClient(LlmClient):
                     tool_calls_acc=tool_calls_acc,
                     usage=usage,
                 )
+                # 响应日志（完整响应体 JSON）
+                logger.info(
+                    "← LLM response  %s",
+                    json.dumps(result, ensure_ascii=False),
+                )
                 return result
 
             elif event_type == "llm_error":
@@ -414,6 +436,12 @@ class LlmUdsClient(LlmClient):
         }
         if usage:
             result["usage"] = usage
+
+        # 响应日志（完整响应体 JSON）
+        logger.info(
+            "← LLM response (non-stream)  %s",
+            json.dumps(result, ensure_ascii=False),
+        )
         return result
 
     @staticmethod

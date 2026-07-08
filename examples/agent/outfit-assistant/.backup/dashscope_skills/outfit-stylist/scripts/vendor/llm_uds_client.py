@@ -194,6 +194,12 @@ class LlmUdsClient(LlmClient):
             request_body["tools"] = tools
             request_body["tool_choice"] = "auto"
 
+        # 请求日志（完整原始请求体 JSON）
+        logger.info(
+            "→ LLM request  %s",
+            json.dumps(request_body, ensure_ascii=False),
+        )
+
         if stream:
             request_body["stream"] = True
             return self._chat(request_body, on_chunk=on_chunk)
@@ -376,6 +382,11 @@ class LlmUdsClient(LlmClient):
                     tool_calls_acc=tool_calls_acc,
                     usage=usage,
                 )
+                # 响应日志（完整响应体 JSON）
+                logger.info(
+                    "← LLM response  %s",
+                    json.dumps(result, ensure_ascii=False),
+                )
                 return result
 
             elif event_type == "llm_error":
@@ -414,6 +425,12 @@ class LlmUdsClient(LlmClient):
         }
         if usage:
             result["usage"] = usage
+
+        # 响应日志（完整响应体 JSON）
+        logger.info(
+            "← LLM response (non-stream)  %s",
+            json.dumps(result, ensure_ascii=False),
+        )
         return result
 
     @staticmethod

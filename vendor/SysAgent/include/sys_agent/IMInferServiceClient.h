@@ -16,9 +16,10 @@
 
 #include <string>
 #include <memory>
+#include <mutex>
 #include <functional>
 #include <atomic>
-#include <mutex>
+#include <cstdint>
 #include "framework_com/http_2_client.h"
 
 namespace SysAgent {
@@ -120,6 +121,16 @@ private:
     std::string GetOpenAIUrl();
 
     /**
+     * 生成下一个 requestId（整数，原子递增，进程内不重复）。
+     * 
+     * 用于转发到 FusionMind 的 HTTP header `requestId`，
+     * FusionMind 侧要求该值在请求之间不能重复。
+     * 
+     * 注意：fetch_add 保证 ID 唯一但不保证接收端单调。
+     */
+    int64_t NextRequestId();
+
+    /**
      * 解析 OpenAI 格式的单个 SSE chunk。
      * 
      * 支持两种响应结构：
@@ -138,6 +149,9 @@ private:
     // 单例相关静态成员
     static std::shared_ptr<IMInferServiceClient> instance_;
     static std::once_flag once_flag_;
+
+    // requestId 不重复计数器（fetch_add 保证唯一，不保证接收端单调；线程安全）
+    std::atomic<int64_t> request_id_counter_{0};
 };
 
 } // namespace SysAgent

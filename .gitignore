@@ -108,4 +108,11 @@ venv
 **/outfit_assistant/.backup
 **/outfit_assistant/**/outfit-stylist/output/*
 **/outfit_assistant/assets/*
+examples/agent/outfit-assistant/assets
+examples/agent/outfit-assistant/workspace/assets
+frontend/bridge/templates/agent_template/harness_agent/workspace/assets
+examples/agent/outfit-assistant/outputs
+
+examples/agent/outfit-assistant/harness/assets
+examples/agent/outfit-assistant/workspace/upload
 # **/.env

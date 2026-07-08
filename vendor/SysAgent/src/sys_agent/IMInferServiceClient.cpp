@@ -12,7 +12,6 @@
 
 #include "sys_agent/IMInferServiceClient.h"
 
-using namespace SYSAGENT;
 
 namespace SysAgent {
 
