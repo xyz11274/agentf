@@ -329,26 +329,54 @@ def extract_artifact_paths(text: str) -> list[str]:
     )
     candidates = re.findall(pattern, text, flags=re.IGNORECASE)
     seen: list[str] = []
+    skipped_upload: list[str] = []          # I-6 boundary audit trail
+    skipped_missing: list[str] = []
     for item in candidates:
         if item.startswith(("http://", "https://")):
             # External URL — no upload-dir guard applies, but still skip
             # obvious upload endpoint paths (defensive; not the main path).
             if "/upload/" in item or "/uploads/" in item:
+                skipped_upload.append(item)
                 continue
             seen.append(item)
         elif item.startswith("/"):
             # Absolute path — reject if it lives under an upload input directory
             if _is_user_upload_input(item):
+                skipped_upload.append(item)
                 continue
             if os.path.isfile(item):
                 seen.append(item)
+            else:
+                skipped_missing.append(item)
         else:
             # Relative path — resolve against AGENT_PACKAGE_DIR
             abs_path = os.path.normpath(os.path.join(AGENT_PACKAGE_DIR, item))
             if _is_user_upload_input(abs_path):
+                skipped_upload.append(abs_path)
                 continue
             if os.path.isfile(abs_path):
                 seen.append(abs_path)
+            else:
+                skipped_missing.append(abs_path)
+    # I-6 audit log: 守护点证据。完整清单落 stderr，不截断（F7）。
+    print(
+        f"[flow] artifact.collect candidates={len(candidates)} "
+        f"admitted={len(seen)} skipped_upload={len(skipped_upload)} "
+        f"skipped_missing={len(skipped_missing)}",
+        file=sys.stderr,
+    )
+    if skipped_upload:
+        print(
+            "[flow] artifact.skipped_upload (I-6 input boundary) "
+            + json.dumps(skipped_upload, ensure_ascii=False),
+            file=sys.stderr,
+        )
+    if skipped_missing:
+        print(
+            "[flow] artifact.skipped_missing (file not on disk) "
+            + json.dumps(skipped_missing, ensure_ascii=False),
+            file=sys.stderr,
+        )
     return list(dict.fromkeys(seen))
 
 
@@ -380,12 +408,15 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
       - Path resolution mismatches between daemon and Bridge processes
     """
     result = []
+    skipped_missing: list[str] = []
+    skipped_copy_err: list[str] = []
     pkg_root = Path(AGENT_PACKAGE_DIR).resolve()
     outputs_dir = pkg_root / "outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
     for path in artifacts:
         p = Path(path).resolve()
         if not p.is_file():
+            skipped_missing.append(path)
             continue  # skip non-existent files rather than returning dead URLs
         try:
             p.relative_to(pkg_root)
@@ -412,9 +443,26 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
         if not dest.exists():
             try:
                 dest.write_bytes(p.read_bytes())
-            except OSError:
+            except OSError as exc:
+                skipped_copy_err.append(f"{path} -> {dest}: {exc}")
                 continue  # skip files that can't be copied
         result.append(str(dest))
+    # 完整审计日志（F7：不截断）。数量摘要 + 跳过清单分两行，便于 grep。
+    print(
+        f"[flow] artifact relocate input={len(artifacts)} relocated={len(result)} "
+        f"skipped_missing={len(skipped_missing)} copy_err={len(skipped_copy_err)}",
+        file=sys.stderr,
+    )
+    if skipped_missing:
+        print(
+            "[flow] artifact.relocate_missing " + json.dumps(skipped_missing, ensure_ascii=False),
+            file=sys.stderr,
+        )
+    if skipped_copy_err:
+        print(
+            "[flow] artifact.relocate_copy_err " + json.dumps(skipped_copy_err, ensure_ascii=False),
+            file=sys.stderr,
+        )
     return result
 
 
@@ -778,14 +826,28 @@ def execute():
                 args_preview = json.dumps(args, ensure_ascii=False)[:200]
                 print(f"[flow]   tool_call: {name} args={args_preview}", file=sys.stderr)
                 result = tool_registry.execute(name, args)
-                for artifact in extract_artifact_paths(result):
+                # Audit: artifacts collected from this tool result (完整清单，F7)
+                tool_artifacts = extract_artifact_paths(result)
+                new_count = 0
+                for artifact in tool_artifacts:
                     if artifact not in generated_artifacts:
                         generated_artifacts.append(artifact)
+                        new_count += 1
                 # Relocate artifacts written outside agent package into package outputs/
                 generated_artifacts = _ensure_artifacts_in_package(generated_artifacts)
-                # Log tool result (truncate to 3000 chars)
-                result_preview = result[:3000]
-                print(f"[flow]   tool_result: {name} => {result_preview}", file=sys.stderr)
+                # ── F7: 不截断存储层。完整 tool_result 落 stderr ──
+                # 通用路径必须默认完整（F7）；此处是 daemon 捕获 stderr 的主路径，
+                # 完整内容应同时落独立文件兜底（F7.1），但 stderr 链路本身不截断。
+                print(
+                    f"[flow]   tool_result: {name} => {result}",
+                    file=sys.stderr,
+                )
+                if tool_artifacts:
+                    print(
+                        f"[flow]   artifact.from_tool {name} collected={len(tool_artifacts)} "
+                        f"new={new_count} paths=" + json.dumps(tool_artifacts, ensure_ascii=False),
+                        file=sys.stderr,
+                    )
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.get("id", name),

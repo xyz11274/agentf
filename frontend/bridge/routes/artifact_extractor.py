@@ -15,12 +15,15 @@ This is consumed by both ``routes/chat.py`` (WebSocket) and
 from __future__ import annotations
 
 import json
+import logging
 import mimetypes
 import re
 from pathlib import Path
 
 from config import settings
 from models import ArtifactInfo
+
+logger = logging.getLogger("agentflow.bridge.routes.artifact_extractor")
 
 
 # Patterns match any Markdown link/image whose URL points at the artifact API.
@@ -111,6 +114,16 @@ def extract_artifact_infos(content: str) -> list[ArtifactInfo]:
                 mime_type=_infer_mime_type(url, art_type),
             ))
 
+    # 审计日志：产物提取结果。完整 url 清单落 logger（F7：不截断存储层）。
+    # SSE 流每轮 final chunk 会调用一次；同步模式只调一次；持久化路径另见 serialize_artifacts。
+    if artifacts:
+        logger.info(
+            "artifact.extract count=%d urls=%s",
+            len(artifacts),
+            [a.url for a in artifacts],
+        )
+    else:
+        logger.debug("artifact.extract count=0 (no artifact patterns matched)")
     return artifacts
 
 
@@ -122,8 +135,18 @@ def serialize_artifacts(content: str) -> str:
     """
     artifacts = extract_artifact_infos(content)
     if not artifacts:
+        logger.info("artifact.persist count=0 (nothing to serialize)")
         return "[]"
-    return json.dumps([a.model_dump() for a in artifacts], ensure_ascii=False)
+    serialized = json.dumps([a.model_dump() for a in artifacts], ensure_ascii=False)
+    # 审计日志：产物清单即将落盘到 dialogue_rounds.artifacts TEXT 列。
+    # 完整清单落 logger（F7），事后可凭此回溯"持久化前产物语义现场"。
+    logger.info(
+        "artifact.persist count=%d json_len=%d urls=%s",
+        len(artifacts),
+        len(serialized),
+        [a.url for a in artifacts],
+    )
+    return serialized
 
 
 def publicize_artifact_urls(content: str) -> str:

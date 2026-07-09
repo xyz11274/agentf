@@ -253,6 +253,21 @@ def _dedup_versioned_artifacts(paths: list[str]) -> list[str]:
     return [path for _, path in best.values()]
 
 
+def _existing_artifact_url(path: str) -> str | None:
+    """Resolve a path to a servable URL, returning None if the file is missing.
+
+    HTTP(S) URLs pass through unchanged (remote files cannot be verified
+    locally). Local paths are confirmed to exist on disk before being mapped
+    to a Bridge URL, so we never emit a link to a non-existent artifact.
+    """
+    if path.startswith(("http://", "https://")):
+        return path
+    if not os.path.isfile(path):
+        print(f"[flow] WARN: artifact not found on disk, skip URL: {path}", file=sys.stderr)
+        return None
+    return local_artifact_url(path)
+
+
 def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
     """Append browser-accessible Markdown for generated artifacts (images, HTML, downloads)."""
     try:
@@ -279,18 +294,18 @@ def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
     blocks = []
     if images:
         for index, path in enumerate(images, 1):
-            url = path if path.startswith(("http://", "https://")) else local_artifact_url(path)
-            if url not in content:
+            url = _existing_artifact_url(path)
+            if url and url not in content:
                 blocks.append(ARTIFACT_IMAGE_TEMPLATE.format(index=index, url=url))
     if html_reports:
         for index, path in enumerate(html_reports, 1):
-            url = path if path.startswith(("http://", "https://")) else local_artifact_url(path)
-            if url not in content:
+            url = _existing_artifact_url(path)
+            if url and url not in content:
                 blocks.append(ARTIFACT_HTML_TEMPLATE.format(index=index, url=url))
     if downloads:
         for index, path in enumerate(downloads, 1):
-            url = path if path.startswith(("http://", "https://")) else local_artifact_url(path)
-            if url not in content:
+            url = _existing_artifact_url(path)
+            if url and url not in content:
                 blocks.append(ARTIFACT_DOWNLOAD_TEMPLATE.format(index=index, url=url))
 
     if not blocks:

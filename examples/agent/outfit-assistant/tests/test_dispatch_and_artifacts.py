@@ -151,14 +151,18 @@ def test_relative_html_image_is_rewritten_without_modifying_skill(tmp_path, monk
     assert rendered.count(expected) == 1
 
 
-def test_local_artifact_becomes_bridge_markdown_url():
+def test_local_artifact_becomes_bridge_markdown_url(tmp_path):
+    image = tmp_path / "look.png"
+    image.write_bytes(b"image")
+
     rendered = coordinator.append_artifacts_markdown(
         "完成",
-        '["/tmp/output/look.png"]',
+        f'["{image}"]',
     )
 
     assert "## 生成产物" in rendered
-    assert "/api/artifacts/outfit-assistant?path=%2Ftmp%2Foutput%2Flook.png" in rendered
+    assert "/api/artifacts/outfit-assistant?path=" in rendered
+    assert "look.png" in rendered
 
 
 def test_existing_absolute_markdown_image_is_rewritten(tmp_path):
@@ -193,8 +197,11 @@ def test_llm_failure_does_not_claim_an_artifact_without_evidence():
     assert "图片仍可查看" not in response
 
 
-def test_llm_failure_preserves_artifacts_that_were_actually_reported():
-    response = coordinator.llm_error_response('["/tmp/output/look.png"]')
+def test_llm_failure_preserves_artifacts_that_were_actually_reported(tmp_path):
+    image = tmp_path / "look.png"
+    image.write_bytes(b"image")
+
+    response = coordinator.llm_error_response(f'["{image}"]')
 
     assert "产物仍可查看" in response
     assert "/api/artifacts/outfit-assistant?path=" in response
@@ -252,17 +259,19 @@ def test_xlsx_path_is_extracted(tmp_path):
 # Non-image artifact UI rendering
 # ═══════════════════════════════════════════════════════════════════
 
-def test_pptx_artifact_adds_download_link():
+def test_pptx_artifact_adds_download_link(tmp_path):
     """append_artifacts_markdown should produce a download link for .pptx."""
+    pptx = tmp_path / "presentation.pptx"
+    pptx.write_bytes(b"pptx")
     rendered = coordinator.append_artifacts_markdown(
         "PPT 生成完成",
-        '["/tmp/output/presentation.pptx"]',
+        f'["{pptx}"]',
     )
 
     assert "## 生成产物" in rendered
     assert "📥" in rendered or "下载" in rendered
     assert "presentation.pptx" in rendered
-    assert "/api/artifacts/outfit-assistant?path=%2Ftmp%2Foutput%2Fpresentation.pptx" in rendered
+    assert "/api/artifacts/outfit-assistant?path=" in rendered
     # .pptx 不应被误渲染为图片（不应有 ![]  markdown 图片语法）
     assert "![" not in rendered
 

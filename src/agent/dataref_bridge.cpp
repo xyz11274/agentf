@@ -9,7 +9,7 @@ namespace framework {
 namespace dataref_bridge {
 namespace {
 runtime::MMDataBus& control_databus() {
-  static runtime::MMDataBus bus(4 * 1024 * 1024);
+  static runtime::MMDataBus bus(222 * 1024 * 1024);
   static std::once_flag once;
   std::call_once(once, [] {
     // Default local redis endpoint; MMDataBus remains usable even if remote is unavailable.

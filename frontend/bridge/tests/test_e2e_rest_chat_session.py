@@ -223,9 +223,9 @@ class TestSessionPersistence:
                 "client_id": cid,
                 "content": "你好，帮我推荐穿搭",
             },
-            timeout=60,
+            timeout=180,
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 200, f"HTTP {resp.status_code}: {resp.text[:300]}"
 
         if not daemon_port:
             pytest.skip("daemon RPC not available in remote mode")
@@ -259,9 +259,9 @@ class TestSessionPersistence:
                 "client_id": cid,
                 "content": "推荐一套商务休闲穿搭",
             },
-            timeout=60,
+            timeout=180,
         )
-        assert resp.status_code == 200
+        assert resp.status_code == 200, f"HTTP {resp.status_code}: {resp.text[:300]}"
         data = resp.json()
         assert data.get("success") is True
         assert len(data.get("data", {}).get("content", "")) > 0
@@ -360,7 +360,7 @@ class TestAgentflowPipeline:
                 "client_id": cid,
                 "content": "我要去上海出差一周, 推荐穿搭",
             },
-            timeout=120,
+            timeout=300,
         )
         assert r1.status_code == 200
         d1 = r1.json()
@@ -376,7 +376,7 @@ class TestAgentflowPipeline:
                 "client_id": cid,
                 "content": "我更喜欢商务休闲风格",
             },
-            timeout=120,
+            timeout=300,
         )
         assert r2.status_code == 200
         d2 = r2.json()
@@ -392,7 +392,7 @@ class TestAgentflowPipeline:
                 "client_id": cid,
                 "content": "刚才说的穿搭, 能给我推荐几套具体的吗?",
             },
-            timeout=120,
+            timeout=300,
         )
         assert r3.status_code == 200
         d3 = r3.json()

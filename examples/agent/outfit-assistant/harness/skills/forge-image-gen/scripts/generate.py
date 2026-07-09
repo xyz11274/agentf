@@ -322,14 +322,18 @@ def write_images(images, output):
         out = out.with_suffix(".png")
     out.parent.mkdir(parents=True, exist_ok=True)
     written = []
+    # 输出绝对路径：下游 extract_artifact_paths / local_artifact_url 依赖绝对路径
+    # 来计算相对于 agent_packages_root 的 URL。若输出相对路径字符串（如
+    # "assets/foo.png"），下游会用 AGENT_PACKAGE_DIR 拼接解析，但 bash 工具的
+    # 实际 cwd 可能与之不同，导致"文件实际位置 ≠ URL 解析位置"的路径漂移。
     if len(images) == 1:
         out.write_bytes(images[0])
-        written.append(str(out))
+        written.append(str(out.resolve()))
     else:
         for i, img in enumerate(images, 1):
             part = out.with_name(f"{out.stem}-{i}{out.suffix}")
             part.write_bytes(img)
-            written.append(str(part))
+            written.append(str(part.resolve()))
     return written
 
 

@@ -253,6 +253,21 @@ def _dedup_versioned_artifacts(paths: list[str]) -> list[str]:
     return [path for _, path in best.values()]
 
 
+def _existing_artifact_url(path: str) -> str | None:
+    """Resolve a path to a servable URL, returning None if the file is missing.
+
+    HTTP(S) URLs pass through unchanged (remote files cannot be verified
+    locally). Local paths are confirmed to exist on disk before being mapped
+    to a Bridge URL, so we never emit a link to a non-existent artifact.
+    """
+    if path.startswith(("http://", "https://")):
+        return path
+    if not os.path.isfile(path):
+        print(f"[flow] WARN: artifact not found on disk, skip URL: {path}", file=sys.stderr)
+        return None
+    return local_artifact_url(path)
+
+
 def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
     """Append browser-accessible Markdown for generated artifacts (images, HTML, downloads)."""
     try:
@@ -279,20 +294,35 @@ def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
     blocks = []
     if images:
         for index, path in enumerate(images, 1):
-            url = path if path.startswith(("http://", "https://")) else local_artifact_url(path)
-            if url not in content:
+            url = _existing_artifact_url(path)
+            if url and url not in content:
                 blocks.append(ARTIFACT_IMAGE_TEMPLATE.format(index=index, url=url))
     if html_reports:
         for index, path in enumerate(html_reports, 1):
-            url = path if path.startswith(("http://", "https://")) else local_artifact_url(path)
-            if url not in content:
+            url = _existing_artifact_url(path)
+            if url and url not in content:
                 blocks.append(ARTIFACT_HTML_TEMPLATE.format(index=index, url=url))
     if downloads:
         for index, path in enumerate(downloads, 1):
-            url = path if path.startswith(("http://", "https://")) else local_artifact_url(path)
-            if url not in content:
+            url = _existing_artifact_url(path)
+            if url and url not in content:
                 blocks.append(ARTIFACT_DOWNLOAD_TEMPLATE.format(index=index, url=url))
 
+    # Audit:产物 Markdown 拼装结果。完整清单落 stderr（F7：不截断存储层）。
+    # 分类计数 + 实际拼入 blocks 的 url 清单，事后可回溯"哪些产物被渲染"。
+    print(
+        f"[flow] artifact.markdown input_items={len(items)} "
+        f"images={len(images)} html={len(html_reports)} downloads={len(downloads)} "
+        f"blocks={len(blocks)}",
+        file=sys.stderr,
+    )
+    if blocks:
+        # 仅记 url 清单（已去重），不重复记 path 清单 — url 才是前端实际访问点
+        block_urls = [b.split("](")[-1].rstrip(")") for b in blocks]
+        print(
+            "[flow] artifact.markdown_urls " + json.dumps(block_urls, ensure_ascii=False),
+            file=sys.stderr,
+        )
     if not blocks:
         return content
     return content.rstrip() + "\n\n" + ARTIFACTS_SECTION_HEADER + "\n\n" + "\n\n".join(blocks)

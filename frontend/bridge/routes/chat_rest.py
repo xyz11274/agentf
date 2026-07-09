@@ -755,6 +755,13 @@ async def chat_rest(
             )
             await provider.update_agentflow_session_ref(sess["id"], agentflow_session_id)
             artifacts_json = serialize_artifacts(full_content)
+            # Audit:产物清单即将落盘。extract_artifact_infos 已记 urls，此处补数量 + dialogue 关联
+            logger.info(
+                "chat_turn.persist_artifacts agent=%s dialogue=%s artifacts=%d json_len=%d",
+                agent_id, dialogue_id,
+                len(json.loads(artifacts_json)) if artifacts_json and artifacts_json != "[]" else 0,
+                len(artifacts_json),
+            )
             await provider.save_dialogue(
                 session_id=sess["id"],
                 user_input=_content_to_text(body.content),
@@ -819,6 +826,13 @@ async def chat_rest(
             )
             await provider.update_agentflow_session_ref(sess["id"], active.session_id)
             artifacts_json = serialize_artifacts(full_content)
+            # Audit:产物清单即将落盘。extract_artifact_infos 已记 urls，此处补数量 + dialogue 关联
+            logger.info(
+                "sse_chat.persist_artifacts agent=%s dialogue=%s artifacts=%d json_len=%d",
+                agent_id, dialogue_id,
+                len(json.loads(artifacts_json)) if artifacts_json and artifacts_json != "[]" else 0,
+                len(artifacts_json),
+            )
             await provider.save_dialogue(
                 session_id=sess["id"],
                 user_input=_content_to_text(body.content),

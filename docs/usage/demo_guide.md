@@ -1685,7 +1685,7 @@ curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
 
 curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
   -H "Content-Type: application/json" \
-  -d '{"user_id":"demo","client_id":"demo","content":"今天上海的天气适合穿什么？"}'
+  -d '{"user_id":"demo","client_id":"demo","content":"这两天深圳下雨，帮我推荐一套穿搭，要效果图，不要问其他问题"}'
 
 # 3b. 图片识别：上传穿搭照并让 Agent 点评（需先有图片 base64）
 IMG_B64="data:image/jpeg;base64,$(base64 -i tmp/outfit_male_loungewear.jpeg | tr -d '\n')"
@@ -1735,6 +1735,12 @@ curl -k -X POST https://115.120.249.45:40092/health/api/chat/outfit-assistant \
 curl -k -X POST https://115.120.249.45:40092/health/api/chat/outfit-assistant \
   -H "Content-Type: application/json" \
   -d '{"user_id":"demo","client_id":"demo","content":"帮我推荐一套居家穿搭，男生。给我效果图，其他不要问，用于快速测试"}'
+
+curl -k -X POST https://115.120.249.45:40092/health/api/chat/outfit-assistant \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"demox","client_id":"demox","content":"这两天深圳下雨，帮我推荐一套穿搭，要效果图，不要问其他问题"}'
+
+
 
 # 3b. 图片识别：上传穿搭照并让 Agent 点评（需先有图片 base64）
 IMG_B64="data:image/jpeg;base64,$(base64 -i tmp/outfit_male_loungewear.jpeg | tr -d '\n')"
