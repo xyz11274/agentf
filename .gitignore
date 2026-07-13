@@ -105,6 +105,8 @@ venv
 .cache
 
 frontend/web
+examples/agent/outfit-assistant/.env_minimax
+configs/dev
 
 
 **/outfit_assistant/docs
