@@ -27,6 +27,7 @@ public:
     std::string client_id;
     std::string agent_id;
     std::string session_id;
+    std::string dialogue_id;
     std::string task_id;
     std::string workflow_id;
     std::string node_id;
@@ -63,7 +64,8 @@ public:
                       DataRef& out_ref);
   bool resolve_ref(const std::string& data_ref, DataVariant& value) const;
   std::vector<std::string> find_refs_by_owner(const std::string& owner_key,
-                                              const std::string& owner_value) const;
+                                               const std::string& owner_value) const;
+  void clear_owner_index(const std::string& owner_key, const std::string& owner_value);
 
   // Connection management for remote bus
   bool connect_remote(const std::string& address);

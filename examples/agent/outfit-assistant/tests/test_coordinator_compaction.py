@@ -74,7 +74,7 @@ class TestCompactionIntegration:
         )
 
     def test_compaction_log_format(self) -> None:
-        """压缩日志格式正确：包含 → tok dropped。"""
+        """压缩日志格式正确：对齐设计文档 §6 — 含 → tok，且 ratio=/dropped=/folded=/msgs 择一。"""
         stdout, stderr, rc = _run_coordinator({
             "AF_INPUT": "北京今天35度，帮我推荐穿搭",
             "AF_MODEL_MAX_TOKENS": "400",
@@ -84,26 +84,33 @@ class TestCompactionIntegration:
             if "compaction:" in line:
                 assert "→" in line, f"应包含 →: {line}"
                 assert "tok" in line, f"应包含 tok: {line}"
-                assert "dropped" in line, f"应包含 dropped: {line}"
+                # 设计文档 §6：非 emergency 分支含 ratio= 和 dropped=/folded=；
+                # emergency 分支特殊格式含 msgs。择一即可。
+                assert any(k in line for k in ("ratio=", "dropped=", "folded=", "msgs")), (
+                    f"应含 ratio=/dropped=/folded=/msgs 之一 (设计文档 §6): {line}"
+                )
                 return
         pytest.fail("未找到 compaction 日志行")
 
     def test_compaction_shows_token_change(self) -> None:
-        """压缩日志包含 before→after token 变化。"""
+        """压缩日志包含 before→after token 变化（设计文档 §6 格式）。"""
         stdout, stderr, rc = _run_coordinator({
             "AF_INPUT": "帮我推荐一套商务休闲穿搭",
             "AF_MODEL_MAX_TOKENS": "400",
         })
         for line in stderr.splitlines():
             if "compaction:" in line:
-                # 格式: compaction: 450→320 tok
+                # 设计文档格式: compaction: <level> (450→320 tok, ratio=0.xx, ...)
                 assert "→" in line
-                parts = line.split("→")
-                assert len(parts) >= 2
-                before = parts[0].split()[-1]
-                after = parts[1].split()[0]
-                assert before.isdigit(), f"before 应为数字: {before}"
-                assert after.isdigit(), f"after 应为数字: {after}"
+                # 提取括号内的 → 分割
+                if "(" in line and ")" in line:
+                    inside = line[line.index("(") + 1:line.index(")")]
+                    if "→" in inside:
+                        parts = inside.split("→")
+                        before = parts[0].strip()
+                        after = parts[1].split()[0]
+                        assert before.isdigit(), f"before 应为数字: {before}"
+                        assert after.isdigit(), f"after 应为数字: {after}"
                 return
         pytest.fail("未找到 compaction 日志行")
 

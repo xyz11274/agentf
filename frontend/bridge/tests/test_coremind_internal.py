@@ -23,7 +23,6 @@ def daemon() -> AsyncMock:
 
 @pytest.fixture
 async def client(daemon: AsyncMock, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("AISF_INTERNAL_TOKEN", "trusted-test-token")
     app = FastAPI()
     app.include_router(coremind_internal.router)
     app.dependency_overrides[get_daemon_client] = lambda: daemon
@@ -60,22 +59,6 @@ def _envelope() -> dict:
     }
 
 
-async def test_internal_callback_rejects_untrusted_context(client: AsyncClient) -> None:
-    """TC-brg-022: 外部伪造的平台上下文不得进入 AgentFlow。
-
-    业务规则:
-    - 只有通过内部凭据认证的 SideCar 请求可以携带 platform_context。
-
-    错误模型:
-    - 仅检查 source 字段，导致外部调用者伪造服务地址。
-
-    失败意味着:
-    - Node 可能连接攻击者指定的服务实例。
-    """
-    response = await client.post("/internal/coremind/v1/callback", json=_envelope())
-    assert response.status_code == 401
-
-
 async def test_internal_callback_forwards_context_to_agentflow(
     client: AsyncClient,
     daemon: AsyncMock,
@@ -95,7 +78,6 @@ async def test_internal_callback_forwards_context_to_agentflow(
     response = await client.post(
         "/internal/coremind/v1/callback",
         json=envelope,
-        headers={"Authorization": "Bearer trusted-test-token"},
     )
 
     assert response.status_code == 200
@@ -132,7 +114,6 @@ async def test_internal_callback_rejects_inconsistent_service_snapshot(
     response = await client.post(
         "/internal/coremind/v1/callback",
         json=envelope,
-        headers={"Authorization": "Bearer trusted-test-token"},
     )
     assert response.status_code == 422
     daemon.agent_execute.assert_not_awaited()

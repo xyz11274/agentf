@@ -7,7 +7,7 @@ REST SSE Chat + Session Persistence E2E 测试 - pytest + daemon fixture 版.
   3. 完整的 agentflow 执行链路 (daemon -> agent -> workflow -> LLM call)
 
 LLM 模式:
-  - 设置环境变量 AF_LLM_BASE_URL + API_KEY -> 真实 LLM 调用
+  - 设置环境变量 AF_LLM_BASE_URL + AF_LLM_API_KEY -> 真实 LLM 调用
   - 未设置 -> 回退到 mock LLM (e2e-scripted)
 """
 
@@ -23,7 +23,9 @@ import requests as http_requests
 
 from .e2e_helpers import outfit_daemon_real_llm, free_port, jsonrpc_call, send_user_message  # noqa: F401
 
-BRIDGE_PORT: int | None = None
+# E2E 测试超时配置：正常执行应在 30s 内完成，超时说明环境/配置有问题
+_E2E_REQUEST_TIMEOUT = 30  # 单次 chat 请求超时（秒）
+_E2E_MULTITURN_TIMEOUT = 60  # 多轮对话每轮超时（秒，首轮需创建 session 可能稍慢）
 
 
 @pytest.fixture(scope="class")
@@ -85,8 +87,8 @@ def bridge_daemon(request: pytest.FixtureRequest) -> dict[str, Any]:  # noqa: F8
     bridge_dir = Path(__file__).resolve().parents[2] / "bridge"
     env = os.environ.copy()
 
-    env["DAEMON_HOST"] = "127.0.0.1"
-    env["DAEMON_PORT"] = str(daemon_port)
+    env["AF_BR_DAEMON_HOST"] = "127.0.0.1"
+    env["AF_BR_DAEMON_PORT"] = str(daemon_port)
     env["BRIDGE_HTTP_PORT"] = str(port)
     env["NO_PROXY"] = "127.0.0.1,localhost"
     env["no_proxy"] = "127.0.0.1,localhost"
@@ -223,7 +225,7 @@ class TestSessionPersistence:
                 "client_id": cid,
                 "content": "你好，帮我推荐穿搭",
             },
-            timeout=180,
+            timeout=_E2E_REQUEST_TIMEOUT,
         )
         assert resp.status_code == 200, f"HTTP {resp.status_code}: {resp.text[:300]}"
 
@@ -259,7 +261,7 @@ class TestSessionPersistence:
                 "client_id": cid,
                 "content": "推荐一套商务休闲穿搭",
             },
-            timeout=180,
+            timeout=_E2E_REQUEST_TIMEOUT,
         )
         assert resp.status_code == 200, f"HTTP {resp.status_code}: {resp.text[:300]}"
         data = resp.json()
@@ -303,7 +305,7 @@ class TestAgentflowPipeline:
                 "content": "推荐一套适合开会的穿搭",
             },
             stream=True,
-            timeout=120,
+            timeout=_E2E_REQUEST_TIMEOUT,
         )
         assert resp.status_code == 200, (
             f"HTTP {resp.status_code}: {resp.text[:500]}"
@@ -320,9 +322,16 @@ class TestAgentflowPipeline:
         all_content = ""
         for event in events[:-1]:
             choices = event.get("choices", [])
-            if choices and "delta" in choices[0]:
-                # content may be None on the first role-only chunk
-                all_content += choices[0]["delta"].get("content") or ""
+            if choices:
+                choice = choices[0]
+                # SSE 流式格式：llm_chunk 用 delta.content，text/progress 用 message.content
+                delta = choice.get("delta", {})
+                if delta and delta.get("content"):
+                    all_content += delta["content"]
+                else:
+                    msg = choice.get("message", {})
+                    if msg and msg.get("content"):
+                        all_content += msg["content"]
 
         assert len(all_content) > 0, (
             f"Agentflow pipeline returned empty content (llm_mode={llm_mode})"
@@ -360,7 +369,7 @@ class TestAgentflowPipeline:
                 "client_id": cid,
                 "content": "我要去上海出差一周, 推荐穿搭",
             },
-            timeout=300,
+            timeout=_E2E_MULTITURN_TIMEOUT,
         )
         assert r1.status_code == 200
         d1 = r1.json()
@@ -376,7 +385,7 @@ class TestAgentflowPipeline:
                 "client_id": cid,
                 "content": "我更喜欢商务休闲风格",
             },
-            timeout=300,
+            timeout=_E2E_MULTITURN_TIMEOUT,
         )
         assert r2.status_code == 200
         d2 = r2.json()
@@ -392,7 +401,7 @@ class TestAgentflowPipeline:
                 "client_id": cid,
                 "content": "刚才说的穿搭, 能给我推荐几套具体的吗?",
             },
-            timeout=300,
+            timeout=_E2E_MULTITURN_TIMEOUT,
         )
         assert r3.status_code == 200
         d3 = r3.json()

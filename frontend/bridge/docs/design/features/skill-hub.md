@@ -1,7 +1,7 @@
 # Skill Hub 功能设计
 
 > **层级**: L2 · `docs/design/features/skill-hub.md`
-> **状态**: 已填充
+> **状态**: 已填充 · 2026-07-13 新增嵌套目录发现 + 覆盖安装 + 文件浏览与编辑
 > **创建日期**: 2026-06-25
 
 ---
@@ -34,11 +34,11 @@ Skill Hub（技能中心仓库）是一个独立的 Web 功能模块，提供一
 │  │                     │   │                                 │  │
 │  │ SkillHubPage.vue    │   │ routes/skill_hub.py             │  │
 │  │  - 技能列表（卡片）    │   │  - GET /api/skill-hub          │  │
-│  │  - 上传对话框        │   │  - GET /api/skill-hub/{name}   │  │
+│  │  - 上传对话框        │   │  - GET /api/skill-hub/{name:path}│  │
 │  │                     │   │  - POST /api/skill-hub/upload   │  │
-│  │ SkillDetailPage.vue │   │  - DELETE /api/skill-hub/{name} │  │
-│  │  - 技能详情渲染       │   │  - POST /api/skill-hub/...    │  │
-│  │  - 安装对话框        │   │         {name}/install         │  │
+│  │ SkillDetailPage.vue │   │  - DELETE /api/skill-hub/{name:path} │  │
+│  │  - 技能详情渲染       │   │  - POST /api/skill-hub/{name:path}/install │  │
+│  │  - 安装对话框        │   │         (支持 overwrite)          │  │
 │  │                     │   │                                 │  │
 │  │ skillHubStore.ts    │   │  → 复用 packages.py 的路径校验   │  │
 │  │  - 列表状态管理       │   │  → 直接操作文件系统              │  │
@@ -58,10 +58,10 @@ Skill Hub（技能中心仓库）是一个独立的 Web 功能模块，提供一
 
 | 职责 | 归属 | 边界 |
 |------|------|------|
-| 技能元数据浏览 | 后端读取 SKILL.md frontmatter → 前端展示 | 不缓存，每次读取文件系统 |
+| 技能元数据浏览 | 后端递归扫描含 `SKILL.md` 的目录 → 前端展示 | 支持嵌套路径（`dashscope/forge-image-gen`），不缓存 |
 | 技能全文查看 | 后端读取 SKILL.md 全文 → 前端 Markdown 渲染 | 不进 daemon |
-| 技能上传与校验 | 后端接收文件 → 校验格式 → 写入文件系统 | 格式仅校验 frontmatter 基本结构 |
-| 技能安装 | 后端跨目录复制技能文件到目标 Package | 校验来源和目标的合法性 |
+| 技能上传与校验 | 后端接收文件 → 校验格式 → 写入文件系统 | 格式仅校验 frontmatter 基本结构；**仅支持扁平名称（无 `/`）** |
+| 技能安装 | 后端跨目录复制技能文件到目标 Package | 支持覆盖安装；校验来源和目标的合法性 |
 | 技能删除 | 后端递归删除技能目录 | 限制在 `skill_hub_path` 内 |
 
 ### 3.2 开发视图（代码组织）
@@ -141,9 +141,10 @@ SkillHubPage.vue / SkillDetailPage.vue
 ```
 前端                          Bridge                         文件系统
   │                            │                                │
-  │ POST /api/skill-hub/{name}/│                                │
+  │ POST /api/skill-hub/{name:path}/                            │
   │   install                  │                                │
-  │   {target_package}         │                                │
+  │   {target_package,         │                                │
+  │    overwrite?}             │                                │
   │───────────────────────────→│                                │
   │                            │ 1. 验证来源：skill_hub/{name}   │
   │                            │    └─ 不存在 → 404              │
@@ -153,27 +154,42 @@ SkillHubPage.vue / SkillDetailPage.vue
   │                            │    └─ {dest}/harness/skills/    │
   │                            │       {name}/                   │
   │                            │ 4. 检查目标是否已存在            │
-  │                            │    └─ 存在 → 409                │
+  │                            │    ├─ 存在且 overwrite=false     │
+  │                            │    │  → 409                     │
+  │                            │    └─ 存在且 overwrite=true      │
+  │                            │       → rmtree 旧目录            │
   │                            │ 5. 创建父目录 harness/skills/   │
   │                            │── mkdir -p ──────────────────→│
   │                            │ 6. 递归复制技能目录              │
   │                            │── copytree ──────────────────→│
   │                            │ 7. 返回安装结果                  │
   │←── 200 {name, target_      │                                │
-  │    package, target_path}  │                                │
+  │    package, overwrite,     │                                │
+  │    target_path, file_count}│                                │
 ```
+
+**API 路由变化**：`{name}` → `{name:path}`（2026-07-13），以支持嵌套路径中的 `/` 字符。前端 Vue Router 对应改为 `:name(.*)`。
+
+**agent runtime 技能发现**：`list_skills` 工具（`packages/agentflow-runtime/.../harness/tools/list_skills.py`）同样从 `os.listdir()` 改为 `os.walk()` 递归扫描，以确保运行时能发现嵌套安装的技能目录。`load_skill` 工具因使用 `os.path.join` 天然支持嵌套路径，无需改动。
 
 ### 3.4 技能目录结构
 
 ```
 resource/skill_hub/
-├── my-skill/                  ← 技能名 = 目录名
-│   ├── SKILL.md               ← 技能定义（YAML frontmatter + Markdown 正文）
-│   └── references/            ← 可选：参考资料目录
+├── my-skill/                         ← 扁平技能名
+│   ├── SKILL.md
+│   └── references/
 │       └── example.md
-└── another-skill/
-    └── SKILL.md
+└── dashscope_outfit_skills/          ← 嵌套分组（无 SKILL.md，不被识别为技能）
+    ├── forge-image-gen/              ← 嵌套技能名 = "dashscope_outfit_skills/forge-image-gen"
+    │   ├── SKILL.md
+    │   └── scripts/
+    │       └── generate.py
+    └── outfit-stylist/
+        └── SKILL.md
 ```
+
+**技能发现机制**：递归扫描 `skill_hub_path` 下所有含 `SKILL.md` 的目录，以相对路径作为技能名（`my-skill` 或 `dashscope_outfit_skills/forge-image-gen`）。隐藏目录（以 `.` 开头）被跳过。
 
 **SKILL.md 格式**：
 
@@ -199,22 +215,21 @@ version: 1.0.0
 
 ### 3.5 文件操作安全模型
 
-技能仓库仅接受目录名（不含路径分隔符操作），因此安全校验简化为两层：
+技能名校验现支持嵌套路径（以 `/` 分隔），安全校验扩展为三层：
 
 | 层 | 函数 | 校验内容 | 拒绝条件 |
 |----|------|----------|----------|
-| 1 技能名 | `_validate_skill_name()` | `[a-zA-Z0-9_-]{1,128}` | `..`、`/`、空格、空字符串、超长 |
+| 1 技能名 | `_validate_skill_name()` | `[a-zA-Z0-9_/-]{1,128}`，每段 `[a-zA-Z0-9_-]` | `..`、`//`、首尾 `/`、空字符串、超长、空格、特殊字符 |
 | 2 目录边界 | `settings.skill_hub_path / name` | resolve 后 parent 校验 | 越界 |
-
-技能名校验逻辑与 Package 管理的 `_validate_package_name()` 等效。
-由于技能模块不操作任意文件路径（只有技能名 → 目录映射），无需 `_validate_relative_path()` 这类相对路径校验。
+| 3 上传名称 | upload 中额外校验 | 扁平名称（不含 `/`） | 嵌套路径仅限预存目录结构，上传不可创建 |
 
 安装目标校验额外检查：
 
 | 校验 | 方法 | 违反后果 |
 |------|------|----------|
 | 目标 Package 存在 | `(agent_packages_path / target).is_dir()` | 404 |
-| 目标 `harness/skills/` 不冲突 | `(dest / harness / skills / name).exists()` | 409 |
+| 源技能存在 | `(skill_hub_path / name).is_dir()` | 404 |
+| 目标 `harness/skills/` 不冲突 | `(dest / harness / skills / name).exists()` | 非 overwrite → 409；overwrite=true → 先删再复制 |
 
 ### 3.6 关键架构决策
 
@@ -222,8 +237,11 @@ version: 1.0.0
 |------|------|------|-----------|
 | 存储方式 | 文件系统目录 | 与现有 Package 管理一致，无额外依赖 | 数据库（增加运维复杂度） |
 | 技能目录结构 | 每技能一目录 | 支持附带 `references/` 等辅助文件 | 单文件存储（无法扩展） |
+| 技能发现 | 递归扫描（`rglob`/`os.walk`） | 支持嵌套分组目录，如 `dashscope/forge-image-gen` | 扁平扫描（无法发现嵌套技能） |
+| 嵌套路径支持 | API 路由用 `{name:path}`，前端用 `:name(.*)` | 同时支持扁平名和嵌套名 | 仅扁平名（与分组需求冲突） |
 | 校验范围 | 仅 frontmatter 格式 | 最小校验，不阻塞上传 | 深度语义校验（不阻塞可先不做） |
 | 安装方式 | 文件复制（copytree） | 简单可靠，无需 daemon 参与 | 通过 daemon RPC（需额外开发） |
+| 安装覆盖 | 支持 `overwrite=true` 参数 | 先 rmtree 再完整复制 | 增量更新（当前无此需求） |
 | 并发控制 | 无锁 | 低频操作，冲突概率低 | 文件锁（过度设计） |
 
 ### 3.7 前端组件设计
@@ -232,8 +250,10 @@ version: 1.0.0
 
 ```
 /skill-hub                    SkillHubPage.vue    — 技能列表（首页）
-/skill-hub/:name              SkillDetailPage.vue — 技能详情 + 安装
+/skill-hub/:name(.*)          SkillDetailPage.vue — 技能详情 + 安装（支持嵌套路径名）
 ```
+
+**Vue Router 参数说明**：``:name(.*)`` 匹配任意层级路径（含 `/`），确保嵌套技能名如 `dashscope/forge-image-gen` 能被正确路由。与后端 FastAPI 的 ``{name:path}`` 对应。
 
 **SkillHubPage 页面结构**：
 
@@ -284,7 +304,7 @@ version: 1.0.0
 | `loadSkillDetail(name)` | ✅ | 加载技能详情 |
 | `uploadSkill(file, name?, overwrite?)` | ✅ | 上传技能 |
 | `deleteSkill(name)` | ✅ | 删除技能 |
-| `installSkill(name, targetPackage)` | ✅ | 安装技能到 Agent Package |
+| `installSkill(name, targetPackage, overwrite?)` | ✅ | 安装技能到 Agent Package（支持覆盖） |
 
 **前端类型定义**（`types/agentflow.ts` 新增）：
 
@@ -314,8 +334,9 @@ export interface SkillDetail extends SkillInfo {
 | 上传文件格式不支持 | 参数错误 | 400 | `"Unsupported file format: .exe. Allowed: .md, .zip, .tar.gz, .tgz"` |
 | 归档中缺少 SKILL.md | 参数错误 | 400 | `"Archive does not contain SKILL.md at root"` |
 | 目标 Package 不存在 | 资源不存在 | 404 | `"Target package 'unknown_agent' not found"` |
-| 目标 Package 技能冲突 | 资源冲突 | 409 | `"Skill 'my-skill' already installed in package 'harness-agent'"` |
+| 目标 Package 技能冲突（非覆盖） | 资源冲突 | 409 | `"Skill 'my-skill' already installed in package 'harness-agent'. Set overwrite=true to replace."` |
 | 文件系统写入失败 | 内部错误 | 500 | `"Failed to write file: Permission denied"` |
+| 上传技能名含 `/` | 参数错误 | 400 | `"Uploaded skill name must be flat (no '/')"` |
 
 ### 3.9 配置项
 
@@ -339,11 +360,80 @@ return (_PROJECT_ROOT / path).resolve()
 | 技能版本管理 | ❌ 不支持 | 同名技能覆盖写入，不保留历史 |
 | 全文搜索 | ❌ 不支持 | 仅前端按名称/标签筛选 |
 | 评分/评论/收藏 | ❌ 不支持 | 不在本阶段 |
-| 在线编辑器 | ❌ 不支持 | 下载后编辑再上传 |
 | 跨节点分发 | ❌ 不支持 | 仅管理本机文件系统 |
 | 依赖管理 | ❌ 不支持 | 技能间依赖不在本模块处理 |
 | 并发写入保护 | ❌ 不支持 | 无文件锁 |
 | 大文件上传保护 | ❌ 不支持 | 无显式大小上限 |
+
+### 3.11 技能文件浏览与编辑
+
+Skill Detail 页面除了展示 SKILL.md 内容外，还提供完整技能目录的文件浏览和在线编辑能力。
+
+#### 3.11.1 API 端点
+
+复用 Agent Package 文件管理的路由模式，在 `skill_hub.py` 中添加以下路由（注册在 `/{name:path}` 之前，避免被 catch-all 捕获）：
+
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| `GET` | `/{name:path}/tree` | 递归文件树 |
+| `GET` | `/{name:path}/file/{file_path:path}` | 读取文件内容 |
+| `PUT` | `/{name:path}/file/{file_path:path}` | 写入文件内容 |
+| `DELETE` | `/{name:path}/file/{file_path:path}` | 删除文件 |
+| `POST` | `/{name:path}/file/{file_path:path}/rename` | 重命名文件 |
+| `POST` | `/{name:path}/file/{file_path:path}` | 创建空文件 |
+
+`GET /{name:path}/tree` 返回 `FileNode[]`（与 `packages.py` 中 `_build_tree_sync` 相同格式）。
+
+#### 3.11.2 路由注册顺序
+
+由于 `/{name:path}` 是 catch-all 路由，所有具体路径的路由必须注册在它之前：
+
+```
+@router.get("")                    ← 列表
+@router.get("/{name:path}/tree")   ← 文件树（必须先注册）
+@router.get("/{name:path}/file/{file_path:path}")
+@router.put(...)                   ← 文件 CRUD
+@router.delete(...)
+@router.post(...)
+@router.get("/{name:path}")        ← 技能详情（catch-all，最后注册）
+```
+
+#### 3.11.3 前端变化
+
+在 `SkillDetailPage.vue` 中新增 tab 切换：
+
+```
+┌─ SkillDetailPage ─────────────────────────────┐
+│ ← 技能中心    minimax/forge-image-gen          │
+│                                               │
+│  [📄 技能内容] [📁 文件浏览]  ← tab 切换        │
+│ ───────────────────────────────────────────── │
+│                                               │
+│  Tab「文件浏览」:                              │
+│  ┌─────────────┬──────────────────────────┐   │
+│  │ 📁 文件树    │ 📝 文件编辑器              │   │
+│  │             │                          │   │
+│  │ ├─ SKILL.md │  (点击文件后显示内容)      │   │
+│  │ ├─ scripts/ │  [保存] [取消]            │   │
+│  │ │ └─ gen.py │                          │   │
+│  │ └─ refs/    │                          │   │
+│  └─────────────┴──────────────────────────┘   │
+└───────────────────────────────────────────────┘
+```
+
+**实现方式**：复用现有 `FileTree.vue` 组件（通过 `packageName` prop 指向技能目录）。`FileTree` 的 `file-selected` 事件触发文件加载和编辑。
+
+**技能目录路径构造**：前端从技能详情接口已有 `name`（如 `minimax_outfit_skills/forge-image-gen`），树和文件操作 API 使用 `encodeURIComponent(name)` 作为路径参数，与现有模式一致。
+
+#### 3.11.4 安全与边界
+
+文件操作复用 `packages.py` 中已验证的路径安全模型（`_validate_relative_path` + `_resolve_within`），读写限制在 `skill_hub_path / name` 目录内，不可越界访问其他技能或系统文件。
+
+| 校验 | 方法 | 违反后果 |
+|------|------|----------|
+| 路径穿越 | `_validate_relative_path()` 拦截 `..` | 403 |
+| 目录越界 | `_resolve_within()` 锚定 `skill_hub_path / name` | 403 |
+| 写目录 | 写操作拒绝目录路径 | 409 |
 
 ---
 

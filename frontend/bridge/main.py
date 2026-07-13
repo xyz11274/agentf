@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import logging.handlers
+import subprocess
+import sys
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -181,6 +183,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         sync_task = asyncio.create_task(
             _session_sync_loop(session_sync, daemon_client, settings.session_sync_interval),
             name="bridge.session_sync_poll",
+        )
+
+    # --- §2.2 预装 agentflow-runtime 到系统 python3 ---------------------------
+    # shell wrapper fallback 时依赖系统 python3 已预装 agentflow-runtime。
+    # 失败不阻断 Bridge 启动（只 WARN）——预装缺失只影响 fallback 分支，
+    # .venv 就绪的 Agent 仍可正常运行。
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet", "agentflow-runtime"],
+            check=False,
+            capture_output=True,
+            timeout=120,
+        )
+        logger.info("preload agentflow-runtime to system python (%s)", sys.executable)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "preload agentflow-runtime failed (shell wrapper fallback may break): %s",
+            exc,
         )
 
     try:

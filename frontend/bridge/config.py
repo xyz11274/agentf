@@ -2,9 +2,14 @@
 
 Configuration sources (low → high priority):
   1. Code defaults (Field(default=...))
-  2. ``config.yaml`` (human-readable, all settings documented)
-  3. ``.env`` file (legacy, optional)
+  2. ``configs/{env}/bridge.yaml`` (per-environment YAML, env=``AF_BR_ENV``)
+  3. ``config.yaml`` (fallback CWD / frontend path)
   4. System environment variables
+
+``AF_BR_ENV`` controls which per-environment config is loaded.
+  - Not set / ``dev`` → ``configs/dev/bridge.yaml``
+  - ``prod`` → ``configs/prod/bridge.yaml``
+  - Any other value → ``configs/{value}/bridge.yaml``
 
 Importing ``settings`` gives the process-wide singleton.
 """
@@ -24,8 +29,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Project root: parent of the ``frontend/bridge/`` package directory.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
+# ── Environment mode ──────────────────────────────────────────────
+# Controls which configs/{env}/bridge.yaml is loaded.
+_AGENTFLOW_ENV = os.environ.get("AF_BR_ENV", "dev")
+
 # ── Config file search path ───────────────────────────────────────
+# First match wins.  Environment-specific configs at the front so they
+# take precedence over generic fallback paths.
 _CONFIG_FILE_CANDIDATES = [
+    _PROJECT_ROOT / "configs" / _AGENTFLOW_ENV / "bridge.yaml",
     Path("config.yaml"),
     Path("frontend/bridge/config.yaml"),
     _PROJECT_ROOT / "frontend" / "bridge" / "config.yaml",
@@ -90,14 +102,11 @@ class BridgeSettings(BaseSettings):
 
     Load order (low → high priority):
       1. Code defaults below
-      2. ``config.yaml``
-      3. ``.env`` file
-      4. System environment variables
+      2. ``configs/{env}/bridge.yaml`` / ``config.yaml`` (YAML)
+      3. System environment variables
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
         env_prefix="",
         case_sensitive=False,
         extra="ignore",
@@ -154,13 +163,13 @@ class BridgeSettings(BaseSettings):
         return self._yaml_source
 
     # --- 🔌 daemon connectivity ------------------------------------------------
-    daemon_host: str = Field(default="127.0.0.1", description="Daemon hostname / IP.")
-    daemon_port: int = Field(default=17891, ge=1, le=65535, description="Daemon TCP/WS port.")
+    daemon_host: str = Field(validation_alias="AF_BR_DAEMON_HOST", default="127.0.0.1", description="Daemon hostname / IP.")
+    daemon_port: int = Field(validation_alias="AF_BR_DAEMON_PORT", default=17891, ge=1, le=65535, description="Daemon TCP/WS port.")
 
     # --- 🌐 bridge server bind -------------------------------------------------
-    bridge_listen: str = Field(
+    bridge_listen: str = Field(validation_alias="AF_BR_LISTEN", 
         default="0.0.0.0:8199",
-        description="Bridge listen address (host:port). Set via BRIDGE_LISTEN env var.",
+        description="Bridge listen address (host:port). Set via AF_BR_LISTEN.",
     )
 
     @property
@@ -175,54 +184,54 @@ class BridgeSettings(BaseSettings):
         return int(parts[1]) if len(parts) > 1 else 8199
 
     # --- sidecar (production entry point) ------------------------------------
-    sidecar_enabled: bool = Field(default=False, description="Enable C++ CoreMind sidecar. Set via SIDECAR_ENABLED.")
-    sidecar_listen: str = Field(default="0.0.0.0:23767", description="Sidecar external listen address. Set via SIDECAR_LISTEN.")
-    sidecar_aisf_adapter_url: str = Field(default="http://127.0.0.1:18080", description="Sidecar → aisf_adapter URL. Set via SIDECAR_AISF_ADAPTER_URL.")
+    sidecar_enabled: bool = Field(validation_alias="AF_BR_SIDECAR_ENABLED", default=False, description="Enable C++ CoreMind sidecar. Set via AF_BR_SIDECAR_ENABLED.")
+    sidecar_listen: str = Field(validation_alias="AF_BR_SIDECAR_LISTEN", default="0.0.0.0:23767", description="Sidecar external listen address. Set via AF_BR_SIDECAR_LISTEN.")
+    sidecar_aisf_adapter_url: str = Field(validation_alias="AF_BR_SIDECAR_AISF_ADAPTER_URL", default="http://127.0.0.1:18080", description="Sidecar → aisf_adapter URL. Set via AF_BR_SIDECAR_AISF_ADAPTER_URL.")
 
     # --- 🔧 aisf_adapter（已接入主 Bridge 的 /v1/tasks 路由） ---
-    aisf_adapter_agent_id: str = Field(default="outfit-assistant", description="agentflowd 中 agent 标识. Set via AISF_ADAPTER_AGENT_ID.")
-    aisf_adapter_mode: str = Field(default="async", description="AISF Adapter mode: async | sync. Set via AISF_ADAPTER_MODE.")
-    aisf_adapter_timeout: float = Field(default=360.0, gt=0, description="Per-task timeout (seconds). Set via AISF_ADAPTER_TIMEOUT.")
-    aisf_adapter_upstream_scheme: str = Field(default="http", description="Upstream callback scheme: http | https. Set via AISF_ADAPTER_UPSTREAM_SCHEME.")
-    aisf_adapter_upstream_callback_port: int = Field(default=23767, description="Upstream SysAgent callback port. Set via AISF_ADAPTER_UPSTREAM_CALLBACK_PORT.")
-    aisf_adapter_upstream_callback_path: str = Field(default="/coremind/systemagent/v1/callback", description="Upstream callback path. Set via AISF_ADAPTER_UPSTREAM_CALLBACK_PATH.")
-    aisf_adapter_upstream_client_cert_path: str = Field(default="", description="Client cert PEM path for mTLS. Set via AISF_ADAPTER_UPSTREAM_CLIENT_CERT_PATH.")
-    aisf_adapter_upstream_client_key_path: str = Field(default="", description="Client key PEM path for mTLS. Set via AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PATH.")
-    aisf_adapter_upstream_client_key_password: str = Field(default="", description="Client key PEM password (if encrypted). Set via AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PASSWORD.")
-    aisf_adapter_upstream_ca_cert_path: str = Field(default="", description="Custom CA cert path for server verification. Set via AISF_ADAPTER_UPSTREAM_CA_CERT_PATH.")
-    aisf_adapter_upstream_verify: bool = Field(default=True, description="Verify server TLS cert. Set via AISF_ADAPTER_UPSTREAM_VERIFY.")
+    aisf_adapter_agent_id: str = Field(validation_alias="AF_BR_AISF_ADAPTER_AGENT_ID", default="outfit-assistant", description="agentflowd 中 agent 标识. Set via AF_BR_AISF_ADAPTER_AGENT_ID.")
+    aisf_adapter_mode: str = Field(validation_alias="AF_BR_AISF_ADAPTER_MODE", default="async", description="AISF Adapter mode: async | sync. Set via AF_BR_AISF_ADAPTER_MODE.")
+    aisf_adapter_timeout: float = Field(validation_alias="AF_BR_AISF_ADAPTER_TIMEOUT", default=360.0, gt=0, description="Per-task timeout (seconds). Set via AF_BR_AISF_ADAPTER_TIMEOUT.")
+    aisf_adapter_upstream_scheme: str = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_SCHEME", default="http", description="Upstream callback scheme: http | https. Set via AF_BR_AISF_ADAPTER_UPSTREAM_SCHEME.")
+    aisf_adapter_upstream_callback_port: int = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PORT", default=23767, description="Upstream SysAgent callback port. Set via AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PORT.")
+    aisf_adapter_upstream_callback_path: str = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PATH", default="/coremind/systemagent/v1/callback", description="Upstream callback path. Set via AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PATH.")
+    aisf_adapter_upstream_client_cert_path: str = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_CERT_PATH", default="", description="Client cert PEM path for mTLS. Set via AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_CERT_PATH.")
+    aisf_adapter_upstream_client_key_path: str = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PATH", default="", description="Client key PEM path for mTLS. Set via AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PATH.")
+    aisf_adapter_upstream_client_key_password: str = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PASSWORD", default="", description="Client key PEM password (if encrypted). Set via AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PASSWORD.")
+    aisf_adapter_upstream_ca_cert_path: str = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_CA_CERT_PATH", default="", description="Custom CA cert path for server verification. Set via AF_BR_AISF_ADAPTER_UPSTREAM_CA_CERT_PATH.")
+    aisf_adapter_upstream_verify: bool = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_VERIFY", default=True, description="Verify server TLS cert. Set via AF_BR_AISF_ADAPTER_UPSTREAM_VERIFY.")
 
     # --- agent_defaults — LLM 配置降级链路 (from config.yaml) ----------
-    agent_defaults_llm_api_key: str = Field(default="", description="Default LLM API key. From config.yaml agent_defaults.llm.api_key.")
-    agent_defaults_llm_base_url: str = Field(default="", description="Default LLM base URL. From config.yaml agent_defaults.llm.base_url.")
-    agent_defaults_llm_model: str = Field(default="gpt-4o", description="Default LLM model. From config.yaml agent_defaults.llm.model.")
-    agent_defaults_llm_fallback_api_key: str = Field(default="", description="Fallback LLM API key. From config.yaml agent_defaults.llm_fallback.api_key.")
-    agent_defaults_llm_fallback_base_url: str = Field(default="", description="Fallback LLM base URL. From config.yaml agent_defaults.llm_fallback.base_url.")
-    agent_defaults_llm_fallback_model: str = Field(default="", description="Fallback LLM model. From config.yaml agent_defaults.llm_fallback.model.")
+    agent_defaults_llm_api_key: str = Field(validation_alias="AF_BR_AGENT_DEFAULTS_LLM_API_KEY", default="", description="Default LLM API key. From config.yaml agent_defaults.llm.api_key.")
+    agent_defaults_llm_base_url: str = Field(validation_alias="AF_BR_AGENT_DEFAULTS_LLM_BASE_URL", default="", description="Default LLM base URL. From config.yaml agent_defaults.llm.base_url.")
+    agent_defaults_llm_model: str = Field(validation_alias="AF_BR_AGENT_DEFAULTS_LLM_MODEL", default="gpt-4o", description="Default LLM model. From config.yaml agent_defaults.llm.model.")
+    agent_defaults_llm_fallback_api_key: str = Field(validation_alias="AF_BR_AGENT_DEFAULTS_LLM_FALLBACK_API_KEY", default="", description="Fallback LLM API key. From config.yaml agent_defaults.llm_fallback.api_key.")
+    agent_defaults_llm_fallback_base_url: str = Field(validation_alias="AF_BR_AGENT_DEFAULTS_LLM_FALLBACK_BASE_URL", default="", description="Fallback LLM base URL. From config.yaml agent_defaults.llm_fallback.base_url.")
+    agent_defaults_llm_fallback_model: str = Field(validation_alias="AF_BR_AGENT_DEFAULTS_LLM_FALLBACK_MODEL", default="", description="Fallback LLM model. From config.yaml agent_defaults.llm_fallback.model.")
 
     # --- artifact ------------------------------------------------------------
-    artifact_public_base_url: str = Field(
+    artifact_public_base_url: str = Field(validation_alias="AF_BR_ARTIFACT_PUBLIC_BASE_URL", 
         default="",
         description="Public base URL for artifact links (empty = relative paths).",
     )
 
     # --- 📂 filesystem paths ----------------------------------------------------
-    agent_packages_dir: str = Field(
+    agent_packages_dir: str = Field(validation_alias="AF_BR_AGENT_PACKAGES_DIR", 
         default="examples/agent",
         description="Directory containing Agent Package source trees.",
     )
-    skill_hub_dir: str = Field(
+    skill_hub_dir: str = Field(validation_alias="AF_BR_SKILL_HUB_DIR", 
         default="resource/skill_hub",
         description="Directory containing the Skill Hub central repository.",
     )
-    agent_template_dir: str = Field(
-        default="templates",
+    agent_template_dir: str = Field(validation_alias="AF_BR_AGENT_TEMPLATE_DIR",
+        default="frontend/bridge/templates/agent_template",
         description="Directory containing agent creation templates (e.g. harness_agent).",
     )
 
     # --- 🪵 observability / behavior --------------------------------------------
-    log_level: str = Field(default="INFO", description="Logging level name.")
-    request_timeout_seconds: float = Field(
+    log_level: str = Field(validation_alias="AF_BR_LOG_LEVEL", default="INFO", description="Logging level name.")
+    request_timeout_seconds: float = Field(validation_alias="AF_BR_REQUEST_TIMEOUT_SECONDS", 
         default=5.0, gt=0,
         description="Per-request timeout (seconds) for outbound daemon calls.",
     )
@@ -236,52 +245,52 @@ class BridgeSettings(BaseSettings):
         default=256, ge=1,
         description="Images with base64 payload ≥ this KB are landed to disk by the bridge.",
     )
-    uploads_dir: str = Field(
+    uploads_dir: str = Field(validation_alias="AF_BR_UPLOADS_DIR", 
         default="/tmp/agentflow/uploads",
         description="Directory where bridge lands large inline images before forwarding to daemon.",
     )
-    chat_turn_timeout_seconds: float = Field(
+    chat_turn_timeout_seconds: float = Field(validation_alias="AF_BR_CHAT_TURN_TIMEOUT_SECONDS", 
         default=900.0, gt=0,
-        description="Maximum chat turn duration. Set via CHAT_TURN_TIMEOUT_SECONDS.",
+        description="Maximum chat turn duration. Set via AF_BR_.",
     )
-    daemon_status_refresh_interval: float = Field(
+    daemon_status_refresh_interval: float = Field(validation_alias="AF_BR_DAEMON_STATUS_REFRESH_INTERVAL", 
         default=10.0, gt=0,
         description="Seconds between background daemon status cache refreshes.",
     )
 
     # --- 💾 session persistence (Bridge sessions) ------------------------------
-    session_provider: str = Field(
+    session_provider: str = Field(validation_alias="AF_BR_SESSION_PROVIDER", 
         default="local",
         description=(
             "Session persistence backend: 'local' (SQLite file) or 'kmm' "
-            "(aisf platform KMM service, Phase 3). Set via SESSION_PROVIDER."
+            "(aisf platform KMM service, Phase 3). Set via AF_BR_."
         ),
     )
-    session_db_path: str = Field(
+    session_db_path: str = Field(validation_alias="AF_BR_SESSION_DB_PATH", 
         default="/tmp/agentflow/sessions.db",
         description=(
             "SQLite database path used by LocalSessionProvider. "
-            "Set via SESSION_DB_PATH."
+            "Set via AF_BR_."
         ),
     )
     session_context_limit_rounds: int = Field(
         default=5, ge=1,
         description=(
             "Default number of past dialogue rounds injected into the next "
-            "chat turn as history context. Set via SESSION_CONTEXT_LIMIT_ROUNDS."
+            "chat turn as history context. Set via AF_BR_."
         ),
     )
-    session_sync_interval: float = Field(
+    session_sync_interval: float = Field(validation_alias="AF_BR_SESSION_SYNC_INTERVAL", 
         default=30.0, gt=0,
         description=(
             "Seconds between background agentflow→Bridge session status "
-            "syncs. Set via SESSION_SYNC_INTERVAL. 0 disables the poller "
+            "syncs. Set via AF_BR_. 0 disables the poller "
             "(sync runs only on lifespan start)."
         ),
     )
 
     # --- 🌍 CORS ---------------------------------------------------------------
-    cors_allowed_origins: list[str] = Field(
+    cors_allowed_origins: list[str] = Field(validation_alias="AF_BR_CORS_ALLOWED_ORIGINS", 
         default_factory=lambda: [
             "http://localhost:15173",
             "http://127.0.0.1:15173",

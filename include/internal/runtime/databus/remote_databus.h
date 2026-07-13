@@ -36,6 +36,7 @@ public:
   void unsubscribe(const std::string& key);
   bool index_data_ref(const std::string& owner_index_key, const std::string& data_ref);
   std::vector<std::string> find_indexed_refs(const std::string& owner_index_key) const;
+  void clear_owner_index(const std::string& owner_index_key);
 
 private:
   bool connected_ = false;

@@ -58,7 +58,8 @@ Bridge 通过 `app.mount("/health", bridge_app)` 将全部业务路由挂载在 
 如果 Agent 会生成图片或 HTML，Bridge 必须配置对外可访问的基地址：
 
 ```bash
-# frontend/bridge/.env
+# configs/{env}/bridge.yaml → artifact_public_base_url
+# 或环境变量 ARTIFACT_PUBLIC_BASE_URL
 ARTIFACT_PUBLIC_BASE_URL=https://agent.example.com
 ```
 

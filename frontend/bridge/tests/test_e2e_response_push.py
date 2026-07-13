@@ -101,7 +101,7 @@ class TestResponsePush:
                 f"{OUTFIT_AGENT / '.venv' / 'bin'}"
                 f"{os.pathsep}/usr/bin:/bin:/usr/sbin:/sbin"
             )
-            env["API_KEY"] = "e2e-test-key"
+            env["AF_LLM_API_KEY"] = "e2e-test-key"
             env["AF_LLM_BASE_URL"] = llm_url
             env["AF_LLM_MODEL"] = "e2e-scripted"
             env["AF_SKILL_MAX_COMPLETION_TOKENS"] = "512"

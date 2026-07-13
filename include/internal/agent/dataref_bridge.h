@@ -9,12 +9,15 @@ namespace agentflow {
 namespace framework {
 namespace dataref_bridge {
 
+void init(int capacity_mb, const std::string& redis_url);
+
 std::string store_payload(const std::string& payload,
-                          const std::map<std::string, std::string>& metadata,
-                          const std::string& logical_key);
+                           const std::map<std::string, std::string>& metadata,
+                           const std::string& logical_key);
 bool resolve_payload(const std::string& data_ref, std::string& payload);
 std::vector<std::string> find_refs_by_owner(const std::string& owner_key,
-                                            const std::string& owner_value);
+                                             const std::string& owner_value);
+int cleanup_dialogue(const std::string& dialogue_id);
 
 }  // namespace dataref_bridge
 }  // namespace framework

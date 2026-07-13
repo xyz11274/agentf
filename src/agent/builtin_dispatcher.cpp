@@ -6,6 +6,7 @@
 #include <sstream>
 
 #include "agent/agent.h"
+#include "agent/dataref_bridge.h"
 #include "agent/session.h"
 #include "agent/task.h"
 #include "workflow/workflow.h"
@@ -700,6 +701,13 @@ void BuiltinDispatcher::cleanup_dialogue_data(MMAgent& agent,
 
   Logger::instance().info_f("[CLEANUP_DIALOGUE] Cleaned up %zu skills for dialogue_id=%s",
                             launched_skills.size(), dialogue_id.c_str());
+
+  int bus_b_cleared = dataref_bridge::cleanup_dialogue(dialogue_id);
+  if(bus_b_cleared > 0) {
+    Logger::instance().info_f(
+        "[CLEANUP_DIALOGUE] Cleaned %d DataRef entries (Bus-B) for dialogue_id=%s",
+        bus_b_cleared, dialogue_id.c_str());
+  }
 }
 
 }  // namespace framework

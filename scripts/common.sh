@@ -17,16 +17,6 @@ ar_detect_cores() {
     fi
 }
 
-ar_load_env() {
-    local env_file="${1:-$AR_SCRIPT_DIR/.env}"
-    if [ -f "$env_file" ]; then
-        set -a
-        # shellcheck disable=SC1090
-        source "$env_file"
-        set +a
-    fi
-}
-
 ar_archive_log() {
     local log_file="$1"
     local keep_logs="${2:-false}"

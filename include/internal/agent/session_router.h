@@ -73,6 +73,7 @@ class SessionRouter {
   bool enqueue_response_message(const MMAgentMsgQue::Message& message);
   bool dequeue_response_message(MMAgentMsgQue::Message& message);
   int  get_response_queue_size() const;
+  int  get_request_queue_size() const;
 
  private:
   bool handle_route_message(const MMAgentMsgQue::Message& message);

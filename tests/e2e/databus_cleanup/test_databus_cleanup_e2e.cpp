@@ -553,3 +553,90 @@ TEST(E2EDataBusCleanupStandalone, UnregisterAgentSafeTeardownOrder) {
   runtime->stop();
   SUCCEED() << "I-2：unregister 析构链无野指针崩溃";
 }
+
+// ============================================================================
+// 修复 ⑨ store_with_ref 反向映射根治 logical key 漏删
+//     关联设计文档：docs/design/DataBus总线B修复方案.md §3.3.1
+//     根因：store_with_ref 双份存储（data_ref:{hash} + logical_key），
+//     cleanup 时只删 data_ref 份。现框架层新增反向映射
+//     "data_ref_logical:{data_id}" → logical_key，cleanup 时连带删除。
+//     本用例锁住修复不变量：容量回基线、logical key 不残留。
+//     独立 TEST（非 TEST_F）：避免 fixture agent 与本用例直接操作 databus 的交互
+// ============================================================================
+TEST(E2EDataBusCleanupStandalone, CleanupDialogueLeavesLogicalKeyLeak) {
+  // 不变量 I-1：cleanup 后容量回基线，无 logical key 残留
+  agentflow::runtime::MMDataBus db(4 * 1024 * 1024);
+  const size_t baseline = db.get_used_capacity();
+
+  // 模拟一次对话：store 3 条 payload（带 dialogue_id owner）
+  const std::string dialogue_id = "e2e-leak-test-did";
+  // 注：payload 用短字符串，避免触发 std::ostringstream 的 locale/moneypunct 路径
+  // （本机 miniconda libc++ ABI 与系统 libc++ 不兼容，会在 ostringstream 时 EXC_BAD_ACCESS）
+  const std::string payload_str = "PG-512B";  // 短常量，足以验证双份存储与漏删
+  const agentflow::DataVariant payload = payload_str;
+  agentflow::runtime::MMDataBus::OwnerContext owner;
+  owner.dialogue_id = dialogue_id;
+  owner.session_id  = "e2e-leak-test-sid";
+
+  agentflow::runtime::MMDataBus::DataRef ref1, ref2, ref3;
+  ASSERT_TRUE(db.store_with_ref("msg:msg-001", payload, owner, ref1));
+  ASSERT_TRUE(db.store_with_ref("msg:msg-002", payload, owner, ref2));
+  ASSERT_TRUE(db.store_with_ref("context:e2e-agent:session:e2e-leak-test-sid:msg-003",
+                               payload, owner, ref3));
+
+  const size_t after_store = db.get_used_capacity();
+  EXPECT_GT(after_store, baseline)
+      << "前置：store 3 条 payload 后容量应增加";
+
+  // �前置：data_ref:{hash} 份与 logical key 份都应存在（双份存储）
+  ASSERT_TRUE(db.contains("data_ref:" + ref1.data_id));
+  ASSERT_TRUE(db.contains("msg:msg-001"));
+  ASSERT_TRUE(db.contains("msg:msg-002"));
+  ASSERT_TRUE(db.contains("context:e2e-agent:session:e2e-leak-test-sid:msg-003"));
+
+  // 清理——复刻 dataref_bridge::cleanup_dialogue 的核心逻辑
+  const std::string addr_prefix = "databus://global/";
+  const std::vector<std::string> refs = {
+      ref1.address, ref2.address, ref3.address,
+  };
+  for (const auto& ref_addr : refs) {
+    ASSERT_EQ(ref_addr.rfind(addr_prefix, 0), 0u);
+    std::string data_id = ref_addr.substr(addr_prefix.size());
+
+    // ① 删 data_ref 份
+    db.remove("data_ref:" + data_id);
+
+    // ② 通过反向映射删 logical key 份
+    agentflow::DataVariant lk_val;
+    if (db.get("data_ref_logical:" + data_id, lk_val)) {
+      if (const auto* lk = std::get_if<std::string>(&lk_val)) {
+        db.remove(*lk);
+      }
+    }
+    // ③ 删反向映射自身
+    db.remove("data_ref_logical:" + data_id);
+  }
+
+  const size_t after_cleanup = db.get_used_capacity();
+
+  // === 不变量 I-1：容量回基线（修复后应 PASS）===
+  EXPECT_EQ(after_cleanup, baseline)
+      << "修复不变量：cleanup 后容量回基线。"
+      << "after_cleanup=" << after_cleanup << " baseline=" << baseline;
+
+  // === 不变量 I-1：logical key 不残留 ===
+  EXPECT_FALSE(db.contains("msg:msg-001"))
+      << "修复不变量：logical key 'msg:msg-001' 应已清除";
+  EXPECT_FALSE(db.contains("msg:msg-002"))
+      << "修复不变量：logical key 'msg:msg-002' 应已清除";
+  EXPECT_FALSE(db.contains("context:e2e-agent:session:e2e-leak-test-sid:msg-003"))
+      << "修复不变量：logical key 'context:...:msg-003' 应已清除";
+
+  // === 不变量 I-1：反向映射自身不残留 ===
+  EXPECT_FALSE(db.contains("data_ref_logical:" + ref1.data_id))
+      << "修复不变量：反向映射 data_ref_logical 应已清除";
+  EXPECT_FALSE(db.contains("data_ref_logical:" + ref2.data_id))
+      << "修复不变量：反向映射 data_ref_logical 应已清除";
+  EXPECT_FALSE(db.contains("data_ref_logical:" + ref3.data_id))
+      << "修复不变量：反向映射 data_ref_logical 应已清除";
+}

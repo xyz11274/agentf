@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "agent/agent.h"
+#include "agent/dataref_bridge.h"
 #include "agent/package.h"
 #include "daemon/agent_registry.h"  // NOLINT
 #include "daemon/rpc_handler.h"     // NOLINT
@@ -113,10 +114,31 @@ bool Daemon::initialize() {
     }
   }
 
-  // 3. Create Runtime
+  // 2b. Pre-install agentflow-runtime in the default Python interpreter.
+  //     This provides a fallback when the agent's .venv is unavailable or
+  //     incomplete — the daemon's default Python always has the package.
+  if (!config_.runtime_pkg_dir.empty()) {
+    std::string cmd = "pip install -e " + config_.runtime_pkg_dir + " --quiet 2>/dev/null";
+    int rc = std::system(cmd.c_str());
+    if (rc == 0) {
+      Logger::instance().info_f("[RUNTIME_PKG] Pre-installed agentflow-runtime from %s",
+                                config_.runtime_pkg_dir.c_str());
+    } else {
+      Logger::instance().warn_f("[RUNTIME_PKG] Failed to pre-install agentflow-runtime from %s "
+                                "(exit=%d), continuing without fallback",
+                                config_.runtime_pkg_dir.c_str(), rc);
+    }
+  }
+
+  // 3. Initialize DataRef Bridge (Bus-B) before any store_payload call
+  framework::dataref_bridge::init(
+      config_.dataref_bridge_config.capacity_mb,
+      config_.dataref_bridge_config.redis_url);
+
+  // 4. Create Runtime
   runtime_ = std::make_unique<runtime::MMAgentRuntime>(config_.runtime_config);
 
-  // 4. Create AgentRegistry and load configured agents
+  // 5. Create AgentRegistry and load configured agents
   registry_ = std::make_unique<AgentRegistry>();
   if (!load_agents()) {
     Logger::instance().error("[DAEMON] Failed to load agents");

@@ -47,7 +47,7 @@ def sse_parse(text):
 
 def main():
     print(f"Bridge REST SSE Chat E2E")
-    api_key = os.environ.get("AF_LLM_API_KEY") or os.environ.get("API_KEY", "")
+    api_key = os.environ.get("AF_LLM_API_KEY", "")
     base_url = os.environ.get("AF_LLM_BASE_URL", "")
     use_real = bool(api_key and base_url)
     print(f"  LLM: {'REAL' if use_real else 'MOCK'} {base_url}")
@@ -66,7 +66,7 @@ def main():
 
     # Start bridge (requires correct python3 with uvicorn + websockets)
     bridge_env = dict(os.environ)
-    bridge_env["DAEMON_HOST"] = "127.0.0.1"; bridge_env["DAEMON_PORT"] = str(dp)
+    bridge_env["AF_BR_DAEMON_HOST"] = "127.0.0.1"; bridge_env["AF_BR_DAEMON_PORT"] = str(dp)
     b = subprocess.Popen(
         ["uv", "run", "--directory", str(BRIDGE_DIR),
          "python", "-m", "uvicorn", "main:bridge_app",

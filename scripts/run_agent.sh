@@ -15,15 +15,6 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 AGENT_PATH="$PROJECT_DIR/examples/agent/harness_agent"
 RUNNER="$PROJECT_DIR/build/agent_runner"
 
-# ---------- 加载环境变量 ----------
-ENV_FILE="$SCRIPT_DIR/.env"
-if [ -f "$ENV_FILE" ]; then
-    echo "[INFO] Loading environment from: $ENV_FILE"
-    set -a
-    source "$ENV_FILE"
-    set +a
-fi
-
 # ---------- 检查编译产物 ----------
 if [ ! -f "$RUNNER" ]; then
     echo "[ERROR] agent_runner not found at: $RUNNER"
@@ -72,7 +63,8 @@ case "$MODE" in
             echo "║        ${AF_LLM_BASE_URL}"
         else
             echo "║     ⚠️  Using mock LLM (no real API calls)"
-            echo "║        Set AF_LLM_BASE_URL + AF_LLM_API_KEY in .env"
+            echo "║        Set AF_LLM_BASE_URL + AF_LLM_API_KEY env vars"
+            echo "║        or configs/{env}/bridge.yaml → agent_defaults.llm"
         fi
 
         echo "║                                                ║"

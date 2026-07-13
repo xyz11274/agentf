@@ -76,6 +76,8 @@ bool parse_cli_args(int argc, char* argv[], DaemonConfig& config) {
              "  --flow-trace-file FILE   Flow trace output file (single .ndjson)\n"
              "  --flow-trace-dir DIR     Flow trace output directory (per-session .ndjson)\n"
              "  --drain-timeout MS       Graceful shutdown timeout (default 30000)\n"
+             "  --runtime-pkg-dir DIR    Pre-install agentflow-runtime from this dir\n"
+             "                          (e.g. packages/agentflow-runtime)\n"
              "\n"
              "  --version / --help\n";
       return false;
@@ -158,6 +160,13 @@ bool parse_cli_args(int argc, char* argv[], DaemonConfig& config) {
       if (config.flow_trace_dir.empty()) return false;
     } else if (arg == "--drain-timeout") {
       config.drain_timeout_ms = std::stoi(take_value(i));
+    } else if (arg == "--dataref-capacity-mb") {
+      config.dataref_bridge_config.capacity_mb = std::stoi(take_value(i));
+    } else if (arg == "--dataref-redis-url") {
+      config.dataref_bridge_config.redis_url = take_value(i);
+    } else if (arg == "--runtime-pkg-dir") {
+      config.runtime_pkg_dir = take_value(i);
+      if (config.runtime_pkg_dir.empty()) return false;
     } else {
       std::cerr << "Error: unknown option '" << arg << "'" << std::endl;
       return false;
@@ -183,6 +192,13 @@ void apply_env_overrides(DaemonConfig& config) {
   env_if("AF_FLOW_TRACE_FILE", config.flow_trace_file);
   env_if("AF_FLOW_TRACE_DIR", config.flow_trace_dir);
   env_if("AF_CONFIG_FILE", config.config_file);
+
+  const char* env_cap = std::getenv("AF_DATAREF_CAPACITY_MB");
+  if (env_cap) {
+    int cap = std::atoi(env_cap);
+    if (cap > 0) config.dataref_bridge_config.capacity_mb = cap;
+  }
+  env_if("AF_DATAREF_REDIS_URL", config.dataref_bridge_config.redis_url);
 }
 
 bool load_config_file(DaemonConfig& config) {
@@ -304,6 +320,14 @@ bool load_config_file(DaemonConfig& config) {
     if (is_set(pf)) config.pid_file = pf;
     int64_t dt = dsl::JsonHelper::get_int(daemon_node, "drain_timeout_ms", 0);
     if (dt > 0) config.drain_timeout_ms = static_cast<int>(dt);
+  }
+
+  auto dref = dsl::JsonHelper::get_object(root, "dataref_bridge");
+  if (dref) {
+    int64_t cap = dsl::JsonHelper::get_int(dref, "capacity_mb", 0);
+    if (cap > 0) config.dataref_bridge_config.capacity_mb = static_cast<int>(cap);
+    std::string url = dsl::JsonHelper::get_string(dref, "redis_url");
+    if (is_set(url)) config.dataref_bridge_config.redis_url = url;
   }
 
   return true;

@@ -195,27 +195,42 @@ _AGENT_ENV_DEFAULTS: dict[str, str] = {
     # Coordinator
     "AF_MAX_COORDINATOR_ITERATIONS":  "agent_defaults.coordinator.max_iterations",
     "AF_MAX_COMPLETION_TOKENS":       "agent_defaults.coordinator.max_completion_tokens",
+    "AF_COORDINATOR_LLM_MODEL":       "agent_defaults.coordinator.model",
     # Skill
     "AF_MAX_SKILL_TASK_ITERATIONS":     "agent_defaults.skill.max_iterations",
     "AF_SKILL_MAX_COMPLETION_TOKENS":   "agent_defaults.skill.max_completion_tokens",
     "AF_SKILL_LLM_RECOVERY_ATTEMPTS":   "agent_defaults.skill.llm_recovery_attempts",
     "AF_NODE_EXECUTION_TIMEOUT":        "agent_defaults.skill.node_timeout_sec",
-    # Token 预算
-    "AF_MODEL_MAX_TOKENS":      "agent_defaults.model_max_tokens",
-    "AF_COMPACTION_THRESHOLD":  "agent_defaults.compaction_threshold",
+    "AF_SKILL_LLM_MODEL":               "agent_defaults.skill.model",
+    # Token 预算（YAML 中嵌套在 skill: 下）
+    "AF_MODEL_MAX_TOKENS":      "agent_defaults.skill.model_max_tokens",
+    "AF_COMPACTION_THRESHOLD":  "agent_defaults.skill.compaction_threshold",
     # HTTP
     "AF_LLM_TIMEOUT":           "agent_defaults.llm_timeout",
     "AF_LLM_CONNECT_TIMEOUT":   "agent_defaults.llm_connect_timeout",
     "AF_LLM_MAX_RETRIES":       "agent_defaults.llm_max_retries",
     "AF_LLM_RETRY_BASE_DELAY":  "agent_defaults.llm_retry_base_delay",
+    # LLM 生成参数（Coordinator）
+    "AF_LLM_TEMPERATURE":           "agent_defaults.llm.temperature",
+    "AF_LLM_TOP_P":                 "agent_defaults.llm.top_p",
+    "AF_LLM_FREQUENCY_PENALTY":     "agent_defaults.llm.frequency_penalty",
+    "AF_LLM_PRESENCE_PENALTY":      "agent_defaults.llm.presence_penalty",
+    "AF_LLM_TOP_K":                 "agent_defaults.llm.top_k",
+    "AF_LLM_STOP":                  "agent_defaults.llm.stop",
+    # Coordinator 专用
+    "AF_COORDINATOR_LLM_TEMPERATURE": "agent_defaults.coordinator.temperature",
+    # Skill 专用
+    "AF_SKILL_LLM_TEMPERATURE":      "agent_defaults.skill.temperature",
+    # UDS 通道切换
+    "AF_USE_AISF_MODELS":       "agent_defaults.use_aisf_models",
     # VL
-    "VISION_BASE_URL":  "agent_defaults.vision.base_url",
-    "VISION_MODEL":     "agent_defaults.vision.model",
-    "VISION_API_KEY":   "agent_defaults.vision.api_key",
+    "AF_BR_VISION_BASE_URL":  "agent_defaults.vision.base_url",
+    "AF_BR_VISION_MODEL":     "agent_defaults.vision.model",
+    "AF_BR_VISION_API_KEY":   "agent_defaults.vision.api_key",
     # VL 降级
-    "VISION_FALLBACK_BASE_URL": "agent_defaults.vision_fallback.base_url",
-    "VISION_FALLBACK_MODEL":    "agent_defaults.vision_fallback.model",
-    "VISION_FALLBACK_API_KEY":  "agent_defaults.vision_fallback.api_key",
+    "AF_BR_VISION_FALLBACK_BASE_URL": "agent_defaults.vision_fallback.base_url",
+    "AF_BR_VISION_FALLBACK_MODEL":    "agent_defaults.vision_fallback.model",
+    "AF_BR_VISION_FALLBACK_API_KEY":  "agent_defaults.vision_fallback.api_key",
 }
 
 

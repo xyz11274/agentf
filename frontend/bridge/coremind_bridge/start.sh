@@ -16,10 +16,6 @@ if [ ! -x "$SIDECAR_BIN" ]; then
     echo "[start] SideCar binary not found: $SIDECAR_BIN" >&2
     exit 1
 fi
-if [ -z "${AISF_INTERNAL_TOKEN:-}" ]; then
-    echo "[start] AISF_INTERNAL_TOKEN is required" >&2
-    exit 1
-fi
 
 cleanup() {
     if [ -n "${SIDECAR_PID:-}" ]; then

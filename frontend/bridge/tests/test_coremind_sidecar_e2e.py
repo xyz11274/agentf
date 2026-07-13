@@ -123,7 +123,6 @@ def _sidecar(
         text=True,
         env={
             **os.environ,
-            "AISF_INTERNAL_TOKEN": "trusted-test-token",
             "NO_PROXY": "127.0.0.1,localhost",
             **(extra_env or {}),
         },
@@ -319,12 +318,10 @@ def test_user_request_reaches_node_with_trusted_context(
     bridge_log_file = (tmp_path / "bridge.log").open("wb")
     env = {
         **os.environ,
-        "DAEMON_HOST": "127.0.0.1",
-        "DAEMON_PORT": str(daemon_port),
-        "BRIDGE_HOST": "127.0.0.1",
-        "BRIDGE_PORT": str(bridge_port),
-        "AISF_INTERNAL_TOKEN": "trusted-test-token",
-        "COREMIND_AGENT_ID": "coremind-context-agent",
+        "AF_BR_DAEMON_HOST": "127.0.0.1",
+        "AF_BR_DAEMON_PORT": str(daemon_port),
+        "AF_BR_LISTEN": f"127.0.0.1:{bridge_port}",
+        "AF_BR_COREMIND_AGENT_ID": "coremind-context-agent",
         "PYTHONPATH": str(PROJECT_ROOT / "frontend" / "bridge"),
         "NO_PROXY": "127.0.0.1,localhost",
         "no_proxy": "127.0.0.1,localhost",

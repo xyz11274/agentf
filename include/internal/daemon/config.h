@@ -48,6 +48,19 @@ struct DaemonConfig {
   bool daemonize = false;
   int drain_timeout_ms = 30000;
 
+  // DataRef Bridge (总线 B) configuration
+  struct DataRefBridgeConfig {
+    int         capacity_mb = 512;
+    std::string redis_url   = "redis://127.0.0.1:6379";
+  };
+  DataRefBridgeConfig dataref_bridge_config;
+
+  // Runtime package directory (e.g. packages/agentflow-runtime).
+  // If set, daemon runs `pip install -e <dir>` at startup to pre-install
+  // agentflow-runtime in the default Python interpreter, providing a
+  // fallback when the agent's .venv is unavailable or incomplete.
+  std::string runtime_pkg_dir;
+
   // CLI-only fields (not in config file)
   std::string config_file;
   bool validate = false;

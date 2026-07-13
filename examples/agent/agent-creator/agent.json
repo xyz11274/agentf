@@ -1,0 +1,37 @@
+{
+  "name": "AgentCreator",
+  "version": "1.0.0",
+  "description": "对话创建智能体 — 通过自然语言引导用户创建新 Agent 包，实时生成文件结构",
+  "session_pool_size": 1,
+  "max_workflows": 10,
+  "max_concurrent_workflows": 5,
+  "data_bus_capacity_mb": 5,
+  "tasks": [
+    {
+      "id": 0,
+      "type": "dispatcher",
+      "description": "Routes to harness_run skill via next_skills",
+      "next_skills": ["harness_run"],
+      "workflow_pool_size": 1
+    },
+    {
+      "id": 1,
+      "type": "coordinator",
+      "description": "Collects skill result and returns to client",
+      "workflow_file": "coordinator_collect.json",
+      "workflow_pool_size": 1
+    },
+    {
+      "id": 2,
+      "type": "skill",
+      "description": "Runs the LLM think-and-act loop for conversational agent creation",
+      "workflow_file": "harness_run_workflow.json",
+      "skill": {
+        "name": "harness_run",
+        "config_dir": "harness/skills/harness_run",
+        "instance_pool_size": 1
+      },
+      "workflow_pool_size": 1
+    }
+  ]
+}

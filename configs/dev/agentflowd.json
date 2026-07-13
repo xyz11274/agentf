@@ -1,0 +1,30 @@
+{
+  "server": {
+    "listen": "127.0.0.1:17891",
+    "uds_biz_path": "/tmp/agentflowd_biz.sock",
+    "uds_ctrl_path": "/tmp/agentflowd_ctrl.sock",
+    "max_connections": 1024
+  },
+  "runtime": {
+    "role": "master",
+    "worker_threads": 4,
+    "local_worker_id": "worker-1",
+    "worker_default_workflow_threads": 2,
+    "worker_control_threads": 1,
+    "worker_business_threads": 2,
+    "worker_queue_size": 1024
+  },
+  "dataref_bridge": {
+    "capacity_mb": 512,
+    "redis_url": ""
+  },
+  "logging": {
+    "level": "debug",
+    "file": ""
+  },
+  "daemon": {
+    "pid_file": "/tmp/agentflowd.pid",
+    "drain_timeout_ms": 30000
+  },
+  "agents": []
+}

@@ -130,7 +130,7 @@ reqmsg → MMAgent.default_session → MMAgent.new_session → SessionTaskCoordi
 MMAgentTask → Scheduler → Deployer → MMWorkerEngine → Node执行 → 状态更新
 ```
 
-使用 `examples/agent/basic_agent` 作为测试数据。
+使用 `examples/agent/outfit-test-agent` 作为测试数据。
 
 | 用例ID | 名称 | 描述 |
 |--------|------|------|
@@ -172,10 +172,9 @@ ctest --test-dir build -R E2E --output-on-failure
 
 # 运行特定场景
 ./build/bin/test_e2e_message_routing
-./build/bin/test_e2e_basic_agent
 
 # 运行单个测试用例
-./build/bin/test_e2e_basic_agent --gtest_filter=BasicAgentE2ETest.PackageLoading
+./build/bin/test_e2e_message_routing --gtest_filter=...
 ```
 
 ### E2E 测试设计原则

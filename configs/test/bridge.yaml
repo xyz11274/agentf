@@ -1,0 +1,108 @@
+# AgentFlow Bridge — 测试环境配置
+#
+# 适用于 E2E 测试和 CI 环境。
+# 使用方式：AGENTFLOW_ENV=test ./scripts/start_bridge.sh
+# 加载优先级: 系统环境变量 > .env 文件 > 此文件 > 代码默认值
+
+# ── Daemon（agentflowd）连接 ──────────────────────────────────────
+daemon:
+  host: "127.0.0.1"
+  port: 17891
+
+# ── Bridge 服务绑定 ───────────────────────────────────────────────
+bridge:
+  listen: "0.0.0.0:8199"
+
+# ── Sidecar（测试环境不启用） ─────────────────────────────────────
+sidecar:
+  enabled: false
+  listen: "0.0.0.0:23767"
+  aisf_adapter_url: "http://127.0.0.1:18080"
+
+# ── AISF Adapter ───────────────────────────────────────────────────
+aisf_adapter:
+  agent_id: "outfit-assistant"
+  mode: "async"
+  timeout: 60.0  # 测试用较短超时
+  upstream:
+    scheme: "http"
+    callback_port: 23767
+    callback_path: "/coremind/systemagent/v1/callback"
+    client_cert_path: ""
+    client_key_path: ""
+    client_key_password: ""
+    ca_cert_path: ""
+    verify: false  # 测试场景跳过证书校验
+
+# ── Artifact 公网地址 ─────────────────────────────────────────────
+artifact_public_base_url: "http://localhost:8199/health"
+
+# ── 文件路径 ──────────────────────────────────────────────────────
+agent_packages_dir: "examples/agent"
+skill_hub_dir: "resource/skill_hub"
+agent_template_dir: "frontend/bridge/templates/agent_template"
+# ── 日志与超时 ────────────────────────────────────────────────────
+log_level: "DEBUG"
+request_timeout_seconds: 30.0  # CI 环境保留一定余量
+upload_max_body_size_mb: 100
+
+# ── 会话持久化 ────────────────────────────────────────────────────
+session_provider: "local"
+session_db_path: "/tmp/agentflow/test-sessions.db"  # 测试用临时路径
+session_context_limit_rounds: 5
+session_sync_interval: 10.0  # 测试时缩短同步间隔
+
+# ── 多模态内容 ────────────────────────────────────────────────────
+content_image_inline_threshold_kb: 256
+uploads_dir: "/tmp/agentflow/test-uploads"
+chat_turn_timeout_seconds: 120.0  # 测试较短超时
+daemon_status_refresh_interval: 5.0
+
+# ── CORS（测试环境全开放） ───────────────────────────────────────
+cors_allowed_origins:
+  - "*"
+
+# ── Agent 默认配置（load_agent 时注入） ──────────────────────────
+agent_defaults:
+  llm:
+    api_key: "${AF_LLM_API_KEY:-e2e-test-key}"
+    base_url: "${AF_LLM_BASE_URL:-}"
+    model: "${AF_LLM_MODEL:-e2e-scripted}"
+    temperature: 0.7
+    top_p: 1.0
+    frequency_penalty: 0.0
+    presence_penalty: 0.0
+    top_k: 0
+    stop: ""
+  llm_fallback:
+    api_key: "e2e-test-key"
+    base_url: ""
+    model: "e2e-scripted"
+  coordinator:
+    max_iterations: 5       # 测试缩短轮次
+    max_completion_tokens: 1024
+    model: ""
+    temperature: 0.3
+  skill:
+    max_iterations: 4       # 测试缩短轮次
+    max_completion_tokens: 1024
+    llm_recovery_attempts: 1
+    node_timeout_sec: 60    # 测试较短超时
+    model_max_tokens: 32000 # 测试减小上下文
+    compaction_threshold: 0.8
+    model: ""               # 空=使用全局 AF_LLM_MODEL
+    temperature: 0.5
+  llm_timeout: 30           # 测试短超时
+  llm_connect_timeout: 5
+  llm_max_retries: 1
+  llm_retry_base_delay: 0.5
+  # UDS 通道切换：true 时为模型名自动补 aisf/ 前缀，走 UDS 而非 HTTP
+  use_aisf_models: false
+  vision:
+    base_url: ""
+    model: ""
+    api_key: ""
+  vision_fallback:
+    base_url: ""
+    model: ""
+    api_key: ""

@@ -130,5 +130,13 @@ std::vector<std::string> RemoteDatabus::find_indexed_refs(const std::string& own
   return refs;
 }
 
+void RemoteDatabus::clear_owner_index(const std::string& owner_index_key) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  owner_index_.erase(owner_index_key);
+  if(connected_) {
+    redis_adapter_instance().del(owner_index_key);
+  }
+}
+
 }  // namespace runtime
 }  // namespace agentflow

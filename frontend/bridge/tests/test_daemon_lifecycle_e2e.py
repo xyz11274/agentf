@@ -18,7 +18,7 @@ import websockets
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DAEMON_BINARY = PROJECT_ROOT / "build" / "agentflowd"
-BASIC_AGENT = PROJECT_ROOT / "examples" / "agent" / "basic_agent"
+HARNESS_AGENT = PROJECT_ROOT / "frontend" / "bridge" / "templates" / "agent_template" / "harness_agent"
 
 
 def _free_port() -> int:
@@ -64,9 +64,9 @@ def _start_daemon(port: int, log_path: Path) -> tuple[subprocess.Popen[bytes], A
             "--listen",
             f"127.0.0.1:{port}",
             "--package",
-            str(BASIC_AGENT),
+            str(HARNESS_AGENT),
         ],
-        cwd=BASIC_AGENT,
+        cwd=HARNESS_AGENT,
         env={**os.environ, "PYTHONUNBUFFERED": "1"},
         stdout=log_file,
         stderr=subprocess.STDOUT,

@@ -73,9 +73,9 @@ while [ $# -gt 0 ]; do
             echo "  --log-level|-l LEVEL   uvicorn log level: debug|info|warning (default: info)"
             echo "  --no-reload|-r         Disable hot-reload (dev mode only)"
             echo "  --keep-logs            Keep previous log instead of archiving"
-            echo "  dev|production         Run mode (default: dev)"
+            echo "  dev|test|production    Run mode (default: dev)"
             exit 0 ;;
-        dev|production)         MODE="$1"; shift ;;
+        dev|test|production)    MODE="$1"; shift ;;
         *)                      echo "[ERROR] Unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -83,23 +83,25 @@ done
 case "$MODE" in
     dev)
         HOST="0.0.0.0"
+        export AGENTFLOW_ENV="dev" AF_BR_ENV="dev"
         if [ "$NO_RELOAD" = false ]; then
             RELOAD=(--reload --reload-dir "$AR_PROJECT_ROOT/frontend/bridge")
         else
             RELOAD=()
         fi
         ;;
-    production)
-        HOST="127.0.0.1"
-        RELOAD=()
-        ;;
+    test)
+            HOST="127.0.0.1"
+            export AGENTFLOW_ENV="test" AF_BR_ENV="test"
+            RELOAD=()
+            ;;
+        production)
+            HOST="127.0.0.1"
+            export AGENTFLOW_ENV="prod" AF_BR_ENV="prod"
+            RELOAD=()
+            ;;
 esac
 
-ar_load_env
-if [ "$MODE" = "production" ] && [ -z "${AISF_INTERNAL_TOKEN:-}" ]; then
-    echo "[ERROR] AISF_INTERNAL_TOKEN is required in production" >&2
-    exit 1
-fi
 ar_require_command python3
 if ! PYTHONPATH="$AR_PROJECT_ROOT/frontend/bridge" python3 -c "import fastapi, uvicorn" 2>/dev/null; then
     echo "[ERROR] Bridge dependencies are missing; install frontend/bridge/requirements.txt" >&2

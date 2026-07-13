@@ -147,6 +147,10 @@ int SessionRouter::get_response_queue_size() const {
   return response_queue_.get_queue_size();
 }
 
+int SessionRouter::get_request_queue_size() const {
+  return request_queue_.get_queue_size();
+}
+
 bool SessionRouter::handle_route_message(const MMAgentMsgQue::Message& message) {
   const auto user_it = message.metadata.find("user_id");
   const auto client_it = message.metadata.find("client_id");

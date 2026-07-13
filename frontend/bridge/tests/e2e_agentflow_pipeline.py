@@ -1,23 +1,20 @@
 #!/usr/bin/env python3
 """
-AgentFlow E2E — 真实 LLM + agentflow 执行 (直接 daemon JSON-RPC)
+AgentFlow E2E — real LLM + agentflow execution (direct daemon JSON-RPC)
 
 验证完整的 agentflow 执行链路，不含 bridge 层：
   1. daemon 启动 + agent 注册
-  2. agent.execute → workflow → LLM call (MiniMax) → 返回内容
+  2. agent.execute → workflow → LLM call → 返回内容
   3. session.list 返回已创建的会话
   4. 多轮对话保持上下文
 
-用法:
-  set -a; source examples/agent/outfit-assistant/.env; set +a
-  python3 scripts/tests/e2e_agentflow_pipeline.py
+LLM 配置优先读取环境变量，缺失时自动从 outfit-assistant/.env 加载。
 """
 
 from __future__ import annotations
 
 import json
 import os
-import signal
 import socket
 import subprocess
 import sys
@@ -28,6 +25,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DAEMON_BINARY = PROJECT_ROOT / "build" / "agentflowd"
 OUTFIT_AGENT = str(PROJECT_ROOT / "examples" / "agent" / "outfit-assistant")
+OUTFIT_ENV_FILE = PROJECT_ROOT / "examples" / "agent" / "outfit-assistant" / ".env"
 
 PASS = 0
 FAIL = 0
@@ -52,67 +50,89 @@ def free_port() -> int:
 def wait_port(port: int, process: subprocess.Popen, timeout: float = 15) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        if process.poll() is not None: return False
+        if process.poll() is not None:
+            return False
         try:
-            with socket.socket() as s: s.settimeout(0.5); s.connect(("127.0.0.1", port)); return True
-        except: pass
+            with socket.socket() as s:
+                s.settimeout(0.5)
+                s.connect(("127.0.0.1", port))
+                return True
+        except Exception:
+            pass
         time.sleep(0.2)
     return False
 
 
-def jsonrpc(host: str, port: int, method: str, params: dict, timeout: float = 10) -> dict:
+def jsonrpc(host: str, port: int, method: str, params: dict,
+            timeout: float = 10) -> dict:
+    """Send JSON-RPC request, read newline-delimited one-line response."""
     with socket.socket() as s:
-        s.settimeout(timeout); s.connect((host, port))
-        req = json.dumps({"jsonrpc": "2.0", "method": method, "params": params, "id": 1})
+        s.settimeout(timeout)
+        s.connect((host, port))
+        req = json.dumps(
+            {"jsonrpc": "2.0", "method": method, "params": params, "id": 1})
         s.sendall((req + "\n").encode())
         chunks = []
         while True:
             c = s.recv(1)
-            if not c or c == b"\n": break
+            if not c or c == b"\n":
+                break
             chunks.append(c)
         return json.loads(b"".join(chunks).decode())
 
 
 def execute_and_poll(port: int, agent_id: str, task_id: str, user_id: str,
-                     client_id: str, content: str, timeout: float = 120) -> dict | None:
-    """Send TASKASSIGNMENT via JSON-RPC and poll for response."""
-    # Build the full task assignment message
-    r = jsonrpc("127.0.0.1", port, "TASKASSIGNMENT", {
-        "Header": {
-            "MessageType": "UserTaskManagement", "TaskID": task_id,
-            "Sender": "SystemAgent", "Receiver": "HealthAgent",
-            "UserName": user_id, "DeviceId": "e2e-device",
-            "ClientSessionId": client_id, "DeviceCategory": "2",
-            "UUID": f"uuid-{task_id}",
-            "AcmSessionId": "", "DialogueId": "", "SessionId": "",
-            "EventTimeStamp": "2026-07-04T12:00:00Z",
-            "SysAgentEntity": "127.0.0.1",
-            "TeamEnvironmentID": "te_test_001", "ClientExField": "",
-        },
-        "Data": {
-            "MessageType": "TaskAssignment", "UserInputText": content,
-            "RewriteQ": content, "UserIntent": "",
-            "UserInputObject": '{"code":200003,"data":{"intent":"","params":null}}',
-            "UserSpecifiedAgent": "", "APPName": "", "ToolName": "",
-            "IsHaveSendHuoShan": "0", "LongHistory": "",
-        },
-    })
-    print(f"    Execute response OK, polling for task {task_id}...", flush=True)
+                     client_id: str, content: str,
+                     timeout: float = 120) -> dict | None:
+    """Execute agent task via agent.execute and poll via agent.poll_response.
 
-    # Poll for response
+    与 e2e_helpers.poll_agent_response 同样的兜底策略：
+    agent.poll_response 的消息可能被 ResponsePoller（50ms 周期）异步通知
+    消费，消费后 poll 返回 messages=[]、complete=false。因此高频轮询 +
+    每 2 秒 fallback 到 workflow.list_instances 检查 workflow 是否已结束。
+    """
+    r = jsonrpc("127.0.0.1", port, "agent.execute", {
+        "agent_id": agent_id, "user_id": user_id, "client_id": client_id,
+        "content": content, "request_id": task_id,
+    })
+    if "error" in r:
+        print(f"    ❌ agent.execute error: {r['error']}", flush=True)
+        return None
+    print(f"    Execute OK, polling task {task_id}...", flush=True)
+
     deadline = time.monotonic() + timeout
+    poll_count = 0
     while time.monotonic() < deadline:
-        resp = jsonrpc("127.0.0.1", port, "RESPONSE",
-                       {"TaskID": task_id}, timeout=5)
+        poll_count += 1
+        resp = jsonrpc("127.0.0.1", port, "agent.poll_response", {
+            "agent_id": agent_id, "user_id": user_id, "client_id": client_id,
+            "timeout_ms": "500",
+        }, timeout=5)
+        if "error" in resp:
+            time.sleep(0.2)
+            continue
         result = resp.get("result", {})
-        msg_type = result.get("MessageType")
-        if msg_type == "UserOutput":
-            return result
-        if msg_type == "TaskStatusManagement":
-            data = result.get("Data", {})
-            if data.get("TaskStatusCode") == 200:
-                return result
-        time.sleep(0.5)
+        messages = result.get("messages", [])
+        contents = [m.get("content", "") for m in messages if m.get("content")]
+        if contents:
+            return {"Data": {"UserOutputText": contents[-1]}}
+
+        # 每 2 秒尝试一次 workflow.list_instances 兜底
+        # （ResponsePoller 可能已消费消息，poll 返回空但 workflow 已完成）
+        if poll_count % 20 == 0:
+            wf = jsonrpc("127.0.0.1", port, "workflow.list_instances", {},
+                        timeout=5)
+            wf_result = wf.get("result", {})
+            instances = wf_result.get("instances", []) if isinstance(wf_result, dict) else []
+            running = any(
+                inst.get("status") == "running" for inst in instances
+                if isinstance(inst, dict)
+            )
+            if not running:
+                # 无运行中 workflow → 任务已完成（消息被 ResponsePoller 消费）
+                return {"Data": {"UserOutputText": ""}}
+
+        time.sleep(0.1)
     return None
 
 
@@ -121,105 +141,147 @@ def main() -> int:
     print("AgentFlow E2E — real LLM + agentflow execution")
     print("=" * 60)
 
-    api_key = os.environ.get("AF_LLM_API_KEY") or os.environ.get("API_KEY", "")
+    # ── Load LLM config: env vars first, fallback to .env ──
+    api_key = os.environ.get("AF_LLM_API_KEY", "")
     base_url = os.environ.get("AF_LLM_BASE_URL", "")
+    llm_model = os.environ.get("AF_LLM_MODEL", "")
+
     if not api_key or not base_url:
-        print("\n⚠️  No AF_LLM_BASE_URL / API_KEY set — tests will fail")
-        print("  Run: set -a; source examples/agent/outfit-assistant/.env; set +a\n")
+        if OUTFIT_ENV_FILE.is_file():
+            try:
+                from dotenv import load_dotenv
+                loaded = load_dotenv(OUTFIT_ENV_FILE, override=False)
+                if loaded:
+                    api_key = api_key or os.environ.get("AF_LLM_API_KEY", "")
+                    base_url = base_url or os.environ.get("AF_LLM_BASE_URL", "")
+                    llm_model = llm_model or os.environ.get("AF_LLM_MODEL", "")
+                    print(f"   📄 Loaded LLM config from {OUTFIT_ENV_FILE.name}", flush=True)
+            except ImportError:
+                pass
+
+    if not api_key or not base_url:
+        print(f"\n❌ LLM not configured: set AF_LLM_API_KEY + AF_LLM_BASE_URL")
+        print(f"   (expected in {OUTFIT_ENV_FILE} or environment)\n", flush=True)
+        return 1
 
     if not DAEMON_BINARY.is_file():
-        print(f"❌ Daemon not built: {DAEMON_BINARY}"); return 1
+        print(f"❌ Daemon not built: {DAEMON_BINARY}")
+        return 1
+
     print(f"\n✅ Daemon: {DAEMON_BINARY}")
-    print(f"✅ LLM: {base_url}")
+    print(f"✅ LLM: {base_url}  model={llm_model or '(default)'}")
     print()
 
     # ── Start daemon ──
     port = free_port()
-    daemon_env = dict(os.environ)
-    daemon_env["PATH"] = f"{PROJECT_ROOT / 'examples' / 'agent' / 'outfit-assistant' / '.venv' / 'bin'}{os.pathsep}/usr/bin:/bin:/usr/sbin:/sbin"
-
     print(f"🚀 Daemon port {port}...", end=" ", flush=True)
+
+    venv_bin = str(PROJECT_ROOT / 'examples' / 'agent' / 'outfit-assistant' / '.venv' / 'bin')
+    daemon_env = {
+        "PATH": f"{venv_bin}{os.pathsep}/usr/bin:/bin:/usr/sbin:/sbin",
+        "AF_LLM_API_KEY": api_key,
+        "AF_LLM_BASE_URL": base_url,
+        "AF_LLM_MODEL": llm_model,
+        "AF_SKILL_MAX_COMPLETION_TOKENS": "512",
+        "NO_PROXY": "127.0.0.1,localhost",
+        "no_proxy": "127.0.0.1,localhost",
+    }
+
     daemon = subprocess.Popen(
         [str(DAEMON_BINARY), "--listen", f"127.0.0.1:{port}", "--package", OUTFIT_AGENT],
+        cwd=PROJECT_ROOT,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=daemon_env,
     )
-    assert wait_port(port, daemon), "Daemon failed to start"
-    time.sleep(1)
-    r = jsonrpc("127.0.0.1", port, "agent.list", {})
-    agents = [a.get("agent_id", "") for a in r.get("result", {}).get("agents", [])]
-    assert "outfit-assistant" in agents, f"Agent not registered: {agents}"
-    print(f"✅ PID={daemon.pid}, agents={agents}")
 
+    _exit_code = 0
     try:
-        # ═══════════════════════════════════════════════════
-        # Test 1: Execute single turn
-        # ═══════════════════════════════════════════════════
-        print(f"\n─── Test 1: Single-turn agent.execute ───")
-        tid1 = f"e2e-{uuid.uuid4().hex[:8]}"
-        result = execute_and_poll(port, "outfit-assistant", tid1,
-                                  "e2e-u1", "e2e-c1",
-                                  "推荐一套适合开会的穿搭", timeout=120)
-        if result:
-            text = result.get("Data", {}).get("UserOutputText", "")
-            if len(text) > 20:
-                ok(f"Single turn: {len(text)} chars — \"{text[:60]}...\"")
-            elif text:
-                ok(f"Single turn: {len(text)} chars")
+        if not wait_port(port, daemon):
+            print(f"❌ Daemon failed to start on port {port}", flush=True)
+            _exit_code = 1
+        else:
+            time.sleep(1)
+            r = jsonrpc("127.0.0.1", port, "agent.list", {})
+            agents_data = r.get("result", {}).get("agents", [])
+            agents = [a.get("agent_id", "") for a in agents_data]
+            if "outfit-assistant" not in agents:
+                print(f"❌ Agent not registered. Got: {agents}", flush=True)
+                _exit_code = 1
             else:
-                fail(f"Single turn: no UserOutputText — keys={list(result.get('Data',{}).keys())}")
-        else:
-            fail("Single turn: no response (timeout)")
+                print(f"✅ PID={daemon.pid}, agents={agents}")
 
-        # ═══════════════════════════════════════════════════
-        # Test 2: Session persistence
-        # ═══════════════════════════════════════════════════
-        print(f"\n─── Test 2: Session persistence ───")
-        r = jsonrpc("127.0.0.1", port, "session.list",
-                    {"agent_id": "outfit-assistant", "user_id": "e2e-u1"})
-        sessions = r.get("result", {}).get("sessions", [])
-        matching = [s for s in sessions if s.get("user_id") == "e2e-u1"]
-        if matching:
-            ok(f"Session: {matching[0].get('status','?')} user_id={matching[0].get('user_id','?')}")
-        else:
-            fail(f"No session for e2e-u1 — {sessions}")
-
-        # ═══════════════════════════════════════════════════
-        # Test 3: Multi-turn (3 turns, same user/client)
-        # ═══════════════════════════════════════════════════
-        print(f"\n─── Test 3: Multi-turn (3 turns) ───")
-        uid3 = f"e2e-mt-{uuid.uuid4().hex[:6]}"
-        cid3 = f"cli-{uuid.uuid4().hex[:6]}"
-        turns_ok = 0
-        for i, msg in enumerate([
-            "我要去上海出差一周",
-            "我更喜欢商务休闲风格",
-            "能推荐几套具体的搭配吗？",
-        ]):
-            tid = f"e2e-{uuid.uuid4().hex[:8]}"
-            result = execute_and_poll(port, "outfit-assistant", tid,
-                                      uid3, cid3, msg, timeout=120)
+        if _exit_code == 0:
+            # ══════════════════════════════════════════════
+            # Test 1: Single-turn
+            # ══════════════════════════════════════════════
+            print(f"\n─── Test 1: Single-turn agent.execute ───")
+            tid1 = f"e2e-{uuid.uuid4().hex[:8]}"
+            result = execute_and_poll(port, "outfit-assistant", tid1,
+                                      "e2e-u1", "e2e-c1",
+                                      "推荐一套适合开会的穿搭", timeout=120)
             if result:
                 text = result.get("Data", {}).get("UserOutputText", "")
-                turns_ok += 1 if len(text) > 0 else 0
-                print(f"    Turn {i+1}: {len(text)} chars", flush=True)
+                if len(text) > 20:
+                    ok(f"Single turn: {len(text)} chars — \"{text[:60]}...\"")
+                elif text:
+                    ok(f"Single turn: {len(text)} chars")
+                else:
+                    fail(f"Single turn: empty UserOutputText")
             else:
-                print(f"    Turn {i+1}: no response", flush=True)
-        if turns_ok == 3:
-            ok("Multi-turn: 3/3 turns completed with real LLM calls")
-        else:
-            fail(f"Multi-turn: only {turns_ok}/3")
+                fail("Single turn: no response (timeout)")
+
+            # ══════════════════════════════════════════════
+            # Test 2: Session persistence
+            # ══════════════════════════════════════════════
+            print(f"\n─── Test 2: Session persistence ───")
+            r = jsonrpc("127.0.0.1", port, "session.list",
+                        {"agent_id": "outfit-assistant", "user_id": "e2e-u1"})
+            sessions = r.get("result", {}).get("sessions", [])
+            matching = [s for s in sessions if s.get("user_id") == "e2e-u1"]
+            if matching:
+                ok(f"Session: {matching[0].get('status','?')} user_id={matching[0].get('user_id','?')}")
+            else:
+                fail(f"No session for e2e-u1 — {sessions}")
+
+            # ══════════════════════════════════════════════
+            # Test 3: Multi-turn (3 turns)
+            # ══════════════════════════════════════════════
+            print(f"\n─── Test 3: Multi-turn (3 turns) ───")
+            uid3 = f"e2e-mt-{uuid.uuid4().hex[:6]}"
+            cid3 = f"cli-{uuid.uuid4().hex[:6]}"
+            turns_ok = 0
+            for i, msg in enumerate([
+                "我要去上海出差一周",
+                "我更喜欢商务休闲风格",
+                "能推荐几套具体的搭配吗？",
+            ]):
+                tid = f"e2e-{uuid.uuid4().hex[:8]}"
+                result = execute_and_poll(port, "outfit-assistant", tid,
+                                          uid3, cid3, msg, timeout=120)
+                if result:
+                    text = result.get("Data", {}).get("UserOutputText", "")
+                    turns_ok += 1 if len(text) > 0 else 0
+                    print(f"    Turn {i+1}: {len(text)} chars", flush=True)
+                else:
+                    print(f"    Turn {i+1}: no response", flush=True)
+            if turns_ok == 3:
+                ok("Multi-turn: 3/3 turns completed with real LLM calls")
+            else:
+                fail(f"Multi-turn: only {turns_ok}/3")
 
     finally:
         print(f"\n─── Cleanup ───")
         daemon.terminate()
-        try: daemon.wait(timeout=10)
-        except: daemon.kill()
+        try:
+            daemon.wait(timeout=10)
+        except Exception:
+            daemon.kill()
+            daemon.wait(timeout=3)
         print(f"   ✅ Stopped")
 
     print(f"\n{'='*60}")
     print(f"Result: {PASS} pass / {FAIL} fail / {PASS+FAIL} total")
     print(f"{'='*60}")
-    return 0 if FAIL == 0 else 1
+    return _exit_code if _exit_code else (0 if FAIL == 0 else 1)
 
 
 if __name__ == "__main__":

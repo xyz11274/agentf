@@ -1163,13 +1163,32 @@ void MMAgent::handle_dialogue_interrupt(const std::shared_ptr<MMAgentSession>& s
     }
   }
 
-  // 3. Clean up DataBus keys for this dialogue (forces coordinator path
+  // 3. Publish interrupt flag to global sys namespace BEFORE cleanup.
+  //    Subprocess pollers (skill_executor / coordinator_decide) read this
+  //    via databus.get_global("interrupt:{dialogue_id}") at the top of each
+  //    LLM round and exit when set. MUST be written before cleanup_dialogue_data
+  //    so the flag survives the dialogue-scoped subtree wipe (flag is in
+  //    global sys namespace, not dialogue-scoped, but the ordering invariant
+  //    I-INT-1 protects against the window where flag is unset AND data is
+  //    already cleared — a subprocess polling in that window would see both
+  //    empty and wrongly conclude "normally completed".
+  //    Flag lifecycle: NOT cleared by dialogue-level cleanup (different prefix);
+  //    cleared by session aging (remove_by_prefix "/session/{sid}/") or agent stop.
+  //    See docs/design/modules/dialogue-interrupt-propagation.md §3.2.
+  {
+    std::string interrupt_key = "/session/" + session->get_session_id() +
+                                "/sys/interrupt:" + dialogue_id;
+    publish_data(interrupt_key, std::string("true"));
+    Logger::instance().info_f("[CONTROL] DIALOGUE-INTERRUPT set flag key=%s", interrupt_key.c_str());
+  }
+
+  // 4. Clean up DataBus keys for this dialogue (forces coordinator path
   //    to finalize and trigger cleanup_dialogue_data, which releases the
   //    serialization lock via release_dialogue_lock).
   BuiltinDispatcher::cleanup_dialogue_data(*this, session->get_session_id(), dialogue_id);
   cleanup_multi_responses(*this, session->get_session_id(), dialogue_id);
 
-  // 4. Belt-and-suspenders: explicitly release the lock in case
+  // 5. Belt-and-suspenders: explicitly release the lock in case
   //    cleanup_dialogue_data's normal path doesn't fire (e.g. no
   //    coordinator round was triggered yet).  Idempotent.
   session->release_dialogue_lock(dialogue_id);
@@ -1237,8 +1256,13 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
 
   std::string payload = message.content;
   std::string payload_ref = message.data_ref;
-  Logger::instance().info_f("[BUILD_RUNTIME_TASK] message.content='%s', message.data_ref='%s'",
-                            message.content.c_str(), message.data_ref.c_str());
+  {
+    // Payload truncation: log preview only, full content in debug
+    std::string content_preview = message.content.substr(0, 120);
+    if(message.content.size() > 120) content_preview += "...";
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] message.content_preview='%s' (full_len=%zu), message.data_ref='%s'",
+                              content_preview.c_str(), message.content.size(), message.data_ref.c_str());
+  }
   if(payload_ref.empty() && !payload.empty()) {
     std::ostringstream logical_key;
     logical_key << "msg:" << message.message_id;
@@ -1275,6 +1299,22 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
     task->set_parameter("trace_labels", trace_labels_it->second);
     Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set trace_labels=%s for task=%s",
                               trace_labels_it->second.c_str(), task_config.task_id.c_str());
+  }
+
+  // Pass trace_id from message metadata to task parameters for end-to-end correlation
+  {
+    bool found_trace_id = false;
+    for(const auto& [k, v] : message.metadata) {
+      if(k == "trace_id" && !v.empty()) found_trace_id = true;
+    }
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK_DEBUG] metadata_keys=%zu trace_id_found=%s",
+                              message.metadata.size(), found_trace_id ? "true" : "false");
+    if(const auto trace_id_it = message.metadata.find("trace_id");
+       trace_id_it != message.metadata.end() && !trace_id_it->second.empty()) {
+      task->set_parameter("trace_id", trace_id_it->second);
+      Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set trace_id=%s for task=%s",
+                                 trace_id_it->second.c_str(), task_config.task_id.c_str());
+    }
   }
 
   if(const auto platform_context_it = message.metadata.find("platform_context");
@@ -1609,15 +1649,45 @@ void MMAgent::handle_task_intent_request(const std::shared_ptr<MMAgentSession>& 
   }
 }
 
+// ---------------------------------------------------------------------------
+// Scope guard for handle_task_data_exchange duration logging
+// ---------------------------------------------------------------------------
+namespace {
+
+struct DataExchangeDurationGuard {
+  explicit DataExchangeDurationGuard(std::string trace)
+      : trace_id(std::move(trace)), start_ms(get_current_timestamp_ms()) {}
+  ~DataExchangeDurationGuard() {
+    int64_t dur = get_current_timestamp_ms() - start_ms;
+    Logger::instance().debug_f("[DATA_EXCHANGE_DURATION] duration=%ldms trace=%s",
+                               dur, trace_id.empty() ? "(none)" : trace_id.c_str());
+  }
+  std::string trace_id;
+  int64_t start_ms;
+};
+
+} // anonymous namespace
+
 void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& session,
                                         const std::shared_ptr<MMAgentTask>& task,
                                         const MMAgentMsgQue::Message& message) {
   if(!session || !task) {
     return;
   }
-  Logger::instance().info_f("[HANDLE_DATA_EXCHANGE] task_id=%s, task_type=%s, message_id=%s",
+
+  // Extract trace_id from message metadata for correlation
+  std::string trace_id;
+  if(message.metadata.count("trace_id")) {
+    trace_id = message.metadata.at("trace_id");
+  }
+
+  // Scope guard: logs DATA_EXCHANGE duration on function exit (all return paths)
+  DataExchangeDurationGuard duration_guard(trace_id);
+
+  Logger::instance().info_f("[HANDLE_DATA_EXCHANGE] task_id=%s, task_type=%s, message_id=%s trace=%s",
                             task->get_task_id().c_str(), task->get_task_type().c_str(),
-                            message.message_id.c_str());
+                            message.message_id.c_str(),
+                            trace_id.empty() ? "(none)" : trace_id.c_str());
   task->acknowledge_dispatch_record(message.message_id);
 
   // Get dialogue_id from message metadata for multi-dialogue support
@@ -1719,6 +1789,10 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       if(message.metadata.count("trace_labels")) {
         coordinator_trigger.metadata["trace_labels"] = message.metadata.at("trace_labels");
       }
+      // Propagate trace_id for end-to-end correlation
+      if(!trace_id.empty()) {
+        coordinator_trigger.metadata["trace_id"] = trace_id;
+      }
       // Get the original user prompt
       std::string user_prompt_key = dialogue_id.empty() ? "user_prompt" : dialogue_id + "/user_prompt";
       DataVariant user_prompt_value;
@@ -1778,6 +1852,10 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         if(message.metadata.count("trace_labels")) {
           response_message.metadata["trace_labels"] = message.metadata.at("trace_labels");
         }
+        // Propagate trace_id for end-to-end correlation
+        if(!trace_id.empty()) {
+          response_message.metadata["trace_id"] = trace_id;
+        }
 
         // Get response from databus (with dialogue_id prefix for multi-dialogue support)
         std::string response_key = dialogue_id.empty() ? "response" : dialogue_id + "/response";
@@ -1803,6 +1881,10 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         // Pass trace_labels for flow trace correlation
         if(message.metadata.count("trace_labels")) {
           trigger_message.metadata["trace_labels"] = message.metadata.at("trace_labels");
+        }
+        // Propagate trace_id for end-to-end correlation
+        if(!trace_id.empty()) {
+          trigger_message.metadata["trace_id"] = trace_id;
         }
         coordinator_task->enqueue_data_exchange_message(trigger_message);
 
@@ -1989,6 +2071,10 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       // Pass trace_labels for flow trace correlation
       if(skill_response.metadata.count("trace_labels")) {
         coordinator_trigger.metadata["trace_labels"] = skill_response.metadata["trace_labels"];
+      }
+      // Propagate trace_id for end-to-end correlation
+      if(skill_response.metadata.count("trace_id")) {
+        coordinator_trigger.metadata["trace_id"] = skill_response.metadata.at("trace_id");
       }
       // Get the original user prompt
       std::string user_prompt_key = coord_dialogue_id.empty() ? "user_prompt" : coord_dialogue_id + "/user_prompt";
@@ -2321,6 +2407,20 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       Logger::instance().info_f("[COORDINATOR_SEND] Enqueueing response via session_router, content_len=%zu, msg_id=%s, error=%s",
                                response_message.content.size(), response_message.message_id.c_str(),
                                has_skill_error ? "true" : "false");
+
+      // E2E summary: correlation landmarks for this dialogue
+      {
+        std::string summary_trace_id;
+        if(response_message.metadata.count("trace_id")) {
+          summary_trace_id = response_message.metadata.at("trace_id");
+        }
+        Logger::instance().info_f(
+            "[E2E_SUMMARY] dialogue=%s trace=%s response_len=%zu has_error=%s",
+            dialogue_id.empty() ? "(none)" : dialogue_id.c_str(),
+            summary_trace_id.empty() ? "(none)" : summary_trace_id.c_str(),
+            response_message.content.size(),
+            has_skill_error ? "true" : "false");
+      }
       session_router_->enqueue_response_message(response_message);
 
       // Clean up dialogue data after response is sent
@@ -2369,6 +2469,10 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         bool skill_success = (message.content == "workflow_completed");
         coordinator_response.metadata["skill_success"] = skill_success ? "true" : "false";
         coordinator_response.content = skill_success ? "skill_completed" : "skill_failed";
+        // Propagate trace_id for end-to-end correlation
+        if(!trace_id.empty()) {
+          coordinator_response.metadata["trace_id"] = trace_id;
+        }
 
         coordinator_task->enqueue_response_message(coordinator_response);
 
@@ -2377,6 +2481,10 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         trigger_message.message_id = "trigger-" + task->get_task_id();
         trigger_message.metadata["task_type"] = "coordinator";
         trigger_message.metadata["trigger_type"] = "skill_response";
+        // Propagate trace_id for end-to-end correlation
+        if(!trace_id.empty()) {
+          trigger_message.metadata["trace_id"] = trace_id;
+        }
         coordinator_task->enqueue_data_exchange_message(trigger_message);
 
         Logger::instance().info_f("[SKILLDataExchange] Notified coordinator %s of skill completion",
@@ -3256,10 +3364,29 @@ void MMAgent::process_intent_request_loop() {
 }
 
 void MMAgent::process_data_exchange_loop() {
+  int64_t queue_log_counter = 0;
   while(message_threads_running_) {
     int processed = process_data_exchange_messages();
     if(processed == 0) {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    // Periodic queue depth logging (~every 1 second at 10ms idle sleep)
+    if(++queue_log_counter % 100 == 0) {
+      auto snapshot = get_sessions();
+      for(const auto& session : snapshot) {
+        if(!session) continue;
+        auto router = session_router_;
+        int request_depth = router ? router->get_request_queue_size() : -1;
+        auto coordinator_task = session->get_coordinator_task();
+        int data_ex_depth = coordinator_task ? coordinator_task->get_data_exchange_queue_size() : -1;
+        auto dispatcher_task = session->get_dispatcher_task();
+        int dispatcher_dex_depth = dispatcher_task ? dispatcher_task->get_data_exchange_queue_size() : -1;
+        // Logger::instance().debug_f(
+        //     "[QUEUE_DEPTH] session=%s request=%d coord_data_ex=%d dispatcher_data_ex=%d",
+        //     session->get_session_id().c_str(),
+        //     request_depth, data_ex_depth, dispatcher_dex_depth);
+      }
     }
   }
 }

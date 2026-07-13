@@ -144,7 +144,7 @@ def outfit_daemon_real_llm(request: pytest.FixtureRequest,
                            tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, Any]]:
     """启动 outfits_assistant daemon，优先使用真实 LLM（class-scoped）。
 
-    如果宿主机环境变量设置了 ``AF_LLM_BASE_URL`` 和 ``API_KEY``（或 ``AF_LLM_API_KEY``），
+    如果宿主机环境变量设置了 ``AF_LLM_BASE_URL`` 和 ``AF_LLM_API_KEY``，
     则透传给 daemon，发起真实 LLM 调用；否则回退到 mock LLM。
 
     验证完整的 agentflow 执行链路：daemon → agent → workflow → LLM call。
@@ -156,7 +156,7 @@ def outfit_daemon_real_llm(request: pytest.FixtureRequest,
     tmp_path = tmp_path_factory.mktemp(f"e2e-real-llm-{request.cls.__name__}")
 
     # 检查宿主机是否有真实 LLM 配置
-    host_api_key = os.environ.get("AF_LLM_API_KEY") or os.environ.get("API_KEY", "")
+    host_api_key = os.environ.get("AF_LLM_API_KEY", "")
     host_base_url = os.environ.get("AF_LLM_BASE_URL", "")
     host_model = os.environ.get("AF_LLM_MODEL", "gpt-4o-mini")
     use_real_llm = bool(host_api_key and host_base_url)
@@ -170,10 +170,12 @@ def outfit_daemon_real_llm(request: pytest.FixtureRequest,
         )
         env.setdefault("AF_LLM_BASE_URL", host_base_url)
         env.setdefault("AF_LLM_MODEL", host_model)
-        env.setdefault("API_KEY", host_api_key)
+        env.setdefault("AF_LLM_API_KEY", host_api_key)
         env["AF_SKILL_MAX_COMPLETION_TOKENS"] = "512"
         env["NO_PROXY"] = "127.0.0.1,localhost"
         env["no_proxy"] = "127.0.0.1,localhost"
+        # 节点脚本从 agentflow_runtime pip 包 import，需将包源码目录加入 Python 路径
+        env.setdefault("PYTHONPATH", str(PROJECT_ROOT / "packages" / "agentflow-runtime" / "src"))
 
         daemon = subprocess.Popen(
             [str(DAEMON_BINARY), "--listen", f"127.0.0.1:{daemon_port}",
@@ -187,17 +189,20 @@ def outfit_daemon_real_llm(request: pytest.FixtureRequest,
         # 回退到 mock LLM
         ctx = scripted_llm()
         llm_url = ctx.__enter__()
+        _pythonpath = str(PROJECT_ROOT / "packages" / "agentflow-runtime" / "src")
         env = {
             "PATH": (
                 f"{OUTFIT_AGENT / '.venv' / 'bin'}"
                 f"{os.pathsep}/usr/bin:/bin:/usr/sbin:/sbin"
             ),
-            "API_KEY": "e2e-test-key",
+            "AF_LLM_API_KEY": "e2e-test-key",
             "AF_LLM_BASE_URL": llm_url,
             "AF_LLM_MODEL": "e2e-scripted",
             "AF_SKILL_MAX_COMPLETION_TOKENS": "512",
             "NO_PROXY": "127.0.0.1,localhost",
             "no_proxy": "127.0.0.1,localhost",
+            # 节点脚本从 agentflow_runtime pip 包 import，需将包源码目录加入 Python 路径
+            "PYTHONPATH": _pythonpath,
         }
         daemon = subprocess.Popen(
             [str(DAEMON_BINARY), "--listen", f"127.0.0.1:{daemon_port}",
@@ -346,7 +351,7 @@ def compression_daemon(request: pytest.FixtureRequest,
                 f"{OUTFIT_AGENT / '.venv' / 'bin'}"
                 f"{os.pathsep}/usr/bin:/bin:/usr/sbin:/sbin"
             ),
-            "API_KEY": "e2e-test-key",
+            "AF_LLM_API_KEY": "e2e-test-key",
             "AF_LLM_BASE_URL": llm_url,
             "AF_LLM_MODEL": "e2e-scripted",
             "AF_SKILL_MAX_COMPLETION_TOKENS": "512",

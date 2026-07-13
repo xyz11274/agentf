@@ -351,6 +351,25 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
   auto agent = registry_.find(agent_id);
   if (!agent) return build_error(-2, "Agent not found: " + agent_id, id);
 
+  // Generate trace_id — single correlation id for the full "input→exec→response" chain
+  // Reuse request_id if provided by caller, otherwise generate one
+  std::string trace_id = request_id.empty()
+      ? "trc_" + std::to_string(now_ms()) + "_" + std::to_string(++message_counter_)
+      : request_id;
+
+  // [USER_INPUT] — entry point for all user messages into the system
+  {
+    std::string content_preview = content.substr(0, 120);
+    if (content.size() > 120) content_preview += "...";
+    Logger::instance().info_f(
+        "[USER_INPUT] trace=%s agent=%s user=%s client=%s dialogue=%s "
+        "content_preview=%s content_len=%zu stream=%s",
+        trace_id.c_str(), agent_id.c_str(), user_id.c_str(), client_id.c_str(),
+        dialogue_id.empty() ? "(none)" : dialogue_id.c_str(),
+        content_preview.c_str(), content.size(),
+        stream_str.c_str());
+  }
+
   // Generate message_id
   std::string message_id = "msg_" + std::to_string(++message_counter_) + "_" +
                            std::to_string(now_ms());
@@ -366,6 +385,7 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
   message.metadata["message_type"] = "intent_request";
   message.metadata["user_id"] = user_id;
   message.metadata["client_id"] = client_id;
+  message.metadata["trace_id"] = trace_id;
   if (!trace_labels.empty()) message.metadata["trace_labels"] = trace_labels;
   if (!dialogue_id.empty()) message.metadata["dialogue_id"] = dialogue_id;
   if (!skill_name.empty()) message.metadata["skill_name"] = skill_name;

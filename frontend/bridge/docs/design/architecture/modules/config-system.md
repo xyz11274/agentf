@@ -146,57 +146,13 @@ def get_settings() -> BridgeSettings:
 settings = get_settings()
 ```
 
-- 首次调用 `BridgeSettings()` 时自动读取 `.env` 文件和环境变量
+- 首次调用 `BridgeSettings()` 时自动读取环境变量
 - `lru_cache` 保证整个进程生命周期内只有一个实例
-- 测试可构造 `BridgeSettings(_env_file="test.env")` 覆写
+- 测试可通过环境变量覆写
 
-## 3. .env.example 模板
+## 3. 配置文件模板
 
-文件位置：`frontend/bridge/.env.example`
-
-```bash
-# ============================================================================
-# AgentFlow Bridge — Configuration Template
-# ============================================================================
-# Copy this file to .env and modify for your environment:
-#   cp .env.example .env
-#
-# Environment variables override .env values. The .env file is NOT committed.
-# ============================================================================
-
-# --- daemon connectivity ------------------------------------------------
-DAEMON_HOST=localhost
-DAEMON_PORT=17891
-
-# --- bridge server bind -------------------------------------------------
-BRIDGE_HOST=0.0.0.0
-BRIDGE_PORT=8199
-
-# --- public artifact URL -----------------------------------------------
-# Optional public URL of this Bridge, e.g. https://agent.example.com.
-# Set this when external services must open generated images/HTML artifacts.
-ARTIFACT_PUBLIC_BASE_URL=
-
-# --- filesystem paths ---------------------------------------------------
-# Relative paths are resolved relative to the project root
-# (the parent directory of frontend/bridge/).
-AGENT_PACKAGES_DIR=examples/agent
-SKILL_HUB_DIR=resource/skill_hub
-
-# --- logging ------------------------------------------------------------
-# Valid values: DEBUG, INFO, WARNING, ERROR, CRITICAL
-LOG_LEVEL=INFO
-
-# --- timeouts & intervals -----------------------------------------------
-# Per-request timeout for daemon JSON-RPC calls (seconds)
-REQUEST_TIMEOUT_SECONDS=5.0
-# Background daemon status cache refresh interval (seconds)
-DAEMON_STATUS_REFRESH_INTERVAL=10.0
-
-# --- CORS ---------------------------------------------------------------
-# JSON array of allowed origins. Default allows Vue dev server on :15173.
-CORS_ALLOWED_ORIGINS=["http://localhost:15173","http://127.0.0.1:15173"]
-```
+Bridge 自身配置已迁移至 `configs/{env}/bridge.yaml`（权威）+ `frontend/bridge/config.yaml`（回退），不再使用 `.env` 文件。环境变量覆盖 YAML，详见 `docs/design/config-landscape.md` §2.2。
 
 ## 4. 测试设计
 
@@ -210,7 +166,6 @@ CORS_ALLOWED_ORIGINS=["http://localhost:15173","http://127.0.0.1:15173"]
 | Unit | 派生属性 | `daemon_ws_url` = `"ws://localhost:17891"` |
 | Unit | 路径解析（相对） | `agent_packages_dir="foo"` → `.../project_root/foo` |
 | Unit | 路径解析（绝对） | `agent_packages_dir="/data/agents"` → `/data/agents` |
-| Unit | `.env` 加载 | 设置 `.env` 文件后读取其中的值 |
 | Unit | CORS 解析 | 环境变量 JSON 数组 → Python list |
 | Unit | Artifact URL 默认值 | 未配置时为 `""`，聊天响应保留相对 URL |
 | Unit | Artifact URL 覆盖 | 环境变量可配置公网地址，并去除拼接处多余的 `/` |
@@ -227,7 +182,7 @@ CORS_ALLOWED_ORIGINS=["http://localhost:15173","http://127.0.0.1:15173"]
 | 字段定义与约束 | 本文档 §2.2 |
 | 派生属性实现 | 本文档 §2.3 |
 | 校验规则 | 本文档 §2.4 |
-| .env 文件格式 | 本文档 §3 |
+| 配置文件格式 | 本文档 §3 |
 | Artifact 公网基地址 | 本文档 §2.2，§3 |
 | 测试设计 | 本文档 §4 |
 | 配置分组与功能设计 | `features/config-system.md` L2 |
@@ -236,4 +191,4 @@ CORS_ALLOWED_ORIGINS=["http://localhost:15173","http://127.0.0.1:15173"]
 - `docs/design/features/config-system.md` — 配置系统功能设计（L2）
 - `docs/design/features/bridge-overview.md` — Bridge 总体架构
 - `frontend/bridge/config.py` — 源码实现（最终以此为准）
-- `frontend/bridge/.env.example` — 配置文件模板
+- `docs/design/config-landscape.md` — 配置全景观与加载优先级

@@ -104,6 +104,8 @@ venv
 .venv_unix
 .cache
 
+frontend/web
+
 
 **/outfit_assistant/docs
 **/outfit_assistant/.agentfoundry

@@ -13,7 +13,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 AGENT_RUNNER="${1:-$PROJECT_ROOT/build/agent_runner}"
-PACKAGE_PATH="${2:-$PROJECT_ROOT/examples/agent/basic_agent}"
+PACKAGE_PATH="${2:-$PROJECT_ROOT/examples/agent/outfit-test-agent}"
 
 log() {
   echo "[interactive-test] $1"
@@ -48,7 +48,7 @@ OUTPUT=$(printf 'list\nstatus\nquit\n' | "$AGENT_RUNNER" "$PACKAGE_PATH" --inter
 assert_contains "$OUTPUT" "AgentFlow Interactive Mode" "interactive banner"
 assert_contains "$OUTPUT" "Available commands:" "help text printed"
 assert_contains "$OUTPUT" "=== Workflows ===" "workflow listing"
-assert_contains "$OUTPUT" "\[basic-workflow\]" "basic workflow available"
+assert_contains "$OUTPUT" "\[coordinator-workflow\]" "coordinator workflow available"
 assert_contains "$OUTPUT" "=== Status ===" "status block"
 assert_contains "$OUTPUT" "Runtime running: yes" "runtime status"
 assert_contains "$OUTPUT" "Goodbye!" "clean shutdown"

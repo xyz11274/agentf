@@ -83,19 +83,17 @@ def test_resolve_llm_config_fallback_to_hardcoded(monkeypatch):
     assert result["model"] == "gpt-4o-mini"
 
 
-def test_resolve_llm_config_api_key_chain(monkeypatch):
-    """API key falls back through AF_LLM_API_KEY → API_KEY → AF_FALLBACK_LLM_API_KEY."""
-    monkeypatch.delenv("AF_LLM_API_KEY", raising=False)
-    monkeypatch.setenv("API_KEY", "env-fallback-key")
+def test_resolve_llm_config_api_key_direct(monkeypatch):
+    """AF_LLM_API_KEY is used directly."""
+    monkeypatch.setenv("AF_LLM_API_KEY", "direct-key")
     monkeypatch.delenv("AF_FALLBACK_LLM_API_KEY", raising=False)
     result = MODULE.resolve_llm_config()
-    assert result["api_key"] == "env-fallback-key"
+    assert result["api_key"] == "direct-key"
 
 
-def test_resolve_llm_config_api_key_fallback_to_fallback(monkeypatch):
+def test_resolve_llm_config_api_key_fallback(monkeypatch):
     """AF_FALLBACK_LLM_API_KEY is last resort."""
     monkeypatch.delenv("AF_LLM_API_KEY", raising=False)
-    monkeypatch.delenv("API_KEY", raising=False)
     monkeypatch.setenv("AF_FALLBACK_LLM_API_KEY", "ultimate-fallback")
     result = MODULE.resolve_llm_config()
     assert result["api_key"] == "ultimate-fallback"
@@ -110,26 +108,24 @@ def test_resolve_llm_config_base_url_chain(monkeypatch):
 
 
 def test_resolve_vision_config_chain(monkeypatch):
-    """Vision config falls back VISION_MODEL → VISION_FALLBACK_MODEL."""
-    monkeypatch.delenv("VISION_MODEL", raising=False)
-    monkeypatch.setenv("VISION_FALLBACK_MODEL", "qwen-vl-max")
+    """Vision config falls back AF_BR_VISION_MODEL → AF_BR_VISION_FALLBACK_MODEL."""
+    monkeypatch.delenv("AF_BR_VISION_MODEL", raising=False)
+    monkeypatch.setenv("AF_BR_VISION_FALLBACK_MODEL", "qwen-vl-max")
     result = MODULE.resolve_vision_config()
     assert result["model"] == "qwen-vl-max"
 
 
-def test_resolve_vision_config_api_key_chain(monkeypatch):
-    """Vision API key falls back VISION_API_KEY → API_KEY → VISION_FALLBACK_API_KEY."""
-    monkeypatch.delenv("VISION_API_KEY", raising=False)
-    monkeypatch.delenv("API_KEY", raising=False)
-    monkeypatch.setenv("VISION_FALLBACK_API_KEY", "vision-fallback")
+def test_resolve_vision_config_api_key_direct(monkeypatch):
+    """Vision API key: AF_BR_VISION_API_KEY is used directly."""
+    monkeypatch.setenv("AF_BR_VISION_API_KEY", "direct-vision-key")
+    monkeypatch.delenv("AF_BR_VISION_FALLBACK_API_KEY", raising=False)
     result = MODULE.resolve_vision_config()
-    assert result["api_key"] == "vision-fallback"
+    assert result["api_key"] == "direct-vision-key"
 
 
 def test_resolve_vision_config_api_key_minimax_fallback(monkeypatch):
     """MINIMAX_API_KEY should be checked before VISION_FALLBACK_API_KEY."""
     monkeypatch.delenv("VISION_API_KEY", raising=False)
-    monkeypatch.delenv("API_KEY", raising=False)
     monkeypatch.delenv("VISION_FALLBACK_API_KEY", raising=False)
     monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
     result = MODULE.resolve_vision_config()

@@ -35,6 +35,9 @@ namespace runtime {
 class MMDataBus;  // Forward declaration
 }  // namespace runtime
 
+// Forward declare test fixture for private member access (handle_dialogue_interrupt).
+namespace tests { class DialogueInterruptFlagFixture; }
+
 namespace framework {
 class BuiltinDispatcher;
 
@@ -212,6 +215,9 @@ class MMAgent {
   bool has_task_event_callback() const;
 
  private:
+  // Friend for unit test access to handle_dialogue_interrupt and create_session internals.
+  friend class ::agentflow::tests::DialogueInterruptFlagFixture;
+
   // P0-2 修复：抽不发事件版，让 handle_session_destroy 控制事件时机
   // （先清 tasks/dialogues 再发事件，避免订阅方收到事件时状态未完全销毁）
   int clear_session_data_internal(const std::string& session_id, bool emit_event);

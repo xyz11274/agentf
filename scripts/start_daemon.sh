@@ -55,11 +55,16 @@ _stop_daemon() {
     echo "[INFO] Daemon stopped"
 }
 
+# ── Config file path (per environment) ─────────────────────────────
+_AGENTFLOW_ENV="${AGENTFLOW_ENV:-dev}"  # 默认 dev，可被环境变量覆盖
+_CONFIG_FILE="$AR_PROJECT_ROOT/configs/$_AGENTFLOW_ENV/agentflowd.json"
+
 # ── Parse arguments ─────────────────────────────────────────────────
 ACTION="start"
 PACKAGE="examples/agent/outfit-assistant"
 PORT="17891"
 PROFILE="dev"
+CONFIG_FILE="$_CONFIG_FILE"
 KEEP_LOGS=false
 BUILD_FIRST=false
 BUILD_OPTION_SET=false  # whether user explicitly passed --build / --no-build
@@ -71,6 +76,7 @@ while [ "$#" -gt 0 ]; do
         --package) PACKAGE="$2"; shift 2 ;;
         --port) PORT="$2"; shift 2 ;;
         --profile) PROFILE="$2"; shift 2 ;;
+        --config) CONFIG_FILE="$2"; shift 2 ;;
         --keep-logs) KEEP_LOGS=true; shift ;;
         --build) BUILD_FIRST=true; BUILD_OPTION_SET=true; shift ;;
         --no-build) BUILD_FIRST=false; BUILD_OPTION_SET=true; shift ;;
@@ -87,10 +93,14 @@ while [ "$#" -gt 0 ]; do
             echo "  --package PATH   Agent package directory (default: examples/agent/outfit-assistant)"
             echo "  --port PORT      Listen port (default: 17891)"
             echo "  --profile PROF   Build profile: dev|release|production (default: dev)"
+            echo "  --config PATH    Config file (default: configs/\$AGENTFLOW_ENV/agentflowd.json)"
             echo "  --build          Build binary first"
             echo "  --no-build       Skip build (e.g. quick config-only restart)"
             echo "  --keep-logs      Keep previous log instead of archiving"
             echo "  -r, --restart    Alias for restart command"
+            echo ""
+            echo "Environment:"
+            echo "  AGENTFLOW_ENV    dev|prod (default: dev, controls default config path)"
             exit 0 ;;
         *)
             if [ "$PACKAGE" = "examples/agent/agentflow_assistant" ]; then PACKAGE="$1"
@@ -145,9 +155,25 @@ fi
 
 # ── Resolve binary ──────────────────────────────────────────────────
 case "$PROFILE" in
-    dev) BUILD_DIR="$AR_PROJECT_ROOT/build" ;;
-    release) BUILD_DIR="$AR_PROJECT_ROOT/build" ;;
-    production) BUILD_DIR="$AR_PROJECT_ROOT/build/production" ;;
+    dev)
+        # HealthAgent 构建输出到 build/，原生构建输出到 build/dev/
+        if [ -x "$AR_PROJECT_ROOT/build/agentflowd" ]; then
+            BUILD_DIR="$AR_PROJECT_ROOT/build"
+        else
+            BUILD_DIR="$AR_PROJECT_ROOT/build/dev"
+        fi
+        ;;
+    release)
+        BUILD_DIR="$AR_PROJECT_ROOT/build"
+        ;;
+    production)
+        # 优先 production 构建，fallback 到 release 构建
+        if [ -x "$AR_PROJECT_ROOT/build/production/agentflowd" ]; then
+            BUILD_DIR="$AR_PROJECT_ROOT/build/production"
+        else
+            BUILD_DIR="$AR_PROJECT_ROOT/build"
+        fi
+        ;;
     *) echo "[ERROR] Invalid profile: $PROFILE" >&2; exit 2 ;;
 esac
 
@@ -161,7 +187,6 @@ if [ ! -x "$DAEMON" ]; then
     exit 1
 fi
 
-ar_load_env
 LOG_FILE="$AR_PROJECT_ROOT/logs/agentflowd.log"
 ar_archive_log "$LOG_FILE" "$KEEP_LOGS"
 
@@ -172,8 +197,10 @@ fi
 # ── Launch ──────────────────────────────────────────────────────────
 echo "[INFO] Starting daemon in background..."
 echo "[INFO] Daemon logs → $LOG_FILE"
+echo "[INFO] Config file → $CONFIG_FILE"
 echo "[INFO] View live: tail -f $LOG_FILE"
 nohup "$DAEMON" \
+    --config "$CONFIG_FILE" \
     --package "$PACKAGE_PATH" \
     --listen "127.0.0.1:$PORT" \
     >> "$LOG_FILE" 2>&1 &

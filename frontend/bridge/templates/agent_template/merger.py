@@ -53,6 +53,18 @@ _TEMPLATE_ONLY: tuple[str, ...] = (
     "nodes/llm_call.pyc",
     "nodes/dummy_pre_skill.py",
     "nodes/parse_af_input.py",
+    # Shell wrappers — framework infrastructure (§3.5 standard implementation)
+    # Template always clobbers so wrapper venv-detection logic stays in sync
+    "nodes/coordinator_decide.sh",
+    "nodes/skill_executor.sh",
+    "nodes/dummy_pre_skill.sh",
+    # Workflow DAGs — framework infrastructure (execution_mode + command declaration)
+    # Template always clobbers so shell_script/wrapper 范式 stays in sync
+    "coordinator_workflow.json",
+    "skill_workflow.json",
+    "dummy_pre_skill_workflow.json",
+    # setup.sh — framework infrastructure (venv + sentinel contract §3.5)
+    "setup.sh",
     # Tests — always template-owned
     "tests/",
 )
@@ -202,6 +214,11 @@ def _reapply_template_files(template_dir: Path, target_dir: Path) -> None:
     This guarantees that even if the user archive overwrote a critical
     infrastructure file, the template version is restored.
     """
+    # Sanity check: warn if template has infrastructure files not in _TEMPLATE_ONLY.
+    # This prevents silent "update won't sync" drift when new files are added to
+    # template without being listed. Only scans nodes/ (the most common miss).
+    _check_template_only_coverage(template_dir)
+
     for prefix in _TEMPLATE_ONLY:
         src = template_dir / prefix
         dst = target_dir / prefix
@@ -212,6 +229,30 @@ def _reapply_template_files(template_dir: Path, target_dir: Path) -> None:
         else:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(src, dst)
+
+
+def _check_template_only_coverage(template_dir: Path) -> None:
+    """Warn if template has infrastructure files not covered by _TEMPLATE_ONLY.
+
+    Scans ``nodes/`` for ``*.sh``, ``*.py``, ``*.json`` — the most common
+    miss path. Only warns (does not block), because a missing entry only
+    causes "update won't sync that file" — existing functionality is intact.
+    """
+    _expected_exts = ("*.sh", "*.py", "*.json")
+    for ext in _expected_exts:
+        for f in (template_dir / "nodes").glob(ext):
+            # 构造 _TEMPLATE_ONLY 格式的 prefix（如 "nodes/xxx.sh"）
+            prefix = str(Path("nodes") / f.name)
+            if prefix in _TEMPLATE_ONLY:
+                continue
+            # 如果 nodes/ 整体被目录覆盖也跳过（当前没有，但防御性）
+            if any(p.endswith("/") and p.startswith("nodes/") for p in _TEMPLATE_ONLY):
+                continue
+            logger.warning(
+                "template_only.coverage_miss: %s not in _TEMPLATE_ONLY "
+                "(update won't sync this file to existing agents)",
+                prefix,
+            )
 
 
 def _make_scripts_executable(pkg_dir: Path) -> None:

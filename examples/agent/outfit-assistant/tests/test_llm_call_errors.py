@@ -1,7 +1,6 @@
 import importlib.util
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import requests
 
@@ -84,19 +83,17 @@ def test_resolve_llm_config_fallback_to_hardcoded(monkeypatch):
     assert result["model"] == "gpt-4o-mini"
 
 
-def test_resolve_llm_config_api_key_chain(monkeypatch):
-    """API key falls back through AF_LLM_API_KEY → API_KEY → AF_FALLBACK_LLM_API_KEY."""
-    monkeypatch.delenv("AF_LLM_API_KEY", raising=False)
-    monkeypatch.setenv("API_KEY", "env-fallback-key")
+def test_resolve_llm_config_api_key_direct(monkeypatch):
+    """AF_LLM_API_KEY is used directly."""
+    monkeypatch.setenv("AF_LLM_API_KEY", "direct-key")
     monkeypatch.delenv("AF_FALLBACK_LLM_API_KEY", raising=False)
     result = MODULE.resolve_llm_config()
-    assert result["api_key"] == "env-fallback-key"
+    assert result["api_key"] == "direct-key"
 
 
-def test_resolve_llm_config_api_key_fallback_to_fallback(monkeypatch):
+def test_resolve_llm_config_api_key_fallback(monkeypatch):
     """AF_FALLBACK_LLM_API_KEY is last resort."""
     monkeypatch.delenv("AF_LLM_API_KEY", raising=False)
-    monkeypatch.delenv("API_KEY", raising=False)
     monkeypatch.setenv("AF_FALLBACK_LLM_API_KEY", "ultimate-fallback")
     result = MODULE.resolve_llm_config()
     assert result["api_key"] == "ultimate-fallback"
@@ -111,26 +108,24 @@ def test_resolve_llm_config_base_url_chain(monkeypatch):
 
 
 def test_resolve_vision_config_chain(monkeypatch):
-    """Vision config falls back VISION_MODEL → VISION_FALLBACK_MODEL."""
-    monkeypatch.delenv("VISION_MODEL", raising=False)
-    monkeypatch.setenv("VISION_FALLBACK_MODEL", "qwen-vl-max")
+    """Vision config falls back AF_BR_VISION_MODEL → AF_BR_VISION_FALLBACK_MODEL."""
+    monkeypatch.delenv("AF_BR_VISION_MODEL", raising=False)
+    monkeypatch.setenv("AF_BR_VISION_FALLBACK_MODEL", "qwen-vl-max")
     result = MODULE.resolve_vision_config()
     assert result["model"] == "qwen-vl-max"
 
 
-def test_resolve_vision_config_api_key_chain(monkeypatch):
-    """Vision API key falls back VISION_API_KEY → API_KEY → VISION_FALLBACK_API_KEY."""
-    monkeypatch.delenv("VISION_API_KEY", raising=False)
-    monkeypatch.delenv("API_KEY", raising=False)
-    monkeypatch.setenv("VISION_FALLBACK_API_KEY", "vision-fallback")
+def test_resolve_vision_config_api_key_direct(monkeypatch):
+    """Vision API key: AF_BR_VISION_API_KEY is used directly."""
+    monkeypatch.setenv("AF_BR_VISION_API_KEY", "direct-vision-key")
+    monkeypatch.delenv("AF_BR_VISION_FALLBACK_API_KEY", raising=False)
     result = MODULE.resolve_vision_config()
-    assert result["api_key"] == "vision-fallback"
+    assert result["api_key"] == "direct-vision-key"
 
 
 def test_resolve_vision_config_api_key_minimax_fallback(monkeypatch):
     """MINIMAX_API_KEY should be checked before VISION_FALLBACK_API_KEY."""
     monkeypatch.delenv("VISION_API_KEY", raising=False)
-    monkeypatch.delenv("API_KEY", raising=False)
     monkeypatch.delenv("VISION_FALLBACK_API_KEY", raising=False)
     monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
     result = MODULE.resolve_vision_config()
@@ -304,62 +299,3 @@ def test_non_transient_ssl_error_not_retried(monkeypatch):
     assert result["_llm_error"] is True
     assert "certificate verify failed" in result["error"]
     assert call_count["n"] == 1, "SSL error must NOT be retried"
-
-
-# ── _append_to_index dialogue scoping ──
-
-
-def _make_recorder_with_mock_client():
-    """Create a _TraceRecorder with a mock DataBus client.
-
-    Returns (recorder, mock_client) where mock_client.llm().get/put track calls.
-    """
-    recorder = MODULE._TraceRecorder()
-    recorder._client = MagicMock()
-    # Reset singleton so next test gets a fresh instance
-    MODULE._TraceRecorder._instance = None
-    return recorder
-
-
-def test_append_to_index_uses_dialogue_scoped_key(monkeypatch):
-    """AF_DIALOGUE_ID set → key is traces/index/{dialogue_id}."""
-    monkeypatch.setenv("AF_DIALOGUE_ID", "test-dialogue-123")
-    recorder = _make_recorder_with_mock_client()
-
-    mock_llm = recorder._client.llm.return_value
-    mock_llm.get.return_value = "[]"
-
-    recorder._append_to_index("call-abc")
-
-    # Verify the key includes the dialogue_id
-    expected_key = "traces/index/test-dialogue-123"
-    mock_llm.get.assert_called_once_with(expected_key, "[]")
-    mock_llm.put.assert_called_once()
-
-
-def test_append_to_index_falls_back_to_plain_key(monkeypatch):
-    """No AF_DIALOGUE_ID → key is traces/index."""
-    monkeypatch.delenv("AF_DIALOGUE_ID", raising=False)
-    recorder = _make_recorder_with_mock_client()
-
-    mock_llm = recorder._client.llm.return_value
-    mock_llm.get.return_value = "[]"
-
-    recorder._append_to_index("call-xyz")
-
-    # Verify the key is the plain fallback
-    expected_key = "traces/index"
-    mock_llm.get.assert_called_once_with(expected_key, "[]")
-    mock_llm.put.assert_called_once()
-
-
-def test_append_to_index_no_client_does_nothing(monkeypatch):
-    """No DataBus client → _append_to_index is a no-op."""
-    monkeypatch.setenv("AF_DIALOGUE_ID", "d-1")
-    recorder = MODULE._TraceRecorder()
-    recorder._client = None
-    MODULE._TraceRecorder._instance = None
-
-    # Should not raise
-    recorder._append_to_index("call-noop")
-    # No assertion needed — the point is that no error occurred

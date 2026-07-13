@@ -100,7 +100,6 @@ SideCar 不把平台上下文混入外部 AccessCtrl 载荷，也不使用可由
 
 ```text
 POST /internal/coremind/v1/callback
-Authorization: Bearer <AISF_INTERNAL_TOKEN>
 Content-Type: application/json
 ```
 
@@ -228,7 +227,6 @@ E2E 必须启动真实 C++ SideCar、Python Bridge、AgentFlow daemon 和确定�
 ## 8. 待确认规格
 
 - 内部端点采用同机 loopback、Unix Domain Socket，还是容器内部网络；
-- `AISF_INTERNAL_TOKEN` 的注入与轮换方式；
 - 每个外部入口对应的 required/optional 服务清单；
 - 服务实例选择策略由 SideCar 固定首实例，还是将候选列表交给 Node。
 

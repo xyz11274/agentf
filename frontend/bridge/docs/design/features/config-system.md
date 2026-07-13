@@ -127,49 +127,17 @@ export CORS_ALLOWED_ORIGINS='["http://localhost:15173","http://127.0.0.1:15173"]
 | `agent_packages_path` | Path | 相对路径锚定项目根目录解析 | 文件系统操作 |
 | `skill_hub_path` | Path | 相对路径锚定项目根目录解析 | 技能仓库文件操作 |
 
-### 3.7 .env 文件格式
+### 3.7 配置文件格式
 
-`frontend/bridge/.env`（不提交 git）或 `frontend/bridge/.env.example`（提交 git）：
-
-```bash
-# ============================================================================
-# AgentFlow Bridge — 配置文件
-# ============================================================================
-# 此文件由 BridgeSettings 自动加载。同名的系统环境变量会覆盖此文件的值。
-# 复制此文件为 .env 并修改：
-#   cp .env.example .env
-# ============================================================================
-
-# --- 🔌 Daemon 连接 -----------------------------------------------------------
-DAEMON_HOST=localhost
-DAEMON_PORT=17891
-
-# --- 🌐 Bridge 服务 -----------------------------------------------------------
-BRIDGE_HOST=0.0.0.0
-BRIDGE_PORT=8199
-
-# --- 📂 文件系统路径（相对路径锚定到项目根目录）--------------------------------
-AGENT_PACKAGES_DIR=examples/agent
-SKILL_HUB_DIR=resource/skill_hub
-
-# --- 🪵 日志 ----------------------------------------------------------------
-LOG_LEVEL=INFO
-
-# --- 🚦 超时与间隔 ------------------------------------------------------------
-REQUEST_TIMEOUT_SECONDS=5.0
-DAEMON_STATUS_REFRESH_INTERVAL=10.0
-
-# --- 🌍 CORS（JSON 数组格式）------------------------------------------------
-CORS_ALLOWED_ORIGINS=["http://localhost:15173","http://127.0.0.1:15173"]
-```
+Bridge 自身配置仅通过 YAML（`configs/{env}/bridge.yaml` 权威，`frontend/bridge/config.yaml` 回退）+ 环境变量加载。不再支持 `.env` 文件（已删除，避免与 YAML 权威源并行制造歧义）。环境变量覆盖 YAML，详见 §3.5 加载优先级。
 
 ### 3.8 模块划分
 
 | 组件 | 位置 | 职责 |
 |------|------|------|
 | 配置类 | `frontend/bridge/config.py` | Pydantic Settings 定义 + 派生属性 |
-| .env 模板 | `frontend/bridge/.env.example` | 所有配置项的示例值 + 注释 |
-| .env 文件 | `frontend/bridge/.env` | 本地覆写（已 gitignore） |
+| 环境配置 | `configs/{env}/bridge.yaml` | 环境差异化配置（权威） |
+| 回退配置 | `frontend/bridge/config.yaml` | CI 无 `AGENTFLOW_ENV` 时回退 |
 | 配置文档 | `docs/design/architecture/modules/config-system.md` | 配置项全表 + 说明 |
 
 ---

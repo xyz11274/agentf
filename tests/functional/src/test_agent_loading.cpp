@@ -28,38 +28,34 @@ protected:
 };
 
 TEST_F(AgentLoadingTest, LoadBasicAgentPackage) {
-    std::string package_path = "examples/agent/basic_agent";
+    std::string package_path = "examples/agent/outfit-test-agent";
     
     // Ensure path is correct relative to build dir or source dir
     // We assume test is run from build dir, so path might need adjustment
     if (!std::filesystem::exists(package_path)) {
         // Try up one level
-        package_path = "../examples/agent/basic_agent";
+        package_path = "../examples/agent/outfit-test-agent";
     }
     
     // In case we are deep in build directory
     if (!std::filesystem::exists(package_path)) {
-        package_path = "../../examples/agent/basic_agent";
+        package_path = "../../examples/agent/outfit-test-agent";
     }
     
     if (!std::filesystem::exists(package_path)) {
         // Try absolute path if needed, or fail
-        FAIL() << "Package path not found: examples/agent/basic_agent";
+        FAIL() << "Package path not found: examples/agent/outfit-test-agent";
     }
     
     auto agent = framework::MMAgent::create_from_package(package_path);
     ASSERT_NE(agent, nullptr);
 
     // Basic checks
-    EXPECT_EQ(agent->get_name(), "basic-agent");
-    EXPECT_EQ(agent->get_config().version, "1.0.0");
-    EXPECT_EQ(agent->get_config().description,
-              "Basic execution agent example for AgentFlow with shell and Python workflows");
+    EXPECT_EQ(agent->get_name(), "GeneralHarnessAgent");
+    EXPECT_EQ(agent->get_config().version, "3.0.0");
     
     // Check if workflows are loaded
-    // basic_agent/workflow.json has id "basic-workflow"
-    // Wait, let's verify the workflow ID in workflow.json
-    auto workflow = agent->get_workflow("basic-workflow");
+    auto workflow = agent->get_workflow("coordinator-workflow");
     if (!workflow) {
         // Maybe ID is different, print loaded IDs
         for (const auto& w : agent->get_workflows()) {
@@ -67,16 +63,16 @@ TEST_F(AgentLoadingTest, LoadBasicAgentPackage) {
         }
     }
     ASSERT_NE(workflow, nullptr);
-    EXPECT_EQ(workflow->get_id(), "basic-workflow");
+    EXPECT_EQ(workflow->get_id(), "coordinator-workflow");
 }
 
 TEST_F(AgentLoadingTest, LoadCalculatorAgentPackage) {
-    std::string package_path = "examples/agent/basic_agent";
+    std::string package_path = "examples/agent/outfit-test-agent";
     if (!std::filesystem::exists(package_path)) {
-        package_path = "../examples/agent/basic_agent";
+        package_path = "../examples/agent/outfit-test-agent";
     }
     if (!std::filesystem::exists(package_path)) {
-        package_path = "../../examples/agent/basic_agent";
+        package_path = "../../examples/agent/outfit-test-agent";
     }
     
     ASSERT_TRUE(std::filesystem::exists(package_path)) << "Package path not found: " << package_path;
@@ -84,10 +80,10 @@ TEST_F(AgentLoadingTest, LoadCalculatorAgentPackage) {
     auto agent = framework::MMAgent::create_from_package(package_path);
     ASSERT_NE(agent, nullptr);
 
-    EXPECT_EQ(agent->get_id(), "basic-agent");
+    EXPECT_EQ(agent->get_id(), "GeneralHarnessAgent");
     
-    // Check merged calculator workflow is still available in basic_agent
-    auto workflow = agent->get_workflow("calculator-workflow");
+    // Check harness agent workflows are loaded
+    auto workflow = agent->get_workflow("coordinator-workflow");
     ASSERT_NE(workflow, nullptr);
 }
 
@@ -145,9 +141,9 @@ TEST_F(AgentLoadingTest, CyclicWorkflowControlFlow) {
 }
 
 TEST_F(AgentLoadingTest, AgentLifecycle) {
-    std::string package_path = "examples/agent/basic_agent";
+    std::string package_path = "examples/agent/outfit-test-agent";
     if (!std::filesystem::exists(package_path)) {
-        package_path = "../examples/agent/basic_agent";
+        package_path = "../examples/agent/outfit-test-agent";
     }
     
     auto agent = framework::MMAgent::create_from_package(package_path);
@@ -208,7 +204,7 @@ TEST_F(AgentLoadingTest, AgentActorAutoLoadsPackagesAndRegistersRuntime) {
     std::ofstream ofs(config_path.string());
     ofs << "{"
         << "\"package_root\":\"../examples/agent\","
-        << "\"manifests\":[\"basic_agent\"],"
+        << "\"manifests\":[\"outfit-test-agent\"],"
         << "\"scan_interval_ms\":100,"
         << "\"heartbeat_interval_ms\":100"
         << "}";

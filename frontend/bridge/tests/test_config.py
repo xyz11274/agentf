@@ -120,9 +120,48 @@ def _field_to_env_var(field_name: str) -> list[str]:
     """All possible env var names for a Pydantic field."""
     names = [field_name.upper()]
 
-    # Fields with aliases
-    if field_name == "llm_api_key":
-        names.append("API_KEY")
+    # Bridge-managed fields have aliased AF_BR_* names
+    br_aliases = {
+        "daemon_host": "AF_BR_DAEMON_HOST",
+        "daemon_port": "AF_BR_DAEMON_PORT",
+        "bridge_listen": "AF_BR_LISTEN",
+        "sidecar_enabled": "AF_BR_SIDECAR_ENABLED",
+        "sidecar_listen": "AF_BR_SIDECAR_LISTEN",
+        "sidecar_aisf_adapter_url": "AF_BR_SIDECAR_AISF_ADAPTER_URL",
+        "aisf_adapter_agent_id": "AF_BR_AISF_ADAPTER_AGENT_ID",
+        "aisf_adapter_mode": "AF_BR_AISF_ADAPTER_MODE",
+        "aisf_adapter_timeout": "AF_BR_AISF_ADAPTER_TIMEOUT",
+        "aisf_adapter_upstream_scheme": "AF_BR_AISF_ADAPTER_UPSTREAM_SCHEME",
+        "aisf_adapter_upstream_callback_port": "AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PORT",
+        "aisf_adapter_upstream_callback_path": "AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PATH",
+        "aisf_adapter_upstream_client_cert_path": "AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_CERT_PATH",
+        "aisf_adapter_upstream_client_key_path": "AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PATH",
+        "aisf_adapter_upstream_client_key_password": "AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PASSWORD",
+        "aisf_adapter_upstream_ca_cert_path": "AF_BR_AISF_ADAPTER_UPSTREAM_CA_CERT_PATH",
+        "aisf_adapter_upstream_verify": "AF_BR_AISF_ADAPTER_UPSTREAM_VERIFY",
+        "agent_defaults_llm_api_key": "AF_BR_AGENT_DEFAULTS_LLM_API_KEY",
+        "agent_defaults_llm_base_url": "AF_BR_AGENT_DEFAULTS_LLM_BASE_URL",
+        "agent_defaults_llm_model": "AF_BR_AGENT_DEFAULTS_LLM_MODEL",
+        "agent_defaults_llm_fallback_api_key": "AF_BR_AGENT_DEFAULTS_LLM_FALLBACK_API_KEY",
+        "agent_defaults_llm_fallback_base_url": "AF_BR_AGENT_DEFAULTS_LLM_FALLBACK_BASE_URL",
+        "agent_defaults_llm_fallback_model": "AF_BR_AGENT_DEFAULTS_LLM_FALLBACK_MODEL",
+        "artifact_public_base_url": "AF_BR_ARTIFACT_PUBLIC_BASE_URL",
+        "agent_packages_dir": "AF_BR_AGENT_PACKAGES_DIR",
+        "skill_hub_dir": "AF_BR_SKILL_HUB_DIR",
+        "agent_template_dir": "AF_BR_AGENT_TEMPLATE_DIR",
+        "log_level": "AF_BR_LOG_LEVEL",
+        "request_timeout_seconds": "AF_BR_REQUEST_TIMEOUT_SECONDS",
+        "uploads_dir": "AF_BR_UPLOADS_DIR",
+        "chat_turn_timeout_seconds": "AF_BR_CHAT_TURN_TIMEOUT_SECONDS",
+        "daemon_status_refresh_interval": "AF_BR_DAEMON_STATUS_REFRESH_INTERVAL",
+        "session_provider": "AF_BR_SESSION_PROVIDER",
+        "session_db_path": "AF_BR_SESSION_DB_PATH",
+        "session_sync_interval": "AF_BR_SESSION_SYNC_INTERVAL",
+        "cors_allowed_origins": "AF_BR_CORS_ALLOWED_ORIGINS",
+    }
+    alias = br_aliases.get(field_name)
+    if alias:
+        names.append(alias)
 
     return names
 
@@ -184,28 +223,28 @@ def test_all_pydantic_fields_have_yaml_keys(pydantic_fields, flat_yaml):
 @pytest.mark.parametrize(
     "field_name, env_name, test_value",
     [
-        ("daemon_host", "DAEMON_HOST", "10.0.0.1"),
-        ("daemon_port", "DAEMON_PORT", 9999),
-        ("bridge_listen", "BRIDGE_LISTEN", "0.0.0.0:9999"),
-        ("sidecar_enabled", "SIDECAR_ENABLED", True),
-        ("sidecar_listen", "SIDECAR_LISTEN", "0.0.0.0:12345"),
-        ("sidecar_aisf_adapter_url", "SIDECAR_AISF_ADAPTER_URL", "http://aisf_adapter:8080"),
-        ("aisf_adapter_agent_id", "AISF_ADAPTER_AGENT_ID", "custom-agent"),
-        ("aisf_adapter_mode", "AISF_ADAPTER_MODE", "sync"),
-        ("aisf_adapter_timeout", "AISF_ADAPTER_TIMEOUT", 600),
-        ("aisf_adapter_upstream_callback_port", "AISF_ADAPTER_UPSTREAM_CALLBACK_PORT", 12345),
-        ("aisf_adapter_upstream_callback_path", "AISF_ADAPTER_UPSTREAM_CALLBACK_PATH", "/custom/callback"),
+        ("daemon_host", "AF_BR_DAEMON_HOST", "10.0.0.1"),
+        ("daemon_port", "AF_BR_DAEMON_PORT", 9999),
+        ("bridge_listen", "AF_BR_LISTEN", "0.0.0.0:9999"),
+        ("sidecar_enabled", "AF_BR_SIDECAR_ENABLED", True),
+        ("sidecar_listen", "AF_BR_SIDECAR_LISTEN", "0.0.0.0:12345"),
+        ("sidecar_aisf_adapter_url", "AF_BR_SIDECAR_AISF_ADAPTER_URL", "http://aisf_adapter:8080"),
+        ("aisf_adapter_agent_id", "AF_BR_AISF_ADAPTER_AGENT_ID", "custom-agent"),
+        ("aisf_adapter_mode", "AF_BR_AISF_ADAPTER_MODE", "sync"),
+        ("aisf_adapter_timeout", "AF_BR_AISF_ADAPTER_TIMEOUT", 600),
+        ("aisf_adapter_upstream_callback_port", "AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PORT", 12345),
+        ("aisf_adapter_upstream_callback_path", "AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PATH", "/custom/callback"),
         (
             "artifact_public_base_url",
-            "ARTIFACT_PUBLIC_BASE_URL",
+            "AF_BR_ARTIFACT_PUBLIC_BASE_URL",
             "https://cdn.example.com",
         ),
-        ("log_level", "LOG_LEVEL", "DEBUG"),
-        ("request_timeout_seconds", "REQUEST_TIMEOUT_SECONDS", 30.0),
-        ("chat_turn_timeout_seconds", "CHAT_TURN_TIMEOUT_SECONDS", 1200.0),
+        ("log_level", "AF_BR_LOG_LEVEL", "DEBUG"),
+        ("request_timeout_seconds", "AF_BR_REQUEST_TIMEOUT_SECONDS", 30.0),
+        ("chat_turn_timeout_seconds", "AF_BR_CHAT_TURN_TIMEOUT_SECONDS", 1200.0),
         (
             "daemon_status_refresh_interval",
-            "DAEMON_STATUS_REFRESH_INTERVAL",
+            "AF_BR_DAEMON_STATUS_REFRESH_INTERVAL",
             60.0,
         ),
     ],
@@ -235,14 +274,14 @@ def test_env_var_overrides(field_name, env_name, test_value):
 
 def test_env_overrides_yaml():
     """env 变量必须覆盖 YAML 值（最高优先级）。"""
-    os.environ["DAEMON_HOST"] = "10.0.0.99"
+    os.environ["AF_BR_DAEMON_HOST"] = "10.0.0.99"
     try:
         s = BridgeSettings()
         assert (
             s.daemon_host == "10.0.0.99"
-        ), f"env DAEMON_HOST=10.0.0.99 应覆盖 YAML, 实际={s.daemon_host}"
+        ), f"env AF_BR_DAEMON_HOST=10.0.0.99 应覆盖 YAML, 实际={s.daemon_host}"
     finally:
-        del os.environ["DAEMON_HOST"]
+        del os.environ["AF_BR_DAEMON_HOST"]
 
 
 def test_yaml_overrides_code_default():
@@ -328,7 +367,7 @@ def test_code_defaults_match_yaml_defaults():
         "aisf_adapter_upstream_client_key_password": "",
         "aisf_adapter_upstream_ca_cert_path": "",
         "aisf_adapter_upstream_verify": True,
-        "log_level": "INFO",
+        "log_level": "DEBUG",       # dev 环境配置为 DEBUG，生产配置为 INFO
         "request_timeout_seconds": 15.0,  # YAML 临时调大（排查 agent.load 超时），代码默认仍 5.0
         "chat_turn_timeout_seconds": 900.0,
         "daemon_status_refresh_interval": 10.0,

@@ -1,27 +1,3 @@
-#!/usr/bin/env python3
-"""
-Dummy Pre Skill — pre-processing hook placeholder.
-"""
-
-import json
-import os
-import sys
-
-
-def log(msg: str):
-    print(f"[flow] dummy_pre_skill: {msg}", file=sys.stderr)
-
-
-def execute():
-    user_input = os.environ.get("AF_INPUT", "")
-    dialogue_id = os.environ.get("AF_DIALOGUE_ID", "")
-    session_id = os.environ.get("AF_SESSION_ID", "")
-
-    log(f"triggered session={session_id} dialogue={dialogue_id}")
-    log(f"AF_INPUT={user_input}")
-    log("passthrough — empty output, framework auto-forwards to coordinator")
-    print(json.dumps({}, ensure_ascii=False))
-
-
-if __name__ == "__main__":
-    execute()
+# Auto-generated entry file — do not modify
+# The actual implementation lives in the pip package.
+from agentflow_runtime import dummy_pre_skill as _m; globals().update(_m.__dict__)

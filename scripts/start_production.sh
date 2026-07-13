@@ -5,7 +5,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
-ar_load_env
 
 CHECK_ONLY=false
 if [ "${1:-}" = "--check" ]; then CHECK_ONLY=true
@@ -18,26 +17,38 @@ elif [ "$#" -gt 0 ]; then
 fi
 
 PACKAGE="${AGENT_PACKAGE:-examples/agent/outfit-assistant}"
-DAEMON_PORT="${DAEMON_PORT:-17891}"
+DAEMON_PORT="${DAEMON_PORT:-7890}"
 BRIDGE_PORT="${PYTHON_BRIDGE_PORT:-8199}"
 SIDECAR_PORT="${COREMIND_BRIDGE_PORT:-23767}"
 
-if [ -z "${AISF_INTERNAL_TOKEN:-}" ]; then
-    echo "[ERROR] AISF_INTERNAL_TOKEN is required" >&2
-    exit 1
+# 生产环境使用 prod 配置
+export AGENTFLOW_ENV="prod"
+
+# daemon 二进制：优先 production 构建，fallback 到 release
+DAEMON_BINARY="$AR_PROJECT_ROOT/build/production/agentflowd"
+if [ ! -x "$DAEMON_BINARY" ]; then
+    DAEMON_BINARY="$AR_PROJECT_ROOT/build/agentflowd"
 fi
 
-DAEMON_BINARY="$AR_PROJECT_ROOT/build/production/agentflowd"
+# sidecar 二进制：仅 production 构建存在时才要求
 SIDECAR_BINARY="$AR_PROJECT_ROOT/frontend/bridge/coremind_bridge/build-production/coremind_bridge"
+SIDECAR_AVAILABLE=false
+if [ -x "$SIDECAR_BINARY" ]; then
+    SIDECAR_AVAILABLE=true
+fi
+
 if [[ "$PACKAGE" = /* ]]; then PACKAGE_PATH="$PACKAGE"
 else PACKAGE_PATH="$AR_PROJECT_ROOT/$PACKAGE"
 fi
-for required_file in "$DAEMON_BINARY" "$SIDECAR_BINARY" "$PACKAGE_PATH/agent.json"; do
-    if [ ! -e "$required_file" ]; then
-        echo "[ERROR] Production prerequisite missing: $required_file" >&2
-        exit 1
-    fi
-done
+if [ ! -f "$PACKAGE_PATH/agent.json" ]; then
+    echo "[ERROR] Agent package not found: $PACKAGE_PATH" >&2
+    exit 1
+fi
+if [ ! -x "$DAEMON_BINARY" ]; then
+    echo "[ERROR] Daemon binary not found: $DAEMON_BINARY" >&2
+    echo "        Run: ./scripts/build.sh" >&2
+    exit 1
+fi
 if ! PYTHONPATH="$AR_PROJECT_ROOT/frontend/bridge" python3 -c "import fastapi, uvicorn" 2>/dev/null; then
     echo "[ERROR] Python Bridge production dependencies are missing" >&2
     exit 1
@@ -79,13 +90,17 @@ if [ "$BRIDGE_READY" != "true" ]; then
     exit 1
 fi
 
-PYTHON_BRIDGE_URL="http://127.0.0.1:$BRIDGE_PORT/health" \
-    "$SCRIPT_DIR/start_sidecar.sh" production "$SIDECAR_PORT" &
-PIDS+=("$!")
+if $SIDECAR_AVAILABLE; then
+    PYTHON_BRIDGE_URL="http://127.0.0.1:$BRIDGE_PORT/health" \
+        "$SCRIPT_DIR/start_sidecar.sh" production "$SIDECAR_PORT" &
+    PIDS+=("$!")
+    echo "[READY] daemon=$DAEMON_PORT bridge=127.0.0.1:$BRIDGE_PORT sidecar=0.0.0.0:$SIDECAR_PORT"
+else
+    echo "[READY] daemon=$DAEMON_PORT bridge=127.0.0.1:$BRIDGE_PORT (sidecar skipped)"
+fi
 
-echo "[READY] daemon=$DAEMON_PORT bridge=127.0.0.1:$BRIDGE_PORT sidecar=0.0.0.0:$SIDECAR_PORT"
 while true; do
-    for index in 0 1 2; do
+    for index in "${!PIDS[@]}"; do
         if ! kill -0 "${PIDS[$index]}" 2>/dev/null; then
             wait "${PIDS[$index]}" || exit_code=$?
             echo "[ERROR] Production component $index exited (${exit_code:-0})" >&2

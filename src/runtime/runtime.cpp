@@ -550,7 +550,7 @@ bool MMAgentRuntime::unload_workflow(const AgentId& agent_id, const WorkflowId& 
 bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId& workflow_id,
                                     const DataMap& inputs, const std::string& source_task_id,
                                     const std::string& session_id, const std::string& dialogue_id,
-                                    const std::string& trace_labels,
+                                    const std::string& trace_labels, const std::string& trace_id,
                                     const std::string& task_type, const std::string& skill_task_id,
                                     const std::string& skill_name) {
   if(draining_) {
@@ -592,6 +592,7 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
   state.session_id      = session_id;
   state.dialogue_id     = dialogue_id;  // Store for multi-dialogue support
   state.trace_labels    = trace_labels; // Store for flow trace correlation
+  state.trace_id        = trace_id;     // Store for end-to-end tracing
   state.task_type       = task_type;    // Store for correct task_type in completion message
   state.skill_task_id   = skill_task_id;  // Store actual skill task id for completion tracking
   state.skill_name      = skill_name;      // Store skill name for completion notification
@@ -612,6 +613,7 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
       it->second.session_id = std::move(state.session_id);
       it->second.dialogue_id = std::move(state.dialogue_id);
       it->second.trace_labels = std::move(state.trace_labels);
+      it->second.trace_id     = std::move(state.trace_id);
       it->second.task_type = std::move(state.task_type);
       it->second.skill_task_id = std::move(state.skill_task_id);
       it->second.skill_name = std::move(state.skill_name);
@@ -632,6 +634,7 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
                   std::move(state.session_id),
                   std::move(state.dialogue_id),
                   std::move(state.trace_labels),
+                  std::move(state.trace_id),
                   std::move(state.task_type),
                   std::move(state.skill_task_id),
                   std::move(state.skill_name),
@@ -774,6 +777,7 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
     return;
   }
 
+  std::string dialogue_id;
   {
     std::lock_guard<std::mutex> lock(workflow_state_mutex_);
     auto                        state_it = workflow_states_.find(execution_id);
@@ -785,6 +789,7 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
        || state.running_nodes.count(node->get_id()) == 1) {
       return;
     }
+    dialogue_id = state_it->second.dialogue_id;
     state.queued_nodes.erase(node->get_id());
     state.running_nodes.insert(node->get_id());
   }
@@ -794,10 +799,11 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
 
   Logger::instance().info_f(
       "[PROCESS_NODE_START] ThreadId=%zu, AgentId=%s, WorkflowId=%s, NodeId=%s, NodeName=%s, "
-      "State=%d",
+      "State=%d dialogue=%s",
       std::hash<std::thread::id>{}(thread_id), agent->get_id().c_str(),
       workflow ? workflow->get_id().c_str() : "unknown", node->get_id().c_str(),
-      node->get_name().c_str(), static_cast<int>(node->get_state()));
+      node->get_name().c_str(), static_cast<int>(node->get_state()),
+      dialogue_id.empty() ? "(none)" : dialogue_id.c_str());
 
   // Hydrate node inputs from DataBus using declared input_params keys.
   // This enables genuine DataBus-driven data flow between nodes/workflows.
@@ -1068,19 +1074,21 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
     node_span.add_event("node_failed", {{"duration_ms", std::to_string(duration)}});
     Logger::instance().error_f(
         "[PROCESS_NODE_FAILED] ThreadId=%zu, AgentId=%s, WorkflowId=%s, NodeId=%s, NodeName=%s, "
-        "Duration=%ldms, RetryCount=%d",
+        "Duration=%ldms, RetryCount=%d dialogue=%s",
         std::hash<std::thread::id>{}(thread_id), agent->get_id().c_str(),
         workflow ? workflow->get_id().c_str() : "unknown", node->get_id().c_str(),
-        node->get_name().c_str(), duration, node->get_retry_count());
+        node->get_name().c_str(), duration, node->get_retry_count(),
+        dialogue_id.empty() ? "(none)" : dialogue_id.c_str());
   } else {
     node_span.set_status(trace::SpanStatus::OK);
     node_span.add_event("node_success", {{"duration_ms", std::to_string(duration)}});
     Logger::instance().info_f(
         "[PROCESS_NODE_SUCCESS] ThreadId=%zu, AgentId=%s, WorkflowId=%s, NodeId=%s, NodeName=%s, "
-        "Duration=%ldms",
+        "Duration=%ldms dialogue=%s",
         std::hash<std::thread::id>{}(thread_id), agent->get_id().c_str(),
         workflow ? workflow->get_id().c_str() : "unknown", node->get_id().c_str(),
-        node->get_name().c_str(), duration);
+        node->get_name().c_str(), duration,
+        dialogue_id.empty() ? "(none)" : dialogue_id.c_str());
   }
 
   // =========================================================================
@@ -1267,15 +1275,14 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
   std::string async_call_key;
 
   // Debug: log all outputs for async node
-  Logger::instance().info_f("[ASYNC_CHECK] Node=%s has %zu outputs",
-                              node->get_id().c_str(), outputs.size());
-  for (const auto& [key, val] : outputs) {
-    Logger::instance().info_f("[ASYNC_CHECK] Output key=%s, type_index=%s",
-                                key.c_str(), val.index() == 0 ? "monostate" :
-                                val.index() == 1 ? "bool" :
-                                val.index() == 2 ? "int64" :
-                                val.index() == 3 ? "double" :
-                                val.index() == 4 ? "string" : "other");
+  {
+    std::string keys;
+    for (const auto& [key, val] : outputs) {
+      if (!keys.empty()) keys += ", ";
+      keys += key;
+    }
+    Logger::instance().info_f("[ASYNC_CHECK] Node=%s has %zu outputs: [%s]",
+                              node->get_id().c_str(), outputs.size(), keys.c_str());
   }
 
   if (outputs.count("__async_pending__")) {
@@ -1458,6 +1465,7 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
   std::string complete_session_id;
   std::string complete_dialogue_id;
   std::string complete_trace_labels;
+  std::string complete_trace_id;
   std::string complete_task_type;
   std::string complete_skill_task_id;
   std::string complete_skill_name;
@@ -1507,7 +1515,8 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
                               can_complete ? "true" : "false");
 
     if(can_complete) {
-      Logger::instance().info_f("[WORKFLOW_COMPLETE] Workflow %s completing successfully", execution_id.c_str());
+      Logger::instance().info_f("[WORKFLOW_COMPLETE] Workflow %s completing successfully dialogue=%s", execution_id.c_str(),
+                                state.dialogue_id.empty() ? "(none)" : state.dialogue_id.c_str());
       state.in_progress   = false;
       invoke_complete     = true;
       complete_ok         = state.failed_nodes.empty();
@@ -1517,6 +1526,7 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
       complete_session_id     = state.session_id;
       complete_dialogue_id    = state.dialogue_id;
       complete_trace_labels   = state.trace_labels;
+      complete_trace_id        = state.trace_id;
       complete_task_type      = state.task_type;
       complete_skill_task_id  = state.skill_task_id;
       complete_skill_name     = state.skill_name;
@@ -1650,6 +1660,10 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
             // Pass trace_labels for flow trace correlation across workflow boundaries
             if(!complete_trace_labels.empty()) {
               response.metadata["trace_labels"] = complete_trace_labels;
+            }
+            // Pass trace_id for end-to-end correlation across workflow boundaries
+            if(!complete_trace_id.empty()) {
+              response.metadata["trace_id"] = complete_trace_id;
             }
             response.content = complete_ok ? "workflow_completed" : "workflow_failed";
             source_task->enqueue_data_exchange_message(response);
@@ -1984,7 +1998,11 @@ void MMAgentRuntime::agent_task_poller_loop() {
         if(task->get_parameter("message_content", msg_content) && !msg_content.empty()) {
           inputs["input"]     = msg_content;
           inputs["user_text"] = msg_content;
-          Logger::instance().info_f("[TASK_POLLER] Set inputs[input]='%s' from message_content", msg_content.c_str());
+          // Payload truncation: log preview only, full content in debug
+          std::string preview = msg_content.substr(0, 120);
+          if(msg_content.size() > 120) preview += "...";
+          Logger::instance().info_f("[TASK_POLLER] Set inputs[input] preview='%s' (full_len=%zu) from message_content",
+                                   preview.c_str(), msg_content.size());
         } else {
           Logger::instance().warn_f("[TASK_POLLER] message_content not found or empty for task=%s", task->get_task_id().c_str());
         }
@@ -2093,6 +2111,10 @@ void MMAgentRuntime::agent_task_poller_loop() {
         std::string task_trace_labels;
         task->get_parameter("trace_labels", task_trace_labels);
 
+        // Get trace_id from task parameters for end-to-end correlation
+        std::string task_trace_id;
+        task->get_parameter("trace_id", task_trace_id);
+
         // Get skill task id for completion tracking (the actual task id of this skill)
         std::string skill_task_id = task->get_config().task_id;
 
@@ -2104,7 +2126,7 @@ void MMAgentRuntime::agent_task_poller_loop() {
 
         const bool scheduled = execute_workflow(agent->get_id(), workflow_id, inputs,
                                                 task_source_id, task_session_id, task_dialogue_id,
-                                                task_trace_labels,
+                                                task_trace_labels, task_trace_id,
                                                 task_type, skill_task_id, skill_name);
         framework::MMAgentMsgQue::Message response;
         std::string response_message_id;
@@ -2121,6 +2143,10 @@ void MMAgentRuntime::agent_task_poller_loop() {
         response.metadata["worker_id"] = schedule_result.worker_id;
         response.metadata["message_type"] = "data_exchange";
         response.metadata["dialogue_id"] = task_dialogue_id;
+        // Propagate trace_id for end-to-end correlation in early data_exchange
+        if(!task_trace_id.empty()) {
+          response.metadata["trace_id"] = task_trace_id;
+        }
         response.content = scheduled ? "workflow_scheduled" : "workflow_schedule_failed";
         std::shared_ptr<framework::MMAgentTask> response_target = task;
         std::string source_task_id;

@@ -173,7 +173,6 @@ if [ ! -f "$FMM_SCRIPT" ]; then
     exit 1
 fi
 
-ar_load_env
 
 # ── Build arguments ─────────────────────────────────────────────────
 FMM_ARGS=("--port" "$PORT" "--host" "$HOST" "--log-level" "$LOG_LEVEL")

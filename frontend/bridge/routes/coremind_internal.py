@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import os
-import secrets
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 
 from client import DaemonClient, DaemonError
@@ -47,21 +46,6 @@ class CoreMindEnvelope(BaseModel):
     platform_context: PlatformContext
 
 
-def _authenticate(request: Request, authorization: str | None) -> None:
-    allowed_hosts = {
-        host.strip()
-        for host in os.environ.get("AISF_INTERNAL_ALLOWED_HOSTS", "127.0.0.1,::1").split(",")
-        if host.strip()
-    }
-    client_host = request.client.host if request.client else ""
-    if client_host not in allowed_hosts:
-        raise HTTPException(status_code=403, detail="UNTRUSTED_INTERNAL_SOURCE")
-    expected = os.environ.get("AISF_INTERNAL_TOKEN", "")
-    supplied = authorization.removeprefix("Bearer ") if authorization else ""
-    if not expected or not supplied or not secrets.compare_digest(supplied, expected):
-        raise HTTPException(status_code=401, detail="UNTRUSTED_INTERNAL_REQUEST")
-
-
 def _extract_accessctrl(envelope: CoreMindEnvelope) -> tuple[str, str, str]:
     header = envelope.original_request.get("Header", {})
     data = envelope.original_request.get("Data", {})
@@ -79,13 +63,11 @@ def _extract_accessctrl(envelope: CoreMindEnvelope) -> tuple[str, str, str]:
 async def callback(
     request: Request,
     envelope: CoreMindEnvelope,
-    authorization: str | None = Header(default=None),
     daemon: DaemonClient = Depends(get_daemon_client),  # noqa: B008
 ) -> dict[str, Any]:
-    """Authenticate a SideCar envelope and execute one AgentFlow turn."""
-    _authenticate(request, authorization)
+    """Execute one AgentFlow turn from a SideCar envelope."""
     content, user_id, client_id = _extract_accessctrl(envelope)
-    agent_id = os.environ.get("COREMIND_AGENT_ID", "outfit-assistant")
+    agent_id = os.environ.get("AF_BR_COREMIND_AGENT_ID", "outfit-assistant")
     try:
         result = await daemon.agent_execute(
             agent_id,

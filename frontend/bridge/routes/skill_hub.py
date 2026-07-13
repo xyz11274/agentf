@@ -11,11 +11,20 @@ Endpoints
 ``POST   /api/skill-hub/upload``        — upload a skill (single .md or archive)
 ``DELETE /api/skill-hub/{name}``        — delete a skill
 ``POST   /api/skill-hub/{name}/install``— install skill into an agent package
+``GET    /api/skill-hub/{name}/tree``   — file tree of a skill
+``GET    /api/skill-hub/{name}/file/**`` — read a file inside a skill
+``PUT    /api/skill-hub/{name}/file/**`` — write a file inside a skill
+``DELETE /api/skill-hub/{name}/file/**`` — delete a file inside a skill
+``POST   /api/skill-hub/{name}/file/**/rename`` — rename a file
+``POST   /api/skill-hub/{name}/file/**`` — create an empty file
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import mimetypes
+import os
 import shutil
 import tarfile
 import tempfile
@@ -23,12 +32,21 @@ import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 import re
-from typing import Any
+from typing import Any, List
 
 from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from config import settings
+from models import FileNode
+from routes.packages import (
+    FileWriteRequest,
+    FileRenameRequest,
+    _validate_relative_path,
+    _resolve_within,
+    _to_thread,
+)
 
 logger = logging.getLogger("agentflow.bridge.routes.skill_hub")
 
@@ -48,6 +66,7 @@ class SkillInfo(BaseModel):
     """Metadata for a skill in the central hub."""
 
     name: str
+    display_name: str = ""
     description: str
     tags: list[str] = []
     version: str = "1.0.0"
@@ -69,6 +88,10 @@ class SkillInstallRequest(BaseModel):
         min_length=1,
         max_length=128,
         description="Target agent package name.",
+    )
+    overwrite: bool = Field(
+        False,
+        description="If true, replace an already-installed skill.",
     )
 
 
@@ -96,18 +119,38 @@ def _err(detail: str, code: int = status.HTTP_400_BAD_REQUEST) -> HTTPException:
 
 
 def _validate_skill_name(name: str) -> str:
-    """Validate skill name (reuses package name validation rules).
+    """Validate a skill name, supporting nested paths via ``/``.
 
-    Only ``[a-zA-Z0-9_-]`` characters, 1-128 length, no ``..``, no ``/``.
+    Rules:
+    - 1-128 characters
+    - Each segment: ``[a-zA-Z0-9_-]``
+    - Segments separated by single ``/``
+    - No leading/trailing ``/``, no ``//``, no ``..`` (path traversal)
+    - No empty segments
     """
     if not name or len(name) > 128:
         raise _err(
             f"Invalid skill name: {name!r} (must be 1-128 characters)",
             status.HTTP_403_FORBIDDEN,
         )
-    if not re.match(r"^[a-zA-Z0-9_-]+$", name):
+    if ".." in name:
         raise _err(
-            f"Invalid skill name: {name!r} (only [a-zA-Z0-9_-] allowed)",
+            f"Invalid skill name: {name!r} (path traversal '..' not allowed)",
+            status.HTTP_403_FORBIDDEN,
+        )
+    if name.startswith("/") or name.endswith("/"):
+        raise _err(
+            f"Invalid skill name: {name!r} (cannot start or end with '/')",
+            status.HTTP_403_FORBIDDEN,
+        )
+    if "//" in name:
+        raise _err(
+            f"Invalid skill name: {name!r} (empty segments not allowed)",
+            status.HTTP_403_FORBIDDEN,
+        )
+    if not re.match(r"^[a-zA-Z0-9_/-]+$", name):
+        raise _err(
+            f"Invalid skill name: {name!r} (only [a-zA-Z0-9_-] and '/' separator allowed)",
             status.HTTP_403_FORBIDDEN,
         )
     return name
@@ -127,17 +170,48 @@ def _skill_dir(name: str) -> Path:
 # Frontmatter parsing (minimal)
 # ---------------------------------------------------------------------------
 
+# Regex to match a YAML list item like "- python" or "  - python"
+_RE_LIST_ITEM = re.compile(r"^\s*-\s+(.+)$")
+
+
+def _parse_tag_value(val: str) -> list[str]:
+    """Parse a tag value from frontmatter into a list of strings.
+
+    Supports:
+    * Inline list: ``[python, logging]``
+    * Comma-separated: ``python, logging``
+    * Empty string (multi-line list follows)
+    """
+    val_clean = val.strip('"').strip("'")
+    if val_clean.startswith("[") and val_clean.endswith("]"):
+        tags = [t.strip().strip('"').strip("'") for t in val_clean[1:-1].split(",")]
+        return [t for t in tags if t]
+    if val_clean:
+        return [t.strip() for t in val_clean.split(",") if t.strip()]
+    return []
+
 
 def _parse_frontmatter(text: str) -> dict[str, Any]:
     """Parse YAML-like frontmatter from SKILL.md content.
 
-    Only extracts ``description``, ``tags``, and ``version`` fields.
+    Extracts ``name``, ``description``, ``tags``, and ``version`` fields.
+    Supports inline syntax (``key: value``) and multi-line YAML lists.
+
+    * Inline list: ``tags: [python, logging]``
+    * Comma list:  ``tags: python, logging``
+    * Multi-line::
+
+        tags:
+          - python
+          - logging
+
     Returns defaults for any missing field.
     """
     result: dict[str, Any] = {
         "description": "",
         "tags": [],
         "version": "1.0.0",
+        "name": "",
     }
     if not text.startswith("---\n") and not text.startswith("---\r\n"):
         return result
@@ -147,29 +221,69 @@ def _parse_frontmatter(text: str) -> dict[str, Any]:
     if end_idx == -1:
         return result
 
-    header = text[3:end_idx].strip()
-    for line in header.splitlines():
-        line = line.strip()
-        if ":" not in line:
+    header = text[3:end_idx]
+    lines = header.splitlines()
+
+    # Track multi-line list context
+    list_key: str | None = None
+
+    for raw_line in lines:
+        stripped = raw_line.strip()
+
+        # ── Multi-line YAML list item ──────────────────────────────
+        # A line starting with "- " (possibly indented) is a list item
+        # for the currently tracked list_key.
+        list_match = _RE_LIST_ITEM.match(stripped)
+        if list_match and list_key is not None:
+            item = list_match.group(1).strip().strip('"').strip("'")
+            if item:
+                result[list_key].append(item)  # type: ignore[attr-defined]
             continue
-        key, _, val = line.partition(":")
+
+        # Reset list context when we hit a non-list-item line
+        list_key = None
+
+        if ":" not in stripped:
+            continue
+        key, _, val = stripped.partition(":")
         key = key.strip().lower()
         val = val.strip()
 
         if key == "description":
             result["description"] = val.strip('"').strip("'")
         elif key == "tags":
-            # Support both YAML list [a, b] and comma-separated
-            val_clean = val.strip('"').strip("'")
-            if val_clean.startswith("[") and val_clean.endswith("]"):
-                tags = [t.strip().strip('"').strip("'") for t in val_clean[1:-1].split(",")]
-                result["tags"] = [t for t in tags if t]
-            elif val_clean:
-                result["tags"] = [t.strip() for t in val_clean.split(",") if t.strip()]
+            collected = _parse_tag_value(val)
+            result["tags"] = collected
+            # If val is empty (multi-line list upcoming), enter list context
+            if not collected and not val:
+                list_key = "tags"
+                result["tags"] = []
         elif key == "version":
             result["version"] = val.strip('"').strip("'") or "1.0.0"
+        elif key == "name":
+            result["name"] = val.strip('"').strip("'")
 
     return result
+
+
+def _strip_frontmatter(text: str) -> str:
+    """Strip YAML frontmatter (``---\\n...\\n---``) from the beginning of text.
+
+    Returns the content after the closing ``---``, or the original text
+    if no frontmatter is found.
+    """
+    if not text.startswith("---\n") and not text.startswith("---\r\n"):
+        return text
+    end_idx = text.find("---", 3)
+    if end_idx == -1:
+        return text
+    # Skip the closing --- and the following newline
+    rest = text[end_idx + 3:]
+    if rest.startswith("\n"):
+        rest = rest[1:]
+    elif rest.startswith("\r\n"):
+        rest = rest[2:]
+    return rest
 
 
 def _build_skill_info(name: str, skill_path: Path) -> SkillInfo:
@@ -178,6 +292,7 @@ def _build_skill_info(name: str, skill_path: Path) -> SkillInfo:
     description = ""
     tags: list[str] = []
     version = "1.0.0"
+    display_name = ""
 
     if skill_md.exists() and skill_md.is_file():
         try:
@@ -186,6 +301,7 @@ def _build_skill_info(name: str, skill_path: Path) -> SkillInfo:
             description = fm.get("description", "")
             tags = fm.get("tags", [])
             version = fm.get("version", "1.0.0")
+            display_name = fm.get("name", "")
         except OSError:
             pass
 
@@ -200,6 +316,7 @@ def _build_skill_info(name: str, skill_path: Path) -> SkillInfo:
 
     return SkillInfo(
         name=name,
+        display_name=display_name,
         description=description,
         tags=tags,
         version=version,
@@ -232,24 +349,258 @@ def _infer_skill_name(filename: str) -> str:
 
 @router.get("", response_model=list[SkillInfo], status_code=status.HTTP_200_OK)
 async def list_skills() -> list[SkillInfo]:
-    """List all skills in the hub (metadata only)."""
+    """List all skills in the hub (metadata only).
+
+    Discovers skills by recursively searching for directories containing
+    a ``SKILL.md`` file.  Nested paths (e.g. ``dashscope/forge-image-gen``)
+    are used as the skill name, preserving the directory hierarchy.
+    """
     base = settings.skill_hub_path
     if not base.exists() or not base.is_dir():
         return []
 
     skills: list[SkillInfo] = []
     try:
-        for entry in sorted(base.iterdir()):
-            if entry.is_dir() and not entry.name.startswith("."):
-                info = _build_skill_info(entry.name, entry)
-                skills.append(info)
+        for skill_md in sorted(base.rglob("SKILL.md")):
+            dir_path = skill_md.parent
+            # Skip hidden directories
+            if any(part.startswith(".") for part in dir_path.relative_to(base).parts):
+                continue
+            # Use the relative path as the skill name (e.g. "dashscope/forge-image-gen")
+            name = str(dir_path.relative_to(base))
+            info = _build_skill_info(name, dir_path)
+            skills.append(info)
     except OSError as exc:
         raise _err(f"Failed to read skill hub: {exc}", status.HTTP_500_INTERNAL_SERVER_ERROR) from exc
 
     return skills
 
 
-@router.get("/{name}", response_model=SkillDetail, status_code=status.HTTP_200_OK)
+# ---------------------------------------------------------------------------
+# File tree + file CRUD
+# ---------------------------------------------------------------------------
+
+
+def _skill_tree_path(name: str) -> Path:
+    """Validate skill name and return the skill directory path."""
+    safe = _validate_skill_name(name)
+    skill_dir = settings.skill_hub_path / safe
+    if not skill_dir.exists() or not skill_dir.is_dir():
+        raise _err(f"Skill '{name}' not found", status.HTTP_404_NOT_FOUND)
+    return skill_dir
+
+
+def _build_skill_tree_sync(skill_dir: Path) -> List[FileNode]:
+    """Recursively build a sorted file tree rooted at ``skill_dir``.
+
+    Skips runtime / cache directories (``__pycache__``, ``node_modules``,
+    ``.venv``, ``venv``, ``.git``, ``__pycache__/``, ``*.pyc`` files).
+    """
+
+    _EXCLUDE_DIRS = frozenset({
+        "__pycache__", "node_modules", ".venv", "venv",
+        ".git", ".svn", ".idea", ".vscode",
+    })
+
+    def _node(p: Path) -> FileNode:
+        rel = p.relative_to(skill_dir)
+        if p.is_dir():
+            children = sorted(
+                (c for c in p.iterdir() if c.name not in _EXCLUDE_DIRS),
+                key=lambda c: (not c.is_dir(), c.name),
+            )
+            return FileNode(
+                name=p.name,
+                path=str(rel),
+                type="dir",
+                children=[_node(c) for c in children],
+            )
+        # Skip .pyc files
+        if p.suffix == ".pyc":
+            return None
+        return FileNode(name=p.name, path=str(rel), type="file")
+
+    children = sorted(
+        (c for c in skill_dir.iterdir() if c.name not in _EXCLUDE_DIRS),
+        key=lambda c: (not c.is_dir(), c.name),
+    )
+    return [_node(c) for c in children if _node(c) is not None]
+
+
+@router.get(
+    "/{name:path}/tree",
+    response_model=List[FileNode],
+    response_model_exclude_none=True,
+    summary="Recursive file tree of a skill",
+)
+async def get_skill_tree(
+    name: str,
+) -> List[FileNode]:
+    """Return the recursive file tree of a single skill."""
+    skill_dir = _skill_tree_path(name)
+    return await _to_thread(_build_skill_tree_sync, skill_dir)
+
+
+@router.get(
+    "/{name:path}/file/{file_path:path}",
+    summary="Read a file inside a skill",
+)
+async def read_skill_file(
+    name: str,
+    file_path: str,
+) -> dict[str, str]:
+    """Read the UTF-8 contents of a file inside the skill."""
+    skill_dir = _skill_tree_path(name)
+    segments = _validate_relative_path(file_path)
+    target = _resolve_within(skill_dir, segments)
+    if not target.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="File not found"
+        )
+    if target.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Path is a directory"
+        )
+    content = await _to_thread(lambda: target.read_text(encoding="utf-8"))
+    return {"path": file_path, "content": content}
+
+
+@router.put(
+    "/{name:path}/file/{file_path:path}",
+    status_code=status.HTTP_200_OK,
+    summary="Write file content (create or overwrite)",
+)
+async def write_skill_file(
+    body: FileWriteRequest,
+    name: str,
+    file_path: str,
+) -> dict[str, Any]:
+    """Create or overwrite a file with the supplied UTF-8 content."""
+    skill_dir = _skill_tree_path(name)
+    segments = _validate_relative_path(file_path)
+    target = _resolve_within(skill_dir, segments)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    await _to_thread(lambda: target.write_text(body.content, encoding="utf-8"))
+    logger.info("Wrote %d bytes to %s/%s", len(body.content), name, file_path)
+    return {"path": file_path, "bytes": len(body.content.encode("utf-8"))}
+
+
+@router.delete(
+    "/{name:path}/file/{file_path:path}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete a file inside a skill",
+)
+async def delete_skill_file(
+    name: str,
+    file_path: str,
+) -> None:
+    """Delete a file inside the skill."""
+    skill_dir = _skill_tree_path(name)
+    segments = _validate_relative_path(file_path)
+    target = _resolve_within(skill_dir, segments)
+    if not target.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="File not found"
+        )
+    if target.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Use the directory operation to delete a directory",
+        )
+    await _to_thread(target.unlink)
+    logger.info("Deleted file %s/%s", name, file_path)
+
+
+@router.post(
+    "/{name:path}/file/{file_path:path}/rename",
+    status_code=status.HTTP_200_OK,
+    summary="Rename a file within its parent directory",
+)
+async def rename_skill_file(
+    body: FileRenameRequest,
+    name: str,
+    file_path: str,
+) -> dict[str, str]:
+    """Rename a file within its parent directory."""
+    skill_dir = _skill_tree_path(name)
+    segments = _validate_relative_path(file_path)
+    target = _resolve_within(skill_dir, segments)
+    if not target.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="File not found"
+        )
+    if target.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Use a directory operation to rename directories",
+        )
+    if not body.new_name or "/" in body.new_name or "\\" in body.new_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid new_name: must be a single file name without path separators",
+        )
+    new_path = target.with_name(body.new_name)
+    if new_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Target file '{body.new_name}' already exists",
+        )
+    await _to_thread(target.rename, new_path)
+    logger.info("Renamed %s/%s → %s", name, file_path, body.new_name)
+    return {"old_path": file_path, "new_path": str(new_path.relative_to(skill_dir))}
+
+
+@router.post(
+    "/{name:path}/file/{file_path:path}",
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new empty file",
+)
+async def create_skill_file(
+    name: str,
+    file_path: str,
+) -> dict[str, str]:
+    """Create a new empty file inside the skill."""
+    skill_dir = _skill_tree_path(name)
+    segments = _validate_relative_path(file_path)
+    target = _resolve_within(skill_dir, segments)
+    if target.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="File already exists"
+        )
+    target.parent.mkdir(parents=True, exist_ok=True)
+    await _to_thread(lambda: target.write_text("", encoding="utf-8"))
+    logger.info("Created empty file %s/%s", name, file_path)
+    return {"path": file_path}
+
+
+@router.get(
+    "/{name:path}/media/{media_path:path}",
+    summary="Serve raw file (images, etc.) for inline display",
+)
+async def serve_skill_media(
+    name: str,
+    media_path: str,
+) -> Any:
+    """Serve a file inside the skill as raw bytes with correct Content-Type.
+
+    Used to display images and other media inline in the browser (e.g.
+    Markdown image references, file tree previews).
+    """
+    skill_dir = _skill_tree_path(name)
+    segments = _validate_relative_path(media_path)
+    target = _resolve_within(skill_dir, segments)
+    if not target.exists() or not target.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="File not found"
+        )
+    content_type, _ = mimetypes.guess_type(str(target))
+    if content_type is None:
+        content_type = "application/octet-stream"
+    body = await _to_thread(target.read_bytes)
+    return Response(content=body, media_type=content_type)
+
+
+@router.get("/{name:path}", response_model=SkillDetail, status_code=status.HTTP_200_OK)
 async def get_skill(name: str) -> SkillDetail:
     """Get skill detail including SKILL.md full content."""
     safe = _validate_skill_name(name)
@@ -265,7 +616,8 @@ async def get_skill(name: str) -> SkillDetail:
     skill_md = skill_path / "SKILL.md"
     if skill_md.exists() and skill_md.is_file():
         try:
-            skill_content = skill_md.read_text(encoding="utf-8")
+            raw = skill_md.read_text(encoding="utf-8")
+            skill_content = _strip_frontmatter(raw)
         except OSError as exc:
             raise _err(
                 f"Failed to read SKILL.md: {exc}", status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -305,6 +657,12 @@ async def upload_skill(
     # --- determine skill name -----------------------------------------------
     if name:
         _validate_skill_name(name)
+        if "/" in name:
+            raise _err(
+                "Uploaded skill name must be flat (no '/'): nested paths are "
+                "for pre-existing directory structures only.",
+                status.HTTP_400_BAD_REQUEST,
+            )
     else:
         name = _infer_skill_name(file.filename)
         _validate_skill_name(name)
@@ -370,7 +728,7 @@ async def upload_skill(
     return info
 
 
-@router.delete("/{name}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/{name:path}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_skill(name: str) -> None:
     """Delete a skill from the hub."""
     skill_path = _skill_dir(name)
@@ -384,7 +742,7 @@ async def delete_skill(name: str) -> None:
     logger.info("Deleted skill '%s'", name)
 
 
-@router.post("/{name}/install", response_model=SkillInstallResponse, status_code=status.HTTP_200_OK)
+@router.post("/{name:path}/install", response_model=SkillInstallResponse, status_code=status.HTTP_200_OK)
 async def install_skill(
     name: str,
     body: SkillInstallRequest,
@@ -396,6 +754,11 @@ async def install_skill(
     """
     safe_name = _validate_skill_name(name)
     safe_target = _validate_skill_name(body.target_package)
+    if "/" in safe_target:
+        raise _err(
+            f"Invalid target package name: {safe_target!r} (flat name only, no '/' allowed)",
+            status.HTTP_400_BAD_REQUEST,
+        )
 
     # Source: skill hub
     src = settings.skill_hub_path / safe_name
@@ -412,10 +775,20 @@ async def install_skill(
 
     dest = pkg_path / "harness" / "skills" / safe_name
     if dest.exists():
-        raise _err(
-            f"Skill '{safe_name}' is already installed in package '{safe_target}'",
-            status.HTTP_409_CONFLICT,
-        )
+        if body.overwrite:
+            try:
+                shutil.rmtree(dest)
+            except OSError as exc:
+                raise _err(
+                    f"Failed to remove existing skill for overwrite: {exc}",
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                ) from exc
+        else:
+            raise _err(
+                f"Skill '{safe_name}' is already installed in package '{safe_target}'. "
+                "Set overwrite=true to replace.",
+                status.HTTP_409_CONFLICT,
+            )
 
     # Ensure parent directory exists
     try:

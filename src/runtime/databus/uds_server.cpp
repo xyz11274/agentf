@@ -507,8 +507,7 @@ std::string UDSServer::handle_put(const std::string& method, const std::string& 
   std::string value_str = extract_json_string(params, "value");
 
   // DEBUG: log extracted params to diagnose -32602 / extraction issues
-  Logger::instance().info_f(
-      "[UDS_PUT_DEBUG] session_id=%s namespace=%s key=%s value_len=%zu "
+  Logger::instance().debug_f(
       "sid_empty=%d ns_empty=%d key_empty=%d",
       session_id.c_str(), namespace_str.c_str(), key.c_str(), value_str.size(),
       session_id.empty(), namespace_str.empty(), key.empty());

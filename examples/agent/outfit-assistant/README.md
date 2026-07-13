@@ -2,6 +2,10 @@
 
 穿搭助手 — 基于 AgentFlow 框架的 coordinator-driven agent，结合天气、场合和用户画像提供穿搭建议。
 
+> **执行架构**：对齐 `docs/design/agent-template-delta.md` 的"四层架构：模版 → pip 包 + 入口文件"。
+> daemon 直接 `execve` `nodes/*.py` 入口文件（`execution_mode: python_script`），入口文件只有一行 `from agentflow_runtime.* import ...`，真正实现在 pip 包 `agentflow-runtime` 中。
+> 没有 shell wrapper、没有 sentinel 检测——venv 由 `setup.sh` 手动初始化，框架 worker 通过 `PYTHON_PATH` 找 `.venv/bin/python3`。
+
 ## 完整执行全景图
 
 ```
@@ -32,8 +36,8 @@
 │  (框架内置，无节点)    │   │  ↓                          │
 │                     │   │  dummy_pre_skill.py          │
 │  next_skills:       │   │  ─────────────────           │
-│  ["dummy_pre_skill"]│   │  纯 passthrough              │
-│                     │   │  无任何处理，无 next_skills   │
+│  ["dummy_pre_skill"]│   │  入口文件（1 行 import）      │
+│                     │   │  纯 passthrough，无 next_skills│
 │  生成 dialogue_id   │   │  框架自动 forward 给        │
 │  写 user_prompt 到  │   │  coordinator task            │
 │  DataBus            │   │                              │
@@ -410,7 +414,7 @@ outfit-assistant/
 ├── package.json                        # workflow 注册
 ├── .env / .env.example                 # API key 配置
 ├── requirements.txt                    # Python 依赖
-├── setup.sh                            # 环境初始化脚本
+├── setup.sh                            # 环境初始化脚本（手动跑一次，对齐 design §5.4）
 ├── dummy_pre_skill_workflow.json       # dummy_pre_skill hook workflow
 ├── coordinator_workflow.json           # coordinator task workflow (coordinator_decide)
 ├── skill_workflow.json                 # skill-runner task workflow

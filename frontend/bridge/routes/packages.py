@@ -40,11 +40,47 @@ from client import DaemonClient, DaemonError
 from config import settings
 from dependencies import get_daemon_client
 from models import FileNode, PackageInfo
-from templates.agent_template.merger import merge_template_with_user_upload
+from templates.agent_template.merger import (
+    merge_template_with_user_upload,
+    _reapply_template_files,
+    _make_scripts_executable,
+)
 
 logger = logging.getLogger("agentflow.bridge.routes.packages")
 
 router = APIRouter(prefix="/api/packages", tags=["packages"])
+
+
+# --- §5.1/§5.2 setup.sh 驺动执行 --------------------------------------------
+# Bridge 在 create/update 流程末验 setup.sh（幂等）。setup.sh 负责创建 .venv +
+# 装依赖 + 装 agentflow-runtime + 写 sentinel（见设计文档 §5.4/§3.5）。
+# 失败不阻断主流程（只 WARN）——shell wrapper fallback 到系统 python3。
+def _run_setup_sh(pkg_dir: Path) -> None:
+    setup_sh = pkg_dir / "setup.sh"
+    if not setup_sh.is_file():
+        logger.debug("setup.sh not found in %s, skip", pkg_dir)
+        return
+    import subprocess
+    import os as _os
+    try:
+        proc = subprocess.run(
+            ["bash", str(setup_sh)],
+            cwd=str(pkg_dir),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env={**_os.environ, "AF_SETUP_BY": "bridge"},
+        )
+        if proc.returncode == 0:
+            logger.info("setup.sh ok pkg=%s", pkg_dir.name)
+        else:
+            logger.warning(
+                "setup.sh failed pkg=%s rc=%s stderr=%s",
+                pkg_dir.name, proc.returncode, proc.stderr[:500] if proc.stderr else "",
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("setup.sh invocation error pkg=%s: %s", pkg_dir.name, exc)
 
 # --- constants --------------------------------------------------------------
 
@@ -716,7 +752,10 @@ async def upload_package(
     # Merge strategy:
     #   Single files (package.json, agent.json, workflows) → copy if missing
     #   Directories (harness/, nodes/) → recursive merge, user files win
-    _TEMPLATE_DIR = Path(__file__).resolve().parent.parent / "templates" / "agent_template" / "harness_agent"
+    #
+    # NOTE: template 路径走 settings.agent_template_path（单一真相，F5），
+    # 与 update_package 的 _reapply_template_files 同源——configs 改一次两边都生效。
+    _TEMPLATE_DIR = settings.agent_template_path / template
     if _TEMPLATE_DIR.is_dir():
 
         def _merge_dir(src_dir: Path, dst_dir: Path) -> None:
@@ -779,6 +818,10 @@ async def upload_package(
         "package_upload.complete name=%s files=%d archive=%s",
         safe_name, file_count, file.filename,
     )
+
+    # --- §5.2 upload 流程末验 setup.sh（驮动执行，幂等）----------------------
+    _run_setup_sh(pkg_dir)
+
     return PackageInfo(
         name=safe_name,
         path=str(pkg_dir.resolve()),
@@ -947,6 +990,10 @@ async def create_from_template(
         "package_create_from_template.complete name=%s template=%s files=%d",
         safe_name, template, file_count,
     )
+
+    # --- §5.1 create 流程末验 setup.sh（驮动执行，幂等）----------------------
+    _run_setup_sh(pkg_dir)
+
     return PackageInfo(
         name=safe_name,
         path=str(pkg_dir.resolve()),
@@ -964,6 +1011,7 @@ async def update_package(
     name: str,
     file: UploadFile = File(..., description="Archive file (.zip / .tar.gz)."),
     mode: str = Form("incremental"),
+    template: str = Form("harness_agent"),
     client: DaemonClient = Depends(get_daemon_client),
 ) -> PackageInfo:
     """Update an existing package by uploading an archive.
@@ -1075,6 +1123,17 @@ async def update_package(
     # Directories missing +x are inaccessible; scripts without +x fail at runtime.
     _normalize_permissions(pkg_dir)
 
+    # --- §5.2 sync template public parts (_TEMPLATE_ONLY overlay) --------------
+    # Re-apply template-owned infrastructure files (wrapper/*.sh, harness/tools/,
+    # nodes/*.py entries, tests/) so framework upgrades propagate via update.
+    # User-uploaded files matching _TEMPLATE_ONLY are clobbered (F5 single truth).
+    tmpl_dir = settings.agent_template_path / template
+    if tmpl_dir.is_dir():
+        _reapply_template_files(tmpl_dir.resolve(), pkg_dir)
+        _make_scripts_executable(pkg_dir)
+    else:
+        logger.warning("update.skip_template_sync: template dir not found: %s", tmpl_dir)
+
     # --- build PackageInfo ------------------------------------------------------
     file_count = 0
     try:
@@ -1090,6 +1149,12 @@ async def update_package(
 
     # --- hot-reload (only if already loaded in daemon) ---------------------------
     await _try_hot_reload_agent(safe_name, client)
+
+    # --- §5.2 update 流程末验 setup.sh（驨动执行，幂等）----------------------
+    # 设计文档声明"仅当 setup.sh 或 requirements.txt 变更时跑"，但 update handler
+    # 增量合并未跟踪文件变更清单——setup.sh 本身幂等（内部按 hash 检测依赖是否重装），
+    # 无条件跑一次代价可接受，优于重建变更追踪。
+    _run_setup_sh(pkg_dir)
 
     return PackageInfo(
         name=safe_name,

@@ -72,7 +72,7 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/blackbox/test_blackbox_interactive_runner
         COMMAND bash
                 "${CMAKE_CURRENT_SOURCE_DIR}/blackbox/test_blackbox_interactive_runner.sh"
                 "${CMAKE_BINARY_DIR}/agent_runner"
-                "${CMAKE_SOURCE_DIR}/examples/agent/basic_agent"
+                "${CMAKE_SOURCE_DIR}/examples/agent/outfit-test-agent"
     )
 endif()
 
@@ -197,7 +197,21 @@ endif()
 #    )
 #endif()
 #
-# [REMOVED] Multi-Session Concurrent Blackbox Test — depends on removed SO libraries
+# DataBus Bus-B cleanup black-box E2E test (Python)
+# 验证 store_with_ref 反向映射修复：对话完成时 Bus-B 清理日志应出现
+# 需要 agentflowd 已编译 + websockets 库
+find_program(PYTHON3_BIN python3)
+if(PYTHON3_BIN AND EXISTS "${CMAKE_SOURCE_DIR}/frontend/bridge/tests/test_databus_cleanup_e2e.py")
+    add_test(
+        NAME E2EDataBusCleanupDaemon
+        COMMAND ${PYTHON3_BIN} -m pytest -x -v
+                "${CMAKE_SOURCE_DIR}/frontend/bridge/tests/test_databus_cleanup_e2e.py"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    )
+    set_tests_properties(E2EDataBusCleanupDaemon PROPERTIES
+        ENVIRONMENT "PYTHONPATH=${CMAKE_SOURCE_DIR}/frontend/bridge"
+    )
+endif()
 #if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/system_agent_mock/test_multi_session_concurrent.cpp")
 #    add_executable(test_e2e_multi_session_concurrent
 #        system_agent_mock/test_multi_session_concurrent.cpp

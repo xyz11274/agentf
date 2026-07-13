@@ -5,7 +5,7 @@
 
 ## 问题描述
 
-`DaemonConfig` 结构体中没有 `llm_config` 字段，`daemon_config.json` 即使写了 LLM 配置也读不进去。当前 LLM 配置只能通过**环境变量**（`AF_LLM_BASE_URL` / `AF_LLM_API_KEY` / `AF_LLM_MODEL`）手动 export，不走统一配置管理。
+`DaemonConfig` 结构体中没有 `llm_config` 字段，`configs/{env}/agentflowd.json` 即使写了 LLM 配置也读不进去。当前 LLM 配置只能通过**环境变量**（`AF_LLM_BASE_URL` / `AF_LLM_API_KEY` / `AF_LLM_MODEL`）手动 export，不走统一配置管理。
 
 ## 代码位置
 
@@ -30,7 +30,7 @@ Node 进程通过 os.environ / $ENV 读取
 ## 目标链路（方案中规划）
 
 ```
-daemon_config.json 中的 llm_config
+configs/{env}/agentflowd.json 中的 llm_config
     ↓
 DaemonConfig.llm_config（新增字段）
     ↓
@@ -43,7 +43,7 @@ Node 进程读取 + StreamingLLMClient 使用
 
 ## 影响
 
-- 无法通过 `daemon_config.json` 统一管理 LLM 配置
+- 无法通过 `configs/{env}/agentflowd.json` 统一管理 LLM 配置
 - 每次启动 daemon 前必须手动 export 环境变量
 - 无法在 `agenmd build` 生成的配置中包含 LLM 信息
 - 多 agent 难以使用不同的 LLM 配置

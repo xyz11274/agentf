@@ -3210,5 +3210,118 @@ TEST_F(DialogueSerialLockTest, DoubleReleaseIsSafe) {
   EXPECT_EQ(ses.get_active_dialogue_id(), "");
 }
 
+// ════════════════════════════════════════════════════════════════════
+// Dialogue interrupt flag tests (design §3.2, I-INT-1/2/3/8)
+// ════════════════════════════════════════════════════════════════════
+
+class DialogueInterruptFlagFixture : public ::testing::Test {
+ protected:
+  std::shared_ptr<framework::MMAgent> agent_;
+
+  void SetUp() override {
+    framework::MMAgent::Config cfg;
+    cfg.id = "interrupt_test";
+    cfg.name = "interrupt_test";
+    agent_ = std::make_shared<framework::MMAgent>(cfg);
+    ASSERT_NE(agent_, nullptr);
+  }
+
+  // Call handle_dialogue_interrupt via this helper so that TEST_F subclasses
+  // (which are NOT direct friends of MMAgent) can trigger the interrupt path.
+  void interrupt_dialogue(const std::shared_ptr<framework::MMAgentSession>& session,
+                          const std::string& dialogue_id) {
+    agent_->handle_dialogue_interrupt(session, make_interrupt_msg(dialogue_id));
+  }
+
+  // Build a control message carrying dialogue_id metadata, matching
+  // handle_dialogue_interrupt's expected input shape.
+  framework::MMAgentMsgQue::Message make_interrupt_msg(
+      const std::string& dialogue_id) {
+    framework::MMAgentMsgQue::Message msg;
+    msg.content = framework::MMAgentMsgQue::ControlCommand::DIALOGUE_INTERRUPT;
+    msg.metadata["dialogue_id"] = dialogue_id;
+    return msg;
+  }
+
+  // Read back the interrupt flag via the agent's own DataBus.
+  // When runtime_databus_ is absent, falls back to internal map.
+  std::string read_flag(const std::string& session_id,
+                        const std::string& dialogue_id) {
+    std::string key = "/session/" + session_id +
+                      "/sys/interrupt:" + dialogue_id;
+    DataVariant v;
+    if(!agent_->get_data(key, v)) return "";
+    const auto* s = std::get_if<std::string>(&v);
+    return s ? *s : "";
+  }
+};
+
+// I-INT-2: flag key must be in global sys namespace (/sys/interrupt:{did}),
+//          NOT dialogue-scoped (/sys/{did}/interrupt). After handle_dialogue_interrupt
+//          runs, the global key must contain "true".
+TEST_F(DialogueInterruptFlagFixture, FlagWrittenToGlobalSysNamespace) {
+  auto session = agent_->get_or_create_session("user_flag", "client_flag");
+  ASSERT_NE(session, nullptr);
+  std::string sid = session->get_session_id();
+  std::string did = "d_flag_test";
+
+  interrupt_dialogue(session, did);
+
+  EXPECT_EQ(read_flag(sid, did), "true")
+      << "flag must be written to /sys/interrupt:{did} global namespace";
+}
+
+// I-INT-3: flag must NOT be cleared by dialogue-level cleanup.
+TEST_F(DialogueInterruptFlagFixture, FlagSurvivesDialogueCleanup) {
+  auto session = agent_->get_or_create_session("user_survive", "client_survive");
+  ASSERT_NE(session, nullptr);
+  std::string sid = session->get_session_id();
+  std::string did = "d_survive_test";
+
+  interrupt_dialogue(session, did);
+  ASSERT_EQ(read_flag(sid, did), "true");
+
+  // Run cleanup again (simulate re-trigger or repeated interrupt).
+  framework::BuiltinDispatcher::cleanup_dialogue_data(*agent_, sid, did);
+
+  // Flag must still be present — dialogue cleanup doesn't touch
+  // global sys keys (/sys/interrupt: prefix vs /sys/{did}/ prefix).
+  EXPECT_EQ(read_flag(sid, did), "true")
+      << "flag in global sys namespace must survive dialogue-level cleanup";
+}
+
+// Regression: empty dialogue_id must NOT write a flag (no crash, no side-effect).
+TEST_F(DialogueInterruptFlagFixture, EmptyDialogueIdDoesNotWriteFlag) {
+  auto session = agent_->get_or_create_session("user_empty", "client_empty");
+  ASSERT_NE(session, nullptr);
+  std::string sid = session->get_session_id();
+  std::string empty_did = "";
+
+  interrupt_dialogue(session, empty_did);
+
+  // No flag should have been written for empty dialogue_id.
+  std::string flag_key_prefix = "/session/" + sid + "/sys/interrupt:";
+  DataVariant v;
+  bool exists = agent_->get_data(flag_key_prefix, v);
+  EXPECT_FALSE(exists) << "no flag should be written for empty dialogue_id";
+}
+
+// Regression: duplicate interrupt is idempotent (calling handle_dialogue_interrupt
+// twice on the same dialogue_id must not crash, flag stays "true").
+TEST_F(DialogueInterruptFlagFixture, DuplicateInterruptIsIdempotent) {
+  auto session = agent_->get_or_create_session("user_dup", "client_dup");
+  ASSERT_NE(session, nullptr);
+  std::string sid = session->get_session_id();
+  std::string did = "d_dup_test";
+
+  interrupt_dialogue(session, did);
+  EXPECT_EQ(read_flag(sid, did), "true");
+
+  // Second interrupt on same dialogue_id must not crash or toggle.
+  interrupt_dialogue(session, did);
+  EXPECT_EQ(read_flag(sid, did), "true")
+      << "duplicate interrupt must be idempotent: flag stays 'true'";
+}
+
 }  // namespace tests
 }  // namespace agentflow

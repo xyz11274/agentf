@@ -309,7 +309,7 @@ run_unit_tests() {
     record_unit
 
     # AgentFlow (JSON parsing, UDS, combined)
-    run_test_binary "AgentFlowGoogleTests"  "$BUILD_DIR/tests/test_agentflow_gtest"
+    run_test_binary "AgentFlowGoogleTests"  "$BUILD_DIR/test_agentflow_gtest"
     record_unit
 
     # DSL Adapter

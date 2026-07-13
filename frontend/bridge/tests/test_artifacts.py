@@ -177,14 +177,14 @@ def test_unsupported_artifact_type_is_rejected(
     """
     source = artifact_root / "outfit-assistant" / "agent.py"
     source.parent.mkdir(parents=True)
-    source.write_text("API_KEY = 'secret'", encoding="utf-8")
+    source.write_text("AF_LLM_API_KEY = 'secret'", encoding="utf-8")
 
     response = client.get(
         "/api/artifacts/outfit-assistant/files/outfit-assistant/agent.py"
     )
 
     assert response.status_code == 415
-    assert b"API_KEY" not in response.content
+    assert b"AF_LLM_API_KEY" not in response.content
 
 
 # ═══════════════════════════════════════════════════════════════════

@@ -1,0 +1,115 @@
+# AgentFlow Bridge — 开发环境配置
+#
+# 加载优先级: 系统环境变量 > .env 文件 > 此文件 > 代码默认值
+# 此文件是权威配置。configs/{env}/bridge.yaml 匹配后，
+# frontend/bridge/config.yaml 不会被加载。
+#
+# 此文件必须包含 frontend/bridge/config.yaml 的所有字段，
+# 否则缺字段会回退到代码默认值（可能为空）。
+
+# ── Daemon（agentflowd）连接 ──────────────────────────────────────
+daemon:
+  host: "127.0.0.1"
+  port: 17891
+
+# ── Bridge 服务绑定 ───────────────────────────────────────────────
+bridge:
+  listen: "0.0.0.0:8199"
+
+# ── Sidecar（对外入口，仅生产环境） ────────────────────────────────
+sidecar:
+  enabled: false
+  listen: "0.0.0.0:23767"
+  aisf_adapter_url: "http://127.0.0.1:18080"
+
+# ── AISF Adapter ───────────────────────────────────────────────────
+aisf_adapter:
+  agent_id: "outfit-assistant"
+  mode: "async"
+  timeout: 360.0
+  upstream:
+    scheme: "http"
+    callback_port: 23767
+    callback_path: "/coremind/systemagent/v1/callback"
+    client_cert_path: ""
+    client_key_path: ""
+    client_key_password: ""
+    ca_cert_path: ""
+    verify: true
+
+# ── Artifact 公网地址 ─────────────────────────────────────────────
+artifact_public_base_url: "http://localhost:8199/health"
+
+# ── 文件路径 ──────────────────────────────────────────────────────
+agent_packages_dir: "examples/agent"
+skill_hub_dir: "resource/skill_hub"
+agent_template_dir: "frontend/bridge/templates/agent_template"
+# ── 日志与超时 ────────────────────────────────────────────────────
+log_level: "DEBUG"
+request_timeout_seconds: 15.0
+upload_max_body_size_mb: 100
+
+# ── 会话持久化 ────────────────────────────────────────────────────
+session_provider: "local"
+session_db_path: "data/sessions.db"
+session_context_limit_rounds: 5
+session_sync_interval: 30.0
+
+# ── 多模态内容 ────────────────────────────────────────────────────
+content_image_inline_threshold_kb: 256
+uploads_dir: "/tmp/agentflow/uploads"
+chat_turn_timeout_seconds: 900.0
+daemon_status_refresh_interval: 10.0
+
+# ── CORS ──────────────────────────────────────────────────────────
+cors_allowed_origins:
+  - "http://localhost:15173"
+  - "http://127.0.0.1:15173"
+
+# ── Agent 默认配置（load_agent 时注入） ──────────────────────────
+agent_defaults:
+  llm:
+    # api_key: "${AF_LLM_API_KEY:-sk-dca40208f5714152a6cf0de59cc5f1d0}"
+    # base_url: "${AF_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
+    # model: "${AF_LLM_MODEL:-deepseek-v4-flash}"
+    api_key: "${AF_LLM_API_KEY:-sk-cp-nbU8hW2JOt8hpWAA32Y8BXP_jnz_H8IoN8jfWoDLaaN_Xf5pz05Yl_Q6oQWJf17-2sE6wcvdtpgbqkx6u-bdodmEfAdj6P_IcZVpOGKFygfJ5RLh_xkWjAY}"
+    base_url: "${AF_LLM_BASE_URL:-https://api.minimaxi.com/v1}"
+    model: "${AF_LLM_MODEL:-MiniMax-M3}"    
+    temperature: 0.7
+    top_p: 1.0
+    frequency_penalty: 0.0
+    presence_penalty: 0.0
+    top_k: 0
+    stop: ""
+  llm_fallback:
+    api_key: "sk-dca40208f5714152a6cf0de59cc5f1d0"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    model: "deepseek-v4-flash"
+  coordinator:
+    max_iterations: 10
+    max_completion_tokens: 8192
+    model: ""               # 空=使用全局 AF_LLM_MODEL
+    temperature: 0.3
+  skill:
+    max_iterations: 8
+    max_completion_tokens: 8192
+    llm_recovery_attempts: 2
+    node_timeout_sec: 240
+    model_max_tokens: 128000
+    compaction_threshold: 0.8
+    model: ""               # 空=使用全局 AF_LLM_MODEL
+    temperature: 0.5
+  llm_timeout: 120
+  llm_connect_timeout: 15
+  llm_max_retries: 2
+  llm_retry_base_delay: 1.0
+  # UDS 通道切换：true 时为模型名自动补 aisf/ 前缀，走 UDS 而非 HTTP
+  use_aisf_models: false
+  vision:
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    model: "qwen-vl-max"
+    api_key: "sk-dca40208f5714152a6cf0de59cc5f1d0"
+  vision_fallback:
+    base_url: ""
+    model: ""
+    api_key: ""

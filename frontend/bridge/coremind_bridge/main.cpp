@@ -102,7 +102,6 @@ static BridgeTarget parse_bridge_target(const std::string& bridge_url) {
 
 static void forward_to_bridge(
     const std::string& bridge_url,
-    const std::string& internal_token,
     const httplib::Request& req,
     httplib::Response& res) {
     Json::CharReaderBuilder reader_builder;
@@ -146,7 +145,6 @@ static void forward_to_bridge(
     const auto target = parse_bridge_target(bridge_url);
     httplib::Client client(target.origin.c_str());
     httplib::Headers headers;
-    headers.emplace("Authorization", "Bearer " + internal_token);
     headers.emplace("X-Request-Id", request_id);
     const auto response = client.Post(
         target.path_prefix + "/internal/coremind/v1/callback", headers,
@@ -186,8 +184,6 @@ static ListenAddress parse_listen_address(const std::string& value) {
 int main(int argc, char* argv[]) {
     std::string listen_addr = "0.0.0.0:23767";
     std::string bridge_url = "http://127.0.0.1:8199";
-    std::string internal_token = std::getenv("AISF_INTERNAL_TOKEN") != nullptr
-        ? std::getenv("AISF_INTERNAL_TOKEN") : "";
 
     // ── Parse CLI args ──
     for (int i = 1; i < argc; i++) {
@@ -203,10 +199,6 @@ int main(int argc, char* argv[]) {
             return 1;
         }
     }
-    if (internal_token.empty()) {
-        std::cerr << "[coremind_bridge] AISF_INTERNAL_TOKEN is required" << std::endl;
-        return 1;
-    }
 
     ListenAddress listen;
     try {
@@ -217,7 +209,7 @@ int main(int argc, char* argv[]) {
     }
 
     httplib::Server svr;
-    configure_server(svr, bridge_url, internal_token);
+    configure_server(svr, bridge_url);
 
     std::cout << "[coremind_bridge] listening on " << listen_addr << std::endl;
     std::cout << "[coremind_bridge] forwarding to bridge: " << bridge_url << std::endl;
@@ -230,8 +222,7 @@ int main(int argc, char* argv[]) {
     return 0;
 }
 
-static void configure_server(httplib::Server& svr, const std::string& bridge_url,
-                             const std::string& internal_token) {
+static void configure_server(httplib::Server& svr, const std::string& bridge_url) {
 
     // ═══════════════════════════════════════════════
     //  1. Health check (handled locally)
@@ -267,19 +258,19 @@ static void configure_server(httplib::Server& svr, const std::string& bridge_url
     // ═══════════════════════════════════════════════
     // Matches HealthAgent's USER_REQUEST_URL
     svr.Post("/coremind/systemagent/v1/callback",
-             [bridge_url, internal_token](const httplib::Request& req, httplib::Response& res) {
-        forward_to_bridge(bridge_url, internal_token, req, res);
+             [bridge_url](const httplib::Request& req, httplib::Response& res) {
+        forward_to_bridge(bridge_url, req, res);
     });
 
     // Alternate task entry paths (forward to adapter too)
     svr.Post("/health/v1/tasks",
-             [bridge_url, internal_token](const httplib::Request& req, httplib::Response& res) {
-        forward_to_bridge(bridge_url, internal_token, req, res);
+             [bridge_url](const httplib::Request& req, httplib::Response& res) {
+        forward_to_bridge(bridge_url, req, res);
     });
 
     svr.Post("/aisf/outfit/v1/tasks",
-             [bridge_url, internal_token](const httplib::Request& req, httplib::Response& res) {
-        forward_to_bridge(bridge_url, internal_token, req, res);
+             [bridge_url](const httplib::Request& req, httplib::Response& res) {
+        forward_to_bridge(bridge_url, req, res);
     });
 
     // ═══════════════════════════════════════════════

@@ -1,0 +1,10 @@
+{
+  "status": "success",
+  "provider": "dashscope",
+  "model": "z-image-turbo",
+  "output": "flat_lay_business_outfit.png",
+  "size": "1280x1280",
+  "file_size": "2.2MB",
+  "path": "/Users/archer/local_home/synologydrive/crossworkspace/coding/AI/ai_projects/aisf/aisf_agentflow/examples/agent/outfit-assistant/harness/skills/forge-image-gen/assets/flat_lay_business_outfit.png",
+  "description": "极简商务·清爽利落会议穿搭套装平铺展示图"
+}

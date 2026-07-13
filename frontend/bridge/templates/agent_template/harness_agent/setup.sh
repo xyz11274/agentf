@@ -1,14 +1,19 @@
 #!/bin/bash
 # Harness Agent 环境初始化
 #
-# 做三件事：
+# 定位（对齐 docs/design/agent-template-delta.md §5.4）：由 Bridge 在 create/update 后验动执行，
+# 用户无需手动跑。负责创建 .venv + 装依赖 + 装 agentflow-runtime 内部库 + 写 sentinel。
+#
+# 做四件事：
 #   1. 创建 Python 虚拟环境 .venv
 #   2. 安装 requirements.txt 依赖
-#   3. 提示如何用 PYTHON_PATH 启动 daemon（框架 worker 用 .venv 的 python3 执行节点脚本）
+#   3. 安装内部库 agentflow-runtime（editable mode）
+#   4. 写 sentinel 文件（shell wrapper 检测 .venv 就绪时读这个文件，见 §3.5）
 #
 # 用法：
-#   bash setup.sh                  # 初始化环境
-#   PYTHON_PATH=.venv ./build/agentflowd --listen 0.0.0.0:7891 --package <agent_package_dir>
+#   bash setup.sh                  # 初始化环境（由 Bridge 验动，也可手动跑）
+#   ./build/agentflowd --listen 0.0.0.0:7891 --package <agent_package_dir>
+#   （无需设 PYTHON_PATH；shell wrapper nodes/*.sh 自动检测 .venv 并 fallback 系统 python3）
 #
 # 环境变量（可从 .env 加载）：
 #   API_KEY             — LLM API key
@@ -52,7 +57,20 @@ if [ -f "$VENV_DIR/bin/pip" ] && [ -f "$REQ_FILE" ]; then
     fi
 fi
 
-# ── 3. 校验 .env ──
+# ── 3. 安装内部库 agentflow-runtime ──
+# 内部库从本地路径安装，不走公网
+# 安装成功后写入 sentinel 文件，wrapper 脚本据此判断无需 fork Python 检查
+# 注意：模板被复制到其他位置后，需调整 AF_RUNTIME_PKG 路径
+AF_RUNTIME_PKG="$SCRIPT_DIR/../../../../../packages/agentflow-runtime"
+AF_SENTINEL="$VENV_DIR/.agentflow_installed"
+if [ -d "$AF_RUNTIME_PKG" ]; then
+    "$VENV_DIR/bin/pip" install -e "$AF_RUNTIME_PKG" --quiet 2>/dev/null \
+        && touch "$AF_SENTINEL" \
+        && echo "✅ agentflow-runtime 已安装" \
+        || echo "⚠️  agentflow-runtime 安装失败"
+fi
+
+# ── 4. 校验 .env ──
 if [ ! -f "$SCRIPT_DIR/.env" ]; then
     echo ""
     echo "⚠️  未找到 .env 文件"
@@ -60,7 +78,7 @@ if [ ! -f "$SCRIPT_DIR/.env" ]; then
     echo "   cp .env.example .env && \$EDITOR .env"
 fi
 
-# ── 4. 输出启动指引 ──
+# ── 5. 输出启动指引 ──
 cat <<EOF
 
 ✅ 环境初始化完成
@@ -70,13 +88,14 @@ cat <<EOF
   # 加载 .env 环境变量
   set -a; . <agent_package_dir>/.env; set +a
 
-  # 用 .venv 的 python3 执行节点脚本
-  PYTHON_PATH=<agent_package_dir>/.venv \\
-    ./build/agentflowd \\
+  # shell wrapper（nodes/*.sh）自动检测 .venv 并选 python，无需设 PYTHON_PATH
+  ./build/agentflowd \\
     --listen 0.0.0.0:7891 \\
     --package <agent_package_dir>
 
 关键点：
-  - PYTHON_PATH 指向 .venv 目录（框架 worker 会自动找 .venv/bin/python3）
+  - workflow 用 execution_mode=shell_script，daemon execve bash nodes/*.sh
+  - shell wrapper 检测 .venv + sentinel（见 §3.5）：就绪 → 用 .venv/bin/python3，否则 fallback 系统 python3
+  - 系统 python3 须已预装 agentflow-runtime（由 Bridge 启动时预装，见 §2.2）
   - .env 里的业务 API key 会被 export 到 worker 子进程
 EOF

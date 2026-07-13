@@ -106,6 +106,10 @@ bool MMDataBus::store_with_ref(const std::string& key, const DataVariant& value,
   }
   put(key, value);
 
+  // Reverse mapping: data_id → logical key, so cleanup can remove both copies
+  // without needing to know the logical key up front.
+  put("data_ref_logical:" + data_id, key);
+
   if(remote_bus_->is_connected()) {
     const std::string ref_address = out_ref.address;
     add_owner_index(remote_bus_.get(), "request_id", owner.request_id, ref_address);
@@ -113,6 +117,7 @@ bool MMDataBus::store_with_ref(const std::string& key, const DataVariant& value,
     add_owner_index(remote_bus_.get(), "client_id", owner.client_id, ref_address);
     add_owner_index(remote_bus_.get(), "agent_id", owner.agent_id, ref_address);
     add_owner_index(remote_bus_.get(), "session_id", owner.session_id, ref_address);
+    add_owner_index(remote_bus_.get(), "dialogue_id", owner.dialogue_id, ref_address);
     add_owner_index(remote_bus_.get(), "task_id", owner.task_id, ref_address);
     add_owner_index(remote_bus_.get(), "workflow_id", owner.workflow_id, ref_address);
     add_owner_index(remote_bus_.get(), "node_id", owner.node_id, ref_address);
@@ -140,6 +145,11 @@ std::vector<std::string> MMDataBus::find_refs_by_owner(const std::string& owner_
     return {};
   }
   return remote_bus_->find_indexed_refs(owner_index_key(owner_key, owner_value));
+}
+
+void MMDataBus::clear_owner_index(const std::string& owner_key, const std::string& owner_value) {
+  if(owner_key.empty() || owner_value.empty() || !remote_bus_->is_connected()) return;
+  remote_bus_->clear_owner_index(owner_index_key(owner_key, owner_value));
 }
 
 bool MMDataBus::connect_remote(const std::string& address) {

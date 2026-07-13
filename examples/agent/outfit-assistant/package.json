@@ -4,8 +4,8 @@
   "description": "穿搭助手 — dispatcher → dummy_pre_skill hook → coordinator loop",
   "author": "AgentFlow",
   "workflows": [
-    "dummy_pre_skill_workflow.json",
     "coordinator_workflow.json",
+    "dummy_pre_skill_workflow.json",
     "skill_workflow.json"
   ],
   "metadata": {

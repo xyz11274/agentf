@@ -71,18 +71,9 @@ frontend/bridge/coremind_bridge/build-production/coremind_bridge
 
 ## 配置
 
-```bash
-cp scripts/.env.example scripts/.env
-```
+脚本启动参数（端口、package 路径）已在各脚本的 `${VAR:-default}` 默认值中，可通过 CLI 参数或环境变量覆盖，无需配置文件。
 
-至少设置：
-
-```bash
-AISF_INTERNAL_TOKEN="replace-with-deployment-secret"
-COREMIND_REQUIRED_SERVICES="IMInferScheduler"
-```
-
-`.env` 仅供本地或受控部署使用，不应提交密钥。
+Bridge / Agent 节点的运行时配置统一在 `configs/{env}/bridge.yaml`（按 `AGENTFLOW_ENV` 选环境），详见 `configs/README.md`。
 
 ## 启动
 

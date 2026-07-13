@@ -1,0 +1,15 @@
+{
+  "name": "agent-creator",
+  "version": "1.0.0",
+  "description": "对话创建智能体 — 自然语言引导创建 Agent 包",
+  "author": "AgentFlow",
+  "workflows": [
+    "harness_run_workflow.json",
+    "coordinator_collect.json"
+  ],
+  "metadata": {
+    "type": "agent",
+    "category": "harness",
+    "description": "Conversational agent creation via LLM-driven loop"
+  }
+}

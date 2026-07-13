@@ -233,7 +233,7 @@ def real_infra(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, A
                 f"{OUTFIT_AGENT / '.venv' / 'bin'}"
                 f"{os.pathsep}/usr/bin:/bin:/usr/sbin:/sbin"
             ),
-            "API_KEY": "e2e-test-key",
+            "AF_LLM_API_KEY": "e2e-test-key",
             "AF_LLM_BASE_URL": llm_url,
             "AF_LLM_MODEL": "e2e-scripted",
             "AF_SKILL_MAX_COMPLETION_TOKENS": "512",

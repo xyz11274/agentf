@@ -1,0 +1,28 @@
+{
+  "id": "harness-run-workflow",
+  "version": "1.0",
+  "name": "Agent Creator — LLM Conversation Loop",
+  "description": "LLM think-and-act loop with file management tools for conversational agent creation",
+  "nodes": [
+    {
+      "id": "llm_think",
+      "name": "LLM Think and Act",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "./python_wrapper.sh ./nodes/llm_loop.py",
+      "working_dir": "examples/agent/agent-creator",
+      "json_output": true,
+      "inputs": [
+        {"name": "input", "type": "string", "required": true},
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "dialogue_id", "type": "string", "required": false}
+      ],
+      "outputs": [
+        {"name": "response", "type": "string"}
+      ],
+      "enable_hot_reload": false,
+      "timeout_ms": 120000
+    }
+  ],
+  "edges": []
+}

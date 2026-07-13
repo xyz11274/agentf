@@ -1152,7 +1152,7 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
                              timeout_ms);
 
   // [DEBUG] Log full command details for troubleshooting
-  Logger::instance().info_f("[CODE_LOADER_DEBUG] Command=%s, WorkingDir=%s, EnvVars=%zu",
+  Logger::instance().debug_f("[CODE_LOADER_DEBUG] Command=%s, WorkingDir=%s, EnvVars=%zu",
                             command.c_str(), working_dir.c_str(), env_vars.size());
 
   auto shell_escape_single = [](const std::string& s) {
@@ -1201,7 +1201,7 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
     }
   }
 
-  Logger::instance().info_f("[CODE_LOADER_DEBUG] Final command: %s", prepared_command.c_str());
+  Logger::instance().debug_f("[CODE_LOADER_DEBUG] Final command: %s", prepared_command.c_str());
 
   int output_pipe[2];
   if(pipe(output_pipe) != 0) {
@@ -1320,10 +1320,10 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
   result.success   = (!timed_out && exit_code == 0 && !killed_by_signal);
 
   // [DEBUG] Log execution result details
-  Logger::instance().info_f("[CODE_LOADER_DEBUG] Exit code=%d, Success=%s, OutputLen=%zu, Signal=%d",
+  Logger::instance().debug_f("[CODE_LOADER_DEBUG] Exit code=%d, Success=%s, OutputLen=%zu, Signal=%d",
                             exit_code, result.success ? "true" : "false", output.size(), signal_num);
   if(!output.empty()) {
-    Logger::instance().info_f("[CODE_LOADER_DEBUG] Output: %s", output.c_str());
+    Logger::instance().debug_f("[CODE_LOADER_DEBUG] Output: %s", output.c_str());
   }
 
   if(!result.success) {

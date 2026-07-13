@@ -16,11 +16,6 @@ case "$PROFILE" in
     *) echo "[ERROR] Profile must be production or local" >&2; exit 2 ;;
 esac
 
-ar_load_env
-if [ -z "${AISF_INTERNAL_TOKEN:-}" ]; then
-    echo "[ERROR] AISF_INTERNAL_TOKEN is required" >&2
-    exit 1
-fi
 if [ ! -x "$BINARY" ]; then
     echo "[ERROR] Missing SideCar binary: $BINARY" >&2
     exit 1

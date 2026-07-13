@@ -1,6 +1,6 @@
 {
   "name": "OutfitAssistantAgent",
-  "version": "3.0.0",
+  "version": "3.2.0",
   "description": "穿搭助手 — dispatcher → dummy_pre_skill hook → coordinator loop",
   "session_pool_size": 3,
   "max_workflows": 10,
