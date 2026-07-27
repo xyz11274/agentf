@@ -1,8 +1,14 @@
-"""read_file tool — read a file from the local filesystem."""
+"""read_file tool — read a file from the local filesystem.
+
+ToolExecutor 迁移（Phase 3，ADR 20260724-tools-runtime-refactor.md）：
+- 通过 create_executor() 抽象层路由，不再内部 if-else
+- sandbox-mode 由 factory 读取 AF_SANDBOX_MODE 决定 Host/HTTP/E2B
+- 宿主侧保留路径 security 检查（sandbox_endpoint 为空时）
+- execute() 签名不变（skill_executor 兼容）
+"""
 
 import json
 import os
-
 
 TOOL_NAME = "read_file"
 TOOL_DESCRIPTION = "Read the contents of a file from the local filesystem. Use with max_chars to avoid reading overly large files."
@@ -33,7 +39,23 @@ TOOL_PARAMS = {
 }
 
 
-def execute(tool_input: dict) -> str:
+def execute(tool_input: dict, sandbox_endpoint: str = None) -> str:
+    """读取文件内容。
+
+    迁移后：通过 ToolExecutor 抽象层路由（create_executor），不再内部 if-else。
+    保持签名不变（skill_executor.py 兼容）。
+
+    Args:
+        tool_input: {"file_path": str, "max_chars": int, "offset": int, "limit": int}
+        sandbox_endpoint: 由 daemon 注入的沙箱 HTTP endpoint。
+            传递给 create_executor 作为 endpoint override。
+
+    Returns:
+        JSON 字符串——FileContent 格式（content/error/total_lines）
+        加 tool 字段标识来源。
+    """
+    from agentflow_runtime.executors.factory import create_executor
+
     file_path = tool_input.get("file_path", "")
     max_chars = tool_input.get("max_chars", 10000)
     offset = tool_input.get("offset", 1)
@@ -43,57 +65,26 @@ def execute(tool_input: dict) -> str:
         return json.dumps({"error": "file_path is required", "tool": "read_file"},
                           ensure_ascii=False)
 
-    # Resolve relative paths against CWD
-    resolved = os.path.abspath(file_path)
+    # 宿主侧路径 security 检查（sandbox_endpoint 为空时，沙箱侧由 server 自行检查）
+    if not sandbox_endpoint:
+        resolved = os.path.abspath(file_path)
+        cwd = os.path.abspath(os.getcwd())
+        if not resolved.startswith(cwd):
+            return json.dumps({
+                "error": f"Access denied: path '{file_path}' is outside the working directory '{cwd}'",
+                "tool": "read_file"
+            }, ensure_ascii=False)
 
-    # Security: reject paths outside the project
-    cwd = os.path.abspath(os.getcwd())
-    if not resolved.startswith(cwd):
-        return json.dumps({
-            "error": f"Access denied: path '{file_path}' is outside the working directory '{cwd}'",
-            "tool": "read_file"
-        }, ensure_ascii=False)
+    # 通过 Factory 获取 executor（替代原来的 if-else 分支）
+    executor = create_executor(sandbox_endpoint=sandbox_endpoint)
+    result = executor.read_file(file_path, offset if offset > 0 else 0, limit if limit > 0 else 0)
 
-    if not os.path.isfile(resolved):
-        return json.dumps({
-            "error": f"File not found: {file_path}",
-            "tool": "read_file"
-        }, ensure_ascii=False)
+    # 统一序列化（FileContent.to_dict() + 补 tool 字段）
+    data = result.to_dict()
+    data["tool"] = "read_file"
 
-    try:
-        with open(resolved, encoding="utf-8", errors="replace") as f:
-            if offset > 1 or limit != -1:
-                # Line-based read
-                lines = f.readlines()
-                start = max(0, offset - 1)
-                if limit > 0:
-                    selected = lines[start:start + limit]
-                else:
-                    selected = lines[start:]
-                content = "".join(selected)
-                total_lines = len(lines)
-            else:
-                content = f.read()
-                total_lines = content.count("\n") + 1
+    # max_chars 截断（宿主侧逻辑，保留不变）
+    if max_chars > 0 and data.get("content") and len(data["content"]) > max_chars:
+        data["content"] = data["content"][:max_chars] + f"\n... (truncated at {max_chars} chars)"
 
-        if max_chars > 0 and len(content) > max_chars:
-            content = content[:max_chars] + f"\n... (truncated at {max_chars} chars)"
-
-        return json.dumps({
-            "content": content,
-            "char_count": len(content),
-            "line_count": total_lines,
-            "file_path": resolved,
-            "tool": "read_file",
-        }, ensure_ascii=False)
-
-    except PermissionError:
-        return json.dumps({
-            "error": f"Permission denied: {file_path}",
-            "tool": "read_file"
-        }, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({
-            "error": f"Failed to read file: {e}",
-            "tool": "read_file"
-        }, ensure_ascii=False)
+    return json.dumps(data, ensure_ascii=False)

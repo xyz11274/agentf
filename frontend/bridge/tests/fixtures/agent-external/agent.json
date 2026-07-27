@@ -1,0 +1,4 @@
+{
+  "name": "agent-external",
+  "description": "L2 外部服务验证 agent — 调真实外部 API，验证 sandbox 内工具链 + 外部服务连通性"
+}

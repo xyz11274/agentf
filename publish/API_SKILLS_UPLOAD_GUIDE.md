@@ -13,7 +13,7 @@
 
 所有接口通过 `agentflowd` daemon 的 JSON-RPC 2.0 端点访问。
 
-- TCP: 默认 `127.0.0.1:7890`
+- TCP: 默认 `127.0.0.1:17891`
 - Unix Domain Socket: 通过配置的 `uds_biz_path`
 
 ## 方法
@@ -174,16 +174,16 @@ DATA=$(base64 skills-upload.zip | tr -d '\n')
 # 3. 上传
 echo "{\"jsonrpc\":\"2.0\",\"method\":\"agent.upload_skills\",\
       \"params\":{\"agent_id\":\"harness-agent\",\"skills_data\":\"$DATA\"},\"id\":1}" | \
-  nc 127.0.0.1 7890
+  nc 127.0.0.1 17891
 
 # 4. 列出 skills
 echo '{"jsonrpc":"2.0","method":"agent.list_skills",\
-      "params":{"agent_id":"harness-agent"},"id":1}' | nc 127.0.0.1 7890
+      "params":{"agent_id":"harness-agent"},"id":1}' | nc 127.0.0.1 17891
 
 # 5. 删除 skill
 echo '{"jsonrpc":"2.0","method":"agent.remove_skill",\
       "params":{"agent_id":"harness-agent","skill_name":"my-skill"},"id":1}' | \
-  nc 127.0.0.1 7890
+  nc 127.0.0.1 17891
 ```
 
 ### Python
@@ -193,7 +193,7 @@ import json, socket, base64
 
 def send_rpc(method, params):
     req = json.dumps({"jsonrpc":"2.0","method":method,"params":params,"id":1})
-    sock = socket.create_connection(("127.0.0.1", 7890))
+    sock = socket.create_connection(("127.0.0.1", 17891))
     sock.sendall(req.encode())
     resp = b""
     while True:

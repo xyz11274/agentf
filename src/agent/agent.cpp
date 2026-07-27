@@ -439,7 +439,7 @@ MMAgent::MMAgent(const Config& config) : config_(config), state_(AgentState::CRE
 std::shared_ptr<MMAgent> MMAgent::create_from_package(const std::string& package_path) {
   auto package = AgentPackage::load_from_directory(package_path);
   if(!package) {
-    std::cerr << "Failed to load agent package from: " << package_path << std::endl;
+    Logger::instance().error_f("Failed to load agent package from: %s", package_path.c_str());
     return nullptr;
   }
 
@@ -468,13 +468,13 @@ std::shared_ptr<MMAgent> MMAgent::create_from_package(const std::string& package
       if(result.is_valid() && result.workflow) {
         loaded_workflows.push_back(result.workflow);
       } else {
-        std::cerr << "Failed to load workflow from: " << wf_path.string() << std::endl;
+        Logger::instance().error_f("Failed to load workflow from: %s", wf_path.string().c_str());
         if(!result.errors.empty()) {
-          std::cerr << "Parser error: " << result.errors[0].message << std::endl;
+          Logger::instance().error_f("Parser error: %s", result.errors[0].message.c_str());
         }
       }
     } else {
-      std::cerr << "Workflow file not found: " << wf_path.string() << std::endl;
+      Logger::instance().error_f("Workflow file not found: %s", wf_path.string().c_str());
     }
   }
 
@@ -889,6 +889,10 @@ bool MMAgent::dequeue_response_message(MMAgentMsgQue::Message& message) {
   return session_router_ ? session_router_->dequeue_response_message(message) : false;
 }
 
+bool MMAgent::enqueue_response_message(const MMAgentMsgQue::Message& message) {
+  return session_router_ ? session_router_->enqueue_response_message(message) : false;
+}
+
 int MMAgent::get_response_queue_size() const {
   return session_router_ ? session_router_->get_response_queue_size() : 0;
 }
@@ -959,6 +963,10 @@ void MMAgent::handle_routed_request_message(const std::shared_ptr<MMAgentSession
   }
   if(client_it != message.metadata.end()) {
     session->set_metadata("client_id", client_it->second);
+  }
+  const auto sandbox_ep_it = message.metadata.find("sandbox_endpoint");
+  if(sandbox_ep_it != message.metadata.end()) {
+    session->set_metadata("sandbox_endpoint", sandbox_ep_it->second);
   }
   session->set_metadata("session_id", session->get_session_id());
   session->enqueue_received_message(message);
@@ -1279,6 +1287,14 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
   }
   if(!payload.empty()) {
     task->set_parameter("message_content", payload);
+  }
+  // Pass sandbox_endpoint from message metadata to task parameters
+  // for worker env var injection (AF_SANDBOX_ENDPOINT).
+  if(const auto sandbox_it = message.metadata.find("sandbox_endpoint");
+     sandbox_it != message.metadata.end() && !sandbox_it->second.empty()) {
+    task->set_parameter("sandbox_endpoint", sandbox_it->second);
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set sandbox_endpoint=%s for task=%s",
+                              sandbox_it->second.c_str(), task_config.task_id.c_str());
   }
   if(const auto selected_skills_it = message.metadata.find("selected_skills");
      selected_skills_it != message.metadata.end()) {

@@ -1,0 +1,4 @@
+{
+  "name": "agent-perf-noop",
+  "description": "L0 性能基线 agent — 不调 LLM，仅测调度开销"
+}

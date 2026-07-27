@@ -1,6 +1,12 @@
 #!/bin/bash
 set -e
 
+# 加载环境配置
+_ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../configs" && pwd)" 2>/dev/null || _ENV_DIR=""
+_ENV="${AGENTFLOW_ENV:-dev}"
+if [ -n "$_ENV_DIR" ] && [ -f "$_ENV_DIR/$_ENV/.env" ]; then set -a; source "$_ENV_DIR/$_ENV/.env"; set +a; fi
+unset _ENV_DIR _ENV
+
 # ============================================================
 # run_agent.sh — 启动 harness_agent 交互模式
 # 用法:

@@ -18,6 +18,9 @@
 #include "runtime/exe_loader.h"
 #include "utils/thread_pool.h"
 
+// AgentFoundry 沙箱机制移植：前向声明避免重 include
+namespace agentflow { namespace sandbox { class Sandbox; } }
+
 namespace agentflow {
 namespace framework {
 
@@ -237,6 +240,11 @@ public:
   void set_async_call_key(const std::string& key) { async_call_key_ = key; }
   const std::string& get_async_call_key() const { return async_call_key_; }
 
+  // Sandbox 实例（AgentFoundry 沙箱机制移植）
+  // 由 workflow/agent 在 node 创建后注入，供 execute_with_worker_engine 使用
+  void set_sandbox(std::shared_ptr<agentflow::sandbox::Sandbox> sandbox) { sandbox_ = std::move(sandbox); }
+  std::shared_ptr<agentflow::sandbox::Sandbox> get_sandbox() const { return sandbox_; }
+
   // MMNode runtime queue + event loop
   bool start_runtime();
   bool start_runtime(const RuntimeConfig& config);
@@ -299,6 +307,10 @@ private:
 
   // Async call key for tracking async callbacks
   std::string async_call_key_;
+
+  // Sandbox 实例（AgentFoundry 沙箱机制移植）
+  // 由 workflow/agent 在 node 创建后注入，非空时 execute_code 走 Sandbox::exec
+  std::shared_ptr<agentflow::sandbox::Sandbox> sandbox_;
 
   // Helper methods for execution
   bool execute_cpp_function();

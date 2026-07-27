@@ -214,6 +214,10 @@ class BridgeSettings(BaseSettings):
         default="",
         description="Public base URL for artifact links (empty = relative paths).",
     )
+    artifacts_storage_dir: str = Field(validation_alias="AF_BR_ARTIFACTS_STORAGE_DIR",
+        default="",
+        description="Artifact storage directory (local filesystem). Empty = agent_packages_path.parent / artifacts_storage.",
+    )
 
     # --- 📂 filesystem paths ----------------------------------------------------
     agent_packages_dir: str = Field(validation_alias="AF_BR_AGENT_PACKAGES_DIR", 
@@ -241,10 +245,6 @@ class BridgeSettings(BaseSettings):
     )
 
     # --- 🖼️ multimodal content (Phase A) ---------------------------------------
-    content_image_inline_threshold_kb: int = Field(
-        default=256, ge=1,
-        description="Images with base64 payload ≥ this KB are landed to disk by the bridge.",
-    )
     uploads_dir: str = Field(validation_alias="AF_BR_UPLOADS_DIR", 
         default="/tmp/agentflow/uploads",
         description="Directory where bridge lands large inline images before forwarding to daemon.",

@@ -24,6 +24,7 @@ import os
 import re
 import sys
 import time
+from datetime import datetime
 from typing import Any
 import uuid
 from pathlib import Path
@@ -184,7 +185,8 @@ def _init_skills() -> None:
             if _name and _name not in _AVAILABLE_SKILLS:
                 _AVAILABLE_SKILLS.append(_name)
     _skills_csv = ", ".join(_AVAILABLE_SKILLS)
-    COORDINATOR_PROTOCOL = PROTOCOL_TEMPLATE.format(available_skills=_skills_csv)
+    _now = datetime.now().strftime("%Y-%m-%d %H:%M:%S %Z")
+    COORDINATOR_PROTOCOL = PROTOCOL_TEMPLATE.format(available_skills=_skills_csv, current_time=_now)
     global RUN_SKILLS_TOOL
     RUN_SKILLS_TOOL = copy.deepcopy(RUN_SKILLS_TOOL_DEFINITION)
     RUN_SKILLS_TOOL["function"]["parameters"]["properties"]["skills"]["items"]["properties"]["name"]["enum"] = list(_AVAILABLE_SKILLS)
@@ -345,35 +347,45 @@ def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
         return content
 
     _image_suffixes = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-    images = _dedup_versioned_artifacts(
-        [p for p in items if Path(p).suffix.lower() in _image_suffixes]
-    )
+    # Dedup must operate on the FULL image set, then drive the downstream
+    # downloads exclusion.  Pre-fix bug: `downloads` used the dedup-ed `images`
+    # list, so a dedup-dropped version (outfit-review-1.png) fell through to
+    # downloads and was rendered again — defeating the dedup (I-4 idempotent).
+    all_images = [p for p in items if Path(p).suffix.lower() in _image_suffixes]
+    images = _dedup_versioned_artifacts(all_images)
     html_reports = [p for p in items if p.lower().endswith(".html")]
-    downloads = [p for p in items if p not in images and p not in html_reports]
+    downloads = [p for p in items if p not in all_images and p not in html_reports]
 
     blocks = []
+    skipped_already_in_content: list[str] = []
     if images:
         for index, path in enumerate(images, 1):
             url = _existing_artifact_url(path)
             if url and url not in content:
                 blocks.append(ARTIFACT_IMAGE_TEMPLATE.format(index=index, url=url))
+            elif url:
+                skipped_already_in_content.append(path)
     if html_reports:
         for index, path in enumerate(html_reports, 1):
             url = _existing_artifact_url(path)
             if url and url not in content:
                 blocks.append(ARTIFACT_HTML_TEMPLATE.format(index=index, url=url))
+            elif url:
+                skipped_already_in_content.append(path)
     if downloads:
         for index, path in enumerate(downloads, 1):
             url = _existing_artifact_url(path)
             if url and url not in content:
                 blocks.append(ARTIFACT_DOWNLOAD_TEMPLATE.format(index=index, url=url))
+            elif url:
+                skipped_already_in_content.append(path)
 
     # Audit:产物 Markdown 拼装结果。完整清单落 stderr（F7：不截断存储层）。
     # 分类计数 + 实际拼入 blocks 的 url 清单，事后可回溯"哪些产物被渲染"。
     print(
         f"[flow] artifact.markdown input_items={len(items)} "
         f"images={len(images)} html={len(html_reports)} downloads={len(downloads)} "
-        f"blocks={len(blocks)}",
+        f"blocks={len(blocks)} skipped_in_content={len(skipped_already_in_content)}",
         file=sys.stderr,
     )
     if blocks:
@@ -381,6 +393,12 @@ def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
         block_urls = [b.split("](")[-1].rstrip(")") for b in blocks]
         print(
             "[flow] artifact.markdown_urls " + json.dumps(block_urls, ensure_ascii=False),
+            file=sys.stderr,
+        )
+    if skipped_already_in_content:
+        print(
+            "[flow] artifact.markdown_skipped_in_content "
+            + json.dumps(skipped_already_in_content, ensure_ascii=False),
             file=sys.stderr,
         )
     if not blocks:
@@ -411,18 +429,26 @@ def rewrite_local_artifact_links(content: str, artifacts: list[str]) -> str:
         for path in artifacts
         if not path.startswith(("http://", "https://")) and os.path.isfile(path)
     }
+    resolved_count = 0
+    unresolved_refs: list[str] = []
 
     def resolve_url(reference: str) -> str | None:
+        nonlocal resolved_count
         reference = reference.strip()
         if not reference or reference.startswith(("http://", "https://", "data:", "#")):
+            if reference:
+                unresolved_refs.append(f"{reference}(skip:external)")
             return None
         candidate = reference if os.path.isabs(reference) else os.path.join(
             AGENT_PACKAGE_DIR, reference
         )
         real_candidate = os.path.realpath(candidate)
         if real_candidate not in local_artifacts:
+            unresolved_refs.append(f"{reference}(not_in_artifacts)")
             return None
+        resolved_count += 1
         return local_artifact_url(local_artifacts[real_candidate])
+
 
     markdown_pattern = re.compile(r"(!?\[[^\]]*\]\()([^)\s]+)(\))", re.I)
 
@@ -445,7 +471,21 @@ def rewrite_local_artifact_links(content: str, artifacts: list[str]) -> str:
         quote_char = match.group("quote")
         return f"{match.group('prefix')}{quote_char}{url}{quote_char}"
 
-    return html_pattern.sub(replace_html, content)
+    content = html_pattern.sub(replace_html, content)
+
+    # 可观测性：记录链接改写决策
+    print(
+        f"[flow] artifact.rewrite_links total_artifacts={len(local_artifacts)} "
+        f"resolved={resolved_count} unresolved={len(unresolved_refs)}",
+        file=sys.stderr,
+    )
+    if unresolved_refs:
+        print(
+            "[flow] artifact.rewrite_links_unresolved "
+            + json.dumps(unresolved_refs[:20], ensure_ascii=False),  # 限前20避免超长
+            file=sys.stderr,
+        )
+    return content
 
 
 def rewrite_local_image_links(content: str) -> str:
@@ -457,23 +497,93 @@ def rewrite_local_image_links(content: str) -> str:
 
 
 def local_artifact_url(path: str, package_dir: str | None = None) -> str:
-    """Map a package-local path to a hierarchy-preserving HTTP URL.
+    """Map a package-local path to a file-storage artifact URL.
 
     When called from an entry file, pass ``package_dir`` explicitly to
     avoid path resolution against the pip package's own directory.
+
+    Returns ``/api/artifacts/{artifact_id}`` where artifact_id is
+    ``{agent_name}/{session_id}/{relative_path}``.
+
+    If ``session_id`` is unavailable (no AF_SESSION_ID), falls back to
+    the legacy ``/api/artifacts/{agent_name}/files/{relative}`` format.
     """
     if package_dir is None:
         package_dir = AGENT_PACKAGE_DIR
-    packages_root = os.path.dirname(package_dir)
-    relative = os.path.relpath(os.path.realpath(path), packages_root)
+    agent_name = os.path.basename(package_dir.rstrip(os.sep)) or "agent"
+    # relative 相对 package_dir 计算，避免 agent_name 在 URL 中重复
+    # （URL 格式已含 {agent_name}/files/ 或 {agent_name}/{session_id}/）
+    relative = os.path.relpath(os.path.realpath(path), os.path.realpath(package_dir))
+    # _ensure_artifacts_in_package 已按 session_id 分目录保存，
+    # relative 形如 "outputs/{session_id}/{filename}"。
+    # 仅在 URL 格式含 {session_id} 段时（新格式）剥离避免重复；
+    # legacy 格式（无 storage_url）必须保留 session_id，否则 Bridge 找不到文件。
+    session_id = os.environ.get("AF_SESSION_ID", "")
+    storage_url = os.environ.get("AF_ARTIFACT_STORAGE_URL", "")
+    if session_id and storage_url:
+        parts = relative.split("/")
+        if len(parts) > 2 and parts[0] == "outputs" and parts[1] == session_id:
+            relative = "/".join([parts[0]] + parts[2:])
     if relative.startswith(".."):
-        return f"/api/artifacts/outfit-assistant?path={quote(path, safe='')}"
-    return f"/api/artifacts/outfit-assistant/files/{quote(relative, safe='/')}"
+        # 产物在 agent package 之外（如 /tmp/foo.png 或绝对路径外部文件）。
+        # 降级为 basename，与 skill_executor._upload_artifacts_to_storage
+        # 中 `rel = Path(p.name)` 的约定一致：外部文件按 basename 上传、
+        # 按 basename 生成 URL，两侧 basename 匹配 → URL 可访问。
+        relative = os.path.basename(path)
+
+    # 优先使用文件存储服务的 artifact_id 格式
+    _format = "session_id" if session_id and storage_url else "legacy"
+    _sandbox_mode = os.environ.get("AF_SANDBOX_MODE", "unknown")
+    if session_id and storage_url:
+        url = f"/api/artifacts/{agent_name}/{session_id}/{quote(relative, safe='/')}"
+    else:
+        # 降级：传统格式（无存储服务时）
+        url = f"/api/artifacts/{agent_name}/files/{quote(relative, safe='/')}"
+
+    # 可观测性：记录 URL 生成决策链路，便于 E2B 等远端沙箱模式排查
+    print(
+        f"[flow] artifact.local_artifact_url url={url} format={_format} "
+        f"agent={agent_name} session_id={session_id or '(unset)'} "
+        f"storage_url={'set' if storage_url else 'unset'} "
+        f"sandbox_mode={_sandbox_mode} path={path} relative={relative}",
+        file=sys.stderr,
+    )
+    return url
 
 
 # ---------------------------------------------------------------------------
 # Main — single LLM decision per trigger
 # ---------------------------------------------------------------------------
+
+def _put_e2e_response(databus, response_text: str, *, log_timing: bool = False) -> None:
+    """把 final response text 写到 DataBus key `_e2e_response`——给**外部 e2e 测试**用的旁路钩子。
+
+    性质说明（这是 5 处 copy-paste try/except 霰弹式收敛的公共抽象）：
+      - **不是真业务路径**——真业务路径是 `session_router->enqueue_response_message()`（execute() 在
+        final_response 时已调，final response 已入队，下游 consumer 从 session_router 队列拿 final）。
+      - `_e2e_response` DataBus key 仅供外部 e2e 测试 daemon 直连 JSON-RPC 时读这个 key 拿 final response。
+      - 失败时只 WARN 不抛——dialogue cleanup 后 DataBus 拒写已 cleanup 的 key 是合理的（design 不变量
+        S-2「response 不入 DataBus」的延伸：final response 走 session_router 队列，不入 DataBus）。
+      - WARN 留在 stderr 的目的：让 skill_stderr.<pid>.log 能看到这个旁路钩子的失败，但不污染真路径
+        的成功率（失败不影响 final response 已入队 + session_save + script_exit）。
+
+    Args:
+        databus: DataBus 实例（调用前已构造）。非 connected 时静默返回。
+        response_text: final response text，写入 DataBus key `_e2e_response`（global namespace）。
+        log_timing: 是否打印 `[timing] e2e_put=Xs`（仅 line 965 那处需要计时，其他 4 处不需要）。
+    """
+    if not databus.is_connected():
+        return
+    try:
+        if log_timing:
+            _t7 = time.time()
+            databus._client.raw().put("_e2e_response", response_text)
+            print(f"[timing] e2e_put={time.time()-_t7:.1f}s", file=sys.stderr)
+        else:
+            databus._client.raw().put("_e2e_response", response_text)
+    except Exception as exc:
+        print(f"[flow] WARN: e2e_response put failed: {exc}", file=sys.stderr)
+
 
 def execute():
     _t0 = time.time()
@@ -552,11 +662,7 @@ def execute():
         response_text = llm_error_response(completed_skill_artifacts)
         output = {"response": response_text, "status": "max_iterations_reached"}
         print(json.dumps(output, ensure_ascii=False))
-        if databus.is_connected():
-            try:
-                databus._client.raw().put("_e2e_response", response_text)
-            except Exception:
-                print("[flow] WARN: e2e_response put failed", file=sys.stderr)
+        _put_e2e_response(databus, response_text)
         return
 
     _t2 = time.time()
@@ -573,6 +679,7 @@ def execute():
 
     # Parse AF_INPUT to get the conversation messages from bridge
     # AF_INPUT format: {"stream": bool, "messages": [{role, content}, ...]}
+    # Falls back to plain text via parse_af_input() for backward compatibility.
     af_messages: list[dict] = []
     try:
         parsed = json.loads(raw_input)
@@ -580,6 +687,20 @@ def execute():
             af_messages = parsed["messages"]
     except (json.JSONDecodeError, TypeError):
         pass
+
+    # If the inline JSON parsing failed (plain text input), use parse_af_input
+    # which handles both plain text and JSON format, then convert to messages.
+    if not af_messages:
+        content_parts = parse_af_input(raw_input)
+        if content_parts:
+            # Convert parse_af_input format [{type, text}, ...] to
+            # LLM messages format [{role, content}, ...]
+            for part in content_parts:
+                if isinstance(part, dict) and part.get("type") == "text" and part.get("text"):
+                    af_messages.append({"role": "user", "content": part["text"]})
+                elif isinstance(part, dict) and part.get("role") and part.get("content"):
+                    # Already in messages format (from Bridge JSON)
+                    af_messages.append(part)
 
     # Construct this trigger's input
     # dummy_pre_skill is a passthrough hook — treat as first trigger (no result to evaluate)
@@ -741,11 +862,7 @@ def execute():
         # workflow completes, coordinator can be re-triggered.
         response_text = llm_error_response(completed_skill_artifacts)
         output = {"response": response_text}
-        if databus.is_connected():
-            try:
-                databus._client.raw().put("_e2e_response", response_text)
-            except Exception:
-                print("[flow] WARN: e2e_response put failed", file=sys.stderr)
+        _put_e2e_response(databus, response_text)
         _t6 = time.time()
         print(f"[timing] output={_t6-_t0:.1f}s total", file=sys.stderr)
         print(json.dumps(output, ensure_ascii=False))
@@ -784,11 +901,7 @@ def execute():
         )
         response_text = llm_error_response(completed_skill_artifacts)
         output = {"response": response_text}
-        if databus.is_connected():
-            try:
-                databus._client.raw().put("_e2e_response", response_text)
-            except Exception:
-                print("[flow] WARN: e2e_response put failed", file=sys.stderr)
+        _put_e2e_response(databus, response_text)
         _t6 = time.time()
         print(f"[timing] output={_t6-_t0:.1f}s total", file=sys.stderr)
         print(json.dumps(output, ensure_ascii=False))
@@ -819,11 +932,7 @@ def execute():
                 "response_length": len(response_text),
             }, level="WARN")
             print(json.dumps({"response": response_text}, ensure_ascii=False))
-            if databus.is_connected():
-                try:
-                    databus._client.raw().put("_e2e_response", response_text)
-                except Exception:
-                    print("[flow] WARN: e2e_response put failed", file=sys.stderr)
+            _put_e2e_response(databus, response_text)
             messages_to_save = messages[1:]
             if recorder.is_connected:
                 recorder.write_session_messages(messages_to_save)
@@ -950,12 +1059,7 @@ def execute():
         # which immediately removes the "response" key). Raw client writes to
         # global namespace, not dialogue-scoped, so any session can read it.
         if databus.is_connected():
-            try:
-                _t7 = time.time()
-                databus._client.raw().put("_e2e_response", response_text)
-                print(f"[timing] e2e_put={time.time()-_t7:.1f}s", file=sys.stderr)
-            except Exception:
-                print("[flow] WARN: e2e_response put failed", file=sys.stderr)
+            _put_e2e_response(databus, response_text, log_timing=True)
 
         messages_to_save = messages[1:]
         if recorder.is_connected:

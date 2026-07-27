@@ -13,6 +13,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
+# 加载环境配置
+ar_load_env
+
 PID_FILE="/tmp/fusionmind_mock.pid"
 
 # ── Helper: resolve running PID ─────────────────────────────────────

@@ -24,6 +24,9 @@
 #include "daemon/rpc_server.h"      // NOLINT
 #include "daemon/response_poller.h" // NOLINT
 #include "daemon/event_broker.h"    // NOLINT // NOLINT
+#include "daemon/sandbox_lifecycle.h"   // SandboxLifecycle 完整类型（unique_ptr 析构需要）
+#include "daemon/sandbox_snapshots.h"   // SandboxSnapshots 完整类型
+#include "daemon/session_manager.h"     // SessionManager 完整类型
 #include "runtime/agent_runtime.h"
 #include "runtime/flow_trace.h"
 #include "utils/logger.h"
@@ -41,6 +44,7 @@ static void signal_handler(int sig) {
       if (g_daemon) g_daemon->shutdown();
     } else {
       g_shutdown_phase = ShutdownPhase::FORCED;
+      if (g_daemon) g_daemon->force_shutdown();  // FR-023: quick cleanup before _exit
       _exit(1);
     }
   }
@@ -76,6 +80,12 @@ Daemon::~Daemon() {
 bool Daemon::initialize() {
   g_daemon = this;
   install_signal_handlers();
+
+  // 0. Clean up orphan sandbox resources from previous crash (FR-025 L3)
+  // 仅在沙箱模式启用时清理，mode=none 时跳过（避免误杀其他项目同名进程）
+  if (config_.sandbox_config.mode != "none") {
+    cleanup_orphan_sandboxes();
+  }
 
   // 1. Initialize logging
   {
@@ -135,6 +145,26 @@ bool Daemon::initialize() {
       config_.dataref_bridge_config.capacity_mb,
       config_.dataref_bridge_config.redis_url);
 
+  // 3.5 Initialize Sandbox management (AgentFoundry 沙箱机制移植，对齐 lld.md T014)
+  // 注入点：DataRef Bridge init 后、Runtime 创建前——agent start 时已可持有沙箱映射
+  // sandbox-mode=none 时 SandboxLifecycle 内部走 nullptr 路径（向后兼容，FR-006）
+  if (config_.sandbox_config.mode != "none") {
+    session_manager_ = std::make_unique<SessionManager>();
+    sandbox_lifecycle_ = std::make_unique<SandboxLifecycle>(
+        *session_manager_, config_);
+    sandbox_snapshots_ = std::make_unique<SandboxSnapshots>(
+        *sandbox_lifecycle_, config_);
+    sandbox_lifecycle_->set_snapshots(*sandbox_snapshots_);  // 反向注入，供 destroy/recycle 使用
+    sandbox_lifecycle_->start_gc_thread();  // 非阻塞，GC 周期从 config.gc_destroy_ttl_ms 读取
+    Logger::instance().info_f(
+        "[SANDBOX] Initialized sandbox management: mode=%s, max_active=%d",
+        config_.sandbox_config.mode.c_str(),
+        config_.sandbox_config.sandbox_max_active);
+  } else {
+    Logger::instance().info(
+        "[SANDBOX] sandbox-mode=none, bypass sandbox init (backward compat)");
+  }
+
   // 4. Create Runtime
   runtime_ = std::make_unique<runtime::MMAgentRuntime>(config_.runtime_config);
 
@@ -173,7 +203,10 @@ bool Daemon::initialize() {
 
   // 8. Create and start RPC Server
   rpc_server_ = std::make_unique<RpcServer>();
-  rpc_handler_ = std::make_unique<RpcHandler>(*runtime_, *registry_, *response_poller_, *event_broker_);
+  rpc_handler_ = std::make_unique<RpcHandler>(*runtime_, *registry_, *response_poller_,
+                                               *event_broker_, *session_manager_,
+                                               sandbox_lifecycle_.get(),
+                                               config_.sandbox_config.allow_fallback);
   rpc_handler_->register_all(*rpc_server_);
 
   RpcServer::Config rpc_config;
@@ -278,18 +311,97 @@ void Daemon::shutdown_services() {
     runtime_.reset();
   }
 
-  // Clean up UDS socket files
-  if (!config_.uds_biz_path.empty()) unlink(config_.uds_biz_path.c_str());
-  if (!config_.uds_ctrl_path.empty()) unlink(config_.uds_ctrl_path.c_str());
+  // Destroy all sandbox resources (FR-023: explicit cleanup, not relying on RAII chain)
+  if (session_manager_) {
+    session_manager_->destroy_all();
+    Logger::instance().info("[SANDBOX] All sandboxes destroyed via explicit cleanup");
+  }
 
-  // Remove PID file
-  if (!config_.pid_file.empty()) unlink(config_.pid_file.c_str());
+  // 显式回收过期快照（FR-023）：避免依赖 RAII 析构链
+  // gc_recycle 在 GC 线程停止前再跑一次，确保本次运行产生的过期快照被清理
+  if (sandbox_snapshots_) {
+    try {
+      sandbox_snapshots_->gc_recycle();
+      Logger::instance().info("[SANDBOX] Snapshot gc_recycle completed on shutdown");
+    } catch (const std::exception& e) {
+      Logger::instance().warn_f("[SANDBOX] Snapshot gc_recycle on shutdown failed: %s", e.what());
+    }
+  }
+
+  // 清理 UDS socket / PID 文件（与 force_shutdown 共用同一实现，FR-023）
+  cleanup_socket_and_pid_files();
 }
 
 void Daemon::shutdown() {
   if (shutdown_phase_.load() == ShutdownPhase::NONE) {
     shutdown_phase_ = ShutdownPhase::DRAINING;
   }
+}
+
+void Daemon::cleanup_socket_and_pid_files() {
+  // 清理 UDS socket 文件（biz + ctrl）
+  if (!config_.uds_biz_path.empty()) unlink(config_.uds_biz_path.c_str());
+  if (!config_.uds_ctrl_path.empty()) unlink(config_.uds_ctrl_path.c_str());
+  // 清理 PID 文件
+  if (!config_.pid_file.empty()) unlink(config_.pid_file.c_str());
+}
+
+void Daemon::force_shutdown() {
+  // FR-023: quick cleanup before _exit(1) on forced shutdown (second SIGTERM/SIGINT)
+  // Destroy sandbox resources synchronously, then let _exit(1) do the rest.
+  // Each LocalSandbox::destroy() takes ~1s (SIGTERM → 1s → SIGKILL → waitpid),
+  // so for N sandboxes this blocks up to N seconds — acceptable for forced shutdown.
+  if (session_manager_) {
+    session_manager_->destroy_all();
+    Logger::instance().info("[SANDBOX] All sandboxes destroyed via force_shutdown");
+  }
+  // 与 shutdown_services() 一致地清理 UDS socket / PID 文件
+  // 防止下次启动 bind() 失败或外部监控误判 daemon 仍在运行
+  cleanup_socket_and_pid_files();
+}
+
+void Daemon::cleanup_orphan_sandboxes() {
+  // FR-025 L3: 启动时清理上一次 crash 残留的孤儿资源
+  // 幂等：无残留则无操作
+  Logger::instance().info_f("[SANDBOX] Starting orphan sandbox cleanup (mode=%s)...",
+                            config_.sandbox_config.mode.c_str());
+
+  // 1. LocalSandbox：杀 orphaned sandbox_http_server.py 进程
+  //    匹配规则：命令行含 sandbox_http_server.py + ppid==1（被 init 收养）
+  //    说明：覆盖 --parent-pid 命令行参数 和 DAEMON_PID 环境变量两种启动模式
+  //          (前者 argv 含 --parent-pid；后者仅靠环境变量，argv 不含特征)
+  //          因此按 ppid==1 判定孤儿，不依赖 --parent-pid 命令行参数
+  //    macOS 兼容：用 ps -o ppid= 代替 /proc/$pid/stat
+  Logger::instance().info("[SANDBOX] Orphan cleanup step 1: LocalSandbox processes...");
+  int rc = std::system(
+      "for pid in $(pgrep -f 'sandbox_http_server.py' 2>/dev/null); do "
+      "  ppid=$(ps -o ppid= -p $pid 2>/dev/null | tr -d ' '); "
+      "  [ \"$ppid\" = \"1\" ] && kill $pid 2>/dev/null; "
+      "done");
+  (void)rc;
+
+  // 2. Docker：删带 label 的残留容器（仅 local/docker 模式需要）
+  //    E2B 模式使用远程沙箱，本地无 Docker 容器，直接跳过
+  if (config_.sandbox_config.mode == "e2b") {
+    Logger::instance().info("[SANDBOX] Orphan cleanup step 2: mode=e2b, skipping Docker cleanup");
+  } else {
+    //    幂等：无匹配容器时 docker 输出空列表，不报错
+    //    注意：std::system() 由 /bin/sh -c 执行，命令替换 $(docker ps ...)
+    //         在 timeout 之前展开，docker ps 挂起时 timeout 失效。
+    //    修复：用管道 | 让 timeout 直接覆盖 docker ps，避免命令替换陷阱。
+    //    超时保护：3s 超时，防止 Docker daemon 不可达时阻塞 daemon 启动。
+    Logger::instance().info("[SANDBOX] Orphan cleanup step 2: Docker sandbox containers...");
+    int docker_rc = std::system(
+        "timeout 3 docker ps -q --filter label=agentflow.sandbox=1 2>/dev/null "
+        "| xargs -r timeout 3 docker rm -f 2>/dev/null");
+    if (docker_rc != 0 && docker_rc != 1) {
+      // 非零通常意味着超时或 docker 不可用，仅记录不阻塞
+      Logger::instance().warn_f("[SANDBOX] Docker orphan cleanup returned rc=%d "
+                                "(timeout/docker-unavailable is normal)", docker_rc);
+    }
+  }
+
+  Logger::instance().info("[SANDBOX] Orphan cleanup completed");
 }
 
 bool Daemon::load_agents() {

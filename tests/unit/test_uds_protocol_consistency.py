@@ -35,8 +35,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.request import Request, urlopen
-from urllib.error import URLError
+import requests
 
 # ── UDS 传输层 ─────────────────────────────────────────────────────────
 
@@ -600,18 +599,15 @@ class FusionMindComparison:
 def probe_fusionmind_via_http(url: str, request_body: dict[str, Any],
                                timeout: int = 10) -> dict[str, Any] | str:
     """通过 HTTP POST 直接调用 FusionMind 的 OpenAI 兼容端点，返回解析后的 JSON 或错误字符串。"""
-    req = Request(
-        url,
-        data=json.dumps(request_body, ensure_ascii=False).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with urlopen(req, timeout=timeout) as resp:
-            body = resp.read().decode("utf-8")
-    except URLError as e:
-        return f"HTTP error: {e}"
-    except Exception as e:
+        resp = requests.post(
+            url,
+            json=request_body,
+            headers={"Content-Type": "application/json"},
+            timeout=timeout,
+        )
+        body = resp.text
+    except requests.exceptions.RequestException as e:
         return f"Request failed: {e}"
 
     # 解析 SSE 响应（FusionMind 即使非流式也可能返回 SSE 格式）

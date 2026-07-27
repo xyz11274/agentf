@@ -1,6 +1,6 @@
 {
   "server": {
-    "listen": "0.0.0.0:7890",
+    "listen": "0.0.0.0:17891",
     "uds_biz_path": "/tmp/agentflowd_biz.sock",
     "uds_ctrl_path": "/tmp/agentflowd_ctrl.sock",
     "max_connections": 1024

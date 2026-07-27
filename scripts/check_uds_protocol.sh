@@ -10,6 +10,12 @@
 # 用法：
 #   bash scripts/check_uds_protocol.sh                # 只测 UDS 协议
 #   bash scripts/check_uds_protocol.sh --full          # UDS + FusionMind 转发对比
+
+# 加载环境配置
+_ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../configs" && pwd)" 2>/dev/null || _ENV_DIR=""
+_ENV="${AGENTFLOW_ENV:-dev}"
+if [ -n "$_ENV_DIR" ] && [ -f "$_ENV_DIR/$_ENV/.env" ]; then set -a; source "$_ENV_DIR/$_ENV/.env"; set +a; fi
+unset _ENV_DIR _ENV
 #   bash scripts/check_uds_protocol.sh --socket /tmp/agentflow_plugin.sock --tag production
 #   bash scripts/check_uds_protocol.sh --help          # 完整参数
 #

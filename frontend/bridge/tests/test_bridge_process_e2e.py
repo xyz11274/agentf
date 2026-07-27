@@ -12,7 +12,7 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.request
+import requests
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -270,10 +270,10 @@ def _wait_bridge(process: subprocess.Popen[bytes], base_url: str) -> None:
         if process.poll() is not None:
             raise AssertionError(f"bridge exited during startup: {process.returncode}")
         try:
-            with urllib.request.urlopen(
+            response = requests.get(
                 f"{base_url}/health/api/health", timeout=1
-            ) as response:
-                if response.status == 200:
+            )
+            if response.status_code == 200:
                     return
         except Exception:
             pass

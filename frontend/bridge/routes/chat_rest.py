@@ -335,7 +335,8 @@ async def _chat_turn_events(
     # Serialize content for daemon. Large inline base64 images are
     # landed to disk and replaced with file_url here. The result is
     # the text-only representation of THIS turn's user input.
-    this_turn_text = prepare_content_for_daemon(content, agent_id=agent_id)
+    this_turn_text = prepare_content_for_daemon(content, agent_id=agent_id,
+                                                 user_id=user_id, client_id=client_id)
 
     # Assemble the daemon payload per the messages-list contract:
     #   {stream, messages: history + [{"role":"user","content": this_turn_text}]}

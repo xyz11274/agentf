@@ -348,6 +348,21 @@ def test_code_defaults_match_yaml_defaults():
     s = BridgeSettings()
     fields = BridgeSettings.model_fields
 
+    # 判断当前环境，加载对应的预期值
+    current_env = os.environ.get("AF_BR_ENV", "dev")
+    # 各环境与 dev 的差异对照（dev 环境也可以直接写硬编码，但为了清晰集中管理）
+    # 新增 configs/{env}/bridge.yaml 时在此补充差异项
+    _env_overrides = {
+        "test": {
+            "aisf_adapter_timeout": 60.0,
+            "aisf_adapter_upstream_verify": False,
+            "request_timeout_seconds": 30.0,
+            "chat_turn_timeout_seconds": 300.0,
+            "daemon_status_refresh_interval": 5.0,
+        },
+    }
+    overrides = _env_overrides.get(current_env, {})
+
     # 这些字段的代码默认值应与 config.yaml 一致
     expected = {
         "daemon_host": "127.0.0.1",
@@ -367,11 +382,13 @@ def test_code_defaults_match_yaml_defaults():
         "aisf_adapter_upstream_client_key_password": "",
         "aisf_adapter_upstream_ca_cert_path": "",
         "aisf_adapter_upstream_verify": True,
-        "log_level": "DEBUG",       # dev 环境配置为 DEBUG，生产配置为 INFO
-        "request_timeout_seconds": 15.0,  # YAML 临时调大（排查 agent.load 超时），代码默认仍 5.0
+        "log_level": "DEBUG",
+        "request_timeout_seconds": 15.0,
         "chat_turn_timeout_seconds": 900.0,
         "daemon_status_refresh_interval": 10.0,
     }
+    # 按环境覆盖差异值
+    expected.update(overrides)
 
     for field_name, expected_val in expected.items():
         actual_val = getattr(s, field_name)

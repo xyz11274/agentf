@@ -157,6 +157,10 @@ async def _try_hot_reload_agent(
         logger.warning("Failed to unload agent '%s': %s", matched_id, exc)
         return
 
+    # 注入默认配置到 .env（与 agents.py load_agent 路由一致）
+    from routes.agents import _inject_agent_env_defaults
+    _inject_agent_env_defaults(package_name)
+
     try:
         result = await client.agent_load(package_path)
         logger.info("Agent '%s' hot-reloaded into daemon: %s", package_name, result)

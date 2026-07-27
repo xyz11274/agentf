@@ -1,16 +1,18 @@
-"""Secure serving of generated chat artifacts from agent package directories.
+"""Secure serving of generated chat artifacts from file storage service.
 
-The artifact router attempts to resolve file paths in two locations:
-1. Inside ``agent_packages_path`` (e.g. ``examples/agent/``) — primary
-2. Inside the project root — fallback, for files generated at the project root
-   (e.g. ``.agentfoundry/outputs/``) where the ``relative_path`` includes the
-   agent package directory prefix that needs to be stripped.
+Phase 2: Bridge 自身作为存储中心（见 docs/design/features/artifact-storage.md §3.3）。
+
+- 上传：POST /api/artifacts/upload → 路径安全校验 → 写入本地文件系统
+- 下载：GET /api/artifacts/{artifact_id} → 从本地文件系统读取
+- 不再转发到外部存储服务（沙箱 HTTP server 不再参与产物存储链路）
 """
 
 import logging
+import re
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+import base64
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from config import settings
@@ -22,10 +24,53 @@ _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _DOCUMENT_SUFFIXES = {".pptx", ".ppt", ".docx", ".doc", ".xlsx", ".xls", ".pdf"}
 _ARTIFACT_SUFFIXES = _IMAGE_SUFFIXES | _DOCUMENT_SUFFIXES | {".html", ".htm", ".css", ".js", ".json", ".svg"}
 
+# ── 产物存储根目录 ──────────────────────────────────────────────────────
+# 默认与 agent_packages_path 同级，可由环境变量 ARTIFACTS_STORAGE_DIR 覆盖
+_ARTIFACTS_STORAGE_DIR = Path(
+    getattr(settings, "artifacts_storage_dir", "") or
+    str(settings.agent_packages_path.parent / "artifacts_storage")
+)
+
+
+# ── 路径白名单（I-upload-traversal-block 第一、二层）────────────────────
+# 段字符集：字母/数字/._- （含 _，与 agentflow session_id "{user}_{client}" 格式兼容）
+# 注意：首字符集 [A-Za-z0-9._] 不含 -，后续字符集 [A-Za-z0-9._-] 含 -。
+# session_id 格式为 {user_id}_{client_id}，不含 -，当前无实际风险。
+_ARTIFACT_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._-]*$")
+
+
+def _is_safe_path_segment(segment: str) -> bool:
+    """单段路径白名单（agent_name / session_id）：拒含 `/` 或 `..` 或空。"""
+    if not segment:
+        return False
+    return bool(_ARTIFACT_PATH_SEGMENT_RE.match(segment)) and segment != "." and segment != ".."
+
+
+def _is_safe_relative_path(path: str) -> bool:
+    """相对路径白名单：拒绝对对路径、`..` 段、控制字符。
+
+    控制字符（< 0x20）在部分文件系统上可能引发异常或被视为特殊字符，
+    此处显式阻断避免歧义（M3 可定位错误信息）。
+    """
+    if not path:
+        return False
+    if path.startswith("/") or path.startswith("\\"):
+        return False
+    # 控制字符检查（< 0x20 = 空格前的所有 ASCII 控制字符）
+    if any(ord(c) < 0x20 for c in path):
+        return False
+    parts = path.split("/")
+    for part in parts:
+        if not _is_safe_path_segment(part):
+            return False
+    return True
+
 
 def _image_media_type(path: Path) -> str:
+    """读取文件头 12 字节推断图片 MIME 类型，避免读取整个文件。"""
     try:
-        header = path.read_bytes()[:12]
+        with path.open("rb") as f:
+            header = f.read(12)
     except OSError:
         return "application/octet-stream"
     if header.startswith(b"\xff\xd8\xff"):
@@ -44,41 +89,45 @@ def _resolve_artifact(relative_path: str, agent_pkg_name: str = "") -> Path:
 
     Strategy:
     1. Primary: resolve inside ``agent_packages_path``.
-       ``relative_path`` may already contain the agent package directory name
-       (e.g. ``outfit-assistant/.agentfoundry/...``).
-    2. Fallback: if the primary candidate does not exist AND the
-       ``relative_path`` starts with the agent package directory name, strip
-       that prefix and resolve the remainder inside the project root.
-
-    Returns the resolved absolute Path, or ``None`` if no candidate exists.
+    2. Fallback: strip session_id segment and try again.
+    3. Fallback: project root (legacy paths).
     """
     root = settings.agent_packages_path.resolve()
     pkg_dir = Path(settings.agent_packages_dir)
 
-    # ── Primary: inside agent_packages_path ────────────────────
     candidate = (root / relative_path).resolve()
     try:
         candidate.relative_to(root)
     except ValueError:
-        candidate = None  # path traversal blocked
+        logger.warning("artifact_resolve.traversal_blocked path=%s root=%s", relative_path, root)
+        candidate = None
 
-    # ── Fallback: project root ─────────────────────────────────
-    # 仅当 agent_packages_dir 是相对路径时才启用回退。
-    # 绝对路径意味着 packages 不在项目目录下，回退不适用。
+    if candidate is None or not candidate.is_file():
+        # Fallback: strip session_id segment (second segment) and retry
+        parts = Path(relative_path).parts
+        if len(parts) >= 3 and parts[0] == agent_pkg_name:
+            # Try without session_id: agent-sandbox/1/outputs/file.png → agent-sandbox/outputs/file.png
+            stripped = "/".join([parts[0]] + list(parts[2:]))
+            alt = (root / stripped).resolve()
+            try:
+                alt.relative_to(root)
+            except ValueError:
+                pass
+            else:
+                if alt.is_file():
+                    return alt
+
     if (candidate is None or not candidate.is_file()) and not pkg_dir.is_absolute():
         parts = Path(relative_path).parts
         if parts and parts[0] == agent_pkg_name and len(parts) > 1:
-            # Strip the agent package directory prefix
             remaining = "/".join(parts[1:])
-            # Compute project root by going up from agent_packages_path
-            # by the depth of agent_packages_dir
             depth = len(pkg_dir.parts)
             project_root = root.parents[depth - 1] if depth > 1 else root.parent
             fallback = (project_root / remaining).resolve()
             try:
                 fallback.relative_to(project_root)
             except ValueError:
-                pass  # traversal blocked
+                pass
             else:
                 if fallback.is_file():
                     return fallback
@@ -86,61 +135,134 @@ def _resolve_artifact(relative_path: str, agent_pkg_name: str = "") -> Path:
     return candidate
 
 
-async def get_artifact(agent_id: str, path: str = Query(...)) -> FileResponse:
-    """Return an image only when it resolves inside a allowed root."""
-    _aid = agent_id  # capture before del for logging
-    del agent_id  # Path containment is the authorization boundary for now.
-    root = settings.agent_packages_path.resolve()
-    candidate = Path(path)
-    if not candidate.is_absolute():
-        candidate = root / candidate
-    candidate = candidate.resolve()
+# ── 上传端点 ────────────────────────────────────────────────────────────
 
-    try:
-        candidate.relative_to(root)
-    except ValueError as exc:
-        logger.warning("artifact_serve.forbidden agent=%s path=%s (outside packages root)", _aid, path)
-        raise HTTPException(status_code=403, detail="artifact path outside packages root") from exc
-    if candidate.suffix.lower() not in _IMAGE_SUFFIXES:
-        logger.warning("artifact_serve.unsupported agent=%s path=%s suffix=%s", _aid, path, candidate.suffix)
-        raise HTTPException(status_code=415, detail="unsupported artifact type")
-    if not candidate.is_file():
-        logger.warning("artifact_serve.not_found agent=%s path=%s resolved=%s", _aid, path, candidate)
-        raise HTTPException(status_code=404, detail="artifact not found")
-    return FileResponse(candidate, media_type=_image_media_type(candidate))
+
+@router.post("/upload")
+async def upload_artifact(body: dict) -> dict:
+    """上传产物到 bridge 存储中心。
+
+    请求体格式（与设计文档 §2.3 接口契约一致）：
+    ```json
+    {
+      "agent_name": "outfit-assistant",
+      "session_id": "user_abc_client_123",
+      "files": [
+        {"path": "outputs/look.png", "data_b64": "<base64>"}
+      ]
+    }
+    ```
+    """
+    agent_name = body.get("agent_name", "")
+    session_id = body.get("session_id", "")
+    files = body.get("files", [])
+
+    if not agent_name or not session_id or not files:
+        raise HTTPException(status_code=400, detail="Missing agent_name, session_id, or files")
+
+    # 段白名单（I-upload-traversal-block 第二层）
+    if not _is_safe_path_segment(agent_name):
+        raise HTTPException(status_code=400, detail=f"Invalid agent_name: {agent_name}")
+    if not _is_safe_path_segment(session_id):
+        raise HTTPException(status_code=400, detail=f"Invalid session_id: {session_id}")
+
+    artifact_ids = []
+    storage_root = _ARTIFACTS_STORAGE_DIR.resolve()
+
+    for f in files:
+        file_path = f.get("path", "")
+        data_b64 = f.get("data_b64", "")
+
+        if not file_path:
+            logger.warning("artifact upload skip: empty path")
+            continue
+        if not data_b64:
+            logger.warning("artifact upload skip: empty data_b64 path=%s", file_path)
+            continue
+
+        # 白名单字符过滤（I-upload-traversal-block 第一层）
+        if not _is_safe_relative_path(file_path):
+            raise HTTPException(status_code=400, detail=f"Invalid path: {file_path}")
+
+        artifact_id = f"{agent_name}/{session_id}/{file_path}"
+        dest = (storage_root / artifact_id).resolve()
+
+        # realpath 越界检查（I-upload-traversal-block 第三层）
+        try:
+            dest.relative_to(storage_root)
+        except ValueError:
+            logger.warning("artifact upload traversal blocked id=%s", artifact_id)
+            raise HTTPException(status_code=403, detail="Path traversal blocked")
+
+        try:
+            content = base64.b64decode(data_b64)
+        except (ValueError, base64.binascii.Error) as e:
+            raise HTTPException(status_code=400, detail=f"Invalid base64: {e}")
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            dest.write_bytes(content)
+            artifact_ids.append(artifact_id)
+        except OSError as e:
+            logger.error("artifact upload write failed id=%s err=%s", artifact_id, e)
+            raise HTTPException(status_code=500, detail=f"Write failed: {e}")
+
+    return {"artifact_ids": artifact_ids}
+
+
+# ── 下载端点 ────────────────────────────────────────────────────────────
 
 
 @router.get("/{agent_id}/files/{relative_path:path}")
-async def get_artifact_file(agent_id: str, relative_path: str) -> FileResponse:
-    """Serve an artifact tree while preserving HTML-relative asset paths.
+async def get_artifact_legacy(agent_id: str, relative_path: str) -> FileResponse:
+    """Legacy route: ``/api/artifacts/{agent_id}/files/{relative_path}``
 
-    Resolves ``relative_path`` inside the agent packages directory first,
-    then falls back to the project root if the file is not found there
-    (handles the case where tools generate files at the project root,
-    e.g. ``.agentfoundry/outputs/``).
-
-    ``relative_path`` is expected to INCLUDE the agent package directory name
-    (e.g. ``outfit-assistant/workspace/assets/review.png``) because
-    ``coordinator_decide.local_artifact_url()`` computes the path relative to
-    ``packages_root`` (parent of the agent package dir). Stripping the prefix
-    here would break resolution — ``_resolve_artifact`` already handles the
-    full path correctly.
+    Maintained for backward compatibility.  Internally delegates to the
+    artifact-ID resolution path.
     """
-    _aid = agent_id
+    return await get_artifact_file(f"{agent_id}/{relative_path}")
 
-    candidate = _resolve_artifact(relative_path, agent_pkg_name=agent_id)
 
-    if candidate is None:
-        logger.warning("artifact_serve.forbidden agent=%s path=%s (blocked traversal)", _aid, relative_path)
-        raise HTTPException(status_code=403, detail="artifact path blocked")
+@router.get("/{artifact_id:path}")
+async def get_artifact_file(artifact_id: str) -> FileResponse:
+    """Serve an artifact by its ID.
 
-    if candidate.suffix.lower() not in _ARTIFACT_SUFFIXES:
-        logger.warning("artifact_serve.unsupported agent=%s path=%s suffix=%s", _aid, relative_path, candidate.suffix)
-        raise HTTPException(status_code=415, detail="unsupported artifact type")
+    Artifact ID format: ``{agent_name}/{session_id}/{file_path}``
+    (e.g. ``outfit-assistant/user_abc_client_123/outputs/look.png``).
 
-    if not candidate.is_file():
-        logger.warning("artifact_serve.not_found agent=%s path=%s resolved=%s", _aid, relative_path, candidate)
+    Resolution order:
+    1. Bridge 本地存储（_ARTIFACTS_STORAGE_DIR）
+    2. Local filesystem (``agent_packages_path``) — backward compatible fallback
+    """
+    # Strategy 1: bridge 本地存储
+    stored = (_ARTIFACTS_STORAGE_DIR / artifact_id).resolve()
+    try:
+        stored.relative_to(_ARTIFACTS_STORAGE_DIR.resolve())
+    except ValueError:
+        logger.warning("artifact_download.traversal_blocked id=%s", artifact_id)
+        raise HTTPException(status_code=403, detail="Path traversal blocked")
+    if stored.is_file():
+        if stored.suffix.lower() not in _ARTIFACT_SUFFIXES:
+            logger.warning("artifact_serve.unsupported id=%s suffix=%s", artifact_id, stored.suffix)
+            raise HTTPException(status_code=415, detail="unsupported artifact type")
+        return _file_response(stored)
+
+    # Strategy 2: local filesystem fallback (legacy path format)
+    _aid = artifact_id.split("/")[0] if "/" in artifact_id else ""
+    candidate = _resolve_artifact(artifact_id, agent_pkg_name=_aid)
+
+    if candidate is None or not candidate.is_file():
+        logger.warning("artifact_serve.not_found id=%s", artifact_id)
         raise HTTPException(status_code=404, detail="artifact not found")
 
-    media_type = _image_media_type(candidate) if candidate.suffix.lower() in _IMAGE_SUFFIXES else None
-    return FileResponse(candidate, media_type=media_type)
+    if candidate.suffix.lower() not in _ARTIFACT_SUFFIXES:
+        logger.warning("artifact_serve.unsupported id=%s suffix=%s", artifact_id, candidate.suffix)
+        raise HTTPException(status_code=415, detail="unsupported artifact type")
+
+    return _file_response(candidate)
+
+
+def _file_response(path: Path) -> FileResponse:
+    """Create a FileResponse with proper media type for images."""
+    media_type = _image_media_type(path) if path.suffix.lower() in _IMAGE_SUFFIXES else None
+    return FileResponse(path, media_type=media_type)

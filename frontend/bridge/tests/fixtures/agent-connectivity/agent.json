@@ -1,0 +1,4 @@
+{
+  "name": "agent-connectivity",
+  "description": "L0 连通性验证 agent — 单 coordinator 节点直连 LLM, 用于真实 LLM 连通性 E2E"
+}

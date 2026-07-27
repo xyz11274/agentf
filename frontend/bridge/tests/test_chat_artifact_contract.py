@@ -156,7 +156,7 @@ def test_custom_label_artifact_is_extracted() -> None:
     content = (
         "方案已生成\n\n"
         "![居家穿搭效果图](http://localhost:8199/health/api/artifacts/"
-        "outfit-assistant/files/outfit-assistant/outputs/look.png)"
+        "outfit-assistant/files/outputs/look.png)"
     )
     artifacts = extract_artifact_infos(content)
     assert len(artifacts) == 1, f"自定义 label artifact 应提取 1 个, got {len(artifacts)}"

@@ -6,13 +6,15 @@
 # ── Daemon（agentflowd）连接 ──────────────────────────────────────
 daemon:
   host: "127.0.0.1"
-  port: 7890
+  port: 17891
 
 # ── Bridge 服务绑定 ───────────────────────────────────────────────
 bridge:
   listen: "0.0.0.0:8199"
 
 # ── Sidecar（对外入口） ────────────────────────────────────────────
+# 注意：SideCar 生命周期由 scripts/start_production.sh 管理，bridge 不负责启动/停止它。
+# 本段仅记录生产部署时 SideCar 的预期监听地址，供运维参考，不控制 bridge 行为。
 sidecar:
   enabled: true
   listen: "0.0.0.0:23767"
@@ -24,7 +26,7 @@ aisf_adapter:
   mode: "async"
   timeout: 360.0
   upstream:
-    scheme: "https"
+    scheme: "http"
     callback_port: 23767
     callback_path: "/coremind/systemagent/v1/callback"
     # client_cert_path: "/etc/agentflow/certs/client.pem"
@@ -34,8 +36,11 @@ aisf_adapter:
     verify: false
 
 # ── Artifact 公网地址 ─────────────────────────────────────────────
-# 替换为生产环境可访问的域名
-artifact_public_base_url: "https://115.120.249.45:40092/health"
+artifact_public_base_url: "http://115.120.249.45:40092/health"
+
+# ── 产物存储目录（详见 docs/design/features/artifact-storage.md §8）──
+# 空字符串 = 默认 agent_packages_path.parent / artifacts_storage
+artifacts_storage_dir: ""
 
 # ── 文件路径 ──────────────────────────────────────────────────────
 agent_packages_dir: "examples/agent"
@@ -53,7 +58,6 @@ session_context_limit_rounds: 5
 session_sync_interval: 30.0
 
 # ── 多模态内容 ────────────────────────────────────────────────────
-content_image_inline_threshold_kb: 256
 uploads_dir: "/var/lib/agentflow/uploads"
 chat_turn_timeout_seconds: 900.0
 daemon_status_refresh_interval: 10.0

@@ -56,7 +56,24 @@ bool MMAgentMsgQue::enqueue_message(const Message& message) {
     return false;
   }
   Message control_message = message;
-  if(control_message.data_ref.empty() && !control_message.content.empty()) {
+  // ── 跳过 dataref_bridge 存储的条件 ──
+  // 1) data_ref 已非空（调用方已指定引用）
+  // 2) content 为空（无内容可存）
+  // 3) metadata["final"] == "true"（final 响应紧接着会被 cleanup_dialogue_data
+  //    清除 dataref 条目，存进去也会丢失，导致 ResponsePoller 出队时
+  //    resolve_payload 失败 → 静默丢消息（E2E 测试 Read timed out 的根因）。
+  //    将 content 内联在消息体中，避免被 cleanup 误伤。）
+  // 4) metadata["type"] == "progress"（非 final 进度消息。
+  //    进度消息在 final response 之前入队，紧接着的 cleanup_dialogue_data
+  //    会通过 find_refs_by_owner("dialogue_id", ...) 清掉进度消息的 data_ref
+  //    （owner.dialogue_id 来自 metadata），导致 dequeue 时 resolve_payload
+  //    失败 → 静默丢消息。将 content 内联，避免被 cleanup 误伤。）
+  const bool is_final = (message.metadata.count("final") > 0 &&
+                         message.metadata.at("final") == "true");
+  const bool is_progress = (message.metadata.count("type") > 0 &&
+                            message.metadata.at("type") == "progress");
+  const bool skip_dataref = is_final || is_progress;
+  if(!skip_dataref && control_message.data_ref.empty() && !control_message.content.empty()) {
     std::ostringstream logical_key;
     logical_key << "msg:" << control_message.message_id;
     control_message.data_ref =

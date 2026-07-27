@@ -66,7 +66,6 @@ bool RemoteDatabus::publish(const std::string& key, const DataVariant& value) {
   if(sub_it != subscriptions_.end()) {
     sub_it->second(key, value);
   }
-  Logger::instance().debug("RemoteDatabus published key: " + key);
   return true;
 }
 

@@ -176,7 +176,7 @@ check_health() {
   fi
 
   step "Checking daemon health..."
-  if timeout 5 "$broker_bin" localhost:7890 health 2>&1; then
+  if timeout 5 "$broker_bin" localhost:17891 health 2>&1; then
     info "Daemon is healthy"
   else
     warn "Health check skipped (daemon running but af-broker RPC may need configuration)"

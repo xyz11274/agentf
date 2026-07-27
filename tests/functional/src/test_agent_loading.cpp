@@ -18,36 +18,54 @@ namespace functional {
 
 class AgentLoadingTest : public ::testing::Test {
 protected:
+    std::string package_path_;
+
     void SetUp() override {
-        // Setup code
+        // 动态创建测试 agent 包（测试完成后在 TearDown 中销毁）
+        namespace fs = std::filesystem;
+        auto tmp = fs::temp_directory_path() / "agentflow_test_agent";
+        fs::create_directories(tmp);
+        package_path_ = tmp.string();
+
+        // package.json
+        std::ofstream pkg(tmp / "package.json");
+        pkg << "{"
+            << "\"name\":\"GeneralHarnessAgent\","
+            << "\"version\":\"3.0.0\","
+            << "\"description\":\"Test agent (dynamically created)\","
+            << "\"author\":\"AgentFlow\","
+            << "\"workflows\":[\"coordinator_workflow.json\"],"
+            << "\"metadata\":{\"type\":\"test\",\"category\":\"testing\"}"
+            << "}";
+        pkg.close();
+
+        // coordinator_workflow.json（最小可用 workflow）
+        std::ofstream wf(tmp / "coordinator_workflow.json");
+        wf << "{"
+            << "\"id\":\"coordinator-workflow\","
+            << "\"version\":\"3.0\","
+            << "\"name\":\"Coordinator Test\","
+            << "\"nodes\":[{"
+            << "\"id\":\"test_node\",\"name\":\"Test Node\",\"type\":\"task\","
+            << "\"execution_mode\":\"cpp_function\","
+            << "\"cpp_function\":\"return true;\""
+            << "}]"
+            << "}";
+        wf.close();
     }
 
     void TearDown() override {
-        // Cleanup code
+        // 清理动态创建的测试包
+        if (!package_path_.empty()) {
+            std::filesystem::remove_all(package_path_);
+        }
     }
 };
 
 TEST_F(AgentLoadingTest, LoadBasicAgentPackage) {
-    std::string package_path = "examples/agent/outfit-test-agent";
-    
-    // Ensure path is correct relative to build dir or source dir
-    // We assume test is run from build dir, so path might need adjustment
-    if (!std::filesystem::exists(package_path)) {
-        // Try up one level
-        package_path = "../examples/agent/outfit-test-agent";
-    }
-    
-    // In case we are deep in build directory
-    if (!std::filesystem::exists(package_path)) {
-        package_path = "../../examples/agent/outfit-test-agent";
-    }
-    
-    if (!std::filesystem::exists(package_path)) {
-        // Try absolute path if needed, or fail
-        FAIL() << "Package path not found: examples/agent/outfit-test-agent";
-    }
-    
-    auto agent = framework::MMAgent::create_from_package(package_path);
+    ASSERT_TRUE(std::filesystem::exists(package_path_)) << "Package path not found: " << package_path_;
+
+    auto agent = framework::MMAgent::create_from_package(package_path_);
     ASSERT_NE(agent, nullptr);
 
     // Basic checks
@@ -67,17 +85,9 @@ TEST_F(AgentLoadingTest, LoadBasicAgentPackage) {
 }
 
 TEST_F(AgentLoadingTest, LoadCalculatorAgentPackage) {
-    std::string package_path = "examples/agent/outfit-test-agent";
-    if (!std::filesystem::exists(package_path)) {
-        package_path = "../examples/agent/outfit-test-agent";
-    }
-    if (!std::filesystem::exists(package_path)) {
-        package_path = "../../examples/agent/outfit-test-agent";
-    }
-    
-    ASSERT_TRUE(std::filesystem::exists(package_path)) << "Package path not found: " << package_path;
+    ASSERT_TRUE(std::filesystem::exists(package_path_)) << "Package path not found: " << package_path_;
 
-    auto agent = framework::MMAgent::create_from_package(package_path);
+    auto agent = framework::MMAgent::create_from_package(package_path_);
     ASSERT_NE(agent, nullptr);
 
     EXPECT_EQ(agent->get_id(), "GeneralHarnessAgent");
@@ -141,12 +151,7 @@ TEST_F(AgentLoadingTest, CyclicWorkflowControlFlow) {
 }
 
 TEST_F(AgentLoadingTest, AgentLifecycle) {
-    std::string package_path = "examples/agent/outfit-test-agent";
-    if (!std::filesystem::exists(package_path)) {
-        package_path = "../examples/agent/outfit-test-agent";
-    }
-    
-    auto agent = framework::MMAgent::create_from_package(package_path);
+    auto agent = framework::MMAgent::create_from_package(package_path_);
     ASSERT_NE(agent, nullptr);
     
     // Test lifecycle transitions
@@ -200,11 +205,15 @@ TEST_F(AgentLoadingTest, AgentActorAutoLoadsPackagesAndRegistersRuntime) {
     fs::path temp_dir = fs::temp_directory_path() / "agentflow_agent_actor_test";
     fs::create_directories(temp_dir);
 
+    // 使用动态创建的测试包路径
+    fs::path pkg_root = fs::path(package_path_).parent_path();
+    std::string pkg_name = fs::path(package_path_).filename().string();
+
     fs::path config_path = temp_dir / "AgentService.config";
     std::ofstream ofs(config_path.string());
     ofs << "{"
-        << "\"package_root\":\"../examples/agent\","
-        << "\"manifests\":[\"outfit-test-agent\"],"
+        << "\"package_root\":\"" << pkg_root.string() << "\","
+        << "\"manifests\":[\"" << pkg_name << "\"],"
         << "\"scan_interval_ms\":100,"
         << "\"heartbeat_interval_ms\":100"
         << "}";

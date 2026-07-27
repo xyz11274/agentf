@@ -781,7 +781,7 @@ graph TB
 
 | Channel | Socket | Methods |
 |---------|--------|---------|
-| TCP | `0.0.0.0:7890` | All methods |
+| TCP | `0.0.0.0:17891` | All methods |
 | UDS-BIZ | `/tmp/agentflowd_biz.sock` | Business: `agent.execute`, `agent.poll_response`, `agent.send_control`, `databus.*`, `event.*` |
 | UDS-CTRL | `/tmp/agentflowd_ctrl.sock` | Control: `agent.load/unload/list/info/pause/resume`, `session.*`, `workflow.*`, `worker.*`, `runtime.*`, `health`, `metrics.get` |
 

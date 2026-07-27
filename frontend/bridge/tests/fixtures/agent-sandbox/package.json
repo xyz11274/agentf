@@ -1,0 +1,10 @@
+{
+  "name": "agent-sandbox",
+  "version": "1.0.0",
+  "description": "L1 sandbox E2E test agent",
+  "workflows": [
+    "dummy_pre_skill_workflow.json",
+    "coordinator_workflow.json",
+    "skill_workflow.json"
+  ]
+}

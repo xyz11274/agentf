@@ -36,5 +36,22 @@
     "pid_file": "/tmp/agentflowd-test.pid",
     "drain_timeout_ms": 5000
   },
+  "sandbox": {
+    "mode": "e2b",
+    "workdir_root": "tmp/test/sandbox",
+    "snapshot_root": "tmp/test/snapshots",
+    "sandbox_http_port": 8080,
+    "sandbox_max_active": 4,
+    "output_max_bytes": 524288,
+    "gc_destroy_ttl_ms": 300000,
+    "gc_recycle_snapshot_ttl_ms": 3600000,
+    "e2b_default_template": "tpl-cb6b9dcbf5784a1487a75971",
+    "e2b_api_key": "e2b_000000000",
+    "e2b_api_url": "http://218.245.96.148:30030",
+    "e2b_ca_cert_path": "resource/certs/e2b_CA.pem",
+    "e2b_network_allow_out": "[\"10.0.0.0/8\",\"43.0.0.0/8\",\"218.0.0.0/8\"]",
+    "image_name": "agentflow-sandbox:v1",
+    "allow_fallback": true
+  },
   "agents": []
 }

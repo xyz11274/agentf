@@ -14,6 +14,7 @@
 #include <type_traits>
 
 #include "runtime/worker.h"
+#include "sandbox/sandbox.h"
 #include "utils/logger.h"
 #include "utils/thread_pool.h"
 
@@ -58,6 +59,7 @@ std::shared_ptr<MMNode> MMNode::clone(bool inherit_databus) const {
     cloned->databus_ = databus_;
     cloned->databus_client_ = databus_client_;
     cloned->plugin_uds_path_ = plugin_uds_path_;
+    cloned->sandbox_ = sandbox_;  // 继承沙箱实例（同 session 共享）
   }
 
   // Note: code_loader_ is already set in constructor via global_code_loader()
@@ -542,6 +544,22 @@ bool MMNode::execute_with_worker_engine() {
 
   // Pass DataBus UDS path for workflow-level DataBus access
   request.databus_uds_path = databus_uds_path_;
+
+  // Pass Sandbox 实例（AgentFoundry 沙箱机制移植）
+  // 非空时 execute_code 走 Sandbox::exec，空走原 code_loader 路径
+  request.sandbox = sandbox_;
+  // Pass Sandbox endpoint URL for artifact storage service
+  if (sandbox_) {
+    request.sandbox_endpoint = sandbox_->endpoint();
+  }
+  // Fallback: sandbox_ 为 null 时从 inputs 读 sandbox_endpoint
+  // （rpc_handler 创建沙箱后注入 message.metadata → session metadata → workflow inputs）
+  if (request.sandbox_endpoint.empty()) {
+    auto it = inputs_.find("sandbox_endpoint");
+    if (it != inputs_.end()) {
+      request.sandbox_endpoint = data_variant_to_string(it->second);
+    }
+  }
 
   switch(config_.execution_mode) {
     case ExecutionMode::SHELL_SCRIPT:

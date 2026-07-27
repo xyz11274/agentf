@@ -13,6 +13,10 @@
 
 namespace agentflow {
 
+// Forward declaration for SandboxOptions (defined in sandbox/sandbox_types.h)
+// AgentFoundry 沙箱机制移植：sandbox_opts 非空时走安全层，nullptr 向后兼容
+namespace sandbox { struct SandboxOptions; }
+
 // Forward declaration for INodeDataBus (defined in agentflow/so_node.h)
 class INodeDataBus;
 
@@ -229,7 +233,8 @@ public:
    */
   ExecutionResult execute_jar(const std::string& jar_path, const std::string& main_class,
                               const std::vector<std::string>& args   = {},
-                              const ExecutionConfig&          config = ExecutionConfig());
+                              const ExecutionConfig&          config = ExecutionConfig(),
+                              const sandbox::SandboxOptions*  sandbox_opts = nullptr);
 
   /**
    * Execute a shell script
@@ -240,7 +245,8 @@ public:
    */
   ExecutionResult execute_shell_script(const std::string&              script_path,
                                        const std::vector<std::string>& args   = {},
-                                       const ExecutionConfig&          config = ExecutionConfig());
+                                       const ExecutionConfig&          config = ExecutionConfig(),
+                                       const sandbox::SandboxOptions*  sandbox_opts = nullptr);
 
   /**
    * Execute a Python script
@@ -251,7 +257,8 @@ public:
    */
   ExecutionResult execute_python_script(const std::string&              script_path,
                                         const std::vector<std::string>& args   = {},
-                                        const ExecutionConfig&          config = ExecutionConfig());
+                                        const ExecutionConfig&          config = ExecutionConfig(),
+                                        const sandbox::SandboxOptions*  sandbox_opts = nullptr);
 
   /**
    * Execute a Go script
@@ -262,7 +269,8 @@ public:
    */
   ExecutionResult execute_go_script(const std::string&              script_path,
                                     const std::vector<std::string>& args   = {},
-                                    const ExecutionConfig&          config = ExecutionConfig());
+                                    const ExecutionConfig&          config = ExecutionConfig(),
+                                    const sandbox::SandboxOptions*  sandbox_opts = nullptr);
 
   /**
    * Generic execute method that auto-detects file type
@@ -271,7 +279,8 @@ public:
    * @return Execution result
    */
   ExecutionResult execute(const std::string&     file_path,
-                          const ExecutionConfig& config = ExecutionConfig());
+                          const ExecutionConfig& config = ExecutionConfig(),
+                          const sandbox::SandboxOptions* sandbox_opts = nullptr);
 
   /**
    * Reload code for hot reload
@@ -410,8 +419,19 @@ private:
   mutable std::mutex                     so_cache_mutex_;
 
   // Helper methods
+  // AgentFoundry 沙箱机制移植（lld.md T026）：sandbox_opts 非空时走安全层（白名单+双检+截断）
+  // nullptr 时保持原逻辑不变（向后兼容，FR-006/SC-007）
   ExecutionResult execute_command(const std::string& command, const std::string& working_dir,
-                                  int timeout_ms, const std::vector<std::string>& env_vars);
+                                  int timeout_ms, const std::vector<std::string>& env_vars,
+                                  const sandbox::SandboxOptions* sandbox_opts = nullptr);
+
+  // AgentFoundry 沙箱机制移植（lld.md T027/T028）：安全层辅助方法
+  // build_safe_env：env 白名单过滤，拒绝 *_API_KEY（B3/FR-003）
+  static std::vector<std::string> build_safe_env(const std::vector<std::string>& raw_env,
+                                                  const std::vector<std::string>& whitelist);
+  // resolve_safe_path：路径双检（string prefix + realpath），拒绝越界（B4/FR-004）
+  // 异常：抛 std::runtime_error 含路径名与允许前缀
+  static std::string resolve_safe_path(const std::string& path, const std::string& allowed_prefix);
 
   SoLibraryPtr load_so_library(const std::string& file_path);
   SoFunction   get_so_function(const SoLibraryPtr& handle, const std::string& function_name);

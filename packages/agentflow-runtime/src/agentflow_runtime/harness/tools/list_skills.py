@@ -1,8 +1,10 @@
 """list_skills tool — lists available skills from harness/skills/.
 
-Discovers skills by recursively searching for directories containing
-``SKILL.md``.  Nested paths (e.g. ``minimax_outfit_skills/forge-image-gen``)
-are reported as the skill name, preserving the filesystem hierarchy.
+ToolExecutor 迁移（Phase 3，ADR 20260724-tools-runtime-refactor.md）：
+- skills 目录始终在宿主机上（不在沙箱内），无需通过 executor 路由
+- 移除 sandbox HTTP POST 路径（从未被有效使用——skills 从不在沙箱内）
+- 保留 _get_skills_dir() 和宿主机 os.walk() 逻辑
+- execute() 签名不变（skill_executor 兼容，sandbox_endpoint 参数保留但忽略）
 """
 
 import json
@@ -35,19 +37,27 @@ def _get_skills_dir():
     return _SKILLS_DIR
 
 
-def execute(tool_input: dict) -> str:
+def execute(tool_input: dict, sandbox_endpoint: str = None) -> str:
+    """列出可用技能。
+
+    skills 目录始终在宿主机上，不通过 executor 路由。
+    sandbox_endpoint 参数保留以兼容签名，但被忽略。
+
+    Args:
+        tool_input: {}（无参数）
+        sandbox_endpoint: 保留兼容，忽略（skills 在宿主机上）。
+
+    Returns:
+        JSON 字符串——{"skills": [{"name": "...", "path": "..."}]}
+    """
     skills_dir = _get_skills_dir()
     if not os.path.isdir(skills_dir):
         return json.dumps({"skills": [], "error": "skills directory not found"})
 
     skills = []
-    # Recursively walk the skills directory to find SKILL.md files.
-    # This supports nested paths (e.g. "minimax_outfit_skills/forge-image-gen").
     for root, dirs, files in os.walk(skills_dir):
-        # Skip hidden directories
         dirs[:] = [d for d in dirs if not d.startswith(".")]
         if "SKILL.md" in files:
-            # Use the relative path from skills_dir as the skill name
             rel = os.path.relpath(root, skills_dir)
             skill_md = os.path.join(root, "SKILL.md")
             skills.append({"name": rel, "path": skill_md})

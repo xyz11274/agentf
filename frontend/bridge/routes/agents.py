@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -249,6 +250,26 @@ def _resolve_yaml_path(cfg: dict[str, Any], dotted: str) -> str | None:
     return str(current)
 
 
+# Regex for `${VAR:-default}` or `${VAR}` placeholder syntax
+#   Group 1: VAR name (ignored)
+#   Group 2: default value (after ":-"), or None if no default
+_PLACEHOLDER_RE = re.compile(r"^\$\{([^}:]+)(?::-(.*))?\}$")
+
+
+def _resolve_placeholder(val: str) -> str:
+    """Resolve a ``${VAR:-default}`` placeholder to its default value.
+
+    If the value is not a placeholder, returns it unchanged.
+    If it is a placeholder with a default, returns the default.
+    If it is a placeholder without a default (``${VAR}``), returns empty string.
+    """
+    m = _PLACEHOLDER_RE.match(val)
+    if not m:
+        return val  # Not a placeholder
+    # m.group(2) is the default value (after ":-"), or None if no default
+    return m.group(2) or ""
+
+
 def _inject_agent_env_defaults(pkg_name: str) -> None:
     """Merge Bridge ``agent_defaults`` into the agent's ``.env``.
 
@@ -277,12 +298,15 @@ def _inject_agent_env_defaults(pkg_name: str) -> None:
     if not raw_cfg:
         return
 
-    # Build injection candidates
+    # Build injection candidates — resolve `${VAR:-default}` placeholders
     candidates: dict[str, str] = {}
     for env_key, yaml_path in _AGENT_ENV_DEFAULTS.items():
         val = _resolve_yaml_path(raw_cfg, yaml_path)
         if val is not None:
-            candidates[env_key] = val
+            # YAML 中的 `${VAR:-default}` 是字面量，需解析为实际默认值
+            val = _resolve_placeholder(val)
+            if val:
+                candidates[env_key] = val
 
     if not candidates:
         return
@@ -309,7 +333,12 @@ def _inject_agent_env_defaults(pkg_name: str) -> None:
                     if v and not v.startswith(_PLACEHOLDER_PREFIXES):
                         user_has_real.add(k)
 
-    #   b) Write bridge-injected defaults at the TOP (for keys user hasn't set)
+    # Use boundary markers so the injected block is always identifiable and
+    # replaceable regardless of what the user has in the rest of the file.
+    _INJECT_START = "# ── BRIDGE_INJECTED_START ──"
+    _INJECT_END   = "# ── BRIDGE_INJECTED_END ──"
+
+    #   b) Collect bridge-injected defaults
     defaults_to_write: list[str] = []
     for env_key, val in candidates.items():
         if env_key in user_has_real:
@@ -319,20 +348,26 @@ def _inject_agent_env_defaults(pkg_name: str) -> None:
         defaults_to_write.append(f"{env_key}={val}")
         written_defaults.add(env_key)
 
-    if defaults_to_write:
-        top_lines.append("# ── Bridge-injected defaults (user values below override) ──")
-        top_lines.extend(defaults_to_write)
-        top_lines.append("")
-
-    #   c) Preserve all original user lines (always wins over bridge defaults)
+    #   c) Read existing file, strip any stale injected block (marker-delimited),
+    #      keep all user lines.
+    user_lines: list[str] = []
     if env_file.is_file():
-        bottom_lines = list(env_file.read_text(encoding="utf-8").splitlines())
+        raw_lines = list(env_file.read_text(encoding="utf-8").splitlines())
+        in_injected = False
+        for line in raw_lines:
+            if line.strip() == _INJECT_START:
+                in_injected = True
+                continue
+            if line.strip() == _INJECT_END:
+                in_injected = False
+                continue
+            if not in_injected:
+                user_lines.append(line)
 
-    # Strip trailing empty lines from bottom for clean join
-    while bottom_lines and bottom_lines[-1] == "":
-        bottom_lines.pop()
-
-    lines = top_lines + bottom_lines
+    if defaults_to_write:
+        # Build the new injected block at the top
+        inject_block = [_INJECT_START] + defaults_to_write + [_INJECT_END, ""]
+        lines = inject_block + user_lines
     total_written = len(written_defaults) + len(user_has_real)
 
     if defaults_to_write:

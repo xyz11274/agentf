@@ -709,10 +709,6 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
 
         bool ok = router->enqueue_response_message(msg);
         if(ok) {
-          Logger::instance().info_f(
-              "[RESPONSE_PUSH] Enqueued to session_router: type=%s, "
-              "content_len=%zu, dialogue=%s",
-              type.c_str(), content.size(), did.c_str());
         } else {
           Logger::instance().warn_f(
               "[RESPONSE_PUSH] enqueue_response_message failed: type=%s, "
@@ -879,6 +875,14 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
     // Merge with any existing inputs (e.g. set via set_inputs() or message payload)
     const DataMap& existing = node->get_inputs();
     for(const auto& kv : existing) {
+      if(hydrated.find(kv.first) == hydrated.end()) {
+        hydrated[kv.first] = kv.second;
+      }
+    }
+    // Carry over all workflow-level inputs not yet in hydrated (e.g. sandbox_endpoint
+    // that was propagated from message.metadata via BUILD_RUNTIME_TASK → TASK_POLLER
+    // → execute_workflow state.inputs but is not declared in the node's input_params).
+    for(const auto& kv : workflow_inputs) {
       if(hydrated.find(kv.first) == hydrated.end()) {
         hydrated[kv.first] = kv.second;
       }
@@ -2049,6 +2053,13 @@ void MMAgentRuntime::agent_task_poller_loop() {
         if(task->get_parameter("exec_skill_key", exec_skill_key) && !exec_skill_key.empty()) {
           inputs["exec_skill_key"] = exec_skill_key;
           Logger::instance().info_f("[TASK_POLLER] Set inputs[exec_skill_key]='%s'", exec_skill_key.c_str());
+        }
+        // Propagate sandbox_endpoint from task parameters to node inputs
+        // for worker env var injection (AF_SANDBOX_ENDPOINT).
+        std::string sandbox_endpoint;
+        if(task->get_parameter("sandbox_endpoint", sandbox_endpoint) && !sandbox_endpoint.empty()) {
+          inputs["sandbox_endpoint"] = sandbox_endpoint;
+          Logger::instance().info_f("[TASK_POLLER] Set inputs[sandbox_endpoint]='%s'", sandbox_endpoint.c_str());
         }
         std::string platform_context;
         if(task->get_parameter("platform_context", platform_context) &&

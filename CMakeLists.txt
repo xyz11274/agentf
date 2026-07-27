@@ -215,6 +215,8 @@ set(AGENTFLOW_VENDOR_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vendor)
 include_directories(${AGENTFLOW_INCLUDE_DIR}/external)
 # Internal headers - for internal implementation only
 include_directories(${AGENTFLOW_INCLUDE_DIR}/internal)
+# Source root - for sandbox/ and daemon/ headers
+include_directories(${AGENTFLOW_SOURCE_DIR})
 
 # Source files - Reorganized structure
 
@@ -322,10 +324,6 @@ if(USE_RAPIDJSON)
   )
 endif()
 
-if(USE_REDIS)
-  target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_REDIS=1)
-endif()
-
 set(AGENTFLOW_SOURCES
     ${AGENTFLOW_AGENT_SOURCES}
     ${AGENTFLOW_WORKFLOW_SOURCES}
@@ -334,11 +332,22 @@ set(AGENTFLOW_SOURCES
     ${AGENTFLOW_ACTOR_ADAPTER_SOURCES}
     ${AGENTFLOW_CACHE_ADAPTER_SOURCES}
     ${AGENTFLOW_DSL_ADAPTER_SOURCES}
+    # Sandbox SDK 层（AgentFoundry 沙箱机制移植）
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_helpers.cpp
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_ignore.cpp
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_factory.cpp
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_local.cpp
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_docker.cpp
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_e2b.cpp
 )
 
 # Create main library (shared library .so)
 add_library(agentflow SHARED ${AGENTFLOW_SOURCES})
 target_include_directories(agentflow PUBLIC ${AGENTFLOW_INCLUDE_DIR} ${AGENTFLOW_VENDOR_DIR}/miniz)
+
+if(USE_REDIS)
+  target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_REDIS=1)
+endif()
 
 # Set library output directory
 set_target_properties(agentflow PROPERTIES
@@ -370,10 +379,6 @@ if(USE_RAPIDJSON)
     target_include_directories(agentflow PUBLIC ${RAPIDJSON_INCLUDE_ROOT})
   endif()
   target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_RAPIDJSON=1)
-endif()
-
-if(USE_REDIS)
-  target_compile_definitions(node_adapter_lib PUBLIC AGENTFLOW_WITH_REDIS=1)
 endif()
 
 # ============================================================================
@@ -421,6 +426,18 @@ add_executable(agentflowd
     ${AGENTFLOW_SOURCE_DIR}/daemon/response_poller.cpp
     ${AGENTFLOW_SOURCE_DIR}/daemon/event_broker.cpp
     ${AGENTFLOW_SOURCE_DIR}/daemon/ws_upgrade.cpp
+    # Sandbox 沙箱机制移植（daemon 层）
+    ${AGENTFLOW_SOURCE_DIR}/daemon/session_manager.cpp
+    ${AGENTFLOW_SOURCE_DIR}/daemon/sandbox_lifecycle.cpp
+    ${AGENTFLOW_SOURCE_DIR}/daemon/sandbox_snapshots.cpp
+    ${AGENTFLOW_SOURCE_DIR}/daemon/artifact_store.cpp
+    # Sandbox 沙箱机制移植（SDK 层）
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_ignore.cpp
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_factory.cpp
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_helpers.cpp
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_local.cpp
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_docker.cpp
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_e2b.cpp
 )
 target_link_libraries(agentflowd PRIVATE agentflow)
 
@@ -586,7 +603,14 @@ add_library(node_adapter_lib SHARED
     ${AGENTFLOW_UTILS_SOURCES}
     ${AGENTFLOW_ACTOR_ADAPTER_SOURCES}
     ${AGENTFLOW_CACHE_ADAPTER_SOURCES}
-    ${AGENTFLOW_DSL_ADAPTER_SOURCES})
+    ${AGENTFLOW_DSL_ADAPTER_SOURCES}
+    # Sandbox SDK 层（与 agentflow 库保持一致，worker.cpp 引用 SandboxHelpers::bash）
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_helpers.cpp
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_ignore.cpp
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_factory.cpp
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_local.cpp
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_docker.cpp
+    ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_e2b.cpp)
 target_include_directories(node_adapter_lib PUBLIC ${AGENTFLOW_INCLUDE_DIR})
 find_package(Threads REQUIRED)
 target_link_libraries(node_adapter_lib PUBLIC Threads::Threads)
@@ -612,6 +636,10 @@ if(USE_RAPIDJSON)
     target_include_directories(node_adapter_lib PUBLIC ${RAPIDJSON_INCLUDE_ROOT})
   endif()
   target_compile_definitions(node_adapter_lib PUBLIC AGENTFLOW_WITH_RAPIDJSON=1)
+endif()
+
+if(USE_REDIS)
+  target_compile_definitions(node_adapter_lib PUBLIC AGENTFLOW_WITH_REDIS=1)
 endif()
 
 # Node adapter executable
@@ -660,6 +688,10 @@ if(AGENTFLOW_BUILD_TESTS)
       ${AGENTFLOW_TEST_DIR}/unit/src/test_databus_session_isolation.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_uds_json_parsing.cpp
       ${AGENTFLOW_TEST_DIR}/unit/src/test_openai_parsing_gtest.cpp
+      # Sandbox ExecResult 解析测试——TC-SBOX-052/053（B24 C++ 消费端 JSON 解析正确性）
+      ${AGENTFLOW_TEST_DIR}/unit/sandbox_exec_result_test.cpp
+      # SandboxHelpers 测试——validate_upload_path 等工具函数
+      ${AGENTFLOW_TEST_DIR}/unit/sandbox_helpers_test.cpp
   )
   if(TARGET GTest::gtest)
     target_link_libraries(test_agentflow_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)
@@ -788,6 +820,18 @@ if(AGENTFLOW_BUILD_TESTS)
       ${AGENTFLOW_SOURCE_DIR}/daemon/response_poller.cpp
       ${AGENTFLOW_SOURCE_DIR}/daemon/event_broker.cpp
       ${AGENTFLOW_SOURCE_DIR}/daemon/ws_upgrade.cpp
+      # Sandbox daemon 层
+      ${AGENTFLOW_SOURCE_DIR}/daemon/session_manager.cpp
+      ${AGENTFLOW_SOURCE_DIR}/daemon/sandbox_lifecycle.cpp
+      ${AGENTFLOW_SOURCE_DIR}/daemon/sandbox_snapshots.cpp
+      ${AGENTFLOW_SOURCE_DIR}/daemon/artifact_store.cpp
+      # Sandbox SDK 层
+      ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_ignore.cpp
+      ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_factory.cpp
+      ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_helpers.cpp
+      ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_local.cpp
+      ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_docker.cpp
+      ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_e2b.cpp
   )
   if(TARGET GTest::gtest)
     target_link_libraries(test_daemon_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)

@@ -331,7 +331,8 @@ async def _run_turn(
                 agent_id, dialogue_id, exc,
             )
 
-    this_turn_text = prepare_content_for_daemon(request.content, agent_id=agent_id)
+    this_turn_text = prepare_content_for_daemon(request.content, agent_id=agent_id,
+                                                 user_id=request.user_id, client_id=request.client_id)
     messages_payload = (
         [*history_messages, {"role": "user", "content": this_turn_text}]
         if history_messages

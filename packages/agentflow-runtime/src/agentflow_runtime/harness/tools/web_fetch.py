@@ -1,4 +1,11 @@
-"""web_fetch tool — fetch a URL and return its content as text."""
+"""web_fetch tool — fetch a URL and return its content as text.
+
+ToolExecutor 迁移（Phase 3，ADR 20260724-tools-runtime-refactor.md）：
+- 通过 create_executor() 抽象层路由，不再内部 if-else
+- sandbox-mode 由 factory 读取 AF_SANDBOX_MODE 决定 Host/HTTP/E2B
+- 宿主侧保留 blocked_prefixes / blocked_metadata security 检查（始终执行，B2 防线）
+- execute() 签名不变（skill_executor 兼容）
+"""
 
 import json
 
@@ -25,8 +32,55 @@ TOOL_PARAMS = {
     "required": ["url"]
 }
 
+# 私有/内部地址前缀（宿主侧第一道防线，B2）
+_BLOCKED_PREFIXES = [
+    "http://localhost", "https://localhost",
+    "http://127.0.0.1", "https://127.0.0.1",
+    "http://10.", "https://10.",
+    "http://172.16.", "https://172.16.",
+    "http://192.168.", "https://192.168.",
+    "http://169.254.", "https://169.254.",
+    "http://[::1]", "https://[::1]",
+    "http://0.0.0.0", "https://0.0.0.0",
+]
 
-def execute(tool_input: dict) -> str:
+# 云元数据端点
+_BLOCKED_METADATA = [
+    "169.254.169.254",  # cloud metadata
+    "metadata.google.internal",
+    "metadata.aws.internal",
+]
+
+
+def _is_blocked(url: str) -> str | None:
+    """检查 URL 是否命中安全黑名单，返回拒绝原因或 None。"""
+    if not url.startswith("http://") and not url.startswith("https://"):
+        return "Only http and https URLs are allowed"
+    for prefix in _BLOCKED_PREFIXES:
+        if url.startswith(prefix):
+            return "Access denied: requests to private/internal addresses are not allowed"
+    for blocked in _BLOCKED_METADATA:
+        if blocked in url:
+            return "Access denied: requests to metadata endpoints are not allowed"
+    return None
+
+
+def execute(tool_input: dict, sandbox_endpoint: str = None) -> str:
+    """获取 URL 内容。
+
+    迁移后：通过 ToolExecutor 抽象层路由（create_executor），不再内部 if-else。
+    保持签名不变（skill_executor.py 兼容）。
+
+    Args:
+        tool_input: {"url": str, "max_chars": int, "timeout": int}
+        sandbox_endpoint: 由 daemon 注入的沙箱 HTTP endpoint。
+
+    Returns:
+        JSON 字符串——FileContent 格式（content/error/total_lines）
+        加 tool 字段标识来源。
+    """
+    from agentflow_runtime.executors.factory import create_executor
+
     url = tool_input.get("url", "")
     max_chars = tool_input.get("max_chars", 5000)
     timeout = tool_input.get("timeout", 15)
@@ -35,127 +89,23 @@ def execute(tool_input: dict) -> str:
         return json.dumps({"error": "url is required", "tool": "web_fetch"},
                           ensure_ascii=False)
 
-    # Security: only allow http/https
-    if not url.startswith("http://") and not url.startswith("https://"):
-        return json.dumps({
-            "error": "Only http and https URLs are allowed",
-            "tool": "web_fetch"
-        }, ensure_ascii=False)
+    # 宿主侧第一道防线：URL 安全检查（始终执行，B2）
+    blocked_reason = _is_blocked(url)
+    if blocked_reason:
+        return json.dumps({"error": blocked_reason, "tool": "web_fetch"},
+                          ensure_ascii=False)
 
-    # Block private/internal addresses
-    blocked_prefixes = [
-        "http://localhost", "https://localhost",
-        "http://127.0.0.1", "https://127.0.0.1",
-        "http://10.", "https://10.",
-        "http://172.16.", "https://172.16.",
-        "http://192.168.", "https://192.168.",
-        "http://169.254.", "https://169.254.",
-        "http://[::1]", "https://[::1]",
-        "http://0.0.0.0", "https://0.0.0.0",
-    ]
-    for prefix in blocked_prefixes:
-        if url.startswith(prefix):
-            return json.dumps({
-                "error": f"Access denied: requests to private/internal addresses are not allowed",
-                "tool": "web_fetch"
-            }, ensure_ascii=False)
+    # 通过 Factory 获取 executor
+    executor = create_executor(sandbox_endpoint=sandbox_endpoint)
+    result = executor.fetch_url(url, timeout)
 
-    # Metadata endpoints
-    blocked_metadata = [
-        "169.254.169.254",  # cloud metadata
-        "metadata.google.internal",
-        "metadata.aws.internal",
-    ]
-    for blocked in blocked_metadata:
-        if blocked in url:
-            return json.dumps({
-                "error": f"Access denied: requests to metadata endpoints are not allowed",
-                "tool": "web_fetch"
-            }, ensure_ascii=False)
+    # 统一序列化（FileContent.to_dict() + 补 tool 字段）
+    data = result.to_dict()
+    data["tool"] = "web_fetch"
+    data["url"] = url
 
-    try:
-        import urllib.request
-        import ssl
+    # max_chars 截断（宿主侧逻辑，保留不变）
+    if max_chars > 0 and data.get("content") and len(data["content"]) > max_chars:
+        data["content"] = data["content"][:max_chars] + f"\n... (truncated at {max_chars} chars)"
 
-        # Create SSL context (skip certificate verification to avoid
-        # certificate issues in various environments)
-        ssl_ctx = ssl._create_unverified_context()
-
-        req = urllib.request.Request(
-            url,
-            headers={
-                "User-Agent": "AgentFlow-HarnessAgent/1.0",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            }
-        )
-
-        with urllib.request.urlopen(req, timeout=timeout, context=ssl_ctx) as resp:
-            raw = resp.read()
-            content_type = resp.headers.get("Content-Type", "")
-            charset = "utf-8"
-
-            # Try to extract charset from Content-Type
-            if "charset=" in content_type:
-                charset = content_type.split("charset=")[-1].split(";")[0].strip()
-
-            try:
-                text = raw.decode(charset, errors="replace")
-            except (LookupError, UnicodeDecodeError):
-                text = raw.decode("utf-8", errors="replace")
-
-            # Strip HTML tags for cleaner output if it's HTML
-            if "text/html" in content_type:
-                import re
-                # Remove script and style elements
-                text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL | re.IGNORECASE)
-                text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
-                # Remove HTML tags
-                text = re.sub(r'<[^>]+>', ' ', text)
-                # Collapse whitespace
-                text = re.sub(r'\s+', ' ', text).strip()
-                # Restore newlines for readability
-                text = text.replace('. ', '.\n').replace('? ', '?\n').replace('! ', '!\n')
-
-            status = resp.status
-
-        truncated = False
-        if max_chars > 0 and len(text) > max_chars:
-            text = text[:max_chars] + f"\n... (truncated at {max_chars} chars)"
-            truncated = True
-
-        return json.dumps({
-            "content": text,
-            "char_count": len(text),
-            "content_type": content_type,
-            "status": status,
-            "url": url,
-            "truncated": truncated,
-            "tool": "web_fetch",
-        }, ensure_ascii=False)
-
-    except TimeoutError:
-        return json.dumps({
-            "error": f"Request timed out after {timeout}s",
-            "tool": "web_fetch"
-        }, ensure_ascii=False)
-    except urllib.error.HTTPError as e:
-        return json.dumps({
-            "error": f"HTTP {e.code}: {e.reason}",
-            "status": e.code,
-            "tool": "web_fetch"
-        }, ensure_ascii=False)
-    except urllib.error.URLError as e:
-        return json.dumps({
-            "error": f"URL error: {e.reason}",
-            "tool": "web_fetch"
-        }, ensure_ascii=False)
-    except ImportError:
-        return json.dumps({
-            "error": "urllib is not available",
-            "tool": "web_fetch"
-        }, ensure_ascii=False)
-    except Exception as e:
-        return json.dumps({
-            "error": f"Failed to fetch URL: {e}",
-            "tool": "web_fetch"
-        }, ensure_ascii=False)
+    return json.dumps(data, ensure_ascii=False)

@@ -6,9 +6,11 @@ for the coordinator node (coordinator_decide.py).
 # ---------------------------------------------------------------------------
 # Coordinator system prompt template — defines role, run_skills usage, output format
 # ---------------------------------------------------------------------------
-# {available_skills} is replaced at runtime by the coordinator node.
+# {available_skills} and {current_time} are replaced at runtime by the coordinator node.
 
 PROTOCOL_TEMPLATE = """## 你的工作方式
+
+当前时间: {current_time}
 
 你是一个任务编排 AI，通过 run_skills 工具委派 skill 执行子任务。
 你不能直接读取文件、执行命令或搜索——所有具体工作必须委派给 skill。
@@ -130,5 +132,6 @@ DECISION_FAILURE_PROMPT = (
 )
 
 DECISION_SUCCESS_PROMPT = (
-    "请评估结果，决定是否需要再委派 skill 或直接回复用户。"
+    "请评估结果。如果 skill-runner 已返回有用结果，请直接回复用户，不要再次调用 run_skills。"
+    "仅在结果明显不完整或缺必要信息时才再次委派。"
 )

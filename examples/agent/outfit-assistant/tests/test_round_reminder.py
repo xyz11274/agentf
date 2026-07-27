@@ -1,12 +1,7 @@
-import importlib.util
-from pathlib import Path
+from __future__ import annotations
 
+from agentflow_runtime import round_reminder as MODULE
 
-MODULE_PATH = Path(__file__).parents[1] / "nodes" / "round_reminder.py"
-SPEC = importlib.util.spec_from_file_location("outfit_round_reminder", MODULE_PATH)
-MODULE = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-SPEC.loader.exec_module(MODULE)
 
 build_round_reminder = MODULE.build_round_reminder
 
@@ -166,7 +161,8 @@ def test_detect_loop_threshold_one_fires_on_first_occurrence():
     不变量 I-2 边界硬约束：阈值边界语义必须与文档一致。
     """
     import importlib.util
-    skill_exec_path = MODULE_PATH.parents[1] / "nodes" / "skill_executor.py"
+    from pathlib import Path
+    skill_exec_path = Path(__file__).parents[1] / "nodes" / "skill_executor.py"
     spec = importlib.util.spec_from_file_location("outfit_skill_exec", skill_exec_path)
     skill_exec = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

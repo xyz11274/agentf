@@ -303,7 +303,7 @@ def test_mixed_image_and_download_artifacts(tmp_path):
 # ═══════════════════════════════════════════════════════════════════
 
 def test_user_uploaded_image_is_not_collected_as_artifact(tmp_path, monkeypatch):
-    """用户上传到 workspace/upload/ 的原图落在任务指令文本里时，
+    """用户上传到 workspace/upload/（或 workspace/{session}/upload/）的原图落在任务指令文本里时，
     不应被 extract_artifact_paths 收进 artifacts_json（I-6）。
     复现日志 0707130424-4405fc2d5072 的幽灵产物 bug：
     skill prompt 引用了原图路径让 skill 调 outfit_vision.py 去看，
@@ -318,8 +318,8 @@ def test_user_uploaded_image_is_not_collected_as_artifact(tmp_path, monkeypatch)
 
     text = (
         '{"messages":[{"content":"点评一下我的穿搭？ '
-        f'用户上传了图片，路径: {upload} '
-        '需要查看图片内容时请使用 read_image 工具"}]}'
+        f'用户上传了图片，路径: {upload}'
+        '"]}]}'
     )
 
     result = executor.extract_artifact_paths(text)

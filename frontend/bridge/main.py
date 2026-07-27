@@ -44,6 +44,7 @@ from routes.aisf_tasks import router as aisf_tasks_router
 from routes.chat_rest import router as chat_rest_router
 from routes.coremind_internal import router as coremind_internal_router
 from routes.packages import router as packages_router
+from routes.sandbox_files import router as sandbox_files_router
 from routes.skill_hub import router as skill_hub_router
 from routes.conversations_api import router as conversations_router
 
@@ -487,6 +488,7 @@ bridge_app.include_router(llm_trace_routes.router)
 # ``(user_id, client_id)`` so the frontend can list past conversations
 # independently of the daemon's ephemeral dialogue lifecycle.
 bridge_app.include_router(conversations_router)
+bridge_app.include_router(sandbox_files_router)
 
 
 # Health check (accessible at /health/api/health)
@@ -513,6 +515,10 @@ app.mount("/health", bridge_app)
 
 # AISF SysAgent 调度入口（独立路由，不经过 /health 挂载前缀）
 app.include_router(aisf_tasks_router)
+
+# Artifact 文件服务（外层 app 直挂，本地 dev 通过 Vite proxy /api 可达；
+# 生产环境通过网关加 /health 前缀 → bridge_app 下的 artifacts 路由同样可处理）
+app.include_router(artifacts_router)
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
+# 加载环境配置
+ar_load_env
+
 CHECK_ONLY=false
 if [ "${1:-}" = "--check" ]; then CHECK_ONLY=true
 elif [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
@@ -17,7 +20,8 @@ elif [ "$#" -gt 0 ]; then
 fi
 
 PACKAGE="${AGENT_PACKAGE:-examples/agent/outfit-assistant}"
-DAEMON_PORT="${DAEMON_PORT:-7890}"
+# daemon 端口统一 17891（与 start_daemon.sh / start_e2e.sh / configs/{dev,test}/agentflowd.json / config.py 默认值一致）
+DAEMON_PORT="${DAEMON_PORT:-17891}"
 BRIDGE_PORT="${PYTHON_BRIDGE_PORT:-8199}"
 SIDECAR_PORT="${COREMIND_BRIDGE_PORT:-23767}"
 
@@ -31,7 +35,11 @@ if [ ! -x "$DAEMON_BINARY" ]; then
 fi
 
 # sidecar 二进制：仅 production 构建存在时才要求
-SIDECAR_BINARY="$AR_PROJECT_ROOT/frontend/bridge/coremind_bridge/build-production/coremind_bridge"
+# 生产栈故意只认 build-production/，不 fallback 到 build-dev/build-release stub binary——
+# stub 永远返回空服务发现，会立刻触发 REQUIRED_SERVICE_DISCOVERY_FAILED，不能服务生产请求。
+# 本地开发用 ./scripts/build.sh dev 构建的 stub sidecar 应通过 scripts/start_sidecar.sh local 单独启动，
+# 不要塞进生产栈。详见 docs/design/architecture/modules/coremind-bridge.md §6.1
+SIDECAR_BINARY="$AR_PROJECT_ROOT/sidecar/build-production/coremind_bridge"
 SIDECAR_AVAILABLE=false
 if [ -x "$SIDECAR_BINARY" ]; then
     SIDECAR_AVAILABLE=true
@@ -69,6 +77,28 @@ trap cleanup EXIT INT TERM
 "$SCRIPT_DIR/start_daemon.sh" --profile production --package "$PACKAGE" --port "$DAEMON_PORT" &
 PIDS+=("$!")
 
+# 等待 daemon 就绪（TCP 端口可达）后再启动 Bridge
+# 注意：daemon 只暴露 JSON-RPC 接口，没有 REST /health 端点。
+# 这里用 curl -s（非 -sf）只检查 TCP 连接是否建立，不检查 HTTP 状态码。
+# 即使返回 404 也认为 daemon 已就绪——因为 daemon 的 HTTP 服务器会响应 404 页，
+# 但连接失败（connection refused）才说明 daemon 未就绪。
+DAEMON_READY=false
+for _ in $(seq 1 15); do
+    if curl -s --connect-timeout 1 "http://127.0.0.1:$DAEMON_PORT/" >/dev/null 2>&1; then
+        DAEMON_READY=true
+        break
+    fi
+    if ! kill -0 "${PIDS[0]}" 2>/dev/null; then
+        echo "[ERROR] Daemon exited during startup" >&2
+        exit 1
+    fi
+    sleep 1
+done
+if [ "$DAEMON_READY" != "true" ]; then
+    echo "[ERROR] Daemon readiness timed out after 15s" >&2
+    exit 1
+fi
+
 DAEMON_HOST=127.0.0.1 DAEMON_PORT="$DAEMON_PORT" \
     "$SCRIPT_DIR/start_bridge.sh" production "$BRIDGE_PORT" &
 PIDS+=("$!")
@@ -91,9 +121,27 @@ if [ "$BRIDGE_READY" != "true" ]; then
 fi
 
 if $SIDECAR_AVAILABLE; then
+    # SideCar 继承 caller 的 APPID / COREMIND_REQUIRED_SERVICES / COREMIND_OPTIONAL_SERVICES
+    # （start_sidecar.sh 内会设默认值，caller 可通过环境变量覆盖）
     PYTHON_BRIDGE_URL="http://127.0.0.1:$BRIDGE_PORT/health" \
         "$SCRIPT_DIR/start_sidecar.sh" production "$SIDECAR_PORT" &
     PIDS+=("$!")
+    SIDECAR_READY=false
+    for _ in $(seq 1 15); do
+        if curl -sf "http://127.0.0.1:$SIDECAR_PORT/health" >/dev/null; then
+            SIDECAR_READY=true
+            break
+        fi
+        if ! kill -0 "${PIDS[2]}" 2>/dev/null; then
+            echo "[ERROR] C++ SideCar exited during startup" >&2
+            exit 1
+        fi
+        sleep 1
+    done
+    if [ "$SIDECAR_READY" != "true" ]; then
+        echo "[ERROR] C++ SideCar readiness timed out" >&2
+        exit 1
+    fi
     echo "[READY] daemon=$DAEMON_PORT bridge=127.0.0.1:$BRIDGE_PORT sidecar=0.0.0.0:$SIDECAR_PORT"
 else
     echo "[READY] daemon=$DAEMON_PORT bridge=127.0.0.1:$BRIDGE_PORT (sidecar skipped)"

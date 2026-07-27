@@ -22,11 +22,16 @@ namespace daemon {
 class AgentRegistry;
 class ResponsePoller;
 class EventBroker;
+class SessionManager;  // AgentFoundry 沙箱机制移植
+class SandboxLifecycle;  // AgentFoundry 沙箱生命周期管理
 
 class RpcHandler {
 public:
   RpcHandler(runtime::MMAgentRuntime& runtime, AgentRegistry& registry,
-             ResponsePoller& poller, EventBroker& event_broker);
+             ResponsePoller& poller, EventBroker& event_broker,
+             SessionManager& session_manager,
+             SandboxLifecycle* sandbox_lifecycle = nullptr,
+             bool sandbox_allow_fallback = true);
   ~RpcHandler() = default;
 
   void register_all(RpcServer& server);
@@ -36,6 +41,9 @@ private:
   AgentRegistry& registry_;
   ResponsePoller& poller_;
   EventBroker& event_broker_;
+  SessionManager& session_manager_;  // AgentFoundry 沙箱机制移植
+  SandboxLifecycle* sandbox_lifecycle_;  // nullable, mode=none 时为 nullptr
+  bool sandbox_allow_fallback_;  // false=沙箱失败拒绝请求，true=降级到无沙箱
   RpcServer* server_ = nullptr;
   int64_t start_time_ms_;
   std::atomic<int64_t> message_counter_{0};
@@ -86,6 +94,18 @@ private:
   std::string handle_databus_get(const std::string& params, int64_t id);
   std::string handle_databus_list_keys(const std::string& params, int64_t id);
   std::string handle_databus_remove_by_prefix(const std::string& params, int64_t id);
+
+  // Sandbox methods (AgentFoundry 沙箱机制移植)
+  std::string handle_sandbox_read_file(const std::string& params, int64_t id);
+  // Upload binary asset into sandbox (symmetric to read_file; POST /upload, see contracts/bridge-sandbox-files.md)
+  std::string handle_sandbox_upload_file(const std::string& params, int64_t id);
+
+  // 推算会话级用户上传目录宿主机绝对路径（与 bridge content_serializer._compute_upload_dir 同构）
+  // 返回：{agent_packages_path}/{agent_id}/workspace/{user_id}_{client_id}/upload/
+  // agent package 路径取自 sandbox_lifecycle_->config().agents[i].package_path；找不到对应 agent 则返回空
+  std::string _resolve_session_upload_dir(const std::string& agent_id,
+                                          const std::string& user_id,
+                                          const std::string& client_id);
 };
 
 }  // namespace daemon

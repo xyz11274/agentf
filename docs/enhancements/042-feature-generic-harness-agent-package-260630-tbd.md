@@ -1,9 +1,9 @@
 # 详细设计: 通用 Harness Agent Package — Coordinator-Driven Agent Loop + 参数化 Skill Task
 
 > **文档级别**: L4 技术设计
-> **日期**: 2026-06-30，刷新 2026-07-02
-> **状态**: implemented
-> **关联**: `examples/agent/outfit-assistant/`（实现）、031-coordinator-协同机制、038-harness-agent-能力升级、040-harness-agent-MCP-support
+> **日期**: 2026-06-30，刷新 2026-07-14
+> **状态**: implemented (v3+)
+> **关联**: `packages/agentflow-runtime/src/agentflow_runtime/`（核心实现）、`examples/agent/outfit-assistant/`（生产 Agent）、`frontend/bridge/templates/agent_template/harness_agent/`（通用模板）、031-coordinator-协同机制、038-harness-agent-能力升级、040-harness-agent-MCP-support、agent-template-delta（四层架构）
 
 ---
 
@@ -41,7 +41,18 @@ AgentFlow 框架要求每个 session **必须包含三个 task**：
 
 **不能消除任何一个 task** — 框架的消息路由、完成通知、并发计数等机制都依赖三个 task 的存在。
 
-### 1.3 设计目标
+### 1.3 当前实现状态（v3+）
+
+本设计已实现并演进到 v3+ 架构，核心变化：
+
+1. **代码包化**：通用逻辑从 `examples/agent/harness_agent_v2/` 迁移到 `packages/agentflow-runtime/src/agentflow_runtime/`（pip 包），agent 包仅保留入口 wrapper 文件
+2. **单 Skill-Runner 路由**：所有 skill 通过 `exec_skill_key` → DataBus dispatch manifest 统一路由到单个 `skill-runner` task，不再为每个 skill 创建独立 task
+3. **dummy_pre_skill hook**：在 dispatcher 和 coordinator 之间插入预处理步骤
+4. **新增能力**：对话中断处理、流式进度推送、Artifact 管理、工具调用死循环检测、上下文压缩、可观测性事件等
+
+详见 §15 实施情况。
+
+### 1.4 设计目标
 
 在保留三层 task 的前提下，**将决策权从 dispatcher 转移到 coordinator**：
 
@@ -74,36 +85,37 @@ Coordinator Skill (LLM while-loop, 真正的决策中枢)
 
 框架要求每个 session 包含 dispatcher (task_index=0)、coordinator (task_index=1)、skill (task_index≥2) 三个 task，不可省略。本方案在保留三层结构的前提下，**将决策权从 dispatcher 转移到 coordinator**。
 
-### 2.2 核心抽象：general_task_executor
+v3+ 架构引入了一个 **dummy_pre_skill hook**（预处理步骤）和 **单 skill-runner 路由**：
 
-**关键洞察**：coordinator-skill 和 generic-skill 本质上是同一个东西——**LLM function-calling loop**。差异仅在配置：
+```
+agent.json:
+  tasks[0]: dispatcher        → next_skills=["dummy_pre_skill"]  (透传)
+  tasks[1]: coordinator       → coordinator_workflow.json        (LLM 决策循环)
+  tasks[2]: skill (dummy_pre_skill)  → 预处理 hook，透传后触发 coordinator
+  tasks[3]: skill (skill-runner)     → 通用 skill 执行器，通过 exec_skill_key 路由
+```
 
-| 实例 | system prompt 来源 | 绑定工具 | 职责 |
-|------|-------------------|---------|------|
-| coordinator-skill | agent.md 正文 | `[run_skills]` | 规划与委派 |
-| generic-skill | SKILL.md（coordinator 指定） | `[领域工具集]` | 执行具体任务 |
+### 2.2 核心抽象：两个独立节点
 
-两者共享同一个 Python 实现：`general_task_executor.py`。通过入参控制行为差异：
+**关键洞察**：coordinator 和 skill 是**两个独立的 Python 节点**，不再共享同一个 `general_task_executor.py`：
 
-```python
-# coordinator-skill 实例化
-general_task_executor(
-    system_prompt = agent.md 正文,        # "你是任务编排 AI..."
-    tools = [run_skills],                 # 只能委派
-    load_skills = [],                     # 不加载额外技能文档
-)
+| 节点 | 文件 | system prompt 来源 | 绑定工具 | 职责 |
+|------|------|-------------------|---------|------|
+| **coordinator_decide** | `coordinator_decide.py` | 框架协议 + agent.md 正文 | `[run_skills]` | 规划与委派 |
+| **skill_executor** | `skill_executor.py` | SKILL.md（dispatch manifest 指定） | `[领域工具集]` | 执行具体任务 |
 
-# generic-skill 实例化 (由 coordinator 通过 run_skills 指派)
-general_task_executor(
-    system_prompt = SKILL.md 内容,        # "## Skill: code-review\n..."
-    tools = [bash, read_file, write_file, web_fetch, mcp__*],  # 领域工具
-    load_skills = ["problem-localization"],  # coordinator 指定
-)
+两者通过 **DataBus dispatch manifest** 通信：
+
+```
+Coordinator 调用 run_skills
+  → handle_run_skills_call 写入 dispatch:{dialogue_id}:{round}:{i} 到 DataBus
+  → 所有 skill 通过 exec_skill_key 路由到 skill-runner task
+  → skill_executor 从 DataBus 读取 dispatch manifest 获取 skill_name/prompt/load_skills
 ```
 
 ### 2.3 架构总览
 
-**Coordinator 就是主 Agent**——它思考、分析、回复用户，`run_skills` 是它委派执行的手段。Skill Task 是被委派的执行单元，做完具体工作后把结果交回。
+**Coordinator 就是主 Agent**——它思考、分析、回复用户，`run_skills` 是它委派执行的手段。Skill-Runner 是被委派的执行单元，做完具体工作后把结果交回。
 
 ```
 用户请求
@@ -111,16 +123,21 @@ general_task_executor(
   ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  Dispatcher (task_index=0) — 透传层                             │
-│  固定 next_skills=["coordinator-skill"]                          │
+│  固定 next_skills=["dummy_pre_skill"]                           │
 └──────────────┬──────────────────────────────────────────────────┘
                │
                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  Coordinator (主 Agent 循环)                                     │
-│  = general_task_executor(                                       │
-│      system_prompt = 框架协议 + agent.md 业务意图,              │
-│      tools = [run_skills],                                      │
-│    )                                                             │
+│  dummy_pre_skill (task_index=2) — 预处理 hook                   │
+│  框架启动 → 执行 dummy_pre_skill.py → 透传后触发 coordinator   │
+└──────────────┬──────────────────────────────────────────────────┘
+               │ skill 完成 → 框架 re-trigger coordinator
+               ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  Coordinator (task_index=1, 主 Agent 循环)                      │
+│  = coordinator_decide.py                                        │
+│      system_prompt = 框架协议 + agent.md 业务意图               │
+│      tools = [run_skills]                                       │
 │                                                                  │
 │  它就是用户对话的对象：                                          │
 │    - 分析用户需求                                                │
@@ -134,53 +151,57 @@ general_task_executor(
 │                                                                  │
 │  ┌─── run_skills: 委派执行 ──────────────────────────────┐     │
 │  │  传入: skill 名称 + 任务指令(prompt) + 技能文档       │     │
-│  │  效果: 框架启动 skill task → 并行执行 → 完成后通知    │     │
+│  │  效果: 写 dispatch manifest → 写 next_skills          │     │
+│  │        → 框架启动 skill-runner → 并行执行 → 完成后    │     │
 │  └───────────────────────────────────────────────────────┘     │
 └──────────────┬──────────────────────────────────────────────────┘
-               │ run_skills → next_skills → 框架启动 skill task × N
+               │ run_skills → dispatch manifest → next_skills
                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  Skill Task × N (被委派的执行单元, 可并行)                      │
-│  = general_task_executor(                                       │
-│      system_prompt = SKILL.md (coordinator 指定),               │
-│      tools = [领域工具集],                                      │
-│      load_skills = [coordinator 指定],                          │
-│    )                                                             │
+│  Skill-Runner (task_index=3, 被委派的执行单元, 可并行)          │
+│  = skill_executor.py                                            │
+│      system_prompt = SKILL.md (dispatch manifest 指定)          │
+│      tools = [领域工具集]                                       │
 │                                                                  │
-│  它是 coordinator 的手：                                        │
-│    - 收到 coordinator 指派的 prompt → 知道"做什么"             │
+│  所有 skill 共享同一个 task，通过 exec_skill_key 区分：          │
+│    - 读 DataBus dispatch:{key} → 获取 skill_name/prompt        │
 │    - 加载 SKILL.md → 知道"怎么做"                               │
 │    - LLM + 技能知识 + 领域工具 → function-calling loop          │
-│    - 做完 → 结果交回 coordinator                                │
+│    - 做完 → 结果写入 DataBus skill_result → 通知 coordinator   │
 └─────────────────────────────────────────────────────────────────┘
                │ skill 完成 → 框架 re-trigger coordinator
                ▼
           Coordinator 继续分析...
 ```
 
-**一句话**：Coordinator 是脑（分析+决策+回复），Skill 是手（执行具体工作），`run_skills` 是脑指挥手的接口。
+**一句话**：Coordinator 是脑（分析+决策+回复），Skill-Runner 是手（执行具体工作），`run_skills` + DataBus dispatch manifest 是脑指挥手的接口。
 
 ### 2.4 关键设计决策
 
 **1. Coordinator 为什么是事件驱动而非 while-loop**
 
-框架的 `next_skills` 在 workflow **完成后**才被处理（`process_next_skills_launch` 在 workflow 完成回调中执行）。coordinator-skill 不能在 while-loop 中"等待 skill 结果"——必须先完成 workflow，让框架启动 skill，然后等框架在 skill 完成后 re-trigger 自己。
+框架的 `next_skills` 在 workflow **完成后**才被处理（`process_next_skills_launch` 在 workflow 完成回调中执行）。coordinator 不能在 while-loop 中"等待 skill 结果"——必须先完成 workflow，让框架启动 skill，然后等框架在 skill 完成后 re-trigger 自己。
 
-**2. 为什么 coordinator-skill 和 generic-skill 是同一个 node**
+**2. 为什么是单 skill-runner 而非多 skill task**
 
-两者都是"LLM + 工具 + while-loop"的 function-calling agent。差异仅在：
-- **system prompt**：coordinator-skill 用 agent.md（编排指令）；generic-skill 用 SKILL.md（技能指令）
-- **工具绑定**：coordinator-skill 只绑 `run_skills`；generic-skill 绑领域工具
-- **技能加载**：coordinator-skill 不加载额外 SKILL.md；generic-skill 按 coordinator 指定加载
+所有 skill 共享同一个 `skill-runner` task（task_index=3），通过 `exec_skill_key` 路由区分：
 
-统一为一个 `general_task_executor.py` 消灭了"coordinator 节点"和"skill 节点"的代码重复。
+- **加 skill 无需改 agent.json**：只需在 `harness/skills/` 下放 SKILL.md
+- **并行度由 instance_pool_size 控制**：`instance_pool_size=5` 允许 5 个 skill 实例并行
+- **dispatch manifest 承载所有信息**：skill_name/prompt/load_skills 打包在 DataBus key 中
+
+**3. 为什么 coordinator 和 skill 是独立的 Python 节点**
+
+两者职责不同，工具集不同，生命周期不同：
+- **coordinator**：只绑 `run_skills`，事件驱动（单轮 LLM 决策后交出控制权）
+- **skill_executor**：绑领域工具集，while-loop（多轮工具调用直到完成）
 
 ### 2.5 核心设计原则
 
 | 原则 | 说明 |
 |------|------|
 | **三层 task 保留** | 框架硬性要求，dispatcher/coordinator/skill 不可省略 |
-| **Dispatcher 退化为透传** | 固定 `next_skills=["coordinator-skill"]`，不做决策 |
+| **Dispatcher 退化为透传** | 固定 `next_skills=["dummy_pre_skill"]`，不做决策 |
 | **统一执行器** | coordinator-skill 和 generic-skill 共享 `general_task_executor.py`，差异仅在入参 |
 | **Coordinator 事件驱动** | 每次 skill 完成触发一次 LLM 决策，框架 re-trigger 提供循环 |
 | **Skill 是被参数化的** | 不再是"我是什么"，而是"coordinator 让我做什么" |
@@ -296,72 +317,61 @@ general_task_executor(
                     └──────────────────────────────────────────────────────┘
 ```
 
-### 5.3 Coordinator → Skill Task：任务指派（通过 DataBus）
+### 5.3 Coordinator → Skill-Runner：任务指派（通过 DataBus dispatch manifest）
 
-Coordinator 通过 `run_skills` 工具调用，将任务指派信息写入 DataBus 的 `coord:dispatch` key。这是一个结构化 JSON，包含所有待调度 skill 的完整信息：
+**v3+ 核心变化**：所有 skill 通过 **单 skill-runner task** 路由，不再为每个 skill 创建独立 task。Coordinator 的 `run_skills` 被拦截后，为每个 skill 写入独立的 **dispatch manifest** 到 DataBus，然后通过 `exec_skill_key` 指向该 manifest。
 
-**DataBus Key**: `/session/{sid}/sys/{did}/coord:dispatch`
+**写入流程**（`handle_run_skills_call`）：
 
-**Value 格式**:
-
-```json
-{
-  "skills": [
-    {
-      "name": "code-review",
-      "prompt": "审查 agent.cpp 的并发安全性",
-      "load_skills": ["coder-skills/problem-localization"],
-      "exec_skill_key": "review_input",
-      "force": false
-    },
-    {
-      "name": "security-scan",
-      "prompt": "扫描 SQL 注入风险",
-      "load_skills": ["security/codeql-scan"],
-      "exec_skill_key": "",
-      "force": false
-    }
-  ],
-  "reason": "用户要求代码安全审查",
-  "dispatch_round": 2
-}
+```
+Coordinator LLM 产出 run_skills tool_call
+  │
+  ├─ ① 为每个 skill 生成 dispatch manifest key:
+  │     dispatch:{dialogue_id}:{round}:{i}
+  │
+  ├─ ② 写入 DataBus (global sys namespace, 无 dialogue 前缀):
+  │     Key:   dispatch:{did}:{round}:{i}
+  │     Value: {"skill_name": "code-review", "prompt": "...", "load_skills": [...]}
+  │
+  ├─ ③ 构造 next_skills 全部指向 skill-runner:
+  │     [{"name": "skill-runner", "exec_skill_key": "dispatch:{did}:{round}:{i}", "force": true}]
+  │
+  └─ ④ 写入 next_skills → 框架接管调度
 ```
 
-**写入时机**：coordinator 的 `run_skills` tool_call 被拦截后：
-1. 先写入 `coord:dispatch`（包含每个 skill 的 prompt + load_skills）
-2. 再写入 `next_skills`（触发框架调度）
-3. skill task 启动时从 `coord:dispatch` 读取属于自己的那份指派信息
+**DataBus dispatch manifest 格式**：
 
-**skill task 读取方式**：
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `skill_name` | string | 实际 skill 名称（如 `code-review`） |
+| `prompt` | string | coordinator 指派的详细任务指令 |
+| `load_skills` | string[] | 应加载的技能文档名称列表 |
+
+**skill-runner 读取方式**：
 
 ```python
-# general_task_executor.py 中
-dispatch = databus.get("coord:dispatch")  # 读整个 dispatch 记录
-dispatch_data = json.loads(dispatch)
-# 找到属于自己的 skill 指派
-my_spec = next(s for s in dispatch_data["skills"] if s["name"] == skill_name)
-skill_prompt = my_spec["prompt"]
-load_skills_list = my_spec["load_skills"]
+# skill_executor.py 中
+# exec_skill_key 由框架从 node inputs 注入为 AF_EXEC_SKILL_KEY
+dispatch_key = os.environ.get("AF_EXEC_SKILL_KEY", "")
+raw = databus.get_global(dispatch_key)  # 读 dispatch manifest
+manifest = json.loads(raw)
+skill_name = manifest["skill_name"]
+skill_prompt = manifest["prompt"]
+load_skill_names = manifest["load_skills"]
 ```
 
-**为什么不用环境变量**：
-- prompt 可能很长（几百字的任务指令），环境变量有大小限制
-- load_skills 是数组，环境变量需要序列化/反序列化
-- DataBus 支持命名空间隔离和自动清理，环境变量不会随 dialogue 清理
-- 多个并行 skill 各自需要不同的 prompt，环境变量无法区分
-
-### 5.4 Skill Task → Coordinator：结果回传（通过 DataBus）
+### 5.4 Skill-Runner → Coordinator：结果回传（通过 DataBus）
 
 | 数据 | DataBus Key | 写入方 | 读取方 | 说明 |
 |------|------------|--------|--------|------|
-| **skill 结果** | node stdout → `skill_result` | general_task_executor.py | 框架 process_node → DataBus | skill 的执行输出 |
-| **skill 状态** | node stdout → `status` | general_task_executor.py | 框架 | "completed" / "failed" / "max_rounds_reached" |
+| **skill 结果** | node stdout → `skill_result` | skill_executor.py | 框架 process_node → DataBus | skill 的执行输出 |
+| **skill 状态** | node stdout → `status` | skill_executor.py | 框架 | `"completed"` / `"failed"` / `"max_rounds_reached"` / `"node_timeout"` / `"llm_error"` |
 | **完成通知** | response 队列 + data_exchange trigger | 框架 | coordinator | `completed_skill_name` + `skill_success` |
 
 **回传链路**（已有，完全复用）：
 
 ```
-general_task_executor.py stdout → node.cpp 解析 JSON → runtime.cpp process_node
+skill_executor.py stdout → node.cpp 解析 JSON → runtime.cpp process_node
   → DataBus publish → workflow_completed → agent.cpp handle_task_data_exchange
   → coordinator response 队列 → coordinator trigger → coordinator workflow 执行
 ```
@@ -530,16 +540,14 @@ Coordinator 是整个 agent loop 的 **决策中枢**，采用 **事件驱动** 
 
 Coordinator **只绑定一个工具**：`run_skills`。
 
+**工具定义**（JSON Schema 格式）：
+
 ```python
 RUN_SKILLS_TOOL = {
     "type": "function",
     "function": {
         "name": "run_skills",
-        "description": (
-            "委派一个或多个 skill 去执行子任务。每个 skill 会收到你指定的任务指令和技能文档，"
-            "独立完成工作后返回结果。所有 skill 并行执行，全部完成后统一返回。"
-            "你可以根据结果决定是否需要再委派新的 skill，或直接回复用户。"
-        ),
+        "description": "委派一个或多个 skill 去执行子任务。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -548,97 +556,59 @@ RUN_SKILLS_TOOL = {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "name": {
-                                "type": "string",
-                                "description": "Skill 名称，对应 harness/skills/ 下的目录名"
-                            },
-                            "prompt": {
-                                "type": "string",
-                                "description": "给这个 skill 的任务指令。"
-                                             "告诉 skill executor 应该完成什么具体工作。"
-                                             "这是 skill 的核心输入——skill 将围绕这个指令执行。"
-                            },
-                            "load_skills": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "该 skill 应加载的额外技能文档名称列表。"
-                                             "这些 SKILL.md 的内容会注入 skill 的 system prompt。"
-                            },
-                            "exec_skill_key": {
-                                "type": "string",
-                                "description": "DataBus key，指向该 skill 的结构化输入数据。"
-                                             "用于传递不适合放在 prompt 中的大型结构化数据。"
-                            },
-                            "force": {
-                                "type": "boolean",
-                                "description": "强制重新执行，即使该 skill 已启动过。默认 false。"
-                            }
+                            "name":        {"type": "string", "description": "Skill 名称"},
+                            "prompt":      {"type": "string", "description": "任务指令（必填）"},
+                            "load_skills": {"type": "array", "items": {"type": "string"},
+                                            "description": "应加载的技能文档列表"},
+                            "exec_skill_key": {"type": "string", "description": "结构化输入 DataBus key"},
+                            "force":        {"type": "boolean", "description": "强制重新执行"},
                         },
-                        "required": ["name", "prompt"]
-                    },
-                    "description": "要执行的 skill 列表，每个 skill 带有任务指派信息"
+                        "required": ["name", "prompt"],
+                    }
                 },
-                "reason": {
-                    "type": "string",
-                    "description": "为什么需要这些 skill（用于审计和可追溯性）"
-                }
+                "reason": {"type": "string", "description": "调度原因"},
             },
-            "required": ["skills"]
+            "required": ["skills"],
         }
     }
 }
 ```
 
-**设计要点**：
-
-- `prompt` 是必填项 — coordinator 必须明确告诉 skill "做什么"
-- `load_skills` 是可选 — skill 可以不加载额外技能文档（纯工具调用场景）
-- `exec_skill_key` 是可选 — 简单任务只需 prompt，复杂任务才需要结构化输入
-- `force` 对齐框架已有 `SkillSpec.force` — 允许重跑已完成的 skill
+**设计要点**：`prompt` 必填（coordinator 必须说清做什么），所有 skill 通过单 `skill-runner` 路由，由 `exec_skill_key` 区分。
 
 ### 6.3 `run_skills` 拦截与框架对接
 
 当 coordinator LLM 产出 `run_skills` tool_call 时，**不作为普通工具执行**，而是拦截并对接框架的 next_skills 管线：
 
+```mermaid
+flowchart LR
+    A["LLM 产出 run_skills tool_call"] --> B["为每个 skill 生成 dispatch key"]
+    B --> C["写入 DataBus dispatch:{did}:{round}:{i}"]
+    C --> D["构造 next_skills 全部指向 skill-runner"]
+    D --> E["写入 next_skills → 框架接管调度"]
+    E --> F["框架 launch_skill_task × N"]
+    F --> G["skill-runner 读 dispatch manifest"]
+```
+
+**核心实现**：
+
 ```python
-def handle_run_skills_call(args: dict, databus: DataBusClient,
-                           session_id: str, dialogue_id: str) -> str:
-    """拦截 run_skills tool_call，写入 DataBus，触发框架调度。"""
-
+def handle_run_skills_call(args, databus, session_id, dialogue_id):
     skills = args.get("skills", [])
-    reason = args.get("reason", "")
-
-    # ① 为每个 skill 写入任务指令和技能列表到 DataBus
-    for spec in skills:
-        name = spec["name"]
-        prompt = spec.get("prompt", "")
-        load_list = spec.get("load_skills", [])
-
-        if prompt:
-            databus.put(f"skill_prompt:{name}", prompt)
-        if load_list:
-            databus.put(f"load_skills:{name}", json.dumps(load_list))
-
-    # ② 构造 next_skills 数据（与框架 SkillSpec 格式对齐）
+    # ① 为每个 skill 写入 dispatch manifest（必须 在 next_skills 之前）
     next_skills = []
-    for spec in skills:
-        entry = {"name": spec["name"]}
-        if spec.get("exec_skill_key"):
-            entry["exec_skill_key"] = spec["exec_skill_key"]
-        if spec.get("force"):
-            entry["force"] = True
-        next_skills.append(entry)
-
-    # ③ 写入 next_skills 到 DataBus → 框架接管调度
+    for i, spec in enumerate(skills, 1):
+        dispatch_key = f"dispatch:{dialogue_id}:{dispatch_round}:{i}"
+        databus.put_global(dispatch_key, json.dumps({
+            "skill_name": spec["name"],
+            "prompt": spec.get("prompt", ""),
+            "load_skills": spec.get("load_skills", []),
+        }))
+        # 所有 skill 都通过 skill-runner 路由
+        next_skills.append({"name": "skill-runner", "exec_skill_key": dispatch_key, "force": True})
+    # ② 写入 next_skills → 框架接管
     databus.put("next_skills", json.dumps(next_skills))
-
-    # ④ 返回确认（coordinator 将在下一轮收到 skill 结果）
-    return json.dumps({
-        "status": "dispatched",
-        "skills": [s["name"] for s in skills],
-        "message": f"已调度 {len(skills)} 个 skill，等待执行结果...",
-        "reason": reason
-    }, ensure_ascii=False)
+    return json.dumps({"status": "dispatched", "skills": [s["name"] for s in skills]})
 ```
 
 **关键**：步骤 ① 必须在步骤 ③ 之前执行，确保 skill task 启动时 `skill_prompt` 和 `load_skills` 已在 DataBus 中就绪。
@@ -647,198 +617,82 @@ def handle_run_skills_call(args: dict, databus: DataBusClient,
 
 Coordinator 是 **事件驱动** 的：每次被框架触发时执行一次 LLM 决策，然后交出控制权。框架的 skill 完成 → re-trigger 机制提供"循环"。
 
+```mermaid
+flowchart TD
+    subgraph init["① 初始化"]
+        A1[加载 .env / AgentConfig]
+        A2[解析 agent.md frontmatter + body]
+        A3[解析 AF_INPUT stream flag + messages]
+    end
+
+    subgraph restore["② 状态恢复"]
+        B1[读 DataBus ctx 恢复对话历史]
+        B2[读 _coordinator_round 确定轮次]
+        B3[读框架注入的 completed_skill_*]
+    end
+
+    subgraph guard["③ 保护检查"]
+        C1[Max iterations guard]
+        C2[Context compression]
+        C3[Round reminder injection]
+        C4[Interrupt flag poll]
+    end
+
+    subgraph llm["④ 单轮 LLM 决策"]
+        D1[call_llm tools: run_skills]
+        D2{LLM 产出?}
+        D3["run_skills → dispatch manifest → next_skills"]
+        D4["无 tool_call → 输出最终 response"]
+    end
+
+    subgraph persist["⑤ 持久化 + 交出控制权"]
+        E1[写回 session_messages 到 DataBus]
+        E2[写 _coordinator_round +1]
+        E3[输出 JSON 到 stdout → workflow 完成]
+    end
+
+    init --> restore --> guard --> llm
+    D2 -->|tool_call| D3 --> persist
+    D2 -->|no tool| D4 --> persist
+```
+
+**核心代码结构**（`coordinator_decide.py` 的 `execute()` 函数骨架）：
+
 ```python
-#!/usr/bin/env python3
-"""
-Coordinator Decide — 事件驱动的 coordinator 节点。
-
-每次被框架触发时执行一次 LLM 决策：
-  - 首次触发: dispatcher 转发用户请求后，skill 完成触发
-  - 后续触发: 每当 coordinator 指派的 skill 完成时，框架 re-trigger
-
-执行逻辑（单轮）:
-  1. 从 DataBus 读取已完成的 skill 结果
-  2. 恢复跨轮对话历史
-  3. LLM 决策 (工具: run_skills)
-  4. 持久化对话历史
-  5. 输出 next_skills 或 response → 本轮结束，交出控制权
-"""
-
-import json, os, sys, yaml
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from databus_client import DataBusClient
-
-NODES_DIR = os.path.dirname(os.path.abspath(__file__))
-AGENT_PACKAGE_DIR = os.path.dirname(NODES_DIR)
-AGENT_MD_PATH = os.path.join(AGENT_PACKAGE_DIR, "agent.md")
-
-
-def parse_agent_md(path):
-    if not os.path.isfile(path):
-        return {}, ""
-    with open(path, encoding="utf-8") as f:
-        raw = f.read()
-    parts = raw.split("---", 2)
-    if len(parts) < 3:
-        return {}, raw.strip()
-    try:
-        frontmatter = yaml.safe_load(parts[1]) or {}
-    except Exception:
-        frontmatter = {}
-    return frontmatter, parts[2].strip()
-
-
-def call_llm(messages, tools=None, model="gpt-4o-mini", base_url="", api_key=""):
-    import requests
-    url = base_url.rstrip("/") + "/chat/completions"
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
-    body = {"model": model, "messages": messages, "max_completion_tokens": 2000}
-    if tools:
-        body["tools"] = tools
-        body["tool_choice"] = "auto"
-    resp = requests.post(url, json=body, headers=headers, timeout=60)
-    resp.raise_for_status()
-    return resp.json()
-
-
-def handle_run_skills_call(args, databus, session_id, dialogue_id):
-    """拦截 run_skills tool_call → 写入 DataBus → 触发框架调度。"""
-    skills = args.get("skills", [])
-    reason = args.get("reason", "")
-
-    # ① 写入每个 skill 的任务指令和技能列表
-    for spec in skills:
-        name = spec["name"]
-        prompt = spec.get("prompt", "")
-        load_list = spec.get("load_skills", [])
-        if prompt:
-            databus.put(f"skill_prompt:{name}", prompt)
-        if load_list:
-            databus.put(f"load_skills:{name}", json.dumps(load_list))
-
-    # ② 构造 next_skills（对齐 SkillSpec 格式）
-    next_skills = []
-    for spec in skills:
-        entry = {"name": spec["name"]}
-        if spec.get("exec_skill_key"):
-            entry["exec_skill_key"] = spec["exec_skill_key"]
-        if spec.get("force"):
-            entry["force"] = True
-        next_skills.append(entry)
-
-    # ③ 写入 next_skills → 框架接管
-    databus.put("next_skills", json.dumps(next_skills))
-
-    return json.dumps({
-        "status": "dispatched",
-        "skills": [s["name"] for s in skills],
-        "message": f"已调度 {len(skills)} 个 skill，等待执行结果..."
-    }, ensure_ascii=False)
-
-
-def collect_skill_results(databus, launched_skills):
-    """从 DataBus 读取已完成的 skill 结果。"""
-    results = []
-    for name in launched_skills:
-        raw = databus.get(f"skill_result:{name}")
-        if raw:
-            try:
-                results.append({"skill": name, "result": json.loads(raw)})
-            except json.JSONDecodeError:
-                results.append({"skill": name, "result": raw})
-    return results
-
-
 def execute():
-    user_input = os.environ.get("AF_INPUT", "")
-    dialogue_id = os.environ.get("AF_DIALOGUE_ID", "")
-    session_id = os.environ.get("AF_SESSION_ID", "")
-
-    # 框架注入的 skill 完成信息
-    completed_skill = os.environ.get("completed_skill_name", "")  # 从 node inputs
-    skill_success = os.environ.get("skill_success", "")            # 从 node inputs
-
-    frontmatter, system_prompt = parse_agent_md(AGENT_MD_PATH)
-    model_cfg = frontmatter.get("model", {})
-
-    api_key = model_cfg.get("api_key", "")
-    if not api_key or "${" in api_key:
-        print(json.dumps({"error": "API key not resolved"}, ensure_ascii=False))
-        sys.exit(1)
-
+    # ① 初始化
+    _load_dotenv(); _init_skills()
+    frontmatter, agent_md_body = parse_agent_md(AGENT_MD_PATH)
+    llm_cfg = resolve_llm_config(frontmatter.get("model", {}), node_type="coordinator")
     databus = DataBusClient()
 
-    # 读取跨轮对话历史
-    history = databus.read_messages() if databus.is_connected() else []
-
-    messages = [{"role": "system", "content": system_prompt or
-                 "你是一个任务编排 AI。分析用户需求，委派 skill 执行子任务。"}]
+    # ② 状态恢复
+    history = recorder.read_session_messages() if recorder.is_connected else []
+    messages = [{"role": "system", "content": COORDINATOR_PROTOCOL + agent_md_body}]
     messages.extend(history)
 
-    # 构造本轮输入
-    if completed_skill:
-        # 后续触发：skill 完成通知
-        skill_results = collect_skill_results(databus, [completed_skill])
-        messages.append({"role": "user", "content":
-            f"Skill '{completed_skill}' 已完成 (success={skill_success})。\n"
-            f"结果: {json.dumps(skill_results, ensure_ascii=False, indent=2)}\n"
-            f"请评估结果，决定是否需要再委派 skill 或直接回复用户。"})
-    else:
-        # 首次触发：用户原始请求
-        messages.append({"role": "user", "content": user_input})
+    # ③ 保护检查
+    if current_round > max_iterations:       # Max iterations guard
+        output = {"response": "...", "status": "max_iterations_reached"}
+    messages, _ = compress_messages(messages, budget)  # Context compression
+    messages.append(build_round_reminder(...))          # Budget awareness
+    if databus.get_global(f"interrupt:{did}") == "true":  # Interrupt check
+        output = {"response": "对话已被取消", "status": "interrupted"}
 
-    # 单轮 LLM 决策
-    tools = [RUN_SKILLS_TOOL]  # 只绑 run_skills
-
-    raw = call_llm(
-        messages, tools=tools,
-        model=model_cfg.get("name", "gpt-4o-mini"),
-        base_url=model_cfg.get("base_url", ""),
-        api_key=model_cfg.get("api_key", ""))
-
+    # ④ 单轮 LLM 决策
+    raw = call_llm(messages, tools=[RUN_SKILLS_TOOL], ...)
     choice = raw.get("choices", [{}])[0]
-    msg = choice.get("message", {})
-    tool_calls = msg.get("tool_calls")
+    tool_calls = choice.get("message", {}).get("tool_calls")
 
     if tool_calls:
-        messages.append(msg)
-        for tc in tool_calls:
-            func = tc.get("function", {})
-            name = func.get("name", "")
-            args = json.loads(func.get("arguments", "{}"))
-
-            if name == "run_skills":
-                result_str = handle_run_skills_call(args, databus, session_id, dialogue_id)
-            else:
-                result_str = json.dumps({"error": f"Unknown tool: {name}"})
-
-            messages.append({
-                "role": "tool",
-                "tool_call_id": tc.get("id", name),
-                "content": result_str,
-            })
-
-        # 持久化对话历史（coordinator 交出控制权，等框架 re-trigger）
-        messages_to_save = messages[1:]
-        if databus.is_connected():
-            databus.write_messages(messages_to_save)
-
-        # 输出 coordinator_status（不写 response，避免覆盖 skill 结果）
-        print(json.dumps({"coordinator_status": "skills_dispatched"},
-                         ensure_ascii=False))
+        handle_run_skills_call(args, databus, session_id, dialogue_id)
+        # 交出控制权，等框架 re-trigger
+        print(json.dumps({"coordinator_status": "skills_dispatched"}))
     else:
-        # LLM 无 tool_call → 输出最终响应
-        response_text = msg.get("content", "")
-        print(json.dumps({"response": response_text}, ensure_ascii=False))
+        print(json.dumps({"response": response_text}))
 
-        messages_to_save = messages[1:]
-        if databus.is_connected():
-            databus.write_messages(messages_to_save)
-
-
-if __name__ == "__main__":
-    execute()
+    # ⑤ 持久化
+    recorder.write_session_messages(messages[1:])
 ```
 
 ### 6.5 Coordinator Workflow JSON
@@ -931,231 +785,94 @@ Skill Executor 的所有输入通过 **框架环境变量** + **DataBus** 获取
 
 ### 7.4 Skill Executor 主循环实现
 
+Skill Executor 是一个 **LLM while-loop**，每次迭代执行一次 LLM 调用 + 工具执行，直到完成或超时/超轮次。
+
+```mermaid
+flowchart TD
+    subgraph init["① 初始化"]
+        A1[读 AF_EXEC_SKILL_KEY]
+        A2[读 DataBus dispatch manifest]
+        A3[skill_name / prompt / load_skills]
+        A4[加载 SKILL.md → system prompt]
+        A5[绑定领域工具集]
+    end
+
+    subgraph loop["② LLM while-loop"]
+        B1[超时检查 node_timeout]
+        B2[中断检查 interrupt flag]
+        B3[上下文压缩 compress_messages]
+        B4[预算提醒 round_reminder]
+        B5[call_llm tools=领域工具集]
+        B6{LLM 产出?}
+        B7[执行工具 → 结果回填 → 产物提取]
+        B8[死循环检测 tool_call_loop]
+    end
+
+    subgraph exit["③ 退出"]
+        C1["completed - 正常完成"]
+        C2["max_rounds_reached - 达上限"]
+        C3["node_timeout - 超时"]
+        C4["tool_call_loop_detected"]
+        C5["llm_error - API 错误"]
+        C6["interrupted - 用户取消"]
+    end
+
+    init --> loop
+    B6 -->|tool_call| B7 --> B8 -->|正常| B1
+    B8 -->|死循环| C4
+    B6 -->|无 tool_call| C1
+    B1 -->|超时| C3
+    B2 -->|中断| C6
+    B5 -->|API 错误| C5
+    B1 -->|未超时| B2 -->|未中断| B3 --> B4 --> B5
+```
+
+**核心代码结构**（`skill_executor.py` 的 `execute()` 函数骨架）：
+
 ```python
-#!/usr/bin/env python3
-"""
-Universal Skill Executor — 通用的参数化 skill task node。
-
-被 coordinator 通过 run_skills 派发，接收：
-  - 任务指令 (skill_prompt): 告诉这个 skill "做什么"
-  - 技能文档 (load_skills): 告诉这个 skill "怎么做"
-  - 结构化输入 (exec_skill_key): 传递大型/结构化数据
-
-执行 LLM + 技能知识 + 领域工具的 while-loop，输出结果。
-"""
-
-import json, os, sys, yaml
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from databus_client import DataBusClient
-
-NODES_DIR = os.path.dirname(os.path.abspath(__file__))
-AGENT_PACKAGE_DIR = os.path.dirname(NODES_DIR)
-AGENT_MD_PATH = os.path.join(AGENT_PACKAGE_DIR, "agent.md")
-SKILLS_BASE = os.path.join(AGENT_PACKAGE_DIR, "harness", "skills")
-
-# 加载领域工具集
-sys.path.insert(0, os.path.join(AGENT_PACKAGE_DIR, "harness"))
-import tools as tool_registry
-
-
-def get_env(key, default=""):
-    return os.environ.get(key, default)
-
-
-def parse_agent_md(path):
-    if not os.path.isfile(path):
-        return {}, ""
-    with open(path, encoding="utf-8") as f:
-        raw = f.read()
-    parts = raw.split("---", 2)
-    if len(parts) < 3:
-        return {}, raw.strip()
-    try:
-        frontmatter = yaml.safe_load(parts[1]) or {}
-    except Exception:
-        frontmatter = {}
-    return frontmatter, parts[2].strip()
-
-
-# ── SKILL.md 加载 ─────────────────────────────────────────
-
-def load_skill_md(skill_name):
-    """读取 harness/skills/{skill_name}/SKILL.md"""
-    path = os.path.join(SKILLS_BASE, skill_name, "SKILL.md")
-    if not os.path.isfile(path):
-        return None
-    with open(path, encoding="utf-8") as f:
-        return f.read()
-
-
-def load_skills_from_list(skill_names):
-    """批量加载 SKILL.md，返回 {name: content}"""
-    result = {}
-    for name in skill_names:
-        content = load_skill_md(name)
-        result[name] = content if content else f"[Skill '{name}' 文档未找到]"
-    return result
-
-
-# ── 结构化输入解析 ────────────────────────────────────────
-
-def resolve_skill_input(databus, exec_skill_key):
-    """从 DataBus 读取 exec_skill_key 指向的结构化输入。"""
-    if not exec_skill_key or not databus.is_connected():
-        return {}
-    raw = databus.get(exec_skill_key)
-    if not raw:
-        return {}
-    try:
-        return json.loads(raw) if isinstance(raw, str) else raw
-    except json.JSONDecodeError:
-        return {"raw_input": raw}
-
-
-# ── LLM 调用 ─────────────────────────────────────────────
-
-def call_llm(messages, tools=None, model="gpt-4o-mini", base_url="", api_key=""):
-    import requests
-    url = base_url.rstrip("/") + "/chat/completions"
-    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"}
-    body = {"model": model, "messages": messages, "max_completion_tokens": 2000}
-    if tools:
-        body["tools"] = tools
-        body["tool_choice"] = "auto"
-    resp = requests.post(url, json=body, headers=headers, timeout=60)
-    resp.raise_for_status()
-    return resp.json()
-
-
-# ── 主执行逻辑 ────────────────────────────────────────────
-
 def execute():
-    # ① 读取框架注入的环境变量
-    user_input     = get_env("AF_INPUT", "")
-    dialogue_id    = get_env("AF_DIALOGUE_ID", "")
-    session_id     = get_env("AF_SESSION_ID", "")
-    exec_skill_key = get_env("exec_skill_key", "")
+    # ① 初始化
+    exec_skill_key = os.environ.get("AF_EXEC_SKILL_KEY", "")
+    manifest = json.loads(databus.get_global(exec_skill_key))
+    skill_name = manifest["skill_name"]
+    skill_prompt = manifest["prompt"]
+    load_skill_names = [skill_name] + manifest.get("load_skills", [])
 
-    databus = DataBusClient()
+    system_prompt = "\n\n---\n\n".join(
+        f"## Skill: {name}\n\n{load_skill_md(name)}" for name in load_skill_names
+    )
+    tool_registry = _LocalToolRegistry(skill_name)
+    llm_cfg = resolve_llm_config(agent_md_model, node_type="skill")
 
-    # ② 推断当前 skill_name
-    #    Phase 1: 从 DataBus 已写入的 skill_prompt:* key 推断
-    #    Phase 2: 框架直接注入 AF_SKILL_NAME
-    skill_name = get_env("AF_SKILL_NAME", "")
-    if not skill_name:
-        # 兜底：从 exec_skill_key 或 user_input 推断
-        skill_name = get_env("AF_SKILL_NAME_FALLBACK", "generic-skill")
-
-    # ③ 从 DataBus 读取 coordinator 指派的任务指令
-    skill_prompt = ""
-    if databus.is_connected():
-        raw = databus.get(f"skill_prompt:{skill_name}")
-        if raw:
-            skill_prompt = raw
-
-    # ④ 从 DataBus 读取应加载的技能列表
-    load_skill_names = []
-    if databus.is_connected():
-        raw = databus.get(f"load_skills:{skill_name}")
-        if raw:
-            try:
-                load_skill_names = json.loads(raw)
-            except json.JSONDecodeError:
-                pass
-
-    # 确保自身技能文档被加载
-    if skill_name and skill_name not in load_skill_names:
-        load_skill_names.insert(0, skill_name)
-
-    # ⑤ 解析结构化输入
-    skill_input = resolve_skill_input(databus, exec_skill_key)
-
-    # ⑥ 确定最终的任务指令
-    task_instruction = skill_prompt \
-                    or skill_input.get("prompt", "") \
-                    or user_input
-
-    # ⑦ 加载技能文档 → 构造 system prompt
-    skill_docs = load_skills_from_list(load_skill_names)
-    system_parts = []
-    for name, content in skill_docs.items():
-        system_parts.append(f"## Skill: {name}\n\n{content}")
-    system_prompt = "\n\n---\n\n".join(system_parts) if system_parts else \
-                    "你是一个任务执行 agent。完成指派给你的任务。"
-
-    # ⑧ 构造 LLM 消息
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user",   "content": task_instruction},
-    ]
-    if skill_input.get("context"):
-        messages.append({"role": "user", "content":
-            f"附加上下文:\n{json.dumps(skill_input['context'], ensure_ascii=False)}"})
-
-    # ⑨ 获取领域工具集（不含 run_skills）
-    available_tools = tool_registry.get_tools()
-
-    # ⑩ 读取模型配置
-    frontmatter, _ = parse_agent_md(AGENT_MD_PATH)
-    model_cfg = frontmatter.get("model", {})
-    api_key = model_cfg.get("api_key", "")
-    if not api_key or "${" in api_key:
-        print(json.dumps({"error": "API key not resolved"}, ensure_ascii=False))
-        sys.exit(1)
-
-    # ⑪ LLM while-loop 执行任务
-    max_rounds = int(get_env("AF_MAX_SKILL_TASK_ITERATIONS", "8"))
+    # ② LLM while-loop
     for round_i in range(max_rounds):
-        raw = call_llm(
-            messages, tools=available_tools,
-            model=model_cfg.get("name", "gpt-4o-mini"),
-            base_url=model_cfg.get("base_url", ""),
-            api_key=model_cfg.get("api_key", ""))
+        # 保护检查
+        if elapsed > node_timeout_sec: break  # node_timeout
+        if databus.get_global(f"interrupt:{dialogue_id}") == "true": break  # interrupt
+        messages, _ = compress_messages(messages, budget)  # context compression
+        messages.append(build_round_reminder(round_i, max_rounds, elapsed, ...))  # budget
 
+        raw = call_llm(messages, tools=available_tools, ...)
         choice = raw.get("choices", [{}])[0]
-        msg = choice.get("message", {})
-        tool_calls = msg.get("tool_calls")
+        tool_calls = choice.get("message", {}).get("tool_calls")
 
         if tool_calls:
-            messages.append(msg)
+            # 死循环检测
+            if _detect_tool_call_loop(history, signatures, threshold=3):
+                output = {"status": "tool_call_loop_detected", ...}
+                break
+            # 执行工具
             for tc in tool_calls:
-                func = tc.get("function", {})
-                name = func.get("name", "")
-                try:
-                    args = json.loads(func.get("arguments", "{}"))
-                except json.JSONDecodeError:
-                    args = {}
                 result = tool_registry.execute(name, args)
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", name),
-                    "content": result,
-                })
+                generated_artifacts.extend(extract_artifact_paths(result))
+                messages.append({"role": "tool", "content": result})
         else:
-            # 任务完成 → 输出结果
-            response_text = msg.get("content", "")
-            output = {
-                "skill_result": response_text,
-                "status": "completed",
-                "skill_name": skill_name,
-                "rounds_used": round_i + 1,
-            }
-            print(json.dumps(output, ensure_ascii=False))
-            return
+            output = {"status": "completed", "skill_result": content, ...}
+            break
 
-    # 超过最大轮次
-    output = {
-        "skill_result": messages[-1].get("content", "") if messages else "",
-        "status": "max_rounds_reached",
-        "skill_name": skill_name,
-        "rounds_used": max_rounds,
-    }
-    print(json.dumps(output, ensure_ascii=False))
-
-
-if __name__ == "__main__":
-    execute()
+    # ③ 输出结果
+    databus.put("skill_result:skill-runner", json.dumps(output))
+    print(json.dumps(output))
 ```
 
 ### 7.5 Skill Workflow JSON
@@ -1196,42 +913,439 @@ if __name__ == "__main__":
 
 ---
 
-## 8. Agent Package 配置
+## 8. Agent Task Loop 外循环 与 Agent Function Calling 内循环
 
-### 8.1 agent.json
+### 8.1 双循环架构总览
+
+Harness Agent 的运行时由 **两个嵌套的循环** 构成：
+
+```
+外循环 (Agent Task Loop) — Coordinator 事件驱动
+  ┌────────────────────────────────────────────────────────────┐
+  │  Coordinator 被框架触发（首次 / skill 完成 re-trigger）     │
+  │  → ① 恢复重入状态 (DataBus ctx namespace)                  │
+  │  → ② 上下文压缩 (compress_messages)                        │
+  │  → ③ 预算提醒注入 (round_reminder)                         │
+  │  → ④ 中断标志轮询                                         │
+  │  → ⑤ 单轮 LLM 决策 (tools: [run_skills])                  │
+  │  │                                                         │
+  │  ├─ run_skills → 写 dispatch manifest → 写 next_skills    │
+  │  │   → 框架启动内循环 × N                                  │
+  │  │   → 持久化状态 → 交出控制权（等 re-trigger）            │
+  │  │                                                         │
+  │  └─ 无 tool_call → 输出最终 response → 对话结束            │
+  └──────────────┬─────────────────────────────────────────────┘
+                 │ skill 完成 → 框架 re-trigger（pending_skills_count=0）
+                 ▼
+  ┌────────────────────────────────────────────────────────────┐
+  │  内循环 (Agent Function Calling) — LLM while-loop          │
+  │  Skill Executor 被框架启动（实例池分配）                     │
+  │  → 读 dispatch manifest (exec_skill_key)                    │
+  │  → 加载 SKILL.md → 绑定领域工具集                           │
+  │  → 循环直到以下任一条件满足:                                 │
+  │    ├─ 上下文压缩 (compress_messages)                        │
+  │    ├─ 预算提醒注入 (round_reminder)                         │
+  │    ├─ 中断标志轮询                                         │
+  │    ├─ LLM 调用                                              │
+  │    ├─ 工具执行 → 结果回填 → 产物提取                        │
+  │    ├─ 死循环检测 (tool_call_loop_detection)                 │
+  │    ├─ 节点超时 (node_timeout)                               │
+  │    └─ 最大轮次 (max_rounds) → 强制退出                      │
+  │  → 输出 skill_result → 框架通知 coordinator                  │
+  └────────────────────────────────────────────────────────────┘
+```
+
+**关键区别**：
+
+| 维度 | 外循环 (Task Loop) | 内循环 (Function Calling) |
+|------|-------------------|--------------------------|
+| **驱动方式** | 框架事件驱动（re-trigger） | LLM while-loop（自驱动） |
+| **执行节点** | `coordinator_decide.py` | `skill_executor.py` |
+| **每轮决策** | 单次 LLM 调用 | 多次 LLM 调用（直到完成） |
+| **绑定工具** | `[run_skills]` 仅委派 | 领域工具集（bash, read_file, ...） |
+| **状态持久化** | DataBus ctx 命名空间（跨 trigger） | 无（单次执行，结果即回传） |
+| **循环终止** | skill 完成后 framework re-trigger | LLM 自主决定 / 超时 / 最大轮次 |
+| **并发度** | 单实例（coordinator 串行） | 多实例并行（instance_pool_size=5） |
+
+### 8.2 外循环：Coordinator Task Loop（事件驱动）
+
+#### 8.2.1 触发时机
+
+Coordinator 的每次执行由框架的 `handle_task_data_exchange` 触发：
+
+| 触发场景 | 条件 | 说明 |
+|---------|------|------|
+| **首次触发** | `completed_skill == ""` 或 `completed_skill == "dummy_pre_skill"` | 用户新请求，无前置 skill 结果需要评估 |
+| **Re-trigger** | `completed_skill` 为真实 skill 名称 | 某个 skill 执行完成，coordinator 需要评估结果 |
+
+#### 8.2.2 重入状态恢复
+
+Coordinator 是事件驱动的——每次被框架触发执行一次 LLM 决策，然后交出控制权。**重入时必须恢复完整状态**：
+
+```
+状态持久化到 DataBus ctx 命名空间（session 级，跨 dialogue 持久化）:
+
+  /session/{sid}/ctx/session_messages    ← 完整对话历史 (JSON array)
+  /session/{sid}/ctx/_coordinator_round  ← 当前轮次计数器
+
+恢复流程:
+  ① 读 session_messages → 恢复对话历史
+  ② 读 _coordinator_round → 确定当前轮次
+  ③ 读框架注入的 completed_skill_name / skill_success / skill_result
+  ④ 构造本轮输入（skill 完成通知 / 用户原始请求）
+```
+
+#### 8.2.3 单轮执行流程
+
+每次外循环迭代执行以下步骤：
+
+```
+1. 初始化
+   ├─ 加载 .env / AgentConfig
+   ├─ 解析 agent.md（frontmatter + body）
+   └─ 解析 AF_INPUT（stream flag + messages）
+
+2. 状态恢复
+   ├─ 读 DataBus ctx 恢复对话历史
+   ├─ 读 _coordinator_round 确定轮次
+   └─ 读框架注入的 completed_skill_* 变量
+
+3. Max iterations 保护
+   └─ current_round > max_iterations → 强制输出并退出
+
+4. 上下文压缩
+   └─ compress_messages(messages, budget) → 压缩到 budget 内
+
+5. 预算提醒注入
+   └─ build_round_reminder(round_i, max_rounds, elapsed, ...)
+
+6. 中断标志轮询
+   └─ databus.get_global("interrupt:{did}") == "true" → 中断退出
+
+7. 单次 LLM 调用
+   ├─ tools: [run_skills]
+   └─ 支持流式输出 (stream flag)
+
+8. LLM 结果处理
+   ├─ 检测 LLM error / empty response → fallback 输出
+   ├─ 有 tool_call → run_skills → dispatch manifest → next_skills
+   └─ 无 tool_call → 最终 response → 输出到 stdout
+
+9. 状态持久化
+   └─ 写回 session_messages + _coordinator_round 到 DataBus
+
+10. 交出控制权
+    └─ 输出 JSON 到 stdout → workflow 完成 → 框架接管
+```
+
+#### 8.2.4 Max Iterations 保护
+
+```python
+# coordinator_decide.py 中
+max_iterations = AgentConfig.coordinator_max_iterations()  # 默认 10
+
+# 轮次计数器
+current_round = _get_coordinator_round()  # 从 DataBus 读取
+
+# 首次触发重置计数器，re-trigger 递增
+first_trigger = not (completed_skill and completed_skill != "dummy_pre_skill")
+if first_trigger:
+    current_round = 1
+else:
+    current_round = int(databus.get("_coordinator_round")) + 1
+
+# 前置保护：超过 max_iterations 直接输出
+if current_round > max_iterations:
+    output = {"response": llm_error_response(...), "status": "max_iterations_reached"}
+    print(json.dumps(output))
+
+# 后置保护：最后一轮即使 LLM 要调工具也强制输出
+if current_round >= max_iterations and tool_calls:
+    response_text = msg.get("content", "") or "已达协调轮次上限"
+    output = {"response": response_text}
+    print(json.dumps(output))
+```
+
+**设计要点**：
+- **前置保护**（行 549-560）：在调用 LLM 前检查，避免浪费一次 LLM 调用
+- **后置保护**（行 805-830）：在 LLM 产出 tool_call 时检查，强制输出而非继续调度
+
+### 8.3 内循环：Skill Function Calling Loop（LLM while-loop）
+
+#### 8.3.1 循环结构
+
+Skill Executor 被框架启动后，进入 **LLM while-loop**，每次迭代包括：
+
+```
+for round_i in range(max_rounds):
+    │
+    ├─ 超时检查: elapsed > node_timeout_sec → node_timeout 退出
+    ├─ 中断检查: interrupt flag → interrupted 退出
+    ├─ 上下文压缩: compress_messages(messages, budget)
+    ├─ 预算提醒: build_round_reminder(round_i, max_rounds, elapsed, ...)
+    ├─ LLM 调用: call_llm(messages, tools=available_tools)
+    ├─ 结果处理:
+    │   ├─ LLM error → llm_error 退出
+    │   ├─ Empty response → llm_error 退出
+    │   ├─ Invalid tool calls → recovery 重试
+    │   ├─ Tool calls → 执行工具 → 产物提取 → 回填 messages
+    │   │   ├─ 死循环检测: _detect_tool_call_loop → loop_detected 退出
+    │   │   └─ 正常执行 → continue
+    │   └─ No tool calls → completed 退出
+    │
+    └─ 到达 max_rounds → max_rounds_reached 退出
+```
+
+#### 8.3.2 退出状态
+
+| 退出状态 | 触发条件 | 说明 |
+|---------|---------|------|
+| `completed` | LLM 无 tool_call | 正常完成，LLM 给出了最终结果 |
+| `max_rounds_reached` | 达到 `AF_SKILL_MAX_ITERATIONS`（默认 24） | LLM 持续调工具未收敛 |
+| `node_timeout` | 达到 `AF_NODE_EXECUTION_TIMEOUT`（默认 240s） | 节点级别硬超时保护 |
+| `llm_error` | LLM API 返回错误 | 网络/API 问题 |
+| `tool_call_loop_detected` | 连续 3 轮相同 tool_call 签名 | LLM 陷入死循环 |
+| `tool_call_error` | 工具参数截断超出恢复次数 | 工具调用格式错误恢复耗尽 |
+| `interrupted` | 收到中断 flag | 用户取消对话 |
+
+#### 8.3.3 工具调用死循环检测
+
+```python
+# skill_executor.py 中的检测逻辑
+# 连续 3 轮出现完全相同的 tool_call 签名 → 视为死循环
+tool_call_history: list[list[tuple[str, str]]] = []
+
+for each round:
+    new_signatures = [(name, json.dumps(args, sort_keys=True))
+                      for tc in tool_calls]
+    if _detect_tool_call_loop(tool_call_history, new_signatures, threshold=3):
+        # 强制走完成分支
+        output = {"status": "tool_call_loop_detected", ...}
+        return
+    tool_call_history.append(new_signatures)
+```
+
+**设计原则**：违反不变量 I-4（幂等性）。同一规则重复应用不应产生重复效果——重复 tool_call 即违反。
+
+#### 8.3.4 工具调用截断恢复
+
+当 LLM 产出的工具参数在参数完成前被截断（`finish_reason=length` 导致 JSON 不完整），内循环会尝试恢复：
+
+```python
+if not valid_tool_calls:
+    if recovery_attempts < max_recovery_attempts:
+        recovery_attempts += 1
+        completion_budget = min(completion_budget * 2, 16384)  # 加倍预算
+        messages.append({"role": "user", "content": SKILL_RECOVERY_PROMPT})
+        continue  # 重试本轮
+    else:
+        output = {"status": "tool_call_error", ...}
+```
+
+### 8.4 共享机制
+
+以下机制在外循环和内循环中**共用同一套实现**：
+
+#### 8.4.1 上下文压缩
+
+```
+触发时机: 每轮 LLM 调用前
+位置:     llm_call.py:compress_messages()
+设计文档: docs/design/features/context-compression.md
+
+压缩序列（按优先级从低到高，每步完成后检查 budget）:
+  P5 丢弃 reminder           ← 本轮会重新生成
+  P4 折叠 tool_result 到文件  ← 核心：保留内容但释放上下文窗口
+  P3 折叠 tool_call 到文件    ← 保留最近 N 轮调用链
+  P2 硬压缩：LLM 语义摘要     ← 可选，默认关闭
+  P2 降级：丢弃 assistant     ← 保留最近 2 条
+  P1 丢弃 user                ← 保留最近 2 条
+  P0 极端兜底                 ← 截断到仅剩 system + 最近的 user
+
+保护轮次（永不压缩）:
+  R0 system 消息
+  R1 第一轮 user + assistant（用户原始意图）
+  R2 最近 3 轮完整对话（保持局部连贯性）
+```
+
+配置项：
+
+| 环境变量 | 默认值 | 说明 |
+|---------|--------|------|
+| `AF_MODEL_MAX_TOKENS` | 131072 | 模型最大 token 数 |
+| `AF_COMPACTION_THRESHOLD` | 0.8 | 触发压缩的阈值比例 |
+| `AF_PROTECT_LAST_ROUNDS` | 3 | 保护的最远轮次数 |
+| `AF_FOLD_DIR` | `/tmp/agentflow/folded` | 折叠文件的存储目录 |
+| `AF_HARD_COMPRESSION_ENABLED` | `false` | 是否启用 LLM 语义摘要 |
+| `AF_HARD_COMPRESSION_MODEL` | `""` | 摘要使用的模型（为空则复用主模型） |
+
+#### 8.4.2 预算感知提醒
+
+```
+触发时机: 每轮 LLM 调用前（always=True 模式）
+位置:     round_reminder.py:build_round_reminder()
+设计文档: 本文件顶部注释
+
+两种模式:
+  - Always 模式（skill_executor + coordinator 均使用）:
+    每轮注入完整预算遥测，让 LLM 从第 1 轮就感知剩余预算
+    格式: <system-reminder>剩余 7/10 轮，已用 45/240s (19%)，...closing_hint</system-reminder>
+
+  - Threshold 模式（向后兼容，当前未使用）:
+    仅在最后 3 轮或超时 70% 时触发
+
+升档梯度（always 模式）:
+  <50% rounds AND <50% time: "可继续探索工具以完成任务，但注意收敛预算"
+  >=50% either:              "倾向收敛，避免发起非必要的新工具调用"
+  >=70% either OR last 3:    "本轮必须收敛，给出已有结论或当前执行结果"
+```
+
+**设计原则**：`build_round_reminder` 是**软提示层**，与硬约束（`node_timeout` break + `tool_call_loop` detection）互为兜底。软提示先尝试引导 LLM 收敛，硬约束在软提示失效时兜底。
+
+#### 8.4.3 中断标志轮询
+
+```
+触发时机: 每轮 LLM 调用前（外循环 + 内循环）
+位置:     coordinator_decide.py:654-677
+          skill_executor.py:719-748
+
+流程:
+  daemon 收到中断请求 → 写入 global sys flag:
+    /session/{sid}/sys/interrupt:{did} = "true"
+  → 节点轮询该 flag → 命中则写 interrupted 结果 → 正常断流
+
+设计原则:
+  - 轮询失败（DataBus 抖动）不阻断主流程（I-INT-5）
+  - 中断结果走正常 stdout JSON 通道，Bridge 收到后正常断流
+  - 不同于 workflow 级 kill：中断允许节点输出"已取消"响应，kill 直接终止进程
+```
+
+#### 8.4.4 Thinking 标签提取（仅外循环）
+
+```
+外循环 (coordinator) 在最终响应时解析 thinking 标签:
+  LLM 输出格式:
+    ＜thinking＞
+    推理过程...
+    ＜/thinking＞
+    ＜response＞
+    给用户的最终回复
+    ＜/response＞
+
+  → 推理过程写入 trace 记录（不展示给用户）
+  → 最终回复作为 response 输出
+
+内循环 (skill) 不解析 thinking 标签——skill 的输出是结构化结果，
+coordinator 负责格式化。
+```
+
+#### 8.4.5 可观测性事件
+
+双循环均通过 `emit_event()` 发射全链路追踪事件：
+
+| 事件 | 发射方 | 说明 |
+|------|--------|------|
+| `coordinator.trigger` | 外循环 | 触发类型（first / skill_completion） |
+| `coordinator.llm_call_start` | 外循环 | LLM 调用开始（消息数、模型） |
+| `coordinator.llm_result` | 外循环 | LLM 结果（finish_reason、tool_call 数量） |
+| `coordinator.max_iterations` | 外循环 | 达到最大迭代次数 |
+| `coordinator.interrupted` | 外循环 | 被中断 |
+| `coordinator.skills_dispatched` | 外循环 | 已调度 skill 列表 |
+| `coordinator.final_response` | 外循环 | 最终输出 |
+
+| 事件 | 发射方 | 说明 |
+|------|--------|------|
+| `skill_executor.trigger` | 内循环 | 触发信息（skill_name、load_skills） |
+| `skill_executor.llm_round_start` | 内循环 | 每轮 LLM 开始 |
+| `skill_executor.llm_error` | 内循环 | LLM 调用失败 |
+| `skill_executor.tool_call` | 内循环 | 工具调用（名称、数量） |
+| `skill_executor.tool_call_loop_detected` | 内循环 | 死循环检测命中 |
+| `skill_executor.node_timeout` | 内循环 | 节点超时 |
+| `skill_executor.max_rounds_reached` | 内循环 | 达到最大轮次 |
+| `skill_executor.completed` | 内循环 | 正常/异常完成 |
+
+### 8.5 双循环协作流程
+
+```
+外循环 第1轮 (coordinator)
+  │ LLM: run_skills({skills: [{name: "code-review", prompt: "..."}]})
+  │
+  ├─ dispatch manifest 写入 DataBus
+  ├─ next_skills → 框架启动内循环 × N
+  └─ 交出控制权
+       │
+       ▼
+内循环 第1~N轮 (skill_executor × N, 并行)
+  │ LLM while-loop 执行具体任务
+  │ → 工具调用 → 结果回填 → 完成
+  │
+  └─ 输出 skill_result → 框架通知 coordinator
+       │
+       ▼
+外循环 第2轮 (coordinator re-trigger)
+  │ LLM: 评估所有 skill 结果
+  │
+  ├─ 结果满意 → 无 tool_call → 输出最终 response → 对话结束
+  └─ 需要补充 → run_skills 再次委派 → 重复
+```
+
+**与框架的交互边界**：
+
+```
+外循环                      框架                       内循环
+  │                        │                          │
+  ├─ write next_skills ───→│  parse_next_skills()     │
+  │                        │  launch_skill_task() × N │
+  │                        │  ├─ 分配执行实例池 ─────→│
+  │                        │  │                       ├─ 读 dispatch manifest
+  │                        │  │                       ├─ while-loop 执行
+  │                        │  │                       └─ 输出 skill_result
+  │                        │  │                       │
+  │                        │  └─ pending_skills_count │
+  │                        │     → 0 → re-trigger     │
+  │←─ completed_skill_name ─│                        │
+  │  skill_success          │                          │
+```
+
+---
+
+## 9. Agent Package 配置
+
+### 9.1 agent.json（v3+ 实际配置）
 
 ```json
 {
-  "name": "HarnessAgentV2",
-  "version": "2.0.0",
-  "description": "Coordinator-driven agent loop with parameterized skill tasks",
-  "session_pool_size": 1,
+  "name": "GeneralHarnessAgent",
+  "version": "3.0.0",
+  "description": "通用 Harness Agent — dispatcher → dummy_pre_skill hook → coordinator loop",
+  "session_pool_size": 3,
   "max_workflows": 10,
   "max_concurrent_workflows": 5,
-  "data_bus_capacity_mb": 5,
+  "data_bus_capacity_mb": 50,
   "tasks": [
     {
       "id": 0,
       "type": "dispatcher",
-      "description": "Passthrough — forwards to coordinator-skill",
-      "next_skills": ["coordinator-skill"],
+      "description": "Routes to dummy_pre_skill hook via next_skills",
+      "next_skills": ["dummy_pre_skill"],
       "max_concurrent_skills": 5,
       "workflow_pool_size": 1
     },
     {
       "id": 1,
       "type": "coordinator",
-      "description": "Event-driven coordinator — evaluates results, dispatches skills",
-      "workflow_file": "task_executor_workflow.json",
+      "description": "LLM decision loop — dispatches skills, evaluates results, outputs final response",
+      "workflow_file": "coordinator_workflow.json",
       "workflow_pool_size": 1
     },
     {
       "id": 2,
       "type": "skill",
-      "description": "Coordinator skill — LLM decision loop (event-driven)",
-      "workflow_file": "coordinator_skill_workflow.json",
+      "description": "Pre-processing hook — passthrough before coordinator",
+      "workflow_file": "dummy_pre_skill_workflow.json",
       "skill": {
-        "name": "coordinator-skill",
+        "name": "dummy_pre_skill",
+        "config_dir": "harness/skills/dummy_pre_skill",
         "instance_pool_size": 1
       },
       "workflow_pool_size": 1
@@ -1239,10 +1353,11 @@ if __name__ == "__main__":
     {
       "id": 3,
       "type": "skill",
-      "description": "Generic parameterized skill executor",
+      "description": "Generic skill runner — serves ALL skill names via exec_skill_key routing",
       "workflow_file": "skill_workflow.json",
       "skill": {
-        "name": "generic-skill",
+        "name": "skill-runner",
+        "config_dir": "harness/skills/skill-runner",
         "instance_pool_size": 5
       },
       "workflow_pool_size": 5
@@ -1251,25 +1366,24 @@ if __name__ == "__main__":
 }
 ```
 
-**关键变化**：
+**关键变化（vs v2 设计）**：
 
-| 字段 | 旧值 | 新值 | 说明 |
-|------|------|------|------|
-| `tasks[0].next_skills` | `["harness_agent_run"]` | `["coordinator-skill"]` | dispatcher 不直接启动业务 skill，而是启动 coordinator-skill |
-| `tasks[0].max_concurrent_skills` | N/A | `5` | dispatcher 可并行调度 5 个 skill（含 coordinator-skill） |
-| `tasks[2]` (新增) | N/A | `coordinator-skill` | coordinator 的 LLM 决策作为 skill task 执行，结果触发框架 coordinator task |
-| `tasks[3].skill.name` | `"harness_agent_run"` | `"generic-skill"` | 通用 skill，不绑定具体业务 |
-| `tasks[3].skill.instance_pool_size` | `1` | `5` | 允许 5 个 skill 实例并行 |
-| `tasks[3].workflow_pool_size` | `1` | `5` | 5 个 workflow 实例并行 |
+| 字段 | v2 设计 | v3+ 实际 | 说明 |
+|------|---------|---------|------|
+| `tasks[0].next_skills` | `["coordinator-skill"]` | `["dummy_pre_skill"]` | dispatcher 先启动预处理 hook |
+| `tasks[2]` | `coordinator-skill`  | `dummy_pre_skill` | 预处理 hook，透传后触发 coordinator |
+| `tasks[3].skill.name` | `"generic-skill"` | `"skill-runner"` | 单 skill 路由，通过 exec_skill_key 区分 |
+| `tasks[3].skill.instance_pool_size` | `5` | `5` | 保留 5 实例并行 |
+| `data_bus_capacity_mb` | `5` | `50`（模板）/ `500`（outfit） | 按需增大 |
 
 **架构说明**：
 
-- **Dispatcher (task_index=0)**：透传层，固定 `next_skills=["coordinator-skill"]`，不做任何决策
+- **Dispatcher (task_index=0)**：透传层，固定 `next_skills=["dummy_pre_skill"]`，不做任何决策
 - **Coordinator (task_index=1)**：框架级协调，接收 skill 完成通知，读 DataBus 判定结果
-- **Coordinator-skill (task_index=2)**：coordinator 的 LLM 决策逻辑，作为 skill 执行。每次被 dispatcher 或自身产出的 next_skills 启动，执行一次 LLM 决策后结束
-- **Generic-skill (task_index=3)**：参数化的业务 skill executor，由 coordinator-skill 通过 `run_skills` 调度
+- **dummy_pre_skill (task_index=2)**：预处理 hook，执行后框架触发 coordinator
+- **skill-runner (task_index=3)**：通用 skill 执行器，所有 skill 通过 `exec_skill_key` → DataBus dispatch manifest 路由。这是唯一的 skill task，coordinator 的 `run_skills` 产出的所有 skill 都走这个通道
 
-### 8.2 agent.md
+### 9.2 agent.md
 
 ```markdown
 ---
@@ -1307,9 +1421,9 @@ skills:
 
 ---
 
-## 9. 完整数据流时序
+## 10. 完整数据流时序
 
-### 9.1 单 skill 场景
+### 10.1 单 skill 场景
 
 ```
 用户: "审查 src/agent/agent.cpp 的并发安全性"
@@ -1378,7 +1492,7 @@ T5  Coordinator Loop (第二轮)
         → {"response": "审查完成。launch_skill_task 方法在以下方面存在并发风险：..."}
 ```
 
-### 9.2 并行多 skill 场景
+### 10.2 并行多 skill 场景
 
 ```
 用户: "审查代码安全性并搜索相关 CVE"
@@ -1412,122 +1526,161 @@ T6  Coordinator 聚合两个 skill 结果 → LLM 评估 → 输出最终 respon
 
 ---
 
-## 10. 框架侧改动（Phase 2，可选）
+## 11. 框架侧改动（已放弃 — DataBus 方案已解决问题）
 
-Phase 1 所有新逻辑在 Python 节点层实现，**零框架改动**。Phase 2 可选新增以下环境变量传播，提升通用性：
+**v3+ 结论**：当前方案通过 DataBus dispatch manifest 已完全解决了 skill 路由问题，**不需要 C++ 框架层改动**。
 
-### 10.1 新增 `AF_SKILL_NAME` 环境变量传播
+v2 设计曾提出的 Phase 2 框架改动（`AF_SKILL_NAME` / `AF_SKILL_PROMPT` / `AF_LOAD_SKILLS` 传播）已被放弃，原因：
 
-**当前**：`skill_name` 存在于 `task.skill_name`，但未传播到 node 的环境变量。
+| 原提案 | 状态 | 放弃原因 |
+|--------|------|---------|
+| `AF_SKILL_NAME` 传播 | ❌ 已放弃 | skill-runner 通过 `exec_skill_key` → DataBus dispatch manifest 获取 skill_name，不需要框架注入 |
+| `AF_SKILL_PROMPT` 传播 | ❌ 已放弃 | prompt 通过 dispatch manifest 传递，比环境变量更可靠（无大小限制、支持结构化数据） |
+| `AF_LOAD_SKILLS` 传播 | ❌ 已放弃 | 同 `AF_SKILL_PROMPT`，manifest 已包含 load_skills 列表 |
 
-**改动**：
-
-```cpp
-// runtime.cpp — task poller 中，skill task 注入 AF_SKILL_NAME
-if(task_type == "skill") {
-    std::string skill_name = task->get_skill_name();
-    if(!skill_name.empty()) {
-        inputs["skill_name"] = skill_name;
-        // Python node 可通过 os.environ["AF_SKILL_NAME"] 或 inputs["skill_name"] 获取
-    }
-}
-```
-
-**改动量**：约 5 行 C++。
-
-### 10.2 新增 `AF_SKILL_PROMPT` 传播
-
-**当前**：`skill_prompt` 由 coordinator 写入 DataBus `skill_prompt:{name}` key，skill executor 从 DataBus 读取。
-
-**Phase 2 优化**：将 `skill_prompt` 通过 message metadata → task parameter → node inputs 传播，减少一次 DataBus 读取。
-
-```cpp
-// agent.cpp — launch_skill_task 中
-skill_msg.metadata["skill_prompt"] = skill_prompt;  // 新增
-
-// agent.cpp — build_runtime_task 中
-if(const auto it = message.metadata.find("skill_prompt"); it != message.metadata.end()) {
-    task->set_parameter("skill_prompt", it->second);
-}
-
-// runtime.cpp — task poller 中
-std::string skill_prompt;
-if(task->get_parameter("skill_prompt", skill_prompt) && !skill_prompt.empty()) {
-    inputs["skill_prompt"] = skill_prompt;
-}
-```
-
-**改动量**：约 15 行 C++。
-
-### 10.3 新增 `AF_LOAD_SKILLS` 传播
-
-与 `AF_SKILL_PROMPT` 类似的传播链路。
-
-**改动量**：约 15 行 C++。
+**保留的 framework 依赖**：
+- `next_skills` 管线（`parse_next_skills` + `launch_skill_task` + `pending_skills_count`）
+- `exec_skill_key` 从 node inputs → 环境变量传播（已有）
+- `completed_skill_name` / `skill_success` / `skill_result` / `skill_artifacts` 从 node inputs 注入（已有）
 
 ---
 
-## 11. 目录结构
+## 12. 目录结构（v3+ 实际）
+
+### 11.1 Pip 包（核心逻辑）
 
 ```
-examples/agent/harness_agent_v2/
-├── agent.json                    # agent package 配置（§8.1）
-├── agent.md                      # system prompt + 模型配置（§8.2）
-├── task_executor_workflow.json         # coordinator workflow（§6.5）
-├── skill_workflow.json           # 通用 skill workflow（§7.5）
-├── nodes/
-│   ├── general_task_executor.py       # coordinator 主循环（§6.4）
-│   ├── general_task_executor.py         # 通用 skill executor（§7.4）
-│   ├── databus_client.py         # DataBus UDS 客户端（复用）
-│   └── llm_trace_recorder.py    # LLM 调用追踪（复用）
+packages/agentflow-runtime/src/agentflow_runtime/
+├── __init__.py                       # 空（命名空间包）
+├── coordinator_decide.py             # Coordinator 主循环 — 事件驱动 LLM 决策
+├── skill_executor.py                 # 通用 skill 执行器 — LLM while-loop
+├── databus_client.py                 # DataBus UDS 客户端（dialogue-scoped wrapper）
+├── llm_call.py                       # LLM API 调用 + 全链路 trace 记录
+├── observability.py                  # 可观测性事件发射
+├── parse_af_input.py                 # AF_INPUT 协议解析（stream + messages）
+├── round_reminder.py                 # 轮次预算提醒注入
+├── common/
+│   ├── __init__.py
+│   ├── agent_config.py               # AgentConfig — 三层 fallback 配置系统
+│   ├── runtime_context.py            # 运行时上下文（环境变量读取）
+│   └── clients/
+│       ├── __init__.py
+│       ├── base.py                   # LLM 客户端基类
+│       ├── llm_uds_client.py         # UDS LLM 客户端
+│       └── openai_compatible_client.py  # OpenAI 兼容客户端
 ├── harness/
-│   ├── tools/                    # 领域工具集（skill task 绑定）
-│   │   ├── __init__.py           # 工具注册 + MCP 发现（复用）
-│   │   ├── bash.py
-│   │   ├── echo.py
-│   │   ├── read_file.py
-│   │   ├── write_file.py
-│   │   ├── web_fetch.py
-│   │   ├── load_skill.py
-│   │   ├── list_skills.py
-│   │   └── mcp_bridge.py
-│   └── skills/                   # 技能文档目录
-│       ├── code-review/
+│   ├── __init__.py
+│   └── tools/                        # 领域工具集
+│       ├── __init__.py               # 工具注册 + MCP 发现
+│       ├── bash.py
+│       ├── list_skills.py
+│       ├── load_skill.py
+│       ├── mcp_bridge.py
+│       ├── read_file.py
+│       ├── web_fetch.py
+│       └── write_file.py
+├── prompts/                          # 集中式 prompt 管理
+│   ├── __init__.py
+│   ├── common.py                     # 共享模板（artifact UI、LLM error）
+│   ├── coordinator.py                # coordinator prompt + run_skills 工具定义
+│   └── skill.py                      # skill prompt + 失败恢复模板
+├── dummy_pre_skill.py                # 预处理 hook 节点
+└── tests/                            # 单元测试
+    ├── test_compress_messages.py
+    ├── test_coordinator_compaction.py
+    ├── test_interrupt_poll.py
+    ├── test_llm_compaction.py
+    └── test_tool_path_resolution.py
+```
+
+### 11.2 Agent 包（生产示例 — outfit-assistant）
+
+```
+examples/agent/outfit-assistant/
+├── agent.json                        # agent package 配置（§9.1）
+├── agent.md                          # system prompt + 模型配置（§9.2）
+├── coordinator_workflow.json         # coordinator workflow
+├── skill_workflow.json               # 通用 skill workflow
+├── dummy_pre_skill_workflow.json     # 预处理 hook workflow
+├── nodes/                            # 入口 wrapper 文件（委托 pip 包）
+│   ├── coordinator_decide.py         # 1 行 import → agentflow_runtime.coordinator_decide
+│   ├── coordinator_decide.sh         # shell wrapper（检测 .venv）
+│   ├── skill_executor.py             # 1 行 import → agentflow_runtime.skill_executor
+│   ├── skill_executor.sh             # shell wrapper
+│   ├── dummy_pre_skill.py
+│   ├── dummy_pre_skill.sh
+│   └── common/                       # 共享工具
+├── harness/
+│   ├── tools/                        # 领域工具集（同 pip 包内容）
+│   └── skills/                       # 技能文档目录
+│       ├── dummy_pre_skill/
 │       │   └── SKILL.md
-│       ├── problem-localization/
+│       ├── skill-runner/
 │       │   └── SKILL.md
-│       ├── security-scan/
-│       │   └── SKILL.md
-│       ├── web-search/
-│       │   └── SKILL.md
-│       └── echo/
-│           └── SKILL.md
-├── test_client.py                # 测试客户端
+│       ├── minimax_outfit_skills/
+│       │   ├── outfit-stylist/
+│       │   ├── forge-image-gen/
+│       │   └── video-gen/
+│       └── ...
+├── tests/                            # 集成测试
+│   ├── test_coordinator_compaction.py
+│   ├── test_coordinator_decide_databus.py
+│   ├── test_databus_client_contract.py
+│   ├── test_databus_memory_regression.py
+│   ├── test_dispatch_and_artifacts.py
+│   ├── test_llm_call_errors.py
+│   ├── test_llm_compaction.py
+│   ├── test_llm_config_params.py
+│   ├── test_round_reminder.py
+│   ├── test_skill_executor_recovery.py
+│   └── test_streaming_chunk_push.py
+├── .env / .env.example
+├── requirements.txt
+├── setup.sh                            # 自动创建 .venv + pip install agentflow-runtime
 └── README.md
 ```
 
+### 11.3 通用模板
+
+```
+frontend/bridge/templates/agent_template/harness_agent/
+├── agent.json                          # 通用配置（同 §9.1）
+├── agent.md                            # 通用模板 agent.md
+├── coordinator_workflow.json
+├── skill_workflow.json
+├── dummy_pre_skill_workflow.json
+├── nodes/                              # 入口 wrapper
+├── harness/skills/                     # 技能目录（空，用户按需添加）
+├── harness/tools/                      # 领域工具集
+├── tests/                              # 集成测试模板
+└── setup.sh
+```
+
 ---
 
-## 12. 与现有 harness-agent 的对比
+## 13. 与现有 harness-agent 的对比
 
-| 维度 | harness-agent (V1) | harness-agent-v2 (本方案) |
+| 维度 | harness-agent (V1) | harness-agent (v3+ 当前) |
 |------|-------------------|--------------------------|
-| **架构** | dispatcher → skill → coordinator (三层) | dispatcher(透传) → coordinator-skill → coordinator(事件驱动) → skill(参数化) |
-| **决策方** | dispatcher (硬编码 next_skills) | coordinator-skill LLM (自主规划, 事件驱动) |
+| **架构** | dispatcher → skill → coordinator (三层) | dispatcher(透传) → dummy_pre_skill(hook) → coordinator(事件驱动) → skill-runner(单路由) |
+| **决策方** | dispatcher (硬编码 next_skills) | coordinator LLM (自主规划, 事件驱动) |
 | **Skill 数量** | 1 个固定 skill | N 个动态 skill，按需调度 |
-| **Skill 绑定** | 每个 skill 独立 workflow + node | 一个通用 general_task_executor.py |
-| **任务指派** | 无法指派（skill 不知道"做什么"） | prompt + load_skills 参数化 |
-| **工具绑定** | skill 绑所有工具 | coordinator 只绑 run_skills；skill 绑领域工具 |
+| **Skill 路由** | 每个 skill 独立 task | 单 skill-runner task + exec_skill_key 路由 |
+| **任务指派** | 无法指派（skill 不知道"做什么"） | prompt + load_skills 通过 dispatch manifest 参数化 |
+| **工具绑定** | skill 绑所有工具 | coordinator 只绑 run_skills；skill-runner 绑领域工具 |
 | **并行** | 单 skill | 多 skill 并行（instance_pool_size=5） |
 | **再规划** | coordinator 透传，无再规划 | coordinator LLM 评估结果后可再委派 |
 | **加 skill** | 改 agent.json + 写 workflow + 写 node | 放 SKILL.md 到 harness/skills/ |
+| **代码分发** | 节点文件直接复制 | pip 包 + 入口 wrapper 文件 |
+| **Prompt 管理** | 散落在 node 代码中 | 集中式 `prompts/` 模块管理 |
+| **配置管理** | 环境变量硬编码 | AgentConfig 三层 fallback 系统 |
 | **终止语义** | DataBus 键存在性检查 | LLM 自主决定不再调用 run_skills |
 
 ---
 
-## 13. 测试方案
+## 14. 测试方案
 
-### 13.1 E2E 测试场景
+### 14.1 E2E 测试场景
 
 | TC | 场景 | 步骤 | 预期 |
 |----|------|------|------|
@@ -1539,63 +1692,100 @@ examples/agent/harness_agent_v2/
 | 6 | Coordinator 不直接操作 | coordinator LLM 尝试调 read_file | 工具不存在，LLM 被迫用 run_skills |
 | 7 | 最大轮次保护 | coordinator 持续调 run_skills 超过上限 | 达到 max_rounds 后输出部分结果 |
 | 8 | Skill 最大轮次 | skill LLM 持续调工具超过上限 | skill 输出 status=max_rounds_reached |
-| 9 | exec_skill_key 路由 | coordinator 传入 exec_skill_key | skill 从 DataBus 读取结构化输入 |
+| 9 | dispatch manifest 路由 | coordinator 传多个 skill → dispatch manifest 写入 | skill-runner 从 DataBus 读取正确的 manifest |
 | 10 | force 重跑 | coordinator 对已完成 skill 设 force=true | skill 被重新执行 |
 
-### 13.2 单元测试
+### 14.2 单元测试
 
-| 测试 | 验证点 |
-|------|--------|
-| `test_handle_run_skills_call` | DataBus 写入 skill_prompt / load_skills / next_skills 的 key 和值正确 |
-| `test_collect_skill_results` | 从 DataBus 正确读取多个 skill 的结果 |
-| `test_load_skill_md` | SKILL.md 文件存在/不存在时的行为 |
-| `test_resolve_skill_input` | exec_skill_key 有值/无值/DataBus 不可用时的行为 |
-| `test_run_skills_tool_schema` | 工具定义 JSON Schema 合法，required 字段正确 |
+| 测试 | 验证点 | 实际文件 |
+|------|--------|---------|
+| `test_handle_run_skills_call` | DataBus 写入 dispatch manifest / next_skills 的 key 和值正确 | `packages/agentflow-runtime/tests/` |
+| `test_dispatch_and_artifacts` | dispatch manifest + artifact 路径提取 | `outfit-assistant/tests/test_dispatch_and_artifacts.py` |
+| `test_coordinator_decide_databus` | coordinator 的 DataBus 读写 | `outfit-assistant/tests/test_coordinator_decide_databus.py` |
+| `test_databus_client_contract` | DataBus 客户端契约 | `outfit-assistant/tests/test_databus_client_contract.py` |
+| `test_skill_executor_recovery` | 工具调用截断恢复 | `outfit-assistant/tests/test_skill_executor_recovery.py` |
+| `test_streaming_chunk_push` | 流式推送 | `outfit-assistant/tests/test_streaming_chunk_push.py` |
+| `test_coordinator_compaction` | 上下文压缩 | `outfit-assistant/tests/test_coordinator_compaction.py` |
+| `test_llm_compaction` | LLM 调用压缩 | `outfit-assistant/tests/test_llm_compaction.py` |
 
 ---
 
-## 14. 实施情况
+## 15. 实施情况
 
-### Phase 1: Python 节点层实现（零框架改动）— ✅ 已完成
+### 15.1 Phase 1: 核心架构实现（v2）— ✅ 已完成
 
-实现位置：`examples/agent/outfit-assistant/`
+实现位置：`examples/agent/outfit-assistant/` + `packages/agentflow-runtime/`
 
 | 步骤 | 内容 | 状态 | 实际文件 |
 |------|------|------|---------|
 | 1 | 创建目录结构 | ✅ | `examples/agent/outfit-assistant/` |
-| 2 | 实现 coordinator（含 `run_skills` 工具定义 + 拦截逻辑） | ✅ | `nodes/coordinator_decide.py` — `RUN_SKILLS_TOOL` + `handle_run_skills_call()` |
-| 3 | 实现通用 skill executor（含 SKILL.md 加载 + 结构化输入解析 + LLM while-loop） | ✅ | `nodes/skill_executor.py` — 通过 `exec_skill_key` 路由 |
+| 2 | 实现 coordinator（含 `run_skills` 工具定义 + 拦截逻辑 + dispatch manifest） | ✅ | `packages/agentflow-runtime/.../coordinator_decide.py` |
+| 3 | 实现通用 skill executor（含 SKILL.md 加载 + dispatch manifest 解析 + LLM while-loop） | ✅ | `packages/agentflow-runtime/.../skill_executor.py` |
 | 4 | 编写 workflow + agent.json + agent.md | ✅ | `coordinator_workflow.json` + `skill_workflow.json` + `agent.json` + `agent.md` |
-| 5 | 复用 `harness/tools/` + `databus_client.py` + `llm_call.py` | ✅ | `harness/tools/` + `nodes/databus_client.py` + `nodes/llm_call.py` |
-| 6 | E2E 测试 | ✅ | `harness/skills/forge-image-gen/tests/test_e2e.py` |
+| 5 | 编写 `harness/tools/` + `databus_client.py` + `llm_call.py` | ✅ | `pip 包 + harness/` |
+| 6 | E2E 测试 | ✅ | `outfit-assistant/tests/` + `bridge/tests/` |
 | 7 | README.md | ✅ | `README.md` |
 
-### Phase 2: 框架侧优化（可选，低优先级）
+### 15.2 Phase 2: 架构演进（v3+）— ✅ 已完成
 
-| 步骤 | 内容 | 优先级 | 状态 |
-|------|------|--------|------|
-| 1 | 新增 `AF_SKILL_NAME` 环境变量传播（runtime.cpp 约 5 行） | P3 | ⬜ 未实施 |
-| 2 | 新增 `AF_SKILL_PROMPT` 传播链路（agent.cpp + runtime.cpp 约 15 行） | P3 | ⬜ 未实施 |
-| 3 | 新增 `AF_LOAD_SKILLS` 传播链路（约 15 行） | P3 | ⬜ 未实施 |
-| 4 | 单元测试覆盖新增传播 | P3 | ⬜ 未实施 |
+| 步骤 | 内容 | 状态 | 说明 |
+|------|------|------|------|
+| 1 | **单 skill-runner 路由** | ✅ | 从"多 skill task"改为"单 skill-runner + exec_skill_key 路由" |
+| 2 | **dummy_pre_skill hook** | ✅ | 在 dispatcher 和 coordinator 之间插入预处理步骤 |
+| 3 | **代码包化** | ✅ | 核心逻辑迁移到 `packages/agentflow-runtime/` pip 包，agent 包仅保留入口 wrapper |
+| 4 | **集中式 prompt 管理** | ✅ | 提取到 `prompts/coordinator.py` + `prompts/skill.py` + `prompts/common.py` |
+| 5 | **AgentConfig 配置系统** | ✅ | 三层 fallback 配置（环境变量 → .env → 默认值） |
+| 6 | **对话中断处理** | ✅ | coordinator + skill 轮询 `interrupt:{did}` flag |
+| 7 | **流式进度推送** | ✅ | `response_push()` 向 Bridge 推流式进度 |
+| 8 | **Artifact 管理** | ✅ | 自动提取产物路径、重写 Markdown/HTML 链接 |
+| 9 | **工具调用死循环检测** | ✅ | `_detect_tool_call_loop()` 检测重复调用 |
+| 10 | **网络失败防护** | ✅ | `SKILL_NETWORK_FAILURE_PROMPT` 注入 |
+| 11 | **上下文压缩** | ✅ | 基于 `compress_messages` 的多级压缩 |
+| 12 | **轮次预算提醒** | ✅ | `build_round_reminder()` 每轮注入 |
+| 13 | **Node 超时硬约束** | ✅ | `node_timeout_sec` 硬超时保护 |
+| 14 | **Thinking 标签提取** | ✅ | 解析 `\\<think\\>...\\<\\/think\\> ... \\<response\\>` 格式 |
+| 15 | **可观测性事件** | ✅ | `emit_event()` 全链路追踪 |
+
+### 15.3 Phase 3: 框架侧优化 — ❌ 已放弃
+
+| 步骤 | 内容 | 状态 | 放弃原因 |
+|------|------|------|---------|
+| 1 | 新增 `AF_SKILL_NAME` 环境变量传播 | ❌ 已放弃 | DataBus dispatch manifest 已解决，不需要框架改动 |
+| 2 | 新增 `AF_SKILL_PROMPT` 传播链路 | ❌ 已放弃 | 同上 |
+| 3 | 新增 `AF_LOAD_SKILLS` 传播链路 | ❌ 已放弃 | 同上 |
 
 ---
 
-## 15. 关联方案
+## 16. 关联方案
 
 | 关联方案 | 关系说明 |
 |---------|---------|
 | [031-coordinator-协同机制](031-feature-coordinator-协同机制设计分析-260405-tbd.md) | 本方案是 031 中"coordinator 自主规划 + 事件驱动"的具体落地 |
 | [038-harness-agent-能力升级](038-feature-harness-agent-能力升级-260621-tbd.md) | 本方案是 038 的架构升级版，从"单 skill + load_skills 工具"走向"多 skill + run_skills 委派" |
-| [040-harness-agent-MCP](040-feature-harness-agent-mcp-support-260622-tbd.md) | MCP 工具桥接层完全复用，general_task_executor.py 的领域工具集包含 MCP 工具 |
+| [040-harness-agent-MCP](040-feature-harness-agent-mcp-support-260622-tbd.md) | MCP 工具桥接层完全复用，skill_executor 的领域工具集包含 MCP 工具 |
+| [agent-template-delta](agent-template-delta.md) | 描述了从文件复制式分发到 pip 包 + 入口 wrapper 的四层架构演进 |
 | [023-next-skills-格式扩展](023-feature-next-skills-格式扩展-260319-implemented.md) | `run_skills` 产出的 next_skills 格式与 023 完全对齐（SkillSpec） |
 | [009-coordinator-task0-默认化](009-feature-mmnode-执行引擎下沉-coordinator-task0-默认化-260228-implemented.md) | 本方案延续 009 的 coordinator 作为 task_index=0 的设计 |
 
 ---
 
-## 16. 修订记录
+## 17. 修订记录
 
 | 版本 | 刷新时间 | 刷新人 | 刷新内容 |
 |------|---------|--------|---------|
 | v1.0 | 2026-06-30 | AtomCode | 初始版本：完整设计文档，含节点数据交互、coordinator/skill runtime、工具绑定、数据流时序、实施计划 |
 | v1.1 | 2026-07-02 | AtomCode | 状态从 tbd → implemented；实施计划更新为实施情况，指向 `outfit-assistant/` 实际实现；修复 MiniMax endpoint 域名错误（minimax.io → minimaxi.com）|
+| v2.0 | 2026-07-14 | AtomCode | 全面更新反映 v3+ 架构演进：单 skill-runner 路由 + dispatch manifest 数据交互 + dummy_pre_skill hook；代码包化到 `packages/agentflow-runtime/` 的 pip 包模型；新增 §8 Agent Task Loop 外循环与 Function Calling 内循环 章节（含上下文压缩、预算感知、中断处理、双循环协作等 15 项机制）；§11 框架侧改动标记为"已放弃"；§12 目录结构重写为 pip 包 + agent 包 + 模板三层；§15 实施情况重写为 Phase 1/2/3 三阶段；代码精简（大段实现代码替换为 Mermaid 流程图 + 核心骨架）；新增 §18 技术债务 |
+
+---
+
+## 18. 技术债务
+
+| # | 债务项 | 优先级 | 描述 |
+|---|--------|--------|------|
+| 1 | **历史上下文对话接入** | P2 | 当前依赖 Python 侧 Bridge 连接 aisf 上下文服务获取历史对话，未以框架原生方式接入，增加故障点和耦合 |
+| 2 | **记忆服务未接入** | P2 | Agent 记忆数据（用户偏好、会话摘要）通过 `.agentfoundry/memory/` 自行管理，无统一记忆服务，无法跨 Agent 共享 |
+| 3 | **RAG 服务未接入** | P3 | 缺少对业务知识库的检索增强生成能力，Agent 仅依赖 LLM 训练数据和 SKILL.md 静态知识 |
+| 4 | **系统内模型推理服务接口未跑通生产** | **P1** | `llm_uds_client.py` / `openai_compatible_client.py` 已实现但端到端生产链路未验证，双客户端并存增加维护成本 |
+| 5 | **上下文压缩策略可优化** | P3 | 硬压缩默认关闭、折叠文件无自动展开、压缩阈值全局配置未区分节点类型、保护轮次静态配置未动态调整 |
+| 6 | **Hook 系统消费端待完善** | P3 | 仅实现 `emit_event()` 发射端，消费端只对接可观测性日志，缺少 Handler 注册/分发/条件触发/异步回调机制 |

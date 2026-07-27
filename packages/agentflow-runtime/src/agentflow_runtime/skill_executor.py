@@ -203,7 +203,13 @@ class _LocalToolRegistry:
         if _mod is None:
             return json.dumps({"error": f"Unknown tool: {name}"})
         try:
-            return _mod.execute(args)
+            # 由 daemon 注入的沙箱 HTTP endpoint（B16），bash 等工具走沙箱 /exec
+            # 独立于 AF_ARTIFACT_STORAGE_URL（产物上传用），避免 env var 重载
+            sandbox_endpoint = os.environ.get("AF_SANDBOX_ENDPOINT", "")
+            if sandbox_endpoint:
+                logging.info("tool.exec sandbox_mode tool=%s sandbox_id=%s", name, sandbox_endpoint.split('/')[-2] if '/sandbox/' in sandbox_endpoint else '?')
+            # 沙箱 endpoint 为空时，工具走本地 subprocess.run 路径
+            return _mod.execute(args, sandbox_endpoint=sandbox_endpoint)
         except Exception as e:
             return json.dumps({"error": f"Tool '{name}' failed: {e}"})
 
@@ -429,6 +435,7 @@ def extract_artifact_paths(text: str) -> list[str]:
     seen: list[str] = []
     skipped_upload: list[str] = []          # I-6 boundary audit trail
     skipped_missing: list[str] = []
+    skipped_empty: list[str] = []           # exists but 0 bytes (下载/写入异常)
     for item in candidates:
         if item.startswith(("http://", "https://")):
             # External URL — no upload-dir guard applies, but still skip
@@ -443,7 +450,11 @@ def extract_artifact_paths(text: str) -> list[str]:
                 skipped_upload.append(item)
                 continue
             if os.path.isfile(item):
-                seen.append(item)
+                if os.path.getsize(item) > 0:
+                    seen.append(item)
+                else:
+                    skipped_empty.append(item)
+                    logging.warning("artifact.skipped_empty path=%s size=0", item)
             else:
                 skipped_missing.append(item)
         else:
@@ -453,14 +464,17 @@ def extract_artifact_paths(text: str) -> list[str]:
                 skipped_upload.append(abs_path)
                 continue
             if os.path.isfile(abs_path):
-                seen.append(abs_path)
-            else:
-                skipped_missing.append(abs_path)
+                if os.path.getsize(abs_path) > 0:
+                    seen.append(abs_path)
+                else:
+                    skipped_empty.append(abs_path)
+                    logging.warning("artifact.skipped_empty path=%s size=0", abs_path)
     # I-6 audit log: 守护点证据。完整清单落 stderr，不截断（F7）。
     print(
         f"[flow] artifact.collect candidates={len(candidates)} "
         f"admitted={len(seen)} skipped_upload={len(skipped_upload)} "
-        f"skipped_missing={len(skipped_missing)}",
+        f"skipped_missing={len(skipped_missing)} "
+        f"skipped_empty={len(skipped_empty)}",
         file=sys.stderr,
     )
     if skipped_upload:
@@ -475,12 +489,122 @@ def extract_artifact_paths(text: str) -> list[str]:
             + json.dumps(skipped_missing, ensure_ascii=False),
             file=sys.stderr,
         )
+    if skipped_empty:
+        print(
+            "[flow] artifact.skipped_empty (file is 0 bytes) "
+            + json.dumps(skipped_empty, ensure_ascii=False),
+            file=sys.stderr,
+        )
     return list(dict.fromkeys(seen))
+
+
+# ── Structured / dual-channel extraction ─────────────────────────────
+# 测试期望的对外 API：从 JSON tool result 抽取 artifacts 字段
+# 防御性解析：malformed JSON、非 dict、非 list、非 string items → 返回空
+# 字段优先级（or-chain 短路）：artifacts > files > outputs > result > path
+_ARTIFACT_JSON_FIELDS = ("artifacts", "files", "outputs", "result", "path")
+
+
+def extract_structured_artifacts(result_json: str) -> list[str]:
+    """Extract artifact paths from a JSON tool result's structured fields.
+
+    Parses the JSON, looks for ``artifacts``/``files``/``outputs`` (first
+    truthy field wins, or-chain short-circuit), and returns the list of
+    artifact paths. Defensive: malformed JSON / non-dict / non-list /
+    non-string items all return ``[]``.
+
+    Relative paths are resolved against ``AGENT_PACKAGE_DIR``.
+    User-upload inputs (workspace/upload/, uploads/) are rejected (I-6).
+    Non-existent files are skipped.
+    """
+    if not result_json or not result_json.strip():
+        return []
+    try:
+        data = json.loads(result_json)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+
+    # Pick the first truthy field (or-chain short-circuit semantics)
+    items: list = []
+    for field in _ARTIFACT_JSON_FIELDS:
+        val = data.get(field)
+        if isinstance(val, list):
+            items = val
+            break
+
+    if not items:
+        return []
+
+    # Resolve to absolute path. Callers overriding AGENT_PACKAGE_DIR must patch
+    # THIS module's globals (entry file's override does NOT propagate here —
+    # closure binds at function-def time).
+    package_root = os.path.realpath(AGENT_PACKAGE_DIR)
+
+    # Artifact suffix whitelist (mirror append_artifacts_markdown semantics):
+    # only files with these suffixes are "generated artifacts" — inputs like
+    # readme.txt / config.yaml are NOT artifacts (I-6 boundary).
+    _artifact_suffixes = {
+        ".png", ".jpg", ".jpeg", ".webp", ".gif",  # images
+        ".html", ".htm",                            # html reports
+        ".pdf", ".pptx", ".docx", ".xlsx",          # office downloads
+        ".mp4", ".mp3", ".wav", ".webm",            # media
+        ".svg", ".bmp", ".tiff",                    # more images
+        ".csv", ".json", ".yaml", ".yml",           # structured reports (legacy)
+    }
+
+    extracted: list[str] = []
+    for item in items:
+        if not isinstance(item, str) or not item:
+            continue
+        # HTTP URL: pass through unchanged (no suffix check for URLs)
+        if item.startswith(("http://", "https://")):
+            # I-6: skip obvious upload endpoint paths
+            if "/upload/" in item or "/uploads/" in item:
+                continue
+            extracted.append(item)
+            continue
+        # Absolute or relative path: resolve + guard
+        if os.path.isabs(item):
+            resolved = os.path.normpath(item)
+        else:
+            resolved = os.path.normpath(os.path.join(package_root, item))
+        if _is_user_upload_input(resolved):
+            continue  # I-6 boundary
+        if not os.path.isfile(resolved):
+            continue  # skip non-existent
+        # Suffix whitelist: reject non-artifact files (readme.txt, config.yaml, ...)
+        if Path(resolved).suffix.lower() not in _artifact_suffixes:
+            continue
+        extracted.append(resolved)
+
+    return list(dict.fromkeys(extracted))
+
+
+def extract_all_artifacts(result_json: str) -> list[str]:
+    """Dual-channel merge: structured extraction + text regex extraction.
+
+    Combines ``extract_structured_artifacts`` (artifacts/files/outputs JSON
+    fields) with ``extract_artifact_paths`` (regex over stdout/text) and
+    dedupes preserving first-seen order.
+    """
+    structured = extract_structured_artifacts(result_json)
+    text_channel = extract_artifact_paths(result_json)
+
+    merged: list[str] = []
+    seen: set[str] = set()
+    for path in structured + text_channel:
+        if path not in seen:
+            seen.add(path)
+            merged.append(path)
+    return merged
 
 
 # I-6 boundary: directories that hold user-uploaded inputs, never skill-generated artifacts.
 # Match against resolved absolute paths only; keep lowercase for case-insensitive compare.
-_USER_UPLOAD_INPUT_MARKERS = ("/workspace/upload/", "/uploads/")
+# Supports both old (workspace/upload/) and new session-level (workspace/{session}/upload/) paths.
+_USER_UPLOAD_INPUT_MARKERS = ("/workspace/upload/", "/workspace/", "/uploads/")
 
 
 def _is_user_upload_input(resolved_path: str) -> bool:
@@ -489,8 +613,21 @@ def _is_user_upload_input(resolved_path: str) -> bool:
     Used by extract_artifact_paths to enforce I-6: skill-consumed inputs must not
     be reported as generated artifacts. Case-insensitive on the directory markers
     because macOS / Linux paths are not reliably canonical.
+
+    Matches both:
+      - Legacy:  ``/workspace/upload/``
+      - Session: ``/workspace/{user_id}_{client_id}/upload/`` (requires BOTH markers)
     """
     lowered = resolved_path.lower()
+    # Session-level isolation path: must contain /workspace/ and /upload/ together
+    has_workspace = "/workspace/" in lowered
+    has_upload = "/upload/" in lowered
+    if has_workspace and has_upload:
+        # Verify /workspace/ comes before /upload/ (both in path, workspace precedes upload)
+        ws_idx = lowered.index("/workspace/")
+        up_idx = lowered.index("/upload/")
+        if ws_idx < up_idx:
+            return True
     return any(marker in lowered for marker in _USER_UPLOAD_INPUT_MARKERS)
 
 
@@ -499,23 +636,47 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
 
     The Bridge artifact endpoint only serves files under agent_packages_path.
     This function copies ALL artifact files (whether inside or outside the
-    package) to AGENT_PACKAGE_DIR/outputs/, giving a single predictable
-    location regardless of where the LLM saved them. Avoids issues with:
+    package) to AGENT_PACKAGE_DIR/outputs/{session_id}/, giving a single
+    predictable location regardless of where the LLM saved them. The session_id
+    subdirectory ensures the local file path matches the URL format
+    (/api/artifacts/{agent_name}/{session_id}/{file_path}), so Bridge fallback
+    resolution does not need to strip session_id segments. Avoids issues with:
       - Hidden directories (.agentfoundry/) in the URL path
       - Files saved outside the package (/tmp/...)
       - Path resolution mismatches between daemon and Bridge processes
+
+    Sandbox fallback: if a file doesn't exist on the host filesystem but
+    AF_SANDBOX_ENDPOINT is set (sandbox endpoint), try to download it
+    from the sandbox via read_file tool before giving up.
     """
     result = []
     skipped_missing: list[str] = []
     skipped_copy_err: list[str] = []
     pkg_root = Path(AGENT_PACKAGE_DIR).resolve()
-    outputs_dir = pkg_root / "outputs"
+    session_id = os.environ.get("AF_SESSION_ID", "")
+    outputs_dir = pkg_root / "outputs" / session_id if session_id else pkg_root / "outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
+    kept_in_place: list[str] = []   # 已在 package 内，无需复制
+    copied_to_outputs: list[str] = []  # 复制到 outputs/
+    total_bytes = 0
+    # 沙箱 endpoint，用于下载宿主机上不存在的文件（沙箱 HTTP server 的 /exec + read_file）
+    sandbox_url = os.environ.get("AF_SANDBOX_ENDPOINT", "")
     for path in artifacts:
+        # HTTP(S) URLs are external resources — pass through unchanged.
+        # Pre-fix bug: Path('https://...').resolve() → not a file → silently skipped.
+        if path.startswith(("http://", "https://")):
+            result.append(path)
+            continue
         p = Path(path).resolve()
         if not p.is_file():
-            skipped_missing.append(path)
-            continue  # skip non-existent files rather than returning dead URLs
+            # 尝试从沙箱下载（TDD: 修复 sandbox → host 文件同步 bug）
+            if sandbox_url:
+                _download_from_sandbox(p, sandbox_url)
+            if not p.is_file():
+                skipped_missing.append(path)
+                continue  # skip non-existent files rather than returning dead URLs
+        file_size = p.stat().st_size
+        total_bytes += file_size
         try:
             p.relative_to(pkg_root)
         except ValueError:
@@ -525,6 +686,7 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
             # their directory hierarchy so HTML/CSS relative references and
             # same-named files remain stable.
             result.append(str(p))
+            kept_in_place.append(f"{p.name}({file_size}B)")
             continue
         dest = outputs_dir / p.name
         # Deduplicate: if same filename already copied, add a suffix
@@ -545,12 +707,30 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
                 skipped_copy_err.append(f"{path} -> {dest}: {exc}")
                 continue  # skip files that can't be copied
         result.append(str(dest))
-    # 完整审计日志（F7：不截断）。数量摘要 + 跳过清单分两行，便于 grep。
+        copied_to_outputs.append(f"{dest.name}({file_size}B)")
+    # 可观测性审计日志（F7：不截断存储层，便于 E2B 等远端沙箱模式排查）
+    _sandbox_mode = os.environ.get("AF_SANDBOX_MODE", "unknown")
+    _storage_url = os.environ.get("AF_ARTIFACT_STORAGE_URL", "")
     print(
-        f"[flow] artifact relocate input={len(artifacts)} relocated={len(result)} "
+        f"[flow] artifact.relocate input={len(artifacts)} relocated={len(result)} "
+        f"total_bytes={total_bytes} sandbox_mode={_sandbox_mode} "
+        f"storage_url={'set' if _storage_url else 'unset'} "
+        f"kept_in_place={len(kept_in_place)} copied={len(copied_to_outputs)} "
         f"skipped_missing={len(skipped_missing)} copy_err={len(skipped_copy_err)}",
         file=sys.stderr,
     )
+    if kept_in_place:
+        print(
+            "[flow] artifact.relocate_kept_in_place "
+            + json.dumps(kept_in_place, ensure_ascii=False),
+            file=sys.stderr,
+        )
+    if copied_to_outputs:
+        print(
+            "[flow] artifact.relocate_copied "
+            + json.dumps(copied_to_outputs, ensure_ascii=False),
+            file=sys.stderr,
+        )
     if skipped_missing:
         print(
             "[flow] artifact.relocate_missing " + json.dumps(skipped_missing, ensure_ascii=False),
@@ -561,7 +741,149 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
             "[flow] artifact.relocate_copy_err " + json.dumps(skipped_copy_err, ensure_ascii=False),
             file=sys.stderr,
         )
+
+    # 自动上传到文件存储服务（Phase 2: bridge 自身作为存储中心）
+    _upload_artifacts_to_storage(result)
+
     return result
+
+
+def _download_from_sandbox(local_path: Path, sandbox_url: str) -> None:
+    """Download a file from the sandbox HTTP server to the local filesystem.
+
+    Used by _ensure_artifacts_in_package as a fallback when a file doesn't
+    exist on the host but was generated inside the sandbox (E2B mode).
+    The sandbox HTTP server's read_file tool returns file content via POST /exec.
+    Sends a path relative to AGENT_PACKAGE_DIR since the sandbox resolves
+    paths relative to its working directory.
+    """
+    import urllib.request
+    import json as _json
+    try:
+        # 将绝对路径转为相对 AGENT_PACKAGE_DIR 的相对路径（沙箱侧按 workdir 解析）
+        pkg_root = Path(AGENT_PACKAGE_DIR).resolve()
+        try:
+            rel_path = str(local_path.resolve().relative_to(pkg_root))
+        except ValueError:
+            rel_path = str(local_path)
+        body = _json.dumps({"tool": "read_file", "params": {"path": rel_path}}).encode()
+        req = urllib.request.Request(
+            f"{sandbox_url.rstrip('/')}/exec",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = _json.loads(resp.read().decode("utf-8"))
+        if result.get("exit_code") == 0:
+            content = result.get("stdout", "")
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            local_path.write_bytes(content.encode("latin-1"))
+            logging.info("artifact.download_from_sandbox path=%s size=%d",
+                         local_path, len(content))
+        else:
+            logging.warning("artifact.download_from_sandbox.failed path=%s stderr=%s",
+                           local_path, result.get("stderr", ""))
+    except Exception as e:
+        logging.warning("artifact.download_from_sandbox.error path=%s err=%s",
+                       local_path, e)
+
+
+def _upload_artifacts_to_storage(artifact_paths: list[str]) -> None:
+    """Upload artifacts to bridge storage center (POST /api/artifacts/upload).
+
+    Phase 2: bridge 自身作为存储中心（见 docs/design/features/artifact-storage.md §3.3）。
+    不再上传到沙箱 HTTP server——沙箱 HTTP server 不参与产物存储链路。
+
+    失败语义（与 docs/design/features/artifact-storage.md §7 对齐）：
+    - 配置缺失/无文件：info 级别，正常跳过
+    - 读取失败/上传失败：error 级别，但不抛异常，skill 主流程继续
+      （产物上传是异步增强，URL 仍会构造但 bridge 端会 404，已知降级）
+    """
+    # AF_ARTIFACT_STORAGE_URL 默认指向 bridge 自身地址（http://localhost:8199)
+    storage_url = os.environ.get("AF_ARTIFACT_STORAGE_URL", "http://localhost:8199")
+    if not storage_url:
+        logging.info("artifact.upload.skip: AF_ARTIFACT_STORAGE_URL not set")
+        return
+    agent_name = os.path.basename(AGENT_PACKAGE_DIR.rstrip(os.sep))
+    session_id = os.environ.get("AF_SESSION_ID", "")
+    if not session_id:
+        logging.info("artifact.upload.skip: no AF_SESSION_ID")
+        return
+    _sandbox_mode = os.environ.get("AF_SANDBOX_MODE", "unknown")
+    files = []
+    total_bytes = 0
+    for path in artifact_paths:
+        if path.startswith(("http://", "https://")):
+            logging.info("artifact.upload.skip_external_url path=%s", path)
+            continue  # 外部 URL 不上传
+        p = Path(path)
+        if not p.is_file():
+            logging.warning("artifact.upload.skip_missing path=%s", path)
+            continue
+        try:
+            data = p.read_bytes()
+        except OSError as e:
+            logging.error("artifact.upload.read_failed path=%s err=%s", path, e)
+            continue
+        total_bytes += len(data)
+        # artifact_id = {agent_name}/{session_id}/{file_path}
+        # file_path 是相对 AGENT_PACKAGE_DIR 的路径
+        # _ensure_artifacts_in_package 已按 session_id 分目录保存，
+        # 因此 rel 形如 "outputs/{session_id}/{filename}"。
+        # 上传时需要剥离 session_id 段，避免 Bridge 侧 artifact_id 重复。
+        try:
+            rel = p.resolve().relative_to(Path(AGENT_PACKAGE_DIR).resolve())
+            # 剥离 session_id 段：outputs/{session_id}/{filename} → outputs/{filename}
+            rel_parts = rel.parts
+            if len(rel_parts) > 2 and rel_parts[0] == "outputs" and rel_parts[1] == session_id:
+                rel = Path(rel_parts[0]) / Path(*rel_parts[2:])
+        except ValueError:
+            rel = Path(p.name)  # 外部文件，用文件名（与 local_artifact_url basename 约定一致）
+        # base64 编码二进制产物，避免 utf-8 decode 损坏 PNG/PDF 等格式
+        import base64
+        files.append({
+            "path": str(rel),
+            "data_b64": base64.b64encode(data).decode("ascii"),
+        })
+    if not files:
+        logging.info("artifact.upload.skip: no files to upload "
+                      f"agent={agent_name} session={session_id} sandbox_mode={_sandbox_mode}")
+        return
+    import urllib.request
+    body = json.dumps({"agent_name": agent_name, "session_id": session_id, "files": files}).encode("utf-8")
+    upload_url = f"{storage_url.rstrip('/')}/api/artifacts/upload"
+    file_names = [f.get("path", "?") for f in files]
+    logging.info(
+        "artifact.upload.start url=%s agent=%s session=%s "
+        "sandbox_mode=%s files=%d total_bytes=%d names=%s",
+        upload_url, agent_name, session_id,
+        _sandbox_mode, len(files), total_bytes, file_names,
+    )
+    try:
+        req = urllib.request.Request(
+            upload_url,
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp_body = json.loads(resp.read().decode("utf-8"))
+            ids = resp_body.get("artifact_ids", [])
+            logging.info(
+                "artifact.upload.done url=%s agent=%s session=%s "
+                "sandbox_mode=%s count=%d ids=%s",
+                upload_url, agent_name, session_id,
+                _sandbox_mode, len(ids), ids,
+            )
+    except Exception as e:
+        # 记录完整请求上下文，避免 E2B 等远端模式无法定位
+        logging.error(
+            "artifact.upload.failed url=%s agent=%s session=%s "
+            "sandbox_mode=%s file_count=%d total_bytes=%d names=%s err=%s",
+            upload_url, agent_name, session_id,
+            _sandbox_mode, len(files), total_bytes, file_names, e,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -569,6 +891,8 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 def execute():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
+                        stream=sys.stderr, force=True)
     _load_dotenv()  # Load .env (respects entry file overrides of AGENT_PACKAGE_DIR)
     # §3.5 venv sentinel injection — lazy (entry-file AGENT_PACKAGE_DIR override is in effect now)
     _inject_venv_env()
@@ -1013,7 +1337,8 @@ def execute():
                 print(f"[flow]   tool_call: {name} args={args_preview}", file=sys.stderr)
                 result = tool_registry.execute(name, args)
                 # Audit: artifacts collected from this tool result (完整清单，F7)
-                tool_artifacts = extract_artifact_paths(result)
+                # 双通道：结构化 JSON 字段（artifacts/files/outputs/result/path）+ regex 文本扫描
+                tool_artifacts = extract_all_artifacts(result)
                 new_count = 0
                 for artifact in tool_artifacts:
                     if artifact not in generated_artifacts:
@@ -1050,6 +1375,26 @@ def execute():
             except Exception as exc:
                 print(f"[flow]   WARN: summary progress push failed: {exc}", file=sys.stderr)
             response_text = msg.get("content", "")
+            # 安全网：LLM 最终回复文本中可能包含工具未捕获的文件路径（如图片路径），
+            # 兜底扫描并去重。I-6 边界守卫已在 extract_artifact_paths 中内置。
+            # 先通过 _ensure_artifacts_in_package 归一化路径（原始 → outputs/{session_id}/{name}），
+            # 再与已归一的 generated_artifacts 比较，避免工具结果中的同文件被重复加入。
+            if response_text.strip():
+                response_artifacts = extract_all_artifacts(response_text)
+                if response_artifacts:
+                    response_normalized = _ensure_artifacts_in_package(response_artifacts)
+                    new_count = 0
+                    for artifact in response_normalized:
+                        if artifact not in generated_artifacts:
+                            generated_artifacts.append(artifact)
+                            new_count += 1
+                    if new_count:
+                        generated_artifacts = _ensure_artifacts_in_package(generated_artifacts)
+                        print(
+                            f"[flow]   artifact.from_response_text new={new_count} "
+                            f"total={len(generated_artifacts)}",
+                            file=sys.stderr,
+                        )
             output = {
                 "skill_result": response_text,
                 "status": "completed",

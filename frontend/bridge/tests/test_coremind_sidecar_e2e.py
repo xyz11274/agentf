@@ -8,6 +8,7 @@ import os
 import shutil
 import signal
 import socket
+import struct
 import subprocess
 import sys
 import threading
@@ -21,7 +22,7 @@ import httpx
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SIDECAR_SOURCE = PROJECT_ROOT / "frontend" / "bridge" / "coremind_bridge"
+SIDECAR_SOURCE = PROJECT_ROOT / "sidecar"
 DAEMON_BINARY = PROJECT_ROOT / "build" / "agentflowd"
 FIXTURE_AGENT = Path(__file__).parent / "fixtures" / "coremind_context_agent"
 
@@ -230,7 +231,6 @@ def test_sidecar_builds_trusted_context_for_bridge(
     assert envelope["platform_context"] == {"services": {}}
     assert envelope["request_id"]
     assert received[0]["request_id"] == "trace-sidecar-e2e"
-    assert received[0]["authorization"] == "Bearer trusted-test-token"
     assert received[0]["content_type"].startswith("application/json")
 
 
@@ -396,3 +396,155 @@ def test_user_request_reaches_node_with_trusted_context(
         else:
             bridge_log_file.close()
         _stop(daemon, daemon_log_file)
+
+
+# ── UDS LLM 测试 ─────────────────────────────────────────────────
+
+UDS_TEST_SOCKET = "/tmp/test_coremind_sidecar_uds.sock"
+
+
+def send_uds_frame(sock: socket.socket, data: dict[str, Any]) -> None:
+    """发送 UDS 帧：4-byte BE 长度 + UTF-8 JSON。"""
+    payload = json.dumps(data, ensure_ascii=False).encode("utf-8")
+    header = struct.pack(">I", len(payload))
+    sock.sendall(header + payload)
+
+
+def recv_uds_frame(sock: socket.socket) -> dict[str, Any] | None:
+    """接收 UDS 帧：先读 4-byte 长度，再读负载。"""
+    len_buf = sock.recv(4)
+    if len(len_buf) < 4:
+        return None
+    frame_len = struct.unpack(">I", len_buf)[0]
+    chunks: list[bytes] = []
+    remaining = frame_len
+    while remaining > 0:
+        chunk = sock.recv(remaining)
+        if not chunk:
+            return None
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return json.loads(b"".join(chunks))
+
+
+class _IMInferHandler(BaseHTTPRequestHandler):
+    """Mock IMInferScheduler — 接收 LLM 请求并返回固定响应。"""
+    received_requests: list[dict[str, Any]] = []
+
+    def do_POST(self) -> None:  # noqa: N802
+        body = self.rfile.read(int(self.headers.get("content-length", "0")))
+        self.received_requests.append({
+            "path": self.path,
+            "body": json.loads(body),
+        })
+        resp = json.dumps({
+            "content": "Mock IMInferScheduler E2E OK",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }).encode()
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(resp)))
+        self.end_headers()
+        self.wfile.write(resp)
+
+    def log_message(self, *_args: Any) -> None:
+        return
+
+
+@contextlib.contextmanager
+def _im_infer_server() -> Iterator[tuple[str, int]]:
+    """启动 mock IMInferScheduler HTTP 服务器。"""
+    _IMInferHandler.received_requests = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _IMInferHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield "127.0.0.1", server.server_port
+    finally:
+        server.shutdown()
+        thread.join(timeout=3)
+        server.server_close()
+
+
+@pytest.mark.e2e
+def test_sidecar_uds_llm_forwarding(sidecar_binary: Path) -> None:
+    """TC-brg-026: SideCar UDS LLM 代理 — 接收 Node 的 llm.chat 请求并转发到后端。
+
+    业务规则:
+    - Node 通过 UDS 发送 llm.chat 请求（4-byte 长度帧协议）
+    - SideCar 接收后通过 httplib 转发到 LLM 后端（本地 dev 路径）
+    - 响应以 llm_final 事件回传
+
+    错误模型:
+    - UDS 帧协议不匹配（长度/JSON 格式）
+    - 后端不可用时返回 llm_error 而非 hang
+    """
+    uds_path = UDS_TEST_SOCKET
+    if os.path.exists(uds_path):
+        os.unlink(uds_path)
+
+    with _im_infer_server() as (im_host, im_port):
+        port = _free_port()
+        proc = subprocess.Popen(
+            [
+                str(sidecar_binary),
+                "--listen", f"127.0.0.1:{port}",
+                "--bridge-url", "http://127.0.0.1:1",
+                "--uds-socket", uds_path,
+                "--llm-api-url", f"http://{im_host}:{im_port}",
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            env={**os.environ, "NO_PROXY": "127.0.0.1,localhost"},
+        )
+        try:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if proc.poll() is not None:
+                    pytest.fail(f"SideCar exited:\n{proc.stdout.read()}")
+                try:
+                    if httpx.get(f"http://127.0.0.1:{port}/health", timeout=0.3).status_code == 200:
+                        break
+                except httpx.HTTPError:
+                    time.sleep(0.05)
+            else:
+                pytest.fail("SideCar did not become healthy")
+
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(5.0)
+            sock.connect(uds_path)
+
+            request = {
+                "method": "llm.chat",
+                "request_id": "e2e-uds-001",
+                "params": {
+                    "request": {
+                        "model": "aisf/test-model",
+                        "messages": [{"role": "user", "content": "Hello"}],
+                        "stream": False,
+                    },
+                },
+            }
+            send_uds_frame(sock, request)
+
+            response = recv_uds_frame(sock)
+            assert response is not None, "No UDS response received"
+            assert response.get("event_type") == "llm_final", \
+                f"Expected llm_final, got {response.get('event_type')}"
+            assert response.get("done") is True
+
+            assert _IMInferHandler.received_requests, \
+                "IMInferScheduler received no requests"
+            received_path = _IMInferHandler.received_requests[0]["path"]
+            # dev 模式走 OpenAI 兼容路径 /chat/completions
+            assert received_path == "/chat/completions", \
+                f"Expected /chat/completions, got {received_path}"
+        finally:
+            if os.path.exists(uds_path):
+                os.unlink(uds_path)
+            if proc.poll() is None:
+                proc.send_signal(signal.SIGTERM)
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=2)

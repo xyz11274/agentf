@@ -4,3 +4,4 @@ Version: 0.1.0
 Summary: AgentFlow Agent Runtime — generic agent execution engine
 Requires-Python: >=3.12
 Requires-Dist: openai>=1.0
+Requires-Dist: e2b-code-interpreter==2.8.1

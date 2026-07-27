@@ -35,6 +35,8 @@ dependencies = [
     "pyyaml>=6.0",
     "requests>=2.31",
     "python-multipart>=0.0.32",
+    "e2b-code-interpreter==2.8.1",
+    "e2b==2.34.0",
 ]
 
 [project.optional-dependencies]
@@ -63,6 +65,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-ra --strict-markers"
 markers = [
+    "asyncio: async test (pytest-asyncio)",
     "e2e: end-to-end tests requiring live daemon + bridge (deselect with -m 'not e2e')",
     "slow: tests that take >10s (deselect with -m 'not slow')",
 ]
@@ -74,3 +77,10 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM"]
 ignore = ["E501"]
+
+[dependency-groups]
+dev = [
+    "cryptography>=49.0.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]

@@ -65,7 +65,7 @@ except ImportError:
 
 
 def _log_warn(msg: str) -> None:
-    print(f"[llm_call] WARN: {msg}", file=sys.stderr)
+    print(f"[llm_call] WARN: {msg}", file=sys.stderr, flush=True)
 
 
 # ── Task context (read once per call from framework-injected env vars) ──

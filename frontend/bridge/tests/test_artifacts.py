@@ -48,7 +48,7 @@ def test_image_is_fetchable_with_real_mime(client: TestClient, artifact_root: Pa
 
     response = client.get(
         "/api/artifacts/outfit-assistant/files/"
-        "outfit-assistant/outputs/look.png"
+        "outputs/look.png"
     )
 
     assert response.status_code == 200
@@ -79,7 +79,7 @@ def test_html_relative_resource_tree_is_fetchable(
     (assets / "look.png").write_bytes(JPEG_BYTES)
     (assets / "theme.css").write_text("img { max-width: 100%; }", encoding="utf-8")
 
-    base = "/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-1"
+    base = "/api/artifacts/outfit-assistant/files/outputs/task-1"
     html = client.get(f"{base}/report.html")
     image = client.get(f"{base}/assets/look.png")
     css = client.get(f"{base}/assets/theme.css")
@@ -154,11 +154,99 @@ def test_artifact_symlink_escape_is_rejected(
 
     response = client.get(
         "/api/artifacts/outfit-assistant/files/"
-        "outfit-assistant/outputs/outside.png"
+        "outputs/outside.png"
     )
 
-    assert response.status_code == 403
+    assert response.status_code == 404
     assert response.content != JPEG_BYTES
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Dual-path regression: /api/artifacts vs /health/api/artifacts
+# ═══════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def dual_path_app(artifact_root: Path) -> FastAPI:
+    """模拟 main.py 的双路径注册：外层 app 直挂 + bridge_app 挂 /health。
+
+    main.py 中:
+      app.include_router(artifacts_router)   # 外层直挂
+      app.mount("/health", bridge_app)        # bridge_app 内也有 artifacts_router
+    """
+    bridge_app = FastAPI()
+    bridge_app.include_router(artifacts.router)
+    app = FastAPI()
+    app.include_router(artifacts.router)
+    app.mount("/health", bridge_app)
+    return app
+
+
+@pytest.fixture
+def dual_path_client(dual_path_app: FastAPI) -> TestClient:
+    return TestClient(dual_path_app)
+
+
+_ARTIFACT_REL = "outfit-assistant/outputs/dual-path-test.png"
+
+
+def test_outer_app_serves_without_health_prefix(
+    dual_path_client: TestClient, artifact_root: Path
+) -> None:
+    """外层 app 直挂的 artifacts 路由应能通过 /api/artifacts/... 访问。
+
+    回归目标：coordinator 生成的裸 /api/artifacts/... URL 在 Bridge 侧不被
+    /health 前缀绑架。本地 dev 通过 Vite proxy /api → Bridge 时走此路径。
+    """
+    path = artifact_root / _ARTIFACT_REL
+    path.parent.mkdir(parents=True)
+    path.write_bytes(JPEG_BYTES)
+
+    resp = dual_path_client.get(f"/api/artifacts/{_ARTIFACT_REL}")
+
+    assert resp.status_code == 200, (
+        f"Outer app should serve /api/artifacts/... (no /health), "
+        f"got {resp.status_code}: {resp.text}"
+    )
+    assert resp.content == JPEG_BYTES
+
+
+def test_inner_app_serves_with_health_prefix(
+    dual_path_client: TestClient, artifact_root: Path
+) -> None:
+    """bridge_app 挂载在 /health 下时，/health/api/artifacts/... 也应可达。
+
+    回归目标：生产环境网关加 /health 前缀后，Bridge 内部仍能解析。
+    """
+    path = artifact_root / _ARTIFACT_REL
+    path.parent.mkdir(parents=True)
+    path.write_bytes(JPEG_BYTES)
+
+    resp = dual_path_client.get(f"/health/api/artifacts/{_ARTIFACT_REL}")
+
+    assert resp.status_code == 200, (
+        f"Inner app should serve /health/api/artifacts/... (with /health), "
+        f"got {resp.status_code}: {resp.text}"
+    )
+    assert resp.content == JPEG_BYTES
+
+
+def test_both_paths_return_same_content(
+    dual_path_client: TestClient, artifact_root: Path
+) -> None:
+    """两条路径应返回完全相同的文件内容。"""
+    path = artifact_root / _ARTIFACT_REL
+    path.parent.mkdir(parents=True)
+    path.write_bytes(JPEG_BYTES)
+
+    without = dual_path_client.get(f"/api/artifacts/{_ARTIFACT_REL}")
+    with_health = dual_path_client.get(f"/health/api/artifacts/{_ARTIFACT_REL}")
+
+    assert without.status_code == 200
+    assert with_health.status_code == 200
+    assert without.content == with_health.content, (
+        "Both paths should return identical file content"
+    )
 
 
 def test_unsupported_artifact_type_is_rejected(
@@ -180,7 +268,7 @@ def test_unsupported_artifact_type_is_rejected(
     source.write_text("AF_LLM_API_KEY = 'secret'", encoding="utf-8")
 
     response = client.get(
-        "/api/artifacts/outfit-assistant/files/outfit-assistant/agent.py"
+        "/api/artifacts/outfit-assistant/files/agent.py"
     )
 
     assert response.status_code == 415
@@ -199,7 +287,7 @@ def test_pptx_is_served(client: TestClient, artifact_root: Path) -> None:
 
     response = client.get(
         "/api/artifacts/outfit-assistant/files/"
-        "outfit-assistant/outputs/presentation.pptx"
+        "outputs/presentation.pptx"
     )
 
     assert response.status_code == 200
@@ -214,7 +302,7 @@ def test_docx_is_served(client: TestClient, artifact_root: Path) -> None:
 
     response = client.get(
         "/api/artifacts/outfit-assistant/files/"
-        "outfit-assistant/outputs/report.docx"
+        "outputs/report.docx"
     )
 
     assert response.status_code == 200
@@ -229,7 +317,7 @@ def test_pdf_is_served(client: TestClient, artifact_root: Path) -> None:
 
     response = client.get(
         "/api/artifacts/outfit-assistant/files/"
-        "outfit-assistant/outputs/document.pdf"
+        "outputs/document.pdf"
     )
 
     assert response.status_code == 200
@@ -244,7 +332,7 @@ def test_xlsx_is_served(client: TestClient, artifact_root: Path) -> None:
 
     response = client.get(
         "/api/artifacts/outfit-assistant/files/"
-        "outfit-assistant/outputs/data.xlsx"
+        "outputs/data.xlsx"
     )
 
     assert response.status_code == 200
@@ -259,7 +347,7 @@ def test_pptx_in_package_root_is_served(client: TestClient, artifact_root: Path)
 
     response = client.get(
         "/api/artifacts/outfit-assistant/files/"
-        "outfit-assistant/secret.pptx"
+        "secret.pptx"
     )
 
     assert response.status_code == 200

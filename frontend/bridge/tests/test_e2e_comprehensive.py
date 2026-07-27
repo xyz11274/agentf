@@ -486,6 +486,74 @@ class TestPackageLifecycle:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# Tests — 场景 7: 产物 URL 生成 → Bridge 服务的完整链路
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestArtifactUrlPipeline:
+    """验证 local_artifact_url 生成的 URL 能被 Bridge 正确服务。
+
+    这是整条产物链路的契约测试：
+      local_artifact_url 生成 URL → Bridge GET /api/artifacts/{id} → 200 OK
+
+    修复前：URL 中 agent_name 重复（outfit-assistant/files/outfit-assistant/...），
+    Bridge 无法解析 → 404。但单元测试各自断言旧格式，未被发现。
+    """
+
+    async def test_local_artifact_url_is_servable_by_bridge(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """在 patched 环境下验证完整链路。"""
+        # ── 1. 设置 artifact 目录 ────────────────────────────────
+        pkg_dir = tmp_path / "packages"
+        pkg_dir.mkdir()
+        monkeypatch.setattr(settings, "agent_packages_dir", str(pkg_dir))
+
+        # 重建 bridge app（确保 settings 已 patched）
+        from main import bridge_app
+        from dependencies import get_daemon_client
+
+        mock_daemon = _MockDaemon()
+        bridge_app.dependency_overrides[get_daemon_client] = lambda: mock_daemon
+
+        # ── 2. 创建产物文件 ──────────────────────────────────────
+        file = pkg_dir / "outfit-assistant" / "outputs" / "look.png"
+        file.parent.mkdir(parents=True)
+        file.write_bytes(b"\xff\xd8\xff\xe0" + b"fake-png-content")
+
+        # ── 3. 用 local_artifact_url 生成 URL ────────────────────
+        from agentflow_runtime import coordinator_decide
+
+        # patch AGENT_PACKAGE_DIR 指向我们的测试目录
+        monkeypatch.setattr(coordinator_decide, "AGENT_PACKAGE_DIR", str(pkg_dir / "outfit-assistant"))
+        url = coordinator_decide.local_artifact_url(str(file))
+        # 预期：/api/artifacts/outfit-assistant/files/outputs/look.png（无 agent_name 重复）
+        assert "/api/artifacts/" in url
+        assert "outfit-assistant/files/outfit-assistant" not in url, (
+            f"URL 不应含重复 agent_name: {url}"
+        )
+        assert url.endswith("outputs/look.png"), f"URL 应指向 outputs/look.png: {url}"
+
+        # ── 4. 通过 Bridge 请求该 URL ────────────────────────────
+        async with AsyncClient(
+            transport=ASGITransport(app=bridge_app), base_url="http://test",
+        ) as ac:
+            resp = await ac.get(url)
+
+        assert resp.status_code == 200, (
+            f"local_artifact_url 生成的 URL {url} 应被 Bridge 服务，"
+            f"实际 HTTP {resp.status_code}: {resp.text[:200]}"
+        )
+        assert resp.content.startswith(b"\xff\xd8\xff\xe0"), (
+            f"返回内容应为图片二进制，实际 {resp.content[:20]}"
+        )
+        assert resp.headers["content-type"] == "image/jpeg"
+
+        # 清理 dependency_overrides
+        bridge_app.dependency_overrides.pop(get_daemon_client, None)
+
+
+# ═══════════════════════════════════════════════════════════════════
 # 辅助函数
 # ═══════════════════════════════════════════════════════════════════
 

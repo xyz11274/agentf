@@ -7,7 +7,6 @@ Covers:
         (prevents stale progress message leaking into next round)
 """
 
-import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -16,11 +15,25 @@ from typing import Any
 import pytest
 
 
-MODULE_PATH = Path(__file__).parents[1] / "nodes" / "coordinator_decide.py"
-SPEC = importlib.util.spec_from_file_location("coordinator_decide_databus", MODULE_PATH)
-MODULE = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-SPEC.loader.exec_module(MODULE)
+# 关键：必须直接 import pip package 里的 coordinator_decide 模块，
+# 并 mock 该模块的 call_llm/DataBusClient。
+#
+# 历史反模式（已废弃）：
+#   MODULE_PATH = Path(__file__).parents[1] / "nodes" / "coordinator_decide.py"
+#   SPEC = importlib.util.spec_from_file_location(...)
+#   MODULE = importlib.util.module_from_spec(SPEC)
+#   SPEC.loader.exec_module(MODULE)
+#   monkeypatch.setattr(MODULE, "call_llm", fake)
+#
+# entry file (nodes/coordinator_decide.py) 是 thin re-export：
+#   globals().update(_m.__dict__)
+# 这把 pip package 的 call_llm 拷贝到 entry file 命名空间。
+# 但 execute() 函数本身来自 pip package，它的 call_llm 引用
+# 解析到 pip package 的 coordinator_decide 模块。
+# 所以 monkeypatch entry file 的 call_llm 不生效，测试走真实 LLM。
+#
+# 正模式：直接 import pip package 模块并 mock 它
+from agentflow_runtime import coordinator_decide as MODULE
 
 
 # ── Helpers ──

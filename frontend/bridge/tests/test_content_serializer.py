@@ -74,12 +74,21 @@ class TestFlattenToText:
         assert result == parts
 
     def test_image_url_with_data_is_flattened(self, tmp_path) -> None:
+        # Simulate the real upload_dir layout: {agent_packages}/{agent_id}/workspace/{session}/upload
+        # (see content_serializer._compute_upload_dir). flatten_to_text drops the
+        # {agent_packages}/{agent_id}/ prefix to produce a sandbox-relative path
+        # workspace/{session}/upload/{sha}.{ext} — see agent-package-structure.md §3.6 I-7.
+        upload_dir = tmp_path / "test-agent" / "workspace" / "user1_client-a" / "upload"
+        agent_root = tmp_path / "test-agent"
         parts = [{"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}]
-        result = flatten_to_text(parts, upload_dir=tmp_path)
+        result = flatten_to_text(parts, upload_dir=upload_dir, agent_root=agent_root)
         assert len(result) == 1
         assert result[0]["type"] == "text"
         assert "用户上传了图片" in result[0]["text"]
-        assert str(tmp_path) in result[0]["text"]
+        # sandbox-relative path: drop {agent_packages}/{agent_id}/ prefix
+        assert "workspace/user1_client-a/upload/" in result[0]["text"]
+        assert "test-agent" not in result[0]["text"], f"got: {result[0]['text']!r}"
+        assert str(tmp_path) not in result[0]["text"], f"got: {result[0]['text']!r}"
 
     def test_mixed_parts(self, tmp_path) -> None:
         parts = [
@@ -127,11 +136,12 @@ class TestExtractUserText:
     def test_content_array_with_image_path(self) -> None:
         raw = json.dumps([
             {"type": "text", "text": "看图"},
-            {"type": "text", "text": "用户上传了图片，路径: /tmp/abc.png 需要查看图片内容时请使用 read_image 工具"},
+            {"type": "text", "text": "用户上传了图片，路径: /tmp/abc.png"},
         ])
         text = self._extract(raw)
         assert "看图" in text
-        assert "read_image" in text
+        assert "用户上传了图片" in text
+        assert "read_image" not in text
 
     def test_empty_input_returns_empty(self) -> None:
         assert self._extract("") == ""
@@ -159,11 +169,13 @@ class TestPrepareContentForDaemon:
         result = prepare_content_for_daemon([
             TextPart(type="text", text="看图"),
             ImagePart(type="image_url", image_url={"url": "data:image/png;base64,aGVsbG8="}),
-        ], agent_id="test-agent")
+        ], agent_id="test-agent", user_id="user1", client_id="cli-a")
         assert "看图" in result
         assert "用户上传了图片" in result
-        assert "test-agent" in result
-        assert "read_image" in result
+        # sandbox-relative path (drop the agent_id/ prefix), see agent-package-structure.md §3.6 I-7
+        assert "workspace/user1_cli-a/upload/" in result
+        assert "test-agent" not in result, f"path must be sandbox-relative, got: {result!r}"
+        assert "read_image" not in result
         assert not result.startswith("["), f"should not be JSON: {result!r}"
 
     def test_chinese_characters_preserved(self) -> None:

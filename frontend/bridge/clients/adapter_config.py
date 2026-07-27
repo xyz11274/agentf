@@ -10,7 +10,7 @@ import yaml
 
 _DEFAULT_CONFIG_PATHS = [
     "config.yaml",
-    "frontend/bridge/coremind_bridge/config.yaml",
+    "sidecar/config.yaml",
     "/opt/agentflow/config.yaml",
 ]
 

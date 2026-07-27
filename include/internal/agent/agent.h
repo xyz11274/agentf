@@ -111,6 +111,7 @@ class MMAgent {
   std::shared_ptr<MMAgentSession> get_session_by_key(const std::string& session_key) const;
   bool route_request_message(const MMAgentMsgQue::Message& message);
   bool dequeue_response_message(MMAgentMsgQue::Message& message);
+  bool enqueue_response_message(const MMAgentMsgQue::Message& message);
   int  get_response_queue_size() const;
   int  process_session_messages(const std::string& session_key);
   int  process_all_sessions_until_idle();

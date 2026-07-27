@@ -306,8 +306,6 @@ void UDSServer::worker_thread_func(size_t thread_id) {
         active_clients_[client_fd] = true;
       }
 
-      Logger::instance().debug_f("[UDS_SERVER] Worker %zu handling client fd=%d", thread_id, client_fd);
-
       handle_client(client_fd);
 
       // Client cleanup is done in handle_client
@@ -351,8 +349,6 @@ void UDSServer::server_loop() {
       continue;
     }
 
-    Logger::instance().debug_f("[UDS_SERVER] Client queued: fd=%d, queue_size=%zu",
-                               client_fd, task_queue_.size());
   }
 }
 
@@ -464,8 +460,6 @@ std::string UDSServer::handle_request(const std::string& request_json) {
     return build_error_response(-32600, "Invalid Request: missing method", id);
   }
 
-  Logger::instance().debug_f("[UDS_SERVER] Request: method=%s id=%lld", method.c_str(), id);
-
   if (method == "put") {
     return handle_put(method, params, id);
   } else if (method == "get") {
@@ -505,12 +499,6 @@ std::string UDSServer::handle_put(const std::string& method, const std::string& 
   std::string namespace_str = extract_json_string(params, "namespace");
   std::string key = extract_json_string(params, "key");
   std::string value_str = extract_json_string(params, "value");
-
-  // DEBUG: log extracted params to diagnose -32602 / extraction issues
-  Logger::instance().debug_f(
-      "sid_empty=%d ns_empty=%d key_empty=%d",
-      session_id.c_str(), namespace_str.c_str(), key.c_str(), value_str.size(),
-      session_id.empty(), namespace_str.empty(), key.empty());
 
   if (session_id.empty() || namespace_str.empty() || key.empty()) {
     return build_error_response(-32602, "Invalid params: missing session_id, namespace, or key", id);
@@ -760,10 +748,6 @@ std::string UDSServer::handle_response_push(const std::string& params, int64_t i
   if (!response_push_callback_) {
     return build_error_response(-1, "response_push callback not configured", id);
   }
-
-  Logger::instance().info_f("[UDS_SERVER] response_push: session=%s, dialogue=%s, type=%s, skill=%s, content_len=%zu",
-                            session_id.c_str(), dialogue_id.c_str(), type_str.c_str(),
-                            skill.c_str(), content.size());
 
   bool success = response_push_callback_(session_id, dialogue_id, content, type_str, skill, round_str, status);
   if (success) {

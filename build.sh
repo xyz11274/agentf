@@ -4,6 +4,13 @@
 # Usage: ./build.sh [clean|build|test|example|rebuild]
 # Supports macOS (Darwin) and Linux with automatic platform detection.
 
+# 加载环境配置
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_ENV="${AGENTFLOW_ENV:-dev}"
+_ENV_FILE="$_SCRIPT_DIR/configs/$_ENV/.env"
+if [ -f "$_ENV_FILE" ]; then set -a; source "$_ENV_FILE"; set +a; fi
+unset _SCRIPT_DIR _ENV _ENV_FILE
+
 set -e
 
 # ============================================================================

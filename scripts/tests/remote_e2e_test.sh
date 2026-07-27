@@ -3,6 +3,12 @@
 # AgentFlow 远程 E2E 测试脚本
 # ----------------------------------------------------------------------------
 # 连接已部署的远程 bridge endpoint，执行远程兼容的 E2E 测试。
+
+# 加载环境配置
+_ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../configs" && pwd)" 2>/dev/null || _ENV_DIR=""
+_ENV="${AGENTFLOW_ENV:-dev}"
+if [ -n "$_ENV_DIR" ] && [ -f "$_ENV_DIR/$_ENV/.env" ]; then set -a; source "$_ENV_DIR/$_ENV/.env"; set +a; fi
+unset _ENV_DIR _ENV
 # 不编译、不启动本地 daemon/bridge——只通过网络调用远程 REST API。
 #
 # 与 regression_test.sh 的区别：

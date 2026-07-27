@@ -800,7 +800,8 @@ ExecutionResult CodeLoader::load_and_execute_so_v3(const std::string&     file_p
 
 ExecutionResult CodeLoader::execute_jar(const std::string& jar_path, const std::string& main_class,
                                         const std::vector<std::string>& args,
-                                        const ExecutionConfig&          config) {
+                                        const ExecutionConfig&          config,
+                                        const sandbox::SandboxOptions*  sandbox_opts) {
   log_execution_start(jar_path, ExecutableType::JAR_FILE);
 
   // Check if java is available
@@ -818,21 +819,23 @@ ExecutionResult CodeLoader::execute_jar(const std::string& jar_path, const std::
   cmd_args.insert(cmd_args.end(), args.begin(), args.end());
 
   std::string command = build_command_string(java_cmd, cmd_args);
-  return execute_command(command, config.working_dir, config.timeout_ms, config.env_vars);
+  return execute_command(command, config.working_dir, config.timeout_ms, config.env_vars, sandbox_opts);
 }
 
 ExecutionResult CodeLoader::execute_shell_script(const std::string&              script_path,
                                                  const std::vector<std::string>& args,
-                                                 const ExecutionConfig&          config) {
+                                                 const ExecutionConfig&          config,
+                                                 const sandbox::SandboxOptions*  sandbox_opts) {
   log_execution_start(script_path, ExecutableType::SHELL_SCRIPT);
 
   std::string command = build_command_string(script_path, args);
-  return execute_command(command, config.working_dir, config.timeout_ms, config.env_vars);
+  return execute_command(command, config.working_dir, config.timeout_ms, config.env_vars, sandbox_opts);
 }
 
 ExecutionResult CodeLoader::execute_python_script(const std::string&              script_path,
                                                   const std::vector<std::string>& args,
-                                                  const ExecutionConfig&          config) {
+                                                  const ExecutionConfig&          config,
+                                                  const sandbox::SandboxOptions*  sandbox_opts) {
   log_execution_start(script_path, ExecutableType::PYTHON_SCRIPT);
 
   std::string python_cmd  = "python3";
@@ -845,12 +848,13 @@ ExecutionResult CodeLoader::execute_python_script(const std::string&            
   std::string command = build_command_string(python_cmd, { script_path });
   command += " " + build_command_string("", args);
 
-  return execute_command(command, config.working_dir, config.timeout_ms, config.env_vars);
+  return execute_command(command, config.working_dir, config.timeout_ms, config.env_vars, sandbox_opts);
 }
 
 ExecutionResult CodeLoader::execute_go_script(const std::string&              script_path,
                                               const std::vector<std::string>& args,
-                                              const ExecutionConfig&          config) {
+                                              const ExecutionConfig&          config,
+                                              const sandbox::SandboxOptions*  sandbox_opts) {
   log_execution_start(script_path, ExecutableType::GO_SCRIPT);
 
   std::string go_cmd  = "go";
@@ -863,10 +867,11 @@ ExecutionResult CodeLoader::execute_go_script(const std::string&              sc
   std::string command = build_command_string(go_cmd, { "run", script_path });
   command += " " + build_command_string("", args);
 
-  return execute_command(command, config.working_dir, config.timeout_ms, config.env_vars);
+  return execute_command(command, config.working_dir, config.timeout_ms, config.env_vars, sandbox_opts);
 }
 
-ExecutionResult CodeLoader::execute(const std::string& file_path, const ExecutionConfig& config) {
+ExecutionResult CodeLoader::execute(const std::string& file_path, const ExecutionConfig& config,
+                                    const sandbox::SandboxOptions* sandbox_opts) {
   ExecutableType type = detect_executable_type(file_path);
 
   switch(type) {
@@ -874,19 +879,19 @@ ExecutionResult CodeLoader::execute(const std::string& file_path, const Executio
       return load_and_execute_so(file_path, "execute", config);
 
     case ExecutableType::JAR_FILE:
-      return execute_jar(file_path, "", {}, config);
+      return execute_jar(file_path, "", {}, config, sandbox_opts);
 
     case ExecutableType::SHELL_SCRIPT:
-      return execute_shell_script(file_path, {}, config);
+      return execute_shell_script(file_path, {}, config, sandbox_opts);
 
     case ExecutableType::GO_SCRIPT:
-      return execute_go_script(file_path, {}, config);
+      return execute_go_script(file_path, {}, config, sandbox_opts);
 
     case ExecutableType::PYTHON_SCRIPT:
-      return execute_python_script(file_path, {}, config);
+      return execute_python_script(file_path, {}, config, sandbox_opts);
 
     case ExecutableType::EXECUTABLE:
-      return execute_shell_script(file_path, {}, config);
+      return execute_shell_script(file_path, {}, config, sandbox_opts);
 
     default:
       ExecutionResult result;
@@ -1144,7 +1149,8 @@ bool CodeLoader::create_backup(const std::string& file_path, const std::string& 
 
 ExecutionResult CodeLoader::execute_command(const std::string& command,
                                             const std::string& working_dir, int timeout_ms,
-                                            const std::vector<std::string>& env_vars) {
+                                            const std::vector<std::string>& env_vars,
+                                            const sandbox::SandboxOptions* sandbox_opts) {
   ExecutionResult result;
   auto            start_time = std::chrono::steady_clock::now();
 
@@ -1211,10 +1217,69 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
     return result;
   }
 
+  // ── stderr 实时落盘 pipe（与 stdout pipe 分离）──────────────────
+  // 设计不变量（见 docs/design/architecture/modules/sandbox-module.md §6.3 +
+  // #1/#2 调研结论）：
+  //   - result.stdout 仍只含 stdout（line ~1320 `result.stdout = output` 不变）
+  //   - result.stderr 仍只在 failure 时赋（line ~1340 不变）
+  //   - nullptr sandbox_opts 路径行为不变（stderr pipe 建立与否不依赖 sandbox_opts）
+  //   - node 完成时机不变（poll loop 仍等 waitpid 返回）
+  //   - 独立文件是**额外**的实时落盘，不替代 result.stderr
+  // 动机：skill 子进程（skill_executor.py）的 emit_event/`[flow]` stderr 在 node
+  // 未完成时憋在 pipe 里不落盘（poll loop 只在 waitpid 返回后 drain_output），
+  // 导致 outfit-stylist skill 内部卡住 2 分 41 秒时 daemon.log 完全沈默，无法定位
+  // 是哪一步慢。按 PROJECT_MEMORY pitfall（子进程场景需独立文件兠底）+ F7.1
+  // （外部服务接口的原始请求/响应必须完整记录）——这里额外建一根 stderr 专用 pipe，
+  // 父进程 poll loop drain 时实时追加写到独立文件，node 完成时机不变。
+  int stderr_pipe[2];
+  if(pipe(stderr_pipe) != 0) {
+    // stderr pipe 建失败不阻断主流程——stdout pipe 仍能工作，只是失去 stderr 实时落盘
+    Logger::instance().warn_f("[CODE_LOADER] Failed to create stderr drain pipe: %s", std::strerror(errno));
+    stderr_pipe[0] = -1;
+    stderr_pipe[1] = -1;
+  }
+
+  // 独立 stderr 日志文件路径：用 daemon 的 AF_LOG_FILE 惯例取当前 log 目录，
+  // 命名 skill_stderr.<child_pid>.log。child_pid 在 fork 后才有，这里先取 daemon
+  // log 目录 + 用 getpid() 标识本次 execute_command 调用（父进程 pid 唯一标识调用轮）。
+  // dialogue_id/skill_name 在 execute_command 内拿不到（4 个调用点只传 command/timeout/env），
+  // 用 getpid() 标识是最佳可达方案——文件内容里的 `[flow]`/`[obs]` 行自带 dialogue_id。
+  std::string stderr_log_path;
+  std::ofstream stderr_log_stream;
+  if(stderr_pipe[0] >= 0) {
+    const char* daemon_log = std::getenv("AF_LOG_FILE");
+    if(daemon_log && *daemon_log) {
+      // 取 daemon log 目录，建 skill_stderr.<pid>.log
+      std::string dir = std::string(daemon_log);
+      size_t last_sep = dir.find_last_of('/');
+      if(last_sep != std::string::npos) {
+        dir = dir.substr(0, last_sep);
+      } else {
+        dir = ".";
+      }
+      stderr_log_path = dir + "/skill_stderr." + std::to_string(static_cast<long>(getpid())) + ".log";
+    } else {
+      // 无 AF_LOG_FILE 兜底：落 /tmp/（子进程场景需独立文件兠底，避免父进程 tool_result 链路二次截断）
+      stderr_log_path = "/tmp/agentflowd_skill_stderr." + std::to_string(static_cast<long>(getpid())) + ".log";
+    }
+    stderr_log_stream.open(stderr_log_path, std::ios::out | std::ios::app);
+    if(!stderr_log_stream.is_open()) {
+      Logger::instance().warn_f("[CODE_LOADER] Failed to open stderr drain log: %s", stderr_log_path.c_str());
+    } else {
+      stderr_log_stream << "=== execute_command start pid=" << static_cast<long>(getpid())
+                        << " ts=" << std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::system_clock::now().time_since_epoch()).count()
+                        << " ===\n";
+      stderr_log_stream.flush();
+    }
+  }
+
   pid_t child_pid = fork();
   if(child_pid < 0) {
     close(output_pipe[0]);
     close(output_pipe[1]);
+    if(stderr_pipe[0] >= 0) close(stderr_pipe[0]);
+    if(stderr_pipe[1] >= 0) close(stderr_pipe[1]);
     result.success       = false;
     result.error_message = "Failed to fork command process";
     result.exit_code     = -1;
@@ -1226,7 +1291,13 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
     // descendant it launches. This is essential for Python/tool subprocesses.
     setpgid(0, 0);
     dup2(output_pipe[1], STDOUT_FILENO);
-    dup2(output_pipe[1], STDERR_FILENO);
+    if(stderr_pipe[1] >= 0) {
+      dup2(stderr_pipe[1], STDERR_FILENO);  // stderr 走专用 pipe，与 stdout 分离
+      close(stderr_pipe[0]);
+      close(stderr_pipe[1]);
+    } else {
+      dup2(output_pipe[1], STDERR_FILENO);  // fallback：stderr pipe 建失败时合并到 stdout（原行为）
+    }
     close(output_pipe[0]);
     close(output_pipe[1]);
 
@@ -1246,12 +1317,18 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
   // Close the child side and make reads non-blocking so timeout enforcement
   // never depends on a descendant closing the output pipe.
   close(output_pipe[1]);
+  if(stderr_pipe[1] >= 0) close(stderr_pipe[1]);  // 父进程关闭子进程端，避免 fd 泄漏
   setpgid(child_pid, child_pid);
   int flags = fcntl(output_pipe[0], F_GETFL, 0);
   if(flags >= 0) fcntl(output_pipe[0], F_SETFL, flags | O_NONBLOCK);
+  if(stderr_pipe[0] >= 0) {
+    int sflags = fcntl(stderr_pipe[0], F_GETFL, 0);
+    if(sflags >= 0) fcntl(stderr_pipe[0], F_SETFL, sflags | O_NONBLOCK);
+  }
 
   char buffer[4096];
   std::string output;
+  std::string stderr_buffer;  // 累积 stderr（可选赋给 result.stderr，但默认不赋——独立文件是主落盘）
   int status = 0;
   bool child_running = true;
   bool timed_out = false;
@@ -1269,8 +1346,27 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
     }
   };
 
+  // stderr 实时落盘 lambda——每次 drain 把 stderr pipe 内容追加写到独立文件。
+  // 不阻断主流程：read EAGAIN 时静默返回（非阻塞 pipe）；写文件失败只 WARN 不抛。
+  auto drain_stderr_to_log = [&]() {
+    if(stderr_pipe[0] < 0 || !stderr_log_stream.is_open()) return;
+    while(true) {
+      ssize_t n = read(stderr_pipe[0], buffer, sizeof(buffer));
+      if(n > 0) {
+        stderr_buffer.append(buffer, static_cast<size_t>(n));
+        stderr_log_stream.write(buffer, static_cast<std::streamsize>(n));
+        stderr_log_stream.flush();  // 实时落盘——子进程卡住时立即可见
+      } else if(n < 0 && errno == EINTR) {
+        continue;
+      } else {
+        break;  // EAGAIN (非阻塞 pipe 无数据) 或 EOF
+      }
+    }
+  };
+
   while(child_running) {
     drain_output();
+    drain_stderr_to_log();  // 每次 poll 轮 drain stderr 实时落盘
 
     pid_t waited = waitpid(child_pid, &status, WNOHANG);
     if(waited == child_pid) {
@@ -1289,11 +1385,14 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
       kill(-child_pid, SIGKILL);
       Logger::instance().warn_f(
           "[NODE_TIMEOUT] child_pid=%d killed after %lldms (timeout_ms=%d); "
-          "stdout buffer (%zu bytes) is residual and will not be parsed as json_output",
+          "stdout buffer (%zu bytes) is residual and will not be parsed as json_output; "
+          "stderr drain log (%zu bytes) at %s",
           static_cast<int>(child_pid),
           static_cast<long long>(elapsed_ms),
           timeout_ms,
-          output.size());
+          output.size(),
+          stderr_buffer.size(),
+          stderr_log_path.empty() ? "(disabled)" : stderr_log_path.c_str());
       while(waitpid(child_pid, &status, 0) < 0 && errno == EINTR) {}
       child_running = false;
       break;
@@ -1310,6 +1409,29 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
 
   drain_output();
   close(output_pipe[0]);
+  drain_stderr_to_log();  // 子进程退出后最后一次 drain（捕获退出前的尾部 stderr）
+  if(stderr_pipe[0] >= 0) close(stderr_pipe[0]);
+  if(stderr_log_stream.is_open()) {
+    stderr_log_stream << "=== execute_command end pid=" << static_cast<long>(getpid())
+                      << " exit=" << (WIFEXITED(status) ? WEXITSTATUS(status) : -1)
+                      << " duration_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - start_time).count()
+                      << " stderr_bytes=" << stderr_buffer.size() << " ===\n";
+    stderr_log_stream.flush();
+    stderr_log_stream.close();
+  }
+
+  // ── Stderr 回喂 daemon.log ────────────────────────────────────
+  // stderr_buffer 内含子进程 emit_event / [flow] 等结构化日志，
+  // 已实时落盘到独立文件 skill_stderr.<pid>.log。
+  // 这里再打到 daemon.log 便于一站式检索。
+  // 内容中自带 [flow] / [obs] 标记 + dialogue_id，不必额外提取。
+  if (!stderr_buffer.empty()) {
+    Logger::instance().info_f("[NODE_STDERR] pid=%d bytes=%zu\n%s",
+                              child_pid,
+                              stderr_buffer.size(),
+                              stderr_buffer.c_str());
+  }
 
   int exit_code = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
   int signal_num = WIFSIGNALED(status) ? WTERMSIG(status) : 0;
@@ -1516,6 +1638,73 @@ CodeLoader& global_code_loader() {
   }
 
   return *g_global_code_loader;
+}
+
+// ============================================================================
+// AgentFoundry 沙箱机制移植——安全层辅助方法（lld.md T027/T028）
+// exe_loader.h 声明：static build_safe_env(raw_env, whitelist) + resolve_safe_path(path, allowed_prefix)
+// ============================================================================
+
+// build_safe_env：env 白名单过滤，拒绝 *_API_KEY（B3/FR-003）
+// 算法：遍历 raw_env，按 KEY=VALUE 拆分，KEY 在 whitelist 或不以 _API_KEY 结尾则保留
+// 不变量 B3：*_API_KEY 100% 不泄漏
+std::vector<std::string> CodeLoader::build_safe_env(const std::vector<std::string>& raw_env,
+                                                    const std::vector<std::string>& whitelist) {
+  std::vector<std::string> safe;
+  safe.reserve(raw_env.size());
+  for (const auto& entry : raw_env) {
+    auto eq_pos = entry.find('=');
+    if (eq_pos == std::string::npos) continue;  // 格式非法，跳过
+    std::string key = entry.substr(0, eq_pos);
+    // B3：拒绝 *_API_KEY 模式（大小写不敏感匹配 _API_KEY 后缀）
+    std::string key_upper = key;
+    std::transform(key_upper.begin(), key_upper.end(), key_upper.begin(), ::toupper);
+    if (key_upper.size() >= 8 &&
+        key_upper.compare(key_upper.size() - 8, 8, "_API_KEY") == 0) {
+      continue;  // 拒绝密钥泄漏
+    }
+    // 白名单为空 = 保留全部（向后兼容，sandbox_opts=nullptr 路径）
+    if (whitelist.empty()) {
+      safe.push_back(entry);
+      continue;
+    }
+    // 白名单非空：只保留命中键
+    if (std::find(whitelist.begin(), whitelist.end(), key) != whitelist.end()) {
+      safe.push_back(entry);
+    }
+  }
+  return safe;
+}
+
+// resolve_safe_path：路径双检（string prefix + realpath），拒绝越界（B4/FR-004）
+// 算法：realpath 解析后再 prefix 检查（双检防符号链接逃逸）
+// 异常：越界抛 std::runtime_error 含路径名与允许前缀
+std::string CodeLoader::resolve_safe_path(const std::string& path,
+                                          const std::string& allowed_prefix) {
+  if (path.empty()) {
+    throw std::runtime_error("Path escape rejected: empty path (allowed: '" + allowed_prefix + "')");
+  }
+  // 构造完整路径（相对路径基于 allowed_prefix 解析）
+  std::string full = path;
+  if (path[0] != '/') {
+    full = allowed_prefix + "/" + path;
+  }
+  // realpath 解析符号链接（需 <cstdlib> 的 realpath，允 nullptr 返回新分配字符串）
+  char* resolved = realpath(full.c_str(), nullptr);
+  if (!resolved) {
+    throw std::runtime_error("Path escape rejected: '" + path + "' (resolve failed, allowed: '" + allowed_prefix + "')");
+  }
+  std::string resolved_str(resolved);
+  free(resolved);
+  // 双检：resolved 必须以 allowed_prefix 开头（精确匹配或后跟 /）
+  if (resolved_str != allowed_prefix &&
+      !(resolved_str.size() > allowed_prefix.size() &&
+        resolved_str.compare(0, allowed_prefix.size(), allowed_prefix) == 0 &&
+        resolved_str[allowed_prefix.size()] == '/')) {
+    throw std::runtime_error("Path escape rejected: '" + path + "' resolves to '" +
+                            resolved_str + "' outside sandbox workdir '" + allowed_prefix + "'");
+  }
+  return resolved_str;
 }
 
 }  // namespace runtime

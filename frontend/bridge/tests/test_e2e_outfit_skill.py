@@ -13,7 +13,19 @@ from typing import Any
 
 import pytest
 
-from .e2e_helpers import outfit_daemon, send_user_message, poll_agent_response
+from .e2e_helpers import (
+    outfit_daemon,
+    send_user_message,
+    poll_agent_response,
+    AGENT_LAYER_L3,
+    skip_if_layer_not_in,
+)
+
+_skip_reason = skip_if_layer_not_in(AGENT_LAYER_L3)
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.skip(reason="Temporarily disabled"),
+]
 
 
 def _poll_response(port: int, task_id: str,

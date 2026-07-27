@@ -64,7 +64,7 @@ PLATFORM_DIR=/opt/coremind/platform \
 
 ```text
 build/production/agentflowd
-frontend/bridge/coremind_bridge/build-production/coremind_bridge
+sidecar/build-production/coremind_bridge
 ```
 
 生产构建不允许使用 `COREMIND_ENABLED=OFF` 的本地 stub。
@@ -168,7 +168,7 @@ Bridge，也不会因此断开浏览器 WebSocket。
 
 - 根目录 `build.sh`：已废弃，不再维护。原因是该脚本用字符串拼接 cmake 参数，当 generator 名为 `"Unix Makefiles"`（无 Ninja 时）会产生 shell 参数分裂 bug。所有功能已被 `scripts/build.sh` 替代。新人直接忽略即可。
 - `run_agent.sh` 仍指向 `examples/agent/harness_agent`，属于示例工具，不参与生产启动。
-- `frontend/bridge/coremind_bridge/build.sh` 是 SideCar 模块级构建入口；统一生产构建应使用 `scripts/build.sh production`。
+- `sidecar/build.sh` 是 SideCar 模块级构建入口；统一生产构建应使用 `scripts/build.sh production`。
 
 ---
 

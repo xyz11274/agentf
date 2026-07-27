@@ -221,19 +221,6 @@ class LocalSessionProvider(SessionProvider):
         except sqlite3.Error as exc:
             logger.warning("local_provider.update_status failed id=%s: %s", session_id, exc)
 
-    async def delete_session(
-        self, session_id: str,
-    ) -> None:
-        """硬删除一条 Bridge session 及其关联的 trace 和对话数据。"""
-        try:
-            with self._connect() as conn:
-                conn.execute("DELETE FROM traces WHERE session_id=?", (session_id,))
-                conn.execute("DELETE FROM dialogue_rounds WHERE session_id=?", (session_id,))
-                conn.execute("DELETE FROM sessions WHERE id=?", (session_id,))
-                logger.info("local_provider.session_deleted id=%s", session_id)
-        except sqlite3.Error as exc:
-            logger.warning("local_provider.delete_session failed id=%s: %s", session_id, exc)
-
     async def update_session_title(
         self, session_id: str, title: str,
     ) -> None:

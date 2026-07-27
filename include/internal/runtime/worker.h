@@ -22,6 +22,11 @@
 #include "runtime/exe_loader.h"
 #include "utils/thread_pool.h"
 
+// Forward declaration for Sandbox (defined in sandbox/sandbox.h)
+// AgentFoundry 沙箱机制移植：前向声明避免重 include
+namespace agentflow { namespace sandbox { class Sandbox; } }
+namespace agentflow { namespace sandbox { struct SandboxOptions; } }
+
 namespace agentflow {
 namespace runtime {
 
@@ -74,6 +79,20 @@ public:
     // chunks via response_push; when false (default), the existing
     // coordinator round-trip is used exclusively.
     bool stream = false;
+
+    // Sandbox 实例（AgentFoundry 沙箱机制移植，对齐 lld.md T024）
+    // 非空时 execute_code 走 Sandbox::exec（通过 SandboxHelpers），空走原 execute_command（向后兼容）
+    // 由调用方（node/worker_actor）在 execute_code 前注入
+    std::shared_ptr<sandbox::Sandbox> sandbox;
+
+    // Sandbox endpoint URL（沙箱内 HTTP server 的地址）
+    // 注入为 AF_ARTIFACT_STORAGE_URL 环境变量，供 skill_executor 上传产物到文件存储服务
+    std::string sandbox_endpoint;
+
+    // SandboxOptions：沙箱不可用时（sandbox==nullptr）的轻量安全层
+    // 非空时 exe_loader 走 env 白名单 + 路径双检 + 输出截断
+    // nullptr = 向后兼容，原逻辑不变
+    const sandbox::SandboxOptions* sandbox_opts = nullptr;
   };
 
   struct ExecutionResponse {
@@ -177,6 +196,11 @@ public:
   static bool rollback_code_version(const std::string& command, const std::string& version_id);
   static bool stop_hot_reload(const std::string& command);
 
+  // Sandbox 持有位（AgentFoundry 沙箱机制移植，对齐 lld.md T024）
+  // set_sandbox 在 execute_code 前由 worker_actor 注入；非空走 Sandbox::exec，空走原 execute_command（向后兼容）
+  void set_sandbox(std::shared_ptr<sandbox::Sandbox> sandbox);
+  std::shared_ptr<sandbox::Sandbox> get_sandbox() const;
+
 private:
   static int64_t now_ms();
   std::string workflow_pool_key(const TaskItem& task) const;
@@ -208,6 +232,10 @@ private:
   std::unordered_map<std::string, std::unique_ptr<basic::ThreadPool>> workflow_pools_;
   mutable std::mutex                                                   workflow_pool_mutex_;
   std::unique_ptr<basic::ThreadPool>                                  control_pool_;
+
+  // Sandbox 实例（AgentFoundry 沙箱机制移植，对齐 lld.md T024）
+  // 由 worker_actor 在 execute_code 前注入；非空时走 Sandbox::exec
+  std::shared_ptr<sandbox::Sandbox> sandbox_;
 
   std::unordered_map<std::string, std::vector<WorkerControlHandler>> control_handlers_;
   std::mutex                                                         handler_mutex_;

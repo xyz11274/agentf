@@ -29,14 +29,14 @@ Bridge 的配置在 `frontend/bridge/config.yaml`，生产环境建议：
 ```bash
 # 通过环境变量覆盖默认值
 export BRIDGE_LISTEN=0.0.0.0:8199
-export DAEMON_PORT=7890
+export DAEMON_PORT=17891
 ```
 
 ## 配置说明
 
 | 字段 | 生产值 | 含义 |
 |------|--------|------|
-| `server.listen` | `0.0.0.0:7890` | TCP 监听地址 |
+| `server.listen` | `0.0.0.0:17891` | TCP 监听地址（与 dev/test 端口统一） |
 | `runtime.worker_threads` | 8 | Worker 线程池大小 |
 | `dataref_bridge.capacity_mb` | 1024 | 总线 B 容量 |
 | `daemon.drain_timeout_ms` | 60000 | 优雅关闭等待时间 |

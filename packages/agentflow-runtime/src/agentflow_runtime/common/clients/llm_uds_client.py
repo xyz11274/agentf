@@ -132,7 +132,7 @@ class LlmUdsClient(LlmClient):
         model: str = "",
     ):
         self.sock_path = sock_path or os.environ.get(
-            "AF_UDS_SOCKET_PATH", DEFAULT_SOCKET_PATH
+            "AF_PLUGIN_UDS_FILE", DEFAULT_SOCKET_PATH
         )
         self.model = (
             model

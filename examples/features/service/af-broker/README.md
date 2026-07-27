@@ -9,26 +9,26 @@ Go client adapter for agentflowd JSON-RPC 2.0 daemon.
 go build -o af-broker ./cmd/af-broker/
 
 # Health check
-./af-broker localhost:7890 health
+./af-broker localhost:17891 health
 
 # Load an agent
-./af-broker localhost:7890 load /path/to/agent/package
+./af-broker localhost:17891 load /path/to/agent/package
 
 # Execute a request
-./af-broker localhost:7890 execute basic-agent "hello world"
+./af-broker localhost:17891 execute basic-agent "hello world"
 
 # Poll for responses
-./af-broker localhost:7890 poll basic-agent 5000
+./af-broker localhost:17891 poll basic-agent 5000
 
 # Subscribe to events
-./af-broker localhost:7890 subscribe task,workflow
+./af-broker localhost:17891 subscribe task,workflow
 
 # Get metrics
-./af-broker localhost:7890 metrics json
-./af-broker localhost:7890 metrics prometheus
+./af-broker localhost:17891 metrics json
+./af-broker localhost:17891 metrics prometheus
 
 # Shutdown daemon
-./af-broker localhost:7890 shutdown
+./af-broker localhost:17891 shutdown
 ```
 
 ## As a Library
@@ -36,7 +36,7 @@ go build -o af-broker ./cmd/af-broker/
 ```go
 import "github.com/agentflow/af-broker"
 
-client := afbroker.NewClient("localhost:7890", afbroker.ChannelTCP)
+client := afbroker.NewClient("localhost:17891", afbroker.ChannelTCP)
 client.Connect(context.Background())
 defer client.Close()
 

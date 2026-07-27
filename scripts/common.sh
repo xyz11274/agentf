@@ -34,3 +34,22 @@ ar_require_command() {
         exit 1
     fi
 }
+
+# 加载环境对应的 .env 文件
+# 根据 AGENTFLOW_ENV 决定加载哪个配置目录下的 .env：
+#   prod  → configs/prod/.env
+#   test  → configs/test/.env
+#   dev   → configs/dev/.env（默认）
+# 加载后，脚本可通过 $AF_BUILD_PROFILE 等变量获取环境配置。
+ar_load_env() {
+    local env="${AGENTFLOW_ENV:-dev}"
+    local env_file="$AR_PROJECT_ROOT/configs/$env/.env"
+    if [ -f "$env_file" ]; then
+        set -a
+        source "$env_file"
+        set +a
+        echo "[env] loaded $env_file" >&2
+    else
+        echo "[env] WARNING: $env_file not found" >&2
+    fi
+}

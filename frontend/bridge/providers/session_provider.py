@@ -100,13 +100,6 @@ class SessionProvider(ABC):
         ...
 
     @abstractmethod
-    async def delete_session(
-        self, session_id: str,
-    ) -> None:
-        """Hard-delete a session and all its associated traces + dialogue data."""
-        ...
-
-    @abstractmethod
     async def update_session_title(
         self, session_id: str, title: str,
     ) -> None:

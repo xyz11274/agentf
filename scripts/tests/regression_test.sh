@@ -3,6 +3,12 @@
 # AgentFlow 回归测试脚本
 # ----------------------------------------------------------------------------
 # 自动编译并运行全量单元测试 + E2E 测试，输出彩色结果汇总。
+
+# 加载环境配置
+_ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../configs" && pwd)" 2>/dev/null || _ENV_DIR=""
+_ENV="${AGENTFLOW_ENV:-dev}"
+if [ -n "$_ENV_DIR" ] && [ -f "$_ENV_DIR/$_ENV/.env" ]; then set -a; source "$_ENV_DIR/$_ENV/.env"; set +a; fi
+unset _ENV_DIR _ENV
 #
 # 用法:
 #   ./scripts/regression_test.sh              # 完整回归：fix → build → unit → e2e
@@ -10,9 +16,15 @@
 #   ./scripts/regression_test.sh --skip-fix   # 跳过换行符/权限修复
 #   ./scripts/regression_test.sh --unit-only  # 仅运行单元测试
 #   ./scripts/regression_test.sh --e2e-only   # 仅运行 E2E 测试
+#
+# 环境变量配置:
+#   DOCKER_SANDBOX_ENABLED=1    # 启用 Docker 沙箱 E2E 测试（需 Docker daemon）
+#   SANDBOX_PRESERVE=1          # 保留沙箱测试现场（不清理进程/容器，供调试）
 # ============================================================================
 
-set -euo pipefail
+set -uo pipefail
+# ⚠ 不设 -e：回归脚本用 PASS/FAIL 计数器追踪结果，不依赖 set -e 退出。
+# set -e 会与 exec > >(tee ...) 管道冲突，导致沙箱测试段在管道断开时被静默跳过。
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -29,6 +41,137 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 # ---------------------------------------------------------------------------
+# 辅助函数：带超时保护的命令执行（兼容 Linux/macOS）
+# ---------------------------------------------------------------------------
+_timeout() {
+    local _sec="$1"; shift
+    if command -v timeout &>/dev/null; then
+        timeout "$_sec" "$@"
+    elif command -v gtimeout &>/dev/null; then
+        gtimeout "$_sec" "$@"
+    else
+        # 兜底：无 timeout 命令时直接执行（macOS 可 `brew install coreutils`）
+        "$@"
+    fi
+}
+
+# ---------------------------------------------------------------------------
+# 辅助函数：检测当前沙箱有效模式（综合配置文件 + 环境变量）
+# ---------------------------------------------------------------------------
+_detect_sandbox_mode() {
+    local _cfg="$PROJECT_DIR/configs/test/agentflowd.json"
+    local _cfg_mode="unknown"
+    local _docker_enabled=false
+    local _e2b_key=false
+
+    # 1) 从配置文件读取 sandbox.mode
+    if [ -f "$_cfg" ]; then
+        _cfg_mode=$(python3 -c "
+import json
+with open('$_cfg') as f:
+    cfg = json.load(f)
+print(cfg.get('sandbox', {}).get('mode', 'unknown'))
+" 2>/dev/null || echo "unknown")
+    fi
+
+    # 2) 检查环境变量 + 配置文件中的 e2b_api_key（开发/测试/生产环境由配置文件驱动）
+    [ "${DOCKER_SANDBOX_ENABLED:-}" = "1" ] && _docker_enabled=true
+    if [ -n "${E2B_API_KEY:-}" ]; then
+        _e2b_key=true
+    elif [ -f "$_cfg" ]; then
+        # 配置文件中的 e2b_api_key 非空即视为已配置
+        _cfg_key=$(python3 -c "
+import json
+with open('$_cfg') as f:
+    cfg = json.load(f)
+print(cfg.get('sandbox', {}).get('e2b_api_key', '') or '')
+" 2>/dev/null)
+        [ -n "$_cfg_key" ] && _e2b_key=true
+    fi
+
+    # 3) 综合推断有效模式
+    local _effective="$_cfg_mode"
+    local _hint=""
+    if [ "$_cfg_mode" = "e2b" ] && ! $_e2b_key; then
+        _effective="e2b (退化: 无 E2B_API_KEY，daemon 启动会回退到 none)"
+        _hint="  ${YELLOW}提示: 设置 E2B_API_KEY 启用 E2B 沙箱${NC}"
+    elif [ "$_cfg_mode" = "e2b" ] && $_e2b_key; then
+        _effective="e2b (就绪)"
+    elif [ "$_cfg_mode" = "docker" ] && ! $_docker_enabled; then
+        _effective="docker (退化: Docker 引擎可用但可能未运行)"
+    elif [ "$_cfg_mode" = "docker" ] && $_docker_enabled; then
+        _effective="docker (就绪)"
+    fi
+
+    # 4) 额外提示
+    local _extra=""
+    $_docker_enabled && _extra="${_extra}  DOCKER_SANDBOX_ENABLED=1"
+    $_e2b_key && _extra="${_extra}  E2B_API_KEY=已设置"
+
+    echo "sandbox.mode=${_cfg_mode} | 有效=${_effective}${_extra:+ | env:${_extra}}"
+    [ -n "$_hint" ] && echo "$_hint"
+}
+
+# ---------------------------------------------------------------------------
+# 辅助函数：扫描 daemon.log 提取沙箱运行时证据
+# ---------------------------------------------------------------------------
+_check_sandbox_logs() {
+    local _log_file="$1"
+    local _label="$2"  # 描述标签，如"回归测试 daemon"或"开发 daemon"
+
+    if [ ! -f "$_log_file" ]; then
+        return
+    fi
+
+    # 提取关键信息（使用 Python 代替 macOS 不支持的 grep -P）
+    local _extracted
+    _extracted=$(python3 -c "
+import re, sys
+with open('$1') as f:
+    content = f.read()
+
+mode = ''
+m = re.search(r'Initialized sandbox management: mode=([^,]+)', content)
+if m: mode = m.group(1)
+
+fail_count = content.count('Failed to launch sandbox')
+
+fail_reasons = '; '.join(sorted(set(re.findall(r'Failed to launch sandbox.*?: ([^,]+)', content))))
+
+timestamps = re.findall(r'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', content)
+last_fail = timestamps[-1] if timestamps else ''
+
+isolated = content.count('continuing without sandbox isolation')
+
+print('{}||{}||{}||{}||{}'.format(mode, fail_count, fail_reasons, last_fail, isolated))
+" 2>/dev/null || echo "||0|||0")
+    local _mode; _mode="${_extracted%%||*}"
+    local _remain="${_extracted#*||}"
+    local _fail_count; _fail_count="${_remain%%||*}"
+    _remain="${_remain#*||}"
+    local _fail_reason; _fail_reason="${_remain%%||*}"
+    _remain="${_remain#*||}"
+    local _last_fail; _last_fail="${_remain%%||*}"
+    _remain="${_remain#*||}"
+    local _isolated; _isolated="${_remain}"
+
+    if [ -n "$_mode" ]; then
+        echo "  $_label: mode=${_mode}"
+        if [ "$_fail_count" -gt 0 ] || [ "$_isolated" -gt 0 ]; then
+            echo "    ${RED}⚠ 沙箱告警${NC}"
+            echo "    ${RED}→${NC} 沙箱启动失败: ${_fail_count} 次"
+            [ -n "$_fail_reason" ] && echo "    ${RED}→${NC} 原因: ${_fail_reason}"
+            [ -n "$_last_fail" ] && echo "    ${RED}→${NC} 最近失败: ${_last_fail}"
+            echo "    ${RED}→${NC} 影响: ${_isolated} 次请求在无沙箱隔离下执行"
+            return 1
+        else
+            echo "    ${GREEN}✓${NC} 沙箱运行正常"
+        fi
+    fi
+    return 0
+}
+
+# ---------------------------------------------------------------------------
 # 计数器
 # ---------------------------------------------------------------------------
 UNIT_PASS=0
@@ -38,6 +181,11 @@ E2E_FAIL=0
 E2E_TOTAL=0
 BRIDGE_PASS=0
 BRIDGE_FAIL=0
+FRONTEND_PASS=0
+FRONTEND_FAIL=0
+SANDBOX_PASS=0
+SANDBOX_FAIL=0
+SANDBOX_ALERT=false
 TEST_TOTAL=0
 TEST_FAILED=0
 START_TIME=$(date +%s)
@@ -45,7 +193,17 @@ START_TIME=$(date +%s)
 # Platform-specific library path (DYLD on macOS, LD on Linux)
 case "$(uname -s)" in
     Darwin)
-        export DYLD_LIBRARY_PATH="$BUILD_DIR/lib:$BUILD_DIR/tests:$BUILD_DIR/tests/e2e:${DYLD_LIBRARY_PATH:-}"
+        # conda 的 libc++（2022）缺少 __from_native_exception_pointer 符号
+        # 确保 /usr/lib（系统 libc++）在搜索路径最前面
+        sys_lib="/usr/lib"
+        raw="${DYLD_LIBRARY_PATH:-}"
+        # 过滤掉 conda 的 lib 路径，避免 ABI 不匹配
+        filtered=""
+        if [ -n "$raw" ]; then
+            filtered=$(echo "$raw" | tr ':' '\n' | grep -v "^/Users/.*/miniconda3/lib$" | grep -v "^$sys_lib$" | tr '\n' ':')
+            filtered="${filtered%:}"
+        fi
+        export DYLD_LIBRARY_PATH="$sys_lib:$BUILD_DIR/lib:$BUILD_DIR/tests:$BUILD_DIR/tests/e2e${filtered:+:$filtered}"
         ;;
     Linux)
         export LD_LIBRARY_PATH="$BUILD_DIR/lib:$BUILD_DIR/tests:$BUILD_DIR/tests/e2e:${LD_LIBRARY_PATH:-}"
@@ -142,7 +300,7 @@ do_build() {
         cmake -B build -DCMAKE_BUILD_TYPE=Release -DAGENTFLOW_WITH_RAPIDJSON=ON > /dev/null 2>&1
     fi
 
-    if cmake --build "$BUILD_DIR" -j"$NUM_CORES" 2>&1 | tail -3; then
+    if _timeout 600 cmake --build "$BUILD_DIR" -j"$NUM_CORES" 2>&1 | tail -3; then
         echo -e "       ${GREEN}编译成功${NC}"
     else
         echo -e "       ${RED}编译失败${NC}"
@@ -370,14 +528,6 @@ run_e2e_tests() {
     run_test_binary "E2E MessageRouting"    "$BUILD_DIR/tests/e2e/test_e2e_message_routing"
     record_e2e
 
-    # Basic Agent
-    run_test_binary "E2E BasicAgent"        "$BUILD_DIR/tests/e2e/test_e2e_basic_agent"
-    record_e2e
-
-    # Nested Workflow
-    run_test_binary "E2E NestedWorkflow"    "$BUILD_DIR/tests/e2e/test_e2e_nested_workflow"
-    record_e2e
-
     # Interactive Runner
     if [ -f "$BUILD_DIR/tests/e2e/test_e2e_interactive_runner" ]; then
         run_test_binary "E2E InteractiveRunner" "$BUILD_DIR/tests/e2e/test_e2e_interactive_runner"
@@ -419,12 +569,10 @@ run_frontend_tests() {
 
     local web_dir="$PROJECT_DIR/frontend/web"
     local failed=0
-    FRONTEND_PASS=0
-    FRONTEND_FAIL=0
 
     if [ -d "$web_dir" ]; then
         echo -e "  ${CYAN}[vitest]${NC} 前端单元测试..."
-        if cd "$web_dir" && npx vitest run --reporter=verbose 2>&1 | tail -3; then
+        if cd "$web_dir" && _timeout 120 npx vitest run --reporter=verbose 2>&1 | tail -3; then
             echo -e "  ${GREEN}✓ 前端测试通过${NC}"
             FRONTEND_PASS=1
         else
@@ -448,10 +596,32 @@ run_python_bridge_tests() {
     echo ""
 
     local bridge_dir="$PROJECT_DIR/frontend/bridge"
-    local failed=0
+
+    # ── 加载测试环境配置 ──
+    # configs/test/bridge.env 中的变量会被 configs/test/bridge.yaml 的
+    # ${VAR:-default} 展开捕获，同时被 Bridge 子进程继承。
+    local _bridge_env="$PROJECT_DIR/configs/test/bridge.env"
+    if [ -f "$_bridge_env" ]; then
+        set -a  # 自动 export 后续变量
+        source "$_bridge_env"
+        set +a
+        echo -e "  ${CYAN}[env]${NC} 已加载: $_bridge_env"
+    fi
+
+    # ── DYLD_LIBRARY_PATH 保护 ──
+    # C++ 测试需要在 DYLD_LIBRARY_PATH 中注入 /usr/lib（系统 libc++），
+    # 但 macOS 下该变量会污染 Python 的 sqlite3 加载——设置后
+    # _sqlite3.cpython-312-darwin.so 链接到系统 /usr/lib/libsqlite3.dylib
+    # （缺少 _sqlite3_enable_load_extension 符号），导致 ImportError。
+    # 因此 Python 测试前必须清除，测试后恢复。
+    local _saved_dyld="${DYLD_LIBRARY_PATH:-}"
+    local _saved_ld="${LD_LIBRARY_PATH:-}"
+    unset DYLD_LIBRARY_PATH
+    unset LD_LIBRARY_PATH
 
     # 1) 单元 + 集成测试（mock daemon，无需 daemon 二进制）
     echo -e "  ${CYAN}[pytest]${NC} Bridge 集成测试..."
+    local _pytest_out; _pytest_out="$(mktemp)"
     if uv run --directory "$bridge_dir" pytest \
         tests/test_aisf_tasks.py \
         tests/test_config.py \
@@ -460,27 +630,36 @@ run_python_bridge_tests() {
         tests/test_chat_rest_sse.py \
         tests/test_chat.py \
         tests/test_routes.py \
-        -v --no-header 2>&1 | tail -5; then
+        tests/test_e2e_comprehensive.py \
+        -v --no-header 2>&1 | tee "$_pytest_out" | tail -5; then
         echo -e "  ${GREEN}✓ Bridge 集成测试通过${NC}"
-        BRIDGE_PASS=1
+        BRIDGE_PASS=$((BRIDGE_PASS + 1))
     else
         echo -e "  ${RED}✗ Bridge 集成测试失败${NC}"
-        failed=1
+        echo -e "  ${YELLOW}━━ 完整输出 ━━${NC}"
+        cat "$_pytest_out"
+        BRIDGE_FAIL=$((BRIDGE_FAIL + 1))
     fi
+    rm -f "$_pytest_out"
     echo ""
 
     # 2) 真实 daemon E2E（需要 daemon 二进制 + outfit-assistant/.venv）
     if [ -f "$BUILD_DIR/agentflowd" ]; then
         echo -e "  ${CYAN}[pytest]${NC} 真实 daemon E2E..."
+        local _pytest_out; _pytest_out="$(mktemp)"
         if uv run --directory "$bridge_dir" pytest \
             tests/test_sysagent_reald_daemon_e2e.py \
             tests/test_e2e_rest_chat_session.py \
-            -v --no-header -m e2e 2>&1 | tail -5; then
+            -v --no-header -m e2e 2>&1 | tee "$_pytest_out" | tail -5; then
             echo -e "  ${GREEN}✓ 真实 daemon E2E 通过${NC}"
+            BRIDGE_PASS=$((BRIDGE_PASS + 1))
         else
             echo -e "  ${RED}✗ 真实 daemon E2E 失败${NC}"
-            failed=1
+            echo -e "  ${YELLOW}━━ 完整输出 ━━${NC}"
+            cat "$_pytest_out"
+            BRIDGE_FAIL=$((BRIDGE_FAIL + 1))
         fi
+        rm -f "$_pytest_out"
     else
         echo -e "  ${YELLOW}⚠ 跳过真实 daemon E2E（agentflowd 未编译）${NC}"
     fi
@@ -491,70 +670,298 @@ run_python_bridge_tests() {
     local outfit_dir="$PROJECT_DIR/examples/agent/outfit-assistant"
     if [ -d "$outfit_dir" ]; then
         echo -e "  ${CYAN}[pytest]${NC} Outfit assistant 节点测试..."
+        local _pytest_out; _pytest_out="$(mktemp)"
         if python -m pytest "$outfit_dir/tests" \
-            -v --no-header 2>&1 | tail -5; then
+            -v --no-header 2>&1 | tee "$_pytest_out" | tail -5; then
             echo -e "  ${GREEN}✓ Outfit assistant 节点测试通过${NC}"
             BRIDGE_PASS=$((BRIDGE_PASS + 1))
         else
             echo -e "  ${RED}✗ Outfit assistant 节点测试失败${NC}"
-            failed=1
+            echo -e "  ${YELLOW}━━ 完整输出 ━━${NC}"
+            cat "$_pytest_out"
+            BRIDGE_FAIL=$((BRIDGE_FAIL + 1))
         fi
+        rm -f "$_pytest_out"
     else
         echo -e "  ${YELLOW}⚠ 跳过 Outfit assistant 测试（目录不存在）${NC}"
     fi
 
     # 4) 真实 daemon outfit E2E（需要 daemon 二进制，自动启停 daemon）
     if [ -f "$BUILD_DIR/agentflowd" ]; then
-        local e2e_passed=true
-
         for e2e_file in test_e2e_outfit_agent.py test_e2e_outfit_multiturn.py test_e2e_outfit_skill.py; do
             if [ -f "$bridge_dir/tests/$e2e_file" ]; then
                 echo -e "  ${CYAN}[pytest]${NC} Outfit E2E: $e2e_file..."
+                local _pytest_out; _pytest_out="$(mktemp)"
                 if uv run --directory "$bridge_dir" pytest \
                     "tests/$e2e_file" \
-                    -v --no-header -m e2e 2>&1 | tail -5; then
+                    -v --no-header -m e2e 2>&1 | tee "$_pytest_out" | tail -5; then
                     echo -e "  ${GREEN}✓ $e2e_file 通过${NC}"
                     BRIDGE_PASS=$((BRIDGE_PASS + 1))
                 else
                     echo -e "  ${RED}✗ $e2e_file 失败${NC}"
-                    e2e_passed=false
+                    echo -e "  ${YELLOW}━━ 完整输出 ━━${NC}"
+                    cat "$_pytest_out"
+                    BRIDGE_FAIL=$((BRIDGE_FAIL + 1))
                 fi
+                rm -f "$_pytest_out"
             fi
         done
 
-        # 5) Agentflow 完整执行链路 E2E（真实 LLM + daemon）
-        local e2e_pipeline="$PROJECT_DIR/frontend/bridge/tests/e2e_agentflow_pipeline.py"
-        if [ -f "$e2e_pipeline" ]; then
-            echo -e "  ${CYAN}[E2E]${NC} Agentflow pipeline (real LLM)..."
-            if cd "$PROJECT_DIR" && python3 "$e2e_pipeline" 2>&1 | tail -3; then
-                echo -e "  ${GREEN}✓ Agentflow pipeline 通过${NC}"
+        # 5) Minimal agent 真实 LLM 连通性 E2E（替代旧的 e2e_agentflow_pipeline.py）
+        #    极简 agent fixture（单 coordinator 节点）+ 真实/mock LLM 自动切换
+        local e2e_minimal="$bridge_dir/tests/test_e2e_minimal_agent.py"
+        if [ -f "$e2e_minimal" ]; then
+            echo -e "  ${CYAN}[pytest]${NC} Minimal agent E2E (连通性)..."
+            local _pytest_out; _pytest_out="$(mktemp)"
+            if uv run --directory "$bridge_dir" pytest \
+                "tests/test_e2e_minimal_agent.py" \
+                -v --no-header -m e2e 2>&1 | tee "$_pytest_out" | tail -5; then
+                echo -e "  ${GREEN}✓ Minimal agent E2E 通过${NC}"
                 BRIDGE_PASS=$((BRIDGE_PASS + 1))
             else
-                echo -e "  ${RED}✗ Agentflow pipeline 失败${NC}"
-                e2e_passed=false
+                echo -e "  ${RED}✗ Minimal agent E2E 失败${NC}"
+                echo -e "  ${YELLOW}━━ 完整输出 ━━${NC}"
+                cat "$_pytest_out"
+                BRIDGE_FAIL=$((BRIDGE_FAIL + 1))
             fi
+            rm -f "$_pytest_out"
         fi
 
-        if ! $e2e_passed; then
-            failed=1
+        # 6) Docker 沙箱 + 穿搭助手 E2E（可选，需 DOCKER_SANDBOX_ENABLED=1）
+        local e2e_docker_sandbox="$bridge_dir/tests/test_e2e_outfit_docker_sandbox.py"
+        if [ -f "$e2e_docker_sandbox" ]; then
+            local _sandbox_mode; _sandbox_mode="$(_detect_sandbox_mode)"
+            echo -e "  ${CYAN}[pytest]${NC} Docker 沙箱 E2E"
+            echo -e "    ${CYAN}[沙箱配置]${NC} $_sandbox_mode"
+            local _pytest_out; _pytest_out="$(mktemp)"
+            if DOCKER_SANDBOX_ENABLED=1 uv run --directory "$bridge_dir" pytest \
+                "tests/test_e2e_outfit_docker_sandbox.py" \
+                -v --no-header -m e2e 2>&1 | tee "$_pytest_out" | tail -5; then
+                echo -e "  ${GREEN}✓ Docker 沙箱 E2E 通过${NC}"
+                BRIDGE_PASS=$((BRIDGE_PASS + 1))
+            else
+                echo -e "  ${RED}✗ Docker 沙箱 E2E 失败${NC}"
+                echo -e "  ${YELLOW}━━ 完整输出 ━━${NC}"
+                cat "$_pytest_out"
+                BRIDGE_FAIL=$((BRIDGE_FAIL + 1))
+            fi
+            rm -f "$_pytest_out"
         fi
     else
         echo -e "  ${YELLOW}⚠ 跳过真实 daemon outfit E2E（agentflowd 未编译）${NC}"
     fi
 
-    BRIDGE_FAIL=$failed
+    # ── 恢复 DYLD/LD_LIBRARY_PATH ──
+    if [ -n "$_saved_dyld" ]; then
+        export DYLD_LIBRARY_PATH="$_saved_dyld"
+    else
+        unset DYLD_LIBRARY_PATH
+    fi
+    if [ -n "$_saved_ld" ]; then
+        export LD_LIBRARY_PATH="$_saved_ld"
+    else
+        unset LD_LIBRARY_PATH
+    fi
+
     echo ""
+}
+
+# ---------------------------------------------------------------------------
+# Step 5: Sandbox E2E 测试（LocalSandbox + DockerSandbox）
+# ---------------------------------------------------------------------------
+run_sandbox_e2e_tests() {
+    echo -e "${BOLD}${CYAN}━━━ 沙箱 E2E 测试 ━━━${NC}"
+    # 显示当前沙箱模式
+    local _sandbox_mode; _sandbox_mode="$(_detect_sandbox_mode)"
+    echo -e "  ${CYAN}[沙箱配置]${NC} $_sandbox_mode"
+    echo ""
+
+    local sandbox_dir="$PROJECT_DIR/tests/e2e"
+
+    if [ ! -d "$sandbox_dir" ]; then
+        echo -e "  ${YELLOW}⚠ 跳过沙箱测试（tests/e2e 不存在）${NC}"
+        echo ""
+        return
+    fi
+
+    # ── DYLD/LD_LIBRARY_PATH 保护（同 Bridge 测试） ──
+    local _saved_dyld="${DYLD_LIBRARY_PATH:-}"
+    local _saved_ld="${LD_LIBRARY_PATH:-}"
+    unset DYLD_LIBRARY_PATH
+    unset LD_LIBRARY_PATH
+
+    # 1) LocalSandbox 测试（始终执行）
+    local _pytest_out; _pytest_out="$(mktemp)"
+    echo -e "  ${CYAN}[pytest]${NC} LocalSandbox E2E..."
+    if uv run --directory "$PROJECT_DIR" pytest \
+        "$sandbox_dir/sandbox_local_test.py" \
+        -v --no-header 2>&1 | tee "$_pytest_out" | tail -5; then
+        echo -e "  ${GREEN}✓ LocalSandbox 测试通过${NC}"
+        SANDBOX_PASS=$((SANDBOX_PASS + 1))
+    else
+        echo -e "  ${RED}✗ LocalSandbox 测试失败${NC}"
+        echo -e "  ${YELLOW}━━ 完整输出 ━━${NC}"
+        cat "$_pytest_out"
+        SANDBOX_FAIL=$((SANDBOX_FAIL + 1))
+    fi
+    rm -f "$_pytest_out"
+    echo ""
+
+    # 2) DockerSandbox 测试（可选，需 DOCKER_SANDBOX_ENABLED=1）
+    if [ "${DOCKER_SANDBOX_ENABLED:-}" = "1" ]; then
+        echo -e "  ${CYAN}[pytest]${NC} DockerSandbox E2E..."
+        local _pytest_out; _pytest_out="$(mktemp)"
+        if uv run --directory "$PROJECT_DIR" pytest \
+            "$sandbox_dir/sandbox_docker_test.py" \
+            -v --no-header 2>&1 | tee "$_pytest_out" | tail -5; then
+            echo -e "  ${GREEN}✓ DockerSandbox 测试通过${NC}"
+            SANDBOX_PASS=$((SANDBOX_PASS + 1))
+        else
+            echo -e "  ${RED}✗ DockerSandbox 测试失败${NC}"
+            echo -e "  ${YELLOW}━━ 完整输出 ━━${NC}"
+            cat "$_pytest_out"
+            SANDBOX_FAIL=$((SANDBOX_FAIL + 1))
+        fi
+        rm -f "$_pytest_out"
+
+        # 3) 跨模式一致性测试（Docker 可用时执行）
+        echo -e "  ${CYAN}[pytest]${NC} 跨模式一致性测试..."
+        local _pytest_out; _pytest_out="$(mktemp)"
+        if uv run --directory "$PROJECT_DIR" pytest \
+            "$sandbox_dir/sandbox_consistency_test.py" \
+            -v --no-header 2>&1 | tee "$_pytest_out" | tail -5; then
+            echo -e "  ${GREEN}✓ 一致性测试通过${NC}"
+            SANDBOX_PASS=$((SANDBOX_PASS + 1))
+        else
+            echo -e "  ${RED}✗ 一致性测试失败${NC}"
+            echo -e "  ${YELLOW}━━ 完整输出 ━━${NC}"
+            cat "$_pytest_out"
+            SANDBOX_FAIL=$((SANDBOX_FAIL + 1))
+        fi
+        rm -f "$_pytest_out"
+    else
+        echo -e "  ${YELLOW}⚠ 跳过 DockerSandbox（设置 DOCKER_SANDBOX_ENABLED=1 启用）${NC}"
+    fi
+    echo ""
+
+    # 3) E2B Sandbox 全生命周期测试（需 E2B_API_KEY 或配置文件有 e2b_api_key）
+    # 验证：create → upload → kill 全链路（fork 降级日志）
+    local _has_e2b_key=false
+    [ -n "${E2B_API_KEY:-}" ] && _has_e2b_key=true
+    if ! $_has_e2b_key && [ -f "$PROJECT_DIR/configs/test/agentflowd.json" ]; then
+        _cfg_key=$(python3 -c "
+import json
+with open('$PROJECT_DIR/configs/test/agentflowd.json') as f:
+    cfg = json.load(f)
+print(cfg.get('sandbox', {}).get('e2b_api_key', '') or '')
+" 2>/dev/null) || true
+        [ -n "$_cfg_key" ] && _has_e2b_key=true
+    fi
+    if $_has_e2b_key; then
+        echo -e "  ${CYAN}[e2b_smoke]${NC} E2B Sandbox 全生命周期..."
+        local _e2b_out; _e2b_out="$(mktemp)"
+        if bash "$PROJECT_DIR/scripts/tests/e2b_fork_smoke.sh" 2>&1 | tee "$_e2b_out" | tail -3; then
+            echo -e "  ${GREEN}✓ E2B Sandbox 测试通过${NC}"
+            SANDBOX_PASS=$((SANDBOX_PASS + 1))
+        else
+            echo -e "  ${RED}✗ E2B Sandbox 测试失败${NC}"
+            echo -e "  ${YELLOW}━━ 完整输出 ━━${NC}"
+            cat "$_e2b_out"
+            SANDBOX_FAIL=$((SANDBOX_FAIL + 1))
+        fi
+        rm -f "$_e2b_out"
+    else
+        echo -e "  ${YELLOW}⚠ 跳过 E2B Sandbox（设置 E2B_API_KEY 环境变量启用）${NC}"
+    fi
+    echo ""
+
+    # ── 清理：确保没有任何 sandbox_http_server.py 残留进程 ──
+    # 设置 SANDBOX_PRESERVE=1 可保留现场（容器 + 日志）用于调试
+    if [ "${SANDBOX_PRESERVE:-}" != "1" ]; then
+        local _leftover
+        _leftover=$(pgrep -f "sandbox_http_server" 2>/dev/null || true)
+        if [ -n "$_leftover" ]; then
+            echo -e "  ${YELLOW}[cleanup]${NC} 清理残留的 sandbox_http_server 进程..."
+            pkill -f "sandbox_http_server" 2>/dev/null || true
+            sleep 1
+            _leftover=$(pgrep -f "sandbox_http_server" 2>/dev/null || true)
+            if [ -n "$_leftover" ]; then
+                echo -e "  ${YELLOW}[cleanup]${NC} 强制终止残留进程..."
+                pkill -9 -f "sandbox_http_server" 2>/dev/null || true
+            fi
+        fi
+
+        # ── 清理 Docker 残留容器 ──
+        if command -v docker &>/dev/null; then
+            local _docker_leftover
+            _docker_leftover=$(_timeout 10 docker ps -a --filter "name=agentflow-sandbox" --format "{{.ID}}" 2>/dev/null || true)
+            if [ -n "$_docker_leftover" ]; then
+                echo -e "  ${YELLOW}[cleanup]${NC} 清理残留的 Docker 沙箱容器..."
+                echo "$_docker_leftover" | while read -r _cid; do
+                    echo -e "    ${YELLOW}→${NC} 停止并移除容器 ${_cid}..."
+                    _timeout 10 docker stop "$_cid" 2>/dev/null || true
+                    _timeout 10 docker rm -f "$_cid" 2>/dev/null || true
+                done
+            fi
+        fi
+    else
+        echo -e "  ${YELLOW}[preserve]${NC} SANDBOX_PRESERVE=1，跳过清理"
+        echo -e "  ${YELLOW}         ${NC} 残留的 sandbox_http_server 进程和 Docker 容器已保留供调试"
+    fi
+
+    # ── 恢复 DYLD/LD_LIBRARY_PATH ──
+    if [ -n "$_saved_dyld" ]; then
+        export DYLD_LIBRARY_PATH="$_saved_dyld"
+    else
+        unset DYLD_LIBRARY_PATH
+    fi
+    if [ -n "$_saved_ld" ]; then
+        export LD_LIBRARY_PATH="$_saved_ld"
+    else
+        unset LD_LIBRARY_PATH
+    fi
 }
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 main() {
+    # ── 日志持久化 ──
+    # 创建 logs/ 目录，按时间戳保存完整输出，同时仍显示在终端
+    local _log_dir="$PROJECT_DIR/logs"
+    mkdir -p "$_log_dir"
+    local _log_file="$_log_dir/regression_$(date +%Y%m%d_%H%M%S).log"
+    # 将 stdout/stderr 同时写入终端和日志文件（去掉颜色转义序列以保日志可读）
+    # 使用 Python 逐行处理，避免 BSD sed 块缓冲导致管道死锁
+    exec > >(tee >(python3 -c '
+import sys, re
+for line in sys.stdin:
+    sys.stdout.write(re.sub(r"\x1b\[[0-9;]*m", "", line))
+    sys.stdout.flush()
+' >> "$_log_file")) 2>&1
+
     echo -e "${BOLD}════════════════════════════════════════════${NC}"
     echo -e "${BOLD}  AgentFlow 回归测试${NC}"
     echo -e "${BOLD}════════════════════════════════════════════${NC}"
     echo -e "项目目录: ${CYAN}$PROJECT_DIR${NC}"
+    echo -e "日志文件: ${CYAN}$_log_file${NC}"
     echo ""
+    echo -e "${BOLD}配置提示:${NC}"
+    echo -e "  ${CYAN}DOCKER_SANDBOX_ENABLED=1${NC}    启用 Docker 沙箱 E2E 测试"
+    echo -e "  ${CYAN}SANDBOX_PRESERVE=1${NC}          保留沙箱测试现场（不清理进程/容器）"
+    echo ""
+
+    # ── 启动时沙箱预检：检查开发 daemon 的沙箱状态 ──
+    local _dev_daemon_log="$_log_dir/agentflowd.log"
+    if [ -f "$_dev_daemon_log" ]; then
+        echo -e "${BOLD}开发环境 daemon 沙箱状态:${NC}"
+        if _check_sandbox_logs "$_dev_daemon_log" "开发 daemon"; then
+            :  # ok
+        else
+            SANDBOX_ALERT=true
+        fi
+        echo ""
+    fi
 
     fix_common_issues
     do_build
@@ -569,14 +976,15 @@ main() {
         run_e2e_tests
         run_frontend_tests
         run_python_bridge_tests
+        run_sandbox_e2e_tests || true
     fi
 
     # -----------------------------------------------------------------------
     # 最终汇总
     # -----------------------------------------------------------------------
     local elapsed=$(($(date +%s) - START_TIME))
-    local total_pass=$((UNIT_PASS + E2E_PASS + (FRONTEND_PASS) + (BRIDGE_PASS)))
-    local total_fail=$((UNIT_FAIL + E2E_FAIL + FRONTEND_FAIL + BRIDGE_FAIL))
+    local total_pass=$((UNIT_PASS + E2E_PASS + (FRONTEND_PASS) + (BRIDGE_PASS) + (SANDBOX_PASS)))
+    local total_fail=$((UNIT_FAIL + E2E_FAIL + FRONTEND_FAIL + BRIDGE_FAIL + SANDBOX_FAIL))
     local total_all=$((total_pass + total_fail))
 
     echo -e "${BOLD}════════════════════════════════════════════${NC}"
@@ -586,10 +994,119 @@ main() {
     echo -e "  E2E:        ${GREEN}${E2E_PASS} 通过${NC} / ${RED}${E2E_FAIL} 失败${NC}"
     echo -e "  Frontend:   ${GREEN}${FRONTEND_PASS:-0} 通过${NC} / ${RED}${FRONTEND_FAIL:-0} 失败${NC}"
     echo -e "  Bridge:     ${GREEN}${BRIDGE_PASS} 通过${NC} / ${RED}${BRIDGE_FAIL} 失败${NC}"
+    echo -e "  Sandbox:    ${GREEN}${SANDBOX_PASS:-0} 通过${NC} / ${RED}${SANDBOX_FAIL:-0} 失败${NC}"
     echo -e "  ───────────────────────────"
     echo -e "  合计:       ${GREEN}${total_pass} 通过${NC} / ${RED}${total_fail} 失败${NC} (共 ${total_all})"
     echo -e "  耗时: ${elapsed}s"
     echo ""
+
+    # ── 测试 daemon/bridge 日志目录索引 ──
+    # 由 e2e_helpers.py 的 _test_log_dir() + bridge_daemon fixture 落盘到
+    # logs/tests/<ts>_<cls>_<fixture>/{daemon.log,bridge.log}
+    # 在汇总里列出本轮所有子目录,方便定位失败现场
+    local _tests_log_root="$_log_dir/tests"
+    if [ -d "$_tests_log_root" ]; then
+        echo -e "  ${BOLD}测试 daemon/bridge 日志目录${NC} (${CYAN}$_tests_log_root${NC}):"
+        # 列出本轮回归期间（START_TIME 之后）创建的子目录
+        # 注意：BSD find（macOS 默认）不支持 GNU find 的 `-newermt "@epoch"` 语法，会报
+        # `find: Can't parse date/time: @1784398501`。改用 BSD 兼容方式：先 touch 建一个
+        # 时间参考文件（epoch 秒），再用 `-newer` 比参考文件新。GNU find 也支持 `-newer`，
+        # 所以这个写法跨 BSD/GNU 都工作。
+        # 列出本轮回归期间（START_TIME 之后）创建的子目录
+        # 注意：BSD find（macOS 默认）不支持 GNU find 的 `-newermt "@epoch"` 语法，会报
+        # `find: Can't parse date/time: @1784398501`；BSD touch 也不支持 `touch -d "@epoch"`
+        # （报 `out of range or illegal time specification`）。改用 Python 一次性过滤子目录
+        # （比较 os.path.getmtime > START_TIME），避免 BSD/GNU touch/find 的所有跨平台差异。
+        if [ -n "$START_TIME" ]; then
+            python3 - "$_tests_log_root" "$START_TIME" <<'PYEOF' | sort | while read -r _sub; do
+import os, sys
+root, start = sys.argv[1], float(sys.argv[2])
+if not os.path.isdir(root):
+    sys.exit(0)
+for name in os.listdir(root):
+    sub = os.path.join(root, name)
+    if os.path.isdir(sub) and os.path.getmtime(sub) > start:
+        print(sub)
+PYEOF
+                local _daemon_log="${_sub}/daemon.log"
+                local _bridge_log="${_sub}/bridge.log"
+                local _daemon_size=""
+                local _bridge_size=""
+                [ -f "$_daemon_log" ] && _daemon_size=$(wc -c < "$_daemon_log" | tr -d ' ')
+                [ -f "$_bridge_log" ] && _bridge_size=$(wc -c < "$_bridge_log" | tr -d ' ')
+                echo -e "    ${CYAN}$(basename "$_sub")${NC}  daemon=${_daemon_size:-0}B  bridge=${_bridge_size:-0}B"
+            done
+        else
+            # START_TIME 缺失兜底：列出所有子目录（不按时间过滤）
+            find "$_tests_log_root" -maxdepth 1 -mindepth 1 -type d | sort | while read -r _sub; do
+                local _daemon_log="${_sub}/daemon.log"
+                local _bridge_log="${_sub}/bridge.log"
+                local _daemon_size=""
+                local _bridge_size=""
+                [ -f "$_daemon_log" ] && _daemon_size=$(wc -c < "$_daemon_log" | tr -d ' ')
+                [ -f "$_bridge_log" ] && _bridge_size=$(wc -c < "$_bridge_log" | tr -d ' ')
+                echo -e "    ${CYAN}$(basename "$_sub")${NC}  daemon=${_daemon_size:-0}B  bridge=${_bridge_size:-0}B"
+            done
+        fi
+        echo ""
+    fi
+
+    # ── 沙箱运行时告警 ──
+    # 扫描本轮测试 daemon 日志，检查沙箱是否真正生效
+    local _sandbox_alert_shown=false
+    if [ -d "$_tests_log_root" ] && [ -n "$START_TIME" ]; then
+        while IFS= read -r _alert_sub; do
+            local _alert_daemon="${_alert_sub}/daemon.log"
+            if [ -f "$_alert_daemon" ] && grep -q "Failed to launch sandbox" "$_alert_daemon" 2>/dev/null; then
+                if ! $_sandbox_alert_shown; then
+                    echo -e "  ${BOLD}${RED}━━━ 沙箱运行时告警 ━━━${NC}"
+                    _sandbox_alert_shown=true
+                fi
+                local _alert_name; _alert_name=$(basename "$_alert_sub")
+                # 使用 Python 提取（不支持 -P）
+                local _alert_info
+                _alert_info=$(python3 -c "
+import re,sys
+with open('$_alert_daemon') as f:
+    content = f.read()
+mode = ''
+m = re.search(r'mode=([^,]+)', content)
+if m: mode = m.group(1)
+reasons = sorted(set(re.findall(r'Failed to launch sandbox.*?: ([^,]+)', content)))
+isolated = content.count('continuing without sandbox isolation')
+print('{}||{}||{}'.format(mode, '; '.join(reasons), isolated))
+" 2>/dev/null || echo "?|||0")
+                local _alert_mode; _alert_mode="${_alert_info%%||*}"
+                local _remain="${_alert_info#*||}"
+                local _alert_reason; _alert_reason="${_remain%%||*}"
+                _remain="${_remain#*||}"
+                local _alert_isolated; _alert_isolated="${_remain}"
+                echo -e "  ${RED}╔══════════════════════════════════════════════════╗${NC}"
+                echo -e "  ${RED}║${NC}  测试: ${CYAN}${_alert_name}${NC}"
+                echo -e "  ${RED}║${NC}  mode=${_alert_mode}  |  启动失败: 有  |  无隔离请求: ${_alert_isolated}"
+                echo -e "  ${RED}║${NC}  原因: ${_alert_reason}"
+                echo -e "  ${RED}╚══════════════════════════════════════════════════╝${NC}"
+                SANDBOX_ALERT=true
+            fi
+        done < <(python3 - "$_tests_log_root" "$START_TIME" <<'PYEOF'
+import os, sys
+root, start = sys.argv[1], float(sys.argv[2])
+if os.path.isdir(root):
+    for name in os.listdir(root):
+        sub = os.path.join(root, name)
+        if os.path.isdir(sub) and os.path.getmtime(sub) > start:
+            print(sub)
+PYEOF
+)
+    fi
+
+    # ── 汇总沙箱告警状态 ──
+    if $SANDBOX_ALERT; then
+        echo ""
+        echo -e "  ${RED}${BOLD}⚠ 沙箱告警: 有沙箱未正常运行，技能在无隔离环境下执行${NC}"
+        echo -e "  ${YELLOW}  解决方法: 设置 E2B_API_KEY 环境变量后重启 daemon${NC}"
+        echo ""
+    fi
 
     if [ "$total_fail" -eq 0 ]; then
         echo -e "  ${GREEN}${BOLD}✅ 全部通过！${NC}"

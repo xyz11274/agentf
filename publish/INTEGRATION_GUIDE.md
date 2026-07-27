@@ -2436,13 +2436,13 @@ private:
 
 ```bash
 # Foreground mode (for development)
-./agentflowd --listen 0.0.0.0:7890
+./agentflowd --listen 0.0.0.0:17891
 
 # Daemon mode (for production)
-./agentflowd --listen 0.0.0.0:7890 --daemonize --pid-file /var/run/agentflowd.pid
+./agentflowd --listen 0.0.0.0:17891 --daemonize --pid-file /var/run/agentflowd.pid
 
 # With agent package pre-loaded
-./agentflowd --listen 0.0.0.0:7890 --package /path/to/agent/package
+./agentflowd --listen 0.0.0.0:17891 --package /path/to/agent/package
 
 # Validate configuration
 ./agentflowd --config /etc/agentflowd.json --validate
@@ -2454,7 +2454,7 @@ agentflowd supports three-way configuration merge: **CLI flags > Environment var
 
 Key environment variables:
 - `AF_CONFIG_FILE` — Path to JSON config file
-- `AF_LISTEN` — TCP listen address (default: `0.0.0.0:7890`)
+- `AF_LISTEN` — TCP listen address (default: `0.0.0.0:17891`)
 - `AF_UDS_BIZ_PATH` — UDS business socket path
 - `AF_UDS_CTRL_PATH` — UDS control socket path
 - `AF_LOG_LEVEL` — Log level (trace/debug/info/warn/error)
@@ -2509,7 +2509,7 @@ All methods use JSON-RPC 2.0 over newline-delimited TCP or UDS:
 ```go
 import "github.com/agentflow/af-broker"
 
-client := afbroker.NewClient("localhost:7890", afbroker.ChannelTCP)
+client := afbroker.NewClient("localhost:17891", afbroker.ChannelTCP)
 client.Connect(context.Background())
 defer client.Close()
 

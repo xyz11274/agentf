@@ -117,7 +117,7 @@ main()
 ```cpp
 struct DaemonConfig {
   // Server
-  std::string listen = "0.0.0.0:7890";        // TCP 监听地址
+  std::string listen = "0.0.0.0:17891";        // TCP 监听地址
   std::string uds_biz_path = "/tmp/agentflowd_biz.sock";   // UDS 业务套接字（请求执行、响应推送）
   std::string uds_ctrl_path = "/tmp/agentflowd_ctrl.sock";  // UDS 控制套接字（状态查询、Agent 管理、关机等）
   int         max_connections = 1024;           // 最大并发客户端连接
@@ -154,7 +154,7 @@ struct DaemonConfig {
 ```json
 {
   "server": {
-    "listen": "0.0.0.0:7890",
+    "listen": "0.0.0.0:17891",
     "uds_biz_path": "/tmp/agentflowd_biz.sock",
     "uds_ctrl_path": "/tmp/agentflowd_ctrl.sock",
     "max_connections": 1024
@@ -197,7 +197,7 @@ struct DaemonConfig {
 
 | DaemonConfig 字段 | CLI 参数 | 环境变量 | JSON 配置键 | 默认值 | 备注 |
 |---|---|---|---|---|---|
-| `listen` | `--listen` | `AF_LISTEN` | `server.listen` | `0.0.0.0:7890` | |
+| `listen` | `--listen` | `AF_LISTEN` | `server.listen` | `0.0.0.0:17891` | |
 | `uds_biz_path` | `--uds-biz-path` | `AF_UDS_BIZ_PATH` | `server.uds_biz_path` | `/tmp/agentflowd_biz.sock` | 业务 UDS |
 | `uds_ctrl_path` | `--uds-ctrl-path` | `AF_UDS_CTRL_PATH` | `server.uds_ctrl_path` | `/tmp/agentflowd_ctrl.sock` | 控制 UDS |
 | `max_connections` | `--max-connections` | — | `server.max_connections` | `1024` | 无环境变量 |
@@ -238,8 +238,8 @@ struct DaemonConfig {
 场景: config.json 中 "worker_threads": 8, CLI 传 --worker-threads 4
 结果: worker_threads = 4  (CLI 优先)
 
-场景: config.json 中 "listen": "0.0.0.0:9000", 无 CLI 参数, AF_LISTEN=127.0.0.1:7890
-结果: listen = "127.0.0.1:7890"  (ENV 优先于文件)
+场景: config.json 中 "listen": "0.0.0.0:9000", 无 CLI 参数, AF_LISTEN=127.0.0.1:17891
+结果: listen = "127.0.0.1:17891"  (ENV 优先于文件)
 
 场景: config.json 中无 deployer 节, CLI 传 --heartbeat-timeout 5000
 结果: heartbeat_timeout_ms = 5000  (CLI), 其余 deployer 字段用默认值
@@ -398,7 +398,7 @@ Agent 加载:
   --validate               校验包结构后退出
 
 服务:
-  --listen ADDR:PORT       TCP 监听地址（默认 0.0.0.0:7890）
+  --listen ADDR:PORT       TCP 监听地址（默认 0.0.0.0:17891）
   --uds-biz-path PATH      UDS 业务套接字路径（默认 /tmp/agentflowd_biz.sock）
   --uds-ctrl-path PATH     UDS 控制套接字路径（默认 /tmp/agentflowd_ctrl.sock）
   --max-connections N      最大并发客户端连接（默认 1024）

@@ -41,9 +41,7 @@ import os
 import re
 import sys
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
+import requests
 from pathlib import Path
 from typing import Any
 
@@ -117,39 +115,22 @@ def _run_turn_rest(message: str, timeout: int = TURN_TIMEOUT) -> dict[str, Any]:
         }
     """
     url = f"{BRIDGE_HTTP}/api/chat/{AGENT_ID}"
-    payload = json.dumps({
+    payload = {
         "user_id": USER_ID,
         "client_id": CLIENT_ID,
         "content": message,
-    }, ensure_ascii=False).encode("utf-8")
+    }
 
     start = time.time()
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={"Content-Type": "application/json; charset=utf-8",
-                 "Accept": "application/json"},
-        method="POST",
-    )
-
     try:
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-            raw = resp.read().decode("utf-8")
-            status_code = resp.status
-    except urllib.error.HTTPError as exc:
-        body = ""
-        try:
-            body = exc.read().decode("utf-8")[:500]
-        except Exception:
-            pass
-        return {
-            "final_content": "",
-            "task_id": "",
-            "success": False,
-            "status_code": exc.code,
-            "elapsed": time.time() - start,
-            "error": f"HTTP {exc.code}: {exc.reason} | body={body}",
-        }
+        resp = requests.post(
+            url,
+            json=payload,
+            headers={"Accept": "application/json"},
+            timeout=HTTP_TIMEOUT,
+        )
+        raw = resp.text
+        status_code = resp.status_code
     except Exception as exc:
         return {
             "final_content": "",
@@ -254,16 +235,15 @@ def _fetch_traces() -> list[dict]:
     需要 ``user_id`` + ``client_id`` query 参数（daemon 通过 SessionRouter 解析 session）。
     返回 ``{success, data:{traces:[...], total:N}, error}``。
     """
-    params = (
-        f"?user_id={urllib.parse.quote(USER_ID)}"
-        f"&client_id={urllib.parse.quote(CLIENT_ID)}"
-        f"&limit=200"
-    )
-    url = f"{BRIDGE_HTTP}/api/agents/{AGENT_ID}/llm-traces{params}"
+    params = {
+        "user_id": USER_ID,
+        "client_id": CLIENT_ID,
+        "limit": 200,
+    }
+    url = f"{BRIDGE_HTTP}/api/agents/{AGENT_ID}/llm-traces"
     try:
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        resp = requests.get(url, params=params, headers={"Accept": "application/json"}, timeout=15)
+        data = resp.json()
     except Exception as exc:
         print(f"[guard] WARN: fetch traces failed: {exc}")
         return []

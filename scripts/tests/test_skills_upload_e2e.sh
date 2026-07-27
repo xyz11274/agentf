@@ -5,14 +5,20 @@
 # Validates: agent.upload_skills, agent.list_skills, agent.remove_skill
 #
 # Usage:    ./scripts/test_skills_upload_e2e.sh
-# Env vars: AF_HOST (127.0.0.1) | AF_PORT (7890) | AF_AGENT_ID (harness-agent)
+# Env vars: AF_HOST (127.0.0.1) | AF_PORT (17891) | AF_AGENT_ID (harness-agent)
 # Exit:     0 = all pass, 1 = some fail, 2 = missing prerequisite tool
 # ============================================================================
 
 set -euo pipefail
 
+# 加载环境配置
+_ENV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../configs" && pwd)" 2>/dev/null || _ENV_DIR=""
+_ENV="${AGENTFLOW_ENV:-dev}"
+if [ -n "$_ENV_DIR" ] && [ -f "$_ENV_DIR/$_ENV/.env" ]; then set -a; source "$_ENV_DIR/$_ENV/.env"; set +a; fi
+unset _ENV_DIR _ENV
+
 HOST="${AF_HOST:-127.0.0.1}"
-PORT="${AF_PORT:-7890}"
+PORT="${AF_PORT:-17891}"
 AGENT_ID="${AF_AGENT_ID:-harness-agent}"
 
 SKILL_NAME="test-skill"

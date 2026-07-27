@@ -37,6 +37,10 @@ aisf_adapter:
 # ── Artifact 公网地址 ─────────────────────────────────────────────
 artifact_public_base_url: "http://localhost:8199/health"
 
+# ── 产物存储目录（详见 docs/design/features/artifact-storage.md §8）──
+# 空字符串 = 默认 agent_packages_path.parent / artifacts_storage
+artifacts_storage_dir: ""
+
 # ── 文件路径 ──────────────────────────────────────────────────────
 agent_packages_dir: "examples/agent"
 skill_hub_dir: "resource/skill_hub"
@@ -53,9 +57,8 @@ session_context_limit_rounds: 5
 session_sync_interval: 10.0  # 测试时缩短同步间隔
 
 # ── 多模态内容 ────────────────────────────────────────────────────
-content_image_inline_threshold_kb: 256
 uploads_dir: "/tmp/agentflow/test-uploads"
-chat_turn_timeout_seconds: 120.0  # 测试较短超时
+chat_turn_timeout_seconds: 300.0  # 实测 outfit-stylist skill 耗时分布（logs/tests/ 3 轮回归）：最坏 162s、多个 >100s 样本，是 LLM while-loop 多轮 tool_calls 的真实业务厚度（非偶发）；300s 留 ~1.8x 余量。客户端 read_timeout 必须略大于此值（见 frontend/bridge/tests/test_e2e_rest_chat_session.py）。真实 LLM 偶发慢还由 test_multi_turn_context_maintained 断言放宽兜底（3 轮中至少 2 轮成功），不只靠阈值
 daemon_status_refresh_interval: 5.0
 
 # ── CORS（测试环境全开放） ───────────────────────────────────────
@@ -84,10 +87,18 @@ agent_defaults:
     model: ""
     temperature: 0.3
   skill:
-    max_iterations: 4       # 测试缩短轮次
+    # e2e 优化：真实 LLM (MiniMax-M3) 多轮 tool_calls 长尾延迟显著
+    # （实测 outfit-stylist 单节点 150s，含 1 次 83s 长尾 LLM 调用，见
+    # logs/tests/20260718_231428_TestRestSseChat_outfit_daemon_real_llm/daemon.log）。
+    # 测试场景只需 LLM 给一段 text 回复，无需完整"查天气→识别图→生成效果图"工作流。
+    # 限制 max_iterations=2：1 轮 tool_call + 1 轮 finish 足够覆盖 e2e 断言。
+    # node_timeout_sec=90：给单轮 LLM 长尾留余量，避免误杀正常调用。
+    # llm_recovery_attempts=0：测试不希望进入恢复重试循环。
+    # 生产配置 (configs/prod/bridge.yaml) 保留 max_iterations=8 不变。
+    max_iterations: 2       # e2e 优化：限制 LLM 循环轮次
     max_completion_tokens: 1024
-    llm_recovery_attempts: 1
-    node_timeout_sec: 60    # 测试较短超时
+    llm_recovery_attempts: 0  # e2e 优化：禁用恢复重试
+    node_timeout_sec: 90    # e2e 优化：给长尾 LLM 留余量
     model_max_tokens: 32000 # 测试减小上下文
     compaction_threshold: 0.8
     model: ""               # 空=使用全局 AF_LLM_MODEL
@@ -99,10 +110,10 @@ agent_defaults:
   # UDS 通道切换：true 时为模型名自动补 aisf/ 前缀，走 UDS 而非 HTTP
   use_aisf_models: false
   vision:
-    base_url: ""
-    model: ""
-    api_key: ""
+    base_url: "${AF_VISION_BASE_URL:-}"
+    model: "${AF_VISION_MODEL:-}"
+    api_key: "${AF_VISION_API_KEY:-}"
   vision_fallback:
-    base_url: ""
-    model: ""
-    api_key: ""
+    base_url: "${AF_VISION_FALLBACK_BASE_URL:-}"
+    model: "${AF_VISION_FALLBACK_MODEL:-}"
+    api_key: "${AF_VISION_FALLBACK_API_KEY:-}"

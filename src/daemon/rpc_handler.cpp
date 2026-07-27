@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <csignal>
+#include <filesystem>
 #include <sstream>
 #include <unistd.h>
 
@@ -14,6 +15,10 @@
 #include "daemon/event_broker.h"
 #include "daemon/response_poller.h"
 #include "daemon/rpc_server.h"
+#include "daemon/sandbox_lifecycle.h"  // SandboxLifecycle::create
+#include "daemon/session_manager.h"
+#include "sandbox/sandbox_factory.h"   // SandboxFactory::SandboxLaunchException
+#include "sandbox/sandbox_helpers.h"   // SandboxHelpers::validate_upload_path
 #include "agent/agent.h"
 #include "agent/session_router.h"
 #include "runtime/agent_runtime.h"
@@ -121,8 +126,13 @@ std::string resolve_session_id(
 }  // namespace
 
 RpcHandler::RpcHandler(runtime::MMAgentRuntime& runtime, AgentRegistry& registry,
-                       ResponsePoller& poller, EventBroker& event_broker)
+                       ResponsePoller& poller, EventBroker& event_broker,
+                       SessionManager& session_manager,
+                       SandboxLifecycle* sandbox_lifecycle,
+                       bool sandbox_allow_fallback)
     : runtime_(runtime), registry_(registry), poller_(poller), event_broker_(event_broker),
+      session_manager_(session_manager), sandbox_lifecycle_(sandbox_lifecycle),
+      sandbox_allow_fallback_(sandbox_allow_fallback),
       start_time_ms_(now_ms()) {}
 
 std::string RpcHandler::json_escape(const std::string& s) {
@@ -217,6 +227,12 @@ void RpcHandler::register_all(RpcServer& server) {
       [this](const std::string& p, int64_t id, int, ChannelType) { return handle_databus_list_keys(p, id); });
   server.register_handler("databus.remove_by_prefix",
       [this](const std::string& p, int64_t id, int, ChannelType) { return handle_databus_remove_by_prefix(p, id); });
+
+  // Sandbox
+  server.register_handler("sandbox.read_file",
+      [this](const std::string& p, int64_t id, int, ChannelType) { return handle_sandbox_read_file(p, id); });
+  server.register_handler("sandbox.upload_file",
+      [this](const std::string& p, int64_t id, int, ChannelType) { return handle_sandbox_upload_file(p, id); });
 }
 
 // --- Query methods ---
@@ -393,6 +409,74 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
   if (!platform_context.empty()) message.metadata["platform_context"] = platform_context;
   if (stream_str == "true") message.metadata["stream"] = "true";
 
+  // ── Sandbox 创建（按用户身份，懒加载）────────────────────────────
+  // 在 route_request_message 前创建沙箱，确保 worker 执行时沙箱已就绪
+  // sandbox_lifecycle_ 为 nullptr 时跳过（sandbox-mode=none 向后兼容）
+  std::shared_ptr<sandbox::Sandbox> sandbox_sb;
+  if (sandbox_lifecycle_) {
+    sandbox::SandboxKey key;
+    key.user_id = user_id;
+    key.client_id = client_id;
+    key.agent_id = agent_id;
+    try {
+      sandbox_sb = sandbox_lifecycle_->create(key);
+      if (sandbox_sb) {
+        Logger::instance().info_f(
+            "[SANDBOX] Created/reused sandbox id=%s for user=%s client=%s agent=%s",
+            sandbox_sb->id().c_str(), user_id.c_str(), client_id.c_str(), agent_id.c_str());
+      }
+    } catch (const SandboxLifecycle::ConcurrentLimitException& e) {
+      Logger::instance().warn_f(
+          "[SANDBOX] Concurrent limit reached (%d/%d) for user=%s client=%s agent=%s, "
+          "continuing without sandbox isolation",
+          e.current(), e.limit(), user_id.c_str(), client_id.c_str(), agent_id.c_str());
+      // 不拒绝请求——沙箱隔离是增强能力，请求本身仍可处理（降级到无沙箱）
+    } catch (const sandbox::SandboxFactory::SandboxLaunchException& e) {
+      if (sandbox_allow_fallback_) {
+        Logger::instance().error_f(
+            "[SANDBOX] Failed to launch sandbox for user=%s client=%s agent=%s: %s, "
+            "continuing without sandbox isolation",
+            user_id.c_str(), client_id.c_str(), agent_id.c_str(), e.what());
+        // 不拒绝请求——沙箱拉起失败（如 Docker 不可用/镜像未构建）降级到无沙箱
+      } else {
+        // allow_fallback=false：沙箱拉起失败直接拒绝请求，返回明确错误
+        auto resp = build_error(-32000,
+            "Sandbox launch failed: " + std::string(e.what()) +
+            " [allow_fallback=false]", id);
+        Logger::instance().error_f(
+            "[SANDBOX] Sandbox launch failed, rejecting request (allow_fallback=false): %s",
+            e.what());
+        return resp;
+      }
+    }
+  }
+
+  // 沙箱创建成功后将 endpoint 注入 message metadata（flow 到 node inputs）
+  // 并 setenv 到 daemon 进程环境，确保所有子进程（含 skill_executor）继承 AF_SANDBOX_ENDPOINT
+  if (sandbox_sb) {
+    const std::string& ep = sandbox_sb->endpoint();
+    message.metadata["sandbox_endpoint"] = ep;
+    setenv("AF_SANDBOX_ENDPOINT", ep.c_str(), 1);
+    Logger::instance().info_f(
+        "[SANDBOX] Injected AF_SANDBOX_ENDPOINT=%s for user=%s client=%s",
+        ep.c_str(), user_id.c_str(), client_id.c_str());
+
+    // 同步会话级用户上传目录到沙箱（agent-package-structure.md §2.2/§3.2）
+    // E2B 沙箱远端，需主动同步；Local/Docker 共享 workdir，基类 no-op 跳过
+    // 失败不拒绝请求（沙箱隔离是增强能力），记 warning 继续处理
+    try {
+      std::string session_upload_dir = _resolve_session_upload_dir(agent_id, user_id, client_id);
+      if (!session_upload_dir.empty()) {
+        sandbox_sb->sync_session_uploads(session_upload_dir);
+      }
+    } catch (const std::exception& e) {
+      Logger::instance().warn_f(
+          "[SANDBOX] sync_session_uploads failed for user=%s client=%s agent=%s: %s "
+          "(continuing without user uploads in sandbox)",
+          user_id.c_str(), client_id.c_str(), agent_id.c_str(), e.what());
+    }
+  }
+
   if (!agent->route_request_message(message)) {
     return build_error(-1, "Failed to route request message", id);
   }
@@ -557,6 +641,13 @@ std::string RpcHandler::handle_session_destroy(const std::string& params, int64_
     return build_error(-32602, "Invalid params: missing agent_id or session_id", id);
   }
   int removed = runtime_.clear_session_data(agent_id, session_id);
+
+  // 清理该 agent 关联的沙箱（AgentFoundry 沙箱机制移植）
+  // 委托给 SandboxLifecycle::destroy_by_agent 一次性销毁，避免调用方遍历 list_active 后再调 destroy 触发二次遍历
+  if (sandbox_lifecycle_) {
+    sandbox_lifecycle_->destroy_by_agent(agent_id);
+  }
+
   return build_success("{\"success\":true,\"keys_removed\":" + std::to_string(removed) + "}", id);
 }
 
@@ -880,6 +971,197 @@ std::string RpcHandler::handle_databus_remove_by_prefix(const std::string& param
   Logger::instance().info_f("[DATABUS_CLEANUP] Removed %d keys for agent=%s session=%s prefix=%s",
                             removed, agent_id.c_str(), session_id.c_str(), prefix.c_str());
   return build_success(oss.str(), id);
+}
+
+// --- Sandbox ---
+
+std::string RpcHandler::handle_sandbox_read_file(const std::string& params, int64_t id) {
+  // 参数：sandbox_id（沙箱唯一标识），path（文件相对路径）
+  std::string sandbox_id = extract_json_string_local(params, "sandbox_id");
+  std::string file_path = extract_json_string_local(params, "path");
+  if (sandbox_id.empty() || file_path.empty()) {
+    return build_error(-32602, "Invalid params: need sandbox_id and path", id);
+  }
+
+  // 1. 运行时通道：查活沙箱 → POST /exec (tool=read_file) 转发
+  auto active = session_manager_.list_active();
+  for (auto& sb : active) {
+    if (sb->id() == sandbox_id) {
+      std::string ep = sb->endpoint().rfind('/') == sb->endpoint().size() - 1
+          ? sb->endpoint().substr(0, sb->endpoint().size() - 1)
+          : sb->endpoint();
+      // 通过 POST /exec 调用沙箱内 HTTP server 的 read_file 工具
+      // 对齐 contracts/sandbox-http-server.md POST /exec 契约
+      // 用 rapidjson 构造 body，转义由库自动处理（避免手写转义漏覆盖控制字符）
+      rapidjson::Document req_doc;
+      req_doc.SetObject();
+      rapidjson::Document::AllocatorType& alloc = req_doc.GetAllocator();
+      // rapidjson AddMember 需要 Value 右值，不能直接传 const char* / std::string
+      rapidjson::Value tool_val;
+      tool_val.SetString("read_file", alloc);
+      req_doc.AddMember("tool", tool_val.Move(), alloc);
+      rapidjson::Value tool_params(rapidjson::kObjectType);
+      rapidjson::Value path_val;
+      path_val.SetString(file_path.c_str(), static_cast<rapidjson::SizeType>(file_path.size()), alloc);
+      tool_params.AddMember("path", path_val.Move(), alloc);
+      req_doc.AddMember("tool_params", tool_params.Move(), alloc);
+      req_doc.AddMember("opts", rapidjson::Value(rapidjson::kObjectType).Move(), alloc);
+      std::string body = rj_stringify(req_doc);
+      std::string curl_cmd = "curl -s -m 10 -X POST -H 'Content-Type: application/json' -d '" + body + "' '" + ep + "/exec' 2>/dev/null";
+      FILE* pipe = popen(curl_cmd.c_str(), "r");
+      if (!pipe) {
+        return build_success("{\"found\":false,\"source\":\"runtime\",\"error\":\"curl failed\"}", id);
+      }
+      char buf[4096];
+      std::string result;
+      while (fgets(buf, sizeof(buf), pipe) != nullptr) {
+        result += buf;
+      }
+      pclose(pipe);
+
+      // 解析 ExecResult JSON
+      std::string exit_code_str = extract_json_string_local(result, "exit_code");
+      std::string content = extract_json_string_local(result, "stdout");
+      std::string err = extract_json_string_local(result, "stderr");
+      if (!exit_code_str.empty() && exit_code_str != "0") {
+        return build_success("{\"found\":false,\"source\":\"runtime\",\"error\":\"" + json_escape(err) + "\"}", id);
+      }
+      if (!content.empty()) {
+        // 对内容做 JSON 转义（包含在 success JSON 的 content 字段中）
+        std::string escaped;
+        for (char c : content) {
+          if (c == '"' || c == '\\') { escaped += '\\'; escaped += c; }
+          else if (c == '\n') { escaped += "\\n"; }
+          else if (c == '\r') { escaped += "\\r"; }
+          else if (c == '\t') { escaped += "\\t"; }
+          else { escaped += c; }
+        }
+        return build_success("{\"found\":true,\"source\":\"runtime\",\"content\":\"" + escaped + "\"}", id);
+      }
+      // 运行时通道无内容，回退到快照
+      break;
+    }
+  }
+
+  // 2. 快照通道（回退，仅 Local/Docker 模式）
+  // E2B 模式不经过此路径（直接返回未找到）
+  return build_success("{\"found\":false,\"source\":\"snapshot\",\"error\":\"not found\"}", id);
+}
+
+std::string RpcHandler::handle_sandbox_upload_file(const std::string& params, int64_t id) {
+  // 对称 handle_sandbox_read_file：Bridge → daemon → 沙箱内 HTTP server POST /upload
+  // 契约：contracts/bridge-sandbox-files.md RPC sandbox.upload_file
+  // 设计权威源：agent-package-structure.md §3.6 用户上传资产流转
+  //
+  // 与 read_file 的关键差异：
+  //   1. POST /upload 端点（二进制专属）而非 /exec + write_file
+  //   2. body 是 {path, content_b64} 而非 {tool, tool_params, opts}
+  //   3. 强制 path 以 workspace/upload/ 为前缀（守 artifact 边界 I-6 + 鲛穿越）
+  //   4. 不走快照回退通道——快照是只读的，写入仅走运行时通道
+  std::string sandbox_id = extract_json_string_local(params, "sandbox_id");
+  std::string file_path = extract_json_string_local(params, "path");
+  std::string content_b64 = extract_json_string_local(params, "content_b64");
+  if (sandbox_id.empty() || file_path.empty() || content_b64.empty()) {
+    return build_error(-32602, "Invalid params: need sandbox_id, path and content_b64", id);
+  }
+
+  // 守 artifact 边界 I-6 + 会话级路径校验：只接受 workspace/{user_id}_{client_id}/upload/{filename}
+  {
+    std::string upload_err = sandbox::SandboxHelpers::validate_upload_path(file_path);
+    if (!upload_err.empty()) {
+      return build_success("{\"written\":false,\"error\":\"PATH_NOT_IN_UPLOAD_DIR\","
+                           "\"message\":\"" + json_escape(upload_err) + "\","
+                           "\"path\":\"" + json_escape(file_path) + "\"}", id);
+    }
+  }
+
+  // 1. 运行时通道：查活沙箱 → POST /upload 转发
+  auto active = session_manager_.list_active();
+  for (auto& sb : active) {
+    if (sb->id() == sandbox_id) {
+      std::string ep = sb->endpoint().rfind('/') == sb->endpoint().size() - 1
+          ? sb->endpoint().substr(0, sb->endpoint().size() - 1)
+          : sb->endpoint();
+      // 对齐 contracts/sandbox-http-server.md POST /upload 契约
+      // 用 rapidjson 构造 body，转义由库自动处理（避免手写转义漏覆盖控制字符）
+      rapidjson::Document req_doc;
+      req_doc.SetObject();
+      rapidjson::Document::AllocatorType& alloc = req_doc.GetAllocator();
+      rapidjson::Value path_val;
+      path_val.SetString(file_path.c_str(), static_cast<rapidjson::SizeType>(file_path.size()), alloc);
+      req_doc.AddMember("path", path_val.Move(), alloc);
+      rapidjson::Value b64_val;
+      b64_val.SetString(content_b64.c_str(), static_cast<rapidjson::SizeType>(content_b64.size()), alloc);
+      req_doc.AddMember("content_b64", b64_val.Move(), alloc);
+      std::string body = rj_stringify(req_doc);
+      // -m 30：二进制图可能几 MB，给足超时（read_file 用 -m 10 是因为文本小）
+      std::string curl_cmd = "curl -s -m 30 -X POST -H 'Content-Type: application/json' -d '" + body + "' '" + ep + "/upload' 2>/dev/null";
+      FILE* pipe = popen(curl_cmd.c_str(), "r");
+      if (!pipe) {
+        return build_success("{\"written\":false,\"error\":\"INTERNAL\",\"message\":\"curl failed\"}", id);
+      }
+      char buf[4096];
+      std::string result;
+      while (fgets(buf, sizeof(buf), pipe) != nullptr) {
+        result += buf;
+      }
+      pclose(pipe);
+
+      // 解析沙箱内 server 响应（{written, bytes_written, path} 或 {error: {...}})
+      // 透传给 Bridge，由 Bridge 决定如何处理错误
+      std::string written = extract_json_string_local(result, "written");
+      if (written == "true") {
+        // 成功：透传完整响应（含 bytes_written + path）
+        return build_success(result, id);
+      }
+      // 失败：沙箱内 server 返回错误 JSON，透传给 Bridge
+      std::string err_code = extract_json_string_local(result, "code");
+      if (!err_code.empty()) {
+        return build_success("{\"written\":false,\"error\":\"" + json_escape(err_code) +
+                             "\",\"message\":\"" + json_escape(extract_json_string_local(result, "message")) +
+                             "\",\"path\":\"" + json_escape(file_path) + "\"}", id);
+      }
+      // curl 失败或响应不可解析
+      return build_success("{\"written\":false,\"error\":\"INTERNAL\","
+                           "\"message\":\"sandbox HTTP server unreachable or invalid response: " +
+                           json_escape(result) + "\"}", id);
+    }
+  }
+
+  // 2. 沙箱不存在——upload 不走快照回退通道（快照是只读的）
+  return build_success("{\"written\":false,\"error\":\"SANDBOX_NOT_FOUND\","
+                       "\"message\":\"sandbox not active: " + json_escape(sandbox_id) + "\"}", id);
+}
+
+std::string RpcHandler::_resolve_session_upload_dir(const std::string& agent_id,
+                                                    const std::string& user_id,
+                                                    const std::string& client_id) {
+  // 推算会话级用户上传目录宿主机绝对路径（与 bridge content_serializer._compute_upload_dir 同构）
+  // 真相源：agent package 路径在 config.agents[i].package_path，agent_id 匹配 name_override 或 basename
+  // 返回：{abs_package_path}/workspace/{user_id}_{client_id}/upload/
+  // 找不到对应 agent 或三元组不完整 → 返回空（调用方按空跳过）
+  if (agent_id.empty() || user_id.empty() || client_id.empty()) {
+    return "";
+  }
+  if (!sandbox_lifecycle_) {
+    return "";  // mode=none 时 sandbox_lifecycle_ 为 nullptr，无沙箱无上传
+  }
+  const auto& config = sandbox_lifecycle_->config();
+  namespace fs = std::filesystem;
+  for (const auto& entry : config.agents) {
+    // package_path 可能为相对路径（如 "examples/agent/outfit-assistant"）
+    std::string pkg_path = fs::absolute(entry.package_path).string();
+    // 匹配 agent_id：name_override 优先，否则用 basename
+    std::string name = entry.name_override;
+    if (name.empty()) {
+      auto pos = pkg_path.find_last_of('/');
+      name = (pos != std::string::npos) ? pkg_path.substr(pos + 1) : pkg_path;
+    }
+    if (name != agent_id) continue;
+    // 同构 bridge 的 _compute_upload_dir 路径约定
+    return pkg_path + "/workspace/" + user_id + "_" + client_id + "/upload";
+  }
+  return "";
 }
 
 }  // namespace daemon

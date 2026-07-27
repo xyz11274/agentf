@@ -28,7 +28,7 @@ import os
 import socket
 import sys
 import time
-import urllib.request
+import requests
 from typing import Any, Optional
 
 import pytest
@@ -212,9 +212,8 @@ def _fetch_traces(user_id: str, client_id: str,
         params = f"agent_id={AGENT_ID}&user_id={user_id}&client_id={client_id}&limit=100"
         url = f"{BRIDGE_HTTP}/api/agents/{AGENT_ID}/llm-traces?{params}"
         try:
-            req = urllib.request.Request(url, headers={"Accept": "application/json"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            resp = requests.get(url, headers={"Accept": "application/json"}, timeout=10)
+            data = resp.json()
         except Exception:
             time.sleep(2)
             continue

@@ -144,6 +144,48 @@ AGENTFLOW_ENV=dev                           AGENTFLOW_ENV=prod
 |------|------|---------|
 | **环境配置（权威）** | `configs/dev/agentflowd.json` / `configs/test/agentflowd.json` / `configs/prod/agentflowd.json` | `scripts/start_daemon.sh` 自动传 `--config` |
 
+### sandbox 段（agentflowd.json）
+
+`agentflowd.json` 顶层 `sandbox` 对象控制 AgentFoundry 沙箱机制。三种 mode（`local`/`docker`/`e2b`）**共用同一 workspace 契约**——只是隔离强度和是否跨机器不同，工具调用方式（HTTP POST `/exec`）完全一致。
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `mode` | string | `"none"` | `none`/`local`/`docker`/`e2b`。`none` = 向后兼容（无沙箱） |
+| `workdir_root` | string | `/tmp/agentflow_sandbox` | 沙箱工作区根目录，每沙箱在 `workdir_root/<sandbox_id>/` 下 |
+| `snapshot_root` | string | `/tmp/agentflow_snapshots` | 快照持久化根目录，销毁时快照落 `snapshot_root/<sandbox_id>/` |
+| `sandbox_http_port` | int | `8080` | 沙箱内 HTTP server 监听端口（容器内固定，LocalSandbox 用 0 自动分配） |
+| `sandbox_max_active` | int | `16` | 并发软上限，超限拒绝新用户对话 |
+| `output_max_bytes` | int | `0` | 输出截断阈值，0 = 不截断 |
+| `gc_destroy_ttl_ms` | int | `600000` (10min) | 活沙箱闲置超时转 RECYCLING |
+| `gc_recycle_snapshot_ttl_ms` | int | `86400000` (24h) | 销毁后快照过期清理 |
+| `e2b_default_template` | string | `"base"` | E2B 远程沙箱默认模板（mode=e2b 时生效） |
+| `skills_src_dir` | string | `""` | 宿主机上 agent package 的 `harness/skills` 路径，用于 DockerSandbox 技能同步。为空时从 `--package` 路径自动推导 |
+
+**环境变量覆盖**（优先级：环境变量 > 配置文件 > 代码默认值）：
+
+| 环境变量 | 对应字段 |
+|---------|---------|
+| `AF_SANDBOX_MODE` | `sandbox.mode` |
+| `AF_SANDBOX_WORKDIR_ROOT` | `sandbox.workdir_root` |
+| `AF_SANDBOX_SNAPSHOT_ROOT` | `sandbox.snapshot_root` |
+| `AF_SANDBOX_HTTP_PORT` | `sandbox.sandbox_http_port` |
+| `AF_SANDBOX_MAX_ACTIVE` | `sandbox.sandbox_max_active` |
+| `AF_SANDBOX_OUTPUT_MAX_BYTES` | `sandbox.output_max_bytes` |
+| `AF_SANDBOX_GC_DESTROY_TTL_MS` | `sandbox.gc_destroy_ttl_ms` |
+| `AF_SANDBOX_GC_RECYCLE_SNAPSHOT_TTL_MS` | `sandbox.gc_recycle_snapshot_ttl_ms` |
+| `AF_SANDBOX_E2B_TEMPLATE` | `sandbox.e2b_default_template` |
+| `AF_SANDBOX_SKILLS_SRC_DIR` | `sandbox.skills_src_dir` |
+
+**配置优先级提醒**：`apply_env_overrides` 会覆盖配置文件中的同名字段。如需固定值不被环境变量覆盖，请在启动脚本中 unset 对应环境变量。
+
+**校验规则**（`validate_config`）：
+- `mode` 必须是 `none`/`local`/`docker`/`e2b` 之一
+- `mode != none` 时，`workdir_root` 和 `snapshot_root` 必须非空
+- `sandbox_http_port` 必须在 `[1, 65535]` 范围内
+- `sandbox_max_active` 必须为正整数
+- `gc_destroy_ttl_ms` 和 `gc_recycle_snapshot_ttl_ms` 必须为正数
+- `output_max_bytes` 必须为非负数（0 = 不截断）
+
 ---
 
 ## 组件与配置对照
@@ -192,7 +234,7 @@ AGENTFLOW_ENV=dev                           AGENTFLOW_ENV=prod
 
 | 配置项 | dev | test | prod | 原因 |
 |--------|-----|------|------|------|
-| daemon listen | `127.0.0.1:17891` | `127.0.0.1:17891` | `0.0.0.0:7890` | 开发/测试本地绑定，生产全接口 |
+| daemon listen | `127.0.0.1:17891` | `127.0.0.1:17891` | `0.0.0.0:17891` | 开发/测试本地绑定，生产全接口；端口全环境统一 17891 |
 | daemon worker_threads | 4 | 2 | 8 | 测试最小资源，生产高并发 |
 | dataref_bridge.capacity_mb | 512 | 128 | 1024 | 测试最小资源 |
 | dataref_bridge.redis_url | 空（禁用） | 空（禁用） | `redis://127.0.0.1:6379` | 开发/测试不依赖 Redis |
@@ -220,5 +262,5 @@ AGENTFLOW_ENV=test ./scripts/start_daemon.sh                # test daemon config
 # ── 覆盖个别字段（不修改配置文件）──
 export AF_DATAREF_CAPACITY_MB=2048         # daemon 环境变量覆盖
 export AGENTFLOW_ENV=prod                  # bridge 环境选择
-export DAEMON_PORT=7890                    # bridge 连接不同 daemon 端口
+export DAEMON_PORT=17891                   # bridge 连接不同 daemon 端口
 ```

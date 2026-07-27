@@ -1,9 +1,11 @@
-import importlib.util
+from __future__ import annotations
+
 import sys
 from pathlib import Path
 
 import requests
 
+from agentflow_runtime import llm_call as MODULE
 
 # llm_call.py does `from common.clients import OpenAiCompatibleClient, ...` at
 # import time — the ``common`` package lives under ``nodes/``, so we have to put
@@ -11,12 +13,6 @@ import requests
 _NODES_DIR = (Path(__file__).parents[1] / "nodes").resolve()
 if str(_NODES_DIR) not in sys.path:
     sys.path.insert(0, str(_NODES_DIR))
-
-MODULE_PATH = Path(__file__).parents[1] / "nodes" / "llm_call.py"
-SPEC = importlib.util.spec_from_file_location("outfit_llm_call", MODULE_PATH)
-MODULE = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-SPEC.loader.exec_module(MODULE)
 
 # After llm_call loads we can import the OpenAI client module — the actual
 # ``requests.post`` call happens there, so monkeypatch must target its module
@@ -124,9 +120,18 @@ def test_resolve_vision_config_api_key_direct(monkeypatch):
 
 
 def test_resolve_vision_config_api_key_minimax_fallback(monkeypatch):
-    """MINIMAX_API_KEY should be checked before VISION_FALLBACK_API_KEY."""
-    monkeypatch.delenv("VISION_API_KEY", raising=False)
-    monkeypatch.delenv("VISION_FALLBACK_API_KEY", raising=False)
+    """Vision API key fallback chain: AF_BR_VISION_API_KEY → MINIMAX_API_KEY → AF_BR_VISION_FALLBACK_API_KEY.
+
+    Contract: when higher-priority keys are unset, the next key in the chain
+    is used. This test verifies the middle link (MINIMAX_API_KEY) is hit
+    when AF_BR_VISION_API_KEY is unset, regardless of the specific vendor.
+
+    All three env vars must be cleared first to avoid real-environment leakage.
+    """
+    monkeypatch.delenv("AF_BR_VISION_API_KEY", raising=False)
+    monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+    monkeypatch.delenv("AF_BR_VISION_FALLBACK_API_KEY", raising=False)
+    # Set the middle-priority key; expect it to be returned
     monkeypatch.setenv("MINIMAX_API_KEY", "minimax-key")
     result = MODULE.resolve_vision_config()
     assert result["api_key"] == "minimax-key"

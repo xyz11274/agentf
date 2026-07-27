@@ -22,10 +22,10 @@ def log(msg: str):
 
 def execute():
     user_input = af_input()
-    dialogue_id = dialogue_id()
-    session_id = session_id()
+    dlg_id = dialogue_id()
+    sess_id = session_id()
 
-    log(f"triggered session={session_id} dialogue={dialogue_id}")
+    log(f"triggered session={sess_id} dialogue={dlg_id}")
     log(f"AF_INPUT={user_input}")
     log("passthrough — empty output, framework auto-forwards to coordinator")
     print(json.dumps({}, ensure_ascii=False))

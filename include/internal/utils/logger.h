@@ -2,6 +2,7 @@
 #define AGENTFLOW_BASIC_LOGGER_H
 
 #include <chrono>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -16,6 +17,7 @@ namespace agentflow {
 /**
  * Simple logger for AgentFlow system
  * Supports logging levels: DEBUG, INFO, WARN, ERROR
+ * Log rotation: max file size + keep N backups
  */
 class Logger {
 public:
@@ -33,6 +35,7 @@ public:
 
   void set_sink(std::unique_ptr<ILogSink> sink);
   void set_log_file(const std::string& path);
+  void set_log_rotation(int64_t max_bytes, int max_backups);
   void flush();
   void log(Level level, const std::string& message);
 
@@ -69,7 +72,13 @@ private:
   std::unique_ptr<ILogSink> sink_;
   std::ofstream             log_file_;
   std::mutex                mutex_;
+  std::string               log_path_;          // 当前日志文件路径
+  int64_t                   max_file_bytes_ = 0;  // 0 = 不轮转
+  int                       max_backups_    = 3;
+  bool                      rotate_pending_ = false;  // 阶段 1 标记，阶段 2 执行
 
+  void rotate_log();                  // 阶段 1：锁内检查 file_size 并标记
+  void rotate_exec_unlocked();        // 阶段 2：执行 fs::rename/remove 并重开文件
   std::string get_timestamp() const;
   std::string get_level_string(Level level) const;
 

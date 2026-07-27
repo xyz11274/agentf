@@ -6,25 +6,44 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
+# 加载环境配置
+ar_load_env
+
+# ── Helper: is PID a zombie? ──────────────────────────────────────────
+_is_zombie() {
+    local pid="$1"
+    # macOS: ps -o state= 返回进程状态首字母，Z = zombie
+    local state
+    state=$(ps -o state= -p "$pid" 2>/dev/null | head -1 | tr -d ' ')
+    [ "$state" = "Z" ]
+}
+
+# ── Helper: check if PID is alive and not zombie ──────────────────────
+_is_alive() {
+    local pid="$1"
+    kill -0 "$pid" 2>/dev/null || return 1
+    _is_zombie "$pid" && return 1 || return 0
+}
+
 # ── Helper: resolve running PID ─────────────────────────────────────
 _resolve_pid() {
     local -a pids=()
+    # 优先读 PID 文件
     if [ -f /tmp/agentflowd.pid ]; then
         local pid_file
         pid_file=$(cat /tmp/agentflowd.pid)
-        if kill -0 "$pid_file" 2>/dev/null; then
+        if _is_alive "$pid_file"; then
             pids+=("$pid_file")
         else
             rm -f /tmp/agentflowd.pid
         fi
     fi
+    # 再 pgrep 全系统查（排除已死的僵尸）
     if [ ${#pids[@]} -eq 0 ]; then
-        # pgrep may return multiple PIDs (one per line); read them all
         while IFS= read -r line; do
-            [ -n "$line" ] && pids+=("$line")
+            [ -n "$line" ] && _is_alive "$line" && pids+=("$line")
         done < <(pgrep -x agentflowd 2>/dev/null || true)
     fi
-    # Return space-separated list so callers can iterate
     echo "${pids[*]:-}"
 }
 
@@ -32,12 +51,12 @@ _resolve_pid() {
 _stop_daemon() {
     local pids="$1"
     echo "[INFO] Stopping daemon (PID=$pids)..."
-    # Kill all PIDs (space-separated list)
+    # SIGTERM first
     kill $pids 2>/dev/null || true
     for _ in $(seq 1 10); do
         local all_dead=true
         for pid in $pids; do
-            if kill -0 "$pid" 2>/dev/null; then
+            if _is_alive "$pid"; then
                 all_dead=false
                 break
             fi
@@ -45,18 +64,19 @@ _stop_daemon() {
         $all_dead && break
         sleep 0.3
     done
-    # Force-kill any survivors
+    # SIGKILL survivors (僵尸进程 kill -9 无效，忽略)
     for pid in $pids; do
-        if kill -0 "$pid" 2>/dev/null; then
+        if _is_alive "$pid"; then
             kill -9 "$pid" 2>/dev/null || true
         fi
     done
+    # 清理 PID 文件
     rm -f /tmp/agentflowd.pid
     echo "[INFO] Daemon stopped"
 }
 
 # ── Config file path (per environment) ─────────────────────────────
-_AGENTFLOW_ENV="${AGENTFLOW_ENV:-dev}"  # 默认 dev，可被环境变量覆盖
+_AGENTFLOW_ENV="${AGENTFLOW_ENV:-dev}"
 _CONFIG_FILE="$AR_PROJECT_ROOT/configs/$_AGENTFLOW_ENV/agentflowd.json"
 
 # ── Parse arguments ─────────────────────────────────────────────────
@@ -67,7 +87,7 @@ PROFILE="dev"
 CONFIG_FILE="$_CONFIG_FILE"
 KEEP_LOGS=false
 BUILD_FIRST=false
-BUILD_OPTION_SET=false  # whether user explicitly passed --build / --no-build
+BUILD_OPTION_SET=false
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -90,17 +110,18 @@ while [ "$#" -gt 0 ]; do
             echo "  restart  Stop, rebuild, then start (default: --build)"
             echo ""
             echo "Options:"
-            echo "  --package PATH   Agent package directory (default: examples/agent/outfit-assistant)"
+            echo "  --package PATH   Agent package directory"
             echo "  --port PORT      Listen port (default: 17891)"
             echo "  --profile PROF   Build profile: dev|release|production (default: dev)"
             echo "  --config PATH    Config file (default: configs/\$AGENTFLOW_ENV/agentflowd.json)"
             echo "  --build          Build binary first"
-            echo "  --no-build       Skip build (e.g. quick config-only restart)"
+            echo "  --no-build       Skip build"
             echo "  --keep-logs      Keep previous log instead of archiving"
             echo "  -r, --restart    Alias for restart command"
             echo ""
             echo "Environment:"
-            echo "  AGENTFLOW_ENV    dev|prod (default: dev, controls default config path)"
+            echo "  AGENTFLOW_ENV    dev|prod (default: dev)"
+            echo "  AF_LOG_FILE      Daemon log path (default: logs/agentflowd.log)"
             exit 0 ;;
         *)
             if [ "$PACKAGE" = "examples/agent/agentflow_assistant" ]; then PACKAGE="$1"
@@ -112,7 +133,7 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-# restart 默认重新编译旧；显式 --no-build 可跳过
+# restart 默认重新编译
 if [ "$ACTION" = "restart" ] && [ "$BUILD_OPTION_SET" = false ]; then
     BUILD_FIRST=true
 fi
@@ -149,14 +170,12 @@ PID=$(_resolve_pid)
 if [ -n "$PID" ]; then
     echo "[WARN] Daemon is already running (PID=$PID)"
     echo "       To restart, use:  $0 restart"
-    echo "       To stop, use:     $0 stop"
     exit 1
 fi
 
 # ── Resolve binary ──────────────────────────────────────────────────
 case "$PROFILE" in
     dev)
-        # HealthAgent 构建输出到 build/，原生构建输出到 build/dev/
         if [ -x "$AR_PROJECT_ROOT/build/agentflowd" ]; then
             BUILD_DIR="$AR_PROJECT_ROOT/build"
         else
@@ -167,7 +186,6 @@ case "$PROFILE" in
         BUILD_DIR="$AR_PROJECT_ROOT/build"
         ;;
     production)
-        # 优先 production 构建，fallback 到 release 构建
         if [ -x "$AR_PROJECT_ROOT/build/production/agentflowd" ]; then
             BUILD_DIR="$AR_PROJECT_ROOT/build/production"
         else
@@ -187,18 +205,19 @@ if [ ! -x "$DAEMON" ]; then
     exit 1
 fi
 
-LOG_FILE="$AR_PROJECT_ROOT/logs/agentflowd.log"
+LOG_FILE="${AF_LOG_FILE:-$AR_PROJECT_ROOT/logs/agentflowd.log}"
 ar_archive_log "$LOG_FILE" "$KEEP_LOGS"
 
 if [[ "$PACKAGE" = /* ]]; then PACKAGE_PATH="$PACKAGE"
 else PACKAGE_PATH="$AR_PROJECT_ROOT/$PACKAGE"
 fi
 
-# ── Launch ──────────────────────────────────────────────────────────
+# ── Launch (注入 AF_LOG_FILE 确保 skill_stderr 日志落 logs/) ──────────
 echo "[INFO] Starting daemon in background..."
 echo "[INFO] Daemon logs → $LOG_FILE"
 echo "[INFO] Config file → $CONFIG_FILE"
 echo "[INFO] View live: tail -f $LOG_FILE"
+export AF_LOG_FILE="$LOG_FILE"
 nohup "$DAEMON" \
     --config "$CONFIG_FILE" \
     --package "$PACKAGE_PATH" \

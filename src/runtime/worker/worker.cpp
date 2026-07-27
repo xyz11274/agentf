@@ -18,6 +18,7 @@
 
 #include "runtime/databus/file_databus_bridge.h"
 #include "runtime/llm/streaming_client.h"
+#include "sandbox/sandbox_helpers.h"  // SandboxHelpers::bash
 #include "utils/logger.h"
 
 namespace agentflow {
@@ -172,6 +173,14 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
     file_databus.put(pair.first, pair.second);
   }
 
+  // Inject sandbox endpoint as AF_SANDBOX_ENDPOINT for tool execution
+  // and artifact download (curl POST /exec on the sandbox HTTP server).
+  // Keeps AF_ARTIFACT_STORAGE_URL free for its original purpose: uploading
+  // artifacts to the Bridge (POST /api/artifacts/upload).
+  if(!request.sandbox_endpoint.empty()) {
+    exec_config.env_vars.push_back("AF_SANDBOX_ENDPOINT=" + request.sandbox_endpoint);
+  }
+
   std::atomic<bool>                  monitor_running{true};
   std::set<std::string>              seen_event_files;
   std::set<std::string>              handled_llm_requests;
@@ -252,6 +261,80 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
   }
 
   runtime::ExecutionResult result;
+
+  // 显式标志位：沙箱路径是否已成功执行并填充 result
+  // 用以替代"result.exit_code == -1 判断是否回退"的脆弱逻辑（避免魔法值依赖）
+  bool sandbox_executed = false;
+
+  // ── Sandbox 执行路径 ──────────────────────────────────────────
+  // 当 request.sandbox 非空时，走 SandboxHelpers::bash 在沙箱内执行，绕过 code_loader
+  // 非空时替换 SHELL_SCRIPT/EXECUTABLE/PYTHON_SCRIPT/GO_SCRIPT/JAVA_JAR 的执行路径
+  // SO_LIBRARY 和 CPP_FUNCTION 仍走原路径（沙箱不支持 SO loading）
+  if (request.sandbox) {
+    sandbox::ExecOptions sbox_opts;
+    sbox_opts.timeout_ms = exec_config.timeout_ms;
+    sbox_opts.working_dir = exec_config.working_dir;
+    // 注入环境变量
+    for (const auto& env : exec_config.env_vars) {
+      auto eq = env.find('=');
+      if (eq != std::string::npos) {
+        sbox_opts.env_vars[env.substr(0, eq)] = env.substr(eq + 1);
+      }
+    }
+
+    // 根据执行模式构造命令
+    std::string cmd;
+    switch (request.mode) {
+      case ExecutionMode::SHELL_SCRIPT:
+      case ExecutionMode::EXECUTABLE:
+        cmd = request.command;
+        for (const auto& arg : request.args) {
+          cmd += " " + arg;
+        }
+        break;
+      case ExecutionMode::PYTHON_SCRIPT:
+        cmd = "python3 " + request.command;
+        for (const auto& arg : request.args) {
+          cmd += " " + arg;
+        }
+        break;
+      case ExecutionMode::GO_SCRIPT:
+        cmd = "go run " + request.command;
+        for (const auto& arg : request.args) {
+          cmd += " " + arg;
+        }
+        break;
+      case ExecutionMode::JAVA_JAR:
+        cmd = "java -jar " + request.command;
+        for (const auto& arg : request.args) {
+          cmd += " " + arg;
+        }
+        break;
+      default:
+        // SO_LIBRARY / CPP_FUNCTION: 沙箱不支持 SO loading，保持 cmd 为空走 code_loader 回退
+        break;
+    }
+
+    if (!cmd.empty()) {
+      auto exec_result = sandbox::SandboxHelpers::bash(*request.sandbox, cmd, sbox_opts);
+      result.success = (exec_result.exit_code == 0);
+      result.stdout = exec_result.stdout;
+      result.stderr = exec_result.stderr;
+      result.exit_code = exec_result.exit_code;
+      result.duration_ms = exec_result.duration_ms;
+      if (!result.success && result.stderr.empty()) {
+        result.error_message = "Sandbox execution failed with exit code " +
+                               std::to_string(exec_result.exit_code);
+      }
+      sandbox_executed = true;  // 沙箱路径已填充 result
+    } else {
+      // SO_LIBRARY / CPP_FUNCTION: fall through, use code_loader below
+    }
+  }
+
+  // 非沙箱路径（或 SO_LIBRARY/CPP_FUNCTION 回退）——走 code_loader
+  // 回退条件：无沙箱实例，或沙箱路径未执行（cmd 为空的 SO_LIBRARY/CPP_FUNCTION 场景）
+  if (!request.sandbox || !sandbox_executed) {
   switch(request.mode) {
     case ExecutionMode::SHELL_SCRIPT:
       result = code_loader.execute_shell_script(request.command, request.args, exec_config);
@@ -301,6 +384,7 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
       result = code_loader.execute(request.command, exec_config);
       break;
   }
+  }  // end if (!request.sandbox || result.exit_code == -1)
 
   monitor_running = false;
   if(event_monitor_thread.joinable()) {
@@ -419,6 +503,15 @@ int64_t MMWorkerEngine::now_ms() {
   timeval tv;
   gettimeofday(&tv, nullptr);
   return static_cast<int64_t>(tv.tv_sec) * 1000 + tv.tv_usec / 1000;
+}
+
+// Sandbox 持有（AgentFoundry 沙箱机制移植，对齐 lld.md T024）
+void MMWorkerEngine::set_sandbox(std::shared_ptr<sandbox::Sandbox> sandbox) {
+  sandbox_ = std::move(sandbox);
+}
+
+std::shared_ptr<sandbox::Sandbox> MMWorkerEngine::get_sandbox() const {
+  return sandbox_;
 }
 
 MMWorkerEngine::MMWorkerEngine(const Config& config) : config_(config) {

@@ -61,7 +61,7 @@ Agent Package（部署最小单元）
 ```
 外部系统 (CI/CD / 管理平台)
     │
-    │ JSON-RPC 2.0 over TCP (端口 7890) 或 UDS
+    │ JSON-RPC 2.0 over TCP (端口 17891) 或 UDS
     │ 方法: agent.upload_skills / agent.list_skills / agent.remove_skill
     ▼
 agentflowd (daemon)
@@ -766,21 +766,21 @@ DATA=$(base64 /tmp/skills-upload.zip | tr -d '\n')
 # 发送 JSON-RPC
 echo "{\"jsonrpc\":\"2.0\",\"method\":\"agent.upload_skills\",\
       \"params\":{\"agent_id\":\"harness-agent\",\"skills_data\":\"$DATA\"},\"id\":1}" | \
-  nc 127.0.0.1 7890
+  nc 127.0.0.1 17891
 ```
 
 ### 14.2 列出 Skills
 
 ```bash
 echo '{"jsonrpc":"2.0","method":"agent.list_skills","params":{"agent_id":"harness-agent"},"id":1}' | \
-  nc 127.0.0.1 7890
+  nc 127.0.0.1 17891
 ```
 
 ### 14.3 删除 Skill
 
 ```bash
 echo '{"jsonrpc":"2.0","method":"agent.remove_skill","params":{"agent_id":"harness-agent","skill_name":"skill-a"},"id":1}' | \
-  nc 127.0.0.1 7890
+  nc 127.0.0.1 17891
 ```
 
 ---

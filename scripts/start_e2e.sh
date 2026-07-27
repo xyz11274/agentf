@@ -33,6 +33,9 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
+# 加载环境配置
+ar_load_env
+
 # ── 默认配置 ──────────────────────────────────────────────────────────
 
 # 组件开关

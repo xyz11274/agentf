@@ -23,10 +23,18 @@ import pytest
 
 NODES_DIR = Path(__file__).resolve().parents[1] / "nodes"
 COORDINATOR_SCRIPT = NODES_DIR / "coordinator_decide.py"
+AGENT_PACKAGE_DIR = Path(__file__).resolve().parents[1]
 
 
 def _run_coordinator(env: dict[str, str]) -> tuple[str, str, int]:
-    """Run coordinator_decide.py with given env, return (stdout, stderr, rc)."""
+    """Run coordinator_decide.py with given env, return (stdout, stderr, rc).
+
+    Critical: 必须显式 unset .env 里可能硬设的干扰变量，否则测试失控。
+    历史反模式：.env 硬设 AF_MODEL_MAX_TOKENS=128000，_load_dotenv(override=True)
+    覆盖测试传入的 400，导致 budget=102400 而非 320，压缩永不触发。
+    正模式：测试运行前临时移走 .env，跑完恢复，确保 subprocess 内 AgentConfig
+    解析的就是测试传入值，不受 .env override 影响。
+    """
     base_env = os.environ.copy()
     # Set minimal node env vars
     base_env.update({
@@ -39,16 +47,32 @@ def _run_coordinator(env: dict[str, str]) -> tuple[str, str, int]:
         # Coordinator 会 call_llm（curl），会快速失败返回 _llm_error
         # 但压缩检查发生在 call_llm 之前，所以即使 LLM 失败也能验证压缩
     })
+    # 显式 unset .env 可能硬设的干扰变量（避免覆盖测试传入值）
+    for var in ("AF_MODEL_MAX_TOKENS", "AF_COMPACTION_THRESHOLD"):
+        base_env.pop(var, None)
     base_env.update(env)
 
-    result = subprocess.run(
-        [sys.executable, str(COORDINATOR_SCRIPT)],
-        env=base_env,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    return result.stdout, result.stderr, result.returncode
+    # 临时移走 .env：_load_dotenv(override=True) 会覆盖测试传入值
+    dotenv_path = AGENT_PACKAGE_DIR / ".env"
+    dotenv_bak = None
+    if dotenv_path.exists():
+        dotenv_bak = dotenv_path.with_suffix(".env.bak_for_test")
+        dotenv_path.rename(dotenv_bak)
+    try:
+        result = subprocess.run(
+            [sys.executable, str(COORDINATOR_SCRIPT)],
+            env=base_env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return result.stdout, result.stderr, result.returncode
+    finally:
+        # 恢复 .env（无论测试成败）
+        if dotenv_bak and dotenv_bak.exists():
+            if dotenv_path.exists():
+                dotenv_path.unlink()  # subprocess 可能重新创建空 .env
+            dotenv_bak.rename(dotenv_path)
 
 
 class TestCompactionIntegration:

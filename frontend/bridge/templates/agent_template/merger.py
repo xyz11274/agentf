@@ -46,12 +46,19 @@ _TEMPLATE_ONLY: tuple[str, ...] = (
     # Runtime tools — critical infrastructure
     "harness/tools/",
     "harness/skills/skill-runner/",
+    # dummy_pre_skill 的 config_dir 不能存在，否则 MMAgent 将 workflow_file 解析为相对路径
+    # 导致找不到文件。由 _build_agent_from_src 在 merger 完成后删除。
+    # "harness/skills/dummy_pre_skill/",
+    "dummy_pre_skill_workflow.json",
+    "nodes/dummy_pre_skill.sh",
+    "nodes/dummy_pre_skill.py",
     # DataBus + LLM — core nodes
     "nodes/databus_client.py",
     "nodes/databus_client.pyc",
     "nodes/llm_call.py",
     "nodes/llm_call.pyc",
     "nodes/dummy_pre_skill.py",
+    "nodes/dummy_pre_skill.sh",
     "nodes/parse_af_input.py",
     # Shell wrappers — framework infrastructure (§3.5 standard implementation)
     # Template always clobbers so wrapper venv-detection logic stays in sync
@@ -331,11 +338,6 @@ def merge_template_with_user_upload(
     )
     _copy_template(template_dir, target_dir)
 
-    # --- Phase 2: rewrite working_dir in workflow files --------------------
-    template_workdir = _detect_template_workdir(template_dir)
-    if template_workdir:
-        _rewrite_working_dir(target_dir, template_workdir, package_workdir)
-
     # --- Phase 3: extract user archive on top, re-apply infra -------------
     suffix = ".tar.gz" if is_tar else ".zip"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -348,6 +350,13 @@ def merge_template_with_user_upload(
         _reapply_template_files(template_dir, target_dir)
     finally:
         tmp_path.unlink(missing_ok=True)
+
+    # --- Phase 2 (after reapply): rewrite working_dir in workflow files ---
+    # MUST be after _reapply_template_files, which overwrites workflow files
+    # from the template (including the template's original working_dir).
+    template_workdir = _detect_template_workdir(template_dir)
+    if template_workdir:
+        _rewrite_working_dir(target_dir, template_workdir, package_workdir)
 
     # --- Phase 4: deep-merge agent.json -----------------------------------
     # Read whatever agent.json is on disk now (could be user's or template's)

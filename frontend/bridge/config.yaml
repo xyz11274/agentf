@@ -50,6 +50,10 @@ aisf_adapter:
 # artifact_public_base_url: "https://115.120.249.45:40092/health"
 artifact_public_base_url: "http://localhost:8199/health"
 
+# ── 产物存储目录（详见 docs/design/features/artifact-storage.md §8）──
+# 空字符串 = 默认 agent_packages_path.parent / artifacts_storage
+artifacts_storage_dir: ""
+
 # ── 文件路径 ──────────────────────────────────────────────────────
 # 相对路径基于项目根目录解析
 agent_packages_dir: "examples/agent"
@@ -70,8 +74,7 @@ session_context_limit_rounds: 5  # 注入到下一轮 chat 的历史对话轮数
 session_sync_interval: 30.0      # agentflow→Bridge session 状态同步轮询间隔（秒）
 
 # ── 多模态内容（Phase A） ─────────────────────────────────────────
-# base64 内联图 ≥ 此 KB 阈值时，bridge 落盘并替换为 file_url
-content_image_inline_threshold_kb: 256
+# 图片由 content_serializer 全量落盘到 workspace/upload/（不做阈值判断）
 uploads_dir: "/tmp/agentflow/uploads"  # 大图落盘目录
 chat_turn_timeout_seconds: 900.0  # 聊天单轮总超时（秒，可用 CHAT_TURN_TIMEOUT_SECONDS 覆盖）
 daemon_status_refresh_interval: 10.0

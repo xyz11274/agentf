@@ -236,22 +236,4 @@ async def update_persistent_session(
     return _ok(updated)
 
 
-@router.delete("/persistent/{session_id}", name="delete_persistent_session")
-async def delete_persistent_session(
-    session_id: str,
-    provider: SessionProvider = Depends(get_session_provider),  # noqa: B008
-) -> dict[str, Any]:
-    """``DELETE /api/sessions/persistent/{id}`` — hard-delete a persistent session
-    and all its associated traces and dialogue data."""
-    sess = await provider.get_session(session_id)
-    if sess is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Persistent session not found: {session_id}",
-        )
-    await provider.delete_session(session_id)
-    logger.info("persistent_session.deleted id=%s", session_id)
-    return _ok({"deleted": session_id})
 
-
-__all__ = ["router"]
