@@ -10,6 +10,7 @@
 
 #include <json/json.h>
 #include <httplib.h>
+#include <framework_com/http_client_factory.h>
 
 #include "resolve_handler.h"
 
@@ -277,6 +278,12 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
 #ifdef COREMIND_ENABLED
                 auto httpF = CMFrm::COM::HttpClientFactory::GetHttpClientFactory();
                 auto h2 = httpF->GetHttp2Client("default");
+#ifndef CMFrm_Http2ClientRequest_DEFINED
+                if (h2) {
+                    // Http2ClientRequest 不存在于当前 SDK 版本时走 httplib fallback
+                    (void)h2;
+                }
+#else
                 if (h2) {
                     auto req = std::make_shared<CMFrm::COM::Http2ClientRequest>();
                     req->SetMethod(CMFrm::COM::POST);
@@ -286,6 +293,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                     h2->Send(req);
                     return;
                 }
+#endif
 #endif
                 auto ds = target.find("://");
                 auto da = ds == std::string::npos ? 0 : ds + 3;
@@ -361,25 +369,24 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                     post_callback("Completed", 0, "", true);
 
                     // 额外发送 TaskStatus 报文
-                    Json::Value task_status = {
-                        {"Header", {
-                            {"MessageType", "TaskStatusManagement"},
-                            {"TaskID", task_id},
-                            {"DialogueId", dialogue_id},
-                            {"Sender", receiver.empty() ? "SysAgent" : receiver},
-                            {"Receiver", sender.empty() ? "APP" : sender},
-                            {"UserName", user_name},
-                            {"ClientSessionId", client_session_id},
-                            {"SeqNum", request_id},
-                            {"EventTimeStamp", current_timestamp_ms()},
-                        }},
-                        {"Data", {
-                            {"MessageType", "TaskStatusReport"},
-                            {"TaskStatusCode", 200},
-                            {"TaskStatusReport", "TaskCompleted"},
-                            {"UserOutputText", accumulated_content},
-                        }},
-                    };
+                    Json::Value task_status;
+                    Json::Value hdr;
+                    hdr["MessageType"] = "TaskStatusManagement";
+                    hdr["TaskID"] = task_id;
+                    hdr["DialogueId"] = dialogue_id;
+                    hdr["Sender"] = receiver.empty() ? "SysAgent" : receiver;
+                    hdr["Receiver"] = sender.empty() ? "APP" : sender;
+                    hdr["UserName"] = user_name;
+                    hdr["ClientSessionId"] = client_session_id;
+                    hdr["SeqNum"] = request_id;
+                    hdr["EventTimeStamp"] = current_timestamp_ms();
+                    task_status["Header"] = hdr;
+                    Json::Value data;
+                    data["MessageType"] = "TaskStatusReport";
+                    data["TaskStatusCode"] = 200;
+                    data["TaskStatusReport"] = "TaskCompleted";
+                    data["UserOutputText"] = accumulated_content;
+                    task_status["Data"] = data;
                     // 添加透传字段到 TaskStatus Header
                     for (const auto& k : {"AcmSessionId", "ClientExField", "DeviceCategory",
                                           "DeviceId", "SessionId", "TeamEnvironmentID", "UUID"}) {
@@ -392,6 +399,11 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
 #ifdef COREMIND_ENABLED
                     auto httpF = CMFrm::COM::HttpClientFactory::GetHttpClientFactory();
                     auto h2 = httpF->GetHttp2Client("default");
+#ifndef CMFrm_Http2ClientRequest_DEFINED
+                    if (h2) {
+                        (void)h2;
+                    }
+#else
                     if (h2) {
                         auto req = std::make_shared<CMFrm::COM::Http2ClientRequest>();
                         req->SetMethod(CMFrm::COM::POST);
@@ -401,6 +413,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                         h2->Send(req);
                         return true;
                     }
+#endif
 #endif
                     auto ds = ts_url.find("://");
                     auto da = ds == std::string::npos ? 0 : ds + 3;
