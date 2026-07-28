@@ -1,5 +1,6 @@
 #include "sidecar_router.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -13,6 +14,12 @@
 #include "resolve_handler.h"
 
 // ── JSON 辅助 ──
+
+static std::string current_timestamp_ms() {
+    auto now = std::chrono::system_clock::now().time_since_epoch();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now).count();
+    return std::to_string(ms);
+}
 
 static Json::StreamWriterBuilder json_writer() {
     Json::StreamWriterBuilder w;
@@ -299,7 +306,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
             std::string sse_buffer;
             std::string accumulated_content;
             cli.Post(callback_path_stream.c_str(), http_headers, json_dumps(rest_body), "application/json",
-                [&](const char* data, size_t len) {
+                [&](const char* data, size_t len) -> bool {
                     sse_buffer.append(data, len);
                     // 按 \n 分割 SSE 事件
                     size_t pos;
@@ -313,7 +320,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                         if (line.compare(0, 6, "data: ") != 0) continue;
                         std::string payload = line.substr(6);
                         // 检查终止信号
-                        if (payload == "[DONE]") return;
+                        if (payload == "[DONE]") return false;
                         // 解析 SSE json
                         Json::Value sse_json;
                         Json::CharReaderBuilder rdr;
@@ -331,12 +338,12 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                                 if (msg.isString()) token = msg.asString();
                             }
                         }
-                        if (token.empty()) return;
+                        if (token.empty()) continue;
                         // ── 只返回 coordinator 的消息 ──
                         // skill_executor 的消息（_source=skill_executor）跳过，不回调上游。
                         // 如需恢复所有消息，注释掉下面三行，取消注释 next 三行。
                         std::string _src = sse_json.get("_source", "").asString();
-                        if (_src != "coordinator" && !_src.empty()) return;
+                        if (_src != "coordinator" && !_src.empty()) continue;
                         // ── end ──
                         bool is_progress = sse_json.get("_progress", false).asBool()
                                         || sse_json.get("_chunk_type", "").asString() == "progress";
@@ -347,6 +354,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                         post_callback("Running", is_progress ? 1 : 0, token, false);
                         accumulated_content += token;
                     }
+                    return true;
                 },
                 [&]() {
                     // SSE 流结束：发送 Completed 信号（内容已增量发出，Completed 仅做结束标记）
