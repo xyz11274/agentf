@@ -16,6 +16,7 @@
 #include <random>
 #include <sstream>
 #include <string>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "sandbox/sandbox_factory.h"  // SandboxLaunchException
