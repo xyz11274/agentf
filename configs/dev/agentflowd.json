@@ -24,7 +24,7 @@
   },
   "daemon": {
     "pid_file": "/tmp/agentflowd.pid",
-    "drain_timeout_ms": 30000
+    "drain_timeout_ms": 120000
   },
   "sandbox": {
     "mode": "e2b",

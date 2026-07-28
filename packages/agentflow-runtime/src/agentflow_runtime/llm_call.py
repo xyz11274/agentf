@@ -291,13 +291,37 @@ class _TraceRecorder:
             def _on_chunk(raw_json: str) -> None:
                 # 异常全部吞掉（守 §3.7：trace 路径失败不中断主流程）
                 try:
+                    # DEBUG: 验证 _on_chunk 是否被执行
+                    import sys as _sys
+                    print(f"[LLM_CALL_DEBUG] _on_chunk called: type={_chunk_type} json_len={len(raw_json)} source={source}", file=_sys.stderr, flush=True)
+                    
+                    # 守 streaming-response.md §3.2 核心原则 #2：
+                    #   llm_chunk → 原始 OpenAI delta JSON（choices[0].delta.content），
+                    #                Bridge 透传，前端/外部客户端自行组装增量 token
+                    #   progress  → message.content 格式的纯文本
+                    #                （choices[0].message.content），直接渲染
+                    if _chunk_type == "progress":
+                        # 从原始 delta JSON 中提取纯文本（delta.content），
+                        # 直接推纯文本，不包装 message.content 格式——
+                        # Bridge 的 _sse_stream() 会自己做 message.content 包装。
+                        # 避免双重嵌套导致格式 C（msg.content = JSON-stringified JSON）。
+                        parsed = json.loads(raw_json)
+                        inner_text = ""
+                        choices = parsed.get("choices", [])
+                        if choices:
+                            delta = choices[0].get("delta", {})
+                            if isinstance(delta, dict):
+                                inner_text = delta.get("content", "")
+                        content = inner_text
+                    else:
+                        content = raw_json  # llm_chunk: 原始 delta JSON，Bridge 透传
+
                     kwargs: dict = {"type": _chunk_type, "source": source}
                     if skill:
                         kwargs["skill"] = skill
                     if round_i:
                         kwargs["round"] = str(round_i)
-                    # dialogue_id 由 _RealDataBusClient 内部从 session_id 派生
-                    _push_client.response_push(raw_json, **kwargs)
+                    _push_client.response_push(content, **kwargs)
                 except Exception:
                     print(f"[flow] WARN: chunk_publisher failed", file=sys.stderr)
 

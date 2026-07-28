@@ -45,7 +45,10 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             "authorization": self.headers.get("authorization"),
             "content_type": self.headers.get("content-type"),
         })
-        response = json.dumps({"success": True, "data": {"content": "node-ok"}}).encode()
+        response = json.dumps({
+            "task_id": "test-task",
+            "content": "node-ok",
+        }).encode()
         self.send_response(200)
         self.send_header("content-type", "application/json; charset=utf-8")
         self.send_header("content-length", str(len(response)))
@@ -208,7 +211,11 @@ def test_sidecar_builds_trusted_context_for_bridge(
     失败意味着:
     - Bridge/Node 无法消费 SideCar 的服务发现结果。
     """
-    payload = {"eventType": "TASKASSIGNMENT", "taskID": f"task-{path.rsplit('/', 1)[-1]}"}
+    payload = {
+        "Header": {"UserName": "6d64bb1e63e24c5d", "ClientSessionId": "trace-request-id",
+                    "TaskID": f"task-{path.rsplit('/', 1)[-1]}"},
+        "Data": {"UserInputText": "test request"},
+    }
     with (
         _bridge_server() as (bridge_url, received),
         _sidecar(sidecar_binary, bridge_url) as base_url,
@@ -221,15 +228,13 @@ def test_sidecar_builds_trusted_context_for_bridge(
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
-    assert response.json()["data"]["content"] == "node-ok"
+    assert response.json()["Data"]["UserOutputText"] == "node-ok"
     assert len(received) == 1
-    assert received[0]["path"] == "/internal/coremind/v1/callback"
+    assert received[0]["path"] == "/api/chat/outfit-assistant?stream=false"
     envelope = json.loads(received[0]["body"])
-    assert envelope["schema_version"] == "1.0"
-    assert envelope["source"] == "coremind-sidecar"
-    assert envelope["original_request"] == payload
-    assert envelope["platform_context"] == {"services": {}}
-    assert envelope["request_id"]
+    assert envelope["user_id"]  # user_id is extracted from Header.UserName
+    assert envelope["client_id"]  # client_id is extracted from Header.ClientSessionId
+    assert envelope["content"]  # multimodal OpenAI format
     assert received[0]["request_id"] == "trace-sidecar-e2e"
     assert received[0]["content_type"].startswith("application/json")
 

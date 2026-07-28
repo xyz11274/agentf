@@ -23,7 +23,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
+import typing
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -53,6 +55,24 @@ from services import _pull_and_save_traces
 from session_dependencies import get_session_provider
 
 logger = logging.getLogger("agentflow.bridge.routes.chat_rest")
+
+# ⚠ DEBUG: SSE capture fixture path (set via env; empty = disabled)
+_SSE_CAPTURE_PATH = os.environ.get("AF_SSE_CAPTURE", "")
+_sse_capture_file: typing.IO | None = None
+
+
+def _capture_sse_payload(payload: dict[str, Any]) -> None:
+    """如果 AF_SSE_CAPTURE 环境变量已设，将 SSE payload 追加到 fixture 文件。"""
+    global _sse_capture_file
+    if not _SSE_CAPTURE_PATH:
+        return
+    try:
+        if _sse_capture_file is None:
+            _sse_capture_file = open(_SSE_CAPTURE_PATH, "w")
+        _sse_capture_file.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        _sse_capture_file.flush()
+    except Exception:
+        pass
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
@@ -454,7 +474,10 @@ async def _chat_turn_events(
         is_final = _extract_final(notification)
         chunk_content = publicize_artifact_urls(_extract_content(notification))
         msg_type = _extract_metadata_value(notification, "type", "")
-        is_progress = (msg_type == "progress")
+        # daemon 推送的 progress 通知仅设 metadata["final"]="false"，
+        # 未设 metadata["type"]="progress"。
+        # 当 type 为空且非终态时，判定为 progress。
+        is_progress = (msg_type == "progress") or (not msg_type and not is_final)
 
         chunk_count += 1
 
@@ -926,6 +949,8 @@ async def chat_rest(
                         if meta_val:
                             payload[meta_key] = meta_val
                     yield _sse_data_json(payload)
+                    # ⚠ DEBUG: capture SSE payload for fixture (AF_SSE_CAPTURE)
+                    _capture_sse_payload(payload)
                     # 累积到 sse_chunks 供首 chunk 检测（L887）及数据库持久化。
                     # 守不变量 I-1：仅 final chunk 的内容入库，非 final chunk 仅作 SSE 流式展示。
                     # 与同步路径（Fix 2, L690-695）逻辑一致。

@@ -19,6 +19,7 @@ message(STATUS "coremind_bridge PLATFORM_DIR=${PLATFORM_DIR}")
 add_executable(coremind_bridge
     main.cpp
     uds_model_proxy.cpp
+    proxy_handler.cpp
 )
 
 if(COREMIND_ENABLED)

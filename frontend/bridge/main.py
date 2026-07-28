@@ -42,7 +42,6 @@ from routes import sessions as sessions_routes
 from routes.artifacts import router as artifacts_router
 from routes.aisf_tasks import router as aisf_tasks_router
 from routes.chat_rest import router as chat_rest_router
-from routes.coremind_internal import router as coremind_internal_router
 from routes.packages import router as packages_router
 from routes.sandbox_files import router as sandbox_files_router
 from routes.skill_hub import router as skill_hub_router
@@ -437,7 +436,6 @@ class _RequestTimingMiddleware(BaseHTTPMiddleware):
 bridge_app.add_middleware(_RequestDebugMiddleware)
 bridge_app.add_middleware(_RequestTimingMiddleware)
 bridge_app.include_router(artifacts_router)
-bridge_app.include_router(coremind_internal_router)
 
 
 # ---------------------------------------------------------------------------

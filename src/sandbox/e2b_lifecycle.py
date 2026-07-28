@@ -225,7 +225,7 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
     _apply_ssl_patch()
     try:
         sb = Sandbox._cls_connect_sandbox(sandbox_id=args.sandbox_id)
-        sb.snapshot(filesystem_only=True)
+        sb.create_snapshot()
         _log(f"snapshot: done sandbox_id={args.sandbox_id}")
         return 0
     except Exception as e:

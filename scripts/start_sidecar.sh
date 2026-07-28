@@ -19,7 +19,19 @@ case "$PROFILE" in
     *) echo "[ERROR] Profile must be production or local" >&2; exit 2 ;;
 esac
 
-if [ ! -x "$BINARY" ]; then
+if [ "$PROFILE" = "local" ]; then
+    echo "[sidecar] Building for local profile..."
+    BUILD_DIR="$AR_PROJECT_ROOT/sidecar/build-dev"
+    if [ ! -d "$BUILD_DIR" ]; then
+        cmake -S "$AR_PROJECT_ROOT/sidecar" -B "$BUILD_DIR"
+    fi
+    cmake --build "$BUILD_DIR" --target coremind_bridge -j4
+    if [ ! -x "$BINARY" ]; then
+        echo "[ERROR] Build failed: $BINARY not produced" >&2
+        exit 1
+    fi
+    echo "[sidecar] Build succeeded"
+elif [ ! -x "$BINARY" ]; then
     echo "[ERROR] Missing SideCar binary: $BINARY" >&2
     exit 1
 fi
@@ -34,5 +46,15 @@ export APPID="${APPID:-0}"
 export COREMIND_REQUIRED_SERVICES="${COREMIND_REQUIRED_SERVICES:-}"
 export COREMIND_OPTIONAL_SERVICES="${COREMIND_OPTIONAL_SERVICES:-}"
 
+LOG_DIR="$AR_PROJECT_ROOT/logs"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/sidecar.log"
+# 归档旧日志
+[ -f "$LOG_FILE" ] && mv "$LOG_FILE" "${LOG_FILE}.$(date +%Y%m%d-%H%M%S)" 2>/dev/null
+
+echo "[sidecar] Starting on 0.0.0.0:$PORT, logging to $LOG_FILE"
+echo "[sidecar] Binary: $BINARY"
+echo "[sidecar] Bridge: $BRIDGE_URL"
+
 exec "$BINARY" --listen "0.0.0.0:$PORT" --bridge-url "$BRIDGE_URL" \
-    $( [ "$PROFILE" = "production" ] && echo "--coremind-mode" )
+    $( [ "$PROFILE" = "production" ] && echo "--coremind-mode" ) >> "$LOG_FILE" 2>&1

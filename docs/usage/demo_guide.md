@@ -13,6 +13,7 @@
 1. [环境说明](#1-环境说明)
 2. [Agent Package 格式说明](#2-agent-package-格式说明)
 3. [第一步：上传 Agent Package](#3-第一步上传-agent-package)
+3.5 [对接模式与响应数据格式](#35-对接模式与响应数据格式)
 4. [第二步：触发请求（对话）](#4-第二步触发请求对话)
 5. [第三步：收集 Trace](#5-第三步收集-trace)
 6. [第四步：更新技能（更新 Agent Package）](#6-第四步更新技能更新-agent-package)
@@ -170,37 +171,36 @@ outfit-assistant/
 ├── package.json                   # 包元信息
 ├── agent.json                     # agent 定义（4 个 task）
 ├── agent.md                       # 模型配置 + 业务意图 + skills 列表
-├── dummy_pre_skill_workflow.json  # 前置 hook workflow（dummy_pre_skill task）
 ├── coordinator_workflow.json      # coordinator 决策 workflow（coordinator_decide 节点）
+├── dummy_pre_skill_workflow.json  # 前置 hook workflow（dummy_pre_skill task）
 ├── skill_workflow.json            # 通用 skill 执行 workflow（skill_executor 节点）
-├── setup.sh                       # 环境初始化脚本（创建 venv、装依赖）
+├── setup.sh                       # 环境初始化脚本（创建 .venv、装依赖、写 sentinel）
 ├── nodes/
-│   ├── dummy_pre_skill.py         # 前置 hook 占位节点
+│   ├── coordinator_decide.sh      # wrapper：load .env → 包内 .venv / fallback 系统 python3
 │   ├── coordinator_decide.py      # coordinator LLM 决策核心（run_skills 工具）
+│   ├── dummy_pre_skill.sh         # wrapper
+│   ├── dummy_pre_skill.py         # 前置 hook 占位节点
+│   ├── skill_executor.sh          # wrapper
 │   ├── skill_executor.py          # 通用 skill 执行器 + 双层 tool 加载
-│   ├── databus_client.py          # DataBus 封装（dialogue_id 前缀对齐 + global 方法）
-│   └── llm_call.py                # LLM 调用 (curl) + trace 写入（_TraceRecorder）
+│   └── common/                    # 节点共享内部模块（DataBus 客户端、LLM 调用、trace 记录等由 agentflow-runtime 提供）
 ├── harness/
 │   ├── skills/
 │   │   ├── dummy_pre_skill/SKILL.md       # hook 占位 skill
 │   │   ├── skill-runner/SKILL.md          # 通用 skill-runner 占位
-│   │   ├── outfit-stylist/                # 综合穿搭 skill（含 weather.py 等 scripts/）
-│   │   ├── forge-image-gen/               # 图片生成 skill
-│   │   └── video-gen/                     # 视频生成 skill
+│   │   └── minimax_outfit_skills/         # 业务 skills 子目录
+│   │       ├── outfit-stylist/            # 综合穿搭 skill（含 weather.py / outfit_vision.py 等 scripts/）
+│   │       ├── forge-image-gen/           # 图片生成 skill（含 generate.py）
+│   │       └── video-gen/                 # 视频生成 skill（含 make_video.py）
 │   └── tools/
-│       ├── __init__.py            # 工具自动发现入口
-│       ├── bash.py                # bash 执行
-│       ├── read_file.py           # 读文件
-│       ├── write_file.py          # 写文件
-│       ├── web_fetch.py           # 网页抓取
-│       ├── list_skills.py         # 列出技能
-│       ├── load_skill.py          # 加载技能文档
-│       └── mcp_bridge.py          # MCP 桥接
-├── data/
-│   └── occasion_guide.json        # 穿搭指南数据
+│       └── __init__.py            # 工具自动发现入口（具体工具由 agentflow-runtime 提供）
+├── assets/                        # 静态素材（示例图等）
+├── outputs/                       # 业务产物输出目录（按 task/UUID 分桶）
 ├── .env.example                   # 环境变量模板
+├── .env_minimax / .env_dashqueue  # 模型专用 .env 变体
 └── requirements.txt               # Python 依赖
 ```
+
+> 说明：早期版本中的 `nodes/databus_client.py`、`nodes/llm_call.py` 已收敛到 `agentflow-runtime` Python 包，节点脚本通过 `import agentflow_runtime` 引用；harness/tools 下的具体工具（`bash.py`、`read_file.py`、`web_fetch.py` 等）同样由 `agentflow-runtime` 提供，包内只保留 `__init__.py` 自动发现入口。业务 skills 实际下挂在 `harness/skills/minimax_outfit_skills/` 子目录而非直接挂在 `harness/skills/` 下。
 
 ### 2.1 `package.json` — 包元信息
 
@@ -211,8 +211,8 @@ outfit-assistant/
   "description": "穿搭助手 — dispatcher → dummy_pre_skill hook → coordinator loop",
   "author": "AgentFlow",
   "workflows": [
-    "dummy_pre_skill_workflow.json",
     "coordinator_workflow.json",
+    "dummy_pre_skill_workflow.json",
     "skill_workflow.json"
   ],
   "metadata": {
@@ -238,12 +238,12 @@ outfit-assistant/
 ```json
 {
   "name": "OutfitAssistantAgent",
-  "version": "3.0.0",
+  "version": "3.2.0",
   "description": "穿搭助手 — dispatcher → dummy_pre_skill hook → coordinator loop",
   "session_pool_size": 3,
   "max_workflows": 10,
   "max_concurrent_workflows": 5,
-  "data_bus_capacity_mb": 50,
+  "data_bus_capacity_mb": 500,
   "tasks": [
     {
       "id": 0,
@@ -371,8 +371,8 @@ coordinator 的 LLM 决策节点，单节点 DAG：
       "id": "coordinator_decide",
       "name": "Coordinator Decide",
       "type": "task",
-      "execution_mode": "python_script",
-      "command": "./nodes/coordinator_decide.py",
+      "execution_mode": "shell_script",
+      "command": "bash nodes/coordinator_decide.sh",
       "working_dir": "examples/agent/outfit-assistant",
       "json_output": true,
       "enable_hot_reload": false,
@@ -415,8 +415,8 @@ coordinator 节点的两种出口：
       "id": "skill_executor",
       "name": "Universal Skill Executor",
       "type": "task",
-      "execution_mode": "python_script",
-      "command": "./nodes/skill_executor.py",
+      "execution_mode": "shell_script",
+      "command": "bash nodes/skill_executor.sh",
       "working_dir": "examples/agent/outfit-assistant",
       "json_output": true,
       "enable_hot_reload": false,
@@ -442,13 +442,13 @@ coordinator 节点的两种出口：
 
 #### 前置 hook workflow（`dummy_pre_skill_workflow.json`）
 
-dispatcher 首次路由的占位 hook，单节点 `dummy_pre_skill.py`，输出为空，仅作为"先经过 hook 再进 coordinator"的固定编排点。
+dispatcher 首次路由的占位 hook，单节点 `dummy_pre_skill.sh`（wrapper 转 `dummy_pre_skill.py`），输出为空，仅作为"先经过 hook 再进 coordinator"的固定编排点。
 
 | node 字段 | 说明 |
 |-----------|------|
 | `id` | 节点唯一标识 |
 | `execution_mode` | `shell_script` / `python_script` / `so` |
-| `command` | 执行命令（相对 `working_dir`） |
+| `command` | 执行命令（相对 `working_dir`）。当前 outfit-assistant 三个 workflow 均用 `shell_script` + `bash nodes/xxx.sh`，由 .sh wrapper 加载 `.env` 后转调同名 .py 节点脚本 |
 | `working_dir` | 工作目录（相对于 daemon 启动目录） |
 | `json_output` | `true` 表示 stdout 输出 JSON，框架自动解析 |
 | `inputs` | 入参声明。框架自动注入同名 `AF_INPUT`、`AF_SESSION_ID`、`AF_DIALOGUE_ID` 等环境变量；额外入参（如 `completed_skill_name`、`exec_skill_key`）也以 `AF_*` 大写形式注入 |
@@ -458,6 +458,8 @@ dispatcher 首次路由的占位 hook，单节点 `dummy_pre_skill.py`，输出�
 ### 2.5 LLM 节点脚本格式
 
 节点脚本（如 `coordinator_decide.py`、`skill_executor.py`）通过环境变量接收输入，通过 stdout 输出 JSON。框架把 workflow `inputs` 声明的入参以 `AF_*` 大写形式注入为环境变量。
+
+> **wrapper 层**：当前所有节点都走 `bash nodes/xxx.sh` wrapper 而非直接调 `.py`。wrapper 优先用包内 `.venv`（由 `setup.sh` 装好后写 `.agentflow_installed` sentinel），不可用则 fallback 到系统 `python3`（依赖 bridge 启动时预装 `agentflow-runtime`）。wrapper 启动前会 `source` 包根 `.env`，使 `API_KEY` 等业务环境变量在 Python 启动前就就位。节点脚本本身的输入/输出协议不变。
 
 **输入环境变量（coordinator_decide 节点示例）：**
 
@@ -592,6 +594,212 @@ POST /api/agents/{agent_id}/load
 
 ---
 
+## 3.5 对接模式与响应数据格式
+
+Bridge 支持两种对接模式，**响应数据格式完全不同**，对接方必须按自己所在模式解析：
+
+| 模式 | 入口 | 触发方 | 响应方式 | 响应格式 |
+|------|------|--------|---------|---------|
+| **A. 直连 Bridge** | `POST /api/chat/{agent_id}` / `WS /ws/chat/{agent_id}` | 对接方主动 HTTP/WS 调用 | 同步 JSON 或流式 chunk（OpenAI-compatible） | Bridge 原生 `ApiResponse` 信封 |
+| **B. SystemAgent 路由** | `POST /aisf/healthagent/v1/tasks` | 上游 SysAgent 调度 Bridge | 异步回调（POST 到上游 `SysAgentEntity`） | AISF AccessCtrl 报文（PascalCase） |
+
+### 3.5.A 模式 A：直连 Bridge
+
+对接方直接调用 `/api/chat/{agent_id}`（REST 同步/SSE）或 `/ws/chat/{agent_id}`（WebSocket），**响应由 Bridge 在同一连接返回**。
+
+#### A.1 同步 REST（`?stream=false` 或省略）
+
+完整回复包在标准 `ApiResponse` 信封里一次性返回：
+
+```json
+{
+  "success": true,
+  "data": {
+    "task_id": "0_task_2_runtime_skill-...",
+    "content": "根据您的出差需求，建议穿着商务休闲装，上海今天气温...",
+    "artifacts": [
+      {"type": "image", "url": "/api/artifacts/outfit-assistant/files/.../look.png",
+       "name": "look.png", "mime_type": "image/png"}
+    ]
+  },
+  "error": null
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `success` | bool | `true` 表示请求成功 |
+| `data.task_id` | string | 本次任务的唯一标识 |
+| `data.content` | string | Agent 的完整回复；可能含图片/HTML 的 Markdown URL |
+| `data.artifacts` | ArtifactInfo[] | 结构化产物元数据（仅 final 才有，可能为空数组） |
+| `error` | object \| null | 失败时 `{code, message}`，成功时 `null` |
+
+#### A.2 SSE 流式（`?stream=true`）
+
+响应为 `text/event-stream`，每行一个 `data:` 事件，**OpenAI Chat Completions SSE 兼容格式**：
+
+```
+data: {"choices":[{"delta":{"content":"正在执行 outfit-stylist…"},"index":0}],"_dialogue_id":"0704123456-abc123def","_progress":true,"_chunk_type":"progress"}
+
+data: {"choices":[{"delta":{"content":"好的，已为您生成方案。"},"index":0}],"_chunk_type":"llm_chunk"}
+
+data: {"choices":[{"delta":{"content":"\n\n## 生成产物"},"index":0}],"_chunk_type":"llm_chunk"}
+
+data: {"choices":[{"message":{"content":"\n\n[📥 下载文件](/api/artifacts/.../look.png)"}}],"_artifacts":[{"type":"image","url":"/api/artifacts/.../look.png","name":"look.png","mime_type":"image/png"}]}
+
+data: [DONE]
+```
+
+| 字段 | 出现时机 | 说明 |
+|------|---------|------|
+| `choices[].delta.content` | llm_chunk / progress chunk | 流式 token（逐段推送） |
+| `choices[].message.content` | text chunk（final） | 完整内容（同步响应格式） |
+| `choices[].index` | 每个 chunk | 恒为 0（单 choice） |
+| `_dialogue_id` | **首个 chunk** | 对话 ID，用于后续 trace 过滤 |
+| `_chunk_type` | 每个 chunk | `text` / `llm_chunk` / `progress`，前端据此分流 |
+| `_progress` | progress chunk | `true` 表示系统进度消息（非模型输出） |
+| `_source` | 部分 chunk | `coordinator` / `skill_executor`，消息来源 |
+| `_artifacts` | **final chunk** | 结构化产物元数据数组 |
+| `error` | 错误时 | `{"message":"...","code":-32000}` |
+| `[DONE]` | 对话完成 | 终止信号，无 data body |
+
+#### A.3 WebSocket（`/ws/chat/{agent_id}`）
+
+逐帧推送，**Bridge 自定义 ChatChunk 帧**（非 OpenAI 格式）：
+
+```json
+{"type":"chunk","content":"正在执行 outfit-stylist…","final":false,"progress":true,"chunk_type":"progress","_source":"coordinator"}
+{"type":"chunk","content":"好的，已为您生成方案。","final":false,"progress":false,"chunk_type":"llm_chunk"}
+{"type":"chunk","content":"\n\n[📥 下载文件](...)","final":true,"progress":false,"artifacts":[{"type":"image","url":"...","name":"look.png"}]}
+{"type":"done","final":true}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `type` | string | `"chunk"` / `"done"` / `"error"` / `"ping"` |
+| `content` | string | 文本片段 |
+| `final` | bool | `true` 时为本轮最后一条 chunk |
+| `progress` | bool | `true` 时为系统进度消息（非模型输出） |
+| `chunk_type` | string | `text` / `llm_chunk` / `progress` |
+| `artifacts` | ArtifactInfo[] | 仅 final chunk 携带 |
+| `_source` / `_skill` / `_round` / `_status` | string | 技能执行元数据（部分 chunk） |
+
+> **WS vs SSE 格式差异**：WebSocket 帧用 `type:"chunk"` + 顶层字段；SSE 用 OpenAI `choices[].delta.content` + `_` 前缀扩展字段。两者内容来源相同，只是序列化信封不同。
+
+### 3.5.B 模式 B：SystemAgent 路由（异步回调）
+
+上游 SysAgent 调度 Bridge 的 `POST /aisf/healthagent/v1/tasks` 端点（AISF 协议）。Bridge **立即返回 202 accepted**，后台执行 agent，完成后**主动 POST 回上游** `http://{SysAgentEntity}:23767/coremind/systemagent/v1/callback`。
+
+> **本模式不走 `/api/chat/*` 路由**。请求入口和回调格式都是 AISF AccessCtrl 协议（PascalCase），与模式 A 的 OpenAI-compatible 格式完全不同。
+
+#### B.1 入站请求（SysAgent → Bridge）
+
+`POST /aisf/healthagent/v1/tasks`，body 为 AccessCtrl 报文：
+
+```json
+{
+  "Header": {
+    "MessageType": "TASKASSIGNMENT",
+    "Sender": "SysAgent",
+    "Receiver": "HealthAgent",
+    "UserName": "zhangsan",
+    "DeviceId": "device-123",
+    "TaskID": "task-abc-001",
+    "SysAgentEntity": "10.0.0.5:23767",
+    "ClientSessionId": "sess-xyz",
+    "EventTimeStamp": "2026-07-28T10:00:00Z"
+  },
+  "Data": {
+    "UserInputText": "帮我推荐穿搭",
+    "UserInputObject": {"data": {"content": [{"type": "image", "data": "<base64>"}]}}
+  }
+}
+```
+
+Bridge 立即返回（不等待 agent 执行）：
+
+```json
+{"status": "accepted", "task_id": "task-abc-001", "mode": "async"}
+```
+
+#### B.2 出站回调（Bridge → 上游 SysAgent）
+
+agent 执行完成后，Bridge 主动 **POST 两份报文**到上游 `SysAgentEntity`：
+
+**① UserOutput（最终文本，可能多次推送）**
+
+```json
+{
+  "Header": {
+    "MessageType": "DataExchange",
+    "Sender": "HealthAgent",
+    "Receiver": "SysAgent",
+    "UserName": "zhangsan",
+    "DeviceId": "device-123",
+    "TaskID": "task-abc-001",
+    "EventTimeStamp": "2026-07-28T10:00:05Z"
+  },
+  "Data": {
+    "MessageType": "UserOutput",
+    "UserOutputText": "上海今天25°C，建议轻薄西装外套搭配休闲裤...",
+    "UserOutputObject": "",
+    "StreamStatus": "Completed",
+    "IsVoiceBroadcast": 0,
+    "UserOutputFlag": 0
+  },
+  "Payload": {"Function": "", "Action": ""}
+}
+```
+
+| `Data` 字段 | 说明 |
+|-------------|------|
+| `StreamStatus` | `Running`（流式中间态）/ `Completed`（最终） |
+| `UserOutputFlag` | `0` = 用户可见文本；`1` = progress（技能执行通知） |
+| `UserOutputObject` | 预留（skill 返回的 code/data JSON，当前空） |
+
+**② TaskStatusReport（任务完成信号，最后一条）**
+
+```json
+{
+  "Header": {
+    "MessageType": "TaskStatusManagement",
+    "Sender": "HealthAgent",
+    "Receiver": "SystemAgent",
+    "TaskID": "task-abc-001",
+    ...
+  },
+  "Data": {
+    "MessageType": "TaskStatusReport",
+    "TaskStatusCode": 200,
+    "TaskStatusReport": "TaskCompleted"
+  },
+  "Payload": {"Function": "", "Action": ""}
+}
+```
+
+| `Data.TaskStatusCode` | 含义 |
+|----------------------|------|
+| `200` | 任务完成 |
+| `500` | 任务失败（`TaskStatusReport` 字段含错误描述） |
+
+> **sidecar 路径**：若对接方通过 sidecar（`sidecar/main.cpp`）转发，sidecar 会把入站 AccessCtrl 转为 Bridge 的 REST SSE 调用，再把 SSE chunk 转回 AccessCtrl UserOutput 回调上游。sidecar 的 UserOutput 帧的 `Header.Sender` 为 `"SysAgent"`、`Header.Receiver` 为 `"APP"`（与 Bridge 直发的 `HealthAgent`/`SysAgent` 不同），但 `Data` 结构一致。
+
+### 3.5.C 两种模式对照速查
+
+| 维度 | 模式 A（直连 Bridge） | 模式 B（SystemAgent 路由） |
+|------|---------------------|--------------------------|
+| 入口端点 | `/api/chat/{agent_id}` / `/ws/chat/{agent_id}` | `/aisf/healthagent/v1/tasks` |
+| 触发方 | 对接方主动调用 | 上游 SysAgent 调度 |
+| 响应方式 | 同一连接返回（同步 JSON / SSE / WS 帧） | 202 accepted 后异步 POST 回上游 |
+| 响应格式 | OpenAI-compatible（`choices[].delta`）或 Bridge ChatChunk | AISF AccessCtrl（PascalCase `Header`/`Data`） |
+| 流式支持 | SSE `data:` 行 / WS 帧 | UserOutput 多次推送（`StreamStatus: Running`） |
+| 产物元数据 | `data.artifacts` / `_artifacts` / `artifacts` 字段 | 需从 `UserOutputText` 的 Markdown URL 自行解析 |
+| 完成信号 | `data: [DONE]` / `{"type":"done"}` | TaskStatusReport（`TaskStatusCode: 200`） |
+| 错误信号 | `error` 字段 / `{"type":"error"}` | TaskStatusReport（`TaskStatusCode: 500`） |
+| 认证 | 无内置（反代层加） | 无内置（AISF 系统内信任） |
+
+---
+
 ## 4. 第二步：触发请求（对话）
 
 ### 4.1 REST 接口
@@ -690,7 +898,7 @@ Content 同样支持 content array 格式，与 REST 接口一致：
 }
 ```
 
-图片格式与 [§4.6 实战场景](#46-实战场景上传图片获取穿搭推荐) 完全一致：小图用 base64 data URL 内联，大图先上传再引用 `file_url`。
+图片格式与 [§4.6 实战场景](#46-实战场景上传图片获取穿搭推荐) 完全一致：所有图片统一用 base64 data URL 内联在 content array 中，Bridge 对 ≥ 256KB 的大图自动落盘替换为 `file_url`，客户端无需先上传。
 
 **Bridge 逐帧推送：**
 
@@ -1012,26 +1220,18 @@ curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
 
 响应中的 `content` 包含 Markdown 格式的推荐表格和图片链接，`artifacts` 数组提供结构化图片元数据。外部服务可任选一种方式消费。
 
-#### 方式二：SSE 流式（大图片，文件上传）
+#### 方式二：SSE 流式（大图片，自动落盘）
 
-对于 base64 后 ≥ 256KB 的大图片（如高清全身照），Bridge 自动落盘并替换为 `file_url`，但仍需注意 `POST body` 大小。推荐先上传再引用：
+对于 base64 后 ≥ 256KB 的大图片（如高清全身照），**Bridge 会自动将其落盘到 `uploads_dir`（默认 `/tmp/agentflow/uploads`）并把 content 中的 data URL 替换为 `file:///...` 形式的 `file_url`**，daemon 侧的 skill 通过 `bash` 工具调用 `outfit_vision.py` 识别该本地路径。客户端**无需先上传**——直接把 base64 data URL 内联在 content array 中发 SSE 请求即可，Bridge 在转发给 daemon 前完成落盘替换。
 
-**步骤 1：上传图片到 Bridge**
+> ⚠️ **`POST /api/chat/uploads` 端点尚未上线**（设计文档 `frontend/bridge/docs/design/features/multimodal-chat-input.md` 标注为 Phase B 待启动）。当前 Phase A：所有图片统一走 content array 内联 base64，Bridge 自动按 256KB 阈值落盘。Phase B 上线后才会提供独立的先上传再引用通道。
 
-```bash
-# 上传图片，返回 file_url
-curl -X POST http://127.0.0.1:8199/health/api/chat/uploads \
-  -H "Content-Type: multipart/form-data" \
-  -F "file=@~/Pictures/my_outfit_hires.png"
-
-# 响应：{"file_url": "file:///tmp/agentflow/uploads/abc123.png", "filename": "my_outfit_hires.png"}
-```
-
-> 上传接口位于 `POST /api/chat/uploads`，接受 `multipart/form-data` 格式。返回的 `file_url` 是 Bridge 本地路径，daemon 侧的 skill 通过 `bash` 工具调用 `outfit_vision.py` 来识别图片，而非虚构的 `read_image` 工具。
-
-**步骤 2：发送 SSE 流式请求，引用上传的文件**
+**步骤 1：发送 SSE 流式请求，图片以 base64 内联**
 
 ```bash
+# 大图同样直接 base64 内联（Bridge 会自动落盘替换为 file_url）
+IMG_DATA="data:image/png;base64,$(base64 -i ~/Pictures/my_outfit_hires.png | tr -d '\n')"
+
 curl -N -X POST "http://127.0.0.1:8199/health/api/chat/outfit-assistant?stream=true" \
   -H "Content-Type: application/json" \
   -d '{
@@ -1039,10 +1239,12 @@ curl -N -X POST "http://127.0.0.1:8199/health/api/chat/outfit-assistant?stream=t
     "client_id": "demo",
     "content": [
       {"type": "text", "text": "帮我推荐一套适合今天上班穿的搭配，并生成效果图"},
-      {"type": "image_url", "image_url": {"url": "file:///tmp/agentflow/uploads/abc123.png"}}
+      {"type": "image_url", "image_url": {"url": "'"$IMG_DATA"'"}}
     ]
   }'
 ```
+
+落盘后的路径形如 `file:///tmp/agentflow/uploads/<sha256>.png`，skill 节点可通过 `outfit_vision.py` 直接读取该本地文件做视觉识别。
 
 **步骤 3：实时接收 SSE 事件流**
 
@@ -1098,7 +1300,7 @@ open look.png
 | 环节 | 关键点 |
 |------|--------|
 | 输入格式 | `content` 支持 `ContentPart[]`：`text` + `image_url`（data: / file: / http(s):） |
-| 图片阈值 | base64 < 256KB 直接内联；≥ 256KB 先上传再引用 `file_url` |
+| 图片阈值 | base64 < 256KB 直接内联透传；≥ 256KB Bridge 自动落盘替换为 `file_url`（无需客户端先上传） |
 | 进度通知 | `progress=true` 的 chunk 在技能执行期间推送，前端可展示进度条 |
 | 产物交付 | final chunk 的 `_artifacts`（SSE）或 `data.artifacts`（同步）提供结构化元数据 |
 | 产物下载 | HTTP GET `/api/artifacts/{agent_id}/files/{path}`，无需认证签名 |
@@ -1127,16 +1329,13 @@ curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
 # 3. 从响应 data.content 中提取 artifact URL → 下载效果图
 ```
 
-##### 方式二：SSE 流式 + 先上传再引用（大图 ≥ 256KB）
+##### 方式二：SSE 流式 + base64 内联（大图 ≥ 256KB，Bridge 自动落盘）
 
 ```bash
-# 1. 上传图片到 Bridge
-curl -X POST http://127.0.0.1:8199/health/api/chat/uploads \
-  -F "file=@tmp/outfit_male_loungewear.jpeg"
+# 1. 大图同样直接 base64 内联（Bridge 会按 256KB 阈值自动落盘替换为 file_url）
+IMG_DATA="data:image/jpeg;base64,$(base64 -i tmp/outfit_male_loungewear.jpeg | tr -d '\n')"
 
-# 响应：{"file_url": "file:///tmp/agentflow/uploads/xxx.jpeg", "filename": "outfit_male_loungewear.jpeg"}
-
-# 2. 发送 SSE 流式请求，引用上传的文件
+# 2. 发送 SSE 流式请求，图片以 base64 内联
 curl -N -X POST "http://127.0.0.1:8199/health/api/chat/outfit-assistant?stream=true" \
   -H "Content-Type: application/json" \
   -d '{
@@ -1144,7 +1343,7 @@ curl -N -X POST "http://127.0.0.1:8199/health/api/chat/outfit-assistant?stream=t
     "client_id": "demo",
     "content": [
       {"type": "text", "text": "帮我点评一下我的穿搭，必须描述我的穿了什么"},
-      {"type": "image_url", "image_url": {"url": "file:///tmp/agentflow/uploads/xxx.jpeg"}}
+      {"type": "image_url", "image_url": {"url": "'"$IMG_DATA"'"}}
     ]
   }'
 
@@ -1257,7 +1456,7 @@ B 窗口（取消方）的新请求获取锁后开始流式响应。
 
 ### 5.1 Trace 数据说明
 
-LLM 调用轨迹（trace）由节点脚本（`coordinator_decide.py` / `skill_executor.py`）通过 `llm_call.py` 的 `_TraceRecorder` 写入 DataBus `llm/` 命名空间。每次 LLM 调用产生 3 条记录 + 1 条索引：
+LLM 调用轨迹（trace）由节点脚本（`coordinator_decide.py` / `skill_executor.py`，实现收敛在 `agentflow-runtime` Python 包）通过 `_TraceRecorder` 写入 DataBus `llm/` 命名空间。每次 LLM 调用产生 3 条记录 + 1 条索引：
 
 | DataBus key | 内容 |
 |-------------|------|
@@ -1547,7 +1746,7 @@ curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
 | `POST` | `/api/chat/{agent_id}` | 同步对话请求（返回完整回复，含 Markdown 产物链接 + `data.artifacts`） |
 | `POST` | `/api/chat/{agent_id}?stream=true` | SSE 流式对话（OpenAI-compatible 格式，final chunk 带 `_artifacts`） |
 | `WS` | `/ws/chat/{agent_id}` | WebSocket 流式对话（实时逐帧推送，含 `progress`/`artifacts` 字段） |
-| `POST` | `/api/chat/uploads` | 上传文件（大图/附件），返回 `file_url` 供后续 chat 引用（multipart/form-data） |
+| — | `/api/chat/uploads` | ⚠️ 待 Phase B 上线。当前大图走 content array 内联 base64，Bridge 按 256KB 阈值自动落盘 |
 
 **ChatChunk 响应格式（流式）：**
 
@@ -1572,8 +1771,9 @@ curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/api/artifacts/{agent_id}/files/{relative_path}` | 获取图片、HTML 及其相对资源（推荐） |
-| `GET` | `/api/artifacts/{agent_id}?path={path}` | 旧版图片兼容接口，不建议新接入使用 |
+| `GET` | `/api/artifacts/{agent_id}/files/{relative_path}` | 获取图片、HTML 及其相对资源（legacy 兼容，内部转 artifact_id 解析） |
+| `GET` | `/api/artifacts/{artifact_id}` | 按 artifact_id（形如 `{agent_id}/{session_id}/{path}`）服务文件，推荐使用 |
+| `POST` | `/api/artifacts/upload` | 上传产物到 bridge 存储中心（body: `{agent_name, session_id, files:[{path, data_b64}]}`），非 chat 图片上传 |
 
 ### 8.5 LLM Trace
 
