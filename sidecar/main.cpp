@@ -42,6 +42,7 @@
 
 // CoreMind framework headers — only available in Huawei build environment
 #ifdef COREMIND_ENABLED
+#include <framework_com/http_client_factory.h>
 #include <framework_starter/framework_starter.h>
 #endif
 
