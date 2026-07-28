@@ -356,7 +356,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                     }
                     return true;
                 },
-                [&]() {
+                [&](uint64_t, uint64_t) -> bool {
                     // SSE 流结束：发送 Completed 信号（内容已增量发出，Completed 仅做结束标记）
                     post_callback("Completed", 0, "", true);
 
@@ -399,7 +399,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                         req->AddHeader("Content-Type", "application/json");
                         req->AddBody(ts_str);
                         h2->Send(req);
-                        return;
+                        return true;
                     }
 #endif
                     auto ds = ts_url.find("://");
@@ -411,6 +411,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                                ts_str, "application/json");
 
                     ctx->WriteAsyncResponse();
+                    return true;
                 }
             );
         }).detach();
