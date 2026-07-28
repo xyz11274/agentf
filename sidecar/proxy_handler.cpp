@@ -146,7 +146,7 @@ void handle_proxy_memory_query(const httplib::Request& req, httplib::Response& r
     std::string errors;
     std::istringstream input(req.body);
     if (!Json::parseFromStream(reader, input, &body, &errors)) {
-        set_json_response(res, {{"status","error"},{"error":"invalid_json"}}, 400);
+        { Json::Value v; v["status"] = "error"; v["error"] = "invalid_json"; set_json_response(res, v, 400); }
         std::cerr << "[coremind_bridge] RES " << req.method << " " << req.path
                   << " 400 | error=invalid_json" << std::endl;
         return;
@@ -169,7 +169,7 @@ void handle_proxy_memory_store(const httplib::Request& req, httplib::Response& r
     std::string errors;
     std::istringstream input(req.body);
     if (!Json::parseFromStream(reader, input, &body, &errors)) {
-        set_json_response(res, {{"status","error"},{"error":"invalid_json"}}, 400);
+        { Json::Value v; v["status"] = "error"; v["error"] = "invalid_json"; set_json_response(res, v, 400); }
         std::cerr << "[coremind_bridge] RES " << req.method << " " << req.path
                   << " 400 | error=invalid_json" << std::endl;
         return;
@@ -192,14 +192,14 @@ void handle_proxy_rag_search(const httplib::Request& req, httplib::Response& res
     std::string errors;
     std::istringstream input(req.body);
     if (!Json::parseFromStream(reader, input, &body, &errors)) {
-        set_json_response(res, {{"status","error"},{"error":"invalid_json"}}, 400);
+        { Json::Value v; v["status"] = "error"; v["error"] = "invalid_json"; set_json_response(res, v, 400); }
         std::cerr << "[coremind_bridge] RES " << req.method << " " << req.path
                   << " 400 | error=invalid_json" << std::endl;
         return;
     }
     // GaussClient 是 C++ SDK，暂用 stub 占位
     // TODO: 接入 GaussClient::Instance()->Search()
-    set_json_response(res, {{"status","stub"},{"service","GaussClient(rag/search)"}});
+    { Json::Value v; v["status"] = "stub"; v["service"] = "GaussClient(rag/search)"; set_json_response(res, v); }
 #else
     set_json_response(res, proxy_stub_response("GaussClient(rag/search)"));
 #endif
@@ -216,14 +216,14 @@ void handle_proxy_context_add(const httplib::Request& req, httplib::Response& re
     std::string errors;
     std::istringstream input(req.body);
     if (!Json::parseFromStream(reader, input, &body, &errors)) {
-        set_json_response(res, {{"status","error"},{"error":"invalid_json"}}, 400);
+        { Json::Value v; v["status"] = "error"; v["error"] = "invalid_json"; set_json_response(res, v, 400); }
         std::cerr << "[coremind_bridge] RES " << req.method << " " << req.path
                   << " 400 | error=invalid_json" << std::endl;
         return;
     }
     // ContextManager 是 C++ SDK，暂用 stub 占位
     // TODO: 接入 ContextManager::AddContext()
-    set_json_response(res, {{"status","stub"},{"service","ContextManager(context/add)"}});
+    { Json::Value v; v["status"] = "stub"; v["service"] = "ContextManager(context/add)"; set_json_response(res, v); }
 #else
     set_json_response(res, proxy_stub_response("ContextManager(context/add)"));
 #endif
