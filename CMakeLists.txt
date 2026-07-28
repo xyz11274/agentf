@@ -119,6 +119,14 @@ if(OPENSSL_FOUND)
   message(STATUS "OpenSSL found - enabling SSL/TLS support")
   message(STATUS "  OpenSSL Version: ${OPENSSL_VERSION}")
   set(USE_OPENSSL ON)
+  # 静态链接 OpenSSL 时, libcrypto.a 可能依赖 zlib, 需要链接 -lz
+  find_package(ZLIB QUIET)
+  if(ZLIB_FOUND)
+    set(OPENSSL_ZLIB_LIBS ZLIB::ZLIB)
+    message(STATUS "  ZLIB found for static OpenSSL linkage")
+  else()
+    set(OPENSSL_ZLIB_LIBS "")
+  endif()
 else()
   message(STATUS "OpenSSL not found - SSL/TLS disabled")
   message(STATUS "  GitHub: https://github.com/openssl/openssl.git")
@@ -369,7 +377,7 @@ endif()
 
 # Link with OpenSSL if available
 if(USE_OPENSSL)
-  target_link_libraries(agentflow PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+  target_link_libraries(agentflow PUBLIC OpenSSL::SSL OpenSSL::Crypto ${OPENSSL_ZLIB_LIBS})
   target_compile_definitions(agentflow PUBLIC AGENTFLOW_WITH_OPENSSL=1)
 endif()
 
@@ -626,7 +634,7 @@ endif()
 
 # Link with OpenSSL if available
 if(USE_OPENSSL)
-  target_link_libraries(node_adapter_lib PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+  target_link_libraries(node_adapter_lib PUBLIC OpenSSL::SSL OpenSSL::Crypto ${OPENSSL_ZLIB_LIBS})
   target_compile_definitions(node_adapter_lib PUBLIC AGENTFLOW_WITH_OPENSSL=1)
 endif()
 
