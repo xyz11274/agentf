@@ -278,12 +278,6 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
 #ifdef COREMIND_ENABLED
                 auto httpF = CMFrm::COM::HttpClientFactory::GetHttpClientFactory();
                 auto h2 = httpF->GetHttp2Client("default");
-#ifndef CMFrm_Http2ClientRequest_DEFINED
-                if (h2) {
-                    // Http2ClientRequest 不存在于当前 SDK 版本时走 httplib fallback
-                    (void)h2;
-                }
-#else
                 if (h2) {
                     auto req = std::make_shared<CMFrm::COM::Http2ClientRequest>();
                     req->SetMethod(CMFrm::COM::POST);
@@ -291,9 +285,8 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                     req->AddHeader("Content-Type", "application/json");
                     req->AddBody(cb_str);
                     h2->Send(req);
-                    return;
+                    return true;
                 }
-#endif
 #endif
                 auto ds = target.find("://");
                 auto da = ds == std::string::npos ? 0 : ds + 3;
@@ -399,11 +392,6 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
 #ifdef COREMIND_ENABLED
                     auto httpF = CMFrm::COM::HttpClientFactory::GetHttpClientFactory();
                     auto h2 = httpF->GetHttp2Client("default");
-#ifndef CMFrm_Http2ClientRequest_DEFINED
-                    if (h2) {
-                        (void)h2;
-                    }
-#else
                     if (h2) {
                         auto req = std::make_shared<CMFrm::COM::Http2ClientRequest>();
                         req->SetMethod(CMFrm::COM::POST);
@@ -413,7 +401,6 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                         h2->Send(req);
                         return true;
                     }
-#endif
 #endif
                     auto ds = ts_url.find("://");
                     auto da = ds == std::string::npos ? 0 : ds + 3;
