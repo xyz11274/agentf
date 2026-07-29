@@ -72,7 +72,7 @@ cors_allowed_origins:
 # ── Agent 默认配置（load_agent 时注入） ──────────────────────────
 agent_defaults:
   llm:
-    api_key: "${AF_LLM_API_KEY:-sk-dca40208f5714152a6cf0de59cc5f1d0}"
+    api_key: "${AF_LLM_API_KEY:-sk-ws-H.EDDMREP.gXlt.MEUCIQDS2ezv7sywxvCIry01hm7tkwKSBd0wmaLDz1_cNFgEbAIgK6mwFXsRvqREZbuPPzB1V8C9H3INslUdKhKfDqlV7ig}"
     base_url: "${AF_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
     model: "${AF_LLM_MODEL:-deepseek-v4-flash}"
     temperature: 0.7
@@ -82,7 +82,7 @@ agent_defaults:
     top_k: 0
     stop: ""
   llm_fallback:
-    api_key: "sk-dca40208f5714152a6cf0de59cc5f1d0"
+    api_key: "sk-ws-H.EDDMREP.gXlt.MEUCIQDS2ezv7sywxvCIry01hm7tkwKSBd0wmaLDz1_cNFgEbAIgK6mwFXsRvqREZbuPPzB1V8C9H3INslUdKhKfDqlV7ig"
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model: "deepseek-v4-flash"
   coordinator:
@@ -108,7 +108,7 @@ agent_defaults:
   vision:
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model: "qwen-vl-max"
-    api_key: "sk-dca40208f5714152a6cf0de59cc5f1d0"
+    api_key: "sk-ws-H.EDDMREP.gXlt.MEUCIQDS2ezv7sywxvCIry01hm7tkwKSBd0wmaLDz1_cNFgEbAIgK6mwFXsRvqREZbuPPzB1V8C9H3INslUdKhKfDqlV7ig"
   vision_fallback:
     base_url: ""
     model: ""

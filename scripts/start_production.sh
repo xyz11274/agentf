@@ -6,6 +6,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
+# 生产环境使用 prod 配置（在 ar_load_env 之前设置，确保加载 configs/prod/.env）
+export AGENTFLOW_ENV="prod"
+# daemon 日志路径：默认 /tmp/agentflowd.log（Pod 可写），可通过 AF_LOG_FILE 覆盖
+export AF_LOG_FILE="${AF_LOG_FILE:-/tmp/agentflowd.log}"
+
 # 加载环境配置
 ar_load_env
 
@@ -24,9 +29,6 @@ PACKAGE="${AGENT_PACKAGE:-examples/agent/outfit-assistant}"
 DAEMON_PORT="${DAEMON_PORT:-17891}"
 BRIDGE_PORT="${PYTHON_BRIDGE_PORT:-8199}"
 SIDECAR_PORT="${COREMIND_BRIDGE_PORT:-23767}"
-
-# 生产环境使用 prod 配置
-export AGENTFLOW_ENV="prod"
 
 # daemon 二进制：优先 production 构建，fallback 到 release
 DAEMON_BINARY="$AR_PROJECT_ROOT/build/production/agentflowd"

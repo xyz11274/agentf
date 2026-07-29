@@ -90,13 +90,13 @@ cors_allowed_origins:
 agent_defaults:
   # ── LLM 主模型 ──
   llm:
-    api_key: "${AF_LLM_API_KEY:-sk-dca40208f5714152a6cf0de59cc5f1d0}"
+    api_key: "${AF_LLM_API_KEY:-sk-ws-H.EDDMREP.gXlt.MEUCIQDS2ezv7sywxvCIry01hm7tkwKSBd0wmaLDz1_cNFgEbAIgK6mwFXsRvqREZbuPPzB1V8C9H3INslUdKhKfDqlV7ig}"
     base_url: "${AF_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
     model: "${AF_LLM_MODEL:-deepseek-v4-flash}"
 
   # ── LLM 降级模型（主模型不可用时自动尝试） ──
   llm_fallback:
-    api_key: "sk-dca40208f5714152a6cf0de59cc5f1d0"
+    api_key: "sk-ws-H.EDDMREP.gXlt.MEUCIQDS2ezv7sywxvCIry01hm7tkwKSBd0wmaLDz1_cNFgEbAIgK6mwFXsRvqREZbuPPzB1V8C9H3INslUdKhKfDqlV7ig"
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model: "deepseek-v4-flash"
 
@@ -126,7 +126,7 @@ agent_defaults:
   vision:
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model: "qwen-vl-max"
-    api_key: "sk-dca40208f5714152a6cf0de59cc5f1d0"
+    api_key: "sk-ws-H.EDDMREP.gXlt.MEUCIQDS2ezv7sywxvCIry01hm7tkwKSBd0wmaLDz1_cNFgEbAIgK6mwFXsRvqREZbuPPzB1V8C9H3INslUdKhKfDqlV7ig"
 
   # ── VL 降级模型 ──
   vision_fallback:
