@@ -68,7 +68,7 @@ ResolveResult resolve_service(const std::string& service_name) {
         instances.push_back(si);
 
         std::cout << "[coremind_bridge] resolved: " << service_name
-                  << " → " << ip << ":" << port << std::endl;
+                  << " → " << ip << ":" << port_num << std::endl;
     }
 
     result.instances = instances;

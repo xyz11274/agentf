@@ -253,7 +253,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
 
             // 回调 POST 辅助函数
             auto post_callback = [&](const std::string& stream_status, int flag,
-                                     const std::string& text, bool is_final) {
+                                     const std::string& text, bool is_final) -> bool {
                 Json::Value cb;
                 cb["Data"]["MessageType"] = "UserOutput";
                 cb["Data"]["StreamStatus"] = stream_status;
@@ -292,9 +292,10 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                 auto da = ds == std::string::npos ? 0 : ds + 3;
                 auto dp = target.find('/', da);
                 httplib::Client cb_cli(target.substr(0, dp).c_str());
-                return cb_cli.Post(target.substr(dp).c_str(),
-                                   {{"Content-Type", "application/json"}},
-                                   cb_str, "application/json");
+                auto cb_res = cb_cli.Post(target.substr(dp).c_str(),
+                                       {{"Content-Type", "application/json"}},
+                                       cb_str, "application/json");
+                return cb_res != nullptr;
             };
 
             std::string callback_path_stream = "/api/chat/" + agent_id + "?stream=true";
