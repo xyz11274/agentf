@@ -141,9 +141,9 @@ def _connect_sandbox(sandbox_id: str) -> Sandbox:
     return sb
 
 
-def _kill_sandbox(sandbox_id: str, envd_version: str = "0.2.0") -> None:
+def _kill_sandbox(sandbox_id: str) -> None:
     """重连并销毁沙箱，幂等。"""
-    s = _connect_sandbox(sandbox_id, envd_version)
+    s = _connect_sandbox(sandbox_id)
     s.kill()
 
 
@@ -283,9 +283,8 @@ def cmd_kill_all(args: argparse.Namespace) -> int:
     failed = 0
     for sb in sandboxes:
         sandbox_id = getattr(sb, "sandbox_id", getattr(sb, "id", "unknown"))
-        envd_ver = getattr(sb, "envd_version", "0.2.0")
         try:
-            _kill_sandbox(sandbox_id, envd_ver)
+            _kill_sandbox(sandbox_id)
             print(f"  ✅ {sandbox_id}")
         except Exception as e:
             print(f"  ❌ {sandbox_id}: {e}")
@@ -346,9 +345,8 @@ def cmd_prune(args: argparse.Namespace) -> int:
     print()
     failed = 0
     for sandbox_id, age, info in stale:
-        envd_ver = info.get("envd_version", "0.2.0") if isinstance(info, dict) else "0.2.0"
         try:
-            _kill_sandbox(sandbox_id, envd_ver)
+            _kill_sandbox(sandbox_id)
             print(f"  ✅ {sandbox_id} killed ({int(age.total_seconds() / 60)}m old)")
         except Exception as e:
             print(f"  ❌ {sandbox_id}: {e}")

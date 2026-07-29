@@ -33,7 +33,7 @@ ResolveResult resolve_service(const std::string& service_name) {
     CMFrm::OM::QueryInstanceResp resp;
     bool ok = CMFrm::Utils::Retry([&]() {
         return mgr->QueryInstanceList(req, resp);
-    }, CMFrm::Utils::RetryCount2, CMFrm::Utils::RetryBackOffSecond2);
+    }, CMFrm::Constants::RetryCount2, CMFrm::Constants::RetryBackOffSecond2);
 
     if (!ok || resp.instanceList.empty()) {
         result.error = "QueryInstanceList failed or returned empty";
@@ -43,10 +43,19 @@ ResolveResult resolve_service(const std::string& service_name) {
 
     std::vector<ServiceInstance> instances;
     for (const auto& inst : resp.instanceList) {
-        auto [ip, port] = CMFrm::Utils::ParseEndpoint(inst.endpoint);
+        // endpoint 格式为 "ip:port"，手动拆分（框架部分版本缺失 ParseEndpoint）
+        auto colon = inst.endpoint.rfind(':');
+        if (colon == std::string::npos) {
+            std::cerr << "[coremind_bridge] skip malformed endpoint: "
+                      << service_name << " → " << inst.endpoint
+                      << " (no colon)" << std::endl;
+            continue;
+        }
+        std::string ip = inst.endpoint.substr(0, colon);
+        std::string port_str = inst.endpoint.substr(colon + 1);
         int port_num = 0;
         try {
-            port_num = std::stoi(port);
+            port_num = std::stoi(port_str);
         } catch (const std::exception& e) {
             std::cerr << "[coremind_bridge] skip malformed endpoint: "
                       << service_name << " → " << inst.endpoint

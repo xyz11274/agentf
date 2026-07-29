@@ -292,9 +292,9 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                 auto da = ds == std::string::npos ? 0 : ds + 3;
                 auto dp = target.find('/', da);
                 httplib::Client cb_cli(target.substr(0, dp).c_str());
-                cb_cli.Post(target.substr(dp).c_str(),
-                           {{"Content-Type", "application/json"}},
-                           cb_str, "application/json");
+                return cb_cli.Post(target.substr(dp).c_str(),
+                                   {{"Content-Type", "application/json"}},
+                                   cb_str, "application/json");
             };
 
             std::string callback_path_stream = "/api/chat/" + agent_id + "?stream=true";
