@@ -151,7 +151,7 @@ void handle_proxy_memory_query(const httplib::Request& req, httplib::Response& r
                   << " 400 | error=invalid_json" << std::endl;
         return;
     }
-    auto result = proxy_via_coremind("KMMService", "/memory/query", body);
+    auto result = proxy_via_coremind("KMMService", "/memory/query", body, 27202);
     set_json_response(res, result);
 #else
     set_json_response(res, proxy_stub_response("KMMService(memory/query)"));
@@ -174,7 +174,7 @@ void handle_proxy_memory_store(const httplib::Request& req, httplib::Response& r
                   << " 400 | error=invalid_json" << std::endl;
         return;
     }
-    auto result = proxy_via_coremind("KMMService", "/memory/store", body);
+    auto result = proxy_via_coremind("KMMService", "/memory/store", body, 27202);
     set_json_response(res, result);
 #else
     set_json_response(res, proxy_stub_response("KMMService(memory/store)"));

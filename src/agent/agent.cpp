@@ -1265,11 +1265,8 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
   std::string payload = message.content;
   std::string payload_ref = message.data_ref;
   {
-    // Payload truncation: log preview only, full content in debug
-    std::string content_preview = message.content.substr(0, 120);
-    if(message.content.size() > 120) content_preview += "...";
-    Logger::instance().info_f("[BUILD_RUNTIME_TASK] message.content_preview='%s' (full_len=%zu), message.data_ref='%s'",
-                              content_preview.c_str(), message.content.size(), message.data_ref.c_str());
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] message.content='%s' (full_len=%zu), message.data_ref='%s'",
+                              message.content.c_str(), message.content.size(), message.data_ref.c_str());
   }
   if(payload_ref.empty() && !payload.empty()) {
     std::ostringstream logical_key;

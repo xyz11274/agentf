@@ -149,6 +149,7 @@ if(NOT DEFINED RAPIDJSON_INCLUDE_DIR)
       "/opt/homebrew/include"
       "/usr/include/x86_64-linux-gnu"
       ${CMAKE_SOURCE_DIR}/vendor/rapidjson/include
+      ${PLATFORM_DIR}/include
     PATH_SUFFIXES rapidjson
     NO_DEFAULT_PATH
     NO_CMAKE_ENVIRONMENT_PATH

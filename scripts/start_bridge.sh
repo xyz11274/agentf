@@ -42,10 +42,28 @@ _stop_bridge() {
         kill -9 "$pid" 2>/dev/null || true
     fi
     rm -f "$PID_FILE"
-    # Wait for the OS to release the listening port so the next
-    # uvicorn instance doesn't get EADDRINUSE (Errno 48).
-    sleep 1
     echo "[INFO] Bridge stopped"
+}
+
+# ── Helper: wait for port to become available ──────────────────────
+_wait_port_free() {
+    local port="$1"
+    local timeout="${2:-5}"  # default 5 seconds
+    local max_steps=$((timeout * 10))  # 0.1s per step
+    local step=0
+    echo "[INFO] Waiting for port $port to become available (timeout=${timeout}s)..."
+    while [ "$step" -lt "$max_steps" ]; do
+        if ! lsof -i :"$port" -P -n 2>/dev/null | grep -q LISTEN; then
+            local elapsed
+            elapsed=$(echo "scale=1; $step / 10" | bc 2>/dev/null || echo "$step")
+            echo "[INFO] Port $port is free (after ${elapsed}s)"
+            return 0
+        fi
+        sleep 0.1
+        step=$((step + 1))
+    done
+    echo "[WARN] Port $port still in use after ${timeout}s timeout (continuing anyway)"
+    return 1
 }
 
 # ── Parse arguments ─────────────────────────────────────────────────
@@ -134,6 +152,7 @@ if [ "$ACTION" = "restart" ]; then
     if [ -n "$PID" ]; then
         _stop_bridge "$PID"
     fi
+    _wait_port_free "$PORT" 5
 fi
 
 # ═══════════════════════════════════════════════════════════════════
@@ -149,8 +168,11 @@ if [ -n "$PID" ]; then
     exit 1
 fi
 
+# ── 确保端口可用 ─────────────────────────────────────────────────────
+_wait_port_free "$PORT" 5 || true
+
 # ── 日志文件 ─────────────────────────────────────────────────────────
-LOG_DIR="$AR_PROJECT_ROOT/logs"
+LOG_DIR="${AF_BRIDGE_LOG_DIR:-$AR_PROJECT_ROOT/logs}"
 LOG_FILE="$LOG_DIR/bridge.log"
 mkdir -p "$LOG_DIR"
 ar_archive_log "$LOG_FILE" "$KEEP_LOGS"

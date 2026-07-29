@@ -375,14 +375,12 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
 
   // [USER_INPUT] — entry point for all user messages into the system
   {
-    std::string content_preview = content.substr(0, 120);
-    if (content.size() > 120) content_preview += "...";
     Logger::instance().info_f(
         "[USER_INPUT] trace=%s agent=%s user=%s client=%s dialogue=%s "
-        "content_preview=%s content_len=%zu stream=%s",
+        "content=%s content_len=%zu stream=%s",
         trace_id.c_str(), agent_id.c_str(), user_id.c_str(), client_id.c_str(),
         dialogue_id.empty() ? "(none)" : dialogue_id.c_str(),
-        content_preview.c_str(), content.size(),
+        content.c_str(), content.size(),
         stream_str.c_str());
   }
 

@@ -182,4 +182,7 @@ examples/agent/outfit-assistant/harness/outputs
 resource/skill_hub/dashscope_outfit_skills/outfit-stylist/assets
 resource/skill_hub/dashscope_outfit_skills/forge-image-gen/assets
 examples/agent/test-agent/workspace
+examples/agent/outfit-assistant/harness/assets/
+examples/agent/outfit-assistant/harness/skills/dashscope_outfit_skills/outfit-stylist/assets/
+examples/agent/outfit-assistant/harness/skills/dashscope_outfit_skills/forge-image-gen/assets/
 ###

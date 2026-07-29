@@ -11,7 +11,6 @@
 
 #include <memory>
 #include <string>
-#include <stdexcept>
 
 #include "sandbox/sandbox.h"
 #include "sandbox/sandbox_types.h"

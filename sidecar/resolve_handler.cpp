@@ -33,7 +33,7 @@ ResolveResult resolve_service(const std::string& service_name) {
     CMFrm::OM::QueryInstanceResp resp;
     bool ok = CMFrm::Utils::Retry([&]() {
         return mgr->QueryInstanceList(req, resp);
-    }, CMFrm::Constants::RetryCount2, CMFrm::Constants::RetryBackOffSecond2);
+    }, CMFrm::Utils::RetryCount2, CMFrm::Utils::RetryBackOffSecond2);
 
     if (!ok || resp.instanceList.empty()) {
         result.error = "QueryInstanceList failed or returned empty";
@@ -43,11 +43,7 @@ ResolveResult resolve_service(const std::string& service_name) {
 
     std::vector<ServiceInstance> instances;
     for (const auto& inst : resp.instanceList) {
-        // ParseEndpoint 在当前 SDK 版本中不存在，内联解析 "ip:port"
-        auto ep = inst.endpoint;
-        auto colon = ep.find(':');
-        std::string ip = (colon != std::string::npos) ? ep.substr(0, colon) : ep;
-        std::string port = (colon != std::string::npos) ? ep.substr(colon + 1) : "";
+        auto [ip, port] = CMFrm::Utils::ParseEndpoint(inst.endpoint);
         int port_num = 0;
         try {
             port_num = std::stoi(port);

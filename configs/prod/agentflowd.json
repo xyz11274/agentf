@@ -37,7 +37,7 @@
     "drain_timeout_ms": 60000
   },
   "sandbox": {
-    "mode": "e2b",
+    "mode": "none",
     "workdir_root": "/var/agentflow/sandbox",
     "snapshot_root": "/var/agentflow/snapshots",
     "sandbox_http_port": 8080,

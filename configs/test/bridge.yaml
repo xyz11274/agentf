@@ -68,9 +68,12 @@ cors_allowed_origins:
 # ── Agent 默认配置（load_agent 时注入） ──────────────────────────
 agent_defaults:
   llm:
-    api_key: "${AF_LLM_API_KEY:-e2e-test-key}"
-    base_url: "${AF_LLM_BASE_URL:-}"
-    model: "${AF_LLM_MODEL:-e2e-scripted}"
+    # api_key: "${AF_LLM_API_KEY:-e2e-test-key}"
+    # base_url: "${AF_LLM_BASE_URL:-}"
+    # model: "${AF_LLM_MODEL:-e2e-scripted}"
+    api_key: "${AF_LLM_API_KEY:-sk-cp-nbU8hW2JOt8hpWAA32Y8BXP_jnz_H8IoN8jfWoDLaaN_Xf5pz05Yl_Q6oQWJf17-2sE6wcvdtpgbqkx6u-bdodmEfAdj6P_IcZVpOGKFygfJ5RLh_xkWjAY}"
+    base_url: "${AF_LLM_BASE_URL:-https://api.minimaxi.com/v1}"
+    model: "${AF_LLM_MODEL:-MiniMax-M3}"    
     temperature: 0.7
     top_p: 1.0
     frequency_penalty: 0.0

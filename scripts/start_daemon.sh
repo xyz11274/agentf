@@ -25,6 +25,13 @@ _is_alive() {
     _is_zombie "$pid" && return 1 || return 0
 }
 
+# ── Helper: check if port is in use (any address) ─────────────────────
+# Returns "PID PROCESS_NAME" if occupied, empty string if free.
+_check_port() {
+    local port="$1"
+    lsof -i "tcp:${port}" -s TCP:LISTEN 2>/dev/null | awk 'NR>1 {print $2, $1}' || true
+}
+
 # ── Helper: resolve running PID ─────────────────────────────────────
 _resolve_pid() {
     local -a pids=()
@@ -159,6 +166,36 @@ if [ "$ACTION" = "restart" ]; then
     if [ -n "$PID" ]; then
         _stop_daemon "$PID"
     fi
+    # After stopping daemon, check if port is still occupied by another process
+    OCCUPIER=$(_check_port "$PORT")
+    if [ -n "$OCCUPIER" ]; then
+        OCCUPIER_PID=$(echo "$OCCUPIER" | awk '{print $1}')
+        OCCUPIER_NAME=$(echo "$OCCUPIER" | awk '{print $2}')
+        echo "[WARN] Port $PORT is occupied by PID=$OCCUPIER_PID ($OCCUPIER_NAME)"
+        echo "[INFO] Attempting to free port $PORT..."
+        kill "$OCCUPIER_PID" 2>/dev/null || true
+        for _ in $(seq 1 5); do
+            OCCUPIER=$(_check_port "$PORT")
+            [ -z "$OCCUPIER" ] && break
+            sleep 0.3
+        done
+        OCCUPIER=$(_check_port "$PORT")
+        if [ -n "$OCCUPIER" ]; then
+            OCCUPIER_PID=$(echo "$OCCUPIER" | awk '{print $1}')
+            echo "[WARN] Process $OCCUPIER_PID did not exit gracefully, sending SIGKILL..."
+            kill -9 "$OCCUPIER_PID" 2>/dev/null || true
+            sleep 0.3
+        fi
+        # Final check
+        OCCUPIER=$(_check_port "$PORT")
+        if [ -n "$OCCUPIER" ]; then
+            OCCUPIER_PID=$(echo "$OCCUPIER" | awk '{print $1}')
+            OCCUPIER_NAME=$(echo "$OCCUPIER" | awk '{print $2}')
+            echo "[ERROR] Cannot free port $PORT (PID=$OCCUPIER_PID, $OCCUPIER_NAME)"
+            exit 1
+        fi
+        echo "[INFO] Port $PORT freed"
+    fi
 fi
 
 # ═══════════════════════════════════════════════════════════════════
@@ -170,6 +207,16 @@ PID=$(_resolve_pid)
 if [ -n "$PID" ]; then
     echo "[WARN] Daemon is already running (PID=$PID)"
     echo "       To restart, use:  $0 restart"
+    exit 1
+fi
+
+# ── Guard: port already in use by another process? ────────────────
+OCCUPIER=$(_check_port "$PORT")
+if [ -n "$OCCUPIER" ]; then
+    OCCUPIER_PID=$(echo "$OCCUPIER" | awk '{print $1}')
+    OCCUPIER_NAME=$(echo "$OCCUPIER" | awk '{print $2}')
+    echo "[ERROR] Port $PORT is already in use by PID=$OCCUPIER_PID ($OCCUPIER_NAME)"
+    echo "       Use '$0 restart' to force-clear the port, or kill the process manually"
     exit 1
 fi
 

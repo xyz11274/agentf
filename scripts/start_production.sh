@@ -8,8 +8,10 @@ source "$SCRIPT_DIR/common.sh"
 
 # 生产环境使用 prod 配置（在 ar_load_env 之前设置，确保加载 configs/prod/.env）
 export AGENTFLOW_ENV="prod"
-# daemon 日志路径：默认 /tmp/agentflowd.log（Pod 可写），可通过 AF_LOG_FILE 覆盖
-export AF_LOG_FILE="${AF_LOG_FILE:-/tmp/agentflowd.log}"
+# 日志目录可通过环境变量覆盖（Pod 上若 logs/ 不可写，可设为 /tmp/）
+export AF_LOG_FILE="${AF_LOG_FILE:-$AR_PROJECT_ROOT/logs/agentflowd.log}"
+export AF_BRIDGE_LOG_DIR="${AF_BRIDGE_LOG_DIR:-$AR_PROJECT_ROOT/logs}"
+export AF_SIDECAR_LOG_DIR="${AF_SIDECAR_LOG_DIR:-$AR_PROJECT_ROOT/logs}"
 
 # 加载环境配置
 ar_load_env

@@ -643,6 +643,11 @@ class DataBusClient:
         sid = os.environ.get("AF_SESSION_ID", "")
         if not did:
             return False
+        # Guard: None content → empty string, preventing JSON null from
+        # propagating through the UDS handler and displaying as "null"
+        # in the frontend progress bubble.
+        if content is None:
+            content = ""
         params = {
             "session_id": sid,
             "dialogue_id": did,

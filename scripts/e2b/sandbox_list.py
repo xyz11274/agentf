@@ -53,6 +53,53 @@ _DEFAULT_API_KEY = "e2b_000000000"
 _CA_CERT_PATH = str(Path(__file__).resolve().parent.parent.parent / "resource" / "certs" / "e2b_CA.pem")
 
 
+def _apply_ssl_patch() -> None:
+    """SSLPatch: 内部 E2B 部署使用 IP 直连，跳过证书验证。"""
+    import ssl as _ssl
+
+    if getattr(_ssl, "_agentflow_patched", False):
+        return  # idempotent guard
+
+    _orig_create_default_context = _ssl.create_default_context
+
+    def _patched_create_default_context(*args, **kwargs):
+        ctx = _orig_create_default_context(*args, **kwargs)
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+        return ctx
+
+    _ssl.create_default_context = _patched_create_default_context
+    _ssl._agentflow_patched = True  # type: ignore[attr-defined]
+
+
+# 内部 E2B 部署用 path-based 反向代理（cubeproxy），SDK 构造的 hostname 路由
+# （https://{port}-{id}.cube.app）不可达，需重写为 path-based 路由
+_DEFAULT_ENVD_PORT = 49983
+_SANDBOX_TARGET_HOST = "https://218.245.96.148:443"
+
+
+def _patch_envd_url(sb) -> None:
+    """将 sandbox 的 envd_api_url 从 hostname 路由重写为 path-based 路由。
+
+    原 SDK 默认: https://{port}-{id}.cube.app
+    重写后:     https://218.245.96.148:443/sandbox/{id}/{port}
+
+    内部部署使用 cubeproxy 做反向代理，server_name _; 不接受 *.cube.app SNI。
+    """
+    path = f"{_SANDBOX_TARGET_HOST}/sandbox/{sb.sandbox_id}/{_DEFAULT_ENVD_PORT}"
+    # 私有 name-mangled 属性（SandboxBase.__envd_api_url）
+    try:
+        sb._SandboxBase__envd_api_url = path
+    except AttributeError:
+        pass
+    sb._envd_api_url = path
+    # 子客户端模块持有自己的 URL 副本
+    for attr in ("_filesystem", "_commands", "_pty"):
+        mod = getattr(sb, attr, None)
+        if mod is not None and hasattr(mod, "_envd_api_url"):
+            mod._envd_api_url = path
+
+
 def _setup_env() -> None:
     """设置 E2B SDK 环境变量。"""
     os.environ.setdefault("E2B_API_URL", _DEFAULT_API_URL)
@@ -86,21 +133,12 @@ def _fmt_time(dt: datetime | None) -> str:
         return f"{int(delta.days)}d ago"
 
 
-def _connect_sandbox(sandbox_id: str, envd_version: str = "0.2.0") -> Sandbox:
-    """重连已有 E2B 沙箱。"""
-    from e2b.connection_config import ConnectionConfig
-    config = ConnectionConfig(
-        api_url=os.environ.get("E2B_API_URL", _DEFAULT_API_URL),
-        api_key=os.environ.get("E2B_API_KEY", _DEFAULT_API_KEY),
-    )
-    return Sandbox(
-        sandbox_id=sandbox_id,
-        envd_version=envd_version,
-        sandbox_domain=None,
-        envd_access_token=None,
-        traffic_access_token=None,
-        connection_config=config,
-    )
+def _connect_sandbox(sandbox_id: str) -> Sandbox:
+    """重连已有 E2B 沙箱。用 Sandbox.connect（SDK v2 的权威重连接口）。"""
+    sb = Sandbox.connect(sandbox_id)
+    # 重写 envd URL：内部部署用 path-based 反向代理，SDK 构造的 hostname 路由不可达
+    _patch_envd_url(sb)
+    return sb
 
 
 def _kill_sandbox(sandbox_id: str, envd_version: str = "0.2.0") -> None:
@@ -327,14 +365,14 @@ def cmd_prune(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     """在指定沙箱中执行远程命令。"""
     _setup_env()
+    _apply_ssl_patch()
 
     sandbox_id = args.sandbox_id
-    command = args.command
-    envd_version = getattr(args, "envd_version", "0.2.0")
+    command = args.cmd
     timeout = getattr(args, "timeout", 30)
 
     try:
-        sb = _connect_sandbox(sandbox_id, envd_version=envd_version)
+        sb = _connect_sandbox(sandbox_id)
     except Exception as e:
         print(f"[e2b_run] ERROR: failed to connect to sandbox {sandbox_id}: {e}")
         return 1
@@ -398,7 +436,7 @@ def main() -> int:
     # run
     p_run = sub.add_parser("run", help="在沙箱中执行远程命令")
     p_run.add_argument("sandbox_id", help="沙箱 ID")
-    p_run.add_argument("command", nargs=argparse.REMAINDER, help="要执行的命令")
+    p_run.add_argument("cmd", nargs=argparse.REMAINDER, help="要执行的命令")
     p_run.add_argument("--timeout", type=int, default=30,
                        help="命令超时秒数（默认 30）")
     p_run.add_argument("--envd-version", default="0.2.0",
@@ -416,11 +454,11 @@ def main() -> int:
         return cmd_prune(args)
     elif args.command == "run":
         # argparse.REMAINDER 返回 list，拼接为字符串
-        cmd = " ".join(args.command) if args.command else ""
+        cmd = " ".join(args.cmd) if args.cmd else ""
         if not cmd:
             print("[e2b_run] ERROR: no command specified.")
             return 1
-        args.command = cmd
+        args.cmd = cmd
         return cmd_run(args)
     else:
         parser.print_help()
