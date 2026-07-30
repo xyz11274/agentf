@@ -53,6 +53,20 @@ export PROCESS_TYPE="${PROCESS_TYPE:-OutfitAgent}"
 export CSP_PROCESS_ID="${CSP_PROCESS_ID:-OutfitAgent}"
 export SYSTEM_AGENT_NAME="${SYSTEM_AGENT_NAME:-OutfitAgent}"
 
+# CoreMind 框架初始化必需的环境变量（FrameworkStarter::initServiceConfig 读取）
+export TZ="${TZ:-Asia/Shanghai}"
+export RUNLOG_CONFIG="${RUNLOG_CONFIG:-/opt/coremind/conf/log.json}"
+export LOG_CONFIG="${LOG_CONFIG:-/opt/coremind/conf/log.json}"
+export NON_BYPASS_BBOX_PATH="${NON_BYPASS_BBOX_PATH:-/opt/coremind/logs/bbox}"
+export SSLPATH="${SSLPATH:-/opt/sharevolume/ssl/cert}"
+export SSL_CERT_PATH="${SSL_CERT_PATH:-/opt/sharevolume/ssl/cert}"
+export CIPHER_ROOT="${CIPHER_ROOT:-/opt/sharevolume/ssl/cipher}"
+export CIPHER_PATH="${CIPHER_PATH:-/opt/sharevolume/ssl/cipher}"
+export CIPHERPATH="${CIPHERPATH:-/opt/sharevolume/ssl/cipher}"
+export ROOT_KEY_HOME="${ROOT_KEY_HOME:-/opt/sharevolume/ssl/cipher}"
+export WORK_KEY_HOME="${WORK_KEY_HOME:-/opt/sharevolume/ssl/cipher}"
+export SSL_ENABLE="${SSL_ENABLE:-false}"
+
 LOG_DIR="${AF_SIDECAR_LOG_DIR:-$AR_PROJECT_ROOT/logs}"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/sidecar.log"
@@ -78,6 +92,9 @@ for _dir in "${_LIB_DIRS[@]}"; do
     fi
 done
 export LD_LIBRARY_PATH="${AF_LIBRARY_PATH:-$LIBRARY_PATH}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# CoreMind 框架 initServiceConfig 要求 SSLPATH 目录存在（即使 SSL_ENABLE=false）
+mkdir -p "$SSLPATH"
 
 exec "$BINARY" --listen "0.0.0.0:$PORT" --bridge-url "$BRIDGE_URL" \
     -processType "${SERVICENAME:-OutfitAgent}" \
