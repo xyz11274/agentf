@@ -80,4 +80,5 @@ done
 export LD_LIBRARY_PATH="${AF_LIBRARY_PATH:-$LIBRARY_PATH}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 exec "$BINARY" --listen "0.0.0.0:$PORT" --bridge-url "$BRIDGE_URL" \
+    -processType "${SERVICENAME:-OutfitAgent}" \
     $( [ "$PROFILE" = "production" ] && echo "--coremind-mode" ) >> "$LOG_FILE" 2>&1

@@ -532,7 +532,7 @@ int main(int argc, char* argv[]) {
             llm_api_url = argv[++i];
         } else if (arg == "--coremind-mode") {
             coremind_mode = true;
-        } else if (arg == "--process-type" && i + 1 < argc) {
+        } else if (arg == "-processType" && i + 1 < argc) {
             // 消费参数但不处理 —— FrameworkStarter::InitFramework 会从 argv 解析它
             // 用于 CoreMind 服务注册的服务名标识（如 OutfitAgent）
             i++;
