@@ -46,6 +46,13 @@ export APPID="${APPID:-0}"
 export COREMIND_REQUIRED_SERVICES="${COREMIND_REQUIRED_SERVICES:-}"
 export COREMIND_OPTIONAL_SERVICES="${COREMIND_OPTIONAL_SERVICES:-}"
 
+# CoreMind 服务注册 —— 上游通过服务名 OutfitAgent 发现并路由到此 sidecar
+# SERVICENAME / PROCESS_TYPE / CSP_PROCESS_ID 由 CoreMind 框架在 InitFramework 时读取
+export SERVICENAME="${SERVICENAME:-OutfitAgent}"
+export PROCESS_TYPE="${PROCESS_TYPE:-OutfitAgent}"
+export CSP_PROCESS_ID="${CSP_PROCESS_ID:-OutfitAgent}"
+export SYSTEM_AGENT_NAME="${SYSTEM_AGENT_NAME:-OutfitAgent}"
+
 LOG_DIR="${AF_SIDECAR_LOG_DIR:-$AR_PROJECT_ROOT/logs}"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/sidecar.log"
