@@ -36,8 +36,8 @@
     "pid_file": "/tmp/agentflowd.pid",
     "drain_timeout_ms": 60000
   },
-  "sandbox": {
-    "mode": "none",
+  "sandbox": {s
+    "mode": "e2b",
     "workdir_root": "/var/agentflow/sandbox",
     "snapshot_root": "/var/agentflow/snapshots",
     "sandbox_http_port": 8080,

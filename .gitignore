@@ -185,4 +185,5 @@ examples/agent/test-agent/workspace
 examples/agent/outfit-assistant/harness/assets/
 examples/agent/outfit-assistant/harness/skills/dashscope_outfit_skills/outfit-stylist/assets/
 examples/agent/outfit-assistant/harness/skills/dashscope_outfit_skills/forge-image-gen/assets/
+examples/agent/outfit-assistant/.agentoid/
 ###

@@ -295,7 +295,10 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                 auto cb_res = cb_cli.Post(target.substr(dp).c_str(),
                                        {{"Content-Type", "application/json"}},
                                        cb_str, "application/json");
-                return cb_res != nullptr;
+                // httplib::Result 提供 operator bool()：请求成功（拿到 Response）为 true，
+                // 连接失败/未发出为 false。lambda 返回值未被任何调用点消费，
+                // 此处仅用于消除 lambda 内两分支返回类型不一致的编译错误。
+                return static_cast<bool>(cb_res);
             };
 
             std::string callback_path_stream = "/api/chat/" + agent_id + "?stream=true";
