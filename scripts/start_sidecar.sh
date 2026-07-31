@@ -168,7 +168,7 @@ export CIPHER_PATH="${CIPHER_PATH:-/opt/sharevolume/ssl/cipher}"
 export CIPHERPATH="${CIPHERPATH:-/opt/sharevolume/ssl/cipher}"
 export ROOT_KEY_HOME="${ROOT_KEY_HOME:-/opt/sharevolume/ssl/cipher}"
 export WORK_KEY_HOME="${WORK_KEY_HOME:-/opt/sharevolume/ssl/cipher}"
-export INNER_TLS_ENABLE="${INNER_TLS_ENABLE:-true}"
+export INNER_TLS_ENABLE="${INNER_TLS_ENABLE:-false}"
 export SSL_ENABLE="${SSL_ENABLE:-false}"
 
 # 打印 CoreMind 框架关键 env vars
@@ -211,13 +211,18 @@ export LD_LIBRARY_PATH="${AF_LIBRARY_PATH:-$LIBRARY_PATH}${LD_LIBRARY_PATH:+:$LD
 # CoreMind 框架 initServiceConfig 要求 SSLPATH 目录存在
 mkdir -p "$SSLPATH"
 
-# ── 同步 serviceconfig 到共享卷（与工作版 start.sh 对齐）──
-if [ -d "/opt/coremind/serviceconfig" ]; then
+# ── 同步 serviceconfig 到共享卷（非破坏性：JSON 已存在则跳过）──
+if [ -f "/opt/sharevolume/serviceconfig/serviceconfig.json" ]; then
+    echo "[sidecar] serviceconfig.json already exists, skipping sync"
+elif [ -d "/opt/coremind/serviceconfig" ]; then
     echo "[sidecar] Syncing serviceconfig to /opt/sharevolume..."
-    rm -rf /opt/sharevolume/serviceconfig
     cp -R /opt/coremind/serviceconfig /opt/sharevolume/
-    if [ -f "$SCRIPT_DIR/serviceconfig.py" ]; then
-        python "$SCRIPT_DIR/serviceconfig.py" 2>/dev/null || true
+    SERVICECONFIG_PY=""
+    for candidate in "$SCRIPT_DIR/serviceconfig.py" "/opt/coremind/scripts/serviceconfig.py"; do
+        [ -f "$candidate" ] && SERVICECONFIG_PY="$candidate" && break
+    done
+    if [ -n "$SERVICECONFIG_PY" ]; then
+        python "$SERVICECONFIG_PY" 2>/dev/null || true
     fi
 fi
 
