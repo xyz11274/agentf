@@ -96,7 +96,7 @@ tmp
 
 .ruff_cache
 .pytest_cache
-logs/*
+# logs/*
 **/.agentfoundry/*
 venv
 .venv
