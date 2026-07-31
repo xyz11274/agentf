@@ -40,6 +40,7 @@ target_include_directories(coremind_bridge PRIVATE
     ${PLATFORM_DIR}/include/framework_common
     ${PLATFORM_DIR}/include/framework_com
     ${PLATFORM_DIR}/include/framework_starter
+    ${PLATFORM_DIR}/include/mmagentflow
     ${PLATFORM_DIR}/include/httplib
     ${CMAKE_CURRENT_SOURCE_DIR}
 )
@@ -73,6 +74,7 @@ if(COREMIND_ENABLED)
         cm_framework_common
         cm_framework_com
         cm_framework_starter
+        matemindsdk
     )
 endif()
 

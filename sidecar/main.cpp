@@ -44,6 +44,7 @@
 #ifdef COREMIND_ENABLED
 #include <framework_com/http_client_factory.h>
 #include <framework_starter/framework_starter.h>
+#include <mm_sdk.h>
 #endif
 
 // ── Global state ──
@@ -453,6 +454,8 @@ static bool init_coremind_framework(int argc, char* argv[]) {
     g_sidecar_router->Register(
         {CMFrm::COM::GET,  kHealthCheckUrl,          CMFrm::COM::RAW, "default", -1, SidecarRouter::HandleHealthCheck});
     g_sidecar_router->Register(
+        {CMFrm::COM::GET,  "/health",                 CMFrm::COM::RAW, "default", -1, SidecarRouter::HandleHealthCheck});
+    g_sidecar_router->Register(
         {CMFrm::COM::GET,  kScheduleTaskAbilityUrl,   CMFrm::COM::RAW, "default", -1, SidecarRouter::HandleScheduleTaskAbility});
     g_sidecar_router->Register(
         {CMFrm::COM::POST, kUserRequestUrl,            CMFrm::COM::RAW, "default", -1, SidecarRouter::HandleUserRequest});
@@ -507,6 +510,41 @@ static bool init_coremind_framework(int argc, char* argv[]) {
         }
     }
     std::cout << "[coremind_bridge] Pre-cache complete" << std::endl;
+    return true;
+}
+
+// ── MateMind SDK 初始化（对标 SysAgent initMateMindSdk） ──
+// MM_SdkInit 读取 /opt/coremind/conf/matemindsdk.json，其中 callbackserverport=27171
+// 该端口注册为 CMF_LABEL_MAP_mmsdk-callback-server，使框架服务注册包含 27171 端口
+static bool init_mate_mind_sdk() {
+    auto log_func = [](mmsdk::MMlogLevel level, const std::string& str) -> uint32_t {
+        switch (level) {
+            case mmsdk::MM_LOG_DEBUG:
+                std::clog << "[matemindsdk][D] " << str << std::endl;
+                break;
+            case mmsdk::MM_LOG_INFO:
+                std::clog << "[matemindsdk][I] " << str << std::endl;
+                break;
+            case mmsdk::MM_LOG_WARN:
+                std::clog << "[matemindsdk][W] " << str << std::endl;
+                break;
+            case mmsdk::MM_LOG_ERR:
+            case mmsdk::MM_LOG_FATAL:
+                std::cerr << "[matemindsdk][E] " << str << std::endl;
+                break;
+            default:
+                break;
+        }
+        return 0;
+    };
+
+    constexpr const char* kConfigPath = "/opt/coremind/conf/matemindsdk.json";
+    if (mmsdk::MM_SdkInit(kConfigPath, log_func) != 0) {
+        std::cerr << "[coremind_bridge] MateMind SDK init failed (config: " << kConfigPath << ")"
+                  << std::endl;
+        return false;
+    }
+    std::cout << "[coremind_bridge] MateMind SDK initialized (callback port 27171)" << std::endl;
     return true;
 }
 #endif
@@ -583,6 +621,11 @@ int main(int argc, char* argv[]) {
 
         if (!init_coremind_framework(argc, argv)) {
             std::cerr << "[coremind_bridge] FAILED to initialize CoreMind framework" << std::endl;
+            return 1;
+        }
+
+        if (!init_mate_mind_sdk()) {
+            std::cerr << "[coremind_bridge] FAILED to initialize MateMind SDK" << std::endl;
             return 1;
         }
 
