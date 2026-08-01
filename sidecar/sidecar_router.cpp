@@ -69,7 +69,6 @@ static std::string get_env_or(const char* name, const std::string& fallback) {
 }
 
 // ── 响应辅助 ──
-// 对标 HealthAgent 的模式：WriteStatueCode + WriteJSONContentType + WriteResponseBody
 // 注意：CoreMind API 拼写为 WriteStatueCode（非 StatusCode），此乃框架自有拼写
 
 static void ok_response(const std::shared_ptr<CMFrm::ServiceRouter::Context>& ctx,
@@ -158,7 +157,18 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
     // 3. 从 AccessCtrl 格式提取字段（全部保存用于响应回传）
     auto header = original_request["Header"];
     auto data = original_request["Data"];
-    Json::Value req_header = header;  // 保存完整 Header 用于接口转换
+
+    std::string header_msg_type = header.get("MessageType", "").asString();
+    std::string data_msg_type = data.get("MessageType", "").asString();
+    bool is_task_assignment = (header_msg_type == "UserTaskManagement" && data_msg_type == "TaskAssignment");
+    bool is_user_input = (header_msg_type == "DataExchange" && data_msg_type == "UserInput");
+    if (!is_task_assignment && !is_user_input) {
+        error_response(context, 400,
+            "unsupported message type: " + header_msg_type + "/" + data_msg_type);
+        return CMFrm::COM::SYNC;
+    }
+
+    Json::Value req_header = header;
     std::string user_name = header.get("UserName", "").asString();
     std::string client_session_id = header.get("ClientSessionId",
                                header.get("SessionId", "")).asString();
@@ -169,7 +179,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
     std::string user_input_text = data.get("UserInputText", "").asString();
 
     // 4. 构建多模态 content（OpenAI 格式）
-    // 合并 UserInputText + UserInputObject.data.content[]
+    // UserInputObject 在 CMF 协议中是 stringified JSON string（对齐 SysAgent TaskAssignment::Parse）
     Json::Value content_parts(Json::arrayValue);
     if (!user_input_text.empty()) {
         Json::Value text_part;
@@ -177,15 +187,24 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
         text_part["text"] = user_input_text;
         content_parts.append(text_part);
     }
-    auto user_input_obj = data["UserInputObject"]["data"]["content"];
-    if (user_input_obj.isArray()) {
-        for (const auto& item : user_input_obj) {
-            std::string item_type = item.get("type", "").asString();
-            if (item_type == "image") {
-                Json::Value image_part;
-                image_part["type"] = "image_url";
-                image_part["image_url"]["url"] = item.get("data", "").asString();
-                content_parts.append(image_part);
+    std::string user_input_object_str = data.get("UserInputObject", "").asString();
+    if (!user_input_object_str.empty()) {
+        Json::Value user_input_obj;
+        Json::CharReaderBuilder obj_reader;
+        std::string obj_err;
+        std::istringstream obj_stream(user_input_object_str);
+        if (Json::parseFromStream(obj_reader, obj_stream, &user_input_obj, &obj_err)) {
+            auto content_array = user_input_obj["data"]["content"];
+            if (content_array.isArray()) {
+                for (const auto& item : content_array) {
+                    std::string item_type = item.get("type", "").asString();
+                    if (item_type == "image") {
+                        Json::Value image_part;
+                        image_part["type"] = "image_url";
+                        image_part["image_url"]["url"] = item.get("data", "").asString();
+                        content_parts.append(image_part);
+                    }
+                }
             }
         }
     }
@@ -223,21 +242,13 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
     std::string agent_id = get_env_or("AF_BR_COREMIND_AGENT_ID", "outfit-assistant");
     std::string callback_path = "/api/chat/" + agent_id + "?stream=false";
 
-    // ── 异步回调模式 ──
-    // SideCar 模式：立即返回 accepted → 后台处理 → POST 结果到上游回调 URL
-    // httplib 模式（dev）：直接同步返回（无上游回调地址）
+    // ── 有 SysAgentEntity → 异步模式；无 → 同步 dev 模式 ──
     if (!sys_agent_entity.empty()) {
-        // ===== 异步模式：立即返回 accepted，后台处理 + POST 回上游 =====
-        // 立即返回 accepted
-        Json::Value accepted;
-        accepted["status"] = "accepted";
-        accepted["task_id"] = task_id;
+        // 只返回 200 status code（对齐 SysAgent），实际结果通过回调 POST 送回上游
         context->WriteStatueCode(CMFrm::COM::HttpStatus::HTTP200);
-        context->WriteJSONContentType();
-        context->WriteResponseBody(json_dumps(accepted));
 
         // 后台线程处理（捕获所有需要的数据）
-        std::thread([=, ctx = context]() {
+        std::thread([=]() {
             auto scheme_pos = bridge_url.find("://");
             auto auth_start = (scheme_pos == std::string::npos) ? 0 : scheme_pos + 3;
             auto path_start = bridge_url.find('/', auth_start);
@@ -259,6 +270,10 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                 cb["Data"]["StreamStatus"] = stream_status;
                 cb["Data"]["UserOutputFlag"] = flag;
                 cb["Data"]["UserOutputText"] = text;
+                cb["Data"]["UserOutputObject"] = "";
+                cb["Data"]["UserManualInterventionFlag"] = false;
+                cb["Data"]["ImplicitOutputFlag"] = false;
+                cb["Data"]["IsVoiceBroadcast"] = 1;
                 cb["Header"]["MessageType"] = "DataExchange";
                 cb["Header"]["TaskID"] = task_id;
                 cb["Header"]["DialogueId"] = dialogue_id;
@@ -344,18 +359,10 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                             }
                         }
                         if (token.empty()) continue;
-                        // ── 只返回 coordinator 的消息 ──
-                        // skill_executor 的消息（_source=skill_executor）跳过，不回调上游。
-                        // 如需恢复所有消息，注释掉下面三行，取消注释 next 三行。
                         std::string _src = sse_json.get("_source", "").asString();
                         if (_src != "coordinator" && !_src.empty()) continue;
-                        // ── end ──
                         bool is_progress = sse_json.get("_progress", false).asBool()
                                         || sse_json.get("_chunk_type", "").asString() == "progress";
-                        // 原来的代码（取消注释可恢复全量回调）:
-                        // bool is_progress = sse_json.get("_progress", false).asBool()
-                        //                 || sse_json.get("_chunk_type", "").asString() == "progress";
-                        // post_callback("Running", is_progress ? 1 : 0, token, false);
                         post_callback("Running", is_progress ? 1 : 0, token, false);
                         accumulated_content += token;
                     }
@@ -414,7 +421,6 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                                {{"Content-Type", "application/json"}},
                                ts_str, "application/json");
 
-                    ctx->WriteAsyncResponse();
                     return true;
                 }
             );
@@ -445,103 +451,27 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
 
     auto response = cli.Post(callback_path.c_str(), http_headers, json_dumps(rest_body), "application/json");
     if (!response) {
-        error_response(context, 502, "BRIDGE_UNREACHABLE");
+        context->WriteStatueCode(CMFrm::COM::HttpStatus::HTTP500);
         return CMFrm::COM::SYNC;
     }
 
-    // 解析 REST API 响应（ChatRestResponse 格式：{task_id, content, artifacts}）
-    Json::Value bridge_resp;
-    Json::CharReaderBuilder resp_reader;
-    std::string resp_errors;
-    std::istringstream resp_input(response->body);
     std::string resp_text;
-    std::string task_id_resp = task_id;
-    Json::Value resp_artifacts;
-    if (Json::parseFromStream(resp_reader, resp_input, &bridge_resp, &resp_errors)) {
-        resp_text = bridge_resp.get("content", "").asString();
-        task_id_resp = bridge_resp.get("task_id", task_id).asString();
-        resp_artifacts = bridge_resp["artifacts"];
-    } else {
-        resp_text = response->body;
-    }
-
-    // ── UserOutput 报文（流式完成） ──
-    {
-        Json::Value ack;
-        Json::Value ack_data;
-        ack_data["MessageType"] = "UserOutput";
-        ack_data["StreamStatus"] = "Completed";
-        ack_data["UserOutputFlag"] = 0;
-        ack_data["ImplicitOutputFlag"] = false;
-        ack_data["IsVoiceBroadcast"] = 1;
-        ack_data["UserManualInterventionFlag"] = false;
-        ack_data["UserOutputText"] = resp_text;
-        if (resp_artifacts.isArray() && resp_artifacts.size() > 0) {
-            ack_data["UserOutputObject"]["code"] = 200101;
-            ack_data["UserOutputObject"]["data"]["content"] = resp_artifacts;
+    if (!response->body.empty()) {
+        Json::Value bridge_resp;
+        Json::CharReaderBuilder resp_reader;
+        std::string resp_errors;
+        std::istringstream resp_input(response->body);
+        if (Json::parseFromStream(resp_reader, resp_input, &bridge_resp, &resp_errors)) {
+            resp_text = bridge_resp.get("content", "").asString();
         } else {
-            ack_data["UserOutputObject"] = "";
+            resp_text = response->body;
         }
-        ack["Data"] = ack_data;
-
-        Json::Value ack_header;
-        ack_header["MessageType"] = "DataExchange";
-        ack_header["TaskID"] = task_id_resp;
-        ack_header["DialogueId"] = dialogue_id;
-        ack_header["UserName"] = user_name;
-        ack_header["ClientSessionId"] = client_session_id;
-        ack_header["Sender"] = receiver.empty() ? "SysAgent" : receiver;
-        ack_header["Receiver"] = sender.empty() ? "APP" : sender;
-        ack_header["SeqNum"] = request_id;
-        ack_header["EventTimeStamp"] = current_timestamp_ms();
-        // 回传上游原 Header 中的透传字段
-        for (const auto& key : {"AcmSessionId", "ClientExField", "DeviceCategory", "DeviceId",
-                                "SessionId", "SysAgentEntity", "TeamEnvironmentID", "UUID"}) {
-            if (req_header.isMember(key)) {
-                ack_header[key] = req_header[key];
-            }
-        }
-        ack["Header"] = ack_header;
-
-        // 同步模式下，UserOutput 报文暂不写回，保留供流式实现后使用
-        std::cout << "[sidecar_router] user_output: " << json_dumps(ack) << std::endl;
     }
 
-    // ── TaskStatus 报文（任务完成通知，同步模式写回上游） ──
-    {
-        Json::Value ts;
-        Json::Value ts_header;
-        ts_header["MessageType"] = "TaskStatusManagement";
-        ts_header["Sender"] = receiver.empty() ? "SysAgent" : receiver;
-        ts_header["Receiver"] = sender.empty() ? "APP" : sender;
-        ts_header["UserName"] = user_name;
-        ts_header["ClientSessionId"] = client_session_id;
-        ts_header["TaskID"] = task_id_resp;
-        ts_header["DialogueId"] = dialogue_id;
-        ts_header["SeqNum"] = request_id;
-        ts_header["EventTimeStamp"] = current_timestamp_ms();
-        for (const auto& key : {"AcmSessionId", "ClientExField", "DeviceCategory", "DeviceId",
-                                "SessionId", "SysAgentEntity", "TeamEnvironmentID", "UUID"}) {
-            if (req_header.isMember(key)) {
-                ts_header[key] = req_header[key];
-            }
-        }
-        ts["Header"] = ts_header;
+    std::cout << "[sidecar_router] sync response: request_id=" << request_id
+              << " task_id=" << task_id << " resp_len=" << resp_text.size() << std::endl;
 
-        Json::Value ts_data;
-        ts_data["MessageType"] = "TaskStatusReport";
-        ts_data["TaskStatusCode"] = resp_text.empty() ? 500 : 200;
-        ts_data["TaskStatusReport"] = resp_text.empty() ? "TaskFailed" : "TaskCompleted";
-        ts_data["UserOutputText"] = resp_text;
-        ts["Data"] = ts_data;
-
-        context->WriteStatueCode(CMFrm::COM::HttpStatus::HTTP200);
-        context->WriteJSONContentType();
-        context->WriteResponseBody(json_dumps(ts));
-    }
-
-    std::cout << "[sidecar_router] forwarded to bridge: request_id="
-              << request_id << " task_id=" << task_id_resp << std::endl;
+    context->WriteStatueCode(CMFrm::COM::HttpStatus::HTTP200);
     return CMFrm::COM::SYNC;
 }
 
