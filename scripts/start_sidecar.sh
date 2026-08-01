@@ -47,9 +47,14 @@ _stop_sidecar() {
 }
 
 # ── Parse arguments ─────────────────────────────────────────────────
+# 支持两种等价的传参方式（不可混用冲突）：
+#   位置参数:  $0 [start|stop|restart] [profile] [port]     如 start_sidecar.sh local 23768
+#   选项参数:  $0 [start|stop|restart] [--profile PROF] [--port PORT]
+# 位置参数与选项统一在 while 中解析，避免 PROFILE/PORT 被 $1/$2 提前污染
+# （旧实现中 `--profile local` 会把 PORT 置为 "local"，导致 --listen 解析失败）。
 ACTION="start"
-PROFILE="${1:-production}"
-PORT="${2:-23767}"
+PROFILE=""
+PORT=""
 KEEP_LOGS=false
 
 while [ $# -gt 0 ]; do
@@ -59,12 +64,16 @@ while [ $# -gt 0 ]; do
         --profile)          PROFILE="$2"; shift 2 ;;
         --keep-logs)        KEEP_LOGS=true; shift ;;
         -h|--help)
-            echo "Usage: $0 [start|stop|restart] [options]"
+            echo "Usage: $0 [start|stop|restart] [profile] [port]"
             echo ""
             echo "Commands:"
             echo "  start    Start sidecar (default; fails if already running)"
             echo "  stop     Stop running sidecar"
             echo "  restart  Stop then start"
+            echo ""
+            echo "Positional args (equivalent to options):"
+            echo "  profile  Build profile: production|local (default: production)"
+            echo "  port     Listen port (default: 23767)"
             echo ""
             echo "Options:"
             echo "  --port PORT       Listen port (default: 23767)"
@@ -74,9 +83,22 @@ while [ $# -gt 0 ]; do
             echo "Environment:"
             echo "  AF_SIDECAR_LOG_DIR   SideCar log directory (default: logs/)"
             exit 0 ;;
-        *) echo "[ERROR] Unknown argument: $1" >&2; exit 2 ;;
+        *)
+            # 位置参数：第一个为 profile，第二个为 port
+            if [ -z "$PROFILE" ]; then
+                PROFILE="$1"
+            elif [ -z "$PORT" ]; then
+                PORT="$1"
+            else
+                echo "[ERROR] Unknown argument: $1" >&2
+                exit 2
+            fi
+            shift ;;
     esac
 done
+
+PROFILE="${PROFILE:-production}"
+PORT="${PORT:-23767}"
 
 # ═══════════════════════════════════════════════════════════════════
 #  stop
@@ -228,35 +250,35 @@ export LD_LIBRARY_PATH="${AF_LIBRARY_PATH:-${LIBRARY_PATH:-}}${LD_LIBRARY_PATH:+
 # CoreMind 框架 initServiceConfig 要求 SSLPATH 目录存在
 mkdir -p "$SSLPATH"
 
-# ── 生成 serviceconfig.json 到共享卷 ─────────────────────────────────
-# serviceconfig.json 定义 CMF 注册端口（23767/27200），必须在 sidecar 启动前存在。
-# init 容器通常已生成，但如果 init 容器未运行或 sharevolume 被清理，需要本地重新生成。
-SERVICECONFIG_DIR="/opt/sharevolume/serviceconfig"
-SERVICECONFIG_JSON="$SERVICECONFIG_DIR/serviceconfig.json"
-mkdir -p "$SERVICECONFIG_DIR"
+# ── 生成 serviceconfig.json 到共享卷（仅 production 模式）─────────────
+# local (stub) 模式不调 init_coremind_framework，不需要 serviceconfig。
+if [ "$PROFILE" = "production" ]; then
+    SERVICECONFIG_DIR="/opt/sharevolume/serviceconfig"
+    SERVICECONFIG_JSON="$SERVICECONFIG_DIR/serviceconfig.json"
+    mkdir -p "$SERVICECONFIG_DIR"
 
-if [ -f "$SERVICECONFIG_JSON" ]; then
-    echo "[sidecar] serviceconfig.json already exists, skipping generation"
-else
-    echo "[sidecar] serviceconfig.json not found, generating..."
-    # 查找 serviceconfig.py（优先本地脚本目录，回退到部署路径）
-    SERVICECONFIG_PY=""
-    for candidate in "$SCRIPT_DIR/serviceconfig.py" "/opt/coremind/scripts/serviceconfig.py"; do
-        [ -f "$candidate" ] && SERVICECONFIG_PY="$candidate" && break
-    done
-    if [ -z "$SERVICECONFIG_PY" ]; then
-        echo "[ERROR] serviceconfig.py not found and serviceconfig.json not pre-generated" >&2
-        exit 1
+    if [ -f "$SERVICECONFIG_JSON" ]; then
+        echo "[sidecar] serviceconfig.json already exists, skipping generation"
+    else
+        echo "[sidecar] serviceconfig.json not found, generating..."
+        SERVICECONFIG_PY=""
+        for candidate in "$SCRIPT_DIR/serviceconfig.py" "/opt/coremind/scripts/serviceconfig.py"; do
+            [ -f "$candidate" ] && SERVICECONFIG_PY="$candidate" && break
+        done
+        if [ -z "$SERVICECONFIG_PY" ]; then
+            echo "[ERROR] serviceconfig.py not found and serviceconfig.json not pre-generated" >&2
+            exit 1
+        fi
+        python "$SERVICECONFIG_PY" || {
+            echo "[ERROR] serviceconfig.py failed to generate JSON" >&2
+            exit 1
+        }
+        if [ ! -f "$SERVICECONFIG_JSON" ]; then
+            echo "[ERROR] serviceconfig.json was not generated after running $SERVICECONFIG_PY" >&2
+            exit 1
+        fi
+        echo "[sidecar] serviceconfig.json generated successfully"
     fi
-    python "$SERVICECONFIG_PY" || {
-        echo "[ERROR] serviceconfig.py failed to generate JSON" >&2
-        exit 1
-    }
-    if [ ! -f "$SERVICECONFIG_JSON" ]; then
-        echo "[ERROR] serviceconfig.json was not generated after running $SERVICECONFIG_PY" >&2
-        exit 1
-    fi
-    echo "[sidecar] serviceconfig.json generated successfully"
 fi
 
 # ── 日志文件 ─────────────────────────────────────────────────────────
