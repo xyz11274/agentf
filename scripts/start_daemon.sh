@@ -90,7 +90,10 @@ _CONFIG_FILE="$AR_PROJECT_ROOT/configs/$_AGENTFLOW_ENV/agentflowd.json"
 ACTION="start"
 PACKAGE="examples/agent/outfit-assistant"
 PORT="17891"
-PROFILE="dev"
+case "$_AGENTFLOW_ENV" in
+    prod) PROFILE="production" ;;
+    *)    PROFILE="dev" ;;
+esac
 CONFIG_FILE="$_CONFIG_FILE"
 KEEP_LOGS=false
 BUILD_FIRST=false

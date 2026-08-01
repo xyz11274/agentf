@@ -171,6 +171,22 @@ export WORK_KEY_HOME="${WORK_KEY_HOME:-/opt/sharevolume/ssl/cipher}"
 export INNER_TLS_ENABLE="${INNER_TLS_ENABLE:-false}"
 export SSL_ENABLE="${SSL_ENABLE:-false}"
 
+# ── Local profile: redirect /opt/* paths to project-local dirs ──────
+# Stub mode (COREMIND_ENABLED=OFF) doesn't need real CoreMind paths.
+if [ "$PROFILE" = "local" ]; then
+    _LOCAL_RUNTIME="$AR_PROJECT_ROOT/.runtime/sidecar"
+    export SSLPATH="${_LOCAL_RUNTIME}/ssl/cert"
+    export SSL_CERT_PATH="${_LOCAL_RUNTIME}/ssl/cert"
+    export RUNLOG_CONFIG="${RUNLOG_CONFIG:-$_LOCAL_RUNTIME/conf/log.json}"
+    export LOG_CONFIG="${LOG_CONFIG:-$_LOCAL_RUNTIME/conf/log.json}"
+    export NON_BYPASS_BBOX_PATH="${_LOCAL_RUNTIME}/logs/bbox"
+    export CIPHER_ROOT="${_LOCAL_RUNTIME}/ssl/cipher"
+    export CIPHER_PATH="${_LOCAL_RUNTIME}/ssl/cipher"
+    export CIPHERPATH="${_LOCAL_RUNTIME}/ssl/cipher"
+    export ROOT_KEY_HOME="${_LOCAL_RUNTIME}/ssl/cipher"
+    export WORK_KEY_HOME="${_LOCAL_RUNTIME}/ssl/cipher"
+fi
+
 # 打印 CoreMind 框架关键 env vars
 echo "[sidecar] CoreMind init env vars:"
 echo "  SSLPATH=$SSLPATH"
@@ -180,12 +196,12 @@ echo "  INNER_TLS_ENABLE=$INNER_TLS_ENABLE"
 echo "  SERVICENAME=$SERVICENAME"
 echo "  PROCESS_TYPE=$PROCESS_TYPE"
 echo "  APPID=$APPID"
-echo "  LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
-echo "  TZ=$TZ"
-echo "  RUNLOG_CONFIG=$RUNLOG_CONFIG"
-echo "  NON_BYPASS_BBOX_PATH=$NON_BYPASS_BBOX_PATH"
-echo "  CIPHER_PATH=$CIPHER_PATH"
-echo "  ROOT_KEY_HOME=$ROOT_KEY_HOME"
+echo "  LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"
+echo "  TZ=${TZ:-}"
+echo "  RUNLOG_CONFIG=${RUNLOG_CONFIG:-}"
+echo "  NON_BYPASS_BBOX_PATH=${NON_BYPASS_BBOX_PATH:-}"
+echo "  CIPHER_PATH=${CIPHER_PATH:-}"
+echo "  ROOT_KEY_HOME=${ROOT_KEY_HOME:-}"
 if [ -d "$SSLPATH" ]; then
     echo "  [ok] SSLPATH directory exists"
     ls -la "$SSLPATH/" | head -10
@@ -194,6 +210,7 @@ else
 fi
 
 # ── 运行时库路径 ────────────────────────────────────────────────────
+LIBRARY_PATH=""
 _LIB_DIRS=(
     "$AR_PROJECT_ROOT/build/production"
     "$AR_PROJECT_ROOT/../platform/lib"
@@ -206,24 +223,40 @@ for _dir in "${_LIB_DIRS[@]}"; do
         fi
     fi
 done
-export LD_LIBRARY_PATH="${AF_LIBRARY_PATH:-$LIBRARY_PATH}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="${AF_LIBRARY_PATH:-${LIBRARY_PATH:-}}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 # CoreMind 框架 initServiceConfig 要求 SSLPATH 目录存在
 mkdir -p "$SSLPATH"
 
-# ── 同步 serviceconfig 到共享卷（非破坏性：JSON 已存在则跳过）──
-if [ -f "/opt/sharevolume/serviceconfig/serviceconfig.json" ]; then
-    echo "[sidecar] serviceconfig.json already exists, skipping sync"
-elif [ -d "/opt/coremind/serviceconfig" ]; then
-    echo "[sidecar] Syncing serviceconfig to /opt/sharevolume..."
-    cp -R /opt/coremind/serviceconfig /opt/sharevolume/
+# ── 生成 serviceconfig.json 到共享卷 ─────────────────────────────────
+# serviceconfig.json 定义 CMF 注册端口（23767/27200），必须在 sidecar 启动前存在。
+# init 容器通常已生成，但如果 init 容器未运行或 sharevolume 被清理，需要本地重新生成。
+SERVICECONFIG_DIR="/opt/sharevolume/serviceconfig"
+SERVICECONFIG_JSON="$SERVICECONFIG_DIR/serviceconfig.json"
+mkdir -p "$SERVICECONFIG_DIR"
+
+if [ -f "$SERVICECONFIG_JSON" ]; then
+    echo "[sidecar] serviceconfig.json already exists, skipping generation"
+else
+    echo "[sidecar] serviceconfig.json not found, generating..."
+    # 查找 serviceconfig.py（优先本地脚本目录，回退到部署路径）
     SERVICECONFIG_PY=""
     for candidate in "$SCRIPT_DIR/serviceconfig.py" "/opt/coremind/scripts/serviceconfig.py"; do
         [ -f "$candidate" ] && SERVICECONFIG_PY="$candidate" && break
     done
-    if [ -n "$SERVICECONFIG_PY" ]; then
-        python "$SERVICECONFIG_PY" 2>/dev/null || true
+    if [ -z "$SERVICECONFIG_PY" ]; then
+        echo "[ERROR] serviceconfig.py not found and serviceconfig.json not pre-generated" >&2
+        exit 1
     fi
+    python "$SERVICECONFIG_PY" || {
+        echo "[ERROR] serviceconfig.py failed to generate JSON" >&2
+        exit 1
+    }
+    if [ ! -f "$SERVICECONFIG_JSON" ]; then
+        echo "[ERROR] serviceconfig.json was not generated after running $SERVICECONFIG_PY" >&2
+        exit 1
+    fi
+    echo "[sidecar] serviceconfig.json generated successfully"
 fi
 
 # ── 日志文件 ─────────────────────────────────────────────────────────

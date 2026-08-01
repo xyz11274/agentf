@@ -68,7 +68,11 @@ _wait_port_free() {
 
 # ── Parse arguments ─────────────────────────────────────────────────
 ACTION="start"
-MODE="dev"
+case "${AGENTFLOW_ENV:-dev}" in
+    prod) MODE="production" ;;
+    test) MODE="test" ;;
+    *)    MODE="dev" ;;
+esac
 PORT="8199"
 LOG_LEVEL="debug"
 NO_RELOAD=false
@@ -122,6 +126,12 @@ case "$MODE" in
             RELOAD=()
             ;;
 esac
+
+BRIDGE_VENV="$AR_PROJECT_ROOT/frontend/bridge/.venv_unix"
+if [ -x "$BRIDGE_VENV/bin/python3" ]; then
+    export PATH="$BRIDGE_VENV/bin:$PATH"
+    export VIRTUAL_ENV="$BRIDGE_VENV"
+fi
 
 ar_require_command python3
 if ! PYTHONPATH="$AR_PROJECT_ROOT/frontend/bridge" python3 -c "import fastapi, uvicorn" 2>/dev/null; then
