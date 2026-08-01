@@ -58,7 +58,12 @@ std::string extract_json_object_local(const std::string& json, const std::string
   return rj_stringify(d[key.c_str()]);
 }
 
-// DataVariant → JSON string (mirrors uds_server.cpp variant_to_json)
+// DataVariant → JSON string (mirrors uds_server.cpp variant_to_json).
+// Strings that are already JSON values (start with '{' or '[') pass through
+// verbatim so consumers keep receiving objects/arrays; plain strings (incl.
+// empty ones) are quoted + fully escaped so the frame stays valid JSON.
+// Non-string variants are serialized by data_variant_to_string(), which
+// emits native JSON for bool/int64/double/FileDescriptor/FileDescriptorList.
 std::string variant_to_json_local(const DataVariant& var) {
   if (std::holds_alternative<std::string>(var)) {
     const std::string& str = std::get<std::string>(var);
@@ -67,16 +72,9 @@ std::string variant_to_json_local(const DataVariant& var) {
         (str[first_char_pos] == '{' || str[first_char_pos] == '[')) {
       return str;  // Already JSON, pass through
     }
-    // Use json_escape from the RpcHandler instance
-    return "\"" + std::get<std::string>(var) + "\"";
-  } else if (std::holds_alternative<int64_t>(var)) {
-    return std::to_string(std::get<int64_t>(var));
-  } else if (std::holds_alternative<double>(var)) {
-    return std::to_string(std::get<double>(var));
-  } else if (std::holds_alternative<bool>(var)) {
-    return std::get<bool>(var) ? "true" : "false";
+    return "\"" + escape_json_string(str) + "\"";
   }
-  return "null";
+  return data_variant_to_string(var);
 }
 
 std::string build_success(const std::string& result, int64_t id) {
@@ -897,28 +895,14 @@ std::string RpcHandler::handle_databus_get(const std::string& params, int64_t id
   DataVariant value;
   bool exists = databus.get(full_key, value);
 
-  // data_variant_to_string() returns raw strings unquoted (designed for env-var
-  // interpolation / JSON-fragment splicing). For databus.get we must emit a
-  // self-contained JSON *value*: re-quote + escape strings, otherwise non-JSON
-  // string values (e.g. empty) yield malformed frames like {"value":} that the
-  // client drops as non-JSON, hanging the request until timeout.
-  auto to_json_value = [this](const DataVariant& v) -> std::string {
-    return std::visit(
-        [this](const auto& arg) -> std::string {
-          using T = std::decay_t<decltype(arg)>;
-          if constexpr (std::is_same_v<T, std::string>) {
-            return "\"" + json_escape(arg) + "\"";
-          }
-          // bool / int64 / double / FileDescriptor / list are already valid
-          // JSON values.
-          return data_variant_to_string(arg);
-        },
-        v);
-  };
-
   std::ostringstream oss;
   if (exists) {
-    oss << "{\"exists\":true,\"value\":" << to_json_value(value) << "}";
+    // variant_to_json_local() emits a self-contained JSON *value*: strings
+    // that are already JSON (e.g. LLM trace payloads) pass through verbatim,
+    // while plain/empty strings are quoted + escaped — otherwise non-JSON
+    // string values yield malformed frames like {"value":} that the client
+    // drops as non-JSON, hanging the request until timeout.
+    oss << "{\"exists\":true,\"value\":" << variant_to_json_local(value) << "}";
   } else {
     oss << "{\"exists\":false,\"value\":null}";
   }

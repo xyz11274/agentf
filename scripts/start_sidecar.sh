@@ -193,6 +193,10 @@ export WORK_KEY_HOME="${WORK_KEY_HOME:-/opt/sharevolume/ssl/cipher}"
 export INNER_TLS_ENABLE="${INNER_TLS_ENABLE:-false}"
 export SSL_ENABLE="${SSL_ENABLE:-false}"
 
+# GaussDB (DataMindSDK_C) SSL 配置路径 — 与 OutfitAgent start.sh 对齐
+export RAG_GAUSS_SSL_PATH="${RAG_GAUSS_SSL_PATH:-/opt/sharevolume/ragssl}"
+export RAG_GAUSS_GUC_PATH="${RAG_GAUSS_GUC_PATH:-/opt/sharevolume/ragssl}"
+
 # ── Local profile: redirect /opt/* paths to project-local dirs ──────
 # Stub mode (COREMIND_ENABLED=OFF) doesn't need real CoreMind paths.
 if [ "$PROFILE" = "local" ]; then
@@ -249,6 +253,21 @@ export LD_LIBRARY_PATH="${AF_LIBRARY_PATH:-${LIBRARY_PATH:-}}${LD_LIBRARY_PATH:+
 
 # CoreMind 框架 initServiceConfig 要求 SSLPATH 目录存在
 mkdir -p "$SSLPATH"
+
+# ── GaussDB SSL 配置工具部署（幂等，对齐 HealthAgent/OutfitAgent start.sh）──
+# DataMindSDK_C 通过 RAG_GAUSS_GUC_PATH 定位 gs_guc 完成 SSL 配置（PGSSLCERT）。
+# gs_guc 由构建链注入到项目根（OutfitAgent pre-makeimage-package.sh tar 含 gs_guc）。
+# 幂等性：mkdir -p + cp -f + chmod 均可重复执行；不使用 rm -rf，避免误删目录内
+# 其他文件（如证书），支持统一脚本与本脚本混用同一 ragssl 目录。
+# local (stub) 模式通常无 gs_guc，缺失时告警不阻断启动。
+if [ -f "$AR_PROJECT_ROOT/gs_guc" ]; then
+    mkdir -p "$RAG_GAUSS_GUC_PATH"
+    cp -f "$AR_PROJECT_ROOT/gs_guc" "$RAG_GAUSS_GUC_PATH/gs_guc"
+    chmod 550 "$RAG_GAUSS_GUC_PATH/gs_guc"
+    echo "[sidecar] GaussDB gs_guc deployed to $RAG_GAUSS_GUC_PATH"
+else
+    echo "[sidecar][WARN] gs_guc not found at $AR_PROJECT_ROOT/gs_guc — GaussDB SSL 连接将失败（连接池全 dead）"
+fi
 
 # ── 生成 serviceconfig.json 到共享卷（仅 production 模式）─────────────
 # local (stub) 模式不调 init_coremind_framework，不需要 serviceconfig。
