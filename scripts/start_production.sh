@@ -73,8 +73,10 @@ fi
 PIDS=()
 cleanup() {
     local pid
-    for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
-    for pid in "${PIDS[@]}"; do wait "$pid" 2>/dev/null || true; done
+    # 兼容 bash < 4.4：set -u 下空数组展开会报 unbound variable，
+    # ${arr[@]+"${arr[@]}"} 语法在空数组时安全展开为空。
+    for pid in "${PIDS[@]+"${PIDS[@]}"}"; do kill "$pid" 2>/dev/null || true; done
+    for pid in "${PIDS[@]+"${PIDS[@]}"}"; do wait "$pid" 2>/dev/null || true; done
 }
 trap cleanup EXIT INT TERM
 
