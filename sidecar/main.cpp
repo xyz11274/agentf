@@ -463,6 +463,10 @@ static bool init_coremind_framework(int argc, char* argv[]) {
         {CMFrm::COM::POST, "/health/v1/tasks",         CMFrm::COM::RAW, "default", -1, SidecarRouter::HandleUserRequest});
     g_sidecar_router->Register(
         {CMFrm::COM::POST, "/aisf/outfit/v1/tasks",    CMFrm::COM::RAW, "default", -1, SidecarRouter::HandleUserRequest});
+    // 与 deployment/conf/agents.json 中 OutfitAgent 的 baseUrl 契约保持一致
+    // （上游 CSP 平台按 baseUrl=/aisf/outfitagent/v1/tasks 下发任务）
+    g_sidecar_router->Register(
+        {CMFrm::COM::POST, "/aisf/outfitagent/v1/tasks", CMFrm::COM::RAW, "default", -1, SidecarRouter::HandleUserRequest});
     g_sidecar_router->Register(
         {CMFrm::COM::POST, "/aisf/sysagent/v1/agentInstall",   CMFrm::COM::RAW, "default", -1, SidecarRouter::HandleAgentInstall});
     g_sidecar_router->Register(
@@ -737,6 +741,11 @@ static void configure_server(httplib::Server& svr, const std::string& bridge_url
     });
 
     svr.Post("/aisf/outfit/v1/tasks",
+             [bridge_url](const httplib::Request& req, httplib::Response& res) {
+        forward_to_bridge(bridge_url, req, res);
+    });
+    // 与 deployment/conf/agents.json 中 OutfitAgent 的 baseUrl 契约保持一致
+    svr.Post("/aisf/outfitagent/v1/tasks",
              [bridge_url](const httplib::Request& req, httplib::Response& res) {
         forward_to_bridge(bridge_url, req, res);
     });
