@@ -26,6 +26,7 @@ if(COREMIND_ENABLED)
     target_sources(coremind_bridge PRIVATE
         resolve_handler.cpp
         sidecar_router.cpp
+        router_logic.cpp
     )
 else()
     target_sources(coremind_bridge PRIVATE
