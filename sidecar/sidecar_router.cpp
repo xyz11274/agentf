@@ -208,12 +208,16 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
         }
     }
 
-    Json::Value messages(Json::arrayValue);
-    Json::Value user_msg;
-    user_msg["role"] = "user";
-    user_msg["content"] = content_parts;
-    messages.append(user_msg);
-    std::string content_str = json_dumps(messages);
+    // content 直接传 ContentPart 数组，不包装 messages 结构
+    // Bridge 的 _chat_turn_events 会自行包装 role/user（对齐 main.cpp forward_to_bridge）
+    std::string content_str;
+    if (content_parts.size() == 1 && content_parts[0].isMember("text")) {
+        // 纯文本场景：直接传字符串
+        content_str = content_parts[0]["text"].asString();
+    } else {
+        // 多模态场景：传 ContentPart JSON 数组
+        content_str = json_dumps(content_parts);
+    }
 
     // 提取上游回调地址（SysAgentEntity）
     std::string sys_agent_entity = header.get("SysAgentEntity", "").asString();
