@@ -2,7 +2,6 @@
 #include <sstream>
 
 namespace sidecar {
-
 bool is_supported_message_type(const std::string& header_msg_type,
                                const std::string& data_msg_type) {
     if (header_msg_type == "UserTaskManagement" && data_msg_type == "TaskAssignment")
@@ -127,6 +126,69 @@ std::pair<std::string, std::string> swap_sender_receiver(
     std::string new_sender = original_receiver.empty() ? "SysAgent" : original_receiver;
     std::string new_receiver = original_sender.empty() ? "APP" : original_sender;
     return {new_sender, new_receiver};
+}
+
+std::optional<Json::Value> parse_request_body(const std::string& body) {
+    if (body.empty()) return std::nullopt;
+
+    Json::Value root;
+    Json::CharReaderBuilder reader;
+    std::string errors;
+    std::istringstream input(body);
+    if (!Json::parseFromStream(reader, input, &root, &errors)) {
+        return std::nullopt;
+    }
+    return root;
+}
+
+Json::Value build_health_response() {
+    Json::Value body;
+    body["status"] = "healthy";
+    body["coremind"] = true;
+    body["sidecar"] = true;
+    return body;
+}
+
+Json::Value build_callback_header(
+    const std::string& message_type,
+    const std::string& task_id,
+    const std::string& dialogue_id,
+    const std::string& user_name,
+    const std::string& client_session_id,
+    const std::string& original_sender,
+    const std::string& original_receiver,
+    const std::string& seq_num,
+    const Json::Value& req_header) {
+    auto [new_sender, new_receiver] = swap_sender_receiver(original_sender, original_receiver);
+
+    Json::Value header;
+    header["MessageType"] = message_type;
+    header["TaskID"] = task_id;
+    header["DialogueId"] = dialogue_id;
+    header["UserName"] = user_name;
+    header["ClientSessionId"] = client_session_id;
+    header["Sender"] = new_sender;
+    header["Receiver"] = new_receiver;
+    header["SeqNum"] = seq_num;
+
+    for (const auto& k : {"AcmSessionId", "ClientExField", "DeviceCategory",
+                          "DeviceId", "SessionId", "TeamEnvironmentID", "UUID"}) {
+        if (req_header.isMember(k)) header[k] = req_header[k];
+    }
+    return header;
+}
+
+std::string build_user_output_object(const Json::Value& sse_artifacts) {
+    if (!sse_artifacts.isArray() || sse_artifacts.empty()) return "";
+
+    Json::Value output;
+    output["code"] = 200101;
+    output["data"]["content"] = sse_artifacts;
+
+    Json::StreamWriterBuilder w;
+    w["indentation"] = "";
+    w["emitUTF8"] = true;
+    return Json::writeString(w, output);
 }
 
 }

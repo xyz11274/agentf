@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <utility>
 #include <json/json.h>
@@ -42,5 +43,32 @@ bool should_forward_to_callback(const std::string& source);
 std::pair<std::string, std::string> swap_sender_receiver(
     const std::string& original_sender,
     const std::string& original_receiver);
+
+// TC-SID-005/006: 解析请求体为 JSON。
+// 空串或非法 JSON 返回空 optional；合法 JSON 返回填充的 optional。
+std::optional<Json::Value> parse_request_body(const std::string& body);
+
+// TC-SID-015: 构建健康检查响应。
+// 返回 {"status":"healthy","coremind":true,"sidecar":true}
+Json::Value build_health_response();
+
+// TC-SID-011: 构建回调 Header JSON，执行 Sender/Receiver 翻转并透传上游字段。
+// passthrough_keys = {"AcmSessionId", "ClientExField", "DeviceCategory",
+//                     "DeviceId", "SessionId", "TeamEnvironmentID", "UUID"}
+Json::Value build_callback_header(
+    const std::string& message_type,
+    const std::string& task_id,
+    const std::string& dialogue_id,
+    const std::string& user_name,
+    const std::string& client_session_id,
+    const std::string& original_sender,
+    const std::string& original_receiver,
+    const std::string& seq_num,
+    const Json::Value& req_header);
+
+// TC-SID-026: 将 SSE _artifacts 数组转换为 UserOutputObject 的 stringified JSON。
+// artifacts 为空或 null 时返回 ""（用于 Running 回调）。
+// artifacts 非空时返回 {"code":200101,"data":{"content":[...]}} 的字符串形式。
+std::string build_user_output_object(const Json::Value& sse_artifacts);
 
 }

@@ -870,6 +870,25 @@ print(cfg.get('sandbox', {}).get('e2b_api_key', '') or '')
             SANDBOX_FAIL=$((SANDBOX_FAIL + 1))
         fi
         rm -f "$_e2b_out"
+
+        # E2B 冷启动性能基准：create + skills 同步分段计时，阈值断言防回归
+        echo -e "  ${CYAN}[perf_cold_start]${NC} E2B 冷启动性能基准..."
+        local _perf_py="$PROJECT_DIR/frontend/bridge/.venv_unix/bin/python3"
+        if [ ! -x "$_perf_py" ]; then
+            echo -e "  ${YELLOW}⚠ 跳过冷启动基准（venv python 不存在: $_perf_py）${NC}"
+        else
+            local _perf_out; _perf_out="$(mktemp)"
+            if "$_perf_py" "$PROJECT_DIR/tests/perf/perf_cold_start.py" 2>&1 | tee "$_perf_out" | tail -3; then
+                echo -e "  ${GREEN}✓ E2B 冷启动性能基准通过${NC}"
+                SANDBOX_PASS=$((SANDBOX_PASS + 1))
+            else
+                echo -e "  ${RED}✗ E2B 冷启动性能基准失败（可能回归）${NC}"
+                echo -e "  ${YELLOW}━━ 完整输出 ━━${NC}"
+                cat "$_perf_out"
+                SANDBOX_FAIL=$((SANDBOX_FAIL + 1))
+            fi
+            rm -f "$_perf_out"
+        fi
     else
         echo -e "  ${YELLOW}⚠ 跳过 E2B Sandbox（设置 E2B_API_KEY 环境变量启用）${NC}"
     fi

@@ -161,8 +161,8 @@ class DaemonClient:
                 self._ws = await asyncio.wait_for(
                     websockets.connect(
                         self._ws_url,
-                        ping_interval=20,
-                        ping_timeout=10,
+                        ping_interval=60,
+                        ping_timeout=60,
                         max_size=2 ** 20,  # 1 MB frame limit
                     ),
                     timeout=self._timeout,

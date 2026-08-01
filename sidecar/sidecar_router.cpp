@@ -13,6 +13,12 @@
 #include <framework_com/http_client_factory.h>
 
 #include "resolve_handler.h"
+#include "router_logic.h"
+
+using sidecar::build_callback_header;
+using sidecar::build_health_response;
+using sidecar::build_user_output_object;
+using sidecar::parse_request_body;
 
 // ── JSON 辅助 ──
 
@@ -110,10 +116,7 @@ std::vector<CMFrm::ServiceRouter::UsrServiceRouter> SidecarRouter::URLPatterns()
 
 CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleHealthCheck(
     const std::shared_ptr<CMFrm::ServiceRouter::Context>& context) {
-    Json::Value body;
-    body["status"] = "healthy";
-    body["coremind"] = true;
-    body["sidecar"] = true;
+    Json::Value body = build_health_response();
     ok_response(context, body);
     return CMFrm::COM::SYNC;
 }
@@ -137,22 +140,18 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleScheduleTaskAbility(
 
 CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
     const std::shared_ptr<CMFrm::ServiceRouter::Context>& context) {
-    // 1. 读取请求体
+    // 1. 解析请求体
     std::string req_body = context->GetRequestBody();
-    if (req_body.empty()) {
-        error_response(context, 400, "empty request body");
+    auto parsed = parse_request_body(req_body);
+    if (!parsed.has_value()) {
+        if (req_body.empty()) {
+            error_response(context, 400, "empty request body");
+        } else {
+            error_response(context, 400, "invalid JSON");
+        }
         return CMFrm::COM::SYNC;
     }
-
-    // 2. 解析请求体为 JSON
-    Json::Value original_request;
-    Json::CharReaderBuilder reader;
-    std::string errors;
-    std::istringstream input(req_body);
-    if (!Json::parseFromStream(reader, input, &original_request, &errors)) {
-        error_response(context, 400, "invalid JSON: " + errors);
-        return CMFrm::COM::SYNC;
-    }
+    Json::Value original_request = *parsed;
 
     // 3. 从 AccessCtrl 格式提取字段（全部保存用于响应回传）
     auto header = original_request["Header"];
@@ -264,29 +263,21 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
 
             // 回调 POST 辅助函数
             auto post_callback = [&](const std::string& stream_status, int flag,
-                                     const std::string& text, bool is_final) -> bool {
+                                      const std::string& text, bool is_final,
+                                      const std::string& user_output_object) -> bool {
                 Json::Value cb;
                 cb["Data"]["MessageType"] = "UserOutput";
                 cb["Data"]["StreamStatus"] = stream_status;
                 cb["Data"]["UserOutputFlag"] = flag;
                 cb["Data"]["UserOutputText"] = text;
-                cb["Data"]["UserOutputObject"] = "";
+                cb["Data"]["UserOutputObject"] = user_output_object;
                 cb["Data"]["UserManualInterventionFlag"] = false;
                 cb["Data"]["ImplicitOutputFlag"] = false;
                 cb["Data"]["IsVoiceBroadcast"] = 1;
-                cb["Header"]["MessageType"] = "DataExchange";
-                cb["Header"]["TaskID"] = task_id;
-                cb["Header"]["DialogueId"] = dialogue_id;
-                cb["Header"]["UserName"] = user_name;
-                cb["Header"]["ClientSessionId"] = client_session_id;
-                cb["Header"]["Sender"] = receiver.empty() ? "SysAgent" : receiver;
-                cb["Header"]["Receiver"] = sender.empty() ? "APP" : sender;
-                cb["Header"]["SeqNum"] = request_id;
+                cb["Header"] = build_callback_header("DataExchange", task_id, dialogue_id,
+                                                      user_name, client_session_id,
+                                                      sender, receiver, request_id, req_header);
                 cb["Header"]["EventTimeStamp"] = current_timestamp_ms();
-                for (const auto& k : {"AcmSessionId", "ClientExField", "DeviceCategory",
-                                      "DeviceId", "SessionId", "TeamEnvironmentID", "UUID"}) {
-                    if (req_header.isMember(k)) cb["Header"][k] = req_header[k];
-                }
                 std::string target = "https://" + sys_agent_entity + ":23767"
                                    + "/coremind/systemagent/v1/callback";
                 std::string cb_str = json_dumps(cb);
@@ -325,6 +316,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
 
             std::string sse_buffer;
             std::string accumulated_content;
+            Json::Value accumulated_artifacts;
             cli.Post(callback_path_stream.c_str(), http_headers, json_dumps(rest_body), "application/json",
                 [&](const char* data, size_t len) -> bool {
                     sse_buffer.append(data, len);
@@ -347,6 +339,10 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                         std::string err;
                         std::istringstream ss(payload);
                         if (!Json::parseFromStream(rdr, ss, &sse_json, &err)) continue;
+                        Json::Value chunk_artifacts = sse_json.get("_artifacts", Json::Value(Json::nullValue));
+                        if (!chunk_artifacts.isNull()) {
+                            accumulated_artifacts = chunk_artifacts;
+                        }
                         // 提取 content
                         std::string token;
                         auto choices = sse_json["choices"];
@@ -363,40 +359,29 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                         if (_src != "coordinator" && !_src.empty()) continue;
                         bool is_progress = sse_json.get("_progress", false).asBool()
                                         || sse_json.get("_chunk_type", "").asString() == "progress";
-                        post_callback("Running", is_progress ? 1 : 0, token, false);
+                        post_callback("Running", is_progress ? 1 : 0, token, false, "");
                         accumulated_content += token;
                     }
                     return true;
                 },
                 [&](uint64_t, uint64_t) -> bool {
                     // SSE 流结束：发送 Completed 信号（内容已增量发出，Completed 仅做结束标记）
-                    post_callback("Completed", 0, "", true);
+                    std::string output_obj = build_user_output_object(accumulated_artifacts);
+                    post_callback("Completed", 0, "", true, output_obj);
 
                     // 额外发送 TaskStatus 报文
                     Json::Value task_status;
-                    Json::Value hdr;
-                    hdr["MessageType"] = "TaskStatusManagement";
-                    hdr["TaskID"] = task_id;
-                    hdr["DialogueId"] = dialogue_id;
-                    hdr["Sender"] = receiver.empty() ? "SysAgent" : receiver;
-                    hdr["Receiver"] = sender.empty() ? "APP" : sender;
-                    hdr["UserName"] = user_name;
-                    hdr["ClientSessionId"] = client_session_id;
-                    hdr["SeqNum"] = request_id;
-                    hdr["EventTimeStamp"] = current_timestamp_ms();
-                    task_status["Header"] = hdr;
+                    task_status["Header"] = build_callback_header(
+                        "TaskStatusManagement", task_id, dialogue_id,
+                        user_name, client_session_id,
+                        sender, receiver, request_id, req_header);
+                    task_status["Header"]["EventTimeStamp"] = current_timestamp_ms();
                     Json::Value data;
                     data["MessageType"] = "TaskStatusReport";
                     data["TaskStatusCode"] = 200;
                     data["TaskStatusReport"] = "TaskCompleted";
                     data["UserOutputText"] = accumulated_content;
                     task_status["Data"] = data;
-                    // 添加透传字段到 TaskStatus Header
-                    for (const auto& k : {"AcmSessionId", "ClientExField", "DeviceCategory",
-                                          "DeviceId", "SessionId", "TeamEnvironmentID", "UUID"}) {
-                        if (req_header.isMember(k))
-                            task_status["Header"][k] = req_header[k];
-                    }
                     std::string ts_url = "https://" + sys_agent_entity + ":23767"
                                        + "/coremind/systemagent/v1/callback";
                     std::string ts_str = json_dumps(task_status);

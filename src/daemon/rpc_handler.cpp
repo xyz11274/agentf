@@ -417,11 +417,14 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
     key.client_id = client_id;
     key.agent_id = agent_id;
     try {
+      auto sb_t0 = std::chrono::steady_clock::now();
       sandbox_sb = sandbox_lifecycle_->create(key);
+      auto sb_t1 = std::chrono::steady_clock::now();
+      auto sb_ms = std::chrono::duration_cast<std::chrono::milliseconds>(sb_t1 - sb_t0).count();
       if (sandbox_sb) {
         Logger::instance().info_f(
-            "[SANDBOX] Created/reused sandbox id=%s for user=%s client=%s agent=%s",
-            sandbox_sb->id().c_str(), user_id.c_str(), client_id.c_str(), agent_id.c_str());
+            "[SANDBOX] Created/reused sandbox id=%s for user=%s client=%s agent=%s (create_latency=%lldms)",
+            sandbox_sb->id().c_str(), user_id.c_str(), client_id.c_str(), agent_id.c_str(), sb_ms);
       }
     } catch (const SandboxLifecycle::ConcurrentLimitException& e) {
       Logger::instance().warn_f(
@@ -475,9 +478,15 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
     }
   }
 
+  auto route_t0 = std::chrono::steady_clock::now();
   if (!agent->route_request_message(message)) {
     return build_error(-1, "Failed to route request message", id);
   }
+  auto route_t1 = std::chrono::steady_clock::now();
+  auto route_ms = std::chrono::duration_cast<std::chrono::milliseconds>(route_t1 - route_t0).count();
+  Logger::instance().info_f(
+      "[TIMING] trace=%s sandbox_create+route latency=%lldms (from USER_INPUT to route complete)",
+      trace_id.c_str(), route_ms);
 
   // Register with ResponsePoller for async notification routing
   poller_.register_request(message_id, client_fd, agent_id, dialogue_id);
@@ -888,10 +897,28 @@ std::string RpcHandler::handle_databus_get(const std::string& params, int64_t id
   DataVariant value;
   bool exists = databus.get(full_key, value);
 
+  // data_variant_to_string() returns raw strings unquoted (designed for env-var
+  // interpolation / JSON-fragment splicing). For databus.get we must emit a
+  // self-contained JSON *value*: re-quote + escape strings, otherwise non-JSON
+  // string values (e.g. empty) yield malformed frames like {"value":} that the
+  // client drops as non-JSON, hanging the request until timeout.
+  auto to_json_value = [this](const DataVariant& v) -> std::string {
+    return std::visit(
+        [this](const auto& arg) -> std::string {
+          using T = std::decay_t<decltype(arg)>;
+          if constexpr (std::is_same_v<T, std::string>) {
+            return "\"" + json_escape(arg) + "\"";
+          }
+          // bool / int64 / double / FileDescriptor / list are already valid
+          // JSON values.
+          return data_variant_to_string(arg);
+        },
+        v);
+  };
+
   std::ostringstream oss;
   if (exists) {
-    std::string value_str = data_variant_to_string(value);
-    oss << "{\"exists\":true,\"value\":" << value_str << "}";
+    oss << "{\"exists\":true,\"value\":" << to_json_value(value) << "}";
   } else {
     oss << "{\"exists\":false,\"value\":null}";
   }

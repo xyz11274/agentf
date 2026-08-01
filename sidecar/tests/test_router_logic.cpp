@@ -226,3 +226,85 @@ TEST(TestCallback, EmptySenderDefaultsAPP) {
     EXPECT_EQ(new_sender, "SystemAgent");
     EXPECT_EQ(new_receiver, "APP");
 }
+
+// ═══════════════════════════════════════════════════════════
+// 请求体解析 (TC-SID-005/006)
+// ═══════════════════════════════════════════════════════════
+
+TEST(TestParsing, TC_SID_005_EmptyBody) {
+    auto result = parse_request_body("");
+    EXPECT_FALSE(result.has_value());
+}
+
+TEST(TestParsing, TC_SID_006_InvalidJson) {
+    EXPECT_FALSE(parse_request_body("not json").has_value());
+    EXPECT_FALSE(parse_request_body("{broken").has_value());
+    auto result = parse_request_body(R"({"key":"value"})");
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ((*result)["key"].asString(), "value");
+}
+
+// ═══════════════════════════════════════════════════════════
+// 健康检查响应 (TC-SID-015)
+// ═══════════════════════════════════════════════════════════
+
+TEST(TestHealth, TC_SID_015_Format) {
+    auto body = build_health_response();
+    EXPECT_EQ(body["status"].asString(), "healthy");
+    EXPECT_EQ(body["coremind"].asBool(), true);
+    EXPECT_EQ(body["sidecar"].asBool(), true);
+}
+
+// ═══════════════════════════════════════════════════════════
+// 回调 Header 构建 + 透传字段 (TC-SID-011)
+// ═══════════════════════════════════════════════════════════
+
+TEST(TestCallback, TC_SID_011_PassthroughFields) {
+    Json::Value req_header;
+    req_header["AcmSessionId"] = "acm-123";
+    req_header["DeviceId"] = "dev-456";
+    req_header["SessionId"] = "sess-789";
+    req_header["ExtraField"] = "should-not-passthrough";
+
+    auto hdr = build_callback_header(
+        "DataExchange", "task-1", "dlg-1", "user-1",
+        "client-1", "APP", "SystemAgent", "seq-1", req_header
+    );
+
+    EXPECT_EQ(hdr["MessageType"].asString(), "DataExchange");
+    EXPECT_EQ(hdr["TaskID"].asString(), "task-1");
+    EXPECT_EQ(hdr["Sender"].asString(), "SystemAgent");
+    EXPECT_EQ(hdr["Receiver"].asString(), "APP");
+    EXPECT_EQ(hdr["AcmSessionId"].asString(), "acm-123");
+    EXPECT_EQ(hdr["DeviceId"].asString(), "dev-456");
+    EXPECT_EQ(hdr["SessionId"].asString(), "sess-789");
+    EXPECT_FALSE(hdr.isMember("ExtraField"));
+}
+
+// ═══════════════════════════════════════════════════════════
+// UserOutputObject 构建 (TC-SID-026)
+// ═══════════════════════════════════════════════════════════
+
+TEST(TestOutputFormat, TC_SID_026_ArtifactsToOutputObject) {
+    Json::Value empty_artifacts(Json::arrayValue);
+    EXPECT_EQ(build_user_output_object(empty_artifacts), "");
+    EXPECT_EQ(build_user_output_object(Json::Value(Json::nullValue)), "");
+
+    Json::Value artifacts(Json::arrayValue);
+    Json::Value img;
+    img["type"] = "image";
+    img["url"] = "https://example.com/look.png";
+    img["name"] = "look.png";
+    img["mime_type"] = "image/png";
+    artifacts.append(img);
+
+    std::string result = build_user_output_object(artifacts);
+    Json::Value parsed;
+    Json::CharReaderBuilder reader;
+    std::string err;
+    std::istringstream ss(result);
+    ASSERT_TRUE(Json::parseFromStream(reader, ss, &parsed, &err));
+    EXPECT_EQ(parsed["code"].asInt(), 200101);
+    EXPECT_EQ(parsed["data"]["content"][0]["type"].asString(), "image");
+    EXPECT_EQ(parsed["data"]["content"][0]["url"].asString(), "https://example.com/look.png");
+}

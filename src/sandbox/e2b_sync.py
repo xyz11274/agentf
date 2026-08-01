@@ -104,11 +104,24 @@ def _connect_sandbox(sandbox_id: str) -> "Sandbox":
 
 # ── upload：本地目录 → 远端目录 ──────────────────────────────────────
 
+# 不同步到沙箱的缓存/构建产物目录与文件后缀
+_CACHE_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".git"}
+_CACHE_SUFFIXES = {".pyc", ".pyo", ".pyc", ".ds_store"}
+
+
+def _should_exclude(rel_path: Path) -> bool:
+    if rel_path.suffix.lower() in _CACHE_SUFFIXES:
+        return True
+    return any(part in _CACHE_DIRS for part in rel_path.parts)
+
+
 def _walk_local_files(local_root: Path):
-    """遍历 local_root 下所有常规文件，yield (relative_path, absolute_path)。"""
+    """遍历 local_root 下所有常规文件（排除缓存产物），yield (relative_path, absolute_path)。"""
     for path in local_root.rglob("*"):
         if path.is_file() and not path.is_symlink():
-            yield path.relative_to(local_root), path
+            rel = path.relative_to(local_root)
+            if not _should_exclude(rel):
+                yield rel, path
 
 
 def upload(sandbox_id: str, local_dir: str, remote_dir: str) -> None:
