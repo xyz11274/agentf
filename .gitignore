@@ -172,20 +172,20 @@ docs/gaps
 docs/research
 docs/review
 docs/usage
-# resource/skill_hub/minimax_outfit_skills
-# examples/agent/outfit-assistant/harness/skills/minimax_outfit_skills
+resource/skill_hub/minimax_outfit_skills
+examples/agent/outfit-assistant/harness/skills/minimax_outfit_skills
 frontend/bridge/docs
 
-# examples/agent/outfit-assistant/assets
-# examples/agent/outfit-assistant/preferences.json
-# examples/agent/outfit-assistant/*.html
-# examples/agent/outfit-assistant/*.png
-# examples/agent/outfit-assistant/harness/outputs
-# resource/skill_hub/dashscope_outfit_skills/outfit-stylist/assets
-# resource/skill_hub/dashscope_outfit_skills/forge-image-gen/assets
-# examples/agent/test-agent/workspace
-# examples/agent/outfit-assistant/harness/assets/
-# examples/agent/outfit-assistant/harness/skills/dashscope_outfit_skills/outfit-stylist/assets/
-# examples/agent/outfit-assistant/harness/skills/dashscope_outfit_skills/forge-image-gen/assets/
-# examples/agent/outfit-assistant/.agentoid/
+examples/agent/outfit-assistant/assets
+examples/agent/outfit-assistant/preferences.json
+examples/agent/outfit-assistant/*.html
+examples/agent/outfit-assistant/*.png
+examples/agent/outfit-assistant/harness/outputs
+resource/skill_hub/dashscope_outfit_skills/outfit-stylist/assets
+resource/skill_hub/dashscope_outfit_skills/forge-image-gen/assets
+examples/agent/test-agent/workspace
+examples/agent/outfit-assistant/harness/assets/
+examples/agent/outfit-assistant/harness/skills/dashscope_outfit_skills/outfit-stylist/assets/
+examples/agent/outfit-assistant/harness/skills/dashscope_outfit_skills/forge-image-gen/assets/
+examples/agent/outfit-assistant/.agentoid/
 ###
