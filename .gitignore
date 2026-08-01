@@ -162,6 +162,8 @@ venv
 
 ### NotReadyResources
 docs/bugs
+docs/debug-guides
+docs/presentation
 docs/decisions
 docs/design
 docs/development

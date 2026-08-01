@@ -83,21 +83,22 @@ target_link_libraries(coremind_bridge PRIVATE Threads::Threads)
 
 # ═══════════════════════════════════════════════════════════
 # Unit tests — pure logic, no CMF dependency
+# Skipped silently when GTest is unavailable (e.g. production CI).
 # ═══════════════════════════════════════════════════════════
-
-enable_testing()
-
-add_executable(test_router_logic
-    tests/test_router_logic.cpp
-    router_logic.cpp
-)
-
-target_include_directories(test_router_logic PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-)
 
 find_package(GTest QUIET)
 if(GTest_FOUND)
+    enable_testing()
+
+    add_executable(test_router_logic
+        tests/test_router_logic.cpp
+        router_logic.cpp
+    )
+
+    target_include_directories(test_router_logic PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+
     target_link_libraries(test_router_logic PRIVATE GTest::GTest GTest::Main)
     # Ensure runtime can find GTest dylib (e.g. miniconda install)
     if(GTest_DIR)
@@ -105,16 +106,15 @@ if(GTest_FOUND)
         set_target_properties(test_router_logic PROPERTIES
             BUILD_RPATH "${GTEST_LIB_DIR}")
     endif()
-else()
-    find_package(Threads REQUIRED)
-    target_link_libraries(test_router_logic PRIVATE Threads::Threads)
-endif()
 
-if(jsoncpp_FOUND)
-    target_link_libraries(test_router_logic PRIVATE JsonCpp::JsonCpp)
-else()
-    target_link_libraries(test_router_logic PRIVATE jsoncpp)
-endif()
+    if(jsoncpp_FOUND)
+        target_link_libraries(test_router_logic PRIVATE JsonCpp::JsonCpp)
+    else()
+        target_link_libraries(test_router_logic PRIVATE jsoncpp)
+    endif()
 
-include(GoogleTest)
-gtest_discover_tests(test_router_logic)
+    include(GoogleTest)
+    gtest_discover_tests(test_router_logic)
+else()
+    message(STATUS "sidecar: GTest not found — skipping unit tests")
+endif()
