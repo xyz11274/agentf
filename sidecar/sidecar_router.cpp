@@ -208,16 +208,10 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
         }
     }
 
-    // content 直接传 ContentPart 数组，不包装 messages 结构
-    // Bridge 的 _chat_turn_events 会自行包装 role/user（对齐 main.cpp forward_to_bridge）
-    std::string content_str;
-    if (content_parts.size() == 1 && content_parts[0].isMember("text")) {
-        // 纯文本场景：直接传字符串
-        content_str = content_parts[0]["text"].asString();
-    } else {
-        // 多模态场景：传 ContentPart JSON 数组
-        content_str = json_dumps(content_parts);
-    }
+    // content 直接传 ContentPart 数组（JSON 数组，非字符串化）
+    // bridge 的 normalize_content 需要数组才能识别 image_url part 并落盘；
+    // 纯文本场景传 [{type:text,text:...}] 数组，bridge prepare_content_for_daemon
+    // 同样返回纯文本，行为一致（对齐 main.cpp forward_to_bridge）。
 
     // 提取上游回调地址（SysAgentEntity）
     std::string sys_agent_entity = header.get("SysAgentEntity", "").asString();
@@ -263,7 +257,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
             Json::Value rest_body;
             rest_body["user_id"] = user_name;
             rest_body["client_id"] = client_session_id;
-            rest_body["content"] = content_str;
+            rest_body["content"] = content_parts;
 
             // 回调 POST 辅助函数
             auto post_callback = [&](const std::string& stream_status, int flag,
@@ -430,7 +424,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
     Json::Value rest_body;
     rest_body["user_id"] = user_name;
     rest_body["client_id"] = client_session_id;
-    rest_body["content"] = content_str;
+    rest_body["content"] = content_parts;
 
     httplib::Client cli(origin.c_str());
     cli.set_read_timeout(360, 0);

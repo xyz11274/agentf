@@ -200,16 +200,10 @@ static void forward_to_bridge(
             }
         }
     }
-    // content 直接传 ContentPart 数组，不包装 messages 结构
-    // Bridge 的 _chat_turn_events 会自行包装 role/user
-    std::string content_str;
-    if (content_parts.size() == 1 && content_parts[0].isMember("text")) {
-        // 纯文本场景：直接传字符串
-        content_str = content_parts[0]["text"].asString();
-    } else {
-        // 多模态场景：传 ContentPart JSON 数组
-        content_str = Json::writeString(json_writer(), content_parts);
-    }
+    // content 直接传 ContentPart 数组（JSON 数组，非字符串化）
+    // bridge 的 normalize_content 需要数组才能识别 image_url part 并落盘；
+    // 纯文本场景传 [{type:text,text:...}] 数组，bridge prepare_content_for_daemon
+    // 同样返回纯文本，行为一致。
 
     // 构造 REST API 请求体
     static std::atomic<unsigned long long> request_counter{0};
@@ -221,7 +215,7 @@ static void forward_to_bridge(
     Json::Value rest_body;
     rest_body["user_id"] = user_name;
     rest_body["client_id"] = client_session_id;
-    rest_body["content"] = content_str;
+    rest_body["content"] = content_parts;
 
     // 从 bridge_url 提取 origin 和 path prefix
     const auto target = parse_bridge_target(bridge_url);
