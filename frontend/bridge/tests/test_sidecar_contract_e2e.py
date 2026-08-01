@@ -155,14 +155,24 @@ def main():
             f"user_id mismatch: {bridge_body.get('user_id')}"
         assert bridge_body.get("client_id") == "session-DH_WD_LWWD_05_014-1783071771128030945", \
             f"client_id mismatch: {bridge_body.get('client_id')}"
-        assert "帮我推荐" in bridge_body.get("content", ""), \
-            "content should contain UserInputText"
-        assert "image_url" in bridge_body.get("content", ""), \
-            "content should contain image_url for images"
+        # 接口契约：content 必须是 ContentPart 数组（list[ContentPart]），不能是字符串、
+        # 不能是嵌套 messages 结构（守护 §10 修复）
+        content = bridge_body.get("content")
+        assert isinstance(content, list), \
+            f"content must be a ContentPart array, got {type(content).__name__}: {str(content)[:120]}"
+        text_parts = [p["text"] for p in content if isinstance(p, dict) and p.get("type") == "text"]
+        assert any("帮我推荐" in t for t in text_parts), \
+            f"content should contain UserInputText, got text parts: {text_parts}"
+        assert any(isinstance(p, dict) and p.get("type") == "image_url" for p in content), \
+            f"content should contain image_url for images, got: {content}"
+        # 契约守护：content 数组元素不得再嵌套 role/messages（双层嵌套回归）
+        for p in content:
+            assert "role" not in p and "messages" not in p, \
+                f"content part must not nest message structure: {p}"
 
         print(f"  user_id:    {bridge_body.get('user_id')} ✅")
         print(f"  client_id:  {bridge_body.get('client_id')} ✅")
-        print(f"  content:    {bridge_body.get('content', '')[:80]}... ✅")
+        print(f"  content:    {str(bridge_body.get('content'))[:80]}... ✅ (ContentPart 数组)")
 
         print("\n── 测试 2：响应符合合同 §3 TaskStatus 格式 ──")
         header = body.get("Header", {})

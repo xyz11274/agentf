@@ -175,13 +175,22 @@ def main():
             f"user_id: {bridge_req.get('user_id')}"
         assert bridge_req.get("client_id") == "session-DH_WD_LWWD_05_014-1783071771128030945", \
             f"client_id: {bridge_req.get('client_id')}"
-        assert "帮我推荐" in bridge_req.get("content", ""), \
-            "content 应包含 UserInputText"
-        assert "image_url" in bridge_req.get("content", ""), \
-            "content 应包含 image_url（图片转换后）"
+        # 接口契约：content 必须是 ContentPart 数组（list[ContentPart]），不能是字符串、
+        # 不能是嵌套 messages 结构（守护 §10 修复）
+        content = bridge_req.get("content")
+        assert isinstance(content, list), \
+            f"content must be a ContentPart array, got {type(content).__name__}: {str(content)[:120]}"
+        text_parts = [p["text"] for p in content if isinstance(p, dict) and p.get("type") == "text"]
+        assert any("帮我推荐" in t for t in text_parts), \
+            f"content 应包含 UserInputText, got text parts: {text_parts}"
+        assert any(isinstance(p, dict) and p.get("type") == "image_url" for p in content), \
+            f"content 应包含 image_url（图片转换后）, got: {content}"
+        for p in content:
+            assert "role" not in p and "messages" not in p, \
+                f"content part must not nest message structure: {p}"
         print("   user_id    ✅")
         print("   client_id  ✅")
-        print("   content    ✅ (含文本+图片)")
+        print("   content    ✅ (ContentPart 数组，含文本+图片)")
 
         # 6. 验证响应符合 §3 TaskStatus 格式
         print("\n── 测试 3：响应符合 TaskStatus 格式 ──")
