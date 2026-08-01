@@ -39,6 +39,17 @@ static std::string json_dumps(const Json::Value& v) {
     return Json::writeString(json_writer(), v);
 }
 
+static std::string pretty_json(const std::string& raw) {
+    Json::CharReaderBuilder reader;
+    Json::Value val;
+    std::string errors;
+    std::istringstream input(raw);
+    if (Json::parseFromStream(reader, input, &val, &errors)) {
+        return val.toStyledString();
+    }
+    return raw;
+}
+
 static std::vector<std::string> split_services(const char* value) {
     std::vector<std::string> result;
     if (value == nullptr) return result;
@@ -167,6 +178,9 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
         return CMFrm::COM::SYNC;
     }
 
+    std::cerr << "[sidecar_router] REQ " << header_msg_type << "/" << data_msg_type
+              << " | body=\n" << pretty_json(req_body) << std::endl;
+
     Json::Value req_header = header;
     std::string user_name = header.get("UserName", "").asString();
     std::string client_session_id = header.get("ClientSessionId",
@@ -237,7 +251,23 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
 
     std::string bridge_url = get_env_or("BRIDGE_URL", "http://127.0.0.1:8199");
     std::string agent_id = get_env_or("AF_BR_COREMIND_AGENT_ID", "outfit-assistant");
-    std::string callback_path = "/api/chat/" + agent_id + "?stream=false";
+    // 从 bridge_url 提取 path prefix（对齐 main.cpp parse_bridge_target）：
+    // bridge 业务路由挂载在 /health 前缀下（main.py app.mount("/health", bridge_app)），
+    // 转发路径必须拼上该前缀，否则 404。生产配置 BRIDGE_URL 应含 /health。
+    std::string bridge_path_prefix;
+    {
+        auto scheme_pos = bridge_url.find("://");
+        auto auth_start = (scheme_pos == std::string::npos) ? 0 : scheme_pos + 3;
+        auto path_start = bridge_url.find('/', auth_start);
+        if (path_start != std::string::npos) {
+            bridge_path_prefix = bridge_url.substr(path_start);
+            while (bridge_path_prefix.size() > 1 && bridge_path_prefix.back() == '/') {
+                bridge_path_prefix.pop_back();
+            }
+            if (bridge_path_prefix == "/") bridge_path_prefix.clear();
+        }
+    }
+    std::string callback_path = bridge_path_prefix + "/api/chat/" + agent_id + "?stream=false";
 
     // ── 有 SysAgentEntity → 异步模式；无 → 同步 dev 模式 ──
     if (!sys_agent_entity.empty()) {
@@ -305,7 +335,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                 return static_cast<bool>(cb_res);
             };
 
-            std::string callback_path_stream = "/api/chat/" + agent_id + "?stream=true";
+            std::string callback_path_stream = bridge_path_prefix + "/api/chat/" + agent_id + "?stream=true";
             httplib::Client cli(origin.c_str());
             cli.set_read_timeout(360, 0);
             httplib::Headers http_headers;
@@ -315,7 +345,10 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
             std::string sse_buffer;
             std::string accumulated_content;
             Json::Value accumulated_artifacts;
-            cli.Post(callback_path_stream.c_str(), http_headers, json_dumps(rest_body), "application/json",
+            std::string body_str = json_dumps(rest_body);
+            std::cerr << "[sidecar_router] FWD " << callback_path_stream << " req=" << request_id
+                      << " | body=\n" << pretty_json(body_str) << std::endl;
+            cli.Post(callback_path_stream.c_str(), http_headers, body_str, "application/json",
                 [&](const char* data, size_t len) -> bool {
                     sse_buffer.append(data, len);
                     // 按 \n 分割 SSE 事件
@@ -331,6 +364,10 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                         std::string payload = line.substr(6);
                         // 检查终止信号
                         if (payload == "[DONE]") return false;
+                        std::string sse_preview = payload.substr(0, 500);
+                        if (payload.size() > 500) sse_preview += "... (truncated)";
+                        std::cerr << "[sidecar_router] SSE_RAW len=" << payload.size()
+                                  << " data=" << sse_preview << std::endl;
                         // 解析 SSE json
                         Json::Value sse_json;
                         Json::CharReaderBuilder rdr;
@@ -432,7 +469,10 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
     http_headers.emplace("Content-Type", "application/json");
     http_headers.emplace("X-Request-Id", request_id);
 
-    auto response = cli.Post(callback_path.c_str(), http_headers, json_dumps(rest_body), "application/json");
+    std::string body_str = json_dumps(rest_body);
+    std::cerr << "[sidecar_router] FWD " << callback_path << " req=" << request_id
+              << " | body=\n" << pretty_json(body_str) << std::endl;
+    auto response = cli.Post(callback_path.c_str(), http_headers, body_str, "application/json");
     if (!response) {
         context->WriteStatueCode(CMFrm::COM::HttpStatus::HTTP500);
         return CMFrm::COM::SYNC;
@@ -451,8 +491,11 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
         }
     }
 
+    std::string resp_preview = resp_text.substr(0, 500);
+    if (resp_text.size() > 500) resp_preview += "... (truncated)";
     std::cout << "[sidecar_router] sync response: request_id=" << request_id
-              << " task_id=" << task_id << " resp_len=" << resp_text.size() << std::endl;
+              << " task_id=" << task_id << " resp_len=" << resp_text.size()
+              << " content=" << resp_preview << std::endl;
 
     context->WriteStatueCode(CMFrm::COM::HttpStatus::HTTP200);
     return CMFrm::COM::SYNC;
