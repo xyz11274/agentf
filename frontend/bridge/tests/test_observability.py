@@ -92,11 +92,11 @@ class TestRequestTimingMiddleware:
 
 
 class TestRequestDebugMiddleware:
-    """TC-obs-05 ~ 07: DEBUG 请求/响应日志"""
+    """TC-obs-05 ~ 07: 请求/响应原始内容日志（INFO 及以上级别打印）"""
 
-    def test_debug_logs_request_body(self, caplog: pytest.LogCaptureFixture):
-        """DEBUG 级别应打印请求 body。"""
-        caplog.set_level(logging.DEBUG)
+    def test_info_logs_request_body(self, caplog: pytest.LogCaptureFixture):
+        """INFO 级别应打印请求 body。"""
+        caplog.set_level(logging.INFO)
         app = _make_app()
         with TestClient(app) as client:
             client.post("/api/test/ok", json={"key": "value"})
@@ -105,9 +105,9 @@ class TestRequestDebugMiddleware:
             for msg in caplog.messages
         )
 
-    def test_debug_logs_response(self, caplog: pytest.LogCaptureFixture):
-        """DEBUG 级别应打印响应 body。"""
-        caplog.set_level(logging.DEBUG)
+    def test_info_logs_response(self, caplog: pytest.LogCaptureFixture):
+        """INFO 级别应打印响应 body。"""
+        caplog.set_level(logging.INFO)
         app = _make_app()
         with TestClient(app) as client:
             client.get("/api/test/ok")
@@ -116,9 +116,9 @@ class TestRequestDebugMiddleware:
             for msg in caplog.messages
         )
 
-    def test_info_level_skips_debug_logging(self, caplog: pytest.LogCaptureFixture):
-        """INFO 级别不应打 >>>/<<< 日志。"""
-        caplog.set_level(logging.INFO)
+    def test_warning_level_skips_body_logging(self, caplog: pytest.LogCaptureFixture):
+        """WARNING 及以上级别不应打 >>>/<<< 日志。"""
+        caplog.set_level(logging.WARNING)
         app = _make_app()
         with TestClient(app) as client:
             client.get("/api/test/ok")

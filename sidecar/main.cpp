@@ -283,6 +283,8 @@ static void forward_to_bridge(
             };
 
             std::string body_str = Json::writeString(json_writer(), rest_body);
+            std::cerr << "[coremind_bridge] FWD " << stream_path << " req=" << request_id
+                      << " | body=\n" << pretty_json(body_str) << std::endl;
             auto result = cli.Post(stream_path.c_str(), hdrs, body_str, "application/json",
                 [&](const char* data, size_t len) {
                     sse_buffer.append(data, len);

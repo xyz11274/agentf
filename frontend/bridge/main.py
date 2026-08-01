@@ -354,14 +354,15 @@ def _mask_headers(headers: dict) -> dict:
     return masked
 
 class _RequestDebugMiddleware(BaseHTTPMiddleware):
-    """DEBUG 级别打印请求/响应详细内容（body + headers）。
+    """INFO 级别打印请求/响应详细内容（body + headers）。
 
-    仅在 root logger 的 level ≤ DEBUG 时生效，避免生产环境性能开销。
-    响应体通过包装 StreamingResponse 捕获，不影响下游流式传输。
+    仅在 root logger 的 level ≤ INFO 时生效；WARNING 及以上级别关闭，
+    避免生产环境性能开销。响应体通过包装 StreamingResponse 捕获，
+    不影响下游流式传输。
     """
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        if not logger.isEnabledFor(logging.DEBUG):
+        if not logger.isEnabledFor(logging.INFO):
             return await call_next(request)
 
         if request.url.path.startswith("/ws/"):
@@ -373,7 +374,7 @@ class _RequestDebugMiddleware(BaseHTTPMiddleware):
         if len(body_bytes) > _MAX_BODY_LOG:
             body_preview += f" … (truncated, {len(body_bytes)} bytes total)"
 
-        logger.debug(
+        logger.info(
             ">>> %s %s headers=%s body=%s",
             request.method, request.url.path,
             _mask_headers(dict(request.headers)),
@@ -392,7 +393,7 @@ class _RequestDebugMiddleware(BaseHTTPMiddleware):
             resp_preview = resp_body[:_MAX_RESP_LOG].decode("utf-8", errors="replace")
             if len(resp_body) > _MAX_RESP_LOG:
                 resp_preview += f" … (truncated, {len(resp_body)} bytes total)"
-            logger.debug(
+            logger.info(
                 "<<< %s %s status=%d body=%s",
                 request.method, request.url.path, response.status_code, resp_preview,
             )
@@ -411,7 +412,7 @@ class _RequestDebugMiddleware(BaseHTTPMiddleware):
         resp_preview = resp_body[:_MAX_RESP_LOG].decode("utf-8", errors="replace")
         if len(resp_body) > _MAX_RESP_LOG:
             resp_preview += f" … (truncated, {len(resp_body)} bytes total)"
-        logger.debug(
+        logger.info(
             "<<< %s %s status=%d body=%s",
             request.method, request.url.path, response.status_code, resp_preview,
         )
