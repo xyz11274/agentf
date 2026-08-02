@@ -720,7 +720,6 @@ std::shared_ptr<MMAgentSession> MMAgent::create_session_from_tasks(
     }
     if(task_definition.task_type == "skill") {
       task_config.skill_name = task_definition.skill.skill_name;
-      task_config.skill_config_dir = task_definition.skill.skill_config_dir;
       task_config.instance_pool_size = task_definition.skill.instance_pool_size;
       task_config.expected_parameters = task_definition.skill.expected_parameters;
     }

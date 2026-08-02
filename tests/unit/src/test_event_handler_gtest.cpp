@@ -117,7 +117,6 @@ TEST_F(EventStructureTest, TaskEventDefaultValues) {
   EXPECT_TRUE(event.workflow_id.empty());
   EXPECT_TRUE(event.task_type.empty());
   EXPECT_TRUE(event.skill_name.empty());
-  EXPECT_TRUE(event.skill_config_dir.empty());
 }
 
 // =============================================================================
@@ -202,7 +201,7 @@ TEST_F(EventBuilderTest, BuildDialogueDestroyedEvent) {
 TEST_F(EventBuilderTest, BuildTaskCreatedEvent) {
   runtime::TaskEvent event = runtime::EventBuilder::build_task_created_event(
       "agent-1", "user-1", "client-1", "session-1", "dialogue-1",
-      "task-1", "workflow-1", "skill", "skill-name", "/config/skill");
+      "task-1", "workflow-1", "skill", "skill-name");
 
   EXPECT_EQ(event.event_type, runtime::EventType::TASK_CREATED);
   EXPECT_EQ(event.agent_id, "agent-1");
@@ -214,7 +213,6 @@ TEST_F(EventBuilderTest, BuildTaskCreatedEvent) {
   EXPECT_EQ(event.workflow_id, "workflow-1");
   EXPECT_EQ(event.task_type, "skill");
   EXPECT_EQ(event.skill_name, "skill-name");
-  EXPECT_EQ(event.skill_config_dir, "/config/skill");
 }
 
 TEST_F(EventBuilderTest, BuildTaskDestroyedEvent) {

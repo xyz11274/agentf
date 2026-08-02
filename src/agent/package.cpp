@@ -138,10 +138,6 @@ bool parse_task_definition(const rapidjson::Value& task_value, int expected_inde
         || task_definition.skill.skill_name.empty()) {
       return fail_agent_json_parse("skill.name must be a non-empty string");
     }
-    if(!parse_string_member(skill_object, "config_dir", task_definition.skill.skill_config_dir)
-        || task_definition.skill.skill_config_dir.empty()) {
-      return fail_agent_json_parse("skill.config_dir must be a non-empty string");
-    }
     task_definition.skill.instance_pool_size = 2;
     if(skill_object.HasMember("instance_pool_size")
        && (!parse_int_member(skill_object, "instance_pool_size",

@@ -129,7 +129,6 @@ struct TaskEvent {
   std::string workflow_id;
   std::string task_type;       // dispatcher, coordinator, skill
   std::string skill_name;      // Valid for skill type only
-  std::string skill_config_dir;  // Valid for skill type only
 };
 
 /**
@@ -264,8 +263,7 @@ public:
       const std::string& task_id,
       const std::string& workflow_id,
       const std::string& task_type,
-      const std::string& skill_name      = "",
-      const std::string& skill_config_dir = "") {
+      const std::string& skill_name      = "") {
     TaskEvent event;
     event.event_type       = EventType::TASK_CREATED;
     event.agent_id         = agent_id;
@@ -277,7 +275,6 @@ public:
     event.workflow_id      = workflow_id;
     event.task_type        = task_type;
     event.skill_name       = skill_name;
-    event.skill_config_dir = skill_config_dir;
     return event;
   }
 

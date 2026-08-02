@@ -76,7 +76,6 @@ protected:
                             "workflow_file": "workflows/main.json",
                             "skill": {
                                 "name": "search",
-                                "config_dir": "runtime",
                                 "instance_pool_size": 2
                             }
                         }

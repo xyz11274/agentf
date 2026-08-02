@@ -33,7 +33,6 @@
       "workflow_file": "workflow_knowledge.json",
       "skill": {
         "name": "knowledge",
-        "config_dir": "skills/knowledge",
         "instance_pool_size": 2
       },
       "workflow_pool_size": 2
@@ -45,7 +44,6 @@
       "workflow_file": "workflow_tools.json",
       "skill": {
         "name": "tools",
-        "config_dir": "skills/tools",
         "instance_pool_size": 2
       },
       "workflow_pool_size": 2

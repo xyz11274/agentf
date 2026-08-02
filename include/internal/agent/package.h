@@ -28,7 +28,6 @@ class AgentPackage {
 
   struct SkillTaskConfig {
     std::string skill_name;
-    std::string skill_config_dir;
     int         instance_pool_size = 1;
     std::vector<std::string> expected_parameters;  // Skill execution prerequisites
   };

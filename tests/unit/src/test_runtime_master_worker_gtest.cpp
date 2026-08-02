@@ -247,7 +247,6 @@ TEST(RuntimeMasterWorkerTest, RuntimeMaterializesWorkflowPoolsFromAgentTasks) {
               "workflow_pool_size": 4,
               "skill": {
                 "name": "search",
-                "config_dir": "skills/search",
                 "instance_pool_size": 2
               }
             }

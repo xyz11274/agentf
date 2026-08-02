@@ -346,8 +346,7 @@ TEST_F(AgentTest, PackageDispatcherWorkflowMappingIsApplied) {
               "description": "Support skill",
               "workflow_file": "workflow_a.json",
               "skill": {
-                "name": "support",
-                "config_dir": "skills/support"
+                "name": "support"
               }
             }
           ]
@@ -424,8 +423,7 @@ TEST_F(AgentTest, WorkflowIdMetadataHasHigherPriorityThanCoordinatorWorkflow) {
               "description": "Support skill",
               "workflow_file": "workflow_a.json",
               "skill": {
-                "name": "support",
-                "config_dir": "skills/support"
+                "name": "support"
               }
             }
           ]
@@ -513,8 +511,7 @@ TEST_F(AgentTest, CoordinatorInstantiatesSkillTaskFromSkillTemplateWorkflow) {
               "description": "Search skill",
               "workflow_file": "workflow_skill.json",
               "skill": {
-                "name": "search",
-                "config_dir": "skills/search"
+                "name": "search"
               }
             }
           ]
@@ -607,7 +604,7 @@ TEST_F(AgentTest, CoordinatorSkipsStaleWorkflowCompleteWhenNewerWorkflowPending)
           "tasks": [
             { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "wf_coordinator.json" },
             { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "wf_coordinator.json" },
-            { "id": 2, "type": "skill", "description": "Dummy skill", "workflow_file": "wf_coordinator.json", "skill": { "name": "dummy", "config_dir": "skills/dummy" } }
+            { "id": 2, "type": "skill", "description": "Dummy skill", "workflow_file": "wf_coordinator.json", "skill": { "name": "dummy" } }
           ]
         }
       ]
@@ -719,8 +716,7 @@ TEST_F(AgentTest, AgentJsonInstantiatesConfiguredSessionPoolAndSkillPools) {
               "workflow_file": "workflow_skill.json",
               "workflow_pool_size": 4,
               "skill": {
-                "name": "search",
-                "config_dir": "skills/search"
+                "name": "search"
               }
             }
           ]
@@ -757,7 +753,6 @@ TEST_F(AgentTest, AgentJsonInstantiatesConfiguredSessionPoolAndSkillPools) {
   EXPECT_EQ(agent->get_context()->get_context_updater_task()->get_task_type(), "contextupdater");
   EXPECT_EQ(skill_task->get_task_type(), "skill");
   EXPECT_EQ(skill_task->get_skill_name(), "search");
-  EXPECT_EQ(skill_task->get_skill_config_dir(), "skills/search");
   EXPECT_EQ(skill_task->get_instance_pool_size(), 2);
   EXPECT_EQ(skill_task->get_workflow_pool_size(), 4);
   EXPECT_FALSE(skill_task->is_skill_instance());
@@ -807,8 +802,7 @@ TEST_F(AgentTest, AgentJsonRejectsInvalidWorkflowPoolSize) {
               "description": "Search skill",
               "workflow_file": "workflow_main.json",
               "skill": {
-                "name": "search",
-                "config_dir": "skills/search"
+                "name": "search"
               }
             }
           ]
@@ -863,8 +857,7 @@ TEST_F(AgentTest, AgentJsonDefaultsWorkflowPoolSizeToOneWhenOmitted) {
               "description": "Search skill",
               "workflow_file": "workflow_main.json",
               "skill": {
-                "name": "search",
-                "config_dir": "skills/search"
+                "name": "search"
               }
             }
           ]
@@ -1194,7 +1187,7 @@ TEST_F(AgentTest, DispatcherWithNextSkillsFromPackage) {
               "type": "skill",
               "description": "Search skill",
               "workflow_file": "workflow_main.json",
-              "skill": {"name": "search", "config_dir": "skills/search"}
+              "skill": {"name": "search"}
             }
           ]
         }
@@ -1319,7 +1312,7 @@ TEST_F(AgentTest, SyncContextCallbackStoresContextInDataBus) {
               "type": "skill",
               "description": "Test skill",
               "workflow_file": "workflow_main.json",
-              "skill": {"name": "test-skill", "config_dir": "skills/test"}
+              "skill": {"name": "test-skill"}
             }
           ]
         }
@@ -1415,7 +1408,7 @@ TEST_F(AgentTest, AsyncContextCallbackDoesNotBlock) {
           "tasks": [
             {"id": 0, "type": "dispatcher", "description": "D", "next_skills": ["s"]},
             {"id": 1, "type": "coordinator", "description": "C", "workflow_file": "workflow.json"},
-            {"id": 2, "type": "skill", "description": "S", "workflow_file": "workflow.json", "skill": {"name": "s", "config_dir": "skills/s"}}
+            {"id": 2, "type": "skill", "description": "S", "workflow_file": "workflow.json", "skill": {"name": "s"}}
           ]
         }
       ]
@@ -1490,7 +1483,7 @@ TEST_F(AgentTest, ContextCallbackReceivesPreviousContext) {
           "tasks": [
             {"id": 0, "type": "dispatcher", "description": "D", "next_skills": ["s"]},
             {"id": 1, "type": "coordinator", "description": "C", "workflow_file": "workflow.json"},
-            {"id": 2, "type": "skill", "description": "S", "workflow_file": "workflow.json", "skill": {"name": "s", "config_dir": "skills/s"}}
+            {"id": 2, "type": "skill", "description": "S", "workflow_file": "workflow.json", "skill": {"name": "s"}}
           ]
         }
       ]
@@ -1561,7 +1554,7 @@ TEST_F(AgentTest, ContextCallbackExceptionHandling) {
           "tasks": [
             {"id": 0, "type": "dispatcher", "description": "D", "next_skills": ["s"]},
             {"id": 1, "type": "coordinator", "description": "C", "workflow_file": "workflow.json"},
-            {"id": 2, "type": "skill", "description": "S", "workflow_file": "workflow.json", "skill": {"name": "s", "config_dir": "skills/s"}}
+            {"id": 2, "type": "skill", "description": "S", "workflow_file": "workflow.json", "skill": {"name": "s"}}
           ]
         }
       ]
@@ -1622,7 +1615,7 @@ TEST_F(AgentTest, SkillWithEmptyExpectedParametersSkipsValidation) {
           "type": "skill",
           "description": "Travel skill without expected_parameters",
           "workflow_file": "workflow.json",
-          "skill": {"name": "travel", "config_dir": "skills/travel", "instance_pool_size": 1}
+          "skill": {"name": "travel", "instance_pool_size": 1}
         }
       ]
     })";
@@ -1671,7 +1664,6 @@ TEST_F(AgentTest, SkillWithExpectedParametersParsesCorrectly) {
           "workflow_file": "workflow.json",
           "skill": {
             "name": "travel",
-            "config_dir": "skills/travel",
             "instance_pool_size": 1,
             "expected_parameters": ["destination", "date", "travelers"]
           }
@@ -1725,7 +1717,6 @@ TEST_F(AgentTest, ParameterValidationPassesWhenAllParametersAvailableInMetadata)
           "workflow_file": "workflow.json",
           "skill": {
             "name": "travel",
-            "config_dir": "skills/travel",
             "expected_parameters": ["destination", "date"]
           }
         }
@@ -1797,7 +1788,6 @@ TEST_F(AgentTest, ParameterValidationFailsWhenParametersMissing) {
           "workflow_file": "workflow.json",
           "skill": {
             "name": "travel",
-            "config_dir": "skills/travel",
             "expected_parameters": ["destination", "date", "travelers"]
           }
         }
@@ -1869,7 +1859,6 @@ TEST_F(AgentTest, ParameterValidationFailsWhenNoParametersAvailable) {
           "workflow_file": "workflow.json",
           "skill": {
             "name": "travel",
-            "config_dir": "skills/travel",
             "expected_parameters": ["destination"]
           }
         }
@@ -1934,7 +1923,6 @@ TEST_F(AgentTest, ExtraParametersDoNotAffectValidation) {
           "workflow_file": "workflow.json",
           "skill": {
             "name": "travel",
-            "config_dir": "skills/travel",
             "expected_parameters": ["destination"]
           }
         }
@@ -2008,7 +1996,6 @@ TEST_F(AgentTest, MetadataTakesPriorityOverDataBusForAvailableParameters) {
           "workflow_file": "workflow.json",
           "skill": {
             "name": "travel",
-            "config_dir": "skills/travel",
             "expected_parameters": ["destination"]
           }
         }
@@ -2084,7 +2071,6 @@ TEST_F(AgentTest, DataBusFallbackWhenNoMetadataAvailableParameters) {
           "workflow_file": "workflow.json",
           "skill": {
             "name": "travel",
-            "config_dir": "skills/travel",
             "expected_parameters": ["destination"]
           }
         }
@@ -2161,7 +2147,6 @@ TEST_F(AgentTest, DialogueIdPrefixedAvailableParametersKey) {
           "workflow_file": "workflow.json",
           "skill": {
             "name": "travel",
-            "config_dir": "skills/travel",
             "expected_parameters": ["destination"]
           }
         }

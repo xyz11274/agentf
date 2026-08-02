@@ -118,10 +118,6 @@ std::shared_ptr<MMAgentTask> SessionTaskCoordinator::build_task_for_message(
     if(skill_name_it != message.metadata.end()) {
       task_config.skill_name = skill_name_it->second;
     }
-    const auto skill_dir_it = message.metadata.find("skill_config_dir");
-    if(skill_dir_it != message.metadata.end()) {
-      task_config.skill_config_dir = skill_dir_it->second;
-    }
   }
 
   auto task = std::make_shared<MMAgentTask>(task_config);

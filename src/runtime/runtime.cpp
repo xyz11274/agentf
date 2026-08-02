@@ -420,7 +420,7 @@ bool MMAgentRuntime::register_agent(AgentPtr agent) {
                                         ? agent->get_session(session_id)->get_client_id() : "";
             TaskEvent event = EventBuilder::build_task_created_event(
                 agent_id, user_id, client_id, session_id, dialogue_id,
-                task_id, workflow_id, task_type, skill_name, "");
+                task_id, workflow_id, task_type, skill_name);
             emit_task_event(event);
           }
         });
@@ -1922,7 +1922,7 @@ void MMAgentRuntime::agent_registration_loop() {
                                           ? agent->get_session(session_id)->get_client_id() : "";
               TaskEvent event = EventBuilder::build_task_created_event(
                   agent_id, user_id, client_id, session_id, dialogue_id,
-                  task_id, workflow_id, task_type, skill_name, "");
+                  task_id, workflow_id, task_type, skill_name);
               emit_task_event(event);
             }
           });

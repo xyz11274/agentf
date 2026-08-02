@@ -28,7 +28,6 @@
       "workflow_file": "harness_run_workflow.json",
       "skill": {
         "name": "harness_run",
-        "config_dir": "harness/skills/harness_run",
         "instance_pool_size": 1
       },
       "workflow_pool_size": 1

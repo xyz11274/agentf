@@ -344,7 +344,7 @@ TEST_F(ControlMessageTest, SessionInterruptStopsRunningSkillTasks) {
               "type": "skill",
               "description": "Test skill",
               "workflow_file": "workflow_skill.json",
-              "skill": { "name": "test-skill", "config_dir": "skills/test-skill" }
+              "skill": { "name": "test-skill" }
             }
           ]
         }

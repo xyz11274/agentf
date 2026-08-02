@@ -24,7 +24,6 @@
       "workflow_file": "context_workflow.json",
       "skill": {
         "name": "context-echo",
-        "config_dir": "skills/context-echo",
         "instance_pool_size": 1
       }
     }
