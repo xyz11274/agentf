@@ -547,3 +547,71 @@ TEST(SSEChunkProcessor, FullDumpReplay_WithArtifacts) {
     EXPECT_NE(completed.user_output_object.find("outfit-1.png"), std::string::npos);
     EXPECT_NE(completed.user_output_object.find("outfit-2.png"), std::string::npos);
 }
+
+// ═══════════════════════════════════════════════════════════
+// SSEChunkProcessor — bridge SSE 错误信封检测
+// 对齐 chat_rest.py:1004-1021：bridge 在 daemon 通知中途失败/timeout 时，
+// HTTP 200 + SSE 推 {"error":{"message":"...","code":-32000}} + [DONE]。
+// sidecar 必须识别此 payload、设置 has_error()，调用方据此跳过 Completed、改发错误 TaskStatus。
+// 否则错误信息被静默丢弃、上游收到虚假 Completed + 200/TaskCompleted（F1 数据安全）。
+// ═══════════════════════════════════════════════════════════
+
+TEST(SSEChunkProcessor, BridgeErrorPayload_SetsHasError) {
+    // 模拟 bridge SSE 错误信封
+    Json::Value err_payload;
+    err_payload["error"]["message"] = "agent.execute timed out after 30s";
+    err_payload["error"]["code"] = -32000;
+
+    SSEChunkProcessor proc;
+    auto results = proc.process(err_payload);
+
+    EXPECT_TRUE(proc.has_error());
+    EXPECT_EQ(proc.error_message(), "agent.execute timed out after 30s");
+    // 错误 payload 不应产生任何回调指令（should_send 全 false）
+    EXPECT_EQ(results.size(), 0u);
+}
+
+TEST(SSEChunkProcessor, NormalChunk_NoErrorSet) {
+    // 正常 LLM chunk 不应触发 has_error
+    Json::Value normal;
+    normal["choices"][0]["delta"]["content"] = "你好";
+    normal["_source"] = "coordinator";
+    normal["_chunk_type"] = "llm_chunk";
+
+    SSEChunkProcessor proc;
+    proc.process(normal);
+
+    EXPECT_FALSE(proc.has_error());
+    EXPECT_EQ(proc.error_message(), "");
+}
+
+TEST(SSEChunkProcessor, ErrorPayload_SkipsSubsequentChunks) {
+    // 错误 payload 后的后续 chunk 应被丢弃（已错则不再处理）
+    Json::Value err_payload;
+    err_payload["error"]["message"] = "daemon error: connection lost";
+    Json::Value late_chunk;
+    late_chunk["choices"][0]["delta"]["content"] = "迟到的 chunk";
+    late_chunk["_source"] = "coordinator";
+    late_chunk["_chunk_type"] = "llm_chunk";
+
+    SSEChunkProcessor proc;
+    proc.process(err_payload);
+    EXPECT_TRUE(proc.has_error());
+
+    auto results = proc.process(late_chunk);
+    EXPECT_EQ(results.size(), 0u);  // 已错状态丢弃后续 chunk
+    // accumulated_content 不应被迟到的 chunk 污染
+    EXPECT_EQ(proc.accumulated_content(), "");
+}
+
+TEST(SSEChunkProcessor, ErrorPayload_EmptyMessage_NotTreatedAsError) {
+    // error 字段存在但 message 为空 — 不应误判为错误（保守处理，避免空 message 触发 false positive）
+    Json::Value malformed;
+    malformed["error"]["message"] = "";
+    malformed["error"]["code"] = -32000;
+
+    SSEChunkProcessor proc;
+    proc.process(malformed);
+
+    EXPECT_FALSE(proc.has_error());
+}

@@ -52,6 +52,19 @@ def test_exec_workdir_parameter(executor, tmp_path):
     assert resolved_stdout == resolved_tmp
 
 
+def test_exec_default_cwd_falls_back_to_agent_package_dir(executor, monkeypatch, tmp_path):
+    """HostExecutor 兜底 AF_AGENT_PACKAGE_DIR——防御性 fallback。
+
+    bash.py 缺省 cwd 透传宿主 agent_package_dir（非 None），此 fallback 在生产
+    走不进去；保留兜底应对未来其他调用方传 None。本测试直接调 executor 验证兜底语义。
+    """
+    monkeypatch.setenv("AF_AGENT_PACKAGE_DIR", str(tmp_path))
+    result = executor.exec_command("pwd")
+    resolved_tmp = os.path.realpath(str(tmp_path))
+    resolved_stdout = os.path.realpath(result.stdout.strip())
+    assert resolved_stdout == resolved_tmp
+
+
 def test_exec_timeout_returns_error(executor):
     """Timeout produces ExecResult with error containing timeout info."""
     result = executor.exec_command("sleep 10", timeout=1)

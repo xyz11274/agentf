@@ -46,6 +46,7 @@ src/agentflow_runtime/prompts/skill.py
 tests/test_artifact_url_generation.py
 tests/test_compress_messages.py
 tests/test_coordinator_compaction.py
+tests/test_coordinator_response_clean.py
 tests/test_e2b_executor.py
 tests/test_executor_base.py
 tests/test_executor_factory.py

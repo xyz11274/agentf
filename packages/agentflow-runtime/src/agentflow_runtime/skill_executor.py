@@ -206,8 +206,17 @@ class _LocalToolRegistry:
             # 由 daemon 注入的沙箱 HTTP endpoint（B16），bash 等工具走沙箱 /exec
             # 独立于 AF_ARTIFACT_STORAGE_URL（产物上传用），避免 env var 重载
             sandbox_endpoint = os.environ.get("AF_SANDBOX_ENDPOINT", "")
+            sandbox_mode = os.environ.get("AF_SANDBOX_MODE", "none")
             if sandbox_endpoint:
-                logging.info("tool.exec sandbox_mode tool=%s sandbox_id=%s", name, sandbox_endpoint.split('/')[-2] if '/sandbox/' in sandbox_endpoint else '?')
+                # 显式打印 mode 值——日志一眼看出走哪条执行路径
+                # （e2b→E2BExecutor 远端沙箱，local/docker→HTTPExecutor，none→HostExecutor 本地）
+                logging.info(
+                    "tool.exec sandbox_mode=%s tool=%s sandbox_id=%s",
+                    sandbox_mode, name,
+                    sandbox_endpoint.split('/')[-2] if '/sandbox/' in sandbox_endpoint else '?')
+            else:
+                logging.info("tool.exec sandbox_mode=%s tool=%s (no endpoint, host fallback)",
+                             sandbox_mode, name)
             # 沙箱 endpoint 为空时，工具走本地 subprocess.run 路径
             return _mod.execute(args, sandbox_endpoint=sandbox_endpoint)
         except Exception as e:

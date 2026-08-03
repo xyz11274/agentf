@@ -455,15 +455,24 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
     }
   }
 
-  // 沙箱创建成功后将 endpoint 注入 message metadata（flow 到 node inputs）
-  // 并 setenv 到 daemon 进程环境，确保所有子进程（含 skill_executor）继承 AF_SANDBOX_ENDPOINT
+  // 沙箱创建成功后将 endpoint + mode 注入 message metadata（flow 到 node inputs）
+  // 并 setenv 到 daemon 进程环境，确保所有子进程（含 skill_executor）继承
+  // AF_SANDBOX_ENDPOINT + AF_SANDBOX_MODE——factory.py 同时读这两个 env 才能选对
+  // executor（mode=e2b→E2BExecutor，mode=local/docker→HTTPExecutor，mode=none/缺→HostExecutor）。
+  // 漏注 AF_SANDBOX_MODE 会让 factory 落到 HostExecutor，即使 endpoint 已注入也走本地 subprocess。
+  // sandbox_sb->sandbox_mode() 已是小写 "e2b"（sandbox_e2b.h:71），与 factory.py 的 mode 比较
+  // 直接对齐；Local/Docker 基类返回 ""，映射到 "local"（factory 的 "local"/"docker" 共享 HTTPExecutor 分支）。
   if (sandbox_sb) {
     const std::string& ep = sandbox_sb->endpoint();
     message.metadata["sandbox_endpoint"] = ep;
     setenv("AF_SANDBOX_ENDPOINT", ep.c_str(), 1);
+    std::string raw_mode = sandbox_sb->sandbox_mode();  // "e2b" / "" (Local/Docker)
+    std::string af_mode = raw_mode.empty() ? "local" : raw_mode;
+    message.metadata["sandbox_mode"] = af_mode;
+    setenv("AF_SANDBOX_MODE", af_mode.c_str(), 1);
     Logger::instance().info_f(
-        "[SANDBOX] Injected AF_SANDBOX_ENDPOINT=%s for user=%s client=%s",
-        ep.c_str(), user_id.c_str(), client_id.c_str());
+        "[SANDBOX] Injected AF_SANDBOX_ENDPOINT=%s AF_SANDBOX_MODE=%s for user=%s client=%s",
+        ep.c_str(), af_mode.c_str(), user_id.c_str(), client_id.c_str());
 
     // 同步会话级用户上传目录到沙箱（agent-package-structure.md §2.2/§3.2）
     // E2B 沙箱远端，需主动同步；Local/Docker 共享 workdir，基类 no-op 跳过

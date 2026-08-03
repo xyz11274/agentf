@@ -2056,12 +2056,18 @@ void MMAgentRuntime::agent_task_poller_loop() {
           inputs["exec_skill_key"] = exec_skill_key;
           Logger::instance().info_f("[TASK_POLLER] Set inputs[exec_skill_key]='%s'", exec_skill_key.c_str());
         }
-        // Propagate sandbox_endpoint from task parameters to node inputs
-        // for worker env var injection (AF_SANDBOX_ENDPOINT).
+        // Propagate sandbox_endpoint + sandbox_mode from task parameters to node inputs
+        // for worker env var injection (AF_SANDBOX_ENDPOINT + AF_SANDBOX_MODE).
+        // factory.py 同时读这两个 env 才能选对 executor；漏 sandbox_mode 会让 factory 落到 HostExecutor。
         std::string sandbox_endpoint;
         if(task->get_parameter("sandbox_endpoint", sandbox_endpoint) && !sandbox_endpoint.empty()) {
           inputs["sandbox_endpoint"] = sandbox_endpoint;
           Logger::instance().info_f("[TASK_POLLER] Set inputs[sandbox_endpoint]='%s'", sandbox_endpoint.c_str());
+        }
+        std::string sandbox_mode;
+        if(task->get_parameter("sandbox_mode", sandbox_mode) && !sandbox_mode.empty()) {
+          inputs["sandbox_mode"] = sandbox_mode;
+          Logger::instance().info_f("[TASK_POLLER] Set inputs[sandbox_mode]='%s'", sandbox_mode.c_str());
         }
         std::string platform_context;
         if(task->get_parameter("platform_context", platform_context) &&

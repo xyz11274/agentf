@@ -10,6 +10,7 @@ Requires the ``requests`` library (already a project dependency).
 """
 
 import json
+import os
 
 import requests
 
@@ -48,6 +49,18 @@ class HTTPExecutor(ToolExecutor):
         ``{"error": "...", "tool": tool}`` dicts so callers can uniformly
         map them to result dataclasses.
         """
+        # cwd 按沙箱类型分流：bash.py 缺省 cwd 透传的是宿主 agent_package_dir，
+        # 该路径在容器内不存在，透传给 sandbox server 的 subprocess 会 FileNotFoundError 崩。
+        # HTTPExecutor 看不到 daemon 的宿主↔容器挂载点映射，但容器内 SANDBOX_WORKDIR=/workdir
+        # 由 daemon 注入（Dockerfile L36 + sandbox_docker.cpp L115）——把宿主路径替换为空串，
+        # 让 server 端 fallback 链 opts.working_dir → SANDBOX_WORKDIR 落到容器内正确路径。
+        # 显式 cwd override（沙箱内绝对路径）不是宿主 agent_package_dir 起始，不受影响。
+        # 注：本段 cwd 清洗只对 bash 生效——read_file/write_file/edit_file/list_dir/web_fetch
+        # 调用 _post 时不传 workdir（None），清洗分支走不进去。
+        if workdir:
+            agent_pkg_dir = os.environ.get("AF_AGENT_PACKAGE_DIR", "")
+            if agent_pkg_dir and workdir.startswith(agent_pkg_dir):
+                workdir = ""
         try:
             resp = requests.post(
                 f"{self.endpoint}/exec",

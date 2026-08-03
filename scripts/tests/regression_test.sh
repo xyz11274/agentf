@@ -306,6 +306,23 @@ do_build() {
         echo -e "       ${RED}编译失败${NC}"
         exit 1
     fi
+
+    # Sidecar build-dev（stub 模式 COREMIND_ENABLED=OFF）— 为 SidecarErrorSymmetry 护测供二进制
+    # 本地无 CoreMind SDK，必须 stub 编译（对齐 PROJECT_MEMORY：本地走 COREMIND_ENABLED=OFF）
+    local _sidecar_dir="$PROJECT_DIR/sidecar"
+    local _sidecar_build="$_sidecar_dir/build-dev"
+    if [ -f "$_sidecar_dir/CMakeLists.txt" ]; then
+        if [ ! -d "$_sidecar_build" ]; then
+            cmake -B "$_sidecar_build" -S "$_sidecar_dir" \
+                -DCMAKE_BUILD_TYPE=Debug -DCOREMIND_ENABLED=OFF > /dev/null 2>&1
+        fi
+        if _timeout 120 cmake --build "$_sidecar_build" --target coremind_bridge \
+                --target test_router_logic -j"$NUM_CORES" 2>&1 | tail -2; then
+            echo -e "       ${GREEN}sidecar stub 编译成功${NC}"
+        else
+            echo -e "       ${YELLOW}⚠ sidecar stub 编译失败（SidecarErrorSymmetry 将 SKIP）${NC}"
+        fi
+    fi
     echo ""
 }
 
@@ -553,6 +570,20 @@ run_e2e_tests() {
     if [ -f "$BUILD_DIR/tests/e2e/test_e2e_system_agent_mock" ]; then
         run_legacy_e2e_binary "E2E SystemAgentMock" "$BUILD_DIR/tests/e2e/test_e2e_system_agent_mock"
         record_e2e
+    fi
+
+    # Sidecar 异步路径错误四分档对称性护测 — dev/prod 行为分叉回归门禁
+    # 真启 sidecar（build-dev stub）+ mock Bridge + mock callback，覆盖错误四分档：
+    #   ① bridge 不可达  ② HTTP 非 200  ③ SSE 流内 error payload  ④ 成功
+    # 锁住 dev forward_to_bridge 与 prod sidecar_router 的错误处理行为对称
+    # （F13 铁律：不 mock 关键集成点，真起 sidecar + 真发 HTTP + 真收回调）
+    local _sym_script="$PROJECT_DIR/sidecar/tests/test_error_branch_symmetry.py"
+    if [ -f "$_sym_script" ] && [ -f "$PROJECT_DIR/sidecar/build-dev/coremind_bridge" ]; then
+        # 脚本自带 #!/usr/bin/env python3 shebang，直接执行（chmod +x 已设）
+        run_legacy_e2e_binary "E2E SidecarErrorSymmetry" "$_sym_script"
+        record_e2e
+    else
+        echo -e "  ${YELLOW}⚠ SKIP${NC} E2E SidecarErrorSymmetry (脚本或 sidecar 二进制不存在)"
     fi
 
     echo ""

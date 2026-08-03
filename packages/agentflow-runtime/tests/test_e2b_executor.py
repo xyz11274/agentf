@@ -102,6 +102,22 @@ def test_exec_command_calls_sdk_run(executor_with_mocks):
     assert kwargs["cwd"] == E2BExecutor.SANDBOX_WORKSPACE
 
 
+def test_exec_command_forwards_workdir_override(executor_with_mocks):
+    """exec_command 透传显式 workdir 给 SDK cwd——webshell 跨命令 cwd 延续。
+
+    bash.py 缺省 cwd 透传宿主 agent_package_dir，executor 经 _to_sandbox_path 翻译；
+    外部显式 cwd override（如 webshell 延续）必须透传，恢复 cwd override 功能。
+    用宿主路径 fixture（生产真实输入）验证 _to_sandbox_path 翻译后 cwd 是沙箱路径。
+    """
+    exe, sb = executor_with_mocks
+    # 宿主子目录（生产中 webshell 延续的真实形态），应被 _to_sandbox_path 翻译
+    host_subdir = os.path.join(HOST_PKG_DIR, "outputs")
+    exe.exec_command("pwd", workdir=host_subdir)
+
+    _, kwargs = sb.commands.run.call_args
+    assert kwargs["cwd"] == os.path.join(E2BExecutor.SANDBOX_WORKSPACE, "outputs")
+
+
 def test_exec_command_translates_paths(executor_with_mocks):
     """agent_package_dir in command is replaced with /home/user/workspace."""
     exe, sb = executor_with_mocks

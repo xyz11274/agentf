@@ -329,23 +329,36 @@ static void forward_to_bridge(
                 });
 
             // ── 任务结束：无论 bridge 成功/失败/超时都必须通知 upstream ──
-            // 对齐生产 sidecar_router.cpp:417-506 的兜底逻辑：
-            //   bridge 不可达/连接断开/超时 → ts_code=500, ts_status="BridgeError"，跳过 Completed 回调
-            //   bridge HTTP 非 200          → ts_code=resp.status, ts_status="BridgeError"，跳过 Completed 回调
-            //   bridge 200                  → ts_code=200, ts_status="TaskCompleted"，先发 Completed 再发 TaskStatus
+            // 错误分流（对齐生产 sidecar_router.cpp + bridge chat_rest.py 错误两路）：
+            //   ① HTTP 不可达/断开/超时 → ts=500/BridgeError，error=httplib error
+            //   ② HTTP 非 200          → ts=resp.status/BridgeError，body 含 error detail
+            //   ③ HTTP 200 但 SSE 流内 error payload → ts=500/BridgeError，error_message_ 携详情
+            //   ④ HTTP 200 且无错误    → ts=200/TaskCompleted，先发 Completed UserOutput 再发 TaskStatus
+            // 错误时跳过 Completed 回调（避免上游收到虚假"完成"信号），仅发错误 TaskStatus。
             // 防止 upstream 永久等待，也避免 bridge 故障时上报虚假 200/TaskCompleted（F1 数据安全）。
             int ts_code;
             std::string ts_status;
+            std::string ts_error_detail;  // 提取的 bridge 错误详情，拼到 TaskStatusReport 让上游可定位
             if (!result) {
                 ts_code = 500;
                 ts_status = "BridgeError";
+                ts_error_detail = httplib::to_string(result.error());
                 std::cerr << "[coremind_bridge] BRIDGE_ERR req=" << request_id
-                          << " error=" << httplib::to_string(result.error()) << std::endl;
+                          << " error=" << ts_error_detail << std::endl;
             } else if (result->status != 200) {
                 ts_code = result->status;
                 ts_status = "BridgeError";
+                ts_error_detail = result->body.substr(0, 500);
                 std::cerr << "[coremind_bridge] BRIDGE_HTTP_ERR req=" << request_id
-                          << " http=" << result->status << std::endl;
+                          << " http=" << result->status
+                          << " body=" << ts_error_detail << std::endl;
+            } else if (processor.has_error()) {
+                // bridge SSE 流内 error payload（chat_rest.py:1004-1021 daemon 通知中途失败/timeout）
+                ts_code = 500;
+                ts_status = "BridgeError";
+                ts_error_detail = processor.error_message();
+                std::cerr << "[coremind_bridge] SSE_STREAM_ERR req=" << request_id
+                          << " error=" << ts_error_detail << std::endl;
             } else {
                 ts_code = 200;
                 ts_status = "TaskCompleted";
@@ -353,7 +366,7 @@ static void forward_to_bridge(
                           << " content_len=" << processor.accumulated_content().size() << std::endl;
             }
 
-            // 仅 bridge 成功时发 Completed UserOutput 回调；失败时上游只收 TaskStatus（对齐生产）
+            // 仅 bridge 完全成功时发 Completed UserOutput 回调；失败时上游只收 TaskStatus（对齐生产）
             if (ts_code == 200) {
                 auto completed = processor.make_completed();
                 post_callback(completed.stream_status, completed.flag, completed.text,
@@ -362,10 +375,17 @@ static void forward_to_bridge(
 
             // TaskStatusReport（成功/失败都发，防止 upstream 永久等待）
             Json::Value task_status;
-            task_status["Data"] = sidecar::build_task_status_data(ts_code, ts_status, processor.accumulated_content());
+            // 错误时把 bridge 详情拼到 UserOutputText，上游可据此定位（F7 错误可定位 + F1 禁止掩盖）
+            // 成功时仍是 coordinator 的最终回答 accumulated_content。
+            std::string ts_text = (ts_code == 200)
+                ? processor.accumulated_content()
+                : ("bridge_error: " + ts_error_detail);
+            task_status["Data"] = sidecar::build_task_status_data(ts_code, ts_status, ts_text);
             task_status["Header"] = sidecar::build_callback_header(
                 "TaskStatusManagement", task_id, dialogue_id, user_name, client_session_id,
                 sender, receiver, request_id, header);
+            // EventTimeStamp 必须用 ISO 8601 格式（sidecar_interface_contract.md §3 报文 +
+            // router_logic.h:72-73 呑约），与 UserOutput 回调（L278）和生产路径保持对称。
             task_status["Header"]["EventTimeStamp"] = sidecar::current_timestamp_iso8601();
             std::string ts_str = Json::writeString(json_writer(), task_status);
             httplib::Client ts_cli(sys_agent_entity.c_str());

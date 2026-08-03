@@ -174,6 +174,9 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
     exec_config.env_vars.push_back(env_key + "=" + data_variant_to_string(pair.second));
     file_databus.put(pair.first, pair.second);
   }
+  // 注：sandbox_mode input 自动由此循环注入为 AF_SANDBOX_MODE env_var
+  // （to_env_suffix("sandbox_mode")="SANDBOX_MODE"→"AF_SANDBOX_MODE"），factory.py 据此选 executor。
+  // sandbox_endpoint 则走下面显式分支（历史原因，保持与旧的 sandbox_endpoint 字段兼容）。
 
   // Inject sandbox endpoint as AF_SANDBOX_ENDPOINT for tool execution
   // and artifact download (curl POST /exec on the sandbox HTTP server).

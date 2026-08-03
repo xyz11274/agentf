@@ -1284,13 +1284,20 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
   if(!payload.empty()) {
     task->set_parameter("message_content", payload);
   }
-  // Pass sandbox_endpoint from message metadata to task parameters
-  // for worker env var injection (AF_SANDBOX_ENDPOINT).
+  // Pass sandbox_endpoint + sandbox_mode from message metadata to task parameters
+  // for worker env var injection (AF_SANDBOX_ENDPOINT + AF_SANDBOX_MODE).
+  // factory.py 同时读这两个 env 才能选对 executor；漏 sandbox_mode 会让 factory 落到 HostExecutor。
   if(const auto sandbox_it = message.metadata.find("sandbox_endpoint");
      sandbox_it != message.metadata.end() && !sandbox_it->second.empty()) {
     task->set_parameter("sandbox_endpoint", sandbox_it->second);
     Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set sandbox_endpoint=%s for task=%s",
                               sandbox_it->second.c_str(), task_config.task_id.c_str());
+  }
+  if(const auto mode_it = message.metadata.find("sandbox_mode");
+     mode_it != message.metadata.end() && !mode_it->second.empty()) {
+    task->set_parameter("sandbox_mode", mode_it->second);
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set sandbox_mode=%s for task=%s",
+                              mode_it->second.c_str(), task_config.task_id.c_str());
   }
   if(const auto selected_skills_it = message.metadata.find("selected_skills");
      selected_skills_it != message.metadata.end()) {

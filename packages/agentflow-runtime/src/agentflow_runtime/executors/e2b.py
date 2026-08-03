@@ -119,9 +119,14 @@ class E2BExecutor(ToolExecutor):
             if exports:
                 sandbox_cmd = exports + sandbox_cmd
 
+            # cwd 也要宿主→沙箱翻译——bash.py 缺省 cwd 透传的是宿主 agent_package_dir，
+            # 直接给 SDK 会因沙箱内不存在该路径而崩。用 _to_sandbox_path 翻译后再传
+            # （宿主 agent_package_dir → /home/user/workspace，恰好等于 SANDBOX_WORKSPACE）；
+            # 显式 cwd override（沙箱内绝对路径）走翻译仍不变（_to_sandbox_path 对沙箱路径原样返回）。
+            sandbox_cwd = self._to_sandbox_path(workdir) if workdir else self.SANDBOX_WORKSPACE
             execution = sb.commands.run(
                 sandbox_cmd,
-                cwd=self.SANDBOX_WORKSPACE,
+                cwd=sandbox_cwd,
                 timeout=sdk_timeout,
             )
 
@@ -249,7 +254,7 @@ class E2BExecutor(ToolExecutor):
         try:
             sb = self._connect()
             execution = sb.commands.run(
-                f"cat '{sandbox_path}' 2>/dev/null; printf '\nEXIT_CODE=%s\n' $?",
+                f"cat '{sandbox_path}' 2>/dev/null; printf '\\nEXIT_CODE=%s\\n' $?",
                 cwd=self.SANDBOX_WORKSPACE,
                 timeout=30,
             )
@@ -257,12 +262,22 @@ class E2BExecutor(ToolExecutor):
             stdout = execution.stdout or ""
 
             # Parse exit code from the sentinel line
-            parts = stdout.rsplit("\nEXIT_CODE=", 1)
-            if len(parts) == 2:
-                content_part = parts[0]
-                sentinel_code = parts[1].strip()
+            # sentinel 格式 '\nEXIT_CODE=<code>\n' 的前缀 \n 是 sentinel 起始分隔，
+            # 但 sentinel 构造时 printf '\nEXIT_CODE=%s\n' 把 \n 当 sentinel 自己的前缀，
+            # 与 content 的行尾 \n 重叠。切片时把 marker 前缀 \n 还给 content——
+            # content_part = stdout[:marker_pos + 1]——保留 content 的所有行（含末尾空行），
+            # total_lines 与文件实际行数一致。
+            # 不用 rsplit：rsplit 把分隔符前缀 \n 吞进分隔段，丢空行
+            # （content '{"key": "value"}\n\n' 被截成 '{"key": "value"}\n'，多算一个空行）。
+            sentinel_marker = "\nEXIT_CODE="
+            marker_pos = stdout.rfind(sentinel_marker)
+            if marker_pos != -1:
+                sentinel_seg = stdout[marker_pos + len(sentinel_marker):]
+                sentinel_code = sentinel_seg.strip()
                 if sentinel_code and sentinel_code != "0":
                     return FileContent(error=f"File not found: {path}")
+                # marker_pos 是 sentinel 前缀 \n 的位置，+1 还给 content
+                content_part = stdout[:marker_pos + 1]
             else:
                 content_part = stdout
 

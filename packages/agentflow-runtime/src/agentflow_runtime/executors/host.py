@@ -28,6 +28,9 @@ class HostExecutor(ToolExecutor):
     # -- exec_command -------------------------------------------------------
 
     def exec_command(self, command: str, timeout: int = 30, workdir: str | None = None) -> ExecResult:
+        # bash.py 缺省 cwd 透传宿主 agent_package_dir（非 None），workdir 永远非空，
+        # 故 fallback 分支实际走不进去——保留兜底仅为防御性兜底（应对未来其他调用方传 None）。
+        cwd = workdir or os.environ.get("AF_AGENT_PACKAGE_DIR") or os.getcwd()
         try:
             result = subprocess.run(
                 command,
@@ -35,7 +38,7 @@ class HostExecutor(ToolExecutor):
                 capture_output=True,
                 text=True,
                 timeout=timeout,
-                cwd=workdir,
+                cwd=cwd,
             )
             return ExecResult(
                 stdout=result.stdout,
