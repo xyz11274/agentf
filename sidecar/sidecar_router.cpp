@@ -374,7 +374,13 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
             dumper->dump_request(rest_body);
             std::cerr << "[sidecar_router] FWD " << callback_path_stream << " req=" << request_id
                       << " | body=\n" << pretty_json(body_str) << std::endl;
-            cli.Post(callback_path_stream.c_str(), http_headers, body_str, "application/json",
+            // P3: Post 只用 ContentReceiver（去掉 Progress callback）。
+            // 任务结束逻辑统一放到 Post 返回后，确保任何退出路径（成功/失败/超时）
+            // 都向 upstream 发送 TaskStatusReport，防止 upstream 永久等待。
+            // [DONE] 不再 return false（原实现导致 httplib 中止接收、Progress 不触发，
+            // 任务结束消息永远发不出去），改为 continue 让 Post 自然完成。
+            auto stream_result = cli.Post(callback_path_stream.c_str(), http_headers,
+                                          body_str, "application/json",
                 [&](const char* data, size_t len) -> bool {
                     sse_buffer.append(data, len);
                     // 按 \n 分割 SSE 事件
@@ -388,8 +394,8 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                         // 只处理 data: 行
                         if (line.compare(0, 6, "data: ") != 0) continue;
                         std::string payload = line.substr(6);
-                        // 检查终止信号
-                        if (payload == "[DONE]") return false;
+                        // [DONE] 标记流结束，不阻断接收（让 Post 自然返回后统一处理）
+                        if (payload == "[DONE]") continue;
                         std::cerr << "[sidecar_router] SSE_RAW len=" << payload.size()
                                   << " data=" << payload << std::endl;
                         // 解析 SSE json
@@ -405,68 +411,99 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                         }
                     }
                     return true;
-                },
-                [&](uint64_t, uint64_t) -> bool {
-                    auto completed = processor.make_completed();
-                    post_callback(completed.stream_status, completed.flag, completed.text,
-                                  completed.is_final, completed.user_output_object);
-
-                    Json::Value task_status;
-                    task_status["Header"] = build_callback_header(
-                        "TaskStatusManagement", task_id, dialogue_id,
-                        user_name, client_session_id,
-                        sender, receiver, request_id, req_header);
-                    task_status["Header"]["EventTimeStamp"] = current_timestamp_ms();
-                    Json::Value data;
-                    data["MessageType"] = "TaskStatusReport";
-                    data["TaskStatusCode"] = 200;
-                    data["TaskStatusReport"] = "TaskCompleted";
-                    data["UserOutputText"] = processor.accumulated_content();
-                    task_status["Data"] = data;
-                    std::string ts_url = "https://" + sys_agent_entity + ":23767"
-                                       + "/coremind/systemagent/v1/callback";
-                    std::string ts_str = json_dumps(task_status);
-                    std::cerr << "[sidecar_router] CBF_TASKSTATUS req=" << request_id
-                              << " code=200 status=TaskCompleted"
-                              << " content_len=" << processor.accumulated_content().size()
-                              << " target=" << ts_url << std::endl;
-#ifdef COREMIND_ENABLED
-                    auto httpF = CMFrm::COM::HttpClientFactory::GetHttpClientFactory();
-                    auto h2 = httpF->GetHttp2Client("default");
-                    if (h2) {
-                        auto req = std::make_shared<CMFrm::COM::Http2ClientRequest>();
-                        req->SetMethod(CMFrm::COM::POST);
-                        req->SetReqUrl(ts_url);
-                        req->AddHeader("Content-Type", "application/json");
-                        req->AddBody(ts_str);
-                        h2->Send(req);
-                        std::cerr << "[sidecar_router] CBF_SENT req=" << request_id
-                                  << " via=coremind_h2 type=task_status" << std::endl;
-                        dumper->dump_callback_result("task_status", "coremind_h2", 0, "");
-                        return true;
-                    }
-#endif
-                    auto ds = ts_url.find("://");
-                    auto da = ds == std::string::npos ? 0 : ds + 3;
-                    auto dp = ts_url.find('/', da);
-                    httplib::Client cb_cli(ts_url.substr(0, dp).c_str());
-                    auto ts_res = cb_cli.Post(ts_url.substr(dp).c_str(),
-                               {{"Content-Type", "application/json"}},
-                               ts_str, "application/json");
-                    if (ts_res) {
-                        std::cerr << "[sidecar_router] CBF_RESP req=" << request_id
-                                  << " type=task_status http=" << ts_res->status << std::endl;
-                        dumper->dump_callback_result("task_status", "httplib", ts_res->status, "");
-                    } else {
-                        std::cerr << "[sidecar_router] CBF_ERR req=" << request_id
-                                  << " type=task_status error=" << httplib::to_string(ts_res.error()) << std::endl;
-                        dumper->dump_callback_result("task_status", "httplib", 0,
-                                                      httplib::to_string(ts_res.error()));
-                    }
-
-                    return true;
                 }
             );
+
+            // ── 任务结束：无论 bridge 成功/失败/超时都必须通知 upstream ──
+            int ts_code;
+            std::string ts_status;
+            if (!stream_result) {
+                // P3: bridge 不可达/连接断开/超时 — 仍需告知 upstream 任务结束
+                ts_code = 500;
+                ts_status = "BridgeError";
+                std::cerr << "[sidecar_router] BRIDGE_ERR req=" << request_id
+                          << " error=" << httplib::to_string(stream_result.error())
+                          << std::endl;
+            } else if (stream_result->status != 200) {
+                ts_code = stream_result->status;
+                ts_status = "BridgeError";
+                std::cerr << "[sidecar_router] BRIDGE_HTTP_ERR req=" << request_id
+                          << " http=" << stream_result->status << std::endl;
+            } else {
+                ts_code = 200;
+                ts_status = "TaskCompleted";
+                std::cerr << "[sidecar_router] STREAM_DONE req=" << request_id
+                          << " content_len=" << processor.accumulated_content().size()
+                          << std::endl;
+            }
+
+            // 最后一次流式回调（is_final=true, stream_status=Completed）
+            {
+                auto completed = processor.make_completed();
+                post_callback(completed.stream_status, completed.flag, completed.text,
+                              completed.is_final, completed.user_output_object);
+            }
+
+            // TaskStatusReport（成功/失败都发，防止 upstream 永久等待）
+            Json::Value task_status;
+            task_status["Header"] = build_callback_header(
+                "TaskStatusManagement", task_id, dialogue_id,
+                user_name, client_session_id,
+                sender, receiver, request_id, req_header);
+            task_status["Header"]["EventTimeStamp"] = current_timestamp_ms();
+            Json::Value ts_data;
+            ts_data["MessageType"] = "TaskStatusReport";
+            ts_data["TaskStatusCode"] = ts_code;
+            ts_data["TaskStatusReport"] = ts_status;
+            ts_data["UserOutputText"] = processor.accumulated_content();
+            task_status["Data"] = ts_data;
+            std::string ts_url = "https://" + sys_agent_entity + ":23767"
+                               + "/coremind/systemagent/v1/callback";
+            std::string ts_str = json_dumps(task_status);
+            std::cerr << "[sidecar_router] CBF_TASKSTATUS req=" << request_id
+                      << " code=" << ts_code << " status=" << ts_status
+                      << " content_len=" << processor.accumulated_content().size()
+                      << " target=" << ts_url << std::endl;
+
+            // 发送 TaskStatusReport（CoreMind H2 优先，fallback httplib）
+            bool ts_sent = false;
+#ifdef COREMIND_ENABLED
+            {
+                auto httpF = CMFrm::COM::HttpClientFactory::GetHttpClientFactory();
+                auto h2 = httpF->GetHttp2Client("default");
+                if (h2) {
+                    auto req = std::make_shared<CMFrm::COM::Http2ClientRequest>();
+                    req->SetMethod(CMFrm::COM::POST);
+                    req->SetReqUrl(ts_url);
+                    req->AddHeader("Content-Type", "application/json");
+                    req->AddBody(ts_str);
+                    h2->Send(req);
+                    std::cerr << "[sidecar_router] CBF_SENT req=" << request_id
+                              << " via=coremind_h2 type=task_status" << std::endl;
+                    dumper->dump_callback_result("task_status", "coremind_h2", 0, "");
+                    ts_sent = true;
+                }
+            }
+#endif
+            if (!ts_sent) {
+                auto ds = ts_url.find("://");
+                auto da = ds == std::string::npos ? 0 : ds + 3;
+                auto dp = ts_url.find('/', da);
+                httplib::Client cb_cli(ts_url.substr(0, dp).c_str());
+                auto ts_res = cb_cli.Post(ts_url.substr(dp).c_str(),
+                           {{"Content-Type", "application/json"}},
+                           ts_str, "application/json");
+                if (ts_res) {
+                    std::cerr << "[sidecar_router] CBF_RESP req=" << request_id
+                              << " type=task_status http=" << ts_res->status << std::endl;
+                    dumper->dump_callback_result("task_status", "httplib", ts_res->status, "");
+                } else {
+                    std::cerr << "[sidecar_router] CBF_ERR req=" << request_id
+                              << " type=task_status error=" << httplib::to_string(ts_res.error()) << std::endl;
+                    dumper->dump_callback_result("task_status", "httplib", 0,
+                                                  httplib::to_string(ts_res.error()));
+                }
+            }
         }).detach();
 
         return CMFrm::COM::ASYNC;
