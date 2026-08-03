@@ -1,4 +1,4 @@
-"""pytest——E2B 远程沙箱 Provider 测试（需 E2B_API_KEY，可选）。
+"""pytest——e2b 远程沙箱 Provider 测试（需 E2B_API_KEY，可选）。
 
 覆盖 AC-US5-002 + SC-012，引用 TC-SBOX-027、TC-SBOX-001、TC-SBOX-053。
 """
@@ -14,22 +14,22 @@ import requests
     reason="需 E2B_API_KEY 环境变量，可选测试",
 )
 def test_no_token_request_rejected():
-    """TC-SBOX-027: E2B 无 token 公网请求被拒，仅 daemon 持 token 可达。
+    """TC-SBOX-027: e2b 无 token 公网请求被拒，仅 daemon 持 token 可达。
 
     业务规则:
-    - B17: E2B 远程沙箱通过 token 鉴权隔离（FR-022）
+    - B17: e2b 远程沙箱通过 token 鉴权隔离（FR-022）
 
     错误模型:
     - server 无鉴权暴露——allow_public_traffic 未设 false 或 token 未配
 
     失败意味着:
-    - E2B 远程沙箱内 server 对公网暴露，任人可调执行命令
+    - e2b 远程沙箱内 server 对公网暴露，任人可调执行命令
     """
-    # 此测试需 E2B API key + 实际 E2B 沙箱
-    # 实现：通过 Python E2B SDK 创建沙箱（allow_public_traffic=False + traffic_access_token）
+    # 此测试需 e2b API key + 实际 e2b 沙箱
+    # 实现：通过 Python e2b SDK 创建沙箱（allow_public_traffic=False + traffic_access_token）
     # 验证：无 token 的 HTTP 请求被拒，带 token 的请求通过
     # 因 E2B_API_KEY 在 CI 中可选，保留 skipif
-    pytest.skip("需 E2B_API_KEY + E2B SDK——可选测试，CI 中启用")
+    pytest.skip("需 E2B_API_KEY + e2b SDK——可选测试，CI 中启用")
 
 
 @pytest.mark.skipif(
@@ -37,10 +37,10 @@ def test_no_token_request_rejected():
     reason="需 E2B_API_KEY 环境变量，可选测试",
 )
 def test_e2b_exec_echo():
-    """TC-SBOX-001: E2B 沙箱内 echo 返回正确。
+    """TC-SBOX-001: e2b 沙箱内 echo 返回正确。
 
     全链路验证：
-    1. 创建 E2B 沙箱（Sandbox.create）
+    1. 创建 e2b 沙箱（Sandbox.create）
     2. 上传 sandbox_http_server.py 并启动
     3. 轮询 HTTP server 就绪
     4. POST /exec 执行 echo hello

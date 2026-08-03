@@ -5,7 +5,7 @@ Extracted from the duplicate patch logic in:
 - ``docker/sandbox/e2b_lifecycle.py`` (_apply_ssl_patch, L80-94)
 - ``docker/sandbox/e2b_sync.py`` (_patched_ssl_ctx L44-52, _patch_envd_url L82-95)
 
-These patches are required because the internal E2B deployment uses a
+These patches are required because the internal e2b deployment uses a
 path-based reverse proxy (cubeproxy) with ``server_name _;`` which does
 not accept ``*.cube.app`` TLS SNI.  All SDK HTTP calls must be routed
 through ``https://218.245.96.148:443/sandbox/{id}/{port}`` with SSL

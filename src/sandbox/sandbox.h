@@ -88,7 +88,7 @@ class Sandbox {
   virtual void sync_session_uploads(const std::string& session_upload_dir) { (void)session_upload_dir; }
 
   // 沙箱模式标识（用于 SandboxSnapshots::restore 分支判断）
-  // 默认返回空字符串（Local/Docker）；E2BSandbox override 返回 "E2B"
+  // 默认返回空字符串（Local/Docker）；E2BSandbox override 返回 "e2b"
   virtual std::string sandbox_mode() const { return ""; }
 };
 

@@ -2,7 +2,7 @@
 
 按 daemon ``sandbox.mode`` 分派数据源：
 
-- ``e2b``   : E2B SDK 直连（复用 ``scripts/e2b/sandbox_list.py`` 已验证路径：SSL patch /
+- ``e2b``   : e2b SDK 直连（复用 ``scripts/e2b/sandbox_list.py`` 已验证路径：SSL patch /
               envd URL 重写 / Sandbox.list / connect+kill）
 - ``local`` : daemon 日志 ``[SANDBOX]`` 事件解析 + workdir/snapshot 目录扫描
 - ``docker``: 同 local（本期，未接 docker SDK）
@@ -113,25 +113,25 @@ class UnsupportedAction(SandboxObserverError):
 
 
 class ProviderError(SandboxObserverError):
-    """provider 底层调用失败（E2B SDK / 日志读取）。"""
+    """provider 底层调用失败（e2b SDK / 日志读取）。"""
 
 
 class ExecUnavailable(SandboxObserverError):
-    """命令执行通道不可用（endpoint 未解析 / E2B SDK 失败）。"""
+    """命令执行通道不可用（endpoint 未解析 / e2b SDK 失败）。"""
 
 
-# ── E2B Provider（SDK 直连，复用 sandbox_list.py 已验证逻辑）────────
+# ── e2b Provider（SDK 直连，复用 sandbox_list.py 已验证逻辑）────────
 
-# 内部 E2B 部署用 path-based 反向代理（cubeproxy），SDK 构造的 hostname 路由
+# 内部 e2b 部署用 path-based 反向代理（cubeproxy），SDK 构造的 hostname 路由
 # （https://{port}-{id}.cube.app）不可达，需重写为 path-based 路由。
 _DEFAULT_ENVD_PORT = 49983
 _SANDBOX_TARGET_HOST = "https://218.245.96.148:443"
 
 
 class E2BProvider:
-    """E2B SDK 直连 provider。
+    """e2b SDK 直连 provider。
 
-    逻辑对齐 ``scripts/e2b/sandbox_list.py``（该脚本是经过真实环境验证的 E2B
+    逻辑对齐 ``scripts/e2b/sandbox_list.py``（该脚本是经过真实环境验证的 e2b
     观测实现）：SSL patch（IP 直连跳过证书校验）、envd URL 重写（cubeproxy
     path-based 路由）、``Sandbox.list(query=...)`` 枚举、``connect + kill`` 销毁。
     """
@@ -150,7 +150,7 @@ class E2BProvider:
 
     @staticmethod
     def _apply_ssl_patch() -> None:
-        """SSL patch：内部 E2B 部署使用 IP 直连，跳过证书验证。"""
+        """SSL patch：内部 e2b 部署使用 IP 直连，跳过证书验证。"""
         import ssl as _ssl
 
         if getattr(_ssl, "_agentflow_patched", False):
@@ -187,7 +187,7 @@ class E2BProvider:
             return Sandbox, SandboxQuery, SandboxState
         except ImportError as exc:
             raise ProviderError(
-                f"E2B SDK not installed (pip install e2b-code-interpreter): {exc}"
+                f"e2b SDK not installed (pip install e2b-code-interpreter): {exc}"
             ) from exc
 
     def _connect_sandbox(self, Sandbox, sandbox_id: str):
@@ -220,7 +220,7 @@ class E2BProvider:
             sandboxes = list(paginator.next_items())
         except Exception as exc:  # noqa: BLE001 — 需完整保留错误信息
             logger.error("sandbox_observer.e2b_list failed: %s", exc)
-            raise ProviderError(f"E2B list failed: {exc}") from exc
+            raise ProviderError(f"e2b list failed: {exc}") from exc
 
         results: list[SandboxInfo] = []
         for sb in sandboxes:
@@ -266,7 +266,7 @@ class E2BProvider:
             if "404" in msg or "not found" in msg or "already" in msg:
                 return KillResult(sandbox_id=sandbox_id, killed=False, already_gone=True)
             logger.error("sandbox_observer.e2b_kill failed sandbox_id=%s: %s", sandbox_id, exc)
-            raise ProviderError(f"E2B kill {sandbox_id} failed: {exc}") from exc
+            raise ProviderError(f"e2b kill {sandbox_id} failed: {exc}") from exc
 
     def prune_stale(self, older_minutes: int, dry_run: bool = True) -> PruneResult:
         self._setup_env()
@@ -279,7 +279,7 @@ class E2BProvider:
             sandboxes = list(paginator.next_items())
         except Exception as exc:  # noqa: BLE001
             logger.error("sandbox_observer.e2b_prune_list failed: %s", exc)
-            raise ProviderError(f"E2B prune list failed: {exc}") from exc
+            raise ProviderError(f"e2b prune list failed: {exc}") from exc
 
         stale: list[dict[str, Any]] = []
         for sb in sandboxes:
@@ -312,7 +312,7 @@ class E2BProvider:
         return result
 
     def exec_command(self, sandbox_id: str, command: str, timeout_ms: int = 30000, cwd: str | None = None) -> ExecResult:
-        """在 E2B 沙箱内执行单条命令（复用 cmd_run 已验证的 commands.run 通道）。
+        """在 e2b 沙箱内执行单条命令（复用 cmd_run 已验证的 commands.run 通道）。
 
         Args:
             cwd: 工作目录（绝对路径），None 时由沙箱默认 cwd 决定。
@@ -331,7 +331,7 @@ class E2BProvider:
             sb = self._connect_sandbox(Sandbox, sandbox_id)
         except Exception as exc:  # noqa: BLE001
             logger.error("sandbox_observer.e2b_exec_connect failed sandbox_id=%s: %s", sandbox_id, exc)
-            raise ProviderError(f"E2B connect {sandbox_id} failed: {exc}") from exc
+            raise ProviderError(f"e2b connect {sandbox_id} failed: {exc}") from exc
 
         try:
             kwargs = {"timeout": timeout_ms / 1000.0}
@@ -340,7 +340,7 @@ class E2BProvider:
             result = sb.commands.run(command, **kwargs)
         except Exception as exc:  # noqa: BLE001
             logger.error("sandbox_observer.e2b_exec failed sandbox_id=%s cwd=%s: %s", sandbox_id, cwd, exc)
-            raise ExecUnavailable(f"E2B exec {sandbox_id} failed: {exc}") from exc
+            raise ExecUnavailable(f"e2b exec {sandbox_id} failed: {exc}") from exc
 
         return ExecResult(
             sandbox_id=sandbox_id,

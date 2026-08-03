@@ -158,7 +158,7 @@ AGENTFLOW_ENV=dev                           AGENTFLOW_ENV=prod
 | `output_max_bytes` | int | `0` | 输出截断阈值，0 = 不截断 |
 | `gc_destroy_ttl_ms` | int | `600000` (10min) | 活沙箱闲置超时转 RECYCLING |
 | `gc_recycle_snapshot_ttl_ms` | int | `86400000` (24h) | 销毁后快照过期清理 |
-| `e2b_default_template` | string | `"base"` | E2B 远程沙箱默认模板（mode=e2b 时生效） |
+| `e2b_default_template` | string | `"base"` | e2b 远程沙箱默认模板（mode=e2b 时生效） |
 | `skills_src_dir` | string | `""` | 宿主机上 agent package 的 `harness/skills` 路径，用于 DockerSandbox 技能同步。为空时从 `--package` 路径自动推导 |
 
 **环境变量覆盖**（优先级：环境变量 > 配置文件 > 代码默认值）：

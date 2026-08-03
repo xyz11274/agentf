@@ -1,4 +1,4 @@
-# AgentFoundry 沙箱镜像（DockerSandbox + E2B Sandbox 共用）
+# AgentFoundry 沙箱镜像（DockerSandbox + e2b Sandbox 共用）
 # 对齐 lld.md T070 + plan.md §11.2 最小细度
 # 基础镜像：python:3.12-slim（最小化，约 120MB）
 FROM python:3.12-slim
@@ -18,7 +18,7 @@ ARG HTTP_SERVER_SRC=/docker/sandbox/http_server
 COPY ${HTTP_SERVER_SRC} /opt/sandbox/http_server/
 
 # 沙箱内环境初始化脚本（统一依赖安装入口）
-# 与 E2B 模板构建共用同一份 sandbox-setup.sh
+# 与 e2b 模板构建共用同一份 sandbox-setup.sh
 COPY docker/sandbox/sandbox-setup.sh /opt/sandbox/sandbox-setup.sh
 RUN bash /opt/sandbox/sandbox-setup.sh
 

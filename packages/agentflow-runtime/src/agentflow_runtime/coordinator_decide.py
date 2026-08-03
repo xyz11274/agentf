@@ -540,7 +540,7 @@ def local_artifact_url(path: str, package_dir: str | None = None) -> str:
         # 降级：传统格式（无存储服务时）
         url = f"/api/artifacts/{agent_name}/files/{quote(relative, safe='/')}"
 
-    # 可观测性：记录 URL 生成决策链路，便于 E2B 等远端沙箱模式排查
+    # 可观测性：记录 URL 生成决策链路，便于 e2b 等远端沙箱模式排查
     print(
         f"[flow] artifact.local_artifact_url url={url} format={_format} "
         f"agent={agent_name} session_id={session_id or '(unset)'} "

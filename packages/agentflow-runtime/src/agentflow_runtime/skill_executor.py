@@ -708,7 +708,7 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
                 continue  # skip files that can't be copied
         result.append(str(dest))
         copied_to_outputs.append(f"{dest.name}({file_size}B)")
-    # 可观测性审计日志（F7：不截断存储层，便于 E2B 等远端沙箱模式排查）
+    # 可观测性审计日志（F7：不截断存储层，便于 e2b 等远端沙箱模式排查）
     _sandbox_mode = os.environ.get("AF_SANDBOX_MODE", "unknown")
     _storage_url = os.environ.get("AF_ARTIFACT_STORAGE_URL", "")
     print(
@@ -752,7 +752,7 @@ def _download_from_sandbox(local_path: Path, sandbox_url: str) -> None:
     """Download a file from the sandbox HTTP server to the local filesystem.
 
     Used by _ensure_artifacts_in_package as a fallback when a file doesn't
-    exist on the host but was generated inside the sandbox (E2B mode).
+    exist on the host but was generated inside the sandbox (e2b mode).
     The sandbox HTTP server's read_file tool returns file content via POST /exec.
     Sends a path relative to AGENT_PACKAGE_DIR since the sandbox resolves
     paths relative to its working directory.
@@ -877,7 +877,7 @@ def _upload_artifacts_to_storage(artifact_paths: list[str]) -> None:
                 _sandbox_mode, len(ids), ids,
             )
     except Exception as e:
-        # 记录完整请求上下文，避免 E2B 等远端模式无法定位
+        # 记录完整请求上下文，避免 e2b 等远端模式无法定位
         logging.error(
             "artifact.upload.failed url=%s agent=%s session=%s "
             "sandbox_mode=%s file_count=%d total_bytes=%d names=%s err=%s",

@@ -1,16 +1,16 @@
 """
-E2E 测试：bridge HTTP → 真实 LLM → 图片生成 → 产物展示（E2B 沙箱模式）。
+E2E 测试：bridge HTTP → 真实 LLM → 图片生成 → 产物展示（e2b 沙箱模式）。
 
 验证链路：
   bridge HTTP POST → daemon → agent → workflow → skill_executor
-  → E2B 沙箱内工具执行 → 图片生成 → 产物 URL 在 SSE 响应中可见 → 图片可访问
+  → e2b 沙箱内工具执行 → 图片生成 → 产物 URL 在 SSE 响应中可见 → 图片可访问
 
 LLM 模式：
   - 设置环境变量 AF_LLM_BASE_URL + AF_LLM_API_KEY → 真实 LLM 调用
   - 未设置 → 回退到 mock LLM（e2e-scripted，验证链路但不生成真实图片）
 
 沙箱模式由 configs/test/agentflowd.json 的 sandbox.mode 决定：
-  - mode: "e2b" → 远程 E2B 沙箱
+  - mode: "e2b" → 远程 e2b 沙箱
   - mode: "docker" → 本地 Docker 沙箱
 
 运行：
@@ -227,7 +227,7 @@ def _extract_artifact_urls(events: list[dict[str, Any] | str]) -> set[str]:
 
 @pytest.mark.e2e
 class TestE2BImageGen:
-    """E2B 沙箱模式下的问答 + 图片生成 + 图片展示全链路测试。"""
+    """e2b 沙箱模式下的问答 + 图片生成 + 图片展示全链路测试。"""
 
     def test_chat_returns_nonempty(self, e2b_bridge_daemon: dict[str, Any]) -> None:
         """问答链路：发送普通消息，验证 SSE 返回非空内容。"""
@@ -291,7 +291,7 @@ class TestE2BImageGen:
 
         验证链路：
           bridge HTTP POST → daemon → agent → workflow → skill_executor
-          → E2B 沙箱内工具执行 → 图片生成 → 产物 URL 在响应中可见 → 图片可访问
+          → e2b 沙箱内工具执行 → 图片生成 → 产物 URL 在响应中可见 → 图片可访问
 
         验证：
           1. SSE 流式响应完整（[DONE] 结尾）
@@ -410,7 +410,7 @@ class TestE2BImageGen:
             bridge HTTP POST (content array 含 data: URL)
             → flatten_to_text 落盘 + 替换为路径文本
             → daemon → AF_INPUT → coordinator → skill
-            → E2B 沙箱内 outfit_vision.py open(path) + VL API
+            → e2b 沙箱内 outfit_vision.py open(path) + VL API
             → 返回理解结果 → SSE 流回前端
 
         验证：

@@ -161,7 +161,7 @@ async def sandbox_exec(request: Request, sandbox_id: str, body: _ExecBody) -> di
     """``POST /api/sandbox/{sandbox_id}/exec`` — webshell 命令执行（单条，完整输出）。
 
     模式通道：
-    - e2b: E2B SDK ``commands.run``（cwd 透传给 SDK 一等参数）
+    - e2b: e2b SDK ``commands.run``（cwd 透传给 SDK 一等参数）
     - local/docker: 沙箱内 HTTP server ``POST /exec``（tool=bash，沙箱侧 is_dangerous 防护）
     """
     command = body.command.strip()

@@ -19,7 +19,7 @@ from agentflow_runtime.executors.http import HTTPExecutor
 from agentflow_runtime.executors.e2b import E2BExecutor
 
 
-# Valid E2B endpoint format (sandbox_id is extracted from /sandbox/{uuid}/)
+# Valid e2b endpoint format (sandbox_id is extracted from /sandbox/{uuid}/)
 E2B_ENDPOINT = "https://218.245.96.148:443/sandbox/a1b2c3d4-e5f6-7890-abcd-ef1234567890/49983"
 LOCAL_ENDPOINT = "http://localhost:9999"
 

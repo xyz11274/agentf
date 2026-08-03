@@ -37,14 +37,14 @@ docker push registry.example.com/agentflow-sandbox:v1
 |--------|--------|------|
 | `image_name` | `agentflow-sandbox:v1` | daemon 配置中引用，见 `configs/*/agentflowd.json` 的 `sandbox.image_name` |
 
-## 与 E2B 的关系
+## 与 e2b 的关系
 
-Docker 沙箱与 E2B 沙箱共用同一代码库（`sandbox_http_server.py`），但镜像构建方式不同：
+Docker 沙箱与 e2b 沙箱共用同一代码库（`sandbox_http_server.py`），但镜像构建方式不同：
 
-| 特性 | Docker 沙箱 | E2B 沙箱 |
+| 特性 | Docker 沙箱 | e2b 沙箱 |
 |------|------------|----------|
-| 镜像来源 | 本地 `docker build` | E2B 平台模板（`Sandbox.create(template=...)`） |
-| 构建方式 | `docker/sandbox/Dockerfile` | 通过 E2B SDK `Template` API |
-| 生命周期 | 宿主机管理 | E2B 平台管理 |
+| 镜像来源 | 本地 `docker build` | e2b 平台模板（`Sandbox.create(template=...)`） |
+| 构建方式 | `docker/sandbox/Dockerfile` | 通过 e2b SDK `Template` API |
+| 生命周期 | 宿主机管理 | e2b 平台管理 |
 
-详见 `docs/usage/sandbox.md` §4「E2B 模板创建」。
+详见 `docs/usage/sandbox.md` §4「e2b 模板创建」。

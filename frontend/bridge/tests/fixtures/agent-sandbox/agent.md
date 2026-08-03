@@ -1,6 +1,6 @@
 ---
 name: agent-sandbox
-description: L1 沙箱验证 agent — 验证 E2B/Docker 沙箱模式下问答 + 图片生成全链路
+description: L1 沙箱验证 agent — 验证 e2b/Docker 沙箱模式下问答 + 图片生成全链路
 version: 1.0.0
 ---
 

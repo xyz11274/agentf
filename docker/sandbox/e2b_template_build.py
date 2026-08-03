@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""E2B 自定义模板构建工具 — 一次性设置脚本。
+"""e2b 自定义模板构建工具 — 一次性设置脚本。
 
-用途：将 sandbox_http_server.py 预装到 E2B 模板中，后续沙箱创建时
+用途：将 sandbox_http_server.py 预装到 e2b 模板中，后续沙箱创建时
 跳过上传步骤，节省一次 RTT。
 
 用法：
@@ -18,7 +18,7 @@
   构建成功后打印模板 ID，可用于 daemon 配置的 e2b_default_template。
 
 环境变量：
-  E2B_API_KEY  必填，E2B SDK 鉴权
+  E2B_API_KEY  必填，e2b SDK 鉴权
 """
 
 import argparse
@@ -111,7 +111,7 @@ def build_template(args: argparse.Namespace) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="E2B 自定义模板构建工具"
+        description="e2b 自定义模板构建工具"
     )
     parser.add_argument("--name", default="agentflow-sandbox",
                         help="模板名称（默认 agentflow-sandbox）")

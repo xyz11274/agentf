@@ -28,7 +28,7 @@ def test_three_modes_blind():
     - 镜像不共用——两 Provider 用不同镜像
 
     失败意味着:
-    - Docker/E2B 模式下行为与 local 不一致，用户可感知切换
+    - Docker/e2b 模式下行为与 local 不一致，用户可感知切换
     """
     pytest.skip("实现期驱动——E2E 三模式盲测")
 

@@ -1060,7 +1060,7 @@ def sandbox_test_daemon(
             str(PROJECT_ROOT / "packages" / "agentflow-runtime" / "src"),
         )
         env["AF_LOG_FILE"] = str(daemon_log)
-        # E2B SDK 需要绝对路径的 CA 证书（子进程不继承工作目录）
+        # e2b SDK 需要绝对路径的 CA 证书（子进程不继承工作目录）
         _ca = PROJECT_ROOT / "resource" / "certs" / "e2b_CA.pem"
         if _ca.is_file():
             env["SSL_CERT_FILE"] = str(_ca)
@@ -1089,7 +1089,7 @@ def sandbox_test_daemon(
         print(f"[sandbox_test_daemon] env[AF_LLM_MODEL]={env.get('AF_LLM_MODEL', 'NOT_SET')}", file=sys.stderr, flush=True)
 
     env["AF_LOG_FILE"] = str(daemon_log)
-    # E2B SDK 需要绝对路径的 CA 证书（子进程不继承工作目录）
+    # e2b SDK 需要绝对路径的 CA 证书（子进程不继承工作目录）
     _ca = PROJECT_ROOT / "resource" / "certs" / "e2b_CA.pem"
     if _ca.is_file():
         env["SSL_CERT_FILE"] = str(_ca)

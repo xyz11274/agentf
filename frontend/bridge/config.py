@@ -272,17 +272,17 @@ class BridgeSettings(BaseSettings):
     sandbox_e2b_api_url: str = Field(
         validation_alias="AF_BR_SANDBOX_E2B_API_URL",
         default="http://218.245.96.148:30030",
-        description="E2B API base URL (mirrors daemon sandbox.e2b_api_url).",
+        description="e2b API base URL (mirrors daemon sandbox.e2b_api_url).",
     )
     sandbox_e2b_api_key: str = Field(
         validation_alias="AF_BR_SANDBOX_E2B_API_KEY",
         default="e2b_000000000",
-        description="E2B API key (kept in memory, never exposed to responses).",
+        description="e2b API key (kept in memory, never exposed to responses).",
     )
     sandbox_e2b_ca_cert_path: str = Field(
         validation_alias="AF_BR_SANDBOX_E2B_CA_CERT_PATH",
         default="resource/certs/e2b_CA.pem",
-        description="E2B CA cert path for TLS verification.",
+        description="e2b CA cert path for TLS verification.",
     )
     # 注：无 sandbox_daemon_log_path——local/docker 模式已切换为 daemon RPC
     # 数据源（sandbox.list），不再解析 daemon 日志（2026-08-02 重构）

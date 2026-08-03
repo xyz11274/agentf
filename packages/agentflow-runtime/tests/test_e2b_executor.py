@@ -1,7 +1,7 @@
-"""E2BExecutor behavior tests — verifies E2B SDK direct-connect sandbox execution.
+"""E2BExecutor behavior tests — verifies e2b SDK direct-connect sandbox execution.
 
 All tests mock e2b_code_interpreter.Sandbox — no real sandbox or network required.
-Reference: ADR 20260724-tools-runtime-refactor.md Phase 3 (E2B provider).
+Reference: ADR 20260724-tools-runtime-refactor.md Phase 3 (e2b provider).
 """
 
 import os
@@ -24,7 +24,7 @@ HOST_PKG_DIR = "/fake/agent/package"
 
 @pytest.fixture
 def mock_sandbox():
-    """A mock E2B Sandbox instance with commands.run returning empty success."""
+    """A mock e2b Sandbox instance with commands.run returning empty success."""
     sb = MagicMock()
     sb.sandbox_id = SANDBOX_ID
     sb._envd_api_url = f"https://218.245.96.148:443/sandbox/{SANDBOX_ID}/49983"

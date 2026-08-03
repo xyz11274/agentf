@@ -27,7 +27,7 @@ struct Snapshot {
   int64_t      created_at = 0; // ms 时间戳
   std::string  store_path;     // 宿主机持久化绝对路径（E2B 模式为空）
   int64_t      size_bytes = 0;  // ≥0，运维指标
-  std::string  sandbox_mode;   // 沙箱模式：""（Local/Docker）/ "E2B" / "none"
+  std::string  sandbox_mode;   // 沙箱模式：""（Local/Docker）/ "e2b" / "none"
 };
 
 // SandboxSnapshots：快照生命周期管理
@@ -44,7 +44,7 @@ class SandboxSnapshots {
   // 后置：返回 Snapshot 实体（store_path 指向宿主机持久化目录，E2B 模式为空）
   // 跳过 dotfile（.agentfoundry/.venv/__pycache__/node_modules/.git），只保留交付物（B9）
   // 不变量 I-1：销毁时快照兜底，异常时 try/finally 触发
-  // sandbox_mode 区分 Local/Docker（""） vs E2B（"E2B"），影响 restore 路径
+  // sandbox_mode 区分 Local/Docker（""） vs E2B（"e2b"），影响 restore 路径
   Snapshot snapshot(const std::string& sandbox_id, const std::string& sandbox_mode = "");
 
   // restore_from_snapshot：从快照 fork 新沙箱

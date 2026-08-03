@@ -109,13 +109,13 @@ Snapshot SandboxSnapshots::snapshot(const std::string& sandbox_id, const std::st
 
   // Local/Docker 模式：拷贝 workdir 到 store_path；E2B 模式只在内存记录
   //（平台侧快照由 E2BSandbox::snapshot 调用 E2B SDK 完成）
-  if (sandbox_mode != "E2B") {
+  if (sandbox_mode != "e2b") {
     copy_dir_skip_dotfiles(workdir, store_path);
   }
 
   // 统计快照大小（运维指标）
   int64_t size = 0;
-  if (sandbox_mode != "E2B") {
+  if (sandbox_mode != "e2b") {
     for (const auto& entry : fs::recursive_directory_iterator(store_path, ec)) {
       if (entry.is_regular_file()) {
         size += static_cast<int64_t>(entry.file_size());
@@ -127,7 +127,7 @@ Snapshot SandboxSnapshots::snapshot(const std::string& sandbox_id, const std::st
   snap.snapshot_id = snap_id;
   snap.sandbox_id = sandbox_id;
   snap.created_at = now_ms();
-  snap.store_path = sandbox_mode == "E2B" ? "" : store_path;
+  snap.store_path = sandbox_mode == "e2b" ? "" : store_path;
   snap.size_bytes = size;
   snap.sandbox_mode = sandbox_mode;
   snapshots_.push_back(snap);
@@ -151,7 +151,7 @@ std::unique_ptr<sandbox::Sandbox> SandboxSnapshots::restore_from_snapshot(const 
   }
 
   // 按 sandbox_mode 分支：E2B → 平台侧 fork；Local/Docker → 本地 workdir 拷贝
-  if (found.sandbox_mode == "E2B") {
+  if (found.sandbox_mode == "e2b") {
     // E2B 分支：从已快照的源沙箱 fork 派生新沙箱
     sandbox::SandboxKey owner = lifecycle_.find_owner_by_sandbox_id(found.sandbox_id);
     sandbox::E2BSandbox::ForkParams fp;

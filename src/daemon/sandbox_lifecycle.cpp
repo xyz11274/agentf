@@ -141,7 +141,7 @@ void SandboxLifecycle::destroy(const std::string& sandbox_id) {
       sb->destroy();  // 幂等（B7）
       // 销毁后清理 workdir（仅 Local/Docker；E2B 的宿主机 workdir 是暂存目录，保留）
       // 用户语义：local 模式沙箱 = workdir 目录，kill 即删目录（2026-08-02 用户确认）
-      if (snapshot_ok && sb->sandbox_mode() != "E2B") {
+      if (snapshot_ok && sb->sandbox_mode() != "e2b") {
         std::error_code ec;
         fs::remove_all(sb->workdir(), ec);
         if (ec && ec != std::errc::no_such_file_or_directory) {
@@ -180,7 +180,7 @@ int SandboxLifecycle::destroy_by_agent(const std::string& agent_id) {
     sb->destroy();  // 幂等（B7）
     // 销毁后清理 workdir（仅 Local/Docker；E2B 的宿主机 workdir 是暂存目录，保留）
     // 与 destroy() 单删路径一致：用户语义 local 沙箱 = workdir 目录，销毁即删目录
-    if (snapshot_ok && sb->sandbox_mode() != "E2B") {
+    if (snapshot_ok && sb->sandbox_mode() != "e2b") {
       std::error_code ec;
       fs::remove_all(sb->workdir(), ec);
       if (ec && ec != std::errc::no_such_file_or_directory) {

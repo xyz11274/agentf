@@ -1,5 +1,5 @@
 """
-E2E 测试：agent-sandbox — 问答 + 图片生成全链路（E2B/Docker 沙箱模式）。
+E2E 测试：agent-sandbox — 问答 + 图片生成全链路（e2b/Docker 沙箱模式）。
 
 使用专用的 ``fixtures/agent-sandbox``，包含：
 - ``draw-image`` skill：纯本地图片生成（Python 标准库，不调外部 API）

@@ -2,7 +2,7 @@
 
 ToolExecutor 迁移（Phase 3，ADR 20260724-tools-runtime-refactor.md）：
 - 通过 create_executor() 抽象层路由，不再内部 if-else
-- sandbox-mode 由 factory 读取 AF_SANDBOX_MODE 决定 Host/HTTP/E2B
+- sandbox-mode 由 factory 读取 AF_SANDBOX_MODE 决定 Host/HTTP/e2b
 - 宿主侧保留路径 security 检查（sandbox_endpoint 为空时）
 - execute() 签名不变（skill_executor 兼容）
 - append 模式通过 read-append-write 在 executor 层实现（HostExecutor 无原生 append 支持）

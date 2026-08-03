@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-E2B 沙箱运维脚本 — 列出/清理/远程执行远端 E2B 沙箱。
+e2b 沙箱运维脚本 — 列出/清理/远程执行远端 e2b 沙箱。
 
 用法:
   # 列出所有运行中的沙箱
@@ -26,8 +26,8 @@ E2B 沙箱运维脚本 — 列出/清理/远程执行远端 E2B 沙箱。
   python3 scripts/e2b/sandbox_list.py run <sandbox_id> -- cat /home/user/output.txt
 
 环境变量:
-  E2B_API_URL         E2B API 地址（默认 http://218.245.96.148:30030）
-  E2B_API_KEY         E2B API 密钥（默认 e2b_000000000）
+  E2B_API_URL         e2b API 地址（默认 http://218.245.96.148:30030）
+  E2B_API_KEY         e2b API 密钥（默认 e2b_000000000）
   SSL_CERT_FILE       CA 证书路径（自签名证书时必填）
 """
 
@@ -54,7 +54,7 @@ _CA_CERT_PATH = str(Path(__file__).resolve().parent.parent.parent / "resource" /
 
 
 def _apply_ssl_patch() -> None:
-    """SSLPatch: 内部 E2B 部署使用 IP 直连，跳过证书验证。"""
+    """SSLPatch: 内部 e2b 部署使用 IP 直连，跳过证书验证。"""
     import ssl as _ssl
 
     if getattr(_ssl, "_agentflow_patched", False):
@@ -72,7 +72,7 @@ def _apply_ssl_patch() -> None:
     _ssl._agentflow_patched = True  # type: ignore[attr-defined]
 
 
-# 内部 E2B 部署用 path-based 反向代理（cubeproxy），SDK 构造的 hostname 路由
+# 内部 e2b 部署用 path-based 反向代理（cubeproxy），SDK 构造的 hostname 路由
 # （https://{port}-{id}.cube.app）不可达，需重写为 path-based 路由
 _DEFAULT_ENVD_PORT = 49983
 _SANDBOX_TARGET_HOST = "https://218.245.96.148:443"
@@ -101,7 +101,7 @@ def _patch_envd_url(sb) -> None:
 
 
 def _setup_env() -> None:
-    """设置 E2B SDK 环境变量。"""
+    """设置 e2b SDK 环境变量。"""
     os.environ.setdefault("E2B_API_URL", _DEFAULT_API_URL)
     os.environ.setdefault("E2B_API_KEY", _DEFAULT_API_KEY)
     # CA 证书：如果文件存在且未设置 SSL_CERT_FILE，自动配置
@@ -134,7 +134,7 @@ def _fmt_time(dt: datetime | None) -> str:
 
 
 def _connect_sandbox(sandbox_id: str) -> Sandbox:
-    """重连已有 E2B 沙箱。用 Sandbox.connect（SDK v2 的权威重连接口）。"""
+    """重连已有 e2b 沙箱。用 Sandbox.connect（SDK v2 的权威重连接口）。"""
     sb = Sandbox.connect(sandbox_id)
     # 重写 envd URL：内部部署用 path-based 反向代理，SDK 构造的 hostname 路由不可达
     _patch_envd_url(sb)
@@ -173,7 +173,7 @@ def _sandbox_age(sandbox_info: dict) -> timedelta | None:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
-    """列出 E2B 沙箱。"""
+    """列出 e2b 沙箱。"""
     _setup_env()
 
     # 构造查询条件
@@ -404,7 +404,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="E2B 沙箱运维工具 — 查询和清理远端沙箱",
+        description="e2b 沙箱运维工具 — 查询和清理远端沙箱",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )

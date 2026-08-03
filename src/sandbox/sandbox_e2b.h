@@ -68,7 +68,7 @@ class E2BSandbox : public Sandbox {
   void snapshot() override;  // FR-012：调用 e2b_lifecycle.py snapshot 保存远端磁盘状态
 
   // 沙箱模式标识——E2B（用于 SandboxSnapshots restore 分支判断）
-  std::string sandbox_mode() const override { return "E2B"; }
+  std::string sandbox_mode() const override { return "e2b"; }
 
   // 同步会话级用户上传目录到远端沙箱（agent-package-structure.md §2.2/§3.2）
   // 调 e2b_sync.py upload 增量同步 session_upload_dir 到 {remote_workspace_dir}/workspace/{session}/upload

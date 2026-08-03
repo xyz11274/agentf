@@ -2,14 +2,14 @@
 # Copyright (c) 2026 AgentFlow Authors
 # Licensed under MIT License
 #
-# E2B 沙箱生命周期管理脚本
+# e2b 沙箱生命周期管理脚本
 #
 # 用途：把原本内嵌在 src/sandbox/sandbox_e2b.cpp 里的 Python 代码抽出来，
 #       C++ 侧只负责 fork+execvp python3 e2b_lifecycle.py <subcommand> <args>。
 #
 # 子命令：
-#   create  创建 E2B 沙箱、上传 sandbox_http_server.py、后台启动、轮询就绪
-#   kill    幂等销毁 E2B 沙箱（已 kill 时无操作）
+#   create  创建 e2b 沙箱、上传 sandbox_http_server.py、后台启动、轮询就绪
+#   kill    幂等销毁 e2b 沙箱（已 kill 时无操作）
 #
 # 调用契约（被 E2BSandbox 通过 fork+execvp 调用）：
 #   python3 e2b_lifecycle.py create \
@@ -21,7 +21,7 @@
 #   python3 e2b_lifecycle.py kill --sandbox-id ID
 #
 # 环境变量：
-#   E2B_API_KEY     必填，E2B SDK 鉴权
+#   E2B_API_KEY     必填，e2b SDK 鉴权
 #
 # 退出码：
 #   0  成功（create 时 stdout 输出 JSON {"id":..., "host_url":...}）
@@ -144,7 +144,7 @@ def cmd_create(args: argparse.Namespace) -> int:
     sb = Sandbox.create(**create_kwargs)
     _log(f"create: sandbox_id={sb.sandbox_id}")
 
-    # 自定义 E2B 部署的 envd API 走 path-based 路由（非 hostname 路由）
+    # 自定义 e2b 部署的 envd API 走 path-based 路由（非 hostname 路由）
     # nginx 配置: server_name _; location ^~ /sandbox/<id>/<port>/
     # 因此需要覆盖 SDK 自动构造的 https://{port}-{id}.cube.app 地址
     target_host = "https://218.245.96.148:443"
@@ -214,9 +214,9 @@ def cmd_kill(args: argparse.Namespace) -> int:
 
 
 def cmd_snapshot(args: argparse.Namespace) -> int:
-    """为已创建的 E2B 沙箱创建文件系统快照（FR-012）。
+    """为已创建的 e2b 沙箱创建文件系统快照（FR-012）。
 
-    通过 E2B SDK 的 snapshot API 在平台侧保存沙箱磁盘状态，
+    通过 e2b SDK 的 snapshot API 在平台侧保存沙箱磁盘状态，
     快照可用于后续 Sandbox.create() 恢复。不下载文件到本地。
     """
     api_key = _check_api_key()
@@ -239,9 +239,9 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
 
 
 def cmd_fork(args: argparse.Namespace) -> int:
-    """从源沙箱 fork 出新沙箱（E2B 平台侧 restore 通道，§8.1）。
+    """从源沙箱 fork 出新沙箱（e2b 平台侧 restore 通道，§8.1）。
 
-    调用 E2B SDK Sandbox.fork() 从源沙箱的当前文件系统状态派生新沙箱。
+    调用 e2b SDK Sandbox.fork() 从源沙箱的当前文件系统状态派生新沙箱。
     新沙箱继承源沙箱的 filesystem（含已上传的 workspace 文件），
     然后启动 HTTP server 并应用 path-based routing patch。
 
@@ -328,37 +328,37 @@ def cmd_fork(args: argparse.Namespace) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="E2B 沙箱生命周期管理（create / kill / snapshot / fork）"
+        description="e2b 沙箱生命周期管理（create / kill / snapshot / fork）"
     )
     sub = parser.add_subparsers(dest="subcommand", required=True)
 
-    p_create = sub.add_parser("create", help="创建 E2B 沙箱并启动 HTTP server")
+    p_create = sub.add_parser("create", help="创建 e2b 沙箱并启动 HTTP server")
     p_create.add_argument("--traffic-access-token", required=True,
-                          help="E2B 公共 URL token 鉴权")
+                          help="e2b 公共 URL token 鉴权")
     p_create.add_argument("--sandbox-http-server-path", required=True,
                           help="宿主机侧 sandbox_http_server.py 绝对路径")
     p_create.add_argument("--sandbox-http-port", type=int, required=True,
                           help="沙箱内 HTTP server 监听端口")
     p_create.add_argument("--remote-workspace-dir", required=True,
-                          help="E2B 远端工作目录绝对路径")
+                          help="e2b 远端工作目录绝对路径")
     p_create.add_argument("--timeout", type=int, default=3600,
-                          help="E2B 沙箱超时秒数（默认 3600）")
+                          help="e2b 沙箱超时秒数（默认 3600）")
     p_create.add_argument("--template", default="base",
-                          help="E2B 沙箱模板 ID（默认 base）")
+                          help="e2b 沙箱模板 ID（默认 base）")
     p_create.add_argument("--network-allow-out",
                           help="沙箱出站网络 CIDR 列表 JSON 数组，如 '[\"10.0.0.0/8\"]'")
     p_create.set_defaults(func=cmd_create)
 
-    p_kill = sub.add_parser("kill", help="幂等销毁 E2B 沙箱")
-    p_kill.add_argument("--sandbox-id", required=True, help="E2B sandbox ID")
+    p_kill = sub.add_parser("kill", help="幂等销毁 e2b 沙箱")
+    p_kill.add_argument("--sandbox-id", required=True, help="e2b sandbox ID")
     p_kill.set_defaults(func=cmd_kill)
 
-    p_snapshot = sub.add_parser("snapshot", help="对 E2B 沙箱创建文件系统快照（FR-012）")
-    p_snapshot.add_argument("--sandbox-id", required=True, help="E2B sandbox ID")
+    p_snapshot = sub.add_parser("snapshot", help="对 e2b 沙箱创建文件系统快照（FR-012）")
+    p_snapshot.add_argument("--sandbox-id", required=True, help="e2b sandbox ID")
     p_snapshot.set_defaults(func=cmd_snapshot)
 
     p_fork = sub.add_parser("fork", help="从源沙箱 fork 出新沙箱（B3 restore 通道）")
-    p_fork.add_argument("--sandbox-id", required=True, help="源 E2B sandbox ID")
+    p_fork.add_argument("--sandbox-id", required=True, help="源 e2b sandbox ID")
     p_fork.add_argument("--sandbox-http-server-path", required=True,
                         help="宿主机侧 sandbox_http_server.py 绝对路径")
     p_fork.add_argument("--sandbox-http-port", type=int, required=True,

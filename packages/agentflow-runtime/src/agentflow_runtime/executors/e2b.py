@@ -1,6 +1,6 @@
-"""E2BExecutor — E2B SDK direct-connect provider for remote sandbox mode.
+"""E2BExecutor — e2b SDK direct-connect provider for remote sandbox mode.
 
-Connects to an existing E2B sandbox via ``Sandbox.connect()`` and executes
+Connects to an existing e2b sandbox via ``Sandbox.connect()`` and executes
 commands through ``sb.commands.run()``.  This is the most complex provider,
 encapsulating:
 
@@ -31,13 +31,13 @@ from agentflow_runtime.executors.base import (
 
 
 class E2BExecutor(ToolExecutor):
-    """E2B SDK direct-connect provider — remote sandbox mode (D-001 decision).
+    """e2b SDK direct-connect provider — remote sandbox mode (D-001 decision).
 
     The ``endpoint`` is injected by the daemon in the format:
     ``https://host:port/sandbox/{sandbox_id}/{port}``
     """
 
-    # E2B sandbox internal workspace path
+    # e2b sandbox internal workspace path
     SANDBOX_WORKSPACE = "/home/user/workspace"
 
     # Environment variables forwarded into the sandbox
@@ -75,7 +75,7 @@ class E2BExecutor(ToolExecutor):
     # -- sandbox connection -------------------------------------------------
 
     def _connect(self, timeout: int = 90):
-        """Connect to the E2B sandbox and apply SSL + URL patches.
+        """Connect to the e2b sandbox and apply SSL + URL patches.
 
         Returns a connected ``Sandbox`` instance with path-based routing.
         """
@@ -95,7 +95,7 @@ class E2BExecutor(ToolExecutor):
     def exec_command(
         self, command: str, timeout: int = 30, workdir: str | None = None
     ) -> ExecResult:
-        """Execute a shell command via E2B SDK ``commands.run``.
+        """Execute a shell command via e2b SDK ``commands.run``.
 
         Translates host paths to sandbox paths, forwards env vars, and
         translates output paths back.  Downloads generated images on success.

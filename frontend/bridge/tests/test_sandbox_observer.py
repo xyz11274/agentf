@@ -5,7 +5,7 @@
 - LocalProvider 走 daemon RPC（sandbox.list 枚举 / sandbox.destroy 销毁），
   数据源为 daemon 内存活跃沙箱（2026-08-02 重构，移除日志解析/目录扫描）
 - SandboxObserver kill/prune 分派：e2b 走 SDK、local/docker 走 daemon RPC（E2）
-- exec_command 两条通道：Local 走沙箱内 HTTP server /exec、E2B 走 SDK commands.run
+- exec_command 两条通道：Local 走沙箱内 HTTP server /exec、e2b 走 SDK commands.run
 """
 
 from __future__ import annotations

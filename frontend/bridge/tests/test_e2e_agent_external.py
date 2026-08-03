@@ -234,7 +234,7 @@ class TestExternalService:
 
         验证链路：
           bridge HTTP POST → daemon → agent → coordinator → skill_executor
-          → E2B/Docker 沙箱 → ext-service skill → 调真实外部 API
+          → e2b/Docker 沙箱 → ext-service skill → 调真实外部 API
           → 结果回传 → 响应
 
         注意：需要沙箱网络出站规则允许访问外部 API。

@@ -2,13 +2,13 @@
 # Copyright (c) 2026 AgentFlow Authors
 # Licensed under MIT License
 #
-# E2B 沙箱 workspace 双向同步脚本
+# e2b 沙箱 workspace 双向同步脚本
 #
-# 用途：E2BSandbox 构造时把宿主机 workdir 内容上传到 E2B 远端沙箱；
+# 用途：E2BSandbox 构造时把宿主机 workdir 内容上传到 e2b 远端沙箱；
 #       销毁前把远端 workdir 下载回宿主机 snapshot 目录。
 #
 # 设计要点：
-# - E2B SDK 无目录整体上传能力（官方文档明确），必须遍历+逐文件上传
+# - e2b SDK 无目录整体上传能力（官方文档明确），必须遍历+逐文件上传
 # - 使用 sandbox.files.write_files 批量上传，减少 RTT
 # - 下载用 sandbox.files.list 列目录 + read 逐文件下载
 # - 失败 fail-fast：上传失败抛异常（B22 不 fallback），下载失败记 warning 不阻塞销毁
@@ -18,7 +18,7 @@
 #   python3 e2b_sync.py download --sandbox-id ID --local-dir PATH --remote-dir PATH
 #
 # 环境变量：
-#   E2B_API_KEY     必填，E2B SDK 鉴权
+#   E2B_API_KEY     必填，e2b SDK 鉴权
 #   E2B_TEMPLATE    可选，默认 "base"
 #
 # 退出码：
@@ -92,13 +92,13 @@ def _check_api_key() -> str:
 
 
 def _connect_sandbox(sandbox_id: str) -> "Sandbox":
-    """重连已有 E2B 沙箱。用 Sandbox.connect（SDK v2 的权威重连接口）。"""
+    """重连已有 e2b 沙箱。用 Sandbox.connect（SDK v2 的权威重连接口）。"""
     try:
         sb = Sandbox.connect(sandbox_id)
         _patch_envd_url(sb)
         return sb
     except Exception as e:
-        _log(f"ERROR: failed to reconnect E2B sandbox id={sandbox_id}: {e}")
+        _log(f"ERROR: failed to reconnect e2b sandbox id={sandbox_id}: {e}")
         sys.exit(1)
 
 
@@ -189,7 +189,7 @@ def upload(sandbox_id: str, local_dir: str, remote_dir: str) -> None:
 # ── download：远端目录 → 本地目录 ────────────────────────────────────
 
 def _list_remote_files(sb, remote_dir: str):
-    """列远端目录所有文件。E2B files.list 返回文件列表。"""
+    """列远端目录所有文件。e2b files.list 返回文件列表。"""
     try:
         entries = sb.files.list(remote_dir)
     except Exception as e:
@@ -239,7 +239,7 @@ def download(sandbox_id: str, local_dir: str, remote_dir: str) -> None:
     """保存远端工作区。
 
     双策略：
-    - 优先：E2B 文件系统快照（1 次 RTT，保存到 E2B 平台侧），
+    - 优先：e2b 文件系统快照（1 次 RTT，保存到 e2b 平台侧），
             下次 Sandbox.create() 时可通过快照恢复，无需本地下载。
     - 降级：逐文件下载到本地（SDK 不支持 snapshot 时）。
     """
@@ -251,7 +251,7 @@ def download(sandbox_id: str, local_dir: str, remote_dir: str) -> None:
 
     _log(f"download: remote={remote_dir} → local={local_root}")
 
-    # 方案一：E2B 文件系统快照（1 次 RTT 保存全量磁盘状态）
+    # 方案一：e2b 文件系统快照（1 次 RTT 保存全量磁盘状态）
     # 仅在 SDK 支持 snapshot API 时生效，否则静默降级
     downloaded = 0
     failed = 0
@@ -260,7 +260,7 @@ def download(sandbox_id: str, local_dir: str, remote_dir: str) -> None:
             _log("download: attempting filesystem snapshot...")
             sb.snapshot(filesystem_only=True)
             _log("download: filesystem snapshot created")
-            # 快照已保存到 E2B 平台侧，无需逐文件下载
+            # 快照已保存到 e2b 平台侧，无需逐文件下载
             # 下次 Sandbox.create() 时可通过快照恢复
             return
     except (AttributeError, NotImplementedError, TypeError):
@@ -278,16 +278,16 @@ def download(sandbox_id: str, local_dir: str, remote_dir: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="E2B sandbox workspace 双向同步"
+        description="e2b sandbox workspace 双向同步"
     )
     parser.add_argument(
         "action",
         choices=["upload", "download"],
         help="upload=本地→远端(构造时), download=远端→本地(销毁前)",
     )
-    parser.add_argument("--sandbox-id", required=True, help="E2B sandbox ID")
+    parser.add_argument("--sandbox-id", required=True, help="e2b sandbox ID")
     parser.add_argument("--local-dir", required=True, help="宿主机本地目录绝对路径")
-    parser.add_argument("--remote-dir", required=True, help="E2B 远端目录绝对路径")
+    parser.add_argument("--remote-dir", required=True, help="e2b 远端目录绝对路径")
     args = parser.parse_args()
 
     if not os.path.isabs(args.local_dir):

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E2B fork 端到端 smoke test（独立脚本，不依赖 daemon）
+# e2b fork 端到端 smoke test（独立脚本，不依赖 daemon）
 # 验证全链路：create sandbox → upload 测试文件 → create_snapshot → fork → 验证 fork 继承文件
 # 用法：E2B_API_KEY=xxx bash scripts/tests/e2b_fork_smoke.sh
 set -euo pipefail
@@ -17,7 +17,7 @@ export SSL_CERT_FILE="${SSL_CERT_FILE:-$(pwd)/docs/env/e2b_CA.pem}"
 PYTHON="$(pwd)/frontend/bridge/.venv_unix/bin/python3"
 
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║         E2B Fork Smoke Test                             ║"
+echo "║         e2b Fork Smoke Test                             ║"
 echo "╚══════════════════════════════════════════════════════════╝"
 
 # ── 1. 创建测试环境文件 ──
@@ -97,5 +97,5 @@ echo "  cleaned"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
-echo "║   ✅ E2B Fork Smoke Test PASSED                        ║"
+echo "║   ✅ e2b Fork Smoke Test PASSED                        ║"
 echo "╚══════════════════════════════════════════════════════════╝"

@@ -1,4 +1,4 @@
-"""Generate & load ``agent-package.manifest.jsonc`` for E2B sandbox upload (T-004).
+"""Generate & load ``agent-package.manifest.jsonc`` for e2b sandbox upload (T-004).
 
 Scanning rules (§3.2):
   ✅ ``harness/skills/**``       — always included if exists
