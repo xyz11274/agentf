@@ -73,6 +73,10 @@ Json::Value build_callback_header(
 // 返回 "2026-07-03T09:42:51.123Z" 形式字符串（毫秒精度）。
 std::string current_timestamp_iso8601();
 
+// stderr/stdout 日志前缀时间戳——本地时间 + 可读格式 + 毫秒精度，
+// 如 "2026-08-03 12:34:05.123"。供 cerr/cout 输出加前缀，便于从日志时间序定位事件。
+std::string log_timestamp();
+
 // TC-SID-026: 将 SSE _artifacts 数组转换为 UserOutputObject 的 stringified JSON。
 // artifacts 为空或 null 时返回 ""（用于 Running 回调）。
 // artifacts 非空时返回 {"code":200101,"data":{"content":[...]}} 的字符串形式。
@@ -129,12 +133,20 @@ public:
     void dump_callback(const std::string& stream_status, int flag,
                        const std::string& text, bool is_final,
                        const std::string& user_output_object);
+    // dump_callback_request：记录发往 upstream 的完整 HTTP 请求体（F7/F7.1 铁律——
+    // 与外部系统交互的原始请求必须完整落盘，供联合 debug）。callback_type 区分
+    // "user_output"（流式回调）vs "task_status"（TaskStatusReport）；target 为完整 URL；
+    // body 为构造好的 JSON 请求体原文（cb_str/ts_str）。
+    void dump_callback_request(const std::string& callback_type,
+                              const std::string& target,
+                              const std::string& body);
     void dump_callback_result(const std::string& callback_type,
                               const std::string& via, int http_status,
                               const std::string& error);
 
 private:
     std::ofstream file_;
+    std::ofstream callback_file_;  // callback 类数据单独文件，便于和上游沟通
     bool enabled_ = false;
 };
 

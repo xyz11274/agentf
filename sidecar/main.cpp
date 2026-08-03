@@ -58,13 +58,13 @@ static std::shared_ptr<SidecarRouter> g_sidecar_router;
 
 static void signal_handler(int sig) {
     const char* name = (sig == SIGTERM) ? "SIGTERM" : (sig == SIGINT) ? "SIGINT" : "SIG?";
-    std::cerr << "[coremind_bridge] received " << name << ", shutting down..." << std::endl;
+    std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] received " << name << ", shutting down..." << std::endl;
     if (auto* svr = g_http_server.load()) {
         svr->stop();
     }
 #ifdef COREMIND_ENABLED
     // CoreMind 框架的 WaitProcessExit() 会处理框架级 shutdown
-    std::cerr << "[coremind_bridge] CoreMind framework will shut down" << std::endl;
+    std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] CoreMind framework will shut down" << std::endl;
 #endif
 }
 
@@ -162,7 +162,7 @@ static void forward_to_bridge(
 
     // 日志：记录入站请求（method + path + 缩进格式化的请求体）
     {
-        std::cerr << "[coremind_bridge] REQ " << req.method << " " << req.path
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] REQ " << req.method << " " << req.path
                   << " | body=\n" << pretty_json(req.body) << std::endl;
     }
 
@@ -174,7 +174,7 @@ static void forward_to_bridge(
         !original_request.isObject()) {
         res.status = 400;
         res.set_content(R"({"error":"invalid JSON request"})", "application/json");
-        std::cerr << "[coremind_bridge] RES " << req.method << " " << req.path
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] RES " << req.method << " " << req.path
                   << " 400 | body={\"error\":\"invalid JSON request\"}" << std::endl;
         return;
     }
@@ -191,7 +191,7 @@ static void forward_to_bridge(
         res.set_content(
             R"({"error":"unsupported message type: )" + header_msg_type + "/" + data_msg_type + R"("})",
             "application/json");
-        std::cerr << "[coremind_bridge] RES " << req.method << " " << req.path
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] RES " << req.method << " " << req.path
                   << " 400 | body={\"error\":\"unsupported message type\"}" << std::endl;
         return;
     }
@@ -240,7 +240,7 @@ static void forward_to_bridge(
     if (!sys_agent_entity.empty()) {
         // 对齐生产 HandleUserRequest：异步路径只返回 200 状态码（WriteStatueCode(200) 无 body）
         res.status = 200;
-        std::cerr << "[coremind_bridge] ASYNC " << req.path << " req=" << request_id
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] ASYNC " << req.path << " req=" << request_id
                   << " callback=" << sys_agent_entity << std::endl;
 
         // 后台线程处理 SSE 流 + POST 回调
@@ -277,7 +277,9 @@ static void forward_to_bridge(
                     sender, receiver, request_id, header);
                 cb["Header"]["EventTimeStamp"] = sidecar::current_timestamp_iso8601();
                 std::string cb_body = Json::writeString(json_writer(), cb);
-                std::cerr << "[coremind_bridge] CBF_CALLBACK req=" << request_id
+                dumper->dump_callback_request("user_output",
+                    "http://" + sys_agent_entity + "/coremind/systemagent/v1/callback", cb_body);
+                std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] CBF_CALLBACK req=" << request_id
                           << " status=" << stream_status << " flag=" << flag
                           << " text_len=" << text.size()
                           << " body=\n" << cb.toStyledString() << std::endl;
@@ -286,11 +288,11 @@ static void forward_to_bridge(
                             {{"Content-Type", "application/json"}},
                             cb_body, "application/json");
                 if (cb_res) {
-                    std::cerr << "[coremind_bridge] CBF_RESP req=" << request_id
+                    std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] CBF_RESP req=" << request_id
                               << " http=" << cb_res->status << std::endl;
                 } else {
                     auto err = cb_res.error();
-                    std::cerr << "[coremind_bridge] CBF_ERR req=" << request_id
+                    std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] CBF_ERR req=" << request_id
                               << " error=" << httplib::to_string(err) << std::endl;
                 }
                 return true;
@@ -298,7 +300,7 @@ static void forward_to_bridge(
 
             std::string body_str = Json::writeString(json_writer(), rest_body);
             dumper->dump_request(rest_body);
-            std::cerr << "[coremind_bridge] FWD " << stream_path << " req=" << request_id
+            std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] FWD " << stream_path << " req=" << request_id
                       << " | body=\n" << pretty_json(body_str) << std::endl;
             auto result = cli.Post(stream_path.c_str(), hdrs, body_str, "application/json",
                 [&](const char* data, size_t len) {
@@ -310,7 +312,7 @@ static void forward_to_bridge(
                         if (line.substr(0, 6) == "data: ") {
                             std::string payload = line.substr(6);
                             if (payload == "[DONE]") continue;
-                            std::cerr << "[coremind_bridge] SSE_RAW len=" << payload.size()
+                            std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] SSE_RAW len=" << payload.size()
                                       << " data=" << payload << std::endl;
                             Json::Value sse_json;
                             Json::CharReaderBuilder rdr;
@@ -343,13 +345,13 @@ static void forward_to_bridge(
                 ts_code = 500;
                 ts_status = "BridgeError";
                 ts_error_detail = httplib::to_string(result.error());
-                std::cerr << "[coremind_bridge] BRIDGE_ERR req=" << request_id
+                std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] BRIDGE_ERR req=" << request_id
                           << " error=" << ts_error_detail << std::endl;
             } else if (result->status != 200) {
                 ts_code = result->status;
                 ts_status = "BridgeError";
                 ts_error_detail = result->body.substr(0, 500);
-                std::cerr << "[coremind_bridge] BRIDGE_HTTP_ERR req=" << request_id
+                std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] BRIDGE_HTTP_ERR req=" << request_id
                           << " http=" << result->status
                           << " body=" << ts_error_detail << std::endl;
             } else if (processor.has_error()) {
@@ -357,12 +359,12 @@ static void forward_to_bridge(
                 ts_code = 500;
                 ts_status = "BridgeError";
                 ts_error_detail = processor.error_message();
-                std::cerr << "[coremind_bridge] SSE_STREAM_ERR req=" << request_id
+                std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] SSE_STREAM_ERR req=" << request_id
                           << " error=" << ts_error_detail << std::endl;
             } else {
                 ts_code = 200;
                 ts_status = "TaskCompleted";
-                std::cerr << "[coremind_bridge] STREAM_DONE req=" << request_id
+                std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] STREAM_DONE req=" << request_id
                           << " content_len=" << processor.accumulated_content().size() << std::endl;
             }
 
@@ -388,12 +390,14 @@ static void forward_to_bridge(
             // router_logic.h:72-73 呑约），与 UserOutput 回调（L278）和生产路径保持对称。
             task_status["Header"]["EventTimeStamp"] = sidecar::current_timestamp_iso8601();
             std::string ts_str = Json::writeString(json_writer(), task_status);
+            dumper->dump_callback_request("task_status",
+                "http://" + sys_agent_entity + "/coremind/systemagent/v1/callback", ts_str);
             httplib::Client ts_cli(sys_agent_entity.c_str());
             ts_cli.Post("/coremind/systemagent/v1/callback",
                         {{"Content-Type", "application/json"}},
                         ts_str, "application/json");
 
-            std::cerr << "[coremind_bridge] ASYNC_DONE req=" << request_id
+            std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] ASYNC_DONE req=" << request_id
                       << " ts_code=" << ts_code << " ts_status=" << ts_status
                       << " accumulated=" << processor.accumulated_content().size() << " chars" << std::endl;
         }).detach();
@@ -412,12 +416,12 @@ static void forward_to_bridge(
     sync_headers.emplace("X-Request-Id", request_id);
 
     std::string sync_body = Json::writeString(json_writer(), rest_body);
-    std::cerr << "[coremind_bridge] SYNC_FWD " << sync_path << " req=" << request_id
+    std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] SYNC_FWD " << sync_path << " req=" << request_id
               << " | body=\n" << pretty_json(sync_body) << std::endl;
     auto sync_response = sync_cli.Post(sync_path.c_str(), sync_headers, sync_body, "application/json");
     if (!sync_response) {
         res.status = 500;
-        std::cerr << "[coremind_bridge] SYNC_ERR req=" << request_id
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] SYNC_ERR req=" << request_id
                   << " upstream unreachable" << std::endl;
         return;
     }
@@ -437,7 +441,7 @@ static void forward_to_bridge(
 
     std::string sync_preview = sync_text.substr(0, 500);
     if (sync_text.size() > 500) sync_preview += "... (truncated)";
-    std::cout << "[coremind_bridge] sync response: request_id=" << request_id
+    std::cout << "[" << sidecar::log_timestamp() << "] [coremind_bridge] sync response: request_id=" << request_id
               << " resp_len=" << sync_text.size()
               << " content=" << sync_preview << std::endl;
 
@@ -504,7 +508,7 @@ static bool init_coremind_framework(int argc, char* argv[]) {
 
     CMFrm::Starter::FrameworkStarter::InitFramework(frameworkInitParam);
 
-    std::cout << "[coremind_bridge] CoreMind framework initialized"
+    std::cout << "[" << sidecar::log_timestamp() << "] [coremind_bridge] CoreMind framework initialized"
               << " — listening on CoreMind HTTP/2 + SSL" << std::endl;
 
     // 注册 HTTP/2 客户端配置（对标 HealthAgent InitUMOMFrm）
@@ -519,7 +523,7 @@ static bool init_coremind_framework(int argc, char* argv[]) {
 
     // 预缓存服务实例（对标 HealthAgent InitUMOMFrm）
     // 避免首次请求时额外的服务发现延迟
-    std::cout << "[coremind_bridge] Pre-caching CoreMind service instances..." << std::endl;
+    std::cout << "[" << sidecar::log_timestamp() << "] [coremind_bridge] Pre-caching CoreMind service instances..." << std::endl;
     auto required_services = split_services(std::getenv("COREMIND_REQUIRED_SERVICES"));
     auto optional_services = split_services(std::getenv("COREMIND_OPTIONAL_SERVICES"));
     for (const auto& name : required_services) {
@@ -536,7 +540,7 @@ static bool init_coremind_framework(int argc, char* argv[]) {
             std::cout << "  [precache] " << name << " resolved (optional)" << std::endl;
         }
     }
-    std::cout << "[coremind_bridge] Pre-cache complete" << std::endl;
+    std::cout << "[" << sidecar::log_timestamp() << "] [coremind_bridge] Pre-cache complete" << std::endl;
     return true;
 }
 
@@ -557,7 +561,7 @@ static bool init_mate_mind_sdk() {
                 break;
             case mmsdk::MM_LOG_ERR:
             case mmsdk::MM_LOG_FATAL:
-                std::cerr << "[matemindsdk][E] " << str << std::endl;
+                std::cerr << "[" << sidecar::log_timestamp() << "] [matemindsdk][E] " << str << std::endl;
                 break;
             default:
                 break;
@@ -567,11 +571,11 @@ static bool init_mate_mind_sdk() {
 
     constexpr const char* kConfigPath = "/opt/coremind/conf/matemindsdk.json";
     if (mmsdk::MM_SdkInit(kConfigPath, log_func) != 0) {
-        std::cerr << "[coremind_bridge] MateMind SDK init failed (config: " << kConfigPath << ")"
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] MateMind SDK init failed (config: " << kConfigPath << ")"
                   << std::endl;
         return false;
     }
-    std::cout << "[coremind_bridge] MateMind SDK initialized (callback port 27171)" << std::endl;
+    std::cout << "[" << sidecar::log_timestamp() << "] [coremind_bridge] MateMind SDK initialized (callback port 27171)" << std::endl;
     return true;
 }
 #endif
@@ -620,7 +624,7 @@ int main(int argc, char* argv[]) {
         if (env_url != nullptr) {
             llm_api_url = env_url;
         } else {
-            std::cerr << "[coremind_bridge] --llm-api-url or AF_LLM_BASE_URL required when using --uds-socket"
+            std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] --llm-api-url or AF_LLM_BASE_URL required when using --uds-socket"
                       << std::endl;
             std::cerr << "  (not needed with --coremind-mode, where IMInferScheduler is resolved via service discovery)"
                       << std::endl;
@@ -647,26 +651,26 @@ int main(int argc, char* argv[]) {
         UdsModelProxy uds_proxy;
         if (!uds_socket.empty()) {
             if (!uds_proxy.start(uds_socket, llm_api_url, true)) {
-                std::cerr << "[coremind_bridge] FAILED to start UDS proxy on "
+                std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] FAILED to start UDS proxy on "
                           << uds_socket << std::endl;
                 return 1;
             }
         }
 
         if (!init_coremind_framework(argc, argv)) {
-            std::cerr << "[coremind_bridge] FAILED to initialize CoreMind framework" << std::endl;
+            std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] FAILED to initialize CoreMind framework" << std::endl;
             return 1;
         }
 
         if (!init_mate_mind_sdk()) {
-            std::cerr << "[coremind_bridge] FAILED to initialize MateMind SDK" << std::endl;
+            std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] FAILED to initialize MateMind SDK" << std::endl;
             return 1;
         }
 
         // 阻塞等待 CoreMind 框架退出信号
         CMFrm::Starter::FrameworkStarter::WaitProcessExit();
 
-        std::cout << "[coremind_bridge] CoreMind framework stopped" << std::endl;
+        std::cout << "[" << sidecar::log_timestamp() << "] [coremind_bridge] CoreMind framework stopped" << std::endl;
         return 0;
     }
 #endif
@@ -678,7 +682,7 @@ int main(int argc, char* argv[]) {
     try {
         listen = parse_listen_address(listen_addr);
     } catch (const std::exception& error) {
-        std::cerr << "[coremind_bridge] invalid --listen value: " << error.what() << std::endl;
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] invalid --listen value: " << error.what() << std::endl;
         return 1;
     }
 
@@ -695,22 +699,22 @@ int main(int argc, char* argv[]) {
     UdsModelProxy uds_proxy;
     if (!uds_socket.empty()) {
         if (!uds_proxy.start(uds_socket, llm_api_url)) {
-            std::cerr << "[coremind_bridge] FAILED to start UDS proxy on " << uds_socket << std::endl;
+            std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] FAILED to start UDS proxy on " << uds_socket << std::endl;
             return 1;
         }
     }
 
-    std::cout << "[coremind_bridge] listening on " << listen_addr << std::endl;
-    std::cout << "[coremind_bridge] forwarding to bridge: " << bridge_url << std::endl;
+    std::cout << "[" << sidecar::log_timestamp() << "] [coremind_bridge] listening on " << listen_addr << std::endl;
+    std::cout << "[" << sidecar::log_timestamp() << "] [coremind_bridge] forwarding to bridge: " << bridge_url << std::endl;
 
     if (!svr.bind_to_port(listen.host, listen.port)) {
-        std::cerr << "[coremind_bridge] FAILED to bind " << listen_addr << std::endl;
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] FAILED to bind " << listen_addr << std::endl;
         g_http_server.store(nullptr);
         return 1;
     }
     svr.listen_after_bind();
 
-    std::cout << "[coremind_bridge] server stopped" << std::endl;
+    std::cout << "[" << sidecar::log_timestamp() << "] [coremind_bridge] server stopped" << std::endl;
     g_http_server.store(nullptr);
     return 0;
 }
@@ -721,13 +725,13 @@ static void configure_server(httplib::Server& svr, const std::string& bridge_url
     //  1. Health check (handled locally)
     // ═══════════════════════════════════════════════
     const auto health_handler = [](const httplib::Request& req, httplib::Response& res) {
-        std::cerr << "[coremind_bridge] REQ " << req.method << " " << req.path << std::endl;
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] REQ " << req.method << " " << req.path << std::endl;
         Json::Value json;
         json["status"] = "healthy";
         json["coremind"] = true;
         json["sidecar"] = true;
         set_json_response(res, json);
-        std::cerr << "[coremind_bridge] RES " << req.method << " " << req.path
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] RES " << req.method << " " << req.path
                   << " 200 | body={\"status\":\"healthy\"}" << std::endl;
     };
     svr.Get("/health", health_handler);
@@ -738,7 +742,7 @@ static void configure_server(httplib::Server& svr, const std::string& bridge_url
     // ═══════════════════════════════════════════════
     svr.Get("/sysagent/v1/scheduleTaskAbility",
             [](const httplib::Request& req, httplib::Response& res) {
-        std::cerr << "[coremind_bridge] REQ " << req.method << " " << req.path << std::endl;
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] REQ " << req.method << " " << req.path << std::endl;
         Json::Value json;
         json["agent_name"] = "outfit-assistant";
         json["version"] = "1.0.0";
@@ -751,7 +755,7 @@ static void configure_server(httplib::Server& svr, const std::string& bridge_url
         json["endpoint"] = "/coremind/systemagent/v1/callback";
         json["async_mode"] = true;
         set_json_response(res, json);
-        std::cerr << "[coremind_bridge] RES " << req.method << " " << req.path
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] RES " << req.method << " " << req.path
                   << " 200 | body={\"agent_name\":\"outfit-assistant\"}" << std::endl;
     });
 
@@ -785,7 +789,7 @@ static void configure_server(httplib::Server& svr, const std::string& bridge_url
     // ═══════════════════════════════════════════════
     svr.Get("/resolve/:name", [](const httplib::Request& req, httplib::Response& res) {
         auto name = req.path_params.at("name");
-        std::cerr << "[coremind_bridge] REQ " << req.method << " " << req.path << " (name=" << name << ")" << std::endl;
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] REQ " << req.method << " " << req.path << " (name=" << name << ")" << std::endl;
         auto result = resolve_service(name);
 
         Json::Value json;
@@ -804,12 +808,12 @@ static void configure_server(httplib::Server& svr, const std::string& bridge_url
         }
         int status = result.success ? 200 : 503;
         set_json_response(res, json, status);
-        std::cerr << "[coremind_bridge] RES " << req.method << " " << req.path
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] RES " << req.method << " " << req.path
                   << " " << status << " | body={\"status\":\"" << json["status"].asString() << "\"}" << std::endl;
     });
 
     svr.Post("/resolve/batch", [](const httplib::Request& req, httplib::Response& res) {
-        std::cerr << "[coremind_bridge] REQ " << req.method << " " << req.path << std::endl;
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] REQ " << req.method << " " << req.path << std::endl;
 
         Json::CharReaderBuilder reader_builder;
         Json::Value request_json;
@@ -820,7 +824,7 @@ static void configure_server(httplib::Server& svr, const std::string& bridge_url
             res.status = 400;
             res.set_content(R"({"status":"error","error":"services must be an array"})",
                             "application/json");
-            std::cerr << "[coremind_bridge] RES " << req.method << " " << req.path
+            std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] RES " << req.method << " " << req.path
                       << " 400 | body={\"status\":\"error\"}" << std::endl;
             return;
         }
@@ -855,7 +859,7 @@ static void configure_server(httplib::Server& svr, const std::string& bridge_url
             response["status"] = "partial";
         }
         set_json_response(res, response);
-        std::cerr << "[coremind_bridge] RES " << req.method << " " << req.path
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] RES " << req.method << " " << req.path
                   << " 200 | body={\"status\":\"" << response["status"].asString() << "\"}" << std::endl;
     });
 
@@ -872,25 +876,25 @@ static void configure_server(httplib::Server& svr, const std::string& bridge_url
     // ═══════════════════════════════════════════════
     svr.Post("/aisf/sysagent/v1/agentInstall",
              [](const httplib::Request& req, httplib::Response& res) {
-        std::cerr << "[coremind_bridge] REQ " << req.method << " " << req.path << std::endl;
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] REQ " << req.method << " " << req.path << std::endl;
         res.set_content(R"({"status":"ok","action":"install"})", "application/json");
-        std::cerr << "[coremind_bridge] RES " << req.method << " " << req.path
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] RES " << req.method << " " << req.path
                   << " 200 | body={\"status\":\"ok\",\"action\":\"install\"}" << std::endl;
     });
 
     svr.Post("/aisf/sysagent/v1/agentUpdate",
              [](const httplib::Request& req, httplib::Response& res) {
-        std::cerr << "[coremind_bridge] REQ " << req.method << " " << req.path << std::endl;
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] REQ " << req.method << " " << req.path << std::endl;
         res.set_content(R"({"status":"ok","action":"update"})", "application/json");
-        std::cerr << "[coremind_bridge] RES " << req.method << " " << req.path
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] RES " << req.method << " " << req.path
                   << " 200 | body={\"status\":\"ok\",\"action\":\"update\"}" << std::endl;
     });
 
     svr.Post("/aisf/sysagent/v1/agentUninstall",
              [](const httplib::Request& req, httplib::Response& res) {
-        std::cerr << "[coremind_bridge] REQ " << req.method << " " << req.path << std::endl;
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] REQ " << req.method << " " << req.path << std::endl;
         res.set_content(R"({"status":"ok","action":"uninstall"})", "application/json");
-        std::cerr << "[coremind_bridge] RES " << req.method << " " << req.path
+        std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] RES " << req.method << " " << req.path
                   << " 200 | body={\"status\":\"ok\",\"action\":\"uninstall\"}" << std::endl;
     });
 

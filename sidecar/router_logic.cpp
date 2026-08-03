@@ -197,6 +197,19 @@ std::string current_timestamp_iso8601() {
     return oss.str();
 }
 
+std::string log_timestamp() {
+    auto now = std::chrono::system_clock::now();
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+    localtime_r(&time_t_now, &tm);  // 本地时间，stderr 日志可读性优先
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%d %H:%M:%S")
+        << '.' << std::setfill('0') << std::setw(3) << ms.count();
+    return oss.str();
+}
+
 std::string build_user_output_object(const Json::Value& sse_artifacts) {
     if (!sse_artifacts.isArray() || sse_artifacts.empty()) return "";
 
@@ -227,7 +240,7 @@ std::vector<SSEChunkProcessor::Callback> SSEChunkProcessor::process(const Json::
         std::string msg = err_obj.get("message", "").asString();
         if (!msg.empty()) {
             error_message_ = msg;
-            std::cerr << "[sidecar_processor] SSE_ERROR msg=" << msg << std::endl;
+            std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_processor] SSE_ERROR msg=" << msg << std::endl;
         }
         return results;  // 错误 payload 不含 choices，自然走不到下面
     }
@@ -316,16 +329,23 @@ SidecarDumper::SidecarDumper(const std::string& request_id) {
     std::filesystem::create_directories(dir);
     std::string filename = std::string(dir) + "/" + dump_timestamp() + "_" + request_id + ".jsonl";
     file_.open(filename);
-    if (file_.is_open()) {
+    // callback 类数据（callback_out/callback_request/callback_result）单独落一个文件，
+    // 便于和上游联合 debug 时直接拿到完整的 callback 流，不用从混合 JSONL 里筛行。
+    std::string cb_filename = std::string(dir) + "/" + dump_timestamp() + "_" + request_id + "_callback.jsonl";
+    callback_file_.open(cb_filename);
+    if (file_.is_open() && callback_file_.is_open()) {
         enabled_ = true;
-        std::cerr << "[sidecar_dumper] dump file: " << filename << std::endl;
+        std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_dumper] dump file: " << filename
+                  << " | callback file: " << cb_filename << std::endl;
     } else {
-        std::cerr << "[sidecar_dumper] WARN: cannot open " << filename << std::endl;
+        std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_dumper] WARN: cannot open " << filename
+                  << " or " << cb_filename << std::endl;
     }
 }
 
 SidecarDumper::~SidecarDumper() {
     if (file_.is_open()) file_.close();
+    if (callback_file_.is_open()) callback_file_.close();
 }
 
 void SidecarDumper::dump_request(const Json::Value& body) {
@@ -368,8 +388,33 @@ void SidecarDumper::dump_callback(const std::string& stream_status, int flag,
     Json::StreamWriterBuilder w;
     w["indentation"] = "";
     w["emitUTF8"] = true;
-    file_ << Json::writeString(w, entry) << "\n";
+    const std::string line = Json::writeString(w, entry) + "\n";
+    file_ << line;
+    callback_file_ << line;
     file_.flush();
+    callback_file_.flush();
+}
+
+void SidecarDumper::dump_callback_request(const std::string& callback_type,
+                                          const std::string& target,
+                                          const std::string& body) {
+    if (!enabled_) return;
+    Json::Value entry;
+    entry["_direction"] = "callback_request";
+    entry["_timestamp"] = dump_timestamp();
+    entry["callback_type"] = callback_type;
+    entry["target"] = target;
+    // body 是构造好的 JSON 请求体原文（cb_str/ts_str）——原样落盘，不重新解析，
+    // 避免解析失败丢失现场或改变字段顺序（F7/F7.1：原始请求必须完整落盘）。
+    entry["body"] = body;
+    Json::StreamWriterBuilder w;
+    w["indentation"] = "";
+    w["emitUTF8"] = true;
+    const std::string line = Json::writeString(w, entry) + "\n";
+    file_ << line;
+    callback_file_ << line;
+    file_.flush();
+    callback_file_.flush();
 }
 
 void SidecarDumper::dump_callback_result(const std::string& callback_type,
@@ -388,8 +433,11 @@ void SidecarDumper::dump_callback_result(const std::string& callback_type,
     Json::StreamWriterBuilder w;
     w["indentation"] = "";
     w["emitUTF8"] = true;
-    file_ << Json::writeString(w, entry) << "\n";
+    const std::string line = Json::writeString(w, entry) + "\n";
+    file_ << line;
+    callback_file_ << line;
     file_.flush();
+    callback_file_.flush();
 }
 
-}
+}  // namespace sidecar

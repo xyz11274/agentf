@@ -11,3 +11,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "real_sandbox: tests requiring live e2b sandbox (E2B_API_KEY + AF_SANDBOX_ENDPOINT) — skip locally, run on CI with credentials",
+]

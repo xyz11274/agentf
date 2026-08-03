@@ -185,7 +185,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
         return CMFrm::COM::SYNC;
     }
 
-    std::cerr << "[sidecar_router] REQ " << header_msg_type << "/" << data_msg_type
+    std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] REQ " << header_msg_type << "/" << data_msg_type
               << " | body=\n" << pretty_json(req_body) << std::endl;
 
     Json::Value req_header = header;
@@ -322,7 +322,8 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                 std::string target = "https://" + sys_agent_entity + ":23767"
                                    + "/coremind/systemagent/v1/callback";
                 std::string cb_str = json_dumps(cb);
-                std::cerr << "[sidecar_router] CBF_CALLBACK req=" << request_id
+                dumper->dump_callback_request("user_output", target, cb_str);
+                std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_CALLBACK req=" << request_id
                           << " status=" << stream_status << " flag=" << flag
                           << " text_len=" << text.size()
                           << " target=" << target << std::endl;
@@ -336,7 +337,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                     req->AddHeader("Content-Type", "application/json");
                     req->AddBody(cb_str);
                     h2->Send(req);
-                    std::cerr << "[sidecar_router] CBF_SENT req=" << request_id
+                    std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_SENT req=" << request_id
                               << " via=coremind_h2" << std::endl;
                     dumper->dump_callback_result("user_output", "coremind_h2", 0, "");
                     return true;
@@ -350,11 +351,11 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                                        {{"Content-Type", "application/json"}},
                                        cb_str, "application/json");
                 if (cb_res) {
-                    std::cerr << "[sidecar_router] CBF_RESP req=" << request_id
+                    std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_RESP req=" << request_id
                               << " http=" << cb_res->status << std::endl;
                     dumper->dump_callback_result("user_output", "httplib", cb_res->status, "");
                 } else {
-                    std::cerr << "[sidecar_router] CBF_ERR req=" << request_id
+                    std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_ERR req=" << request_id
                               << " error=" << httplib::to_string(cb_res.error()) << std::endl;
                     dumper->dump_callback_result("user_output", "httplib", 0,
                                                   httplib::to_string(cb_res.error()));
@@ -373,7 +374,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
             sidecar::SSEChunkProcessor processor;
             std::string body_str = json_dumps(rest_body);
             dumper->dump_request(rest_body);
-            std::cerr << "[sidecar_router] FWD " << callback_path_stream << " req=" << request_id
+            std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] FWD " << callback_path_stream << " req=" << request_id
                       << " | body=\n" << pretty_json(body_str) << std::endl;
             // P3: Post 只用 ContentReceiver（去掉 Progress callback）。
             // 任务结束逻辑统一放到 Post 返回后，确保任何退出路径（成功/失败/超时）
@@ -397,7 +398,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                         std::string payload = line.substr(6);
                         // [DONE] 标记流结束，不阻断接收（让 Post 自然返回后统一处理）
                         if (payload == "[DONE]") continue;
-                        std::cerr << "[sidecar_router] SSE_RAW len=" << payload.size()
+                        std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] SSE_RAW len=" << payload.size()
                                   << " data=" << payload << std::endl;
                         // 解析 SSE json
                         Json::Value sse_json;
@@ -429,13 +430,13 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                 ts_code = 500;
                 ts_status = "BridgeError";
                 ts_error_detail = httplib::to_string(stream_result.error());
-                std::cerr << "[sidecar_router] BRIDGE_ERR req=" << request_id
+                std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] BRIDGE_ERR req=" << request_id
                           << " error=" << ts_error_detail << std::endl;
             } else if (stream_result->status != 200) {
                 ts_code = stream_result->status;
                 ts_status = "BridgeError";
                 ts_error_detail = stream_result->body.substr(0, 500);
-                std::cerr << "[sidecar_router] BRIDGE_HTTP_ERR req=" << request_id
+                std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] BRIDGE_HTTP_ERR req=" << request_id
                           << " http=" << stream_result->status
                           << " body=" << ts_error_detail << std::endl;
             } else if (processor.has_error()) {
@@ -443,12 +444,12 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                 ts_code = 500;
                 ts_status = "BridgeError";
                 ts_error_detail = processor.error_message();
-                std::cerr << "[sidecar_router] SSE_STREAM_ERR req=" << request_id
+                std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] SSE_STREAM_ERR req=" << request_id
                           << " error=" << ts_error_detail << std::endl;
             } else {
                 ts_code = 200;
                 ts_status = "TaskCompleted";
-                std::cerr << "[sidecar_router] STREAM_DONE req=" << request_id
+                std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] STREAM_DONE req=" << request_id
                           << " content_len=" << processor.accumulated_content().size()
                           << std::endl;
             }
@@ -480,7 +481,8 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
             std::string ts_url = "https://" + sys_agent_entity + ":23767"
                                + "/coremind/systemagent/v1/callback";
             std::string ts_str = json_dumps(task_status);
-            std::cerr << "[sidecar_router] CBF_TASKSTATUS req=" << request_id
+            dumper->dump_callback_request("task_status", ts_url, ts_str);
+            std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_TASKSTATUS req=" << request_id
                       << " code=" << ts_code << " status=" << ts_status
                       << " content_len=" << processor.accumulated_content().size()
                       << " target=" << ts_url << std::endl;
@@ -498,7 +500,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                     req->AddHeader("Content-Type", "application/json");
                     req->AddBody(ts_str);
                     h2->Send(req);
-                    std::cerr << "[sidecar_router] CBF_SENT req=" << request_id
+                    std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_SENT req=" << request_id
                               << " via=coremind_h2 type=task_status" << std::endl;
                     dumper->dump_callback_result("task_status", "coremind_h2", 0, "");
                     ts_sent = true;
@@ -514,11 +516,11 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                            {{"Content-Type", "application/json"}},
                            ts_str, "application/json");
                 if (ts_res) {
-                    std::cerr << "[sidecar_router] CBF_RESP req=" << request_id
+                    std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_RESP req=" << request_id
                               << " type=task_status http=" << ts_res->status << std::endl;
                     dumper->dump_callback_result("task_status", "httplib", ts_res->status, "");
                 } else {
-                    std::cerr << "[sidecar_router] CBF_ERR req=" << request_id
+                    std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_ERR req=" << request_id
                               << " type=task_status error=" << httplib::to_string(ts_res.error()) << std::endl;
                     dumper->dump_callback_result("task_status", "httplib", 0,
                                                   httplib::to_string(ts_res.error()));
@@ -550,7 +552,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
     http_headers.emplace("X-Request-Id", request_id);
 
     std::string body_str = json_dumps(rest_body);
-    std::cerr << "[sidecar_router] FWD " << callback_path << " req=" << request_id
+    std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] FWD " << callback_path << " req=" << request_id
               << " | body=\n" << pretty_json(body_str) << std::endl;
     auto response = cli.Post(callback_path.c_str(), http_headers, body_str, "application/json");
     if (!response) {
@@ -573,7 +575,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
 
     std::string resp_preview = resp_text.substr(0, 500);
     if (resp_text.size() > 500) resp_preview += "... (truncated)";
-    std::cout << "[sidecar_router] sync response: request_id=" << request_id
+    std::cout << "[" << sidecar::log_timestamp() << "] [sidecar_router] sync response: request_id=" << request_id
               << " task_id=" << task_id << " resp_len=" << resp_text.size()
               << " content=" << resp_preview << std::endl;
 
