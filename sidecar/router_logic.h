@@ -56,7 +56,8 @@ Json::Value build_health_response();
 
 // TC-SID-011: 构建回调 Header JSON，执行 Sender/Receiver 翻转并透传上游字段。
 // passthrough_keys = {"AcmSessionId", "ClientExField", "DeviceCategory",
-//                     "DeviceId", "SessionId", "TeamEnvironmentID", "UUID"}
+//                     "DeviceId", "SessionId", "SysAgentEntity",
+//                     "TeamEnvironmentID", "UUID"}
 Json::Value build_callback_header(
     const std::string& message_type,
     const std::string& task_id,
@@ -67,6 +68,10 @@ Json::Value build_callback_header(
     const std::string& original_receiver,
     const std::string& seq_num,
     const Json::Value& req_header);
+
+// sidecar_interface_contract.md §2-3: EventTimeStamp 需 ISO 8601 格式。
+// 返回 "2026-07-03T09:42:51.123Z" 形式字符串（毫秒精度）。
+std::string current_timestamp_iso8601();
 
 // TC-SID-026: 将 SSE _artifacts 数组转换为 UserOutputObject 的 stringified JSON。
 // artifacts 为空或 null 时返回 ""（用于 Running 回调）。
@@ -88,11 +93,19 @@ public:
     };
 
     // 处理一条 SSE data JSON，返回回调指令（should_send=false 表示跳过）。
-    // 内部维护 accumulated_content_ / final_text_ / accumulated_artifacts_。
+    // 内部维护 accumulated_content_ / final_text_ / accumulated_artifacts_ / error_message_。
+    // 检测 bridge SSE 错误信封 {"error":{"message":"...","code":-32000}}（chat_rest.py:1004-1021）：
+    // 命中时设置 error_message_，调用方应据此跳过 Completed 回调、改走错误 TaskStatus 分支。
     std::vector<Callback> process(const Json::Value& sse_json);
 
     // 流结束后构造 Completed 回调（携带 final_text + artifacts）。
+    // 注意：has_error()=true 时不应调用此方法——上游应改发错误 TaskStatus。
     Callback make_completed();
+
+    // bridge SSE 流内是否收到 error payload。true 表示流已以错误终止，
+    // 上游应跳过 Completed UserOutput，改发 TaskStatusCode=500 + BridgeError + error_message。
+    bool has_error() const { return !error_message_.empty(); }
+    const std::string& error_message() const { return error_message_; }
 
     const std::string& accumulated_content() const { return accumulated_content_; }
 
@@ -100,6 +113,7 @@ private:
     std::string accumulated_content_;
     std::string final_text_;
     Json::Value accumulated_artifacts_;
+    std::string error_message_;  // bridge SSE error payload 的 message，空=无错误
 };
 
 // ── SidecarDumper — 请求/响应 dump（dev/prod 共享） ────────────────

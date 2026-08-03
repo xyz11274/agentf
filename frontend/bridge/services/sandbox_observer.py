@@ -311,8 +311,14 @@ class E2BProvider:
         )
         return result
 
-    def exec_command(self, sandbox_id: str, command: str, timeout_ms: int = 30000) -> ExecResult:
-        """在 E2B 沙箱内执行单条命令（复用 cmd_run 已验证的 commands.run 通道）。"""
+    def exec_command(self, sandbox_id: str, command: str, timeout_ms: int = 30000, cwd: str | None = None) -> ExecResult:
+        """在 E2B 沙箱内执行单条命令（复用 cmd_run 已验证的 commands.run 通道）。
+
+        Args:
+            cwd: 工作目录（绝对路径），None 时由沙箱默认 cwd 决定。
+                前端在会话内持有当前 cwd 并逐条透传——沙箱本身不维护 webshell
+                session 状态（无状态通道，I-4 幂等）。
+        """
         self._setup_env()
         self._apply_ssl_patch()
         Sandbox, _, _ = self._import_sdk()
@@ -328,9 +334,12 @@ class E2BProvider:
             raise ProviderError(f"E2B connect {sandbox_id} failed: {exc}") from exc
 
         try:
-            result = sb.commands.run(command, timeout=timeout_ms / 1000.0)
+            kwargs = {"timeout": timeout_ms / 1000.0}
+            if cwd:
+                kwargs["cwd"] = cwd
+            result = sb.commands.run(command, **kwargs)
         except Exception as exc:  # noqa: BLE001
-            logger.error("sandbox_observer.e2b_exec failed sandbox_id=%s: %s", sandbox_id, exc)
+            logger.error("sandbox_observer.e2b_exec failed sandbox_id=%s cwd=%s: %s", sandbox_id, cwd, exc)
             raise ExecUnavailable(f"E2B exec {sandbox_id} failed: {exc}") from exc
 
         return ExecResult(
@@ -435,12 +444,18 @@ class LocalProvider:
             raise SandboxNotFound(f"Sandbox {sandbox_id} not found ({self._mode})")
         return found[0]
 
-    async def exec_command(self, sandbox_id: str, command: str, timeout_ms: int = 30000) -> ExecResult:
+    async def exec_command(self, sandbox_id: str, command: str, timeout_ms: int = 30000, cwd: str | None = None) -> ExecResult:
         """在沙箱内执行单条命令：向沙箱内 HTTP server 发 ``POST /exec``（tool=bash）。
 
         endpoint 来自 ``sandbox.list`` RPC（权威源，不再解析日志）。endpoint
-        缺失时抛 ExecUnavailable（L4 契约 §2.7）。危险命令过滤由沙箱侧
+        缺失时抛 ExecUnavailable（L4 呑约 §2.7）。危险命令过滤由沙箱侧
         ``is_dangerous()`` 承担（不重复实现，M2 收敛）。
+
+        Args:
+            cwd: 工作目录（绝对路径），None 时由沙箱默认 cwd 决定。
+                透传给 opts.working_dir → sandbox_http_server → runtime bash。
+                前端在会话内持有当前 cwd 并逐条透传——沙箱本身不维护 webshell
+                session 状态（无状态通道，I-4 幂等）。
         """
         if not command or not command.strip():
             raise ProviderError("command must not be empty")
@@ -459,10 +474,13 @@ class LocalProvider:
         import httpx  # 局部导入：observer 基础路径（list/get）不依赖网络客户端
 
         url = endpoint.rstrip("/") + "/exec"
+        opts: dict = {"timeout_ms": timeout_ms}
+        if cwd:
+            opts["working_dir"] = cwd
         payload = {
             "tool": "bash",
             "tool_params": {"command": command},
-            "opts": {"timeout_ms": timeout_ms},
+            "opts": opts,
         }
         try:
             resp = httpx.post(url, json=payload, timeout=max(timeout_ms / 1000.0 + 5, 10.0))
@@ -611,11 +629,11 @@ class SandboxObserver:
         )
         return result
 
-    async def exec_command(self, sandbox_id: str, command: str, timeout_ms: int = 30000) -> ExecResult:
+    async def exec_command(self, sandbox_id: str, command: str, timeout_ms: int = 30000, cwd: str | None = None) -> ExecResult:
         if self._mode == "e2b":
-            return await asyncio.to_thread(self._provider.exec_command, sandbox_id, command, timeout_ms)
+            return await asyncio.to_thread(self._provider.exec_command, sandbox_id, command, timeout_ms, cwd)
         # local/docker：async RPC 通道（LocalProvider 方法为 async）
-        return await self._provider.exec_command(sandbox_id, command, timeout_ms)
+        return await self._provider.exec_command(sandbox_id, command, timeout_ms, cwd)
 
 
 __all__ = [

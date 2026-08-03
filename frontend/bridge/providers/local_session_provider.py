@@ -145,6 +145,8 @@ class LocalSessionProvider(SessionProvider):
                 )
                 sess = self._row_to_session(row)
                 sess["last_active_at"] = now
+                logger.info("local_provider.session_found id=%s user=%s client=%s",
+                            row["id"], user_id, client_id)
                 return sess
 
             sid = _new_session_id()
@@ -289,6 +291,8 @@ class LocalSessionProvider(SessionProvider):
                     " VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (session_id, dialogue_id, user_input, agent_response, agent_name, artifacts, now),
                 )
+                logger.info("local_provider.save_dialogue ok id=%s dialogue=%s input_len=%d resp_len=%d",
+                            session_id, dialogue_id, len(user_input), len(agent_response))
         except sqlite3.Error as exc:
             # I-5: silent skip on persistence failure — never break the chat flow.
             logger.warning(
@@ -362,6 +366,8 @@ class LocalSessionProvider(SessionProvider):
         for r in rows:
             messages.append({"role": "user", "content": r["user_input"]})
             messages.append({"role": "assistant", "content": r["agent_response"]})
+        logger.info("local_provider.get_context session=%s rounds=%d msgs=%d",
+                    session_id, len(rows), len(messages))
         return ContextResult(messages=messages, memories=[])
 
     # ------------------------------------------------------------------

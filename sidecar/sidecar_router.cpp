@@ -16,6 +16,7 @@
 #include "router_logic.h"
 
 using sidecar::build_callback_header;
+using sidecar::current_timestamp_iso8601;
 using sidecar::build_health_response;
 using sidecar::build_user_output_object;
 using sidecar::parse_request_body;
@@ -317,7 +318,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                 cb["Header"] = build_callback_header("DataExchange", task_id, dialogue_id,
                                                       user_name, client_session_id,
                                                       sender, receiver, request_id, req_header);
-                cb["Header"]["EventTimeStamp"] = current_timestamp_ms();
+                cb["Header"]["EventTimeStamp"] = current_timestamp_iso8601();
                 std::string target = "https://" + sys_agent_entity + ":23767"
                                    + "/coremind/systemagent/v1/callback";
                 std::string cb_str = json_dumps(cb);
@@ -415,20 +416,35 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
             );
 
             // ── 任务结束：无论 bridge 成功/失败/超时都必须通知 upstream ──
+            // 错误分流（对齐 dev main.cpp forward_to_bridge + bridge chat_rest.py 错误两路）：
+            //   ① HTTP 不可达/断开/超时 → ts=500/BridgeError
+            //   ② HTTP 非 200          → ts=resp.status/BridgeError，body 含 error detail
+            //   ③ HTTP 200 但 SSE 流内 error payload → ts=500/BridgeError，error_message_ 携详情
+            //   ④ HTTP 200 且无错误    → ts=200/TaskCompleted，先发 Completed UserOutput 再发 TaskStatus
+            // 错误时跳过 Completed 回调（避免上游收到虚假"完成"信号），仅发错误 TaskStatus。
             int ts_code;
             std::string ts_status;
+            std::string ts_error_detail;  // 提取的 bridge 错误详情，拼到 TaskStatusReport 让上游可定位
             if (!stream_result) {
-                // P3: bridge 不可达/连接断开/超时 — 仍需告知 upstream 任务结束
                 ts_code = 500;
                 ts_status = "BridgeError";
+                ts_error_detail = httplib::to_string(stream_result.error());
                 std::cerr << "[sidecar_router] BRIDGE_ERR req=" << request_id
-                          << " error=" << httplib::to_string(stream_result.error())
-                          << std::endl;
+                          << " error=" << ts_error_detail << std::endl;
             } else if (stream_result->status != 200) {
                 ts_code = stream_result->status;
                 ts_status = "BridgeError";
+                ts_error_detail = stream_result->body.substr(0, 500);
                 std::cerr << "[sidecar_router] BRIDGE_HTTP_ERR req=" << request_id
-                          << " http=" << stream_result->status << std::endl;
+                          << " http=" << stream_result->status
+                          << " body=" << ts_error_detail << std::endl;
+            } else if (processor.has_error()) {
+                // bridge SSE 流内 error payload（chat_rest.py:1004-1021 daemon 通知中途失败/timeout）
+                ts_code = 500;
+                ts_status = "BridgeError";
+                ts_error_detail = processor.error_message();
+                std::cerr << "[sidecar_router] SSE_STREAM_ERR req=" << request_id
+                          << " error=" << ts_error_detail << std::endl;
             } else {
                 ts_code = 200;
                 ts_status = "TaskCompleted";
@@ -437,8 +453,8 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                           << std::endl;
             }
 
-            // 最后一次流式回调（is_final=true, stream_status=Completed）
-            {
+            // 仅 bridge 完全成功时发 Completed UserOutput 回调；错误时上游只收 TaskStatus（避免虚假完成）
+            if (ts_code == 200) {
                 auto completed = processor.make_completed();
                 post_callback(completed.stream_status, completed.flag, completed.text,
                               completed.is_final, completed.user_output_object);
@@ -450,12 +466,16 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                 "TaskStatusManagement", task_id, dialogue_id,
                 user_name, client_session_id,
                 sender, receiver, request_id, req_header);
-            task_status["Header"]["EventTimeStamp"] = current_timestamp_ms();
+            task_status["Header"]["EventTimeStamp"] = current_timestamp_iso8601();
             Json::Value ts_data;
             ts_data["MessageType"] = "TaskStatusReport";
             ts_data["TaskStatusCode"] = ts_code;
             ts_data["TaskStatusReport"] = ts_status;
-            ts_data["UserOutputText"] = processor.accumulated_content();
+            // 错误时把 bridge 详情拼到 UserOutputText，上游可据此定位（F7 错误可定位 + F1 禁止掩盖）
+            // 成功时仍是 coordinator 的最终回答 accumulated_content。
+            ts_data["UserOutputText"] = ts_code == 200
+                ? processor.accumulated_content()
+                : ("bridge_error: " + ts_error_detail);
             task_status["Data"] = ts_data;
             std::string ts_url = "https://" + sys_agent_entity + ":23767"
                                + "/coremind/systemagent/v1/callback";

@@ -177,10 +177,24 @@ Json::Value build_callback_header(
     header["SeqNum"] = seq_num;
 
     for (const auto& k : {"AcmSessionId", "ClientExField", "DeviceCategory",
-                          "DeviceId", "SessionId", "TeamEnvironmentID", "UUID"}) {
+                           "DeviceId", "SessionId", "SysAgentEntity",
+                           "TeamEnvironmentID", "UUID"}) {
         if (req_header.isMember(k)) header[k] = req_header[k];
     }
     return header;
+}
+
+std::string current_timestamp_iso8601() {
+    auto now = std::chrono::system_clock::now();
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+    gmtime_r(&time_t_now, &tm);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()) % 1000;
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%S")
+        << '.' << std::setfill('0') << std::setw(3) << ms.count() << 'Z';
+    return oss.str();
 }
 
 std::string build_user_output_object(const Json::Value& sse_artifacts) {
@@ -200,6 +214,23 @@ std::string build_user_output_object(const Json::Value& sse_artifacts) {
 
 std::vector<SSEChunkProcessor::Callback> SSEChunkProcessor::process(const Json::Value& sse_json) {
     std::vector<Callback> results;
+
+    // ── bridge SSE 错误信封检测（chat_rest.py:1004-1021）──────────────
+    // bridge 在 daemon 通知中途失败/timeout 时，HTTP 200 + SSE 推 error payload：
+    //   data: {"error":{"message":"...","code":-32000}}
+    //   data: [DONE]
+    // 命中时记录 error_message_，返回空 results（不再处理 chunk）。
+    // 调用方据此跳过 Completed 回调、改发错误 TaskStatus（F1 数据安全：禁止掩盖问题）。
+    if (!error_message_.empty()) return results;  // 已错则丢弃后续 chunk
+    const Json::Value& err_obj = sse_json["error"];
+    if (err_obj.isObject()) {
+        std::string msg = err_obj.get("message", "").asString();
+        if (!msg.empty()) {
+            error_message_ = msg;
+            std::cerr << "[sidecar_processor] SSE_ERROR msg=" << msg << std::endl;
+        }
+        return results;  // 错误 payload 不含 choices，自然走不到下面
+    }
 
     Json::Value chunk_artifacts = sse_json.get("_artifacts", sse_json.get("artifacts", Json::Value(Json::nullValue)));
     if (!chunk_artifacts.isNull()) {

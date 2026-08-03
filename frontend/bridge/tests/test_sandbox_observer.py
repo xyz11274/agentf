@@ -32,11 +32,17 @@ from services.sandbox_observer import (
 
 
 class _ExecServer(BaseHTTPRequestHandler):
-    """模拟沙箱内 HTTP server：POST /exec 返回固定 ExecResult。"""
+    """模拟沙箱内 HTTP server：POST /exec 返回固定 ExecResult。
+
+    last_request 类变量记录最近一次请求体，供测试断言 opts.working_dir 透传。
+    """
+
+    last_request: dict = {}
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+        _ExecServer.last_request = body
         assert body.get("tool") == "bash", f"tool 应为 bash: {body}"
         assert body.get("tool_params", {}).get("command"), f"command 缺失: {body}"
         resp = json.dumps(
@@ -61,6 +67,7 @@ class _ExecServer(BaseHTTPRequestHandler):
 @pytest.fixture
 def exec_server():
     """启动本地 HTTP server 模拟沙箱内 /exec 通道。"""
+    _ExecServer.last_request = {}
     server = ThreadingHTTPServer(("127.0.0.1", 0), _ExecServer)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -354,6 +361,42 @@ def test_local_exec_command_via_http(exec_server):
     assert result.command == "ls -la"
 
 
+def test_local_exec_command_cwd_passthrough(exec_server):
+    """cwd 透传：LocalProvider.exec_command(cwd=...) 应把 cwd 转给 opts.working_dir。
+
+    不变量（I-3 元数据一致性）：cwd 路径要原样透传到 POST body 的 opts.working_dir，
+    不得静默改写或丢弃。
+    """
+    client = _FakeDaemonClient(
+        result=_rpc_list_result(
+            [{"sandbox_id": "sb-http", "state": "RUNNING", "mode": "local", "endpoint": exec_server}],
+            server_now_ms=1_000,
+        )
+    )
+    provider = LocalProvider(mode="local", daemon_client=client)
+
+    asyncio.run(provider.exec_command("sb-http", "pwd", timeout_ms=10000, cwd="/workspace/logs"))
+
+    body = _ExecServer.last_request
+    assert body["opts"].get("working_dir") == "/workspace/logs"
+
+
+def test_local_exec_command_cwd_omitted(exec_server):
+    """cwd 缺省时 POST body 的 opts 不含 working_dir 键——保持沙箱默认 cwd 行为。"""
+    client = _FakeDaemonClient(
+        result=_rpc_list_result(
+            [{"sandbox_id": "sb-http", "state": "RUNNING", "mode": "local", "endpoint": exec_server}],
+            server_now_ms=1_000,
+        )
+    )
+    provider = LocalProvider(mode="local", daemon_client=client)
+
+    asyncio.run(provider.exec_command("sb-http", "pwd", timeout_ms=10000))
+
+    body = _ExecServer.last_request
+    assert "working_dir" not in body["opts"]
+
+
 def test_local_exec_command_no_endpoint():
     """RPC 返回的 endpoint 缺失时抛 ExecUnavailable。"""
     client = _FakeDaemonClient(
@@ -387,7 +430,7 @@ class _FakeCommandResult:
 class _FakeSandbox:
     def __init__(self, commands=None):
         self.commands = commands or SimpleNamespace(
-            run=lambda cmd, timeout: _FakeCommandResult()
+            run=lambda cmd, timeout, **kwargs: _FakeCommandResult()
         )
 
 
@@ -414,6 +457,50 @@ def test_e2b_exec_command_via_sdk(monkeypatch):
     assert result.exit_code == 0
     assert result.stdout == "e2b stdout"
     assert result.command == "echo hello"
+
+
+def test_e2b_exec_command_cwd_passthrough(monkeypatch):
+    """cwd 透传：E2BProvider.exec_command(cwd=...) 应把 cwd 转给 SDK commands.run 的 cwd kwargs。
+
+    不变量（I-3 元数据一致性）：cwd 路径要原样透传，不得静默改写或丢弃。
+    """
+    captured: dict = {}
+
+    def fake_run(cmd, timeout, **kwargs):
+        captured["cmd"] = cmd
+        captured["timeout"] = timeout
+        captured["kwargs"] = kwargs
+        return _FakeCommandResult()
+
+    provider = E2BProvider(api_url="http://127.0.0.1:1", api_key="k", ca_cert_path="")
+    fake_sb = _FakeSandbox(commands=SimpleNamespace(run=fake_run))
+
+    monkeypatch.setattr(provider, "_import_sdk", lambda: (object(), object(), object()))
+    monkeypatch.setattr(provider, "_connect_sandbox", lambda cls, sid: fake_sb)
+
+    provider.exec_command("sb-e2b", "pwd", timeout_ms=10000, cwd="/workspace/logs")
+
+    assert captured["cmd"] == "pwd"
+    assert captured["kwargs"].get("cwd") == "/workspace/logs"
+
+
+def test_e2b_exec_command_cwd_omitted(monkeypatch):
+    """cwd 缺省时不往 SDK kwargs 里加 cwd 键——保持 SDK 默认行为。"""
+    captured: dict = {}
+
+    def fake_run(cmd, timeout, **kwargs):
+        captured["kwargs"] = kwargs
+        return _FakeCommandResult()
+
+    provider = E2BProvider(api_url="http://127.0.0.1:1", api_key="k", ca_cert_path="")
+    fake_sb = _FakeSandbox(commands=SimpleNamespace(run=fake_run))
+
+    monkeypatch.setattr(provider, "_import_sdk", lambda: (object(), object(), object()))
+    monkeypatch.setattr(provider, "_connect_sandbox", lambda cls, sid: fake_sb)
+
+    provider.exec_command("sb-e2b", "pwd", timeout_ms=10000)
+
+    assert "cwd" not in captured["kwargs"]
 
 
 def test_e2b_exec_command_sdk_error(monkeypatch):

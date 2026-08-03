@@ -275,7 +275,7 @@ static void forward_to_bridge(
                 cb["Header"] = sidecar::build_callback_header(
                     "DataExchange", task_id, dialogue_id, user_name, client_session_id,
                     sender, receiver, request_id, header);
-                cb["Header"]["EventTimeStamp"] = current_timestamp_ms();
+                cb["Header"]["EventTimeStamp"] = sidecar::current_timestamp_iso8601();
                 std::string cb_body = Json::writeString(json_writer(), cb);
                 std::cerr << "[coremind_bridge] CBF_CALLBACK req=" << request_id
                           << " status=" << stream_status << " flag=" << flag
@@ -328,17 +328,45 @@ static void forward_to_bridge(
                     return true;
                 });
 
-            // SSE 流结束：Completed 回调 + TaskStatus 报文
-            auto completed = processor.make_completed();
-            post_callback(completed.stream_status, completed.flag, completed.text,
-                          completed.is_final, completed.user_output_object);
+            // ── 任务结束：无论 bridge 成功/失败/超时都必须通知 upstream ──
+            // 对齐生产 sidecar_router.cpp:417-506 的兜底逻辑：
+            //   bridge 不可达/连接断开/超时 → ts_code=500, ts_status="BridgeError"，跳过 Completed 回调
+            //   bridge HTTP 非 200          → ts_code=resp.status, ts_status="BridgeError"，跳过 Completed 回调
+            //   bridge 200                  → ts_code=200, ts_status="TaskCompleted"，先发 Completed 再发 TaskStatus
+            // 防止 upstream 永久等待，也避免 bridge 故障时上报虚假 200/TaskCompleted（F1 数据安全）。
+            int ts_code;
+            std::string ts_status;
+            if (!result) {
+                ts_code = 500;
+                ts_status = "BridgeError";
+                std::cerr << "[coremind_bridge] BRIDGE_ERR req=" << request_id
+                          << " error=" << httplib::to_string(result.error()) << std::endl;
+            } else if (result->status != 200) {
+                ts_code = result->status;
+                ts_status = "BridgeError";
+                std::cerr << "[coremind_bridge] BRIDGE_HTTP_ERR req=" << request_id
+                          << " http=" << result->status << std::endl;
+            } else {
+                ts_code = 200;
+                ts_status = "TaskCompleted";
+                std::cerr << "[coremind_bridge] STREAM_DONE req=" << request_id
+                          << " content_len=" << processor.accumulated_content().size() << std::endl;
+            }
 
+            // 仅 bridge 成功时发 Completed UserOutput 回调；失败时上游只收 TaskStatus（对齐生产）
+            if (ts_code == 200) {
+                auto completed = processor.make_completed();
+                post_callback(completed.stream_status, completed.flag, completed.text,
+                              completed.is_final, completed.user_output_object);
+            }
+
+            // TaskStatusReport（成功/失败都发，防止 upstream 永久等待）
             Json::Value task_status;
-            task_status["Data"] = sidecar::build_task_status_data(200, "TaskCompleted", processor.accumulated_content());
+            task_status["Data"] = sidecar::build_task_status_data(ts_code, ts_status, processor.accumulated_content());
             task_status["Header"] = sidecar::build_callback_header(
                 "TaskStatusManagement", task_id, dialogue_id, user_name, client_session_id,
                 sender, receiver, request_id, header);
-            task_status["Header"]["EventTimeStamp"] = current_timestamp_ms();
+            task_status["Header"]["EventTimeStamp"] = sidecar::current_timestamp_iso8601();
             std::string ts_str = Json::writeString(json_writer(), task_status);
             httplib::Client ts_cli(sys_agent_entity.c_str());
             ts_cli.Post("/coremind/systemagent/v1/callback",
@@ -346,6 +374,7 @@ static void forward_to_bridge(
                         ts_str, "application/json");
 
             std::cerr << "[coremind_bridge] ASYNC_DONE req=" << request_id
+                      << " ts_code=" << ts_code << " ts_status=" << ts_status
                       << " accumulated=" << processor.accumulated_content().size() << " chars" << std::endl;
         }).detach();
         return;

@@ -45,7 +45,7 @@ class _FakeObserver:
         from services.sandbox_observer import PruneResult
         return PruneResult(dry_run=dry_run, older_minutes=older_minutes, stale=[], killed=0, failed=0)
 
-    async def exec_command(self, sandbox_id, command, timeout_ms=30000):
+    async def exec_command(self, sandbox_id, command, timeout_ms=30000, cwd=None):
         from services.sandbox_observer import ExecResult
         return ExecResult(
             sandbox_id=sandbox_id, command=command, exit_code=0,
@@ -162,6 +162,50 @@ def test_exec_ok():
     assert data["command"] == "ls -la"
 
 
+def test_exec_cwd_passthrough():
+    """cwd 字段从请求体透传到 observer.exec_command——锁住 I-3 元数据一致性。
+
+    不变量：cwd 路径要原样透传，不得静默改写或丢弃。
+    """
+    captured: dict = {}
+
+    class _CapturingObserver(_FakeObserver):
+        async def exec_command(self, sandbox_id, command, timeout_ms=30000, cwd=None):
+            captured["cwd"] = cwd
+            from services.sandbox_observer import ExecResult
+            return ExecResult(
+                sandbox_id=sandbox_id, command=command, exit_code=0,
+                stdout=f"ok:{command}", stderr="", truncated=False, duration_ms=5,
+            )
+
+    client = _make_client(_CapturingObserver(mode="e2b"))
+    resp = client.post(
+        "/api/sandbox/sb-1/exec",
+        json={"command": "pwd", "cwd": "/workspace/logs"},
+    )
+    assert resp.status_code == 200, f"{resp.status_code} {resp.text}"
+    assert captured["cwd"] == "/workspace/logs"
+
+
+def test_exec_cwd_omitted():
+    """cwd 缺省时 observer 收到 None——保持 SDK 默认 cwd 行为。"""
+    captured: dict = {}
+
+    class _CapturingObserver(_FakeObserver):
+        async def exec_command(self, sandbox_id, command, timeout_ms=30000, cwd=None):
+            captured["cwd"] = cwd
+            from services.sandbox_observer import ExecResult
+            return ExecResult(
+                sandbox_id=sandbox_id, command=command, exit_code=0,
+                stdout=f"ok:{command}", stderr="", truncated=False, duration_ms=5,
+            )
+
+    client = _make_client(_CapturingObserver(mode="e2b"))
+    resp = client.post("/api/sandbox/sb-1/exec", json={"command": "pwd"})
+    assert resp.status_code == 200
+    assert captured["cwd"] is None
+
+
 def test_exec_empty_command():
     client = _make_client(_FakeObserver(mode="e2b"))
     resp = client.post("/api/sandbox/sb-1/exec", json={"command": "   "})
@@ -173,7 +217,7 @@ def test_exec_unavailable_mapping():
     from services.sandbox_observer import ExecUnavailable
 
     class _UnavailableObserver(_FakeObserver):
-        async def exec_command(self, sandbox_id, command, timeout_ms=30000):
+        async def exec_command(self, sandbox_id, command, timeout_ms=30000, cwd=None):
             raise ExecUnavailable("no endpoint for sandbox sb-x")
 
     client = _make_client(_UnavailableObserver(mode="local"))

@@ -193,6 +193,11 @@ def _exec_tool(tool_name: str, tool_params: dict, opts: dict) -> dict:
     if "timeout_ms" in opts:
         tool_input["timeout"] = opts["timeout_ms"] // 1000
 
+    # -- cwd override（webshell 跨命令 cwd 延续）：opts.working_dir 优先于默认 agent package dir --
+    # 仅对 bash 生效——read_file/write_file/edit_file 走 resolve_safe_path 基准 workdir（上面已取）
+    if tool_name == "bash" and opts.get("working_dir"):
+        tool_input["cwd"] = opts["working_dir"]
+
     # -- 环境变量白名单检查（FR-003）：opts.env_vars 只允许设置白名单内的变量 --
     env_vars = opts.get("env_vars", {})
     if env_vars:

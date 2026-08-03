@@ -153,6 +153,7 @@ async def sandbox_prune(
 class _ExecBody(BaseModel):
     command: str
     timeout_ms: int = 30000
+    cwd: str | None = None  # 工作目录（绝对路径）；跨命令 cwd 延续由前端会话内持有并逐条透传
 
 
 @router.post("/{sandbox_id}/exec", name="sandbox_exec")
@@ -160,16 +161,17 @@ async def sandbox_exec(request: Request, sandbox_id: str, body: _ExecBody) -> di
     """``POST /api/sandbox/{sandbox_id}/exec`` — webshell 命令执行（单条，完整输出）。
 
     模式通道：
-    - e2b: E2B SDK ``commands.run``
+    - e2b: E2B SDK ``commands.run``（cwd 透传给 SDK 一等参数）
     - local/docker: 沙箱内 HTTP server ``POST /exec``（tool=bash，沙箱侧 is_dangerous 防护）
     """
     command = body.command.strip()
     if not command:
         raise HTTPException(status_code=400, detail="command must not be empty")
+    cwd = body.cwd.strip() if body.cwd else None
     observer = _get_observer(request)
     try:
         result = await observer.exec_command(
-            sandbox_id=sandbox_id, command=command, timeout_ms=body.timeout_ms
+            sandbox_id=sandbox_id, command=command, timeout_ms=body.timeout_ms, cwd=cwd
         )
     except Exception as exc:  # noqa: BLE001
         raise _map_observer_error(exc) from exc

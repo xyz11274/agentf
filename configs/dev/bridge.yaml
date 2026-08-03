@@ -66,7 +66,7 @@ daemon_status_refresh_interval: 10.0
 
 # ── 沙箱管理（本地开发可观测性，见 docs/design/features/sandbox-management.md）──
 sandbox:
-  mode: "local"                  # e2b | local | docker（对齐 daemon sandbox.mode）
+  mode: "e2b"                  # e2b | local | docker（对齐 daemon sandbox.mode）
   # 注：workdir_root/snapshot_root/daemon_log_path 已废弃——local/docker 模式
   # 切换为 daemon RPC 数据源（sandbox.list），不再目录扫描/日志解析（2026-08-02 重构）
   e2b_api_url: "http://218.245.96.148:30030"

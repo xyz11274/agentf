@@ -56,7 +56,7 @@ def execute(tool_input: dict, sandbox_endpoint: str = None) -> str:
     保持签名不变（skill_executor.py L212 兼容）。
 
     Args:
-        tool_input: {"command": str, "timeout": int}
+        tool_input: {"command": str, "timeout": int, "cwd": str (optional)}
         sandbox_endpoint: 由 daemon 注入的沙箱 HTTP endpoint（B16）。
             传递给 create_executor 作为 endpoint override。
 
@@ -68,6 +68,10 @@ def execute(tool_input: dict, sandbox_endpoint: str = None) -> str:
 
     command = tool_input.get("command", "")
     timeout = tool_input.get("timeout", 30)
+    # cwd override（webshell 跨命令 cwd 延续）：外部传入优先，缺省回落到 agent package dir
+    # 不改默认语义——非 webshell 路径（skill_executor 等）不传 cwd，行为不变
+    cwd = tool_input.get("cwd")
+    workdir = cwd if cwd else _get_agent_package_dir()
 
     if not command.strip():
         return json.dumps({"error": "Empty command"}, ensure_ascii=False)
@@ -81,7 +85,7 @@ def execute(tool_input: dict, sandbox_endpoint: str = None) -> str:
 
     # 通过 Factory 获取 executor（替代原来的 if-else 分支）
     executor = create_executor(sandbox_endpoint=sandbox_endpoint)
-    result = executor.exec_command(command, timeout, workdir=_get_agent_package_dir())
+    result = executor.exec_command(command, timeout, workdir=workdir)
     # 统一序列化（ExecResult.to_dict() + 补 tool 字段）
     data = result.to_dict()
     data["tool"] = "bash"

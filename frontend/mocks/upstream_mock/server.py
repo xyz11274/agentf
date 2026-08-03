@@ -141,7 +141,7 @@ async def _push_event(task_id: str, event: dict) -> None:
 async def handle_send(request: Request) -> JSONResponse:
     """前端触发送指令——构造 AccessCtrl 请求，POST 到 sidecar。
 
-    请求体: {text: str, images?: str[], agent_id?: str}
+    请求体: {text: str, images?: str[], agent_id?: str, user_id?: str, client_id?: str, device_id?: str}
     """
     body = await request.json()
     user_text = body.get("text", "")
@@ -149,6 +149,11 @@ async def handle_send(request: Request) -> JSONResponse:
     agent_id = body.get("agent_id", "outfit-assistant")
     user_id = body.get("user_id", "mock-upstream-user")
     client_session_id = body.get("client_id", f"sim-session-{uuid.uuid4().hex[:12]}")
+    # DeviceId 与 ClientSessionId 是独立维度：DeviceId 标识物理设备，原样回传；
+    # ClientSessionId 标识会话，与 UserName 共同构成身份映射对（对齐 sidecar
+    # sidecar_router.cpp:191-199 的 user_name + client_session_id → bridge user_id + client_id）。
+    # 不复用 client_session_id，否则抹平二者分离的契约，掩盖上游对设备维度的依赖。
+    device_id = body.get("device_id", f"sim-device-{uuid.uuid4().hex[:12]}")
     task_id = f"sim_task_{datetime.now(timezone.utc).strftime('%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
     # 构造 AccessCtrl 请求体（带 SysAgentEntity → 异步回调模式）
@@ -161,7 +166,7 @@ async def handle_send(request: Request) -> JSONResponse:
             "Sender": "UpstreamMock",
             "Receiver": "SysAgent",
             "UserName": user_id,
-            "DeviceId": client_session_id,
+            "DeviceId": device_id,
             "DeviceCategory": "2",
             "UUID": f"mock_{uuid.uuid4().hex[:12]}",
             "ClientSessionId": client_session_id,
