@@ -734,6 +734,7 @@ std::string UDSServer::handle_response_push(const std::string& params, int64_t i
   std::string content = extract_json_string(params, "content");
   std::string type_str = extract_json_string(params, "type");
   std::string final_str = extract_json_string(params, "final");
+  std::string source = extract_json_string(params, "source");
   std::string skill = extract_json_string(params, "skill");
   std::string round_str = extract_json_string(params, "round");
   std::string status = extract_json_string(params, "status");
@@ -753,7 +754,7 @@ std::string UDSServer::handle_response_push(const std::string& params, int64_t i
     return build_error_response(-1, "response_push callback not configured", id);
   }
 
-  bool success = response_push_callback_(session_id, dialogue_id, content, type_str, skill, round_str, status);
+  bool success = response_push_callback_(session_id, dialogue_id, content, type_str, source, skill, round_str, status);
   if (success) {
     return build_success_response("{\"success\":true,\"queued\":true}", id);
   }

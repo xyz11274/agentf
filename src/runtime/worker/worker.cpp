@@ -120,6 +120,7 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
                                        const std::string& dialogue_id,
                                        const std::string& content,
                                        const std::string& type,
+                                       const std::string& source,
                                        const std::string& skill,
                                        const std::string& round_str,
                                        const std::string& status) -> bool {
@@ -145,6 +146,7 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
           }
         }
         payload += "\",\"type\":\"" + type + "\",\"seq\":" + std::to_string(seq);
+        if(!source.empty()) payload += ",\"source\":\"" + source + "\"";
         if(!skill.empty())  payload += ",\"skill\":\"" + skill + "\"";
         if(!round_str.empty()) payload += ",\"round\":\"" + round_str + "\"";
         if(!status.empty()) payload += ",\"status\":\"" + status + "\"";

@@ -6,6 +6,7 @@
 #include "daemon/rpc_handler.h"
 
 #include <chrono>
+#include <cctype>
 #include <csignal>
 #include <filesystem>
 #include <sstream>
@@ -231,6 +232,10 @@ void RpcHandler::register_all(RpcServer& server) {
       [this](const std::string& p, int64_t id, int, ChannelType) { return handle_sandbox_read_file(p, id); });
   server.register_handler("sandbox.upload_file",
       [this](const std::string& p, int64_t id, int, ChannelType) { return handle_sandbox_upload_file(p, id); });
+  server.register_handler("sandbox.list",
+      [this](const std::string& p, int64_t id, int, ChannelType) { return handle_sandbox_list(p, id); });
+  server.register_handler("sandbox.destroy",
+      [this](const std::string& p, int64_t id, int, ChannelType) { return handle_sandbox_destroy(p, id); });
 }
 
 // --- Query methods ---
@@ -1140,6 +1145,119 @@ std::string RpcHandler::handle_sandbox_upload_file(const std::string& params, in
   // 2. 沙箱不存在——upload 不走快照回退通道（快照是只读的）
   return build_success("{\"written\":false,\"error\":\"SANDBOX_NOT_FOUND\","
                        "\"message\":\"sandbox not active: " + json_escape(sandbox_id) + "\"}", id);
+}
+
+std::string RpcHandler::handle_sandbox_list(const std::string& params, int64_t id) {
+  // 沙箱列表（E1：透传 SandboxLifecycle::list_active()，三模式统一）
+  // 参数：可选 state 过滤（RUNNING/STOPPED/RECYCLING，不区分大小写）
+  // 响应：{"sandboxes": [{sandbox_id, state, mode, owner:{user_id,client_id,agent_id},
+  //                        endpoint, workdir}], "total": N}
+  // 设计权威源：docs/design/features/sandbox-management.md 演进方向 E1
+  std::string state_filter = extract_json_string_local(params, "state");
+  for (char& c : state_filter) {
+    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  }
+
+  rapidjson::Document doc;
+  doc.SetObject();
+  rapidjson::Document::AllocatorType& alloc = doc.GetAllocator();
+  rapidjson::Value arr(rapidjson::kArrayType);
+
+  if (sandbox_lifecycle_) {
+    // mode：透传配置（local/docker/e2b），与 bridge 观测侧对齐
+    std::string mode = sandbox_lifecycle_->config().sandbox_config.mode;
+    auto active = sandbox_lifecycle_->list_active();
+    for (const auto& sb : active) {
+      if (!sb) continue;
+      std::string state_str;
+      switch (sb->state()) {
+        case sandbox::SandboxState::RUNNING:   state_str = "RUNNING"; break;
+        case sandbox::SandboxState::STOPPED:   state_str = "STOPPED"; break;
+        case sandbox::SandboxState::RECYCLING: state_str = "RECYCLING"; break;
+      }
+      if (!state_filter.empty() && state_str != state_filter) continue;
+
+      rapidjson::Value item(rapidjson::kObjectType);
+      rapidjson::Value v;
+      v.SetString(sb->id().c_str(), static_cast<rapidjson::SizeType>(sb->id().size()), alloc);
+      item.AddMember("sandbox_id", v.Move(), alloc);
+      v.SetString(state_str.c_str(), static_cast<rapidjson::SizeType>(state_str.size()), alloc);
+      item.AddMember("state", v.Move(), alloc);
+      v.SetString(mode.c_str(), static_cast<rapidjson::SizeType>(mode.size()), alloc);
+      item.AddMember("mode", v.Move(), alloc);
+
+      const sandbox::SandboxKey& owner = sb->owner();
+      rapidjson::Value owner_obj(rapidjson::kObjectType);
+      v.SetString(owner.user_id.c_str(), static_cast<rapidjson::SizeType>(owner.user_id.size()), alloc);
+      owner_obj.AddMember("user_id", v.Move(), alloc);
+      v.SetString(owner.client_id.c_str(), static_cast<rapidjson::SizeType>(owner.client_id.size()), alloc);
+      owner_obj.AddMember("client_id", v.Move(), alloc);
+      v.SetString(owner.agent_id.c_str(), static_cast<rapidjson::SizeType>(owner.agent_id.size()), alloc);
+      owner_obj.AddMember("agent_id", v.Move(), alloc);
+      item.AddMember("owner", owner_obj.Move(), alloc);
+
+      const std::string& ep = sb->endpoint();
+      if (!ep.empty()) {
+        v.SetString(ep.c_str(), static_cast<rapidjson::SizeType>(ep.size()), alloc);
+        item.AddMember("endpoint", v.Move(), alloc);
+      }
+      const std::string& wd = sb->workdir();
+      if (!wd.empty()) {
+        v.SetString(wd.c_str(), static_cast<rapidjson::SizeType>(wd.size()), alloc);
+        item.AddMember("workdir", v.Move(), alloc);
+      }
+      // FR-009：最近活跃时间戳（steady_clock ms，GC 闲置判定依据）。
+      // bridge 侧 prune 用它计算闲置时长（与 daemon GC 同一语义）。
+      item.AddMember("last_active_at", sb->last_active_at(), alloc);
+      arr.PushBack(item.Move(), alloc);
+    }
+  }
+
+  int total = static_cast<int>(arr.Size());
+  doc.AddMember("sandboxes", arr.Move(), alloc);
+  doc.AddMember("total", total, alloc);
+  // server_now_ms：daemon 当前 steady_clock 时间（与 last_active_at 同基准）。
+  // bridge 用它计算闲置时长（idle = server_now_ms - last_active_at），
+  // 避免跨进程时钟基准假设（F11 不猜接口，时间基准由权威源提供）。
+  doc.AddMember("server_now_ms", now_ms(), alloc);
+  return build_success(rj_stringify(doc), id);
+}
+
+std::string RpcHandler::handle_sandbox_destroy(const std::string& params, int64_t id) {
+  // 沙箱销毁（E2：透传 SandboxLifecycle::destroy()，幂等单删）
+  // 参数：sandbox_id（沙箱唯一标识）
+  // 响应：{"sandbox_id": ..., "destroyed": true/false, "already_gone": true/false}
+  // 幂等语义（B7）：未命中视为 already_gone=true（对齐 E2B kill 语义）
+  // 设计权威源：docs/design/features/sandbox-management.md 演进方向 E2
+  std::string sandbox_id = extract_json_string_local(params, "sandbox_id");
+  if (sandbox_id.empty()) {
+    return build_error(-32602, "Invalid params: need sandbox_id", id);
+  }
+  if (!sandbox_lifecycle_) {
+    // mode=none：无沙箱子系统，任何 id 都视为已消失
+    return build_success(
+        "{\"sandbox_id\":\"" + json_escape(sandbox_id) +
+        "\",\"destroyed\":false,\"already_gone\":true}", id);
+  }
+
+  // 先确认存在性（list_active 匹配）——未命中则幂等已消失
+  bool found = false;
+  for (const auto& sb : sandbox_lifecycle_->list_active()) {
+    if (sb && sb->id() == sandbox_id) {
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    return build_success(
+        "{\"sandbox_id\":\"" + json_escape(sandbox_id) +
+        "\",\"destroyed\":false,\"already_gone\":true}", id);
+  }
+
+  sandbox_lifecycle_->destroy(sandbox_id);  // 幂等：内部已处理已销毁情况
+  return build_success(
+      "{\"sandbox_id\":\"" + json_escape(sandbox_id) +
+      "\",\"destroyed\":true,\"already_gone\":false}", id);
 }
 
 std::string RpcHandler::_resolve_session_upload_dir(const std::string& agent_id,

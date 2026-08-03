@@ -34,10 +34,12 @@ from client import DaemonClient, DaemonConnectionError, DaemonTimeoutError
 from config import settings
 from providers import LocalSessionProvider
 from services import AgentflowSessionSync
+from services.sandbox_observer import SandboxObserver
 from routes import agents as agents_routes
 from routes import chat as chat_routes
 from routes import daemon as daemon_routes
 from routes import llm_trace as llm_trace_routes
+from routes import sandbox as sandbox_routes
 from routes import sessions as sessions_routes
 from routes.artifacts import router as artifacts_router
 from routes.aisf_tasks import router as aisf_tasks_router
@@ -71,6 +73,13 @@ if not any(isinstance(h, logging.FileHandler) for h in _root_logger.handlers):
     _fh.setFormatter(logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
     _root_logger.addHandler(_fh)
+    # 移除 basicConfig 添加的 StreamHandler（stderr）——start_bridge.sh 已把
+    # stdout/stderr 重定向进 bridge.log（>> file 2>&1），StreamHandler 与 FileHandler
+    # 会写同一文件导致同一行日志打印双份。FileHandler 是唯一文件落点。
+    for _h in list(_root_logger.handlers):
+        if isinstance(_h, logging.StreamHandler) and not isinstance(_h, logging.FileHandler):
+            _root_logger.removeHandler(_h)
+            logger.info("Removed duplicate StreamHandler (stderr redirected to %s)", _LOG_FILE)
     logger.info("FileHandler attached: %s", _LOG_FILE)
 
 # Suppress noisy websocket keepalive DEBUG logs (module-level, runs early).
@@ -169,6 +178,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _daemon_status_poll_loop(runtime_state, daemon_client),
         name="bridge.daemon_status_poll",
     )
+
+    # --- Sandbox observer (local dev observability) ---------------------------
+    # 观测适配层按 sandbox.mode 分派数据源（e2b SDK / daemon 日志 / 目录扫描）；
+    # local/docker 模式的 kill/prune 经 daemon_client 调 sandbox.destroy RPC（E2），
+    # daemon 离线时构造不失败（_daemon_client=None，kill/prune 返回 502 兜底）。
+    # 初始化失败不阻断 Bridge 启动（路由返回 502 兜底）。
+    try:
+        runtime_state.sandbox_observer = SandboxObserver(settings, daemon_client=daemon_client)
+        app.state.sandbox_observer = runtime_state.sandbox_observer
+        logger.info("sandbox observer initialized mode=%s", settings.sandbox_mode)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("sandbox observer init failed (suppressed): %s", exc)
 
     # --- Session status sync (Phase 2) --------------------------------------
     # Best-effort background sync of agentflow→Bridge session status.
@@ -384,11 +405,24 @@ class _RequestDebugMiddleware(BaseHTTPMiddleware):
         # ── 包装响应以捕获 body ──
         response = await call_next(request)
 
-        if isinstance(response, StreamingResponse):
-            # 对于流式响应，收集 body chunks 后重组
+        # SSE 流式响应（text/event-stream）：收集全部 chunks 再重组会破坏流式
+        # 实时性（前端要等整个流结束才能收到），直接透传不捕获 body。
+        if response.headers.get("content-type", "").startswith("text/event-stream"):
+            logger.info(
+                "<<< %s %s status=%d body=<streaming>",
+                request.method, request.url.path, response.status_code,
+            )
+            return response
+
+        # Starlette BaseHTTPMiddleware 会把下游响应包装为内部 _StreamingResponse
+        # （继承 Response 而非 StreamingResponse，仅有 body_iterator），
+        # 因此不能只用 isinstance(StreamingResponse) 判断——统一按 body_iterator 处理。
+        if hasattr(response, "body_iterator"):
+            # 收集 body chunks 后重组（跳过 ASGI 控制消息，如 pathsend）
             chunks: list[bytes] = []
             async for chunk in response.body_iterator:
-                chunks.append(chunk)
+                if isinstance(chunk, bytes):
+                    chunks.append(chunk)
             resp_body = b"".join(chunks)
             resp_preview = resp_body[:_MAX_RESP_LOG].decode("utf-8", errors="replace")
             if len(resp_body) > _MAX_RESP_LOG:
@@ -476,6 +510,11 @@ bridge_app.include_router(packages_router)
 # prefix, so the full mount path is ``/api/daemon/status`` and
 # ``/api/daemon/uptime`` — no extra wrapping needed.
 bridge_app.include_router(daemon_routes.router)
+
+
+# Sandbox management routes (local dev observability). Own ``/api/sandbox``
+# prefix; reads SandboxObserver from ``app.state.sandbox_observer``.
+bridge_app.include_router(sandbox_routes.router)
 
 
 # LLM Trace routes — Phase 1, reads DataBus UDS directly (bypasses daemon).

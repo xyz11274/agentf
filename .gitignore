@@ -117,7 +117,9 @@ cmake_install.cmake
 cmake-build-debug/
 cmake-build-release/
 sidecar/build-dev/
-sidecar/build-test
+sidecar/build-test/
+sidecar/build-release/
+build-test-sidecar
 CMakeCache.txt
 CMakeFiles/
 coverage/
@@ -189,4 +191,6 @@ examples/agent/outfit-assistant/harness/skills/dashscope_outfit_skills/outfit-st
 examples/agent/outfit-assistant/harness/skills/dashscope_outfit_skills/forge-image-gen/assets/
 examples/agent/outfit-assistant/.agentoid/
 examples/agent/outfit-assistant/workspace
+examples/agent/outfit-assistant/harness/skills/dashscope_outfit_skills/forge-image-gen/scripts/assets
+examples/agent/outfit-assistant/harness/output
 ###

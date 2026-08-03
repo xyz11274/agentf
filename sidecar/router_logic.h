@@ -1,8 +1,10 @@
 #pragma once
 
+#include <fstream>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 #include <json/json.h>
 
 namespace sidecar {
@@ -70,5 +72,53 @@ Json::Value build_callback_header(
 // artifacts 为空或 null 时返回 ""（用于 Running 回调）。
 // artifacts 非空时返回 {"code":200101,"data":{"content":[...]}} 的字符串形式。
 std::string build_user_output_object(const Json::Value& sse_artifacts);
+
+// ── SSE chunk → UserOutput 回调决策器（dev/prod 共享） ──────────────
+// 封装 chunk 类型判断、flag 决策、final_text/artifacts 状态维护。
+// main.cpp 和 sidecar_router.cpp 都调用此类，确保行为一致。
+class SSEChunkProcessor {
+public:
+    struct Callback {
+        bool should_send = false;
+        std::string stream_status = "Running";
+        int flag = 0;
+        std::string text;
+        bool is_final = false;
+        std::string user_output_object;
+    };
+
+    // 处理一条 SSE data JSON，返回回调指令（should_send=false 表示跳过）。
+    // 内部维护 accumulated_content_ / final_text_ / accumulated_artifacts_。
+    std::vector<Callback> process(const Json::Value& sse_json);
+
+    // 流结束后构造 Completed 回调（携带 final_text + artifacts）。
+    Callback make_completed();
+
+    const std::string& accumulated_content() const { return accumulated_content_; }
+
+private:
+    std::string accumulated_content_;
+    std::string final_text_;
+    Json::Value accumulated_artifacts_;
+};
+
+// ── SidecarDumper — 请求/响应 dump（dev/prod 共享） ────────────────
+// 环境变量 AF_SIDECAR_DUMP_DIR 控制，空=禁用。
+// 每个请求生成一个 JSONL 文件：{timestamp}_{request_id}.jsonl
+class SidecarDumper {
+public:
+    SidecarDumper(const std::string& request_id);
+    ~SidecarDumper();
+
+    void dump_request(const Json::Value& body);
+    void dump_sse_chunk(const Json::Value& sse_json);
+    void dump_callback(const std::string& stream_status, int flag,
+                       const std::string& text, bool is_final,
+                       const std::string& user_output_object);
+
+private:
+    std::ofstream file_;
+    bool enabled_ = false;
+};
 
 }

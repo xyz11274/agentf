@@ -58,6 +58,11 @@ logger = logging.getLogger("agentflow.bridge.routes.chat_rest")
 
 # ⚠ DEBUG: SSE capture fixture path (set via env; empty = disabled)
 _SSE_CAPTURE_PATH = os.environ.get("AF_SSE_CAPTURE", "")
+
+# Per-request SSE dump directory (set via env; empty = disabled).
+# Each SSE streaming request dumps request body + all SSE payloads to
+# {dir}/{timestamp}_{dialogue_id}.jsonl for debugging.
+_SSE_DUMP_DIR = os.environ.get("AF_SSE_DUMP_DIR", "")
 _sse_capture_file: typing.IO | None = None
 
 
@@ -893,6 +898,27 @@ async def chat_rest(
     )
     _register_dialogue(active)
 
+    sse_dump_fh: typing.IO | None = None
+    if _SSE_DUMP_DIR:
+        try:
+            os.makedirs(_SSE_DUMP_DIR, exist_ok=True)
+            dump_name = f"{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{dialogue_id}.jsonl"
+            sse_dump_fh = open(os.path.join(_SSE_DUMP_DIR, dump_name), "w", encoding="utf-8")
+            sse_dump_fh.write(json.dumps({
+                "_meta": True,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "agent_id": agent_id,
+                "user_id": body.user_id,
+                "client_id": body.client_id,
+                "dialogue_id": dialogue_id,
+                "request": body.model_dump(),
+            }, ensure_ascii=False, default=str) + "\n")
+            sse_dump_fh.flush()
+            logger.info("sse_dump.start dialogue=%s file=%s", dialogue_id, dump_name)
+        except Exception as exc:
+            logger.warning("sse_dump.init_failed dialogue=%s: %s", dialogue_id, exc)
+            sse_dump_fh = None
+
     async def _sse_stream() -> AsyncIterator[str]:
         sse_chunks: list[str] = []
         try:
@@ -940,6 +966,10 @@ async def chat_rest(
                     # 进度消息标记（技能执行期间）
                     if event.get("progress"):
                         payload["_progress"] = True
+                    # 最终回复标记（metadata.final 唯一真相源 → 透传给下游，
+                    # sidecar/前端据此区分"过程"与"最终回复"，避免完整块重复渲染）
+                    if event.get("final"):
+                        payload["_final"] = True
                     # chunk 类型（progress / llm_chunk / text）— 前端据此分流
                     if chunk_type:
                         payload["_chunk_type"] = chunk_type
@@ -949,8 +979,13 @@ async def chat_rest(
                         if meta_val:
                             payload[meta_key] = meta_val
                     yield _sse_data_json(payload)
-                    # ⚠ DEBUG: capture SSE payload for fixture (AF_SSE_CAPTURE)
                     _capture_sse_payload(payload)
+                    if sse_dump_fh:
+                        try:
+                            sse_dump_fh.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+                            sse_dump_fh.flush()
+                        except Exception:
+                            pass
                     # 累积到 sse_chunks 供首 chunk 检测（L887）及数据库持久化。
                     # 守不变量 I-1：仅 final chunk 的内容入库，非 final chunk 仅作 SSE 流式展示。
                     # 与同步路径（Fix 2, L690-695）逻辑一致。
@@ -967,12 +1002,19 @@ async def chat_rest(
                         await _persist_to_provider("".join(final_content))
                         return
                 elif event["type"] == "error":
-                    yield _sse_data_json({
+                    err_payload = {
                         "error": {
                             "message": event["message"],
                             "code": event.get("code", -32000),
                         },
-                    })
+                    }
+                    yield _sse_data_json(err_payload)
+                    if sse_dump_fh:
+                        try:
+                            sse_dump_fh.write(json.dumps(err_payload, ensure_ascii=False, default=str) + "\n")
+                            sse_dump_fh.flush()
+                        except Exception:
+                            pass
                     yield _SSE_DONE
                     _save_conversation(sse_chunks)
                     await _persist_to_provider("".join(sse_chunks))
@@ -994,6 +1036,11 @@ async def chat_rest(
             raise
         finally:
             _unregister_dialogue(active.user_id, active.client_id)
+            if sse_dump_fh:
+                try:
+                    sse_dump_fh.close()
+                except Exception:
+                    pass
 
     return StreamingResponse(
         _sse_stream(),

@@ -13,15 +13,21 @@
 #               → [mock 模式] 回显/固定文本/模板
 #               → [proxy 模式] FusionMind Mock (:8085) → 真实 LLM
 #
+#   Sidecar 链路（默认启用，--no-sidecar 关闭）：
+#     Frontend (SidecarSim 页面)
+#       → Upstream Mock (:23768)                ← 模拟 CoreMind 上游平台
+#         → SideCar (stub, :23767)
+#           → Bridge (uvicorn:8199) → daemon → LLM
+#
 # 用法：
-#   bash scripts/start_e2e.sh                                    # 默认 mock 模式
-#   bash scripts/start_e2e.sh --proxy                            # Proxy → DashScope
-#   bash scripts/start_e2e.sh --proxy \\
+#   bash scripts/start_dev.sh                                    # 默认 mock 模式
+#   bash scripts/start_dev.sh --proxy                            # Proxy → DashScope
+#   bash scripts/start_dev.sh --proxy \\
 #       --upstream-url https://dashscope.aliyuncs.com/compatible-mode/v1 \\
 #       --api-key $DASHSCOPE_API_KEY
-#   bash scripts/start_e2e.sh --mode fixed --response "你好"
-#   bash scripts/start_e2e.sh --no-frontend                       # 无前端
-#   bash scripts/start_e2e.sh --no-mock-uds                       # 无 mock UDS
+#   bash scripts/start_dev.sh --mode fixed --response "你好"
+#   bash scripts/start_dev.sh --no-frontend                       # 无前端
+#   bash scripts/start_dev.sh --no-mock-uds                       # 无 mock UDS
 #
 # 停止：Ctrl+C 自动清理所有组件（委托各组件脚本的 stop 命令）
 # ═══════════════════════════════════════════════════════════════════════
@@ -43,12 +49,27 @@ RUN_FMM=true           # FusionMind Mock Server
 RUN_MOCK_UDS=true      # Mock UDS Server (Python)
 RUN_DAEMON=true        # agentflowd
 RUN_BRIDGE=true        # Bridge
+RUN_SIDECAR=true       # C++ SideCar (stub, :23767)
+RUN_UPSTREAM_MOCK=true # Upstream Mock (CoreMind 上游模拟, :23768)
 RUN_FRONTEND=true      # Frontend web
+
+# Bridge SSE per-request dump（调试用：每个 SSE 请求保存完整请求体+响应流）
+# 想关掉注释此行或设空串即可
+export AF_SSE_DUMP_DIR="logs/sse_dump"
+
+# Sidecar per-request dump（调试用：sidecar 收到的请求+SSE chunk+发出的回调）
+# 与 Bridge dump 对照分析全链路
+export AF_SIDECAR_DUMP_DIR="logs/sidecar_dump"
+
+# restart 语义：daemon 默认自动构建（修改 C++ 后重启即重编译），--no-build 可跳过
+DAEMON_BUILD=true
 
 # 端口
 FMM_PORT=8085
 DAEMON_PORT=17891
 BRIDGE_PORT=8199
+SIDECAR_PORT=23767
+UPSTREAM_MOCK_PORT=23768
 FRONTEND_PORT=15173
 
 # Sockets
@@ -83,8 +104,10 @@ while [ $# -gt 0 ]; do
         --no-mock-uds)        RUN_MOCK_UDS=false; shift ;;
         --no-daemon)          RUN_DAEMON=false; shift ;;
         --no-bridge)          RUN_BRIDGE=false; shift ;;
+        --no-sidecar)         RUN_SIDECAR=false; shift ;;
+        --no-upstream-mock)   RUN_UPSTREAM_MOCK=false; shift ;;
         --no-frontend)        RUN_FRONTEND=false; shift ;;
-        --fmm-only)           RUN_MOCK_UDS=false; RUN_DAEMON=false; RUN_BRIDGE=false; RUN_FRONTEND=false; shift ;;
+        --fmm-only)           RUN_MOCK_UDS=false; RUN_DAEMON=false; RUN_BRIDGE=false; RUN_SIDECAR=false; RUN_UPSTREAM_MOCK=false; RUN_FRONTEND=false; shift ;;
 
         # 端口
         --fmm-port)           FMM_PORT="${2:?}"; shift 2 ;;
@@ -106,6 +129,7 @@ while [ $# -gt 0 ]; do
         # 其他
         --package)            AGENT_PACKAGE="${2:?}"; shift 2 ;;
         --agentflowd-bin)     AGENTFLOWD_BIN="${2:?}"; shift 2 ;;
+        --no-build)           DAEMON_BUILD=false; shift ;;
 
         -h|--help)
             sed -n '3,29p' "$0"
@@ -116,6 +140,8 @@ while [ $# -gt 0 ]; do
             echo "    --no-mock-uds         不启动 Mock UDS Server"
             echo "    --no-daemon           不启动 agentflowd"
             echo "    --no-bridge           不启动 Bridge"
+            echo "    --no-sidecar          不启动 SideCar (:23767)"
+            echo "    --no-upstream-mock    不启动 Upstream Mock (:23768)"
             echo "    --no-frontend         不启动前端"
             echo "    --fmm-only           仅启动 FusionMind Mock"
             echo ""
@@ -137,6 +163,9 @@ while [ $# -gt 0 ]; do
             echo "    --uds-socket PATH     Mock UDS socket 路径"
             echo "    --package PATH        Agent 包目录"
             echo "    --agentflowd-bin PATH agentflowd 二进制路径"
+            echo ""
+            echo "  构建："
+            echo "    --no-build            跳过 daemon 自动构建（默认 restart 会增量重编译 C++）"
             exit 0 ;;
         *)
             echo "[ERROR] 未知参数: $1" >&2
@@ -189,6 +218,12 @@ _cleanup() {
                     kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null || true
                     echo "  ✅ 前端已停止"
                 fi ;;
+            upstream_mock)
+                echo "  ⏹  停止 Upstream Mock..."
+                bash "$SCRIPT_DIR/start_upstream_mock.sh" stop 2>/dev/null || true ;;
+            sidecar)
+                echo "  ⏹  停止 SideCar..."
+                bash "$SCRIPT_DIR/start_sidecar.sh" stop 2>/dev/null || true ;;
         esac
     done
 
@@ -222,7 +257,7 @@ trap 'echo ""; echo "收到中断信号..."; exit 0' INT TERM
 # ═══════════════════════════════════════════════════════════════════════
 
 if $RUN_FMM; then
-    FMM_ARGS=("start" "--port" "$FMM_PORT")
+    FMM_ARGS=("restart" "--port" "$FMM_PORT")
 
     if [ "$FMM_MODE" = "proxy" ]; then
         # Proxy 模式：先解析上游地址和 API Key
@@ -304,7 +339,12 @@ echo ""
 # ═══════════════════════════════════════════════════════════════════════
 
 if $RUN_DAEMON; then
-    DAEMON_ARGS=("start" "--port" "$DAEMON_PORT" "--package" "$AGENT_PACKAGE")
+    # restart 语义：先停后启，重复运行幂等；默认自动增量构建（修改 C++ 后重启即生效），
+    # 纯 Python 调试可用 --no-build 跳过编译
+    DAEMON_ARGS=("restart" "--port" "$DAEMON_PORT" "--package" "$AGENT_PACKAGE")
+    if [ "$DAEMON_BUILD" = false ]; then
+        DAEMON_ARGS+=(--no-build)
+    fi
 
     if [ -n "$AGENTFLOWD_BIN" ]; then
         # 如果用户指定了二进制路径，传给 start_daemon.sh 会用它
@@ -324,13 +364,40 @@ fi
 
 if $RUN_BRIDGE; then
     echo "🚀 启动 Bridge (port $BRIDGE_PORT)..."
-    bash "$SCRIPT_DIR/start_bridge.sh" start --port "$BRIDGE_PORT" --log-level info --no-reload
+    bash "$SCRIPT_DIR/start_bridge.sh" restart --port "$BRIDGE_PORT" --log-level info --no-reload
     _components+=("bridge")
     _wait_for_port "$BRIDGE_PORT" "Bridge" 15
 fi
 
 # ═══════════════════════════════════════════════════════════════════════
-#  6. 前端
+#  6. SideCar (C++ stub, 外部入口)
+# ═══════════════════════════════════════════════════════════════════════
+
+if $RUN_SIDECAR; then
+    echo "🚀 启动 SideCar (port $SIDECAR_PORT, local stub)..."
+    # restart 语义：先停后启；build-dev 缺失时 start_sidecar.sh local 会自动 cmake 构建，
+    # 构建失败或启动失败不阻断整条链路（warn 后继续，可用 --no-sidecar 关闭）
+    if bash "$SCRIPT_DIR/start_sidecar.sh" restart local "$SIDECAR_PORT"; then
+        _components+=("sidecar")
+        _wait_for_port "$SIDECAR_PORT" "SideCar" 15
+    else
+        echo "[WARN] SideCar 启动失败（继续，可通过 --no-sidecar 关闭）"
+    fi
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
+#  7. Upstream Mock (CoreMind 上游模拟, SidecarSim 页面使用)
+# ═══════════════════════════════════════════════════════════════════════
+
+if $RUN_UPSTREAM_MOCK; then
+    echo "🚀 启动 Upstream Mock (port $UPSTREAM_MOCK_PORT)..."
+    bash "$SCRIPT_DIR/start_upstream_mock.sh" restart
+    _components+=("upstream_mock")
+    _wait_for_port "$UPSTREAM_MOCK_PORT" "Upstream Mock" 15
+fi
+
+# ═══════════════════════════════════════════════════════════════════════
+#  8. 前端
 # ═══════════════════════════════════════════════════════════════════════
 
 if $RUN_FRONTEND; then
@@ -357,6 +424,8 @@ echo ""
 echo "  📍 前端:       http://localhost:$FRONTEND_PORT"
 echo "  📍 Bridge API: http://localhost:$BRIDGE_PORT"
 echo "  📍 Daemon:     127.0.0.1:$DAEMON_PORT"
+echo "  📍 SideCar:     127.0.0.1:$SIDECAR_PORT (stub)"
+echo "  📍 Upstream:    http://localhost:$UPSTREAM_MOCK_PORT (CoreMind 上游 Mock)"
 echo "  📍 FusionMind:  http://localhost:$FMM_PORT"
 echo "       POST  /infermind/llm/v1/chat/openai/completions"
 echo "       POST  /infermind/llm/v1/chat/completions"
@@ -370,6 +439,8 @@ echo "    FusionMind Mock:  tail -f $LOG_DIR/fusionmind_mock.log"
 echo "    Mock UDS Server:  tail -f $LOG_DIR/mock_uds_server.log"
 echo "    Daemon:           tail -f $LOG_DIR/agentflowd.log"
 echo "    Bridge:           tail -f $LOG_DIR/bridge.log"
+echo "    SideCar:          tail -f $LOG_DIR/sidecar.log"
+echo "    Upstream Mock:    tail -f $LOG_DIR/upstream_mock.log"
 echo ""
 echo "  按 Ctrl+C 停止所有组件"
 echo "═══════════════════════════════════════════════════════════════"

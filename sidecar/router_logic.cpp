@@ -1,4 +1,9 @@
 #include "router_logic.h"
+#include <chrono>
+#include <cstdlib>
+#include <ctime>
+#include <filesystem>
+#include <iostream>
 #include <sstream>
 
 namespace sidecar {
@@ -189,6 +194,151 @@ std::string build_user_output_object(const Json::Value& sse_artifacts) {
     w["indentation"] = "";
     w["emitUTF8"] = true;
     return Json::writeString(w, output);
+}
+
+// ── SSEChunkProcessor ──────────────────────────────────────────────
+
+std::vector<SSEChunkProcessor::Callback> SSEChunkProcessor::process(const Json::Value& sse_json) {
+    std::vector<Callback> results;
+
+    Json::Value chunk_artifacts = sse_json.get("_artifacts", sse_json.get("artifacts", Json::Value(Json::nullValue)));
+    if (!chunk_artifacts.isNull()) {
+        accumulated_artifacts_ = chunk_artifacts;
+    }
+
+    std::string token;
+    std::string reasoning;
+    auto choices = sse_json["choices"];
+    if (choices.isArray() && choices.size() > 0) {
+        auto delta = choices[0]["delta"];
+        if (delta.isObject()) {
+            auto rc = delta["reasoning_content"];
+            if (rc.isString()) reasoning = rc.asString();
+            auto dc = delta["content"];
+            if (dc.isString()) token = dc.asString();
+        } else {
+            auto msg = choices[0]["message"]["content"];
+            if (msg.isString()) token = msg.asString();
+        }
+    }
+
+    if (token.empty() && reasoning.empty()) return results;
+
+    std::string _src = sse_json.get("_source", "").asString();
+    if (!_src.empty() && _src != "coordinator") return results;
+
+    if (!reasoning.empty()) {
+        results.push_back({true, "Running", 1, reasoning, false, ""});
+    }
+
+    std::string _chunk_type = sse_json.get("_chunk_type", "").asString();
+    std::string _skill = sse_json.get("_skill", "").asString();
+    bool is_final = sse_json.get("_final", false).asBool();
+
+    if (_chunk_type == "llm_chunk") {
+        if (!token.empty()) {
+            results.push_back({true, "Running", 0, token, false, ""});
+            accumulated_content_ += token;
+        }
+        return results;
+    }
+
+    if (is_final) {
+        if (!token.empty()) final_text_ = token;
+        return results;
+    }
+
+    if (!_skill.empty() && !token.empty()) {
+        results.push_back({true, "Running", 1, token, false, ""});
+    }
+
+    return results;
+}
+
+SSEChunkProcessor::Callback SSEChunkProcessor::make_completed() {
+    Callback cb;
+    cb.should_send = true;
+    cb.stream_status = "Completed";
+    cb.flag = 0;
+    cb.text = final_text_;
+    cb.is_final = true;
+    cb.user_output_object = build_user_output_object(accumulated_artifacts_);
+    return cb;
+}
+
+// ── SidecarDumper ──────────────────────────────────────────────────
+
+static std::string dump_timestamp() {
+    auto now = std::chrono::system_clock::now();
+    auto t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+    gmtime_r(&t, &tm);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y%m%d_%H%M%S", &tm);
+    return buf;
+}
+
+SidecarDumper::SidecarDumper(const std::string& request_id) {
+    const char* dir = std::getenv("AF_SIDECAR_DUMP_DIR");
+    if (!dir || !*dir) return;
+
+    std::filesystem::create_directories(dir);
+    std::string filename = std::string(dir) + "/" + dump_timestamp() + "_" + request_id + ".jsonl";
+    file_.open(filename);
+    if (file_.is_open()) {
+        enabled_ = true;
+        std::cerr << "[sidecar_dumper] dump file: " << filename << std::endl;
+    } else {
+        std::cerr << "[sidecar_dumper] WARN: cannot open " << filename << std::endl;
+    }
+}
+
+SidecarDumper::~SidecarDumper() {
+    if (file_.is_open()) file_.close();
+}
+
+void SidecarDumper::dump_request(const Json::Value& body) {
+    if (!enabled_) return;
+    Json::Value entry;
+    entry["_meta"] = true;
+    entry["_timestamp"] = dump_timestamp();
+    entry["request"] = body;
+    Json::StreamWriterBuilder w;
+    w["indentation"] = "";
+    w["emitUTF8"] = true;
+    file_ << Json::writeString(w, entry) << "\n";
+    file_.flush();
+}
+
+void SidecarDumper::dump_sse_chunk(const Json::Value& sse_json) {
+    if (!enabled_) return;
+    Json::Value entry = sse_json;
+    entry["_direction"] = "sse_in";
+    entry["_timestamp"] = dump_timestamp();
+    Json::StreamWriterBuilder w;
+    w["indentation"] = "";
+    w["emitUTF8"] = true;
+    file_ << Json::writeString(w, entry) << "\n";
+    file_.flush();
+}
+
+void SidecarDumper::dump_callback(const std::string& stream_status, int flag,
+                                  const std::string& text, bool is_final,
+                                  const std::string& user_output_object) {
+    if (!enabled_) return;
+    Json::Value entry;
+    entry["_direction"] = "callback_out";
+    entry["_timestamp"] = dump_timestamp();
+    entry["stream_status"] = stream_status;
+    entry["flag"] = flag;
+    entry["text"] = text;
+    entry["is_final"] = is_final;
+    entry["user_output_object"] = user_output_object;
+    Json::StreamWriterBuilder w;
+    w["indentation"] = "";
+    w["emitUTF8"] = true;
+    file_ << Json::writeString(w, entry) << "\n";
+    file_.flush();
 }
 
 }

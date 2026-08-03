@@ -114,11 +114,6 @@ _tasks: dict[str, TaskSession] = {}
 _tasks_lock = asyncio.Lock()
 """task_id → TaskSession。sidecar 可能返回同一个 task_id 多次回调。"""
 
-# sidecar request_id → mock task_id 映射
-# sidecar 的回调中用自己生成的 request_id (sidecar-N)，而不是原始 AccessCtrl 的 TaskID
-_sidecar_req_map: dict[str, str] = {}
-_sidecar_req_lock = asyncio.Lock()
-
 # SSE 订阅者队列
 _sse_subscribers: dict[str, list[asyncio.Queue]] = {}
 _sse_lock = asyncio.Lock()
@@ -157,9 +152,12 @@ async def handle_send(request: Request) -> JSONResponse:
     task_id = f"sim_task_{datetime.now(timezone.utc).strftime('%m%d%H%M%S')}_{uuid.uuid4().hex[:8]}"
 
     # 构造 AccessCtrl 请求体（带 SysAgentEntity → 异步回调模式）
+    # 消息类型组合对齐 sidecar router_logic.cpp is_supported_message_type（B1）：
+    #   UserTaskManagement/TaskAssignment（任务下发）或 DataExchange/UserInput（用户输入）。
+    # 不可用 DataExchange/TaskAssignment 混搭，否则 sidecar 返回 400 unsupported message type。
     accessctrl: dict[str, Any] = {
         "Header": {
-            "MessageType": "DataExchange",
+            "MessageType": "UserTaskManagement",
             "Sender": "UpstreamMock",
             "Receiver": "SysAgent",
             "UserName": user_id,
@@ -168,6 +166,7 @@ async def handle_send(request: Request) -> JSONResponse:
             "UUID": f"mock_{uuid.uuid4().hex[:12]}",
             "ClientSessionId": client_session_id,
             "TaskID": task_id,
+            "DialogueId": f"dlg_{uuid.uuid4().hex[:12]}",
             "SysAgentEntity": f"{MOCK_HOST}:{MOCK_PORT}",
             "SeqNum": task_id,
             "EventTimeStamp": datetime.now(timezone.utc).isoformat(),
@@ -179,15 +178,18 @@ async def handle_send(request: Request) -> JSONResponse:
     }
 
     # 如果有图片，加入 UserInputObject
+    # CMF 协议中 UserInputObject 必须是 stringified JSON string（对齐 sidecar
+    # router_logic.cpp build_openai_messages / sidecar_router.cpp:203）。
+    # 传嵌套 JSON 对象会被 sidecar 的 asString() 取空串，多模态图片被静默丢弃。
     if images:
-        accessctrl["Data"]["UserInputObject"] = {
+        accessctrl["Data"]["UserInputObject"] = json.dumps({
             "code": 200101,
             "data": {
                 "content": [
                     {"type": "image", "data": url} for url in images
                 ],
             },
-        }
+        }, ensure_ascii=False)
 
     # 注册 task session
     async with _tasks_lock:
@@ -232,55 +234,48 @@ async def handle_send(request: Request) -> JSONResponse:
         "agent_id": agent_id,
     })
 
-    # httplib 模式 sidecar 是同步返回的，结果已含在响应体中。
-    # 解析 TaskStatusReport / UserOutput 并推为事件，使 SSE 流能立即获取。
-    # 异步模式（有 SysAgentEntity）下 sidecar 返回 {"status":"accepted"}，无 Data 段，
+    # 同步 dev 模式（httplib）：响应体可能直接含 TaskStatusReport / UserOutput，
+    # 解析并推为事件，使 SSE 流能立即获取。
+    # 异步模式（coreMind-mode / 有 SysAgentEntity）：sidecar 只返回 200 无 body
+    # （sidecar_router.cpp 对齐 SysAgent 只 WriteStatueCode(200)），
     # 此时不推 done，由异步回调 handler 在收到回调后推 done。
-    try:
-        sidecar_resp = json.loads(resp.text)
-        data = sidecar_resp.get("Data", {})
-        msg_type = data.get("MessageType", "")
-        text = data.get("UserOutputText", "") or ""
-        if msg_type == "TaskStatusReport" or msg_type == "UserOutput":
-            # 同步模式——真正拿到了结果
-            if text:
+    if resp.text.strip():
+        try:
+            sidecar_resp = json.loads(resp.text)
+            data = sidecar_resp.get("Data", {})
+            msg_type = data.get("MessageType", "")
+            text = data.get("UserOutputText", "") or ""
+            if msg_type == "TaskStatusReport" or msg_type == "UserOutput":
+                # 同步模式——真正拿到了结果
+                if text:
+                    await _push_event(task_id, {
+                        "type": "user_output",
+                        "task_id": task_id,
+                        "stream_status": "Completed",
+                        "text": text,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    })
                 await _push_event(task_id, {
-                    "type": "user_output",
+                    "type": "task_status",
                     "task_id": task_id,
-                    "stream_status": "Completed",
-                    "text": text,
+                    "status_code": data.get("TaskStatusCode", 200),
+                    "report": data.get("TaskStatusReport", "TaskCompleted"),
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 })
-            await _push_event(task_id, {
-                "type": "task_status",
-                "task_id": task_id,
-                "status_code": data.get("TaskStatusCode", 200),
-                "report": data.get("TaskStatusReport", "TaskCompleted"),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            })
-            await _push_event(task_id, {"type": "done", "task_id": task_id})
-        # 否则是异步模式——不推 done，等回调 handler 去推
-    except Exception as parse_err:
-        logger.warning("parse_sidecar_response failed: %s", parse_err)
+                await _push_event(task_id, {"type": "done", "task_id": task_id})
+            # 否则是异步模式——不推 done，等回调 handler 去推
+        except Exception as parse_err:
+            logger.warning("parse_sidecar_response failed: %s", parse_err)
 
     logger.info(
         "send task_id=%s agent=%s status=%d",
         task_id, agent_id, sidecar_status,
     )
 
-    # 异步模式下 sidecar 返回 {"status":"accepted","request_id":"sidecar-N"}
-    # 注册 sidecar request_id → mock task_id 映射，供回调 handler 查找
-    if sidecar_status == 200:
-        try:
-            sidecar_resp = json.loads(resp.text)
-            if sidecar_resp.get("status") == "accepted":
-                req_id = sidecar_resp.get("request_id", "")
-                if req_id:
-                    async with _sidecar_req_lock:
-                        _sidecar_req_map[req_id] = task_id
-                    logger.info("mapped sidecar_req=%s -> mock_task=%s", req_id, task_id)
-        except Exception:
-            pass
+    # 对齐生产行为：sidecar 异步模式只返回 200 无 body（sidecar_router.cpp
+    # WriteStatueCode(200) 对齐 SysAgent），回调 Header.TaskID=原始 task_id，
+    # 无需 request_id 映射——callback handler 直接用 TaskID 匹配 mock task_id。
+    # （httplib dev 模式 main.cpp forward_to_bridge 同样已对齐为 200 无 body。）
 
     return JSONResponse({
         "task_id": task_id,
@@ -295,17 +290,15 @@ async def handle_callback(request: Request) -> JSONResponse:
     body = await request.json()
     header = body.get("Header", {})
     data = body.get("Data", {})
-    callback_task_id = header.get("TaskID", "") or header.get("taskID", "")
-
-    # 通过 sidecar request_id 映射找到 Mock 的 task_id
-    async with _sidecar_req_lock:
-        mock_task_id = _sidecar_req_map.get(callback_task_id, callback_task_id)
+    # 对齐生产行为：sidecar 回调 Header.TaskID 即原始 AccessCtrl TaskID（build_callback_header），
+    # 直接作为 mock task_id 使用，无需 request_id 映射。
+    mock_task_id = header.get("TaskID", "") or header.get("taskID", "")
 
     message_type = data.get("MessageType", "")
 
     logger.info(
-        "callback sidecar_req=%s mock_task=%s msgType=%s",
-        callback_task_id, mock_task_id, message_type,
+        "callback task_id=%s msgType=%s",
+        mock_task_id, message_type,
     )
 
     # 不解析字段，原样透传

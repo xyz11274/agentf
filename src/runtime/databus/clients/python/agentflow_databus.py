@@ -643,11 +643,12 @@ class DataBusClient:
         sid = os.environ.get("AF_SESSION_ID", "")
         if not did:
             return False
-        # Guard: None content → empty string, preventing JSON null from
-        # propagating through the UDS handler and displaying as "null"
-        # in the frontend progress bubble.
-        if content is None:
-            content = ""
+        # Guard: 空/None content 直接跳过推送。
+        # 原先只拦 None（防 JSON null 显示为 "null"），但空串 "" 会被 daemon
+        # 以 -32602 "missing dialogue_id or content" 拒绝并抛 JSONRPCError，
+        # 上游 _on_chunk 的 except 吞掉后只留无原因的 WARN 日志。
+        if not content:
+            return False
         params = {
             "session_id": sid,
             "dialogue_id": did,

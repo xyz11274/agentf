@@ -19,7 +19,7 @@ Python Bridge 生产模式只监听 loopback；SideCar 是唯一外部入口。
 | `start_bridge.sh` | 启动开发或内部生产 Bridge |
 | `start_sidecar.sh` | 启动本地或生产 SideCar |
 | `start_production.sh` | 统一启动生产三进程栈 |
-| `start_e2e.sh` | 本地端到端调试：启动完整链路（FusionMind Mock + Mock UDS + daemon + Bridge + 前端） |
+| `start_dev.sh` | 本地端到端调试：启动完整链路（FusionMind Mock + Mock UDS + daemon + Bridge + SideCar + Upstream Mock + 前端） |
 | `start_mock_uds_server.sh` | 单独启动 Mock UDS Server（替代 UDSPluginServer，用于本地 LLM 调用调试） |
 | `start_web.sh` | 启动 Vue/Vite 开发服务器 |
 | `run_agent.sh` | 旧 harness_agent 交互演示，仅保留开发用途 |
@@ -30,7 +30,7 @@ Python Bridge 生产模式只监听 loopback；SideCar 是唯一外部入口。
 | 文件 | 用途 |
 |------|------|
 | `.env` / `.env.example` | 部署配置（密钥、服务地址） |
-| `config.json` | daemon 本地开发配置文件，被 `start_daemon.sh` 和 `start_e2e.sh` 引用 |
+| `config.json` | daemon 本地开发配置文件，被 `start_daemon.sh` 和 `start_dev.sh` 引用 |
 
 ## 构建
 
@@ -79,23 +79,31 @@ Bridge / Agent 节点的运行时配置统一在 `configs/{env}/bridge.yaml`（�
 
 ### 端到端调试（推荐）
 
-一键启动完整本地调试链路：FusionMind Mock + Mock UDS Server + agentflowd + Bridge + 前端。
+一键启动完整本地调试链路：FusionMind Mock + Mock UDS Server + agentflowd + Bridge + SideCar + Upstream Mock + 前端。
 
 ```bash
-# 默认 Mock 模式（回显）
-./scripts/start_e2e.sh
+# 默认 Mock 模式（回显，含 SideCar 链路）
+./scripts/start_dev.sh
 
 # Proxy 模式（透传到真实 LLM）
-./scripts/start_e2e.sh --proxy
+./scripts/start_dev.sh --proxy
 
-# 仅启动 Mock UDS + daemon + Bridge（无前端）
-./scripts/start_e2e.sh --no-frontend
+# 仅启动 Mock UDS + daemon + Bridge（无前端、无 SideCar/Upstream Mock）
+./scripts/start_dev.sh --no-frontend --no-sidecar --no-upstream-mock
 
 # 仅启动 FusionMind Mock 和 Mock UDS Server
-./scripts/start_e2e.sh --fmm-only
+./scripts/start_dev.sh --fmm-only
+
+# 跳过 daemon 自动构建（纯 Python 调试时更快）
+./scripts/start_dev.sh --no-build
 ```
 
-启动链路：
+**restart 构建语义**：所有组件均以独立脚本的 `restart` 语义启动（先停后启，重复运行幂等）。
+daemon 的 restart 默认会**增量重编译 C++**（`start_daemon.sh restart` 默认 `--build`）——
+修改 `src/`、`include/` 等 C++ 代码后直接重跑 `start_dev.sh` 即可生效；
+纯 Python 调试想跳过编译用 `--no-build`。SideCar 同理（`start_sidecar.sh local` 每次 `cmake --build` 增量构建）。
+
+启动链路（daemon 侧）：
 
 ```text
 Frontend (Vite:15173)
@@ -106,6 +114,15 @@ Frontend (Vite:15173)
           → Mock UDS Server (Python UDS)     ← 模拟 UDSPluginServer
             → [mock] FusionMind Mock (:8085)  ← 回显/固定响应/工具调用
             → [proxy] 真实 LLM API            ← DashScope 等上游
+```
+
+SideCar 链路（默认启用，`--no-sidecar` / `--no-upstream-mock` 关闭）：
+
+```text
+Frontend (SidecarSim 页面)
+  → Upstream Mock (:23768)                   ← 模拟 CoreMind 上游平台
+    → SideCar (stub, :23767)                 ← 外部入口，转发到 Bridge
+      → Bridge (uvicorn:8199) → daemon → LLM
 ```
 
 停止：`Ctrl+C` 自动逆序清理所有子进程。
@@ -183,7 +200,7 @@ Bridge，也不会因此断开浏览器 WebSocket。
 │   ├── start_bridge.sh      ── 启动 Python Bridge（dev / production）
 │   ├── start_sidecar.sh     ── 启动 C++ SideCar
 │   ├── start_production.sh  ── 统一启动 daemon + Bridge + SideCar
-│   ├── start_e2e.sh         ── 本地端到端调试（FMM Mock + Mock UDS + daemon + Bridge + 前端）
+│   ├── start_dev.sh         ── 本地端到端调试（FMM Mock + Mock UDS + daemon + Bridge + SideCar + Upstream Mock + 前端）
 │   ├── start_mock_uds_server.sh ── 单独启动 Mock UDS Server（替代 UDSPluginServer）
 │   ├── start_web.sh         ── 启动 Vue/Vite 开发服务器
 │   ├── run_agent.sh         ── harness_agent 示例演示（开发用）

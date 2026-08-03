@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 #include <json/json.h>
+#include <fstream>
+#include <sstream>
 #include "router_logic.h"
 
 using namespace sidecar;
@@ -307,4 +309,241 @@ TEST(TestOutputFormat, TC_SID_026_ArtifactsToOutputObject) {
     EXPECT_EQ(parsed["code"].asInt(), 200101);
     EXPECT_EQ(parsed["data"]["content"][0]["type"].asString(), "image");
     EXPECT_EQ(parsed["data"]["content"][0]["url"].asString(), "https://example.com/look.png");
+}
+
+// ═══════════════════════════════════════════════════════════
+// SSEChunkProcessor — chunk 决策器单元测试
+// ═══════════════════════════════════════════════════════════
+
+static Json::Value make_llm_chunk(const std::string& content, const std::string& source = "coordinator") {
+    Json::Value sse;
+    sse["choices"][0]["delta"]["content"] = content;
+    sse["_chunk_type"] = "llm_chunk";
+    sse["_source"] = source;
+    return sse;
+}
+
+static Json::Value make_tool_calls_delta() {
+    Json::Value sse;
+    sse["choices"][0]["delta"]["content"] = Json::nullValue;
+    sse["choices"][0]["delta"]["tool_calls"][0]["function"]["name"] = "run_skills";
+    sse["_chunk_type"] = "llm_chunk";
+    sse["_source"] = "coordinator";
+    return sse;
+}
+
+static Json::Value make_coord_progress(const std::string& text, const std::string& skill) {
+    Json::Value sse;
+    sse["choices"][0]["message"]["content"] = text;
+    sse["_chunk_type"] = "progress";
+    sse["_source"] = "coordinator";
+    sse["_skill"] = skill;
+    return sse;
+}
+
+static Json::Value make_final_block(const std::string& content) {
+    Json::Value sse;
+    sse["choices"][0]["message"]["content"] = content;
+    sse["_final"] = true;
+    return sse;
+}
+
+TEST(SSEChunkProcessor, LlmChunkText_ForwardedAsFlag0) {
+    SSEChunkProcessor proc;
+    auto results = proc.process(make_llm_chunk("你好"));
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].flag, 0);
+    EXPECT_EQ(results[0].text, "你好");
+    EXPECT_EQ(results[0].stream_status, "Running");
+    EXPECT_FALSE(results[0].is_final);
+}
+
+TEST(SSEChunkProcessor, ToolCallsDelta_Skipped) {
+    SSEChunkProcessor proc;
+    auto results = proc.process(make_tool_calls_delta());
+    EXPECT_TRUE(results.empty());
+}
+
+TEST(SSEChunkProcessor, SkillExecutor_Filtered) {
+    SSEChunkProcessor proc;
+    auto results = proc.process(make_llm_chunk("skill text", "skill_executor"));
+    EXPECT_TRUE(results.empty());
+}
+
+TEST(SSEChunkProcessor, CoordinatorProgress_ThinkFlag1) {
+    SSEChunkProcessor proc;
+    auto results = proc.process(make_coord_progress("coordinator 决策中…", "coordinator"));
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].flag, 1);
+    EXPECT_EQ(results[0].text, "coordinator 决策中…");
+}
+
+TEST(SSEChunkProcessor, DaemonPreview_NoSkill_Skipped) {
+    Json::Value sse;
+    sse["choices"][0]["message"]["content"] = "preview text";
+    sse["_chunk_type"] = "progress";
+    SSEChunkProcessor proc;
+    auto results = proc.process(sse);
+    EXPECT_TRUE(results.empty());
+}
+
+TEST(SSEChunkProcessor, Final_SavesTextNotForwarded) {
+    SSEChunkProcessor proc;
+    auto results = proc.process(make_final_block("最终回复文本"));
+    EXPECT_TRUE(results.empty());
+
+    auto completed = proc.make_completed();
+    EXPECT_EQ(completed.text, "最终回复文本");
+    EXPECT_EQ(completed.stream_status, "Completed");
+    EXPECT_TRUE(completed.is_final);
+}
+
+TEST(SSEChunkProcessor, ReasoningAndToken_BothForwarded) {
+    Json::Value sse;
+    sse["choices"][0]["delta"]["reasoning_content"] = "思考过程";
+    sse["choices"][0]["delta"]["content"] = "回复文本";
+    sse["_chunk_type"] = "llm_chunk";
+    sse["_source"] = "coordinator";
+
+    SSEChunkProcessor proc;
+    auto results = proc.process(sse);
+    ASSERT_EQ(results.size(), 2u);
+    EXPECT_EQ(results[0].flag, 1);
+    EXPECT_EQ(results[0].text, "思考过程");
+    EXPECT_EQ(results[1].flag, 0);
+    EXPECT_EQ(results[1].text, "回复文本");
+}
+
+TEST(SSEChunkProcessor, AccumulatedContent_OnlyLlmChunk) {
+    SSEChunkProcessor proc;
+    proc.process(make_coord_progress("决策中", "coordinator"));
+    proc.process(make_llm_chunk("Hello"));
+    proc.process(make_llm_chunk(" World"));
+    EXPECT_EQ(proc.accumulated_content(), "Hello World");
+}
+
+// ═══════════════════════════════════════════════════════════
+// SSEChunkProcessor — 全量 dump 数据回归测试
+// 数据源：logs/sse_dump 真实 outfit-assistant 请求
+// ═══════════════════════════════════════════════════════════
+
+TEST(SSEChunkProcessor, FullDumpReplay) {
+    std::string fixture_path = TEST_FIXTURES_DIR;
+    fixture_path += "/sse_dump_outfit.jsonl";
+
+    std::ifstream file(fixture_path);
+    ASSERT_TRUE(file.is_open()) << "Cannot open fixture: " << fixture_path;
+
+    SSEChunkProcessor proc;
+    int total_events = 0;
+    int flag0_count = 0;
+    int flag1_count = 0;
+    int empty_count = 0;
+
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.empty()) continue;
+        Json::Value sse_json;
+        Json::CharReaderBuilder reader;
+        std::istringstream iss(line);
+        std::string errs;
+        if (!Json::parseFromStream(reader, iss, &sse_json, &errs)) continue;
+        if (sse_json.get("_meta", false).asBool()) continue;
+
+        total_events++;
+        auto results = proc.process(sse_json);
+        if (results.empty()) {
+            empty_count++;
+        } else {
+            for (const auto& cb : results) {
+                if (cb.flag == 0) flag0_count++;
+                else if (cb.flag == 1) flag1_count++;
+            }
+        }
+    }
+
+    auto completed = proc.make_completed();
+
+    EXPECT_EQ(total_events, 1288);
+    EXPECT_EQ(flag0_count, 390);
+    EXPECT_EQ(flag1_count, 5);
+    EXPECT_EQ(empty_count, 893);
+    EXPECT_EQ(completed.text.size(), 2141u);  // 1043 Unicode chars = 2141 UTF-8 bytes
+    EXPECT_EQ(completed.stream_status, "Completed");
+    EXPECT_TRUE(completed.is_final);
+    EXPECT_FALSE(proc.accumulated_content().empty());
+}
+
+TEST(SSEChunkProcessor, ArtifactsField_UnderscorePrefixed) {
+    Json::Value sse;
+    sse["choices"][0]["message"]["content"] = "最终回复";
+    sse["_final"] = true;
+    Json::Value arts(Json::arrayValue);
+    Json::Value img;
+    img["type"] = "image";
+    img["url"] = "/api/artifacts/test/img.png";
+    img["name"] = "img.png";
+    arts.append(img);
+    sse["_artifacts"] = arts;
+
+    SSEChunkProcessor proc;
+    proc.process(sse);
+
+    auto completed = proc.make_completed();
+    EXPECT_FALSE(completed.user_output_object.empty());
+    EXPECT_NE(completed.user_output_object.find("img.png"), std::string::npos);
+}
+
+// ═══════════════════════════════════════════════════════════
+// SSEChunkProcessor — 带 artifacts 产物的全量 dump 回归测试
+// 数据源：真实 outfit-assistant 请求（含 2 张穿搭效果图）
+// ═══════════════════════════════════════════════════════════
+
+TEST(SSEChunkProcessor, FullDumpReplay_WithArtifacts) {
+    std::string fixture_path = TEST_FIXTURES_DIR;
+    fixture_path += "/sse_dump_outfit_with_artifacts.jsonl";
+
+    std::ifstream file(fixture_path);
+    ASSERT_TRUE(file.is_open()) << "Cannot open fixture: " << fixture_path;
+
+    SSEChunkProcessor proc;
+    int total_events = 0;
+    int flag0_count = 0;
+    int flag1_count = 0;
+    int empty_count = 0;
+
+    std::string line;
+    while (std::getline(file, line)) {
+        if (line.empty()) continue;
+        Json::Value sse_json;
+        Json::CharReaderBuilder reader;
+        std::istringstream iss(line);
+        std::string errs;
+        if (!Json::parseFromStream(reader, iss, &sse_json, &errs)) continue;
+        if (sse_json.get("_meta", false).asBool()) continue;
+
+        total_events++;
+        auto results = proc.process(sse_json);
+        if (results.empty()) {
+            empty_count++;
+        } else {
+            for (const auto& cb : results) {
+                if (cb.flag == 0) flag0_count++;
+                else if (cb.flag == 1) flag1_count++;
+            }
+        }
+    }
+
+    auto completed = proc.make_completed();
+
+    EXPECT_EQ(total_events, 1082);
+    EXPECT_EQ(flag0_count, 428);
+    EXPECT_EQ(flag1_count, 3);
+    EXPECT_EQ(empty_count, 651);
+    EXPECT_EQ(completed.text.size(), 2534u);  // 1324 Unicode chars = 2534 UTF-8 bytes
+
+    // 关键验证：_artifacts 字段被正确读取并放入 user_output_object
+    EXPECT_FALSE(completed.user_output_object.empty());
+    EXPECT_NE(completed.user_output_object.find("outfit-1.png"), std::string::npos);
+    EXPECT_NE(completed.user_output_object.find("outfit-2.png"), std::string::npos);
 }

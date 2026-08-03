@@ -99,6 +99,10 @@ private:
   std::string handle_sandbox_read_file(const std::string& params, int64_t id);
   // Upload binary asset into sandbox (symmetric to read_file; POST /upload, see contracts/bridge-sandbox-files.md)
   std::string handle_sandbox_upload_file(const std::string& params, int64_t id);
+  // 沙箱管理：list_active 枚举 + destroy 销毁（local/docker/e2b 三模式统一，E1/E2）
+  // 透传 SandboxLifecycle::list_active() / destroy()——本地开发可观测性管理能力
+  std::string handle_sandbox_list(const std::string& params, int64_t id);
+  std::string handle_sandbox_destroy(const std::string& params, int64_t id);
 
   // 推算会话级用户上传目录宿主机绝对路径（与 bridge content_serializer._compute_upload_dir 同构）
   // 返回：{agent_packages_path}/{agent_id}/workspace/{user_id}_{client_id}/upload/

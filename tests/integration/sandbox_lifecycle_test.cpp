@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <thread>
@@ -48,11 +49,17 @@ class StubSandbox : public Sandbox {
   SandboxState state() const override { return state_; }
   const SandboxKey& owner() const override { return owner_; }
   const std::string& workdir() const override { return workdir_; }
+  int64_t last_active_at() const override { return last_active_at_; }
+  void mark_active() override {
+    last_active_at_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+  }
+  void snapshot() override {}  // Stub：无平台侧快照
 
   // 测试辅助：手动设状态（模拟 STOPPED/GC 超时）
   void set_state(SandboxState s) { state_ = s; }
   void set_last_active_at(int64_t ms) { last_active_at_ = ms; }
-  int64_t last_active_at() const { return last_active_at_; }
+  int64_t last_active_at_for_test() const { return last_active_at_; }
   int destroy_count() const { return destroy_count_; }
 
  private:
@@ -84,8 +91,8 @@ daemon::DaemonConfig make_test_config(int max_active = 2) {
   return cfg;
 }
 
-SandboxKey make_key(const std::string& u, const std::string& c, const std::string& a) {
-  SandboxKey k;
+sandbox::SandboxKey make_key(const std::string& u, const std::string& c, const std::string& a) {
+  sandbox::SandboxKey k;
   k.user_id = u;
   k.client_id = c;
   k.agent_id = a;
@@ -250,6 +257,33 @@ TEST(SandboxLifecycleTest, DestroyIdempotent) {
   EXPECT_EQ(sm.list_active().size(), 0u);
   // StubSandbox::destroy 仍会增计数（测试桩局限），但 SessionManager 不应崩
   // 真实 Sandbox::destroy 内部幂等，此处校验 SessionManager 侧幂等
+}
+
+// 用户语义（2026-08-02 确认）：local 模式沙箱 = workdir 目录，kill 即删目录。
+// 验证 SandboxLifecycle::destroy 在本地快照成功后删除 workdir 目录（F1：快照失败保留）。
+TEST(SandboxLifecycleTest, DestroyRemovesWorkdir) {
+  agentflow::daemon::SessionManager sm;
+  auto cfg = make_test_config();
+  agentflow::daemon::SandboxLifecycle sl(sm, cfg);
+  agentflow::daemon::SandboxSnapshots snaps(sl, cfg);
+  sl.set_snapshots(snaps);
+
+  // 构造真实存在的 workdir（快照 copy 需要源目录存在且非空）
+  auto key = make_key("u", "c", "a");
+  std::string workdir = "/tmp/agentflow_sandbox_test_wd_destroy";
+  fs::remove_all(workdir);
+  fs::create_directories(workdir);
+  {
+    std::ofstream(workdir + "/artifact.txt") << "payload";
+  }
+  auto sb = std::make_shared<StubSandbox>(key, "sb-wd-del", workdir);
+  sm.put(key, sb);
+  EXPECT_TRUE(fs::exists(workdir)) << "前置：workdir 应存在";
+
+  sl.destroy("sb-wd-del");
+  EXPECT_EQ(sm.list_active().size(), 0u) << "销毁后应从 SessionManager 移除";
+  EXPECT_FALSE(fs::exists(workdir)) << "销毁后 workdir 目录应被删除（kill 即删目录）";
+  fs::remove_all(workdir);  // 清理测试残留
 }
 
 // TC-SBOX-034: 快照幂等先清旧再重做。

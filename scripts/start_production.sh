@@ -27,7 +27,7 @@ elif [ "$#" -gt 0 ]; then
 fi
 
 PACKAGE="${AGENT_PACKAGE:-examples/agent/outfit-assistant}"
-# daemon 端口统一 17891（与 start_daemon.sh / start_e2e.sh / configs/{dev,test}/agentflowd.json / config.py 默认值一致）
+# daemon 端口统一 17891（与 start_daemon.sh / start_dev.sh / configs/{dev,test}/agentflowd.json / config.py 默认值一致）
 DAEMON_PORT="${DAEMON_PORT:-17891}"
 BRIDGE_PORT="${PYTHON_BRIDGE_PORT:-8199}"
 SIDECAR_PORT="${COREMIND_BRIDGE_PORT:-23767}"

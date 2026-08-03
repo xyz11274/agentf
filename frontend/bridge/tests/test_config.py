@@ -106,6 +106,10 @@ def _pydantic_field_to_yaml_path(field_name: str) -> str:
         "agent_defaults_llm_fallback_api_key": "agent_defaults.llm_fallback.api_key",
         "agent_defaults_llm_fallback_base_url": "agent_defaults.llm_fallback.base_url",
         "agent_defaults_llm_fallback_model": "agent_defaults.llm_fallback.model",
+        "sandbox_mode": "sandbox.mode",
+        "sandbox_e2b_api_url": "sandbox.e2b_api_url",
+        "sandbox_e2b_api_key": "sandbox.e2b_api_key",
+        "sandbox_e2b_ca_cert_path": "sandbox.e2b_ca_cert_path",
     }
 
     if field_name in special_map:

@@ -117,9 +117,13 @@ void SandboxLifecycle::destroy(const std::string& sandbox_id) {
       }
 
       // 第二层：ArtifactStore 快照（仅 Local/Docker 模式有效，E2B 无本地 workdir）
+      // snapshot_ok 标记本地快照是否成功——只有快照成功后才会删除 workdir
+      // （F1 数据安全：快照失败保留目录，绝不删未兜底的数据）
+      bool snapshot_ok = false;
       if (snapshots_) {
         try {
           snapshots_->snapshot(sandbox_id, sb->sandbox_mode());
+          snapshot_ok = true;
         } catch (const std::exception& e) {
           Logger::instance().warn_f("[SANDBOX] ArtifactStore snapshot failed for sandbox=%s: %s",
                                      sandbox_id.c_str(), e.what());
@@ -129,11 +133,22 @@ void SandboxLifecycle::destroy(const std::string& sandbox_id) {
         ArtifactStore store(config_);
         try {
           store.snapshot(sandbox_id, sb->workdir());
+          snapshot_ok = true;
         } catch (const std::exception& e) {
           Logger::instance().warn_f("[SANDBOX] Fallback ArtifactStore snapshot failed: %s", e.what());
         }
       }
       sb->destroy();  // 幂等（B7）
+      // 销毁后清理 workdir（仅 Local/Docker；E2B 的宿主机 workdir 是暂存目录，保留）
+      // 用户语义：local 模式沙箱 = workdir 目录，kill 即删目录（2026-08-02 用户确认）
+      if (snapshot_ok && sb->sandbox_mode() != "E2B") {
+        std::error_code ec;
+        fs::remove_all(sb->workdir(), ec);
+        if (ec && ec != std::errc::no_such_file_or_directory) {
+          Logger::instance().warn_f("[SANDBOX] Failed to remove workdir for sandbox=%s: %s (%s)",
+                                     sandbox_id.c_str(), sb->workdir().c_str(), ec.message().c_str());
+        }
+      }
       // 从 SessionManager 移除
       session_manager_.destroy(sb->owner());
       return;
@@ -151,15 +166,28 @@ int SandboxLifecycle::destroy_by_agent(const std::string& agent_id) {
     if (!sb) continue;
     if (sb->owner().agent_id != agent_id) continue;
     // 销毁前快照（与 destroy 路径一致的兜底逻辑，B11）
+    // snapshot_ok 标记本地快照是否成功——只有快照成功后才会删除 workdir（F1）
+    bool snapshot_ok = false;
     if (snapshots_) {
       try {
-        snapshots_->snapshot(sb->id());
+        snapshots_->snapshot(sb->id(), sb->sandbox_mode());
+        snapshot_ok = true;
       } catch (const std::exception& e) {
         Logger::instance().warn_f("[SANDBOX] Snapshot failed for sandbox=%s: %s",
                                    sb->id().c_str(), e.what());
       }
     }
     sb->destroy();  // 幂等（B7）
+    // 销毁后清理 workdir（仅 Local/Docker；E2B 的宿主机 workdir 是暂存目录，保留）
+    // 与 destroy() 单删路径一致：用户语义 local 沙箱 = workdir 目录，销毁即删目录
+    if (snapshot_ok && sb->sandbox_mode() != "E2B") {
+      std::error_code ec;
+      fs::remove_all(sb->workdir(), ec);
+      if (ec && ec != std::errc::no_such_file_or_directory) {
+        Logger::instance().warn_f("[SANDBOX] Failed to remove workdir for sandbox=%s: %s (%s)",
+                                   sb->id().c_str(), sb->workdir().c_str(), ec.message().c_str());
+      }
+    }
     session_manager_.destroy(sb->owner());
     Logger::instance().info_f(
         "[SANDBOX] Destroyed sandbox id=%s for agent=%s",

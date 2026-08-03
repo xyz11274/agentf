@@ -226,10 +226,11 @@ fi
 # ── Resolve binary ──────────────────────────────────────────────────
 case "$PROFILE" in
     dev)
-        if [ -x "$AR_PROJECT_ROOT/build/agentflowd" ]; then
-            BUILD_DIR="$AR_PROJECT_ROOT/build"
-        else
+        # build.sh dev 输出到 build/dev/；优先用它（restart 构建产物），旧扁平 build/ 仅 fallback
+        if [ -x "$AR_PROJECT_ROOT/build/dev/agentflowd" ]; then
             BUILD_DIR="$AR_PROJECT_ROOT/build/dev"
+        else
+            BUILD_DIR="$AR_PROJECT_ROOT/build"
         fi
         ;;
     release)

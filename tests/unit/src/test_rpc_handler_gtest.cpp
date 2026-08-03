@@ -18,6 +18,9 @@ TEST_F(RpcServerTest, MethodAccessControlTCP) {
   EXPECT_TRUE(RpcServer::is_method_allowed(ChannelType::TCP, "runtime.shutdown"));
   EXPECT_TRUE(RpcServer::is_method_allowed(ChannelType::TCP, "databus.put"));
   EXPECT_TRUE(RpcServer::is_method_allowed(ChannelType::TCP, "event.subscribe"));
+  // E1/E2：沙箱管理 RPC（sandbox.list / sandbox.destroy）经 TCP/WebSocket 通道（bridge 直连）
+  EXPECT_TRUE(RpcServer::is_method_allowed(ChannelType::TCP, "sandbox.list"));
+  EXPECT_TRUE(RpcServer::is_method_allowed(ChannelType::TCP, "sandbox.destroy"));
 }
 
 TEST_F(RpcServerTest, MethodAccessControlUDSBiz) {

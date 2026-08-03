@@ -677,6 +677,7 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
                             const std::string& did,
                             const std::string& content,
                             const std::string& type,
+                            const std::string& source,
                             const std::string& skill,
                             const std::string& round_str,
                             const std::string& status) -> bool {
@@ -703,6 +704,7 @@ bool MMAgentRuntime::execute_workflow(const AgentId& agent_id, const WorkflowId&
         msg.metadata["dialogue_id"] = did;
         msg.metadata["session_id"] = sid;
         if(!type.empty())      msg.metadata["type"] = type;
+        if(!source.empty())    msg.metadata["source"] = source;
         if(!skill.empty())     msg.metadata["skill"] = skill;
         if(!round_str.empty()) msg.metadata["round"] = round_str;
         if(!status.empty())    msg.metadata["status"] = status;

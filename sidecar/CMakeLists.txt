@@ -20,13 +20,13 @@ add_executable(coremind_bridge
     main.cpp
     uds_model_proxy.cpp
     proxy_handler.cpp
+    router_logic.cpp   # 纯协议逻辑（无 CMF 依赖），dev/main.cpp 与生产 sidecar_router 共用
 )
 
 if(COREMIND_ENABLED)
     target_sources(coremind_bridge PRIVATE
         resolve_handler.cpp
         sidecar_router.cpp
-        router_logic.cpp
     )
 else()
     target_sources(coremind_bridge PRIVATE
@@ -98,6 +98,10 @@ if(GTest_FOUND)
 
     target_include_directories(test_router_logic PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+
+    target_compile_definitions(test_router_logic PRIVATE
+        TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
     )
 
     target_link_libraries(test_router_logic PRIVATE GTest::GTest GTest::Main)

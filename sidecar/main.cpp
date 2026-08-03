@@ -27,6 +27,7 @@
 
 #include <httplib.h>
 #include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstdlib>
 #include <iostream>
@@ -39,6 +40,7 @@
 #include "uds_model_proxy.h"
 #include "proxy_handler.h"
 #include "sidecar_router.h"
+#include "router_logic.h"
 
 // CoreMind framework headers — only available in Huawei build environment
 #ifdef COREMIND_ENABLED
@@ -76,6 +78,12 @@ static Json::StreamWriterBuilder json_writer() {
         return b;
     }();
     return w;
+}
+
+static std::string current_timestamp_ms() {
+    auto now = std::chrono::system_clock::now();
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    return std::to_string(ms);
 }
 
 static void set_json_response(httplib::Response& res, const Json::Value& json, int status = 200) {
@@ -174,32 +182,35 @@ static void forward_to_bridge(
     // 从 AccessCtrl 格式提取字段（与 HandleUserRequest 一致）
     auto header = original_request["Header"];
     auto data = original_request["Data"];
+
+    // B1: EventType 校验 — 与生产 HandleUserRequest 一致，非法组合 400 拒绝
+    std::string header_msg_type = header.get("MessageType", "").asString();
+    std::string data_msg_type = data.get("MessageType", "").asString();
+    if (!sidecar::is_supported_message_type(header_msg_type, data_msg_type)) {
+        res.status = 400;
+        res.set_content(
+            R"({"error":"unsupported message type: )" + header_msg_type + "/" + data_msg_type + R"("})",
+            "application/json");
+        std::cerr << "[coremind_bridge] RES " << req.method << " " << req.path
+                  << " 400 | body={\"error\":\"unsupported message type\"}" << std::endl;
+        return;
+    }
+
     std::string user_name = header.get("UserName", "").asString();
     std::string client_session_id = header.get("ClientSessionId",
                                header.get("SessionId", "")).asString();
+    std::string task_id = header.get("TaskID", "").asString();
+    std::string dialogue_id = header.get("DialogueId", "").asString();
+    std::string sender = header.get("Sender", "").asString();
+    std::string receiver = header.get("Receiver", "").asString();
     std::string user_input_text = data.get("UserInputText", "").asString();
+    std::string user_input_object_str = data.get("UserInputObject", "").asString();
     std::string sys_agent_entity = header.get("SysAgentEntity", "").asString();
 
-    // 构建多模态 content
-    Json::Value content_parts(Json::arrayValue);
-    if (!user_input_text.empty()) {
-        Json::Value text_part;
-        text_part["type"] = "text";
-        text_part["text"] = user_input_text;
-        content_parts.append(text_part);
-    }
-    auto user_input_obj = data["UserInputObject"]["data"]["content"];
-    if (user_input_obj.isArray()) {
-        for (const auto& item : user_input_obj) {
-            std::string item_type = item.get("type", "").asString();
-            if (item_type == "image") {
-                Json::Value image_part;
-                image_part["type"] = "image_url";
-                image_part["image_url"]["url"] = item.get("data", "").asString();
-                content_parts.append(image_part);
-            }
-        }
-    }
+    // B10: 构建 OpenAI 多模态 content — UserInputObject 是 stringified JSON string（CMF 协议），
+    // 与生产 HandleUserRequest 共用 build_openai_messages（嵌套对象会被 asString() 丢弃图片）。
+    auto openai_messages = sidecar::build_openai_messages(user_input_text, user_input_object_str);
+    Json::Value content_parts = openai_messages[0]["content"];
     // content 直接传 ContentPart 数组（JSON 数组，非字符串化）
     // bridge 的 normalize_content 需要数组才能识别 image_url part 并落盘；
     // 纯文本场景传 [{type:text,text:...}] 数组，bridge prepare_content_for_daemon
@@ -222,20 +233,17 @@ static void forward_to_bridge(
     const char* env_agent = std::getenv("AF_BR_COREMIND_AGENT_ID");
     std::string agent_id = env_agent ? env_agent : "outfit-assistant";
 
-    if (sys_agent_entity.empty()) {
-        std::cerr << "[coremind_bridge] WARN no SysAgentEntity, callbacks will not be delivered"
-                  << std::endl;
-    }
-
     // ══════════════════════════════════════════════════════════════
-    //  always async: 202 + 后台 SSE 流式转发 + POST 回调
+    //  有 SysAgentEntity → 异步模式：200 无 body + 后台 SSE 流式转发 + POST 回调
+    //  无 SysAgentEntity → 同步模式：httplib POST ?stream=false（对齐生产同步分支）
     // ══════════════════════════════════════════════════════════════
-    std::string ts_body = R"({"status":"accepted","request_id":")" + request_id + R"("})";
-    res.set_content(ts_body, "application/json");
-    std::cerr << "[coremind_bridge] ASYNC " << req.path << " req=" << request_id
-              << " callback=" << (sys_agent_entity.empty() ? "(none)" : sys_agent_entity) << std::endl;
+    if (!sys_agent_entity.empty()) {
+        // 对齐生产 HandleUserRequest：异步路径只返回 200 状态码（WriteStatueCode(200) 无 body）
+        res.status = 200;
+        std::cerr << "[coremind_bridge] ASYNC " << req.path << " req=" << request_id
+                  << " callback=" << sys_agent_entity << std::endl;
 
-    // 后台线程处理 SSE 流 + POST 回调
+        // 后台线程处理 SSE 流 + POST 回调
         std::thread([=]() {
             std::string stream_path = target.path_prefix + "/api/chat/" + agent_id + "?stream=true";
             httplib::Client cli(target.origin.c_str());
@@ -245,24 +253,29 @@ static void forward_to_bridge(
             hdrs.emplace("X-Request-Id", request_id);
 
             std::string sse_buffer;
-            std::string accumulated;
-            std::string last_sent;
-            bool has_content = false;
+            sidecar::SSEChunkProcessor processor;
+            auto dumper = std::make_shared<sidecar::SidecarDumper>(request_id);
 
-            // POST 回调辅助函数
-            auto post_callback = [&](const std::string& stream_status, const std::string& text, int flag = 0) {
+            // POST 回调辅助函数 — 对齐生产 sidecar_router.cpp 的回调构造：
+            //   Data 用 build_user_output_data（含 UserOutputObject/IsVoiceBroadcast/
+            //   ImplicitOutputFlag/UserManualInterventionFlag），UserOutputObject 覆盖为
+            //   stringified artifacts（Completed）或空串（Running）；
+            //   Header 用 build_callback_header（TaskID=原始 task_id、DialogueId、
+            //   Sender/Receiver 翻转、透传 AcmSessionId/ClientExField/DeviceCategory/
+            //   DeviceId/SessionId/TeamEnvironmentID/UUID、SeqNum=request_id）+ EventTimeStamp。
+            //   回调 URL：dev 模式 http://{SysAgentEntity}（本地 mock 无 TLS）；
+            //   生产模式 https://{SysAgentEntity}:23767（CoreMind HTTP/2 + mTLS）——环境差异。
+            auto post_callback = [&](const std::string& stream_status, int flag,
+                                       const std::string& text, bool is_final,
+                                       const std::string& user_output_object) -> bool {
+                dumper->dump_callback(stream_status, flag, text, is_final, user_output_object);
                 Json::Value cb;
-                cb["Data"]["MessageType"] = "UserOutput";
-                cb["Data"]["StreamStatus"] = stream_status;
-                cb["Data"]["UserOutputFlag"] = flag;
-                cb["Data"]["UserOutputText"] = text;
-                cb["Header"]["MessageType"] = "DataExchange";
-                cb["Header"]["TaskID"] = request_id;
-                cb["Header"]["Sender"] = "SysAgent";
-                cb["Header"]["Receiver"] = "APP";
-                cb["Header"]["SeqNum"] = request_id;
-                cb["Header"]["UserName"] = user_name;
-                cb["Header"]["ClientSessionId"] = client_session_id;
+                cb["Data"] = sidecar::build_user_output_data(stream_status, flag, text);
+                cb["Data"]["UserOutputObject"] = user_output_object;
+                cb["Header"] = sidecar::build_callback_header(
+                    "DataExchange", task_id, dialogue_id, user_name, client_session_id,
+                    sender, receiver, request_id, header);
+                cb["Header"]["EventTimeStamp"] = current_timestamp_ms();
                 std::string cb_body = Json::writeString(json_writer(), cb);
                 std::cerr << "[coremind_bridge] CBF_CALLBACK req=" << request_id
                           << " status=" << stream_status << " flag=" << flag
@@ -280,9 +293,11 @@ static void forward_to_bridge(
                     std::cerr << "[coremind_bridge] CBF_ERR req=" << request_id
                               << " error=" << httplib::to_string(err) << std::endl;
                 }
+                return true;
             };
 
             std::string body_str = Json::writeString(json_writer(), rest_body);
+            dumper->dump_request(rest_body);
             std::cerr << "[coremind_bridge] FWD " << stream_path << " req=" << request_id
                       << " | body=\n" << pretty_json(body_str) << std::endl;
             auto result = cli.Post(stream_path.c_str(), hdrs, body_str, "application/json",
@@ -295,91 +310,17 @@ static void forward_to_bridge(
                         if (line.substr(0, 6) == "data: ") {
                             std::string payload = line.substr(6);
                             if (payload == "[DONE]") continue;
-                            // 打印原始 Bridge SSE 数据（截断前 500 字符，避免日志过大）
-                            std::string sse_preview = payload.substr(0, 500);
-                            if (payload.size() > 500) sse_preview += "... (truncated)";
                             std::cerr << "[coremind_bridge] SSE_RAW len=" << payload.size()
-                                      << " data=" << sse_preview << std::endl;
+                                      << " data=" << payload << std::endl;
                             Json::Value sse_json;
                             Json::CharReaderBuilder rdr;
                             std::istringstream sse_in(payload);
                             std::string sse_err;
                             if (Json::parseFromStream(rdr, sse_in, &sse_json, &sse_err)) {
-                                std::string token;
-                                auto is_progress = sse_json.get("_progress", false).asBool()
-                                    || sse_json.get("_chunk_type", "").asString() == "progress";
-                                auto is_llm_chunk = sse_json.get("_chunk_type", "").asString() == "llm_chunk";
-                                auto source = sse_json.get("_source", "").asString();
-                                auto skill = sse_json.get("_skill", "").asString();
-                                // 只处理 coordinator 的消息：_source="" 且 _skill="" 或 "coordinator"
-                                // 跳过 skill_executor 的消息（_skill="outfit-stylist" 等）
-                                if (!skill.empty() && skill != "coordinator") continue;
-                                auto delta = sse_json["choices"][0]["delta"];
-                                if (delta.isObject()) token = delta.get("content", "").asString();
-                                if (token.empty()) {
-                                    auto msg = sse_json["choices"][0]["message"];
-                                    if (msg.isObject()) token = msg.get("content", "").asString();
-                                }
-                                if (!token.empty()) {
-                                    // llm_chunk: coordinator 的流式 token 作为 progress 推给上游，
-                                    // 仅 tool_calls-only（无文本）的 llm_chunk 跳过。
-                                    if (is_llm_chunk && token[0] == '{') continue;
-                                    // progress/text 的 content 可能嵌套了 raw OpenAI JSON
-                                    //（coordinator 节点写入 databus 时未剥壳），递归提取纯文本。
-                                    // 检查内容中是否嵌入 JSON（不以 { 开头但包含 { 的场景，
-                                    // 如 "coordinator 决策中…{"choices":[...]}"）
-                                    auto json_start = token.find('{');
-                                    if (json_start != std::string::npos) {
-                                        std::string json_part = token.substr(json_start);
-                                        Json::Value nested;
-                                        Json::CharReaderBuilder nested_rdr;
-                                        std::istringstream nested_in(json_part);
-                                        std::string nested_err;
-                                        if (Json::parseFromStream(nested_rdr, nested_in, &nested, &nested_err)) {
-                                            auto nested_msg = nested["choices"][0]["message"];
-                                            if (nested_msg.isObject()) {
-                                                std::string t = nested_msg.get("content", "").asString();
-                                                if (!t.empty()) {
-                                                    token = token.substr(0, json_start) + t;
-                                                }
-                                            }
-                                            if (token.empty() || token == json_part) {
-                                                auto nested_delta = nested["choices"][0]["delta"];
-                                                if (nested_delta.isObject()) {
-                                                    std::string t = nested_delta.get("content", "").asString();
-                                                    if (!t.empty()) {
-                                                        token = token.substr(0, json_start) + t;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        // 如果提取后仍然是纯 JSON（delta.content 为空，仅含 tool_calls），
-                                        // 说明没有用户可见文本，跳过这个 chunk。
-                                        if (!token.empty() && token[0] == '{') {
-                                            token.clear();
-                                        }
-                                    }
-                                    // 仅 _progress=true 的消息作为思考过程（flag=1），
-                                    // 其余（llm_chunk、text 等）均为回复内容（flag=0）。
-                                    // 最终完整回复（text）不累积，避免与前面的 llm_chunk 重复。
-                                    int flag = sse_json.get("_progress", false).asBool() ? 1 : 0;
-                                    // text chunk（非 llm_chunk、非 progress）是 coordinator 的最后完整回复。
-                                    // llm_chunk 的增量 token 已完整覆盖回复内容，跳过 text 回调，
-                                    // 避免前端收到流式 token + 最终回复的双份重复内容。
-                                    if (!is_llm_chunk && !is_progress) {
-                                        continue;
-                                    }
-                                    accumulated += token;
-                                    has_content = has_content || !is_progress;
-                                    // 只发增量（delta）
-                                    std::string delta = accumulated.substr(last_sent.size());
-                                    last_sent = accumulated;
-                                    // 空增量不触发 Running 回调（tool_calls-only chunk 等无文本场景），
-                                    // 但 Completed 收尾回调不受影响（见下方 SSE 流结束处的独立调用）。
-                                    if (!delta.empty()) {
-                                        // UserOutputFlag: 0=用户可见文本, 1=progress
-                                        post_callback("Running", delta, flag);
-                                    }
+                                dumper->dump_sse_chunk(sse_json);
+                                for (const auto& cb : processor.process(sse_json)) {
+                                    post_callback(cb.stream_status, cb.flag, cb.text,
+                                                  cb.is_final, cb.user_output_object);
                                 }
                             }
                         }
@@ -387,34 +328,71 @@ static void forward_to_bridge(
                     return true;
                 });
 
-            // SSE 流结束（Post 返回后）
-            if (has_content) {
-                std::string final_delta = accumulated.substr(last_sent.size());
-                // 只发尚未通过 Running 发送的剩余内容，不重复发已经发过的
-                post_callback("Completed", final_delta);
-            }
-            // TaskStatus 报文
-            Json::Value ts;
-            ts["Header"]["MessageType"] = "TaskStatusManagement";
-            ts["Header"]["TaskID"] = request_id;
-            ts["Header"]["Sender"] = "SysAgent";
-            ts["Header"]["Receiver"] = "APP";
-            ts["Header"]["SeqNum"] = request_id;
-            ts["Header"]["UserName"] = user_name;
-            ts["Header"]["ClientSessionId"] = client_session_id;
-            ts["Data"]["MessageType"] = "TaskStatusReport";
-            ts["Data"]["TaskStatusCode"] = has_content ? 200 : 500;
-            ts["Data"]["TaskStatusReport"] = has_content ? "TaskCompleted" : "TaskFailed";
-            ts["Data"]["UserOutputText"] = accumulated;
+            // SSE 流结束：Completed 回调 + TaskStatus 报文
+            auto completed = processor.make_completed();
+            post_callback(completed.stream_status, completed.flag, completed.text,
+                          completed.is_final, completed.user_output_object);
+
+            Json::Value task_status;
+            task_status["Data"] = sidecar::build_task_status_data(200, "TaskCompleted", processor.accumulated_content());
+            task_status["Header"] = sidecar::build_callback_header(
+                "TaskStatusManagement", task_id, dialogue_id, user_name, client_session_id,
+                sender, receiver, request_id, header);
+            task_status["Header"]["EventTimeStamp"] = current_timestamp_ms();
+            std::string ts_str = Json::writeString(json_writer(), task_status);
             httplib::Client ts_cli(sys_agent_entity.c_str());
             ts_cli.Post("/coremind/systemagent/v1/callback",
                         {{"Content-Type", "application/json"}},
-                        Json::writeString(json_writer(), ts), "application/json");
+                        ts_str, "application/json");
 
             std::cerr << "[coremind_bridge] ASYNC_DONE req=" << request_id
-                      << " accumulated=" << accumulated.size() << " chars" << std::endl;
+                      << " accumulated=" << processor.accumulated_content().size() << " chars" << std::endl;
         }).detach();
         return;
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  同步模式（无 SysAgentEntity）— 对齐生产 HandleUserRequest 同步分支：
+    //  httplib POST ?stream=false，返回 200（有内容）/ 500（Bridge 不可达）
+    // ══════════════════════════════════════════════════════════════
+    std::string sync_path = target.path_prefix + "/api/chat/" + agent_id + "?stream=false";
+    httplib::Client sync_cli(target.origin.c_str());
+    sync_cli.set_read_timeout(360, 0);
+    httplib::Headers sync_headers;
+    sync_headers.emplace("Content-Type", "application/json");
+    sync_headers.emplace("X-Request-Id", request_id);
+
+    std::string sync_body = Json::writeString(json_writer(), rest_body);
+    std::cerr << "[coremind_bridge] SYNC_FWD " << sync_path << " req=" << request_id
+              << " | body=\n" << pretty_json(sync_body) << std::endl;
+    auto sync_response = sync_cli.Post(sync_path.c_str(), sync_headers, sync_body, "application/json");
+    if (!sync_response) {
+        res.status = 500;
+        std::cerr << "[coremind_bridge] SYNC_ERR req=" << request_id
+                  << " upstream unreachable" << std::endl;
+        return;
+    }
+
+    std::string sync_text;
+    if (!sync_response->body.empty()) {
+        Json::Value bridge_resp;
+        Json::CharReaderBuilder sync_reader;
+        std::string sync_errors;
+        std::istringstream sync_input(sync_response->body);
+        if (Json::parseFromStream(sync_reader, sync_input, &bridge_resp, &sync_errors)) {
+            sync_text = bridge_resp.get("content", "").asString();
+        } else {
+            sync_text = sync_response->body;
+        }
+    }
+
+    std::string sync_preview = sync_text.substr(0, 500);
+    if (sync_text.size() > 500) sync_preview += "... (truncated)";
+    std::cout << "[coremind_bridge] sync response: request_id=" << request_id
+              << " resp_len=" << sync_text.size()
+              << " content=" << sync_preview << std::endl;
+
+    res.status = 200;
 }
 
 struct ListenAddress {

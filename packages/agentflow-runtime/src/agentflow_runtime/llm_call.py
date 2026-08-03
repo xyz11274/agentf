@@ -321,9 +321,17 @@ class _TraceRecorder:
                         kwargs["skill"] = skill
                     if round_i:
                         kwargs["round"] = str(round_i)
+                    # Guard: 空 content（如 delta 只含 role/tool_calls/finish_reason）跳过推送，
+                    # 避免 daemon 对空 content 返回 -32602 error 触发无意义异常
+                    if not content:
+                        return
                     _push_client.response_push(content, **kwargs)
                 except Exception:
-                    print(f"[flow] WARN: chunk_publisher failed", file=sys.stderr)
+                    import traceback
+                    print(
+                        f"[flow] WARN: chunk_publisher failed\n{traceback.format_exc()}",
+                        file=sys.stderr, flush=True,
+                    )
 
             chunk_publisher = _on_chunk
 

@@ -22,8 +22,6 @@ from mocks.upstream_mock.server import (
     _push_event,
     _sse_lock,
     _sse_subscribers,
-    _sidecar_req_lock,
-    _sidecar_req_map,
     _tasks,
     _tasks_lock,
     app,
@@ -37,7 +35,6 @@ def reset_state():
     """每个测试前重置全局状态。"""
     _tasks.clear()
     _sse_subscribers.clear()
-    _sidecar_req_map.clear()
     yield
 
 

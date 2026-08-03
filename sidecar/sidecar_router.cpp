@@ -291,8 +291,9 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
 
             // 回调 POST 辅助函数
             auto post_callback = [&](const std::string& stream_status, int flag,
-                                      const std::string& text, bool is_final,
-                                      const std::string& user_output_object) -> bool {
+                                       const std::string& text, bool is_final,
+                                       const std::string& user_output_object) -> bool {
+                dumper->dump_callback(stream_status, flag, text, is_final, user_output_object);
                 Json::Value cb;
                 cb["Data"]["MessageType"] = "UserOutput";
                 cb["Data"]["StreamStatus"] = stream_status;
@@ -343,9 +344,10 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
             http_headers.emplace("X-Request-Id", request_id);
 
             std::string sse_buffer;
-            std::string accumulated_content;
-            Json::Value accumulated_artifacts;
+            sidecar::SSEChunkProcessor processor;
+            auto dumper = std::make_shared<sidecar::SidecarDumper>(request_id);
             std::string body_str = json_dumps(rest_body);
+            dumper->dump_request(rest_body);
             std::cerr << "[sidecar_router] FWD " << callback_path_stream << " req=" << request_id
                       << " | body=\n" << pretty_json(body_str) << std::endl;
             cli.Post(callback_path_stream.c_str(), http_headers, body_str, "application/json",
@@ -364,47 +366,27 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                         std::string payload = line.substr(6);
                         // 检查终止信号
                         if (payload == "[DONE]") return false;
-                        std::string sse_preview = payload.substr(0, 500);
-                        if (payload.size() > 500) sse_preview += "... (truncated)";
                         std::cerr << "[sidecar_router] SSE_RAW len=" << payload.size()
-                                  << " data=" << sse_preview << std::endl;
+                                  << " data=" << payload << std::endl;
                         // 解析 SSE json
                         Json::Value sse_json;
                         Json::CharReaderBuilder rdr;
                         std::string err;
                         std::istringstream ss(payload);
                         if (!Json::parseFromStream(rdr, ss, &sse_json, &err)) continue;
-                        Json::Value chunk_artifacts = sse_json.get("_artifacts", Json::Value(Json::nullValue));
-                        if (!chunk_artifacts.isNull()) {
-                            accumulated_artifacts = chunk_artifacts;
+                        dumper->dump_sse_chunk(sse_json);
+                        for (const auto& cb : processor.process(sse_json)) {
+                            post_callback(cb.stream_status, cb.flag, cb.text,
+                                          cb.is_final, cb.user_output_object);
                         }
-                        // 提取 content
-                        std::string token;
-                        auto choices = sse_json["choices"];
-                        if (choices.isArray() && choices.size() > 0) {
-                            auto delta = choices[0]["delta"]["content"];
-                            if (delta.isString()) token = delta.asString();
-                            else {
-                                auto msg = choices[0]["message"]["content"];
-                                if (msg.isString()) token = msg.asString();
-                            }
-                        }
-                        if (token.empty()) continue;
-                        std::string _src = sse_json.get("_source", "").asString();
-                        if (_src != "coordinator" && !_src.empty()) continue;
-                        bool is_progress = sse_json.get("_progress", false).asBool()
-                                        || sse_json.get("_chunk_type", "").asString() == "progress";
-                        post_callback("Running", is_progress ? 1 : 0, token, false, "");
-                        accumulated_content += token;
                     }
                     return true;
                 },
                 [&](uint64_t, uint64_t) -> bool {
-                    // SSE 流结束：发送 Completed 信号（内容已增量发出，Completed 仅做结束标记）
-                    std::string output_obj = build_user_output_object(accumulated_artifacts);
-                    post_callback("Completed", 0, "", true, output_obj);
+                    auto completed = processor.make_completed();
+                    post_callback(completed.stream_status, completed.flag, completed.text,
+                                  completed.is_final, completed.user_output_object);
 
-                    // 额外发送 TaskStatus 报文
                     Json::Value task_status;
                     task_status["Header"] = build_callback_header(
                         "TaskStatusManagement", task_id, dialogue_id,
@@ -415,7 +397,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                     data["MessageType"] = "TaskStatusReport";
                     data["TaskStatusCode"] = 200;
                     data["TaskStatusReport"] = "TaskCompleted";
-                    data["UserOutputText"] = accumulated_content;
+                    data["UserOutputText"] = processor.accumulated_content();
                     task_status["Data"] = data;
                     std::string ts_url = "https://" + sys_agent_entity + ":23767"
                                        + "/coremind/systemagent/v1/callback";

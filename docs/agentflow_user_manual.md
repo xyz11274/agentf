@@ -1137,7 +1137,6 @@ extern "C" void coordinator_node_v3(const SoDataMap& inputs, SoDataMap& outputs,
       "workflow_file": "skill_travel_workflow.json",
       "skill": {
         "name": "travel",
-        "config_dir": "runtime",
         "instance_pool_size": 2,
         "expected_parameters": ["destination", "date", "travelers"]
       }

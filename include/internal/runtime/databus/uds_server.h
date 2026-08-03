@@ -92,6 +92,7 @@ public:
                                                    const std::string& dialogue_id,
                                                    const std::string& content,
                                                    const std::string& type,
+                                                   const std::string& source,
                                                    const std::string& skill,
                                                    const std::string& round_str,
                                                    const std::string& status)>;

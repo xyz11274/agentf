@@ -267,7 +267,6 @@ outfit-assistant/
       "workflow_file": "dummy_pre_skill_workflow.json",
       "skill": {
         "name": "dummy_pre_skill",
-        "config_dir": "harness/skills/dummy_pre_skill",
         "instance_pool_size": 1
       },
       "workflow_pool_size": 1
@@ -279,7 +278,6 @@ outfit-assistant/
       "workflow_file": "skill_workflow.json",
       "skill": {
         "name": "skill-runner",
-        "config_dir": "harness/skills/skill-runner",
         "instance_pool_size": 5
       },
       "workflow_pool_size": 5

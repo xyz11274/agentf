@@ -27,7 +27,7 @@
     "drain_timeout_ms": 120000
   },
   "sandbox": {
-    "mode": "e2b",
+    "mode": "local",
     "workdir_root": "tmp/dev/sandbox",
     "snapshot_root": "tmp/dev/snapshots",
     "sandbox_http_port": 8080,

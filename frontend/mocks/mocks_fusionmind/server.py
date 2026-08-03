@@ -452,6 +452,30 @@ async def legacy_completions(request: Request) -> Response:
     return await _handle_completions(request)
 
 
+@app.post("/infermind/scheduler/v1/chat/completions")
+async def scheduler_completions(request: Request) -> Response:
+    """IMInferScheduler 调度接口 — sidecar UdsModelProxy coremind-mode 生产路径的转发目标。
+
+    对齐 sidecar/uds_model_proxy.cpp 生产路径解析（`IM_INFER_CHAT_PATH`）：
+      1. UdsModelProxy 经 `resolve_service("IMInferScheduler")` 找到地址后转发到此端点；
+      2. 响应取**顶层** `content` / `response` 字段（IMInferScheduler 格式），
+         非 OpenAI `choices[0].message.content` 包装 —— 传错格式会被 UdsModelProxy
+         解析为空串并回退整包 JSON；
+      3. 该路径使用 HTTP/2 非流式单次请求（`Http2ClientRequest` + `Send`），
+         因此此处固定返回非流式 JSON，不输出 SSE。
+    """
+    body = await request.json()
+    messages = body.get("messages", [])
+    system_prompt, last_user = _parse_messages(messages)
+    answer = _mock_answer(system_prompt, last_user)
+    logger.info("→ scheduler_completions query_len=%d mode=%s",
+                len(last_user), _config.get("mode", "echo"))
+    return Response(
+        content=_model_dump_json({"content": answer}),
+        media_type="application/json",
+    )
+
+
 @app.get("/health")
 async def health() -> dict:
     return {
@@ -512,6 +536,7 @@ def main() -> None:
     logger.info("  Endpoints:")
     logger.info("    POST /infermind/llm/v1/chat/openai/completions")
     logger.info("    POST /infermind/llm/v1/chat/completions")
+    logger.info("    POST /infermind/scheduler/v1/chat/completions  (sidecar UdsModelProxy coremind-mode 生产路径)")
     logger.info("    GET  /health")
     logger.info("=" * 60)
 

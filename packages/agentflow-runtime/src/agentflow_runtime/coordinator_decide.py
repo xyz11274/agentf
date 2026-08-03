@@ -1013,7 +1013,7 @@ def execute():
                         for skill_name_ in skill_labels.strip().split():
                             sn = skill_name_.strip()
                             if sn:
-                                databus.response_push(sn, type="progress", skill=sn, status="running",
+                                databus.response_push(f"正在执行 {sn}", type="progress", skill=sn, status="running",
                                                       source="coordinator")
                 except Exception as exc:
                     print(f"[flow]   WARN: dispatch progress push failed: {exc}", file=sys.stderr)

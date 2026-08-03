@@ -841,6 +841,8 @@ if(AGENTFLOW_BUILD_TESTS)
       ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_local.cpp
       ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_docker.cpp
       ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_e2b.cpp
+      # Sandbox 生命周期集成测试（StubSandbox + 真实 SessionManager/SandboxLifecycle/SandboxSnapshots）
+      ${AGENTFLOW_TEST_DIR}/integration/sandbox_lifecycle_test.cpp
   )
   if(TARGET GTest::gtest)
     target_link_libraries(test_daemon_gtest PRIVATE agentflow GTest::gtest GTest::gtest_main)

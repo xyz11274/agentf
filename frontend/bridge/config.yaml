@@ -79,6 +79,17 @@ uploads_dir: "/tmp/agentflow/uploads"  # 大图落盘目录
 chat_turn_timeout_seconds: 900.0  # 聊天单轮总超时（秒，可用 CHAT_TURN_TIMEOUT_SECONDS 覆盖）
 daemon_status_refresh_interval: 10.0
 
+# ── 沙箱管理（本地开发可观测性，见 docs/design/features/sandbox-management.md）──
+sandbox:
+  mode: "local"                  # e2b | local | docker（对齐 daemon sandbox.mode）
+  # 注：workdir_root/snapshot_root/daemon_log_path 已废弃——local/docker 模式
+  # 切换为 daemon RPC 数据源（sandbox.list），不再目录扫描/日志解析（2026-08-02 重构）
+  e2b_api_url: "http://218.245.96.148:30030"
+  e2b_api_key: "e2b_000000000"
+  e2b_ca_cert_path: "resource/certs/e2b_CA.pem"
+  # 注：无 daemon_log_path——local/docker 模式已切换为 daemon RPC 数据源
+  # （sandbox.list），不再解析 daemon 日志（2026-08-02 重构）
+
 # ── CORS ──────────────────────────────────────────────────────────
 cors_allowed_origins:
   - "http://localhost:15173"

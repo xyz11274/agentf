@@ -258,6 +258,35 @@ class BridgeSettings(BaseSettings):
         description="Seconds between background daemon status cache refreshes.",
     )
 
+    # --- 🏖️ sandbox management (local dev observability) ----------------------
+    # 对齐 daemon 配置 configs/{env}/agentflowd.json 的 sandbox.* 与
+    # scripts/e2b/sandbox_list.py 的默认值（见 docs/design/features/sandbox-management.md）。
+    sandbox_mode: str = Field(
+        validation_alias="AF_BR_SANDBOX_MODE",
+        default="local",
+        description="Sandbox mode: e2b | local | docker. Mirrors daemon sandbox.mode.",
+    )
+    # 注：无 sandbox_workdir_root / sandbox_daemon_log_path——local/docker 模式
+    # 已切换为 daemon RPC 数据源（sandbox.list），不再目录扫描/日志解析
+    # （2026-08-02 重构）
+    sandbox_e2b_api_url: str = Field(
+        validation_alias="AF_BR_SANDBOX_E2B_API_URL",
+        default="http://218.245.96.148:30030",
+        description="E2B API base URL (mirrors daemon sandbox.e2b_api_url).",
+    )
+    sandbox_e2b_api_key: str = Field(
+        validation_alias="AF_BR_SANDBOX_E2B_API_KEY",
+        default="e2b_000000000",
+        description="E2B API key (kept in memory, never exposed to responses).",
+    )
+    sandbox_e2b_ca_cert_path: str = Field(
+        validation_alias="AF_BR_SANDBOX_E2B_CA_CERT_PATH",
+        default="resource/certs/e2b_CA.pem",
+        description="E2B CA cert path for TLS verification.",
+    )
+    # 注：无 sandbox_daemon_log_path——local/docker 模式已切换为 daemon RPC
+    # 数据源（sandbox.list），不再解析 daemon 日志（2026-08-02 重构）
+
     # --- 💾 session persistence (Bridge sessions) ------------------------------
     session_provider: str = Field(validation_alias="AF_BR_SESSION_PROVIDER", 
         default="local",

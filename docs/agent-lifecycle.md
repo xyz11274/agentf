@@ -724,7 +724,6 @@ sequenceDiagram
             "workflow_pool_size": 2,
             "skill": {
                 "name": "faq",
-                "config_dir": "skills/faq",
                 "instance_pool_size": 2
             }
         },
@@ -736,7 +735,6 @@ sequenceDiagram
             "workflow_pool_size": 2,
             "skill": {
                 "name": "escalation",
-                "config_dir": "skills/escalation",
                 "instance_pool_size": 2
             }
         }
