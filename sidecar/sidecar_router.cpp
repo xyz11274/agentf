@@ -289,7 +289,8 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
             rest_body["client_id"] = client_session_id;
             rest_body["content"] = content_parts;
 
-            // 回调 POST 辅助函数
+            // 回调 POST 辅助函数（dumper 必须先于本 lambda 声明——lambda [&] 捕获不到尚未声明的变量）
+            auto dumper = std::make_shared<sidecar::SidecarDumper>(request_id);
             auto post_callback = [&](const std::string& stream_status, int flag,
                                        const std::string& text, bool is_final,
                                        const std::string& user_output_object) -> bool {
@@ -345,7 +346,6 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
 
             std::string sse_buffer;
             sidecar::SSEChunkProcessor processor;
-            auto dumper = std::make_shared<sidecar::SidecarDumper>(request_id);
             std::string body_str = json_dumps(rest_body);
             dumper->dump_request(rest_body);
             std::cerr << "[sidecar_router] FWD " << callback_path_stream << " req=" << request_id
