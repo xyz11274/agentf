@@ -321,6 +321,10 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                 std::string target = "https://" + sys_agent_entity + ":23767"
                                    + "/coremind/systemagent/v1/callback";
                 std::string cb_str = json_dumps(cb);
+                std::cerr << "[sidecar_router] CBF_CALLBACK req=" << request_id
+                          << " status=" << stream_status << " flag=" << flag
+                          << " text_len=" << text.size()
+                          << " target=" << target << std::endl;
 #ifdef COREMIND_ENABLED
                 auto httpF = CMFrm::COM::HttpClientFactory::GetHttpClientFactory();
                 auto h2 = httpF->GetHttp2Client("default");
@@ -331,6 +335,9 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                     req->AddHeader("Content-Type", "application/json");
                     req->AddBody(cb_str);
                     h2->Send(req);
+                    std::cerr << "[sidecar_router] CBF_SENT req=" << request_id
+                              << " via=coremind_h2" << std::endl;
+                    dumper->dump_callback_result("user_output", "coremind_h2", 0, "");
                     return true;
                 }
 #endif
@@ -341,9 +348,16 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                 auto cb_res = cb_cli.Post(target.substr(dp).c_str(),
                                        {{"Content-Type", "application/json"}},
                                        cb_str, "application/json");
-                // httplib::Result 提供 operator bool()：请求成功（拿到 Response）为 true，
-                // 连接失败/未发出为 false。lambda 返回值未被任何调用点消费，
-                // 此处仅用于消除 lambda 内两分支返回类型不一致的编译错误。
+                if (cb_res) {
+                    std::cerr << "[sidecar_router] CBF_RESP req=" << request_id
+                              << " http=" << cb_res->status << std::endl;
+                    dumper->dump_callback_result("user_output", "httplib", cb_res->status, "");
+                } else {
+                    std::cerr << "[sidecar_router] CBF_ERR req=" << request_id
+                              << " error=" << httplib::to_string(cb_res.error()) << std::endl;
+                    dumper->dump_callback_result("user_output", "httplib", 0,
+                                                  httplib::to_string(cb_res.error()));
+                }
                 return static_cast<bool>(cb_res);
             };
 
@@ -412,6 +426,10 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                     std::string ts_url = "https://" + sys_agent_entity + ":23767"
                                        + "/coremind/systemagent/v1/callback";
                     std::string ts_str = json_dumps(task_status);
+                    std::cerr << "[sidecar_router] CBF_TASKSTATUS req=" << request_id
+                              << " code=200 status=TaskCompleted"
+                              << " content_len=" << processor.accumulated_content().size()
+                              << " target=" << ts_url << std::endl;
 #ifdef COREMIND_ENABLED
                     auto httpF = CMFrm::COM::HttpClientFactory::GetHttpClientFactory();
                     auto h2 = httpF->GetHttp2Client("default");
@@ -422,6 +440,9 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                         req->AddHeader("Content-Type", "application/json");
                         req->AddBody(ts_str);
                         h2->Send(req);
+                        std::cerr << "[sidecar_router] CBF_SENT req=" << request_id
+                                  << " via=coremind_h2 type=task_status" << std::endl;
+                        dumper->dump_callback_result("task_status", "coremind_h2", 0, "");
                         return true;
                     }
 #endif
@@ -429,9 +450,19 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                     auto da = ds == std::string::npos ? 0 : ds + 3;
                     auto dp = ts_url.find('/', da);
                     httplib::Client cb_cli(ts_url.substr(0, dp).c_str());
-                    cb_cli.Post(ts_url.substr(dp).c_str(),
+                    auto ts_res = cb_cli.Post(ts_url.substr(dp).c_str(),
                                {{"Content-Type", "application/json"}},
                                ts_str, "application/json");
+                    if (ts_res) {
+                        std::cerr << "[sidecar_router] CBF_RESP req=" << request_id
+                                  << " type=task_status http=" << ts_res->status << std::endl;
+                        dumper->dump_callback_result("task_status", "httplib", ts_res->status, "");
+                    } else {
+                        std::cerr << "[sidecar_router] CBF_ERR req=" << request_id
+                                  << " type=task_status error=" << httplib::to_string(ts_res.error()) << std::endl;
+                        dumper->dump_callback_result("task_status", "httplib", 0,
+                                                      httplib::to_string(ts_res.error()));
+                    }
 
                     return true;
                 }

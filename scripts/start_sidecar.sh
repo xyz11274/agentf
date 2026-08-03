@@ -311,6 +311,20 @@ LOG_FILE="$LOG_DIR/sidecar.log"
 mkdir -p "$LOG_DIR"
 ar_archive_log "$LOG_FILE" "$KEEP_LOGS"
 
+# ── SidecarDumper trace 持久化（每请求独立 JSONL 文件）──
+# SidecarDumper（router_logic.cpp）按 request_id 生成 {ts}_{request_id}.jsonl，
+# 记录请求体 + SSE chunks + 回调事件。默认关闭（不设环境变量时 dump 方法 no-op）。
+# 文件数 = 请求数，长期运行会堆积——设 AF_SIDECAR_DUMP_KEEP_DAYS=0 可禁用，或定期清理。
+export AF_SIDECAR_DUMP_DIR="${AF_SIDECAR_DUMP_DIR:-$LOG_DIR/sidecar_dumps}"
+mkdir -p "$AF_SIDECAR_DUMP_DIR"
+
+# ── 日志轮转（copytruncate 模式）──
+# sidecar.log 是 C++ stderr 被 shell `>>` 重定向，没有 Python RotatingFileHandler 那样的自动轮转。
+# 用后台 watcher 定期检查大小，超过阈值就 copy + truncate（不动 inode，fd 仍有效）。
+# 阈值默认 50MB，可通过 AF_SIDECAR_LOG_MAX_MB 覆盖。
+AF_SIDECAR_LOG_MAX_MB="${AF_SIDECAR_LOG_MAX_MB:-50}"
+SIDECAR_LOG_MAX_BYTES=$(( AF_SIDECAR_LOG_MAX_MB * 1024 * 1024 ))
+
 # ── 后台启动 ─────────────────────────────────────────────────────────
 echo "[sidecar] Starting on 0.0.0.0:$PORT, logging to $LOG_FILE"
 echo "[sidecar] Binary: $BINARY"
@@ -327,5 +341,28 @@ nohup "$BINARY" \
     >> "$LOG_FILE" 2>&1 &
 SIDECAR_PID=$!
 echo "$SIDECAR_PID" > "$PID_FILE"
+
+# ── 日志轮转 watcher（copytruncate 模式）──
+# 后台进程：每 60s 检查 sidecar.log 大小，超阈值就归档 + 清空。
+# sidecar 退出后 watcher 自动退出（kill -0 检测）。
+nohup bash -c '
+    SIDECAR_PID='"$SIDECAR_PID"'
+    LOG_FILE="'"$LOG_FILE"'"
+    MAX_BYTES='"$SIDECAR_LOG_MAX_BYTES"'
+    while kill -0 "$SIDECAR_PID" 2>/dev/null; do
+        sleep 60
+        if [ -f "$LOG_FILE" ]; then
+            size=$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)
+            if [ "$size" -gt "$MAX_BYTES" ]; then
+                cp "$LOG_FILE" "${LOG_FILE}.$(date +%Y%m%d%H%M%S)"
+                : > "$LOG_FILE"
+            fi
+        fi
+    done
+' >> /dev/null 2>&1 &
+LOG_WATCHER_PID=$!
+echo "[INFO] Log rotator started (PID=$LOG_WATCHER_PID, max=${AF_SIDECAR_LOG_MAX_MB}MB)"
+
 echo "[INFO] SideCar started (PID=$SIDECAR_PID)"
+echo "[INFO] Dump dir: $AF_SIDECAR_DUMP_DIR"
 echo "[INFO] Stop: $0 stop"

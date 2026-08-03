@@ -115,6 +115,9 @@ public:
     void dump_callback(const std::string& stream_status, int flag,
                        const std::string& text, bool is_final,
                        const std::string& user_output_object);
+    void dump_callback_result(const std::string& callback_type,
+                              const std::string& via, int http_status,
+                              const std::string& error);
 
 private:
     std::ofstream file_;

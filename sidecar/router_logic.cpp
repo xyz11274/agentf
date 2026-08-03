@@ -341,4 +341,24 @@ void SidecarDumper::dump_callback(const std::string& stream_status, int flag,
     file_.flush();
 }
 
+void SidecarDumper::dump_callback_result(const std::string& callback_type,
+                                          const std::string& via, int http_status,
+                                          const std::string& error) {
+    if (!enabled_) return;
+    Json::Value entry;
+    entry["_direction"] = "callback_result";
+    entry["_timestamp"] = dump_timestamp();
+    entry["callback_type"] = callback_type;
+    entry["via"] = via;
+    entry["http_status"] = http_status;
+    if (!error.empty()) {
+        entry["error"] = error;
+    }
+    Json::StreamWriterBuilder w;
+    w["indentation"] = "";
+    w["emitUTF8"] = true;
+    file_ << Json::writeString(w, entry) << "\n";
+    file_.flush();
+}
+
 }
