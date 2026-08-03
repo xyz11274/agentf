@@ -137,7 +137,12 @@ if [ -n "$PID" ]; then
 fi
 
 # ── Resolve binary ──────────────────────────────────────────────────
-BRIDGE_URL="${PYTHON_BRIDGE_URL:-http://127.0.0.1:8199/health}"
+# 必须 export：sidecar_router.cpp（生产 CoreMind 集成路径）用 get_env_or("BRIDGE_URL", ...)
+# 读环境变量，不是命令行参数。不 export 时 sidecar_router 用代码默认值 http://127.0.0.1:8199
+# （不含 /health），导致转发 path 缺 /health 前缀，bridge 新架构（app.mount("/health", bridge_app)）404。
+# main.cpp 的 configure_server 路径则通过 --bridge-url 命令行参数读取（L319 nohup 行已传），
+# 两条路径都需要覆盖，所以既要 export 又要 --bridge-url。
+export BRIDGE_URL="${PYTHON_BRIDGE_URL:-http://127.0.0.1:8199/health}"
 case "$PROFILE" in
     production) BINARY="$AR_PROJECT_ROOT/sidecar/build-production/coremind_bridge" ;;
     local)      BINARY="$AR_PROJECT_ROOT/sidecar/build-dev/coremind_bridge" ;;

@@ -52,6 +52,19 @@ public:
 
 private:
     std::vector<CMFrm::ServiceRouter::UsrServiceRouter> router_list_;
+
+    // ── 配置注入点 ──
+    // CoreMind 框架的 handler 签名要求 static（框架通过函数指针调用，不传 this），
+    // 所以配置必须用 class static 成员而非实例成员。
+    // main.cpp 解析 --bridge-url 后通过 set_bridge_url() 注入，消除对环境变量的隐式依赖。
+    // 默认值与原 get_env_or("BRIDGE_URL", "http://127.0.0.1:8199") 一致，向后兼容。
+    // 声明在 .h，定义在 .cpp（遵循"头文件只放声明"原则）。
+    static std::string bridge_url_;
+
+public:
+    /// 配置注入：main.cpp 解析 --bridge-url 后调用。
+    /// 必须在 CoreMind framework init 前调用，确保 handler 被回调时配置已就绪。
+    static void set_bridge_url(const std::string& url) { bridge_url_ = url; }
 };
 
 #endif // COREMIND_ENABLED

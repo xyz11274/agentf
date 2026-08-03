@@ -584,6 +584,13 @@ int main(int argc, char* argv[]) {
     // ═══════════════════════════════════════════════════════════════
 #ifdef COREMIND_ENABLED
     if (coremind_mode) {
+        // 把 --bridge-url 注入到 SidecarRouter 的 static 配置。
+        // 必须在 init_coremind_framework 前调用——framework init 会注册 SidecarRouter 的
+        // URL patterns，之后框架回调 HandleUserRequest 时会读 bridge_url_。
+        // 不注入的话 SidecarRouter 用 class 默认值 http://127.0.0.1:8199（不含 /health），
+        // 导致转发 path 缺 /health 前缀，bridge 新架构 404。
+        SidecarRouter::set_bridge_url(bridge_url);
+
         std::signal(SIGTERM, signal_handler);
         std::signal(SIGINT, signal_handler);
 

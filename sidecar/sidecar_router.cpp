@@ -20,6 +20,12 @@ using sidecar::build_health_response;
 using sidecar::build_user_output_object;
 using sidecar::parse_request_body;
 
+// ── SidecarRouter static 成员定义 ──
+// 声明在 sidecar_router.h，这里定义并初始化默认值。
+// 默认值与原 get_env_or("BRIDGE_URL", "http://127.0.0.1:8199") 一致。
+// main.cpp 解析 --bridge-url 后通过 set_bridge_url() 覆盖。
+std::string SidecarRouter::bridge_url_ = "http://127.0.0.1:8199";
+
 // ── JSON 辅助 ──
 
 static std::string current_timestamp_ms() {
@@ -249,11 +255,15 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
     static std::atomic<unsigned long long> counter{0};
     std::string request_id = "sidecar-" + std::to_string(++counter);
 
-    std::string bridge_url = get_env_or("BRIDGE_URL", "http://127.0.0.1:8199");
+    std::string bridge_url = bridge_url_;  // 由 main.cpp --bridge-url 注入（set_bridge_url）
+    // 向后兼容：环境变量 BRIDGE_URL 仍可覆盖（如未通过 --bridge-url 传入时）
+    if (const char* env_url = std::getenv("BRIDGE_URL")) {
+        bridge_url = env_url;
+    }
     std::string agent_id = get_env_or("AF_BR_COREMIND_AGENT_ID", "outfit-assistant");
     // 从 bridge_url 提取 path prefix（对齐 main.cpp parse_bridge_target）：
     // bridge 业务路由挂载在 /health 前缀下（main.py app.mount("/health", bridge_app)），
-    // 转发路径必须拼上该前缀，否则 404。生产配置 BRIDGE_URL 应含 /health。
+    // 转发路径必须拼上该前缀，否则 404。--bridge-url 应含 /health（如 http://127.0.0.1:8199/health）。
     std::string bridge_path_prefix;
     {
         auto scheme_pos = bridge_url.find("://");
