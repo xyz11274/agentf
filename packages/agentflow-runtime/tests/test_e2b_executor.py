@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from agentflow_runtime.executors.base import ExecResult, FileContent, WriteResult
+from agentflow_runtime.executors.base import ExecResult, FileContent
 from agentflow_runtime.executors.e2b import E2BExecutor
 
 
@@ -91,11 +91,15 @@ def test_init_no_api_key_raises(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_exec_command_calls_sdk_run(executor_with_mocks):
-    """exec_command calls Sandbox.connect + sb.commands.run."""
+    """exec_command calls Sandbox.connect + sb.commands.run.
+
+    _connect 现在会先调一次 commands.run 做 mkdir -p SANDBOX_WORKSPACE（幂等保 cwd
+    不崩），真命令是最后一次调用——检查最后一次即可，不再用 assert_called_once。
+    """
     exe, sb = executor_with_mocks
     exe.exec_command("echo hello", timeout=10)
 
-    sb.commands.run.assert_called_once()
+    assert sb.commands.run.call_count >= 1
     args, kwargs = sb.commands.run.call_args
     # command is positional arg
     assert "echo hello" in args[0]
@@ -130,18 +134,44 @@ def test_exec_command_translates_paths(executor_with_mocks):
     assert E2BExecutor.SANDBOX_WORKSPACE in sent_cmd
 
 
-def test_exec_command_forwards_env_vars(executor_with_mocks, monkeypatch):
-    """export prefix includes API_KEY, MINIMAX_API_KEY when set."""
+def test_exec_command_injects_env_source_prefix(executor_with_mocks):
+    """命令前缀含 `set -a && source .env && set +a` — 让 .env 的 KEY=VAL 进子进程 os.environ。
+
+    覆盖设计文档 sandbox-env-injection.md §6 敲定方案:
+    - .env 标准写法无 export,source 后只是 shell 变量,子进程读不到
+    - set -a 让 source 期间赋值自动 export,子进程能读
+    - 宿主机 os.environ 不透传(防 PATH/HOME 污染沙箱)
+    """
     exe, sb = executor_with_mocks
-    monkeypatch.setenv("API_KEY", "sk-xxx")
-    monkeypatch.setenv("MINIMAX_API_KEY", "mm-yyy")
     exe.exec_command("echo hi")
 
     args, _ = sb.commands.run.call_args
     sent_cmd = args[0]
-    assert "export API_KEY=" in sent_cmd
-    assert "sk-xxx" in sent_cmd
-    assert "export MINIMAX_API_KEY=" in sent_cmd
+    # 必须含 set -a + source .env + set +a 前缀
+    assert "set -a" in sent_cmd
+    assert "source /home/user/workspace/.env" in sent_cmd
+    assert "set +a" in sent_cmd
+    # 命令本体在前缀之后
+    assert sent_cmd.endswith("echo hi") or "echo hi" in sent_cmd
+    # 宿主机 os.environ 不应被透传——不应出现裸 export PATH/HOME
+    assert "export PATH=" not in sent_cmd
+    assert "export HOME=" not in sent_cmd
+
+
+def test_exec_command_env_prefix_has_file_check(executor_with_mocks):
+    """.env 不存在时前缀含 `[ -f ... ] &&` 兜底,source 不崩,沙箱用原生环境。
+
+    锁住不变量:源前缀无条件拼,但 [ -f ] 兜底让 .env 缺失时不 source(防 shell 报错)。
+    """
+    exe, sb = executor_with_mocks
+    exe.exec_command("echo hi")
+
+    args, _ = sb.commands.run.call_args
+    sent_cmd = args[0]
+    # 必须含 [ -f ... ] && 兜底
+    assert "[ -f /home/user/workspace/.env ]" in sent_cmd
+    # 兜底 + set -a + source + set +a 链完整
+    assert "[ -f" in sent_cmd and "set -a" in sent_cmd and "source" in sent_cmd
 
 
 def test_exec_command_returns_exec_result(executor_with_mocks):
@@ -205,7 +235,8 @@ def test_e2b_read_file_uses_sandbox_sdk(executor_with_mocks):
 
     result = exe.read_file(f"{E2BExecutor.SANDBOX_WORKSPACE}/test.txt")
 
-    sb.commands.run.assert_called_once()
+    # _connect 先调一次 mkdir，read_file 的 cat 是最后一次调用——不再 assert_called_once
+    assert sb.commands.run.call_count >= 1
     args, _ = sb.commands.run.call_args
     sent_cmd = args[0]
     assert "cat" in sent_cmd, f"Expected cat command but got: {sent_cmd}"

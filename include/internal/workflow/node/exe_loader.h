@@ -425,10 +425,7 @@ private:
                                   int timeout_ms, const std::vector<std::string>& env_vars,
                                   const sandbox::SandboxOptions* sandbox_opts = nullptr);
 
-  // AgentFoundry 沙箱机制移植（lld.md T027/T028）：安全层辅助方法
-  // build_safe_env：env 白名单过滤，拒绝 *_API_KEY（B3/FR-003）
-  static std::vector<std::string> build_safe_env(const std::vector<std::string>& raw_env,
-                                                  const std::vector<std::string>& whitelist);
+  // AgentFoundry 沙箱机制移植（lld.md T028）：安全层辅助方法
   // resolve_safe_path：路径双检（string prefix + realpath），拒绝越界（B4/FR-004）
   // 异常：抛 std::runtime_error 含路径名与允许前缀
   static std::string resolve_safe_path(const std::string& path, const std::string& allowed_prefix);

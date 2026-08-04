@@ -298,9 +298,27 @@ def load_skill_md(skill_name: str) -> str | None:
     with open(path, encoding="utf-8") as f:
         content = f.read()
     # Replace AgentFoundry template variables
-    skill_dir = os.path.join(_get_skills_base(), skill_name)
+    # sandbox_mode=e2b 时 SKILL_DIR 必须用沙箱内绝对路径而非宿主路径——否则 LLM
+    # 拼命令含宿主路径 /Users/archer/...，e2b.py exec_command 翻译回沙箱路径后
+    # 目标在沙箱里也不存在（agent 包上传时按 harness/skills 结构落盘到
+    # /home/user/workspace/harness/skills/...）。沙箱透明性要求 LLM 看到的是
+    # 沙箱内它能直接用的路径，而不是宿主路径再翻译。
+    skills_base = _get_skills_base()
+    skill_dir = os.path.join(skills_base, skill_name)
+    sandbox_mode = os.environ.get("AF_SANDBOX_MODE", "")
+    if sandbox_mode == "e2b":
+        # SANDBOX_WORKSPACE = /home/user/workspace（e2b.py 同步常量）
+        # skills_base 形如 /Users/archer/.../outfit-assistant/harness/skills
+        # → 沙箱内 /home/user/workspace/harness/skills
+        sandbox_workspace = os.environ.get(
+            "AF_SANDBOX_WORKSPACE", "/home/user/workspace"
+        )
+        agent_pkg_dir = _get_agent_package_dir()
+        if agent_pkg_dir and skills_base.startswith(agent_pkg_dir):
+            skills_base = sandbox_workspace + skills_base[len(agent_pkg_dir):]
+            skill_dir = os.path.join(skills_base, skill_name)
     content = content.replace("${SKILL_DIR}", skill_dir)
-    content = content.replace("${SKILLS_DIR}", _get_skills_base())
+    content = content.replace("${SKILLS_DIR}", skills_base)
     return content
 
 

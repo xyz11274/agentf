@@ -70,6 +70,17 @@ std::shared_ptr<sandbox::Sandbox> SandboxLifecycle::create(const sandbox::Sandbo
     skills_src_dir = fs::absolute(config_.agents[0].package_path).string() + "/harness/skills";
   }
 
+  // 推导 agent_package_dir：agent 包根目录绝对路径，用于整体同步到远端沙箱
+  // （含 .env、agent.md、nodes/、harness/tools/、workflows/ 等非 skills 资产）。
+  // 设计权威源：docs/design/features/sandbox-env-injection.md §2 链路环节⑤
+  // ——"上传整个 agent 包目录到沙箱内 /home/user/workspace"。
+  //此前实现只同步 harness/skills 子集（环节⑤未落地），导致 .env 等包根文件
+  //  从未进沙箱，set -a && source /home/user/workspace/.env 兜底跳过 → 密钥缺失。
+  std::string agent_package_dir;
+  if (!config_.agents.empty()) {
+    agent_package_dir = fs::absolute(config_.agents[0].package_path).string();
+  }
+
   auto sandbox_ptr = sandbox::SandboxFactory::create(
       config_.sandbox_config.mode,
       owner,
@@ -83,7 +94,9 @@ std::shared_ptr<sandbox::Sandbox> SandboxLifecycle::create(const sandbox::Sandbo
       config_.sandbox_config.e2b_api_url,
       config_.sandbox_config.e2b_api_key,
       config_.sandbox_config.e2b_default_template,
-      config_.sandbox_config.e2b_network_allow_out);
+      config_.sandbox_config.e2b_network_allow_out,
+      config_.sandbox_config.e2b_ca_cert_path,
+      agent_package_dir);
 
   // mode=none 时 SandboxFactory 返回 nullptr（向后兼容，FR-006）
   if (!sandbox_ptr) {

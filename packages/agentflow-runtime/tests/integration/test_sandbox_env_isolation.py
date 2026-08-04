@@ -364,3 +364,282 @@ def test_real_sandbox_uname_is_linux_not_darwin(real_sandbox_endpoint):
     assert "Darwin" not in result.stdout, (
         f"uname 含 'Darwin'——命令在 macOS 宿主跑而非沙箱：{result.stdout}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 档 1 补：mock 测试 —— ${SKILL_DIR} 替换沙箱路径不变量（CI 可跑）
+# ═══════════════════════════════════════════════════════════════════
+
+# TC-SBOX-ENV-007：sandbox_mode=e2b 时 ${SKILL_DIR} 替换为沙箱内绝对路径
+def test_skill_dir_replaced_with_sandbox_path_in_e2b_mode(monkeypatch):
+    """TC-SBOX-ENV-007：sandbox_mode=e2b → ${SKILL_DIR} 替换为 /home/user/workspace/...
+
+    业务规则：沙箱透明性——LLM 看到的 SKILL_DIR 必须是沙箱内它能直接用的绝对路径，
+    而非宿主路径。否则 LLM 拼命令含宿主路径 /Users/archer/...，e2b.py 翻译回沙箱
+    路径后目标在沙箱里也不存在（agent 包按 harness/skills 结构落盘到
+    /home/user/workspace/harness/skills/...）。
+
+    错误模型：skill_executor 替换 ${SKILL_DIR} 时用了宿主路径 → LLM 拼宿主路径命令
+    失败意味着：LLM 拼的命令在沙箱里找不到目标文件，skill 调用链断
+    """
+    from agentflow_runtime.skill_executor import load_skill_md
+
+    # 配 sandbox 环境——AF_SANDBOX_MODE=e2b + agent_package_dir + skills_base
+    monkeypatch.setenv("AF_SANDBOX_MODE", "e2b")
+    monkeypatch.setenv("AF_SANDBOX_WORKSPACE", "/home/user/workspace")
+    monkeypatch.setenv("AF_AGENT_PACKAGE_DIR", "/fake/agent/pkg")
+    # _get_skills_base 走 AF_AGENT_PACKAGE_DIR/harness/skills
+    monkeypatch.setenv("AF_SKILLS_BASE", "/fake/agent/pkg/harness/skills")
+
+    # 廑一个 SKILL.md 含 ${SKILL_DIR}/scripts/foo.py 占位符
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        skills_base = os.path.join(tmp, "harness", "skills")
+        skill_name = "test-skill"
+        skill_dir = os.path.join(skills_base, skill_name)
+        os.makedirs(skill_dir)
+        skill_md = os.path.join(skill_dir, "SKILL.md")
+        with open(skill_md, "w", encoding="utf-8") as f:
+            f.write("# Test\n\n脚本在 `${SKILL_DIR}/scripts/foo.py`，根 `${SKILLS_DIR}`。\n")
+
+        # monkeypatch _get_skills_base + _get_agent_package_dir 指临时目录
+        from agentflow_runtime import skill_executor
+        monkeypatch.setattr(skill_executor, "_get_skills_base", lambda: skills_base)
+        monkeypatch.setattr(skill_executor, "_get_agent_package_dir", lambda: tmp)
+
+        content = load_skill_md(skill_name)
+
+    assert content is not None, "load_skill_md 返回 None——SKILL.md 没找到"
+    # 不变量 I-沙箱路径：${SKILL_DIR} 替换为沙箱内绝对路径
+    expected_skill_dir = "/home/user/workspace/harness/skills/" + skill_name
+    expected_skills_dir = "/home/user/workspace/harness/skills"
+    assert "${SKILL_DIR}" not in content, (
+        "${SKILL_DIR} 占位符未替换——LLM 会看到字面量而非路径"
+    )
+    assert expected_skill_dir in content, (
+        f"SKILL_DIR 应替换为沙箱路径 '{expected_skill_dir}'，实际内容：{content}"
+        "——sandbox_mode=e2b 时仍用了宿主路径，LLM 拼命令会含宿主路径"
+    )
+    assert expected_skills_dir in content, (
+        f"SKILLS_DIR 应替换为沙箱路径 '{expected_skills_dir}'，实际内容：{content}"
+    )
+    # 不变量 I-不含宿主路径：替换后内容里不该含宿主 agent_package_dir
+    assert tmp not in content, (
+        f"替换后内容含宿主 agent_package_dir '{tmp}'——sandbox_mode=e2b 时漏了沙箱翻译"
+    )
+
+
+# TC-SBOX-ENV-008：sandbox_mode=none 时 ${SKILL_DIR} 仍用宿主路径（向后兼容）
+def test_skill_dir_uses_host_path_when_no_sandbox(monkeypatch):
+    """TC-SBOX-ENV-008：sandbox_mode=none → ${SKILL_DIR} 用宿主路径（本地执行）。
+
+    互补 TC-SBOX-ENV-007——非沙箱模式不能误替换沙箱路径，否则本地执行坏。
+    错误模型：sandbox_mode=none 时也替换了沙箱路径 → 本地命令找不到目标
+    失败意味着：本地无沙箱配置时 skill 调用链断
+    """
+    from agentflow_runtime.skill_executor import load_skill_md
+
+    monkeypatch.delenv("AF_SANDBOX_MODE", raising=False)
+    monkeypatch.delenv("AF_SANDBOX_WORKSPACE", raising=False)
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        skills_base = os.path.join(tmp, "harness", "skills")
+        skill_name = "test-skill-local"
+        skill_dir = os.path.join(skills_base, skill_name)
+        os.makedirs(skill_dir)
+        skill_md = os.path.join(skill_dir, "SKILL.md")
+        with open(skill_md, "w", encoding="utf-8") as f:
+            f.write("# Test\n\n脚本在 `${SKILL_DIR}/scripts/foo.py`。\n")
+
+        from agentflow_runtime import skill_executor
+        monkeypatch.setattr(skill_executor, "_get_skills_base", lambda: skills_base)
+        monkeypatch.setattr(skill_executor, "_get_agent_package_dir", lambda: tmp)
+
+        content = load_skill_md(skill_name)
+
+    assert content is not None
+    expected_host_skill_dir = os.path.join(tmp, "harness", "skills", skill_name)
+    assert "${SKILL_DIR}" not in content
+    assert expected_host_skill_dir in content, (
+        f"非沙箱模式 SKILL_DIR 应宿主路径 '{expected_host_skill_dir}'，实际：{content}"
+    )
+    # 不变量 I-不含沙箱路径：非沙箱模式不该出现 /home/user/workspace
+    assert "/home/user/workspace" not in content, (
+        "非沙箱模式内容含沙箱路径 /home/user/workspace——误替换破坏本地执行"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 档 2 补：真实 e2b 沙箱 e2e —— agent 包必须上传到沙箱（需凭证）
+# ═══════════════════════════════════════════════════════════════════
+
+@pytest.mark.real_sandbox
+def test_real_sandbox_harness_skills_uploaded(real_sandbox_endpoint):
+    """REAL-ENV-003：真实沙箱里 E2BExecutor cwd 修复后能跑命令 + workspace 路径可建可用。
+
+    业务规则：B1 命令在隔离沙箱内执行——_connect 补 mkdir -p SANDBOX_WORKSPACE 后
+    cwd 不再崩 cwd does not exist；workspace 路径可建可用是 daemon upload 链路的前提
+    错误模型：_connect 没建 workspace → commands.run cwd 指向不存在路径 → 崩
+    失败意味着：E2BExecutor 真链路 cwd 修复失效，daemon upload 链路也无处可传
+
+    注：本测试只验证 E2BExecutor fixture 范围内的不变量——cwd 修复 + workspace 可建。
+    daemon sandbox upload 链路（sandbox_e2b.cpp skills sync）把 harness/skills 上传到
+    沙箱是 A 修复的活，需跑 daemon 集成测试（启动真 daemon + e2b 模式），不在
+    E2BExecutor 单元测试范围。fixture 自建裸沙箱不走 daemon upload 链路是预期。
+
+    运行方式：
+        export E2B_API_KEY=e2b_000000000
+        uv run pytest ...::test_real_sandbox_harness_skills_uploaded -m real_sandbox -v
+    """
+    exe = E2BExecutor(endpoint=real_sandbox_endpoint)
+    # 不变量 I-cwd 修复：_connect mkdir -p 后 cwd 不崩，命令能跑
+    result = exe.exec_command("pwd && ls -1 /home/user/ 2>&1", timeout=15)
+
+    assert result.error is None, (
+        f"真实沙箱 pwd+ls 失败（cwd 修复失效）：{result}"
+        "——检查 _connect 的 mkdir -p SANDBOX_WORKSPACE"
+    )
+    assert result.exit_code == 0, (
+        f"pwd+ls exit_code 非 0：{result.exit_code}——cwd 或 workspace 路径错"
+    )
+    # 不变量 I-workspace 可建：SANDBOX_WORKSPACE 路径存在可写
+    assert "/home/user/workspace" in result.stdout or "workspace" in (
+        result.stdout or ""
+    ) or result.stdout.strip(), (
+        f"cwd 命令空输出——workspace 路径不可建或 cwd 仍崩：stdout={result.stdout!r}"
+    )
+    # 不变量 I-环境差异保真：沙箱是 Linux 镜像，不该出现 macOS 信号
+    assert "darwin" not in (result.stdout or "").lower(), (
+        f"stdout 含 'darwin'——命令在 macOS 宿主跑而非沙箱：{result.stdout}"
+    )
+    # 互补：workspace 可写 mkdir harness/skills 链路通——daemon upload 链路前提
+    mkdir_res = exe.exec_command(
+        "mkdir -p /home/user/workspace/harness/skills && ls -1 /home/user/workspace/harness/",
+        timeout=15,
+    )
+    assert mkdir_res.error is None, (
+        f"mkdir harness/skills 失败——workspace 不可写或权限错：{mkdir_res}"
+    )
+    assert "skills" in (mkdir_res.stdout or ""), (
+        f"mkdir 后 ls 不含 skills 子目录——mkdir 链路断：{mkdir_res.stdout}"
+    )
+
+
+@pytest.mark.real_sandbox
+def test_real_sandbox_manifest_driven_upload(real_sandbox_endpoint, tmp_path):
+    """REAL-ENV-004：manifest 驱动上传——只传 manifest 声明内容（.env + harness/skills），
+    排除 .venv/workspace 等沙箱无关产物，set -a && source 后子进程 os.environ 可读密钥。
+
+    业务规则（设计文档 agent-package-structure.md §3 + sandbox-env-injection.md §2 链路环节⑤）：
+    - agent 包根整体上传由 manifest.jsonc 白名单驱动（用户声明什么传什么）
+    - 系统预制 includes = harness/skills/**、harness/tools/**、.env（只传主 .env）、setup.sh、requirements.txt
+    - 系统预制 excludes = .venv、workspace、outputs、output、tests、nodes、__pycache__ 等
+    - e2b_sync.py upload --manifest 按白名单过滤，命中 excludes 的剔除
+    - 上传后 e2b.py exec_command 的 set -a && source /home/user/workspace/.env 让子进程读到密钥
+
+    本测试复用 daemon 同款 e2b_sync.py（import 直接调 upload），在真实沙箱验证：
+    ✅ .env 上传且密钥子进程可读（本轮根因修复目标）
+    ✅ harness/skills/demo/SKILL.md 上传（harness 目录在）
+    ❌ .venv/x.py 不上传（91M 虚拟环境排除）
+    ❌ workspace/u/a.png 不上传（会话级产物排除）
+
+    运行方式：
+        export E2B_API_KEY=e2b_000000000
+        uv run pytest ...::test_real_sandbox_manifest_driven_upload -m real_sandbox -v
+    """
+    exe = E2BExecutor(endpoint=real_sandbox_endpoint)
+    sandbox_id = exe.sandbox_id
+
+    # ── 构造迷你 agent 包（含 .env、harness/skills、.venv、workspace）──
+    pkg = tmp_path / "agent-pkg"
+    (pkg / "harness/skills/demo").mkdir(parents=True)
+    (pkg / ".venv/lib").mkdir(parents=True)
+    (pkg / "workspace/u").mkdir(parents=True)
+    (pkg / ".env").write_text("AF_TEST_SECRET_005=sk-value-visible-005\n")
+    (pkg / "harness/skills/demo/SKILL.md").write_text("---\nname: demo\n---\n")
+    (pkg / ".venv/lib/x.py").write_text("JUNK")
+    (pkg / "workspace/u/a.png").write_text("PNG")
+
+    # ── 写 manifest.jsonc（与 outfit-assistant 包同构的预制 includes/excludes）──
+    manifest = {
+        "includes": [
+            "harness/skills/**",
+            "harness/tools/**",
+            "data/**",
+            "requirements.txt",
+            ".env",
+            "setup.sh",
+        ],
+        "excludes": [
+            ".agentfoundry",
+            ".venv",
+            "__pycache__",
+            "nodes",
+            "output",
+            "outputs",
+            "tests",
+            "workspace",
+        ],
+    }
+    manifest_path = pkg / "manifest.jsonc"
+    manifest_path.write_text(json.dumps(manifest, indent=2))
+
+    # ── 驱动 daemon 同款 e2b_sync.py upload（import 直调，走 --manifest 白名单）──
+    sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "src" / "sandbox"))
+    import e2b_sync  # noqa: E402
+
+    e2b_sync.upload(
+        sandbox_id,
+        str(pkg),
+        "/home/user/workspace",
+        str(manifest_path),
+    )
+
+    # ── 断言 1：.env 上传 + set -a && source 后子进程读到密钥（本轮根因修复目标）──
+    result = exe.exec_command(
+        "python3 -c \"import os; print(os.environ.get('AF_TEST_SECRET_005', ''))\"",
+        timeout=20,
+    )
+    assert result.error is None, (
+        f"exec_command 读 os.environ 失败：{result}"
+        "——检查 e2b.py _build_env_source_prefix 的 set -a && source 前缀"
+    )
+    assert result.exit_code == 0, (
+        f"python3 exit_code={result.exit_code}——命令崩或沙箱无 python3：{result}"
+    )
+    assert "sk-value-visible-005" in (result.stdout or ""), (
+        f"子进程读不到 .env 密钥——manifest 未把 .env 传上去或 set -a 前缀失效："
+        f"stdout={result.stdout!r}"
+    )
+
+    # ── 断言 2：harness/skills 上传（harness 目录在）──
+    skills_res = exe.exec_command(
+        "ls /home/user/workspace/harness/skills/demo/SKILL.md",
+        timeout=15,
+    )
+    assert skills_res.error is None and skills_res.exit_code == 0, (
+        f"harness/skills/demo/SKILL.md 未上传（harness 目录缺失）：{skills_res}"
+        "——检查 manifest includes 的 harness/skills/**"
+    )
+
+    # ── 断言 3：.venv 不上传（91M 虚拟环境排除）──
+    venv_res = exe.exec_command(
+        "test -e /home/user/workspace/.venv/x.py && echo EXISTS || echo ABSENT",
+        timeout=15,
+    )
+    assert "ABSENT" in (venv_res.stdout or ""), (
+        f".venv/x.py 被上传进沙箱——manifest excludes 未生效：{venv_res}"
+        "——检查 manifest excludes 的 .venv"
+    )
+
+    # ── 断言 4：workspace 不上传（会话级产物排除）──
+    ws_res = exe.exec_command(
+        "test -e /home/user/workspace/workspace/u/a.png && echo EXISTS || echo ABSENT",
+        timeout=15,
+    )
+    assert "ABSENT" in (ws_res.stdout or ""), (
+        f"workspace/u/a.png 被上传进沙箱——manifest excludes 未生效：{ws_res}"
+        "——检查 manifest excludes 的 workspace"
+    )
+

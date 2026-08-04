@@ -20,7 +20,6 @@ import logging
 import os
 import re
 import signal
-import subprocess
 import sys
 import threading
 import time
@@ -43,14 +42,9 @@ DANGEROUS_PREFIXES = (
     "mkfs.", "dd if=/dev/zero of=/dev/sd", "shutdown", "reboot",
 )
 
-# 环境变量白名单（FR-003）：opts.env_vars 只允许设置以下变量
-ALLOWED_ENV_VARS = frozenset({
-    "PATH", "HOME", "USER", "TMPDIR", "TEMP", "TMP",
-    "AF_AGENT_PACKAGE_DIR", "PYTHONPATH",
-    "SANDBOX_WORKDIR",
-    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-    "LANG", "LC_ALL",
-})
+# FR-003 已变更(见 docs/design/features/sandbox-env-injection.md §4):
+# 密钥 *_API_KEY 允许在沙箱内文件中,不再用宿主侧白名单拦截。
+# env_vars 透传到沙箱——宿主机 os.environ 不透传(由 e2b.py 的 set -a && source .env 兜底)。
 
 
 def is_dangerous(command: str) -> bool:
@@ -77,21 +71,6 @@ class PathEscapeException(Exception):
         super().__init__(f"Path escape rejected: '{path}' escapes sandbox workdir '{allowed_prefix}'")
         self.path = path
         self.allowed_prefix = allowed_prefix
-
-
-def _check_env_vars(env_vars: dict) -> str | None:
-    """检查环境变量是否在白名单内（FR-003）。
-
-    返回 ``None`` 表示全部合法，否则返回 ENV_VAR_BLOCKED 错误信息。
-    """
-    blocked = [k for k in env_vars if k not in ALLOWED_ENV_VARS]
-    if blocked:
-        return (
-            f"ENV_VAR_BLOCKED: these env vars are not in the allowed whitelist: "
-            f"{', '.join(sorted(blocked))}. "
-            f"Allowed: {', '.join(sorted(ALLOWED_ENV_VARS))}"
-        )
-    return None
 
 
 def validate_upload_path(path: str) -> str | None:
@@ -198,12 +177,10 @@ def _exec_tool(tool_name: str, tool_params: dict, opts: dict) -> dict:
     if tool_name == "bash" and opts.get("working_dir"):
         tool_input["cwd"] = opts["working_dir"]
 
-    # -- 环境变量白名单检查（FR-003）：opts.env_vars 只允许设置白名单内的变量 --
+    # FR-003 已变更(见 docs/design/features/sandbox-env-injection.md §4):
+    # env_vars 不再白名单拦截——密钥 *_API_KEY 允许透传到沙箱内(可信沙箱持密)。
     env_vars = opts.get("env_vars", {})
     if env_vars:
-        blocked_msg = _check_env_vars(env_vars)
-        if blocked_msg:
-            return _exec_result(1, stderr=blocked_msg)
         tool_input["env_vars"] = env_vars
 
     # -- 委托执行 --

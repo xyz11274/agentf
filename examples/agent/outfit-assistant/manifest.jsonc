@@ -1,0 +1,23 @@
+{
+  // 上传清单配置文件（agent 包内，随包上传控制沙箱同步范围）
+  // includes：上传到沙箱的路径 glob（相对 agent 包根）
+  // excludes：即使命中 includes 也排除的目录/文件
+  "includes": [
+    "harness/skills/**",
+    "harness/tools/**",
+    "data/**",
+    "requirements.txt",
+    ".env",
+    "setup.sh"
+  ],
+  "excludes": [
+    ".agentfoundry",
+    ".venv",
+    "__pycache__",
+    "nodes",
+    "output",
+    "outputs",
+    "tests",
+    "workspace"
+  ]
+}

@@ -1641,40 +1641,9 @@ CodeLoader& global_code_loader() {
 }
 
 // ============================================================================
-// AgentFoundry 沙箱机制移植——安全层辅助方法（lld.md T027/T028）
-// exe_loader.h 声明：static build_safe_env(raw_env, whitelist) + resolve_safe_path(path, allowed_prefix)
+// AgentFoundry 沙箱机制移植——安全层辅助方法（lld.md T028）
+// exe_loader.h 声明：static resolve_safe_path(path, allowed_prefix)
 // ============================================================================
-
-// build_safe_env：env 白名单过滤，拒绝 *_API_KEY（B3/FR-003）
-// 算法：遍历 raw_env，按 KEY=VALUE 拆分，KEY 在 whitelist 或不以 _API_KEY 结尾则保留
-// 不变量 B3：*_API_KEY 100% 不泄漏
-std::vector<std::string> CodeLoader::build_safe_env(const std::vector<std::string>& raw_env,
-                                                    const std::vector<std::string>& whitelist) {
-  std::vector<std::string> safe;
-  safe.reserve(raw_env.size());
-  for (const auto& entry : raw_env) {
-    auto eq_pos = entry.find('=');
-    if (eq_pos == std::string::npos) continue;  // 格式非法，跳过
-    std::string key = entry.substr(0, eq_pos);
-    // B3：拒绝 *_API_KEY 模式（大小写不敏感匹配 _API_KEY 后缀）
-    std::string key_upper = key;
-    std::transform(key_upper.begin(), key_upper.end(), key_upper.begin(), ::toupper);
-    if (key_upper.size() >= 8 &&
-        key_upper.compare(key_upper.size() - 8, 8, "_API_KEY") == 0) {
-      continue;  // 拒绝密钥泄漏
-    }
-    // 白名单为空 = 保留全部（向后兼容，sandbox_opts=nullptr 路径）
-    if (whitelist.empty()) {
-      safe.push_back(entry);
-      continue;
-    }
-    // 白名单非空：只保留命中键
-    if (std::find(whitelist.begin(), whitelist.end(), key) != whitelist.end()) {
-      safe.push_back(entry);
-    }
-  }
-  return safe;
-}
 
 // resolve_safe_path：路径双检（string prefix + realpath），拒绝越界（B4/FR-004）
 // 算法：realpath 解析后再 prefix 检查（双检防符号链接逃逸）

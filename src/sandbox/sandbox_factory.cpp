@@ -36,7 +36,8 @@ std::unique_ptr<Sandbox> SandboxFactory::create(const std::string& mode,
                                                   const std::string& e2b_api_key,
                                                   const std::string& e2b_default_template,
                                                   const std::string& e2b_network_allow_out,
-                                                  const std::string& e2b_ca_cert_path) {
+                                                  const std::string& e2b_ca_cert_path,
+                                                  const std::string& agent_package_dir) {
   if (mode == "none") {
     return nullptr;  // 向后兼容（FR-006）
   }
@@ -72,7 +73,8 @@ std::unique_ptr<Sandbox> SandboxFactory::create(const std::string& mode,
                                         e2b_api_key,
                                         e2b_default_template,
                                         e2b_network_allow_out,
-                                        e2b_ca_cert_path);
+                                        e2b_ca_cert_path,
+                                        agent_package_dir);
   }
 
   throw SandboxLaunchException("Unknown sandbox mode: " + mode);

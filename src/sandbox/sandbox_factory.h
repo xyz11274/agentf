@@ -37,6 +37,11 @@ class SandboxFactory {
   // e2b_default_template: E2B 沙箱模板 ID（mode=e2b 时生效，默认 "base"）
   // e2b_network_allow_out: E2B 沙箱网络出站 CIDR 列表（mode=e2b 时生效，可选）
   // e2b_ca_cert_path: E2B CA 证书路径（mode=e2b 时生效，设为 SSL_CERT_FILE 传给子进程，可选）
+  // agent_package_dir: 宿主机 agent 包根目录绝对路径，用于整体同步到远端沙箱
+  //   workspace 根（含 .env、agent.md、nodes/、harness/tools/、workflows/ 等非 skills 资产）。
+  //   设计权威源：docs/design/features/sandbox-env-injection.md §2 链路环节⑤。
+  //   此前实现只同步 harness/skills 子集，环节⑤未落地 → .env 等包根文件从未进沙箱。
+  //   空串 = 无 agent 包（如 mode=none/local 不需要），E2B 时必传。
   static std::unique_ptr<Sandbox> create(const std::string& mode,
                                         const SandboxKey& owner,
                                         const std::string& workdir_root,
@@ -50,7 +55,8 @@ class SandboxFactory {
                                         const std::string& e2b_api_key = "",
                                         const std::string& e2b_default_template = "base",
                                         const std::string& e2b_network_allow_out = "",
-                                        const std::string& e2b_ca_cert_path = "");
+                                        const std::string& e2b_ca_cert_path = "",
+                                        const std::string& agent_package_dir = "");
 
   // 注册 Provider 构造函数（供 Phase 7 docker/e2b 注册）
   using FactoryFn = std::function<std::unique_ptr<Sandbox>(

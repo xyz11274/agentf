@@ -40,9 +40,6 @@ class E2BExecutor(ToolExecutor):
     # e2b sandbox internal workspace path
     SANDBOX_WORKSPACE = "/home/user/workspace"
 
-    # Environment variables forwarded into the sandbox
-    _FORWARD_ENV_KEYS = ("API_KEY", "MINIMAX_API_KEY", "AF_LLM_MODEL", "E2B_API_KEY")
-
     # Regex to extract image file paths from command stdout
     _IMAGE_PATH_RE = re.compile(
         r"/home/user/workspace/[^\s\"\'\\]+\.(?:png|jpe?g|webp|gif)",
@@ -88,7 +85,45 @@ class E2BExecutor(ToolExecutor):
         apply_ssl_patch()
         sb = Sandbox.connect(self.sandbox_id, timeout=timeout)
         patch_envd_url(sb)
+        # 确保沙箱 workspace 存在——commands.run 的 cwd 直接指它会在镜像布局不同
+        # 或会话刚建立时崩（cwd does not exist）。smoke test 之所以先 mkdir 再 cd
+        # 就是这个原因。幂等：mkdir -p 已存在不报错。
+        sb.commands.run(
+            f"mkdir -p {self.SANDBOX_WORKSPACE}", timeout=15
+        )
         return sb
+
+    # -- env forwarding -----------------------------------------------------
+
+    def _build_env_source_prefix(self) -> str:
+        """Build a ``set -a && source .env && set +a &&`` prefix from the agent .env file.
+
+        The agent ``.env`` uses standard ``KEY=VAL`` syntax (no ``export``).
+        ``source`` loads these as shell variables — but **shell variables do
+        not propagate to child processes**. ``set -a`` (POSIX allexport)
+        makes every assignment during ``source`` automatically ``export``,
+        so the subsequent ``python3 script.py`` child sees them in ``os.environ``.
+
+        Why not forward via API ``env_vars`` or an ``export KEY=VAL;`` prefix?
+          - API/prefix forwarding repeats every var on every command (stateless)
+            and leaks secrets into network requests (violates the updated FR-003).
+          - The .env file is already sandbox-local (uploaded with the agent
+            package at load time — see sandbox-env-injection.md §2). Loading it
+            in-sandbox is zero-network, and secrets stay in the sandbox file only.
+
+        ``.env`` missing → return "" (sandbox keeps its native environment).
+        The check is done in-shell (``[ -f ... ] &&``) because the file lives
+        sandbox-side and cannot be probed from the host ``os.path``.
+        """
+        env_path = os.path.join(self.SANDBOX_WORKSPACE, ".env")
+        # 用 `{ ... ; } 2>/dev/null;` 包裹源逻辑——.env 不存在时整段静默跳过且
+        # 不影响后续命令 exit code（`[ -f ] && ... && ` 链在 .env 缺失时会让
+        # 后续真命令被 `&&` 短路掉，pwd/ls 根本不跑，exit=1 stderr 空）。
+        # `set +a` 显式关 allexport，恢复沙箱原生 shell 状态。
+        return (
+            f"{{ {{ [ -f {env_path} ] && set -a && source {env_path} && set +a; }} "
+            f"2>/dev/null; }}; "
+        )
 
     # -- exec_command -------------------------------------------------------
 
@@ -110,14 +145,13 @@ class E2BExecutor(ToolExecutor):
                 self.agent_package_dir, self.SANDBOX_WORKSPACE
             )
 
-            # Forward env vars
-            exports = ""
-            for key in self._FORWARD_ENV_KEYS:
-                val = os.environ.get(key, "")
-                if val:
-                    exports += f"export {key}={val!r}; "
-            if exports:
-                sandbox_cmd = exports + sandbox_cmd
+            # Inject env vars from the agent package .env file (sandbox-side).
+            # .env 随 agent 包加载时上传到 /home/user/workspace/.env(设计文档 §2 链路)。
+            # set -a 让 source 期间所有赋值自动 export,子进程 os.environ 能读到。
+            # 宿主机 os.environ 不透传——防 PATH/HOME/USER 等 macOS 路径污染 Linux 容器。
+            # .env 不存在 → 前缀的 [ -f ] 兜底跳过 source,沙箱用原生环境。
+            env_prefix = self._build_env_source_prefix()
+            sandbox_cmd = env_prefix + sandbox_cmd
 
             # cwd 也要宿主→沙箱翻译——bash.py 缺省 cwd 透传的是宿主 agent_package_dir，
             # 直接给 SDK 会因沙箱内不存在该路径而崩。用 _to_sandbox_path 翻译后再传
@@ -160,11 +194,22 @@ class E2BExecutor(ToolExecutor):
                     self.SANDBOX_WORKSPACE, self.agent_package_dir
                 )
 
+            # F7.1：error 字段补命令上下文——把发送给沙箱的 sandbox_cmd 拼进 error，
+            # 让 LLM 能看到"我发了什么→沙箱返回了什么"，从空 error 中能自诊断路径错。
+            # 原本只写 `Sandbox SDK exec failed: {e}`，e.__str__ 末尾 stderr 空时 LLM
+            # 看到空 error 完全无法判断"命令不存在""路径错""权限错"还是"命令本身逻辑错"。
+            # _connect 抛异常时 sandbox_cmd 尚未赋值（try 块 line 132），用 locals().get 兜底
+            # 避 UnboundLocalError——_connect 失败的 error 里 cmd="<connect failed>"。
+            sandbox_cmd_local = locals().get("sandbox_cmd", "<connect/setup failed before sandbox_cmd assigned>")
+            cmd_preview = sandbox_cmd_local[:200] if len(sandbox_cmd_local) > 200 else sandbox_cmd_local
             return ExecResult(
                 stdout=stdout,
                 stderr=stderr,
                 exit_code=code if code is not None else -1,
-                error=f"Sandbox SDK exec failed: {e}",
+                error=(
+                    f"Sandbox SDK exec failed (cmd={cmd_preview!r}, "
+                    f"exit={code}): {e}"
+                ),
             )
 
     # -- image download -----------------------------------------------------

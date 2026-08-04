@@ -1,4 +1,4 @@
-"""Tests for generate_manifest() — agent-package.manifest.jsonc generation (T-004).
+"""Tests for generate_manifest() — manifest.jsonc generation (T-004).
 
 Tests the scanning rules from §3.2:
   ✅ harness/skills/**       — always included if exists
@@ -19,7 +19,7 @@ from agentflow_runtime.common.manifest import generate_manifest, load_manifest
 # Helpers
 # ---------------------------------------------------------------------------
 
-MANIFEST_NAME = "agent-package.manifest.jsonc"
+MANIFEST_NAME = "manifest.jsonc"
 
 
 def _make_package(tmp: Path, files: list[str]) -> None:

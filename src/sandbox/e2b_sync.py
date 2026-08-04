@@ -14,8 +14,13 @@
 # - 失败 fail-fast：上传失败抛异常（B22 不 fallback），下载失败记 warning 不阻塞销毁
 #
 # 调用契约（被 E2BSandbox 通过 fork+execlp 调用）：
-#   python3 e2b_sync.py upload   --sandbox-id ID --local-dir PATH --remote-dir PATH
+#   python3 e2b_sync.py upload   --sandbox-id ID --local-dir PATH --remote-dir PATH [--manifest PATH]
 #   python3 e2b_sync.py download --sandbox-id ID --local-dir PATH --remote-dir PATH
+#
+# --manifest（可选，仅 upload）：manifest.jsonc 路径。
+#   提供时按 manifest 的 files 白名单过滤上传（相对 local-dir 的路径集合），
+#   命中 excludes 的剔除；files 为空时按 includes glob 展开。
+#   缺省（workdir/skills 段）走 _CACHE_DIRS/_CACHE_SUFFIXES 缓存过滤，行为不变。
 #
 # 环境变量：
 #   E2B_API_KEY     必填，e2b SDK 鉴权
@@ -29,6 +34,8 @@
 # 日志：打到 stderr，父进程读取或丢弃；不污染 stdout（stdout 留给结构化结果）
 
 import argparse
+import fnmatch
+import json
 import os
 import sys
 import traceback
@@ -124,7 +131,92 @@ def _walk_local_files(local_root: Path):
                 yield rel, path
 
 
-def upload(sandbox_id: str, local_dir: str, remote_dir: str) -> None:
+def _load_manifest_whitelist(manifest_path: str, local_root: Path) -> set[str] | None:
+    """Load manifest.jsonc → upload whitelist (relative posix paths).
+
+    返回 None 仅表示未指定 manifest（调用方走 _CACHE_* 兜底过滤——workdir/skills 段
+    行为不变）。指定了 manifest 但加载/生成失败 → 记 FATAL 并 sys.exit(1)（B22 不
+    fallback：用户明确要求"只传 manifest 声明的内容"，无法确定白名单时禁止盲传，
+    否则会把 .venv(91M) 等沙箱无关产物传上去）。
+
+    优先用 files 列表（具体路径）；files 为空时按 includes glob 在 local_root 下展开。
+    命中 excludes 的文件始终剔除。
+    """
+    if not manifest_path:
+        return None
+    mpath = Path(manifest_path)
+    if not mpath.is_file():
+        # 首次连接无 manifest——用框架规则推断生成（agent-package-structure.md §3.1 场景①）
+        # generate_manifest 写盘到 local_root/manifest.jsonc，
+        # 后续连接直接读，跳过重新推断（场景②）
+        try:
+            from agentflow_runtime.common.manifest import generate_manifest
+            data = generate_manifest(local_root)
+            _log(f"manifest not found, generated fresh: {mpath}")
+        except ImportError:
+            _log(
+                "FATAL: manifest not found and agentflow_runtime unavailable — "
+                "cannot determine upload whitelist (blind upload forbidden)"
+            )
+            sys.exit(1)
+        except Exception as e:
+            _log(f"FATAL: manifest generation failed for {local_root}: {e}")
+            sys.exit(1)
+    else:
+        # manifest.jsonc 是 JSONC 格式（用户可写 // 注释），裸 json.loads 会抛
+        # JSONDecodeError——剥离注释后再解析（权威实现 agentflow_runtime.common.manifest）
+        try:
+            from agentflow_runtime.common.manifest import strip_jsonc_comments
+            raw = mpath.read_text(encoding="utf-8")
+            data = json.loads(strip_jsonc_comments(raw))
+        except ImportError:
+            _log("FATAL: manifest parsing requires agentflow_runtime.common.manifest")
+            sys.exit(1)
+        except (json.JSONDecodeError, OSError) as e:
+            _log(f"FATAL: manifest unparseable ({mpath}): {e}")
+            sys.exit(1)
+
+    files = data.get("files") or []
+    includes = data.get("includes") or []
+    excludes = data.get("excludes") or []
+
+    # 展开白名单：优先 files（具体路径），否则 includes glob
+    if files:
+        whitelist = set()
+        for item in files:
+            if isinstance(item, dict):
+                p = item.get("path", "")
+            else:
+                p = str(item)
+            if p:
+                whitelist.add(p.lstrip("/"))
+    elif includes:
+        whitelist = set()
+        for pat in includes:
+            for rel, _ in _walk_local_files(local_root):
+                if fnmatch.fnmatch(rel.as_posix(), pat):
+                    whitelist.add(rel.as_posix())
+    else:
+        _log(f"FATAL: manifest has neither files nor includes: {mpath}")
+        sys.exit(1)
+
+    # 命中 excludes 的剔除
+    for ex in excludes:
+        whitelist = {p for p in whitelist if not _path_matches_exclude(p, ex)}
+    return whitelist
+
+
+def _path_matches_exclude(rel_posix: str, ex: str) -> bool:
+    """判断相对路径是否命中 excludes 项（目录前缀或 glob）。"""
+    ex = ex.rstrip("/")
+    if "/" in ex:
+        return fnmatch.fnmatch(rel_posix, ex) or rel_posix.startswith(ex + "/")
+    # 顶层目录名/文件名
+    first = rel_posix.split("/", 1)[0]
+    return first == ex or fnmatch.fnmatch(rel_posix, ex)
+
+
+def upload(sandbox_id: str, local_dir: str, remote_dir: str, manifest_path: str = "") -> None:
     api_key = _check_api_key()
     local_root = Path(local_dir).resolve()
     if not local_root.is_dir():
@@ -133,14 +225,21 @@ def upload(sandbox_id: str, local_dir: str, remote_dir: str) -> None:
 
     sb = _connect_sandbox(sandbox_id)
 
-    # 收集待上传文件
-    entries = list(_walk_local_files(local_root))
+    # 收集待上传文件：有 manifest 按白名单过滤，否则走 _CACHE_* 兜底
+    whitelist = _load_manifest_whitelist(manifest_path, local_root)
+    entries = []
+    for rel, abs_path in _walk_local_files(local_root):
+        if whitelist is not None and rel.as_posix() not in whitelist:
+            continue
+        entries.append((rel, abs_path))
     total = len(entries)
     if total == 0:
         _log(f"upload: local-dir empty, nothing to upload (remote_dir={remote_dir})")
         return
 
     _log(f"upload: {total} files, local={local_root} → remote={remote_dir}")
+    if whitelist is not None:
+        _log(f"upload: manifest whitelist applied ({len(whitelist)} entries)")
 
     # 确保远端根目录存在
     try:
@@ -288,6 +387,11 @@ def main() -> int:
     parser.add_argument("--sandbox-id", required=True, help="e2b sandbox ID")
     parser.add_argument("--local-dir", required=True, help="宿主机本地目录绝对路径")
     parser.add_argument("--remote-dir", required=True, help="e2b 远端目录绝对路径")
+    parser.add_argument(
+        "--manifest",
+        default="",
+        help="manifest.jsonc 路径（可选，仅 upload）——按 manifest 白名单过滤上传",
+    )
     args = parser.parse_args()
 
     if not os.path.isabs(args.local_dir):
@@ -299,7 +403,7 @@ def main() -> int:
 
     try:
         if args.action == "upload":
-            upload(args.sandbox_id, args.local_dir, args.remote_dir)
+            upload(args.sandbox_id, args.local_dir, args.remote_dir, args.manifest)
         else:
             download(args.sandbox_id, args.local_dir, args.remote_dir)
         return 0

@@ -35,6 +35,10 @@ class E2BSandbox : public Sandbox {
   // e2b_default_template: E2B 沙箱模板 ID（如 tpl-cb6b9dcbf5784a1487a75971，默认 "base"）
   // e2b_network_allow_out: 沙箱出站网络 CIDR 列表（JSON 数组字符串，可选）
   // e2b_ca_cert_path: E2B CA 证书路径（自签名证书，设为 SSL_CERT_FILE 传给子进程，可选）
+  // agent_package_dir: 宿主机 agent 包根目录绝对路径，启动时整体同步到远端沙箱
+  //   workspace 根（含 .env、agent.md、nodes/、harness/tools/、workflows/ 等非 skills 资产）。
+  //   设计权威源：docs/design/features/sandbox-env-injection.md §2 链路环节⑤。
+  //   空串 = 无 agent 包（fork 分支 filesystem 继承自源沙箱，不必再传）。
   E2BSandbox(const SandboxKey& owner,
              const std::string& workdir_root,
              const std::string& sandbox_http_server_path,
@@ -46,7 +50,8 @@ class E2BSandbox : public Sandbox {
              const std::string& e2b_api_key = "",
              const std::string& e2b_default_template = "base",
              const std::string& e2b_network_allow_out = "",
-             const std::string& e2b_ca_cert_path = "");
+             const std::string& e2b_ca_cert_path = "",
+             const std::string& agent_package_dir = "");
 
   ~E2BSandbox() override;
 
@@ -115,6 +120,7 @@ class E2BSandbox : public Sandbox {
   std::string   e2b_default_template_;    // E2B 沙箱模板 ID
   std::string   e2b_network_allow_out_;   // E2B 沙箱出站网络 CIDR 列表
   std::string   e2b_ca_cert_path_;        // E2B CA 证书路径（SSL_CERT_FILE）
+  std::string   agent_package_dir_;       // 宿主机 agent 包根目录，启动时整体同步到远端沙箱 workspace 根（含 .env 等包根文件）
   int64_t       output_max_bytes_;
   int64_t       last_active_at_ = 0;  // FR-009：最近活跃时间戳（ms），构造时初始化
   SandboxState  state_;
@@ -123,7 +129,8 @@ class E2BSandbox : public Sandbox {
   static std::string generate_token();
 
   // 私有构造器——不调 e2b_lifecycle.py create，直接注入已 fork 的结果（B3 restore 通道）
-  // 仅 ForkFromSnapshot 静态工厂使用，绕过全量 create 流程
+  // 仅 ForkFromSnapshot 雱态工厂使用，绕过全量 create 流程
+  // agent_package_dir 留空：fork 分支 filesystem 继承自源沙箱，无需再整体同步包根
   E2BSandbox(const SandboxKey& owner,
              const std::string& workdir,              // 宿主机侧 workdir（绝对路径）
              const std::string& forked_sandbox_id,    // E2B 平台侧 sandbox_id（fork 结果）
@@ -137,10 +144,23 @@ class E2BSandbox : public Sandbox {
              const std::string& e2b_api_key,
              const std::string& e2b_default_template,
              const std::string& e2b_network_allow_out,
-             const std::string& e2b_ca_cert_path);
+             const std::string& e2b_ca_cert_path,
+             const std::string& agent_package_dir = "");
 
   // curl 带 token 鉴权 POST 到公共 URL
   std::string curl_post_with_token(const std::string& path, const std::string& body_json, int64_t timeout_ms);
+
+  // e2b_sync.py upload 的统一执行器——收敛 ctor/sync_session_uploads 四处同款调用
+  // 消除"霰弹式修改"反模式（四处各自构造 argv + 同款失败判定）：
+  //   - sync_script 路径由 e2b_sync_script_path_ 同源推导（parent_path()/"e2b_sync.py"），消除 cwd 依赖
+  //   - 失败判定口径与原四处逐字一致：exit_code != 0 或 output 含 ERROR/FATAL/Traceback → 抛异常
+  //   - err_prefix 让抛出异常能区分调用场景（"workspace upload" / "agent package upload" / ...）
+  //   - manifest_path 非空时透传给 e2b_sync.py --manifest 走白名单过滤（仅 agent 包根段用）
+  // 脚本不存在时静默跳过（保持原行为：允许纯 HTTP 模式，err_prefix 含 "sync" 走 throws on missing）
+  void upload_via_e2b_sync(const std::string& local_dir,
+                           const std::string& remote_dir,
+                           const std::string& err_prefix,
+                           const std::string& manifest_path = "");
 };
 
 }  // namespace sandbox
