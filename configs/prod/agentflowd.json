@@ -48,7 +48,7 @@
     "e2b_default_template": "tpl-cb6b9dcbf5784a1487a75971",
     "e2b_api_key": "e2b_000000000",
     "e2b_api_url": "http://218.245.96.148:30030",
-    "e2b_ca_cert_path": "configs/certs/e2b_CA.pem",
+    "e2b_ca_cert_path": "configs/prod/certs/e2b_CA.pem",
     "e2b_network_allow_out": "[\"10.0.0.0/8\",\"43.0.0.0/8\",\"218.0.0.0/8\"]",
     "image_name": "agentflow-sandbox:v1",
     "allow_fallback": false
