@@ -9,7 +9,7 @@ Phase B (2026-07-26):
 - Return a JSON string of the flattened content array (only text parts).
 - Downstream nodes always receive a text-only content array.
 
-Design doc: ``docs/design/features/agent-package-structure.md`` §3.6
+Design doc: ``docs/design/features/agent-package/agent-package-structure.md`` §3.6
 Changelog:
   2026-07-26 Phase B: session-level isolation (user_id+client_id in path).
   2026-07-03 Phase A: initial implementation, shared ``workspace/upload/``.

@@ -193,4 +193,5 @@ examples/agent/outfit-assistant/.agentoid/
 examples/agent/outfit-assistant/workspace
 examples/agent/outfit-assistant/harness/skills/dashscope_outfit_skills/forge-image-gen/scripts/assets
 examples/agent/outfit-assistant/harness/output
+docs/tech-debt
 ###

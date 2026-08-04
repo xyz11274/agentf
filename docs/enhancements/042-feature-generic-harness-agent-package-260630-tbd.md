@@ -1151,7 +1151,7 @@ if not valid_tool_calls:
 ```
 触发时机: 每轮 LLM 调用前
 位置:     llm_call.py:compress_messages()
-设计文档: docs/design/features/context-compression.md
+设计文档: docs/design/features/agent-runtime/context-compression.md
 
 压缩序列（按优先级从低到高，每步完成后检查 budget）:
   P5 丢弃 reminder           ← 本轮会重新生成

@@ -819,10 +819,10 @@ def _download_from_sandbox(local_path: Path, sandbox_url: str) -> None:
 def _upload_artifacts_to_storage(artifact_paths: list[str]) -> None:
     """Upload artifacts to bridge storage center (POST /api/artifacts/upload).
 
-    Phase 2: bridge 自身作为存储中心（见 docs/design/features/artifact-storage.md §3.3）。
+    Phase 2: bridge 自身作为存储中心（见 docs/design/features/sandbox/artifact-storage.md §3.3）。
     不再上传到沙箱 HTTP server——沙箱 HTTP server 不参与产物存储链路。
 
-    失败语义（与 docs/design/features/artifact-storage.md §7 对齐）：
+    失败语义（与 docs/design/features/sandbox/artifact-storage.md §7 对齐）：
     - 配置缺失/无文件：info 级别，正常跳过
     - 读取失败/上传失败：error 级别，但不抛异常，skill 主流程继续
       （产物上传是异步增强，URL 仍会构造但 bridge 端会 404，已知降级）
@@ -1043,7 +1043,7 @@ def execute():
             print(f"[flow]   ⚠️  node_timeout reached at round={round_i+1} "
                   f"elapsed={elapsed:.0f}s > limit={node_timeout_sec}s", file=sys.stderr)
             try:
-                databus.response_push(f"{skill_name} 节点超时，正在汇总…",
+                databus.response_push(f"{skill_name} 节点超时，正在汇总…\n",
                                     type="progress", skill=skill_name,
                                     round=str(round_i+1), status="completed",
                                     source="skill_executor")
@@ -1078,7 +1078,7 @@ def execute():
                     }, level="WARN")
                     print(f"[flow]   ⚠️  interrupted by DIALOGUE-INTERRUPT at round={round_i+1}", file=sys.stderr)
                     try:
-                        databus.response_push(f"{skill_name} 已被取消",
+                        databus.response_push(f"{skill_name} 已被取消\n",
                                             type="progress", skill=skill_name,
                                             status="completed", source="skill_executor")
                     except Exception as exc:
@@ -1115,8 +1115,9 @@ def execute():
 
         # ── Progress: push round info to frontend ──
         # "第 X 轮：调用 LLM…" → 用户看到"正在等 API"而非"卡了"
+        # 末尾 \n：产生端自带换行，外部渲染端拼接多条进度时自然换行（不横排）
         _round_start = time.time()
-        progress_msg = f"{skill_name} 第 {round_i+1}/{max_rounds} 轮：调用 LLM…"
+        progress_msg = f"{skill_name} 第 {round_i+1}/{max_rounds} 轮：调用 LLM…\n"
         # 仅通过 response_push 推流式进度，不再写 DataBus response key
         # （response key 仅供 coordinator 最终输出使用，进度写入会污染最终结果）
         try:
@@ -1266,7 +1267,7 @@ def execute():
                     file=sys.stderr,
                 )
                 try:
-                    databus.response_push(f"{skill_name} 正在恢复第 {round_i+1} 轮…",
+                    databus.response_push(f"{skill_name} 正在恢复第 {round_i+1} 轮…\n",
                                           type="progress", skill=skill_name,
                                           round=str(round_i+1), status="running",
                                           source="skill_executor")
@@ -1297,7 +1298,7 @@ def execute():
             })
             print(f"[flow]   round={round_i+1} → tool_calls: {tool_names}", file=sys.stderr)
             # ── Progress: tool call details ──
-            msg_tool = f"{skill_name} → 正在调用 {', '.join(tool_names)}"
+            msg_tool = f"{skill_name} → 正在调用 {', '.join(tool_names)}\n"
             try:
                 databus.response_push(msg_tool, type="progress",
                                       skill=skill_name, round=str(round_i+1),
@@ -1325,7 +1326,7 @@ def execute():
                 }, level="WARN")
                 print(f"[flow]   ⚠️  tool_call loop detected at round={round_i+1}, forcing completion", file=sys.stderr)
                 try:
-                    databus.response_push(f"{skill_name} 检测到重复调用，正在汇总…",
+                    databus.response_push(f"{skill_name} 检测到重复调用，正在汇总…\n",
                                           type="progress", skill=skill_name,
                                           status="completed", source="skill_executor")
                 except Exception as exc:
@@ -1394,7 +1395,7 @@ def execute():
         else:
             # Task complete → output result
             # ── Progress: LLM returned final answer ──
-            msg_summary = f"{skill_name} 汇总结果…"
+            msg_summary = f"{skill_name} 汇总结果…\n"
             try:
                 databus.response_push(msg_summary, type="progress",
                                       skill=skill_name, status="completed",

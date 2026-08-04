@@ -1,7 +1,7 @@
 """E2E 测试：Bridge 作为产物存储中心（Phase 2）。
 
 Bridge 自身实现 upload/download 端点，不再转发到沙箱 HTTP server。
-见 docs/design/features/artifact-storage.md §3.3。
+见 docs/design/features/sandbox/artifact-storage.md §3.3。
 """
 
 from __future__ import annotations

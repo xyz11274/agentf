@@ -187,7 +187,7 @@ def test_local_artifact_becomes_bridge_markdown_url(tmp_path):
 
     assert "## 生成产物" in rendered
     # URL 走 artifact_id 格式（{agent}/{session}/{path} 或 legacy {agent}/files/{path}），无 ?path= 查询参数
-    # 设计文档 docs/design/features/artifact-storage.md §I-artifact-id
+    # 设计文档 docs/design/features/sandbox/artifact-storage.md §I-artifact-id
     assert "/api/artifacts/" in rendered
     assert "?path=" not in rendered
     assert "look.png" in rendered

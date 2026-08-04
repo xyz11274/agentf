@@ -8,8 +8,6 @@ Tests the scanning rules from §3.2:
   ❌ agent.json, package.json, *.json workflows, nodes/, agent.md, .env, setup.sh
 """
 
-import json
-import os
 import tempfile
 from pathlib import Path
 
@@ -205,3 +203,51 @@ def test_manifest_invalid_json():
         (_manifest_path(tmp)).write_text("{invalid json}")
         loaded = load_manifest(tmp)
         assert loaded is None
+
+
+def test_load_manifest_jsonc_with_comments():
+    """load_manifest strips JSONC comments (// ...) before parsing.
+
+    Regression guard: load_manifest previously called a misspelled
+    ``_strip_jsonc_comments`` (NameError) instead of ``strip_jsonc_comments``.
+    A manifest written by hand with ``//`` comments would crash load_manifest
+    even though strip_jsonc_comments exists for exactly this purpose.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        # Hand-written JSONC with // line comments — mirrors
+        # examples/agent/outfit-assistant/manifest.jsonc shape
+        (_manifest_path(tmp)).write_text(
+            """{
+            // includes: upload whitelist globs (relative to agent package root)
+            "includes": ["harness/skills/**", ".env", "setup.sh"],
+            // excludes: even if matched by includes, drop these
+            "excludes": [".venv", "workspace"],
+            "files": [{"path": ".env"}]
+            }"""
+        )
+        loaded = load_manifest(tmp)
+        assert loaded is not None, "load_manifest crashed or returned None on JSONC with comments"
+        assert loaded["includes"] == ["harness/skills/**", ".env", "setup.sh"]
+        assert loaded["excludes"] == [".venv", "workspace"]
+        assert loaded["files"] == [{"path": ".env"}]
+
+
+def test_load_manifest_jsonc_with_block_comments():
+    """load_manifest strips JSONC block comments (/* ... */) too.
+
+    Covers the strip_jsonc_comments block-comment branch — line-comment-only
+    tests would miss a regression where block-comment stripping breaks.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        (_manifest_path(tmp)).write_text(
+            """{
+            "includes": ["harness/skills/**"], /* block comment */
+            "files": [{"path": "harness/skills/demo/SKILL.md"}]
+            }"""
+        )
+        loaded = load_manifest(tmp)
+        assert loaded is not None
+        assert loaded["includes"] == ["harness/skills/**"]
+        assert loaded["files"] == [{"path": "harness/skills/demo/SKILL.md"}]

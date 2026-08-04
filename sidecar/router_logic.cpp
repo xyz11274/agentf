@@ -122,7 +122,9 @@ SSEResult parse_sse_line(const std::string& line) {
 
 bool should_forward_to_callback(const std::string& source) {
     if (source.empty()) return true;
-    return source == "coordinator";
+    // coordinator / skill_executor 均可回调 upstream(后者仅 progress 汇总文本,
+    // 细分过滤在 SSEChunkProcessor::process 内完成)
+    return source == "coordinator" || source == "skill_executor";
 }
 
 std::pair<std::string, std::string> swap_sender_receiver(
@@ -269,6 +271,17 @@ std::vector<SSEChunkProcessor::Callback> SSEChunkProcessor::process(const Json::
     if (token.empty() && reasoning.empty()) return results;
 
     std::string _src = sse_json.get("_source", "").asString();
+    // skill_executor: 仅转发 progress 汇总文本(思考过程 flag=1),
+    // llm_chunk / reasoning / _final 仍不外露(coremind-bridge.md §3.3 决策)
+    if (_src == "skill_executor") {
+        // skill_executor: progress 汇总文本(产生端已带 \n)与 LLM 逐 token 增量(llm_chunk)
+        // 均转发为思考过程(flag=1);不累积进 accumulated_content_,避免污染最终回复文本。
+        // LLM 增量保持原样(含其自身换行符),由消费端按 token 组装。
+        std::string _ct = sse_json.get("_chunk_type", "").asString();
+        if ((_ct != "progress" && _ct != "llm_chunk") || token.empty()) return results;
+        results.push_back({true, "Running", 1, token, false, ""});
+        return results;
+    }
     if (!_src.empty() && _src != "coordinator") return results;
 
     if (!reasoning.empty()) {

@@ -42,7 +42,7 @@ DANGEROUS_PREFIXES = (
     "mkfs.", "dd if=/dev/zero of=/dev/sd", "shutdown", "reboot",
 )
 
-# FR-003 已变更(见 docs/design/features/sandbox-env-injection.md §4):
+# FR-003 已变更(见 docs/design/features/sandbox/sandbox-env-injection.md §4):
 # 密钥 *_API_KEY 允许在沙箱内文件中,不再用宿主侧白名单拦截。
 # env_vars 透传到沙箱——宿主机 os.environ 不透传(由 e2b.py 的 set -a && source .env 兜底)。
 
@@ -177,7 +177,7 @@ def _exec_tool(tool_name: str, tool_params: dict, opts: dict) -> dict:
     if tool_name == "bash" and opts.get("working_dir"):
         tool_input["cwd"] = opts["working_dir"]
 
-    # FR-003 已变更(见 docs/design/features/sandbox-env-injection.md §4):
+    # FR-003 已变更(见 docs/design/features/sandbox/sandbox-env-injection.md §4):
     # env_vars 不再白名单拦截——密钥 *_API_KEY 允许透传到沙箱内(可信沙箱持密)。
     env_vars = opts.get("env_vars", {})
     if env_vars:

@@ -663,14 +663,25 @@ void E2BSandbox::upload_via_e2b_sync(const std::string& local_dir,
                                      const std::string& manifest_path) {
   // e2b_sync.py upload 的统一执行器——收敛 ctor/sync_session_uploads 四处同款调用
   // 消除"霰弹式修改"反模式（四处各自 fs::absolute("src/sandbox/e2b_sync.py") + argv + 同款判定）：
-  //   - sync_script 路径由 e2b_sync_script_path_ 同源推导（parent_path()/"e2b_sync.py"），消除 cwd 依赖
+  //   - sync_script 路径直指 src/sandbox/e2b_sync.py（daemon cwd 恒为项目根，
+  //     fs::absolute("src/...") 是全局既有约定，见 sandbox_lifecycle.cpp:63 http_server_path）
   //   - 失败判定口径与原四处逐字一致：exit_code != 0 或 output 含 ERROR/FATAL/Traceback → 抛异常
   //   - manifest_path 非空时透传给 e2b_sync.py --manifest 走白名单过滤（仅 agent 包根段用）
+  //
+  // 路径推导修正（2026-08-04）：
+  //   曾用 fs::path(e2b_sync_script_path_).parent_path() / "e2b_sync.py" 同源推导，
+  //   但该假设"sandbox_http_server.py 与 e2b_sync.py 同目录"不成立——
+  //   sandbox_http_server.py 在 docker/sandbox/http_server/（沙箱内 HTTP server），
+  //   e2b_sync.py 在 src/sandbox/（宿主机同步脚本），两者不同目录！
+  //   parent_path 推导出 docker/sandbox/http_server/e2b_sync.py（不存在）→
+  //   skills sync 段 err_prefix 含 "sync" → throw → daemon 崩（libc++abi terminate，
+  //   sidecar 模拟 SSE 收到 "daemon WebSocket closed"，本任务排查的卡住根因）。
+  // 修正：直指 src/sandbox/e2b_sync.py（与原四处调用逐字一致）。
+  //
   // e2b_sync_script_path_ 空串 = 纯 HTTP 模式（无文件同步），保持原"静默跳过"行为
   if (e2b_sync_script_path_.empty()) return;
 
-  // 同源推导：sandbox_http_server.py 与 e2b_sync.py 同在 src/sandbox/ 下
-  fs::path sync_script = fs::path(e2b_sync_script_path_).parent_path() / "e2b_sync.py";
+  fs::path sync_script = fs::absolute("src/sandbox/e2b_sync.py");
   if (!fs::exists(sync_script)) {
     // 脚本不存在时静默跳过：允许纯 HTTP 模式（无文件同步）
     // 与原四处行为逐字一致（原 ctor 三段静默跳过，sync_session_uploads段 throws——
@@ -732,12 +743,6 @@ void E2BSandbox::sync_session_uploads(const std::string& session_upload_dir) {
     return;
   }
 
-  fs::path sync_script = fs::absolute("src/sandbox/e2b_sync.py");
-  if (!fs::exists(sync_script)) {
-    throw std::runtime_error(
-        "E2BSandbox::sync_session_uploads: e2b_sync.py not found: " + sync_script.string());
-  }
-
   // remote 目标 = 远端 workspace 根 / 同名相对路径
   // session_upload_dir 形如 .../{agent_id}/workspace/{user_id}_{client_id}/upload
   // 我们取 .../{agent_id}/ 之后的相对部分拼到 remote_workspace_dir_ 后面
@@ -754,27 +759,10 @@ void E2BSandbox::sync_session_uploads(const std::string& session_upload_dir) {
   std::string rel_under_workspace = rel.substr(pos + 1);
   std::string remote_target = remote_workspace_dir_ + "/" + rel_under_workspace;
 
-  std::vector<std::string> sync_argv = {
-      resolve_python3(), sync_script.string(),
-      "upload",
-      "--sandbox-id", sandbox_id_,
-      "--local-dir", session_upload_dir,
-      "--remote-dir", remote_target,
-  };
-  auto sync_res = exec_cmd_argv(sync_argv);
-  // exit_code != 0 = execvp 失败（python3 不在 PATH，exit=127）或 脚本 exit 非 0
-  // 必须当错误处理，否则静默"成功"但无数据传输，用户上传不在沙箱里却继续处理
-  if (sync_res.exit_code != 0 || sync_res.output.empty()) {
-    throw std::runtime_error(
-        "E2BSandbox::sync_session_uploads: e2b_sync.py upload failed (exit=" +
-        std::to_string(sync_res.exit_code) + "): " + sync_res.output);
-  }
-  if (sync_res.output.find("ERROR") != std::string::npos ||
-      sync_res.output.find("FATAL") != std::string::npos ||
-      sync_res.output.find("Traceback") != std::string::npos) {
-    throw std::runtime_error(
-        "E2BSandbox::sync_session_uploads: e2b_sync.py upload failed: " + sync_res.output);
-  }
+  // 复用统一 upload 执行器（err_prefix 含 "sync" → 脚本缺失时 throws 而非静默跳过，
+  // 保持 sync_session_uploads 段原严格行为）
+  upload_via_e2b_sync(session_upload_dir, remote_target, "sync_session_uploads");
+
   Logger::instance().info_f(
       "[E2B] sync_session_uploads done: %s -> %s",
       session_upload_dir.c_str(), remote_target.c_str());

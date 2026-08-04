@@ -224,8 +224,9 @@ class _TraceRecorder:
             hangs mid-stream the connection is abandoned after ``timeout`` s.
 
         **Streaming chunk classification** (streaming-response.md §3.6):
-          source == "coordinator"     → type="llm_chunk"  (对话 token)
-          source == "skill_executor"  → type="progress"   (中间产物)
+          all sources (coordinator / skill_executor) → type="llm_chunk"
+            (原始 delta JSON,增量组装;消费端用 source 区分——coordinator 进正文,
+             skill_executor 进思考/过程通道)
           other / empty source         → no chunk push
 
         Returns OpenAI-compatible response dict, or
@@ -285,7 +286,10 @@ class _TraceRecorder:
         # See streaming-response.md §3.5 / §3.6 for the full contract.
         chunk_publisher = None
         if stream_enabled and source and self._client:
-            _chunk_type = "llm_chunk" if source == "coordinator" else "progress"
+            # 所有 LLM 流式输出统一走 llm_chunk(原始 delta JSON,增量组装)——
+            # skill_executor 与 coordinator 同通道,用 source 区分消费行为;
+            # 不再把 skill 的 LLM 增量降级为 progress(会导致逐 token 碎片化)。
+            _chunk_type = "llm_chunk"
             _push_client = self._client
 
             def _on_chunk(raw_json: str) -> None:
@@ -298,23 +302,20 @@ class _TraceRecorder:
                     # 守 streaming-response.md §3.2 核心原则 #2：
                     #   llm_chunk → 原始 OpenAI delta JSON（choices[0].delta.content），
                     #                Bridge 透传，前端/外部客户端自行组装增量 token
-                    #   progress  → message.content 格式的纯文本
-                    #                （choices[0].message.content），直接渲染
-                    if _chunk_type == "progress":
-                        # 从原始 delta JSON 中提取纯文本（delta.content），
-                        # 直接推纯文本，不包装 message.content 格式——
-                        # Bridge 的 _sse_stream() 会自己做 message.content 包装。
-                        # 避免双重嵌套导致格式 C（msg.content = JSON-stringified JSON）。
-                        parsed = json.loads(raw_json)
-                        inner_text = ""
-                        choices = parsed.get("choices", [])
-                        if choices:
-                            delta = choices[0].get("delta", {})
-                            if isinstance(delta, dict):
-                                inner_text = delta.get("content", "")
-                        content = inner_text
-                    else:
-                        content = raw_json  # llm_chunk: 原始 delta JSON，Bridge 透传
+                    # Guard: 跳过无 content 的 chunk（delta 只含 role/tool_calls/finish_reason
+                    # 或 content 为空时），避免把原始 JSON 当 token 推给消费端——
+                    # tool_calls 增量不推流（前端以最终响应为准），空 content 推送会
+                    # 触发 daemon 对空 content 返回 -32602 error。
+                    parsed = json.loads(raw_json)
+                    delta_content = ""
+                    choices = parsed.get("choices", [])
+                    if choices:
+                        delta = choices[0].get("delta", {})
+                        if isinstance(delta, dict):
+                            delta_content = delta.get("content") or ""
+                    if not delta_content:
+                        return
+                    content = raw_json  # llm_chunk: 原始 delta JSON，Bridge 透传
 
                     kwargs: dict = {"type": _chunk_type, "source": source}
                     if skill:
@@ -1068,8 +1069,9 @@ def call_llm(messages: list, model: str = "gpt-4o-mini",
 
     ``source`` / ``skill`` / ``round_i`` identify the caller for the
     streaming chunk classification:
-      source="coordinator"    → on_chunk pushes type="llm_chunk"
-      source="skill_executor" → on_chunk pushes type="progress"
+      source="coordinator" / "skill_executor" → on_chunk pushes type="llm_chunk"
+        (统一增量通道;消费端按 source 区分:coordinator 进对话正文,
+         skill_executor 进思考/过程通道。汇总进度文本由各节点单独推 type="progress")
     Empty source → no chunk push (the on_chunk callback is not wired).
 
     ``extra_body`` — additional LLM request body parameters (temperature,

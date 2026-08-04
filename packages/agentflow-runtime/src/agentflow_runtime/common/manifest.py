@@ -36,7 +36,7 @@ _EXCLUDE_PREFIXES = ("agent.json", "package.json", "coordinator")
 # 注：.env 与 setup.sh 曾在此处排除，但 sandbox-env-injection.md §6.1 敲定的
 # set -a && source /home/user/workspace/.env 链路要求 .env 必须在沙箱内（本轮修订，
 # 2026-08-04）。setup.sh 是沙箱内环境初始化脚本，随包上传由框架执行。
-# 修订来源：docs/design/features/agent-package-structure.md §3.2 上传规则（.env / setup.sh 纳入 includes）
+# 修订来源：docs/design/features/agent-package/agent-package-structure.md §3.2 上传规则（.env / setup.sh 纳入 includes）
 _EXCLUDE_NAMES = {"agent.md"}
 
 # Directories to exclude entirely

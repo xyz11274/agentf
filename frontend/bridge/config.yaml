@@ -50,7 +50,7 @@ aisf_adapter:
 # artifact_public_base_url: "https://115.120.249.45:40092/health"
 artifact_public_base_url: "http://localhost:8199/health"
 
-# ── 产物存储目录（详见 docs/design/features/artifact-storage.md §8）──
+# ── 产物存储目录（详见 docs/design/features/sandbox/artifact-storage.md §8）──
 # 空字符串 = 默认 agent_packages_path.parent / artifacts_storage
 artifacts_storage_dir: ""
 

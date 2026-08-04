@@ -37,7 +37,7 @@ class E2BSandbox : public Sandbox {
   // e2b_ca_cert_path: E2B CA 证书路径（自签名证书，设为 SSL_CERT_FILE 传给子进程，可选）
   // agent_package_dir: 宿主机 agent 包根目录绝对路径，启动时整体同步到远端沙箱
   //   workspace 根（含 .env、agent.md、nodes/、harness/tools/、workflows/ 等非 skills 资产）。
-  //   设计权威源：docs/design/features/sandbox-env-injection.md §2 链路环节⑤。
+  //   设计权威源：docs/design/features/sandbox/sandbox-env-injection.md §2 链路环节⑤。
   //   空串 = 无 agent 包（fork 分支 filesystem 继承自源沙箱，不必再传）。
   E2BSandbox(const SandboxKey& owner,
              const std::string& workdir_root,
@@ -152,7 +152,11 @@ class E2BSandbox : public Sandbox {
 
   // e2b_sync.py upload 的统一执行器——收敛 ctor/sync_session_uploads 四处同款调用
   // 消除"霰弹式修改"反模式（四处各自构造 argv + 同款失败判定）：
-  //   - sync_script 路径由 e2b_sync_script_path_ 同源推导（parent_path()/"e2b_sync.py"），消除 cwd 依赖
+  //   - sync_script 路径直指 src/sandbox/e2b_sync.py（daemon cwd 恒为项目根，
+  //     fs::absolute("src/...") 是全局既有约定；曾用 e2b_sync_script_path_ parent_path
+  //     同源推导，但 sandbox_http_server.py 在 docker/sandbox/http_server/、e2b_sync.py
+  //     在 src/sandbox/ 不同目录，推导出不存在路径 → skills sync throw → daemon 崩，
+  //     2026-08-04 修正）
   //   - 失败判定口径与原四处逐字一致：exit_code != 0 或 output 含 ERROR/FATAL/Traceback → 抛异常
   //   - err_prefix 让抛出异常能区分调用场景（"workspace upload" / "agent package upload" / ...）
   //   - manifest_path 非空时透传给 e2b_sync.py --manifest 走白名单过滤（仅 agent 包根段用）

@@ -158,7 +158,7 @@ TEST(TestSSE, TC_SID_013_SkillExecutorFiltered) {
     ASSERT_TRUE(result.should_process);
     EXPECT_EQ(result.token, "skip me");
     EXPECT_EQ(result.source, "skill_executor");
-    EXPECT_FALSE(should_forward_to_callback(result.source));
+    EXPECT_TRUE(should_forward_to_callback(result.source));
 }
 
 TEST(TestSSE, CoordinatorForwarded) {
@@ -341,6 +341,16 @@ static Json::Value make_coord_progress(const std::string& text, const std::strin
     return sse;
 }
 
+static Json::Value make_skill_progress(const std::string& text, const std::string& skill, const std::string& round) {
+    Json::Value sse;
+    sse["choices"][0]["message"]["content"] = text;
+    sse["_chunk_type"] = "progress";
+    sse["_source"] = "skill_executor";
+    sse["_skill"] = skill;
+    sse["_round"] = round;
+    return sse;
+}
+
 static Json::Value make_final_block(const std::string& content) {
     Json::Value sse;
     sse["choices"][0]["message"]["content"] = content;
@@ -364,9 +374,45 @@ TEST(SSEChunkProcessor, ToolCallsDelta_Skipped) {
     EXPECT_TRUE(results.empty());
 }
 
-TEST(SSEChunkProcessor, SkillExecutor_Filtered) {
+TEST(SSEChunkProcessor, SkillExecutor_LlmChunk_ForwardedAsFlag1_NotAccumulated) {
     SSEChunkProcessor proc;
     auto results = proc.process(make_llm_chunk("skill text", "skill_executor"));
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].flag, 1);
+    EXPECT_EQ(results[0].text, "skill text");
+    EXPECT_EQ(results[0].stream_status, "Running");
+    EXPECT_FALSE(results[0].is_final);
+    // LLM 增量不累积进最终回复文本(避免污染 TaskStatusReport)
+    EXPECT_TRUE(proc.accumulated_content().empty());
+}
+
+TEST(SSEChunkProcessor, SkillExecutor_Reasoning_Filtered) {
+    Json::Value sse;
+    sse["choices"][0]["delta"]["reasoning_content"] = "skill reasoning";
+    sse["choices"][0]["delta"]["content"] = "skill text";
+    sse["_chunk_type"] = "llm_chunk";
+    sse["_source"] = "skill_executor";
+    SSEChunkProcessor proc;
+    auto results = proc.process(sse);
+    // 只转发 content 增量,reasoning 不外露
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].flag, 1);
+    EXPECT_EQ(results[0].text, "skill text");
+}
+
+TEST(SSEChunkProcessor, SkillExecutor_Progress_ForwardedAsFlag1) {
+    SSEChunkProcessor proc;
+    auto results = proc.process(make_skill_progress("outfit-stylist 第 1 轮：调用 LLM…", "outfit-stylist", "1"));
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].flag, 1);
+    EXPECT_EQ(results[0].text, "outfit-stylist 第 1 轮：调用 LLM…");
+    EXPECT_EQ(results[0].stream_status, "Running");
+    EXPECT_FALSE(results[0].is_final);
+}
+
+TEST(SSEChunkProcessor, SkillExecutor_Progress_EmptyText_Skipped) {
+    SSEChunkProcessor proc;
+    auto results = proc.process(make_skill_progress("", "outfit-stylist", "1"));
     EXPECT_TRUE(results.empty());
 }
 
@@ -466,8 +512,9 @@ TEST(SSEChunkProcessor, FullDumpReplay) {
 
     EXPECT_EQ(total_events, 1288);
     EXPECT_EQ(flag0_count, 390);
-    EXPECT_EQ(flag1_count, 5);
-    EXPECT_EQ(empty_count, 893);
+    // 744 条 skill_executor progress 现转发为 flag=1(思考过程), coordinator progress 5 条
+    EXPECT_EQ(flag1_count, 749);
+    EXPECT_EQ(empty_count, 149);
     EXPECT_EQ(completed.text.size(), 2141u);  // 1043 Unicode chars = 2141 UTF-8 bytes
     EXPECT_EQ(completed.stream_status, "Completed");
     EXPECT_TRUE(completed.is_final);
@@ -538,8 +585,9 @@ TEST(SSEChunkProcessor, FullDumpReplay_WithArtifacts) {
 
     EXPECT_EQ(total_events, 1082);
     EXPECT_EQ(flag0_count, 428);
-    EXPECT_EQ(flag1_count, 3);
-    EXPECT_EQ(empty_count, 651);
+    // 518 条 skill_executor progress 现转发为 flag=1(思考过程), coordinator progress 3 条
+    EXPECT_EQ(flag1_count, 521);
+    EXPECT_EQ(empty_count, 133);
     EXPECT_EQ(completed.text.size(), 2534u);  // 1324 Unicode chars = 2534 UTF-8 bytes
 
     // 关键验证：_artifacts 字段被正确读取并放入 user_output_object

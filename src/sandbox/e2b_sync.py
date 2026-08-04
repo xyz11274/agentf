@@ -217,7 +217,7 @@ def _path_matches_exclude(rel_posix: str, ex: str) -> bool:
 
 
 def upload(sandbox_id: str, local_dir: str, remote_dir: str, manifest_path: str = "") -> None:
-    api_key = _check_api_key()
+    _check_api_key()  # 鉴权 + fail-fast（E2B_API_KEY 缺失 sys.exit(2)）
     local_root = Path(local_dir).resolve()
     if not local_root.is_dir():
         _log(f"ERROR: local-dir does not exist or is not a directory: {local_root}")
@@ -311,7 +311,7 @@ def _download_file_by_file(sb, remote_dir: str, local_root: Path) -> tuple[int, 
         remote_files = []
 
     if not remote_files:
-        _log(f"download: remote-dir empty or unreadable, nothing to download")
+        _log("download: remote-dir empty or unreadable, nothing to download")
         return 0, 0
 
     downloaded = 0
@@ -342,7 +342,7 @@ def download(sandbox_id: str, local_dir: str, remote_dir: str) -> None:
             下次 Sandbox.create() 时可通过快照恢复，无需本地下载。
     - 降级：逐文件下载到本地（SDK 不支持 snapshot 时）。
     """
-    api_key = _check_api_key()
+    _check_api_key()  # 鉴权 + fail-fast（E2B_API_KEY 缺失 sys.exit(2)）
     local_root = Path(local_dir).resolve()
     local_root.mkdir(parents=True, exist_ok=True)
 

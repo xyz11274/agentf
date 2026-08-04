@@ -762,7 +762,7 @@ def execute():
     # ── Progress: coordinator is calling LLM (may take >60s) ──
     try:
         if 'databus' in dir():
-            databus.response_push("coordinator 决策中…", type="progress",
+            databus.response_push("coordinator 决策中…\n", type="progress",
                                   skill="coordinator", status="running",
                                   source="coordinator")
     except Exception as exc:
@@ -1013,7 +1013,7 @@ def execute():
                         for skill_name_ in skill_labels.strip().split():
                             sn = skill_name_.strip()
                             if sn:
-                                databus.response_push(f"正在执行 {sn}", type="progress", skill=sn, status="running",
+                                databus.response_push(f"正在执行 {sn}\n", type="progress", skill=sn, status="running",
                                                       source="coordinator")
                 except Exception as exc:
                     print(f"[flow]   WARN: dispatch progress push failed: {exc}", file=sys.stderr)

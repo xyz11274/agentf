@@ -1,6 +1,6 @@
 """Secure serving of generated chat artifacts from file storage service.
 
-Phase 2: Bridge 自身作为存储中心（见 docs/design/features/artifact-storage.md §3.3）。
+Phase 2: Bridge 自身作为存储中心（见 docs/design/features/sandbox/artifact-storage.md §3.3）。
 
 - 上传：POST /api/artifacts/upload → 路径安全校验 → 写入本地文件系统
 - 下载：GET /api/artifacts/{artifact_id} → 从本地文件系统读取
