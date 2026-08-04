@@ -49,7 +49,7 @@ from content_serializer import prepare_content_for_daemon
 from dependencies import get_daemon_client
 from models import ContentPart
 from providers import SessionProvider
-from routes.artifact_extractor import extract_artifact_infos, publicize_artifact_urls, serialize_artifacts
+from routes.artifact_extractor import apply_artifact_output_mode, extract_artifact_infos, publicize_artifact_urls, serialize_artifacts
 from routes.conversations import get_store, ConversationRecord
 from services import _pull_and_save_traces
 from session_dependencies import get_session_provider
@@ -488,6 +488,11 @@ async def _chat_turn_events(
 
         # Structured artifact metadata from the chunk content.
         artifacts = extract_artifact_infos(chunk_content) if is_final else []
+        # 产物输出模式转换（artifact_reference / artifact_payload 两维正交开关）：
+        # 仅 final chunk 应用（产物 URL 只出现在最终完整文本）；默认 link+url 时无转换，
+        # 与历史行为完全一致（I-3 三路一致：SSE / 同步 / 历史回放共用同一转换后结果）。
+        if is_final:
+            chunk_content, artifacts = apply_artifact_output_mode(chunk_content, artifacts)
 
         # task_id is attached to the first chunk only, so callers can
         # track the daemon task without scanning every frame.
@@ -783,7 +788,12 @@ async def chat_rest(
                 body.user_id, body.client_id,
             )
             await provider.update_agentflow_session_ref(sess["id"], agentflow_session_id)
-            artifacts_json = serialize_artifacts(full_content)
+            # 持久化使用转换后产物元数据（含 placeholder/data_base64，I-3 三路一致）；
+            # 默认模式（link+url）下 accumulated_artifacts 即 extract 结果，行为与历史一致。
+            artifacts_json = (
+                json.dumps(accumulated_artifacts, ensure_ascii=False)
+                if accumulated_artifacts else serialize_artifacts(full_content)
+            )
             # Audit:产物清单即将落盘。extract_artifact_infos 已记 urls，此处补数量 + dialogue 关联
             logger.info(
                 "chat_turn.persist_artifacts agent=%s dialogue=%s artifacts=%d json_len=%d",
@@ -839,7 +849,7 @@ async def chat_rest(
             content="".join(chunks),
         ))
 
-    async def _persist_to_provider(full_content: str) -> None:
+    async def _persist_to_provider(full_content: str, artifacts: list | None = None) -> None:
         """Persist the completed dialogue to the durable SessionProvider.
 
         Runs the Bridge-session save + trace pull. I-5: silent on failure
@@ -848,13 +858,21 @@ async def chat_rest(
 
         ``bsession`` was resolved during the context-injection step before
         the SSE stream opened; re-resolve only if that step failed.
+
+        ``artifacts`` 为 final chunk 的转换后产物元数据（含 placeholder/data_base64，
+        I-3 三路一致）；为 None 时回退 ``serialize_artifacts(full_content)``。
         """
         try:
             sess = bsession if bsession is not None else await provider.get_or_create_session(
                 body.user_id, body.client_id,
             )
             await provider.update_agentflow_session_ref(sess["id"], active.session_id)
-            artifacts_json = serialize_artifacts(full_content)
+            # 持久化使用转换后产物元数据（含 placeholder/data_base64，I-3 三路一致）；
+            # 默认模式（link+url）下 artifacts 即 extract 结果，行为与历史一致。
+            artifacts_json = (
+                json.dumps(artifacts, ensure_ascii=False)
+                if artifacts else serialize_artifacts(full_content)
+            )
             # Audit:产物清单即将落盘。extract_artifact_infos 已记 urls，此处补数量 + dialogue 关联
             logger.info(
                 "sse_chat.persist_artifacts agent=%s dialogue=%s artifacts=%d json_len=%d",
@@ -999,7 +1017,9 @@ async def chat_rest(
                         )]
                         yield _SSE_DONE
                         _save_conversation(final_content)
-                        await _persist_to_provider("".join(final_content))
+                        await _persist_to_provider(
+                            "".join(final_content), event.get("artifacts"),
+                        )
                         return
                 elif event["type"] == "error":
                     err_payload = {

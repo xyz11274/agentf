@@ -50,12 +50,14 @@ class MockBridgeHandler(BaseHTTPRequestHandler):
         })
         sse = "".join(
             f'data: {json.dumps(c, ensure_ascii=False)}\n\n' for c in [
+                # 对齐真实 bridge SSE：llm_chunk 逐 token 增量（无 _chunk_type 的 chunk
+                # 会被 SSEChunkProcessor 忽略，不产生 Running 回调——mock 必须带 _chunk_type）
                 {"choices": [{"delta": {"content": "你"}}],
-                 "_source": "coordinator", "_progress": True},
+                 "_source": "coordinator", "_chunk_type": "llm_chunk"},
                 {"choices": [{"delta": {"content": "好"}}],
-                 "_source": "coordinator", "_progress": False},
+                 "_source": "coordinator", "_chunk_type": "llm_chunk"},
                 {"choices": [{"delta": {}}], "finish_reason": "stop",
-                 "_source": "coordinator", "_progress": False,
+                 "_source": "coordinator", "_final": True,
                  "artifacts": [{"type": "image", "url": "http://x/look.png"}]},
             ]
         ) + "data: [DONE]\n\n"

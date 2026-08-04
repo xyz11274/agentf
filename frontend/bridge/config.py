@@ -214,6 +214,17 @@ class BridgeSettings(BaseSettings):
         default="",
         description="Public base URL for artifact links (empty = relative paths).",
     )
+    # 产物输出模式（两维正交开关，详见 docs/design/features/artifact-output-pipeline.md §3.6）：
+    #   artifact_reference: link（默认，Markdown 链接）| placeholder（{{artifact:N}} 占位符，由消费端自行替换）
+    #   artifact_payload:    url（默认，HTTP serve 地址）| base64（内容以 base64 内嵌，无需网络访问）
+    artifact_reference: str = Field(validation_alias="AF_BR_ARTIFACT_REFERENCE",
+        default="link",
+        description="Artifact reference form in response text: link | placeholder.",
+    )
+    artifact_payload: str = Field(validation_alias="AF_BR_ARTIFACT_PAYLOAD",
+        default="url",
+        description="Artifact content transport: url | base64 (base64 embeds content inline).",
+    )
     artifacts_storage_dir: str = Field(validation_alias="AF_BR_ARTIFACTS_STORAGE_DIR",
         default="",
         description="Artifact storage directory (local filesystem). Empty = agent_packages_path.parent / artifacts_storage.",

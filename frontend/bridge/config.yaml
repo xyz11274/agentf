@@ -50,6 +50,13 @@ aisf_adapter:
 # artifact_public_base_url: "https://115.120.249.45:40092/health"
 artifact_public_base_url: "http://localhost:8199/health"
 
+# ── 产物输出模式（两维正交开关，详见 docs/design/features/artifact-output-pipeline.md §3.6）──
+# artifact_reference: link（默认，Markdown 链接）| placeholder（{{artifact:N}} 占位符，由消费端自行替换）
+# artifact_payload:    url（默认，HTTP serve 地址）| base64（内容以 base64 内嵌，无需网络访问 serve URL）
+#   组合：link+url 现状；link+base64 文本内 data URI；placeholder+base64 占位符 + 元数据 data_base64
+artifact_reference: "link"
+artifact_payload: "url"
+
 # ── 产物存储目录（详见 docs/design/features/sandbox/artifact-storage.md §8）──
 # 空字符串 = 默认 agent_packages_path.parent / artifacts_storage
 artifacts_storage_dir: ""

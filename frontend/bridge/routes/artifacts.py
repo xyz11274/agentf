@@ -266,3 +266,43 @@ def _file_response(path: Path) -> FileResponse:
     """Create a FileResponse with proper media type for images."""
     media_type = _image_media_type(path) if path.suffix.lower() in _IMAGE_SUFFIXES else None
     return FileResponse(path, media_type=media_type)
+
+
+def read_artifact_base64(url: str) -> str:
+    """Read an artifact referenced by its serve URL and return base64 content.
+
+    Supports both URL shapes:
+      ``/api/artifacts/{agent_id}/files/{relative_path}``
+      ``/api/artifacts/{artifact_id}``
+    (公网化后的绝对 URL 同样支持——从 ``/api/artifacts/`` 开始匹配）。
+
+    Resolution order mirrors :func:`get_artifact_file`: bridge 本地存储优先，
+    legacy filesystem fallback 其次。文件不存在/路径越界/读取失败返回 ``""``，
+    由调用方决定保留 URL 形式（不阻断产物展示）。
+    """
+    if not url:
+        return ""
+    url = url.split("?")[0]
+    m = re.search(r"/api/artifacts/(.+?)/files/(.+)", url)
+    if m:
+        artifact_id = f"{m.group(1)}/{m.group(2)}"
+    else:
+        m = re.search(r"/api/artifacts/(.+)", url)
+        if not m:
+            return ""
+        artifact_id = m.group(1)
+
+    storage_root = _ARTIFACTS_STORAGE_DIR.resolve()
+    stored = (storage_root / artifact_id).resolve()
+    try:
+        stored.relative_to(storage_root)
+    except ValueError:
+        return ""
+    if stored.is_file():
+        return base64.b64encode(stored.read_bytes()).decode("ascii")
+
+    agent_name = artifact_id.split("/")[0]
+    candidate = _resolve_artifact(artifact_id, agent_pkg_name=agent_name)
+    if candidate is not None and candidate.is_file():
+        return base64.b64encode(candidate.read_bytes()).decode("ascii")
+    return ""

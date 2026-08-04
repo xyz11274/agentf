@@ -7,6 +7,9 @@ Provides:
   JSON-serializes artifacts for database persistence.
 - ``publicize_artifact_urls(content)`` — rewrites relative ``/api/artifacts/``
   URLs to public absolute URLs when ``artifact_public_base_url`` is configured.
+- ``apply_artifact_output_mode(content, artifacts)`` — rewrites response text
+  and artifact metadata per the two orthogonal output-mode switches
+  (``artifact_reference``: link | placeholder, ``artifact_payload``: url | base64).
 
 This is consumed by both ``routes/chat.py`` (WebSocket) and
 ``routes/chat_rest.py`` (REST SSE) to populate the ``ChatChunk.artifacts`` field.
@@ -22,6 +25,7 @@ from pathlib import Path
 
 from config import settings
 from models import ArtifactInfo
+from routes.artifacts import read_artifact_base64
 
 logger = logging.getLogger("agentflow.bridge.routes.artifact_extractor")
 
@@ -160,3 +164,51 @@ def publicize_artifact_urls(content: str) -> str:
     if not base:
         return content
     return content.replace("(/api/artifacts/", f"({base}/api/artifacts/")
+
+
+def apply_artifact_output_mode(content: str, artifacts: list[ArtifactInfo]) -> tuple[str, list[ArtifactInfo]]:
+    """Rewrite response text + artifact metadata per the output-mode switches.
+
+    两维正交开关（设计定稿 §3.6）：
+      - ``artifact_reference``: ``link``（默认，Markdown 链接）| ``placeholder``（{{artifact:N}} 占位符）
+      - ``artifact_payload``:   ``url``（默认，HTTP serve 地址）| ``base64``（内容以 base64 内嵌）
+
+    组合语义：
+      - link + url        → 现状，无转换
+      - link + base64     → 文本中产物引用替换为 data URI（data:{mime};base64,...），
+                            元数据 ``data_base64`` 填充内容
+      - placeholder + url → 文本中产物引用替换为 {{artifact:N}}，元数据附 ``placeholder``
+      - placeholder + base64 → 占位符 + 元数据附 ``placeholder`` 与 ``data_base64``
+                            （方案 3：前端拿到 base64 文本后自行替换占位符）
+
+    调用方在 ``extract_artifact_infos`` 之后、构造对外事件之前调用；
+    返回值用于对外输出，持久化路径用同一转换后结果保证 I-3 三路一致。
+    """
+    reference = getattr(settings, "artifact_reference", "link")
+    payload = getattr(settings, "artifact_payload", "url")
+    if reference == "link" and payload == "url":
+        return content, artifacts
+
+    # payload=base64：读取产物文件转 base64 填入 data_base64（无法读取时保留 url 形式）
+    if payload == "base64":
+        for art in artifacts:
+            if not art.data_base64:
+                art.data_base64 = read_artifact_base64(art.url)
+
+    if reference == "link":
+        # link + base64：仅对 image 做文本内 data URI 内嵌（前端 markdown-it 原生渲染
+        # data:image/*，见 MarkdownContent.vue validateLink 白名单）。
+        # html/download 保留 serve URL：data:text/html 有 XSS 风险、download 需要文件名/下载
+        # 语义，文本内嵌无意义；其内容仍经 data_base64 元数据提供（消费端按需取用）。
+        for art in artifacts:
+            if art.data_base64 and art.type == "image":
+                data_uri = f"data:{art.mime_type};base64,{art.data_base64}"
+                content = content.replace(art.url, data_uri)
+        return content, artifacts
+
+    # reference == "placeholder": 文本替换为 {{artifact:N}} 占位符，元数据附 placeholder
+    for idx, art in enumerate(artifacts, start=1):
+        placeholder = f"{{{{artifact:{idx}}}}}"
+        art.placeholder = placeholder
+        content = content.replace(art.url, placeholder)
+    return content, artifacts

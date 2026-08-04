@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from config import settings
 from models import ArtifactInfo
 from routes import chat, chat_rest
 from routes.artifact_extractor import extract_artifact_infos
@@ -194,3 +195,100 @@ def test_chatchunk_serializes_artifacts() -> None:
     assert len(dumped["artifacts"]) == 1
     assert dumped["artifacts"][0]["type"] == "download"
     assert dumped["artifacts"][0]["url"] == "/api/artifacts/test/f.pptx"
+
+
+# ═══════════════════════════════════════════════════════════
+# 产物输出模式（apply_artifact_output_mode）— 两维正交开关
+#   artifact_reference: link | placeholder
+#   artifact_payload:   url | base64
+# ═══════════════════════════════════════════════════════════
+
+_ART = ArtifactInfo(
+    type="image",
+    url="/api/artifacts/outfit-assistant/files/outputs/look.png",
+    name="look.png",
+    mime_type="image/png",
+)
+_CONTENT = "结果：![生成图片 1](/api/artifacts/outfit-assistant/files/outputs/look.png)"
+
+
+def test_output_mode_link_url_is_noop(monkeypatch) -> None:
+    """link + url（默认）：文本与元数据原样，无转换。"""
+    from routes.artifact_extractor import apply_artifact_output_mode
+
+    monkeypatch.setattr(settings, "artifact_reference", "link")
+    monkeypatch.setattr(settings, "artifact_payload", "url")
+    content, artifacts = apply_artifact_output_mode(_CONTENT, [_ART.model_copy(deep=True)])
+    assert content == _CONTENT
+    assert artifacts[0].url == _ART.url
+    assert artifacts[0].data_base64 == ""
+    assert artifacts[0].placeholder == ""
+
+
+def test_output_mode_link_base64_inlines_data_uri(monkeypatch) -> None:
+    """link + base64：文本中产物引用替换为 data URI，元数据填 data_base64。"""
+    from routes.artifact_extractor import apply_artifact_output_mode
+
+    monkeypatch.setattr(settings, "artifact_reference", "link")
+    monkeypatch.setattr(settings, "artifact_payload", "base64")
+    monkeypatch.setattr(
+        "routes.artifact_extractor.read_artifact_base64",
+        lambda url: "aGVsbG8=",  # "hello"
+    )
+    content, artifacts = apply_artifact_output_mode(_CONTENT, [_ART.model_copy(deep=True)])
+    assert content == "结果：![生成图片 1](data:image/png;base64,aGVsbG8=)"
+    assert artifacts[0].data_base64 == "aGVsbG8="
+    assert artifacts[0].placeholder == ""
+
+
+def test_output_mode_placeholder_url_keeps_url(monkeypatch) -> None:
+    """placeholder + url：文本替换为 {{artifact:N}}，元数据保留 url 并附 placeholder。"""
+    from routes.artifact_extractor import apply_artifact_output_mode
+
+    monkeypatch.setattr(settings, "artifact_reference", "placeholder")
+    monkeypatch.setattr(settings, "artifact_payload", "url")
+    content, artifacts = apply_artifact_output_mode(_CONTENT, [_ART.model_copy(deep=True)])
+    assert content == "结果：![生成图片 1]({{artifact:1}})"
+    assert artifacts[0].placeholder == "{{artifact:1}}"
+    assert artifacts[0].url == _ART.url
+    assert artifacts[0].data_base64 == ""
+
+
+def test_output_mode_placeholder_base64_embeds_content(monkeypatch) -> None:
+    """placeholder + base64：文本占位符 + 元数据附 placeholder 与 data_base64。"""
+    from routes.artifact_extractor import apply_artifact_output_mode
+
+    monkeypatch.setattr(settings, "artifact_reference", "placeholder")
+    monkeypatch.setattr(settings, "artifact_payload", "base64")
+    monkeypatch.setattr(
+        "routes.artifact_extractor.read_artifact_base64",
+        lambda url: "aGVsbG8=",
+    )
+    content, artifacts = apply_artifact_output_mode(_CONTENT, [_ART.model_copy(deep=True)])
+    assert content == "结果：![生成图片 1]({{artifact:1}})"
+    assert artifacts[0].placeholder == "{{artifact:1}}"
+    assert artifacts[0].data_base64 == "aGVsbG8="
+    assert artifacts[0].url == _ART.url
+
+
+def test_output_mode_multiple_artifacts_numbered(monkeypatch) -> None:
+    """多个产物时占位符按出现顺序编号 {{artifact:1}} / {{artifact:2}}。"""
+    from routes.artifact_extractor import apply_artifact_output_mode
+
+    monkeypatch.setattr(settings, "artifact_reference", "placeholder")
+    monkeypatch.setattr(settings, "artifact_payload", "base64")
+    monkeypatch.setattr("routes.artifact_extractor.read_artifact_base64", lambda url: "b64")
+    art2 = ArtifactInfo(
+        type="download",
+        url="/api/artifacts/outfit-assistant/files/outputs/deck.pptx",
+        name="deck.pptx",
+        mime_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    )
+    content = (
+        "图：![a](/api/artifacts/outfit-assistant/files/outputs/look.png)\n"
+        "文件：[下载 1](/api/artifacts/outfit-assistant/files/outputs/deck.pptx)"
+    )
+    new_content, artifacts = apply_artifact_output_mode(content, [_ART, art2])
+    assert "{{artifact:1}}" in new_content and "{{artifact:2}}" in new_content
+    assert artifacts[0].placeholder == "{{artifact:1}}"
+    assert artifacts[1].placeholder == "{{artifact:2}}"

@@ -309,6 +309,16 @@ class ArtifactInfo(BaseModel):
     mime_type: str = "application/octet-stream"
     """MIME type hint for the HTTP response Content-Type header."""
 
+    # 产物输出模式扩展字段（默认空 = 不启用，保持向后兼容）：
+    #   placeholder: 文本中产物引用的占位符（如 "{{artifact:1}}"），
+    #     artifact_reference=placeholder 时由消费端按此占位符定位并自行替换
+    #   data_base64: 产物内容 base64（artifact_payload=base64 时内嵌，无需网络访问 serve URL）
+    placeholder: str = ""
+    """Placeholder token in the response text ({{artifact:N}}) when reference=placeholder."""
+
+    data_base64: str = ""
+    """Base64-encoded artifact content (payload=base64 mode); empty = fetch via url."""
+
 
 class ChatChunk(BaseModel):
     """Streaming chunk emitted by the bridge during a chat turn.

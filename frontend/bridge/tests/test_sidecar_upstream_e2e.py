@@ -29,14 +29,16 @@ CONTRACT_INPUT = {
     "Data": {
         "MessageType": "TaskAssignment",
         "UserInputText": "帮我推荐一下今天这件裤子适合怎样穿搭",
-        "UserInputObject": {
+        # CMF 协议：UserInputObject 必须是 stringified JSON string（对齐 SysAgent
+        # TaskAssignment::Parse 用 GetString）；传嵌套对象会被 sidecar 的 asString() 拒绝
+        "UserInputObject": json.dumps({
             "code": 200101,
             "data": {
                 "content": [
                     {"type": "image", "data": "data:image/png;base64,iVBORw0KGgoA..."}
                 ]
             }
-        }
+        }, ensure_ascii=False)
     },
     "Header": {
         "AcmSessionId": "",
@@ -46,7 +48,9 @@ CONTRACT_INPUT = {
         "DeviceId": "1.2.6d64bb1e63e24c5d_f7190b5edfd8af8f@sysagent.cu.gd.com.cn",
         "DialogueId": "",
         "EventTimeStamp": "2026-07-03T09:42:51Z",
-        "MessageType": "DataExchange",
+        # B1 校验（is_supported_message_type）只接受 UserTaskManagement/TaskAssignment
+        # 或 DataExchange/UserInput；合同 §1 样例的 DataExchange/TaskAssignment 会被 400 拒绝
+        "MessageType": "UserTaskManagement",
         "Receiver": "SysAgent",
         "Sender": "AISFDEMO",
         "SeqNum": "39d17163be329ea4364e6f9c66b0d1ac",

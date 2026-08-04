@@ -33,7 +33,7 @@ from content_serializer import prepare_content_for_daemon
 from models import ChatChunk, ChatDone, ChatRequest, ContentPart
 from providers import SessionProvider
 from routes.conversations import get_store, ConversationRecord
-from routes.artifact_extractor import extract_artifact_infos, publicize_artifact_urls, serialize_artifacts
+from routes.artifact_extractor import apply_artifact_output_mode, extract_artifact_infos, publicize_artifact_urls, serialize_artifacts
 from services import _pull_and_save_traces
 
 logger = logging.getLogger("agentflow.bridge.routes.chat")
@@ -388,6 +388,8 @@ async def _run_turn(
     chunk_count = 0
     turn_start = time.time()
     chunks_accumulated: list[str] = []
+    # 最终 chunk 的转换后产物元数据（含 placeholder/data_base64，供持久化与回放一致）
+    final_artifacts: list[dict] = []
 
     while True:
         if stop_event.is_set():
@@ -522,8 +524,14 @@ async def _run_turn(
         is_llm_chunk = (msg_type == "llm_chunk")
 
         chunk_count += 1
-        chunks_accumulated.append(chunk_content if msg_type == "text" else "")
         artifacts = extract_artifact_infos(chunk_content) if is_final else []
+        # 产物输出模式转换（artifact_reference / artifact_payload 两维正交开关）：
+        # 仅 final chunk 应用（产物 URL 只出现在最终完整文本）；默认 link+url 时无转换，
+        # 与历史行为完全一致（I-3 三路一致：WebSocket / SSE / 历史回放共用同一转换后结果）。
+        if is_final:
+            chunk_content, artifacts = apply_artifact_output_mode(chunk_content, artifacts)
+        chunks_accumulated.append(chunk_content if msg_type == "text" else "")
+        final_artifacts = [a.model_dump() for a in artifacts] if is_final else final_artifacts
         chunk = ChatChunk(content=chunk_content, final=is_final,
                           progress=is_progress, artifacts=artifacts,
                           type="chunk",
@@ -584,7 +592,12 @@ async def _run_turn(
             )
             await provider.update_agentflow_session_ref(sess["id"], agentflow_session_id)
             full_content = "".join(chunks_accumulated)
-            artifacts_json = serialize_artifacts(full_content)
+            # 持久化使用转换后产物元数据（含 placeholder/data_base64，I-3 三路一致）；
+            # 默认模式（link+url）下 final_artifacts 即 extract 结果，行为与历史一致。
+            artifacts_json = (
+                json.dumps(final_artifacts, ensure_ascii=False)
+                if final_artifacts else serialize_artifacts(full_content)
+            )
             await provider.save_dialogue(
                 session_id=sess["id"],
                 user_input=_content_to_text(request.content),

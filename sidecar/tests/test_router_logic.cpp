@@ -575,6 +575,36 @@ TEST(SSEChunkProcessor, ArtifactsField_UnderscorePrefixed) {
     EXPECT_NE(completed.user_output_object.find("img.png"), std::string::npos);
 }
 
+// 产物内嵌模式（artifact_reference=placeholder / artifact_payload=base64）：
+// bridge 会在 _artifacts 元数据中附 placeholder 与 data_base64 字段，
+// sidecar 必须原样透传到 UserOutputObject，upstream 才能感知"文本中的
+// {{artifact:N}} 占位符需要替换"并自行渲染。字段丢失 = 内嵌模式契约破坏。
+TEST(SSEChunkProcessor, ArtifactsField_PlaceholderBase64_Passthrough) {
+    Json::Value sse;
+    sse["choices"][0]["message"]["content"] = "结果：![生成图片 1]({{artifact:1}})";
+    sse["_final"] = true;
+    Json::Value arts(Json::arrayValue);
+    Json::Value img;
+    img["type"] = "image";
+    img["url"] = "/api/artifacts/test/img.png";
+    img["name"] = "img.png";
+    img["mime_type"] = "image/png";
+    img["placeholder"] = "{{artifact:1}}";
+    img["data_base64"] = "aGVsbG8=";
+    arts.append(img);
+    sse["_artifacts"] = arts;
+
+    SSEChunkProcessor proc;
+    proc.process(sse);
+
+    auto completed = proc.make_completed();
+    // UserOutputObject 是 stringified JSON：必须完整携带 placeholder/data_base64
+    EXPECT_NE(completed.user_output_object.find("placeholder"), std::string::npos);
+    EXPECT_NE(completed.user_output_object.find("{{artifact:1}}"), std::string::npos);
+    EXPECT_NE(completed.user_output_object.find("data_base64"), std::string::npos);
+    EXPECT_NE(completed.user_output_object.find("aGVsbG8="), std::string::npos);
+}
+
 // ═══════════════════════════════════════════════════════════
 // SSEChunkProcessor — 带 artifacts 产物的全量 dump 回归测试
 // 数据源：真实 outfit-assistant 请求（含 2 张穿搭效果图）

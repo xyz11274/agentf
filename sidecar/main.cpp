@@ -455,7 +455,22 @@ static void forward_to_bridge(
               << " resp_len=" << sync_text.size()
               << " content=" << sync_preview << std::endl;
 
+    // 同步模式同样返回 TaskStatusManagement 报文（对齐异步回调格式），
+    // 使上游在无 SysAgentEntity 场景也能拿到任务结束信号；否则上游无法感知任务完成。
+    // Header 用 build_callback_header：TaskStatus Receiver 固定 SystemAgent（AISF 协议 §2.2）、
+    // SeqNum 透传上游请求 Header.SeqNum（router_logic.h build_callback_header）。
+    Json::Value sync_task_status;
+    sync_task_status["Data"] = sidecar::build_task_status_data(200, "TaskCompleted", sync_text);
+    sync_task_status["Header"] = sidecar::build_callback_header(
+        "TaskStatusManagement", task_id, dialogue_id, user_name, client_session_id,
+        sender, receiver, seq_num, header, "SystemAgent");
+    sync_task_status["Header"]["EventTimeStamp"] = sidecar::current_timestamp_iso8601();
+    std::string sync_ts_str = Json::writeString(json_writer(), sync_task_status);
+    res.set_content(sync_ts_str, "application/json");
     res.status = 200;
+    std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] SYNC_TASKSTATUS req=" << request_id
+              << " body=" << sync_ts_str.substr(0, 500)
+              << (sync_ts_str.size() > 500 ? "... (truncated)" : "") << std::endl;
 }
 
 struct ListenAddress {
