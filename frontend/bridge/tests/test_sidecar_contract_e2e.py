@@ -181,10 +181,14 @@ def main():
         assert header.get("MessageType") == "TaskStatusManagement", \
             f"Expected TaskStatusManagement, got {header.get('MessageType')}"
 
-        # Sender/Receiver 反转
+        # Sender 翻转
         assert header.get("Sender") == "SysAgent", \
             f"Sender should be Receiver original value: SysAgent"
-        assert header.get("Receiver") == "AISFDEMO"
+        # 任务结束信号（TaskStatusManagement）Receiver 固定为 SystemAgent
+        assert header.get("Receiver") == "SystemAgent"
+        # SeqNum 透传上游请求 Header.SeqNum（上游发什么回什么）
+        assert header.get("SeqNum") == CONTRACT_INPUT["Header"]["SeqNum"], \
+            f"SeqNum should echo upstream request: {CONTRACT_INPUT['Header']['SeqNum']}, got {header.get('SeqNum')}"
 
         # 透传字段
         assert header.get("ClientSessionId") == CONTRACT_INPUT["Header"]["ClientSessionId"]

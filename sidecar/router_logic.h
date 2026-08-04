@@ -58,6 +58,9 @@ Json::Value build_health_response();
 // passthrough_keys = {"AcmSessionId", "ClientExField", "DeviceCategory",
 //                     "DeviceId", "SessionId", "SysAgentEntity",
 //                     "TeamEnvironmentID", "UUID"}
+// receiver_override 非空时覆盖翻转后的 Receiver（对齐 AISF 协议 §2.2：
+// TaskStatusManagement 报文 Header.Receiver 固定为 "SystemAgent"，
+// 与 UserOutput（Receiver=请求 Sender）不同）。
 Json::Value build_callback_header(
     const std::string& message_type,
     const std::string& task_id,
@@ -67,7 +70,8 @@ Json::Value build_callback_header(
     const std::string& original_sender,
     const std::string& original_receiver,
     const std::string& seq_num,
-    const Json::Value& req_header);
+    const Json::Value& req_header,
+    const std::string& receiver_override = "");
 
 // sidecar_interface_contract.md §2-3: EventTimeStamp 需 ISO 8601 格式。
 // 返回 "2026-07-03T09:42:51.123Z" 形式字符串（毫秒精度）。

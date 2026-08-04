@@ -71,7 +71,9 @@ def _make_callback(
             "MessageType": "DataExchange",
             "TaskID": task_id,
             "Sender": "SysAgent",
-            "Receiver": "AISFDEMO",
+            # 对齐 sidecar 契约：UserOutput 的 Receiver=请求 Sender（翻转），
+            # TaskStatusReport（任务结束信号）的 Receiver 固定为 SystemAgent
+            "Receiver": "SystemAgent" if message_type == "TaskStatusReport" else "AISFDEMO",
             "ClientSessionId": f"test-session-{uuid.uuid4().hex[:8]}",
             "SeqNum": task_id,
             "EventTimeStamp": "2026-07-28T12:00:00Z",

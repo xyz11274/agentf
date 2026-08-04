@@ -234,6 +234,13 @@ def main() -> int:
             d = task_statuses[0].get("Data", {})
             if d.get("TaskStatusCode") != 200 or d.get("TaskStatusReport") != "TaskCompleted":
                 failures.append(f"TaskStatus 应 200/TaskCompleted，实际 {d.get('TaskStatusCode')}/{d.get('TaskStatusReport')}")
+            # 任务结束信号（TaskStatusManagement）Receiver 固定为 SystemAgent
+            ts_header = task_statuses[0].get("Header", {})
+            if ts_header.get("Receiver") != "SystemAgent":
+                failures.append(f"TaskStatus Header.Receiver 应 SystemAgent，实际 {ts_header.get('Receiver')!r}")
+            # SeqNum 透传上游请求 Header.SeqNum（上游发什么回什么）
+            if ts_header.get("SeqNum") != "e2e-seq":
+                failures.append(f"TaskStatus Header.SeqNum 应透传上游 e2e-seq，实际 {ts_header.get('SeqNum')!r}")
 
         # ── 5. 无 SysAgentEntity → 同步模式 200（Bridge 有响应）──
         MockBridgeHandler.received.clear()

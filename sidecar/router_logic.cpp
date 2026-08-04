@@ -165,7 +165,8 @@ Json::Value build_callback_header(
     const std::string& original_sender,
     const std::string& original_receiver,
     const std::string& seq_num,
-    const Json::Value& req_header) {
+    const Json::Value& req_header,
+    const std::string& receiver_override) {
     auto [new_sender, new_receiver] = swap_sender_receiver(original_sender, original_receiver);
 
     Json::Value header;
@@ -175,7 +176,9 @@ Json::Value build_callback_header(
     header["UserName"] = user_name;
     header["ClientSessionId"] = client_session_id;
     header["Sender"] = new_sender;
-    header["Receiver"] = new_receiver;
+    // TaskStatusManagement 报文 Receiver 固定为 SystemAgent（AISF 协议 §2.2），
+    // 与 UserOutput（Receiver=请求 Sender）不同；其余报文保持翻转语义。
+    header["Receiver"] = receiver_override.empty() ? new_receiver : receiver_override;
     header["SeqNum"] = seq_num;
 
     for (const auto& k : {"AcmSessionId", "ClientExField", "DeviceCategory",

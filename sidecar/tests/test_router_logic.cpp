@@ -277,10 +277,44 @@ TEST(TestCallback, TC_SID_011_PassthroughFields) {
     EXPECT_EQ(hdr["TaskID"].asString(), "task-1");
     EXPECT_EQ(hdr["Sender"].asString(), "SystemAgent");
     EXPECT_EQ(hdr["Receiver"].asString(), "APP");
+    EXPECT_EQ(hdr["SeqNum"].asString(), "seq-1");
     EXPECT_EQ(hdr["AcmSessionId"].asString(), "acm-123");
     EXPECT_EQ(hdr["DeviceId"].asString(), "dev-456");
     EXPECT_EQ(hdr["SessionId"].asString(), "sess-789");
     EXPECT_FALSE(hdr.isMember("ExtraField"));
+}
+
+// TaskStatusManagement 任务结束信号：Receiver 固定为 SystemAgent（AISF 协议 §2.2），
+// 与 UserOutput（Receiver=请求 Sender）不同；SeqNum 透传上游请求值。
+TEST(TestCallback, TaskStatusReceiverFixedSystemAgent) {
+    Json::Value req_header;
+    req_header["SysAgentEntity"] = "172.32.1.54";
+
+    auto hdr = build_callback_header(
+        "TaskStatusManagement", "task-1", "dlg-1", "user-1",
+        "client-1", "AISFDEMO", "SysAgent", "upstream-seq-001", req_header, "SystemAgent"
+    );
+
+    EXPECT_EQ(hdr["MessageType"].asString(), "TaskStatusManagement");
+    // Sender 仍翻转（原 Receiver）
+    EXPECT_EQ(hdr["Sender"].asString(), "SysAgent");
+    // Receiver 被固定覆盖为 SystemAgent，不再等于翻转后的原 Sender
+    EXPECT_EQ(hdr["Receiver"].asString(), "SystemAgent");
+    // SeqNum 透传上游请求 Header.SeqNum（上游发什么回什么）
+    EXPECT_EQ(hdr["SeqNum"].asString(), "upstream-seq-001");
+}
+
+// UserOutput 回调不传 receiver_override 时保持翻转语义（Receiver=原 Sender）
+TEST(TestCallback, UserOutputKeepsSwapWithoutOverride) {
+    Json::Value req_header;
+    auto hdr = build_callback_header(
+        "DataExchange", "task-1", "dlg-1", "user-1",
+        "client-1", "AISFDEMO", "SysAgent", "upstream-seq-001", req_header
+    );
+
+    EXPECT_EQ(hdr["Sender"].asString(), "SysAgent");
+    EXPECT_EQ(hdr["Receiver"].asString(), "AISFDEMO");
+    EXPECT_EQ(hdr["SeqNum"].asString(), "upstream-seq-001");
 }
 
 // ═══════════════════════════════════════════════════════════

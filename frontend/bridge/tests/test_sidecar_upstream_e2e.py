@@ -198,8 +198,12 @@ def main():
             f"Header.MessageType: {header.get('MessageType')}"
         assert header.get("Sender") == "SysAgent", \
             f"Sender should be original Receiver"
-        assert header.get("Receiver") == "AISFDEMO", \
-            f"Receiver should be original Sender"
+        # 任务结束信号（TaskStatusManagement）Receiver 固定为 SystemAgent
+        assert header.get("Receiver") == "SystemAgent", \
+            f"Receiver should be SystemAgent for task end signal"
+        # SeqNum 透传上游请求 Header.SeqNum（上游发什么回什么）
+        assert header.get("SeqNum") == CONTRACT_INPUT["Header"]["SeqNum"], \
+            f"SeqNum should echo upstream request: {CONTRACT_INPUT['Header']['SeqNum']}, got {header.get('SeqNum')}"
         assert header.get("ClientSessionId") == CONTRACT_INPUT["Header"]["ClientSessionId"]
         assert header.get("TeamEnvironmentID") == CONTRACT_INPUT["Header"]["TeamEnvironmentID"]
         assert header.get("UUID") == CONTRACT_INPUT["Header"]["UUID"]

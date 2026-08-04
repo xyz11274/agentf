@@ -206,6 +206,9 @@ static void forward_to_bridge(
     std::string user_input_text = data.get("UserInputText", "").asString();
     std::string user_input_object_str = data.get("UserInputObject", "").asString();
     std::string sys_agent_entity = header.get("SysAgentEntity", "").asString();
+    // 回调 SeqNum 透传上游请求 Header.SeqNum（上游发什么回什么），
+    // 缺失时回退 request_id 保持非空（契约要求 SeqNum 必填）。
+    std::string seq_num = header.get("SeqNum", "").asString();
 
     // B10: 构建 OpenAI 多模态 content — UserInputObject 是 stringified JSON string（CMF 协议），
     // 与生产 HandleUserRequest 共用 build_openai_messages（嵌套对象会被 asString() 丢弃图片）。
@@ -221,6 +224,9 @@ static void forward_to_bridge(
     auto request_id = req.get_header_value("X-Request-Id");
     if (request_id.empty()) {
         request_id = "sidecar-" + std::to_string(++request_counter);
+    }
+    if (seq_num.empty()) {
+        seq_num = request_id;  // 上游未带 SeqNum 时回退 request_id，保证回调 Header.SeqNum 非空
     }
 
     Json::Value rest_body;
@@ -262,7 +268,8 @@ static void forward_to_bridge(
             //   stringified artifacts（Completed）或空串（Running）；
             //   Header 用 build_callback_header（TaskID=原始 task_id、DialogueId、
             //   Sender/Receiver 翻转、透传 AcmSessionId/ClientExField/DeviceCategory/
-            //   DeviceId/SessionId/TeamEnvironmentID/UUID、SeqNum=request_id）+ EventTimeStamp。
+            //   DeviceId/SessionId/TeamEnvironmentID/UUID、SeqNum=上游请求 Header.SeqNum
+            //   透传，缺失回退 request_id）+ EventTimeStamp。
             //   回调 URL：dev 模式 http://{SysAgentEntity}（本地 mock 无 TLS）；
             //   生产模式 https://{SysAgentEntity}:23767（CoreMind HTTP/2 + mTLS）——环境差异。
             auto post_callback = [&](const std::string& stream_status, int flag,
@@ -274,7 +281,7 @@ static void forward_to_bridge(
                 cb["Data"]["UserOutputObject"] = user_output_object;
                 cb["Header"] = sidecar::build_callback_header(
                     "DataExchange", task_id, dialogue_id, user_name, client_session_id,
-                    sender, receiver, request_id, header);
+                    sender, receiver, seq_num, header);
                 cb["Header"]["EventTimeStamp"] = sidecar::current_timestamp_iso8601();
                 std::string cb_body = Json::writeString(json_writer(), cb);
                 dumper->dump_callback_request("user_output",
@@ -383,9 +390,12 @@ static void forward_to_bridge(
                 ? processor.accumulated_content()
                 : ("bridge_error: " + ts_error_detail);
             task_status["Data"] = sidecar::build_task_status_data(ts_code, ts_status, ts_text);
+            // TaskStatusManagement 是任务结束信号：Header.Receiver 固定为 SystemAgent
+            // （AISF 协议 §2.2，与 UserOutput 的 Receiver=请求 Sender 不同），
+            // SeqNum 透传上游请求 Header.SeqNum（router_logic.h build_callback_header）。
             task_status["Header"] = sidecar::build_callback_header(
                 "TaskStatusManagement", task_id, dialogue_id, user_name, client_session_id,
-                sender, receiver, request_id, header);
+                sender, receiver, seq_num, header, "SystemAgent");
             // EventTimeStamp 必须用 ISO 8601 格式（sidecar_interface_contract.md §3 报文 +
             // router_logic.h:72-73 呑约），与 UserOutput 回调（L278）和生产路径保持对称。
             task_status["Header"]["EventTimeStamp"] = sidecar::current_timestamp_iso8601();

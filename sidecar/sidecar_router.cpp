@@ -197,6 +197,9 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
     std::string sender = header.get("Sender", "").asString();
     std::string receiver = header.get("Receiver", "").asString();
     std::string user_input_text = data.get("UserInputText", "").asString();
+    // 回调 SeqNum 透传上游请求 Header.SeqNum（上游发什么回什么），
+    // 缺失时回退 request_id 保持非空（契约要求 SeqNum 必填）。
+    std::string seq_num = header.get("SeqNum", "").asString();
 
     // 4. 构建多模态 content（OpenAI 格式）
     // UserInputObject 在 CMF 协议中是 stringified JSON string（对齐 SysAgent TaskAssignment::Parse）
@@ -255,6 +258,9 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
     // 6. 生成 request_id
     static std::atomic<unsigned long long> counter{0};
     std::string request_id = "sidecar-" + std::to_string(++counter);
+    if (seq_num.empty()) {
+        seq_num = request_id;  // 上游未带 SeqNum 时回退 request_id，保证回调 Header.SeqNum 非空
+    }
 
     std::string bridge_url = bridge_url_;  // 由 main.cpp --bridge-url 注入（set_bridge_url）
     // 向后兼容：环境变量 BRIDGE_URL 仍可覆盖（如未通过 --bridge-url 传入时）
@@ -317,7 +323,7 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                 cb["Data"]["IsVoiceBroadcast"] = 1;
                 cb["Header"] = build_callback_header("DataExchange", task_id, dialogue_id,
                                                       user_name, client_session_id,
-                                                      sender, receiver, request_id, req_header);
+                                                      sender, receiver, seq_num, req_header);
                 cb["Header"]["EventTimeStamp"] = current_timestamp_iso8601();
                 std::string target = "https://" + sys_agent_entity + ":23767"
                                    + "/coremind/systemagent/v1/callback";
@@ -463,10 +469,13 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
 
             // TaskStatusReport（成功/失败都发，防止 upstream 永久等待）
             Json::Value task_status;
+            // TaskStatusManagement 是任务结束信号：Header.Receiver 固定为 SystemAgent
+            // （AISF 协议 §2.2，与 UserOutput 的 Receiver=请求 Sender 不同），
+            // SeqNum 透传上游请求 Header.SeqNum（router_logic.h build_callback_header）。
             task_status["Header"] = build_callback_header(
                 "TaskStatusManagement", task_id, dialogue_id,
                 user_name, client_session_id,
-                sender, receiver, request_id, req_header);
+                sender, receiver, seq_num, req_header, "SystemAgent");
             task_status["Header"]["EventTimeStamp"] = current_timestamp_iso8601();
             Json::Value ts_data;
             ts_data["MessageType"] = "TaskStatusReport";

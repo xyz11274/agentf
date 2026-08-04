@@ -219,6 +219,19 @@ def _assert_task_status(
         return
 
     ts = task_statuses[-1].get("Data", {})
+    ts_header = task_statuses[-1].get("Header", {})
+    # 任务结束信号（TaskStatusManagement）Receiver 固定为 SystemAgent
+    if ts_header.get("Receiver") != "SystemAgent":
+        failures.append(
+            f"[{scenario_name}] TaskStatus Header.Receiver 应 SystemAgent，"
+            f"实际={ts_header.get('Receiver')!r}"
+        )
+    # SeqNum 透传上游请求 Header.SeqNum（上游发什么回什么）
+    if ts_header.get("SeqNum") != "sym-test-seq":
+        failures.append(
+            f"[{scenario_name}] TaskStatus Header.SeqNum 应透传上游 sym-test-seq，"
+            f"实际={ts_header.get('SeqNum')!r}"
+        )
     if ts.get("TaskStatusCode") != expected_ts_code:
         failures.append(
             f"[{scenario_name}] TaskStatusCode 应={expected_ts_code}，"
