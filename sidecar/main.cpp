@@ -300,13 +300,13 @@ static void forward_to_bridge(
                     std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] CBF_RESP req=" << request_id
                               << " http=" << cb_res->status << std::endl;
                     // F7.1: 外部服务原始响应必须完整落盘（与生产 sidecar_router.cpp 对齐）
-                    dumper->dump_callback_result("user_output", "httplib", cb_res->status, "");
+                    dumper->dump_callback_result("user_output", "httplib", cb_res->status, "", cb_res->body);
                 } else {
                     auto err = cb_res.error();
                     std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] CBF_ERR req=" << request_id
                               << " error=" << httplib::to_string(err) << std::endl;
                     dumper->dump_callback_result("user_output", "httplib", 0,
-                                                 httplib::to_string(err));
+                                                 httplib::to_string(err), "");
                 }
                 return true;
             };
@@ -418,13 +418,13 @@ static void forward_to_bridge(
                           << " http=" << ts_res->status << std::endl;
                 // F7.1: 任务结束信号（TaskStatusReport）的原始响应必须完整落盘，
                 // 与生产 sidecar_router.cpp 的 dump_callback_result 对齐。
-                dumper->dump_callback_result("task_status", "httplib", ts_res->status, "");
+                dumper->dump_callback_result("task_status", "httplib", ts_res->status, "", ts_res->body);
             } else {
                 auto ts_err = ts_res.error();
                 std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] TSR_ERR req=" << request_id
                           << " error=" << httplib::to_string(ts_err) << std::endl;
                 dumper->dump_callback_result("task_status", "httplib", 0,
-                                             httplib::to_string(ts_err));
+                                             httplib::to_string(ts_err), "");
             }
 
             std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] ASYNC_DONE req=" << request_id

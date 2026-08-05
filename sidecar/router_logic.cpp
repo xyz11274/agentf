@@ -512,7 +512,8 @@ void SidecarDumper::dump_callback_request(const std::string& callback_type,
 
 void SidecarDumper::dump_callback_result(const std::string& callback_type,
                                           const std::string& via, int http_status,
-                                          const std::string& error) {
+                                          const std::string& error,
+                                          const std::string& response) {
     if (!enabled_) return;
     Json::Value entry;
     entry["_direction"] = "callback_result";
@@ -522,6 +523,9 @@ void SidecarDumper::dump_callback_result(const std::string& callback_type,
     entry["http_status"] = http_status;
     if (!error.empty()) {
         entry["error"] = error;
+    }
+    if (!response.empty()) {
+        entry["response"] = response;
     }
     Json::StreamWriterBuilder w;
     w["indentation"] = "";

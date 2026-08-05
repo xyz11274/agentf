@@ -330,10 +330,11 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                                    + "/coremind/systemagent/v1/callback";
                 std::string cb_str = json_dumps(cb);
                 dumper->dump_callback_request("user_output", target, cb_str);
-                std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_CALLBACK req=" << request_id
+                // F7.1 原样打印发送给上游的完整请求体(用户要求,不截断)
+                std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_REQUEST req=" << request_id
                           << " status=" << stream_status << " flag=" << flag
-                          << " text_len=" << text.size()
-                          << " target=" << target << std::endl;
+                          << " target=" << target
+                          << " body=" << cb_str << std::endl;
 #ifdef COREMIND_ENABLED
                 auto httpF = CMFrm::COM::HttpClientFactory::GetHttpClientFactory();
                 auto h2 = httpF->GetHttp2Client("default");
@@ -343,31 +344,38 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                     req->SetReqUrl(target);
                     req->AddHeader("Content-Type", "application/json");
                     req->AddBody(cb_str);
-                    h2->Send(req);
-                    std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_SENT req=" << request_id
-                              << " via=coremind_h2" << std::endl;
-                    dumper->dump_callback_result("user_output", "coremind_h2", 0, "");
-                    return true;
-                }
-#endif
-                auto ds = target.find("://");
-                auto da = ds == std::string::npos ? 0 : ds + 3;
-                auto dp = target.find('/', da);
-                httplib::Client cb_cli(target.substr(0, dp).c_str());
-                auto cb_res = cb_cli.Post(target.substr(dp).c_str(),
-                                       {{"Content-Type", "application/json"}},
-                                       cb_str, "application/json");
-                if (cb_res) {
-                    std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_RESP req=" << request_id
-                              << " http=" << cb_res->status << std::endl;
-                    dumper->dump_callback_result("user_output", "httplib", cb_res->status, "");
-                } else {
+                    auto h2_res = h2->Send(req);
+                    if (h2_res && h2_res->Is2XXStatusCode()) {
+                        // F7.1 原样打印上游响应体(成功也完整打印,用户要求不截断)
+                        std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_RESP req=" << request_id
+                                  << " via=coremind_h2 http=" << h2_res->GetStatusCode()
+                                  << " resp_body=" << h2_res->GetResponseBody() << std::endl;
+                        dumper->dump_callback_result("user_output", "coremind_h2", h2_res->GetStatusCode(),
+                                                      "", h2_res->GetResponseBody());
+                        return true;
+                    }
+                    // H2 发送失败/非 2xx:明确报错,不回退 httplib 重发(用户要求,避免重复回调)
+                    std::string h2_detail = !h2_res ? "null response" : h2_res->GetResponseBody();
                     std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_ERR req=" << request_id
-                              << " error=" << httplib::to_string(cb_res.error()) << std::endl;
-                    dumper->dump_callback_result("user_output", "httplib", 0,
-                                                  httplib::to_string(cb_res.error()));
+                              << " via=coremind_h2 http=" << (h2_res ? h2_res->GetStatusCode() : 0)
+                              << " error=H2_SEND_FAILED resp_body=" << h2_detail << std::endl;
+                    dumper->dump_callback_result("user_output", "coremind_h2",
+                                                  h2_res ? h2_res->GetStatusCode() : 0,
+                                                  h2_res ? "H2_SEND_FAILED" : "H2_SEND_NULL_RESPONSE",
+                                                  h2_res ? h2_res->GetResponseBody() : "");
+                    return false;
                 }
-                return static_cast<bool>(cb_res);
+                std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_ERR req=" << request_id
+                          << " via=coremind_h2 error=H2_CLIENT_UNAVAILABLE target=" << target << std::endl;
+                dumper->dump_callback_result("user_output", "coremind_h2", 0, "H2_CLIENT_UNAVAILABLE", "");
+                return false;
+#else
+                // 本文件仅生产模式(COREMIND_ENABLED=ON)编译;此处兜底避免未定义行为
+                std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_ERR req=" << request_id
+                          << " error=PROD_ONLY_PATH" << std::endl;
+                dumper->dump_callback_result("user_output", "stub", 0, "PROD_ONLY_PATH", "");
+                return false;
+#endif
             };
 
             std::string callback_path_stream = bridge_path_prefix + "/api/chat/" + agent_id + "?stream=true";
@@ -493,13 +501,13 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                                + "/coremind/systemagent/v1/callback";
             std::string ts_str = json_dumps(task_status);
             dumper->dump_callback_request("task_status", ts_url, ts_str);
-            std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_TASKSTATUS req=" << request_id
-                      << " code=" << ts_code << " status=" << ts_status
-                      << " content_len=" << processor.accumulated_content().size()
-                      << " target=" << ts_url << std::endl;
+            // F7.1 原样打印发送给上游的完整请求体(用户要求,不截断)
+            std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_REQUEST req=" << request_id
+                      << " type=task_status code=" << ts_code << " status=" << ts_status
+                      << " target=" << ts_url
+                      << " body=" << ts_str << std::endl;
 
-            // 发送 TaskStatusReport（CoreMind H2 优先，fallback httplib）
-            bool ts_sent = false;
+            // 发送 TaskStatusReport（CoreMind H2 唯一通道;失败明确报错,不回退 httplib 重发）
 #ifdef COREMIND_ENABLED
             {
                 auto httpF = CMFrm::COM::HttpClientFactory::GetHttpClientFactory();
@@ -510,33 +518,36 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                     req->SetReqUrl(ts_url);
                     req->AddHeader("Content-Type", "application/json");
                     req->AddBody(ts_str);
-                    h2->Send(req);
-                    std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_SENT req=" << request_id
-                              << " via=coremind_h2 type=task_status" << std::endl;
-                    dumper->dump_callback_result("task_status", "coremind_h2", 0, "");
-                    ts_sent = true;
-                }
-            }
-#endif
-            if (!ts_sent) {
-                auto ds = ts_url.find("://");
-                auto da = ds == std::string::npos ? 0 : ds + 3;
-                auto dp = ts_url.find('/', da);
-                httplib::Client cb_cli(ts_url.substr(0, dp).c_str());
-                auto ts_res = cb_cli.Post(ts_url.substr(dp).c_str(),
-                           {{"Content-Type", "application/json"}},
-                           ts_str, "application/json");
-                if (ts_res) {
-                    std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_RESP req=" << request_id
-                              << " type=task_status http=" << ts_res->status << std::endl;
-                    dumper->dump_callback_result("task_status", "httplib", ts_res->status, "");
+                    auto h2_res = h2->Send(req);
+                    if (h2_res && h2_res->Is2XXStatusCode()) {
+                        // F7.1 原样打印上游响应体(成功也完整打印,用户要求不截断)
+                        std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_RESP req=" << request_id
+                                  << " via=coremind_h2 type=task_status http=" << h2_res->GetStatusCode()
+                                  << " resp_body=" << h2_res->GetResponseBody() << std::endl;
+                        dumper->dump_callback_result("task_status", "coremind_h2", h2_res->GetStatusCode(),
+                                                      "", h2_res->GetResponseBody());
+                    } else {
+                        // H2 发送失败/非 2xx:明确报错,不回退 httplib 重发(用户要求,避免重复回调)
+                        std::string h2_detail = !h2_res ? "null response" : h2_res->GetResponseBody();
+                        std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_ERR req=" << request_id
+                                  << " via=coremind_h2 type=task_status http=" << (h2_res ? h2_res->GetStatusCode() : 0)
+                                  << " error=H2_SEND_FAILED resp_body=" << h2_detail << std::endl;
+                        dumper->dump_callback_result("task_status", "coremind_h2",
+                                                      h2_res ? h2_res->GetStatusCode() : 0,
+                                                      h2_res ? "H2_SEND_FAILED" : "H2_SEND_NULL_RESPONSE",
+                                                      h2_res ? h2_res->GetResponseBody() : "");
+                    }
                 } else {
                     std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_ERR req=" << request_id
-                              << " type=task_status error=" << httplib::to_string(ts_res.error()) << std::endl;
-                    dumper->dump_callback_result("task_status", "httplib", 0,
-                                                  httplib::to_string(ts_res.error()));
+                              << " via=coremind_h2 type=task_status error=H2_CLIENT_UNAVAILABLE target=" << ts_url << std::endl;
+                    dumper->dump_callback_result("task_status", "coremind_h2", 0, "H2_CLIENT_UNAVAILABLE", "");
                 }
             }
+#else
+            std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] CBF_ERR req=" << request_id
+                      << " error=PROD_ONLY_PATH" << std::endl;
+            dumper->dump_callback_result("task_status", "stub", 0, "PROD_ONLY_PATH", "");
+#endif
         }).detach();
 
         return CMFrm::COM::ASYNC;

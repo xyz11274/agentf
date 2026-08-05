@@ -155,9 +155,13 @@ public:
     void dump_callback_request(const std::string& callback_type,
                               const std::string& target,
                               const std::string& body);
+    // dump_callback_result：记录发往 upstream 回调的结果。error 仅存错误详情
+    // （如 "null response" / httplib 连接错误），response 存上游返回的完整响应体
+    // （F7.1 铁律——外部响应必须完整落盘，成功/失败都要）。via 区分 "coremind_h2"/"httplib"。
     void dump_callback_result(const std::string& callback_type,
                               const std::string& via, int http_status,
-                              const std::string& error);
+                              const std::string& error,
+                              const std::string& response);
 
 private:
     std::ofstream file_;
