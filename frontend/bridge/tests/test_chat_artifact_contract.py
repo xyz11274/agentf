@@ -232,9 +232,9 @@ def test_output_mode_link_base64_inlines_data_uri(monkeypatch) -> None:
     monkeypatch.setattr(settings, "artifact_reference", "link")
     monkeypatch.setattr(settings, "artifact_payload", "base64")
     monkeypatch.setattr(
-        "routes.artifact_extractor.read_artifact_base64",
-        lambda url: "aGVsbG8=",  # "hello"
-    )
+                "routes.artifact_extractor.read_artifact_base64",
+                lambda url, mime_type=None: "aGVsbG8=",  # "hello"
+            )
     content, artifacts = apply_artifact_output_mode(_CONTENT, [_ART.model_copy(deep=True)])
     assert content == "结果：![生成图片 1](data:image/png;base64,aGVsbG8=)"
     assert artifacts[0].data_base64 == "aGVsbG8="
@@ -262,7 +262,7 @@ def test_output_mode_placeholder_base64_embeds_content(monkeypatch) -> None:
     monkeypatch.setattr(settings, "artifact_payload", "base64")
     monkeypatch.setattr(
         "routes.artifact_extractor.read_artifact_base64",
-        lambda url: "aGVsbG8=",
+        lambda url, mime_type=None: "aGVsbG8=",
     )
     content, artifacts = apply_artifact_output_mode(_CONTENT, [_ART.model_copy(deep=True)])
     assert content == "结果：![生成图片 1]({{artifact:1}})"
@@ -277,7 +277,7 @@ def test_output_mode_multiple_artifacts_numbered(monkeypatch) -> None:
 
     monkeypatch.setattr(settings, "artifact_reference", "placeholder")
     monkeypatch.setattr(settings, "artifact_payload", "base64")
-    monkeypatch.setattr("routes.artifact_extractor.read_artifact_base64", lambda url: "b64")
+    monkeypatch.setattr("routes.artifact_extractor.read_artifact_base64", lambda url, mime_type=None: "b64")
     art2 = ArtifactInfo(
         type="download",
         url="/api/artifacts/outfit-assistant/files/outputs/deck.pptx",
@@ -292,3 +292,69 @@ def test_output_mode_multiple_artifacts_numbered(monkeypatch) -> None:
     assert "{{artifact:1}}" in new_content and "{{artifact:2}}" in new_content
     assert artifacts[0].placeholder == "{{artifact:1}}"
     assert artifacts[1].placeholder == "{{artifact:2}}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _encode_file 图片压缩(artifact-storage.md §2.4)
+# 真实文件读取:压缩到最长边 ≤512px;开关关闭返回 raw base64
+# ═══════════════════════════════════════════════════════════════════
+
+def _make_test_image(tmp_path: Path, size: int = 1024) -> Path:
+    """生成一张 size×size 的 PNG 测试图(带噪点,避免纯色被 PNG 无损压缩到极小)。"""
+    import io as _io
+
+    from PIL import Image
+
+    img = Image.new("RGB", (size, size), (120, 80, 200))
+    for x in range(0, size, 64):
+        for y in range(0, size, 64):
+            img.putpixel((x, y), ((x * 7) % 256, (y * 5) % 256, 128))
+    buf = _io.BytesIO()
+    img.save(buf, format="PNG")
+    p = tmp_path / "test.png"
+    p.write_bytes(buf.getvalue())
+    return p
+
+
+def test_encode_file_compresses_image_to_512(tmp_path) -> None:
+    """图片读取返回 base64 时压缩:最长边 ≤512px,且体积小于原图。"""
+    import base64 as _b64
+    import io as _io
+
+    from PIL import Image
+
+    from routes.artifacts import _encode_file
+
+    p = _make_test_image(tmp_path, 1024)
+    raw_size = p.stat().st_size
+    b64 = _encode_file(str(p), "image/png")
+    data = _b64.b64decode(b64)
+    img = Image.open(_io.BytesIO(data))
+    longest = max(img.width, img.height)
+    assert longest <= 512, f"压缩后最长边应 ≤512,got {longest}"
+    assert len(data) < raw_size, "压缩后体积应小于原图"
+
+
+def test_encode_file_compress_disabled_returns_raw(tmp_path, monkeypatch) -> None:
+    """开关关闭时返回 raw base64 不压缩。"""
+    import base64 as _b64
+
+    from routes.artifacts import _encode_file
+
+    p = _make_test_image(tmp_path, 1024)
+    raw_bytes = p.read_bytes()
+    monkeypatch.setattr(settings, "artifact_compress_enabled", False)
+    b64 = _encode_file(str(p), "image/png")
+    assert _b64.b64decode(b64) == raw_bytes, "开关关闭应返回 raw base64"
+
+
+def test_encode_file_non_image_returns_raw(tmp_path) -> None:
+    """非图片文件(pdf 等)直接返回 raw base64 不压缩。"""
+    import base64 as _b64
+
+    from routes.artifacts import _encode_file
+
+    p = tmp_path / "report.pdf"
+    p.write_bytes(b"%PDF-1.4 fake")
+    b64 = _encode_file(str(p), "application/pdf")
+    assert _b64.b64decode(b64) == b"%PDF-1.4 fake"

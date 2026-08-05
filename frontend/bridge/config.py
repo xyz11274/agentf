@@ -229,6 +229,12 @@ class BridgeSettings(BaseSettings):
         default="",
         description="Artifact storage directory (local filesystem). Empty = agent_packages_path.parent / artifacts_storage.",
     )
+    # 图片压缩开关（读取/返回 base64 时压缩,不污染存储原图）:
+    # 默认启用;置 false 时返回 raw base64(不压缩)。对应 env AF_BR_ARTIFACT_COMPRESS_ENABLED。
+    artifact_compress_enabled: bool = Field(validation_alias="AF_BR_ARTIFACT_COMPRESS_ENABLED",
+        default=True,
+        description="Compress image artifacts to base64 on read (max side 512px). Default enabled.",
+    )
 
     # --- 📂 filesystem paths ----------------------------------------------------
     agent_packages_dir: str = Field(validation_alias="AF_BR_AGENT_PACKAGES_DIR", 

@@ -12,8 +12,10 @@ import re
 from pathlib import Path
 
 import base64
+import io
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
+from PIL import Image
 
 from config import settings
 
@@ -268,13 +270,17 @@ def _file_response(path: Path) -> FileResponse:
     return FileResponse(path, media_type=media_type)
 
 
-def read_artifact_base64(url: str) -> str:
+def read_artifact_base64(url: str, mime_type: str | None = None) -> str:
     """Read an artifact referenced by its serve URL and return base64 content.
 
     Supports both URL shapes:
       ``/api/artifacts/{agent_id}/files/{relative_path}``
       ``/api/artifacts/{artifact_id}``
     (公网化后的绝对 URL 同样支持——从 ``/api/artifacts/`` 开始匹配）。
+
+    Image artifacts are automatically compressed (resize+quality) to keep the
+    base64 payload size reasonable for multi-turn dialogue.  Non-image files
+    are returned as raw base64 (no compression).
 
     Resolution order mirrors :func:`get_artifact_file`: bridge 本地存储优先，
     legacy filesystem fallback 其次。文件不存在/路径越界/读取失败返回 ``""``，
@@ -299,10 +305,83 @@ def read_artifact_base64(url: str) -> str:
     except ValueError:
         return ""
     if stored.is_file():
-        return base64.b64encode(stored.read_bytes()).decode("ascii")
+        return _encode_file(stored, mime_type)
 
     agent_name = artifact_id.split("/")[0]
     candidate = _resolve_artifact(artifact_id, agent_pkg_name=agent_name)
     if candidate is not None and candidate.is_file():
-        return base64.b64encode(candidate.read_bytes()).decode("ascii")
+        return _encode_file(candidate, mime_type)
     return ""
+
+
+# ── 图片压缩 ──────────────────────────────────────────────────────────
+# 仅对图片类型做压缩，非图片文件（pdf/pptx 等）返回 raw base64。
+# 压缩发生在"读取/返回 base64"时（read_artifact_base64 → _encode_file），
+# **不污染存储原图**——存储层始终保留原始文件，压缩仅为传输/上下文减负。
+# 开关：settings.artifact_compress_enabled（env AF_BR_ARTIFACT_COMPRESS_ENABLED，默认启用）。
+# 压缩参数：
+#   MAX_DIMENSION   — 最大边长（px），超出的图片等比缩放到此尺寸（业务传输 512px 足够）
+#   JPEG_QUALITY    — JPEG 压缩质量
+# 图片压缩大幅减少 base64 体积，避免多轮对话上下文/持久化膨胀。
+# 压缩后的图片仍为自包含 data URI，消费端无需额外处理。
+
+_MAX_DIMENSION = 512
+_JPEG_QUALITY = 80
+_SUPPORTED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+
+def _encode_file(path: Path | str, mime_type: str | None = None) -> str:
+    """Read a file and return its base64 content, compressing images on the fly.
+
+    ``mime_type`` is an optional hint (e.g. ``"image/png"``) — the function
+    also falls back to the file extension when ``mime_type`` is ``None``.
+
+    压缩开关关闭（settings.artifact_compress_enabled=false）时跳过压缩,返回 raw base64。
+    """
+    path = Path(path) if isinstance(path, str) else path
+    ext = path.suffix.lower()
+    is_image = (mime_type or "").startswith("image/") or ext in _SUPPORTED_IMAGE_EXTS
+
+    if is_image and getattr(settings, "artifact_compress_enabled", True):
+        try:
+            raw_bytes = path.read_bytes()
+            img = Image.open(path)
+            # 等比缩放 — 仅当超出最大边长时才缩放
+            if img.width > _MAX_DIMENSION or img.height > _MAX_DIMENSION:
+                ratio = min(_MAX_DIMENSION / img.width, _MAX_DIMENSION / img.height)
+                new_w = int(img.width * ratio)
+                new_h = int(img.height * ratio)
+                img = img.resize((new_w, new_h), Image.LANCZOS)
+
+            # 统一转 RGB（用于 JPEG 压缩）
+            if img.mode in ("RGBA", "LA", "P"):
+                background = Image.new("RGB", img.size, (255, 255, 255))
+                if img.mode == "P":
+                    img = img.convert("RGBA")
+                background.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
+                img_rgb = background
+            elif img.mode != "RGB":
+                img_rgb = img.convert("RGB")
+            else:
+                img_rgb = img
+
+            # 尝试 JPEG 压缩，与原格式取最小者
+            # 照片类（JPEG/WebP）→ JPEG 压缩效果好；简单图（PNG 纯色）→ PNG 原格式更小
+            buf_jpeg = io.BytesIO()
+            img_rgb.save(buf_jpeg, format="JPEG", quality=_JPEG_QUALITY, optimize=True)
+            jpeg_b64 = base64.b64encode(buf_jpeg.getvalue()).decode("ascii")
+
+            # 原格式 base64（作为对照）
+            raw_b64 = base64.b64encode(raw_bytes).decode("ascii")
+
+            # 选更小的
+            if len(jpeg_b64) < len(raw_b64):
+                return jpeg_b64
+            return raw_b64
+        except Exception:
+            logger.warning("_encode_file image compress failed path=%s ext=%s", path, ext)
+            # 压缩失败 → 退化为 raw base64（不丢数据）
+            return base64.b64encode(path.read_bytes()).decode("ascii")
+
+    # 非图片文件：直接 raw base64
+    return base64.b64encode(path.read_bytes()).decode("ascii")

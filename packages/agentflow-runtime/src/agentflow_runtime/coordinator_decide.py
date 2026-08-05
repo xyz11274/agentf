@@ -358,24 +358,44 @@ def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
 
     blocks = []
     skipped_already_in_content: list[str] = []
+    # ── 归一化去重(I-4 幂等):按产物 basename 判断"是否已在 content 中被引用" ──
+    # 不能再用 `url not in content` 字符串匹配——LLM 输出可能以本地路径/占位符形式
+    # 引用产物(rewrite 后 URL 形式也可能与 _existing_artifact_url 不一致),URL 匹配
+    # 不到导致同一产物重复追加(实测:"## 生成产物" 块出现 2 次)。
+    # 归一化 key = 文件名(basename),对本地路径 / serve URL / 已改写 URL 均稳定。
+    existing_content_keys: set[str] = set()
+    for _m in re.finditer(r"!?\[[^\]]*\]\(([^)\s]+)\)", content, re.I):
+        _ref = _m.group(1).split("?")[0].split("#")[0]
+        _name = Path(_ref).name
+        if _name:
+            existing_content_keys.add(_name)
+
+    def _should_append(path: str, url: str) -> bool:
+        """URL 存在且 basename 未被 content 引用才追加。"""
+        key = Path(path).name
+        if key in existing_content_keys:
+            return False
+        existing_content_keys.add(key)  # 本函数内同类产物也只追加一次
+        return True
+
     if images:
         for index, path in enumerate(images, 1):
             url = _existing_artifact_url(path)
-            if url and url not in content:
+            if url and _should_append(path, url):
                 blocks.append(ARTIFACT_IMAGE_TEMPLATE.format(index=index, url=url))
             elif url:
                 skipped_already_in_content.append(path)
     if html_reports:
         for index, path in enumerate(html_reports, 1):
             url = _existing_artifact_url(path)
-            if url and url not in content:
+            if url and _should_append(path, url):
                 blocks.append(ARTIFACT_HTML_TEMPLATE.format(index=index, url=url))
             elif url:
                 skipped_already_in_content.append(path)
     if downloads:
         for index, path in enumerate(downloads, 1):
             url = _existing_artifact_url(path)
-            if url and url not in content:
+            if url and _should_append(path, url):
                 blocks.append(ARTIFACT_DOWNLOAD_TEMPLATE.format(index=index, url=url))
             elif url:
                 skipped_already_in_content.append(path)

@@ -86,6 +86,17 @@ std::string log_timestamp();
 // artifacts 非空时返回 {"code":200101,"data":{"content":[...]}} 的字符串形式。
 std::string build_user_output_object(const Json::Value& sse_artifacts);
 
+// F7 展示层截断：递归遍历 JSON，将 base64 data URI（如 "data:image/png;base64,xxx"）
+// 截断为"前缀 + 前 120 字符 + 长度标记"，防止超长 base64 刷屏日志。
+// 仅用于日志展示——存储层（dumper 落盘）仍保留完整数据。
+// 返回 toStyledString 格式的截断结果（main.cpp / sidecar_router.cpp 的 pretty_json 共用）。
+std::string json_to_styled_truncated(const Json::Value& v);
+
+// 字符串级 base64 截断（不解析 JSON，直接找 "base64," 标记截断）——
+// 用于 SSE_RAW 等打印原始行的日志点（main.cpp / sidecar_router.cpp），
+// 保留原始行其余部分不变；超长 base64 载荷截为前 120 字符 + full_len 标记。
+std::string truncate_base64_in_text(const std::string& raw);
+
 // ── SSE chunk → UserOutput 回调决策器（dev/prod 共享） ──────────────
 // 封装 chunk 类型判断、flag 决策、final_text/artifacts 状态维护。
 // main.cpp 和 sidecar_router.cpp 都调用此类，确保行为一致。

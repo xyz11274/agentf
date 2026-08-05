@@ -12,6 +12,7 @@
  */
 
 #include "proxy_handler.h"
+#include "router_logic.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -46,7 +47,8 @@ static std::string pretty_json(const std::string& raw) {
     std::string errors;
     std::istringstream input(raw);
     if (Json::parseFromStream(reader, input, &val, &errors)) {
-        return val.toStyledString();
+        // F7 展示层:base64 截断 + UTF-8 输出(替代 toStyledString 的 \uXXXX 转义)
+        return sidecar::json_to_styled_truncated(val);
     }
     return raw;
 }

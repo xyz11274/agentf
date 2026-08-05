@@ -228,6 +228,74 @@ std::string build_user_output_object(const Json::Value& sse_artifacts) {
     return Json::writeString(w, output);
 }
 
+// F7 展示层截断——base64 data URI（如 "data:image/png;base64,xxx"）递归截断。
+// 仅用于日志展示：超长 base64 会让日志不可读；存储层（dumper 落盘）保留完整数据。
+namespace {
+void truncate_base64_in_value(Json::Value& v) {
+    if (v.isObject()) {
+        for (auto& key : v.getMemberNames()) {
+            truncate_base64_in_value(v[key]);
+        }
+    } else if (v.isArray()) {
+        for (auto& item : v) {
+            truncate_base64_in_value(item);
+        }
+    } else if (v.isString()) {
+        const std::string& s = v.asString();
+        // data URI 形式: "data:image/png;base64,<...>" —— 在 "base64," 后截断
+        const std::string marker = "base64,";
+        auto pos = s.find(marker);
+        if (pos != std::string::npos && s.size() - (pos + marker.size()) > 120) {
+            std::string head = s.substr(0, pos + marker.size());
+            std::string tail = s.substr(pos + marker.size());
+            v = head + tail.substr(0, 120)
+                + "...[base64 truncated, full_len=" + std::to_string(tail.size()) + "]";
+        }
+    }
+}
+
+// 字符串型 JSON body 的 base64 截断:解析→截断→compact 序列化。
+// 解析失败返回原串(保留现场,不丢数据)——用户要求 dump trace 亦截断 base64。
+std::string truncate_base64_in_json_string(const std::string& raw) {
+    if (raw.empty()) return raw;
+    Json::CharReaderBuilder reader;
+    Json::Value val;
+    std::string errors;
+    std::istringstream input(raw);
+    if (!Json::parseFromStream(reader, input, &val, &errors)) {
+        return raw;
+    }
+    truncate_base64_in_value(val);
+    Json::StreamWriterBuilder w;
+    w["indentation"] = "";
+    w["emitUTF8"] = true;
+    return Json::writeString(w, val);
+}
+}  // namespace
+
+std::string json_to_styled_truncated(const Json::Value& v) {
+    Json::Value copy = v;
+    truncate_base64_in_value(copy);
+    // emitUTF8=true:toStyledString() 默认把非 ASCII 转义为 \uXXXX,控制台日志不可读;
+    // 这里用 StreamWriterBuilder 输出原生 UTF-8,并保持 tab 缩进的 pretty 格式。
+    Json::StreamWriterBuilder w;
+    w["indentation"] = "\t";
+    w["emitUTF8"] = true;
+    return Json::writeString(w, copy);
+}
+
+std::string truncate_base64_in_text(const std::string& raw) {
+    const std::string marker = "base64,";
+    auto pos = raw.find(marker);
+    if (pos != std::string::npos && raw.size() - (pos + marker.size()) > 120) {
+        std::string head = raw.substr(0, pos + marker.size());
+        std::string tail = raw.substr(pos + marker.size());
+        return head + tail.substr(0, 120)
+            + "...[base64 truncated, full_len=" + std::to_string(tail.size()) + "]";
+    }
+    return raw;
+}
+
 // ── SSEChunkProcessor ──────────────────────────────────────────────
 
 std::vector<SSEChunkProcessor::Callback> SSEChunkProcessor::process(const Json::Value& sse_json) {
@@ -369,17 +437,25 @@ void SidecarDumper::dump_request(const Json::Value& body) {
     Json::Value entry;
     entry["_meta"] = true;
     entry["_timestamp"] = dump_timestamp();
-    entry["request"] = body;
+    // 用户要求 dump trace 亦截断 base64(否则落盘文件同样刷屏不可读);
+    // 保留 full_len 标记,调试仍可知原始长度。
+    Json::Value req = body;
+    truncate_base64_in_value(req);
+    entry["request"] = req;
     Json::StreamWriterBuilder w;
     w["indentation"] = "";
     w["emitUTF8"] = true;
-    file_ << Json::writeString(w, entry) << "\n";
+    const std::string line = Json::writeString(w, entry) + "\n";
+    file_ << line;
+    callback_file_ << line;
     file_.flush();
+    callback_file_.flush();
 }
 
 void SidecarDumper::dump_sse_chunk(const Json::Value& sse_json) {
     if (!enabled_) return;
     Json::Value entry = sse_json;
+    truncate_base64_in_value(entry);  // 同 dump_request:base64 截断落盘(full_len 标记保留)
     entry["_direction"] = "sse_in";
     entry["_timestamp"] = dump_timestamp();
     Json::StreamWriterBuilder w;
@@ -400,7 +476,7 @@ void SidecarDumper::dump_callback(const std::string& stream_status, int flag,
     entry["flag"] = flag;
     entry["text"] = text;
     entry["is_final"] = is_final;
-    entry["user_output_object"] = user_output_object;
+    entry["user_output_object"] = truncate_base64_in_json_string(user_output_object);
     Json::StreamWriterBuilder w;
     w["indentation"] = "";
     w["emitUTF8"] = true;
@@ -420,9 +496,10 @@ void SidecarDumper::dump_callback_request(const std::string& callback_type,
     entry["_timestamp"] = dump_timestamp();
     entry["callback_type"] = callback_type;
     entry["target"] = target;
-    // body 是构造好的 JSON 请求体原文（cb_str/ts_str）——原样落盘，不重新解析，
-    // 避免解析失败丢失现场或改变字段顺序（F7/F7.1：原始请求必须完整落盘）。
-    entry["body"] = body;
+    // body 是构造好的 JSON 请求体原文（cb_str/ts_str）——解析后截断 base64 再落盘，
+    // 避免超长 base64 撑爆 dump 文件（用户要求 dump trace 亦截断）；解析失败返回原串
+    // 保留现场不丢数据（F7/F7.1：原始请求完整落盘语义由失败回退兜底）。
+    entry["body"] = truncate_base64_in_json_string(body);
     Json::StreamWriterBuilder w;
     w["indentation"] = "";
     w["emitUTF8"] = true;

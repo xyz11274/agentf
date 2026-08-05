@@ -61,6 +61,11 @@ artifact_payload: "url"
 # 空字符串 = 默认 agent_packages_path.parent / artifacts_storage
 artifacts_storage_dir: ""
 
+# ── 图片压缩开关（读取/返回 base64 时压缩,不污染存储原图）──
+# 默认启用:读取时等比压缩到最长边 512px + JPEG quality 80(详见 artifact-storage.md §2.4)。
+# 置 false 时返回 raw base64 不压缩(对应 env AF_BR_ARTIFACT_COMPRESS_ENABLED)。
+artifact_compress_enabled: true
+
 # ── 文件路径 ──────────────────────────────────────────────────────
 # 相对路径基于项目根目录解析
 agent_packages_dir: "examples/agent"

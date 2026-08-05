@@ -37,6 +37,8 @@ dependencies = [
     "python-multipart>=0.0.32",
     "e2b-code-interpreter==2.8.1",
     "e2b==2.34.0",
+    # Image compression for base64-embedded artifacts (read_artifact_base64)
+    "Pillow>=10.4",
 ]
 
 [project.optional-dependencies]

@@ -39,12 +39,18 @@ aisf_adapter:
 artifact_public_base_url: "http://115.120.249.45:40092/health"
 
 # ── 产物输出模式（两维正交开关，详见 docs/design/features/artifact-output-pipeline.md §3.6）──
-artifact_reference: "link"
+artifact_reference: "placeholder"
 artifact_payload: "base64"
 
 # ── 产物存储目录（详见 docs/design/features/sandbox/artifact-storage.md §8）──
 # 空字符串 = 默认 agent_packages_path.parent / artifacts_storage
 artifacts_storage_dir: ""
+
+
+# ── 图片压缩开关（读取/返回 base64 时压缩,不污染存储原图）──
+# 默认启用:读取时等比压缩到最长边 512px + JPEG quality 80(详见 artifact-storage.md §2.4)。
+# 置 false 时返回 raw base64 不压缩(对应 env AF_BR_ARTIFACT_COMPRESS_ENABLED)。
+artifact_compress_enabled: true
 
 # ── 文件路径 ──────────────────────────────────────────────────────
 agent_packages_dir: "examples/agent"

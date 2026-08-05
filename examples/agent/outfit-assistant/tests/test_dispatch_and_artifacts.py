@@ -945,3 +945,52 @@ def test_html_poster_attribute_is_rewritten(tmp_path, monkeypatch):
     assert 'poster="assets/thumb.jpg"' not in rendered, (
         f"原始 HTML 属性未被重写，rendered={rendered!r}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════
+# append_artifacts_markdown 归一化去重(I-4 幂等)
+# 缺陷修复:原实现用 `url not in content` 字符串匹配,LLM 输出以本地路径/占位符
+# 引用产物时 URL 匹配不到 → 同一产物重复追加("## 生成产物" 块出现 2 次)。
+# 修复后按 basename 归一化判断 content 是否已引用,避免重复。
+# ═══════════════════════════════════════════════════════════════════
+
+def test_artifact_already_in_content_not_appended_twice(tmp_path):
+    """content 已含产物引用(basename 命中)时,不再追加第二个产物块。"""
+    image = tmp_path / "look.png"
+    image.write_bytes(b"image")
+    # content 以本地路径形式引用同一产物(LLM 常见输出)
+    rendered = coordinator.append_artifacts_markdown(
+        f"![穿搭效果图]({image})",
+        json.dumps([str(image)]),
+    )
+    # basename look.png 已在 content 中被引用 → 不追加任何 "## 生成产物" 块
+    assert rendered.count("## 生成产物") == 0, f"已引用产物不应再追加块,got:\n{rendered}"
+    assert "/api/artifacts/" in rendered
+
+
+def test_same_basename_different_path_deduplicated(tmp_path):
+    """同 basename 不同路径的产物只追加一次(归一化 key = basename)。"""
+    a = tmp_path / "a" / "look.png"
+    b = tmp_path / "b" / "look.png"
+    a.parent.mkdir(parents=True)
+    b.parent.mkdir(parents=True)
+    a.write_bytes(b"a")
+    b.write_bytes(b"b")
+    # content 不含引用,两个产物 basename 相同 → 只追加 1 个块
+    rendered = coordinator.append_artifacts_markdown(
+        "完成",
+        json.dumps([str(a), str(b)]),
+    )
+    assert rendered.count("## 生成产物") == 1, f"同 basename 应只追加 1 次,got:\n{rendered}"
+
+
+def test_artifact_not_in_content_still_appended(tmp_path):
+    """content 未引用产物时仍正常追加(未破坏正常追加路径)。"""
+    image = tmp_path / "gen.png"
+    image.write_bytes(b"png")
+    rendered = coordinator.append_artifacts_markdown(
+        "完成",
+        json.dumps([str(image)]),
+    )
+    assert rendered.count("## 生成产物") == 1
+    assert "/api/artifacts/" in rendered

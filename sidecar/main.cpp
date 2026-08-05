@@ -98,7 +98,8 @@ static std::string pretty_json(const std::string& raw) {
     std::string errors;
     std::istringstream input(raw);
     if (Json::parseFromStream(reader, input, &val, &errors)) {
-        return val.toStyledString();
+        // F7 展示层截断:base64 data URI 超长时截断,防止日志刷屏;存储层(dumper)保留完整
+        return sidecar::json_to_styled_truncated(val);
     }
     return raw;
 }
@@ -289,7 +290,8 @@ static void forward_to_bridge(
                 std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] CBF_CALLBACK req=" << request_id
                           << " status=" << stream_status << " flag=" << flag
                           << " text_len=" << text.size()
-                          << " body=\n" << cb.toStyledString() << std::endl;
+                          // F7:展示层 base64 截断 + UTF-8 输出(替代 toStyledString 的 \uXXXX 转义)
+                          << " body=\n" << sidecar::json_to_styled_truncated(cb) << std::endl;
                 httplib::Client cb_cli(sys_agent_entity.c_str());
                 auto cb_res = cb_cli.Post("/coremind/systemagent/v1/callback",
                             {{"Content-Type", "application/json"}},
@@ -297,10 +299,14 @@ static void forward_to_bridge(
                 if (cb_res) {
                     std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] CBF_RESP req=" << request_id
                               << " http=" << cb_res->status << std::endl;
+                    // F7.1: 外部服务原始响应必须完整落盘（与生产 sidecar_router.cpp 对齐）
+                    dumper->dump_callback_result("user_output", "httplib", cb_res->status, "");
                 } else {
                     auto err = cb_res.error();
                     std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] CBF_ERR req=" << request_id
                               << " error=" << httplib::to_string(err) << std::endl;
+                    dumper->dump_callback_result("user_output", "httplib", 0,
+                                                 httplib::to_string(err));
                 }
                 return true;
             };
@@ -320,7 +326,8 @@ static void forward_to_bridge(
                             std::string payload = line.substr(6);
                             if (payload == "[DONE]") continue;
                             std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] SSE_RAW len=" << payload.size()
-                                      << " data=" << payload << std::endl;
+                                      // F7 展示层:payload 可能含 _artifacts data_base64,字符串级截断
+                                      << " data=" << sidecar::truncate_base64_in_text(payload) << std::endl;
                             Json::Value sse_json;
                             Json::CharReaderBuilder rdr;
                             std::istringstream sse_in(payload);
@@ -403,9 +410,22 @@ static void forward_to_bridge(
             dumper->dump_callback_request("task_status",
                 "http://" + sys_agent_entity + "/coremind/systemagent/v1/callback", ts_str);
             httplib::Client ts_cli(sys_agent_entity.c_str());
-            ts_cli.Post("/coremind/systemagent/v1/callback",
+            auto ts_res = ts_cli.Post("/coremind/systemagent/v1/callback",
                         {{"Content-Type", "application/json"}},
                         ts_str, "application/json");
+            if (ts_res) {
+                std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] TSR_RESP req=" << request_id
+                          << " http=" << ts_res->status << std::endl;
+                // F7.1: 任务结束信号（TaskStatusReport）的原始响应必须完整落盘，
+                // 与生产 sidecar_router.cpp 的 dump_callback_result 对齐。
+                dumper->dump_callback_result("task_status", "httplib", ts_res->status, "");
+            } else {
+                auto ts_err = ts_res.error();
+                std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] TSR_ERR req=" << request_id
+                          << " error=" << httplib::to_string(ts_err) << std::endl;
+                dumper->dump_callback_result("task_status", "httplib", 0,
+                                             httplib::to_string(ts_err));
+            }
 
             std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] ASYNC_DONE req=" << request_id
                       << " ts_code=" << ts_code << " ts_status=" << ts_status

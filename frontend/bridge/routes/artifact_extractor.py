@@ -193,7 +193,7 @@ def apply_artifact_output_mode(content: str, artifacts: list[ArtifactInfo]) -> t
     if payload == "base64":
         for art in artifacts:
             if not art.data_base64:
-                art.data_base64 = read_artifact_base64(art.url)
+                art.data_base64 = read_artifact_base64(art.url, art.mime_type)
 
     if reference == "link":
         # link + base64：仅对 image 做文本内 data URI 内嵌（前端 markdown-it 原生渲染

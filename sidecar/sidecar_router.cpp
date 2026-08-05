@@ -52,7 +52,8 @@ static std::string pretty_json(const std::string& raw) {
     std::string errors;
     std::istringstream input(raw);
     if (Json::parseFromStream(reader, input, &val, &errors)) {
-        return val.toStyledString();
+        // F7 展示层截断:base64 data URI 超长时截断,防止日志刷屏;存储层(dumper)保留完整
+        return sidecar::json_to_styled_truncated(val);
     }
     return raw;
 }
@@ -405,7 +406,8 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                         // [DONE] 标记流结束，不阻断接收（让 Post 自然返回后统一处理）
                         if (payload == "[DONE]") continue;
                         std::cerr << "[" << sidecar::log_timestamp() << "] [sidecar_router] SSE_RAW len=" << payload.size()
-                                  << " data=" << payload << std::endl;
+                                  // F7 展示层:payload 可能含 _artifacts data_base64,字符串级截断
+                                  << " data=" << sidecar::truncate_base64_in_text(payload) << std::endl;
                         // 解析 SSE json
                         Json::Value sse_json;
                         Json::CharReaderBuilder rdr;

@@ -346,6 +346,48 @@ TEST(TestOutputFormat, TC_SID_026_ArtifactsToOutputObject) {
 }
 
 // ═══════════════════════════════════════════════════════════
+// 展示层 base64 截断 (F7) — 防止超长 base64 刷屏日志
+// ═══════════════════════════════════════════════════════════
+
+TEST(TestOutputFormat, Base64DataUri_TruncatedInDisplay) {
+    std::string long_b64(500, 'A');  // 500 字符 base64
+    Json::Value body;
+    body["code"] = 200101;
+    body["data"]["content"][0]["type"] = "image";
+    body["data"]["content"][0]["data"] = "data:image/png;base64," + long_b64;
+
+    std::string shown = json_to_styled_truncated(body);
+    EXPECT_NE(shown.find("base64,"), std::string::npos);
+    EXPECT_NE(shown.find("...[base64 truncated"), std::string::npos);
+    EXPECT_NE(shown.find("full_len=500"), std::string::npos);
+    // 截断后 base64 载荷长度 = 120(头部)而非完整 500
+    auto cut_pos = shown.find("base64,");
+    auto tail_pos = shown.find("...", cut_pos);
+    ASSERT_NE(cut_pos, std::string::npos);
+    ASSERT_NE(tail_pos, std::string::npos);
+    EXPECT_EQ(tail_pos - (cut_pos + 7), 120u);
+}
+
+TEST(TestOutputFormat, ShortBase64_NotTruncated) {
+    Json::Value body;
+    body["data"]["content"][0]["data"] = "data:image/png;base64,abc";
+
+    std::string shown = json_to_styled_truncated(body);
+    EXPECT_NE(shown.find("base64,abc"), std::string::npos);
+    EXPECT_EQ(shown.find("truncated"), std::string::npos);
+}
+
+TEST(TestOutputFormat, NonBase64Json_Untouched) {
+    Json::Value body;
+    body["msg"] = "hello world";
+    body["n"] = 42;
+
+    std::string shown = json_to_styled_truncated(body);
+    EXPECT_NE(shown.find("hello world"), std::string::npos);
+    EXPECT_EQ(shown.find("truncated"), std::string::npos);
+}
+
+// ═══════════════════════════════════════════════════════════
 // SSEChunkProcessor — chunk 决策器单元测试
 // ═══════════════════════════════════════════════════════════
 
