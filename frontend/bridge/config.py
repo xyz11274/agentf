@@ -167,7 +167,7 @@ class BridgeSettings(BaseSettings):
     daemon_port: int = Field(validation_alias="AF_BR_DAEMON_PORT", default=17891, ge=1, le=65535, description="Daemon TCP/WS port.")
 
     # --- 🌐 bridge server bind -------------------------------------------------
-    bridge_listen: str = Field(validation_alias="AF_BR_LISTEN", 
+    bridge_listen: str = Field(validation_alias="AF_BR_LISTEN",
         default="0.0.0.0:8199",
         description="Bridge listen address (host:port). Set via AF_BR_LISTEN.",
     )
@@ -210,7 +210,7 @@ class BridgeSettings(BaseSettings):
     agent_defaults_llm_fallback_model: str = Field(validation_alias="AF_BR_AGENT_DEFAULTS_LLM_FALLBACK_MODEL", default="", description="Fallback LLM model. From config.yaml agent_defaults.llm_fallback.model.")
 
     # --- artifact ------------------------------------------------------------
-    artifact_public_base_url: str = Field(validation_alias="AF_BR_ARTIFACT_PUBLIC_BASE_URL", 
+    artifact_public_base_url: str = Field(validation_alias="AF_BR_ARTIFACT_PUBLIC_BASE_URL",
         default="",
         description="Public base URL for artifact links (empty = relative paths).",
     )
@@ -237,11 +237,26 @@ class BridgeSettings(BaseSettings):
     )
 
     # --- 📂 filesystem paths ----------------------------------------------------
-    agent_packages_dir: str = Field(validation_alias="AF_BR_AGENT_PACKAGES_DIR", 
-        default="examples/agent",
-        description="Directory containing Agent Package source trees.",
+    # 三态模型（见 docs/design/features/agent-package/agent-package-three-state.md）：
+    #   ① template（蓝图）      → agent_template_dir
+    #   ② agent-packages（固化态）→ agent_packages_dir —— template + user uploads 合并后的纯净静态资产，不含运行时数据
+    #   ③ workspace（运行实例） → agent_workspace_dir —— ② 的拷贝 + 运行时数据（.venv/outputs/workspace/memory）
+    # daemon load 的是 ③（workspace 实例），②→③ 的同步拷贝由 bridge 的 load 路由负责。
+    agent_packages_dir: str = Field(validation_alias="AF_BR_AGENT_PACKAGES_DIR",
+        default="resource/agent-packages",
+        description="Directory containing Agent Package source trees (固化态②: template + user uploads, no runtime data).",
     )
-    skill_hub_dir: str = Field(validation_alias="AF_BR_SKILL_HUB_DIR", 
+    agent_workspace_dir: str = Field(validation_alias="AF_BR_AGENT_WORKSPACE_DIR",
+        default="examples/agent",
+        description="Agent workspace instances directory (运行态③: copy of ② + runtime data). daemon loads agents from here.",
+    )
+    # 产物存储根目录：属运行态数据，落点在 ③ workspace 侧。空 = 自动取 agent_workspace_path.parent / "artifacts_storage"。
+    # S5：显式 Field + YAML 入口，避免"看似可配置实无入口"误导（artifacts.py:33 曾用 getattr 兜底）。
+    artifacts_storage_dir: str = Field(validation_alias="AF_BR_ARTIFACTS_STORAGE_DIR",
+        default="",
+        description="Directory for artifact storage (运行态产物). Empty → defaults to {agent_workspace_path.parent}/artifacts_storage.",
+    )
+    skill_hub_dir: str = Field(validation_alias="AF_BR_SKILL_HUB_DIR",
         default="resource/skill_hub",
         description="Directory containing the Skill Hub central repository.",
     )
@@ -252,7 +267,7 @@ class BridgeSettings(BaseSettings):
 
     # --- 🪵 observability / behavior --------------------------------------------
     log_level: str = Field(validation_alias="AF_BR_LOG_LEVEL", default="INFO", description="Logging level name.")
-    request_timeout_seconds: float = Field(validation_alias="AF_BR_REQUEST_TIMEOUT_SECONDS", 
+    request_timeout_seconds: float = Field(validation_alias="AF_BR_REQUEST_TIMEOUT_SECONDS",
         default=5.0, gt=0,
         description="Per-request timeout (seconds) for outbound daemon calls.",
     )
@@ -262,15 +277,15 @@ class BridgeSettings(BaseSettings):
     )
 
     # --- 🖼️ multimodal content (Phase A) ---------------------------------------
-    uploads_dir: str = Field(validation_alias="AF_BR_UPLOADS_DIR", 
+    uploads_dir: str = Field(validation_alias="AF_BR_UPLOADS_DIR",
         default="/tmp/agentflow/uploads",
         description="Directory where bridge lands large inline images before forwarding to daemon.",
     )
-    chat_turn_timeout_seconds: float = Field(validation_alias="AF_BR_CHAT_TURN_TIMEOUT_SECONDS", 
+    chat_turn_timeout_seconds: float = Field(validation_alias="AF_BR_CHAT_TURN_TIMEOUT_SECONDS",
         default=900.0, gt=0,
         description="Maximum chat turn duration. Set via AF_BR_.",
     )
-    daemon_status_refresh_interval: float = Field(validation_alias="AF_BR_DAEMON_STATUS_REFRESH_INTERVAL", 
+    daemon_status_refresh_interval: float = Field(validation_alias="AF_BR_DAEMON_STATUS_REFRESH_INTERVAL",
         default=10.0, gt=0,
         description="Seconds between background daemon status cache refreshes.",
     )
@@ -305,14 +320,14 @@ class BridgeSettings(BaseSettings):
     # 数据源（sandbox.list），不再解析 daemon 日志（2026-08-02 重构）
 
     # --- 💾 session persistence (Bridge sessions) ------------------------------
-    session_provider: str = Field(validation_alias="AF_BR_SESSION_PROVIDER", 
+    session_provider: str = Field(validation_alias="AF_BR_SESSION_PROVIDER",
         default="local",
         description=(
             "Session persistence backend: 'local' (SQLite file) or 'kmm' "
             "(aisf platform KMM service, Phase 3). Set via AF_BR_."
         ),
     )
-    session_db_path: str = Field(validation_alias="AF_BR_SESSION_DB_PATH", 
+    session_db_path: str = Field(validation_alias="AF_BR_SESSION_DB_PATH",
         default="/tmp/agentflow/sessions.db",
         description=(
             "SQLite database path used by LocalSessionProvider. "
@@ -326,7 +341,7 @@ class BridgeSettings(BaseSettings):
             "chat turn as history context. Set via AF_BR_."
         ),
     )
-    session_sync_interval: float = Field(validation_alias="AF_BR_SESSION_SYNC_INTERVAL", 
+    session_sync_interval: float = Field(validation_alias="AF_BR_SESSION_SYNC_INTERVAL",
         default=30.0, gt=0,
         description=(
             "Seconds between background agentflow→Bridge session status "
@@ -336,7 +351,7 @@ class BridgeSettings(BaseSettings):
     )
 
     # --- 🌍 CORS ---------------------------------------------------------------
-    cors_allowed_origins: list[str] = Field(validation_alias="AF_BR_CORS_ALLOWED_ORIGINS", 
+    cors_allowed_origins: list[str] = Field(validation_alias="AF_BR_CORS_ALLOWED_ORIGINS",
         default_factory=lambda: [
             "http://localhost:15173",
             "http://127.0.0.1:15173",
@@ -352,6 +367,14 @@ class BridgeSettings(BaseSettings):
     @property
     def agent_packages_path(self) -> Path:
         p = Path(self.agent_packages_dir)
+        if p.is_absolute():
+            return p.resolve()
+        return (_PROJECT_ROOT / p).resolve()
+
+    @property
+    def agent_workspace_path(self) -> Path:
+        """Absolute path to the agent workspace instances directory (运行态③)."""
+        p = Path(self.agent_workspace_dir)
         if p.is_absolute():
             return p.resolve()
         return (_PROJECT_ROOT / p).resolve()

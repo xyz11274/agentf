@@ -219,7 +219,8 @@ AGENTFLOW_ENV=dev                           AGENTFLOW_ENV=prod
 
 | 字段 | 示例 | 基准目录 | 代码 |
 |------|------|---------|------|
-| `agent_packages_dir` | `"examples/agent"` | **项目根** | `_PROJECT_ROOT / p` |
+| `agent_packages_dir` | `"resource/agent-packages"` | **项目根** | `_PROJECT_ROOT / p` |
+| `agent_workspace_dir` | `"examples/agent"` | **项目根** | `_PROJECT_ROOT / p` |
 | `skill_hub_dir` | `"resource/skill_hub"` | **项目根** | `_PROJECT_ROOT / p` |
 | `agent_template_dir` | `"frontend/bridge/templates/agent_template"` | **项目根** | `_PROJECT_ROOT / p` |
 | `session_db_path` | `"data/sessions.db"` | **项目根** | `_PROJECT_ROOT / p` |

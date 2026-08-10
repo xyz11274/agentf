@@ -47,11 +47,14 @@ std::string extract_json_string(const std::string& json, const std::string& key)
   if (d.HasParseError() || !d.HasMember(key.c_str())) return "";
   const auto& v = d[key.c_str()];
   if (v.IsString()) return v.GetString();
-  // Non-string value (null, object, array, number, bool) → treat as absent.
-  // In particular, JSON null (Python None) must NOT be stringified to "null"
-  // — that literal would propagate through the daemon → bridge → frontend
-  // and display as the string "null" in the UI progress bubble.
-  return "";
+  // JSON null (Python None) → treat as absent. In particular, JSON null must
+  // NOT be stringified to "null" — that literal would propagate through the
+  // daemon → bridge → frontend and display as the string "null" in the UI
+  // progress bubble.
+  if (v.IsNull()) return "";
+  // object / array / number / bool → 返回 JSON 原文（01ba0716 修复：
+  // 嵌套 JSON 数组/对象不得被截断，value 字段完整落库）
+  return rj_stringify(v);
 }
 
 std::string extract_json_object(const std::string& json, const std::string& key) {

@@ -205,6 +205,41 @@ void SandboxSnapshots::gc_recycle() {
   _save_to_disk();
 }
 
+bool SandboxSnapshots::delete_snapshot(const std::string& snapshot_id) {
+  // 幂等（B7）：快照不存在返回 false（不抛异常，对齐 sandbox.destroy already_gone 语义）
+  std::vector<Snapshot> surviving;
+  bool found = false;
+  for (const auto& s : snapshots_) {
+    if (s.snapshot_id == snapshot_id) {
+      found = true;
+      // 删除 store_path（E2B 模式 store_path 为空串，remove_all 空串无害）
+      std::error_code ec;
+      if (!s.store_path.empty()) {
+        fs::remove_all(s.store_path, ec);
+        if (ec) {
+          // 目录删除失败：保留 registry 条目（F1：绝不静默丢失索引指向的数据）
+          Logger::instance().warn_f(
+              "[SANDBOX] delete_snapshot: failed to remove store_path=%s for snapshot=%s (%s)",
+              s.store_path.c_str(), snapshot_id.c_str(), ec.message().c_str());
+          surviving.push_back(s);
+          continue;
+        }
+      }
+      continue;  // 已删除，跳过
+    }
+    surviving.push_back(s);
+  }
+  if (!found) {
+    Logger::instance().warn_f("[SANDBOX] delete_snapshot: snapshot=%s not found (idempotent)",
+                              snapshot_id.c_str());
+    return false;
+  }
+  snapshots_ = surviving;
+  _save_to_disk();
+  Logger::instance().info_f("[SANDBOX] delete_snapshot: snapshot=%s deleted", snapshot_id.c_str());
+  return true;
+}
+
 void SandboxSnapshots::_save_to_disk() const {
   // 持久化 snapshots_ 列表到 registry.jsonc（简化 JSON 格式，非 JSONC，存为 .jsonc 兼容编辑器）
   // 失败不抛异常：持久化是优化，非关键路径（真相源在内存，重启后 _load_from_disk 静默跳过）

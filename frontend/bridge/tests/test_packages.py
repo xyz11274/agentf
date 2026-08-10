@@ -66,6 +66,11 @@ def fake_packages_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (root / ".hidden" / "package.json").write_text("{}")
 
     monkeypatch.setattr(config_module.settings, "agent_packages_dir", str(root))
+    # 三态模型：热重载/load 会同步 ②→③，③ workspace 实例必须指向 tmp，
+    # 否则 _sync_agent_package 会写入真实 examples/agent 目录。
+    workspace = tmp_path / "agent_workspace"
+    workspace.mkdir()
+    monkeypatch.setattr(config_module.settings, "agent_workspace_dir", str(workspace))
     return root
 
 

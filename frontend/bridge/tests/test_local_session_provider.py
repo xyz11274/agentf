@@ -14,6 +14,7 @@ Invariants locked here:
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from uuid import UUID
 
@@ -172,6 +173,55 @@ async def test_get_messages_respects_limit(provider: LocalSessionProvider):
     # Oldest first within the returned window.
     assert msgs[0]["content"] == "Q0"
     assert msgs[1]["content"] == "A0"
+
+
+# ── User images persistence ───────────────────────────────────────────
+
+
+async def test_save_dialogue_persists_user_images(provider: LocalSessionProvider):
+    """用户附加图片（data URI）落库并回读：user 消息带 images，assistant 不带。"""
+    s = await provider.get_or_create_session("alice", "web")
+    images = json.dumps([
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    ], ensure_ascii=False)
+    await provider.save_dialogue(
+        s["id"], "带图的提问", "回答", dialogue_id="d-img", images=images,
+    )
+
+    msgs = await provider.get_messages(s["id"], limit=10)
+    assert len(msgs) == 2
+    user_msg = msgs[0]
+    assert user_msg["role"] == "user"
+    assert user_msg["content"] == "带图的提问"
+    assert user_msg["images"] == json.loads(images), (
+        "user 消息必须回读 images（data URI 列表），否则前端无法回显用户图片"
+    )
+    # assistant 消息无用户图片
+    assert msgs[1]["role"] == "assistant"
+    assert msgs[1].get("images", []) == []
+
+
+async def test_save_dialogue_default_images_empty(provider: LocalSessionProvider):
+    """不带 images 参数时默认落库空数组，回读 images == []（不报错）。"""
+    s = await provider.get_or_create_session("alice", "web")
+    await provider.save_dialogue(s["id"], "Q", "A", dialogue_id="d-1")
+
+    msgs = await provider.get_messages(s["id"], limit=10)
+    assert msgs[0]["images"] == []
+
+
+async def test_save_dialogue_images_multiple(provider: LocalSessionProvider):
+    """多张图片按序落库回读，顺序保持不变（I-1 不丢数据）。"""
+    s = await provider.get_or_create_session("alice", "web")
+    img_a = "data:image/png;base64,AAAA"
+    img_b = "data:image/jpeg;base64,BBBB"
+    await provider.save_dialogue(
+        s["id"], "多图", "ok", dialogue_id="d-multi",
+        images=json.dumps([img_a, img_b]),
+    )
+
+    msgs = await provider.get_messages(s["id"], limit=10)
+    assert msgs[0]["images"] == [img_a, img_b]
 
 
 # ── Context injection ───────────────────────────────────────────────

@@ -653,6 +653,7 @@ run_python_bridge_tests() {
     # 1) 单元 + 集成测试（mock daemon，无需 daemon 二进制）
     echo -e "  ${CYAN}[pytest]${NC} Bridge 集成测试..."
     local _pytest_out; _pytest_out="$(mktemp)"
+    # -k 排除依赖 agentflow_runtime（bridge venv 未安装）的测试类
     if uv run --directory "$bridge_dir" pytest \
         tests/test_aisf_tasks.py \
         tests/test_config.py \
@@ -662,7 +663,15 @@ run_python_bridge_tests() {
         tests/test_chat.py \
         tests/test_routes.py \
         tests/test_e2e_comprehensive.py \
-        -v --no-header 2>&1 | tee "$_pytest_out" | tail -5; then
+        tests/test_artifacts.py \
+        tests/test_artifact_storage_e2e.py \
+        tests/test_agent_env_inject.py \
+        tests/test_content_serializer.py \
+        tests/test_packages.py \
+        tests/test_chat_artifact_contract.py \
+        -v --no-header \
+        -k "not TestUploadToStorage and not TestSandboxArtifactDownload and not TestArtifactUrlPipeline" \
+        2>&1 | tee "$_pytest_out" | tail -5; then
         echo -e "  ${GREEN}✓ Bridge 集成测试通过${NC}"
         BRIDGE_PASS=$((BRIDGE_PASS + 1))
     else

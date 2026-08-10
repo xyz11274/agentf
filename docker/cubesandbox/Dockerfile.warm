@@ -1,0 +1,52 @@
+# 预热模板镜像（CubeSandbox）— 基于 sandbox-code:latest 增量
+#
+# 用途：创建"预跑 sandbox_http_server.py"的预热模板，使段2 Sandbox.create(template=预热模板)
+# 首问毫秒级就绪（HTTP server 已在跑），避免每次上传+启动（实测 31s → 目标几十 ms）。
+# 设计权威源：docs/design/features/sandbox/sandbox-warm-template-oci.md §2.2/§2.6
+#
+# base 选型（2026-08-09 确认）：
+# - 硬约束：模板必须携带 envd（Cube 沙箱 agent，:49983）——probe/SDK/init 全部依赖
+# - sandbox-code:latest 已含 envd + Python 3.12 + curl，集群验证通过（与先例 agentfoundry-sandbox:cube 一致）
+# - 不另选 base，规避"集群 OS/依赖不兼容"风险
+#
+# 构建方式（手动，无公共 registry）：SSH 上节点 docker build → POST /templates 注册
+#   scp -P 8791 docker/cubesandbox/Dockerfile.warm docker/cubesandbox/warm-entrypoint.sh root@218.245.96.148:/root/warm/
+#   scp -P 8791 -r docker/sandbox/http_server docker/sandbox/sandbox-setup.sh root@218.245.96.148:/root/warm/
+#   ssh root@218.245.96.148 'cd /root/warm && docker build -t agentflow-sandbox-warm:v1 -f Dockerfile.warm .'
+
+FROM ccr.ccs.tencentyun.com/ags-image/sandbox-code:latest
+
+# 预置 sandbox_http_server.py（与现有 Dockerfile / e2b_lifecycle.py 同源路径）
+COPY http_server/sandbox_http_server.py /opt/sandbox/http_server/sandbox_http_server.py
+
+# 预置环境初始化脚本（当前无 pip 依赖，仅 stdlib；未来加包在此）
+COPY sandbox-setup.sh /opt/sandbox/sandbox-setup.sh
+RUN bash /opt/sandbox/sandbox-setup.sh
+
+# 工作区挂载点（与 e2b_remote_workspace_dir 对应，daemon 配置注入 SANDBOX_WORKDIR）
+RUN mkdir -p /home/user/workspace
+
+# 健康检查：每 30s 探测 /exec 端点（与现有 Dockerfile 对齐）
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -s -X POST http://127.0.0.1:8080/exec \
+        -H "Content-Type: application/json" \
+        -d '{"tool":"bash","tool_params":{"command":"echo ready"},"opts":{}}' \
+        | grep -qE '"exit_code"[[:space:]]*:[[:space:]]*0' || exit 1
+
+# ⚠️ 关键：不动 ENTRYPOINT——保留 sandbox-code:latest 的 /init（s6-overlay）。
+# 先例 agentfoundry-sandbox:cube（Dockerfile.cube）就是这样做的（仅 RUN 增量装包）。
+#
+# HTTP server 启动机制（2026-08-09 实测坐实）：
+# - sandbox-code 的 s6-rc.d 没有 cmd service——s6-overlay 只跑注册的 service
+#   （envd / jupyter / uvicorn），Docker CMD 不会被 s6 拉起 → v2 用 CMD 前台、
+#   v3 删 CMD 都不行：沙箱内 HTTP server 不在跑，probe 失败走 v1 兜底。
+# - 正解：把 HTTP server 注册为 s6-overlay service（与 envd 同机制，后台 longrun），
+#   /init 启动时自动拉起 → snapshot 捕获运行中进程 → 模板复用毫秒级。
+# 结构与 envd service 对齐：run（with-contenv bash）+ type（longrun）+ user bundle 注册。
+RUN mkdir -p /etc/s6-overlay/s6-rc.d/warm-http \
+ && printf '%s\n' '#!/command/with-contenv bash' \
+        'exec python3 /opt/sandbox/http_server/sandbox_http_server.py --port 8080 --host 0.0.0.0 > /tmp/sandbox_http_server.log 2>&1' \
+        > /etc/s6-overlay/s6-rc.d/warm-http/run \
+ && chmod +x /etc/s6-overlay/s6-rc.d/warm-http/run \
+ && printf 'longrun\n' > /etc/s6-overlay/s6-rc.d/warm-http/type \
+ && printf 'warm-http\n' > /etc/s6-overlay/s6-rc.d/user/contents.d/warm-http

@@ -36,12 +36,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import yaml
 
 from agentflow_runtime.databus_client import DataBusClient
-from agentflow_runtime.llm_call import (
-    call_llm,
+from agentflow_runtime.compaction import (
     compress_messages,
-    estimate_message_tokens,
     get_compaction_threshold,
     get_model_max_tokens,
+)
+from agentflow_runtime.llm_call import (
+    call_llm,
     get_recorder,
     resolve_llm_config,
 )
@@ -116,6 +117,11 @@ def _load_dotenv() -> None:
     """Load .env from the agent package directory, if it exists.
     Uses AGENT_PACKAGE_DIR from globals() to respect entry file overrides.
     """
+    # 测试隔离开关：AF_SKIP_DOTENV=1 时跳过 .env 加载（override=True 会覆盖
+    # 测试传入的环境变量，如 AF_LLM_BASE_URL，导致单测意外打真实 API）。
+    if os.environ.get("AF_SKIP_DOTENV", "").lower() in ("1", "true"):
+        print("[flow] dotenv: skipped (AF_SKIP_DOTENV set)", file=sys.stderr)
+        return
     p = os.path.join(AGENT_PACKAGE_DIR, ".env")
     print(f"[flow] dotenv: path={p} exists={os.path.isfile(p)}", file=sys.stderr)
     if os.path.isfile(p):
@@ -364,7 +370,15 @@ def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
     # 不到导致同一产物重复追加(实测:"## 生成产物" 块出现 2 次)。
     # 归一化 key = 文件名(basename),对本地路径 / serve URL / 已改写 URL 均稳定。
     existing_content_keys: set[str] = set()
+    # Markdown 链接引用：![alt](path) / [text](path)
     for _m in re.finditer(r"!?\[[^\]]*\]\(([^)\s]+)\)", content, re.I):
+        _ref = _m.group(1).split("?")[0].split("#")[0]
+        _name = Path(_ref).name
+        if _name:
+            existing_content_keys.add(_name)
+    # HTML <img src="..."> 引用同样视为"已在 content 中被引用"，
+    # 否则 HTML 内联图片会被重复追加到"## 生成产物"块（I-4 幂等性）。
+    for _m in re.finditer(r"<img[^>]*\bsrc\s*=\s*[\"']([^\"']+)[\"']", content, re.I):
         _ref = _m.group(1).split("?")[0].split("#")[0]
         _name = Path(_ref).name
         if _name:
@@ -641,12 +655,7 @@ def execute():
         "model": model_name,
         "max_iterations": max_iterations,
     })
-    print(f"[flow] coordinator_decide triggered: session={session_id} dialogue={dialogue_id} model={model_name}", file=sys.stderr)
     _t1 = time.time()
-    if completed_skill:
-        print(f"[flow]   trigger_type=skill_completion completed_skill={completed_skill} success={skill_success}", file=sys.stderr)
-    else:
-        print(f"[flow]   trigger_type=first", file=sys.stderr)
 
     databus = DataBusClient()
     recorder = get_recorder()
@@ -672,13 +681,10 @@ def execute():
             current_round = 1
     if databus.is_connected():
         databus.put("_coordinator_round", str(current_round))
-    print(f"[flow]   coordinator_round={current_round}/{max_iterations} "
-          f"(first_trigger={is_first_trigger})", file=sys.stderr)
 
     # ── Max iterations guard: break before LLM call ──
     if current_round > max_iterations:
         emit_event("coordinator.max_iterations", {"round": current_round, "max_iterations": max_iterations}, level="WARN")
-        print(f"[flow]   ⚠️  max iterations ({max_iterations}) reached, force ending", file=sys.stderr)
         response_text = llm_error_response(completed_skill_artifacts)
         output = {"response": response_text, "status": "max_iterations_reached"}
         print(json.dumps(output, ensure_ascii=False))
@@ -800,7 +806,6 @@ def execute():
                     "round": current_round,
                     "elapsed_s": round(time.time() - _t0, 1),
                 }, level="WARN")
-                print(f"[flow]   ⚠️  interrupted by DIALOGUE-INTERRUPT at round={current_round}", file=sys.stderr)
                 response_text = "对话已被取消"
                 output = {"response": response_text, "status": "interrupted"}
                 # Bridge 从 stdout JSON 读 coordinator 响应（与正常完成路径同款，
@@ -852,17 +857,12 @@ def execute():
     _obs_tc_count = len(_obs_tcs) if _obs_tcs else 0
     _obs_tc_names = [tc.get("function", {}).get("name", "?")
                      for tc in (_obs_tcs or [])]
-    print(
-        f"[obs] coord_decide: finish={_obs_finish} "
-        f"tool_calls={_obs_tc_count} names={_obs_tc_names or 'none'} "
-        f"content_preview={_obs_content_preview}",
-        file=sys.stderr,
-    )
     emit_event("coordinator.llm_result", {
         "round": current_round,
         "finish_reason": _obs_finish,
         "tool_call_count": _obs_tc_count,
         "tool_call_names": _obs_tc_names,
+        "content_preview": _obs_content_preview,
         "llm_duration_s": round(_t5 - _t4, 1),
         "total_duration_s": round(_t5 - _t0, 1),
     })
@@ -874,10 +874,6 @@ def execute():
             "error": err_msg,
             "duration_s": round(_t5 - _t0, 1),
         }, level="ERROR")
-        print(
-            f"[flow]   ⚠️  LLM error after call_llm internal retries, returning fallback: {err_msg}",
-            file=sys.stderr,
-        )
         # Return fallback response instead of crashing — user gets something,
         # workflow completes, coordinator can be re-triggered.
         response_text = llm_error_response(completed_skill_artifacts)
@@ -911,14 +907,6 @@ def execute():
             "error": err_msg,
             "duration_s": round(_t5 - _t0, 1),
         }, level="ERROR")
-        print(
-            f"[flow]   ⚠️  {err_msg}",
-            file=sys.stderr,
-        )
-        print(
-            f"[flow]   raw_response={json.dumps(raw, ensure_ascii=False)[:500]}",
-            file=sys.stderr,
-        )
         response_text = llm_error_response(completed_skill_artifacts)
         output = {"response": response_text}
         _put_e2e_response(databus, response_text)
@@ -936,8 +924,6 @@ def execute():
         # ── Max iterations guard: if this is the last allowed round, force final ──
         #     output instead of dispatching more skills.
         if current_round >= max_iterations:
-            print(f"[flow]   ⚠️  max iterations ({max_iterations}) reached, forcing final output "
-                  f"even though LLM requested tools", file=sys.stderr)
             raw_response = msg.get("content", "")
             import re as _re
             think_match = _re.search(r"</think>\s*", raw_response)
@@ -975,18 +961,8 @@ def execute():
                     _sn = _s.get("name", "") if isinstance(_s, dict) else str(_s)
                     if _sn:
                         _dispatched_skills[_sn] = None
-                # Log full per-skill parameters
-                for i, s in enumerate(skill_names, 1):
-                    p = s.get("prompt", "")[:100]
-                    ls = s.get("load_skills", [])
-                    print(f"[flow]   skill[{i}]: name={s.get('name','?')} prompt='{p}' load_skills={ls}", file=sys.stderr)
-                print(f"[flow]   LLM decision: run_skills reason={args.get('reason','')[:80]}", file=sys.stderr)
                 result_str = handle_run_skills_call(args, databus, session_id, dialogue_id)
-                # Log dispatch result
-                result_json = json.loads(result_str)
-                print(f"[flow]   dispatch result: status={result_json.get('status')} skills={result_json.get('skills')}", file=sys.stderr)
             else:
-                print(f"[flow]   LLM decision: unknown_tool={name}", file=sys.stderr)
                 result_str = json.dumps({"error": f"Unknown tool: {name}"})
 
             messages.append({
@@ -1053,7 +1029,6 @@ def execute():
             }, ensure_ascii=False))
     else:
         # LLM made no tool_call → final response
-        print(f"[flow]   LLM decision: final_response (no tool_call)", file=sys.stderr)
         raw_response = msg.get("content", "")
         # Strip <think> tags: keep reasoning in trace, only show user-facing content
         import re as _re

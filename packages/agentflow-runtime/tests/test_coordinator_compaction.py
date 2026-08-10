@@ -41,6 +41,10 @@ def _run_coordinator(env: dict[str, str]) -> tuple[str, str, int]:
         "AF_SESSION_ID": "test-compaction-session",
         "AF_LLM_API_KEY": "test-key-not-used",
         "AF_LLM_BASE_URL": "http://127.0.0.1:1/v1",  # 无法连接，但不会挂起
+        # 测试隔离：跳过 agent 包 .env 加载（override=True 会覆盖上面传入的
+        # AF_LLM_BASE_URL/AF_LLM_API_KEY，导致测试意外打真实 LLM API）。
+        # 见 coordinator_decide.py / skill_executor.py 的 _load_dotenv() 开关。
+        "AF_SKIP_DOTENV": "1",
         # Coordinator 会 call_llm（curl），会快速失败返回 _llm_error
         # 但压缩检查发生在 call_llm 之前，所以即使 LLM 失败也能验证压缩
     })
@@ -145,26 +149,28 @@ class TestCompactionIntegration:
     # ════════════════════════════════════════════════════════════════
 
     def test_interrupt_poll_failure_does_not_block(self) -> None:
-        """回归：interrupt flag 轮询失败（DataBus 不可用）不阻断 coordinator 正常退出。
-        
+        """回归：interrupt flag 轮询不可用（DataBus 未连接）不阻断 coordinator 正常退出。
+
         I-INT-5 的集成级验证：子进程运行 coordinator_decide.py，
-        AF_DATABUS_UDS_FILE="" 下 get_global 不可用，轮询打 WARN 日志后继续。
-        coordinator 正常走 LLM call → _llm_error → fallback path → 正常退出。
+        AF_DATABUS_UDS_FILE="" 时 is_connected()=False，interrupt 轮询被
+        `if databus.is_connected():` 跳过（coordinator_decide.py:796），
+        主流程继续 → LLM call 快速失败 → _llm_error → fallback path → 正常退出。
         """
         stdout, stderr, rc = _run_coordinator({
             "AF_INPUT": "推荐穿搭",
-            "AF_DATABUS_UDS_FILE": "",  # 禁用 DataBus，轮询必然失败
+            "AF_DATABUS_UDS_FILE": "",  # 禁用 DataBus（无 UDS）
             "AF_LLM_BASE_URL": "http://127.0.0.1:1/v1",  # 快速失败
         })
-        # 中断轮询失败应打 WARN 日志（不阻断）
-        assert "interrupt flag poll failed" in stderr, (
-            "DataBus 不可用时，中断轮询应打 WARN 日志\n"
-            f"stderr:\n{stderr[:2000]}"
-        )
-        # node 正常退出（LLM call 失败但走 fallback）
+        # 轮询被跳过不应阻断主流程——node 应正常退出（LLM call 失败但走 fallback）
         assert rc == 0 or "_llm_error" in stdout or "error" in stdout, (
-            "轮询失败后 coordinator 应正常退出\n"
+            "轮询不可用时 coordinator 应正常退出\n"
             f"stdout:\n{stdout[:1000]}\nstderr:\n{stderr[:1000]}"
+        )
+        # DataBus 未连接时轮询应静默跳过（不打 interrupt 相关日志，除非 LLM 自身的 error）
+        interrupt_logs = [l for l in stderr.splitlines() if "interrupt" in l.lower()]
+        assert len(interrupt_logs) <= 1, (
+            "DataBus 未连接时不应输出 interrupt 轮询失败日志（轮询被跳过）\n"
+            f"stderr:\n{stderr[:2000]}"
         )
 
     def test_interrupt_flag_not_set_continues_normally(self) -> None:

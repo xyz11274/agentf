@@ -25,6 +25,8 @@ Run with:
 
 Prerequisites:
   1. agentflowd built and running:
+     # 三态模型（删 examples 不崩不变量）：先确保 ③ 就绪（②→③ 自动同步）
+     # 手动同步：uv run python frontend/bridge/tests/e2e_helpers.py
      set -a; . examples/agent/outfit-assistant/.env; set +a
      PYTHON_PATH="$(pwd)/examples/agent/outfit-assistant/.venv" \\
        ./build/agentflowd --listen 0.0.0.0:17891 \\

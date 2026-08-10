@@ -43,7 +43,10 @@ from .e2e_helpers import (
 
 
 _E2E_TIMEOUT = 120
-_OUTFIT_AGENT = PROJECT_ROOT / "examples" / "agent" / "outfit-assistant"
+# 三态模型（删 examples 不崩不变量）：③ 路径仍指向 examples/agent/outfit-assistant，
+# 但首次用时自动从 ② 固化态重建——import 时即调 ensure，删 examples 后导入即同步。
+from e2e_helpers import ensure_outfit_agent_3 as _ensure_3  # noqa: E402
+_OUTFIT_AGENT = _ensure_3()
 _OUTFIT_AGENT_STR = str(_OUTFIT_AGENT)
 _DOCKER_IMAGE_TAG = "agentflow-sandbox:v1"
 

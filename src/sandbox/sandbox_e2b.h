@@ -71,6 +71,12 @@ class E2BSandbox : public Sandbox {
         std::chrono::steady_clock::now().time_since_epoch()).count();
   }
   void snapshot() override;  // FR-012：调用 e2b_lifecycle.py snapshot 保存远端磁盘状态
+  // pause：调 e2b_lifecycle.py pause（SDK Sandbox.pause(keep_memory=True)，平台侧暂停）
+  // resume：调 e2b_lifecycle.py resume（SDK connect 唤醒 paused sandbox + is_running 校验）
+  // 幂等（B7）：已 STOPPED 时 pause 无操作；已 RUNNING 时 resume 无操作
+  // 失败：SDK 不支持/平台拒绝时抛 std::runtime_error 含可定位原因（上层映射 UnsupportedAction）
+  void pause() override;
+  void resume() override;
 
   // 沙箱模式标识——E2B（用于 SandboxSnapshots restore 分支判断）
   std::string sandbox_mode() const override { return "e2b"; }

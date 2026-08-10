@@ -16,6 +16,7 @@
 #include "daemon/sandbox_lifecycle.h"
 #include "daemon/sandbox_snapshots.h"
 #include "daemon/session_manager.h"
+#include "daemon/template_registry.h"
 #include "sandbox/sandbox.h"
 #include "sandbox/sandbox_types.h"
 
@@ -55,6 +56,12 @@ class StubSandbox : public Sandbox {
         std::chrono::steady_clock::now().time_since_epoch()).count();
   }
   void snapshot() override {}  // Stub：无平台侧快照
+  void pause() override {
+    if (state_ != SandboxState::RECYCLING) state_ = SandboxState::STOPPED;
+  }
+  void resume() override {
+    if (state_ == SandboxState::STOPPED) state_ = SandboxState::RUNNING;
+  }
 
   // 测试辅助：手动设状态（模拟 STOPPED/GC 超时）
   void set_state(SandboxState s) { state_ = s; }
@@ -113,7 +120,8 @@ using agentflow::sandbox::StubSandbox;
 TEST(SandboxLifecycleTest, SameUserReusesSandbox) {
   agentflow::daemon::SessionManager sm;
   auto cfg = make_test_config();
-  agentflow::daemon::SandboxLifecycle sl(sm, cfg);
+  agentflow::daemon::TemplateRegistry tr(cfg);
+  agentflow::daemon::SandboxLifecycle sl(sm, cfg, tr);
   // 注：create() 会走 SandboxFactory::create——需 Stub 注册；此处直接测 SessionManager 复用语义
   auto key = make_key("userA", "clientA", "agentA");
   auto sb1 = std::make_shared<StubSandbox>(key, "sb-001", "/tmp/wd_001");
@@ -144,7 +152,8 @@ TEST(SandboxLifecycleTest, DifferentUsersIsolated) {
 TEST(SandboxLifecycleTest, LimitRejectsNotInterrupts) {
   agentflow::daemon::SessionManager sm;
   auto cfg = make_test_config(2);  // max=2
-  agentflow::daemon::SandboxLifecycle sl(sm, cfg);
+  agentflow::daemon::TemplateRegistry tr(cfg);
+  agentflow::daemon::SandboxLifecycle sl(sm, cfg, tr);
   // 填满 2 个活沙箱
   auto k1 = make_key("u1", "c", "a");
   auto k2 = make_key("u2", "c", "a");
@@ -162,7 +171,8 @@ TEST(SandboxLifecycleTest, LimitRejectsNotInterrupts) {
 TEST(SandboxLifecycleTest, ConcurrentLimitRejectsNew) {
   agentflow::daemon::SessionManager sm;
   auto cfg = make_test_config(1);  // max=1
-  agentflow::daemon::SandboxLifecycle sl(sm, cfg);
+  agentflow::daemon::TemplateRegistry tr(cfg);
+  agentflow::daemon::SandboxLifecycle sl(sm, cfg, tr);
   auto k1 = make_key("u1", "c", "a");
   sm.put(k1, std::make_shared<StubSandbox>(k1, "sb-1", "/tmp/wd1"));
   EXPECT_EQ(sm.list_active().size(), 1u);
@@ -175,7 +185,8 @@ TEST(SandboxLifecycleTest, ConcurrentLimitRejectsNew) {
 TEST(SandboxLifecycleTest, GcRecyclesIdle) {
   agentflow::daemon::SessionManager sm;
   auto cfg = make_test_config();
-  agentflow::daemon::SandboxLifecycle sl(sm, cfg);
+  agentflow::daemon::TemplateRegistry tr(cfg);
+  agentflow::daemon::SandboxLifecycle sl(sm, cfg, tr);
   auto key = make_key("u", "c", "a");
   auto sb = std::make_shared<StubSandbox>(key, "sb-idle", "/tmp/wd_idle");
   // 手动设 last_active_at 为很久以前——超 gc_destroy_ttl_ms
@@ -192,7 +203,8 @@ TEST(SandboxLifecycleTest, GcRecyclesIdle) {
 TEST(SandboxLifecycleTest, RecyclingIrreversible) {
   agentflow::daemon::SessionManager sm;
   auto cfg = make_test_config();
-  agentflow::daemon::SandboxLifecycle sl(sm, cfg);
+  agentflow::daemon::TemplateRegistry tr(cfg);
+  agentflow::daemon::SandboxLifecycle sl(sm, cfg, tr);
   auto key = make_key("u", "c", "a");
   auto sb = std::make_shared<StubSandbox>(key, "sb-recyc", "/tmp/wd");
   sm.put(key, sb);
@@ -207,7 +219,8 @@ TEST(SandboxLifecycleTest, RecyclingIrreversible) {
 TEST(SandboxLifecycleTest, KilledTriggersSnapshot) {
   agentflow::daemon::SessionManager sm;
   auto cfg = make_test_config();
-  agentflow::daemon::SandboxLifecycle sl(sm, cfg);
+  agentflow::daemon::TemplateRegistry tr(cfg);
+  agentflow::daemon::SandboxLifecycle sl(sm, cfg, tr);
   agentflow::daemon::SandboxSnapshots snaps(sl, cfg);
   auto key = make_key("u", "c", "a");
   auto sb = std::make_shared<StubSandbox>(key, "sb-snap", "/tmp/wd_snap");
@@ -228,7 +241,8 @@ TEST(SandboxLifecycleTest, KilledTriggersSnapshot) {
 TEST(SandboxLifecycleTest, UnreachableSnapshotHonest) {
   agentflow::daemon::SessionManager sm;
   auto cfg = make_test_config();
-  agentflow::daemon::SandboxLifecycle sl(sm, cfg);
+  agentflow::daemon::TemplateRegistry tr(cfg);
+  agentflow::daemon::SandboxLifecycle sl(sm, cfg, tr);
   agentflow::daemon::SandboxSnapshots snaps(sl, cfg);
   // 不存在的 sandbox_id 拍快照应抛含 id 的错误
   EXPECT_THROW(
@@ -247,7 +261,8 @@ TEST(SandboxLifecycleTest, UnreachableSnapshotHonest) {
 TEST(SandboxLifecycleTest, DestroyIdempotent) {
   agentflow::daemon::SessionManager sm;
   auto cfg = make_test_config();
-  agentflow::daemon::SandboxLifecycle sl(sm, cfg);
+  agentflow::daemon::TemplateRegistry tr(cfg);
+  agentflow::daemon::SandboxLifecycle sl(sm, cfg, tr);
   auto key = make_key("u", "c", "a");
   auto sb = std::make_shared<StubSandbox>(key, "sb-dup", "/tmp/wd");
   sm.put(key, sb);
@@ -264,7 +279,8 @@ TEST(SandboxLifecycleTest, DestroyIdempotent) {
 TEST(SandboxLifecycleTest, DestroyRemovesWorkdir) {
   agentflow::daemon::SessionManager sm;
   auto cfg = make_test_config();
-  agentflow::daemon::SandboxLifecycle sl(sm, cfg);
+  agentflow::daemon::TemplateRegistry tr(cfg);
+  agentflow::daemon::SandboxLifecycle sl(sm, cfg, tr);
   agentflow::daemon::SandboxSnapshots snaps(sl, cfg);
   sl.set_snapshots(snaps);
 
@@ -290,7 +306,15 @@ TEST(SandboxLifecycleTest, DestroyRemovesWorkdir) {
 TEST(SandboxLifecycleTest, SnapshotIdempotent) {
   agentflow::daemon::SessionManager sm;
   auto cfg = make_test_config();
-  agentflow::daemon::SandboxLifecycle sl(sm, cfg);
+  agentflow::daemon::TemplateRegistry tr(cfg);
+  agentflow::daemon::SandboxLifecycle sl(sm, cfg, tr);
+
+  // 隔离环境污染：先清理 snapshot_root 再构造 SandboxSnapshots——
+  // 否则 _load_from_disk 加载前序测试残留的 registry.jsonc，list_snapshots() 期望值失真
+  // （单独跑通过/全量跑失败，顺序依赖 /tmp 污染的根因，2026-08-10 修复）
+  fs::remove_all(cfg.sandbox_config.snapshot_root);
+  fs::create_directories(cfg.sandbox_config.snapshot_root);
+
   agentflow::daemon::SandboxSnapshots snaps(sl, cfg);
   auto key = make_key("u", "c", "a");
   auto sb = std::make_shared<StubSandbox>(key, "sb-snap2", "/tmp/wd_snap2");
@@ -313,4 +337,54 @@ TEST(SandboxLifecycleTest, SnapshotIdempotent) {
 // 注：此 TC 需 worker.cpp 接入 Sandbox——属 US1 范畴，此处 SKIP
 TEST(SandboxLifecycleTest, InferenceLoopStaysOnHost) {
   GTEST_SKIP() << "需 worker.cpp 接入 Sandbox——US1 范畴，留 implement 期";
+}
+
+// 快照单条删除（v0.3 管理能力）：真实 SandboxSnapshots（真实拷贝 + registry 持久化）
+// 验证：删除返回 true / list 不再包含 / store_path 目录已删 / 幂等二次删除返回 false
+TEST(SandboxLifecycleTest, DeleteSnapshotRemovesRegistryAndDir) {
+  agentflow::daemon::SessionManager sm;
+  auto cfg = make_test_config();
+  agentflow::daemon::TemplateRegistry tr(cfg);
+  agentflow::daemon::SandboxLifecycle sl(sm, cfg, tr);
+
+  // 隔离环境污染：必须先清理 snapshot_root 再构造 SandboxSnapshots——
+  // 否则构造时 _load_from_disk 会加载前序测试（KilledTriggersSnapshot 等）写入的
+  // registry.jsonc 历史快照，导致 list_snapshots().size() 期望值失真
+  // （实测 "Loaded 2 snapshots"，DeleteSnapshot 测试失败根因，2026-08-10 修复）
+  fs::remove_all(cfg.sandbox_config.snapshot_root);
+  fs::create_directories(cfg.sandbox_config.snapshot_root);
+
+  agentflow::daemon::SandboxSnapshots snaps(sl, cfg);
+
+  // 构造真实 workdir（快照 copy 需要源目录存在且非空）
+  auto key = make_key("u", "c", "a");
+  std::string workdir = "/tmp/agentflow_sandbox_test_wd_snap_del";
+  fs::remove_all(workdir);
+  fs::create_directories(workdir);
+  {
+    std::ofstream(workdir + "/artifact.txt") << "payload";
+  }
+  auto sb = std::make_shared<StubSandbox>(key, "sb-snap-del", workdir);
+  sm.put(key, sb);
+
+  // 拍快照（真实拷贝到 snapshot_root/<sandbox_id>/<snapshot_id>/）
+  auto snap = snaps.snapshot("sb-snap-del");
+  std::string snap_id = snap.snapshot_id;
+  EXPECT_NE(snap_id, "") << "快照 id 应非空";
+  EXPECT_FALSE(snap.store_path.empty()) << "Local 模式 store_path 应非空";
+  EXPECT_TRUE(fs::exists(snap.store_path)) << "快照目录应真实存在";
+  EXPECT_EQ(snaps.list_snapshots().size(), 1u);
+
+  // 删除：registry 条目移除 + store_path 目录删除
+  EXPECT_TRUE(snaps.delete_snapshot(snap_id)) << "首次删除应返回 true";
+  EXPECT_EQ(snaps.list_snapshots().size(), 0u) << "删除后 registry 不再包含";
+  EXPECT_FALSE(fs::exists(snap.store_path)) << "删除后 store_path 目录应消失";
+
+  // 幂等（B7）：重复删除返回 false（already_gone 语义，不抛异常）
+  EXPECT_FALSE(snaps.delete_snapshot(snap_id)) << "重复删除应返回 false（幂等）";
+  EXPECT_EQ(snaps.list_snapshots().size(), 0u);
+
+  // 清理测试残留
+  fs::remove_all(workdir);
+  fs::remove_all(cfg.sandbox_config.snapshot_root);
 }

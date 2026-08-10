@@ -1,0 +1,27 @@
+{
+  "id": "coordinator-collect",
+  "version": "1.0",
+  "name": "Coordinator Collect",
+  "description": "Collects skill outputs and returns to client",
+  "nodes": [
+    {
+      "id": "collector",
+      "name": "Skill Output Collector",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "./python_wrapper.sh ./nodes/coordinator_collect.py",
+      "working_dir": "examples/agent/agent-creator",
+      "json_output": true,
+      "timeout_ms": 1000,
+      "inputs": [
+        {"name": "input", "type": "string", "required": true},
+        {"name": "session_id", "type": "string", "required": true},
+        {"name": "dialogue_id", "type": "string", "required": false}
+      ],
+      "outputs": [
+        {"name": "response", "type": "string"}
+      ]
+    }
+  ],
+  "edges": []
+}

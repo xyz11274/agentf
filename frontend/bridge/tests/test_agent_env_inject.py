@@ -76,12 +76,13 @@ class TestInjectAgentEnvDefaults:
 
     @pytest.fixture
     def pkg_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-        """Create a fake agent package directory."""
-        pkg = tmp_path / "agents" / "test_agent"
+        """Create a fake agent workspace directory (③)."""
+        pkg = tmp_path / "workspace" / "test_agent"
         pkg.mkdir(parents=True)
         from config import settings
-        # agent_packages_path is a property derived from agent_packages_dir
-        monkeypatch.setattr(settings, "agent_packages_dir", str(tmp_path / "agents"))
+        # _inject_agent_env_defaults 写入 ③ workspace 实例（三态模型），
+        # 故 monkeypatch agent_workspace_dir 而非 agent_packages_dir
+        monkeypatch.setattr(settings, "agent_workspace_dir", str(tmp_path / "workspace"))
         return pkg
 
     @pytest.fixture

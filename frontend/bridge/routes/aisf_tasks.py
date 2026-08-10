@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -37,6 +38,7 @@ from aisf_adapter.sysagent.server import (
 )
 from client import DaemonClient
 from config import settings
+from providers import SessionProvider
 
 logger = logging.getLogger("routes.aisf_tasks")
 
@@ -152,12 +154,15 @@ async def receive_task(request: Request) -> JSONResponse:
         ctx.userName, ctx.deviceId
     )
 
+    # Bridge 持久化会话 provider（与 chat 链路同源，可能未配置则跳过落库）
+    provider: SessionProvider | None = getattr(request.app.state, "session_provider", None)
+
     mode = settings.aisf_adapter_mode or "async"
     agent_id = settings.aisf_adapter_agent_id
     if mode == "sync":
         # 同步模式：等结果再返回（调试用）
         result = await _execute_and_callback(
-            daemon, parsed, ctx, prev_dialogue_id, agent_id
+            daemon, parsed, ctx, prev_dialogue_id, agent_id, provider
         )
         return JSONResponse(status_code=200, content=result)
 
@@ -166,7 +171,7 @@ async def receive_task(request: Request) -> JSONResponse:
     queue = await _get_or_create_queue(ctx.userName, ctx.deviceId)
     await queue.put(
         _execute_and_callback(
-            daemon, parsed, ctx, prev_dialogue_id, agent_id
+            daemon, parsed, ctx, prev_dialogue_id, agent_id, provider
         )
     )
     # 如果没有正在运行的 executor，启动一个
@@ -177,22 +182,69 @@ async def receive_task(request: Request) -> JSONResponse:
     )
 
 
+async def _extract_user_images(parsed: dict) -> str:
+    """从 AccessCtrl 的 UserInputObject 中提取用户附加图片的 data URI 列表（JSON 编码）。
+
+    格式对齐 coremind-bridge.md §3.2 / mock 服务器构造：
+    ``{"code":200101,"data":{"content":[{"type":"image","data":<url>}]}}``。
+
+    仅收集 ``data:`` 前缀的内联图片（blob URL 跨进程无法恢复，落库无意义）；
+    无图片返回 ``"[]"``。供 save_dialogue 持久化用户图片。
+    """
+    uio = parsed.get("data", {}).get("userInputObject", "")
+    if not isinstance(uio, str) or not uio:
+        return "[]"
+    try:
+        payload = json.loads(uio)
+        items = payload.get("data", {}).get("content", [])
+    except (ValueError, AttributeError):
+        return "[]"
+    images: list[str] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        if it.get("type") == "image":
+            data = it.get("data", "")
+            if isinstance(data, str) and data.startswith("data:"):
+                images.append(data)
+    return json.dumps(images, ensure_ascii=False)
+
+
 async def _execute_and_callback(
     daemon: DaemonClient,
     parsed: dict,
     ctx: HaContext,
     prev_dialogue_id: str,
     agent_id: str,
+    provider: SessionProvider | None = None,
 ) -> dict[str, Any]:
     """执行 agentflowd 任务并回调上游。
 
     复用 app.state.daemon_client（长连接 WebSocket），对标 coremind_internal.py
     的 agent_execute + wait_for_response 循环。
+
+    持久化：与 chat 链路同源——会话键为 userName + clientSessionId
+    （sidecar 模拟页前端选的 user_id/client_id 经 mock → sidecar → 本端点 header），
+    任务开始时 get_or_create_session（失败也能在会话列表看到），成功时 save_dialogue。
     """
     task_id = ctx.parentTaskID
     user_input = parsed.get("data", {}).get("userInputText", "")
     user_id = ctx.userName or "sysagent-user"
     client_id = ctx.deviceId or "sysagent"
+
+    # 持久化会话（失败时也创建，列表可见；成功才存对话）
+    bsession: dict | None = None
+    if provider is not None:
+        try:
+            bsession = await provider.get_or_create_session(
+                ctx.userName or "sysagent-user",
+                ctx.clientSessionId or ctx.deviceId or "sysagent",
+            )
+        except Exception as exc:  # noqa: BLE101
+            logger.warning(
+                "fulfill_task.session_failed taskID=%s: %s (proceeding without persistence)",
+                task_id, exc,
+            )
 
     # dialogue_id：复用旧对话 ID，否则生成新的
     dialogue_id = prev_dialogue_id or (
@@ -245,6 +297,23 @@ async def _execute_and_callback(
             "fulfill_task.complete taskID=%s dialogue=%s elapsed=%.1fs content_len=%d chunks=%d",
             task_id, dialogue_id, elapsed, len(full_content), len(chunks),
         )
+
+        # 持久化对话（与 chat 链路同源：同一会话键下 save_dialogue）
+        if provider is not None and bsession is not None:
+            try:
+                await provider.save_dialogue(
+                    session_id=bsession["id"],
+                    user_input=user_input,
+                    agent_response=full_content,
+                    dialogue_id=dialogue_id,
+                    agent_name=agent_id,
+                    images=await _extract_user_images(parsed),
+                )
+            except Exception as exc:  # noqa: BLE101
+                logger.warning(
+                    "fulfill_task.persist_failed taskID=%s dialogue=%s: %s",
+                    task_id, dialogue_id, exc,
+                )
 
         # 回调上游：先 UserOutput，再 TaskStatusReport(code=200)
         if ctx.sysAgentEntity:

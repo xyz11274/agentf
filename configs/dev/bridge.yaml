@@ -57,7 +57,11 @@ artifacts_storage_dir: ""
 artifact_compress_enabled: true
 
 # ── 文件路径 ──────────────────────────────────────────────────────
-agent_packages_dir: "examples/agent"
+# 三态模型（详见 docs/design/features/agent-package/agent-package-three-state.md）：
+#   agent_packages_dir  = 固化态②（纯净静态资产，不含运行时数据）
+#   agent_workspace_dir = 运行实例③（② 的拷贝 + 运行时数据，daemon load 这里）
+agent_packages_dir: "resource/agent-packages"
+agent_workspace_dir: "examples/agent"
 skill_hub_dir: "resource/skill_hub"
 agent_template_dir: "frontend/bridge/templates/agent_template"
 # ── 日志与超时 ────────────────────────────────────────────────────

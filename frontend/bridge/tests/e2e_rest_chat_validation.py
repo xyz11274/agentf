@@ -11,9 +11,13 @@ from __future__ import annotations
 import json, os, signal, socket, subprocess, sys, time, uuid
 from pathlib import Path
 
+# 三态模型（删 examples 不崩不变量）：独立脚本运行前自动从 ② 固化态重建 ③。
+# 脚本所在目录（tests/）在 sys.path[0]，可直接 import e2e_helpers。
+from e2e_helpers import ensure_outfit_agent_3 as _ensure_3  # noqa: E402
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DAEMON_BINARY = PROJECT_ROOT / "build" / "agentflowd"
-OUTFIT_AGENT = str(PROJECT_ROOT / "examples" / "agent" / "outfit-assistant")
+OUTFIT_AGENT = str(_ensure_3())
 BRIDGE_DIR = PROJECT_ROOT / "frontend" / "bridge"
 
 PASS, FAIL = 0, 0

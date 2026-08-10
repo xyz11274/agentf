@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS dialogue_rounds (
     agent_response TEXT NOT NULL,
     agent_name TEXT DEFAULT '',
     artifacts TEXT DEFAULT '[]',
+    images TEXT DEFAULT '[]',
     created_at TEXT NOT NULL,
     FOREIGN KEY (session_id) REFERENCES sessions(id)
 );
@@ -107,6 +108,14 @@ class LocalSessionProvider(SessionProvider):
             conn.execute("PRAGMA journal_mode=WAL")
         if not self._init_done:
             conn.executescript(_SCHEMA)
+            # 存量库迁移：旧版 dialogue_rounds 无 images 列，ALTER 补上
+            # （CREATE TABLE IF NOT EXISTS 不会给已存在的表加列）
+            try:
+                conn.execute(
+                    "ALTER TABLE dialogue_rounds ADD COLUMN images TEXT DEFAULT '[]'"
+                )
+            except sqlite3.OperationalError:
+                pass  # 列已存在（新库）
             self._init_done = True
         return conn
 
@@ -265,6 +274,7 @@ class LocalSessionProvider(SessionProvider):
         user_input: str, agent_response: str,
         dialogue_id: str, agent_name: str = "",
         artifacts: str = "[]",
+        images: str = "[]",
     ) -> str:
         now = _now_iso()
         try:
@@ -287,9 +297,10 @@ class LocalSessionProvider(SessionProvider):
                 conn.execute(
                     "INSERT INTO dialogue_rounds"
                     " (session_id, dialogue_id, user_input, agent_response,"
-                    "  agent_name, artifacts, created_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (session_id, dialogue_id, user_input, agent_response, agent_name, artifacts, now),
+                    "  agent_name, artifacts, images, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (session_id, dialogue_id, user_input, agent_response,
+                     agent_name, artifacts, images, now),
                 )
                 logger.info("local_provider.save_dialogue ok id=%s dialogue=%s input_len=%d resp_len=%d",
                             session_id, dialogue_id, len(user_input), len(agent_response))
@@ -313,7 +324,7 @@ class LocalSessionProvider(SessionProvider):
         row_cap = max(1, math.ceil(limit / 2))
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT user_input, agent_response, agent_name, artifacts, dialogue_id, created_at"
+                "SELECT user_input, agent_response, agent_name, artifacts, images, dialogue_id, created_at"
                 " FROM dialogue_rounds WHERE session_id=?"
                 " ORDER BY created_at ASC LIMIT ?",
                 (session_id, row_cap),
@@ -321,9 +332,11 @@ class LocalSessionProvider(SessionProvider):
         messages: list[dict[str, Any]] = []
         for r in rows:
             artifacts = json.loads(r["artifacts"]) if r["artifacts"] else []
+            images = json.loads(r["images"]) if r["images"] else []
             messages.append({
                 "role": "user",
                 "content": r["user_input"],
+                "images": images,
                 "dialogue_id": r["dialogue_id"],
                 "artifacts": [],
                 "created_at": r["created_at"],

@@ -481,7 +481,11 @@ class TestSseStreamingEndpoint:
         # The first chunk now includes _dialogue_id (used for trace filtering).
         assert events[0]["choices"] == [{"message": {"content": "Hello"}, "index": 0}]
         assert "_dialogue_id" in events[0]
-        assert events[1] == {"choices": [{"message": {"content": " world"}, "index": 0}]}
+        # 第二个 chunk final=True → SSE 序列化按 §3.2 注入 _final（与 WebSocket 路径统一）
+        assert events[1] == {
+            "choices": [{"message": {"content": " world"}, "index": 0}],
+            "_final": True,
+        }
         assert events[2] == "[DONE]"
 
     def test_streaming_single_final_chunk(self, mock_daemon: AsyncMock) -> None:

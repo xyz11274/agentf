@@ -113,6 +113,10 @@ struct DaemonConfig {
     // 默认与 E2B 基础镜像一致（/home/user/workspace）
     // 可通过 AF_SANDBOX_E2B_REMOTE_WORKSPACE_DIR 环境变量覆盖
     std::string e2b_remote_workspace_dir = "/home/user/workspace";
+    // agent 级快照映射持久化文件路径（agent_id → snapshotID + version/hash）
+    // 默认 data/template_registry.json（与 sessions.db 同目录，运行时状态归 data 非 logs）
+    // 可通过 AF_SANDBOX_E2B_TEMPLATE_MAP_PATH 环境变量覆盖
+    std::string e2b_template_map_path = "data/template_registry.json";
 
     // 宿主机上 agent package 的 harness/skills 路径，用于 DockerSandbox/E2B skills-sync
     // 由 daemon 启动时根据 --package 路径自动推导（package_path + "/harness/skills"）

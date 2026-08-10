@@ -180,11 +180,12 @@ class TestBridgeLocalFS:
         app.include_router(artifacts.router)
         # 存储目录为空，模拟无存储服务
         artifacts._ARTIFACTS_STORAGE_DIR = tmp_path / "empty_storage"
-        # 在本地文件系统创建文件（通过 agent_packages_dir 配置）
-        pkg_root = tmp_path / "packages"
-        pkg_root.mkdir()
-        artifacts.settings.agent_packages_dir = str(pkg_root)
-        local_file = pkg_root / "test-pkg/outputs/look.png"
+        # 三态模型：产物属运行态数据，落点在 ③ workspace 实例目录
+        # _resolve_artifact 主路径从 agent_workspace_path 解析，故 fixture 设置 ③
+        workspace_root = tmp_path / "workspace"
+        workspace_root.mkdir()
+        artifacts.settings.agent_workspace_dir = str(workspace_root)
+        local_file = workspace_root / "test-pkg/outputs/look.png"
         local_file.parent.mkdir(parents=True, exist_ok=True)
         local_file.write_bytes(b"local-fallback-content")
         return app

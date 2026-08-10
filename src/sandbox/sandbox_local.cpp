@@ -52,7 +52,9 @@ LocalSandbox::LocalSandbox(const SandboxKey& owner,
       workdir_(workdir_root + "/" + sandbox_id_),
       state_(SandboxState::RUNNING),
       output_max_bytes_(output_max_bytes),
-      server_pid_(-1) {
+      server_pid_(-1),
+      http_server_path_(sandbox_http_server_path),
+      http_server_port_(sandbox_http_port) {
   // 创建 workdir（对齐 B6：按 sandbox_id 隔离工作区）
   std::error_code ec;
   fs::create_directories(workdir_, ec);
@@ -327,6 +329,44 @@ void LocalSandbox::destroy() {
     server_pid_ = -1;
   }
   // workdir 不清理——快照兜底（B11/I-1），由 SandboxSnapshots 负责
+}
+
+void LocalSandbox::pause() {
+  // B21：RUNNING→STOPPED 可逆（暂停/恢复）；B7 幂等
+  if (state_ == SandboxState::STOPPED || state_ == SandboxState::RECYCLING) {
+    return;  // 已暂停/已销毁，无操作
+  }
+  state_ = SandboxState::STOPPED;
+
+  if (server_pid_ > 0) {
+    // 与 destroy() 相同的 terminate 策略：SIGTERM → 等 1s → SIGKILL
+    kill(server_pid_, SIGTERM);
+    int status;
+    pid_t waited = waitpid(server_pid_, &status, WNOHANG);
+    if (waited == 0) {
+      usleep(1000000);
+      kill(server_pid_, SIGKILL);
+      waitpid(server_pid_, &status, 0);
+    }
+    server_pid_ = -1;
+  }
+  // workdir 保留（B21 可逆，resume 后恢复同一 workdir）
+  mark_active();  // FR-009：暂停也是活动（避免 GC 立即回收）
+}
+
+void LocalSandbox::resume() {
+  // B21：STOPPED→RUNNING 可逆；B7 幂等
+  if (state_ != SandboxState::STOPPED) {
+    return;  // 非暂停态无操作（RUNNING 或 RECYCLING）
+  }
+
+  // 重新拉起 sandbox_http_server.py（端口复用 http_server_port_，0=自动分配）
+  int port = launch_http_server(http_server_path_, http_server_port_);
+  endpoint_ = "http://127.0.0.1:" + std::to_string(port);  // B17：只监听 loopback
+  wait_for_server_ready(port);
+
+  state_ = SandboxState::RUNNING;
+  mark_active();  // FR-009：恢复后重置活跃时间戳
 }
 
 }  // namespace sandbox

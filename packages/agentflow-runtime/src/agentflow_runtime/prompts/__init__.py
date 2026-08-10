@@ -7,7 +7,8 @@ and fallback texts live here instead of being scattered across node scripts.
 Usage::
 
     from prompts import PROTOCOL_TEMPLATE, SKILL_FALLBACK_SYSTEM
-    messages = [{"role": "system", "content": PROTOCOL_TEMPLATE.format(available_skills="...")}]
+    messages = [{"role": "system", "content": PROTOCOL_TEMPLATE.format(
+        available_skills="...", current_time="2026-08-06T00:00:00Z")}]
 """
 
 from prompts.coordinator import (
@@ -30,9 +31,11 @@ from prompts.common import (
 
 from prompts.skill import (
     SKILL_ARTIFACT_AUTO_COLLECT_PROMPT,
+    SKILL_ASK_USER_FALLBACK_PROMPT,
     SKILL_FALLBACK_SYSTEM,
     SKILL_NETWORK_FAILURE_PROMPT,
     SKILL_NETWORK_RESOURCE_PROMPT,
+    SKILL_REPORT_EXECUTION_PROMPT,
     SKILL_SECTION_TEMPLATE,
     SKILL_NOT_FOUND_TEMPLATE,
     SKILL_RECOVERY_PROMPT,
@@ -55,9 +58,11 @@ __all__ = [
     "ARTIFACT_DOWNLOAD_TEMPLATE",
     # skill
     "SKILL_ARTIFACT_AUTO_COLLECT_PROMPT",
+    "SKILL_ASK_USER_FALLBACK_PROMPT",
     "SKILL_FALLBACK_SYSTEM",
     "SKILL_NETWORK_FAILURE_PROMPT",
     "SKILL_NETWORK_RESOURCE_PROMPT",
+    "SKILL_REPORT_EXECUTION_PROMPT",
     "SKILL_SECTION_TEMPLATE",
     "SKILL_NOT_FOUND_TEMPLATE",
     "SKILL_RECOVERY_PROMPT",

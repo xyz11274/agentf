@@ -10,15 +10,15 @@ from fastapi.testclient import TestClient
 
 from routes import artifacts
 
-
 JPEG_BYTES = b"\xff\xd8\xff\xe0" + b"fixture-jpeg-content"
 
 
 @pytest.fixture
 def artifact_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    root = tmp_path / "packages"
+    # 三态模型：artifacts 读取根在 ③ workspace 实例（agent_workspace_path）
+    root = tmp_path / "workspace"
     root.mkdir()
-    monkeypatch.setattr(artifacts.settings, "agent_packages_dir", str(root))
+    monkeypatch.setattr(artifacts.settings, "agent_workspace_dir", str(root))
     return root
 
 
@@ -352,3 +352,132 @@ def test_pptx_in_package_root_is_served(client: TestClient, artifact_root: Path)
 
     assert response.status_code == 200
     assert b"valid-pptx-content" in response.content
+
+
+# ═══════════════════════════════════════════════════════════════════
+# _resolve_artifact fallback 路径覆盖（D-2 修正）
+# 审查时漏读调用点误判 fallback 为死代码；实为活路径——处理无 session_id 的 legacy artifact_id。
+# 此处补测试锁住 fallback 行为，防未来误删。
+# ═══════════════════════════════════════════════════════════════════
+
+
+def test_resolve_artifact_primary_path_flat_layout(
+    artifact_root: Path,
+) -> None:
+    """主路径：artifact_id 无 session_id 段（3 段：agent/file_subpath…），
+
+    直接命中 ③ workspace 扁平产物布局 `{agent}/{outputs}/{file}`。
+    业务规则：产物可按 agent_id/relative_path 形式直接访问，不强求 session_id。
+    """
+    from routes.artifacts import _resolve_artifact
+
+    # ③ workspace 扁平布局：outfit-assistant/outputs/look.png（3 段，无 session_id）
+    flat = artifact_root / "outfit-assistant" / "outputs" / "look.png"
+    flat.parent.mkdir(parents=True)
+    flat.write_bytes(JPEG_BYTES)
+
+    # artifact_id = outfit-assistant/outputs/look.png（3 段）
+    # agent_pkg_name = outfit-assistant（= artifact_id.split("/")[0] = parts[0]）
+    resolved = _resolve_artifact(
+        "outfit-assistant/outputs/look.png",
+        agent_pkg_name="outfit-assistant",
+    )
+    assert resolved is not None
+    assert resolved.is_file()
+    assert resolved.read_bytes() == JPEG_BYTES
+
+
+def test_resolve_artifact_fallback_strip_session_id(
+    artifact_root: Path,
+) -> None:
+    """Fallback 1：artifact_id 带 session_id（4 段），但 ③ 是扁平布局（无 session_id），
+
+    strip 第二段后命中主路径。
+    业务规则：daemon 产物落 ③ 是扁平的（{agent}/outputs/...），但 artifact_id 可能带
+    session_id（{agent}/{session}/outputs/...）——strip 后应能命中。
+    """
+    from routes.artifacts import _resolve_artifact
+
+    # ③ 扁平布局（无 session_id）
+    flat = artifact_root / "outfit-assistant" / "outputs" / "look.png"
+    flat.parent.mkdir(parents=True)
+    flat.write_bytes(JPEG_BYTES)
+
+    # artifact_id 带 session_id（4 段）：outfit-assistant/user_1_cli_2/outputs/look.png
+    # parts[0] = outfit-assistant = agent_pkg_name → len(parts)>=3 成立 → strip parts[1]
+    # → outfit-assistant/outputs/look.png（3 段）→ �命中 ③ 扁平布局
+    resolved = _resolve_artifact(
+        "outfit-assistant/user_1_cli_2/outputs/look.png",
+        agent_pkg_name="outfit-assistant",
+    )
+    assert resolved is not None
+    assert resolved.is_file()
+    assert resolved.read_bytes() == JPEG_BYTES
+
+
+def test_resolve_artifact_fallback_not_triggered_when_flat_exists(
+    artifact_root: Path,
+) -> None:
+    """主路径优先：③ 扁平布局已存在时，不走 fallback strip。
+
+    业务规则：strip 是兜底，不覆盖主路径命中。
+    """
+    from routes.artifacts import _resolve_artifact
+
+    # ③ 同时有扁平（无 session）和带 session 的布局
+    flat = artifact_root / "outfit-assistant" / "outputs" / "look.png"
+    flat.parent.mkdir(parents=True)
+    flat.write_bytes(JPEG_BYTES)
+
+    with_session = artifact_root / "outfit-assistant" / "user_1_cli_2" / "outputs" / "look.png"
+    with_session.parent.mkdir(parents=True)
+    with_session.write_bytes(b"different-content")
+
+    # artifact_id 带 session_id（4 段），但主路径（带 session）已命中 → 不 strip
+    resolved = _resolve_artifact(
+        "outfit-assistant/user_1_cli_2/outputs/look.png",
+        agent_pkg_name="outfit-assistant",
+    )
+    assert resolved is not None
+    assert resolved.is_file()
+    # 主路径命中带 session 的文件，不是 strip 后的扁平文件
+    assert resolved.read_bytes() == b"different-content"
+    assert resolved != flat.resolve()
+
+
+def test_resolve_artifact_returns_none_when_not_found(
+    artifact_root: Path,
+) -> None:
+    """文件不存在时返回 None（或非文件 Path），不抛异常。
+
+    业务规则：404 由调用方决定，_resolve_artifact 只做解析。
+    """
+    from routes.artifacts import _resolve_artifact
+
+    resolved = _resolve_artifact(
+        "outfit-assistant/outputs/nonexistent.png",
+        agent_pkg_name="outfit-assistant",
+    )
+    # 主路径不命中，fallback strip 后也不命中 → 返回 None 或非文件 Path
+    assert resolved is None or not resolved.is_file()
+
+
+def test_resolve_artifact_traversal_blocked_returns_none(
+    artifact_root: Path,
+) -> None:
+    """路径越界 ③ 根时，主路径返回 None 并记日志，不抛异常。
+
+    业务规则：traversal 防护在 _resolve_artifact 内，越界不命中文件。
+    """
+    from routes.artifacts import _resolve_artifact
+
+    # 越界路径：artifact_id 含 .. 逃逸 ③ 根
+    # 注：调用方（get_artifact_file）会先做 traversal 校验抛 403，
+    # _resolve_artifact 内部用 relative_to 兜底，越界时 candidate=None
+    resolved = _resolve_artifact(
+        "../../../../etc/passwd",
+        agent_pkg_name="",
+    )
+    # parts[0] = ".." != agent_pkg_name("") → fallback 不触发；
+    # 主路径 relative_to 校验失败 → candidate=None
+    assert resolved is None or not resolved.is_file()

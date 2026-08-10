@@ -27,8 +27,15 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DAEMON_BINARY = PROJECT_ROOT / "build" / "agentflowd"
+
+# 三态模型（agent-package-three-state.md §2.1）：
+#   ② 固化态 = resource/agent-packages/outfit-assistant/（纯净静态资产 + .env）
+#   ③ 运行态 = examples/agent/outfit-assistant/（② 拷贝 + 运行时数据 .venv/outputs/…）
+# 不变量（用户拍板 2026-08-07）：删 examples/agent/ 不应影响功能/测试/脚本——
+# 测试首次用时自动从 ② 同步重建 ③，daemon CLI 仍加载 ③ 路径。
 OUTFIT_AGENT = PROJECT_ROOT / "examples" / "agent" / "outfit-assistant"
 OUTFIT_AGENT_STR = str(OUTFIT_AGENT)  # absolute string path for daemon CLI
+OUTFIT_AGENT_2 = PROJECT_ROOT / "resource" / "agent-packages" / "outfit-assistant"
 LLM_REPLY = "你好，我是服装搭配助手，很高兴为您服务！"
 
 # 测试 daemon/bridge 日志统一落到 logs/tests/（项目根下，gitignored）
@@ -38,6 +45,52 @@ _TESTS_LOG_ROOT = PROJECT_ROOT / "logs" / "tests"
 
 # 测试 daemon sandbox 配置路径（同 daemon 默认 fallback 路径）
 _TEST_SANDBOX_CONFIG = PROJECT_ROOT / "configs" / "test" / "agentflowd.json"
+
+
+def _rsync_2_to_3_if_needed(target_3: Path = OUTFIT_AGENT, source_2: Path = OUTFIT_AGENT_2) -> bool:
+    """删 examples 不崩不变量：③ 缺失或 ② 比 ③ 新时自动 rsync ②→③。
+
+    排除运行时数据（.venv/outputs/workspace/.agentfoundry/preferences.json/manifest.jsonc/dist），
+    保留 ③ 已有运行时数据。幂等（rsync --update 仅传新/改文件）。
+    返回 True 表示发生了同步，False 表示 ③ 已就绪跳过。
+
+    设计：agent-package-three-state.md §5（与 start_daemon.sh / start_dev.sh /
+    start_production.sh 的 _sync_②_to_③ 同源逻辑，单一真相源）。
+    """
+    import shutil
+    if not source_2.is_dir():
+        return False  # ② 缺失由调用方判定（② 是权威源，缺则无法重建）
+    need_sync = (
+        not target_3.is_dir()
+        or not (target_3 / "agent.json").is_file()
+        or source_2.stat().st_mtime > target_3.stat().st_mtime
+    )
+    if not need_sync:
+        return False
+    target_3.mkdir(parents=True, exist_ok=True)
+    _EXCLUDES = {
+        ".venv", "outputs", "workspace", ".agentfoundry",
+        "preferences.json", "manifest.jsonc", "dist",
+    }
+    shutil.copytree(
+        source_2, target_3, dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns(*_EXCLUDES),
+    )
+    return True
+
+
+def ensure_outfit_agent_3() -> Path:
+    """确保 ③ 运行实例就绪——删 examples 后测试首次用时自动从 ② 重建。
+
+    返回 OUTFIT_AGENT（③ 路径）。② 缺则 raise（② 是权威源，缺即无法重建）。
+    """
+    if not OUTFIT_AGENT_2.is_dir():
+        raise RuntimeError(
+            f"② 固化态缺失，无法重建 ③: {OUTFIT_AGENT_2} "
+            "(resource/agent-packages/outfit-assistant 应存在)"
+        )
+    _rsync_2_to_3_if_needed()
+    return OUTFIT_AGENT
 
 
 def _load_sandbox_mode() -> str:

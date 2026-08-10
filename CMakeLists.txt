@@ -439,6 +439,7 @@ add_executable(agentflowd
     ${AGENTFLOW_SOURCE_DIR}/daemon/session_manager.cpp
     ${AGENTFLOW_SOURCE_DIR}/daemon/sandbox_lifecycle.cpp
     ${AGENTFLOW_SOURCE_DIR}/daemon/sandbox_snapshots.cpp
+    ${AGENTFLOW_SOURCE_DIR}/daemon/template_registry.cpp
     ${AGENTFLOW_SOURCE_DIR}/daemon/artifact_store.cpp
     # Sandbox 沙箱机制移植（SDK 层）
     ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_ignore.cpp
@@ -833,6 +834,7 @@ if(AGENTFLOW_BUILD_TESTS)
       ${AGENTFLOW_SOURCE_DIR}/daemon/session_manager.cpp
       ${AGENTFLOW_SOURCE_DIR}/daemon/sandbox_lifecycle.cpp
       ${AGENTFLOW_SOURCE_DIR}/daemon/sandbox_snapshots.cpp
+      ${AGENTFLOW_SOURCE_DIR}/daemon/template_registry.cpp
       ${AGENTFLOW_SOURCE_DIR}/daemon/artifact_store.cpp
       # Sandbox SDK 层
       ${AGENTFLOW_SOURCE_DIR}/sandbox/sandbox_ignore.cpp

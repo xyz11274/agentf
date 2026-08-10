@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-from agentflow_runtime.llm_call import (
+from agentflow_runtime.compaction import (
     compress_messages,
     estimate_message_tokens,
 )

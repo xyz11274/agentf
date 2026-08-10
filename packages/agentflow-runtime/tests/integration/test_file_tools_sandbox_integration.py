@@ -32,11 +32,17 @@ def _find_free_port() -> int:
 
 
 @pytest.fixture
-def sandbox_server():
-    """拉起 sandbox_http_server.py，yield (endpoint, workdir)，销毁子进程。"""
+def sandbox_server(monkeypatch: pytest.MonkeyPatch):
+    """拉起 sandbox_http_server.py，yield (endpoint, workdir)，销毁子进程。
+
+    chdir(workdir)：默认无 AF_SANDBOX_MODE 时工具走 HostExecutor，
+    用 os.getcwd() 决定落点——不 chdir 会把测试文件写进 pytest cwd
+    （包根目录）造成残留，且 workdir teardown 清理不到。
+    """
     port = _find_free_port()
     workdir = Path(__file__).resolve().parent / "_sandbox_workdir_test"
     workdir.mkdir(exist_ok=True)
+    monkeypatch.chdir(workdir)
     proc = subprocess.Popen(
         [sys.executable, _SERVER, "--port", str(port), "--host", "127.0.0.1"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,

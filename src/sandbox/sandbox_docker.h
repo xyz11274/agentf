@@ -54,6 +54,11 @@ class DockerSandbox : public Sandbox {
         std::chrono::steady_clock::now().time_since_epoch()).count();
   }
   void snapshot() override {}  // FR-012：no-op，由 SandboxLifecycle 通过 ArtifactStore 处理
+  // pause：docker pause（挂起容器内进程，不停止容器——避免触发 --rm 自动删除）
+  // resume：docker unpause（恢复容器内进程）
+  // 幂等（B7）：已 STOPPED 时 pause 无操作；已 RUNNING 时 resume 无操作
+  void pause() override;
+  void resume() override;
 
  private:
   SandboxKey    owner_;

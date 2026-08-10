@@ -375,7 +375,7 @@ def test_skill_dir_replaced_with_sandbox_path_in_e2b_mode(monkeypatch):
     """TC-SBOX-ENV-007：sandbox_mode=e2b → ${SKILL_DIR} 替换为 /home/user/workspace/...
 
     业务规则：沙箱透明性——LLM 看到的 SKILL_DIR 必须是沙箱内它能直接用的绝对路径，
-    而非宿主路径。否则 LLM 拼命令含宿主路径 /Users/archer/...，e2b.py 翻译回沙箱
+    而非宿主路径。否则 LLM 拼命令含宿主路径 /Users/xxx/...，e2b.py 翻译回沙箱
     路径后目标在沙箱里也不存在（agent 包按 harness/skills 结构落盘到
     /home/user/workspace/harness/skills/...）。
 

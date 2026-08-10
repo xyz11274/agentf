@@ -68,7 +68,10 @@ artifact_compress_enabled: true
 
 # ── 文件路径 ──────────────────────────────────────────────────────
 # 相对路径基于项目根目录解析
-agent_packages_dir: "examples/agent"
+# 三态模型（agent-package-three-state.md §2.1）：固化态② vs 运行实例③ 分离，
+# 与 configs/{dev,test,prod}/bridge.yaml 保持一致——单一真相源（F4/I-5）。
+agent_packages_dir: "resource/agent-packages"
+agent_workspace_dir: "examples/agent"
 skill_hub_dir: "resource/skill_hub"
 agent_template_dir: "templates"
 

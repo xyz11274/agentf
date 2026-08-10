@@ -37,7 +37,8 @@ _MIME_TO_EXT = {"png": "png", "jpeg": "jpg", "jpg": "jpg", "webp": "webp", "gif"
 def _compute_upload_dir(agent_id: str, user_id: str, client_id: str) -> Path:
     """Return the per-session workspace upload directory.
 
-    Path: ``{agent_packages_path}/{agent_id}/workspace/{user_id}_{client_id}/upload/``
+    Path: ``{agent_workspace_path}/{agent_id}/workspace/{user_id}_{client_id}/upload/``
+    （③ workspace 实例内；三态模型见 agent-package-three-state.md）
 
     Raises ``ValueError`` if ``user_id`` or ``client_id`` is empty — session
     context is required for user-data isolation. No backward-compatible fallback.
@@ -47,7 +48,7 @@ def _compute_upload_dir(agent_id: str, user_id: str, client_id: str) -> Path:
             "session-level upload path requires user_id and client_id, "
             f"got user_id={user_id!r} client_id={client_id!r}"
         )
-    return settings.agent_packages_path / agent_id / "workspace" / f"{user_id}_{client_id}" / "upload"
+    return settings.agent_workspace_path / agent_id / "workspace" / f"{user_id}_{client_id}" / "upload"
 
 
 def _land_image(data_url: str, upload_dir: Path) -> str | None:
@@ -155,8 +156,8 @@ def prepare_content_for_daemon(
     parts = normalize_content(content)
     if agent_id:
         upload_dir = _compute_upload_dir(agent_id, user_id, client_id)
-        # agent_root = {agent_packages_path}/{agent_id}
-        agent_root = settings.agent_packages_path / agent_id
+        # agent_root = {agent_workspace_path}/{agent_id}（③ workspace 实例，三态模型）
+        agent_root = settings.agent_workspace_path / agent_id
         parts = flatten_to_text(parts, upload_dir, agent_root)
     # Return plain text (no JSON array) — daemon sets this as AF_INPUT
     # and coordinator reads it as the user message.

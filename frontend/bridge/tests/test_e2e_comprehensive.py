@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -152,9 +153,13 @@ class TestSyncRest:
         assert data["error"] is None
 
     async def test_sync_rest_includes_artifacts(
-        self, client: AsyncClient, mock_daemon: _MockDaemon
+        self, client: AsyncClient, mock_daemon: _MockDaemon, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """同步响应携带 artifacts 字段。"""
+        # 显式锁定 link+url 模式（test bridge.yaml 默认 placeholder+base64，
+        # 与 test_chat_artifact_contract.py 惯例一致——产物输出模式由测试显式指定）
+        monkeypatch.setattr(settings, "artifact_reference", "link")
+        monkeypatch.setattr(settings, "artifact_payload", "url")
         content = "方案已生成\n\n## 生成产物\n\n![生成图片 1](/api/artifacts/test/files/look.png)"
         mock_daemon.set_responses([
             {"content": content, "final": True, "type": "text", "session_id": "ses_001"},
@@ -439,9 +444,20 @@ class TestPackageLifecycle:
         assert len(data) > 0
 
     async def test_agent_load(
-        self, client: AsyncClient, mock_daemon: _MockDaemon
+        self, client: AsyncClient, mock_daemon: _MockDaemon,
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """加载 agent。"""
+        # 三态模型（agent-package-three-state.md）：load 前 _sync_agent_package
+        # 从 ② agent_packages_dir 拷贝到 ③ agent_workspace_dir。测试环境无
+        # test-agent 固化态包，monkeypatch 到临时目录并创建最小包，避免 404。
+        pkg_dir = tmp_path / "packages"
+        (pkg_dir / "test-agent").mkdir(parents=True)
+        (pkg_dir / "test-agent" / "package.json").write_text(
+            '{"name": "test-agent"}', encoding="utf-8",
+        )
+        monkeypatch.setattr(settings, "agent_packages_dir", str(pkg_dir))
+        monkeypatch.setattr(settings, "agent_workspace_dir", str(tmp_path / "workspace"))
         resp = await client.post(
             "/api/agents/test-agent/load",
             json={},

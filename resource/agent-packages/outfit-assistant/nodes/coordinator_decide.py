@@ -1,0 +1,6 @@
+# Auto-generated entry file — do not modify
+# The actual implementation lives in the pip package.
+import sys as _sys
+from agentflow_runtime import coordinator_decide as _m; import os as _os; _m.__dict__['AGENT_PACKAGE_DIR'] = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))); _m.__dict__['AGENT_MD_PATH'] = _os.path.join(_m.__dict__['AGENT_PACKAGE_DIR'], 'agent.md'); _m.__dict__['NODES_DIR'] = _os.path.dirname(_os.path.abspath(__file__)); _is_main = __name__ == '__main__'; globals().update(_m.__dict__)
+if _is_main:
+    execute()

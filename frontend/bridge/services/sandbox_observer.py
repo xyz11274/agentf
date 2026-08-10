@@ -97,7 +97,68 @@ class ExecResult:
         return dataclasses.asdict(self)
 
 
-# ── 异常类型（对齐 L4 契约 §4）────────────────────────────────────
+@dataclass
+class PauseResult:
+    """沙箱暂停结果（对齐 daemon sandbox.pause RPC 响应）。"""
+
+    sandbox_id: str
+    paused: bool = False  # false = 已暂停，幂等命中
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class ResumeResult:
+    """沙箱恢复结果（对齐 daemon sandbox.resume RPC 响应）。"""
+
+    sandbox_id: str
+    resumed: bool = False  # false = 已运行，幂等命中
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class SnapshotResult:
+    """快照实体（对齐 daemon sandbox.snapshot / snapshot_list RPC 响应）。"""
+
+    snapshot_id: str
+    sandbox_id: str
+    created_at: int | None = None  # ms 时间戳
+    store_path: str | None = None  # 宿主机持久化路径（E2B 模式为空）
+    size_bytes: int | None = None
+    sandbox_mode: str | None = None  # ""（Local/Docker）/ "e2b"
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class SnapshotDeleteResult:
+    """快照单条删除结果（对齐 daemon sandbox.snapshot_delete RPC 响应）。"""
+
+    snapshot_id: str
+    deleted: bool = False
+    already_gone: bool = False  # 幂等命中（快照不存在）
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclass
+class TemplateResult:
+    """e2b 模板实体（模板创建/列表结果，仅 e2b 模式）。"""
+
+    template_id: str
+    name: str
+    status: str = "ready"  # ready | building | failed
+    cpu_count: int | None = None
+    memory_mb: int | None = None
+    error: str | None = None  # 构建失败原因（status=failed 时）
+
+    def to_dict(self) -> dict[str, Any]:
+        return dataclasses.asdict(self)
 
 
 class SandboxObserverError(Exception):
@@ -124,6 +185,10 @@ class ExecUnavailable(SandboxObserverError):
 
 # 内部 e2b 部署用 path-based 反向代理（cubeproxy），SDK 构造的 hostname 路由
 # （https://{port}-{id}.cube.app）不可达，需重写为 path-based 路由。
+# ⚠️ 必须用裸 IP 而非域名——cubeproxy nginx server_name `_` catch-all 不识别
+# *.cube.app 的 SNI hostname，带域名的请求被 RST。裸 IP 无 SNI 走 catch-all
+# server block，TLS 通过 + path-based 路由生效。
+# 详见 docs/bugs/20260723_e2b_sandbox_envd_connection.md 阶段 2-3。
 _DEFAULT_ENVD_PORT = 49983
 _SANDBOX_TARGET_HOST = "https://218.245.96.148:443"
 
@@ -227,11 +292,9 @@ class E2BProvider:
             sandbox_id = getattr(sb, "sandbox_id", getattr(sb, "id", "unknown"))
             sb_state = getattr(sb, "state", None)
             template = getattr(sb, "template", None)
-            info = {}
-            with contextlib.suppress(Exception):  # noqa: BLE001 — get_info 失败不阻断列表
-                info = sb.get_info() if hasattr(sb, "get_info") else {}
-
-            created_at = self._extract_created_at(info)
+            # CubeSandbox 适配(2026-08-10):优先读 ListedSandbox.started_at 属性,
+            # 不再依赖 get_info()(ListedSandbox 无此方法 → created_at 恒 None)
+            created_at = self._extract_sandbox_created_at(sb)
             age_seconds = self._compute_age(created_at)
             results.append(
                 SandboxInfo(
@@ -284,10 +347,9 @@ class E2BProvider:
         stale: list[dict[str, Any]] = []
         for sb in sandboxes:
             sandbox_id = getattr(sb, "sandbox_id", getattr(sb, "id", "unknown"))
-            info = {}
-            with contextlib.suppress(Exception):  # noqa: BLE001
-                info = sb.get_info() if hasattr(sb, "get_info") else {}
-            created_at = self._extract_created_at(info)
+            # CubeSandbox 适配(2026-08-10):优先直接读 ListedSandbox.started_at 属性,
+            # 不再依赖 get_info()(ListedSandbox 无此方法 → created_at 恒 None → 永删 0 个)
+            created_at = self._extract_sandbox_created_at(sb)
             if created_at and created_at < cutoff:
                 age_minutes = int((datetime.now(UTC) - created_at).total_seconds() // 60)
                 stale.append({"sandbox_id": str(sandbox_id), "age_minutes": age_minutes})
@@ -352,6 +414,205 @@ class E2BProvider:
             duration_ms=None,
         )
 
+    # -- 管理能力（pause/resume/snapshot，SDK 直连通道） -------------
+    def create_template(self, name: str, from_template: str = "base",
+                        cpu_count: int = 2, memory_mb: int = 1024) -> TemplateResult:
+        """构建 e2b 自定义模板（SDK Template.build，同步长耗时）。
+
+        复用 docker/cubesandbox/e2b_template_build.py 的已验证构建逻辑：
+        预装 sandbox_http_server.py + sandbox-setup.sh 到 /opt/sandbox/，
+        设置 SANDBOX_WORKDIR 环境变量，构建后返回 template_id。
+
+        Args:
+            name: 模板名称（唯一，重复构建由 SDK 幂等处理）
+            from_template: 基础模板 ID（默认 base）
+            cpu_count / memory_mb: 资源配额
+        """
+        self._setup_env()
+        self._apply_ssl_patch()
+        try:
+            from e2b import Template
+        except ImportError as exc:
+            raise ProviderError(f"e2b SDK not installed (pip install e2b): {exc}") from exc
+
+        # 读取本地 http_server 与 setup 脚本（对齐 e2b_template_build.py）
+        import sys as _sys
+        from pathlib import Path as _Path
+        script_dir = _Path(__file__).resolve().parents[3] / "docker" / "sandbox"
+        http_server = script_dir / "http_server" / "sandbox_http_server.py"
+        setup_script = script_dir / "sandbox-setup.sh"
+        if not http_server.is_file() or not setup_script.is_file():
+            raise ProviderError(
+                f"template build assets not found: {http_server} / {setup_script}"
+            )
+
+        logger.info(
+            "sandbox_observer.e2b_create_template name=%s from_template=%s cpu=%d mem=%dMB",
+            name, from_template, cpu_count, memory_mb,
+        )
+        try:
+            builder = (
+                Template()
+                .from_template(from_template)
+                .add_files({
+                    "/opt/sandbox/http_server/sandbox_http_server.py": http_server.read_text(),
+                    "/opt/sandbox/sandbox-setup.sh": setup_script.read_text(),
+                })
+                .add_commands([
+                    "mkdir -p /opt/sandbox/tools",
+                    "bash /opt/sandbox/sandbox-setup.sh",
+                ])
+                .env_vars({"SANDBOX_WORKDIR": "/workdir"})
+            )
+            result = Template.build(
+                builder, name,
+                cpu_count=cpu_count, memory_mb=memory_mb,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error("sandbox_observer.e2b_create_template failed name=%s: %s", name, exc)
+            raise ProviderError(f"e2b create_template {name} failed: {exc}") from exc
+
+        template_id = str(getattr(result, "id", getattr(result, "template_id", "")))
+        logger.info("sandbox_observer.e2b_create_template done name=%s template_id=%s", name, template_id)
+        return TemplateResult(template_id=template_id, name=name, status="ready",
+                              cpu_count=cpu_count, memory_mb=memory_mb)
+
+    def list_templates(self) -> list[TemplateResult]:
+        """列出已构建的 e2b 模板。
+
+        e2b SDK 无原生模板列表 API——返回本进程已创建的模板（内存记录，
+        E2BProvider 实例生命周期内）。跨进程/历史模板无法枚举（SDK 限制），
+        由调用方（路由层）在响应中如实标注 warning（I-3 不猜）。
+        """
+        # 简化：SDK 无 list 方法，返回空清单 + 路由层 warning 提示
+        # （本实现不维护模板注册表——模板是平台侧资源，由 e2b 控制台管理）
+        return []
+
+    def delete_snapshot(self, snapshot_id: str) -> SnapshotDeleteResult:
+        """暂停 e2b 沙箱（SDK pause，keep_memory=True 保留内存快照可快速恢复）。"""
+        self._setup_env()
+        self._apply_ssl_patch()
+        Sandbox, _, _ = self._import_sdk()
+        try:
+            sb = self._connect_sandbox(Sandbox, sandbox_id)
+            paused = sb.pause(keep_memory=True)
+            logger.info("sandbox_observer.e2b_pause sandbox_id=%s paused=%s", sandbox_id, paused)
+            return PauseResult(sandbox_id=sandbox_id, paused=bool(paused))
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc).lower()
+            if "404" in msg or "not found" in msg or "already" in msg:
+                # 已暂停/已消失：SDK 幂等语义
+                logger.info("sandbox_observer.e2b_pause idempotent sandbox_id=%s", sandbox_id)
+                return PauseResult(sandbox_id=sandbox_id, paused=False)
+            logger.error("sandbox_observer.e2b_pause failed sandbox_id=%s: %s", sandbox_id, exc)
+            raise ProviderError(f"e2b pause {sandbox_id} failed: {exc}") from exc
+
+    def resume_sandbox(self, sandbox_id: str) -> ResumeResult:
+        """恢复已暂停的 e2b 沙箱（SDK 无显式 resume——connect 唤醒 + is_running 校验）。
+
+        e2b SDK 的 paused sandbox 在重新 connect 时自动唤醒（auto_resume 语义）。
+        若平台不支持唤醒（is_running 仍为 False），抛 ProviderError 含可定位原因。
+        """
+        self._setup_env()
+        self._apply_ssl_patch()
+        Sandbox, _, _ = self._import_sdk()
+        try:
+            sb = self._connect_sandbox(Sandbox, sandbox_id)
+            running = sb.is_running()
+            logger.info("sandbox_observer.e2b_resume sandbox_id=%s running=%s", sandbox_id, running)
+            if not running:
+                raise ProviderError(
+                    f"e2b resume {sandbox_id}: sandbox still not running after connect "
+                    "(platform may not support resume)"
+                )
+            return ResumeResult(sandbox_id=sandbox_id, resumed=True)
+        except ProviderError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc).lower()
+            if "404" in msg or "not found" in msg:
+                logger.warning("sandbox_observer.e2b_resume gone sandbox_id=%s", sandbox_id)
+                raise SandboxNotFound(f"Sandbox {sandbox_id} not found (e2b)") from exc
+            logger.error("sandbox_observer.e2b_resume failed sandbox_id=%s: %s", sandbox_id, exc)
+            raise ProviderError(f"e2b resume {sandbox_id} failed: {exc}") from exc
+
+    def create_snapshot(self, sandbox_id: str) -> SnapshotResult:
+        """为 e2b 沙箱创建平台侧快照（SDK create_snapshot，filesystem + memory）。"""
+        self._setup_env()
+        self._apply_ssl_patch()
+        Sandbox, _, _ = self._import_sdk()
+        try:
+            sb = self._connect_sandbox(Sandbox, sandbox_id)
+            snap = sb.create_snapshot()
+            snap_id = str(getattr(snap, "id", getattr(snap, "snapshot_id", "")))
+            logger.info("sandbox_observer.e2b_create_snapshot sandbox_id=%s snapshot_id=%s",
+                        sandbox_id, snap_id)
+            return SnapshotResult(
+                snapshot_id=snap_id,
+                sandbox_id=sandbox_id,
+                created_at=None,  # e2b SDK 不提供 ms 时间戳（I-3：不猜）
+                store_path=None,  # e2b 平台侧存储，无宿主机路径
+                size_bytes=None,
+                sandbox_mode="e2b",
+            )
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc).lower()
+            if "404" in msg or "not found" in msg:
+                raise SandboxNotFound(f"Sandbox {sandbox_id} not found (e2b)") from exc
+            logger.error("sandbox_observer.e2b_create_snapshot failed sandbox_id=%s: %s", sandbox_id, exc)
+            raise ProviderError(f"e2b create_snapshot {sandbox_id} failed: {exc}") from exc
+
+    def delete_snapshot(self, snapshot_id: str) -> SnapshotDeleteResult:
+        """删除 e2b 平台侧快照（SDK delete_snapshot 类方法，幂等）。"""
+        self._setup_env()
+        self._apply_ssl_patch()
+        Sandbox, _, _ = self._import_sdk()
+        try:
+            deleted = Sandbox.delete_snapshot(snapshot_id)
+            logger.info("sandbox_observer.e2b_delete_snapshot snapshot_id=%s deleted=%s",
+                        snapshot_id, deleted)
+            return SnapshotDeleteResult(snapshot_id=snapshot_id, deleted=bool(deleted), already_gone=not deleted)
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc).lower()
+            if "404" in msg or "not found" in msg:
+                logger.info("sandbox_observer.e2b_delete_snapshot idempotent snapshot_id=%s", snapshot_id)
+                return SnapshotDeleteResult(snapshot_id=snapshot_id, deleted=False, already_gone=True)
+            logger.error("sandbox_observer.e2b_delete_snapshot failed snapshot_id=%s: %s", snapshot_id, exc)
+            raise ProviderError(f"e2b delete_snapshot {snapshot_id} failed: {exc}") from exc
+
+    def list_snapshots(self, sandbox_id: str | None = None) -> list[SnapshotResult]:
+        """列出 e2b 平台侧快照（SDK list_snapshots）。sandbox_id 必填（SDK 实例方法）。"""
+        self._setup_env()
+        self._apply_ssl_patch()
+        Sandbox, _, _ = self._import_sdk()
+        if not sandbox_id:
+            raise ProviderError("e2b list_snapshots requires sandbox_id (SDK instance method)")
+        try:
+            sb = self._connect_sandbox(Sandbox, sandbox_id)
+            paginator = sb.list_snapshots()
+            items = list(paginator) if hasattr(paginator, "__iter__") else []
+            out: list[SnapshotResult] = []
+            for item in items:
+                snap_id = str(getattr(item, "id", getattr(item, "snapshot_id", "")))
+                if not snap_id:
+                    continue
+                out.append(SnapshotResult(
+                    snapshot_id=snap_id,
+                    sandbox_id=sandbox_id,
+                    created_at=None,
+                    store_path=None,
+                    size_bytes=None,
+                    sandbox_mode="e2b",
+                ))
+            logger.info("sandbox_observer.e2b_list_snapshots sandbox_id=%s count=%d", sandbox_id, len(out))
+            return out
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc).lower()
+            if "404" in msg or "not found" in msg:
+                raise SandboxNotFound(f"Sandbox {sandbox_id} not found (e2b)") from exc
+            logger.error("sandbox_observer.e2b_list_snapshots failed sandbox_id=%s: %s", sandbox_id, exc)
+            raise ProviderError(f"e2b list_snapshots {sandbox_id} failed: {exc}") from exc
+
     # -- helpers -------------------------------------------------------
     @staticmethod
     def _endpoint_for(sandbox_id: str) -> str:
@@ -371,6 +632,26 @@ class E2BProvider:
                     return datetime.fromisoformat(val.replace("Z", "+00:00"))
             except (ValueError, TypeError):
                 continue
+        return None
+
+    @staticmethod
+    def _extract_sandbox_created_at(sb) -> datetime | None:
+        """提取沙箱创建时间:优先直接读对象自带属性,fallback get_info()。
+
+        CubeSandbox 适配(2026-08-10):``Sandbox.list`` 返回的 ``ListedSandbox``
+        自带 ``started_at`` 属性(datetime),但**没有** ``get_info`` 方法——
+        此前依赖 ``sb.get_info()`` 提取,info 恒为空 dict → created_at 永远 None
+        → prune_stale 永不判 stale → 清理过期沙箱永远删 0 个。修复:先读属性,
+        属性缺失时再 fallback get_info()(兼容 E2B Cloud 场景)。
+        """
+        val = getattr(sb, "started_at", None)
+        if isinstance(val, datetime):
+            return val
+        if val:  # str/int 形态兜底
+            return E2BProvider._extract_created_at({"started_at": val})
+        with contextlib.suppress(Exception):  # noqa: BLE001 — get_info 失败不阻断
+            info = sb.get_info() if hasattr(sb, "get_info") else {}
+            return E2BProvider._extract_created_at(info)
         return None
 
     @staticmethod
@@ -447,6 +728,12 @@ class LocalProvider:
     async def exec_command(self, sandbox_id: str, command: str, timeout_ms: int = 30000, cwd: str | None = None) -> ExecResult:
         """在沙箱内执行单条命令：向沙箱内 HTTP server 发 ``POST /exec``（tool=bash）。
 
+        ⚠️ 当前 e2b 场景不通（2026-08-09 确认）：endpoint 是沙箱内 HTTP server 的
+        cubeproxy 外部路径（http://host:80/sandbox/{id}/8080），D-001 实测 cubeproxy
+        不转发 8080（HTTP 502），e2b 下此通道实际抛 ExecUnavailable。webshell 在
+        e2b 场景不可用，仅 Local/Docker 模式（HTTPExecutor 直连沙箱内 HTTP server）
+        此通道可用。
+
         endpoint 来自 ``sandbox.list`` RPC（权威源，不再解析日志）。endpoint
         缺失时抛 ExecUnavailable（L4 呑约 §2.7）。危险命令过滤由沙箱侧
         ``is_dangerous()`` 承担（不重复实现，M2 收敛）。
@@ -500,6 +787,80 @@ class LocalProvider:
             duration_ms=data.get("duration_ms"),
         )
 
+    # -- 管理能力（pause/resume/snapshot，经 daemon RPC 通道） -------
+    async def pause_sandbox(self, sandbox_id: str) -> PauseResult:
+        """经 daemon RPC ``sandbox.pause`` 暂停沙箱（Local/Docker 模式）。"""
+        try:
+            result = await self._daemon_client.send_request("sandbox.pause", {"sandbox_id": sandbox_id})
+        except Exception as exc:  # noqa: BLE001
+            logger.error("sandbox_observer.pause failed sandbox_id=%s mode=%s: %s", sandbox_id, self._mode, exc)
+            raise ProviderError(f"sandbox.pause {sandbox_id} failed ({self._mode}): {exc}") from exc
+        return PauseResult(sandbox_id=sandbox_id, paused=bool(result.get("paused", False)))
+
+    async def resume_sandbox(self, sandbox_id: str) -> ResumeResult:
+        """经 daemon RPC ``sandbox.resume`` 恢复沙箱（Local/Docker 模式）。"""
+        try:
+            result = await self._daemon_client.send_request("sandbox.resume", {"sandbox_id": sandbox_id})
+        except Exception as exc:  # noqa: BLE001
+            logger.error("sandbox_observer.resume failed sandbox_id=%s mode=%s: %s", sandbox_id, self._mode, exc)
+            raise ProviderError(f"sandbox.resume {sandbox_id} failed ({self._mode}): {exc}") from exc
+        return ResumeResult(sandbox_id=sandbox_id, resumed=bool(result.get("resumed", False)))
+
+    async def create_snapshot(self, sandbox_id: str) -> SnapshotResult:
+        """经 daemon RPC ``sandbox.snapshot`` 生成快照（Local/Docker 模式）。
+
+        Local/Docker：SandboxSnapshots 拷贝 workdir → snapshot_root（含 size_bytes）；
+        E2B 模式走 SDK 直连（E2BProvider），不经此路径。
+        """
+        try:
+            result = await self._daemon_client.send_request("sandbox.snapshot", {"sandbox_id": sandbox_id})
+        except Exception as exc:  # noqa: BLE001
+            logger.error("sandbox_observer.snapshot failed sandbox_id=%s mode=%s: %s", sandbox_id, self._mode, exc)
+            raise ProviderError(f"sandbox.snapshot {sandbox_id} failed ({self._mode}): {exc}") from exc
+        return SnapshotResult(
+            snapshot_id=result.get("snapshot_id", ""),
+            sandbox_id=sandbox_id,
+            created_at=result.get("created_at"),
+            store_path=result.get("store_path"),
+            size_bytes=result.get("size_bytes"),
+            sandbox_mode=result.get("sandbox_mode"),
+        )
+
+    async def delete_snapshot(self, snapshot_id: str) -> SnapshotDeleteResult:
+        """经 daemon RPC ``sandbox.snapshot_delete`` 单条删除快照（幂等）。"""
+        try:
+            result = await self._daemon_client.send_request("sandbox.snapshot_delete", {"snapshot_id": snapshot_id})
+        except Exception as exc:  # noqa: BLE001
+            logger.error("sandbox_observer.snapshot_delete failed snapshot_id=%s mode=%s: %s", snapshot_id, self._mode, exc)
+            raise ProviderError(f"sandbox.snapshot_delete {snapshot_id} failed ({self._mode}): {exc}") from exc
+        return SnapshotDeleteResult(
+            snapshot_id=snapshot_id,
+            deleted=bool(result.get("deleted", False)),
+            already_gone=bool(result.get("already_gone", False)),
+        )
+
+    async def list_snapshots(self, sandbox_id: str | None = None) -> list[SnapshotResult]:
+        """经 daemon RPC ``sandbox.snapshot_list`` 列出快照（可选 sandbox_id 过滤）。"""
+        params: dict[str, Any] = {}
+        if sandbox_id:
+            params["sandbox_id"] = sandbox_id
+        try:
+            result = await self._daemon_client.send_request("sandbox.snapshot_list", params)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("sandbox_observer.snapshot_list failed mode=%s: %s", self._mode, exc)
+            raise ProviderError(f"sandbox.snapshot_list failed ({self._mode}): {exc}") from exc
+        out: list[SnapshotResult] = []
+        for item in result.get("snapshots") or []:
+            out.append(SnapshotResult(
+                snapshot_id=item.get("snapshot_id", ""),
+                sandbox_id=item.get("sandbox_id", ""),
+                created_at=item.get("created_at"),
+                store_path=item.get("store_path"),
+                size_bytes=item.get("size_bytes"),
+                sandbox_mode=item.get("sandbox_mode"),
+            ))
+        return out
+
 
 # ── 统一入口（路由层只依赖此类）───────────────────────────────────
 
@@ -533,13 +894,17 @@ class SandboxObserver:
         return self._mode
 
     def capabilities(self) -> dict[str, bool]:
-        """能力矩阵：三模式统一支持 list/kill/prune（E1/E2 后 local/docker 不再是只读）。
+        """能力矩阵：三模式统一支持 list/kill/prune + pause/snapshot；template 仅 e2b。
 
-        local/docker 全部依赖 daemon RPC 通道（sandbox.list / sandbox.destroy），
-        daemon 离线时调用会返回 502 ProviderError——能力矩阵表示"模式支持"，
-        运行期可用性由路由层错误映射体现。
+        local/docker 全部依赖 daemon RPC 通道（sandbox.list / sandbox.destroy /
+        sandbox.pause / sandbox.resume / sandbox.snapshot / sandbox.snapshot_delete /
+        sandbox.snapshot_list），daemon 离线时调用会返回 502 ProviderError——
+        能力矩阵表示"模式支持"，运行期可用性由路由层错误映射体现。
+        template 是 e2b 平台资源（SDK Template.build），local/docker 无模板概念。
         """
-        return {"list": True, "kill": True, "prune": True, "files": True}
+        return {"list": True, "kill": True, "prune": True, "files": True,
+                "pause": True, "snapshot": True,
+                "template": self._mode == "e2b"}
 
     async def list_sandboxes(
         self, state: str | None = None, mode: str | None = None
@@ -635,12 +1000,78 @@ class SandboxObserver:
         # local/docker：async RPC 通道（LocalProvider 方法为 async）
         return await self._provider.exec_command(sandbox_id, command, timeout_ms, cwd)
 
+    # -- 管理能力统一接口（pause/resume/snapshot） -------------------
+    async def pause_sandbox(self, sandbox_id: str) -> PauseResult:
+        """暂停沙箱（B21：RUNNING→STOPPED 可逆）。
+
+        e2b 走 SDK pause；local/docker 经 daemon RPC ``sandbox.pause``。
+        """
+        if self._mode == "e2b":
+            return await asyncio.to_thread(self._provider.pause_sandbox, sandbox_id)
+        return await self._provider.pause_sandbox(sandbox_id)
+
+    async def resume_sandbox(self, sandbox_id: str) -> ResumeResult:
+        """恢复沙箱（B21：STOPPED→RUNNING 可逆）。
+
+        e2b 走 SDK connect 唤醒（auto_resume 语义，无显式 resume 方法）；
+        local/docker 经 daemon RPC ``sandbox.resume``。
+        """
+        if self._mode == "e2b":
+            return await asyncio.to_thread(self._provider.resume_sandbox, sandbox_id)
+        return await self._provider.resume_sandbox(sandbox_id)
+
+    async def create_snapshot(self, sandbox_id: str) -> SnapshotResult:
+        """生成快照（e2b 走 SDK create_snapshot；local/docker 经 daemon RPC ``sandbox.snapshot``）。"""
+        if self._mode == "e2b":
+            return await asyncio.to_thread(self._provider.create_snapshot, sandbox_id)
+        return await self._provider.create_snapshot(sandbox_id)
+
+    async def delete_snapshot(self, snapshot_id: str) -> SnapshotDeleteResult:
+        """单条删除快照（幂等；e2b 走 SDK delete_snapshot；local/docker 经 daemon RPC）。"""
+        if self._mode == "e2b":
+            return await asyncio.to_thread(self._provider.delete_snapshot, snapshot_id)
+        return await self._provider.delete_snapshot(snapshot_id)
+
+    async def list_snapshots(self, sandbox_id: str | None = None) -> list[SnapshotResult]:
+        """列出快照（e2b 需 sandbox_id 定位实例；local/docker 可选过滤）。"""
+        if self._mode == "e2b":
+            return await asyncio.to_thread(self._provider.list_snapshots, sandbox_id)
+        return await self._provider.list_snapshots(sandbox_id)
+
+    # -- 模板能力（仅 e2b 模式） --------------------------------------
+    async def create_template(self, name: str, from_template: str = "base",
+                              cpu_count: int = 2, memory_mb: int = 1024) -> TemplateResult:
+        """构建 e2b 模板（SDK Template.build，同步长耗时——前端需 loading 态）。
+
+        local/docker 无模板概念 → UnsupportedAction（400，能力矩阵 template=false）。
+        """
+        if self._mode != "e2b":
+            raise UnsupportedAction(
+                f"template creation not supported in {self._mode} mode (e2b only)"
+            )
+        return await asyncio.to_thread(
+            self._provider.create_template, name, from_template, cpu_count, memory_mb
+        )
+
+    async def list_templates(self) -> list[TemplateResult]:
+        """列出已构建 e2b 模板（SDK 无原生 list API——返回空 + warning 由路由层标注）。"""
+        if self._mode != "e2b":
+            raise UnsupportedAction(
+                f"template listing not supported in {self._mode} mode (e2b only)"
+            )
+        return await asyncio.to_thread(self._provider.list_templates)
+
 
 __all__ = [
     "SandboxInfo",
     "KillResult",
     "PruneResult",
     "ExecResult",
+    "PauseResult",
+    "ResumeResult",
+    "SnapshotResult",
+    "SnapshotDeleteResult",
+    "TemplateResult",
     "SandboxObserver",
     "SandboxObserverError",
     "SandboxNotFound",

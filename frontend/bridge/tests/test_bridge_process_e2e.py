@@ -24,7 +24,9 @@ import websockets
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DAEMON_BINARY = PROJECT_ROOT / "build" / "agentflowd"
-OUTFIT_AGENT = PROJECT_ROOT / "examples" / "agent" / "outfit-assistant"
+# 三态模型（删 examples 不崩不变量）：import 时自动从 ② 固化态重建 ③
+from e2e_helpers import ensure_outfit_agent_3 as _ensure_3  # noqa: E402
+OUTFIT_AGENT = _ensure_3()
 CONFIRMATION = "E2E_BRIDGE_CONFIRMATION_7F3A"
 LARGE_REQUEST_MARKER = "E2E_LARGE_RESPONSE_REQUEST"
 LARGE_RESPONSE = "LARGE_BEGIN|" + ("0123456789abcdef" * 12_000) + "|LARGE_END"

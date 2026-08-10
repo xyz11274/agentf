@@ -26,6 +26,7 @@ from services.sandbox_observer import (
     ProviderError,
     SandboxNotFound,
     SandboxObserver,
+    UnsupportedAction,
 )
 
 # ── fixtures ────────────────────────────────────────────────────────
@@ -99,15 +100,30 @@ def test_observer_dispatches_local():
     obs = SandboxObserver(_make_settings(mode="local"))
     assert isinstance(obs._provider, LocalProvider)
     assert obs.mode == "local"
-    # E1/E2 后三模式统一支持 list/kill/prune（local/docker 经 daemon RPC 通道）
-    assert obs.capabilities() == {"list": True, "kill": True, "prune": True, "files": True}
+    # E1/E2 后三模式统一支持 list/kill/prune/pause/snapshot（local/docker 经 daemon RPC 通道）
+    assert obs.capabilities() == {
+        "list": True, "kill": True, "prune": True, "files": True,
+        "pause": True, "snapshot": True, "template": False,
+    }
 
 
 def test_observer_dispatches_e2b():
     obs = SandboxObserver(_make_settings(mode="e2b"))
     assert isinstance(obs._provider, E2BProvider)
     assert obs.mode == "e2b"
-    assert obs.capabilities() == {"list": True, "kill": True, "prune": True, "files": True}
+    assert obs.capabilities() == {
+        "list": True, "kill": True, "prune": True, "files": True,
+        "pause": True, "snapshot": True, "template": True,
+    }
+
+
+def test_observer_local_rejects_template():
+    """local 模式模板创建 → UnsupportedAction（能力矩阵 template=false）。"""
+    import pytest
+    obs = SandboxObserver(_make_settings(mode="local"))
+    with pytest.raises(UnsupportedAction):
+        import asyncio
+        asyncio.get_event_loop().run_until_complete(obs.create_template("tpl-x"))
 
 
 def test_observer_rejects_unknown_mode():

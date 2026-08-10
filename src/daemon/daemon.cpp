@@ -27,6 +27,7 @@
 #include "daemon/sandbox_lifecycle.h"   // SandboxLifecycle 完整类型（unique_ptr 析构需要）
 #include "daemon/sandbox_snapshots.h"   // SandboxSnapshots 完整类型
 #include "daemon/session_manager.h"     // SessionManager 完整类型
+#include "daemon/template_registry.h"   // TemplateRegistry 完整类型（v2 段1 预热）
 #include "runtime/agent_runtime.h"
 #include "runtime/flow_trace.h"
 #include "utils/logger.h"
@@ -150,8 +151,11 @@ bool Daemon::initialize() {
   // sandbox-mode=none 时 SandboxLifecycle 内部走 nullptr 路径（向后兼容，FR-006）
   if (config_.sandbox_config.mode != "none") {
     session_manager_ = std::make_unique<SessionManager>();
+    // v2 段1 预热：TemplateRegistry 按 agent_id 预建 e2b template（改动 #1）
+    // 仅 e2b 模式内部有效；Local/Docker 模式 preload no-op（无 template 概念）
+    template_registry_ = std::make_unique<TemplateRegistry>(config_);
     sandbox_lifecycle_ = std::make_unique<SandboxLifecycle>(
-        *session_manager_, config_);
+        *session_manager_, config_, *template_registry_);
     sandbox_snapshots_ = std::make_unique<SandboxSnapshots>(
         *sandbox_lifecycle_, config_);
     sandbox_lifecycle_->set_snapshots(*sandbox_snapshots_);  // 反向注入，供 destroy/recycle 使用
@@ -206,6 +210,7 @@ bool Daemon::initialize() {
   rpc_handler_ = std::make_unique<RpcHandler>(*runtime_, *registry_, *response_poller_,
                                                *event_broker_, *session_manager_,
                                                sandbox_lifecycle_.get(),
+                                               sandbox_snapshots_.get(),
                                                config_.sandbox_config.allow_fallback);
   rpc_handler_->register_all(*rpc_server_);
 
@@ -413,6 +418,26 @@ bool Daemon::load_agents() {
   for (const auto& entry : config_.agents) {
     if (!registry_->load_agent(entry.package_path, entry.name_override, *runtime_)) {
       return false;
+    }
+    // v2 段1 预热：config 启动路径 load agent 也触发 template preload
+    //（与 RPC handle_agent_load 一致——生产上 agent 常通过 config 启动加载，
+    //  若此处不预热，config 加载的 agent 首问仍冷启动，违背 v2 设计意图）
+    // 失败不拒绝启动：warning 降级，execute 首问走 v1 懒加载兜底（用户 2026-08-08 拍板）
+    auto loaded = registry_->list_all();
+    if (!loaded.empty() && sandbox_lifecycle_) {
+      const auto& last = loaded.back();
+      try {
+        bool ok = sandbox_lifecycle_->preload_template(last.agent_id, last.package_path);
+        if (!ok) {
+          Logger::instance().warn_f(
+              "[TEMPLATE] preload degraded for agent=%s (config load path, execute 首问走 v1 兜底)",
+              last.agent_id.c_str());
+        }
+      } catch (const std::exception& e) {
+        Logger::instance().warn_f(
+            "[TEMPLATE] preload threw for agent=%s: %s (config load path, execute 首问走 v1 兜底)",
+            last.agent_id.c_str(), e.what());
+      }
     }
   }
   return true;

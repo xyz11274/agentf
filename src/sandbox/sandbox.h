@@ -57,6 +57,20 @@ class Sandbox {
   // 后置：快照已保存，具体存储介质由 Provider 决定
   virtual void snapshot() = 0;
 
+  // 暂停沙箱（B21：RUNNING→STOPPED 可逆，非终态）
+  // 语义：暂停沙箱内进程/容器，保留 workdir 与状态，可 resume() 恢复
+  // 前置：state() == RUNNING
+  // 后置：state() == STOPPED，exec() 拒绝执行
+  // 幂等：已 STOPPED 时无操作（B7 幂等语义）
+  virtual void pause() = 0;
+
+  // 恢复沙箱（B21：STOPPED→RUNNING 可逆）
+  // 语义：重新拉起沙箱内 HTTP server / 容器，恢复可执行状态
+  // 前置：state() == STOPPED
+  // 后置：state() == RUNNING，exec() 恢复可用
+  // 幂等：已 RUNNING 时无操作
+  virtual void resume() = 0;
+
   // 持有者身份（B6：按 SandboxKey 复用）
   virtual const SandboxKey& owner() const = 0;
 

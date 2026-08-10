@@ -198,5 +198,33 @@ void DockerSandbox::destroy() {
   }
 }
 
+void DockerSandbox::pause() {
+  // B21：RUNNING→STOPPED 可逆；B7 幂等
+  if (state_ == SandboxState::STOPPED || state_ == SandboxState::RECYCLING) {
+    return;  // 已暂停/已销毁，无操作
+  }
+  state_ = SandboxState::STOPPED;
+
+  // 用 docker pause 而非 docker stop：stop 会触发 --rm 自动删除容器（FR-025 兜底），
+  // 且 pause 不释放端口映射，resume 后 endpoint_ 不变
+  if (!container_id_.empty()) {
+    exec_cmd("docker pause 'sandbox-" + sandbox_id_ + "' 2>/dev/null");
+  }
+  mark_active();  // FR-009：暂停也是活动（避免 GC 立即回收）
+}
+
+void DockerSandbox::resume() {
+  // B21：STOPPED→RUNNING 可逆；B7 幂等
+  if (state_ != SandboxState::STOPPED) {
+    return;  // 非暂停态无操作（RUNNING 或 RECYCLING）
+  }
+
+  if (!container_id_.empty()) {
+    exec_cmd("docker unpause 'sandbox-" + sandbox_id_ + "' 2>/dev/null");
+  }
+  state_ = SandboxState::RUNNING;
+  mark_active();  // FR-009：恢复后重置活跃时间戳
+}
+
 }  // namespace sandbox
 }  // namespace agentflow

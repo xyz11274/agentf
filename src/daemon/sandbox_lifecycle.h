@@ -21,6 +21,7 @@
 
 // SandboxSnapshots 前向声明（避免循环 include）
 namespace agentflow { namespace daemon { class SandboxSnapshots; } }
+namespace agentflow { namespace daemon { class TemplateRegistry; } }
 
 namespace agentflow {
 namespace daemon {
@@ -30,7 +31,8 @@ namespace daemon {
 // daemon initialize 时注入（src/daemon/daemon.cpp:137）
 class SandboxLifecycle {
  public:
-  SandboxLifecycle(SessionManager& session_manager, const daemon::DaemonConfig& config);
+  SandboxLifecycle(SessionManager& session_manager, const daemon::DaemonConfig& config,
+                   TemplateRegistry& template_registry);
   ~SandboxLifecycle();
 
   // create：按 owner 查找或创建沙箱
@@ -39,6 +41,14 @@ class SandboxLifecycle {
   // 异常：超并发上限抛 ConcurrentLimitException(当前数, 上限) —— 拒绝新用户不中断已有（FR-021）
   //       拉起失败透传 SandboxFactory::SandboxLaunchException —— 不 fallback（B22）
   std::shared_ptr<sandbox::Sandbox> create(const sandbox::SandboxKey& owner);
+
+  // preload_template：v2 段1 预热——load agent 时预建 e2b template（委托 TemplateRegistry::preload）
+  // agent 级快照（2026-08-09）：快照 = 基础模板 + agent package（manifest includes 全量），
+  //   package_path 用于读 version + manifest hash（构建快照）
+  // 仅 e2b 模式有效；Local/Docker/none 模式 no-op 返回 true
+  // 返回 false = preload 失败（load RPC 降级 warning，execute 首问走 v1 懒加载兜底）
+  // 调用方：RpcHandler::handle_agent_load（部署期，非用户请求路径）
+  bool preload_template(const std::string& agent_id, const std::string& package_path);
 
   // destroy：摧毁指定 sandbox_id 的沙箱（幂等，B7）
   // 后置：sandbox->destroy() + 从 SessionManager 移除
@@ -95,6 +105,7 @@ class SandboxLifecycle {
  private:
   SessionManager&              session_manager_;
   const daemon::DaemonConfig&  config_;
+  TemplateRegistry&            template_registry_;  // v2 段1 预热：按 agent_id 预建 e2b template
   SandboxSnapshots*            snapshots_ = nullptr;  // 后注入，可为空（向后兼容）
   std::atomic<bool>            gc_running_{false};
   std::thread                  gc_thread_;

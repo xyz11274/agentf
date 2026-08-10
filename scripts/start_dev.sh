@@ -85,6 +85,9 @@ FMM_TOKEN_DELAY=0.02
 FMM_ERROR_RATE=0.0
 
 # Agent 配置
+# 默认加载 ③ workspace 运行实例（examples/agent/{name}/，三态模型见
+# docs/design/features/agent-package/agent-package-three-state.md §2.1）。
+# 启动脚本绕过 bridge 的 ②→③ 同步直接加载 ③ 实例（by-design）；改 ② 固化态后需手动 load 或 rsync 同步。
 AGENT_PACKAGE="$PROJECT_ROOT/examples/agent/outfit-assistant"
 AGENTFLOWD_BIN=""
 
@@ -341,6 +344,25 @@ echo ""
 if $RUN_DAEMON; then
     # restart 语义：先停后启，重复运行幂等；默认自动增量构建（修改 C++ 后重启即生效），
     # 纯 Python 调试可用 --no-build 跳过编译
+    # 三态模型：启动前自动从 ② 同步重建 ③（删 examples 不崩不变量）
+    _sync_2_to_3() {
+        local pkg_name="${AGENT_PACKAGE##*/}"
+        local source_2="$PROJECT_ROOT/resource/agent-packages/$pkg_name"
+        if [ ! -d "$source_2" ]; then
+            echo "[WARN] ② 固化态不存在: $source_2（跳过同步）"; return 0
+        fi
+        if [ ! -d "$AGENT_PACKAGE" ] || [ "$source_2" -nt "$AGENT_PACKAGE" ]; then
+            echo "[INFO] 同步 ②→③: $source_2 → $AGENT_PACKAGE"
+            mkdir -p "$AGENT_PACKAGE"
+            rsync -a --delete \
+                --exclude='.venv/' --exclude='outputs/' --exclude='workspace/' \
+                --exclude='.agentfoundry/' --exclude='preferences.json' \
+                --exclude='manifest.jsonc' --exclude='dist/' \
+                "$source_2/" "$AGENT_PACKAGE/"
+            echo "[INFO] 同步完成（运行时数据保留）"
+        fi
+    }
+    _sync_2_to_3
     DAEMON_ARGS=("restart" "--port" "$DAEMON_PORT" "--package" "$AGENT_PACKAGE")
     if [ "$DAEMON_BUILD" = false ]; then
         DAEMON_ARGS+=(--no-build)

@@ -473,7 +473,8 @@ static void forward_to_bridge(
     if (sync_text.size() > 500) sync_preview += "... (truncated)";
     std::cout << "[" << sidecar::log_timestamp() << "] [coremind_bridge] sync response: request_id=" << request_id
               << " resp_len=" << sync_text.size()
-              << " content=" << sync_preview << std::endl;
+              // F7.1: 完整响应体原样打印(用户要求不截断),preview 仅供快速浏览
+              << " resp_body=" << sync_response->body << std::endl;
 
     // 同步模式同样返回 TaskStatusManagement 报文（对齐异步回调格式），
     // 使上游在无 SysAgentEntity 场景也能拿到任务结束信号；否则上游无法感知任务完成。

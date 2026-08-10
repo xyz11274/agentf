@@ -25,7 +25,8 @@ class _FakeObserver:
 
     def capabilities(self):
         # E1/E2 后三模式统一支持 kill/prune（local/docker 经 daemon RPC 通道）
-        return {"list": True, "kill": True, "prune": True, "files": True}
+        return {"list": True, "kill": True, "prune": True, "files": True,
+                "pause": True, "snapshot": True, "template": self._mode == "e2b"}
 
     async def list_sandboxes(self, state=None, mode=None):
         return self._sandboxes
@@ -51,6 +52,53 @@ class _FakeObserver:
             sandbox_id=sandbox_id, command=command, exit_code=0,
             stdout=f"ok:{command}", stderr="", truncated=False, duration_ms=5,
         )
+
+    # -- 管理能力（pause/resume/snapshot） ---------------------------
+    async def pause_sandbox(self, sandbox_id):
+        from services.sandbox_observer import PauseResult
+        return PauseResult(sandbox_id=sandbox_id, paused=True)
+
+    async def resume_sandbox(self, sandbox_id):
+        from services.sandbox_observer import ResumeResult
+        return ResumeResult(sandbox_id=sandbox_id, resumed=True)
+
+    async def create_snapshot(self, sandbox_id):
+        from services.sandbox_observer import SnapshotResult
+        return SnapshotResult(
+            snapshot_id=f"snap-{sandbox_id}-1", sandbox_id=sandbox_id,
+            created_at=1787890000000, store_path=f"/tmp/snap/{sandbox_id}/snap-1",
+            size_bytes=1024, sandbox_mode="",
+        )
+
+    async def delete_snapshot(self, snapshot_id):
+        from services.sandbox_observer import SnapshotDeleteResult
+        return SnapshotDeleteResult(snapshot_id=snapshot_id, deleted=True, already_gone=False)
+
+    async def list_snapshots(self, sandbox_id=None):
+        from services.sandbox_observer import SnapshotResult
+        return [SnapshotResult(
+            snapshot_id="snap-1", sandbox_id="sb-1",
+            created_at=1787890000000, store_path="/tmp/snap/sb-1/snap-1",
+            size_bytes=1024, sandbox_mode="",
+        )]
+
+    # -- 模板能力（仅 e2b 模式） -------------------------------------
+    async def create_template(self, name, from_template="base", cpu_count=2, memory_mb=1024):
+        from services.sandbox_observer import TemplateResult, UnsupportedAction
+        if self._mode != "e2b":
+            raise UnsupportedAction(
+                f"template creation not supported in {self._mode} mode (e2b only)"
+            )
+        return TemplateResult(template_id=f"tpl-{name}", name=name, status="ready",
+                              cpu_count=cpu_count, memory_mb=memory_mb)
+
+    async def list_templates(self):
+        from services.sandbox_observer import UnsupportedAction
+        if self._mode != "e2b":
+            raise UnsupportedAction(
+                f"template listing not supported in {self._mode} mode (e2b only)"
+            )
+        return []
 
 
 def _make_client(observer=None):
@@ -84,7 +132,10 @@ def test_overview_local_mode():
     data = resp.json()
     assert data["success"] is True
     assert data["data"]["mode"] == "local"
-    assert data["data"]["capabilities"] == {"list": True, "kill": True, "prune": True, "files": True}
+    assert data["data"]["capabilities"] == {
+        "list": True, "kill": True, "prune": True, "files": True,
+        "pause": True, "snapshot": True, "template": False,
+    }
     assert data["data"]["counts"]["total"] == 1
 
 
@@ -238,3 +289,141 @@ def test_unsupported_action_mapping():
     resp = client.post("/api/sandbox/sb-1/kill")
     assert resp.status_code == 400
     assert "read-only" in resp.json()["detail"]
+
+
+# ── pause / resume ─────────────────────────────────────────────────
+
+
+def test_pause_ok():
+    client = _make_client(_FakeObserver(mode="local"))
+    resp = client.post("/api/sandbox/sb-1/pause")
+    assert resp.status_code == 200, f"{resp.status_code} {resp.text}"
+    data = resp.json()["data"]
+    assert data["paused"] is True
+
+
+def test_resume_ok():
+    client = _make_client(_FakeObserver(mode="local"))
+    resp = client.post("/api/sandbox/sb-1/resume")
+    assert resp.status_code == 200, f"{resp.status_code} {resp.text}"
+    data = resp.json()["data"]
+    assert data["resumed"] is True
+
+
+def test_pause_provider_error_mapping():
+    """ProviderError → 502（e2b SDK pause 失败）。"""
+    from services.sandbox_observer import ProviderError
+
+    class _PauseFailObserver(_FakeObserver):
+        async def pause_sandbox(self, sandbox_id):
+            raise ProviderError("e2b pause sb-x failed: timeout")
+
+    client = _make_client(_PauseFailObserver(mode="e2b"))
+    resp = client.post("/api/sandbox/sb-x/pause")
+    assert resp.status_code == 502
+    assert "pause" in resp.json()["detail"]
+
+
+# ── snapshot 管理 ─────────────────────────────────────────────────
+
+
+def test_create_snapshot_ok():
+    client = _make_client(_FakeObserver(mode="local"))
+    resp = client.post("/api/sandbox/sb-1/snapshots")
+    assert resp.status_code == 200, f"{resp.status_code} {resp.text}"
+    data = resp.json()["data"]
+    assert data["snapshot_id"] == "snap-sb-1-1"
+    assert data["sandbox_id"] == "sb-1"
+
+
+def test_snapshot_list_ok():
+    client = _make_client(_FakeObserver(mode="local"))
+    resp = client.get("/api/sandbox/snapshots")
+    assert resp.status_code == 200, f"{resp.status_code} {resp.text}"
+    data = resp.json()["data"]
+    assert data["total"] == 1
+    assert data["snapshots"][0]["snapshot_id"] == "snap-1"
+
+
+def test_snapshot_list_with_filter():
+    """sandbox_id 查询参数透传——快照列表按来源沙箱过滤。"""
+    captured: dict = {}
+
+    class _CapturingObserver(_FakeObserver):
+        async def list_snapshots(self, sandbox_id=None):
+            captured["sandbox_id"] = sandbox_id
+            return []
+
+    client = _make_client(_CapturingObserver(mode="local"))
+    resp = client.get("/api/sandbox/snapshots?sandbox_id=sb-2")
+    assert resp.status_code == 200
+    assert captured["sandbox_id"] == "sb-2"
+
+
+def test_snapshot_delete_ok():
+    client = _make_client(_FakeObserver(mode="local"))
+    resp = client.post("/api/sandbox/snapshots/snap-1/delete")
+    assert resp.status_code == 200, f"{resp.status_code} {resp.text}"
+    data = resp.json()["data"]
+    assert data["deleted"] is True
+    assert data["already_gone"] is False
+
+
+def test_snapshot_route_not_confused_with_detail():
+    """``/api/sandbox/snapshots`` 不得被 ``/{sandbox_id}`` 路由吞掉（注册顺序）。"""
+    client = _make_client(_FakeObserver(mode="local"))
+    resp = client.get("/api/sandbox/snapshots")
+    assert resp.status_code == 200
+    assert "snapshots" in resp.json()["data"]
+
+
+# ── template（e2b 模式）────────────────────────────────────────────
+
+
+def test_template_create_e2b_ok():
+    """e2b 模式模板创建成功返回 template_id。"""
+    from services.sandbox_observer import TemplateResult
+
+    class _TemplateObserver(_FakeObserver):
+        async def create_template(self, name, from_template="base", cpu_count=2, memory_mb=1024):
+            return TemplateResult(template_id="tpl-abc", name=name, status="ready",
+                                  cpu_count=cpu_count, memory_mb=memory_mb)
+
+    client = _make_client(_TemplateObserver(mode="e2b"))
+    resp = client.post("/api/sandbox/templates", json={"name": "agentflow-sandbox"})
+    assert resp.status_code == 200, f"{resp.status_code} {resp.text}"
+    data = resp.json()["data"]
+    assert data["template_id"] == "tpl-abc"
+    assert data["name"] == "agentflow-sandbox"
+
+
+def test_template_create_empty_name():
+    client = _make_client(_FakeObserver(mode="e2b"))
+    resp = client.post("/api/sandbox/templates", json={"name": "   "})
+    assert resp.status_code == 400
+
+
+def test_template_create_local_rejected():
+    """local 模式模板创建 → UnsupportedAction（400，能力矩阵 template=false）。"""
+    client = _make_client(_FakeObserver(mode="local"))
+    resp = client.post("/api/sandbox/templates", json={"name": "tpl-x"})
+    assert resp.status_code == 400
+    assert "e2b" in resp.json()["detail"].lower()
+
+
+def test_template_list_e2b_ok():
+    """e2b 模式模板列表返回空清单 + warning（SDK 无原生 list API，I-3 不猜）。"""
+    client = _make_client(_FakeObserver(mode="e2b"))
+    resp = client.get("/api/sandbox/templates")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["total"] == 0
+    assert data["warning"] is not None
+
+
+def test_template_route_not_confused_with_detail():
+    """``/api/sandbox/templates`` 不得被 ``/{sandbox_id}`` 路由吞掉（注册顺序）。"""
+    client = _make_client(_FakeObserver(mode="e2b"))
+    resp = client.get("/api/sandbox/templates")
+    assert resp.status_code == 200
+    assert "templates" in resp.json()["data"]

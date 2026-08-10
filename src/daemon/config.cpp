@@ -220,6 +220,7 @@ void apply_env_overrides(DaemonConfig& config) {
   env_if("AF_SANDBOX_E2B_TEMPLATE", config.sandbox_config.e2b_default_template);
   env_if("AF_SANDBOX_E2B_NETWORK_ALLOW_OUT", config.sandbox_config.e2b_network_allow_out);
   env_if("AF_SANDBOX_E2B_REMOTE_WORKSPACE_DIR", config.sandbox_config.e2b_remote_workspace_dir);
+  env_if("AF_SANDBOX_E2B_TEMPLATE_MAP_PATH", config.sandbox_config.e2b_template_map_path);
   env_if("AF_SANDBOX_SKILLS_SRC_DIR", config.sandbox_config.skills_src_dir);
   env_if("AF_SANDBOX_IMAGE_NAME", config.sandbox_config.image_name);
 
@@ -453,6 +454,8 @@ bool load_config_file(DaemonConfig& config) {
 
     std::string e2b_remote = dsl::JsonHelper::get_string(sandbox_node, "e2b_remote_workspace_dir");
     if (is_set(e2b_remote)) config.sandbox_config.e2b_remote_workspace_dir = e2b_remote;
+    std::string e2b_map = dsl::JsonHelper::get_string(sandbox_node, "e2b_template_map_path");
+    if (is_set(e2b_map)) config.sandbox_config.e2b_template_map_path = e2b_map;
 
     std::string e2b_allow = dsl::JsonHelper::get_string(sandbox_node, "e2b_network_allow_out");
     if (is_set(e2b_allow)) config.sandbox_config.e2b_network_allow_out = e2b_allow;
@@ -493,7 +496,7 @@ bool load_config_file(DaemonConfig& config) {
         "sandbox_http_port", "output_max_bytes", "gc_destroy_ttl_ms",
         "gc_recycle_snapshot_ttl_ms", "e2b_default_template", "e2b_api_key",
         "e2b_api_url", "e2b_ca_cert_path", "e2b_remote_workspace_dir",
-        "e2b_network_allow_out", "image_name", "allow_fallback",
+        "e2b_network_allow_out", "e2b_template_map_path", "image_name", "allow_fallback",
         // LocalSandbox 字段
         "local_sandbox_python", "docker_image", "docker_sandbox_python",
         "skills_src_dir", "snapshot_enabled",

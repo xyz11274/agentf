@@ -57,6 +57,13 @@ class _FakeDataBus:
             return self._interrupt_flag or None
         return None
 
+    def get(self, key: str) -> str | None:
+        # 与 DataBusClient.get 同语义：读 sys namespace（dialogue 前缀），
+        # fake 无持久数据 → 返回 None（stream/_coordinator_round 等读不到即默认）
+        if key.startswith("interrupt:"):
+            return self._interrupt_flag or None
+        return None
+
     def put(self, key: str, value: str) -> bool:
         self.put_calls.append((key, value))
         return True
@@ -153,8 +160,16 @@ def test_skill_executor_poll_failure_does_not_block(interrupt_flag_env):
     from agentflow_runtime import skill_executor
 
     fake_bus = _FakeDataBus(interrupt_flag="true")
-    # 让 get_global 抛异常模拟 DataBus 抖动
-    fake_bus.get_global = MagicMock(side_effect=Exception("UDS reconnect"))
+    # 让 interrupt 轮询（interrupt: 前缀）抛异常模拟 DataBus 抖动，
+    # 但 dispatch manifest 读取（dispatch: 前缀）保持正常——否则异常会先
+    # 在 dispatch 读取处（skill_executor.py:943，无 try/except）冒出，
+    # 测不到"轮询失败不阻断"这一意图（I-NT-5）。
+    def _flaky_get_global(key):
+        if key.startswith("interrupt:"):
+            raise Exception("UDS reconnect")
+        return None
+
+    fake_bus.get_global = _flaky_get_global
 
     with patch.object(skill_executor, "DataBusClient", return_value=fake_bus), \
          patch.object(skill_executor, "call_llm") as mock_llm, \
@@ -213,7 +228,11 @@ def test_interrupt_flag_stays_set_on_repeated_poll(interrupt_flag_env):
         def get_global(self, key):
             # 始终返回 "true"，模拟 flag 在轮询间不消失
             return "true" if key.startswith("interrupt:") else None
-        
+
+        def get(self, key):
+            # 与 DataBusClient.get 同语义（dialogue 前缀读）；fake 无持久数据
+            return "true" if key.startswith("interrupt:") else None
+
         def put(self, key, value):
             self.put_calls.append((key, value))
             return True
@@ -280,6 +299,14 @@ def test_coordinator_interrupt_flag_hit_returns_early(monkeypatch):
         def get_global(self, key):
             return "true" if key.startswith("interrupt:") else None
         
+        def get(self, key):
+            # 与 DataBusClient.get 同语义（dialogue 前缀读）；fake 无持久数据
+            return "true" if key.startswith("interrupt:") else None
+        
+        def put(self, key, value):
+            self.put_calls.append((key, value))
+            return True
+        
         def delete(self, key):
             self.delete_calls.append(key)
             return True
@@ -343,6 +370,13 @@ def test_coordinator_interrupt_flag_miss_continues(monkeypatch):
         
         def get_global(self, key):
             return None  # 未中断
+        
+        def get(self, key):
+            # 与 DataBusClient.get 同语义（dialogue 前缀读）；fake 无持久数据
+            return None
+        
+        def put(self, key, value):
+            return True
         
         def delete(self, key):
             return True

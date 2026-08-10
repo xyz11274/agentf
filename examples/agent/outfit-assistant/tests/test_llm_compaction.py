@@ -11,7 +11,7 @@ Verifies:
 
 from __future__ import annotations
 
-from agentflow_runtime import llm_call as MODULE
+from agentflow_runtime import compaction as MODULE
 
 estimate_message_tokens = MODULE.estimate_message_tokens
 compact_messages = MODULE.compact_messages

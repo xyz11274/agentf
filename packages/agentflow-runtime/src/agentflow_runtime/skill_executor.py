@@ -41,23 +41,27 @@ from agentflow_runtime.common.runtime_context import (
 )
 from agentflow_runtime.common.agent_config import AgentConfig
 from agentflow_runtime.databus_client import DataBusClient
-from agentflow_runtime.llm_call import (
-    call_llm,
+from agentflow_runtime.tool_policies import execute_in_batches
+from agentflow_runtime.compaction import (
     compress_messages,
-    estimate_message_tokens,
     get_compaction_threshold,
     get_model_max_tokens,
+)
+from agentflow_runtime.llm_call import (
+    call_llm,
     resolve_llm_config,
 )
 from agentflow_runtime.observability import emit_event
 from agentflow_runtime.parse_af_input import parse_stream
 from prompts import (
     SKILL_ARTIFACT_AUTO_COLLECT_PROMPT,
+    SKILL_ASK_USER_FALLBACK_PROMPT,
     SKILL_FALLBACK_SYSTEM,
     SKILL_NETWORK_FAILURE_PROMPT,
     SKILL_NETWORK_RESOURCE_PROMPT,
     SKILL_NOT_FOUND_TEMPLATE,
     SKILL_RECOVERY_PROMPT,
+    SKILL_REPORT_EXECUTION_PROMPT,
     SKILL_SECTION_TEMPLATE,
 )
 from agentflow_runtime.round_reminder import build_round_reminder
@@ -147,6 +151,11 @@ _DOTENV_PATH = os.path.join(AGENT_PACKAGE_DIR, ".env")
 
 def _load_dotenv() -> None:
     """Load .env using AGENT_PACKAGE_DIR from globals() (respects entry file overrides)."""
+    # 测试隔离开关：AF_SKIP_DOTENV=1 时跳过 .env 加载（override=True 会覆盖
+    # 测试传入的环境变量，如 AF_LLM_BASE_URL，导致单测意外打真实 API）。
+    if os.environ.get("AF_SKIP_DOTENV", "").lower() in ("1", "true"):
+        print("[flow] dotenv: skipped (AF_SKIP_DOTENV set)", file=sys.stderr)
+        return
     p = os.path.join(AGENT_PACKAGE_DIR, ".env")
     print(f"[flow] dotenv: path={p} exists={os.path.isfile(p)}", file=sys.stderr)
     if os.path.isfile(p):
@@ -202,6 +211,7 @@ class _LocalToolRegistry:
         _mod = self._modules.get(name)
         if _mod is None:
             return json.dumps({"error": f"Unknown tool: {name}"})
+        _t_exec_start = time.monotonic()
         try:
             # 由 daemon 注入的沙箱 HTTP endpoint（B16），bash 等工具走沙箱 /exec
             # 独立于 AF_ARTIFACT_STORAGE_URL（产物上传用），避免 env var 重载
@@ -218,8 +228,14 @@ class _LocalToolRegistry:
                 logging.info("tool.exec sandbox_mode=%s tool=%s (no endpoint, host fallback)",
                              sandbox_mode, name)
             # 沙箱 endpoint 为空时，工具走本地 subprocess.run 路径
-            return _mod.execute(args, sandbox_endpoint=sandbox_endpoint)
+            result = _mod.execute(args, sandbox_endpoint=sandbox_endpoint)
+            _dur_ms = (time.monotonic() - _t_exec_start) * 1000
+            print(f"[timing] tool_exec name={name} duration_ms={_dur_ms:.1f} sandbox_mode={sandbox_mode}",
+                  file=sys.stderr)
+            return result
         except Exception as e:
+            _dur_ms = (time.monotonic() - _t_exec_start) * 1000
+            print(f"[timing] tool_exec name={name} duration_ms={_dur_ms:.1f} error=1", file=sys.stderr)
             return json.dumps({"error": f"Tool '{name}' failed: {e}"})
 
 
@@ -299,7 +315,7 @@ def load_skill_md(skill_name: str) -> str | None:
         content = f.read()
     # Replace AgentFoundry template variables
     # sandbox_mode=e2b 时 SKILL_DIR 必须用沙箱内绝对路径而非宿主路径——否则 LLM
-    # 拼命令含宿主路径 /Users/archer/...，e2b.py exec_command 翻译回沙箱路径后
+    # 拼命令含宿主路径 /Users/xxx/...，e2b.py exec_command 翻译回沙箱路径后
     # 目标在沙箱里也不存在（agent 包上传时按 harness/skills 结构落盘到
     # /home/user/workspace/harness/skills/...）。沙箱透明性要求 LLM 看到的是
     # 沙箱内它能直接用的路径，而不是宿主路径再翻译。
@@ -308,7 +324,7 @@ def load_skill_md(skill_name: str) -> str | None:
     sandbox_mode = os.environ.get("AF_SANDBOX_MODE", "")
     if sandbox_mode == "e2b":
         # SANDBOX_WORKSPACE = /home/user/workspace（e2b.py 同步常量）
-        # skills_base 形如 /Users/archer/.../outfit-assistant/harness/skills
+        # skills_base 形如 /Users/xxx/.../outfit-assistant/harness/skills
         # → 沙箱内 /home/user/workspace/harness/skills
         sandbox_workspace = os.environ.get(
             "AF_SANDBOX_WORKSPACE", "/home/user/workspace"
@@ -778,6 +794,11 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
 def _download_from_sandbox(local_path: Path, sandbox_url: str) -> None:
     """Download a file from the sandbox HTTP server to the local filesystem.
 
+    ⚠️ 当前 e2b 场景不通（2026-08-09 确认）：sandbox_url 是沙箱内 HTTP server 的
+    cubeproxy 外部路径（http://host:80/sandbox/{id}/8080），D-001 实测 cubeproxy
+    不转发 8080（HTTP 502），e2b 下此下载实际失败、走 warning 降级（artifact 缺失）。
+    仅 Local/Docker 模式（HTTPExecutor 直连沙箱内 HTTP server）此通道可用。
+
     Used by _ensure_artifacts_in_package as a fallback when a file doesn't
     exist on the host but was generated inside the sandbox (e2b mode).
     The sandbox HTTP server's read_file tool returns file content via POST /exec.
@@ -926,7 +947,6 @@ def execute():
     # ① Read framework-injected environment variables
     user_input     = _input()
     dialogue_id    = _dialogue_id()
-    session_id     = _session_id()
     exec_skill_key = _exec_skill_key()
 
     databus = DataBusClient()
@@ -979,6 +999,15 @@ def execute():
     # artifacts are auto-collected and published; no need for self-hosted
     # HTTP server or file service.
     system_prompt += "\n\n" + SKILL_ARTIFACT_AUTO_COLLECT_PROMPT
+    # Append ask_user/render_ui fallback: skill docs may reference session
+    # built-in tools that are not in this run's tool list. Degrade to plain-text
+    # questioning and signal awaiting_user_input structurally so the coordinator
+    # can present the question directly without re-dispatching.
+    system_prompt += "\n\n" + SKILL_ASK_USER_FALLBACK_PROMPT
+    # Append execution-report requirement: executor must report what it actually
+    # did (reads, key checks, external calls) with success/failure, so the
+    # coordinator can avoid re-dispatching the same work (重复委派 = 耗时主因).
+    system_prompt += "\n\n" + SKILL_REPORT_EXECUTION_PROMPT
 
     # ⑦ Construct LLM messages
     messages = [
@@ -1006,15 +1035,12 @@ def execute():
     emit_event("skill_executor.trigger", {
         "exec_skill_key": exec_skill_key,
         "skill_name": skill_name,
+        "skill_prompt_preview": skill_prompt[:80] if skill_prompt else "",
         "load_skills": load_skill_names,
+        "tools_available": [t["function"]["name"] for t in available_tools],
         "model": model_name,
         "max_rounds": max_rounds,
     })
-    print(f"[flow] skill_executor triggered: session={session_id} dialogue={dialogue_id}", file=sys.stderr)
-    print(f"[flow]   exec_skill_key={exec_skill_key} skill_name={skill_name}", file=sys.stderr)
-    print(f"[flow]   skill_prompt={skill_prompt[:80] if skill_prompt else '(none)'}", file=sys.stderr)
-    print(f"[flow]   load_skills={load_skill_names}", file=sys.stderr)
-    print(f"[flow]   tools_available={[t['function']['name'] for t in available_tools]}", file=sys.stderr)
 
     # Node-level timeout (injected by framework as AF_NODE_EXECUTION_TIMEOUT);
     # fallback to node default 240s if absent.
@@ -1040,8 +1066,6 @@ def execute():
                 "elapsed_s": round(elapsed, 1),
                 "node_timeout_sec": node_timeout_sec,
             }, level="WARN")
-            print(f"[flow]   ⚠️  node_timeout reached at round={round_i+1} "
-                  f"elapsed={elapsed:.0f}s > limit={node_timeout_sec}s", file=sys.stderr)
             try:
                 databus.response_push(f"{skill_name} 节点超时，正在汇总…\n",
                                     type="progress", skill=skill_name,
@@ -1076,7 +1100,6 @@ def execute():
                         "skill_name": skill_name,
                         "elapsed_s": round(time.time() - _turn_start, 1),
                     }, level="WARN")
-                    print(f"[flow]   ⚠️  interrupted by DIALOGUE-INTERRUPT at round={round_i+1}", file=sys.stderr)
                     try:
                         databus.response_push(f"{skill_name} 已被取消\n",
                                             type="progress", skill=skill_name,
@@ -1106,12 +1129,6 @@ def execute():
             "budget": completion_budget,
             "elapsed_s": round(elapsed, 1),
         })
-        print(
-            f"[flow]   LLM round={round_i+1}/{max_rounds} msgs={len(messages)} "
-            f"tools={bool(available_tools)} model={model_name} budget={completion_budget} "
-            f"elapsed={elapsed:.0f}s",
-            file=sys.stderr,
-        )
 
         # ── Progress: push round info to frontend ──
         # "第 X 轮：调用 LLM…" → 用户看到"正在等 API"而非"卡了"
@@ -1187,7 +1204,6 @@ def execute():
                 "error": err_msg,
                 "elapsed_s": round(time.time() - _turn_start, 1),
             }, level="ERROR")
-            print(f"[flow]   ⚠️  LLM error after call_llm internal retries: {err_msg}", file=sys.stderr)
             # Transport-layer retry is handled INSIDE call_llm (SSL/DNS/timeout).
             # If we reach here, call_llm has exhausted its retries — the network
             # is genuinely down. Do NOT rewrite messages (the conversation is
@@ -1228,8 +1244,6 @@ def execute():
                 "error": err_msg,
                 "elapsed_s": round(time.time() - _turn_start, 1),
             }, level="ERROR")
-            print(f"[flow]   ⚠️  {err_msg}", file=sys.stderr)
-            print(f"[flow]   raw_response={json.dumps(raw, ensure_ascii=False)[:500]}", file=sys.stderr)
             output = {
                 "skill_result": f"LLM call failed: {err_msg}",
                 "status": "llm_error",
@@ -1296,7 +1310,6 @@ def execute():
                 "tool_names": tool_names,
                 "tool_count": len(tool_calls),
             })
-            print(f"[flow]   round={round_i+1} → tool_calls: {tool_names}", file=sys.stderr)
             # ── Progress: tool call details ──
             msg_tool = f"{skill_name} → 正在调用 {', '.join(tool_names)}\n"
             try:
@@ -1324,7 +1337,6 @@ def execute():
                     "signatures": new_signatures,
                     "elapsed_s": round(time.time() - _turn_start, 1),
                 }, level="WARN")
-                print(f"[flow]   ⚠️  tool_call loop detected at round={round_i+1}, forcing completion", file=sys.stderr)
                 try:
                     databus.response_push(f"{skill_name} 检测到重复调用，正在汇总…\n",
                                           type="progress", skill=skill_name,
@@ -1349,21 +1361,29 @@ def execute():
                     "artifacts_count": len(generated_artifacts),
                     "elapsed_s": round(time.time() - _turn_start, 1),
                 })
-                print(f"[flow]   result: skill={skill_name} status=tool_call_loop_detected rounds={round_i+1}", file=sys.stderr)
                 if databus.is_connected():
                     result_json = json.dumps(output, ensure_ascii=True)
                     databus.put("skill_result:skill-runner", result_json)
                 print(json.dumps(output, ensure_ascii=False))
                 return
             tool_call_history.append(new_signatures)
-            for tc in tool_calls:
+
+            # ── 工具执行：混合批次调度（只读并行、写串行，批次间保序）──
+            # 设计文档 tools/system_tools/2.工具执行并行优化.md §3：
+            #   - execute_in_batches 只做"按批次调度调用工具拿结果"（可并行部分并行）
+            #   - 副作用（产物收集、_ensure 落盘、消息回灌）在此处按原始顺序串行处理
+            #   - pool.map 保序 → tool_results[i] 对应 tool_calls[i]
+            def _execute_tool_call(tc):
                 func = tc.get("function", {})
                 name = func.get("name", "")
                 args = json.loads(func.get("arguments", "{}"))
                 # Log tool call params (truncate to 200 chars)
                 args_preview = json.dumps(args, ensure_ascii=False)[:200]
                 print(f"[flow]   tool_call: {name} args={args_preview}", file=sys.stderr)
-                result = tool_registry.execute(name, args)
+                return name, args, tool_registry.execute(name, args)
+
+            _tool_results = execute_in_batches(tool_calls, _execute_tool_call)
+            for tc, (name, args, result) in zip(tool_calls, _tool_results):
                 # Audit: artifacts collected from this tool result (完整清单，F7)
                 # 双通道：结构化 JSON 字段（artifacts/files/outputs/result/path）+ regex 文本扫描
                 tool_artifacts = extract_all_artifacts(result)
@@ -1437,8 +1457,6 @@ def execute():
                     "tool_calls_in_round": bool(tool_calls),
                     "elapsed_s": round(time.time() - _turn_start, 1),
                 }, level="WARN")
-                print(f"[flow]   ⚠️  empty skill_result: skill={skill_name} "
-                      f"LLM returned finish=stop with no content", file=sys.stderr)
             # Write result to DataBus for coordinator to read.
             #   skill_result:skill-runner — key matching AF_COMPLETED_SKILL_NAME
             # Coordinator's collect_skill_results reads by completed_skill name ("skill-runner"),
@@ -1453,7 +1471,6 @@ def execute():
                 "artifacts_count": len(generated_artifacts),
                 "elapsed_s": round(time.time() - _turn_start, 1),
             })
-            print(f"[flow]   result: skill={skill_name} status={output.get('status','completed')} rounds={round_i+1}", file=sys.stderr)
             if databus.is_connected():
                 result_json = json.dumps(output, ensure_ascii=True)
                 databus.put("skill_result:skill-runner", result_json)

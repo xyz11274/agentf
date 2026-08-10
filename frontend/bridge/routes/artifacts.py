@@ -7,12 +7,12 @@ Phase 2: Bridge 自身作为存储中心（见 docs/design/features/sandbox/arti
 - 不再转发到外部存储服务（沙箱 HTTP server 不再参与产物存储链路）
 """
 
+import base64
+import io
 import logging
 import re
 from pathlib import Path
 
-import base64
-import io
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from PIL import Image
@@ -27,10 +27,13 @@ _DOCUMENT_SUFFIXES = {".pptx", ".ppt", ".docx", ".doc", ".xlsx", ".xls", ".pdf"}
 _ARTIFACT_SUFFIXES = _IMAGE_SUFFIXES | _DOCUMENT_SUFFIXES | {".html", ".htm", ".css", ".js", ".json", ".svg"}
 
 # ── 产物存储根目录 ──────────────────────────────────────────────────────
-# 默认与 agent_packages_path 同级，可由环境变量 ARTIFACTS_STORAGE_DIR 覆盖
+# 默认与 agent_workspace_path（③ 运行实例目录）同级，可由配置 artifacts_storage_dir 覆盖。
+# 三态模型（agent-package-three-state.md）：产物属运行态数据，落点在 ③ workspace 侧；
+# 基准挂在 agent_workspace_path.parent（= examples/）保持存储位置稳定，不随固化态目录迁移。
+# S5：artifacts_storage_dir 是 BridgeSettings 显式 Field（config.py），空值走 fallback。
 _ARTIFACTS_STORAGE_DIR = Path(
-    getattr(settings, "artifacts_storage_dir", "") or
-    str(settings.agent_packages_path.parent / "artifacts_storage")
+    settings.artifacts_storage_dir or
+    str(settings.agent_workspace_path.parent / "artifacts_storage")
 )
 
 
@@ -90,12 +93,12 @@ def _resolve_artifact(relative_path: str, agent_pkg_name: str = "") -> Path:
     """Resolve a relative artifact path, searching multiple roots.
 
     Strategy:
-    1. Primary: resolve inside ``agent_packages_path``.
+    1. Primary: resolve inside ``agent_workspace_path``（③ 运行实例目录，产物落点）。
     2. Fallback: strip session_id segment and try again.
     3. Fallback: project root (legacy paths).
     """
-    root = settings.agent_packages_path.resolve()
-    pkg_dir = Path(settings.agent_packages_dir)
+    root = settings.agent_workspace_path.resolve()
+    pkg_dir = Path(settings.agent_workspace_dir)
 
     candidate = (root / relative_path).resolve()
     try:

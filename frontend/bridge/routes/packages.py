@@ -28,11 +28,12 @@ import shutil
 import tarfile
 import tempfile
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, List
+from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, Path as PathParam, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import Path as PathParam
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
@@ -41,9 +42,9 @@ from config import settings
 from dependencies import get_daemon_client
 from models import FileNode, PackageInfo
 from templates.agent_template.merger import (
-    merge_template_with_user_upload,
-    _reapply_template_files,
     _make_scripts_executable,
+    _reapply_template_files,
+    merge_template_with_user_upload,
 )
 
 logger = logging.getLogger("agentflow.bridge.routes.packages")
@@ -60,8 +61,8 @@ def _run_setup_sh(pkg_dir: Path) -> None:
     if not setup_sh.is_file():
         logger.debug("setup.sh not found in %s, skip", pkg_dir)
         return
-    import subprocess
     import os as _os
+    import subprocess
     try:
         proc = subprocess.run(
             ["bash", str(setup_sh)],
@@ -149,7 +150,17 @@ async def _try_hot_reload_agent(
         return
 
     # Agent is loaded → unload then reload
-    package_path = str(settings.agent_packages_path / package_name)
+    # 三态模型：daemon 只 load ③ workspace 实例；先同步 ②→③ 再 load ③，
+    # 运行时数据不落 ② 固化态（agent-package-three-state.md §3.2）。
+    from routes.agents import _sync_agent_package
+    try:
+        workspace_path = _sync_agent_package(package_name)
+    except HTTPException as exc:
+        logger.warning("hot_reload.sync_failed pkg=%s error=%s", package_name, exc.detail)
+        return
+    # setup.sh 在 ③ workspace 实例上执行（三态模型 I-3S-1：.venv/ 只落 ③）
+    _run_setup_sh(workspace_path)
+    package_path = str(workspace_path)
     try:
         await client.agent_unload(matched_id)
         logger.info("Agent '%s' unloaded from daemon", matched_id)
@@ -273,7 +284,7 @@ def _validate_package_name(name: str) -> str:
     return name
 
 
-def _validate_relative_path(rel_path: str) -> List[str]:
+def _validate_relative_path(rel_path: str) -> list[str]:
     """Validate a user-supplied relative path for safety.
 
     Rejects absolute paths, ``..`` segments, NUL bytes, backslashes, and
@@ -308,7 +319,7 @@ def _validate_relative_path(rel_path: str) -> List[str]:
     return parts
 
 
-def _resolve_within(package_dir: Path, segments: List[str]) -> Path:
+def _resolve_within(package_dir: Path, segments: list[str]) -> Path:
     """Resolve ``segments`` under ``package_dir`` and verify containment.
 
     Symlinks that escape the sandbox are caught here via the
@@ -351,12 +362,12 @@ async def _to_thread(func, *args, **kwargs):
     return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
 
 
-def _list_packages_sync() -> List[PackageInfo]:
+def _list_packages_sync() -> list[PackageInfo]:
     """Enumerate immediate subdirectories of the agent packages root."""
     base = settings.agent_packages_path
     if not base.exists() or not base.is_dir():
         return []
-    out: List[PackageInfo] = []
+    out: list[PackageInfo] = []
     for child in sorted(base.iterdir(), key=lambda p: p.name):
         if not child.is_dir() or child.name.startswith("."):
             continue
@@ -364,7 +375,7 @@ def _list_packages_sync() -> List[PackageInfo]:
             file_count = sum(1 for p in child.rglob("*") if p.is_file())
             mtime = child.stat().st_mtime
             last_modified = datetime.fromtimestamp(
-                mtime, tz=timezone.utc
+                mtime, tz=UTC
             ).isoformat(timespec="seconds")
         except OSError as exc:
             logger.warning("Skipping package %s due to error: %s", child, exc)
@@ -380,7 +391,7 @@ def _list_packages_sync() -> List[PackageInfo]:
     return out
 
 
-def _build_tree_sync(pkg_dir: Path) -> List[FileNode]:
+def _build_tree_sync(pkg_dir: Path) -> list[FileNode]:
     """Recursively build a sorted file tree rooted at ``pkg_dir``.
 
     Directories come first, then files; both groups sorted alphabetically
@@ -574,7 +585,7 @@ async def _run_agent_build(source_dir: Path, output_dir: Path) -> None:
         stdout_b, stderr_b = await asyncio.wait_for(
             proc.communicate(), timeout=_BUILD_TIMEOUT_SECONDS
         )
-    except asyncio.TimeoutError as exc:
+    except TimeoutError as exc:
         proc.kill()
         await proc.wait()
         raise HTTPException(
@@ -639,7 +650,7 @@ async def create_package(body: PackageCreateRequest) -> PackageInfo:
             detail=f"Package '{safe_name}' already exists",
         )
     pkg_dir.mkdir(parents=True, exist_ok=False)
-    now = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+    now = datetime.now(tz=UTC).isoformat(timespec="seconds")
     logger.info("Created package '%s' at %s", safe_name, pkg_dir)
     return PackageInfo(
         name=safe_name,
@@ -759,7 +770,8 @@ async def upload_package(
     #
     # NOTE: template 路径走 settings.agent_template_path（单一真相，F5），
     # 与 update_package 的 _reapply_template_files 同源——configs 改一次两边都生效。
-    _TEMPLATE_DIR = settings.agent_template_path / template
+    # template 与 create-from-template 路由的默认值一致（"harness_agent"）。
+    _TEMPLATE_DIR = settings.agent_template_path / "harness_agent"
     if _TEMPLATE_DIR.is_dir():
 
         def _merge_dir(src_dir: Path, dst_dir: Path) -> None:
@@ -817,14 +829,14 @@ async def upload_package(
     except OSError:
         pass
 
-    now = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+    now = datetime.now(tz=UTC).isoformat(timespec="seconds")
     logger.info(
         "package_upload.complete name=%s files=%d archive=%s",
         safe_name, file_count, file.filename,
     )
 
-    # --- §5.2 upload 流程末验 setup.sh（驮动执行，幂等）----------------------
-    _run_setup_sh(pkg_dir)
+    # 三态模型：setup.sh 不在 ② 固化态执行（避免 .venv/ 污染），
+    # 改在 load_agent 时于 ③ workspace 实例上执行（I-3S-1）。
 
     return PackageInfo(
         name=safe_name,
@@ -989,14 +1001,14 @@ async def create_from_template(
     except OSError:
         pass
 
-    now = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+    now = datetime.now(tz=UTC).isoformat(timespec="seconds")
     logger.info(
         "package_create_from_template.complete name=%s template=%s files=%d",
         safe_name, template, file_count,
     )
 
-    # --- §5.1 create 流程末验 setup.sh（驮动执行，幂等）----------------------
-    _run_setup_sh(pkg_dir)
+    # 三态模型：setup.sh 不在 ② 固化态执行（避免 .venv/ 污染），
+    # 改在 load_agent 时于 ③ workspace 实例上执行（I-3S-1）。
 
     return PackageInfo(
         name=safe_name,
@@ -1145,20 +1157,18 @@ async def update_package(
     except OSError:
         pass
 
-    now = datetime.now(tz=timezone.utc).isoformat(timespec="seconds")
+    now = datetime.now(tz=UTC).isoformat(timespec="seconds")
     logger.info(
         "package_update.complete name=%s mode=%s files=%d archive=%s",
         safe_name, mode_lower, file_count, file.filename,
     )
 
     # --- hot-reload (only if already loaded in daemon) ---------------------------
+    # _try_hot_reload_agent 内部已执行 setup.sh（在 ③ workspace 实例上）。
     await _try_hot_reload_agent(safe_name, client)
 
-    # --- §5.2 update 流程末验 setup.sh（驨动执行，幂等）----------------------
-    # 设计文档声明"仅当 setup.sh 或 requirements.txt 变更时跑"，但 update handler
-    # 增量合并未跟踪文件变更清单——setup.sh 本身幂等（内部按 hash 检测依赖是否重装），
-    # 无条件跑一次代价可接受，优于重建变更追踪。
-    _run_setup_sh(pkg_dir)
+    # 三态模型：setup.sh 不在 ② 固化态执行（避免 .venv/ 污染），
+    # 已由 _try_hot_reload_agent 在 ③ 上执行（I-3S-1）。
 
     return PackageInfo(
         name=safe_name,
@@ -1173,8 +1183,8 @@ async def update_package(
 # ---------------------------------------------------------------------------
 
 
-@router.get("", response_model=List[PackageInfo], summary="List agent packages on disk")
-async def list_packages() -> List[PackageInfo]:
+@router.get("", response_model=list[PackageInfo], summary="List agent packages on disk")
+async def list_packages() -> list[PackageInfo]:
     """Return every directory under ``agent_packages_path`` as a package.
 
     Each entry mirrors the ``PackageInfo`` schema in :mod:`models`: name,
@@ -1188,13 +1198,13 @@ async def list_packages() -> List[PackageInfo]:
 
 @router.get(
     "/{name}/tree",
-    response_model=List[FileNode],
+    response_model=list[FileNode],
     response_model_exclude_none=True,
     summary="Recursive file tree of a package",
 )
 async def get_package_tree(
     name: str = PathParam(..., description="Package directory name"),
-) -> List[FileNode]:
+) -> list[FileNode]:
     """Return the recursive file tree of a single package."""
     pkg_dir = _package_dir(name)
     return await _to_thread(_build_tree_sync, pkg_dir)

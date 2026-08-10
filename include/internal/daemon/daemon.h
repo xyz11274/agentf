@@ -33,6 +33,7 @@ class EventBroker;
 class SessionManager;          // AgentFoundry 沙箱机制移植（lld.md T014）
 class SandboxLifecycle;
 class SandboxSnapshots;
+class TemplateRegistry;        // v2 段1 预热：按 agent_id 预建 e2b template
 
 enum class ShutdownPhase {
   NONE = 0,
@@ -81,6 +82,7 @@ private:
   std::unique_ptr<SessionManager> session_manager_;
   std::unique_ptr<SandboxLifecycle> sandbox_lifecycle_;
   std::unique_ptr<SandboxSnapshots> sandbox_snapshots_;
+  std::unique_ptr<TemplateRegistry> template_registry_;  // v2 段1 预热（仅 e2b 模式创建）
   std::atomic<ShutdownPhase> shutdown_phase_{ShutdownPhase::NONE};
   int64_t start_time_ms_ = 0;
 };

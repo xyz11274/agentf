@@ -21,6 +21,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from client import DaemonClient
+from providers import LocalSessionProvider
 from routes import aisf_tasks
 
 
@@ -37,8 +38,13 @@ def _task_request(
     user_name: str = "user-001",
     device_id: str = "device-001",
     sys_agent_entity: str = "127.0.0.1",
+    client_session_id: str | None = None,
 ) -> dict:
-    """构建标准 TASKASSIGNMENT 请求体（对标 AISF-interface.md §1）。"""
+    """构建标准 TASKASSIGNMENT 请求体（对标 AISF-interface.md §1）。
+
+    ``client_session_id`` 缺省由 ``task_id`` 派生（保持各用例身份独立）；
+    显式传入可构造"不同任务、同一会话身份"的用例（幂等/多轮）。
+    """
     return {
         "Header": {
             "MessageType": "UserTaskManagement",
@@ -49,7 +55,7 @@ def _task_request(
             "DeviceId": device_id,
             "DeviceCategory": "2",
             "UUID": f"uuid-{task_id}",
-            "ClientSessionId": f"session-{task_id}",
+            "ClientSessionId": client_session_id or f"session-{task_id}",
             "AcmSessionId": "",
             "DialogueId": "",
             "SessionId": "",
@@ -440,3 +446,94 @@ class TestBackgroundExecution:
         assert result.status_code == 202
         # 但不应有任何上游回调
         upstream_mock.assert_not_called()
+
+
+class TestPersistence:
+    """sidecar 模拟链路落库：与 agent 问答页会话列表同源（同一持久化会话库）。
+
+    键映射对齐 sidecar_router.cpp 官方契约：UserName + ClientSessionId →
+    bridge user_id + client_id。验证会话创建、对话落库、幂等复用、失败可见性。
+    """
+
+    async def _post_with_provider(
+        self,
+        daemon: AsyncMock,
+        provider: LocalSessionProvider,
+        json_body: dict,
+    ) -> tuple[AsyncMock, asyncio.Task | None]:
+        """构建注入 provider 的隔离 app，POST 并等待后台任务完成。"""
+        app = FastAPI()
+        app.include_router(aisf_tasks.router)
+        app.state.daemon_client = daemon
+        app.state.session_provider = provider
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://bridge"
+        ) as http:
+            return await _fire_and_wait_background(http, daemon, json_body)
+
+    async def test_success_persists_session_and_dialogue(
+        self, daemon: AsyncMock, upstream_mock: AsyncMock, tmp_path
+    ) -> None:
+        """TC-aisf-030: 任务成功 → 会话创建（键=userName+clientSessionId）+ 对话落库。"""
+        provider = LocalSessionProvider(tmp_path / "sessions.db")
+        resp, _ = await self._post_with_provider(
+            daemon, provider,
+            _task_request(task_id="persist-001", content="肚子疼咨询", user_name="user-001"),
+        )
+        assert resp.status_code == 202
+
+        # 会话键 = userName + ClientSessionId（与前端会话身份同源）
+        sessions = await provider.list_sessions(user_id="user-001")
+        assert len(sessions) == 1
+        sess = sessions[0]
+        assert sess["user_id"] == "user-001"
+        assert sess["client_id"] == "session-persist-001", (
+            "会话 client_id 必须取 Header.ClientSessionId（非 deviceId），"
+            "否则与前端 sidecar 模拟页会话身份对不上"
+        )
+
+        # 对话落库：一轮 dialogue → user + assistant 两条消息
+        msgs = await provider.get_messages(sess["id"])
+        assert len(msgs) == 2, f"expected user+assistant pair, got {len(msgs)}"
+        assert msgs[0]["role"] == "user"
+        assert msgs[0]["content"] == "肚子疼咨询"
+        assert msgs[1]["role"] == "assistant"
+        assert "根据您描述的肚子疼" in msgs[1]["content"]
+
+    async def test_same_identity_reuses_session(
+        self, daemon: AsyncMock, upstream_mock: AsyncMock, tmp_path
+    ) -> None:
+        """TC-aisf-031: 同一 (userName, clientSessionId) 多次请求复用同一会话（I-4 幂等）。"""
+        provider = LocalSessionProvider(tmp_path / "sessions.db")
+        for i in range(2):
+            resp, _ = await self._post_with_provider(
+                daemon, provider,
+                _task_request(
+                    task_id=f"persist-{i}",
+                    user_name="user-001",
+                    client_session_id="same-session",
+                ),
+            )
+            assert resp.status_code == 202
+
+        sessions = await provider.list_sessions(user_id="user-001")
+        assert len(sessions) == 1, "同一身份必须复用同一持久化会话"
+        msgs = await provider.get_messages(sessions[0]["id"])
+        assert len(msgs) == 4, "两轮对话应累积为 4 条消息"
+
+    async def test_failed_task_creates_session_without_dialogue(
+        self, daemon: AsyncMock, upstream_mock: AsyncMock, tmp_path
+    ) -> None:
+        """TC-aisf-032: 执行失败 → 会话仍创建（列表可见）但无对话落库。"""
+        daemon.agent_execute.side_effect = RuntimeError("boom")
+        provider = LocalSessionProvider(tmp_path / "sessions.db")
+        resp, _ = await self._post_with_provider(
+            daemon, provider,
+            _task_request(task_id="fail-persist", user_name="user-001"),
+        )
+        assert resp.status_code == 202
+
+        sessions = await provider.list_sessions(user_id="user-001")
+        assert len(sessions) == 1, "失败也应创建会话，保证会话列表可见"
+        msgs = await provider.get_messages(sessions[0]["id"])
+        assert len(msgs) == 0, "失败无对话内容，不应落库 dialogue"

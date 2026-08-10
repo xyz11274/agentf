@@ -32,40 +32,6 @@ namespace sandbox {
 
 namespace fs = std::filesystem;
 
-// ── python3 绝对路径探测（lazy + 缓存）────────────────────────────────
-// 真根因修复：execvp("python3") 在 daemon PATH 无 python3 时失败 _exit(127)，父进程
-// 拿空串被上层只检 ERROR/FATAL/Traceback 的判定静默吞 → skills sync 没跑 → 沙箱里
-// harness/skills 空。改 exec_cmd_argv 检 exit_code 是兜底，但根治 = 用绝对路径直调。
-// 探测序：PATH which python3 → 常见绝对路径候选 → 裸 "python3" 兜底（保留 PATH 依赖）
-static const std::string& resolve_python3() {
-  static std::string cached;
-  if (!cached.empty()) return cached;
-  // 命1：PATH which python3
-  FILE* fp = popen("which python3 2>/dev/null", "r");
-  if (fp) {
-    char buf[4096];
-    if (fgets(buf, sizeof(buf), fp)) {
-      std::string p = buf;
-      while (!p.empty() && (p.back() == '\n' || p.back() == '\r')) p.pop_back();
-      if (!p.empty() && fs::exists(p)) cached = p;
-    }
-    pclose(fp);
-  }
-  // 命2：常见绝对路径候选（macOS Homebrew / Linux / conda）
-  if (cached.empty()) {
-    static const char* candidates[] = {
-        "/opt/homebrew/bin/python3", "/usr/local/bin/python3",
-        "/usr/bin/python3", "/bin/python3",
-    };
-    for (auto c : candidates) {
-      if (fs::exists(c)) { cached = c; break; }
-    }
-  }
-  // 命3：兜底——裸 "python3"（保留 PATH 依赖，至少 exit_code=127 能被 exec_cmd_argv 捕到）
-  if (cached.empty()) cached = "python3";
-  return cached;
-}
-
 static std::string generate_sandbox_id() {
   auto now = std::chrono::steady_clock::now().time_since_epoch().count();
   std::random_device rd;
@@ -82,78 +48,6 @@ static std::string exec_cmd(const std::string& cmd) {
   while (fgets(buf, sizeof(buf), fp)) result += buf;
   pclose(fp);
   return result;
-}
-
-// execvp 形式：参数以 argv 数组直传，不经 shell。
-// 解决两个问题（CWE-78 shell 注入 + CWE-522 凭据暴露在 ps）：
-//   1. traffic_access_token / sandbox_id / 路径 等含 ' 或 $ 时不会被 shell 解释
-//   2. token 不出现在子进程的 ps cmdline 中
-// 与 curl_post_with_token 的 fork+execvp 模式一致（F5 单一真相来源）。
-// stderr 合并到 stdout（dup2(stdout_pipe[1], STDERR_FILENO)），便于诊断。
-//
-// 返回 {output, exit_code}：exit_code = 子进程退出码（execvp 失败=127，正常=脚本 exit）。
-// 上层 MUST 检 exit_code != 0 → 失败，不能只看 stdout 字串（空输出+exit 127 会被静默吞）。
-// 这修了 skills sync 静默失败的真根因：daemon 启动时 PATH 无 python3，execvp 失败 _exit(127)，
-// 父进程拿到空串，上层只检 ERROR/FATAL/Traceback 不命中 → 静默吞 → 沙箱里 harness/skills 空。
-// 与 sandbox_types.h 的 ExecResult（工具执行结果，对外暴露）撞名，本 struct 仅本文件内部用
-struct SubprocResult {
-  std::string output;
-  int exit_code;  // -1 = pipe/fork 失败（父进程侧资源错）
-};
-static SubprocResult exec_cmd_argv(const std::vector<std::string>& argv_strs) {
-  int stdout_pipe[2];
-  if (pipe(stdout_pipe) < 0) return {"", -1};
-
-  pid_t pid = fork();
-  if (pid < 0) {
-    close(stdout_pipe[0]);
-    close(stdout_pipe[1]);
-    return {"", -1};
-  }
-
-  if (pid == 0) {
-    // ── 子进程 ──
-    dup2(stdout_pipe[1], STDOUT_FILENO);
-    dup2(stdout_pipe[1], STDERR_FILENO);  // stderr 合并到 stdout
-    close(stdout_pipe[0]);
-    close(stdout_pipe[1]);
-
-    // 构造 argv（execvp 要求 nullptr 结尾）
-    std::vector<char*> argv;
-    argv.reserve(argv_strs.size() + 1);
-    // 注意：这里用 vector<char*> 指向 argv_strs 中各 string 的 c_str()。
-    // argv_strs 在本函数栈上，子进程 execvp 前一直有效，安全。
-    for (const auto& s : argv_strs) {
-      argv.push_back(const_cast<char*>(s.c_str()));
-    }
-    argv.push_back(nullptr);
-
-    execvp(argv_strs[0].c_str(), argv.data());
-    _exit(127);  // execvp 仅在失败时返回（如 python3 不在 PATH）
-  }
-
-  // ── 父进程 ──
-  close(stdout_pipe[1]);
-
-  std::string result;
-  char buf[4096];
-  ssize_t n;
-  while ((n = read(stdout_pipe[0], buf, sizeof(buf))) > 0) {
-    result.append(buf, n);
-  }
-  close(stdout_pipe[0]);
-
-  // 等待子进程退出（避免僵尸）+ 读 exit code（区分 execvp 失败 vs 脚本正常退出）
-  int status;
-  waitpid(pid, &status, 0);
-  int code = -1;
-  if (WIFEXITED(status)) {
-    code = WEXITSTATUS(status);  // 127 = execvp 失败；其他 = 脚本 exit code
-  } else if (WIFSIGNALED(status)) {
-    code = 128 + WTERMSIG(status);  // 被信号杀，约定 128+signum（与 shell 一致）
-  }
-
-  return {result, code};
 }
 
 E2BSandbox::E2BSandbox(const SandboxKey& owner,
@@ -237,7 +131,7 @@ E2BSandbox::E2BSandbox(const SandboxKey& owner,
   }
 
   std::vector<std::string> create_argv = {
-      resolve_python3(), lifecycle_script.string(),
+      SandboxHelpers::resolve_python3(), lifecycle_script.string(),
       "create",
       "--traffic-access-token", traffic_access_token_,
       "--sandbox-http-server-path", sandbox_http_server_path,
@@ -249,7 +143,7 @@ E2BSandbox::E2BSandbox(const SandboxKey& owner,
     create_argv.push_back("--network-allow-out");
     create_argv.push_back(e2b_network_allow_out_);
   }
-  auto create_res = exec_cmd_argv(create_argv);
+  auto create_res = SandboxHelpers::exec_cmd_argv(create_argv);
   if (create_res.exit_code != 0 || create_res.output.empty()) {
     throw SandboxFactory::SandboxLaunchException(
         "E2B Sandbox creation failed: python3 exit=" +
@@ -303,37 +197,56 @@ E2BSandbox::E2BSandbox(const SandboxKey& owner,
   // E2B 沙箱在远端，必须主动上传宿主 workdir 内容
   // 失败 fail-fast（B22 不 fallback）：上传失败抛 SandboxLaunchException
   // 脚本不存在时静默跳过：允许纯 HTTP 模式（无文件同步）
-  upload_via_e2b_sync(workdir_, remote_workspace_dir_, "workspace upload");
-
-  // ── agent 包根整体同步（manifest 驱动，设计文档 sandbox-env-injection.md §2 链路环节⑤）──
-  // 此前实现只同步 harness/skills 子集，环节⑤未落地 → .env、agent.md、nodes/、
-  // harness/tools/、workflows/ 等包根文件从未进沙箱。e2b.py 的 set -a && source
-  // /home/user/workspace/.env 兜底跳过 → 密钥缺失 → 子进程 os.environ.get() 读不到。
   //
-  // 不走"盲传整个包根"——那会把 .venv(91M)/workspace/outputs/tests 等沙箱无关产物
-  // 全传上去（agent-package-structure.md §3 设计约束：只传 manifest 声明的内容）。
-  // 此段调 e2b_sync.py upload --manifest <agent_package_dir>/manifest.jsonc：
-  //   - manifest.jsonc 存在 → 按 includes/excludes 白名单过滤上传（用户声明什么传什么）
-  //   - manifest.jsonc 不存在 → e2b_sync.py 用 agentflow_runtime.common.manifest 框架规则
-  //     推断生成（首次连接），后续连接直接读，跳过重新推断（§3.1 场景①②）
-  //   - manifest 加载/生成失败 → e2b_sync.py FATAL exit 1 → 这里 fail-fast（B22 不 fallback）
-  //
-  // 与下游 skills 段不冲突：skills 段是 harness/skills 子集，e2b_sync.py 幂等跳过同内容。
-  if (!agent_package_dir_.empty()) {
-    std::string manifest_path =
-        (fs::path(agent_package_dir_) / "manifest.jsonc").string();
-    upload_via_e2b_sync(agent_package_dir_, remote_workspace_dir_,
-                        "agent package upload", manifest_path);
+  // ── 快照跳过 e2b_sync（2026-08-10 修复，create_latency 27.6s → 秒级）────────
+  // agent 级快照（snap-*）构建时已固化 manifest includes 全量资产（harness/skills、
+  // data、requirements.txt、.env、setup.sh 等，见 template_snapshot_create.py），
+  // 运行时资产已在沙箱蓝图——下方三段 e2b_sync 上传（workspace / agent package /
+  // skills）会重复上传 43 文件，实测 create_latency=27.6s（2026-08-10 首问 e2e）。
+  // 修复：模板是 snap-* 时跳过三段资产上传；tpl-*（基础模板，preload 降级路径）
+  // 资产未预置，保留原上传逻辑兼容。
+  // 注意：sync_session_uploads（用户会话上传目录）不受此影响——用户数据非快照
+  // 内容，即使 snap-* 也必须同步（见 upload_via_e2b_sync L730 调用点）。
+  bool is_snapshot_template = (e2b_default_template_.rfind("snap-", 0) == 0);
+  if (is_snapshot_template) {
+    Logger::instance().info_f(
+        "[E2B] snapshot template=%s detected, skip e2b_sync asset upload "
+        "(assets preloaded in snapshot blueprint)",
+        e2b_default_template_.c_str());
   }
+  if (!is_snapshot_template) {
+    upload_via_e2b_sync(workdir_, remote_workspace_dir_, "workspace upload");
 
-  // ── skills 同步到远端沙箱 ──────────────────────────────────────
-  // 将宿主机 harness/skills 复制到远端沙箱的 workdir 下
-  // 失败 fail-fast（B22 不 fallback）
-  if (!skills_src_dir_.empty() && fs::is_directory(skills_src_dir_)) {
-    upload_via_e2b_sync(skills_src_dir_,
-                        remote_workspace_dir_ + "/harness/skills",
-                        "skills sync");
-  }
+    // ── agent 包根整体同步（manifest 驱动，设计文档 sandbox-env-injection.md §2 链路环节⑤）──
+    // 此前实现只同步 harness/skills 子集，环节⑤未落地 → .env、agent.md、nodes/、
+    // harness/tools/、workflows/ 等包根文件从未进沙箱。e2b.py 的 set -a && source
+    // /home/user/workspace/.env 兜底跳过 → 密钥缺失 → 子进程 os.environ.get() 读不到。
+    //
+    // 不走"盲传整个包根"——那会把 .venv(91M)/workspace/outputs/tests 等沙箱无关产物
+    // 全传上去（agent-package-structure.md §3 设计约束：只传 manifest 声明的内容）。
+    // 此段调 e2b_sync.py upload --manifest <agent_package_dir>/manifest.jsonc：
+    //   - manifest.jsonc 存在 → 按 includes/excludes 白名单过滤上传（用户声明什么传什么）
+    //   - manifest.jsonc 不存在 → e2b_sync.py 用 agentflow_runtime.common.manifest 框架规则
+    //     推断生成（首次连接），后续连接直接读，跳过重新推断（§3.1 场景①②）
+    //   - manifest 加载/生成失败 → e2b_sync.py FATAL exit 1 → 这里 fail-fast（B22 不 fallback）
+    //
+    // 与下游 skills 段不冲突：skills 段是 harness/skills 子集，e2b_sync.py 幂等跳过同内容。
+    if (!agent_package_dir_.empty()) {
+      std::string manifest_path =
+          (fs::path(agent_package_dir_) / "manifest.jsonc").string();
+      upload_via_e2b_sync(agent_package_dir_, remote_workspace_dir_,
+                          "agent package upload", manifest_path);
+    }
+
+    // ── skills 同步到远端沙箱 ──────────────────────────────────────
+    // 将宿主机 harness/skills 复制到远端沙箱的 workdir 下
+    // 失败 fail-fast（B22 不 fallback）
+    if (!skills_src_dir_.empty() && fs::is_directory(skills_src_dir_)) {
+      upload_via_e2b_sync(skills_src_dir_,
+                          remote_workspace_dir_ + "/harness/skills",
+                          "skills sync");
+    }
+  }  // !is_snapshot_template：snap-* 跳过三段资产上传（资产已固化在快照）
   mark_active();  // FR-009：初始化活跃时间戳
 }
 
@@ -437,13 +350,13 @@ std::unique_ptr<E2BSandbox> E2BSandbox::ForkFromSnapshot(const ForkParams& param
 
   // 4. 调 e2b_lifecycle.py fork
   std::vector<std::string> fork_argv = {
-      resolve_python3(), lifecycle_script.string(),
+      SandboxHelpers::resolve_python3(), lifecycle_script.string(),
       "fork",
       "--sandbox-id", params.source_sandbox_id,
       "--sandbox-http-server-path", params.sandbox_http_server_path,
       "--sandbox-http-port", std::to_string(params.sandbox_http_port),
   };
-  auto fork_res = exec_cmd_argv(fork_argv);
+  auto fork_res = SandboxHelpers::exec_cmd_argv(fork_argv);
   if (fork_res.exit_code != 0 || fork_res.output.empty()) {
     throw SandboxFactory::SandboxLaunchException(
         "ForkFromSnapshot: fork failed (exit=" +
@@ -620,6 +533,13 @@ ExecResult E2BSandbox::exec(const std::string& tool,
     return r;
   }
 
+  // ⚠️ 当前 e2b 场景此通道实际不通（2026-08-09 确认）：
+  //   - endpoint_ 是沙箱内 HTTP server 的 cubeproxy 外部路径（http://host:80/sandbox/{id}/8080），
+  //     D-001 实测 cubeproxy 不转发 8080（HTTP 502）
+  //   - 且 request.sandbox 实际为 null（MMNode::set_sandbox 无调用点），worker 不触发此路径
+  //   - harness 工具执行走 e2b SDK（E2BExecutor → commands.run，envd :49983），不经 HTTP server
+  //   - 仅 Local/Docker 模式（HTTPExecutor 直连沙箱内 HTTP server）此通道可用
+  //     （详见 docs/research/agentfoundry-sandbox-porting/14-e2b冷启动耗时分析.md）
   int64_t timeout_ms = opts.timeout_ms > 0 ? opts.timeout_ms : 30000;
   std::string path = endpoint_ + "/exec";
   std::string resp = curl_post_with_token(path, tool_params_json, timeout_ms);
@@ -637,11 +557,11 @@ void E2BSandbox::snapshot() {
 
   if (fs::exists(lifecycle_script)) {
     std::vector<std::string> snap_argv = {
-        resolve_python3(), lifecycle_script.string(),
+        SandboxHelpers::resolve_python3(), lifecycle_script.string(),
         "snapshot",
         "--sandbox-id", sandbox_id_,
     };
-    auto snap_res = exec_cmd_argv(snap_argv);
+    auto snap_res = SandboxHelpers::exec_cmd_argv(snap_argv);
     // 记录 snapshot 子进程输出（含错误），失败不抛异常
     // exit_code=127 = python3 不在 PATH（execvp 失败）→ 也要 warn，否则静默
     if (snap_res.exit_code != 0 ||
@@ -655,6 +575,71 @@ void E2BSandbox::snapshot() {
       Logger::instance().info_f("[E2B] snapshot done for sandbox=%s", sandbox_id_.c_str());
     }
   }
+}
+
+void E2BSandbox::pause() {
+  // B21：RUNNING→STOPPED 可逆；B7 幂等
+  if (state_ == SandboxState::STOPPED || state_ == SandboxState::RECYCLING) {
+    return;  // 已暂停/已销毁，无操作
+  }
+  state_ = SandboxState::STOPPED;
+
+  // 调 e2b_lifecycle.py pause（SDK pause(keep_memory=True)，平台侧暂停）
+  fs::path lifecycle_script = fs::absolute("src/sandbox/e2b_lifecycle.py");
+  if (!fs::exists(lifecycle_script)) {
+    throw std::runtime_error("E2BSandbox::pause: e2b_lifecycle.py not found: " +
+                             lifecycle_script.string());
+  }
+  std::vector<std::string> pause_argv = {
+      SandboxHelpers::resolve_python3(), lifecycle_script.string(),
+      "pause",
+      "--sandbox-id", sandbox_id_,
+  };
+  auto pause_res = SandboxHelpers::exec_cmd_argv(pause_argv);
+  if (pause_res.exit_code != 0 ||
+      pause_res.output.find("ERROR") != std::string::npos ||
+      pause_res.output.find("FATAL") != std::string::npos ||
+      pause_res.output.find("Traceback") != std::string::npos) {
+    // SDK/平台拒绝暂停（如不支持 pause 端点）——回滚状态并抛可定位异常（上层映射 UnsupportedAction）
+    state_ = SandboxState::RUNNING;
+    throw std::runtime_error("E2BSandbox::pause failed for sandbox=" + sandbox_id_ +
+                             " (exit=" + std::to_string(pause_res.exit_code) + "): " +
+                             pause_res.output);
+  }
+  Logger::instance().info_f("[E2B] pause done for sandbox=%s", sandbox_id_.c_str());
+  mark_active();  // FR-009：暂停也是活动（避免 GC 立即回收）
+}
+
+void E2BSandbox::resume() {
+  // B21：STOPPED→RUNNING 可逆；B7 幂等
+  if (state_ != SandboxState::STOPPED) {
+    return;  // 非暂停态无操作（RUNNING 或 RECYCLING）
+  }
+
+  // 调 e2b_lifecycle.py resume（SDK connect 唤醒 paused sandbox + is_running 校验）
+  fs::path lifecycle_script = fs::absolute("src/sandbox/e2b_lifecycle.py");
+  if (!fs::exists(lifecycle_script)) {
+    throw std::runtime_error("E2BSandbox::resume: e2b_lifecycle.py not found: " +
+                             lifecycle_script.string());
+  }
+  std::vector<std::string> resume_argv = {
+      SandboxHelpers::resolve_python3(), lifecycle_script.string(),
+      "resume",
+      "--sandbox-id", sandbox_id_,
+  };
+  auto resume_res = SandboxHelpers::exec_cmd_argv(resume_argv);
+  if (resume_res.exit_code != 0 ||
+      resume_res.output.find("ERROR") != std::string::npos ||
+      resume_res.output.find("FATAL") != std::string::npos ||
+      resume_res.output.find("Traceback") != std::string::npos) {
+    // SDK/平台不支持唤醒——保持 STOPPED 并抛可定位异常（上层映射 UnsupportedAction）
+    throw std::runtime_error("E2BSandbox::resume failed for sandbox=" + sandbox_id_ +
+                             " (exit=" + std::to_string(resume_res.exit_code) + "): " +
+                             resume_res.output);
+  }
+  state_ = SandboxState::RUNNING;
+  Logger::instance().info_f("[E2B] resume done for sandbox=%s", sandbox_id_.c_str());
+  mark_active();  // FR-009：恢复后重置活跃时间戳
 }
 
 void E2BSandbox::upload_via_e2b_sync(const std::string& local_dir,
@@ -694,7 +679,7 @@ void E2BSandbox::upload_via_e2b_sync(const std::string& local_dir,
   }
 
   std::vector<std::string> argv = {
-      resolve_python3(), sync_script.string(),
+      SandboxHelpers::resolve_python3(), sync_script.string(),
       "upload",
       "--sandbox-id", sandbox_id_,
       "--local-dir", local_dir,
@@ -705,7 +690,7 @@ void E2BSandbox::upload_via_e2b_sync(const std::string& local_dir,
     argv.push_back(manifest_path);
   }
 
-  auto res = exec_cmd_argv(argv);
+  auto res = SandboxHelpers::exec_cmd_argv(argv);
   // 失败判定：exit_code != 0 或输出含 ERROR/FATAL/Traceback（口径与原四处逐字一致）
   // exit_code=127 = execvp 失败（python3 不在 PATH）→ 必须当错，否则静默"成功"但无数据传输
   if (res.exit_code != 0 ||
@@ -782,11 +767,11 @@ void E2BSandbox::destroy() {
 
   if (fs::exists(lifecycle_script)) {
     std::vector<std::string> kill_argv = {
-        resolve_python3(), lifecycle_script.string(),
+        SandboxHelpers::resolve_python3(), lifecycle_script.string(),
         "kill",
         "--sandbox-id", sandbox_id_,
     };
-    (void)exec_cmd_argv(kill_argv);
+    (void)SandboxHelpers::exec_cmd_argv(kill_argv);
   }
 }
 

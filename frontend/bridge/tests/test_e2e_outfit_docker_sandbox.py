@@ -31,6 +31,7 @@ from .e2e_helpers import (
     DAEMON_BINARY,
     OUTFIT_AGENT,
     OUTFIT_AGENT_STR,
+    ensure_outfit_agent_3 as _ensure_3,
     _daemon_env,
     _daemon_log_path,
     _load_sandbox_mode,
@@ -39,6 +40,8 @@ from .e2e_helpers import (
     wait_port,
     await_agent_ready,
 )
+# 三态模型（删 examples 不崩不变量）：import 时自动从 ② 固化态重建 ③
+_ensure_3()
 
 # ── 超时配置 ──────────────────────────────────────────────────────────
 _E2E_TIMEOUT = 90  # 单轮 chat 超时（秒），与 test_e2e_rest_chat_session 一致

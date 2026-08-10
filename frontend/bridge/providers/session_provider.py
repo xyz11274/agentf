@@ -124,11 +124,16 @@ class SessionProvider(ABC):
         user_input: str, agent_response: str,
         dialogue_id: str, agent_name: str = "",
         artifacts: str = "[]",
+        images: str = "[]",
     ) -> str:
         """Persist one dialogue round (user + assistant message pair).
 
         ``artifacts`` is a JSON-encoded list of ``ArtifactInfo`` dicts
         extracted from ``agent_response``. Defaults to ``"[]"``.
+
+        ``images`` is a JSON-encoded list of user-attached image data URIs
+        (``data:image/...;base64,...``), so user-sent images survive reload.
+        Defaults to ``"[]"``.
 
         Returns the persisted dialogue_id. Title is auto-set from
         ``user_input``'s first 50 chars on the session's first dialogue.

@@ -26,6 +26,9 @@ elif [ "$#" -gt 0 ]; then
     exit 2
 fi
 
+# 默认加载 ③ workspace 运行实例（examples/agent/{name}/，三态模型见
+# docs/design/features/agent-package/agent-package-three-state.md §2.1）。
+# 启动脚本绕过 bridge 的 ②→③ 同步直接加载 ③ 实例（by-design）；改 ② 固化态后需手动 load 或 rsync 同步。
 PACKAGE="${AGENT_PACKAGE:-examples/agent/outfit-assistant}"
 # daemon 端口统一 17891（与 start_daemon.sh / start_dev.sh / configs/{dev,test}/agentflowd.json / config.py 默认值一致）
 DAEMON_PORT="${DAEMON_PORT:-17891}"
@@ -52,6 +55,26 @@ fi
 if [[ "$PACKAGE" = /* ]]; then PACKAGE_PATH="$PACKAGE"
 else PACKAGE_PATH="$AR_PROJECT_ROOT/$PACKAGE"
 fi
+# 三态模型：启动前自动从 ② 同步重建 ③（删 examples 不崩不变量）
+# 缺 ③ 或 ② 比 ③ 新时 rsync ②→③，排除运行时数据保留 ③ 已有现场。
+_sync_2_to_3() {
+    local pkg_name="${PACKAGE_PATH##*/}"
+    local source_2="$AR_PROJECT_ROOT/resource/agent-packages/$pkg_name"
+    if [ ! -d "$source_2" ]; then
+        echo "[WARN] ② 固化态不存在: $source_2（跳过同步）"; return 0
+    fi
+    if [ ! -d "$PACKAGE_PATH" ] || [ "$source_2" -nt "$PACKAGE_PATH" ]; then
+        echo "[INFO] 同步 ②→③: $source_2 → $PACKAGE_PATH"
+        mkdir -p "$PACKAGE_PATH"
+        rsync -a --delete \
+            --exclude='.venv/' --exclude='outputs/' --exclude='workspace/' \
+            --exclude='.agentfoundry/' --exclude='preferences.json' \
+            --exclude='manifest.jsonc' --exclude='dist/' \
+            "$source_2/" "$PACKAGE_PATH/"
+        echo "[INFO] 同步完成（运行时数据保留）"
+    fi
+}
+_sync_2_to_3
 if [ ! -f "$PACKAGE_PATH/agent.json" ]; then
     echo "[ERROR] Agent package not found: $PACKAGE_PATH" >&2
     exit 1

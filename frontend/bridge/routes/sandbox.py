@@ -111,6 +111,85 @@ async def sandbox_list(
     return _ok({"sandboxes": [s.to_dict() for s in sandboxes], "total": len(sandboxes), "warning": None})
 
 
+@router.get("/snapshots", name="sandbox_snapshot_list")
+async def sandbox_snapshot_list(
+    request: Request,
+    sandbox_id: str | None = None,
+) -> dict[str, Any]:
+    """``GET /api/sandbox/snapshots`` — 快照列表（可选 ``sandbox_id`` 过滤）。
+
+    注意：本路由声明在 ``/{sandbox_id}`` 之前——避免 ``/snapshots`` 被
+    误匹配为 sandbox_id（FastAPI 按注册顺序匹配）。
+    """
+    observer = _get_observer(request)
+    try:
+        snapshots = await observer.list_snapshots(sandbox_id=sandbox_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _map_observer_error(exc) from exc
+    return _ok({"snapshots": [s.to_dict() for s in snapshots], "total": len(snapshots)})
+
+
+@router.post("/snapshots/{snapshot_id}/delete", name="sandbox_snapshot_delete")
+async def sandbox_snapshot_delete(request: Request, snapshot_id: str) -> dict[str, Any]:
+    """``POST /api/sandbox/snapshots/{snapshot_id}/delete`` — 单条删除快照（幂等）。
+
+    删除是破坏性操作——前端需二次确认（快照 store_path 目录不可恢复）。
+    幂等：快照不存在时返回 already_gone=true（对齐 sandbox.destroy 语义）。
+    """
+    observer = _get_observer(request)
+    try:
+        result = await observer.delete_snapshot(snapshot_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _map_observer_error(exc) from exc
+    return _ok(result.to_dict())
+
+
+class _TemplateCreateBody(BaseModel):
+    name: str
+    from_template: str = "base"
+    cpu_count: int = 2
+    memory_mb: int = 1024
+
+
+@router.post("/templates", name="sandbox_template_create")
+async def sandbox_template_create(request: Request, body: _TemplateCreateBody) -> dict[str, Any]:
+    """``POST /api/sandbox/templates`` — 构建 e2b 模板（仅 e2b 模式）。
+
+    同步长耗时（分钟级，SDK Template.build）——前端需 loading 态。
+    local/docker 无模板概念 → UnsupportedAction（400，能力矩阵 template=false）。
+    """
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="template name must not be empty")
+    observer = _get_observer(request)
+    try:
+        result = await observer.create_template(
+            name=name, from_template=body.from_template,
+            cpu_count=body.cpu_count, memory_mb=body.memory_mb,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _map_observer_error(exc) from exc
+    return _ok(result.to_dict())
+
+
+@router.get("/templates", name="sandbox_template_list")
+async def sandbox_template_list(request: Request) -> dict[str, Any]:
+    """``GET /api/sandbox/templates`` — 列出已构建 e2b 模板（仅 e2b 模式）。
+
+    e2b SDK 无原生模板列表 API——返回空清单并如实标注 warning（I-3 不猜）。
+    """
+    observer = _get_observer(request)
+    try:
+        templates = await observer.list_templates()
+    except Exception as exc:  # noqa: BLE001
+        raise _map_observer_error(exc) from exc
+    return _ok({
+        "templates": [t.to_dict() for t in templates],
+        "total": len(templates),
+        "warning": "e2b SDK 无原生模板列表 API，仅返回本会话构建记录；历史模板请到 e2b 控制台查看",
+    })
+
+
 @router.get("/{sandbox_id}", name="sandbox_detail")
 async def sandbox_detail(request: Request, sandbox_id: str) -> dict[str, Any]:
     """``GET /api/sandbox/{sandbox_id}`` — 单沙箱详情。"""
@@ -128,6 +207,51 @@ async def sandbox_kill(request: Request, sandbox_id: str) -> dict[str, Any]:
     observer = _get_observer(request)
     try:
         result = await observer.kill_sandbox(sandbox_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _map_observer_error(exc) from exc
+    return _ok(result.to_dict())
+
+
+@router.post("/{sandbox_id}/pause", name="sandbox_pause")
+async def sandbox_pause(request: Request, sandbox_id: str) -> dict[str, Any]:
+    """``POST /api/sandbox/{sandbox_id}/pause`` — 暂停沙箱（B21：RUNNING→STOPPED 可逆）。
+
+    三模式统一支持：e2b 走 SDK pause；local/docker 经 daemon RPC ``sandbox.pause``。
+    幂等：已暂停沙箱返回 paused=false。
+    """
+    observer = _get_observer(request)
+    try:
+        result = await observer.pause_sandbox(sandbox_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _map_observer_error(exc) from exc
+    return _ok(result.to_dict())
+
+
+@router.post("/{sandbox_id}/resume", name="sandbox_resume")
+async def sandbox_resume(request: Request, sandbox_id: str) -> dict[str, Any]:
+    """``POST /api/sandbox/{sandbox_id}/resume`` — 恢复沙箱（B21：STOPPED→RUNNING 可逆）。
+
+    三模式统一支持：e2b 走 SDK connect 唤醒；local/docker 经 daemon RPC ``sandbox.resume``。
+    幂等：已运行沙箱返回 resumed=false。
+    """
+    observer = _get_observer(request)
+    try:
+        result = await observer.resume_sandbox(sandbox_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _map_observer_error(exc) from exc
+    return _ok(result.to_dict())
+
+
+@router.post("/{sandbox_id}/snapshots", name="sandbox_snapshot_create")
+async def sandbox_snapshot_create(request: Request, sandbox_id: str) -> dict[str, Any]:
+    """``POST /api/sandbox/{sandbox_id}/snapshots`` — 生成快照。
+
+    三模式统一支持：e2b 走 SDK create_snapshot（平台侧）；
+    local/docker 经 daemon RPC ``sandbox.snapshot``（workdir 拷贝到 snapshot_root）。
+    """
+    observer = _get_observer(request)
+    try:
+        result = await observer.create_snapshot(sandbox_id)
     except Exception as exc:  # noqa: BLE001
         raise _map_observer_error(exc) from exc
     return _ok(result.to_dict())

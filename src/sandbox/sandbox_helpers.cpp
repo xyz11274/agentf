@@ -6,14 +6,22 @@
 
 #include "sandbox/sandbox_helpers.h"
 
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <filesystem>
 #include <sstream>
 #include <string>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <vector>
 
 #include <rapidjson/document.h>
 
 namespace agentflow {
 namespace sandbox {
+
+namespace fs = std::filesystem;
 
 // 简化 JSON 字符串转义（生产实现可用 rapidjson，此处为 MVP 范围）
 static std::string escape_json(const std::string& s) {
@@ -107,6 +115,94 @@ ExecResult SandboxHelpers::parse_exec_result_json(const std::string& resp, const
   }
 
   return result;
+}
+
+// ── 子进程执行（F5 单一真相来源：E2BSandbox / TemplateRegistry / e2b 子进程调用共用）──
+// 原实现位于 sandbox_e2b.cpp（2026-08-08 提取），迁移后 sandbox_e2b.cpp 改用 SandboxHelpers::
+
+const std::string& SandboxHelpers::resolve_python3() {
+  static std::string cached;
+  if (!cached.empty()) return cached;
+  // 命1：PATH which python3
+  FILE* fp = popen("which python3 2>/dev/null", "r");
+  if (fp) {
+    char buf[4096];
+    if (fgets(buf, sizeof(buf), fp)) {
+      std::string p = buf;
+      while (!p.empty() && (p.back() == '\n' || p.back() == '\r')) p.pop_back();
+      if (!p.empty() && fs::exists(p)) cached = p;
+    }
+    pclose(fp);
+  }
+  // 命2：常见绝对路径候选（macOS Homebrew / Linux / conda）
+  if (cached.empty()) {
+    static const char* candidates[] = {
+        "/opt/homebrew/bin/python3", "/usr/local/bin/python3",
+        "/usr/bin/python3", "/bin/python3",
+    };
+    for (auto c : candidates) {
+      if (fs::exists(c)) { cached = c; break; }
+    }
+  }
+  // 命3：兜底——裸 "python3"（保留 PATH 依赖，至少 exit_code=127 能被 exec_cmd_argv 捕到）
+  if (cached.empty()) cached = "python3";
+  return cached;
+}
+
+SubprocessResult SandboxHelpers::exec_cmd_argv(const std::vector<std::string>& argv_strs) {
+  int stdout_pipe[2];
+  if (pipe(stdout_pipe) < 0) return {"", -1};
+
+  pid_t pid = fork();
+  if (pid < 0) {
+    close(stdout_pipe[0]);
+    close(stdout_pipe[1]);
+    return {"", -1};
+  }
+
+  if (pid == 0) {
+    // ── 子进程 ──
+    dup2(stdout_pipe[1], STDOUT_FILENO);
+    dup2(stdout_pipe[1], STDERR_FILENO);  // stderr 合并到 stdout
+    close(stdout_pipe[0]);
+    close(stdout_pipe[1]);
+
+    // 构造 argv（execvp 要求 nullptr 结尾）
+    std::vector<char*> argv;
+    argv.reserve(argv_strs.size() + 1);
+    // 注意：这里用 vector<char*> 指向 argv_strs 中各 string 的 c_str()。
+    // argv_strs 在本函数栈上，子进程 execvp 前一直有效，安全。
+    for (const auto& s : argv_strs) {
+      argv.push_back(const_cast<char*>(s.c_str()));
+    }
+    argv.push_back(nullptr);
+
+    execvp(argv_strs[0].c_str(), argv.data());
+    _exit(127);  // execvp 仅在失败时返回（如 python3 不在 PATH）
+  }
+
+  // ── 父进程 ──
+  close(stdout_pipe[1]);
+
+  std::string result;
+  char buf[4096];
+  ssize_t n;
+  while ((n = read(stdout_pipe[0], buf, sizeof(buf))) > 0) {
+    result.append(buf, n);
+  }
+  close(stdout_pipe[0]);
+
+  // 等待子进程退出（避免僵尸）+ 读 exit code（区分 execvp 失败 vs 脚本正常退出）
+  int status;
+  waitpid(pid, &status, 0);
+  int code = -1;
+  if (WIFEXITED(status)) {
+    code = WEXITSTATUS(status);  // 127 = execvp 失败；其他 = 脚本 exit code
+  } else if (WIFSIGNALED(status)) {
+    code = 128 + WTERMSIG(status);  // 被信号杀，约定 128+signum（与 shell 一致）
+  }
+
+  return {result, code};
 }
 
 }  // namespace sandbox

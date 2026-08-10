@@ -15,6 +15,7 @@
 namespace fs = std::filesystem;
 
 #include "daemon/sandbox_snapshots.h"  // SandboxSnapshots::snapshot / gc_recycle
+#include "daemon/template_registry.h"  // TemplateRegistry（v2 段1 预热）
 #include "sandbox/sandbox_factory.h"
 #include "daemon/artifact_store.h"  // ArtifactStore snapshot
 #include "utils/logger.h"
@@ -30,8 +31,9 @@ inline int64_t now_ms() {
 }
 }  // namespace
 
-SandboxLifecycle::SandboxLifecycle(SessionManager& session_manager, const daemon::DaemonConfig& config)
-    : session_manager_(session_manager), config_(config) {}
+SandboxLifecycle::SandboxLifecycle(SessionManager& session_manager, const daemon::DaemonConfig& config,
+                                   TemplateRegistry& template_registry)
+    : session_manager_(session_manager), config_(config), template_registry_(template_registry) {}
 
 SandboxLifecycle::~SandboxLifecycle() {
   if (gc_running_.load()) {
@@ -81,6 +83,19 @@ std::shared_ptr<sandbox::Sandbox> SandboxLifecycle::create(const sandbox::Sandbo
     agent_package_dir = fs::absolute(config_.agents[0].package_path).string();
   }
 
+  // v2 改动 #7：e2b 模式 template 取值优先从 TemplateRegistry::resolve(agent_id)
+  // 取已预建 alias（段1 preload 成功），未预建则 fallback 到 config e2b_default_template（v1 路径）
+  std::string e2b_template = config_.sandbox_config.e2b_default_template;
+  if (config_.sandbox_config.mode == "e2b") {
+    std::string resolved = template_registry_.resolve(owner.agent_id);
+    if (!resolved.empty()) {
+      e2b_template = resolved;
+      Logger::instance().info_f(
+          "[SANDBOX] e2b template resolved for agent=%s alias=%s (v2 preload)",
+          owner.agent_id.c_str(), resolved.c_str());
+    }
+  }
+
   auto sandbox_ptr = sandbox::SandboxFactory::create(
       config_.sandbox_config.mode,
       owner,
@@ -93,7 +108,7 @@ std::shared_ptr<sandbox::Sandbox> SandboxLifecycle::create(const sandbox::Sandbo
       config_.sandbox_config.image_name,
       config_.sandbox_config.e2b_api_url,
       config_.sandbox_config.e2b_api_key,
-      config_.sandbox_config.e2b_default_template,
+      e2b_template,
       config_.sandbox_config.e2b_network_allow_out,
       config_.sandbox_config.e2b_ca_cert_path,
       agent_package_dir);
@@ -106,6 +121,13 @@ std::shared_ptr<sandbox::Sandbox> SandboxLifecycle::create(const sandbox::Sandbo
   auto shared = std::shared_ptr<sandbox::Sandbox>(sandbox_ptr.release());
   session_manager_.put(owner, shared);
   return shared;
+}
+
+bool SandboxLifecycle::preload_template(const std::string& agent_id, const std::string& package_path) {
+  // v2 段1 预热：委托 TemplateRegistry::preload（幂等 build e2b template）
+  // agent 级快照（2026-08-09）：package_path 用于读 version + manifest hash（构建快照）
+  // 仅 e2b 模式有效；Local/Docker/none 模式 TemplateRegistry 内部 no-op 返回 true
+  return template_registry_.preload(agent_id, package_path);
 }
 
 void SandboxLifecycle::destroy(const std::string& sandbox_id) {
@@ -151,7 +173,9 @@ void SandboxLifecycle::destroy(const std::string& sandbox_id) {
           Logger::instance().warn_f("[SANDBOX] Fallback ArtifactStore snapshot failed: %s", e.what());
         }
       }
-      sb->destroy();  // 幂等（B7）
+      // 注意：不在此处调 sb->destroy()——下方 session_manager_.destroy(owner)
+      // 内部已含 sb->destroy() 语义，重复调用会导致 destroy 被触发 2 次
+      // （GcRecyclesIdle 测试实测 destroy_count=2，根因即此，2026-08-10 修复）
       // 销毁后清理 workdir（仅 Local/Docker；E2B 的宿主机 workdir 是暂存目录，保留）
       // 用户语义：local 模式沙箱 = workdir 目录，kill 即删目录（2026-08-02 用户确认）
       if (snapshot_ok && sb->sandbox_mode() != "e2b") {

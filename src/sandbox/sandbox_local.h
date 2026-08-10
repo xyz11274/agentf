@@ -52,6 +52,11 @@ class LocalSandbox : public Sandbox {
         std::chrono::steady_clock::now().time_since_epoch()).count();
   }
   void snapshot() override {}  // FR-012：no-op，由 SandboxLifecycle 通过 ArtifactStore 处理
+  // pause：SIGTERM 停掉 sandbox_http_server.py 子进程，state_→STOPPED（B21 可逆，保留 workdir）
+  // resume：重新 launch_http_server + wait_for_server_ready，state_→RUNNING
+  // 幂等（B7）：已 STOPPED 时 pause 无操作；已 RUNNING 时 resume 无操作
+  void pause() override;
+  void resume() override;
 
  private:
   SandboxKey    owner_;
@@ -62,6 +67,8 @@ class LocalSandbox : public Sandbox {
   int64_t       output_max_bytes_;
   int64_t       last_active_at_ = 0;  // FR-009：最近活跃时间戳（ms），构造时初始化
   pid_t         server_pid_;  // sandbox_http_server.py 子进程 PID，<0 表示未启动/已销毁
+  std::string   http_server_path_;  // 持久化：resume 时重新拉起 server 用（pause 后需保存）
+  int           http_server_port_ = 0;  // 持久化：sandbox_http_port（0=自动分配）
 
   // 拉起 sandbox_http_server.py 子进程，返回分配的端口号
   // 异常：SandboxLaunchException

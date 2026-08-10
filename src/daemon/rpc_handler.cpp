@@ -17,6 +17,7 @@
 #include "daemon/response_poller.h"
 #include "daemon/rpc_server.h"
 #include "daemon/sandbox_lifecycle.h"  // SandboxLifecycle::create
+#include "daemon/sandbox_snapshots.h"  // SandboxSnapshots::snapshot/delete_snapshot/list_snapshots（快照 RPC）
 #include "daemon/session_manager.h"
 #include "sandbox/sandbox_factory.h"   // SandboxFactory::SandboxLaunchException
 #include "sandbox/sandbox_helpers.h"   // SandboxHelpers::validate_upload_path
@@ -128,9 +129,11 @@ RpcHandler::RpcHandler(runtime::MMAgentRuntime& runtime, AgentRegistry& registry
                        ResponsePoller& poller, EventBroker& event_broker,
                        SessionManager& session_manager,
                        SandboxLifecycle* sandbox_lifecycle,
+                       SandboxSnapshots* sandbox_snapshots,
                        bool sandbox_allow_fallback)
     : runtime_(runtime), registry_(registry), poller_(poller), event_broker_(event_broker),
       session_manager_(session_manager), sandbox_lifecycle_(sandbox_lifecycle),
+      sandbox_snapshots_(sandbox_snapshots),
       sandbox_allow_fallback_(sandbox_allow_fallback),
       start_time_ms_(now_ms()) {}
 
@@ -236,6 +239,18 @@ void RpcHandler::register_all(RpcServer& server) {
       [this](const std::string& p, int64_t id, int, ChannelType) { return handle_sandbox_list(p, id); });
   server.register_handler("sandbox.destroy",
       [this](const std::string& p, int64_t id, int, ChannelType) { return handle_sandbox_destroy(p, id); });
+  // 暂停/恢复（B21：RUNNING↔STOPPED 可逆）
+  server.register_handler("sandbox.pause",
+      [this](const std::string& p, int64_t id, int, ChannelType) { return handle_sandbox_pause(p, id); });
+  server.register_handler("sandbox.resume",
+      [this](const std::string& p, int64_t id, int, ChannelType) { return handle_sandbox_resume(p, id); });
+  // 快照管理（生成 / 单条删除 / 列表）
+  server.register_handler("sandbox.snapshot",
+      [this](const std::string& p, int64_t id, int, ChannelType) { return handle_sandbox_snapshot(p, id); });
+  server.register_handler("sandbox.snapshot_delete",
+      [this](const std::string& p, int64_t id, int, ChannelType) { return handle_sandbox_snapshot_delete(p, id); });
+  server.register_handler("sandbox.snapshot_list",
+      [this](const std::string& p, int64_t id, int, ChannelType) { return handle_sandbox_snapshot_list(p, id); });
 }
 
 // --- Query methods ---
@@ -316,8 +331,30 @@ std::string RpcHandler::handle_agent_load(const std::string& params, int64_t id)
   // Start the newly loaded agent
   entry.agent->start();
 
+  // v2 段1 预热：load agent 后触发 e2b template preload（仅 e2b 模式内部有效）
+  // 用户 2026-08-08 拍板：preload 失败不拒绝 load——load RPC 返回 warning 语义，
+  // agent 仍载入，execute 首问走 v1 懒加载兜底。模板 build 阻塞等完成（部署期可接受）。
+  std::string preload_status = "skipped";
+  if (sandbox_lifecycle_) {
+    try {
+      bool ok = sandbox_lifecycle_->preload_template(entry.agent_id, entry.package_path);
+      preload_status = ok ? "ready" : "degraded";
+      if (!ok) {
+        Logger::instance().warn_f(
+            "[TEMPLATE] preload degraded for agent=%s (load success, execute 首问走 v1 兜底)",
+            entry.agent_id.c_str());
+      }
+    } catch (const std::exception& e) {
+      preload_status = "degraded";
+      Logger::instance().warn_f(
+          "[TEMPLATE] preload threw for agent=%s: %s (load success, execute 首问走 v1 兜底)",
+          entry.agent_id.c_str(), e.what());
+    }
+  }
+
   return build_success("{\"agent_id\":\"" + json_escape(entry.agent_id) + "\""
                      + ",\"name\":\"" + json_escape(entry.name) + "\""
+                     + ",\"template_preload\":\"" + preload_status + "\""
                      + ",\"success\":true}", id);
 }
 
@@ -496,8 +533,13 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
   }
   auto route_t1 = std::chrono::steady_clock::now();
   auto route_ms = std::chrono::duration_cast<std::chrono::milliseconds>(route_t1 - route_t0).count();
+  // TIMING 修正（2026-08-10）：此指标只测 route_request_message 段，不含沙箱创建。
+  // 旧文案 "sandbox_create+route latency (from USER_INPUT to route complete)" 有误导性——
+  // 真实沙箱创建耗时在 [SANDBOX] Created/reused sandbox ... (create_latency=...) 单独测量。
+  // 首问总耗时 = create_latency + route latency + LLM/工具链路（见耗时分布分析）。
   Logger::instance().info_f(
-      "[TIMING] trace=%s sandbox_create+route latency=%lldms (from USER_INPUT to route complete)",
+      "[TIMING] trace=%s route latency=%lldms (route_request_message only; "
+      "sandbox create measured separately as create_latency)",
       trace_id.c_str(), route_ms);
 
   // Register with ResponsePoller for async notification routing
@@ -1007,6 +1049,11 @@ std::string RpcHandler::handle_sandbox_read_file(const std::string& params, int6
   }
 
   // 1. 运行时通道：查活沙箱 → POST /exec (tool=read_file) 转发
+  // ⚠️ 当前 e2b 场景不通（2026-08-09 确认）：endpoint 是沙箱内 HTTP server 的
+  // cubeproxy 外部路径（http://host:80/sandbox/{id}/8080），而 D-001 实测
+  // cubeproxy 不转发 8080 端口（HTTP 502）。e2b 下此通道实际失败，调用方
+  // （bridge sandbox_files.py）会回退 ArtifactStore 快照通道。仅 Local/Docker
+  // 模式（HTTPExecutor 直连沙箱内 HTTP server）此通道可用。
   auto active = session_manager_.list_active();
   for (auto& sb : active) {
     if (sb->id() == sandbox_id) {
@@ -1099,6 +1146,11 @@ std::string RpcHandler::handle_sandbox_upload_file(const std::string& params, in
   }
 
   // 1. 运行时通道：查活沙箱 → POST /upload 转发
+  // ⚠️ 当前 e2b 场景不通（2026-08-09 确认）：与 read_file 同因——endpoint 是
+  // 沙箱内 HTTP server 的 cubeproxy 外部路径（http://host:80/sandbox/{id}/8080），
+  // D-001 实测 cubeproxy 不转发 8080（HTTP 502），e2b 下此通道实际失败。
+  // 且 upload 不走快照回退（快照只读），e2b 下用户上传资产实际不可达。
+  // 仅 Local/Docker 模式（HTTPExecutor 直连沙箱内 HTTP server）此通道可用。
   auto active = session_manager_.list_active();
   for (auto& sb : active) {
     if (sb->id() == sandbox_id) {
@@ -1267,6 +1319,170 @@ std::string RpcHandler::handle_sandbox_destroy(const std::string& params, int64_
   return build_success(
       "{\"sandbox_id\":\"" + json_escape(sandbox_id) +
       "\",\"destroyed\":true,\"already_gone\":false}", id);
+}
+
+std::string RpcHandler::handle_sandbox_pause(const std::string& params, int64_t id) {
+  // 沙箱暂停（B21：RUNNING→STOPPED 可逆，非终态）
+  // 参数：sandbox_id
+  // 响应：{"sandbox_id": ..., "paused": true/false}（false = 已暂停，幂等）
+  std::string sandbox_id = extract_json_string_local(params, "sandbox_id");
+  if (sandbox_id.empty()) {
+    return build_error(-32602, "Invalid params: need sandbox_id", id);
+  }
+  if (!sandbox_lifecycle_) {
+    return build_error(-32603, "sandbox subsystem disabled (mode=none)", id);
+  }
+  for (const auto& sb : sandbox_lifecycle_->list_active()) {
+    if (sb && sb->id() == sandbox_id) {
+      if (sb->state() == sandbox::SandboxState::STOPPED) {
+        // 已暂停：幂等成功
+        return build_success(
+            "{\"sandbox_id\":\"" + json_escape(sandbox_id) + "\",\"paused\":false}", id);
+      }
+      try {
+        sb->pause();
+      } catch (const std::exception& e) {
+        // SDK/平台不支持 pause（如 e2b 平台无 pause 端点）——返回可定位错误（M3）
+        Logger::instance().warn_f("[SANDBOX] pause failed sandbox=%s: %s",
+                                  sandbox_id.c_str(), e.what());
+        return build_error(-32603,
+                           std::string("sandbox.pause failed: ") + e.what(), id);
+      }
+      return build_success(
+          "{\"sandbox_id\":\"" + json_escape(sandbox_id) + "\",\"paused\":true}", id);
+    }
+  }
+  return build_error(-32602,
+                     "sandbox not found: " + json_escape(sandbox_id), id);
+}
+
+std::string RpcHandler::handle_sandbox_resume(const std::string& params, int64_t id) {
+  // 沙箱恢复（B21：STOPPED→RUNNING 可逆）
+  // 参数：sandbox_id
+  // 响应：{"sandbox_id": ..., "resumed": true/false}（false = 已运行，幂等）
+  std::string sandbox_id = extract_json_string_local(params, "sandbox_id");
+  if (sandbox_id.empty()) {
+    return build_error(-32602, "Invalid params: need sandbox_id", id);
+  }
+  if (!sandbox_lifecycle_) {
+    return build_error(-32603, "sandbox subsystem disabled (mode=none)", id);
+  }
+  for (const auto& sb : sandbox_lifecycle_->list_active()) {
+    if (sb && sb->id() == sandbox_id) {
+      if (sb->state() == sandbox::SandboxState::RUNNING) {
+        // 已运行：幂等成功
+        return build_success(
+            "{\"sandbox_id\":\"" + json_escape(sandbox_id) + "\",\"resumed\":false}", id);
+      }
+      if (sb->state() == sandbox::SandboxState::RECYCLING) {
+        return build_error(-32602,
+                           "sandbox in terminal state RECYCLING: " + json_escape(sandbox_id), id);
+      }
+      try {
+        sb->resume();
+      } catch (const std::exception& e) {
+        Logger::instance().warn_f("[SANDBOX] resume failed sandbox=%s: %s",
+                                  sandbox_id.c_str(), e.what());
+        return build_error(-32603,
+                           std::string("sandbox.resume failed: ") + e.what(), id);
+      }
+      return build_success(
+          "{\"sandbox_id\":\"" + json_escape(sandbox_id) + "\",\"resumed\":true}", id);
+    }
+  }
+  return build_error(-32602,
+                     "sandbox not found: " + json_escape(sandbox_id), id);
+}
+
+std::string RpcHandler::handle_sandbox_snapshot(const std::string& params, int64_t id) {
+  // 快照生成——透传 SandboxSnapshots::snapshot(sandbox_id, sandbox_mode)
+  // 参数：sandbox_id
+  // 响应：Snapshot 实体 JSON（snapshot_id/sandbox_id/created_at/store_path/size_bytes/sandbox_mode）
+  std::string sandbox_id = extract_json_string_local(params, "sandbox_id");
+  if (sandbox_id.empty()) {
+    return build_error(-32602, "Invalid params: need sandbox_id", id);
+  }
+  if (!sandbox_snapshots_) {
+    return build_error(-32603, "snapshot subsystem disabled (mode=none)", id);
+  }
+  // 由 SandboxSnapshots::snapshot 前置校验：sandbox_id 必须在活沙箱列表中
+  std::string sandbox_mode;
+  for (const auto& sb : sandbox_lifecycle_->list_active()) {
+    if (sb && sb->id() == sandbox_id) {
+      sandbox_mode = sb->sandbox_mode();
+      break;
+    }
+  }
+  if (sandbox_mode.empty() && sandbox_lifecycle_) {
+    // 未在活沙箱列表命中——让 snapshot 抛"not active"（统一错误语义）
+    // 空 mode 会按 Local/Docker 分支处理，但前置会先抛 not active
+  }
+  try {
+    daemon::Snapshot snap = sandbox_snapshots_->snapshot(sandbox_id, sandbox_mode);
+    std::string resp =
+        "{\"snapshot_id\":\"" + json_escape(snap.snapshot_id) +
+        "\",\"sandbox_id\":\"" + json_escape(snap.sandbox_id) +
+        "\",\"created_at\":" + std::to_string(snap.created_at) +
+        ",\"store_path\":\"" + json_escape(snap.store_path) +
+        "\",\"size_bytes\":" + std::to_string(snap.size_bytes) +
+        ",\"sandbox_mode\":\"" + json_escape(snap.sandbox_mode) + "\"}";
+    return build_success(resp, id);
+  } catch (const std::exception& e) {
+    Logger::instance().warn_f("[SANDBOX] snapshot failed sandbox=%s: %s",
+                              sandbox_id.c_str(), e.what());
+    return build_error(-32603, std::string("sandbox.snapshot failed: ") + e.what(), id);
+  }
+}
+
+std::string RpcHandler::handle_sandbox_snapshot_delete(const std::string& params, int64_t id) {
+  // 快照单条删除——透传 SandboxSnapshots::delete_snapshot（幂等）
+  // 参数：snapshot_id
+  // 响应：{"snapshot_id": ..., "deleted": true/false, "already_gone": true/false}
+  std::string snapshot_id = extract_json_string_local(params, "snapshot_id");
+  if (snapshot_id.empty()) {
+    return build_error(-32602, "Invalid params: need snapshot_id", id);
+  }
+  if (!sandbox_snapshots_) {
+    return build_error(-32603, "snapshot subsystem disabled (mode=none)", id);
+  }
+  try {
+    bool deleted = sandbox_snapshots_->delete_snapshot(snapshot_id);
+    return build_success(
+        "{\"snapshot_id\":\"" + json_escape(snapshot_id) +
+        "\",\"deleted\":" + (deleted ? "true" : "false") +
+        ",\"already_gone\":" + (deleted ? "false" : "true") + "}", id);
+  } catch (const std::exception& e) {
+    Logger::instance().warn_f("[SANDBOX] snapshot_delete failed snapshot=%s: %s",
+                              snapshot_id.c_str(), e.what());
+    return build_error(-32603, std::string("sandbox.snapshot_delete failed: ") + e.what(), id);
+  }
+}
+
+std::string RpcHandler::handle_sandbox_snapshot_list(const std::string& params, int64_t id) {
+  // 快照列表——透传 SandboxSnapshots::list_snapshots()
+  // 参数：可选 sandbox_id 过滤
+  // 响应：{"snapshots": [Snapshot...], "total": N}
+  if (!sandbox_snapshots_) {
+    return build_error(-32603, "snapshot subsystem disabled (mode=none)", id);
+  }
+  std::string filter_sandbox_id = extract_json_string_local(params, "sandbox_id");
+  std::vector<daemon::Snapshot> all = sandbox_snapshots_->list_snapshots();
+  std::string items;
+  int count = 0;
+  for (const auto& s : all) {
+    if (!filter_sandbox_id.empty() && s.sandbox_id != filter_sandbox_id) {
+      continue;
+    }
+    if (!items.empty()) items += ",";
+    items += "{\"snapshot_id\":\"" + json_escape(s.snapshot_id) +
+             "\",\"sandbox_id\":\"" + json_escape(s.sandbox_id) +
+             "\",\"created_at\":" + std::to_string(s.created_at) +
+             ",\"store_path\":\"" + json_escape(s.store_path) +
+             "\",\"size_bytes\":" + std::to_string(s.size_bytes) +
+             ",\"sandbox_mode\":\"" + json_escape(s.sandbox_mode) + "\"}";
+    ++count;
+  }
+  return build_success("{\"snapshots\":[" + items + "],\"total\":" + std::to_string(count) + "}", id);
 }
 
 std::string RpcHandler::_resolve_session_upload_dir(const std::string& agent_id,

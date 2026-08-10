@@ -600,6 +600,23 @@ def _content_to_text(content: str | list[ContentPart]) -> str:
     return "".join(parts)
 
 
+def _content_images(content: str | list[ContentPart]) -> str:
+    """从聊天请求 content 中提取用户附加图片的 data URI 列表（JSON 编码）。
+
+    仅收集 ``data:`` 前缀的内联图片（blob URL / 文件路径在会话历史中无法恢复，
+    落库无意义）；纯文本消息返回 ``"[]"``。供 save_dialogue 持久化用户图片。
+    """
+    if isinstance(content, str):
+        return "[]"
+    images: list[str] = []
+    for p in content:
+        url = getattr(p, "image_url", None)
+        url_str = getattr(url, "url", "") if url else ""
+        if url_str.startswith("data:"):
+            images.append(url_str)
+    return json.dumps(images, ensure_ascii=False)
+
+
 _SSE_DONE = "data: [DONE]\n\n"
 
 
@@ -887,6 +904,7 @@ async def chat_rest(
                 dialogue_id=dialogue_id,
                 agent_name=agent_id,
                 artifacts=artifacts_json,
+                images=_content_images(body.content),
             )
             logger.info(
                 "sse_chat.trace_pull agent=%s dialogue=%s user=%s client=%s sess=%s",

@@ -53,6 +53,13 @@ class SandboxSnapshots {
   // 异常：快照不存在抛 std::runtime_error 含 snapshot_id
   std::unique_ptr<sandbox::Sandbox> restore_from_snapshot(const std::string& snapshot_id);
 
+  // delete_snapshot：单条删除快照（管理能力，与 gc_recycle 的 TTL 批量清理互补）
+  // 前置：snapshot_id 在已拍快照列表中
+  // 后置：从 snapshots_ 移除 + remove_all(store_path)（E2B 模式 store_path 为空，仅移除 registry 条目）
+  // 幂等（B7）：快照不存在返回 false（不抛异常，与 sandbox.destroy 的 already_gone 语义对齐）
+  // 返回：true=已删除；false=快照不存在（幂等命中）
+  bool delete_snapshot(const std::string& snapshot_id);
+
   // gc_recycle：清理过期快照——created_at 超 gc_recycle_snapshot_ttl_ms 删除 store_path
   // 阈值从 config.sandbox_config.gc_recycle_snapshot_ttl_ms 读取（FR-009，默认 24h）
   void gc_recycle();

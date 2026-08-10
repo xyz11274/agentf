@@ -41,7 +41,9 @@ from routes.aisf_tasks import router as aisf_router
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DAEMON_BINARY = PROJECT_ROOT / "build" / "agentflowd"
-OUTFIT_AGENT = PROJECT_ROOT / "examples" / "agent" / "outfit-assistant"
+# 三态模型（删 examples 不崩不变量）：import 时自动从 ② 固化态重建 ③
+from e2e_helpers import ensure_outfit_agent_3 as _ensure_3  # noqa: E402
+OUTFIT_AGENT = _ensure_3()
 LLM_REPLY = "你好，我是服装搭配助手，很高兴为您服务！"
 
 
@@ -237,6 +239,10 @@ def real_infra(tmp_path_factory: pytest.TempPathFactory) -> Iterator[dict[str, A
             "AF_LLM_BASE_URL": llm_url,
             "AF_LLM_MODEL": "e2e-scripted",
             "AF_SKILL_MAX_COMPLETION_TOKENS": "512",
+            # 本测试聚焦 Bridge → daemon → 上游回调链路（LLM 已 mock），
+            # 不依赖远程 E2B 沙箱：跳过沙箱创建，避免 e2b 创建耗时
+            # 30s（create_latency≈30s）拖垮 agent.execute 响应超时。
+            "AF_SANDBOX_MODE": "none",
             "NO_PROXY": "127.0.0.1,localhost",
             "no_proxy": "127.0.0.1,localhost",
         }

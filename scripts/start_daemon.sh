@@ -88,6 +88,10 @@ _CONFIG_FILE="$AR_PROJECT_ROOT/configs/$_AGENTFLOW_ENV/agentflowd.json"
 
 # ── Parse arguments ─────────────────────────────────────────────────
 ACTION="start"
+# 默认加载 ③ workspace 运行实例（examples/agent/{name}/，三态模型见
+# docs/design/features/agent-package/agent-package-three-state.md §2.1）。
+# 启动脚本绕过 bridge 的 ②→③ 同步直接加载 ③ 实例（by-design：本地开发/生产
+# 启动时 ③ 已就绪或由开发者手动同步）；改 ② 固化态后需手动 load 或 rsync 同步。
 PACKAGE="examples/agent/outfit-assistant"
 PORT="17891"
 case "$_AGENTFLOW_ENV" in
@@ -262,6 +266,31 @@ ar_archive_log "$LOG_FILE" "$KEEP_LOGS"
 if [[ "$PACKAGE" = /* ]]; then PACKAGE_PATH="$PACKAGE"
 else PACKAGE_PATH="$AR_PROJECT_ROOT/$PACKAGE"
 fi
+
+# ── 三态模型：自动从 ② 固化态同步重建 ③ 运行实例（删 examples 不崩不变量）──
+# 设计：agent-package-three-state.md §5。③ 缺失或 ② 比 ③ 新时 rsync ②→③。
+# 排除运行时数据（.venv/outputs/workspace/.agentfoundry/preferences.json/manifest.jsonc），
+# 保留 ③ 已有运行时数据。同步是幂等的（rsync --update 仅传新/改文件）。
+_sync_2_to_3() {
+    local pkg_name="${PACKAGE_PATH##*/}"
+    local source_2="$AR_PROJECT_ROOT/resource/agent-packages/$pkg_name"
+    local target_3="$PACKAGE_PATH"
+    if [ ! -d "$source_2" ]; then
+        echo "[WARN] ② 固化态不存在: $source_2（跳过同步，直接加载 ③）"
+        return 0
+    fi
+    if [ ! -d "$target_3" ] || [ "$source_2" -nt "$target_3" ]; then
+        echo "[INFO] 同步 ②→③: $source_2 → $target_3"
+        mkdir -p "$target_3"
+        rsync -a --delete \
+            --exclude='.venv/' --exclude='outputs/' --exclude='workspace/' \
+            --exclude='.agentfoundry/' --exclude='preferences.json' \
+            --exclude='manifest.jsonc' --exclude='dist/' \
+            "$source_2/" "$target_3/"
+        echo "[INFO] 同步完成（运行时数据保留）"
+    fi
+}
+_sync_2_to_3
 
 # ── Launch (注入 AF_LOG_FILE 确保 skill_stderr 日志落 logs/) ──────────
 echo "[INFO] Starting daemon in background..."

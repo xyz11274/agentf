@@ -24,6 +24,7 @@ class ResponsePoller;
 class EventBroker;
 class SessionManager;  // AgentFoundry 沙箱机制移植
 class SandboxLifecycle;  // AgentFoundry 沙箱生命周期管理
+class SandboxSnapshots;  // AgentFoundry 沙箱快照管理（sandbox.snapshot / snapshot_delete / snapshot_list RPC）
 
 class RpcHandler {
 public:
@@ -31,6 +32,7 @@ public:
              ResponsePoller& poller, EventBroker& event_broker,
              SessionManager& session_manager,
              SandboxLifecycle* sandbox_lifecycle = nullptr,
+             SandboxSnapshots* sandbox_snapshots = nullptr,
              bool sandbox_allow_fallback = true);
   ~RpcHandler() = default;
 
@@ -43,6 +45,7 @@ private:
   EventBroker& event_broker_;
   SessionManager& session_manager_;  // AgentFoundry 沙箱机制移植
   SandboxLifecycle* sandbox_lifecycle_;  // nullable, mode=none 时为 nullptr
+  SandboxSnapshots* sandbox_snapshots_;  // nullable, mode=none 时为 nullptr（快照 RPC 用）
   bool sandbox_allow_fallback_;  // false=沙箱失败拒绝请求，true=降级到无沙箱
   RpcServer* server_ = nullptr;
   int64_t start_time_ms_;
@@ -103,6 +106,13 @@ private:
   // 透传 SandboxLifecycle::list_active() / destroy()——本地开发可观测性管理能力
   std::string handle_sandbox_list(const std::string& params, int64_t id);
   std::string handle_sandbox_destroy(const std::string& params, int64_t id);
+  // 沙箱暂停/恢复（B21：RUNNING↔STOPPED 可逆）——透传 Sandbox::pause()/resume()
+  std::string handle_sandbox_pause(const std::string& params, int64_t id);
+  std::string handle_sandbox_resume(const std::string& params, int64_t id);
+  // 快照管理（透传 SandboxSnapshots）：生成 / 单条删除 / 列表
+  std::string handle_sandbox_snapshot(const std::string& params, int64_t id);
+  std::string handle_sandbox_snapshot_delete(const std::string& params, int64_t id);
+  std::string handle_sandbox_snapshot_list(const std::string& params, int64_t id);
 
   // 推算会话级用户上传目录宿主机绝对路径（与 bridge content_serializer._compute_upload_dir 同构）
   // 返回：{agent_packages_path}/{agent_id}/workspace/{user_id}_{client_id}/upload/

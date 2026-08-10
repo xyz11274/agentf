@@ -105,16 +105,28 @@ static Json::Value proxy_via_coremind(const std::string& service_name,
     req->SetMethod(CMFrm::COM::POST);
     req->SetReqUrl(target);
     req->AddHeader("Content-Type", "application/json");
-    req->AddBody(json_dumps(body));
+    std::string req_body_str = json_dumps(body);
+    req->AddBody(req_body_str);
     req->SetTimeoutSecond(30);
+
+    // F7.1: 发送前打印完整请求体(原始证据,不截断)
+    std::cout << "[proxy] PROXY_REQ url=" << target
+              << " req_body=" << req_body_str << std::endl;
 
     auto httpResult = http2Client->Send(req);
     if (!httpResult || !httpResult->Is2XXStatusCode()) {
+        std::string resp_detail = httpResult ? httpResult->GetResponseBody() : "null response";
+        // F7.1: 失败也打印上游响应体(原始证据)
+        std::cerr << "[proxy] PROXY_ERR url=" << target
+                  << " resp_body=" << resp_detail << std::endl;
         result["error"] = "UPSTREAM_ERROR";
         return result;
     }
 
     std::string resp_body = httpResult->GetResponseBody();
+    // F7.1: 响应体完整打印(原始证据,不截断)
+    std::cout << "[proxy] PROXY_RESP url=" << target
+              << " resp_body=" << resp_body << std::endl;
     Json::CharReaderBuilder reader;
     std::string errors;
     std::istringstream input(resp_body);

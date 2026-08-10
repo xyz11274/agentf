@@ -599,7 +599,8 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
     if (resp_text.size() > 500) resp_preview += "... (truncated)";
     std::cout << "[" << sidecar::log_timestamp() << "] [sidecar_router] sync response: request_id=" << request_id
               << " task_id=" << task_id << " resp_len=" << resp_text.size()
-              << " content=" << resp_preview << std::endl;
+              // F7.1: 完整响应体原样打印(用户要求不截断),preview 仅供快速浏览
+              << " resp_body=" << response->body << std::endl;
 
     context->WriteStatueCode(CMFrm::COM::HttpStatus::HTTP200);
     return CMFrm::COM::SYNC;

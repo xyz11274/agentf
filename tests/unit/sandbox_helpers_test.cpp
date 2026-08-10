@@ -38,6 +38,8 @@ class StubSandbox : public Sandbox {
   int64_t last_active_at() const override { return 0; }
   void mark_active() override {}
   void snapshot() override {}
+  void pause() override {}   // Stub：无平台侧暂停语义
+  void resume() override {}  // Stub：无平台侧恢复语义
   const SandboxKey& owner() const override { return owner_; }
   const std::string& workdir() const override { return workdir_; }
 

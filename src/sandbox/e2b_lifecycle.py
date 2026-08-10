@@ -104,6 +104,18 @@ def _check_api_key() -> str:
     return api_key
 
 
+def _probe_http_ready(sb, health_url: str, attempts: int = 6, interval: float = 0.5) -> bool:
+    """探测沙箱内 HTTP server 是否就绪（curl /exec 通）。
+
+    v2 用途：预建 template 经 set_start_cmd 预跑 + snapshot 捕获运行中进程，
+    Sandbox.create(template=alias) 后进程已在跑，探测应立即通过。
+    未就绪返回 False（调用方走 v1 兜底：上传 server + 启动 + 再轮询）。
+    """
+    # 2026-08-10：HTTP server 探测已跳过（用户拍板）——cmd_create 不再调用本函数，
+    # 但保留定义供 cmd_fork 等未来 HTTP server 回归路径复用（见 cmd_create 跳过注释）。
+    return False
+
+
 def cmd_create(args: argparse.Namespace) -> int:
     api_key = _check_api_key()
     _log(f"create: E2B_API_KEY={api_key[:8]}...{api_key[-4:] if len(api_key) > 12 else ''} "
@@ -112,10 +124,6 @@ def cmd_create(args: argparse.Namespace) -> int:
     # path-based 路由走 IP 直连，但证书是给 *.cube.app 签的，需跳过主机名校验
     # 且内部部署的 CA 证书路径可能不一致，一并跳过证书验证
     _apply_ssl_patch()
-
-    if not Path(args.sandbox_http_server_path).is_file():
-        _log(f"ERROR: sandbox_http_server.py not found: {args.sandbox_http_server_path}")
-        return 1
 
     _log(f"create: token={args.traffic_access_token[:8]}... "
          f"port={args.sandbox_http_port} remote_dir={args.remote_workspace_dir} "
@@ -145,8 +153,14 @@ def cmd_create(args: argparse.Namespace) -> int:
     _log(f"create: sandbox_id={sb.sandbox_id}")
 
     # 自定义 e2b 部署的 envd API 走 path-based 路由（非 hostname 路由）
-    # nginx 配置: server_name _; location ^~ /sandbox/<id>/<port>/
+    # nginx 配置: server_name _;（catch-all）location ^~ /sandbox/<id>/<port>/
     # 因此需要覆盖 SDK 自动构造的 https://{port}-{id}.cube.app 地址
+    #
+    # ⚠️ 必须用裸 IP 而非域名 cube.app（2026-08-09 实测 + bug 20260723 阶段 2 坐实）：
+    # cubeproxy nginx server_name 是 `_`（catch-all），不识别 *.cube.app 的 SNI hostname
+    # → 带域名的请求 nginx 直接 RST（Connection reset by peer / errno=54）
+    # → 裸 IP 无 SNI 走 catch-all server block，TLS 通过 + path-based 路由生效。
+    # 详见 docs/bugs/20260723_e2b_sandbox_envd_connection.md 阶段 2-3。
     target_host = "https://218.245.96.148:443"
     path_based_url = f"{target_host}/sandbox/{sb.sandbox_id}/49983"
     # patch 沙箱内部存 envd_api_url 的地方（SDK 各处分别缓存，逐一覆盖）
@@ -160,33 +174,19 @@ def cmd_create(args: argparse.Namespace) -> int:
         sb._pty._envd_api_url = path_based_url
     _log(f"create: envd_api_url={path_based_url} (path-based routing)")
 
-    with open(args.sandbox_http_server_path, "rb") as f:
-        sb.files.write("/opt/sandbox/http_server/sandbox_http_server.py", f.read())
-    _log("create: uploaded sandbox_http_server.py")
-
-    start_cmd = (
-        f"nohup python3 /opt/sandbox/http_server/sandbox_http_server.py"
-        f" --port {args.sandbox_http_port} --host 0.0.0.0"
-        f" > /tmp/sandbox_http_server.log 2>&1 &"
-    )
-    sb.commands.run(start_cmd, background=True)
-    _log("create: started HTTP server in background")
-
-    health_url = f"http://localhost:{args.sandbox_http_port}/exec"
-    for _ in range(20):
-        try:
-            r = sb.commands.run(
-                f"curl -s --connect-timeout 2 {health_url}", timeout=3
-            )
-            if r.exit_code == 0:
-                _log("create: HTTP server ready")
-                break
-        except Exception:
-            pass
-        time.sleep(0.5)
-    else:
-        _log("ERROR: HTTP server startup timeout after 10s")
-        return 1
+    # ── HTTP server 探测已跳过（2026-08-10 用户拍板）──────────────────────
+    # 原逻辑（v2 改动 #3）：创建后 _probe_http_ready 短探测 HTTP server（attempts=6），
+    # 未就绪则走 v1 兜底：上传 sandbox_http_server.py + 启动 + 长轮询（attempts=20）。
+    #
+    # ⚠️ 实测坐实（2026-08-09 调研 + 2026-08-10 首问耗时分析）：
+    #   - HTTP server 实际无人使用——工具执行主链路走 e2b SDK（E2BExecutor →
+    #     commands.run，envd :49983），不经 HTTP server（docs/research/.../14-e2b冷启动耗时分析.md）
+    #   - 外部访问路径 http://host:80/sandbox/{id}/8080 被 cubeproxy 挡（D-001：不转发 8080，HTTP 502）
+    #   - 但快照基础模板未预跑 HTTP server → 探测不通过 → 每次首问走 v1 兜底
+    #     上传+启动+轮询，实测 create_latency=32.9s（2026-08-10 首问 00:46 链路）
+    #   - 因此跳过探测与 v1 兜底：Sandbox.create 完成即返回，create_latency 恢复到
+    #     平台调度耗时（快照复用秒级），不再等待无人使用的 HTTP server。
+    # 保留 host_url 输出字段（外部契约结构不变，端口指向无实际调用方）。
 
     host_url = f"http://218.245.96.148:80/sandbox/{sb.sandbox_id}/{args.sandbox_http_port}"
     json.dump({"id": sb.sandbox_id, "host_url": host_url}, sys.stdout)
@@ -234,6 +234,59 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
             _log("snapshot: sandbox already gone, skip snapshot")
             return 0
         _log(f"snapshot: FATAL {e}")
+        traceback.print_exc(file=sys.stderr)
+        return 1
+
+
+def cmd_pause(args: argparse.Namespace) -> int:
+    """暂停 e2b 沙箱（平台侧暂停，保留内存/磁盘状态，可 resume 恢复）。
+
+    通过 e2b SDK pause(keep_memory=True) 暂停沙箱。keep_memory=True
+    保留内存快照，resume 时快速恢复；keep_memory=False 冷启动（丢内存态）。
+    幂等：SDK pause 对已暂停沙箱返回 False（视为成功）。
+    """
+    api_key = _check_api_key()
+    _apply_ssl_patch()
+    _log(f"pause: sandbox_id={args.sandbox_id} keep_memory={args.keep_memory}")
+    try:
+        sb = Sandbox._cls_connect_sandbox(sandbox_id=args.sandbox_id)
+        paused = sb.pause(keep_memory=args.keep_memory)
+        _log(f"pause: done sandbox_id={args.sandbox_id} paused={paused}")
+        return 0
+    except Exception as e:
+        msg = str(e).lower()
+        if "404" in msg or "not found" in msg:
+            _log("pause: sandbox already gone")
+            return 1
+        _log(f"pause: FATAL {e}")
+        traceback.print_exc(file=sys.stderr)
+        return 1
+
+
+def cmd_resume(args: argparse.Namespace) -> int:
+    """恢复已暂停的 e2b 沙箱（唤醒 paused sandbox）。
+
+    e2b SDK 无显式 resume 方法——paused sandbox 通过重新连接唤醒
+    （connect 后自动恢复，auto_resume 语义）。连接成功后用 is_running()
+    校验恢复状态；SDK 不支持时抛异常（上层映射 UnsupportedAction）。
+    """
+    api_key = _check_api_key()
+    _apply_ssl_patch()
+    _log(f"resume: sandbox_id={args.sandbox_id}")
+    try:
+        sb = Sandbox._cls_connect_sandbox(sandbox_id=args.sandbox_id)
+        running = sb.is_running()
+        _log(f"resume: done sandbox_id={args.sandbox_id} running={running}")
+        if not running:
+            _log("resume: ERROR sandbox still not running after connect")
+            return 1
+        return 0
+    except Exception as e:
+        msg = str(e).lower()
+        if "404" in msg or "not found" in msg:
+            _log("resume: sandbox already gone")
+            return 1
+        _log(f"resume: FATAL {e}")
         traceback.print_exc(file=sys.stderr)
         return 1
 
@@ -291,6 +344,10 @@ def cmd_fork(args: argparse.Namespace) -> int:
 
     # 4. 启动 HTTP server（新沙箱是新进程，需要启动 server）
     # 从命令行参数读取 sandbox_http_server_path，若为空则从原路径上传
+    # ⚠️ 当前 e2b 场景下此 HTTP server 实际无人使用（2026-08-09 确认）：
+    #   工具执行走 e2b SDK（commands.run，envd :49983），外部 8080 路径被
+    #   cubeproxy 挡（D-001：不转发 8080，HTTP 502）——上传启动仅满足 fork
+    #   流程探测，无外部调用方。详见 14-e2b冷启动耗时分析.md
     if args.sandbox_http_server_path:
         with open(args.sandbox_http_server_path, "rb") as f:
             forked.files.write("/opt/sandbox/http_server/sandbox_http_server.py", f.read())
@@ -356,6 +413,16 @@ def main() -> int:
     p_snapshot = sub.add_parser("snapshot", help="对 e2b 沙箱创建文件系统快照（FR-012）")
     p_snapshot.add_argument("--sandbox-id", required=True, help="e2b sandbox ID")
     p_snapshot.set_defaults(func=cmd_snapshot)
+
+    p_pause = sub.add_parser("pause", help="暂停 e2b 沙箱（平台侧，可 resume 恢复）")
+    p_pause.add_argument("--sandbox-id", required=True, help="e2b sandbox ID")
+    p_pause.add_argument("--keep-memory", action="store_true", default=True,
+                         help="保留内存快照（默认 True，resume 快速恢复；False 冷启动）")
+    p_pause.set_defaults(func=cmd_pause)
+
+    p_resume = sub.add_parser("resume", help="恢复已暂停的 e2b 沙箱（connect 唤醒）")
+    p_resume.add_argument("--sandbox-id", required=True, help="e2b sandbox ID")
+    p_resume.set_defaults(func=cmd_resume)
 
     p_fork = sub.add_parser("fork", help="从源沙箱 fork 出新沙箱（B3 restore 通道）")
     p_fork.add_argument("--sandbox-id", required=True, help="源 e2b sandbox ID")

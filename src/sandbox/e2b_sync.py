@@ -207,13 +207,21 @@ def _load_manifest_whitelist(manifest_path: str, local_root: Path) -> set[str] |
 
 
 def _path_matches_exclude(rel_posix: str, ex: str) -> bool:
-    """判断相对路径是否命中 excludes 项（目录前缀或 glob）。"""
+    """判断相对路径是否命中 excludes 项（目录前缀、glob 或任意路径段）。
+
+    语义：
+    - ex 含 "/"（如 "foo/bar"）→ 前缀/glob 匹配（原逻辑）
+    - ex 无 "/"（如 ".agentfoundry"、"__pycache__"）→ 命中**任意路径段**
+      （顶层或嵌套同名目录/文件都排除）。修复：manifest excludes 只匹配顶层
+      目录导致 harness/skills/**/outfit-stylist/.agentfoundry 逃过排除、
+      被预装进每个新沙箱（2026-08-07 e2b-runtime-data-isolation 根因）。
+    """
     ex = ex.rstrip("/")
     if "/" in ex:
         return fnmatch.fnmatch(rel_posix, ex) or rel_posix.startswith(ex + "/")
-    # 顶层目录名/文件名
-    first = rel_posix.split("/", 1)[0]
-    return first == ex or fnmatch.fnmatch(rel_posix, ex)
+    # 任意路径段精确/glob 命中（顶层或嵌套）
+    segments = rel_posix.split("/")
+    return any(seg == ex or fnmatch.fnmatch(seg, ex) for seg in segments)
 
 
 def upload(sandbox_id: str, local_dir: str, remote_dir: str, manifest_path: str = "") -> None:

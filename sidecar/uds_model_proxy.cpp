@@ -242,9 +242,15 @@ void UdsModelProxy::handle_llm_chat(int client_fd, const std::string& request_id
         req->AddBody(body);
         req->SetTimeoutSecond(360);
 
+        // F7.1: 发送前打印完整请求体(原始证据,不截断)
+        std::cout << "[uds_proxy] IM_INFER_REQ url=" << target << IM_INFER_CHAT_PATH
+                  << " req_body=" << body << std::endl;
+
         auto httpResult = http2Client->Send(req);
         if (!httpResult || !httpResult->Is2XXStatusCode()) {
-            std::cerr << "[uds_proxy] IMInferScheduler request failed" << std::endl;
+            std::string resp_detail = httpResult ? httpResult->GetResponseBody() : "null response";
+            std::cerr << "[uds_proxy] IMInferScheduler request failed"
+                      << " resp=" << resp_detail << std::endl;
             Json::Value err_event;
             err_event["event_id"] = make_uuid();
             err_event["event_type"] = "llm_error";
@@ -261,8 +267,8 @@ void UdsModelProxy::handle_llm_chat(int client_fd, const std::string& request_id
         }
 
         std::string respBody = httpResult->GetResponseBody();
-        std::cout << "[uds_proxy] IMInferScheduler responded: body_len="
-                  << respBody.size() << std::endl;
+        // F7.1: 响应体完整打印(原始证据,不截断)
+        std::cout << "[uds_proxy] IM_INFER_RESP resp_body=" << respBody << std::endl;
 
         // 解析并回传
         Json::Value resp_body;
@@ -293,10 +299,16 @@ void UdsModelProxy::handle_llm_chat(int client_fd, const std::string& request_id
     cli.set_read_timeout(120, 0);
 
     auto content_type = "application/json";
+    // F7.1: 发送前打印完整请求体(原始证据,不截断)
+    std::cout << "[uds_proxy] LLM_REQ url=" << llm_api_url_ << "/chat/completions"
+              << " req_body=" << body << std::endl;
     auto res = cli.Post("/chat/completions", {{"Content-Type", content_type}}, body, content_type);
 
     // ... 以下保持原有 OpenAI 响应解析逻辑不变 ...
     if (!res) {
+        // F7.1: 失败也打印完整错误证据(可定位)
+        std::cerr << "[uds_proxy] LLM_ERR upstream unreachable"
+                  << " error=" << httplib::to_string(res.error()) << std::endl;
         Json::Value err_event;
         err_event["event_id"] = make_uuid();
         err_event["event_type"] = "llm_error";

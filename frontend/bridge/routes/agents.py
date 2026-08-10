@@ -14,8 +14,8 @@ will break the Vue UI.
 from __future__ import annotations
 
 import logging
-import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -30,8 +30,8 @@ from client import (
     InvalidParamsError,
     NotFoundError,
 )
-from dependencies import get_daemon_client
 from config import settings
+from dependencies import get_daemon_client
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +47,7 @@ def _ok(data: Any) -> dict[str, Any]:
     return {"success": True, "data": data, "error": None}
 
 
-def _raise_daemon_error(exc: DaemonError) -> "HTTPException":
+def _raise_daemon_error(exc: DaemonError) -> HTTPException:
     """Translate a :class:`DaemonError` to the corresponding HTTP status.
 
     Mapping (locked by the bridge contract):
@@ -105,6 +105,68 @@ async def get_agent(
         raise _raise_daemon_error(exc) from exc
 
 
+# 三态模型：② 固化态（agent_packages_path）→ ③ workspace 实例（agent_workspace_path）
+# 同步时跳过 ③ 的运行时数据（保留运行现场），资产以 ② 为权威源（I-3S-3）。
+# manifest.jsonc 不在此排除清单中——它是 ② 固化态 agent 包的"沙箱上传清单"声明
+# （agent-package-structure.md §3.3），属于资产而非运行时数据。随 ②→③ 同步带上后，
+# ③ 的 manifest 恒等于 ② 的权威清单：daemon 的 TemplateRegistry 用 ③ 的 manifest
+# 构建快照时，只含 ② 声明资产（不含 ③ 独有运行时产物如 dashscope_outfit_skills），
+# 且 daemon 全程只感知 ③（不感知 ②/③ 之分，三态模型约束）。
+_SYNC_EXCLUDE_NAMES = {
+    ".venv", "outputs", "workspace", ".agentfoundry",
+    "preferences.json",
+}
+
+
+def _sync_agent_package(pkg_name: str) -> Path:
+    """Sync ② 固化态 → ③ workspace 实例，返回 ③ 路径。
+
+    规则（docs/design/features/agent-package/agent-package-three-state.md §5）：
+    - ③ 不存在 → 全量拷贝 ② → ③
+    - ③ 已存在 → 覆盖式同步：② 的资产文件覆盖 ③ 同名文件；③ 的运行时数据
+      （排除清单）保留不动
+    - ② 为资产单一真相源（I-5 / I-3S-3）
+    - OSError 处理（用户拍板 2026-08-07）：中途失败时 **不清理 ③ 半成品**——
+      下次 load 的 `dirs_exist_ok=True` 覆盖式同步会在残缺 ③ 上重拷，② 仍是权威源；
+      避免误删 ③ 已有的运行时数据（.venv/outputs 等，恢复代价高）。失败由 500 上报，
+      下次 load 以 ② 为准收敛。
+    """
+    source = settings.agent_packages_path / pkg_name
+    target = settings.agent_workspace_path / pkg_name
+    if not source.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Agent package '{pkg_name}' not found in "
+                f"{settings.agent_packages_path.resolve()}"
+            ),
+        )
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(
+            source,
+            target,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(*_SYNC_EXCLUDE_NAMES),
+        )
+    except OSError as exc:
+        logger.warning("agent_lifecycle.sync_error pkg=%s error=%s", pkg_name, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to sync agent package '{pkg_name}' to workspace: {exc}",
+        ) from exc
+    # F7.1：记同步规模便于故障定位（② 与 ③ 文件数一致断言 I-3S-3）
+    try:
+        sync_count = sum(1 for _ in target.rglob("*") if _.is_file())
+    except OSError:
+        sync_count = -1  # 无法统计时不静默，记 -1 明示异常
+    logger.info(
+        "agent_lifecycle.sync pkg=%s src=%s dst=%s files=%d",
+        pkg_name, source.resolve(), target.resolve(), sync_count,
+    )
+    return target
+
+
 @router.post("/{agent_id}/load", name="load_agent")
 async def load_agent(
     agent_id: str,
@@ -113,17 +175,25 @@ async def load_agent(
 ) -> dict[str, Any]:
     """``POST /api/agents/{id}/load`` — load an agent (``agent.load``).
 
-    Before loading, injects default agent configuration into the agent's
-    ``.env`` file from Bridge ``config.yaml → agent_defaults``.
+    Before loading, syncs the agent package from the 固化态 directory
+    (``agent_packages_path``, ②) into the workspace instance directory
+    (``agent_workspace_path``, ③), then loads the workspace instance so all
+    runtime data (``.venv``/``outputs``/``workspace``/memory) lands in ③ and
+    never pollutes ②. Injects default agent configuration into the instance's
+    ``.env`` from Bridge ``config.yaml → agent_defaults``.
     Only writes values that are not already set (empty or placeholder).
     """
     pkg_name = (body.package_path if body else None) or agent_id
-    from routes.packages import _validate_package_name
+    from routes.packages import _run_setup_sh, _validate_package_name
     _validate_package_name(pkg_name)
-    package_path = str(settings.agent_packages_path / pkg_name)
+    workspace_path = _sync_agent_package(pkg_name)
+    package_path = str(workspace_path)
 
-    # 注入默认配置到 .env（不覆盖用户已有值）
+    # 注入默认配置到 .env（③ workspace 实例内，daemon 从 AGENT_PACKAGE_DIR/.env 读取）
     _inject_agent_env_defaults(pkg_name)
+
+    # setup.sh 在 ③ workspace 实例上执行（三态模型 I-3S-1：.venv/ 等运行时数据只落 ③）
+    _run_setup_sh(workspace_path)
 
     try:
         result = await client.agent_load(package_path)
@@ -276,7 +346,8 @@ def _inject_agent_env_defaults(pkg_name: str) -> None:
     Only writes values that are currently empty, missing, or hold a
     placeholder (``${...}``).  Never overwrites a user-configured value.
     """
-    pkg_dir = settings.agent_packages_path / pkg_name
+    # 三态模型：.env 是运行时数据，注入到 ③ workspace 实例（daemon load ③ 时读取）
+    pkg_dir = settings.agent_workspace_path / pkg_name
     env_file = pkg_dir / ".env"
     if not pkg_dir.is_dir():
         logger.warning("agent_env_inject.skip pkg=%s (directory not found)", pkg_name)
@@ -294,7 +365,8 @@ def _inject_agent_env_defaults(pkg_name: str) -> None:
                 current_env[k.strip()] = v.strip()
 
     # Resolve agent_defaults from config.yaml
-    raw_cfg = getattr(settings, "_yaml_source", {})
+    # F11：走公开 @property raw_config（单一真相源），不直接访问实例属性 _yaml_source
+    raw_cfg = settings.raw_config
     if not raw_cfg:
         return
 

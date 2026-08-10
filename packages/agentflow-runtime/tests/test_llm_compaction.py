@@ -11,7 +11,7 @@ Verifies:
 
 from __future__ import annotations
 
-from agentflow_runtime.llm_call import (
+from agentflow_runtime.compaction import (
     estimate_message_tokens,
     compact_messages,
     get_model_max_tokens,

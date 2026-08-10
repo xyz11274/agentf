@@ -3,8 +3,7 @@ name: 穿搭顾问 · Outfit Stylist
 # model: MiniMax-M3
 model: deepseek-v4-flash
 # model: aisf/qwen3-32b
-description: 个性化穿搭顾问：根据真实天气、场合和个人风格给出可落地的搭配（上装/外套/下装/鞋/配饰 + 配色 +
-  理由）。查实时天气、识别上传的衣物/全身照、记住风格档案与历史，按意图以文字/可交互视图/可下载 HTML 呈现，可生成穿搭效果图。
+description: 个性化穿搭顾问：根据真实天气、场合和个人风格给出可落地的搭配（上装/外套/下装/鞋/配饰 + 配色 + 理由）。查实时天气、识别上传的衣物/全身照、记住风格档案与历史，按意图以文字/可交互视图/可下载 HTML 呈现；配置图像 key 时默认附效果图、可按意图生成动态展示视频。
 skills:
   - name: outfit-stylist
   - name: forge-image-gen
