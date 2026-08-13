@@ -167,9 +167,13 @@ async def chat_endpoint(websocket: WebSocket, agent_id: str) -> None:
             # recv completed — process the new frame.
             try:
                 inbound_raw = recv_task.result()
+                recv_ts = time.time()
                 if logger.isEnabledFor(logging.DEBUG):
-                    preview = json.dumps(inbound_raw, ensure_ascii=False)[:1024]
-                    logger.debug("ws_recv agent=%s data=%s", agent_id, preview)
+                    inbound_json = json.dumps(inbound_raw, ensure_ascii=False)
+                    logger.debug(
+                        "ws_recv agent=%s data=%s len=%d ts=%.3f",
+                        agent_id, inbound_json, len(inbound_json), recv_ts,
+                    )
             except WebSocketDisconnect:
                 logger.info("chat_turn.disconnect agent=%s", agent_id)
                 if turn_task is not None:
@@ -305,6 +309,7 @@ async def _run_turn(
     history_messages: list[dict] = []
     bsession: dict | None = None
     if provider is not None:
+        context_load_start = time.time()
         try:
             bsession = await provider.get_or_create_session(
                 request.user_id, request.client_id,
@@ -330,6 +335,10 @@ async def _run_turn(
                 "ws_chat.context_failed agent=%s dialogue=%s: %s (proceeding without history)",
                 agent_id, dialogue_id, exc,
             )
+        logger.info(
+            "chat_turn.context_load agent=%s dialogue=%s elapsed=%.3fs",
+            agent_id, dialogue_id, time.time() - context_load_start,
+        )
 
     this_turn_text = prepare_content_for_daemon(request.content, agent_id=agent_id,
                                                  user_id=request.user_id, client_id=request.client_id)
@@ -343,6 +352,7 @@ async def _run_turn(
         "messages": messages_payload,
     }, ensure_ascii=False)
 
+    daemon_exec_start = time.time()
     try:
         execute_result = await asyncio.wait_for(
             daemon_client.agent_execute(
@@ -356,6 +366,10 @@ async def _run_turn(
             timeout=turn_timeout,
         )
     except asyncio.TimeoutError:
+        logger.info(
+            "chat_turn.daemon_execute agent=%s dialogue=%s elapsed=%.3fs status=timeout",
+            agent_id, dialogue_id, time.time() - daemon_exec_start,
+        )
         await _safe_send(
             websocket,
             _error_frame(
@@ -367,7 +381,16 @@ async def _run_turn(
         await _safe_send(websocket, ChatDone().model_dump())
         return
     except DaemonError:
+        logger.info(
+            "chat_turn.daemon_execute agent=%s dialogue=%s elapsed=%.3fs status=daemon_error",
+            agent_id, dialogue_id, time.time() - daemon_exec_start,
+        )
         raise
+
+    logger.info(
+        "chat_turn.daemon_execute agent=%s dialogue=%s elapsed=%.3fs status=ok",
+        agent_id, dialogue_id, time.time() - daemon_exec_start,
+    )
 
     task_id = _extract_task_id(execute_result)
     if not task_id:
@@ -388,6 +411,7 @@ async def _run_turn(
     chunk_count = 0
     turn_start = time.time()
     chunks_accumulated: list[str] = []
+    ttfb_logged = False
     # 最终 chunk 的转换后产物元数据（含 placeholder/data_base64，供持久化与回放一致）
     final_artifacts: list[dict] = []
 
@@ -440,6 +464,7 @@ async def _run_turn(
             # Race wait_for_response against stop_event so a client stop
             # interrupts the poll immediately instead of waiting for the
             # daemon's response timeout.
+            wait_once_start = time.time()
             wait_task = asyncio.create_task(
                 daemon_client.wait_for_response(
                     agent_id, dialogue_id=dialogue_id, timeout=remaining,
@@ -460,6 +485,11 @@ async def _run_turn(
                 # asyncio.wait timeout — retry.
                 raise asyncio.TimeoutError()
             notification = wait_task.result()
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "chat_turn.wait_once agent=%s dialogue=%s task=%s elapsed=%.3fs",
+                    agent_id, dialogue_id, task_id, time.time() - wait_once_start,
+                )
         except asyncio.CancelledError:
             raise
         except asyncio.TimeoutError as exc:
@@ -513,6 +543,13 @@ async def _run_turn(
                 break
 
         chunk_content = publicize_artifact_urls(_extract_content(notification))
+
+        if not ttfb_logged and chunk_content:
+            logger.info(
+                "chat_turn.ttfb agent=%s dialogue=%s task=%s elapsed=%.3fs",
+                agent_id, dialogue_id, task_id, time.time() - turn_start,
+            )
+            ttfb_logged = True
 
         # ── Unified type field ────────────────────────────────────
         # daemon 通知携带 type 字段: text | llm_chunk | progress
@@ -692,12 +729,17 @@ def _error_frame(message: str, *, code: int) -> dict[str, Any]:
 async def _safe_send(websocket: WebSocket, payload: dict[str, Any]) -> None:
     """Best-effort send; swallow errors so a single failed send doesn't crash the loop."""
     if logger.isEnabledFor(logging.DEBUG):
-        preview = json.dumps(payload, ensure_ascii=False)[:1024]
-        logger.debug("ws_send type=%s preview=%s", payload.get("type", "?"), preview)
+        payload_json = json.dumps(payload, ensure_ascii=False)
+        logger.debug("ws_send type=%s data=%s len=%d",
+                     payload.get("type", "?"), payload_json, len(payload_json))
+    send_start = time.time()
     try:
         await websocket.send_json(payload)
     except Exception:
         pass
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("chat_turn.send elapsed=%.3fs type=%s",
+                     time.time() - send_start, payload.get("type", "?"))
 
 
 def _peer(websocket: WebSocket) -> str:

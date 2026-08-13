@@ -382,6 +382,7 @@ async def _chat_turn_events(
         }, ensure_ascii=False)
 
     # --- Step 1: execute --------------------------------------------------
+    daemon_exec_start = time.time()
     try:
         execute_result = await asyncio.wait_for(
             daemon_client.agent_execute(
@@ -396,6 +397,10 @@ async def _chat_turn_events(
             timeout=turn_timeout,
         )
     except asyncio.TimeoutError:
+        logger.info(
+            "chat_turn.daemon_execute agent=%s dialogue=%s elapsed=%.3fs status=timeout",
+            agent_id, dialogue_id, time.time() - daemon_exec_start,
+        )
         daemon_client.discard_response_queue(dialogue_id)
         logger.warning(
             "chat_turn.timeout agent=%s dialogue=%s execute_timeout=%ss",
@@ -405,10 +410,19 @@ async def _chat_turn_events(
         yield {"type": "done", "final": True}
         return
     except DaemonError as exc:
+        logger.info(
+            "chat_turn.daemon_execute agent=%s dialogue=%s elapsed=%.3fs status=daemon_error",
+            agent_id, dialogue_id, time.time() - daemon_exec_start,
+        )
         daemon_client.discard_response_queue(dialogue_id)
         yield {"type": "error", "message": str(exc), "code": getattr(exc, "code", -32000)}
         yield {"type": "done", "final": True}
         return
+
+    logger.info(
+        "chat_turn.daemon_execute agent=%s dialogue=%s elapsed=%.3fs status=ok",
+        agent_id, dialogue_id, time.time() - daemon_exec_start,
+    )
 
     task_id = _extract_task_id(execute_result)
     if not task_id:
@@ -427,6 +441,7 @@ async def _chat_turn_events(
     deadline = asyncio.get_running_loop().time() + turn_timeout
     chunk_count = 0
     turn_start = time.time()
+    ttfb_logged = False
 
     while True:
         remaining = deadline - asyncio.get_running_loop().time()
@@ -441,12 +456,18 @@ async def _chat_turn_events(
             return
 
         try:
+            wait_once_start = time.time()
             notification = await asyncio.wait_for(
                 daemon_client.wait_for_response(
                     agent_id, dialogue_id=dialogue_id, timeout=remaining,
                 ),
                 timeout=remaining,
             )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "chat_turn.wait_once agent=%s dialogue=%s task=%s elapsed=%.3fs",
+                    agent_id, dialogue_id, task_id, time.time() - wait_once_start,
+                )
         except asyncio.TimeoutError:
             elapsed = time.time() - turn_start
             logger.warning(
@@ -478,6 +499,13 @@ async def _chat_turn_events(
 
         is_final = _extract_final(notification)
         chunk_content = publicize_artifact_urls(_extract_content(notification))
+
+        if not ttfb_logged and chunk_content:
+            logger.info(
+                "chat_turn.ttfb agent=%s dialogue=%s task=%s elapsed=%.3fs",
+                agent_id, dialogue_id, task_id, time.time() - turn_start,
+            )
+            ttfb_logged = True
         msg_type = _extract_metadata_value(notification, "type", "")
         # daemon 推送的 progress 通知仅设 metadata["final"]="false"，
         # 未设 metadata["type"]="progress"。
@@ -676,8 +704,8 @@ async def chat_rest(
     turn_timeout = settings.chat_turn_timeout_seconds
 
     logger.info(
-        "chat_turn.start agent=%s user=%s client=%s dialogue=%s content_len=%d stream=%s",
-        agent_id, body.user_id, body.client_id, dialogue_id, len(str(body.content)), stream,
+        "chat_turn.start agent=%s user=%s client=%s dialogue=%s content_len=%d stream=%s ts=%.3f",
+        agent_id, body.user_id, body.client_id, dialogue_id, len(str(body.content)), stream, time.time(),
     )
 
     # ── 上下文注入（设计文档 §2.4 / §3.1 Step 2-3）─────────────────
@@ -687,6 +715,7 @@ async def chat_rest(
     # I-5: 历史上下文拉取失败不应阻塞对话主流程，静默降级为无历史。
     history_messages: list[dict] = []
     bsession: dict | None = None
+    context_load_start = time.time()
     try:
         bsession = await provider.get_or_create_session(body.user_id, body.client_id)
         ctx = await provider.get_context(
@@ -711,6 +740,10 @@ async def chat_rest(
             "chat_turn.context_failed agent=%s dialogue=%s: %s (proceeding without history)",
             agent_id, dialogue_id, exc,
         )
+    logger.info(
+        "chat_turn.context_load agent=%s dialogue=%s elapsed=%.3fs",
+        agent_id, dialogue_id, time.time() - context_load_start,
+    )
 
     event_gen = _chat_turn_events(
         daemon_client=client,
@@ -957,6 +990,8 @@ async def chat_rest(
 
     async def _sse_stream() -> AsyncIterator[str]:
         sse_chunks: list[str] = []
+        stream_start = time.time()
+        sse_chunk_count = 0
         try:
             async for event in event_gen:
                 if event["type"] == "_session_info":
@@ -1028,11 +1063,16 @@ async def chat_rest(
                     sse_chunks.append(
                         _extract_token_for_persist(event["content"], event.get("chunk_type"))
                     )
+                    sse_chunk_count += 1
                     if event["final"]:
                         # 仅 final chunk 的内容入库（非 final 的 progress / llm_token 仅 SSE 展示）
                         final_content = [_extract_token_for_persist(
                             event["content"], event.get("chunk_type"),
                         )]
+                        logger.info(
+                            "chat_sse.stream agent=%s dialogue=%s elapsed=%.3fs chunks=%d",
+                            agent_id, dialogue_id, time.time() - stream_start, sse_chunk_count,
+                        )
                         yield _SSE_DONE
                         _save_conversation(final_content)
                         await _persist_to_provider(
@@ -1046,6 +1086,10 @@ async def chat_rest(
                             "code": event.get("code", -32000),
                         },
                     }
+                    logger.info(
+                        "chat_sse.stream agent=%s dialogue=%s elapsed=%.3fs chunks=%d status=error",
+                        agent_id, dialogue_id, time.time() - stream_start, sse_chunk_count,
+                    )
                     yield _sse_data_json(err_payload)
                     if sse_dump_fh:
                         try:
@@ -1058,6 +1102,10 @@ async def chat_rest(
                     await _persist_to_provider("".join(sse_chunks))
                     return
                 elif event["type"] == "done":
+                    logger.info(
+                        "chat_sse.stream agent=%s dialogue=%s elapsed=%.3fs chunks=%d status=done",
+                        agent_id, dialogue_id, time.time() - stream_start, sse_chunk_count,
+                    )
                     yield _SSE_DONE
                     _save_conversation(sse_chunks)
                     await _persist_to_provider("".join(sse_chunks))
@@ -1069,6 +1117,10 @@ async def chat_rest(
             logger.info(
                 "sse_stream.disconnect agent=%s dialogue=%s (auto-cancelling)",
                 agent_id, dialogue_id,
+            )
+            logger.info(
+                "chat_sse.stream agent=%s dialogue=%s elapsed=%.3fs chunks=%d status=disconnect",
+                agent_id, dialogue_id, time.time() - stream_start, sse_chunk_count,
             )
             await _cancel_dialogue(active)
             raise

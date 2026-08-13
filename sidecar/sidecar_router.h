@@ -60,11 +60,21 @@ private:
     // 默认值与原 get_env_or("BRIDGE_URL", "http://127.0.0.1:8199") 一致，向后兼容。
     // 声明在 .h，定义在 .cpp（遵循"头文件只放声明"原则）。
     static std::string bridge_url_;
+    // agent 路由配置（转发目标）：main.cpp 加载 configs/{env}/sidecar.json 后注入。
+    // 默认值 = outfit-assistant / 1.0.0 / 默认 capabilities，与旧硬编码行为一致。
+    static std::string agent_name_;
+    static std::string agent_version_;
+    static std::vector<std::string> agent_capabilities_;
 
 public:
     /// 配置注入：main.cpp 解析 --bridge-url 后调用。
     /// 必须在 CoreMind framework init 前调用，确保 handler 被回调时配置已就绪。
     static void set_bridge_url(const std::string& url) { bridge_url_ = url; }
+
+    /// 配置注入：main.cpp 加载 sidecar.json 后调用，设置转发目标 agent。
+    /// 必须在 CoreMind framework init 前调用（与 set_bridge_url 同一时机）。
+    static void set_agent_config(const std::string& name, const std::string& version,
+                                 const std::vector<std::string>& capabilities);
 };
 
 #endif // COREMIND_ENABLED

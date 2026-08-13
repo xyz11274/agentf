@@ -13,7 +13,7 @@
 // 改为 REST 确认已有 READY 模板复用。
 // agent 级快照关联（2026-08-09，设计 sandbox-warm-template-oci.md §2.6）：
 //   preload 按 agent 解析/构建快照（快照 = 基础模板 + agent manifest includes 全量），
-//   未命中自动构建（调 template_snapshot_create.py --manifest），构建成功回收旧快照。
+//   未命中自动构建（调 template_admin.py snapshot --manifest），构建成功回收旧快照。
 
 #include "daemon/template_registry.h"
 
@@ -235,11 +235,11 @@ std::string TemplateRegistry::read_agent_version(const std::string& package_path
 }
 
 std::string TemplateRegistry::compute_manifest_hash(const std::string& package_path) {
-  // 调 template_snapshot_create.py --hash-manifest <pkg>/manifest.jsonc
+  // 调 template_admin.py snapshot --hash-manifest <pkg>/manifest.jsonc
   // 计算 manifest includes 内容 hash8（复用 e2b_sync 权威解析）；失败返回空串
-  fs::path script = fs::absolute("scripts/e2b/template_snapshot_create.py");
+  fs::path script = fs::absolute("scripts/e2b/template_admin.py");
   if (!fs::exists(script)) {
-    Logger::instance().error_f("[TEMPLATE] template_snapshot_create.py not found: %s",
+    Logger::instance().error_f("[TEMPLATE] template_admin.py not found: %s",
                                script.string().c_str());
     return "";
   }
@@ -249,7 +249,7 @@ std::string TemplateRegistry::compute_manifest_hash(const std::string& package_p
   }
   std::vector<std::string> argv = {
       sandbox::SandboxHelpers::resolve_python3(), script.string(),
-      "--hash-manifest", manifest.string(),
+      "snapshot", "--hash-manifest", manifest.string(),
   };
   auto res = sandbox::SandboxHelpers::exec_cmd_argv(argv);
   Logger::instance().info_f(
@@ -288,13 +288,13 @@ std::string TemplateRegistry::compute_manifest_hash(const std::string& package_p
 std::string TemplateRegistry::build_agent_snapshot(const std::string& agent_id,
                                                    const std::string& package_path,
                                                    const std::string& base_template) {
-  // 调 template_snapshot_create.py 构建 agent 增量快照：
-  //   --base-template <基础模板> --manifest <pkg>/manifest.jsonc
+  // 调 template_admin.py snapshot 构建 agent 增量快照：
+  //   snapshot --base-template <基础模板> --manifest <pkg>/manifest.jsonc
   //   --name snap-<agent_id>-<version>-<hash8>（设计 §2.6 命名规范）
   // 成功返回平台 snapshotID（stdout 末行），失败返回空串
-  fs::path script = fs::absolute("scripts/e2b/template_snapshot_create.py");
+  fs::path script = fs::absolute("scripts/e2b/template_admin.py");
   if (!fs::exists(script)) {
-    Logger::instance().error_f("[TEMPLATE] template_snapshot_create.py not found: %s",
+    Logger::instance().error_f("[TEMPLATE] template_admin.py not found: %s",
                                script.string().c_str());
     return "";
   }
@@ -307,6 +307,7 @@ std::string TemplateRegistry::build_agent_snapshot(const std::string& agent_id,
   fs::path manifest = fs::path(package_path) / "manifest.jsonc";
   std::vector<std::string> argv = {
       sandbox::SandboxHelpers::resolve_python3(), script.string(),
+      "snapshot",
       "--base-template", base_template,
       "--name", snap_name,
   };
@@ -314,11 +315,24 @@ std::string TemplateRegistry::build_agent_snapshot(const std::string& agent_id,
     argv.push_back("--manifest");
     argv.push_back(manifest.string());
   }
+  // 2026-08-11：agentflow-runtime 由宿主随 agent package 一起上传到沙箱
+  //（--upload-dir 与 --manifest 并存，见 template_admin.py snapshot 步骤 3）
+  // 目标路径 $HOME/workspace/packages/agentflow-runtime——与沙箱版 setup.sh 的
+  // AF_RUNTIME_PKG 默认值（$SCRIPT_DIR/packages/agentflow-runtime）对齐，
+  // setup.sh 沙箱预热时 pip install -e 该路径即可，无需 pip 源/--find-links。
+  fs::path runtime_pkg = fs::absolute("packages/agentflow-runtime");
+  if (fs::is_directory(runtime_pkg)) {
+    argv.push_back("--upload-dir");
+    argv.push_back(runtime_pkg.string() + ":/home/user/workspace/packages/agentflow-runtime");
+  }
   Logger::instance().info_f(
-      "[TEMPLATE] building snapshot agent=%s name=%s base=%s manifest=%s",
+      "[TEMPLATE] building snapshot agent=%s name=%s base=%s manifest=%s runtime_upload=%s",
       agent_id.c_str(), snap_name.c_str(), base_template.c_str(),
-      fs::is_regular_file(manifest) ? manifest.string().c_str() : "(none)");
-  auto res = sandbox::SandboxHelpers::exec_cmd_argv(argv);
+      fs::is_regular_file(manifest) ? manifest.string().c_str() : "(none)",
+      fs::is_directory(runtime_pkg) ? "yes" : "no");
+  // 超时 180s：快照构建含 E2B 沙箱创建 + 沙箱内 setup.sh，网络不可达时可能挂起；
+  // 超时返回 124 → 上层走"降级 base + execute v1 兜底"路径，不阻塞 daemon 启动。
+  auto res = sandbox::SandboxHelpers::exec_cmd_argv(argv, /*timeout_ms=*/180000);
   Logger::instance().info_f(
       "[TEMPLATE] snapshot build agent=%s exit=%d output=%s",
       agent_id.c_str(), res.exit_code,

@@ -92,7 +92,9 @@ ACTION="start"
 # docs/design/features/agent-package/agent-package-three-state.md §2.1）。
 # 启动脚本绕过 bridge 的 ②→③ 同步直接加载 ③ 实例（by-design：本地开发/生产
 # 启动时 ③ 已就绪或由开发者手动同步）；改 ② 固化态后需手动 load 或 rsync 同步。
-PACKAGE="examples/agent/outfit-assistant"
+# agent 包路径可配置化：AF_AGENT_PACKAGE env（configs/{env}/.env 中设置，ar_load_env 已加载）
+# > 默认 outfit-assistant。相对路径基于项目根，--package CLI 参数仍可显式覆盖。
+PACKAGE="${AF_AGENT_PACKAGE:-examples/agent/outfit-assistant}"
 PORT="17891"
 case "$_AGENTFLOW_ENV" in
     prod) PROFILE="production" ;;
@@ -279,7 +281,17 @@ _sync_2_to_3() {
         echo "[WARN] ② 固化态不存在: $source_2（跳过同步，直接加载 ③）"
         return 0
     fi
-    if [ ! -d "$target_3" ] || [ "$source_2" -nt "$target_3" ]; then
+    # 同步触发判定（2026-08-10 修复）：原 `source_2 -nt target_3` 比较顶层目录 mtime，
+    # 深层 harness/tools 建文件不更新顶层目录 mtime → 新工具不同步（链路缺口①坐实）。
+    # 改内容级检测：③ 缺失 或 ② 中存在比 ③ 顶层目录更新的文件 → 触发 rsync。
+    # find -newer 兼容 BSD/GNU（macOS dev + Linux prod）；rsync --update 幂等，过度触发无害。
+    local need_sync=0
+    if [ ! -d "$target_3" ]; then
+        need_sync=1
+    elif find "$source_2" -type f -newer "$target_3" 2>/dev/null | head -1 | grep -q .; then
+        need_sync=1
+    fi
+    if [ "$need_sync" = "1" ]; then
         echo "[INFO] 同步 ②→③: $source_2 → $target_3"
         mkdir -p "$target_3"
         rsync -a --delete \

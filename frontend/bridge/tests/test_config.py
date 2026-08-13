@@ -71,18 +71,10 @@ def _pydantic_field_to_yaml_path(field_name: str) -> str:
     """Convert Pydantic field name to config.yaml dot-path.
 
     bridge_listen → bridge.listen
-    aisf_adapter_upstream_callback_port → aisf_adapter.upstream.callback_port
+    daemon_status_refresh_interval → daemon_status_refresh_interval
     """
     # Special cases where nesting doesn't follow underscores
     special_map = {
-        "aisf_adapter_upstream_callback_port": "aisf_adapter.upstream.callback_port",
-        "aisf_adapter_upstream_callback_path": "aisf_adapter.upstream.callback_path",
-        "aisf_adapter_upstream_scheme": "aisf_adapter.upstream.scheme",
-        "aisf_adapter_upstream_client_cert_path": "aisf_adapter.upstream.client_cert_path",
-        "aisf_adapter_upstream_client_key_path": "aisf_adapter.upstream.client_key_path",
-        "aisf_adapter_upstream_client_key_password": "aisf_adapter.upstream.client_key_password",
-        "aisf_adapter_upstream_ca_cert_path": "aisf_adapter.upstream.ca_cert_path",
-        "aisf_adapter_upstream_verify": "aisf_adapter.upstream.verify",
         "daemon_status_refresh_interval": "daemon_status_refresh_interval",
         "request_timeout_seconds": "request_timeout_seconds",
         "chat_turn_timeout_seconds": "chat_turn_timeout_seconds",
@@ -96,10 +88,6 @@ def _pydantic_field_to_yaml_path(field_name: str) -> str:
         "daemon_port": "daemon.port",
         "sidecar_enabled": "sidecar.enabled",
         "sidecar_listen": "sidecar.listen",
-        "sidecar_aisf_adapter_url": "sidecar.aisf_adapter_url",
-        "aisf_adapter_agent_id": "aisf_adapter.agent_id",
-        "aisf_adapter_mode": "aisf_adapter.mode",
-        "aisf_adapter_timeout": "aisf_adapter.timeout",
         "agent_defaults_llm_api_key": "agent_defaults.llm.api_key",
         "agent_defaults_llm_base_url": "agent_defaults.llm.base_url",
         "agent_defaults_llm_model": "agent_defaults.llm.model",
@@ -131,18 +119,6 @@ def _field_to_env_var(field_name: str) -> list[str]:
         "bridge_listen": "AF_BR_LISTEN",
         "sidecar_enabled": "AF_BR_SIDECAR_ENABLED",
         "sidecar_listen": "AF_BR_SIDECAR_LISTEN",
-        "sidecar_aisf_adapter_url": "AF_BR_SIDECAR_AISF_ADAPTER_URL",
-        "aisf_adapter_agent_id": "AF_BR_AISF_ADAPTER_AGENT_ID",
-        "aisf_adapter_mode": "AF_BR_AISF_ADAPTER_MODE",
-        "aisf_adapter_timeout": "AF_BR_AISF_ADAPTER_TIMEOUT",
-        "aisf_adapter_upstream_scheme": "AF_BR_AISF_ADAPTER_UPSTREAM_SCHEME",
-        "aisf_adapter_upstream_callback_port": "AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PORT",
-        "aisf_adapter_upstream_callback_path": "AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PATH",
-        "aisf_adapter_upstream_client_cert_path": "AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_CERT_PATH",
-        "aisf_adapter_upstream_client_key_path": "AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PATH",
-        "aisf_adapter_upstream_client_key_password": "AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PASSWORD",
-        "aisf_adapter_upstream_ca_cert_path": "AF_BR_AISF_ADAPTER_UPSTREAM_CA_CERT_PATH",
-        "aisf_adapter_upstream_verify": "AF_BR_AISF_ADAPTER_UPSTREAM_VERIFY",
         "agent_defaults_llm_api_key": "AF_BR_AGENT_DEFAULTS_LLM_API_KEY",
         "agent_defaults_llm_base_url": "AF_BR_AGENT_DEFAULTS_LLM_BASE_URL",
         "agent_defaults_llm_model": "AF_BR_AGENT_DEFAULTS_LLM_MODEL",
@@ -180,7 +156,7 @@ def test_all_yaml_keys_have_pydantic_fields(flat_yaml, pydantic_fields):
     missing = []
     for yaml_path in flat_yaml:
         # Skip items that don't map to Pydantic fields
-        if yaml_path in ("#", "sidecar", "aisf_adapter", "llm", "daemon", "bridge"):
+        if yaml_path in ("#", "sidecar", "llm", "daemon", "bridge"):
             continue
         # agent_defaults subtree is injected directly into agent environment
         # via YAML injection, not consumed by BridgeSettings Pydantic model
@@ -232,12 +208,6 @@ def test_all_pydantic_fields_have_yaml_keys(pydantic_fields, flat_yaml):
         ("bridge_listen", "AF_BR_LISTEN", "0.0.0.0:9999"),
         ("sidecar_enabled", "AF_BR_SIDECAR_ENABLED", True),
         ("sidecar_listen", "AF_BR_SIDECAR_LISTEN", "0.0.0.0:12345"),
-        ("sidecar_aisf_adapter_url", "AF_BR_SIDECAR_AISF_ADAPTER_URL", "http://aisf_adapter:8080"),
-        ("aisf_adapter_agent_id", "AF_BR_AISF_ADAPTER_AGENT_ID", "custom-agent"),
-        ("aisf_adapter_mode", "AF_BR_AISF_ADAPTER_MODE", "sync"),
-        ("aisf_adapter_timeout", "AF_BR_AISF_ADAPTER_TIMEOUT", 600),
-        ("aisf_adapter_upstream_callback_port", "AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PORT", 12345),
-        ("aisf_adapter_upstream_callback_path", "AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PATH", "/custom/callback"),
         (
             "artifact_public_base_url",
             "AF_BR_ARTIFACT_PUBLIC_BASE_URL",
@@ -358,8 +328,6 @@ def test_code_defaults_match_yaml_defaults():
     # 新增 configs/{env}/bridge.yaml 时在此补充差异项
     _env_overrides = {
         "test": {
-            "aisf_adapter_timeout": 60.0,
-            "aisf_adapter_upstream_verify": False,
             "request_timeout_seconds": 30.0,
             "chat_turn_timeout_seconds": 300.0,
             "daemon_status_refresh_interval": 5.0,
@@ -374,18 +342,6 @@ def test_code_defaults_match_yaml_defaults():
         "bridge_listen": "0.0.0.0:8199",
         "sidecar_enabled": False,
         "sidecar_listen": "0.0.0.0:23767",
-        "sidecar_aisf_adapter_url": "http://127.0.0.1:18080",
-        "aisf_adapter_agent_id": "outfit-assistant",
-        "aisf_adapter_mode": "async",
-        "aisf_adapter_timeout": 360.0,
-        "aisf_adapter_upstream_scheme": "http",
-        "aisf_adapter_upstream_callback_port": 23767,
-        "aisf_adapter_upstream_callback_path": "/coremind/systemagent/v1/callback",
-        "aisf_adapter_upstream_client_cert_path": "",
-        "aisf_adapter_upstream_client_key_path": "",
-        "aisf_adapter_upstream_client_key_password": "",
-        "aisf_adapter_upstream_ca_cert_path": "",
-        "aisf_adapter_upstream_verify": True,
         "log_level": "DEBUG",
         "request_timeout_seconds": 15.0,
         "chat_turn_timeout_seconds": 900.0,

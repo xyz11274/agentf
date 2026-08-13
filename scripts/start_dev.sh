@@ -88,7 +88,9 @@ FMM_ERROR_RATE=0.0
 # 默认加载 ③ workspace 运行实例（examples/agent/{name}/，三态模型见
 # docs/design/features/agent-package/agent-package-three-state.md §2.1）。
 # 启动脚本绕过 bridge 的 ②→③ 同步直接加载 ③ 实例（by-design）；改 ② 固化态后需手动 load 或 rsync 同步。
-AGENT_PACKAGE="$PROJECT_ROOT/examples/agent/outfit-assistant"
+# agent 包路径可配置化：AF_AGENT_PACKAGE env（configs/{env}/.env 中设置，ar_load_env 已加载）
+# 优先，AGENT_PACKAGE 旧变量向后兼容，最后默认 outfit-assistant。
+AGENT_PACKAGE="$PROJECT_ROOT/${AF_AGENT_PACKAGE:-examples/agent/outfit-assistant}"
 AGENTFLOWD_BIN=""
 
 # 日志

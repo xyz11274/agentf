@@ -524,6 +524,12 @@ class TestArtifactUrlPipeline:
         pkg_dir = tmp_path / "packages"
         pkg_dir.mkdir()
         monkeypatch.setattr(settings, "agent_packages_dir", str(pkg_dir))
+        # E2E-3 契约对齐(2026-08-12):bridge _resolve_artifact 读 agent_workspace_path
+        # (= agent_workspace_dir resolve) 寻产物文件,剥会话段 fallback 也在此 root 下重试.
+        # 必须 patch agent_workspace_dir 指向测试造的 pkg_dir,否则 URL 含会话段后
+        # bridge 找不到文件 → 404(原 legacy files/ 形态靠 project_root fallback 误中).
+        # agent_workspace_path 是 computed property 没 setter,patch agent_workspace_dir 即可.
+        monkeypatch.setattr(settings, "agent_workspace_dir", str(pkg_dir))
 
         # 重建 bridge app（确保 settings 已 patched）
         from main import bridge_app
@@ -542,11 +548,21 @@ class TestArtifactUrlPipeline:
 
         # patch AGENT_PACKAGE_DIR 指向我们的测试目录
         monkeypatch.setattr(coordinator_decide, "AGENT_PACKAGE_DIR", str(pkg_dir / "outfit-assistant"))
+        # E2E-3 契约对齐(2026-08-12):显式走新契约分支——设 AF_USER_ID+AF_CLIENT_ID+
+        # AF_ARTIFACT_STORAGE_URL,断言 URL 含 {user_id}_{client_id} 会话段而非退化到 legacy files/ 形态.
+        # 修复后的 local_artifact_url 走 _artifact_session_id() 与 _upload_artifacts_to_storage 单一真相来源.
+        monkeypatch.setenv("AF_USER_ID", "user_abc")
+        monkeypatch.setenv("AF_CLIENT_ID", "client_xyz")
+        monkeypatch.setenv("AF_ARTIFACT_STORAGE_URL", "http://localhost:8199")
         url = coordinator_decide.local_artifact_url(str(file))
-        # 预期：/api/artifacts/outfit-assistant/files/outputs/look.png（无 agent_name 重复）
+        # 预期：/api/artifacts/outfit-assistant/{user_id}_{client_id}/outputs/look.png
+        # (新契约格式,会话段 {user_id}_{client_id} 与上传落盘段一致)
         assert "/api/artifacts/" in url
-        assert "outfit-assistant/files/outfit-assistant" not in url, (
+        assert "outfit-assistant/user_abc_client_xyz/outfit-assistant" not in url, (
             f"URL 不应含重复 agent_name: {url}"
+        )
+        assert "user_abc_client_xyz" in url, (
+            f"E2E-3: URL 应含 {user_id}_{client_id} 会话段(新契约),实际: {url}"
         )
         assert url.endswith("outputs/look.png"), f"URL 应指向 outputs/look.png: {url}"
 

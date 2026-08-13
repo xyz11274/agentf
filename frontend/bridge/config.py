@@ -154,9 +154,6 @@ class BridgeSettings(BaseSettings):
     def sidecar_enabled(self) -> bool:
         return bool(_yget(self._yaml_source, "sidecar", "enabled"))
 
-    # ── AISF Adapter config（已接入主 Bridge，仅保留运行时参数） ──
-    # aisf_adapter_agent_id 走标准 Pydantic 字段加载（见上方 Field 定义）
-
     # ── Raw YAML for other components to consume ───────────────────
     @property
     def raw_config(self) -> dict[str, Any]:
@@ -186,20 +183,6 @@ class BridgeSettings(BaseSettings):
     # --- sidecar (production entry point) ------------------------------------
     sidecar_enabled: bool = Field(validation_alias="AF_BR_SIDECAR_ENABLED", default=False, description="Enable C++ CoreMind sidecar. Set via AF_BR_SIDECAR_ENABLED.")
     sidecar_listen: str = Field(validation_alias="AF_BR_SIDECAR_LISTEN", default="0.0.0.0:23767", description="Sidecar external listen address. Set via AF_BR_SIDECAR_LISTEN.")
-    sidecar_aisf_adapter_url: str = Field(validation_alias="AF_BR_SIDECAR_AISF_ADAPTER_URL", default="http://127.0.0.1:18080", description="Sidecar → aisf_adapter URL. Set via AF_BR_SIDECAR_AISF_ADAPTER_URL.")
-
-    # --- 🔧 aisf_adapter（已接入主 Bridge 的 /v1/tasks 路由） ---
-    aisf_adapter_agent_id: str = Field(validation_alias="AF_BR_AISF_ADAPTER_AGENT_ID", default="outfit-assistant", description="agentflowd 中 agent 标识. Set via AF_BR_AISF_ADAPTER_AGENT_ID.")
-    aisf_adapter_mode: str = Field(validation_alias="AF_BR_AISF_ADAPTER_MODE", default="async", description="AISF Adapter mode: async | sync. Set via AF_BR_AISF_ADAPTER_MODE.")
-    aisf_adapter_timeout: float = Field(validation_alias="AF_BR_AISF_ADAPTER_TIMEOUT", default=360.0, gt=0, description="Per-task timeout (seconds). Set via AF_BR_AISF_ADAPTER_TIMEOUT.")
-    aisf_adapter_upstream_scheme: str = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_SCHEME", default="http", description="Upstream callback scheme: http | https. Set via AF_BR_AISF_ADAPTER_UPSTREAM_SCHEME.")
-    aisf_adapter_upstream_callback_port: int = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PORT", default=23767, description="Upstream SysAgent callback port. Set via AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PORT.")
-    aisf_adapter_upstream_callback_path: str = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PATH", default="/coremind/systemagent/v1/callback", description="Upstream callback path. Set via AF_BR_AISF_ADAPTER_UPSTREAM_CALLBACK_PATH.")
-    aisf_adapter_upstream_client_cert_path: str = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_CERT_PATH", default="", description="Client cert PEM path for mTLS. Set via AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_CERT_PATH.")
-    aisf_adapter_upstream_client_key_path: str = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PATH", default="", description="Client key PEM path for mTLS. Set via AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PATH.")
-    aisf_adapter_upstream_client_key_password: str = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PASSWORD", default="", description="Client key PEM password (if encrypted). Set via AF_BR_AISF_ADAPTER_UPSTREAM_CLIENT_KEY_PASSWORD.")
-    aisf_adapter_upstream_ca_cert_path: str = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_CA_CERT_PATH", default="", description="Custom CA cert path for server verification. Set via AF_BR_AISF_ADAPTER_UPSTREAM_CA_CERT_PATH.")
-    aisf_adapter_upstream_verify: bool = Field(validation_alias="AF_BR_AISF_ADAPTER_UPSTREAM_VERIFY", default=True, description="Verify server TLS cert. Set via AF_BR_AISF_ADAPTER_UPSTREAM_VERIFY.")
 
     # --- agent_defaults — LLM 配置降级链路 (from config.yaml) ----------
     agent_defaults_llm_api_key: str = Field(validation_alias="AF_BR_AGENT_DEFAULTS_LLM_API_KEY", default="", description="Default LLM API key. From config.yaml agent_defaults.llm.api_key.")
@@ -234,6 +217,14 @@ class BridgeSettings(BaseSettings):
     artifact_compress_enabled: bool = Field(validation_alias="AF_BR_ARTIFACT_COMPRESS_ENABLED",
         default=True,
         description="Compress image artifacts to base64 on read (max side 512px). Default enabled.",
+    )
+    # 非图片产物 data_base64 填充上限(字节):
+    # 视频/音频/文档等非图片文件超过该大小时跳过 data_base64 填充(元数据保留 url 形式,
+    # 前端仍可访问,不阻断产物交付——I-8)。图片不受限(已压缩到 512px,体积可控)。
+    # 默认 1MB;置 0 表示不限制。对应 env AF_BR_ARTIFACT_BASE64_MAX_BYTES。
+    artifact_base64_max_bytes: int = Field(validation_alias="AF_BR_ARTIFACT_BASE64_MAX_BYTES",
+        default=1024 * 1024,
+        description="Max bytes for non-image data_base64 embedding; skip (keep url) when exceeded. 0 = unlimited.",
     )
 
     # --- 📂 filesystem paths ----------------------------------------------------
@@ -292,7 +283,7 @@ class BridgeSettings(BaseSettings):
 
     # --- 🏖️ sandbox management (local dev observability) ----------------------
     # 对齐 daemon 配置 configs/{env}/agentflowd.json 的 sandbox.* 与
-    # scripts/e2b/sandbox_list.py 的默认值（见 docs/design/features/sandbox-management.md）。
+    # scripts/e2b/sandbox_toolkit.py 的默认值（见 docs/design/features/sandbox-management.md）。
     sandbox_mode: str = Field(
         validation_alias="AF_BR_SANDBOX_MODE",
         default="local",

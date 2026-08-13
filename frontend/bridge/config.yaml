@@ -18,36 +18,11 @@ bridge:
 sidecar:
   enabled: false           # 生产环境设为 true
   listen: "0.0.0.0:23767"  # 对外暴露的地址端口
-  aisf_adapter_url: "http://127.0.0.1:18080"  # 内部 aisf_adapter 地址
-
-# ── AISF Adapter（已接入主 Bridge） ─────────────────────────────────
-# 对外接收端点：POST /health/v1/tasks（由 routes/aisf_tasks.py 提供）
-# 上游 SysAgent 通过此端点下发 TaskAssignment 请求
-aisf_adapter:
-  agent_id: "outfit-assistant"   # agentflowd 中的 agent 标识
-  mode: "async"                   # async | sync（默认异步，符合 AISF 协议）
-  timeout: 360.0                  # 单次任务超时（秒）
-
-  # 上游 SysAgent 回调地址（任务完成后 Bridge 主动 POST 回传结果）
-  # URL: {scheme}://{Header.SysAgentEntity}:{port}{path}
-  upstream:
-    scheme: "http"   # http | https
-    callback_port: 23767
-    callback_path: "/coremind/systemagent/v1/callback"
-
-    # --- TLS / mTLS 证书（仅 scheme=https 时生效） ---
-    # 客户端证书（mTLS），留空则不发送客户端证书
-    client_cert_path: ""       # PEM 格式客户端证书路径
-    client_key_path: ""        # PEM 格式客户端私钥路径
-    client_key_password: ""    # 私钥密码（如果加密）
-    # 服务端证书验证
-    ca_cert_path: ""           # 自定义 CA 证书路径，空=使用系统 CA
-    verify: true               # false=跳过服务端证书验证（仅测试/自签名用）
 
 # ── Artifact 公网地址 ─────────────────────────────────────────────
 # 空字符串 = 使用相对路径（仅内网可用）
 # 线上部署时填公网可访问的 URL，如 https://agent.example.com
-# artifact_public_base_url: "https://115.120.249.45:40092/health"
+# artifact_public_base_url: "https://115.120.249.45:40007/health"
 artifact_public_base_url: "http://localhost:8199/health"
 
 # ── 产物输出模式（两维正交开关，详见 docs/design/features/artifact-output-pipeline.md §3.6）──

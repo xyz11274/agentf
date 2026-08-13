@@ -84,4 +84,10 @@ def execute(tool_input: dict, sandbox_endpoint: str = None) -> str:
     # 统一序列化（WriteResult.to_dict() + 补 tool 字段）
     data = result.to_dict()
     data["tool"] = "write_file"
+    # 结构化产物字段：extract_structured_artifacts 的 or-chain 只认 list
+    # （_ARTIFACT_JSON_FIELDS 含 artifacts/files/outputs/result/path）。
+    # e2b 模式下 WriteResult.path 是沙箱内路径，包装成 files 列表供产物收集识别；
+    # 本地模式 path 为空字符串时不加 files，行为不变。
+    if data.get("path"):
+        data["files"] = [data["path"]]
     return json.dumps(data, ensure_ascii=False)

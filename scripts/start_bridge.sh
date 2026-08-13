@@ -116,12 +116,12 @@ case "$MODE" in
         fi
         ;;
     test)
-            HOST="127.0.0.1"
+            HOST="0.0.0.0"
             export AGENTFLOW_ENV="test" AF_BR_ENV="test"
             RELOAD=()
             ;;
         production)
-            HOST="127.0.0.1"
+            HOST="0.0.0.0"
             export AGENTFLOW_ENV="prod" AF_BR_ENV="prod"
             RELOAD=()
             ;;

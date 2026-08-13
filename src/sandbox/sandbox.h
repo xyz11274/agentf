@@ -104,6 +104,19 @@ class Sandbox {
   // 沙箱模式标识（用于 SandboxSnapshots::restore 分支判断）
   // 默认返回空字符串（Local/Docker）；E2BSandbox override 返回 "e2b"
   virtual std::string sandbox_mode() const { return ""; }
+
+  // 沙箱内 workspace 根目录（远端沙箱内绝对路径，如 e2b 的 /home/user/workspace）
+  //
+  // 用途（agent-package-structure.md §3.6 I-7 路径注入语义）：
+  //   daemon handle_agent_execute 下发 user message 前，把注入给 LLM 的相对路径
+  //   workspace/{user_id}_{client_id}/upload/... 改写为沙箱内绝对路径
+  //   {prefix}/workspace/{user_id}_{client_id}/upload/...——避免 LLM 把 "workspace"
+  //   前缀误当沙箱根、拼错成 {prefix}/{session}/upload/...（少拼一层，实测发生）。
+  //
+  // 默认返回空串 = 无远端 workspace（Local/Docker 与宿主机共享 workdir，
+  // 相对路径在 cwd=workdir 下直接可解析，无需改写）；E2BSandbox override
+  // 返回 remote_workspace_dir_（/home/user/workspace）。
+  virtual std::string sandbox_workspace_prefix() const { return ""; }
 };
 
 }  // namespace sandbox

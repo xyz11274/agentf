@@ -276,6 +276,47 @@ def test_unsupported_artifact_type_is_rejected(
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 媒体产物 serve(failure_mode_matrix §五 B-video)——
+# _ARTIFACT_SUFFIXES 白名单放行 mp4 等 + 正确 Content-Type 供浏览器内联播放
+# ═══════════════════════════════════════════════════════════════════
+
+@pytest.mark.parametrize(
+    "filename, mime_substring",
+    [
+        ("demo.mp4", "video/mp4"),
+        ("clip.mov", "video/quicktime"),
+        ("anim.webm", "video/webm"),
+        ("audio.mp3", "audio/mpeg"),
+        ("voice.wav", "audio/wav"),
+    ],
+)
+def test_media_artifact_is_served_with_real_mime(
+    client: TestClient,
+    artifact_root: Path,
+    filename: str,
+    mime_substring: str,
+) -> None:
+    """媒体产物(视频/音频)应被 bridge 白名单放行并以正确 Content-Type serve,
+    否则浏览器无法内联播放(fix: _MEDIA_SUFFIXES + _media_type 接入 _file_response)。"""
+    media = artifact_root / "outfit-assistant" / "outputs" / filename
+    media.parent.mkdir(parents=True)
+    media.write_bytes(b"fake-media-content")
+
+    response = client.get(
+        f"/api/artifacts/outfit-assistant/files/outputs/{filename}"
+    )
+
+    assert response.status_code == 200, (
+        f"{filename} 应被白名单放行, got {response.status_code}"
+    )
+    assert response.content == b"fake-media-content"
+    assert response.headers["content-type"].startswith(mime_substring), (
+        f"{filename} Content-Type 应含 {mime_substring}, "
+        f"got {response.headers.get('content-type')}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Non-image artifact delivery (PPT, DOCX, PDF, XLSX)
 # ═══════════════════════════════════════════════════════════════════
 

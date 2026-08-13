@@ -655,10 +655,7 @@ run_python_bridge_tests() {
     local _pytest_out; _pytest_out="$(mktemp)"
     # -k 排除依赖 agentflow_runtime（bridge venv 未安装）的测试类
     if uv run --directory "$bridge_dir" pytest \
-        tests/test_aisf_tasks.py \
         tests/test_config.py \
-        tests/test_upstream_callback_ssl.py \
-        tests/test_sysagent_callback_e2e.py \
         tests/test_chat_rest_sse.py \
         tests/test_chat.py \
         tests/test_routes.py \

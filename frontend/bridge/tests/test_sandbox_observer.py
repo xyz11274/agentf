@@ -24,6 +24,7 @@ from services.sandbox_observer import (
     ExecUnavailable,
     LocalProvider,
     ProviderError,
+    PtySession,
     SandboxNotFound,
     SandboxObserver,
     UnsupportedAction,
@@ -434,6 +435,107 @@ def test_local_exec_command_empty_command():
         asyncio.run(provider.exec_command("sb-x", "   "))
 
 
+# ── LocalProvider：pty 通道（沙箱内 HTTP server /pty/*）─────────────
+
+
+class _PtyServer(BaseHTTPRequestHandler):
+    """模拟沙箱内 HTTP server 的 PTY 端点：/pty/open 返回 session_id。"""
+
+    last_request: dict = {}
+    last_path: str = ""
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length).decode("utf-8")) if length else {}
+        _PtyServer.last_request = body
+        _PtyServer.last_path = self.path
+        if self.path == "/pty/open":
+            resp = json.dumps({"session_id": "pty-1", "pid": 42}).encode("utf-8")
+        elif self.path == "/pty/send":
+            resp = json.dumps({"ok": True}).encode("utf-8")
+        else:
+            resp = json.dumps({"ok": True}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(resp)))
+        self.end_headers()
+        self.wfile.write(resp)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def pty_server():
+    """启动本地 HTTP server 模拟沙箱内 PTY 端点。"""
+    _PtyServer.last_request = {}
+    _PtyServer.last_path = ""
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _PtyServer)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield f"http://127.0.0.1:{port}"
+    server.shutdown()
+
+
+def _local_provider_with_endpoint(endpoint: str) -> LocalProvider:
+    client = _FakeDaemonClient(
+        result=_rpc_list_result(
+            [{"sandbox_id": "sb-pty", "state": "RUNNING", "mode": "local", "endpoint": endpoint}],
+            server_now_ms=1_000,
+        )
+    )
+    return LocalProvider(mode="local", daemon_client=client)
+
+
+def test_local_pty_open_via_http(pty_server):
+    """pty_open 向沙箱内 /pty/open 发 rows/cols/cwd，返回 PtySession。"""
+    provider = _local_provider_with_endpoint(pty_server)
+
+    session = asyncio.run(provider.pty_open("sb-pty", rows=40, cols=120, cwd="/workspace"))
+
+    assert _PtyServer.last_path == "/pty/open"
+    assert _PtyServer.last_request == {"rows": 40, "cols": 120, "cwd": "/workspace"}
+    assert isinstance(session, PtySession)
+    assert session.sandbox_id == "sb-pty"
+    assert session.session_id == "pty-1"
+    assert session.mode == "local"
+    assert session.endpoint == pty_server
+
+
+def test_local_pty_open_no_endpoint():
+    """沙箱存在但 endpoint 缺失时 pty_open 抛 ExecUnavailable（对齐 exec 通道）。"""
+    provider = LocalProvider(
+        mode="local",
+        daemon_client=_FakeDaemonClient(
+            result=_rpc_list_result(
+                [{"sandbox_id": "sb-nep", "state": "RUNNING", "mode": "local"}],  # 无 endpoint
+                server_now_ms=1_000,
+            )
+        ),
+    )
+
+    with pytest.raises(ExecUnavailable):
+        asyncio.run(provider.pty_open("sb-nep"))
+
+
+def test_local_pty_send_base64(pty_server):
+    """pty_send 将 Ctrl+C 等输入 base64 编码透传（不丢失字节语义）。"""
+    provider = _local_provider_with_endpoint(pty_server)
+    session = PtySession(
+        sandbox_id="sb-pty",
+        session_id="pty-1",
+        mode="local",
+        endpoint=pty_server,
+    )
+
+    asyncio.run(provider.pty_send(session, b"\x03ls\r"))
+
+    assert _PtyServer.last_path == "/pty/send"
+    assert _PtyServer.last_request["session_id"] == "pty-1"
+    assert _PtyServer.last_request["data"] == "A2xzDQ=="  # base64("\x03ls\r")
+
+
 # ── E2BProvider：exec_command 通道（SDK commands.run）───────────────
 
 
@@ -535,3 +637,34 @@ def test_e2b_exec_command_sdk_error(monkeypatch):
 
     with pytest.raises(ExecUnavailable):
         provider.exec_command("sb-e2b", "sleep 100")
+
+
+def test_e2b_exec_command_exit_error_returns_exec_result(monkeypatch):
+    """命令业务失败（exit_code != 0）时 SDK 抛 CommandExitException，应返回正常 ExecResult。
+
+    不变量（F9 通道失败与命令失败分离 + I-1 业务输出不丢失）：
+    - e2b SDK 在命令退出码非 0 时抛 CommandExitException（CommandResult 子类，
+      含 exit_code/stdout/stderr，类型定义已核实）
+    - exec_command 必须把 exit_code + stderr 原样带回（前端显示在 terminal），
+      只有真正的通道异常才抛 ExecUnavailable——不得弹错误通知掩盖 stderr。
+    """
+    class _FakeExitError(Exception):
+        exit_code = 2
+        stdout = "partial stdout"
+        stderr = "ls: cannot access 'nope': No such file or directory"
+
+    provider = E2BProvider(api_url="http://127.0.0.1:1", api_key="k", ca_cert_path="")
+    fake_sb = _FakeSandbox(
+        commands=SimpleNamespace(run=lambda cmd, timeout: (_ for _ in ()).throw(_FakeExitError()))
+    )
+
+    monkeypatch.setattr(provider, "_import_sdk", lambda: (object(), object(), object()))
+    monkeypatch.setattr(provider, "_connect_sandbox", lambda cls, sid: fake_sb)
+
+    result = provider.exec_command("sb-e2b", "ls nope", timeout_ms=10000)
+
+    assert isinstance(result, ExecResult)
+    assert result.exit_code == 2
+    assert result.stdout == "partial stdout"
+    assert result.stderr == "ls: cannot access 'nope': No such file or directory"
+    assert result.command == "ls nope"

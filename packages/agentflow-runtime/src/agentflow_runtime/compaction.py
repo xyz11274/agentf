@@ -15,6 +15,7 @@ import json
 import os
 import sys
 from copy import deepcopy
+import time
 
 
 # ── Token estimation & message compaction ──
@@ -113,7 +114,10 @@ def compress_messages(
             / "hard_summary" / "drop_assistant" / "drop_user" / "emergency"
     """
     current = estimate_message_tokens(messages)
+    _t0 = time.monotonic()
     if current <= budget:
+        _ms = (time.monotonic() - _t0) * 1000
+        print(f"[timing] compaction level=skip duration_ms={_ms:.1f}", file=sys.stderr)
         return messages, "skip"
 
     # 深拷贝元素：折叠/丢弃会原地改 msg，不能污染调用方的 messages
@@ -133,6 +137,8 @@ def compress_messages(
         print(f"[flow]   compaction: drop_reminder "
               f"({before_tok}→{after_tok} tok, ratio={_ratio(after_tok)}, "
               f"dropped={dropped})", file=sys.stderr)
+        _ms = (time.monotonic() - _t0) * 1000
+        print(f"[timing] compaction level=drop_reminder duration_ms={_ms:.1f}", file=sys.stderr)
         return result, "drop_reminder"
 
     # ── Step 2: 折叠 tool_result 到文件（P4） ──
@@ -144,6 +150,8 @@ def compress_messages(
         print(f"[flow]   compaction: fold_tool_result "
               f"({before_tok}→{after_tok} tok, ratio={_ratio(after_tok)}, "
               f"folded={folded})", file=sys.stderr)
+        _ms = (time.monotonic() - _t0) * 1000
+        print(f"[timing] compaction level=fold_tool_result duration_ms={_ms:.1f}", file=sys.stderr)
         return result, "fold_tool_result"
 
     # ── Step 3: 折叠 tool_call 到文件（P3，保留最近 max(3, N) 条） ──
@@ -158,6 +166,8 @@ def compress_messages(
         print(f"[flow]   compaction: fold_tool_call "
               f"({before_tok}→{after_tok} tok, ratio={_ratio(after_tok)}, "
               f"folded={folded})", file=sys.stderr)
+        _ms = (time.monotonic() - _t0) * 1000
+        print(f"[timing] compaction level=fold_tool_call duration_ms={_ms:.1f}", file=sys.stderr)
         return result, "fold_tool_call"
 
     # ── Step 4: 硬压缩（P2，LLM 语义摘要，可选，默认关闭） ──
@@ -170,6 +180,8 @@ def compress_messages(
             print(f"[flow]   compaction: hard_summary "
                   f"({before}→{after_tok} tok, ratio={_ratio(after_tok)})",
                   file=sys.stderr)
+            _ms = (time.monotonic() - _t0) * 1000
+            print(f"[timing] compaction level=hard_summary duration_ms={_ms:.1f}", file=sys.stderr)
             return result, "hard_summary"
 
     # ── Step 5: 丢弃 assistant_content（P2 降级，保留最近 2 条） ──
@@ -182,6 +194,8 @@ def compress_messages(
         print(f"[flow]   compaction: drop_assistant "
               f"({before_tok}→{after_tok} tok, ratio={_ratio(after_tok)}, "
               f"dropped={dropped})", file=sys.stderr)
+        _ms = (time.monotonic() - _t0) * 1000
+        print(f"[timing] compaction level=drop_assistant duration_ms={_ms:.1f}", file=sys.stderr)
         return result, "drop_assistant"
 
     # ── Step 6: 丢弃 user_instruction（P1，保留最近 2 条） ──
@@ -193,10 +207,14 @@ def compress_messages(
         print(f"[flow]   compaction: drop_user "
               f"({before_tok}→{after_tok} tok, ratio={_ratio(after_tok)}, "
               f"dropped={dropped})", file=sys.stderr)
+        _ms = (time.monotonic() - _t0) * 1000
+        print(f"[timing] compaction level=drop_user duration_ms={_ms:.1f}", file=sys.stderr)
         return result, "drop_user"
 
     # ── Step 7: 极端兜底 ──
     result = _emergency_trim(result, budget)
+    _ms = (time.monotonic() - _t0) * 1000
+    print(f"[timing] compaction level=emergency duration_ms={_ms:.1f}", file=sys.stderr)
     return result, "emergency"
 
 

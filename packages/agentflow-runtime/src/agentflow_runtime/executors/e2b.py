@@ -10,13 +10,16 @@ encapsulating:
 - **Env forwarding** — inject API_KEY/MINIMAX_API_KEY/etc into sandbox
 - **Image download** — auto-download generated images from sandbox envd
 
-File operations (read/write/edit/list) run on the **host** filesystem
-because the sandbox workspace is mounted to the host.  Paths are
-translated bidirectionally via ``_resolve_path()``.
+File operations (read/write/edit/list) run **inside the sandbox** (session-isolated):
+write_file/edit_file/list_dir 通过 e2b SDK 写入沙箱，read_file 在沙箱内 cat，
+均不写回宿主机 agent 包目录（避免跨会话数据残留）。产物由 skill_executor 的
+_ensure_artifacts_in_package 通过 download_to_host 拉回宿主机 outputs/{session_id}/
+后上传 bridge → artifacts_storage。
 
 Reference: ADR 20260724-tools-runtime-refactor.md §4.3-4.4 (D-001 decision).
 """
 
+import logging
 import os
 import re
 import urllib.parse
@@ -257,31 +260,67 @@ class E2BExecutor(ToolExecutor):
                 return resp.read()
         else:
             data = sb.files.read(path)
-            if isinstance(data, str):
-                data = data.encode("latin-1")
-            return data
+            if isinstance(data, bytearray):
+                return bytes(data)
+            return data.encode("utf-8") if isinstance(data, str) else None
+
+    def download_to_host(self, sandbox_path: str, local_path: str) -> bool:
+        """Download a file from the sandbox to the host filesystem.
+
+        产物收集链路（skill_executor._ensure_artifacts_in_package）在 e2b 模式下
+        调用：把沙箱内生成的产物（write_file / bash 生成的文件）拉回宿主机
+        outputs/{session_id}/ 后，再上传 bridge → artifacts_storage。
+
+        走 envd /files 端点取原始 bytes（与 _download_images 一致，I-binary-safe），
+        禁止 sb.files.read() 的 str 返回（会乱码二进制）。
+
+        Returns:
+            True 拉回成功；False 沙箱内无该文件或下载失败（best-effort）。
+        """
+        try:
+            sb = self._connect()
+            data = self._fetch_sandbox_file(sb, sandbox_path)
+            if data is None:
+                logging.warning(
+                    "artifact.sandbox_download.missing sandbox_path=%s local=%s",
+                    sandbox_path, local_path,
+                )
+                return False
+            parent = os.path.dirname(os.path.abspath(local_path))
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(local_path, "wb") as f:
+                f.write(data)
+            logging.info(
+                "artifact.sandbox_download.done sandbox_path=%s local=%s bytes=%d",
+                sandbox_path, local_path, len(data),
+            )
+            return True
+        except Exception as e:
+            logging.warning(
+                "artifact.sandbox_download.error sandbox_path=%s local=%s err=%s",
+                sandbox_path, local_path, e,
+            )
+            return False
 
     # -- path translation ---------------------------------------------------
 
-    def _resolve_path(self, path: str) -> str:
-        """Translate sandbox paths to host paths.
-
-        - Sandbox paths (``/home/user/workspace/...``) → host ``agent_package_dir/...``
-        - Relative paths → resolved against ``agent_package_dir``
-        - Absolute host paths → returned as-is
-        """
-        if path.startswith(self.SANDBOX_WORKSPACE):
-            return path.replace(self.SANDBOX_WORKSPACE, self.agent_package_dir)
-        if not os.path.isabs(path):
-            return os.path.join(self.agent_package_dir, path)
-        return path
-
     def _to_sandbox_path(self, path: str) -> str:
-        """Translate host path → sandbox path (reverse of _resolve_path)."""
-        if path.startswith(self.SANDBOX_WORKSPACE):
+        """Translate host path → sandbox path.
+
+        - 已是沙箱路径（/home/user/workspace/...）→ 原样返回
+        - 宿主机 agent_package_dir 前缀 → 替换为沙箱 workspace
+        - 相对路径 → 拼到沙箱 workspace 下
+        - 其他绝对路径 → 原样返回
+
+        边界安全：agent_package_dir 前缀判断加 os.sep 边界（含 == 与 +os.sep 二分），
+        避免 /fake/agent/package-backup/... 这种姊妹目录前缀碰撞被误替换为
+        /home/user/workspace-backup/...（2026-08-10 review 发现）。
+        """
+        if path.startswith(self.SANDBOX_WORKSPACE + os.sep) or path == self.SANDBOX_WORKSPACE:
             return path
-        if path.startswith(self.agent_package_dir):
-            return path.replace(self.agent_package_dir, self.SANDBOX_WORKSPACE)
+        if path == self.agent_package_dir or path.startswith(self.agent_package_dir + os.sep):
+            return path.replace(self.agent_package_dir, self.SANDBOX_WORKSPACE, 1)
         if not os.path.isabs(path):
             return os.path.join(self.SANDBOX_WORKSPACE, path)
         return path
@@ -349,23 +388,24 @@ class E2BExecutor(ToolExecutor):
     # -- write_file ---------------------------------------------------------
 
     def write_file(self, path: str, content: str) -> WriteResult:
-        """Write file to host filesystem (workspace is mounted)."""
-        resolved = self._resolve_path(path)
+        """Write file **inside the sandbox** (session-isolated), not host.
 
+        e2b 模式下文件留在沙箱内，由产物收集链路（_ensure_artifacts_in_package
+        → e2b SDK 拉回 → outputs/{session_id}/ → upload storage）收走，避免
+        直接写回宿主机 agent 包目录造成跨会话数据残留。返回体带沙箱内 path，
+        供 extract_structured_artifacts 识别产物。
+        """
+        sandbox_path = self._to_sandbox_path(path)
         try:
-            parent = os.path.dirname(os.path.abspath(resolved))
-            if parent:
-                os.makedirs(parent, exist_ok=True)
-
-            with open(resolved, "w", encoding="utf-8") as f:
-                f.write(content)
-
+            sb = self._connect()
+            sb.files.write(sandbox_path, content.encode("utf-8"))
             return WriteResult(
                 success=True,
                 bytes_written=len(content.encode("utf-8")),
+                path=sandbox_path,
             )
         except Exception as e:
-            return WriteResult(error=f"Failed to write file: {e}")
+            return WriteResult(error=f"Failed to write file in sandbox: {e}", path=sandbox_path)
 
     # -- edit_file ----------------------------------------------------------
 
@@ -376,15 +416,15 @@ class E2BExecutor(ToolExecutor):
         new_str: str,
         replace_all: bool = False,
     ) -> ExecResult:
-        """Edit file on host filesystem with precise text replacement."""
-        resolved = self._resolve_path(path)
+        """Edit file **inside the sandbox** (read-replace-write via e2b SDK).
 
-        if not os.path.isfile(resolved):
-            return ExecResult(exit_code=1, error=f"File not found: {path}")
+        与 write_file 一致：文件在沙箱内，不写回宿主机，避免跨会话残留。
+        """
+        sandbox_path = self._to_sandbox_path(path)
 
         try:
-            with open(resolved, "r", encoding="utf-8") as f:
-                content = f.read()
+            sb = self._connect()
+            content = sb.files.read(sandbox_path)
 
             if old_str not in content:
                 return ExecResult(
@@ -403,8 +443,7 @@ class E2BExecutor(ToolExecutor):
             else:
                 new_content = content.replace(old_str, new_str, 1)
 
-            with open(resolved, "w", encoding="utf-8") as f:
-                f.write(new_content)
+            sb.files.write(sandbox_path, new_content.encode("utf-8"))
 
             return ExecResult(exit_code=0, stdout=f"Edited {path}")
         except Exception as e:
@@ -413,35 +452,33 @@ class E2BExecutor(ToolExecutor):
     # -- list_dir -----------------------------------------------------------
 
     def list_dir(self, path: str, recursive: bool = False) -> list[dict]:
-        """List directory on host filesystem."""
-        resolved = self._resolve_path(path)
+        """List directory **inside the sandbox** (sb.files.list).
 
-        if not os.path.isdir(resolved):
+        与 read/write/edit 一致：目录在沙箱内，返回沙箱内路径，不读宿主机。
+        """
+        sandbox_path = self._to_sandbox_path(path)
+
+        try:
+            sb = self._connect()
+            # depth=None 表示递归列全量；非递归 depth=1
+            entries = sb.files.list(sandbox_path, depth=None if recursive else 1)
+
+            # e2b SDK EntryInfo.type: Optional[FileType]，FileType(Enum) 取值
+            # FILE="file"/DIR="dir"。直接用 enum identity 判断——禁止凭 str(Enum)
+            # 推断（str(FileType.DIR)=="FileType.DIR" 不.startswith("DIR")，曾导致
+            # is_dir 永远 False 的回归 bug，2026-08-10 review 发现）。
+            from e2b_code_interpreter import FileType
+
+            result: list[dict] = []
+            for entry in entries:
+                result.append({
+                    "name": entry.name,
+                    "path": entry.path,
+                    "is_dir": entry.type is FileType.DIR,
+                })
+            return result
+        except Exception:
             return []
-
-        entries: list[dict] = []
-
-        if recursive:
-            for root, dirs, files in os.walk(resolved):
-                dirs[:] = sorted(dirs)
-                for name in sorted(files):
-                    full = os.path.join(root, name)
-                    entries.append({"name": name, "path": full, "is_dir": False})
-                for name in sorted(dirs):
-                    full = os.path.join(root, name)
-                    entries.append({"name": name, "path": full, "is_dir": True})
-        else:
-            with os.scandir(resolved) as it:
-                for entry in sorted(it, key=lambda e: e.name):
-                    entries.append(
-                        {
-                            "name": entry.name,
-                            "path": os.path.join(resolved, entry.name),
-                            "is_dir": entry.is_dir(),
-                        }
-                    )
-
-        return entries
 
     # -- fetch_url ----------------------------------------------------------
 

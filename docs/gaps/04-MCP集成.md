@@ -1,7 +1,7 @@
 # Gap 04: MCP 协议集成缺失
 
 ## 状态
-⚠️ **示例层已实现**（`examples/agent/harness-agent/harness/tools/mcp_bridge.py`），C++ 框架层仍无原生支持
+✅ **Python 层已正式接入**（2026-08-13）：`agentflow-runtime` 的 `harness/mcp/mcp_bridge.py`（独立 MCP 接入层目录，与系统工具分离）已接入 `_LocalToolRegistry`，MCP 工具对 LLM 可见可调；C++ 框架层仍无原生支持
 
 ## 问题描述
 

@@ -24,7 +24,16 @@ logger = logging.getLogger("agentflow.bridge.routes.artifacts")
 router = APIRouter(prefix="/api/artifacts", tags=["artifacts"])
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _DOCUMENT_SUFFIXES = {".pptx", ".ppt", ".docx", ".doc", ".xlsx", ".xls", ".pdf"}
-_ARTIFACT_SUFFIXES = _IMAGE_SUFFIXES | _DOCUMENT_SUFFIXES | {".html", ".htm", ".css", ".js", ".json", ".svg"}
+# 媒体后缀与 skill_executor 的 _artifact_suffixes 对齐(文本/JSON 双通道已能识别
+# mp4/mov/webm/mp3/wav),bridge 白名单必须同步放行,否则识别了也 415 serve 不了
+# (failure_mode_matrix §五 B-video)。
+_MEDIA_SUFFIXES = {".mp4", ".mov", ".webm", ".mp3", ".wav"}
+_ARTIFACT_SUFFIXES = (
+    _IMAGE_SUFFIXES
+    | _DOCUMENT_SUFFIXES
+    | _MEDIA_SUFFIXES
+    | {".html", ".htm", ".css", ".js", ".json", ".svg"}
+)
 
 # ── 产物存储根目录 ──────────────────────────────────────────────────────
 # 默认与 agent_workspace_path（③ 运行实例目录）同级，可由配置 artifacts_storage_dir 覆盖。
@@ -87,6 +96,21 @@ def _image_media_type(path: Path) -> str:
     if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
         return "image/webp"
     return "application/octet-stream"
+
+
+# 媒体后缀 → MIME（与 _MEDIA_SUFFIXES 白名单配套；缺失时浏览器无法内联播放）
+_MEDIA_MIME = {
+    ".mp4": "video/mp4",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm",
+    ".mp3": "audio/mpeg",
+    ".wav": "audio/wav",
+}
+
+
+def _media_type(path: Path) -> str | None:
+    """按后缀返回媒体 MIME；非媒体后缀返回 None（交给调用方回退到图片/默认）。"""
+    return _MEDIA_MIME.get(path.suffix.lower())
 
 
 def _resolve_artifact(relative_path: str, agent_pkg_name: str = "") -> Path:
@@ -268,9 +292,59 @@ async def get_artifact_file(artifact_id: str) -> FileResponse:
 
 
 def _file_response(path: Path) -> FileResponse:
-    """Create a FileResponse with proper media type for images."""
-    media_type = _image_media_type(path) if path.suffix.lower() in _IMAGE_SUFFIXES else None
+    """Create a FileResponse with proper media type for images/media.
+
+    媒体产物(视频/音频)必须有正确 Content-Type,否则浏览器无法内联播放
+    (_MEDIA_SUFFIXES 白名单配套,见 failure_mode_matrix §五 B-video)。
+    """
+    suffix = path.suffix.lower()
+    media_type = (
+        _image_media_type(path) if suffix in _IMAGE_SUFFIXES else _media_type(path)
+    )
     return FileResponse(path, media_type=media_type)
+
+
+def artifact_file_size(url: str) -> int | None:
+    """Resolve an artifact serve URL to its local file and return byte size.
+
+    Resolution order mirrors :func:`read_artifact_base64`: bridge 本地存储优先,
+    legacy filesystem fallback 其次。文件不存在/路径越界返回 ``None``。
+
+    用途:base64 填充前判断非图片文件是否超过体积阈值(避免把大视频/文档
+    塞进 SSE 元数据,见 apply_artifact_output_mode 的 artifact_base64_max_bytes)。
+    """
+    if not url:
+        return None
+    url = url.split("?")[0]
+    m = re.search(r"/api/artifacts/(.+?)/files/(.+)", url)
+    if m:
+        artifact_id = f"{m.group(1)}/{m.group(2)}"
+    else:
+        m = re.search(r"/api/artifacts/(.+)", url)
+        if not m:
+            return None
+        artifact_id = m.group(1)
+
+    storage_root = _ARTIFACTS_STORAGE_DIR.resolve()
+    stored = (storage_root / artifact_id).resolve()
+    try:
+        stored.relative_to(storage_root)
+    except ValueError:
+        return None
+    if stored.is_file():
+        try:
+            return stored.stat().st_size
+        except OSError:
+            return None
+
+    agent_name = artifact_id.split("/")[0]
+    candidate = _resolve_artifact(artifact_id, agent_pkg_name=agent_name)
+    if candidate is not None and candidate.is_file():
+        try:
+            return candidate.stat().st_size
+        except OSError:
+            return None
+    return None
 
 
 def read_artifact_base64(url: str, mime_type: str | None = None) -> str:

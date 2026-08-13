@@ -20,22 +20,6 @@ bridge:
 sidecar:
   enabled: false
   listen: "0.0.0.0:23767"
-  aisf_adapter_url: "http://127.0.0.1:18080"
-
-# ── AISF Adapter ───────────────────────────────────────────────────
-aisf_adapter:
-  agent_id: "outfit-assistant"
-  mode: "async"
-  timeout: 360.0
-  upstream:
-    scheme: "http"
-    callback_port: 23767
-    callback_path: "/coremind/systemagent/v1/callback"
-    client_cert_path: ""
-    client_key_path: ""
-    client_key_password: ""
-    ca_cert_path: ""
-    verify: true
 
 # ── Artifact 公网地址 ─────────────────────────────────────────────
 artifact_public_base_url: "http://localhost:8199/health"
@@ -102,6 +86,9 @@ agent_defaults:
     api_key: "${AF_LLM_API_KEY:-sk-ws-H.EDDMREP.gXlt.MEUCIQDS2ezv7sywxvCIry01hm7tkwKSBd0wmaLDz1_cNFgEbAIgK6mwFXsRvqREZbuPPzB1V8C9H3INslUdKhKfDqlV7ig}"
     base_url: "${AF_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
     model: "${AF_LLM_MODEL:-deepseek-v4-flash}"
+    # api_key: "${AF_LLM_API_KEY:-sk-cp-nbU8hW2JOt8hpWAA32Y8BXP_jnz_H8IoN8jfWoDLaaN_Xf5pz05Yl_Q6oQWJf17-2sE6wcvdtpgbqkx6u-bdodmEfAdj6P_IcZVpOGKFygfJ5RLh_xkWjAY}"
+    # base_url: "${AF_LLM_BASE_URL:-https://api.minimaxi.com/v1}"
+    # model: "${AF_LLM_MODEL:-MiniMax-M3}"
     temperature: 0.7
     top_p: 1.0
     frequency_penalty: 0.0

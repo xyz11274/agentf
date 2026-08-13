@@ -585,9 +585,10 @@ def poll_agent_response(host: str, port: int, task_id: str,
     注意事项：
       agent.poll_response 在 daemon 中存在已知限制：
       - 消息可能被 ResponsePoller（50ms 周期）异步通知消费
-      - 消费后 poll 返回 messages=[]、complete=false
+      - 消费后 poll 返回 messages=[]，但 complete 仍为 true
+        （complete = 无运行节点 && 响应队列空，2026-08-10 修正，不再依赖 msg_count）
       - 因此需要高频轮询，在 ResponsePoller 消费前捕获消息
-      - 同时 fallback 到检查 workflow 是否已完成（通过 workflow.list_instances）
+      - complete=true 且无消息 = 任务真实完成但响应已被异步消费 → 返回空
     """
     deadline = time.monotonic() + timeout
     poll_count = 0
@@ -608,26 +609,18 @@ def poll_agent_response(host: str, port: int, task_id: str,
         contents = [m.get("content", "") for m in messages if m.get("content")]
         final_contents = [m.get("content", "") for m in messages if m.get("final") and m.get("content")]
 
-        # 优先返回 final 消息（跳过 progress 进度消息）
+        # 只返回 final 消息（跳过 progress 进度消息）。
+        # progress（final=false）是 coordinator/skill 的中间输出，不是最终响应——
+        # 若在此返回会拿到 20-44 字符的截断内容（2026-08-10 实测），而非完整 skill 结果。
         if final_contents:
             return final_contents[-1]
 
-        # 若 complete 但无 final 消息，返回最后一条内容（兜底）
-        if complete and contents:
-            return contents[-1]
-
-        # 每 2 秒尝试一次 workflow.list_instances 兜底
-        if poll_count % 20 == 0:
-            wf = jsonrpc_call(host, port, "workflow.list_instances", {}, req_id=3)
-            wf_result = wf.get("result", {})
-            instances = wf_result.get("instances", []) if isinstance(wf_result, dict) else []
-            running = any(
-                inst.get("status") == "running" for inst in instances
-                if isinstance(inst, dict)
-            )
-            if not running and not contents:
-                # 无运行中 workflow → 任务已完成
-                return ""
+        # complete 且无 final：任务已结束但最终响应尚未被本 poll 捕获。
+        # final 消息可能被 ResponsePoller 异步消费后 re-enqueue 回 agent 队列，
+        # 继续轮询等 final 出现（而非返回 progress 或空）；超时则由下方 TimeoutError 兜底。
+        # 要求至少轮询 2s，避免 agent.execute 刚提交、节点尚未启动时的误判。
+        if complete and poll_count >= 20:
+            continue
 
         time.sleep(0.1)
     raise TimeoutError(f"task {task_id} not completed within {timeout}s "

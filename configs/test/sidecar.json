@@ -1,0 +1,14 @@
+{
+  "agent": {
+    "name": "outfit-assistant",
+    "version": "1.0.0",
+    "capabilities": [
+      "outfit_consult",
+      "weather_query",
+      "occasion_guide",
+      "image_generation",
+      "video_generation"
+    ]
+  },
+  "bridge_url": "http://127.0.0.1:8199/health"
+}

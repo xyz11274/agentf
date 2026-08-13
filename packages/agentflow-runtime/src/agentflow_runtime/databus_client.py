@@ -8,6 +8,7 @@ so all puts/gets MUST include dialogue_id prefix. This wrapper ensures that.
 import json
 import os
 import sys
+import time
 import traceback
 
 _SDK_DIR = os.path.normpath(os.path.join(
@@ -63,6 +64,7 @@ class DataBusClient:
         """Read conversation messages (JSON list) from DataBus ctx namespace."""
         if not self._client:
             return []
+        _t0 = time.monotonic()
         try:
             raw = self._client.ctx().get("session_messages", "[]")
             if raw is None or raw == "":
@@ -73,29 +75,48 @@ class DataBusClient:
         except Exception as exc:
             _log_warn(f"read_messages failed: {exc}\n{traceback.format_exc()}")
             return []
+        finally:
+            _ms = (time.monotonic() - _t0) * 1000
+            print(f"[timing] databus.read_messages session={self._session_id} duration_ms={_ms:.1f}",
+                  file=sys.stderr)
 
     def write_messages(self, messages: list) -> bool:
         """Write conversation messages (JSON list) to DataBus ctx namespace."""
         if not self._client:
             return False
+        _t0 = time.monotonic()
         try:
             return self._client.ctx().put("session_messages", json.dumps(messages, ensure_ascii=False))
         except Exception as exc:
             _log_warn(f"write_messages failed: {exc}\n{traceback.format_exc()}")
             return False
+        finally:
+            _ms = (time.monotonic() - _t0) * 1000
+            print(f"[timing] databus.write_messages session={self._session_id} duration_ms={_ms:.1f}",
+                  file=sys.stderr)
 
     def put(self, key: str, value: str) -> bool:
         """Write to sys namespace WITH dialogue_id prefix so framework can find it."""
         if not self._client:
             return False
-        # Use dialogue-scoped sys namespace: framework reads /session/{sid}/sys/{dialogue_id}/{key}
-        scoped_key = f"{self._dialogue_id}/{key}" if self._dialogue_id else key
-        return self._client.sys().put(scoped_key, value)
+        _t0 = time.monotonic()
+        try:
+            # Use dialogue-scoped sys namespace: framework reads /session/{sid}/sys/{dialogue_id}/{key}
+            scoped_key = f"{self._dialogue_id}/{key}" if self._dialogue_id else key
+            return self._client.sys().put(scoped_key, value)
+        except Exception as exc:
+            _log_warn(f"put failed for key={key}: {exc}")
+            return False
+        finally:
+            _ms = (time.monotonic() - _t0) * 1000
+            print(f"[timing] databus.put session={self._session_id} duration_ms={_ms:.1f}",
+                  file=sys.stderr)
 
     def get(self, key: str) -> str | None:
         """Read from sys namespace WITH dialogue_id prefix."""
         if not self._client:
             return None
+        _t0 = time.monotonic()
         scoped_key = f"{self._dialogue_id}/{key}" if self._dialogue_id else key
         try:
             raw = self._client.sys().get(scoped_key, None)
@@ -105,6 +126,10 @@ class DataBusClient:
         except Exception as exc:
             _log_warn(f"get failed for key={scoped_key}: {exc}")
             return None
+        finally:
+            _ms = (time.monotonic() - _t0) * 1000
+            print(f"[timing] databus.get session={self._session_id} duration_ms={_ms:.1f}",
+                  file=sys.stderr)
 
     def delete(self, key: str) -> bool:
         """Delete from sys namespace WITH dialogue_id prefix."""
@@ -128,17 +153,23 @@ class DataBusClient:
         """
         if not self._client:
             return False
+        _t0 = time.monotonic()
         try:
             self._client.sys().put(key, value)
             return True
         except Exception as exc:
             _log_warn(f"put_global '{key}' failed: {exc}")
             return False
+        finally:
+            _ms = (time.monotonic() - _t0) * 1000
+            print(f"[timing] databus.put_global session={self._session_id} duration_ms={_ms:.1f}",
+                  file=sys.stderr)
 
     def get_global(self, key: str) -> str | None:
         """Read from sys namespace WITHOUT dialogue_id prefix."""
         if not self._client:
             return None
+        _t0 = time.monotonic()
         try:
             raw = self._client.sys().get(key)
             if raw is None:
@@ -149,6 +180,10 @@ class DataBusClient:
         except Exception as exc:
             _log_warn(f"get_global '{key}' failed: {exc}")
             return None
+        finally:
+            _ms = (time.monotonic() - _t0) * 1000
+            print(f"[timing] databus.get_global session={self._session_id} duration_ms={_ms:.1f}",
+                  file=sys.stderr)
 
     def response_push(self, content: str, type: str = "progress",
                       source: str = "", skill: str = "",
@@ -163,6 +198,7 @@ class DataBusClient:
         """
         if not self._client:
             return False
+        _t0 = time.monotonic()
         try:
             # 只传非空可选参数（守 SDK 行为：if param: params[param] = val）
             kwargs: dict = {"type": type}
@@ -176,3 +212,7 @@ class DataBusClient:
         except Exception as exc:
             _log_warn(f"response_push failed: {exc}")
             return False
+        finally:
+            _ms = (time.monotonic() - _t0) * 1000
+            print(f"[timing] databus.response_push session={self._session_id} duration_ms={_ms:.1f}",
+                  file=sys.stderr)

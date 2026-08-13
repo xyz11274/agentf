@@ -43,6 +43,18 @@ AGENTFLOW_ENV=prod ./scripts/start_daemon.sh     # 显式指定生产
 
 配置优先级：**环境变量 > 配置文件 > CLI 参数 > 代码默认值**
 
+**加载的 agent 包可配置化**（`AF_AGENT_PACKAGE`，三态模型 ③ 运行实例路径，相对项目根）：
+
+| 脚本 | 读取方式 |
+|------|---------|
+| `start_daemon.sh` | `PACKAGE="${AF_AGENT_PACKAGE:-examples/agent/outfit-assistant}"` |
+| `start_production.sh` | `PACKAGE="${AGENT_PACKAGE:-${AF_AGENT_PACKAGE:-...}}"`（旧变量 `AGENT_PACKAGE` 优先，向后兼容） |
+| `start_dev.sh` | `AGENT_PACKAGE="$PROJECT_ROOT/${AF_AGENT_PACKAGE:-...}"` |
+
+在 `configs/{env}/.env` 中设置 `AF_AGENT_PACKAGE=examples/agent/cloudalbum-agent`（取消注释示例即可）
+即可切换 daemon/bridge 加载的 agent 包，无需修改代码。配合 SideCar 段的
+`AF_BR_COREMIND_AGENT_ID` 覆盖，可实现"全套服务（daemon/bridge/sidecar）切到同一 agent"。
+
 ### Bridge (Python FastAPI)
 
 **配置文件搜索顺序**（先匹配者生效）：
@@ -85,11 +97,53 @@ Bridge 配置优先级：**系统环境变量 > configs/{env}/bridge.yaml > 代�
 
 ### Sidecar (coremind_bridge)
 
-纯 CLI 参数 + 环境变量，无需配置文件：
+JSON 配置文件 + 环境变量，按环境隔离：
 
 ```bash
-./scripts/start_sidecar.sh production 23767
+# 方式 A：通过脚本（推荐）
+./scripts/start_sidecar.sh production 23767     # AGENTFLOW_ENV 控制 → configs/{env}/sidecar.json
+
+# 方式 B：直接启动（--config 指定配置文件）
+./sidecar/build-test/coremind_bridge --listen 0.0.0.0:23767 --config configs/dev/sidecar.json
 ```
+
+配置文件搜索顺序（first-match-wins）：
+
+| 优先级 | 来源 |
+|--------|------|
+| ① | `--config <path>` CLI 参数 |
+| ② | `AF_SIDECAR_CONFIG` 环境变量 |
+| ③ | `configs/{AGENTFLOW_ENV}/sidecar.json`（AGENTFLOW_ENV 默认 dev） |
+
+字段级覆盖：**系统环境变量 > 配置文件 > 代码默认值**
+
+| 环境变量 | 覆盖字段 | 设置位置 |
+|---------|---------|---------|
+| `AF_BR_COREMIND_AGENT_ID`（新，优先） | `agent.name` | 任意启动环境 |
+| `AGENT_ID`（旧，向后兼容） | `agent.name` | 任意启动环境 |
+| `AF_SIDECAR_CAPABILITIES`（逗号分隔） | `agent.capabilities` | 任意启动环境 |
+| `BRIDGE_URL` | `bridge_url` | 任意启动环境 |
+
+**推荐方式：在 `configs/{env}/.env` 中设置**（start_sidecar.sh 的 `ar_load_env` 自动加载并 export
+给 sidecar 子进程）。例如切换路由到 cloudalbum-agent 只需在对应环境 .env 中取消注释：
+
+```bash
+# configs/{dev,test,prod}/.env
+AF_BR_COREMIND_AGENT_ID=cloudalbum-agent
+AF_SIDECAR_CAPABILITIES=photo_album_manage,photo_search,face_recognition
+```
+
+`.env` 生效链路：`start_sidecar.sh` → `ar_load_env`（按 AGENTFLOW_ENV 选 `configs/{env}/.env`，
+`set -a` export）→ sidecar 子进程继承 → `load_sidecar_config()` env 覆盖生效。**改 .env 后重启
+sidecar 即生效，无需修改任何代码/重新编译。**
+
+> ⚠️ 注意：`start_sidecar.sh` 的 `ar_load_env` 在 PROFILE→AGENTFLOW_ENV 对齐**之后**执行
+> （避免 `start_sidecar.sh production` 误加载 dev 的 .env）。直接设 `AF_BR_COREMIND_AGENT_ID`
+> 环境变量同样生效（优先级 env > 配置文件）。
+
+`agent.name` 决定 sidecar 转发到 Bridge 的 `/api/chat/{agent_name}` 路由目标——换 agent 只需改
+配置文件（或设环境变量），无需修改代码/重新编译。部署多套 sidecar 时，每套容器指向各自的
+`sidecar.json` 即可路由到不同 agent。
 
 ---
 
@@ -194,7 +248,7 @@ AGENTFLOW_ENV=dev                           AGENTFLOW_ENV=prod
 |------|---------|---------|---------|---------|
 | agentflowd daemon | JSON + 环境变量 | `configs/dev/agentflowd.json` | `configs/prod/agentflowd.json` | `scripts/start_daemon.sh`（自动补 `--config`） |
 | Bridge (Python) | YAML + 环境变量 | `configs/dev/bridge.yaml` | `configs/prod/bridge.yaml` | `scripts/start_bridge.sh`（导出 `AGENTFLOW_ENV`） |
-| Sidecar (C++ bridge) | CLI 参数 | 无 | 无 | `scripts/start_sidecar.sh` |
+| Sidecar (C++ bridge) | JSON + 环境变量 | `configs/dev/sidecar.json` | `configs/prod/sidecar.json` | `scripts/start_sidecar.sh`（自动按 `AGENTFLOW_ENV` 选配置） |
 
 ---
 

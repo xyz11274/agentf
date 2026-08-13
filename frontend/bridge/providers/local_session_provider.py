@@ -24,6 +24,7 @@ import json
 import logging
 import math
 import sqlite3
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -277,6 +278,7 @@ class LocalSessionProvider(SessionProvider):
         images: str = "[]",
     ) -> str:
         now = _now_iso()
+        save_start = time.time()
         try:
             with self._connect() as conn:
                 # Auto-title: first dialogue sets the title from user_input[:50].
@@ -310,6 +312,10 @@ class LocalSessionProvider(SessionProvider):
                 "local_provider.save_dialogue failed id=%s dialogue=%s: %s",
                 session_id, dialogue_id, exc,
             )
+        logger.info(
+            "persist.save_dialogue id=%s dialogue=%s elapsed=%.3fs",
+            session_id, dialogue_id, time.time() - save_start,
+        )
         return dialogue_id
 
     async def get_messages(
@@ -392,6 +398,7 @@ class LocalSessionProvider(SessionProvider):
         dialogue_id: str, trace_type: str, trace_data: dict,
     ) -> None:
         now = _now_iso()
+        save_start = time.time()
         try:
             with self._connect() as conn:
                 conn.execute(
@@ -410,6 +417,10 @@ class LocalSessionProvider(SessionProvider):
                 "local_provider.save_trace_failed id=%s dialogue=%s: %s",
                 session_id, dialogue_id, exc,
             )
+        logger.info(
+            "persist.save_trace id=%s dialogue=%s elapsed=%.3fs",
+            session_id, dialogue_id, time.time() - save_start,
+        )
 
     async def get_traces(
         self, session_id: str, dialogue_id: str = "",

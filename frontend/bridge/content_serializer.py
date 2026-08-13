@@ -162,4 +162,13 @@ def prepare_content_for_daemon(
     # Return plain text (no JSON array) — daemon sets this as AF_INPUT
     # and coordinator reads it as the user message.
     texts = [p["text"] for p in parts if p.get("type") == "text"]
+    # 非 text part(如未来新增 video/file 类型)会在此被丢弃——不得静默(M3):
+    # 打 WARNING 说明类型与原因,避免"用户传了内容但 agent 完全不知道"。
+    dropped = [p.get("type") for p in parts if p.get("type") != "text"]
+    if dropped:
+        logger.warning(
+            "content_serializer.drop_non_text types=%s — 当前仅支持 text 与 image_url,"
+            "其余 part 类型未落盘且未进入对话上下文",
+            sorted(set(dropped)),
+        )
     return "\n".join(texts) if texts else content if isinstance(content, str) else ""

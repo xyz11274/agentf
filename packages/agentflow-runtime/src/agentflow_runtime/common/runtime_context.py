@@ -43,8 +43,36 @@ def get_env(key: str, default: str = "") -> str:
 # ── Runtime context accessors ──
 
 def session_id() -> str:
-    """Current session ID (UUID)."""
+    """Current session slot ID (0/1/2 — the agentflow session slot, NOT user identity).
+
+    For artifact routing use ``user_id() + "_" + client_id()`` as the session_id
+    segment per ``docs/design/features/sandbox/artifact-storage.md`` §2.2.
+    """
     return get_env("AF_SESSION_ID")
+
+
+def user_id() -> str:
+    """Current user ID (injected by framework for artifact routing)."""
+    return get_env("AF_USER_ID")
+
+
+def client_id() -> str:
+    """Current client ID (injected by framework for artifact routing)."""
+    return get_env("AF_CLIENT_ID")
+
+
+def artifact_session_id() -> str:
+    """Artifact routing key ``{user_id}_{client_id}`` per artifact-storage.md §2.2.
+
+    Returns empty string when both user_id and client_id are unset (e.g. legacy
+    paths without these injected). Callers should treat empty as a sentinel that
+    artifact routing is not yet provisioned, not as a valid directory segment.
+    """
+    uid = user_id()
+    cid = client_id()
+    if not uid and not cid:
+        return ""
+    return f"{uid}_{cid}"
 
 
 def dialogue_id() -> str:
@@ -105,3 +133,25 @@ def skill_name() -> str:
 def node_execution_timeout() -> str:
     """Node-level timeout in seconds (injected by framework)."""
     return get_env("AF_NODE_EXECUTION_TIMEOUT")
+
+
+# ── Trace context accessors (§6.2 跨进程 span 树) ──
+# C++ worker.cpp spawn 子进程前注入 AF_TRACE_ID + AF_PARENT_SPAN_ID，
+# Python 侧经此 accessor 读入，由 trace.span_context.SpanContext 建立父链。
+
+def trace_id() -> str:
+    """Current trace ID (injected by C++ worker from TraceContext::trace_id()).
+
+    Empty when C++ side has no active trace (e.g. TraceTask not started) —
+    SpanContext will then fall back to a local ``py_local_*`` trace_id.
+    """
+    return get_env("AF_TRACE_ID")
+
+
+def parent_span_id() -> str:
+    """Parent span ID (injected by C++ worker from TraceContext::span_id()).
+
+    The C++ NODE span that spawned this Python subprocess — Python-side spans
+    attach as children of this span. Empty when C++ side has no active span.
+    """
+    return get_env("AF_PARENT_SPAN_ID")

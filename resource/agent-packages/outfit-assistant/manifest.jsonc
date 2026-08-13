@@ -11,67 +11,16 @@
     ".agentfoundry",
     ".venv",
     "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".git",
     "nodes",
     "output",
     "outputs",
     "tests",
-    "workspace"
+    "workspace",
+    "assets"
   ],
-  "files": [
-    {
-      "path": "setup.sh"
-    },
-    {
-      "path": "requirements.txt"
-    },
-    {
-      "path": "harness/skills/__init__.py"
-    },
-    {
-      "path": "harness/skills/skill-runner/SKILL.md"
-    },
-    {
-      "path": "harness/skills/video-gen/SKILL.md"
-    },
-    {
-      "path": "harness/skills/forge-image-gen/SKILL.md"
-    },
-    {
-      "path": "harness/skills/dummy_pre_skill/SKILL.md"
-    },
-    {
-      "path": "harness/skills/outfit-stylist/weather.py"
-    },
-    {
-      "path": "harness/skills/outfit-stylist/SKILL.md"
-    },
-    {
-      "path": "harness/skills/video-gen/scripts/make_video.py"
-    },
-    {
-      "path": "harness/skills/forge-image-gen/references/providers.md"
-    },
-    {
-      "path": "harness/skills/forge-image-gen/scripts/generate.py"
-    },
-    {
-      "path": "harness/skills/outfit-stylist/references/style-guide.md"
-    },
-    {
-      "path": "harness/skills/outfit-stylist/scripts/outfit_vision.py"
-    },
-    {
-      "path": "harness/skills/outfit-stylist/evals/commute-rainy/rubric.md"
-    },
-    {
-      "path": "harness/skills/outfit-stylist/evals/commute-rainy/task.md"
-    },
-    {
-      "path": "harness/tools/__init__.py"
-    },
-    {
-      "path": ".env"
-    }
-  ],
-  "generated_at": "2026-08-09T18:12:21.859928+00:00"
+  "generated_at": "2026-08-11T00:00:00.000000+00:00"
 }

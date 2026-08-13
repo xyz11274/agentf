@@ -30,26 +30,20 @@ _INCLUDE_GLOBS = [
 ]
 
 # Files/directories to exclude even if they match a glob
-_EXCLUDE_PREFIXES = ("agent.json", "package.json", "coordinator")
-
-# File names to exclude (top-level only)
 # 注：.env 与 setup.sh 曾在此处排除，但 sandbox-env-injection.md §6.1 敲定的
 # set -a && source /home/user/workspace/.env 链路要求 .env 必须在沙箱内（本轮修订，
 # 2026-08-04）。setup.sh 是沙箱内环境初始化脚本，随包上传由框架执行。
 # 修订来源：docs/design/features/agent-package/agent-package-structure.md §3.2 上传规则（.env / setup.sh 纳入 includes）
-_EXCLUDE_NAMES = {"agent.md"}
 
 # Directories to exclude entirely
-# nodes/ = daemon 侧执行不上传；__pycache__/.venv 等 = 缓存/虚拟环境不上传；
+# nodes/ = daemon 侧执行不上传；__pycache__/.pytest_cache/.mypy_cache/.ruff_cache 等 = 缓存/虚拟环境不上传；
+# .git = 版本控制元数据不上传（与 e2b_sync._CACHE_DIRS 对齐，I-5 单一真相）；
 # workspace/、outputs/、output/ = 会话级产物与运行时数据，沙箱侧会重新生成（上传是污染）；
 # tests/ = 测试代码，沙箱不跑；.agentfoundry/ = IDE/框架资产管理目录
 _EXCLUDE_DIRS = {
-    "nodes", "__pycache__", ".venv", "workspace",
-    "outputs", "output", "tests", ".agentfoundry",
+    "nodes", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".git",
+    ".venv", "workspace", "outputs", "output", "tests", ".agentfoundry",
 }
-
-# Cache/产物文件后缀，递归扫描时跳过
-_CACHE_SUFFIXES = {".pyc", ".pyo", ".ds_store"}
 
 
 def generate_manifest(agent_package_dir: str | os.PathLike) -> dict:
@@ -58,8 +52,8 @@ def generate_manifest(agent_package_dir: str | os.PathLike) -> dict:
     If the manifest file already exists, returns its content without rescanning.
 
     Returns:
-        Parsed manifest dict with keys ``files`` (list of ``{"path": ...}``),
-        ``generated_at`` (ISO 8601 timestamp).
+        Parsed manifest dict with keys ``includes`` (glob whitelist),
+        ``excludes`` (glob blacklist) and ``generated_at`` (ISO 8601 timestamp).
     """
     base = Path(agent_package_dir)
     manifest_path = base / MANIFEST_NAME
@@ -146,65 +140,18 @@ def strip_jsonc_comments(text: str) -> str:
 
 
 def _rescan_and_write(base: Path, manifest_path: Path) -> dict:
-    """Scan the package directory and write a fresh manifest."""
-    files = []
+    """Write a fresh manifest with the system-default includes/excludes globs.
 
-    for entry in base.iterdir():
-        name = entry.name
-
-        # Skip excluded names and dirs
-        if name in _EXCLUDE_NAMES:
-            continue
-        if name in _EXCLUDE_DIRS:
-            continue
-        if name.startswith(_EXCLUDE_PREFIXES):
-            continue
-
-        if name == "harness":
-            _scan_harness(entry, base, files)
-        elif name == "data":
-            _scan_recursive(entry, base, files)
-        elif name == "requirements.txt" and entry.is_file():
-            files.append({"path": "requirements.txt"})
-        elif entry.is_file() and (name == ".env" or name == "setup.sh"):
-            # .env（主密钥文件，不含变体）与 setup.sh 随包上传——
-            # sandbox-env-injection.md §6.1 的 set -a && source /home/user/workspace/.env
-            # 链路要求密钥文件在沙箱内；setup.sh 由框架在沙箱内执行环境初始化。
-            # 修订来源：agent-package-structure.md §3.2 上传规则（本轮将 .env / setup.sh 纳入 includes；
-            # 用户确认只传主 .env，不传 .env_dashscope/.env_minimax 等变体）
-            files.append({"path": name})
-
+    收敛（2026-08-11）：不再扫描并展开具体文件列表（files 键）——includes glob
+    由消费端（e2b_sync._load_manifest_whitelist）实时展开，新增文件自动进入
+    上传白名单与快照 hash，消除 "files 快照过期" 断点（I-5 单一真相来源）。
+    """
     manifest = {
         # 系统预制 includes——用户可编辑此键覆盖/扩展上传范围（agent-package-structure.md §3.3）
         "includes": list(_INCLUDE_GLOBS),
         # 系统预制 excludes——用户可编辑此键追加排除项
         "excludes": sorted(_EXCLUDE_DIRS),
-        "files": files,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
     return manifest
-
-
-def _scan_harness(harness_dir: Path, base: Path, files: list) -> None:
-    """Scan harness/ — include skills/ and tools/, exclude everything else."""
-    skills_dir = harness_dir / "skills"
-    if skills_dir.is_dir():
-        _scan_recursive(skills_dir, base, files)
-
-    tools_dir = harness_dir / "tools"
-    if tools_dir.is_dir():
-        _scan_recursive(tools_dir, base, files)
-
-
-def _scan_recursive(dir_path: Path, base: Path, files: list) -> None:
-    """Recursively collect all regular files under a directory, skipping cache dirs."""
-    for entry in dir_path.rglob("*"):
-        if entry.is_file():
-            rel = entry.relative_to(base)
-            # 跳过缓存目录（__pycache__、.pytest_cache 等）与 .venv 等无关目录
-            if any(part in _EXCLUDE_DIRS for part in rel.parts):
-                continue
-            if rel.suffix.lower() in _CACHE_SUFFIXES:
-                continue
-            files.append({"path": rel.as_posix()})

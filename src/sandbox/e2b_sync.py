@@ -119,7 +119,14 @@ _CACHE_SUFFIXES = {".pyc", ".pyo", ".pyc", ".ds_store"}
 def _should_exclude(rel_path: Path) -> bool:
     if rel_path.suffix.lower() in _CACHE_SUFFIXES:
         return True
-    return any(part in _CACHE_DIRS for part in rel_path.parts)
+    for part in rel_path.parts:
+        if part in _CACHE_DIRS:
+            return True
+        # 宿主侧本地 venv（.venv / .venv_unix / .venv_windows 等）是平台绑定的
+        # 开发产物，上传到沙箱（Linux）无用且体积巨大（如 41MB），一律排除。
+        if part.startswith(".venv"):
+            return True
+    return False
 
 
 def _walk_local_files(local_root: Path):
@@ -139,7 +146,8 @@ def _load_manifest_whitelist(manifest_path: str, local_root: Path) -> set[str] |
     fallback：用户明确要求"只传 manifest 声明的内容"，无法确定白名单时禁止盲传，
     否则会把 .venv(91M) 等沙箱无关产物传上去）。
 
-    优先用 files 列表（具体路径）；files 为空时按 includes glob 在 local_root 下展开。
+    按 includes glob 在 local_root 下展开（files 键已废弃，2026-08-11 收敛——
+    includes 为唯一真相来源 I-5：glob 实时展开，新增文件自动进入白名单）。
     命中 excludes 的文件始终剔除。
     """
     if not manifest_path:
@@ -176,29 +184,19 @@ def _load_manifest_whitelist(manifest_path: str, local_root: Path) -> set[str] |
             _log(f"FATAL: manifest unparseable ({mpath}): {e}")
             sys.exit(1)
 
-    files = data.get("files") or []
     includes = data.get("includes") or []
     excludes = data.get("excludes") or []
 
-    # 展开白名单：优先 files（具体路径），否则 includes glob
-    if files:
-        whitelist = set()
-        for item in files:
-            if isinstance(item, dict):
-                p = item.get("path", "")
-            else:
-                p = str(item)
-            if p:
-                whitelist.add(p.lstrip("/"))
-    elif includes:
-        whitelist = set()
-        for pat in includes:
-            for rel, _ in _walk_local_files(local_root):
-                if fnmatch.fnmatch(rel.as_posix(), pat):
-                    whitelist.add(rel.as_posix())
-    else:
-        _log(f"FATAL: manifest has neither files nor includes: {mpath}")
+    # 展开白名单：按 includes glob 实时展开（files 键已废弃——2026-08-11 收敛，
+    # 单一真相来源 I-5：glob 展开让新增文件自动进白名单，无 files 快照过期问题）
+    if not includes:
+        _log(f"FATAL: manifest has no includes: {mpath}")
         sys.exit(1)
+    whitelist = set()
+    for pat in includes:
+        for rel, _ in _walk_local_files(local_root):
+            if fnmatch.fnmatch(rel.as_posix(), pat):
+                whitelist.add(rel.as_posix())
 
     # 命中 excludes 的剔除
     for ex in excludes:

@@ -9,6 +9,7 @@
 #include "agent/dataref_bridge.h"
 #include "agent/session.h"
 #include "agent/task.h"
+#include "runtime/flow_trace.h"
 #include "workflow/workflow.h"
 #include "utils/logger.h"
 
@@ -366,6 +367,23 @@ bool BuiltinDispatcher::launch_skill_task(MMAgent& agent,
   skill_task->set_parameter("source_task_id", source_task->get_task_id());
   skill_task->set_parameter("session_id", session->get_session_id());
 
+  // Pass user_id / client_id for artifact routing（与 agent.cpp build_runtime_task 对齐）。
+  // skill_message.metadata 已从 context.metadata 拷贝（上方 L340-344），
+  // rpc_handler 入口把 user_id/client_id 塞进 metadata；worker 端注 AF_USER_ID/AF_CLIENT_ID，
+  // skill_executor 用 {user_id}_{client_id} 作产物路由键（artifact-storage.md §2.2）。
+  if(const auto user_id_it = skill_message.metadata.find("user_id");
+     user_id_it != skill_message.metadata.end() && !user_id_it->second.empty()) {
+    skill_task->set_parameter("user_id", user_id_it->second);
+  } else if(!session->get_user_id().empty()) {
+    skill_task->set_parameter("user_id", session->get_user_id());
+  }
+  if(const auto client_id_it = skill_message.metadata.find("client_id");
+     client_id_it != skill_message.metadata.end() && !client_id_it->second.empty()) {
+    skill_task->set_parameter("client_id", client_id_it->second);
+  } else if(!session->get_client_id().empty()) {
+    skill_task->set_parameter("client_id", session->get_client_id());
+  }
+
   // Add exec_skill_key if provided
   if(!exec_skill_key.empty()) {
     skill_task->set_parameter("exec_skill_key", exec_skill_key);
@@ -376,6 +394,17 @@ bool BuiltinDispatcher::launch_skill_task(MMAgent& agent,
   }
 
   session->add_task(skill_task);
+
+  // Flow trace: task dispatched（skill 任务分派出口；SKILL_LAUNCHED 在 agent 侧另一路径发出）
+  {
+    std::string task_dispatch_labels;
+    if(context.metadata.count("trace_labels")) {
+      task_dispatch_labels = context.metadata.at("trace_labels");
+    }
+    FLOW_TRACE_TASK_L(session_id, dialogue_id, task_dispatch_labels,
+                      "dispatcher", "skill-exec",
+                      runtime::FlowEventType::TASK_DISPATCHED);
+  }
 
   Logger::instance().info_f("[BuiltinDispatcher] Created skill task: %s for skill: %s",
                            skill_task->get_task_id().c_str(), skill_name.c_str());
@@ -669,7 +698,14 @@ void BuiltinDispatcher::cleanup_dialogue_data(MMAgent& agent,
   }
 
   // Clean up skill result keys in user namespace (dynamic based on launched_skills)
-  for(const auto& skill_name : launched_skills) {
+  // launched_skills 维度 = "name:exec_skill_key"（agent.cpp 复合 key 判重），反推
+  // skill_name 时取 ':' 前的 name 部分——exec_skill_key 含 ':' 但 name 是简单标识符。
+  for(const auto& launched_key_entry : launched_skills) {
+    std::string skill_name = launched_key_entry;
+    auto colon_pos = skill_name.find(':');
+    if(colon_pos != std::string::npos) {
+      skill_name = skill_name.substr(0, colon_pos);
+    }
     remove_user_data(agent, session_id, dialogue_id, skill_name + "_result");
     remove_user_data(agent, session_id, dialogue_id, skill_name + "_confidence");
   }

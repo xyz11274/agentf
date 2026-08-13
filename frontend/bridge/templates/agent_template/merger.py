@@ -70,8 +70,9 @@ _TEMPLATE_ONLY: tuple[str, ...] = (
     "coordinator_workflow.json",
     "skill_workflow.json",
     "dummy_pre_skill_workflow.json",
-    # setup.sh — framework infrastructure (venv + sentinel contract §3.5)
-    "setup.sh",
+    # setup-host.sh — framework infrastructure (宿主 venv + sentinel contract §3.5)
+    # setup.sh 已改用户域（沙箱版，用户可上传覆盖）——不再被 template 强制覆盖
+    "setup-host.sh",
     # Tests — always template-owned
     "tests/",
 )

@@ -2,7 +2,7 @@
 
 按 daemon ``sandbox.mode`` 分派数据源：
 
-- ``e2b``   : e2b SDK 直连（复用 ``scripts/e2b/sandbox_list.py`` 已验证路径：SSL patch /
+- ``e2b``   : e2b SDK 直连（复用 ``scripts/e2b/sandbox_toolkit.py`` 已验证路径：SSL patch /
               envd URL 重写 / Sandbox.list / connect+kill）
 - ``local`` : daemon 日志 ``[SANDBOX]`` 事件解析 + workdir/snapshot 目录扫描
 - ``docker``: 同 local（本期，未接 docker SDK）
@@ -98,6 +98,28 @@ class ExecResult:
 
 
 @dataclass
+class PtySession:
+    """交互式 PTY 会话句柄（对齐 L4 契约 §2.15）。
+
+    e2b 模式：``_sb`` + ``_handle`` 为 SDK 内部对象（CommandHandle，含 pid 与
+    事件流），route 层经 SandboxObserver.pty_stream 读取输出并转发 WebSocket；
+    local/docker 模式：``endpoint`` 指向沙箱内 HTTP server，``session_id`` 为
+    server 侧会话标识，输出经 ``/pty/read`` 轮询获取。
+
+    不变量（I-1）：stdout/stderr 流式全量转发不截断；会话由 ``session_id``
+    唯一标识，断线重连/关闭面板由 route 层负责 kill。
+    """
+
+    sandbox_id: str
+    session_id: str
+    mode: str
+    endpoint: str | None = None
+    # e2b SDK 内部句柄（不序列化，route 层通过门面方法访问）
+    _sb: Any = None
+    _handle: Any = None
+
+
+@dataclass
 class PauseResult:
     """沙箱暂停结果（对齐 daemon sandbox.pause RPC 响应）。"""
 
@@ -181,7 +203,7 @@ class ExecUnavailable(SandboxObserverError):
     """命令执行通道不可用（endpoint 未解析 / e2b SDK 失败）。"""
 
 
-# ── e2b Provider（SDK 直连，复用 sandbox_list.py 已验证逻辑）────────
+# ── e2b Provider（SDK 直连，复用 sandbox_toolkit.py 已验证逻辑）────────
 
 # 内部 e2b 部署用 path-based 反向代理（cubeproxy），SDK 构造的 hostname 路由
 # （https://{port}-{id}.cube.app）不可达，需重写为 path-based 路由。
@@ -196,7 +218,7 @@ _SANDBOX_TARGET_HOST = "https://218.245.96.148:443"
 class E2BProvider:
     """e2b SDK 直连 provider。
 
-    逻辑对齐 ``scripts/e2b/sandbox_list.py``（该脚本是经过真实环境验证的 e2b
+    逻辑对齐 ``scripts/e2b/sandbox_toolkit.py``（该脚本是经过真实环境验证的 e2b
     观测实现）：SSL patch（IP 直连跳过证书校验）、envd URL 重写（cubeproxy
     path-based 路由）、``Sandbox.list(query=...)`` 枚举、``connect + kill`` 销毁。
     """
@@ -401,6 +423,26 @@ class E2BProvider:
                 kwargs["cwd"] = cwd
             result = sb.commands.run(command, **kwargs)
         except Exception as exc:  # noqa: BLE001
+            # e2b SDK 在命令退出码非 0 时抛 CommandExitException（继承 CommandResult，
+            # 含 exit_code/stdout/stderr，类型定义已核实）——这是命令的业务失败，不是
+            # 通道故障。必须返回正常 ExecResult（exit_code != 0 + stderr 原样带回），
+            # 让前端把 stderr 显示在 terminal；只有真正的通道异常才抛 ExecUnavailable
+            # （F9：通道失败与命令失败分离；I-1：业务输出不丢失）。
+            exit_code = getattr(exc, "exit_code", None)
+            if exit_code is not None:
+                logger.info(
+                    "sandbox_observer.e2b_exec_exit sandbox_id=%s cwd=%s exit_code=%s",
+                    sandbox_id, cwd, exit_code,
+                )
+                return ExecResult(
+                    sandbox_id=sandbox_id,
+                    command=command,
+                    exit_code=int(exit_code),
+                    stdout=getattr(exc, "stdout", "") or "",
+                    stderr=getattr(exc, "stderr", "") or "",
+                    truncated=False,
+                    duration_ms=None,
+                )
             logger.error("sandbox_observer.e2b_exec failed sandbox_id=%s cwd=%s: %s", sandbox_id, cwd, exc)
             raise ExecUnavailable(f"e2b exec {sandbox_id} failed: {exc}") from exc
 
@@ -413,6 +455,84 @@ class E2BProvider:
             truncated=False,
             duration_ms=None,
         )
+
+    # -- 交互式 PTY（webshell v0.4，SDK Pty 直连通道） ------------------
+    def pty_open(self, sandbox_id: str, rows: int = 24, cols: int = 80,
+                 cwd: str | None = None) -> PtySession:
+        """在 e2b 沙箱内启动交互式 PTY（/bin/bash -i -l），返回会话句柄。
+
+        SDK Pty.create 能力已核实（e2b 2.34.0）：以 ``PtySize`` 启动 PTY 返回
+        ``CommandHandle``（含 pid + 事件流），后续 send_stdin/resize/kill 以
+        pid 寻址。会话由 bridge 持有（``_sb`` + ``_handle``），route 层经
+        SandboxObserver 门面方法操作。
+        """
+        self._setup_env()
+        self._apply_ssl_patch()
+        Sandbox, _, _ = self._import_sdk()
+        try:
+            sb = self._connect_sandbox(Sandbox, sandbox_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("sandbox_observer.e2b_pty_connect failed sandbox_id=%s: %s", sandbox_id, exc)
+            raise ProviderError(f"e2b pty connect {sandbox_id} failed: {exc}") from exc
+        try:
+            from e2b import PtySize  # SDK 类型（e2b/__init__.py 已导出，核实过）
+            handle = sb.pty.create(PtySize(rows=rows, cols=cols), cwd=cwd)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("sandbox_observer.e2b_pty_open failed sandbox_id=%s: %s", sandbox_id, exc)
+            raise ExecUnavailable(f"e2b pty open {sandbox_id} failed: {exc}") from exc
+        pid = int(getattr(handle, "pid", -1))
+        logger.info("sandbox_observer.e2b_pty_open sandbox_id=%s pid=%s", sandbox_id, pid)
+        return PtySession(
+            sandbox_id=sandbox_id,
+            session_id=str(pid),
+            mode="e2b",
+            _sb=sb,
+            _handle=handle,
+        )
+
+    def pty_send(self, session: PtySession, data: bytes) -> None:
+        """向 PTY 发送输入（含 Ctrl+C 字节 ``\\x03``，原样透传）。"""
+        try:
+            session._sb.pty.send_stdin(int(session.session_id), data)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "sandbox_observer.e2b_pty_send failed sandbox_id=%s pid=%s: %s",
+                session.sandbox_id, session.session_id, exc,
+            )
+            raise ExecUnavailable(f"e2b pty send {session.sandbox_id} failed: {exc}") from exc
+
+    def pty_resize(self, session: PtySession, rows: int, cols: int) -> None:
+        """调整 PTY 终端尺寸（xterm resize 事件转发）。"""
+        try:
+            from e2b import PtySize
+            session._sb.pty.resize(int(session.session_id), PtySize(rows=rows, cols=cols))
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "sandbox_observer.e2b_pty_resize failed sandbox_id=%s pid=%s: %s",
+                session.sandbox_id, session.session_id, exc,
+            )
+            raise ExecUnavailable(f"e2b pty resize {session.sandbox_id} failed: {exc}") from exc
+
+    def pty_kill(self, session: PtySession) -> None:
+        """彻底终止 PTY 会话（前端关闭面板 / WebSocket 断开时调用）。"""
+        try:
+            session._sb.pty.kill(int(session.session_id))
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "sandbox_observer.e2b_pty_kill failed sandbox_id=%s pid=%s: %s",
+                session.sandbox_id, session.session_id, exc,
+            )
+            raise ExecUnavailable(f"e2b pty kill {session.sandbox_id} failed: {exc}") from exc
+
+    def pty_iter_output(self, session: PtySession):
+        """迭代 PTY 输出（同步生成器，供门面层 to_thread 桥接）。
+
+        SDK CommandHandle 迭代产出 ``(stdout, stderr, pty)`` 元组；本方法
+        归一化为 ``(stdout|None, stderr|None)``，route 层转发为 WebSocket
+        ``output`` / ``stderr`` 帧（F7 不截断）。
+        """
+        for stdout, stderr, _pty in session._handle:
+            yield stdout, stderr
 
     # -- 管理能力（pause/resume/snapshot，SDK 直连通道） -------------
     def create_template(self, name: str, from_template: str = "base",
@@ -787,6 +907,154 @@ class LocalProvider:
             duration_ms=data.get("duration_ms"),
         )
 
+    # -- 交互式 PTY（webshell v0.4，转发到沙箱内 server PTY 端点） ----
+    async def _pty_endpoint(self, sandbox_id: str) -> str:
+        """解析沙箱内 HTTP server endpoint（缺失抛 ExecUnavailable）。"""
+        sb = await self.get_sandbox(sandbox_id)
+        endpoint = sb.endpoint
+        if not endpoint:
+            logger.warning(
+                "sandbox_observer.pty_no_endpoint sandbox_id=%s mode=%s", sandbox_id, self._mode
+            )
+            raise ExecUnavailable(
+                f"no endpoint for sandbox {sandbox_id} ({self._mode}); cannot open pty"
+            )
+        return endpoint.rstrip("/")
+
+    async def pty_open(self, sandbox_id: str, rows: int = 24, cols: int = 80,
+                       cwd: str | None = None) -> PtySession:
+        """向沙箱内 HTTP server 发 ``POST /pty/open`` 启动交互式 PTY。
+
+        沙箱内 server（sandbox_http_server.py）以 ``pty`` + ``os.forkpty`` 启动
+        ``/bin/bash -i -l``，返回 ``session_id``；bridge 持有会话标识，输出经
+        ``/pty/read`` 轮询获取（无状态转发，I-4 幂等）。
+        """
+        endpoint = await self._pty_endpoint(sandbox_id)
+        payload: dict[str, Any] = {"rows": rows, "cols": cols}
+        if cwd:
+            payload["cwd"] = cwd
+        try:
+            import httpx  # 局部导入：observer 基础路径不依赖网络客户端
+            resp = await asyncio.to_thread(
+                lambda: httpx.post(f"{endpoint}/pty/open", json=payload, timeout=15.0)
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("sandbox_observer.pty_open_failed sandbox_id=%s url=%s: %s", sandbox_id, endpoint, exc)
+            raise ExecUnavailable(f"pty open {sandbox_id} failed (url={endpoint}): {exc}") from exc
+        session_id = str(data.get("session_id") or "")
+        if not session_id:
+            raise ExecUnavailable(f"pty open {sandbox_id}: sandbox server returned no session_id")
+        logger.info("sandbox_observer.pty_open sandbox_id=%s session_id=%s", sandbox_id, session_id)
+        return PtySession(
+            sandbox_id=sandbox_id,
+            session_id=session_id,
+            mode=self._mode,
+            endpoint=endpoint,
+        )
+
+    async def pty_send(self, session: PtySession, data: bytes) -> None:
+        """向 PTY 发送输入（含 Ctrl+C 字节 ``\\x03``，base64 透传到沙箱内 server）。"""
+        import base64 as _b64
+        import httpx  # 局部导入
+        endpoint = session.endpoint or ""
+        try:
+            resp = await asyncio.to_thread(
+                lambda: httpx.post(
+                    f"{endpoint}/pty/send",
+                    json={"session_id": session.session_id, "data": _b64.b64encode(data).decode("ascii")},
+                    timeout=10.0,
+                )
+            )
+            resp.raise_for_status()
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "sandbox_observer.pty_send_failed sandbox_id=%s session_id=%s: %s",
+                session.sandbox_id, session.session_id, exc,
+            )
+            raise ExecUnavailable(f"pty send {session.sandbox_id} failed: {exc}") from exc
+
+    async def pty_resize(self, session: PtySession, rows: int, cols: int) -> None:
+        """调整 PTY 终端尺寸（转发到沙箱内 server /pty/resize）。"""
+        import httpx  # 局部导入
+        endpoint = session.endpoint or ""
+        try:
+            resp = await asyncio.to_thread(
+                lambda: httpx.post(
+                    f"{endpoint}/pty/resize",
+                    json={"session_id": session.session_id, "rows": rows, "cols": cols},
+                    timeout=10.0,
+                )
+            )
+            resp.raise_for_status()
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "sandbox_observer.pty_resize_failed sandbox_id=%s session_id=%s: %s",
+                session.sandbox_id, session.session_id, exc,
+            )
+            raise ExecUnavailable(f"pty resize {session.sandbox_id} failed: {exc}") from exc
+
+    async def pty_kill(self, session: PtySession) -> None:
+        """终止 PTY 会话（转发到沙箱内 server /pty/kill；失败仅告警不抛错——清理路径）。"""
+        import httpx  # 局部导入
+        endpoint = session.endpoint or ""
+        try:
+            resp = await asyncio.to_thread(
+                lambda: httpx.post(
+                    f"{endpoint}/pty/kill",
+                    json={"session_id": session.session_id},
+                    timeout=10.0,
+                )
+            )
+            resp.raise_for_status()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "sandbox_observer.pty_kill_failed sandbox_id=%s session_id=%s: %s",
+                session.sandbox_id, session.session_id, exc,
+            )
+
+    async def pty_iter_output(self, session: PtySession):
+        """轮询沙箱内 server ``/pty/read`` 获取增量输出（异步生成器）。
+
+        产出 ``(stdout|None, stderr|None)`` 元组；``/pty/read`` 返回
+        ``{"stdout": ..., "stderr": ..., "exit_code": null|int}``，exit_code
+        非 null 表示 PTY 进程已结束（route 层据此发送 exit 帧并终止轮询）。
+        """
+        import httpx  # 局部导入
+        endpoint = session.endpoint or ""
+        offset = 0
+        while True:
+            try:
+                resp = await asyncio.to_thread(
+                    lambda: httpx.post(
+                        f"{endpoint}/pty/read",
+                        json={"session_id": session.session_id, "offset": offset},
+                        timeout=10.0,
+                    )
+                )
+                resp.raise_for_status()
+                data = resp.json()
+            except Exception as exc:  # noqa: BLE001
+                logger.error(
+                    "sandbox_observer.pty_read_failed sandbox_id=%s session_id=%s: %s",
+                    session.sandbox_id, session.session_id, exc,
+                )
+                yield None, f"[bridge] pty read failed: {exc}"
+                break
+            stdout = data.get("stdout") or ""
+            stderr = data.get("stderr") or ""
+            offset = int(data.get("offset", offset))
+            if stdout:
+                yield stdout, None
+            if stderr:
+                yield None, stderr
+            exit_code = data.get("exit_code")
+            if exit_code is not None:
+                yield None, None
+                break
+            await asyncio.sleep(0.1)
+
     # -- 管理能力（pause/resume/snapshot，经 daemon RPC 通道） -------
     async def pause_sandbox(self, sandbox_id: str) -> PauseResult:
         """经 daemon RPC ``sandbox.pause`` 暂停沙箱（Local/Docker 模式）。"""
@@ -1037,6 +1305,60 @@ class SandboxObserver:
         if self._mode == "e2b":
             return await asyncio.to_thread(self._provider.list_snapshots, sandbox_id)
         return await self._provider.list_snapshots(sandbox_id)
+
+    # -- 交互式 PTY 统一接口（webshell v0.4，见 L4 契约 §2.15） ----------
+    async def pty_open(self, sandbox_id: str, rows: int = 24, cols: int = 80,
+                       cwd: str | None = None) -> PtySession:
+        """启动交互式 PTY（e2b 走 SDK Pty.create；local/docker 走沙箱内 server /pty/open）。"""
+        if self._mode == "e2b":
+            return await asyncio.to_thread(self._provider.pty_open, sandbox_id, rows, cols, cwd)
+        return await self._provider.pty_open(sandbox_id, rows, cols, cwd)
+
+    async def pty_send(self, session: PtySession, data: bytes) -> None:
+        """向 PTY 发送输入（Ctrl+C 字节 ``\\x03`` 原样透传）。"""
+        if self._mode == "e2b":
+            return await asyncio.to_thread(self._provider.pty_send, session, data)
+        return await self._provider.pty_send(session, data)
+
+    async def pty_resize(self, session: PtySession, rows: int, cols: int) -> None:
+        """调整 PTY 终端尺寸。"""
+        if self._mode == "e2b":
+            return await asyncio.to_thread(self._provider.pty_resize, session, rows, cols)
+        return await self._provider.pty_resize(session, rows, cols)
+
+    async def pty_kill(self, session: PtySession) -> None:
+        """终止 PTY 会话（WebSocket 断开/关闭面板时调用）。"""
+        if self._mode == "e2b":
+            return await asyncio.to_thread(self._provider.pty_kill, session)
+        return await self._provider.pty_kill(session)
+
+    async def pty_iter_output(self, session: PtySession):
+        """读取 PTY 输出流（异步生成器，产出 ``(stdout|None, stderr|None)``）。
+
+        e2b 走 SDK CommandHandle 事件流（to_thread 桥接）；local/docker 轮询
+        沙箱内 server ``/pty/read``。route 层据此转发 WebSocket output/stderr 帧。
+        """
+        if self._mode == "e2b":
+            loop = asyncio.get_running_loop()
+            queue: asyncio.Queue[tuple[str | None, str | None]] = asyncio.Queue()
+
+            def _drain() -> None:
+                try:
+                    for stdout, stderr in self._provider.pty_iter_output(session):
+                        loop.call_soon_threadsafe(queue.put_nowait, (stdout, stderr))
+                finally:
+                    loop.call_soon_threadsafe(queue.put_nowait, (None, None))
+
+            task = asyncio.create_task(asyncio.to_thread(_drain))
+            while True:
+                stdout, stderr = await queue.get()
+                if stdout is None and stderr is None:
+                    break
+                yield stdout, stderr
+            await task
+        else:
+            async for stdout, stderr in self._provider.pty_iter_output(session):
+                yield stdout, stderr
 
     # -- 模板能力（仅 e2b 模式） --------------------------------------
     async def create_template(self, name: str, from_template: str = "base",

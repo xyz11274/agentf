@@ -6,6 +6,10 @@
 #
 # 注意：agentflow_databus 不是 pip 包，它来自项目 src/runtime/databus/clients/python，
 # 由 llm_call.py / databus_client.py 通过 sys.path 注入，无需在此声明。
+#
+# .env 加载策略：python-dotenv 首选（官方库更完整），未装时兜底走 stdlib 零依赖解析器
+#（agentflow_runtime.common.env_loader）——避免沙箱 DNS 不可达装不上 dotenv 导致业务断链
+#（详见 docs/bugs/20260811_sandbox_dns_unreachable.md）
 
 pyyaml>=6.0
 python-dotenv>=1.0

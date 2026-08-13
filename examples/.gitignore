@@ -6,3 +6,4 @@
 examples/agent/outfit_assistant/assets
 examples/agent/outfit_assistant/harness/skills/outfit-stylist/output
 examples/agent/outfit-assistant/*.html
+examples/agent/outfit-assistant/workspace

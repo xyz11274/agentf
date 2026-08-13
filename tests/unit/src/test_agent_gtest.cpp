@@ -382,6 +382,91 @@ TEST_F(AgentTest, PackageDispatcherWorkflowMappingIsApplied) {
   fs::remove_all(tmp);
 }
 
+TEST_F(AgentTest, BuildRuntimeTaskPropagatesUserIdClientIdToTaskParameters) {
+  namespace fs = std::filesystem;
+  const fs::path tmp = fs::path("build/test_user_client_prop_pkg");
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({
+      "name": "user-client-prop-agent",
+      "version": "1.0.0",
+      "workflows": ["workflow_a.json", "workflow_b.json", "task-context.json"],
+      "task_context_workflow": "task-context.json"
+    })";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "session_pool_size": 1,
+      "tasks": [
+        {
+          "id": 0,
+          "type": "contextupdater",
+          "description": "Update agent context",
+          "workflow_file": "task-context.json",
+          "workflow_pool_size": 2
+        }
+      ],
+      "sessions": [
+        {
+          "id": 0,
+          "description": "Homogeneous pooled session template",
+          "task_count": 3,
+          "tasks": [
+            { "id": 0, "type": "dispatcher", "description": "Dispatch", "workflow_file": "workflow_b.json" },
+            { "id": 1, "type": "coordinator", "description": "Coordinate", "workflow_file": "workflow_b.json" },
+            {
+              "id": 2,
+              "type": "skill",
+              "description": "Support skill",
+              "workflow_file": "workflow_a.json",
+              "skill": {
+                "name": "support"
+              }
+            }
+          ]
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow_a.json", "wf_a");
+  write_workflow_json(tmp / "workflow_b.json", "wf_b");
+  write_workflow_json(tmp / "task-context.json", "wf_context");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+
+  // user_id/client_id 从 message.metadata 进入（rpc_handler handle_agent_execute
+  // 入口就把它塞进 metadata）→ build_runtime_task 必须透传到 task parameter，
+  // 供 worker 注入 AF_USER_ID/AF_CLIENT_ID → skill 子进程 artifact 路由键用。
+  framework::MMAgentMsgQue::Message req;
+  req.message_id = "req_user_client_prop";
+  req.metadata["user_id"] = "u_prop";
+  req.metadata["client_id"] = "c_prop";
+  req.metadata["session_id"] = "0";
+  req.metadata["workflow_id"] = "wf_b";
+  ASSERT_TRUE(agent->route_request_message(req));
+  EXPECT_EQ(agent->process_session_messages("0"), 1);
+
+  auto session = get_or_create_first_session(agent);
+  ASSERT_NE(session, nullptr);
+  auto task = find_task_by_message_id(session->get_tasks(), "req_user_client_prop");
+  ASSERT_NE(task, nullptr);
+
+  std::string user_id;
+  std::string client_id;
+  EXPECT_TRUE(task->get_parameter("user_id", user_id))
+      << "build_runtime_task 必须把 message.metadata.user_id 透传到 task parameter";
+  EXPECT_EQ(user_id, "u_prop");
+  EXPECT_TRUE(task->get_parameter("client_id", client_id))
+      << "build_runtime_task 必须把 message.metadata.client_id 透传到 task parameter";
+  EXPECT_EQ(client_id, "c_prop");
+
+  fs::remove_all(tmp);
+}
+
 TEST_F(AgentTest, WorkflowIdMetadataHasHigherPriorityThanCoordinatorWorkflow) {
   namespace fs = std::filesystem;
   const fs::path tmp = fs::path("build/test_coordinator_override_pkg");

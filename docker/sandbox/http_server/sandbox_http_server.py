@@ -14,15 +14,20 @@
 import argparse
 import base64
 import concurrent.futures
+import fcntl
 import importlib
 import json
 import logging
 import os
+import pty as pty_mod
 import re
 import signal
+import struct
 import sys
+import termios
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -32,6 +37,12 @@ DEFAULT_OUTPUT_MAX_BYTES = 0
 # 并发执行上限
 MAX_CONCURRENT = int(os.environ.get("SANDBOX_MAX_CONCURRENT", "8"))
 _concurrency_semaphore = threading.Semaphore(MAX_CONCURRENT)
+
+# ── 交互式 PTY 会话表（webshell v0.4，见 L2 §webshell 交互式 PTY）──
+# session_id -> {"master_fd": int, "child_pid": int, "rows": int, "cols": int,
+#                "output": bytearray, "read_offset": int, "exit_code": int|None}
+_pty_sessions: dict[str, dict] = {}
+_pty_sessions_lock = threading.Lock()
 
 # 错误码常量（与 contracts/sandbox-http-server.md 对齐）
 PATH_NOT_IN_UPLOAD_DIR = "PATH_NOT_IN_UPLOAD_DIR"
@@ -283,6 +294,60 @@ TOOL_DISPATCH = {
 }
 
 
+# ── 交互式 PTY：后台读取线程与窗口尺寸 ioctl ─────────────────────────
+
+def _pty_set_winsize(master_fd: int, rows: int, cols: int) -> None:
+    """设置 PTY 窗口尺寸（TIOCSWINSZ）。失败静默——非关键路径。"""
+    try:
+        fcntl.ioctl(
+            master_fd,
+            termios.TIOCSWINSZ,
+            struct.pack("HHHH", rows, cols, 0, 0),
+        )
+    except OSError as exc:
+        logging.warning("sandbox_http_server.pty_set_winsize failed: %s", exc)
+
+
+def _pty_reader(session_id: str) -> None:
+    """后台读 PTY 输出：持续读 master_fd 追加到会话缓冲，进程退出后置 exit_code。
+
+    会话表条目：{"master_fd", "child_pid", "rows", "cols", "output", "read_offset", "exit_code"}。
+    EOF / OSError（EIO，PTY 子进程退出）视为进程结束：waitpid 回收并记录退出码。
+    """
+    with _pty_sessions_lock:
+        session = _pty_sessions.get(session_id)
+    if session is None:
+        return
+    master_fd = session["master_fd"]
+    try:
+        while True:
+            try:
+                chunk = os.read(master_fd, 4096)
+            except OSError:
+                break  # EIO：PTY 对端（子进程）已关闭
+            if not chunk:
+                break
+            with _pty_sessions_lock:
+                session["output"].extend(chunk)
+    finally:
+        exit_code: int | None = None
+        try:
+            _, status = os.waitpid(session["child_pid"], 0)
+            if os.WIFEXITED(status):
+                exit_code = os.WEXITSTATUS(status)
+            elif os.WIFSIGNALED(status):
+                exit_code = 128 + os.WTERMSIG(status)
+        except (ChildProcessError, OSError):
+            exit_code = -1
+        with _pty_sessions_lock:
+            session["exit_code"] = exit_code
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+        logging.info("sandbox_http_server.pty_reader_end session_id=%s exit_code=%s", session_id, exit_code)
+
+
 class SandboxHttpHandler(BaseHTTPRequestHandler):
     """沙箱内 HTTP server handler：工具执行端点 POST /exec。"""
 
@@ -299,6 +364,16 @@ class SandboxHttpHandler(BaseHTTPRequestHandler):
             self._handle_exec()
         elif self.path == "/upload":
             self._handle_upload()
+        elif self.path == "/pty/open":
+            self._handle_pty_open()
+        elif self.path == "/pty/send":
+            self._handle_pty_send()
+        elif self.path == "/pty/resize":
+            self._handle_pty_resize()
+        elif self.path == "/pty/kill":
+            self._handle_pty_kill()
+        elif self.path == "/pty/read":
+            self._handle_pty_read()
         else:
             self._send_json(404, {"error": {
                 "code": "NOT_FOUND",
@@ -419,6 +494,161 @@ class SandboxHttpHandler(BaseHTTPRequestHandler):
             self._send_json(200, _exec_result(1, stderr=f"Internal error: {type(e).__name__}: {e}"))
         finally:
             _concurrency_semaphore.release()
+
+    # -- 交互式 PTY 端点（webshell v0.4） ----------------------------
+
+    def _read_json_body(self) -> dict:
+        """读取并解析请求 JSON body（失败抛 ValueError）。"""
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length) if length > 0 else b"{}"
+        return json.loads(body.decode("utf-8"))
+
+    def _handle_pty_open(self):
+        """POST /pty/open — 启动交互式 PTY（forkpty + exec /bin/bash -i -l）。
+
+        请求体：{"rows": N, "cols": N, "cwd": "/path"}。
+        响应：{"session_id": "...", "pid": N}。后台线程持续读 master_fd 输出，
+        bridge 经 /pty/read 轮询增量（无状态转发，I-4 幂等）。
+        """
+        try:
+            request = self._read_json_body()
+        except (ValueError, json.JSONDecodeError) as e:
+            self._send_json(400, {"error": {"code": "INVALID_JSON", "message": f"Invalid JSON: {e}"}})
+            return
+        rows = int(request.get("rows", 24))
+        cols = int(request.get("cols", 80))
+        cwd = request.get("cwd") or os.environ.get("SANDBOX_WORKDIR") or os.getcwd()
+        session_id = uuid.uuid4().hex[:12]
+        try:
+            pid, master_fd = pty_mod.fork()
+        except OSError as exc:
+            logging.error("sandbox_http_server.pty_fork failed: %s", exc)
+            self._send_json(500, {"error": {"code": "PTY_FORK_FAILED", "message": str(exc)}})
+            return
+        if pid == 0:
+            # 子进程：exec 交互式 bash
+            try:
+                os.chdir(cwd)
+                os.environ.setdefault("TERM", "xterm-256color")
+                os.execv("/bin/bash", ["/bin/bash", "-i", "-l"])
+            except Exception as exc:  # noqa: BLE001 — exec 失败退出，父进程会读到 EOF
+                os._exit(127)
+        # 父进程：登记会话并启动后台读线程
+        _pty_set_winsize(master_fd, rows, cols)
+        with _pty_sessions_lock:
+            _pty_sessions[session_id] = {
+                "master_fd": master_fd,
+                "child_pid": pid,
+                "rows": rows,
+                "cols": cols,
+                "output": bytearray(),
+                "read_offset": 0,
+                "exit_code": None,
+            }
+        threading.Thread(target=_pty_reader, args=(session_id,), daemon=True).start()
+        logging.info("sandbox_http_server.pty_open session_id=%s pid=%s", session_id, pid)
+        self._send_json(200, {"session_id": session_id, "pid": pid})
+
+    def _handle_pty_send(self):
+        """POST /pty/send — 向 PTY 写入输入（base64，含 Ctrl+C 字节 \\x03）。"""
+        try:
+            request = self._read_json_body()
+        except (ValueError, json.JSONDecodeError) as e:
+            self._send_json(400, {"error": {"code": "INVALID_JSON", "message": f"Invalid JSON: {e}"}})
+            return
+        session_id = request.get("session_id", "")
+        with _pty_sessions_lock:
+            session = _pty_sessions.get(session_id)
+        if session is None:
+            self._send_json(404, {"error": {"code": "PTY_NOT_FOUND", "message": f"pty session not found: {session_id}"}})
+            return
+        try:
+            data = base64.b64decode(request.get("data", ""))
+            os.write(session["master_fd"], data)
+        except (ValueError, OSError) as exc:
+            logging.error("sandbox_http_server.pty_send failed session_id=%s: %s", session_id, exc)
+            self._send_json(500, {"error": {"code": "PTY_SEND_FAILED", "message": str(exc)}})
+            return
+        self._send_json(200, {"ok": True})
+
+    def _handle_pty_resize(self):
+        """POST /pty/resize — 调整 PTY 窗口尺寸（xterm resize 事件）。"""
+        try:
+            request = self._read_json_body()
+        except (ValueError, json.JSONDecodeError) as e:
+            self._send_json(400, {"error": {"code": "INVALID_JSON", "message": f"Invalid JSON: {e}"}})
+            return
+        session_id = request.get("session_id", "")
+        with _pty_sessions_lock:
+            session = _pty_sessions.get(session_id)
+        if session is None:
+            self._send_json(404, {"error": {"code": "PTY_NOT_FOUND", "message": f"pty session not found: {session_id}"}})
+            return
+        rows = int(request.get("rows", 24))
+        cols = int(request.get("cols", 80))
+        _pty_set_winsize(session["master_fd"], rows, cols)
+        with _pty_sessions_lock:
+            session["rows"] = rows
+            session["cols"] = cols
+        self._send_json(200, {"ok": True})
+
+    def _handle_pty_kill(self):
+        """POST /pty/kill — 终止 PTY 会话（WebSocket 断开/关闭面板时调用）。
+
+        幂等：会话不存在返回 200（对齐 kill 幂等语义，I-4）。
+        """
+        try:
+            request = self._read_json_body()
+        except (ValueError, json.JSONDecodeError) as e:
+            self._send_json(400, {"error": {"code": "INVALID_JSON", "message": f"Invalid JSON: {e}"}})
+            return
+        session_id = request.get("session_id", "")
+        with _pty_sessions_lock:
+            session = _pty_sessions.pop(session_id, None)
+        if session is None:
+            self._send_json(200, {"ok": True, "already_gone": True})
+            return
+        try:
+            os.kill(session["child_pid"], signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        logging.info("sandbox_http_server.pty_kill session_id=%s pid=%s", session_id, session["child_pid"])
+        self._send_json(200, {"ok": True})
+
+    def _handle_pty_read(self):
+        """POST /pty/read — 增量读取 PTY 输出（bridge 轮询）。
+
+        请求体：{"session_id": "...", "offset": N}。
+        响应：{"stdout": "...", "stderr": "", "offset": N, "exit_code": null|int}。
+        exit_code 非 null 表示 PTY 进程已结束（route 层发送 exit 帧并终止轮询）。
+        """
+        try:
+            request = self._read_json_body()
+        except (ValueError, json.JSONDecodeError) as e:
+            self._send_json(400, {"error": {"code": "INVALID_JSON", "message": f"Invalid JSON: {e}"}})
+            return
+        session_id = request.get("session_id", "")
+        with _pty_sessions_lock:
+            session = _pty_sessions.get(session_id)
+        if session is None:
+            self._send_json(404, {"error": {"code": "PTY_NOT_FOUND", "message": f"pty session not found: {session_id}"}})
+            return
+        offset = int(request.get("offset", 0))
+        with _pty_sessions_lock:
+            output = bytes(session["output"])
+            exit_code = session["exit_code"]
+        if offset < len(output):
+            chunk = output[offset:]
+            new_offset = len(output)
+        else:
+            chunk = b""
+            new_offset = offset
+        self._send_json(200, {
+            "stdout": chunk.decode("utf-8", errors="replace"),
+            "stderr": "",
+            "offset": new_offset,
+            "exit_code": exit_code,
+        })
 
     def _send_json(self, status: int, data: dict):
         """发送 JSON 响应。"""

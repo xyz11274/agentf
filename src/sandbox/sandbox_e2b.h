@@ -81,6 +81,10 @@ class E2BSandbox : public Sandbox {
   // 沙箱模式标识——E2B（用于 SandboxSnapshots restore 分支判断）
   std::string sandbox_mode() const override { return "e2b"; }
 
+  // 沙箱内 workspace 根目录（/home/user/workspace，与 e2b.py SANDBOX_WORKSPACE 同步常量）
+  // 用于 daemon 下发 user message 前把图片相对路径改写为沙箱内绝对路径（I-7 注入语义）
+  std::string sandbox_workspace_prefix() const override { return remote_workspace_dir_; }
+
   // 同步会话级用户上传目录到远端沙箱（agent-package-structure.md §2.2/§3.2）
   // 调 e2b_sync.py upload 增量同步 session_upload_dir 到 {remote_workspace_dir}/workspace/{session}/upload
   // 失败抛 std::runtime_error 含可定位信息

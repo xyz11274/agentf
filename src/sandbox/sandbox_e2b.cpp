@@ -200,7 +200,7 @@ E2BSandbox::E2BSandbox(const SandboxKey& owner,
   //
   // ── 快照跳过 e2b_sync（2026-08-10 修复，create_latency 27.6s → 秒级）────────
   // agent 级快照（snap-*）构建时已固化 manifest includes 全量资产（harness/skills、
-  // data、requirements.txt、.env、setup.sh 等，见 template_snapshot_create.py），
+  // data、requirements.txt、.env、setup.sh 等，见 template_admin.py snapshot），
   // 运行时资产已在沙箱蓝图——下方三段 e2b_sync 上传（workspace / agent package /
   // skills）会重复上传 43 文件，实测 create_latency=27.6s（2026-08-10 首问 e2e）。
   // 修复：模板是 snap-* 时跳过三段资产上传；tpl-*（基础模板，preload 降级路径）

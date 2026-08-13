@@ -358,3 +358,129 @@ def test_encode_file_non_image_returns_raw(tmp_path) -> None:
     p.write_bytes(b"%PDF-1.4 fake")
     b64 = _encode_file(str(p), "application/pdf")
     assert _b64.b64decode(b64) == b"%PDF-1.4 fake"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 非图片 data_base64 体积阈值防护(fix: artifact_base64_max_bytes)——
+# 大视频/大文档跳过 base64 填充,保留 url 形式(I-8 不阻断交付)
+# ═══════════════════════════════════════════════════════════════════
+
+def _download_art(url: str = "/api/artifacts/outfit-assistant/files/outputs/demo.mp4",
+                  name: str = "demo.mp4") -> ArtifactInfo:
+    """构造一个 download 类型产物(视频)。"""
+    return ArtifactInfo(
+        type="download",
+        url=url,
+        name=name,
+        mime_type="video/mp4",
+    )
+
+
+def test_output_mode_base64_small_non_image_is_filled(monkeypatch) -> None:
+    """非图片文件 ≤ 阈值 → 照常填充 data_base64。"""
+    from routes.artifact_extractor import apply_artifact_output_mode
+
+    monkeypatch.setattr(settings, "artifact_reference", "link")
+    monkeypatch.setattr(settings, "artifact_payload", "base64")
+    monkeypatch.setattr(settings, "artifact_base64_max_bytes", 1024 * 1024)
+    monkeypatch.setattr("routes.artifact_extractor.artifact_file_size", lambda url: 100)
+    monkeypatch.setattr(
+        "routes.artifact_extractor.read_artifact_base64",
+        lambda url, mime_type=None: "c21hbGw=",  # "small"
+    )
+
+    art = _download_art()
+    content = f"文件：[下载 1]({art.url})"
+    _, artifacts = apply_artifact_output_mode(content, [art])
+
+    assert artifacts[0].data_base64 == "c21hbGw=", (
+        f"小文件应填充 data_base64, got {artifacts[0].data_base64!r}"
+    )
+
+
+def test_output_mode_base64_large_non_image_is_skipped_with_warning(
+    monkeypatch, caplog
+) -> None:
+    """非图片文件 > 阈值 → 跳过 data_base64 填充(保留 url 形式),
+    且打 WARNING 日志(含 type/url/size),不静默。"""
+    import logging
+
+    from routes.artifact_extractor import apply_artifact_output_mode
+
+    monkeypatch.setattr(settings, "artifact_reference", "link")
+    monkeypatch.setattr(settings, "artifact_payload", "base64")
+    monkeypatch.setattr(settings, "artifact_base64_max_bytes", 1024 * 1024)
+    monkeypatch.setattr("routes.artifact_extractor.artifact_file_size", lambda url: 5 * 1024 * 1024)
+    monkeypatch.setattr(
+        "routes.artifact_extractor.read_artifact_base64",
+        lambda url, mime_type=None: "SHU5UXpGY2huZHlCMQ==",
+    )
+
+    art = _download_art()
+    content = f"文件：[下载 1]({art.url})"
+    with caplog.at_level(logging.WARNING, logger="agentflow.bridge.routes.artifact_extractor"):
+        _, artifacts = apply_artifact_output_mode(content, [art])
+
+    assert artifacts[0].data_base64 == "", (
+        f"大文件应跳过 data_base64 填充, got {artifacts[0].data_base64!r}"
+    )
+    assert artifacts[0].url == art.url, "大文件应保留 url 形式(I-8 不阻断交付)"
+    assert any("artifact.base64.skip_non_image" in r.message for r in caplog.records), (
+        f"应打 WARNING 日志说明跳过大文件, got: {[r.message for r in caplog.records]}"
+    )
+
+
+def test_output_mode_base64_large_image_unaffected(monkeypatch) -> None:
+    """图片不受阈值限制:即使文件 > 阈值也照常填充(图片有压缩,体积可控)。"""
+    from routes.artifact_extractor import apply_artifact_output_mode
+
+    monkeypatch.setattr(settings, "artifact_reference", "link")
+    monkeypatch.setattr(settings, "artifact_payload", "base64")
+    monkeypatch.setattr(settings, "artifact_base64_max_bytes", 1024)
+    monkeypatch.setattr(
+        "routes.artifact_extractor.artifact_file_size",
+        lambda url: 99 * 1024 * 1024,
+    )
+    monkeypatch.setattr(
+        "routes.artifact_extractor.read_artifact_base64",
+        lambda url, mime_type=None: "aW1hZ2U=",  # "image"
+    )
+
+    # 自构造干净实例:不依赖模块级 _ART(其他测试可能原地污染其 data_base64)
+    art = ArtifactInfo(
+        type="image",
+        url="/api/artifacts/outfit-assistant/files/outputs/look.png",
+        name="look.png",
+        mime_type="image/png",
+    )
+    content = f"![图 1]({art.url})"
+    _, artifacts = apply_artifact_output_mode(content, [art])
+
+    assert artifacts[0].data_base64 == "aW1hZ2U=", (
+        f"图片不受体积阈值限制, got {artifacts[0].data_base64!r}"
+    )
+
+
+def test_output_mode_base64_max_bytes_zero_unlimited(monkeypatch) -> None:
+    """阈值置 0 = 不限制:任意大小的非图片文件都填充。"""
+    from routes.artifact_extractor import apply_artifact_output_mode
+
+    monkeypatch.setattr(settings, "artifact_reference", "link")
+    monkeypatch.setattr(settings, "artifact_payload", "base64")
+    monkeypatch.setattr(settings, "artifact_base64_max_bytes", 0)
+    monkeypatch.setattr(
+        "routes.artifact_extractor.artifact_file_size",
+        lambda url: 999 * 1024 * 1024,
+    )
+    monkeypatch.setattr(
+        "routes.artifact_extractor.read_artifact_base64",
+        lambda url, mime_type=None: "SHVnZQ==",  # "Huge"
+    )
+
+    art = _download_art()
+    content = f"文件：[下载 1]({art.url})"
+    _, artifacts = apply_artifact_output_mode(content, [art])
+
+    assert artifacts[0].data_base64 == "SHVnZQ==", (
+        f"阈值 0 时不限制,应填充, got {artifacts[0].data_base64!r}"
+    )

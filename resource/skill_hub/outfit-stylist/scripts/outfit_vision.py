@@ -22,9 +22,9 @@ secrets / a Vault — the sandbox drops *_API_KEY from the per-call env path).
 Zero pip dependencies; uses DashScope's OpenAI-compatible endpoint.
 
 Usage:
-  python3 outfit_vision.py --image uploads/coat.jpg
-  python3 outfit_vision.py --image uploads/me.jpg --mode person
-  python3 outfit_vision.py --image uploads/x.png --mode garment --model qwen-vl-plus
+  python3 outfit_vision.py --image upload/coat.jpg
+  python3 outfit_vision.py --image upload/me.jpg --mode person
+  python3 outfit_vision.py --image upload/x.png --mode garment --model qwen-vl-plus
 
 Prints one JSON object to stdout. Exit 0 on success; non-zero (message on
 stderr) on a missing key / unreadable image / API error. If the model's reply

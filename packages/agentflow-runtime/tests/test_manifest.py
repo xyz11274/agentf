@@ -1,11 +1,10 @@
 """Tests for generate_manifest() — manifest.jsonc generation (T-004).
 
-Tests the scanning rules from §3.2:
-  ✅ harness/skills/**       — always included if exists
-  ✅ harness/tools/**        — included if exists (user overrides)
-  ✅ data/**                 — included if exists
-  ✅ requirements.txt        — included if exists
-  ❌ agent.json, package.json, *.json workflows, nodes/, agent.md, .env, setup.sh
+Tests the manifest structure after the files-key removal (2026-08-11):
+  - manifest carries ``includes`` glob whitelist (harness/skills/**, etc.)
+  - manifest carries ``excludes`` glob blacklist (nodes/, .venv/, etc.)
+  - ``files`` key is no longer generated — includes glob is the single
+    source of truth (I-5); consumers expand it at runtime.
 """
 
 import tempfile
@@ -54,8 +53,8 @@ def test_manifest_generates_on_first_call():
         assert _manifest_path(tmp).exists()
 
 
-def test_manifest_includes_skills():
-    """harness/skills/** should be in the file list."""
+def test_manifest_has_includes_globs():
+    """includes glob whitelist covers skills/tools/data/env/setup/requirements."""
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         _make_package(tmp, [
@@ -64,14 +63,29 @@ def test_manifest_includes_skills():
             "harness/skills/foo/scripts/tool.py",
         ])
         manifest = generate_manifest(tmp)
-        files = {f["path"] for f in manifest["files"]}
-        assert "harness/skills/foo/SKILL.md" in files
-        assert "harness/skills/foo/scripts/tool.py" in files
+        includes = manifest["includes"]
+        assert "harness/skills/**" in includes
+        assert "harness/tools/**" in includes
+        assert "data/**" in includes
+        assert "requirements.txt" in includes
+        assert ".env" in includes
+        assert "setup.sh" in includes
+
+
+def test_manifest_no_files_key():
+    """files key is removed — includes glob is the single source of truth."""
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        _make_package(tmp, [
+            "agent.json",
+            "harness/skills/my-skill/SKILL.md",
+        ])
+        manifest = generate_manifest(tmp)
+        assert "files" not in manifest
 
 
 def test_manifest_excludes_daemon_files():
-    """agent.json, package.json, workflow *.json, nodes/, agent.md should NOT
-    be in the file list."""
+    """excludes glob blacklist covers daemon-only / sandbox-irrelevant dirs."""
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         _make_package(tmp, [
@@ -85,59 +99,29 @@ def test_manifest_excludes_daemon_files():
             "harness/skills/my-skill/SKILL.md",
         ])
         manifest = generate_manifest(tmp)
-        files = {f["path"] for f in manifest["files"]}
-        assert "agent.json" not in files
-        assert "package.json" not in files
-        assert "coordinator_workflow.json" not in files
-        assert "skill_workflow.json" not in files
-        assert "nodes/skill_executor.py" not in files
-        assert "agent.md" not in files
+        excludes = manifest["excludes"]
+        # 这些目录/文件由 excludes 或"不在 includes glob 内"双重保证不进沙箱
+        assert "nodes" in excludes
+        assert ".venv" in excludes
+        assert "tests" in excludes
+        assert "outputs" in excludes
+        # agent.json 等不在 includes glob 内（includes 只含 harness/skills/** 等），
+        # 由消费端 glob 展开天然排除——此处验证 includes 不含调度文件
+        includes = manifest["includes"]
+        assert not any(g.startswith("agent.json") or g.startswith("nodes") for g in includes)
 
 
-def test_manifest_includes_data():
-    """data/** should be included if present."""
+def test_manifest_generated_at_is_set():
+    """generated_at timestamp should be set."""
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         _make_package(tmp, [
             "agent.json",
-            "data/guide.json",
-            "data/images/logo.png",
             "harness/skills/my-skill/SKILL.md",
         ])
         manifest = generate_manifest(tmp)
-        files = {f["path"] for f in manifest["files"]}
-        assert "data/guide.json" in files
-        assert "data/images/logo.png" in files
-
-
-def test_manifest_includes_requirements():
-    """requirements.txt should be included if present."""
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
-        _make_package(tmp, [
-            "agent.json",
-            "requirements.txt",
-            "harness/skills/my-skill/SKILL.md",
-        ])
-        manifest = generate_manifest(tmp)
-        files = {f["path"] for f in manifest["files"]}
-        assert "requirements.txt" in files
-
-
-def test_manifest_includes_tools_overrides():
-    """harness/tools/** should be included if present (user overrides)."""
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
-        _make_package(tmp, [
-            "agent.json",
-            "harness/tools/bash.py",
-            "harness/tools/custom_tool.py",
-            "harness/skills/my-skill/SKILL.md",
-        ])
-        manifest = generate_manifest(tmp)
-        files = {f["path"] for f in manifest["files"]}
-        assert "harness/tools/bash.py" in files
-        assert "harness/tools/custom_tool.py" in files
+        assert "generated_at" in manifest
+        assert manifest["generated_at"]  # not empty
 
 
 def test_manifest_with_manifest_already_exists():
@@ -156,19 +140,6 @@ def test_manifest_with_manifest_already_exists():
         assert m1 == m2
 
 
-def test_manifest_generated_at_is_set():
-    """generated_at timestamp should be set."""
-    with tempfile.TemporaryDirectory() as td:
-        tmp = Path(td)
-        _make_package(tmp, [
-            "agent.json",
-            "harness/skills/my-skill/SKILL.md",
-        ])
-        manifest = generate_manifest(tmp)
-        assert "generated_at" in manifest
-        assert manifest["generated_at"]  # not empty
-
-
 # ---------------------------------------------------------------------------
 # Tests — load_manifest
 # ---------------------------------------------------------------------------
@@ -185,7 +156,7 @@ def test_load_manifest_exists():
         generate_manifest(tmp)
         loaded = load_manifest(tmp)
         assert loaded is not None
-        assert "files" in loaded
+        assert "includes" in loaded
 
 
 def test_load_manifest_not_exists():
@@ -216,21 +187,19 @@ def test_load_manifest_jsonc_with_comments():
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         # Hand-written JSONC with // line comments — mirrors
-        # examples/agent/outfit-assistant/manifest.jsonc shape
+        # resource/agent-packages/outfit-assistant/manifest.jsonc shape
         (_manifest_path(tmp)).write_text(
             """{
             // includes: upload whitelist globs (relative to agent package root)
             "includes": ["harness/skills/**", ".env", "setup.sh"],
             // excludes: even if matched by includes, drop these
-            "excludes": [".venv", "workspace"],
-            "files": [{"path": ".env"}]
+            "excludes": [".venv", "workspace"]
             }"""
         )
         loaded = load_manifest(tmp)
         assert loaded is not None, "load_manifest crashed or returned None on JSONC with comments"
         assert loaded["includes"] == ["harness/skills/**", ".env", "setup.sh"]
         assert loaded["excludes"] == [".venv", "workspace"]
-        assert loaded["files"] == [{"path": ".env"}]
 
 
 def test_load_manifest_jsonc_with_block_comments():
@@ -243,11 +212,9 @@ def test_load_manifest_jsonc_with_block_comments():
         tmp = Path(td)
         (_manifest_path(tmp)).write_text(
             """{
-            "includes": ["harness/skills/**"], /* block comment */
-            "files": [{"path": "harness/skills/demo/SKILL.md"}]
+            "includes": ["harness/skills/**"] /* block comment */
             }"""
         )
         loaded = load_manifest(tmp)
         assert loaded is not None
         assert loaded["includes"] == ["harness/skills/**"]
-        assert loaded["files"] == [{"path": "harness/skills/demo/SKILL.md"}]

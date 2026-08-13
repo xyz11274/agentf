@@ -53,6 +53,9 @@ class WriteResult:
     success: bool = False
     error: str | None = None
     bytes_written: int = 0
+    # 写入的路径（e2b 模式下为沙箱内路径，如 /home/user/workspace/...）。
+    # 供产物收集链路 extract_structured_artifacts 识别（_ARTIFACT_JSON_FIELDS 含 path）。
+    path: str = ""
 
     def to_dict(self) -> dict:
         """Return a JSON-serializable dict representation."""

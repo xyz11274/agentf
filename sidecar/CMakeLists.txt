@@ -18,6 +18,7 @@ message(STATUS "coremind_bridge PLATFORM_DIR=${PLATFORM_DIR}")
 
 add_executable(coremind_bridge
     main.cpp
+    sidecar_config.cpp # 配置加载（JSON + env 覆盖 + 默认值），dev 与生产共用
     uds_model_proxy.cpp
     proxy_handler.cpp
     router_logic.cpp   # 纯协议逻辑（无 CMF 依赖），dev/main.cpp 与生产 sidecar_router 共用
@@ -120,6 +121,30 @@ if(GTest_FOUND)
 
     include(GoogleTest)
     gtest_discover_tests(test_router_logic)
+
+    add_executable(test_sidecar_config
+        tests/test_sidecar_config.cpp
+        sidecar_config.cpp
+    )
+
+    target_include_directories(test_sidecar_config PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+
+    target_link_libraries(test_sidecar_config PRIVATE GTest::GTest GTest::Main)
+    if(GTest_DIR)
+        get_filename_component(GTEST_LIB_DIR "${GTest_DIR}/../.." ABSOLUTE)
+        set_target_properties(test_sidecar_config PROPERTIES
+            BUILD_RPATH "${GTEST_LIB_DIR}")
+    endif()
+
+    if(jsoncpp_FOUND)
+        target_link_libraries(test_sidecar_config PRIVATE JsonCpp::JsonCpp)
+    else()
+        target_link_libraries(test_sidecar_config PRIVATE jsoncpp)
+    endif()
+
+    gtest_discover_tests(test_sidecar_config)
 else()
     message(STATUS "sidecar: GTest not found — skipping unit tests")
 endif()

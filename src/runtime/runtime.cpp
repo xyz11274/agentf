@@ -1029,8 +1029,26 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
                    FlowEventType::NODE_STARTED);
 
   // Execute node
+  // 异常收尾：node->execute() 抛异常时若裸奔，NODE_COMPLETED 与 WORKFLOW_COMPLETED 都会缺失
+  // （trajectory 出现"只有 start 无 end"死节点，且 workflow 永远达不到 can_complete）。
+  // 此处捕获异常：记录日志（M3 三要素 ①）+ 以失败结果继续传导（execution_result=false →
+  // 下游 update_workflow_state 失败分支 → WORKFLOW_COMPLETED 正常发出）。
   auto start_time       = std::chrono::steady_clock::now();
-  bool execution_result = node->execute();
+  bool execution_result = false;
+  std::string node_exception;
+  try {
+    execution_result = node->execute();
+  } catch(const std::exception& e) {
+    execution_result = false;
+    node_exception = e.what();
+    Logger::instance().error_f("[PROCESS_NODE_EXCEPTION] Node=%s threw: %s",
+                               node->get_name().c_str(), e.what());
+  } catch(...) {
+    execution_result = false;
+    node_exception = "unknown exception";
+    Logger::instance().error_f("[PROCESS_NODE_EXCEPTION] Node=%s threw unknown exception",
+                               node->get_name().c_str());
+  }
   auto end_time         = std::chrono::steady_clock::now();
   auto duration =
       std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time).count();
@@ -1072,7 +1090,11 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
   FLOW_TRACE_NODE_WITH_DATA_L(flow_session_id, flow_dialogue_id, flow_trace_labels,
                               workflow ? workflow->get_id() : "", node->get_name(),
                               FlowEventType::NODE_COMPLETED,
-                              trace_input, trace_output, duration * 1000);  // duration in microseconds
+                              trace_input,
+                              node_exception.empty()
+                                  ? trace_output
+                                  : ("{\"exception\":\"" + escape_json_string(node_exception) + "\"}"),
+                              duration * 1000);  // duration in microseconds
 
   // [DEBUG] Log node processing result
   if(!execution_result) {
@@ -1433,6 +1455,11 @@ void MMAgentRuntime::schedule_workflow_executable_nodes(const std::string& execu
     Logger::instance().error_f("No cloned workflow found for execution_id: %s", execution_id.c_str());
     return;
   }
+
+  // Flow trace: workflow scheduled（调度可执行节点前发出，枚举已定义但此前零打点）
+  FLOW_TRACE_WORKFLOW_L(state.session_id, state.dialogue_id, state.trace_labels,
+                        state.source_task_id, workflow->get_id(),
+                        FlowEventType::WORKFLOW_SCHEDULED);
 
   // Get executable nodes
   auto executable_nodes = workflow->get_executable_nodes();
@@ -2020,6 +2047,17 @@ void MMAgentRuntime::agent_task_poller_loop() {
         if(task->get_parameter("dialogue_id", dialogue_id) && !dialogue_id.empty()) {
           inputs["dialogue_id"] = dialogue_id;
           Logger::instance().info_f("[TASK_POLLER] Set inputs[dialogue_id]='%s'", dialogue_id.c_str());
+        }
+        // Propagate user_id / client_id for artifact routing. AF_SESSION_ID 是执行槽位
+        // (session slot, 0/1/2)，不是用户会话标识；产物目录与 artifact_id 需用
+        // {user_id}_{client_id} 作为 session_id 段（见 docs/design/features/sandbox/artifact-storage.md §2.2）。
+        std::string user_id;
+        if(task->get_parameter("user_id", user_id) && !user_id.empty()) {
+          inputs["user_id"] = user_id;
+        }
+        std::string client_id;
+        if(task->get_parameter("client_id", client_id) && !client_id.empty()) {
+          inputs["client_id"] = client_id;
         }
         // Propagate stream flag from task parameter to node inputs
         std::string stream_str;

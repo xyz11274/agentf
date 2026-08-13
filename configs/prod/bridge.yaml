@@ -18,25 +18,9 @@ bridge:
 sidecar:
   enabled: true
   listen: "0.0.0.0:23767"
-  aisf_adapter_url: "http://127.0.0.1:18080"
-
-# ── AISF Adapter ───────────────────────────────────────────────────
-aisf_adapter:
-  agent_id: "outfit-assistant"
-  mode: "async"
-  timeout: 360.0
-  upstream:
-    scheme: "http"
-    callback_port: 23767
-    callback_path: "/coremind/systemagent/v1/callback"
-    # client_cert_path: "/etc/agentflow/certs/client.pem"
-    # client_key_path: "/etc/agentflow/certs/client-key.pem"
-    # client_key_password: ""
-    # ca_cert_path: "/etc/agentflow/certs/ca.pem"
-    verify: false
 
 # ── Artifact 公网地址 ─────────────────────────────────────────────
-artifact_public_base_url: "http://115.120.249.45:40092/health"
+artifact_public_base_url: "http://115.120.249.45:40007/health"
 
 # ── 产物输出模式（两维正交开关，详见 docs/design/features/artifact-output-pipeline.md §3.6）──
 artifact_reference: "placeholder"

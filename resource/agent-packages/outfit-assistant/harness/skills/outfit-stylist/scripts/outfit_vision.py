@@ -22,9 +22,9 @@ secrets / a Vault — the sandbox drops *_API_KEY from the per-call env path).
 Zero pip dependencies; uses DashScope's OpenAI-compatible endpoint.
 
 Usage:
-  python3 outfit_vision.py --image uploads/coat.jpg
-  python3 outfit_vision.py --image uploads/me.jpg --mode person
-  python3 outfit_vision.py --image uploads/x.png --mode garment --model qwen-vl-plus
+  python3 outfit_vision.py --image upload/coat.jpg
+  python3 outfit_vision.py --image upload/me.jpg --mode person
+  python3 outfit_vision.py --image upload/x.png --mode garment --model qwen-vl-plus
 
 Prints one JSON object to stdout. Exit 0 on success; non-zero (message on
 stderr) on a missing key / unreadable image / API error. If the model's reply
@@ -60,23 +60,31 @@ GARMENT_PROMPT = (
 PERSON_PROMPT = (
     "你是穿搭个性化助手。基于这张全身/人物照，给出用于穿搭建议的【粗略】视觉线索，"
     "只输出一个 JSON 对象，不要任何额外文字或代码块标记。"
-    "结构：{\"body_shape_hint\":\"对整体身形轮廓的中性、试探性描述（如 偏直筒/偏沙漏/上宽下窄/不确定）\","
+    "结构：{\"gender_impression\":\"对人物性别的粗略视觉印象（男/女/中性/不确定）\","
+    "\"body_shape_hint\":\"对整体身形轮廓的中性、试探性描述（如 偏直筒/偏沙漏/上宽下窄/不确定）\","
     "\"height_impression\":\"高挑/中等/娇小/不确定\",\"skin_undertone\":\"冷调/暖调/中性/不确定\","
     "\"coloring_notes\":\"发色、肤色明度等与配色相关的观察\","
     "\"disclaimer\":\"这些是基于单张照片的粗略推测，可能不准，仅供搭配参考。\"}。"
-    "措辞必须尊重、不评判身材；看不清就填『不确定』。不要描述或推断与穿搭无关的个人身份信息。"
+    "措辞必须尊重、不评判身材；看不清就填『不确定』。性别印象用于决定推荐方向（男装/女装/中性），"
+    "是穿搭相关的必要线索，但仅输出粗略印象、不臆造其他个人身份信息。"
 )
 
 OUTFIT_PROMPT = (
-    "你是穿搭识别助手。识别这张【整体穿搭/上身照】里的全部服饰单品和整体造型线索，"
+    "你是穿搭识别助手。识别这张【整体穿搭/上身照】里的全部服饰单品、整体造型线索和人物视觉线索，"
     "只输出一个 JSON 对象，不要任何额外文字或代码块标记。"
     "结构：{\"items\":[{\"category\":\"上装/外套/下装/连衣裙/鞋/包/配饰 等\",\"subtype\":\"具体款式\","
     "\"colors\":[\"颜色，中文\"],\"fit\":\"修身/合身/宽松/oversize\"}],"
     "\"palette\":[\"整体主要配色，中文\"],\"style_tags\":[\"风格词，如 简约/通勤/休闲/复古/街头/甜美/运动\"],"
     "\"formality\":\"休闲/商务休闲/正式/运动\",\"layering\":\"层次与廓形的简短观察\","
     "\"proportion_notes\":\"上下比例、廓形的中性观察（不评判身材）\","
+    "\"gender_impression\":\"对人物性别的粗略视觉印象（男/女/中性/不确定，人物不可见则不确定）\","
+    "\"body_shape_hint\":\"对整体身形轮廓的中性、试探性描述（如 偏直筒/偏沙漏/上宽下窄/不确定）\","
+    "\"height_impression\":\"高挑/中等/娇小/不确定\",\"skin_undertone\":\"冷调/暖调/中性/不确定\","
+    "\"coloring_notes\":\"发色、肤色明度等与配色相关的观察\","
     "\"summary\":\"一句话概述这套造型\"}。"
-    "只描述真实可见的内容，不臆造看不清的细节；措辞中性、不评判身材，不输出对人物外貌的主观评价。"
+    "只描述真实可见的内容，不臆造看不清的细节（看不清就填『不确定』）；措辞中性、不评判身材，"
+    "性别印象仅用于决定推荐方向（男装/女装/中性），不输出对人物外貌的其他主观评价。"
+    "本调用已覆盖人物视觉线索，调用方无需再单独识别人物维度。"
 )
 
 # A direct opener that ignores environment proxies — inside a container a

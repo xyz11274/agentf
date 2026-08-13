@@ -243,3 +243,53 @@ std::string json = mc->export_json();
 // 导出 Prometheus 格式
 std::string prom = mc->export_prometheus();
 ```
+
+---
+
+## Python 侧 span 模型（harness agent 链路）
+
+> 设计文档：`docs/design/architecture/observability-design.md` §6 落地架构。
+> 本节是 Python 侧（harness agent coordinator/skill_executor 等）融合进 TraceSystem span 树的说明。
+
+### 模块位置
+
+```
+packages/agentflow-runtime/src/agentflow_runtime/trace/
+├── __init__.py      — 公开 API（emit_span, span_event, SpanContext, SpanKind, ...）
+├── types.py         — TraceSpan/SpanEvent/SpanKind dataclass（镜像 C++ trace_types.h）
+├── span_context.py  — SpanContext 进程内 span 栈（仿 C++ TraceContext）
+├── span_writer.py   — SpanWriter NDJSON 落盘
+└── emit.py          — emit_span() context manager + span_event() 瞬时事件
+```
+
+### 跨进程 span 树机制
+
+C++ daemon spawn Python 子进程前注入两个环境变量（`worker.cpp`）：
+- `AF_TRACE_ID` — 当前 trace_id（从 C++ TraceContext::trace_id() 取）
+- `AF_PARENT_SPAN_ID` — 当前 NODE span 的 span_id（Python 侧 span 挂为子节点）
+
+Python 侧 `SpanContext.read_env()` 在进程入口读入建立根父链，进程内子 span 的父子关系靠栈自动维护（仿 C++ ScopedSpan）。
+
+### 落盘 NDJSON
+
+```
+trace_output/python/python_spans_<dialogue_id>.ndjson
+```
+
+一行一 span JSON，与 C++ 侧 `trace_output/task_<id>.ndjson` 格式一致，viewer 同目录扫两侧合并展示跨进程 span 树。
+
+### 与现有 observability.py 的关系
+
+`observability.py::emit_event` 已转为 `trace.span_event()` 的兼容入口（消除 F4 双轨）：
+- 11 类瞬时事件：自动走 span_event（挂活跃 span 的 events，无活跃 span 时退化为 stderr [obs] preview）
+- 4 对成对事件（llm_call_start/result 等）：**P1 阶段迁为 emit_span context manager**，本轮 P0 保留 emit_event 两行各打一次（duration 在 payload elapsed_s 字段，未丢）
+- stderr [obs] 行保留为 preview（§6.8），真相源在 NDJSON
+
+### 消费端入口
+
+| 场景 | 入口 |
+|------|------|
+| 开发态速读实时轨迹 | stderr `[obs]`/`[timing]` preview（tail -f） |
+| 结构化查询某次请求 | `grep "trace_id" trace_output/**/*.ndjson`（合并 C++ + Python） |
+| 可视化甘特图/火焰图 | `tools/span_trace_viewer/`（Phase D 收尾后扩展读 Python NDJSON） |
+| LLM 调用明细 | recorder DataBus + bridge `/api/.../llm-traces`（已有） |

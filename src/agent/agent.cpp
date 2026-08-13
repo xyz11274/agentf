@@ -1312,6 +1312,36 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
                               dialogue_id_it->second.c_str(), task_config.task_id.c_str());
   }
 
+  // Pass user_id / client_id to task parameters for artifact routing.
+  // rpc_handler::handle_agent_execute 入口把 user_id/client_id 塞进 message.metadata；
+  // worker 端把 inputs 按 AF_{KEY} 注入子进程 env（AF_USER_ID/AF_CLIENT_ID），
+  // skill_executor 用 {user_id}_{client_id} 作产物路由键（artifact-storage.md §2.2）。
+  // metadata 优先，session 兜底（session 也持有 active user/client）。
+  const std::string* user_id_val = nullptr;
+  const std::string* client_id_val = nullptr;
+  if(const auto user_id_it = message.metadata.find("user_id");
+     user_id_it != message.metadata.end() && !user_id_it->second.empty()) {
+    user_id_val = &user_id_it->second;
+  } else if(session && !session->get_user_id().empty()) {
+    user_id_val = &session->get_user_id();
+  }
+  if(const auto client_id_it = message.metadata.find("client_id");
+     client_id_it != message.metadata.end() && !client_id_it->second.empty()) {
+    client_id_val = &client_id_it->second;
+  } else if(session && !session->get_client_id().empty()) {
+    client_id_val = &session->get_client_id();
+  }
+  if(user_id_val) {
+    task->set_parameter("user_id", *user_id_val);
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set user_id=%s for task=%s",
+                              user_id_val->c_str(), task_config.task_id.c_str());
+  }
+  if(client_id_val) {
+    task->set_parameter("client_id", *client_id_val);
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set client_id=%s for task=%s",
+                              client_id_val->c_str(), task_config.task_id.c_str());
+  }
+
   // Pass trace_labels from message metadata to task parameters for flow trace correlation
   if(const auto trace_labels_it = message.metadata.find("trace_labels");
      trace_labels_it != message.metadata.end() && !trace_labels_it->second.empty()) {
@@ -1752,6 +1782,18 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       task->on_skill_completed("unknown-skill");  // fallback
     }
 
+    // Flow trace: skill completed（与 agent.cpp:2850 SKILL_LAUNCHED 配对，from/to 同构）
+    {
+      std::string skill_complete_labels;
+      if(message.metadata.count("trace_labels")) {
+        skill_complete_labels = message.metadata.at("trace_labels");
+      }
+      FLOW_TRACE_SKILL_L(session->get_session_id(), dialogue_id, skill_complete_labels,
+                         task->get_task_type(),
+                         skill_name_for_counter.empty() ? "unknown-skill" : skill_name_for_counter,
+                         runtime::FlowEventType::SKILL_COMPLETED);
+    }
+
     // Decrement pending_skills_count in DataBus for coordinator to track
     std::string pending_count_key = dialogue_id.empty() ? "pending_skills_count" : dialogue_id + "/pending_skills_count";
     DataVariant pending_count_value;
@@ -1970,6 +2012,16 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
           Logger::instance().info_f(
               "[DISPATCHERDataExchange] Enqueueing direct dispatcher response, content='%s'",
               response_message.content.c_str());
+          // Flow trace: response sent（dispatcher 直接响应出口）
+          {
+            std::string dispatcher_trace_labels;
+            if(message.metadata.count("trace_labels")) {
+              dispatcher_trace_labels = message.metadata.at("trace_labels");
+            }
+            FLOW_TRACE_EVENT_L("task-exec", session->get_session_id(), dialogue_id,
+                               "dispatcher", "bridge", runtime::FlowEventType::RESPONSE_SENT,
+                               {}, dispatcher_trace_labels);
+          }
           session_router_->enqueue_response_message(response_message);
         }
         return;
@@ -2295,6 +2347,16 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
           }
 
           if(session_router_) {
+            // Flow trace: response sent（coordinator multi-response 出口）
+            {
+              std::string multi_trace_labels;
+              if(message.metadata.count("trace_labels")) {
+                multi_trace_labels = message.metadata.at("trace_labels");
+              }
+              FLOW_TRACE_EVENT_L("task-exec", session->get_session_id(), dialogue_id,
+                                 "coordinator", "bridge", runtime::FlowEventType::RESPONSE_SENT,
+                                 {}, multi_trace_labels);
+            }
             session_router_->enqueue_response_message(response_message);
             mark_response_consumed(*this, session->get_session_id(), dialogue_id, multi_result.consumed_index);
 
@@ -2330,6 +2392,16 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
           }
 
           if(session_router_) {
+            // Flow trace: response sent（coordinator single-response 出口）
+            {
+              std::string single_trace_labels;
+              if(message.metadata.count("trace_labels")) {
+                single_trace_labels = message.metadata.at("trace_labels");
+              }
+              FLOW_TRACE_EVENT_L("task-exec", session->get_session_id(), dialogue_id,
+                                 "coordinator", "bridge", runtime::FlowEventType::RESPONSE_SENT,
+                                 {}, single_trace_labels);
+            }
             session_router_->enqueue_response_message(response_message);
 
             if(has_dialogue_event_callback()) {
@@ -2439,6 +2511,18 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
             summary_trace_id.empty() ? "(none)" : summary_trace_id.c_str(),
             response_message.content.size(),
             has_skill_error ? "true" : "false");
+      }
+      // Flow trace: response sent（coordinator 单响应最终出口，与前端回传配对）
+      {
+        std::string response_trace_labels;
+        if(response_message.metadata.count("trace_labels")) {
+          response_trace_labels = response_message.metadata.at("trace_labels");
+        } else if(message.metadata.count("trace_labels")) {
+          response_trace_labels = message.metadata.at("trace_labels");
+        }
+        FLOW_TRACE_EVENT_L("task-exec", session->get_session_id(), dialogue_id,
+                           "coordinator", "bridge", runtime::FlowEventType::RESPONSE_SENT,
+                           {}, response_trace_labels);
       }
       session_router_->enqueue_response_message(response_message);
 
@@ -2880,14 +2964,17 @@ MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
   std::string scheduled_key = dialogue_id.empty() ? "skills_scheduled" : dialogue_id + "/skills_scheduled";
 
   // Load launched_skills from databus
+  // Key 维度 = "name:exec_skill_key"——区分同一 skill-runner task 下不同 exec_skill_key
+  // 的调度实例（实测 2026-08-11 死链：维度只看 name 导致第二轮 outfit-stylist 调度被
+  // 误判为"重排 forge-image-gen"。F4 铐律：所有消费点已同步迁移到复合 key 维度）。
   DataVariant launched_value;
   if(get_data(launched_key, launched_value)) {
     if(const auto* text = std::get_if<std::string>(&launched_value)) {
       std::istringstream iss(*text);
-      std::string skill_name;
-      while(std::getline(iss, skill_name, ',')) {
-        if(!skill_name.empty()) {
-          result.launched_skills.insert(skill_name);
+      std::string launched_key_entry;
+      while(std::getline(iss, launched_key_entry, ',')) {
+        if(!launched_key_entry.empty()) {
+          result.launched_skills.insert(launched_key_entry);
         }
       }
     }
@@ -2897,16 +2984,21 @@ MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
   // FORCE RE-LAUNCH HANDLING
   // ============================================================
   // Use set to avoid duplicates when collecting force skills
+  // launched_skills 维度 = "name:exec_skill_key"，force 判断必须用复合 key，
+  // 否则同一 skill-runner task 下不同 exec_skill_key 的调度会被误判为"已 launch"。
   std::set<std::string> force_skill_names_set;
   bool has_force_skills = false;
 
   for(const auto& spec : next_skills) {
-    if(spec.force && result.launched_skills.count(spec.name)) {
+    std::string launched_key_for_spec = spec.exec_skill_key.empty()
+        ? spec.name
+        : spec.name + ":" + spec.exec_skill_key;
+    if(spec.force && result.launched_skills.count(launched_key_for_spec)) {
       has_force_skills = true;
       force_skill_names_set.insert(spec.name);
 
       // Remove from launched_skills set
-      result.launched_skills.erase(spec.name);
+      result.launched_skills.erase(launched_key_for_spec);
 
       // Check if skill has result (completed) or is still pending
       std::string result_key = dialogue_id.empty()
@@ -2956,9 +3048,13 @@ MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
   }
 
   // Filter out already launched skills
+  // launched_skills 维度 = "name:exec_skill_key"，复合 key 判重。
   std::vector<SkillSpec> skills_to_launch;
   for(const auto& spec : next_skills) {
-    if(result.launched_skills.find(spec.name) == result.launched_skills.end()) {
+    std::string launched_key_for_spec = spec.exec_skill_key.empty()
+        ? spec.name
+        : spec.name + ":" + spec.exec_skill_key;
+    if(result.launched_skills.find(launched_key_for_spec) == result.launched_skills.end()) {
       skills_to_launch.push_back(spec);
     }
   }
@@ -3011,7 +3107,12 @@ MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
       break;
     }
     if(launch_skill_task(session, spec.name, spec.exec_skill_key, message_with_dialogue, task)) {
-      result.launched_skills.insert(spec.name);
+      // launched_skills 维度 = "name:exec_skill_key"，记录复合 key 避免不同
+      // exec_skill_key 的 skill-runner 调度实例被误判为同一已 launch skill。
+      std::string launched_key_for_spec = spec.exec_skill_key.empty()
+          ? spec.name
+          : spec.name + ":" + spec.exec_skill_key;
+      result.launched_skills.insert(launched_key_for_spec);
       result.launched_count++;
       result.launched_any = true;
       // Collect force skills to reset their flags (set avoids duplicates)
@@ -3045,9 +3146,13 @@ MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
   }
 
   // Check if all skills have been launched
+  // launched_skills 维度 = "name:exec_skill_key"，复合 key 判全 launch 完成。
   result.all_launched = true;
   for(const auto& spec : next_skills) {
-    if(result.launched_skills.find(spec.name) == result.launched_skills.end()) {
+    std::string launched_key_for_spec = spec.exec_skill_key.empty()
+        ? spec.name
+        : spec.name + ":" + spec.exec_skill_key;
+    if(result.launched_skills.find(launched_key_for_spec) == result.launched_skills.end()) {
       result.all_launched = false;
       break;
     }

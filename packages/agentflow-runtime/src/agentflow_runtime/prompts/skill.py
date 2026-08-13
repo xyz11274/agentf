@@ -130,3 +130,33 @@ SKILL_REPORT_EXECUTION_PROMPT = (
     "- 明确列出**已完成、无需重复执行**的部分（如「key 已检查通过，勿再检查」）。\n"
     "最终结果部分照常输出。"
 )
+
+# Instructs the skill executor to prefer domain/specialized tools over generic
+# ones (bash as last resort). 第一性原理（2026-08-10）：LLM 在工具选择上天然倾向
+# 通用 bash 逐轮探索，即使有专用工具（如 preload_user_context）可用——实测
+# baseline-20260810 中 LLM 调用了 preload_user_context 拿到真实天气后仍 3 次
+# bash 补查 weather.py（轮次/token 浪费）。该原则是**跨 skill 通用**的（任何
+# skill 都有"专用工具 vs bash"的选择），故抽象到系统提示词层而非逐个改 SKILL.md
+# （避免霰弹式修改）；改 SKILL.md 只修一个 skill，改这里一次覆盖全部。
+SKILL_TOOL_PRIORITY_PROMPT = (
+    "## 工具选择优先级（重要）\n\n"
+    "- **优先使用专用/领域工具**：当工具列表中已有能完成该步骤的专用工具"
+    "（如 `preload_user_context` 预加载用户上下文、`read_file` 读文件）时，"
+    "**先用它**，不要用通用手段绕路。\n"
+    "- **bash 是兜底，不是首选**：只有没有专用工具、或专用工具无法完成该步骤时，"
+    "才用 `bash` 执行命令。能用专用工具完成的工作，禁止用 bash 重复实现。\n"
+    "- **已获取的信息直接复用**：专用工具返回的结果（如用户档案、历史、天气）"
+    "直接用于后续推理，**不要再用 bash 重复查询同一数据**"
+    "（如工具已返回天气，就不要再 `bash python3 weather.py` 补查一次）。\n"
+    "- **禁止探索性 bash**：当 `preload_user_context` 已返回档案/历史/天气/风格参考时，"
+    "**禁止再用 bash 做探索性检查**——`ls` 目录、探测 key（如 `[ -n $VAR ]` 形式）、"
+    "确认工具文件存在（如 `ls weather.py`）、查看档案目录，全部不需要："
+    "preload 返回的内容就是权威数据，直接基于它推理。"
+    "仅当 preload 明确返回缺失字段（如 error）时才针对性补查一次。\n"
+    "- **遵循 preload 的 _hint 声明**：`preload_user_context` 返回的 `_hint` 字段"
+    "明确列出了本次已返回的字段（如 profile_content/history_files/weather/style_guide）"
+    "并声明禁止再次探索——**看到 _hint 后必须直接基于已返回字段推理**，"
+    "不得再调用 bash 做任何 ls/探测/确认存在的探索性动作。\n"
+    "- 判断方法：动手调用 bash 前先自问——工具列表里有现成的专用工具吗？"
+    "如果有，用专用工具；如果没有，才轮到 bash。"
+)

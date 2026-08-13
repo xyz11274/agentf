@@ -17,7 +17,9 @@
 #include <type_traits>
 
 #include "runtime/databus/file_databus_bridge.h"
+#include "runtime/flow_trace.h"
 #include "runtime/llm/streaming_client.h"
+#include "runtime/trace/trace_context.h"
 #include "sandbox/sandbox_helpers.h"  // SandboxHelpers::bash
 #include "utils/logger.h"
 
@@ -186,6 +188,21 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
     exec_config.env_vars.push_back("AF_SANDBOX_ENDPOINT=" + request.sandbox_endpoint);
   }
 
+  // Inject trace context (AF_TRACE_ID + AF_PARENT_SPAN_ID) for Python subprocess.
+  // §6.2 跨进程 span 树：Python 侧 SpanContext 读这两个环境变量建立父链。
+  // C++ 侧改动最小：仅从当前线程 TraceContext 取 trace_id + current span_id 追加 2 个 env_vars。
+  {
+    auto& tc = runtime::trace::TraceContext::current();
+    const std::string& tid = tc.trace_id();
+    if(!tid.empty()) {
+      exec_config.env_vars.push_back("AF_TRACE_ID=" + tid);
+      const std::string& parent_span = tc.span_id();  // 当前 NODE span 作为 Python 子进程的父
+      if(!parent_span.empty()) {
+        exec_config.env_vars.push_back("AF_PARENT_SPAN_ID=" + parent_span);
+      }
+    }
+  }
+
   std::atomic<bool>                  monitor_running{true};
   std::set<std::string>              seen_event_files;
   std::set<std::string>              handled_llm_requests;
@@ -233,6 +250,9 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
           cfg.model      = request.llm_config.model;
           cfg.timeout_ms = request.llm_config.timeout_ms;
           std::string final_text;
+          // Flow trace: LLM request (enter) — 记录请求发起时刻（F7.1：请求构造后、发送前）
+          FLOW_TRACE_EXTERNAL_CALL(request.session_id, "", "worker", "llm-stream",
+                                   "enter-llm", cfg.model, "");
           const bool ok = client.stream_prompt(
               prompt, cfg,
               [&](const std::string& chunk) {
@@ -247,6 +267,10 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
                 file_databus.put("agentflow.llm.error." + request_id, error_message);
                 file_databus.publish(error_channel, error_message);
               });
+          // Flow trace: LLM response (exit) — 响应接收完成（成功/失败均记录）
+          FLOW_TRACE_EXTERNAL_CALL(request.session_id, "", "worker", "llm-stream",
+                                   "exit-llm", cfg.model,
+                                   ok ? final_text : "llm stream failed");
           if(!ok) {
             file_databus.publish(error_channel, std::string("llm stream failed"));
           }
@@ -321,7 +345,14 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
     }
 
     if (!cmd.empty()) {
+      // Flow trace: 工具执行开始（沙箱 bash 路径）
+      FLOW_TRACE_EXTERNAL_CALL(request.session_id, "", "worker", "tool-bash",
+                               "enter-tool", cmd, "");
       auto exec_result = sandbox::SandboxHelpers::bash(*request.sandbox, cmd, sbox_opts);
+      // Flow trace: 工具执行结束（成功/失败均记录）
+      FLOW_TRACE_EXTERNAL_CALL(request.session_id, "", "worker", "tool-bash",
+                               "exit-tool", cmd,
+                               exec_result.exit_code == 0 ? exec_result.stdout : exec_result.stderr);
       result.success = (exec_result.exit_code == 0);
       result.stdout = exec_result.stdout;
       result.stderr = exec_result.stderr;
@@ -340,6 +371,9 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
   // 非沙箱路径（或 SO_LIBRARY/CPP_FUNCTION 回退）——走 code_loader
   // 回退条件：无沙箱实例，或沙箱路径未执行（cmd 为空的 SO_LIBRARY/CPP_FUNCTION 场景）
   if (!request.sandbox || !sandbox_executed) {
+  // Flow trace: 工具执行开始（本地 code_loader 路径）
+  FLOW_TRACE_EXTERNAL_CALL(request.session_id, "", "worker", "tool-exec",
+                           "enter-tool", request.command, "");
   switch(request.mode) {
     case ExecutionMode::SHELL_SCRIPT:
       result = code_loader.execute_shell_script(request.command, request.args, exec_config);
@@ -389,6 +423,10 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
       result = code_loader.execute(request.command, exec_config);
       break;
   }
+  // Flow trace: 工具执行结束（本地 code_loader 路径，成功/失败均记录）
+  FLOW_TRACE_EXTERNAL_CALL(request.session_id, "", "worker", "tool-exec",
+                           "exit-tool", request.command,
+                           result.success ? result.stdout : result.stderr);
   }  // end if (!request.sandbox || result.exit_code == -1)
 
   monitor_running = false;

@@ -4,26 +4,26 @@ e2b 沙箱运维脚本 — 列出/清理/远程执行远端 e2b 沙箱。
 
 用法:
   # 列出所有运行中的沙箱
-  python3 scripts/e2b/sandbox_list.py list
+  python3 scripts/e2b/sandbox_toolkit.py list
 
   # 列出所有沙箱（含已暂停）
-  python3 scripts/e2b/sandbox_list.py list --all
+  python3 scripts/e2b/sandbox_toolkit.py list --all
 
   # 列出并显示详细信息（创建时间、模板、状态等）
-  python3 scripts/e2b/sandbox_list.py list --verbose
+  python3 scripts/e2b/sandbox_toolkit.py list --verbose
 
   # 清理指定沙箱
-  python3 scripts/e2b/sandbox_list.py kill <sandbox_id>
+  python3 scripts/e2b/sandbox_toolkit.py kill <sandbox_id>
 
   # 清理所有运行中的沙箱（需要 --force 确认）
-  python3 scripts/e2b/sandbox_list.py kill-all --force
+  python3 scripts/e2b/sandbox_toolkit.py kill-all --force
 
   # 清理超时沙箱（运行超过 N 分钟）
-  python3 scripts/e2b/sandbox_list.py prune --older-than 30
+  python3 scripts/e2b/sandbox_toolkit.py prune --older-than 30
 
   # 在沙箱中远程执行命令（-- 后的内容作为命令原样传递）
-  python3 scripts/e2b/sandbox_list.py run <sandbox_id> -- ls -la /home/user/
-  python3 scripts/e2b/sandbox_list.py run <sandbox_id> -- cat /home/user/output.txt
+  python3 scripts/e2b/sandbox_toolkit.py run <sandbox_id> -- ls -la /home/user/
+  python3 scripts/e2b/sandbox_toolkit.py run <sandbox_id> -- cat /home/user/output.txt
 
 环境变量:
   E2B_API_URL         e2b API 地址（默认 http://218.245.96.148:30030）

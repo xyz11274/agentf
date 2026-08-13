@@ -525,6 +525,40 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
           "(continuing without user uploads in sandbox)",
           user_id.c_str(), client_id.c_str(), agent_id.c_str(), e.what());
     }
+
+    // B: 注入路径语义——把 user message 中的图片相对路径改写为沙箱内绝对路径
+    // （agent-package-structure.md §3.6 I-7 路径注入语义，2026-08-12 修复）
+    //
+    // 问题：Bridge content_serializer 注入的是相对路径
+    //   workspace/{user_id}_{client_id}/upload/{filename}
+    // LLM 拿它拼沙箱绝对路径时，把 "workspace" 前缀误当沙箱根
+    // （/home/user/workspace 最后一节也叫 workspace），拼成
+    //   /home/user/workspace/{user_id}_{client_id}/upload/...（少拼一层 workspace/）
+    // 而正确沙箱路径是
+    //   /home/user/workspace/workspace/{user_id}_{client_id}/upload/...
+    // 实测（2026-08-12 scene-uc1 日志）：agent 第一次 ls 上述少一层路径 → NO_IMAGE，
+    // 然后 find / 兜底 + e2b 输出翻译成宿主机路径才侥幸成功。
+    //
+    // 修复：route_request_message 下发前，e2b 模式把相对路径改写为沙箱内绝对路径，
+    // coordinator/skill_executor 透传给 LLM 的路径无歧义。
+    // Local/Docker 与宿主机共享 workdir（sandbox_workspace_prefix() 空），不改写。
+    // 实现收敛在 SandboxHelpers::rewrite_upload_path_to_sandbox（F5 单一真相来源）。
+    if (sandbox_sb) {
+      const std::string ws_prefix = sandbox_sb->sandbox_workspace_prefix();
+      if (!ws_prefix.empty()) {
+        const std::string session_marker =
+            "workspace/" + user_id + "_" + client_id + "/upload/";
+        std::string rewritten = sandbox::SandboxHelpers::rewrite_upload_path_to_sandbox(
+            message.content, session_marker, ws_prefix);
+        if (rewritten != message.content) {
+          Logger::instance().info_f(
+              "[SANDBOX] rewrite upload path rel=workspace/.../upload/ -> %s/workspace/... "
+              "(user=%s client=%s)",
+              ws_prefix.c_str(), user_id.c_str(), client_id.c_str());
+          message.content = rewritten;
+        }
+      }
+    }
   }
 
   auto route_t0 = std::chrono::steady_clock::now();
@@ -605,8 +639,15 @@ std::string RpcHandler::handle_agent_poll_response(const std::string& params, in
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
 
+  // complete 判定修正（2026-08-10）：返回式不再要求 msg_count > 0。
+  // 原实现 final 消息被 ResponsePoller 消费后返回 complete=false，
+  // 导致 poll 端（e2e_helpers.poll_agent_response）永远等不到完成信号。
+  // 与循环内 break 使用的 complete（runtime_quiet && queue_empty）保持一致，
+  // 只要无运行节点且响应队列空即视为完成，即使消息已被异步消费。
+  bool runtime_quiet_final = runtime_.get_running_nodes() == 0;
+  bool queue_empty_final = agent->get_response_queue_size() == 0;
   result_oss << "],\"complete\":"
-             << (has_final || (msg_count > 0 && runtime_.get_running_nodes() == 0) ? "true" : "false");
+             << (has_final || (runtime_quiet_final && queue_empty_final) ? "true" : "false");
 
   result_oss << "}";
   return build_success(result_oss.str(), id);

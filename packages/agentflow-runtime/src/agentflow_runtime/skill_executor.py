@@ -18,7 +18,6 @@ Environment variables (injected by the worker):
   AF_EXEC_SKILL_KEY      — DataBus key for structured input
 """
 
-import importlib as _importlib
 import importlib.util as _importlib_util
 import json
 import logging
@@ -34,6 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import yaml
 
 from agentflow_runtime.common.runtime_context import (
+    artifact_session_id as _artifact_session_id,
     dialogue_id as _dialogue_id,
     exec_skill_key as _exec_skill_key,
     input as _input,
@@ -52,7 +52,7 @@ from agentflow_runtime.llm_call import (
     resolve_llm_config,
 )
 from agentflow_runtime.observability import emit_event
-from agentflow_runtime.parse_af_input import parse_stream
+from agentflow_runtime.trace import emit_span, SpanKind, SpanStatus
 from prompts import (
     SKILL_ARTIFACT_AUTO_COLLECT_PROMPT,
     SKILL_ASK_USER_FALLBACK_PROMPT,
@@ -63,8 +63,10 @@ from prompts import (
     SKILL_RECOVERY_PROMPT,
     SKILL_REPORT_EXECUTION_PROMPT,
     SKILL_SECTION_TEMPLATE,
+    SKILL_TOOL_PRIORITY_PROMPT,
 )
 from agentflow_runtime.round_reminder import build_round_reminder
+from agentflow_runtime.harness.mcp import MCP_AVAILABLE, MCPBridge, discover_servers
 
 NODES_DIR = os.path.dirname(os.path.abspath(__file__))
 AGENT_PACKAGE_DIR = os.path.dirname(NODES_DIR)
@@ -147,10 +149,15 @@ def _get_agent_tools_dir() -> str:
 
 
 # ── Load .env from package root (lazy, respects entry file overrides) ──
+# 策略：python-dotenv 首选（官方库更完整），装不上时兜底走 stdlib 零依赖解析器
+#（agentflow_runtime.common.env_loader）——避免沙箱 DNS 不可达装不上 dotenv 导致业务断链
 _DOTENV_PATH = os.path.join(AGENT_PACKAGE_DIR, ".env")
 
 def _load_dotenv() -> None:
-    """Load .env using AGENT_PACKAGE_DIR from globals() (respects entry file overrides)."""
+    """Load .env using AGENT_PACKAGE_DIR from globals() (respects entry file overrides).
+
+    走 python-dotenv 优先；未装时兜底走 stdlib 解析器（agentflow_runtime.common.env_loader）。
+    """
     # 测试隔离开关：AF_SKIP_DOTENV=1 时跳过 .env 加载（override=True 会覆盖
     # 测试传入的环境变量，如 AF_LLM_BASE_URL，导致单测意外打真实 API）。
     if os.environ.get("AF_SKIP_DOTENV", "").lower() in ("1", "true"):
@@ -162,7 +169,12 @@ def _load_dotenv() -> None:
         try:
             from dotenv import load_dotenv
             load_dotenv(p, override=True)
-            print(f"[flow] dotenv: loaded OK", file=sys.stderr)
+            print("[flow] dotenv: loaded OK (python-dotenv)", file=sys.stderr)
+        except ImportError:
+            # dotenv 装不上（沙箱 DNS 不可达等场景）→ 兜底走 stdlib 解析器
+            from agentflow_runtime.common.env_loader import load_env_file
+            n = load_env_file(p, override=True)
+            print(f"[flow] dotenv: loaded OK (stdlib fallback, {n} vars)", file=sys.stderr)
         except Exception as exc:
             print(f"[dotenv] ERROR: load failed: {exc}", file=sys.stderr)
             logging.error("dotenv.load failed: %s", exc)
@@ -184,6 +196,7 @@ class _LocalToolRegistry:
     def __init__(self, skill_name: str = ""):
         self._tools = []
         self._modules = {}
+        self._mcp_bridges = {}  # server_name -> MCPBridge (I-5: per-instance)
 
         # 0. Inject AGENT_PACKAGE_DIR for built-in tools (bash, load_skill, etc.)
         os.environ["AF_AGENT_PACKAGE_DIR"] = AGENT_PACKAGE_DIR
@@ -204,10 +217,77 @@ class _LocalToolRegistry:
             if os.path.isdir(scripts_dir):
                 _load_dir(self, scripts_dir, prefix=f"_skill_{skill_name}_")
 
+        # 4. Load MCP server tools (追加，不阻塞，I-4 优雅降级)
+        self._load_mcp_tools()
+
+    def _load_mcp_tools(self):
+        """加载 MCP server 工具并注册路由（I-4: 任何失败都降级不抛）。"""
+        try:
+            if not MCP_AVAILABLE:
+                logging.warning("mcp_tools.skip mcp_sdk_missing")
+                return
+
+            # 收集配置路径：env 配置 + agent package .mcp.json + cwd/.mcp.json
+            paths = []
+            env_paths = os.getenv("AF_MCP_CONFIG_PATHS", "")
+            if env_paths:
+                paths.extend(p for p in env_paths.split(os.pathsep) if p)
+            pkg_dir = os.environ.get("AF_AGENT_PACKAGE_DIR", AGENT_PACKAGE_DIR)
+            paths.append(os.path.join(pkg_dir, ".mcp.json"))
+            paths.append(os.path.join(os.getcwd(), ".mcp.json"))
+            # 去重
+            seen = set()
+            deduped = []
+            for p in paths:
+                ap = os.path.abspath(p)
+                if ap not in seen:
+                    seen.add(ap)
+                    deduped.append(p)
+
+            configs = discover_servers(*deduped)
+            if not configs:
+                logging.info("mcp_tools.none_config")
+                return
+
+            for cfg in configs:
+                try:
+                    bridge = MCPBridge(cfg)
+                    if not bridge.ensure_ready():
+                        logging.warning("mcp_tools.skip_connect server=%s", cfg.name)
+                        continue
+                    tools = bridge.load_tools()
+                    for tool in tools:
+                        # 仅并入 get_tools() 使 LLM 可见；execute 路由由 mcp__ 前缀判断单一接管，
+                        # 不注册 _modules（避免双轨路由：若未来前缀判断后移，dict 值会被当模块调用）
+                        self._tools.append(tool)
+                    self._mcp_bridges[cfg.name] = bridge
+                    logging.info("mcp_tools.loaded server=%s count=%d",
+                                 cfg.name, len(tools))
+                except Exception as err:
+                    logging.warning("mcp_tools.skip_connect server=%s error=%s",
+                                    cfg.name, err)
+                    continue
+        except Exception as e:
+            logging.warning("mcp_tools.load_failed error=%s", e)
+
     def get_tools(self):
         return list(self._tools)
 
     def execute(self, name, args):
+        # I-6: MCP 路由在 sandbox 分支之前，保证 MCP 工具永不误走沙箱 /exec
+        if name.startswith("mcp__"):
+            logging.info("tool.exec sandbox_mode=mcp tool=%s", name)
+            parts = name.split("__")  # mcp__{server}__{tool}
+            server_name, tool_name = parts[1], "__".join(parts[2:])
+            bridge = self._mcp_bridges.get(server_name)
+            if bridge is None:
+                return json.dumps({"error": f"MCP server '{server_name}' not connected"})
+            try:
+                result = bridge.call_tool(tool_name, args or {})
+                return json.dumps(result, ensure_ascii=False)
+            except Exception as e:
+                return json.dumps({"error": f"MCP tool '{name}' failed: {e}"})
+
         _mod = self._modules.get(name)
         if _mod is None:
             return json.dumps({"error": f"Unknown tool: {name}"})
@@ -254,7 +334,7 @@ def _load_dir(registry: _LocalToolRegistry, directory: str, prefix: str = ""):
             _mod = _importlib_util.module_from_spec(spec)
             spec.loader.exec_module(_mod)
         except Exception as exc:
-            logging.warning("tool_loader.skip module=%s error=%s", name, exc)
+            logging.warning("tool_loader.skip module=%s error=%s", mod_name, exc)
             continue
         if not all(hasattr(_mod, a) for a in ("TOOL_NAME", "TOOL_DESCRIPTION", "TOOL_PARAMS", "execute")):
             continue
@@ -293,7 +373,7 @@ def parse_agent_md(path: str) -> tuple:
         frontmatter = _expand_env(frontmatter)
     except Exception:
         frontmatter = {}
-        print(f"[flow] WARN: agent.md frontmatter parse failed", file=sys.stderr)
+        print("[flow] WARN: agent.md frontmatter parse failed", file=sys.stderr)
     return frontmatter, parts[2].strip()
 
 
@@ -472,7 +552,11 @@ def extract_artifact_paths(text: str) -> list[str]:
         r"|/[^\s\"'\\]+"                 # absolute paths
         r"|(?:\.\.?)?[^\s\"'\\:]+/[^\s\"'\\]+"  # relative paths with at least one /
         r")"
-        r"\.(?:png|jpe?g|webp|gif|pptx?|docx?|xlsx?|pdf)"
+        # 后缀与 extract_structured_artifacts 的 _artifact_suffixes 对齐,
+        # 消除双通道不一致(failure_mode_matrix §五 B-video:文本通道曾无法识别
+        # mp4;html/htm 同为报告产物,文本通道曾无法识别 → coordinator 收不到
+        # html_reports,只能走 downloads 分类)。
+        r"\.(?:png|jpe?g|webp|gif|html?|mp4|mov|webm|mp3|wav|pptx?|docx?|xlsx?|pdf)"
     )
     candidates = re.findall(pattern, text, flags=re.IGNORECASE)
     seen: list[str] = []
@@ -548,6 +632,13 @@ def extract_artifact_paths(text: str) -> list[str]:
 _ARTIFACT_JSON_FIELDS = ("artifacts", "files", "outputs", "result", "path")
 
 
+def _sandbox_workspace_prefix() -> str:
+    """e2b 模式沙箱 workspace 前缀（/home/user/workspace）。非 e2b 返回空串。"""
+    if os.environ.get("AF_SANDBOX_MODE", "") != "e2b":
+        return ""
+    return os.environ.get("AF_SANDBOX_WORKSPACE", "/home/user/workspace")
+
+
 def extract_structured_artifacts(result_json: str) -> list[str]:
     """Extract artifact paths from a JSON tool result's structured fields.
 
@@ -562,11 +653,16 @@ def extract_structured_artifacts(result_json: str) -> list[str]:
     """
     if not result_json or not result_json.strip():
         return []
+    _t0 = time.monotonic()
     try:
         data = json.loads(result_json)
     except (ValueError, TypeError):
+        _ms = (time.monotonic() - _t0) * 1000
+        print(f"[timing] artifact.extract_structured duration_ms={_ms:.1f}", file=sys.stderr)
         return []
     if not isinstance(data, dict):
+        _ms = (time.monotonic() - _t0) * 1000
+        print(f"[timing] artifact.extract_structured duration_ms={_ms:.1f}", file=sys.stderr)
         return []
 
     # Pick the first truthy field (or-chain short-circuit semantics)
@@ -578,6 +674,8 @@ def extract_structured_artifacts(result_json: str) -> list[str]:
             break
 
     if not items:
+        _ms = (time.monotonic() - _t0) * 1000
+        print(f"[timing] artifact.extract_structured duration_ms={_ms:.1f}", file=sys.stderr)
         return []
 
     # Resolve to absolute path. Callers overriding AGENT_PACKAGE_DIR must patch
@@ -615,13 +713,21 @@ def extract_structured_artifacts(result_json: str) -> list[str]:
             resolved = os.path.normpath(os.path.join(package_root, item))
         if _is_user_upload_input(resolved):
             continue  # I-6 boundary
-        if not os.path.isfile(resolved):
-            continue  # skip non-existent
         # Suffix whitelist: reject non-artifact files (readme.txt, config.yaml, ...)
         if Path(resolved).suffix.lower() not in _artifact_suffixes:
             continue
+        # e2b 模式：沙箱内产物（/home/user/workspace/...）宿主机上不存在，
+        # 但文件在沙箱内、由 _ensure_artifacts_in_package 从沙箱拉回。放行。
+        ws_prefix = _sandbox_workspace_prefix()
+        if ws_prefix and resolved.startswith(ws_prefix):
+            extracted.append(resolved)
+            continue
+        if not os.path.isfile(resolved):
+            continue  # skip non-existent
         extracted.append(resolved)
 
+    _ms = (time.monotonic() - _t0) * 1000
+    print(f"[timing] artifact.extract_structured duration_ms={_ms:.1f}", file=sys.stderr)
     return list(dict.fromkeys(extracted))
 
 
@@ -632,6 +738,7 @@ def extract_all_artifacts(result_json: str) -> list[str]:
     fields) with ``extract_artifact_paths`` (regex over stdout/text) and
     dedupes preserving first-seen order.
     """
+    _t0 = time.monotonic()
     structured = extract_structured_artifacts(result_json)
     text_channel = extract_artifact_paths(result_json)
 
@@ -641,6 +748,8 @@ def extract_all_artifacts(result_json: str) -> list[str]:
         if path not in seen:
             seen.add(path)
             merged.append(path)
+    _ms = (time.monotonic() - _t0) * 1000
+    print(f"[timing] artifact.extract_all duration_ms={_ms:.1f}", file=sys.stderr)
     return merged
 
 
@@ -671,6 +780,13 @@ def _is_user_upload_input(resolved_path: str) -> bool:
         up_idx = lowered.index("/upload/")
         if ws_idx < up_idx:
             return True
+    # e2b 沙箱 workspace（/home/user/workspace/...）不是宿主机 upload 目录，
+    # 但含 /workspace/ 子串会被下方 /workspace/ marker 误判为上传输入（I-6 误伤）。
+    # e2b 模式下真正的上传输入在沙箱内 /home/user/workspace/{session}/upload/ 等，
+    # 已由上方 has_workspace+has_upload 分支覆盖；纯沙箱 workspace 路径直接放行。
+    ws_prefix = _sandbox_workspace_prefix()
+    if ws_prefix and resolved_path.startswith(ws_prefix):
+        return False
     return any(marker in lowered for marker in _USER_UPLOAD_INPUT_MARKERS)
 
 
@@ -695,9 +811,12 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
     result = []
     skipped_missing: list[str] = []
     skipped_copy_err: list[str] = []
+    _t0 = time.monotonic()
     pkg_root = Path(AGENT_PACKAGE_DIR).resolve()
-    session_id = os.environ.get("AF_SESSION_ID", "")
-    outputs_dir = pkg_root / "outputs" / session_id if session_id else pkg_root / "outputs"
+    # artifact 路由键用 {user_id}_{client_id}（artifact-storage.md §2.2），不是 AF_SESSION_ID
+    # （后者是执行槽位 0/1/2，缺用户维度会导致不同用户产物撞路径）。
+    sess_id = _artifact_session_id()
+    outputs_dir = pkg_root / "outputs" / sess_id if sess_id else pkg_root / "outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
     kept_in_place: list[str] = []   # 已在 package 内，无需复制
     copied_to_outputs: list[str] = []  # 复制到 outputs/
@@ -712,8 +831,17 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
             continue
         p = Path(path).resolve()
         if not p.is_file():
-            # 尝试从沙箱下载（TDD: 修复 sandbox → host 文件同步 bug）
-            if sandbox_url:
+            # e2b 模式：产物在沙箱内（write_file 写入 /home/user/workspace/...），
+            # 宿主机不存在 → 用 e2b SDK 通道（envd /files 端点）拉回宿主机
+            # outputs/{session_id}/{name}，后续 kept_in_place 直接可服务。
+            # （e2b 下 HTTP server 通道不通——cubeproxy 不转发 8080，见 _download_from_sandbox）
+            ws_prefix = _sandbox_workspace_prefix()
+            if ws_prefix and str(p).startswith(ws_prefix) and sandbox_url:
+                dest = outputs_dir / p.name
+                if _download_from_sandbox_e2b(str(p), dest):
+                    p = dest  # 拉回成功 → 按包内文件处理（kept_in_place）
+            elif sandbox_url:
+                # 非 e2b（Local/Docker）：HTTP server 通道
                 _download_from_sandbox(p, sandbox_url)
             if not p.is_file():
                 skipped_missing.append(path)
@@ -788,6 +916,8 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
     # 自动上传到文件存储服务（Phase 2: bridge 自身作为存储中心）
     _upload_artifacts_to_storage(result)
 
+    _ms = (time.monotonic() - _t0) * 1000
+    print(f"[timing] artifact.ensure_in_package duration_ms={_ms:.1f}", file=sys.stderr)
     return result
 
 
@@ -807,6 +937,7 @@ def _download_from_sandbox(local_path: Path, sandbox_url: str) -> None:
     """
     import urllib.request
     import json as _json
+    _t0 = time.monotonic()
     try:
         # 将绝对路径转为相对 AGENT_PACKAGE_DIR 的相对路径（沙箱侧按 workdir 解析）
         pkg_root = Path(AGENT_PACKAGE_DIR).resolve()
@@ -835,6 +966,39 @@ def _download_from_sandbox(local_path: Path, sandbox_url: str) -> None:
     except Exception as e:
         logging.warning("artifact.download_from_sandbox.error path=%s err=%s",
                        local_path, e)
+    finally:
+        _ms = (time.monotonic() - _t0) * 1000
+        print(f"[timing] artifact.download_from_sandbox duration_ms={_ms:.1f}", file=sys.stderr)
+
+
+def _download_from_sandbox_e2b(sandbox_path: str, local_path: Path) -> bool:
+    """e2b 模式：用 e2b SDK 通道（envd /files 端点）从沙箱拉回产物到宿主机。
+
+    e2b 沙箱 HTTP server 通道（_download_from_sandbox）当前不通（cubeproxy 不转发
+    8080，HTTP 502，见 artifact-storage.md §1.3）。e2b 下唯一可用通道是 e2b SDK
+    直连 envd /files 端点（E2BExecutor.download_to_host，与 _download_images 一致，
+    I-binary-safe 取原始 bytes）。
+
+    Args:
+        sandbox_path: 沙箱内绝对路径（/home/user/workspace/...）。
+        local_path: 宿主机目标路径（outputs/{session_id}/{name}）。
+
+    Returns:
+        True 拉回成功；False 失败（调用方走 skipped_missing 降级）。
+    """
+    sandbox_url = os.environ.get("AF_SANDBOX_ENDPOINT", "")
+    if not sandbox_url:
+        logging.warning("artifact.download_e2b.skip: no AF_SANDBOX_ENDPOINT path=%s",
+                        sandbox_path)
+        return False
+    try:
+        from agentflow_runtime.executors.factory import create_executor
+        executor = create_executor(sandbox_mode="e2b", sandbox_endpoint=sandbox_url)
+        return executor.download_to_host(sandbox_path, str(local_path))
+    except Exception as e:
+        logging.warning("artifact.download_e2b.error path=%s err=%s",
+                        sandbox_path, e)
+        return False
 
 
 def _upload_artifacts_to_storage(artifact_paths: list[str]) -> None:
@@ -850,13 +1014,20 @@ def _upload_artifacts_to_storage(artifact_paths: list[str]) -> None:
     """
     # AF_ARTIFACT_STORAGE_URL 默认指向 bridge 自身地址（http://localhost:8199)
     storage_url = os.environ.get("AF_ARTIFACT_STORAGE_URL", "http://localhost:8199")
+    _t0 = time.monotonic()
     if not storage_url:
         logging.info("artifact.upload.skip: AF_ARTIFACT_STORAGE_URL not set")
+        _ms = (time.monotonic() - _t0) * 1000
+        print(f"[timing] artifact.upload_to_storage duration_ms={_ms:.1f}", file=sys.stderr)
         return
     agent_name = os.path.basename(AGENT_PACKAGE_DIR.rstrip(os.sep))
-    session_id = os.environ.get("AF_SESSION_ID", "")
+    # artifact 路由键用 {user_id}_{client_id}（artifact-storage.md §2.2 + §I-artifact-id），
+    # 不是 AF_SESSION_ID（执行槽位 0/1/2，缺用户维度会导致跨用户产物撞 artifact_id）。
+    session_id = _artifact_session_id()
     if not session_id:
-        logging.info("artifact.upload.skip: no AF_SESSION_ID")
+        logging.info("artifact.upload.skip: no AF_USER_ID/AF_CLIENT_ID")
+        _ms = (time.monotonic() - _t0) * 1000
+        print(f"[timing] artifact.upload_to_storage duration_ms={_ms:.1f}", file=sys.stderr)
         return
     _sandbox_mode = os.environ.get("AF_SANDBOX_MODE", "unknown")
     files = []
@@ -897,6 +1068,8 @@ def _upload_artifacts_to_storage(artifact_paths: list[str]) -> None:
     if not files:
         logging.info("artifact.upload.skip: no files to upload "
                       f"agent={agent_name} session={session_id} sandbox_mode={_sandbox_mode}")
+        _ms = (time.monotonic() - _t0) * 1000
+        print(f"[timing] artifact.upload_to_storage duration_ms={_ms:.1f}", file=sys.stderr)
         return
     import urllib.request
     body = json.dumps({"agent_name": agent_name, "session_id": session_id, "files": files}).encode("utf-8")
@@ -932,6 +1105,9 @@ def _upload_artifacts_to_storage(artifact_paths: list[str]) -> None:
             upload_url, agent_name, session_id,
             _sandbox_mode, len(files), total_bytes, file_names, e,
         )
+    finally:
+        _ms = (time.monotonic() - _t0) * 1000
+        print(f"[timing] artifact.upload_to_storage duration_ms={_ms:.1f}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -941,6 +1117,7 @@ def _upload_artifacts_to_storage(artifact_paths: list[str]) -> None:
 def execute():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
                         stream=sys.stderr, force=True)
+    _script_t0 = time.monotonic()
     _load_dotenv()  # Load .env (respects entry file overrides of AGENT_PACKAGE_DIR)
     # §3.5 venv sentinel injection — lazy (entry-file AGENT_PACKAGE_DIR override is in effect now)
     _inject_venv_env()
@@ -1008,6 +1185,10 @@ def execute():
     # did (reads, key checks, external calls) with success/failure, so the
     # coordinator can avoid re-dispatching the same work (重复委派 = 耗时主因).
     system_prompt += "\n\n" + SKILL_REPORT_EXECUTION_PROMPT
+    # Append tool-priority principle: prefer specialized tools over generic
+    # bash (bash as last resort). 第一性原理抽象（2026-08-10）——通用原则放
+    # 系统提示词层一次覆盖所有 skill，避免逐个改 SKILL.md 的霰弹式修改。
+    system_prompt += "\n\n" + SKILL_TOOL_PRIORITY_PROMPT
 
     # ⑦ Construct LLM messages
     messages = [
@@ -1031,6 +1212,21 @@ def execute():
     # ⑩ LLM while-loop — max_rounds defined before flow debug to avoid NameError
     max_rounds = AgentConfig.skill_max_iterations()
 
+    # ── SKILL span 显式 lifecycle（trigger → completed/各终止出口）──
+    # P2.2 迁移：用显式 __enter__/__exit__ 而非 with 块，因 skill 执行段跨度 480 行 + 多 return 出口，
+    # with 块化需全段缩进改动风险高。显式 lifecycle 在各出口手动 __exit__ 落盘等价。
+    _skill_span_cm = emit_span(
+        SpanKind.SKILL, "skill_executor.execute",
+        tags={
+            "skill_name": skill_name,
+            "exec_skill_key": exec_skill_key,
+            "model": model_name,
+            "max_rounds": str(max_rounds),
+        },
+    )
+    _skill_span = _skill_span_cm.__enter__()
+    _skill_span.set_tag("dialogue_id", _dialogue_id() or "")
+
     # ── flow debug ──
     emit_event("skill_executor.trigger", {
         "exec_skill_key": exec_skill_key,
@@ -1040,6 +1236,12 @@ def execute():
         "tools_available": [t["function"]["name"] for t in available_tools],
         "model": model_name,
         "max_rounds": max_rounds,
+    })
+    _skill_span.add_event("skill_executor.trigger", {
+        "skill_name": skill_name,
+        "model": model_name,
+        "max_rounds": str(max_rounds),
+        "tools_count": str(len(available_tools)),
     })
 
     # Node-level timeout (injected by framework as AF_NODE_EXECUTION_TIMEOUT);
@@ -1085,6 +1287,10 @@ def execute():
                 result_json = json.dumps(output, ensure_ascii=True)
                 databus.put("skill_result:skill-runner", result_json)
             print(json.dumps(output, ensure_ascii=False))
+            _ms = (time.monotonic() - _script_t0) * 1000
+            print(f"[timing] script_exit duration_ms={_ms:.1f} total", file=sys.stderr)
+            _skill_span.set_status(SpanStatus.ERROR, f"node_timeout at round {round_i+1}")
+            _skill_span_cm.__exit__(None, None, None)
             return
         # ── Interrupt flag poll (design §3.3.1) ──────────────────────────
         # daemon 的 handle_dialogue_interrupt 在 cleanup 前写入 global sys flag
@@ -1117,6 +1323,10 @@ def execute():
                         databus.put("skill_result:skill-runner",
                                     json.dumps(output, ensure_ascii=True))
                     print(json.dumps(output, ensure_ascii=False))
+                    _ms = (time.monotonic() - _script_t0) * 1000
+                    print(f"[timing] script_exit duration_ms={_ms:.1f} total", file=sys.stderr)
+                    _skill_span.set_status(SpanStatus.CANCELLED, f"interrupted at round {round_i+1}")
+                    _skill_span_cm.__exit__(None, None, None)
                     return
             except Exception as exc:
                 print(f"[flow]   WARN: interrupt flag poll failed: {exc}", file=sys.stderr)
@@ -1129,12 +1339,34 @@ def execute():
             "budget": completion_budget,
             "elapsed_s": round(elapsed, 1),
         })
+        # ── LLM span 显式 lifecycle（llm_round_start → llm_result/llm_error）──
+        # P2.3 迁移：每轮 LLM 调用一个 span，parent=SKILL span（栈自动维护）。
+        # trigger_location=python_direct 标识 Python 侧自行调用（与 C++ worker.cpp 代理调用对等）。
+        _llm_span_cm = emit_span(
+            SpanKind.LLM, "skill_executor.llm_round",
+            tags={
+                "round": str(round_i + 1),
+                "model": model_name,
+                "trigger_location": "python_direct",
+            },
+        )
+        _llm_span = _llm_span_cm.__enter__()
+        _llm_span.set_tag("dialogue_id", _dialogue_id() or "")
+        _llm_span.add_event("skill_executor.llm_round_start", {
+            "round": str(round_i + 1),
+            "max_rounds": str(max_rounds),
+            "messages": str(len(messages)),
+            "model": model_name,
+            "tools": str(bool(available_tools)),
+            "budget": str(completion_budget),
+            "elapsed_s": str(round(elapsed, 1)),
+        })
 
         # ── Progress: push round info to frontend ──
         # "第 X 轮：调用 LLM…" → 用户看到"正在等 API"而非"卡了"
         # 末尾 \n：产生端自带换行，外部渲染端拼接多条进度时自然换行（不横排）
         _round_start = time.time()
-        progress_msg = f"{skill_name} 第 {round_i+1}/{max_rounds} 轮：调用 LLM…\n"
+        progress_msg = f"{skill_name} 第 {round_i+1}/{max_rounds} 轮：思考中…\n"
         # 仅通过 response_push 推流式进度，不再写 DataBus response key
         # （response key 仅供 coordinator 最终输出使用，进度写入会污染最终结果）
         try:
@@ -1178,6 +1410,7 @@ def execute():
         if level != "skip":
             messages = compressed
 
+        _llm_t0 = time.monotonic()
         raw = call_llm(
             messages, tools=available_tools,
             model=model_name,
@@ -1196,6 +1429,9 @@ def execute():
                 "top_k": AgentConfig.skill_llm_top_k() or None,
                 "stop": AgentConfig.skill_llm_stop() or None,
             })
+        _llm_ms = (time.monotonic() - _llm_t0) * 1000
+        print(f"[timing] llm_round round={round_i+1} duration_ms={_llm_ms:.1f}",
+              file=sys.stderr)
 
         if raw.get("_llm_error"):
             err_msg = raw.get("error", "LLM call failed")
@@ -1221,6 +1457,12 @@ def execute():
                 result_json = json.dumps(output, ensure_ascii=True)
                 databus.put("skill_result:skill-runner", result_json)
             print(json.dumps(output, ensure_ascii=False))
+            _ms = (time.monotonic() - _script_t0) * 1000
+            print(f"[timing] script_exit duration_ms={_ms:.1f} total", file=sys.stderr)
+            _llm_span.set_status(SpanStatus.ERROR, f"llm_error at round {round_i+1}: {err_msg}")
+            _llm_span_cm.__exit__(None, None, None)
+            _skill_span.set_status(SpanStatus.ERROR, f"llm_error at round {round_i+1}: {err_msg}")
+            _skill_span_cm.__exit__(None, None, None)
             return
 
         # ── 检测 LLM 返回空内容（API 成功但未实际处理请求） ──
@@ -1256,11 +1498,25 @@ def execute():
                 result_json = json.dumps(output, ensure_ascii=True)
                 databus.put("skill_result:skill-runner", result_json)
             print(json.dumps(output, ensure_ascii=False))
+            _ms = (time.monotonic() - _script_t0) * 1000
+            print(f"[timing] script_exit duration_ms={_ms:.1f} total", file=sys.stderr)
+            _llm_span.set_status(SpanStatus.ERROR, f"llm_error empty_response at round {round_i+1}")
+            _llm_span_cm.__exit__(None, None, None)
+            _skill_span.set_status(SpanStatus.ERROR, f"llm_error empty_response at round {round_i+1}")
+            _skill_span_cm.__exit__(None, None, None)
             return
 
+        # ── LLM span 正常完成：拿到 choice 后闭合（llm_result 落 span events）──
         choice = raw.get("choices", [{}])[0]
         msg = choice.get("message", {})
         tool_calls = msg.get("tool_calls")
+        _llm_span.set_status(SpanStatus.OK)
+        _llm_span.add_event("skill_executor.llm_result", {
+            "round": str(round_i + 1),
+            "finish_reason": choice.get("finish_reason", "?"),
+            "tool_call_count": str(len(tool_calls or [])),
+        })
+        _llm_span_cm.__exit__(None, None, None)
 
         valid_tool_calls, invalid_reason = validate_tool_calls(choice)
         if not valid_tool_calls:
@@ -1301,6 +1557,8 @@ def execute():
                 result_json = json.dumps(output, ensure_ascii=True)
                 databus.put("skill_result:skill-runner", result_json)
             print(json.dumps(output, ensure_ascii=False))
+            _ms = (time.monotonic() - _script_t0) * 1000
+            print(f"[timing] script_exit duration_ms={_ms:.1f} total", file=sys.stderr)
             return
 
         if tool_calls:
@@ -1309,7 +1567,7 @@ def execute():
                 "round": round_i + 1,
                 "tool_names": tool_names,
                 "tool_count": len(tool_calls),
-            })
+            }, duration_ms=(time.monotonic() - _llm_t0) * 1000)
             # ── Progress: tool call details ──
             msg_tool = f"{skill_name} → 正在调用 {', '.join(tool_names)}\n"
             try:
@@ -1365,6 +1623,10 @@ def execute():
                     result_json = json.dumps(output, ensure_ascii=True)
                     databus.put("skill_result:skill-runner", result_json)
                 print(json.dumps(output, ensure_ascii=False))
+                _ms = (time.monotonic() - _script_t0) * 1000
+                print(f"[timing] script_exit duration_ms={_ms:.1f} total", file=sys.stderr)
+                _skill_span.set_status(SpanStatus.ERROR, f"tool_call_loop_detected at round {round_i+1}")
+                _skill_span_cm.__exit__(None, None, None)
                 return
             tool_call_history.append(new_signatures)
 
@@ -1470,11 +1732,15 @@ def execute():
                 "response_length": len(response_text),
                 "artifacts_count": len(generated_artifacts),
                 "elapsed_s": round(time.time() - _turn_start, 1),
-            })
+            }, duration_ms=(time.monotonic() - _script_t0) * 1000)
             if databus.is_connected():
                 result_json = json.dumps(output, ensure_ascii=True)
                 databus.put("skill_result:skill-runner", result_json)
             print(json.dumps(output, ensure_ascii=False))
+            _ms = (time.monotonic() - _script_t0) * 1000
+            print(f"[timing] script_exit duration_ms={_ms:.1f} total", file=sys.stderr)
+            _skill_span.set_status(SpanStatus.OK)
+            _skill_span_cm.__exit__(None, None, None)
             return
 
     # Max rounds reached
@@ -1495,6 +1761,10 @@ def execute():
         result_json = json.dumps(output, ensure_ascii=True)
         databus.put("skill_result:skill-runner", result_json)
     print(json.dumps(output, ensure_ascii=False))
+    _ms = (time.monotonic() - _script_t0) * 1000
+    print(f"[timing] script_exit duration_ms={_ms:.1f} total", file=sys.stderr)
+    _skill_span.set_status(SpanStatus.ERROR, f"max_rounds_reached ({max_rounds})")
+    _skill_span_cm.__exit__(None, None, None)
 
 
 if __name__ == "__main__":

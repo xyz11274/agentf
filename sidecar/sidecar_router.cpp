@@ -26,6 +26,20 @@ using sidecar::parse_request_body;
 // 默认值与原 get_env_or("BRIDGE_URL", "http://127.0.0.1:8199") 一致。
 // main.cpp 解析 --bridge-url 后通过 set_bridge_url() 覆盖。
 std::string SidecarRouter::bridge_url_ = "http://127.0.0.1:8199";
+// agent 路由配置默认值：与旧硬编码 outfit-assistant 行为一致，等待 main.cpp 注入覆盖。
+std::string SidecarRouter::agent_name_ = "outfit-assistant";
+std::string SidecarRouter::agent_version_ = "1.0.0";
+std::vector<std::string> SidecarRouter::agent_capabilities_ = {
+    "outfit_consult", "weather_query", "occasion_guide",
+    "image_generation", "video_generation"};
+
+// 配置注入：main.cpp 加载 sidecar.json 后调用（在 framework init 前）。
+void SidecarRouter::set_agent_config(const std::string& name, const std::string& version,
+                                     const std::vector<std::string>& capabilities) {
+    agent_name_ = name;
+    agent_version_ = version;
+    agent_capabilities_ = capabilities;
+}
 
 // ── JSON 辅助 ──
 
@@ -143,14 +157,12 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleHealthCheck(
 CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleScheduleTaskAbility(
     const std::shared_ptr<CMFrm::ServiceRouter::Context>& context) {
     Json::Value body;
-    body["agent_name"] = get_env_or("AGENT_ID", "outfit-assistant");
-    body["version"] = "1.0.0";
+    body["agent_name"] = agent_name_;
+    body["version"] = agent_version_;
     body["capabilities"] = Json::Value(Json::arrayValue);
-    body["capabilities"].append("outfit_consult");
-    body["capabilities"].append("weather_query");
-    body["capabilities"].append("occasion_guide");
-    body["capabilities"].append("image_generation");
-    body["capabilities"].append("video_generation");
+    for (const auto& cap : agent_capabilities_) {
+        body["capabilities"].append(cap);
+    }
     body["endpoint"] = "/coremind/systemagent/v1/callback";
     body["async_mode"] = true;
     ok_response(context, body);
@@ -268,7 +280,9 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
     if (const char* env_url = std::getenv("BRIDGE_URL")) {
         bridge_url = env_url;
     }
-    std::string agent_id = get_env_or("AF_BR_COREMIND_AGENT_ID", "outfit-assistant");
+    // 转发目标 agent：由 main.cpp 从 configs/{env}/sidecar.json 注入（env 覆盖后），
+    // 替换旧硬编码 outfit-assistant。默认值仍为 outfit-assistant 保持向后兼容。
+    std::string agent_id = agent_name_;
     // 从 bridge_url 提取 path prefix（对齐 main.cpp parse_bridge_target）：
     // bridge 业务路由挂载在 /health 前缀下（main.py app.mount("/health", bridge_app)），
     // 转发路径必须拼上该前缀，否则 404。--bridge-url 应含 /health（如 http://127.0.0.1:8199/health）。

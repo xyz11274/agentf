@@ -52,20 +52,28 @@ logger = logging.getLogger("agentflow.bridge.routes.packages")
 router = APIRouter(prefix="/api/packages", tags=["packages"])
 
 
-# --- §5.1/§5.2 setup.sh 驺动执行 --------------------------------------------
-# Bridge 在 create/update 流程末验 setup.sh（幂等）。setup.sh 负责创建 .venv +
+# --- §5.1/§5.2 setup 驱动执行（宿主侧）-----------------------------------
+# Bridge 在 create/update 流程末验 setup-host.sh（幂等）。宿主侧初始化负责创建 .venv +
 # 装依赖 + 装 agentflow-runtime + 写 sentinel（见设计文档 §5.4/§3.5）。
+# 2026-08-11 分离：宿主执行 setup-host.sh；setup.sh 改为沙箱版（用户感知、上传沙箱，
+# 由 template_admin.py snapshot 在沙箱预热时执行）。旧包无 setup-host.sh 时 fallback setup.sh。
 # 失败不阻断主流程（只 WARN）——shell wrapper fallback 到系统 python3。
 def _run_setup_sh(pkg_dir: Path) -> None:
-    setup_sh = pkg_dir / "setup.sh"
-    if not setup_sh.is_file():
-        logger.debug("setup.sh not found in %s, skip", pkg_dir)
-        return
+    setup_script = pkg_dir / "setup-host.sh"
+    script_kind = "setup-host.sh"
+    if not setup_script.is_file():
+        # 存量包可能只有旧 setup.sh（宿主版语义）——fallback 兼容，WARN 提示迁移
+        legacy = pkg_dir / "setup.sh"
+        if not legacy.is_file():
+            logger.debug("setup-host.sh/setup.sh not found in %s, skip", pkg_dir)
+            return
+        setup_script = legacy
+        script_kind = "setup.sh (legacy, 建议 update 一次以获取 setup-host.sh)"
     import os as _os
     import subprocess
     try:
         proc = subprocess.run(
-            ["bash", str(setup_sh)],
+            ["bash", str(setup_script)],
             cwd=str(pkg_dir),
             check=False,
             capture_output=True,
@@ -74,14 +82,14 @@ def _run_setup_sh(pkg_dir: Path) -> None:
             env={**_os.environ, "AF_SETUP_BY": "bridge"},
         )
         if proc.returncode == 0:
-            logger.info("setup.sh ok pkg=%s", pkg_dir.name)
+            logger.info("%s ok pkg=%s", script_kind, pkg_dir.name)
         else:
             logger.warning(
-                "setup.sh failed pkg=%s rc=%s stderr=%s",
-                pkg_dir.name, proc.returncode, proc.stderr[:500] if proc.stderr else "",
+                "%s failed pkg=%s rc=%s stderr=%s",
+                script_kind, pkg_dir.name, proc.returncode, proc.stderr[:500] if proc.stderr else "",
             )
     except Exception as exc:  # noqa: BLE001
-        logger.warning("setup.sh invocation error pkg=%s: %s", pkg_dir.name, exc)
+        logger.warning("%s invocation error pkg=%s: %s", script_kind, pkg_dir.name, exc)
 
 # --- constants --------------------------------------------------------------
 

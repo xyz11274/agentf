@@ -1916,26 +1916,28 @@ curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
 
 ```bash
 # 0. 确保远程 daemon 和 bridge 已启动（外部地址替换为实际值）
+#健康检查api
+curl -k https://115.120.249.45:40007/health/api/health
 
 # 1. 上传 agent package
-curl -k -X POST https://115.120.249.45:40092/health/api/packages/upload \
+curl -k -X POST https://115.120.249.45:40007/health/api/packages/upload \
   -F "file=@tmp/outfit-test-agent.zip" -F "name=outfit-test-agent"
 
 # 2. 加载到 daemon
-curl -k -X POST https://115.120.249.45:40092/health/api/agents/outfit-test-agent/load \
+curl -k -X POST https://115.120.249.45:40007/health/api/agents/outfit-test-agent/load \
   -H "Content-Type: application/json" -d '{}'
 
 # 3. 触发对话（快速测试用简洁 prompt）
-curl -k -X POST https://115.120.249.45:40092/health/api/chat/outfit-assistant \
+curl -k -X POST https://115.120.249.45:40007/health/api/chat/outfit-assistant \
   -H "Content-Type: application/json" \
   -d '{"user_id":"demo","client_id":"demo","content":"你好"}'
 
 
-curl -k -X POST https://115.120.249.45:40092/health/api/chat/outfit-assistant \
+curl -k -X POST https://115.120.249.45:40007/health/api/chat/outfit-assistant \
   -H "Content-Type: application/json" \
   -d '{"user_id":"demo","client_id":"demo","content":"帮我推荐一套居家穿搭，男生。给我效果图，其他不要问，用于快速测试"}'
 
-curl -k -X POST https://115.120.249.45:40092/health/api/chat/outfit-assistant \
+curl -k -X POST https://115.120.249.45:40007/health/api/chat/outfit-assistant \
   -H "Content-Type: application/json" \
   -d '{"user_id":"demox","client_id":"demox","content":"这两天深圳下雨，帮我推荐一套穿搭，要效果图，不要问其他问题"}'
 
@@ -1943,7 +1945,7 @@ curl -k -X POST https://115.120.249.45:40092/health/api/chat/outfit-assistant \
 
 # 3b. 图片识别：上传穿搭照并让 Agent 点评（需先有图片 base64）
 IMG_B64="data:image/jpeg;base64,$(base64 -i tmp/outfit_male_loungewear.jpeg | tr -d '\n')"
-curl -k -X POST https://115.120.249.45:40092/health/api/chat/outfit-assistant \
+curl -k -X POST https://115.120.249.45:40007/health/api/chat/outfit-assistant \
   -H "Content-Type: application/json" \
   -d "{
     \"user_id\":\"demo\",
@@ -1955,14 +1957,14 @@ curl -k -X POST https://115.120.249.45:40092/health/api/chat/outfit-assistant \
   }" | jq .
 
 # 4. 查询 trace
-curl "https://115.120.249.45:40092/health/api/agents/outfit-assistant/llm-traces?user_id=demo&client_id=demo"
+curl "https://115.120.249.45:40007/health/api/agents/outfit-assistant/llm-traces?user_id=demo&client_id=demo"
 
 # 5. 更新 agent package（修改 agent.md 后重新打包）
-curl -X PUT https://115.120.249.45:40092/health/api/packages/outfit-assistant/update \
+curl -X PUT https://115.120.249.45:40007/health/api/packages/outfit-assistant/update \
   -F "file=@outfit-assistant_v2.zip" -F "mode=incremental"
 
 # 6. 再次触发
-curl -k -X POST https://115.120.249.45:40092/health/api/chat/outfit-assistant \
+curl -k -X POST https://115.120.249.45:40007/health/api/chat/outfit-assistant \
   -H "Content-Type: application/json" \
   -d '{"user_id":"demo","client_id":"demo","content":"帮我推荐一套居家穿搭，男生。给我效果图，其他不要问，用于快速测试"}'
 ```

@@ -238,8 +238,11 @@ std::string to_json_line(const FlowTraceEvent& event) {
 
   oss << "{";
 
-  // Time
+  // Time（毫秒显示串）+ 原始微秒时间戳（供 trajectory 精确排序/对齐）
   oss << "\"time\":\"" << escape_json_string(event.time) << "\"";
+  if (event.timestamp_us > 0) {
+    oss << ",\"timestamp_us\":" << event.timestamp_us;
+  }
 
   // Type
   oss << ",\"type\":\"" << escape_json_string(event.type) << "\"";

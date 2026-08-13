@@ -87,26 +87,126 @@ def _jsonrpc_call(host: str, port: int, method: str,
         return json.loads(b"".join(chunks).decode("utf-8"))
 
 
-def _send_message(host: str, port: int, content: str, task_id: str) -> dict:
-    """通过 daemon 发送用户消息（长超时 agent.execute）。"""
+def _send_message(host: str, port: int, content: str, task_id: str,
+                  client_id: str | None = None) -> dict:
+    """通过 daemon 发送用户消息（长超时 agent.execute）。
+
+    client_id 决定对话路由（SessionRouter 按 user_id:client_id 复用同一
+    session/dialogue）。同一对话的澄清回复必须传相同 client_id，否则每轮
+    都被当作独立新请求走完整流程（测试案例设计修正，CHANGE-20260811-040）。
+    """
     return _jsonrpc_call(host, port, "agent.execute", {
         "agent_id": "outfit-assistant",
         "user_id": "perf-user",
-        "client_id": task_id,
+        "client_id": client_id or task_id,
         "content": content,
         "request_id": task_id,
     }, req_id=7)
 
 
+def _ensure_snapshot_fresh(agent_pkg: Path, registry_path: Path,
+                           build_pkg: Path | None = None) -> None:
+    """评测前确保 e2b snapshot 与 manifest hash 一致（避免 daemon 启动 rebuild 超 15s）。
+
+    背景（2026-08-12 实测）：修改 harness 文件（SKILL.md/工具）后 manifest hash 变化，
+    daemon 启动时检测 stale → 触发 rebuild（140-260s）> wait_port 15s → 评测启动失败。
+    本函数在启动 daemon 前检查 registry hash vs manifest hash：
+      - 一致 → 跳过（无需预构建）
+      - 不一致 → 调 template_admin.py snapshot --manifest 预构建 + 更新 registry
+
+    三态模型（agent-package-three-state.md）：② 固化态 = resource/agent-packages/{name}（纯净
+    静态资产权威源），③ workspace = examples/agent/{name}（② 的拷贝 + 运行时数据）。daemon
+    加载 ③（--package examples/...），故 hash 检测用 agent_pkg（③，与 daemon 口径一致）；
+    快照构建 asset 源用 build_pkg（② 固化态，默认 resource/agent-packages/{name}）。
+    """
+    hash_script = PROJECT_ROOT / "scripts" / "e2b" / "template_admin.py"
+    manifest = agent_pkg / "manifest.jsonc"
+    if build_pkg is None:
+        build_pkg = PROJECT_ROOT / "resource" / "agent-packages" / agent_pkg.name
+    build_manifest = build_pkg / "manifest.jsonc"
+
+    def _manifest_hash() -> str:
+        r = subprocess.run(
+            [sys.executable, str(hash_script), "snapshot", "--hash-manifest", str(manifest)],
+            capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=120,
+        )
+        lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+        return lines[-1] if lines else ""
+
+    def _registry_hash() -> str:
+        try:
+            with open(registry_path, encoding="utf-8") as f:
+                doc = json.load(f)
+            entries = doc.get("entries") or []
+            return entries[0].get("hash", "") if entries else ""
+        except (OSError, json.JSONDecodeError, IndexError):
+            return ""
+
+    mhash = _manifest_hash()
+    rhash = _registry_hash()
+    if mhash and mhash == rhash:
+        print(f"[hash-check] snapshot 最新（hash={mhash}），跳过预构建")
+        return
+
+    print(f"[hash-check] snapshot stale（registry={rhash} vs manifest={mhash}），预构建中…")
+    r = subprocess.run(
+        [sys.executable, str(hash_script), "snapshot", "--manifest", str(build_manifest)],
+        capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=600,
+    )
+    lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
+    snap_id = lines[-1] if lines else ""
+    if not snap_id.startswith("snap-"):
+        raise SystemExit(f"[hash-check] 预构建失败，无法解析 snapshotID。stdout 尾部:\n{r.stdout[-500:]}\nstderr:\n{r.stderr[-500:]}")
+    # 更新 registry（hash + snapshot 同步指向新快照）
+    try:
+        with open(registry_path, encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        doc = {"entries": []}
+    if not doc.get("entries"):
+        doc["entries"] = [{}]
+    doc["entries"][0] = {
+        "agent_id": "outfit-assistant",
+        "snapshot": snap_id,
+        "version": "3.0.0",
+        "hash": mhash,
+    }
+    registry_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(registry_path, "w", encoding="utf-8") as f:
+        json.dump(doc, f, ensure_ascii=False)
+    print(f"[hash-check] 预构建完成 snapshot={snap_id} hash={mhash}，registry 已更新")
+
+
 def _start_daemon(log_dir: Path) -> tuple[subprocess.Popen, int, Path]:
-    """启动 outfit-assistant daemon（真实 LLM 模式，从宿主机环境读 key）。"""
+    """启动 outfit-assistant daemon（真实 LLM 模式，自动从 agent 包 .env 读 key）。"""
+    # 自动 source agent 包 .env：调用方无需手动 `set -a && source .env`。
+    # 缺 AF_LLM_API_KEY/AF_LLM_BASE_URL 时从 outfit-assistant 包 .env 加载到 os.environ。
+    agent_env = OUTFIT_AGENT / ".env"
+    if agent_env.is_file():
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(agent_env, override=False)
+        except ImportError:
+            # dotenv 不可用时兜底 stdlib 零依赖解析（KEY=VALUE 行，跳过 # 注释）
+            for line in agent_env.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip().strip("'\"")
+                os.environ.setdefault(k, v)
+
     host_api_key = os.environ.get("AF_LLM_API_KEY", "")
     host_base_url = os.environ.get("AF_LLM_BASE_URL", "")
     if not (host_api_key and host_base_url):
         raise SystemExit(
-            "缺少真实 LLM 配置。请先: set -a && source "
-            "examples/agent/outfit-assistant/.env && set +a"
+            "缺少真实 LLM 配置：未在环境变量或 agent 包 .env 找到 "
+            "AF_LLM_API_KEY/AF_LLM_BASE_URL。请检查 "
+            f"{agent_env} 是否存在且含 LLM key。"
         )
+
+    # 评测前确保 snapshot 与 manifest 一致（避免 daemon 启动 rebuild 超 15s）
+    _ensure_snapshot_fresh(OUTFIT_AGENT, PROJECT_ROOT / "data" / "template_registry.json")
 
     daemon_port = free_port()
     daemon_log = log_dir / "daemon.log"
@@ -155,9 +255,10 @@ def _parse_daemon_log(log: Path) -> dict:
         int(x) for x in re.findall(r"create_latency=(\d+)ms", text)
     ]
 
-    # LLM 调用
+    # LLM 调用（精确匹配 [llm_call] 行的响应延迟，避免误匹配
+    # route latency=18ms / create_latency=439ms 等其他 latency 字段）
     llm_latencies = [
-        int(x) for x in re.findall(r"latency=(\d+)ms", text)
+        int(x) for x in re.findall(r"\[llm_call\].*?<<<.*?latency=(\d+)ms", text)
     ]
 
     # 工具执行
@@ -194,10 +295,15 @@ def main() -> None:
 
     rounds: list[dict] = []
     try:
+        # 同一对话的澄清回复必须复用同一 client_id（SessionRouter 按
+        # user_id:client_id 路由同一 dialogue）——轮2/轮3 是轮1 推荐后的
+        # 澄清回答（地点/场合/风格 → 性别/体型/身高），不是独立新请求。
+        dialogue_client_id = f"perf-baseline-dialogue-{int(time.time() * 1000)}"
         for i, question in enumerate(STANDARD_QUESTIONS, 1):
             task_id = f"perf-baseline-{i}-{int(time.time() * 1000)}"
             t0 = time.monotonic()
-            _send_message("127.0.0.1", port, question, task_id)
+            _send_message("127.0.0.1", port, question, task_id,
+                          client_id=dialogue_client_id)
             response = poll_agent_response(
                 "127.0.0.1", port, task_id, timeout=ROUND_TIMEOUT
             )

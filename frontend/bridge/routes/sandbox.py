@@ -10,10 +10,11 @@ provider 细节（e2b SDK / daemon 日志 / 目录扫描）。
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 from services.sandbox_observer import (
@@ -300,6 +301,102 @@ async def sandbox_exec(request: Request, sandbox_id: str, body: _ExecBody) -> di
     except Exception as exc:  # noqa: BLE001
         raise _map_observer_error(exc) from exc
     return _ok(result.to_dict())
+
+
+# ── 交互式 PTY WebSocket（webshell v0.4，见 L4 契约 §2.15）──────────
+
+# 服务端超时无消息判死（前端心跳间隔更短，服务端按 2 倍余量判断）
+_PTY_IDLE_TIMEOUT_S = 60
+
+
+@router.websocket("/{sandbox_id}/pty")
+async def sandbox_pty(websocket: WebSocket, sandbox_id: str) -> None:
+    """``WS /api/sandbox/{sandbox_id}/pty`` — webshell 交互式 PTY 双向通道。
+
+    协议（JSON 文本帧，见 L4 契约 §2.15）：
+    - 前端 → bridge: ``{"type":"input","data":"..."}`` / ``{"type":"resize","rows":N,"cols":N}`` / ``{"type":"ping"}``
+    - bridge → 前端: ``{"type":"output","data":"..."}`` / ``{"type":"stderr","data":"..."}`` / ``{"type":"exit","code":N}``
+
+    Ctrl+C：xterm 编码为 ``\\x03`` 字节随 input 帧透传 → PTY 信号语义（SIGINT）。
+    """
+    await websocket.accept()
+    observer: SandboxObserver | None = getattr(websocket.app.state, "sandbox_observer", None)
+    if observer is None:
+        await websocket.close(code=1011, reason="sandbox observer not initialized")
+        return
+
+    # 首个帧为 resize（或缺省 24x80），随后 open PTY
+    rows, cols = 24, 80
+    session = None
+    try:
+        try:
+            first = await websocket.receive_json()
+            if first.get("type") == "resize":
+                rows = int(first.get("rows", rows))
+                cols = int(first.get("cols", cols))
+        except WebSocketDisconnect:
+            return
+        except Exception:  # noqa: BLE001 — 首个帧非 JSON/异常：用缺省尺寸
+            pass
+
+        session = await observer.pty_open(sandbox_id, rows=rows, cols=cols)
+        logger.info("sandbox_pty.open sandbox_id=%s session_id=%s", sandbox_id, session.session_id)
+
+        # 输出转发任务：observer.pty_iter_output → websocket 帧
+        async def pump() -> None:
+            try:
+                async for stdout, stderr in observer.pty_iter_output(session):
+                    if stdout:
+                        await websocket.send_json({"type": "output", "data": stdout})
+                    if stderr:
+                        await websocket.send_json({"type": "stderr", "data": stderr})
+            except Exception as exc:  # noqa: BLE001
+                logger.error("sandbox_pty.pump failed sandbox_id=%s: %s", sandbox_id, exc)
+            finally:
+                try:
+                    await websocket.send_json({"type": "exit", "code": -1})
+                except Exception:  # noqa: BLE001
+                    pass
+
+        pump_task = asyncio.create_task(pump(), name=f"sandbox-pty.pump.{sandbox_id}")
+
+        # 输入循环：input / resize / ping；空闲超时判死
+        while True:
+            try:
+                frame = await asyncio.wait_for(websocket.receive_json(), timeout=_PTY_IDLE_TIMEOUT_S)
+            except asyncio.TimeoutError:
+                logger.warning("sandbox_pty.idle_timeout sandbox_id=%s session_id=%s", sandbox_id, session.session_id)
+                break
+            except WebSocketDisconnect:
+                break
+            ftype = frame.get("type")
+            if ftype == "input":
+                data = frame.get("data", "")
+                if data:
+                    await observer.pty_send(session, data.encode("utf-8", errors="replace"))
+            elif ftype == "resize":
+                await observer.pty_resize(session, int(frame.get("rows", rows)), int(frame.get("cols", cols)))
+            elif ftype == "ping":
+                try:
+                    await websocket.send_json({"type": "pong"})
+                except Exception:  # noqa: BLE001
+                    break
+            else:
+                logger.warning("sandbox_pty.unknown_frame sandbox_id=%s type=%s", sandbox_id, ftype)
+        pump_task.cancel()
+    except Exception as exc:  # noqa: BLE001 — 连接阶段错误映射为 close（HTTP 状态语义见契约）
+        logger.error("sandbox_pty.error sandbox_id=%s: %s", sandbox_id, exc)
+        try:
+            await websocket.close(code=1011, reason=f"pty error: {exc}")
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        if session is not None:
+            try:
+                await observer.pty_kill(session)
+                logger.info("sandbox_pty.close sandbox_id=%s session_id=%s", sandbox_id, session.session_id)
+            except Exception as exc:  # noqa: BLE001 — 清理路径失败不抛
+                logger.warning("sandbox_pty.kill_failed sandbox_id=%s session_id=%s: %s", sandbox_id, session.session_id, exc)
 
 
 __all__ = ["router"]

@@ -42,7 +42,6 @@ from routes import llm_trace as llm_trace_routes
 from routes import sandbox as sandbox_routes
 from routes import sessions as sessions_routes
 from routes.artifacts import router as artifacts_router
-from routes.aisf_tasks import router as aisf_tasks_router
 from routes.chat_rest import router as chat_rest_router
 from routes.packages import router as packages_router
 from routes.sandbox_files import router as sandbox_files_router
@@ -550,9 +549,6 @@ app = FastAPI(title="AgentFlow Bridge (external)", lifespan=lifespan)
 
 ##最新修改
 app.mount("/health", bridge_app)
-
-# AISF SysAgent 调度入口（独立路由，不经过 /health 挂载前缀）
-app.include_router(aisf_tasks_router)
 
 # Artifact 文件服务（外层 app 直挂，本地 dev 通过 Vite proxy /api 可达；
 # 生产环境通过网关加 /health 前缀 → bridge_app 下的 artifacts 路由同样可处理）

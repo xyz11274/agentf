@@ -297,3 +297,114 @@ def test_apply_ssl_patch_is_idempotent():
     assert first_check is False
     assert ctx2.check_hostname is False
     assert ctx2.verify_mode == ssl.CERT_NONE
+
+
+# ---------------------------------------------------------------------------
+# write_file — 沙箱内写入（不写回宿主机）
+# ---------------------------------------------------------------------------
+
+def test_e2b_write_file_writes_inside_sandbox(executor_with_mocks, tmp_path, monkeypatch):
+    """E2BExecutor.write_file must write via e2b SDK into the sandbox,
+    NOT to the host agent_package_dir (跨会话隔离，避免宿主机残留)."""
+    exe, sb = executor_with_mocks
+    # sb.files 是 MagicMock 自动生成 —— 显式配置 write 返回，避免 mock 自动返回值
+    sb.files.write.return_value = None
+
+    sandbox_path = f"{E2BExecutor.SANDBOX_WORKSPACE}/harness/skills/outfit-stylist/outfit-2026-08-10.html"
+    result = exe.write_file(sandbox_path, "<html>lookbook</html>")
+
+    # 1) 写入走沙箱 SDK，而不是宿主机 open()
+    sb.files.write.assert_called_once()
+    call_path, call_data = sb.files.write.call_args[0]
+    assert call_path == sandbox_path
+    assert isinstance(call_data, bytes)
+    assert b"<html>lookbook</html>" in call_data
+
+    # 2) 宿主机 agent_package_dir 下不得产生文件
+    assert not (tmp_path / "harness" / "skills" / "outfit-stylist" / "outfit-2026-08-10.html").exists()
+
+    # 3) 返回体携带沙箱内 path（供产物收集 extract_structured_artifacts 识别）
+    assert result.success is True
+    assert result.path == sandbox_path
+    assert result.bytes_written == len("<html>lookbook</html>".encode("utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# list_dir — is_dir 推断走 FileType enum identity（非字符串 introspection）
+# ---------------------------------------------------------------------------
+
+def test_e2b_list_dir_is_dir_uses_filetype_identity(executor_with_mocks):
+    """list_dir 的 is_dir 必须用 FileType enum identity 判断，禁止凭 str(Enum) 推断。
+
+    回归 bug：原代码 `str(FileType.DIR).upper().startswith("DIR")` 永远 False
+    （str(FileType.DIR)=="FileType.DIR"，开头是 "FILETYPE" 非 "DIR"），
+    导致所有目录被错误标记为 is_dir=False。2026-08-10 review 发现。
+
+    本测用真 EntryInfo dataclass 实例（非 MagicMock 自动生成），贴近 SDK
+    真实返回形态，避免 mock 掩盖 enum identity 推断错误。
+    """
+    from datetime import datetime, timezone
+    from e2b_code_interpreter import FileType
+    from e2b.sandbox.filesystem.filesystem import EntryInfo
+
+    exe, sb = executor_with_mocks
+    sandbox_dir = f"{E2BExecutor.SANDBOX_WORKSPACE}/harness/skills/outfit-stylist"
+    # 真 EntryInfo 实例：一个目录 + 一个文件，type 用真 FileType enum
+    sb.files.list.return_value = [
+        EntryInfo(
+            name="outfit-stylist",
+            type=FileType.DIR,
+            path=f"{sandbox_dir}/outfit-stylist",
+            metadata=None,
+            size=0, mode=0, permissions="rwxr-xr-x",
+            owner="user", group="user",
+            modified_time=datetime(2026, 8, 10, tzinfo=timezone.utc),
+            symlink_target=None,
+        ),
+        EntryInfo(
+            name="outfit-2026-08-10.html",
+            type=FileType.FILE,
+            path=f"{sandbox_dir}/outfit-2026-08-10.html",
+            metadata=None,
+            size=1024, mode=0, permissions="rw-r--r--",
+            owner="user", group="user",
+            modified_time=datetime(2026, 8, 10, tzinfo=timezone.utc),
+            symlink_target=None,
+        ),
+    ]
+
+    result = exe.list_dir(sandbox_dir, recursive=False)
+
+    # 不变量：DIR → is_dir=True，FILE → is_dir=False（enum identity 判断）
+    assert len(result) == 2
+    assert result[0]["name"] == "outfit-stylist"
+    assert result[0]["is_dir"] is True, "FileType.DIR 必须被识别为目录"
+    assert result[1]["name"] == "outfit-2026-08-10.html"
+    assert result[1]["is_dir"] is False, "FileType.FILE 必须被识别为文件"
+
+
+# ---------------------------------------------------------------------------
+# _to_sandbox_path — agent_package_dir 前缀边界（姊妹目录不误替换）
+# ---------------------------------------------------------------------------
+
+def test_e2b_to_sandbox_path_rejects_sibling_prefix(executor):
+    """_to_sandbox_path 必须用 os.sep 边界判断 agent_package_dir 前缀，
+    避免 /fake/agent/package-backup/... 姊妹目录被误替换为沙箱路径。
+
+    回归 bug：原 `path.startswith(agent_package_dir)` + `replace(...)` 无边界，
+    把 /fake/agent/package-backup/foo.html 错转为 /home/user/workspace-backup/foo.html。
+    2026-08-10 review 发现。
+    """
+    # agent_package_dir = /fake/agent/package（fixture 设的 HOST_PKG_DIR）
+    sibling = f"{HOST_PKG_DIR}-backup/foo.html"
+    result = executor._to_sandbox_path(sibling)
+    assert result == sibling, f"姊妹目录前缀碰撞应原样返回，实际: {result}"
+
+    # 正向：包内路径 → 沙箱路径
+    inside = f"{HOST_PKG_DIR}/harness/skills/outfit.html"
+    result_inside = executor._to_sandbox_path(inside)
+    assert result_inside == f"{E2BExecutor.SANDBOX_WORKSPACE}/harness/skills/outfit.html"
+
+    # 边界：agent_package_dir 本身 → 沙箱 workspace 根
+    result_root = executor._to_sandbox_path(HOST_PKG_DIR)
+    assert result_root == E2BExecutor.SANDBOX_WORKSPACE

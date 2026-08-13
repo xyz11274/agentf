@@ -21,11 +21,12 @@ import json
 import logging
 import mimetypes
 import re
+import time
 from pathlib import Path
 
 from config import settings
 from models import ArtifactInfo
-from routes.artifacts import read_artifact_base64
+from routes.artifacts import artifact_file_size, read_artifact_base64
 
 logger = logging.getLogger("agentflow.bridge.routes.artifact_extractor")
 
@@ -96,6 +97,7 @@ def extract_artifact_infos(content: str) -> list[ArtifactInfo]:
     the artifact API.
     """
     artifacts: list[ArtifactInfo] = []
+    _t0 = time.time()
 
     # 边界是 url 指向 ``/api/artifacts/`` 路径（agent 产物），label 任意。
     # 守 I-1：不误匹配用户正文里的随手图片引用（emoji、外部图床等）。
@@ -128,6 +130,10 @@ def extract_artifact_infos(content: str) -> list[ArtifactInfo]:
         )
     else:
         logger.debug("artifact.extract count=0 (no artifact patterns matched)")
+    logger.debug(
+        "artifact.extract_done count=%d elapsed=%.3fs",
+        len(artifacts), time.time() - _t0,
+    )
     return artifacts
 
 
@@ -186,14 +192,32 @@ def apply_artifact_output_mode(content: str, artifacts: list[ArtifactInfo]) -> t
     """
     reference = getattr(settings, "artifact_reference", "link")
     payload = getattr(settings, "artifact_payload", "url")
+    _t0 = time.time()
     if reference == "link" and payload == "url":
+        logger.debug("artifact.output_mode_done mode=link+url elapsed=%.3fs", time.time() - _t0)
         return content, artifacts
 
-    # payload=base64：读取产物文件转 base64 填入 data_base64（无法读取时保留 url 形式）
+    # payload=base64：读取产物文件转 base64 填入 data_base64（无法读取时保留 url 形式）。
+    # 非图片产物(视频/音频/文档)超过体积阈值时**跳过填充**并打 WARNING——
+    # 避免把大视频/大文档的 raw base64 塞进 SSE 元数据（base64 膨胀 ~33% 且不压缩）。
+    # 图片不受限(已压缩到 512px,体积可控)。跳过 = 元数据 data_base64 保持空串,
+    # 前端 artifactSrc 回退到 url(与 I-8 "内嵌失败保留 url"同语义,不阻断产物交付)。
+    # 阈值可配置:settings.artifact_base64_max_bytes(env AF_BR_ARTIFACT_BASE64_MAX_BYTES,默认 1MB,0=不限)。
+    max_bytes = getattr(settings, "artifact_base64_max_bytes", 0)
     if payload == "base64":
         for art in artifacts:
-            if not art.data_base64:
-                art.data_base64 = read_artifact_base64(art.url, art.mime_type)
+            if art.data_base64:
+                continue
+            if art.type != "image" and max_bytes > 0:
+                size = artifact_file_size(art.url)
+                if size is not None and size > max_bytes:
+                    logger.warning(
+                        "artifact.base64.skip_non_image type=%s url=%s size=%d max_bytes=%d "
+                        "(keep url form, frontend fetches via serve URL)",
+                        art.type, art.url, size, max_bytes,
+                    )
+                    continue  # 跳过填充,保留 url 形式(I-8)
+            art.data_base64 = read_artifact_base64(art.url, art.mime_type)
 
     if reference == "link":
         # link + base64：仅对 image 做文本内 data URI 内嵌（前端 markdown-it 原生渲染
@@ -211,4 +235,6 @@ def apply_artifact_output_mode(content: str, artifacts: list[ArtifactInfo]) -> t
         placeholder = f"{{{{artifact:{idx}}}}}"
         art.placeholder = placeholder
         content = content.replace(art.url, placeholder)
+    logger.debug("artifact.output_mode_done mode=placeholder+%s elapsed=%.3fs",
+                 payload, time.time() - _t0)
     return content, artifacts

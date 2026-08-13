@@ -313,7 +313,7 @@ def pick_provider(explicit):
 
 
 def write_images(images, output):
-    out = Path(output)
+    out = Path(output).resolve()
     if out.suffix == "":
         out = out.with_suffix(".png")
     out.parent.mkdir(parents=True, exist_ok=True)

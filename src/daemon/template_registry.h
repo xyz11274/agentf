@@ -16,7 +16,7 @@
 // agent 级快照关联（2026-08-09，设计 sandbox-warm-template-oci.md §2.6）：
 //   快照 = 基础模板 + agent package（manifest includes 全量）。每 agent 一个快照，
 //   TemplateRegistry 按 agent_id 解析快照；agent load 时快照不存在则自动构建
-//   （调 template_snapshot_create.py --manifest）；version/hash 变化 → 重建新快照
+//   （调 template_admin.py snapshot --manifest）；version/hash 变化 → 重建新快照
 //   → 回收旧快照（DELETE /templates/{旧 snapshotID}）。
 
 #ifndef AGENTFLOW_DAEMON_TEMPLATE_REGISTRY_H
@@ -43,7 +43,7 @@ class TemplateRegistry {
   // agent 级快照（2026-08-09）：快照 = 基础模板 + agent package（manifest includes 全量）。
   //   1. 内存映射命中 → 复用（幂等）
   //   2. 未命中 → 计算 agent 快照 key（version + manifest hash8）→ 平台 REST 检查
-  //   3. 平台无该 agent 快照 → 自动构建（调 template_snapshot_create.py --manifest）
+  //   3. 平台无该 agent 快照 → 自动构建（调 template_admin.py snapshot --manifest）
   //   4. 构建成功 → 记录映射；回收旧快照（DELETE /templates/{旧 snapshotID}，防膨胀）
   //   5. 构建失败 → 降级基础模板（不阻塞首问，execute 走 v1 兜底）
   // 参数：package_path = agent package 根目录（读 package.json version + manifest includes hash）
@@ -72,11 +72,11 @@ class TemplateRegistry {
   // 调 e2b_template_build.py delete --template-id <templateID>：exit 0=删除成功/已不存在
   int delete_template(const std::string& template_id);
 
-  // 调 template_snapshot_create.py --hash-manifest <manifest> 计算 includes 内容 hash8
+  // 调 template_admin.py snapshot --hash-manifest <manifest> 计算 includes 内容 hash8
   // 返回空串 = 计算失败（无 manifest / 解析错误）
   std::string compute_manifest_hash(const std::string& package_path);
 
-  // 调 template_snapshot_create.py --base-template <base> --manifest <manifest> --name <snap_name>
+  // 调 template_admin.py snapshot --base-template <base> --manifest <manifest> --name <snap_name>
   // 构建 agent 增量快照；成功返回平台 snapshotID（stdout 末行），失败返回空串
   std::string build_agent_snapshot(const std::string& agent_id, const std::string& package_path,
                                    const std::string& base_template);

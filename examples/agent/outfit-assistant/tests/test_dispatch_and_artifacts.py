@@ -293,6 +293,94 @@ def test_xlsx_path_is_extracted(tmp_path):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 媒体产物提取(文本通道,failure_mode_matrix §五 B-video)——与 _artifact_suffixes
+# 双通道对齐;曾缺失 → mp4 文本通道识别不了
+# ═══════════════════════════════════════════════════════════════════
+
+def test_media_paths_are_extracted_from_text(tmp_path):
+    """文本通道应提取视频/音频产物路径(mp4/mov/webm/mp3/wav),与
+    _artifact_suffixes 双通道对齐(曾缺失 → mp4 识别不了)。"""
+    mp4 = tmp_path / "demo.mp4"
+    mp4.write_bytes(b"mp4")
+    mov = tmp_path / "clip.mov"
+    mov.write_bytes(b"mov")
+    webm = tmp_path / "anim.webm"
+    webm.write_bytes(b"webm")
+    mp3 = tmp_path / "audio.mp3"
+    mp3.write_bytes(b"mp3")
+    wav = tmp_path / "voice.wav"
+    wav.write_bytes(b"wav")
+
+    text = (
+        f'{{"stdout": "视频: {mp4}\\n短片: {mov}\\n动画: {webm}\\n'
+        f'音频: {mp3}\\n语音: {wav}\\n"}}'
+    )
+    result = executor.extract_artifact_paths(text)
+
+    for p in (mp4, mov, webm, mp3, wav):
+        assert str(p) in result, (
+            f"文本通道应提取媒体产物 {p.name}, got: {result}"
+        )
+
+
+def test_missing_media_file_not_admitted(tmp_path):
+    """不存在的媒体路径不应被收进产物(与图片 same semantics)。"""
+    missing = tmp_path / "ghost.mp4"
+    text = f'{{"stdout": "视频: {missing}"}}'
+
+    result = executor.extract_artifact_paths(text)
+
+    assert str(missing) not in result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# HTML 报告产物提取(文本通道,failure_mode_matrix §五 B-html)——
+# 与 mp4 同类修复:文本通道曾无法识别 html/htm → coordinator 收不到 html_reports
+# ═══════════════════════════════════════════════════════════════════
+
+def test_html_report_paths_are_extracted_from_text(tmp_path):
+    """文本通道应提取 HTML 报告产物路径(.html/.htm),与 _artifact_suffixes
+    双通道对齐(曾缺失 → html 报告走不到 html_reports 分类,只能落 downloads)。"""
+    html = tmp_path / "report.html"
+    html.write_bytes(b"<html></html>")
+    htm = tmp_path / "summary.htm"
+    htm.write_bytes(b"<html></html>")
+
+    text = f'{{"stdout": "报告: {html}\\n摘要: {htm}\\n"}}'
+    result = executor.extract_artifact_paths(text)
+
+    assert str(html) in result, (
+        f"文本通道应提取 .html 报告, got: {result}"
+    )
+    assert str(htm) in result, (
+        f"文本通道应提取 .htm 报告, got: {result}"
+    )
+
+
+def test_html_report_is_appended_as_report_block(tmp_path, monkeypatch):
+    """文本通道提取的 .html 产物在 append 阶段应归入 html_reports →
+    追加[查看报告]块(而非 downloads 下载块)。"""
+    package = tmp_path / "custom-agent"
+    report = package / "outputs" / "report.html"
+    report.parent.mkdir(parents=True)
+    report.write_bytes(b"<html><body>report</body></html>")
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+
+    rendered = coordinator.append_artifacts_markdown(
+        "报告已生成",
+        json.dumps([str(report)]),
+    )
+
+    assert "## 生成产物" in rendered, (
+        f"html 报告应追加产物块,got:\n{rendered}"
+    )
+    assert "report.html" in rendered, (
+        f"报告块应含 report.html,got:\n{rendered}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
 # Non-image artifact UI rendering
 # ═══════════════════════════════════════════════════════════════════
 
@@ -716,6 +804,149 @@ def test_append_artifacts_http_url_not_rewritten(tmp_path, monkeypatch):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# 失败模式矩阵(failure_mode_matrix.md §二 append)——A3 HTML 死链接、
+# A4 外部 URL 同 basename 幂等
+# ═══════════════════════════════════════════════════════════════════
+
+def test_append_html_img_dead_link_still_appends_block(tmp_path, monkeypatch):
+    """A3: content 中 HTML <img src="./assets/look.png"> 引用在 rewrite 因
+    basename 歧义(两个 look.png)无法解析时是死链接 → 不得误判为"已引用"而
+    跳过生成产物块追加。若 basename 唯一可解析,rewrite 成功即内容已可访问,
+    不追加是幂等正确行为(由 R6/R1 覆盖)。"""
+    package = tmp_path / "custom-agent"
+    image_a = package / "harness" / "assets" / "look.png"
+    image_b = package / "outputs" / "look.png"
+    image_a.parent.mkdir(parents=True)
+    image_b.parent.mkdir(parents=True)
+    image_a.write_bytes(b"png-a")
+    image_b.write_bytes(b"png-b")
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+
+    rendered = coordinator.append_artifacts_markdown(
+        '<section><img src="./assets/look.png" alt="look"></section>',
+        json.dumps([str(image_a), str(image_b)]),
+    )
+
+    assert "## 生成产物" in rendered, (
+        f"HTML 死链接(歧义未解析)不得跳过追加,got:\n{rendered}"
+    )
+    assert "/api/artifacts/custom-agent/files/" in rendered
+
+
+def test_append_external_url_same_basename_is_idempotent(tmp_path, monkeypatch):
+    """A4: content 已含外部 URL(https://cdn.example.com/look.png,可访问)且
+    basename 与本地产物相同 → 视为已在内容中被引用,不重复追加本地产物(I-4 幂等)。"""
+    package = tmp_path / "custom-agent"
+    image = package / "harness" / "assets" / "look.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"png")
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+
+    rendered = coordinator.append_artifacts_markdown(
+        "参考图:![look](https://cdn.example.com/look.png)",
+        json.dumps([str(image)]),
+    )
+
+    assert rendered.count("## 生成产物") == 0, (
+        f"外部 URL 同 basename 应视为已引用,不追加块,got:\n{rendered}"
+    )
+    assert "https://cdn.example.com/look.png" in rendered
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 补充场景维度(failure_mode_matrix.md §五)——B-video 视频产物、
+# C-mixed 混合去重、C-versioned 版本号不误伤
+# ═══════════════════════════════════════════════════════════════════
+
+def test_append_video_artifact_becomes_download_block(tmp_path, monkeypatch):
+    """B-video: 视频产物(.mp4)不在 _image_suffixes → 归入 downloads →
+    追加下载块(而非图片块)。bridge 白名单不含视频后缀为已知限制,记录不修。"""
+    package = tmp_path / "custom-agent"
+    video = package / "outputs" / "demo.mp4"
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"mp4-bytes")
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+
+    rendered = coordinator.append_artifacts_markdown(
+        "视频已生成",
+        json.dumps([str(video)]),
+    )
+
+    assert "## 生成产物" in rendered, (
+        f"视频产物应追加产物块,got:\n{rendered}"
+    )
+    assert "![生成图片" not in rendered, (
+        f"视频不应走图片块,got:\n{rendered}"
+    )
+    assert "demo.mp4" in rendered, (
+        f"视频应以下载块呈现,got:\n{rendered}"
+    )
+
+
+def test_append_mixed_duplicate_and_unique_artifacts(tmp_path, monkeypatch):
+    """C-mixed: 2 个同 basename(look.png) + 1 个不重复(other.png) →
+    追加 2 块(重复合并 1 次 + 不重复 1 次),不丢不重复产物。"""
+    package = tmp_path / "custom-agent"
+    a = package / "harness" / "assets" / "look.png"
+    b = package / "outputs" / "look.png"
+    c = package / "assets" / "other.png"
+    a.parent.mkdir(parents=True)
+    b.parent.mkdir(parents=True)
+    c.parent.mkdir(parents=True)
+    a.write_bytes(b"a")
+    b.write_bytes(b"b")
+    c.write_bytes(b"c")
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+
+    rendered = coordinator.append_artifacts_markdown(
+        "完成",
+        json.dumps([str(a), str(b), str(c)]),
+    )
+
+    assert rendered.count("## 生成产物") == 1, (
+        f"混合产物只追加 1 个产物块,got:\n{rendered}"
+    )
+    assert "look.png" in rendered and "other.png" in rendered, (
+        f"重复合并后不重复产物不得丢失,got:\n{rendered}"
+    )
+    assert rendered.count("![生成图片") == 2, (
+        f"应渲染 2 张图片(look 1 次 + other 1 次),got:\n{rendered}"
+    )
+
+
+def test_append_versioned_artifacts_keep_highest(tmp_path, monkeypatch):
+    """C-versioned: outfit-1.png + outfit-2.png 同家族(版本号) →
+    _dedup_versioned_artifacts 只保留最高版本,追加 1 块(不误伤,幂等)。"""
+    package = tmp_path / "custom-agent"
+    v1 = package / "assets" / "outfit-1.png"
+    v2 = package / "assets" / "outfit-2.png"
+    v1.parent.mkdir(parents=True)
+    v1.write_bytes(b"v1")
+    v2.write_bytes(b"v2")
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+
+    rendered = coordinator.append_artifacts_markdown(
+        "完成",
+        json.dumps([str(v1), str(v2)]),
+    )
+
+    assert rendered.count("## 生成产物") == 1, (
+        f"版本号产物应合并为 1 块,got:\n{rendered}"
+    )
+    assert "outfit-2.png" in rendered, (
+        f"应保留最高版本 outfit-2.png,got:\n{rendered}"
+    )
+    assert "outfit-1.png" not in rendered, (
+        f"低版本 outfit-1.png 不应出现,got:\n{rendered}"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════
 # _ensure_artifacts_in_package: external file handling
 # ═══════════════════════════════════════════════════════════════════
 
@@ -994,3 +1225,31 @@ def test_artifact_not_in_content_still_appended(tmp_path):
     )
     assert rendered.count("## 生成产物") == 1
     assert "/api/artifacts/" in rendered
+
+
+def test_dead_link_same_basename_still_appends_block(tmp_path, monkeypatch):
+    """content 中的死链接(./assets/look.png)与真实产物(harness/assets/look.png)同名，
+    但路径错位 + basename 歧义(存在两个 look.png)导致 rewrite 无法解析 → 不得因同名
+    误判"已在内容中被引用"而跳过生成产物块追加(fix-outfit-image-display 次因)。"""
+    package = tmp_path / "custom-agent"
+    a = package / "harness" / "assets" / "look.png"
+    b = package / "outputs" / "look.png"
+    a.parent.mkdir(parents=True)
+    b.parent.mkdir(parents=True)
+    a.write_bytes(b"a")
+    b.write_bytes(b"b")
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+
+    rendered = coordinator.append_artifacts_markdown(
+        "完成:![look](./assets/look.png)",
+        json.dumps([str(a), str(b)]),
+    )
+
+    # 死链接不得跳过追加，且同 basename 去重只追加 1 个块
+    assert rendered.count("## 生成产物") == 1, (
+        f"死链接同名不得跳过追加且应去重为 1 块,got:\n{rendered}"
+    )
+    assert "/api/artifacts/" in rendered, (
+        f"追加的产物块应含可访问 URL,got:\n{rendered}"
+    )

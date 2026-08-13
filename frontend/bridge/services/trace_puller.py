@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 from client import DaemonClient, DaemonError
@@ -107,6 +108,9 @@ async def _pull_and_save_traces(
         )
         return 0
 
+    pull_start = time.time()
+    key_count = 0
+
     sess_params: dict[str, Any] = {
         "agent_id": agent_id,
         # Pass (user_id, client_id) instead of session_id so the daemon can
@@ -133,13 +137,18 @@ async def _pull_and_save_traces(
             "trace_pull.list_keys_failed agent=%s dialogue=%s user=%s: %s",
             agent_id, dialogue_id, user_id, exc,
         )
+        logger.info(
+            "trace_pull.done agent=%s dialogue=%s elapsed=%.3fs keys=%d",
+            agent_id, dialogue_id, time.time() - pull_start, key_count,
+        )
         return 0
 
     raw_keys: list[str] = list_result.get("keys", []) if isinstance(list_result, dict) else []
+    key_count = len(raw_keys)
     logger.info(
-        "trace_pull.list_keys_ok agent=%s dialogue=%s user=%s raw_keys_count=%d raw_keys=%s",
-        agent_id, dialogue_id, user_id, len(raw_keys),
-        raw_keys[:20],  # cap to avoid huge log lines
+        "trace_pull.list_keys_ok agent=%s dialogue=%s user=%s raw_keys_count=%d total=%d raw_keys=%s",
+        agent_id, dialogue_id, user_id, len(raw_keys), len(raw_keys),
+        raw_keys,
     )
 
     # Filter to ``/meta`` sub-keys — each one identifies a distinct
@@ -156,6 +165,10 @@ async def _pull_and_save_traces(
             "trace_pull.no_traces agent=%s dialogue=%s user=%s "
             "(no /meta keys in %d raw keys)",
             agent_id, dialogue_id, user_id, len(raw_keys),
+        )
+        logger.info(
+            "trace_pull.done agent=%s dialogue=%s elapsed=%.3fs keys=%d",
+            agent_id, dialogue_id, time.time() - pull_start, key_count,
         )
         return 0
 
@@ -240,6 +253,10 @@ async def _pull_and_save_traces(
                 agent_id, dialogue_id, exc,
             )
 
+    logger.info(
+        "trace_pull.done agent=%s dialogue=%s elapsed=%.3fs keys=%d",
+        agent_id, dialogue_id, time.time() - pull_start, key_count,
+    )
     return persisted
 
 
@@ -254,6 +271,7 @@ async def _fetch_trace_detail(
     Returns ``None`` on any daemon error so the caller can skip the entry
     without aborting the whole pull.
     """
+    fetch_start = time.time()
     detail: dict[str, Any] = {"call_id": call_id}
 
     async def _safe_get(key: str) -> Any:
@@ -280,12 +298,18 @@ async def _fetch_trace_detail(
             )
             return None
         raw_value = result.get("value")
-        # Debug: log type and preview of raw_value to diagnose \n encoding
-        _value_preview = str(raw_value)[:200] if raw_value is not None else "None"
-        logger.info(
-            "trace_pull.raw_value call_id=%s key=%s value_type=%s preview=%s",
-            call_id, key, type(raw_value).__name__, _value_preview,
-        )
+        # Debug: log type and full raw_value to diagnose \n encoding (F7: 不截断)
+        if raw_value is not None:
+            raw_str = str(raw_value)
+            logger.info(
+                "trace_pull.raw_value call_id=%s key=%s value_type=%s len=%d value=%s",
+                call_id, key, type(raw_value).__name__, len(raw_str), raw_str,
+            )
+        else:
+            logger.info(
+                "trace_pull.raw_value call_id=%s key=%s value_type=None value=None",
+                call_id, key,
+            )
         # The agent's llm_call.py stores dict values (request/response/meta)
         # through the UDS server which extracts them as JSON strings.
         # The value returned by databus.get is a JSON-encoded string of the
@@ -316,11 +340,19 @@ async def _fetch_trace_detail(
     meta_data = await _safe_get("meta")
 
     if request_data is None and response_data is None and meta_data is None:
+        logger.info(
+            "trace_pull.fetch_detail_done call_id=%s elapsed=%.3fs result=none",
+            call_id, time.time() - fetch_start,
+        )
         return None
 
     detail["request"] = request_data
     detail["response"] = response_data
     detail["meta"] = meta_data
+    logger.info(
+        "trace_pull.fetch_detail_done call_id=%s elapsed=%.3fs result=ok",
+        call_id, time.time() - fetch_start,
+    )
     return detail
 
 

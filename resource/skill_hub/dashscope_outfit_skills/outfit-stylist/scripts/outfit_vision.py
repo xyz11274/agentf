@@ -34,9 +34,9 @@ payload — only the transport layer changes):
       endpoint, authed by DASHSCOPE_API_KEY. Zero pip deps; stdlib urllib only.
 
 Usage:
-  python3 outfit_vision.py --image uploads/coat.jpg
-  python3 outfit_vision.py --image uploads/me.jpg --mode person
-  python3 outfit_vision.py --image uploads/x.png --model aisf/qwen-vl-max   # UDS
+  python3 outfit_vision.py --image upload/coat.jpg
+  python3 outfit_vision.py --image upload/me.jpg --mode person
+  python3 outfit_vision.py --image upload/x.png --model aisf/qwen-vl-max   # UDS
 
 Prints one JSON object to stdout. Exit 0 on success; non-zero (message on
 stderr) on a missing key / unreadable image / API error. If the model's reply

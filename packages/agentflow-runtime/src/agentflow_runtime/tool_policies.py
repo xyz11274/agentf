@@ -14,6 +14,8 @@
 from __future__ import annotations
 
 import json
+import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
@@ -116,6 +118,7 @@ def execute_in_batches(tool_calls: list, execute_fn: Callable) -> list:
     - execute_fn(tc) 是"执行单个工具、返回原始结果"的注入函数；
       消息回灌、产物合并等副作用由调用方按结果顺序统一处理（§2.3）
     """
+    _t0 = time.monotonic()
     results: list = []
     for batch in build_batches(tool_calls):
         if len(batch) == 1:
@@ -123,4 +126,7 @@ def execute_in_batches(tool_calls: list, execute_fn: Callable) -> list:
         else:
             with ThreadPoolExecutor(max_workers=_max_workers(batch)) as pool:
                 results.extend(pool.map(execute_fn, batch))  # 并行批次 + pool.map 保序
+    _ms = (time.monotonic() - _t0) * 1000
+    _parallel = sum(1 for b in build_batches(tool_calls) if len(b) > 1)
+    print(f"[timing] tool_batch parallel={_parallel} duration_ms={_ms:.1f}", file=sys.stderr)
     return results

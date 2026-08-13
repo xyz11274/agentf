@@ -3,7 +3,7 @@ name = "agentflow-runtime"
 version = "0.1.0"
 description = "AgentFlow Agent Runtime — generic agent execution engine"
 requires-python = ">=3.12"
-dependencies = ["openai>=1.0", "e2b-code-interpreter==2.8.1"]
+dependencies = ["openai>=1.0", "e2b-code-interpreter==2.8.1", "mcp>=1.27,<2"]
 
 [build-system]
 requires = ["setuptools>=75"]

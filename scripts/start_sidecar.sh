@@ -7,9 +7,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
-# 加载环境配置
-ar_load_env
-
 PID_FILE="/tmp/agentflow-sidecar.pid"
 
 # ── Helper: resolve running PID ─────────────────────────────────────
@@ -82,6 +79,8 @@ while [ $# -gt 0 ]; do
             echo ""
             echo "Environment:"
             echo "  AF_SIDECAR_LOG_DIR   SideCar log directory (default: logs/)"
+            echo "  AF_SIDECAR_CONFIG    SideCar 配置文件路径（默认 configs/\$AGENTFLOW_ENV/sidecar.json）"
+            echo "  AGENTFLOW_ENV        dev|test|prod，选择 sidecar.json 环境（默认按 profile 对齐）"
             exit 0 ;;
         *)
             # 位置参数：第一个为 profile，第二个为 port
@@ -99,6 +98,30 @@ done
 
 PROFILE="${PROFILE:-production}"
 PORT="${PORT:-23767}"
+
+# ── PROFILE → AGENTFLOW_ENV 对齐（sidecar.json 按环境选择）──
+# sidecar 配置查找默认走 configs/{AGENTFLOW_ENV}/sidecar.json；若调用方未显式设置
+# AGENTFLOW_ENV，则按 PROFILE 对齐（production→prod，local→dev），避免
+# `start_sidecar.sh production` 误加载 dev 配置。start_production.sh 已 export AGENTFLOW_ENV=prod，
+# 此处 `:-` 判定不会覆盖它。
+if [ -z "${AGENTFLOW_ENV:-}" ]; then
+    case "$PROFILE" in
+        production) export AGENTFLOW_ENV="prod" ;;
+        local)      export AGENTFLOW_ENV="dev" ;;
+    esac
+fi
+# 配置文件路径：AF_SIDECAR_CONFIG 显式指定优先，否则按环境默认
+SIDECAR_CONFIG="${AF_SIDECAR_CONFIG:-$AR_PROJECT_ROOT/configs/$AGENTFLOW_ENV/sidecar.json}"
+if [ ! -f "$SIDECAR_CONFIG" ]; then
+    echo "[WARN] SideCar config not found: $SIDECAR_CONFIG (sidecar 将回退默认 outfit-assistant)" >&2
+fi
+
+# ── 加载环境配置（必须在 PROFILE→AGENTFLOW_ENV 对齐之后）──
+# ar_load_env 按 AGENTFLOW_ENV 选 configs/{env}/.env；提前执行会在
+# `start_sidecar.sh production`（未显式设 AGENTFLOW_ENV）时误加载 dev 的 .env。
+# .env 中的变量（如 AF_BR_COREMIND_AGENT_ID）经 set -a export，被 sidecar 子进程继承，
+# 从而在启动时覆盖 sidecar.json 的 agent.name——即"只改 .env 不改代码"的路由切换入口。
+ar_load_env
 
 # ═══════════════════════════════════════════════════════════════════
 #  stop
@@ -336,6 +359,7 @@ echo "[INFO] View live: tail -f $LOG_FILE"
 nohup "$BINARY" \
     --listen "0.0.0.0:$PORT" \
     --bridge-url "$BRIDGE_URL" \
+    --config "$SIDECAR_CONFIG" \
     -processType "${SERVICENAME:-OutfitAgent}" \
     $( [ "$PROFILE" = "production" ] && echo "--coremind-mode" ) \
     >> "$LOG_FILE" 2>&1 &

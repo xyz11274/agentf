@@ -279,6 +279,10 @@ class TraceRecorder:
             _chunk_type = "llm_chunk"
             _push_client = self._client
 
+            # TTFT（首 token 延迟）统计：首个有效内容 chunk 到达时间 vs 请求开始。
+            # 用可变容器避免 nonlocal 声明；失败不中断主流程（§3.7）。
+            _ttft = {"logged": False}
+
             def _on_chunk(raw_json: str) -> None:
                 # 异常全部吞掉（守 §3.7：trace 路径失败不中断主流程）
                 try:
@@ -302,6 +306,13 @@ class TraceRecorder:
                             delta_content = delta.get("content") or ""
                     if not delta_content:
                         return
+                    if not _ttft["logged"]:
+                        _ttft["logged"] = True
+                        print(
+                            f"[timing] ttft_ms={(time.time() - start_time) * 1000:.1f} "
+                            f"call_id={call_id} node={ctx.get('node_id', '?')}",
+                            file=sys.stderr, flush=True,
+                        )
                     content = raw_json  # llm_chunk: 原始 delta JSON，Bridge 透传
 
                     kwargs: dict = {"type": _chunk_type, "source": source}

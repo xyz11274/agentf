@@ -2,7 +2,7 @@
 
 > **文档级别**: L4 技术设计
 > **日期**: 2026-06-22
-> **状态**: tbd
+> **状态**: 已完成（Python 层接入，2026-08-13）
 > **关联**: `examples/agent/harness-agent/`（现有实现）、`.mcp.json`（MCP 配置）、`docs/gaps/04-MCP集成.md`
 
 ---

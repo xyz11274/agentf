@@ -3,6 +3,7 @@
 // 用桩 Sandbox（StubSandbox）绕过 LocalSandbox 的 fork+exec，纯校验 tool_params JSON 构造正确性
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <string>
 #include <utility>
 
@@ -117,6 +118,82 @@ TEST(SandboxHelpersTest, JsonEscapeSpecialChars) {
    auto result = SandboxHelpers::validate_upload_path("workspace/user1_client-a/other/file.png");
    EXPECT_FALSE(result.empty()) << "upload 目录外的路径应被拒绝";
  }
+
+ // ── rewrite_upload_path_to_sandbox（I-7 路径注入语义，2026-08-12 修复） ─────
+
+ TEST(SandboxHelpersTest, RewriteUploadPath_RelativeToSandboxAbs) {
+   // e2b 模式：相对路径 workspace/{session}/upload/... → /home/user/workspace/workspace/{session}/upload/...
+   std::string content =
+       "用户上传了图片，路径: workspace/user1_client-a/upload/abc123.png";
+   std::string result = SandboxHelpers::rewrite_upload_path_to_sandbox(
+       content, "workspace/user1_client-a/upload/", "/home/user/workspace");
+   EXPECT_EQ(result,
+             "用户上传了图片，路径: /home/user/workspace/workspace/user1_client-a/upload/abc123.png");
+ }
+
+ TEST(SandboxHelpersTest, RewriteUploadPath_EmptyWsPrefixNoop) {
+   // Local/Docker（ws_prefix 空）：共享 workdir，相对路径原样保留
+   std::string content =
+       "路径: workspace/user1_client-a/upload/abc123.png";
+   std::string result = SandboxHelpers::rewrite_upload_path_to_sandbox(
+       content, "workspace/user1_client-a/upload/", "");
+   EXPECT_EQ(result, content);
+ }
+
+ TEST(SandboxHelpersTest, RewriteUploadPath_NoMatchNoop) {
+   // 无匹配路径：原样返回，不误改写
+   std::string content = "请点评我的穿搭，不需要看图";
+   std::string result = SandboxHelpers::rewrite_upload_path_to_sandbox(
+       content, "workspace/user1_client-a/upload/", "/home/user/workspace");
+   EXPECT_EQ(result, content);
+ }
+
+ TEST(SandboxHelpersTest, RewriteUploadPath_AlreadySandboxAbsNoDoubleRewrite) {
+   // 幂等：已是沙箱绝对路径时不二次改写（session_marker 前缀已不存在）
+   std::string content =
+       "路径: /home/user/workspace/workspace/user1_client-a/upload/abc123.png";
+   std::string result = SandboxHelpers::rewrite_upload_path_to_sandbox(
+       content, "workspace/user1_client-a/upload/", "/home/user/workspace");
+   EXPECT_EQ(result, content);
+ }
+
+ TEST(SandboxHelpersTest, RewriteUploadPath_MultipleOccurrences) {
+   // 多处出现全部改写
+   std::string content =
+       "图1: workspace/user1_client-a/upload/a.png\n图2: workspace/user1_client-a/upload/b.png";
+   std::string result = SandboxHelpers::rewrite_upload_path_to_sandbox(
+       content, "workspace/user1_client-a/upload/", "/home/user/workspace");
+   EXPECT_EQ(result,
+             "图1: /home/user/workspace/workspace/user1_client-a/upload/a.png\n"
+             "图2: /home/user/workspace/workspace/user1_client-a/upload/b.png");
+ }
+
+// exec_cmd_argv 超时 kill：子进程挂起时必须在 timeout_ms 后返回 124，
+// 不能无限阻塞（回归：2026-08-12 read() 阻塞 bug 使 180s 超时失效，
+// daemon 快照重建卡死 9+ 分钟。修复 = 管道读端置 O_NONBLOCK + 轮询）。
+TEST(SandboxHelpersTest, ExecCmdArgvTimeoutKillsChild) {
+  const int timeout_ms = 500;
+  const int child_sleep_s = 10;  // 子进程远超超时阈值，若超时失效将阻塞测试
+  auto t0 = std::chrono::steady_clock::now();
+  auto res = SandboxHelpers::exec_cmd_argv(
+      {"/bin/sleep", std::to_string(child_sleep_s)}, timeout_ms);
+  auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - t0)
+                        .count();
+  // 超时 kill 约定 exit_code=124（与 timeout 命令一致）
+  EXPECT_EQ(res.exit_code, 124) << "超时后应返回 124，实际: " << res.exit_code;
+  // 实际耗时应在超时阈值附近（≤2s），而非等到子进程自然退出（10s）
+  EXPECT_LT(elapsed_ms, child_sleep_s * 1000 / 2)
+      << "超时未生效，阻塞了 " << elapsed_ms << "ms";
+}
+
+// exec_cmd_argv 无超时（timeout_ms<=0）：正常等待子进程退出并取回退出码
+TEST(SandboxHelpersTest, ExecCmdArgvNoTimeoutWaitsAndGetsExitCode) {
+  auto res = SandboxHelpers::exec_cmd_argv({"/bin/sh", "-c", "echo hi; exit 7"});
+  EXPECT_EQ(res.exit_code, 7);
+  EXPECT_NE(res.output.find("hi"), std::string::npos)
+      << "stdout 应包含子进程输出: " << res.output;
+}
 
  }  // namespace
  }  // namespace sandbox

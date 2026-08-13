@@ -20,13 +20,19 @@ tags:
 ## 核心工作流（按顺序，缺省取合理默认并明说）
 
 ### 0. 召回个性化档案（每次先做）
-用 `glob` / `read` 查看记忆库，把用户已知偏好载入，避免重复推荐：
-```bash
-cat .agentfoundry/memory/outfit-profile/profile.md 2>/dev/null
-ls .agentfoundry/memory/outfit-profile/history/ 2>/dev/null | tail -10
-```
-- `profile.md` 存：体型、身高印象、肤色冷暖、风格偏好、禁忌色/不穿的单品、尺码、常用品牌、特殊需求。**没有这个文件就是新用户**，走下面第 0.5 步。
-- `history/` 每个文件是一次过往搭配（含用户反馈喜欢/不喜欢），用来避免连续重复、参考被认可的风格。
+**preload_user_context 工具已在 skill 首轮前预加载用户上下文**，直接从 context JSON 取用，**禁止再用 bash/glob/read 探查记忆库**（本轮 perf 基线实测：LLM 逐轮 bash 探查 profile/history 耗 13+ 轮 ≈ 55s，preload 后应 0 轮）：
+
+| 字段 | context JSON key | 说明 |
+|------|-----------------|------|
+| 档案 | `profile_content` | 等价于 `cat profile.md`；**为空/null = 新用户**，走第 0.5 步 |
+| 历史 | `history_files` | 最近 10 条历史文件名列表（等价 `ls history/ | tail -10`）；按需用 `read` 读具体文件 |
+| 天气 | `weather` | 含当前温度/体感/湿度/天气描述 + 5 日预报（等价 `weather.py`）；**避免再调 weather.py 补查** |
+| 风格参考 | `style_guide` | `references/style-guide.md` 全文（等价 `read style-guide.md`）|
+| 目录树 | `workspace_tree` | 关键目录浅层树（upload/、outputs/、memory/ 档案目录）——**上传图存在性与档案目录结构直接看它，禁止再 ls 探查** |
+| 已返回字段 | `_hint` | 声明本次 preload 已返回哪些字段——**LLM 不得再用 bash 探索这些字段** |
+
+- `profile.md` 存：体型、身高印象、肤色冷暖、风格偏好、禁忌色/不穿的单品、尺码、常用品牌、特殊需求。**`profile_content` 为空 = 新用户**，走下面第 0.5 步。
+- `history_files` 每个文件是一次过往搭配（含用户反馈喜欢/不喜欢），用来避免连续重复、参考被认可的风格。
 
 > 记忆按 **workspace 隔离**（本平台每个终端用户独立 workspace，天然 = per-user）。若一个 workspace 服务多个用户，按 `profile/<用户名>/profile.md` 子目录区分，并从对话/会话信息确定当前用户。
 
@@ -48,6 +54,8 @@ ls .agentfoundry/memory/outfit-profile/history/ 2>/dev/null | tail -10
 ```
 **若 `ask_user` 工具不可用**（本次工具列表中没有 `ask_user`）：**不要按默认假设直接出整套推荐**——改用**文本一次性询问**关键偏好（性别方向、体型、想要风格、身高、避讳色/单品、尺码），等用户回复后再写 `profile.md` 并进入推荐。**新用户没有 profile 时必须先询问，禁止直接按中性/通用假设出整套推荐**（除非用户明确表示"随便/你定"）。
 拿到答案（gender/body/style/height/avoid/size）后 → **写进 `profile.md`** 再进入第 1–4 步推荐。**`gender` 决定整条推荐线（男装/女装/中性）+ 效果图模特性别**，务必贯彻；选「不便说/中性」就走中性、不假设。
+
+> **建档收敛**：建档（写 `profile.md` + 写 `history` 文件）**同一轮一次写完**，不要分多轮、不要先 `bash mkdir`（write_file 自动创建父目录）。
 - 用户少填几项 / 选「不确定」→ 用合理默认并说明、不强求。
 - **已有档案的老用户跳过本步**，直接按档案推（**别**对老用户弹 `ask_user`）。
 
@@ -66,16 +74,16 @@ python3 ${SKILL_DIR}/weather.py "<城市>"
 输出一行 JSON：`current`(temp/feels_like/desc/humidity/wind) + 5 天 `forecast`。若有 `error` 字段，就告诉用户拿不到天气、改用其描述的体感来搭，**绝不臆造温度**。用 `feels_like` 和 `desc`（雨/雪/风）决定保暖层数、是否需防水/防风。温度分层规则见 `${SKILL_DIR}/references/style-guide.md`。
 
 ### 3. 看上传的图片（有才做，必须走脚本，不许凭空描述）
-上传的文件落在会话沙箱的 `uploads/` 下。**只要用户上传了图片，必须** 调用视觉脚本识别，不能自己猜图里是什么：
+上传的文件落在会话沙箱的 `upload/` 下。**只要用户上传了图片，必须** 调用视觉脚本识别，不能自己猜图里是什么：
 ```bash
 # 衣物单品（识别品类/颜色/版型/正式度/季节，用于纳入搭配/避免撞色）
-python3 ${SKILL_DIR}/scripts/outfit_vision.py --image uploads/<file> --mode garment
+python3 ${SKILL_DIR}/scripts/outfit_vision.py --image upload/<file> --mode garment
 # 全身/人物照（粗判体型轮廓、肤色冷暖，用于个性化）
-python3 ${SKILL_DIR}/scripts/outfit_vision.py --image uploads/<file> --mode person
+python3 ${SKILL_DIR}/scripts/outfit_vision.py --image upload/<file> --mode person
 # 整体穿搭/上身照（识别整套单品 + 配色/风格/廓形线索，用于【点评】）
-python3 ${SKILL_DIR}/scripts/outfit_vision.py --image uploads/<file> --mode outfit
+python3 ${SKILL_DIR}/scripts/outfit_vision.py --image upload/<file> --mode outfit
 ```
-- 脚本回 **结构化 JSON**，直接拿来推理。**多张图就对每张各调一次脚本、合并结果**（先 `ls uploads/` 看有几张）。按意图选 mode：要**点评一身造型**→`outfit`；要**收集用户的单品来搭**→对每件 `garment`；要**个性化体型/肤色**→`person`。
+- 脚本回 **结构化 JSON**，直接拿来推理。**多张图就对每张各调一次脚本、合并结果**（upload/ 文件列表已在 `workspace_tree`，直接看它知道有几张，**禁止再 `ls upload/` 探查**）。按意图选 mode：要**点评一身造型**→`outfit`；要**收集用户的单品来搭**→对每件 `garment`；要**个性化体型/肤色**→`person`。
 - 人物照的体型/肤色判断是 **粗略视觉推测、可能不准**，脚本已带免责声明——转述时也要这样表述，措辞尊重、不做身材评判。
 - 若脚本报 `DASHSCOPE_API_KEY` 未配置或网络错误，**如实告诉用户图片暂时分析不了**，让其用文字描述单品，照常给建议——不要假装看过图。
 
@@ -117,7 +125,7 @@ python3 ${SKILL_DIR}/scripts/outfit_vision.py --image uploads/<file> --mode outf
 ## 用你的衣橱按场景搭配（用户上传多件单品 + 给场景时）
 
 意图：上传了**多张单品图** + 说了场景/场合/天气（如「我有这几件，明天面试怎么搭」）。**从用户自己的单品里组合**，不要凭空换别的：
-1. `ls uploads/` 看有几张，对**每张**跑 `outfit_vision.py --mode garment`，汇总成用户的「单品清单」（品类/颜色/版型/正式度）。
+1. upload/ 文件列表已在 `workspace_tree`，直接看它知道有几张（**禁止再 `ls upload/` 探查**），对**每张**跑 `outfit_vision.py --mode garment`，汇总成用户的「单品清单」（品类/颜色/版型/正式度）。
 2. 查天气（第 2 步）+ 明确场景/场合。
 3. 从这些**真实单品**里搭 1–2 套适合该场景的，每套讲清：用了哪几件（对应到用户上传的图）、为什么搭得起来（呼应场合/天气/配色/性别）、怎么穿（卷袖/扎进去/叠穿等小技巧）。
 4. **缺关键件**（如有上装下装没鞋、缺外套御寒）→ 明说缺什么 + 建议**添置一两件**（给具体描述），区分「你已有的」和「建议添置的」。
@@ -161,7 +169,7 @@ python3 ${SKILLS_DIR}/forge-image-gen/scripts/generate.py \
 - `NO_KEY` → **静默跳过**图，正常给文字/视图/HTML；只有用户专门问「能出效果图吗」时才说明需要配置图像 key。
 - 把 `./assets/outfit-1.png` 和 `./assets/outfit-2.png` **都**嵌入所选形态：纯聊天/HTML 里用 markdown 图片 `![平铺](assets/outfit-1.png)` 和 `![上身效果](assets/outfit-2.png)`（Console 会把相对路径解析成沙盒图内联渲染）；视图里放 image 节点。
 - 退出码非零表示**已尝试但失败**（网络/额度/尺寸不支持），**如实说明、不要假装生成了图**；可回退到 `--size 1024x1024` 再试一次。
-- **隐私**：默认生成**泛化服饰效果图（平铺/匿名人台）**，**不要**把用户上传的人物照当参考图。仅当用户明确要求「把这套穿在我身上」并同意时，才追加 `--ref uploads/<全身照>`。
+- **隐私**：默认生成**泛化服饰效果图（平铺/匿名人台）**，**不要**把用户上传的人物照当参考图。仅当用户明确要求「把这套穿在我身上」并同意时，才追加 `--ref upload/<全身照>`。
 
 ## 生成穿搭效果视频（按意图触发，系统引导）
 

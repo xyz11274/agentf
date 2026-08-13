@@ -41,6 +41,7 @@
 #include "proxy_handler.h"
 #include "sidecar_router.h"
 #include "router_logic.h"
+#include "sidecar_config.h"
 
 // CoreMind framework headers — only available in Huawei build environment
 #ifdef COREMIND_ENABLED
@@ -51,6 +52,10 @@
 
 // ── Global state ──
 static std::atomic<httplib::Server*> g_http_server{nullptr};
+
+// Sidecar 运行配置（agent 路由目标 / bridge_url），main() 加载 configs/{env}/sidecar.json
+// 后赋值；forward_to_bridge 与 scheduleTaskAbility handler 读取它，替换旧硬编码 outfit-assistant。
+static sidecar::SidecarConfig g_sidecar_config;
 
 #ifdef COREMIND_ENABLED
 static std::shared_ptr<SidecarRouter> g_sidecar_router;
@@ -237,8 +242,9 @@ static void forward_to_bridge(
 
     // 从 bridge_url 提取 origin 和 path prefix
     const auto target = parse_bridge_target(bridge_url);
-    const char* env_agent = std::getenv("AF_BR_COREMIND_AGENT_ID");
-    std::string agent_id = env_agent ? env_agent : "outfit-assistant";
+    // 转发目标 agent：由 main() 从 configs/{env}/sidecar.json 加载（env 覆盖后），
+    // 替换旧硬编码 outfit-assistant（原 getenv("AF_BR_COREMIND_AGENT_ID") 兜底）。
+    std::string agent_id = g_sidecar_config.agent.name;
 
     // ══════════════════════════════════════════════════════════════
     //  有 SysAgentEntity → 异步模式：200 无 body + 后台 SSE 流式转发 + POST 回调
@@ -627,8 +633,14 @@ static bool init_mate_mind_sdk() {
 #endif
 
 int main(int argc, char* argv[]) {
+    // ── 加载 Sidecar 配置（agent 路由目标 / bridge_url）──
+    // 配置来源：--config CLI 参数 > AF_SIDECAR_CONFIG env > configs/{AGENTFLOW_ENV}/sidecar.json
+    // （AGENTFLOW_ENV 默认 dev）；env 覆盖（AF_BR_COREMIND_AGENT_ID/AGENT_ID/BRIDGE_URL）在
+    // load_sidecar_config 内完成。所有转发路径读取 g_sidecar_config，替换旧硬编码 outfit-assistant。
+    g_sidecar_config = sidecar::load_sidecar_config(sidecar::find_sidecar_config_path(argc, argv));
+
     std::string listen_addr = "0.0.0.0:23767";
-    std::string bridge_url = "http://127.0.0.1:8199";
+    std::string bridge_url = g_sidecar_config.bridge_url;  // 配置文件默认值，--bridge-url 可覆盖
     const char* env_uds = std::getenv("AF_PLUGIN_UDS_FILE");
     std::string uds_socket = env_uds ? env_uds : "";
     std::string llm_api_url;
@@ -645,6 +657,8 @@ int main(int argc, char* argv[]) {
             uds_socket = argv[++i];
         } else if (arg == "--llm-api-url" && i + 1 < argc) {
             llm_api_url = argv[++i];
+        } else if (arg == "--config" && i + 1 < argc) {
+            i++;  // 配置路径已由 find_sidecar_config_path 提前解析，这里只消费参数避免 usage 报错
         } else if (arg == "--coremind-mode") {
             coremind_mode = true;
         } else if (arg == "-processType" && i + 1 < argc) {
@@ -655,6 +669,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "Usage: coremind_bridge"
                       << " --listen <ip:port>"
                       << " --bridge-url <url>"
+                      << " [--config <path>]"
                       << " [--uds-socket <path>]"
                       << " [--llm-api-url <url>]"
                       << " [--coremind-mode]"
@@ -689,6 +704,11 @@ int main(int argc, char* argv[]) {
         // 不注入的话 SidecarRouter 用 class 默认值 http://127.0.0.1:8199（不含 /health），
         // 导致转发 path 缺 /health 前缀，bridge 新架构 404。
         SidecarRouter::set_bridge_url(bridge_url);
+        // 注入转发目标 agent（configs/{env}/sidecar.json 加载值，含 env 覆盖），
+        // 替换旧硬编码 outfit-assistant；HandleUserRequest / HandleScheduleTaskAbility 读取。
+        SidecarRouter::set_agent_config(
+            g_sidecar_config.agent.name, g_sidecar_config.agent.version,
+            g_sidecar_config.agent.capabilities);
 
         std::signal(SIGTERM, signal_handler);
         std::signal(SIGINT, signal_handler);
@@ -790,19 +810,17 @@ static void configure_server(httplib::Server& svr, const std::string& bridge_url
             [](const httplib::Request& req, httplib::Response& res) {
         std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] REQ " << req.method << " " << req.path << std::endl;
         Json::Value json;
-        json["agent_name"] = "outfit-assistant";
-        json["version"] = "1.0.0";
+        json["agent_name"] = g_sidecar_config.agent.name;
+        json["version"] = g_sidecar_config.agent.version;
         json["capabilities"] = Json::Value(Json::arrayValue);
-        json["capabilities"].append("outfit_consult");
-        json["capabilities"].append("weather_query");
-        json["capabilities"].append("occasion_guide");
-        json["capabilities"].append("image_generation");
-        json["capabilities"].append("video_generation");
+        for (const auto& cap : g_sidecar_config.agent.capabilities) {
+            json["capabilities"].append(cap);
+        }
         json["endpoint"] = "/coremind/systemagent/v1/callback";
         json["async_mode"] = true;
         set_json_response(res, json);
         std::cerr << "[" << sidecar::log_timestamp() << "] [coremind_bridge] RES " << req.method << " " << req.path
-                  << " 200 | body={\"agent_name\":\"outfit-assistant\"}" << std::endl;
+                  << " 200 | body={\"agent_name\":\"" << g_sidecar_config.agent.name << "\"}" << std::endl;
     });
 
     // ═══════════════════════════════════════════════
