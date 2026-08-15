@@ -33,7 +33,7 @@ AgentFlow 已具备把外部 Python agent 框架嵌入 workflow node 的基础�
 
 依赖与运行时：包内 `scripts/setup_env.sh` 用 uv 建独立 venv，editable 安装 deepsearch（指向 `~/atomGitProjects/deepsearch/deepsearch`，**不修改其源码**），随后**卸载 pip 拉入的 `openjiuwen`**，node 启动时 `sys.path.insert(0, vendor/openjiuwen/python)` 强制使用仓库 vendored 副本；worker 通过 `PYTHON_PATH` 环境变量选用该 venv 的 python（`exe_loader.cpp:266-286` 支持 venv 目录/二进制路径解析）。
 
-测试独立闭环：包内 `tests/run_tests.sh` 为唯一测试入口（因不可修改 `tests/e2e/CMakeLists.txt`，无法注册 ctest），分两段：(a) 适配层单测（本地 mock endpoint）；(b) **以包内 import 驱动方式运行 deepsearch 全量 pytest 套件**（默认 `-m "not llm"`，`RUN_LLM_TESTS=1` 时 opt-in 真实 LLM 用例）。
+测试独立闭环：**所有评测脚本与用例都收敛在包内 `tests/` 目录**——`tests/run_tests.sh` 为唯一测试入口（因不可修改 `tests/e2e/CMakeLists.txt`，无法注册 ctest），分两段：(a) 适配层单测（本地 mock endpoint）；(b) deepsearch 全量 pytest 用例——由同步脚本把 `$DEEPSEARCH_HOME/tests` **复制**到包内 `tests/deepsearch_suite/` 后在包内运行（默认 `-m "not llm"`，`RUN_LLM_TESTS=1` 时 opt-in 真实 LLM 用例），**不在外部目录原地执行、不引用外部测试路径**；AgentFlow 仓库根目录 `tests/` 一律不动。
 
 ## 3. 约束与假设
 
@@ -42,6 +42,7 @@ AgentFlow 已具备把外部 Python agent 框架嵌入 workflow node 的基础�
 - 不修改 `examples/agent/openjiuwen_deepsearch/` 之外的任何**代码**。具体包括：
   - 不修改 AgentFlow 的 C++/CMake/SDK（含 `publish/sdk/python/agentflow_databus.py`）；
   - 不修改 `tests/e2e/CMakeLists.txt`——因此**无法注册 ctest**（ctest 注册依赖该文件的 `if(EXISTS ...) add_test` 模式，见 `tests/e2e/CMakeLists.txt:100-135`），测试只能通过包内 standalone 脚本运行；
+  - **不修改、不新增 AgentFlow 仓库根目录 `tests/` 下的任何内容**——所有评测脚本与用例都位于本包 `tests/` 目录内；
   - 不修改 `vendor/openjiuwen/python`（vendored agent-core 副本）；
   - 不修改 `~/atomGitProjects/agent-core` 与 `~/atomGitProjects/deepsearch` 源码；对二者的任何适配（monkey-patch、子类化、配置注入）都放在本包 `nodes/python/compat/` 适配层完成。
 - 本文档例外：`docs/enhancements/040-*.md`（本文件）与 `docs/enhancements/README.md` 索引行属**文档交付物**，非代码变更。
@@ -402,14 +403,17 @@ examples/agent/openjiuwen_deepsearch/
 ├── scripts/
 │   ├── setup_env.sh                           # §7.6
 │   └── build_and_run.sh                       # ./build.sh build && ./build/example_openjiuwen_deepsearch_tui examples/agent/openjiuwen_deepsearch/package
-└── tests/
+└── tests/                                     # 评测脚本与用例全部收在包内（AgentFlow 根 tests/ 不动）
     ├── run_tests.sh                           # 唯一测试入口（不能改 CMakeLists, 无法注册 ctest）
+    ├── pytest_package.ini.in                  # ini 模板（run_tests.sh 展开绝对路径; markers/pythonpath/asyncio_mode）
     ├── conftest.py                            # 适配层测试夹具 (mock endpoint)
-    ├── pytest_deepsearch.ini.in               # deepsearch 全量套件的 ini 模板（run_tests.sh 展开绝对路径）
-    ├── test_agentflow_llm_client.py           # mock /chat/completions: invoke/stream/tool_calls/SSE
-    ├── test_env_resolver.py                   # 优先级归并 / 密钥不落盘
-    ├── test_deepsearch_runner_wiring.py       # agent_config 构造 + registry 注册 + fake agent.run 聚合
-    ├── test_memory_adapter.py
+    ├── adapter/                               # 适配层单测（-m adapter, 秒级）
+    │   ├── test_agentflow_llm_client.py       # mock /chat/completions: invoke/stream/tool_calls/SSE
+    │   ├── test_env_resolver.py               # 优先级归并 / 密钥不落盘
+    │   ├── test_deepsearch_runner_wiring.py   # agent_config 构造 + registry 注册 + fake agent.run 聚合
+    │   └── test_memory_adapter.py
+    ├── sync_deepsearch_tests.sh               # 幂等同步: cp -R $DEEPSEARCH_HOME/tests -> tests/deepsearch_suite/
+    ├── deepsearch_suite/                      # deepsearch 全量用例副本（.gitignore, 同步脚本生成）
     └── auto_deepsearch_dialog.sh              # 黑盒冒烟（手动, 需密钥; 不注册 ctest）
 ```
 
@@ -451,34 +455,37 @@ examples/agent/openjiuwen_deepsearch/
 | 功能点 | 现有 Examples 覆盖 | 更新建议 |
 |--------|-------------------|---------|
 | python_script node + AF_* env 注入 | ✅ multi_session_chat | 无 |
-| function-calling LLM 通路（messages/tools） | ❌ 无先例 | 本包 `test_agentflow_llm_client.py`（mock SSE + tool_calls） |
+| function-calling LLM 通路（messages/tools） | ❌ 无先例 | 本包 `tests/adapter/test_agentflow_llm_client.py`（mock SSE + tool_calls） |
 | 长耗时 node（timeout_ms 显式配置） | ❌（现有 node 均 <30s） | workflow JSON `timeout_ms:3600000` + react 快路径回归 |
-| 流式聚合 + DataBus 进度事件 | ❌ | `test_deepsearch_runner_wiring.py` |
+| 流式聚合 + DataBus 进度事件 | ❌ | `tests/adapter/test_deepsearch_runner_wiring.py` |
 | 外部重型 SDK 依赖管理（venv/PYTHON_PATH/vendored 校验） | ❌ | setup_env.sh 幂等重跑 + 校验单测 |
 | 跨 run conversation resume（checkpointer） | ❌ | 双次 react run 复用 conversation_id，断言 ctx 快照 |
 
-### 9.2 测试执行设计（唯一入口 `tests/run_tests.sh`，因不可改 CMakeLists 无法注册 ctest）
+### 9.2 测试执行设计（唯一入口 `tests/run_tests.sh`，用例全部位于包内，AgentFlow 根 `tests/` 不动）
 
 ```bash
 # 1) 环境准备（幂等）
 bash scripts/setup_env.sh
-# 2) 适配层单测（本地 mock OpenAI endpoint，秒级）
-"$VENV_DIR/bin/python" -m pytest examples/agent/openjiuwen_deepsearch/tests -m adapter
-# 3) deepsearch 全量套件 —— 包内 import 驱动（不改 deepsearch 任何代码）
-#    run_tests.sh 由 tests/pytest_deepsearch.ini.in 生成 ini（展开 DEEPSEARCH_HOME /
+# 2) deepsearch 全量用例同步进包内（幂等, 只读源目录, 不修改 deepsearch 任何代码）
+bash tests/sync_deepsearch_tests.sh   # rm -rf tests/deepsearch_suite && cp -R "$DEEPSEARCH_HOME/tests" tests/deepsearch_suite/
+# 3) 适配层单测（本地 mock OpenAI endpoint，秒级）
+"$VENV_DIR/bin/python" -m pytest -c tests/pytest_package.ini tests/adapter -m adapter
+# 4) deepsearch 全量套件 —— 在包内 tests/deepsearch_suite 上运行
+#    run_tests.sh 由 tests/pytest_package.ini.in 生成 ini（展开 DEEPSEARCH_HOME /
 #    AgentFlow 仓库根绝对路径；asyncio_mode=strict、markers unit/integration/llm、
-#    pythonpath 注入 vendored agent-core 与 DEEPSEARCH_HOME）
-"$VENV_DIR/bin/python" -m pytest -c tests/pytest_deepsearch.ini \
-    "$DEEPSEARCH_HOME/tests" -m "not llm"
-# 4) RUN_LLM_TESTS=1 且密钥齐备时加跑 -m llm
-# 5) 总退出码 = 各段 OR
+#    pythonpath 注入 vendored agent-core 与 DEEPSEARCH_HOME——仅 import 路径, 非测试路径）
+"$VENV_DIR/bin/python" -m pytest -c tests/pytest_package.ini tests/deepsearch_suite -m "not llm"
+# 5) RUN_LLM_TESTS=1 且密钥齐备时加跑 -m llm
+# 6) 总退出码 = 各段 OR
 ```
 
 要点：
 
-- **import 驱动的兼容性意义**：第 3 段运行时 `openjiuwen` 由 ini 的 `pythonpath` 解析到 **vendored 副本**——deepsearch 全量 131 文件约 1823 用例在 vendored agent-core 上全部通过，即 §3 版本偏差风险的直接证明。
-- deepsearch 自带 `tests/conftest.py`（主线程 event loop fixture）位于被收集路径内，pytest 自动加载生效，无需复制。
-- 用 `-c` 指定包内生成 ini 而非依赖 deepsearch 的 pyproject，保证 asyncio_mode/markers/pythonpath 由本包控制且 rootdir 行为确定。
+- **用例位置约束**：所有评测脚本与用例（适配层单测 + deepsearch 全量副本）都在 `examples/agent/openjiuwen_deepsearch/tests/` 下；不在外部目录原地执行 pytest，不引用 `$DEEPSEARCH_HOME/tests` 作为测试路径，更不动 AgentFlow 根 `tests/`。
+- **同步而非引用的原因**：deepsearch 用例集随其源码演进，`sync_deepsearch_tests.sh` 幂等全量刷新（先删后拷）保证每次跑的都是当前源码对应用例；副本目录 `.gitignore`，不入库、不手改——对 deepsearch 仍是只读操作。
+- **兼容性证明**：第 4 段运行时 `openjiuwen` 由 ini 的 `pythonpath` 解析到 **vendored 副本**——deepsearch 全量 131 文件约 1823 用例在 vendored agent-core 上全部通过，即 §3 版本偏差风险的直接证明。
+- deepsearch 自带的 `tests/conftest.py`（主线程 event loop fixture）随副本落在 `tests/deepsearch_suite/conftest.py`，位于被收集路径内自动生效；包级 `tests/conftest.py` 只服务 `tests/adapter/`，二者作用域隔离互不干扰。
+- 用 `-c` 指定包内生成 ini 而非依赖 deepsearch 的 pyproject，保证 asyncio_mode/markers/pythonpath 由本包控制且 rootdir 落在本包。
 
 ### 9.3 测试用例设计与独立性
 
@@ -537,3 +544,4 @@ bash scripts/setup_env.sh
 | 版本 | 刷新时间 | 刷新人 | 刷新内容 |
 |------|---------|--------|---------|
 | v1.0 | 2026-08-15 | DanielKernel | 初始版本（tbd，编码前待人工确认） |
+| v1.1 | 2026-08-15 | DanielKernel | 测试布局调整：评测脚本与 deepsearch 用例副本全部收敛到包内 `tests/`（`sync_deepsearch_tests.sh` 同步至 `tests/deepsearch_suite/` 后在包内运行），不再以 `$DEEPSEARCH_HOME/tests` 为 pytest 测试路径；明确不动 AgentFlow 根 `tests/` |
