@@ -34,6 +34,11 @@ class SpanWriter:
                 # 找项目根：从本文件向上找 pyproject.toml
                 project_root = self._find_project_root()
                 output_dir = str(project_root / "trace_output" / "python")
+            else:
+                # 注入值语义 = trace 根目录（daemon 已绝对化，与 C++ task_*.ndjson 同根），
+                # Python span 统一追加 /python 子目录（与兜底路径、文档 §6.4 布局一致，
+                # viewer 单目录扫两侧时在 trace_output/python/ 下找到 Python span）
+                output_dir = str(Path(output_dir) / "python")
         self._output_dir = Path(output_dir)
         self._file_lock = threading.Lock()
 
@@ -46,12 +51,18 @@ class SpanWriter:
 
     @staticmethod
     def _find_project_root() -> Path:
-        """从本文件位置向上找 pyproject.toml 标记项目根。"""
+        """从本文件位置向上找仓库根标记（.git / CMakeLists.txt）。
+
+        不能以 pyproject.toml 为标记：本包位于 packages/agentflow-runtime/，
+        向上找第一个 pyproject.toml 会命中包自身目录，导致兜底目录错落为
+        packages/agentflow-runtime/trace_output/python/，与 C++ trace_output/ 不同根。
+        仓库根以 .git（git 仓库）或 CMakeLists.txt（agentflow 构建根）为标记。
+        """
         p = Path(__file__).resolve()
         for parent in [p] + list(p.parents):
-            if (parent / "pyproject.toml").exists():
+            if (parent / ".git").exists() or (parent / "CMakeLists.txt").exists():
                 return parent
-        # fallback：向上 5 层
+        # fallback：无标记时退回包根（与旧行为一致，仅异常环境触发）
         return p.parents[5] if len(p.parents) > 5 else p.parent
 
     def write_span(self, span: TraceSpan) -> None:

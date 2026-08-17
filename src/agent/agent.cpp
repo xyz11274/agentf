@@ -967,6 +967,13 @@ void MMAgent::handle_routed_request_message(const std::shared_ptr<MMAgentSession
   if(sandbox_ep_it != message.metadata.end()) {
     session->set_metadata("sandbox_endpoint", sandbox_ep_it->second);
   }
+  // 修复(2026-08-14):sandbox_mode 与 sandbox_endpoint 同源持久化——否则
+  // build_runtime_task 的 session metadata 回退分支(见下)永不触发,
+  // coordinator 子进程缺 AF_SANDBOX_MODE 会落到 HostExecutor(工厂选错执行器)。
+  const auto sandbox_mode_it = message.metadata.find("sandbox_mode");
+  if(sandbox_mode_it != message.metadata.end()) {
+    session->set_metadata("sandbox_mode", sandbox_mode_it->second);
+  }
   session->set_metadata("session_id", session->get_session_id());
   session->enqueue_received_message(message);
 
@@ -1287,17 +1294,35 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
   // Pass sandbox_endpoint + sandbox_mode from message metadata to task parameters
   // for worker env var injection (AF_SANDBOX_ENDPOINT + AF_SANDBOX_MODE).
   // factory.py 同时读这两个 env 才能选对 executor；漏 sandbox_mode 会让 factory 落到 HostExecutor。
-  if(const auto sandbox_it = message.metadata.find("sandbox_endpoint");
-     sandbox_it != message.metadata.end() && !sandbox_it->second.empty()) {
-    task->set_parameter("sandbox_endpoint", sandbox_it->second);
-    Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set sandbox_endpoint=%s for task=%s",
-                              sandbox_it->second.c_str(), task_config.task_id.c_str());
+  // 修复(2026-08-14)：coordinator 等 runtime 内部任务的消息 metadata 不含 sandbox_endpoint
+  // （handle_intent 的注入只落在 skill 消息上），而 session metadata 已由 L966-968 保存
+  // intent 请求的 sandbox_endpoint → 缺省回退 session metadata，否则 coordinator 子进程
+  // 无 AF_SANDBOX_ENDPOINT，e2b 产物（write_file 生成的 html 等）无法从沙箱拉回宿主机。
+  std::string sandbox_endpoint_val;
+  const auto sandbox_it = message.metadata.find("sandbox_endpoint");
+  if(sandbox_it != message.metadata.end() && !sandbox_it->second.empty()) {
+    sandbox_endpoint_val = sandbox_it->second;
+  } else if(session->get_metadata("sandbox_endpoint", sandbox_endpoint_val) && !sandbox_endpoint_val.empty()) {
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] sandbox_endpoint from session metadata for task=%s",
+                              task_config.task_id.c_str());
   }
-  if(const auto mode_it = message.metadata.find("sandbox_mode");
-     mode_it != message.metadata.end() && !mode_it->second.empty()) {
-    task->set_parameter("sandbox_mode", mode_it->second);
+  if(!sandbox_endpoint_val.empty()) {
+    task->set_parameter("sandbox_endpoint", sandbox_endpoint_val);
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set sandbox_endpoint=%s for task=%s",
+                              sandbox_endpoint_val.c_str(), task_config.task_id.c_str());
+  }
+  std::string sandbox_mode_val;
+  const auto mode_it = message.metadata.find("sandbox_mode");
+  if(mode_it != message.metadata.end() && !mode_it->second.empty()) {
+    sandbox_mode_val = mode_it->second;
+  } else if(session->get_metadata("sandbox_mode", sandbox_mode_val) && !sandbox_mode_val.empty()) {
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] sandbox_mode from session metadata for task=%s",
+                              task_config.task_id.c_str());
+  }
+  if(!sandbox_mode_val.empty()) {
+    task->set_parameter("sandbox_mode", sandbox_mode_val);
     Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set sandbox_mode=%s for task=%s",
-                              mode_it->second.c_str(), task_config.task_id.c_str());
+                              sandbox_mode_val.c_str(), task_config.task_id.c_str());
   }
   if(const auto selected_skills_it = message.metadata.find("selected_skills");
      selected_skills_it != message.metadata.end()) {

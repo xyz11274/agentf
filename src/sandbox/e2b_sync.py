@@ -254,6 +254,18 @@ def upload(sandbox_id: str, local_dir: str, remote_dir: str, manifest_path: str 
         _log(f"ERROR: make_dir({remote_dir}) failed: {e}")
         sys.exit(1)
 
+    # ── 远端存在性检查（§4.2.1，2026-08-15）────────────────────────────
+    # 内容寻址文件名（sha256[:16].ext）= 内容指纹：远端同名 ⇒ 同内容，跳过。
+    # 多轮对话中 sync_session_uploads 每轮触发，跳过已存在文件避免重复全量上传。
+    # list 失败降级为全量上传（保守：不丢文件，不 fail-fast）。
+    try:
+        remote_existing = set(_list_remote_files(sb, remote_dir))
+    except Exception as e:
+        _log(f"WARN: list remote files failed ({e}) — fallback to full upload")
+        remote_existing = set()
+    if remote_existing:
+        _log(f"upload: {len(remote_existing)} remote files already exist, skip same-name entries")
+
     # 批量上传：write_files 接受 [{path, data}, ...]
     # 注意：write_files 要求 path 是远端绝对路径
     batch = []
@@ -263,6 +275,8 @@ def upload(sandbox_id: str, local_dir: str, remote_dir: str, manifest_path: str 
 
     for rel_path, abs_path in entries:
         remote_path = f"{remote_dir}/{rel_path.as_posix()}"
+        if remote_path in remote_existing:
+            continue  # 内容寻址：远端同名即同内容，跳过（§4.2.1 幂等）
         try:
             with open(abs_path, "rb") as f:
                 content = f.read()
@@ -294,7 +308,12 @@ def upload(sandbox_id: str, local_dir: str, remote_dir: str, manifest_path: str 
 # ── download：远端目录 → 本地目录 ────────────────────────────────────
 
 def _list_remote_files(sb, remote_dir: str):
-    """列远端目录所有文件。e2b files.list 返回文件列表。"""
+    """列远端目录所有文件。e2b files.list 返回文件列表。
+
+    兼容两种 SDK 形态（2026-08-15 真实沙箱验证暴露）：
+    - 旧形态：EntryInfo 有 ``is_file()``/``is_dir()`` 方法
+    - 新形态：EntryInfo 是 dataclass，用 ``type`` 字段（FileType 枚举）判断
+    """
     try:
         entries = sb.files.list(remote_dir)
     except Exception as e:
@@ -303,10 +322,21 @@ def _list_remote_files(sb, remote_dir: str):
 
     for entry in entries:
         # entry.path 是远端绝对路径
-        if entry.is_file():
-            yield entry.path
-        elif entry.is_dir():
-            yield from _list_remote_files(sb, entry.path)
+        is_file_method = getattr(entry, "is_file", None)
+        if callable(is_file_method):
+            # 旧 SDK：方法形态
+            if entry.is_file():
+                yield entry.path
+            elif entry.is_dir():
+                yield from _list_remote_files(sb, entry.path)
+        else:
+            # 新 SDK：dataclass + type 字段（FileType 枚举，name 为 "FILE"/"DIR"）
+            entry_type = getattr(entry, "type", None)
+            type_name = (getattr(entry_type, "name", "") or str(entry_type)).upper()
+            if "FILE" in type_name:
+                yield entry.path
+            elif "DIR" in type_name:
+                yield from _list_remote_files(sb, entry.path)
 
 
 def _download_file_by_file(sb, remote_dir: str, local_root: Path) -> tuple[int, int]:

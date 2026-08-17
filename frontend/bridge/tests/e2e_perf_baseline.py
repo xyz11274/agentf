@@ -261,10 +261,17 @@ def _parse_daemon_log(log: Path) -> dict:
         int(x) for x in re.findall(r"\[llm_call\].*?<<<.*?latency=(\d+)ms", text)
     ]
 
-    # 工具执行
-    tool_execs: dict[str, list[int]] = {}
+    # 工具执行（v2 同一 exec 打印两行：带 sandbox_mode / 带 args，duration 差 0.1ms；
+    # 按 (name, int(duration)) 截断去重合并为同一次执行——对齐 aggregate_trace_logs.py 口径）
+    tool_execs: dict[str, list[float]] = {}
+    seen: set[tuple[str, int]] = set()
     for m in re.finditer(r"tool_exec name=(\w+) duration_ms=([\d.]+)", text):
-        tool_execs.setdefault(m.group(1), []).append(float(m.group(2)))
+        name, dur = m.group(1), float(m.group(2))
+        key = (name, int(dur))
+        if key in seen:
+            continue
+        seen.add(key)
+        tool_execs.setdefault(name, []).append(dur)
 
     def _last(seq):
         return seq[-1] if seq else None

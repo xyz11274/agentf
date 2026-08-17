@@ -154,3 +154,35 @@ def test_returns_tool_executor_interface(
 
     assert isinstance(executor, ToolExecutor)
     assert isinstance(executor, expected_type)
+
+
+# ---------------------------------------------------------------------------
+# sandbox_workspace_prefix — 沙箱 workspace 前缀（架构修复 W1 收敛）
+# ---------------------------------------------------------------------------
+
+def test_sandbox_workspace_prefix_e2b_mode(monkeypatch):
+    """e2b 模式返回沙箱 workspace 前缀(默认 /home/user/workspace)。
+
+    架构修复 W1(2026-08-14):沙箱环境读取从 skill_executor 渗漏收敛到 executors
+    factory 层——与 create_executor 同层读取 AF_SANDBOX_MODE,消除编排层
+    方法名泄漏底层实现(sandbox)的渗漏抽象。
+    """
+    from agentflow_runtime.executors.factory import sandbox_workspace_prefix
+
+    monkeypatch.setenv("AF_SANDBOX_MODE", "e2b")
+    monkeypatch.delenv("AF_SANDBOX_WORKSPACE", raising=False)
+    assert sandbox_workspace_prefix() == "/home/user/workspace"
+
+    monkeypatch.setenv("AF_SANDBOX_WORKSPACE", "/custom/ws")
+    assert sandbox_workspace_prefix() == "/custom/ws"
+
+
+def test_sandbox_workspace_prefix_non_e2b_returns_empty(monkeypatch):
+    """非 e2b 模式返回空串(无沙箱 workspace 语义)。"""
+    from agentflow_runtime.executors.factory import sandbox_workspace_prefix
+
+    monkeypatch.setenv("AF_SANDBOX_MODE", "local")
+    assert sandbox_workspace_prefix() == ""
+
+    monkeypatch.delenv("AF_SANDBOX_MODE", raising=False)
+    assert sandbox_workspace_prefix() == ""

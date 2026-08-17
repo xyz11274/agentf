@@ -240,15 +240,51 @@ def execute(tool_input: dict, sandbox_endpoint: str = None) -> str:
             if len(all_dirs) > len(dirs):
                 entry["dirs_truncated"] = True
                 entry["total_dirs"] = len(all_dirs)
+            # upload 目录额外透传图片确定性路径（OP-1，2026-08-16）：
+            # executor.list_dir 的 entry["path"] 已是当前执行环境可直接使用的路径
+            #（HostExecutor=宿主机绝对路径；e2b=沙箱内绝对路径），透传给 LLM 供
+            # outfit_vision --image 直接使用，消除"LLM 从文件名拼相对路径"的方差
+            #（001748 轮2 #5 拼 upload/xxx.png 失败 + find/pwd 探索的根因）。
+            if _dir == "upload":
+                upload_images = [
+                    {"name": e["name"], "path": e["path"]}
+                    for e in entries
+                    if not e.get("is_dir")
+                    and e["name"].lower().endswith((".png", ".jpg", ".jpeg", ".webp"))
+                ]
+                if upload_images:
+                    entry["upload_images"] = upload_images[:20]
             tree[_dir] = entry
         ctx["workspace_tree"] = tree
+
+        # 3.8 env：非动态环境信息探测（key 可用性 + 技能挂载，防探索性 bash）
+        # 背景（2026-08-16）：SKILL.md 文生图/视频章节原本写死 `[ -n "$DASHSCOPE_API_KEY" ]`
+        # 与 `ls ${SKILLS_DIR}/video-gen/...` 探测命令，每次触发一轮额外 LLM tool_call。
+        # 这些是非动态环境信息（key 是否注入、技能是否挂载），由本工具确定性探测
+        # 一次性返回（M7 识别脚本），LLM 直接基于返回推理，不再 bash 探测。
+        env_ctx: dict = {}
+        # key 可用性：executor 在目标执行环境（Host=宿主机 / e2b=沙箱内）探测
+        key_probe = executor.exec_command(
+            '[ -n "$DASHSCOPE_API_KEY" ] && echo KEY_YES || echo KEY_NO'
+        )
+        env_ctx["dashscope_key_available"] = bool(
+            key_probe.stdout and "KEY_YES" in key_probe.stdout
+        )
+        # 技能挂载：列 harness/skills 根目录，检查 forge-image-gen / video-gen
+        skills_root = f"{agent_pkg}/harness/skills" if agent_pkg else "harness/skills"
+        skill_dirs = {e["name"] for e in executor.list_dir(skills_root) if e.get("is_dir")}
+        env_ctx["skills"] = {
+            "forge_image_gen": "forge-image-gen" in skill_dirs,
+            "video_gen": "video-gen" in skill_dirs,
+        }
+        ctx["env"] = env_ctx
 
         # 4. 新用户标记（LLM 可据此走 ask_user 分支，不额外探索）
         ctx["is_new_user"] = not ctx["profile_exists"]
 
         # 5. _hint：声明本次已返回的字段（防探索性 bash，CHANGE-20260811-042）
         # LLM 看到 _hint 后不得再用 bash 探索/探测/ls 重复获取这些数据
-        returned = [k for k in ("profile_content", "history_files", "weather", "style_guide", "workspace_tree") if ctx.get(k)]
+        returned = [k for k in ("profile_content", "history_files", "weather", "style_guide", "workspace_tree", "env") if ctx.get(k)]
         ctx["_hint"] = (
             "本工具已返回以下字段(权威数据,直接使用): "
             + ", ".join(returned)
@@ -256,6 +292,12 @@ def execute(tool_input: dict, sandbox_endpoint: str = None) -> str:
             "（禁止 ls 目录、[ -n 探测 key、ls weather.py/scripts/references、查看档案目录、"
             "查 upload/ 上传图存在性）——workspace_tree 已列出关键目录树（upload/memory/outputs），"
             "上传图存在性与档案目录结构直接看 workspace_tree，如需要这些数据,直接基于本返回推理。"
+            "upload/ 内图片的确定性路径见 workspace_tree.upload.upload_images[].path"
+            "（executor 已翻译为当前执行环境可直接使用的路径），outfit_vision --image 直接用该 path，"
+            "禁止拼相对路径（如 upload/xxx.png）或 find/ls 探测图片位置。"
+            "env 已返回非动态环境信息：dashscope_key_available（DASHSCOPE_API_KEY 是否可用）"
+            "与 skills.forge_image_gen / skills.video_gen（文生图/视频技能是否挂载）——"
+            "生成图/视频前直接看 env，**禁止再用 bash `[ -n $VAR ]` 探测 key 或 ls 技能目录**。"
         )
 
         return json.dumps(ctx, ensure_ascii=False)

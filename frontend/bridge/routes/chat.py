@@ -29,7 +29,11 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 
 from client import DaemonClient, DaemonError
 from config import settings
-from content_serializer import prepare_content_for_daemon
+from content_serializer import (
+    derive_history_user_messages,
+    prepare_content_for_daemon,
+    serialize_content_for_storage,
+)
 from models import ChatChunk, ChatDone, ChatRequest, ContentPart
 from providers import SessionProvider
 from routes.conversations import get_store, ConversationRecord
@@ -342,6 +346,13 @@ async def _run_turn(
 
     this_turn_text = prepare_content_for_daemon(request.content, agent_id=agent_id,
                                                  user_id=request.user_id, client_id=request.client_id)
+    # I-DERIV（03-bridge-session-persistence.md §1.3）：历史 user 消息存的是原始
+    # content（含 base64 真相源），拼 daemon messages 前消费时派生路径文本。
+    if history_messages:
+        history_messages = derive_history_user_messages(
+            history_messages, agent_id=agent_id,
+            user_id=request.user_id, client_id=request.client_id,
+        )
     messages_payload = (
         [*history_messages, {"role": "user", "content": this_turn_text}]
         if history_messages
@@ -637,7 +648,7 @@ async def _run_turn(
             )
             await provider.save_dialogue(
                 session_id=sess["id"],
-                user_input=_content_to_text(request.content),
+                user_input=serialize_content_for_storage(request.content),
                 agent_response=full_content,
                 dialogue_id=dialogue_id,
                 agent_name=agent_id,

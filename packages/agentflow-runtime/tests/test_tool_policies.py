@@ -54,15 +54,40 @@ def test_classify_tool_bash_read_markers():
     assert classify_tool("bash", {"command": "cat a.md"}) == "read"
     assert classify_tool("bash", {"command": "ls -la"}) == "read"
     assert classify_tool("bash", {"command": "echo hello"}) == "read"
-    assert classify_tool("bash", {"command": "python3 weather.py 北京"}) == "read"
+    # 业务脚本名不在框架只读白名单（2026-08-16 用户指正：框架层不感知业务脚本名，
+    # 无法从命令行判断脚本只读 → 保守判 write 串行）
+    assert classify_tool("bash", {"command": "python3 weather.py 北京"}) == "write"
 
 
 def test_classify_tool_bash_write_markers():
     assert classify_tool("bash", {"command": "mv a b"}) == "write"
     assert classify_tool("bash", {"command": "rm -rf /tmp/x"}) == "write"
     assert classify_tool("bash", {"command": "mkdir -p out"}) == "write"
-    assert classify_tool("bash", {"command": "python3 generate.py --prompt x"}) == "write"
     assert classify_tool("bash", {"command": "echo x > /tmp/a.txt"}) == "write"
+
+
+def test_classify_tool_bash_parallel_write():
+    """gen_asset.py 生成新文件（--output 指定、互不覆盖）→ parallel-write（可并行）。
+
+    2026-08-16 并行优化：两张图（outfit-1.png / outfit-2.png）各自独立 bash 调用
+    gen_asset.py，写不同新文件互不依赖 → 归入并行批次（与 write_file 覆盖语义不同）。
+    """
+    assert classify_tool(
+        "bash", {"command": "python3 gen_asset.py --prompt x --output ./assets/a.png"}
+    ) == "parallel-write"
+    assert classify_tool(
+        "bash", {"command": "python3 gen_asset.py --prompt y --output ./assets/b.png"}
+    ) == "parallel-write"
+
+
+def test_classify_tool_parallel_write_excludes_dangerous():
+    """gen_asset.py 命令含重定向/删除/移动等副作用标记 → 退化为保守串行 write。"""
+    assert classify_tool(
+        "bash", {"command": "python3 gen_asset.py --prompt x > /tmp/a.log 2>&1"}
+    ) == "write"
+    assert classify_tool(
+        "bash", {"command": "python3 gen_asset.py --prompt x && rm -rf /tmp/y"}
+    ) == "write"
 
 
 def test_classify_tool_unknown_conservative():
@@ -90,6 +115,24 @@ def test_build_batches_read_write_groups():
     assert [t["id"] for t in batches[0]] == ["t1", "t2"]   # 并行批
     assert [t["id"] for t in batches[1]] == ["t3"]        # 写串行批
     assert [t["id"] for t in batches[2]] == ["t4", "t5"]  # 并行批
+
+
+def test_build_batches_generate_parallel_group():
+    """[gen,gen,写,gen] → [[gen,gen],[写],[gen]]——两个 gen_asset.py 归并行批。
+
+    2026-08-16 并行优化核心：两张图各自独立 bash 调用 gen_asset.py → 并行执行。
+    """
+    tcs = [
+        _mk_tc("bash", "python3 gen_asset.py --prompt a --output ./assets/a.png", "g1"),
+        _mk_tc("bash", "python3 gen_asset.py --prompt b --output ./assets/b.png", "g2"),
+        _mk_tc("write_file", tc_id="w1"),
+        _mk_tc("bash", "python3 gen_asset.py --prompt c --output ./assets/c.png", "g3"),
+    ]
+    batches = build_batches(tcs)
+    assert len(batches) == 3, f"应 3 个批次，实际 {batches}"
+    assert [t["id"] for t in batches[0]] == ["g1", "g2"]  # 两个 gen_asset.py 并行
+    assert [t["id"] for t in batches[1]] == ["w1"]        # 写串行
+    assert [t["id"] for t in batches[2]] == ["g3"]        # 单个 gen_asset.py 独立批
 
 
 def test_build_batches_all_read_single_batch():
@@ -145,6 +188,31 @@ def test_execute_in_batches_serial_writes():
     _, s1, e1 = calls[0]
     _, s2, _ = calls[1]
     assert s2 >= e1, f"写工具应串行（s2 >= e1），实际 s2={s2:.3f} e1={e1:.3f}"
+
+
+def test_execute_in_batches_parallel_generate_writes():
+    """两个 gen_asset.py（parallel-write）并行：时间戳重叠（不是墙钟阈值，抗 CI 抖动）。
+
+    2026-08-16 并行优化核心验证：两张图（outfit-1.png / outfit-2.png）各自独立
+    bash 调用 gen_asset.py 写不同新文件 → 框架并行执行。断言两个执行时间窗重叠
+    （max start < min end），比墙钟阈值（<0.4s）更稳健——加载的 CI 机器上线程
+    调度可能让第二 worker 启动延迟超过阈值，造成误报（P3 review）。
+    """
+    calls: list = []
+    tcs = [
+        _mk_tc("bash", "python3 gen_asset.py --prompt a --output ./assets/a.png", "g1"),
+        _mk_tc("bash", "python3 gen_asset.py --prompt b --output ./assets/b.png", "g2"),
+    ]
+    results = execute_in_batches(tcs, _timed_execute(calls))
+
+    assert len(results) == 2
+    assert results == ["ok:g1", "ok:g2"]  # 保序
+    # 并行 = 两个执行时间窗重叠（max start < min end）；串行则第二个 start >= 第一个 end
+    starts = [s for _, s, _ in calls]
+    ends = [e for _, _, e in calls]
+    assert max(starts) < min(ends), (
+        f"两个 gen_asset.py 应并行（时间窗重叠），starts={starts} ends={ends}"
+    )
 
 
 def test_execute_in_batches_mixed_preserves_order():

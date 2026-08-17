@@ -22,16 +22,19 @@ add_executable(coremind_bridge
     uds_model_proxy.cpp
     proxy_handler.cpp
     router_logic.cpp   # 纯协议逻辑（无 CMF 依赖），dev/main.cpp 与生产 sidecar_router 共用
+    acm_client.h       # ACM 客户端声明 + 公共纯函数（始终编译，头文件）
 )
 
 if(COREMIND_ENABLED)
     target_sources(coremind_bridge PRIVATE
         resolve_handler.cpp
         sidecar_router.cpp
+        acm_client.cpp       # 生产 ACM 客户端（SDK HttpClient::GetAcmUrl + Http1CertSendRequest）
     )
 else()
     target_sources(coremind_bridge PRIVATE
         resolve_handler_stub.cpp
+        acm_client_stub.cpp  # dev stub ACM 客户端（httplib 直连 AF_SIDECAR_ACM_URL）
     )
 endif()
 
@@ -145,6 +148,24 @@ if(GTest_FOUND)
     endif()
 
     gtest_discover_tests(test_sidecar_config)
+
+    # test_acm_client — ACM 客户端公共纯函数（acm_client.h inline,无网络/SDK 依赖）
+    add_executable(test_acm_client
+        tests/test_acm_client.cpp
+    )
+
+    target_include_directories(test_acm_client PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+
+    target_link_libraries(test_acm_client PRIVATE GTest::GTest GTest::Main)
+    if(GTest_DIR)
+        get_filename_component(GTEST_LIB_DIR "${GTest_DIR}/../.." ABSOLUTE)
+        set_target_properties(test_acm_client PROPERTIES
+            BUILD_RPATH "${GTEST_LIB_DIR}")
+    endif()
+
+    gtest_discover_tests(test_acm_client)
 else()
     message(STATUS "sidecar: GTest not found — skipping unit tests")
 endif()

@@ -41,6 +41,7 @@
 #include "proxy_handler.h"
 #include "sidecar_router.h"
 #include "router_logic.h"
+#include "acm_client.h"  // AcmClient::fetch_url / upload_file（产物 ACM 上传，L4 §4.2）
 #include "sidecar_config.h"
 
 // CoreMind framework headers — only available in Huawei build environment
@@ -391,6 +392,31 @@ static void forward_to_bridge(
             // 仅 bridge 完全成功时发 Completed UserOutput 回调；失败时上游只收 TaskStatus（对齐生产）
             if (ts_code == 200) {
                 auto completed = processor.make_completed();
+                // 产物 ACM 上传（L4 §4.2）：url 优先下载 → base64 兜底 → upload_file → 写 acm_file_id。
+                // 失败降级保留原 url，不阻断回调（I-degrade / I-acm-file-id）。
+                if (!completed.user_output_object.empty()) {
+                    Json::Value uoo;
+                    Json::CharReaderBuilder rdr;
+                    std::string uoo_err;
+                    std::istringstream uoo_in(completed.user_output_object);
+                    if (Json::parseFromStream(rdr, uoo_in, &uoo, &uoo_err)) {
+                        const int injected = sidecar::enrich_artifacts_with_acm(
+                            uoo,
+                            [](const std::string& url) { return sidecar::AcmClient::fetch_url(url); },
+                            [](const std::string& name, const std::string& content,
+                               const std::string& mime) {
+                                const std::vector<uint8_t> bytes(content.begin(), content.end());
+                                const auto res = sidecar::AcmClient::upload_file(name, bytes, mime);
+                                return res.success ? res.file_uuid : "";
+                            });
+                        if (injected > 0) {
+                            completed.user_output_object = Json::writeString(json_writer(), uoo);
+                            std::cerr << "[" << sidecar::log_timestamp()
+                                      << "] [coremind_bridge] ACM_ART_INJECT req=" << request_id
+                                      << " injected=" << injected << std::endl;
+                        }
+                    }
+                }
                 post_callback(completed.stream_status, completed.flag, completed.text,
                               completed.is_final, completed.user_output_object);
             }

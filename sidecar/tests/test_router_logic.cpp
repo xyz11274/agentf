@@ -769,3 +769,153 @@ TEST(SSEChunkProcessor, ErrorPayload_EmptyMessage_NotTreatedAsError) {
 
     EXPECT_FALSE(proc.has_error());
 }
+
+// ═══════════════════════════════════════════════════════════
+// 产物 ACM 上传编排 enrich_artifacts_with_acm（L4 §4.2 / I-acm-file-id / I-degrade）
+// ═══════════════════════════════════════════════════════════
+
+namespace {
+
+// 构造 UserOutputObject：{code:200101, data:{content:[...]}}
+Json::Value make_uoo(const std::vector<Json::Value>& items) {
+    Json::Value uoo;
+    uoo["code"] = 200101;
+    for (const auto& it : items) {
+        uoo["data"]["content"].append(it);
+    }
+    return uoo;
+}
+
+// 构造单条产物条目
+Json::Value make_artifact(const std::string& name, const std::string& url = "",
+                          const std::string& data_base64 = "") {
+    Json::Value it;
+    it["type"] = "image";
+    it["name"] = name;
+    it["mime_type"] = "image/png";
+    if (!url.empty()) it["url"] = url;
+    if (!data_base64.empty()) it["data_base64"] = data_base64;
+    return it;
+}
+
+}  // namespace
+
+TEST(AcmArtifactEnrich, TC_ACM_101_UrlPriorityUploadsAndInjectsFileId) {
+    // url 优先：fetch_fn 命中 → upload_fn 收到内容 → acm_file_id 注入
+    auto uoo = make_uoo({make_artifact("look.png", "http://bridge/api/artifacts/look.png")});
+
+    std::vector<std::string> fetched_urls;
+    std::vector<std::string> uploaded_names;
+    const int injected = enrich_artifacts_with_acm(
+        uoo,
+        [&](const std::string& url) {
+            fetched_urls.push_back(url);
+            return std::string("\x89PNG\x0d\x0a", 6);  // 模拟 url 下载 bytes
+        },
+        [&](const std::string& name, const std::string&, const std::string&) {
+            uploaded_names.push_back(name);
+            return "acm-id-look.png";  // 上传成功返回 file_uuid
+        });
+
+    EXPECT_EQ(injected, 1);
+    ASSERT_EQ(fetched_urls.size(), 1u);
+    EXPECT_EQ(fetched_urls[0], "http://bridge/api/artifacts/look.png");
+    ASSERT_EQ(uploaded_names.size(), 1u);
+    EXPECT_EQ(uploaded_names[0], "look.png");
+    // acm_file_id 注入 + 原 url 保留（降级）
+    EXPECT_EQ(uoo["data"]["content"][0]["acm_file_id"].asString(), "acm-id-look.png");
+    EXPECT_EQ(uoo["data"]["content"][0]["url"].asString(), "http://bridge/api/artifacts/look.png");
+}
+
+TEST(AcmArtifactEnrich, TC_ACM_102_NoUrlUsesBase64Fallback) {
+    // 无 url → base64 兜底解码后上传
+    // "Hello" → SGVsbG8=
+    auto uoo = make_uoo({make_artifact("look.png", "", "SGVsbG8=")});
+
+    int fetched = 0;
+    std::string uploaded_content;
+    const int injected = enrich_artifacts_with_acm(
+        uoo,
+        [&](const std::string&) { ++fetched; return ""; },
+        [&](const std::string&, const std::string& content, const std::string&) {
+            uploaded_content = content;
+            return "acm-id-b64";
+        });
+
+    EXPECT_EQ(injected, 1);
+    EXPECT_EQ(fetched, 0);  // 无 url，不触发 fetch
+    EXPECT_EQ(uploaded_content, "Hello");  // base64 解码后的内容
+    EXPECT_EQ(uoo["data"]["content"][0]["acm_file_id"].asString(), "acm-id-b64");
+}
+
+TEST(AcmArtifactEnrich, TC_ACM_103_UrlFetchFailFallsBackToBase64) {
+    // url 下载失败（fetch 返回空）→ base64 兜底
+    auto uoo = make_uoo({make_artifact("look.png", "http://bridge/x.png", "SGVsbG8=")});
+
+    std::string uploaded_content;
+    const int injected = enrich_artifacts_with_acm(
+        uoo,
+        [&](const std::string&) { return ""; },  // url 下载失败
+        [&](const std::string&, const std::string& content, const std::string&) {
+            uploaded_content = content;
+            return "acm-id-b64";
+        });
+
+    EXPECT_EQ(injected, 1);
+    EXPECT_EQ(uploaded_content, "Hello");  // 降级到 base64
+    EXPECT_EQ(uoo["data"]["content"][0]["acm_file_id"].asString(), "acm-id-b64");
+}
+
+TEST(AcmArtifactEnrich, TC_ACM_104_UploadFailKeepsUrlNoFileId) {
+    // 上传失败（upload 返回空）→ 不写 acm_file_id、保留 url、不阻断（I-degrade）
+    auto uoo = make_uoo({make_artifact("look.png", "http://bridge/api/artifacts/look.png")});
+
+    const int injected = enrich_artifacts_with_acm(
+        uoo,
+        [&](const std::string&) { return "\x89PNG"; },
+        [&](const std::string&, const std::string&, const std::string&) { return ""; });  // 上传失败
+
+    EXPECT_EQ(injected, 0);
+    EXPECT_FALSE(uoo["data"]["content"][0].isMember("acm_file_id"));
+    EXPECT_EQ(uoo["data"]["content"][0]["url"].asString(), "http://bridge/api/artifacts/look.png");
+}
+
+TEST(AcmArtifactEnrich, TC_ACM_105_NoContentSkipped) {
+    // url 下载失败 + 无 data_base64 → 该条跳过，不写 file_id、保留条目
+    auto uoo = make_uoo({make_artifact("look.png", "http://bridge/x.png")});
+
+    int upload_calls = 0;
+    const int injected = enrich_artifacts_with_acm(
+        uoo,
+        [&](const std::string&) { return ""; },
+        [&](const std::string&, const std::string&, const std::string&) { ++upload_calls; return "x"; });
+
+    EXPECT_EQ(injected, 0);
+    EXPECT_EQ(upload_calls, 0);
+    EXPECT_FALSE(uoo["data"]["content"][0].isMember("acm_file_id"));
+}
+
+TEST(AcmArtifactEnrich, TC_ACM_106_MultipleArtifactsMixedOutcome) {
+    // 多产物混合：第 1 条 url 成功注入，第 2 条上传失败保留 url，第 3 条无内容跳过
+    auto uoo = make_uoo({
+        make_artifact("a.png", "http://bridge/a.png"),
+        make_artifact("b.png", "http://bridge/b.png"),
+        make_artifact("c.png", "http://bridge/c.png"),
+    });
+
+    const int injected = enrich_artifacts_with_acm(
+        uoo,
+        [&](const std::string& url) {
+            return url.find("a.png") != std::string::npos ? "\x89PNG" : "";
+        },
+        [&](const std::string& name, const std::string& content, const std::string&) {
+            if (name == "a.png") return "acm-id-a";
+            if (name == "b.png" && !content.empty()) return "acm-id-b";
+            return "";
+        });
+
+    EXPECT_EQ(injected, 1);  // 仅 a 注入
+    EXPECT_EQ(uoo["data"]["content"][0]["acm_file_id"].asString(), "acm-id-a");
+    EXPECT_FALSE(uoo["data"]["content"][1].isMember("acm_file_id"));  // b：url 下载失败→无 base64→跳过
+    EXPECT_FALSE(uoo["data"]["content"][2].isMember("acm_file_id"));  // c：同上
+}

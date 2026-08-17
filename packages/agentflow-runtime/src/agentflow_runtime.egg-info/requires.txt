@@ -1,2 +1,8 @@
 openai>=1.0
 e2b-code-interpreter==2.8.1
+mcp<2,>=1.27
+PyYAML>=6.0
+requests>=2.31
+
+[dev]
+pytest>=8

@@ -392,6 +392,8 @@ bool load_config_file(DaemonConfig& config) {
     if (is_set(ftf)) config.flow_trace_file = ftf;
     std::string ftd = dsl::JsonHelper::get_string(trace, "flow_dir");
     if (is_set(ftd)) config.flow_trace_dir = ftd;
+    std::string tod = dsl::JsonHelper::get_string(trace, "output_dir");
+    if (is_set(tod)) config.trace_output_dir = tod;
   }
 
   // Daemon section
@@ -486,6 +488,25 @@ bool load_config_file(DaemonConfig& config) {
   }
 
 #ifdef AGENTFLOW_WITH_RAPIDJSON
+  // 深度校验：遍历 trace JSON 所有 key，检测是否被 C++ 代码加载
+  // 如果 JSON 中有 key 未被任何 dsl::JsonHelper::get_* 消费，说明遗漏了加载
+  if (trace) {
+    auto* rj_val = const_cast<dsl::RapidjsonValue*>(dynamic_cast<const dsl::RapidjsonValue*>(trace.get()));
+    if (rj_val && rj_val->get_raw_value() && rj_val->get_raw_value()->IsObject()) {
+      static const std::unordered_set<std::string> kKnownTraceKeys = {
+        "flow_file", "flow_dir", "output_dir",
+      };
+      for (auto it = rj_val->get_raw_value()->MemberBegin();
+           it != rj_val->get_raw_value()->MemberEnd(); ++it) {
+        std::string key(it->name.GetString(), it->name.GetStringLength());
+        if (kKnownTraceKeys.find(key) == kKnownTraceKeys.end()) {
+          Logger::instance().warn_f(
+              "[CONFIG] trace.%s exists in JSON but was NOT loaded by C++ (config.cpp missing get_* call)",
+              key.c_str());
+        }
+      }
+    }
+  }
   // 深度校验：遍历 sandbox JSON 所有 key，检测是否被 C++ 代码加载
   // 如果 JSON 中有 key 未被任何 dsl::JsonHelper::get_* 消费，说明遗漏了加载
   if (sandbox_node) {

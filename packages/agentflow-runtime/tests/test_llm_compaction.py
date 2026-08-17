@@ -20,6 +20,40 @@ from agentflow_runtime.compaction import (
 
 
 # ═══════════════════════════════════════════════════════════════════
+# _fold_by_role — 按 role 折叠消息到文件
+# ═══════════════════════════════════════════════════════════════════
+
+def test_fold_by_role_folds_tool_messages_to_file(tmp_path) -> None:
+    """_fold_by_role 将 tool 消息折叠到文件,返回 (result, folded_count)。
+
+    行为锁定(2026-08-14 架构修复 S2):封装 FoldSpec 上下文对象后行为不得变化——
+    tool 消息被折叠、_folded 标记、折叠文件落盘、seq 递增。
+    """
+    from agentflow_runtime.compaction import _fold_by_role, FoldSpec
+
+    msgs = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "thinking", "tool_calls": [{"function": {"name": "bash", "arguments": "{}"}}]},
+        {"role": "tool", "content": "result content", "tool_call_id": "call_1"},
+        {"role": "tool", "content": "second result", "tool_call_id": "call_2"},
+    ]
+    budget = 0  # 折叠后仍超预算 → 不提前返回,折叠所有候选
+    fold_spec = FoldSpec(seq=[0], session_id="sess1", dialogue_id="dlg1",
+                         fold_dir=str(tmp_path))
+    result, folded = _fold_by_role(msgs, "tool", "tool_result", budget, fold_spec)
+
+    assert folded == 2
+    folded_msgs = [m for m in result if m.get("_folded")]
+    assert len(folded_msgs) == 2
+    # 折叠文件落盘:fold_dir/sess1/dlg1/tool_result_{0,1}.txt
+    files = sorted(str(p) for p in tmp_path.rglob("tool_result_*.txt"))
+    assert len(files) == 2, f"应落盘 2 个折叠文件, 实际: {files}"
+    # seq 递增到 2
+    assert fold_spec.seq[0] == 2
+
+
+# ═══════════════════════════════════════════════════════════════════
 # estimate_message_tokens
 # ═══════════════════════════════════════════════════════════════════
 

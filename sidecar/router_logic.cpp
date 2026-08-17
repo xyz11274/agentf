@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <iostream>
 #include <sstream>
+#include "acm_client.h"  // acm_base64_decode（enrich_artifacts_with_acm 内容兜底解码）
 
 namespace sidecar {
 bool is_supported_message_type(const std::string& header_msg_type,
@@ -226,6 +227,72 @@ std::string build_user_output_object(const Json::Value& sse_artifacts) {
     w["indentation"] = "";
     w["emitUTF8"] = true;
     return Json::writeString(w, output);
+}
+
+// ── 产物 ACM 上传编排（L4 §4.2） ────────────────────────────────────
+int enrich_artifacts_with_acm(
+    Json::Value& user_output_object,
+    const std::function<std::string(const std::string& url)>& fetch_fn,
+    const std::function<std::string(const std::string& name,
+                                    const std::string& content,
+                                    const std::string& mime)>& upload_fn) {
+    if (!user_output_object.isObject()) return 0;
+    Json::Value& data = user_output_object["data"];
+    if (!data.isObject()) return 0;
+    Json::Value& content = data["content"];
+    if (!content.isArray()) return 0;
+
+    int injected = 0;
+    for (Json::Value& item : content) {
+        if (!item.isObject()) continue;
+        const std::string name = item.get("name", "").asString();
+        const std::string url = item.get("url", "").asString();
+        const std::string mime = item.get("mime_type", "application/octet-stream").asString();
+
+        // ① 内容获取：url 优先 → base64 兜底（用户拍板 2026-08-14）
+        std::string content_bytes;
+        std::string via;
+        if (!url.empty()) {
+            content_bytes = fetch_fn(url);
+            via = "url";
+            std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_DL"
+                      << " url=" << url << " via=url size=" << content_bytes.size() << std::endl;
+        }
+        if (content_bytes.empty()) {
+            const std::string b64 = item.get("data_base64", "").asString();
+            if (!b64.empty()) {
+                const auto decoded = acm_base64_decode(b64);
+                content_bytes.assign(decoded.begin(), decoded.end());
+                via = "base64";
+                std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_B64"
+                          << " name=" << name << " via=base64 size=" << content_bytes.size()
+                          << (url.empty() ? "" : " (url fetch failed)") << std::endl;
+            }
+        }
+        if (content_bytes.empty()) {
+            std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_SKIP"
+                      << " name=" << name
+                      << " reason=no content (url fetch failed and no data_base64)" << std::endl;
+            continue;
+        }
+
+        // ② 上传 ACM
+        const std::string file_id = upload_fn(name, content_bytes, mime);
+        if (!file_id.empty()) {
+            // ③ 成功 → 写 acm_file_id（保留原 url 作降级）
+            item["acm_file_id"] = file_id;
+            injected++;
+            std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_UP_OK"
+                      << " name=" << name << " file_id=" << file_id
+                      << " via=" << via << std::endl;
+        } else {
+            // ④ 失败 → 保留原 url，不阻断回调（L2 R-degrade）
+            std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_UP_ERR"
+                      << " name=" << name << " via=" << via
+                      << " (upload failed, keep original url)" << std::endl;
+        }
+    }
+    return injected;
 }
 
 // F7 展示层截断——base64 data URI（如 "data:image/png;base64,xxx"）递归截断。

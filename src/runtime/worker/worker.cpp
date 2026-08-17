@@ -20,6 +20,8 @@
 #include "runtime/flow_trace.h"
 #include "runtime/llm/streaming_client.h"
 #include "runtime/trace/trace_context.h"
+#include "runtime/trace/trace_manager.h"
+#include <filesystem>
 #include "sandbox/sandbox_helpers.h"  // SandboxHelpers::bash
 #include "utils/logger.h"
 
@@ -201,6 +203,20 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
         exec_config.env_vars.push_back("AF_PARENT_SPAN_ID=" + parent_span);
       }
     }
+  }
+
+  // Inject AF_TRACE_OUTPUT_DIR so the Python SpanWriter writes to the same
+  // directory as the C++ TraceManager（§6.4 同根合并：viewer 单目录扫两侧）。
+  // daemon 启动时 TraceManager::set_output_dir() 已绝对化（daemon.cpp 1c），此处再
+  // absolute() 双保险：即使 TraceManager 未被 daemon 初始化（单测直调 worker 场景），
+  // 注入的也是绝对路径——Python 子进程 cwd（working_dir/sandbox workdir）与 daemon
+  // 不同，相对路径必然落到错误分片。
+  {
+    std::string trace_out = runtime::trace::TraceManager::instance().output_dir();
+    std::error_code ec;
+    std::filesystem::path abs_out = std::filesystem::absolute(trace_out, ec);
+    exec_config.env_vars.push_back(
+        "AF_TRACE_OUTPUT_DIR=" + (ec ? trace_out : abs_out.string()));
   }
 
   std::atomic<bool>                  monitor_running{true};

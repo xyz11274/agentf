@@ -41,14 +41,25 @@ AgentFlow 框架要求每个 session **必须包含三个 task**：
 
 **不能消除任何一个 task** — 框架的消息路由、完成通知、并发计数等机制都依赖三个 task 的存在。
 
-### 1.3 当前实现状态（v3+）
+### 1.3 当前实现状态（v3+ → v5）
 
-本设计已实现并演进到 v3+ 架构，核心变化：
+本设计已实现并演进到 v5 架构。核心演进脉络：
 
+**v3+（本设计原始落地）**：
 1. **代码包化**：通用逻辑从 `examples/agent/harness_agent_v2/` 迁移到 `packages/agentflow-runtime/src/agentflow_runtime/`（pip 包），agent 包仅保留入口 wrapper 文件
 2. **单 Skill-Runner 路由**：所有 skill 通过 `exec_skill_key` → DataBus dispatch manifest 统一路由到单个 `skill-runner` task，不再为每个 skill 创建独立 task
 3. **dummy_pre_skill hook**：在 dispatcher 和 coordinator 之间插入预处理步骤
 4. **新增能力**：对话中断处理、流式进度推送、Artifact 管理、工具调用死循环检测、上下文压缩、可观测性事件等
+
+**v4（2026-08 中旬，结构拆分 + 工具执行抽象）**：
+5. **skill_executor 结构拆分**：god-module 拆分为 `artifact_pipeline.py`（产物收集/归位/上传）、`tool_registry.py`（`_LocalToolRegistry` 工具加载与 MCP 路由）、`skills_loader.py`（SKILL.md 加载）、`compaction.py`（上下文压缩）、`tool_policies.py`（工具并行批处理）——re-export 保持调用点不变
+6. **executors 工具执行抽象层**：`executors/factory.py::create_executor` 按 `AF_SANDBOX_MODE` 选择 provider（`E2BExecutor`/`HTTPExecutor`/`HostExecutor`），沙箱 workspace 前缀读取收敛到 factory 层
+7. **trace/ span 可观测性**：`trace/emit.py::emit_span`（context manager 生命周期 span）+ `span_event`（瞬时事件），NDJSON 落盘（`SpanWriter`）；`observability.py::emit_event` 转调 `span_event`（消除双轨）
+
+**v5（2026-08-14，hook 机制 + coordinator v2 + 共用逻辑收敛）**：
+8. **Hook 机制**：`hooks/`（registry/loader/engine）+ `events.py`（27 项事件目录）+ `mounts.py`（14 项挂载点）+ `context.py`（`AgentContext` 干预载体）——生命周期事件可订阅、可干预（改写 payload / 阻断动作），详见 `docs/design/features/hooks/hook-system.md`
+9. **Coordinator v2（Agent Loop 形态）**：`coordinator_agent_loop.py` 不暴露 `run_skills`，直接暴露 harness 工具集，进程内 messages 保留上下文；通过 `AF_COORDINATOR_VERSION` 环境变量在 v1/v2 间切换（见 `docs/design/features/agent-runtime/coordinator-as-agent-loop.md`）
+10. **共用逻辑收敛（霰弹式修复）**：v1/v2 共享的 `parse_agent_md`/`append_artifacts_markdown`/`llm_error_response`/`save_session_messages`/`bind_package_paths` 等收口到 `coordinator_common.py`（单一真相源 F4）
 
 详见 §15 实施情况。
 
@@ -74,7 +85,7 @@ Coordinator Skill (LLM while-loop, 真正的决策中枢)
 1. **Dispatcher 退化为透传** — 固定 `next_skills=["coordinator-skill"]`，不做任何决策
 2. **Coordinator 升级为决策中枢** — 用 LLM while-loop + `run_skills` 工具自主规划
 3. **Skill 参数化** — coordinator 通过 `run_skills` 指派"做什么"和"用什么技能"
-4. **通用 skill node** — 一个 `general_task_executor.py` 通过入参差异化，消灭 N 份模板代码
+4. **通用 skill node（v3+ 演进）** — coordinator 与 skill 拆分为两个独立节点（`coordinator_decide.py` / `skill_executor.py`），消灭 N 份模板代码；共享纯逻辑收口 `coordinator_common.py`
 5. **工具分层绑定** — coordinator 只绑 `run_skills`；skill task 绑领域工具
 
 ---
@@ -202,7 +213,7 @@ Coordinator 调用 run_skills
 |------|------|
 | **三层 task 保留** | 框架硬性要求，dispatcher/coordinator/skill 不可省略 |
 | **Dispatcher 退化为透传** | 固定 `next_skills=["dummy_pre_skill"]`，不做决策 |
-| **统一执行器** | coordinator-skill 和 generic-skill 共享 `general_task_executor.py`，差异仅在入参 |
+| **统一执行器** | `coordinator_decide.py` 与 `skill_executor.py` 两个独立节点（见 §2.2），共享的纯逻辑收口到 `coordinator_common.py` |
 | **Coordinator 事件驱动** | 每次 skill 完成触发一次 LLM 决策，框架 re-trigger 提供循环 |
 | **Skill 是被参数化的** | 不再是"我是什么"，而是"coordinator 让我做什么" |
 | **技能知识从 SKILL.md 动态加载** | 不硬编码在 node 中，coordinator 指定加载哪些 |
@@ -311,9 +322,11 @@ Coordinator 调用 run_skills
                     │    └── {exec_skill_key}       ← coordinator 写入   │
                     │                                    skill 读取        │
                     │                                                      │
-                    │  /session/{sid}/ctx/                                 │
-                    │    ├── coord_messages         ← coordinator 维护    │  §5.5
-                    │    └── coord_checkpoint       ← coordinator 维护    │  §5.5
+                    │  llm namespace（跨 dialogue 持久化）                 │
+                    │    └── session_messages       ← recorder 维护       │  §5.5
+                    │                                                      │
+                    │  sys/{did}/                                          │
+                    │    └── _coordinator_round     ← coordinator 维护     │  §5.5
                     └──────────────────────────────────────────────────────┘
 ```
 
@@ -378,50 +391,41 @@ skill_executor.py stdout → node.cpp 解析 JSON → runtime.cpp process_node
 
 ### 5.5 Coordinator 重入状态（通过 DataBus 持久化）
 
-Coordinator 是事件驱动的：每次被框架触发执行一次，然后交出控制权。**重入时必须恢复完整状态**，否则丢失对话上下文和已调度信息。
+Coordinator 是事件驱动的：每次被框架触发执行一次，然后交出控制权。**重入时必须恢复完整状态**，否则丢失对话上下文和调度轮次。
 
-**持久化的状态**（全部存储在 DataBus `ctx` 命名空间，跨 dialogue 持久化）：
+**持久化的状态**（当前实现事实，与 `recorder.py`/`coordinator_decide.py` 实际一致）：
 
-| 状态 | DataBus Key | 类型 | 说明 |
-|------|------------|------|------|
-| **对话历史** | `/session/{sid}/ctx/coord_messages` | JSON array | 完整的 messages 列表（含 system/user/assistant/tool 消息） |
-| **调度检查点** | `/session/{sid}/ctx/coord_checkpoint` | JSON object | 当前轮次、已启动 skill 集合、阶段标记 |
+| 状态 | DataBus Key | 类型 | 读写方 | 说明 |
+|------|------------|------|--------|------|
+| **对话历史** | `llm` namespace `session_messages` | JSON array | `recorder.read_session_messages()` / `write_session_messages()` | 完整 messages 列表（去掉 system，`save_session_messages` 存 `messages[1:]`） |
+| **调度轮次** | `sys` namespace `{dialogue_id}/_coordinator_round` | string(整数) | `databus.get/put("_coordinator_round")` | 当前轮次计数器，首次触发重置为 1，skill 完成触发 +1 |
 
-**checkpoint 格式**：
-
-```json
-{
-  "phase": "evaluating",
-  "dispatch_round": 2,
-  "launched_skills": ["code-review", "security-scan"],
-  "completed_skills": ["code-review"],
-  "pending_skills": ["security-scan"],
-  "user_input_received": true
-}
-```
+> **实现注意**（2026-08-15 审阅修正）：早期设计曾设想 `ctx/coord_messages` + `ctx/coord_checkpoint`（checkpoint 含 phase/launched_skills/pending_skills 等 JSON object），但**该 checkpoint 概念未实现**——当前代码用 `llm/session_messages`（跨 dialogue 持久化对话历史）+ `sys/{dialogue_id}/_coordinator_round`（轮次计数）两个 key 承载，无独立的调度检查点对象；已调度 skill 的追溯通过 `sys/{dialogue_id}/launched_skills`（框架写入）与 `skill_result:{name}`（skill 回传）实现。
 
 **重入恢复流程**：
 
 ```
-coordinator-skill 被框架触发
+coordinator 被框架触发
   │
-  ├─ ① 从 DataBus 读取 coord_messages → 恢复对话历史
-  ├─ ② 从 DataBus 读取 coord_checkpoint → 恢复调度状态
-  ├─ ③ 从框架注入的 node inputs 读取 completed_skill_name + skill_success
+  ├─ ① 从 recorder 读取 llm/session_messages → 恢复对话历史
+  ├─ ② 从 databus 读取 sys/{dialogue_id}/_coordinator_round → 确定当前轮次
+  ├─ ③ 从框架注入的 node inputs 读取 completed_skill_name + skill_success + skill_result + skill_artifacts
   │
   ├─ ④ 构造本轮输入:
-  │     if phase == "initial":
+  │     if 首次触发 (completed_skill 为空或 dummy_pre_skill):
   │         messages += [{"role":"user", "content": 用户原始请求}]
-  │     elif phase == "evaluating":
-  │         messages += [{"role":"user", "content": f"Skill {name} 完成，结果: ..."}]
+  │     else (skill 完成 re-trigger):
+  │         messages += [{"role":"user", "content": build_skill_completion_message(...)}]
   │
   ├─ ⑤ LLM 决策 (工具: run_skills)
-  │     ├─ tool_call: run_skills → 更新 checkpoint → 写 next_skills → 结束
+  │     ├─ tool_call: run_skills → 写 dispatch manifest + next_skills → 结束（交还框架）
   │     └─ 无 tool_call → 写 response → 结束
   │
-  ├─ ⑥ 持久化: 写回 coord_messages + coord_checkpoint 到 DataBus
-  └─ ⑦ 输出 coordinator_status → workflow 完成 → 交出控制权
+  ├─ ⑥ 持久化: save_session_messages(recorder, messages) + databus.put("_coordinator_round", round+1)
+  └─ ⑦ 输出 coordinator_status / response JSON → workflow 完成 → 交出控制权
 ```
+
+> 说明：第 ⑥ 步的轮次递增实际发生在第 ② 步之后（`current_round = raw_round + 1` 后立即 `put` 回写），以保证 max_iterations 前置保护读到最新值——见 `coordinator_decide.py::execute()` 开头逻辑。
 
 ---
 
@@ -467,7 +471,7 @@ coordinator-skill 被框架触发
 └─────────────────────────────────────────────────────┘
 ```
 
-**框架协议模板**（硬编码在 `general_task_executor.py` 中，coordinator-skill 实例化时自动注入）：
+**框架协议模板**（集中在 `agentflow_runtime/prompts/coordinator.py` 的 `PROTOCOL_TEMPLATE`，coordinator 节点启动时自动注入）：
 
 ```python
 COORDINATOR_PROTOCOL = """## 你的工作方式
@@ -515,8 +519,8 @@ model:
 **组装逻辑**：
 
 ```python
-# general_task_executor.py 中，当 role == "coordinator" 时
-system_prompt = COORDINATOR_PROTOCOL + "\n\n---\n\n" + agent_md_body
+# agentflow_runtime/prompts/coordinator.py 中，coordinator 节点实例化时
+system_prompt = PROTOCOL_TEMPLATE + "\n\n---\n\n" + agent_md_body
 ```
 
 ### 6.2 职责与执行机制
@@ -528,15 +532,15 @@ Coordinator 是整个 agent loop 的 **决策中枢**，采用 **事件驱动** 
 2. **后续触发**：每当 coordinator 指派的 skill 完成时，框架自动 re-trigger coordinator
 
 **每次执行（单轮 LLM 调用）**：
-1. **恢复重入状态** — 从 DataBus 读取 `coord_messages` + `coord_checkpoint`
-2. **构造本轮输入** — 根据 checkpoint.phase 决定是"初始规划"还是"评估结果"
+1. **恢复重入状态** — 从 recorder 读取 `llm/session_messages`（对话历史）+ databus 读取 `sys/{did}/_coordinator_round`（轮次）
+2. **构造本轮输入** — 根据首次触发 / skill 完成 re-trigger 决定是"初始规划"还是"评估结果"
 3. **LLM 决策** — 绑定工具 `[run_skills]`，决定下一步
-4. **持久化重入状态** — 写回 `coord_messages` + `coord_checkpoint` 到 DataBus
+4. **持久化重入状态** — `save_session_messages(recorder, messages)` + `databus.put("_coordinator_round", round+1)`（见 §5.5）
 5. **交出控制权** — 输出 coordinator_status，workflow 完成
 
 **"循环"由框架提供**：coordinator 每次执行完 workflow 后，如果产出了 `next_skills`，框架启动新 skill → skill 完成 → re-trigger coordinator → 形成循环。coordinator 自身不需要 Python while-loop。
 
-### 6.2 工具绑定
+### 6.3 工具绑定
 
 Coordinator **只绑定一个工具**：`run_skills`。
 
@@ -576,14 +580,14 @@ RUN_SKILLS_TOOL = {
 
 **设计要点**：`prompt` 必填（coordinator 必须说清做什么），所有 skill 通过单 `skill-runner` 路由，由 `exec_skill_key` 区分。
 
-### 6.3 `run_skills` 拦截与框架对接
+### 6.4 `run_skills` 拦截与框架对接
 
 当 coordinator LLM 产出 `run_skills` tool_call 时，**不作为普通工具执行**，而是拦截并对接框架的 next_skills 管线：
 
 ```mermaid
 flowchart LR
     A["LLM 产出 run_skills tool_call"] --> B["为每个 skill 生成 dispatch key"]
-    B --> C["写入 DataBus dispatch:{did}:{round}:{i}"]
+    B --> C["写入 DataBus dispatch:&lt;did&gt;:&lt;round&gt;:&lt;i&gt;"]
     C --> D["构造 next_skills 全部指向 skill-runner"]
     D --> E["写入 next_skills → 框架接管调度"]
     E --> F["框架 launch_skill_task × N"]
@@ -613,7 +617,7 @@ def handle_run_skills_call(args, databus, session_id, dialogue_id):
 
 **关键**：步骤 ① 必须在步骤 ③ 之前执行，确保 skill task 启动时 `skill_prompt` 和 `load_skills` 已在 DataBus 中就绪。
 
-### 6.4 Coordinator 事件驱动实现
+### 6.5 Coordinator 事件驱动实现
 
 Coordinator 是 **事件驱动** 的：每次被框架触发时执行一次 LLM 决策，然后交出控制权。框架的 skill 完成 → re-trigger 机制提供"循环"。
 
@@ -695,7 +699,7 @@ def execute():
     recorder.write_session_messages(messages[1:])
 ```
 
-### 6.5 Coordinator Workflow JSON
+### 6.6 Coordinator Workflow JSON
 
 ```json
 {
@@ -708,8 +712,8 @@ def execute():
       "name": "Coordinator Agent Loop",
       "type": "task",
       "execution_mode": "python_script",
-      "command": "./nodes/general_task_executor.py",
-      "working_dir": "examples/agent/harness_agent_v2",
+      "command": "./nodes/coordinator_decide.py",
+      "working_dir": "examples/agent/outfit-assistant",
       "json_output": true,
       "inputs": [
         {"name": "input",               "type": "string", "required": true},
@@ -744,28 +748,28 @@ Skill Task 是 **被参数化的 mini-agent**，职责：
 
 ### 7.2 工具绑定
 
-Skill Task 绑定 **领域工具集**，从 `harness/tools/` + MCP 自动发现：
+Skill Task 绑定 **领域工具集**，从 `agentflow_runtime/harness/tools/` + agent 包 `harness/tools/` + skill `scripts/` + MCP 自动发现：
 
 ```python
-# general_task_executor.py 的工具来源
-tools = tool_registry.get_tools()  # 本地工具 + MCP 工具
+# tool_registry.py 的工具来源（skill_executor 通过 _LocalToolRegistry 加载）
+tools = _LocalToolRegistry(skill_name).get_tools()  # 本地工具 + MCP 工具
 ```
 
 **与 coordinator 的工具隔离**：
 
 | 角色 | 绑定工具 | 说明 |
 |------|---------|------|
-| Coordinator | `[run_skills]` | 只做规划和委派，不直接操作文件/搜索/执行 |
-| Skill Task | `[echo, bash, read_file, write_file, web_fetch, load_skill, list_skills, mcp__*]` | 做具体工作，操作文件、搜索、执行命令 |
+| Coordinator | `[run_skills]`（v1）/ harness 工具集（v2 agent loop） | v1 只做规划和委派，不直接操作文件/搜索/执行；v2 直接调工具 |
+| Skill Task | `[bash, read_file, write_file, edit_file, web_fetch, load_skill, list_skills, mcp__*]` | 做具体工作，操作文件、搜索、执行命令 |
 
-**隔离方式**：两个 node 是独立的 Python 进程（不同 workflow 实例），各自 `import tools as tool_registry` 时绑定不同的工具子集。具体实现：
+**隔离方式**：coordinator 与 skill 是两个独立的 Python 进程（不同 workflow 实例），各自通过 `_LocalToolRegistry` 绑定不同的工具子集：
 
 ```python
-# general_task_executor.py
-tools = [RUN_SKILLS_TOOL]  # 只绑 run_skills
+# coordinator_decide.py（v1）
+tools = [RUN_SKILLS_TOOL_DEFINITION]  # 只绑 run_skills
 
-# general_task_executor.py
-tools = tool_registry.get_tools()  # 绑领域工具集（不含 run_skills）
+# skill_executor.py
+tools = _LocalToolRegistry(skill_name).get_tools()  # 绑领域工具集（不含 run_skills）
 ```
 
 ### 7.3 入参契约
@@ -888,8 +892,8 @@ def execute():
       "name": "Universal Skill Executor",
       "type": "task",
       "execution_mode": "python_script",
-      "command": "./nodes/general_task_executor.py",
-      "working_dir": "examples/agent/harness_agent_v2",
+      "command": "./nodes/skill_executor.py",
+      "working_dir": "examples/agent/outfit-assistant",
       "json_output": true,
       "inputs": [
         {"name": "input",               "type": "string", "required": true},
@@ -923,7 +927,7 @@ Harness Agent 的运行时由 **两个嵌套的循环** 构成：
 外循环 (Agent Task Loop) — Coordinator 事件驱动
   ┌────────────────────────────────────────────────────────────┐
   │  Coordinator 被框架触发（首次 / skill 完成 re-trigger）     │
-  │  → ① 恢复重入状态 (DataBus ctx namespace)                  │
+  │  → ① 恢复重入状态 (llm/session_messages + sys/{did}/_coordinator_round) │
   │  → ② 上下文压缩 (compress_messages)                        │
   │  → ③ 预算提醒注入 (round_reminder)                         │
   │  → ④ 中断标志轮询                                         │
@@ -983,14 +987,14 @@ Coordinator 的每次执行由框架的 `handle_task_data_exchange` 触发：
 Coordinator 是事件驱动的——每次被框架触发执行一次 LLM 决策，然后交出控制权。**重入时必须恢复完整状态**：
 
 ```
-状态持久化到 DataBus ctx 命名空间（session 级，跨 dialogue 持久化）:
+状态持久化（与 §5.5 同源，当前实现事实）:
 
-  /session/{sid}/ctx/session_messages    ← 完整对话历史 (JSON array)
-  /session/{sid}/ctx/_coordinator_round  ← 当前轮次计数器
+  llm/session_messages              ← 完整对话历史 (JSON array, recorder 读写)
+  sys/{dialogue_id}/_coordinator_round  ← 当前轮次计数器 (databus get/put)
 
 恢复流程:
-  ① 读 session_messages → 恢复对话历史
-  ② 读 _coordinator_round → 确定当前轮次
+  ① 读 llm/session_messages → 恢复对话历史
+  ② 读 sys/{dialogue_id}/_coordinator_round → 确定当前轮次
   ③ 读框架注入的 completed_skill_name / skill_success / skill_result
   ④ 构造本轮输入（skill 完成通知 / 用户原始请求）
 ```
@@ -1307,11 +1311,87 @@ coordinator 负责格式化。
   │  skill_success          │                          │
 ```
 
+### 8.6 v4/v5 新增机制（与双循环正交的横切能力）
+
+以下机制在 v4/v5 引入，横切外循环/内循环，与 §8.1-§8.5 的循环结构正交：
+
+#### 8.6.1 工具执行抽象层（executors）
+
+工具调用不再直接 `subprocess`/`requests`，而是经 `executors/factory.py::create_executor` 按 `AF_SANDBOX_MODE` 选择 provider：
+
+| provider | 类 | 执行环境 | 触发条件 |
+|----------|-----|---------|---------|
+| `E2BExecutor` | `executors/e2b.py` | E2B 远端沙箱（SDK 直连） | `AF_SANDBOX_MODE=e2b` |
+| `HTTPExecutor` | `executors/http.py` | 沙箱内 HTTP server（local/docker） | `AF_SANDBOX_MODE=local\|docker` + `AF_SANDBOX_ENDPOINT` |
+| `HostExecutor` | `executors/host.py` | 宿主机直接执行 | `AF_SANDBOX_MODE=none` 或无 endpoint |
+
+统一接口：`exec_command` / `read_file` / `write_file` / `edit_file` / `list_dir` / `fetch_url`，返回 `ExecResult`/`FileContent`/`WriteResult`。沙箱 workspace 前缀读取收敛到 `factory.sandbox_workspace_prefix`（修复渗漏坏味道 W1）。各工具脚本（`harness/tools/*.py`）通过 `sandbox_endpoint` 参数接入该抽象。
+
+#### 8.6.2 span 可观测性（trace/）
+
+替代散落的 `emit_event` 成对事件，提供结构化生命周期 span：
+
+```
+trace/emit.py::emit_span(kind, name)  — context manager，进入=span 开始，退出=end+落盘
+trace/emit.py::span_event(name, data) — 瞬时事件，挂父 span 的 events
+trace/span_writer.py::SpanWriter      — NDJSON 落盘（按 trace_id 分片）
+trace/span_context.py::SpanContext    — 进程内嵌套栈（trace_id/span_id/parent）
+```
+
+`observability.py::emit_event` 保留为兼容入口（内部转调 `span_event`，消除双轨 F4）。span 名与事件名统一收口在 `events.py`（`ALL_SPAN_NAMES`/`ALL_EVENTS`），禁止散落字符串（F3 I-5）。
+
+#### 8.6.3 Hook 机制（生命周期事件订阅/干预）
+
+v5 引入，让 agent 包可订阅运行时生命周期事件并干预：
+
+| 组件 | 职责 |
+|------|------|
+| `events.py` | 27 项可观测性事件目录 + `INTERVENABLE_EVENTS`（5 个可干预事件） |
+| `mounts.py` | 14 项挂载点（`<node>.<before\|after>_<action>`），before 可注入/阻断，after 可检查/改写 |
+| `hooks/registry.py` | `HookRegistry` 进程级订阅表（`register`/`handlers_for`） |
+| `hooks/loader.py` | `load_hooks_from_dir` 从 `{agent}/harness/hooks/` 加载 handler（校验签名/事件名） |
+| `hooks/engine.py` | `trigger(event, payload, can_intervene, ctx)` 分发；handler 返回 dict → 合并 payload；抛异常 → 隔离不阻断（H-3） |
+| `context.py` | `AgentContext`（messages/artifacts/blocked/block_reason）——handler 注入/修改/阻断的载体 |
+
+设计文档：`docs/design/features/hooks/hook-system.md`（含不变量 H-1~H-5）。
+
+#### 8.6.4 Coordinator v2（Agent Loop 形态）
+
+`coordinator_agent_loop.py` 是 coordinator 的第二种形态，与 v1（`coordinator_decide.py`）并存，通过 `AF_COORDINATOR_VERSION` 切换。
+
+**设计背景（v1 痛点）**：v1 的 coordinator + skill_executor 联动在实际测试中暴露效率低下——coordinator 与 skill 是独立子进程，**skill 之间上下文不共享**（图片视觉特征、tool 循环中间结论、进程内缓存全部丢失），导致不同 skill 对同一必要探查动作**重复执行**（如"分析图"skill 已看过图，后续 skill 又要重新看），时延不可控。
+
+**v2 设计思路（对齐业界实现）**：
+
+```
+业界主流形态（主 agent + subagent）:
+  Main Agent (task loop + function_calling loop)
+    ├─ 自身即完整的 agent loop：思考 → 调工具 → 继续 → 收敛
+    └─ 需要委派时 → subagent 执行 → 结果回传
+```
+
+- **coordinator → 主 agent**：v2 的 coordinator 退化为类似主 agent 的 **task loop + function_calling loop**——不暴露 `run_skills`，直接暴露 harness 工具集，进程内 messages 天然保留上下文，同一张图分析过一遍就不再重复分析（见 `coordinator-as-agent-loop.md` §1.1-1.2）
+- **skill_executor → subagent（远期演进）**：skill_executor 聚焦为**委派执行**职责，类似业界的 subagent——只在被明确委派时执行具体任务并回传结果，不再是"被 coordinator 反复冷启动拉起的对等节点"
+
+**当前状态**：⚠️ **草案/实验**——目前仅实现了 **coordinator 自循环**（`coordinator_agent_loop.py`）作为实验验证，因为这涉及架构与业务语义的重新定义（skill 从"独立 workflow"变为"harness 工具集合"、daemon re-trigger 链弱化）。尚未全量切换；若后期设计达成一致，**skill_executor 应改名为 subagent executor**（届时同步更新本文档、`agent-runtime.md`、`coordinator-as-agent-loop.md` 与代码模块名）。
+
+| 维度 | v1（coordinator_decide） | v2（coordinator_agent_loop） |
+|------|-------------------------|------------------------------|
+| 角色定位 | 框架驱动的单次决策节点 | 自驱动主 agent（task loop + function_calling loop） |
+| 工具暴露 | 只暴露 `run_skills` 委派 | 直接暴露 harness 工具集（bash/read_file/write_file 等） |
+| 上下文 | 跨 re-trigger 持久化到 DataBus（冷启动回灌文本） | 进程内 messages 天然保留（单次 workflow 内多轮 LLM 调用） |
+| 痛点 | skill 间上下文不共享 → 重复探查 → 时延不可控 | 同一探查动作不再重复执行 |
+| 与 skill 的关系 | 派发 skill workflow（独立子进程） | skill 定位为委派执行单元（subagent 职责，远期改名） |
+| 状态 | 生产使用 | ⚠️ 草案/实验（A/B 验证中，见 `coordinator-as-agent-loop.md` §4） |
+| 设计文档 | 本文档 | `docs/design/features/agent-runtime/coordinator-as-agent-loop.md` |
+
+**共用逻辑收敛**：v1/v2 共享的纯逻辑（`parse_agent_md`/`append_artifacts_markdown`/`llm_error_response`/`save_session_messages`/`bind_package_paths`/`put_e2e_response`/`is_empty_llm_response`）统一收口到 `coordinator_common.py`（单一真相源 F4），两版不再各自维护重复实现。
+
 ---
 
 ## 9. Agent Package 配置
 
-### 9.1 agent.json（v3+ 实际配置）
+### 9.1 agent.json（v5 实际配置）
 
 ```json
 {
@@ -1345,7 +1425,6 @@ coordinator 负责格式化。
       "workflow_file": "dummy_pre_skill_workflow.json",
       "skill": {
         "name": "dummy_pre_skill",
-        "config_dir": "harness/skills/dummy_pre_skill",
         "instance_pool_size": 1
       },
       "workflow_pool_size": 1
@@ -1357,7 +1436,6 @@ coordinator 负责格式化。
       "workflow_file": "skill_workflow.json",
       "skill": {
         "name": "skill-runner",
-        "config_dir": "harness/skills/skill-runner",
         "instance_pool_size": 5
       },
       "workflow_pool_size": 5
@@ -1374,6 +1452,7 @@ coordinator 负责格式化。
 | `tasks[2]` | `coordinator-skill`  | `dummy_pre_skill` | 预处理 hook，透传后触发 coordinator |
 | `tasks[3].skill.name` | `"generic-skill"` | `"skill-runner"` | 单 skill 路由，通过 exec_skill_key 区分 |
 | `tasks[3].skill.instance_pool_size` | `5` | `5` | 保留 5 实例并行 |
+| `skill.config_dir` | 存在 | **已移除（2026-08-02）** | 无消费死字段——skill_executor 用约定路径 `harness/skills/{name}/SKILL.md` 定位，不读取 config_dir |
 | `data_bus_capacity_mb` | `5` | `50`（模板）/ `500`（outfit） | 按需增大 |
 
 **架构说明**：
@@ -1454,7 +1533,7 @@ T2  框架接管
     │
     └─ runtime task poller 调度 skill workflow
 
-T3  Skill Task: general_task_executor.py
+T3  Skill Task: skill_executor.py
     │
     ├─ 读 DataBus "skill_prompt:code-review" → "审查 src/agent/agent.cpp ..."
     ├─ 读 DataBus "load_skills:code-review" → ["coder-skills/problem-localization"]
@@ -1514,8 +1593,8 @@ T2  handle_run_skills_call:
     └─ DataBus.put("next_skills", '[{"name":"code-review"},{"name":"web-search"}]')
 
 T3  框架并行启动两个 skill task:
-    ├─ Skill Task 1: code-review → general_task_executor.py (进程 A)
-    └─ Skill Task 2: web-search  → general_task_executor.py (进程 B)
+    ├─ Skill Task 1: code-review → skill_executor.py (进程 A)
+    └─ Skill Task 2: web-search  → skill_executor.py (进程 B)
 
 T4  两个 skill 各自执行 LLM while-loop，结果写入 DataBus
 
@@ -1545,24 +1624,55 @@ v2 设计曾提出的 Phase 2 框架改动（`AF_SKILL_NAME` / `AF_SKILL_PROMPT`
 
 ---
 
-## 12. 目录结构（v3+ 实际）
+## 12. 目录结构（v5 实际）
 
-### 11.1 Pip 包（核心逻辑）
+### 12.1 Pip 包（核心逻辑）
 
 ```
 packages/agentflow-runtime/src/agentflow_runtime/
 ├── __init__.py                       # 空（命名空间包）
-├── coordinator_decide.py             # Coordinator 主循环 — 事件驱动 LLM 决策
-├── skill_executor.py                 # 通用 skill 执行器 — LLM while-loop
+├── coordinator_decide.py             # Coordinator v1 — 事件驱动 LLM 决策（run_skills 委派）
+├── coordinator_agent_loop.py         # Coordinator v2 — Agent Loop 形态（直接调 harness 工具，AF_COORDINATOR_VERSION 切换）
+├── coordinator_common.py             # v1/v2 共享纯逻辑（parse_agent_md/append_artifacts_markdown/llm_error_response 等，单一真相源）
+├── skill_executor.py                 # 通用 skill 执行器 — LLM while-loop（入口 + re-export 拆分模块符号）
+├── dummy_pre_skill.py                # 预处理 hook 节点
 ├── databus_client.py                 # DataBus UDS 客户端（dialogue-scoped wrapper）
-├── llm_call.py                       # LLM API 调用 + 全链路 trace 记录
-├── observability.py                  # 可观测性事件发射
+├── llm_call.py                       # LLM API 调用（call_llm / resolve_llm_config / get_recorder）
+├── compaction.py                     # 上下文压缩（compress_messages / compact_messages）
+├── artifact_pipeline.py              # 产物收集/归位/上传（extract_artifact_paths / _ensure_artifacts_in_package）
+├── tool_registry.py                  # _LocalToolRegistry 工具加载 + MCP 工具路由（mcp__ 前缀）
+├── tool_policies.py                  # 工具调用分类 + 并行批处理（classify_tool / build_batches / execute_in_batches）
+├── skills_loader.py                  # SKILL.md 加载（parse_agent_md / load_skill_md / load_skills_from_list）
+├── context.py                        # AgentContext — hook handler 干预载体（messages/artifacts/blocked）
+├── events.py                         # 生命周期事件目录（27 项可观测性事件 + span 名 + INTERVENABLE_EVENTS）
+├── mounts.py                         # hook 挂载点目录（14 项 <node>.<before|after>_<action>）
+├── observability.py                  # emit_event（转调 span_event，兼容入口）
 ├── parse_af_input.py                 # AF_INPUT 协议解析（stream + messages）
 ├── round_reminder.py                 # 轮次预算提醒注入
+├── recorder.py                       # TraceRecorder — DataBus meta 追踪 + session 消息读写 + trace_call
+├── executors/                        # 工具执行抽象层（v4 新增）
+│   ├── base.py                       # ToolExecutor 基类 + ExecResult/FileContent/WriteResult
+│   ├── factory.py                    # create_executor（按 AF_SANDBOX_MODE 选 provider）+ sandbox_workspace_prefix
+│   ├── e2b.py                        # E2BExecutor（SDK 直连沙箱）
+│   ├── http.py                       # HTTPExecutor（沙箱内 HTTP server）
+│   └── host.py                       # HostExecutor（宿主机直接执行）
+├── hooks/                            # Hook 机制（v5 新增）
+│   ├── registry.py                   # HookRegistry — 进程级订阅表
+│   ├── loader.py                     # load_hooks_from_dir — 从 agent 包 harness/hooks/ 加载 handler
+│   └── engine.py                     # trigger — 分发 + 可干预回写 + 异常隔离
+├── trace/                            # span 可观测性（v4 新增）
+│   ├── types.py                      # TraceSpan / SpanEvent / SpanKind / SpanStatus
+│   ├── span_context.py               # SpanContext — trace_id/span_id 栈
+│   ├── span_writer.py                # SpanWriter — NDJSON 落盘
+│   └── emit.py                       # emit_span（context manager）/ span_event（瞬时事件）
 ├── common/
 │   ├── __init__.py
 │   ├── agent_config.py               # AgentConfig — 三层 fallback 配置系统
+│   ├── env_loader.py                 # .env 零依赖解析器（python-dotenv 不可用时的 stdlib 兜底）
 │   ├── runtime_context.py            # 运行时上下文（环境变量读取）
+│   ├── manifest.py                   # 资产 manifest 生成/加载（generate_manifest / load_manifest）
+│   ├── find_runtime_package.py       # 运行时包路径定位（符号链接脚本禁用 parents[N] 的标记搜索法）
+│   ├── sandbox_patch.py              # SSL patch / envd URL patch（沙箱网络环境适配）
 │   └── clients/
 │       ├── __init__.py
 │       ├── base.py                   # LLM 客户端基类
@@ -1570,30 +1680,43 @@ packages/agentflow-runtime/src/agentflow_runtime/
 │       └── openai_compatible_client.py  # OpenAI 兼容客户端
 ├── harness/
 │   ├── __init__.py
-│   └── tools/                        # 领域工具集
-│       ├── __init__.py               # 工具注册 + MCP 发现
+│   ├── mcp/                          # MCP 工具桥接（v4 移入独立子包）
+│   │   ├── __init__.py               # MCP_AVAILABLE / MCPBridge / discover_servers
+│   │   └── mcp_bridge.py             # MCPBridge — server 生命周期 + call_tool
+│   └── tools/                        # 领域工具集（builtin，随 pip 包分发）
+│       ├── __init__.py
 │       ├── bash.py
+│       ├── edit_file.py
 │       ├── list_skills.py
 │       ├── load_skill.py
-│       ├── mcp_bridge.py
 │       ├── read_file.py
 │       ├── web_fetch.py
 │       └── write_file.py
 ├── prompts/                          # 集中式 prompt 管理
 │   ├── __init__.py
 │   ├── common.py                     # 共享模板（artifact UI、LLM error）
-│   ├── coordinator.py                # coordinator prompt + run_skills 工具定义
+│   ├── coordinator.py                # PROTOCOL_TEMPLATE + RUN_SKILLS_TOOL_DEFINITION
 │   └── skill.py                      # skill prompt + 失败恢复模板
-├── dummy_pre_skill.py                # 预处理 hook 节点
-└── tests/                            # 单元测试
+└── tests/                            # 单元测试（v4 大幅扩充）
+    ├── integration/                  # 集成测试目录
     ├── test_compress_messages.py
     ├── test_coordinator_compaction.py
+    ├── test_coordinator_run_skills_force.py
+    ├── test_executor_base.py / test_executor_factory.py / test_e2b_executor.py
+    ├── test_host_executor.py / test_http_executor.py
+    ├── test_find_runtime_package.py
+    ├── test_hooks.py
     ├── test_interrupt_poll.py
     ├── test_llm_compaction.py
-    └── test_tool_path_resolution.py
+    ├── test_manifest.py
+    ├── test_mcp_bridge.py
+    ├── test_tool_path_resolution.py
+    ├── test_tool_policies.py
+    ├── test_trace_emit.py
+    └── ...
 ```
 
-### 11.2 Agent 包（生产示例 — outfit-assistant）
+### 12.2 Agent 包（生产示例 — outfit-assistant）
 
 ```
 examples/agent/outfit-assistant/
@@ -1604,24 +1727,29 @@ examples/agent/outfit-assistant/
 ├── dummy_pre_skill_workflow.json     # 预处理 hook workflow
 ├── nodes/                            # 入口 wrapper 文件（委托 pip 包）
 │   ├── coordinator_decide.py         # 1 行 import → agentflow_runtime.coordinator_decide
-│   ├── coordinator_decide.sh         # shell wrapper（检测 .venv）
+│   ├── coordinator_decide.sh         # shell wrapper（检测 .venv + AF_COORDINATOR_VERSION 切换 v1/v2）
+│   ├── coordinator_decide_v2.py      # v2 入口 → agentflow_runtime.coordinator_agent_loop
+│   ├── coordinator_decide_v2.sh      # v2 shell wrapper
 │   ├── skill_executor.py             # 1 行 import → agentflow_runtime.skill_executor
 │   ├── skill_executor.sh             # shell wrapper
 │   ├── dummy_pre_skill.py
 │   ├── dummy_pre_skill.sh
 │   └── common/                       # 共享工具
 ├── harness/
-│   ├── tools/                        # 领域工具集（同 pip 包内容）
-│   └── skills/                       # 技能文档目录
-│       ├── dummy_pre_skill/
-│       │   └── SKILL.md
-│       ├── skill-runner/
-│       │   └── SKILL.md
-│       ├── minimax_outfit_skills/
-│       │   ├── outfit-stylist/
-│       │   ├── forge-image-gen/
-│       │   └── video-gen/
-│       └── ...
+│   ├── tools/                        # agent 包级领域工具（覆盖 pip 包 builtin，可选）
+│   ├── skills/                       # 技能文档目录
+│   │   ├── dummy_pre_skill/
+│   │   │   └── SKILL.md
+│   │   ├── skill-runner/
+│   │   │   └── SKILL.md
+│   │   ├── minimax_outfit_skills/
+│   │   │   ├── outfit-stylist/
+│   │   │   ├── forge-image-gen/
+│   │   │   └── video-gen/
+│   │   └── ...
+│   └── hooks/                        # agent 包级 hook handler（v5 新增，load_hooks_from_dir 加载）
+├── .agentfoundry/                    # 运行态数据（memory/assets，运行时生成）
+├── workspace/                        # 沙箱工作区镜像（运行时生成，按 user/client 分目录）
 ├── tests/                            # 集成测试
 │   ├── test_coordinator_compaction.py
 │   ├── test_coordinator_decide_databus.py
@@ -1640,7 +1768,7 @@ examples/agent/outfit-assistant/
 └── README.md
 ```
 
-### 11.3 通用模板
+### 12.3 通用模板
 
 ```
 frontend/bridge/templates/agent_template/harness_agent/
@@ -1660,7 +1788,7 @@ frontend/bridge/templates/agent_template/harness_agent/
 
 ## 13. 与现有 harness-agent 的对比
 
-| 维度 | harness-agent (V1) | harness-agent (v3+ 当前) |
+| 维度 | harness-agent (V1) | harness-agent (v5 当前) |
 |------|-------------------|--------------------------|
 | **架构** | dispatcher → skill → coordinator (三层) | dispatcher(透传) → dummy_pre_skill(hook) → coordinator(事件驱动) → skill-runner(单路由) |
 | **决策方** | dispatcher (硬编码 next_skills) | coordinator LLM (自主规划, 事件驱动) |
@@ -1697,16 +1825,29 @@ frontend/bridge/templates/agent_template/harness_agent/
 
 ### 14.2 单元测试
 
-| 测试 | 验证点 | 实际文件 |
-|------|--------|---------|
-| `test_handle_run_skills_call` | DataBus 写入 dispatch manifest / next_skills 的 key 和值正确 | `packages/agentflow-runtime/tests/` |
-| `test_dispatch_and_artifacts` | dispatch manifest + artifact 路径提取 | `outfit-assistant/tests/test_dispatch_and_artifacts.py` |
-| `test_coordinator_decide_databus` | coordinator 的 DataBus 读写 | `outfit-assistant/tests/test_coordinator_decide_databus.py` |
-| `test_databus_client_contract` | DataBus 客户端契约 | `outfit-assistant/tests/test_databus_client_contract.py` |
-| `test_skill_executor_recovery` | 工具调用截断恢复 | `outfit-assistant/tests/test_skill_executor_recovery.py` |
-| `test_streaming_chunk_push` | 流式推送 | `outfit-assistant/tests/test_streaming_chunk_push.py` |
-| `test_coordinator_compaction` | 上下文压缩 | `outfit-assistant/tests/test_coordinator_compaction.py` |
-| `test_llm_compaction` | LLM 调用压缩 | `outfit-assistant/tests/test_llm_compaction.py` |
+`packages/agentflow-runtime/tests/`（v4 大幅扩充，28 个文件）：
+
+| 测试 | 验证点 |
+|------|--------|
+| `test_coordinator_run_skills_force.py` / `test_coordinator_duplicate_dispatch_block.py` | run_skills 拦截（force 重跑 / 重复派发阻断）→ dispatch manifest + next_skills 写入正确 |
+| `test_coordinator_response_clean.py` / `test_coordinator_clarify_prompt.py` | coordinator response 键清理 / clarify prompt 透传 |
+| `test_coordinator_skill_question_passthrough.py` | skill 提问透传 |
+| `test_dispatch_and_artifacts.py`（outfit-assistant） | dispatch manifest + artifact 路径提取 |
+| `test_databus_client_contract.py` / `test_databus_client_audit.py` | DataBus 客户端契约 / 审计 |
+| `test_skill_executor_recovery.py`（outfit-assistant） | 工具调用截断恢复 |
+| `test_streaming_chunk_push.py`（outfit-assistant） | 流式推送 |
+| `test_skill_executor_tool_parallel.py` / `test_tool_policies.py` | 工具并行批处理（分类/并发/结果合并） |
+| `test_coordinator_compaction.py` / `test_llm_compaction.py` / `test_compress_messages.py` | 上下文压缩（coordinator / LLM 调用 / 消息折叠） |
+| `test_executor_base.py` / `test_executor_factory.py` / `test_e2b_executor.py` / `test_host_executor.py` / `test_http_executor.py` | executors 抽象层（factory 路由 + 各 provider） |
+| `test_tool_path_resolution.py` / `test_find_runtime_package.py` | 工具路径解析 / 运行时包定位 |
+| `test_hooks.py` | Hook 机制（注册/加载/触发/干预/异常隔离） |
+| `test_trace_emit.py` | span 落盘（emit_span/span_event） |
+| `test_mcp_bridge.py` | MCP 工具桥接 |
+| `test_manifest.py` | 资产 manifest 生成/加载 |
+| `test_artifact_*.py`（collect_e2b / routing_id / url_generation） | Artifact 产物收集（E2B 下载 / 路由 ID / URL 生成） |
+| `test_preload_workspace_tree.py` | workspace 预加载 |
+| `test_module_ownership.py` | 模块归属校验 |
+| `test_interrupt_poll.py` | 中断标志轮询 |
 
 ---
 
@@ -1754,6 +1895,25 @@ frontend/bridge/templates/agent_template/harness_agent/
 | 2 | 新增 `AF_SKILL_PROMPT` 传播链路 | ❌ 已放弃 | 同上 |
 | 3 | 新增 `AF_LOAD_SKILLS` 传播链路 | ❌ 已放弃 | 同上 |
 
+### 15.4 Phase 4: 结构拆分 + 工具执行抽象 + span 可观测性（v4）— ✅ 已完成
+
+| 步骤 | 内容 | 状态 | 实际文件 |
+|------|------|------|---------|
+| 1 | **skill_executor 结构拆分**（god-module → 独立模块 + re-export） | ✅ | `artifact_pipeline.py`（产物收集/归位/上传）、`tool_registry.py`（`_LocalToolRegistry` + MCP 路由）、`skills_loader.py`（SKILL.md 加载）、`compaction.py`（上下文压缩）、`tool_policies.py`（工具并行批处理） |
+| 2 | **executors 工具执行抽象层** | ✅ | `executors/factory.py::create_executor` 按 `AF_SANDBOX_MODE` 选 provider；`e2b.py`（E2BExecutor SDK 直连）/ `http.py`（HTTPExecutor 沙箱 HTTP server）/ `host.py`（HostExecutor 宿主机）；沙箱 workspace 前缀读取收敛到 factory 层（修复 W1 渗漏） |
+| 3 | **trace/ span 可观测性** | ✅ | `trace/emit.py::emit_span` + `span_event`；`trace/span_writer.py::SpanWriter` NDJSON 落盘；`trace/span_context.py::SpanContext` 嵌套栈；`observability.py::emit_event` 转调 `span_event`（消除双轨 F4） |
+| 4 | **MCP 工具桥接移入独立子包** | ✅ | `harness/mcp/mcp_bridge.py`（原 `harness/tools/mcp_bridge.py`）；`tool_registry._load_mcp_tools` 按优先级扫配置、`mcp__` 前缀路由在 sandbox 分支之前（I-6） |
+| 5 | **Artifact pipeline 增强** | ✅ | `_download_from_sandbox`（local/docker HTTP）/ `_download_from_sandbox_e2b`（SDK）；`_upload_artifacts_to_storage`（ACM 文件服务） |
+
+### 15.5 Phase 5: Hook 机制 + Coordinator v2 + 共用逻辑收敛（v5）— ✅ 已完成
+
+| 步骤 | 内容 | 状态 | 实际文件 |
+|------|------|------|---------|
+| 1 | **Hook 机制**（生命周期事件订阅/干预/阻断） | ✅ | `hooks/registry.py`（HookRegistry 订阅表）、`hooks/loader.py`（load_hooks_from_dir）、`hooks/engine.py::trigger`（分发 + 干预回写 + 异常隔离）；`events.py`（27 项事件目录 + INTERVENABLE_EVENTS）；`mounts.py`（14 项 before/after 挂载点）；`context.py`（AgentContext 干预载体） |
+| 2 | **Coordinator v2（Agent Loop 形态）** | ✅ | `coordinator_agent_loop.py`——不暴露 `run_skills`，直接暴露 harness 工具集，进程内 messages 保留上下文；`AF_COORDINATOR_VERSION` 环境变量切换 v1/v2（`coordinator_decide.sh` 读取） |
+| 3 | **共用逻辑收敛（霰弹式修复）** | ✅ | v1/v2 共享的 `parse_agent_md`/`append_artifacts_markdown`/`llm_error_response`/`save_session_messages`/`bind_package_paths`/`put_e2e_response`/`is_empty_llm_response` 收口到 `coordinator_common.py`（单一真相源 F4） |
+| 4 | **工具并行批处理** | ✅ | `tool_policies.py::execute_in_batches`——工具按只读/写分类、并发执行（`_max_workers` 控制） |
+
 ---
 
 ## 16. 关联方案
@@ -1776,6 +1936,7 @@ frontend/bridge/templates/agent_template/harness_agent/
 | v1.0 | 2026-06-30 | AtomCode | 初始版本：完整设计文档，含节点数据交互、coordinator/skill runtime、工具绑定、数据流时序、实施计划 |
 | v1.1 | 2026-07-02 | AtomCode | 状态从 tbd → implemented；实施计划更新为实施情况，指向 `outfit-assistant/` 实际实现；修复 MiniMax endpoint 域名错误（minimax.io → minimaxi.com）|
 | v2.0 | 2026-07-14 | AtomCode | 全面更新反映 v3+ 架构演进：单 skill-runner 路由 + dispatch manifest 数据交互 + dummy_pre_skill hook；代码包化到 `packages/agentflow-runtime/` 的 pip 包模型；新增 §8 Agent Task Loop 外循环与 Function Calling 内循环 章节（含上下文压缩、预算感知、中断处理、双循环协作等 15 项机制）；§11 框架侧改动标记为"已放弃"；§12 目录结构重写为 pip 包 + agent 包 + 模板三层；§15 实施情况重写为 Phase 1/2/3 三阶段；代码精简（大段实现代码替换为 Mermaid 流程图 + 核心骨架）；新增 §18 技术债务 |
+| v3.0 | 2026-08-15 | AtomCode | 全量同步到 v5 实现：§1.3 补 v4/v5 演进脉络（结构拆分/executors/trace/hook/coordinator v2/共用逻辑收敛）；§2.5 统一执行器表述修正（general_task_executor → coordinator_decide + skill_executor + coordinator_common）；§6.1 框架协议模板位置修正（prompts/coordinator.py）；§6.6/§7.5 workflow command 修正为实际节点文件；§7.2 工具绑定更新（_LocalToolRegistry + MCP + v2 工具集）；§9.1 agent.json 移除已废弃 config_dir 字段；§10 时序修正节点名；§12 目录结构重写为 v5 实际（新增 executors/hooks/trace/coordinator_agent_loop/coordinator_common/tool_registry/tool_policies/artifact_pipeline/compaction/skills_loader/context/events/mounts/recorder/env_loader/manifest/find_runtime_package/sandbox_patch + harness/mcp/）；新增 §8.6 v4/v5 新增机制章节；§15 实施情况新增 Phase 4/5；§18 技术债务 #6 标记已解决（Hook 机制已实现） |
 
 ---
 
@@ -1788,4 +1949,4 @@ frontend/bridge/templates/agent_template/harness_agent/
 | 3 | **RAG 服务未接入** | P3 | 缺少对业务知识库的检索增强生成能力，Agent 仅依赖 LLM 训练数据和 SKILL.md 静态知识 |
 | 4 | **系统内模型推理服务接口未跑通生产** | **P1** | `llm_uds_client.py` / `openai_compatible_client.py` 已实现但端到端生产链路未验证，双客户端并存增加维护成本 |
 | 5 | **上下文压缩策略可优化** | P3 | 硬压缩默认关闭、折叠文件无自动展开、压缩阈值全局配置未区分节点类型、保护轮次静态配置未动态调整 |
-| 6 | **Hook 系统消费端待完善** | P3 | 仅实现 `emit_event()` 发射端，消费端只对接可观测性日志，缺少 Handler 注册/分发/条件触发/异步回调机制 |
+| ~~6~~ | ~~**Hook 系统消费端待完善**~~ | ~~P3~~ | **✅ 已解决（2026-08-15）**：v5 已实现完整 Hook 机制——`hooks/registry.py`（Handler 注册/分发）、`hooks/loader.py`（从 `harness/hooks/` 加载）、`hooks/engine.py::trigger`（条件触发 + 干预回写 + 异常隔离）、`events.py`（27 项事件目录 + INTERVENABLE_EVENTS）、`mounts.py`（14 项 before/after 挂载点）、`context.py`（AgentContext 阻断载体）；异步回调仍缺，如有需求另立债务 |

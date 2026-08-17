@@ -22,6 +22,9 @@
     "level": "debug",
     "file": ""
   },
+  "trace": {
+    "output_dir": "trace_output"
+  },
   "daemon": {
     "pid_file": "/tmp/agentflowd.pid",
     "drain_timeout_ms": 120000

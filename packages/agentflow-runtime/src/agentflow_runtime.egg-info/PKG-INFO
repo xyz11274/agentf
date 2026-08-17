@@ -5,3 +5,8 @@ Summary: AgentFlow Agent Runtime — generic agent execution engine
 Requires-Python: >=3.12
 Requires-Dist: openai>=1.0
 Requires-Dist: e2b-code-interpreter==2.8.1
+Requires-Dist: mcp<2,>=1.27
+Requires-Dist: PyYAML>=6.0
+Requires-Dist: requests>=2.31
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"

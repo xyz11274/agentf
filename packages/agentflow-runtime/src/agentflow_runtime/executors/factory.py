@@ -19,7 +19,19 @@ from agentflow_runtime.executors.e2b import E2BExecutor
 from agentflow_runtime.executors.host import HostExecutor
 from agentflow_runtime.executors.http import HTTPExecutor
 
-__all__ = ["create_executor"]
+__all__ = ["create_executor", "sandbox_workspace_prefix"]
+
+
+def sandbox_workspace_prefix() -> str:
+    """e2b 模式沙箱 workspace 前缀(/home/user/workspace),非 e2b 返回空串。
+
+    架构修复 W1(2026-08-14):沙箱环境读取从 skill_executor 渗漏收敛到 executors
+    factory 层——与 create_executor 同层读取 AF_SANDBOX_MODE,消除编排层方法名
+    泄漏底层实现(sandbox)的渗漏抽象。调用方(产物收集)据此判断路径是否在沙箱内。
+    """
+    if os.environ.get("AF_SANDBOX_MODE", "") != "e2b":
+        return ""
+    return os.environ.get("AF_SANDBOX_WORKSPACE", "/home/user/workspace")
 
 
 def create_executor(

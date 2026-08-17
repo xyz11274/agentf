@@ -14,6 +14,7 @@
 
 #include "resolve_handler.h"
 #include "router_logic.h"
+#include "acm_client.h"  // AcmClient::fetch_url / upload_file（产物 ACM 上传，L4 §4.2）
 
 using sidecar::build_callback_header;
 using sidecar::current_timestamp_iso8601;
@@ -487,6 +488,28 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
             // 仅 bridge 完全成功时发 Completed UserOutput 回调；错误时上游只收 TaskStatus（避免虚假完成）
             if (ts_code == 200) {
                 auto completed = processor.make_completed();
+                // 产物 ACM 上传（L4 §4.2）：url 优先下载 → base64 兜底 → upload_file → 写 acm_file_id。
+                // 失败降级保留原 url，不阻断回调（I-degrade / I-acm-file-id）。
+                if (!completed.user_output_object.empty()) {
+                    auto uoo = parse_request_body(completed.user_output_object);
+                    if (uoo) {
+                        const int injected = sidecar::enrich_artifacts_with_acm(
+                            *uoo,
+                            [](const std::string& url) { return AcmClient::fetch_url(url); },
+                            [](const std::string& name, const std::string& content,
+                               const std::string& mime) {
+                                const std::vector<uint8_t> bytes(content.begin(), content.end());
+                                const auto res = AcmClient::upload_file(name, bytes, mime);
+                                return res.success ? res.file_uuid : "";
+                            });
+                        if (injected > 0) {
+                            completed.user_output_object = json_dumps(*uoo);
+                            std::cerr << "[" << sidecar::log_timestamp()
+                                      << "] [sidecar_router] ACM_ART_INJECT req=" << request_id
+                                      << " injected=" << injected << std::endl;
+                        }
+                    }
+                }
                 post_callback(completed.stream_status, completed.flag, completed.text,
                               completed.is_final, completed.user_output_object);
             }

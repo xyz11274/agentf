@@ -9,7 +9,7 @@
       "type": "task",
       "execution_mode": "shell_script",
       "command": "bash nodes/skill_executor.sh",
-      "working_dir": "examples/agent/outfit-assistant",
+      "working_dir": "examples/agent/harness-agent",
       "json_output": true,
       "enable_hot_reload": false,
       "inputs": [

@@ -394,7 +394,7 @@ def test_pptx_artifact_adds_download_link(tmp_path):
     )
 
     assert "## 生成产物" in rendered
-    assert "📥" in rendered or "下载" in rendered
+    assert "下载" in rendered
     assert "presentation.pptx" in rendered
     # agent name = basename(AGENT_PACKAGE_DIR), dynamic not hardcoded (Fix 7)
     # URL 走 artifact_id 格式，无 ?path= 查询参数（artifact-storage.md §I-artifact-id）
@@ -418,7 +418,7 @@ def test_mixed_image_and_download_artifacts(tmp_path):
 
     assert "## 生成产物" in rendered
     assert "![生成图片" in rendered
-    assert "📥" in rendered or "deck.pptx" in rendered
+    assert "deck.pptx" in rendered
 
 
 # ═══════════════════════════════════════════════════════════════════

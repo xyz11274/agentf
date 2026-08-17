@@ -17,18 +17,20 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, AsyncIterator
 
 import httpx
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 logger = logging.getLogger("upstream_mock")
 # 模块级日志配置：uvicorn 以 import string 方式启动时也生效
@@ -227,7 +229,7 @@ async def handle_send(request: Request) -> JSONResponse:
         await _push_event(task_id, {"type": "done", "task_id": task_id})
         return JSONResponse(
             status_code=502,
-            content={"error": f"sidecar 请求失败", "detail": sidecar_body[:200]},
+            content={"error": "sidecar 请求失败", "detail": sidecar_body[:200]},
         )
 
     # 记录发送结果
@@ -372,6 +374,89 @@ async def stream_events(task_id: str):
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "coremind-upstream-mock", "port": MOCK_PORT}
+
+
+# ── ACM 文件服务 Mock ─────────────────────────────────────────────
+# 模拟 ACM-master 的 /acm/v1/uploadfile 与 /acm/v1/downloadfile/（file_server_mgr.cpp）：
+#   - 上传：multipart 形式（filename="..." + Content-Length + \r\n\r\n + payload），
+#     扩展名白名单 ALLOWED_UPLOAD_FILE_TYPES={jpg,png,log,zip,txt,html,wav,pptx,pdf,docx,xlsx,md}
+#   - 下载：HTTP 层恒 200 + body.RetCode 判定；downloadtype: base64 头 → base64 JSON；
+#     不带该头 → application/octet-stream 二进制流
+#   - 失败信号：RetCode:500 / request file not exist（HTTP 层恒 200）
+ACM_FILES_DIR = Path(__file__).resolve().parent / "acm_files"
+ALLOWED_UPLOAD_FILE_TYPES = {"jpg", "png", "log", "zip", "txt", "html", "wav", "pptx", "pdf", "docx", "xlsx", "md"}
+
+
+def _acm_ret(status_code: int, ret_msg: str, data: dict | None = None) -> JSONResponse:
+    """构造 ACM 风格响应：HTTP 层恒 200，真实状态在 body.RetCode（对齐 ResponseMsg）。"""
+    body: dict[str, Any] = {"Version": "1.0", "RetCode": status_code, "RetMsg": ret_msg}
+    if data:
+        body["Data"] = data
+    return JSONResponse(body, status_code=200)
+
+
+@app.post("/acm/v1/uploadfile")
+async def acm_upload(request: Request) -> JSONResponse:
+    """模拟 ACM 上传：解析 multipart（filename + payload），落盘 acm_files/。"""
+    ACM_FILES_DIR.mkdir(parents=True, exist_ok=True)
+    body_bytes = await request.body()
+
+    # 解析 filename="..."
+    raw = body_bytes.decode("latin-1")
+    start = raw.find('filename="')
+    if start == -1:
+        return _acm_ret(400, "filename get error")
+    name_start = start + len('filename="')
+    name_end = raw.find('"', name_start)
+    if name_end == -1:
+        return _acm_ret(400, "filename get error")
+    file_name = raw[name_start:name_end]
+
+    # 扩展名白名单（对齐 ACM IsAllowedFileType）
+    ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+    if ext not in ALLOWED_UPLOAD_FILE_TYPES:
+        return _acm_ret(400, "file type not allowed")
+
+    # payload 起始：\r\n\r\n 之后（二进制安全：bytes 切片）
+    payload_marker = b"\r\n\r\n"
+    marker_pos = body_bytes.find(payload_marker)
+    if marker_pos == -1:
+        return _acm_ret(400, "request payload start pos get error")
+    payload = body_bytes[marker_pos + len(payload_marker):]
+
+    # 文件名净化（对齐 fs::path(fileName).filename()，防目录穿越）
+    safe_name = Path(file_name).name
+    target = ACM_FILES_DIR / safe_name
+    target.write_bytes(payload)
+
+    logger.info("[ACM] upload file_uuid=%s size=%d", safe_name, len(payload))
+    return _acm_ret(200, "ACM receive file succeed", {"fileUUID": safe_name})
+
+
+@app.get("/acm/v1/downloadfile/{file_key}")
+async def acm_download(file_key: str, request: Request):
+    """模拟 ACM 下载：downloadtype: base64 → base64 JSON；否则二进制流。"""
+    ACM_FILES_DIR.mkdir(parents=True, exist_ok=True)
+    safe_name = Path(file_key).name
+    target = ACM_FILES_DIR / safe_name
+    if not target.exists():
+        return _acm_ret(500, "request file not exist", {"fileUUID": safe_name})
+
+    content = target.read_bytes()
+    is_base64 = request.headers.get("downloadtype", "") == "base64"
+    if is_base64:
+        b64 = base64.b64encode(content).decode("ascii")
+        data = {
+            "fileUUID": safe_name,
+            "fileContent": b64,
+            "originalSize": len(content),
+            "base64Size": len(b64),
+        }
+        logger.info("[ACM] download base64 file_uuid=%s size=%d", safe_name, len(content))
+        return _acm_ret(200, "ACM download file succeed", data)
+
+    logger.info("[ACM] download binary file_uuid=%s size=%d", safe_name, len(content))
+    return Response(content, media_type="application/octet-stream")
 
 
 @app.get("/tasks/{task_id}")

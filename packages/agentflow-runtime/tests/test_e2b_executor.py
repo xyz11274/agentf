@@ -219,7 +219,35 @@ def test_exec_command_sdk_exception_extracts_results(executor_with_mocks):
     assert "partial output" in result.stdout
     assert HOST_PKG_DIR in result.stdout  # translated
     assert result.error is not None
+    # F7.1 诊断契约:错误信息必须携带 "Sandbox SDK exec failed" 前缀与命令上下文,
+    # 让 LLM 从空 error 中能自诊断路径错(2026-08-14 review 恢复误删断言)。
     assert "Sandbox SDK exec failed" in result.error
+    assert "cmd=" in result.error
+
+
+def test_download_images_pulls_video_from_sandbox(executor, monkeypatch, tmp_path):
+    """bash 成功后 stdout 中的视频路径也应被拉回宿主机(与图片同一机制)。
+
+    回归 bug(2026-08-14 实测):视频生成成功但宿主机无文件,collect 阶段
+    os.path.isfile 失败 → skipped_missing → 前端收不到视频。根因:
+    _IMAGE_PATH_RE 只匹配 png/jpeg/webp/gif,bash 执行后视频未从沙箱拉回。
+    """
+    exe = executor
+    exe.agent_package_dir = str(tmp_path)
+    sb = MagicMock()
+    video_bytes = b"\x00\x00\x00\x18ftypmp42"  # 假 mp4 头
+    monkeypatch.setattr(
+        exe,
+        "_fetch_sandbox_file",
+        lambda s, path: video_bytes if path.endswith(".mp4") else None,
+    )
+
+    stdout = f"saved video to {E2BExecutor.SANDBOX_WORKSPACE}/outfit.mp4"
+    exe._download_images(sb, stdout)
+
+    target = tmp_path / "outfit.mp4"
+    assert target.exists(), "视频应从沙箱拉回宿主机"
+    assert target.read_bytes() == video_bytes
 
 
 # ---------------------------------------------------------------------------

@@ -202,14 +202,37 @@ class DataBusClient:
         try:
             # 只传非空可选参数（守 SDK 行为：if param: params[param] = val）
             kwargs: dict = {"type": type}
-            if source: kwargs["source"] = source
-            if skill:   kwargs["skill"] = skill
-            if round:   kwargs["round"] = round
-            if status:  kwargs["status"] = status
+            if source:
+                kwargs["source"] = source
+            if skill:
+                kwargs["skill"] = skill
+            if round:
+                kwargs["round"] = round
+            if status:
+                kwargs["status"] = status
             if self._dialogue_id:
                 kwargs["dialogue_id"] = self._dialogue_id
-            return self._client.response_push(content, **kwargs)
+            ok = self._client.response_push(content, **kwargs)
+            # W2 集中审计日志(2026-08-14):调用点分散在 5 个模块,审计行含
+            # source/type/skill/status 上下文,全链路推送可追溯(F7 不截断)。
+            print(
+                f"[audit] databus.response_push session={self._session_id} "
+                f"source={source or '(unset)'} type={type} "
+                f"skill={skill or '-'} round={round or '-'} status={status or '-'} "
+                f"ok={ok}",
+                file=sys.stderr,
+            )
+            return ok
         except Exception as exc:
+            # 失败也打印审计行(含调用模块),再打 WARN 带异常根因——两条信息互补,
+            # 定位"哪个模块推送失败 + 为什么失败"(F7.1 请求/响应同范式)。
+            print(
+                f"[audit] databus.response_push session={self._session_id} "
+                f"source={source or '(unset)'} type={type} "
+                f"skill={skill or '-'} round={round or '-'} status={status or '-'} "
+                f"ok=False",
+                file=sys.stderr,
+            )
             _log_warn(f"response_push failed: {exc}")
             return False
         finally:

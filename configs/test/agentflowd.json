@@ -30,7 +30,8 @@
     "file": ""
   },
   "trace": {
-    "flow_dir": "/tmp/agentflow/test-traces"
+    "flow_dir": "/tmp/agentflow/test-traces",
+    "output_dir": "trace_output"
   },
   "daemon": {
     "pid_file": "/tmp/agentflowd-test.pid",

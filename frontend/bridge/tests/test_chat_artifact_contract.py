@@ -62,7 +62,7 @@ CONTENT_WITH_ARTIFACTS = (
     "## 生成产物\n\n"
     "![生成图片 1](/api/artifacts/outfit-assistant/files/agent/outputs/look.png)\n\n"
     "[查看报告 1](/api/artifacts/outfit-assistant/files/agent/outputs/report.html)\n\n"
-    "[📥 下载文件 1](/api/artifacts/outfit-assistant/files/agent/outputs/deck.pptx)"
+    "[下载文件 1](/api/artifacts/outfit-assistant/files/agent/outputs/deck.pptx)"
 )
 
 
@@ -122,7 +122,7 @@ def test_artifact_info_has_correct_url() -> None:
 
 def test_download_artifact_preserves_filename() -> None:
     """Download filename is extracted from the URL path."""
-    content = "[📥 下载文件 1](/api/artifacts/test/files/my_report.pptx)"
+    content = "[下载文件 1](/api/artifacts/test/files/my_report.pptx)"
     artifacts = extract_artifact_infos(content)
     assert len(artifacts) == 1
     assert artifacts[0].name == "my_report.pptx"
@@ -131,7 +131,7 @@ def test_download_artifact_preserves_filename() -> None:
 
 def test_pdf_download_has_correct_mime() -> None:
     """.pdf download has pdf MIME type."""
-    content = "[📥 下载文件 1](/api/artifacts/test/files/doc.pdf)"
+    content = "[下载文件 1](/api/artifacts/test/files/doc.pdf)"
     artifacts = extract_artifact_infos(content)
     assert len(artifacts) == 1
     assert artifacts[0].mime_type == "application/pdf"
@@ -140,8 +140,8 @@ def test_pdf_download_has_correct_mime() -> None:
 def test_publicized_urls_are_deduplicated() -> None:
     """Same artifact URL appearing twice is only reported once."""
     content = (
-        "[📥 下载文件 1](/api/artifacts/test/files/report.pptx)\n\n"
-        "[📥 下载文件 2](/api/artifacts/test/files/report.pptx)"
+        "[下载文件 1](/api/artifacts/test/files/report.pptx)\n\n"
+        "[下载文件 2](/api/artifacts/test/files/report.pptx)"
     )
     artifacts = extract_artifact_infos(content)
     assert len(artifacts) == 1

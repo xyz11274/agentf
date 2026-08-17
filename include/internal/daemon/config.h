@@ -47,6 +47,10 @@ struct DaemonConfig {
   std::string flow_trace_file;  // single .ndjson file (all events appended)
   std::string flow_trace_dir;   // per-session .ndjson files under this directory
 
+  // Span trace（TraceSystem NDJSON 输出目录，C++ TraceManager 与 Python SpanWriter 共用）
+  // 空字符串 = 使用代码默认 "trace_output"（相对 daemon 启动 cwd）
+  std::string trace_output_dir;
+
   // Daemon
   std::string pid_file;
   bool daemonize = false;

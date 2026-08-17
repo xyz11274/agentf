@@ -1,6 +1,7 @@
 #pragma once
 
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
@@ -85,6 +86,23 @@ std::string log_timestamp();
 // artifacts 为空或 null 时返回 ""（用于 Running 回调）。
 // artifacts 非空时返回 {"code":200101,"data":{"content":[...]}} 的字符串形式。
 std::string build_user_output_object(const Json::Value& sse_artifacts);
+
+// ── 产物 ACM 上传编排（L4 §4.2） ──────────────────────────────────────
+// 遍历 user_output_object["data"]["content"]，对每条产物（ArtifactInfo）：
+//   ① 内容获取（url 优先 → base64 兜底，用户拍板 2026-08-14）：
+//      fetch_fn(url) 下载；空/失败 → 读 data_base64 经 acm_base64_decode 解码
+//   ② upload_fn(name, content, mime) 上传 ACM，返回 file_uuid（空串 = 失败）
+//   ③ 成功 → 写 item["acm_file_id"]；失败 → 保留原 url（降级），不阻断
+// 日志：ACM_ART_DL / ACM_ART_B64 / ACM_ART_UP_OK / ACM_ART_UP_ERR / ACM_ART_SKIP。
+// 返回：成功注入 acm_file_id 的条数。
+// fetch_fn/upload_fn 由调用方注入（sidecar_router 生产 / main.cpp dev），
+// 本函数保持纯编排可测（不含网络副作用）。
+int enrich_artifacts_with_acm(
+    Json::Value& user_output_object,
+    const std::function<std::string(const std::string& url)>& fetch_fn,
+    const std::function<std::string(const std::string& name,
+                                    const std::string& content,
+                                    const std::string& mime)>& upload_fn);
 
 // F7 展示层截断：递归遍历 JSON，将 base64 data URI（如 "data:image/png;base64,xxx"）
 // 截断为"前缀 + 前 120 字符 + 长度标记"，防止超长 base64 刷屏日志。

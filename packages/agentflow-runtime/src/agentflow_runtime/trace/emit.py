@@ -198,10 +198,24 @@ def current_span_id_safe() -> str:
     except Exception:
         return ""
 
+# 进程级 fallback trace_id：首次生成后缓存复用。
+# 未注入 AF_TRACE_ID 时（python_direct 直跑 / 无 daemon 注入），同一进程内
+# 所有 span 必须共享同一 trace_id，viewer 才能按 trace_id 聚合 span 树；
+# 否则每 span 一个独立 trace_id（每次 now_us() 不同）→ viewer 每 span 一个
+# session，数据零散无法展示（F3 不变量 I-1：trace 关联信息不丢失）。
+_fallback_trace_id_cache: str | None = None
+_fallback_trace_id_lock = threading.Lock()
+
+
 def _fallback_trace_id() -> str:
     """SpanContext 无 trace_id 时的退化（进程未被注入 AF_TRACE_ID）。
 
-    返回 "py_local_<pid>_<ts>" 让 span 仍可落盘，viewer 标记为"无父链"。
+    进程级稳定：首次调用生成 "py_local_<pid>_<ts>" 后缓存复用，
+    同进程后续 span 共享同一 trace_id；跨进程仍各不同（天然隔离）。
     """
-    import os
-    return f"py_local_{os.getpid()}_{now_us()}"
+    global _fallback_trace_id_cache
+    with _fallback_trace_id_lock:
+        if _fallback_trace_id_cache is None:
+            import os
+            _fallback_trace_id_cache = f"py_local_{os.getpid()}_{now_us()}"
+        return _fallback_trace_id_cache

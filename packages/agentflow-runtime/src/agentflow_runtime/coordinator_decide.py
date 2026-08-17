@@ -21,19 +21,14 @@ import copy
 import json
 import logging
 import os
-import re
 import sys
 import time
 from datetime import datetime
 from typing import Any
 import uuid
-from pathlib import Path
-from urllib.parse import quote
 
 # ── Add nodes/ to sys.path for local imports (before .venv activation) ──
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-import yaml
 
 from agentflow_runtime.databus_client import DataBusClient
 from agentflow_runtime.compaction import (
@@ -48,7 +43,6 @@ from agentflow_runtime.llm_call import (
 )
 from agentflow_runtime.common.agent_config import AgentConfig
 from agentflow_runtime.common.runtime_context import (
-    artifact_session_id as _artifact_session_id,
     completed_skill_name as _completed_skill_name,
     dialogue_id as _dialogue_id,
     input as _input,
@@ -58,38 +52,33 @@ from agentflow_runtime.common.runtime_context import (
     skill_success as _skill_success,
 )
 from agentflow_runtime.observability import emit_event
+from agentflow_runtime import events as hook_events
+from agentflow_runtime import mounts as hook_mounts
+from agentflow_runtime.context import AgentContext
+from agentflow_runtime.hooks import load_hooks_from_dir, trigger as hook_trigger
 from agentflow_runtime.trace import emit_span, SpanKind, SpanStatus
 from agentflow_runtime.parse_af_input import parse_af_input, parse_stream
 from prompts import (
-    ARTIFACT_DOWNLOAD_TEMPLATE,
-    ARTIFACT_HTML_TEMPLATE,
-    ARTIFACT_IMAGE_TEMPLATE,
-    ARTIFACTS_SECTION_HEADER,
     COORDINATOR_FALLBACK_SYSTEM,
     DECISION_FAILURE_PROMPT,
     DECISION_SUCCESS_PROMPT,
-    LLM_ERROR_NO_ARTIFACTS,
-    LLM_ERROR_WITH_ARTIFACTS,
     PROTOCOL_TEMPLATE,
     RUN_SKILLS_TOOL_DEFINITION,
     SKILL_COMPLETION_TEMPLATE,
 )
 from agentflow_runtime.round_reminder import build_round_reminder
-from prompts import (
-    ARTIFACT_DOWNLOAD_TEMPLATE,
-    ARTIFACT_HTML_TEMPLATE,
-    ARTIFACT_IMAGE_TEMPLATE,
-    ARTIFACTS_SECTION_HEADER,
-    COORDINATOR_FALLBACK_SYSTEM,
-    DECISION_FAILURE_PROMPT,
-    DECISION_SUCCESS_PROMPT,
-    LLM_ERROR_NO_ARTIFACTS,
-    LLM_ERROR_WITH_ARTIFACTS,
-    PROTOCOL_TEMPLATE,
-    RUN_SKILLS_TOOL_DEFINITION,
-    SKILL_COMPLETION_TEMPLATE,
+# 霰弹式收敛(2026-08-14):产物处理/parse_agent_md/e2e_response/llm_error 兜底等
+# 与 v2(coordinator_agent_loop.py)共享的纯逻辑统一收口到 coordinator_common,
+# 本模块不再各自维护重复实现(单一真相源 F4)。
+from agentflow_runtime.coordinator_common import (
+    append_artifacts_markdown,
+    bind_package_paths,
+    is_empty_llm_response,
+    llm_error_response,
+    parse_agent_md,
+    put_e2e_response,
+    save_session_messages,
 )
-from agentflow_runtime.round_reminder import build_round_reminder
 
 NODES_DIR = os.path.dirname(os.path.abspath(__file__))
 AGENT_PACKAGE_DIR = os.path.dirname(NODES_DIR)
@@ -149,36 +138,8 @@ def _load_dotenv() -> None:
 
 
 # ── Helper functions (must be defined before module-level code below) ──
-
-RE_ENV_VAR = re.compile(r"\$\{(\w+)\}")
-
-
-def _expand_env(value):
-    if isinstance(value, str):
-        return RE_ENV_VAR.sub(lambda m: os.environ.get(m.group(1), m.group(0)), value)
-    if isinstance(value, dict):
-        return {k: _expand_env(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_expand_env(v) for v in value]
-    return value
-
-
-def parse_agent_md(path: str) -> tuple:
-    if not os.path.isfile(path):
-        return {}, ""
-    with open(path, encoding="utf-8") as f:
-        raw = f.read()
-    parts = raw.split("---", 2)
-    if len(parts) < 3:
-        return {}, raw.strip()
-    try:
-        frontmatter = yaml.safe_load(parts[1]) or {}
-        frontmatter = _expand_env(frontmatter)
-    except Exception:
-        frontmatter = {}
-        print(f"[flow] WARN: agent.md frontmatter parse failed", file=sys.stderr)
-    body = parts[2].strip()
-    return frontmatter, body
+# 霰弹式收敛(2026-08-14):RE_ENV_VAR/_expand_env/parse_agent_md 已上移
+# coordinator_common(见顶部 import),此处不再重复定义。
 
 
 # ---------------------------------------------------------------------------
@@ -216,6 +177,33 @@ _init_skills()  # Module-level init; re-called in execute() to respect entry fil
 # run_skills interception → DataBus → framework next_skills pipeline
 # ---------------------------------------------------------------------------
 
+def _is_duplicate_dispatch(completed_skill: str, skill_names: list,
+                           force_requested: bool,
+                           last_prompt: str | None = None) -> bool:
+    """F2 拦截判定:同一 dialogue 内重复 dispatch 刚完成的 skill(无 force)→ True。
+
+    F1(提示词)无法完全阻止 LLM 偶发二次 dispatch,此处代码层强制拦截——
+    避免重复执行整段 skill 浪费耗时。force=true 是显式逃生口,不拦截。
+
+    判定维度(2026-08-13 升级):**skill 名 + 输入 prompt 双维度**。
+    - 同名 skill 且本次 prompt 与上次 dispatch 该 skill 的 prompt 相同 → 重复,拦截。
+    - 同名但 prompt 不同(用户补充信息/新任务指令 → 同 skill 重跑) → 不算重复,放行。
+    - last_prompt 缺失(None)时保守按"同名即重复"处理,维持原语义。
+    """
+    if not completed_skill or force_requested:
+        return False
+    for _s in skill_names:
+        name = _s.get("name") if isinstance(_s, dict) else str(_s)
+        if name != completed_skill:
+            continue
+        prompt = _s.get("prompt", "") if isinstance(_s, dict) else ""
+        if last_prompt is not None and prompt != last_prompt:
+            # 同名但 prompt 不同 → 新任务,不算重复
+            continue
+        return True
+    return False
+
+
 def handle_run_skills_call(args: dict, databus: DataBusClient,
                            session_id: str, dialogue_id: str) -> str:
     """Intercept run_skills tool_call → write dispatch info to DataBus → trigger framework.
@@ -238,6 +226,11 @@ def handle_run_skills_call(args: dict, databus: DataBusClient,
             "load_skills": spec.get("load_skills", []),
         }
         databus.put_global(dispatch_key, json.dumps(dispatch_data, ensure_ascii=False))
+
+        # 记录该 skill 最近一次 dispatch 的 prompt(供 re-trigger 时 F2 双维度
+        # 重复判定对比:同名 skill + 同 prompt 才算重复,新 prompt 放行)。
+        databus.put_global(f"last_prompt:{dialogue_id}:{spec['name']}",
+                           spec.get("prompt", ""))
 
         # ② All skills go through 'skill-runner', differentiated by exec_skill_key
         # force 是 coordinator 显式 opt-in 的"重排逃生口"（builtin_dispatcher.h:28
@@ -316,358 +309,22 @@ def collect_skill_results(databus: DataBusClient, skill_names: list) -> list:
     return results
 
 
-_VERSION_SUFFIX = re.compile(r"-(\d+)$")
-
-
-def _dedup_versioned_artifacts(paths: list[str]) -> list[str]:
-    """Keep only the highest-numbered variant when filenames share a ``-N`` stem.
-
-    ``outfit-review-1.png`` and ``outfit-review-2.png`` are treated as versions
-    of the same artifact family (base stem ``outfit-review``); only the
-    highest-numbered one survives.  Files without a ``-N`` suffix are kept
-    unchanged.
-    """
-    best: dict[str, tuple[int, str]] = {}
-    for path in paths:
-        stem = Path(path).stem
-        match = _VERSION_SUFFIX.search(stem)
-        base = stem[: match.start()] if match else stem
-        num = int(match.group(1)) if match else 0
-        prev = best.get(base)
-        if prev is None or num > prev[0]:
-            best[base] = (num, path)
-    return [path for _, path in best.values()]
-
-
-def _existing_artifact_url(path: str) -> str | None:
-    """Resolve a path to a servable URL, returning None if the file is missing.
-
-    HTTP(S) URLs pass through unchanged (remote files cannot be verified
-    locally). Local paths are confirmed to exist on disk before being mapped
-    to a Bridge URL, so we never emit a link to a non-existent artifact.
-    """
-    if path.startswith(("http://", "https://")):
-        return path
-    if not os.path.isfile(path):
-        print(f"[flow] WARN: artifact not found on disk, skip URL: {path}", file=sys.stderr)
-        return None
-    return local_artifact_url(path)
-
-
-def append_artifacts_markdown(content: str, artifacts_json: str) -> str:
-    """Append browser-accessible Markdown for generated artifacts (images, HTML, downloads)."""
-    try:
-        artifacts = json.loads(artifacts_json) if artifacts_json else []
-    except (json.JSONDecodeError, TypeError):
-        artifacts = []
-    items = [item for item in artifacts if isinstance(item, str)]
-    legacy_absolute_images = re.findall(
-        r"!\[[^\]]*\]\((/[^)]+\.(?:png|jpe?g|webp|gif))\)", content, re.I
-    )
-    content = rewrite_local_artifact_links(
-        content, list(dict.fromkeys(items + legacy_absolute_images))
-    )
-    if not items:
-        return content
-
-    _image_suffixes = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-    # Dedup must operate on the FULL image set, then drive the downstream
-    # downloads exclusion.  Pre-fix bug: `downloads` used the dedup-ed `images`
-    # list, so a dedup-dropped version (outfit-review-1.png) fell through to
-    # downloads and was rendered again — defeating the dedup (I-4 idempotent).
-    all_images = [p for p in items if Path(p).suffix.lower() in _image_suffixes]
-    images = _dedup_versioned_artifacts(all_images)
-    html_reports = [p for p in items if p.lower().endswith(".html")]
-    downloads = [p for p in items if p not in all_images and p not in html_reports]
-
-    blocks = []
-    skipped_already_in_content: list[str] = []
-    # ── 归一化去重(I-4 幂等):按产物 basename 判断"是否已在 content 中被引用" ──
-    # 不能再用 `url not in content` 字符串匹配——LLM 输出可能以本地路径/占位符形式
-    # 引用产物(rewrite 后 URL 形式也可能与 _existing_artifact_url 不一致),URL 匹配
-    # 不到导致同一产物重复追加(实测:"## 生成产物" 块出现 2 次)。
-    # 归一化 key = 文件名(basename),对本地路径 / serve URL / 已改写 URL 均稳定。
-    existing_content_keys: set[str] = set()
-    # 只把"已解析为可访问 URL"的引用视为"已在 content 中被引用"——
-    # rewrite 成功后的产物 URL(/api/artifacts/...)、外部 URL(http/https)、data URI
-    # 都是前端可访问形态;死链接(本地相对路径,rewrite 未解析)不计入,
-    # 允许追加兜底产物块(fix-outfit-image-display:死链接误判导致图片彻底不可见)。
-    def _is_resolved_ref(ref: str) -> bool:
-        return ref.startswith(("/api/artifacts/", "http://", "https://", "data:"))
-
-    # Markdown 链接引用：![alt](path) / [text](path)
-    for _m in re.finditer(r"!?\[[^\]]*\]\(([^)\s]+)\)", content, re.I):
-        _ref = _m.group(1).split("?")[0].split("#")[0]
-        if not _is_resolved_ref(_ref):
-            continue
-        _name = Path(_ref).name
-        if _name:
-            existing_content_keys.add(_name)
-    # HTML <img src="..."> 引用同样视为"已在 content 中被引用"，
-    # 否则 HTML 内联图片会被重复追加到"## 生成产物"块（I-4 幂等性）。
-    for _m in re.finditer(r"<img[^>]*\bsrc\s*=\s*[\"']([^\"']+)[\"']", content, re.I):
-        _ref = _m.group(1).split("?")[0].split("#")[0]
-        if not _is_resolved_ref(_ref):
-            continue
-        _name = Path(_ref).name
-        if _name:
-            existing_content_keys.add(_name)
-
-    def _should_append(path: str, url: str) -> bool:
-        """URL 存在且 basename 未被 content 引用才追加。"""
-        key = Path(path).name
-        if key in existing_content_keys:
-            return False
-        existing_content_keys.add(key)  # 本函数内同类产物也只追加一次
-        return True
-
-    if images:
-        for index, path in enumerate(images, 1):
-            url = _existing_artifact_url(path)
-            if url and _should_append(path, url):
-                blocks.append(ARTIFACT_IMAGE_TEMPLATE.format(index=index, url=url))
-            elif url:
-                skipped_already_in_content.append(path)
-    if html_reports:
-        for index, path in enumerate(html_reports, 1):
-            url = _existing_artifact_url(path)
-            if url and _should_append(path, url):
-                blocks.append(ARTIFACT_HTML_TEMPLATE.format(index=index, url=url))
-            elif url:
-                skipped_already_in_content.append(path)
-    if downloads:
-        for index, path in enumerate(downloads, 1):
-            url = _existing_artifact_url(path)
-            if url and _should_append(path, url):
-                blocks.append(ARTIFACT_DOWNLOAD_TEMPLATE.format(index=index, url=url))
-            elif url:
-                skipped_already_in_content.append(path)
-
-    # Audit:产物 Markdown 拼装结果。完整清单落 stderr（F7：不截断存储层）。
-    # 分类计数 + 实际拼入 blocks 的 url 清单，事后可回溯"哪些产物被渲染"。
-    print(
-        f"[flow] artifact.markdown input_items={len(items)} "
-        f"images={len(images)} html={len(html_reports)} downloads={len(downloads)} "
-        f"blocks={len(blocks)} skipped_in_content={len(skipped_already_in_content)}",
-        file=sys.stderr,
-    )
-    if blocks:
-        # 仅记 url 清单（已去重），不重复记 path 清单 — url 才是前端实际访问点
-        block_urls = [b.split("](")[-1].rstrip(")") for b in blocks]
-        print(
-            "[flow] artifact.markdown_urls " + json.dumps(block_urls, ensure_ascii=False),
-            file=sys.stderr,
-        )
-    if skipped_already_in_content:
-        print(
-            "[flow] artifact.markdown_skipped_in_content "
-            + json.dumps(skipped_already_in_content, ensure_ascii=False),
-            file=sys.stderr,
-        )
-    if not blocks:
-        return content
-    return content.rstrip() + "\n\n" + ARTIFACTS_SECTION_HEADER + "\n\n" + "\n\n".join(blocks)
-
-
-def llm_error_response(artifacts_json: str) -> str:
-    """Build an honest fallback based on artifacts actually reported by a skill."""
-    try:
-        artifacts = json.loads(artifacts_json) if artifacts_json else []
-    except (json.JSONDecodeError, TypeError):
-        artifacts = []
-    has_artifacts = any(isinstance(item, str) and item for item in artifacts)
-    if has_artifacts:
-        return append_artifacts_markdown(LLM_ERROR_WITH_ARTIFACTS, artifacts_json)
-    return LLM_ERROR_NO_ARTIFACTS
-
-
-def rewrite_local_artifact_links(content: str, artifacts: list[str]) -> str:
-    """Rewrite local Markdown and HTML references using collected artifacts.
-
-    Skill output remains untouched at its source.  Only references that resolve
-    to a file already admitted to the current artifact list are publicized.
-    """
-    local_artifacts = {
-        os.path.realpath(path): path
-        for path in artifacts
-        if not path.startswith(("http://", "https://")) and os.path.isfile(path)
-    }
-    resolved_count = 0
-    unresolved_refs: list[str] = []
-
-    def resolve_url(reference: str) -> str | None:
-        nonlocal resolved_count
-        reference = reference.strip()
-        if not reference or reference.startswith(("http://", "https://", "data:", "#")):
-            if reference:
-                unresolved_refs.append(f"{reference}(skip:external)")
-            return None
-        candidate = reference if os.path.isabs(reference) else os.path.join(
-            AGENT_PACKAGE_DIR, reference
-        )
-        real_candidate = os.path.realpath(candidate)
-        if real_candidate not in local_artifacts:
-            # 兜底:LLM 常以 skill cwd 视角引用相对路径(如 ./assets/x.png),与
-            # AGENT_PACKAGE_DIR 基准下的真实路径(harness/assets/x.png)错位。
-            # 按 basename 在产物清单中唯一匹配 → 解析成功;多个同 basename(歧义)
-            # 拒绝猜测,保持 unresolved(F11.1:不凭命名猜属性/路径)。
-            base = os.path.basename(reference)
-            if base:
-                matches = [p for p in local_artifacts.values() if os.path.basename(p) == base]
-                if len(matches) == 1:
-                    resolved_count += 1
-                    return local_artifact_url(matches[0])
-            unresolved_refs.append(f"{reference}(not_in_artifacts)")
-            return None
-        resolved_count += 1
-        return local_artifact_url(local_artifacts[real_candidate])
-
-
-    markdown_pattern = re.compile(r"(!?\[[^\]]*\]\()([^)\s]+)(\))", re.I)
-
-    def replace_markdown(match: re.Match) -> str:
-        url = resolve_url(match.group(2))
-        if not url:
-            return match.group(0)
-        return f"{match.group(1)}{url}{match.group(3)}"
-
-    content = markdown_pattern.sub(replace_markdown, content)
-    html_pattern = re.compile(
-        r"(?P<prefix>\b(?:src|href|poster)\s*=\s*)(?P<quote>[\"'])(?P<path>[^\"']+)(?P=quote)",
-        re.I,
-    )
-
-    def replace_html(match: re.Match) -> str:
-        url = resolve_url(match.group("path"))
-        if not url:
-            return match.group(0)
-        quote_char = match.group("quote")
-        return f"{match.group('prefix')}{quote_char}{url}{quote_char}"
-
-    content = html_pattern.sub(replace_html, content)
-
-    # 可观测性：记录链接改写决策
-    print(
-        f"[flow] artifact.rewrite_links total_artifacts={len(local_artifacts)} "
-        f"resolved={resolved_count} unresolved={len(unresolved_refs)}",
-        file=sys.stderr,
-    )
-    if unresolved_refs:
-        print(
-            "[flow] artifact.rewrite_links_unresolved "
-            + json.dumps(unresolved_refs[:20], ensure_ascii=False),  # 限前20避免超长
-            file=sys.stderr,
-        )
-    return content
-
-
-def rewrite_local_image_links(content: str) -> str:
-    """Backward-compatible absolute Markdown image rewriting helper."""
-    absolute_images = re.findall(
-        r"!\[[^\]]*\]\((/[^)]+\.(?:png|jpe?g|webp|gif))\)", content, re.I
-    )
-    return rewrite_local_artifact_links(content, absolute_images)
-
-
-def local_artifact_url(path: str, package_dir: str | None = None) -> str:
-    """Map a package-local path to a file-storage artifact URL.
-
-    When called from an entry file, pass ``package_dir`` explicitly to
-    avoid path resolution against the pip package's own directory.
-
-    Returns ``/api/artifacts/{artifact_id}`` where artifact_id is
-    ``{agent_name}/{session_id}/{relative_path}``.
-
-    E2E-3 单一真相来源(2026-08-12 修复):session_id 段改走
-    ``_artifact_session_id()``(即 {user_id}_{client_id}),与
-    ``skill_executor._upload_artifacts_to_storage`` 的落盘目录段一致;
-    不再读 ``AF_SESSION_ID``(agentflow 执行槽位 0/1/2,缺用户维度
-    会导致 URL 段与上传段错位,靠 Bridge 剥离重试兜底)。
-
-    If ``session_id`` is unavailable (no AF_USER_ID/AF_CLIENT_ID), falls back
-    to the legacy ``/api/artifacts/{agent_name}/files/{relative}`` format.
-    """
-    if package_dir is None:
-        package_dir = AGENT_PACKAGE_DIR
-    agent_name = os.path.basename(package_dir.rstrip(os.sep)) or "agent"
-    # relative 相对 package_dir 计算，避免 agent_name 在 URL 中重复
-    # （URL 格式已含 {agent_name}/files/ 或 {agent_name}/{session_id}/）
-    relative = os.path.relpath(os.path.realpath(path), os.path.realpath(package_dir))
-    # _ensure_artifacts_in_package 已按 session_id 分目录保存，
-    # relative 形如 "outputs/{session_id}/{filename}"。
-    # 仅在 URL 格式含 {session_id} 段时（新格式）剥离避免重复；
-    # legacy 格式（无 storage_url）必须保留 session_id，否则 Bridge 找不到文件。
-    # E2E-3: session_id 走 _artifact_session_id()({user_id}_{client_id}),
-    # 与 _upload_artifacts_to_storage 的落盘目录段单一真相来源。
-    session_id = _artifact_session_id()
-    storage_url = os.environ.get("AF_ARTIFACT_STORAGE_URL", "")
-    if session_id and storage_url:
-        parts = relative.split("/")
-        if len(parts) > 2 and parts[0] == "outputs" and parts[1] == session_id:
-            relative = "/".join([parts[0]] + parts[2:])
-    if relative.startswith(".."):
-        # 产物在 agent package 之外（如 /tmp/foo.png 或绝对路径外部文件）。
-        # 降级为 basename，与 skill_executor._upload_artifacts_to_storage
-        # 中 `rel = Path(p.name)` 的约定一致：外部文件按 basename 上传、
-        # 按 basename 生成 URL，两侧 basename 匹配 → URL 可访问。
-        relative = os.path.basename(path)
-
-    # 优先使用文件存储服务的 artifact_id 格式
-    _format = "session_id" if session_id and storage_url else "legacy"
-    _sandbox_mode = os.environ.get("AF_SANDBOX_MODE", "unknown")
-    if session_id and storage_url:
-        url = f"/api/artifacts/{agent_name}/{session_id}/{quote(relative, safe='/')}"
-    else:
-        # 降级：传统格式（无存储服务时）
-        url = f"/api/artifacts/{agent_name}/files/{quote(relative, safe='/')}"
-
-    # 可观测性：记录 URL 生成决策链路，便于 e2b 等远端沙箱模式排查
-    print(
-        f"[flow] artifact.local_artifact_url url={url} format={_format} "
-        f"agent={agent_name} session_id={session_id or '(unset)'} "
-        f"storage_url={'set' if storage_url else 'unset'} "
-        f"sandbox_mode={_sandbox_mode} path={path} relative={relative}",
-        file=sys.stderr,
-    )
-    return url
+# 霰弹式收敛(2026-08-14):append_artifacts_markdown / llm_error_response /
+# rewrite_local_artifact_links / rewrite_local_image_links / local_artifact_url /
+# put_e2e_response 已上移 coordinator_common(见顶部 import),此处不再重复定义。
 
 
 # ---------------------------------------------------------------------------
 # Main — single LLM decision per trigger
 # ---------------------------------------------------------------------------
 
-def _put_e2e_response(databus, response_text: str, *, log_timing: bool = False) -> None:
-    """把 final response text 写到 DataBus key `_e2e_response`——给**外部 e2e 测试**用的旁路钩子。
-
-    性质说明（这是 5 处 copy-paste try/except 霰弹式收敛的公共抽象）：
-      - **不是真业务路径**——真业务路径是 `session_router->enqueue_response_message()`（execute() 在
-        final_response 时已调，final response 已入队，下游 consumer 从 session_router 队列拿 final）。
-      - `_e2e_response` DataBus key 仅供外部 e2e 测试 daemon 直连 JSON-RPC 时读这个 key 拿 final response。
-      - 失败时只 WARN 不抛——dialogue cleanup 后 DataBus 拒写已 cleanup 的 key 是合理的（design 不变量
-        S-2「response 不入 DataBus」的延伸：final response 走 session_router 队列，不入 DataBus）。
-      - WARN 留在 stderr 的目的：让 skill_stderr.<pid>.log 能看到这个旁路钩子的失败，但不污染真路径
-        的成功率（失败不影响 final response 已入队 + session_save + script_exit）。
-
-    Args:
-        databus: DataBus 实例（调用前已构造）。非 connected 时静默返回。
-        response_text: final response text，写入 DataBus key `_e2e_response`（global namespace）。
-        log_timing: 是否打印 `[timing] e2e_put=Xs`（仅 line 965 那处需要计时，其他 4 处不需要）。
-    """
-    if not databus.is_connected():
-        return
-    try:
-        if log_timing:
-            _t7 = time.time()
-            databus._client.raw().put("_e2e_response", response_text)
-            print(f"[timing] e2e_put={time.time()-_t7:.1f}s", file=sys.stderr)
-        else:
-            databus._client.raw().put("_e2e_response", response_text)
-    except Exception as exc:
-        print(f"[flow] WARN: e2e_response put failed: {exc}", file=sys.stderr)
-
 
 def execute():
     _t0 = time.time()
+    # 霰弹式收敛(2026-08-14):公共模块 coordinator_common 的产物 URL 生成
+    # 依赖模块级 AGENT_PACKAGE_DIR——entry file 只注入本模块,必须同步到公共模块,
+    # 否则 local_artifact_url 落到 pip 包路径(v2 对 skill_executor 同款同步模式)。
+    bind_package_paths(AGENT_PACKAGE_DIR, AGENT_MD_PATH, NODES_DIR)
     _load_dotenv()      # Load .env (respects entry file overrides of AGENT_PACKAGE_DIR)
     _init_skills()      # Init skills from agent.md (respects entry file overrides)
     raw_input = _input()
@@ -694,8 +351,17 @@ def execute():
     api_key = llm_cfg["api_key"]
     base_url = llm_cfg["base_url"]
 
+    # ── hooks: 加载 agent 包 harness/hooks（幂等，无 hooks 目录则零开销）──
+    load_hooks_from_dir(os.path.join(AGENT_PACKAGE_DIR, "harness", "hooks"))
+    # ── hooks: 回合级入口挂载点（观察；messages 尚未构造，ctx 空上下文）──
+    hook_trigger(hook_mounts.AGENT_DIALOGUE_START, {
+        "session_id": session_id,
+        "dialogue_id": dialogue_id,
+        "trigger_type": "skill_completion" if completed_skill else "first",
+    }, ctx=AgentContext())
+
     # ── flow debug ──
-    emit_event("coordinator.trigger", {
+    emit_event(hook_events.COORDINATOR_TRIGGER, {
         "trigger_type": "skill_completion" if completed_skill else "first",
         "completed_skill": completed_skill,
         "skill_success": skill_success,
@@ -711,6 +377,16 @@ def execute():
     # Persist to DataBus for downstream nodes (skill_executor, etc.)
     if stream:
         databus.put("stream", "true")
+
+    # 读取刚完成的 skill 最近一次 dispatch 的 prompt(F2 双维度重复判定用:
+    # 同名 skill + 同 prompt 才算重复;同名不同 prompt = 新任务放行)。
+    last_prompt = None
+    if completed_skill and databus.is_connected():
+        try:
+            last_prompt = databus.get_global(f"last_prompt:{dialogue_id}:{completed_skill}")
+        except Exception as exc:
+            print(f"[flow]   WARN: read last_prompt failed: {exc}", file=sys.stderr)
+            last_prompt = None
 
     # ── Coordinator iteration tracking ──
     # First trigger (no completed_skill or dummy_pre_skill hook) starts a new
@@ -731,11 +407,18 @@ def execute():
 
     # ── Max iterations guard: break before LLM call ──
     if current_round > max_iterations:
-        emit_event("coordinator.max_iterations", {"round": current_round, "max_iterations": max_iterations}, level="WARN")
+        emit_event(hook_events.COORDINATOR_MAX_ITERATIONS, {"round": current_round, "max_iterations": max_iterations}, level="WARN")
         response_text = llm_error_response(completed_skill_artifacts)
+        # ── hooks: 回合级出口（观察，不可干预——固定错误文案）──
+        hook_trigger(hook_mounts.AGENT_DIALOGUE_END, {
+            "session_id": session_id,
+            "dialogue_id": dialogue_id,
+            "status": "max_iterations",
+            "response_text": response_text,
+        }, ctx=AgentContext())
         output = {"response": response_text, "status": "max_iterations_reached"}
         print(json.dumps(output, ensure_ascii=False))
-        _put_e2e_response(databus, response_text)
+        put_e2e_response(databus, response_text)
         print(f"[timing] max_iterations total={time.time()-_t0:.1f}s", file=sys.stderr)
         return
 
@@ -831,165 +514,261 @@ def execute():
     if reminder:
         messages.append(reminder)
 
-    _t4 = time.time()
-    print(f"[timing] llm_call_start={_t4-_t0:.1f}s", file=sys.stderr)
-    # ── Progress: coordinator is calling LLM (may take >60s) ──
-    try:
-        if 'databus' in dir():
-            databus.response_push("coordinator 决策中…\n", type="progress",
-                                  skill="coordinator", status="running",
-                                  source="coordinator")
-    except Exception as exc:
-        print(f"[flow]   WARN: coordinator progress push failed: {exc}", file=sys.stderr)
-    # ── Interrupt flag poll (design §3.3.2) ──────────────────────────
-    # daemon 的 handle_dialogue_interrupt 在 cleanup 前写入 global sys flag
-    # "/session/{sid}/sys/interrupt:{did}"。每轮 call_llm 之前轮询，命中则
-    # 写 interrupted 最终响应给 Bridge 走正常断流，自己 return。
-    # 轮询失败（DataBus 抖动）不阻断主流程（I-INT-5）。
-    if databus.is_connected():
+    # ── Coordinator 工具循环 ──────────────────────────────────────────
+    # run_skills 被拦截(重复 dispatch)/参数无效时,把工具调用结果作为
+    # tool result 返回给模型(与 skill_executor 同模式),让模型重新决策;
+    # 直到模型直接输出 final response / 成功 dispatch skill / 达到轮次上限。
+    _tool_loop_round = 0
+    while True:
+        _tool_loop_round += 1
+        # ── 工具循环轮次上限保护 ──
+        if _tool_loop_round > max_iterations:
+            emit_event(hook_events.COORDINATOR_TOOL_LOOP_MAX_ROUNDS, {
+                "round": current_round,
+                "tool_loop_round": _tool_loop_round,
+                "max_iterations": max_iterations,
+            }, level="WARN")
+            response_text = "已达协调工具循环上限，基于已有结果输出。"
+            output = {"response": response_text, "status": "tool_loop_max_rounds"}
+            print(json.dumps(output, ensure_ascii=False))
+            put_e2e_response(databus, response_text)
+            print(f"[timing] tool_loop_max_rounds total={time.time()-_t0:.1f}s", file=sys.stderr)
+            return
+
+        _t4 = time.time()
+        print(f"[timing] llm_call_start={_t4-_t0:.1f}s", file=sys.stderr)
+        # ── Progress: coordinator is calling LLM (may take >60s) ──
         try:
-            _flag = databus.get_global(f"interrupt:{dialogue_id}")
-            if _flag == "true":
-                emit_event("coordinator.interrupted", {
-                    "round": current_round,
-                    "elapsed_s": round(time.time() - _t0, 1),
-                }, level="WARN")
-                response_text = "对话已被取消"
-                output = {"response": response_text, "status": "interrupted"}
-                # Bridge 从 stdout JSON 读 coordinator 响应（与正常完成路径同款，
-                # 见行 551-552 print(json.dumps(output))）。中断必须走同一通道，
-                # 否则 Bridge 收不到响应会 hang 到超时。
-                print(json.dumps(output, ensure_ascii=False))
-                if databus.is_connected():
-                    try:
-                        # 清掉可能的旧 response key，避免下轮误读（与正常完成路径行 882 对齐）
-                        databus.delete("response")
-                    except Exception as exc:
-                        print(f"[flow]   WARN: interrupt response delete failed: {exc}", file=sys.stderr)
-                print(f"[timing] interrupted total={time.time()-_t0:.1f}s", file=sys.stderr)
-                return
+            if 'databus' in dir():
+                databus.response_push("coordinator 决策中…\n", type="progress",
+                                      skill="coordinator", status="running",
+                                      source="coordinator")
         except Exception as exc:
-            print(f"[flow]   WARN: interrupt flag poll failed: {exc}", file=sys.stderr)
-    with emit_span(
-        SpanKind.LLM, "coordinator.llm_round",
-        tags={
-            "round": str(current_round),
-            "messages": str(len(messages)),
-            "model": model_name,
-            "stream": str(stream),
-            "trigger_location": "python_direct",
-        },
-    ) as _llm_span:
-        _llm_span.set_tag("dialogue_id", _dialogue_id() or "")
-        raw = call_llm(
-            messages, tools=[RUN_SKILLS_TOOL],
-            model=model_name,
-            base_url=base_url,
-            api_key=api_key,
-            max_completion_tokens=max_completion_tokens,
-            stream=stream,
-            source="coordinator",
-            extra_body={
-                "temperature": AgentConfig.llm_temperature(),
-                "top_p": AgentConfig.llm_top_p(),
-                "frequency_penalty": AgentConfig.llm_frequency_penalty(),
-                "presence_penalty": AgentConfig.llm_presence_penalty(),
-                "top_k": AgentConfig.llm_top_k() or None,
-                "stop": AgentConfig.llm_stop() or None,
-            }
-        )
-        _t5 = time.time()
-        print(f"[timing] llm_call_end={_t5-_t0:.1f}s (llm={_t5-_t4:.1f}s)", file=sys.stderr)
-
-        # ── Observability: log raw LLM response structure ──
-        _obs_choice = raw.get("choices", [{}])[0]
-        _obs_msg = _obs_choice.get("message", {})
-        _obs_tcs = _obs_msg.get("tool_calls")
-        _obs_finish = _obs_choice.get("finish_reason", "?")
-        _obs_content = _obs_msg.get("content", "")
-        _obs_content_preview = _obs_content[:150].replace("\n", " ") if _obs_content else "(empty)"
-        _obs_tc_count = len(_obs_tcs) if _obs_tcs else 0
-        _obs_tc_names = [tc.get("function", {}).get("name", "?")
-                         for tc in (_obs_tcs or [])]
-        _llm_span.add_event("coordinator.llm_result", {
-            "round": str(current_round),
-            "finish_reason": _obs_finish,
-            "tool_call_count": str(_obs_tc_count),
-            "tool_call_names": ",".join(_obs_tc_names),
-            "content_preview": _obs_content_preview,
-            "llm_duration_s": str(round(_t5 - _t4, 1)),
-            "total_duration_s": str(round(_t5 - _t0, 1)),
-        })
-        emit_event("coordinator.llm_result", {
-            "round": current_round,
-            "finish_reason": _obs_finish,
-            "tool_call_count": _obs_tc_count,
-            "tool_call_names": _obs_tc_names,
-            "content_preview": _obs_content_preview,
-            "llm_duration_s": round(_t5 - _t4, 1),
-            "total_duration_s": round(_t5 - _t0, 1),
-        }, duration_ms=(_t5 - _t4) * 1000)
-
-        if raw.get("_llm_error"):
-            err_msg = raw.get("error", "LLM call failed")
-            _llm_span.set_status(SpanStatus.ERROR, err_msg)
-            _llm_span.add_event("coordinator.llm_error", {
+            print(f"[flow]   WARN: coordinator progress push failed: {exc}", file=sys.stderr)
+        # ── Interrupt flag poll (design §3.3.2) ──────────────────────────
+        # daemon 的 handle_dialogue_interrupt 在 cleanup 前写入 global sys flag
+        # "/session/{sid}/sys/interrupt:{did}"。每轮 call_llm 之前轮询，命中则
+        # 写 interrupted 最终响应给 Bridge 走正常断流，自己 return。
+        # 轮询失败（DataBus 抖动）不阻断主流程（I-INT-5）。
+        if databus.is_connected():
+            try:
+                _flag = databus.get_global(f"interrupt:{dialogue_id}")
+                if _flag == "true":
+                    emit_event(hook_events.COORDINATOR_INTERRUPTED, {
+                        "round": current_round,
+                        "elapsed_s": round(time.time() - _t0, 1),
+                    }, level="WARN")
+                    response_text = "对话已被取消"
+                    # ── hooks: 回合级出口（观察，不可干预——固定中断文案）──
+                    hook_trigger(hook_mounts.AGENT_DIALOGUE_END, {
+                        "session_id": session_id,
+                        "dialogue_id": dialogue_id,
+                        "status": "interrupted",
+                        "response_text": response_text,
+                    }, ctx=AgentContext(messages=messages))
+                    output = {"response": response_text, "status": "interrupted"}
+                    # Bridge 从 stdout JSON 读 coordinator 响应（与正常完成路径同款，
+                    # 见行 551-552 print(json.dumps(output))）。中断必须走同一通道，
+                    # 否则 Bridge 收不到响应会 hang 到超时。
+                    print(json.dumps(output, ensure_ascii=False))
+                    if databus.is_connected():
+                        try:
+                            # 清掉可能的旧 response key，避免下轮误读（与正常完成路径行 882 对齐）
+                            databus.delete("response")
+                        except Exception as exc:
+                            print(f"[flow]   WARN: interrupt response delete failed: {exc}", file=sys.stderr)
+                    print(f"[timing] interrupted total={time.time()-_t0:.1f}s", file=sys.stderr)
+                    return
+            except Exception as exc:
+                print(f"[flow]   WARN: interrupt flag poll failed: {exc}", file=sys.stderr)
+        with emit_span(
+            SpanKind.LLM, hook_events.SPAN_COORDINATOR_LLM_ROUND,
+            tags={
                 "round": str(current_round),
-                "error": err_msg,
-                "duration_s": str(round(_t5 - _t0, 1)),
+                "messages": str(len(messages)),
+                "model": model_name,
+                "stream": str(stream),
+                "trigger_location": "python_direct",
+            },
+        ) as _llm_span:
+            _llm_span.set_tag("dialogue_id", _dialogue_id() or "")
+            # ── hooks: LLM 调用前挂载点（注入 messages / 阻断本轮，v1 决策循环）──
+            _llm_ctx = AgentContext(messages=messages)
+            hook_trigger(hook_mounts.COORDINATOR_V1_BEFORE_LLM_CALL, {
+                "round": current_round,
+                "model": model_name,
+                "messages_count": len(messages),
+            }, can_intervene=True, ctx=_llm_ctx)
+            if _llm_ctx.blocked:
+                # 阻断本轮 LLM 调用：直接走最终响应出口（无 tool_call 语义）
+                raw = {"choices": [{"message": {"role": "assistant", "content": "（LLM 调用已被 hook 阻断）"}}]}
+                _llm_blocked = True
+            else:
+                raw = call_llm(
+                    messages, tools=[RUN_SKILLS_TOOL],
+                    model=model_name,
+                    base_url=base_url,
+                    api_key=api_key,
+                    max_completion_tokens=max_completion_tokens,
+                    stream=stream,
+                    source="coordinator",
+                    extra_body={
+                        "temperature": AgentConfig.llm_temperature(),
+                        "top_p": AgentConfig.llm_top_p(),
+                        "frequency_penalty": AgentConfig.llm_frequency_penalty(),
+                        "presence_penalty": AgentConfig.llm_presence_penalty(),
+                        "top_k": AgentConfig.llm_top_k() or None,
+                        "stop": AgentConfig.llm_stop() or None,
+                    }
+                )
+            _t5 = time.time()
+            print(f"[timing] llm_call_end={_t5-_t0:.1f}s (llm={_t5-_t4:.1f}s)", file=sys.stderr)
+            # ── hooks: LLM 调用后挂载点（检查/改写决策，v1）──
+            hook_trigger(hook_mounts.COORDINATOR_V1_AFTER_LLM_CALL, {
+                "round": current_round,
+                "raw_choices": raw.get("choices", [{}])[0] if raw.get("choices") else {},
+            }, ctx=_llm_ctx)
+
+            # ── Observability: log raw LLM response structure ──
+            _obs_choice = raw.get("choices", [{}])[0]
+            _obs_msg = _obs_choice.get("message", {})
+            _obs_tcs = _obs_msg.get("tool_calls")
+            _obs_finish = _obs_choice.get("finish_reason", "?")
+            _obs_content = _obs_msg.get("content", "")
+            _obs_content_preview = _obs_content[:150].replace("\n", " ") if _obs_content else "(empty)"
+            _obs_tc_count = len(_obs_tcs) if _obs_tcs else 0
+            _obs_tc_names = [tc.get("function", {}).get("name", "?")
+                             for tc in (_obs_tcs or [])]
+            _llm_span.add_event(hook_events.COORDINATOR_LLM_RESULT, {
+                "round": str(current_round),
+                "finish_reason": _obs_finish,
+                "tool_call_count": str(_obs_tc_count),
+                "tool_call_names": ",".join(_obs_tc_names),
+                "content_preview": _obs_content_preview,
+                "llm_duration_s": str(round(_t5 - _t4, 1)),
+                "total_duration_s": str(round(_t5 - _t0, 1)),
             })
-            emit_event("coordinator.llm_error", {
+            emit_event(hook_events.COORDINATOR_LLM_RESULT, {
+                "round": current_round,
+                "finish_reason": _obs_finish,
+                "tool_call_count": _obs_tc_count,
+                "tool_call_names": _obs_tc_names,
+                "content_preview": _obs_content_preview,
+                "llm_duration_s": round(_t5 - _t4, 1),
+                "total_duration_s": round(_t5 - _t0, 1),
+            }, duration_ms=(_t5 - _t4) * 1000)
+
+            if raw.get("_llm_error"):
+                err_msg = raw.get("error", "LLM call failed")
+                _llm_span.set_status(SpanStatus.ERROR, err_msg)
+                _llm_span.add_event(hook_events.COORDINATOR_LLM_ERROR, {
+                    "round": str(current_round),
+                    "error": err_msg,
+                    "duration_s": str(round(_t5 - _t0, 1)),
+                })
+                emit_event(hook_events.COORDINATOR_LLM_ERROR, {
+                    "round": current_round,
+                    "error": err_msg,
+                    "duration_s": round(_t5 - _t0, 1),
+                }, level="ERROR")
+                # Return fallback response instead of crashing — user gets something,
+                # workflow completes, coordinator can be re-triggered.
+                response_text = llm_error_response(completed_skill_artifacts)
+                output = {"response": response_text}
+                put_e2e_response(databus, response_text)
+                _t6 = time.time()
+                print(f"[timing] output={_t6-_t0:.1f}s total", file=sys.stderr)
+                print(json.dumps(output, ensure_ascii=False))
+                return
+
+        # ── 检测 LLM 返回空内容（API 成功但未实际处理请求） ──
+        # 典型信号：content="" + usage 全零 + finish_reason=stop
+        # 这通常意味着 API key 无效、模型不支持流式、或参数配置错误。
+        _raw_usage = raw.get("usage", {}) or {}
+        _raw_choice = raw.get("choices", [{}])[0]
+        _raw_msg = _raw_choice.get("message", {})
+        _raw_content = _raw_msg.get("content", "")
+        _raw_finish = _raw_choice.get("finish_reason", "")
+        _raw_tc = _raw_msg.get("tool_calls")
+        # 复用 coordinator_common.is_empty_llm_response(单一真相源 F4,霰弹式收敛)
+        _is_empty_response = is_empty_llm_response(raw)
+        if _is_empty_response:
+            err_msg = "LLM returned empty response (zero tokens, no content, finish=stop)"
+            emit_event(hook_events.COORDINATOR_LLM_ERROR, {
                 "round": current_round,
                 "error": err_msg,
                 "duration_s": round(_t5 - _t0, 1),
             }, level="ERROR")
-            # Return fallback response instead of crashing — user gets something,
-            # workflow completes, coordinator can be re-triggered.
             response_text = llm_error_response(completed_skill_artifacts)
             output = {"response": response_text}
-            _put_e2e_response(databus, response_text)
+            put_e2e_response(databus, response_text)
             _t6 = time.time()
             print(f"[timing] output={_t6-_t0:.1f}s total", file=sys.stderr)
             print(json.dumps(output, ensure_ascii=False))
             return
 
-    # ── 检测 LLM 返回空内容（API 成功但未实际处理请求） ──
-    # 典型信号：content="" + usage 全零 + finish_reason=stop
-    # 这通常意味着 API key 无效、模型不支持流式、或参数配置错误。
-    _raw_usage = raw.get("usage", {}) or {}
-    _raw_choice = raw.get("choices", [{}])[0]
-    _raw_msg = _raw_choice.get("message", {})
-    _raw_content = _raw_msg.get("content", "")
-    _raw_finish = _raw_choice.get("finish_reason", "")
-    _raw_tc = _raw_msg.get("tool_calls")
-    _is_empty_response = (
-        not _raw_content
-        and not _raw_tc
-        and _raw_finish == "stop"
-        and _raw_usage.get("prompt_tokens", 0) == 0
-        and _raw_usage.get("completion_tokens", 0) == 0
-    )
-    if _is_empty_response:
-        err_msg = "LLM returned empty response (zero tokens, no content, finish=stop)"
-        emit_event("coordinator.llm_error", {
-            "round": current_round,
-            "error": err_msg,
-            "duration_s": round(_t5 - _t0, 1),
-        }, level="ERROR")
-        response_text = llm_error_response(completed_skill_artifacts)
-        output = {"response": response_text}
-        _put_e2e_response(databus, response_text)
-        _t6 = time.time()
-        print(f"[timing] output={_t6-_t0:.1f}s total", file=sys.stderr)
-        print(json.dumps(output, ensure_ascii=False))
-        return
+        choice = raw.get("choices", [{}])[0]
+        msg = choice.get("message", {})
+        tool_calls = msg.get("tool_calls")
+        messages.append(msg)
 
-    choice = raw.get("choices", [{}])[0]
-    msg = choice.get("message", {})
-    tool_calls = msg.get("tool_calls")
-    messages.append(msg)
+        if not tool_calls:
+            # LLM made no tool_call → final response
+            raw_response = msg.get("content", "")
+            # Strip <think> tags: keep reasoning in trace, only show user-facing content
+            import re as _re
+            think_match = _re.search(r"</think>\s*", raw_response)
+            if think_match:
+                response_text = raw_response[think_match.end():].strip()
+            else:
+                response_text = raw_response
+            response_text = append_artifacts_markdown(
+                response_text, completed_skill_artifacts
+            )
+            emit_event(hook_events.COORDINATOR_FINAL_RESPONSE, {
+                "round": current_round,
+                "has_tool_call": False,
+                "response_length": len(response_text),
+                "elapsed_s": round(time.time() - _t0, 1),
+            })
+            # ── hooks: 最终响应前挂载点（改写 response_text；ctx 供注入/修改）──
+            _final_ctx = AgentContext(messages=messages)
+            _hook_payload = hook_trigger(
+                hook_mounts.COORDINATOR_BEFORE_FINAL_RESPONSE,
+                {"round": current_round, "response_text": response_text, "has_tool_call": False},
+                can_intervene=True,
+                ctx=_final_ctx,
+            )
+            response_text = _hook_payload.get("response_text", response_text)
+            hook_trigger(hook_mounts.AGENT_DIALOGUE_END, {
+                "session_id": session_id,
+                "dialogue_id": dialogue_id,
+                "status": "normal",
+                "response_text": response_text,
+                "elapsed_s": round(time.time() - _t0, 1),
+            }, can_intervene=True, ctx=_final_ctx)
+            print(json.dumps({"response": response_text}, ensure_ascii=False))
+            _t6 = time.time()
+            print(f"[timing] final_output={_t6-_t0:.1f}s total", file=sys.stderr)
+            # ── hooks: 最终响应后挂载点（记录/审计）──
+            hook_trigger(hook_mounts.COORDINATOR_AFTER_FINAL_RESPONSE, {
+                "round": current_round,
+                "response_length": len(response_text),
+                "elapsed_s": round(time.time() - _t0, 1),
+            }, ctx=_final_ctx)
 
-    if tool_calls:
+            # Write to persistent DataBus key for e2e tests (bypasses RESPONSE_POLLER
+            # which immediately removes the "response" key). Raw client writes to
+            # global namespace, not dialogue-scoped, so any session can read it.
+            if databus.is_connected():
+                put_e2e_response(databus, response_text, log_timing=True)
+
+            save_session_messages(recorder, messages)
+
+            _t9 = time.time()
+            print(f"[timing] script_exit={_t9-_t0:.1f}s", file=sys.stderr)
+            return
+
         # ── Max iterations guard: if this is the last allowed round, force final ──
         #     output instead of dispatching more skills.
         if current_round >= max_iterations:
@@ -1001,16 +780,14 @@ def execute():
             else:
                 response_text = raw_response or "已达协调轮次上限，基于已有结果输出。"
             response_text = append_artifacts_markdown(response_text, completed_skill_artifacts)
-            emit_event("coordinator.max_rounds_forced_output", {
+            emit_event(hook_events.COORDINATOR_MAX_ROUNDS_FORCED_OUTPUT, {
                 "round": current_round,
                 "max_iterations": max_iterations,
                 "response_length": len(response_text),
             }, level="WARN")
             print(json.dumps({"response": response_text}, ensure_ascii=False))
-            _put_e2e_response(databus, response_text)
-            messages_to_save = messages[1:]
-            if recorder.is_connected:
-                recorder.write_session_messages(messages_to_save)
+            put_e2e_response(databus, response_text)
+            save_session_messages(recorder, messages)
             print(f"[timing] max_rounds_forced_output total={time.time()-_t0:.1f}s", file=sys.stderr)
             return
 
@@ -1032,21 +809,15 @@ def execute():
                 force_requested = bool(args.get("force")) or any(
                     isinstance(_s, dict) and _s.get("force") for _s in skill_names
                 )
-                if (
-                    _completed_skill_name
-                    and not force_requested
-                    and any(
-                        (_s.get("name") if isinstance(_s, dict) else str(_s)) == _completed_skill_name
-                        for _s in skill_names
-                    )
-                ):
+                if _is_duplicate_dispatch(completed_skill, skill_names, force_requested,
+                                          last_prompt):
                     result_str = json.dumps({
-                        "error": f"skill '{_completed_skill_name}' 刚完成，不得重复 dispatch（除非 force=true）",
-                        "response": f"skill '{_completed_skill_name}' 刚完成，基于其结果直接回复，不要重复执行。",
+                        "error": f"skill '{completed_skill}' 刚完成，不得重复 dispatch（除非 force=true）",
+                        "response": f"skill '{completed_skill}' 刚完成，基于其结果直接回复，不要重复执行。",
                     }, ensure_ascii=False)
-                    emit_event("coordinator.duplicate_skill_dispatch_blocked", {
+                    emit_event(hook_events.COORDINATOR_DUPLICATE_SKILL_DISPATCH_BLOCKED, {
                         "round": current_round,
-                        "skill": _completed_skill_name,
+                        "skill": completed_skill,
                     }, level="WARN")
                 else:
                     # Collect skill names for progress reporting
@@ -1054,7 +825,30 @@ def execute():
                         _sn = _s.get("name", "") if isinstance(_s, dict) else str(_s)
                         if _sn:
                             _dispatched_skills[_sn] = None
-                    result_str = handle_run_skills_call(args, databus, session_id, dialogue_id)
+                    # ── hooks: skill 分发前挂载点（阻断本轮 dispatch，ctx.blocked 语义）──
+                    _dispatch_ctx = AgentContext(messages=messages)
+                    hook_trigger(
+                        hook_mounts.COORDINATOR_BEFORE_SKILL_DISPATCH,
+                        {
+                            "round": current_round,
+                            "skill_names": list(_dispatched_skills),
+                        },
+                        can_intervene=True,
+                        ctx=_dispatch_ctx,
+                    )
+                    if _dispatch_ctx.blocked:
+                        result_str = json.dumps({
+                            "skipped_by_hook": True,
+                            "response": "本轮 skill 分发已被 hook 阻断，请直接基于已有信息回复用户。",
+                        }, ensure_ascii=False)
+                    else:
+                        result_str = handle_run_skills_call(args, databus, session_id, dialogue_id)
+                        # ── hooks: skill 分发后挂载点（检查分发结果）──
+                        hook_trigger(hook_mounts.COORDINATOR_AFTER_SKILL_DISPATCH, {
+                            "round": current_round,
+                            "skill_names": list(_dispatched_skills),
+                            "result_length": len(result_str),
+                        }, ctx=_dispatch_ctx)
             else:
                 result_str = json.dumps({"error": f"Unknown tool: {name}"})
 
@@ -1065,9 +859,7 @@ def execute():
             })
 
         # Persist conversation history (coordinator yields control, waits for re-trigger)
-        messages_to_save = messages[1:]
-        if recorder.is_connected:
-            recorder.write_session_messages(messages_to_save)
+        save_session_messages(recorder, messages)
 
         # Output coordinator_status + progress response for frontend
         _t6 = time.time()
@@ -1075,7 +867,7 @@ def execute():
         if _dispatched_skills:
             skill_labels = "、".join(_dispatched_skills)
             with emit_span(
-                SpanKind.SKILL, "coordinator.skill_dispatch",
+                SpanKind.SKILL, hook_events.SPAN_COORDINATOR_SKILL_DISPATCH,
                 tags={
                     "round": str(current_round),
                     "skill_names": skill_labels,
@@ -1083,34 +875,19 @@ def execute():
                 },
             ) as _dispatch_span:
                 _dispatch_span.set_tag("dialogue_id", _dialogue_id() or "")
-                _dispatch_span.add_event("coordinator.skills_dispatched", {
+                _dispatch_span.add_event(hook_events.COORDINATOR_SKILLS_DISPATCHED, {
                     "round": str(current_round),
                     "skill_names": skill_labels,
                     "elapsed_s": str(round(_t6 - _t0, 1)),
                 })
-                emit_event("coordinator.skills_dispatched", {
+                emit_event(hook_events.COORDINATOR_SKILLS_DISPATCHED, {
                     "round": current_round,
                     "skill_names": skill_labels,
                     "elapsed_s": round(_t6 - _t0, 1),
                 }, duration_ms=(_t6 - _t0) * 1000)
 
-                # Extract LLM's intermediate reasoning from this round's response
-                llm_before_call = msg.get("content", "")
-                llm_summary = ""
-                if llm_before_call:
-                    # Strip  coz tags (same logic as final response path)
-                    think_match = re.search(r" coz \s*", llm_before_call)
-                    if think_match:
-                        llm_before_call = llm_before_call[think_match.end():].strip()
-                    else:
-                        llm_before_call = llm_before_call.strip()
-                    # Keep concise — frontend progress area shows single-line text
-                    if len(llm_before_call) > 200:
-                        llm_before_call = llm_before_call[:200] + "…"
-                    if llm_before_call:
-                                llm_summary = f"\n分析：{llm_before_call}"
-
-                    skill_progress = f"正在执行 {skill_labels}{llm_summary}"
+                # Push per-skill progress to databus (frontend progress area)
+                if msg.get("content", "").strip():
                     try:
                         if 'databus' in dir() and databus.is_connected():
                             for skill_name_ in skill_labels.strip().split():
@@ -1120,97 +897,47 @@ def execute():
                                                            source="coordinator")
                     except Exception as exc:
                         print(f"[flow]   WARN: dispatch progress push failed: {exc}", file=sys.stderr)
-                        _dispatch_span.add_event("coordinator.dispatch_progress_push_failed", {
+                        _dispatch_span.add_event(hook_events.COORDINATOR_DISPATCH_PROGRESS_PUSH_FAILED, {
                             "error": str(exc)[:200],
                         })
                 # Clean up "response" key to prevent stale progress message
                 # from leaking into the next coordinator round.
                 if databus.is_connected():
                     databus.delete("response")
-                _dispatch_span.add_event("coordinator.dispatch_loop_end", {
+                _dispatch_span.add_event(hook_events.COORDINATOR_DISPATCH_LOOP_END, {
                     "round": str(current_round),
                     "skills_dispatched": skill_labels,
                     "elapsed_s": str(round(_t6 - _t0, 1)),
                 })
-                emit_event("coordinator.dispatch_loop_end", {
+                emit_event(hook_events.COORDINATOR_DISPATCH_LOOP_END, {
                     "round": current_round,
                     "skills_dispatched": skill_labels,
                     "elapsed_s": round(_t6 - _t0, 1),
                 })
+            # 有 skill 成功 dispatch → yield 控制权:历史已在上方保存,
+            # 输出 progress 后 return,等 skill 完成后 framework 重新触发 coordinator。
+            return
         else:
-            # All tool_calls were unknown — no skills dispatched.
-            # 2026-08-11 修复(CHANGE-20260811-044):此前静默输出模糊兜底错误,
-            # 且无诊断日志 → C2 二次 dispatch 空 skills 时表现为"挂起 240s 超时"。
-            # 现在:① 打印诊断日志(原始 tool_calls + skills 为空原因,可定位)
-            #      ② 错误消息明确说明原因,便于上层感知与重试。
-            print(json.dumps({
-                "error": "run_skills 未携带有效的 skills 参数(数组为空或解析失败)",
-                "response": "run_skills 未携带有效的 skills 参数，请重新决策。",
-                "tool_calls": tool_calls,
-            }, ensure_ascii=False))
-            emit_event("coordinator.empty_skills_dispatch", {
+            # 全部 tool_calls 被拦截(重复 dispatch)/参数无效/未知工具 → 没有 skill 成功 dispatch。
+            # tool result 已在上面的 for 循环中回灌 messages——与 skill_executor 同模式:
+            # 把工具调用结果(错误说明)返回给模型,continue 工具循环让模型重新决策
+            # (直接输出 final response,或调度其他 skill),直到收敛或达到轮次上限。
+            emit_event(hook_events.COORDINATOR_TOOL_LOOP_RETRY, {
                 "round": current_round,
+                "tool_loop_round": _tool_loop_round,
                 "tool_calls": tool_calls,
                 "elapsed_s": round(time.time() - _t0, 1),
             }, level="WARN")
-            # 2026-08-11 修复(CHANGE-20260811-054):补 SSE 结束机制——
-            # 此前该分支只打诊断日志,未 _put_e2e_response → SSE 流不 [DONE] 结束,
-            # 二次 dispatch 空 skills 时用户侧仍 240s 挂起(超时现场 140842 确认
-            # coordinator.empty_skills_dispatch 已触发但流未结束)。
-            # 与 final_response 分支对齐:把错误响应推给 e2e/SSE 链路,让流完成。
-            if databus.is_connected():
-                _put_e2e_response(
-                    databus,
-                    "run_skills 未携带有效的 skills 参数，请重新决策。",
-                    log_timing=True,
-                )
-            # 2026-08-11 修复(CHANGE-20260811-056):清理残留 next_skills——
-            # 超时现场 143730 确认:WORKFLOW_COMPLETE 后 framework 仍
-            # GET_FRAMEWORK_DATA 读到残留 next_skills → 误判有 pending skill → SSE 不 [DONE]。
-            # 空 skills 分支未 dispatch,必须显式清 next_skills 让 framework 结束流。
+            # 清理残留 next_skills(CHANGE-20260811-056):未 dispatch 时若不清理,
+            # framework 在 WORKFLOW_COMPLETE 后仍 GET_FRAMEWORK_DATA 读到残留
+            # next_skills → 误判有 pending skill → SSE 不 [DONE]。
             if databus.is_connected():
                 try:
                     databus.delete("next_skills")
                 except Exception as exc:
                     print(f"[flow] WARN: delete next_skills failed: {exc}", file=sys.stderr)
-            print(f"[timing] empty_skills_dispatch total={time.time()-_t0:.1f}s", file=sys.stderr)
-    else:
-        # LLM made no tool_call → final response
-        raw_response = msg.get("content", "")
-        # Strip <think> tags: keep reasoning in trace, only show user-facing content
-        import re as _re
-        think_match = _re.search(r"</think>\s*", raw_response)
-        if think_match:
-            response_text = raw_response[think_match.end():].strip()
-        else:
-            response_text = raw_response
-        response_text = append_artifacts_markdown(
-            response_text, completed_skill_artifacts
-        )
-        emit_event("coordinator.final_response", {
-            "round": current_round,
-            "has_tool_call": False,
-            "response_length": len(response_text),
-            "elapsed_s": round(time.time() - _t0, 1),
-        })
-        print(json.dumps({"response": response_text}, ensure_ascii=False))
-        _t6 = time.time()
-        print(f"[timing] final_output={_t6-_t0:.1f}s total", file=sys.stderr)
-
-        # Write to persistent DataBus key for e2e tests (bypasses RESPONSE_POLLER
-        # which immediately removes the "response" key). Raw client writes to
-        # global namespace, not dialogue-scoped, so any session can read it.
-        if databus.is_connected():
-            _put_e2e_response(databus, response_text, log_timing=True)
-
-        messages_to_save = messages[1:]
-        if recorder.is_connected:
-            _t8 = time.time()
-            recorder.write_session_messages(messages_to_save)
-            print(f"[timing] session_save={time.time()-_t8:.1f}s", file=sys.stderr)
-
-        _t9 = time.time()
-        print(f"[timing] script_exit={_t9-_t0:.1f}s", file=sys.stderr)
+            print(f"[timing] tool_loop_retry={time.time()-_t0:.1f}s", file=sys.stderr)
+            continue
 
 
 if __name__ == "__main__":

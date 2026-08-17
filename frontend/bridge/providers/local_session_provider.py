@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from content_serializer import display_text_from_stored
 from .session_provider import ContextResult, SessionProvider
 
 logger = logging.getLogger("agentflow.bridge.providers.local")
@@ -286,7 +287,9 @@ class LocalSessionProvider(SessionProvider):
                     "SELECT title FROM sessions WHERE id=?", (session_id,),
                 ).fetchone()
                 if sess is not None and not (sess["title"] or ""):
-                    title = user_input.strip()[:50]
+                    # 自动标题用展平文本（I-REQ 存原始 content JSON；展示层需可读文本，
+                    # code-review P3 修复：原始 JSON 会生成乱码标题）
+                    title = display_text_from_stored(user_input).strip()[:50]
                     conn.execute(
                         "UPDATE sessions SET title=?, last_active_at=? WHERE id=?",
                         (title, now, session_id),
@@ -341,7 +344,8 @@ class LocalSessionProvider(SessionProvider):
             images = json.loads(r["images"]) if r["images"] else []
             messages.append({
                 "role": "user",
-                "content": r["user_input"],
+                # 展示层展平（code-review P3 修复：原始 content JSON 含 base64 会渲染乱码）
+                "content": display_text_from_stored(r["user_input"]),
                 "images": images,
                 "dialogue_id": r["dialogue_id"],
                 "artifacts": [],

@@ -1,2 +1,3 @@
 agentflow_runtime
 outputs
+workspace

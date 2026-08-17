@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 
-from agentflow_runtime.coordinator_decide import (
+# 霰弹式收敛(2026-08-14):local_artifact_url / rewrite_local_artifact_links
+# 从 coordinator_decide 上移 coordinator_common(单一真相源 F4),测试同步迁移。
+from agentflow_runtime.coordinator_common import (
     local_artifact_url,
     rewrite_local_artifact_links,
 )
@@ -69,13 +70,15 @@ def test_url_with_session_id_uses_new_format(
     """
     pkg, path = _setup_artifact(tmp_path)
     # 新契约:会话段走 {user_id}_{client_id},不是 AF_SESSION_ID(执行槽位 0/1/2)
-    monkeypatch.setenv("AF_USER_ID", "user_test")
-    monkeypatch.setenv("AF_CLIENT_ID", "client")
+    env_user_id = "user_test"
+    env_client_id = "client"
+    monkeypatch.setenv("AF_USER_ID", env_user_id)
+    monkeypatch.setenv("AF_CLIENT_ID", env_client_id)
     monkeypatch.setenv("AF_ARTIFACT_STORAGE_URL", "http://bridge:8199")
     url = local_artifact_url(str(path), package_dir=str(pkg))
     # 新格式: /api/artifacts/{agent_name}/{user_id}_{client_id}/{relative}
     assert "/user_test_client/" in url, (
-        f"New format should contain {user_id}_{client_id} segment, got: {url}"
+        f"New format should contain {env_user_id}_{env_client_id} segment, got: {url}"
     )
     assert "/health" not in url, (
         f"URL should still NOT contain /health with session_id, got: {url}"
@@ -127,7 +130,7 @@ def test_rewrite_resolves_basename_when_package_path_mismatch(
     pkg = tmp_path / "custom-agent"
     image = _write(pkg, "harness/assets/look.png")
     monkeypatch.setattr(
-        "agentflow_runtime.coordinator_decide.AGENT_PACKAGE_DIR", str(pkg)
+        "agentflow_runtime.coordinator_common.AGENT_PACKAGE_DIR", str(pkg)
     )
 
     rendered = rewrite_local_artifact_links(
@@ -151,7 +154,7 @@ def test_rewrite_ambiguous_basename_stays_unresolved(
     _write(pkg, "harness/assets/look.png")
     _write(pkg, "outputs/look.png")
     monkeypatch.setattr(
-        "agentflow_runtime.coordinator_decide.AGENT_PACKAGE_DIR", str(pkg)
+        "agentflow_runtime.coordinator_common.AGENT_PACKAGE_DIR", str(pkg)
     )
 
     rendered = rewrite_local_artifact_links(
@@ -194,7 +197,7 @@ def test_rewrite_resolves_nested_and_absolute(
     pkg = tmp_path / "custom-agent"
     image = _write(pkg, artifact_rel)
     monkeypatch.setattr(
-        "agentflow_runtime.coordinator_decide.AGENT_PACKAGE_DIR", str(pkg)
+        "agentflow_runtime.coordinator_common.AGENT_PACKAGE_DIR", str(pkg)
     )
     if content is None:  # R7 用绝对路径引用
         content = f"![x]({image})"
@@ -214,7 +217,7 @@ def test_rewrite_html_img_relative_path_resolved_by_basename(
     pkg = tmp_path / "custom-agent"
     image = _write(pkg, "harness/assets/look.png")
     monkeypatch.setattr(
-        "agentflow_runtime.coordinator_decide.AGENT_PACKAGE_DIR", str(pkg)
+        "agentflow_runtime.coordinator_common.AGENT_PACKAGE_DIR", str(pkg)
     )
 
     rendered = rewrite_local_artifact_links(
@@ -242,7 +245,7 @@ def test_rewrite_refuses_guess_when_basename_unmatchable(
     pkg = tmp_path / "custom-agent"
     _write(pkg, "harness/assets/look.png")
     monkeypatch.setattr(
-        "agentflow_runtime.coordinator_decide.AGENT_PACKAGE_DIR", str(pkg)
+        "agentflow_runtime.coordinator_common.AGENT_PACKAGE_DIR", str(pkg)
     )
 
     artifacts = [str(pkg / "harness/assets/look.png")]
@@ -262,7 +265,7 @@ def test_rewrite_empty_reference_does_not_crash(
     pkg = tmp_path / "custom-agent"
     _write(pkg, "harness/assets/look.png")
     monkeypatch.setattr(
-        "agentflow_runtime.coordinator_decide.AGENT_PACKAGE_DIR", str(pkg)
+        "agentflow_runtime.coordinator_common.AGENT_PACKAGE_DIR", str(pkg)
     )
 
     rendered = rewrite_local_artifact_links(
@@ -286,7 +289,7 @@ def test_rewrite_sandbox_absolute_path_resolved_by_basename(
     pkg = tmp_path / "custom-agent"
     image = _write(pkg, "harness/assets/look.png")
     monkeypatch.setattr(
-        "agentflow_runtime.coordinator_decide.AGENT_PACKAGE_DIR", str(pkg)
+        "agentflow_runtime.coordinator_common.AGENT_PACKAGE_DIR", str(pkg)
     )
 
     rendered = rewrite_local_artifact_links(

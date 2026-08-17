@@ -195,4 +195,6 @@ examples/agent/outfit-assistant/harness/skills/dashscope_outfit_skills/forge-ima
 examples/agent/outfit-assistant/harness/output
 docs/tech-debt
 wheelhouse
+frontend/mocks/upstream_mock/acm_files
+packages/agentflow-runtime/src/agentflow_runtime.egg-info
 ###

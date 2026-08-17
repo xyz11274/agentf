@@ -16,9 +16,23 @@ import os
 import sys
 from copy import deepcopy
 import time
+from dataclasses import dataclass, field
 
 
 # ── Token estimation & message compaction ──
+
+@dataclass
+class FoldSpec:
+    """折叠落盘上下文(架构修复 S2, 2026-08-14)。
+
+    ``seq/session_id/dialogue_id/fold_dir`` 四个强相关参数总是成组传递,
+    封装为上下文对象消除 ``_fold_by_role`` 的 10 参数模糊接口。
+    """
+
+    seq: list = field(default_factory=lambda: [0])
+    session_id: str = ""
+    dialogue_id: str = ""
+    fold_dir: str = "/tmp/agentflow/folded"
 
 def estimate_message_tokens(messages: list) -> int:
     """Estimate total tokens in a message list (conservative overestimate).
@@ -122,7 +136,8 @@ def compress_messages(
 
     # 深拷贝元素：折叠/丢弃会原地改 msg，不能污染调用方的 messages
     result = [deepcopy(m) for m in messages]
-    seq = [0]
+    fold_spec = FoldSpec(seq=[0], session_id=session_id,
+                         dialogue_id=dialogue_id, fold_dir=fold_dir)
     before_tok = current
 
     def _ratio(after_tok: int) -> float:
@@ -143,8 +158,7 @@ def compress_messages(
 
     # ── Step 2: 折叠 tool_result 到文件（P4） ──
     before_count = len(result)
-    result, folded = _fold_by_role(result, "tool", "tool_result", budget, seq,
-                                   session_id, dialogue_id, fold_dir)
+    result, folded = _fold_by_role(result, "tool", "tool_result", budget, fold_spec)
     after_tok = estimate_message_tokens(result)
     if after_tok <= budget:
         print(f"[flow]   compaction: fold_tool_result "
@@ -158,8 +172,7 @@ def compress_messages(
     # N = protect_last_rounds，保证最近轮次内的 tool_call 链完整
     tool_call_protect = max(3, protect_last_rounds)
     before_count = len(result)
-    result, folded = _fold_by_role(result, "assistant", "tool_call", budget, seq,
-                                   session_id, dialogue_id, fold_dir,
+    result, folded = _fold_by_role(result, "assistant", "tool_call", budget, fold_spec,
                                    protect_field="tool_calls", protect_last=tool_call_protect)
     after_tok = estimate_message_tokens(result)
     if after_tok <= budget:
@@ -225,8 +238,8 @@ def _is_reminder(msg: dict) -> bool:
             and "<system-reminder>" in msg["content"])
 
 
-def _fold_by_role(result: list, role: str, ftype: str, budget: int, seq: list,
-                  session_id: str, dialogue_id: str, fold_dir: str,
+def _fold_by_role(result: list, role: str, ftype: str, budget: int,
+                  fold_spec: FoldSpec,
                   protect_field: str = None, protect_last: int = 0) -> tuple[list, int]:
     """按 role 折叠消息到文件。从最旧到最新。返回 (result, folded_count)。"""
     candidates = []
@@ -246,7 +259,7 @@ def _fold_by_role(result: list, role: str, ftype: str, budget: int, seq: list,
     # 从最旧到最新折叠
     folded = 0
     for i in candidates:
-        _fold_one(result[i], seq, session_id, dialogue_id, fold_dir, ftype)
+        _fold_one(result[i], fold_spec, ftype)
         folded += 1
         if estimate_message_tokens(result) <= budget:
             return result, folded
@@ -468,20 +481,19 @@ def _get_model_max_for_summary(model: str) -> int:
     return 128000  # 默认 128K
 
 
-def _fold_one(msg: dict, seq: list, session_id: str, dialogue_id: str,
-              fold_dir: str, ftype: str = "tool_result") -> None:
+def _fold_one(msg: dict, fold_spec: FoldSpec, ftype: str = "tool_result") -> None:
     """将单条消息折叠到文件，替换 content 为索引引用（原地修改 msg）。"""
     content = msg.get("content", "")
     tool_call_id = msg.get("tool_call_id", "")
     tool_calls = msg.get("tool_calls")
 
-    n = seq[0]
-    seq[0] += 1
+    n = fold_spec.seq[0]
+    fold_spec.seq[0] += 1
 
     # sanitize session_id/dialogue_id 防路径注入（替换 ../ / 等危险字符）
-    safe_session = "".join(c if c.isalnum() or c in "-_" else "_" for c in (session_id or "_"))
-    safe_dialog = "".join(c if c.isalnum() or c in "-_" else "_" for c in (dialogue_id or "_"))
-    subdir = os.path.join(fold_dir, safe_session, safe_dialog)
+    safe_session = "".join(c if c.isalnum() or c in "-_" else "_" for c in (fold_spec.session_id or "_"))
+    safe_dialog = "".join(c if c.isalnum() or c in "-_" else "_" for c in (fold_spec.dialogue_id or "_"))
+    subdir = os.path.join(fold_spec.fold_dir, safe_session, safe_dialog)
     os.makedirs(subdir, exist_ok=True)
 
     file_path = os.path.join(subdir, f"{ftype}_{n}.txt")
@@ -495,7 +507,7 @@ def _fold_one(msg: dict, seq: list, session_id: str, dialogue_id: str,
             f.write(content)
 
     _update_manifest(subdir, n, ftype, tool_call_id,
-                     estimate_message_tokens([msg]), session_id, dialogue_id)
+                     estimate_message_tokens([msg]), fold_spec.session_id, fold_spec.dialogue_id)
 
     msg["content"] = f"[{ftype} saved to {file_path}]"
     msg["_folded"] = True

@@ -30,6 +30,7 @@
 #include "daemon/template_registry.h"   // TemplateRegistry 完整类型（v2 段1 预热）
 #include "runtime/agent_runtime.h"
 #include "runtime/flow_trace.h"
+#include "runtime/trace/trace_manager.h"
 #include "utils/logger.h"
 
 namespace agentflow {
@@ -113,6 +114,21 @@ bool Daemon::initialize() {
       flow_trace.set_output_file(config_.flow_trace_file);
       flow_trace.set_stdout_enabled(false);
     }
+  }
+
+  // 1c. Initialize span trace（TraceSystem NDJSON 输出目录）
+  // 与 FlowTrace 不同：trace_output_dir 是 Python SpanWriter（AF_TRACE_OUTPUT_DIR）
+  // 与 C++ TraceManager 的共用根目录，空值回退代码默认 "trace_output"（相对启动 cwd）。
+  // 绝对化：do_daemonize()（步骤 2）会 chdir("/")，若此处存相对路径，daemonize 模式下
+  // 后续写 span 会解析到 "/trace_output"（非 root 用户 EACCES 被 catch 吞掉 → trace 静默
+  // 丢失）；基于启动 cwd 转绝对路径后 immune 到 chdir，且 worker 注入的同值也变为绝对。
+  {
+    std::string trace_dir =
+        config_.trace_output_dir.empty() ? "trace_output" : config_.trace_output_dir;
+    std::error_code ec;
+    std::filesystem::path abs_dir = std::filesystem::absolute(trace_dir, ec);
+    runtime::trace::TraceManager::instance().set_output_dir(
+        ec ? trace_dir : abs_dir.string());
   }
 
   Logger::instance().info("[DAEMON] agentflowd starting...");

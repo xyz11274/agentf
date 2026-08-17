@@ -214,3 +214,42 @@ def test_return_value_contract_unchanged():
     assert ret["skills"] == ["outfit-stylist"]
     assert "message" in ret
     assert ret["reason"] == "test"
+
+
+# ════════════════════════════════════════════════════════════════════
+# ⑤ dispatch 时记录 last_prompt(供 F2 双维度重复判定对比)
+# ════════════════════════════════════════════════════════════════════
+
+
+def test_dispatch_records_last_prompt():
+    """每个 skill dispatch 时应写入 last_prompt:{dialogue_id}:{skill_name}。
+
+    2026-08-13 双维度升级:coordinator re-trigger 时读取该 key 对比本次 prompt,
+    同名 skill + 同 prompt 才算重复;同名不同 prompt(新任务)放行。
+    """
+    args = {
+        "skills": [{"name": "outfit-stylist", "prompt": "推荐一套穿搭并返回HTML"}],
+        "reason": "用户请求穿搭推荐",
+    }
+    _, fake_bus = _call_handle(args)
+
+    key = "last_prompt:dlg_test:outfit-stylist"
+    assert key in fake_bus.global_puts, (
+        "dispatch 时必须记录 last_prompt key,否则 re-trigger 无法做双维度重复判定"
+    )
+    assert fake_bus.global_puts[key] == "推荐一套穿搭并返回HTML"
+
+
+def test_dispatch_records_last_prompt_per_skill():
+    """多 skill 同批 dispatch 时,每个 skill 独立记录自己的 last_prompt。"""
+    args = {
+        "skills": [
+            {"name": "outfit-stylist", "prompt": "推荐穿搭"},
+            {"name": "forge-image-gen", "prompt": "生成效果图"},
+        ],
+        "reason": "",
+    }
+    _, fake_bus = _call_handle(args)
+
+    assert fake_bus.global_puts.get("last_prompt:dlg_test:outfit-stylist") == "推荐穿搭"
+    assert fake_bus.global_puts.get("last_prompt:dlg_test:forge-image-gen") == "生成效果图"

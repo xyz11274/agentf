@@ -279,10 +279,16 @@ def _is_transient_http_error(e: Exception) -> bool:
     注意：``requests.SSLError`` 继承自 ``requests.ConnectionError``，所以必须
     先检查 SSL 失败信号再走 ConnectionError 通用分支，否则 SSL 证书错误会被
     误判为可重试。
+
+    2026-08-14 修正：原来用 ``"ssl" in msg`` 一刀切排除所有 SSL 错误，
+    但 SSLEOFError（如 [SSL: UNEXPECTED_EOF_WHILE_READING]）是**瞬时**错误
+    （连接被对端关闭），应当可重试。真正不可重试的只有证书验证错误
+    （certificate verify failed / unknown ca）——证书本身有问题，重试无用。
     """
     msg = str(e).lower()
-    # SSL 证书错误不重试（先于 isinstance 检查，避免被 SSLError ⊂ ConnectionError 吞掉）
-    if "certificate verify failed" in msg or "ssl" in msg:
+    # SSL 证书错误不重试（先于 isinstance 检查，避免被 SSLError ⊂ ConnectionError 吞掉）。
+    # 只排除证书类错误；SSLEOFError 等瞬时 SSL 错误不在此列，走下方 ConnectionError 分支重试。
+    if "certificate verify failed" in msg or "certificate_verify_failed" in msg or "unknown ca" in msg:
         return False
     if isinstance(e, (requests.ConnectionError, requests.Timeout)):
         return True

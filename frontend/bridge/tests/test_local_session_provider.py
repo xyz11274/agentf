@@ -345,3 +345,52 @@ async def test_schema_idempotent_across_constructs(tmp_path: Path):
     assert fetched is not None
     msgs = await p2.get_messages(s["id"])
     assert len(msgs) == 2
+
+
+# ── 展示层展平（code-review P3：I-REQ 存原始 content JSON，展示层需可读文本）──
+
+
+_STORED_JSON_INPUT = json.dumps([
+    {"type": "text", "text": "看图"},
+    {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}},
+], ensure_ascii=False)
+
+
+async def test_auto_title_flattens_stored_json(provider: LocalSessionProvider):
+    """自动标题必须用展平文本——原始 content JSON（含 base64）会生成乱码标题。"""
+    s = await provider.get_or_create_session("alice", "web")
+    await provider.save_dialogue(s["id"], _STORED_JSON_INPUT, "A1", dialogue_id="d-1")
+
+    sess = await provider.get_session(s["id"])
+    assert sess is not None
+    # 标题应为展平文本"看图"，而非 JSON 乱码
+    assert sess["title"] == "看图", f"标题应为展平文本，实际: {sess['title']!r}"
+    assert "[{" not in sess["title"], f"标题不应含 JSON 乱码: {sess['title']!r}"
+
+
+async def test_get_messages_flattens_stored_json(provider: LocalSessionProvider):
+    """get_messages 展示层必须展平——JSON 形态 user_input 渲染为可读文本，不渲染原始 JSON。"""
+    s = await provider.get_or_create_session("alice", "web")
+    await provider.save_dialogue(s["id"], _STORED_JSON_INPUT, "A1", dialogue_id="d-1")
+
+    msgs = await provider.get_messages(s["id"])
+    user_msg = msgs[0]
+    assert user_msg["role"] == "user"
+    assert user_msg["content"] == "看图", \
+        f"展示层应渲染展平文本，实际: {user_msg['content']!r}"
+    assert "base64" not in user_msg["content"], \
+        f"展示层不应渲染 base64: {user_msg['content']!r}"
+
+
+async def test_get_context_keeps_raw_content(provider: LocalSessionProvider):
+    """get_context 必须保持原始 content（I-DERIV 消费时派生的输入）——不展平。
+
+    derive_history_user_messages 依赖原始 JSON（含 image_url）做消费时派生；
+    若 get_context 展平，路径文本派生将失效（O5/I-REQ 链路破坏）。
+    """
+    s = await provider.get_or_create_session("alice", "web")
+    await provider.save_dialogue(s["id"], _STORED_JSON_INPUT, "A1", dialogue_id="d-1")
+
+    ctx = await provider.get_context(s["id"], "alice")
+    assert ctx.messages[0]["content"] == _STORED_JSON_INPUT, \
+        "get_context 应保持原始 content（I-DERIV 输入），不得展平"

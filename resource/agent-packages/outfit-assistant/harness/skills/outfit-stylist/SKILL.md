@@ -17,7 +17,7 @@ version: 0.7.0
 ## 核心工作流（按顺序，缺省取合理默认并明说）
 
 ### 0. 召回个性化档案（每次先做）
-**preload_user_context 工具已在 skill 首轮前预加载用户上下文**，直接从 context JSON 取用，**禁止再用 bash/glob/read 探查记忆库**（本轮 perf 基线实测：LLM 逐轮 bash 探查 profile/history 耗 13+ 轮 ≈ 55s，preload 后应 0 轮）：
+**用户上下文已在 skill 首轮系统消息中预加载**（档案/历史/风格参考/目录树/图片路径/环境/最近天气），**直接从预加载内容取用，不要调用 preload_user_context 工具**（本工具只用于需要指定 location 的天气补查），**禁止再用 bash/glob/read 探查记忆库**（本轮 perf 基线实测：LLM 逐轮 bash 探查 profile/history 耗 13+ 轮 ≈ 55s，预加载后应 0 轮）：
 
 | 字段 | context JSON key | 说明 |
 |------|-----------------|------|
@@ -63,24 +63,24 @@ version: 0.7.0
 ```bash
 python3 ${SKILL_DIR}/weather.py "<城市>"
 ```
-输出一行 JSON：`current`(temp/feels_like/desc/humidity/wind) + 5 天 `forecast`。若有 `error` 字段，就告诉用户拿不到天气、改用其描述的体感来搭，**绝不臆造温度**。用 `feels_like` 和 `desc`（雨/雪/风）决定保暖层数、是否需防水/防风。温度分层规则**已由 `preload_user_context` 预加载**（返回的 `style_guide` 字段），**直接用，不要 read_file 重复读取** style-guide.md（仅当返回缺失该字段时才 read_file 兜底）。
+输出一行 JSON：`current`(temp/feels_like/desc/humidity/wind) + 5 天 `forecast`。若有 `error` 字段，就告诉用户拿不到天气、改用其描述的体感来搭，**绝不臆造温度**。用 `feels_like` 和 `desc`（雨/雪/风）决定保暖层数、是否需防水/防风。温度分层规则**已在预加载上下文中提供**（`style_guide` 字段），**直接用，不要 read_file 重复读取** style-guide.md（仅当返回缺失该字段时才 read_file 兜底）。
 
 ### 3. 看上传的图片（有才做，必须走脚本，不许凭空描述）
-上传的文件落在会话沙箱的 `upload/` 下。**只要用户上传了图片，必须** 调用视觉脚本识别，不能自己猜图里是什么：
+上传的文件落在会话沙箱的 `upload/` 下。**只要用户上传了图片，必须** 调用视觉脚本识别，不能自己猜图里是什么。**`--image` 参数用预加载上下文 `workspace_tree.upload.upload_images[].path`（确定性路径），禁止拼 `upload/<file>` 相对路径或 `ls upload/` 探测**：
 ```bash
 # 衣物单品（识别品类/颜色/版型/正式度/季节，用于纳入搭配/避免撞色）
-python3 ${SKILL_DIR}/scripts/outfit_vision.py --image upload/<file> --mode garment
+python3 ${SKILL_DIR}/scripts/outfit_vision.py --image <upload_images[0].path> --mode garment
 # 全身/人物照（粗判体型轮廓、肤色冷暖，用于个性化）
-python3 ${SKILL_DIR}/scripts/outfit_vision.py --image upload/<file> --mode person
+python3 ${SKILL_DIR}/scripts/outfit_vision.py --image <upload_images[0].path> --mode person
 # 整体穿搭/上身照（识别整套单品 + 配色/风格/廓形线索，用于【点评】）
-python3 ${SKILL_DIR}/scripts/outfit_vision.py --image upload/<file> --mode outfit
+python3 ${SKILL_DIR}/scripts/outfit_vision.py --image <upload_images[0].path> --mode outfit
 ```
 - 脚本回 **结构化 JSON**，直接拿来推理。**多张图就对每张各调一次脚本、合并结果**（upload/ 文件列表已在 `workspace_tree`，直接看它知道有几张，**禁止再 `ls upload/` 探查**）。按意图选 mode：要**点评一身造型**→`outfit`；要**收集用户的单品来搭**→对每件 `garment`；要**个性化体型/肤色**→`person`。
 - 人物照的体型/肤色判断是 **粗略视觉推测、可能不准**，脚本已带免责声明——转述时也要这样表述，措辞尊重、不做身材评判。
 - 若脚本报 `DASHSCOPE_API_KEY` 未配置或网络错误，**如实告诉用户图片暂时分析不了**，让其用文字描述单品，照常给建议——不要假装看过图。
 
 ### 4. 推理搭配（grounded）
-风格参考（配色 / 体型扬长避短 / 各场合 dress code / 温度分层 / 风格词典）**已由 `preload_user_context` 预加载**（返回的 `style_guide` 字段）——**直接用，不要再用 read_file 重复读取** `${SKILL_DIR}/references/style-guide.md`（仅当返回缺失该字段时才 read_file 兜底）。结合 **性别（男装/女装/中性，来自档案 `gender`）** + 天气 + 场合 + 个性化档案 + 上传单品，给出 1–2 套完整搭配。每套要有：单品清单（上装/外套/下装/鞋/配饰）、主配色、为什么适合（呼应天气/场合/体型/偏好）、可选的替换项。规避用户禁忌色和不穿的单品。**若用户上传了自己的单品，优先用这些真实单品来组合**（不够再补建议一两件并说明是「建议添置」）。
+风格参考（配色 / 体型扬长避短 / 各场合 dress code / 温度分层 / 风格词典）**已在预加载上下文中提供**（`style_guide` 字段）——**直接用，不要再用 read_file 重复读取** `${SKILL_DIR}/references/style-guide.md`（仅当返回缺失该字段时才 read_file 兜底）。结合 **性别（男装/女装/中性，来自档案 `gender`）** + 天气 + 场合 + 个性化档案 + 上传单品，给出 1–2 套完整搭配。每套要有：单品清单（上装/外套/下装/鞋/配饰）、主配色、为什么适合（呼应天气/场合/体型/偏好）、可选的替换项。规避用户禁忌色和不穿的单品。**若用户上传了自己的单品，优先用这些真实单品来组合**（不够再补建议一两件并说明是「建议添置」）。
 
 ### 5. 选交付形态（按用户意图）
 | 用户意图 | 形态 |
@@ -105,9 +105,9 @@ python3 ${SKILL_DIR}/scripts/outfit_vision.py --image upload/<file> --mode outfi
 ## 评价穿搭风格（用户上传整身照 + 想听点评时）
 
 意图：「这样穿好看吗 / 帮我点评 / 打个分 / 给点建议」。**别出一套全新搭配**，而是评价用户已经穿的这身：
-**轮次收敛（重要）**：识别 + 推理一次完成——拿到 `preload_user_context`（档案/天气/风格参考）和 `outfit_vision`（造型线索）后，**在下一轮直接输出完整点评**（整体印象/配色/版型/场合/建议一次给全），**不要分多轮逐步处理**（如每轮只确认一个维度、反复调用工具补查、一轮只做一件事）。点评场景预期 4 轮内完成：preload → 识别 → 完整点评 →（可选）写记忆。
+**轮次收敛（重要）**：识别 + 推理一次完成——拿到预加载的用户上下文（档案/天气/风格参考）和 `outfit_vision`（造型线索）后，**在下一轮直接输出完整点评**（整体印象/配色/版型/场合/建议一次给全），**不要分多轮逐步处理**（如每轮只确认一个维度、反复调用工具补查、一轮只做一件事）。点评场景预期 4 轮内完成：preload → 识别 → 完整点评 →（可选）写记忆。
 1. 跑 `outfit_vision.py` **识别 1 次**拿结构化造型线索（items / palette / style_tags / formality / layering / proportion_notes / **body_shape_hint / height_impression / skin_undertone / coloring_notes**——outfit 模式一次调用已覆盖"整体造型 + 人物视觉"全部维度）——**单张图只识别一次，不要重复调用**（识别是慢操作，重复调用浪费轮次与耗时）；仅当用户上传了**多张图**时才每张各跑一次。**调用必须带完整参数**：`--image <上传图的完整文件路径>` + `--mode outfit`，缺一不可（参数不全的调用会失败，白跑一次后还得修正重试，浪费整轮）。**一次识别即可获得全部维度（含男女/身形/肤色/风格），不要为了不同维度分多次识别**——需要人物线索时直接复用本次返回的 body_shape_hint 等字段。
-2. 风格参考（配色 / 体型扬长避短 / 场合 dress code / 温度分层 / 风格词典）**已由 `preload_user_context` 预加载**（返回的 `style_guide` 字段）——**直接用，不要 read_file 重复读取** style-guide.md（仅当返回缺失该字段时才 read_file 兜底）。结合**性别** + 场合（用户说了就用，没说按通用），给一份**建设性点评**：
+2. 风格参考（配色 / 体型扬长避短 / 场合 dress code / 温度分层 / 风格词典）**已在预加载上下文中提供**（`style_guide` 字段）——**直接用，不要 read_file 重复读取** style-guide.md（仅当返回缺失该字段时才 read_file 兜底）。结合**性别** + 场合（用户说了就用，没说按通用），给一份**建设性点评**：
    - **整体印象**：风格定位 + 一句话感受。
    - **配色**：主配色协不协调、有无撞色/沉闷，怎么调更好。
    - **版型与比例**：廓形、上下比例（中性描述，**不评判身材**）。
@@ -141,37 +141,29 @@ python3 ${SKILL_DIR}/scripts/outfit_vision.py --image upload/<file> --mode outfi
 
 ## 生成穿搭效果图（默认开启）
 
-agent 已挂 `forge-image-gen`。**给出推荐后，默认为主推搭配（套1）生成一张效果图**——前提是图像 key 在沙箱里可用（与第 3 步视觉识别**同一个 `DASHSCOPE_API_KEY`**，z-image-turbo 自动选中，无需 `--provider`）。
+agent 已挂 `forge-image-gen`。**给出推荐后，默认为主推搭配（套1）生成一张效果图**——图像 key 已由环境注入沙箱（与第 3 步视觉识别**同一个 `DASHSCOPE_API_KEY`**，z-image-turbo 自动选中，无需 `--provider`），**无需探测 key**，直接执行生成命令；失败按退出码兜底（见下）。
 
-**先探测 key 再决定**（没 key 别白跑一次再道歉）：
+**默认生成两张**：① 平铺(flat-lay) ② 人物上身效果。两张的 prompt 都用套1的真实单品/配色/风格/场合/天气氛围拼。**人物上身图的模特性别按档案 `gender`**：女装→女模特、男装→男模特、中性/不便说→中性气质模特（别强加性别）。两张输出到不同文件（outfit-1.png / outfit-2.png）互不依赖，**一次 tool_calls 同时发起两个独立的 bash 工具调用**（各自调用一次 generate.py），框架会并行执行它们（2026-08-16 并行优化，图生成 9.3s 串行 → ~4.8s 并行）：
 ```bash
-[ -n "$DASHSCOPE_API_KEY" ] && echo HAVE_KEY || echo NO_KEY
-```
-- `HAVE_KEY` → **默认生成两张**：① 平铺(flat-lay) ② 人物上身效果。两张的 prompt 都用套1的真实单品/配色/风格/场合/天气氛围拼。**人物上身图的模特性别按档案 `gender`**：女装→女模特、男装→男模特、中性/不便说→中性气质模特（别强加性别）：
-```bash
-# ① 平铺图——清楚展示每件单品与配色
+# ① 平铺图——清楚展示每件单品与配色（独立 bash 工具调用 1）
 python3 ${SKILLS_DIR}/forge-image-gen/scripts/generate.py \
   --prompt "时尚穿搭平铺图(flat-lay)，<场合·天气氛围>：<上装+颜色>、<外套+颜色>、<下装+颜色>、<鞋>、<配饰> 整齐平铺；<风格词>；干净浅色背景，俯拍，柔和打光，无文字无水印" \
   --output ./assets/outfit-1.png --size 1024x1024
-# ② 人物上身效果——模特穿着这套的展示图（也是后面视频的首帧，所以拍成正面全身）
+# ② 人物上身效果——模特穿着这套的展示图（也是后面视频的首帧，所以拍成正面全身）（独立 bash 工具调用 2）
 python3 ${SKILLS_DIR}/forge-image-gen/scripts/generate.py \
   --prompt "时尚穿搭上身效果，一位<按 gender：女模特/男模特/中性气质模特>**正面全身**穿着这套<风格词>造型：<上装+颜色>，<外套+颜色>，<下装+颜色>，<鞋>，<配饰>；<场合·天气氛围>；正面全身入镜、自然挺拔站姿、双手自然下垂、**纯色简洁影棚背景**、柔和均匀打光，时尚杂志/电商展示质感，无文字无水印" \
   --output ./assets/outfit-2.png --size 1024x1024
 ```
-（两张顺序生成；用户明确说「只要一张/只要平铺」时才只生成图1。尺寸固定用已验证的 `1024x1024`，避免不支持的尺寸报错。**outfit-2.png 要拍成正面全身、纯色背景的模特图——它同时是动态视频的首帧，全身正面 + 干净背景才能让模特顺畅转身展示，详见「生成穿搭效果视频」节。**）
-- `NO_KEY` → **静默跳过**图，正常给文字/视图/HTML；只有用户专门问「能出效果图吗」时才说明需要配置图像 key。
+（两张**并行**生成——**两个生成命令作为独立的 bash 工具调用一次发出**，不要合并成一条 shell 命令（`&` 后台会丢失各自结果收集）；用户明确说「只要一张/只要平铺」时才只生成图1（单独一个工具调用）。尺寸固定用已验证的 `1024x1024`，避免不支持的尺寸报错。**outfit-2.png 要拍成正面全身、纯色背景的模特图——它同时是动态视频的首帧，全身正面 + 干净背景才能让模特顺畅转身展示，详见「生成穿搭效果视频」节。**）
 - 把 `./assets/outfit-1.png` 和 `./assets/outfit-2.png` **都**嵌入所选形态：纯聊天/HTML 里用 markdown 图片 `![平铺](assets/outfit-1.png)` 和 `![上身效果](assets/outfit-2.png)`（Console 会把相对路径解析成沙盒图内联渲染）；视图里放 image 节点。
-- 退出码非零表示**已尝试但失败**（网络/额度/尺寸不支持），**如实说明、不要假装生成了图**；可回退到 `--size 1024x1024` 再试一次。
+- 退出码非零表示**已尝试但失败**（网络/额度/尺寸不支持/缺 key），**如实说明、不要假装生成了图**；可回退到 `--size 1024x1024` 再试一次。
 - **隐私**：默认生成**泛化服饰效果图（平铺/匿名人台）**，**不要**把用户上传的人物照当参考图。仅当用户明确要求「把这套穿在我身上」并同意时，才追加 `--ref upload/<全身照>`。
 
 ## 生成穿搭效果视频（按意图触发，系统引导）
 
-视频用 `video-gen`（DashScope Wan，t2v + i2v，**同一个 `DASHSCOPE_API_KEY`**）。**视频不默认生成**（异步、约 1–3 分钟、成本高）。**先确认 `video-gen` 是否挂载到本会话**（老 agent/会话可能没挂上）：
-```bash
-ls ${SKILLS_DIR}/video-gen/scripts/make_video.py 2>/dev/null && echo HAS_VIDEO || echo NO_VIDEO
-```
-- `HAS_VIDEO` → 给完推荐 + 效果图后**主动引导**：「想看这套的动态展示短视频吗？大约要 1–3 分钟。」用户答应 / 主动说「视频/动态/动起来/short video」时才生成。
-- `NO_VIDEO` → **别提视频**（避免承诺了又做不了）。用户若主动要，就如实说明：当前会话没挂载视频技能，需要在 Agent 配置里把 `video-gen` 加上、再新建会话即可。
+视频用 `video-gen`（DashScope Wan，t2v + i2v，**同一个 `DASHSCOPE_API_KEY`**）。**视频不默认生成**（异步、约 1–3 分钟、成本高）。**是否挂载看预加载上下文的 `env.skills.video_gen`**（老 agent/会话可能没挂上，无需 bash 探测）：
+- `env.skills.video_gen=True` → 给完推荐 + 效果图后**主动引导**：「想看这套的动态展示短视频吗？大约要 1–3 分钟。」用户答应 / 主动说「视频/动态/动起来/short video」时才生成。
+- `env.skills.video_gen=False` → **别提视频**（避免承诺了又做不了）。用户若主动要，就如实说明：当前会话没挂载视频技能，需要在 Agent 配置里把 `video-gen` 加上、再新建会话即可。
 
 **首选 image-to-video——用「人物上身图」当首帧，做模特多角度转身展示**：
 - ⚠️**首帧必须是 `./assets/outfit-2.png`（正面全身模特图），绝不用平铺图 `outfit-1.png`**。平铺图里没有模特，i2v 只能把这张静止产品图微微推拉——**这正是「视频画面没变」的根因**。目标是让**模特原地转身、从正面→侧面→背面多个角度展示这套穿搭的真实上身效果**。
@@ -186,7 +178,7 @@ python3 ${SKILLS_DIR}/video-gen/scripts/make_video.py \
 ```
 - **模型与时长（默认完整 360°）**：用 `wan2.5-i2v-preview` + `--duration 10`（新协议，约 10 秒，模特转一整圈）——已在生产实测可用、转得出正面/侧面/背面多角度。若该模型未开通（submit 报模型错/无权限），去掉 `--model/--duration` 回退默认 `wanx2.1-i2v-turbo`（约 5 秒、只能转半圈），并如实告诉用户「完整 360° 需在 DashScope 开通 wan2.5 i2v 模型」。
 - **i2v 的局限**（如实告知用户）：背面/侧面是模型**根据正面推断**的合理呈现，不是这套衣服背面的精确还原；要精确的多角度，需要真人多角度拍摄。作为动态展示已足够。
-- 没有效果图（NO_KEY 跳过了图，或图失败）→ 退化为 **text-to-video**：去掉 `--image`，用文字描述「一位模特穿着<整套搭配>原地转身，正面/侧面/背面依次展示」（注意：t2v 不保证和效果图一致）。
+- 没有效果图（图生成失败/未生成）→ 退化为 **text-to-video**：去掉 `--image`，用文字描述「一位模特穿着<整套搭配>原地转身，正面/侧面/背面依次展示」（注意：t2v 不保证和效果图一致）。
 - **异步且慢**：脚本提交任务后轮询（每 ~10s，默认上限 600s），完成把 mp4 路径打到 stdout。生成前先告诉用户「在生成，约 1–3 分钟，请稍等」；**不要**因为慢就放弃或假装做好了。
 - 拿到 stdout 的 `./outfit.mp4` 路径后作为交付物告诉用户（Console 文件浏览器可播放/下载）；HTML lookbook 里可嵌 `<video src="outfit.mp4" controls>`。
 - 退出码非零（缺 key/额度/超时/模型未开通）→ **如实说明失败原因**，不要假装生成了视频。

@@ -59,7 +59,8 @@ def emit_event(
     补 _node_context() 字段到 data，保持与旧调用方 payload schema 一致。
 
     Args:
-        event: Event name, e.g. "coordinator.decision", "skill.tool_call"
+        event: Event name — 引用 ``agentflow_runtime.events`` 领域目录常量，
+            禁止散落字符串（H-5）。示例：``hook_events.COORDINATOR_TRIGGER``。
         data: Event-specific key-value payload
         level: Log level (INFO, WARN, ERROR)
         duration_ms: Optional duration（秒/毫秒，由调用方负责校正，§5.2.4 H3）

@@ -215,3 +215,51 @@ def test_execute_mcp_unknown_server(monkeypatch):
     parsed = json.loads(out)
     assert "error" in parsed
     assert "not connected" in parsed["error"]
+
+
+# 4f. _load_mcp_tools 入口/未发现配置日志规范（M3 可观测性：日志含可定位信息）
+def _make_registry_without_mcp_config(monkeypatch):
+    """Construct _LocalToolRegistry with MCP available but no servers discovered.
+
+    Stubs builtin tool loading (avoid side-effects) + discover_servers returns [] so
+    _load_mcp_tools walks the none_config branch.
+    """
+    from agentflow_runtime import skill_executor as se
+
+    monkeypatch.setattr(se, "_load_dir", lambda *a, **kw: None)
+    monkeypatch.setattr(se, "MCP_AVAILABLE", True)
+    monkeypatch.setattr(se, "MCPBridge", lambda cfg: pytest.fail("bridge must not be built when no config"))
+    monkeypatch.setattr(se, "discover_servers", lambda *paths: [])
+    monkeypatch.setenv("AF_MCP_CONFIG_PATHS", "")
+    return se
+
+
+def test_load_mcp_tools_emits_start_log(monkeypatch, caplog):
+    """入口日志 mcp_tools.start 含 scan_paths，标明开始扫配置 + 扫哪些路径（排障区分"没跑到这段"vs"配置为空"）。"""
+    import logging as _logging
+
+    se = _make_registry_without_mcp_config(monkeypatch)
+    # skill_executor 用命名 logger（logger = logging.getLogger(__name__)），按命名 logger 捕获
+    with caplog.at_level(_logging.INFO, logger="agentflow_runtime.skill_executor"):
+        se._LocalToolRegistry()
+    start_logs = [r for r in caplog.records if r.message.startswith("mcp_tools.start")]
+    assert start_logs, "must emit mcp_tools.start entry log at _load_mcp_tools entry"
+    # scan_paths 字段含扫的路径列表（pkg + cwd 两路，去重后）
+    assert "scan_paths=" in start_logs[0].message, "start log must carry scan_paths field"
+
+
+def test_load_mcp_tools_none_config_log_carries_paths(monkeypatch, caplog, tmp_path):
+    """未发现配置时 mcp_tools.none_config 日志必须含 scan_paths——排障可定位"路径算错"还是"路径对但文件不存在"。"""
+    import logging as _logging
+
+    se = _make_registry_without_mcp_config(monkeypatch)
+    # cwd 设到 tmp_path，让 cwd/.mcp.json 路径可断言（tmp_path 下没有 .mcp.json）
+    monkeypatch.chdir(tmp_path)
+    with caplog.at_level(_logging.INFO, logger="agentflow_runtime.skill_executor"):
+        se._LocalToolRegistry()
+    none_logs = [r for r in caplog.records if r.message.startswith("mcp_tools.none_config")]
+    assert none_logs, "must emit mcp_tools.none_config when no servers discovered"
+    msg = none_logs[0].message
+    assert "scan_paths=" in msg, "none_config log must carry scan_paths field"
+    # cwd 路径必须是 tmp_path/.mcp.json（证路径算对但文件不存在 → none 而非 loaded）
+    assert str(tmp_path / ".mcp.json") in msg, f"none_config scan_paths must contain cwd path, got: {msg}"

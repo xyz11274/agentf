@@ -43,9 +43,12 @@ class E2BExecutor(ToolExecutor):
     # e2b sandbox internal workspace path
     SANDBOX_WORKSPACE = "/home/user/workspace"
 
-    # Regex to extract image file paths from command stdout
+    # Regex to extract image/video file paths from command stdout
+    # 后缀与 collect 白名单对齐(2026-08-14 review):拉回正则必须 ⊆ 收集白名单,
+    # 否则 mkv 等被拉回宿主机却无法被 extract_artifact_paths/_artifact_suffixes
+    # 收集 → 孤儿文件。白名单见 skill_executor.py 正则与 bridge _MEDIA_SUFFIXES。
     _IMAGE_PATH_RE = re.compile(
-        r"/home/user/workspace/[^\s\"\'\\]+\.(?:png|jpe?g|webp|gif)",
+        r"/home/user/workspace/[^\s\"\'\\]+\.(?:png|jpe?g|webp|gif|mp4|mov|webm|mp3|wav)",
         re.IGNORECASE,
     )
 
@@ -218,10 +221,14 @@ class E2BExecutor(ToolExecutor):
     # -- image download -----------------------------------------------------
 
     def _download_images(self, sb, stdout: str) -> None:
-        """Extract image file paths from stdout and download to host.
+        """Extract image/video file paths from stdout and download to host.
 
-        Best-effort — download failures are silently skipped (images are
+        Best-effort — download failures are silently skipped (media are
         a side-effect, not the primary command output).
+
+        2026-08-14 修复:正则从仅图片扩展为图片+视频(mp4/mov/webm/mkv/mp3/wav)。
+        此前视频只在沙箱内,宿主机无文件 → collect 阶段 os.path.isfile 失败 →
+        skipped_missing → 前端收不到视频产物。与图片同一拉回机制(生成即落盘)。
 
         Source: outfit bash.py L118-151.
         """

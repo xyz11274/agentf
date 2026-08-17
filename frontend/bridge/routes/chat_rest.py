@@ -45,7 +45,11 @@ from client import (
     NotFoundError,
 )
 from config import settings
-from content_serializer import prepare_content_for_daemon
+from content_serializer import (
+    derive_history_user_messages,
+    prepare_content_for_daemon,
+    serialize_content_for_storage,
+)
 from dependencies import get_daemon_client
 from models import ContentPart
 from providers import SessionProvider
@@ -368,6 +372,13 @@ async def _chat_turn_events(
     # JSON-stringify the whole object so it travels through the daemon's
     # single `content` string field. Nodes parse the object to extract
     # both the messages array and the stream flag.
+    # I-DERIV（03-bridge-session-persistence.md §1.3）：历史 user 消息存的是原始
+    # content（含 base64 真相源），拼 daemon messages 前消费时派生路径文本。
+    if history_messages:
+        history_messages = derive_history_user_messages(
+            history_messages, agent_id=agent_id,
+            user_id=user_id, client_id=client_id,
+        )
     if history_messages or stream:
         messages_payload = [*history_messages, {"role": "user", "content": this_turn_text}] if history_messages else [{"role": "user", "content": this_turn_text}]
         daemon_content = json.dumps({
@@ -853,7 +864,7 @@ async def chat_rest(
             )
             await provider.save_dialogue(
                 session_id=sess["id"],
-                user_input=_content_to_text(body.content),
+                user_input=serialize_content_for_storage(body.content),
                 agent_response=full_content,
                 dialogue_id=dialogue_id,
                 agent_name=agent_id,
@@ -932,7 +943,7 @@ async def chat_rest(
             )
             await provider.save_dialogue(
                 session_id=sess["id"],
-                user_input=_content_to_text(body.content),
+                user_input=serialize_content_for_storage(body.content),
                 agent_response=full_content,
                 dialogue_id=dialogue_id,
                 agent_name=agent_id,

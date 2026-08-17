@@ -643,7 +643,7 @@ data: {"choices":[{"delta":{"content":"好的，已为您生成方案。"},"inde
 
 data: {"choices":[{"delta":{"content":"\n\n## 生成产物"},"index":0}],"_chunk_type":"llm_chunk"}
 
-data: {"choices":[{"message":{"content":"\n\n[📥 下载文件](/api/artifacts/.../look.png)"}}],"_artifacts":[{"type":"image","url":"/api/artifacts/.../look.png","name":"look.png","mime_type":"image/png"}]}
+data: {"choices":[{"message":{"content":"\n\n[下载文件](/api/artifacts/.../look.png)"}}],"_artifacts":[{"type":"image","url":"/api/artifacts/.../look.png","name":"look.png","mime_type":"image/png"}]}
 
 data: [DONE]
 ```
@@ -668,7 +668,7 @@ data: [DONE]
 ```json
 {"type":"chunk","content":"正在执行 outfit-stylist…","final":false,"progress":true,"chunk_type":"progress","_source":"coordinator"}
 {"type":"chunk","content":"好的，已为您生成方案。","final":false,"progress":false,"chunk_type":"llm_chunk"}
-{"type":"chunk","content":"\n\n[📥 下载文件](...)","final":true,"progress":false,"artifacts":[{"type":"image","url":"...","name":"look.png"}]}
+{"type":"chunk","content":"\n\n[下载文件](...)","final":true,"progress":false,"artifacts":[{"type":"image","url":"...","name":"look.png"}]}
 {"type":"done","final":true}
 ```
 
@@ -906,7 +906,7 @@ Content 同样支持 content array 格式，与 REST 接口一致：
 {"type":"chunk","content":"\n\n## 生成产物","final":false,"progress":false}
 {
   "type": "chunk",
-  "content": "\n\n[📥 下载文件 1](/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/presentation.pptx)",
+  "content": "\n\n[下载文件 1](/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/presentation.pptx)",
   "final": true,
   "artifacts": [
     {"type": "download", "url": "/api/artifacts/outfit-assistant/files/.../presentation.pptx", "name": "presentation.pptx", "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation"},
@@ -1052,7 +1052,7 @@ interface ArtifactInfo {
   "success": true,
   "data": {
     "task_id": "task_abc123",
-    "content": "穿搭方案已生成：\n\n![穿搭效果图](https://agent.example.com/health/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-abc123/look.png)\n\n[查看完整 HTML 报告](https://agent.example.com/health/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-abc123/report.html)\n\n[📥 下载文件 1](https://agent.example.com/health/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-abc123/deck.pptx)"
+    "content": "穿搭方案已生成：\n\n![穿搭效果图](https://agent.example.com/health/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-abc123/look.png)\n\n[查看完整 HTML 报告](https://agent.example.com/health/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-abc123/report.html)\n\n[下载文件 1](https://agent.example.com/health/api/artifacts/outfit-assistant/files/outfit-assistant/outputs/task-abc123/deck.pptx)"
   },
   "error": null
 }

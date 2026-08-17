@@ -78,11 +78,12 @@ def _discover_run(run: Optional[str]) -> tuple[Optional[Path], Optional[Path]]:
 
 
 def _extract_llm_calls(text: str) -> list[dict[str, Any]]:
-    """抽 [llm_call] 段: [#N] >>>/<<<  lat=Xms finish=Y tool_calls=Z。
+    """抽 [llm_call] 段: [#N] >>>/<<<  lat=Xms finish=Y tool_calls=Z + token/msgs。
 
     兼容两种格式:
-        [llm_call] WARN: [#4] >>> call_id=... node=skill_executor   （请求开始）
-        [llm_call] WARN: [#4] <<< ... latency=5505ms finish=tool_calls （响应结束）
+        [llm_call] WARN: [#4] >>> call_id=... node=skill_executor msgs=6 （请求开始）
+        [llm_call] WARN: [#4] <<< ... latency=5505ms finish=tool_calls
+            tok=prompt:0/completion:262/total:262   （响应结束）
         [llm_call] #1 lat=5505ms fin=tool_calls                    （daemon.log 紧凑）
     """
     calls: dict[str, dict[str, Any]] = {}
@@ -95,10 +96,18 @@ def _extract_llm_calls(text: str) -> list[dict[str, Any]]:
         num = m_num.group(1)
         entry = calls.setdefault(num, {"num": num, "req": False, "resp": False,
                                        "latency_ms": None, "finish": None,
-                                       "tool_calls": 0})
+                                       "tool_calls": 0, "call_id": None,
+                                       "msgs": None, "prompt_tokens": None,
+                                       "completion_tokens": None})
         m_dir = re.search(r"(>>>|<<<)", line)
         if m_dir:
             entry["req" if m_dir.group(1) == ">>>" else "resp"] = True
+        m_cid = re.search(r"call_id=([0-9a-f]+)", line)
+        if m_cid:
+            entry["call_id"] = m_cid.group(1)
+        m_msgs = re.search(r"msgs=(\d+)", line)
+        if m_msgs:
+            entry["msgs"] = int(m_msgs.group(1))
         m_lat = re.search(r"lat(?:ency)?=(\d+)ms", line)
         if m_lat:
             entry["latency_ms"] = int(m_lat.group(1))
@@ -108,27 +117,100 @@ def _extract_llm_calls(text: str) -> list[dict[str, Any]]:
         m_tc = re.search(r"tool_calls?=(\d+)", line)
         if m_tc:
             entry["tool_calls"] = int(m_tc.group(1))
+        m_tok = re.search(r"tok=prompt:(\d+)/completion:(\d+)/total:(\d+)", line)
+        if m_tok:
+            entry["prompt_tokens"] = int(m_tok.group(1))
+            entry["completion_tokens"] = int(m_tok.group(2))
     return list(calls.values())
 
 
-def _extract_tool_calls(text: str) -> list[dict[str, Any]]:
-    """抽 tool 调用: [flow] tool_result: <tool> => <result> 与 [obs] JSON tool_call。"""
-    tools: list[dict[str, Any]] = []
+def _extract_ttft(text: str) -> dict[str, float]:
+    """抽 skill_stderr 的 TTFT 行,按 call_id 关联。
+
+    [timing] ttft_ms=1371.4 call_id=fbdda1b8e248 node=coordinator_decide
+    返回 {call_id: ttft_ms}。
+    """
+    result: dict[str, float] = {}
     for line in text.splitlines():
+        m = re.search(r"\[timing\] ttft_ms=([\d.]+) call_id=([0-9a-f]+)", line)
+        if m:
+            result[m.group(2)] = float(m.group(1))
+    return result
+
+
+def _extract_tool_calls(text: str) -> list[dict[str, Any]]:
+    """抽 tool 调用：兼容 v1（[flow] tool_result）与 v2（[timing] tool_exec / [obs]）格式。
+
+    v1 格式（skill_executor）:
+        [flow] tool_result: <tool> => <result>
+
+    v2 格式（coordinator agent loop）:
+        [timing] tool_exec name=<tool> duration_ms=<N> [sandbox_mode=e2b]   ← 实际执行（权威）
+        [obs] ... "tool_call_names":"['a', 'b']"                             ← LLM 决策工具名
+        [obs] ... "tool_calls":"['a', 'b']"                                  ← tool_loop_retry
+    """
+    tools: list[dict[str, Any]] = []
+    # (tool, duration_ms 截断) 去重——v2 同一 exec 打印两次（带/不带 sandbox_mode，
+    # duration 差 0.1ms，如 632.5/632.6），int() 截断合并为同一次执行；
+    # 不同 duration 的同名工具（如 9 次 bash）各自保留
+    seen: set[tuple[str, int]] = set()
+    for line in text.splitlines():
+        # v2: [timing] tool_exec name=X duration_ms=N args={...}（实际执行，权威来源）
+        m_exec = re.search(r"\[timing\] tool_exec name=([a-z_0-9]+) duration_ms=([0-9.]+)", line)
+        if m_exec:
+            dur = float(m_exec.group(2))
+            key = (m_exec.group(1), int(dur))
+            if key not in seen:
+                seen.add(key)
+                # args 字段（F7.1: bash 命令等原始输入；F7.2: base64 图片已截断为元信息）
+                m_args = re.search(r"args=(\{.*\}|\[.*\]|\".*\")", line)
+                args_raw = m_args.group(1) if m_args else ""
+                tools.append({
+                    "tool": m_exec.group(1),
+                    "args": args_raw[:500],
+                    "duration_ms": dur,
+                    "source": "exec",
+                })
+            continue
+        # v2: [obs] ... "tool_call_names":"['a', 'b']"（LLM 决策的工具名列表）
+        m_names = re.search(r'"tool_call_names"\s*:\s*"(\[[^"]*\])"', line)
+        if m_names:
+            for n in re.findall(r"'([a-z_0-9]+)'", m_names.group(1)):
+                key = ("decision", n)
+                if key not in seen:
+                    seen.add(key)
+                    tools.append({"tool": n, "args": "", "source": "decision"})
+            continue
+        # v2: [obs] ... "tool_calls":"['bash', 'bash']"（tool_loop_retry 的工具列表）
+        m_tcs = re.search(r'"tool_calls"\s*:\s*"(\[[^"]*\])"', line)
+        if m_tcs:
+            for n in re.findall(r"'([a-z_0-9]+)'", m_tcs.group(1)):
+                key = ("decision", n)
+                if key not in seen:
+                    seen.add(key)
+                    tools.append({"tool": n, "args": "", "source": "decision"})
+            continue
+        # v1: [flow] tool_result: <tool> => <result>
         if "[flow]" in line and ("tool_result" in line or "tool_call" in line):
             m_tool = re.search(r"tool_(?:result|call)[: ]+([a-z_]+)", line, re.I)
             m_res = re.search(r"=>\s*(.{1,200})", line)
             tools.append({
                 "tool": m_tool.group(1) if m_tool else "?",
                 "args": (m_res.group(1)[:200] if m_res else ""),
+                "source": "flow",
             })
         elif "[obs]" in line and "tool_call" in line:
+            # 注意: coordinator.final_response 事件含 "has_tool_call" 字段，不是工具调用——
+            # 必须匹配到 tool_name/tool 字段才算；匹配不到直接跳过，不产生 "?"。
             m_tool = re.search(r'"tool_name"[:\s]+"([a-z_]+)"', line, re.I) \
                 or re.search(r'"tool"[:\s]+"([a-z_]+)"', line, re.I)
+            if not m_tool:
+                continue
             m_cmd = re.search(r'"command"[:\s]+"([^"]{1,200})"', line, re.I)
             tools.append({
-                "tool": m_tool.group(1) if m_tool else "?",
+                "tool": m_tool.group(1),
                 "args": m_cmd.group(1)[:200] if m_cmd else "",
+                "source": "flow",
             })
     return tools
 
@@ -169,6 +251,7 @@ def _build_report(daemon: Optional[Path], stderr: Optional[Path]) -> dict[str, A
     report: dict[str, Any] = {"sources": {}}
     all_llm: list[dict[str, Any]] = []
     all_tools: list[dict[str, Any]] = []
+    ttft_by_call: dict[str, float] = {}
 
     if daemon and daemon.is_file():
         text = daemon.read_text(errors="replace")
@@ -184,9 +267,11 @@ def _build_report(daemon: Optional[Path], stderr: Optional[Path]) -> dict[str, A
         text = stderr.read_text(errors="replace")
         llm = _extract_llm_calls(text)
         tools = _extract_tool_calls(text)
+        ttft_by_call = _extract_ttft(text)
         report["sources"]["skill_stderr"] = {"path": str(stderr),
                                               "llm_calls": llm,
-                                              "tool_calls": tools}
+                                              "tool_calls": tools,
+                                              "ttft_by_call": ttft_by_call}
         all_llm.extend(llm)
         all_tools.extend(tools)
 
@@ -200,18 +285,53 @@ def _build_report(daemon: Optional[Path], stderr: Optional[Path]) -> dict[str, A
             for k, v in c.items():
                 if v and not merged[num].get(k):
                     merged[num][k] = v
+
+    # 关联 TTFT(call_id 匹配)并计算 TPS/生成耗时(规范 §3.2)
+    for c in merged.values():
+        cid = c.get("call_id")
+        if cid and cid in ttft_by_call:
+            c["ttft_ms"] = ttft_by_call[cid]
+            lat = c.get("latency_ms")
+            if lat is not None:
+                c["generation_ms"] = max(lat - ttft_by_call[cid], 0.0)
+        comp = c.get("completion_tokens")
+        gen = c.get("generation_ms")
+        if comp is not None and gen:
+            c["tps"] = round(comp / (gen / 1000.0), 1) if gen > 0 else None
     report["llm_calls"] = sorted(merged.values(),
                                  key=lambda x: int(x["num"]) if x["num"].isdigit() else 0)
 
     report["tool_calls"] = all_tools
 
-    # 聚合统计
+    # 聚合统计(规范 §3.1:总输入/输出 token、平均 TTFT、平均 TPS)
+    ttfts = [c["ttft_ms"] for c in report["llm_calls"] if c.get("ttft_ms")]
+    comps = [c["completion_tokens"] or 0 for c in report["llm_calls"]]
+    gens = [c["generation_ms"] for c in report["llm_calls"] if c.get("generation_ms")]
+    tps_vals = [c["tps"] for c in report["llm_calls"] if c.get("tps")]
+    # tool 分布只统计"实际执行"(exec/flow)，不统计 LLM 决策(decision)——避免同一工具
+    # 被 decision+exec 重复计数；跨源(daemon+stderr)同一 exec 也按 (tool, int(duration))
+    # 去重（v2 同一 exec 两次打印 duration 差 0.1ms，截断后合并为一次）
+    executed = {}
+    for t in all_tools:
+        if t.get("source") == "decision":
+            continue
+        dur = t.get("duration_ms")
+        key = (t["tool"], int(dur) if dur is not None else None)
+        if key not in executed:
+            executed[key] = t["tool"]
     report["summary"] = {
         "llm_call_count": len(report["llm_calls"]),
         "tool_call_count": len(all_tools),
         "total_llm_latency_ms": sum(c["latency_ms"] or 0 for c in report["llm_calls"]),
-        "tool_counter": Counter(t["tool"] for t in all_tools),
+        "tool_counter": Counter(executed.values()),
         "finish_reason_counter": Counter(c["finish"] or "?" for c in report["llm_calls"]),
+        # 性能指标(规范 v1.0 §3.1)
+        "total_prompt_tokens": sum(c["prompt_tokens"] or 0 for c in report["llm_calls"]),
+        "total_completion_tokens": sum(comps),
+        "total_tokens": sum(comps) + sum(c["prompt_tokens"] or 0 for c in report["llm_calls"]),
+        "avg_ttft_ms": round(sum(ttfts) / len(ttfts), 1) if ttfts else None,
+        "avg_generation_ms": round(sum(gens) / len(gens), 1) if gens else None,
+        "avg_tps": round(sum(tps_vals) / len(tps_vals), 1) if tps_vals else None,
     }
 
     # 分段耗时
@@ -266,8 +386,14 @@ def main() -> int:
     for c in report["llm_calls"]:
         lat = c.get("latency_ms")
         lat_s = f"{lat}ms" if lat else "-"
-        print(f"LLM#{c['num']}: lat={lat_s} fin={c.get('finish') or '?'} "
-              f"tc={c.get('tool_calls', 0)}")
+        ttft_s = f"{c['ttft_ms']:.0f}ms" if c.get("ttft_ms") else "-"
+        gen_s = f"{c['generation_ms']:.0f}ms" if c.get("generation_ms") else "-"
+        tps_s = f"{c['tps']}" if c.get("tps") else "-"
+        comp_s = c.get("completion_tokens") if c.get("completion_tokens") is not None else "-"
+        msgs_s = c.get("msgs") if c.get("msgs") is not None else "-"
+        print(f"LLM#{c['num']}: lat={lat_s} ttft={ttft_s} gen={gen_s} "
+              f"comp={comp_s} tps={tps_s} msgs={msgs_s} "
+              f"fin={c.get('finish') or '?'} tc={c.get('tool_calls', 0)}")
     print()
     print(f"=== tool 调用（{report['summary']['tool_call_count']} 次）===")
     for t in report["tool_calls"][:40]:

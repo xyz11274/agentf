@@ -766,3 +766,130 @@ class TestChatRestContextInjectionIntegration:
         assert call["agent_response"] == "final answer"
         assert call["session_id"] == "b-sess-1"
 
+    def test_dialogue_user_input_persists_raw_content_with_base64(
+        self, mock_daemon: AsyncMock,
+    ) -> None:
+        """I-REQ（03-bridge-session-persistence.md §1.3，2026-08-15 固化）：保存历史的
+        user_input 必须保留**原始 content**（含图片 base64 data URI），不得在存储层替换为
+        派生路径文本——落盘文件可能被沙箱回收/workspace 清理而丢失，base64 未存则原始
+        输入不可重建。派生路径文本（"用户上传了图片，路径: ..."）是消费时视图，不落库。
+        """
+        mock_daemon.agent_execute.return_value = {"task_id": "t1"}
+        mock_daemon.wait_for_response.return_value = {"content": "ok", "final": True}
+
+        provider = _MockProvider(history=[])
+        app = self._mk_app(mock_daemon, provider)
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/chat/agent_a",
+                json={
+                    "user_id": "u1",
+                    "client_id": "c1",
+                    "content": [
+                        {"type": "text", "text": "看图"},
+                        {"type": "image_url",
+                         "image_url": {"url": "data:image/png;base64,aGVsbG8="}},
+                    ],
+                },
+            )
+
+        assert response.status_code == 200
+        assert len(provider.save_dialogue_calls) == 1
+        user_input = provider.save_dialogue_calls[0]["user_input"]
+        # I-REQ 不变量：存储层必须保留原始 content（含 base64 真相源）
+        assert '"type": "text"' in user_input, f"缺 text part: {user_input!r}"
+        assert "data:image/png;base64,aGVsbG8=" in user_input, \
+            f"base64 原始数据丢失: {user_input!r}"
+        # 派生路径文本（消费时视图）不得在存储层落库（I-DERIV）
+        assert "用户上传了图片" not in user_input, \
+            f"user_input 存了派生文本而非原始 content: {user_input!r}"
+
+    def test_history_image_content_derived_to_path_at_consumption(
+        self, mock_daemon: AsyncMock, monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        """I-DERIV（03-bridge-session-persistence.md §1.3）：历史 user 消息若为原始
+        content（含 base64），消费时（拼 daemon messages 前）必须派生为路径文本
+        "用户上传了图片，路径: ..."，而非原样透传 base64——轮2 LLM 需要路径才能
+        直接用工具处理图片，base64 只留作真相源。
+        """
+        # agent_workspace_path 是 pydantic property（无 setter），monkeypatch 其底层
+        # 字段 agent_workspace_dir（pydantic 字段允许赋值）
+        monkeypatch.setattr(
+            "routes.chat_rest.settings.agent_workspace_dir", str(tmp_path),
+        )
+        mock_daemon.agent_execute.return_value = {"task_id": "t1"}
+        mock_daemon.wait_for_response.return_value = {"content": "ok", "final": True}
+
+        # 历史 user 消息 = 原始 content（JSON 序列化，含 base64）
+        history = [{
+            "role": "user",
+            "content": json.dumps([
+                {"type": "text", "text": "看图"},
+                {"type": "image_url",
+                 "image_url": {"url": "data:image/png;base64,aGVsbG8="}},
+            ], ensure_ascii=False),
+        }]
+        provider = _MockProvider(history=history)
+        app = self._mk_app(mock_daemon, provider)
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/chat/agent_a",
+                json={"user_id": "u1", "client_id": "c1", "content": "帮我推荐"},
+            )
+
+        assert response.status_code == 200
+        sent_content = mock_daemon.agent_execute.call_args.kwargs.get("content") or \
+            mock_daemon.agent_execute.call_args.args[2]
+        parsed = json.loads(sent_content)
+        msgs = parsed["messages"]
+        hist_user = msgs[0]
+        assert hist_user["role"] == "user"
+        # 消费时派生：历史图路径文本进入 LLM 上下文（base64 不原样透传）
+        assert "用户上传了图片" in hist_user["content"], \
+            f"历史图未派生路径文本: {hist_user['content']!r}"
+        assert "base64,aGVsbG8=" not in hist_user["content"], \
+            f"base64 原样透传进上下文（应只留路径文本）: {hist_user['content']!r}"
+
+    def test_history_textonly_json_not_derived(
+        self, mock_daemon: AsyncMock, monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        """code-review P3（content_serializer.py:217-227 修复）：用户纯文本恰好是
+        JSON content-part 形态（text-only，无 image_url）时，消费派生必须原样保留——
+        不得误当存储形态改写（原始措辞不得被重写/截断）。
+        """
+        monkeypatch.setattr(
+            "routes.chat_rest.settings.agent_workspace_dir", str(tmp_path),
+        )
+        mock_daemon.agent_execute.return_value = {"task_id": "t1"}
+        mock_daemon.wait_for_response.return_value = {"content": "ok", "final": True}
+
+        # 用户粘贴的 text-only JSON 形态纯文本（非存储产物）
+        history = [{
+            "role": "user",
+            "content": json.dumps([
+                {"type": "text", "text": "请总结这段对话"},
+            ], ensure_ascii=False),
+        }]
+        provider = _MockProvider(history=history)
+        app = self._mk_app(mock_daemon, provider)
+
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/chat/agent_a",
+                json={"user_id": "u1", "client_id": "c1", "content": "帮我推荐"},
+            )
+
+        assert response.status_code == 200
+        sent_content = mock_daemon.agent_execute.call_args.kwargs.get("content") or \
+            mock_daemon.agent_execute.call_args.args[2]
+        parsed = json.loads(sent_content)
+        hist_user = parsed["messages"][0]
+        # text-only JSON 形态不得被派生改写——原样保留（含 JSON 原文）
+        assert hist_user["content"] == json.dumps(
+            [{"type": "text", "text": "请总结这段对话"}], ensure_ascii=False,
+        ), f"text-only JSON 形态被误改写: {hist_user['content']!r}"
+
