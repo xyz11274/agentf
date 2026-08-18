@@ -2,6 +2,7 @@
 #include <json/json.h>
 #include <fstream>
 #include <sstream>
+#include <stdexcept>
 #include "router_logic.h"
 
 using namespace sidecar;
@@ -918,4 +919,47 @@ TEST(AcmArtifactEnrich, TC_ACM_106_MultipleArtifactsMixedOutcome) {
     EXPECT_EQ(uoo["data"]["content"][0]["acm_file_id"].asString(), "acm-id-a");
     EXPECT_FALSE(uoo["data"]["content"][1].isMember("acm_file_id"));  // b：url 下载失败→无 base64→跳过
     EXPECT_FALSE(uoo["data"]["content"][2].isMember("acm_file_id"));  // c：同上
+}
+
+TEST(AcmArtifactEnrich, TC_ACM_107_FetchThrowsSkipsItemKeepsOthers) {
+    // fetch_fn 抛异常（SDK 下载异常，非常规失败路径）→ 单条降级：不写 acm_file_id、保留 url；
+    // 异常不阻断循环，后续条目正常注入（I-degrade / I-acm-file-id）
+    auto uoo = make_uoo({
+        make_artifact("bad.png", "http://bridge/bad.png"),
+        make_artifact("good.png", "http://bridge/good.png"),
+    });
+
+    const int injected = enrich_artifacts_with_acm(
+        uoo,
+        [&](const std::string& url) {
+            if (url.find("bad.png") != std::string::npos) {
+                throw std::runtime_error("simulated fetch exception");
+            }
+            return std::string("\x89PNG\x0d\x0a", 6);
+        },
+        [&](const std::string& name, const std::string&, const std::string&) {
+            return name == "good.png" ? "acm-id-good" : "";
+        });
+
+    EXPECT_EQ(injected, 1);  // 仅 good 注入
+    EXPECT_FALSE(uoo["data"]["content"][0].isMember("acm_file_id"));  // bad：异常降级
+    EXPECT_EQ(uoo["data"]["content"][0]["url"].asString(), "http://bridge/bad.png");  // 保留 url
+    EXPECT_EQ(uoo["data"]["content"][1]["acm_file_id"].asString(), "acm-id-good");  // good：正常注入
+}
+
+TEST(AcmArtifactEnrich, TC_ACM_108_UploadThrowsKeepsUrlNoBlock) {
+    // upload_fn 抛异常（SDK 上传异常，非常规失败路径）→ 单条降级：不写 acm_file_id、保留 url、
+    // 不阻断调用方（I-degrade；异常被 enrich 内部捕获，调用点 post_callback 照常）
+    auto uoo = make_uoo({make_artifact("look.png", "http://bridge/api/artifacts/look.png")});
+
+    const int injected = enrich_artifacts_with_acm(
+        uoo,
+        [&](const std::string&) { return std::string("\x89PNG\x0d\x0a", 6); },
+        [&](const std::string&, const std::string&, const std::string&) -> std::string {
+            throw std::runtime_error("simulated upload exception");
+        });
+
+    EXPECT_EQ(injected, 0);
+    EXPECT_FALSE(uoo["data"]["content"][0].isMember("acm_file_id"));
+    EXPECT_EQ(uoo["data"]["content"][0]["url"].asString(), "http://bridge/api/artifacts/look.png");
 }

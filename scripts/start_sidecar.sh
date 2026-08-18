@@ -151,12 +151,17 @@ fi
 # ═══════════════════════════════════════════════════════════════════
 
 # ── Guard: already running? ───────────────────────────────────────
+# 幂等：已运行视为成功（exit 0），对齐 init.sh 注释"start_sidecar.sh 已改为 already running 返回 0"。
+# 背景（2026-08-18 修复）：start_production.sh 用 `wait $! || exit 1` 校验 wrapper 退出码——
+# 业务要求 sidecar 先行（init.sh 阶段 b 已启动），start_production.sh 再启时若这里 exit 1，
+# 一键启动（start.sh）会误报 "[ERROR] SideCar wrapper exited with code 1" 并中断整链。
+# 需要强制重启请显式用 `$0 restart`；stop 语义不变。
 PID=$(_resolve_pid)
 if [ -n "$PID" ]; then
-    echo "[WARN] SideCar is already running (PID=$PID)"
+    echo "[WARN] SideCar is already running (PID=$PID), start is a no-op (idempotent)"
     echo "       To restart, use:  $0 restart"
     echo "       To stop, use:     $0 stop"
-    exit 1
+    exit 0
 fi
 
 # ── Resolve binary ──────────────────────────────────────────────────

@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
+#include <exception>
 #include <filesystem>
 #include <iostream>
 #include <sstream>
@@ -249,47 +250,63 @@ int enrich_artifacts_with_acm(
         const std::string url = item.get("url", "").asString();
         const std::string mime = item.get("mime_type", "application/octet-stream").asString();
 
-        // ① 内容获取：url 优先 → base64 兜底（用户拍板 2026-08-14）
-        std::string content_bytes;
-        std::string via;
-        if (!url.empty()) {
-            content_bytes = fetch_fn(url);
-            via = "url";
-            std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_DL"
-                      << " url=" << url << " via=url size=" << content_bytes.size() << std::endl;
-        }
-        if (content_bytes.empty()) {
-            const std::string b64 = item.get("data_base64", "").asString();
-            if (!b64.empty()) {
-                const auto decoded = acm_base64_decode(b64);
-                content_bytes.assign(decoded.begin(), decoded.end());
-                via = "base64";
-                std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_B64"
-                          << " name=" << name << " via=base64 size=" << content_bytes.size()
-                          << (url.empty() ? "" : " (url fetch failed)") << std::endl;
+        try {
+            // ① 内容获取：url 优先 → base64 兜底（用户拍板 2026-08-14）
+            std::string content_bytes;
+            std::string via;
+            if (!url.empty()) {
+                content_bytes = fetch_fn(url);
+                via = "url";
+                std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_DL"
+                          << " url=" << url << " via=url size=" << content_bytes.size() << std::endl;
             }
-        }
-        if (content_bytes.empty()) {
-            std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_SKIP"
-                      << " name=" << name
-                      << " reason=no content (url fetch failed and no data_base64)" << std::endl;
-            continue;
-        }
+            if (content_bytes.empty()) {
+                const std::string b64 = item.get("data_base64", "").asString();
+                if (!b64.empty()) {
+                    const auto decoded = acm_base64_decode(b64);
+                    content_bytes.assign(decoded.begin(), decoded.end());
+                    via = "base64";
+                    std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_B64"
+                              << " name=" << name << " via=base64 size=" << content_bytes.size()
+                              << (url.empty() ? "" : " (url fetch failed)") << std::endl;
+                }
+            }
+            if (content_bytes.empty()) {
+                std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_SKIP"
+                          << " name=" << name
+                          << " reason=no content (url fetch failed and no data_base64)" << std::endl;
+                continue;
+            }
 
-        // ② 上传 ACM
-        const std::string file_id = upload_fn(name, content_bytes, mime);
-        if (!file_id.empty()) {
-            // ③ 成功 → 写 acm_file_id（保留原 url 作降级）
-            item["acm_file_id"] = file_id;
-            injected++;
-            std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_UP_OK"
-                      << " name=" << name << " file_id=" << file_id
-                      << " via=" << via << std::endl;
-        } else {
-            // ④ 失败 → 保留原 url，不阻断回调（L2 R-degrade）
-            std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_UP_ERR"
-                      << " name=" << name << " via=" << via
-                      << " (upload failed, keep original url)" << std::endl;
+            // ② 上传 ACM
+            const std::string file_id = upload_fn(name, content_bytes, mime);
+            if (!file_id.empty()) {
+                // ③ 成功 → 写 acm_file_id（保留原 url 作降级）
+                item["acm_file_id"] = file_id;
+                injected++;
+                std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_UP_OK"
+                          << " name=" << name << " file_id=" << file_id
+                          << " via=" << via << std::endl;
+            } else {
+                // ④ 失败 → 保留原 url，不阻断回调（L2 R-degrade）
+                std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_UP_ERR"
+                          << " name=" << name << " via=" << via
+                          << " (upload failed, keep original url)" << std::endl;
+            }
+        } catch (const std::exception& ex) {
+            // ⑤ SDK/回调抛异常（http1_send 内 Http1Client::Send 等非常规失败路径）→ 单条降级：
+            //    保留原 url、不写 acm_file_id、不阻断其余条目与回调（I-degrade / I-acm-file-id）。
+            //    F7.1：name/url/mime/exception.what() 完整落盘，仅凭日志可定位"哪条产物、为何中断"。
+            std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_EXC"
+                      << " name=" << name << " url=" << url << " mime=" << mime
+                      << " exception=" << ex.what()
+                      << " (enrich item aborted by exception, keep original url)" << std::endl;
+        } catch (...) {
+            // 非 std::exception（SDK 抛出非标准类型）同样单条降级，日志标注 unknown
+            std::cerr << "[" << log_timestamp() << "] [acm_client] ACM_ART_EXC"
+                      << " name=" << name << " url=" << url << " mime=" << mime
+                      << " exception=unknown non-std exception"
+                      << " (enrich item aborted by exception, keep original url)" << std::endl;
         }
     }
     return injected;
