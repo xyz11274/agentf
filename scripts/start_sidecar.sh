@@ -64,7 +64,7 @@ while [ $# -gt 0 ]; do
             echo "Usage: $0 [start|stop|restart] [profile] [port]"
             echo ""
             echo "Commands:"
-            echo "  start    Start sidecar (default; fails if already running)"
+            echo "  start    Start sidecar (default; no-op with exit 0 if already running; use restart to force)"
             echo "  stop     Stop running sidecar"
             echo "  restart  Stop then start"
             echo ""
@@ -297,6 +297,9 @@ mkdir -p "$SSLPATH"
 # local (stub) 模式通常无 gs_guc，缺失时告警不阻断启动。
 RAG_GAUSS_GUC_BIN="$RAG_GAUSS_GUC_PATH/gs_guc"
 if [ -f "$RAG_GAUSS_GUC_BIN" ]; then
+    # 已就绪也归一化权限（幂等）：保证 owner/group 可执行，对齐旧实现每次启动
+    # cp+chmod 的权限保证——否则 644 等不可执行残留会导致 SDK 调用失败且无告警
+    chmod 550 "$RAG_GAUSS_GUC_BIN"
     echo "[sidecar] GaussDB gs_guc already ready at $RAG_GAUSS_GUC_BIN (skip deploy)"
 else
     GS_GUC_SRC=""
