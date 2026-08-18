@@ -282,19 +282,33 @@ export LD_LIBRARY_PATH="${AF_LIBRARY_PATH:-${LIBRARY_PATH:-}}${LD_LIBRARY_PATH:+
 # CoreMind 框架 initServiceConfig 要求 SSLPATH 目录存在
 mkdir -p "$SSLPATH"
 
-# ── GaussDB SSL 配置工具部署（幂等，对齐 HealthAgent/OutfitAgent start.sh）──
+# ── GaussDB SSL 配置工具部署（幂等，对齐 HealthAgent/OutfitAgent install.sh）──
 # DataMindSDK_C 通过 RAG_GAUSS_GUC_PATH 定位 gs_guc 完成 SSL 配置（PGSSLCERT）。
-# gs_guc 由构建链注入到项目根（OutfitAgent pre-makeimage-package.sh tar 含 gs_guc）。
+# 检查顺序：部署目标就绪优先（install.sh/initContainer 已部署则直接复用，不重复部署、
+# 不误报）→ 目标缺失时从候选源部署（gs_guc 实际由构建链注入到 $COREMIND_ROOT/gs_guc，
+# 而非 $AR_PROJECT_ROOT/gs_guc——2026-08-18 修复：源路径候选化，消除路径假设不一致误报）。
 # 幂等性：mkdir -p + cp -f + chmod 均可重复执行；不使用 rm -rf，避免误删目录内
 # 其他文件（如证书），支持统一脚本与本脚本混用同一 ragssl 目录。
 # local (stub) 模式通常无 gs_guc，缺失时告警不阻断启动。
-if [ -f "$AR_PROJECT_ROOT/gs_guc" ]; then
-    mkdir -p "$RAG_GAUSS_GUC_PATH"
-    cp -f "$AR_PROJECT_ROOT/gs_guc" "$RAG_GAUSS_GUC_PATH/gs_guc"
-    chmod 550 "$RAG_GAUSS_GUC_PATH/gs_guc"
-    echo "[sidecar] GaussDB gs_guc deployed to $RAG_GAUSS_GUC_PATH"
+RAG_GAUSS_GUC_BIN="$RAG_GAUSS_GUC_PATH/gs_guc"
+if [ -f "$RAG_GAUSS_GUC_BIN" ]; then
+    echo "[sidecar] GaussDB gs_guc already ready at $RAG_GAUSS_GUC_BIN (skip deploy)"
 else
-    echo "[sidecar][WARN] gs_guc not found at $AR_PROJECT_ROOT/gs_guc — GaussDB SSL 连接将失败（连接池全 dead）"
+    GS_GUC_SRC=""
+    for _cand in "${COREMIND_ROOT:-/opt/coremind}/gs_guc" "$AR_PROJECT_ROOT/gs_guc"; do
+        if [ -f "$_cand" ]; then
+            GS_GUC_SRC="$_cand"
+            break
+        fi
+    done
+    if [ -n "$GS_GUC_SRC" ]; then
+        mkdir -p "$RAG_GAUSS_GUC_PATH"
+        cp -f "$GS_GUC_SRC" "$RAG_GAUSS_GUC_BIN"
+        chmod 550 "$RAG_GAUSS_GUC_BIN"
+        echo "[sidecar] GaussDB gs_guc deployed from $GS_GUC_SRC to $RAG_GAUSS_GUC_PATH"
+    else
+        echo "[sidecar][WARN] gs_guc not ready: $RAG_GAUSS_GUC_BIN missing and no source found (${COREMIND_ROOT:-/opt/coremind}/gs_guc, $AR_PROJECT_ROOT/gs_guc) — GaussDB SSL 连接将失败（连接池全 dead）"
+    fi
 fi
 
 # ── 生成 serviceconfig.json 到共享卷（仅 production 模式）─────────────
