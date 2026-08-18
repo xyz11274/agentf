@@ -530,6 +530,11 @@ async def _chat_turn_events(
         # 产物输出模式转换（artifact_reference / artifact_payload 两维正交开关）：
         # 仅 final chunk 应用（产物 URL 只出现在最终完整文本）；默认 link+url 时无转换，
         # 与历史行为完全一致（I-3 三路一致：SSE / 同步 / 历史回放共用同一转换后结果）。
+        # 持久化保留替换前的原始 content（含真实产物路径）——placeholder/base64 模式下
+        # 占位符会丢掉真实路径，LLM 下一轮历史将看不到产物路径 → 误判未生成 → 重复生成
+        # （2026-08-17 复盘：生成视频轮重复生成效果图）。对外展示用替换后 content，
+        # 持久化（save_dialogue）用替换前 raw content。
+        raw_content = chunk_content
         if is_final:
             chunk_content, artifacts = apply_artifact_output_mode(chunk_content, artifacts)
 
@@ -539,6 +544,10 @@ async def _chat_turn_events(
         event: dict[str, Any] = {
             "type": "chunk",
             "content": chunk_content,
+            # 持久化专用：替换前的原始 content（含真实产物路径），供 save_dialogue 落库，
+            # LLM 下一轮历史可见真实路径（I-1 不丢数据；2026-08-17 复盘修复）。
+            # 仅 final chunk 有意义；非 final 恒为空串（同步/SSE 累积只认 final）。
+            "raw_content": raw_content if is_final else "",
             "final": is_final,
             "progress": is_progress,
             "chunk_type": msg_type if msg_type else None,
@@ -795,9 +804,12 @@ async def chat_rest(
                     # 非 final chunk（progress / skill 思辨 / llm_token）的过程展示
                     # 仅在 SSE 流式路径透传给前端，被 final 一到即覆盖。
                     if event.get("final"):
+                        # 持久化用替换前 raw_content（含真实产物路径），LLM 下一轮历史
+                        # 可见路径避免重复生成（2026-08-17 复盘修复）；对外展示仍用 content。
                         accumulated_content = [
                             _extract_token_for_persist(
-                                event["content"], event.get("chunk_type"),
+                                event.get("raw_content") or event["content"],
+                                event.get("chunk_type"),
                             )
                         ]
                         # artifacts on the final chunk only
@@ -1072,13 +1084,19 @@ async def chat_rest(
                     # 守不变量 I-1：仅 final chunk 的内容入库，非 final chunk 仅作 SSE 流式展示。
                     # 与同步路径（Fix 2, L690-695）逻辑一致。
                     sse_chunks.append(
-                        _extract_token_for_persist(event["content"], event.get("chunk_type"))
+                        _extract_token_for_persist(
+                            event.get("raw_content") or event["content"],
+                            event.get("chunk_type"),
+                        )
                     )
                     sse_chunk_count += 1
                     if event["final"]:
                         # 仅 final chunk 的内容入库（非 final 的 progress / llm_token 仅 SSE 展示）
+                        # 持久化用替换前 raw_content（含真实产物路径），LLM 下一轮历史可见
+                        # 路径避免重复生成（2026-08-17 复盘修复）；对外展示仍用 content。
                         final_content = [_extract_token_for_persist(
-                            event["content"], event.get("chunk_type"),
+                            event.get("raw_content") or event["content"],
+                            event.get("chunk_type"),
                         )]
                         logger.info(
                             "chat_sse.stream agent=%s dialogue=%s elapsed=%.3fs chunks=%d",

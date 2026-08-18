@@ -74,7 +74,7 @@ class TestChatTurnEventsHappyPath:
             events.append(event)
 
         assert len(events) == 2
-        assert events[0] == {"type": "chunk", "content": "Hello world!", "final": True, "task_id": "t1", "artifacts": None, "progress": False, "chunk_type": None}
+        assert events[0] == {"type": "chunk", "content": "Hello world!", "raw_content": "Hello world!", "final": True, "task_id": "t1", "artifacts": None, "progress": False, "chunk_type": None}
         assert events[1] == {"type": "done", "final": True}
 
     @pytest.mark.asyncio
@@ -153,7 +153,7 @@ class TestChatTurnEventsHappyPath:
             events.append(event)
 
         assert len(events) == 2
-        assert events[0] == {"type": "chunk", "content": "", "final": True, "task_id": "t1", "artifacts": None, "progress": False, "chunk_type": None}
+        assert events[0] == {"type": "chunk", "content": "", "raw_content": "", "final": True, "task_id": "t1", "artifacts": None, "progress": False, "chunk_type": None}
         assert events[1] == {"type": "done", "final": True}
 
 
@@ -391,7 +391,7 @@ class TestChatTurnEventsErrors:
             events.append(event)
 
         assert len(events) == 2
-        assert events[0] == {"type": "chunk", "content": "ok", "final": True, "task_id": "t1", "artifacts": None, "progress": False, "chunk_type": None}
+        assert events[0] == {"type": "chunk", "content": "ok", "raw_content": "ok", "final": True, "task_id": "t1", "artifacts": None, "progress": False, "chunk_type": None}
         assert events[1] == {"type": "done", "final": True}
 
 

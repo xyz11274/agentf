@@ -262,6 +262,12 @@ class BridgeSettings(BaseSettings):
         default=5.0, gt=0,
         description="Per-request timeout (seconds) for outbound daemon calls.",
     )
+    agent_load_timeout_seconds: float = Field(validation_alias="AF_BR_AGENT_LOAD_TIMEOUT_SECONDS",
+        default=300.0, gt=0,
+        description="Timeout (seconds) for agent.load RPC. agent.load 内含 snapshot rebuild "
+                    "(沙箱创建+资产上传+setup.sh,最坏 180s),全局 request_timeout_seconds 不够,"
+                    "需独立长超时(2026-08-17 复盘:60s 超时导致 agent.load HTTP 504)。",
+    )
     upload_max_body_size_mb: int = Field(
         default=100, ge=1,
         description="Max HTTP request body size in MB for file uploads.",

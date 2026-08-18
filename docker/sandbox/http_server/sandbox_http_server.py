@@ -142,7 +142,7 @@ def _exec_tool(tool_name: str, tool_params: dict, opts: dict) -> dict:
     - ``tool=bash`` → 先检查 ``is_dangerous()``
     - ``tool=read_file/write_file/edit_file`` → 先检查 ``resolve_safe_path()``
     """
-    workdir = opts.get("working_dir") or os.environ.get("SANDBOX_WORKDIR") or os.getcwd()
+    workdir = opts.get("working_dir") or os.environ.get("AF_SANDBOX_WORKSPACE") or os.getcwd()
     output_max_bytes = opts.get("output_max_bytes", DEFAULT_OUTPUT_MAX_BYTES)
 
     # -- 参数名映射：sandbox_http_server 旧参数名 → runtime tool 参数名 --
@@ -431,7 +431,7 @@ class SandboxHttpHandler(BaseHTTPRequestHandler):
             return
 
         # resolve_safe_path 双检越界（B4）：workdir 基准 + realpath
-        workdir = os.environ.get("SANDBOX_WORKDIR") or os.getcwd()
+        workdir = os.environ.get("AF_SANDBOX_WORKSPACE") or os.getcwd()
         try:
             resolved = resolve_safe_path(path, workdir)
         except (ValueError, PathEscapeException) as e:
@@ -517,7 +517,7 @@ class SandboxHttpHandler(BaseHTTPRequestHandler):
             return
         rows = int(request.get("rows", 24))
         cols = int(request.get("cols", 80))
-        cwd = request.get("cwd") or os.environ.get("SANDBOX_WORKDIR") or os.getcwd()
+        cwd = request.get("cwd") or os.environ.get("AF_SANDBOX_WORKSPACE") or os.getcwd()
         session_id = uuid.uuid4().hex[:12]
         try:
             pid, master_fd = pty_mod.fork()

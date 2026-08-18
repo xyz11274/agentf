@@ -974,6 +974,13 @@ void MMAgent::handle_routed_request_message(const std::shared_ptr<MMAgentSession
   if(sandbox_mode_it != message.metadata.end()) {
     session->set_metadata("sandbox_mode", sandbox_mode_it->second);
   }
+  // 2026-08-17 Step 1（path-translation-convergence.md）：sandbox_workspace 与
+  // sandbox_endpoint/mode 同源持久化——build_runtime_task 的 session metadata 回退
+  // 分支据此给 coordinator 子进程注入 AF_SANDBOX_WORKSPACE（当前执行环境工作目录契约）。
+  const auto sandbox_ws_it = message.metadata.find("sandbox_workspace");
+  if(sandbox_ws_it != message.metadata.end()) {
+    session->set_metadata("sandbox_workspace", sandbox_ws_it->second);
+  }
   session->set_metadata("session_id", session->get_session_id());
   session->enqueue_received_message(message);
 
@@ -1323,6 +1330,22 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
     task->set_parameter("sandbox_mode", sandbox_mode_val);
     Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set sandbox_mode=%s for task=%s",
                               sandbox_mode_val.c_str(), task_config.task_id.c_str());
+  }
+  // 2026-08-17 Step 1（path-translation-convergence.md）：sandbox_workspace 回退注入——
+  // 与 sandbox_endpoint/mode 同机制，缺省从 session metadata 回退（coordinator 等
+  // runtime 内部任务的消息 metadata 不含它），worker 端经 inputs 自动注入 AF_SANDBOX_WORKSPACE。
+  std::string sandbox_workspace_val;
+  const auto ws_it = message.metadata.find("sandbox_workspace");
+  if(ws_it != message.metadata.end() && !ws_it->second.empty()) {
+    sandbox_workspace_val = ws_it->second;
+  } else if(session->get_metadata("sandbox_workspace", sandbox_workspace_val) && !sandbox_workspace_val.empty()) {
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] sandbox_workspace from session metadata for task=%s",
+                              task_config.task_id.c_str());
+  }
+  if(!sandbox_workspace_val.empty()) {
+    task->set_parameter("sandbox_workspace", sandbox_workspace_val);
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set sandbox_workspace=%s for task=%s",
+                              sandbox_workspace_val.c_str(), task_config.task_id.c_str());
   }
   if(const auto selected_skills_it = message.metadata.find("selected_skills");
      selected_skills_it != message.metadata.end()) {

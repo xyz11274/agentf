@@ -194,7 +194,10 @@ examples/agent/outfit-assistant/workspace
 examples/agent/outfit-assistant/harness/skills/dashscope_outfit_skills/forge-image-gen/scripts/assets
 examples/agent/outfit-assistant/harness/output
 docs/tech-debt
+docs/deployment
 wheelhouse
 frontend/mocks/upstream_mock/acm_files
 packages/agentflow-runtime/src/agentflow_runtime.egg-info
+aisf.code-workspace
+
 ###

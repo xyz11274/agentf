@@ -576,9 +576,14 @@ async def _run_turn(
         # 产物输出模式转换（artifact_reference / artifact_payload 两维正交开关）：
         # 仅 final chunk 应用（产物 URL 只出现在最终完整文本）；默认 link+url 时无转换，
         # 与历史行为完全一致（I-3 三路一致：WebSocket / SSE / 历史回放共用同一转换后结果）。
+        # 持久化保留替换前的原始 content（含真实产物路径）——placeholder/base64 模式下
+        # 占位符会丢掉真实路径，LLM 下一轮历史将看不到产物路径 → 误判未生成 → 重复生成
+        # （2026-08-17 复盘：生成视频轮重复生成效果图）。对外展示用替换后 chunk_content，
+        # 持久化（save_dialogue / chunks_accumulated）用替换前 raw_chunk_content。
+        raw_chunk_content = chunk_content
         if is_final:
             chunk_content, artifacts = apply_artifact_output_mode(chunk_content, artifacts)
-        chunks_accumulated.append(chunk_content if msg_type == "text" else "")
+        chunks_accumulated.append(raw_chunk_content if msg_type == "text" else "")
         final_artifacts = [a.model_dump() for a in artifacts] if is_final else final_artifacts
         chunk = ChatChunk(content=chunk_content, final=is_final,
                           progress=is_progress, artifacts=artifacts,

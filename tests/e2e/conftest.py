@@ -234,7 +234,7 @@ def _run_docker_container(workdir_host_path: str | None = None):
             "mode": "rw",
         }
     # skills 已预复制到 workdir/harness/skills/，SANDBOX_WORKDIR=/workdir 让 HTTP server 找到
-    _environment = {"SANDBOX_WORKDIR": "/workdir"}
+    _environment = {"AF_SANDBOX_WORKSPACE": "/workdir"}
 
     try:
         container = client.containers.run(

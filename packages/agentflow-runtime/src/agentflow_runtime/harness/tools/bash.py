@@ -68,10 +68,11 @@ def execute(tool_input: dict, sandbox_endpoint: str = None) -> str:
 
     command = tool_input.get("command", "")
     timeout = tool_input.get("timeout", 30)
-    # cwd override（webshell 跨命令 cwd 延续）：外部传入优先，缺省回落到 agent package dir
-    # 不改默认语义——非 webshell 路径（skill_executor 等）不传 cwd，行为不变
+    # cwd override（webshell 跨命令 cwd 延续）：外部传入优先，缺省回落到统一契约
+    # AF_SANDBOX_WORKSPACE（worker.cpp Step 1 注入：host=agent 包根 / e2b=沙箱目录）——
+    # host 与 e2b 消费同一契约，逻辑一致；未注入时（直接导入测试）兜底 agent 包根。
     cwd = tool_input.get("cwd")
-    workdir = cwd if cwd else _get_agent_package_dir()
+    workdir = cwd if cwd else (os.environ.get("AF_SANDBOX_WORKSPACE") or _get_agent_package_dir())
 
     if not command.strip():
         return json.dumps({"error": "Empty command"}, ensure_ascii=False)

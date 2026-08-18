@@ -582,7 +582,7 @@ class E2BProvider:
                     "mkdir -p /opt/sandbox/tools",
                     "bash /opt/sandbox/sandbox-setup.sh",
                 ])
-                .env_vars({"SANDBOX_WORKDIR": "/workdir"})
+                .env_vars({"AF_SANDBOX_WORKSPACE": "/workdir"})
             )
             result = Template.build(
                 builder, name,

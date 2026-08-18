@@ -17,7 +17,7 @@ version: 0.7.0
 ## 核心工作流（按顺序，缺省取合理默认并明说）
 
 ### 0. 召回个性化档案（每次先做）
-**用户上下文已在 skill 首轮系统消息中预加载**（档案/历史/风格参考/目录树/图片路径/环境/最近天气），**直接从预加载内容取用，不要调用 preload_user_context 工具**（本工具只用于需要指定 location 的天气补查），**禁止再用 bash/glob/read 探查记忆库**（本轮 perf 基线实测：LLM 逐轮 bash 探查 profile/history 耗 13+ 轮 ≈ 55s，预加载后应 0 轮）：
+**用户上下文已在 skill 首轮系统消息中预加载**（档案/历史/风格参考/目录树/图片路径/环境/最近天气），**直接从预加载内容取用，不要调用 preload_user_context 工具**（本工具只用于需要指定 location 的天气补查——**按需加载：传 `load_weather=true` + `location`，其余 `load_*` 设 `false` 跳过，返回只含 weather，避免重复取已预加载字段**，2026-08-17 优化），**禁止再用 bash/glob/read 探查记忆库**（本轮 perf 基线实测：LLM 逐轮 bash 探查 profile/history 耗 13+ 轮 ≈ 55s，预加载后应 0 轮）：
 
 | 字段 | context JSON key | 说明 |
 |------|-----------------|------|

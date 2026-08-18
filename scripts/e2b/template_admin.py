@@ -598,7 +598,7 @@ def _create_sandbox(cfg: dict, server_path: Path, port: int, remote_dir: str):
     """段1：起沙箱 + 上传 server + 启动 + 就绪探测（复用 e2b_lifecycle.py 同款逻辑）。"""
     from e2b_code_interpreter import Sandbox
 
-    create_kwargs = dict(timeout=600, envs={"SANDBOX_WORKDIR": remote_dir}, template=cfg["base_template"])
+    create_kwargs = dict(timeout=600, envs={"AF_SANDBOX_WORKSPACE": remote_dir}, template=cfg["base_template"])
     if cfg.get("network_allow_out"):
         try:
             create_kwargs["network"] = {"allow_out": json.loads(cfg["network_allow_out"])}

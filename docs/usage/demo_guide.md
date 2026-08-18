@@ -19,6 +19,7 @@
 6. [第四步：更新技能（更新 Agent Package）](#6-第四步更新技能更新-agent-package)
 7. [第五步：再次触发](#7-第五步再次触发)
 8. [附录：完整接口定义](#8-附录完整接口定义)
+9. [ACM 文件服务连通性测试（生产容器内 curl）](#9-acm-文件服务连通性测试生产容器内-curl)
 
 ---
 
@@ -1222,7 +1223,7 @@ curl -X POST http://127.0.0.1:8199/health/api/chat/outfit-assistant \
 
 对于 base64 后 ≥ 256KB 的大图片（如高清全身照），**Bridge 会自动将其落盘到 `uploads_dir`（默认 `/tmp/agentflow/uploads`）并把 content 中的 data URL 替换为 `file:///...` 形式的 `file_url`**，daemon 侧的 skill 通过 `bash` 工具调用 `outfit_vision.py` 识别该本地路径。客户端**无需先上传**——直接把 base64 data URL 内联在 content array 中发 SSE 请求即可，Bridge 在转发给 daemon 前完成落盘替换。
 
-> ⚠️ **`POST /api/chat/uploads` 端点尚未上线**（设计文档 `frontend/bridge/docs/design/features/multimodal-chat-input.md` 标注为 Phase B 待启动）。当前 Phase A：所有图片统一走 content array 内联 base64，Bridge 自动按 256KB 阈值落盘。Phase B 上线后才会提供独立的先上传再引用通道。
+> ⚠️ **`POST /api/chat/uploads` 端点尚未上线**（设计文档 `frontend/bridge/docs/design/features/multimodal-chat/multimodal-chat-input.md` 标注为 Phase B 待启动）。当前 Phase A：所有图片统一走 content array 内联 base64，Bridge 自动按 256KB 阈值落盘。Phase B 上线后才会提供独立的先上传再引用通道。
 
 **步骤 1：发送 SSE 流式请求，图片以 base64 内联**
 
@@ -1855,6 +1856,165 @@ HTTP 状态码映射：
 | `-32052` | artifact 路径被拒绝 | 路径穿越尝试 |
 
 > 错误码遵循 JSON-RPC 2.0 规范中的 `Server error (-32000 to -32099)` 范围。
+
+---
+
+## 9. ACM 文件服务连通性测试（生产容器内 curl）
+
+> **目的**：进入生产容器，直接用 `curl` 对 ACM 文件服务做一次「上传 → 下载 → 失败信号」往返验证，确认 sidecar 的产物 ACM 上传链路在生产环境是通的。
+>
+> **适用对象**：部署/运维/验收人员。本测试绕过业务层（不经过 bridge / daemon），只验证 ACM 服务本身的可达性与契约正确性。
+
+### 9.1 前置条件
+
+| 项 | 说明 |
+|----|------|
+| 生产容器已启动 | sidecar（`coremind_bridge`）已运行（`ps aux \| grep coremind_bridge` 可见） |
+| ACM 服务已部署 | 由 CoreMind 平台统一管理，地址经 SDK `GetAcmUrl` 服务发现解析，无需手动配置 |
+| 进入容器 | `kubectl exec -it <pod> -- /bin/bash`（或 `docker exec -it <container> bash`） |
+
+### 9.2 步骤 1：从 sidecar 日志获取 ACM 实际地址
+
+sidecar 每次 ACM 请求都会在日志打印完整 URL（F7.1 请求/响应完整落盘），先取一条真实请求确认 ACM host:port 与协议（http/https，生产为 mTLS）：
+
+```bash
+# 生产 sidecar 日志默认在 /opt/coremind/logs/sidecar.log（AF_SIDECAR_LOG_DIR 可覆盖）
+grep -E "ACM_(UP|DL)_(REQ|RESP)" /opt/coremind/logs/sidecar.log | tail -5
+```
+
+输出示例：
+
+```
+[2026-08-17 10:00:00] [acm_client] ACM_UP_REQ url=https://<acm-host>:<acm-port>/acm/v1/uploadfile file_name=look.png content_len=12345 mime_type=image/png
+[2026-08-17 10:00:01] [acm_client] ACM_UP_RESP url=https://<acm-host>:<acm-port>/acm/v1/uploadfile success=true file_uuid=look.png elapsed_ms=42
+[2026-08-17 10:00:02] [acm_client] ACM_DL_REQ url=https://<acm-host>:<acm-port>/acm/v1/downloadfile/look.png file_key=look.png base64=false
+[2026-08-17 10:00:03] [acm_client] ACM_DL_RESP url=https://<acm-host>:<acm-port>/acm/v1/downloadfile/look.png success=true content_len=12345 elapsed_ms=35
+```
+
+> 若日志为空（尚无真实业务流量），可从 CoreMind 服务注册/配置中心查询 ACM 服务实例地址，或联系平台方获取。
+
+### 9.3 步骤 2：上传测试
+
+ACM 上传的请求体是**自定义 multipart 简化格式**（非标准 `multipart/form-data`）：
+
+```
+filename="<file_name>"\r\nContent-Length: <size>\r\n\r\n<payload>
+```
+
+因此 `curl -F` 不适用（会生成标准 multipart 边界，ACM 服务端解析不到），必须手工构造 body 后用 `--data-binary` 发送：
+
+```bash
+# 准备测试文件（扩展名须在白名单内：jpg/png/log/zip/txt/html/wav/pptx/pdf/docx/xlsx/md）
+echo "hello acm" > /tmp/test.txt
+
+# 构造 ACM 格式 body：filename + Content-Length + \r\n\r\n + payload
+SIZE=$(stat -c%s /tmp/test.txt)
+{ printf 'filename="test.txt"\r\nContent-Length: %d\r\n\r\n' "$SIZE"; cat /tmp/test.txt; } > /tmp/acm_upload.bin
+
+# 发送上传请求（URL 中的 host:port 替换为 9.2 拿到的实际值；生产 https 需按 mTLS 证书要求加 --cacert/--cert）
+curl -sS -X POST "https://<acm-host>:<acm-port>/acm/v1/uploadfile" \
+  --data-binary @/tmp/acm_upload.bin
+```
+
+**预期响应**（HTTP 恒 200，真实状态在 `RetCode`）：
+
+```json
+{"Version":"1.0","RetCode":200,"RetMsg":"ACM receive file succeed","Data":{"fileUUID":"test.txt"}}
+```
+
+| 判定 | 条件 |
+|------|------|
+| ✅ 通过 | `RetCode: 200` 且 `Data.fileUUID` 返回文件名 |
+| ❌ 失败 | `RetCode: 400`（`filename get error` / `file type not allowed` / `request payload start pos get error`） |
+
+### 9.4 步骤 3：下载测试（二进制模式）
+
+```bash
+# 下载刚才上传的文件（不带 downloadtype 头 → 二进制流）
+curl -sS "https://<acm-host>:<acm-port>/acm/v1/downloadfile/test.txt" -o /tmp/acm_download.bin
+
+# 校验内容一致（核心断言：上传 → 下载 往返字节一致）
+cmp /tmp/test.txt /tmp/acm_download.bin && echo "✅ ACM download roundtrip OK"
+```
+
+### 9.5 步骤 4：下载测试（base64 模式）
+
+携带 `downloadtype: base64` 头时，服务端返回 base64 JSON（`Data.fileContent`）：
+
+```bash
+curl -sS -H "downloadtype: base64" \
+  "https://<acm-host>:<acm-port>/acm/v1/downloadfile/test.txt"
+```
+
+**预期响应**：
+
+```json
+{"Version":"1.0","RetCode":200,"RetMsg":"ACM download file succeed","Data":{"fileUUID":"test.txt","fileContent":"aGVsbG8gYWNtCg==","originalSize":11,"base64Size":16}}
+```
+
+可本地校验 base64 内容与源文件一致：
+
+```bash
+# 用 python 提取 fileContent 并 base64 解码后与源文件比对
+curl -sS -H "downloadtype: base64" \
+  "https://<acm-host>:<acm-port>/acm/v1/downloadfile/test.txt" \
+  | python3 -c "import sys,json,base64; print(json.load(sys.stdin)['Data']['fileContent'])" \
+  | base64 -d | cmp - /tmp/test.txt && echo "✅ base64 roundtrip OK"
+```
+
+### 9.6 步骤 5：失败信号验证（关键契约）
+
+ACM 的错误**不是** HTTP 状态码（恒 200），而是响应体 `RetCode: 500` + `request file not exist`。必须验证 sidecar 的错误识别依赖此契约：
+
+```bash
+# 下载不存在的文件 → 预期 RetCode:500 / request file not exist
+curl -sS "https://<acm-host>:<acm-port>/acm/v1/downloadfile/not-exist-$(date +%s).png"
+```
+
+**预期响应**（注意 HTTP 仍是 200，真实状态在 body）：
+
+```json
+{"Version":"1.0","RetCode":500,"RetMsg":"request file not exist","Data":{"fileUUID":"not-exist-<ts>.png"}}
+```
+
+> ⚠️ 若返回 HTTP 非 200（如 404/502），说明部署了非 ACM 契约的服务或网络层有问题——sidecar 的 `acm_client` 会按非 200 直接判失败。
+
+### 9.7 步骤 6：白名单验证（可选）
+
+上传不在白名单内的扩展名（如 `.exe`、`.sh`）应被拒绝：
+
+```bash
+SIZE=$(stat -c%s /tmp/test.txt)
+{ printf 'filename="evil.exe"\r\nContent-Length: %d\r\n\r\n' "$SIZE"; cat /tmp/test.txt; } > /tmp/acm_bad.bin
+curl -sS -X POST "https://<acm-host>:<acm-port>/acm/v1/uploadfile" --data-binary @/tmp/acm_bad.bin
+```
+
+**预期响应**：`{"Version":"1.0","RetCode":400,"RetMsg":"file type not allowed",...}`
+
+### 9.8 与本地 dev（upstream_mock）的对照
+
+本地开发环境（`COREMIND_ENABLED=OFF` stub 模式）的 ACM 地址来自 `AF_SIDECAR_ACM_URL` 环境变量，默认 `http://127.0.0.1:23768`（指向 `frontend/mocks/upstream_mock`）。本地同样可跑以上 curl 验证：
+
+```bash
+# 本地 dev：协议为 http，无 mTLS
+curl -sS -X POST "http://127.0.0.1:23768/acm/v1/uploadfile" --data-binary @/tmp/acm_upload.bin
+curl -sS "http://127.0.0.1:23768/acm/v1/downloadfile/test.txt" -o /tmp/acm_download.bin
+```
+
+本地 mock 契约与生产 ACM 完全对齐（`server.py` 的 `acm_upload`/`acm_download` 实现同一份 `file_server_mgr.cpp` 契约），本地往返通过 ≠ 生产通过（生产还有 mTLS/服务发现环节），但本地失败通常意味着契约理解有误。
+
+### 9.9 完整验证清单
+
+| # | 验证项 | 命令要点 | 通过标准 |
+|---|--------|---------|---------|
+| 1 | ACM 地址可达 | 9.2 grep 日志 | 拿到 `ACM_*_REQ url=...` |
+| 2 | 上传成功 | 9.3 POST uploadfile | `RetCode:200` + `fileUUID` |
+| 3 | 二进制下载往返 | 9.4 GET downloadfile | `cmp` 字节一致 |
+| 4 | base64 下载往返 | 9.5 带 `downloadtype: base64` | base64 解码后与源文件一致 |
+| 5 | 失败信号识别 | 9.6 下载不存在文件 | `RetCode:500` + `request file not exist` |
+| 6 | 白名单拒绝 | 9.7 上传 `.exe` | `RetCode:400` + `file type not allowed` |
+
+全部通过 = 生产 ACM 服务连通，sidecar 产物上传链路可用；此时业务层产物回调（`UserOutputObject` 附带 `acm_file_id`）可正常完成。
 
 ---
 

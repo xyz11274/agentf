@@ -305,7 +305,13 @@ class DaemonClient:
         return await self.send_request("agent.info", {"agent_id": agent_id})
 
     async def agent_load(self, package_path: str) -> dict[str, Any]:
-        return await self.send_request("agent.load", {"package_path": package_path})
+        # agent.load 内含 snapshot rebuild(沙箱创建+上传+setup.sh,最坏 180s),远超全局
+        # request_timeout_seconds(默认 5s)——用独立长超时 agent_load_timeout_seconds(默认 300s)
+        # (2026-08-17 复盘:60s 超时导致 agent.load HTTP 504)。
+        return await self.send_request(
+            "agent.load", {"package_path": package_path},
+            timeout=self._bridge_settings.agent_load_timeout_seconds,
+        )
 
     async def agent_unload(self, agent_id: str) -> dict[str, Any]:
         return await self.send_request("agent.unload", {"agent_id": agent_id})

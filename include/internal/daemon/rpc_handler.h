@@ -99,6 +99,10 @@ private:
   std::string handle_databus_remove_by_prefix(const std::string& params, int64_t id);
 
   // Sandbox methods (AgentFoundry 沙箱机制移植)
+  // 外层文件通道（保留）：read_file/upload_file 是 bridge↔daemon 外层语义
+  //（用户文件上传 / 产物拉回），非 agent 内部工具执行——后者由 Python executor
+  //（E2B SDK / HTTP POST /exec）直连承载。e2b 的 cubeproxy 502 是基础设施缺口
+  //（2026-08-09），应修复通道而非删除（2026-08-17 用户确认保留）。
   std::string handle_sandbox_read_file(const std::string& params, int64_t id);
   // Upload binary asset into sandbox (symmetric to read_file; POST /upload, see contracts/bridge-sandbox-files.md)
   std::string handle_sandbox_upload_file(const std::string& params, int64_t id);

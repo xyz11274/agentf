@@ -75,6 +75,11 @@ std::string SandboxHelpers::validate_upload_path(const std::string& path) {
   return "";  // 合法
 }
 
+// 2026-08-17 Step 6（路径翻译收归 sandbox 模块）：保留现状仅补注释——
+// ws_prefix 由调用方传沙箱 workspace 前缀（rpc_handler 经 sandbox_sb->sandbox_workspace_prefix()
+// 取 remote_workspace_dir_，即 daemon config 权威值），与统一契约 env AF_SANDBOX_WORKSPACE
+// 同源（path-translation-convergence.md Step 1 注入）；e2b 下二者恒等。
+// 实施 Step 1-5 后按需评估是否显式改读 AF_SANDBOX_WORKSPACE env（当前保持实现不变）。
 std::string SandboxHelpers::rewrite_upload_path_to_sandbox(
     const std::string& content,
     const std::string& session_marker,

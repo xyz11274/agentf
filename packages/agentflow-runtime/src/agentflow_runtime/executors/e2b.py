@@ -41,7 +41,11 @@ class E2BExecutor(ToolExecutor):
     """
 
     # e2b sandbox internal workspace path
-    SANDBOX_WORKSPACE = "/home/user/workspace"
+    # 2026-08-17: 不再硬编码——与 factory.sandbox_workspace_prefix() 同源读统一契约
+    # env AF_SANDBOX_WORKSPACE（worker.cpp Step 1 注入：e2b=沙箱目录/host=agent 包根），
+    # 默认 /home/user/workspace 向后兼容。模块级读取（类常量）：factory 的 e2b 前置
+    # 在模块加载时 env 未注入会返回空串，故直接读契约 env 而非调用 factory 函数。
+    SANDBOX_WORKSPACE = os.environ.get("AF_SANDBOX_WORKSPACE", "/home/user/workspace")
 
     # Regex to extract image/video file paths from command stdout
     # 后缀与 collect 白名单对齐(2026-08-14 review):拉回正则必须 ⊆ 收集白名单,

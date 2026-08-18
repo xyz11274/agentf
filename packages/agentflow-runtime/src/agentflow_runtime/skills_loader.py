@@ -81,12 +81,14 @@ def load_skill_md(skill_name: str) -> str | None:
     skill_dir = os.path.join(skills_base, skill_name)
     sandbox_mode = os.environ.get("AF_SANDBOX_MODE", "")
     if sandbox_mode == "e2b":
+        # 2026-08-17 Step 5：值来源统一——复用 factory.sandbox_workspace_prefix()
+        # （其已从 AF_SANDBOX_WORKSPACE 读权威值，W1 收敛），消除第二处独立取值。
         # SANDBOX_WORKSPACE = /home/user/workspace（e2b.py 同步常量）
         # skills_base 形如 /Users/xxx/.../outfit-assistant/harness/skills
         # → 沙箱内 /home/user/workspace/harness/skills
-        sandbox_workspace = os.environ.get(
-            "AF_SANDBOX_WORKSPACE", "/home/user/workspace"
-        )
+        from agentflow_runtime.executors.factory import sandbox_workspace_prefix
+
+        sandbox_workspace = sandbox_workspace_prefix() or "/home/user/workspace"
         agent_pkg_dir = _get_agent_package_dir()
         if agent_pkg_dir and skills_base.startswith(agent_pkg_dir):
             skills_base = sandbox_workspace + skills_base[len(agent_pkg_dir):]

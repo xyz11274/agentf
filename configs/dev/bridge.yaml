@@ -51,6 +51,9 @@ agent_template_dir: "frontend/bridge/templates/agent_template"
 # ── 日志与超时 ────────────────────────────────────────────────────
 log_level: "DEBUG"
 request_timeout_seconds: 60.0
+# agent.load 独立长超时:内含 snapshot rebuild(沙箱创建+上传+setup.sh,最坏 180s),
+# 远超全局 request_timeout_seconds——独立超时避免 agent.load HTTP 504(2026-08-17 复盘)
+agent_load_timeout_seconds: 300.0
 upload_max_body_size_mb: 100
 
 # ── 会话持久化 ────────────────────────────────────────────────────

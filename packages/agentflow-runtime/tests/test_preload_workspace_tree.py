@@ -267,3 +267,102 @@ def test_env_hint_mentions_env_fields(
     ctx = json.loads(out)
     hint = ctx.get("_hint", "")
     assert "env" in hint, f"_hint 未声明 env: {hint[:200]}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# 按需加载（load_* 参数，2026-08-17 优化）——LLM 自选要什么，返回只含请求字段
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _exec(tool_input: dict) -> dict:
+    """执行 preload 并解析返回 JSON。"""
+    return json.loads(preload.execute(tool_input, sandbox_endpoint=None))
+
+
+def test_load_profile_false_skips_profile_and_is_new_user(
+    tmp_path: Path,
+) -> None:
+    """load_profile=false → 不含 profile_exists/profile_content/is_new_user。"""
+    (tmp_path / ".agentfoundry" / "memory" / "outfit-profile").mkdir(parents=True)
+    (tmp_path / ".agentfoundry" / "memory" / "outfit-profile" / "profile.md").write_text(
+        "# 档案\n- 性别：男", encoding="utf-8"
+    )
+    ctx = _exec({"load_profile": False})
+    assert "profile_exists" not in ctx, f"load_profile=false 不应返回 profile_exists: {list(ctx.keys())}"
+    assert "profile_content" not in ctx
+    assert "is_new_user" not in ctx, "is_new_user 依赖 profile_exists，应随 load_profile=false 省略"
+
+
+def test_load_history_false_skips_history(tmp_path: Path) -> None:
+    """load_history=false → 不含 history_files。"""
+    (tmp_path / ".agentfoundry" / "memory" / "outfit-profile" / "history").mkdir(parents=True)
+    (tmp_path / ".agentfoundry" / "memory" / "outfit-profile" / "history" / "20260817.md").write_text("x")
+    ctx = _exec({"load_history": False})
+    assert "history_files" not in ctx, f"load_history=false 不应返回 history_files: {list(ctx.keys())}"
+
+
+def test_load_style_guide_false_skips_style_guide(tmp_path: Path) -> None:
+    """load_style_guide=false → 不含 style_guide。"""
+    ctx = _exec({"load_style_guide": False})
+    assert "style_guide" not in ctx
+
+
+def test_load_workspace_false_skips_tree_and_hint_adapts(tmp_path: Path) -> None:
+    """load_workspace=false → 不含 workspace_tree，且 _hint 明示未请求（可再调用补取）。"""
+    (tmp_path / "upload").mkdir()
+    (tmp_path / "upload" / "a.png").write_bytes(b"x")
+    ctx = _exec({"load_workspace": False})
+    assert "workspace_tree" not in ctx, f"load_workspace=false 不应返回 workspace_tree: {list(ctx.keys())}"
+    hint = ctx.get("_hint", "")
+    assert "未请求 workspace_tree" in hint, f"_hint 应提示未请求 workspace_tree: {hint[:200]}"
+    assert "可再次调用本工具并传 load_workspace=true" in hint
+
+
+def test_load_env_false_skips_env_and_hint_adapts(tmp_path: Path) -> None:
+    """load_env=false → 不含 env，且 _hint 明示未请求。"""
+    ctx = _exec({"load_env": False})
+    assert "env" not in ctx, f"load_env=false 不应返回 env: {list(ctx.keys())}"
+    hint = ctx.get("_hint", "")
+    assert "未请求 env" in hint, f"_hint 应提示未请求 env: {hint[:200]}"
+
+
+def test_load_weather_false_skips_weather_even_with_location(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """load_weather=false 即使给 location 也不查天气（双条件缺一不查）。"""
+    ctx = _exec({"location": "北京", "load_weather": False})
+    assert "weather" not in ctx, f"load_weather=false 不应返回 weather: {list(ctx.keys())}"
+
+
+def test_weather_only_selective_load(tmp_path: Path) -> None:
+    """只补查天气：load_weather=true + location，其余 load_* false → 返回只含 weather（不含 profile/tree/env）。"""
+    ctx = _exec({
+        "location": "北京",
+        "load_weather": True,
+        "load_profile": False,
+        "load_history": False,
+        "load_style_guide": False,
+        "load_workspace": False,
+        "load_env": False,
+    })
+    assert "weather" in ctx, f"load_weather=true 应返回 weather: {list(ctx.keys())}"
+    assert "profile_content" not in ctx, f"按需加载应跳过 profile: {list(ctx.keys())}"
+    assert "workspace_tree" not in ctx
+    assert "env" not in ctx
+    hint = ctx.get("_hint", "")
+    assert "weather" in hint, f"_hint 应声明 weather 已返回: {hint[:200]}"
+    assert "未请求 workspace_tree" in hint, f"_hint 应提示未请求 workspace_tree: {hint[:200]}"
+
+
+def test_load_defaults_all_true_backward_compatible(tmp_path: Path) -> None:
+    """不传 load_*（默认全 true）= 现状行为：环境相关字段全部返回（向后兼容）。
+
+    style_guide 是条件字段（仅 style-guide.md 文件存在时返回，if sg_out 守护），
+    不参与"必返"断言——本测试环境无该文件，缺省不返回属正确尽力而为行为。
+    """
+    (tmp_path / "upload").mkdir()
+    (tmp_path / "upload" / "a.png").write_bytes(b"x")
+    ctx = _exec({})
+    for key in ("profile_exists", "profile_content", "history_files",
+                "workspace_tree", "env", "is_new_user", "_hint"):
+        assert key in ctx, f"默认加载应返回 {key}: {list(ctx.keys())}"

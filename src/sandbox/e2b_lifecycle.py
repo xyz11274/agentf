@@ -135,7 +135,7 @@ def cmd_create(args: argparse.Namespace) -> int:
 
     create_kwargs = dict(
         timeout=args.timeout,
-        envs={"SANDBOX_WORKDIR": args.remote_workspace_dir},
+        envs={"AF_SANDBOX_WORKSPACE": args.remote_workspace_dir},
         template=args.template,
     )
     # 解析网络出站规则（JSON 数组字符串 → {"allow_out": [...]}）

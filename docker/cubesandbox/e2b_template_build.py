@@ -186,7 +186,7 @@ def build_template(args: argparse.Namespace) -> None:
         .copy(str(server_path), "/opt/sandbox/http_server/sandbox_http_server.py")
         .copy(str(setup_path), "/opt/sandbox/sandbox-setup.sh")
         .run_cmd("mkdir -p /opt/sandbox/tools && bash /opt/sandbox/sandbox-setup.sh")
-        .set_envs({"SANDBOX_WORKDIR": "/workdir"})
+        .set_envs({"AF_SANDBOX_WORKSPACE": "/workdir"})
         .set_start_cmd(start_cmd, wait_for_port(args.http_port))
     )
 

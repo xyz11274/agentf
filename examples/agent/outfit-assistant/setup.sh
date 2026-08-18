@@ -49,6 +49,17 @@ install_deps() {
         echo "ℹ️  无 requirements.txt，跳过依赖安装"
         return 0
     fi
+
+    # 预装探测（2026-08-17 复盘：snapshot build 卡 180s 超时 exit=124 根因）——
+    # 沙箱基础镜像已预装 yaml/requests/urllib3（实测 import 成功，2026-08-11），
+    # dotenv 未装时业务走 stdlib 兜底解析器（env_loader）。三个核心依赖 import 成功
+    # 即跳过安装：避免 DNS 不可达时 curl --resolve 逐包串行（每包最坏 20s+90s）
+    # 拖满外层 180s 超时、snapshot rebuild 失败降级 base 模板、agent.load 60s 超时。
+    if python3 -c "import yaml, requests, urllib3" 2>/dev/null; then
+        echo "✅ 依赖已预装（import yaml/requests/urllib3 成功），跳过依赖安装"
+        return 0
+    fi
+
     echo "📦 尝试安装 requirements.txt 依赖到系统 python ..."
 
     # ① 外网 pip（运维修好 DNS 后主路径）

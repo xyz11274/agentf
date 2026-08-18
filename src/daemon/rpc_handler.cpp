@@ -231,6 +231,10 @@ void RpcHandler::register_all(RpcServer& server) {
       [this](const std::string& p, int64_t id, int, ChannelType) { return handle_databus_remove_by_prefix(p, id); });
 
   // Sandbox
+  // 外层文件通道（保留）：sandbox.read_file/upload_file 是 bridge↔daemon 外层语义
+  //（用户文件上传 / 产物拉回），非 agent 内部工具执行（后者由 Python executor 直连
+  // 承载）。Local/Docker 经 HTTPExecutor 直连沙箱内 HTTP server 可用；e2b 的 cubeproxy
+  // 502 是基础设施缺口（2026-08-09），应修复通道而非删除（2026-08-17 用户确认保留）。
   server.register_handler("sandbox.read_file",
       [this](const std::string& p, int64_t id, int, ChannelType) { return handle_sandbox_read_file(p, id); });
   server.register_handler("sandbox.upload_file",
@@ -558,6 +562,53 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
           message.content = rewritten;
         }
       }
+    }
+  }
+
+  // 2026-08-17 Step 1（path-translation-convergence.md）：统一注入当前执行环境工作目录契约
+  // sandbox_workspace → session metadata → workflow inputs → worker.cpp 自动注入 AF_SANDBOX_WORKSPACE：
+  //   e2b = 沙箱目录（sandbox_sb->sandbox_workspace_prefix()，/home/user/workspace）
+  //   host = agent 包根（config.agents[i].package_path 绝对化，对齐 _resolve_session_upload_dir）
+  //   Local/Docker 共享 workdir → sandbox_workspace_prefix() 返回 "" → 回落到 agent 包根
+  {
+    std::string sandbox_workspace_val;
+    if (sandbox_sb) {
+      sandbox_workspace_val = sandbox_sb->sandbox_workspace_prefix();
+    }
+    if (sandbox_workspace_val.empty() && sandbox_lifecycle_) {
+      const auto& sandbox_config = sandbox_lifecycle_->config();
+      namespace fs = std::filesystem;
+      for (const auto& entry : sandbox_config.agents) {
+        std::string pkg_path = fs::absolute(entry.package_path).string();
+        std::string name = entry.name_override;
+        if (name.empty()) {
+          auto pos = pkg_path.find_last_of('/');
+          name = (pos != std::string::npos) ? pkg_path.substr(pos + 1) : pkg_path;
+        }
+        if (name == agent_id) {
+          sandbox_workspace_val = pkg_path;
+          break;
+        }
+      }
+    }
+    // 2026-08-17 review P1 修复：host 模式（sandbox_lifecycle_ 为 nullptr，mode=none 是
+    // config 默认值 config.h:62）下上述 config.agents 分支不执行 → AF_SANDBOX_WORKSPACE
+    // 不注入，违背 Step 1 验收"节点进程 env 恒含（host=agent 包根）"。回退从 registry_
+    // 反查 agent 包根（load_agent 时注册的 package_path，handle_agent_load 同源）。
+    if (sandbox_workspace_val.empty()) {
+      namespace fs = std::filesystem;
+      for (const auto& entry : registry_.list_all()) {
+        if (entry.agent_id == agent_id && !entry.package_path.empty()) {
+          sandbox_workspace_val = fs::absolute(entry.package_path).string();
+          break;
+        }
+      }
+    }
+    if (!sandbox_workspace_val.empty()) {
+      message.metadata["sandbox_workspace"] = sandbox_workspace_val;
+      Logger::instance().info_f(
+          "[SANDBOX] Injected sandbox_workspace=%s for user=%s client=%s agent=%s",
+          sandbox_workspace_val.c_str(), user_id.c_str(), client_id.c_str(), agent_id.c_str());
     }
   }
 

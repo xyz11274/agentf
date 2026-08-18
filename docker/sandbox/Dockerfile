@@ -30,10 +30,11 @@ RUN mkdir -p /opt/sandbox/tools
 RUN mkdir -p /workdir
 
 # workdir 物理挂载点（/workdir，下方挂载）与 HTTP server 定位 harness/skills 用的
-# SANDBOX_WORKDIR 环境变量在此同一镜像层固化——单一真相来源。
+# AF_SANDBOX_WORKSPACE 环境变量在此同一镜像层固化——单一真相来源。
 # 调用方（sandbox_docker.cpp / sandbox_e2b.cpp / conftest.py）显式注入同值亦兼容，
 # 但镜像本身不再依赖调用方"记得"注入，消除霰弹式注入点。
-ENV SANDBOX_WORKDIR=/workdir
+# 2026-08-17 review P3：统一契约名（原 SANDBOX_WORKDIR 已废弃，path-translation-convergence.md）。
+ENV AF_SANDBOX_WORKSPACE=/workdir
 
 # 健康检查：每 30s 探测 /exec 端点
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \

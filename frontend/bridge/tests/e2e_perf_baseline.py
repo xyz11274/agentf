@@ -130,6 +130,17 @@ def _ensure_snapshot_fresh(agent_pkg: Path, registry_path: Path,
             [sys.executable, str(hash_script), "snapshot", "--hash-manifest", str(manifest)],
             capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=120,
         )
+        # fail fast（2026-08-18 fix，沙箱-warm-template-oci.md §2.6.8 不变量 I-A8）：
+        # 旧实现只取 stdout 末行，子进程失败（rc≠0）或 stdout 空时返回空串 →
+        # 上游 `if mhash and mhash == rhash` 短路为 False → 无条件触发 e2b snapshot
+        # 预构建（即使 sandbox.mode=none 也跑，超时 600s 失败）。root cause 子进程
+        # 缺 agentflow_runtime.common.manifest 时 rc=1 + stderr 含 FATAL，但被吞掉。
+        # 修：检 rc≠0 或空 stdout 时显式抛错含 stderr 根因，不再掩盖。
+        if r.returncode != 0 or not r.stdout.strip():
+            raise SystemExit(
+                f"[hash-check] manifest hash 计算失败（rc={r.returncode}）。"
+                f"子进程 stderr:\n{r.stderr[-500:]}"
+            )
         lines = [ln.strip() for ln in r.stdout.splitlines() if ln.strip()]
         return lines[-1] if lines else ""
 
@@ -206,6 +217,13 @@ def _start_daemon(log_dir: Path) -> tuple[subprocess.Popen, int, Path]:
         )
 
     # 评测前确保 snapshot 与 manifest 一致（避免 daemon 启动 rebuild 超 15s）
+    # 环境注入（2026-08-18 fix，同根延伸 fail-fast）：_manifest_hash 子进程用 sys.executable
+    # （bridge venv）调 template_admin.py，但 bridge venv 缺 agentflow_runtime.common.manifest
+    # → hash 永失败。注入 PYTHONPATH（runtime src）给 os.environ，让子进程能 import runtime
+    # 算通 hash，从而走"hash 一致 → 跑过预构建"正常路径，而非被 fail-fast 堵死。
+    runtime_src = str(PROJECT_ROOT / "packages" / "agentflow-runtime" / "src")
+    os.environ.setdefault("PYTHONPATH", runtime_src)
+
     _ensure_snapshot_fresh(OUTFIT_AGENT, PROJECT_ROOT / "data" / "template_registry.json")
 
     daemon_port = free_port()

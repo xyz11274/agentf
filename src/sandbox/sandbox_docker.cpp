@@ -112,7 +112,7 @@ DockerSandbox::DockerRunResult DockerSandbox::run_container(int sandbox_http_por
                     "-p 0:" + std::to_string(sandbox_http_port) + " "
                     "-v '" + workdir_ + ":/workdir' "
                     "-e DAEMON_PID='" + std::to_string(getpid()) + "' "
-                    "-e SANDBOX_WORKDIR='/workdir' ";
+                    "-e AF_SANDBOX_WORKSPACE='/workdir' ";
   cmd += "'" + image_name_ + "' 2>&1";
   std::string output = exec_cmd(cmd);
 
