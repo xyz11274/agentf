@@ -13,7 +13,7 @@
 //   - 失败信号：RetCode:500 / request file not exist（HTTP 层恒 200，必须按 body 判定）
 //
 // 双线实现（条件编译，对齐 resolve_handler）：
-//   COREMIND_ENABLED=ON  → acm_client.cpp   （SDK HttpClient::GetAcmUrl + Http1CertSendRequest）
+//   COREMIND_ENABLED=ON  → acm_client.cpp   （SDK HttpClientFactory + Http1Client + AF_SIDECAR_ACM_URL）
 //   COREMIND_ENABLED=OFF → acm_client_stub.cpp（httplib 直连 AF_SIDECAR_ACM_URL）
 // 公共纯函数（本文件 inline）两线共用，保证契约一致 + 可单元测试。
 // ═══════════════════════════════════════════════════════════════════
@@ -170,7 +170,7 @@ public:
 
     /// 从 url 下载产物内容到内存（L4 §4.2 产物内容获取，url 优先路径）。
     /// 返回原始 bytes（std::string 承载）；失败返回空串（调用方降级 base64 兜底）。
-    /// 双线实现：stub = httplib GET；生产 = Http1CertSendRequest GET。
+    /// 双线实现：stub = httplib GET；生产 = SDK Http1Client GET。
     static std::string fetch_url(const std::string& url);
 };
 

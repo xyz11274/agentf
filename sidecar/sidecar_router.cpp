@@ -495,11 +495,11 @@ CMFrm::COM::ServerRespHandleMode SidecarRouter::HandleUserRequest(
                     if (uoo) {
                         const int injected = sidecar::enrich_artifacts_with_acm(
                             *uoo,
-                            [](const std::string& url) { return AcmClient::fetch_url(url); },
+                            [](const std::string& url) { return sidecar::AcmClient::fetch_url(url); },
                             [](const std::string& name, const std::string& content,
                                const std::string& mime) {
                                 const std::vector<uint8_t> bytes(content.begin(), content.end());
-                                const auto res = AcmClient::upload_file(name, bytes, mime);
+                                const auto res = sidecar::AcmClient::upload_file(name, bytes, mime);
                                 return res.success ? res.file_uuid : "";
                             });
                         if (injected > 0) {
