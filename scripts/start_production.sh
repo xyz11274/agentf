@@ -86,8 +86,17 @@ if [ ! -x "$DAEMON_BINARY" ]; then
     echo "        Run: ./scripts/build.sh" >&2
     exit 1
 fi
+# Python Bridge 依赖检查：优先使用 install.sh 构建的 venv（frontend/bridge/.venv_unix）。
+# 对齐 start_bridge.sh 的 venv 检测模式——若 venv 存在则注入 PATH，保证依赖检查
+# 与 bridge 启动使用同一 Python 环境；venv 缺失时回退裸 python3（报错引导先跑 install.sh）。
+BRIDGE_VENV="$AR_PROJECT_ROOT/frontend/bridge/.venv_unix"
+if [ -x "$BRIDGE_VENV/bin/python3" ]; then
+    export PATH="$BRIDGE_VENV/bin:$PATH"
+    export VIRTUAL_ENV="$BRIDGE_VENV"
+fi
 if ! PYTHONPATH="$AR_PROJECT_ROOT/frontend/bridge" python3 -c "import fastapi, uvicorn" 2>/dev/null; then
     echo "[ERROR] Python Bridge production dependencies are missing" >&2
+    echo "        Run: bash deployment/scripts/install.sh (或 install.sh --only bridge)" >&2
     exit 1
 fi
 if $CHECK_ONLY; then
