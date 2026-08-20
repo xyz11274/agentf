@@ -1,9 +1,9 @@
 # 详细设计: 通用 Harness Agent Package — Coordinator-Driven Agent Loop + 参数化 Skill Task
 
 > **文档级别**: L4 技术设计
-> **日期**: 2026-06-30，刷新 2026-07-14
+> **日期**: 2026-06-30，刷新 2026-08-20
 > **状态**: implemented (v3+)
-> **关联**: `packages/agentflow-runtime/src/agentflow_runtime/`（核心实现）、`examples/agent/outfit-assistant/`（生产 Agent）、`frontend/bridge/templates/agent_template/harness_agent/`（通用模板）、031-coordinator-协同机制、038-harness-agent-能力升级、040-harness-agent-MCP-support、agent-template-delta（四层架构）
+> **关联**: `packages/agentflow-runtime/src/agentflow_runtime/`（核心实现）、`examples/agent/outfit-assistant/`（生产 Agent）、`frontend/bridge/templates/agent_template/harness_agent/`（通用模板）
 
 ---
 
@@ -41,7 +41,7 @@ AgentFlow 框架要求每个 session **必须包含三个 task**：
 
 **不能消除任何一个 task** — 框架的消息路由、完成通知、并发计数等机制都依赖三个 task 的存在。
 
-### 1.3 当前实现状态（v3+ → v5）
+### 1.3 当前实现状态（v3+ → v5.2）
 
 本设计已实现并演进到 v5 架构。核心演进脉络：
 
@@ -57,9 +57,16 @@ AgentFlow 框架要求每个 session **必须包含三个 task**：
 7. **trace/ span 可观测性**：`trace/emit.py::emit_span`（context manager 生命周期 span）+ `span_event`（瞬时事件），NDJSON 落盘（`SpanWriter`）；`observability.py::emit_event` 转调 `span_event`（消除双轨）
 
 **v5（2026-08-14，hook 机制 + coordinator v2 + 共用逻辑收敛）**：
-8. **Hook 机制**：`hooks/`（registry/loader/engine）+ `events.py`（27 项事件目录）+ `mounts.py`（14 项挂载点）+ `context.py`（`AgentContext` 干预载体）——生命周期事件可订阅、可干预（改写 payload / 阻断动作），详见 `docs/design/features/hooks/hook-system.md`
+8. **Hook 机制**：`hooks/`（registry/loader/engine）+ `events.py`（27 项事件目录）+ `mounts.py`（16 项挂载点）+ `context.py`（`AgentContext` 干预载体）——生命周期事件可订阅、可干预（改写 payload / 阻断动作），详见 `docs/design/features/hooks/hook-system.md`
 9. **Coordinator v2（Agent Loop 形态）**：`coordinator_agent_loop.py` 不暴露 `run_skills`，直接暴露 harness 工具集，进程内 messages 保留上下文；通过 `AF_COORDINATOR_VERSION` 环境变量在 v1/v2 间切换（见 `docs/design/features/agent-runtime/coordinator-as-agent-loop.md`）
 10. **共用逻辑收敛（霰弹式修复）**：v1/v2 共享的 `parse_agent_md`/`append_artifacts_markdown`/`llm_error_response`/`save_session_messages`/`bind_package_paths` 等收口到 `coordinator_common.py`（单一真相源 F4）
+
+**v5.1（2026-08-16，hooks v1/v2 事件拆分 + v2 接入工具并行）**：
+11. **coordinator v1/v2 事件拆分**：`coordinator.before/after_llm_call` 拆分为 `coordinator_v1.*`（决策循环 + skill 委派）与 `coordinator_v2.*`（agent_loop 直接执行工具）——共用一个事件名会让 hook 无法区分触发来源（v1 `current_round` vs v2 `round_i+1`），挂载点目录 14→16 项
+12. **Coordinator v2 接入工具并行批处理**：`coordinator_agent_loop.py` 复用 `execute_in_batches`（与 skill_executor 同款，见 §8.6.1）
+
+**v5.2（2026-08-17，沙箱 workspace 路径契约统一）**：
+13. **AF_SANDBOX_WORKSPACE 统一契约**：worker 侧（worker.cpp Step 1）统一注入 `AF_SANDBOX_WORKSPACE`（host 模式 = agent 包根 / e2b 模式 = 沙箱目录）；`e2b.py` 消硬编码、`bash.py`/`skills_loader.py` 统一读契约，路径翻译收归 sandbox 模块（详见 §8.6.1）
 
 详见 §15 实施情况。
 
@@ -183,6 +190,43 @@ Coordinator 调用 run_skills
                │ skill 完成 → 框架 re-trigger coordinator
                ▼
           Coordinator 继续分析...
+```
+
+**系统组件图（逻辑视图 · C4 Component，承载 UML 组件图语义）**：
+
+```mermaid
+flowchart TB
+    subgraph FRAME["daemon 框架（C++）"]
+        DISP["Dispatcher（task_index=0）<br/>固定 next_skills=dummy_pre_skill"]
+        PRE["dummy_pre_skill（task_index=2）<br/>预处理 hook → 透传触发 coordinator"]
+        COORD["Coordinator（task_index=1）<br/>coordinator_workflow.json"]
+        SKILL["Skill-Runner（task_index≥3）<br/>通用 skill 执行器（exec_skill_key 路由）"]
+        LAUNCH["launch_skill_task / next_skills 管线"]
+    end
+    subgraph AGENT["agent 包（Python 节点）"]
+        CD["coordinator_decide.py<br/>tools=[run_skills]"]
+        SE["skill_executor.py<br/>tools=[领域工具集]"]
+    end
+    subgraph DB["DataBus"]
+        NS["next_skills / launched_skills /<br/>pending_skills_count / response"]
+        DM["dispatch:dialogue:round:i<br/>（skill_name / prompt / load_skills）"]
+        SR["skill_result:skill_name"]
+        RC["_coordinator_round"]
+    end
+
+    DISP --> PRE
+    PRE --> COORD
+    COORD --> CD
+    CD -->|"run_skills tool_call → 写 dispatch manifest"| DM
+    CD -->|"写 next_skills"| NS
+    NS --> LAUNCH
+    LAUNCH --> SKILL
+    SKILL --> SE
+    SE -->|"读 dispatch manifest"| DM
+    SE -->|"写 skill_result"| SR
+    SE -->|"写 response"| NS
+    SR --> COORD
+    RC --> CD
 ```
 
 **一句话**：Coordinator 是脑（分析+决策+回复），Skill-Runner 是手（执行具体工作），`run_skills` + DataBus dispatch manifest 是脑指挥手的接口。
@@ -329,6 +373,48 @@ Coordinator 调用 run_skills
                     │    └── _coordinator_round     ← coordinator 维护     │  §5.5
                     └──────────────────────────────────────────────────────┘
 ```
+
+**数据交互 DFD（场景视图 · 数据流图，承载 DFD 语义：subgraph 空间边界 + 存储点 + 跨边界虚线）**：
+
+```mermaid
+flowchart LR
+    subgraph COORD["coordinator 节点（coordinator_decide.py）"]
+        CD1(["LLM 决策：run_skills tool_call"])
+        CD2(["handle_run_skills_call：写 dispatch manifest + next_skills"])
+    end
+    subgraph FRAME2["daemon 框架"]
+        F1(["parse_next_skills"])
+        F2(["launch_skill_task × N"])
+        F3(["pending_skills_count → 0 → re-trigger"])
+    end
+    subgraph DB2["DataBus（存储中心）"]
+        DM2[("dispatch:dialogue:round:i<br/>skill_name / prompt / load_skills")]
+        NS2[("next_skills / launched_skills / pending_skills_count")]
+        SR2[("skill_result:skill_name")]
+        RC2[("_coordinator_round")]
+    end
+    subgraph SKILL2["skill 节点（skill_executor.py）"]
+        S1(["读 dispatch manifest → 加载 SKILL.md"])
+        S2(["LLM while-loop：工具执行"])
+        S3(["写 skill_result → 完成"])
+    end
+
+    CD1 --> CD2
+    CD2 -.->|"写（跨节点）"| DM2
+    CD2 -.->|"写（跨节点）"| NS2
+    NS2 --> F1
+    F1 --> F2
+    F2 -.->|"调度（跨节点）"| S1
+    S1 --> DM2
+    S1 --> S2
+    S2 --> S3
+    S3 -.->|"写（跨节点）"| SR2
+    SR2 --> F3
+    F3 -.->|"re-trigger（跨节点）"| CD1
+    RC2 -.-> CD1
+```
+
+**数据停留点**：`dispatch:*`（coordinator 写 / skill 读）、`skill_result:*`（skill 写 / coordinator 读）、`next_skills`（coordinator 写 / 框架读）、`_coordinator_round`（coordinator 自维护）——全部落在 DataBus，跨节点读写经 UDS，无进程内共享。
 
 ### 5.3 Coordinator → Skill-Runner：任务指派（通过 DataBus dispatch manifest）
 
@@ -621,6 +707,8 @@ def handle_run_skills_call(args, databus, session_id, dialogue_id):
 
 Coordinator 是 **事件驱动** 的：每次被框架触发时执行一次 LLM 决策，然后交出控制权。框架的 skill 完成 → re-trigger 机制提供"循环"。
 
+> 下图承载 **UML 活动图语义**（Mermaid flowchart 近似承载）：五个阶段（初始化 → 状态恢复 → 保护检查 → 单轮 LLM 决策 → 持久化+交出控制权）描述的是 coordinator 单次被触发的执行流程，循环由框架 re-trigger 提供。
+
 ```mermaid
 flowchart TD
     subgraph init["① 初始化"]
@@ -644,7 +732,7 @@ flowchart TD
 
     subgraph llm["④ 单轮 LLM 决策"]
         D1[call_llm tools: run_skills]
-        D2{LLM 产出?}
+        D2{"LLM 产出?"}
         D3["run_skills → dispatch manifest → next_skills"]
         D4["无 tool_call → 输出最终 response"]
     end
@@ -791,6 +879,8 @@ Skill Executor 的所有输入通过 **框架环境变量** + **DataBus** 获取
 
 Skill Executor 是一个 **LLM while-loop**，每次迭代执行一次 LLM 调用 + 工具执行，直到完成或超时/超轮次。
 
+> 下图承载 **UML 活动图语义**（Mermaid flowchart 近似承载）：三阶段（初始化 → LLM while-loop → 退出分支）描述 skill 单次执行流程；B1→B8 循环表示迭代，退出分支 C1~C6 是终态判定。
+
 ```mermaid
 flowchart TD
     subgraph init["① 初始化"]
@@ -807,7 +897,7 @@ flowchart TD
         B3[上下文压缩 compress_messages]
         B4[预算提醒 round_reminder]
         B5[call_llm tools=领域工具集]
-        B6{LLM 产出?}
+        B6{"LLM 产出?"}
         B7[执行工具 → 结果回填 → 产物提取]
         B8[死循环检测 tool_call_loop]
     end
@@ -1105,7 +1195,7 @@ for round_i in range(max_rounds):
 | 退出状态 | 触发条件 | 说明 |
 |---------|---------|------|
 | `completed` | LLM 无 tool_call | 正常完成，LLM 给出了最终结果 |
-| `max_rounds_reached` | 达到 `AF_SKILL_MAX_ITERATIONS`（默认 24） | LLM 持续调工具未收敛 |
+| `max_rounds_reached` | 达到 `AF_MAX_SKILL_TASK_ITERATIONS`（fallback `AF_SKILL_MAX_ROUNDS`，默认 8） | LLM 持续调工具未收敛 |
 | `node_timeout` | 达到 `AF_NODE_EXECUTION_TIMEOUT`（默认 240s） | 节点级别硬超时保护 |
 | `llm_error` | LLM API 返回错误 | 网络/API 问题 |
 | `tool_call_loop_detected` | 连续 3 轮相同 tool_call 签名 | LLM 陷入死循环 |
@@ -1176,7 +1266,7 @@ if not valid_tool_calls:
 
 | 环境变量 | 默认值 | 说明 |
 |---------|--------|------|
-| `AF_MODEL_MAX_TOKENS` | 131072 | 模型最大 token 数 |
+| `AF_MODEL_MAX_TOKENS` | 128000 | 模型最大 token 数 |
 | `AF_COMPACTION_THRESHOLD` | 0.8 | 触发压缩的阈值比例 |
 | `AF_PROTECT_LAST_ROUNDS` | 3 | 保护的最远轮次数 |
 | `AF_FOLD_DIR` | `/tmp/agentflow/folded` | 折叠文件的存储目录 |
@@ -1327,6 +1417,15 @@ coordinator 负责格式化。
 
 统一接口：`exec_command` / `read_file` / `write_file` / `edit_file` / `list_dir` / `fetch_url`，返回 `ExecResult`/`FileContent`/`WriteResult`。沙箱 workspace 前缀读取收敛到 `factory.sandbox_workspace_prefix`（修复渗漏坏味道 W1）。各工具脚本（`harness/tools/*.py`）通过 `sandbox_endpoint` 参数接入该抽象。
 
+**v5.2 演进（2026-08-17）——AF_SANDBOX_WORKSPACE 统一契约**：沙箱路径翻译收归 sandbox 模块，worker 侧（`worker.cpp` Step 1）统一注入 `AF_SANDBOX_WORKSPACE` 环境变量（host 模式 = agent 包根 / e2b 模式 = 沙箱目录），注入链：rpc_handler → agent.cpp session 持久化 + build_runtime_task 回退 → worker.cpp inputs→env 自动注入。消费方统一读该契约：
+
+| 消费方 | 读取方式 |
+|--------|---------|
+| `executors/e2b.py` | `SANDBOX_WORKSPACE = os.environ.get("AF_SANDBOX_WORKSPACE", "/home/user/workspace")`（消硬编码） |
+| `executors/factory.py::sandbox_workspace_prefix` | e2b 模式下读 `AF_SANDBOX_WORKSPACE`（默认 `/home/user/workspace`） |
+| `harness/tools/bash.py` | cwd 默认值 = `AF_SANDBOX_WORKSPACE`（缺省兜底 agent 包根） |
+| `skills_loader.py` | e2b 模式下复用 `factory.sandbox_workspace_prefix()` 做 skills_base 路径翻译（消除第二处独立取值） |
+
 #### 8.6.2 span 可观测性（trace/）
 
 替代散落的 `emit_event` 成对事件，提供结构化生命周期 span：
@@ -1347,11 +1446,13 @@ v5 引入，让 agent 包可订阅运行时生命周期事件并干预：
 | 组件 | 职责 |
 |------|------|
 | `events.py` | 27 项可观测性事件目录 + `INTERVENABLE_EVENTS`（5 个可干预事件） |
-| `mounts.py` | 14 项挂载点（`<node>.<before\|after>_<action>`），before 可注入/阻断，after 可检查/改写 |
+| `mounts.py` | 16 项挂载点（`<node>.<before\|after>_<action>`），before 可注入/阻断，after 可检查/改写 |
 | `hooks/registry.py` | `HookRegistry` 进程级订阅表（`register`/`handlers_for`） |
 | `hooks/loader.py` | `load_hooks_from_dir` 从 `{agent}/harness/hooks/` 加载 handler（校验签名/事件名） |
 | `hooks/engine.py` | `trigger(event, payload, can_intervene, ctx)` 分发；handler 返回 dict → 合并 payload；抛异常 → 隔离不阻断（H-3） |
 | `context.py` | `AgentContext`（messages/artifacts/blocked/block_reason）——handler 注入/修改/阻断的载体 |
+
+**v5.1 演进（2026-08-16）——coordinator v1/v2 事件拆分**：`coordinator.before/after_llm_call` 拆分为 `coordinator_v1.before/after_llm_call`（v1 决策循环）与 `coordinator_v2.before/after_llm_call`（v2 agent_loop 直接执行工具）——共用一个事件名会让 hook 无法区分触发来源（v1 `current_round` vs v2 `round_i+1`），挂载点目录 14→16 项；`coordinator_decide.py` 改用 V1 事件、`coordinator_agent_loop.py` 改用 V2 事件；`preload_user_context` hook（双副本）的 HOOK_EVENTS 扩展为 skill_executor + coordinator_v1 + coordinator_v2 三事件（任一触发首轮注入预加载上下文）。
 
 设计文档：`docs/design/features/hooks/hook-system.md`（含不变量 H-1~H-5）。
 
@@ -1374,6 +1475,8 @@ v5 引入，让 agent 包可订阅运行时生命周期事件并干预：
 - **skill_executor → subagent（远期演进）**：skill_executor 聚焦为**委派执行**职责，类似业界的 subagent——只在被明确委派时执行具体任务并回传结果，不再是"被 coordinator 反复冷启动拉起的对等节点"
 
 **当前状态**：⚠️ **草案/实验**——目前仅实现了 **coordinator 自循环**（`coordinator_agent_loop.py`）作为实验验证，因为这涉及架构与业务语义的重新定义（skill 从"独立 workflow"变为"harness 工具集合"、daemon re-trigger 链弱化）。尚未全量切换；若后期设计达成一致，**skill_executor 应改名为 subagent executor**（届时同步更新本文档、`agent-runtime.md`、`coordinator-as-agent-loop.md` 与代码模块名）。
+
+**v5.1 演进（2026-08-16）**：v2 已接入工具并行批处理——`coordinator_agent_loop.py` 复用 `tool_policies.execute_in_batches`（与 skill_executor 同款，L907-942 同款逻辑，L568-595），工具按只读/写分类并发执行。
 
 | 维度 | v1（coordinator_decide） | v2（coordinator_agent_loop） |
 |------|-------------------------|------------------------------|
@@ -1504,6 +1607,34 @@ skills:
 
 ### 10.1 单 skill 场景
 
+**完整数据流时序（场景视图 · UML 顺序图）**：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant CD as coordinator_decide.py<br/>（coordinator 节点）
+    participant DB as DataBus
+    participant FR as 框架<br/>（next_skills 管线 / launch_skill_task）
+    participant SE as skill_executor.py<br/>（skill-runner 节点）
+
+    U->>CD: 用户请求（AF_INPUT）
+    CD->>CD: LLM 决策 → run_skills tool_call
+    CD->>DB: put dispatch:dialogue:round:i<br/>（skill_name / prompt / load_skills）
+    CD->>DB: put next_skills → 框架接管
+    FR->>FR: parse_next_skills → launch_skill_task
+    FR->>SE: 调度 skill workflow（exec_skill_key 路由）
+    SE->>DB: 读 dispatch manifest（skill_name / prompt / load_skills）
+    SE->>SE: LLM while-loop（工具执行：read_file / bash / ...）
+    SE->>DB: 写 skill_result:skill_name
+    SE-->>FR: workflow_completed
+    FR->>FR: pending_skills_count → 0
+    FR->>CD: re-trigger coordinator<br/>（completed_skill_name / skill_success）
+    CD->>DB: 读 skill 结果
+    CD->>CD: LLM 评估 → 无 tool_call → 最终 response
+    CD-->>U: 最终回复
+```
+
 ```
 用户: "审查 src/agent/agent.cpp 的并发安全性"
 
@@ -1572,6 +1703,40 @@ T5  Coordinator Loop (第二轮)
 ```
 
 ### 10.2 并行多 skill 场景
+
+**并行多 skill 时序（进程视图 · UML 顺序图，par 并行分支）**：
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as 用户
+    participant CD as coordinator_decide.py
+    participant DB as DataBus
+    participant FR as 框架<br/>（next_skills 管线）
+    participant SE1 as skill_executor 进程 A<br/>（code-review）
+    participant SE2 as skill_executor 进程 B<br/>（web-search）
+
+    U->>CD: 用户请求
+    CD->>CD: LLM 决策 → run_skills（2 个 skill）
+    CD->>DB: 写 dispatch manifest × 2
+    CD->>DB: 写 next_skills（code-review + web-search）
+    FR->>FR: parse_next_skills → launch_skill_task × 2
+    par 并行执行（pending_skills_count=2）
+        FR->>SE1: 调度 skill workflow（exec_skill_key 路由）
+        FR->>SE2: 调度 skill workflow（exec_skill_key 路由）
+        SE1->>DB: 读 dispatch manifest
+        SE2->>DB: 读 dispatch manifest
+        SE1->>SE1: LLM while-loop（工具执行）
+        SE2->>SE2: LLM while-loop（工具执行）
+        SE1->>DB: 写 skill_result:code-review
+        SE2->>DB: 写 skill_result:web-search
+    end
+    FR->>FR: pending_skills_count → 0
+    FR->>CD: re-trigger coordinator
+    CD->>DB: 聚合两个 skill 结果
+    CD->>CD: LLM 评估 → 无 tool_call → 最终 response
+    CD-->>U: 最终回复
+```
 
 ```
 用户: "审查代码安全性并搜索相关 CVE"
@@ -1645,7 +1810,7 @@ packages/agentflow-runtime/src/agentflow_runtime/
 ├── skills_loader.py                  # SKILL.md 加载（parse_agent_md / load_skill_md / load_skills_from_list）
 ├── context.py                        # AgentContext — hook handler 干预载体（messages/artifacts/blocked）
 ├── events.py                         # 生命周期事件目录（27 项可观测性事件 + span 名 + INTERVENABLE_EVENTS）
-├── mounts.py                         # hook 挂载点目录（14 项 <node>.<before|after>_<action>）
+├── mounts.py                         # hook 挂载点目录（16 项 <node>.<before|after>_<action>，coordinator v1/v2 拆分后）
 ├── observability.py                  # emit_event（转调 span_event，兼容入口）
 ├── parse_af_input.py                 # AF_INPUT 协议解析（stream + messages）
 ├── round_reminder.py                 # 轮次预算提醒注入
@@ -1716,12 +1881,86 @@ packages/agentflow-runtime/src/agentflow_runtime/
     └── ...
 ```
 
+**模块依赖图（开发视图 · UML 包图语义）**：
+
+```mermaid
+flowchart TB
+    subgraph ENTRY["入口节点"]
+        CD["coordinator_decide.py<br/>（v1 事件驱动，run_skills 委派）"]
+        CAL["coordinator_agent_loop.py<br/>（v2 Agent Loop，直接调工具）"]
+        SE["skill_executor.py<br/>（LLM while-loop + re-export 拆分）"]
+    end
+    subgraph SHARED["共享逻辑"]
+        CC["coordinator_common.py<br/>（v1/v2 单一真相源）"]
+    end
+    subgraph CORE["核心支撑"]
+        LLM["llm_call.py"]
+        DBC["databus_client.py"]
+        SKL["skills_loader.py"]
+        TR["tool_registry.py<br/>（工具加载 + mcp 路由）"]
+        TP["tool_policies.py<br/>（并行批处理）"]
+        AP["artifact_pipeline.py"]
+        COM["compaction.py"]
+        RR["round_reminder.py"]
+        PAI["parse_af_input.py"]
+    end
+    subgraph EXEC["executors/（工具执行抽象层，v4）"]
+        FX["factory.py<br/>（AF_SANDBOX_MODE 选 provider）"]
+        E1["e2b.py"]
+        E2["http.py"]
+        E3["host.py"]
+    end
+    subgraph OBS["可观测性"]
+        OBS1["observability.py"]
+        TRC["trace/emit.py"]
+        REC["recorder.py"]
+    end
+    subgraph HOOK["hooks/（v5）"]
+        HK["engine.py + registry.py + loader.py"]
+        CTX["context.py（AgentContext）"]
+        EV["events.py + mounts.py"]
+    end
+    subgraph HARNESS["harness/"]
+        MCP["mcp/mcp_bridge.py"]
+        TOOLS["tools/（领域工具集）"]
+    end
+
+    CD --> LLM
+    CD --> DBC
+    CD --> CC
+    CAL --> LLM
+    CAL --> CC
+    CAL --> TR
+    SE --> LLM
+    SE --> DBC
+    SE --> SKL
+    SE --> TR
+    SE --> AP
+    SE --> COM
+    SE --> RR
+    SE --> PAI
+    SE --> FX
+    TR --> MCP
+    FX --> E1
+    FX --> E2
+    FX --> E3
+    OBS1 --> TRC
+    REC --> DBC
+    HK --> CTX
+    HK --> EV
+    MCP --> TOOLS
+```
+
+**依赖要点**：`coordinator_decide` / `coordinator_agent_loop` / `skill_executor` 三个入口经 `llm_call` + `databus_client` 依赖基础设施；v1/v2 共享逻辑收口 `coordinator_common`（单一真相源）；skill_executor 经 `executors/factory` 路由到三端 provider（AF_SANDBOX_MODE）；hooks 经 `context` 干预载体 + `events/mounts` 目录；observability 转调 `trace/emit`（消除双轨）；`tool_registry` 依赖 `harness/mcp`（mcp__ 路由）。
+
 ### 12.2 Agent 包（生产示例 — outfit-assistant）
 
 ```
 examples/agent/outfit-assistant/
-├── agent.json                        # agent package 配置（§9.1）
+├── agent.json                        # agent package 配置（§9.1，业务版：OutfitAssistantAgent 3.2.0）
 ├── agent.md                          # system prompt + 模型配置（§9.2）
+├── package.json                      # agent 注册 ID（daemon agent.list/execute 寻址依据，name=outfit-assistant）
+├── manifest.jsonc                    # 资产 manifest（common/manifest.py 生成/加载，includes/excludes 规则）
 ├── coordinator_workflow.json         # coordinator workflow
 ├── skill_workflow.json               # 通用 skill workflow
 ├── dummy_pre_skill_workflow.json     # 预处理 hook workflow
@@ -1736,18 +1975,18 @@ examples/agent/outfit-assistant/
 │   ├── dummy_pre_skill.sh
 │   └── common/                       # 共享工具
 ├── harness/
-│   ├── tools/                        # agent 包级领域工具（覆盖 pip 包 builtin，可选）
-│   ├── skills/                       # 技能文档目录
+│   ├── hooks/                        # agent 包级 hook handler（v5 新增，load_hooks_from_dir 加载）
+│   │   └── preload_user_context.py   # 首轮注入用户预加载上下文的 hook（双副本：hooks/ + tools/）
+│   ├── skills/                       # 技能文档目录（平铺，无 minimax_outfit_skills 子目录）
 │   │   ├── dummy_pre_skill/
 │   │   │   └── SKILL.md
 │   │   ├── skill-runner/
 │   │   │   └── SKILL.md
-│   │   ├── minimax_outfit_skills/
-│   │   │   ├── outfit-stylist/
-│   │   │   ├── forge-image-gen/
-│   │   │   └── video-gen/
+│   │   ├── outfit-stylist/           # 穿搭搭配技能（含 changelog/evals/references/scripts）
+│   │   ├── forge-image-gen/          # 图片生成技能（含 references/scripts）
+│   │   ├── video-gen/                # 视频生成技能（含 scripts）
 │   │   └── ...
-│   └── hooks/                        # agent 包级 hook handler（v5 新增，load_hooks_from_dir 加载）
+│   └── tools/                        # agent 包级工具（当前仅 preload_user_context hook 副本，领域工具在 pip 包）
 ├── .agentfoundry/                    # 运行态数据（memory/assets，运行时生成）
 ├── workspace/                        # 沙箱工作区镜像（运行时生成，按 user/client 分目录）
 ├── tests/                            # 集成测试
@@ -1765,6 +2004,7 @@ examples/agent/outfit-assistant/
 ├── .env / .env.example
 ├── requirements.txt
 ├── setup.sh                            # 自动创建 .venv + pip install agentflow-runtime
+├── setup-host.sh                       # 宿主机侧环境准备（sandbox 相关依赖）
 └── README.md
 ```
 
@@ -1772,16 +2012,21 @@ examples/agent/outfit-assistant/
 
 ```
 frontend/bridge/templates/agent_template/harness_agent/
-├── agent.json                          # 通用配置（同 §9.1）
+├── agent.json                          # 通用配置（GeneralHarnessAgent 3.0.0，同 §9.1）
 ├── agent.md                            # 通用模板 agent.md
+├── package.json                        # 模板注册 ID（name=harness-agent，daemon 寻址依据）
 ├── coordinator_workflow.json
 ├── skill_workflow.json
 ├── dummy_pre_skill_workflow.json
 ├── nodes/                              # 入口 wrapper
-├── harness/skills/                     # 技能目录（空，用户按需添加）
-├── harness/tools/                      # 领域工具集
+├── harness/
+│   ├── skills/                         # 技能目录（含 dummy_pre_skill + skill-runner 基础 SKILL.md，业务技能按需添加）
+│   └── tools/                          # 领域工具集（当前仅 understand_image.bak 占位）
 ├── tests/                              # 集成测试模板
-└── setup.sh
+├── .env / .env.example
+├── requirements.txt
+├── setup.sh
+└── setup-host.sh
 ```
 
 ---
@@ -1825,7 +2070,7 @@ frontend/bridge/templates/agent_template/harness_agent/
 
 ### 14.2 单元测试
 
-`packages/agentflow-runtime/tests/`（v4 大幅扩充，28 个文件）：
+`packages/agentflow-runtime/tests/`（v4 大幅扩充，30 个文件）：
 
 | 测试 | 验证点 |
 |------|--------|
@@ -1909,10 +2154,18 @@ frontend/bridge/templates/agent_template/harness_agent/
 
 | 步骤 | 内容 | 状态 | 实际文件 |
 |------|------|------|---------|
-| 1 | **Hook 机制**（生命周期事件订阅/干预/阻断） | ✅ | `hooks/registry.py`（HookRegistry 订阅表）、`hooks/loader.py`（load_hooks_from_dir）、`hooks/engine.py::trigger`（分发 + 干预回写 + 异常隔离）；`events.py`（27 项事件目录 + INTERVENABLE_EVENTS）；`mounts.py`（14 项 before/after 挂载点）；`context.py`（AgentContext 干预载体） |
+| 1 | **Hook 机制**（生命周期事件订阅/干预/阻断） | ✅ | `hooks/registry.py`（HookRegistry 订阅表）、`hooks/loader.py`（load_hooks_from_dir）、`hooks/engine.py::trigger`（分发 + 干预回写 + 异常隔离）；`events.py`（27 项事件目录 + INTERVENABLE_EVENTS）；`mounts.py`（16 项 before/after 挂载点）；`context.py`（AgentContext 干预载体） |
 | 2 | **Coordinator v2（Agent Loop 形态）** | ✅ | `coordinator_agent_loop.py`——不暴露 `run_skills`，直接暴露 harness 工具集，进程内 messages 保留上下文；`AF_COORDINATOR_VERSION` 环境变量切换 v1/v2（`coordinator_decide.sh` 读取） |
 | 3 | **共用逻辑收敛（霰弹式修复）** | ✅ | v1/v2 共享的 `parse_agent_md`/`append_artifacts_markdown`/`llm_error_response`/`save_session_messages`/`bind_package_paths`/`put_e2e_response`/`is_empty_llm_response` 收口到 `coordinator_common.py`（单一真相源 F4） |
 | 4 | **工具并行批处理** | ✅ | `tool_policies.py::execute_in_batches`——工具按只读/写分类、并发执行（`_max_workers` 控制） |
+
+### 15.6 Phase 5 后续演进（v5.1 / v5.2）— ✅ 已完成
+
+| 步骤 | 内容 | 状态 | 实际文件 |
+|------|------|------|---------|
+| 1 | **coordinator v1/v2 事件拆分**（挂载点 14→16 项） | ✅ | `mounts.py`：`coordinator.before/after_llm_call` 拆为 `coordinator_v1.*`（v1 决策循环）与 `coordinator_v2.*`（v2 agent_loop）；`coordinator_decide.py` 改用 V1 事件、`coordinator_agent_loop.py` 改用 V2 事件；`preload_user_context` hook（双副本：`outfit-assistant/harness/hooks/` + `harness/tools/`）HOOK_EVENTS 扩展为 skill_executor + coordinator_v1 + coordinator_v2 三事件 |
+| 2 | **Coordinator v2 接入工具并行批处理** | ✅ | `coordinator_agent_loop.py` 复用 `tool_policies.execute_in_batches`（与 skill_executor L907-942 同款，L568-595） |
+| 3 | **AF_SANDBOX_WORKSPACE 统一契约**（路径翻译收归 sandbox 模块） | ✅ | 注入链：rpc_handler → agent.cpp session 持久化 + build_runtime_task 回退 → worker.cpp inputs→env 自动注入；`e2b.py` 消硬编码、`bash.py`/`skills_loader.py` 统一读契约（详见 §8.6.1） |
 
 ---
 
@@ -1933,10 +2186,12 @@ frontend/bridge/templates/agent_template/harness_agent/
 
 | 版本 | 刷新时间 | 刷新人 | 刷新内容 |
 |------|---------|--------|---------|
-| v1.0 | 2026-06-30 | AtomCode | 初始版本：完整设计文档，含节点数据交互、coordinator/skill runtime、工具绑定、数据流时序、实施计划 |
-| v1.1 | 2026-07-02 | AtomCode | 状态从 tbd → implemented；实施计划更新为实施情况，指向 `outfit-assistant/` 实际实现；修复 MiniMax endpoint 域名错误（minimax.io → minimaxi.com）|
-| v2.0 | 2026-07-14 | AtomCode | 全面更新反映 v3+ 架构演进：单 skill-runner 路由 + dispatch manifest 数据交互 + dummy_pre_skill hook；代码包化到 `packages/agentflow-runtime/` 的 pip 包模型；新增 §8 Agent Task Loop 外循环与 Function Calling 内循环 章节（含上下文压缩、预算感知、中断处理、双循环协作等 15 项机制）；§11 框架侧改动标记为"已放弃"；§12 目录结构重写为 pip 包 + agent 包 + 模板三层；§15 实施情况重写为 Phase 1/2/3 三阶段；代码精简（大段实现代码替换为 Mermaid 流程图 + 核心骨架）；新增 §18 技术债务 |
-| v3.0 | 2026-08-15 | AtomCode | 全量同步到 v5 实现：§1.3 补 v4/v5 演进脉络（结构拆分/executors/trace/hook/coordinator v2/共用逻辑收敛）；§2.5 统一执行器表述修正（general_task_executor → coordinator_decide + skill_executor + coordinator_common）；§6.1 框架协议模板位置修正（prompts/coordinator.py）；§6.6/§7.5 workflow command 修正为实际节点文件；§7.2 工具绑定更新（_LocalToolRegistry + MCP + v2 工具集）；§9.1 agent.json 移除已废弃 config_dir 字段；§10 时序修正节点名；§12 目录结构重写为 v5 实际（新增 executors/hooks/trace/coordinator_agent_loop/coordinator_common/tool_registry/tool_policies/artifact_pipeline/compaction/skills_loader/context/events/mounts/recorder/env_loader/manifest/find_runtime_package/sandbox_patch + harness/mcp/）；新增 §8.6 v4/v5 新增机制章节；§15 实施情况新增 Phase 4/5；§18 技术债务 #6 标记已解决（Hook 机制已实现） |
+| v1.0 | 2026-06-30 | - | 初始版本：完整设计文档，含节点数据交互、coordinator/skill runtime、工具绑定、数据流时序、实施计划 |
+| v1.1 | 2026-07-02 | - | 状态从 tbd → implemented；实施计划更新为实施情况，指向 `outfit-assistant/` 实际实现；修复 MiniMax endpoint 域名错误（minimax.io → minimaxi.com）|
+| v2.0 | 2026-07-14 | - | 全面更新反映 v3+ 架构演进：单 skill-runner 路由 + dispatch manifest 数据交互 + dummy_pre_skill hook；代码包化到 `packages/agentflow-runtime/` 的 pip 包模型；新增 §8 Agent Task Loop 外循环与 Function Calling 内循环 章节（含上下文压缩、预算感知、中断处理、双循环协作等 15 项机制）；§11 框架侧改动标记为"已放弃"；§12 目录结构重写为 pip 包 + agent 包 + 模板三层；§15 实施情况重写为 Phase 1/2/3 三阶段；代码精简（大段实现代码替换为 Mermaid 流程图 + 核心骨架）；新增 §18 技术债务 |
+| v3.0 | 2026-08-15 | - | 全量同步到 v5 实现：§1.3 补 v4/v5 演进脉络（结构拆分/executors/trace/hook/coordinator v2/共用逻辑收敛）；§2.5 统一执行器表述修正（general_task_executor → coordinator_decide + skill_executor + coordinator_common）；§6.1 框架协议模板位置修正（prompts/coordinator.py）；§6.6/§7.5 workflow command 修正为实际节点文件；§7.2 工具绑定更新（_LocalToolRegistry + MCP + v2 工具集）；§9.1 agent.json 移除已废弃 config_dir 字段；§10 时序修正节点名；§12 目录结构重写为 v5 实际（新增 executors/hooks/trace/coordinator_agent_loop/coordinator_common/tool_registry/tool_policies/artifact_pipeline/compaction/skills_loader/context/events/mounts/recorder/env_loader/manifest/find_runtime_package/sandbox_patch + harness/mcp/）；新增 §8.6 v4/v5 新增机制章节；§15 实施情况新增 Phase 4/5；§18 技术债务 #6 标记已解决（Hook 机制已实现） |
+| v3.1 | 2026-08-20 | - | 全量同步到 v5.1/v5.2 实现：§1.3 补 v5.1（hooks v1/v2 事件拆分 14→16 挂载点、v2 接入 execute_in_batches）与 v5.2（AF_SANDBOX_WORKSPACE 统一契约）演进脉络；§8.6.1 补 AF_SANDBOX_WORKSPACE 契约消费方表；§8.6.3 挂载点 14→16 项 + v1/v2 事件拆分说明；§8.6.4 补 v2 接入 execute_in_batches；§12.1 mounts.py 注释 16 项；§12.2 outfit 目录修正（skills 平铺无 minimax_outfit_skills 子目录、补 package.json/manifest.jsonc/setup-host.sh/preload_user_context hook 双副本）；§12.3 模板目录补 package.json/setup-host.sh/skills 基础 SKILL.md；§15 新增 Phase 5 后续演进（15.6） |
+| v3.2 | 2026-08-20 | - | 与代码一致性校验（042~044 三文档比对）：§14.2 tests 文件数修正（28 → 30 个，实际 `packages/agentflow-runtime/tests/*.py` 计数）；头部日期刷新至 2026-08-20 |
 
 ---
 
@@ -1949,4 +2204,4 @@ frontend/bridge/templates/agent_template/harness_agent/
 | 3 | **RAG 服务未接入** | P3 | 缺少对业务知识库的检索增强生成能力，Agent 仅依赖 LLM 训练数据和 SKILL.md 静态知识 |
 | 4 | **系统内模型推理服务接口未跑通生产** | **P1** | `llm_uds_client.py` / `openai_compatible_client.py` 已实现但端到端生产链路未验证，双客户端并存增加维护成本 |
 | 5 | **上下文压缩策略可优化** | P3 | 硬压缩默认关闭、折叠文件无自动展开、压缩阈值全局配置未区分节点类型、保护轮次静态配置未动态调整 |
-| ~~6~~ | ~~**Hook 系统消费端待完善**~~ | ~~P3~~ | **✅ 已解决（2026-08-15）**：v5 已实现完整 Hook 机制——`hooks/registry.py`（Handler 注册/分发）、`hooks/loader.py`（从 `harness/hooks/` 加载）、`hooks/engine.py::trigger`（条件触发 + 干预回写 + 异常隔离）、`events.py`（27 项事件目录 + INTERVENABLE_EVENTS）、`mounts.py`（14 项 before/after 挂载点）、`context.py`（AgentContext 阻断载体）；异步回调仍缺，如有需求另立债务 |
+| ~~6~~ | ~~**Hook 系统消费端待完善**~~ | ~~P3~~ | **✅ 已解决（2026-08-15）**：v5 已实现完整 Hook 机制——`hooks/registry.py`（Handler 注册/分发）、`hooks/loader.py`（从 `harness/hooks/` 加载）、`hooks/engine.py::trigger`（条件触发 + 干预回写 + 异常隔离）、`events.py`（27 项事件目录 + INTERVENABLE_EVENTS）、`mounts.py`（16 项 before/after 挂载点，v5.1 起 coordinator v1/v2 事件拆分）、`context.py`（AgentContext 阻断载体）；异步回调仍缺，如有需求另立债务 |
