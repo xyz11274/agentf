@@ -80,6 +80,65 @@ def sandbox_server(monkeypatch: pytest.MonkeyPatch):
             pass
 
 
+def test_server_does_not_reenter_inherited_endpoint(tmp_path):
+    """HTTP server 作为执行链终点时，不得把 runtime tool 再路由回自身。
+
+    复现 daemon 启动环境：子进程继承 ``AF_SANDBOX_MODE=local`` 及自身
+    endpoint。修复前一次 bash 调用会递归占满 8 个请求槽，最终返回
+    ``Concurrent tool execution limit reached (8)``。
+    """
+    port = _find_free_port()
+    endpoint = f"http://127.0.0.1:{port}"
+    child_env = os.environ.copy()
+    child_env["AF_SANDBOX_MODE"] = "local"
+    child_env["AF_SANDBOX_ENDPOINT"] = endpoint
+    child_env["AF_SANDBOX_WORKSPACE"] = str(tmp_path)
+
+    proc = subprocess.Popen(
+        [sys.executable, _SERVER, "--port", str(port), "--host", "127.0.0.1"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=str(tmp_path),
+        env=child_env,
+    )
+    try:
+        import requests
+
+        response = None
+        for _ in range(50):
+            try:
+                response = requests.post(
+                    f"{endpoint}/exec",
+                    json={
+                        "tool": "bash",
+                        "tool_params": {"command": "printf terminal-ok"},
+                        "opts": {},
+                    },
+                    timeout=3,
+                )
+                break
+            except requests.ConnectionError:
+                if proc.poll() is not None:
+                    pytest.fail(f"server exited: {proc.stderr.read().decode()}")
+                time.sleep(0.1)
+        else:
+            pytest.fail("server startup timeout")
+
+        assert response is not None
+        result = response.json()
+        assert response.status_code == 200
+        assert result.get("exit_code") == 0, result
+        assert result.get("stdout") == "terminal-ok", result
+        assert "Concurrent tool execution limit" not in result.get("stderr", "")
+    finally:
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2)
+
+
 # AC-US2-003: write_file 写 output.txt 落沙箱内 workdir，宿主机对应 workdir 下可见
 def test_write_file_lands_in_workdir(sandbox_server):
     """AC-US2-003 + TC-SBOX-004: write_file 落 workdir。

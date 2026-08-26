@@ -25,10 +25,11 @@ def executor():
     return HTTPExecutor(endpoint=ENDPOINT)
 
 
-def _mock_resp(data: dict):
+def _mock_resp(data: dict, status_code: int = 200):
     """Build a mock response object whose .json() returns *data*."""
     m = MagicMock()
     m.json.return_value = data
+    m.status_code = status_code
     return m
 
 
@@ -81,6 +82,38 @@ def test_exec_command_invalid_json_returns_error(executor):
 
     assert isinstance(result, ExecResult)
     assert result.error is not None
+
+
+def test_http_503_propagates_error_to_read_file(executor):
+    """HTTP overload must not look like a successful empty file read."""
+    resp = _mock_resp(
+        {
+            "stdout": "",
+            "stderr": "Concurrent tool execution limit reached (8). Retry later.",
+            "exit_code": 1,
+        },
+        status_code=503,
+    )
+    with patch(_POST, return_value=resp):
+        result = executor.read_file("/some/path.txt")
+
+    assert result.content == ""
+    assert result.error is not None
+    assert "HTTP 503" in result.error
+    assert "Concurrent tool execution limit reached" in result.error
+
+
+def test_nonzero_exit_propagates_error_to_write_file(executor):
+    """A JSON ExecResult failure must retain its stderr as WriteResult.error."""
+    resp = _mock_resp(
+        {"stdout": "", "stderr": "permission denied", "exit_code": 1}
+    )
+    with patch(_POST, return_value=resp):
+        result = executor.write_file("/out.txt", "content")
+
+    assert result.success is False
+    assert result.error is not None
+    assert "permission denied" in result.error
 
 
 # ---------------------------------------------------------------------------

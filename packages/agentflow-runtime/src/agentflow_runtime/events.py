@@ -55,6 +55,7 @@ SPAN_COORDINATOR_LLM_ROUND = "coordinator.llm_round"
 SPAN_COORDINATOR_SKILL_DISPATCH = "coordinator.skill_dispatch"
 SPAN_SKILL_EXECUTOR_EXECUTE = "skill_executor.execute"
 SPAN_SKILL_EXECUTOR_LLM_ROUND = "skill_executor.llm_round"
+SPAN_SKILL_EXECUTOR_TOOL_BATCH = "skill_executor.tool_batch"
 
 
 # ── 全量事件目录（事件名，唯一；不含 span 名）──
@@ -79,6 +80,7 @@ ALL_SPAN_NAMES: frozenset[str] = frozenset({
     SPAN_COORDINATOR_SKILL_DISPATCH,
     SPAN_SKILL_EXECUTOR_EXECUTE,
     SPAN_SKILL_EXECUTOR_LLM_ROUND,
+    SPAN_SKILL_EXECUTOR_TOOL_BATCH,
 })
 
 

@@ -689,6 +689,20 @@ def main():
         stream=sys.stderr,
     )
 
+    # HTTP server 是沙箱工具执行链的终点。若继续继承 worker 用来访问本服务的
+    # endpoint，runtime tool 会再次 POST 回本服务，递归耗尽并发槽。
+    inherited_mode = os.environ.get("AF_SANDBOX_MODE", "")
+    inherited_endpoint = os.environ.get("AF_SANDBOX_ENDPOINT", "")
+    os.environ["AF_SANDBOX_MODE"] = "none"
+    os.environ.pop("AF_SANDBOX_ENDPOINT", None)
+    if inherited_mode or inherited_endpoint:
+        logging.info(
+            "sandbox_http_server cleared upstream executor routing "
+            "(inherited_mode=%s endpoint_present=%s)",
+            inherited_mode or "<unset>",
+            bool(inherited_endpoint),
+        )
+
     if args.parent_pid:
         threading.Thread(target=_parent_monitor, args=(args.parent_pid,), daemon=True).start()
 

@@ -31,11 +31,11 @@ def test_event_catalog_unique() -> None:
 
 
 def test_span_names_unique() -> None:
-    """emit_span 生命周期单元名目录唯一（4 项）。"""
+    """emit_span 生命周期单元名目录唯一（5 项）。"""
     from agentflow_runtime import events as ev
 
-    assert len(ev.ALL_SPAN_NAMES) == 4
-    assert len(set(ev.ALL_SPAN_NAMES)) == 4
+    assert len(ev.ALL_SPAN_NAMES) == 5
+    assert len(set(ev.ALL_SPAN_NAMES)) == 5
     # span 名与事件名不冲突（各自命名空间）
     assert ev.ALL_SPAN_NAMES.isdisjoint(ev.ALL_EVENTS)
 

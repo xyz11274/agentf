@@ -116,13 +116,20 @@ def _make_llm_response(content: str = "", tool_calls=None, finish: str = "stop")
     }
 
 
-def test_multiple_tool_calls_execute_in_parallel(skill_env):
+def test_multiple_tool_calls_execute_in_parallel(skill_env, tmp_path):
     """P1 落地：一次返回 2 个只读 tool_calls 时，混合批次并行执行（时间戳重叠）。
 
     batch 策略（tool_policies.execute_in_batches）将只读工具（echo 命令）归入
     同一并行批次 → 时间戳重叠。写工具仍串行（见 test_tool_policies.py）。
     """
     from agentflow_runtime import skill_executor
+    from agentflow_runtime.trace.span_context import SpanContext
+    from agentflow_runtime.trace.span_writer import SpanWriter
+
+    skill_env.setenv("AF_SKIP_DOTENV", "1")
+    skill_env.setenv("AF_TRACE_OUTPUT_DIR", str(tmp_path))
+    SpanContext.current().clear()
+    skill_env.setattr(SpanWriter, "_instance", None)
 
     fake_bus = _FakeDataBus()
     fake_reg = _FakeToolRegistry()
@@ -137,9 +144,15 @@ def test_multiple_tool_calls_execute_in_parallel(skill_env):
         _make_llm_response(content="完成"),
     ]
 
+    def fake_hook_trigger(event_name, payload, **kwargs):
+        if event_name == skill_executor.hook_mounts.SKILL_EXECUTOR_AFTER_TOOL_CALL:
+            return {**payload, "results": []}
+        return payload
+
     with patch.object(skill_executor, "DataBusClient", return_value=fake_bus), \
          patch.object(skill_executor, "call_llm", side_effect=llm_side_effect) as mock_llm, \
          patch.object(skill_executor, "emit_event"), \
+         patch.object(skill_executor, "hook_trigger", side_effect=fake_hook_trigger), \
          patch.object(skill_executor, "AgentConfig") as mock_cfg, \
          patch.object(skill_executor, "_LocalToolRegistry", return_value=fake_reg), \
          patch.object(skill_executor, "_ensure_artifacts_in_package",
@@ -177,8 +190,24 @@ def test_multiple_tool_calls_execute_in_parallel(skill_env):
 
     # ③ LLM 被调用 2 轮（工具轮 + 最终答案轮）
     assert mock_llm.call_count == 2, f"call_llm 应 2 轮，实际 {mock_llm.call_count}"
+    second_round_messages = mock_llm.call_args_list[1].args[0]
+    tool_messages = [m for m in second_round_messages if m.get("role") == "tool"]
+    assert [m["tool_call_id"] for m in tool_messages] == ["call_1", "call_2"]
 
     # ④ 结果写入 DataBus（status=completed）
     put_calls = dict(fake_bus.put_calls)
     result = json.loads(put_calls["skill_result:skill-runner"])
     assert result["status"] == "completed"
+
+    # ⑤ 主线程记录一个 tool_batch span，父节点是 skill span。
+    span_files = list(tmp_path.rglob("python_spans_*.ndjson"))
+    spans = [json.loads(line) for path in span_files for line in path.read_text().splitlines()]
+    skill_spans = [s for s in spans if s["name"] == skill_executor.hook_events.SPAN_SKILL_EXECUTOR_EXECUTE]
+    tool_spans = [s for s in spans if s["name"] == skill_executor.hook_events.SPAN_SKILL_EXECUTOR_TOOL_BATCH]
+    assert len(skill_spans) == 1
+    assert len(tool_spans) == 1
+    assert tool_spans[0]["kind"] == "TOOL"
+    assert tool_spans[0]["parent_span_id"] == skill_spans[0]["span_id"]
+    assert tool_spans[0]["status"] == "OK"
+    assert tool_spans[0]["tags"]["tool_count"] == "2"
+    assert SpanContext.current().current_span_id() == ""

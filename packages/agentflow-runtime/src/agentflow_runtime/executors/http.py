@@ -75,7 +75,43 @@ class HTTPExecutor(ToolExecutor):
                 },
                 timeout=timeout + 5,
             )
-            return resp.json()
+            data = resp.json()
+            if not isinstance(data, dict):
+                return {
+                    "error": (
+                        "Sandbox returned invalid JSON object: "
+                        f"expected object, got {type(data).__name__}"
+                    ),
+                    "tool": tool,
+                }
+
+            # /exec 对 HTTP 失败和工具失败都返回 ExecResult JSON。并发过载时
+            # 响应为 HTTP 503 + exit_code=1 + stderr，但没有 error 字段；这里
+            # 必须补齐错误，否则 read_file 会变成空内容成功，write_file 会变成
+            # ``success=false, error=null``。
+            raw_error = data.get("error")
+            if isinstance(raw_error, dict):
+                error_text = (
+                    raw_error.get("message")
+                    or raw_error.get("code")
+                    or json.dumps(raw_error, ensure_ascii=False)
+                )
+            else:
+                error_text = str(raw_error) if raw_error else ""
+
+            status_code = resp.status_code
+            exit_code = data.get("exit_code")
+            failed = status_code >= 400 or (
+                exit_code is not None and exit_code != 0
+            )
+            if failed:
+                detail = error_text or str(data.get("stderr") or "").strip()
+                if not detail:
+                    detail = f"exit_code={exit_code}"
+                data["error"] = (
+                    f"Sandbox tool {tool} failed (HTTP {status_code}): {detail}"
+                )
+            return data
         except (
             requests.exceptions.ConnectionError,
             OSError,
