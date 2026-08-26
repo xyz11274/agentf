@@ -168,14 +168,20 @@ def build_graph(events: list[dict]):
             elif not d_keys and d_names and s_name in d_names:
                 matched.append((s, 1))          # 名称+时序兜底，优先级 1
         if matched:
+            # 一个 dispatch 可连多个并行 skill：exec_key 精确匹配的取全部，
+            # 名称兜底只取最近一个（避免跨轮串边）
             matched.sort(key=lambda x: (x[1], x[0].get("ts") or 0))
-            s = matched[0][0]
-            edges.append({
-                "type": "dispatch", "from": d.get("trace_id"), "to": s.get("trace_id"),
-                "skill": (d_names or [""])[0],
-                "exec_key": s.get("data", {}).get("exec_skill_key", "")
-                            or (d_keys[0] if d_keys else ""), "ts": d_ts,
-            })
+            if matched[0][1] == 0:  # 有 exec_key 精确匹配 → 连所有精确匹配的 start
+                picked = [m for m in matched if m[1] == 0]
+            else:
+                picked = [matched[0]]
+            for s, _prio in picked:
+                edges.append({
+                    "type": "dispatch", "from": d.get("trace_id"), "to": s.get("trace_id"),
+                    "skill": (d_names or [""])[0],
+                    "exec_key": s.get("data", {}).get("exec_skill_key", "")
+                                or (d_keys[0] if d_keys else ""), "ts": d_ts,
+                })
 
     ends = [e for e in evs if e.get("type") == "skill.end"]
     restarts = [e for e in evs if e.get("type") == "session.start"

@@ -201,3 +201,5 @@ packages/agentflow-runtime/src/agentflow_runtime.egg-info
 aisf.code-workspace
 
 ###
+
+docs/sessionlog/tests/report.html
