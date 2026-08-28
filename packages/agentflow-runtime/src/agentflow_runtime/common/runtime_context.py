@@ -19,7 +19,8 @@ Two categories of variables live here:
 - **Runtime context** (per-node-execution, changes every call):
   ``AF_SESSION_ID``, ``AF_DIALOGUE_ID``, ``AF_NODE_ID``, ``AF_INPUT``,
   ``AF_COMPLETED_SKILL_NAME``, ``AF_SKILL_SUCCESS``, ``AF_SKILL_RESULT``,
-  ``AF_SKILL_ARTIFACTS``, ``AF_EXEC_SKILL_KEY``, ``AF_DATABUS_UDS_FILE``,
+  ``AF_SKILL_ARTIFACTS``, ``AF_COMPLETED_BATCH_KEY``, ``AF_EXEC_SKILL_KEY``, ``AF_BATCH_ID``,
+  ``AF_DATABUS_UDS_FILE``,
   ``AF_SELF_TASK_ID``, ``AF_SKILL_NAME``
 
 - **Config** (stable across executions):
@@ -110,9 +111,19 @@ def skill_artifacts() -> str:
     return get_env("AF_SKILL_ARTIFACTS")
 
 
+def completed_batch_key() -> str:
+    """Dialogue-scoped DataBus key containing one completed Skill batch."""
+    return get_env("AF_COMPLETED_BATCH_KEY")
+
+
 def exec_skill_key() -> str:
     """DataBus key for the structured skill input payload."""
     return get_env("AF_EXEC_SKILL_KEY")
+
+
+def batch_id() -> str:
+    """Dispatch batch identity shared by sibling Skill executions."""
+    return get_env("AF_BATCH_ID")
 
 
 def databus_uds_file() -> str:
@@ -121,12 +132,12 @@ def databus_uds_file() -> str:
 
 
 def self_task_id() -> str:
-    """Current task ID (currently always ``""`` — known framework gap)."""
+    """Current runtime task ID injected by the framework."""
     return get_env("AF_SELF_TASK_ID")
 
 
 def skill_name() -> str:
-    """Current skill name (currently always ``""`` — known framework gap)."""
+    """Current business skill name when resolved by Skill Executor."""
     return get_env("AF_SKILL_NAME")
 
 

@@ -190,18 +190,14 @@ MMWorkerEngine::ExecutionResponse MMWorkerEngine::execute_code(const ExecutionRe
     exec_config.env_vars.push_back("AF_SANDBOX_ENDPOINT=" + request.sandbox_endpoint);
   }
 
-  // Inject trace context (AF_TRACE_ID + AF_PARENT_SPAN_ID) for Python subprocess.
-  // §6.2 跨进程 span 树：Python 侧 SpanContext 读这两个环境变量建立父链。
-  // C++ 侧改动最小：仅从当前线程 TraceContext 取 trace_id + current span_id 追加 2 个 env_vars。
+  // 传播端到端 trace_id，但不把当前 NODE span 注入为 Python 的父 span。
+  // Workflow trace 当前不保证对应活跃的 TraceManager session；注入一个最终
+  // 不会落盘的 NODE span_id 会制造孤儿父边。父链在 session 生命周期闭合后再恢复。
   {
     auto& tc = runtime::trace::TraceContext::current();
     const std::string& tid = tc.trace_id();
     if(!tid.empty()) {
       exec_config.env_vars.push_back("AF_TRACE_ID=" + tid);
-      const std::string& parent_span = tc.span_id();  // 当前 NODE span 作为 Python 子进程的父
-      if(!parent_span.empty()) {
-        exec_config.env_vars.push_back("AF_PARENT_SPAN_ID=" + parent_span);
-      }
     }
   }
 

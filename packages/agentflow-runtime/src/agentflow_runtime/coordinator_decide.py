@@ -15,9 +15,11 @@ Environment variables (injected by the worker):
   AF_DATABUS_UDS_FILE    — UDS socket for runtime DataBus access
   AF_COMPLETED_SKILL_NAME — Name of the skill that just completed (re-trigger)
   AF_SKILL_SUCCESS       — "true"/"false" whether the skill succeeded
+  AF_COMPLETED_BATCH_KEY — DataBus key containing an ALL-joined Skill batch
 """
 
 import copy
+import hashlib
 import json
 import logging
 import os
@@ -43,6 +45,7 @@ from agentflow_runtime.llm_call import (
 )
 from agentflow_runtime.common.agent_config import AgentConfig
 from agentflow_runtime.common.runtime_context import (
+    completed_batch_key as _completed_batch_key,
     completed_skill_name as _completed_skill_name,
     dialogue_id as _dialogue_id,
     input as _input,
@@ -61,6 +64,7 @@ from agentflow_runtime.parse_af_input import parse_af_input, parse_stream
 from prompts import (
     COORDINATOR_FALLBACK_SYSTEM,
     DECISION_FAILURE_PROMPT,
+    DECISION_PARTIAL_SUCCESS_PROMPT,
     DECISION_SUCCESS_PROMPT,
     PROTOCOL_TEMPLATE,
     RUN_SKILLS_TOOL_DEFINITION,
@@ -190,11 +194,13 @@ def _is_duplicate_dispatch(completed_skill: str, skill_names: list,
     - 同名但 prompt 不同(用户补充信息/新任务指令 → 同 skill 重跑) → 不算重复,放行。
     - last_prompt 缺失(None)时保守按"同名即重复"处理,维持原语义。
     """
-    if not completed_skill or force_requested:
+    if not completed_skill:
         return False
     for _s in skill_names:
         name = _s.get("name") if isinstance(_s, dict) else str(_s)
         if name != completed_skill:
+            continue
+        if force_requested or (isinstance(_s, dict) and _s.get("force") is True):
             continue
         prompt = _s.get("prompt", "") if isinstance(_s, dict) else ""
         if last_prompt is not None and prompt != last_prompt:
@@ -203,34 +209,268 @@ def _is_duplicate_dispatch(completed_skill: str, skill_names: list,
         return True
     return False
 
+def _completed_dispatch_marker_key(
+    dialogue_id: str, skill_name: str, prompt: str
+) -> str:
+    """Return a deterministic key for one completed name+prompt dispatch."""
+    canonical = json.dumps(
+        [skill_name, prompt], ensure_ascii=False, separators=(",", ":")
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"completed_dispatch:{dialogue_id}:{digest}"
 
-def handle_run_skills_call(args: dict, databus: DataBusClient,
+
+def _remember_completed_dispatch(
+    databus: DataBusClient,
+    dialogue_id: str,
+    skill_name: str,
+    prompt: str,
+    *,
+    exec_skill_key: str = "",
+    terminal_status: str = "",
+) -> bool:
+    """Persist an idempotent completion marker without affecting business flow."""
+    if not dialogue_id or not skill_name or not isinstance(prompt, str):
+        return False
+    marker_key = _completed_dispatch_marker_key(dialogue_id, skill_name, prompt)
+    payload = {
+        "skill_name": skill_name,
+        "prompt": prompt,
+        "exec_skill_key": exec_skill_key,
+        "terminal_status": terminal_status,
+    }
+    try:
+        written = databus.put_global(
+            marker_key, json.dumps(payload, ensure_ascii=False)
+        )
+    except Exception as exc:
+        print(
+            f"[flow]   WARN: completed dispatch marker write failed "
+            f"key={marker_key}: {exc}",
+            file=sys.stderr,
+        )
+        return False
+    if not written:
+        print(
+            f"[flow]   WARN: completed dispatch marker returned false "
+            f"key={marker_key}",
+            file=sys.stderr,
+        )
+    return bool(written)
+
+
+def _remember_completed_batch_dispatches(
+    databus: DataBusClient, dialogue_id: str, batch: dict
+) -> int:
+    """Resolve exact prompts from dispatch manifests and mark terminal branches."""
+    remembered = 0
+    for result in batch.get("results", []):
+        exec_skill_key = result.get("exec_skill_key", "")
+        try:
+            raw_manifest = databus.get_global(exec_skill_key)
+            manifest = (
+                json.loads(raw_manifest)
+                if isinstance(raw_manifest, str)
+                else raw_manifest
+            )
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            print(
+                f"[flow]   WARN: completed dispatch manifest decode failed "
+                f"key={exec_skill_key}: {exc}",
+                file=sys.stderr,
+            )
+            continue
+        except Exception as exc:
+            print(
+                f"[flow]   WARN: completed dispatch manifest read failed "
+                f"key={exec_skill_key}: {exc}",
+                file=sys.stderr,
+            )
+            continue
+        if not isinstance(manifest, dict):
+            print(
+                f"[flow]   WARN: completed dispatch manifest missing "
+                f"key={exec_skill_key}",
+                file=sys.stderr,
+            )
+            continue
+        skill_name = manifest.get("skill_name")
+        prompt = manifest.get("prompt")
+        if not isinstance(skill_name, str) or not isinstance(prompt, str):
+            print(
+                f"[flow]   WARN: completed dispatch manifest identity invalid "
+                f"key={exec_skill_key}",
+                file=sys.stderr,
+            )
+            continue
+        if _remember_completed_dispatch(
+            databus,
+            dialogue_id,
+            skill_name,
+            prompt,
+            exec_skill_key=exec_skill_key,
+            terminal_status=str(result.get("skill_status", "")),
+        ):
+            remembered += 1
+    return remembered
+
+
+def _was_dispatch_completed(
+    databus: DataBusClient,
+    dialogue_id: str,
+    skill_name: str,
+    prompt: str,
+) -> bool:
+    """Check the exact dialogue-scoped completion marker; read failure is open."""
+    if not dialogue_id or not skill_name or not isinstance(prompt, str):
+        return False
+    marker_key = _completed_dispatch_marker_key(dialogue_id, skill_name, prompt)
+    try:
+        return databus.get_global(marker_key) not in (None, "")
+    except Exception as exc:
+        print(
+            f"[flow]   WARN: completed dispatch marker read failed "
+            f"key={marker_key}: {exc}",
+            file=sys.stderr,
+        )
+        return False
+
+def _find_persisted_completed_dispatch(
+    databus: DataBusClient,
+    dialogue_id: str,
+    skill_specs: list,
+    force_all: bool,
+) -> str:
+    """Return the first exact completed dispatch not covered by a force escape."""
+    if force_all or not databus.is_connected():
+        return ""
+    for spec in skill_specs:
+        if not isinstance(spec, dict) or spec.get("force") is True:
+            continue
+        skill_name = spec.get("name", "")
+        if _was_dispatch_completed(
+            databus, dialogue_id, skill_name, spec.get("prompt", "")
+        ):
+            return skill_name
+    return ""
+
+
+def _validate_run_skills_args(
+    args: Any,
+    available_skills: list[str] | None = None,
+) -> str:
+    """Return an actionable validation error, or an empty string when valid."""
+    if not isinstance(args, dict):
+        return "arguments must be a JSON object"
+
+    skills = args.get("skills")
+    if not isinstance(skills, list) or not skills:
+        return "skills must be a non-empty array"
+    if "reason" in args and not isinstance(args["reason"], str):
+        return "reason must be a string"
+    if "force" in args and not isinstance(args["force"], bool):
+        return "force must be a boolean"
+
+    allowed = set(available_skills) if available_skills is not None else None
+    for index, spec in enumerate(skills):
+        path = f"skills[{index}]"
+        if not isinstance(spec, dict):
+            return f"{path} must be an object"
+
+        name = spec.get("name")
+        if not isinstance(name, str) or not name.strip():
+            return f"{path}.name must be a non-empty string"
+        if allowed is not None and name not in allowed:
+            choices = ", ".join(available_skills or []) or "(none)"
+            return f"{path}.name '{name}' is unavailable; allowed: {choices}"
+
+        prompt = spec.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            return f"{path}.prompt must be a non-empty string"
+
+        load_skills = spec.get("load_skills", [])
+        if (
+            not isinstance(load_skills, list)
+            or any(not isinstance(item, str) or not item.strip() for item in load_skills)
+        ):
+            return f"{path}.load_skills must be an array of non-empty strings"
+        if allowed is not None:
+            for load_index, load_name in enumerate(load_skills):
+                if load_name not in allowed:
+                    choices = ", ".join(available_skills or []) or "(none)"
+                    return f"{path}.load_skills[{load_index}] '{load_name}' is unavailable; allowed: {choices}"
+
+        if "force" in spec and not isinstance(spec["force"], bool):
+            return f"{path}.force must be a boolean"
+        if "exec_skill_key" in spec and not isinstance(spec["exec_skill_key"], str):
+            return f"{path}.exec_skill_key must be a string"
+
+    return ""
+
+
+def _invalid_run_skills_result(error: str) -> dict:
+    """Build the normal Tool result used by the Coordinator correction loop."""
+    return {
+        "status": "invalid_arguments",
+        "batch_id": "",
+        "skills": [],
+        "exec_skill_keys": [],
+        "dispatches": [],
+        "rejected": [{
+            "request_index": 0,
+            "stage": "argument_validation",
+            "error": error,
+        }],
+        "warnings": [],
+        "error": error,
+        "response": f"run_skills 参数无效：{error}。请修正参数后重新决策。",
+    }
+
+
+def handle_run_skills_call(args: Any, databus: DataBusClient,
                            session_id: str, dialogue_id: str) -> str:
     """Intercept run_skills tool_call → write dispatch info to DataBus → trigger framework.
 
     All skills are routed through a single 'skill-runner' task.
     Real skill identity is carried by exec_skill_key → DataBus dispatch manifest.
     """
+    validation_error = _validate_run_skills_args(args)
+    if validation_error:
+        return json.dumps(_invalid_run_skills_result(validation_error), ensure_ascii=False)
+
     skills = args.get("skills", [])
     reason = args.get("reason", "")
 
     # ① Write per-skill dispatch manifest to DataBus (must be BEFORE next_skills)
-    #    Key: dispatch:{N} → value: {skill_name, prompt, load_skills}
+    #    Key: dispatch:{N} → value includes the complete invocation identity and
+    #    arguments needed by the Skill process and trajectory recorder.
     next_skills_specs = []
+    accepted_specs = []
+    rejected = []
     dispatch_round = uuid.uuid4().hex[:12]
+    batch_id = f"batch:{dialogue_id}:{dispatch_round}"
     for i, spec in enumerate(skills, 1):
         dispatch_key = f"dispatch:{dialogue_id}:{dispatch_round}:{i}"
         dispatch_data = {
             "skill_name": spec["name"],
             "prompt": spec.get("prompt", ""),
             "load_skills": spec.get("load_skills", []),
+            "batch_id": batch_id,
+            "request_index": i,
+            "force": bool(spec.get("force", False)),
         }
-        databus.put_global(dispatch_key, json.dumps(dispatch_data, ensure_ascii=False))
-
-        # 记录该 skill 最近一次 dispatch 的 prompt(供 re-trigger 时 F2 双维度
-        # 重复判定对比:同名 skill + 同 prompt 才算重复,新 prompt 放行)。
-        databus.put_global(f"last_prompt:{dialogue_id}:{spec['name']}",
-                           spec.get("prompt", ""))
+        manifest_written = databus.put_global(
+            dispatch_key,
+            json.dumps(dispatch_data, ensure_ascii=False),
+        )
+        if not manifest_written:
+            rejected.append({
+                "name": spec["name"],
+                "request_index": i,
+                "stage": "manifest_write",
+                "error": "DataBus put_global returned false",
+            })
+            continue
 
         # ② All skills go through 'skill-runner', differentiated by exec_skill_key
         # force 是 coordinator 显式 opt-in 的"重排逃生口"（builtin_dispatcher.h:28
@@ -243,17 +483,84 @@ def handle_run_skills_call(args: dict, databus: DataBusClient,
         next_skills_specs.append({
             "name": "skill-runner",
             "exec_skill_key": dispatch_key,
+            "batch_id": batch_id,
             "force": bool(spec.get("force", False)),
         })
+        accepted_specs.append((i, spec, dispatch_key))
+
+
+    if not accepted_specs:
+        return json.dumps({
+            "status": "dispatch_failed",
+            "batch_id": batch_id,
+            "skills": [],
+            "exec_skill_keys": [],
+            "dispatches": [],
+            "rejected": rejected,
+            "warnings": [],
+            "message": "没有 skill 成功写入 dispatch manifest，请重新决策。",
+            "reason": reason,
+        }, ensure_ascii=False)
 
     # ③ Write next_skills → framework takes over scheduling
-    databus.put("next_skills", json.dumps(next_skills_specs, ensure_ascii=False))
+    next_skills_written = databus.put(
+        "next_skills",
+        json.dumps(next_skills_specs, ensure_ascii=False),
+    )
+    if not next_skills_written:
+        rejected.extend({
+            "name": spec["name"],
+            "request_index": request_index,
+            "stage": "next_skills_write",
+            "error": "DataBus put returned false",
+        } for request_index, spec, _ in accepted_specs)
+        return json.dumps({
+            "status": "dispatch_failed",
+            "batch_id": batch_id,
+            "skills": [],
+            "exec_skill_keys": [],
+            "dispatches": [],
+            "rejected": rejected,
+            "warnings": [],
+            "message": "next_skills 提交失败，没有 skill 被框架调度，请重新决策。",
+            "reason": reason,
+        }, ensure_ascii=False)
+
+    # next_skills 提交成功后再记录 last_prompt，避免未实际调度的 skill
+    # 污染下一轮 F2 重复判定。该辅助写入失败不回滚已经提交的调度。
+    warnings = []
+    for _, spec, _ in accepted_specs:
+        prompt_written = databus.put_global(
+            f"last_prompt:{dialogue_id}:{spec['name']}",
+            spec.get("prompt", ""),
+        )
+        if not prompt_written:
+            warnings.append({
+                "name": spec["name"],
+                "stage": "last_prompt_write",
+                "error": "DataBus put_global returned false",
+            })
 
     # ④ Return confirmation
+    accepted_names = [spec["name"] for _, spec, _ in accepted_specs]
+    dispatches = [{
+        "request_index": request_index,
+        "skill_name": spec["name"],
+        "prompt": spec.get("prompt", ""),
+        "load_skills": list(spec.get("load_skills", [])),
+        "force": bool(spec.get("force", False)),
+        "exec_skill_key": dispatch_key,
+        "batch_id": batch_id,
+    } for request_index, spec, dispatch_key in accepted_specs]
     return json.dumps({
-        "status": "dispatched",
-        "skills": [s["name"] for s in skills],
-        "message": f"已调度 {len(skills)} 个 skill，等待执行结果...",
+        "status": "partially_dispatched" if rejected else "dispatched",
+        "batch_id": batch_id,
+        "skills": accepted_names,
+        "exec_skill_keys": [key for _, _, key in accepted_specs],
+        "dispatches": dispatches,
+        "rejected": rejected,
+        "warnings": warnings,
+        "message": f"已调度 {len(accepted_names)} 个 skill，等待执行结果...",
         "reason": reason
     }, ensure_ascii=False)
 
@@ -282,6 +589,259 @@ def build_skill_completion_message(completed_skill: str, skill_success: str,
         skill_results=json.dumps(skill_results, ensure_ascii=False, indent=2),
         decision=decision,
     )
+
+
+def attach_skill_completion_result(
+    history: Any,
+    completion_message: str,
+    batch_id: str = "",
+    skill_names: list[str] | None = None,
+) -> list[dict]:
+    """Attach an asynchronous completion as the result of its run_skills call.
+
+    A successful dispatch already left an assistant tool call and a temporary
+    dispatch ACK in session history. Replace that ACK in place so the next LLM
+    request contains one protocol-valid tool result instead of a fabricated
+    user turn. If history could not be restored, reconstruct the missing pair
+    rather than sending an orphan tool message.
+    """
+    if not isinstance(history, list):
+        history = []
+    normalized_names = [str(name) for name in (skill_names or []) if name]
+
+    for message in reversed(history):
+        if not isinstance(message, dict) or message.get("role") != "tool":
+            continue
+        try:
+            dispatch_ack = json.loads(message.get("content", ""))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(dispatch_ack, dict) or dispatch_ack.get("status") not in {
+            "dispatched", "partially_dispatched",
+        }:
+            continue
+        ack_batch_id = str(dispatch_ack.get("batch_id", ""))
+        if batch_id and ack_batch_id != batch_id:
+            continue
+        message["content"] = json.dumps({
+            "status": "execution_completed",
+            "batch_id": batch_id or ack_batch_id,
+            "skills": normalized_names or dispatch_ack.get("skills", []),
+            "dispatch": dispatch_ack,
+            "result": completion_message,
+        }, ensure_ascii=False)
+        return history
+
+    # Recorder/DataBus history may be unavailable after a transient failure.
+    # Reconstruct a valid assistant→tool pair so Skill output still stays in
+    # the low-trust tool channel and the provider never receives an orphan.
+    identity = batch_id or ",".join(normalized_names) or "legacy-skill-completion"
+    synthetic_id = f"af_completion_{uuid.uuid5(uuid.NAMESPACE_URL, identity).hex[:16]}"
+    history.append({
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [{
+            "id": synthetic_id,
+            "type": "function",
+            "function": {
+                "name": "run_skills",
+                "arguments": json.dumps({
+                    "skills": [
+                        {"name": name, "prompt": "", "load_skills": []}
+                        for name in normalized_names
+                    ],
+                    "reason": "restored asynchronous completion",
+                }, ensure_ascii=False),
+            },
+        }],
+    })
+    history.append({
+        "role": "tool",
+        "tool_call_id": synthetic_id,
+        "content": json.dumps({
+            "status": "execution_completed",
+            "batch_id": batch_id,
+            "skills": normalized_names,
+            "result": completion_message,
+        }, ensure_ascii=False),
+    })
+    return history
+
+def _mark_completed_batch_consumed(
+    databus: DataBusClient, completed_batch_key: str, max_attempts: int = 3
+) -> None:
+    """写入 Batch 消费屏障；DataBus 返回 False 时做有界重试。"""
+    marker_key = f"{completed_batch_key}:consumed"
+    for attempt in range(1, max_attempts + 1):
+        if databus.put(marker_key, "true"):
+            return
+        print(
+            f"[flow]   WARN: mark batch consumed returned false "
+            f"attempt={attempt}/{max_attempts} key={marker_key}",
+            file=sys.stderr,
+        )
+    raise ValueError(
+        f"completed batch '{completed_batch_key}' consumed marker write failed"
+    )
+
+
+def parse_completed_batch(raw_batch: Any, completed_batch_key: str) -> dict:
+    """Parse and validate one C++ ALL-join result from the dialogue DataBus."""
+    try:
+        batch = json.loads(raw_batch) if isinstance(raw_batch, str) else raw_batch
+    except (json.JSONDecodeError, TypeError) as exc:
+        raise ValueError(
+            f"completed batch '{completed_batch_key}' is not valid JSON"
+        ) from exc
+    if not isinstance(batch, dict) or not isinstance(batch.get("results"), list):
+        raise ValueError(
+            f"completed batch '{completed_batch_key}' must contain a results array"
+        )
+    if not batch["results"]:
+        raise ValueError(
+            f"completed batch '{completed_batch_key}' has an empty results array"
+        )
+    if not batch.get("batch_id"):
+        raise ValueError(
+            f"completed batch '{completed_batch_key}' has no batch_id"
+        )
+    for index, result in enumerate(batch["results"]):
+        if not isinstance(result, dict) or not result.get("exec_skill_key"):
+            raise ValueError(
+                f"completed batch '{completed_batch_key}' result[{index}] "
+                "has no exec_skill_key"
+            )
+    return batch
+
+
+def build_skill_batch_completion_message(batch: dict) -> str:
+    """Build one existing-format completion message for an entire Skill batch."""
+    normalized_results = []
+    completed_names = []
+    all_succeeded = True
+    any_succeeded = False
+    for result in batch["results"]:
+        name = (
+            result.get("business_skill_name")
+            or result.get("framework_skill_name")
+            or result.get("exec_skill_key")
+        )
+        completed_names.append(name)
+        skill_result = result.get("skill_result", "")
+        if isinstance(skill_result, str):
+            try:
+                skill_result = json.loads(skill_result)
+            except (json.JSONDecodeError, TypeError):
+                pass
+        succeeded = result.get("skill_success") is True
+        all_succeeded = all_succeeded and succeeded
+        any_succeeded = any_succeeded or succeeded
+        normalized_results.append({
+            "skill": name,
+            "exec_skill_key": result.get("exec_skill_key", ""),
+            "workflow_execution_id": result.get("workflow_execution_id", ""),
+            "workflow_success": result.get("workflow_success") is True,
+            "skill_success": succeeded,
+            "skill_status": result.get("skill_status", ""),
+            "result": skill_result,
+            "artifacts_json": result.get("artifacts_json", "[]"),
+        })
+
+    if all_succeeded:
+        batch_success = "true"
+        decision = DECISION_SUCCESS_PROMPT
+    elif any_succeeded:
+        batch_success = "partial"
+        decision = DECISION_PARTIAL_SUCCESS_PROMPT
+    else:
+        batch_success = "false"
+        decision = DECISION_FAILURE_PROMPT
+    completed_label = (
+        f"batch {batch['batch_id']} [" + ", ".join(completed_names) + "]"
+    )
+    return SKILL_COMPLETION_TEMPLATE.format(
+        completed_skill=completed_label,
+        skill_success=batch_success,
+        skill_results=json.dumps(normalized_results, ensure_ascii=False, indent=2),
+        decision=decision,
+    )
+
+
+def collect_batch_artifacts(batch: dict) -> str:
+    """Flatten per-Skill artifact arrays for the existing final-response path."""
+    artifacts = []
+    for result in batch["results"]:
+        raw_artifacts = result.get("artifacts_json", "[]")
+        if isinstance(raw_artifacts, str):
+            try:
+                raw_artifacts = json.loads(raw_artifacts)
+            except (json.JSONDecodeError, TypeError):
+                raw_artifacts = []
+        if isinstance(raw_artifacts, list):
+            artifacts.extend(raw_artifacts)
+    return json.dumps(artifacts, ensure_ascii=False)
+
+
+_DIALOGUE_ARTIFACTS_KEY = "_coordinator_artifacts"
+
+
+def merge_dialogue_artifacts(
+    databus: DataBusClient, current_artifacts: Any, max_attempts: int = 3
+) -> str:
+    """Merge current completion artifacts into a dialogue-scoped stable ledger."""
+
+    def _parse(raw: Any) -> list:
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                return []
+        return raw if isinstance(raw, list) else []
+
+    previous = []
+    connected = databus.is_connected()
+    if connected:
+        try:
+            previous = _parse(databus.get(_DIALOGUE_ARTIFACTS_KEY))
+        except Exception as exc:
+            print(
+                f"[flow]   WARN: read dialogue artifacts failed: {exc}",
+                file=sys.stderr,
+            )
+
+    merged = []
+    seen = set()
+    for item in previous + _parse(current_artifacts):
+        try:
+            identity = json.dumps(
+                item, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+        except (TypeError, ValueError):
+            continue
+        if identity in seen:
+            continue
+        seen.add(identity)
+        merged.append(item)
+
+    serialized = json.dumps(merged, ensure_ascii=False)
+    if connected:
+        for attempt in range(1, max_attempts + 1):
+            try:
+                if databus.put(_DIALOGUE_ARTIFACTS_KEY, serialized):
+                    break
+            except Exception as exc:
+                print(
+                    f"[flow]   WARN: write dialogue artifacts failed: {exc}",
+                    file=sys.stderr,
+                )
+            print(
+                f"[flow]   WARN: persist dialogue artifacts returned false "
+                f"attempt={attempt}/{max_attempts}",
+                file=sys.stderr,
+            )
+    return serialized
 
 
 # ---------------------------------------------------------------------------
@@ -336,11 +896,16 @@ def execute():
     skill_success = _skill_success()
     completed_skill_result = _skill_result()
     completed_skill_artifacts = _skill_artifacts()
+    completed_batch_key = _completed_batch_key()
 
     max_iterations = AgentConfig.coordinator_max_iterations()
     max_completion_tokens = AgentConfig.max_completion_tokens()
 
     frontmatter, agent_md_body = parse_agent_md(AGENT_MD_PATH)
+    agent_definition_sha256 = hashlib.sha256(json.dumps(
+        {"frontmatter": frontmatter, "body": agent_md_body},
+        ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
+    ).encode("utf-8")).hexdigest()
     model_cfg = frontmatter.get("model", {})
     # model can be a plain string (e.g. "MiniMax-M3") or a dict {name: "..."}
     agent_md_model = model_cfg if isinstance(model_cfg, str) else model_cfg.get("name", "")
@@ -353,47 +918,32 @@ def execute():
 
     # ── hooks: 加载 agent 包 harness/hooks（幂等，无 hooks 目录则零开销）──
     load_hooks_from_dir(os.path.join(AGENT_PACKAGE_DIR, "harness", "hooks"))
-    # ── hooks: 回合级入口挂载点（观察；messages 尚未构造，ctx 空上下文）──
-    hook_trigger(hook_mounts.AGENT_DIALOGUE_START, {
-        "session_id": session_id,
-        "dialogue_id": dialogue_id,
-        "trigger_type": "skill_completion" if completed_skill else "first",
-    }, ctx=AgentContext())
+    _dialogue_end_emitted = False
 
-    # ── flow debug ──
-    emit_event(hook_events.COORDINATOR_TRIGGER, {
-        "trigger_type": "skill_completion" if completed_skill else "first",
-        "completed_skill": completed_skill,
-        "skill_success": skill_success,
-        "model": model_name,
-        "max_iterations": max_iterations,
-    })
-    _t1 = time.time()
-
-    databus = DataBusClient()
-    recorder = get_recorder()
-    # Read stream flag from AF_INPUT (bridge sends {"stream": bool, "messages": [...]})
-    stream = parse_stream(_input())
-    # Persist to DataBus for downstream nodes (skill_executor, etc.)
-    if stream:
-        databus.put("stream", "true")
-
-    # 读取刚完成的 skill 最近一次 dispatch 的 prompt(F2 双维度重复判定用:
-    # 同名 skill + 同 prompt 才算重复;同名不同 prompt = 新任务放行)。
-    last_prompt = None
-    if completed_skill and databus.is_connected():
+    def _emit_dialogue_end_once(status, response_text, ctx=None, can_intervene=False):
+        """Emit one dialogue terminal event without changing business output."""
+        nonlocal _dialogue_end_emitted
+        if _dialogue_end_emitted:
+            return
+        _dialogue_end_emitted = True
+        end_ctx = ctx or AgentContext()
         try:
-            last_prompt = databus.get_global(f"last_prompt:{dialogue_id}:{completed_skill}")
+            hook_trigger(hook_mounts.AGENT_DIALOGUE_END, {
+                "session_id": session_id,
+                "dialogue_id": dialogue_id,
+                "status": status,
+                "response_text": response_text,
+                "elapsed_s": round(time.time() - _t0, 1),
+            }, can_intervene=can_intervene, ctx=end_ctx)
         except Exception as exc:
-            print(f"[flow]   WARN: read last_prompt failed: {exc}", file=sys.stderr)
-            last_prompt = None
-
-    # ── Coordinator iteration tracking ──
-    # First trigger (no completed_skill or dummy_pre_skill hook) starts a new
-    # dialogue → reset counter to 1. Re-trigger (skill completed) → +1.
-    # This prevents stale counter from a previous dialogue leaking into a new
-    # one within the same session.
-    is_first_trigger = not (completed_skill and completed_skill != "dummy_pre_skill")
+            # 轨迹钩子失败不能改变 Coordinator 已确定的最终响应。
+            print(f"[flow]   WARN: dialogue end hook failed: {exc}", file=sys.stderr)
+    is_completion_trigger = bool(
+        completed_batch_key
+        or (completed_skill and completed_skill != "dummy_pre_skill")
+    )
+    databus = DataBusClient()
+    is_first_trigger = not is_completion_trigger
     if is_first_trigger:
         current_round = 1
     else:
@@ -402,20 +952,209 @@ def execute():
             current_round = int(raw_round) + 1 if raw_round is not None else 1
         except (ValueError, TypeError):
             current_round = 1
+    trigger_type = "skill_completion" if is_completion_trigger else "first"
+    activation_payload = {
+        "session_id": session_id,
+        "dialogue_id": dialogue_id,
+        "input": raw_input if is_first_trigger else "",
+        "trigger_type": trigger_type,
+        "completed_skill": completed_skill if is_completion_trigger else "",
+        "completed_batch_key": completed_batch_key,
+        "skill_success": skill_success,
+        "coordinator_version": "v1",
+        "code_revision": (
+            os.environ.get("AF_CODE_REVISION")
+            or os.environ.get("GIT_COMMIT", "")
+        ),
+        "agent_definition_sha256": agent_definition_sha256,
+        "model": model_name,
+        "max_iterations": max_iterations,
+        "max_completion_tokens": max_completion_tokens,
+        "activation_index": current_round,
+        "skill_completion_index": max(0, current_round - 1),
+    }
+
+    # Dialogue start is emitted once; every event-driven re-entry is a separate
+    # Coordinator activation and uses the existing coordinator.trigger event.
+    if not is_completion_trigger:
+        hook_trigger(
+            hook_mounts.AGENT_DIALOGUE_START,
+            dict(activation_payload),
+            ctx=AgentContext(),
+        )
+    hook_trigger(
+        hook_events.COORDINATOR_TRIGGER,
+        dict(activation_payload),
+        ctx=AgentContext(),
+    )
+    emit_event(hook_events.COORDINATOR_TRIGGER, dict(activation_payload))
+    _t1 = time.time()
+
+    recorder = get_recorder()
+    completed_batch = None
+    completed_batch_message = ""
+    completed_skill_names: list[str] = []
+    if completed_batch_key:
+        try:
+            raw_batch = databus.get(completed_batch_key)
+            if raw_batch in (None, ""):
+                raise ValueError(
+                    f"completed batch '{completed_batch_key}' was not found"
+                )
+            completed_batch = parse_completed_batch(raw_batch, completed_batch_key)
+            for result in completed_batch["results"]:
+                name = (
+                    result.get("business_skill_name")
+                    or result.get("framework_skill_name")
+                    or result.get("exec_skill_key")
+                )
+                if name and name not in completed_skill_names:
+                    completed_skill_names.append(name)
+            successful_count = sum(
+                r.get("skill_success") is True
+                for r in completed_batch["results"]
+            )
+            skill_success = (
+                "true" if successful_count == len(completed_batch["results"])
+                else ("partial" if successful_count else "false")
+            )
+            batch_result_payload = {
+                "dialogue_id": dialogue_id,
+                "completed_batch_key": completed_batch_key,
+                "batch_id": completed_batch["batch_id"],
+                "status": skill_success,
+                "successful_count": successful_count,
+                "total_count": len(completed_batch["results"]),
+                "results": completed_batch["results"],
+            }
+            hook_trigger(
+                hook_events.COORDINATOR_BATCH_RESULT,
+                dict(batch_result_payload),
+                ctx=AgentContext(),
+            )
+            emit_event(
+                hook_events.COORDINATOR_BATCH_RESULT,
+                dict(batch_result_payload),
+            )
+            completed_skill_artifacts = merge_dialogue_artifacts(
+                databus, collect_batch_artifacts(completed_batch)
+            )
+            # Accept the aggregate before any later early-return guard (for
+            # example max_iterations). C++ final gating waits for this marker;
+            # delaying it until message assembly can otherwise deadlock a
+            # successfully parsed terminal Batch.
+            completed_batch_message = build_skill_batch_completion_message(
+                completed_batch
+            )
+            if databus.is_connected():
+                _remember_completed_batch_dispatches(databus, dialogue_id, completed_batch)
+                _mark_completed_batch_consumed(databus, completed_batch_key)
+        except (ValueError, TypeError) as exc:
+            error_text = f"内部错误：并行 Skill 批次结果读取失败（{exc}）"
+            emit_event(hook_events.COORDINATOR_LLM_ERROR, {
+                "error": str(exc),
+                "completed_batch_key": completed_batch_key,
+            }, level="ERROR")
+            if databus.is_connected():
+                try:
+                    consume_error_key = f"{completed_batch_key}:consume_error"
+                    if not databus.put(consume_error_key, str(exc)):
+                        print(
+                            f"[flow]   ERROR: mark batch consume error returned false "
+                            f"key={consume_error_key}",
+                            file=sys.stderr,
+                        )
+                    if not databus.put("skill_failed", "true"):
+                        print(
+                            "[flow]   WARN: mark skill_failed returned false",
+                            file=sys.stderr,
+                        )
+                except Exception as marker_exc:
+                    print(
+                        f"[flow]   WARN: mark batch consume error failed: "
+                        f"{marker_exc}",
+                        file=sys.stderr,
+                    )
+            _emit_dialogue_end_once("batch_result_error", error_text)
+            print(json.dumps({
+                "response": error_text,
+                "status": "batch_result_error",
+            }, ensure_ascii=False))
+            put_e2e_response(databus, error_text)
+            print(f"[timing] batch_result_error total={time.time()-_t0:.1f}s",
+                  file=sys.stderr)
+            return
+
+    if (
+        completed_batch is None
+        and completed_skill
+        and completed_skill != "dummy_pre_skill"
+    ):
+        completed_skill_artifacts = merge_dialogue_artifacts(
+            databus, completed_skill_artifacts
+        )
+    # Read stream flag from AF_INPUT (bridge sends {"stream": bool, "messages": [...]})
+    stream = parse_stream(_input())
+    # Persist to DataBus for downstream nodes (skill_executor, etc.)
+    if stream:
+        databus.put("stream", "true")
+
+    # 读取刚完成的 skill 最近一次 dispatch 的 prompt(F2 双维度重复判定用:
+    # 同名 skill + 同 prompt 才算重复;同名不同 prompt = 新任务放行)。
+    last_prompts: dict[str, Any] = {}
+    completed_names_for_guard = (
+        completed_skill_names
+        if completed_skill_names
+        else ([completed_skill] if completed_skill else [])
+    )
+    if completed_names_for_guard and databus.is_connected():
+        try:
+            for name in completed_names_for_guard:
+                last_prompts[name] = databus.get_global(
+                    f"last_prompt:{dialogue_id}:{name}"
+                )
+        except Exception as exc:
+            print(f"[flow]   WARN: read last_prompt failed: {exc}", file=sys.stderr)
+            last_prompts = {}
+
+    if (
+        completed_batch is None
+        and completed_skill
+        and completed_skill != "dummy_pre_skill"
+        and databus.is_connected()
+    ):
+        completed_prompt = last_prompts.get(completed_skill)
+        if isinstance(completed_prompt, str):
+            _remember_completed_dispatch(
+                databus, dialogue_id, completed_skill, completed_prompt,
+                terminal_status=skill_success,
+            )
+
+    # ── Coordinator iteration tracking ──
+    # round remains the compatibility control counter. Separate trace-only
+    # counters below distinguish activation, LLM decision, completion and
+    # in-activation correction semantics.
+    raw_decision_index = (
+        databus.get("_coordinator_decision_index")
+        if not is_first_trigger and databus.is_connected() else None
+    )
+    try:
+        _decision_index = (
+            int(raw_decision_index)
+            if raw_decision_index is not None else max(0, current_round - 1)
+        )
+    except (ValueError, TypeError):
+        _decision_index = max(0, current_round - 1)
     if databus.is_connected():
         databus.put("_coordinator_round", str(current_round))
+        databus.put("_coordinator_decision_index", str(_decision_index))
 
     # ── Max iterations guard: break before LLM call ──
     if current_round > max_iterations:
         emit_event(hook_events.COORDINATOR_MAX_ITERATIONS, {"round": current_round, "max_iterations": max_iterations}, level="WARN")
         response_text = llm_error_response(completed_skill_artifacts)
         # ── hooks: 回合级出口（观察，不可干预——固定错误文案）──
-        hook_trigger(hook_mounts.AGENT_DIALOGUE_END, {
-            "session_id": session_id,
-            "dialogue_id": dialogue_id,
-            "status": "max_iterations",
-            "response_text": response_text,
-        }, ctx=AgentContext())
+        _emit_dialogue_end_once("max_iterations", response_text)
         output = {"response": response_text, "status": "max_iterations_reached"}
         print(json.dumps(output, ensure_ascii=False))
         put_e2e_response(databus, response_text)
@@ -461,17 +1200,29 @@ def execute():
 
     # Construct this trigger's input
     # dummy_pre_skill is a passthrough hook — treat as first trigger (no result to evaluate)
-    if completed_skill and completed_skill != "dummy_pre_skill":
-        # Re-trigger: use persisted history + skill completion message
+    if completed_batch is not None:
+        history = attach_skill_completion_result(
+            history,
+            completed_batch_message,
+            batch_id=str(completed_batch.get("batch_id", "")),
+            skill_names=completed_skill_names,
+        )
         messages.extend(history)
+    elif completed_skill and completed_skill != "dummy_pre_skill":
+        # Re-trigger: use persisted history + skill completion message
         # collect_skill_results is a 30s databus.get() fallback — skip when env var has the data.
         collected = [] if completed_skill_result else collect_skill_results(databus, [completed_skill])
-        messages.append({"role": "user", "content": build_skill_completion_message(
-            completed_skill,
-            skill_success,
-            completed_skill_result,
-            collected,
-        )})
+        history = attach_skill_completion_result(
+            history,
+            build_skill_completion_message(
+                completed_skill,
+                skill_success,
+                completed_skill_result,
+                collected,
+            ),
+            skill_names=[completed_skill],
+        )
+        messages.extend(history)
     else:
         # First trigger: use the messages array from AF_INPUT directly
         # (bridge has already assembled history + this turn's user input)
@@ -528,13 +1279,26 @@ def execute():
                 "tool_loop_round": _tool_loop_round,
                 "max_iterations": max_iterations,
             }, level="WARN")
-            response_text = "已达协调工具循环上限，基于已有结果输出。"
+            response_text = append_artifacts_markdown(
+                "已达协调工具循环上限，基于已有结果输出。",
+                completed_skill_artifacts,
+            )
             output = {"response": response_text, "status": "tool_loop_max_rounds"}
+            _emit_dialogue_end_once("tool_loop_max_rounds", response_text)
             print(json.dumps(output, ensure_ascii=False))
             put_e2e_response(databus, response_text)
             print(f"[timing] tool_loop_max_rounds total={time.time()-_t0:.1f}s", file=sys.stderr)
             return
 
+        _decision_index += 1
+        if databus.is_connected():
+            databus.put("_coordinator_decision_index", str(_decision_index))
+        _trace_indices = {
+            "activation_index": current_round,
+            "decision_index": _decision_index,
+            "skill_completion_index": max(0, current_round - 1),
+            "internal_tool_correction_index": _tool_loop_round - 1,
+        }
         _t4 = time.time()
         print(f"[timing] llm_call_start={_t4-_t0:.1f}s", file=sys.stderr)
         # ── Progress: coordinator is calling LLM (may take >60s) ──
@@ -560,12 +1324,9 @@ def execute():
                     }, level="WARN")
                     response_text = "对话已被取消"
                     # ── hooks: 回合级出口（观察，不可干预——固定中断文案）──
-                    hook_trigger(hook_mounts.AGENT_DIALOGUE_END, {
-                        "session_id": session_id,
-                        "dialogue_id": dialogue_id,
-                        "status": "interrupted",
-                        "response_text": response_text,
-                    }, ctx=AgentContext(messages=messages))
+                    _emit_dialogue_end_once(
+                        "interrupted", response_text, AgentContext(messages=messages)
+                    )
                     output = {"response": response_text, "status": "interrupted"}
                     # Bridge 从 stdout JSON 读 coordinator 响应（与正常完成路径同款，
                     # 见行 551-552 print(json.dumps(output))）。中断必须走同一通道，
@@ -585,6 +1346,11 @@ def execute():
             SpanKind.LLM, hook_events.SPAN_COORDINATOR_LLM_ROUND,
             tags={
                 "round": str(current_round),
+                "activation_index": str(_trace_indices["activation_index"]),
+                "decision_index": str(_trace_indices["decision_index"]),
+                "internal_tool_correction_index": str(
+                    _trace_indices["internal_tool_correction_index"]
+                ),
                 "messages": str(len(messages)),
                 "model": model_name,
                 "stream": str(stream),
@@ -598,6 +1364,7 @@ def execute():
                 "round": current_round,
                 "model": model_name,
                 "messages_count": len(messages),
+                **_trace_indices,
             }, can_intervene=True, ctx=_llm_ctx)
             if _llm_ctx.blocked:
                 # 阻断本轮 LLM 调用：直接走最终响应出口（无 tool_call 语义）
@@ -612,6 +1379,7 @@ def execute():
                     max_completion_tokens=max_completion_tokens,
                     stream=stream,
                     source="coordinator",
+                    round_i=current_round,
                     extra_body={
                         "temperature": AgentConfig.llm_temperature(),
                         "top_p": AgentConfig.llm_top_p(),
@@ -624,9 +1392,19 @@ def execute():
             _t5 = time.time()
             print(f"[timing] llm_call_end={_t5-_t0:.1f}s (llm={_t5-_t4:.1f}s)", file=sys.stderr)
             # ── hooks: LLM 调用后挂载点（检查/改写决策，v1）──
+            _llm_call_id = raw.get("_agentflow_call_id", "")
             hook_trigger(hook_mounts.COORDINATOR_V1_AFTER_LLM_CALL, {
                 "round": current_round,
+                "call_id": _llm_call_id,
                 "raw_choices": raw.get("choices", [{}])[0] if raw.get("choices") else {},
+                **_trace_indices,
+            }, ctx=_llm_ctx)
+            _effective_response = recorder.record_effective_response(_llm_call_id, raw)
+            hook_trigger(hook_events.COORDINATOR_LLM_RESULT, {
+                "round": current_round,
+                "call_id": _llm_call_id,
+                "response": _effective_response,
+                **_trace_indices,
             }, ctx=_llm_ctx)
 
             # ── Observability: log raw LLM response structure ──
@@ -650,6 +1428,7 @@ def execute():
             })
             emit_event(hook_events.COORDINATOR_LLM_RESULT, {
                 "round": current_round,
+                **_trace_indices,
                 "finish_reason": _obs_finish,
                 "tool_call_count": _obs_tc_count,
                 "tool_call_names": _obs_tc_names,
@@ -675,25 +1454,18 @@ def execute():
                 # workflow completes, coordinator can be re-triggered.
                 response_text = llm_error_response(completed_skill_artifacts)
                 output = {"response": response_text}
+                _emit_dialogue_end_once("llm_error", response_text)
                 put_e2e_response(databus, response_text)
                 _t6 = time.time()
                 print(f"[timing] output={_t6-_t0:.1f}s total", file=sys.stderr)
                 print(json.dumps(output, ensure_ascii=False))
                 return
 
-        # ── 检测 LLM 返回空内容（API 成功但未实际处理请求） ──
-        # 典型信号：content="" + usage 全零 + finish_reason=stop
-        # 这通常意味着 API key 无效、模型不支持流式、或参数配置错误。
-        _raw_usage = raw.get("usage", {}) or {}
-        _raw_choice = raw.get("choices", [{}])[0]
-        _raw_msg = _raw_choice.get("message", {})
-        _raw_content = _raw_msg.get("content", "")
-        _raw_finish = _raw_choice.get("finish_reason", "")
-        _raw_tc = _raw_msg.get("tool_calls")
+        # ── 检测 LLM 返回空业务结果（不依赖 token 计数） ──
         # 复用 coordinator_common.is_empty_llm_response(单一真相源 F4,霰弹式收敛)
         _is_empty_response = is_empty_llm_response(raw)
         if _is_empty_response:
-            err_msg = "LLM returned empty response (zero tokens, no content, finish=stop)"
+            err_msg = "LLM returned empty response (no content and no tool calls)"
             emit_event(hook_events.COORDINATOR_LLM_ERROR, {
                 "round": current_round,
                 "error": err_msg,
@@ -701,6 +1473,7 @@ def execute():
             }, level="ERROR")
             response_text = llm_error_response(completed_skill_artifacts)
             output = {"response": response_text}
+            _emit_dialogue_end_once("llm_error", response_text)
             put_e2e_response(databus, response_text)
             _t6 = time.time()
             print(f"[timing] output={_t6-_t0:.1f}s total", file=sys.stderr)
@@ -740,13 +1513,9 @@ def execute():
                 ctx=_final_ctx,
             )
             response_text = _hook_payload.get("response_text", response_text)
-            hook_trigger(hook_mounts.AGENT_DIALOGUE_END, {
-                "session_id": session_id,
-                "dialogue_id": dialogue_id,
-                "status": "normal",
-                "response_text": response_text,
-                "elapsed_s": round(time.time() - _t0, 1),
-            }, can_intervene=True, ctx=_final_ctx)
+            _emit_dialogue_end_once(
+                "normal", response_text, _final_ctx, can_intervene=True
+            )
             print(json.dumps({"response": response_text}, ensure_ascii=False))
             _t6 = time.time()
             print(f"[timing] final_output={_t6-_t0:.1f}s total", file=sys.stderr)
@@ -785,6 +1554,7 @@ def execute():
                 "max_iterations": max_iterations,
                 "response_length": len(response_text),
             }, level="WARN")
+            _emit_dialogue_end_once("max_rounds_forced_output", response_text)
             print(json.dumps({"response": response_text}, ensure_ascii=False))
             put_e2e_response(databus, response_text)
             save_session_messages(recorder, messages)
@@ -793,62 +1563,137 @@ def execute():
 
         # Collect dispatched skill names for progress reporting (ordered set via dict)
         _dispatched_skills: dict[str, None] = {}
+        run_skills_call_count = sum(
+            1
+            for tc in tool_calls
+            if tc.get("function", {}).get("name", "") == "run_skills"
+        )
+        multiple_run_skills_error = (
+            "one assistant response must contain exactly one run_skills call; "
+            "put every parallel Skill in that call's skills array"
+            if run_skills_call_count > 1
+            else ""
+        )
         for tc in tool_calls:
             func = tc.get("function", {})
             name = func.get("name", "")
+            arguments_error = ""
             try:
                 args = json.loads(func.get("arguments", "{}"))
-            except json.JSONDecodeError:
+            except (json.JSONDecodeError, TypeError) as exc:
+                args = {}
+                arguments_error = f"arguments must be valid JSON: {exc}"
+            if not isinstance(args, dict):
+                arguments_error = "arguments must decode to a JSON object"
                 args = {}
 
             if name == "run_skills":
-                skill_names = args.get("skills", [])
+                validation_error = (
+                    multiple_run_skills_error
+                    or arguments_error
+                    or _validate_run_skills_args(args, _AVAILABLE_SKILLS)
+                )
+                raw_skill_names = args.get("skills", [])
+                skill_names = raw_skill_names if isinstance(raw_skill_names, list) else []
+                requested_skill_names = [
+                    _s.get("name", "") if isinstance(_s, dict) else str(_s)
+                    for _s in skill_names
+                ]
+                requested_skill_names = [name for name in requested_skill_names if name]
                 # F2 拦截(CHANGE-20260811-055):连续 round 重复 dispatch 已完成的 skill(无 force)→ 拒绝。
                 # F1(提示词)无法完全阻止 LLM 偶发二次 dispatch,此处代码层强制拦截——
                 # 避免重复执行整段 skill 浪费耗时(超时现场 140842 同源:二次 dispatch 空 skills/重复执行)。
-                force_requested = bool(args.get("force")) or any(
-                    isinstance(_s, dict) and _s.get("force") for _s in skill_names
-                )
-                if _is_duplicate_dispatch(completed_skill, skill_names, force_requested,
-                                          last_prompt):
-                    result_str = json.dumps({
-                        "error": f"skill '{completed_skill}' 刚完成，不得重复 dispatch（除非 force=true）",
-                        "response": f"skill '{completed_skill}' 刚完成，基于其结果直接回复，不要重复执行。",
-                    }, ensure_ascii=False)
+                force_requested = bool(args.get("force"))
+                duplicate_completed_skill = next((
+                    name for name in completed_names_for_guard
+                    if _is_duplicate_dispatch(
+                        name, skill_names, force_requested,
+                        last_prompts.get(name),
+                    )
+                ), "")
+
+                if not validation_error and not duplicate_completed_skill:
+                    duplicate_completed_skill = _find_persisted_completed_dispatch(
+                        databus, dialogue_id, skill_names, force_requested
+                    )
+                _dispatch_ctx = AgentContext(messages=messages)
+                if validation_error:
+                    dispatch_result = _invalid_run_skills_result(validation_error)
+                    result_str = json.dumps(dispatch_result, ensure_ascii=False)
+                elif duplicate_completed_skill:
+                    dispatch_result = {
+                        "status": "duplicate_blocked",
+                        "skills": [],
+                        "exec_skill_keys": [],
+                        "rejected": [{
+                            "name": duplicate_completed_skill,
+                            "stage": "duplicate_guard",
+                            "error": "completed name+prompt dispatched again without force",
+                        }],
+                        "warnings": [],
+                        "error": f"skill '{duplicate_completed_skill}' 已用相同 prompt 完成，不得重复 dispatch（除非 force=true）",
+                        "response": f"skill '{duplicate_completed_skill}' 已有相同输入的完成结果，请直接使用，不要重复执行。",
+                    }
+                    result_str = json.dumps(dispatch_result, ensure_ascii=False)
                     emit_event(hook_events.COORDINATOR_DUPLICATE_SKILL_DISPATCH_BLOCKED, {
                         "round": current_round,
-                        "skill": completed_skill,
+                        "skill": duplicate_completed_skill,
                     }, level="WARN")
                 else:
-                    # Collect skill names for progress reporting
-                    for _s in skill_names:
-                        _sn = _s.get("name", "") if isinstance(_s, dict) else str(_s)
-                        if _sn:
-                            _dispatched_skills[_sn] = None
                     # ── hooks: skill 分发前挂载点（阻断本轮 dispatch，ctx.blocked 语义）──
-                    _dispatch_ctx = AgentContext(messages=messages)
                     hook_trigger(
                         hook_mounts.COORDINATOR_BEFORE_SKILL_DISPATCH,
                         {
                             "round": current_round,
-                            "skill_names": list(_dispatched_skills),
+                            "skill_names": requested_skill_names,
                         },
                         can_intervene=True,
                         ctx=_dispatch_ctx,
                     )
                     if _dispatch_ctx.blocked:
-                        result_str = json.dumps({
+                        dispatch_result = {
+                            "status": "blocked_by_hook",
+                            "skills": [],
+                            "exec_skill_keys": [],
+                            "rejected": [{
+                                "name": skill_name,
+                                "stage": "before_dispatch_hook",
+                                "error": "dispatch blocked by hook",
+                            } for skill_name in requested_skill_names],
+                            "warnings": [],
                             "skipped_by_hook": True,
                             "response": "本轮 skill 分发已被 hook 阻断，请直接基于已有信息回复用户。",
-                        }, ensure_ascii=False)
+                        }
+                        result_str = json.dumps(dispatch_result, ensure_ascii=False)
                     else:
                         result_str = handle_run_skills_call(args, databus, session_id, dialogue_id)
-                        # ── hooks: skill 分发后挂载点（检查分发结果）──
-                        hook_trigger(hook_mounts.COORDINATOR_AFTER_SKILL_DISPATCH, {
-                            "round": current_round,
-                            "skill_names": list(_dispatched_skills),
-                            "result_length": len(result_str),
-                        }, ctx=_dispatch_ctx)
+                        try:
+                            dispatch_result = json.loads(result_str)
+                        except (json.JSONDecodeError, TypeError):
+                            dispatch_result = {}
+                accepted_skill_names = (
+                    dispatch_result.get("skills", [])
+                    if dispatch_result.get("status") in {
+                        "dispatched", "partially_dispatched",
+                    }
+                    else []
+                )
+                for skill_name in accepted_skill_names:
+                    if skill_name:
+                        _dispatched_skills[str(skill_name)] = None
+                # ── hooks: skill 分发后挂载点（所有 run_skills 结果均进入轨迹）──
+                hook_trigger(hook_mounts.COORDINATOR_AFTER_SKILL_DISPATCH, {
+                    "round": current_round,
+                    "status": dispatch_result.get("status", "dispatch_failed"),
+                    "requested_skill_names": requested_skill_names,
+                    "skill_names": accepted_skill_names,
+                    "batch_id": dispatch_result.get("batch_id", ""),
+                    "exec_skill_keys": dispatch_result.get("exec_skill_keys", []),
+                    "dispatches": dispatch_result.get("dispatches", []),
+                    "rejected": dispatch_result.get("rejected", []),
+                    "warnings": dispatch_result.get("warnings", []),
+                    "result_length": len(result_str),
+                }, ctx=_dispatch_ctx)
             else:
                 result_str = json.dumps({"error": f"Unknown tool: {name}"})
 
@@ -887,19 +1732,18 @@ def execute():
                 }, duration_ms=(_t6 - _t0) * 1000)
 
                 # Push per-skill progress to databus (frontend progress area)
-                if msg.get("content", "").strip():
-                    try:
-                        if 'databus' in dir() and databus.is_connected():
-                            for skill_name_ in skill_labels.strip().split():
-                                sn = skill_name_.strip()
-                                if sn:
-                                    databus.response_push(f"正在执行 {sn}\n", type="progress", skill=sn, status="running",
-                                                           source="coordinator")
-                    except Exception as exc:
-                        print(f"[flow]   WARN: dispatch progress push failed: {exc}", file=sys.stderr)
-                        _dispatch_span.add_event(hook_events.COORDINATOR_DISPATCH_PROGRESS_PUSH_FAILED, {
-                            "error": str(exc)[:200],
-                        })
+                try:
+                    if 'databus' in dir() and databus.is_connected():
+                        for skill_name_ in _dispatched_skills:
+                            sn = skill_name_.strip()
+                            if sn:
+                                databus.response_push(f"正在执行 {sn}\n", type="progress", skill=sn, status="running",
+                                                       source="coordinator")
+                except Exception as exc:
+                    print(f"[flow]   WARN: dispatch progress push failed: {exc}", file=sys.stderr)
+                    _dispatch_span.add_event(hook_events.COORDINATOR_DISPATCH_PROGRESS_PUSH_FAILED, {
+                        "error": str(exc)[:200],
+                    })
                 # Clean up "response" key to prevent stale progress message
                 # from leaking into the next coordinator round.
                 if databus.is_connected():
@@ -922,12 +1766,24 @@ def execute():
             # tool result 已在上面的 for 循环中回灌 messages——与 skill_executor 同模式:
             # 把工具调用结果(错误说明)返回给模型,continue 工具循环让模型重新决策
             # (直接输出 final response,或调度其他 skill),直到收敛或达到轮次上限。
-            emit_event(hook_events.COORDINATOR_TOOL_LOOP_RETRY, {
+            retry_payload = {
                 "round": current_round,
                 "tool_loop_round": _tool_loop_round,
+                "action": "retry",
+                "reason": "no_skill_dispatched",
                 "tool_calls": tool_calls,
                 "elapsed_s": round(time.time() - _t0, 1),
-            }, level="WARN")
+            }
+            emit_event(
+                hook_events.COORDINATOR_TOOL_LOOP_RETRY,
+                dict(retry_payload),
+                level="WARN",
+            )
+            hook_trigger(
+                hook_events.COORDINATOR_TOOL_LOOP_RETRY,
+                dict(retry_payload),
+                ctx=AgentContext(messages=messages),
+            )
             # 清理残留 next_skills(CHANGE-20260811-056):未 dispatch 时若不清理,
             # framework 在 WORKFLOW_COMPLETE 后仍 GET_FRAMEWORK_DATA 读到残留
             # next_skills → 误判有 pending skill → SSE 不 [DONE]。
@@ -940,5 +1796,34 @@ def execute():
             continue
 
 
+def main():
+    """Run the production entrypoint and emit an observation-only error terminal."""
+    started_at = time.monotonic()
+    try:
+        return execute()
+    except Exception as exc:
+        try:
+            load_hooks_from_dir(os.path.join(AGENT_PACKAGE_DIR, "harness", "hooks"))
+            hook_trigger(
+                hook_events.AGENT_DIALOGUE_ERROR,
+                {
+                    "session_id": _session_id(),
+                    "dialogue_id": _dialogue_id(),
+                    "status": "unhandled_exception",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                    "elapsed_s": round(time.monotonic() - started_at, 1),
+                },
+                ctx=AgentContext(),
+            )
+        except Exception as hook_exc:
+            # 轨迹钩子失败不能替换 Coordinator 的原始异常。
+            print(
+                f"[flow]   WARN: dialogue error hook failed: {hook_exc}",
+                file=sys.stderr,
+            )
+        raise
+
+
 if __name__ == "__main__":
-    execute()
+    main()

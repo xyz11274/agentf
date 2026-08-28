@@ -453,6 +453,7 @@ def _call_summary_llm(source_text: str, model: str = "", node_type: str = "") ->
             messages=[{"role": "user", "content": prompt}],
             model=resolved_model,
             max_completion_tokens=500,
+            source=f"{node_type}_compaction",
             extra_body={"temperature": 0.3},
         )
         # 检查 finish_reason

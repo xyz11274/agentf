@@ -544,17 +544,17 @@ class TestArtifactUrlPipeline:
         file.write_bytes(b"\xff\xd8\xff\xe0" + b"fake-png-content")
 
         # ── 3. 用 local_artifact_url 生成 URL ────────────────────
-        from agentflow_runtime import coordinator_decide
+        from agentflow_runtime import coordinator_common
 
         # patch AGENT_PACKAGE_DIR 指向我们的测试目录
-        monkeypatch.setattr(coordinator_decide, "AGENT_PACKAGE_DIR", str(pkg_dir / "outfit-assistant"))
+        monkeypatch.setattr(coordinator_common, "AGENT_PACKAGE_DIR", str(pkg_dir / "outfit-assistant"))
         # E2E-3 契约对齐(2026-08-12):显式走新契约分支——设 AF_USER_ID+AF_CLIENT_ID+
         # AF_ARTIFACT_STORAGE_URL,断言 URL 含 {user_id}_{client_id} 会话段而非退化到 legacy files/ 形态.
         # 修复后的 local_artifact_url 走 _artifact_session_id() 与 _upload_artifacts_to_storage 单一真相来源.
         monkeypatch.setenv("AF_USER_ID", "user_abc")
         monkeypatch.setenv("AF_CLIENT_ID", "client_xyz")
         monkeypatch.setenv("AF_ARTIFACT_STORAGE_URL", "http://localhost:8199")
-        url = coordinator_decide.local_artifact_url(str(file))
+        url = coordinator_common.local_artifact_url(str(file))
         # 预期：/api/artifacts/outfit-assistant/{user_id}_{client_id}/outputs/look.png
         # (新契约格式,会话段 {user_id}_{client_id} 与上传落盘段一致)
         assert "/api/artifacts/" in url

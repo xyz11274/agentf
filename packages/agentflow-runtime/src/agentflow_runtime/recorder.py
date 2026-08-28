@@ -4,7 +4,8 @@ LLM trace recorder — DataBus trace recording for LLM API calls.
 
 Each call produces 3 keys under DataBus ``llm`` namespace:
   traces/{call_id}/request   — full HTTP request body
-  traces/{call_id}/response  — full HTTP response body
+  traces/{call_id}/provider_response — original HTTP response before Hooks
+  traces/{call_id}/response  — effective response used after Hooks
   traces/{call_id}/meta      — latency, tokens, finish_reason, summaries
 Plus traces/index — ordered list of call_ids for enumeration.
 
@@ -13,6 +14,7 @@ This module owns the trace-recording responsibility only; the LLM call
 entry point ``call_llm`` stays in ``llm_call.py``.
 """
 
+import copy
 import json
 import os
 import sys
@@ -22,9 +24,11 @@ import uuid
 import urllib3
 
 from agentflow_runtime.common.runtime_context import (
+    batch_id as _batch_id,
     completed_skill_name as _completed_skill_name,
     databus_uds_file as _databus_uds_file,
     dialogue_id as _dialogue_id,
+    exec_skill_key as _exec_skill_key,
     node_id as _node_id,
     self_task_id as _self_task_id,
     session_id as _session_id,
@@ -61,22 +65,16 @@ def _log_warn(msg: str) -> None:
 # to reconstruct the coordinator → skill → coordinator control flow WITHOUT
 # any framework-side change.
 #
-# Verified env vars actually injected (confirmed via agentflowd CODE_LOADER_DEBUG
-# logs, 2026-07-02):
+# Framework inputs currently injected by Runtime and Worker:
 #   coordinator_decide node receives:
 #     AF_NODE_ID=coordinator_decide, AF_DIALOGUE_ID, AF_SESSION_ID,
-#     AF_COMPLETED_SKILL_NAME (non-empty on re-entry), AF_SKILL_SUCCESS
+#     AF_SELF_TASK_ID, AF_COMPLETED_SKILL_NAME (non-empty on re-entry)
 #   skill_executor node receives:
 #     AF_NODE_ID=skill_executor, AF_DIALOGUE_ID, AF_SESSION_ID,
-#     AF_EXEC_SKILL_KEY=dispatch:N
+#     AF_SELF_TASK_ID, AF_EXEC_SKILL_KEY, AF_BATCH_ID
 #
-# Known framework gaps (env vars NOT injected despite node authors expecting them):
-#   - AF_SELF_TASK_ID  — runtime.cpp:1847 sets inputs["self_task_id"] but it
-#                        does not reach the node env (only 11 vars injected,
-#                        self_task_id missing). task_id left empty.
-#   - AF_SKILL_NAME    — skill_executor.py docstring claims "injected by
-#                        framework" but it is NOT. Infer task_type from
-#                        AF_NODE_ID instead.
+# AF_SKILL_NAME is resolved from the dispatch manifest by Skill Executor for
+# nested LLM calls; task_type still falls back to AF_NODE_ID inference.
 #
 # task_type inference (no AF_TASK_TYPE env var exists):
 #   - AF_NODE_ID contains "skill_executor"  → "skill"        (subagent executing)
@@ -97,12 +95,7 @@ def _infer_task_type(node_id: str, completed_skill: str) -> str:
 def _task_context() -> dict:
     """Collect framework-injected task identity from environment.
 
-    Returns a dict with keys: dialogue_id, session_id, node_id, task_id,
-    skill_name, completed_skill, task_type. Empty string for any missing
-    field — downstream consumers should treat empty as "unknown", not error.
-
-    Note: task_id is currently always empty (AF_SELF_TASK_ID not injected by
-    framework — known gap). Use node_id + dialogue_id for caller correlation.
+    Missing fields remain empty strings so trace recording never blocks a call.
     """
     node_id = _node_id()
     completed_skill = _completed_skill_name()
@@ -110,11 +103,53 @@ def _task_context() -> dict:
         "dialogue_id": _dialogue_id(),
         "session_id": _session_id(),
         "node_id": node_id,                          # reliable caller identifier
-        "task_id": _self_task_id(),                   # currently always "" (framework gap)
-        "skill_name": _skill_name(),                  # currently always "" (framework gap)
+        "task_id": _self_task_id(),
+        "skill_name": _skill_name(),
+        "exec_skill_key": _exec_skill_key(),
+        "batch_id": _batch_id(),
         "completed_skill": completed_skill,          # non-empty ⇒ control returned to coordinator
         "task_type": _infer_task_type(node_id, completed_skill),
     }
+
+
+def _emit_llm_request_prepared(
+        call_id: str,
+        request_body: dict,
+        task_context: dict,
+        *,
+        model: str,
+        request_url: str,
+        stream: bool,
+        connect_timeout: int,
+        request_timeout: int) -> None:
+    """Publish the exact request after serialization and before HTTP starts."""
+    try:
+        from agentflow_runtime import events, hooks
+        from agentflow_runtime.context import AgentContext
+
+        meta = copy.deepcopy(task_context)
+        meta.update({
+            "request_url": request_url,
+            "stream": stream,
+            "connect_timeout_s": connect_timeout,
+            "request_timeout_s": request_timeout,
+        })
+        hooks.trigger(
+            events.LLM_REQUEST_PREPARED,
+            {
+                "dialogue_id": task_context.get("dialogue_id", ""),
+                "session_id": task_context.get("session_id", ""),
+                "call_id": call_id,
+                "model": model,
+                "request": copy.deepcopy(request_body),
+                "meta": meta,
+            },
+            ctx=AgentContext(
+                messages=copy.deepcopy(request_body.get("messages") or []),
+            ),
+        )
+    except Exception as exc:
+        _log_warn(f"llm request prepared hook failed: {exc}")
 
 
 class TraceRecorder:
@@ -166,12 +201,28 @@ class TraceRecorder:
             return []
 
     def write_session_messages(self, messages: list) -> bool:
-        """Write conversation history to DataBus llm/session_messages."""
+        """Write the compatibility cache and a dialogue-scoped effective snapshot."""
         if not self._client:
             return False
+        payload = json.dumps(messages, ensure_ascii=False)
         try:
-            return self._client.llm().put("session_messages",
-                                          json.dumps(messages, ensure_ascii=False))
+            namespace = self._client.llm()
+        except Exception as exc:
+            _log_warn(f"write_session_messages failed: {exc}")
+            return False
+
+        dialogue_id = _dialogue_id()
+        if dialogue_id:
+            scoped_key = f"conversations/{dialogue_id}/effective_messages"
+            try:
+                if namespace.put(scoped_key, payload) is False:
+                    _log_warn(
+                        f"write dialogue effective_messages returned false: {dialogue_id}")
+            except Exception as exc:
+                _log_warn(f"write dialogue effective_messages failed: {exc}")
+
+        try:
+            return namespace.put("session_messages", payload)
         except Exception as exc:
             _log_warn(f"write_session_messages failed: {exc}")
             return False
@@ -225,30 +276,20 @@ class TraceRecorder:
         start_time = time.time()
         timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-        # Build request body
-        request_body = {
-            "model": model,
-            "messages": messages,
-            "max_completion_tokens": max_completion_tokens,
-        }
-        if tools:
-            request_body["tools"] = tools
-            request_body["tool_choice"] = "auto"
-
-        # Record request to DataBus (before HTTP call)
-        if self._client:
-            self._put(f"traces/{call_id}/request", request_body)
-
-        # ── HTTP call via requests ──
-        url = base_url.rstrip("/")
-        if not url.endswith("/chat/completions"):
-            url += "/chat/completions"
-
         # Unified entry log — one line per model call, visible across ALL nodes
         # (coordinator_decide + skill_executor). This is the single source of
         # truth for "which node called the LLM when". Captures node_id from
         # framework-injected AF_NODE_ID so callers don't need to log it themselves.
         ctx = _task_context()
+        # The runtime does not currently inject AF_SKILL_NAME into skill
+        # executor processes. Prefer the per-call identity resolved from the
+        # dispatch manifest so every LLM trace remains attributable.
+        if skill:
+            ctx["skill_name"] = skill
+        ctx.update({
+            "source": source,
+            "round": round_i,
+        })
         _log_warn(
             f"[#{seq}] >>> call_id={call_id} node={ctx.get('node_id','?')} "
             f"task_type={ctx.get('task_type','?')} model={model} "
@@ -257,7 +298,6 @@ class TraceRecorder:
             f"connect_timeout={connect_timeout}s timeout={timeout}s"
         )
 
-        attempt = 0
         from agentflow_runtime.common.clients import OpenAiCompatibleClient
 
         _http_client = OpenAiCompatibleClient(
@@ -265,6 +305,30 @@ class TraceRecorder:
             connect_timeout=connect_timeout,
             request_timeout=timeout,
         )
+
+        # Record the exact transport body from the same builder used by the
+        # HTTP client. This includes stream/thinking and generation parameters.
+        request_body = _http_client.build_request_body(
+            messages,
+            tools=tools,
+            max_completion_tokens=max_completion_tokens,
+            stream=stream_enabled,
+            extra_body=extra_body,
+        )
+        _emit_llm_request_prepared(
+            call_id,
+            request_body,
+            ctx,
+            model=model,
+            request_url=_http_client.base_url,
+            stream=stream_enabled,
+            connect_timeout=connect_timeout,
+            request_timeout=timeout,
+        )
+        if self._client:
+            self._put(
+                f"traces/{call_id}/request", copy.deepcopy(request_body)
+            )
 
         # ── Build chunk publisher for streaming mode ──
         # on_chunk callback fires once per non-empty SSE delta. We translate
@@ -341,11 +405,27 @@ class TraceRecorder:
             on_chunk=chunk_publisher,
             extra_body=extra_body,
         )
+        # The transport owns retries. Read the number of HTTP attempts it
+        # actually started instead of maintaining a disconnected outer counter.
+        transport_attempts = max(0, int(getattr(_http_client, "last_attempts", 1)))
+        retries_used = max(0, transport_attempts - 1)
+        retry_reasons = list(getattr(_http_client, "last_retry_reasons", []) or [])
+        http_status = getattr(_http_client, "last_http_status", None)
+        usage_source = str(
+            getattr(_http_client, "last_usage_source", "")
+            or ("provider" if response_data.get("usage") else "missing")
+        )
+        estimator_version = str(
+            getattr(_http_client, "last_usage_estimator_version", "") or "")
         # If the client returned an error, wrap it with _llm_error
         if response_data.get("_llm_error") or "error" in response_data:
             last_error = response_data.get("error", "Unknown error")
             latency_ms = int((time.time() - start_time) * 1000)
             if self._client:
+                provider_snapshot = copy.deepcopy(response_data)
+                self._put(
+                    f"traces/{call_id}/provider_response", provider_snapshot)
+                self._put(f"traces/{call_id}/response", provider_snapshot)
                 error_meta = {
                     "model": model, "latency_ms": latency_ms,
                     "timestamp": timestamp, "error": last_error,
@@ -353,11 +433,21 @@ class TraceRecorder:
                     "total_tokens": 0, "finish_reason": "error",
                     "msg_count": len(messages),
                     "tools_enabled": bool(tools),
-                    "retries_attempted": 0,
+                    "transport_attempts": transport_attempts,
+                    "retries_attempted": retries_used,
+                    "retries_used": retries_used,
+                    "retry_reasons": retry_reasons,
+                    "http_status": http_status,
+                    "usage_source": usage_source,
+                    "estimator_version": estimator_version,
                     "request_summary": self._summarize_messages(messages)[:200],
                     "response_summary": f"error: {last_error[:200]}",
+                    "request_url": _http_client.base_url,
+                    "stream": stream_enabled,
+                    "connect_timeout_s": connect_timeout,
+                    "request_timeout_s": timeout,
                 }
-                error_meta.update(_task_context())
+                error_meta.update(ctx)
                 self._put(f"traces/{call_id}/meta", error_meta)
                 self._verify_meta_written(call_id)
                 self._append_to_index(call_id)
@@ -367,13 +457,18 @@ class TraceRecorder:
                 f"err={last_error}"
             )
             return {"error": f"LLM call failed: {last_error}",
-                    "_llm_error": True}
+                    "_llm_error": True,
+                    "_agentflow_call_id": call_id}
 
         latency_ms = int((time.time() - start_time) * 1000)
 
         # Record full response + meta to DataBus
         if self._client:
-            self._put(f"traces/{call_id}/response", response_data)
+            provider_snapshot = copy.deepcopy(response_data)
+            self._put(
+                f"traces/{call_id}/provider_response", provider_snapshot)
+            self._put(
+                f"traces/{call_id}/response", copy.deepcopy(provider_snapshot))
             usage = response_data.get("usage", {})
             choice = response_data.get("choices", [{}])[0]
             meta = {
@@ -388,9 +483,18 @@ class TraceRecorder:
                 "finish_reason": choice.get("finish_reason", "unknown"),
                 "msg_count": len(messages),
                 "tools_enabled": bool(tools),
-                "retries_used": attempt,
+                "transport_attempts": transport_attempts,
+                "retries_used": retries_used,
+                "retry_reasons": retry_reasons,
+                "http_status": http_status,
+                "usage_source": usage_source,
+                "estimator_version": estimator_version,
+                "request_url": _http_client.base_url,
+                "stream": stream_enabled,
+                "connect_timeout_s": connect_timeout,
+                "request_timeout_s": timeout,
             }
-            meta.update(_task_context())
+            meta.update(ctx)
             self._put(f"traces/{call_id}/meta", meta)
             self._verify_meta_written(call_id)
             self._append_to_index(call_id)
@@ -408,9 +512,68 @@ class TraceRecorder:
             f"tok=prompt:{_usage.get('prompt_tokens',0)}/"
             f"completion:{_usage.get('completion_tokens',0)}/"
             f"total:{_usage.get('total_tokens',0)} "
-            f"retries={attempt}"
+            f"retries={retries_used}"
         )
+        # Internal correlation field for the immediate after-LLM hook. Add it
+        # only after recording so the stored provider response stays clean.
+        response_data["_agentflow_call_id"] = call_id
         return response_data
+
+    def record_effective_response(self, call_id: str, response: dict) -> dict:
+        """Persist the post-Hook response while preserving the provider response."""
+        try:
+            clean_response = copy.deepcopy({
+                key: value
+                for key, value in response.items()
+                if key != "_agentflow_call_id"
+            })
+        except Exception as exc:
+            _log_warn(f"snapshot effective response failed: {exc}")
+            return {}
+
+        if not self._client or not call_id:
+            return clean_response
+
+        def _decode(value):
+            if isinstance(value, bytes):
+                value = value.decode("utf-8", errors="replace")
+            if isinstance(value, str):
+                try:
+                    return json.loads(value)
+                except (TypeError, ValueError):
+                    pass
+            return value
+
+        try:
+            namespace = self._client.llm()
+            response_key = f"traces/{call_id}/response"
+            provider_key = f"traces/{call_id}/provider_response"
+            provider_response = _decode(namespace.get(provider_key))
+            if provider_response is None:
+                provider_response = _decode(namespace.get(response_key))
+                if provider_response is not None:
+                    self._put(provider_key, provider_response)
+
+            self._put(response_key, clean_response)
+            meta = _decode(namespace.get(f"traces/{call_id}/meta"))
+            if isinstance(meta, dict):
+                meta.setdefault("provider_finish_reason", meta.get("finish_reason", "unknown"))
+                meta.setdefault("provider_response_summary", meta.get("response_summary", ""))
+                choice = (clean_response.get("choices") or [{}])[0]
+                effective_finish = choice.get("finish_reason", "unknown")
+                if not clean_response.get("choices") and clean_response.get("_llm_error"):
+                    effective_finish = "error"
+                meta["response_summary"] = self._summarize_response(clean_response)
+                meta["finish_reason"] = effective_finish
+                meta["hook_modified"] = (
+                    provider_response != clean_response
+                    if provider_response is not None
+                    else None
+                )
+                self._put(f"traces/{call_id}/meta", meta)
+        except Exception as exc:
+            _log_warn(f"record effective response failed for call_id={call_id}: {exc}")
+        return clean_response
 
     # ── DataBus helpers ──
 
@@ -427,8 +590,12 @@ class TraceRecorder:
     def _append_to_index(self, call_id: str) -> None:
         if not self._client:
             return
+        dialogue_id = _dialogue_id()
+        # Concurrent calls use distinct authoritative keys; the legacy list
+        # below remains for compatibility but is no longer the truth source.
+        entry_scope = dialogue_id or "_global"
+        self._put(f"traces/index_entries/{entry_scope}/{call_id}", call_id)
         try:
-            dialogue_id = _dialogue_id()
             key = f"traces/index/{dialogue_id}" if dialogue_id else "traces/index"
             raw = self._client.llm().get(key, "[]")
             index = json.loads(raw) if isinstance(raw, str) else (raw or [])

@@ -45,6 +45,58 @@ namespace storage = agentflow::utils::storage;
 namespace {
 constexpr const char* kFallbackSessionId = "0";
 
+std::string json_escape(const std::string& value) {
+  static constexpr char kHex[] = "0123456789abcdef";
+  std::string result;
+  result.reserve(value.size());
+  for(const unsigned char ch : value) {
+    switch(ch) {
+      case '\"': result += "\\\""; break;
+      case '\\': result += "\\\\"; break;
+      case '\b': result += "\\b"; break;
+      case '\f': result += "\\f"; break;
+      case '\n': result += "\\n"; break;
+      case '\r': result += "\\r"; break;
+      case '\t': result += "\\t"; break;
+      default:
+        if(ch < 0x20) {
+          result += "\\u00";
+          result += kHex[(ch >> 4) & 0x0f];
+          result += kHex[ch & 0x0f];
+        } else {
+          result += static_cast<char>(ch);
+        }
+        break;
+    }
+  }
+  return result;
+}
+
+std::string message_metadata(const MMAgentMsgQue::Message& message,
+                             const std::string& key,
+                             const std::string& fallback = "") {
+  const auto it = message.metadata.find(key);
+  return it == message.metadata.end() || it->second.empty() ? fallback : it->second;
+}
+
+std::string harness_batch_state_key(const std::string& session_id,
+                                    const std::string& dialogue_id,
+                                    const std::string& batch_id) {
+  return session_id + "\x1f" + dialogue_id + "\x1f" + batch_id;
+}
+
+bool is_harness_batch_terminal(const MMAgentMsgQue::Message& message) {
+  const std::string message_type = message_metadata(message, "message_type");
+  const std::string status = message_metadata(message, "status");
+  return message.content == "workflow_completed"
+      || message.content == "workflow_failed"
+      || message.content == "workflow_schedule_failed"
+      || message.content == "skill_launch_failed"
+      || message.content == "INTERRUPTED"
+      || message_type == "skill_launch_failed"
+      || status == "interrupted";
+}
+
 int64_t get_current_timestamp_ms() {
   struct timeval tv;
   gettimeofday(&tv, NULL);
@@ -1026,11 +1078,22 @@ void MMAgent::handle_session_interrupt(const std::shared_ptr<MMAgentSession>& se
   Logger::instance().info_f("[CONTROL] SESSION-INTERRUPT for session=%s",
                             session->get_session_id().c_str());
 
+  // Stop BatchState from backfilling queued Skills while active Skills are
+  // being interrupted. Queued dispatches have no runtime task to interrupt,
+  // so they are recorded as terminal here; active dispatches finish through
+  // the identity-bearing INTERRUPTED messages below.
+  interrupt_queued_harness_skills(session);
+
   // Get all running skill tasks
   auto tasks = session->get_tasks();
   for(auto& task : tasks) {
-    if(task->get_state() == MMAgentTask::TaskState::RUNNING &&
-       task->get_task_type() == "skill") {
+    std::string runtime_message_id;
+    const bool is_pending_runtime_skill =
+        task->get_state() == MMAgentTask::TaskState::PENDING
+        && task->get_parameter("message_id", runtime_message_id);
+    if((task->get_state() == MMAgentTask::TaskState::RUNNING
+        || is_pending_runtime_skill)
+       && task->get_task_type() == "skill") {
       // Interrupt the skill task
       task->interrupt();
       task->stop_message_threads();
@@ -1044,12 +1107,23 @@ void MMAgent::handle_session_interrupt(const std::shared_ptr<MMAgentSession>& se
         interrupt_msg.type = MMAgentMsgQue::MessageType::TASK_RESPONSE;
         interrupt_msg.content = "INTERRUPTED";
         interrupt_msg.metadata["task_id"] = task->get_task_id();
+        interrupt_msg.metadata["skill_task_id"] = task->get_task_id();
+        interrupt_msg.metadata["task_type"] = "skill";
         interrupt_msg.metadata["skill_name"] = task->get_skill_name();
         interrupt_msg.metadata["status"] = "interrupted";
+        interrupt_msg.metadata["skill_success"] = "false";
+        interrupt_msg.metadata["skill_status"] = "interrupted";
+        interrupt_msg.metadata["skill_result"] = "session_interrupted";
 
         std::string dialogue_id;
         if(task->get_parameter("dialogue_id", dialogue_id)) {
           interrupt_msg.metadata["dialogue_id"] = dialogue_id;
+        }
+        for(const char* key : {"batch_id", "exec_skill_key", "trace_labels"}) {
+          std::string value;
+          if(task->get_parameter(key, value) && !value.empty()) {
+            interrupt_msg.metadata[key] = value;
+          }
         }
         interrupt_msg.metadata["session_id"] = session->get_session_id();
 
@@ -1152,10 +1226,21 @@ void MMAgent::handle_dialogue_interrupt(const std::shared_ptr<MMAgentSession>& s
         interrupt_msg.type = MMAgentMsgQue::MessageType::TASK_RESPONSE;
         interrupt_msg.content = "INTERRUPTED";
         interrupt_msg.metadata["task_id"]        = task->get_task_id();
+        interrupt_msg.metadata["skill_task_id"]  = task->get_task_id();
+        interrupt_msg.metadata["task_type"]      = "skill";
         interrupt_msg.metadata["skill_name"]     = task->get_skill_name();
         interrupt_msg.metadata["status"]         = "interrupted";
+        interrupt_msg.metadata["skill_success"]  = "false";
+        interrupt_msg.metadata["skill_status"]   = "interrupted";
+        interrupt_msg.metadata["skill_result"]   = "dialogue_interrupted";
         interrupt_msg.metadata["dialogue_id"]    = dialogue_id;
         interrupt_msg.metadata["session_id"]     = session->get_session_id();
+        for(const char* key : {"batch_id", "exec_skill_key", "trace_labels"}) {
+          std::string value;
+          if(task->get_parameter(key, value) && !value.empty()) {
+            interrupt_msg.metadata[key] = value;
+          }
+        }
         coordinator_task->enqueue_data_exchange_message(interrupt_msg);
       }
     }
@@ -1446,6 +1531,14 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
     task->set_parameter("skill_success", skill_success_it->second);
     Logger::instance().info_f("[BUILD_RUNTIME_TASK] Set skill_success=%s for task=%s",
                               skill_success_it->second.c_str(), task_config.task_id.c_str());
+  }
+
+  if(const auto batch_key_it = message.metadata.find("completed_batch_key");
+     batch_key_it != message.metadata.end() && !batch_key_it->second.empty()) {
+    task->set_parameter("completed_batch_key", batch_key_it->second);
+    Logger::instance().info_f(
+        "[BUILD_RUNTIME_TASK] Set completed_batch_key=%s for task=%s",
+        batch_key_it->second.c_str(), task_config.task_id.c_str());
   }
 
   // Carry the completed skill payload across the workflow boundary. The UDS
@@ -1794,6 +1887,13 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     Logger::instance().info_f("[HANDLE_DATA_EXCHANGE] Using dialogue_id=%s", dialogue_id.c_str());
   }
 
+  // Harness batches own their completion messages.  A partial result fills
+  // one batch slot and may launch a queued sibling; it must not enter the
+  // legacy per-skill Coordinator trigger path below.
+  if(handle_harness_batch_terminal(session, task, message)) {
+    return;
+  }
+
   // ============================================================
   // SKILL COMPLETION DETECTION (MUST RUN BEFORE next_skills HANDLING)
   // ============================================================
@@ -1801,6 +1901,13 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
   // NOTE: Concurrency control only applies to skill-type tasks (task_type == "skill").
   // Dispatcher and coordinator tasks do NOT use the counter.
   // IMPORTANT: Both success and failure should trigger completion handling
+  bool reported_skill_success = (message.content == "workflow_completed");
+  if(const auto success_it = message.metadata.find("skill_success");
+     success_it != message.metadata.end()
+     && (success_it->second == "true" || success_it->second == "false")) {
+    reported_skill_success = (success_it->second == "true");
+  }
+
   bool is_skill_completion = false;
   std::string skill_name_for_counter;
 
@@ -1817,7 +1924,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         skill_name_for_counter = message.metadata.at("skill_name");
       }
       Logger::instance().info_f("[SKILL_COMPLETION] Detected skill task completion (success=%s), skill=%s, decrementing counter",
-                               message.content == "workflow_completed" ? "true" : "false",
+                               reported_skill_success ? "true" : "false",
                                skill_name_for_counter.empty() ? "unknown" : skill_name_for_counter.c_str());
     }
   }
@@ -1830,7 +1937,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       task->on_skill_completed("unknown-skill");  // fallback
     }
 
-    // Flow trace: skill completed（与 agent.cpp:2850 SKILL_LAUNCHED 配对，from/to 同构）
+    // Flow trace: Skill terminal event (paired with SKILL_LAUNCHED).
     {
       std::string skill_complete_labels;
       if(message.metadata.count("trace_labels")) {
@@ -1839,7 +1946,9 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       FLOW_TRACE_SKILL_L(session->get_session_id(), dialogue_id, skill_complete_labels,
                          task->get_task_type(),
                          skill_name_for_counter.empty() ? "unknown-skill" : skill_name_for_counter,
-                         runtime::FlowEventType::SKILL_COMPLETED);
+                         reported_skill_success
+                             ? runtime::FlowEventType::SKILL_COMPLETED
+                             : runtime::FlowEventType::SKILL_FAILED);
     }
 
     // Decrement pending_skills_count in DataBus for coordinator to track
@@ -1866,7 +1975,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       coordinator_trigger.message_id = "coordinator-trigger-" + message.message_id;
       coordinator_trigger.metadata["task_type"] = "coordinator";
       coordinator_trigger.metadata["trigger_type"] = "skill_completion";
-      const bool skill_ok = (message.content == "workflow_completed");
+      const bool skill_ok = reported_skill_success;
       coordinator_trigger.metadata["skill_success"] = skill_ok ? "true" : "false";
       // Track skill failure in DataBus so the final response can carry error status
       if(!skill_ok) {
@@ -1889,6 +1998,10 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       if(const auto result_it = message.metadata.find("skill_result");
          result_it != message.metadata.end() && !result_it->second.empty()) {
         coordinator_trigger.metadata["skill_result"] = result_it->second;
+      }
+      if(const auto status_it = message.metadata.find("skill_status");
+         status_it != message.metadata.end() && !status_it->second.empty()) {
+        coordinator_trigger.metadata["skill_status"] = status_it->second;
       }
       if(const auto artifacts_it = message.metadata.find("artifacts_json");
          artifacts_it != message.metadata.end() && !artifacts_it->second.empty()) {
@@ -1919,7 +2032,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       task->enqueue_intent_request_message(coordinator_trigger);
       Logger::instance().info_f("[SKILL_COMPLETION] Triggered coordinator workflow for skill completion, skill=%s, success=%s",
                                skill_name_for_counter.c_str(),
-                               message.content == "workflow_completed" ? "true" : "false");
+                               reported_skill_success ? "true" : "false");
       return;
     }
   }
@@ -1948,8 +2061,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         response_message.metadata["task_type"] = "coordinator";
         response_message.metadata["source_task_type"] = "dispatcher";
         // Include skill success/failure status for coordinator workflow
-        bool skill_success = (message.content == "workflow_completed");
-        response_message.metadata["skill_success"] = skill_success ? "true" : "false";
+        response_message.metadata["skill_success"] = reported_skill_success ? "true" : "false";
         if(!skill_name_for_counter.empty()) {
           response_message.metadata["skill_name"] = skill_name_for_counter;
         }
@@ -2138,6 +2250,9 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     // Check if this is a response from skill (in coordinator's response_queue)
     MMAgentMsgQue::Message skill_response;
     if(task->dequeue_response_message(skill_response)) {
+      if(handle_harness_batch_terminal(session, task, skill_response)) {
+        return;
+      }
       // Skill completed - get result from databus and send to client
       Logger::instance().info_f("[COORDINATORDataExchange] Received skill response, message_id=%s",
                                 skill_response.message_id.c_str());
@@ -2361,6 +2476,14 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
       // may be stale from a previous round.
       if(result.all_launched && result.launched_count == 0) {
         Logger::instance().info_f("[COORDINATORDataExchange] All skills already launched, checking if response is ready");
+        std::string batch_gate_details;
+        if(!can_finalize_harness_dialogue(
+               session->get_session_id(), dialogue_id, &batch_gate_details)) {
+          Logger::instance().info_f(
+              "[COORDINATORDataExchange][BATCH_GATE] Final blocked: %s",
+              batch_gate_details.c_str());
+          return;
+        }
 
         // Check pending_skills_count to ensure all skills have completed
         std::string pending_count_key = dialogue_id.empty() ? "pending_skills_count" : dialogue_id + "/pending_skills_count";
@@ -2471,6 +2594,14 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     }
 
     // No next_skills - coordinator is done, send response to client
+    std::string batch_gate_details;
+    if(!can_finalize_harness_dialogue(
+           session->get_session_id(), dialogue_id, &batch_gate_details)) {
+      Logger::instance().info_f(
+          "[COORDINATORDataExchange][BATCH_GATE] Final blocked: %s",
+          batch_gate_details.c_str());
+      return;
+    }
     Logger::instance().info_f("[COORDINATORDataExchange] Coordinator completed without skill, sending response");
 
     // Final drain: flush any remaining stream chunks before final response.
@@ -2615,11 +2746,17 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         coordinator_response.receiver_id = coordinator_task_id;
         coordinator_response.metadata["task_type"] = "skill_response";
         coordinator_response.metadata["skill_name"] = task->get_skill_name();
-        coordinator_response.metadata["message_type"] = "skill_completed";
+        coordinator_response.metadata["message_type"] =
+            reported_skill_success ? "skill_completed" : "skill_failed";
         // Include skill success/failure status from the original workflow completion message
-        bool skill_success = (message.content == "workflow_completed");
-        coordinator_response.metadata["skill_success"] = skill_success ? "true" : "false";
-        coordinator_response.content = skill_success ? "skill_completed" : "skill_failed";
+        coordinator_response.metadata["skill_success"] =
+            reported_skill_success ? "true" : "false";
+        if(const auto status_it = message.metadata.find("skill_status");
+           status_it != message.metadata.end() && !status_it->second.empty()) {
+          coordinator_response.metadata["skill_status"] = status_it->second;
+        }
+        coordinator_response.content =
+            reported_skill_success ? "skill_completed" : "skill_failed";
         // Propagate trace_id for end-to-end correlation
         if(!trace_id.empty()) {
           coordinator_response.metadata["trace_id"] = trace_id;
@@ -2742,6 +2879,16 @@ bool MMAgent::launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
       failure_message.metadata["skill_name"] = skill_name;
       failure_message.metadata["failure_reason"] = "parameter_validation_failed";
       failure_message.metadata["dialogue_id"] = dialogue_id;
+      failure_message.metadata["skill_success"] = "false";
+      failure_message.metadata["skill_status"] = "skill_launch_failed";
+      failure_message.metadata["skill_result"] = "parameter_validation_failed";
+      if(!exec_skill_key.empty()) {
+        failure_message.metadata["exec_skill_key"] = exec_skill_key;
+      }
+      if(const auto batch_it = context.metadata.find("batch_id");
+         batch_it != context.metadata.end() && !batch_it->second.empty()) {
+        failure_message.metadata["batch_id"] = batch_it->second;
+      }
 
       // Serialize expected_parameters as JSON array
 #ifdef AGENTFLOW_WITH_RAPIDJSON
@@ -2840,6 +2987,9 @@ bool MMAgent::launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
   // Create skill runtime task message
   MMAgentMsgQue::Message skill_message;
   skill_message.message_id = "skill-" + skill_name + "-" + context.message_id;
+  if(!exec_skill_key.empty()) {
+    skill_message.message_id += "-" + exec_skill_key;
+  }
   skill_message.metadata["task_type"] = "skill";
   skill_message.metadata["skill_name"] = skill_name;
   skill_message.metadata["session_id"] = session->get_session_id();
@@ -2883,6 +3033,11 @@ bool MMAgent::launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
   // Pass exec_skill_key if provided
   if(!exec_skill_key.empty()) {
     skill_task->set_parameter("exec_skill_key", exec_skill_key);
+  }
+
+  const auto batch_id_it = context.metadata.find("batch_id");
+  if(batch_id_it != context.metadata.end() && !batch_id_it->second.empty()) {
+    skill_task->set_parameter("batch_id", batch_id_it->second);
   }
 
   // Pass dialogue_id as task parameter for workflow input propagation
@@ -2966,6 +3121,577 @@ bool MMAgent::launch_skill_task(const std::shared_ptr<MMAgentSession>& session,
   return true;
 }
 
+MMAgent::NextSkillsLaunchResult MMAgent::process_harness_batch_launch(
+    const std::shared_ptr<MMAgentSession>& session,
+    const std::shared_ptr<MMAgentTask>& task,
+    const std::string& dialogue_id,
+    const std::string& batch_id,
+    const std::vector<HarnessBatchSkill>& skills,
+    const MMAgentMsgQue::Message& message,
+    const std::string& log_prefix) {
+  NextSkillsLaunchResult result;
+  result.found_next_skills = true;
+  if(!session || !task || batch_id.empty() || skills.empty()) {
+    Logger::instance().warn_f("[%s][BATCH] Invalid batch registration request",
+                              log_prefix.c_str());
+    return result;
+  }
+
+  const std::string state_key =
+      harness_batch_state_key(session->get_session_id(), dialogue_id, batch_id);
+  int batch_concurrency = std::max(1, task->get_max_concurrent_skills());
+  if(task->get_task_type() == "coordinator") {
+    if(const auto dispatcher = session->get_dispatcher_task(); dispatcher) {
+      batch_concurrency = std::min(
+          batch_concurrency,
+          std::max(1, dispatcher->get_max_concurrent_skills()));
+    }
+  }
+  bool registration_conflict = false;
+  {
+    std::lock_guard<std::mutex> lock(harness_batches_mutex_);
+    const auto existing = harness_batches_.find(state_key);
+    if(existing == harness_batches_.end()) {
+      HarnessBatchState state;
+      state.session_id = session->get_session_id();
+      state.dialogue_id = dialogue_id;
+      state.batch_id = batch_id;
+      state.source_task_id = task->get_task_id();
+      state.dispatch_order = skills;
+      state.launch_context = message;
+      state.max_concurrent_skills = batch_concurrency;
+      for(const auto& skill : skills) {
+        state.expected_exec_keys.insert(skill.exec_skill_key);
+        state.queued_exec_keys.insert(skill.exec_skill_key);
+      }
+      harness_batches_.emplace(state_key, std::move(state));
+      Logger::instance().info_f(
+          "[%s][BATCH] Registered batch_id=%s skills=%zu max_concurrent=%d",
+          log_prefix.c_str(), batch_id.c_str(), skills.size(),
+          batch_concurrency);
+    } else {
+      const auto& state = existing->second;
+      if(state.source_task_id != task->get_task_id()
+         || state.dispatch_order.size() != skills.size()) {
+        registration_conflict = true;
+      } else {
+        for(size_t i = 0; i < skills.size(); ++i) {
+          if(state.dispatch_order[i].name != skills[i].name
+             || state.dispatch_order[i].exec_skill_key != skills[i].exec_skill_key) {
+            registration_conflict = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // next_skills is a one-shot dispatch manifest.  BatchState owns the copied
+  // entries from this point onward, so a later Coordinator round cannot
+  // accidentally register or launch the same batch again.
+  BuiltinDispatcher::remove_framework_data(
+      *this, session->get_session_id(), dialogue_id, "next_skills");
+  BuiltinDispatcher::remove_framework_data(
+      *this, session->get_session_id(), dialogue_id, "selected_skills");
+
+  if(registration_conflict) {
+    Logger::instance().error_f(
+        "[%s][BATCH] Conflicting duplicate batch registration rejected: batch_id=%s",
+        log_prefix.c_str(), batch_id.c_str());
+    return result;
+  }
+
+  result.launched_count = pump_harness_batch(session, state_key);
+  result.launched_any = result.launched_count > 0;
+  {
+    std::lock_guard<std::mutex> lock(harness_batches_mutex_);
+    const auto it = harness_batches_.find(state_key);
+    if(it != harness_batches_.end()) {
+      result.all_launched = it->second.queued_exec_keys.empty();
+      for(const auto& skill : it->second.dispatch_order) {
+        result.launched_skills.insert(skill.name + ":" + skill.exec_skill_key);
+      }
+    }
+  }
+  return result;
+}
+
+int MMAgent::pump_harness_batch(const std::shared_ptr<MMAgentSession>& session,
+                                const std::string& batch_state_key) {
+  if(!session) {
+    return 0;
+  }
+
+  int launched_count = 0;
+  while(true) {
+    HarnessBatchSkill skill_to_launch;
+    MMAgentMsgQue::Message launch_context;
+    std::string source_task_id;
+    std::string launch_batch_id;
+    std::string launch_dialogue_id;
+    bool should_launch = false;
+    bool should_finalize = false;
+    HarnessBatchState completed_state;
+
+    {
+      std::lock_guard<std::mutex> lock(harness_batches_mutex_);
+      const auto it = harness_batches_.find(batch_state_key);
+      if(it == harness_batches_.end()) {
+        return launched_count;
+      }
+      auto& state = it->second;
+      if(state.terminal_results.size() == state.expected_exec_keys.size()) {
+        if(state.coordinator_triggered) {
+          return launched_count;
+        }
+        state.coordinator_triggered = true;
+        completed_state = state;
+        should_finalize = true;
+      } else if(static_cast<int>(state.active_exec_keys.size())
+                    >= state.max_concurrent_skills
+                || state.queued_exec_keys.empty()) {
+        return launched_count;
+      } else {
+        for(const auto& skill : state.dispatch_order) {
+          if(state.queued_exec_keys.erase(skill.exec_skill_key) > 0) {
+            state.active_exec_keys.insert(skill.exec_skill_key);
+            skill_to_launch = skill;
+            launch_context = state.launch_context;
+            source_task_id = state.source_task_id;
+            launch_batch_id = state.batch_id;
+            launch_dialogue_id = state.dialogue_id;
+            should_launch = true;
+            break;
+          }
+        }
+      }
+    }
+
+    if(should_finalize) {
+      bool all_skills_succeeded = true;
+      bool any_skill_succeeded = false;
+      std::ostringstream payload;
+      payload << "{\"batch_id\":\"" << json_escape(completed_state.batch_id)
+              << "\",\"results\":[";
+      for(size_t i = 0; i < completed_state.dispatch_order.size(); ++i) {
+        const auto& dispatched = completed_state.dispatch_order[i];
+        const auto result_it =
+            completed_state.terminal_results.find(dispatched.exec_skill_key);
+        if(result_it == completed_state.terminal_results.end()) {
+          continue;
+        }
+        const auto& terminal = result_it->second;
+        const bool workflow_success = terminal.content == "workflow_completed";
+        const std::string skill_success_text =
+            message_metadata(terminal, "skill_success");
+        const bool skill_success =
+            skill_success_text == "true"
+            || (skill_success_text.empty() && workflow_success);
+        all_skills_succeeded = all_skills_succeeded && skill_success;
+        any_skill_succeeded = any_skill_succeeded || skill_success;
+
+        const std::string framework_name =
+            message_metadata(terminal, "skill_name", dispatched.name);
+        const std::string business_name =
+            message_metadata(terminal, "business_skill_name", framework_name);
+        const std::string skill_status =
+            message_metadata(terminal, "skill_status",
+                             workflow_success ? "completed" : terminal.content);
+        const std::string skill_result =
+            message_metadata(
+                terminal, "skill_result",
+                message_metadata(terminal, "failure_reason", terminal.content));
+        const std::string artifacts_json =
+            message_metadata(terminal, "artifacts_json", "[]");
+
+        if(i > 0) {
+          payload << ",";
+        }
+        payload << "{"
+                << "\"exec_skill_key\":\""
+                << json_escape(dispatched.exec_skill_key) << "\","
+                << "\"framework_skill_name\":\""
+                << json_escape(framework_name) << "\","
+                << "\"business_skill_name\":\""
+                << json_escape(business_name) << "\","
+                << "\"skill_task_id\":\""
+                << json_escape(message_metadata(terminal, "skill_task_id")) << "\","
+                << "\"workflow_execution_id\":\""
+                << json_escape(message_metadata(terminal, "workflow_execution_id")) << "\","
+                << "\"workflow_success\":"
+                << (workflow_success ? "true" : "false") << ","
+                << "\"skill_success\":"
+                << (skill_success ? "true" : "false") << ","
+                << "\"skill_status\":\""
+                << json_escape(skill_status) << "\","
+                << "\"skill_result\":\""
+                << json_escape(skill_result) << "\","
+                << "\"artifacts_json\":\""
+                << json_escape(artifacts_json) << "\""
+                << "}";
+      }
+      payload << "]}";
+      const char* batch_status =
+          all_skills_succeeded ? "true" : (any_skill_succeeded ? "partial" : "false");
+
+      const std::string completion_key =
+          "completion_batch:" + completed_state.batch_id;
+      BuiltinDispatcher::publish_framework_data(
+          *this, completed_state.session_id, completed_state.dialogue_id,
+          completion_key, DataVariant(payload.str()));
+      if(!any_skill_succeeded) {
+        BuiltinDispatcher::publish_framework_data(
+            *this, completed_state.session_id, completed_state.dialogue_id,
+            "skill_failed", DataVariant(std::string("true")));
+      } else {
+        BuiltinDispatcher::remove_framework_data(
+            *this, completed_state.session_id, completed_state.dialogue_id,
+            "skill_failed");
+      }
+
+      auto source_task = session->get_task(completed_state.source_task_id);
+      if(!source_task) {
+        source_task = session->get_coordinator_task();
+      }
+      if(!source_task) {
+        Logger::instance().error_f(
+            "[BATCH] Cannot trigger Coordinator: source task missing, batch_id=%s",
+            completed_state.batch_id.c_str());
+        return launched_count;
+      }
+
+      MMAgentMsgQue::Message coordinator_trigger;
+      coordinator_trigger.message_id =
+          "coordinator-batch-trigger-" + completed_state.batch_id;
+      coordinator_trigger.metadata["task_type"] = "coordinator";
+      coordinator_trigger.metadata["trigger_type"] = "skill_batch_completion";
+      coordinator_trigger.metadata["session_id"] = completed_state.session_id;
+      coordinator_trigger.metadata["dialogue_id"] = completed_state.dialogue_id;
+      coordinator_trigger.metadata["batch_id"] = completed_state.batch_id;
+      coordinator_trigger.metadata["completed_batch_key"] = completion_key;
+      coordinator_trigger.metadata["completed_skill_name"] = "skill-batch";
+      coordinator_trigger.metadata["skill_success"] =
+          batch_status;
+      for(const char* key : {"trace_id", "trace_labels", "user_id", "client_id"}) {
+        if(const auto value = message_metadata(completed_state.launch_context, key);
+           !value.empty()) {
+          coordinator_trigger.metadata[key] = value;
+        }
+      }
+      DataVariant user_prompt;
+      if(BuiltinDispatcher::get_framework_data(
+             *this, completed_state.session_id, completed_state.dialogue_id,
+             "", "user_prompt", user_prompt)) {
+        if(const auto* text = std::get_if<std::string>(&user_prompt)) {
+          coordinator_trigger.content = *text;
+        }
+      }
+      source_task->enqueue_intent_request_message(coordinator_trigger);
+      Logger::instance().info_f(
+          "[BATCH] Coordinator triggered once after ALL join: batch_id=%s results=%zu status=%s",
+          completed_state.batch_id.c_str(),
+          completed_state.terminal_results.size(),
+          batch_status);
+      return launched_count;
+    }
+
+    if(!should_launch) {
+      return launched_count;
+    }
+
+    launch_context.metadata["batch_id"] = launch_batch_id;
+    launch_context.metadata["dialogue_id"] = launch_dialogue_id;
+
+    auto source_task = session->get_task(source_task_id);
+    if(source_task
+       && launch_skill_task(session, skill_to_launch.name,
+                            skill_to_launch.exec_skill_key,
+                            launch_context, source_task)) {
+      ++launched_count;
+      continue;
+    }
+
+    MMAgentMsgQue::Message failure;
+    failure.message_id =
+        "batch-launch-failure-" + skill_to_launch.exec_skill_key;
+    failure.content = "skill_launch_failed";
+    failure.metadata["task_type"] = "skill";
+    failure.metadata["message_type"] = "skill_launch_failed";
+    failure.metadata["skill_name"] = skill_to_launch.name;
+    failure.metadata["skill_success"] = "false";
+    failure.metadata["skill_status"] = "skill_launch_failed";
+    failure.metadata["skill_result"] = "framework_failed_to_launch_skill";
+    failure.metadata["batch_id"] = launch_context.metadata["batch_id"];
+    failure.metadata["exec_skill_key"] = skill_to_launch.exec_skill_key;
+    failure.metadata["dialogue_id"] = launch_context.metadata["dialogue_id"];
+    {
+      std::lock_guard<std::mutex> lock(harness_batches_mutex_);
+      const auto it = harness_batches_.find(batch_state_key);
+      if(it == harness_batches_.end()) {
+        return launched_count;
+      }
+      it->second.active_exec_keys.erase(skill_to_launch.exec_skill_key);
+      it->second.terminal_results.emplace(skill_to_launch.exec_skill_key,
+                                          std::move(failure));
+    }
+    Logger::instance().warn_f(
+        "[BATCH] Skill launch failed and terminal slot was filled: batch_id=%s exec_skill_key=%s",
+        launch_context.metadata["batch_id"].c_str(),
+        skill_to_launch.exec_skill_key.c_str());
+  }
+}
+
+bool MMAgent::handle_harness_batch_terminal(
+    const std::shared_ptr<MMAgentSession>& session,
+    const std::shared_ptr<MMAgentTask>& task,
+    const MMAgentMsgQue::Message& message) {
+  if(!session || !task) {
+    return false;
+  }
+  const std::string batch_id = message_metadata(message, "batch_id");
+  const std::string exec_skill_key = message_metadata(message, "exec_skill_key");
+  if(batch_id.empty() || exec_skill_key.empty()) {
+    return false;
+  }
+
+  std::string dialogue_id = message_metadata(message, "dialogue_id");
+  std::string state_key =
+      harness_batch_state_key(session->get_session_id(), dialogue_id, batch_id);
+  std::string source_task_id;
+  std::string framework_skill_name;
+  bool accepted_active_terminal = false;
+  bool reported_success = false;
+  {
+    std::lock_guard<std::mutex> lock(harness_batches_mutex_);
+    auto it = harness_batches_.find(state_key);
+    if(it == harness_batches_.end() && dialogue_id.empty()) {
+      for(auto candidate = harness_batches_.begin();
+          candidate != harness_batches_.end(); ++candidate) {
+        if(candidate->second.session_id == session->get_session_id()
+           && candidate->second.batch_id == batch_id) {
+          it = candidate;
+          state_key = candidate->first;
+          dialogue_id = candidate->second.dialogue_id;
+          break;
+        }
+      }
+    }
+    if(it == harness_batches_.end()) {
+      Logger::instance().warn_f(
+          "[BATCH] Ignoring late or unknown batch message: batch_id=%s exec_skill_key=%s content=%s",
+          batch_id.c_str(), exec_skill_key.c_str(), message.content.c_str());
+      return true;
+    }
+    auto& state = it->second;
+    if(state.expected_exec_keys.count(exec_skill_key) == 0) {
+      Logger::instance().warn_f(
+          "[BATCH] Ignoring unknown exec_skill_key=%s for batch_id=%s",
+          exec_skill_key.c_str(), batch_id.c_str());
+      return true;
+    }
+    if(!is_harness_batch_terminal(message)) {
+      Logger::instance().debug_f(
+          "[BATCH] Consumed non-terminal batch notification: batch_id=%s exec_skill_key=%s content=%s",
+          batch_id.c_str(), exec_skill_key.c_str(), message.content.c_str());
+      return true;
+    }
+    if(state.terminal_results.count(exec_skill_key) > 0) {
+      Logger::instance().warn_f(
+          "[BATCH] Ignoring duplicate terminal result: batch_id=%s exec_skill_key=%s",
+          batch_id.c_str(), exec_skill_key.c_str());
+      return true;
+    }
+
+    MMAgentMsgQue::Message terminal = message;
+    terminal.metadata["batch_id"] = batch_id;
+    terminal.metadata["exec_skill_key"] = exec_skill_key;
+    terminal.metadata["dialogue_id"] = dialogue_id;
+    state.terminal_results.emplace(exec_skill_key, std::move(terminal));
+    accepted_active_terminal = state.active_exec_keys.erase(exec_skill_key) > 0;
+    state.queued_exec_keys.erase(exec_skill_key);
+    source_task_id = state.source_task_id;
+    for(const auto& dispatched : state.dispatch_order) {
+      if(dispatched.exec_skill_key == exec_skill_key) {
+        framework_skill_name = dispatched.name;
+        break;
+      }
+    }
+    const std::string success_text = message_metadata(message, "skill_success");
+    reported_success =
+        success_text == "true"
+        || (success_text.empty() && message.content == "workflow_completed");
+  }
+
+  auto source_task = session->get_task(source_task_id);
+  if(accepted_active_terminal && source_task) {
+    source_task->on_skill_completed(
+        framework_skill_name.empty() ? "unknown-skill" : framework_skill_name);
+
+    const std::string pending_key =
+        dialogue_id.empty() ? "pending_skills_count"
+                            : dialogue_id + "/pending_skills_count";
+    DataVariant pending_value;
+    long pending_count = 0;
+    if(get_data(pending_key, pending_value)) {
+      if(const auto* count = std::get_if<int64_t>(&pending_value)) {
+        pending_count = *count;
+      } else if(const auto* count_text = std::get_if<std::string>(&pending_value)) {
+        pending_count = std::stol(*count_text);
+      }
+      if(pending_count > 0) {
+        --pending_count;
+        publish_data(pending_key, DataVariant(pending_count));
+      }
+    }
+
+    FLOW_TRACE_SKILL_L(
+        session->get_session_id(), dialogue_id,
+        message_metadata(message, "trace_labels"), source_task->get_task_type(),
+        framework_skill_name.empty() ? "unknown-skill" : framework_skill_name,
+        reported_success ? runtime::FlowEventType::SKILL_COMPLETED
+                         : runtime::FlowEventType::SKILL_FAILED);
+  }
+
+  Logger::instance().info_f(
+      "[BATCH] Filled terminal slot: batch_id=%s exec_skill_key=%s success=%s",
+      batch_id.c_str(), exec_skill_key.c_str(),
+      reported_success ? "true" : "false");
+  pump_harness_batch(session, state_key);
+  return true;
+}
+
+bool MMAgent::can_finalize_harness_dialogue(const std::string& session_id,
+                                            const std::string& dialogue_id,
+                                            std::string* details) {
+  std::vector<std::pair<std::string, std::string>> completed_batches;
+  {
+    std::lock_guard<std::mutex> lock(harness_batches_mutex_);
+    for(const auto& [key, state] : harness_batches_) {
+      (void)key;
+      if(state.session_id != session_id || state.dialogue_id != dialogue_id) {
+        continue;
+      }
+      if(state.terminal_results.size() != state.expected_exec_keys.size()) {
+        if(details) {
+          *details = "batch_id=" + state.batch_id
+              + " terminal=" + std::to_string(state.terminal_results.size())
+              + "/" + std::to_string(state.expected_exec_keys.size())
+              + " active=" + std::to_string(state.active_exec_keys.size())
+              + " queued=" + std::to_string(state.queued_exec_keys.size());
+        }
+        return false;
+      }
+      if(!state.coordinator_triggered) {
+        if(details) {
+          *details = "batch_id=" + state.batch_id
+              + " is terminal but Coordinator has not been triggered";
+        }
+        return false;
+      }
+      completed_batches.emplace_back(
+          state.batch_id, "completion_batch:" + state.batch_id);
+    }
+  }
+
+  for(const auto& [batch_id, completion_key] : completed_batches) {
+    DataVariant consumed_value;
+    if(!BuiltinDispatcher::get_framework_data(
+           *this, session_id, dialogue_id, "",
+           completion_key + ":consumed", consumed_value)) {
+      DataVariant consume_error_value;
+      if(BuiltinDispatcher::get_framework_data(
+             *this, session_id, dialogue_id, "",
+             completion_key + ":consume_error", consume_error_value)) {
+        if(const auto* consume_error =
+               std::get_if<std::string>(&consume_error_value);
+           consume_error && !consume_error->empty()) {
+          Logger::instance().warn_f(
+              "[BATCH_GATE] Allowing explicit batch consumption error: batch_id=%s error=%s",
+              batch_id.c_str(), consume_error->c_str());
+          continue;
+        }
+      }
+      if(details) {
+        *details = "batch_id=" + batch_id
+            + " terminal result has not been consumed";
+      }
+      return false;
+    }
+    const auto* consumed = std::get_if<std::string>(&consumed_value);
+    if(!consumed || *consumed != "true") {
+      if(details) {
+        *details = "batch_id=" + batch_id
+            + " has invalid consumed marker";
+      }
+      return false;
+    }
+  }
+  return true;
+}
+
+void MMAgent::interrupt_queued_harness_skills(
+    const std::shared_ptr<MMAgentSession>& session) {
+  if(!session) {
+    return;
+  }
+
+  std::vector<std::string> batches_to_pump;
+  {
+    std::lock_guard<std::mutex> lock(harness_batches_mutex_);
+    for(auto& [state_key, state] : harness_batches_) {
+      if(state.session_id != session->get_session_id()
+         || state.coordinator_triggered) {
+        continue;
+      }
+
+      bool changed = false;
+      for(const auto& dispatched : state.dispatch_order) {
+        if(state.queued_exec_keys.erase(dispatched.exec_skill_key) == 0) {
+          continue;
+        }
+
+        MMAgentMsgQue::Message terminal;
+        terminal.message_id =
+            "session-interrupt-queued-" + dispatched.exec_skill_key;
+        terminal.content = "INTERRUPTED";
+        terminal.metadata["task_type"] = "skill";
+        terminal.metadata["skill_name"] = dispatched.name;
+        terminal.metadata["business_skill_name"] = dispatched.name;
+        terminal.metadata["batch_id"] = state.batch_id;
+        terminal.metadata["exec_skill_key"] = dispatched.exec_skill_key;
+        terminal.metadata["dialogue_id"] = state.dialogue_id;
+        terminal.metadata["skill_success"] = "false";
+        terminal.metadata["skill_status"] = "interrupted";
+        terminal.metadata["skill_result"] =
+            "session_interrupted_before_launch";
+        state.terminal_results.emplace(dispatched.exec_skill_key,
+                                       std::move(terminal));
+        changed = true;
+      }
+      if(changed) {
+        batches_to_pump.push_back(state_key);
+      }
+    }
+  }
+
+  for(const auto& state_key : batches_to_pump) {
+    pump_harness_batch(session, state_key);
+  }
+}
+
+void MMAgent::clear_harness_batches(const std::string& session_id,
+                                    const std::string& dialogue_id) {
+  std::lock_guard<std::mutex> lock(harness_batches_mutex_);
+  for(auto it = harness_batches_.begin(); it != harness_batches_.end();) {
+    if(it->second.session_id == session_id
+       && (dialogue_id.empty() || it->second.dialogue_id == dialogue_id)) {
+      it = harness_batches_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
     const std::shared_ptr<MMAgentSession>& session,
     const std::shared_ptr<MMAgentTask>& task,
@@ -3005,6 +3731,47 @@ MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
   auto next_skills = BuiltinDispatcher::parse_next_skills(next_skills_value);
   if(next_skills.empty()) {
     return result;
+  }
+
+  bool has_batch_identity = false;
+  bool valid_batch_identity = true;
+  std::string batch_id;
+  std::set<std::string> batch_exec_keys;
+  for(const auto& spec : next_skills) {
+    if(!spec.batch_id.empty()) {
+      has_batch_identity = true;
+      if(batch_id.empty()) {
+        batch_id = spec.batch_id;
+      }
+    }
+  }
+  if(has_batch_identity) {
+    std::vector<HarnessBatchSkill> batch_skills;
+    batch_skills.reserve(next_skills.size());
+    for(const auto& spec : next_skills) {
+      if(spec.batch_id.empty() || spec.batch_id != batch_id
+         || spec.exec_skill_key.empty()
+         || !batch_exec_keys.insert(spec.exec_skill_key).second) {
+        valid_batch_identity = false;
+        break;
+      }
+      batch_skills.push_back({spec.name, spec.exec_skill_key});
+    }
+    if(valid_batch_identity) {
+      return process_harness_batch_launch(
+          session, task, dialogue_id, batch_id, batch_skills, message, log_prefix);
+    }
+
+    // A malformed mixed manifest cannot safely use BatchState because there
+    // is no unique terminal slot for every dispatch.  Preserve the legacy
+    // behavior explicitly and strip batch IDs so those completions are not
+    // mistaken for members of an unregistered batch.
+    Logger::instance().error_f(
+        "[%s][BATCH] Invalid batch manifest; falling back to legacy dispatch: dialogue_id=%s",
+        log_prefix.c_str(), dialogue_id.c_str());
+    for(auto& spec : next_skills) {
+      spec.batch_id.clear();
+    }
   }
 
   // Build keys with dialogue_id prefix
@@ -3154,7 +3921,11 @@ MMAgent::NextSkillsLaunchResult MMAgent::process_next_skills_launch(
                                remaining_names.c_str());
       break;
     }
-    if(launch_skill_task(session, spec.name, spec.exec_skill_key, message_with_dialogue, task)) {
+    MMAgentMsgQue::Message skill_context = message_with_dialogue;
+    if(!spec.batch_id.empty()) {
+      skill_context.metadata["batch_id"] = spec.batch_id;
+    }
+    if(launch_skill_task(session, spec.name, spec.exec_skill_key, skill_context, task)) {
       // launched_skills 维度 = "name:exec_skill_key"，记录复合 key 避免不同
       // exec_skill_key 的 skill-runner 调度实例被误判为同一已 launch skill。
       std::string launched_key_for_spec = spec.exec_skill_key.empty()
@@ -3793,6 +4564,8 @@ bool MMAgent::has_task_event_callback() const {
 
 int MMAgent::clear_session_data_internal(const std::string& session_id, bool emit_event) {
   int total_count = 0;
+
+  clear_harness_batches(session_id);
 
   // 1. Clear runtime_databus_ data under /session/{session_id}/
   if(runtime_databus_) {

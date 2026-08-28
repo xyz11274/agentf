@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <mutex>
 #include <set>
 #include <sstream>
 
@@ -436,6 +437,9 @@ std::vector<SkillSpec> BuiltinDispatcher::parse_next_skills(const DataVariant& v
           if(doc[i].HasMember("exec_skill_key") && doc[i]["exec_skill_key"].IsString()) {
             spec.exec_skill_key = doc[i]["exec_skill_key"].GetString();
           }
+          if(doc[i].HasMember("batch_id") && doc[i]["batch_id"].IsString()) {
+            spec.batch_id = doc[i]["batch_id"].GetString();
+          }
           if(doc[i].HasMember("force") && doc[i]["force"].IsBool()) {
             spec.force = doc[i]["force"].GetBool();
           }
@@ -609,11 +613,23 @@ bool BuiltinDispatcher::remove_framework_data(MMAgent& agent,
   // Use DataBus remove to truly delete the key (empty DataVariant leaves
   // a trace that get_framework_data still finds — a bug we fixed).
   auto* databus = agent.get_runtime_databus();
-  if(databus && databus->remove(new_key)) {
+  if(databus) {
+    if(!databus->remove(new_key)) {
+      return false;
+    }
     Logger::instance().info_f("[REMOVE_FRAMEWORK_DATA] Removed key=%s", new_key.c_str());
     return true;
   }
-  return false;
+
+  bool removed = false;
+  {
+    std::lock_guard<std::mutex> lock(agent.mutex_);
+    removed = agent.data_bus_.erase(new_key) > 0;
+  }
+  if(removed) {
+    Logger::instance().info_f("[REMOVE_FRAMEWORK_DATA] Removed key=%s", new_key.c_str());
+  }
+  return removed;
 }
 
 bool BuiltinDispatcher::remove_user_data(MMAgent& agent,
@@ -744,6 +760,7 @@ void BuiltinDispatcher::cleanup_dialogue_data(MMAgent& agent,
         "[CLEANUP_DIALOGUE] Cleaned %d DataRef entries (Bus-B) for dialogue_id=%s",
         bus_b_cleared, dialogue_id.c_str());
   }
+  agent.clear_harness_batches(session_id, dialogue_id);
 }
 
 }  // namespace framework

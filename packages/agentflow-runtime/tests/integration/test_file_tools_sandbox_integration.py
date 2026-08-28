@@ -308,3 +308,49 @@ def test_backward_compat_none_endpoint(tmp_path):
     ))
     assert result_e.get("success") is True, f"向后兼容 edit 失败: {result_e}"
     assert (tmp_path / "compat.txt").read_text(encoding="utf-8").strip() == "edited content"
+
+
+def test_artifact_download_is_binary_safe_and_untruncated(
+    sandbox_server, tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """Artifact 拉回必须保留超过 read_file 文本上限的任意原始字节。"""
+    from agentflow_runtime import skill_executor as se
+
+    endpoint, workdir = sandbox_server
+    payload = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 128
+    sandbox_file = Path(workdir) / "artifact-download.png"
+    sandbox_file.write_bytes(payload)
+
+    package_dir = tmp_path / "agent"
+    package_dir.mkdir()
+    monkeypatch.setattr(se, "AGENT_PACKAGE_DIR", str(package_dir))
+    downloaded = package_dir / sandbox_file.name
+    try:
+        se._download_from_sandbox(downloaded, endpoint)
+        assert downloaded.is_file(), "Artifact 未从 Sandbox 拉回"
+        assert downloaded.read_bytes() == payload
+    finally:
+        sandbox_file.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_status"),
+    [
+        ("../outside.png", 400),
+        ("workspace/user_client/upload/input.png", 403),
+        ("secrets.env", 415),
+    ],
+)
+def test_artifact_download_rejects_non_artifact_paths(
+    sandbox_server, path: str, expected_status: int
+):
+    """Artifact 端点拒绝越界路径、用户输入目录和非产物后缀。"""
+    import requests
+
+    endpoint, _ = sandbox_server
+    response = requests.post(
+        f"{endpoint}/artifact/download",
+        json={"path": path},
+        timeout=3,
+    )
+    assert response.status_code == expected_status

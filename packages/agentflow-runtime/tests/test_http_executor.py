@@ -153,6 +153,7 @@ def test_write_file_posts_correct_tool(executor):
     assert payload["tool_params"]["content"] == "hello world"
     assert isinstance(result, WriteResult)
     assert result.success is True
+    assert result.path == "/out.txt"
 
 
 # ---------------------------------------------------------------------------

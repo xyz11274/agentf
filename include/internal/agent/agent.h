@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -218,6 +219,7 @@ class MMAgent {
  private:
   // Friend for unit test access to handle_dialogue_interrupt and create_session internals.
   friend class ::agentflow::tests::DialogueInterruptFlagFixture;
+  friend class BuiltinDispatcher;
 
   // P0-2 修复：抽不发事件版，让 handle_session_destroy 控制事件时机
   // （先清 tasks/dialogues 再发事件，避免订阅方收到事件时状态未完全销毁）
@@ -281,6 +283,26 @@ class MMAgent {
     int launched_count = 0;             // Number of skills launched in this call
   };
 
+  struct HarnessBatchSkill {
+    std::string name;
+    std::string exec_skill_key;
+  };
+
+  struct HarnessBatchState {
+    std::string session_id;
+    std::string dialogue_id;
+    std::string batch_id;
+    std::string source_task_id;
+    std::vector<HarnessBatchSkill> dispatch_order;
+    std::set<std::string> expected_exec_keys;
+    std::set<std::string> queued_exec_keys;
+    std::set<std::string> active_exec_keys;
+    std::map<std::string, MMAgentMsgQue::Message> terminal_results;
+    MMAgentMsgQue::Message launch_context;
+    int max_concurrent_skills = 1;
+    bool coordinator_triggered = false;
+  };
+
   // Unified next_skills processing (used by both UNIFIED and COORDINATOR sections)
   // Fetches next_skills from databus with selected_skills backward compat
   NextSkillsLaunchResult process_next_skills_launch(
@@ -289,6 +311,31 @@ class MMAgent {
       const std::string& dialogue_id,
       const MMAgentMsgQue::Message& message,
       const std::string& log_prefix);
+
+  NextSkillsLaunchResult process_harness_batch_launch(
+      const std::shared_ptr<MMAgentSession>& session,
+      const std::shared_ptr<MMAgentTask>& task,
+      const std::string& dialogue_id,
+      const std::string& batch_id,
+      const std::vector<HarnessBatchSkill>& skills,
+      const MMAgentMsgQue::Message& message,
+      const std::string& log_prefix);
+  int pump_harness_batch(const std::shared_ptr<MMAgentSession>& session,
+                         const std::string& batch_state_key);
+  bool handle_harness_batch_terminal(
+      const std::shared_ptr<MMAgentSession>& session,
+      const std::shared_ptr<MMAgentTask>& task,
+      const MMAgentMsgQue::Message& message);
+  bool can_finalize_harness_dialogue(const std::string& session_id,
+                                     const std::string& dialogue_id,
+                                     std::string* details = nullptr);
+  void interrupt_queued_harness_skills(
+      const std::shared_ptr<MMAgentSession>& session);
+  void clear_harness_batches(const std::string& session_id,
+                             const std::string& dialogue_id = "");
+
+  std::map<std::string, HarnessBatchState> harness_batches_;
+  std::mutex                               harness_batches_mutex_;
 
   std::queue<std::shared_ptr<MMAgentTask>> generated_tasks_;
   std::mutex                               generated_tasks_mutex_;

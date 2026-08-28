@@ -364,6 +364,8 @@ class SandboxHttpHandler(BaseHTTPRequestHandler):
             self._handle_exec()
         elif self.path == "/upload":
             self._handle_upload()
+        elif self.path == "/artifact/download":
+            self._handle_artifact_download()
         elif self.path == "/pty/open":
             self._handle_pty_open()
         elif self.path == "/pty/send":
@@ -379,6 +381,73 @@ class SandboxHttpHandler(BaseHTTPRequestHandler):
                 "code": "NOT_FOUND",
                 "message": f"Not found: {self.path}",
             }})
+
+    def _handle_artifact_download(self):
+        """以原始字节下载生成产物：POST /artifact/download。
+
+        只允许既有 Artifact 后缀，拒绝用户 upload 输入目录，并沿用工作区 realpath
+        边界。内容使用 base64 放入 JSON，避免 /exec + read_file 的文本解码和截断。
+        """
+        try:
+            request = self._read_json_body()
+        except (ValueError, json.JSONDecodeError) as e:
+            self._send_json(400, {"error": {
+                "code": "INVALID_JSON",
+                "message": f"Invalid JSON: {e}",
+            }})
+            return
+
+        path = request.get("path", "")
+        if not path:
+            self._send_json(400, {"error": {
+                "code": "TOOL_PARAMS_INVALID",
+                "message": "need path",
+            }})
+            return
+
+        artifact_suffixes = {
+            ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".bmp", ".tiff",
+            ".html", ".htm", ".pdf", ".pptx", ".docx", ".xlsx",
+            ".mp4", ".mp3", ".wav", ".webm", ".csv", ".json", ".yaml", ".yml",
+        }
+        normalized = "/" + path.replace("\\", "/").lstrip("/")
+        if Path(path).suffix.lower() not in artifact_suffixes:
+            self._send_json(415, {"error": {
+                "code": "UNSUPPORTED_ARTIFACT_TYPE",
+                "message": f"unsupported artifact type: {Path(path).suffix}",
+            }})
+            return
+        if "/upload/" in normalized.lower() or "/uploads/" in normalized.lower():
+            self._send_json(403, {"error": {
+                "code": PATH_NOT_IN_UPLOAD_DIR,
+                "message": "user upload inputs cannot be downloaded as generated artifacts",
+            }})
+            return
+
+        workdir = os.environ.get("AF_SANDBOX_WORKSPACE") or os.getcwd()
+        try:
+            resolved = resolve_safe_path(path, workdir)
+            content = Path(resolved).read_bytes()
+        except (ValueError, PathEscapeException) as e:
+            self._send_json(400, {"error": {
+                "code": "PATH_OUT_OF_BOUNDS",
+                "message": str(e),
+                "details": {"path": path},
+            }})
+            return
+        except OSError as e:
+            self._send_json(404, {"error": {
+                "code": "FILE_READ_FAILED",
+                "message": f"failed to read artifact: {e}",
+                "details": {"path": path},
+            }})
+            return
+
+        self._send_json(200, {
+            "path": path,
+            "size": len(content),
+            "content_b64": base64.b64encode(content).decode("ascii"),
+        })
 
     def _handle_upload(self):
         """处理二进制资产上传：POST /upload。

@@ -13,6 +13,7 @@ AGENT_PACKAGE_DIR, 公共模块需要显式绑定)。
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -31,6 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from agentflow_runtime.common.runtime_context import (
     artifact_session_id as _artifact_session_id,
+    dialogue_id as _dialogue_id,
 )
 from prompts import (
     ARTIFACT_DOWNLOAD_TEMPLATE,
@@ -145,34 +147,44 @@ def build_llm_extra_body() -> dict:
 # ── 空响应检测（v1 语义） ──
 
 def is_empty_llm_response(raw: dict) -> bool:
-    """检测 LLM 返回空内容（API 成功但未实际处理请求）。
-
-    典型信号：content="" + usage 全零 + finish_reason=stop
-    （API key 无效 / 模型不支持流式 / 参数配置错误）。
-    """
-    usage = raw.get("usage", {}) or {}
-    choice = raw.get("choices", [{}])[0]
-    msg = choice.get("message", {})
+    """检测没有用户可见内容、也没有工具调用的 LLM 响应。"""
+    if not isinstance(raw, dict):
+        return True
+    choices = raw.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return True
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        return True
+    msg = choice.get("message")
+    if not isinstance(msg, dict):
+        return True
     content = msg.get("content", "")
-    finish = choice.get("finish_reason", "")
-    tc = msg.get("tool_calls")
-    return (
-        not content
-        and not tc
-        and finish == "stop"
-        and usage.get("prompt_tokens", 0) == 0
-        and usage.get("completion_tokens", 0) == 0
+    has_content = (
+        bool(content.strip()) if isinstance(content, str) else bool(content)
     )
+    return not has_content and not msg.get("tool_calls")
 
 
 # ── session 保存（v2 曾独立实现, v1 曾内联 3 处） ──
 
 def save_session_messages(recorder, messages: list[dict]) -> None:
-    """落 recorder(跨 dialogue 保留历史)。去掉 system message(与 v1 同款 messages[1:])。"""
+    """保存运行态快照，并以 append-only 事件记录当时的有效消息。"""
+    messages_to_save = messages[1:]
+    try:
+        from agentflow_runtime import events as hook_events
+        from agentflow_runtime.hooks import trigger as hook_trigger
+
+        hook_trigger(hook_events.COORDINATOR_MESSAGES_SNAPSHOT, {
+            "dialogue_id": _dialogue_id(),
+            "messages": copy.deepcopy(messages_to_save),
+            "message_count": len(messages_to_save),
+        })
+    except Exception as exc:
+        print(f"[flow] WARN: messages snapshot hook failed: {exc}", file=sys.stderr)
     if not recorder.is_connected:
         return
     _t_save = time.time()
-    messages_to_save = messages[1:]
     recorder.write_session_messages(messages_to_save)
     print(f"[timing] session_save={time.time()-_t_save:.1f}s", file=sys.stderr)
 

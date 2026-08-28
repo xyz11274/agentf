@@ -56,6 +56,7 @@ from providers import SessionProvider
 from routes.artifact_extractor import apply_artifact_output_mode, extract_artifact_infos, publicize_artifact_urls, serialize_artifacts
 from routes.conversations import get_store, ConversationRecord
 from services import _pull_and_save_traces
+from services.sessionlog_delivery import append_bridge_delivery
 from session_dependencies import get_session_provider
 
 logger = logging.getLogger("agentflow.bridge.routes.chat_rest")
@@ -781,6 +782,7 @@ async def chat_rest(
         # --- Synchronous mode: accumulate, return a single JSON response ----
         start_ts = time.time()
         accumulated_content: list[str] = []
+        public_content: list[str] = []
         # Collect artifacts from the final chunk (only chunk with artifacts)
         accumulated_artifacts: list[dict] = []
         task_id: str | None = None
@@ -798,9 +800,10 @@ async def chat_rest(
                     if event.get("task_id") is not None:
                         task_id = event["task_id"]
                     # 守不变量 I-1（final=true 的 chunk = 一个对话一个最终响应）：
-                    # 同步路径只保留 final chunk 作为 full_content，非 final chunk 全丢弃。
-                    # 这样持久化到 SessionProvider 的 agent_response、返回给前端的 content、
-                    # 前端刷新加载历史的渲染 三者完全一致——都是 coordinator 的唯一最终回答。
+                    # 同步路径只保留 final chunk，非 final chunk 全丢弃；同时分开保存
+                    # 含真实产物路径的 raw_content（会话持久化）与输出模式转换后的
+                    # content（HTTP 客户端），避免 placeholder/base64 模式退回原始 URL。
+                    # 默认 link+url 模式下两者内容相同。
                     # 非 final chunk（progress / skill 思辨 / llm_token）的过程展示
                     # 仅在 SSE 流式路径透传给前端，被 final 一到即覆盖。
                     if event.get("final"):
@@ -809,6 +812,12 @@ async def chat_rest(
                         accumulated_content = [
                             _extract_token_for_persist(
                                 event.get("raw_content") or event["content"],
+                                event.get("chunk_type"),
+                            )
+                        ]
+                        public_content = [
+                            _extract_token_for_persist(
+                                event["content"],
                                 event.get("chunk_type"),
                             )
                         ]
@@ -836,10 +845,11 @@ async def chat_rest(
             ) from exc
 
         full_content = "".join(accumulated_content)
+        client_content = "".join(public_content)
         elapsed = time.time() - start_ts
         logger.info(
             "chat_turn.complete agent=%s user=%s dialogue=%s elapsed=%.1fs content_len=%d",
-            agent_id, body.user_id, dialogue_id, elapsed, len(full_content),
+            agent_id, body.user_id, dialogue_id, elapsed, len(client_content),
         )
 
         # Persist to the legacy in-memory conversation store so any caller
@@ -907,11 +917,27 @@ async def chat_rest(
                 agent_id, dialogue_id, exc,
             )
 
-        return _ok(ChatRestResponse(
+        response_data = ChatRestResponse(
             task_id=task_id,
-            content=full_content,
+            content=client_content,
             artifacts=accumulated_artifacts,
-        ))
+        )
+        response_payload = _ok(response_data)
+        append_bridge_delivery(
+            agent_package_dir=settings.agent_packages_path / agent_id,
+            dialogue_id=dialogue_id,
+            agent_id=agent_id,
+            session_id=agentflow_session_id,
+            task_id=task_id or "",
+            transport="http_json",
+            stage="response_prepared",
+            status="final",
+            raw_content=full_content,
+            delivered_content=client_content,
+            wire_payload=_ok(response_data.model_dump(mode="json")),
+            artifacts=accumulated_artifacts,
+        )
+        return response_payload
 
     # --- SSE streaming mode ------------------------------------------------
     def _save_conversation(chunks: list[str]) -> None:
@@ -1015,6 +1041,7 @@ async def chat_rest(
         sse_chunks: list[str] = []
         stream_start = time.time()
         sse_chunk_count = 0
+        stream_task_id = ""
         try:
             async for event in event_gen:
                 if event["type"] == "_session_info":
@@ -1025,6 +1052,8 @@ async def chat_rest(
                     continue  # internal event, not sent to client
 
                 if event["type"] == "chunk":
+                    if event.get("task_id") is not None:
+                        stream_task_id = str(event["task_id"])
                     chunk_type = event.get("chunk_type")
                     is_llm_chunk = (chunk_type == "llm_chunk")
                     # ── llm_chunk: 节点推的是原始 OpenAI SSE chunk JSON，原样透传 ──
@@ -1072,7 +1101,8 @@ async def chat_rest(
                         meta_val = event.get(meta_key)
                         if meta_val:
                             payload[meta_key] = meta_val
-                    yield _sse_data_json(payload)
+                    wire_frame = _sse_data_json(payload)
+                    yield wire_frame
                     _capture_sse_payload(payload)
                     if sse_dump_fh:
                         try:
@@ -1091,6 +1121,25 @@ async def chat_rest(
                     )
                     sse_chunk_count += 1
                     if event["final"]:
+                        append_bridge_delivery(
+                            agent_package_dir=settings.agent_packages_path / agent_id,
+                            dialogue_id=dialogue_id,
+                            agent_id=agent_id,
+                            session_id=active.session_id,
+                            task_id=stream_task_id,
+                            transport="sse",
+                            stage="server_yielded",
+                            status="final",
+                            raw_content=_extract_token_for_persist(
+                                event.get("raw_content") or event["content"],
+                                event.get("chunk_type"),
+                            ),
+                            delivered_content=_extract_token_for_persist(
+                                event["content"], event.get("chunk_type"),
+                            ),
+                            wire_payload={"frame": wire_frame, "data": payload},
+                            artifacts=event.get("artifacts"),
+                        )
                         # 仅 final chunk 的内容入库（非 final 的 progress / llm_token 仅 SSE 展示）
                         # 持久化用替换前 raw_content（含真实产物路径），LLM 下一轮历史可见
                         # 路径避免重复生成（2026-08-17 复盘修复）；对外展示仍用 content。
@@ -1103,6 +1152,19 @@ async def chat_rest(
                             agent_id, dialogue_id, time.time() - stream_start, sse_chunk_count,
                         )
                         yield _SSE_DONE
+                        append_bridge_delivery(
+                            agent_package_dir=settings.agent_packages_path / agent_id,
+                            dialogue_id=dialogue_id,
+                            agent_id=agent_id,
+                            session_id=active.session_id,
+                            task_id=stream_task_id,
+                            transport="sse",
+                            stage="server_stream_completed",
+                            status="done",
+                            raw_content="",
+                            delivered_content="",
+                            wire_payload=_SSE_DONE,
+                        )
                         _save_conversation(final_content)
                         await _persist_to_provider(
                             "".join(final_content), event.get("artifacts"),
@@ -1119,7 +1181,21 @@ async def chat_rest(
                         "chat_sse.stream agent=%s dialogue=%s elapsed=%.3fs chunks=%d status=error",
                         agent_id, dialogue_id, time.time() - stream_start, sse_chunk_count,
                     )
-                    yield _sse_data_json(err_payload)
+                    error_frame = _sse_data_json(err_payload)
+                    yield error_frame
+                    append_bridge_delivery(
+                        agent_package_dir=settings.agent_packages_path / agent_id,
+                        dialogue_id=dialogue_id,
+                        agent_id=agent_id,
+                        session_id=active.session_id,
+                        task_id=stream_task_id,
+                        transport="sse",
+                        stage="server_yielded",
+                        status="error",
+                        raw_content=event["message"],
+                        delivered_content=event["message"],
+                        wire_payload={"frame": error_frame, "data": err_payload},
+                    )
                     if sse_dump_fh:
                         try:
                             sse_dump_fh.write(json.dumps(err_payload, ensure_ascii=False, default=str) + "\n")
@@ -1127,6 +1203,19 @@ async def chat_rest(
                         except Exception:
                             pass
                     yield _SSE_DONE
+                    append_bridge_delivery(
+                        agent_package_dir=settings.agent_packages_path / agent_id,
+                        dialogue_id=dialogue_id,
+                        agent_id=agent_id,
+                        session_id=active.session_id,
+                        task_id=stream_task_id,
+                        transport="sse",
+                        stage="server_stream_completed",
+                        status="done_after_error",
+                        raw_content="",
+                        delivered_content="",
+                        wire_payload=_SSE_DONE,
+                    )
                     _save_conversation(sse_chunks)
                     await _persist_to_provider("".join(sse_chunks))
                     return
@@ -1136,6 +1225,19 @@ async def chat_rest(
                         agent_id, dialogue_id, time.time() - stream_start, sse_chunk_count,
                     )
                     yield _SSE_DONE
+                    append_bridge_delivery(
+                        agent_package_dir=settings.agent_packages_path / agent_id,
+                        dialogue_id=dialogue_id,
+                        agent_id=agent_id,
+                        session_id=active.session_id,
+                        task_id=stream_task_id,
+                        transport="sse",
+                        stage="server_stream_completed",
+                        status="done",
+                        raw_content="",
+                        delivered_content="",
+                        wire_payload=_SSE_DONE,
+                    )
                     _save_conversation(sse_chunks)
                     await _persist_to_provider("".join(sse_chunks))
                     return

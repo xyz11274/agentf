@@ -161,6 +161,7 @@ class HTTPExecutor(ToolExecutor):
             success=success,
             error=data.get("error"),
             bytes_written=len(content.encode("utf-8")) if success else 0,
+            path=path if success else "",
         )
 
     # -- edit_file ----------------------------------------------------------

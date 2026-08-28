@@ -2,7 +2,7 @@
 
 设计文档：docs/design/features/hooks/hook-system.md §2.7。
 
-与 ``agentflow_runtime.events``（27 项可观测性事件）**并存、职责分离**：
+与 ``agentflow_runtime.events``（28 项可观测性事件）**并存、职责分离**：
 - ``events``：可观测性通知（emit_event/emit_span 消费端），hook 只读观察，不承担挂载职责。
 - ``mounts``：**hook 专用动作边界**，handler 在此注入/修改/阻断（before=动作前，after=动作后）。
 

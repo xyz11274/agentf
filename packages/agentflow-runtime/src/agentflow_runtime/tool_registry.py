@@ -87,9 +87,12 @@ class _LocalToolRegistry:
 
         # 3. Load skill-scoped tools from harness/skills/{skill_name}/scripts/
         if skill_name:
-            scripts_dir = os.path.join(_get_skills_base(), skill_name, "scripts")
-            if os.path.isdir(scripts_dir):
-                _ld(self, scripts_dir, prefix=f"_skill_{skill_name}_")
+            skill_dir = _se._resolve_skill_dir(skill_name)
+            if skill_dir is not None:
+                scripts_dir = os.path.realpath(os.path.join(skill_dir, "scripts"))
+                if (os.path.dirname(scripts_dir) == skill_dir
+                        and os.path.isdir(scripts_dir)):
+                    _ld(self, scripts_dir, prefix=f"_skill_{skill_name}_")
 
         # 4. Load MCP server tools (追加，不阻塞，I-4 优雅降级)
         self._load_mcp_tools()
@@ -204,14 +207,20 @@ class _LocalToolRegistry:
 
 def _load_dir(registry: _LocalToolRegistry, directory: str, prefix: str = ""):
     """Load all valid tool modules from a directory into the registry."""
+    directory = os.path.realpath(directory)
     for entry in sorted(os.listdir(directory)):
         if not entry.endswith(".py") or entry.startswith("_"):
             continue
         mod_name = entry[:-3]
+        entry_path = os.path.realpath(os.path.join(directory, entry))
+        if os.path.dirname(entry_path) != directory:
+            logger.warning("tool_loader.skip module=%s error=path_outside_tool_dir", mod_name)
+            continue
+
         try:
             spec = _importlib_util.spec_from_file_location(
                 f"_tool_{prefix}{mod_name}",
-                os.path.join(directory, entry))
+                entry_path)
             if spec is None or spec.loader is None:
                 continue
             _mod = _importlib_util.module_from_spec(spec)
@@ -221,9 +230,19 @@ def _load_dir(registry: _LocalToolRegistry, directory: str, prefix: str = ""):
             continue
         if not all(hasattr(_mod, a) for a in ("TOOL_NAME", "TOOL_DESCRIPTION", "TOOL_PARAMS", "execute")):
             continue
-        registry._modules[_mod.TOOL_NAME] = _mod
-        registry._tools.append({"type": "function", "function": {
-            "name": _mod.TOOL_NAME, "description": _mod.TOOL_DESCRIPTION, "parameters": _mod.TOOL_PARAMS}})
+        tool_name = _mod.TOOL_NAME
+        tool_schema = {"type": "function", "function": {
+            "name": tool_name,
+            "description": _mod.TOOL_DESCRIPTION,
+            "parameters": _mod.TOOL_PARAMS,
+        }}
+        registry._modules[tool_name] = _mod
+        for index, registered in enumerate(registry._tools):
+            if registered.get("function", {}).get("name") == tool_name:
+                registry._tools[index] = tool_schema
+                break
+        else:
+            registry._tools.append(tool_schema)
 
 
 # ---------------------------------------------------------------------------

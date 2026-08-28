@@ -37,6 +37,7 @@ enum class FlowEventType {
   DATA_EXCHANGE,
   SKILL_LAUNCHED,
   SKILL_COMPLETED,
+  SKILL_FAILED,
   RESPONSE_SENT,
   DIALOGUE_CREATED,
   DIALOGUE_COMPLETED,
@@ -65,6 +66,8 @@ inline std::string flow_event_type_name(FlowEventType t) {
       return "skill-launched";
     case FlowEventType::SKILL_COMPLETED:
       return "skill-completed";
+    case FlowEventType::SKILL_FAILED:
+      return "skill-failed";
     case FlowEventType::RESPONSE_SENT:
       return "response-sent";
     case FlowEventType::DIALOGUE_CREATED:

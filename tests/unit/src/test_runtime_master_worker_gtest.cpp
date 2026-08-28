@@ -316,6 +316,64 @@ TEST(RuntimeMasterWorkerTest, WorkerExecutesShellScriptViaEngine) {
   fs::remove(script);
 }
 
+TEST(RuntimeMasterWorkerTest, WorkflowTraceReachesWorkerWithoutOrphanParent) {
+  namespace fs = std::filesystem;
+  const fs::path script = unique_build_script_path("test_worker_trace_env");
+  const fs::path output = unique_build_script_path("test_worker_trace_output");
+  const std::string trace_id =
+      "trace-worker-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
+  {
+    std::ofstream ofs(script);
+    ofs << "#!/bin/sh\n";
+    ofs << "printf '%s\\n%s\\n' \"$AF_TRACE_ID\" \"$AF_PARENT_SPAN_ID\" > '"
+        << output.string() << "'\n";
+  }
+  fs::permissions(script, fs::perms::owner_exec | fs::perms::owner_read | fs::perms::owner_write,
+                  fs::perm_options::add);
+
+  framework::MMAgent::Config agent_cfg;
+  agent_cfg.id = "agent-worker-trace";
+  agent_cfg.name = "agent-worker-trace";
+  auto agent = std::make_shared<framework::MMAgent>(agent_cfg);
+
+  framework::MMWorkflow::Config workflow_cfg;
+  workflow_cfg.id = "workflow-worker-trace";
+  workflow_cfg.name = "workflow-worker-trace";
+  auto workflow = std::make_shared<framework::MMWorkflow>(workflow_cfg);
+
+  framework::MMNode::Config node_cfg;
+  node_cfg.id = "node-worker-trace";
+  node_cfg.name = "node-worker-trace";
+  node_cfg.type = "task";
+  node_cfg.execution_mode = framework::MMNode::ExecutionMode::SHELL_SCRIPT;
+  node_cfg.command = script.string();
+  workflow->add_node(std::make_shared<framework::MMNode>(node_cfg));
+  agent->add_workflow(workflow);
+
+  runtime::MMAgentRuntime runtime;
+  ASSERT_TRUE(runtime.register_agent(agent));
+  ASSERT_TRUE(runtime.start());
+  ASSERT_TRUE(runtime.execute_workflow(agent->get_id(), workflow->get_id(), {}, "", "", "", "",
+                                       trace_id));
+
+  for(int attempt = 0; attempt < 100 && !fs::exists(output); ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  ASSERT_TRUE(fs::exists(output));
+
+  std::ifstream probe(output);
+  std::string observed_trace_id;
+  std::string observed_parent_span_id;
+  std::getline(probe, observed_trace_id);
+  std::getline(probe, observed_parent_span_id);
+  EXPECT_EQ(observed_trace_id, trace_id);
+  EXPECT_TRUE(observed_parent_span_id.empty());
+
+  EXPECT_TRUE(runtime.stop());
+  fs::remove(script);
+  fs::remove(output);
+}
+
 TEST(RuntimeMasterWorkerTest, WorkerHotReloadAndRollback) {
   namespace fs = std::filesystem;
   const fs::path script = unique_build_script_path("test_worker_hot_reload");

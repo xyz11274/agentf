@@ -56,6 +56,23 @@ def test_e2b_sandbox_html_path_skipped_missing_without_pass(monkeypatch: pytest.
     )
 
 
+def test_local_sandbox_structured_relative_path_passes_collect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Local Sandbox 的结构化产物应先放行，再由 ensure 拉回宿主机。"""
+    pkg = tmp_path / "agent"
+    pkg.mkdir()
+    monkeypatch.setattr(skill_executor, "AGENT_PACKAGE_DIR", str(pkg))
+    monkeypatch.setenv("AF_SANDBOX_MODE", "local")
+    monkeypatch.setenv("AF_SANDBOX_ENDPOINT", "http://sandbox:8080")
+
+    result = skill_executor.extract_structured_artifacts(
+        '{"files": ["assets/report.html"]}'
+    )
+
+    assert result == [str(pkg / "assets" / "report.html")]
+
+
 def test_ensure_in_package_e2b_html_uses_sdk_channel(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

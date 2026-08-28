@@ -6,6 +6,7 @@
 
 #ifndef AGENTFLOW_DSL_JSON_ADAPTER_H
 #define AGENTFLOW_DSL_JSON_ADAPTER_H
+#include <cstdint>
 
 #include <map>
 #include <memory>

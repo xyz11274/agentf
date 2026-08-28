@@ -1,5 +1,6 @@
 #include "runtime/agent_runtime.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -117,6 +118,18 @@ static std::string build_framework_key(const std::string& session_id,
   }
   bus_key += key;
   return bus_key;
+}
+
+// Harness Skill nodes return structured business outcomes independently from
+// the workflow execution result. A known failure status affects skill_success,
+// but does not turn a successfully executed workflow into workflow_failed.
+static bool is_harness_skill_failure_status(const std::string& status) {
+  static const std::set<std::string> failure_statuses = {
+      "node_timeout", "interrupted", "llm_error", "tool_call_error",
+      "tool_call_loop_detected", "max_rounds_reached",
+      "dispatch_manifest_error",
+  };
+  return failure_statuses.count(status) > 0;
 }
 
 std::vector<std::shared_ptr<framework::MMAgentTask>> collect_pool_template_tasks(const AgentPtr& agent) {
@@ -776,6 +789,7 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
   }
 
   std::string dialogue_id;
+  std::string workflow_trace_id;
   {
     std::lock_guard<std::mutex> lock(workflow_state_mutex_);
     auto                        state_it = workflow_states_.find(execution_id);
@@ -787,7 +801,8 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
        || state.running_nodes.count(node->get_id()) == 1) {
       return;
     }
-    dialogue_id = state_it->second.dialogue_id;
+    dialogue_id = state.dialogue_id;
+    workflow_trace_id = state.trace_id;
     state.queued_nodes.erase(node->get_id());
     state.running_nodes.insert(node->get_id());
   }
@@ -1000,6 +1015,17 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
     }
   }
 
+  // process_node runs on a worker thread, so request-thread TraceContext is not
+  // available here. Re-inject the execution-owned trace before opening NODE.
+  auto& node_trace_context = trace::TraceContext::current();
+  node_trace_context.clear();
+  if(!workflow_trace_id.empty()) {
+    node_trace_context.inject(workflow_trace_id, "");
+  }
+  struct NodeTraceContextCleanup {
+    ~NodeTraceContextCleanup() { trace::TraceContext::current().clear(); }
+  } node_trace_context_cleanup;
+
   // Trace: open a NODE span (RAII — records to TraceManager on scope exit)
   trace::ScopedSpan node_span(
       trace::SpanKind::NODE,
@@ -1136,6 +1162,19 @@ void MMAgentRuntime::process_node(AgentPtr agent, WorkflowPtr workflow, NodePtr 
 
     // Check if this node has downstream edges
     bool has_downstream = has_downstream_edge(workflow, node);
+
+    // Skill completion must use the outputs produced by this execution. The
+    // dialogue-scoped DataBus keys below are compatibility/publication keys and
+    // may be overwritten by a concurrently running skill workflow.
+    if(!has_downstream) {
+      std::lock_guard<std::mutex> lock(workflow_state_mutex_);
+      auto state_it = workflow_states_.find(execution_id);
+      if(state_it != workflow_states_.end() && state_it->second.task_type == "skill") {
+        for(const auto& output : node_outputs) {
+          state_it->second.terminal_outputs[output.first] = output.second;
+        }
+      }
+    }
 
     if(has_downstream) {
       // Has downstream → Edge point-to-point transfer
@@ -1503,6 +1542,9 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
   std::string complete_skill_task_id;
   std::string complete_skill_name;
   std::string complete_failure_details;
+  std::string complete_exec_skill_key;
+  std::string complete_batch_id;
+  DataMap     complete_terminal_outputs;
 
   {
     std::lock_guard<std::mutex> lock(workflow_state_mutex_);
@@ -1564,6 +1606,19 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
       complete_skill_task_id  = state.skill_task_id;
       complete_skill_name     = state.skill_name;
       complete_failure_details = state.failure_details;
+      complete_terminal_outputs = state.terminal_outputs;
+      const auto exec_skill_key_it = state.inputs.find("exec_skill_key");
+      if(exec_skill_key_it != state.inputs.end()) {
+        if(const auto* value = std::get_if<std::string>(&exec_skill_key_it->second)) {
+          complete_exec_skill_key = *value;
+        }
+      }
+      const auto batch_id_it = state.inputs.find("batch_id");
+      if(batch_id_it != state.inputs.end()) {
+        if(const auto* value = std::get_if<std::string>(&batch_id_it->second)) {
+          complete_batch_id = *value;
+        }
+      }
     } else if(success) {
       // Get the cloned workflow for this execution
       WorkflowPtr workflow;
@@ -1637,22 +1692,34 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
             response.metadata["dialogue_id"] = complete_dialogue_id;
             // Pass skill_name for skill completion tracking
             response.metadata["skill_name"] = complete_skill_name;
-            // Terminal node outputs are stored under the session-isolated framework
-            // key. Carry the skill result on the completion event so it survives the
-            // workflow boundary and does not depend on legacy, unqualified lookups.
+            response.metadata["workflow_execution_id"] = execution_id;
+            if(!complete_skill_task_id.empty()) {
+              response.metadata["skill_task_id"] = complete_skill_task_id;
+            }
+            if(!complete_exec_skill_key.empty()) {
+              response.metadata["exec_skill_key"] = complete_exec_skill_key;
+            }
+            if(!complete_batch_id.empty()) {
+              response.metadata["batch_id"] = complete_batch_id;
+            }
+            // Completion reads only this workflow execution's terminal snapshot.
+            // Dialogue-scoped DataBus outputs remain available for compatibility,
+            // but are not authoritative when sibling skills run concurrently.
             if(complete_task_type == "skill") {
-              DataVariant skill_result;
-              const std::string skill_result_key = build_framework_key(
-                  complete_session_id, complete_dialogue_id, complete_workflow,
-                  "skill_result");
-              if(get_databus(complete_agent).get(skill_result_key, skill_result)) {
-                if(const auto* text = std::get_if<std::string>(&skill_result);
-                   text && !text->empty()) {
-                  response.metadata["skill_result"] = *text;
-                  Logger::instance().info_f(
-                      "[WORKFLOW_COMPLETE] Attached skill_result (%zu bytes)",
-                      text->size());
-                }
+              const auto terminal_text = [&complete_terminal_outputs](
+                                             const std::string& key)
+                  -> const std::string* {
+                const auto output_it = complete_terminal_outputs.find(key);
+                return output_it == complete_terminal_outputs.end()
+                           ? nullptr
+                           : std::get_if<std::string>(&output_it->second);
+              };
+              if(const auto* text = terminal_text("skill_result");
+                 text && !text->empty()) {
+                response.metadata["skill_result"] = *text;
+                Logger::instance().info_f(
+                    "[WORKFLOW_COMPLETE] Attached skill_result (%zu bytes)",
+                    text->size());
               }
               if(!complete_ok && !response.metadata.count("skill_result")) {
                 response.metadata["skill_result"] =
@@ -1665,29 +1732,27 @@ void MMAgentRuntime::update_workflow_state(const std::string& execution_id, cons
                     "[WORKFLOW_COMPLETE] Attached synthesized failure result (%zu bytes)",
                     response.metadata["skill_result"].size());
               }
-              DataVariant business_skill_name;
-              const std::string business_skill_name_key = build_framework_key(
-                  complete_session_id, complete_dialogue_id, complete_workflow,
-                  "skill_name");
-              if(get_databus(complete_agent).get(business_skill_name_key,
-                                                 business_skill_name)) {
-                if(const auto* text = std::get_if<std::string>(&business_skill_name);
-                   text && !text->empty()) {
-                  response.metadata["business_skill_name"] = *text;
-                  Logger::instance().info_f(
-                      "[WORKFLOW_COMPLETE] Attached business_skill_name=%s",
-                      text->c_str());
-                }
+              if(const auto* text = terminal_text("status");
+                 text && !text->empty()) {
+                response.metadata["skill_status"] = *text;
+                response.metadata["skill_success"] =
+                    complete_ok && !is_harness_skill_failure_status(*text)
+                        ? "true"
+                        : "false";
               }
-              DataVariant artifacts_json;
-              const std::string artifacts_key = build_framework_key(
-                  complete_session_id, complete_dialogue_id, complete_workflow,
-                  "artifacts_json");
-              if(get_databus(complete_agent).get(artifacts_key, artifacts_json)) {
-                if(const auto* text = std::get_if<std::string>(&artifacts_json);
-                   text && !text->empty() && *text != "[]") {
-                  response.metadata["artifacts_json"] = *text;
-                }
+              if(!response.metadata.count("skill_success")) {
+                response.metadata["skill_success"] = complete_ok ? "true" : "false";
+              }
+              if(const auto* text = terminal_text("skill_name");
+                 text && !text->empty()) {
+                response.metadata["business_skill_name"] = *text;
+                Logger::instance().info_f(
+                    "[WORKFLOW_COMPLETE] Attached business_skill_name=%s",
+                    text->c_str());
+              }
+              if(const auto* text = terminal_text("artifacts_json");
+                 text && !text->empty() && *text != "[]") {
+                response.metadata["artifacts_json"] = *text;
               }
             }
             // Pass trace_labels for flow trace correlation across workflow boundaries
@@ -2088,11 +2153,25 @@ void MMAgentRuntime::agent_task_poller_loop() {
            !skill_artifacts.empty()) {
           inputs["skill_artifacts"] = skill_artifacts;
         }
+        std::string completed_batch_key;
+        if(task->get_parameter("completed_batch_key", completed_batch_key)
+           && !completed_batch_key.empty()) {
+          inputs["completed_batch_key"] = completed_batch_key;
+          Logger::instance().info_f(
+              "[TASK_POLLER] Set inputs[completed_batch_key]='%s'",
+              completed_batch_key.c_str());
+        }
         // Propagate exec_skill_key for skill-specific data routing
         std::string exec_skill_key;
         if(task->get_parameter("exec_skill_key", exec_skill_key) && !exec_skill_key.empty()) {
           inputs["exec_skill_key"] = exec_skill_key;
           Logger::instance().info_f("[TASK_POLLER] Set inputs[exec_skill_key]='%s'", exec_skill_key.c_str());
+        }
+        std::string batch_id;
+        if(task->get_parameter("batch_id", batch_id) && !batch_id.empty()) {
+          inputs["batch_id"] = batch_id;
+          Logger::instance().info_f("[TASK_POLLER] Set inputs[batch_id]='%s'",
+                                    batch_id.c_str());
         }
         // Propagate sandbox_endpoint + sandbox_mode from task parameters to node inputs
         // for worker env var injection (AF_SANDBOX_ENDPOINT + AF_SANDBOX_MODE).
@@ -2200,6 +2279,16 @@ void MMAgentRuntime::agent_task_poller_loop() {
         response.metadata["worker_id"] = schedule_result.worker_id;
         response.metadata["message_type"] = "data_exchange";
         response.metadata["dialogue_id"] = task_dialogue_id;
+        response.metadata["skill_task_id"] = task->get_config().task_id;
+        if(!skill_name.empty()) {
+          response.metadata["skill_name"] = skill_name;
+        }
+        if(!exec_skill_key.empty()) {
+          response.metadata["exec_skill_key"] = exec_skill_key;
+        }
+        if(!batch_id.empty()) {
+          response.metadata["batch_id"] = batch_id;
+        }
         // Propagate trace_id for end-to-end correlation in early data_exchange
         if(!task_trace_id.empty()) {
           response.metadata["trace_id"] = task_trace_id;

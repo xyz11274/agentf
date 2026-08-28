@@ -58,6 +58,9 @@ class _FakeDataBus:
             "skill_name": "outfit-stylist",
             "prompt": "请帮我查询天气并给出建议",
             "load_skills": [],
+            "batch_id": "batch:d_test_tool_parallel:r1",
+            "request_index": 2,
+            "force": True,
         })
 
     def is_connected(self) -> bool:
@@ -103,6 +106,8 @@ class _FakeToolRegistry:
         time.sleep(0.2)  # 模拟工具耗时（如沙箱网络 I/O）
         end = time.monotonic()
         self.calls.append((name, start, end))
+        if args.get("command") == "echo b":
+            return json.dumps({"error": "simulated failure", "tool": name})
         return json.dumps({"stdout": f"ok:{name}", "exit_code": 0, "stderr": "", "tool": name})
 
 
@@ -143,15 +148,41 @@ def test_multiple_tool_calls_execute_in_parallel(skill_env, tmp_path):
         _make_llm_response(tool_calls=tool_calls, finish="tool_calls"),
         _make_llm_response(content="完成"),
     ]
+    llm_side_effect[0]["_agentflow_call_id"] = "llm-call-1"
+    llm_side_effect[1]["_agentflow_call_id"] = "llm-call-2"
+
+    llm_result_payloads = []
+    effective_responses = []
+    fake_recorder = MagicMock()
+
+    def record_effective_response(call_id, response):
+        snapshot = json.loads(json.dumps(response, ensure_ascii=False))
+        snapshot.pop("_agentflow_call_id", None)
+        effective_responses.append((call_id, snapshot))
+        return snapshot
+
+    fake_recorder.record_effective_response.side_effect = record_effective_response
+
+    tool_result_payloads = []
+    skill_start_payloads = []
 
     def fake_hook_trigger(event_name, payload, **kwargs):
+        if event_name == skill_executor.hook_events.SKILL_EXECUTOR_TRIGGER:
+            skill_start_payloads.append(payload)
+        if event_name == skill_executor.hook_mounts.SKILL_EXECUTOR_AFTER_LLM_CALL:
+            if payload["call_id"] == "llm-call-2":
+                payload["raw_choices"]["message"]["content"] = "Hook 后完成"
+        if event_name == skill_executor.hook_events.SKILL_EXECUTOR_LLM_RESULT:
+            llm_result_payloads.append(payload)
         if event_name == skill_executor.hook_mounts.SKILL_EXECUTOR_AFTER_TOOL_CALL:
             return {**payload, "results": []}
+        if event_name == skill_executor.hook_events.SKILL_EXECUTOR_TOOL_RESULT:
+            tool_result_payloads.append(payload)
         return payload
 
     with patch.object(skill_executor, "DataBusClient", return_value=fake_bus), \
          patch.object(skill_executor, "call_llm", side_effect=llm_side_effect) as mock_llm, \
-         patch.object(skill_executor, "emit_event"), \
+         patch.object(skill_executor, "get_recorder", return_value=fake_recorder), \
          patch.object(skill_executor, "hook_trigger", side_effect=fake_hook_trigger), \
          patch.object(skill_executor, "AgentConfig") as mock_cfg, \
          patch.object(skill_executor, "_LocalToolRegistry", return_value=fake_reg), \
@@ -194,12 +225,55 @@ def test_multiple_tool_calls_execute_in_parallel(skill_env, tmp_path):
     tool_messages = [m for m in second_round_messages if m.get("role") == "tool"]
     assert [m["tool_call_id"] for m in tool_messages] == ["call_1", "call_2"]
 
-    # ④ 结果写入 DataBus（status=completed）
+    # Skill invocation preserves the dispatch identity and complete arguments.
+    assert len(skill_start_payloads) == 1
+    skill_start_payload = skill_start_payloads[0]
+    assert set(skill_start_payload["skill_doc_digests"]) == {"outfit-stylist"}
+    assert all(
+        len(digest) == 64
+        for digest in skill_start_payload["skill_doc_digests"].values()
+    )
+    assert len(skill_start_payload["system_prompt_sha256"]) == 64
+    assert len(skill_start_payload["task_instruction_sha256"]) == 64
+    assert skill_start_payload["tool_definition_digests"][0]["name"] == "bash"
+    assert len(skill_start_payload["tool_definition_digests"][0]["sha256"]) == 64
+    for key in (
+        "skill_doc_digests", "system_prompt_sha256",
+        "task_instruction_sha256", "tool_definition_digests",
+    ):
+        skill_start_payload.pop(key)
+    assert skill_start_payload == {
+        "session_id": "ses_test",
+        "dialogue_id": "d_test_tool_parallel",
+        "skill_name": "outfit-stylist",
+        "skill_prompt": "请帮我查询天气并给出建议",
+        "skill_prompt_preview": "请帮我查询天气并给出建议",
+        "load_skills": [],
+        "effective_load_skills": ["outfit-stylist"],
+        "force": True, "request_index": 2, "exec_skill_key": "dispatch:1",
+        "batch_id": "batch:d_test_tool_parallel:r1",
+        "model": "test", "max_rounds": 5, "tools_count": 1,
+        "tool_names": ["bash"],
+    }
+
+    # ④ 最终 Tool Result 观测保留原始顺序、调用身份、实参和完整返回值。
+    assert len(tool_result_payloads) == 1
+    assert tool_result_payloads[0]["after_hook_rewrite_status"] == "ignored_invalid"
+    assert "count mismatch" in tool_result_payloads[0]["after_hook_rewrite_error"]
+    result_records = tool_result_payloads[0]["tool_results"]
+    assert [r["tool_call_id"] for r in result_records] == ["call_1", "call_2"]
+    assert [r["ordinal"] for r in result_records] == [1, 2]
+    assert [r["arguments"]["command"] for r in result_records] == ["echo a", "echo b"]
+    assert [r["status"] for r in result_records] == ["completed", "error"]
+    assert json.loads(result_records[0]["result"])["stdout"] == "ok:bash"
+    assert json.loads(result_records[1]["result"])["error"] == "simulated failure"
+
+    # ⑤ 结果写入 DataBus（status=completed）
     put_calls = dict(fake_bus.put_calls)
     result = json.loads(put_calls["skill_result:skill-runner"])
     assert result["status"] == "completed"
 
-    # ⑤ 主线程记录一个 tool_batch span，父节点是 skill span。
+    # ⑥ 主线程记录一个 tool_batch span，父节点是 skill span。
     span_files = list(tmp_path.rglob("python_spans_*.ndjson"))
     spans = [json.loads(line) for path in span_files for line in path.read_text().splitlines()]
     skill_spans = [s for s in spans if s["name"] == skill_executor.hook_events.SPAN_SKILL_EXECUTOR_EXECUTE]
@@ -210,4 +284,242 @@ def test_multiple_tool_calls_execute_in_parallel(skill_env, tmp_path):
     assert tool_spans[0]["parent_span_id"] == skill_spans[0]["span_id"]
     assert tool_spans[0]["status"] == "OK"
     assert tool_spans[0]["tags"]["tool_count"] == "2"
+
+    # Tool Call/Result 事件随 Skill span 写入 NDJSON，结果可直接按 call_id 回放。
+    skill_events = {event["name"]: event for event in skill_spans[0]["events"]}
+    # after_llm Hook 的实际执行值必须同时进入 Recorder 和最终观察事件。
+    assert result["skill_result"] == "Hook 后完成"
+    assert [call_id for call_id, _ in effective_responses] == ["llm-call-1", "llm-call-2"]
+    assert effective_responses[-1][1]["choices"][0]["message"]["content"] == "Hook 后完成"
+    assert [payload["call_id"] for payload in llm_result_payloads] == [
+        "llm-call-1", "llm-call-2",
+    ]
+    assert llm_result_payloads[-1]["response"] == effective_responses[-1][1]
+    call_records = json.loads(
+        skill_events[skill_executor.hook_events.SKILL_EXECUTOR_TOOL_CALL]
+        ["attributes"]["tool_calls_json"]
+    )
+    persisted_results = json.loads(
+        skill_events[skill_executor.hook_events.SKILL_EXECUTOR_TOOL_RESULT]
+        ["attributes"]["tool_results_json"]
+    )
+    assert [r["tool_call_id"] for r in call_records] == ["call_1", "call_2"]
+    assert persisted_results == result_records
     assert SpanContext.current().current_span_id() == ""
+
+def _rewrite_fixture():
+    tool_calls = [
+        {
+            "id": "call_1",
+            "function": {
+                "name": "read_file",
+                "arguments": json.dumps({"path": "a.txt"}),
+            },
+        },
+        {
+            "id": "call_2",
+            "function": {
+                "name": "bash",
+                "arguments": json.dumps({"command": "echo ok"}),
+            },
+        },
+    ]
+    original = [
+        ("read_file", {"path": "a.txt"}, "old-a"),
+        ("bash", {"command": "echo ok"}, "old-b"),
+    ]
+    return tool_calls, original
+
+
+def test_after_tool_rewrite_is_reordered_by_tool_call_id():
+    """Structured records may be returned in any order but bind by stable call ID."""
+    from agentflow_runtime import skill_executor
+
+    tool_calls, original = _rewrite_fixture()
+    rewritten = [
+        {
+            "tool_call_id": "call_2",
+            "tool_name": "bash",
+            "arguments": {"command": "echo ok"},
+            "result": "new-b",
+        },
+        {
+            "tool_call_id": "call_1",
+            "tool_name": "read_file",
+            "arguments": {"path": "a.txt"},
+            "result": "new-a",
+        },
+    ]
+
+    normalized, error = skill_executor._normalize_after_tool_rewrite(
+        tool_calls, original, rewritten
+    )
+
+    assert error == ""
+    assert normalized == [
+        ("read_file", {"path": "a.txt"}, "new-a"),
+        ("bash", {"command": "echo ok"}, "new-b"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("rewritten", "error_fragment"),
+    [
+        ([], "count mismatch"),
+        ([
+            {
+                "tool_call_id": "unknown",
+                "tool_name": "read_file",
+                "arguments": {"path": "a.txt"},
+                "result": "new-a",
+            },
+            {
+                "tool_call_id": "call_2",
+                "tool_name": "bash",
+                "arguments": {"command": "echo ok"},
+                "result": "new-b",
+            },
+        ], "unknown tool_call_id"),
+        ([
+            {
+                "tool_call_id": "call_1",
+                "tool_name": "read_file",
+                "arguments": {"path": "other.txt"},
+                "result": "new-a",
+            },
+            {
+                "tool_call_id": "call_2",
+                "tool_name": "bash",
+                "arguments": {"command": "echo ok"},
+                "result": "new-b",
+            },
+        ], "arguments mismatch"),
+        ([
+            {
+                "tool_call_id": "call_1",
+                "tool_name": "read_file",
+                "arguments": {"path": "a.txt"},
+                "result": {"not": "a string"},
+            },
+            {
+                "tool_call_id": "call_2",
+                "tool_name": "bash",
+                "arguments": {"command": "echo ok"},
+                "result": "new-b",
+            },
+        ], "result must be a string"),
+        ([
+            ("bash", {"command": "echo ok"}, "new-b"),
+            ("read_file", {"path": "a.txt"}, "new-a"),
+        ], "legacy tool_name mismatch"),
+    ],
+)
+def test_after_tool_invalid_rewrite_is_rejected(rewritten, error_fragment):
+    from agentflow_runtime import skill_executor
+
+    tool_calls, original = _rewrite_fixture()
+    normalized, error = skill_executor._normalize_after_tool_rewrite(
+        tool_calls, original, rewritten
+    )
+
+    assert normalized is None
+    assert error_fragment in error
+
+
+def test_mixed_skip_messages_keep_original_tool_call_order(skill_env):
+    """Skipped and executed results must follow the assistant tool_calls order."""
+    from agentflow_runtime import skill_executor
+
+    fake_bus = _FakeDataBus()
+    fake_reg = _FakeToolRegistry()
+    tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "arguments": json.dumps({"path": "a.txt"}),
+            },
+        },
+        {
+            "id": "call_2",
+            "type": "function",
+            "function": {
+                "name": "bash",
+                "arguments": json.dumps({"command": "echo skip"}),
+            },
+        },
+        {
+            "id": "call_3",
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "arguments": json.dumps({"file_path": "b.txt", "content": "b"}),
+            },
+        },
+    ]
+    llm_side_effect = [
+        _make_llm_response(tool_calls=tool_calls, finish="tool_calls"),
+        _make_llm_response(content="完成"),
+    ]
+    result_payloads = []
+    fake_recorder = MagicMock()
+    fake_recorder.record_effective_response.side_effect = (
+        lambda _call_id, response: response
+    )
+
+    def fake_hook_trigger(event_name, payload, **_kwargs):
+        if event_name == skill_executor.hook_mounts.SKILL_EXECUTOR_BEFORE_TOOL_CALL:
+            return {**payload, "skip_tool_names": ["bash"]}
+        if event_name == skill_executor.hook_events.SKILL_EXECUTOR_TOOL_RESULT:
+            result_payloads.append(payload)
+        return payload
+
+    with patch.object(skill_executor, "DataBusClient", return_value=fake_bus), \
+         patch.object(skill_executor, "call_llm", side_effect=llm_side_effect) as mock_llm, \
+         patch.object(skill_executor, "get_recorder", return_value=fake_recorder), \
+         patch.object(skill_executor, "hook_trigger", side_effect=fake_hook_trigger), \
+         patch.object(skill_executor, "AgentConfig") as mock_cfg, \
+         patch.object(skill_executor, "_LocalToolRegistry", return_value=fake_reg), \
+         patch.object(skill_executor, "_ensure_artifacts_in_package",
+                      side_effect=lambda artifacts: artifacts), \
+         patch.object(skill_executor, "resolve_llm_config", return_value={
+             "model": "test",
+             "api_key": "k",
+             "base_url": "http://127.0.0.1:1/v1",
+         }):
+        mock_cfg.skill_max_iterations.return_value = 5
+        mock_cfg.node_execution_timeout.return_value = 3600
+        mock_cfg.skill_max_completion_tokens.return_value = 4000
+        mock_cfg.skill_llm_temperature.return_value = 0.7
+        mock_cfg.skill_llm_top_p.return_value = 1.0
+        mock_cfg.skill_llm_frequency_penalty.return_value = 0.0
+        mock_cfg.skill_llm_presence_penalty.return_value = 0.0
+        mock_cfg.skill_llm_top_k.return_value = 0
+        mock_cfg.skill_llm_stop.return_value = None
+        mock_cfg.skill_llm_recovery_attempts.return_value = 2
+
+        import io
+        with patch("sys.stdout", io.StringIO()):
+            skill_executor.execute()
+
+    second_round_messages = mock_llm.call_args_list[1].args[0]
+    tool_messages = [
+        message for message in second_round_messages
+        if message.get("role") == "tool"
+    ]
+    assert [message["tool_call_id"] for message in tool_messages] == [
+        "call_1", "call_2", "call_3",
+    ]
+    assert json.loads(tool_messages[1]["content"]) == {
+        "skipped_by_hook": True,
+        "tool": "bash",
+    }
+    assert [call[0] for call in fake_reg.calls] == ["read_file", "write_file"]
+    assert len(result_payloads) == 1
+    assert [record["tool_call_id"] for record in result_payloads[0]["tool_results"]] == [
+        "call_1", "call_2", "call_3",
+    ]
+    assert [record["status"] for record in result_payloads[0]["tool_results"]] == [
+        "completed", "skipped", "completed",
+    ]
