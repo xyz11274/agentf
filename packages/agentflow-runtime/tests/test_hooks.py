@@ -23,19 +23,19 @@ from agentflow_runtime.hooks.loader import load_hooks_from_dir
 # ═══════════════════════════════════════════════════════════════════
 
 def test_event_catalog_unique() -> None:
-    """事件目录内事件名不重复，且与设计文档 §2.5 全量清单一致（27 项）。"""
+    """事件目录内事件名不重复，且与设计文档 §2.5 全量清单一致。"""
     from agentflow_runtime import events as ev
 
-    assert len(ev.ALL_EVENTS) == 27
-    assert len(set(ev.ALL_EVENTS)) == 27  # 唯一
+    assert len(ev.ALL_EVENTS) == 33
+    assert len(set(ev.ALL_EVENTS)) == 33  # 唯一
 
 
 def test_span_names_unique() -> None:
-    """emit_span 生命周期单元名目录唯一（4 项）。"""
+    """emit_span 生命周期单元名目录唯一（5 项）。"""
     from agentflow_runtime import events as ev
 
-    assert len(ev.ALL_SPAN_NAMES) == 4
-    assert len(set(ev.ALL_SPAN_NAMES)) == 4
+    assert len(ev.ALL_SPAN_NAMES) == 5
+    assert len(set(ev.ALL_SPAN_NAMES)) == 5
     # span 名与事件名不冲突（各自命名空间）
     assert ev.ALL_SPAN_NAMES.isdisjoint(ev.ALL_EVENTS)
 
@@ -60,6 +60,8 @@ def test_existing_emit_event_names_preserved() -> None:
     from agentflow_runtime import events as ev
 
     existing = [
+        "llm.request.prepared",
+        "artifact.storage_result",
         "coordinator.trigger", "coordinator.llm_result", "coordinator.llm_error",
         "coordinator.skills_dispatched", "coordinator.dispatch_loop_end",
         "coordinator.final_response", "coordinator.max_iterations",
@@ -67,7 +69,8 @@ def test_existing_emit_event_names_preserved() -> None:
         "coordinator.tool_loop_max_rounds", "coordinator.tool_loop_retry",
         "coordinator.dispatch_progress_push_failed", "coordinator.interrupted",
         "skill_executor.trigger", "skill_executor.llm_round_start", "skill_executor.llm_result",
-        "skill_executor.llm_error", "skill_executor.tool_call",
+        "skill_executor.recovery_decision",
+        "skill_executor.llm_error", "skill_executor.tool_call", "skill_executor.tool_result",
         "skill_executor.tool_call_loop_detected", "skill_executor.completed",
         "skill_executor.node_timeout", "skill_executor.max_rounds_reached",
         "skill_executor.empty_result", "skill_executor.interrupted",

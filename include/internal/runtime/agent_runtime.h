@@ -204,6 +204,7 @@ private:
      int                    completed_count = 0;
      bool                   in_progress     = false;
      std::string            failure_details;   // Failed node error/stderr for coordinator judgment
+     DataMap                terminal_outputs;   // Per-execution terminal outputs for completion routing
 
      // UDS server for DataBus access - lifecycle tied to workflow execution
      std::string            uds_socket_path;     // Socket file path

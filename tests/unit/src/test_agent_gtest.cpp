@@ -664,6 +664,396 @@ TEST_F(AgentTest, CoordinatorInstantiatesSkillTaskFromSkillTemplateWorkflow) {
   fs::remove_all(tmp);
 }
 
+TEST_F(AgentTest, HarnessBatchBackfillsSlotsAndTriggersCoordinatorOnce) {
+  namespace fs = std::filesystem;
+  const fs::path tmp = fs::path("build/test_harness_batch_join_pkg");
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({
+      "name": "harness-batch-join-agent",
+      "version": "1.0.0",
+      "workflows": ["workflow_coordinator.json", "workflow_skill.json"]
+    })";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "session_pool_size": 1,
+      "tasks": [
+        {
+          "id": 0,
+          "type": "dispatcher",
+          "description": "Dispatch",
+          "max_concurrent_skills": 2
+        },
+        {
+          "id": 1,
+          "type": "coordinator",
+          "description": "Coordinate",
+          "workflow_file": "workflow_coordinator.json"
+        },
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "Generic skill runner",
+          "workflow_file": "workflow_skill.json",
+          "skill": {"name": "skill-runner", "instance_pool_size": 5}
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow_coordinator.json", "wf_batch_coordinator");
+  write_workflow_json(tmp / "workflow_skill.json", "wf_batch_skill");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+  auto session = get_or_create_first_session(agent);
+  ASSERT_NE(session, nullptr);
+  auto coordinator = session->get_coordinator_task();
+  ASSERT_NE(coordinator, nullptr);
+  auto dispatcher = session->get_dispatcher_task();
+  ASSERT_NE(dispatcher, nullptr);
+  ASSERT_EQ(dispatcher->get_max_concurrent_skills(), 2);
+
+  const std::string dialogue_id = "dialogue-batch-five";
+  const std::string batch_id = "batch:dialogue-batch-five:round";
+  std::vector<std::string> exec_keys;
+  std::ostringstream next_skills;
+  next_skills << "[";
+  for(int index = 1; index <= 5; ++index) {
+    if(index > 1) {
+      next_skills << ",";
+    }
+    const std::string exec_key =
+        "dispatch:dialogue-batch-five:round:" + std::to_string(index);
+    exec_keys.push_back(exec_key);
+    next_skills
+        << "{\"name\":\"skill-runner\","
+        << "\"exec_skill_key\":\"" << exec_key << "\","
+        << "\"batch_id\":\"" << batch_id << "\"}";
+  }
+  next_skills << "]";
+
+  const std::string scoped_prefix =
+      "/session/" + session->get_session_id() + "/sys/" + dialogue_id + "/";
+  agent->publish_data(scoped_prefix + "next_skills",
+                      DataVariant(next_skills.str()));
+  agent->publish_data(scoped_prefix + "user_prompt",
+                      DataVariant(std::string("run five skills")));
+
+  framework::MMAgentMsgQue::Message coordinator_completion;
+  coordinator_completion.message_id = "coordinator-dispatch-batch";
+  coordinator_completion.content = "workflow_completed";
+  coordinator_completion.metadata["task_type"] = "coordinator";
+  coordinator_completion.metadata["dialogue_id"] = dialogue_id;
+  ASSERT_TRUE(coordinator->enqueue_data_exchange_message(coordinator_completion));
+  EXPECT_EQ(coordinator->process_pending_messages_once(), 1);
+
+  auto pop_skill = [&]() {
+    std::shared_ptr<framework::MMAgentTask> generated;
+    EXPECT_TRUE(agent->pop_generated_task(generated));
+    EXPECT_NE(generated, nullptr);
+    if(generated) {
+      EXPECT_EQ(generated->get_task_type(), "skill");
+    }
+    return generated;
+  };
+  auto task_exec_key = [](const std::shared_ptr<framework::MMAgentTask>& task) {
+    std::string exec_key;
+    if(task) {
+      task->get_parameter("exec_skill_key", exec_key);
+    }
+    return exec_key;
+  };
+  auto completion_for = [&](const std::string& exec_key) {
+    framework::MMAgentMsgQue::Message completion;
+    const int index =
+        static_cast<int>(std::find(exec_keys.begin(), exec_keys.end(), exec_key)
+                         - exec_keys.begin()) + 1;
+    completion.message_id = "completion-" + std::to_string(index);
+    completion.content = "workflow_completed";
+    completion.metadata["task_type"] = "skill";
+    completion.metadata["skill_name"] = "skill-runner";
+    completion.metadata["business_skill_name"] =
+        "business-" + std::to_string(index);
+    completion.metadata["dialogue_id"] = dialogue_id;
+    completion.metadata["batch_id"] = batch_id;
+    completion.metadata["exec_skill_key"] = exec_key;
+    completion.metadata["skill_task_id"] = "skill-task-" + std::to_string(index);
+    completion.metadata["workflow_execution_id"] =
+        "workflow-execution-" + std::to_string(index);
+    completion.metadata["skill_success"] = "true";
+    completion.metadata["skill_status"] = "completed";
+    completion.metadata["skill_result"] = "result-" + std::to_string(index);
+    completion.metadata["artifacts_json"] =
+        "[{\"artifact\":" + std::to_string(index) + "}]";
+    return completion;
+  };
+  auto deliver_completion =
+      [&](const framework::MMAgentMsgQue::Message& completion) {
+        EXPECT_TRUE(coordinator->enqueue_data_exchange_message(completion));
+        EXPECT_EQ(coordinator->process_pending_messages_once(), 1);
+      };
+
+  auto first = pop_skill();
+  auto second = pop_skill();
+  EXPECT_EQ(task_exec_key(first), exec_keys[0]);
+  EXPECT_EQ(task_exec_key(second), exec_keys[1]);
+  EXPECT_EQ(coordinator->get_running_skills_count(), 2);
+  std::shared_ptr<framework::MMAgentTask> no_third;
+  EXPECT_FALSE(agent->pop_generated_task(no_third));
+
+  // Two sibling completions can coexist in the queue. Processing the first
+  // must not clear the second.
+  ASSERT_TRUE(coordinator->enqueue_data_exchange_message(
+      completion_for(exec_keys[1])));
+  ASSERT_TRUE(coordinator->enqueue_data_exchange_message(
+      completion_for(exec_keys[0])));
+  ASSERT_EQ(coordinator->get_data_exchange_queue_size(), 2);
+  EXPECT_EQ(coordinator->process_pending_messages_once(), 1);
+  EXPECT_EQ(coordinator->get_data_exchange_queue_size(), 1);
+  auto third = pop_skill();
+  EXPECT_EQ(task_exec_key(third), exec_keys[2]);
+  EXPECT_EQ(coordinator->get_running_skills_count(), 2);
+  EXPECT_EQ(coordinator->get_intent_request_queue_size(), 0);
+
+  EXPECT_EQ(coordinator->process_pending_messages_once(), 1);
+  auto fourth = pop_skill();
+  EXPECT_EQ(task_exec_key(fourth), exec_keys[3]);
+  EXPECT_EQ(coordinator->get_running_skills_count(), 2);
+
+  // Duplicate completion does not release a second slot.
+  deliver_completion(completion_for(exec_keys[1]));
+  EXPECT_EQ(coordinator->get_running_skills_count(), 2);
+  EXPECT_EQ(coordinator->get_intent_request_queue_size(), 0);
+  std::shared_ptr<framework::MMAgentTask> no_duplicate_launch;
+  EXPECT_FALSE(agent->pop_generated_task(no_duplicate_launch));
+
+  deliver_completion(completion_for(exec_keys[3]));
+  auto fifth = pop_skill();
+  EXPECT_EQ(task_exec_key(fifth), exec_keys[4]);
+  EXPECT_EQ(coordinator->get_running_skills_count(), 2);
+  EXPECT_EQ(coordinator->get_intent_request_queue_size(), 0);
+
+  deliver_completion(completion_for(exec_keys[2]));
+  EXPECT_EQ(coordinator->get_running_skills_count(), 1);
+  EXPECT_EQ(coordinator->get_intent_request_queue_size(), 0);
+
+  // A recovered Batch must clear a stale all-failed marker from an earlier Batch.
+  agent->publish_data(scoped_prefix + "skill_failed",
+                      DataVariant(std::string("true")));
+
+  auto failed_fifth = completion_for(exec_keys[4]);
+  failed_fifth.metadata["skill_success"] = "false";
+  failed_fifth.metadata["skill_status"] = "llm_error";
+  deliver_completion(failed_fifth);
+  EXPECT_EQ(coordinator->get_running_skills_count(), 0);
+  EXPECT_EQ(coordinator->get_intent_request_queue_size(), 1);
+
+  DataVariant aggregate_value;
+  ASSERT_TRUE(agent->get_data(
+      scoped_prefix + "completion_batch:" + batch_id, aggregate_value));
+  const auto* aggregate = std::get_if<std::string>(&aggregate_value);
+  ASSERT_NE(aggregate, nullptr);
+  size_t previous_position = 0;
+  for(int index = 1; index <= 5; ++index) {
+    const size_t position =
+        aggregate->find("\"skill_result\":\"result-"
+                        + std::to_string(index) + "\"");
+    ASSERT_NE(position, std::string::npos);
+    if(index > 1) {
+      EXPECT_GT(position, previous_position);
+    }
+    previous_position = position;
+  }
+
+  DataVariant batch_skill_failed;
+  EXPECT_FALSE(agent->get_data(scoped_prefix + "skill_failed", batch_skill_failed))
+      << "one failed branch must not mark a partially successful Batch as failed";
+
+  // A response produced before Python consumes the aggregate must not become
+  // final. The same queue tick also consumes the one batch trigger.
+  agent->publish_data(scoped_prefix + "response",
+                      DataVariant(std::string("joined response")));
+  framework::MMAgentMsgQue::Message premature_final;
+  premature_final.message_id = "coordinator-premature-final";
+  premature_final.content = "workflow_completed";
+  premature_final.metadata["task_type"] = "coordinator";
+  premature_final.metadata["dialogue_id"] = dialogue_id;
+  ASSERT_TRUE(coordinator->enqueue_data_exchange_message(premature_final));
+  EXPECT_EQ(coordinator->process_pending_messages_once(), 2);
+
+  bool saw_premature_final = false;
+  framework::MMAgentMsgQue::Message routed_response;
+  while(agent->dequeue_response_message(routed_response)) {
+    saw_premature_final =
+        saw_premature_final
+        || routed_response.metadata["final"] == "true";
+  }
+  EXPECT_FALSE(saw_premature_final);
+
+  // Verify the Coordinator runtime task carries the small DataBus key rather
+  // than an inline aggregate.
+  std::shared_ptr<framework::MMAgentTask> coordinator_runtime;
+  ASSERT_TRUE(agent->pop_generated_task(coordinator_runtime));
+  ASSERT_NE(coordinator_runtime, nullptr);
+  EXPECT_EQ(coordinator_runtime->get_task_type(), "coordinator");
+  std::string completed_batch_key;
+  ASSERT_TRUE(coordinator_runtime->get_parameter(
+      "completed_batch_key", completed_batch_key));
+  EXPECT_EQ(completed_batch_key, "completion_batch:" + batch_id);
+
+  std::string batch_skill_success;
+  ASSERT_TRUE(coordinator_runtime->get_parameter("skill_success", batch_skill_success));
+  EXPECT_EQ(batch_skill_success, "partial");
+
+  agent->publish_data(
+      scoped_prefix + "completion_batch:" + batch_id + ":consumed",
+      DataVariant(std::string("true")));
+  framework::MMAgentMsgQue::Message accepted_final = premature_final;
+  accepted_final.message_id = "coordinator-accepted-final";
+  ASSERT_TRUE(coordinator->enqueue_data_exchange_message(accepted_final));
+  EXPECT_EQ(coordinator->process_pending_messages_once(), 1);
+
+  int final_count = 0;
+  while(agent->dequeue_response_message(routed_response)) {
+    if(routed_response.metadata["final"] == "true") {
+      ++final_count;
+      EXPECT_EQ(routed_response.content, "joined response");
+      EXPECT_EQ(routed_response.metadata.count("error"), 0u);
+    }
+  }
+  EXPECT_EQ(final_count, 1);
+
+  // A late duplicate after dialogue cleanup remains idempotent and cannot
+  // reconstruct the closed Batch.
+  deliver_completion(completion_for(exec_keys[4]));
+  EXPECT_EQ(coordinator->get_running_skills_count(), 0);
+  EXPECT_EQ(coordinator->get_intent_request_queue_size(), 0);
+  std::shared_ptr<framework::MMAgentTask> no_duplicate_coordinator;
+  EXPECT_FALSE(agent->pop_generated_task(no_duplicate_coordinator));
+
+  fs::remove_all(tmp);
+}
+
+TEST_F(AgentTest, SessionInterruptTerminatesActiveAndQueuedHarnessBatchSkills) {
+  namespace fs = std::filesystem;
+  const fs::path tmp = fs::path("build/test_harness_batch_interrupt_pkg");
+  fs::create_directories(tmp);
+
+  {
+    std::ofstream pkg(tmp / "package.json");
+    pkg << R"({
+      "name": "harness-batch-interrupt-agent",
+      "version": "1.0.0",
+      "workflows": ["workflow_coordinator.json", "workflow_skill.json"]
+    })";
+  }
+  {
+    std::ofstream agent_json(tmp / "agent.json");
+    agent_json << R"({
+      "session_pool_size": 1,
+      "tasks": [
+        {
+          "id": 0,
+          "type": "dispatcher",
+          "description": "Dispatch",
+          "max_concurrent_skills": 2
+        },
+        {
+          "id": 1,
+          "type": "coordinator",
+          "description": "Coordinate",
+          "workflow_file": "workflow_coordinator.json"
+        },
+        {
+          "id": 2,
+          "type": "skill",
+          "description": "Generic skill runner",
+          "workflow_file": "workflow_skill.json",
+          "skill": {"name": "skill-runner", "instance_pool_size": 3}
+        }
+      ]
+    })";
+  }
+  write_workflow_json(tmp / "workflow_coordinator.json",
+                      "wf_batch_interrupt_coordinator");
+  write_workflow_json(tmp / "workflow_skill.json", "wf_batch_interrupt_skill");
+
+  auto agent = framework::MMAgent::create_from_package(tmp.string());
+  ASSERT_NE(agent, nullptr);
+  auto session = get_or_create_first_session(agent);
+  ASSERT_NE(session, nullptr);
+  auto coordinator = session->get_coordinator_task();
+  ASSERT_NE(coordinator, nullptr);
+
+  const std::string dialogue_id = "dialogue-batch-interrupt";
+  const std::string batch_id = "batch:dialogue-batch-interrupt:round";
+  const std::string scoped_prefix =
+      "/session/" + session->get_session_id() + "/sys/" + dialogue_id + "/";
+  const std::string next_skills =
+      "[{\"name\":\"skill-runner\",\"exec_skill_key\":\"dispatch:interrupt:1\","
+      "\"batch_id\":\"" + batch_id + "\"},"
+      "{\"name\":\"skill-runner\",\"exec_skill_key\":\"dispatch:interrupt:2\","
+      "\"batch_id\":\"" + batch_id + "\"},"
+      "{\"name\":\"skill-runner\",\"exec_skill_key\":\"dispatch:interrupt:3\","
+      "\"batch_id\":\"" + batch_id + "\"}]";
+  agent->publish_data(scoped_prefix + "next_skills", DataVariant(next_skills));
+  agent->publish_data(scoped_prefix + "user_prompt",
+                      DataVariant(std::string("interrupt this batch")));
+
+  framework::MMAgentMsgQue::Message coordinator_completion;
+  coordinator_completion.message_id = "coordinator-dispatch-interrupt-batch";
+  coordinator_completion.content = "workflow_completed";
+  coordinator_completion.metadata["task_type"] = "coordinator";
+  coordinator_completion.metadata["dialogue_id"] = dialogue_id;
+  ASSERT_TRUE(coordinator->enqueue_data_exchange_message(coordinator_completion));
+  EXPECT_EQ(coordinator->process_pending_messages_once(), 1);
+
+  std::shared_ptr<framework::MMAgentTask> active_one;
+  std::shared_ptr<framework::MMAgentTask> active_two;
+  ASSERT_TRUE(agent->pop_generated_task(active_one));
+  ASSERT_TRUE(agent->pop_generated_task(active_two));
+  ASSERT_NE(active_one, nullptr);
+  ASSERT_NE(active_two, nullptr);
+  EXPECT_EQ(coordinator->get_running_skills_count(), 2);
+
+  framework::MMAgentMsgQue::Message interrupt;
+  interrupt.message_id = "session-interrupt-batch";
+  interrupt.type = framework::MMAgentMsgQue::MessageType::CONTROL;
+  interrupt.content = framework::MMAgentMsgQue::ControlCommand::SESSION_INTERRUPT;
+  interrupt.metadata["session_id"] = session->get_session_id();
+  ASSERT_TRUE(agent->route_request_message(interrupt));
+
+  EXPECT_EQ(active_one->get_state(), framework::MMAgentTask::TaskState::INTERRUPTED);
+  EXPECT_EQ(active_two->get_state(), framework::MMAgentTask::TaskState::INTERRUPTED);
+  std::shared_ptr<framework::MMAgentTask> queued_was_not_launched;
+  EXPECT_FALSE(agent->pop_generated_task(queued_was_not_launched));
+
+  EXPECT_EQ(coordinator->process_pending_messages_once(), 1);
+  EXPECT_EQ(coordinator->get_intent_request_queue_size(), 0);
+  EXPECT_EQ(coordinator->process_pending_messages_once(), 1);
+  EXPECT_EQ(coordinator->get_running_skills_count(), 0);
+  EXPECT_EQ(coordinator->get_intent_request_queue_size(), 1);
+
+  DataVariant aggregate_value;
+  ASSERT_TRUE(agent->get_data(
+      scoped_prefix + "completion_batch:" + batch_id, aggregate_value));
+  const auto* aggregate = std::get_if<std::string>(&aggregate_value);
+  ASSERT_NE(aggregate, nullptr);
+  EXPECT_EQ(std::count(aggregate->begin(), aggregate->end(), '{'), 4);
+  EXPECT_NE(aggregate->find(
+                "\"skill_result\":\"session_interrupted\""),
+            std::string::npos);
+  EXPECT_NE(aggregate->find(
+                "\"skill_result\":\"session_interrupted_before_launch\""),
+            std::string::npos);
+
+  fs::remove_all(tmp);
+}
+
 TEST_F(AgentTest, CoordinatorSkipsStaleWorkflowCompleteWhenNewerWorkflowPending) {
   namespace fs = std::filesystem;
   const fs::path tmp = fs::path("build/test_stale_coordinator_pkg");
@@ -1140,6 +1530,23 @@ TEST_F(AgentTest, BuiltinDispatcherParsesNextSkillsWithExecSkillKey) {
   EXPECT_EQ(skills[1].exec_skill_key, "skill2_data");
   EXPECT_EQ(skills[2].name, "skill3");
   EXPECT_EQ(skills[2].exec_skill_key, "");
+}
+
+TEST_F(AgentTest, BuiltinDispatcherParsesNextSkillsWithBatchId) {
+  std::string json_with_batch = R"([
+    {"name": "skill-runner", "exec_skill_key": "dispatch:dlg:round:1",
+     "batch_id": "batch:dlg:round"},
+    {"name": "skill-runner", "exec_skill_key": "dispatch:dlg:round:2",
+     "batch_id": "batch:dlg:round"}
+  ])";
+  DataVariant value = json_with_batch;
+  auto skills = framework::BuiltinDispatcher::parse_next_skills(value);
+
+  ASSERT_EQ(skills.size(), 2);
+  EXPECT_EQ(skills[0].exec_skill_key, "dispatch:dlg:round:1");
+  EXPECT_EQ(skills[1].exec_skill_key, "dispatch:dlg:round:2");
+  EXPECT_EQ(skills[0].batch_id, "batch:dlg:round");
+  EXPECT_EQ(skills[1].batch_id, "batch:dlg:round");
 }
 
 TEST_F(AgentTest, BuiltinDispatcherParsesNextSkillsWithForceField) {
@@ -3127,9 +3534,9 @@ TEST_F(AgentTest, CoordinatorSkillCompletionTriggersReTrigger) {
 // Skill Failure → skill_failed Flag Test
 // =============================================================================
 //
-// When a skill task fails (workflow_failed), the C++ handler must write
-// skill_failed=true to the databus and still re-trigger the coordinator.
-// This flag is consumed by the Python coordinator_decide.py.
+// When a Skill workflow completes but its business result fails, the C++
+// handler must write skill_failed=true to the databus and still re-trigger the
+// coordinator. This flag is consumed by the Python coordinator_decide.py.
 
 TEST_F(AgentTest, SkillFailureWritesSkillFailedFlag) {
   // 1. Create agent with a coordinator workflow
@@ -3172,13 +3579,15 @@ TEST_F(AgentTest, SkillFailureWritesSkillFailedFlag) {
   // 4. Set up pending_skills_count so it can be decremented
   agent->publish_data(dialogue_id + "/pending_skills_count", DataVariant(static_cast<int64_t>(1)));
 
-  // 5. Send workflow_failed message simulating skill failure
+  // 5. Send a successful workflow completion with a failed Skill result
   framework::MMAgentMsgQue::Message skill_fail_msg;
   skill_fail_msg.message_id = "skill-fail-failed-skill";
-  skill_fail_msg.content = "workflow_failed";
+  skill_fail_msg.content = "workflow_completed";
   skill_fail_msg.metadata["task_type"] = "skill";
   skill_fail_msg.metadata["skill_name"] = "failed-skill";
   skill_fail_msg.metadata["dialogue_id"] = dialogue_id;
+  skill_fail_msg.metadata["skill_success"] = "false";
+  skill_fail_msg.metadata["skill_status"] = "llm_error";
   ASSERT_TRUE(coordinator_task->enqueue_data_exchange_message(skill_fail_msg));
 
   // 6. Wait briefly for processing

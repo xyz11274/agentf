@@ -98,8 +98,9 @@ def serial_events():
            span_id="spB0", parent_span_id="spB0", source_event_seqs=[1],
            data={"skill_name": "echo", "status": "completed", "exec_skill_key": "dispatch:d1:r1:1"}),
         # coordinator C（pid 700, trace tC）——skill 完成触发的新决策段
-        ev(type="session.start", seq=1, pid=700, trace_id="tC", node_id="coordinator_decide",
-           data={"trigger_type": "skill_completion", "model": "m", "completed_skill": "echo"}),
+        ev(type="coordinator.activation", seq=1, pid=700, trace_id="tC", node_id="coordinator_decide",
+           data={"trigger_type": "skill_completion", "model": "m", "completed_skill": "echo",
+                 "completed_batch_key": "", "batch_id": ""}),
         ev(type="llm.request", seq=2, pid=700, trace_id="tC", node_id="coordinator_decide", round=2,
            span_id="spC1", data={"model": "m", "messages": [{"role": "user", "content": "hi"}], "msg_count": 1}),
         ev(type="llm.response", seq=3, pid=700, trace_id="tC", node_id="coordinator_decide", round=2,

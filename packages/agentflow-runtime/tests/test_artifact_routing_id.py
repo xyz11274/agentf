@@ -166,6 +166,13 @@ def test_upload_artifacts_uses_user_client_id_for_session_id(
     )
     # 指向一个假 bridge endpoint，捕获上传 body
     captured: dict = {}
+    captured_events: list[tuple[str, dict]] = []
+
+    def _capture_event(event_name, payload, **_kwargs):
+        captured_events.append((event_name, payload))
+        return payload
+
+    monkeypatch.setattr("agentflow_runtime.hooks.trigger", _capture_event)
 
     class _FakeResp:
         def __init__(self):
@@ -205,3 +212,15 @@ def test_upload_artifacts_uses_user_client_id_for_session_id(
     assert '"session_id": "0"' not in captured.get("body", ""), (
         f"上传 body 不得用槽位号 0 作 session_id，实际 body={captured.get('body')}"
     )
+
+    assert len(captured_events) == 1
+    event_name, payload = captured_events[0]
+    assert event_name == "artifact.storage_result"
+    assert payload["status"] == "uploaded"
+    assert payload["attempted_count"] == 1
+    assert payload["uploaded_count"] == 1
+    entry = payload["entries"][0]
+    assert entry["status"] == "uploaded"
+    assert entry["artifact_id"] == "fake-id"
+    assert entry["size_bytes"] == len(b"fake-image")
+    assert len(entry["sha256"]) == 64

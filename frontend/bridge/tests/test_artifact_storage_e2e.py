@@ -484,8 +484,8 @@ class TestArtifactSessionSegmentConsistency:
 
         场景:同一 agent 同一会话产出文件,两端必须拼到同一 artifact_id.
         """
-        from agentflow_runtime import skill_executor as se
-        from agentflow_runtime.coordinator_decide import local_artifact_url
+        from agentflow_runtime.common.runtime_context import artifact_session_id
+        from agentflow_runtime.coordinator_common import local_artifact_url
 
         agent_dir = tmp_path / "test-agent"
         outputs_dir = agent_dir / "outputs"
@@ -493,8 +493,7 @@ class TestArtifactSessionSegmentConsistency:
         artifact_file = outputs_dir / "look.png"
         artifact_file.write_bytes(b"\x89PNG\r\n\x1a\nfake")
 
-        monkeypatch.setattr(se, "AGENT_PACKAGE_DIR", str(agent_dir))
-        monkeypatch.setattr("agentflow_runtime.coordinator_decide.AGENT_PACKAGE_DIR",
+        monkeypatch.setattr("agentflow_runtime.coordinator_common.AGENT_PACKAGE_DIR",
                             str(agent_dir), raising=False)
         # 模拟真实注入:{user_id}_{client_id} + 执行槽位 同时存在
         monkeypatch.setenv("AF_USER_ID", "user_abc")
@@ -502,8 +501,8 @@ class TestArtifactSessionSegmentConsistency:
         monkeypatch.setenv("AF_SESSION_ID", "0")  # agentflow 执行槽位
         monkeypatch.setenv("AF_ARTIFACT_STORAGE_URL", "http://localhost:8199")
 
-        # 上传侧落盘会话段(runtime_context.artifact_session_id,经 skill_executor 重命名为 _artifact_session_id)
-        upload_segment = se._artifact_session_id()
+        # 上传侧落盘会话段与产物 URL 共用 runtime_context 单一真相源。
+        upload_segment = artifact_session_id()
         expected_segment = "user_abc_client_xyz"  # {user_id}_{client_id}
         assert upload_segment == expected_segment, (
             f"上传侧会话段来源异常. expected={expected_segment} got={upload_segment}"
@@ -566,10 +565,8 @@ class TestRewriteLocalArtifactLinksNoHostPath:
         场景:LLM 输出含两条引用——包内产物 + 包外宿主机绝对路径产物.
         两条都应被改写为 serve URL,文本中不许残留任何宿主机绝对路径.
         """
-        from agentflow_runtime.coordinator_decide import (
-            rewrite_local_artifact_links, AGENT_PACKAGE_DIR as _default_pkg,
-        )
-        import agentflow_runtime.coordinator_decide as cd
+        from agentflow_runtime.coordinator_common import rewrite_local_artifact_links
+        import agentflow_runtime.coordinator_common as cc
 
         agent_dir = tmp_path / "test-agent"
         outputs_dir = agent_dir / "outputs"
@@ -585,7 +582,7 @@ class TestRewriteLocalArtifactLinksNoHostPath:
         external_artifact = external_dir / "extra.png"
         external_artifact.write_bytes(b"\x89PNG\r\n\x1a\nfake-external")
 
-        monkeypatch.setattr(cd, "AGENT_PACKAGE_DIR", str(agent_dir))
+        monkeypatch.setattr(cc, "AGENT_PACKAGE_DIR", str(agent_dir))
         monkeypatch.setenv("AF_ARTIFACT_STORAGE_URL", "http://localhost:8199")
         monkeypatch.setenv("AF_USER_ID", "user_abc")
         monkeypatch.setenv("AF_CLIENT_ID", "client_xyz")
@@ -625,8 +622,8 @@ class TestRewriteLocalArtifactLinksNoHostPath:
 
         这是最窄的防回归断言——直接锁 local_artifact_url 的输出形态.
         """
-        from agentflow_runtime.coordinator_decide import local_artifact_url
-        import agentflow_runtime.coordinator_decide as cd
+        from agentflow_runtime.coordinator_common import local_artifact_url
+        import agentflow_runtime.coordinator_common as cc
 
         agent_dir = tmp_path / "test-agent"
         outputs_dir = agent_dir / "outputs"
@@ -634,7 +631,7 @@ class TestRewriteLocalArtifactLinksNoHostPath:
         artifact_file = outputs_dir / "look.png"
         artifact_file.write_bytes(b"\x89PNG\r\n\x1a\nfake")
 
-        monkeypatch.setattr(cd, "AGENT_PACKAGE_DIR", str(agent_dir))
+        monkeypatch.setattr(cc, "AGENT_PACKAGE_DIR", str(agent_dir))
         monkeypatch.setenv("AF_ARTIFACT_STORAGE_URL", "http://localhost:8199")
         monkeypatch.setenv("AF_USER_ID", "user_abc")
         monkeypatch.setenv("AF_CLIENT_ID", "client_xyz")
@@ -670,8 +667,8 @@ class TestSandboxArtifactDownload:
     - E2E-2: 二进制安全贯穿全链(音视频/PDF/图片不得损坏)
 
     双通道:
-    - Local/Docker 通道(_download_from_sandbox): POST {sandbox_url}/exec tool=read_file
-      Local/Docker 通道: content.encode("latin-1") 往返 0x00-0xFF 不丢字节(2026-08-12 凭证据复核)
+    - Local/Docker 通道(_download_from_sandbox): POST {sandbox_url}/artifact/download
+      返回 base64 编码的原始字节,不经过 read_file 文本解码或字符数截断
     - e2b 通道(_download_from_sandbox_e2b): e2b SDK envd /files 端点,二进制安全
 
     env var 契约(2026-08-12 校正):
@@ -687,7 +684,7 @@ class TestSandboxArtifactDownload:
         驱动 _ensure_artifacts_in_package → _download_from_sandbox 路径。
         env var 必须设 AF_SANDBOX_ENDPOINT(非 AF_ARTIFACT_STORAGE_URL)。
         """
-        import threading, http.server, json, urllib.request
+        import base64, threading, http.server, json
         from agentflow_runtime import skill_executor as se
 
         sandbox_file_rel = "outputs/test-artifact.png"
@@ -695,15 +692,14 @@ class TestSandboxArtifactDownload:
 
         class MockSandboxHandler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
-                if self.path == "/exec":
+                if self.path == "/artifact/download":
                     length = int(self.headers.get("Content-Length", 0))
                     body = json.loads(self.rfile.read(length).decode() if length > 0 else "{}")
-                    tool = body.get("tool", "")
-                    params = body.get("params", {})
-                    if tool == "read_file" and params.get("path") == sandbox_file_rel:
+                    if body.get("path") == sandbox_file_rel:
                         resp = json.dumps({
-                            "stdout": sandbox_content.decode("latin-1"),
-                            "stderr": "", "exit_code": 0, "tool": "read_file"
+                            "path": sandbox_file_rel,
+                            "size": len(sandbox_content),
+                            "content_b64": base64.b64encode(sandbox_content).decode("ascii"),
                         }).encode()
                         self.send_response(200)
                         self.send_header("Content-Type", "application/json")
@@ -746,14 +742,10 @@ class TestSandboxArtifactDownload:
                                                 monkeypatch: pytest.MonkeyPatch):
         """E2E-2 防回归: Local/Docker 通道拉回二进制内容不损坏.
 
-        2026-08-12 凭证据复核(修正前几轮误判):
-        - latin-1 单字节映射 0x00-0xFF ↔ U+0000-U+00FF,任何不超过 U+00FF 的字节一往返不丢
-        - json.dumps(ensure_ascii=False) 对高位码点走 UTF-8 多字节编码,decode('utf-8') 原样还原
-        - 真实崩点只在超过 U+00FF 的字符(如 UTF-8 多字节中文)走 latin-1 encode 时抛 UnicodeEncodeError,
-          但二进制文件字节范围 0x00-0xFF 不会产生这种字符
-        - 故 E2E-2 在 Local/Docker 通道**当前未违反**,本测试锁防回归
+        Local/Docker 必须返回 base64 原始字节，不能经过 read_file 的 UTF-8
+        文本解码、10000 字符上限或 latin-1 逆编码。
         """
-        import threading, http.server, json
+        import base64, threading, http.server, json
         from agentflow_runtime import skill_executor as se
 
         sandbox_file_rel = "outputs/binary-artifact.png"
@@ -762,17 +754,15 @@ class TestSandboxArtifactDownload:
 
         class MockSandboxHandler(http.server.BaseHTTPRequestHandler):
             def do_POST(self):
-                if self.path == "/exec":
+                if self.path == "/artifact/download":
                     length = int(self.headers.get("Content-Length", 0))
                     body = json.loads(self.rfile.read(length).decode() if length > 0 else "{}")
-                    if body.get("tool") == "read_file" and body.get("params", {}).get("path") == sandbox_file_rel:
-                        # 真实沙箱场景:json.dumps 走 ensure_ascii=False 塞原始高位字节,
-                        # 实现侧 resp.read().decode("utf-8") 对非 utf-8 字节崩 → 命中 bug 双重路径
-                        # (① utf-8 decode 崩 ② 即便过了 latin-1 encode 也崩)
+                    if body.get("path") == sandbox_file_rel:
                         resp = json.dumps({
-                            "stdout": binary_content.decode("latin-1"),
-                            "stderr": "", "exit_code": 0, "tool": "read_file"
-                        }, ensure_ascii=False).encode("utf-8")
+                            "path": sandbox_file_rel,
+                            "size": len(binary_content),
+                            "content_b64": base64.b64encode(binary_content).decode("ascii"),
+                        }).encode()
                         self.send_response(200)
                         self.send_header("Content-Type", "application/json")
                         self.end_headers()
@@ -806,7 +796,7 @@ class TestSandboxArtifactDownload:
                 f"E2E-2 违反: 二进制内容损坏.\n"
                 f"  expected len={len(binary_content)} first={binary_content[:16]!r}\n"
                 f"  actual   len={len(actual)} first={actual[:16]!r}\n"
-                f"  根因: _download_from_sandbox 的 content.encode('latin-1') 非二进制安全"
+                f"  根因: /artifact/download 未保留 base64 原始字节"
             )
         finally:
             server.shutdown()

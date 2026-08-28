@@ -16,12 +16,16 @@
         {"name": "input",               "type": "string", "required": true},
         {"name": "session_id",          "type": "string", "required": true},
         {"name": "dialogue_id",         "type": "string", "required": false},
-        {"name": "exec_skill_key",      "type": "string", "required": false}
+        {"name": "exec_skill_key",      "type": "string", "required": false},
+        {"name": "batch_id",            "type": "string", "required": false}
       ],
       "outputs": [
-        {"name": "response", "type": "string"},
-        {"name": "status",   "type": "string"},
-        {"name": "artifacts_json", "type": "string"}
+        {"name": "skill_result",   "type": "string"},
+        {"name": "status",         "type": "string"},
+        {"name": "skill_name",     "type": "string"},
+        {"name": "rounds_used",    "type": "int"},
+        {"name": "artifacts_json", "type": "string"},
+        {"name": "error",          "type": "string"}
       ],
       "timeout_ms": 240000
     }

@@ -5,7 +5,7 @@
 
 ## 一、测试内容
 
-### 1. `test_reader.py`（11 项）— reader 纯函数
+### 1. `test_reader.py`（22 项）— reader 纯函数
 
 | 测试 | 验证点 |
 |---|---|
@@ -13,25 +13,42 @@
 | `test_validate_seq_not_monotonic` | 同一 trace_id 内 seq 乱序 → 报错 |
 | `test_validate_seq_duplicate` | 同一 trace_id 内 seq 重复 → 报错 |
 | `test_validate_llm_request_without_response` | llm.request 无配对 llm.response → 报错 |
+| `test_validate_shared_trace_uses_process_sequence` | 跨进程共享 trace_id 时各进程 seq 独立 |
+| `test_validate_missing_source_sequence` | 血缘 seq 必须存在于同一执行进程 |
+| `test_validate_dispatch_without_start_or_batch_terminal` | 成功派发后必须有 Skill 启动或框架 Batch 终态 |
+| `test_validate_batch_terminal_covers_framework_only_failure` | batch.result 覆盖未进入 Python 的框架失败 |
+| `test_validate_skill_start_without_terminal` | skill.start 必须有 skill.end 或 Batch 终态 |
+| `test_validate_tool_call_without_result` | tool.call 必须有最终 tool.result |
+| `test_validate_session_requires_terminal_event` | session.start 必须有 session.end |
 | `test_build_graph_nodes_are_trace_ids` | 编排图节点 = trace_id（3 个执行单元） |
+| `test_build_graph_shared_trace_keeps_process_nodes_distinct` | 共享 trace 下仍按 pid 区分执行节点 |
 | `test_build_graph_dispatch_edge_exec_key` | 派发边 exec_key 精确匹配 |
 | `test_build_graph_return_edge_serial` | 回传边 B→C（新决策段，非 B→A） |
+| `test_build_graph_parallel_batch_returns_to_one_activation` | 同批多个 skill.end 按 batch_id 回连唯一激活 |
 | `test_build_graph_parallel_skills_distinct` | 一次派发 2 个并行 skill → 2 条派发边（exec_key 区分） |
+| `test_build_graph_parallel_dispatch_uses_matching_skill_name` | 每条并行派发边使用自身 exec key 对应的 Skill 名 |
+| `test_build_graph_framework_only_failure_uses_batch_result` | launch_failed 分支由 batch.result 生成合成节点与回传边 |
 | `test_build_graph_dispatch_fallback_name` | 无 exec_key 时名称+时序兜底 |
 | `test_load_torn_line_dropped` | torn 尾行（坏 JSON）丢弃 |
 | `test_replay_restores_messages` | 重放恢复 request.messages 序列 |
 
-### 2. `test_hook.py`（7 项）— hook 采集（mock 引擎环境）
+### 2. `test_hook.py`（13 项）— hook 采集（mock 引擎环境）
 
 | 测试 | 验证点 |
 |---|---|
 | `test_disabled_no_write` | AF_SESSIONLOG_ENABLED=0 → 不落盘 |
-| `test_session_start_writes_event` | AGENT_DIALOGUE_START → session.start + header（含 completed_skill） |
+| `test_session_start_writes_event` | AGENT_DIALOGUE_START → 唯一 session.start + header |
+| `test_skill_completion_writes_activation_not_session_start` | Skill 回流只写 coordinator.activation，保留 batch_id |
 | `test_llm_request_ctx_messages` | BEFORE_LLM_CALL → llm.request 带 ctx.messages 全量（实时） |
 | `test_llm_response_reads_databus` | AFTER_LLM_CALL → llm.response 从 DataBus 读 response/meta（mock） |
-| `test_skill_end_has_exec_key` | skill.end 带 exec_skill_key（AF_EXEC_SKILL_KEY） |
-| `test_tool_call_result` | BEFORE/AFTER_TOOL_CALL → tool.call/tool.result（含 duration_ms、嵌套在 LLM 下） |
+| `test_skill_end_has_exec_key` | skill.end 带 exec_skill_key、batch_id 和 artifacts |
+| `test_batch_result_preserves_framework_terminal_results` | batch.result 保存完整框架分支终态 |
+| `test_messages_snapshot_is_append_only` | 多次有效消息保存追加事件而不覆盖 |
+| `test_tool_call_result` | Tool Call/最终 Tool Result → 完整参数与结果落盘（含 duration_ms、血缘） |
+| `test_partial_dispatch_records_rejected_manifest` | 部分分发保存 accepted/rejected 与 batch 身份 |
+| `test_failed_dispatch_records_failure_without_stale_exec_key` | 全部分发失败不误用旧 exec key |
 | `test_event_envelope_schema` | 信封字段全集（type/seq/ts/pid/trace_id/dialogue_id/session_id/node_id/data） |
+| `test_torn_sessionlog_line_does_not_consume_next_event` | torn fragment 不吞掉下一条完整事件 |
 
 ### 3. `conftest.py` — 公共 fixture
 
@@ -80,8 +97,8 @@ pytest --cov=.. --cov-report=term-missing
 ```
 docs/sessionlog/tests/
 ├── conftest.py        # 公共 fixture（hook 加载/串行链数据）
-├── test_reader.py     # reader 测试（11 项）
-├── test_hook.py       # hook 测试（7 项）
+├── test_reader.py     # reader 测试（22 项）
+├── test_hook.py       # hook 测试（13 项）
 └── README.md          # 本文档
 ```
 

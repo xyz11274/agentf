@@ -10,14 +10,16 @@
 from __future__ import annotations
 
 import json
+import multiprocessing
 import os
 
 import pytest
 
-from agentflow_runtime.trace import SpanKind, SpanStatus
+from agentflow_runtime.trace import SpanKind, SpanStatus, TraceSpan
 from agentflow_runtime.trace.emit import emit_span
 from agentflow_runtime.trace.span_context import SpanContext
 from agentflow_runtime.trace.span_writer import SpanWriter
+from agentflow_runtime.observability import emit_event
 
 
 @pytest.fixture(autouse=True)
@@ -95,3 +97,150 @@ def test_injected_trace_id_wins(tmp_path) -> None:
         sp.set_status(SpanStatus.OK)
         assert sp.trace_id == "trace_abc_123"
         assert sp.parent_span_id == "span_parent"
+
+
+def test_emit_event_is_persisted_in_active_span(tmp_path) -> None:
+    """emit_span 内的 emit_event 必须能从 NDJSON Span 回放。"""
+    os.environ["AF_DIALOGUE_ID"] = "dialogue-event"
+
+    with emit_span(SpanKind.TOOL, "tool_batch"):
+        emit_event("tool.called", {"tool_name": "read_file"}, level="WARN")
+
+    files = list(tmp_path.rglob("python_spans_*.ndjson"))
+    assert len(files) == 1
+    spans = [json.loads(line) for line in open(files[0]) if line.strip()]
+    assert len(spans) == 1
+    assert len(spans[0]["events"]) == 1
+    event = spans[0]["events"][0]
+    assert event["name"] == "tool.called"
+    assert event["attributes"] == {
+        "tool_name": "read_file",
+        "dialogue_id": "dialogue-event",
+        "session_id": "",
+        "node_id": "",
+        "task_id": "",
+        "level": "WARN",
+    }
+
+
+def test_legacy_dual_event_write_is_not_duplicated(tmp_path) -> None:
+    """同一事件经两个兼容 API 相邻写入时只能生成一条记录。"""
+    os.environ["AF_DIALOGUE_ID"] = "dialogue-event-dedup"
+
+    with emit_span(SpanKind.LLM, "llm_round") as span:
+        span.add_event("llm.result", {"finish_reason": "stop"})
+        emit_event("llm.result", {"round": 1})
+
+    files = list(tmp_path.rglob("python_spans_*.ndjson"))
+    spans = [json.loads(line) for line in open(files[0]) if line.strip()]
+    events = spans[0]["events"]
+    assert len(events) == 1
+    assert events[0]["name"] == "llm.result"
+    assert events[0]["attributes"]["finish_reason"] == "stop"
+    assert events[0]["attributes"]["round"] == "1"
+
+
+def _write_spans_in_child(output_dir: str, dialogue_id: str, worker: int,
+                          count: int, start_event) -> None:
+    """Process target: all children append large records to one dialogue file."""
+    os.environ["AF_DIALOGUE_ID"] = dialogue_id
+    writer = SpanWriter(output_dir=output_dir)
+    start_event.wait()
+    for index in range(count):
+        writer.write_span(TraceSpan(
+            trace_id="trace-multiprocess",
+            span_id=f"worker-{worker}-{index}",
+            kind=SpanKind.SKILL,
+            name="multiprocess-write",
+            start_us=1,
+            end_us=2,
+            status=SpanStatus.OK,
+            tags={"payload": "x" * 65536},
+        ))
+
+
+def test_torn_span_line_does_not_consume_next_record(tmp_path, monkeypatch) -> None:
+    """被杀进程的半行必须和后续完整 Span 隔离。"""
+    dialogue_id = "dialogue-torn-span"
+    monkeypatch.setenv("AF_DIALOGUE_ID", dialogue_id)
+    path = tmp_path / f"python_spans_{dialogue_id}.ndjson"
+    path.write_bytes(b'{"trace_id":"torn"')
+
+    SpanWriter(output_dir=str(tmp_path)).write_span(TraceSpan(
+        trace_id="trace-ok",
+        span_id="span-ok",
+        kind=SpanKind.LLM,
+        name="after-torn",
+        start_us=1,
+        end_us=2,
+        status=SpanStatus.OK,
+    ))
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(lines[0])
+    assert json.loads(lines[1])["span_id"] == "span-ok"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="flock is a POSIX runtime contract")
+def test_multiple_processes_write_parseable_spans(tmp_path) -> None:
+    """兄弟 Skill 进程并发写同一 dialogue 时，每条 Span 都独立可解析。"""
+    process_count = 3
+    spans_per_process = 12
+    ctx = multiprocessing.get_context("fork")
+    start_event = ctx.Event()
+    processes = [
+        ctx.Process(
+            target=_write_spans_in_child,
+            args=(str(tmp_path), "dialogue-multiprocess", worker,
+                  spans_per_process, start_event),
+        )
+        for worker in range(process_count)
+    ]
+    for process in processes:
+        process.start()
+    start_event.set()
+    for process in processes:
+        process.join(timeout=15)
+        assert process.exitcode == 0
+
+    path = tmp_path / "python_spans_dialogue-multiprocess.ndjson"
+    spans = [
+        json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(spans) == process_count * spans_per_process
+
+
+def test_span_writer_failure_is_isolated_and_preserves_business_error(
+    monkeypatch, capsys,
+) -> None:
+    """Trace persistence failure cannot fail success or mask a business exception."""
+
+    class _BrokenWriter:
+        def __init__(self) -> None:
+            self.spans = []
+
+        def write_span(self, span) -> None:
+            self.spans.append(span)
+            raise PermissionError("trace directory is read-only")
+
+    writer = _BrokenWriter()
+    monkeypatch.setattr(SpanWriter, "current", staticmethod(lambda: writer))
+
+    with emit_span(SpanKind.SKILL, "successful-business") as span:
+        span.set_status(SpanStatus.OK)
+
+    with pytest.raises(RuntimeError, match="business failed"):
+        with emit_span(SpanKind.SKILL, "failed-business"):
+            raise RuntimeError("business failed")
+
+    assert [span.status for span in writer.spans] == [
+        SpanStatus.OK,
+        SpanStatus.ERROR,
+    ]
+    assert SpanContext.current().current_span_id() == ""
+    stderr = capsys.readouterr().err
+    assert stderr.count('"stage":"span_write_failed"') == 2
+    assert "PermissionError" in stderr

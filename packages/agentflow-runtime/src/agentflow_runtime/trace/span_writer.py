@@ -11,6 +11,11 @@ import threading
 from pathlib import Path
 from typing import Any
 
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - harness runtime is POSIX
+    fcntl = None
+
 from .types import TraceSpan
 from .span_context import SpanContext
 
@@ -66,9 +71,10 @@ class SpanWriter:
         return p.parents[5] if len(p.parents) > 5 else p.parent
 
     def write_span(self, span: TraceSpan) -> None:
-        """span 结束时写一行 NDJSON append 到文件尾。
+        """span 结束时跨进程安全地追加一行 NDJSON。
 
-        线程安全：文件锁 + append 模式（POSIX append 原子）。
+        进程内由 threading.Lock 串行；POSIX 进程间由 flock 串行。若前一个
+        进程被终止留下半行，先补换行，避免污染随后写入的完整 span。
         """
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -82,11 +88,33 @@ class SpanWriter:
             dialogue_id = span.tags.get("dialogue_id", "_no_dialogue")
         file_path = self._output_dir / f"python_spans_{dialogue_id}.ndjson"
 
-        line = json.dumps(span.to_dict(), ensure_ascii=False, separators=(",", ":"))
+        line = (
+            json.dumps(span.to_dict(), ensure_ascii=False, separators=(",", ":"))
+            + "\n"
+        ).encode("utf-8")
 
         with self._file_lock:
-            with open(file_path, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
+            with open(file_path, "a+b", buffering=0) as f:
+                if fcntl is not None:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                try:
+                    f.seek(0, os.SEEK_END)
+                    size = f.tell()
+                    if size:
+                        f.seek(-1, os.SEEK_END)
+                        if f.read(1) != b"\n":
+                            # Keep the torn fragment for diagnosis, but isolate it
+                            # so this process's complete span remains parseable.
+                            f.write(b"\n")
+                    view = memoryview(line)
+                    while view:
+                        written = f.write(view)
+                        if not written:
+                            raise OSError("short write while appending span")
+                        view = view[written:]
+                finally:
+                    if fcntl is not None:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     def output_dir(self) -> Path:
         return self._output_dir

@@ -11,6 +11,7 @@ Design constraints:
   - No business logic / log format / protocol changes — pure structural split.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -51,6 +52,41 @@ def _pkg_dir() -> str:
     """
     from agentflow_runtime import skill_executor as _se
     return _se.AGENT_PACKAGE_DIR
+
+
+def _emit_artifact_storage_result(
+    status: str,
+    *,
+    agent_name: str,
+    session_id: str,
+    entries: list[dict],
+    attempted_count: int = 0,
+    uploaded_count: int = 0,
+    returned_artifact_ids: list[str] | None = None,
+    error_type: str = "",
+    error: str = "",
+) -> None:
+    """以 fail-open Hook 记录产物持久化事实，不改变上传返回语义。"""
+    try:
+        from agentflow_runtime import events as hook_events
+        from agentflow_runtime.hooks import trigger as hook_trigger
+
+        hook_trigger(hook_events.ARTIFACT_STORAGE_RESULT, {
+            "dialogue_id": os.environ.get("AF_DIALOGUE_ID", ""),
+            "skill_name": os.environ.get("AF_SKILL_NAME", ""),
+            "exec_skill_key": os.environ.get("AF_EXEC_SKILL_KEY", ""),
+            "status": status,
+            "agent_name": agent_name,
+            "artifact_session_id": session_id,
+            "attempted_count": attempted_count,
+            "uploaded_count": uploaded_count,
+            "returned_artifact_ids": returned_artifact_ids or [],
+            "entries": entries,
+            "error_type": error_type,
+            "error": error,
+        })
+    except Exception as exc:  # pragma: no cover - 仅导入/事件层异常
+        logger.warning("artifact.storage_result_hook_failed err=%s", exc)
 
 
 def extract_artifact_paths(text: str) -> list[str]:
@@ -242,7 +278,12 @@ def extract_structured_artifacts(result_json: str) -> list[str]:
             extracted.append(resolved)
             continue
         if not os.path.isfile(resolved):
-            continue  # skip non-existent
+            # Local/Docker Sandbox files do not exist on the host yet. A
+            # structured tool field is explicit enough to defer validation to
+            # _ensure_artifacts_in_package, which pulls it through read_file.
+            if os.environ.get("AF_SANDBOX_ENDPOINT"):
+                extracted.append(resolved)
+            continue
         extracted.append(resolved)
 
     _ms = (time.monotonic() - _t0) * 1000
@@ -250,7 +291,11 @@ def extract_structured_artifacts(result_json: str) -> list[str]:
     return list(dict.fromkeys(extracted))
 
 
-def extract_all_artifacts(result_json: str) -> list[str]:
+def extract_all_artifacts(
+    result_json: str,
+    *,
+    excluded_text_paths: set[str] | list[str] | tuple[str, ...] = (),
+) -> list[str]:
     """Dual-channel merge: structured extraction + text regex extraction.
 
     Combines ``extract_structured_artifacts`` (artifacts/files/outputs JSON
@@ -260,6 +305,15 @@ def extract_all_artifacts(result_json: str) -> list[str]:
     _t0 = time.monotonic()
     structured = extract_structured_artifacts(result_json)
     text_channel = extract_artifact_paths(result_json)
+    excluded = set(excluded_text_paths)
+    skipped_inputs = [path for path in text_channel if path in excluded]
+    if skipped_inputs:
+        print(
+            "[flow] artifact.skipped_input_reference "
+            + json.dumps(skipped_inputs, ensure_ascii=False),
+            file=sys.stderr,
+        )
+        text_channel = [path for path in text_channel if path not in excluded]
 
     merged: list[str] = []
     seen: set[str] = set()
@@ -337,6 +391,26 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
     kept_in_place: list[str] = []   # 已在 package 内，无需复制
     copied_to_outputs: list[str] = []  # 复制到 outputs/
     total_bytes = 0
+    claimed_destinations: dict[Path, str] = {}
+
+    def _claim_output_destination(filename: str, source: str) -> Path:
+        """Keep overwrite semantics across calls, but never collide within one call."""
+        base = outputs_dir / filename
+        previous_source = claimed_destinations.get(base)
+        if previous_source is None or previous_source == source:
+            claimed_destinations[base] = source
+            return base
+        stem = Path(filename).stem
+        suffix = Path(filename).suffix
+        index = 1
+        while True:
+            candidate = outputs_dir / f"{stem}_{index}{suffix}"
+            previous_source = claimed_destinations.get(candidate)
+            if previous_source is None or previous_source == source:
+                claimed_destinations[candidate] = source
+                return candidate
+            index += 1
+
     # 沙箱 endpoint，用于下载宿主机上不存在的文件（沙箱 HTTP server 的 /exec + read_file）
     sandbox_url = os.environ.get("AF_SANDBOX_ENDPOINT", "")
     for path in artifacts:
@@ -359,7 +433,7 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
             # e2b SDK 拉回(沙箱侧按该路径寻址,resolve 展开路径会查无此文件)。
             raw_path = os.path.normpath(path)
             if ws_prefix and raw_path.startswith(ws_prefix) and sandbox_url:
-                dest = outputs_dir / p.name
+                dest = _claim_output_destination(p.name, raw_path)
                 if _se._download_from_sandbox_e2b(raw_path, dest):
                     p = dest  # 拉回成功 → 按包内文件处理（kept_in_place）
             elif sandbox_url:
@@ -378,12 +452,19 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
             # Package-local artifacts are already publishable by Bridge. Keep
             # their directory hierarchy so HTML/CSS relative references and
             # same-named files remain stable.
+            try:
+                p.relative_to(outputs_dir)
+            except ValueError:
+                pass
+            else:
+                claimed_destinations.setdefault(p, str(p))
             result.append(str(p))
             kept_in_place.append(f"{p.name}({file_size}B)")
             continue
-        dest = outputs_dir / p.name
+        dest = _claim_output_destination(p.name, str(p))
         # 多轮对话覆盖策略(2026-08-14 用户确认):同一 session 内同名产物直接覆盖
-        # outputs/ 下旧文件,不产生 _N 后缀(历史消息 URL 内容变为最新版,接受该语义)。
+        # outputs/ 下旧文件(历史消息 URL 内容变为最新版,接受该语义)；但同一次
+        # 收集中的不同源文件不得互相覆盖，后到者使用 _N 后缀。
         # 内容相同则跳过重写(幂等);内容不同则覆盖为最新版。
         if not dest.exists() or dest.read_bytes() != p.read_bytes():
             try:
@@ -436,21 +517,17 @@ def _ensure_artifacts_in_package(artifacts: list[str]) -> list[str]:
 
 
 def _download_from_sandbox(local_path: Path, sandbox_url: str) -> None:
-    """Download a file from the sandbox HTTP server to the local filesystem.
+    """Download a generated artifact from a Local/Docker Sandbox.
 
-    ⚠️ 当前 e2b 场景不通（2026-08-09 确认）：sandbox_url 是沙箱内 HTTP server 的
-    cubeproxy 外部路径（http://host:80/sandbox/{id}/8080），D-001 实测 cubeproxy
-    不转发 8080（HTTP 502），e2b 下此下载实际失败、走 warning 降级（artifact 缺失）。
-    仅 Local/Docker 模式（HTTPExecutor 直连沙箱内 HTTP server）此通道可用。
-
-    Used by _ensure_artifacts_in_package as a fallback when a file doesn't
-    exist on the host but was generated inside the sandbox (e2b mode).
-    The sandbox HTTP server's read_file tool returns file content via POST /exec.
-    Sends a path relative to AGENT_PACKAGE_DIR since the sandbox resolves
-    paths relative to its working directory.
+    e2b uses the SDK-specific download path because its cubeproxy does not
+    forward this HTTP server. Local/Docker use POST /artifact/download;
+    the server returns base64-encoded raw bytes after applying Artifact-type,
+    upload-input and workspace-boundary checks.
     """
-    import urllib.request
+    import base64 as _base64
     import json as _json
+    import urllib.request
+
     _t0 = time.monotonic()
     try:
         # 将绝对路径转为相对 AGENT_PACKAGE_DIR 的相对路径（沙箱侧按 workdir 解析）
@@ -459,27 +536,39 @@ def _download_from_sandbox(local_path: Path, sandbox_url: str) -> None:
             rel_path = str(local_path.resolve().relative_to(pkg_root))
         except ValueError:
             rel_path = str(local_path)
-        body = _json.dumps({"tool": "read_file", "params": {"path": rel_path}}).encode()
+        body = _json.dumps({"path": rel_path}).encode()
         req = urllib.request.Request(
-            f"{sandbox_url.rstrip('/')}/exec",
+            f"{sandbox_url.rstrip('/')}/artifact/download",
             data=body,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             result = _json.loads(resp.read().decode("utf-8"))
-        if result.get("exit_code") == 0:
-            content = result.get("stdout", "")
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-            local_path.write_bytes(content.encode("latin-1"))
-            logger.info("artifact.download_from_sandbox path=%s size=%d",
-                         local_path, len(content))
-        else:
-            logger.warning("artifact.download_from_sandbox.failed path=%s stderr=%s",
-                           local_path, result.get("stderr", ""))
+
+        content_b64 = result.get("content_b64")
+        if not isinstance(content_b64, str):
+            raise ValueError("Sandbox artifact response has no content_b64")
+        content = _base64.b64decode(content_b64, validate=True)
+        expected_size = result.get("size")
+        if not isinstance(expected_size, int) or expected_size != len(content):
+            raise ValueError(
+                f"Sandbox artifact size mismatch: expected={expected_size} actual={len(content)}"
+            )
+
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        local_path.write_bytes(content)
+        logger.info(
+            "artifact.download_from_sandbox path=%s size=%d",
+            local_path,
+            len(content),
+        )
     except Exception as e:
-        logger.warning("artifact.download_from_sandbox.error path=%s err=%s",
-                       local_path, e)
+        logger.warning(
+            "artifact.download_from_sandbox.error path=%s err=%s",
+            local_path,
+            e,
+        )
     finally:
         _ms = (time.monotonic() - _t0) * 1000
         print(f"[timing] artifact.download_from_sandbox duration_ms={_ms:.1f}", file=sys.stderr)
@@ -529,12 +618,22 @@ def _upload_artifacts_to_storage(artifact_paths: list[str]) -> None:
     # AF_ARTIFACT_STORAGE_URL 默认指向 bridge 自身地址（http://localhost:8199)
     storage_url = os.environ.get("AF_ARTIFACT_STORAGE_URL", "http://localhost:8199")
     _t0 = time.monotonic()
+    agent_name = os.path.basename(_pkg_dir().rstrip(os.sep))
+    entries: list[dict] = []
     if not storage_url:
         logger.info("artifact.upload.skip: AF_ARTIFACT_STORAGE_URL not set")
         _ms = (time.monotonic() - _t0) * 1000
         print(f"[timing] artifact.upload_to_storage duration_ms={_ms:.1f}", file=sys.stderr)
+        _emit_artifact_storage_result(
+            "storage_disabled",
+            agent_name=agent_name,
+            session_id="",
+            entries=[
+                {"source_path": str(path), "status": "storage_disabled"}
+                for path in artifact_paths
+            ],
+        )
         return
-    agent_name = os.path.basename(_pkg_dir().rstrip(os.sep))
     # artifact 路由键用 {user_id}_{client_id}（artifact-storage.md §2.2 + §I-artifact-id），
     # 不是 AF_SESSION_ID（执行槽位 0/1/2，缺用户维度会导致跨用户产物撞 artifact_id）。
     session_id = _artifact_session_id()
@@ -542,22 +641,41 @@ def _upload_artifacts_to_storage(artifact_paths: list[str]) -> None:
         logger.info("artifact.upload.skip: no AF_USER_ID/AF_CLIENT_ID")
         _ms = (time.monotonic() - _t0) * 1000
         print(f"[timing] artifact.upload_to_storage duration_ms={_ms:.1f}", file=sys.stderr)
+        _emit_artifact_storage_result(
+            "identity_missing",
+            agent_name=agent_name,
+            session_id="",
+            entries=[
+                {"source_path": str(path), "status": "identity_missing"}
+                for path in artifact_paths
+            ],
+        )
         return
     _sandbox_mode = os.environ.get("AF_SANDBOX_MODE", "unknown")
     files = []
+    file_entry_indexes: list[int] = []
     total_bytes = 0
     for path in artifact_paths:
+        entry = {"source_path": str(path)}
+        entries.append(entry)
         if path.startswith(("http://", "https://")):
             logger.info("artifact.upload.skip_external_url path=%s", path)
+            entry.update({"status": "external_reference", "uri": path})
             continue  # 外部 URL 不上传
         p = Path(path)
         if not p.is_file():
             logger.warning("artifact.upload.skip_missing path=%s", path)
+            entry["status"] = "missing"
             continue
         try:
             data = p.read_bytes()
         except OSError as e:
             logger.error("artifact.upload.read_failed path=%s err=%s", path, e)
+            entry.update({
+                "status": "read_failed",
+                "error_type": type(e).__name__,
+                "error": str(e),
+            })
             continue
         total_bytes += len(data)
         # artifact_id = {agent_name}/{session_id}/{file_path}
@@ -573,6 +691,13 @@ def _upload_artifacts_to_storage(artifact_paths: list[str]) -> None:
                 rel = Path(rel_parts[0]) / Path(*rel_parts[2:])
         except ValueError:
             rel = Path(p.name)  # 外部文件，用文件名（与 local_artifact_url basename 约定一致）
+        entry.update({
+            "status": "prepared",
+            "storage_path": str(rel),
+            "size_bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        })
+        file_entry_indexes.append(len(entries) - 1)
         # base64 编码二进制产物，避免 utf-8 decode 损坏 PNG/PDF 等格式
         import base64
         files.append({
@@ -584,6 +709,12 @@ def _upload_artifacts_to_storage(artifact_paths: list[str]) -> None:
                       f"agent={agent_name} session={session_id} sandbox_mode={_sandbox_mode}")
         _ms = (time.monotonic() - _t0) * 1000
         print(f"[timing] artifact.upload_to_storage duration_ms={_ms:.1f}", file=sys.stderr)
+        _emit_artifact_storage_result(
+            "no_uploadable_files",
+            agent_name=agent_name,
+            session_id=session_id,
+            entries=entries,
+        )
         return
     import urllib.request
     body = json.dumps({"agent_name": agent_name, "session_id": session_id, "files": files}).encode("utf-8")
@@ -595,6 +726,11 @@ def _upload_artifacts_to_storage(artifact_paths: list[str]) -> None:
         upload_url, agent_name, session_id,
         _sandbox_mode, len(files), total_bytes, file_names,
     )
+    storage_status = "upload_failed"
+    uploaded_count = 0
+    returned_artifact_ids: list[str] = []
+    upload_error_type = ""
+    upload_error = ""
     try:
         req = urllib.request.Request(
             upload_url,
@@ -604,14 +740,38 @@ def _upload_artifacts_to_storage(artifact_paths: list[str]) -> None:
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             resp_body = json.loads(resp.read().decode("utf-8"))
-            ids = resp_body.get("artifact_ids", [])
+            raw_ids = resp_body.get("artifact_ids", [])
+            if not isinstance(raw_ids, list):
+                raw_ids = []
+            returned_artifact_ids = [
+                str(artifact_id)
+                for artifact_id in raw_ids
+                if isinstance(artifact_id, str) and artifact_id
+            ]
+            for ordinal, entry_index in enumerate(file_entry_indexes):
+                artifact_entry = entries[entry_index]
+                if ordinal < len(returned_artifact_ids):
+                    artifact_entry.update({
+                        "status": "uploaded",
+                        "artifact_id": returned_artifact_ids[ordinal],
+                    })
+                    uploaded_count += 1
+                else:
+                    artifact_entry["status"] = "upload_response_missing_id"
+            storage_status = "uploaded" if uploaded_count == len(files) else "partial"
             logger.info(
                 "artifact.upload.done url=%s agent=%s session=%s "
                 "sandbox_mode=%s count=%d ids=%s",
                 upload_url, agent_name, session_id,
-                _sandbox_mode, len(ids), ids,
+                _sandbox_mode, len(returned_artifact_ids), returned_artifact_ids,
             )
     except Exception as e:
+        storage_status = "upload_failed"
+        upload_error_type = type(e).__name__
+        upload_error = str(e)
+        for entry_index in file_entry_indexes:
+            if entries[entry_index].get("status") == "prepared":
+                entries[entry_index]["status"] = "upload_failed"
         # 记录完整请求上下文，避免 e2b 等远端模式无法定位
         logger.error(
             "artifact.upload.failed url=%s agent=%s session=%s "
@@ -622,3 +782,14 @@ def _upload_artifacts_to_storage(artifact_paths: list[str]) -> None:
     finally:
         _ms = (time.monotonic() - _t0) * 1000
         print(f"[timing] artifact.upload_to_storage duration_ms={_ms:.1f}", file=sys.stderr)
+        _emit_artifact_storage_result(
+            storage_status,
+            agent_name=agent_name,
+            session_id=session_id,
+            entries=entries,
+            attempted_count=len(files),
+            uploaded_count=uploaded_count,
+            returned_artifact_ids=returned_artifact_ids,
+            error_type=upload_error_type,
+            error=upload_error,
+        )

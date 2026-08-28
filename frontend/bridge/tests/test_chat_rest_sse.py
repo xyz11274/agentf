@@ -514,6 +514,40 @@ class TestSseStreamingEndpoint:
         assert "_dialogue_id" in events[0]
         assert events[1] == "[DONE]"
 
+    def test_streaming_records_final_and_done_delivery(
+        self, mock_daemon: AsyncMock, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """SSE records server handoff facts without claiming a client ACK."""
+        deliveries: list[dict[str, Any]] = []
+        mock_daemon.agent_execute.return_value = {
+            "task_id": "t-delivery", "session_id": "s-delivery",
+        }
+        mock_daemon.wait_for_response.return_value = {
+            "content": "Complete response", "final": True,
+        }
+        monkeypatch.setattr(
+            "routes.chat_rest.append_bridge_delivery",
+            lambda **kwargs: deliveries.append(kwargs) or True,
+        )
+
+        app = self._mk_app(mock_daemon)
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/chat/agent_a?stream=true",
+                json={"user_id": "u1", "client_id": "c1", "content": "hi"},
+            )
+
+        assert response.status_code == 200
+        assert len(deliveries) == 2
+        final_delivery, done_delivery = deliveries
+        assert final_delivery["task_id"] == "t-delivery"
+        assert final_delivery["session_id"] == "s-delivery"
+        assert final_delivery["status"] == "final"
+        assert final_delivery["wire_payload"]["data"]["_final"] is True
+        assert done_delivery["stage"] == "server_stream_completed"
+        assert done_delivery["status"] == "done"
+        assert done_delivery["wire_payload"] == _SSE_DONE
+
     def test_streaming_execute_error(self, mock_daemon: AsyncMock) -> None:
         """SSE error event when agent.execute fails."""
         mock_daemon.agent_execute.side_effect = DaemonError("no such agent")
@@ -765,6 +799,48 @@ class TestChatRestContextInjectionIntegration:
         assert call["user_input"] == "question"
         assert call["agent_response"] == "final answer"
         assert call["session_id"] == "b-sess-1"
+
+    def test_sync_returns_public_content_but_persists_raw_artifact_url(
+        self, mock_daemon: AsyncMock, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Placeholder mode keeps replay history raw and records both views."""
+        raw_content = (
+            "结果：![图](/api/artifacts/agent_a/files/outputs/look.png)"
+        )
+        public_content = "结果：![图]({{artifact:1}})"
+        deliveries: list[dict[str, Any]] = []
+        monkeypatch.setattr("routes.chat_rest.settings.artifact_reference", "placeholder")
+        monkeypatch.setattr("routes.chat_rest.settings.artifact_payload", "url")
+        monkeypatch.setattr("routes.chat_rest.settings.artifact_public_base_url", "")
+        monkeypatch.setattr(
+            "routes.chat_rest.append_bridge_delivery",
+            lambda **kwargs: deliveries.append(kwargs) or True,
+        )
+        mock_daemon.agent_execute.return_value = {
+            "task_id": "t-sync", "session_id": "s-sync",
+        }
+        mock_daemon.wait_for_response.return_value = {
+            "content": raw_content, "final": True,
+        }
+
+        provider = _MockProvider(history=[])
+        app = self._mk_app(mock_daemon, provider)
+        with TestClient(app) as client:
+            response = client.post(
+                "/api/chat/agent_a",
+                json={"user_id": "u1", "client_id": "c1", "content": "question"},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["data"]["content"] == public_content
+        assert provider.save_dialogue_calls[0]["agent_response"] == raw_content
+        assert len(deliveries) == 1
+        delivery_event = deliveries[0]
+        assert delivery_event["task_id"] == "t-sync"
+        assert delivery_event["session_id"] == "s-sync"
+        assert delivery_event["raw_content"] == raw_content
+        assert delivery_event["delivered_content"] == public_content
+        assert delivery_event["wire_payload"]["data"]["content"] == public_content
 
     def test_dialogue_user_input_persists_raw_content_with_base64(
         self, mock_daemon: AsyncMock,

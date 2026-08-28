@@ -47,6 +47,11 @@
           "name": "skill_artifacts",
           "type": "string",
           "required": false
+        },
+        {
+          "name": "completed_batch_key",
+          "type": "string",
+          "required": false
         }
       ],
       "outputs": [
@@ -55,11 +60,7 @@
           "type": "string"
         },
         {
-          "name": "next_skills",
-          "type": "string"
-        },
-        {
-          "name": "coordinator_status",
+          "name": "status",
           "type": "string"
         }
       ],

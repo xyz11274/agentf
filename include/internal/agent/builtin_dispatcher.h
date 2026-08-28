@@ -25,6 +25,7 @@ class MMWorkflow;
 struct SkillSpec {
   std::string name;            ///< Skill name
   std::string exec_skill_key;  ///< Optional: DataBus key for skill-specific data
+  std::string batch_id;        ///< Optional: Coordinator dispatch batch identity
   bool        force = false;   ///< Force re-launch: clear previous result and re-schedule
 
   SkillSpec() = default;

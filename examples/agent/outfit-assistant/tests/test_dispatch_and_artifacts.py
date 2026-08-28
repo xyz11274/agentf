@@ -26,7 +26,10 @@ executor = load("outfit_executor_artifacts", ROOT / "nodes/skill_executor.py")
 # `executor.AGENT_PACKAGE_DIR` does NOT propagate — we must patch the pip package
 # module's AGENT_PACKAGE_DIR for those functions to see the override (F5 single source).
 from agentflow_runtime import skill_executor as _pkg_skill_executor
-from agentflow_runtime import coordinator_decide as _pkg_coordinator_decide
+# Artifact URL/render helpers are owned by coordinator_common after the
+# v1/v2 convergence; keep the historical local alias so existing fixtures
+# patch the closure's real module-level package path.
+from agentflow_runtime import coordinator_common as _pkg_coordinator_decide
 
 
 def _patch_package_dirs(monkeypatch, executor_dir: str, coordinator_dir: str):
@@ -211,7 +214,9 @@ def test_existing_absolute_markdown_image_is_rewritten(tmp_path):
 def test_package_artifact_url_preserves_directory_hierarchy():
     path = ROOT / "output" / "report" / "index.html"
 
-    url = coordinator.local_artifact_url(str(path))
+    url = _pkg_coordinator_decide.local_artifact_url(
+        str(path), package_dir=str(ROOT)
+    )
 
     # agent name = basename(AGENT_PACKAGE_DIR), dynamic not hardcoded (Fix 7)
     # URL 格式：/api/artifacts/{agent_name}/files/{relative}，relative 相对 package_dir 计算
@@ -591,6 +596,42 @@ def test_extract_all_merges_text_and_structured_channels(tmp_path, monkeypatch):
     assert str(img2.resolve()) in all_artifacts
 
 
+def test_extract_all_excludes_text_only_input_reference(tmp_path, monkeypatch):
+    """工具仅在文本里回显输入路径时，不得把它当成本轮生成产物。"""
+    package = tmp_path / "agent"
+    source = package / "references" / "source.png"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"input")
+    monkeypatch.setattr(executor, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_skill_executor, "AGENT_PACKAGE_DIR", str(package))
+    result = json.dumps({"stdout": f"analyzed input {source}"})
+
+    assert executor.extract_all_artifacts(
+        result,
+        excluded_text_paths={str(source.resolve())},
+    ) == []
+
+
+def test_structured_artifact_overrides_input_reference_exclusion(
+        tmp_path, monkeypatch):
+    """Tool 明确声明同一路径为输出时，结构化通道仍是权威来源。"""
+    package = tmp_path / "agent"
+    edited = package / "outputs" / "edited.png"
+    edited.parent.mkdir(parents=True)
+    edited.write_bytes(b"edited")
+    monkeypatch.setattr(executor, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_skill_executor, "AGENT_PACKAGE_DIR", str(package))
+    result = json.dumps({
+        "stdout": f"saved {edited}",
+        "files": ["outputs/edited.png"],
+    })
+
+    assert executor.extract_all_artifacts(
+        result,
+        excluded_text_paths={str(edited.resolve())},
+    ) == [str(edited.resolve())]
+
+
 # ═══════════════════════════════════════════════════════════════════
 # Structured extraction: defensive parsing edge cases
 # ═══════════════════════════════════════════════════════════════════
@@ -759,7 +800,7 @@ def test_url_no_hardcoded_agent_name_in_any_path(tmp_path, monkeypatch):
     img.write_bytes(b"img")
     monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
 
-    url = coordinator.local_artifact_url(str(img))
+    url = _pkg_coordinator_decide.local_artifact_url(str(img))
 
     assert "outfit-assistant" not in url
     assert "my-cool-agent" in url
@@ -772,7 +813,7 @@ def test_url_package_name_with_dots(tmp_path, monkeypatch):
     img.write_bytes(b"img")
     monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
 
-    url = coordinator.local_artifact_url(str(img))
+    url = _pkg_coordinator_decide.local_artifact_url(str(img))
 
     assert "org.example.agent" in url
 
@@ -784,7 +825,7 @@ def test_url_deep_nested_directory_hierarchy(tmp_path, monkeypatch):
     deep.write_bytes(b"img")
     monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
 
-    url = coordinator.local_artifact_url(str(deep))
+    url = _pkg_coordinator_decide.local_artifact_url(str(deep))
 
     assert "/files/" in url
     assert "a/b/c/d/e/deep.png" in url
@@ -988,6 +1029,31 @@ def test_ensure_external_collision_gets_suffix(tmp_path, monkeypatch):
     assert (outputs / "report_1.png").read_bytes() == b"BBB"
 
 
+def test_package_output_is_not_overwritten_by_external_same_name(
+        tmp_path, monkeypatch):
+    """同批已有 package output 时，外部同名文件必须使用后缀。"""
+    package = tmp_path / "agent"
+    existing = package / "outputs" / "report.png"
+    existing.parent.mkdir(parents=True)
+    existing.write_bytes(b"package")
+    external = tmp_path / "external" / "report.png"
+    external.parent.mkdir()
+    external.write_bytes(b"external")
+    monkeypatch.setattr(executor, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_skill_executor, "AGENT_PACKAGE_DIR", str(package))
+
+    result = executor._ensure_artifacts_in_package(
+        [str(existing), str(external)]
+    )
+
+    assert result == [
+        str(existing.resolve()),
+        str((package / "outputs" / "report_1.png").resolve()),
+    ]
+    assert existing.read_bytes() == b"package"
+    assert (package / "outputs" / "report_1.png").read_bytes() == b"external"
+
+
 def test_ensure_nonexistent_file_skipped(tmp_path, monkeypatch):
     package = tmp_path / "agent"
     monkeypatch.setattr(executor, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_skill_executor, "AGENT_PACKAGE_DIR", str(package))
@@ -1053,7 +1119,7 @@ def test_version_dedup_keeps_highest_numbered(tmp_path):
         str(tmp_path / "review-3.png"),
     ]
 
-    result = coordinator._dedup_versioned_artifacts(paths)
+    result = _pkg_coordinator_decide._dedup_versioned_artifacts(paths)
 
     assert result == [str(tmp_path / "review-3.png")]
 
@@ -1065,7 +1131,7 @@ def test_version_dedup_keeps_unversioned_separately(tmp_path):
         str(tmp_path / "standalone.png"),
     ]
 
-    result = coordinator._dedup_versioned_artifacts(paths)
+    result = _pkg_coordinator_decide._dedup_versioned_artifacts(paths)
 
     assert str(tmp_path / "outfit-2.png") in result
     assert str(tmp_path / "standalone.png") in result

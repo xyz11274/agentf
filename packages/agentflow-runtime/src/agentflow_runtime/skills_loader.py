@@ -59,6 +59,25 @@ def parse_agent_md(path: str) -> tuple:
 # SKILL.md loading
 # ---------------------------------------------------------------------------
 
+def _resolve_skill_dir(skill_name: str) -> str | None:
+    """Resolve one direct-child Skill directory without allowing root escape."""
+    if (
+        not isinstance(skill_name, str)
+        or not skill_name
+        or skill_name != skill_name.strip()
+        or skill_name in {".", ".."}
+        or "/" in skill_name
+        or "\\" in skill_name
+        or "\x00" in skill_name
+    ):
+        return None
+    skills_base = os.path.realpath(_get_skills_base())
+    skill_dir = os.path.realpath(os.path.join(skills_base, skill_name))
+    if os.path.dirname(skill_dir) != skills_base:
+        return None
+    return skill_dir
+
+
 def load_skill_md(skill_name: str) -> str | None:
     """Read harness/skills/{skill_name}/SKILL.md and replace AgentFoundry template vars.
 
@@ -66,7 +85,12 @@ def load_skill_md(skill_name: str) -> str | None:
     at mount time.  Our V3 coordinator doesn't have a materialization step,
     so we substitute them here with the actual filesystem paths.
     """
-    path = os.path.join(_get_skills_base(), skill_name, "SKILL.md")
+    resolved_skill_dir = _resolve_skill_dir(skill_name)
+    if resolved_skill_dir is None:
+        return None
+    path = os.path.realpath(os.path.join(resolved_skill_dir, "SKILL.md"))
+    if os.path.dirname(path) != resolved_skill_dir:
+        return None
     if not os.path.isfile(path):
         return None
     with open(path, encoding="utf-8") as f:

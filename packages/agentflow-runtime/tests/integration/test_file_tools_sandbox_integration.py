@@ -80,6 +80,65 @@ def sandbox_server(monkeypatch: pytest.MonkeyPatch):
             pass
 
 
+def test_server_does_not_reenter_inherited_endpoint(tmp_path):
+    """HTTP server 作为执行链终点时，不得把 runtime tool 再路由回自身。
+
+    复现 daemon 启动环境：子进程继承 ``AF_SANDBOX_MODE=local`` 及自身
+    endpoint。修复前一次 bash 调用会递归占满 8 个请求槽，最终返回
+    ``Concurrent tool execution limit reached (8)``。
+    """
+    port = _find_free_port()
+    endpoint = f"http://127.0.0.1:{port}"
+    child_env = os.environ.copy()
+    child_env["AF_SANDBOX_MODE"] = "local"
+    child_env["AF_SANDBOX_ENDPOINT"] = endpoint
+    child_env["AF_SANDBOX_WORKSPACE"] = str(tmp_path)
+
+    proc = subprocess.Popen(
+        [sys.executable, _SERVER, "--port", str(port), "--host", "127.0.0.1"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=str(tmp_path),
+        env=child_env,
+    )
+    try:
+        import requests
+
+        response = None
+        for _ in range(50):
+            try:
+                response = requests.post(
+                    f"{endpoint}/exec",
+                    json={
+                        "tool": "bash",
+                        "tool_params": {"command": "printf terminal-ok"},
+                        "opts": {},
+                    },
+                    timeout=3,
+                )
+                break
+            except requests.ConnectionError:
+                if proc.poll() is not None:
+                    pytest.fail(f"server exited: {proc.stderr.read().decode()}")
+                time.sleep(0.1)
+        else:
+            pytest.fail("server startup timeout")
+
+        assert response is not None
+        result = response.json()
+        assert response.status_code == 200
+        assert result.get("exit_code") == 0, result
+        assert result.get("stdout") == "terminal-ok", result
+        assert "Concurrent tool execution limit" not in result.get("stderr", "")
+    finally:
+        proc.send_signal(signal.SIGTERM)
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2)
+
+
 # AC-US2-003: write_file 写 output.txt 落沙箱内 workdir，宿主机对应 workdir 下可见
 def test_write_file_lands_in_workdir(sandbox_server):
     """AC-US2-003 + TC-SBOX-004: write_file 落 workdir。
@@ -249,3 +308,49 @@ def test_backward_compat_none_endpoint(tmp_path):
     ))
     assert result_e.get("success") is True, f"向后兼容 edit 失败: {result_e}"
     assert (tmp_path / "compat.txt").read_text(encoding="utf-8").strip() == "edited content"
+
+
+def test_artifact_download_is_binary_safe_and_untruncated(
+    sandbox_server, tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """Artifact 拉回必须保留超过 read_file 文本上限的任意原始字节。"""
+    from agentflow_runtime import skill_executor as se
+
+    endpoint, workdir = sandbox_server
+    payload = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 128
+    sandbox_file = Path(workdir) / "artifact-download.png"
+    sandbox_file.write_bytes(payload)
+
+    package_dir = tmp_path / "agent"
+    package_dir.mkdir()
+    monkeypatch.setattr(se, "AGENT_PACKAGE_DIR", str(package_dir))
+    downloaded = package_dir / sandbox_file.name
+    try:
+        se._download_from_sandbox(downloaded, endpoint)
+        assert downloaded.is_file(), "Artifact 未从 Sandbox 拉回"
+        assert downloaded.read_bytes() == payload
+    finally:
+        sandbox_file.unlink(missing_ok=True)
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_status"),
+    [
+        ("../outside.png", 400),
+        ("workspace/user_client/upload/input.png", 403),
+        ("secrets.env", 415),
+    ],
+)
+def test_artifact_download_rejects_non_artifact_paths(
+    sandbox_server, path: str, expected_status: int
+):
+    """Artifact 端点拒绝越界路径、用户输入目录和非产物后缀。"""
+    import requests
+
+    endpoint, _ = sandbox_server
+    response = requests.post(
+        f"{endpoint}/artifact/download",
+        json={"path": path},
+        timeout=3,
+    )
+    assert response.status_code == expected_status

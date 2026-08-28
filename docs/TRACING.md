@@ -277,6 +277,8 @@ trace_output/python/python_spans_<dialogue_id>.ndjson
 ```
 
 一行一 span JSON，与 C++ 侧 `trace_output/task_<id>.ndjson` 格式一致，viewer 同目录扫两侧合并展示跨进程 span 树。
+同一 dialogue 的并行 Python 进程通过 POSIX `flock` 串行追加；若前一进程被终止留下
+半行，下一写入者先补换行隔离该碎片，后续完整 Span 不会与半行粘连。
 
 ### 与现有 observability.py 的关系
 

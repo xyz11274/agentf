@@ -22,6 +22,12 @@ from .span_context import SpanContext
 from .span_writer import SpanWriter
 
 
+# SpanContext 只保存 trace/span ID；这里暂存活动对象，让 span_event() 能把事件
+# 追加到退出时由 SpanWriter 落盘的同一个 Span。
+_active_spans: dict[str, TraceSpan] = {}
+_active_spans_lock = threading.Lock()
+
+
 # ── emit_span()：生命周期 API（context manager）──
 
 @contextmanager
@@ -65,6 +71,8 @@ def emit_span(
     )
 
     ctx.push(trace_id, span.span_id)
+    with _active_spans_lock:
+        _active_spans[span.span_id] = span
     _emit_stderr_preview("span_start", span)
 
     try:
@@ -78,7 +86,12 @@ def emit_span(
     finally:
         span.end_us = now_us()
         ctx.pop(span.span_id)
-        SpanWriter.current().write_span(span)
+        with _active_spans_lock:
+            _active_spans.pop(span.span_id, None)
+        try:
+            SpanWriter.current().write_span(span)
+        except Exception as exc:
+            _emit_span_write_failure_preview(span, exc)
         _emit_stderr_preview("span_end", span)
 
 
@@ -107,19 +120,33 @@ def span_event(
         attributes=attrs,
     )
 
-    # 挂到活跃 span（如有）
-    # 注意：TraceSpan 是 dataclass，events 是 list，可直接 append
-    # 但 emit_span 持有的 span 对象在 ctx 栈中不直接暴露——需经栈查找
-    # 简化：emit_span yield 的 span 对象由调用方持引用，add_event 应走 span.add_event()
-    # 此处仅处理无活跃 span 的退化场景 + stderr preview
-    _emit_event_stderr_preview(event, level)
+    active_span_id = ctx.current_span_id()
+    if active_span_id:
+        with _active_spans_lock:
+            active_span = _active_spans.get(active_span_id)
+            if active_span is not None:
+                _append_span_event(active_span, event, "span_event")
 
-    # 若有活跃 span，调用方应使用 sp.add_event()；此处不强行挂栈
-    # （设计：emit_span yield 的 sp 对象由调用方持引用，add_event 是 sp 的方法）
+    _emit_event_stderr_preview(event, level)
 
 
 # ── TraceSpan.add_event() 辅助（monkey-patch 到 dataclass）──
 # TraceSpan 是 dataclass，无法在 class body 外加方法 → 用闭包
+
+def _append_span_event(
+    span: TraceSpan, event: SpanEvent, origin: str,
+) -> SpanEvent:
+    """追加事件；仅合并旧调用点产生的双 API 相邻写入。"""
+    if span.events:
+        previous = span.events[-1]
+        previous_origin = getattr(previous, "_agentflow_origin", "")
+        if previous.name == event.name and previous_origin and previous_origin != origin:
+            previous.attributes.update(event.attributes)
+            return previous
+    setattr(event, "_agentflow_origin", origin)
+    span.events.append(event)
+    return event
+
 
 def _span_add_event(self: TraceSpan, name: str, attrs: dict[str, str] | None = None) -> SpanEvent:
     ev = SpanEvent(
@@ -127,8 +154,7 @@ def _span_add_event(self: TraceSpan, name: str, attrs: dict[str, str] | None = N
         name=name,
         attributes=attrs or {},
     )
-    self.events.append(ev)
-    return ev
+    return _append_span_event(self, ev, "direct")
 
 def _span_set_status(self: TraceSpan, status: str, error_msg: str = "") -> None:
     self.status = status
@@ -147,6 +173,24 @@ TraceSpan.set_tag = _span_set_tag  # type: ignore[attr-defined]
 # ── stderr preview（§6.8：[obs] 行保留为 preview，真相源在 NDJSON）──
 
 _emit_lock = threading.Lock()
+def _emit_span_write_failure_preview(span: TraceSpan, exc: Exception) -> None:
+    """Best-effort warning: trace persistence must never change business flow."""
+    try:
+        preview = {
+            "stage": "span_write_failed",
+            "trace_id": span.trace_id,
+            "span_id": span.span_id,
+            "name": span.name,
+            "error_type": type(exc).__name__,
+            "error": str(exc)[:500],
+        }
+        line = json.dumps(preview, ensure_ascii=False, separators=(",", ":"))
+        with _emit_lock:
+            print(f"[obs] {line}", file=sys.stderr, flush=True)
+    except Exception:
+        # stderr/serialization may fail together with storage; observability remains optional.
+        pass
+
 
 def _emit_stderr_preview(stage: str, span: TraceSpan) -> None:
     """emit_span 进入/退出时打 stderr [obs] 行（preview，开发态速读）。"""

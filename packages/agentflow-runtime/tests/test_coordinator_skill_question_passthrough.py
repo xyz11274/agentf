@@ -92,6 +92,12 @@ class _FakeBus:
         return None
 
     def get_global(self, key):
+        if key.startswith("dispatch:"):
+            return json.dumps({
+                "skill_name": "outfit-stylist",
+                "prompt": "请推荐穿搭",
+                "load_skills": [],
+            }, ensure_ascii=False)
         return None
 
     def put(self, key, value):
@@ -272,3 +278,15 @@ def test_coordinator_normal_flow_with_question_result(monkeypatch, capsys):
     assert "请告诉我以下信息" in last["response"], f"LLM 应直接转达提问: {last}"
     assert "工具调用失败" not in last["response"], "不应落兜底错误"
     m_llm.assert_called_once()
+    assert m_llm.call_args.kwargs["source"] == "coordinator"
+    assert m_llm.call_args.kwargs["round_i"] == 1
+    llm_messages = m_llm.call_args.args[0]
+    completion_messages = [
+        message for message in llm_messages
+        if "Skill 'outfit-stylist' 已完成" in message.get("content", "")
+    ]
+    assert [message["role"] for message in completion_messages] == ["tool"]
+    completion_tool = completion_messages[0]
+    completion_index = llm_messages.index(completion_tool)
+    reconstructed_call = llm_messages[completion_index - 1]["tool_calls"][0]
+    assert completion_tool["tool_call_id"] == reconstructed_call["id"]

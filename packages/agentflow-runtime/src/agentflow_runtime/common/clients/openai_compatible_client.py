@@ -47,12 +47,56 @@ class OpenAiCompatibleClient(LlmClient):
         self.retry_base_delay = retry_base_delay
         self.connect_timeout = connect_timeout
         self.request_timeout = request_timeout
+        # Per-call transport telemetry. TraceRecorder creates one client for
+        # each LLM call, so this does not alter the OpenAI-compatible response.
+        self.last_attempts = 0
+        self.last_retry_reasons: list[str] = []
+        self.last_http_status: int | None = None
+        self.last_usage_source = "missing"
+        self.last_usage_estimator_version = ""
 
         # Env override
         self.max_retries = int(os.environ.get("AF_LLM_MAX_RETRIES", str(self.max_retries)))
         self.retry_base_delay = float(os.environ.get("AF_LLM_RETRY_BASE_DELAY", str(self.retry_base_delay)))
         self.connect_timeout = int(os.environ.get("AF_LLM_CONNECT_TIMEOUT", str(self.connect_timeout)))
         self.request_timeout = int(os.environ.get("AF_LLM_TIMEOUT", str(self.request_timeout)))
+
+    def build_request_body(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        max_completion_tokens: int = 8192,
+        stream: bool = False,
+        extra_body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build the exact JSON body used by chat_completion."""
+        body: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "max_completion_tokens": max_completion_tokens,
+        }
+        if tools:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+        if stream:
+            body["stream"] = True
+        else:
+            # DashScope rejects non-stream requests when thinking stays enabled.
+            body["enable_thinking"] = False
+        # Reasoning models need thinking explicitly enabled for streaming.
+        if "enable_thinking" not in body:
+            body["enable_thinking"] = True
+        # Generation parameters cannot override transport/core request fields.
+        if extra_body:
+            core_keys = {
+                "model", "messages", "max_completion_tokens", "tools",
+                "tool_choice", "stream", "enable_thinking",
+            }
+            for key, value in extra_body.items():
+                if value is not None and key not in core_keys:
+                    body[key] = value
+        return body
 
     def chat_completion(
         self,
@@ -73,32 +117,13 @@ class OpenAiCompatibleClient(LlmClient):
         （守 §3.7：trace 路径失败不中断主流程）。
         """
         # ── Build request body ──
-        body: dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "max_completion_tokens": max_completion_tokens,
-        }
-        if tools:
-            body["tools"] = tools
-            body["tool_choice"] = "auto"
-        if stream:
-            body["stream"] = True
-        else:
-            # DashScope（通义千问）要求非流式请求显式关闭 enable_thinking，
-            # 否则默认 true 时 API 会拒绝非流式调用。这个参数对其他 provider
-            # 无影响（会被静默忽略）。
-            body["enable_thinking"] = False
-        # 推理模型（如 deepseek-reasoner）要求流式请求也显式设置 enable_thinking，
-        # 否则可能返回空内容。默认设为 True 以兼容推理模型，非推理模型静默忽略。
-        if "enable_thinking" not in body:
-            body["enable_thinking"] = True
-        # Merge extra_body params (temperature, top_p, etc.) — do NOT override
-        # core params (model, messages, max_completion_tokens, tools, stream).
-        if extra_body:
-            core_keys = {"model", "messages", "max_completion_tokens", "tools", "tool_choice", "stream", "enable_thinking"}
-            for k, v in extra_body.items():
-                if v is not None and k not in core_keys:
-                    body[k] = v
+        body = self.build_request_body(
+            messages,
+            tools=tools,
+            max_completion_tokens=max_completion_tokens,
+            stream=stream,
+            extra_body=extra_body,
+        )
 
         headers = {
             "Content-Type": "application/json",
@@ -122,40 +147,80 @@ class OpenAiCompatibleClient(LlmClient):
         # 流式模式也允许重试，但仅限于「还未收到任何 SSE chunk」的连接阶段错误。
         # 一旦收到第一个 SSE 数据，mid-stream 错误不再重试（避免向客户端推送重复流）。
         max_attempts = self.max_retries + 1
+        self.last_attempts = 0
+        self.last_retry_reasons = []
+        self.last_http_status = None
+        self.last_usage_source = "missing"
+        self.last_usage_estimator_version = ""
+        request_deadline = time.monotonic() + max(0.001, float(self.request_timeout))
         response_data = None
         last_error = None
         attempt = 0
         _data_received = False  # 流式模式：是否已收到 SSE chunk
 
         for attempt in range(max_attempts):
+            remaining_timeout = request_deadline - time.monotonic()
+            if remaining_timeout <= 0:
+                last_error = requests.Timeout("LLM request total timeout exhausted")
+                break
+            attempt_timeout = max(0.001, remaining_timeout)
+            connect_timeout = min(max(0.001, float(self.connect_timeout)), attempt_timeout)
             try:
+                self.last_attempts += 1
                 resp = requests.post(
                     self.base_url,
                     headers=headers,
                     json=body,
                     stream=stream,
-                    timeout=(self.connect_timeout, self.request_timeout),
+                    timeout=(connect_timeout, attempt_timeout),
                     verify=False,
                 )
+                response_status = getattr(resp, "status_code", 200)
+                if not isinstance(response_status, int):
+                    response_status = 200
+                self.last_http_status = response_status
+                if time.monotonic() >= request_deadline:
+                    raise requests.Timeout("LLM request total timeout exhausted")
 
                 if not stream:
+                    if response_status != 200:
+                        raise _api_error_from_response(resp, response_status)
                     resp_data = resp.json()
+                    if not isinstance(resp_data, dict):
+                        raise _ApiError(
+                            "Malformed chat completion response: root must be an object"
+                        )
                     if "error" in resp_data and "choices" not in resp_data:
                         raise _ApiError(f"API error: {resp_data.get('error')}")
+                    choices = resp_data.get("choices")
+                    if not isinstance(choices, list) or not choices:
+                        raise _ApiError(
+                            "Malformed chat completion response: choices must be non-empty"
+                        )
+                    choice = choices[0]
+                    if not isinstance(choice, dict) or not isinstance(
+                        choice.get("message"), dict
+                    ):
+                        raise _ApiError(
+                            "Malformed chat completion response: choices[0].message "
+                            "must be an object"
+                        )
+                    usage = resp_data.get("usage")
+                    if usage is None:
+                        resp_data["usage"] = {}
+                    elif not isinstance(usage, dict):
+                        raise _ApiError(
+                            "Malformed chat completion response: usage must be an object"
+                        )
+                    self.last_usage_source = "provider" if resp_data.get("usage") else "missing"
                     response_data = resp_data
                     break
 
                 # ── 流式模式 ──
                 # 先检查 HTTP 状态码：非 200 时错误体不是 SSE 格式，
                 # iter_lines 会因缺少 "data: " 前缀而静默跳过，导致返回空内容。
-                if resp.status_code != 200:
-                    try:
-                        err_data = resp.json()
-                        err_msg = err_data.get("error", {}).get("message", resp.text[:200]) \
-                            if isinstance(err_data.get("error"), dict) else str(err_data.get("error", resp.text[:200]))
-                    except Exception:
-                        err_msg = resp.text[:200]
-                    raise _ApiError(f"API error (HTTP {resp.status_code}): {err_msg}")
+                if response_status != 200:
+                    raise _api_error_from_response(resp, response_status)
 
                 accumulated: list[str] = []
                 finish_reason = "stop"
@@ -164,6 +229,8 @@ class OpenAiCompatibleClient(LlmClient):
                 resp.encoding = "utf-8"
 
                 for sse_line in resp.iter_lines(decode_unicode=True):
+                    if time.monotonic() >= request_deadline:
+                        raise requests.Timeout("LLM request total timeout exhausted")
                     if not sse_line or not sse_line.startswith("data: "):
                         continue
                     _data_received = True  # 已收到第一条 SSE 数据
@@ -176,6 +243,9 @@ class OpenAiCompatibleClient(LlmClient):
                         continue
                     if "error" in chunk:
                         raise _ApiError(f"API error: {chunk['error']}")
+                    chunk_usage = chunk.get("usage")
+                    if chunk_usage:
+                        usage = chunk_usage
                     choices = chunk.get("choices", [])
                     if not choices:
                         continue
@@ -212,7 +282,6 @@ class OpenAiCompatibleClient(LlmClient):
                     fr = choices[0].get("finish_reason")
                     if fr:
                         finish_reason = fr
-                    usage = chunk["usage"] if "usage" in chunk and chunk["usage"] else None
 
                 full_text = "".join(accumulated)
                 tool_calls_text = json.dumps([v["function"] for v in tool_calls_acc.values()]) if tool_calls_acc else ""
@@ -222,6 +291,11 @@ class OpenAiCompatibleClient(LlmClient):
                     # 用文本长度估算 token 数（~1 token / 2 chars，中英文混合粗略估计）。
                     estimated = max(1, len(all_text) // 2)
                     usage = {"prompt_tokens": 0, "completion_tokens": estimated, "total_tokens": estimated}
+                    self.last_usage_source = "estimated"
+                    self.last_usage_estimator_version = "chars_div_2_v1"
+                else:
+                    self.last_usage_source = "provider"
+                    self.last_usage_estimator_version = ""
                 response_message: dict = {"content": full_text, "role": "assistant"}
                 if tool_calls_acc:
                     response_message["tool_calls"] = list(tool_calls_acc.values())
@@ -235,19 +309,19 @@ class OpenAiCompatibleClient(LlmClient):
                 }
                 break
 
-            except _ApiError as e:
-                last_error = e
-                logger.warning(
-                    "API_ERROR (non-retriable) attempt=%d/%d: %s",
-                    attempt + 1, max_attempts, e,
-                )
-                break
 
             except Exception as e:
                 last_error = e
                 retriable = _is_transient_http_error(e)
                 if not _data_received and attempt < max_attempts - 1 and retriable:
                     backoff = min(self.retry_base_delay * (2 ** attempt), 8.0)
+                    retry_reason = (f"http_{e.status_code}" if isinstance(e, _ApiError)
+                                    and e.status_code is not None else type(e).__name__)
+                    self.last_retry_reasons.append(retry_reason)
+                    remaining_timeout = request_deadline - time.monotonic()
+                    if remaining_timeout <= backoff:
+                        last_error = requests.Timeout("LLM request total timeout exhausted")
+                        break
                     logger.warning(
                         "transient error attempt=%d/%d, retry in %.1fs: %s (data_received=%s)",
                         attempt + 1, max_attempts, backoff, e, _data_received,
@@ -269,8 +343,33 @@ class OpenAiCompatibleClient(LlmClient):
         return response_data
 
 
+def _api_error_from_response(resp, status_code: int) -> "_ApiError":
+    """Build a status-aware provider error without assuming an OpenAI body shape."""
+    try:
+        err_data = resp.json()
+        raw_error = err_data.get("error", getattr(resp, "text", "")[:200])
+        if isinstance(raw_error, dict):
+            err_msg = raw_error.get("message", str(raw_error))
+        else:
+            err_msg = str(raw_error)
+    except Exception:
+        err_msg = str(getattr(resp, "text", ""))[:200]
+    return _ApiError(
+        f"API error (HTTP {status_code}): {err_msg}",
+        status_code=status_code,
+    )
+
+
 class _ApiError(Exception):
-    """非重试性 API 错误。"""
+    """Provider API error with explicit retry classification."""
+
+    def __init__(self, message: str, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+    @property
+    def retriable(self) -> bool:
+        return self.status_code in {408, 429, 500, 502, 503, 504}
 
 
 def _is_transient_http_error(e: Exception) -> bool:
@@ -285,6 +384,8 @@ def _is_transient_http_error(e: Exception) -> bool:
     （连接被对端关闭），应当可重试。真正不可重试的只有证书验证错误
     （certificate verify failed / unknown ca）——证书本身有问题，重试无用。
     """
+    if isinstance(e, _ApiError):
+        return e.retriable
     msg = str(e).lower()
     # SSL 证书错误不重试（先于 isinstance 检查，避免被 SSLError ⊂ ConnectionError 吞掉）。
     # 只排除证书类错误；SSLEOFError 等瞬时 SSL 错误不在此列，走下方 ConnectionError 分支重试。

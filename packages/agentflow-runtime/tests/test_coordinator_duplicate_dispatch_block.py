@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -105,3 +106,88 @@ def test_last_prompt_missing_conservative_block():
     cd = _load()
     skill_names = [{"name": "outfit-stylist", "prompt": "推荐穿搭"}]
     assert cd._is_duplicate_dispatch("outfit-stylist", skill_names, False, None) is True
+
+def test_force_on_one_spec_does_not_unlock_its_sibling():
+    """Per-Skill force is not a batch-wide escape hatch."""
+    cd = _load()
+    skills = [
+        {"name": "outfit-stylist", "prompt": "same prompt"},
+        {"name": "forge-image-gen", "prompt": "new image", "force": True},
+    ]
+
+    assert cd._is_duplicate_dispatch(
+        "outfit-stylist", skills, False, "same prompt"
+    ) is True
+    assert cd._is_duplicate_dispatch(
+        "forge-image-gen", skills, False, "new image"
+    ) is False
+
+
+class _FakeLedgerBus:
+    def __init__(self):
+        self.values = {}
+
+    def is_connected(self):
+        return True
+
+    def get_global(self, key):
+        return self.values.get(key)
+
+    def put_global(self, key, value):
+        self.values[key] = value
+        return True
+
+
+def test_completed_dispatch_ledger_survives_unrelated_later_completion():
+    """An older exact dispatch remains blocked after another Skill completes."""
+    cd = _load()
+    bus = _FakeLedgerBus()
+    exec_skill_key = "dispatch:dlg-ledger:round-1:1"
+    bus.values[exec_skill_key] = json.dumps({
+        "skill_name": "weather-search",
+        "prompt": "查询北京天气",
+        "load_skills": [],
+        "batch_id": "batch:dlg-ledger:round-1",
+    }, ensure_ascii=False)
+    batch = {
+        "batch_id": "batch:dlg-ledger:round-1",
+        "results": [{
+            "exec_skill_key": exec_skill_key,
+            "skill_status": "completed",
+        }],
+    }
+
+    assert cd._remember_completed_batch_dispatches(bus, "dlg-ledger", batch) == 1
+    assert cd._find_persisted_completed_dispatch(
+        bus,
+        "dlg-ledger",
+        [{"name": "weather-search", "prompt": "查询北京天气"}],
+        False,
+    ) == "weather-search"
+
+    # A new prompt, another dialogue, or explicit force remains dispatchable.
+    assert cd._find_persisted_completed_dispatch(
+        bus,
+        "dlg-ledger",
+        [{"name": "weather-search", "prompt": "查询上海天气"}],
+        False,
+    ) == ""
+    assert cd._find_persisted_completed_dispatch(
+        bus,
+        "another-dialogue",
+        [{"name": "weather-search", "prompt": "查询北京天气"}],
+        False,
+    ) == ""
+    assert cd._find_persisted_completed_dispatch(
+        bus,
+        "dlg-ledger",
+        [{"name": "weather-search", "prompt": "查询北京天气", "force": True}],
+        False,
+    ) == ""
+
+    marker_key = cd._completed_dispatch_marker_key(
+        "dlg-ledger", "weather-search", "查询北京天气"
+    )
+    marker = json.loads(bus.values[marker_key])
+    assert marker["exec_skill_key"] == exec_skill_key
+    assert marker["terminal_status"] == "completed"

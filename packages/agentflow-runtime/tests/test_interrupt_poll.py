@@ -39,6 +39,12 @@ def interrupt_flag_env(monkeypatch):
                        str(PROJECT_ROOT / "examples" / "agent" / "outfit-assistant"))
     return monkeypatch
 
+_SKILL_MANIFEST = json.dumps({
+    "skill_name": "weather-search",
+    "prompt": "请帮我查询天气",
+    "load_skills": [],
+})
+
 
 class _FakeDataBus:
     """模拟 DataBusClient，可控返回 interrupt flag。"""
@@ -53,6 +59,8 @@ class _FakeDataBus:
         return self.connected
 
     def get_global(self, key: str) -> str | None:
+        if key.startswith("dispatch:"):
+            return _SKILL_MANIFEST
         if key.startswith("interrupt:"):
             return self._interrupt_flag or None
         return None
@@ -167,7 +175,7 @@ def test_skill_executor_poll_failure_does_not_block(interrupt_flag_env):
     def _flaky_get_global(key):
         if key.startswith("interrupt:"):
             raise Exception("UDS reconnect")
-        return None
+        return _SKILL_MANIFEST if key.startswith("dispatch:") else None
 
     fake_bus.get_global = _flaky_get_global
 
@@ -227,6 +235,8 @@ def test_interrupt_flag_stays_set_on_repeated_poll(interrupt_flag_env):
         
         def get_global(self, key):
             # 始终返回 "true"，模拟 flag 在轮询间不消失
+            if key.startswith("dispatch:"):
+                return _SKILL_MANIFEST
             return "true" if key.startswith("interrupt:") else None
 
         def get(self, key):

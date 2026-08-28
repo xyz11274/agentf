@@ -373,6 +373,7 @@ def execute() -> None:
                     max_completion_tokens=max_completion_tokens,
                     stream=stream,
                     source="coordinator",
+                    round_i=round_i + 1,
                     extra_body={
                         "temperature": AgentConfig.llm_temperature(),
                         "top_p": AgentConfig.llm_top_p(),
@@ -386,9 +387,17 @@ def execute() -> None:
             print(f"[timing] llm_call_end={_t_llm_end-_t0:.1f}s (llm={_t_llm_end-_t_llm_start:.1f}s)",
                   file=sys.stderr)
             # ── hooks: LLM 调用后挂载点（检查/改写决策，v2）──
+            _llm_call_id = raw.get("_agentflow_call_id", "")
             hook_trigger(hook_mounts.COORDINATOR_V2_AFTER_LLM_CALL, {
                 "round": round_i + 1,
+                "call_id": _llm_call_id,
                 "raw_choices": raw.get("choices", [{}])[0] if raw.get("choices") else {},
+            }, ctx=_llm_ctx)
+            _effective_response = recorder.record_effective_response(_llm_call_id, raw)
+            hook_trigger(hook_events.COORDINATOR_LLM_RESULT, {
+                "round": round_i + 1,
+                "call_id": _llm_call_id,
+                "response": _effective_response,
             }, ctx=_llm_ctx)
 
             # observability: log raw LLM response
@@ -443,15 +452,13 @@ def execute() -> None:
                 print(f"[timing] llm_error total={time.time()-_t0:.1f}s", file=sys.stderr)
                 return
 
-        # ── 检测 LLM 返回空内容（API 成功但未实际处理请求，与 v1 同款）──
-        # 典型信号：content="" + usage 全零 + finish_reason=stop
-        # 这通常意味着 API key 无效、模型不支持流式、或参数配置错误。
+        # ── 检测 LLM 返回空业务结果（不依赖 token 计数，与 v1 同款）──
         # v2 修复 2026-08-14:原 v2 缺失此检测,LLM 空响应会被当成正常最终响应
         # 输出空字符串,用户/前端无任何反馈。
         # 复用 coordinator_common.is_empty_llm_response(单一真相源 F4,霰弹式收敛)。
         _is_empty_response = is_empty_llm_response(raw)
         if _is_empty_response:
-            err_msg = "LLM returned empty response (zero tokens, no content, finish=stop)"
+            err_msg = "LLM returned empty response (no content and no tool calls)"
             emit_event(hook_events.COORDINATOR_LLM_ERROR, {
                 "round": round_i + 1,
                 "error": err_msg,

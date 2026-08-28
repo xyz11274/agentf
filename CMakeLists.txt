@@ -143,6 +143,7 @@ if(NOT DEFINED RAPIDJSON_INCLUDE_DIR)
     PATHS
       "${CMAKE_INSTALL_PREFIX}/include"
       "${HOMEBREW_PREFIX}/include"
+      "$ENV{CONDA_PREFIX}/include"
       "/usr/local/include"
       "/usr/local/include"
       "/usr/include"
