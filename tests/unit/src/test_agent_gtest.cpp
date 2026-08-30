@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -3730,6 +3731,27 @@ TEST_F(DialogueSerialLockTest, DoubleReleaseIsSafe) {
   // Second release must be a no-op.
   ses.release_dialogue_lock("d1");
   EXPECT_EQ(ses.get_active_dialogue_id(), "");
+}
+
+TEST_F(DialogueSerialLockTest, ActiveDialogueDefersIdleTimeout) {
+  auto cfg = session_cfg();
+  cfg.timeout_ms = 20;
+  framework::MMAgentSession ses(cfg);
+  ses.bind_route("user-a", "client-a");
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(30));
+  ASSERT_TRUE(ses.is_timeout_expired());
+  const int64_t activity_before_dialogue = ses.get_last_activity_time();
+
+  ses.hold_dialogue_lock("d1", ses.acquire_dialogue_lock("d1"));
+  EXPECT_FALSE(ses.is_timeout_expired())
+      << "active dialogue must not be reclaimed by idle Session TTL";
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  ses.release_dialogue_lock("d1");
+  EXPECT_GT(ses.get_last_activity_time(), activity_before_dialogue)
+      << "idle TTL must restart when the dialogue finishes";
+  EXPECT_FALSE(ses.is_timeout_expired());
 }
 
 // ════════════════════════════════════════════════════════════════════

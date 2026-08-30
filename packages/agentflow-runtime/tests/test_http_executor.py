@@ -33,6 +33,19 @@ def _mock_resp(data: dict, status_code: int = 200):
     return m
 
 
+def _set_local_identity(monkeypatch, tmp_path):
+    package_root = tmp_path / "outfit-agent"
+    user_root = package_root / "workspace" / "user-a_conv-a"
+    skills_root = package_root / "harness" / "skills"
+    user_root.mkdir(parents=True)
+    skills_root.mkdir(parents=True)
+    monkeypatch.setenv("AF_SANDBOX_MODE", "local")
+    monkeypatch.setenv("AF_AGENT_PACKAGE_DIR", str(package_root))
+    monkeypatch.setenv("AF_USER_ID", "user-a")
+    monkeypatch.setenv("AF_CLIENT_ID", "conv-a")
+    return package_root, user_root, skills_root
+
+
 # ---------------------------------------------------------------------------
 # exec_command
 # ---------------------------------------------------------------------------
@@ -239,3 +252,48 @@ def test_workdir_passed_in_opts(executor):
 
     _, kwargs = mock_post.call_args
     assert kwargs["json"]["opts"]["working_dir"] == "/custom/work"
+
+
+# ---------------------------------------------------------------------------
+# Local host-filesystem path scope
+# ---------------------------------------------------------------------------
+
+def test_local_path_scope_is_user_isolated_and_skills_are_read_only(
+    executor, monkeypatch, tmp_path
+):
+    """Only this user workspace and static skill reads receive trusted roots."""
+    package_root, user_root, skills_root = _set_local_identity(monkeypatch, tmp_path)
+    current_file = user_root / "profile.md"
+    static_file = skills_root / "outfit-stylist" / "SKILL.md"
+    other_file = package_root / "workspace" / "user-b_conv-b" / "private.md"
+
+    assert executor._local_path_scope("write_file", str(current_file)) == (
+        str(current_file),
+        str(user_root),
+    )
+    assert executor._local_path_scope("read_file", str(static_file)) == (
+        str(static_file),
+        str(skills_root),
+    )
+    assert executor._local_path_scope("write_file", str(static_file)) is None
+    assert executor._local_path_scope("read_file", str(other_file)) is None
+
+    monkeypatch.setenv("AF_SANDBOX_MODE", "docker")
+    assert executor._local_path_scope("read_file", str(current_file)) is None
+
+
+def test_local_relative_write_uses_user_root_and_returns_absolute_path(
+    executor, monkeypatch, tmp_path
+):
+    """Relative Local output paths remain replayable by artifact collection."""
+    _, user_root, _ = _set_local_identity(monkeypatch, tmp_path)
+    response = _mock_resp({"stdout": "", "exit_code": 0})
+
+    with patch(_POST, return_value=response) as mock_post:
+        result = executor.write_file("outputs/lookbook.html", "<html/>")
+
+    payload = mock_post.call_args.kwargs["json"]
+    expected = user_root / "outputs" / "lookbook.html"
+    assert payload["tool_params"]["path"] == str(expected)
+    assert payload["opts"]["working_dir"] == str(user_root)
+    assert result.path == str(expected)

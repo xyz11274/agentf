@@ -14,6 +14,7 @@ import json
 import pytest
 
 from content_serializer import (
+    _artifact_routing_id,
     flatten_to_text,
     normalize_content,
     prepare_content_for_daemon,
@@ -32,6 +33,18 @@ def _parse_af_input_inline(raw: str) -> list[dict]:
     except json.JSONDecodeError:
         pass
     return [{"type": "text", "text": raw}]
+
+
+def test_artifact_routing_id_matches_runtime_contract() -> None:
+    runtime_context = pytest.importorskip(
+        "agentflow_runtime.common.runtime_context"
+    )
+    pairs = (("user-a", "conversation-a"), ("a_b", "c"), ("a", "b_c"))
+
+    for user_id, client_id in pairs:
+        runtime_id = runtime_context.artifact_routing_id(user_id, client_id)
+
+        assert _artifact_routing_id(user_id, client_id) == runtime_id
 
 
 # ── normalize_content ─────────────────────────────────────────────

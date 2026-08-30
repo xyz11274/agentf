@@ -39,7 +39,12 @@ dependencies = [
     "e2b==2.34.0",
     # Image compression for base64-embedded artifacts (read_artifact_base64)
     "Pillow>=10.4",
+    # Shared Harness credential policy and artifact/runtime contracts.
+    "agentflow-runtime",
 ]
+
+[tool.uv.sources]
+agentflow-runtime = { path = "../../packages/agentflow-runtime", editable = true }
 
 [project.optional-dependencies]
 dev = [

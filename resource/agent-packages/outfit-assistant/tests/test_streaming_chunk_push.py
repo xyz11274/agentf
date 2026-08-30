@@ -5,7 +5,7 @@ These tests lock the streaming contract:
   - stream=True + on_chunk set  → callback fires per non-empty delta token
   - stream=False                  → callback never fires
   - on_chunk raising              → main LLM call still completes (resilience)
-  - on_chunk payload format       → the RAW SSE chunk JSON (not parsed dict)
+  - on_chunk payload format       → sanitized SSE JSON with equivalent delta fields
 
 The on_chunk mechanism is the foundation that llm_call.py builds on to wire
 streaming chunks to DataBus.response_push (see streaming-response.md §3.5/§3.6).
@@ -13,28 +13,14 @@ streaming chunks to DataBus.response_push (see streaming-response.md §3.5/§3.6
 
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from agentflow_runtime.common.clients import openai_compatible_client
+from agentflow_runtime.common.clients.openai_compatible_client import OpenAiCompatibleClient
 
 
-# ── Bootstrap: put nodes/ on sys.path so `from common.clients import ...` works
-#    (matches the real node runtime, which is launched with PYTHON_PATH=nodes).
-_NODES_DIR = (Path(__file__).parents[1] / "nodes").resolve()
-if str(_NODES_DIR) not in sys.path:
-    sys.path.insert(0, str(_NODES_DIR))
-
-
-# ── Import the real module via the package namespace (nodes/ is already on
-#    sys.path above). Going through the package keeps ``from .base import ...``
-#    relative imports inside the module working correctly.
-import common  # noqa: E402  (must come AFTER sys.path bootstrap above)
-from common.clients import openai_compatible_client  # noqa: E402
-from common.clients.openai_compatible_client import OpenAiCompatibleClient  # noqa: E402
 
 
 # ── Fake SSE Response ──
@@ -89,7 +75,7 @@ class TestOnChunkCallback:
 
     def test_on_chunk_called_per_token(self, client, monkeypatch):
         """stream=True with 3 content deltas → on_chunk fires exactly 3 times,
-        each invocation receives the RAW SSE payload JSON string."""
+        each invocation receives a sanitized SSE payload JSON string."""
         fake_resp = _FakeSseResponse(SSE_LINES)
         # requests.post returns the streaming response once, then is never re-entered
         # (stream=True skips retry-loop because max_attempts=1 for stream)
@@ -117,7 +103,7 @@ class TestOnChunkCallback:
             parsed = json.loads(raw_json)
             assert "choices" in parsed
             assert parsed["choices"][0]["delta"]["content"], \
-                "callback payload must be the raw SSE JSON, not stripped"
+                "callback payload must contain the sanitized delta content"
         assert response["choices"][0]["message"]["content"] == "你好世界！"
 
     def test_on_chunk_not_called_when_stream_false(self, client, monkeypatch):
@@ -187,9 +173,8 @@ class TestOnChunkCallback:
 
         assert response["choices"][0]["message"]["content"] == "你好世界！"
 
-    def test_on_chunk_payload_preserves_raw_sse(self, client, monkeypatch):
-        """Callback receives the EXACT string after "data: " (no re-serialization).
-        This matters because the bridge forwards it as-is to the websocket."""
+    def test_on_chunk_payload_preserves_delta_fields(self, client, monkeypatch):
+        """Callback preserves non-secret delta fields after safe re-serialization."""
         specific_payload = (
             '{"choices":[{"delta":{"content":"X","custom_field":42},"index":0}]}'
         )
@@ -213,6 +198,8 @@ class TestOnChunkCallback:
             on_chunk=_on_chunk,
         )
 
-        assert received == [specific_payload], (
-            "callback must receive the raw payload string, not a re-serialized copy"
-        )
+        assert len(received) == 1
+        parsed = json.loads(received[0])
+        delta = parsed["choices"][0]["delta"]
+        assert delta["content"] == "X"
+        assert delta["custom_field"] == 42

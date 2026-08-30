@@ -73,6 +73,23 @@ def test_local_sandbox_structured_relative_path_passes_collect(
     assert result == [str(pkg / "assets" / "report.html")]
 
 
+def test_empty_artifacts_field_does_not_hide_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """空的高优先级字段不得遮蔽后续非空结构化产物字段。"""
+    pkg = tmp_path / "agent"
+    pkg.mkdir()
+    report = pkg / "report.html"
+    report.write_text("<html></html>")
+    monkeypatch.setattr(skill_executor, "AGENT_PACKAGE_DIR", str(pkg))
+
+    result = skill_executor.extract_structured_artifacts(
+        '{"artifacts": [], "files": ["report.html"]}'
+    )
+
+    assert result == [str(report)]
+
+
 def test_ensure_in_package_e2b_html_uses_sdk_channel(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

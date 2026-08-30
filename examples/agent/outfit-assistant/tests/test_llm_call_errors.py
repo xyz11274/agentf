@@ -215,7 +215,7 @@ def test_transport_retry_succeeds_after_transient_error(monkeypatch):
 
     result = MODULE.call_llm(
         messages=[{"role": "user", "content": "hi"}],
-        model="m", base_url="http://x/v1", api_key="k", timeout=1)
+        model="m", base_url="http://127.0.0.1:9/v1", api_key="k", timeout=1)
 
     assert "_llm_error" not in result, f"should have retried, got: {result}"
     assert result["choices"][0]["message"]["content"] == "ok"
@@ -242,7 +242,7 @@ def test_transport_retry_exhausted_returns_llm_error(monkeypatch):
 
     result = MODULE.call_llm(
         messages=[{"role": "user", "content": "hi"}],
-        model="m", base_url="http://x/v1", api_key="k", timeout=1)
+        model="m", base_url="http://127.0.0.1:9/v1", api_key="k", timeout=1)
 
     assert result["_llm_error"] is True
     assert "Connection reset" in result["error"]
@@ -272,7 +272,7 @@ def test_deterministic_api_error_not_retried(monkeypatch):
 
     result = MODULE.call_llm(
         messages=[{"role": "user", "content": "hi"}],
-        model="m", base_url="http://x/v1", api_key="bad", timeout=1)
+        model="m", base_url="http://127.0.0.1:9/v1", api_key="bad", timeout=1)
 
     assert result["_llm_error"] is True
     assert "API error" in result["error"]
@@ -299,7 +299,7 @@ def test_non_transient_ssl_error_not_retried(monkeypatch):
 
     result = MODULE.call_llm(
         messages=[{"role": "user", "content": "hi"}],
-        model="m", base_url="http://x/v1", api_key="k", timeout=1)
+        model="m", base_url="http://127.0.0.1:9/v1", api_key="k", timeout=1)
 
     assert result["_llm_error"] is True
     assert "certificate verify failed" in result["error"]

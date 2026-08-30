@@ -172,8 +172,8 @@ def _call_vision(image_data: str, user_prompt: str,
         "Authorization": f"Bearer {cfg['api_key']}",
         "Content-Type": "application/json",
     }
-    # Skip SSL certificate verification to avoid issues in various environments
-    ssl_ctx = ssl._create_unverified_context()
+    # Keep certificate verification enabled; custom CAs use SSL_CERT_FILE.
+    ssl_ctx = ssl.create_default_context()
     req = urllib.request.Request(
         cfg["base_url"],
         data=json.dumps(payload).encode("utf-8"),

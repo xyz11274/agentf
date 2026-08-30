@@ -22,6 +22,7 @@ import pytest
 
 from client import DaemonClient
 from providers import LocalSessionProvider
+import services.trace_puller as trace_puller
 from services.trace_puller import _pull_and_save_traces
 
 
@@ -121,7 +122,7 @@ def _make_trace_entry(call_id: str, model: str = "gpt-4o") -> dict[str, Any]:
             "prompt_tokens": 10,
             "completion_tokens": 5,
             "total_tokens": 15,
-            "dialogue_id": "d-1",
+            "dialogue_id": "",
             "session_id": "mock-ses-001",
             "node_id": "coordinator_decide",
             "task_id": "task-001",
@@ -482,4 +483,71 @@ async def test_pull_and_save_traces_partial_failure_still_cleans_successful(
     ]
     assert "llm/traces/call-ok/" in cleanup_prefixes, (
         f"Expected cleanup for 'call-ok', got prefixes: {cleanup_prefixes}"
+    )
+
+@pytest.mark.asyncio
+async def test_pull_and_save_traces_redacts_secret_before_sqlite(
+    provider: LocalSessionProvider,
+    monkeypatch,
+) -> None:
+    import base64
+    import hashlib
+    import json
+
+    secret = "trace-provider-secret/A+B-998877665544"
+    encoded = base64.b64encode(secret.encode()).decode()
+    monkeypatch.setenv("ODD_VENDOR_TOKEN", secret)
+    entry = _make_trace_entry("call-secret")
+    entry["request"]["messages"][0]["content"] = secret
+    entry["response"]["choices"][0]["message"]["content"] = encoded
+    daemon = _MockDaemonClient([entry])
+    sess = await provider.get_or_create_session("security-user", "web")
+
+    count = await _pull_and_save_traces(
+        daemon, provider,
+        agent_id="test-agent",
+        user_id="security-user",
+        client_id="web",
+        dialogue_id="d-secret",
+        session_id=sess["id"],
+    )
+
+    assert count == 1
+    traces = await provider.get_traces(sess["id"], dialogue_id="d-secret")
+    serialized = json.dumps(traces, ensure_ascii=False)
+    assert secret not in serialized
+    assert encoded not in serialized
+    assert hashlib.sha256(secret.encode()).hexdigest() not in serialized
+    trace_data = traces[0]["trace_data"]
+    assert trace_data["redaction"]["applied"] is True
+    assert "<redacted:env.ODD_VENDOR_TOKEN>" in serialized
+
+
+@pytest.mark.asyncio
+async def test_pull_skips_persistence_and_cleanup_when_sanitizer_is_unavailable(
+    provider: LocalSessionProvider, monkeypatch
+) -> None:
+    from services.secret_safety import SecretSanitizerUnavailable
+
+    daemon = _MockDaemonClient([_make_trace_entry("call-unavailable")])
+    sess = await provider.get_or_create_session("security-user", "web")
+
+    def unavailable(_value):
+        raise SecretSanitizerUnavailable("unavailable")
+
+    monkeypatch.setattr(trace_puller, "sanitize_for_storage", unavailable)
+    count = await _pull_and_save_traces(
+        daemon, provider,
+        agent_id="test-agent",
+        user_id="security-user",
+        client_id="web",
+        dialogue_id="d-unavailable",
+        session_id=sess["id"],
+    )
+
+    assert count == 0
+    assert await provider.get_traces(sess["id"]) == []
+    assert not any(
+        method == "databus.remove_by_prefix"
+        for method, _params in daemon._sent_requests
     )

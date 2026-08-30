@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -95,10 +96,17 @@ def test_semantic_recovery_retries_when_progress_push_succeeds(skill_env):
             "arguments": '{"file_path":"out.txt","content":',
         },
     }]
-    llm_side_effect = [
+    llm_responses = iter([
         _llm_response(tool_calls=truncated_call, finish="length"),
         _llm_response(content="恢复后完成"),
-    ]
+    ])
+    observed_llm_timeouts: list[int] = []
+
+    def llm_side_effect(*_args, **_kwargs):
+        observed_llm_timeouts.append(int(os.environ["AF_LLM_TIMEOUT"]))
+        return next(llm_responses)
+
+    skill_env.setenv("AF_LLM_TIMEOUT", "7200")
 
     with patch.object(skill_executor, "DataBusClient", return_value=fake_bus), \
          patch.object(skill_executor, "call_llm", side_effect=llm_side_effect) as mock_llm, \
@@ -127,6 +135,9 @@ def test_semantic_recovery_retries_when_progress_push_succeeds(skill_env):
             skill_executor.execute()
 
     assert mock_llm.call_count == 2
+    assert len(observed_llm_timeouts) == 2
+    assert all(1 <= timeout < 3600 for timeout in observed_llm_timeouts)
+    assert os.environ["AF_LLM_TIMEOUT"] == "7200"
     second_messages = mock_llm.call_args_list[1].args[0]
     assert any(
         message.get("content") == skill_executor.SKILL_RECOVERY_PROMPT
@@ -224,6 +235,84 @@ def test_nonzero_usage_empty_final_response_is_not_completed(skill_env):
         skill_executor.SpanStatus.ERROR,
         "llm_error empty_final_response at round 1",
     )
+
+
+def test_successful_same_tool_with_other_arguments_does_not_hide_failure(skill_env):
+    """Only an exact operation retry may clear an earlier Tool failure."""
+    from agentflow_runtime import skill_executor
+
+    fake_bus = _FakeDataBus()
+    fake_registry = MagicMock()
+    fake_registry.get_tools.return_value = []
+    fake_registry.execute.side_effect = [
+        json.dumps({
+            "status": "security_policy_blocked",
+            "error": "command rejected",
+        }),
+        json.dumps({"status": "succeeded", "success": True}),
+    ]
+    first_call = [{
+        "id": "call_blocked",
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "arguments": '{"command":"generate --output outputs/a.png"}',
+        },
+    }]
+    second_call = [{
+        "id": "call_ok",
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "arguments": '{"command":"generate --output outputs/b.png"}',
+        },
+    }]
+    llm_responses = iter([
+        _llm_response(tool_calls=first_call, finish="tool_calls"),
+        _llm_response(tool_calls=second_call, finish="tool_calls"),
+        _llm_response(content="第二个文件已生成"),
+    ])
+    hook_calls = []
+
+    def record_hook(name, payload, **_kwargs):
+        hook_calls.append((name, payload))
+        return payload
+
+    with patch.object(skill_executor, "DataBusClient", return_value=fake_bus), \
+         patch.object(skill_executor, "call_llm", side_effect=llm_responses), \
+         patch.object(skill_executor, "emit_event"), \
+         patch.object(skill_executor, "hook_trigger", side_effect=record_hook), \
+         patch.object(skill_executor, "AgentConfig") as mock_cfg, \
+         patch.object(skill_executor, "_LocalToolRegistry", return_value=fake_registry), \
+         patch.object(skill_executor, "load_skills_from_list", return_value={}), \
+         patch.object(skill_executor, "_ensure_artifacts_in_package",
+                      side_effect=lambda artifacts: artifacts), \
+         patch.object(skill_executor, "resolve_llm_config", return_value={
+             "model": "test", "api_key": "k", "base_url": "http://127.0.0.1:1/v1",
+         }):
+        mock_cfg.skill_max_iterations.return_value = 3
+        mock_cfg.node_execution_timeout.return_value = 3600
+        mock_cfg.skill_max_completion_tokens.return_value = 4000
+        mock_cfg.skill_llm_temperature.return_value = 0.7
+        mock_cfg.skill_llm_top_p.return_value = 1.0
+        mock_cfg.skill_llm_frequency_penalty.return_value = 0.0
+        mock_cfg.skill_llm_presence_penalty.return_value = 0.0
+        mock_cfg.skill_llm_top_k.return_value = 0
+        mock_cfg.skill_llm_stop.return_value = None
+        mock_cfg.skill_llm_recovery_attempts.return_value = 0
+
+        with patch("sys.stdout", io.StringIO()):
+            skill_executor.execute()
+
+    result = json.loads(dict(fake_bus.put_calls)["skill_result:skill-runner"])
+    assert result["status"] == "tool_error"
+    assert "unresolved failure" in result["error"]
+    end_payload = next(
+        payload for name, payload in hook_calls
+        if name == skill_executor.hook_mounts.SKILL_EXECUTOR_AFTER_SKILL_COMPLETE
+    )
+    assert end_payload["status"] == "tool_error"
+    assert end_payload["error"] == result["error"]
 
 
 def test_forced_termination_summary_ignores_internal_user_messages():

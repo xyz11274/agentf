@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from agentflow_runtime.common.runtime_context import artifact_routing_id
+
 
 # ═══════════════════════════════════════════════════════════════════
 # runtime_context.artifact_session_id — 路由键构造
@@ -30,8 +32,9 @@ def test_artifact_session_id_combines_user_and_client(
     monkeypatch.setenv("AF_USER_ID", "user_abc")
     monkeypatch.setenv("AF_CLIENT_ID", "client_123")
     from agentflow_runtime.common.runtime_context import artifact_session_id
-    assert artifact_session_id() == "user_abc_client_123", (
-        "artifact 路由键应为 '{user_id}_{client_id}'（artifact-storage.md §2.2）"
+    expected = artifact_routing_id("user_abc", "client_123")
+    assert artifact_session_id() == expected, (
+        "artifact 路由键必须无歧义地包含 user_id 与 client_id"
     )
 
 
@@ -55,9 +58,33 @@ def test_artifact_session_id_does_not_use_session_slot(
     monkeypatch.setenv("AF_USER_ID", "user_abc")
     monkeypatch.setenv("AF_CLIENT_ID", "client_123")
     from agentflow_runtime.common.runtime_context import artifact_session_id
-    assert artifact_session_id() == "user_abc_client_123", (
+    assert artifact_session_id() == artifact_routing_id("user_abc", "client_123"), (
         "路由键必须取自 user_id/client_id，AF_SESSION_ID（槽位）不得混入"
     )
+
+
+def test_artifact_routing_id_separates_ambiguous_legacy_pairs() -> None:
+    """旧拼接会把 (a_b,c) 与 (a,b_c) 都映射为 a_b_c。"""
+    left = artifact_routing_id("a_b", "c")
+    right = artifact_routing_id("a", "b_c")
+
+    assert left != right
+    assert left.startswith("v2__")
+    assert right.startswith("v2__")
+
+
+def test_artifact_routing_id_stays_within_filesystem_segment_limit() -> None:
+    routing_id = artifact_routing_id("u_" + "a" * 118, "c_" + "b" * 118)
+
+    assert len(routing_id.encode("utf-8")) <= 255
+
+
+@pytest.mark.parametrize(
+    ("uid", "cid"),
+    (("", "conversation"), ("user", "")),
+)
+def test_artifact_routing_id_rejects_partial_identity(uid: str, cid: str) -> None:
+    assert artifact_routing_id(uid, cid) == ""
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -102,7 +129,9 @@ def test_ensure_artifacts_uses_user_client_id_for_outputs_dir(
     artifact.write_bytes(b"fake-image")
     result = _ensure_artifacts_in_package([str(artifact)])
 
-    expected_dir = tmp_path / "outputs" / "user_abc_client_123"
+    expected_dir = (
+        tmp_path / "outputs" / artifact_routing_id("user_abc", "client_123")
+    )
     expected_path = expected_dir / "outside-look.png"
     assert expected_path.is_file(), (
         f"产物应落到 {expected_path}（{expected_dir}/），"
@@ -203,9 +232,10 @@ def test_upload_artifacts_uses_user_client_id_for_session_id(
     from agentflow_runtime.skill_executor import _upload_artifacts_to_storage
     _upload_artifacts_to_storage([str(artifact)])
 
-    # 上传 body 必须含 user_abc_client_123，不得含裸槽位号 "0"
-    assert "user_abc_client_123" in captured.get("body", ""), (
-        f"上传 body 的 session_id 段应为 'user_abc_client_123'，"
+    expected_session_id = artifact_routing_id("user_abc", "client_123")
+    # 上传 body 必须含完整用户/会话路由键，不得含裸槽位号 "0"
+    assert expected_session_id in captured.get("body", ""), (
+        f"上传 body 的 session_id 段应为 {expected_session_id!r}，"
         f"实际 body={captured.get('body')}"
     )
     # artifact_id 不得退化为 agent/0/look.png

@@ -54,7 +54,7 @@ def test_manifest_generates_on_first_call():
 
 
 def test_manifest_has_includes_globs():
-    """includes glob whitelist covers skills/tools/data/env/setup/requirements."""
+    """includes whitelist covers runtime assets but excludes credentials."""
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td)
         _make_package(tmp, [
@@ -68,7 +68,7 @@ def test_manifest_has_includes_globs():
         assert "harness/tools/**" in includes
         assert "data/**" in includes
         assert "requirements.txt" in includes
-        assert ".env" in includes
+        assert ".env" not in includes
         assert "setup.sh" in includes
 
 

@@ -50,7 +50,7 @@
   "event_type": "stream|notification",
   "channel": "llm.stream.task_id",
   "data": {
-    "token": "输出内容"
+    "token": "<stream-content>"
   },
   "done": false,
   "timestamp": 1234567890
@@ -273,7 +273,7 @@
 {
   "event_type": "llm_token",
   "task_id": "task_1234567890_abc",
-  "token": "春"
+  "token": "<stream-chunk>"
 }
 
 // OnLLMFinalAnswer

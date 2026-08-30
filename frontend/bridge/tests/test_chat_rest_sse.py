@@ -17,7 +17,9 @@ from fastapi.testclient import TestClient
 from client import DaemonError
 from dependencies import get_daemon_client
 from routes.chat_rest import (
+    _ActiveDialogue,
     _SSE_DONE,
+    _cancel_dialogue,
     _chat_turn_events,
     _sse_data_json,
     router,
@@ -263,6 +265,9 @@ class TestChatTurnEventsErrors:
     @pytest.mark.asyncio
     async def test_execute_timeout(self, mock_daemon: AsyncMock) -> None:
         mock_daemon.agent_execute.side_effect = TimeoutError()
+        mock_daemon.session_list.return_value = [{
+            "session_id": "ses_lookup", "user_id": "u1", "client_id": "c1",
+        }]
 
         events: list[dict[str, Any]] = []
         async for event in _chat_turn_events(
@@ -280,6 +285,14 @@ class TestChatTurnEventsErrors:
         assert events[0]["type"] == "error"
         assert "timed out" in events[0]["message"]
         assert events[1] == {"type": "done", "final": True}
+        mock_daemon.session_list.assert_awaited_once_with("agent_a", "u1")
+        mock_daemon.agent_send_control.assert_awaited_once_with(
+            agent_id="agent_a",
+            command="DIALOGUE-INTERRUPT",
+            session_id="ses_lookup",
+            user_id="u1",
+            dialogue_id="test-dlg-err-1",
+        )
 
     @pytest.mark.asyncio
     async def test_execute_daemon_error(self, mock_daemon: AsyncMock) -> None:
@@ -326,7 +339,9 @@ class TestChatTurnEventsErrors:
 
     @pytest.mark.asyncio
     async def test_wait_for_response_timeout(self, mock_daemon: AsyncMock) -> None:
-        mock_daemon.agent_execute.return_value = {"task_id": "t1"}
+        mock_daemon.agent_execute.return_value = {
+            "task_id": "t1", "session_id": "ses_timeout",
+        }
         mock_daemon.wait_for_response.side_effect = TimeoutError()
 
         events: list[dict[str, Any]] = []
@@ -341,10 +356,18 @@ class TestChatTurnEventsErrors:
         ):
             events.append(event)
 
-        assert len(events) == 2
-        assert events[0]["type"] == "error"
-        assert events[1] == {"type": "done", "final": True}
+        assert len(events) == 3
+        assert events[0] == {"type": "_session_info", "session_id": "ses_timeout"}
+        assert events[1]["type"] == "error"
+        assert events[2] == {"type": "done", "final": True}
         mock_daemon.discard_response_queue.assert_called_once()
+        mock_daemon.agent_send_control.assert_awaited_once_with(
+            agent_id="agent_a",
+            command="DIALOGUE-INTERRUPT",
+            session_id="ses_timeout",
+            user_id="u1",
+            dialogue_id="test-dlg-err-4",
+        )
 
     @pytest.mark.asyncio
     async def test_wait_for_response_daemon_error(self, mock_daemon: AsyncMock) -> None:
@@ -541,7 +564,7 @@ class TestSseStreamingEndpoint:
         assert len(deliveries) == 2
         final_delivery, done_delivery = deliveries
         assert final_delivery["task_id"] == "t-delivery"
-        assert final_delivery["session_id"] == "s-delivery"
+        assert all("session_id" not in delivery for delivery in deliveries)
         assert final_delivery["status"] == "final"
         assert final_delivery["wire_payload"]["data"]["_final"] is True
         assert done_delivery["stage"] == "server_stream_completed"
@@ -803,7 +826,7 @@ class TestChatRestContextInjectionIntegration:
     def test_sync_returns_public_content_but_persists_raw_artifact_url(
         self, mock_daemon: AsyncMock, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Placeholder mode keeps replay history raw and records both views."""
+        """Placeholder mode keeps a signed replay URL and records both views."""
         raw_content = (
             "结果：![图](/api/artifacts/agent_a/files/outputs/look.png)"
         )
@@ -833,12 +856,18 @@ class TestChatRestContextInjectionIntegration:
 
         assert response.status_code == 200
         assert response.json()["data"]["content"] == public_content
-        assert provider.save_dialogue_calls[0]["agent_response"] == raw_content
+        persisted_content = provider.save_dialogue_calls[0]["agent_response"]
+        assert persisted_content.startswith(
+            "结果：![图](/api/artifacts/agent_a/files/outputs/look.png?sig="
+        )
+        assert persisted_content.endswith(")")
         assert len(deliveries) == 1
         delivery_event = deliveries[0]
         assert delivery_event["task_id"] == "t-sync"
-        assert delivery_event["session_id"] == "s-sync"
-        assert delivery_event["raw_content"] == raw_content
+        assert "session_id" not in delivery_event
+        assert delivery_event["user_id"] == "u1"
+        assert delivery_event["client_id"] == "c1"
+        assert delivery_event["raw_content"] == persisted_content
         assert delivery_event["delivered_content"] == public_content
         assert delivery_event["wire_payload"]["data"]["content"] == public_content
 
@@ -969,3 +998,57 @@ class TestChatRestContextInjectionIntegration:
             [{"type": "text", "text": "请总结这段对话"}], ensure_ascii=False,
         ), f"text-only JSON 形态被误改写: {hist_user['content']!r}"
 
+
+def test_sse_error_does_not_persist_progress_as_assistant_history(
+    mock_daemon: AsyncMock,
+) -> None:
+    """An interrupted SSE turn keeps progress out of replay history."""
+    mock_daemon.agent_execute.return_value = {
+        "task_id": "t-error", "session_id": "s-error",
+    }
+    mock_daemon.wait_for_response.side_effect = [
+        {"content": "skill still running", "final": False},
+        TimeoutError(),
+    ]
+
+    provider = _MockProvider(history=[])
+    app = TestChatRestContextInjectionIntegration()._mk_app(mock_daemon, provider)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/chat/agent_a?stream=true",
+            json={"user_id": "u-error", "client_id": "c-error", "content": "hi"},
+        )
+
+    assert response.status_code == 200
+    events = TestSseStreamingEndpoint._parse_sse(response.text)
+    assert events[0]["_progress"] is True
+    dialogue_id = events[0]["_dialogue_id"]
+    assert events[1]["_dialogue_id"] == dialogue_id
+    assert "error" in events[1]
+    assert events[1]["_final"] is False
+    assert events[1]["_terminal_status"] == "error"
+    assert events[2] == "[DONE]"
+    assert provider.save_dialogue_calls == []
+
+    from routes.conversations import get_store
+    assert get_store().get(dialogue_id) is None
+
+
+@pytest.mark.asyncio
+async def test_cancel_dialogue_does_not_use_another_client_session(
+    mock_daemon: AsyncMock,
+) -> None:
+    mock_daemon.session_list.return_value = [{
+        "session_id": "ses_other", "user_id": "u1", "client_id": "other-client",
+    }]
+    dialogue = _ActiveDialogue(
+        agent_id="agent_a",
+        dialogue_id="dlg_target",
+        user_id="u1",
+        client_id="target-client",
+        daemon_client=mock_daemon,
+    )
+
+    await _cancel_dialogue(dialogue)
+
+    mock_daemon.agent_send_control.assert_not_awaited()

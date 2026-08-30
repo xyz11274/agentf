@@ -118,7 +118,7 @@ source frontend/bridge/.venv_unix/bin/activate
 
 ```bash
 # 列出所有运行中的沙箱
-E2B_API_KEY="e2b_000000000" \
+E2B_API_KEY="<credential-placeholder>" \
 SSL_CERT_FILE="$(pwd)/docs/env/e2b_CA.pem" \
 python3 scripts/e2b/sandbox_toolkit.py list
 

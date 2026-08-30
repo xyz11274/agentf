@@ -18,6 +18,7 @@
 #include "daemon/session_manager.h"
 #include "daemon/template_registry.h"
 #include "sandbox/sandbox.h"
+#include "sandbox/sandbox_local.h"
 #include "sandbox/sandbox_types.h"
 
 namespace agentflow {
@@ -122,14 +123,15 @@ TEST(SandboxLifecycleTest, SameUserReusesSandbox) {
   auto cfg = make_test_config();
   agentflow::daemon::TemplateRegistry tr(cfg);
   agentflow::daemon::SandboxLifecycle sl(sm, cfg, tr);
-  // 注：create() 会走 SandboxFactory::create——需 Stub 注册；此处直接测 SessionManager 复用语义
+  // 预置 Stub 后 create() 只走复用分支，不会调用 SandboxFactory。
   auto key = make_key("userA", "clientA", "agentA");
   auto sb1 = std::make_shared<StubSandbox>(key, "sb-001", "/tmp/wd_001");
+  sb1->set_last_active_at(0);
   sm.put(key, sb1);
-  // 第二次 get 应返回同一沙箱
-  auto sb2 = sm.get(key);
+  auto sb2 = sl.create(key);
   EXPECT_EQ(sb2.get(), sb1.get()) << "同用户应复用同一沙箱";
   EXPECT_EQ(sb2->id(), "sb-001") << "复用沙箱 id 应一致";
+  EXPECT_GT(sb2->last_active_at(), 0) << "复用沙箱必须刷新 GC 活跃时间";
 }
 
 // AC-US3-003 + TC-SBOX-003: 异用户同时对话走独立沙箱。
@@ -387,4 +389,35 @@ TEST(SandboxLifecycleTest, DeleteSnapshotRemovesRegistryAndDir) {
   // 清理测试残留
   fs::remove_all(workdir);
   fs::remove_all(cfg.sandbox_config.snapshot_root);
+}
+
+// 同一 daemon 中的 LocalSandbox 必须各自拥有 HTTP endpoint；后一实例即使收到
+// 已被占用的配置端口，也不能把前一实例的 server 误认成自己的 server。
+TEST(SandboxLifecycleTest, LocalHttpEndpointsAreIsolated) {
+  const fs::path server_path =
+      fs::path(EXAMPLES_DIR).parent_path() / "docker/sandbox/http_server/sandbox_http_server.py";
+  ASSERT_TRUE(fs::exists(server_path));
+
+  const auto suffix = std::chrono::steady_clock::now().time_since_epoch().count();
+  const std::string workdir_root =
+      "/tmp/agentflow_local_endpoint_isolation_" + std::to_string(suffix);
+  fs::create_directories(workdir_root);
+
+  agentflow::sandbox::SandboxKey first_owner{"user-a", "client-a", "agent-a"};
+  agentflow::sandbox::SandboxKey second_owner{"user-b", "client-b", "agent-a"};
+  {
+    agentflow::sandbox::LocalSandbox first(
+        first_owner, workdir_root, server_path.string(), 0, 1024 * 1024);
+    const std::size_t port_separator = first.endpoint().rfind(':');
+    ASSERT_NE(port_separator, std::string::npos);
+    const int occupied_port = std::stoi(first.endpoint().substr(port_separator + 1));
+
+    agentflow::sandbox::LocalSandbox second(
+        second_owner, workdir_root, server_path.string(), occupied_port, 1024 * 1024);
+
+    EXPECT_NE(first.endpoint(), second.endpoint());
+    EXPECT_NE(first.workdir(), second.workdir());
+  }
+
+  fs::remove_all(workdir_root);
 }

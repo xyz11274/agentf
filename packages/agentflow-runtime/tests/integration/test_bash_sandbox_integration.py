@@ -17,13 +17,14 @@ from bash import execute, _is_dangerous  # noqa: E402
 
 
 # TC-SBOX-001: echo hello 在 sandbox-mode=none（向后兼容路径）下返回正确
-def test_echo_returns_correct_backward_compat():
-    """TC-SBOX-001: echo hello 返回正确（sandbox-mode=none 向后兼容路径）。
+def test_echo_returns_correct_backward_compat(monkeypatch):
+    """TC-SBOX-001: 显式 unsafe opt-in 后宿主兼容路径返回正确。
 
-    业务规则: B1 命令在隔离沙箱内执行（sandbox-mode=none 时宿主直接执行，向后兼容）
+    业务规则: B1 默认隔离；仅显式 unsafe opt-in 验证旧宿主执行兼容性
     错误模型: 命令泄漏——bash.py 改造后向后兼容路径断裂
     失败意味着: sandbox-mode=none 回归失败，现有部署不兼容
     """
+    monkeypatch.setenv("AF_ALLOW_UNSAFE_LOCAL_SECRET_TOOLS", "1")
     result = json.loads(execute({"command": "echo hello_backward_compat", "timeout": 5}, sandbox_endpoint=None))
     assert result.get("stdout", "").strip() == "hello_backward_compat", f"echo 返回错误: {result}"
     assert result.get("exit_code") == 0, f"exit_code 非 0: {result}"

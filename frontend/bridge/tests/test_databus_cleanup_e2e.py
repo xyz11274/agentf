@@ -181,7 +181,7 @@ def test_chat_request_completes_with_bus_b_cleanup_log(
         _wait_ready(process, daemon_port, timeout=15)
 
         # 发送 chat 请求
-        agent_id = "outfit-test-agent"
+        agent_id = "outfit-assistant"
         payload = {
             "agent_id": agent_id,
             "user_id": "e2e-test-user",

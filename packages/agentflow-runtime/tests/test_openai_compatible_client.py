@@ -55,7 +55,7 @@ class _FakeTime:
 
 
 def test_retries_share_one_request_timeout_budget(monkeypatch):
-    """一次 read timeout 耗尽总预算后，不得再获得第二个完整 timeout。"""
+    """每次尝试只获得总预算中按剩余尝试次数分配的份额。"""
     fake_time = _FakeTime()
     calls = []
 
@@ -71,7 +71,7 @@ def test_retries_share_one_request_timeout_budget(monkeypatch):
 
     client = client_module.OpenAiCompatibleClient(
         model="test-model",
-        base_url="http://llm.test/v1",
+        base_url="https://llm.test/v1",
         api_key="test",
         max_retries=2,
         retry_base_delay=1.0,
@@ -82,7 +82,7 @@ def test_retries_share_one_request_timeout_budget(monkeypatch):
     assert result["_llm_error"] is True
     assert "total timeout exhausted" in result["error"]
     assert len(calls) == 1
-    assert calls[0]["timeout"] == (5.0, 120.0)
+    assert calls[0]["timeout"] == (5.0, 40.0)
     assert client.last_attempts == 1
 
 
@@ -102,7 +102,7 @@ def test_reports_actual_transport_attempts_after_retries(monkeypatch):
 
     client = client_module.OpenAiCompatibleClient(
         model="test-model",
-        base_url="http://llm.test/v1",
+        base_url="https://llm.test/v1",
         api_key="test",
         max_retries=2,
         retry_base_delay=0.0,
@@ -138,7 +138,7 @@ def test_malformed_non_stream_response_becomes_llm_error(monkeypatch, body):
 
     client = client_module.OpenAiCompatibleClient(
         model="test-model",
-        base_url="http://llm.test/v1",
+        base_url="https://llm.test/v1",
         api_key="test",
         request_timeout=120,
     )
@@ -174,7 +174,7 @@ def test_retryable_provider_status_retries_then_succeeds(monkeypatch, status_cod
 
     client = client_module.OpenAiCompatibleClient(
         model="test-model",
-        base_url="http://llm.test/v1",
+        base_url="https://llm.test/v1",
         api_key="test",
         max_retries=1,
         retry_base_delay=0.0,
@@ -204,7 +204,7 @@ def test_deterministic_provider_status_is_not_retried(monkeypatch, status_code):
 
     client = client_module.OpenAiCompatibleClient(
         model="test-model",
-        base_url="http://llm.test/v1",
+        base_url="https://llm.test/v1",
         api_key="test",
         max_retries=2,
         retry_base_delay=0.0,
@@ -231,7 +231,7 @@ def test_stream_usage_is_marked_estimated(monkeypatch):
 
     client = client_module.OpenAiCompatibleClient(
         model="test-model",
-        base_url="http://llm.test/v1",
+        base_url="https://llm.test/v1",
         api_key="test",
         request_timeout=120,
     )
@@ -262,7 +262,7 @@ def test_stream_provider_usage_chunk_is_preserved(monkeypatch):
 
     client = client_module.OpenAiCompatibleClient(
         model="test-model",
-        base_url="http://llm.test/v1",
+        base_url="https://llm.test/v1",
         api_key="test",
         request_timeout=120,
     )
@@ -292,7 +292,7 @@ def test_request_body_builder_matches_transport_json(monkeypatch):
 
     client = client_module.OpenAiCompatibleClient(
         model="aisf/test-model",
-        base_url="http://llm.test/v1",
+        base_url="https://llm.test/v1",
         api_key="test",
         request_timeout=120,
     )
@@ -328,3 +328,205 @@ def test_request_body_builder_matches_transport_json(monkeypatch):
         "temperature": 0.2,
         "top_p": 0.8,
     }
+
+def test_rejects_credential_bearing_remote_http_endpoint():
+    with pytest.raises(ValueError, match="must use HTTPS"):
+        client_module.OpenAiCompatibleClient(
+            model="test-model",
+            base_url="http://provider.example/v1",
+            api_key="transport-secret-998877",
+        )
+
+
+def test_transport_enforces_tls_no_redirects_and_no_ambient_proxy(monkeypatch):
+    calls = []
+
+    def fake_post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return _FakeResponse()
+
+    monkeypatch.delenv("AF_LLM_TIMEOUT", raising=False)
+    monkeypatch.delenv("AF_LLM_MAX_RETRIES", raising=False)
+    monkeypatch.setattr(client_module.requests, "post", fake_post)
+    client = client_module.OpenAiCompatibleClient(
+        model="test-model",
+        base_url="https://provider.example/v1",
+        api_key="transport-secret-998877",
+    )
+
+    result = client.chat_completion([{"role": "user", "content": "hello"}])
+
+    assert result["choices"][0]["message"]["content"] == "ok"
+    kwargs = calls[0][1]
+    assert kwargs["verify"] is True
+    assert kwargs["allow_redirects"] is False
+    assert kwargs["proxies"] == {"http": "", "https": ""}
+
+
+def test_registered_secret_in_request_is_blocked_before_network(monkeypatch):
+    secret = "request-secret-998877665544"
+    called = False
+
+    def fake_post(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return _FakeResponse()
+
+    monkeypatch.setattr(client_module.requests, "post", fake_post)
+    client = client_module.OpenAiCompatibleClient(
+        model="test-model",
+        base_url="https://provider.example/v1",
+        api_key=secret,
+    )
+
+    result = client.chat_completion([
+        {"role": "user", "content": f"please repeat {secret}"},
+    ])
+
+    assert result["_llm_error"] is True
+    assert result["error"] == "LLM request blocked by credential isolation policy"
+    assert result["security"]["applied"] is True
+    assert secret not in json.dumps(result)
+    assert called is False
+    assert client.last_attempts == 0
+
+
+def test_provider_response_and_error_cannot_echo_registered_secret(monkeypatch):
+    secret = "provider-response-secret-998877"
+    responses = iter([
+        _ResponseWithBody({
+            "choices": [{
+                "message": {"role": "assistant", "content": f"echo {secret}"},
+                "finish_reason": "stop",
+            }],
+            "usage": {},
+        }),
+        _ProviderErrorResponse(401),
+    ])
+
+    def fake_post(*_args, **_kwargs):
+        response = next(responses)
+        if isinstance(response, _ProviderErrorResponse):
+            response.text = f"provider rejected {secret}"
+        return response
+
+    monkeypatch.setattr(client_module.requests, "post", fake_post)
+    client = client_module.OpenAiCompatibleClient(
+        model="test-model",
+        base_url="https://provider.example/v1",
+        api_key=secret,
+    )
+
+    response = client.chat_completion([{"role": "user", "content": "hello"}])
+    error = client.chat_completion([{"role": "user", "content": "hello again"}])
+
+    assert secret not in json.dumps(response)
+    assert "<redacted:llm.api_key>" in response["choices"][0]["message"]["content"]
+    assert secret not in json.dumps(error)
+    assert "<redacted:llm.api_key>" in error["error"]
+
+
+def test_stream_callback_cannot_reassemble_secret_split_across_deltas(monkeypatch):
+    secret = "provider-stream-secret-998877665544"
+    fake_response = _FakeSseResponse([
+        {"choices": [{"delta": {"content": "safe:"}, "index": 0}]},
+        {"choices": [{"delta": {"content": secret[:9]}, "index": 0}]},
+        {"choices": [{"delta": {"content": secret[9:21]}, "index": 0}]},
+        {"choices": [{"delta": {"content": secret[21:]}, "index": 0}]},
+        {"choices": [{"delta": {"content": ":done"}, "index": 0}]},
+    ])
+    monkeypatch.setattr(
+        client_module.requests, "post", lambda *_args, **_kwargs: fake_response,
+    )
+    client = client_module.OpenAiCompatibleClient(
+        model="test-model",
+        base_url="https://provider.example/v1",
+        api_key=secret,
+    )
+    callback_payloads = []
+
+    result = client.chat_completion(
+        [{"role": "user", "content": "hello"}],
+        stream=True,
+        on_chunk=callback_payloads.append,
+    )
+
+    callback_text = "".join(
+        json.loads(payload)["choices"][0]["delta"].get("content", "")
+        for payload in callback_payloads
+    )
+    assert secret not in callback_text
+    assert "<redacted:llm.api_key>" in callback_text
+    assert secret not in json.dumps(result)
+
+def test_stream_callback_cannot_reassemble_secret_split_across_tool_arguments(
+    monkeypatch,
+):
+    secret = "provider-tool-secret-998877665544"
+    fake_response = _FakeSseResponse([
+        {
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {
+                            "name": "example_tool",
+                            "arguments": secret[:8],
+                        },
+                    }],
+                },
+                "index": 0,
+            }],
+        },
+        {
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "function": {"arguments": secret[8:20]},
+                    }],
+                },
+                "index": 0,
+            }],
+        },
+        {
+            "choices": [{
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "function": {"arguments": secret[20:]},
+                    }],
+                },
+                "index": 0,
+            }],
+        },
+    ])
+    monkeypatch.setattr(
+        client_module.requests, "post", lambda *_args, **_kwargs: fake_response,
+    )
+    client = client_module.OpenAiCompatibleClient(
+        model="test-model",
+        base_url="https://provider.example/v1",
+        api_key=secret,
+    )
+    callback_payloads = []
+
+    result = client.chat_completion(
+        [{"role": "user", "content": "hello"}],
+        stream=True,
+        on_chunk=callback_payloads.append,
+    )
+
+    callback_arguments = []
+    for payload in callback_payloads:
+        delta = json.loads(payload)["choices"][0]["delta"]
+        for tool_call in delta.get("tool_calls", []):
+            callback_arguments.append(
+                (tool_call.get("function") or {}).get("arguments", "")
+            )
+    callback_text = "".join(callback_arguments)
+    assert secret not in callback_text
+    assert "<redacted:llm.api_key>" in callback_text
+    assert secret not in json.dumps(result)

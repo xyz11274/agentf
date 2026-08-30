@@ -99,6 +99,21 @@ class TestInjectAgentEnvDefaults:
         assert "AF_LLM_MODEL=" in content
         assert "BRIDGE_INJECTED_START" in content
 
+    def test_inject_restricts_env_file_permissions(self, pkg_dir: Path, inject) -> None:
+        """Existing and newly written .env files are owner-readable only."""
+        env_file = pkg_dir / ".env"
+        env_file.write_text("AF_LLM_MODEL=user-model\n", encoding="utf-8")
+        env_file.chmod(0o644)
+
+        inject("test_agent")
+
+        assert env_file.stat().st_mode & 0o777 == 0o600
+
+        env_file.unlink()
+        inject("test_agent")
+
+        assert env_file.stat().st_mode & 0o777 == 0o600
+
     def test_inject_preserves_existing_user_values(self, pkg_dir: Path, inject) -> None:
         """User-set values in .env are not overwritten."""
         env_file = pkg_dir / ".env"
@@ -146,7 +161,6 @@ class TestInjectAgentEnvDefaults:
         monkeypatch.setattr(settings, "_yaml_source", {
             "agent_defaults": {
                 "llm": {
-                    "api_key": "${AF_LLM_API_KEY:-sk-cp-mock-key}",
                     "base_url": "${AF_LLM_BASE_URL:-https://api.minimaxi.com/v1}",
                     "model": "${AF_LLM_MODEL:-MiniMax-M3}",
                 },
@@ -160,9 +174,40 @@ class TestInjectAgentEnvDefaults:
         assert "AF_LLM_BASE_URL=https://api.minimaxi.com/v1" in content, \
             f"应写入解析后的默认值，实际内容: {content}"
         assert "AF_LLM_MODEL=MiniMax-M3" in content
-        assert "AF_LLM_API_KEY=sk-cp-mock-key" in content
         # 确保没有写入未解析的占位符字面量
         assert "${AF_LLM_BASE_URL" not in content, "不应写入未解析的占位符"
+    def test_inject_never_persists_credentials_from_yaml(
+        self,
+        pkg_dir: Path,
+        inject,
+        monkeypatch,
+    ) -> None:
+        """Bridge defaults may configure credentials, but never copy them to workspace."""
+        from config import settings
+
+        monkeypatch.setattr(settings, "_yaml_source", {
+            "agent_defaults": {
+                "llm": {"api_key": "test-main-secret-must-stay-in-host"},
+                "llm_fallback": {"api_key": "test-fallback-secret-must-stay-in-host"},
+                "vision": {"api_key": "test-vision-secret-must-stay-in-host"},
+                "vision_fallback": {
+                    "api_key": "test-vision-fallback-secret-must-stay-in-host",
+                },
+            },
+        })
+
+        inject("test_agent")
+
+        env_file = pkg_dir / ".env"
+        content = env_file.read_text(encoding="utf-8") if env_file.exists() else ""
+        for env_name in (
+            "AF_LLM_API_KEY",
+            "AF_FALLBACK_LLM_API_KEY",
+            "AF_BR_VISION_API_KEY",
+            "AF_BR_VISION_FALLBACK_API_KEY",
+        ):
+            assert f"{env_name}=" not in content
+
 
     def test_injected_env_is_readable_by_dotenv(self, pkg_dir: Path, inject, monkeypatch) -> None:
         """注入后的 .env 文件被 dotenv 加载后，os.environ 能读到正确值。

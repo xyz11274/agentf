@@ -26,8 +26,8 @@ def test_event_catalog_unique() -> None:
     """事件目录内事件名不重复，且与设计文档 §2.5 全量清单一致。"""
     from agentflow_runtime import events as ev
 
-    assert len(ev.ALL_EVENTS) == 33
-    assert len(set(ev.ALL_EVENTS)) == 33  # 唯一
+    assert len(ev.ALL_EVENTS) == 34
+    assert len(set(ev.ALL_EVENTS)) == 34  # 唯一
 
 
 def test_span_names_unique() -> None:

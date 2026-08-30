@@ -214,13 +214,6 @@ def test_response_key_deleted_after_dispatch(monkeypatch):
 
     monkeypatch.setattr(MODULE, "DataBusClient", lambda: FakeDataBus())
     monkeypatch.setattr(MODULE, "call_llm", _make_fake_llm(_SAMPLE_LLM_DISPATCH))
-    monkeypatch.setattr(MODULE, "_AVAILABLE_SKILLS", ["outfit-stylist"])
-    monkeypatch.setattr(MODULE, "_init_skills", lambda: None)
-    monkeypatch.setattr(
-        MODULE, "_find_persisted_completed_dispatch", lambda *a, **kw: "")
-    monkeypatch.delenv("AF_COMPLETED_SKILL_NAME", raising=False)
-    monkeypatch.delenv("AF_COMPLETED_BATCH_KEY", raising=False)
-    monkeypatch.delenv("AF_SKILL_RESULT", raising=False)
 
     # Prevent handle_run_skills_call from doing real work
     monkeypatch.setattr(MODULE, "handle_run_skills_call",
@@ -240,83 +233,6 @@ def test_response_key_deleted_after_dispatch(monkeypatch):
         "dispatch path must delete the 'response' databus key to prevent stale "
         "progress messages leaking into the next coordinator round"
     )
-
-
-def test_multiple_run_skills_calls_are_rejected_before_dispatch(monkeypatch):
-    """Parallel skills must share one run_skills call so next_skills is not overwritten."""
-    class FakeDataBus:
-        def __init__(self):
-            self._connected = True
-
-        def is_connected(self):
-            return self._connected
-
-        def get(self, key: str) -> str | None:
-            return None
-
-        def put(self, key: str, value: str) -> bool:
-            assert key != "next_skills"
-            return True
-
-        def delete(self, key: str) -> bool:
-            return True
-
-    invalid_dispatch = json.loads(_SAMPLE_LLM_DISPATCH)
-    first_call = invalid_dispatch["choices"][0]["message"]["tool_calls"][0]
-    second_call = json.loads(json.dumps(first_call))
-    second_call["id"] = "call_2"
-    second_args = json.loads(second_call["function"]["arguments"])
-    second_args["skills"] = [{"name": "forge-image-gen", "prompt": "生成效果图"}]
-    second_call["function"]["arguments"] = json.dumps(second_args)
-    invalid_dispatch["choices"][0]["message"]["tool_calls"].append(second_call)
-    responses = iter([invalid_dispatch, json.loads(_SAMPLE_LLM_FINAL)])
-    trace_payloads = []
-
-    def capture_hook(event_name, payload, **_kwargs):
-        if event_name in {
-            MODULE.hook_events.COORDINATOR_TRIGGER,
-            MODULE.hook_mounts.COORDINATOR_V1_BEFORE_LLM_CALL,
-        }:
-            trace_payloads.append((event_name, dict(payload)))
-        return payload
-
-    monkeypatch.setattr(MODULE, "DataBusClient", lambda: FakeDataBus())
-    monkeypatch.setattr(MODULE, "call_llm", lambda *a, **kw: next(responses))
-    monkeypatch.setattr(MODULE, "hook_trigger", capture_hook)
-    monkeypatch.setattr(
-        MODULE, "_AVAILABLE_SKILLS", ["outfit-stylist", "forge-image-gen"])
-    monkeypatch.setattr(MODULE, "_init_skills", lambda: None)
-    monkeypatch.setattr(
-        MODULE, "_find_persisted_completed_dispatch", lambda *a, **kw: "")
-    monkeypatch.setattr(
-        MODULE,
-        "handle_run_skills_call",
-        lambda *a, **kw: pytest.fail("invalid multi-call response must not dispatch"),
-    )
-    monkeypatch.delenv("AF_COMPLETED_SKILL_NAME", raising=False)
-    monkeypatch.delenv("AF_COMPLETED_BATCH_KEY", raising=False)
-    monkeypatch.delenv("AF_SKILL_RESULT", raising=False)
-    monkeypatch.setenv("AF_INPUT", "并行生成穿搭方案和效果图")
-    monkeypatch.setenv("AF_DIALOGUE_ID", "test-dialogue-multiple-run-skills")
-    monkeypatch.setenv("AF_SESSION_ID", "test-session-multiple-run-skills")
-    monkeypatch.setenv("AF_LLM_API_KEY", "test-key")
-
-    MODULE.execute()
-
-    activation = next(
-        payload for name, payload in trace_payloads
-        if name == MODULE.hook_events.COORDINATOR_TRIGGER
-    )
-    decisions = [
-        payload for name, payload in trace_payloads
-        if name == MODULE.hook_mounts.COORDINATOR_V1_BEFORE_LLM_CALL
-    ]
-    assert activation["activation_index"] == 1
-    assert activation["skill_completion_index"] == 0
-    assert [payload["decision_index"] for payload in decisions] == [1, 2]
-    assert [
-        payload["internal_tool_correction_index"] for payload in decisions
-    ] == [0, 1]
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -362,25 +278,8 @@ def test_response_push_carries_source_coordinator(monkeypatch):
         def put(self, key, value):
             pass
 
-    dispatch_response = json.loads(_SAMPLE_LLM_DISPATCH)
-    dispatch_message = dispatch_response["choices"][0]["message"]
-    dispatch_args = json.loads(dispatch_message["tool_calls"][0]["function"]["arguments"])
-    dispatch_args["skills"].append({"name": "forge-image-gen", "prompt": "生成效果图"})
-    dispatch_message["tool_calls"][0]["function"]["arguments"] = json.dumps(dispatch_args)
-
     monkeypatch.setattr(MODULE, "DataBusClient", lambda: RecordingDataBus())
-    monkeypatch.setattr(MODULE, "call_llm", lambda *a, **kw: dispatch_response)
-    monkeypatch.setattr(
-        MODULE, "_AVAILABLE_SKILLS", ["outfit-stylist", "forge-image-gen"])
-    monkeypatch.setattr(MODULE, "_init_skills", lambda: None)
-    monkeypatch.delenv("AF_COMPLETED_SKILL_NAME", raising=False)
-    monkeypatch.delenv("AF_COMPLETED_BATCH_KEY", raising=False)
-    monkeypatch.delenv("AF_SKILL_RESULT", raising=False)
-    monkeypatch.setattr(
-        MODULE, "_find_persisted_completed_dispatch", lambda *a, **kw: "")
-    monkeypatch.setattr(
-        MODULE, "handle_run_skills_call",
-        lambda *a, **kw: json.dumps({"status": "dispatched", "skills": ["outfit-stylist", "forge-image-gen"]}))
+    monkeypatch.setattr(MODULE, "call_llm", _make_fake_llm(_SAMPLE_LLM_FINAL))
     monkeypatch.setenv("AF_INPUT", "推荐登山穿搭")
     monkeypatch.setenv("AF_DIALOGUE_ID", "test-dialogue-p2")
     monkeypatch.setenv("AF_SESSION_ID", "test-session-p2")
@@ -395,9 +294,3 @@ def test_response_push_carries_source_coordinator(monkeypatch):
         assert kwargs.get("source") == "coordinator", (
             f"response_push({content!r}) missing source=coordinator, got {kwargs}"
         )
-    dispatch_skills = [
-        kwargs["skill"] for content, kwargs in pushed
-        if content.startswith("正在执行 ")
-    ]
-    assert dispatch_skills == ["outfit-stylist", "forge-image-gen"]
-    assert dispatch_message["content"] == ""

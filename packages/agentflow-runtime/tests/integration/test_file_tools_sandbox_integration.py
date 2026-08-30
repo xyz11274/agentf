@@ -93,6 +93,7 @@ def test_server_does_not_reenter_inherited_endpoint(tmp_path):
     child_env["AF_SANDBOX_MODE"] = "local"
     child_env["AF_SANDBOX_ENDPOINT"] = endpoint
     child_env["AF_SANDBOX_WORKSPACE"] = str(tmp_path)
+    child_env["AF_ALLOW_UNSAFE_LOCAL_SECRET_TOOLS"] = "1"
 
     proc = subprocess.Popen(
         [sys.executable, _SERVER, "--port", str(port), "--host", "127.0.0.1"],
@@ -354,3 +355,75 @@ def test_artifact_download_rejects_non_artifact_paths(
         timeout=3,
     )
     assert response.status_code == expected_status
+
+
+
+def test_local_executor_scopes_user_workspace_and_static_skills(
+    sandbox_server, monkeypatch, tmp_path
+):
+    """Local HTTP files use one user root; skill files stay read-only."""
+    from agentflow_runtime.executors.http import HTTPExecutor
+
+    endpoint, _ = sandbox_server
+    package_root = tmp_path / "outfit-agent"
+    user_root = package_root / "workspace" / "user-a_conv-a"
+    other_root = package_root / "workspace" / "user-b_conv-b"
+    skill_file = package_root / "harness" / "skills" / "stylist" / "SKILL.md"
+    user_root.mkdir(parents=True)
+    other_root.mkdir(parents=True)
+    skill_file.parent.mkdir(parents=True)
+    (other_root / "private.md").write_text("other-user-secret", encoding="utf-8")
+    skill_file.write_text("static-skill", encoding="utf-8")
+
+    monkeypatch.setenv("AF_SANDBOX_MODE", "local")
+    monkeypatch.setenv("AF_AGENT_PACKAGE_DIR", str(package_root))
+    monkeypatch.setenv("AF_USER_ID", "user-a")
+    monkeypatch.setenv("AF_CLIENT_ID", "conv-a")
+    executor = HTTPExecutor(endpoint)
+
+    written = executor.write_file("outputs/result.html", "<html>ok</html>")
+    expected = user_root / "outputs" / "result.html"
+    assert written.success is True
+    assert written.path == str(expected)
+    assert expected.read_text(encoding="utf-8") == "<html>ok</html>"
+    assert executor.read_file(str(expected)).content == "<html>ok</html>"
+
+    denied = executor.read_file(str(other_root / "private.md"))
+    assert denied.error and "Path escape rejected" in denied.error
+    assert "other-user-secret" not in denied.content
+
+    assert executor.read_file(str(skill_file)).content == "static-skill"
+    denied_write = executor.write_file(str(skill_file), "overwritten")
+    assert denied_write.success is False
+    assert skill_file.read_text(encoding="utf-8") == "static-skill"
+
+
+def test_local_executor_list_dir_preserves_user_boundary(
+    sandbox_server, monkeypatch, tmp_path
+):
+    """HTTP list_dir returns current-user/static entries and rejects siblings."""
+    from agentflow_runtime.executors.http import HTTPExecutor
+
+    endpoint, _ = sandbox_server
+    package_root = tmp_path / "outfit-agent"
+    user_root = package_root / "workspace" / "user-a_conv-a"
+    other_root = package_root / "workspace" / "user-b_conv-b"
+    skills_root = package_root / "harness" / "skills"
+    (user_root / "history").mkdir(parents=True)
+    other_root.mkdir(parents=True)
+    (skills_root / "stylist").mkdir(parents=True)
+    (user_root / "profile.md").write_text("profile", encoding="utf-8")
+
+    monkeypatch.setenv("AF_SANDBOX_MODE", "local")
+    monkeypatch.setenv("AF_AGENT_PACKAGE_DIR", str(package_root))
+    monkeypatch.setenv("AF_USER_ID", "user-a")
+    monkeypatch.setenv("AF_CLIENT_ID", "conv-a")
+    executor = HTTPExecutor(endpoint)
+
+    user_entries = executor.list_dir(str(user_root))
+    assert {entry["name"] for entry in user_entries} == {"history", "profile.md"}
+    skill_entries = executor.list_dir(str(skills_root))
+    assert [entry["name"] for entry in skill_entries] == ["stylist"]
+
+    denied = executor._post("list_dir", {"path": str(other_root)})
+    assert denied.get("error") and "Path escape rejected" in denied["error"]

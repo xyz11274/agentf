@@ -5,7 +5,7 @@
 
 ## 一、测试内容
 
-### 1. `test_reader.py`（22 项）— reader 纯函数
+### 1. `test_reader.py`（24 项）— reader 纯函数
 
 | 测试 | 验证点 |
 |---|---|
@@ -19,7 +19,8 @@
 | `test_validate_batch_terminal_covers_framework_only_failure` | batch.result 覆盖未进入 Python 的框架失败 |
 | `test_validate_skill_start_without_terminal` | skill.start 必须有 skill.end 或 Batch 终态 |
 | `test_validate_tool_call_without_result` | tool.call 必须有最终 tool.result |
-| `test_validate_session_requires_terminal_event` | session.start 必须有 session.end |
+| `test_validate_dialogue_requires_terminal_event` | dialogue.start 必须有 dialogue.end |
+| `test_validate_accepts_legacy_session_lifecycle` | 历史 session.* 生命周期仍可读取和校验 |
 | `test_build_graph_nodes_are_trace_ids` | 编排图节点 = trace_id（3 个执行单元） |
 | `test_build_graph_shared_trace_keeps_process_nodes_distinct` | 共享 trace 下仍按 pid 区分执行节点 |
 | `test_build_graph_dispatch_edge_exec_key` | 派发边 exec_key 精确匹配 |
@@ -30,25 +31,33 @@
 | `test_build_graph_framework_only_failure_uses_batch_result` | launch_failed 分支由 batch.result 生成合成节点与回传边 |
 | `test_build_graph_dispatch_fallback_name` | 无 exec_key 时名称+时序兜底 |
 | `test_load_torn_line_dropped` | torn 尾行（坏 JSON）丢弃 |
+| `test_load_finds_hierarchical_dialogue_by_default` | 仅给 dialogue_id 时发现 User/Conversation 下的实体文件 |
 | `test_replay_restores_messages` | 重放恢复 request.messages 序列 |
 
-### 2. `test_hook.py`（13 项）— hook 采集（mock 引擎环境）
+### 2. `test_hook.py`（20 项）— hook 采集（mock 引擎环境）
 
 | 测试 | 验证点 |
 |---|---|
 | `test_disabled_no_write` | AF_SESSIONLOG_ENABLED=0 → 不落盘 |
-| `test_session_start_writes_event` | AGENT_DIALOGUE_START → 唯一 session.start + header |
-| `test_skill_completion_writes_activation_not_session_start` | Skill 回流只写 coordinator.activation，保留 batch_id |
+| `test_dialogue_start_writes_event` | 唯一 dialogue.start + header，并按 User/Client(Dialogue) 层级写入唯一实体文件 |
+| `test_header_agent_falls_back_to_mounted_hook_path` | 未注入包路径时从 Hook 挂载位置恢复 Agent 身份 |
+| `test_hierarchy_projection_sanitizes_user_component` | 恶意用户分量不能逃逸 SessionLog 输出根 |
+| `test_hierarchy_write_failure_is_fail_open` | 层级文件写入失败时观测逻辑 fail-open |
+| `test_skill_completion_writes_activation_not_dialogue_start` | Skill 回流只写 coordinator.activation，保留 batch_id |
 | `test_llm_request_ctx_messages` | BEFORE_LLM_CALL → llm.request 带 ctx.messages 全量（实时） |
 | `test_llm_response_reads_databus` | AFTER_LLM_CALL → llm.response 从 DataBus 读 response/meta（mock） |
+| `test_skill_llm_events_promote_tree_identity` | Skill LLM 三阶段直接携带建树身份字段 |
 | `test_skill_end_has_exec_key` | skill.end 带 exec_skill_key、batch_id 和 artifacts |
 | `test_batch_result_preserves_framework_terminal_results` | batch.result 保存完整框架分支终态 |
 | `test_messages_snapshot_is_append_only` | 多次有效消息保存追加事件而不覆盖 |
 | `test_tool_call_result` | Tool Call/最终 Tool Result → 完整参数与结果落盘（含 duration_ms、血缘） |
+| `test_artifact_persist_records_content_identity` | Artifact 持久化记录路径、大小、摘要与终态 |
 | `test_partial_dispatch_records_rejected_manifest` | 部分分发保存 accepted/rejected 与 batch 身份 |
 | `test_failed_dispatch_records_failure_without_stale_exec_key` | 全部分发失败不误用旧 exec key |
-| `test_event_envelope_schema` | 信封字段全集（type/seq/ts/pid/trace_id/dialogue_id/session_id/node_id/data） |
+| `test_event_envelope_schema` | 信封字段全集（type/seq/ts/pid/trace_id/dialogue_id/node_id/data），且无 Session 身份 |
 | `test_torn_sessionlog_line_does_not_consume_next_event` | torn fragment 不吞掉下一条完整事件 |
+| `test_dialogue_error_writes_dialogue_terminal` | 未处理异常仍产生可回放 dialogue.end |
+| `test_loop_decisions_write_normalized_control_events` | Coordinator/Skill 循环决策归一化为 loop.control |
 
 ### 3. `conftest.py` — 公共 fixture
 

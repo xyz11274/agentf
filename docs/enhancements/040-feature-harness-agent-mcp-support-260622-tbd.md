@@ -97,7 +97,7 @@ def _discover():
       "command": "npx",
       "args": ["-y", "tavily-mcp@latest"],
       "env": {
-        "TAVILY_API_KEY": "tvly-xxx",
+        "TAVILY_API_KEY": "${TAVILY_API_KEY}",
         "DEFAULT_PARAMETERS": "{...}"
       }
     }

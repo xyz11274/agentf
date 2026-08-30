@@ -135,43 +135,26 @@ def test_exec_command_translates_paths(executor_with_mocks):
 
 
 def test_exec_command_injects_env_source_prefix(executor_with_mocks):
-    """命令前缀含 `set -a && source .env && set +a` — 让 .env 的 KEY=VAL 进子进程 os.environ。
-
-    覆盖设计文档 sandbox-env-injection.md §6 敲定方案:
-    - .env 标准写法无 export,source 后只是 shell 变量,子进程读不到
-    - set -a 让 source 期间赋值自动 export,子进程能读
-    - 宿主机 os.environ 不透传(防 PATH/HOME 污染沙箱)
-    """
+    """Generic E2B commands never source the agent package .env."""
     exe, sb = executor_with_mocks
     exe.exec_command("echo hi")
 
     args, _ = sb.commands.run.call_args
     sent_cmd = args[0]
-    # 必须含 set -a + source .env + set +a 前缀
-    assert "set -a" in sent_cmd
-    assert "source /home/user/workspace/.env" in sent_cmd
-    assert "set +a" in sent_cmd
-    # 命令本体在前缀之后
-    assert sent_cmd.endswith("echo hi") or "echo hi" in sent_cmd
-    # 宿主机 os.environ 不应被透传——不应出现裸 export PATH/HOME
-    assert "export PATH=" not in sent_cmd
-    assert "export HOME=" not in sent_cmd
+    assert sent_cmd == "echo hi"
+    assert ".env" not in sent_cmd
+    assert "source " not in sent_cmd
+    assert "set -a" not in sent_cmd
 
 
 def test_exec_command_env_prefix_has_file_check(executor_with_mocks):
-    """.env 不存在时前缀含 `[ -f ... ] &&` 兜底,source 不崩,沙箱用原生环境。
-
-    锁住不变量:源前缀无条件拼,但 [ -f ] 兜底让 .env 缺失时不 source(防 shell 报错)。
-    """
+    """The retained compatibility helper returns an empty prefix."""
     exe, sb = executor_with_mocks
-    exe.exec_command("echo hi")
+    assert exe._build_env_source_prefix() == ""
 
+    exe.exec_command("echo hi")
     args, _ = sb.commands.run.call_args
-    sent_cmd = args[0]
-    # 必须含 [ -f ... ] && 兜底
-    assert "[ -f /home/user/workspace/.env ]" in sent_cmd
-    # 兜底 + set -a + source + set +a 链完整
-    assert "[ -f" in sent_cmd and "set -a" in sent_cmd and "source" in sent_cmd
+    assert args[0] == "echo hi"
 
 
 def test_exec_command_returns_exec_result(executor_with_mocks):
@@ -309,22 +292,21 @@ def test_e2b_read_file_sandbox_file_not_found(executor_with_mocks):
 # sandbox_patch.apply_ssl_patch
 # ---------------------------------------------------------------------------
 
-def test_apply_ssl_patch_is_idempotent():
-    """Calling apply_ssl_patch twice does not stack patches."""
+def test_apply_ssl_patch_is_idempotent(monkeypatch):
+    """The envd patch is idempotent and leaves global TLS strict."""
     from agentflow_runtime.common.sandbox_patch import apply_ssl_patch
 
     import ssl
 
+    monkeypatch.delenv("E2B_API_URL", raising=False)
+    original_factory = ssl.create_default_context
     apply_ssl_patch()
-    ctx1 = ssl.create_default_context()
-    first_check = ctx1.check_hostname
+    apply_ssl_patch()
+    context = ssl.create_default_context()
 
-    apply_ssl_patch()  # second call — should be no-op
-    ctx2 = ssl.create_default_context()
-
-    assert first_check is False
-    assert ctx2.check_hostname is False
-    assert ctx2.verify_mode == ssl.CERT_NONE
+    assert ssl.create_default_context is original_factory
+    assert context.check_hostname is True
+    assert context.verify_mode == ssl.CERT_REQUIRED
 
 
 # ---------------------------------------------------------------------------
@@ -436,3 +418,16 @@ def test_e2b_to_sandbox_path_rejects_sibling_prefix(executor):
     # 边界：agent_package_dir 本身 → 沙箱 workspace 根
     result_root = executor._to_sandbox_path(HOST_PKG_DIR)
     assert result_root == E2BExecutor.SANDBOX_WORKSPACE
+
+
+def test_fetch_url_uses_hardened_host_transport(executor, monkeypatch):
+    expected = FileContent(content="safe")
+    fetch = MagicMock(return_value=expected)
+    monkeypatch.setattr(
+        "agentflow_runtime.executors.host.HostExecutor.fetch_url", fetch,
+    )
+
+    result = executor.fetch_url("https://public.example/page", timeout=17)
+
+    assert result is expected
+    fetch.assert_called_once_with("https://public.example/page", 17)

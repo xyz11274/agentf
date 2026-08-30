@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""sessionlog_reader — 读取/校验/重放 sessionlog，构建编排图（节点=trace_id+pid，边=dispatch/return）。
+"""sessionlog_reader — 读取/校验/重放轨迹日志，构建编排图（节点=trace_id+pid，边=dispatch/return）。
 
 - load(dialogue_id)：读文件，torn 尾行丢弃
-- validate()：校验事件序列、LLM/Tool/Skill 起止配对和 session 完整性
+- validate()：校验事件序列、LLM/Tool/Skill 起止配对和 dialogue 完整性
 - replay()：按文件行序重放事件流（恢复模型看到的一切）
 - build_graph()：构建编排图——
     节点 = trace_id+pid（每个 coordinator/skill 子进程一个执行单元）
@@ -10,49 +10,162 @@
     回传边（return）：skill → coordinator，按 skill_name=completed_skill + 时间序匹配
 """
 
+import hashlib
 import json
 import os
 import sys
 from collections import defaultdict
+from pathlib import Path
+
+
+_HEADER_TYPES = {"dialogue.header", "session.header"}
+_DIALOGUE_START_TYPES = {"dialogue.start", "session.start"}
+_DIALOGUE_END_TYPES = {"dialogue.end", "session.end"}
 
 
 def _default_dir():
     return os.environ.get("AF_SESSIONLOG_DIR", "")
 
 
+def _safe_path_component(value: str, fallback: str) -> str:
+    """与采集 Hook 使用相同的安全文件名规则。"""
+    original = str(value or "")
+    if not original:
+        return fallback
+    component = "".join(
+        char if char.isalnum() or char in "-_." else "_"
+        for char in original
+    ).strip(".")
+    changed = component != original or len(component) > 48
+    component = component[:48] or fallback
+    if changed:
+        digest = hashlib.sha256(original.encode("utf-8")).hexdigest()[:12]
+        component = f"{component}-{digest}"
+    return component
+
+
+def _find_dialogue_file(root: str, dialogue_id: str) -> str:
+    """定位新层级文件，并兼容历史平铺与旧投影目录。"""
+    root_path = Path(root)
+    filename = f"{_safe_path_component(dialogue_id, 'unknown-dialogue')}.jsonl"
+    direct = root_path / filename
+    if direct.is_file():
+        return str(direct)
+    for pattern in (
+        f"by-user/*/*/{filename}",
+        f"by-user/*/sessions/*/{filename}",
+        f"by-user/*/conversations/*/{filename}",
+    ):
+        match = next((path for path in sorted(root_path.glob(pattern)) if path.is_file()), None)
+        if match is not None:
+            return str(match)
+    return str(direct)
+
+
 def load(dialogue_id: str, path: str | None = None) -> list[dict]:
-    """读文件，返回事件列表。torn 尾行（无换行/JSON 解析失败）丢弃。"""
+    """读文件；仅丢弃无换行且无法解析的最后一条 torn 记录。"""
     if path is None:
-        path = os.path.join(_default_dir() or "trace_output/sessionlogs", f"{dialogue_id}.jsonl")
+        path = _find_dialogue_file(
+            _default_dir() or "trace_output/sessionlogs", dialogue_id,
+        )
     events = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.rstrip("\n")
-            if not line.strip():
+    raw_lines = Path(path).read_bytes().splitlines(keepends=True)
+    for line_number, raw_line in enumerate(raw_lines, 1):
+        if not raw_line.strip():
+            continue
+        has_line_ending = raw_line.endswith((b"\n", b"\r"))
+        try:
+            line = raw_line.decode("utf-8")
+            record = json.loads(line)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            is_torn_tail = line_number == len(raw_lines) and not has_line_ending
+            if is_torn_tail:
+                preview = raw_line[:80].decode("utf-8", errors="replace")
+                print(
+                    f"[sessionlog.reader] torn tail dropped at line "
+                    f"{line_number}: {preview}...",
+                    file=sys.stderr,
+                )
                 continue
-            try:
-                events.append(json.loads(line))
-            except json.JSONDecodeError:
-                print(f"[sessionlog.reader] torn line dropped: {line[:80]}...", file=sys.stderr)
+            raise ValueError(
+                f"sessionlog corruption at line {line_number}: {exc}"
+            ) from exc
+        if not isinstance(record, dict):
+            raise ValueError(
+                f"sessionlog record at line {line_number} must be an object"
+            )
+        events.append(record)
     return events
 
 
-def validate(events: list[dict]) -> list[str]:
+def validate(events: list[dict], *, require_header: bool = False) -> list[str]:
     """校验采集正确性（按 trace_id + pid 分组，跨进程不混校验）：
     1. 每个进程内 seq 递增且无重复
     2. llm.request 必须有配对的 llm.response（同进程 + span_id）
     3. source_event_seqs 引用同一进程中存在的 seq
     4. 成功派发的 Skill 必须有 skill.start/skill.end，或有 batch.result 终态兜底
     5. tool.call 必须有对应 tool.result
-    6. session.start/session.end 必须成对
+    6. dialogue.start/dialogue.end 必须成对
     返回问题列表（空=通过）。
     """
     issues = []
+    headers = [
+        (index, event) for index, event in enumerate(events)
+        if isinstance(event, dict) and event.get("type") in _HEADER_TYPES
+    ]
+    if require_header and len(headers) != 1:
+        issues.append(f"dialogue.header 数量应为 1，实际 {len(headers)}")
+    if headers:
+        if headers[0][0] != 0:
+            issues.append("dialogue.header 必须是文件第一条记录")
+        if len(headers) > 1:
+            issues.append(f"dialogue.header 重复: {len(headers)}")
+        header_dialogue_id = headers[0][1].get("dialogue_id")
+        for event in events:
+            if (
+                isinstance(event, dict)
+                and event.get("type") not in _HEADER_TYPES
+                and header_dialogue_id
+                and event.get("dialogue_id") != header_dialogue_id
+            ):
+                issues.append(
+                    "dialogue_id 与 header 不一致: "
+                    f"event={event.get('event_id') or event.get('seq')} "
+                    f"value={event.get('dialogue_id')!r}"
+                )
+
+    seen_event_ids: set[str] = set()
+    seen_idempotency_keys: set[str] = set()
+    process_events = []
+    for index, event in enumerate(events):
+        if not isinstance(event, dict):
+            issues.append(f"第 {index + 1} 条记录不是对象")
+            continue
+        if event.get("type") in _HEADER_TYPES:
+            continue
+        if not isinstance(event.get("type"), str) or not event.get("type"):
+            issues.append(f"第 {index + 1} 条记录缺少 type")
+        if not isinstance(event.get("data"), dict):
+            issues.append(f"第 {index + 1} 条事件 data 不是对象")
+        event_id = event.get("event_id")
+        if event_id:
+            if event_id in seen_event_ids:
+                issues.append(f"event_id 重复: {event_id}")
+            seen_event_ids.add(event_id)
+        idempotency_key = event.get("idempotency_key")
+        if idempotency_key:
+            if idempotency_key in seen_idempotency_keys:
+                issues.append(f"idempotency_key 重复: {idempotency_key}")
+            seen_idempotency_keys.add(idempotency_key)
+        seq = event.get("seq")
+        if not isinstance(seq, int) or isinstance(seq, bool):
+            issues.append(f"第 {index + 1} 条事件 seq 非整数: {seq!r}")
+            continue
+        process_events.append(event)
+
 
     by_process: dict[tuple[str, object], list[dict]] = defaultdict(list)
-    for e in events:
-        if e.get("type") == "session.header":
-            continue
+    for e in process_events:
         tid = e.get("trace_id") or f"pid{e.get('pid')}"
         by_process[(tid, e.get("pid"))].append(e)
 
@@ -122,14 +235,24 @@ def validate(events: list[dict]) -> list[str]:
                     f"{label}: tool.result 无对应 tool.call seq={result.get('seq')}"
                 )
 
-    event_types = {
-        event.get("type") for event in events
-        if event.get("type") != "session.header"
-    }
-    if "session.start" in event_types and "session.end" not in event_types:
-        issues.append("session.start 无配对 session.end")
-    if "session.end" in event_types and "session.start" not in event_types:
-        issues.append("session.end 无配对 session.start")
+    dialogue_starts = [
+        event for event in process_events
+        if event.get("type") in _DIALOGUE_START_TYPES
+    ]
+    dialogue_ends = [
+        event for event in process_events
+        if event.get("type") in _DIALOGUE_END_TYPES
+    ]
+    has_dialogue_start = bool(dialogue_starts)
+    has_dialogue_end = bool(dialogue_ends)
+    if has_dialogue_start and not has_dialogue_end:
+        issues.append("dialogue.start 无配对 dialogue.end")
+    if has_dialogue_end and not has_dialogue_start:
+        issues.append("dialogue.end 无配对 dialogue.start")
+    if require_header and len(dialogue_starts) != 1:
+        issues.append(f"dialogue.start 数量应为 1，实际 {len(dialogue_starts)}")
+    if len(dialogue_ends) > 1:
+        issues.append(f"dialogue.end 终态重复: {len(dialogue_ends)}")
 
     batch_terminal_keys = {
         result.get("exec_skill_key")
@@ -200,7 +323,7 @@ def replay(events: list[dict]):
     """按文件行序重放：恢复每次 llm.request 的 messages 序列（模型看到的一切）。"""
     for e in events:
         t = e.get("type")
-        if t == "session.header":
+        if t in _HEADER_TYPES:
             continue
         if t == "llm.request":
             msgs = e.get("data", {}).get("messages") or []
@@ -238,7 +361,7 @@ def replay(events: list[dict]):
                 extra = f" messages={d.get('message_count', 0)}"
             print(f"[replay] trace={str(e.get('trace_id'))[:20]} seq={e.get('seq')} {t} node={e.get('node_id')}"
                   f" parent={str(e.get('parent_span_id',''))[:20]}{extra}")
-        elif t in ("session.start", "coordinator.activation", "session.end"):
+        elif t in _DIALOGUE_START_TYPES | {"coordinator.activation"} | _DIALOGUE_END_TYPES:
             d = e.get("data", {})
             extra = ""
             if t == "coordinator.activation":
@@ -266,7 +389,7 @@ def build_graph(events: list[dict]):
     回传边：skill.end → coordinator.activation(trigger_type=skill_completion)
             —— 并行批次按 batch_id 精确匹配；旧单 Skill 轨迹按名称+时序兜底
     """
-    evs = [e for e in events if e.get("type") != "session.header"]
+    evs = [e for e in events if e.get("type") not in _HEADER_TYPES]
     if not evs:
         return
 
@@ -399,7 +522,7 @@ def build_graph(events: list[dict]):
     activations = [
         e for e in evs
         if e.get("data", {}).get("trigger_type") == "skill_completion"
-        and e.get("type") in {"coordinator.activation", "session.start"}
+        and e.get("type") in {"coordinator.activation"} | _DIALOGUE_START_TYPES
     ]
     for en in ends:
         end_data = en.get("data", {})
@@ -483,7 +606,7 @@ if __name__ == "__main__":
     path = sys.argv[2] if len(sys.argv) > 2 else None
     evs = load(did, path)
     print(f"=== {did}: {len(evs)} 事件（含 header）===")
-    issues = validate(evs)
+    issues = validate(evs, require_header=True)
     if issues:
         print("问题:")
         for i in issues:

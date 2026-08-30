@@ -66,6 +66,20 @@ async def test_sync_updates_changed_status(daemon: AsyncMock, provider: _FakePro
 
 
 @pytest.mark.asyncio
+async def test_sync_handles_agent_list_dict_payload(
+    daemon: AsyncMock, provider: _FakeProvider,
+):
+    daemon.agent_list.return_value = {"agents": [{"id": "agent_a"}]}
+    daemon.session_list.return_value = [{"id": "af-1", "status": "completed"}]
+
+    syncer = AgentflowSessionSync(daemon, provider)
+    updated = await syncer.sync()
+
+    assert updated == 1
+    assert provider.updates == [("b-1", "completed")]
+
+
+@pytest.mark.asyncio
 async def test_sync_skips_unknown_af_session(daemon: AsyncMock, provider: _FakeProvider):
     daemon.agent_list.return_value = [{"id": "agent_a"}]
     daemon.session_list.return_value = [
