@@ -304,6 +304,36 @@ _sync_2_to_3() {
 }
 _sync_2_to_3
 
+# 调用方未显式指定时，在启动边界解析一次代码版本；运行时 Python 子进程只读该值。
+if [ -z "${AF_CODE_REVISION:-}" ] && [ -z "${GIT_COMMIT:-}" ] \
+    && command -v git >/dev/null 2>&1; then
+    AF_CODE_REVISION=$(git -C "$AR_PROJECT_ROOT" rev-parse HEAD 2>/dev/null || true)
+    export AF_CODE_REVISION
+fi
+
+# 同一 commit 的脏工作区可能运行完全不同的代码；只输出不可逆指纹，不输出 diff 内容。
+if [ -z "${AF_CODE_DIRTY:-}" ] && command -v git >/dev/null 2>&1; then
+    if git -C "$AR_PROJECT_ROOT" status --porcelain=v1 --untracked-files=all \
+        2>/dev/null | grep -q .; then
+        AF_CODE_DIRTY=1
+    else
+        AF_CODE_DIRTY=0
+    fi
+    export AF_CODE_DIRTY
+fi
+if [ -z "${AF_CODE_DIFF_SHA256:-}" ] && [ "${AF_CODE_DIRTY:-0}" = "1" ] \
+    && command -v sha256sum >/dev/null 2>&1; then
+    AF_CODE_DIFF_SHA256=$(
+        {
+            git -C "$AR_PROJECT_ROOT" diff --no-ext-diff --binary HEAD -- 2>/dev/null
+            git -C "$AR_PROJECT_ROOT" status --porcelain=v1 --untracked-files=all 2>/dev/null
+            git -C "$AR_PROJECT_ROOT" ls-files --others --exclude-standard 2>/dev/null \
+                | git -C "$AR_PROJECT_ROOT" hash-object --stdin-paths 2>/dev/null
+        } | sha256sum | awk '{print $1}'
+    )
+    export AF_CODE_DIFF_SHA256
+fi
+
 # ── Launch (注入 AF_LOG_FILE 确保 skill_stderr 日志落 logs/) ──────────
 echo "[INFO] Starting daemon in background..."
 echo "[INFO] Daemon logs → $LOG_FILE"

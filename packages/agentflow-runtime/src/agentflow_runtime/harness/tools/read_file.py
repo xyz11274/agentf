@@ -67,9 +67,13 @@ def execute(tool_input: dict, sandbox_endpoint: str = None) -> str:
 
     # 宿主侧路径 security 检查（sandbox_endpoint 为空时，沙箱侧由 server 自行检查）
     if not sandbox_endpoint:
-        resolved = os.path.abspath(file_path)
-        cwd = os.path.abspath(os.getcwd())
-        if not resolved.startswith(cwd):
+        resolved = os.path.realpath(file_path)
+        cwd = os.path.realpath(os.getcwd())
+        try:
+            inside_workdir = os.path.commonpath((resolved, cwd)) == cwd
+        except ValueError:
+            inside_workdir = False
+        if not inside_workdir:
             return json.dumps({
                 "error": f"Access denied: path '{file_path}' is outside the working directory '{cwd}'",
                 "tool": "read_file"

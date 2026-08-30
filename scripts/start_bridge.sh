@@ -12,17 +12,48 @@ ar_load_env
 PID_FILE="/tmp/agentflow-bridge.pid"
 
 # ── Helper: resolve running PID ─────────────────────────────────────
+_is_bridge_pid() {
+    local candidate="$1"
+    local candidate_cmd candidate_cwd
+    [ -r "/proc/$candidate/cmdline" ] || return 1
+    candidate_cmd=$(tr '\0' ' ' <"/proc/$candidate/cmdline")
+    candidate_cwd=$(readlink -f "/proc/$candidate/cwd" 2>/dev/null || true)
+    [[ "$candidate_cmd" == *"uvicorn main:app"* ]] || return 1
+    if [ "$candidate_cwd" = "$AR_PROJECT_ROOT/frontend/bridge" ]; then
+        return 0
+    fi
+    [[ "$candidate_cmd" == *"--app-dir $AR_PROJECT_ROOT/frontend/bridge"* ]]
+}
+
 _resolve_pid() {
-    local pid=""
+    local pid="" candidate candidates=""
+
+    # Prefer the process that actually owns this port. This also recovers
+    # Bridge workers started through an external conda/uv wrapper.
+    if command -v fuser >/dev/null 2>&1; then
+        candidates=$(fuser -n tcp "$PORT" 2>/dev/null || true)
+        for candidate in $candidates; do
+            if _is_bridge_pid "$candidate"; then
+                echo "$candidate"
+                return
+            fi
+        done
+    fi
+
     if [ -f "$PID_FILE" ]; then
         pid=$(cat "$PID_FILE")
-        if ! kill -0 "$pid" 2>/dev/null; then
+        if ! kill -0 "$pid" 2>/dev/null || ! _is_bridge_pid "$pid"; then
             rm -f "$PID_FILE"
             pid=""
         fi
     fi
     if [ -z "$pid" ]; then
-        pid=$(pgrep -f "uvicorn.*main:app.*frontend/bridge" 2>/dev/null || true)
+        candidates=$(pgrep -f "uvicorn main:app.*--port $PORT" 2>/dev/null || true)
+        for candidate in $candidates; do
+            if _is_bridge_pid "$candidate"; then
+                pid="$candidate"
+            fi
+        done
     fi
     echo "$pid"
 }
@@ -53,7 +84,7 @@ _wait_port_free() {
     local step=0
     echo "[INFO] Waiting for port $port to become available (timeout=${timeout}s)..."
     while [ "$step" -lt "$max_steps" ]; do
-        if ! lsof -i :"$port" -P -n 2>/dev/null | grep -q LISTEN; then
+        if ! (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
             local elapsed
             elapsed=$(echo "scale=1; $step / 10" | bc 2>/dev/null || echo "$step")
             echo "[INFO] Port $port is free (after ${elapsed}s)"

@@ -35,28 +35,8 @@ def _log(msg: str) -> None:
     print(f"[e2b_template_build] {msg}", file=sys.stderr)
 
 
-# 共用 sandbox_patch（SSL 校验跳过——内部 e2b 部署用自签名证书 + path-based 路由）
-# 与 e2b_lifecycle.py 一致：优先从 agentflow-runtime 导入，fallback 到本地定义
-try:
-    from agentflow_runtime.common.sandbox_patch import apply_ssl_patch as _apply_ssl_patch
-except ImportError:
-    def _apply_ssl_patch() -> None:
-        """SSLPatch: 跳过证书验证（内部部署自签名证书）。"""
-        import ssl as _ssl
-
-        if getattr(_ssl, "_agentflow_patched", False):
-            return  # idempotent guard
-
-        _orig_create_default_context = _ssl.create_default_context
-
-        def _patched_create_default_context(*args, **kwargs):
-            ctx = _orig_create_default_context(*args, **kwargs)
-            ctx.check_hostname = False
-            ctx.verify_mode = _ssl.CERT_NONE
-            return ctx
-
-        _ssl.create_default_context = _patched_create_default_context
-        _ssl._agentflow_patched = True  # type: ignore[attr-defined]
+# Security primitives are mandatory: never fall back to process-wide TLS bypass.
+from agentflow_runtime.common.sandbox_patch import apply_ssl_patch as _apply_ssl_patch
 
 
 def _resolve_ssl_cert() -> None:

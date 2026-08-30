@@ -37,6 +37,7 @@ public:
   void register_request(const std::string& message_id, int client_fd,
                         const std::string& agent_id, const std::string& dialogue_id);
   void remove_request(const std::string& message_id);
+  void remove_requests_for_client(int client_fd);
 
   bool is_running() const { return running_.load(); }
 

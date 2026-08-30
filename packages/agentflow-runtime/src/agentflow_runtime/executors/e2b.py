@@ -4,10 +4,10 @@ Connects to an existing e2b sandbox via ``Sandbox.connect()`` and executes
 commands through ``sb.commands.run()``.  This is the most complex provider,
 encapsulating:
 
-- **SSL patch** — skip certificate verification for internal path-based routing
+- **TLS patch** — verify the certificate chain for internal path-based routing
 - **URL patch** — rewrite envd_api_url from hostname to path-based proxy
 - **Path translation** — ``agent_package_dir ↔ /home/user/workspace``
-- **Env forwarding** — inject API_KEY/MINIMAX_API_KEY/etc into sandbox
+- **Secret isolation** — credential files are never uploaded or sourced
 - **Image download** — auto-download generated images from sandbox envd
 
 File operations (read/write/edit/list) run **inside the sandbox** (session-isolated):
@@ -31,6 +31,7 @@ from agentflow_runtime.executors.base import (
     ToolExecutor,
     WriteResult,
 )
+from agentflow_runtime.security import register_secret
 
 
 class E2BExecutor(ToolExecutor):
@@ -72,6 +73,7 @@ class E2BExecutor(ToolExecutor):
         self.sandbox_id = match.group(1)
 
         self.api_key = os.environ.get("E2B_API_KEY", "")
+        register_secret("e2b.api_key", self.api_key)
         if not self.api_key:
             raise RuntimeError("E2B_API_KEY not set, cannot use E2BExecutor")
 
@@ -103,37 +105,12 @@ class E2BExecutor(ToolExecutor):
         )
         return sb
 
-    # -- env forwarding -----------------------------------------------------
-
+    # Kept for callers/tests that still reference the old helper.  Returning
+    # an empty prefix is the security contract: generic sandbox commands never
+    # receive credentials from the agent package.
     def _build_env_source_prefix(self) -> str:
-        """Build a ``set -a && source .env && set +a &&`` prefix from the agent .env file.
-
-        The agent ``.env`` uses standard ``KEY=VAL`` syntax (no ``export``).
-        ``source`` loads these as shell variables — but **shell variables do
-        not propagate to child processes**. ``set -a`` (POSIX allexport)
-        makes every assignment during ``source`` automatically ``export``,
-        so the subsequent ``python3 script.py`` child sees them in ``os.environ``.
-
-        Why not forward via API ``env_vars`` or an ``export KEY=VAL;`` prefix?
-          - API/prefix forwarding repeats every var on every command (stateless)
-            and leaks secrets into network requests (violates the updated FR-003).
-          - The .env file is already sandbox-local (uploaded with the agent
-            package at load time — see sandbox-env-injection.md §2). Loading it
-            in-sandbox is zero-network, and secrets stay in the sandbox file only.
-
-        ``.env`` missing → return "" (sandbox keeps its native environment).
-        The check is done in-shell (``[ -f ... ] &&``) because the file lives
-        sandbox-side and cannot be probed from the host ``os.path``.
-        """
-        env_path = os.path.join(self.SANDBOX_WORKSPACE, ".env")
-        # 用 `{ ... ; } 2>/dev/null;` 包裹源逻辑——.env 不存在时整段静默跳过且
-        # 不影响后续命令 exit code（`[ -f ] && ... && ` 链在 .env 缺失时会让
-        # 后续真命令被 `&&` 短路掉，pwd/ls 根本不跑，exit=1 stderr 空）。
-        # `set +a` 显式关 allexport，恢复沙箱原生 shell 状态。
-        return (
-            f"{{ {{ [ -f {env_path} ] && set -a && source {env_path} && set +a; }} "
-            f"2>/dev/null; }}; "
-        )
+        """Return no environment prefix; agent ``.env`` is never sourced."""
+        return ""
 
     # -- exec_command -------------------------------------------------------
 
@@ -154,14 +131,6 @@ class E2BExecutor(ToolExecutor):
             sandbox_cmd = command.replace(
                 self.agent_package_dir, self.SANDBOX_WORKSPACE
             )
-
-            # Inject env vars from the agent package .env file (sandbox-side).
-            # .env 随 agent 包加载时上传到 /home/user/workspace/.env(设计文档 §2 链路)。
-            # set -a 让 source 期间所有赋值自动 export,子进程 os.environ 能读到。
-            # 宿主机 os.environ 不透传——防 PATH/HOME/USER 等 macOS 路径污染 Linux 容器。
-            # .env 不存在 → 前缀的 [ -f ] 兜底跳过 source,沙箱用原生环境。
-            env_prefix = self._build_env_source_prefix()
-            sandbox_cmd = env_prefix + sandbox_cmd
 
             # cwd 也要宿主→沙箱翻译——bash.py 缺省 cwd 透传的是宿主 agent_package_dir，
             # 直接给 SDK 会因沙箱内不存在该路径而崩。用 _to_sandbox_path 翻译后再传
@@ -257,13 +226,11 @@ class E2BExecutor(ToolExecutor):
 
         Falls back to ``sb.files.read()`` if envd URL is unavailable.
         """
-        import ssl as _ssl
+        from agentflow_runtime.common.sandbox_patch import create_envd_ssl_context
 
         envd_url = getattr(sb, "_envd_api_url", None)
         if envd_url:
-            ctx = _ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = _ssl.CERT_NONE
+            ctx = create_envd_ssl_context()
             params = urllib.parse.urlencode({"path": path, "username": "user"})
             with urllib.request.urlopen(
                 f"{envd_url}/files?{params}", timeout=30, context=ctx
@@ -494,36 +461,7 @@ class E2BExecutor(ToolExecutor):
     # -- fetch_url ----------------------------------------------------------
 
     def fetch_url(self, url: str, timeout: int = 30) -> FileContent:
-        """Fetch URL content via host urllib (does not route through sandbox)."""
-        try:
-            req = urllib.request.Request(
-                url,
-                headers={
-                    "User-Agent": "AgentFlow-E2BExecutor/1.0",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                raw = resp.read()
-                content_type = resp.headers.get("Content-Type", "")
-                charset = "utf-8"
-                if "charset=" in content_type:
-                    charset = content_type.split("charset=")[-1].split(";")[0].strip()
+        """Reuse the hardened host transport; this path never enters E2B."""
+        from agentflow_runtime.executors.host import HostExecutor
 
-                try:
-                    text = raw.decode(charset, errors="replace")
-                except (LookupError, UnicodeDecodeError):
-                    text = raw.decode("utf-8", errors="replace")
-
-                if "text/html" in content_type:
-                    text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE)
-                    text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
-                    text = re.sub(r"<[^>]+>", " ", text)
-                    text = re.sub(r"\s+", " ", text).strip()
-
-                return FileContent(
-                    content=text,
-                    total_lines=text.count("\n") + 1 if text else 0,
-                )
-        except Exception as e:
-            return FileContent(error=f"Failed to fetch URL: {e}")
+        return HostExecutor().fetch_url(url, timeout)

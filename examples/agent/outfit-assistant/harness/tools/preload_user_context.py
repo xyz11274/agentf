@@ -111,13 +111,11 @@ def _wmo_desc(code) -> str:
 def _fetch_weather(location: str) -> dict:
     """Open-Meteo 免 key 查询：geocoding 解析地点 → forecast 取当前天气。失败返回空 dict。"""
     try:
-        # 宿主机直连 Open-Meteo 证书链不可用（沙箱/代理环境），局部跳过证书验证——
-        # 语义与 sandbox_patch.apply_ssl_patch() 一致（项目既有做法），但仅作用于本
-        # 工具的 urlopen，不全局 patch ssl.create_default_context（避免影响 web_fetch
-        # 等其他 HTTPS 工具）。修复证据：baseline-20260810 实测 CERTIFICATE_VERIFY_FAILED。
+        # 保持系统 CA 校验；私有 CA 通过 SSL_CERT_FILE 配置，不能以
+        # 跳过校验换取网络可用性。
         import ssl
 
-        _ssl_ctx = ssl._create_unverified_context()
+        _ssl_ctx = ssl.create_default_context()
         # geocoding 必须带 language=zh，否则中文地点（如"北京"）返回空 results
         # （与 weather.py 成功先例对齐）。实测对照：name=北京&count=1 → 0 条；
         # +language=zh → 1 条。
@@ -194,6 +192,7 @@ def execute(tool_input: dict, sandbox_endpoint: str = None) -> str:
     try:
         # 能力级 executor 路由（与 bash/read_file 同模式，I-sb-1 执行层统一）：
         # 不再拼 shell 命令——read_file/list_dir 由 executor 翻译路径并在沙箱内执行
+        from agentflow_runtime.common.runtime_context import artifact_routing_id
         from agentflow_runtime.executors.factory import create_executor
         executor = create_executor(sandbox_endpoint=sandbox_endpoint)
         ctx: dict = {"memory_dir": memory_dir}
@@ -248,12 +247,12 @@ def execute(tool_input: dict, sandbox_endpoint: str = None) -> str:
         # 确定性只读信息，preload 一次列出即可覆盖，避免各占一轮 LLM tool_calls。
         # 只列关键目录一层（非递归），避免整个 workspace 递归树膨胀上下文。
         #
-        # 工作根 = 用户数据目录 workspace/{user_id}_{client_id}：
-        #   宿主机视角: {AF_AGENT_PACKAGE_DIR}/workspace/{uid}_{cid}
+        # 工作根 = 用户数据目录 workspace/{artifact_routing_id}：
+        #   宿主机视角: {AF_AGENT_PACKAGE_DIR}/workspace/{routing_id}
         #   沙箱视角（经 executor._to_sandbox_path 替换 agent_package_dir 前缀）:
-        #     /home/user/workspace/workspace/{uid}_{cid}  ← 真实用户数据层（双层 workspace）
+        #     /home/user/workspace/workspace/{routing_id}  ← 真实用户数据层（双层 workspace）
         # 背景（2026-08-12 确证）：e2b 沙箱根是 /home/user/workspace，其下还有
-        # workspace/{uid}_{cid}/ 用户层（upload/outputs/memory 都在这层）——
+        # workspace/{routing_id}/ 用户层（upload/outputs/memory 都在这层）——
         # 用 AF_WORKDIR 或 "." 解析到沙箱根，列不到真实 upload（S2/S4 会误报缺失）。
         # AF_USER_ID/AF_CLIENT_ID 已由框架注入（rpc_handler → task parameter → worker env）。
         if load_workspace:
@@ -261,7 +260,8 @@ def execute(tool_input: dict, sandbox_endpoint: str = None) -> str:
             uid = os.environ.get("AF_USER_ID", "")
             cid = os.environ.get("AF_CLIENT_ID", "")
             if agent_pkg and uid and cid:
-                workdir = f"{agent_pkg}/workspace/{uid}_{cid}"
+                routing_id = artifact_routing_id(uid, cid)
+                workdir = f"{agent_pkg}/workspace/{routing_id}"
             else:
                 # 兜底：无 package_dir/user/client（如独立脚本调试），退回相对 "."，
                 # 依赖 executor 相对路径语义（host: 进程 cwd；e2b: 拼沙箱根）。

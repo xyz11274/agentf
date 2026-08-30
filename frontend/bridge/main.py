@@ -34,6 +34,7 @@ from client import DaemonClient, DaemonConnectionError, DaemonTimeoutError
 from config import settings
 from providers import LocalSessionProvider
 from services import AgentflowSessionSync
+from services.secret_safety import install_log_redaction
 from services.sandbox_observer import SandboxObserver
 from routes import agents as agents_routes
 from routes import chat as chat_routes
@@ -80,6 +81,8 @@ if not any(isinstance(h, logging.FileHandler) for h in _root_logger.handlers):
             _root_logger.removeHandler(_h)
             logger.info("Removed duplicate StreamHandler (stderr redirected to %s)", _LOG_FILE)
     logger.info("FileHandler attached: %s", _LOG_FILE)
+
+install_log_redaction()
 
 # Suppress noisy websocket keepalive DEBUG logs (module-level, runs early).
 # Kept here as a baseline; lifespan hook re-suppresses after uvicorn overrides.

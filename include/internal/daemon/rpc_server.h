@@ -46,6 +46,10 @@ public:
   // Send a JSON-RPC notification to a specific client
   void send_notification(int client_fd, const std::string& method, const std::string& params_json);
 
+  // Configure before start; pass an empty function during shutdown before
+  // destroying the callback target.
+  void set_disconnect_handler(std::function<void(int)> handler);
+
   bool is_running() const { return running_.load(); }
 
   // Check if a method is allowed on a given channel
@@ -97,6 +101,8 @@ private:
   // like "agent.response" and "event.notification".
   std::map<int, bool> ws_clients_;
   std::mutex ws_clients_mutex_;
+  std::function<void(int)> disconnect_handler_;
+  std::mutex disconnect_handler_mutex_;
 };
 
 }  // namespace daemon

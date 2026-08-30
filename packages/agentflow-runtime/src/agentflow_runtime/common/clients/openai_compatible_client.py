@@ -17,8 +17,123 @@ from typing import Any
 import requests
 
 from .base import LlmClient
+from agentflow_runtime.security import (
+    SecretStreamRedactor,
+    find_secret_exposures,
+    redact_secrets,
+    register_secret,
+)
+from agentflow_runtime.security.trusted_media import (
+    TrustedMediaError,
+    validate_credential_url,
+)
 
 logger = logging.getLogger("agentflow.node.openai_client")
+
+
+def _safe_text(value: Any) -> str:
+    safe_value, _redaction = redact_secrets(str(value))
+    return safe_value
+
+class _SafeStreamCallback:
+    """Stateful DLP adapter for provider SSE callbacks."""
+
+    def __init__(self, callback: Callable[[str], None]) -> None:
+        self._callback = callback
+        self._content = SecretStreamRedactor()
+        self._tool_arguments: dict[str, SecretStreamRedactor] = {}
+        self._tool_indices: dict[str, Any] = {}
+        self._tool_choice_indices: dict[str, Any] = {}
+        self._content_choice_index: Any = 0
+
+    def _emit(self, payload: dict[str, Any]) -> None:
+        safe_payload, _report = redact_secrets(payload)
+        try:
+            self._callback(json.dumps(safe_payload, ensure_ascii=False))
+        except Exception as exc:
+            logger.warning(
+                "on_chunk callback raised: %s", type(exc).__name__
+            )
+
+    def feed(self, chunk: dict[str, Any]) -> None:
+        """Release only fields that cannot complete a registered secret."""
+        try:
+            choices = chunk.get("choices") or []
+            if not choices or not isinstance(choices[0], dict):
+                return
+            choice = choices[0]
+            delta = choice.get("delta") or {}
+            if not isinstance(delta, dict):
+                return
+
+            safe_chunk, _report = redact_secrets(chunk)
+            safe_choice = safe_chunk["choices"][0]
+            safe_delta = safe_choice.get("delta") or {}
+            safe_choice["delta"] = safe_delta
+            should_emit = False
+
+            content = delta.get("content")
+            if isinstance(content, str) and content:
+                self._content_choice_index = choice.get("index", 0)
+                released = self._content.feed(content)
+                safe_delta["content"] = released
+                should_emit = bool(released)
+
+            tool_calls = delta.get("tool_calls")
+            safe_tool_calls = safe_delta.get("tool_calls")
+            if isinstance(tool_calls, list) and isinstance(safe_tool_calls, list):
+                for original, safe_tool in zip(tool_calls, safe_tool_calls):
+                    if not isinstance(original, dict) or not isinstance(safe_tool, dict):
+                        continue
+                    original_fn = original.get("function") or {}
+                    safe_fn = safe_tool.get("function") or {}
+                    safe_tool["function"] = safe_fn
+                    fragment = original_fn.get("arguments")
+                    if isinstance(fragment, str) and fragment:
+                        raw_index = original.get("index", 0)
+                        state_key = str(raw_index)
+                        redactor = self._tool_arguments.setdefault(
+                            state_key, SecretStreamRedactor()
+                        )
+                        self._tool_indices[state_key] = raw_index
+                        self._tool_choice_indices[state_key] = choice.get("index", 0)
+                        safe_fn["arguments"] = redactor.feed(fragment)
+                should_emit = should_emit or bool(safe_tool_calls)
+
+            if should_emit:
+                self._emit(safe_chunk)
+        except Exception as exc:
+            logger.warning(
+                "stream callback redaction failed: %s", type(exc).__name__
+            )
+
+    def flush(self) -> None:
+        """Release sanitized suffixes after the provider stream ends."""
+        released = self._content.flush()
+        if released:
+            self._emit({
+                "choices": [{
+                    "index": self._content_choice_index,
+                    "delta": {"content": released},
+                    "finish_reason": None,
+                }],
+            })
+        for state_key, redactor in self._tool_arguments.items():
+            released = redactor.flush()
+            if not released:
+                continue
+            self._emit({
+                "choices": [{
+                    "index": self._tool_choice_indices.get(state_key, 0),
+                    "delta": {
+                        "tool_calls": [{
+                            "index": self._tool_indices.get(state_key, 0),
+                            "function": {"arguments": released},
+                        }],
+                    },
+                    "finish_reason": None,
+                }],
+            })
 
 
 class OpenAiCompatibleClient(LlmClient):
@@ -38,8 +153,16 @@ class OpenAiCompatibleClient(LlmClient):
         # do not understand the "aisf/" routing convention.
         if model.startswith("aisf/"):
             model = model[len("aisf/"):]
+        register_secret("llm.api_key", api_key)
+        if find_secret_exposures(base_url).applied:
+            raise ValueError("provider URL must not contain credential material")
+        try:
+            validated_base_url = validate_credential_url(base_url)
+        except TrustedMediaError as exc:
+            raise ValueError(str(exc)) from exc
+
         self.model = model
-        self.base_url = base_url.rstrip("/")
+        self.base_url = validated_base_url.rstrip("/")
         if not self.base_url.endswith("/chat/completions"):
             self.base_url += "/chat/completions"
         self.api_key = api_key
@@ -110,8 +233,8 @@ class OpenAiCompatibleClient(LlmClient):
     ) -> dict[str, Any]:
         """调用 OpenAI 兼容 API，返回 OpenAI 格式响应字典。
 
-        流式模式下，会通过 ``on_chunk`` 回调把每个非空 SSE chunk 的**原始
-        payload JSON 字符串**透传给调用方（典型用法：调用方在闭包里
+        流式模式下，会通过 ``on_chunk`` 回调把每个非空 SSE chunk 脱敏后
+        的等价 delta JSON 字符串传给调用方（典型用法：调用方在闭包里
         ``response_push(raw_json, type=..., source=...)``，见
         streaming-response.md §3.5/§3.6）。``on_chunk`` 内的异常会被吞掉
         （守 §3.7：trace 路径失败不中断主流程）。
@@ -124,6 +247,17 @@ class OpenAiCompatibleClient(LlmClient):
             stream=stream,
             extra_body=extra_body,
         )
+
+        exposure = find_secret_exposures(body)
+        if exposure.applied:
+            self.last_attempts = 0
+            self.last_retry_reasons = []
+            self.last_http_status = None
+            return {
+                "error": "LLM request blocked by credential isolation policy",
+                "_llm_error": True,
+                "security": exposure.to_dict(),
+            }
 
         headers = {
             "Content-Type": "application/json",
@@ -157,13 +291,17 @@ class OpenAiCompatibleClient(LlmClient):
         last_error = None
         attempt = 0
         _data_received = False  # 流式模式：是否已收到 SSE chunk
+        _safe_callback = (
+            _SafeStreamCallback(on_chunk) if stream and on_chunk else None
+        )
 
         for attempt in range(max_attempts):
             remaining_timeout = request_deadline - time.monotonic()
             if remaining_timeout <= 0:
                 last_error = requests.Timeout("LLM request total timeout exhausted")
                 break
-            attempt_timeout = max(0.001, remaining_timeout)
+            attempts_left = max_attempts - attempt
+            attempt_timeout = max(0.001, remaining_timeout / attempts_left)
             connect_timeout = min(max(0.001, float(self.connect_timeout)), attempt_timeout)
             try:
                 self.last_attempts += 1
@@ -173,7 +311,9 @@ class OpenAiCompatibleClient(LlmClient):
                     json=body,
                     stream=stream,
                     timeout=(connect_timeout, attempt_timeout),
-                    verify=False,
+                    verify=True,
+                    allow_redirects=False,
+                    proxies={"http": "", "https": ""},
                 )
                 response_status = getattr(resp, "status_code", 200)
                 if not isinstance(response_status, int):
@@ -253,13 +393,8 @@ class OpenAiCompatibleClient(LlmClient):
                     token = delta.get("content", "")
                     if token:
                         accumulated.append(token)
-                    # 透传原始 SSE chunk 给 on_chunk 回调（content 或 tool_calls delta 都触发）。
-                    # 异常被吞（守 §3.7：trace 失败不中断主流程）。
-                    if on_chunk and (delta.get("content") or delta.get("tool_calls")):
-                        try:
-                            on_chunk(payload)
-                        except Exception:
-                            logger.warning("on_chunk callback raised", exc_info=True)
+                    if _safe_callback:
+                        _safe_callback.feed(chunk)
                     # 累加 tool_calls
                     tc_deltas = delta.get("tool_calls")
                     if tc_deltas:
@@ -324,23 +459,27 @@ class OpenAiCompatibleClient(LlmClient):
                         break
                     logger.warning(
                         "transient error attempt=%d/%d, retry in %.1fs: %s (data_received=%s)",
-                        attempt + 1, max_attempts, backoff, e, _data_received,
+                        attempt + 1, max_attempts, backoff, _safe_text(e), _data_received,
                     )
                     time.sleep(backoff)
                     continue
                 logger.warning(
                     "FAILED attempt=%d/%d retriable=%s url=%s err=%s",
-                    attempt + 1, max_attempts, retriable, self.base_url, e,
+                    attempt + 1, max_attempts, retriable, self.base_url, _safe_text(e),
                 )
                 break
+        if _safe_callback:
+            _safe_callback.flush()
+
 
         if response_data is None:
             return {
-                "error": f"LLM call failed: {last_error}",
+                "error": f"LLM call failed: {_safe_text(last_error)}",
                 "_llm_error": True,
             }
 
-        return response_data
+        safe_response, _redaction = redact_secrets(response_data)
+        return safe_response
 
 
 def _api_error_from_response(resp, status_code: int) -> "_ApiError":
@@ -354,6 +493,7 @@ def _api_error_from_response(resp, status_code: int) -> "_ApiError":
             err_msg = str(raw_error)
     except Exception:
         err_msg = str(getattr(resp, "text", ""))[:200]
+    err_msg = _safe_text(err_msg)
     return _ApiError(
         f"API error (HTTP {status_code}): {err_msg}",
         status_code=status_code,

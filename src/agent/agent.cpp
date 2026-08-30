@@ -1248,28 +1248,8 @@ void MMAgent::handle_dialogue_interrupt(const std::shared_ptr<MMAgentSession>& s
   Logger::instance().info_f("[CONTROL] DIALOGUE-INTERRUPT interrupted %d skill tasks for dialogue_id=%s",
                             interrupted, dialogue_id.c_str());
 
-  // 2. Push a cancellation notification so the Bridge's SSE stream can
-  //    terminate gracefully (instead of hanging until wait_for_response
-  //    times out).  The ResponsePoller picks this up and sends an
-  //    agent.response notification with final=true, which the Bridge
-  //    DaemonClient routes to _response_queues[dialogue_id].
-  {
-    MMAgentMsgQue::Message cancel_msg;
-    cancel_msg.message_id = "cancel-" + dialogue_id;
-    cancel_msg.content = "对话已被取消";
-    cancel_msg.metadata["message_type"] = "agent_response";
-    cancel_msg.metadata["dialogue_id"]  = dialogue_id;
-    cancel_msg.metadata["session_id"]   = session->get_session_id();
-    cancel_msg.metadata["final"]        = "true";
-    if(session_router_) {
-      session_router_->enqueue_response_message(cancel_msg);
-      Logger::instance().info_f(
-          "[CONTROL] DIALOGUE-INTERRUPT enqueued cancel notification for dialogue_id=%s",
-          dialogue_id.c_str());
-    }
-  }
-
-  // 3. Publish interrupt flag to global sys namespace BEFORE cleanup.
+  // 2. Publish interrupt flag to global sys namespace BEFORE cleanup and
+  //    before acknowledging cancellation to the client.
   //    Subprocess pollers (skill_executor / coordinator_decide) read this
   //    via databus.get_global("interrupt:{dialogue_id}") at the top of each
   //    LLM round and exit when set. MUST be written before cleanup_dialogue_data
@@ -1288,16 +1268,42 @@ void MMAgent::handle_dialogue_interrupt(const std::shared_ptr<MMAgentSession>& s
     Logger::instance().info_f("[CONTROL] DIALOGUE-INTERRUPT set flag key=%s", interrupt_key.c_str());
   }
 
+  // 3. Emit the dialogue terminal event before deleting its trajectory data.
+  if(has_dialogue_event_callback()) {
+    dialogue_event_callback_(config_.id, session->get_session_id(),
+                             dialogue_id, "", DialogueEventType::DESTROYED);
+  }
+
   // 4. Clean up DataBus keys for this dialogue (forces coordinator path
   //    to finalize and trigger cleanup_dialogue_data, which releases the
   //    serialization lock via release_dialogue_lock).
   BuiltinDispatcher::cleanup_dialogue_data(*this, session->get_session_id(), dialogue_id);
   cleanup_multi_responses(*this, session->get_session_id(), dialogue_id);
 
-  // 5. Belt-and-suspenders: explicitly release the lock in case
+  // 5. Explicitly release the lock in case
   //    cleanup_dialogue_data's normal path doesn't fire (e.g. no
   //    coordinator round was triggered yet).  Idempotent.
   session->release_dialogue_lock(dialogue_id);
+
+  // 6. Acknowledge only after workers have been interrupted and the terminal
+  //    state is observable. Late progress is discarded after this final frame.
+  {
+    MMAgentMsgQue::Message cancel_msg;
+    cancel_msg.message_id = "cancel-" + dialogue_id;
+    cancel_msg.content = "对话已被取消";
+    cancel_msg.metadata["message_type"] = "agent_response";
+    cancel_msg.metadata["dialogue_id"]  = dialogue_id;
+    cancel_msg.metadata["session_id"]   = session->get_session_id();
+    cancel_msg.metadata["final"]        = "true";
+    cancel_msg.metadata["status"]       = "cancelled";
+    cancel_msg.metadata["error"]        = "true";
+    if(session_router_) {
+      session_router_->enqueue_response_message(cancel_msg);
+      Logger::instance().info_f(
+          "[CONTROL] DIALOGUE-INTERRUPT enqueued cancel notification for dialogue_id=%s",
+          dialogue_id.c_str());
+    }
+  }
 }
 
 std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
@@ -1363,8 +1369,8 @@ std::shared_ptr<MMAgentTask> MMAgent::build_runtime_task(
   std::string payload = message.content;
   std::string payload_ref = message.data_ref;
   {
-    Logger::instance().info_f("[BUILD_RUNTIME_TASK] message.content='%s' (full_len=%zu), message.data_ref='%s'",
-                              message.content.c_str(), message.content.size(), message.data_ref.c_str());
+    Logger::instance().info_f("[BUILD_RUNTIME_TASK] content_len=%zu data_ref_len=%zu",
+                              message.content.size(), message.data_ref.size());
   }
   if(payload_ref.empty() && !payload.empty()) {
     std::ostringstream logical_key;
@@ -2170,8 +2176,8 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
         response_message.metadata["message_type"] = "dispatcher_response";
         if(session_router_) {
           Logger::instance().info_f(
-              "[DISPATCHERDataExchange] Enqueueing direct dispatcher response, content='%s'",
-              response_message.content.c_str());
+              "[DISPATCHERDataExchange] Enqueueing direct dispatcher response, content_len=%zu",
+              response_message.content.size());
           // Flow trace: response sent（dispatcher 直接响应出口）
           {
             std::string dispatcher_trace_labels;
@@ -2218,7 +2224,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     if(get_data("input", original_input)) {
       if(const auto* text = std::get_if<std::string>(&original_input)) {
         coordinator_message.content = *text;
-        Logger::instance().info_f("[DISPATCHERDataExchange] Preserved original input: %s", text->c_str());
+        Logger::instance().info_f("[DISPATCHERDataExchange] Preserved original input, content_len=%zu", text->size());
       }
     }
 
@@ -2331,7 +2337,8 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     // Coordinator workflow completed - check if need to start skill tasks
     // Check next_skills first (preferred), then selected_skills for backward compatibility
     // Use new format with session isolation and fallback to legacy formats
-    bool has_skill_error = false;
+    const bool coordinator_failed = (message.content == "workflow_failed");
+    bool has_skill_error = coordinator_failed;
     {
       DataVariant skill_error_val;
       std::string skill_error_key = "/session/" + session->get_session_id() + "/sys/"
@@ -2339,7 +2346,7 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
           + "skill_failed";
       if(get_data(skill_error_key, skill_error_val)) {
         if(const auto* text = std::get_if<std::string>(&skill_error_val)) {
-          has_skill_error = (*text == "true");
+          has_skill_error = has_skill_error || (*text == "true");
         }
       }
     }
@@ -2672,7 +2679,9 @@ void MMAgent::handle_task_data_exchange(const std::shared_ptr<MMAgentSession>& s
     response_message.metadata["final"] = "true";
     if(session_router_ && (has_response || has_skill_error)) {
       if(!has_response) {
-        response_message.content = "error: skill execution failed";
+        response_message.content = coordinator_failed
+            ? "error: coordinator workflow failed"
+            : "error: skill execution failed";
       }
       Logger::instance().info_f("[COORDINATOR_SEND] Enqueueing response via session_router, content_len=%zu, msg_id=%s, error=%s",
                                response_message.content.size(), response_message.message_id.c_str(),
@@ -3478,8 +3487,8 @@ bool MMAgent::handle_harness_batch_terminal(
     }
     if(it == harness_batches_.end()) {
       Logger::instance().warn_f(
-          "[BATCH] Ignoring late or unknown batch message: batch_id=%s exec_skill_key=%s content=%s",
-          batch_id.c_str(), exec_skill_key.c_str(), message.content.c_str());
+          "[BATCH] Ignoring late or unknown batch message: batch_id=%s exec_skill_key=%s content_len=%zu",
+          batch_id.c_str(), exec_skill_key.c_str(), message.content.size());
       return true;
     }
     auto& state = it->second;
@@ -3491,8 +3500,8 @@ bool MMAgent::handle_harness_batch_terminal(
     }
     if(!is_harness_batch_terminal(message)) {
       Logger::instance().debug_f(
-          "[BATCH] Consumed non-terminal batch notification: batch_id=%s exec_skill_key=%s content=%s",
-          batch_id.c_str(), exec_skill_key.c_str(), message.content.c_str());
+          "[BATCH] Consumed non-terminal batch notification: batch_id=%s exec_skill_key=%s content_len=%zu",
+          batch_id.c_str(), exec_skill_key.c_str(), message.content.size());
       return true;
     }
     if(state.terminal_results.count(exec_skill_key) > 0) {

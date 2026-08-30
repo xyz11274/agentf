@@ -4,9 +4,9 @@ Scanning rules (§3.2):
   ✅ ``harness/skills/**``       — always included if exists
   ✅ ``harness/tools/**``        — included if exists (user overrides)
   ✅ ``data/**``                 — included if exists
-  ✅ ``.env``                    — top-level .env file (keys: DASHSCOPE_API_KEY etc)
   ✅ ``setup.sh``                — top-level only, environment init script
   ✅ ``requirements.txt``        — included if exists
+  ❌ credential files (``.env*``, private keys, ``.mcp.json``)
   ❌ ``agent.json``, ``package.json``, ``coordinator*_workflow.json``,
      ``skill_workflow.json``, ``nodes/``, ``agent.md``
 """
@@ -25,17 +25,10 @@ _INCLUDE_GLOBS = [
     "harness/tools/**",  # user overrides
     "data/**",
     "requirements.txt",
-    ".env",        # 密钥文件——sandbox-env-injection.md §6.1 set -a && source 链路要求（只传主 .env）
     "setup.sh",    # 沙箱内环境初始化脚本
 ]
 
-# Files/directories to exclude even if they match a glob
-# 注：.env 与 setup.sh 曾在此处排除，但 sandbox-env-injection.md §6.1 敲定的
-# set -a && source /home/user/workspace/.env 链路要求 .env 必须在沙箱内（本轮修订，
-# 2026-08-04）。setup.sh 是沙箱内环境初始化脚本，随包上传由框架执行。
-# 修订来源：docs/design/features/agent-package/agent-package-structure.md §3.2 上传规则（.env / setup.sh 纳入 includes）
-
-# Directories to exclude entirely
+# Directories and credential files to exclude even when a custom glob includes them.
 # nodes/ = daemon 侧执行不上传；__pycache__/.pytest_cache/.mypy_cache/.ruff_cache 等 = 缓存/虚拟环境不上传；
 # .git = 版本控制元数据不上传（与 e2b_sync._CACHE_DIRS 对齐，I-5 单一真相）；
 # workspace/、outputs/、output/ = 会话级产物与运行时数据，沙箱侧会重新生成（上传是污染）；
@@ -43,6 +36,9 @@ _INCLUDE_GLOBS = [
 _EXCLUDE_DIRS = {
     "nodes", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".git",
     ".venv", "workspace", "outputs", "output", "tests", ".agentfoundry",
+    ".env", ".env.*", ".mcp.json", ".netrc", ".npmrc", ".pypirc",
+    "*.pem", "*.key", "*.p12", "*.pfx", "*.jks", "*.keystore",
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
 }
 
 

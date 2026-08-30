@@ -46,8 +46,8 @@ def get_env(key: str, default: str = "") -> str:
 def session_id() -> str:
     """Current session slot ID (0/1/2 — the agentflow session slot, NOT user identity).
 
-    For artifact routing use ``user_id() + "_" + client_id()`` as the session_id
-    segment per ``docs/design/features/sandbox/artifact-storage.md`` §2.2.
+    For artifact routing use :func:`artifact_session_id`; raw concatenation is
+    ambiguous when either identity component contains an underscore.
     """
     return get_env("AF_SESSION_ID")
 
@@ -62,18 +62,30 @@ def client_id() -> str:
     return get_env("AF_CLIENT_ID")
 
 
-def artifact_session_id() -> str:
-    """Artifact routing key ``{user_id}_{client_id}`` per artifact-storage.md §2.2.
+def artifact_routing_id(uid: str, cid: str) -> str:
+    """Build one filesystem-safe, unambiguous user/conversation routing key.
 
-    Returns empty string when both user_id and client_id are unset (e.g. legacy
-    paths without these injected). Callers should treat empty as a sentinel that
-    artifact routing is not yet provisioned, not as a valid directory segment.
+    Preserve the legacy form when neither component contains the legacy
+    separator. Otherwise use a length-prefixed v2 form. API validation caps
+    each ASCII component at 120 characters, so the v2 segment is at most the
+    common 255-byte filesystem limit.
     """
-    uid = user_id()
-    cid = client_id()
-    if not uid and not cid:
+    if not uid or not cid:
         return ""
-    return f"{uid}_{cid}"
+    if "_" not in uid and "_" not in cid:
+        return f"{uid}_{cid}"
+    uid_size = len(uid.encode("utf-8"))
+    cid_size = len(cid.encode("utf-8"))
+    return f"v2__u{uid_size}-{uid}-c{cid_size}-{cid}"
+
+
+def artifact_session_id() -> str:
+    """Return the artifact routing key for the current user and conversation.
+
+    Returns empty when either identity component is unset. Callers treat it as
+    a sentinel that artifact routing is not provisioned, not a directory name.
+    """
+    return artifact_routing_id(user_id(), client_id())
 
 
 def dialogue_id() -> str:

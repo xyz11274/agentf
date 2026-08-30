@@ -28,6 +28,9 @@ LLM_REQUEST_PREPARED = "llm.request.prepared"
 # ── Artifact 持久化（Skill 产物上传）──
 ARTIFACT_STORAGE_RESULT = "artifact.storage_result"
 
+# ── 外部/离线评测结果（采集契约，不参与运行时决策）──
+EVALUATION_RESULT = "evaluation.result"
+
 # ── coordinator 决策循环（现有事件名保留）──
 COORDINATOR_TRIGGER = "coordinator.trigger"
 COORDINATOR_LLM_RESULT = "coordinator.llm_result"
@@ -74,6 +77,7 @@ ALL_EVENTS: frozenset[str] = frozenset({
     LLM_REQUEST_PREPARED,
     ARTIFACT_STORAGE_RESULT,
     COORDINATOR_TRIGGER, COORDINATOR_LLM_RESULT, COORDINATOR_LLM_ERROR,
+    EVALUATION_RESULT,
     COORDINATOR_BATCH_RESULT,
     COORDINATOR_MESSAGES_SNAPSHOT,
     COORDINATOR_SKILLS_DISPATCHED, COORDINATOR_DISPATCH_LOOP_END,

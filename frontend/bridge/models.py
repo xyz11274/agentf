@@ -18,6 +18,9 @@ from typing import Generic, List, Literal, Optional, TypeVar, Union
 from pydantic import BaseModel, ConfigDict, Field
 from typing_extensions import Literal as _Literal  # alias for clarity
 
+SAFE_ID_PATTERN = r"^[A-Za-z0-9._-]{1,120}$"
+
+
 
 # ═══════════════════════════════════════════════════════════════════
 # Multimodal content parts (Phase A)
@@ -283,8 +286,8 @@ class ChatRequest(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    user_id: str
-    client_id: str
+    user_id: str = Field(..., pattern=SAFE_ID_PATTERN)
+    client_id: str = Field(..., pattern=SAFE_ID_PATTERN)
     content: Union[str, List[ContentPart]]
 
 

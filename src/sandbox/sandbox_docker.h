@@ -45,6 +45,7 @@ class DockerSandbox : public Sandbox {
   std::string id() const override { return sandbox_id_; }
   void destroy() override;  // docker stop + docker rm（幂等，B7）
   std::string endpoint() const override { return endpoint_; }
+  std::string sandbox_mode() const override { return "docker"; }
   SandboxState state() const override { return state_; }
   const SandboxKey& owner() const override { return owner_; }
   const std::string& workdir() const override { return workdir_; }

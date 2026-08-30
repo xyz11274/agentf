@@ -31,7 +31,7 @@ import time
 import urllib.error
 import urllib.request
 
-ssl._create_default_https_context = ssl._create_unverified_context
+# TLS verification uses system CAs; set SSL_CERT_FILE for private CAs.
 
 SUBMIT_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis"
 TASK_ENDPOINT = "https://dashscope.aliyuncs.com/api/v1/tasks/"

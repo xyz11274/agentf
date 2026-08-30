@@ -16,33 +16,30 @@ needs to produce images.
 
 ## How other skills call it
 
-After materialization the script is at
-`${SKILL_DIR}/scripts/generate.py`. Invoke it with bash:
+Call the structured `generate_image` tool. Never run `generate.py` through
+`bash` and never pass, print, probe, or request a provider credential.
 
-```bash
-python3 ${SKILL_DIR}/scripts/generate.py \
-  --prompt "a minimalist mountain logo, flat vector, indigo on cream" \
-  --output ./assets/logo.png \
-  --size 1024x1024
+```json
+{
+  "prompt": "a minimalist mountain logo, flat vector, indigo on cream",
+  "output": "assets/logo.png",
+  "size": "1024x1024"
+}
 ```
 
-- `--prompt`/`-p` and `--output`/`-o` are required.
-- `--provider` forces a backend; omit it and the first provider with a key set wins.
-- `--model`/`-m`, `--size`, `--n` are optional.
-- `--ref <path>` (repeatable) supplies reference image(s) for image-to-image.
-- `--list-providers` prints the registry; `--json` emits a machine-readable result.
-- The output extension is optional (`.png` default); parent directories are created.
-- For `--n > 1`, files get a `-1`, `-2`, … suffix.
+- `prompt` and `output` are required.
+- `provider` selects `dashscope`, `wan`, or `openai`; omit it for automatic selection.
+- `model`, `size`, and `n` are optional; `n` is limited to 1–4.
+- `refs` is an array of workspace image paths for image-to-image.
+- The result has business `status` plus a `files` array. A failed image does
+  not mean the Harness workflow failed.
 
-## Providers & keys
+## Provider credentials
 
-The script reads each provider's API key from an environment variable
-(`OPENAI_API_KEY`, …). **Sandbox prerequisite:** AgentFoundry's sandbox drops
-`*_API_KEY` from the per-call extra-env path by default, so the key must reach
-the sandbox either through the environment whitelist or — recommended for
-on-prem — via Vaults injection (`Environment.config.secrets`, shipped v1.9).
-`references/providers.md` has the exact operator setup — without it, no image
-can be generated.
+Credentials are read only by the trusted tool in the Skill Executor process.
+They are never copied into prompts, tool arguments, generic subprocesses, or
+sandbox files. If no configured provider is available, report the returned
+business error; do not inspect the environment or retry through `bash`.
 
 ## Scope
 
@@ -69,10 +66,9 @@ can be generated.
 
 ## Notes for the calling skill
 
-- Generate one image per `generate.py` call for fine-grained control, or use
-  `--n` when the provider supports batches.
-- Always pass an explicit `--output` under the working directory (e.g.
-  `./assets/…` or `./image-cards/…`) so the artifact lands where your skill's
-  `post_run`/delivery step expects it.
-- Check the exit code: non-zero means generation failed (missing key, provider
-  error) and stderr carries the reason.
+- Generate one image per `generate_image` call for fine-grained control, or use
+  `n` when the provider supports batches.
+- Always pass an explicit workspace-relative `output` such as
+  `assets/logo.png` or `image-cards/card.png`.
+- Check the returned business `status`; surface failures honestly without
+  attempting to recover credentials from the environment.

@@ -1157,9 +1157,10 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
   Logger::instance().debug_f("[CODE_LOADER] Executing command: %s (timeout_ms=%d)", command.c_str(),
                              timeout_ms);
 
-  // [DEBUG] Log full command details for troubleshooting
-  Logger::instance().debug_f("[CODE_LOADER_DEBUG] Command=%s, WorkingDir=%s, EnvVars=%zu",
-                            command.c_str(), working_dir.c_str(), env_vars.size());
+  // Log execution metadata only; command text may contain user-provided secrets.
+  Logger::instance().debug_f(
+      "[CODE_LOADER_DEBUG] CommandLen=%zu, WorkingDirSet=%s, EnvVars=%zu",
+      command.size(), working_dir.empty() ? "false" : "true", env_vars.size());
 
   auto shell_escape_single = [](const std::string& s) {
     std::string out;
@@ -1190,24 +1191,8 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
     prepared_command =
         "cd '" + shell_escape_single(abs_wd) + "' && (" + prepared_command + ")";
   }
-  if(!env_vars.empty()) {
-    std::ostringstream env_prefix;
-    for(const auto& env : env_vars) {
-      size_t eq = env.find('=');
-      if(eq == std::string::npos || eq == 0) {
-        continue;
-      }
-      std::string key = env.substr(0, eq);
-      std::string val = env.substr(eq + 1);
-      env_prefix << key << "='" << shell_escape_single(val) << "' ";
-    }
-    std::string exports = env_prefix.str();
-    if(!exports.empty()) {
-      prepared_command = "export " + exports + "; " + prepared_command;
-    }
-  }
-
-  Logger::instance().debug_f("[CODE_LOADER_DEBUG] Final command: %s", prepared_command.c_str());
+  Logger::instance().debug_f(
+      "[CODE_LOADER_DEBUG] PreparedCommandLen=%zu", prepared_command.size());
 
   int output_pipe[2];
   if(pipe(output_pipe) != 0) {
@@ -1309,6 +1294,19 @@ ExecutionResult CodeLoader::execute_command(const std::string& command,
     // above this practical ceiling are not opened by the daemon.
     max_fd = std::min<long>(max_fd, 4096);
     for(int fd = 3; fd < max_fd; ++fd) close(fd);
+
+    // Keep credential values in the child environment, never in the shell
+    // source or process command line.  This also avoids key-name injection.
+    for(const auto& env : env_vars) {
+      const size_t eq = env.find('=');
+      if(eq == std::string::npos || eq == 0) continue;
+      const std::string key = env.substr(0, eq);
+      const std::string value = env.substr(eq + 1);
+      if(setenv(key.c_str(), value.c_str(), 1) != 0) {
+        dprintf(STDERR_FILENO, "failed to set child environment variable\n");
+        _exit(126);
+      }
+    }
 
     execl("/bin/sh", "sh", "-c", prepared_command.c_str(), static_cast<char*>(nullptr));
     _exit(127);

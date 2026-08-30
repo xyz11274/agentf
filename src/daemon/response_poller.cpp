@@ -77,6 +77,17 @@ void ResponsePoller::remove_request(const std::string& message_id) {
   in_flight_.erase(message_id);
 }
 
+void ResponsePoller::remove_requests_for_client(int client_fd) {
+  std::lock_guard<std::mutex> lock(in_flight_mutex_);
+  for (auto it = in_flight_.begin(); it != in_flight_.end();) {
+    if (it->second.client_fd == client_fd) {
+      it = in_flight_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 void ResponsePoller::poll_loop() {
   while (running_.load()) {
     auto entries = registry_->list_all();

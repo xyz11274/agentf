@@ -48,6 +48,7 @@ std::shared_ptr<sandbox::Sandbox> SandboxLifecycle::create(const sandbox::Sandbo
   // 先按 key 查找——命中则复用（FR-007，workdir 一致）
   auto existing = session_manager_.get(owner);
   if (existing) {
+    existing->mark_active();
     return existing;  // 复用已有沙箱
  }
 

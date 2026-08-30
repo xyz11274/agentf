@@ -44,36 +44,18 @@ except ImportError:
     print("[e2b_lifecycle] ERROR: e2b_code_interpreter not installed", file=sys.stderr)
     sys.exit(1)
 
-# 共用 sandbox_patch（Phase 4：从 agentflow-runtime 导入，fallback 到本地定义）
-try:
-    from agentflow_runtime.common.sandbox_patch import apply_ssl_patch as _apply_ssl_patch
-except ImportError:
-    # daemon 环境可能未安装 agentflow-runtime，fallback 到本地定义
-    def _apply_ssl_patch() -> None:
-        """SSLPatch: path-based 路由走 IP 直连，跳过证书验证（内部部署）。
-
-        [fallback] agentflow-runtime 不可用时使用此本地定义。
-        权威实现见 ``agentflow_runtime.common.sandbox_patch.apply_ssl_patch``。
-        """
-        import ssl as _ssl
-
-        if getattr(_ssl, "_agentflow_patched", False):
-            return  # idempotent guard
-
-        _orig_create_default_context = _ssl.create_default_context
-
-        def _patched_create_default_context(*args, **kwargs):
-            ctx = _orig_create_default_context(*args, **kwargs)
-            ctx.check_hostname = False
-            ctx.verify_mode = _ssl.CERT_NONE
-            return ctx
-
-        _ssl.create_default_context = _patched_create_default_context
-        _ssl._agentflow_patched = True  # type: ignore[attr-defined]
+# Security primitives are mandatory: never fall back to process-wide TLS bypass.
+from agentflow_runtime.common.sandbox_patch import apply_ssl_patch as _apply_ssl_patch
+from agentflow_runtime.security import redact_secrets as _redact_secrets
 
 
 def _log(msg: str) -> None:
-    print(f"[e2b_lifecycle] {msg}", file=sys.stderr, flush=True)
+    safe_msg, _report = _redact_secrets(str(msg))
+    print(f"[e2b_lifecycle] {safe_msg}", file=sys.stderr, flush=True)
+
+
+def _log_traceback() -> None:
+    _log(traceback.format_exc())
 
 
 def _resolve_ssl_cert() -> None:
@@ -117,17 +99,17 @@ def _probe_http_ready(sb, health_url: str, attempts: int = 6, interval: float = 
 
 
 def cmd_create(args: argparse.Namespace) -> int:
-    api_key = _check_api_key()
-    _log(f"create: E2B_API_KEY={api_key[:8]}...{api_key[-4:] if len(api_key) > 12 else ''} "
-         f"(len={len(api_key)})")
-    _log(f"create: E2B_API_URL={os.environ.get('E2B_API_URL', '(not set)')}")
-    # path-based 路由走 IP 直连，但证书是给 *.cube.app 签的，需跳过主机名校验
-    # 且内部部署的 CA 证书路径可能不一致，一并跳过证书验证
+    _check_api_key()
+    _log("create: E2B credentials loaded")
+    _log(
+        f"create: E2B_API_URL configured={bool(os.environ.get('E2B_API_URL'))}"
+    )
+    # Control-plane TLS remains strict; only the fixed-IP envd transport
+    # uses a chain-verifying context with hostname matching disabled.
     _apply_ssl_patch()
 
-    _log(f"create: token={args.traffic_access_token[:8]}... "
-         f"port={args.sandbox_http_port} remote_dir={args.remote_workspace_dir} "
-         f"template={args.template}")
+    _log(f"create: port={args.sandbox_http_port} "
+         f"remote_dir={args.remote_workspace_dir} template={args.template}")
 
     # 构造 Sandbox.create 参数
     # envd 实际监听 49983（SDK 默认值），经 SSH 上宿主机实测确认
@@ -209,7 +191,7 @@ def cmd_kill(args: argparse.Namespace) -> int:
             _log("kill: sandbox already gone, treat as success")
             return 0
         _log(f"kill: FATAL {e}")
-        traceback.print_exc(file=sys.stderr)
+        _log_traceback()
         return 1
 
 
@@ -234,7 +216,7 @@ def cmd_snapshot(args: argparse.Namespace) -> int:
             _log("snapshot: sandbox already gone, skip snapshot")
             return 0
         _log(f"snapshot: FATAL {e}")
-        traceback.print_exc(file=sys.stderr)
+        _log_traceback()
         return 1
 
 
@@ -259,7 +241,7 @@ def cmd_pause(args: argparse.Namespace) -> int:
             _log("pause: sandbox already gone")
             return 1
         _log(f"pause: FATAL {e}")
-        traceback.print_exc(file=sys.stderr)
+        _log_traceback()
         return 1
 
 
@@ -287,7 +269,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
             _log("resume: sandbox already gone")
             return 1
         _log(f"resume: FATAL {e}")
-        traceback.print_exc(file=sys.stderr)
+        _log_traceback()
         return 1
 
 
@@ -309,7 +291,7 @@ def cmd_fork(args: argparse.Namespace) -> int:
         sb = Sandbox._cls_connect_sandbox(sandbox_id=args.sandbox_id)
     except Exception as e:
         _log(f"ERROR: failed to connect to source sandbox {args.sandbox_id}: {e}")
-        traceback.print_exc(file=sys.stderr)
+        _log_traceback()
         return 1
 
     # 2. fork 派生新沙箱（返回列表，默认 count=1 时取首个）
@@ -324,7 +306,7 @@ def cmd_fork(args: argparse.Namespace) -> int:
             return 1
     except Exception as e:
         _log(f"ERROR: fork exception: {e}")
-        traceback.print_exc(file=sys.stderr)
+        _log_traceback()
         return 1
 
     new_id = forked.sandbox_id
@@ -445,7 +427,7 @@ def main() -> int:
         raise
     except Exception as e:
         _log(f"FATAL: unhandled exception: {e}")
-        traceback.print_exc(file=sys.stderr)
+        _log_traceback()
         return 1
 
 

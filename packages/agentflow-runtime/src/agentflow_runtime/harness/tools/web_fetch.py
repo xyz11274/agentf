@@ -7,7 +7,10 @@ ToolExecutor 迁移（Phase 3，ADR 20260724-tools-runtime-refactor.md）：
 - execute() 签名不变（skill_executor 兼容）
 """
 
+import ipaddress
 import json
+import socket
+import urllib.parse
 
 TOOL_NAME = "web_fetch"
 TOOL_DESCRIPTION = "Fetch a URL and return its content as plain text. Supports http and https URLs. Useful for reading documentation, API responses, or web pages."
@@ -53,15 +56,39 @@ _BLOCKED_METADATA = [
 
 
 def _is_blocked(url: str) -> str | None:
-    """检查 URL 是否命中安全黑名单，返回拒绝原因或 None。"""
-    if not url.startswith("http://") and not url.startswith("https://"):
+    """Require a credential-safe public HTTP(S) destination."""
+    try:
+        parsed = urllib.parse.urlsplit(str(url))
+        port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
+    except (TypeError, ValueError):
+        return "Invalid URL"
+    if parsed.scheme.lower() not in {"http", "https"}:
         return "Only http and https URLs are allowed"
+    if parsed.username is not None or parsed.password is not None:
+        return "Access denied: URL userinfo is not allowed"
+    hostname = (parsed.hostname or "").rstrip(".").lower()
+    if not hostname:
+        return "Invalid URL: hostname is required"
     for prefix in _BLOCKED_PREFIXES:
-        if url.startswith(prefix):
+        if str(url).lower().startswith(prefix):
             return "Access denied: requests to private/internal addresses are not allowed"
     for blocked in _BLOCKED_METADATA:
-        if blocked in url:
+        if hostname == blocked or hostname.endswith("." + blocked):
             return "Access denied: requests to metadata endpoints are not allowed"
+    try:
+        try:
+            addresses = {ipaddress.ip_address(hostname)}
+        except ValueError:
+            addresses = {
+                ipaddress.ip_address(item[4][0].split("%", 1)[0])
+                for item in socket.getaddrinfo(
+                    hostname, port, type=socket.SOCK_STREAM,
+                )
+            }
+    except (OSError, ValueError):
+        return "Access denied: URL hostname could not be safely resolved"
+    if not addresses or any(not address.is_global for address in addresses):
+        return "Access denied: requests to private/internal addresses are not allowed"
     return None
 
 

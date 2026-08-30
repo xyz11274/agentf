@@ -24,6 +24,7 @@ import json
 import logging
 import math
 import sqlite3
+import threading
 import time
 import uuid
 from datetime import UTC, datetime
@@ -78,7 +79,7 @@ CREATE INDEX IF NOT EXISTS idx_traces_session ON traces(session_id, dialogue_id)
 
 
 def _now_iso() -> str:
-    return datetime.now(UTC).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def _new_session_id() -> str:
@@ -95,6 +96,7 @@ class LocalSessionProvider(SessionProvider):
     def __init__(self, db_path: str | Path) -> None:
         self._db_path = str(db_path)
         self._init_done = False
+        self._init_lock = threading.Lock()
 
     # ------------------------------------------------------------------
     # Connection helpers
@@ -103,22 +105,25 @@ class LocalSessionProvider(SessionProvider):
     def _connect(self) -> sqlite3.Connection:
         db_path = Path(self._db_path)
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(db_path), isolation_level=None)
+        conn = sqlite3.connect(str(db_path), isolation_level=None, timeout=5.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=5000")
         # WAL allows concurrent readers while a writer holds the lock.
         with contextlib.suppress(sqlite3.Error):
             conn.execute("PRAGMA journal_mode=WAL")
         if not self._init_done:
-            conn.executescript(_SCHEMA)
-            # 存量库迁移：旧版 dialogue_rounds 无 images 列，ALTER 补上
-            # （CREATE TABLE IF NOT EXISTS 不会给已存在的表加列）
-            try:
-                conn.execute(
-                    "ALTER TABLE dialogue_rounds ADD COLUMN images TEXT DEFAULT '[]'"
-                )
-            except sqlite3.OperationalError:
-                pass  # 列已存在（新库）
-            self._init_done = True
+            with self._init_lock:
+                if not self._init_done:
+                    conn.executescript(_SCHEMA)
+                    # 存量库迁移：旧版 dialogue_rounds 无 images 列，ALTER 补上
+                    try:
+                        conn.execute(
+                            "ALTER TABLE dialogue_rounds ADD COLUMN images TEXT DEFAULT '[]'"
+                        )
+                    except sqlite3.OperationalError:
+                        pass  # 列已存在（新库）
+                    self._init_done = True
         return conn
 
     @staticmethod
@@ -144,6 +149,7 @@ class LocalSessionProvider(SessionProvider):
     ) -> dict:
         now = _now_iso()
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT * FROM sessions WHERE user_id=? AND client_id=? ORDER BY created_at DESC LIMIT 1",
                 (user_id, client_id),
@@ -154,6 +160,7 @@ class LocalSessionProvider(SessionProvider):
                     "UPDATE sessions SET last_active_at=? WHERE id=?",
                     (now, row["id"]),
                 )
+                conn.commit()
                 sess = self._row_to_session(row)
                 sess["last_active_at"] = now
                 logger.info("local_provider.session_found id=%s user=%s client=%s",
@@ -166,6 +173,7 @@ class LocalSessionProvider(SessionProvider):
                 " VALUES (?, ?, ?, ?, ?, 'active')",
                 (sid, user_id, client_id, now, now),
             )
+            conn.commit()
         logger.info("local_provider.session_created id=%s user=%s client=%s", sid, user_id, client_id)
         return {
             "id": sid, "user_id": user_id, "client_id": client_id,
@@ -278,13 +286,32 @@ class LocalSessionProvider(SessionProvider):
         artifacts: str = "[]",
         images: str = "[]",
     ) -> str:
+        try:
+            from services.secret_safety import sanitize_for_storage
+
+            safe_input, _redaction = sanitize_for_storage(user_input)
+            if not isinstance(safe_input, str):
+                raise TypeError("sanitized user input must be text")
+            user_input = safe_input
+        except Exception as exc:
+            logger.warning(
+                "local_provider.save_dialogue input_replaced id=%s dialogue=%s redaction_error=%s",
+                session_id, dialogue_id, type(exc).__name__,
+            )
+            user_input = "<redacted:credential_sanitizer_unavailable>"
         now = _now_iso()
         save_start = time.time()
         try:
             with self._connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
                 # Auto-title: first dialogue sets the title from user_input[:50].
                 sess = conn.execute(
                     "SELECT title FROM sessions WHERE id=?", (session_id,),
+                ).fetchone()
+                existing = conn.execute(
+                    "SELECT id FROM dialogue_rounds"
+                    " WHERE session_id=? AND dialogue_id=? ORDER BY id DESC LIMIT 1",
+                    (session_id, dialogue_id),
                 ).fetchone()
                 if sess is not None and not (sess["title"] or ""):
                     # 自动标题用展平文本（I-REQ 存原始 content JSON；展示层需可读文本，
@@ -299,14 +326,22 @@ class LocalSessionProvider(SessionProvider):
                         "UPDATE sessions SET last_active_at=? WHERE id=?",
                         (now, session_id),
                     )
-                conn.execute(
-                    "INSERT INTO dialogue_rounds"
-                    " (session_id, dialogue_id, user_input, agent_response,"
-                    "  agent_name, artifacts, images, created_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (session_id, dialogue_id, user_input, agent_response,
-                     agent_name, artifacts, images, now),
-                )
+                if existing is None:
+                    conn.execute(
+                        "INSERT INTO dialogue_rounds"
+                        " (session_id, dialogue_id, user_input, agent_response,"
+                        "  agent_name, artifacts, images, created_at)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (session_id, dialogue_id, user_input, agent_response,
+                         agent_name, artifacts, images, now),
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE dialogue_rounds SET user_input=?, agent_response=?,"
+                        " agent_name=?, artifacts=?, images=? WHERE id=?",
+                        (user_input, agent_response, agent_name, artifacts, images, existing["id"]),
+                    )
+                conn.commit()
                 logger.info("local_provider.save_dialogue ok id=%s dialogue=%s input_len=%d resp_len=%d",
                             session_id, dialogue_id, len(user_input), len(agent_response))
         except sqlite3.Error as exc:
@@ -335,7 +370,7 @@ class LocalSessionProvider(SessionProvider):
             rows = conn.execute(
                 "SELECT user_input, agent_response, agent_name, artifacts, images, dialogue_id, created_at"
                 " FROM dialogue_rounds WHERE session_id=?"
-                " ORDER BY created_at ASC LIMIT ?",
+                " ORDER BY created_at ASC, id ASC LIMIT ?",
                 (session_id, row_cap),
             ).fetchall()
         messages: list[dict[str, Any]] = []
@@ -380,7 +415,7 @@ class LocalSessionProvider(SessionProvider):
             rows = conn.execute(
                 "SELECT user_input, agent_response, dialogue_id, created_at"
                 " FROM dialogue_rounds WHERE session_id=?"
-                " ORDER BY created_at DESC LIMIT ?",
+                " ORDER BY created_at DESC, id DESC LIMIT ?",
                 (session_id, limit_rounds),
             ).fetchall()
         # Reverse to oldest-first for the LLM input.
@@ -400,31 +435,45 @@ class LocalSessionProvider(SessionProvider):
     async def save_trace(
         self, session_id: str,
         dialogue_id: str, trace_type: str, trace_data: dict,
-    ) -> None:
+    ) -> bool:
         now = _now_iso()
         save_start = time.time()
+        trace_json = json.dumps(
+            trace_data, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+        )
         try:
             with self._connect() as conn:
-                conn.execute(
-                    "INSERT INTO traces (session_id, dialogue_id, trace_type, trace_data, created_at)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    (session_id, dialogue_id, trace_type, json.dumps(trace_data, ensure_ascii=False), now),
-                )
+                conn.execute("BEGIN IMMEDIATE")
+                existing = conn.execute(
+                    "SELECT 1 FROM traces WHERE session_id=? AND dialogue_id=?"
+                    " AND trace_type=? AND trace_data=? LIMIT 1",
+                    (session_id, dialogue_id, trace_type, trace_json),
+                ).fetchone()
+                if existing is None:
+                    conn.execute(
+                        "INSERT INTO traces (session_id, dialogue_id, trace_type, trace_data, created_at)"
+                        " VALUES (?, ?, ?, ?, ?)",
+                        (session_id, dialogue_id, trace_type, trace_json, now),
+                    )
+                conn.commit()
             logger.info(
                 "local_provider.save_trace_ok id=%s dialogue=%s type=%s call_id=%s",
                 session_id, dialogue_id, trace_type,
                 trace_data.get("call_id", "?"),
             )
+            return True
         except sqlite3.Error as exc:
             # I-5: trace persistence is non-critical — log and continue.
             logger.warning(
                 "local_provider.save_trace_failed id=%s dialogue=%s: %s",
                 session_id, dialogue_id, exc,
             )
-        logger.info(
-            "persist.save_trace id=%s dialogue=%s elapsed=%.3fs",
-            session_id, dialogue_id, time.time() - save_start,
-        )
+            return False
+        finally:
+            logger.info(
+                "persist.save_trace id=%s dialogue=%s elapsed=%.3fs",
+                session_id, dialogue_id, time.time() - save_start,
+            )
 
     async def get_traces(
         self, session_id: str, dialogue_id: str = "",

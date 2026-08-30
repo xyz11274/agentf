@@ -47,6 +47,7 @@ _WS_DIRS = (
 def _collect_context() -> dict:
     """确定性只读收集用户上下文（不含天气）。失败降级返回最小上下文（不阻断）。"""
     try:
+        from agentflow_runtime.common.runtime_context import artifact_routing_id
         from agentflow_runtime.executors.factory import create_executor
 
         executor = create_executor(
@@ -91,7 +92,8 @@ def _collect_context() -> dict:
         uid = os.environ.get("AF_USER_ID", "")
         cid = os.environ.get("AF_CLIENT_ID", "")
         if agent_pkg and uid and cid:
-            workdir = f"{agent_pkg}/workspace/{uid}_{cid}"
+            routing_id = artifact_routing_id(uid, cid)
+            workdir = f"{agent_pkg}/workspace/{routing_id}"
         else:
             workdir = os.environ.get("AF_WORKDIR", "") or "."
         tree: dict = {"workdir": workdir}

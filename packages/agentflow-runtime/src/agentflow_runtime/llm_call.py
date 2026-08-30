@@ -10,8 +10,8 @@ Responsibilities (after the responsibility split, see
   * token estimation & message compaction live in
     ``agentflow_runtime.compaction``
 
-HTTP transport: requests library (verify=False bypasses miniconda Python
-SSL cert issues, matching the old curl -k behavior).
+HTTP transport: requests with certificate verification, no ambient proxy,
+and no credential-bearing redirect.
 
 No mock mode — always calls the real LLM. For offline testing, point
 base_url at a local stub server.

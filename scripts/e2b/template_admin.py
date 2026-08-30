@@ -41,7 +41,7 @@ ROOT = Path(__file__).resolve().parents[2]
 _DEFAULT_CONFIG = ROOT / "configs" / "test" / "agentflowd.json"
 _LOG_DIR = ROOT / "logs" / "tests"
 _DEFAULT_API_URL = "http://218.245.96.148:30030"
-_DEFAULT_API_KEY = "e2b_000000000"
+_DEFAULT_API_KEY = ""
 _CA_CERT_PATH = str(ROOT / "resource" / "certs" / "e2b_CA.pem")
 _DEFAULT_SERVER = ROOT / "docker" / "sandbox" / "http_server" / "sandbox_http_server.py"
 # 内部部署 path-based 反向代理（cubeproxy），SDK 默认 hostname 路由不可达
@@ -93,20 +93,10 @@ def _setup_env(cfg: dict) -> None:
 
 
 def _apply_ssl_patch() -> None:
-    """SSL check_hostname=False + CERT_NONE（幂等，自建部署自签名证书）。"""
-    import ssl as _ssl
-    if getattr(_ssl, "_agentflow_patched", False):
-        return
-    _orig = _ssl.create_default_context
+    """Install the chain-verifying, envd-only TLS transport patch."""
+    from agentflow_runtime.common.sandbox_patch import apply_ssl_patch
 
-    def _patched(*a, **kw):
-        ctx = _orig(*a, **kw)
-        ctx.check_hostname = False
-        ctx.verify_mode = _ssl.CERT_NONE
-        return ctx
-
-    _ssl.create_default_context = _patched
-    _ssl._agentflow_patched = True  # type: ignore[attr-defined]
+    apply_ssl_patch()
 
 
 def _patch_envd_url(sb) -> list:

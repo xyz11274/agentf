@@ -62,7 +62,7 @@ import urllib.request
 # 不 import 框架 nodes/，守 SKILL.md "Zero pip dependencies" 约束）
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-ssl._create_default_https_context = ssl._create_unverified_context
+# TLS verification uses system CAs; set SSL_CERT_FILE for private CAs.
 ENDPOINT = os.environ.get("OUTFIT_VISION_ENDPOINT") or "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 DEFAULT_MODEL = "qwen-vl-max"
 AISF_PREFIX = "aisf/"  # 模型名带此前缀走 UDS，否则走 DashScope HTTP

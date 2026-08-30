@@ -4,7 +4,7 @@
 设计要点（对应 v1 代码结构，深度匹配）：
 - 15 类 Harness 事件，区分 dialogue 起止、Coordinator 激活、循环决策及各层动作对；
   第 16 类 client.delivery 由 Bridge 在最终响应边界直接追加
-- 嵌套结构：session → skill(B 进程) → llm(每轮) → tool(LLM 返回 tool_calls 才出现)
+- 嵌套结构：dialogue → skill(B 进程) → llm(每轮) → tool(LLM 返回 tool_calls 才出现)
 - 工具只在 skill_executor 进程内（skill_executor.py:796-959，LLM 循环内）
 - 信息完整不冗余：
     * llm.request 保存 Harness 有效输入，llm.transport.request 保存实际序列化请求
@@ -14,15 +14,19 @@
 - 血缘：source_event_seqs 进程内引用 seq；跨进程配对优先使用 exec_skill_key / batch_id
 - Hook 观测异常由引擎隔离，不改变工具结果或业务控制流
 
-落盘：trace_output/sessionlogs/{dialogue_id}.jsonl，一行一事件；进程内锁配合
-POSIX flock 同步 append，并隔离进程中断留下的半行。
+落盘：trace_output/sessionlogs/by-user/{user_id}/{client_id}/
+{dialogue_id}.jsonl，一行一事件，不写平铺副本。
+进程内锁配合 POSIX flock 同步 append，并隔离进程中断留下的半行。
 """
 
+import hashlib
 import json
 import os
 import sys
 import threading
 import time
+
+from agentflow_runtime.security import redact_secrets
 
 try:
     import fcntl
@@ -32,11 +36,11 @@ except ImportError:  # pragma: no cover - harness runtime is POSIX
 # ── 配置 ──
 _ENABLED = os.environ.get("AF_SESSIONLOG_ENABLED", "0") == "1"
 _OUTPUT_ROOT = os.environ.get("AF_SESSIONLOG_DIR", "")
-_VERSION = 1
+_VERSION = 2
 
 HOOK_NAME = "sessionlog_recorder_v2"
 HOOK_EVENTS = [
-    "agent.dialogue.start",              # session.start（整个 dialogue 一次）
+    "agent.dialogue.start",              # dialogue.start（整个 dialogue 一次）
     "coordinator.trigger",                # coordinator.activation（每次 v1 激活）
     "coordinator.tool_loop_retry",        # loop.control（Coordinator 纠错）
     "skill_executor.trigger",            # skill.start（SKILL span 已开启后触发）
@@ -52,10 +56,11 @@ HOOK_EVENTS = [
     "skill_executor.before_tool_call",   # tool.call
     "skill_executor.tool_result",         # tool.result（最终有效结果）
     "artifact.storage_result",            # artifact.persist（内容身份 + 存储终态）
+    "evaluation.result",                 # evaluation.result（外部/离线评测）
     "coordinator.after_skill_dispatch",  # skill.dispatch
     "skill_executor.after_skill_complete",  # skill.end
-    "agent.dialogue.error",              # session.end（未处理异常）
-    "agent.dialogue.end",                # session.end
+    "agent.dialogue.error",              # dialogue.end（未处理异常）
+    "agent.dialogue.end",                # dialogue.end
 ]
 HOOK_ORDER = 100
 
@@ -74,12 +79,19 @@ _last_tool_call_ts = None         # 最近一次 tool.call 的 ts（tool.result 
 _last_tool_result_seq = None      # 最近一次 tool.result 的 seq（artifact.persist 血缘）
 _last_skill_start_seq = None      # 最近一次 skill.start 的 seq（skill.end 血缘）
 _last_skill_start_span = None     # 最近一次 skill.start 的 span_id（skill 内 llm 的 parent）
-_last_session_end_source = None   # session.end 血缘
+_last_dialogue_end_source = None  # dialogue.end 血缘
 _last_coordinator_activation_seq = None  # 当前 Coordinator 激活（batch.result 血缘）
 
 # ── DataBus 连接（复用 recorder 同款底层客户端）──
 _databus = None
 _databus_lock = threading.Lock()
+
+
+def _stderr(message: object, **_ignored) -> None:
+    """Write diagnostics without turning stderr into a credential sink."""
+    safe_message, _redaction = redact_secrets(str(message))
+    sys.stderr.write(f"{safe_message}\n")
+    sys.stderr.flush()
 
 
 def _get_databus():
@@ -95,7 +107,7 @@ def _get_databus():
                 return None
             _databus = RealDataBusClient(uds, session_id=sid, timeout_seconds=10.0)
         except Exception as exc:
-            print(f"[sessionlog] databus init failed: {exc}", file=sys.stderr, flush=True)
+            _stderr(f"[sessionlog] databus init failed: {exc}", file=sys.stderr, flush=True)
             _databus = None
         return _databus
 
@@ -103,11 +115,13 @@ def _get_databus():
 # ── 落盘（同步 append，照 span_writer 模式）──
 _writer_lock = threading.Lock()
 _created_header = False
+_dialogue_paths: dict[str, str] = {}
 
 
 def _write_jsonl_line(path: str, line: str, *, only_if_empty: bool = False) -> bool:
     """Append one isolated JSONL record under a process-shared file lock."""
-    record = (line + "\n").encode("utf-8")
+    safe_line, _redaction = redact_secrets(line)
+    record = (safe_line + "\n").encode("utf-8")
     with _writer_lock:
         with open(path, "a+b", buffering=0) as f:
             if fcntl is not None:
@@ -142,32 +156,126 @@ def _output_dir() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "trace_output", "sessionlogs")
 
 
-def _write_header(dialogue_id: str, session_id: str) -> None:
-    """头行：version + 会话身份（借鉴 DSH HeaderLine）。"""
+def _header_agent(payload: dict) -> str:
+    """解析 Agent 身份，不依赖 C++ 额外注入环境变量。"""
+    agent = str(payload.get("agent", "") or "").strip()
+    if agent:
+        return agent
+
+    agent_dir = os.environ.get("AF_AGENT_PACKAGE_DIR", "").strip()
+    if agent_dir:
+        return os.path.basename(os.path.normpath(agent_dir)) or "unknown"
+
+    # 已挂载 Hook 位于 <agent-package>/harness/hooks/sessionlog_hook.py。
+    hook_dir = os.path.dirname(os.path.abspath(__file__))
+    harness_dir = os.path.dirname(hook_dir)
+    if os.path.basename(hook_dir) == "hooks" and os.path.basename(harness_dir) == "harness":
+        return os.path.basename(os.path.dirname(harness_dir)) or "unknown"
+    return "unknown"
+
+
+def _safe_path_component(value: str, fallback: str) -> str:
+    """生成可读且不可路径穿越的目录分量。"""
+    original = str(value or "")
+    if not original:
+        return fallback
+    safe_value, _redaction = redact_secrets(original)
+    component = "".join(
+        char if char.isalnum() or char in "-_." else "_"
+        for char in safe_value
+    ).strip(".")
+    changed = component != safe_value or len(component) > 48
+    component = component[:48] or fallback
+    if changed:
+        digest = hashlib.sha256(safe_value.encode("utf-8")).hexdigest()[:12]
+        component = f"{component}-{digest}"
+    return component
+
+
+def _trajectory_meta(value):
+    """复制 Recorder meta，并移除仅属于运行时槽位的身份字段。"""
+    if isinstance(value, dict):
+        return {
+            key: _trajectory_meta(item)
+            for key, item in value.items()
+            if key not in {"session_id", "session_slot_id"}
+        }
+    if isinstance(value, list):
+        return [_trajectory_meta(item) for item in value]
+    return value
+
+
+def _trajectory_identity(payload: dict | None = None) -> tuple[str, str, str, str]:
+    """返回 User/Client/Agent/Conversation 采集身份。
+
+    前端和 Bridge 把 client_id 当作逻辑会话标识，因此采集层的
+    conversation_id 直接使用同一原始值，不再派生第二个身份。
+    """
+    payload = payload or {}
+    user_id = str(payload.get("user_id") or os.environ.get("AF_USER_ID", ""))
+    client_id = str(payload.get("client_id") or os.environ.get("AF_CLIENT_ID", ""))
+    agent = _header_agent(payload)
+    return user_id, client_id, agent, client_id
+
+
+def _trajectory_path(dialogue_id: str, user_id: str, conversation_id: str) -> str:
+    """返回唯一的 User/Conversation/Dialogue 实体文件路径。"""
+    return os.path.join(
+        _output_dir(),
+        "by-user",
+        _safe_path_component(user_id, "unknown-user"),
+        _safe_path_component(conversation_id, "unknown-conversation"),
+        f"{_safe_path_component(dialogue_id, 'unknown-dialogue')}.jsonl",
+    )
+
+
+def _write_header(dialogue_id: str, payload: dict | None = None) -> None:
+    """头行：version + User/Conversation/Dialogue 身份。"""
     global _created_header
     if _created_header or not dialogue_id:
         return
-    d = _output_dir()
+    payload = payload or {}
+    user_id, client_id, agent, conversation_id = _trajectory_identity(payload)
+    code_dirty = payload.get("code_dirty", os.environ.get("AF_CODE_DIRTY", ""))
+    if not isinstance(code_dirty, bool):
+        code_dirty = str(code_dirty).strip().lower() in {"1", "true", "yes"}
+
     try:
-        os.makedirs(d, exist_ok=True)
-        path = os.path.join(d, f"{dialogue_id}.jsonl")
+        path = _trajectory_path(dialogue_id, user_id, conversation_id)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         header = {
-            "type": "session.header",
+            "type": "dialogue.header",
             "version": _VERSION,
             "dialogue_id": dialogue_id,
-            "session_id": session_id,
+            "conversation_id": conversation_id,
+            "user_id": user_id,
+            "client_id": client_id,
             "created_at": int(time.time() * 1000),
-            "agent": os.environ.get("AF_AGENT_PACKAGE_DIR", "").split("/")[-1] or "unknown",
-            "model": os.environ.get("AF_LLM_MODEL", ""),
+            "agent": agent,
+            "model": payload.get("model") or os.environ.get("AF_LLM_MODEL", ""),
+            "code_revision": (
+                payload.get("code_revision")
+                or os.environ.get("AF_CODE_REVISION")
+                or os.environ.get("GIT_COMMIT", "")
+            ),
+            "code_dirty": code_dirty,
+            "code_diff_sha256": (
+                payload.get("code_diff_sha256")
+                or os.environ.get("AF_CODE_DIFF_SHA256", "")
+            ),
+            "agent_definition_sha256": payload.get("agent_definition_sha256", ""),
         }
+        header, redaction = redact_secrets(header)
+        header["redaction"] = redaction.to_dict()
         _write_jsonl_line(
             path,
             json.dumps(header, ensure_ascii=False, separators=(",", ":")),
             only_if_empty=True,
         )
+        _dialogue_paths[dialogue_id] = path
         _created_header = True
     except Exception as exc:
-        print(f"[sessionlog] header failed: {exc}", file=sys.stderr, flush=True)
+        _stderr(f"[sessionlog] header failed: {exc}", file=sys.stderr, flush=True)
 
 
 def _trace_id() -> str:
@@ -217,13 +325,12 @@ def _append(dialogue_id: str, event_type: str, data: dict,
         "trace_id": trace_id,
         "run_id": dialogue_id,
         "dialogue_id": dialogue_id,
-        "session_id": os.environ.get("AF_SESSION_ID", ""),
         "task_id": os.environ.get("AF_SELF_TASK_ID", ""),
         "node_id": os.environ.get("AF_NODE_ID", ""),
         "primary_parent_event_id": source_event_ids[0] if source_event_ids else "",
         "causal_parent_event_ids": source_event_ids,
         "attributes": {},
-        "redaction": {"applied": False, "policy": "none"},
+        "redaction": {},
     }
     if round_i is not None:
         env["round"] = round_i
@@ -235,15 +342,21 @@ def _append(dialogue_id: str, event_type: str, data: dict,
         env["source_event_seqs"] = source_event_seqs
         env["source_event_ids"] = source_event_ids
     env["data"] = data
+    env, redaction = redact_secrets(env)
+    env["redaction"] = redaction.to_dict()
     if not dialogue_id:
         return seq
     try:
-        os.makedirs(_output_dir(), exist_ok=True)
-        path = os.path.join(_output_dir(), f"{dialogue_id}.jsonl")
+        path = _dialogue_paths.get(dialogue_id)
+        if not path:
+            user_id, _client_id, _agent, conversation_id = _trajectory_identity()
+            path = _trajectory_path(dialogue_id, user_id, conversation_id)
+            _dialogue_paths[dialogue_id] = path
+        os.makedirs(os.path.dirname(path), exist_ok=True)
         line = json.dumps(env, ensure_ascii=False, separators=(",", ":"))
         _write_jsonl_line(path, line)
     except Exception as exc:
-        print(f"[sessionlog] append failed: {exc}", file=sys.stderr, flush=True)
+        _stderr(f"[sessionlog] append failed: {exc}", file=sys.stderr, flush=True)
     return seq
 
 
@@ -274,7 +387,7 @@ def _latest_call_id(dialogue_id: str):
         if isinstance(idx, list) and idx:
             return idx[-1]
     except Exception as exc:
-        print(f"[sessionlog] read index failed: {exc}", file=sys.stderr, flush=True)
+        _stderr(f"[sessionlog] read index failed: {exc}", file=sys.stderr, flush=True)
     return None
 
 
@@ -300,7 +413,7 @@ def _read_llm_call(call_id: str) -> dict:
             except Exception:
                 pass
     except Exception as exc:
-        print(f"[sessionlog] read llm/traces failed: {exc}", file=sys.stderr, flush=True)
+        _stderr(f"[sessionlog] read llm/traces failed: {exc}", file=sys.stderr, flush=True)
     return out
 
 
@@ -311,7 +424,7 @@ def handle(event, ctx) -> None:
     global _last_skill_start_seq, _last_skill_start_span
     global _last_llm_request_seq
     global _last_llm_response_seq, _last_llm_response_span
-    global _last_llm_response_call, _last_session_end_source
+    global _last_llm_response_call, _last_dialogue_end_source
     global _last_tool_call_seq, _last_tool_call_ts
     global _last_tool_result_seq
 
@@ -324,14 +437,19 @@ def handle(event, ctx) -> None:
     if not dialogue_id:
         return
 
-    # ── session.start：整个 dialogue 只出现一次 ──
+    # ── dialogue.start：整个 dialogue 只出现一次 ──
     if name == "agent.dialogue.start":
-        _write_header(dialogue_id, os.environ.get("AF_SESSION_ID", ""))
-        _append(dialogue_id, "session.start", {
+        _write_header(dialogue_id, payload)
+        _append(dialogue_id, "dialogue.start", {
             "input": payload.get("input", ""),
             "trigger_type": payload.get("trigger_type", ""),
             "coordinator_version": payload.get("coordinator_version", ""),
             "code_revision": payload.get("code_revision", ""),
+            "code_dirty": (
+                str(os.environ.get("AF_CODE_DIRTY", "")).lower()
+                in {"1", "true", "yes"}
+            ),
+            "code_diff_sha256": os.environ.get("AF_CODE_DIFF_SHA256", ""),
             "agent_definition_sha256": payload.get("agent_definition_sha256", ""),
             "model": payload.get("model", ""),
             "max_iterations": payload.get("max_iterations"),
@@ -341,7 +459,7 @@ def handle(event, ctx) -> None:
 
     # ── coordinator.activation：每次事件驱动的 Coordinator 执行 ──
     if name == "coordinator.trigger":
-        _write_header(dialogue_id, os.environ.get("AF_SESSION_ID", ""))
+        _write_header(dialogue_id, payload)
         completed_batch_key = payload.get("completed_batch_key", "")
         batch_id = (
             completed_batch_key.removeprefix("completion_batch:")
@@ -365,13 +483,30 @@ def handle(event, ctx) -> None:
 
     # ── batch.result：框架 ALL-join 的完整终态（含未进入 Python 的失败分支）──
     if name == "coordinator.batch_result":
+        raw_status = str(payload.get("status", "")).strip().lower()
+        results = payload.get("results", [])
+        workflow_outcomes = (
+            [result.get("workflow_success") for result in results
+             if isinstance(result, dict)]
+            if isinstance(results, list) else []
+        )
+        if (workflow_outcomes
+                and len(workflow_outcomes) == len(results)
+                and all(isinstance(value, bool) for value in workflow_outcomes)):
+            workflow_status = (
+                "completed" if all(workflow_outcomes)
+                else ("partial" if any(workflow_outcomes) else "failed")
+            )
+        else:
+            workflow_status = "unknown"
         _append(dialogue_id, "batch.result", {
             "completed_batch_key": payload.get("completed_batch_key", ""),
             "batch_id": payload.get("batch_id", ""),
-            "status": payload.get("status", ""),
+            "status": raw_status,
+            "workflow_status": workflow_status,
             "successful_count": payload.get("successful_count", 0),
             "total_count": payload.get("total_count", 0),
-            "results": payload.get("results", []),
+            "results": results,
         }, source_event_seqs=(
             [_last_coordinator_activation_seq]
             if _last_coordinator_activation_seq else []
@@ -491,6 +626,7 @@ def handle(event, ctx) -> None:
         meta = payload.get("meta")
         if not isinstance(meta, dict):
             meta = {}
+        meta = _trajectory_meta(meta)
         prior_request_seq = _last_llm_request_seq
         span_id = _current_span_id()
         task_type = meta.get("task_type", "")
@@ -528,6 +664,7 @@ def handle(event, ctx) -> None:
         meta = llm.get("meta")
         if not isinstance(meta, dict):
             meta = {}
+        meta = _trajectory_meta(meta)
         task_type = meta.get("task_type", "")
         span_id = _current_span_id()
         _last_llm_response_seq = _append(dialogue_id, "llm.response", {
@@ -560,7 +697,44 @@ def handle(event, ctx) -> None:
            round_i=payload.get("round"))
         _last_llm_response_span = span_id
         _last_llm_response_call = call_id
-        _last_session_end_source = _last_llm_response_seq
+        _last_dialogue_end_source = _last_llm_response_seq
+        choices = (
+            response.get("choices") if isinstance(response, dict) else []
+        )
+        first_choice = (
+            choices[0] if isinstance(choices, list) and choices
+            and isinstance(choices[0], dict) else {}
+        )
+        message = first_choice.get("message")
+        if not isinstance(message, dict):
+            message = {}
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            tool_calls = []
+        tool_names = [
+            str(call.get("function", {}).get("name") or "")
+            for call in tool_calls
+            if isinstance(call, dict)
+            and isinstance(call.get("function"), dict)
+        ]
+        loop_scope = (
+            "skill" if name.startswith("skill_executor")
+            else "coordinator"
+        )
+        _append(dialogue_id, "loop.control", {
+            "scope": loop_scope,
+            "source_event_name": name,
+            "decision_stage": "llm_response",
+            "action": "continue" if tool_calls else "stop",
+            "reason": "tool_calls_requested" if tool_calls else "final_response",
+            "round": payload.get("round"),
+            "finish_reason": first_choice.get("finish_reason", ""),
+            "tool_call_count": len(tool_calls),
+            "tool_names": tool_names,
+            "skill_name": payload.get("skill_name", "") or meta.get("skill_name", ""),
+        }, parent_span_id=span_id,
+           source_event_seqs=[_last_llm_response_seq],
+           round_i=payload.get("round"))
         return
 
     # ── tool.call（BEFORE_TOOL_CALL：skill 内、本轮 llm.response 之后）──
@@ -602,7 +776,7 @@ def handle(event, ctx) -> None:
             "exec_skill_key": payload.get("exec_skill_key", ""),
             "batch_id": os.environ.get("AF_BATCH_ID", ""),
             "agent_name": payload.get("agent_name", ""),
-            "artifact_session_id": payload.get("artifact_session_id", ""),
+            "artifact_routing_id": payload.get("artifact_session_id", ""),
             "attempted_count": payload.get("attempted_count", 0),
             "uploaded_count": payload.get("uploaded_count", 0),
             "returned_artifact_ids": payload.get("returned_artifact_ids", []),
@@ -646,26 +820,26 @@ def handle(event, ctx) -> None:
                         read_tries.append(f"global next_skills -> {raw!r}"[:120])
                     except Exception as e:
                         read_tries.append(f"global ERR {e}"[:120])
-                print(f"[sessionlog] next_skills reads: {'; '.join(read_tries)}", file=sys.stderr, flush=True)
+                _stderr(f"[sessionlog] next_skills reads: {'; '.join(read_tries)}", file=sys.stderr, flush=True)
                 if isinstance(raw, bytes):
                     raw = raw.decode("utf-8", errors="replace")
                 if isinstance(raw, str) and raw:
-                    print(f"[sessionlog] next_skills raw type={type(raw).__name__} len={len(raw)} repr={raw[:300]!r}", file=sys.stderr, flush=True)
+                    _stderr(f"[sessionlog] next_skills raw type={type(raw).__name__} len={len(raw)} repr={raw[:300]!r}", file=sys.stderr, flush=True)
                     import json as _json
                     try:
                         raw = _json.loads(raw)
                     except Exception as e:
-                        print(f"[sessionlog] next_skills JSON parse failed: {e}", file=sys.stderr, flush=True)
+                        _stderr(f"[sessionlog] next_skills JSON parse failed: {e}", file=sys.stderr, flush=True)
                 # raw 可能是 list（UDS 已反序列化）或 dict
                 if isinstance(raw, list):
                     exec_keys = [s.get("exec_skill_key", "") for s in raw if isinstance(s, dict)]
                 elif isinstance(raw, dict):
                     exec_keys = [raw.get("exec_skill_key", "")] if raw.get("exec_skill_key") else []
                 else:
-                    print(f"[sessionlog] next_skills raw type={type(raw).__name__}", file=sys.stderr, flush=True)
+                    _stderr(f"[sessionlog] next_skills raw type={type(raw).__name__}", file=sys.stderr, flush=True)
         except Exception as exc:
-            print(f"[sessionlog] read next_skills failed: {exc}", file=sys.stderr, flush=True)
-        print(f"[sessionlog] dispatch exec_keys={exec_keys}", file=sys.stderr, flush=True)
+            _stderr(f"[sessionlog] read next_skills failed: {exc}", file=sys.stderr, flush=True)
+        _stderr(f"[sessionlog] dispatch exec_keys={exec_keys}", file=sys.stderr, flush=True)
         _append(dialogue_id, "skill.dispatch", {
             "status": status,
             "requested_skill_names": (
@@ -701,22 +875,34 @@ def handle(event, ctx) -> None:
            round_i=payload.get("round"))
         return
 
-    # ── session.end（Coordinator 未处理异常；业务异常仍由框架接管）──
+    # ── evaluation.result（外部/离线评测器显式触发，不影响业务）──
+    if name == "evaluation.result":
+        evaluation = dict(payload)
+        evaluation.pop("dialogue_id", None)
+        source_seq = _last_tool_result_seq or _last_llm_response_seq
+        _append(
+            dialogue_id, "evaluation.result", evaluation,
+            source_event_seqs=[source_seq] if source_seq else [],
+            round_i=payload.get("round"),
+        )
+        return
+
+    # ── dialogue.end（Coordinator 未处理异常；业务异常仍由框架接管）──
     if name == "agent.dialogue.error":
-        _append(dialogue_id, "session.end", {
+        _append(dialogue_id, "dialogue.end", {
             "status": payload.get("status", "unhandled_exception"),
             "response_text": "",
             "error_type": payload.get("error_type", ""),
             "error": payload.get("error", ""),
             "elapsed_s": payload.get("elapsed_s"),
             "terminal_source": name,
-        }, source_event_seqs=[_last_session_end_source] if _last_session_end_source else [])
+        }, source_event_seqs=[_last_dialogue_end_source] if _last_dialogue_end_source else [])
         return
 
-    # ── session.end ──
+    # ── dialogue.end ──
     if name == "agent.dialogue.end":
-        _append(dialogue_id, "session.end", {
+        _append(dialogue_id, "dialogue.end", {
             "status": payload.get("status", ""),
             "response_text": payload.get("response_text", ""),
-        }, source_event_seqs=[_last_session_end_source] if _last_session_end_source else [])
+        }, source_event_seqs=[_last_dialogue_end_source] if _last_dialogue_end_source else [])
         return

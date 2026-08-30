@@ -355,7 +355,14 @@ class DaemonClient:
         if stream:
             params["stream"] = True
         try:
-            return await self.send_request("agent.execute", params)
+            # The daemon logs agent.execute payloads at several lifecycle
+            # points. Sanitize once at this shared Bridge boundary so REST,
+            # WebSocket and direct callers cannot put credentials in its logs.
+            from services.secret_safety import sanitize_for_storage
+            safe_params, _redaction = sanitize_for_storage(params)
+            if not isinstance(safe_params, dict):
+                raise TypeError("sanitized agent.execute params must be a mapping")
+            return await self.send_request("agent.execute", safe_params)
         except Exception:
             response_key = dialogue_id or session_id
             if response_key:
@@ -618,11 +625,13 @@ class DaemonClient:
             return cls(full_message, code=None)
 
     def _fail_all_pending(self, exc: BaseException) -> None:
-        """Fail every in-flight request with ``exc``."""
+        """Fail every in-flight request and response waiter with ``exc``."""
         for future in self._pending.values():
             if not future.done():
                 future.set_exception(exc)
         self._pending.clear()
+        for queue in self._response_queues.values():
+            queue.put_nowait({"__daemon_error__": exc})
 
 
 __all__ = [

@@ -47,47 +47,31 @@ except ImportError:
     print("[e2b_sync] ERROR: e2b_code_interpreter not installed", file=sys.stderr)
     sys.exit(1)
 
-# 共用 sandbox_patch（Phase 4：从 agentflow-runtime 导入，fallback 到本地定义）
-try:
-    from agentflow_runtime.common.sandbox_patch import (
-        apply_ssl_patch as _apply_ssl_patch,
-        patch_envd_url as _patch_envd_url,
-    )
-    _apply_ssl_patch()  # module-level SSL patch（与原 inline 行为一致）
-except ImportError:
-    # daemon 环境可能未安装 agentflow-runtime，fallback 到本地定义
-    import ssl as _ssl
+# Security primitives are mandatory: never fall back to process-wide TLS bypass.
+from agentflow_runtime.common.sandbox_patch import (
+    apply_ssl_patch as _apply_ssl_patch,
+    patch_envd_url as _patch_envd_url,
+)
 
-    if not getattr(_ssl, "_agentflow_patched", False):
-        _orig_ssl_ctx = _ssl.create_default_context
+_apply_ssl_patch()
 
-        def _patched_ssl_ctx(*args, **kwargs):
-            ctx = _orig_ssl_ctx(*args, **kwargs)
-            ctx.check_hostname = False
-            ctx.verify_mode = _ssl.CERT_NONE
-            return ctx
-
-        _ssl.create_default_context = _patched_ssl_ctx
-        _ssl._agentflow_patched = True  # type: ignore[attr-defined]
-
-    def _patch_envd_url(sb) -> None:
-        """[fallback] 将 envd_api_url 从 hostname 路由改为 path-based 路由。
-
-        权威实现见 ``agentflow_runtime.common.sandbox_patch.patch_envd_url``。
-        """
-        path = f"https://218.245.96.148:443/sandbox/{sb.sandbox_id}/49983"
-        sb._SandboxBase__envd_api_url = path
-        sb._envd_api_url = path
-        for attr in ("_filesystem", "_commands", "_pty"):
-            mod = getattr(sb, attr, None)
-            if mod and hasattr(mod, "_envd_api_url"):
-                mod._envd_api_url = path
+from agentflow_runtime.security import (
+    find_registered_secret_exposures as _find_registered_secret_exposures,
+    redact_secrets as _redact_secrets,
+    register_environment_secrets as _register_environment_secrets,
+    register_secret as _register_secret,
+)
 
 
 # ── 工具函数 ──────────────────────────────────────────────────────────
 
 def _log(msg: str) -> None:
-    print(f"[e2b_sync] {msg}", file=sys.stderr, flush=True)
+    safe_msg, _report = _redact_secrets(str(msg))
+    print(f"[e2b_sync] {safe_msg}", file=sys.stderr, flush=True)
+
+
+def _log_traceback() -> None:
+    _log(traceback.format_exc())
 
 
 def _check_api_key() -> str:
@@ -114,13 +98,22 @@ def _connect_sandbox(sandbox_id: str) -> "Sandbox":
 # 不同步到沙箱的缓存/构建产物目录与文件后缀
 _CACHE_DIRS = {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".git"}
 _CACHE_SUFFIXES = {".pyc", ".pyo", ".pyc", ".ds_store"}
+_CREDENTIAL_FILES = {
+    ".env", ".mcp.json", ".netrc", ".npmrc", ".pypirc",
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+}
+_CREDENTIAL_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".jks", ".keystore"}
 
 
 def _should_exclude(rel_path: Path) -> bool:
+    basename = rel_path.name.lower()
+    if (basename in _CREDENTIAL_FILES or basename.startswith(".env.")
+            or rel_path.suffix.lower() in _CREDENTIAL_SUFFIXES):
+        return True
     if rel_path.suffix.lower() in _CACHE_SUFFIXES:
         return True
     for part in rel_path.parts:
-        if part in _CACHE_DIRS:
+        if part.lower() in _CACHE_DIRS:
             return True
         # 宿主侧本地 venv（.venv / .venv_unix / .venv_windows 等）是平台绑定的
         # 开发产物，上传到沙箱（Linux）无用且体积巨大（如 41MB），一律排除。
@@ -136,6 +129,41 @@ def _walk_local_files(local_root: Path):
             rel = path.relative_to(local_root)
             if not _should_exclude(rel):
                 yield rel, path
+
+
+def _register_local_package_secrets(local_root: Path) -> None:
+    """Register package credentials for content scanning without exporting them."""
+    if _register_secret is None or _register_environment_secrets is None:
+        return
+    _register_environment_secrets()
+    candidates = [local_root / ".env", *sorted(local_root.glob(".env.*"))]
+    for env_path in candidates:
+        if not env_path.is_file() or env_path.is_symlink():
+            continue
+        try:
+            lines = env_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped.startswith("export "):
+                stripped = stripped[7:].lstrip()
+            name, separator, value = stripped.partition("=")
+            if not separator or not name.strip():
+                continue
+            value = value.strip()
+            if (len(value) >= 2 and value[0] == value[-1]
+                    and value[0] in {"'", '"'}):
+                value = value[1:-1]
+            _register_secret(f"package_env.{name.strip()}", value)
+
+
+def _content_has_registered_secret(content: bytes) -> bool:
+    if _find_registered_secret_exposures is None:
+        return False
+    return _find_registered_secret_exposures(content).applied
 
 
 def _load_manifest_whitelist(manifest_path: str, local_root: Path) -> set[str] | None:
@@ -229,6 +257,7 @@ def upload(sandbox_id: str, local_dir: str, remote_dir: str, manifest_path: str 
         _log(f"ERROR: local-dir does not exist or is not a directory: {local_root}")
         sys.exit(1)
 
+    _register_local_package_secrets(local_root)
     sb = _connect_sandbox(sandbox_id)
 
     # 收集待上传文件：有 manifest 按白名单过滤，否则走 _CACHE_* 兜底
@@ -280,6 +309,10 @@ def upload(sandbox_id: str, local_dir: str, remote_dir: str, manifest_path: str 
         try:
             with open(abs_path, "rb") as f:
                 content = f.read()
+            if _content_has_registered_secret(content):
+                _log(f"SECURITY: skipped credential-bearing file: {rel_path.as_posix()}")
+                failed += 1
+                continue
             batch.append({"path": remote_path, "data": content})
 
             if len(batch) >= BATCH_SIZE:
@@ -447,7 +480,7 @@ def main() -> int:
         raise
     except Exception as e:
         _log(f"FATAL: unhandled exception: {e}")
-        traceback.print_exc(file=sys.stderr)
+        _log_traceback()
         return 1
 
 

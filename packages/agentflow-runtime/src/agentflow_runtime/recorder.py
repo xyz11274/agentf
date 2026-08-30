@@ -21,7 +21,13 @@ import sys
 import time
 import uuid
 
-import urllib3
+from agentflow_runtime.security import (
+    SecretStreamRedactor,
+    find_secret_exposures,
+    redact_secrets,
+    register_environment_secrets,
+    register_secret,
+)
 
 from agentflow_runtime.common.runtime_context import (
     batch_id as _batch_id,
@@ -34,9 +40,6 @@ from agentflow_runtime.common.runtime_context import (
     session_id as _session_id,
     skill_name as _skill_name,
 )
-
-# Suppress InsecureRequestWarning when verify=False (intentional, matches old curl -k)
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 _SDK_DIR = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -54,7 +57,8 @@ except ImportError:
 
 
 def _log_warn(msg: str) -> None:
-    print(f"[llm_call] WARN: {msg}", file=sys.stderr, flush=True)
+    safe_msg, _ = redact_secrets(str(msg))
+    print(f"[llm_call] WARN: {safe_msg}", file=sys.stderr, flush=True)
 
 
 # ── Task context (read once per call from framework-injected env vars) ──
@@ -195,7 +199,9 @@ class TraceRecorder:
                 return []
             if isinstance(raw, bytes):
                 raw = raw.decode("utf-8")
-            return json.loads(raw) if isinstance(raw, str) else raw
+            messages = json.loads(raw) if isinstance(raw, str) else raw
+            safe_messages, _ = redact_secrets(messages)
+            return safe_messages
         except Exception as exc:
             _log_warn(f"read_session_messages failed: {exc}")
             return []
@@ -204,7 +210,8 @@ class TraceRecorder:
         """Write the compatibility cache and a dialogue-scoped effective snapshot."""
         if not self._client:
             return False
-        payload = json.dumps(messages, ensure_ascii=False)
+        safe_messages, _ = redact_secrets(messages)
+        payload = json.dumps(safe_messages, ensure_ascii=False)
         try:
             namespace = self._client.llm()
         except Exception as exc:
@@ -268,6 +275,8 @@ class TraceRecorder:
         Returns OpenAI-compatible response dict, or
         ``{"error": ..., "_llm_error": true}`` on failure.
         """
+        register_environment_secrets()
+        register_secret("llm.api_key", api_key)
         stream_enabled = stream
         _log_warn(f"[STREAM_DEBUG] stream={stream} → stream_enabled={stream_enabled}")
         self._call_count += 1
@@ -315,6 +324,68 @@ class TraceRecorder:
             stream=stream_enabled,
             extra_body=extra_body,
         )
+        request_exposure = find_secret_exposures({
+            "request": request_body,
+            "request_url": _http_client.base_url,
+        })
+        if request_exposure.applied:
+            safe_request, _ = redact_secrets(request_body)
+            safe_url, _ = redact_secrets(_http_client.base_url)
+            blocked_response = {
+                "error": "LLM request blocked: secret material detected",
+                "status": "security_policy_blocked",
+                "_llm_error": True,
+            }
+            _emit_llm_request_prepared(
+                call_id,
+                safe_request,
+                ctx,
+                model=model,
+                request_url=safe_url,
+                stream=stream_enabled,
+                connect_timeout=connect_timeout,
+                request_timeout=timeout,
+            )
+            if self._client:
+                self._put(f"traces/{call_id}/request", safe_request)
+                self._put(f"traces/{call_id}/response", blocked_response)
+                blocked_meta = {
+                    "model": model,
+                    "latency_ms": int((time.time() - start_time) * 1000),
+                    "timestamp": timestamp,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "finish_reason": "security_policy_blocked",
+                    "msg_count": len(messages),
+                    "tools_enabled": bool(tools),
+                    "transport_attempts": 0,
+                    "retries_attempted": 0,
+                    "retries_used": 0,
+                    "retry_reasons": [],
+                    "http_status": None,
+                    "usage_source": "blocked",
+                    "estimator_version": "",
+                    "request_summary": self._summarize_messages(
+                        safe_request.get("messages", [])),
+                    "response_summary": "blocked by secret egress policy",
+                    "request_url": safe_url,
+                    "stream": stream_enabled,
+                    "connect_timeout_s": connect_timeout,
+                    "request_timeout_s": timeout,
+                    "security": request_exposure.to_dict(),
+                }
+                blocked_meta.update(ctx)
+                self._put(f"traces/{call_id}/meta", blocked_meta)
+                self._verify_meta_written(call_id)
+                self._append_to_index(call_id)
+            _log_warn(
+                f"[#{seq}] <<< {call_id} BLOCKED by secret egress policy "
+                f"node={ctx.get('node_id','?')}"
+            )
+            blocked_response["_agentflow_call_id"] = call_id
+            return blocked_response
+
         _emit_llm_request_prepared(
             call_id,
             request_body,
@@ -336,16 +407,42 @@ class TraceRecorder:
         # tokens to the websocket in near real-time.
         # See streaming-response.md §3.5 / §3.6 for the full contract.
         chunk_publisher = None
+        chunk_flusher = None
         if stream_enabled and source and self._client:
             # 所有 LLM 流式输出统一走 llm_chunk(原始 delta JSON,增量组装)——
             # skill_executor 与 coordinator 同通道,用 source 区分消费行为;
             # 不再把 skill 的 LLM 增量降级为 progress(会导致逐 token 碎片化)。
             _chunk_type = "llm_chunk"
             _push_client = self._client
+            _stream_redactor = SecretStreamRedactor()
+            _last_chunk: dict = {"parsed": None}
 
             # TTFT（首 token 延迟）统计：首个有效内容 chunk 到达时间 vs 请求开始。
             # 用可变容器避免 nonlocal 声明；失败不中断主流程（§3.7）。
             _ttft = {"logged": False}
+
+            def _push_delta(parsed: dict, delta_content: str) -> None:
+                if not delta_content:
+                    return
+                safe_parsed, _report = redact_secrets(copy.deepcopy(parsed))
+                source_choices = safe_parsed.get("choices", [])
+                choice_index = 0
+                if source_choices and isinstance(source_choices[0], dict):
+                    choice_index = source_choices[0].get("index", 0)
+                payload = {
+                    key: value for key, value in safe_parsed.items() if key != "choices"
+                }
+                payload["choices"] = [{
+                    "index": choice_index,
+                    "delta": {"content": delta_content},
+                    "finish_reason": None,
+                }]
+                kwargs: dict = {"type": _chunk_type, "source": source}
+                if skill:
+                    kwargs["skill"] = skill
+                if round_i:
+                    kwargs["round"] = str(round_i)
+                _push_client.response_push(json.dumps(payload, ensure_ascii=False), **kwargs)
 
             def _on_chunk(raw_json: str) -> None:
                 # 异常全部吞掉（守 §3.7：trace 路径失败不中断主流程）
@@ -377,34 +474,49 @@ class TraceRecorder:
                             f"call_id={call_id} node={ctx.get('node_id', '?')}",
                             file=sys.stderr, flush=True,
                         )
-                    content = raw_json  # llm_chunk: 原始 delta JSON，Bridge 透传
-
-                    kwargs: dict = {"type": _chunk_type, "source": source}
-                    if skill:
-                        kwargs["skill"] = skill
-                    if round_i:
-                        kwargs["round"] = str(round_i)
-                    # Guard: 空 content（如 delta 只含 role/tool_calls/finish_reason）跳过推送，
-                    # 避免 daemon 对空 content 返回 -32602 error 触发无意义异常
-                    if not content:
-                        return
-                    _push_client.response_push(content, **kwargs)
+                    _last_chunk["parsed"] = parsed
+                    released = _stream_redactor.feed(delta_content)
+                    _push_delta(parsed, released)
                 except Exception:
                     import traceback
+                    safe_traceback, _report = redact_secrets(traceback.format_exc())
                     print(
-                        f"[flow] WARN: chunk_publisher failed\n{traceback.format_exc()}",
+                        f"[flow] WARN: chunk_publisher failed\n{safe_traceback}",
+                        file=sys.stderr, flush=True,
+                    )
+
+            def _flush_chunks() -> None:
+                try:
+                    released = _stream_redactor.flush()
+                    if not released:
+                        return
+                    parsed = _last_chunk.get("parsed")
+                    if not isinstance(parsed, dict):
+                        parsed = {"choices": [{"index": 0, "delta": {}}]}
+                    _push_delta(parsed, released)
+                except Exception:
+                    import traceback
+                    safe_traceback, _report = redact_secrets(traceback.format_exc())
+                    print(
+                        f"[flow] WARN: chunk_flusher failed\n{safe_traceback}",
                         file=sys.stderr, flush=True,
                     )
 
             chunk_publisher = _on_chunk
+            chunk_flusher = _flush_chunks
 
-        response_data = _http_client.chat_completion(
-            messages, tools=tools,
-            max_completion_tokens=max_completion_tokens,
-            stream=stream_enabled,
-            on_chunk=chunk_publisher,
-            extra_body=extra_body,
-        )
+        try:
+            response_data = _http_client.chat_completion(
+                messages, tools=tools,
+                max_completion_tokens=max_completion_tokens,
+                stream=stream_enabled,
+                on_chunk=chunk_publisher,
+                extra_body=extra_body,
+            )
+        finally:
+            if chunk_flusher is not None:
+                chunk_flusher()
+        response_data, response_redaction = redact_secrets(response_data)
         # The transport owns retries. Read the number of HTTP attempts it
         # actually started instead of maintaining a disconnected outer counter.
         transport_attempts = max(0, int(getattr(_http_client, "last_attempts", 1)))
@@ -419,7 +531,7 @@ class TraceRecorder:
             getattr(_http_client, "last_usage_estimator_version", "") or "")
         # If the client returned an error, wrap it with _llm_error
         if response_data.get("_llm_error") or "error" in response_data:
-            last_error = response_data.get("error", "Unknown error")
+            last_error = str(response_data.get("error", "Unknown error"))
             latency_ms = int((time.time() - start_time) * 1000)
             if self._client:
                 provider_snapshot = copy.deepcopy(response_data)
@@ -448,6 +560,8 @@ class TraceRecorder:
                     "request_timeout_s": timeout,
                 }
                 error_meta.update(ctx)
+                if response_redaction.applied:
+                    error_meta["security"] = response_redaction.to_dict()
                 self._put(f"traces/{call_id}/meta", error_meta)
                 self._verify_meta_written(call_id)
                 self._append_to_index(call_id)
@@ -495,6 +609,8 @@ class TraceRecorder:
                 "request_timeout_s": timeout,
             }
             meta.update(ctx)
+            if response_redaction.applied:
+                meta["security"] = response_redaction.to_dict()
             self._put(f"traces/{call_id}/meta", meta)
             self._verify_meta_written(call_id)
             self._append_to_index(call_id)
@@ -527,6 +643,7 @@ class TraceRecorder:
                 for key, value in response.items()
                 if key != "_agentflow_call_id"
             })
+            clean_response, response_redaction = redact_secrets(clean_response)
         except Exception as exc:
             _log_warn(f"snapshot effective response failed: {exc}")
             return {}
@@ -570,6 +687,8 @@ class TraceRecorder:
                     if provider_response is not None
                     else None
                 )
+                if response_redaction.applied:
+                    meta["security"] = response_redaction.to_dict()
                 self._put(f"traces/{call_id}/meta", meta)
         except Exception as exc:
             _log_warn(f"record effective response failed for call_id={call_id}: {exc}")
@@ -581,7 +700,8 @@ class TraceRecorder:
         if not self._client:
             return
         try:
-            self._client.llm().put(key, value)
+            safe_value, _ = redact_secrets(value)
+            self._client.llm().put(key, safe_value)
         except Exception as exc:
             # Log diagnostic info for missing-params errors
             sid = self._client.session_id if self._client else "no-client"

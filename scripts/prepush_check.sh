@@ -15,9 +15,10 @@ unset _ENV_DIR _ENV
 
 #
 # 检查项：
-#   1. Python 语法
-#   2. vendor/SysAgent 头文件自包含性（缺少 include）
-#   3. 改动的 C++ 文件基本语法
+#   1. 已跟踪源码中的硬编码凭据
+#   2. Python 语法
+#   3. vendor/SysAgent 头文件自包含性（缺少 include）
+#   4. F7.1 外部调用落盘合规
 # ═══════════════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -46,7 +47,19 @@ echo ""
 
 QUICK="${1:-}"
 
-# ── 1. Python 语法 ──────────────────────────────────────────────────
+# ── 1. 硬编码凭据 ───────────────────────────────────────────────────
+echo "--- 凭据安全 ---"
+if [ -f "$PROJECT_ROOT/scripts/quality/scan_secrets.py" ]; then
+    check "工作区无硬编码凭据" python3 "$PROJECT_ROOT/scripts/quality/scan_secrets.py" --tracked
+    if ! git -C "$PROJECT_ROOT" diff --cached --quiet; then
+        check "暂存区无硬编码凭据" python3 "$PROJECT_ROOT/scripts/quality/scan_secrets.py" --staged
+    fi
+else
+    echo "  ❌ scan_secrets.py 不存在"
+    FAIL=$((FAIL + 1))
+fi
+
+# ── 2. Python 语法 ──────────────────────────────────────────────────
 echo "--- Python 语法 ---"
 PY_FILES=()
 if [ "$QUICK" = "--quick" ]; then
@@ -79,7 +92,7 @@ py_compile.compile('$f', doraise=True)
     done
 fi
 
-# ── 2. vendor/SysAgent 头文件自包含性 ──────────────────────────────
+# ── 3. vendor/SysAgent 头文件自包含性 ──────────────────────────────
 echo ""
 echo "--- vendor/SysAgent 头文件检查 ---"
 
@@ -151,7 +164,7 @@ else
     echo "  ⏭️  vendor/SysAgent 目录不存在"
 fi
 
-# ── 3. F7.1 外部调用落盘合规检查 ─────────────────────────────────
+# ── 4. F7.1 外部调用落盘合规检查 ─────────────────────────────────
 echo ""
 echo "--- F7.1 外部调用落盘合规检查 ---"
 

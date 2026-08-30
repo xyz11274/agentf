@@ -8,12 +8,18 @@ Phase 2: Bridge 自身作为存储中心（见 docs/design/features/sandbox/arti
 """
 
 import base64
+import hashlib
+import hmac
 import io
 import logging
+import os
 import re
+import secrets
+import threading
 from pathlib import Path
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from PIL import Image
 
@@ -44,6 +50,78 @@ _ARTIFACTS_STORAGE_DIR = Path(
     settings.artifacts_storage_dir or
     str(settings.agent_workspace_path.parent / "artifacts_storage")
 )
+_SIGNING_KEY_LOCK = threading.Lock()
+_SIGNING_KEY: bytes | None = None
+_SIGNING_KEY_FILE = _ARTIFACTS_STORAGE_DIR / ".signing_key"
+
+
+def _artifact_signing_key() -> bytes:
+    """Load one persistent Bridge-local key used for artifact capabilities."""
+    global _SIGNING_KEY
+    if _SIGNING_KEY is not None:
+        return _SIGNING_KEY
+    with _SIGNING_KEY_LOCK:
+        if _SIGNING_KEY is not None:
+            return _SIGNING_KEY
+        configured = os.environ.get("AF_ARTIFACT_SIGNING_KEY", "")
+        if configured:
+            _SIGNING_KEY = hashlib.sha256(configured.encode("utf-8")).digest()
+            return _SIGNING_KEY
+
+        _ARTIFACTS_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            raw = _SIGNING_KEY_FILE.read_bytes()
+        except FileNotFoundError:
+            raw = secrets.token_bytes(32)
+            try:
+                fd = os.open(
+                    _SIGNING_KEY_FILE,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+            except FileExistsError:
+                raw = _SIGNING_KEY_FILE.read_bytes()
+            else:
+                try:
+                    os.write(fd, raw)
+                finally:
+                    os.close(fd)
+        if len(raw) < 32:
+            raise RuntimeError("artifact signing key is invalid")
+        _SIGNING_KEY = hashlib.sha256(raw).digest()
+        return _SIGNING_KEY
+
+
+def _artifact_signature(artifact_id: str) -> str:
+    return hmac.new(
+        _artifact_signing_key(),
+        artifact_id.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _valid_artifact_signature(artifact_id: str, signature: str) -> bool:
+    return bool(signature) and hmac.compare_digest(
+        signature, _artifact_signature(artifact_id),
+    )
+
+
+def sign_artifact_url(url: str) -> str:
+    """Attach or replace the capability signature on one artifact URL."""
+    parsed = urlsplit(url)
+    marker = "/api/artifacts/"
+    if marker not in parsed.path:
+        return url
+    artifact_id = unquote(parsed.path.split(marker, 1)[1])
+    query = [(key, value) for key, value in parse_qsl(parsed.query) if key != "sig"]
+    query.append(("sig", _artifact_signature(artifact_id)))
+    return urlunsplit((
+        parsed.scheme,
+        parsed.netloc,
+        parsed.path,
+        urlencode(query),
+        parsed.fragment,
+    ))
 
 
 # ── 路径白名单（I-upload-traversal-block 第一、二层）────────────────────
@@ -243,17 +321,21 @@ async def upload_artifact(body: dict) -> dict:
 
 
 @router.get("/{agent_id}/files/{relative_path:path}")
-async def get_artifact_legacy(agent_id: str, relative_path: str) -> FileResponse:
+async def get_artifact_legacy(agent_id: str, relative_path: str, sig: str = "") -> FileResponse:
     """Legacy route: ``/api/artifacts/{agent_id}/files/{relative_path}``
 
     Maintained for backward compatibility.  Internally delegates to the
     artifact-ID resolution path.
     """
-    return await get_artifact_file(f"{agent_id}/{relative_path}")
+    legacy_id = f"{agent_id}/files/{relative_path}"
+    if not _valid_artifact_signature(legacy_id, sig):
+        raise HTTPException(status_code=403, detail="invalid artifact capability")
+    artifact_id = f"{agent_id}/{relative_path}"
+    return await get_artifact_file(artifact_id, sig=_artifact_signature(artifact_id))
 
 
 @router.get("/{artifact_id:path}")
-async def get_artifact_file(artifact_id: str) -> FileResponse:
+async def get_artifact_file(artifact_id: str, sig: str = "") -> FileResponse:
     """Serve an artifact by its ID.
 
     Artifact ID format: ``{agent_name}/{session_id}/{file_path}``
@@ -264,6 +346,9 @@ async def get_artifact_file(artifact_id: str) -> FileResponse:
     2. Local filesystem (``agent_packages_path``) — backward compatible fallback
     """
     # Strategy 1: bridge 本地存储
+    if not _valid_artifact_signature(artifact_id, sig):
+        raise HTTPException(status_code=403, detail="invalid artifact capability")
+
     stored = (_ARTIFACTS_STORAGE_DIR / artifact_id).resolve()
     try:
         stored.relative_to(_ARTIFACTS_STORAGE_DIR.resolve())

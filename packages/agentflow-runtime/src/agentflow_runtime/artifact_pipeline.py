@@ -224,7 +224,7 @@ def extract_structured_artifacts(result_json: str) -> list[str]:
     items: list = []
     for field in _ARTIFACT_JSON_FIELDS:
         val = data.get(field)
-        if isinstance(val, list):
+        if isinstance(val, list) and val:
             items = val
             break
 

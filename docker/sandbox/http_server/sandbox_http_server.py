@@ -46,6 +46,23 @@ _pty_sessions_lock = threading.Lock()
 
 # 错误码常量（与 contracts/sandbox-http-server.md 对齐）
 PATH_NOT_IN_UPLOAD_DIR = "PATH_NOT_IN_UPLOAD_DIR"
+_SECURITY_PROFILE = "isolated"
+_CREDENTIAL_FILES = {
+    ".env", ".mcp.json", ".netrc", ".npmrc", ".pypirc",
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+}
+_CREDENTIAL_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".jks", ".keystore"}
+_LOCAL_SAFE_ENV = {
+    "PATH", "PYTHONPATH", "VIRTUAL_ENV", "CONDA_PREFIX", "CONDA_DEFAULT_ENV",
+    "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TERM", "TMPDIR", "TEMP", "TMP",
+    "HOME", "USER", "LOGNAME", "SHELL", "LD_LIBRARY_PATH",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    "NO_PROXY", "no_proxy", "SANDBOX_MAX_CONCURRENT",
+}
+
+
+def _restricted_local() -> bool:
+    return _SECURITY_PROFILE == "restricted-local"
 
 # 危险命令前缀（宿主侧第一道防线，B2）
 DANGEROUS_PREFIXES = (
@@ -53,9 +70,9 @@ DANGEROUS_PREFIXES = (
     "mkfs.", "dd if=/dev/zero of=/dev/sd", "shutdown", "reboot",
 )
 
-# FR-003 已变更(见 docs/design/features/sandbox/sandbox-env-injection.md §4):
-# 密钥 *_API_KEY 允许在沙箱内文件中,不再用宿主侧白名单拦截。
-# env_vars 透传到沙箱——宿主机 os.environ 不透传(由 e2b.py 的 set -a && source .env 兜底)。
+# ``/exec`` is also reachable by model-selected tools.  Caller-supplied
+# environment variables therefore never cross this generic tool boundary;
+# trusted providers use their host-side adapters instead.
 
 
 def is_dangerous(command: str) -> bool:
@@ -82,6 +99,29 @@ class PathEscapeException(Exception):
         super().__init__(f"Path escape rejected: '{path}' escapes sandbox workdir '{allowed_prefix}'")
         self.path = path
         self.allowed_prefix = allowed_prefix
+
+
+def _is_protected_path(path: str, *, for_write: bool = False) -> bool:
+    normalized = path.replace("\\", "/").rstrip("/")
+    basename = normalized.rsplit("/", 1)[-1].lower()
+    if (basename in _CREDENTIAL_FILES or basename.startswith(".env.")
+            or Path(basename).suffix.lower() in _CREDENTIAL_SUFFIXES):
+        return True
+    if not for_write:
+        return False
+    lowered = f"/{normalized.lower().lstrip('./')}"
+    return (
+        basename in {"agent.md", "manifest.json", "manifest.jsonc"}
+        or "/harness/tools/" in lowered
+        or "/harness/hooks/" in lowered
+        or ("/harness/skills/" in lowered and "/scripts/" in lowered)
+    )
+
+
+def _scrub_restricted_local_environment() -> None:
+    for name in list(os.environ):
+        if name not in _LOCAL_SAFE_ENV:
+            os.environ.pop(name, None)
 
 
 def validate_upload_path(path: str) -> str | None:
@@ -140,10 +180,17 @@ def _exec_tool(tool_name: str, tool_params: dict, opts: dict) -> dict:
 
     安全层（前置于委托）：
     - ``tool=bash`` → 先检查 ``is_dangerous()``
-    - ``tool=read_file/write_file/edit_file`` → 先检查 ``resolve_safe_path()``
+    - ``tool=read_file/write_file/edit_file/list_dir`` → 先检查 ``resolve_safe_path()``
     """
     workdir = opts.get("working_dir") or os.environ.get("AF_SANDBOX_WORKSPACE") or os.getcwd()
     output_max_bytes = opts.get("output_max_bytes", DEFAULT_OUTPUT_MAX_BYTES)
+    resolved_path = ""
+
+    if opts.get("env_vars"):
+        return _exec_result(
+            1,
+            stderr="security_policy_blocked: caller-supplied env_vars are disabled",
+        )
 
     # -- 参数名映射：sandbox_http_server 旧参数名 → runtime tool 参数名 --
     _PARAM_MAP = {
@@ -155,16 +202,25 @@ def _exec_tool(tool_name: str, tool_params: dict, opts: dict) -> dict:
 
     # -- 安全前检（前置层，不等委托） --
     if tool_name == "bash":
+        if _restricted_local():
+            return _exec_result(
+                1,
+                stderr="security_policy_blocked: bash is disabled in restricted-local mode",
+            )
         command = tool_params.get("command", "")
         if not command:
             return _exec_result(1, stderr="command must not be empty")
         if is_dangerous(command):
             return _exec_result(1, stderr=f"Dangerous command rejected: {command}")
 
-    elif tool_name in ("read_file", "write_file", "edit_file"):
+    elif tool_name in ("read_file", "write_file", "edit_file", "list_dir"):
         old_path = tool_params.get("path", "")
         try:
-            resolve_safe_path(old_path, workdir)
+            resolved_path = resolve_safe_path(old_path, workdir)
+            if _is_protected_path(
+                    resolved_path, for_write=tool_name in {"write_file", "edit_file"}):
+                return _exec_result(
+                    1, stderr="security_policy_blocked: protected path access denied")
         except (PathEscapeException, ValueError) as e:
             return _exec_result(1, stderr=str(e))
 
@@ -175,6 +231,17 @@ def _exec_tool(tool_name: str, tool_params: dict, opts: dict) -> dict:
         except re.error as e:
             return _exec_result(1, stderr=f"Invalid regex: {e}")
 
+    if tool_name == "list_dir":
+        from agentflow_runtime.executors.host import HostExecutor
+
+        entries = HostExecutor().list_dir(
+            resolved_path, recursive=bool(tool_params.get("recursive", False))
+        )
+        stdout, truncated = _truncate(
+            json.dumps(entries, ensure_ascii=False), output_max_bytes
+        )
+        return _exec_result(0, stdout=stdout, truncated=truncated)
+
     # -- 构建 tool_input（翻译参数名 + 合并 opts 中的相关字段） --
     tool_input = {}
     for k, v in tool_params.items():
@@ -182,17 +249,13 @@ def _exec_tool(tool_name: str, tool_params: dict, opts: dict) -> dict:
         tool_input[mapped] = v
     if "timeout_ms" in opts:
         tool_input["timeout"] = opts["timeout_ms"] // 1000
+    if resolved_path:
+        tool_input["file_path"] = resolved_path
 
     # -- cwd override（webshell 跨命令 cwd 延续）：opts.working_dir 优先于默认 agent package dir --
     # 仅对 bash 生效——read_file/write_file/edit_file 走 resolve_safe_path 基准 workdir（上面已取）
     if tool_name == "bash" and opts.get("working_dir"):
         tool_input["cwd"] = opts["working_dir"]
-
-    # FR-003 已变更(见 docs/design/features/sandbox/sandbox-env-injection.md §4):
-    # env_vars 不再白名单拦截——密钥 *_API_KEY 允许透传到沙箱内(可信沙箱持密)。
-    env_vars = opts.get("env_vars", {})
-    if env_vars:
-        tool_input["env_vars"] = env_vars
 
     # -- 委托执行 --
     start = time.monotonic()
@@ -207,10 +270,13 @@ def _exec_tool(tool_name: str, tool_params: dict, opts: dict) -> dict:
                 return _exec_result(1, stderr=f"Tool {tool_name} has no execute() function")
             # 超时执行：用 opts.timeout_ms 作为 HTTP server 层面超时兜底（F2），
             # 同时传给 runtime tool 作为内部超时。
+            # 文件路径已经过上方 workdir 边界检查；内部标记避免 runtime wrapper
+            # 再按 HTTP server 自身 cwd 误拒绝合法路径。
+            execute_args = (tool_input, "sandbox-internal") if resolved_path else (tool_input,)
             timeout_secs = tool_input.get("timeout", 0)
             if timeout_secs and timeout_secs > 0:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(mod.execute, tool_input)
+                    future = pool.submit(mod.execute, *execute_args)
                     try:
                         result_json = future.result(timeout=timeout_secs)
                     except concurrent.futures.TimeoutError:
@@ -221,7 +287,7 @@ def _exec_tool(tool_name: str, tool_params: dict, opts: dict) -> dict:
                             duration_ms=duration_ms,
                         )
             else:
-                result_json = mod.execute(tool_input)
+                result_json = mod.execute(*execute_args)
             result = json.loads(result_json)
         finally:
             if tool_name in ("list_skills", "load_skill"):
@@ -246,16 +312,19 @@ def _exec_tool(tool_name: str, tool_params: dict, opts: dict) -> dict:
         stdout = result.get("stdout") or ""
         stderr = result.get("stderr") or result.get("error", "") or ""
         truncated = result.get("truncated", False)
-    elif tool_name in ("read_file", "load_skill"):
+    elif tool_name in ("read_file", "load_skill", "web_fetch"):
         # runtime 返回 {"content": "...", "error": null}
         stdout = result.get("content") or ""
         stderr = error
         truncated = False
     elif tool_name in ("write_file", "edit_file"):
         # runtime 返回 {"success": true, "error": null, "bytes_written": N}
-        stdout = "" if result.get("success", True) else error
-        stderr = "" if result.get("success", True) else error
-        exit_code = 0 if result.get("success", True) else 1
+        succeeded = result.get("success")
+        if succeeded is None:
+            succeeded = not error and exit_code == 0
+        stdout = "" if succeeded else error
+        stderr = "" if succeeded else error
+        exit_code = 0 if succeeded else 1
         truncated = False
     elif tool_name == "list_skills":
         skills = result.get("skills", [])
@@ -281,12 +350,14 @@ def _exec_tool(tool_name: str, tool_params: dict, opts: dict) -> dict:
     )
 
 
-# tool 分发表（所有工具统一委托 agentflow_runtime.harness.tools.*）
+# tool 分发表（list_dir 复用 HostExecutor，其余工具委托 runtime tool）
 TOOL_DISPATCH = {
     "bash": _exec_tool,
     "read_file": _exec_tool,
     "write_file": _exec_tool,
     "edit_file": _exec_tool,
+    "list_dir": _exec_tool,
+    "web_fetch": _exec_tool,
     "list_skills": _exec_tool,
     "load_skill": _exec_tool,
     "grep": _exec_tool,
@@ -360,10 +431,18 @@ class SandboxHttpHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """处理 POST 请求。"""
+        if _restricted_local() and self.path.startswith("/pty/"):
+            self._send_json(403, {"error": {
+                "code": "SECURITY_POLICY_BLOCKED",
+                "message": "PTY is disabled in restricted-local mode",
+            }})
+            return
         if self.path == "/exec":
             self._handle_exec()
         elif self.path == "/upload":
             self._handle_upload()
+        elif self.path == "/artifact/upload":
+            self._handle_artifact_upload()
         elif self.path == "/artifact/download":
             self._handle_artifact_download()
         elif self.path == "/pty/open":
@@ -448,6 +527,87 @@ class SandboxHttpHandler(BaseHTTPRequestHandler):
             "size": len(content),
             "content_b64": base64.b64encode(content).decode("ascii"),
         })
+
+    def _handle_artifact_upload(self):
+        """Write trusted generated media bytes into the sandbox workspace."""
+        try:
+            request = self._read_json_body()
+        except (ValueError, json.JSONDecodeError) as e:
+            self._send_json(400, {"error": {
+                "code": "INVALID_JSON",
+                "message": f"Invalid JSON: {e}",
+            }})
+            return
+
+        path = request.get("path", "")
+        content_b64 = request.get("content_b64", "")
+        if not isinstance(path, str) or not path or not isinstance(content_b64, str):
+            self._send_json(400, {"error": {
+                "code": "TOOL_PARAMS_INVALID",
+                "message": "need string path and content_b64",
+            }})
+            return
+
+        media_suffixes = {
+            ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff",
+            ".mp4", ".mov", ".webm", ".mp3", ".wav",
+        }
+        normalized = "/" + path.replace("\\", "/").lstrip("/")
+        if Path(path).suffix.lower() not in media_suffixes:
+            self._send_json(415, {"error": {
+                "code": "UNSUPPORTED_ARTIFACT_TYPE",
+                "message": f"unsupported media type: {Path(path).suffix}",
+            }})
+            return
+        if ("/upload/" in normalized.lower()
+                or _is_protected_path(path, for_write=True)):
+            self._send_json(403, {"error": {
+                "code": "SECURITY_POLICY_BLOCKED",
+                "message": "artifact target path is protected",
+            }})
+            return
+
+        try:
+            content = base64.b64decode(content_b64, validate=True)
+        except (ValueError, TypeError) as e:
+            self._send_json(400, {"error": {
+                "code": "BASE64_DECODE_FAILED",
+                "message": f"base64 decode failed: {e}",
+            }})
+            return
+        if len(content) > 256 * 1024 * 1024:
+            self._send_json(413, {"error": {
+                "code": "ARTIFACT_TOO_LARGE",
+                "message": "artifact exceeds 256 MiB",
+            }})
+            return
+
+        workdir = os.environ.get("AF_SANDBOX_WORKSPACE") or os.getcwd()
+        try:
+            resolved = resolve_safe_path(path, workdir)
+            Path(resolved).parent.mkdir(parents=True, exist_ok=True)
+            Path(resolved).write_bytes(content)
+        except (ValueError, PathEscapeException) as e:
+            self._send_json(400, {"error": {
+                "code": "PATH_OUT_OF_BOUNDS",
+                "message": str(e),
+                "details": {"path": path},
+            }})
+            return
+        except OSError as e:
+            self._send_json(500, {"error": {
+                "code": "FILE_WRITE_FAILED",
+                "message": f"failed to write artifact: {e}",
+                "details": {"path": path},
+            }})
+            return
+
+        self._send_json(200, {
+            "written": True,
+            "bytes_written": len(content),
+            "path": path,
+        })
+
 
     def _handle_upload(self):
         """处理二进制资产上传：POST /upload。
@@ -745,12 +905,22 @@ def _parent_monitor(ppid: int):
 
 
 def main():
+    global _SECURITY_PROFILE
     parser = argparse.ArgumentParser(description="Sandbox HTTP Server")
     parser.add_argument("--port", type=int, default=8080, help="监听端口")
     parser.add_argument("--host", default="0.0.0.0", help="监听地址（默认 0.0.0.0）")
     parser.add_argument("--parent-pid", type=int, default=0,
                         help="父进程 PID（非 0 时启动监控线程）")
+    parser.add_argument(
+        "--security-profile",
+        choices=("isolated", "restricted-local"),
+        default="isolated",
+        help="执行安全配置；宿主进程模式必须使用 restricted-local",
+    )
     args = parser.parse_args()
+    _SECURITY_PROFILE = args.security_profile
+    if _restricted_local():
+        _scrub_restricted_local_environment()
 
     logging.basicConfig(
         level=logging.INFO,

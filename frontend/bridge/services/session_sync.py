@@ -56,10 +56,15 @@ class AgentflowSessionSync:
             logger.warning("session_sync.agent_list failed: %s", exc)
             return 0
 
+        agents = agents if isinstance(agents, list) else (
+            agents.get("agents", []) if isinstance(agents, dict) else []
+        )
         if not agents:
             return 0
 
         for agent in agents:
+            if not isinstance(agent, dict):
+                continue
             agent_id = agent.get("id") or agent.get("agent_id") or ""
             if not agent_id:
                 continue

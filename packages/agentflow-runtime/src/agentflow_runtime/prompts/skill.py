@@ -80,6 +80,10 @@ SKILL_ARTIFACT_AUTO_COLLECT_PROMPT = (
     "注意：你生成的所有产物文件（图片、HTML 报告、PPT 等）都会被系统自动收集"
     "并通过平台的工件发布机制展示给用户。"
     "你只需要调用相关工具生成产物，不需要自己启动 HTTP 服务器或文件服务。"
+    "当结构化生成工具返回成功状态（例如 `status=succeeded`）且 `files` 非空时，"
+    "该产物即视为完成；不要再用 bash、Python/PIL、file、ls 或 read_file 复核。"
+    "仅当用户要求的其他产物尚未完成时才继续调用工具；"
+    "全部完成后立即返回 skill_result。"
 )
 
 # Instructs the LLM what to do when a skill document references a "session

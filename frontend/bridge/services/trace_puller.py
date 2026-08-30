@@ -46,6 +46,11 @@ from typing import Any
 
 from client import DaemonClient, DaemonError
 from providers import SessionProvider
+from services.secret_safety import (
+    SecretSanitizerUnavailable,
+    safe_error_text,
+    sanitize_for_storage,
+)
 
 logger = logging.getLogger("agentflow.bridge.services.trace_puller")
 
@@ -135,7 +140,7 @@ async def _pull_and_save_traces(
     except DaemonError as exc:
         logger.info(
             "trace_pull.list_keys_failed agent=%s dialogue=%s user=%s: %s",
-            agent_id, dialogue_id, user_id, exc,
+            agent_id, dialogue_id, user_id, safe_error_text(exc),
         )
         logger.info(
             "trace_pull.done agent=%s dialogue=%s elapsed=%.3fs keys=%d",
@@ -189,17 +194,44 @@ async def _pull_and_save_traces(
                 agent_id, call_id,
             )
             continue
+        meta_data = trace_data.get("meta")
+        trace_dialogue_id = (
+            str(meta_data.get("dialogue_id") or "")
+            if isinstance(meta_data, dict) else ""
+        )
+        if trace_dialogue_id and trace_dialogue_id != dialogue_id:
+            logger.warning(
+                "trace_pull.dialogue_mismatch agent=%s call_id=%s expected=%s actual=%s",
+                agent_id, call_id, dialogue_id, trace_dialogue_id,
+            )
+            continue
+        try:
+            trace_data, trace_redaction = sanitize_for_storage(trace_data)
+        except SecretSanitizerUnavailable:
+            logger.warning(
+                "trace_pull.save_skipped agent=%s call_id=%s reason=sanitizer_unavailable",
+                agent_id, call_id,
+            )
+            continue
+        if trace_redaction.applied:
+            trace_data["redaction"] = trace_redaction.to_dict()
         logger.info(
             "trace_pull.save_start agent=%s call_id=%s session_id=%s dialogue_id=%s",
             agent_id, call_id, session_id, dialogue_id,
         )
         try:
-            await provider.save_trace(
+            saved = await provider.save_trace(
                 session_id=session_id,
                 dialogue_id=dialogue_id,
                 trace_type="llm_call",
                 trace_data=trace_data,
             )
+            if not saved:
+                logger.warning(
+                    "trace_pull.save_not_durable agent=%s call_id=%s source_retained=true",
+                    agent_id, call_id,
+                )
+                continue
             persisted += 1
             logger.info(
                 "trace_pull.save_ok agent=%s call_id=%s persisted=%d",
@@ -221,13 +253,13 @@ async def _pull_and_save_traces(
             except DaemonError as exc:
                 logger.warning(
                     "trace_pull.cleanup_call_failed agent=%s call_id=%s: %s",
-                    agent_id, call_id, exc,
+                    agent_id, call_id, safe_error_text(exc),
                 )
         except Exception as exc:  # noqa: BLE001
             # I-5: provider failures must not break the chat flow.
             logger.warning(
                 "trace_pull.save_failed agent=%s call_id=%s: %s type=%s",
-                agent_id, call_id, exc, type(exc).__name__,
+                agent_id, call_id, safe_error_text(exc), type(exc).__name__,
             )
 
     logger.info(
@@ -237,21 +269,22 @@ async def _pull_and_save_traces(
 
     # After all calls, clean up the dialogue-scoped index key.
     if persisted > 0:
-        try:
-            index_cleanup = await daemon_client.send_request(
-                "databus.remove_by_prefix",
-                {**sess_params, "prefix": f"llm/traces/index/{dialogue_id}"},
-            )
-            removed_index = index_cleanup.get("removed", 0) if isinstance(index_cleanup, dict) else 0
-            logger.info(
-                "trace_pull.cleanup_index agent=%s dialogue=%s removed=%d",
-                agent_id, dialogue_id, removed_index,
-            )
-        except DaemonError as exc:
-            logger.warning(
-                "trace_pull.cleanup_index_failed agent=%s dialogue=%s: %s",
-                agent_id, dialogue_id, exc,
-            )
+        for index_prefix in (
+            f"llm/traces/index/{dialogue_id}",
+            f"llm/traces/index_entries/{dialogue_id}/",
+        ):
+            try:
+                index_cleanup = await daemon_client.send_request(
+                    "databus.remove_by_prefix",
+                    {**sess_params, "prefix": index_prefix},
+                )
+                removed_index = index_cleanup.get("removed", 0) if isinstance(index_cleanup, dict) else 0
+                logger.info(
+                    "trace_pull.cleanup_index agent=%s dialogue=%s prefix=%s removed=%d",
+                    agent_id, dialogue_id, index_prefix, removed_index,
+                )
+            except DaemonError as exc:
+                logger.warning("trace_pull.cleanup_index_failed prefix=%s: %s", index_prefix, safe_error_text(exc))
 
     logger.info(
         "trace_pull.done agent=%s dialogue=%s elapsed=%.3fs keys=%d",
@@ -288,22 +321,23 @@ async def _fetch_trace_detail(
         except DaemonError as exc:
             logger.info(
                 "trace_pull.get_failed call_id=%s key=%s databus_key=%s: %s",
-                call_id, key, databus_key, exc,
+                call_id, key, databus_key, safe_error_text(exc),
             )
             return None
         if not isinstance(result, dict) or not result.get("exists"):
             logger.info(
-                "trace_pull.get_not_exists call_id=%s key=%s databus_key=%s result=%s",
-                call_id, key, databus_key, result,
+                "trace_pull.get_not_exists call_id=%s key=%s databus_key=%s result_type=%s",
+                call_id, key, databus_key, type(result).__name__,
             )
             return None
         raw_value = result.get("value")
-        # Debug: log type and full raw_value to diagnose \n encoding (F7: 不截断)
+        # Trace bodies may contain prompts, tool results or provider errors.
+        # Log only shape metadata; the full value belongs in trace storage.
         if raw_value is not None:
             raw_str = str(raw_value)
             logger.info(
-                "trace_pull.raw_value call_id=%s key=%s value_type=%s len=%d value=%s",
-                call_id, key, type(raw_value).__name__, len(raw_str), raw_str,
+                "trace_pull.raw_value call_id=%s key=%s value_type=%s len=%d",
+                call_id, key, type(raw_value).__name__, len(raw_str),
             )
         else:
             logger.info(
@@ -339,9 +373,9 @@ async def _fetch_trace_detail(
     response_data = await _safe_get("response")
     meta_data = await _safe_get("meta")
 
-    if request_data is None and response_data is None and meta_data is None:
+    if request_data is None or response_data is None or meta_data is None:
         logger.info(
-            "trace_pull.fetch_detail_done call_id=%s elapsed=%.3fs result=none",
+            "trace_pull.fetch_detail_done call_id=%s elapsed=%.3fs result=incomplete",
             call_id, time.time() - fetch_start,
         )
         return None

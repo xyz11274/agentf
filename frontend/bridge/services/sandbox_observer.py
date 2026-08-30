@@ -235,24 +235,23 @@ class E2BProvider:
         if self._ca_cert_path and Path(self._ca_cert_path).is_file():
             os.environ.setdefault("SSL_CERT_FILE", self._ca_cert_path)
 
-    @staticmethod
-    def _apply_ssl_patch() -> None:
-        """SSL patch：内部 e2b 部署使用 IP 直连，跳过证书验证。"""
-        import ssl as _ssl
+    def _apply_ssl_patch(self) -> None:
+        """Prepare endpoint-scoped envd TLS without weakening global HTTPS."""
+        from urllib.parse import urlsplit
 
-        if getattr(_ssl, "_agentflow_patched", False):
-            return  # idempotent guard
-
-        _orig_create_default_context = _ssl.create_default_context
-
-        def _patched_create_default_context(*args, **kwargs):
-            ctx = _orig_create_default_context(*args, **kwargs)
-            ctx.check_hostname = False
-            ctx.verify_mode = _ssl.CERT_NONE
-            return ctx
-
-        _ssl.create_default_context = _patched_create_default_context
-        _ssl._agentflow_patched = True  # type: ignore[attr-defined]
+        parsed = urlsplit(self._api_url)
+        loopback = parsed.hostname in {"127.0.0.1", "::1", "localhost"}
+        if parsed.scheme != "https" and not (parsed.scheme == "http" and loopback):
+            raise ProviderError(
+                "credential-bearing E2B API endpoint must use HTTPS"
+            )
+        try:
+            from agentflow_runtime.common.sandbox_patch import apply_ssl_patch
+        except ImportError as exc:
+            raise ProviderError(
+                "secure E2B envd transport requires agentflow_runtime"
+            ) from exc
+        apply_ssl_patch()
 
     @staticmethod
     def _patch_envd_url(sb) -> None:
