@@ -206,8 +206,13 @@ void MMAgentSession::update_activity() {
 }
 
 bool MMAgentSession::is_timeout_expired() const {
-  std::lock_guard<std::mutex> lock(mutex_);
+  std::scoped_lock lock(mutex_, dialogue_serialize_mutex_);
   if(active_route_key_.empty()) {
+    return false;
+  }
+  // Session TTL 只回收空闲路由。异步 Workflow 的 dialogue lock 从请求进入
+  // 一直持有到统一 cleanup 出口，持锁即表示业务仍在执行。
+  if(!active_dialogue_id_.empty()) {
     return false;
   }
   const int64_t current_time = get_current_time_ms();
@@ -429,12 +434,18 @@ void MMAgentSession::release_dialogue_lock(const std::string& dialogue_id) {
 }
 
 void MMAgentSession::release_dialogue_slot(const std::string& dialogue_id) {
+  bool released = false;
   {
     std::lock_guard<std::mutex> lk(dialogue_serialize_mutex_);
     // Only clear if we still own the slot (defensive against double-release).
     if (active_dialogue_id_ == dialogue_id) {
       active_dialogue_id_.clear();
+      released = true;
     }
+  }
+  // 长任务结束后从完成时重新计算空闲 TTL，不能继续沿用用户输入时的旧时间戳。
+  if (released) {
+    update_activity();
   }
   dialogue_serialize_cv_.notify_one();
 }

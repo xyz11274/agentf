@@ -166,11 +166,26 @@ def test_validate_tool_call_without_result(serial_events):
     assert any("tool.call 无配对 tool.result" in issue for issue in issues)
 
 
-def test_validate_session_requires_terminal_event(serial_events):
-    """完整性检查应识别丢失的 session.end。"""
+def test_validate_dialogue_requires_terminal_event(serial_events):
+    """完整性检查应识别丢失的 dialogue.end。"""
     r = _load_reader()
-    evs = [e for e in serial_events if e.get("type") != "session.end"]
-    assert any("session.start 无配对 session.end" in issue for issue in r.validate(evs))
+    evs = [e for e in serial_events if e.get("type") != "dialogue.end"]
+    assert any("dialogue.start 无配对 dialogue.end" in issue for issue in r.validate(evs))
+
+
+def test_validate_accepts_legacy_session_lifecycle(serial_events):
+    """Reader 保持对已落盘 session.* 生命周期事件的只读兼容。"""
+    r = _load_reader()
+    legacy_events = []
+    for event in serial_events:
+        legacy = dict(event)
+        if legacy.get("type") == "dialogue.start":
+            legacy["type"] = "session.start"
+        elif legacy.get("type") == "dialogue.end":
+            legacy["type"] = "session.end"
+        legacy_events.append(legacy)
+
+    assert r.validate(legacy_events) == []
 
 
 # ═══════════════════════════════════════════════════════════
@@ -266,7 +281,7 @@ def test_build_graph_parallel_skills_distinct():
     r = _load_reader()
     # 构造：coordinator 派发 echo×2（exec_key :1 和 :2），两个 skill 各自执行
     evs = [
-        {"type": "session.start", "seq": 1, "pid": 1, "trace_id": "tA", "ts": 0,
+        {"type": "dialogue.start", "seq": 1, "pid": 1, "trace_id": "tA", "ts": 0,
          "dialogue_id": "d1", "node_id": "coordinator_decide", "data": {}},
         {"type": "llm.request", "seq": 2, "pid": 1, "trace_id": "tA", "ts": 1,
          "span_id": "spA", "node_id": "coordinator_decide", "data": {"msg_count": 1}},
@@ -391,15 +406,90 @@ def test_load_torn_line_dropped(tmp_path):
     """torn 尾行（坏 JSON）被丢弃，正常行保留。"""
     r = _load_reader()
     p = tmp_path / "d1.jsonl"
-    good = {"type": "session.start", "seq": 1, "ts": 1, "pid": 1, "trace_id": "tA",
+    good = {"type": "dialogue.start", "seq": 1, "ts": 1, "pid": 1, "trace_id": "tA",
             "dialogue_id": "d1", "node_id": "x", "data": {}}
     p.write_text(
-        json.dumps(good) + "\n" + '{"type":"broken","seq":2' + "\n",
+        json.dumps(good) + "\n" + '{"type":"broken","seq":2',
         encoding="utf-8",
     )
     evs = r.load("d1", str(p))
     assert len(evs) == 1
-    assert evs[0]["type"] == "session.start"
+    assert evs[0]["type"] == "dialogue.start"
+
+
+@pytest.mark.parametrize("broken_line", [
+    '{"type":"broken","seq":2\n',
+    b'{"type":"broken","seq":"\xff"}\n',
+])
+def test_load_complete_corrupt_record_raises(tmp_path, broken_line):
+    """中段或带换行的坏记录必须显式失败，不能静默形成缺事件轨迹。"""
+    r = _load_reader()
+    p = tmp_path / "d1.jsonl"
+    good = json.dumps({"type": "dialogue.header", "dialogue_id": "d1"})
+    if isinstance(broken_line, bytes):
+        p.write_bytes(good.encode() + b"\n" + broken_line)
+    else:
+        p.write_text(good + "\n" + broken_line, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="corruption at line 2"):
+        r.load("d1", str(p))
+
+
+def test_validate_strict_header_identity_and_unique_ids(serial_events):
+    """真实文件严格模式要求唯一 Header、身份一致且事件 ID 幂等唯一。"""
+    r = _load_reader()
+    events = [{
+        "type": "dialogue.header",
+        "version": 2,
+        "dialogue_id": "d1",
+    }]
+    for index, event in enumerate(serial_events, 1):
+        item = dict(event)
+        item["event_id"] = f"producer:{index}"
+        item["idempotency_key"] = item["event_id"]
+        events.append(item)
+
+    assert r.validate(events, require_header=True) == []
+
+    duplicate = [dict(event) for event in events]
+    duplicate[2]["event_id"] = duplicate[1]["event_id"]
+    duplicate[2]["idempotency_key"] = duplicate[1]["idempotency_key"]
+    duplicate[2]["dialogue_id"] = "other-dialogue"
+    issues = r.validate(duplicate, require_header=True)
+
+    assert any("event_id 重复" in issue for issue in issues)
+    assert any("idempotency_key 重复" in issue for issue in issues)
+    assert any("dialogue_id 与 header 不一致" in issue for issue in issues)
+
+
+def test_validate_strict_rejects_duplicate_dialogue_terminal(serial_events):
+    r = _load_reader()
+    events = [
+        {"type": "dialogue.header", "version": 2, "dialogue_id": "d1"},
+        *serial_events,
+        dict(serial_events[-1], seq=5),
+    ]
+
+    issues = r.validate(events, require_header=True)
+
+    assert any("dialogue.end 终态重复" in issue for issue in issues)
+
+
+def test_load_finds_hierarchical_dialogue_by_default(tmp_path, monkeypatch):
+    """只给 dialogue_id 时，Reader 能发现 User/Conversation 下的唯一实体文件。"""
+    r = _load_reader()
+    path = (
+        tmp_path / "trace_output" / "sessionlogs" / "by-user"
+        / "user-a" / "client-a" / "d1.jsonl"
+    )
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({"type": "dialogue.header", "dialogue_id": "d1"}) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert r.load("d1") == [{"type": "dialogue.header", "dialogue_id": "d1"}]
 
 
 def test_replay_restores_messages(serial_events):

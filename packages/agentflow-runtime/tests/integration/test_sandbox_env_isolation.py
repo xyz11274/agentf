@@ -275,15 +275,9 @@ def real_sandbox_endpoint():
     os.environ["E2B_API_KEY"] = api_key
     os.environ.setdefault("CUBE_TEMPLATE_ID", _DEFAULT_E2B_TEMPLATE)
 
-    # SSL 补丁——path-based 路由需要绕过自签证书校验
-    import ssl as _ssl
-    _orig_ctx = _ssl.create_default_context
-    def _patched_ctx(*a, **kw):
-        ctx = _orig_ctx(*a, **kw)
-        ctx.check_hostname = False
-        ctx.verify_mode = _ssl.CERT_NONE
-        return ctx
-    _ssl.create_default_context = _patched_ctx
+    # 使用项目共享的私有 CA 配置，保持证书与主机名校验。
+    from agentflow_runtime.common.sandbox_patch import apply_ssl_patch
+    apply_ssl_patch()
 
     from e2b_code_interpreter import Sandbox
 
@@ -528,21 +522,10 @@ def test_real_sandbox_harness_skills_uploaded(real_sandbox_endpoint):
 
 @pytest.mark.real_sandbox
 def test_real_sandbox_manifest_driven_upload(real_sandbox_endpoint, tmp_path):
-    """REAL-ENV-004：manifest 驱动上传——只传 manifest 声明内容（.env + harness/skills），
-    排除 .venv/workspace 等沙箱无关产物，set -a && source 后子进程 os.environ 可读密钥。
+    """REAL-ENV-004：manifest 上传必须排除凭据与运行时产物。
 
-    业务规则（设计文档 agent-package-structure.md §3 + sandbox-env-injection.md §2 链路环节⑤）：
-    - agent 包根整体上传由 manifest.jsonc 白名单驱动（用户声明什么传什么）
-    - 系统预制 includes = harness/skills/**、harness/tools/**、.env（只传主 .env）、setup.sh、requirements.txt
-    - 系统预制 excludes = .venv、workspace、outputs、output、tests、nodes、__pycache__ 等
-    - e2b_sync.py upload --manifest 按白名单过滤，命中 excludes 的剔除
-    - 上传后 e2b.py exec_command 的 set -a && source /home/user/workspace/.env 让子进程读到密钥
-
-    本测试复用 daemon 同款 e2b_sync.py（import 直接调 upload），在真实沙箱验证：
-    ✅ .env 上传且密钥子进程可读（本轮根因修复目标）
-    ✅ harness/skills/demo/SKILL.md 上传（harness 目录在）
-    ❌ .venv/x.py 不上传（91M 虚拟环境排除）
-    ❌ workspace/u/a.png 不上传（会话级产物排除）
+    即使用户在 includes 中显式声明 ``.env``，同步边界仍须拒绝凭据文件；
+    ``harness/skills`` 保持可上传，而 ``.venv``、``workspace`` 继续排除。
 
     运行方式：
         export E2B_API_KEY=e2b_000000000
@@ -596,21 +579,23 @@ def test_real_sandbox_manifest_driven_upload(real_sandbox_endpoint, tmp_path):
         str(manifest_path),
     )
 
-    # ── 断言 1：.env 上传 + set -a && source 后子进程读到密钥（本轮根因修复目标）──
-    result = exe.exec_command(
-        "python3 -c \"import os; print(os.environ.get('AF_TEST_SECRET_005', ''))\"",
+    # ── 断言 1：.env 即使被 manifest 声明也不得上传或注入子进程 ──
+    env_file_res = exe.exec_command(
+        "test -e /home/user/workspace/.env && echo PRESENT || echo ABSENT",
+        timeout=15,
+    )
+    assert "ABSENT" in (env_file_res.stdout or ""), (
+        f".env 被上传进沙箱——凭据文件拒绝策略失效：{env_file_res}"
+    )
+    env_value_res = exe.exec_command(
+        "printenv AF_TEST_SECRET_005 || echo MISSING",
         timeout=20,
     )
-    assert result.error is None, (
-        f"exec_command 读 os.environ 失败：{result}"
-        "——检查 e2b.py _build_env_source_prefix 的 set -a && source 前缀"
+    assert env_value_res.error is None and env_value_res.exit_code == 0, (
+        f"沙箱环境隔离探测失败：{env_value_res}"
     )
-    assert result.exit_code == 0, (
-        f"python3 exit_code={result.exit_code}——命令崩或沙箱无 python3：{result}"
-    )
-    assert "sk-value-visible-005" in (result.stdout or ""), (
-        f"子进程读不到 .env 密钥——manifest 未把 .env 传上去或 set -a 前缀失效："
-        f"stdout={result.stdout!r}"
+    assert "MISSING" in (env_value_res.stdout or ""), (
+        "沙箱子进程获得了 agent 凭据——通用命令边界发生泄漏"
     )
 
     # ── 断言 2：harness/skills 上传（harness 目录在）──

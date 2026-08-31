@@ -1,6 +1,7 @@
 // Copyright (c) 2026 AgentFlow Authors
 // Licensed under MIT License
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <memory>

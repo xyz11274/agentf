@@ -72,6 +72,7 @@ from prompts import (
     SKILL_TOOL_PRIORITY_PROMPT,
 )
 from agentflow_runtime.round_reminder import build_round_reminder
+from agentflow_runtime.security import install_stderr_redaction, redact_secrets
 from agentflow_runtime.harness.mcp import MCP_AVAILABLE, MCPBridge, discover_servers  # noqa: F401, E402
 
 # ── Re-exports from split modules (structural refactor 2026-08-14) ──
@@ -528,6 +529,7 @@ def _finish_dispatch_manifest_error(
 # ---------------------------------------------------------------------------
 
 def execute():
+    install_stderr_redaction()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s",
                         stream=sys.stderr, force=True)
     _script_t0 = time.monotonic()
@@ -609,8 +611,8 @@ def execute():
         {"role": "user",   "content": task_instruction},
     ]
 
-    # ⑧ Get domain tool set from CURRENT skill's scripts/ dir (skill-scoped)
-    tool_registry = _LocalToolRegistry(skill_name)
+    # ⑧ Get tools from the primary and explicitly loaded companion skills.
+    tool_registry = _LocalToolRegistry(skill_name, load_skill_names)
     available_tools = tool_registry.get_tools()
 
     # ⑨ Read model config with fallback chain
@@ -639,6 +641,7 @@ def execute():
     # Make the manifest-resolved identity visible to nested LLM calls such as
     # hard compaction without requiring a framework-side environment change.
     _previous_skill_name = os.environ.get("AF_SKILL_NAME")
+    _previous_llm_timeout = os.environ.get("AF_LLM_TIMEOUT")
     os.environ["AF_SKILL_NAME"] = skill_name
     output = None
     generated_artifacts = []
@@ -729,6 +732,62 @@ def execute():
         # Node-level timeout (injected by framework as AF_NODE_EXECUTION_TIMEOUT);
         # fallback to node default 240s if absent.
         node_timeout_sec = AgentConfig.node_execution_timeout()
+        try:
+            configured_llm_timeout_sec = max(1, int(_previous_llm_timeout or "120"))
+        except ValueError:
+            configured_llm_timeout_sec = 120
+        node_deadline = _script_t0 + float(node_timeout_sec)
+        finalize_reserve_sec = min(5.0, max(0.1, float(node_timeout_sec) * 0.05))
+        tool_deadline = node_deadline - finalize_reserve_sec
+        tool_parameter_specs = {
+            tool.get("function", {}).get("name", ""):
+                tool.get("function", {}).get("parameters", {}).get("properties", {})
+            for tool in available_tools
+        }
+
+        def _set_round_llm_timeout_cap() -> bool:
+            """Keep all LLM calls inside the remaining node budget."""
+            usable_sec = node_deadline - time.monotonic() - finalize_reserve_sec
+            if usable_sec < 1.0:
+                return False
+            timeout_cap = min(configured_llm_timeout_sec, max(1, int(usable_sec)))
+            os.environ["AF_LLM_TIMEOUT"] = str(timeout_cap)
+            return True
+
+        def _finish_node_timeout(round_number: int) -> None:
+            """Write a replayable terminal before the framework hard timeout."""
+            nonlocal output
+            elapsed_total = time.monotonic() - _script_t0
+            emit_event(hook_events.SKILL_EXECUTOR_NODE_TIMEOUT, {
+                "round": round_number,
+                "max_rounds": max_rounds,
+                "skill_name": skill_name,
+                "elapsed_s": round(elapsed_total, 1),
+                "node_timeout_sec": node_timeout_sec,
+            }, level="WARN")
+            try:
+                databus.response_push(f"{skill_name} 节点超时，正在汇总…\n",
+                                      type="progress", skill=skill_name,
+                                      round=str(round_number), status="completed",
+                                      source="skill_executor")
+            except Exception as exc:
+                print(f"[flow]   WARN: node_timeout progress push failed: {exc}", file=sys.stderr)
+            response_text = _summarize_tool_history(messages)
+            output = {
+                "skill_result": response_text,
+                "status": "node_timeout",
+                "skill_name": skill_name,
+                "rounds_used": round_number,
+                "artifacts_json": json.dumps(generated_artifacts, ensure_ascii=False),
+            }
+            if databus.is_connected():
+                result_json = json.dumps(output, ensure_ascii=True)
+                databus.put("skill_result:skill-runner", result_json)
+            print(json.dumps(output, ensure_ascii=False))
+            elapsed_ms = (time.monotonic() - _script_t0) * 1000
+            print(f"[timing] script_exit duration_ms={elapsed_ms:.1f} total", file=sys.stderr)
+            _skill_span.set_status(SpanStatus.ERROR, f"node_timeout at round {round_number}")
+
         completion_budget = AgentConfig.skill_max_completion_tokens()
         recovery_attempts = 0
         max_recovery_attempts = AgentConfig.skill_llm_recovery_attempts()
@@ -736,44 +795,18 @@ def execute():
             extract_artifact_paths(task_instruction)
         )
         generated_artifacts = []
+        observed_artifact_paths: set[str] = set()
+        unresolved_tool_failures: dict[str, dict] = {}
         # tool_call_history: 每轮 tool_call 签名列表，用于检测 LLM 反复调同一 tool 同一参数的死循环
         tool_call_history: list[list[tuple[str, str]]] = []
 
         _turn_start = time.time()
         for round_i in range(max_rounds):
             elapsed = time.time() - _turn_start
-            # ── 硬超时：node_timeout_sec 是边界约束，超过必须停（不变量 I-2）──
-            # build_round_reminder 只做"提醒"，没有硬约束；之前节点跑了 3 分钟+ 不停就是这里漏了 break。
-            if elapsed > node_timeout_sec:
-                emit_event(hook_events.SKILL_EXECUTOR_NODE_TIMEOUT, {
-                    "round": round_i + 1,
-                    "max_rounds": max_rounds,
-                    "skill_name": skill_name,
-                    "elapsed_s": round(elapsed, 1),
-                    "node_timeout_sec": node_timeout_sec,
-                }, level="WARN")
-                try:
-                    databus.response_push(f"{skill_name} 节点超时，正在汇总…\n",
-                                        type="progress", skill=skill_name,
-                                        round=str(round_i+1), status="completed",
-                                        source="skill_executor")
-                except Exception as exc:
-                    print(f"[flow]   WARN: node_timeout progress push failed: {exc}", file=sys.stderr)
-                response_text = _summarize_tool_history(messages)
-                output = {
-                    "skill_result": response_text,
-                    "status": "node_timeout",
-                    "skill_name": skill_name,
-                    "rounds_used": round_i + 1,
-                    "artifacts_json": json.dumps(generated_artifacts, ensure_ascii=False),
-                }
-                if databus.is_connected():
-                    result_json = json.dumps(output, ensure_ascii=True)
-                    databus.put("skill_result:skill-runner", result_json)
-                print(json.dumps(output, ensure_ascii=False))
-                _ms = (time.monotonic() - _script_t0) * 1000
-                print(f"[timing] script_exit duration_ms={_ms:.1f} total", file=sys.stderr)
-                _skill_span.set_status(SpanStatus.ERROR, f"node_timeout at round {round_i+1}")
+            # Reserve enough time for result, skill.end and span persistence.
+            # The cap also applies to hard-compaction LLM calls in this process.
+            if not _set_round_llm_timeout_cap():
+                _finish_node_timeout(round_i + 1)
                 return
             # ── Interrupt flag poll (design §3.3.1) ──────────────────────────
             # daemon 的 handle_dialogue_interrupt 在 cleanup 前写入 global sys flag
@@ -907,6 +940,12 @@ def execute():
                     raw = {"choices": [{"message": {"role": "assistant", "content": "（LLM 调用已被 hook 阻断）"}}]}
                     _llm_blocked = True
                 else:
+                    # Compaction may itself call an LLM, so refresh the cap
+                    # immediately before the main round request.
+                    if not _set_round_llm_timeout_cap():
+                        _llm_span.set_status(SpanStatus.ERROR, "node_timeout before LLM call")
+                        _finish_node_timeout(round_i + 1)
+                        return
                     raw = call_llm(
                         messages, tools=available_tools,
                         model=model_name,
@@ -1246,10 +1285,46 @@ def execute():
                     func = tc.get("function", {})
                     name = func.get("name", "")
                     args = json.loads(func.get("arguments", "{}"))
+                    # Parallel batches contain only bounded built-ins. Shrink
+                    # their declared timeout fields to the same node deadline;
+                    # serial/unknown tools are additionally interrupted by the
+                    # scheduler's POSIX deadline below.
+                    timeout_cap = max(1, int(tool_deadline - time.monotonic()))
+                    parameter_specs = tool_parameter_specs.get(name, {})
+                    for timeout_name in ("timeout", "poll_timeout"):
+                        timeout_spec = parameter_specs.get(timeout_name)
+                        if not isinstance(timeout_spec, dict):
+                            continue
+                        requested_timeout = args.get(
+                            timeout_name, timeout_spec.get("default")
+                        )
+                        try:
+                            requested_timeout = int(requested_timeout)
+                        except (TypeError, ValueError):
+                            continue
+                        if requested_timeout > timeout_cap:
+                            args[timeout_name] = timeout_cap
                     # Log tool call params (truncate to 200 chars)
-                    args_preview = json.dumps(args, ensure_ascii=False)[:200]
+                    safe_args, _redaction = redact_secrets(args)
+                    args_preview = json.dumps(safe_args, ensure_ascii=False)[:200]
                     print(f"[flow]   tool_call: {name} args={args_preview}", file=sys.stderr)
                     return name, args, tool_registry.execute(name, args)
+
+                _timed_out_tool_call_ids = set()
+
+                def _tool_timeout_result(tc):
+                    func = tc.get("function", {})
+                    name = func.get("name", "")
+                    try:
+                        args = json.loads(func.get("arguments", "{}"))
+                    except (json.JSONDecodeError, TypeError):
+                        args = {}
+                    _timed_out_tool_call_ids.add(tc.get("id", name))
+                    return name, args, json.dumps({
+                        "error": f"Tool '{name}' exceeded the remaining node budget",
+                        "status": "node_timeout",
+                        "tool": name,
+                    }, ensure_ascii=False)
 
                 # ── hooks: 应用 skip 过滤（被跳过的工具不执行，直接回灌提示）──
                 _skipped_tool_result_records = []
@@ -1300,7 +1375,17 @@ def execute():
                         },
                     ) as _tool_batch_span:
                         _tool_batch_span.set_tag("dialogue_id", _dialogue_id() or "")
-                        _tool_results = execute_in_batches(tool_calls, _execute_tool_call)
+                        _tool_results = execute_in_batches(
+                            tool_calls,
+                            _execute_tool_call,
+                            deadline_monotonic=tool_deadline,
+                            timeout_fn=_tool_timeout_result,
+                        )
+                        if _timed_out_tool_call_ids:
+                            _tool_batch_span.set_status(
+                                SpanStatus.ERROR,
+                                "tool execution exceeded remaining node budget",
+                            )
                 # ── hooks: 工具调用后挂载点（检查/改写工具结果）──
                 _original_tool_results = [
                     (name, copy.deepcopy(args), result)
@@ -1371,12 +1456,23 @@ def execute():
                         if isinstance(_result_data, dict)
                         else None
                     )
+                    _business_status = (
+                        str(_result_data.get("status") or "").lower()
+                        if isinstance(_result_data, dict)
+                        else ""
+                    )
                     _result_status = "error" if (
                         isinstance(_result_data, dict)
                         and (
                             bool(_result_data.get("error"))
+                            or _result_data.get("ok") is False
                             or _result_data.get("success") is False
                             or _exit_code not in (None, 0, "0")
+                            or _business_status in {
+                                "failed", "error", "timeout", "cancelled", "interrupted",
+                                "tool_error", "node_timeout", "security_policy_blocked",
+                                "blocked", "denied", "forbidden", "unauthorized", "rate_limited",
+                            }
                         )
                     ) else "completed"
                     _tool_result_records.append({
@@ -1388,6 +1484,21 @@ def execute():
                         "result": result,
                     })
                 _tool_result_records.sort(key=lambda item: item["ordinal"])
+                for _record in _tool_result_records:
+                    _record_name = str(_record.get("tool_name") or "")
+                    _record_key = json.dumps(
+                        [
+                            _record_name,
+                            _record.get("arguments", _record.get("arguments_json", "")),
+                        ],
+                        ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str,
+                    )
+                    if not _record_name:
+                        continue
+                    if _record.get("status") == "error":
+                        unresolved_tool_failures[_record_key] = _record
+                    elif _record.get("status") == "completed":
+                        unresolved_tool_failures.pop(_record_key, None)
                 _tool_results_json = json.dumps(
                     _tool_result_records,
                     ensure_ascii=False,
@@ -1417,19 +1528,20 @@ def execute():
                     ctx=_tool_ctx,
                 )
                 for tc, (name, args, result) in zip(tool_calls, _tool_results):
-                    # Audit: artifacts collected from this tool result (完整清单，F7)
-                    # 双通道：结构化 JSON 字段（artifacts/files/outputs/result/path）+ regex 文本扫描
-                    tool_artifacts = extract_all_artifacts(
-                        result,
-                        excluded_text_paths=referenced_input_artifacts,
+                    # 产物账本只接受 Tool 的结构化字段；任意 stdout/网页/错误文本中的
+                    # 路径都不能证明该文件由本轮生成。
+                    tool_artifacts = extract_structured_artifacts(result)
+                    normalized_tool_artifacts = (
+                        _ensure_artifacts_in_package(tool_artifacts)
+                        if tool_artifacts else []
                     )
+                    observed_artifact_paths.update(tool_artifacts)
+                    observed_artifact_paths.update(normalized_tool_artifacts)
                     new_count = 0
-                    for artifact in tool_artifacts:
+                    for artifact in normalized_tool_artifacts:
                         if artifact not in generated_artifacts:
                             generated_artifacts.append(artifact)
                             new_count += 1
-                    # Relocate artifacts written outside agent package into package outputs/
-                    generated_artifacts = _ensure_artifacts_in_package(generated_artifacts)
                     # ── F7: 不截断存储层。完整 tool_result 落 stderr ──
                     # 通用路径必须默认完整（F7）；此处是 daemon 捕获 stderr 的主路径，
                     # 完整内容应同时落独立文件兜底（F7.1），但 stderr 链路本身不截断。
@@ -1452,12 +1564,21 @@ def execute():
                     _tool_messages_by_ordinal[ordinal]
                     for ordinal in sorted(_tool_messages_by_ordinal)
                 )
+                if _timed_out_tool_call_ids:
+                    _finish_node_timeout(round_i + 1)
+                    return
             else:
                 # Task complete → output result
                 response_text = msg.get("content", "")
                 if not isinstance(response_text, str):
                     response_text = ""
                 _empty_final_result = not response_text.strip()
+                _has_tool_failure = bool(unresolved_tool_failures)
+                _final_status = (
+                    "llm_error" if _empty_final_result
+                    else "tool_error" if _has_tool_failure
+                    else "completed"
+                )
                 # ── Progress: LLM returned final answer ──
                 msg_summary = (
                     f"{skill_name} 返回空结果\n" if _empty_final_result
@@ -1466,36 +1587,30 @@ def execute():
                 try:
                     databus.response_push(msg_summary, type="progress",
                                           skill=skill_name,
-                                          status="error" if _empty_final_result else "completed",
+                                          status="error" if _final_status != "completed" else "completed",
                                           source="skill_executor")
                 except Exception as exc:
                     print(f"[flow]   WARN: summary progress push failed: {exc}", file=sys.stderr)
-                # 安全网：LLM 最终回复文本中可能包含工具未捕获的文件路径（如图片路径），
-                # 兜底扫描并去重。I-6 边界守卫已在 extract_artifact_paths 中内置。
-                # 先通过 _ensure_artifacts_in_package 归一化路径（原始 → outputs/{session_id}/{name}），
-                # 再与已归一的 generated_artifacts 比较，避免工具结果中的同文件被重复加入。
+                # 最终 LLM 文本不是产物来源事实：只审计其中从未被 Tool 观测的路径，
+                # 不把旧文件、输入引用或模型臆测补录为本轮 Artifact。
                 if response_text.strip():
                     response_artifacts = extract_all_artifacts(
                         response_text,
                         excluded_text_paths=referenced_input_artifacts,
                     )
-                    if response_artifacts:
-                        response_normalized = _ensure_artifacts_in_package(response_artifacts)
-                        new_count = 0
-                        for artifact in response_normalized:
-                            if artifact not in generated_artifacts:
-                                generated_artifacts.append(artifact)
-                                new_count += 1
-                        if new_count:
-                            generated_artifacts = _ensure_artifacts_in_package(generated_artifacts)
-                            print(
-                                f"[flow]   artifact.from_response_text new={new_count} "
-                                f"total={len(generated_artifacts)}",
-                                file=sys.stderr,
-                            )
+                    unseen_response_artifacts = [
+                        artifact for artifact in response_artifacts
+                        if artifact not in observed_artifact_paths
+                    ]
+                    if unseen_response_artifacts:
+                        print(
+                            "[flow]   artifact.ignored_response_text "
+                            f"unobserved={len(unseen_response_artifacts)}",
+                            file=sys.stderr,
+                        )
                 output = {
                     "skill_result": response_text,
-                    "status": "llm_error" if _empty_final_result else "completed",
+                    "status": _final_status,
                     "skill_name": skill_name,
                     "rounds_used": round_i + 1,
                     "artifacts_json": json.dumps(generated_artifacts, ensure_ascii=False),
@@ -1510,6 +1625,8 @@ def execute():
                         "tool_calls_in_round": bool(tool_calls),
                         "elapsed_s": round(time.time() - _turn_start, 1),
                     }, level="WARN")
+                elif _has_tool_failure:
+                    output["error"] = "one or more tool calls ended with an unresolved failure"
                 # Write result to DataBus for coordinator to read.
                 #   skill_result:skill-runner — key matching AF_COMPLETED_SKILL_NAME
                 # Coordinator's collect_skill_results reads by completed_skill name ("skill-runner"),
@@ -1548,10 +1665,14 @@ def execute():
                 _emit_skill_end_once(_completed_ctx)
                 _ms = (time.monotonic() - _script_t0) * 1000
                 print(f"[timing] script_exit duration_ms={_ms:.1f} total", file=sys.stderr)
-                if _empty_final_result:
+                if _empty_final_result or _has_tool_failure:
+                    _failure_detail = (
+                        "empty_final_response" if _empty_final_result
+                        else "unresolved_tool_failure"
+                    )
                     _skill_span.set_status(
                         SpanStatus.ERROR,
-                        f"llm_error empty_final_response at round {round_i+1}",
+                        f"{_final_status} {_failure_detail} at round {round_i+1}",
                     )
                 else:
                     _skill_span.set_status(SpanStatus.OK)
@@ -1602,6 +1723,10 @@ def execute():
                     os.environ.pop("AF_SKILL_NAME", None)
                 else:
                     os.environ["AF_SKILL_NAME"] = _previous_skill_name
+                if _previous_llm_timeout is None:
+                    os.environ.pop("AF_LLM_TIMEOUT", None)
+                else:
+                    os.environ["AF_LLM_TIMEOUT"] = _previous_llm_timeout
 
 
 if __name__ == "__main__":

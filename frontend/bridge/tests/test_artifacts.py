@@ -13,12 +13,20 @@ from routes import artifacts
 JPEG_BYTES = b"\xff\xd8\xff\xe0" + b"fixture-jpeg-content"
 
 
+class _SignedArtifactClient(TestClient):
+    def get(self, url, *args, **kwargs):
+        return super().get(
+            artifacts.sign_artifact_url(str(url)), *args, **kwargs,
+        )
+
+
 @pytest.fixture
 def artifact_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     # 三态模型：artifacts 读取根在 ③ workspace 实例（agent_workspace_path）
     root = tmp_path / "workspace"
     root.mkdir()
     monkeypatch.setattr(artifacts.settings, "agent_workspace_dir", str(root))
+    monkeypatch.setattr(artifacts, "_SIGNING_KEY", b"artifact-test-signing-key")
     return root
 
 
@@ -26,7 +34,7 @@ def artifact_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def client(artifact_root: Path) -> TestClient:
     app = FastAPI()
     app.include_router(artifacts.router)
-    return TestClient(app)
+    return _SignedArtifactClient(app)
 
 
 def test_image_is_fetchable_with_real_mime(client: TestClient, artifact_root: Path) -> None:
@@ -184,7 +192,7 @@ def dual_path_app(artifact_root: Path) -> FastAPI:
 
 @pytest.fixture
 def dual_path_client(dual_path_app: FastAPI) -> TestClient:
-    return TestClient(dual_path_app)
+    return _SignedArtifactClient(dual_path_app)
 
 
 _ARTIFACT_REL = "outfit-assistant/outputs/dual-path-test.png"

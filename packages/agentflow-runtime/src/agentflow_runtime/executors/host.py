@@ -6,6 +6,7 @@ write_file.py, edit_file.py, web_fetch.py (sandbox_endpoint=None branches).
 Uses only Python stdlib (subprocess, os, urllib) — no external dependencies.
 """
 
+import gzip
 import os
 import re
 import subprocess
@@ -16,6 +17,23 @@ from agentflow_runtime.executors.base import (
     FileContent,
     ToolExecutor,
     WriteResult,
+)
+from agentflow_runtime.security import (
+    has_registered_secrets,
+    safe_subprocess_environment,
+)
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Keep model-selected fetches from crossing the validated URL boundary."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_SAFE_URL_OPENER = urllib.request.build_opener(
+    urllib.request.ProxyHandler({}),
+    _NoRedirectHandler(),
 )
 
 
@@ -28,6 +46,16 @@ class HostExecutor(ToolExecutor):
     # -- exec_command -------------------------------------------------------
 
     def exec_command(self, command: str, timeout: int = 30, workdir: str | None = None) -> ExecResult:
+        allow_unsafe = os.environ.get(
+            "AF_ALLOW_UNSAFE_LOCAL_SECRET_TOOLS", ""
+        ).strip().lower() in {"1", "true", "yes"}
+        if not allow_unsafe:
+            reason = (
+                "Host command blocked while credentials are loaded"
+                if has_registered_secrets()
+                else "Host command blocked; use an isolated sandbox or explicit unsafe opt-in"
+            )
+            return ExecResult(error=reason, exit_code=-1)
         # bash.py 缺省 cwd 透传宿主 agent_package_dir（非 None），workdir 永远非空，
         # 故 fallback 分支实际走不进去——保留兜底仅为防御性兜底（应对未来其他调用方传 None）。
         cwd = workdir or os.environ.get("AF_AGENT_PACKAGE_DIR") or os.getcwd()
@@ -39,6 +67,7 @@ class HostExecutor(ToolExecutor):
                 text=True,
                 timeout=timeout,
                 cwd=cwd,
+                env=safe_subprocess_environment(),
             )
             return ExecResult(
                 stdout=result.stdout,
@@ -179,8 +208,10 @@ class HostExecutor(ToolExecutor):
                     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 },
             )
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with _SAFE_URL_OPENER.open(req, timeout=timeout) as resp:
                 raw = resp.read()
+                if "gzip" in (resp.headers.get("Content-Encoding", "") or "").lower():
+                    raw = gzip.decompress(raw)
                 content_type = resp.headers.get("Content-Type", "")
                 charset = "utf-8"
                 if "charset=" in content_type:

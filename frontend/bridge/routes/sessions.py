@@ -33,6 +33,8 @@ from dependencies import get_daemon_client
 from session_dependencies import get_session_provider
 from providers import SessionProvider
 
+from routes.artifact_extractor import publicize_artifact_urls
+from routes.artifacts import sign_artifact_url
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
@@ -173,6 +175,13 @@ async def list_persistent_messages(
             detail=f"Persistent session not found: {session_id}",
         )
     messages = await provider.get_messages(session_id, limit=limit)
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, str):
+            message["content"] = publicize_artifact_urls(content)
+        for artifact in message.get("artifacts") or []:
+            if isinstance(artifact, dict) and isinstance(artifact.get("url"), str):
+                artifact["url"] = sign_artifact_url(artifact["url"])
     return _ok({"messages": messages, "total": len(messages)})
 
 

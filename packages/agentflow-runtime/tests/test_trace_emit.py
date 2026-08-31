@@ -20,6 +20,7 @@ from agentflow_runtime.trace.emit import emit_span
 from agentflow_runtime.trace.span_context import SpanContext
 from agentflow_runtime.trace.span_writer import SpanWriter
 from agentflow_runtime.observability import emit_event
+from agentflow_runtime.security import register_secret
 
 
 @pytest.fixture(autouse=True)
@@ -138,6 +139,28 @@ def test_legacy_dual_event_write_is_not_duplicated(tmp_path) -> None:
     assert events[0]["name"] == "llm.result"
     assert events[0]["attributes"]["finish_reason"] == "stop"
     assert events[0]["attributes"]["round"] == "1"
+
+
+def test_span_file_and_stderr_preview_redact_credentials(tmp_path, capsys) -> None:
+    """Span NDJSON and stderr previews must never persist registered secrets."""
+    secret = "trace-test-credential-9988776655"
+    register_secret("test.trace", secret)
+    os.environ["AF_DIALOGUE_ID"] = "dialogue-secret-redaction"
+
+    with emit_span(SpanKind.LLM, "provider-call", {"authorization": secret}) as span:
+        span.add_event("provider.error", {"apiKey": secret})
+        span.set_status(SpanStatus.ERROR, f"provider rejected {secret}")
+
+    stderr = capsys.readouterr().err
+    path = next(tmp_path.rglob("python_spans_*.ndjson"))
+    content = path.read_text(encoding="utf-8")
+    record = json.loads(content)
+
+    assert secret not in stderr
+    assert secret not in content
+    assert record["tags"]["authorization"].startswith("<redacted:")
+    assert record["events"][0]["attributes"]["apiKey"].startswith("<redacted:")
+    assert "<redacted:test.trace>" in record["error_msg"]
 
 
 def _write_spans_in_child(output_dir: str, dialogue_id: str, worker: int,

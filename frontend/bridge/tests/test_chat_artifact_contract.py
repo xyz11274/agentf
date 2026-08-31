@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+from urllib.parse import parse_qs, urlsplit
+
 import pytest
 
+from fastapi import HTTPException
 from config import settings
 from models import ArtifactInfo
 from routes import chat, chat_rest
+from routes import artifacts as artifact_routes
 from routes.artifact_extractor import extract_artifact_infos
 
 
@@ -38,7 +43,10 @@ def test_public_and_relative_artifact_url_modes(
     - 内置 UI 或外部服务至少有一个入口无法访问生成产物。
     """
     monkeypatch.setattr(chat.settings, "artifact_public_base_url", "")
-    assert publicizer(RELATIVE) == RELATIVE
+    relative = publicizer(RELATIVE)
+    assert "https://" not in relative
+    assert "/api/artifacts/" in relative
+    assert "?sig=" in relative
 
     monkeypatch.setattr(
         chat.settings,
@@ -47,6 +55,7 @@ def test_public_and_relative_artifact_url_modes(
     )
     absolute = publicizer(RELATIVE)
     assert "https://agent.example.com/api/artifacts/" in absolute
+    assert "?sig=" in absolute
     assert "example.com//api" not in absolute
     assert "/Users/" not in absolute
 
@@ -484,3 +493,31 @@ def test_output_mode_base64_max_bytes_zero_unlimited(monkeypatch) -> None:
     assert artifacts[0].data_base64 == "SHVnZQ==", (
         f"阈值 0 时不限制,应填充, got {artifacts[0].data_base64!r}"
     )
+
+
+def test_artifact_download_requires_capability_signature(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Artifact paths are not bearer-readable without their signed capability."""
+    artifact_id = "agent/session/outputs/look.png"
+    target = tmp_path / artifact_id
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"png")
+    monkeypatch.setattr(artifact_routes, "_ARTIFACTS_STORAGE_DIR", tmp_path)
+    monkeypatch.setattr(artifact_routes, "_SIGNING_KEY", b"k" * 32)
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(artifact_routes.get_artifact_file(artifact_id))
+    assert exc_info.value.status_code == 403
+
+    signed = artifact_routes.sign_artifact_url(
+        f"/api/artifacts/{artifact_id}"
+    )
+    signature = parse_qs(urlsplit(signed).query)["sig"][0]
+    response = asyncio.run(
+        artifact_routes.get_artifact_file(artifact_id, sig=signature)
+    )
+
+    assert response.path == target
+    assert signature not in response.headers.get("content-disposition", "")

@@ -125,6 +125,42 @@ async def test_save_dialogue_returns_dialogue_id(provider: LocalSessionProvider)
     assert out == "d-1"
 
 
+async def test_save_dialogue_redacts_user_credentials(provider: LocalSessionProvider):
+    s = await provider.get_or_create_session("alice", "web")
+    canary = "ark-test-sqlite-boundary-998877665544332211"
+
+    await provider.save_dialogue(
+        s["id"], f"do not persist {canary}", "safe response", dialogue_id="d-safe",
+    )
+
+    context = await provider.get_context(s["id"], "alice")
+    stored_input = context.messages[0]["content"]
+    assert canary not in stored_input
+    assert "<redacted:provider_key>" in stored_input
+
+
+async def test_save_dialogue_keeps_round_when_redaction_fails(
+    provider: LocalSessionProvider, monkeypatch,
+):
+    import services.secret_safety as secret_safety
+
+    s = await provider.get_or_create_session("alice", "web")
+
+    def fail_redaction(_value):
+        raise RuntimeError("sanitizer unavailable")
+
+    monkeypatch.setattr(secret_safety, "sanitize_for_storage", fail_redaction)
+    await provider.save_dialogue(
+        s["id"], "untrusted input", "safe response", dialogue_id="d-safe",
+    )
+
+    context = await provider.get_context(s["id"], "alice")
+    assert context.messages == [
+        {"role": "user", "content": "<redacted:credential_sanitizer_unavailable>"},
+        {"role": "assistant", "content": "safe response"},
+    ]
+
+
 async def test_save_dialogue_auto_title(provider: LocalSessionProvider):
     """First dialogue auto-sets title from user_input[:50]."""
     long_input = "我昨天感冒了需要请一天假去看医生然后还要买药回家休息" * 3

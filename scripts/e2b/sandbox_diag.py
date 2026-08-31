@@ -84,20 +84,10 @@ def setup_env(cfg: dict) -> None:
 
 
 def apply_ssl_patch() -> None:
-    """跳过证书校验（自建部署自签名证书，幂等）。"""
-    import ssl as _ssl
-    if getattr(_ssl, "_agentflow_patched", False):
-        return
-    _orig = _ssl.create_default_context
+    """Install the chain-verifying, envd-only TLS transport patch."""
+    from agentflow_runtime.common.sandbox_patch import apply_ssl_patch as shared_patch
 
-    def _patched(*a, **kw):
-        ctx = _orig(*a, **kw)
-        ctx.check_hostname = False
-        ctx.verify_mode = _ssl.CERT_NONE
-        return ctx
-
-    _ssl.create_default_context = _patched
-    _ssl._agentflow_patched = True  # type: ignore[attr-defined]
+    shared_patch()
 
 
 def patch_envd_url(sb) -> None:
@@ -163,7 +153,7 @@ def cmd_creds(args: argparse.Namespace) -> int:
     log = log_factory("creds")
     cfg = load_sandbox_config()
     setup_env(cfg)
-    log(f"config loaded: api_url={cfg['e2b_api_url']} api_key_len={len(cfg['e2b_api_key'])} "
+    log(f"config loaded: api_url={cfg['e2b_api_url']} credential_configured={bool(cfg['e2b_api_key'])} "
         f"template={cfg.get('e2b_default_template')}")
     apply_ssl_patch()
     t0 = time.monotonic()
@@ -776,7 +766,7 @@ def cmd_pip_check(args: argparse.Namespace) -> int:
             if p.is_file():
                 os.environ["SSL_CERT_FILE"] = str(p.resolve())
         log(f"config loaded: api_url={cfg['e2b_api_url']} "
-            f"api_key_len={len(cfg['e2b_api_key'])} "
+            f"credential_configured={bool(cfg['e2b_api_key'])} "
             f"template={cfg.get('e2b_default_template')}")
         apply_ssl_patch()
 
@@ -1041,7 +1031,7 @@ def cmd_snapshot_verify(args: argparse.Namespace) -> int:
     # ── 1. credentials：脚本内读 config（合法通道，凭据不进 shell 参数面）──
     cfg = load_sandbox_config()
     setup_env(cfg)
-    log(f"credentials loaded: api_url={cfg['e2b_api_url']} key_len={len(cfg['e2b_api_key'])}")
+    log(f"credentials loaded: api_url={cfg['e2b_api_url']} credential_configured={bool(cfg['e2b_api_key'])}")
     apply_ssl_patch()
 
     # ── 2. 拉起沙箱（Sandbox.create 成功 = credentials 有效）──

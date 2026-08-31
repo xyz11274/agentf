@@ -21,8 +21,11 @@
 from __future__ import annotations
 
 import json
-import re
+import posixpath
+import shlex
+import signal
 import sys
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
@@ -44,7 +47,8 @@ _WRITE_TOOL_NAMES = frozenset({
 # bash 命令中的写/副作用标记（保守：命中即视为写，串行）
 _BASH_WRITE_MARKERS = (
     "write", "mv ", "rm ", "mkdir", "rmdir", ">", ">>",
-    "save", "cp ",
+    "save", "cp ", "touch ", "chmod ", "chown ", "tee ",
+    "wget ", "curl ", "sed -i", "install ", "truncate ", "ln ",
 )
 
 # bash 命令中的只读标记（仅通用 shell 只读命令；不感知业务脚本名——
@@ -77,12 +81,27 @@ def _tool_args(tc: dict) -> dict:
 def _output_path(command: str) -> str | None:
     """提取 bash 命令中的 --output 路径（parallel-write 互不覆盖校验用）。
 
-    仅识别显式 `--output <path>`（可带引号），未指定返回 None。
+    仅识别恰好一个显式 `--output <path>`（可带引号）。复合命令或多个
+    输出无法证明副作用独立，返回 None 走保守串行。
     """
-    m = re.search(r"--output\s+['\"]?([^'\"]\S*)['\"]?", command)
-    if not m:
+    if any(marker in command for marker in _BASH_COMPOUND_MARKERS):
         return None
-    return m.group(1).rstrip("/\\")
+    try:
+        argv = shlex.split(command, posix=True)
+    except ValueError:
+        return None
+    outputs = []
+    for index, token in enumerate(argv):
+        if token == "--output":
+            if index + 1 >= len(argv) or argv[index + 1].startswith("-"):
+                return None
+            outputs.append(argv[index + 1])
+        elif token.startswith("--output="):
+            outputs.append(token.partition("=")[2])
+    if len(outputs) != 1:
+        return None
+    path = posixpath.normpath(outputs[0].rstrip("/\\"))
+    return path if path not in {"", ".", ".."} else None
 
 
 def classify_tool(name: str, args: dict) -> str:
@@ -102,6 +121,8 @@ def classify_tool(name: str, args: dict) -> str:
         return "write"
     if name == "bash":
         command = str(args.get("command", ""))
+        if any(marker in command for marker in _BASH_COMPOUND_MARKERS):
+            return "write"
         # 可并行独立写：命令显式指定 --output 新文件路径（结构特征，不感知业务脚本名）
         # 且无互斥写/副作用标记 → 可并行。框架层按"命令结构"判定，不硬编码业务脚本名
         # ——任何"生成新文件"形态的命令（--output 指定）都适用
@@ -134,6 +155,7 @@ def build_batches(tool_calls: list) -> list:
     batches: list[list] = []
     current: list = []
     current_kind: str | None = None  # 当前归并批次的类别（read / parallel-write）
+    current_outputs: set[str] = set()
     for tc in tool_calls:
         kind = classify_tool(_tool_name(tc), _tool_args(tc))
         if kind == "write":
@@ -141,16 +163,30 @@ def build_batches(tool_calls: list) -> list:
                 batches.append(current)
                 current = []
                 current_kind = None
+                current_outputs.clear()
             batches.append([tc])  # 写/未知 → 单独串行批次
             continue
         # read / parallel-write：同类连续归并，异类断批（P2 read-after-write 保序）
+        output = None
+        if kind == "parallel-write":
+            output = _output_path(str(_tool_args(tc).get("command", "")))
         if current and current_kind == kind:
-            current.append(tc)
+            if kind == "parallel-write" and output in current_outputs:
+                batches.append(current)
+                current = [tc]
+                current_outputs = {output} if output else set()
+            else:
+                current.append(tc)
+                if output:
+                    current_outputs.add(output)
         else:
             if current:
                 batches.append(current)
             current = [tc]
             current_kind = kind
+            current_outputs = set()
+            if kind == "parallel-write" and output:
+                current_outputs.add(output)
     if current:
         batches.append(current)
     return batches
@@ -166,19 +202,100 @@ def _max_workers(batch: list) -> int:
     return max(1, min(4, len(batch)))
 
 
-def execute_in_batches(tool_calls: list, execute_fn: Callable) -> list:
+class _ToolDeadlineExpired(BaseException):
+    """Bypass broad tool ``except Exception`` handlers and unwind to scheduler."""
+
+
+def _timeout_result(tool_call, timeout_fn: Callable | None):
+    if timeout_fn is None:
+        raise TimeoutError("tool execution exceeded its deadline")
+    return timeout_fn(tool_call)
+
+
+def _execute_serial_with_deadline(
+    tool_call,
+    execute_fn: Callable,
+    deadline_monotonic: float | None,
+    timeout_fn: Callable | None,
+):
+    """Run a serial/unknown tool with a real POSIX deadline.
+
+    Harness workers invoke this scheduler on their main thread. SIGALRM is
+    intentional here: returning early from a Future cannot stop its worker,
+    while raising a BaseException unwinds provider, subprocess and network
+    calls that commonly catch ``Exception`` themselves.
+    """
+    if deadline_monotonic is None:
+        return execute_fn(tool_call)
+    remaining = deadline_monotonic - time.monotonic()
+    if remaining <= 0:
+        return _timeout_result(tool_call, timeout_fn)
+    if (
+        threading.current_thread() is not threading.main_thread()
+        or not hasattr(signal, "setitimer")
+    ):
+        # The production Skill worker is a Linux main-thread process. Do not
+        # install a process signal handler from an unsupported caller context.
+        return execute_fn(tool_call)
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+
+    def _raise_deadline(_signum, _frame):
+        raise _ToolDeadlineExpired()
+
+    started = time.monotonic()
+    signal.signal(signal.SIGALRM, _raise_deadline)
+    signal.setitimer(signal.ITIMER_REAL, remaining)
+    try:
+        return execute_fn(tool_call)
+    except _ToolDeadlineExpired:
+        return _timeout_result(tool_call, timeout_fn)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0:
+            elapsed = time.monotonic() - started
+            restored_delay = max(0.000001, previous_timer[0] - elapsed)
+            signal.setitimer(
+                signal.ITIMER_REAL, restored_delay, previous_timer[1]
+            )
+
+
+def execute_in_batches(
+    tool_calls: list,
+    execute_fn: Callable,
+    *,
+    deadline_monotonic: float | None = None,
+    timeout_fn: Callable | None = None,
+) -> list:
     """按混合批次调度执行一批工具调用，返回结果列表（与 tool_calls 保序一一对应）。
 
     - 批次间**按原始顺序串行**（写操作可能依赖前序只读结果，保守保序）
     - 批次内**并行**（只读互不干扰）；串行批次（单个写/慢工具）逐个执行
     - execute_fn(tc) 是"执行单个工具、返回原始结果"的注入函数；
       消息回灌、产物合并等副作用由调用方按结果顺序统一处理（§2.3）
+    - 可选 deadline 只改变显式传入它的 Skill 调用；Coordinator 保持原行为。
+      当前 harness 中业务/未知工具均为串行批次，因此可被真实中断；并行批次
+      仅包含白名单只读工具或自身带 timeout 的 bash 调用。
     """
     _t0 = time.monotonic()
     results: list = []
-    for batch in build_batches(tool_calls):
+    batches = build_batches(tool_calls)
+    for batch_index, batch in enumerate(batches):
+        if (
+            deadline_monotonic is not None
+            and time.monotonic() >= deadline_monotonic
+        ):
+            for remaining_batch in batches[batch_index:]:
+                results.extend(
+                    _timeout_result(tc, timeout_fn) for tc in remaining_batch
+                )
+            break
         if len(batch) == 1:
-            results.append(execute_fn(batch[0]))  # 串行批次：逐个执行
+            results.append(_execute_serial_with_deadline(
+                batch[0], execute_fn, deadline_monotonic, timeout_fn
+            ))
         else:
             with ThreadPoolExecutor(max_workers=_max_workers(batch)) as pool:
                 results.extend(pool.map(execute_fn, batch))  # 并行批次 + pool.map 保序
@@ -186,3 +303,4 @@ def execute_in_batches(tool_calls: list, execute_fn: Callable) -> list:
     _parallel = sum(1 for b in build_batches(tool_calls) if len(b) > 1)
     print(f"[timing] tool_batch parallel={_parallel} duration_ms={_ms:.1f}", file=sys.stderr)
     return results
+_BASH_COMPOUND_MARKERS = ("&&", "||", ";", "|")

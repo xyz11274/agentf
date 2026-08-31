@@ -34,10 +34,21 @@ _DATA_URL_RE = re.compile(r"^data:([a-zA-Z0-9.+-]+/([a-zA-Z0-9.+-]+));base64,(.+
 _MIME_TO_EXT = {"png": "png", "jpeg": "jpg", "jpg": "jpg", "webp": "webp", "gif": "gif"}
 
 
+def _artifact_routing_id(user_id: str, client_id: str) -> str:
+    """Mirror runtime/C++ artifact routing without adding a package dependency."""
+    user_size = len(user_id.encode("utf-8"))
+    client_size = len(client_id.encode("utf-8"))
+    if user_size > 120 or client_size > 120:
+        raise ValueError("user_id and client_id must be at most 120 bytes")
+    if "_" not in user_id and "_" not in client_id:
+        return f"{user_id}_{client_id}"
+    return f"v2__u{user_size}-{user_id}-c{client_size}-{client_id}"
+
+
 def _compute_upload_dir(agent_id: str, user_id: str, client_id: str) -> Path:
     """Return the per-session workspace upload directory.
 
-    Path: ``{agent_workspace_path}/{agent_id}/workspace/{user_id}_{client_id}/upload/``
+    Path: ``{agent_workspace_path}/{agent_id}/workspace/{artifact_routing_id}/upload/``
     （③ workspace 实例内；三态模型见 agent-package-three-state.md）
 
     Raises ``ValueError`` if ``user_id`` or ``client_id`` is empty — session
@@ -48,7 +59,8 @@ def _compute_upload_dir(agent_id: str, user_id: str, client_id: str) -> Path:
             "session-level upload path requires user_id and client_id, "
             f"got user_id={user_id!r} client_id={client_id!r}"
         )
-    return settings.agent_workspace_path / agent_id / "workspace" / f"{user_id}_{client_id}" / "upload"
+    routing_id = _artifact_routing_id(user_id, client_id)
+    return settings.agent_workspace_path / agent_id / "workspace" / routing_id / "upload"
 
 
 def _land_image(data_url: str, upload_dir: Path) -> str | None:

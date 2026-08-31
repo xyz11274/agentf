@@ -154,7 +154,7 @@ fi
 if [ ! -f "$SCRIPT_DIR/.env" ]; then
     echo ""
     echo "⚠️  未找到 .env 文件"
-    echo "   请确认 .env 已随包上传（manifest includes 应含 .env）"
+    echo "   凭据应由宿主环境或本地忽略文件提供；manifest 不得包含 .env"
 fi
 
 echo ""

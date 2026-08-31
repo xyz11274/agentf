@@ -1,0 +1,41 @@
+name: agentflow-dev
+
+channels:
+  - conda-forge
+
+# Local sandbox integration tests must bypass the host HTTP proxy.
+variables:
+  NO_PROXY: 127.0.0.1,localhost
+  no_proxy: 127.0.0.1,localhost
+  CC: x86_64-conda-linux-gnu-cc
+  CXX: x86_64-conda-linux-gnu-c++
+
+dependencies:
+  # Harness/runtime baseline.
+  - python=3.12
+  - pip>=24
+  - setuptools>=75
+  - wheel
+  - uv
+
+  # AgentFlow C++ build and test toolchain (single ABI with conda-forge GTest).
+  - cxx-compiler
+  - cmake>=3.25
+  - ninja
+  - pkg-config
+  - openssl
+  - rapidjson
+  - gtest
+
+  # Trajectory Protobuf work and the planned Rust rewrite.
+  - protobuf
+  - libprotobuf
+  - rust
+
+  - pip:
+      # Editable install: local harness source changes are immediately testable.
+      - -e ./packages/agentflow-runtime[dev]
+      - -r ./examples/agent/outfit-assistant/requirements.txt
+      - pytest-asyncio>=0.23
+      - pytest-cov>=4.1
+      - ruff>=0.3

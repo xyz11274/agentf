@@ -26,7 +26,7 @@ executor = load("outfit_executor_artifacts", ROOT / "nodes/skill_executor.py")
 # `executor.AGENT_PACKAGE_DIR` does NOT propagate — we must patch the pip package
 # module's AGENT_PACKAGE_DIR for those functions to see the override (F5 single source).
 from agentflow_runtime import skill_executor as _pkg_skill_executor
-from agentflow_runtime import coordinator_decide as _pkg_coordinator_decide
+from agentflow_runtime import coordinator_common as _pkg_coordinator_common
 
 
 def _patch_package_dirs(monkeypatch, executor_dir: str, coordinator_dir: str):
@@ -39,7 +39,7 @@ def _patch_package_dirs(monkeypatch, executor_dir: str, coordinator_dir: str):
     monkeypatch.setattr(executor, "AGENT_PACKAGE_DIR", executor_dir)
     monkeypatch.setattr(_pkg_skill_executor, "AGENT_PACKAGE_DIR", executor_dir)
     monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", coordinator_dir)
-    monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", coordinator_dir)
+    monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", coordinator_dir)
 
 
 class FakeDataBus:
@@ -146,7 +146,7 @@ def test_relative_markdown_image_is_rewritten_without_modifying_skill(tmp_path, 
     image = package / "assets" / "look.png"
     image.parent.mkdir(parents=True)
     image.write_bytes(b"image")
-    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(package))
 
     rendered = coordinator.append_artifacts_markdown(
         "搭配完成：![look](assets/look.png)",
@@ -164,7 +164,7 @@ def test_relative_html_image_is_rewritten_without_modifying_skill(tmp_path, monk
     image = package / "assets" / "look.png"
     image.parent.mkdir(parents=True)
     image.write_bytes(b"image")
-    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(package))
 
     rendered = coordinator.append_artifacts_markdown(
         '<section><img src="assets/look.png" alt="look"></section>',
@@ -211,7 +211,7 @@ def test_existing_absolute_markdown_image_is_rewritten(tmp_path):
 def test_package_artifact_url_preserves_directory_hierarchy():
     path = ROOT / "output" / "report" / "index.html"
 
-    url = coordinator.local_artifact_url(str(path))
+    url = _pkg_coordinator_common.local_artifact_url(str(path), coordinator.AGENT_PACKAGE_DIR)
 
     # agent name = basename(AGENT_PACKAGE_DIR), dynamic not hardcoded (Fix 7)
     # URL 格式：/api/artifacts/{agent_name}/files/{relative}，relative 相对 package_dir 计算
@@ -365,7 +365,7 @@ def test_html_report_is_appended_as_report_block(tmp_path, monkeypatch):
     report.parent.mkdir(parents=True)
     report.write_bytes(b"<html><body>report</body></html>")
     monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
-    monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(package))
 
     rendered = coordinator.append_artifacts_markdown(
         "报告已生成",
@@ -757,9 +757,9 @@ def test_url_no_hardcoded_agent_name_in_any_path(tmp_path, monkeypatch):
     img = package / "assets" / "look.png"
     img.parent.mkdir(parents=True)
     img.write_bytes(b"img")
-    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(package))
 
-    url = coordinator.local_artifact_url(str(img))
+    url = _pkg_coordinator_common.local_artifact_url(str(img))
 
     assert "outfit-assistant" not in url
     assert "my-cool-agent" in url
@@ -770,9 +770,9 @@ def test_url_package_name_with_dots(tmp_path, monkeypatch):
     img = package / "out.png"
     img.parent.mkdir(parents=True)
     img.write_bytes(b"img")
-    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(package))
 
-    url = coordinator.local_artifact_url(str(img))
+    url = _pkg_coordinator_common.local_artifact_url(str(img))
 
     assert "org.example.agent" in url
 
@@ -782,9 +782,9 @@ def test_url_deep_nested_directory_hierarchy(tmp_path, monkeypatch):
     deep = package / "a" / "b" / "c" / "d" / "e" / "deep.png"
     deep.parent.mkdir(parents=True)
     deep.write_bytes(b"img")
-    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(package))
 
-    url = coordinator.local_artifact_url(str(deep))
+    url = _pkg_coordinator_common.local_artifact_url(str(deep))
 
     assert "/files/" in url
     assert "a/b/c/d/e/deep.png" in url
@@ -792,7 +792,7 @@ def test_url_deep_nested_directory_hierarchy(tmp_path, monkeypatch):
 
 def test_append_artifacts_http_url_not_rewritten(tmp_path, monkeypatch):
     """HTTP URLs in artifacts should pass through unchanged (no local_artifact_url rewrite)."""
-    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(tmp_path)); monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(tmp_path))
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(tmp_path)); monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(tmp_path))
 
     rendered = coordinator.append_artifacts_markdown(
         "完成",
@@ -821,7 +821,7 @@ def test_append_html_img_dead_link_still_appends_block(tmp_path, monkeypatch):
     image_a.write_bytes(b"png-a")
     image_b.write_bytes(b"png-b")
     monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
-    monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(package))
 
     rendered = coordinator.append_artifacts_markdown(
         '<section><img src="./assets/look.png" alt="look"></section>',
@@ -842,7 +842,7 @@ def test_append_external_url_same_basename_is_idempotent(tmp_path, monkeypatch):
     image.parent.mkdir(parents=True)
     image.write_bytes(b"png")
     monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
-    monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(package))
 
     rendered = coordinator.append_artifacts_markdown(
         "参考图:![look](https://cdn.example.com/look.png)",
@@ -868,7 +868,7 @@ def test_append_video_artifact_becomes_download_block(tmp_path, monkeypatch):
     video.parent.mkdir(parents=True)
     video.write_bytes(b"mp4-bytes")
     monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
-    monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(package))
 
     rendered = coordinator.append_artifacts_markdown(
         "视频已生成",
@@ -900,7 +900,7 @@ def test_append_mixed_duplicate_and_unique_artifacts(tmp_path, monkeypatch):
     b.write_bytes(b"b")
     c.write_bytes(b"c")
     monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
-    monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(package))
 
     rendered = coordinator.append_artifacts_markdown(
         "完成",
@@ -928,7 +928,7 @@ def test_append_versioned_artifacts_keep_highest(tmp_path, monkeypatch):
     v1.write_bytes(b"v1")
     v2.write_bytes(b"v2")
     monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
-    monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(package))
 
     rendered = coordinator.append_artifacts_markdown(
         "完成",
@@ -1053,7 +1053,7 @@ def test_version_dedup_keeps_highest_numbered(tmp_path):
         str(tmp_path / "review-3.png"),
     ]
 
-    result = coordinator._dedup_versioned_artifacts(paths)
+    result = _pkg_coordinator_common._dedup_versioned_artifacts(paths)
 
     assert result == [str(tmp_path / "review-3.png")]
 
@@ -1065,7 +1065,7 @@ def test_version_dedup_keeps_unversioned_separately(tmp_path):
         str(tmp_path / "standalone.png"),
     ]
 
-    result = coordinator._dedup_versioned_artifacts(paths)
+    result = _pkg_coordinator_common._dedup_versioned_artifacts(paths)
 
     assert str(tmp_path / "outfit-2.png") in result
     assert str(tmp_path / "standalone.png") in result
@@ -1074,7 +1074,7 @@ def test_version_dedup_keeps_unversioned_separately(tmp_path):
 
 def test_version_dedup_in_append_artifacts_markdown(tmp_path, monkeypatch):
     """End-to-end: user should only see the latest version, not all variants."""
-    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(tmp_path)); monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(tmp_path))
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(tmp_path)); monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(tmp_path))
     # 必须真实落盘，否则 rewrite_local_artifact_links 因 isfile=False 跳过、URL 也不生成
     a1 = tmp_path / "outfit-review-1.png"
     a2 = tmp_path / "outfit-review-2.png"
@@ -1095,7 +1095,7 @@ def test_version_dedup_in_append_artifacts_markdown(tmp_path, monkeypatch):
 def test_unresolved_markdown_reference_left_unchanged(tmp_path, monkeypatch):
     """LLM references a file that doesn't exist → reference stays as-is,
     not rewritten to a broken /api/artifacts/ URL."""
-    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(tmp_path)); monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(tmp_path))
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(tmp_path)); monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(tmp_path))
 
     rendered = coordinator.append_artifacts_markdown(
         "see ![ghost](nonexistent/ghost.png)",
@@ -1107,7 +1107,7 @@ def test_unresolved_markdown_reference_left_unchanged(tmp_path, monkeypatch):
 
 
 def test_unresolved_html_src_left_unchanged(tmp_path, monkeypatch):
-    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(tmp_path)); monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(tmp_path))
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(tmp_path)); monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(tmp_path))
 
     rendered = coordinator.append_artifacts_markdown(
         '<img src="missing/photo.jpg">',
@@ -1143,7 +1143,7 @@ def test_html_href_attribute_is_rewritten(tmp_path, monkeypatch):
     report = package / "reports" / "full.html"
     report.parent.mkdir(parents=True)
     report.write_text("<html></html>")
-    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(package))
 
     rendered = coordinator.append_artifacts_markdown(
         '<a href="reports/full.html">Full Report</a>',
@@ -1163,7 +1163,7 @@ def test_html_poster_attribute_is_rewritten(tmp_path, monkeypatch):
     poster = package / "assets" / "thumb.jpg"
     poster.parent.mkdir(parents=True)
     poster.write_bytes(b"jpg")
-    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package)); monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(package))
 
     rendered = coordinator.append_artifacts_markdown(
         '<video poster="assets/thumb.jpg"></video>',
@@ -1239,7 +1239,7 @@ def test_dead_link_same_basename_still_appends_block(tmp_path, monkeypatch):
     a.write_bytes(b"a")
     b.write_bytes(b"b")
     monkeypatch.setattr(coordinator, "AGENT_PACKAGE_DIR", str(package))
-    monkeypatch.setattr(_pkg_coordinator_decide, "AGENT_PACKAGE_DIR", str(package))
+    monkeypatch.setattr(_pkg_coordinator_common, "AGENT_PACKAGE_DIR", str(package))
 
     rendered = coordinator.append_artifacts_markdown(
         "完成:![look](./assets/look.png)",

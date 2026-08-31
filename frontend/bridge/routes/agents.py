@@ -256,11 +256,9 @@ async def resume_agent(
 # 从 config.yaml → agent_defaults 映射到 .env 变量名和默认值
 _AGENT_ENV_DEFAULTS: dict[str, str] = {
     # LLM 主模型
-    "AF_LLM_API_KEY":       "agent_defaults.llm.api_key",
     "AF_LLM_BASE_URL":      "agent_defaults.llm.base_url",
     "AF_LLM_MODEL":         "agent_defaults.llm.model",
     # LLM 降级
-    "AF_FALLBACK_LLM_API_KEY":  "agent_defaults.llm_fallback.api_key",
     "AF_FALLBACK_LLM_BASE_URL": "agent_defaults.llm_fallback.base_url",
     "AF_FALLBACK_LLM_MODEL":    "agent_defaults.llm_fallback.model",
     # Coordinator
@@ -297,11 +295,9 @@ _AGENT_ENV_DEFAULTS: dict[str, str] = {
     # VL
     "AF_BR_VISION_BASE_URL":  "agent_defaults.vision.base_url",
     "AF_BR_VISION_MODEL":     "agent_defaults.vision.model",
-    "AF_BR_VISION_API_KEY":   "agent_defaults.vision.api_key",
     # VL 降级
     "AF_BR_VISION_FALLBACK_BASE_URL": "agent_defaults.vision_fallback.base_url",
     "AF_BR_VISION_FALLBACK_MODEL":    "agent_defaults.vision_fallback.model",
-    "AF_BR_VISION_FALLBACK_API_KEY":  "agent_defaults.vision_fallback.api_key",
 }
 
 
@@ -345,6 +341,9 @@ def _inject_agent_env_defaults(pkg_name: str) -> None:
 
     Only writes values that are currently empty, missing, or hold a
     placeholder (``${...}``).  Never overwrites a user-configured value.
+
+    Credentials are deliberately absent from `_AGENT_ENV_DEFAULTS`; they stay
+    in the trusted process environment or an operator-managed ignored file.
     """
     # 三态模型：.env 是运行时数据，注入到 ③ workspace 实例（daemon load ③ 时读取）
     pkg_dir = settings.agent_workspace_path / pkg_name
@@ -352,6 +351,12 @@ def _inject_agent_env_defaults(pkg_name: str) -> None:
     if not pkg_dir.is_dir():
         logger.warning("agent_env_inject.skip pkg=%s (directory not found)", pkg_name)
         return
+
+    # Restrict an existing operator-managed file before reading or rewriting it.
+    # Any chmod failure is fatal: loading from a world-readable credential file
+    # would violate the Bridge security boundary.
+    if env_file.is_file():
+        env_file.chmod(0o600)
 
     # Read current .env
     current_env: dict[str, str] = {}
@@ -443,6 +448,8 @@ def _inject_agent_env_defaults(pkg_name: str) -> None:
     total_written = len(written_defaults) + len(user_has_real)
 
     if defaults_to_write:
+        env_file.touch(mode=0o600, exist_ok=True)
+        env_file.chmod(0o600)
         env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
         logger.info(
             "agent_env_inject.inject pkg=%s keys=%d",

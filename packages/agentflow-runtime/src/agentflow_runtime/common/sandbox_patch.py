@@ -1,15 +1,9 @@
-"""Shared sandbox patch utilities — SSL bypass + path-based envd URL routing.
+"""Path-based E2B envd routing with endpoint-scoped TLS verification.
 
-Extracted from the duplicate patch logic in:
-- ``examples/agent/outfit-assistant/harness/tools/bash.py`` (L85-92, L33-49)
-- ``docker/sandbox/e2b_lifecycle.py`` (_apply_ssl_patch, L80-94)
-- ``docker/sandbox/e2b_sync.py`` (_patched_ssl_ctx L44-52, _patch_envd_url L82-95)
-
-These patches are required because the internal e2b deployment uses a
-path-based reverse proxy (cubeproxy) with ``server_name _;`` which does
-not accept ``*.cube.app`` TLS SNI.  All SDK HTTP calls must be routed
-through ``https://218.245.96.148:443/sandbox/{id}/{port}`` with SSL
-certificate verification disabled.
+The internal cubeproxy is reached by a fixed IP while its certificate names
+the cube domain.  Only envd transports therefore disable hostname matching;
+the certificate chain remains mandatory.  The process-wide SSL factory and
+all credential-bearing E2B control-plane requests remain untouched.
 """
 
 # ---------------------------------------------------------------------------
@@ -21,32 +15,103 @@ SANDBOX_TARGET_HOST = "https://218.245.96.148:443"
 
 
 # ---------------------------------------------------------------------------
-# SSL patch
+# Endpoint-scoped envd TLS patch
 # ---------------------------------------------------------------------------
 
-def apply_ssl_patch() -> None:
-    """Globally patch ``ssl.create_default_context`` to skip certificate verification.
+_ENVD_TLS_PATCHED = False
 
-    Idempotent — the monkey-patch is applied only once even if called
-    multiple times (guarded by ``ssl._agentflow_patched`` sentinel).
 
-    Source: e2b_lifecycle.py ``_apply_ssl_patch()`` + outfit bash.py L85-92.
-    """
+def create_envd_ssl_context():
+    """Return a chain-verifying context for the fixed-IP envd proxy."""
+    import os
     import ssl
 
-    if getattr(ssl, "_agentflow_patched", False):
-        return  # already patched — idempotent guard
+    ca_file = os.environ.get("SSL_CERT_FILE", "").strip()
+    context = ssl.create_default_context(cafile=ca_file or None)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_REQUIRED
+    return context
 
-    _orig = ssl.create_default_context
 
-    def _patched(*args, **kwargs):
-        ctx = _orig(*args, **kwargs)
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        return ctx
+def apply_ssl_patch() -> None:
+    """Patch only E2B envd transports; never modify global SSL behavior."""
+    global _ENVD_TLS_PATCHED
 
-    ssl.create_default_context = _patched
-    ssl._agentflow_patched = True  # type: ignore[attr-defined]
+    import asyncio
+    import importlib
+    import os
+
+    from agentflow_runtime.security import register_environment_secrets
+    from agentflow_runtime.security.trusted_media import validate_credential_url
+
+    register_environment_secrets()
+    api_url = os.environ.get("E2B_API_URL", "").strip()
+    if api_url:
+        validate_credential_url(api_url)
+    if _ENVD_TLS_PATCHED:
+        return
+
+    from e2b.api import connection_retries, limits
+    from e2b.api.client_sync import EnvdTransportWithLogger
+
+    def _sync_envd_transport(config, http2=True):
+        instances = getattr(EnvdTransportWithLogger._thread_local, "instances", {})
+        key = (http2, config.proxy, os.environ.get("SSL_CERT_FILE", ""))
+        transport = instances.get(key)
+        if transport is None:
+            transport = EnvdTransportWithLogger(
+                limits=limits,
+                proxy=config.proxy,
+                http2=http2,
+                retries=connection_retries,
+                verify=create_envd_ssl_context(),
+            )
+            instances[key] = transport
+            EnvdTransportWithLogger._thread_local.instances = instances
+        return transport
+
+    sync_modules = (
+        "e2b.api.client_sync",
+        "e2b.sandbox_sync.commands.command",
+        "e2b.sandbox_sync.commands.pty",
+        "e2b.sandbox_sync.filesystem.filesystem",
+    )
+    for module_name in sync_modules:
+        module = importlib.import_module(module_name)
+        module.get_envd_transport = _sync_envd_transport
+
+    try:
+        from e2b.api.client_async import AsyncEnvdTransportWithLogger
+
+        def _async_envd_transport(config, http2=True):
+            loop = asyncio.get_running_loop()
+            instances = AsyncEnvdTransportWithLogger._instances.get(loop)
+            if instances is None:
+                instances = {}
+                AsyncEnvdTransportWithLogger._instances[loop] = instances
+            key = (http2, config.proxy, os.environ.get("SSL_CERT_FILE", ""))
+            transport = instances.get(key)
+            if transport is None:
+                transport = AsyncEnvdTransportWithLogger(
+                    limits=limits,
+                    proxy=config.proxy,
+                    http2=http2,
+                    retries=connection_retries,
+                    verify=create_envd_ssl_context(),
+                )
+                instances[key] = transport
+            return transport
+
+        for module_name in (
+            "e2b.api.client_async",
+            "e2b.sandbox_async.main",
+        ):
+            module = importlib.import_module(module_name)
+            module.get_envd_transport = _async_envd_transport
+    except ImportError:
+        pass
+
+    _ENVD_TLS_PATCHED = True
 
 
 # ---------------------------------------------------------------------------

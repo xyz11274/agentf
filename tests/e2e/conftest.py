@@ -83,11 +83,14 @@ def local_sandbox():
     测试结束后 SIGTERM 终止子进程。
     """
     port = _find_free_port()
+    child_env = os.environ.copy()
+    child_env["AF_ALLOW_UNSAFE_LOCAL_SECRET_TOOLS"] = "1"
     proc = subprocess.Popen(
         [sys.executable, _SANDBOX_SERVER, "--port", str(port), "--host", "127.0.0.1"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=str(Path(_SANDBOX_SERVER).parent),
+        env=child_env,
     )
     endpoint = f"http://127.0.0.1:{port}"
     _wait_ready(endpoint, proc)

@@ -138,6 +138,23 @@ def test_multiple_tool_calls_execute_in_parallel(skill_env, tmp_path):
 
     fake_bus = _FakeDataBus()
     fake_reg = _FakeToolRegistry()
+    fake_reg._tools = [{
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "exec",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "timeout": {
+                        "type": "integer",
+                        "default": 30,
+                    },
+                },
+            },
+        },
+    }]
 
     # call_llm 序列：第 1 轮返回 2 个 tool_calls → 第 2 轮返回最终答案
     tool_calls = [
@@ -180,6 +197,19 @@ def test_multiple_tool_calls_execute_in_parallel(skill_env, tmp_path):
             tool_result_payloads.append(payload)
         return payload
 
+    generated_path = "/tmp/generated.png"
+    stale_response_path = "/tmp/stale-from-final.png"
+
+    def fake_extract_structured_artifacts(result):
+        if isinstance(result, str) and '"stdout": "ok:bash"' in result:
+            return [generated_path]
+        return []
+
+    def fake_extract_artifacts(result, **_kwargs):
+        if result == "Hook 后完成":
+            return [stale_response_path]
+        return []
+
     with patch.object(skill_executor, "DataBusClient", return_value=fake_bus), \
          patch.object(skill_executor, "call_llm", side_effect=llm_side_effect) as mock_llm, \
          patch.object(skill_executor, "get_recorder", return_value=fake_recorder), \
@@ -187,12 +217,16 @@ def test_multiple_tool_calls_execute_in_parallel(skill_env, tmp_path):
          patch.object(skill_executor, "AgentConfig") as mock_cfg, \
          patch.object(skill_executor, "_LocalToolRegistry", return_value=fake_reg), \
          patch.object(skill_executor, "_ensure_artifacts_in_package",
-                      side_effect=lambda artifacts: artifacts), \
+                      side_effect=lambda artifacts: artifacts) as ensure_artifacts, \
+         patch.object(skill_executor, "extract_structured_artifacts",
+                      side_effect=fake_extract_structured_artifacts) as extract_structured, \
+         patch.object(skill_executor, "extract_all_artifacts",
+                      side_effect=fake_extract_artifacts) as extract_text, \
          patch.object(skill_executor, "resolve_llm_config",
                       return_value={"model": "test", "api_key": "k", "base_url": "http://127.0.0.1:1/v1"}):
 
         mock_cfg.skill_max_iterations.return_value = 5
-        mock_cfg.node_execution_timeout.return_value = 3600
+        mock_cfg.node_execution_timeout.return_value = 20
         mock_cfg.skill_max_completion_tokens.return_value = 4000
         mock_cfg.skill_llm_temperature.return_value = 0.7
         mock_cfg.skill_llm_top_p.return_value = 1.0
@@ -224,6 +258,14 @@ def test_multiple_tool_calls_execute_in_parallel(skill_env, tmp_path):
     second_round_messages = mock_llm.call_args_list[1].args[0]
     tool_messages = [m for m in second_round_messages if m.get("role") == "tool"]
     assert [m["tool_call_id"] for m in tool_messages] == ["call_1", "call_2"]
+
+    # Only the successful tool's newly reported artifact is persisted.  The
+    # following failed tool and an unobserved path in final LLM text are not
+    # accepted as new artifact provenance.
+    assert ensure_artifacts.call_count == 1
+    assert ensure_artifacts.call_args.args[0] == [generated_path]
+    assert extract_structured.call_count == 2
+    assert extract_text.call_count == 1
 
     # Skill invocation preserves the dispatch identity and complete arguments.
     assert len(skill_start_payloads) == 1
@@ -264,14 +306,19 @@ def test_multiple_tool_calls_execute_in_parallel(skill_env, tmp_path):
     assert [r["tool_call_id"] for r in result_records] == ["call_1", "call_2"]
     assert [r["ordinal"] for r in result_records] == [1, 2]
     assert [r["arguments"]["command"] for r in result_records] == ["echo a", "echo b"]
+    assert all(
+        1 <= r["arguments"]["timeout"] < 30
+        for r in result_records
+    )
     assert [r["status"] for r in result_records] == ["completed", "error"]
     assert json.loads(result_records[0]["result"])["stdout"] == "ok:bash"
     assert json.loads(result_records[1]["result"])["error"] == "simulated failure"
 
-    # ⑤ 结果写入 DataBus（status=completed）
+    # ⑤ 未恢复的 Tool 业务失败写入 DataBus，但不改变 Workflow 退出语义。
     put_calls = dict(fake_bus.put_calls)
     result = json.loads(put_calls["skill_result:skill-runner"])
-    assert result["status"] == "completed"
+    assert result["status"] == "tool_error"
+    assert "unresolved failure" in result["error"]
 
     # ⑥ 主线程记录一个 tool_batch span，父节点是 skill span。
     span_files = list(tmp_path.rglob("python_spans_*.ndjson"))

@@ -419,7 +419,9 @@ def test_post_package_invokes_subprocess_with_expected_argv(
     # Output dir is the per-package dist/ directory.
     assert Path(argv[4]).name == "dist"
     # CWD is pinned so the script's own SCRIPT_DIR/PROJECT_ROOT agree.
-    assert captured["kwargs"].get("cwd", "").endswith("aisf_agentflow")
+    actual_cwd = Path(captured["kwargs"].get("cwd", "")).resolve()
+
+    assert actual_cwd == Path(__file__).resolve().parents[3]
 
 
 # ---------------------------------------------------------------------------

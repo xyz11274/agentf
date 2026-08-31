@@ -78,6 +78,21 @@ def test_classify_tool_bash_parallel_write():
     assert classify_tool(
         "bash", {"command": "python3 gen_asset.py --prompt y --output ./assets/b.png"}
     ) == "parallel-write"
+    assert classify_tool(
+        "bash",
+        {"command": 'python3 gen_asset.py --prompt x --output "assets/a b.png"'},
+    ) == "parallel-write"
+
+
+def test_classify_tool_parallel_write_rejects_ambiguous_output():
+    assert classify_tool(
+        "bash",
+        {"command": "python3 gen.py --output a.png --output b.png"},
+    ) == "write"
+    assert classify_tool(
+        "bash", {"command": "python3 gen.py --output a.png; echo done"}
+    ) == "write"
+
 
 
 def test_classify_tool_parallel_write_excludes_dangerous():
@@ -133,6 +148,25 @@ def test_build_batches_generate_parallel_group():
     assert [t["id"] for t in batches[0]] == ["g1", "g2"]  # 两个 gen_asset.py 并行
     assert [t["id"] for t in batches[1]] == ["w1"]        # 写串行
     assert [t["id"] for t in batches[2]] == ["g3"]        # 单个 gen_asset.py 独立批
+
+
+def test_build_batches_normalized_same_output_is_not_parallel():
+    """语法不同但归一化后相同的输出路径不能并发覆盖。"""
+    tcs = [
+        _mk_tc(
+            "bash",
+            "python3 gen_asset.py --output ./assets/look.png",
+            "g1",
+        ),
+        _mk_tc(
+            "bash",
+            "python3 gen_asset.py --output assets/tmp/../look.png",
+            "g2",
+        ),
+    ]
+    assert [[tc["id"] for tc in batch] for batch in build_batches(tcs)] == [
+        ["g1"], ["g2"],
+    ]
 
 
 def test_build_batches_all_read_single_batch():
@@ -228,3 +262,32 @@ def test_execute_in_batches_mixed_preserves_order():
     ]
     results = execute_in_batches(tcs, execute_fn)
     assert results == ["result:r1", "result:r2", "result:w1", "result:r3"]
+
+
+def test_execute_in_batches_deadline_closes_serial_and_remaining_calls():
+    """A blocking domain tool times out and later serial calls get terminal results."""
+    executed = []
+    tcs = [
+        _mk_tc("slow_domain_tool", tc_id="slow-1"),
+        _mk_tc("second_domain_tool", tc_id="slow-2"),
+    ]
+
+    def execute_fn(tc):
+        executed.append(tc["id"])
+        time.sleep(1)
+        return f"late:{tc['id']}"
+
+    def timeout_fn(tc):
+        return f"timeout:{tc['id']}"
+
+    started = time.monotonic()
+    results = execute_in_batches(
+        tcs,
+        execute_fn,
+        deadline_monotonic=time.monotonic() + 0.05,
+        timeout_fn=timeout_fn,
+    )
+
+    assert time.monotonic() - started < 0.5
+    assert executed == ["slow-1"]
+    assert results == ["timeout:slow-1", "timeout:slow-2"]

@@ -12,6 +12,7 @@ Covers:
 import json
 import sys
 import textwrap
+from types import SimpleNamespace
 
 import pytest
 
@@ -78,6 +79,75 @@ def test_discover_servers_skips_invalid_entry(tmp_path):
     assert servers[0].command == "uv"
 
 
+def test_remote_http_client_keeps_tls_and_disables_redirects(monkeypatch):
+    captured = {}
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "httpx",
+        SimpleNamespace(AsyncClient=_FakeAsyncClient),
+    )
+
+    client = mcp_bridge._unverified_http_client(
+        headers={"Authorization": "Bearer opaque"},
+        timeout=12,
+    )
+
+    assert isinstance(client, _FakeAsyncClient)
+    assert captured["verify"] is True
+    assert captured["follow_redirects"] is False
+    assert captured["headers"] == {"Authorization": "Bearer opaque"}
+    assert captured["timeout"] == 12
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://mcp.example.test/tools",
+        "http://127.0.0.1:8199/mcp",
+        "http://localhost:8199/mcp",
+        "http://[::1]:8199/mcp",
+    ],
+)
+def test_validate_remote_transport_accepts_authenticated_or_loopback(url):
+    mcp_bridge._validate_remote_transport(
+        mcp_bridge.MCPServerConfig(
+            name="safe",
+            transport_type="streamable-http",
+            url=url,
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("url", "message"),
+    [
+        ("http://mcp.example.test/tools", "must use HTTPS"),
+        (
+            "https://user:" + "password@mcp.example.test/tools",
+            "must be supplied as headers",
+        ),
+        (
+            "https://mcp.example.test/tools?api_key=credential-value-123456",
+            "must not contain credentials",
+        ),
+        ("ftp://mcp.example.test/tools", "must use HTTPS"),
+        ("https:///missing-host", "must use HTTPS"),
+    ],
+)
+def test_validate_remote_transport_rejects_unsafe_urls(url, message):
+    with pytest.raises(ValueError, match=message):
+        mcp_bridge._validate_remote_transport(
+            mcp_bridge.MCPServerConfig(
+                name="unsafe",
+                transport_type="streamable-http",
+                url=url,
+            )
+        )
 # 4b. tool naming — requires mcp SDK for a real stdio server.
 # Defer to the real-link test (4c) which also validates naming.
 

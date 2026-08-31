@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from sandbox_http_server import validate_upload_path
+from sandbox_http_server import _exec_tool, validate_upload_path
 
 
 class TestUploadPathValidation(unittest.TestCase):
@@ -54,6 +54,20 @@ class TestUploadPathValidation(unittest.TestCase):
         path = "workspace/user1_client-a/other/file.png"
         result = validate_upload_path(path)
         self.assertIsNotNone(result)
+
+
+class TestToolEnvironmentPolicy(unittest.TestCase):
+    """The generic tool endpoint must not carry process environments."""
+
+    def test_caller_supplied_env_vars_are_rejected_before_execution(self):
+        result = _exec_tool(
+            "bash",
+            {"command": "printf ok"},
+            {"env_vars": {"LANG": "C"}},
+        )
+
+        self.assertEqual(result["exit_code"], 1)
+        self.assertIn("security_policy_blocked", result["stderr"])
 
 
 if __name__ == "__main__":

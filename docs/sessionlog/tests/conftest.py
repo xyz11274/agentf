@@ -59,7 +59,7 @@ def serial_events():
     import copy
     base = {
         "type": None, "seq": None, "ts": None, "pid": None,
-        "trace_id": None, "dialogue_id": "d1", "session_id": "s0",
+        "trace_id": None, "dialogue_id": "d1",
         "node_id": None, "data": {},
     }
     _ts = iter(range(1000, 1200, 10))
@@ -73,7 +73,7 @@ def serial_events():
 
     return [
         # coordinator A（pid 668, trace tA）
-        ev(type="session.start", seq=1, pid=668, trace_id="tA", node_id="coordinator_decide",
+        ev(type="dialogue.start", seq=1, pid=668, trace_id="tA", node_id="coordinator_decide",
            data={"trigger_type": "first", "model": "m", "completed_skill": ""}),
         ev(type="llm.request", seq=2, pid=668, trace_id="tA", node_id="coordinator_decide", round=1,
            span_id="spA1", data={"model": "m", "messages": [{"role": "user", "content": "hi"}], "msg_count": 1}),
@@ -107,6 +107,6 @@ def serial_events():
            span_id="spC1", source_event_seqs=[2],
            data={"call_id": "c3", "response": {"choices": [{"finish_reason": "stop"}]},
                  "meta": {"task_type": "coordinator", "node_id": "coordinator_decide"}}),
-        ev(type="session.end", seq=4, pid=700, trace_id="tC", node_id="coordinator_decide",
+        ev(type="dialogue.end", seq=4, pid=700, trace_id="tC", node_id="coordinator_decide",
            source_event_seqs=[3], data={"status": "normal", "response_text": "ok"}),
     ]

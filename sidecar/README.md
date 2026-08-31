@@ -93,7 +93,7 @@ export COREMIND_REQUIRED_SERVICES="IMInferScheduler,DMContextService,KMMService"
 
 ```bash
 ./scripts/build.sh dev
-export AF_LLM_API_KEY="sk-xxx"
+export AF_LLM_API_KEY='<credential-from-secret-store>'
 export AF_LLM_BASE_URL="https://dashscope.aliyuncs.com/compatible-mode/v1"
 
 ./coremind_bridge \

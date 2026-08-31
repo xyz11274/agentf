@@ -6,6 +6,7 @@
 
 #include "sandbox/sandbox_local.h"
 
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -13,6 +14,7 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <netinet/in.h>
+#include <mutex>
 #include <random>
 #include <signal.h>
 #include <sstream>
@@ -42,6 +44,58 @@ static std::string generate_sandbox_id() {
   return ss.str();
 }
 
+// LocalSandbox 共用宿主网络命名空间。这里只串行化很短的 server 启动窗口，
+// 避免后一实例在前一子进程完成 bind 前选中同一端口。
+static std::mutex& local_server_launch_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+// fork 前解析实际监听端口；配置端口已被其他 LocalSandbox 占用时，
+// 由内核分配一个空闲的 loopback 端口。
+static int select_local_server_port(int requested_port) {
+  auto try_bind = [](int candidate, int* selected_port) -> int {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) {
+      return errno;
+    }
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(static_cast<uint16_t>(candidate));
+
+    if (bind(sock, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
+      int error = errno;
+      close(sock);
+      return error;
+    }
+
+    socklen_t len = sizeof(addr);
+    if (getsockname(sock, reinterpret_cast<struct sockaddr*>(&addr), &len) != 0) {
+      int error = errno;
+      close(sock);
+      return error;
+    }
+
+    *selected_port = ntohs(addr.sin_port);
+    close(sock);
+    return 0;
+  };
+
+  int selected_port = 0;
+  int error = try_bind(requested_port > 0 ? requested_port : 0, &selected_port);
+  if (error == EADDRINUSE && requested_port > 0) {
+    error = try_bind(0, &selected_port);
+  }
+  if (error != 0 || selected_port <= 0) {
+    throw SandboxFactory::SandboxLaunchException(
+        "Failed to select LocalSandbox HTTP port: " + std::string(strerror(error)));
+  }
+  return selected_port;
+}
+
 LocalSandbox::LocalSandbox(const SandboxKey& owner,
                            const std::string& workdir_root,
                            const std::string& sandbox_http_server_path,
@@ -63,12 +117,9 @@ LocalSandbox::LocalSandbox(const SandboxKey& owner,
         "Failed to create workdir: " + workdir_ + " (" + ec.message() + ")");
   }
 
-  // 拉起 sandbox_http_server.py（bind 0 自动分配端口）
+  // 拉起 sandbox_http_server.py（端口冲突时自动分配独立端口）
   int port = launch_http_server(sandbox_http_server_path, sandbox_http_port);
   endpoint_ = "http://127.0.0.1:" + std::to_string(port);  // B17：只监听 loopback
-
-  // 等待 server 就绪并探测 endpoint 可达
-  wait_for_server_ready(port);
 
   // endpoint 不可达时 wait_for_server_ready 已抛异常——此处 state_ 已是 RUNNING
   mark_active();  // FR-009：初始化活跃时间戳
@@ -83,6 +134,9 @@ LocalSandbox::~LocalSandbox() {
 int LocalSandbox::launch_http_server(const std::string& sandbox_http_server_path, int port) {
   // 用 fork+execl 启 python3 sandbox_http_server.py（popen 的非阻塞版本）
   // 与 exe_loader.cpp 既有 fork+exec 模式一致（F5 单一真相来源）
+
+  std::lock_guard<std::mutex> launch_guard(local_server_launch_mutex());
+  port = select_local_server_port(port);
 
   // FR-024：在 fork 前计算父进程 PID，避免 fork 后子进程 getppid() 竞态
   // （fork 后、getppid() 前父进程死亡 → 子进程被 init 收养 → getppid()==1，
@@ -113,6 +167,7 @@ int LocalSandbox::launch_http_server(const std::string& sandbox_http_server_path
            "--port", std::to_string(port).c_str(),
            "--host", "127.0.0.1",  // B17：只监听 loopback
            "--parent-pid", parent_pid_str.c_str(),
+           "--security-profile", "restricted-local",
            nullptr);
     // execlp 仅在失败时返回
     _exit(127);
@@ -120,28 +175,9 @@ int LocalSandbox::launch_http_server(const std::string& sandbox_http_server_path
   // 父进程
   server_pid_ = pid;
 
-  // 若 port == 0（自动分配），用 bind(0) 探测可用端口
-  if (port == 0) {
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) {
-      // socket 失败，fallback 到随机端口【兜底，不应发生】
-      std::random_device rd;
-      port = 32768 + (rd() % 32768);
-    } else {
-      struct sockaddr_in addr;
-      memset(&addr, 0, sizeof(addr));
-      addr.sin_family = AF_INET;
-      addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-      addr.sin_port = 0;  // 内核分配
-      if (bind(sock, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
-        socklen_t len = sizeof(addr);
-        if (getsockname(sock, (struct sockaddr*)&addr, &len) == 0) {
-          port = ntohs(addr.sin_port);  // 内核分配的端口
-        }
-      }
-      close(sock);
-    }
-  }
+  // 持有启动锁直到当前子进程真正占有选定端口。否则后一实例可能探测到旧
+  // server 的响应，并把兄弟实例的 endpoint 误认成自己的 endpoint。
+  wait_for_server_ready(port);
   return port;
 }
 
@@ -363,7 +399,6 @@ void LocalSandbox::resume() {
   // 重新拉起 sandbox_http_server.py（端口复用 http_server_port_，0=自动分配）
   int port = launch_http_server(http_server_path_, http_server_port_);
   endpoint_ = "http://127.0.0.1:" + std::to_string(port);  // B17：只监听 loopback
-  wait_for_server_ready(port);
 
   state_ = SandboxState::RUNNING;
   mark_active();  // FR-009：恢复后重置活跃时间戳

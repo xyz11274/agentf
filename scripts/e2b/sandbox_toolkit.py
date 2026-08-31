@@ -49,27 +49,15 @@ except ImportError:
 
 # ── 默认配置 ──────────────────────────────────────────────────────────
 _DEFAULT_API_URL = "http://218.245.96.148:30030"
-_DEFAULT_API_KEY = "e2b_000000000"
+_DEFAULT_API_KEY = ""
 _CA_CERT_PATH = str(Path(__file__).resolve().parent.parent.parent / "resource" / "certs" / "e2b_CA.pem")
 
 
 def _apply_ssl_patch() -> None:
-    """SSLPatch: 内部 e2b 部署使用 IP 直连，跳过证书验证。"""
-    import ssl as _ssl
+    """Install the chain-verifying, envd-only TLS transport patch."""
+    from agentflow_runtime.common.sandbox_patch import apply_ssl_patch
 
-    if getattr(_ssl, "_agentflow_patched", False):
-        return  # idempotent guard
-
-    _orig_create_default_context = _ssl.create_default_context
-
-    def _patched_create_default_context(*args, **kwargs):
-        ctx = _orig_create_default_context(*args, **kwargs)
-        ctx.check_hostname = False
-        ctx.verify_mode = _ssl.CERT_NONE
-        return ctx
-
-    _ssl.create_default_context = _patched_create_default_context
-    _ssl._agentflow_patched = True  # type: ignore[attr-defined]
+    apply_ssl_patch()
 
 
 # 内部 e2b 部署用 path-based 反向代理（cubeproxy），SDK 构造的 hostname 路由

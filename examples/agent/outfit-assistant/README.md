@@ -377,7 +377,7 @@ harness/skills/{skill_name}/
 | `llm/traces/index` | call_id 有序列表，供枚举 |
 | `llm/session_messages` | 跨触发的对话历史（session 级持久化） |
 
-HTTP 传输用 Python `requests` 库（`verify=False` 跳过 SSL 证书验证，等效于旧版 curl `-k` 行为）。
+HTTP 传输用 Python `requests` 库并保持证书校验；私有 CA 通过 `SSL_CERT_FILE` 或 `REQUESTS_CA_BUNDLE` 显式配置，远端端点必须使用 HTTPS。
 
 #### meta 中的任务上下文字段
 

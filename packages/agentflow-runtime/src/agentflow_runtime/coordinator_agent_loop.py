@@ -42,6 +42,7 @@ from agentflow_runtime import mounts as hook_mounts
 from agentflow_runtime.context import AgentContext
 from agentflow_runtime.hooks import load_hooks_from_dir, trigger as hook_trigger
 from agentflow_runtime.trace import emit_span, SpanKind, SpanStatus
+from agentflow_runtime.security import install_stderr_redaction
 from agentflow_runtime.parse_af_input import parse_af_input, parse_stream
 from agentflow_runtime.round_reminder import build_round_reminder
 from agentflow_runtime.tool_policies import execute_in_batches
@@ -136,6 +137,7 @@ def execute() -> None:
     3. 没有 completed_skill / skill_success 等框架注入变量——coordinator 自己调工具
     4. 进程内 messages 天然保留上下文，避免跨 skill 重复分析
     """
+    install_stderr_redaction()
     _t0 = time.time()
     # 霰弹式收敛(2026-08-14):公共模块 coordinator_common 的产物 URL 生成
     # 依赖模块级 AGENT_PACKAGE_DIR——entry file 只注入本模块,必须同步到公共模块,
@@ -250,8 +252,8 @@ def execute() -> None:
 
     # ── 加载 harness 工具集（v2 核心：替代 v1 的 RUN_SKILLS_TOOL） ──
     # _LocalToolRegistry 复用 skill_executor 的实现：
-    #   builtin tools（agentflow_runtime 内置）+ agent package harness/tools/ 覆盖 + MCP
-    tool_registry = _LocalToolRegistry(skill_name="")   # 不加载 skill-scoped 工具
+    #   builtin + agent tools + configured skill tools + MCP
+    tool_registry = _LocalToolRegistry(skill_names=skill_names)
     available_tools = tool_registry.get_tools()
     tool_names = [t["function"]["name"] for t in available_tools]
 

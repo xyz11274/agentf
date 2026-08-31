@@ -37,6 +37,10 @@ def client(bridge_app: FastAPI) -> TestClient:
     return TestClient(bridge_app)
 
 
+def _signed_artifact_url(artifact_id: str) -> str:
+    return artifacts.sign_artifact_url(f"/api/artifacts/{artifact_id}")
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  Bridge 存储端点测试
 # ═══════════════════════════════════════════════════════════════════
@@ -69,7 +73,8 @@ class TestBridgeStorageEndpoints:
         assert stored.read_bytes() == b"fake-png-content"
 
         # 下载
-        resp = client.get(f"/api/artifacts/{artifact_id}")
+        assert client.get(f"/api/artifacts/{artifact_id}").status_code == 403
+        resp = client.get(_signed_artifact_url(artifact_id))
         assert resp.status_code == 200
         assert resp.content == b"fake-png-content"
 
@@ -95,7 +100,8 @@ class TestBridgeStorageEndpoints:
 
     def test_download_not_found(self, client: TestClient):
         """下载不存在的产物返回 404。"""
-        resp = client.get("/api/artifacts/nonexistent/file.png")
+        artifact_id = "nonexistent/file.png"
+        resp = client.get(_signed_artifact_url(artifact_id))
         assert resp.status_code == 404
 
     def test_upload_binary_roundtrip(self, client: TestClient, tmp_path: Path):
@@ -121,7 +127,7 @@ class TestBridgeStorageEndpoints:
         stored = tmp_path / "artifacts_storage" / artifact_id
         assert stored.read_bytes() == binary_payload, "Stored bytes mismatch"
         # 下载也必须字节一致
-        resp = client.get(f"/api/artifacts/{artifact_id}")
+        resp = client.get(_signed_artifact_url(artifact_id))
         assert resp.status_code == 200
         assert resp.content == binary_payload, "Downloaded bytes mismatch"
 
@@ -193,14 +199,15 @@ class TestBridgeLocalFS:
     def test_artifact_fallback_to_local_fs(self, app_with_local_fs: FastAPI):
         """存储服务不可用时降级到本地文件系统。"""
         client = TestClient(app_with_local_fs)
-        resp = client.get("/api/artifacts/test-pkg/outputs/look.png")
+        resp = client.get(_signed_artifact_url("test-pkg/outputs/look.png"))
         assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
         assert resp.content == b"local-fallback-content"
 
     def test_artifact_not_found(self, client: TestClient):
         """产物不存在时返回 404。"""
         # 使用默认 client（无本地文件）
-        resp = client.get("/api/artifacts/nonexistent/outputs/missing.png")
+        artifact_id = "nonexistent/outputs/missing.png"
+        resp = client.get(_signed_artifact_url(artifact_id))
         assert resp.status_code == 404
 
 
@@ -308,8 +315,10 @@ class TestUploadToStorage:
             se._upload_artifacts_to_storage([str(test_file)])
 
         # 验证：可通过 bridge 的 GET 端点下载
-        artifact_id = f"test-agent/user_test_client_test/outputs/test-look.png"
-        resp = bridge_client.get(f"/api/artifacts/{artifact_id}")
+        from agentflow_runtime.common.runtime_context import artifact_routing_id
+        routing_id = artifact_routing_id("user_test", "client_test")
+        artifact_id = f"test-agent/{routing_id}/outputs/test-look.png"
+        resp = bridge_client.get(_signed_artifact_url(artifact_id))
         assert resp.status_code == 200, f"Download failed: {resp.status_code} {resp.text}"
         assert resp.content == png_bytes, "Downloaded PNG bytes mismatch"
 
@@ -484,7 +493,10 @@ class TestArtifactSessionSegmentConsistency:
 
         场景:同一 agent 同一会话产出文件,两端必须拼到同一 artifact_id.
         """
-        from agentflow_runtime.common.runtime_context import artifact_session_id
+        from agentflow_runtime.common.runtime_context import (
+            artifact_routing_id,
+            artifact_session_id,
+        )
         from agentflow_runtime.coordinator_common import local_artifact_url
 
         agent_dir = tmp_path / "test-agent"
@@ -503,7 +515,7 @@ class TestArtifactSessionSegmentConsistency:
 
         # 上传侧落盘会话段与产物 URL 共用 runtime_context 单一真相源。
         upload_segment = artifact_session_id()
-        expected_segment = "user_abc_client_xyz"  # {user_id}_{client_id}
+        expected_segment = artifact_routing_id("user_abc", "client_xyz")
         assert upload_segment == expected_segment, (
             f"上传侧会话段来源异常. expected={expected_segment} got={upload_segment}"
         )

@@ -73,7 +73,7 @@ struct DaemonConfig {
     int sandbox_max_active = 16;
 
     // GC 周期与销毁 TTL（FR-009）：活沙箱闲置超 gc_destroy_ttl_ms 转 RECYCLING
-    int64_t gc_destroy_ttl_ms = 600000;  // 10 min
+    int64_t gc_destroy_ttl_ms = 3600000;  // 1 h; longer than one dialogue timeout
 
     // 快照过期清理 TTL（FR-009）：销毁后快照超 gc_recycle_snapshot_ttl_ms 清理
     int64_t gc_recycle_snapshot_ttl_ms = 86400000;  // 24 h

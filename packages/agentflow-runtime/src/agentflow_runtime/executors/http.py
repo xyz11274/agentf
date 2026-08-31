@@ -14,6 +14,7 @@ import os
 
 import requests
 
+from agentflow_runtime.common.runtime_context import artifact_routing_id
 from agentflow_runtime.executors.base import (
     ExecResult,
     FileContent,
@@ -34,6 +35,58 @@ class HTTPExecutor(ToolExecutor):
     def __init__(self, endpoint: str):
         self.endpoint = endpoint.rstrip("/")
 
+    @staticmethod
+    def _is_within(path: str, root: str) -> bool:
+        """Return whether *path* is inside *root* after realpath resolution."""
+        try:
+            return os.path.commonpath((path, root)) == root
+        except ValueError:
+            return False
+
+    def _local_path_scope(self, tool: str, path: str) -> tuple[str, str] | None:
+        """Resolve one Local file request to its narrowest trusted host root.
+
+        LocalSandbox shares the host filesystem, but its HTTP server starts in
+        an isolated temporary cwd. Only the current user's workspace is
+        writable; the agent's static skill tree is read-only. Returning no
+        scope leaves the server's temporary cwd boundary in force, so paths to
+        another user or another package area are still rejected server-side.
+        """
+        if os.environ.get("AF_SANDBOX_MODE", "") != "local" or not path:
+            return None
+
+        agent_pkg = os.environ.get("AF_AGENT_PACKAGE_DIR", "")
+        user_id = os.environ.get("AF_USER_ID", "")
+        client_id = os.environ.get("AF_CLIENT_ID", "")
+        if not agent_pkg or not user_id or not client_id:
+            return None
+
+        session_dir = artifact_routing_id(user_id, client_id)
+        if os.path.basename(session_dir) != session_dir or session_dir in (".", ".."):
+            return None
+
+        package_root = os.path.realpath(agent_pkg)
+        workspace_root = os.path.realpath(os.path.join(package_root, "workspace"))
+        user_root = os.path.realpath(os.path.join(workspace_root, session_dir))
+        if user_root == workspace_root or not self._is_within(user_root, workspace_root):
+            return None
+
+        normalized = os.path.normpath(path)
+        if os.path.isabs(path):
+            resolved = os.path.realpath(path)
+        elif normalized == "harness/skills" or normalized.startswith("harness/skills/"):
+            resolved = os.path.realpath(os.path.join(package_root, normalized))
+        else:
+            resolved = os.path.realpath(os.path.join(user_root, normalized))
+
+        if self._is_within(resolved, user_root):
+            return resolved, user_root
+
+        skills_root = os.path.realpath(os.path.join(package_root, "harness", "skills"))
+        if tool in {"read_file", "list_dir"} and self._is_within(resolved, skills_root):
+            return resolved, skills_root
+        return None
+
     # -- shared transport ---------------------------------------------------
 
     def _post(
@@ -49,15 +102,20 @@ class HTTPExecutor(ToolExecutor):
         ``{"error": "...", "tool": tool}`` dicts so callers can uniformly
         map them to result dataclasses.
         """
+        local_scope = self._local_path_scope(tool, str(tool_params.get("path", "")))
+        if local_scope is not None:
+            resolved_path, workdir = local_scope
+            tool_params = {**tool_params, "path": resolved_path}
+
         # cwd 按沙箱类型分流：bash.py 缺省 cwd 透传的是宿主 agent_package_dir，
         # 该路径在容器内不存在，透传给 sandbox server 的 subprocess 会 FileNotFoundError 崩。
         # HTTPExecutor 看不到 daemon 的宿主↔容器挂载点映射，但容器内 SANDBOX_WORKDIR=/workdir
         # 由 daemon 注入（Dockerfile L36 + sandbox_docker.cpp L115）——把宿主路径替换为空串，
         # 让 server 端 fallback 链 opts.working_dir → SANDBOX_WORKDIR 落到容器内正确路径。
         # 显式 cwd override（沙箱内绝对路径）不是宿主 agent_package_dir 起始，不受影响。
-        # 注：本段 cwd 清洗只对 bash 生效——read_file/write_file/edit_file/list_dir/web_fetch
-        # 调用 _post 时不传 workdir（None），清洗分支走不进去。
-        if workdir:
+        # 注：本段 cwd 清洗只对 bash 生效；Local 文件工具使用上方收敛后的用户/skill
+        # 工作根，不进入宿主 cwd 清洗。
+        if tool == "bash" and workdir:
             agent_pkg_dir = os.environ.get("AF_AGENT_PACKAGE_DIR", "")
             if agent_pkg_dir and workdir.startswith(agent_pkg_dir):
                 workdir = ""
@@ -157,11 +215,13 @@ class HTTPExecutor(ToolExecutor):
             {"path": path, "content": content, "mode": "w"},
         )
         success = data.get("exit_code", 1) == 0 and "error" not in data
+        local_scope = self._local_path_scope("write_file", path)
+        result_path = local_scope[0] if local_scope is not None else path
         return WriteResult(
             success=success,
             error=data.get("error"),
             bytes_written=len(content.encode("utf-8")) if success else 0,
-            path=path if success else "",
+            path=result_path if success else "",
         )
 
     # -- edit_file ----------------------------------------------------------

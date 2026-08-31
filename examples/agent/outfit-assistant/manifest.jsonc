@@ -4,7 +4,6 @@
     "harness/tools/**",
     "data/**",
     "requirements.txt",
-    ".env",
     "setup.sh"
   ],
   "excludes": [
@@ -20,7 +19,14 @@
     "outputs",
     "tests",
     "workspace",
-    "assets"
+    "assets",
+    ".env",
+    ".env.*",
+    ".mcp.json",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx"
   ],
   "generated_at": "2026-08-11T00:00:00.000000+00:00"
 }

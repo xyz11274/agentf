@@ -17,6 +17,8 @@ import threading
 from contextlib import contextmanager
 from typing import Any, Iterator
 
+from agentflow_runtime.security import redact_secrets
+
 from .types import SpanStatus, TraceSpan, SpanEvent, now_us, generate_span_id
 from .span_context import SpanContext
 from .span_writer import SpanWriter
@@ -184,6 +186,7 @@ def _emit_span_write_failure_preview(span: TraceSpan, exc: Exception) -> None:
             "error_type": type(exc).__name__,
             "error": str(exc)[:500],
         }
+        preview, _redaction = redact_secrets(preview)
         line = json.dumps(preview, ensure_ascii=False, separators=(",", ":"))
         with _emit_lock:
             print(f"[obs] {line}", file=sys.stderr, flush=True)
@@ -208,6 +211,7 @@ def _emit_stderr_preview(stage: str, span: TraceSpan) -> None:
         preview["status"] = span.status
         if span.error_msg:
             preview["error"] = span.error_msg[:200]  # preview 可截断，NDJSON 完整
+    preview, _redaction = redact_secrets(preview)
     line = json.dumps(preview, ensure_ascii=False, separators=(",", ":"))
     with _emit_lock:
         print(f"[obs] {line}", file=sys.stderr, flush=True)
@@ -223,6 +227,7 @@ def _emit_event_stderr_preview(event: SpanEvent, level: str) -> None:
         "timestamp_us": event.timestamp_us,
         "data": event.attributes,
     }
+    preview, _redaction = redact_secrets(preview)
     line = json.dumps(preview, ensure_ascii=False, separators=(",", ":"))
     with _emit_lock:
         print(f"[obs] {line}", file=sys.stderr, flush=True)

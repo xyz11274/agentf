@@ -333,6 +333,9 @@ def test_code_defaults_match_yaml_defaults():
             "daemon_status_refresh_interval": 5.0,
         },
     }
+    _env_overrides["dev"] = {
+        "request_timeout_seconds": 60.0,
+    }
     overrides = _env_overrides.get(current_env, {})
 
     # 这些字段的代码默认值应与 config.yaml 一致

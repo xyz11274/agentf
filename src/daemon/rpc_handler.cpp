@@ -104,6 +104,30 @@ int64_t now_ms() {
       .count();
 }
 
+bool is_safe_identity_component(const std::string& value, bool allow_underscore,
+                                size_t max_size = 128) {
+  if(value.empty() || value.size() > max_size) return false;
+  for(unsigned char ch : value) {
+    if(std::isalnum(ch) || ch == '.' || ch == '-' ||
+       (allow_underscore && ch == '_')) {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
+
+std::string artifact_routing_id(const std::string& user_id,
+                                const std::string& client_id) {
+  if (user_id.empty() || client_id.empty()) return "";
+  if (user_id.find('_') == std::string::npos &&
+      client_id.find('_') == std::string::npos) {
+    return user_id + "_" + client_id;
+  }
+  return "v2__u" + std::to_string(user_id.size()) + "-" + user_id +
+         "-c" + std::to_string(client_id.size()) + "-" + client_id;
+}
+
 // Resolve session_id: prefer (user_id, client_id) via SessionRouter,
 // fallback to session_id param (for internal tools/testing).
 // Returns the resolved session_id, or empty string if neither works.
@@ -407,6 +431,13 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
   if (agent_id.empty() || user_id.empty() || client_id.empty() || content.empty()) {
     return build_error(-32602, "Invalid params: missing agent_id, user_id, client_id, or content", id);
   }
+  if(!is_safe_identity_component(user_id, true, 120) ||
+     !is_safe_identity_component(client_id, true, 120)) {
+    return build_error(-32602, "Invalid params: user_id/client_id contain unsupported characters", id);
+  }
+  if(!dialogue_id.empty() && !is_safe_identity_component(dialogue_id, true)) {
+    return build_error(-32602, "Invalid params: dialogue_id contains unsupported characters", id);
+  }
 
   auto agent = registry_.find(agent_id);
   if (!agent) return build_error(-2, "Agent not found: " + agent_id, id);
@@ -421,11 +452,10 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
   {
     Logger::instance().info_f(
         "[USER_INPUT] trace=%s agent=%s user=%s client=%s dialogue=%s "
-        "content=%s content_len=%zu stream=%s",
+        "content_len=%zu stream=%s",
         trace_id.c_str(), agent_id.c_str(), user_id.c_str(), client_id.c_str(),
         dialogue_id.empty() ? "(none)" : dialogue_id.c_str(),
-        content.c_str(), content.size(),
-        stream_str.c_str());
+        content.size(), stream_str.c_str());
   }
 
   // Generate message_id
@@ -551,7 +581,7 @@ std::string RpcHandler::handle_agent_execute(const std::string& params, int64_t 
       const std::string ws_prefix = sandbox_sb->sandbox_workspace_prefix();
       if (!ws_prefix.empty()) {
         const std::string session_marker =
-            "workspace/" + user_id + "_" + client_id + "/upload/";
+            "workspace/" + artifact_routing_id(user_id, client_id) + "/upload/";
         std::string rewritten = sandbox::SandboxHelpers::rewrite_upload_path_to_sandbox(
             message.content, session_marker, ws_prefix);
         if (rewritten != message.content) {
@@ -1603,7 +1633,8 @@ std::string RpcHandler::_resolve_session_upload_dir(const std::string& agent_id,
     }
     if (name != agent_id) continue;
     // 同构 bridge 的 _compute_upload_dir 路径约定
-    return pkg_path + "/workspace/" + user_id + "_" + client_id + "/upload";
+    return pkg_path + "/workspace/" + artifact_routing_id(user_id, client_id) +
+           "/upload";
   }
   return "";
 }

@@ -60,6 +60,41 @@ async def _resolve_future(cli: DaemonClient, req_id: int, timeout: float = 1.0) 
         return None
 
 
+@pytest.mark.asyncio
+async def test_agent_execute_sanitizes_daemon_payload_without_mutating_input():
+    cli = DaemonClient.__new__(DaemonClient)
+    cli._response_queues = {}
+    captured = {}
+
+    async def fake_send_request(method, params, timeout=None):
+        captured["method"] = method
+        captured["params"] = params
+        return {"task_id": "task-1"}
+
+    cli.send_request = fake_send_request
+    content = (
+        '{"messages":[{"role":"user","content":'
+        '"ark-test-boundary-998877665544332211"}]}'
+    )
+    platform_context = {"provider_api_key": "opaque-boundary-value"}
+
+    result = await cli.agent_execute(
+        "agent-a",
+        session_id="",
+        content=content,
+        user_id="user-a",
+        client_id="client-a",
+        dialogue_id="dialogue-a",
+        platform_context=platform_context,
+    )
+
+    assert result == {"task_id": "task-1"}
+    assert captured["method"] == "agent.execute"
+    assert "ark-test-boundary-998877665544332211" not in captured["params"]["content"]
+    assert "<redacted:provider_key>" in captured["params"]["content"]
+    assert captured["params"]["platform_context"]["provider_api_key"].startswith("<redacted:")
+    assert platform_context == {"provider_api_key": "opaque-boundary-value"}
+
 # ---------------------------------------------------------------------------
 # Tests — _looks_like_complete_json (standalone utility)
 # ---------------------------------------------------------------------------

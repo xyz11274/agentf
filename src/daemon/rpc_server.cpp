@@ -337,6 +337,11 @@ void RpcServer::send_notification(int client_fd, const std::string& method, cons
   }
 }
 
+void RpcServer::set_disconnect_handler(std::function<void(int)> handler) {
+  std::lock_guard<std::mutex> lock(disconnect_handler_mutex_);
+  disconnect_handler_ = std::move(handler);
+}
+
 bool RpcServer::is_method_allowed(ChannelType channel, const std::string& method) {
   switch (channel) {
     case ChannelType::TCP:
@@ -525,6 +530,12 @@ cleanup:
   {
     std::lock_guard<std::mutex> lock(ws_clients_mutex_);
     ws_clients_.erase(fd);
+  }
+  {
+    // Keep the lock while invoking so shutdown can safely wait for an
+    // already-started callback before destroying its target.
+    std::lock_guard<std::mutex> lock(disconnect_handler_mutex_);
+    if (disconnect_handler_) disconnect_handler_(fd);
   }
   connection_count_--;
   close(fd);

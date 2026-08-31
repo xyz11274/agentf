@@ -51,12 +51,13 @@ from content_serializer import (
     serialize_content_for_storage,
 )
 from dependencies import get_daemon_client
-from models import ContentPart
+from models import ContentPart, SAFE_ID_PATTERN
 from providers import SessionProvider
-from routes.artifact_extractor import apply_artifact_output_mode, extract_artifact_infos, publicize_artifact_urls, serialize_artifacts
+from routes.artifact_extractor import apply_artifact_output_mode, extract_artifact_infos, publicize_artifact_urls as _shared_publicize_artifact_urls, serialize_artifacts
 from routes.conversations import get_store, ConversationRecord
 from services import _pull_and_save_traces
 from services.sessionlog_delivery import append_bridge_delivery
+from services.secret_safety import sanitize_for_storage, SecretSanitizerUnavailable
 from session_dependencies import get_session_provider
 
 logger = logging.getLogger("agentflow.bridge.routes.chat_rest")
@@ -71,6 +72,15 @@ _SSE_DUMP_DIR = os.environ.get("AF_SSE_DUMP_DIR", "")
 _sse_capture_file: typing.IO | None = None
 
 
+def _sanitize_debug_payload(value: Any) -> Any:
+    """Sanitize optional debug copies with a fail-closed fallback."""
+    try:
+        safe_value, _report = sanitize_for_storage(value)
+        return safe_value
+    except SecretSanitizerUnavailable:
+        return {"redaction": "sanitizer_unavailable"}
+
+
 def _capture_sse_payload(payload: dict[str, Any]) -> None:
     """如果 AF_SSE_CAPTURE 环境变量已设，将 SSE payload 追加到 fixture 文件。"""
     global _sse_capture_file
@@ -79,7 +89,7 @@ def _capture_sse_payload(payload: dict[str, Any]) -> None:
     try:
         if _sse_capture_file is None:
             _sse_capture_file = open(_SSE_CAPTURE_PATH, "w")
-        _sse_capture_file.write(json.dumps(payload, ensure_ascii=False) + "\n")
+        _sse_capture_file.write(json.dumps(_sanitize_debug_payload(payload), ensure_ascii=False) + "\n")
         _sse_capture_file.flush()
     except Exception:
         pass
@@ -115,12 +125,19 @@ def _registry_key(d: _ActiveDialogue) -> tuple[str, str]:
     return (d.user_id, d.client_id)
 
 
-def _register_dialogue(d: _ActiveDialogue) -> None:
-    _active_dialogues[_registry_key(d)] = d
+def _register_dialogue(d: _ActiveDialogue) -> bool:
+    key = _registry_key(d)
+    if key in _active_dialogues:
+        return False
+    _active_dialogues[key] = d
+    return True
 
 
-def _unregister_dialogue(user_id: str, client_id: str) -> None:
-    _active_dialogues.pop((user_id, client_id), None)
+def _unregister_dialogue(user_id: str, client_id: str, dialogue_id: str = "") -> None:
+    key = (user_id, client_id)
+    current = _active_dialogues.get(key)
+    if current is not None and (not dialogue_id or current.dialogue_id == dialogue_id):
+        _active_dialogues.pop(key, None)
 
 
 async def _cancel_dialogue(d: _ActiveDialogue) -> None:
@@ -132,6 +149,33 @@ async def _cancel_dialogue(d: _ActiveDialogue) -> None:
         return
     d.cancelled = True
     session_id = d.session_id
+    if not session_id:
+        try:
+            result = await d.daemon_client.session_list(d.agent_id, d.user_id)
+            sessions = result if isinstance(result, list) else (
+                result.get("sessions", []) if isinstance(result, dict) else []
+            )
+            matches = [
+                str(item.get("session_id") or item.get("id") or "")
+                for item in sessions
+                if isinstance(item, dict)
+                and str(item.get("user_id") or "") == d.user_id
+                and str(item.get("client_id") or "") == d.client_id
+                and (item.get("session_id") or item.get("id"))
+            ]
+            if len(matches) == 1:
+                session_id = matches[0]
+                d.session_id = session_id
+            elif len(matches) > 1:
+                logger.warning(
+                    "cancel_dialogue.ambiguous_session agent=%s dialogue=%s matches=%d",
+                    d.agent_id, d.dialogue_id, len(matches),
+                )
+        except Exception as exc:
+            logger.warning(
+                "cancel_dialogue.session_lookup_error agent=%s dialogue=%s err=%s",
+                d.agent_id, d.dialogue_id, exc,
+            )
     if not session_id:
         logger.warning("cancel_dialogue.no_session agent=%s dialogue=%s", d.agent_id, d.dialogue_id)
         return
@@ -147,6 +191,20 @@ async def _cancel_dialogue(d: _ActiveDialogue) -> None:
             "cancel_dialogue.sent agent=%s dialogue=%s session=%s",
             d.agent_id, d.dialogue_id, session_id,
         )
+        append_bridge_delivery(
+            agent_package_dir=settings.agent_packages_path / d.agent_id,
+            dialogue_id=d.dialogue_id,
+            agent_id=d.agent_id,
+            user_id=d.user_id,
+            client_id=d.client_id,
+            task_id="",
+            transport="control",
+            stage="cancel_acknowledged",
+            status="cancelled",
+            raw_content="",
+            delivered_content="",
+            wire_payload={"command": "DIALOGUE-INTERRUPT"},
+        )
     except Exception as exc:
         logger.warning(
             "cancel_dialogue.error agent=%s dialogue=%s err=%s",
@@ -157,8 +215,12 @@ async def _cancel_dialogue(d: _ActiveDialogue) -> None:
 # Cancel request schema
 class CancelRequest(BaseModel):
     """Request body for POST /api/chat/{agent_id}/cancel."""
-    user_id: str = Field(..., description="User identifier (matches the active SSE stream).")
-    client_id: str = Field(..., description="Client/session identifier (matches the active SSE stream).")
+    user_id: str = Field(
+        ..., pattern=SAFE_ID_PATTERN, description="User identifier (matches the active SSE stream).",
+    )
+    client_id: str = Field(
+        ..., pattern=SAFE_ID_PATTERN, description="Client/session identifier (matches the active SSE stream).",
+    )
 
 
 # Cancel endpoint
@@ -201,8 +263,8 @@ class ChatRestRequest(BaseModel):
 
     model_config = {"from_attributes": True}
 
-    user_id: str = Field(..., description="User identifier.")
-    client_id: str = Field(..., description="Client/session identifier.")
+    user_id: str = Field(..., pattern=SAFE_ID_PATTERN, description="User identifier.")
+    client_id: str = Field(..., pattern=SAFE_ID_PATTERN, description="Client/session identifier.")
     content: str | list[ContentPart] = Field(
         ..., description="User message content (string or content array).",
     )
@@ -311,10 +373,7 @@ def _extract_content(payload: Any) -> str:
 
 
 def publicize_artifact_urls(content: str) -> str:
-    base = settings.artifact_public_base_url.rstrip("/")
-    if not base:
-        return content
-    return content.replace("(/api/artifacts/", f"({base}/api/artifacts/")
+    return _shared_publicize_artifact_urls(content)
 
 
 # --------------------------------------------------------------------------
@@ -393,6 +452,18 @@ async def _chat_turn_events(
             "messages": [{"role": "user", "content": this_turn_text}],
         }, ensure_ascii=False)
 
+    cancel_state = _active_dialogues.get((user_id, client_id))
+    if cancel_state is None or cancel_state.dialogue_id != dialogue_id:
+        # Sync REST turns are not stored in the SSE registry, but use the
+        # same idempotent cancellation path when an execute or wait times out.
+        cancel_state = _ActiveDialogue(
+            agent_id=agent_id,
+            dialogue_id=dialogue_id,
+            user_id=user_id,
+            client_id=client_id,
+            daemon_client=daemon_client,
+        )
+
     # --- Step 1: execute --------------------------------------------------
     daemon_exec_start = time.time()
     try:
@@ -413,6 +484,7 @@ async def _chat_turn_events(
             "chat_turn.daemon_execute agent=%s dialogue=%s elapsed=%.3fs status=timeout",
             agent_id, dialogue_id, time.time() - daemon_exec_start,
         )
+        await _cancel_dialogue(cancel_state)
         daemon_client.discard_response_queue(dialogue_id)
         logger.warning(
             "chat_turn.timeout agent=%s dialogue=%s execute_timeout=%ss",
@@ -447,6 +519,7 @@ async def _chat_turn_events(
     # can register the dialogue for cancellation support.
     session_id = _extract_session_id(execute_result)
     if session_id:
+        cancel_state.session_id = session_id
         yield {"type": "_session_info", "session_id": session_id}
 
     # --- Step 2: wait for response notifications --------------------------
@@ -462,6 +535,7 @@ async def _chat_turn_events(
                 "chat_turn.timeout agent=%s dialogue=%s task=%s timeout=%ss elapsed=%.1fs",
                 agent_id, dialogue_id, task_id, turn_timeout, time.time() - turn_start,
             )
+            await _cancel_dialogue(cancel_state)
             yield {"type": "error", "message": f"turn timed out after {turn_timeout}s", "code": -32000}
             daemon_client.discard_response_queue(dialogue_id)
             yield {"type": "done", "final": True}
@@ -489,6 +563,7 @@ async def _chat_turn_events(
                 remaining, elapsed, chunk_count,
                 daemon_client.is_connected,
             )
+            await _cancel_dialogue(cancel_state)
             yield {"type": "error", "message": f"turn timed out after {turn_timeout}s", "code": -32000}
             daemon_client.discard_response_queue(dialogue_id)
             yield {"type": "done", "final": True}
@@ -666,6 +741,8 @@ def _content_images(content: str | list[ContentPart]) -> str:
     return json.dumps(images, ensure_ascii=False)
 
 
+# Transport EOF only.  Business success requires a preceding payload with
+# ``_final=true``; error streams carry an explicit negative terminal status.
 _SSE_DONE = "data: [DONE]\n\n"
 
 
@@ -722,6 +799,18 @@ async def chat_rest(
         f"{datetime.now(timezone.utc).strftime('%m%d%H%M%S')}"
         f"-{uuid.uuid4().hex[:12]}"
     )
+    active = _ActiveDialogue(
+        agent_id=agent_id,
+        dialogue_id=dialogue_id,
+        user_id=body.user_id,
+        client_id=body.client_id,
+        daemon_client=client,
+    )
+    if not _register_dialogue(active):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="a dialogue is already active for this user and client",
+        )
     turn_timeout = settings.chat_turn_timeout_seconds
 
     logger.info(
@@ -835,10 +924,12 @@ async def chat_rest(
                     )
                 # "done" is the terminal signal — just break
         except HTTPException:
+            _unregister_dialogue(body.user_id, body.client_id, dialogue_id)
             raise
         except Exception as exc:
             logger.exception("chat_turn.unexpected agent=%s: %s", agent_id, exc)
             client.discard_response_queue(dialogue_id)
+            _unregister_dialogue(body.user_id, body.client_id, dialogue_id)
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=str(exc),
@@ -927,7 +1018,8 @@ async def chat_rest(
             agent_package_dir=settings.agent_packages_path / agent_id,
             dialogue_id=dialogue_id,
             agent_id=agent_id,
-            session_id=agentflow_session_id,
+            user_id=body.user_id,
+            client_id=body.client_id,
             task_id=task_id or "",
             transport="http_json",
             stage="response_prepared",
@@ -937,6 +1029,7 @@ async def chat_rest(
             wire_payload=_ok(response_data.model_dump(mode="json")),
             artifacts=accumulated_artifacts,
         )
+        _unregister_dialogue(body.user_id, body.client_id, dialogue_id)
         return response_payload
 
     # --- SSE streaming mode ------------------------------------------------
@@ -1006,15 +1099,6 @@ async def chat_rest(
                 agent_id, dialogue_id, exc,
             )
 
-    # Register the active dialogue so the cancel endpoint can find it.
-    active = _ActiveDialogue(
-        agent_id=agent_id,
-        dialogue_id=dialogue_id,
-        user_id=body.user_id,
-        client_id=body.client_id,
-        daemon_client=client,
-    )
-    _register_dialogue(active)
 
     sse_dump_fh: typing.IO | None = None
     if _SSE_DUMP_DIR:
@@ -1029,7 +1113,7 @@ async def chat_rest(
                 "user_id": body.user_id,
                 "client_id": body.client_id,
                 "dialogue_id": dialogue_id,
-                "request": body.model_dump(),
+                "request": _sanitize_debug_payload(body.model_dump()),
             }, ensure_ascii=False, default=str) + "\n")
             sse_dump_fh.flush()
             logger.info("sse_dump.start dialogue=%s file=%s", dialogue_id, dump_name)
@@ -1106,7 +1190,7 @@ async def chat_rest(
                     _capture_sse_payload(payload)
                     if sse_dump_fh:
                         try:
-                            sse_dump_fh.write(json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+                            sse_dump_fh.write(json.dumps(_sanitize_debug_payload(payload), ensure_ascii=False, default=str) + "\n")
                             sse_dump_fh.flush()
                         except Exception:
                             pass
@@ -1125,7 +1209,8 @@ async def chat_rest(
                             agent_package_dir=settings.agent_packages_path / agent_id,
                             dialogue_id=dialogue_id,
                             agent_id=agent_id,
-                            session_id=active.session_id,
+                            user_id=body.user_id,
+                            client_id=body.client_id,
                             task_id=stream_task_id,
                             transport="sse",
                             stage="server_yielded",
@@ -1156,7 +1241,8 @@ async def chat_rest(
                             agent_package_dir=settings.agent_packages_path / agent_id,
                             dialogue_id=dialogue_id,
                             agent_id=agent_id,
-                            session_id=active.session_id,
+                            user_id=body.user_id,
+                            client_id=body.client_id,
                             task_id=stream_task_id,
                             transport="sse",
                             stage="server_stream_completed",
@@ -1176,6 +1262,9 @@ async def chat_rest(
                             "message": event["message"],
                             "code": event.get("code", -32000),
                         },
+                        "_dialogue_id": dialogue_id,
+                        "_final": False,
+                        "_terminal_status": "error",
                     }
                     logger.info(
                         "chat_sse.stream agent=%s dialogue=%s elapsed=%.3fs chunks=%d status=error",
@@ -1187,7 +1276,8 @@ async def chat_rest(
                         agent_package_dir=settings.agent_packages_path / agent_id,
                         dialogue_id=dialogue_id,
                         agent_id=agent_id,
-                        session_id=active.session_id,
+                        user_id=body.user_id,
+                        client_id=body.client_id,
                         task_id=stream_task_id,
                         transport="sse",
                         stage="server_yielded",
@@ -1198,7 +1288,7 @@ async def chat_rest(
                     )
                     if sse_dump_fh:
                         try:
-                            sse_dump_fh.write(json.dumps(err_payload, ensure_ascii=False, default=str) + "\n")
+                            sse_dump_fh.write(json.dumps(_sanitize_debug_payload(err_payload), ensure_ascii=False, default=str) + "\n")
                             sse_dump_fh.flush()
                         except Exception:
                             pass
@@ -1207,7 +1297,8 @@ async def chat_rest(
                         agent_package_dir=settings.agent_packages_path / agent_id,
                         dialogue_id=dialogue_id,
                         agent_id=agent_id,
-                        session_id=active.session_id,
+                        user_id=body.user_id,
+                        client_id=body.client_id,
                         task_id=stream_task_id,
                         transport="sse",
                         stage="server_stream_completed",
@@ -1216,8 +1307,8 @@ async def chat_rest(
                         delivered_content="",
                         wire_payload=_SSE_DONE,
                     )
-                    _save_conversation(sse_chunks)
-                    await _persist_to_provider("".join(sse_chunks))
+                    # Progress remains observable in SSE/client.delivery, but an
+                    # incomplete turn must not become assistant conversation history.
                     return
                 elif event["type"] == "done":
                     logger.info(
@@ -1229,7 +1320,8 @@ async def chat_rest(
                         agent_package_dir=settings.agent_packages_path / agent_id,
                         dialogue_id=dialogue_id,
                         agent_id=agent_id,
-                        session_id=active.session_id,
+                        user_id=body.user_id,
+                        client_id=body.client_id,
                         task_id=stream_task_id,
                         transport="sse",
                         stage="server_stream_completed",
@@ -1256,7 +1348,7 @@ async def chat_rest(
             await _cancel_dialogue(active)
             raise
         finally:
-            _unregister_dialogue(active.user_id, active.client_id)
+            _unregister_dialogue(active.user_id, active.client_id, active.dialogue_id)
             if sse_dump_fh:
                 try:
                     sse_dump_fh.close()

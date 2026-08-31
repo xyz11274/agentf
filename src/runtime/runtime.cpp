@@ -127,7 +127,8 @@ static bool is_harness_skill_failure_status(const std::string& status) {
   static const std::set<std::string> failure_statuses = {
       "node_timeout", "interrupted", "llm_error", "tool_call_error",
       "tool_call_loop_detected", "max_rounds_reached",
-      "dispatch_manifest_error",
+      "dispatch_manifest_error", "tool_error", "failed", "error",
+      "unhandled_exception",
   };
   return failure_statuses.count(status) > 0;
 }

@@ -171,8 +171,11 @@ class SessionProvider(ABC):
     async def save_trace(
         self, session_id: str,
         dialogue_id: str, trace_type: str, trace_data: dict,
-    ) -> None:
-        """Persist one LLM/execution trace entry."""
+    ) -> bool:
+        """Persist one LLM/execution trace entry.
+
+        Return whether the trace is durable (including an identical retry).
+        """
         ...
 
     @abstractmethod

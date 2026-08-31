@@ -99,6 +99,7 @@ bool Daemon::initialize() {
     else if (config_.log_level == "error")
       lvl = Logger::Level::ERROR;
     Logger::instance().set_level(lvl);
+    Logger::instance().set_log_rotation(50 * 1024 * 1024, 5);
     if (!config_.log_file.empty()) {
       Logger::instance().set_log_file(config_.log_file);
     }
@@ -165,8 +166,10 @@ bool Daemon::initialize() {
   // 3.5 Initialize Sandbox management (AgentFoundry 沙箱机制移植，对齐 lld.md T014)
   // 注入点：DataRef Bridge init 后、Runtime 创建前——agent start 时已可持有沙箱映射
   // sandbox-mode=none 时 SandboxLifecycle 内部走 nullptr 路径（向后兼容，FR-006）
+  // RpcHandler 无论是否创建 Sandbox 都要维护 user/client 会话，
+  // 因此 SessionManager 不能只在启用 Sandbox 时初始化。
+  session_manager_ = std::make_unique<SessionManager>();
   if (config_.sandbox_config.mode != "none") {
-    session_manager_ = std::make_unique<SessionManager>();
     // v2 段1 预热：TemplateRegistry 按 agent_id 预建 e2b template（改动 #1）
     // 仅 e2b 模式内部有效；Local/Docker 模式 preload no-op（无 template 概念）
     template_registry_ = std::make_unique<TemplateRegistry>(config_);
@@ -223,6 +226,11 @@ bool Daemon::initialize() {
 
   // 8. Create and start RPC Server
   rpc_server_ = std::make_unique<RpcServer>();
+  rpc_server_->set_disconnect_handler([this](int client_fd) {
+    if(response_poller_) {
+      response_poller_->remove_requests_for_client(client_fd);
+    }
+  });
   rpc_handler_ = std::make_unique<RpcHandler>(*runtime_, *registry_, *response_poller_,
                                                *event_broker_, *session_manager_,
                                                sandbox_lifecycle_.get(),
@@ -299,6 +307,9 @@ void Daemon::shutdown_services() {
   // Order matters: stop accepting new work first, then drain, then tear down.
 
   // Stop ResponsePoller
+  if (rpc_server_) {
+    rpc_server_->set_disconnect_handler({});
+  }
   if (response_poller_) {
     response_poller_->stop();
     Logger::instance().info("[DAEMON] ResponsePoller stopped");

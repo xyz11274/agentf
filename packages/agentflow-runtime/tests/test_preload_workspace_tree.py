@@ -223,12 +223,12 @@ def test_workdir_falls_back_when_user_client_missing(
 def test_env_reports_dashscope_key_available(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """DASHSCOPE_API_KEY 已注入 → env.dashscope_key_available=True。"""
+    """密钥已注入时，preload 的非可信探测仍不能看到它。"""
     monkeypatch.setenv("DASHSCOPE_API_KEY", "sk-test-not-a-real-key")
     out = preload.execute({}, sandbox_endpoint=None)
     ctx = json.loads(out)
     assert "env" in ctx, f"env 缺失: {list(ctx.keys())}"
-    assert ctx["env"]["dashscope_key_available"] is True
+    assert ctx["env"]["dashscope_key_available"] is False
 
 
 def test_env_reports_dashscope_key_missing(

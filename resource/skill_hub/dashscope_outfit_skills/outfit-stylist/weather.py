@@ -16,8 +16,7 @@ import sys
 import urllib.parse
 import urllib.request
 
-# ⚠️ 忽略 SSL 证书验证（自签名/代理证书场景下使用）
-ssl._create_default_https_context = ssl._create_unverified_context
+# TLS verification uses system CAs; set SSL_CERT_FILE for private CAs.
 GEO = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST = "https://api.open-meteo.com/v1/forecast"
 

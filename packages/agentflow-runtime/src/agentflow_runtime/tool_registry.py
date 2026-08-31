@@ -20,7 +20,57 @@ import re
 import sys
 import time
 
+from agentflow_runtime.security import (
+    find_secret_exposures,
+    has_registered_secrets,
+    redact_secrets,
+    register_environment_secrets,
+)
+
 logger = logging.getLogger(__name__)
+
+_CREDENTIAL_FILES = frozenset({
+    ".env", ".mcp.json", ".netrc", ".npmrc", ".pypirc",
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519",
+})
+_CREDENTIAL_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".jks", ".keystore")
+
+
+def _safe_tool_result(value) -> str:
+    safe_value, _ = redact_secrets(value)
+    if isinstance(safe_value, str):
+        return safe_value
+    return json.dumps(safe_value, ensure_ascii=False, default=str)
+
+
+def _blocked_tool_result(tool_name: str, reason: str, report=None) -> str:
+    payload = {
+        "error": reason,
+        "status": "security_policy_blocked",
+        "tool": tool_name,
+    }
+    if report is not None and report.applied:
+        payload["security"] = report.to_dict()
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _is_protected_path(path, *, for_write: bool = False) -> bool:
+    if not isinstance(path, str) or not path.strip():
+        return False
+    normalized = path.replace("\\", "/").rstrip("/")
+    basename = normalized.rsplit("/", 1)[-1].lower()
+    if (basename in _CREDENTIAL_FILES or basename.startswith(".env.")
+            or basename.endswith(_CREDENTIAL_SUFFIXES)):
+        return True
+    if not for_write:
+        return False
+    lowered = f"/{normalized.lower().lstrip('./')}"
+    return (
+        basename in {"agent.md", "manifest.json", "manifest.jsonc"}
+        or "/harness/tools/" in lowered
+        or "/harness/hooks/" in lowered
+        or ("/harness/skills/" in lowered and "/scripts/" in lowered)
+    )
 
 
 def _pkg_dir() -> str:
@@ -62,7 +112,7 @@ class _LocalToolRegistry:
     Each tool module must expose: TOOL_NAME, TOOL_DESCRIPTION, TOOL_PARAMS, execute(args).
     Global tools are loaded first; skill-scoped tools override same-named globals.
     """
-    def __init__(self, skill_name: str = ""):
+    def __init__(self, skill_name: str = "", skill_names: list[str] | None = None):
         self._tools = []
         self._modules = {}
         self._mcp_bridges = {}  # server_name -> MCPBridge (I-5: per-instance)
@@ -85,14 +135,18 @@ class _LocalToolRegistry:
         if os.path.isdir(agent_dir) and os.path.abspath(agent_dir) != os.path.abspath(builtin_dir):
             _ld(self, agent_dir)
 
-        # 3. Load skill-scoped tools from harness/skills/{skill_name}/scripts/
-        if skill_name:
-            skill_dir = _se._resolve_skill_dir(skill_name)
+        # 3. Load primary + explicitly requested companion skill tools.
+        selected_skills = []
+        for selected in [skill_name, *(skill_names or [])]:
+            if selected and selected not in selected_skills:
+                selected_skills.append(selected)
+        for selected in selected_skills:
+            skill_dir = _se._resolve_skill_dir(selected)
             if skill_dir is not None:
                 scripts_dir = os.path.realpath(os.path.join(skill_dir, "scripts"))
                 if (os.path.dirname(scripts_dir) == skill_dir
                         and os.path.isdir(scripts_dir)):
-                    _ld(self, scripts_dir, prefix=f"_skill_{skill_name}_")
+                    _ld(self, scripts_dir, prefix=f"_skill_{selected}_")
 
         # 4. Load MCP server tools (追加，不阻塞，I-4 优雅降级)
         self._load_mcp_tools()
@@ -160,6 +214,31 @@ class _LocalToolRegistry:
         return list(self._tools)
 
     def execute(self, name, args):
+        register_environment_secrets()
+        args = args or {}
+        exposure = find_secret_exposures(args)
+        if exposure.applied:
+            return _blocked_tool_result(
+                str(name), "tool arguments contain secret material", exposure)
+
+        sandbox_mode = os.environ.get("AF_SANDBOX_MODE", "none")
+        allow_unsafe_local = os.environ.get(
+            "AF_ALLOW_UNSAFE_LOCAL_SECRET_TOOLS", ""
+        ).strip().lower() in {"1", "true", "yes"}
+        if (name == "bash" and sandbox_mode in {"none", "local"}
+                and has_registered_secrets() and not allow_unsafe_local):
+            return _blocked_tool_result(
+                str(name),
+                f"bash is disabled in {sandbox_mode} mode while credentials are loaded",
+            )
+
+        if name in {"read_file", "write_file", "edit_file"}:
+            file_path = args.get("file_path", "") if isinstance(args, dict) else ""
+            if _is_protected_path(
+                    file_path, for_write=name in {"write_file", "edit_file"}):
+                return _blocked_tool_result(
+                    str(name), "access to credential or executable configuration is denied")
+
         # I-6: MCP 路由在 sandbox 分支之前，保证 MCP 工具永不误走沙箱 /exec
         if name.startswith("mcp__"):
             logger.info("tool.exec sandbox_mode=mcp tool=%s", name)
@@ -167,16 +246,18 @@ class _LocalToolRegistry:
             server_name, tool_name = parts[1], "__".join(parts[2:])
             bridge = self._mcp_bridges.get(server_name)
             if bridge is None:
-                return json.dumps({"error": f"MCP server '{server_name}' not connected"})
+                return _safe_tool_result(
+                    {"error": f"MCP server '{server_name}' not connected"})
             try:
                 result = bridge.call_tool(tool_name, args or {})
-                return json.dumps(result, ensure_ascii=False)
+                return _safe_tool_result(result)
             except Exception as e:
-                return json.dumps({"error": f"MCP tool '{name}' failed: {e}"})
+                return _safe_tool_result(
+                    {"error": f"MCP tool '{name}' failed: {e}"})
 
         _mod = self._modules.get(name)
         if _mod is None:
-            return json.dumps({"error": f"Unknown tool: {name}"})
+            return _safe_tool_result({"error": f"Unknown tool: {name}"})
         _t_exec_start = time.monotonic()
         try:
             # 由 daemon 注入的沙箱 HTTP endpoint（B16），bash 等工具走沙箱 /exec
@@ -198,11 +279,11 @@ class _LocalToolRegistry:
             _dur_ms = (time.monotonic() - _t_exec_start) * 1000
             print(f"[timing] tool_exec name={name} duration_ms={_dur_ms:.1f} sandbox_mode={sandbox_mode}",
                   file=sys.stderr)
-            return result
+            return _safe_tool_result(result)
         except Exception as e:
             _dur_ms = (time.monotonic() - _t_exec_start) * 1000
             print(f"[timing] tool_exec name={name} duration_ms={_dur_ms:.1f} error=1", file=sys.stderr)
-            return json.dumps({"error": f"Tool '{name}' failed: {e}"})
+            return _safe_tool_result({"error": f"Tool '{name}' failed: {e}"})
 
 
 def _load_dir(registry: _LocalToolRegistry, directory: str, prefix: str = ""):

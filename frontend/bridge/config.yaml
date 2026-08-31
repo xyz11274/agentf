@@ -75,7 +75,7 @@ sandbox:
   # 注：workdir_root/snapshot_root/daemon_log_path 已废弃——local/docker 模式
   # 切换为 daemon RPC 数据源（sandbox.list），不再目录扫描/日志解析（2026-08-02 重构）
   e2b_api_url: "http://218.245.96.148:30030"
-  e2b_api_key: "e2b_000000000"
+  e2b_api_key: "${AF_BR_SANDBOX_E2B_API_KEY}"
   e2b_ca_cert_path: "resource/certs/e2b_CA.pem"
   # 注：无 daemon_log_path——local/docker 模式已切换为 daemon RPC 数据源
   # （sandbox.list），不再解析 daemon 日志（2026-08-02 重构）
@@ -86,18 +86,18 @@ cors_allowed_origins:
   - "http://127.0.0.1:15173"
 
 # ── Agent 默认配置（load_agent 时自动注入到 .env） ──────────────
-# 当 load_agent 发现 agent 的 .env 中缺少以下配置项时，
-# 自动按此处的值写入。用户已在 .env 中手动设置的值不会被覆盖。
+# 仅注入模型、URL、预算等非秘密默认值。API key 只从宿主环境或用户本地
+# 已忽略的 .env 读取，Bridge 绝不把 config.yaml 中的凭据复制到 workspace。
 agent_defaults:
   # ── LLM 主模型 ──
   llm:
-    api_key: "${AF_LLM_API_KEY:-sk-ws-H.EDDMREP.gXlt.MEUCIQDS2ezv7sywxvCIry01hm7tkwKSBd0wmaLDz1_cNFgEbAIgK6mwFXsRvqREZbuPPzB1V8C9H3INslUdKhKfDqlV7ig}"
+    api_key: "${AF_LLM_API_KEY}"
     base_url: "${AF_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
     model: "${AF_LLM_MODEL:-deepseek-v4-flash}"
 
   # ── LLM 降级模型（主模型不可用时自动尝试） ──
   llm_fallback:
-    api_key: "sk-ws-H.EDDMREP.gXlt.MEUCIQDS2ezv7sywxvCIry01hm7tkwKSBd0wmaLDz1_cNFgEbAIgK6mwFXsRvqREZbuPPzB1V8C9H3INslUdKhKfDqlV7ig"
+    api_key: "${AF_FALLBACK_LLM_API_KEY}"
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model: "deepseek-v4-flash"
 
@@ -127,10 +127,10 @@ agent_defaults:
   vision:
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model: "qwen-vl-max"
-    api_key: "sk-ws-H.EDDMREP.gXlt.MEUCIQDS2ezv7sywxvCIry01hm7tkwKSBd0wmaLDz1_cNFgEbAIgK6mwFXsRvqREZbuPPzB1V8C9H3INslUdKhKfDqlV7ig"
+    api_key: "${AF_BR_VISION_API_KEY}"
 
   # ── VL 降级模型 ──
   vision_fallback:
     base_url: ""
     model: ""
-    api_key: ""
+    api_key: "${AF_BR_VISION_FALLBACK_API_KEY}"

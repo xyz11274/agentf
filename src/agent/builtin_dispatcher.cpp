@@ -711,6 +711,19 @@ void BuiltinDispatcher::cleanup_dialogue_data(MMAgent& agent,
       Logger::instance().info_f("[CLEANUP_DIALOGUE] Cleaned %d dispatch keys for dialogue_id=%s",
                                 dispatch_cleared, dialogue_id.c_str());
     }
+
+    for(const auto& prefix : {
+          "/session/" + session_id + "/sys/last_prompt:" + dialogue_id + ":",
+          "/session/" + session_id + "/sys/completed_dispatch:" + dialogue_id + ":",
+          "/session/" + session_id + "/llm/conversations/" + dialogue_id + "/"
+        }) {
+      int cleared = rt->remove_by_prefix(prefix);
+      if(cleared > 0) {
+        Logger::instance().info_f(
+            "[CLEANUP_DIALOGUE] Cleaned %d auxiliary keys for dialogue_id=%s",
+            cleared, dialogue_id.c_str());
+      }
+    }
   }
 
   // Clean up skill result keys in user namespace (dynamic based on launched_skills)

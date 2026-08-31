@@ -71,10 +71,11 @@ class TestBashAgentPackageDir:
         finally:
             os.environ.pop("AF_AGENT_PACKAGE_DIR", None)
 
-    def test_bash_execute_cwd_is_agent_package_dir(self, tmp_path):
+    def test_bash_execute_cwd_is_agent_package_dir(self, tmp_path, monkeypatch):
         """bash 工具的 cwd 必须等于 AF_AGENT_PACKAGE_DIR。"""
         mod = _import_tool_module("bash")
         test_dir = str(tmp_path)
+        monkeypatch.setenv("AF_ALLOW_UNSAFE_LOCAL_SECRET_TOOLS", "1")
         os.environ["AF_AGENT_PACKAGE_DIR"] = test_dir
         try:
             result = mod.execute({"command": "pwd"})

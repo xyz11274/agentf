@@ -73,7 +73,7 @@ sandbox:
   # 注：workdir_root/snapshot_root/daemon_log_path 已废弃——local/docker 模式
   # 切换为 daemon RPC 数据源（sandbox.list），不再目录扫描/日志解析（2026-08-02 重构）
   e2b_api_url: "http://218.245.96.148:30030"
-  e2b_api_key: "e2b_000000000"
+  e2b_api_key: "${AF_BR_SANDBOX_E2B_API_KEY}"
   e2b_ca_cert_path: "resource/certs/e2b_CA.pem"
   # 注：无 daemon_log_path——local/docker 模式已切换为 daemon RPC 数据源
   # （sandbox.list），不再解析 daemon 日志（2026-08-02 重构）
@@ -86,10 +86,10 @@ cors_allowed_origins:
 # ── Agent 默认配置（load_agent 时注入） ──────────────────────────
 agent_defaults:
   llm:
-    api_key: "${AF_LLM_API_KEY:-sk-ws-H.EDDMREP.gXlt.MEUCIQDS2ezv7sywxvCIry01hm7tkwKSBd0wmaLDz1_cNFgEbAIgK6mwFXsRvqREZbuPPzB1V8C9H3INslUdKhKfDqlV7ig}"
+    api_key: "${AF_LLM_API_KEY}"
     base_url: "${AF_LLM_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}"
     model: "${AF_LLM_MODEL:-deepseek-v4-flash}"
-    # api_key: "${AF_LLM_API_KEY:-sk-cp-nbU8hW2JOt8hpWAA32Y8BXP_jnz_H8IoN8jfWoDLaaN_Xf5pz05Yl_Q6oQWJf17-2sE6wcvdtpgbqkx6u-bdodmEfAdj6P_IcZVpOGKFygfJ5RLh_xkWjAY}"
+    # api_key: "${AF_LLM_API_KEY}"
     # base_url: "${AF_LLM_BASE_URL:-https://api.minimaxi.com/v1}"
     # model: "${AF_LLM_MODEL:-MiniMax-M3}"
     temperature: 0.7
@@ -99,7 +99,7 @@ agent_defaults:
     top_k: 0
     stop: ""
   llm_fallback:
-    api_key: "sk-ws-H.EDDMREP.gXlt.MEUCIQDS2ezv7sywxvCIry01hm7tkwKSBd0wmaLDz1_cNFgEbAIgK6mwFXsRvqREZbuPPzB1V8C9H3INslUdKhKfDqlV7ig"
+    api_key: "${AF_FALLBACK_LLM_API_KEY}"
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model: "deepseek-v4-flash"
   coordinator:
@@ -125,7 +125,7 @@ agent_defaults:
   vision:
     base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model: "qwen-vl-max"
-    api_key: "sk-ws-H.EDDMREP.gXlt.MEUCIQDS2ezv7sywxvCIry01hm7tkwKSBd0wmaLDz1_cNFgEbAIgK6mwFXsRvqREZbuPPzB1V8C9H3INslUdKhKfDqlV7ig"
+    api_key: "${AF_BR_VISION_API_KEY}"
   vision_fallback:
     base_url: ""
     model: ""

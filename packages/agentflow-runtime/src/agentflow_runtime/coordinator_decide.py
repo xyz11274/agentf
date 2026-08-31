@@ -60,6 +60,7 @@ from agentflow_runtime import mounts as hook_mounts
 from agentflow_runtime.context import AgentContext
 from agentflow_runtime.hooks import load_hooks_from_dir, trigger as hook_trigger
 from agentflow_runtime.trace import emit_span, SpanKind, SpanStatus
+from agentflow_runtime.security import install_stderr_redaction
 from agentflow_runtime.parse_af_input import parse_af_input, parse_stream
 from prompts import (
     COORDINATOR_FALLBACK_SYSTEM,
@@ -1798,6 +1799,7 @@ def execute():
 
 def main():
     """Run the production entrypoint and emit an observation-only error terminal."""
+    install_stderr_redaction()
     started_at = time.monotonic()
     try:
         return execute()

@@ -68,6 +68,21 @@ TEST_F(CodeLoaderProcessTest, SuccessfulCommandReturnsWithoutWaitingForTimeoutWa
       << "ms, timeout_ms=" << config.timeout_ms;
 }
 
+TEST_F(CodeLoaderProcessTest, EnvironmentValuesReachChildWithoutShellInterpolation) {
+  const std::string value = "value with spaces ' and $dollar";
+  const auto script = write_script(
+      "child_env.sh", "printf '%s' \"$AF_TEST_SETTING\"\n");
+  ExecutionConfig config;
+  config.timeout_ms = 5000;
+  config.env_vars.push_back("AF_TEST_SETTING=" + value);
+
+  CodeLoader loader;
+  const auto result = loader.execute_shell_script(script.string(), {}, config);
+
+  ASSERT_TRUE(result.success) << result.error_message;
+  EXPECT_EQ(result.stdout, value);
+}
+
 TEST_F(CodeLoaderProcessTest, TimeoutTerminatesDescendantProcesses) {
   // 不变量：CodeLoader 超时杀进程组时，必须连后代进程一起清理。
   //
@@ -101,9 +116,10 @@ TEST_F(CodeLoaderProcessTest, TimeoutTerminatesDescendantProcesses) {
   EXPECT_LT(elapsed.count(), 2500);
 
   // 超时杀进程组后，等待 OS 回收并轮询确认后代已死。
-  // pgrep -f 匹配完整命令行；唯一 marker 确保不误匹配其他进程。
+  // 锚定 argv[0]，避免 pgrep 的父 shell 因命令行包含 marker 而自匹配。
+  const std::string process_pattern = "^" + marker + "( |$)";
   auto marker_alive = [&]() {
-    std::string cmd = "pgrep -f '" + marker + "' 2>/dev/null";
+    std::string cmd = "pgrep -f '" + process_pattern + "' 2>/dev/null";
     FILE* pipe = ::popen(cmd.c_str(), "r");
     if (!pipe) return false;
     char buf[64];
@@ -123,7 +139,7 @@ TEST_F(CodeLoaderProcessTest, TimeoutTerminatesDescendantProcesses) {
   EXPECT_TRUE(descendant_dead) << "后代进程在超时后仍存活";
 
   // 兜底：如果测试自身失败残留了进程，清理掉避免污染后续测试。
-  ::system(("pkill -f '" + marker + "' 2>/dev/null || true").c_str());
+  ::system(("pkill -f '" + process_pattern + "' 2>/dev/null || true").c_str());
 }
 
 // ============================================================================

@@ -26,7 +26,7 @@ from pathlib import Path
 
 from config import settings
 from models import ArtifactInfo
-from routes.artifacts import artifact_file_size, read_artifact_base64
+from routes.artifacts import artifact_file_size, read_artifact_base64, sign_artifact_url
 
 logger = logging.getLogger("agentflow.bridge.routes.artifact_extractor")
 
@@ -120,13 +120,13 @@ def extract_artifact_infos(content: str) -> list[ArtifactInfo]:
                 mime_type=_infer_mime_type(url, art_type),
             ))
 
-    # 审计日志：产物提取结果。完整 url 清单落 logger（F7：不截断存储层）。
+    # 审计日志保留完整路径，但 capability 查询串不得进入普通日志。
     # SSE 流每轮 final chunk 会调用一次；同步模式只调一次；持久化路径另见 serialize_artifacts。
     if artifacts:
         logger.info(
             "artifact.extract count=%d urls=%s",
             len(artifacts),
-            [a.url for a in artifacts],
+            [a.url.partition("?")[0] for a in artifacts],
         )
     else:
         logger.debug("artifact.extract count=0 (no artifact patterns matched)")
@@ -149,12 +149,11 @@ def serialize_artifacts(content: str) -> str:
         return "[]"
     serialized = json.dumps([a.model_dump() for a in artifacts], ensure_ascii=False)
     # 审计日志：产物清单即将落盘到 dialogue_rounds.artifacts TEXT 列。
-    # 完整清单落 logger（F7），事后可凭此回溯"持久化前产物语义现场"。
     logger.info(
         "artifact.persist count=%d json_len=%d urls=%s",
         len(artifacts),
         len(serialized),
-        [a.url for a in artifacts],
+        [a.url.partition("?")[0] for a in artifacts],
     )
     return serialized
 
@@ -167,9 +166,15 @@ def publicize_artifact_urls(content: str) -> str:
     ``(https://cdn.example.com/api/artifacts/...``.
     """
     base = settings.artifact_public_base_url.rstrip("/")
-    if not base:
-        return content
-    return content.replace("(/api/artifacts/", f"({base}/api/artifacts/")
+
+    def _replace_url(match: re.Match[str]) -> str:
+        original = match.group(1)
+        signed = sign_artifact_url(original)
+        if not original.startswith(("http://", "https://")) and base:
+            signed = f"{base}{signed}"
+        return match.group(0).replace(original, signed, 1)
+
+    return _LINK_PATTERN.sub(_replace_url, _IMAGE_PATTERN.sub(_replace_url, content))
 
 
 def apply_artifact_output_mode(content: str, artifacts: list[ArtifactInfo]) -> tuple[str, list[ArtifactInfo]]:
@@ -214,7 +219,7 @@ def apply_artifact_output_mode(content: str, artifacts: list[ArtifactInfo]) -> t
                     logger.warning(
                         "artifact.base64.skip_non_image type=%s url=%s size=%d max_bytes=%d "
                         "(keep url form, frontend fetches via serve URL)",
-                        art.type, art.url, size, max_bytes,
+                        art.type, art.url.partition("?")[0], size, max_bytes,
                     )
                     continue  # 跳过填充,保留 url 形式(I-8)
             art.data_base64 = read_artifact_base64(art.url, art.mime_type)

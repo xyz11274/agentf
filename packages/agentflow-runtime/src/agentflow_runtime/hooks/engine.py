@@ -20,8 +20,25 @@ from typing import Any
 from agentflow_runtime.context import AgentContext
 from agentflow_runtime.events import HookEvent
 from agentflow_runtime.hooks.registry import HookRegistry, default_registry
+from agentflow_runtime.security import redact_secrets
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_context(context: AgentContext) -> None:
+    safe_messages, _ = redact_secrets(context.messages)
+    safe_artifacts, _ = redact_secrets(context.artifacts)
+    safe_reason, _ = redact_secrets(context.block_reason)
+    context.messages[:] = safe_messages
+    context.artifacts[:] = safe_artifacts
+    context.block_reason = safe_reason
+
+
+def _sanitize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    safe_payload, _ = redact_secrets(payload)
+    payload.clear()
+    payload.update(safe_payload)
+    return payload
 
 
 def trigger(
@@ -43,22 +60,29 @@ def trigger(
         registry: 订阅表（默认进程级单例）。
     """
     reg = registry if registry is not None else default_registry
+    context = ctx if ctx is not None else AgentContext()
+    _sanitize_payload(payload)
+    _sanitize_context(context)
     handlers = reg.handlers_for(event_name)
     if not handlers:
         return payload
 
     event = HookEvent(name=event_name, payload=payload, can_intervene=can_intervene)
-    context = ctx if ctx is not None else AgentContext()
     for handler in handlers:
         try:
             result = handler(event, context)
             if isinstance(result, dict):
-                event.payload.update(result)
+                safe_result, _ = redact_secrets(result)
+                event.payload.update(safe_result)
         except Exception as exc:  # noqa: BLE001 — 异常隔离：不阻断主流程
+            safe_error, _ = redact_secrets(str(exc))
             logger.warning(
                 "hook_engine.handler_error event=%s handler=%s error=%s",
                 event_name,
                 getattr(handler, "__name__", "?"),
-                exc,
+                safe_error,
             )
+        finally:
+            _sanitize_payload(event.payload)
+            _sanitize_context(context)
     return event.payload

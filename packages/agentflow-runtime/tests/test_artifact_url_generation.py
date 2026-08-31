@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from agentflow_runtime.common.runtime_context import artifact_routing_id
 # 霰弹式收敛(2026-08-14):local_artifact_url / rewrite_local_artifact_links
 # 从 coordinator_decide 上移 coordinator_common(单一真相源 F4),测试同步迁移。
 from agentflow_runtime.coordinator_common import (
@@ -76,9 +77,10 @@ def test_url_with_session_id_uses_new_format(
     monkeypatch.setenv("AF_CLIENT_ID", env_client_id)
     monkeypatch.setenv("AF_ARTIFACT_STORAGE_URL", "http://bridge:8199")
     url = local_artifact_url(str(path), package_dir=str(pkg))
-    # 新格式: /api/artifacts/{agent_name}/{user_id}_{client_id}/{relative}
-    assert "/user_test_client/" in url, (
-        f"New format should contain {env_user_id}_{env_client_id} segment, got: {url}"
+    routing_id = artifact_routing_id(env_user_id, env_client_id)
+    # 新格式: /api/artifacts/{agent_name}/{artifact_routing_id}/{relative}
+    assert f"/{routing_id}/" in url, (
+        f"New format should contain {routing_id} segment, got: {url}"
     )
     assert "/health" not in url, (
         f"URL should still NOT contain /health with session_id, got: {url}"

@@ -11,6 +11,8 @@ import threading
 from pathlib import Path
 from typing import Any
 
+from agentflow_runtime.security import redact_secrets
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - harness runtime is POSIX
@@ -88,8 +90,9 @@ class SpanWriter:
             dialogue_id = span.tags.get("dialogue_id", "_no_dialogue")
         file_path = self._output_dir / f"python_spans_{dialogue_id}.ndjson"
 
+        safe_span, _redaction = redact_secrets(span.to_dict())
         line = (
-            json.dumps(span.to_dict(), ensure_ascii=False, separators=(",", ":"))
+            json.dumps(safe_span, ensure_ascii=False, separators=(",", ":"))
             + "\n"
         ).encode("utf-8")
 

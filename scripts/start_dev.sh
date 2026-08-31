@@ -55,11 +55,11 @@ RUN_FRONTEND=true      # Frontend web
 
 # Bridge SSE per-request dump（调试用：每个 SSE 请求保存完整请求体+响应流）
 # 想关掉注释此行或设空串即可
-export AF_SSE_DUMP_DIR="logs/sse_dump"
+export AF_SSE_DUMP_DIR="${AF_SSE_DUMP_DIR:-}"
 
 # Sidecar per-request dump（调试用：sidecar 收到的请求+SSE chunk+发出的回调）
 # 与 Bridge dump 对照分析全链路
-export AF_SIDECAR_DUMP_DIR="logs/sidecar_dump"
+export AF_SIDECAR_DUMP_DIR="${AF_SIDECAR_DUMP_DIR:-}"
 
 # restart 语义：daemon 默认自动构建（修改 C++ 后重启即重编译），--no-build 可跳过
 DAEMON_BUILD=true
@@ -271,9 +271,9 @@ if $RUN_FMM; then
         if [ -z "$FMM_API_KEY" ]; then
             echo "[WARN] Proxy 模式但未设置 API Key。"
             echo "  设置方式:"
-            echo "    export DASHSCOPE_API_KEY=sk-xxx   # DashScope"
-            echo "    或: --api-key sk-xxx"
-            echo "    或: export AF_LLM_API_KEY=sk-xxx"
+            echo "    export DASHSCOPE_API_KEY='<credential-from-secret-store>'"
+            echo "    或: --api-key '<credential-from-secret-store>'"
+            echo "    或: export AF_LLM_API_KEY='<credential-from-secret-store>'"
         fi
         FMM_ARGS+=(--proxy --upstream-url "$FMM_UPSTREAM" --api-key "$FMM_API_KEY")
         echo "🔌 FusionMind Mock → PROXY → $FMM_UPSTREAM"

@@ -15,7 +15,9 @@ from agentflow_runtime.executors.host import HostExecutor
 
 
 @pytest.fixture
-def executor():
+def executor(monkeypatch):
+    # Characteristic command tests explicitly opt into host execution.
+    monkeypatch.setenv("AF_ALLOW_UNSAFE_LOCAL_SECRET_TOOLS", "1")
     return HostExecutor()
 
 
@@ -236,17 +238,45 @@ def test_fetch_url_returns_content(executor):
     mock_resp.read.return_value = b"<html><body>Hello</body></html>"
     mock_resp.headers.get.return_value = "text/html"
 
-    with patch("urllib.request.urlopen", return_value=mock_resp):
+    with patch(
+        "agentflow_runtime.executors.host._SAFE_URL_OPENER.open",
+        return_value=mock_resp,
+    ):
         result = executor.fetch_url("https://example.com/test")
     assert isinstance(result, FileContent)
     assert result.error is None
     assert "Hello" in result.content
 
 
+def test_fetch_url_decompresses_gzip_content(executor):
+    """fetch_url decodes gzip transport bytes before charset/HTML handling."""
+    import gzip
+
+    mock_resp = MagicMock()
+    mock_resp.__enter__.return_value = mock_resp
+    mock_resp.read.return_value = gzip.compress(b"<html><body>Hello gzip</body></html>")
+    mock_resp.headers.get.side_effect = lambda name, default="": {
+        "Content-Encoding": "gzip",
+        "Content-Type": "text/html; charset=utf-8",
+    }.get(name, default)
+
+    with patch(
+        "agentflow_runtime.executors.host._SAFE_URL_OPENER.open",
+        return_value=mock_resp,
+    ):
+        result = executor.fetch_url("https://example.com/test")
+
+    assert result.error is None
+    assert "Hello gzip" in result.content
+
+
 def test_fetch_url_connection_error_returns_error(executor):
     """fetch_url on unreachable URL returns FileContent with error."""
     import urllib.error
 
-    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("no connection")):
+    with patch(
+        "agentflow_runtime.executors.host._SAFE_URL_OPENER.open",
+        side_effect=urllib.error.URLError("no connection"),
+    ):
         result = executor.fetch_url("https://unreachable.invalid/page")
     assert result.error is not None
