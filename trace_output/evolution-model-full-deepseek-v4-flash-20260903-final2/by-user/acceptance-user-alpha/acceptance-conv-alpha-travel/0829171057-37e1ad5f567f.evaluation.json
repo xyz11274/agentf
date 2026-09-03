@@ -1,0 +1,580 @@
+{
+ "schema_version": 1,
+ "evaluation_kind": "content_aware_dialogue_evaluation",
+ "evaluator_version": "hybrid-evaluator-v2",
+ "deterministic_rule_set_version": "hybrid-fusion-rules-v1",
+ "source_analyzer_version": "loop-episode-analyzer-v1.1",
+ "source_rule_set_version": "invalid-loop-rules-v1",
+ "source_fingerprint": "cee37d1ef68bea0e7ba18bd39578ce7f53079262a6c6eb556c6ba93309a5ca4c",
+ "source": {
+  "user_id": "acceptance-user-alpha",
+  "conversation_id": "acceptance-conv-alpha-travel",
+  "dialogue_id": "0829171057-37e1ad5f567f"
+ },
+ "source_trace_integrity_valid": true,
+ "metrics": {
+  "episode_count": "8",
+  "coordinator_episode_count": "3",
+  "skill_episode_count": "5",
+  "continued_episode_count": "4",
+  "terminal_episode_count": "4",
+  "outcome_failed_episode_count": "4",
+  "review_episode_count": "4",
+  "unassessed_episode_count": "4",
+  "tool_call_count": "2",
+  "dispatch_batch_count": "2",
+  "partial_dispatch_batch_count": "1",
+  "failed_outcome_rate": 0.5,
+  "workflow_status": "AGGREGATE_STATUS_SUCCEEDED",
+  "business_status": "AGGREGATE_STATUS_PARTIAL"
+ },
+ "assessments": [
+  {
+   "evidence": {
+    "packet_id": "packet:33572e2b27436a67cf4395dac4e9296525d3803c9d5468139ee35d52ff29c338",
+    "episode_id": "loop:coordinator:641911b77a0a286c9672ab40a863550777f6f6233202ecb8590a0dc2385ada32:1",
+    "scope": "coordinator",
+    "owner_id": "coordinator:0829171057-37e1ad5f567f",
+    "activation_index": "1",
+    "round": "1",
+    "attempt_index": "1",
+    "step_index": "1",
+    "action": "continue",
+    "reason": "tool_calls_requested",
+    "continued": true,
+    "input_fingerprint": "18b4d5c2fe762f4cee76e2643dea908c6a5bea9388faf55ccc0a915f77794072",
+    "action_fingerprint": "cd2fa3a6a7c3966bfdae80a434ee0775e7e3e5196f6ac9d011da0acf5ad31b8e",
+    "outcome_fingerprint": "03b83e4dee5447981073f797cafecea4be30aff311e6b625cbd149c8bcd165fe",
+    "outcome_class_fingerprint": "844afd52bf95a3a7d9feabf86fa18caf2a58a44ee7ce3e91176f9e723403301c",
+    "dispatch": {
+     "batch_id": "batch:0829171057-37e1ad5f567f:52b4da055939",
+     "skill_names": [
+      "outfit-stylist",
+      "forge-image-gen"
+     ],
+     "force": [
+      false,
+      false
+     ],
+     "batch_status": "partial",
+     "workflow_status": "completed",
+     "successful_count": 1,
+     "total_count": 2
+    },
+    "source_event_ids": [
+     "python:1796053:1788023457801220:3",
+     "python:1796053:1788023457801220:4",
+     "python:1796053:1788023457801220:5",
+     "python:1796053:1788023457801220:6",
+     "python:1796053:1788023457801220:7",
+     "python:1796053:1788023457801220:8"
+    ],
+    "next_same_owner": {
+     "episode_id": "loop:coordinator:641911b77a0a286c9672ab40a863550777f6f6233202ecb8590a0dc2385ada32:2",
+     "step_index": "2",
+     "action": "continue",
+     "outcome_failed": true,
+     "outcome_class_fingerprint": "3a23e0a6c190c8e1b556e5103a73f1f7a42ce1039659db4289e61085abd3f3e0"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNASSESSED",
+    "explanation": "未命中确定性异常规则；这不等同于已证明该步骤有效。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_SUCCEEDED",
+    "adapter": "openai-compatible-http",
+    "model_id": "deepseek-v4-flash",
+    "request_fingerprint": "d3a79c8e212dff82e138d8eb98cc15a105220a5104e2bacea06f7795b1232929",
+    "response_fingerprint": "498b28245c42f0a92e41a8fcd7f9f0a0458cca422fc9174b9d639c1113a33011",
+    "verdict": "SEMANTIC_VERDICT_USEFUL",
+    "confidence": 0.95,
+    "expected_state_change": "coordinator 应并行调度 outfit-stylist 和 forge-image-gen 两个 skill，并传递详细任务指令。",
+    "observed_state_change": "coordinator 成功调用 run_skills 并行调度了两个 skill，prompt 内容完整，包含天气查询、穿搭设计、图片生成等要求，符合用户需求。",
+    "concise_reason": "正确并行调度两个独立分支，指令清晰完整，为后续执行奠定基础。",
+    "evidence_event_ids": [
+     "python:1796053:1788023457801220:5",
+     "python:1796053:1788023457801220:7"
+    ],
+    "attempts": 1
+   },
+   "final_verdict": "SEMANTIC_VERDICT_USEFUL",
+   "decision_source": "DECISION_SOURCE_MODEL",
+   "final_confidence": 0.95,
+   "fusion_reason": "确定性规则未下语义结论，采用已校验的模型判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:93cc02aac1de285ec48a2e67caa7b1c9158746288bc8bb3acc67781c7118d5e7",
+    "episode_id": "loop:skill:9baa03c24883f13117440d9ad0aed4e99bcca084e52227618057d6f7f1b4d888:1",
+    "scope": "skill",
+    "owner_id": "dispatch:0829171057-37e1ad5f567f:52b4da055939:1",
+    "skill_name": "outfit-stylist",
+    "round": "1",
+    "attempt_index": "1",
+    "step_index": "1",
+    "action": "continue",
+    "reason": "tool_calls_requested",
+    "continued": true,
+    "input_fingerprint": "345c0a10ba39986b5cd85f25a2273c96d0f232dc48ef69d4665686ba2b40b1d0",
+    "action_fingerprint": "9817d1a7838af930cef29a3c0ca1990c6c794f1026279a63b57830b5dc4ddc88",
+    "outcome_fingerprint": "291ffc9b2459a577abc3f9794aab7af65774253975ab7a01a57dee7bebeaf334",
+    "outcome_class_fingerprint": "37efd6460a3e7a0df313e57cd9344f4d98ccab05d4452b295fd808c373fcd0d7",
+    "dispatch": {},
+    "tools": [
+     {
+      "tool_call_id": "call_huyow8f0ppjcpz6y9fovt2fx",
+      "tool_name": "get_weather",
+      "status": "completed",
+      "retryability": "not_applicable",
+      "arguments_fingerprint": "6831dd107b1f71cacd2993f0dad69c4127f4dac0e87006f59b90263eac343f85",
+      "result_fingerprint": "a8748ae1158d62f61a62cf8ba7a1d79be693390b53059ad989588c4901fbf5ee",
+      "call_event_id": "python:1798382:1788023567177104:6",
+      "result_event_id": "python:1798382:1788023567177104:7"
+     }
+    ],
+    "source_event_ids": [
+     "python:1798382:1788023567177104:2",
+     "python:1798382:1788023567177104:3",
+     "python:1798382:1788023567177104:4",
+     "python:1798382:1788023567177104:5",
+     "python:1798382:1788023567177104:6",
+     "python:1798382:1788023567177104:7"
+    ],
+    "next_same_owner": {
+     "episode_id": "loop:skill:9baa03c24883f13117440d9ad0aed4e99bcca084e52227618057d6f7f1b4d888:2",
+     "step_index": "2",
+     "action": "stop",
+     "terminal_status": "llm_error",
+     "outcome_failed": true,
+     "outcome_class_fingerprint": "27890bea0f634824d74fd3a8d2331b664f78e3263a4d5f4fcbc7c94faf148169"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNASSESSED",
+    "explanation": "未命中确定性异常规则；这不等同于已证明该步骤有效。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_NOT_REQUESTED"
+   },
+   "final_verdict": "SEMANTIC_VERDICT_UNASSESSED",
+   "decision_source": "DECISION_SOURCE_NONE",
+   "fusion_reason": "没有足够的确定性证据，也没有可用的模型判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:bc080988178e76137cc371be5b21b685cf69450fbde07738a8ea7b48d57d2078",
+    "episode_id": "loop:skill:4c4a2982a57104d3ccc325502b14ceac0f31640da77663fafc51aa1ce7aea7de:1",
+    "scope": "skill",
+    "owner_id": "dispatch:0829171057-37e1ad5f567f:52b4da055939:2",
+    "skill_name": "forge-image-gen",
+    "round": "1",
+    "attempt_index": "1",
+    "step_index": "1",
+    "action": "continue",
+    "reason": "tool_calls_requested",
+    "continued": true,
+    "input_fingerprint": "6e39265a401e0c1c3a56f56a9b48bf1d4959a12962fdfa4da92a0465d241e0aa",
+    "action_fingerprint": "ea39f5f3a6c567fb36b5aa440fb447515fa104efdb5df2c2bd1ebabf9ef200ca",
+    "outcome_fingerprint": "cfd3bc7420c1a8952cf1e8193001c29786ac315224408069f5d780843677b4ff",
+    "outcome_class_fingerprint": "c72c451099748635c6855470cc84c6b74f0765548135fe4ca60a26cdfdcede18",
+    "dispatch": {},
+    "tools": [
+     {
+      "tool_call_id": "call_5hmv7h1c5tl23ioq2yi4t99h",
+      "tool_name": "generate_image",
+      "status": "completed",
+      "retryability": "not_applicable",
+      "arguments_fingerprint": "eb169946d8f0dd23b7fe18e23e574afdc3a096b5a5be64db8526126e5c486fbe",
+      "result_fingerprint": "8743a4555768e8d661f16870330080bda1cf28d19f64a909fee636dee14a2e53",
+      "call_event_id": "python:1798826:1788023584605156:6",
+      "result_event_id": "python:1798826:1788023584605156:7"
+     }
+    ],
+    "source_event_ids": [
+     "python:1798826:1788023584605156:2",
+     "python:1798826:1788023584605156:3",
+     "python:1798826:1788023584605156:4",
+     "python:1798826:1788023584605156:5",
+     "python:1798826:1788023584605156:6",
+     "python:1798826:1788023584605156:7",
+     "python:1798826:1788023584605156:8"
+    ],
+    "next_same_owner": {
+     "episode_id": "loop:skill:4c4a2982a57104d3ccc325502b14ceac0f31640da77663fafc51aa1ce7aea7de:2",
+     "step_index": "2",
+     "action": "stop",
+     "terminal_status": "completed",
+     "outcome_class_fingerprint": "86427da32bd507602fb454baa61dfdbc66ae03fed4e4351acf849b1be4c98c9a"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNASSESSED",
+    "explanation": "未命中确定性异常规则；这不等同于已证明该步骤有效。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_NOT_REQUESTED"
+   },
+   "final_verdict": "SEMANTIC_VERDICT_UNASSESSED",
+   "decision_source": "DECISION_SOURCE_NONE",
+   "fusion_reason": "没有足够的确定性证据，也没有可用的模型判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:d8bd09c72774dc63e7e168b88d4148f08d25c48a7f5f91def820ece88e55d98b",
+    "episode_id": "loop:skill:4c4a2982a57104d3ccc325502b14ceac0f31640da77663fafc51aa1ce7aea7de:2",
+    "scope": "skill",
+    "owner_id": "dispatch:0829171057-37e1ad5f567f:52b4da055939:2",
+    "skill_name": "forge-image-gen",
+    "round": "2",
+    "attempt_index": "1",
+    "step_index": "2",
+    "action": "stop",
+    "reason": "final_response",
+    "terminal": true,
+    "terminal_status": "completed",
+    "input_fingerprint": "6f20af548d9035d8de59e05ea15d21c33c4baca2882e9b030f689c861fd52f10",
+    "action_fingerprint": "c2e330fdbd669455b30b496c07a55498b513da3f2017ef057efd3c8edb540710",
+    "outcome_fingerprint": "86427da32bd507602fb454baa61dfdbc66ae03fed4e4351acf849b1be4c98c9a",
+    "outcome_class_fingerprint": "86427da32bd507602fb454baa61dfdbc66ae03fed4e4351acf849b1be4c98c9a",
+    "dispatch": {},
+    "source_event_ids": [
+     "python:1798826:1788023584605156:9",
+     "python:1798826:1788023584605156:10",
+     "python:1798826:1788023584605156:11",
+     "python:1798826:1788023584605156:12",
+     "python:1798826:1788023584605156:13"
+    ],
+    "previous_same_owner": {
+     "episode_id": "loop:skill:4c4a2982a57104d3ccc325502b14ceac0f31640da77663fafc51aa1ce7aea7de:1",
+     "step_index": "1",
+     "action": "continue",
+     "outcome_class_fingerprint": "c72c451099748635c6855470cc84c6b74f0765548135fe4ca60a26cdfdcede18"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNASSESSED",
+    "explanation": "未命中确定性异常规则；这不等同于已证明该步骤有效。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_NOT_REQUESTED"
+   },
+   "final_verdict": "SEMANTIC_VERDICT_UNASSESSED",
+   "decision_source": "DECISION_SOURCE_NONE",
+   "fusion_reason": "没有足够的确定性证据，也没有可用的模型判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:7833304505b3cfa1e296ab2b4373b2758be4d1a109df67698e2d895530153e7e",
+    "episode_id": "loop:skill:9baa03c24883f13117440d9ad0aed4e99bcca084e52227618057d6f7f1b4d888:2",
+    "scope": "skill",
+    "owner_id": "dispatch:0829171057-37e1ad5f567f:52b4da055939:1",
+    "skill_name": "outfit-stylist",
+    "round": "2",
+    "attempt_index": "1",
+    "step_index": "2",
+    "action": "stop",
+    "reason": "final_response",
+    "terminal": true,
+    "terminal_status": "llm_error",
+    "outcome_failed": true,
+    "input_fingerprint": "36714e360777fa0c50c2113f4730868e918fb043cab50b50beff0df33e9458fe",
+    "action_fingerprint": "c2e330fdbd669455b30b496c07a55498b513da3f2017ef057efd3c8edb540710",
+    "outcome_fingerprint": "27890bea0f634824d74fd3a8d2331b664f78e3263a4d5f4fcbc7c94faf148169",
+    "outcome_class_fingerprint": "27890bea0f634824d74fd3a8d2331b664f78e3263a4d5f4fcbc7c94faf148169",
+    "dispatch": {},
+    "source_event_ids": [
+     "python:1798382:1788023567177104:8",
+     "python:1798382:1788023567177104:9",
+     "python:1798382:1788023567177104:10",
+     "python:1798382:1788023567177104:11",
+     "python:1798382:1788023567177104:12"
+    ],
+    "previous_same_owner": {
+     "episode_id": "loop:skill:9baa03c24883f13117440d9ad0aed4e99bcca084e52227618057d6f7f1b4d888:1",
+     "step_index": "1",
+     "action": "continue",
+     "outcome_class_fingerprint": "37efd6460a3e7a0df313e57cd9344f4d98ccab05d4452b295fd808c373fcd0d7"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNCERTAIN",
+    "confidence": 0.55,
+    "explanation": "该步骤的业务结果失败，需要结合任务语义判断重试是否必要。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_SUCCEEDED",
+    "adapter": "openai-compatible-http",
+    "model_id": "deepseek-v4-flash",
+    "request_fingerprint": "d3a79c8e212dff82e138d8eb98cc15a105220a5104e2bacea06f7795b1232929",
+    "response_fingerprint": "498b28245c42f0a92e41a8fcd7f9f0a0458cca422fc9174b9d639c1113a33011",
+    "verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+    "confidence": 0.9,
+    "expected_state_change": "outfit-stylist 应完成天气查询并输出三日穿搭方案。",
+    "observed_state_change": "outfit-stylist 成功调用 get_weather 获取成都天气数据，但在生成最终方案时 LLM 调用超时，skill 以 llm_error 终止，未产出穿搭方案。",
+    "concise_reason": "天气数据已成功获取，但 LLM 网络超时导致方案未生成，属于临时性故障，重试合理。",
+    "evidence_event_ids": [
+     "python:1798382:1788023567177104:7",
+     "python:1798382:1788023567177104:10",
+     "python:1798382:1788023567177104:12"
+    ],
+    "attempts": 1
+   },
+   "final_verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+   "decision_source": "DECISION_SOURCE_HYBRID",
+   "final_confidence": 0.9,
+   "fusion_reason": "确定性规则负责筛选可疑步骤，模型补充任务语义判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:0b24d0f0036efd79682dc6ae52b30ffd878fd7a8570485e70c5c3e5c754748d4",
+    "episode_id": "loop:coordinator:641911b77a0a286c9672ab40a863550777f6f6233202ecb8590a0dc2385ada32:2",
+    "scope": "coordinator",
+    "owner_id": "coordinator:0829171057-37e1ad5f567f",
+    "activation_index": "2",
+    "round": "2",
+    "attempt_index": "1",
+    "step_index": "2",
+    "action": "continue",
+    "reason": "tool_calls_requested",
+    "continued": true,
+    "outcome_failed": true,
+    "input_fingerprint": "cb33232c3a9fbd86fe24cab9834d7fe59bf814c89e0256d5a4110df885b914e3",
+    "action_fingerprint": "361be1d885318bcfaf2dae27cf843d33abc2886d60e8ca9f9e07b364afa19715",
+    "outcome_fingerprint": "0befa1ebc378197ea8717a073b9ac6b19c07bca275c42faec9f73324f05ff4df",
+    "outcome_class_fingerprint": "3a23e0a6c190c8e1b556e5103a73f1f7a42ce1039659db4289e61085abd3f3e0",
+    "dispatch": {
+     "batch_id": "batch:0829171057-37e1ad5f567f:8444ad3bb9ae",
+     "skill_names": [
+      "outfit-stylist"
+     ],
+     "force": [
+      true
+     ],
+     "batch_status": "false",
+     "workflow_status": "completed",
+     "total_count": 1
+    },
+    "source_event_ids": [
+     "python:1806583:1788023989563516:3",
+     "python:1806583:1788023989563516:4",
+     "python:1806583:1788023989563516:5",
+     "python:1806583:1788023989563516:6",
+     "python:1806583:1788023989563516:7",
+     "python:1806583:1788023989563516:8"
+    ],
+    "previous_same_owner": {
+     "episode_id": "loop:coordinator:641911b77a0a286c9672ab40a863550777f6f6233202ecb8590a0dc2385ada32:1",
+     "step_index": "1",
+     "action": "continue",
+     "outcome_class_fingerprint": "844afd52bf95a3a7d9feabf86fa18caf2a58a44ee7ce3e91176f9e723403301c"
+    },
+    "next_same_owner": {
+     "episode_id": "loop:coordinator:641911b77a0a286c9672ab40a863550777f6f6233202ecb8590a0dc2385ada32:3",
+     "step_index": "3",
+     "action": "stop",
+     "terminal_status": "llm_error",
+     "outcome_failed": true,
+     "outcome_class_fingerprint": "27890bea0f634824d74fd3a8d2331b664f78e3263a4d5f4fcbc7c94faf148169"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNCERTAIN",
+    "confidence": 0.55,
+    "explanation": "该步骤的业务结果失败，需要结合任务语义判断重试是否必要。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_SUCCEEDED",
+    "adapter": "openai-compatible-http",
+    "model_id": "deepseek-v4-flash",
+    "request_fingerprint": "d3a79c8e212dff82e138d8eb98cc15a105220a5104e2bacea06f7795b1232929",
+    "response_fingerprint": "498b28245c42f0a92e41a8fcd7f9f0a0458cca422fc9174b9d639c1113a33011",
+    "verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+    "confidence": 0.9,
+    "expected_state_change": "coordinator 应基于部分成功结果，仅重试失败的 outfit-stylist 分支。",
+    "observed_state_change": "coordinator 正确识别图片分支成功、穿搭分支因超时失败，仅以 force=true 重试 outfit-stylist，未重跑已成功的图片分支，符合失败处理规则。",
+    "concise_reason": "重试决策正确，仅针对失败分支，且原因（网络超时）可修复，重试有依据。",
+    "evidence_event_ids": [
+     "python:1806583:1788023989563516:2",
+     "python:1806583:1788023989563516:5",
+     "python:1806583:1788023989563516:7"
+    ],
+    "attempts": 1
+   },
+   "final_verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+   "decision_source": "DECISION_SOURCE_HYBRID",
+   "final_confidence": 0.9,
+   "fusion_reason": "确定性规则负责筛选可疑步骤，模型补充任务语义判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:ff3e689f32ffaf67c2be8cf24e36c71508fe548b44f01188ae3441c520ae8932",
+    "episode_id": "loop:skill:66f5c96c56c351faeac8d6b725b9bdf01f10d28f96b722c513ac24543a2982de:1",
+    "scope": "skill",
+    "owner_id": "dispatch:0829171057-37e1ad5f567f:8444ad3bb9ae:1",
+    "skill_name": "outfit-stylist",
+    "round": "1",
+    "attempt_index": "1",
+    "step_index": "1",
+    "action": "stop",
+    "reason": "final_response",
+    "terminal": true,
+    "terminal_status": "llm_error",
+    "outcome_failed": true,
+    "input_fingerprint": "1af6f71e7ee7485b6cab5424f9a728688da0667006864db989bb1e850e27ef18",
+    "action_fingerprint": "c2e330fdbd669455b30b496c07a55498b513da3f2017ef057efd3c8edb540710",
+    "outcome_fingerprint": "27890bea0f634824d74fd3a8d2331b664f78e3263a4d5f4fcbc7c94faf148169",
+    "outcome_class_fingerprint": "27890bea0f634824d74fd3a8d2331b664f78e3263a4d5f4fcbc7c94faf148169",
+    "dispatch": {},
+    "source_event_ids": [
+     "python:1807076:1788024014159387:2",
+     "python:1807076:1788024014159387:3",
+     "python:1807076:1788024014159387:4",
+     "python:1807076:1788024014159387:5",
+     "python:1807076:1788024014159387:6"
+    ]
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNCERTAIN",
+    "confidence": 0.55,
+    "explanation": "该步骤的业务结果失败，需要结合任务语义判断重试是否必要。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_SUCCEEDED",
+    "adapter": "openai-compatible-http",
+    "model_id": "deepseek-v4-flash",
+    "request_fingerprint": "d3a79c8e212dff82e138d8eb98cc15a105220a5104e2bacea06f7795b1232929",
+    "response_fingerprint": "498b28245c42f0a92e41a8fcd7f9f0a0458cca422fc9174b9d639c1113a33011",
+    "verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+    "confidence": 0.9,
+    "expected_state_change": "重试的 outfit-stylist 应完成穿搭方案输出。",
+    "observed_state_change": "重试的 outfit-stylist 在首轮 LLM 调用即因网络超时失败，未产生任何有效输出，skill 以 llm_error 终止。",
+    "concise_reason": "重试仍因同一网络超时失败，属于外部服务临时不可用，重试尝试合理但未成功。",
+    "evidence_event_ids": [
+     "python:1807076:1788024014159387:2",
+     "python:1807076:1788024014159387:4",
+     "python:1807076:1788024014159387:6"
+    ],
+    "attempts": 1
+   },
+   "final_verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+   "decision_source": "DECISION_SOURCE_HYBRID",
+   "final_confidence": 0.9,
+   "fusion_reason": "确定性规则负责筛选可疑步骤，模型补充任务语义判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:c721b7efdde10f990ce53107a7fb9f3737b01c0e23463b5749a9f729b19609ab",
+    "episode_id": "loop:coordinator:641911b77a0a286c9672ab40a863550777f6f6233202ecb8590a0dc2385ada32:3",
+    "scope": "coordinator",
+    "owner_id": "coordinator:0829171057-37e1ad5f567f",
+    "activation_index": "3",
+    "round": "3",
+    "attempt_index": "1",
+    "step_index": "3",
+    "action": "stop",
+    "reason": "final_response",
+    "terminal": true,
+    "terminal_status": "llm_error",
+    "outcome_failed": true,
+    "input_fingerprint": "340010a66ab8f7b980a0e65420794a447da8aa818a19f484997e04ad86a9157e",
+    "action_fingerprint": "c2e330fdbd669455b30b496c07a55498b513da3f2017ef057efd3c8edb540710",
+    "outcome_fingerprint": "27890bea0f634824d74fd3a8d2331b664f78e3263a4d5f4fcbc7c94faf148169",
+    "outcome_class_fingerprint": "27890bea0f634824d74fd3a8d2331b664f78e3263a4d5f4fcbc7c94faf148169",
+    "dispatch": {},
+    "source_event_ids": [
+     "python:1812713:1788024315395980:3",
+     "python:1812713:1788024315395980:4",
+     "python:1812713:1788024315395980:5",
+     "python:1812713:1788024315395980:6",
+     "python:1812713:1788024315395980:7"
+    ],
+    "previous_same_owner": {
+     "episode_id": "loop:coordinator:641911b77a0a286c9672ab40a863550777f6f6233202ecb8590a0dc2385ada32:2",
+     "step_index": "2",
+     "action": "continue",
+     "outcome_failed": true,
+     "outcome_class_fingerprint": "3a23e0a6c190c8e1b556e5103a73f1f7a42ce1039659db4289e61085abd3f3e0"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNCERTAIN",
+    "confidence": 0.55,
+    "explanation": "该步骤的业务结果失败，需要结合任务语义判断重试是否必要。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_SUCCEEDED",
+    "adapter": "openai-compatible-http",
+    "model_id": "deepseek-v4-flash",
+    "request_fingerprint": "d3a79c8e212dff82e138d8eb98cc15a105220a5104e2bacea06f7795b1232929",
+    "response_fingerprint": "498b28245c42f0a92e41a8fcd7f9f0a0458cca422fc9174b9d639c1113a33011",
+    "verdict": "SEMANTIC_VERDICT_PREMATURE_STOP",
+    "confidence": 0.85,
+    "expected_state_change": "coordinator 应基于已有部分结果（图片成功、穿搭失败）向用户提供最终回复，说明失败原因。",
+    "observed_state_change": "coordinator 在收到重试失败结果后，尝试生成最终回复时自身 LLM 调用也超时，最终以 llm_error 终止，仅返回了图片产物和简短说明，未提供穿搭方案或详细失败原因。",
+    "concise_reason": "coordinator 因 LLM 超时未能完成最终回复，导致用户只获得图片产物，穿搭方案缺失，属于过早结束。",
+    "evidence_event_ids": [
+     "python:1812713:1788024315395980:2",
+     "python:1812713:1788024315395980:5",
+     "python:1812713:1788024315395980:7"
+    ],
+    "attempts": 1
+   },
+   "final_verdict": "SEMANTIC_VERDICT_PREMATURE_STOP",
+   "decision_source": "DECISION_SOURCE_HYBRID",
+   "final_confidence": 0.85,
+   "fusion_reason": "确定性规则负责筛选可疑步骤，模型补充任务语义判断。"
+  }
+ ],
+ "model_requested_count": "1",
+ "model_succeeded_count": "1",
+ "dialogue_assessment": {
+  "status": "MODEL_CALL_STATUS_SUCCEEDED",
+  "adapter": "openai-compatible-http",
+  "model_id": "deepseek-v4-flash",
+  "request_fingerprint": "d3a79c8e212dff82e138d8eb98cc15a105220a5104e2bacea06f7795b1232929",
+  "response_fingerprint": "498b28245c42f0a92e41a8fcd7f9f0a0458cca422fc9174b9d639c1113a33011",
+  "task_outcome": "AGGREGATE_STATUS_PARTIAL",
+  "confidence": 0.9,
+  "reason": "用户要求并行执行两个分支：outfit-stylist 设计穿搭方案和 forge-image-gen 生成平铺图。图片分支成功生成并上传了 acceptance-b1-chengdu.png，但穿搭分支因 LLM 网络超时连续失败两次，最终 coordinator 也因超时未能向用户提供穿搭方案，仅返回了图片产物。任务部分完成，穿搭方案缺失。",
+  "evidence_event_ids": [
+   "python:1798826:1788023584605156:7",
+   "python:1798382:1788023567177104:12",
+   "python:1807076:1788024014159387:6",
+   "python:1812713:1788024315395980:7"
+  ],
+  "attempts": 1
+ },
+ "reflection": {
+  "summary": "本次对话中，图片生成分支成功完成，但穿搭方案分支因 LLM 网络超时连续失败两次，最终 coordinator 也因超时未能向用户提供完整回复。任务部分完成，用户仅获得图片产物，穿搭方案缺失。",
+  "root_causes": [
+   "LLM 服务网络超时（ark.cn-beijing.volces.com 读取超时）导致 outfit-stylist 两次执行失败",
+   "coordinator 在最终回复阶段也遭遇 LLM 超时，未能向用户提供穿搭方案或详细失败说明"
+  ],
+  "skill_orchestration_changes": [
+   "在并行调度多个 skill 时，应更早考虑网络超时风险，可设置更短的超时或增加重试间隔",
+   "当某个分支连续失败时，可考虑使用备用模型或降级方案（如基于已有天气数据直接生成穿搭方案）"
+  ],
+  "prompt_changes": [
+   "在 skill prompt 中可增加对网络超时的容错提示，如要求 LLM 在超时后基于已有数据直接输出结果",
+   "coordinator 的最终回复 prompt 可增加对部分成功场景的处理指引，确保即使 LLM 超时也能返回已有产物"
+  ],
+  "stop_condition_changes": [
+   "当同一 skill 连续失败 2 次后，应确保 coordinator 能基于已有结果直接回复，避免因自身超时导致无回复",
+   "可考虑在 coordinator 超时后自动返回已收集的产物和失败信息，而不是完全失败"
+  ],
+  "wasted_episode_ids": [
+   "loop:skill:66f5c96c56c351faeac8d6b725b9bdf01f10d28f96b722c513ac24543a2982de:1"
+  ],
+  "evidence_event_ids": [
+   "python:1798382:1788023567177104:12",
+   "python:1807076:1788024014159387:6",
+   "python:1812713:1788024315395980:7"
+  ]
+ },
+ "content_aware_model": true,
+ "model_scope": "dialogue",
+ "model_prompt_version": "content-aware-dialogue-v1",
+ "content_event_count": "44",
+ "redaction_count": "8"
+}

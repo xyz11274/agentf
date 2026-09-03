@@ -1,0 +1,95 @@
+{
+ "schema_version": 1,
+ "evaluation_kind": "content_aware_dialogue_evaluation",
+ "evaluator_version": "hybrid-evaluator-v2",
+ "deterministic_rule_set_version": "hybrid-fusion-rules-v1",
+ "source_analyzer_version": "loop-episode-analyzer-v1.1",
+ "source_rule_set_version": "invalid-loop-rules-v1",
+ "source_fingerprint": "4b66c74762c2ca26cc75c396eb7bc219139dcf81cfea5dbca53fcfc34924bae5",
+ "source": {
+  "user_id": "acceptance-user-alpha",
+  "conversation_id": "acceptance-conv-alpha-commute",
+  "dialogue_id": "0829172810-5b69eb42a9a6"
+ },
+ "source_trace_integrity_valid": true,
+ "metrics": {
+  "episode_count": "1",
+  "coordinator_episode_count": "1",
+  "terminal_episode_count": "1",
+  "unassessed_episode_count": "1",
+  "workflow_status": "AGGREGATE_STATUS_UNKNOWN",
+  "business_status": "AGGREGATE_STATUS_UNKNOWN"
+ },
+ "assessments": [
+  {
+   "evidence": {
+    "packet_id": "packet:937ee878e4699dfe51f55b43151368d845abdfb5d65d47014786249f65d499ce",
+    "episode_id": "loop:coordinator:a6f6ebe8b3a7ce31b9cf6dc2c9846f4e19e8fb600c7f85dccbee1de290393569:1",
+    "scope": "coordinator",
+    "owner_id": "coordinator:0829172810-5b69eb42a9a6",
+    "activation_index": "1",
+    "round": "1",
+    "attempt_index": "1",
+    "step_index": "1",
+    "action": "stop",
+    "reason": "final_response",
+    "terminal": true,
+    "terminal_status": "normal",
+    "input_fingerprint": "69890e8b88babcacfc0afc9c346c07971d84bece6c2e56011093fe89e505e9dd",
+    "action_fingerprint": "c2e330fdbd669455b30b496c07a55498b513da3f2017ef057efd3c8edb540710",
+    "outcome_fingerprint": "9294a0987a4a56c13af16cb3a3213a0fd9ec003e2eba7c2ffabcffc6a78ed0b1",
+    "outcome_class_fingerprint": "9294a0987a4a56c13af16cb3a3213a0fd9ec003e2eba7c2ffabcffc6a78ed0b1",
+    "dispatch": {},
+    "source_event_ids": [
+     "python:1816203:1788024490821330:3",
+     "python:1816203:1788024490821330:4",
+     "python:1816203:1788024490821330:5",
+     "python:1816203:1788024490821330:6",
+     "python:1816203:1788024490821330:7",
+     "python:1816203:1788024490821330:8"
+    ]
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNASSESSED",
+    "explanation": "未命中确定性异常规则；这不等同于已证明该步骤有效。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_NOT_REQUESTED"
+   },
+   "final_verdict": "SEMANTIC_VERDICT_UNASSESSED",
+   "decision_source": "DECISION_SOURCE_NONE",
+   "fusion_reason": "没有足够的确定性证据，也没有可用的模型判断。"
+  }
+ ],
+ "model_requested_count": "1",
+ "model_succeeded_count": "1",
+ "dialogue_assessment": {
+  "status": "MODEL_CALL_STATUS_SUCCEEDED",
+  "adapter": "openai-compatible-http",
+  "model_id": "deepseek-v4-flash",
+  "request_fingerprint": "c81063b5c891177c13df9dfd7a74c68b54e20d1b4ffa5434f8a3da48b55c86e9",
+  "response_fingerprint": "1b9223b656f8be9a6b39a83a81e3dda727167c9507cb1d14f6864323dfb45a9e",
+  "task_outcome": "AGGREGATE_STATUS_UNKNOWN",
+  "confidence": 0.9,
+  "reason": "当前未选中任何 episode，无法对会话整体任务成败做出有效判定；从内容证据看 A1 图片成功、视频失败，A2 天气获取失败但给出离线建议，A3 图片成功，A4 复盘完成，整体为部分成功，但按评测范围要求不进行结论性判定。",
+  "evidence_event_ids": [
+   "python:1816203:1788024490821330:1",
+   "python:1816203:1788024490821330:5",
+   "python:1816203:1788024490821330:7"
+  ],
+  "attempts": 1
+ },
+ "reflection": {
+  "summary": "本次评测输入中 selected_episode_ids 为空数组，因此 episode_assessments 必须为空，不评测任何未选中的 episode。从内容证据可观察到：A1 并行派发图片与视频 skill，图片成功、视频因后端 UnsupportedModel 失败且未影响图片分支；A2 天气获取两次 LLM 超时后停止重试并给出离线建议；A3 生成新图片且未覆盖旧产物；A4 为纯复盘轮，零 skill 调用。整体流程闭合正常，失败均有证据且降级合理。",
+  "evidence_event_ids": [
+   "python:1816203:1788024490821330:1",
+   "python:1816203:1788024490821330:5",
+   "python:1816203:1788024490821330:7"
+  ]
+ },
+ "content_aware_model": true,
+ "model_scope": "dialogue",
+ "model_prompt_version": "content-aware-dialogue-v1",
+ "content_event_count": "6",
+ "redaction_count": "3"
+}

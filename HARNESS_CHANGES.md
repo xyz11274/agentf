@@ -3277,3 +3277,434 @@
 - 隐私结果：扫描 152 个文本与二进制输出；2 个真实配置凭据及 4 种实际传输表示精确命中 0，provider-neutral findings 0，三枚有效形态 fake canary 原文命中 0。
 - 回归结果：Runtime 非集成与 SessionLog 共 537 passed；C++ 非 E2E 17/17 passed。
 - 外部边界：文本 Provider 仍有 ReadTimeout，视频套餐模型仍返回 `UnsupportedModel`；两者均被记录为业务失败并保持 Workflow 正常闭合，不属于轨迹结构故障。
+
+### CHG-20260901-123：落地首个 C++ 轨迹自进化分析单元
+
+- 日期：2026-09-01
+- 目标：在不修改 Harness 在线执行链和 AgentFlow C++ 底座的前提下，将单个
+  Dialogue 的 SessionLog 转换为可评测 Loop Episode，识别高置信度无效 Loop，
+  并产出带证据约束的元反思请求和待验证候选记忆。
+- 诱发原因：
+  - SessionLog 已能完整记录 Coordinator、Skill、Tool、Batch 与评测事件，但原始
+    JSONL 还不能直接回答“哪一次重试无效、依据是什么、可形成什么候选策略”。
+  - 直接让模型读取整份原始轨迹会混入 Prompt、Tool Payload 和用户数据，并且缺少
+    稳定 Episode、规则版本和证据边界，难以复现与审计。
+  - 非重试错误若跨成功阶段累计，或仅凭任意位置出现 `tool_call_id` 就认定结果已被
+    消费，会分别造成无效 Loop 假阳性和轨迹缺失假阴性。
+- 最小改动：
+  - 新增独立 C++17 子项目 `tools/trajectory_loop_analyzer`，不挂入顶层 CMake，
+    不改 Runtime、Coordinator、Skill Executor、SessionLog Hook 或 C++ 调度底座。
+  - 有界读取单 Dialogue JSONL；按 canonical JSON 和 `idempotency_key` 去重；检查
+    producer identity/sequence、timestamp、Dialogue/Conversation/User 身份、LLM
+    配对、Tool 配对、重复结果和孤立评测；去重状态只保留 canonical SHA-256。
+  - 按 producer 的 LLM request 边界物化 Coordinator/Skill Episode；以
+    `exec_skill_key` 隔离并发 Skill，并用 `batch_id`、`tool_call_id` 做强键关联。
+  - 将 `skill.end` 的已知业务失败终态投影到 `outcome_failed`，同时原样保留 Batch
+    `workflow_status`，不把“生命周期正常闭合但业务失败”误写成 Workflow 失败。
+  - 增加 exact repeat、无状态进展、连续非重试错误、Tool 结果未消费、重复 Dispatch、
+    A-B-A 振荡和 max-round 复核规则；同一 Tool 成功或连续模式中断会清零错误 streak。
+  - 输出结构化诊断、元反思请求和确定性候选记忆；候选只允许
+    `status=candidate` 且 `requires_validation=true`，不会自动注入在线 Prompt。
+    error 级完整性问题会隔离整份轨迹，不生成元反思请求或候选记忆。
+  - 报告不复制原始 Prompt、messages、Tool 参数/结果和评测 details；删除未使用的
+    raw-line 内存副本，稳定指纹使用 SHA-256，并显式保存 analyzer、rule set、
+    evaluator 和 candidate generator 版本。
+  - CLI 支持 compact、strict 和文件输出；阻止输出路径覆盖输入 SessionLog。
+- 涉及文件：
+  - `tools/trajectory_loop_analyzer/CMakeLists.txt`
+  - `tools/trajectory_loop_analyzer/README.md`
+  - `tools/trajectory_loop_analyzer/include/agentflow/trajectory/loop_episode_analyzer.h`
+  - `tools/trajectory_loop_analyzer/src/loop_episode_analyzer.cpp`
+  - `tools/trajectory_loop_analyzer/src/main.cpp`
+  - `tools/trajectory_loop_analyzer/tests/test_loop_episode_analyzer.cpp`
+  - `HARNESS_CHANGES.md`
+- 验证结果：
+  - 12 类确定性 C++ 契约测试通过，覆盖非重试 Loop、瞬态重试、结果未消费、重复
+    Dispatch、缺失 Tool Result、语义重复/冲突、头部身份冲突、必需事件元数据、
+    torn tail、成功清零、评测去重回挂、损坏轨迹隔离和 Payload 不复制。
+  - 同一测试集在 AddressSanitizer 与 UndefinedBehaviorSanitizer 下通过。
+  - 输入/输出同路径测试返回 3，临时 SessionLog 的 SHA-256 前后不变。
+  - 对真实 60-event SessionLog 严格分析通过：物化 9 个 Episode（Coordinator 2、
+    Skill 7），准确标记 video-gen 第 3、4 次连续 `unsupported_model` 为 2 个无效
+    Episode，并聚合为 1 个、支持证据数为 2 的 candidate memory。
+  - 同一输入连续两次输出逐字节一致；检查 21 份原始 Prompt/messages/Tool Payload，
+    报告精确复制命中为 0。
+- 遗留事项：
+  - 本单元只生成单 Dialogue 的版本化派生 JSON，不承担跨轨迹 Experience Store、
+    Protobuf Candidate 持久化、回放评测、晋升、灰度和回滚；这些属于后续落地单元。
+  - 错误分类仍是显式版本化启发式规则；Provider 语义变化时应新增规则版本并使用
+    固定基准集重新验证，不能原地改变历史标签。
+
+### CHG-20260901-124：轨迹进化自然语言模板统一为中文
+
+- 日期：2026-09-01
+- 问题：项目 Coordinator、Skill 与运行时 Prompt 以中文为主，但首个轨迹分析单元新增的诊断、元反思问题和候选记忆模板使用英文；若直接进入后续元反思或策略增强，会造成中英混杂、Prompt 风格漂移及记忆聚类噪声。
+- 风险分析：GitNexus 因该独立工具仍是未跟踪新文件而返回 UNKNOWN；文本补充确认相关模板函数、版本字段及测试只存在于 `tools/trajectory_loop_analyzer`，不被 Harness 在线流程或 AgentFlow C++ 底座调用。
+- 最小改动：
+  - 仅将 `diagnostics`、`reflection_requests` 和 `candidate_memories` 中面向人或 LLM 的自然语言模板改为简体中文。
+  - 字段名、状态、错误类别、规则枚举、阈值、`strategy_key`、指纹材料和 ID 生成逻辑保持不变。
+  - `analyzer_version` 更新为 `loop-episode-analyzer-v1.1`，候选模板版本更新为 `candidate-memory-template-zh-v1`；规则语义未变，`rule_set_version` 继续为 `invalid-loop-rules-v1`。
+  - 增加中文诊断、元反思问题、候选策略和模板版本断言，并同步 README。
+- 涉及文件：
+  - `tools/trajectory_loop_analyzer/include/agentflow/trajectory/loop_episode_analyzer.h`
+  - `tools/trajectory_loop_analyzer/src/loop_episode_analyzer.cpp`
+  - `tools/trajectory_loop_analyzer/tests/test_loop_episode_analyzer.cpp`
+  - `tools/trajectory_loop_analyzer/README.md`
+  - `HARNESS_CHANGES.md`
+- 验证结果：
+  - 独立 C++ 工具重新构建成功，12 类内部契约测试全部通过。
+  - 10 份 SessionLog 分析全部重新生成；剔除自然语言字段和版本字段后，与旧报告逐字段比较为 0 个结构差异。
+  - 检查 59 个诊断、反思和候选自然语言值，全部包含中文；4 组旧英文模板残留为 0。
+  - 修改后的源码、文档及分析产物共 18 个文件通过厂商无关凭据扫描，0 findings。
+
+### CHG-20260901-125：落地确定性优先、模型可插拔的 C++ Hybrid Evaluator
+
+- 日期：2026-09-01
+- 目标：在不修改 Harness 在线执行链和 AgentFlow C++ 底座的前提下，将
+  `trajectory_loop_analyzer` 的去敏 Episode 报告转换为可复现的确定性指标、
+  可选模型语义判断和不可越过硬规则的融合结论，为后续轨迹清洗、元反思和进化
+  记忆筛选提供稳定 Protobuf 数据。
+- 风险分析：
+  - GitNexus 对既有 `LoopEpisodeAnalyzer` 返回 LOW，仅 2 个直接上游；本次不修改
+    该符号或 Analyzer 输入/输出。
+  - 参考的 Python `OpenAiCompatibleClient` 返回 LOW lower-bound、11 个上游；
+    本次没有复用或修改在线 Client，而是在独立离线工具中实现受限 Adapter。
+  - 新工具在首次分析时尚未进入索引，内部辅助符号返回 UNKNOWN；文本检索确认其
+    定义和调用均局限于 `tools/trajectory_hybrid_evaluator`，不被 Runtime、
+    Coordinator、Skill Executor 或 C++ 调度底座引用。
+- 最小改动：
+  - 新增独立 C++17 子项目 `tools/trajectory_hybrid_evaluator`，不挂入顶层 CMake，
+    不修改 Harness、SessionLog Hook、Runtime、Coordinator 或 Skill Executor。
+  - 只读取 `loop_episode_analysis` JSON，不读取原始 SessionLog；证据包只含
+    Episode/Skill/Tool/Dispatch 状态、稳定指纹、诊断、Evaluation 和 Event ID，
+    不复制原始 Prompt、Messages、Tool 参数、Tool 结果或源文件路径。
+  - 新增专用 `hybrid_evaluation.proto`，保存来源身份、证据包、规则判断、模型
+    判断、融合结论、确定性指标和问题；JSON 与二进制 Protobuf 均可输出。
+  - 确定性层重新计算 Episode、Continue/Terminal、Tool 失败、不可重试失败、
+    Dispatch、无效 Loop 下界及 Workflow/业务状态，不把 Coordinator 正常结束
+    自动当成业务成功，也不把“未命中异常”自动标成 `USEFUL`。
+  - Evaluation 以 `event_id` 在报告级去重，但保留其对多个 Episode 的挂载；
+    同 ID 冲突载荷直接拒绝。不同 Metric 不跨量纲求平均；明确失败只进入
+    `UNCERTAIN` 语义复核，不直接判为无效 Loop。
+  - 提供三种模型模式：默认 `none`（绝不联网）、按 `packet_id` 回放的 JSONL
+    Adapter、显式启用的 OpenAI-compatible HTTP Adapter；支持 `none`、
+    `suspicious`、`all` 三种选择范围。
+  - 硬规则 `INVALID` 不允许被模型覆盖；一致时标为 `HYBRID`，冲突时保留规则并
+    显式记录；规则 `UNCERTAIN/UNASSESSED` 才允许合法模型输出补充语义。
+  - 模型输出必须是限长 JSON、白名单 Verdict、`[0,1]` 置信度、中文理由，并至少
+    引用一个证据包内 Event ID；未知证据、非法类型、非中文、直接或 Unicode
+    转义后的凭据样式均拒绝，原始模型响应不落盘，只保存稳定错误码和指纹。
+  - HTTP Key 只能从显式环境变量读取且只进入 Authorization Header；Endpoint
+    禁止 userinfo/query/fragment，生产地址强制 HTTPS，HTTP 只允许 Loopback；
+    禁止重定向、校验 TLS、默认禁用代理，并限制请求/响应、超时、重试、Token 和
+    模型调用总数。Adapter 异常隐藏详情并按 Episode 降级。
+  - Trace 完整性失败默认拒绝；显式隔离后仍保存确定性结果，但不调用模型、不生成
+    可导出的模型请求。输出路径不能覆盖输入、模型响应或其他输出的同路径/硬链接。
+- 涉及文件：
+  - `tools/trajectory_hybrid_evaluator/CMakeLists.txt`
+  - `tools/trajectory_hybrid_evaluator/README.md`
+  - `tools/trajectory_hybrid_evaluator/proto/hybrid_evaluation.proto`
+  - `tools/trajectory_hybrid_evaluator/include/agentflow/trajectory/hybrid_evaluator.h`
+  - `tools/trajectory_hybrid_evaluator/src/hybrid_evaluator.cpp`
+  - `tools/trajectory_hybrid_evaluator/src/model_adapter.cpp`
+  - `tools/trajectory_hybrid_evaluator/src/main.cpp`
+  - `tools/trajectory_hybrid_evaluator/tests/test_hybrid_evaluator.cpp`
+  - `HARNESS_CHANGES.md`
+- 验证结果：
+  - 14 类 C++ 契约测试通过；全新 GCC 15 `-Wall -Wextra -Wpedantic -Werror`
+    构建通过；同一测试集在 AddressSanitizer 与 UndefinedBehaviorSanitizer 下通过。
+  - 4 个并行进程处理现有 10 份真实分析报告成功：55 个 Episode、19 次 Tool、
+    12 次失败 Tool、5 个确定性无效 Episode、22 个语义复核 Episode；全部 Trace
+    完整，Episode 指标与 Assessment 数量一致。
+  - 同一真实输入连续两次紧凑 JSON 逐字节一致，并成功输出二进制 Protobuf。
+  - 可疑模式生成 6 条安全请求；倒序 JSONL 响应按 `packet_id` 回放 6/6 成功；
+    Loopback HTTP Adapter 6/6 成功。不可达 Provider 的 6 个模型分支均在 2 次
+    有限尝试后降级，2 个硬规则 `INVALID` 结论保持不变。
+  - 最终真实 JSON、Protobuf 周边 JSON、模型请求/回放文件和 Mock 日志的常见
+    凭据模式扫描均为 0 命中。
+- 当前边界：
+  - 现有 10 份真实基线尚无 `evaluation.result`，因此真实批处理的
+    `evaluation_count=0`；Protobuf、解析、去重、冲突和失败复核语义已由合成契约
+    测试覆盖，待采集端产生真实评测事件后可直接进入同一管线。
+  - 为避免重新引入用户数据，模型不读取原始任务 Prompt；当前 Verdict 判断步骤
+    进展/恢复必要性，最终任务完成度应优先由已挂载 Evaluation 提供。未来若需要
+    更强目标对齐，应新增经过隐私审查的 Rubric/Summary，而不是回填原始 Prompt。
+
+### CHG-20260901-126：SessionLog 直连的内容感知对话级评测
+
+- 日期：2026-09-01
+- 目标：将原来的 `SessionLog -> analysis.json -> 结构模型评测` 简化为
+  `SessionLog -> 规则评测/内容模型评测/反思`，让模型看到完成任务判断所需的
+  具体内容，同时保持确定性规则、可回放证据、Protobuf 和隐私边界。
+- 风险分析：
+  - GitNexus 对 `HybridTrajectoryEvaluator` 返回 LOW，直接影响仅限该独立工具的
+    3 个文件；本次不接入 Harness 或 C++ Runtime 在线执行流。
+  - `LoopEpisodeAnalyzer::analyze_file` 因独立工具和直接调用未被图索引解析而返回
+    UNKNOWN；文本检索确认调用方仅为 Analyzer CLI、测试和本次新增直连入口。本次
+    不修改 Analyzer 实现或结构契约，只新增内存调用方。
+  - `ModelAdapter` 返回 MEDIUM、5 个直接依赖；为避免扩大影响，接口保持不变，
+    对话级评测继续复用现有 JSONL 与 OpenAI-compatible Adapter。
+  - 索引刷新后，新增但尚未被 Git 跟踪的 `evaluate_sessionlog` 和
+    `make_dialogue_request` 仍返回 UNKNOWN；按规则用文本检索补查，调用只存在于
+    独立 CLI、该工具测试和同文件内部，顶层 CMake、Runtime、Harness、Frontend
+    与在线 Agent 均无调用。
+  - 未出现 HIGH 或 CRITICAL 风险。
+- 最小改动：
+  - `trajectory_hybrid_evaluator` 根据输入扩展名分流：`.jsonl` 进入内容感知直连，
+    `.analysis.json` 保留旧兼容路径；没有修改 Runtime、Coordinator、Skill
+    Executor、SessionLog Hook 或 AgentFlow C++ 调度底座。
+  - 直连入口在内存中调用 `LoopEpisodeAnalyzer`，再通过新增 `evaluate_json()`
+    复用原有确定性评测，不创建、读取或要求用户管理中间 `analysis.json`。
+  - 一个 Dialogue 只构造一次模型请求。`suspicious` 仍评测任务结果和整体反思，
+    但逐 Episode 判断只包含规则筛出的可疑步骤；`all` 判断全部 Episode；`none`
+    只运行规则且不构造具体内容请求。
+  - 模型输入同时包含所有 Episode 的结构证据/规则判断，以及去重后的具体
+    `dialogue.start/end`、LLM request/response、Skill dispatch/start/end、
+    Batch、Tool call/result、Artifact 和 Evaluation 内容；跳过 transport request、
+    messages snapshot、Provider 原始响应和 client delivery 等重复副本。
+  - 内容在外发前递归脱敏和限长：精确替换常见 Secret 环境变量及
+    `AF_SECRET_ENV_NAMES` 指定变量；CLI 将 `--api-key-env` 实际读取值直接注册为
+    瞬时脱敏值，因此不依赖供应商 Key 的变量命名。另处理常见 Key/Token/JWT/
+    私钥、敏感字段和本地路径，限制单字符串、容器项数、递归深度和总请求大小。
+  - Protobuf 增加 Dialogue 任务判断、进化反思、内容事件/脱敏计数和模型范围元数据；
+    最终报告仍只保存结构证据、已校验判断和指纹，不保存具体 Prompt、Messages、
+    Tool 参数或 Tool 结果。`--requests-out` 是显式的脱敏内容调试产物。
+  - 对话级模型响应必须同时给出任务状态、全部选中 Episode 的唯一判断和反思；
+    Event/Episode 引用必须属于本次证据，文本和置信度有界且中文理由必填。任一部分
+    非法会原子拒绝整次模型层并保留规则结果；确定性 `INVALID` 仍不可被模型覆盖。
+  - Trace 完整性失败时不解析具体内容、不构造请求、不调用 Adapter；模型传输或
+    输出失败只作为离线模型层降级，不影响工作流或确定性评测完成状态。
+  - SessionLog 直连默认模型输出预算提高到 4096 Token；CLI 和 README 改为以
+    `.jsonl` 一条命令为主，旧结构化逐 Episode 模式继续兼容。
+- 涉及文件：
+  - `tools/trajectory_hybrid_evaluator/.gitignore`
+  - `tools/trajectory_hybrid_evaluator/CMakeLists.txt`
+  - `tools/trajectory_hybrid_evaluator/README.md`
+  - `tools/trajectory_hybrid_evaluator/proto/hybrid_evaluation.proto`
+  - `tools/trajectory_hybrid_evaluator/include/agentflow/trajectory/hybrid_evaluator.h`
+  - `tools/trajectory_hybrid_evaluator/src/hybrid_evaluator.cpp`
+  - `tools/trajectory_hybrid_evaluator/src/sessionlog_evaluator.cpp`
+  - `tools/trajectory_hybrid_evaluator/src/main.cpp`
+  - `tools/trajectory_hybrid_evaluator/tests/test_sessionlog_evaluator.cpp`
+  - `HARNESS_CHANGES.md`
+- 验证结果：
+  - GCC 15、`-Wall -Wextra -Wpedantic -Werror` 构建通过；旧 Hybrid Evaluator
+    契约测试和新 SessionLog 直连测试目标全部通过。
+  - 新测试覆盖多 Episode 单次调用、具体中文用户内容、Skill Prompt、Tool 参数/
+    结果、任意供应商环境 Secret 精确脱敏、确定性硬规则不可覆盖、干净轨迹仍有
+    Dialogue 任务评测、非法响应原子降级、损坏轨迹禁止模型和 Dialogue JSONL 回放。
+  - 同一完整测试集在 AddressSanitizer 与 UndefinedBehaviorSanitizer 下通过。
+  - 现有 10 份真实 SessionLog 直接规则评测 10/10 成功。最大样本物化 8 个
+    Episode、44 个内容事件，单次脱敏请求 319184 字节，包含 3 个 Skill Prompt、
+    LLM、Tool、Skill 结果和最终回复，低于 2 MiB 上限。
+  - 对模型请求、Protobuf-JSON 和二进制 Protobuf 扫描 7 类当前本地真实 Key：
+    精确值 0 命中，常见凭据模式 0 个文件命中。
+- 未执行与边界：
+  - 没有把现有真实 SessionLog 的具体内容发送到 `.env` 指向的外部 Provider；该
+    数据外发需要针对具体日志和目标地址的明确授权，因此本次不宣称真实 Provider
+    端到端成功。HTTP Adapter 的协议行为由既有测试覆盖，直连层由捕获 Adapter 和
+    JSONL 回放覆盖。
+  - 当前反思只是经过校验的候选输出，不会自动写入正式进化记忆或增强在线 Prompt；
+    晋升、灰度、回滚和跨 Dialogue 聚合仍属于下一个落地单元。
+
+### CHG-20260902-127：补充 Evaluation 字段与内容限长解读
+
+- 日期：2026-09-02
+- 目标：将当前 C++ Hybrid Evaluator 的 Protobuf 字段语义、规则/模型融合边界和
+  SessionLog 内容限长机制沉淀为可独立查阅的文档，供后续 Evaluation 消费、轨迹
+  组织和自进化模块设计使用。
+- 改动性质：仅新增文档，不修改 Harness、SessionLog Hook、Loop Analyzer、Hybrid
+  Evaluator、模型 Adapter 或 C++ Runtime 的任何运行逻辑。
+- 主要内容：
+  - 解释顶层版本/血缘字段、确定性 Metrics、Episode Evidence、Rule/Model
+    Assessment、融合 Verdict、Dialogue Task Assessment、Reflection 和模型调用元数据；
+  - 明确 `metrics.invalid_episode_count` 是确定性无效 Loop 下界，最终语义统计应读取
+    `assessments[].final_verdict`；
+  - 明确 Workflow 状态、结构化 Business 状态与模型 Task Outcome 相互独立；
+  - 汇总 SessionLog 文件/单行、字符串、容器、递归深度、Prompt、HTTP Body、模型
+    Token、响应字节和输出字段的全部限制及超限行为；
+  - 记录 `suspicious` 主要减少模型输出而不一定减少输入，以及最终 Protobuf 尚未
+    持久化 `truncation_count` 的可观测性边界。
+- 涉及文件：
+  - `docs/trajectory-evaluation/EVALUATION_FIELDS.md`
+  - `docs/trajectory-evaluation/CONTENT_LIMITS.md`
+  - `HARNESS_CHANGES.md`
+
+### CHG-20260902-128：统一 C++ 轨迹进化管线并落地候选记忆库
+
+- 日期：2026-09-02
+- 目标：把 SessionLog 到进化记忆库之前的 Loop 分析、Hybrid Evaluation、候选
+  生成、跨 Dialogue 元反思、质量门和持久化合并为一个独立 C++ 目录与统一命令，
+  形成可回放、可追责、可幂等重放的离线进化前半闭环。
+- 风险分析：
+  - 刷新 GitNexus 索引后，HybridTrajectoryEvaluator、LoopEpisodeAnalyzer、
+    finalize_batch_identity、config_fingerprint、run_directory 和路径冲突检查
+    的已解析影响均为 LOW。
+  - evaluate_directory、update_memory_file 等新增直接调用返回 UNKNOWN；文本检索
+    确认调用仅位于统一 CLI、公共头文件和本目录测试，不被 Harness、Coordinator、
+    Skill Executor、Runtime 或顶层 CMake 引用。
+  - finalize_candidate 是候选归一化中央入口，图谱返回 HIGH：7 个上游节点、
+    2 条执行流，覆盖候选合并、元反思和记忆合并。已在修改前显式报告风险；该处
+    只把失效的 string + "\0" 改为真实字符分隔符，并以多用户碰撞用例和三套
+    全量测试约束，没有改变状态、置信度或合并策略。
+- 最小改动：
+  - 将原有两个离线工具收敛到 tools/trajectory_evolution；Loop Analyzer、Hybrid
+    Evaluator、模型 Adapter、候选管线、Protobuf 和测试共享一个 CMake 项目，
+    统一二进制为 trajectory_evolution。
+  - 保留单 Dialogue 的 .jsonl / 旧 analysis.json 兼容评测；目录模式递归发现
+    SessionLog JSONL，逐文件隔离错误并直接输出每个 Dialogue 的 Evaluation，
+    不再要求落盘中间 analysis.json。
+  - 扩展 Protobuf 契约，新增候选目标/状态、支持与反证证据、批次运行摘要、合成
+    指标、元反思结果、记忆更新结果、候选修订和 EvolutionMemoryStore。
+  - 确定性候选只从可证明的无效诊断产生；模型候选只消费已原子校验成功的
+    Dialogue Reflection。跨 Dialogue 聚合保留 User/Conversation/Dialogue、
+    Episode、Diagnostic 和 Event ID。
+  - 质量门区分 PROPOSED、INSUFFICIENT_SUPPORT、CONFLICTED 和
+    REJECTED_BY_GATE；相同作用域/错误下的 USEFUL 或 NECESSARY_RETRY 会成为
+    反证，任一候选都不会自动激活在线策略。
+  - 可选元反思每批最多调用一次模型，只能合并目标与作用域完全一致的已有 Seed；
+    Seed/Event 引用、中文有界文本、置信度和凭据严格校验，非法响应原子降级。
+  - batch_id 覆盖 Evaluator 配置、每个成功评测的完整结果指纹、失败身份与脱敏
+    错误、最终候选和元反思结果；修复模型结论变化时被误判为旧批次的问题。
+  - 以二进制 Protobuf 作为权威记忆格式，JSON 作为可再生视图；同批次更新幂等，
+    跨批次证据去重并保留实质变化快照。写入使用 POSIX flock、同目录临时文件和
+    原子 rename，并发进程不会重复增加修订。
+  - 单文件评测失败不终止其他 Dialogue；所有输入/输出做冲突检查，输出与模型回放
+    不得位于 SessionLog 输入树内，weakly_canonical 同时阻止符号链接绕过。
+  - 持久化前扫描显式 Secret 环境值与常见供应商凭据模式；不保存原始 Prompt、
+    Messages、Tool Payload、模型原始响应或源文件路径。
+  - 新 README 统一说明构建、命令、输出树、质量门、模型预算、并发/幂等语义、
+    隐私边界和退出码。
+- 涉及文件：
+  - tools/trajectory_evolution/.gitignore
+  - tools/trajectory_evolution/CMakeLists.txt
+  - tools/trajectory_evolution/README.md
+  - tools/trajectory_evolution/proto/hybrid_evaluation.proto
+  - tools/trajectory_evolution/include/agentflow/trajectory/evolution_pipeline.h
+  - tools/trajectory_evolution/include/agentflow/trajectory/hybrid_evaluator.h
+  - tools/trajectory_evolution/include/agentflow/trajectory/loop_episode_analyzer.h
+  - tools/trajectory_evolution/src/evolution_pipeline.cpp
+  - tools/trajectory_evolution/src/hybrid_evaluator.cpp
+  - tools/trajectory_evolution/src/loop_episode_analyzer.cpp
+  - tools/trajectory_evolution/src/main.cpp
+  - tools/trajectory_evolution/src/model_adapter.cpp
+  - tools/trajectory_evolution/src/sessionlog_evaluator.cpp
+  - tools/trajectory_evolution/tests/test_evolution_pipeline.cpp
+  - tools/trajectory_evolution/tests/test_hybrid_evaluator.cpp
+  - tools/trajectory_evolution/tests/test_loop_episode_analyzer.cpp
+  - tools/trajectory_evolution/tests/test_sessionlog_evaluator.cpp
+  - HARNESS_CHANGES.md
+- 验证结果：
+  - 常规 Debug、全目标 GCC 15 -Wall -Wextra -Wpedantic -Werror，以及
+    AddressSanitizer/UndefinedBehaviorSanitizer 严格模式下，4/4 CTest 全部通过。
+  - 新测试覆盖跨 Dialogue 门槛、反证、无效轨迹隔离、多用户身份碰撞、Dialogue/
+    元反思结果参与批次身份、元反思合并、记忆插入/更新/幂等/修订/Protobuf 往返、
+    JSON 视图恢复和单文件失败隔离。
+  - 现有 10 份真实 SessionLog（2 用户、3 会话）完成 10/10：生成 20 个逐 Dialogue
+    JSON/PB、1 份 Batch JSON/PB 和 1 份 Memory JSON/PB；得到 1 条 PROPOSED
+    Retry Policy 候选，由 2 用户、3 会话、3 个 Dialogue、5 个无效 Episode
+    支持且无反证。
+  - 相同真实批次串行重放后 batch_id 不变、idempotent_replay=true、revision
+    保持 1；两个进程并发写同一新记忆库也均成功，最终仅 1 个 applied batch。
+  - 普通子目录和符号链接指向输入树时均在写入前以退出码 2 拒绝；真实 Evaluation、
+    Batch、Memory JSON/PB 的常见凭据、本地路径和当前 Secret 环境值扫描均 0 命中。
+- 当前边界：
+  - 本次止于“候选进化记忆库”，没有修改 Harness/C++ 在线底座，也没有把候选提升
+    为 VALIDATED、注入 Coordinator/Skill Prompt 或自动修改 Loop 条件。
+  - 下一阶段应在隔离环境中生成策略变体并做回放/对照评测，再以独立晋升规则更新
+    记忆状态；不能直接把离线反思当成线上策略。
+
+### CHG-20260902-129：稳定 Evolving 真实评测与模型失败归因
+
+- 日期：2026-09-02
+- 目标：使用 `doubao-seed-evolving` 完成内容感知轨迹评测，并修复长时请求、深度
+  思考配置、结构化输出约束和输出截断归因不清的问题。
+- 风险分析：
+  - GitNexus 对 `make_dialogue_request` 和 `extract_model_content` 的上游影响均为
+    LOW，只到独立轨迹进化工具内部调用点。
+  - `OpenAiCompatibleModelAdapter::evaluate` 的名称查询无法解析；改为分析其直接
+    helper，并以文本检索确认适配器只由本工具 CLI、工厂和测试使用。
+  - 测试函数返回 UNKNOWN，文本确认仅由对应 CTest 入口调用。没有改动 Harness、
+    Coordinator、Skill Executor、SessionLog Hook 或 C++ Runtime。
+- 最小改动：
+  - 新增可选 `--thinking-mode enabled|disabled|auto`，仅在显式传入时向兼容接口发送
+    `thinking.type`，不改变其他 Provider 的默认请求。
+  - 保留原有 30 秒/5 秒超时默认值，移除固定 10 分钟/2 分钟配置上限；运行时超时
+    只受 CLI 数值类型与 libcurl `long` 可表示范围约束，可设置为 30 分钟。
+  - Dialogue Prompt 写入 selected episode 的精确数量；为 0 时明确要求返回 `[]`，
+    并明确所有模型结论（包括 `status=unknown`）至少引用一个真实 event_id。
+  - OpenAI 兼容响应读取 `finish_reason`；`length` 不再被误记为 `invalid_json`，而是
+    记录为 `output_token_limit_reached`，保留响应指纹但不让截断内容进入评测。
+  - 增加非法 thinking 模式、空选择数组契约和 unknown 结论证据契约的回归断言。
+- 涉及文件：
+  - `tools/trajectory_evolution/include/agentflow/trajectory/hybrid_evaluator.h`
+  - `tools/trajectory_evolution/src/main.cpp`
+  - `tools/trajectory_evolution/src/model_adapter.cpp`
+  - `tools/trajectory_evolution/src/sessionlog_evaluator.cpp`
+  - `tools/trajectory_evolution/tests/test_hybrid_evaluator.cpp`
+  - `tools/trajectory_evolution/tests/test_sessionlog_evaluator.cpp`
+  - `HARNESS_CHANGES.md`
+- 验证结果：
+  - GCC 15 严格构建通过，4/4 CTest 全部通过。
+  - 使用 Agent Plan `doubao-seed-evolving`、`thinking=disabled`、30 分钟单请求超时
+    和 16384 输出 Token 上限，对 2 用户、3 会话、10 个真实 Dialogue 完成评测；
+    11 条模型请求（含 1 次元反思）全部成功，无模型错误码或非法响应。
+  - 最终产物包含 10 份 Evaluation JSON/PB、1 份 Batch JSON/PB 和 revision=1 的
+    Memory JSON/PB；元反思由 47 条 Seed 收敛为 12 条候选记忆。
+  - 对最终目录全部 JSON、JSONL 和 Protobuf 扫描常见 API Key、Bearer Token 与
+    Secret 模式，命中文件数为 0；凭据只从现有 `.env` 注入进程，未写入命令归档。
+  - 已删除兼容性探测、两次失败批次、诊断请求/响应和旧 GLM 批次，只保留
+    `trace_output/evolution-model-full-evolving-final2-20260902/`。
+
+### CHG-20260903-130：约束跨轨迹元反思的候选兼容边界
+
+- 日期：2026-09-03
+- 问题：`deepseek-v4-flash` 能完成全部逐 Dialogue 评测，但连续把不同
+  `target_type` 或 `target_scope` 的 Seed 合并，元反思被严格校验器以
+  `incompatible_seed_group` 拒绝。
+- 风险分析：GitNexus 对 `make_meta_request` 的上游影响为 LOW，只涉及独立轨迹
+  进化工具的 `synthesize_reports → evaluate_files → evaluate_directory` 链路。
+- 最小改动：为每个 Seed 增加由 `target_type + target_scope` 确定生成的
+  `compatibility_group`，同时向模型提供 `allowed_seed_groups` 硬性白名单；返回的
+  每个合并组只能是某一白名单组的子集。原有服务端严格校验、候选门控、记忆合并
+  和 Harness/C++ 底座均未改动。
+- 涉及文件：
+  - `tools/trajectory_evolution/src/evolution_pipeline.cpp`
+  - `tools/trajectory_evolution/tests/test_evolution_pipeline.cpp`
+  - `HARNESS_CHANGES.md`
+- 验证结果：
+  - 轨迹进化工具重新编译成功，4/4 CTest 全部通过。
+  - 使用 `deepseek-v4-flash`、`thinking=disabled` 完成 2 用户、3 会话、10 个真实
+    Dialogue 的完整评测；10 条 Dialogue 模型调用和 1 条跨轨迹元反思均成功。
+  - 27 个输入 Seed 经元反思形成 9 个合并输出，最终得到 13 条候选并写入
+    revision=1 的 Memory；生成 10 份 Evaluation JSON/PB、Batch JSON/PB 和
+    Memory JSON/PB。
+  - 脱敏请求日志共 11 条，最终目录未命中常见 `ark-...` 凭据模式；三个元反思
+    失败的 DeepSeek 输出目录已删除，只保留
+    `trace_output/evolution-model-full-deepseek-v4-flash-20260903-final2/`。
+
+### CHG-20260903-131：补充 SessionLog 到进化记忆库的数据链路文档
+
+- 日期：2026-09-03
+- 目标：说明原始 SessionLog 如何经过 Event 校验、Loop Episode 重建、确定性规则、
+  Dialogue 模型评测、规则/模型融合、跨 Dialogue 候选、元反思和质量门，最终幂等
+  写入 Protobuf 进化记忆库。
+- 说明：文档区分了进程内中间对象与长期落盘产物，补充并发分支归属、失败隔离、
+  证据回链、Batch 身份、文件锁、原子写入和当前闭环边界；不改变程序行为。
+- 涉及文件：
+  - `docs/trajectory-evaluation/SESSIONLOG_TO_EVOLUTION_MEMORY.md`
+  - `HARNESS_CHANGES.md`
+
+### CHG-20260903-132：补充 Batch Evaluation 与 Memory 字段解读
+
+- 日期：2026-09-03
+- 目标：逐层解释 `HybridEvaluationBatchReport`、`EvolutionCandidate`、
+  `CandidateEvidence`、`MetaReflectionAssessment`、`MemoryUpdateResult`、
+  `EvolutionMemoryStore`、Entry 和 Revision 的字段与生命周期。
+- 说明：重点区分文件级评测成功与业务成功、路径/内容/评测指纹、Seed 与 Candidate、
+  Candidate 质量门状态与 Memory 生命周期状态、元反思输出数与最终候选数，以及 Batch
+  幂等和 Store revision；不改变程序行为。
+- 涉及文件：
+  - `docs/trajectory-evaluation/BATCH_AND_MEMORY_FIELDS.md`
+  - `docs/trajectory-evaluation/SESSIONLOG_TO_EVOLUTION_MEMORY.md`
+  - `HARNESS_CHANGES.md`

@@ -1,0 +1,718 @@
+{
+ "schema_version": 1,
+ "evaluation_kind": "content_aware_dialogue_evaluation",
+ "evaluator_version": "hybrid-evaluator-v2",
+ "deterministic_rule_set_version": "hybrid-fusion-rules-v1",
+ "source_analyzer_version": "loop-episode-analyzer-v1.1",
+ "source_rule_set_version": "invalid-loop-rules-v1",
+ "source_fingerprint": "801f57175a0ca21d5925fed218c220cb0c3df864a72a61367707517d499c16ed",
+ "source": {
+  "user_id": "acceptance-user-beta",
+  "conversation_id": "acceptance-conv-beta-campaign",
+  "dialogue_id": "0829171057-afa3511dea7a"
+ },
+ "source_trace_integrity_valid": true,
+ "metrics": {
+  "episode_count": "9",
+  "coordinator_episode_count": "2",
+  "skill_episode_count": "7",
+  "continued_episode_count": "6",
+  "terminal_episode_count": "3",
+  "outcome_failed_episode_count": "5",
+  "invalid_episode_count": "1",
+  "review_episode_count": "4",
+  "unassessed_episode_count": "4",
+  "tool_call_count": "5",
+  "failed_tool_call_count": "4",
+  "non_retryable_failed_tool_call_count": "3",
+  "dispatch_batch_count": "1",
+  "partial_dispatch_batch_count": "1",
+  "invalid_loop_rate": 0.1111111111111111,
+  "failed_outcome_rate": 0.55555555555555558,
+  "failed_tool_call_rate": 0.8,
+  "workflow_status": "AGGREGATE_STATUS_SUCCEEDED",
+  "business_status": "AGGREGATE_STATUS_PARTIAL"
+ },
+ "assessments": [
+  {
+   "evidence": {
+    "packet_id": "packet:d60a23502e65a7e5e62bb75665491f7642d130aeb84061d8b9fd03654dbaf26e",
+    "episode_id": "loop:coordinator:6b0ffd57aac3b23a4749888771bcae755075112b7c9cf99cc11c3894642b7e23:1",
+    "scope": "coordinator",
+    "owner_id": "coordinator:0829171057-afa3511dea7a",
+    "activation_index": "1",
+    "round": "1",
+    "attempt_index": "1",
+    "step_index": "1",
+    "action": "continue",
+    "reason": "tool_calls_requested",
+    "continued": true,
+    "input_fingerprint": "1474e812b316d6f9b32e2e0edbf2cd313fb5b426c311d960590e187494109f57",
+    "action_fingerprint": "b5c85a868e689ee84751e92f015550bda3f44352382a1c8fc5b4cb9651526272",
+    "outcome_fingerprint": "03b83e4dee5447981073f797cafecea4be30aff311e6b625cbd149c8bcd165fe",
+    "outcome_class_fingerprint": "844afd52bf95a3a7d9feabf86fa18caf2a58a44ee7ce3e91176f9e723403301c",
+    "dispatch": {
+     "batch_id": "batch:0829171057-afa3511dea7a:9c16ea0571ab",
+     "skill_names": [
+      "forge-image-gen",
+      "video-gen"
+     ],
+     "force": [
+      false,
+      false
+     ],
+     "batch_status": "partial",
+     "workflow_status": "completed",
+     "successful_count": 1,
+     "total_count": 2
+    },
+    "source_event_ids": [
+     "python:1796021:1788023457675396:3",
+     "python:1796021:1788023457675396:4",
+     "python:1796021:1788023457675396:5",
+     "python:1796021:1788023457675396:6",
+     "python:1796021:1788023457675396:7",
+     "python:1796021:1788023457675396:8"
+    ],
+    "next_same_owner": {
+     "episode_id": "loop:coordinator:6b0ffd57aac3b23a4749888771bcae755075112b7c9cf99cc11c3894642b7e23:2",
+     "step_index": "2",
+     "action": "stop",
+     "terminal_status": "normal",
+     "outcome_class_fingerprint": "9294a0987a4a56c13af16cb3a3213a0fd9ec003e2eba7c2ffabcffc6a78ed0b1"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNASSESSED",
+    "explanation": "未命中确定性异常规则；这不等同于已证明该步骤有效。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_SUCCEEDED",
+    "adapter": "openai-compatible-http",
+    "model_id": "deepseek-v4-flash",
+    "request_fingerprint": "45ff56db60a91b2b1fc60bf37b7d380c241f04b34b59df89ff156d41cdf48f91",
+    "response_fingerprint": "6b9c4798843bb5fceec368e1c8bce479f33e1952be5440a5573f3afa4b477caa",
+    "verdict": "SEMANTIC_VERDICT_USEFUL",
+    "confidence": 0.95,
+    "expected_state_change": "协调器应正确解析用户需求，并行派发图片和视频生成任务。",
+    "observed_state_change": "协调器成功解析需求，并行派发了forge-image-gen和video-gen两个技能，并记录了批次信息。",
+    "concise_reason": "协调器正确识别用户需求并并行派发两个独立任务，为后续执行奠定了基础，属于必要进展。",
+    "evidence_event_ids": [
+     "python:1796021:1788023457675396:5",
+     "python:1796021:1788023457675396:7"
+    ],
+    "attempts": 1
+   },
+   "final_verdict": "SEMANTIC_VERDICT_USEFUL",
+   "decision_source": "DECISION_SOURCE_MODEL",
+   "final_confidence": 0.95,
+   "fusion_reason": "确定性规则未下语义结论，采用已校验的模型判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:d4ddb3070d9f32d9acbe5e29504aedcb94c3fe9d3e0d32e1b1ed9b7f2be1e35b",
+    "episode_id": "loop:skill:ab58beb123d0c7bdcd17432b70cad2ddc556d3ee633455d7ad2a17b8ff50d394:1",
+    "scope": "skill",
+    "owner_id": "dispatch:0829171057-afa3511dea7a:9c16ea0571ab:1",
+    "skill_name": "forge-image-gen",
+    "round": "1",
+    "attempt_index": "1",
+    "step_index": "1",
+    "action": "continue",
+    "reason": "tool_calls_requested",
+    "continued": true,
+    "input_fingerprint": "6df9f5b2011c03495090e2dd70fe95bb41899c1589c0c28970e56fbe468628ec",
+    "action_fingerprint": "ee2fd478c49404a8ed33984674124f2ca4804c7a89963db26a36787bbd9bc628",
+    "outcome_fingerprint": "7a3ecfc55a0904cdc268ab167670daf45033b1baba762af655ae42645c480de5",
+    "outcome_class_fingerprint": "c72c451099748635c6855470cc84c6b74f0765548135fe4ca60a26cdfdcede18",
+    "dispatch": {},
+    "tools": [
+     {
+      "tool_call_id": "call_5zl1sgopcntf0ugrwon50lpu",
+      "tool_name": "generate_image",
+      "status": "completed",
+      "retryability": "not_applicable",
+      "arguments_fingerprint": "f2d489c42ccf2b94dd4d212816ef063127989fe6650ccc2935f6604c03dcdbfd",
+      "result_fingerprint": "ee34979fc92b109f3b97bd7cf60387787109e59ff28c8d13c8a17ac7bc9a12e7",
+      "call_event_id": "python:1797149:1788023508606836:6",
+      "result_event_id": "python:1797149:1788023508606836:7"
+     }
+    ],
+    "source_event_ids": [
+     "python:1797149:1788023508606836:2",
+     "python:1797149:1788023508606836:3",
+     "python:1797149:1788023508606836:4",
+     "python:1797149:1788023508606836:5",
+     "python:1797149:1788023508606836:6",
+     "python:1797149:1788023508606836:7",
+     "python:1797149:1788023508606836:8"
+    ],
+    "next_same_owner": {
+     "episode_id": "loop:skill:ab58beb123d0c7bdcd17432b70cad2ddc556d3ee633455d7ad2a17b8ff50d394:2",
+     "step_index": "2",
+     "action": "stop",
+     "terminal_status": "completed",
+     "outcome_class_fingerprint": "86427da32bd507602fb454baa61dfdbc66ae03fed4e4351acf849b1be4c98c9a"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNASSESSED",
+    "explanation": "未命中确定性异常规则；这不等同于已证明该步骤有效。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_NOT_REQUESTED"
+   },
+   "final_verdict": "SEMANTIC_VERDICT_UNASSESSED",
+   "decision_source": "DECISION_SOURCE_NONE",
+   "fusion_reason": "没有足够的确定性证据，也没有可用的模型判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:156283f4cd29183220aab7366ca8fbcf53519cdb60af7d10224d4197a60ab5cf",
+    "episode_id": "loop:skill:16905aa059b95052b3325f85c173944454fa580b956e3ccd1910a88fb6cb69a9:1",
+    "scope": "skill",
+    "owner_id": "dispatch:0829171057-afa3511dea7a:9c16ea0571ab:2",
+    "skill_name": "video-gen",
+    "round": "1",
+    "attempt_index": "1",
+    "step_index": "1",
+    "action": "continue",
+    "reason": "tool_calls_requested",
+    "continued": true,
+    "outcome_failed": true,
+    "all_tool_results_failed": true,
+    "has_non_retryable_failure": true,
+    "input_fingerprint": "19010f2983e680bf031c281e9b2c860ddfaf05ff487aa4d5b6c4b717e1f53b4e",
+    "action_fingerprint": "5dd00aee3e12278d07b01768eaf6a62e9a270f1c1d4c0f71b3024c98770dfc3e",
+    "outcome_fingerprint": "c36c4d9ea96fa561a6581cc75aa68f08c7ee86198a8afe3647069a6a76f888bc",
+    "outcome_class_fingerprint": "c498e975173324584c75177a19ad9cdc3ba41c71430cfaec522d6f542c6ea10d",
+    "dispatch": {},
+    "tools": [
+     {
+      "tool_call_id": "call_gkkotmgsxfz462ae73d5xbop",
+      "tool_name": "generate_video",
+      "status": "error",
+      "error_class": "unsupported_model",
+      "retryability": "non_retryable",
+      "arguments_fingerprint": "87743888760e54a2f5c08e8486af2999c7c9c007b23f01158635e5d210a5ecab",
+      "result_fingerprint": "094835ed6af9ed9e34524a3133a6ebfd9417f261d4b77ad69a494e2607377f43",
+      "call_event_id": "python:1797600:1788023527868846:6",
+      "result_event_id": "python:1797600:1788023527868846:7"
+     }
+    ],
+    "source_event_ids": [
+     "python:1797600:1788023527868846:2",
+     "python:1797600:1788023527868846:3",
+     "python:1797600:1788023527868846:4",
+     "python:1797600:1788023527868846:5",
+     "python:1797600:1788023527868846:6",
+     "python:1797600:1788023527868846:7"
+    ],
+    "next_same_owner": {
+     "episode_id": "loop:skill:16905aa059b95052b3325f85c173944454fa580b956e3ccd1910a88fb6cb69a9:2",
+     "step_index": "2",
+     "action": "continue",
+     "outcome_failed": true,
+     "outcome_class_fingerprint": "c498e975173324584c75177a19ad9cdc3ba41c71430cfaec522d6f542c6ea10d"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNCERTAIN",
+    "confidence": 0.55,
+    "explanation": "该步骤的业务结果失败，需要结合任务语义判断重试是否必要。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_SUCCEEDED",
+    "adapter": "openai-compatible-http",
+    "model_id": "deepseek-v4-flash",
+    "request_fingerprint": "45ff56db60a91b2b1fc60bf37b7d380c241f04b34b59df89ff156d41cdf48f91",
+    "response_fingerprint": "6b9c4798843bb5fceec368e1c8bce479f33e1952be5440a5573f3afa4b477caa",
+    "verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+    "confidence": 0.9,
+    "expected_state_change": "视频生成应成功产出MP4文件。",
+    "observed_state_change": "首次调用generate_video失败，错误为unsupported_model，但模型参数可能可调整，重试有依据。",
+    "concise_reason": "首次视频生成失败，错误为模型不支持，但尝试更换模型是合理的重试策略，因此判定为必要重试。",
+    "evidence_event_ids": [
+     "python:1797600:1788023527868846:7"
+    ],
+    "attempts": 1
+   },
+   "final_verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+   "decision_source": "DECISION_SOURCE_HYBRID",
+   "final_confidence": 0.9,
+   "fusion_reason": "确定性规则负责筛选可疑步骤，模型补充任务语义判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:ce3a918a615fc35c168faed1112580e3c62f7464544f626307c793e47212b66f",
+    "episode_id": "loop:skill:16905aa059b95052b3325f85c173944454fa580b956e3ccd1910a88fb6cb69a9:2",
+    "scope": "skill",
+    "owner_id": "dispatch:0829171057-afa3511dea7a:9c16ea0571ab:2",
+    "skill_name": "video-gen",
+    "round": "2",
+    "attempt_index": "1",
+    "step_index": "2",
+    "action": "continue",
+    "reason": "tool_calls_requested",
+    "continued": true,
+    "outcome_failed": true,
+    "all_tool_results_failed": true,
+    "has_non_retryable_failure": true,
+    "input_fingerprint": "2c86d5d74f4d682c04c1f8934e8a8c6d269d4b311137d72cee81547b8ebeebe6",
+    "action_fingerprint": "50cda1c85efb273303d76a2c3ef1f35d2e9cafb91ba45657b6182c356b816a74",
+    "outcome_fingerprint": "f08ea5e196b67a051ece28f7ebcb840f9ecb3b201d736a35579c9607c4bd997d",
+    "outcome_class_fingerprint": "c498e975173324584c75177a19ad9cdc3ba41c71430cfaec522d6f542c6ea10d",
+    "dispatch": {},
+    "tools": [
+     {
+      "tool_call_id": "call_klnflyfgith96ndov71hg2r5",
+      "tool_name": "generate_video",
+      "status": "error",
+      "error_class": "unsupported_model",
+      "retryability": "non_retryable",
+      "arguments_fingerprint": "6227d9fd0c7967452ac0a857188b670007ab39d793755f4bced09d23a5ef4d11",
+      "result_fingerprint": "8607d1b959c80a3074d42bec236d1e6e184a581a8095435679d0fa00f0dfe782",
+      "call_event_id": "python:1797600:1788023527868846:12",
+      "result_event_id": "python:1797600:1788023527868846:13"
+     }
+    ],
+    "source_event_ids": [
+     "python:1797600:1788023527868846:8",
+     "python:1797600:1788023527868846:9",
+     "python:1797600:1788023527868846:10",
+     "python:1797600:1788023527868846:11",
+     "python:1797600:1788023527868846:12",
+     "python:1797600:1788023527868846:13"
+    ],
+    "previous_same_owner": {
+     "episode_id": "loop:skill:16905aa059b95052b3325f85c173944454fa580b956e3ccd1910a88fb6cb69a9:1",
+     "step_index": "1",
+     "action": "continue",
+     "outcome_failed": true,
+     "outcome_class_fingerprint": "c498e975173324584c75177a19ad9cdc3ba41c71430cfaec522d6f542c6ea10d"
+    },
+    "next_same_owner": {
+     "episode_id": "loop:skill:16905aa059b95052b3325f85c173944454fa580b956e3ccd1910a88fb6cb69a9:3",
+     "step_index": "3",
+     "action": "continue",
+     "outcome_failed": true,
+     "outcome_class_fingerprint": "c498e975173324584c75177a19ad9cdc3ba41c71430cfaec522d6f542c6ea10d"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNCERTAIN",
+    "confidence": 0.55,
+    "explanation": "该步骤的业务结果失败，需要结合任务语义判断重试是否必要。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_SUCCEEDED",
+    "adapter": "openai-compatible-http",
+    "model_id": "deepseek-v4-flash",
+    "request_fingerprint": "45ff56db60a91b2b1fc60bf37b7d380c241f04b34b59df89ff156d41cdf48f91",
+    "response_fingerprint": "6b9c4798843bb5fceec368e1c8bce479f33e1952be5440a5573f3afa4b477caa",
+    "verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+    "confidence": 0.9,
+    "expected_state_change": "更换模型后视频生成应成功。",
+    "observed_state_change": "更换为doubao-seedance-1-0-pro后仍失败，错误相同，但尝试其他模型仍有依据。",
+    "concise_reason": "第二次尝试更换模型后仍失败，但错误类型未变，继续尝试其他模型是合理的，判定为必要重试。",
+    "evidence_event_ids": [
+     "python:1797600:1788023527868846:13"
+    ],
+    "attempts": 1
+   },
+   "final_verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+   "decision_source": "DECISION_SOURCE_HYBRID",
+   "final_confidence": 0.9,
+   "fusion_reason": "确定性规则负责筛选可疑步骤，模型补充任务语义判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:48957a817933ce4613ce35b05e0fe57bcc521f46763537d60be142fa452e53e1",
+    "episode_id": "loop:skill:16905aa059b95052b3325f85c173944454fa580b956e3ccd1910a88fb6cb69a9:3",
+    "scope": "skill",
+    "owner_id": "dispatch:0829171057-afa3511dea7a:9c16ea0571ab:2",
+    "skill_name": "video-gen",
+    "round": "3",
+    "attempt_index": "1",
+    "step_index": "3",
+    "action": "continue",
+    "reason": "tool_calls_requested",
+    "continued": true,
+    "outcome_failed": true,
+    "all_tool_results_failed": true,
+    "has_non_retryable_failure": true,
+    "input_fingerprint": "ed939b4fa2648ab7fada80851a46d158f9c148d26d6d2db61113ceb2f2039a80",
+    "action_fingerprint": "7c1a9e3f060bcaa981e1f2a67fbb767956f872544de503ad116598fd02f5c60c",
+    "outcome_fingerprint": "bfd831f36f1c0e0b468a248fdfea21019eb8a5e3f1b96c843ad2287ca0e67b77",
+    "outcome_class_fingerprint": "c498e975173324584c75177a19ad9cdc3ba41c71430cfaec522d6f542c6ea10d",
+    "dispatch": {},
+    "tools": [
+     {
+      "tool_call_id": "call_5xgn6v64jim70vea41ofn6oq",
+      "tool_name": "generate_video",
+      "status": "error",
+      "error_class": "unsupported_model",
+      "retryability": "non_retryable",
+      "arguments_fingerprint": "2b53543ff311328edce436d20d40ab55971079826e49bcd03ca3bbbf2acb806b",
+      "result_fingerprint": "85a339c7dbe13ead9a610765b5701400c55ee7556b87728c3bfd301729707009",
+      "call_event_id": "python:1797600:1788023527868846:18",
+      "result_event_id": "python:1797600:1788023527868846:19"
+     }
+    ],
+    "diagnostics": [
+     {
+      "diagnostic_id": "diagnostic:011b718e442984abd6bfe130f8ccb343f0f9b4e10530d15e1211d77040c90889",
+      "category": "non_retryable_repeat",
+      "counts_as_invalid": true,
+      "confidence": 0.92,
+      "severity": "error",
+      "summary": "同一不可重试错误类别被重复观察到。",
+      "observable_cause": "改变参数后，可观察到的失败类别仍为 unsupported_model。",
+      "tool_name": "generate_video",
+      "error_class": "unsupported_model",
+      "evidence_event_ids": [
+       "python:1797600:1788023527868846:18",
+       "python:1797600:1788023527868846:19"
+      ]
+     }
+    ],
+    "source_event_ids": [
+     "python:1797600:1788023527868846:14",
+     "python:1797600:1788023527868846:15",
+     "python:1797600:1788023527868846:16",
+     "python:1797600:1788023527868846:17",
+     "python:1797600:1788023527868846:18",
+     "python:1797600:1788023527868846:19"
+    ],
+    "previous_same_owner": {
+     "episode_id": "loop:skill:16905aa059b95052b3325f85c173944454fa580b956e3ccd1910a88fb6cb69a9:2",
+     "step_index": "2",
+     "action": "continue",
+     "outcome_failed": true,
+     "outcome_class_fingerprint": "c498e975173324584c75177a19ad9cdc3ba41c71430cfaec522d6f542c6ea10d"
+    },
+    "next_same_owner": {
+     "episode_id": "loop:skill:16905aa059b95052b3325f85c173944454fa580b956e3ccd1910a88fb6cb69a9:4",
+     "step_index": "4",
+     "action": "continue",
+     "outcome_failed": true,
+     "outcome_class_fingerprint": "6dd32797aac0b6b0276f0c3ac843b67ae52747825fd7197b6c74248ce149498a"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_INVALID",
+    "confidence": 0.92,
+    "diagnostic_ids": [
+     "diagnostic:011b718e442984abd6bfe130f8ccb343f0f9b4e10530d15e1211d77040c90889"
+    ],
+    "evidence_event_ids": [
+     "python:1797600:1788023527868846:18",
+     "python:1797600:1788023527868846:19"
+    ],
+    "explanation": "确定性规则已命中无效循环诊断；模型不得覆盖该硬结论。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_SUCCEEDED",
+    "adapter": "openai-compatible-http",
+    "model_id": "deepseek-v4-flash",
+    "request_fingerprint": "45ff56db60a91b2b1fc60bf37b7d380c241f04b34b59df89ff156d41cdf48f91",
+    "response_fingerprint": "6b9c4798843bb5fceec368e1c8bce479f33e1952be5440a5573f3afa4b477caa",
+    "verdict": "SEMANTIC_VERDICT_INVALID",
+    "confidence": 0.95,
+    "expected_state_change": "更换模型后视频生成应成功。",
+    "observed_state_change": "第三次尝试更换为lite模型仍失败，错误相同，且已触发确定性无效循环诊断。",
+    "concise_reason": "连续三次尝试不同模型均返回相同错误，确定性规则判定为无效循环，重试无意义，判定为invalid。",
+    "evidence_event_ids": [
+     "python:1797600:1788023527868846:19"
+    ],
+    "attempts": 1
+   },
+   "final_verdict": "SEMANTIC_VERDICT_INVALID",
+   "decision_source": "DECISION_SOURCE_HYBRID",
+   "final_confidence": 0.95,
+   "fusion_reason": "模型判断与确定性无效规则一致。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:9696d30131e40c58716e4a2d3f5f460c90f453c80cf21950728c1f51328318b7",
+    "episode_id": "loop:skill:16905aa059b95052b3325f85c173944454fa580b956e3ccd1910a88fb6cb69a9:4",
+    "scope": "skill",
+    "owner_id": "dispatch:0829171057-afa3511dea7a:9c16ea0571ab:2",
+    "skill_name": "video-gen",
+    "round": "4",
+    "attempt_index": "1",
+    "step_index": "4",
+    "action": "continue",
+    "reason": "tool_calls_requested",
+    "continued": true,
+    "outcome_failed": true,
+    "all_tool_results_failed": true,
+    "input_fingerprint": "b922d4c14f886bc5aee9837800cae4e419eea6d1282f5720ac62529be44b18cc",
+    "action_fingerprint": "e84650d3534fbc8086e8cfc3b49a5c128e737298d1def587ac318af8517c70bc",
+    "outcome_fingerprint": "cc3700115bc22d8e591651c91f60186d5b25877140f5d04fdebe58430cdeebde",
+    "outcome_class_fingerprint": "6dd32797aac0b6b0276f0c3ac843b67ae52747825fd7197b6c74248ce149498a",
+    "dispatch": {},
+    "tools": [
+     {
+      "tool_call_id": "call_exmtdaaz7b0vsg2xuc6110qx",
+      "tool_name": "web_fetch",
+      "status": "error",
+      "error_class": "unknown_tool_error",
+      "retryability": "unknown",
+      "arguments_fingerprint": "6ee32aa92028b897a3ea0c0fb74cffa7935f8a0a93bacbb7b6554dd522cd1b58",
+      "result_fingerprint": "19387c6c1a6975b8e12201e7654d498548f8a4bb3d47c9b3fd24ec9595d479ae",
+      "call_event_id": "python:1797600:1788023527868846:24",
+      "result_event_id": "python:1797600:1788023527868846:25"
+     }
+    ],
+    "source_event_ids": [
+     "python:1797600:1788023527868846:20",
+     "python:1797600:1788023527868846:21",
+     "python:1797600:1788023527868846:22",
+     "python:1797600:1788023527868846:23",
+     "python:1797600:1788023527868846:24",
+     "python:1797600:1788023527868846:25"
+    ],
+    "previous_same_owner": {
+     "episode_id": "loop:skill:16905aa059b95052b3325f85c173944454fa580b956e3ccd1910a88fb6cb69a9:3",
+     "step_index": "3",
+     "action": "continue",
+     "outcome_failed": true,
+     "outcome_class_fingerprint": "c498e975173324584c75177a19ad9cdc3ba41c71430cfaec522d6f542c6ea10d"
+    },
+    "next_same_owner": {
+     "episode_id": "loop:skill:16905aa059b95052b3325f85c173944454fa580b956e3ccd1910a88fb6cb69a9:5",
+     "step_index": "5",
+     "action": "stop",
+     "terminal_status": "tool_error",
+     "outcome_failed": true,
+     "outcome_class_fingerprint": "2de815ed9f988b2fc4bd7326b265ec597406093a7a534effce3f1af93ee9934c"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNCERTAIN",
+    "confidence": 0.55,
+    "explanation": "该步骤的业务结果失败，需要结合任务语义判断重试是否必要。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_SUCCEEDED",
+    "adapter": "openai-compatible-http",
+    "model_id": "deepseek-v4-flash",
+    "request_fingerprint": "45ff56db60a91b2b1fc60bf37b7d380c241f04b34b59df89ff156d41cdf48f91",
+    "response_fingerprint": "6b9c4798843bb5fceec368e1c8bce479f33e1952be5440a5573f3afa4b477caa",
+    "verdict": "SEMANTIC_VERDICT_UNCERTAIN",
+    "confidence": 0.6,
+    "expected_state_change": "通过查阅文档获取兼容模型信息。",
+    "observed_state_change": "尝试web_fetch获取官方文档，但返回301重定向错误，未能获取信息。",
+    "concise_reason": "尝试获取文档失败，但该步骤是探索性尝试，结果不确定，且后续未再重试，判定为uncertain。",
+    "evidence_event_ids": [
+     "python:1797600:1788023527868846:25"
+    ],
+    "attempts": 1
+   },
+   "final_verdict": "SEMANTIC_VERDICT_UNCERTAIN",
+   "decision_source": "DECISION_SOURCE_HYBRID",
+   "final_confidence": 0.6,
+   "fusion_reason": "确定性规则负责筛选可疑步骤，模型补充任务语义判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:144c10a8251a91efd513b8306d7ba470b21e989bbe86d8f0a24481dda973ed71",
+    "episode_id": "loop:skill:ab58beb123d0c7bdcd17432b70cad2ddc556d3ee633455d7ad2a17b8ff50d394:2",
+    "scope": "skill",
+    "owner_id": "dispatch:0829171057-afa3511dea7a:9c16ea0571ab:1",
+    "skill_name": "forge-image-gen",
+    "round": "2",
+    "attempt_index": "1",
+    "step_index": "2",
+    "action": "stop",
+    "reason": "final_response",
+    "terminal": true,
+    "terminal_status": "completed",
+    "input_fingerprint": "b81d15df962a4b276e415835aa4543c66a7581d73ee7c1cec040d93fdb6cb35a",
+    "action_fingerprint": "c2e330fdbd669455b30b496c07a55498b513da3f2017ef057efd3c8edb540710",
+    "outcome_fingerprint": "86427da32bd507602fb454baa61dfdbc66ae03fed4e4351acf849b1be4c98c9a",
+    "outcome_class_fingerprint": "86427da32bd507602fb454baa61dfdbc66ae03fed4e4351acf849b1be4c98c9a",
+    "dispatch": {},
+    "source_event_ids": [
+     "python:1797149:1788023508606836:9",
+     "python:1797149:1788023508606836:10",
+     "python:1797149:1788023508606836:11",
+     "python:1797149:1788023508606836:12",
+     "python:1797149:1788023508606836:13"
+    ],
+    "previous_same_owner": {
+     "episode_id": "loop:skill:ab58beb123d0c7bdcd17432b70cad2ddc556d3ee633455d7ad2a17b8ff50d394:1",
+     "step_index": "1",
+     "action": "continue",
+     "outcome_class_fingerprint": "c72c451099748635c6855470cc84c6b74f0765548135fe4ca60a26cdfdcede18"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNASSESSED",
+    "explanation": "未命中确定性异常规则；这不等同于已证明该步骤有效。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_NOT_REQUESTED"
+   },
+   "final_verdict": "SEMANTIC_VERDICT_UNASSESSED",
+   "decision_source": "DECISION_SOURCE_NONE",
+   "fusion_reason": "没有足够的确定性证据，也没有可用的模型判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:8c4d379aef1669f38c170369314de484bee8cf611a779126f6ca80e01f380eae",
+    "episode_id": "loop:skill:16905aa059b95052b3325f85c173944454fa580b956e3ccd1910a88fb6cb69a9:5",
+    "scope": "skill",
+    "owner_id": "dispatch:0829171057-afa3511dea7a:9c16ea0571ab:2",
+    "skill_name": "video-gen",
+    "round": "5",
+    "attempt_index": "1",
+    "step_index": "5",
+    "action": "stop",
+    "reason": "final_response",
+    "terminal": true,
+    "terminal_status": "tool_error",
+    "outcome_failed": true,
+    "input_fingerprint": "6bea505ca2ff5554726822d80d386ee6ddb192f16abf71c1b70c5bc08b2a2490",
+    "action_fingerprint": "c2e330fdbd669455b30b496c07a55498b513da3f2017ef057efd3c8edb540710",
+    "outcome_fingerprint": "2de815ed9f988b2fc4bd7326b265ec597406093a7a534effce3f1af93ee9934c",
+    "outcome_class_fingerprint": "2de815ed9f988b2fc4bd7326b265ec597406093a7a534effce3f1af93ee9934c",
+    "dispatch": {},
+    "source_event_ids": [
+     "python:1797600:1788023527868846:26",
+     "python:1797600:1788023527868846:27",
+     "python:1797600:1788023527868846:28",
+     "python:1797600:1788023527868846:29",
+     "python:1797600:1788023527868846:30"
+    ],
+    "previous_same_owner": {
+     "episode_id": "loop:skill:16905aa059b95052b3325f85c173944454fa580b956e3ccd1910a88fb6cb69a9:4",
+     "step_index": "4",
+     "action": "continue",
+     "outcome_failed": true,
+     "outcome_class_fingerprint": "6dd32797aac0b6b0276f0c3ac843b67ae52747825fd7197b6c74248ce149498a"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNCERTAIN",
+    "confidence": 0.55,
+    "explanation": "该步骤的业务结果失败，需要结合任务语义判断重试是否必要。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_SUCCEEDED",
+    "adapter": "openai-compatible-http",
+    "model_id": "deepseek-v4-flash",
+    "request_fingerprint": "45ff56db60a91b2b1fc60bf37b7d380c241f04b34b59df89ff156d41cdf48f91",
+    "response_fingerprint": "6b9c4798843bb5fceec368e1c8bce479f33e1952be5440a5573f3afa4b477caa",
+    "verdict": "SEMANTIC_VERDICT_PREMATURE_STOP",
+    "confidence": 0.7,
+    "expected_state_change": "视频生成任务应继续尝试或明确告知用户失败原因。",
+    "observed_state_change": "技能以tool_error状态终止，未生成视频，但已向协调器报告了失败原因和后续建议。",
+    "concise_reason": "技能在多次尝试失败后停止，虽然报告了原因，但未尝试其他可能的解决方案（如更换通道），过早结束，判定为premature_stop。",
+    "evidence_event_ids": [
+     "python:1797600:1788023527868846:30"
+    ],
+    "attempts": 1
+   },
+   "final_verdict": "SEMANTIC_VERDICT_PREMATURE_STOP",
+   "decision_source": "DECISION_SOURCE_HYBRID",
+   "final_confidence": 0.7,
+   "fusion_reason": "确定性规则负责筛选可疑步骤，模型补充任务语义判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:f034b1955a42e1a39d6e3108acc987a1ebfbf9d9e301e8dce236ec984c50b8e6",
+    "episode_id": "loop:coordinator:6b0ffd57aac3b23a4749888771bcae755075112b7c9cf99cc11c3894642b7e23:2",
+    "scope": "coordinator",
+    "owner_id": "coordinator:0829171057-afa3511dea7a",
+    "activation_index": "2",
+    "round": "2",
+    "attempt_index": "1",
+    "step_index": "2",
+    "action": "stop",
+    "reason": "final_response",
+    "terminal": true,
+    "terminal_status": "normal",
+    "input_fingerprint": "8195face0fb757bb6a3e625fca2e0305587888075cb55b1cf6489d31f930f1b4",
+    "action_fingerprint": "c2e330fdbd669455b30b496c07a55498b513da3f2017ef057efd3c8edb540710",
+    "outcome_fingerprint": "9294a0987a4a56c13af16cb3a3213a0fd9ec003e2eba7c2ffabcffc6a78ed0b1",
+    "outcome_class_fingerprint": "9294a0987a4a56c13af16cb3a3213a0fd9ec003e2eba7c2ffabcffc6a78ed0b1",
+    "dispatch": {},
+    "source_event_ids": [
+     "python:1801396:1788023712841000:3",
+     "python:1801396:1788023712841000:4",
+     "python:1801396:1788023712841000:5",
+     "python:1801396:1788023712841000:6",
+     "python:1801396:1788023712841000:7",
+     "python:1801396:1788023712841000:8"
+    ],
+    "previous_same_owner": {
+     "episode_id": "loop:coordinator:6b0ffd57aac3b23a4749888771bcae755075112b7c9cf99cc11c3894642b7e23:1",
+     "step_index": "1",
+     "action": "continue",
+     "outcome_class_fingerprint": "844afd52bf95a3a7d9feabf86fa18caf2a58a44ee7ce3e91176f9e723403301c"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNASSESSED",
+    "explanation": "未命中确定性异常规则；这不等同于已证明该步骤有效。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_NOT_REQUESTED"
+   },
+   "final_verdict": "SEMANTIC_VERDICT_UNASSESSED",
+   "decision_source": "DECISION_SOURCE_NONE",
+   "fusion_reason": "没有足够的确定性证据，也没有可用的模型判断。"
+  }
+ ],
+ "model_requested_count": "1",
+ "model_succeeded_count": "1",
+ "dialogue_assessment": {
+  "status": "MODEL_CALL_STATUS_SUCCEEDED",
+  "adapter": "openai-compatible-http",
+  "model_id": "deepseek-v4-flash",
+  "request_fingerprint": "45ff56db60a91b2b1fc60bf37b7d380c241f04b34b59df89ff156d41cdf48f91",
+  "response_fingerprint": "6b9c4798843bb5fceec368e1c8bce479f33e1952be5440a5573f3afa4b477caa",
+  "task_outcome": "AGGREGATE_STATUS_PARTIAL",
+  "confidence": 0.95,
+  "reason": "用户要求生成夜跑反光夹克的营销素材，包括主视觉图片和约5秒动态广告。主视觉图片成功生成并上传，但视频生成因后端模型不支持Agent Plan功能而失败，最终仅交付了图片部分，视频未产出，因此任务部分成功。",
+  "evidence_event_ids": [
+   "python:1797149:1788023508606836:7",
+   "python:1797600:1788023527868846:7",
+   "python:1801396:1788023712841000:7"
+  ],
+  "attempts": 1
+ },
+ "reflection": {
+  "summary": "本次对话中，图片生成分支成功，视频生成分支因后端模型不支持Agent Plan功能而失败。视频技能在多次尝试不同模型后仍失败，最终以tool_error结束。协调器正确汇总了部分成功结果并告知用户。主要问题在于视频生成通道的配置或权限不足，导致无法产出视频。",
+  "root_causes": [
+   "后端Ark Agent Plan通道未开通或兼容的Seedance视频模型，导致所有视频生成尝试均返回UnsupportedModel错误。",
+   "视频技能在连续失败后未尝试其他可能的通道（如Wan），而是直接停止，可能过早放弃。"
+  ],
+  "skill_orchestration_changes": [
+   "在视频生成失败后，协调器应评估是否可切换其他视频生成通道或技能，而不是仅依赖当前通道。",
+   "对于外部服务不可用的情况，应更早地停止重试并报告，避免浪费预算。"
+  ],
+  "prompt_changes": [
+   "视频生成prompt已充分描述需求，无需修改。",
+   "建议在技能文档中明确列出当前通道支持的模型ID，避免猜测。"
+  ],
+  "stop_condition_changes": [
+   "当同一错误连续出现两次时，应停止重试并报告，而不是继续尝试。",
+   "技能在失败后应更明确地告知用户后续可采取的行动，如等待通道恢复或更换通道。"
+  ],
+  "wasted_episode_ids": [
+   "loop:skill:16905aa059b95052b3325f85c173944454fa580b956e3ccd1910a88fb6cb69a9:3"
+  ],
+  "evidence_event_ids": [
+   "python:1797600:1788023527868846:19",
+   "python:1797600:1788023527868846:30"
+  ]
+ },
+ "content_aware_model": true,
+ "model_scope": "dialogue",
+ "model_prompt_version": "content-aware-dialogue-v1",
+ "content_event_count": "48",
+ "redaction_count": "9"
+}
