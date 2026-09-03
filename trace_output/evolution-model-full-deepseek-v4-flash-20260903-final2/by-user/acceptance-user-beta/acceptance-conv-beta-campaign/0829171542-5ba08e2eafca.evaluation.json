@@ -1,0 +1,383 @@
+{
+ "schema_version": 1,
+ "evaluation_kind": "content_aware_dialogue_evaluation",
+ "evaluator_version": "hybrid-evaluator-v2",
+ "deterministic_rule_set_version": "hybrid-fusion-rules-v1",
+ "source_analyzer_version": "loop-episode-analyzer-v1.1",
+ "source_rule_set_version": "invalid-loop-rules-v1",
+ "source_fingerprint": "83ae07ae25dd9fbb891abf2068d1092cfad23a9637ef950f44650a6c6622c16a",
+ "source": {
+  "user_id": "acceptance-user-beta",
+  "conversation_id": "acceptance-conv-beta-campaign",
+  "dialogue_id": "0829171542-5ba08e2eafca"
+ },
+ "source_trace_integrity_valid": true,
+ "metrics": {
+  "episode_count": "5",
+  "coordinator_episode_count": "3",
+  "skill_episode_count": "2",
+  "continued_episode_count": "2",
+  "terminal_episode_count": "3",
+  "outcome_failed_episode_count": "4",
+  "review_episode_count": "4",
+  "unassessed_episode_count": "1",
+  "dispatch_batch_count": "2",
+  "failed_outcome_rate": 0.8,
+  "workflow_status": "AGGREGATE_STATUS_SUCCEEDED",
+  "business_status": "AGGREGATE_STATUS_FAILED"
+ },
+ "assessments": [
+  {
+   "evidence": {
+    "packet_id": "packet:c49b98a05da4a6ad9ce9c28fb2c09570bb93bc84cb5fbb5c388e9ac6288e87d5",
+    "episode_id": "loop:coordinator:ddb0486dcd43eaa3f7be5822b0af10912dc85e7117e7767b06e178ed47fdf3a1:1",
+    "scope": "coordinator",
+    "owner_id": "coordinator:0829171542-5ba08e2eafca",
+    "activation_index": "1",
+    "round": "1",
+    "attempt_index": "1",
+    "step_index": "1",
+    "action": "continue",
+    "reason": "tool_calls_requested",
+    "continued": true,
+    "outcome_failed": true,
+    "input_fingerprint": "a6307ffe7b34bb134e4772683831c8f81a04e37e80766ae9ae49508adfec6133",
+    "action_fingerprint": "9678edcda35ec5f116302ee0c6927036c2f98ce5b5884b545ed19c748c133a3b",
+    "outcome_fingerprint": "0befa1ebc378197ea8717a073b9ac6b19c07bca275c42faec9f73324f05ff4df",
+    "outcome_class_fingerprint": "3a23e0a6c190c8e1b556e5103a73f1f7a42ce1039659db4289e61085abd3f3e0",
+    "dispatch": {
+     "batch_id": "batch:0829171542-5ba08e2eafca:068c3b26506c",
+     "skill_names": [
+      "outfit-stylist"
+     ],
+     "force": [
+      false
+     ],
+     "batch_status": "false",
+     "workflow_status": "completed",
+     "total_count": 1
+    },
+    "source_event_ids": [
+     "python:1801978:1788023742618381:3",
+     "python:1801978:1788023742618381:4",
+     "python:1801978:1788023742618381:5",
+     "python:1801978:1788023742618381:6",
+     "python:1801978:1788023742618381:7",
+     "python:1801978:1788023742618381:8"
+    ],
+    "next_same_owner": {
+     "episode_id": "loop:coordinator:ddb0486dcd43eaa3f7be5822b0af10912dc85e7117e7767b06e178ed47fdf3a1:2",
+     "step_index": "2",
+     "action": "continue",
+     "outcome_failed": true,
+     "outcome_class_fingerprint": "3a23e0a6c190c8e1b556e5103a73f1f7a42ce1039659db4289e61085abd3f3e0"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNCERTAIN",
+    "confidence": 0.55,
+    "explanation": "该步骤的业务结果失败，需要结合任务语义判断重试是否必要。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_SUCCEEDED",
+    "adapter": "openai-compatible-http",
+    "model_id": "deepseek-v4-flash",
+    "request_fingerprint": "5a991126a92ec472d9bd113e8c8b0fe29347b41d6ab6d3c8b8e2a566af1eea5a",
+    "response_fingerprint": "72d636e97604c81da472b4675d5cd22ba4bbcf6f017353e7a0777567ca1aa056",
+    "verdict": "SEMANTIC_VERDICT_USEFUL",
+    "confidence": 0.9,
+    "expected_state_change": "coordinator应委派outfit-stylist执行C2任务，并等待结果。",
+    "observed_state_change": "coordinator成功委派outfit-stylist，生成了包含两个URL抓取和穿搭建议的详细prompt，并记录了调度信息。",
+    "concise_reason": "该步骤正确委派了outfit-stylist，prompt设计合理，覆盖了用户要求的网络证据和穿搭建议，是任务推进的必要步骤。",
+    "evidence_event_ids": [
+     "python:1801978:1788023742618381:7"
+    ],
+    "attempts": 1
+   },
+   "final_verdict": "SEMANTIC_VERDICT_USEFUL",
+   "decision_source": "DECISION_SOURCE_HYBRID",
+   "final_confidence": 0.9,
+   "fusion_reason": "确定性规则负责筛选可疑步骤，模型补充任务语义判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:4020e34ded1d789c4334df22d5d046460d68ab05d34ca2b02baededa734dec77",
+    "episode_id": "loop:skill:dfbc410fc4762963911cdd05d79551cf0f146e53efaf8d07a800e81128ee551f:1",
+    "scope": "skill",
+    "owner_id": "dispatch:0829171542-5ba08e2eafca:068c3b26506c:1",
+    "skill_name": "outfit-stylist",
+    "round": "1",
+    "attempt_index": "1",
+    "step_index": "1",
+    "action": "stop",
+    "reason": "final_response",
+    "terminal": true,
+    "terminal_status": "llm_error",
+    "outcome_failed": true,
+    "input_fingerprint": "559991c9e88c8dc93fe61bc10d5a30a253139ca4d69e6e891cea53e0f28ba490",
+    "action_fingerprint": "c2e330fdbd669455b30b496c07a55498b513da3f2017ef057efd3c8edb540710",
+    "outcome_fingerprint": "27890bea0f634824d74fd3a8d2331b664f78e3263a4d5f4fcbc7c94faf148169",
+    "outcome_class_fingerprint": "27890bea0f634824d74fd3a8d2331b664f78e3263a4d5f4fcbc7c94faf148169",
+    "dispatch": {},
+    "source_event_ids": [
+     "python:1802798:1788023786929762:2",
+     "python:1802798:1788023786929762:3",
+     "python:1802798:1788023786929762:4",
+     "python:1802798:1788023786929762:5",
+     "python:1802798:1788023786929762:6"
+    ]
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNCERTAIN",
+    "confidence": 0.55,
+    "explanation": "该步骤的业务结果失败，需要结合任务语义判断重试是否必要。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_SUCCEEDED",
+    "adapter": "openai-compatible-http",
+    "model_id": "deepseek-v4-flash",
+    "request_fingerprint": "5a991126a92ec472d9bd113e8c8b0fe29347b41d6ab6d3c8b8e2a566af1eea5a",
+    "response_fingerprint": "72d636e97604c81da472b4675d5cd22ba4bbcf6f017353e7a0777567ca1aa056",
+    "verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+    "confidence": 0.95,
+    "expected_state_change": "skill应执行URL抓取并返回穿搭建议和记忆写入结果。",
+    "observed_state_change": "skill在LLM调用阶段因模型网关读取超时失败，未执行任何工具调用，返回llm_error。",
+    "concise_reason": "失败原因是模型网关读取超时（瞬时网络故障），属于可修复的临时性错误，重试有依据，符合necessary_retry判定。",
+    "evidence_event_ids": [
+     "python:1802798:1788023786929762:6"
+    ],
+    "attempts": 1
+   },
+   "final_verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+   "decision_source": "DECISION_SOURCE_HYBRID",
+   "final_confidence": 0.95,
+   "fusion_reason": "确定性规则负责筛选可疑步骤，模型补充任务语义判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:2e89f8b86ebe57fa58e2a4a6c6a7cee3bb9fbdc49d77c367d9877fe929894456",
+    "episode_id": "loop:coordinator:ddb0486dcd43eaa3f7be5822b0af10912dc85e7117e7767b06e178ed47fdf3a1:2",
+    "scope": "coordinator",
+    "owner_id": "coordinator:0829171542-5ba08e2eafca",
+    "activation_index": "2",
+    "round": "2",
+    "attempt_index": "1",
+    "step_index": "2",
+    "action": "continue",
+    "reason": "tool_calls_requested",
+    "continued": true,
+    "outcome_failed": true,
+    "input_fingerprint": "a3bdb2aca16069739f1cbedb54f4706fbbe7181ea8f96bcdc58eab1fcf36842d",
+    "action_fingerprint": "bfc17fdf93d3f6f3e5ad6fbb2c89f13c47020eed8979c47fa4bacafd04b24cc7",
+    "outcome_fingerprint": "0befa1ebc378197ea8717a073b9ac6b19c07bca275c42faec9f73324f05ff4df",
+    "outcome_class_fingerprint": "3a23e0a6c190c8e1b556e5103a73f1f7a42ce1039659db4289e61085abd3f3e0",
+    "dispatch": {
+     "batch_id": "batch:0829171542-5ba08e2eafca:813d9ed0b23e",
+     "skill_names": [
+      "outfit-stylist"
+     ],
+     "force": [
+      true
+     ],
+     "batch_status": "false",
+     "workflow_status": "completed",
+     "total_count": 1
+    },
+    "source_event_ids": [
+     "python:1808492:1788024088199112:3",
+     "python:1808492:1788024088199112:4",
+     "python:1808492:1788024088199112:5",
+     "python:1808492:1788024088199112:6",
+     "python:1808492:1788024088199112:7",
+     "python:1808492:1788024088199112:8"
+    ],
+    "previous_same_owner": {
+     "episode_id": "loop:coordinator:ddb0486dcd43eaa3f7be5822b0af10912dc85e7117e7767b06e178ed47fdf3a1:1",
+     "step_index": "1",
+     "action": "continue",
+     "outcome_failed": true,
+     "outcome_class_fingerprint": "3a23e0a6c190c8e1b556e5103a73f1f7a42ce1039659db4289e61085abd3f3e0"
+    },
+    "next_same_owner": {
+     "episode_id": "loop:coordinator:ddb0486dcd43eaa3f7be5822b0af10912dc85e7117e7767b06e178ed47fdf3a1:3",
+     "step_index": "3",
+     "action": "stop",
+     "terminal_status": "normal",
+     "outcome_class_fingerprint": "9294a0987a4a56c13af16cb3a3213a0fd9ec003e2eba7c2ffabcffc6a78ed0b1"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNCERTAIN",
+    "confidence": 0.55,
+    "explanation": "该步骤的业务结果失败，需要结合任务语义判断重试是否必要。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_SUCCEEDED",
+    "adapter": "openai-compatible-http",
+    "model_id": "deepseek-v4-flash",
+    "request_fingerprint": "5a991126a92ec472d9bd113e8c8b0fe29347b41d6ab6d3c8b8e2a566af1eea5a",
+    "response_fingerprint": "72d636e97604c81da472b4675d5cd22ba4bbcf6f017353e7a0777567ca1aa056",
+    "verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+    "confidence": 0.95,
+    "expected_state_change": "coordinator应根据第一次失败原因决定是否重试。",
+    "observed_state_change": "coordinator识别到瞬时网络故障，按规则使用force=true重试outfit-stylist，并调整了prompt（增加短超时设置）。",
+    "concise_reason": "重试决策正确，失败原因明确且可修复，重试有依据，符合necessary_retry。",
+    "evidence_event_ids": [
+     "python:1808492:1788024088199112:7"
+    ],
+    "attempts": 1
+   },
+   "final_verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+   "decision_source": "DECISION_SOURCE_HYBRID",
+   "final_confidence": 0.95,
+   "fusion_reason": "确定性规则负责筛选可疑步骤，模型补充任务语义判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:a6f627fbdd860d673ee66c9e1a7211d055b63a5470deb11a55536abf5e854946",
+    "episode_id": "loop:skill:6d0e2d22545397f1ce34804a858d78b78a3d24973381fc173d2b8e6350e5beb4:1",
+    "scope": "skill",
+    "owner_id": "dispatch:0829171542-5ba08e2eafca:813d9ed0b23e:1",
+    "skill_name": "outfit-stylist",
+    "round": "1",
+    "attempt_index": "1",
+    "step_index": "1",
+    "action": "stop",
+    "reason": "final_response",
+    "terminal": true,
+    "terminal_status": "llm_error",
+    "outcome_failed": true,
+    "input_fingerprint": "ed084e9f95bfceb68f399d2711192c7122226b657da27a20c97b8466f3ac656b",
+    "action_fingerprint": "c2e330fdbd669455b30b496c07a55498b513da3f2017ef057efd3c8edb540710",
+    "outcome_fingerprint": "27890bea0f634824d74fd3a8d2331b664f78e3263a4d5f4fcbc7c94faf148169",
+    "outcome_class_fingerprint": "27890bea0f634824d74fd3a8d2331b664f78e3263a4d5f4fcbc7c94faf148169",
+    "dispatch": {},
+    "source_event_ids": [
+     "python:1808742:1788024103421072:2",
+     "python:1808742:1788024103421072:3",
+     "python:1808742:1788024103421072:4",
+     "python:1808742:1788024103421072:5",
+     "python:1808742:1788024103421072:6"
+    ]
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNCERTAIN",
+    "confidence": 0.55,
+    "explanation": "该步骤的业务结果失败，需要结合任务语义判断重试是否必要。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_SUCCEEDED",
+    "adapter": "openai-compatible-http",
+    "model_id": "deepseek-v4-flash",
+    "request_fingerprint": "5a991126a92ec472d9bd113e8c8b0fe29347b41d6ab6d3c8b8e2a566af1eea5a",
+    "response_fingerprint": "72d636e97604c81da472b4675d5cd22ba4bbcf6f017353e7a0777567ca1aa056",
+    "verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+    "confidence": 0.95,
+    "expected_state_change": "skill应执行URL抓取并返回穿搭建议和记忆写入结果。",
+    "observed_state_change": "skill再次因模型网关读取超时失败，未执行任何工具调用，返回llm_error。",
+    "concise_reason": "重试后仍因同一基础设施故障失败，但重试本身有依据，失败原因明确，符合necessary_retry。",
+    "evidence_event_ids": [
+     "python:1808742:1788024103421072:6"
+    ],
+    "attempts": 1
+   },
+   "final_verdict": "SEMANTIC_VERDICT_NECESSARY_RETRY",
+   "decision_source": "DECISION_SOURCE_HYBRID",
+   "final_confidence": 0.95,
+   "fusion_reason": "确定性规则负责筛选可疑步骤，模型补充任务语义判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:d6905d237c4faa8a13c9576face6c5b4848c6f0ca4cee0a8a911f8533e3ddeae",
+    "episode_id": "loop:coordinator:ddb0486dcd43eaa3f7be5822b0af10912dc85e7117e7767b06e178ed47fdf3a1:3",
+    "scope": "coordinator",
+    "owner_id": "coordinator:0829171542-5ba08e2eafca",
+    "activation_index": "3",
+    "round": "3",
+    "attempt_index": "1",
+    "step_index": "3",
+    "action": "stop",
+    "reason": "final_response",
+    "terminal": true,
+    "terminal_status": "normal",
+    "input_fingerprint": "5f5b4eed8a89695a18dfd39446a9a4071ec9a0e38e10574ad9b78df215cf82a4",
+    "action_fingerprint": "c2e330fdbd669455b30b496c07a55498b513da3f2017ef057efd3c8edb540710",
+    "outcome_fingerprint": "9294a0987a4a56c13af16cb3a3213a0fd9ec003e2eba7c2ffabcffc6a78ed0b1",
+    "outcome_class_fingerprint": "9294a0987a4a56c13af16cb3a3213a0fd9ec003e2eba7c2ffabcffc6a78ed0b1",
+    "dispatch": {},
+    "source_event_ids": [
+     "python:1814473:1788024404690233:3",
+     "python:1814473:1788024404690233:4",
+     "python:1814473:1788024404690233:5",
+     "python:1814473:1788024404690233:6",
+     "python:1814473:1788024404690233:7",
+     "python:1814473:1788024404690233:8"
+    ],
+    "previous_same_owner": {
+     "episode_id": "loop:coordinator:ddb0486dcd43eaa3f7be5822b0af10912dc85e7117e7767b06e178ed47fdf3a1:2",
+     "step_index": "2",
+     "action": "continue",
+     "outcome_failed": true,
+     "outcome_class_fingerprint": "3a23e0a6c190c8e1b556e5103a73f1f7a42ce1039659db4289e61085abd3f3e0"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNASSESSED",
+    "explanation": "未命中确定性异常规则；这不等同于已证明该步骤有效。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_NOT_REQUESTED"
+   },
+   "final_verdict": "SEMANTIC_VERDICT_UNASSESSED",
+   "decision_source": "DECISION_SOURCE_NONE",
+   "fusion_reason": "没有足够的确定性证据，也没有可用的模型判断。"
+  }
+ ],
+ "model_requested_count": "1",
+ "model_succeeded_count": "1",
+ "dialogue_assessment": {
+  "status": "MODEL_CALL_STATUS_SUCCEEDED",
+  "adapter": "openai-compatible-http",
+  "model_id": "deepseek-v4-flash",
+  "request_fingerprint": "5a991126a92ec472d9bd113e8c8b0fe29347b41d6ab6d3c8b8e2a566af1eea5a",
+  "response_fingerprint": "72d636e97604c81da472b4675d5cd22ba4bbcf6f017353e7a0777567ca1aa056",
+  "task_outcome": "AGGREGATE_STATUS_PARTIAL",
+  "confidence": 0.8,
+  "reason": "用户请求的C2验收任务包含两个核心目标：一是调用outfit-stylist获取网络证据并给出夜跑分层建议，二是记录可控失败。实际执行中，outfit-stylist两次因模型网关读取超时（LLM call failed: Read timed out）失败，未执行任何URL抓取或记忆写入，但coordinator在停止重试后提供了兜底的夜跑三层穿搭建议，并如实说明了网络证据缺失。因此任务部分完成：穿搭建议已交付，但网络证据和记忆写入未完成。",
+  "evidence_event_ids": [
+   "python:1802798:1788023786929762:6",
+   "python:1808742:1788024103421072:6",
+   "python:1814473:1788024404690233:7"
+  ],
+  "attempts": 1
+ },
+ "reflection": {
+  "summary": "本次对话中，coordinator正确委派outfit-stylist执行C2验收任务，但skill两次因模型网关读取超时失败，导致网络证据和记忆写入未完成。coordinator在连续失败后按规则停止重试，并提供了兜底的穿搭建议，如实说明了缺失信息。整体工作流闭合正常，但用户任务部分未完成。",
+  "root_causes": [
+   "模型网关（ark.cn-beijing.volces.com）读取超时，属于基础设施故障，非prompt或参数问题。"
+  ],
+  "skill_orchestration_changes": [
+   "在重试时增加短超时设置，避免长时间等待。"
+  ],
+  "prompt_changes": [
+   "重试prompt中增加了对URL抓取设置短超时的指示，以加快失败检测。"
+  ],
+  "stop_condition_changes": [
+   "遵循同一skill连续失败2次后停止重试的规则，避免无效重试。"
+  ],
+  "wasted_episode_ids": [
+   "loop:skill:dfbc410fc4762963911cdd05d79551cf0f146e53efaf8d07a800e81128ee551f:1",
+   "loop:skill:6d0e2d22545397f1ce34804a858d78b78a3d24973381fc173d2b8e6350e5beb4:1"
+  ],
+  "evidence_event_ids": [
+   "python:1802798:1788023786929762:6",
+   "python:1808742:1788024103421072:6",
+   "python:1814473:1788024404690233:7"
+  ]
+ },
+ "content_aware_model": true,
+ "model_scope": "dialogue",
+ "model_prompt_version": "content-aware-dialogue-v1",
+ "content_event_count": "28",
+ "redaction_count": "6"
+}

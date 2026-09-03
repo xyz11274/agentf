@@ -1,0 +1,421 @@
+syntax = "proto3";
+
+package agentflow.trajectory.evaluation;
+
+// The persisted report stores structural evidence and validated conclusions.
+// Direct SessionLog mode builds one transient, redacted content prompt, but raw
+// prompts, messages, tool payloads, and credentials are not copied into Protobuf.
+
+enum SemanticVerdict {
+  SEMANTIC_VERDICT_UNSPECIFIED = 0;
+  SEMANTIC_VERDICT_UNASSESSED = 1;
+  SEMANTIC_VERDICT_USEFUL = 2;
+  SEMANTIC_VERDICT_INVALID = 3;
+  SEMANTIC_VERDICT_NECESSARY_RETRY = 4;
+  SEMANTIC_VERDICT_PREMATURE_STOP = 5;
+  SEMANTIC_VERDICT_UNCERTAIN = 6;
+}
+
+enum DecisionSource {
+  DECISION_SOURCE_UNSPECIFIED = 0;
+  DECISION_SOURCE_NONE = 1;
+  DECISION_SOURCE_RULE = 2;
+  DECISION_SOURCE_MODEL = 3;
+  DECISION_SOURCE_HYBRID = 4;
+}
+
+enum ModelCallStatus {
+  MODEL_CALL_STATUS_UNSPECIFIED = 0;
+  MODEL_CALL_STATUS_NOT_REQUESTED = 1;
+  MODEL_CALL_STATUS_SKIPPED = 2;
+  MODEL_CALL_STATUS_SUCCEEDED = 3;
+  MODEL_CALL_STATUS_TRANSPORT_ERROR = 4;
+  MODEL_CALL_STATUS_INVALID_RESPONSE = 5;
+}
+
+enum AggregateStatus {
+  AGGREGATE_STATUS_UNSPECIFIED = 0;
+  AGGREGATE_STATUS_UNKNOWN = 1;
+  AGGREGATE_STATUS_SUCCEEDED = 2;
+  AGGREGATE_STATUS_FAILED = 3;
+  AGGREGATE_STATUS_PARTIAL = 4;
+}
+
+message SourceIdentity {
+  string user_id = 1;
+  string conversation_id = 2;
+  string dialogue_id = 3;
+}
+
+message DiagnosticEvidence {
+  string diagnostic_id = 1;
+  string category = 2;
+  bool counts_as_invalid = 3;
+  double confidence = 4;
+  string severity = 5;
+  string summary = 6;
+  string observable_cause = 7;
+  string tool_name = 8;
+  string error_class = 9;
+  repeated string evidence_event_ids = 10;
+}
+
+message ToolEvidence {
+  string tool_call_id = 1;
+  string tool_name = 2;
+  string status = 3;
+  string error_class = 4;
+  string retryability = 5;
+  string arguments_fingerprint = 6;
+  string result_fingerprint = 7;
+  string call_event_id = 8;
+  string result_event_id = 9;
+}
+
+message EvaluationEvidence {
+  string event_id = 1;
+  string evaluator = 2;
+  string evaluator_version = 3;
+  string metric = 4;
+  double score = 5;
+  bool has_score = 6;
+  bool passed = 7;
+  bool has_passed = 8;
+}
+
+message DispatchEvidence {
+  string batch_id = 1;
+  repeated string skill_names = 2;
+  repeated bool force = 3;
+  string batch_status = 4;
+  string workflow_status = 5;
+  uint32 successful_count = 6;
+  uint32 total_count = 7;
+}
+
+message NeighborEvidence {
+  string episode_id = 1;
+  uint64 step_index = 2;
+  string action = 3;
+  string terminal_status = 4;
+  bool outcome_failed = 5;
+  string outcome_class_fingerprint = 6;
+}
+
+message EpisodeEvidencePacket {
+  string packet_id = 1;
+  string episode_id = 2;
+  string scope = 3;
+  string owner_id = 4;
+  string skill_name = 5;
+  uint64 activation_index = 6;
+  uint64 round = 7;
+  uint64 attempt_index = 8;
+  uint64 step_index = 9;
+  string action = 10;
+  string reason = 11;
+  bool continued = 12;
+  bool terminal = 13;
+  string terminal_status = 14;
+  bool outcome_failed = 15;
+  bool all_tool_results_failed = 16;
+  bool has_non_retryable_failure = 17;
+  string input_fingerprint = 18;
+  string action_fingerprint = 19;
+  string outcome_fingerprint = 20;
+  string outcome_class_fingerprint = 21;
+  DispatchEvidence dispatch = 22;
+  repeated ToolEvidence tools = 23;
+  repeated DiagnosticEvidence diagnostics = 24;
+  repeated string source_event_ids = 25;
+  NeighborEvidence previous_same_owner = 26;
+  NeighborEvidence next_same_owner = 27;
+  repeated EvaluationEvidence evaluations = 28;
+}
+
+message RuleAssessment {
+  SemanticVerdict verdict = 1;
+  double confidence = 2;
+  repeated string diagnostic_ids = 3;
+  repeated string evidence_event_ids = 4;
+  string explanation = 5;
+}
+
+message ModelAssessment {
+  ModelCallStatus status = 1;
+  string adapter = 2;
+  string model_id = 3;
+  string request_fingerprint = 4;
+  string response_fingerprint = 5;
+  SemanticVerdict verdict = 6;
+  double confidence = 7;
+  string expected_state_change = 8;
+  string observed_state_change = 9;
+  string concise_reason = 10;
+  repeated string evidence_event_ids = 11;
+  string error_code = 12;
+  uint32 attempts = 13;
+}
+
+message EpisodeAssessment {
+  EpisodeEvidencePacket evidence = 1;
+  RuleAssessment rule = 2;
+  ModelAssessment model = 3;
+  SemanticVerdict final_verdict = 4;
+  DecisionSource decision_source = 5;
+  double final_confidence = 6;
+  bool rule_model_conflict = 7;
+  string fusion_reason = 8;
+}
+
+message DeterministicMetrics {
+  uint64 episode_count = 1;
+  uint64 coordinator_episode_count = 2;
+  uint64 skill_episode_count = 3;
+  uint64 continued_episode_count = 4;
+  uint64 terminal_episode_count = 5;
+  uint64 outcome_failed_episode_count = 6;
+  uint64 invalid_episode_count = 7;
+  uint64 review_episode_count = 8;
+  uint64 unassessed_episode_count = 9;
+  uint64 tool_call_count = 10;
+  uint64 failed_tool_call_count = 11;
+  uint64 non_retryable_failed_tool_call_count = 12;
+  uint64 dispatch_batch_count = 13;
+  uint64 partial_dispatch_batch_count = 14;
+  uint64 failed_dispatch_batch_count = 15;
+  double invalid_loop_rate = 16;
+  double failed_outcome_rate = 17;
+  double failed_tool_call_rate = 18;
+  AggregateStatus workflow_status = 19;
+  AggregateStatus business_status = 20;
+  uint64 evaluation_count = 21;
+  uint64 passed_evaluation_count = 22;
+  uint64 failed_evaluation_count = 23;
+}
+
+message ReportIssue {
+  string severity = 1;
+  string code = 2;
+  string message = 3;
+  string episode_id = 4;
+}
+
+message DialogueTaskAssessment {
+  ModelCallStatus status = 1;
+  string adapter = 2;
+  string model_id = 3;
+  string request_fingerprint = 4;
+  string response_fingerprint = 5;
+  AggregateStatus task_outcome = 6;
+  double confidence = 7;
+  string reason = 8;
+  repeated string evidence_event_ids = 9;
+  string error_code = 10;
+  uint32 attempts = 11;
+}
+
+message EvolutionReflection {
+  string summary = 1;
+  repeated string root_causes = 2;
+  repeated string skill_orchestration_changes = 3;
+  repeated string prompt_changes = 4;
+  repeated string stop_condition_changes = 5;
+  repeated string wasted_episode_ids = 6;
+  repeated string evidence_event_ids = 7;
+}
+
+message HybridEvaluationReport {
+  uint32 schema_version = 1;
+  string evaluation_kind = 2;
+  string evaluator_version = 3;
+  string deterministic_rule_set_version = 4;
+  string source_analyzer_version = 5;
+  string source_rule_set_version = 6;
+  string source_fingerprint = 7;
+  SourceIdentity source = 8;
+  bool source_trace_integrity_valid = 9;
+  DeterministicMetrics metrics = 10;
+  repeated EpisodeAssessment assessments = 11;
+  repeated ReportIssue issues = 12;
+  uint64 model_requested_count = 13;
+  uint64 model_succeeded_count = 14;
+  uint64 model_failed_count = 15;
+  bool model_failures_degraded = 16;
+  DialogueTaskAssessment dialogue_assessment = 17;
+  EvolutionReflection reflection = 18;
+  bool content_aware_model = 19;
+  string model_scope = 20;
+  string model_prompt_version = 21;
+  uint64 content_event_count = 22;
+  uint64 redaction_count = 23;
+}
+
+enum CandidateTargetType {
+  CANDIDATE_TARGET_TYPE_UNSPECIFIED = 0;
+  CANDIDATE_TARGET_TYPE_SKILL_ORCHESTRATION = 1;
+  CANDIDATE_TARGET_TYPE_PROMPT = 2;
+  CANDIDATE_TARGET_TYPE_LOOP_STOP_CONDITION = 3;
+  CANDIDATE_TARGET_TYPE_RETRY_POLICY = 4;
+  CANDIDATE_TARGET_TYPE_TOOL_RESULT_CONSUMPTION = 5;
+}
+
+enum EvolutionCandidateStatus {
+  EVOLUTION_CANDIDATE_STATUS_UNSPECIFIED = 0;
+  EVOLUTION_CANDIDATE_STATUS_INSUFFICIENT_SUPPORT = 1;
+  EVOLUTION_CANDIDATE_STATUS_PROPOSED = 2;
+  EVOLUTION_CANDIDATE_STATUS_CONFLICTED = 3;
+  EVOLUTION_CANDIDATE_STATUS_REJECTED_BY_GATE = 4;
+}
+
+enum CandidateEvidenceKind {
+  CANDIDATE_EVIDENCE_KIND_UNSPECIFIED = 0;
+  CANDIDATE_EVIDENCE_KIND_DETERMINISTIC_RULE = 1;
+  CANDIDATE_EVIDENCE_KIND_DIALOGUE_REFLECTION = 2;
+  CANDIDATE_EVIDENCE_KIND_META_REFLECTION = 3;
+  CANDIDATE_EVIDENCE_KIND_CONTRADICTION = 4;
+}
+
+enum EvolutionMemoryStatus {
+  EVOLUTION_MEMORY_STATUS_UNSPECIFIED = 0;
+  EVOLUTION_MEMORY_STATUS_CANDIDATE = 1;
+  EVOLUTION_MEMORY_STATUS_VALIDATED = 2;
+  EVOLUTION_MEMORY_STATUS_REJECTED = 3;
+  EVOLUTION_MEMORY_STATUS_ARCHIVED = 4;
+}
+
+message CandidateEvidence {
+  string evidence_id = 1;
+  CandidateEvidenceKind kind = 2;
+  SourceIdentity source = 3;
+  string source_fingerprint = 4;
+  repeated string episode_ids = 5;
+  repeated string diagnostic_ids = 6;
+  repeated string evidence_event_ids = 7;
+  SemanticVerdict verdict = 8;
+  double confidence = 9;
+}
+
+message EvolutionCandidate {
+  uint32 schema_version = 1;
+  string candidate_id = 2;
+  string generator_version = 3;
+  CandidateTargetType target_type = 4;
+  string target_scope = 5;
+  string trigger_pattern = 6;
+  string observed_problem = 7;
+  string proposed_change = 8;
+  string expected_benefit = 9;
+  string error_class = 10;
+  string retryability = 11;
+  string proposal_fingerprint = 12;
+  EvolutionCandidateStatus status = 13;
+  string gate_reason = 14;
+  double confidence = 15;
+  uint64 support_user_count = 16;
+  uint64 support_conversation_count = 17;
+  uint64 support_dialogue_count = 18;
+  uint64 support_episode_count = 19;
+  uint64 invalid_episode_count = 20;
+  uint64 contradiction_count = 21;
+  repeated CandidateEvidence support_evidence = 22;
+  repeated CandidateEvidence contradiction_evidence = 23;
+  bool meta_reflection_applied = 24;
+  repeated string source_seed_ids = 25;
+  uint64 required_supporting_dialogues = 26;
+  uint64 required_supporting_episodes = 27;
+}
+
+message EvaluationRunSummary {
+  string input_fingerprint = 1;
+  SourceIdentity source = 2;
+  string source_fingerprint = 3;
+  bool evaluation_available = 4;
+  bool trace_integrity_valid = 5;
+  ModelCallStatus model_status = 6;
+  string model_error_code = 7;
+  uint64 episode_count = 8;
+  uint64 invalid_episode_count = 9;
+  string error_code = 10;
+  string error_message = 11;
+  string evaluation_fingerprint = 12;
+}
+
+message CandidateSynthesisMetrics {
+  uint64 input_report_count = 1;
+  uint64 accepted_report_count = 2;
+  uint64 quarantined_report_count = 3;
+  uint64 deterministic_seed_count = 4;
+  uint64 reflection_seed_count = 5;
+  uint64 candidate_count = 6;
+  uint64 proposed_count = 7;
+  uint64 conflicted_count = 8;
+  uint64 insufficient_support_count = 9;
+  uint64 rejected_count = 10;
+}
+
+message MetaReflectionAssessment {
+  ModelCallStatus status = 1;
+  string adapter = 2;
+  string model_id = 3;
+  string request_fingerprint = 4;
+  string response_fingerprint = 5;
+  string error_code = 6;
+  uint32 attempts = 7;
+  uint64 input_seed_count = 8;
+  uint64 output_candidate_count = 9;
+}
+
+message MemoryUpdateResult {
+  bool requested = 1;
+  bool applied = 2;
+  bool idempotent_replay = 3;
+  uint64 revision_before = 4;
+  uint64 revision_after = 5;
+  uint64 inserted_entry_count = 6;
+  uint64 updated_entry_count = 7;
+  uint64 unchanged_entry_count = 8;
+  string error_code = 9;
+}
+
+message HybridEvaluationBatchReport {
+  uint32 schema_version = 1;
+  string evaluation_kind = 2;
+  string pipeline_version = 3;
+  string candidate_generator_version = 4;
+  string evaluator_config_fingerprint = 5;
+  string batch_id = 6;
+  uint64 discovered_input_count = 7;
+  uint64 evaluation_succeeded_count = 8;
+  uint64 evaluation_failed_count = 9;
+  repeated EvaluationRunSummary runs = 10;
+  CandidateSynthesisMetrics synthesis = 11;
+  repeated EvolutionCandidate candidates = 12;
+  MetaReflectionAssessment meta_reflection = 13;
+  MemoryUpdateResult memory_update = 14;
+}
+
+message EvolutionMemoryRevision {
+  uint64 store_revision = 1;
+  string batch_id = 2;
+  EvolutionCandidate candidate_snapshot = 3;
+}
+
+message EvolutionMemoryEntry {
+  string memory_id = 1;
+  EvolutionMemoryStatus status = 2;
+  EvolutionCandidate candidate = 3;
+  string first_batch_id = 4;
+  string last_batch_id = 5;
+  repeated string observed_batch_ids = 6;
+  repeated EvolutionMemoryRevision revisions = 7;
+}
+
+message EvolutionMemoryStore {
+  uint32 schema_version = 1;
+  string store_kind = 2;
+  string store_version = 3;
+  uint64 revision = 4;
+  repeated string applied_batch_ids = 5;
+  repeated EvolutionMemoryEntry entries = 6;
+}

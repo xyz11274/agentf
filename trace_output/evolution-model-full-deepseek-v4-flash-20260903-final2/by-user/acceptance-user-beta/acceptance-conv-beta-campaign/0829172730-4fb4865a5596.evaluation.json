@@ -1,0 +1,260 @@
+{
+ "schema_version": 1,
+ "evaluation_kind": "content_aware_dialogue_evaluation",
+ "evaluator_version": "hybrid-evaluator-v2",
+ "deterministic_rule_set_version": "hybrid-fusion-rules-v1",
+ "source_analyzer_version": "loop-episode-analyzer-v1.1",
+ "source_rule_set_version": "invalid-loop-rules-v1",
+ "source_fingerprint": "0410dd66bcd9947bf67558625ef5d51c29c5f193fb426231c0ca2d14e42e9d61",
+ "source": {
+  "user_id": "acceptance-user-beta",
+  "conversation_id": "acceptance-conv-beta-campaign",
+  "dialogue_id": "0829172730-4fb4865a5596"
+ },
+ "source_trace_integrity_valid": true,
+ "metrics": {
+  "episode_count": "4",
+  "coordinator_episode_count": "2",
+  "skill_episode_count": "2",
+  "continued_episode_count": "2",
+  "terminal_episode_count": "2",
+  "unassessed_episode_count": "4",
+  "tool_call_count": "1",
+  "dispatch_batch_count": "1",
+  "workflow_status": "AGGREGATE_STATUS_SUCCEEDED",
+  "business_status": "AGGREGATE_STATUS_SUCCEEDED"
+ },
+ "assessments": [
+  {
+   "evidence": {
+    "packet_id": "packet:4830025fa4dceff6c1e677c5bd2537a23956b5c5fc484cd0b355a785c09e4b27",
+    "episode_id": "loop:coordinator:6dbb563dca0a8b8aaf3493b1430145d9976bc886c8f4bfdcd3731e68dc48dd42:1",
+    "scope": "coordinator",
+    "owner_id": "coordinator:0829172730-4fb4865a5596",
+    "activation_index": "1",
+    "round": "1",
+    "attempt_index": "1",
+    "step_index": "1",
+    "action": "continue",
+    "reason": "tool_calls_requested",
+    "continued": true,
+    "input_fingerprint": "38ca498590b162728c862dd084ecede04ce619c0faad393148e1701cf02aabec",
+    "action_fingerprint": "979957b7a72abc31ff982bc7494488714a929a468e2c344a7138e0fdb5719cf6",
+    "outcome_fingerprint": "4f2ab4067a1c56e60a99d3f7c1871940f33161c153591bcc8ef15b4c93c286c4",
+    "outcome_class_fingerprint": "0a5f59d3ede932a8e63a4fd9ed4dd1e6496ceded411b9944bfe9a02ba4e75c57",
+    "dispatch": {
+     "batch_id": "batch:0829172730-4fb4865a5596:f3b9d2416e1f",
+     "skill_names": [
+      "forge-image-gen"
+     ],
+     "force": [
+      false
+     ],
+     "batch_status": "true",
+     "workflow_status": "completed",
+     "successful_count": 1,
+     "total_count": 1
+    },
+    "source_event_ids": [
+     "python:1815342:1788024450729125:3",
+     "python:1815342:1788024450729125:4",
+     "python:1815342:1788024450729125:5",
+     "python:1815342:1788024450729125:6",
+     "python:1815342:1788024450729125:7",
+     "python:1815342:1788024450729125:8"
+    ],
+    "next_same_owner": {
+     "episode_id": "loop:coordinator:6dbb563dca0a8b8aaf3493b1430145d9976bc886c8f4bfdcd3731e68dc48dd42:2",
+     "step_index": "2",
+     "action": "stop",
+     "terminal_status": "normal",
+     "outcome_class_fingerprint": "9294a0987a4a56c13af16cb3a3213a0fd9ec003e2eba7c2ffabcffc6a78ed0b1"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNASSESSED",
+    "explanation": "未命中确定性异常规则；这不等同于已证明该步骤有效。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_NOT_REQUESTED"
+   },
+   "final_verdict": "SEMANTIC_VERDICT_UNASSESSED",
+   "decision_source": "DECISION_SOURCE_NONE",
+   "fusion_reason": "没有足够的确定性证据，也没有可用的模型判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:2cdba742341d5ebe2508def143734a94ce53f9908e7852c7cc6b87ab2913bf0b",
+    "episode_id": "loop:skill:320fc935225dadc2073e6ff0b3bbffbea044d3b8eaa9ae0d390f21c68d63b88a:1",
+    "scope": "skill",
+    "owner_id": "dispatch:0829172730-4fb4865a5596:f3b9d2416e1f:1",
+    "skill_name": "forge-image-gen",
+    "round": "1",
+    "attempt_index": "1",
+    "step_index": "1",
+    "action": "continue",
+    "reason": "tool_calls_requested",
+    "continued": true,
+    "input_fingerprint": "b35df74447fbefb2dfe71e1e1db292579d3eafca2314b8ddc6f865fc74b03fa2",
+    "action_fingerprint": "7c7c57f4dbc750e3a5051986e160dc71bde733fbfc1881b17ffa4f83cb300e52",
+    "outcome_fingerprint": "718097ac276202fb0bd5401f0ff11c17ab27a8bee8090e9f8b4df5da245e4f3d",
+    "outcome_class_fingerprint": "c72c451099748635c6855470cc84c6b74f0765548135fe4ca60a26cdfdcede18",
+    "dispatch": {},
+    "tools": [
+     {
+      "tool_call_id": "call_bf3t26dquar6sxwi84v1wq11",
+      "tool_name": "generate_image",
+      "status": "completed",
+      "retryability": "not_applicable",
+      "arguments_fingerprint": "e7b6a4ba44e7885d43266a3d9d664036a682337377fe5a81f516a1028a49cb50",
+      "result_fingerprint": "5b1414e0c94e18ee66870c7c448608c55fb131cd94ff47413bce788155ee6207",
+      "call_event_id": "python:1815680:1788024467885012:6",
+      "result_event_id": "python:1815680:1788024467885012:7"
+     }
+    ],
+    "source_event_ids": [
+     "python:1815680:1788024467885012:2",
+     "python:1815680:1788024467885012:3",
+     "python:1815680:1788024467885012:4",
+     "python:1815680:1788024467885012:5",
+     "python:1815680:1788024467885012:6",
+     "python:1815680:1788024467885012:7",
+     "python:1815680:1788024467885012:8"
+    ],
+    "next_same_owner": {
+     "episode_id": "loop:skill:320fc935225dadc2073e6ff0b3bbffbea044d3b8eaa9ae0d390f21c68d63b88a:2",
+     "step_index": "2",
+     "action": "stop",
+     "terminal_status": "completed",
+     "outcome_class_fingerprint": "86427da32bd507602fb454baa61dfdbc66ae03fed4e4351acf849b1be4c98c9a"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNASSESSED",
+    "explanation": "未命中确定性异常规则；这不等同于已证明该步骤有效。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_NOT_REQUESTED"
+   },
+   "final_verdict": "SEMANTIC_VERDICT_UNASSESSED",
+   "decision_source": "DECISION_SOURCE_NONE",
+   "fusion_reason": "没有足够的确定性证据，也没有可用的模型判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:03bc32388daae758706edf423a2f04ff7183cbc44d323319a4714f80f6b1a41c",
+    "episode_id": "loop:skill:320fc935225dadc2073e6ff0b3bbffbea044d3b8eaa9ae0d390f21c68d63b88a:2",
+    "scope": "skill",
+    "owner_id": "dispatch:0829172730-4fb4865a5596:f3b9d2416e1f:1",
+    "skill_name": "forge-image-gen",
+    "round": "2",
+    "attempt_index": "1",
+    "step_index": "2",
+    "action": "stop",
+    "reason": "final_response",
+    "terminal": true,
+    "terminal_status": "completed",
+    "input_fingerprint": "ef7c42e2dfb1cc34f80598b40c851957aba991d568521e02124eac4a6cb56c46",
+    "action_fingerprint": "c2e330fdbd669455b30b496c07a55498b513da3f2017ef057efd3c8edb540710",
+    "outcome_fingerprint": "86427da32bd507602fb454baa61dfdbc66ae03fed4e4351acf849b1be4c98c9a",
+    "outcome_class_fingerprint": "86427da32bd507602fb454baa61dfdbc66ae03fed4e4351acf849b1be4c98c9a",
+    "dispatch": {},
+    "source_event_ids": [
+     "python:1815680:1788024467885012:9",
+     "python:1815680:1788024467885012:10",
+     "python:1815680:1788024467885012:11",
+     "python:1815680:1788024467885012:12",
+     "python:1815680:1788024467885012:13"
+    ],
+    "previous_same_owner": {
+     "episode_id": "loop:skill:320fc935225dadc2073e6ff0b3bbffbea044d3b8eaa9ae0d390f21c68d63b88a:1",
+     "step_index": "1",
+     "action": "continue",
+     "outcome_class_fingerprint": "c72c451099748635c6855470cc84c6b74f0765548135fe4ca60a26cdfdcede18"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNASSESSED",
+    "explanation": "未命中确定性异常规则；这不等同于已证明该步骤有效。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_NOT_REQUESTED"
+   },
+   "final_verdict": "SEMANTIC_VERDICT_UNASSESSED",
+   "decision_source": "DECISION_SOURCE_NONE",
+   "fusion_reason": "没有足够的确定性证据，也没有可用的模型判断。"
+  },
+  {
+   "evidence": {
+    "packet_id": "packet:86eef1485155b2aff0bb4f1bf0815426095ade071e58e8c3b019a8b18bc8a4f7",
+    "episode_id": "loop:coordinator:6dbb563dca0a8b8aaf3493b1430145d9976bc886c8f4bfdcd3731e68dc48dd42:2",
+    "scope": "coordinator",
+    "owner_id": "coordinator:0829172730-4fb4865a5596",
+    "activation_index": "2",
+    "round": "2",
+    "attempt_index": "1",
+    "step_index": "2",
+    "action": "stop",
+    "reason": "final_response",
+    "terminal": true,
+    "terminal_status": "normal",
+    "input_fingerprint": "f2c65a854a8c748476a74beff7067826cd524550df0f0da86b7662b6cf5aee2c",
+    "action_fingerprint": "c2e330fdbd669455b30b496c07a55498b513da3f2017ef057efd3c8edb540710",
+    "outcome_fingerprint": "9294a0987a4a56c13af16cb3a3213a0fd9ec003e2eba7c2ffabcffc6a78ed0b1",
+    "outcome_class_fingerprint": "9294a0987a4a56c13af16cb3a3213a0fd9ec003e2eba7c2ffabcffc6a78ed0b1",
+    "dispatch": {},
+    "source_event_ids": [
+     "python:1817171:1788024533037896:3",
+     "python:1817171:1788024533037896:4",
+     "python:1817171:1788024533037896:5",
+     "python:1817171:1788024533037896:6",
+     "python:1817171:1788024533037896:7",
+     "python:1817171:1788024533037896:8"
+    ],
+    "previous_same_owner": {
+     "episode_id": "loop:coordinator:6dbb563dca0a8b8aaf3493b1430145d9976bc886c8f4bfdcd3731e68dc48dd42:1",
+     "step_index": "1",
+     "action": "continue",
+     "outcome_class_fingerprint": "0a5f59d3ede932a8e63a4fd9ed4dd1e6496ceded411b9944bfe9a02ba4e75c57"
+    }
+   },
+   "rule": {
+    "verdict": "SEMANTIC_VERDICT_UNASSESSED",
+    "explanation": "未命中确定性异常规则；这不等同于已证明该步骤有效。"
+   },
+   "model": {
+    "status": "MODEL_CALL_STATUS_NOT_REQUESTED"
+   },
+   "final_verdict": "SEMANTIC_VERDICT_UNASSESSED",
+   "decision_source": "DECISION_SOURCE_NONE",
+   "fusion_reason": "没有足够的确定性证据，也没有可用的模型判断。"
+  }
+ ],
+ "model_requested_count": "1",
+ "model_succeeded_count": "1",
+ "dialogue_assessment": {
+  "status": "MODEL_CALL_STATUS_SUCCEEDED",
+  "adapter": "openai-compatible-http",
+  "model_id": "deepseek-v4-flash",
+  "request_fingerprint": "6a4117968440bf87325b5d56e3e383b18956601ba507b7314b3e7230a23eaa98",
+  "response_fingerprint": "206ac2b53f89307af8b036519bc2da748e957274c3eb648255403290cacb1d47",
+  "task_outcome": "AGGREGATE_STATUS_UNKNOWN",
+  "confidence": 0.9,
+  "reason": "当前 selected_episode_ids 为空，未对任何 episode 进行评测；输入证据显示 C3 轮次中 forge-image-gen 成功生成 acceptance-c3-product.png 并完成三轮状态汇总，但按评测范围要求不评测未选中的 episode。",
+  "evidence_event_ids": [
+   "python:1817171:1788024533037896:7"
+  ],
+  "attempts": 1
+ },
+ "reflection": {
+  "summary": "本次输入 selected_episode_ids 为空，按要求返回空 episode_assessments 数组，未对任何 episode 做语义判定。",
+  "evidence_event_ids": [
+   "python:1817171:1788024533037896:7"
+  ]
+ },
+ "content_aware_model": true,
+ "model_scope": "dialogue",
+ "model_prompt_version": "content-aware-dialogue-v1",
+ "content_event_count": "23",
+ "redaction_count": "9"
+}
