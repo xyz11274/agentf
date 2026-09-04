@@ -1,0 +1,16 @@
+# DailyQAAssistant Python 依赖
+# 安装：bash setup.sh
+#
+# 框架 daemon worker 通过 PYTHON_PATH 环境变量找到 .venv 的 python3，
+# 因此节点脚本运行时能 import 到这里的第三方库。
+#
+# 注意：agentflow_databus 不是 pip 包，它来自项目 src/runtime/databus/clients/python，
+# 由节点通过 sys.path 注入，无需在此声明。
+#
+# .env 加载策略：python-dotenv 首选，未装时兜底走 stdlib 零依赖解析器
+#（agentflow_runtime.common.env_loader）
+
+pyyaml>=6.0
+python-dotenv>=1.0
+requests>=2.31.0
+urllib3>=2.0
