@@ -62,7 +62,7 @@ def http_get_json(url, timeout=15):
         return json.loads(resp.read().decode("utf-8"))
 
 
-def execute(args):
+def execute(args, sandbox_endpoint=None):
     args = args if isinstance(args, dict) else {}
     address = str(args.get("address", "")).strip()
     if not address:

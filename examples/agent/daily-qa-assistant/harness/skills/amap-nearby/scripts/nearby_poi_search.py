@@ -127,7 +127,7 @@ def _fmt_poi(poi):
     return item
 
 
-def execute(args):
+def execute(args, sandbox_endpoint=None):
     args = args if isinstance(args, dict) else {}
     keywords = str(args.get("keywords", "")).strip()
     types = str(args.get("types", "")).strip()

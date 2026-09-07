@@ -94,7 +94,7 @@ def _extract_image_urls(payload):
     return urls
 
 
-def execute(args):
+def execute(args, sandbox_endpoint=None):
     args = args if isinstance(args, dict) else {}
     prompt = str(args.get("prompt", "")).strip()
     if not prompt:

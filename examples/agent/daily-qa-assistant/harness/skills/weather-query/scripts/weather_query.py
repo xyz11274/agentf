@@ -102,7 +102,7 @@ def _fmt_daily(days):
     return out
 
 
-def execute(args):
+def execute(args, sandbox_endpoint=None):
     args = args if isinstance(args, dict) else {}
     location = str(args.get("location", "")).strip()
     if not location:

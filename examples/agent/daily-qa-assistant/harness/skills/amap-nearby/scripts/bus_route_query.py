@@ -99,7 +99,7 @@ def _fmt_busstop(stop):
     return item
 
 
-def execute(args):
+def execute(args, sandbox_endpoint=None):
     args = args if isinstance(args, dict) else {}
     city_input = str(args.get("city", "")).strip()
     keywords = str(args.get("keywords", "")).strip()
