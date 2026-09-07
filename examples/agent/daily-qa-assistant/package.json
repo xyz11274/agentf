@@ -1,0 +1,16 @@
+{
+  "name": "daily-qa-assistant",
+  "version": "1.0.0",
+  "description": "通用问答助手 — dispatcher → dummy_pre_skill hook → coordinator loop（天气 / 周边 POI / 公交 / 网页搜索 / 文生图）",
+  "author": "AgentFlow",
+  "workflows": [
+    "coordinator_workflow.json",
+    "dummy_pre_skill_workflow.json",
+    "skill_workflow.json"
+  ],
+  "metadata": {
+    "type": "business-agent",
+    "category": "lifestyle",
+    "tags": ["qa", "weather", "amap-poi", "bus", "web-search", "image-gen"]
+  }
+}

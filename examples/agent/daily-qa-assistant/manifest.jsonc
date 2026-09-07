@@ -1,0 +1,32 @@
+{
+  "includes": [
+    "harness/skills/**",
+    "harness/tools/**",
+    "data/**",
+    "requirements.txt",
+    "setup.sh"
+  ],
+  "excludes": [
+    ".agentfoundry",
+    ".venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".git",
+    "nodes",
+    "output",
+    "outputs",
+    "tests",
+    "workspace",
+    "assets",
+    ".env",
+    ".env.*",
+    ".mcp.json",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx"
+  ],
+  "generated_at": "2026-09-04T00:00:00.000000+00:00"
+}
