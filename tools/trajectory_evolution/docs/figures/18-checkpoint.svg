@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="795" viewBox="0 0 1100 795" role="img" aria-labelledby="title desc">
+<title id="title">持久化与模型的崩溃窗口</title><desc id="desc">纵向是发生顺序；状态与连接、进程的生命周期分开。 第 3、4 步之间中断时，模型调用结果待确认；重试可能产生额外费用。</desc>
+<defs><style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei","PingFang SC",sans-serif;}</style><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L9 4.5L0 9Z" fill="#203248"/></marker></defs>
+<rect width="1100" height="795" fill="#ffffff"/>
+<text x="36" y="52" font-size="30" font-weight="700" fill="#203248" data-max-width="1016"><tspan x="36" dy="0">持久化与模型的崩溃窗口</tspan></text>
+<text x="36" y="94" font-size="18" font-weight="400" fill="#536477" data-max-width="1016"><tspan x="36" dy="0">纵向是发生顺序；状态与连接、进程的生命周期分开。</tspan></text>
+<rect x="55" y="140" width="210" height="46" rx="12" fill="#edf4fb" stroke="#285f96" stroke-width="1.5"/>
+<text x="160" y="170" text-anchor="middle" font-size="19" fill="#285f96" font-weight="600">后台</text>
+<path d="M160 189L160 700" fill="none" stroke="#becbd7" stroke-width="1.5" stroke-dasharray="5 6"/>
+<rect x="328.3333333333333" y="140" width="210" height="46" rx="12" fill="#f4effa" stroke="#7750a3" stroke-width="1.5"/>
+<text x="433.3333333333333" y="170" text-anchor="middle" font-size="19" fill="#7750a3" font-weight="600">检查点</text>
+<path d="M433.3333333333333 189L433.3333333333333 700" fill="none" stroke="#becbd7" stroke-width="1.5" stroke-dasharray="5 6"/>
+<rect x="601.6666666666666" y="140" width="210" height="46" rx="12" fill="#edf7f1" stroke="#18755f" stroke-width="1.5"/>
+<text x="706.6666666666666" y="170" text-anchor="middle" font-size="19" fill="#18755f" font-weight="600">模型供应商</text>
+<path d="M706.6666666666666 189L706.6666666666666 700" fill="none" stroke="#becbd7" stroke-width="1.5" stroke-dasharray="5 6"/>
+<rect x="875" y="140" width="210" height="46" rx="12" fill="#fff4e8" stroke="#a65e19" stroke-width="1.5"/>
+<text x="980" y="170" text-anchor="middle" font-size="19" fill="#a65e19" font-weight="600">派生视图</text>
+<path d="M980 189L980 700" fill="none" stroke="#becbd7" stroke-width="1.5" stroke-dasharray="5 6"/>
+<text x="25" y="264" text-anchor="middle" font-size="17" fill="#536477" font-weight="600">1</text>
+<path d="M160 258L433.3333333333333 258" fill="none" stroke="#203248" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="163.99999999999997" y="217" width="265.3333333333333" height="33" rx="12" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+<text x="169.99999999999997" y="239" font-size="18" font-weight="500" fill="#203248" data-max-width="253.33333333333331"><tspan x="169.99999999999997" dy="0">保存阶段、请求指纹和次数</tspan></text>
+<text x="25" y="344" text-anchor="middle" font-size="17" fill="#536477" font-weight="600">2</text>
+<path d="M160 338L706.6666666666666 338" fill="none" stroke="#203248" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="164" y="297" width="538.6666666666666" height="33" rx="12" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+<text x="170" y="319" font-size="18" font-weight="500" fill="#203248" data-max-width="526.6666666666666"><tspan x="170" dy="0">发出模型请求</tspan></text>
+<text x="25" y="424" text-anchor="middle" font-size="17" fill="#536477" font-weight="600">3</text>
+<path d="M706.6666666666666 418L160 418" fill="none" stroke="#203248" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="164" y="377" width="538.6666666666666" height="33" rx="12" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+<text x="170" y="399" font-size="18" font-weight="500" fill="#203248" data-max-width="526.6666666666666"><tspan x="170" dy="0">返回结果（可能已计费）</tspan></text>
+<text x="25" y="504" text-anchor="middle" font-size="17" fill="#536477" font-weight="600">4</text>
+<path d="M160 498L433.3333333333333 498" fill="none" stroke="#203248" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="163.99999999999997" y="457" width="265.3333333333333" height="33" rx="12" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+<text x="169.99999999999997" y="479" font-size="18" font-weight="500" fill="#203248" data-max-width="253.33333333333331"><tspan x="169.99999999999997" dy="0">校验后提交权威状态</tspan></text>
+<text x="25" y="584" text-anchor="middle" font-size="17" fill="#536477" font-weight="600">5</text>
+<path d="M160 578L980 578" fill="none" stroke="#203248" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="244" y="537" width="652" height="33" rx="12" fill="#ffffff" stroke="none" stroke-width="1.5"/>
+<text x="250" y="559" font-size="18" font-weight="500" fill="#203248" data-max-width="640"><tspan x="250" dy="0">生成 PB / JSON / 关系视图</tspan></text>
+<text x="25" y="664" text-anchor="middle" font-size="17" fill="#536477" font-weight="600">6</text>
+<rect x="51" y="617" width="218" height="59" rx="9" fill="#f4effa" stroke="#7750a3" stroke-width="1.5"/>
+<text x="63" y="640" font-size="18" font-weight="600" fill="#7750a3" data-max-width="194"><tspan x="63" dy="0">发布新内存版本</tspan></text>
+<rect x="32" y="716" width="1036" height="51" rx="12" fill="#fff4e8" stroke="#e6c5a4" stroke-width="1.5"/>
+<text x="52" y="744" font-size="18" font-weight="400" fill="#a65e19" data-max-width="984"><tspan x="52" dy="0">第 3、4 步之间中断时，模型调用结果待确认；重试可能产生额外费用。</tspan></text>
+</svg>

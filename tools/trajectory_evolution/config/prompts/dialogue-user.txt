@@ -1,0 +1,7 @@
+请基于以下结构证据和脱敏后的具体内容，完成一次对话级评测。
+selected_episode_ids 当前共有 {{selected_episode_count}} 项；episode_assessments 数组长度必须与其完全相同。
+如果 selected_episode_ids 当前为 0 项，必须原样返回空数组 []，不得评测未选中的 episode。所有 evidence_event_ids 均必须至少包含 1 个输入中真实存在的 event_id；即使 task_outcome.status 为 unknown 也不能返回空数组。
+输入证据：
+{{evidence_json}}
+只返回一个 JSON 对象，必须严格使用以下结构：{"task_outcome":{"status":"succeeded|partial|failed|unknown","confidence":0.0,"reason":"中文","evidence_event_ids":["event-id"]},"episode_assessments":[{"episode_id":"selected-id","verdict":"useful|invalid|necessary_retry|premature_stop|uncertain","confidence":0.0,"expected_state_change":"...","observed_state_change":"...","concise_reason":"中文","evidence_event_ids":["event-id"]}],"reflection":{"summary":"中文","root_causes":[],"skill_orchestration_changes":[],"experience_injections":[],"stop_condition_changes":[],"wasted_episode_ids":[],"evidence_event_ids":["event-id"]}}。episode_assessments 必须且只能覆盖 selected_episode_ids。
+experience_injections 无合格经验时返回 []，否则每项必须为对象且仅含四个字段：{"target_scope":"从 allowed_experience_scopes 原样选择","trigger_pattern":"执行者当前能够观察到的具体适用条件","proposed_change":"该执行者可执行的一条行为经验，写明必要例外，不擅设通用重试次数或取消核验","evidence_event_ids":["直接支持本条经验的真实 event_id"]}。不要返回字符串，不使用 validated_dialogue_reflection 等来源标签代替条件；不得填写修改 Prompt 模板或源代码、虚构工具能力、跨角色控制的建议。找不到明确执行者或充分条件时省略该条，不影响其他评测结论。

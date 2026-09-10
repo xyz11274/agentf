@@ -1,0 +1,4 @@
+请评估以下单个循环步骤。只能依据证据包，不得推测未记录内容。
+证据包（结构化且已去敏）：
+{{evidence_json}}
+请只返回一个 JSON 对象，字段为：verdict、confidence、expected_state_change、observed_state_change、concise_reason、evidence_event_ids。

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "mode": "disabled",
+  "agent_id": "outfit-assistant",
+  "memory_path": "",
+  "executable": "",
+  "experience_template_file": "",
+  "rpc_timeout_ms": 300,
+  "process_timeout_ms": 2000,
+  "shadow_options": {
+    "target_scopes": ["coordinator"],
+    "max_policy_entries": 128,
+    "max_advice_items": 3,
+    "max_advice_bytes": 4096,
+    "max_query_bytes": 16384,
+    "max_memory_bytes": 16777216,
+    "max_snapshot_bytes": 262144,
+    "max_match_terms": 128,
+    "min_matched_terms": 2,
+    "stop_terms": ["任务", "用户", "工具", "执行"]
+  },
+  "options": {
+    "requested_level": "L3",
+    "fallback": "strict",
+    "allowed_users": [],
+    "allowed_conversations": [],
+    "approved_experiences": [],
+    "action_rules": [],
+    "loop_rules": [],
+    "max_context_bytes": 4096
+  }
+}

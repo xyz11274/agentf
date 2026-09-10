@@ -3,14 +3,18 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "agentflow/trajectory/prompt_templates.h"
 #include "hybrid_evaluation.pb.h"
 
 namespace agentflow::trajectory {
+
+struct AnalysisReport;
 
 namespace evaluation_proto = ::agentflow::trajectory::evaluation;
 
@@ -28,6 +32,7 @@ struct EvaluatorOptions {
   bool allow_invalid_trace = false;
   bool require_chinese_reason = true;
   std::vector<std::string> redaction_secrets;
+  std::shared_ptr<const PromptTemplates> prompts;
 };
 
 struct ModelRequest {
@@ -66,6 +71,8 @@ struct OpenAiCompatibleOptions {
   std::size_t max_request_bytes = 2U * 1024U * 1024U;
   std::uint32_t max_output_tokens = 800;
   bool disable_proxy = true;
+  // Optional background cancellation; unset preserves the original transport.
+  std::function<bool()> cancelled;
 };
 
 std::shared_ptr<ModelAdapter> make_jsonl_model_adapter(
@@ -99,6 +106,9 @@ class HybridTrajectoryEvaluator {
   EvaluationOutput evaluate_sessionlog(
       const std::filesystem::path& path) const;
 
+  // Neutral JSON entry; keep new protocol namespaces out of legacy headers.
+  EvaluationOutput evaluate_trace_json(const std::string& trace_json) const;
+
   static std::string to_json(
       const evaluation_proto::HybridEvaluationReport& report,
       bool pretty = true);
@@ -116,6 +126,12 @@ class HybridTrajectoryEvaluator {
   static std::string dialogue_system_prompt();
 
  private:
+  EvaluationOutput evaluate_content(
+      const AnalysisReport& analysis, const std::string& content,
+      bool standard_trace = false,
+      const std::string& execution_status = {},
+      const std::string& business_status = {}) const;
+
   EvaluatorOptions options_;
   std::shared_ptr<ModelAdapter> model_adapter_;
 };

@@ -1,0 +1,264 @@
+"""Version-bound background evaluation and production-path isolation."""
+import json
+import os
+from pathlib import Path
+import select
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+import urllib.request
+import urllib.error
+import uuid
+
+BUILD = Path(sys.argv.pop(1)).resolve()
+PROTOC = sys.argv.pop(1) if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else shutil.which("protoc")
+SOURCE = Path(__file__).resolve().parents[1]
+CLI = BUILD / "trajectory_evolution"
+WORK = Path(tempfile.mkdtemp(prefix="agent-evaluation-tests.", dir=BUILD))
+TOKEN = "agent-evaluation-test-user-a-token"
+TOKEN_B = "agent-evaluation-test-user-b-token"
+
+
+def write(path, value):
+    path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+
+
+class AgentEvaluationTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp(prefix="case.", dir=WORK))
+        self.env = os.environ.copy()
+        self.env.update(EVAL_USER_A_TOKEN=TOKEN, EVAL_USER_B_TOKEN=TOKEN_B)
+        task = dict(task_id="sum", group_id="sum", task_input="生成视频时缺少图片素材，计算总量20。",
+                    expected_behavior="返回20", initial_state={}, followup_inputs=["再次确认结果。"],
+                    difficulty="easy", category="data", split="train", review_status="reviewed")
+        write(self.root / "task.jsonl", task)
+        dataset = json.loads((SOURCE / "config/dataset.json").read_text())
+        dataset["sources"] = [dict(kind="golden", path=str(self.root / "task.jsonl"))]
+        write(self.root / "dataset.json", dataset)
+        result = subprocess.run([str(CLI), "dataset", "build", "--config", str(self.root / "dataset.json"),
+                                 "--output-root", str(self.root / "dataset")], capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.evaluation = dict(schema_version=1, splits=["train"], repetitions=2, parallelism=1, timeout_ms=10000,
+            require_trace=True, variants=[dict(id="host", version="configured-host", pass_env=[],
+                command=[sys.executable, "-B", str(SOURCE / "tests/agent_evaluation_host.py"), "good",
+                         str(BUILD / "libtrajectory_evolution_local.so")])],
+            checks={"*": [dict(id="total", path="/state/value", op="equals", value=20)]}, judge=dict(enabled=False))
+        write(self.root / "evaluation.json", self.evaluation)
+        write(self.root / "agent-evaluation.json", dict(schema_version=1, dataset="dataset", evaluation_config="evaluation.json",
+            agent=dict(revision="fixture-agent-v1"), min_interval_ms=0, max_jobs_per_hour=100,
+            gate=dict(min_trials=2, min_coverage=1, min_pass_rate=1, max_pass_rate_drop=0)))
+        self.config = json.loads((SOURCE / "config/service.json").read_text())
+        self.config.update(agent_id="eval-test", port=0, max_level="L3", auto_evaluate=False,
+            data_dir=str(self.root / "production"), sharing=dict(enabled=False),
+            principals=[dict(user_id="user-a", token_env="EVAL_USER_A_TOKEN"), dict(user_id="user-b", token_env="EVAL_USER_B_TOKEN")],
+            runtime_config=str(SOURCE / "config/standard-runtime.json"),
+            experience_template_file=str(SOURCE / "config/prompts/runtime-experience.txt"),
+            policy_evaluation_file="agent-evaluation.json")
+        write(self.root / "service.json", self.config)
+        self.process = None
+
+    def start(self):
+        self.process = subprocess.Popen([str(CLI), "serve", "--config", str(self.root / "service.json")],
+                                        env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        ready, _, _ = select.select([self.process.stdout], [], [], 10)
+        self.assertTrue(ready, "service did not start")
+        line = self.process.stdout.readline()
+        self.assertIn("listening=", line, line + (self.process.stderr.read() if self.process.poll() is not None else ""))
+        self.url = "http://" + line.strip().split("listening=")[1] + "/v1/invoke"
+
+    def call(self, op, token=TOKEN, **fields):
+        body = dict(operation=op, request_id=uuid.uuid4().hex, **fields)
+        request = urllib.request.Request(self.url, data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json", "Authorization": "Bearer " + token})
+        try:
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=3) as response:
+                result = json.load(response)
+        except urllib.error.HTTPError as error:
+            return json.load(error)
+        self.assertTrue(result["ok"], result)
+        return result["result"]
+
+    def wait_jobs(self, token=TOKEN):
+        deadline = time.monotonic() + 40
+        while time.monotonic() < deadline:
+            result = self.call("agent_evaluation.status", token=token)
+            if len(result["jobs"]) >= 4 and all(x["status"] not in ("pending", "running") for x in result["jobs"].values()):
+                return result
+            time.sleep(0.05)
+        self.fail("evaluation did not finish: " + json.dumps(result))
+
+    def add_memory(self):
+        folder = self.root / "production/by-user/user-a/memory"
+        folder.mkdir(parents=True, exist_ok=True)
+        source = '''schema_version: 1 store_kind: "trajectory_evolution_memory" store_version: "evolution-memory-store-v1" revision: 1
+entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
+ candidate { schema_version: 1 candidate_id: "test-candidate" generator_version: "scoped-experience-generator-v1"
+ target_type: CANDIDATE_TARGET_TYPE_EXPERIENCE_INJECTION target_scope: "agent:eval-test/actor:assistant" status: EVOLUTION_CANDIDATE_STATUS_PROPOSED
+ trigger_pattern: "生成视频时缺少图片素材" observed_problem: "素材缺失时重复执行"
+ proposed_change: "缺少图片素材时先补充素材，独立的计算任务继续。" support_user_count: 1
+ support_evidence { evidence_id: "test-evidence" source { user_id: "user-a" dialogue_id: "source-run" } }
+ }}'''
+        protoc = PROTOC
+        self.assertTrue(protoc, "pass the configured protoc executable after the build directory")
+        result = subprocess.run([protoc, "--encode=agentflow.trajectory.evaluation.EvolutionMemoryStore",
+            "-I" + str(SOURCE / "proto"), "-I" + str(Path(protoc).resolve().parent.parent / "include"),
+            "hybrid_evaluation.proto"], input=source.encode(), capture_output=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        (folder / "evolution-memory.pb").write_bytes(result.stdout)
+
+    def test_bundle_feedback_does_not_archive_each_memory(self):
+        self.add_memory()
+        self.config["auto_approve_experiences"] = True
+        write(self.root / "service.json", self.config)
+        self.evaluation["variants"][0]["command"][-2] = "bad_candidate"
+        write(self.root / "evaluation.json", self.evaluation)
+        self.start(); self.wait_jobs()
+        deadline = time.monotonic() + 5
+        path = self.root / "production/by-user/user-a/memory/evolution-memory.json"
+        memory = {}
+        while time.monotonic() < deadline:
+            if path.exists():
+                memory = json.loads(path.read_text())
+                if memory.get("entries", [{}])[0].get("evaluation_feedback"):
+                    break
+            time.sleep(.05)
+        self.assertTrue(memory.get("entries"), self.call("agent_evaluation.status"))
+        entry = memory["entries"][0]
+        self.assertEqual(entry["status"], "EVOLUTION_MEMORY_STATUS_CANDIDATE")
+        self.assertEqual(entry["evaluation_feedback"]["status"], "review_needed")
+        self.assertEqual(int(entry["evaluation_feedback"].get("negative_trial_count", 0)), 0)
+        self.assertEqual(self.call("agent_evaluation.feedback", token=TOKEN_B), {})
+
+    def test_single_memory_regression_is_archived(self):
+        self.config["auto_approve_experiences"] = True
+        write(self.root / "service.json", self.config)
+        self.evaluation["variants"][0]["command"][-2] = "memory_bad"
+        write(self.root / "evaluation.json", self.evaluation)
+        self.start(); self.wait_jobs(); self.tearDown()
+        self.add_memory(); self.start()
+        deadline = time.monotonic() + 35
+        path = self.root / "production/by-user/user-a/memory/evolution-memory.json"
+        memory = {}
+        while time.monotonic() < deadline:
+            if path.exists():
+                memory = json.loads(path.read_text())
+                if memory.get("entries") and memory["entries"][0]["status"] == "EVOLUTION_MEMORY_STATUS_ARCHIVED":
+                    break
+            time.sleep(.05)
+        self.assertEqual(memory["entries"][0]["status"], "EVOLUTION_MEMORY_STATUS_ARCHIVED", self.call("agent_evaluation.status"))
+        self.assertGreaterEqual(int(memory["entries"][0]["evaluation_feedback"]["negative_trial_count"]), 2)
+
+    def test_slow_background_does_not_wait_in_run_begin(self):
+        self.evaluation["variants"][0]["command"][-2] = "slow"
+        write(self.root / "evaluation.json", self.evaluation)
+        self.start()
+        started = time.monotonic()
+        run = self.call("run.begin", input="foreground", level="L3", capabilities=["model", "actions", "loop"])
+        self.assertLess(time.monotonic() - started, 1)
+        self.assertEqual(run["level"], "L0")
+        state = self.call("agent_evaluation.status")
+        for job_id, job in state["jobs"].items():
+            if job["status"] in ("pending", "running"):
+                self.call("agent_evaluation.cancel", job_id=job_id)
+
+    def test_single_memory_improvement_is_validated(self):
+        self.config["auto_approve_experiences"] = True
+        write(self.root / "service.json", self.config)
+        self.evaluation["variants"][0]["command"][-2] = "memory_good"
+        write(self.root / "evaluation.json", self.evaluation)
+        settings = json.loads((self.root / "agent-evaluation.json").read_text())
+        settings["gate"]["min_pass_rate"] = 0
+        write(self.root / "agent-evaluation.json", settings)
+        self.start(); self.wait_jobs(); self.tearDown()
+        self.add_memory(); self.start()
+        deadline = time.monotonic() + 35
+        path = self.root / "production/by-user/user-a/memory/evolution-memory.json"
+        memory = {}
+        while time.monotonic() < deadline:
+            if path.exists():
+                memory = json.loads(path.read_text())
+                if memory.get("entries") and memory["entries"][0]["status"] == "EVOLUTION_MEMORY_STATUS_VALIDATED":
+                    break
+            time.sleep(.05)
+        self.assertEqual(memory.get("entries", [{}])[0].get("status"), "EVOLUTION_MEMORY_STATUS_VALIDATED",
+                         self.call("agent_evaluation.status"))
+        self.assertGreaterEqual(int(memory["entries"][0]["evaluation_feedback"]["positive_trial_count"]), 2)
+
+    def tearDown(self):
+        if self.process and self.process.poll() is None:
+            self.process.terminate()
+            try:
+                self.process.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.communicate()
+
+    def test_all_levels_publish_and_reload(self):
+        self.start()
+        result = self.wait_jobs()
+        self.assertEqual(set(result["publications"]), {"L0", "L1", "L2", "L3"}, result)
+        for job in result["jobs"].values():
+            self.assertEqual(job["status"], "passed", job)
+            self.assertEqual(job["gate"]["candidate"]["host_reported_metrics"]["llm_calls"]["mean"], 2)
+        run = self.call("run.begin", input="test", level="L3", capabilities=["model", "actions", "loop"])
+        self.assertEqual(run["level"], "L3", run)
+        self.assertEqual(run["policy_gate"], "published")
+        self.assertIn("agent-version-v1:", run["agent_version_id"])
+        self.call("run.end", run_id=run["run_id"], status="completed", output="done")
+        count = len(result["jobs"])
+        self.tearDown(); self.start()
+        restored = self.wait_jobs()
+        self.assertEqual(len(restored["jobs"]), count)
+
+    def test_native_management_uses_existing_background_service(self):
+        sys.path.insert(0, str(SOURCE / "clients/python"))
+        from evolution_local import LocalEvolution
+        os.environ["EVAL_USER_A_TOKEN"] = TOKEN
+        os.environ["EVAL_USER_B_TOKEN"] = TOKEN_B
+        with self.assertRaises(RuntimeError):
+            # An invalid deployment does not create an unmanaged runtime.
+            LocalEvolution(BUILD / "libtrajectory_evolution_local.so", self.root / "missing.json", TOKEN)
+        evo = LocalEvolution(BUILD / "libtrajectory_evolution_local.so", self.root / "service.json", TOKEN)
+        try:
+            result = evo.manage("agent_evaluation.status")
+            self.assertIn("jobs", result)
+            with self.assertRaisesRegex(RuntimeError, "management_operation_required"):
+                evo.manage("run.begin", {"input": "not an administrative operation"})
+            run = evo.invoke("run.begin", {"input": "test", "level": "L0"})
+            self.assertFalse(run.get("degraded", False), run)
+            evo.invoke("run.end", {"run_id": run["run_id"], "status": "completed", "output": "done"})
+        finally:
+            evo.close()
+
+    def test_failed_candidates_leave_baseline_and_user_isolation(self):
+        self.evaluation["variants"][0]["command"][-2] = "bad_candidate"
+        write(self.root / "evaluation.json", self.evaluation)
+        self.start()
+        result = self.wait_jobs()
+        self.assertEqual(set(result["publications"]), {"L0"}, result)
+        run = self.call("run.begin", input="test", level="L3", capabilities=["model", "actions", "loop"])
+        self.assertEqual(run["level"], "L0", run)
+        denied = self.call("agent_evaluation.retry", token=TOKEN_B, job_id=next(iter(result["jobs"])))
+        self.assertFalse(denied["ok"])
+        self.assertEqual(denied["error"], "evaluation_job_not_found")
+        rejected = self.call("agent_evaluation.submit", artifact={"revision": TOKEN})
+        self.assertEqual(rejected["error"], "credential_value_rejected")
+
+    def test_wrong_loaded_version_is_rejected(self):
+        self.evaluation["variants"][0]["command"][-2] = "wrong_version"
+        write(self.root / "evaluation.json", self.evaluation)
+        self.start()
+        result = self.wait_jobs()
+        self.assertEqual(result["publications"], {}, result)
+        reports = list((self.root / "production/agent-evaluation").glob("*/attempt-*/report.json"))
+        self.assertTrue(reports)
+        for path in reports:
+            for trial in json.loads(path.read_text())["trials"]:
+                self.assertEqual(trial["error_code"], "evaluation_loaded_version_mismatch")
+
+
+if __name__ == "__main__":
+    unittest.main()

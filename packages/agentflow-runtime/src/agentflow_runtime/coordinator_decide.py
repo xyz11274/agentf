@@ -50,6 +50,8 @@ from agentflow_runtime.common.runtime_context import (
     dialogue_id as _dialogue_id,
     input as _input,
     session_id as _session_id,
+    user_id as _user_id,
+    client_id as _client_id,
     skill_artifacts as _skill_artifacts,
     skill_result as _skill_result,
     skill_success as _skill_success,
@@ -72,6 +74,12 @@ from prompts import (
     SKILL_COMPLETION_TEMPLATE,
 )
 from agentflow_runtime.round_reminder import build_round_reminder
+
+try:
+    from evolution_configured import points as _evolution
+except ImportError:
+    _evolution = None
+
 # 霰弹式收敛(2026-08-14):产物处理/parse_agent_md/e2e_response/llm_error 兜底等
 # 与 v2(coordinator_agent_loop.py)共享的纯逻辑统一收口到 coordinator_common,
 # 本模块不再各自维护重复实现(单一真相源 F4)。
@@ -504,11 +512,27 @@ def handle_run_skills_call(args: Any, databus: DataBusClient,
         }, ensure_ascii=False)
 
     # ③ Write next_skills → framework takes over scheduling
+    if _evolution is not None:
+        for _, spec, dispatch_key in accepted_specs:
+            _evolution.point({
+                "phase": "before", "kind": "custom", "name": "skill",
+                "ref": {"run": dialogue_id, "key": dispatch_key},
+                "actor_id": spec["name"],
+                "input": {"skill_name": spec["name"], "prompt": spec.get("prompt", ""),
+                          "load_skills": spec.get("load_skills", [])},
+            }, user_id=_user_id())
     next_skills_written = databus.put(
         "next_skills",
         json.dumps(next_skills_specs, ensure_ascii=False),
     )
     if not next_skills_written:
+        if _evolution is not None:
+            for _, _, dispatch_key in accepted_specs:
+                _evolution.point({
+                    "phase": "after", "kind": "custom",
+                    "ref": {"run": dialogue_id, "key": dispatch_key},
+                    "status": "failed", "output": {"error": "next_skills_write_failed"},
+                }, user_id=_user_id())
         rejected.extend({
             "name": spec["name"],
             "request_index": request_index,
@@ -927,6 +951,11 @@ def execute():
         if _dialogue_end_emitted:
             return
         _dialogue_end_emitted = True
+        if _evolution is not None:
+            _evolution.point({
+                "phase": "after", "kind": "run", "ref": {"run": dialogue_id},
+                "output": {"status": status, "response": response_text},
+            }, user_id=_user_id())
         end_ctx = ctx or AgentContext()
         try:
             hook_trigger(hook_mounts.AGENT_DIALOGUE_END, {
@@ -978,6 +1007,11 @@ def execute():
     # Dialogue start is emitted once; every event-driven re-entry is a separate
     # Coordinator activation and uses the existing coordinator.trigger event.
     if not is_completion_trigger:
+        if _evolution is not None:
+            _evolution.point({
+                "phase": "before", "kind": "run", "ref": {"run": dialogue_id},
+                "conversation_id": _client_id() or dialogue_id, "input": raw_input,
+            }, user_id=_user_id())
         hook_trigger(
             hook_mounts.AGENT_DIALOGUE_START,
             dict(activation_payload),
@@ -1294,6 +1328,17 @@ def execute():
         _decision_index += 1
         if databus.is_connected():
             databus.put("_coordinator_decision_index", str(_decision_index))
+        if _evolution is not None and not _evolution.allow_loop({
+            "ref": {"run": dialogue_id, "key": f"coordinator-loop:{_decision_index}"},
+            "loop_id": "coordinator", "state": messages[-1] if messages else {},
+        }, user_id=_user_id()):
+            response_text = append_artifacts_markdown(
+                "循环控制已停止重复协调，基于已有结果输出。", completed_skill_artifacts,
+            )
+            _emit_dialogue_end_once("loop_control_stop", response_text)
+            print(json.dumps({"response": response_text, "status": "loop_control_stop"}, ensure_ascii=False))
+            put_e2e_response(databus, response_text)
+            return
         _trace_indices = {
             "activation_index": current_round,
             "decision_index": _decision_index,

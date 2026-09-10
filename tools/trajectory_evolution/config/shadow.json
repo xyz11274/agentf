@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "mode": "disabled",
+  "agent_id": "outfit-assistant",
+  "memory_path": "",
+  "executable": "",
+  "query_scope": "coordinator",
+  "rpc_timeout_ms": 300,
+  "process_timeout_ms": 2000,
+  "options": {
+    "target_scopes": ["coordinator"],
+    "max_policy_entries": 128,
+    "max_advice_items": 3,
+    "max_advice_bytes": 4096,
+    "max_query_bytes": 16384,
+    "max_memory_bytes": 16777216,
+    "max_snapshot_bytes": 262144,
+    "max_match_terms": 128,
+    "min_matched_terms": 2,
+    "stop_terms": ["需要", "进行", "任务", "用户", "情况", "相关", "处理", "可以", "如果", "之后", "这个"]
+  }
+}

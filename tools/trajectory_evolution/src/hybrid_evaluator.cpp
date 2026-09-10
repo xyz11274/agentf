@@ -1,4 +1,5 @@
 #include "agentflow/trajectory/hybrid_evaluator.h"
+#include "trajectory_evolution/trace.h"
 
 #include <algorithm>
 #include <array>
@@ -704,18 +705,18 @@ bool should_select_model(
       || packet.terminal_status() == "max_rounds_reached";
 }
 
-ModelRequest make_model_request(const ep::EpisodeEvidencePacket& packet) {
+ModelRequest make_model_request(
+    const ep::EpisodeEvidencePacket& packet,
+    const PromptTemplates& prompts) {
   ModelRequest request;
   request.packet_id = packet.packet_id();
-  request.system_prompt = HybridTrajectoryEvaluator::system_prompt();
+  request.system_prompt = prompts.episode_system;
   request.allowed_event_ids = allowed_event_ids(packet);
-  request.user_prompt =
-      "请评估以下单个循环步骤。只能依据证据包，不得推测未记录内容。\n"
-      "证据包（结构化且已去敏）：\n"
-      + protobuf_json(packet, false)
-      + "\n请只返回一个 JSON 对象，字段为：verdict、confidence、"
-        "expected_state_change、observed_state_change、concise_reason、"
-        "evidence_event_ids。";
+  request.user_prompt = render_prompt_template(
+      "episode_user",
+      prompts.episode_user,
+      {{"evidence_json", protobuf_json(packet, false)}},
+      std::numeric_limits<std::size_t>::max());
   return request;
 }
 
@@ -955,10 +956,20 @@ HybridTrajectoryEvaluator::HybridTrajectoryEvaluator(
   if(options_.max_file_bytes == 0 || options_.max_model_calls > kMaxEpisodes) {
     throw EvaluationError("invalid evaluator resource limits");
   }
+  if(options_.model_selection != ModelSelection::none
+     && options_.prompts == nullptr) {
+    options_.prompts = load_default_prompt_templates();
+  }
 }
 
 EvaluationOutput HybridTrajectoryEvaluator::evaluate_file(
     const std::filesystem::path& path) const {
+  if(::trajectory::evolution::is_trace_path(path)) {
+    ::trajectory::evolution::TraceLimits limits;
+    limits.max_bytes = options_.max_file_bytes;
+    return evaluate_trace_json(::trajectory::evolution::to_json(
+        ::trajectory::evolution::read_trace(path, limits), false));
+  }
   const std::string input = read_bounded_file(path, options_.max_file_bytes);
   return evaluate_json(input);
 }
@@ -1204,7 +1215,11 @@ EvaluationOutput HybridTrajectoryEvaluator::evaluate_json(
     const bool selected = should_select_model(
         options_.model_selection, assessment->evidence(), assessment->rule());
     if(selected) {
-      ModelRequest request = make_model_request(assessment->evidence());
+      if(options_.prompts == nullptr) {
+        throw EvaluationError("model evaluation requires prompt templates");
+      }
+      ModelRequest request = make_model_request(
+          assessment->evidence(), *options_.prompts);
       const bool request_too_large =
           request.system_prompt.size() > kMaxModelRequestBytes
           || request.user_prompt.size()
@@ -1355,15 +1370,7 @@ void HybridTrajectoryEvaluator::write_model_requests_jsonl(
 }
 
 std::string HybridTrajectoryEvaluator::system_prompt() {
-  return
-      "你是 AgentFlow 轨迹评测器。"
-      "判断一个循环步骤在当时是否产生必要进展。"
-      "确定性规则已经独立运行，你只补充任务语义，不得修改证据。"
-      "只能引用证据包内的 event_id；不得编造事实，"
-      "不得输出密钥、Token、原始 Prompt、"
-      "Tool 参数或 Tool 结果。verdict 只能是 useful、invalid、necessary_retry、"
-      "premature_stop、uncertain。concise_reason 必须使用简体中文。"
-      "输出必须是单个 JSON 对象，不要 Markdown，不要额外文字。";
+  return load_default_prompt_templates()->episode_system;
 }
 
 std::string to_string(ModelSelection selection) {

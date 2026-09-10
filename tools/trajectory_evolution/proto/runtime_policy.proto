@@ -1,0 +1,134 @@
+syntax = "proto3";
+package trajectory.evolution.v1;
+
+import "shadow_policy.proto";
+import "trajectory_trace.proto";
+import "google/protobuf/struct.proto";
+
+// Explicit authorization, not automatic promotion of candidate memories.
+message ExperienceApproval {
+  string memory_id = 1;
+  string content_revision = 2;
+}
+// A version-local rewrite; the source memory and its eligibility stay unchanged.
+message ExperienceOverride {
+  ExperienceApproval source_experience = 1;
+  string content = 2;
+}
+message ActionRule {
+  string rule_id = 1;
+  string target_scope = 2;
+  string operation = 3;
+  bool deny = 4;
+  repeated string required_arguments = 5;
+  string reason = 6;
+  // Generated rules require this approved experience to match the current query.
+  ExperienceApproval source_experience = 7;
+}
+message LoopRule {
+  string rule_id = 1;
+  string target_scope = 2;
+  uint32 max_iterations = 3;
+  uint32 max_no_progress = 4;
+  // stop | replan; a replan is a bounded, request-only context addition.
+  string no_progress_decision = 5;
+  uint32 max_replans = 6;
+  string replan_context = 7;
+  string reason = 8;
+  ExperienceApproval source_experience = 9;
+}
+message RuntimeOptions {
+  Level requested_level = 1;
+  // Host declarations are checked here; they are NOT runtime probe evidence.
+  repeated string host_capabilities = 2;
+  string fallback = 3; // strict | downgrade
+  repeated string allowed_users = 4;
+  repeated string allowed_conversations = 5;
+  repeated ExperienceApproval approved_experiences = 6;
+  repeated ActionRule action_rules = 7;
+  repeated LoopRule loop_rules = 8;
+  string experience_template = 9; // exactly one {{experience}} placeholder
+  uint32 max_context_bytes = 10;
+  // Optional framework-neutral binding. Empty preserves the original messages
+  // verification contract. These fields are part of the immutable policy hash.
+  string request_context_pointer = 11; // RFC 6901 pointer, e.g. /system
+  string request_context_mode = 12; // text | system_message
+  repeated ExperienceOverride experience_overrides = 13;
+}
+message RuntimePolicy {
+  uint32 schema_version = 1;
+  string policy_id = 2;
+  ShadowPolicySnapshot snapshot = 3;
+  RuntimeOptions options = 4;
+  Level effective_level = 5;
+}
+message RuntimeAction {
+  string action_id = 1;
+  string operation = 2;
+  google.protobuf.Struct arguments = 3;
+}
+// The caller persists this per execution instance, never per skill name.
+message LoopProgress {
+  string execution_id = 1;
+  uint64 iteration = 2;
+  string fingerprint = 3;
+  uint32 no_progress = 4;
+  uint32 replans = 5;
+  string decision = 6;
+  string rule_id = 7;
+  string reason = 8;
+  string policy_id = 9;
+  string target_scope = 10;
+}
+message RuntimeQuery {
+  AdviceQuery advice_query = 1;
+  string boundary = 2; // llm | actions | loop
+  string execution_id = 3;
+  repeated RuntimeAction actions = 4;
+  uint64 iteration = 5;
+  string state_fingerprint = 6;
+  LoopProgress previous = 7;
+  bool pending_actions = 8;
+}
+message ActionDecision {
+  string action_id = 1;
+  string decision = 2; // allow | reject
+  string rule_id = 3;
+  string reason = 4;
+}
+message RuntimeDecision {
+  string policy_id = 1;
+  RuntimeQuery query = 2;
+  string status = 3; // ready | no_change
+  string context = 4;
+  repeated ExperienceApproval experiences = 5;
+  repeated ActionDecision actions = 6;
+  LoopProgress progress = 7;
+}
+message RuntimeObservation {
+  // The final serialized request, not the mutable prompt history.
+  google.protobuf.Struct request = 1;
+  bool transport_allowed = 2;
+  string call_id = 3;
+  repeated string executed_action_ids = 4;
+  repeated string skipped_action_ids = 5;
+  string loop_decision = 6;
+}
+message RuntimeReceipt {
+  Identity identity = 1;
+  Application application = 2;
+  string execution_id = 3;
+  string boundary = 4;
+  string call_id = 5;
+  repeated string action_ids = 6;
+  repeated ExperienceApproval experiences = 7;
+}
+message RuntimeCommand {
+  string memory_path = 1;
+  Identity identity = 2;
+  ShadowOptions shadow_options = 3;
+  RuntimeOptions options = 4;
+  RuntimePolicy policy = 5;
+  RuntimeQuery query = 6;
+  RuntimeObservation observation = 7;
+}

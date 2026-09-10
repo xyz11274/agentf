@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.16)
+project(standalone_evolution_consumer LANGUAGES CXX)
+find_package(TrajectoryEvolution 0.1 CONFIG REQUIRED)
+add_executable(evolution_consumer main.cpp)
+target_compile_features(evolution_consumer PRIVATE cxx_std_17)
+target_link_libraries(evolution_consumer PRIVATE TrajectoryEvolution::core)

@@ -1,0 +1,111 @@
+syntax = "proto3";
+
+package trajectory.evolution.v1;
+
+import "trajectory_trace.proto";
+
+// All limits are supplied by configuration. This protocol cannot enable Active.
+message ShadowOptions {
+  repeated string target_scopes = 1;
+  uint32 max_policy_entries = 2;
+  uint32 max_advice_items = 3;
+  uint32 max_advice_bytes = 4;
+  uint32 max_query_bytes = 5;
+  uint32 max_memory_bytes = 6;
+  uint32 max_snapshot_bytes = 7;
+  uint32 max_match_terms = 8;
+  uint32 min_matched_terms = 9;
+  repeated string stop_terms = 10;
+}
+
+message ShadowExperience {
+  string memory_id = 1;
+  string content_revision = 2;
+  string target_scope = 3;
+  string trigger_pattern = 4;
+  string observed_problem = 5;
+  string content = 6;
+  repeated string source_candidate_ids = 7;
+  repeated string match_terms = 8;
+  // Set only by the trusted application publication path, never by a trace.
+  bool application_shared = 9;
+}
+
+// Public projection only: no source user, conversation, evidence or review data.
+message PublishedExperience {
+  string memory_id = 1;
+  string target_scope = 2;
+  string trigger_pattern = 3;
+  string content = 4;
+}
+
+message SharedExperienceStore {
+  string application_id = 1;
+  uint64 revision = 2;
+  repeated PublishedExperience experiences = 3;
+  // Present only in a user-specific runtime view, never in the public store.
+  string user_id = 4;
+  repeated CrossMemoryRelation relations = 5;
+}
+
+message CrossMemoryRelation {
+  string private_memory_id = 1;
+  string private_content_revision = 2;
+  string shared_memory_id = 3;
+  string shared_content_revision = 4;
+  // duplicate | related | conflict | independent; missing means unreviewed.
+  string relation = 5;
+}
+
+message ShadowPolicySnapshot {
+  uint32 schema_version = 1;
+  string snapshot_id = 2;
+  Identity identity = 3;
+  uint64 memory_revision = 4;
+  ShadowOptions options = 5;
+  repeated ShadowExperience experiences = 6;
+  // Aggregate counts only; excluded users' IDs/content never leave the compiler.
+  map<string, uint64> excluded_counts = 7;
+  uint64 shared_revision = 8;
+  repeated CrossMemoryRelation cross_relations = 9;
+}
+
+message AdviceQuery {
+  Identity identity = 1;
+  string query_id = 2;
+  string decision_id = 3;
+  string target_scope = 4;
+  string task = 5;
+  string state = 6;
+}
+
+message ShadowAdvice {
+  ShadowExperience experience = 1;
+  repeated string matched_terms = 2;
+  string reason = 3;
+}
+
+message AdviceResult {
+  uint32 schema_version = 1;
+  Identity identity = 2;
+  string query_id = 3;
+  string decision_id = 4;
+  string snapshot_id = 5;
+  string input_fingerprint = 6;
+  // matched | no_match | error; this is NOT the task/business outcome.
+  string status = 7;
+  string reason = 8;
+  string mode = 9;
+  // Always not_applied. A query cannot manufacture an injection receipt.
+  string application_status = 10;
+  repeated ShadowAdvice advice = 11;
+}
+
+// CLI transport within the existing executable; content goes over stdin, not argv.
+message ShadowCommand {
+  string memory_path = 1;
+  Identity identity = 2;
+  ShadowOptions options = 3;
+  ShadowPolicySnapshot snapshot = 4;
+  AdviceQuery query = 5;
+}

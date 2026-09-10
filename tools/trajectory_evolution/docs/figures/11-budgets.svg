@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="569" viewBox="0 0 1100 569" role="img" aria-labelledby="title desc">
+<title id="title">模型调用与预算分层</title><desc id="desc">各行列出对应对象、处理方式与适用条件。 逻辑调用、HTTP 尝试和业务模型调用分别计数。</desc>
+<defs><style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei","PingFang SC",sans-serif;}</style><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L9 4.5L0 9Z" fill="#203248"/></marker></defs>
+<rect width="1100" height="569" fill="#ffffff"/>
+<text x="36" y="52" font-size="30" font-weight="700" fill="#203248" data-max-width="1016"><tspan x="36" dy="0">模型调用与预算分层</tspan></text>
+<text x="36" y="94" font-size="18" font-weight="400" fill="#536477" data-max-width="1016"><tspan x="36" dy="0">各行列出对应对象、处理方式与适用条件。</tspan></text>
+<rect x="40" y="140" width="1020" height="53" rx="10" fill="#203248" stroke="none" stroke-width="1.5"/>
+<text x="54" y="170" font-size="20" font-weight="600" fill="#ffffff" data-max-width="312"><tspan x="54" dy="0">工作</tspan></text>
+<text x="394" y="170" font-size="20" font-weight="600" fill="#ffffff" data-max-width="312"><tspan x="394" dy="0">预算归属</tspan></text>
+<text x="734" y="170" font-size="20" font-weight="600" fill="#ffffff" data-max-width="312"><tspan x="734" dy="0">主要输入</tspan></text>
+<rect x="40" y="193" width="1020" height="55" rx="0" fill="#edf4fb" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="54" y="224" font-size="19" font-weight="600" fill="#285f96" data-max-width="312"><tspan x="54" dy="0">单轨迹评测</tspan></text>
+<text x="394" y="224" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="394" dy="0">私人批次总预算</tspan></text>
+<path d="M380 201L380 240" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="734" y="224" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="734" dy="0">具体活动与内容</tspan></text>
+<path d="M720 201L720 240" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<rect x="40" y="248" width="1020" height="55" rx="0" fill="#ffffff" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="54" y="279" font-size="19" font-weight="600" fill="#285f96" data-max-width="312"><tspan x="54" dy="0">元反思</tspan></text>
+<text x="394" y="279" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="394" dy="0">同一私人批次预算</tspan></text>
+<path d="M380 256L380 295" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="734" y="279" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="734" dy="0">Seed / 证据与候选</tspan></text>
+<path d="M720 256L720 295" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<rect x="40" y="303" width="1020" height="55" rx="0" fill="#edf4fb" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="54" y="334" font-size="19" font-weight="600" fill="#285f96" data-max-width="312"><tspan x="54" dy="0">私库语义整理</tspan></text>
+<text x="394" y="334" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="394" dy="0">同一私人批次预算</tspan></text>
+<path d="M380 311L380 350" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="734" y="334" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="734" dy="0">兼容短名单</tspan></text>
+<path d="M720 311L720 350" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<rect x="40" y="358" width="1020" height="55" rx="0" fill="#ffffff" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="54" y="389" font-size="19" font-weight="600" fill="#285f96" data-max-width="312"><tspan x="54" dy="0">公共提炼与关系</tspan></text>
+<text x="394" y="389" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="394" dy="0">公共每周期独立预算</tspan></text>
+<path d="M380 366L380 405" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="734" y="389" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="734" dy="0">合格经验与同 scope 公共项</tspan></text>
+<path d="M720 366L720 405" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<rect x="40" y="413" width="1020" height="55" rx="0" fill="#edf4fb" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="54" y="444" font-size="19" font-weight="600" fill="#285f96" data-max-width="312"><tspan x="54" dy="0">任务基线验收</tspan></text>
+<text x="394" y="444" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="394" dy="0">任务评测预算</tspan></text>
+<path d="M380 421L380 460" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="734" y="444" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="734" dy="0">受信试验结果与判分标准</tspan></text>
+<path d="M720 421L720 460" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<rect x="32" y="490" width="1036" height="51" rx="12" fill="#fff4e8" stroke="#e6c5a4" stroke-width="1.5"/>
+<text x="52" y="518" font-size="18" font-weight="400" fill="#a65e19" data-max-width="984"><tspan x="52" dy="0">逻辑调用、HTTP 尝试和业务模型调用分别计数。</tspan></text>
+</svg>

@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "splits": ["train"],
+  "repetitions": 1,
+  "parallelism": 2,
+  "timeout_ms": 1800000,
+  "require_trace": true,
+  "variants": [{"id": "baseline", "version": "agentplan-example-v1", "command": ["python3", "-B", "{config_dir}/agentplan-host.py"], "pass_env": ["OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL", "ARK_IMAGE_MODEL", "AF_EVAL_API_TIMEOUT_SECONDS"]}],
+  "checks": {
+    "parallel-report": [
+      {"id": "total", "path": "/artifacts/report.json/json/total", "op": "equals", "value": 20},
+      {"id": "missing", "path": "/artifacts/report.json/json/missing", "op": "contains", "value": "north"}
+    ],
+    "real-image": [
+      {"id": "downloaded", "path": "/artifacts/poster.png/size_bytes", "op": "at_least", "value": 100},
+      {"id": "decoded", "path": "/state/image/decoded", "op": "equals", "value": true},
+      {"id": "width", "path": "/artifacts/poster.png/width", "op": "at_least", "value": 1024},
+      {"id": "height", "path": "/artifacts/poster.png/height", "op": "at_least", "value": 1024}
+    ]
+  },
+  "judge": {"enabled": true, "runtime_config": "../../config/evaluation-agentplan-runtime.json", "prompt": "../../config/prompts/task-judge-system.txt", "max_model_calls": 10, "max_input_bytes": 262144}
+}

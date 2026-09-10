@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="869" viewBox="0 0 1100 869" role="img" aria-labelledby="title desc">
+<title id="title">data_dir：权威源与派生视图</title><desc id="desc">缩进表示归属；右侧解释每个对象承担的责任。 同名 evolution-memory.pb 的私有/公共 schema 不同。</desc>
+<defs><style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei","PingFang SC",sans-serif;}</style><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L9 4.5L0 9Z" fill="#203248"/></marker></defs>
+<rect width="1100" height="869" fill="#ffffff"/>
+<text x="36" y="52" font-size="30" font-weight="700" fill="#203248" data-max-width="1016"><tspan x="36" dy="0">data_dir：权威源与派生视图</tspan></text>
+<text x="36" y="94" font-size="18" font-weight="400" fill="#536477" data-max-width="1016"><tspan x="36" dy="0">缩进表示归属；右侧解释每个对象承担的责任。</tspan></text>
+<rect x="32" y="140" width="1036" height="48" rx="12" fill="#203248" stroke="none" stroke-width="1.5"/>
+<text x="52" y="171" font-size="20" font-weight="600" fill="#ffffff" data-max-width="458"><tspan x="52" dy="0">对象 / 目录</tspan></text>
+<text x="540" y="171" font-size="20" font-weight="600" fill="#ffffff" data-max-width="490"><tspan x="540" dy="0">归属与职责</tspan></text>
+<rect x="52" y="202" width="470" height="52" rx="9" fill="#edf4fb" stroke="#285f96" stroke-width="1.5"/>
+<text x="64" y="231" font-size="19" font-weight="600" fill="#285f96" data-max-width="446"><tspan x="64" dy="0">data_dir/</tspan></text>
+<text x="540" y="231" font-size="19" font-weight="400" fill="#203248" data-max-width="490"><tspan x="540" dy="0">一个受管工作区，一个写入所有者</tspan></text>
+<path d="M62 256L62 292" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<path d="M62 292L76 292" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<rect x="76" y="266" width="446" height="52" rx="9" fill="#edf7f1" stroke="#18755f" stroke-width="1.5"/>
+<text x="88" y="295" font-size="19" font-weight="600" fill="#18755f" data-max-width="422"><tspan x="88" dy="0">runs/</tspan></text>
+<text x="540" y="295" font-size="19" font-weight="400" fill="#203248" data-max-width="490"><tspan x="540" dy="0">HTTP 状态、幂等与阶段</tspan></text>
+<path d="M62 320L62 356" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<path d="M62 356L76 356" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<rect x="76" y="330" width="446" height="52" rx="9" fill="#edf7f1" stroke="#18755f" stroke-width="1.5"/>
+<text x="88" y="359" font-size="19" font-weight="600" fill="#18755f" data-max-width="422"><tspan x="88" dy="0">learning/jobs/</tspan></text>
+<text x="540" y="359" font-size="19" font-weight="400" fill="#203248" data-max-width="490"><tspan x="540" dy="0">冻结批次与检查点</tspan></text>
+<path d="M62 384L62 420" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<path d="M62 420L76 420" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<rect x="76" y="394" width="446" height="52" rx="9" fill="#edf7f1" stroke="#18755f" stroke-width="1.5"/>
+<text x="88" y="423" font-size="19" font-weight="600" fill="#18755f" data-max-width="422"><tspan x="88" dy="0">learning/shared-memory.json</tspan></text>
+<text x="540" y="423" font-size="19" font-weight="400" fill="#203248" data-max-width="490"><tspan x="540" dy="0">公共权威管理账本，受限访问</tspan></text>
+<path d="M62 448L62 484" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<path d="M62 484L76 484" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<rect x="76" y="458" width="446" height="52" rx="9" fill="#edf7f1" stroke="#18755f" stroke-width="1.5"/>
+<text x="88" y="487" font-size="19" font-weight="600" fill="#18755f" data-max-width="422"><tspan x="88" dy="0">memory/</tspan></text>
+<text x="540" y="487" font-size="19" font-weight="400" fill="#203248" data-max-width="490"><tspan x="540" dy="0">可用公共 PB/JSON 投影</tspan></text>
+<path d="M62 512L62 548" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<path d="M62 548L76 548" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<rect x="76" y="522" width="446" height="52" rx="9" fill="#edf7f1" stroke="#18755f" stroke-width="1.5"/>
+<text x="88" y="551" font-size="19" font-weight="600" fill="#18755f" data-max-width="422"><tspan x="88" dy="0">by-user/&lt;user&gt;/</tspan></text>
+<text x="540" y="551" font-size="19" font-weight="400" fill="#203248" data-max-width="490"><tspan x="540" dy="0">用户隔离</tspan></text>
+<path d="M86 576L86 612" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<path d="M86 612L100 612" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<rect x="100" y="586" width="422" height="52" rx="9" fill="#f4effa" stroke="#7750a3" stroke-width="1.5"/>
+<text x="112" y="615" font-size="19" font-weight="600" fill="#7750a3" data-max-width="398"><tspan x="112" dy="0">traces/ · quarantine/</tspan></text>
+<text x="540" y="615" font-size="19" font-weight="400" fill="#203248" data-max-width="490"><tspan x="540" dy="0">完整轨迹与不完整记录分开</tspan></text>
+<path d="M86 640L86 676" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<path d="M86 676L100 676" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<rect x="100" y="650" width="422" height="52" rx="9" fill="#f4effa" stroke="#7750a3" stroke-width="1.5"/>
+<text x="112" y="679" font-size="19" font-weight="600" fill="#7750a3" data-max-width="398"><tspan x="112" dy="0">evaluation/ · batches/</tspan></text>
+<text x="540" y="679" font-size="19" font-weight="400" fill="#203248" data-max-width="490"><tspan x="540" dy="0">单轨迹结论与批次决策</tspan></text>
+<path d="M86 704L86 740" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<path d="M86 740L100 740" fill="none" stroke="#b1c0ce" stroke-width="1.5"/>
+<rect x="100" y="714" width="422" height="52" rx="9" fill="#f4effa" stroke="#7750a3" stroke-width="1.5"/>
+<text x="112" y="743" font-size="19" font-weight="600" fill="#7750a3" data-max-width="398"><tspan x="112" dy="0">memory/</tspan></text>
+<text x="540" y="743" font-size="19" font-weight="400" fill="#203248" data-max-width="490"><tspan x="540" dy="0">私库 PB、JSON 镜像和用户关系</tspan></text>
+<rect x="32" y="790" width="1036" height="51" rx="12" fill="#fff4e8" stroke="#e6c5a4" stroke-width="1.5"/>
+<text x="52" y="818" font-size="18" font-weight="400" fill="#a65e19" data-max-width="984"><tspan x="52" dy="0">同名 evolution-memory.pb 的私有/公共 schema 不同。</tspan></text>
+</svg>

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "dataset": "./reviewed-dataset",
+  "evaluation_config": "evaluation.json",
+  "agent": {"revision": "replace-with-your-agent-code-model-tools-revision"},
+  "min_interval_ms": 60000,
+  "max_jobs": 256,
+  "max_jobs_per_hour": 12,
+  "gate": {
+    "min_trials": 2,
+    "memory_min_pairs": 2,
+    "min_coverage": 1.0,
+    "min_pass_rate": 0.8,
+    "max_pass_rate_drop": 0.0
+  }
+}

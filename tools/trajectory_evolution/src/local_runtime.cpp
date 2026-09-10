@@ -1,0 +1,579 @@
+#include "trajectory_evolution/local_runtime.h"
+#include "trajectory_evolution/evolution.h"
+#include "boundary_runtime.h"
+#include "instrumentation.h"
+#include "local_support.h"
+#include "agent_evaluation_support.h"
+
+#include <atomic>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <mutex>
+#include <set>
+#include <thread>
+#include <unistd.h>
+#include <openssl/rand.h>
+#include <openssl/sha.h>
+
+namespace trajectory::evolution {
+namespace {
+using namespace integration;
+using PrivateMemory = agentflow::trajectory::evaluation::EvolutionMemoryStore;
+struct Memory {
+  PrivateMemory private_memory;
+  v1::SharedExperienceStore shared;
+  Json publications;
+  explicit Memory(const Json& env) : private_memory(proto<PrivateMemory>(env["memory"])),
+      shared(env.has("shared_memory") ? proto<v1::SharedExperienceStore>(env["shared_memory"]) : v1::SharedExperienceStore{}),
+      publications(env["published_versions"]) {}
+};
+std::string hash(const std::string& value) {
+  unsigned char bytes[SHA256_DIGEST_LENGTH];
+  require(SHA256(reinterpret_cast<const unsigned char*>(value.data()), value.size(), bytes), "hash_failed", 500);
+  std::string result; constexpr char hex[] = "0123456789abcdef";
+  for(auto byte : bytes) { result += hex[byte >> 4]; result += hex[byte & 15]; } return result;
+}
+std::string component(const std::string& value) {
+  std::string result; constexpr char hex[] = "0123456789ABCDEF";
+  for(unsigned char c : value) {
+    if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.') result += c;
+    else { result += '%'; result += hex[c >> 4]; result += hex[c & 15]; }
+  } return result;
+}
+std::string timestamp() {
+  return std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count());
+}
+std::size_t monotonic_ms() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+std::shared_ptr<IntegrationService> backend(const std::filesystem::path& path) {
+  // Only startup uses this registry. Multiple users share one background writer.
+  static std::mutex gate;
+  static std::map<std::string, std::weak_ptr<IntegrationService>> services;
+  std::lock_guard<std::mutex> lock(gate);
+  auto& weak = services[std::filesystem::absolute(path).lexically_normal().string()];
+  auto service = weak.lock();
+  if(!service) { service = std::make_shared<IntegrationService>(path); weak = service; }
+  return service;
+}
+bool isolated_trial() {
+  return std::getenv("TRAJECTORY_EVOLUTION_TRIAL_CONFIG") && std::getenv("TRAJECTORY_EVOLUTION_TRIAL_TOKEN");
+}
+enum Phase { free_slot, active, closed, writing, persisted };
+struct CaptureLosses {
+  const std::string run_id;
+  std::atomic<std::size_t> count{0};
+  explicit CaptureLosses(std::string id) : run_id(std::move(id)) {}
+};
+struct Slot {
+  std::timed_mutex gate;
+  std::atomic<int> phase{free_slot};
+  std::atomic<std::size_t> inflight{0};
+  std::shared_ptr<CaptureLosses> losses;
+  std::atomic<std::size_t> last_activity_ms{0};
+  std::string id, begin_id, begin_fingerprint, end_fingerprint, reason;
+  std::size_t epoch = 0, reserved = 0;
+  Json state, initial, start_response, end_response;
+  std::unique_ptr<PolicyRuntime> policy;
+  bool initial_saved = false;
+  std::atomic<bool> capture_complete{false};
+  std::atomic<unsigned> evaluation{0};
+};
+struct InFlight {
+  Slot& slot;
+  explicit InFlight(Slot& s) : slot(s) { ++slot.inflight; }
+  ~InFlight() { --slot.inflight; }
+};
+}
+
+struct LocalRuntime::Impl {
+  LocalRuntimeOptions options;
+  std::shared_ptr<IntegrationService> service;
+  std::string token, user, instance;
+  Json config;
+  std::shared_ptr<const Memory> memory;
+  std::vector<std::shared_ptr<const Memory>> retired_memories;
+  std::unique_ptr<Slot[]> slots;
+  std::timed_mutex begins;
+  std::mutex maintenance, learning;
+  std::atomic<bool> stopping{false};
+  std::atomic<bool> enabled{true};
+  std::atomic<std::size_t> epoch{0};
+  const pid_t owner_pid = ::getpid();
+  std::atomic<std::size_t> calls{0}, degraded{0}, buffer_bytes{0}, published{0}, persistence_errors{0}, learning_errors{0};
+  std::thread writer, learner;
+  std::size_t checkpointed = 0, generation = 0;
+  std::uint64_t memory_version = 0, status_version = 0;
+  std::atomic<std::size_t> memory_refreshes{0};
+
+  Impl(const std::filesystem::path& path, std::string bearer, LocalRuntimeOptions limits)
+      : options(limits), service(backend(isolated_trial() ? std::filesystem::path(std::getenv("TRAJECTORY_EVOLUTION_TRIAL_CONFIG")) : path)),
+        token(isolated_trial() ? std::getenv("TRAJECTORY_EVOLUTION_TRIAL_TOKEN") : std::move(bearer)) {
+    require(options.max_request_bytes >= 1024 && options.max_request_bytes <= 1048576
+        && options.max_buffer_bytes >= 1048576 && options.max_buffer_bytes <= 1073741824
+        && options.max_pending_runs > 0 && options.max_pending_runs <= 1024
+        && options.poll_interval_ms >= 1 && options.poll_interval_ms <= 1000
+        && options.contention_budget_us <= 10000, "local_limits_invalid");
+    const auto env = Json::parse(service->local_environment(token));
+    config = env["config"]; user = env.str("user_id");
+    options.max_request_bytes = std::min(options.max_request_bytes, config.num("max_request_bytes", 1048576));
+    options.max_pending_runs = std::min(options.max_pending_runs, config.num("max_active_runs", 128));
+    memory = std::make_shared<const Memory>(env);
+    memory_version = env.num("memory_version", 0); ++memory_refreshes;
+    unsigned char salt[32]; require(RAND_bytes(salt, sizeof(salt)) == 1, "random_unavailable");
+    instance = hash(std::string(reinterpret_cast<char*>(salt), sizeof(salt))).substr(0, 32);
+    slots = std::make_unique<Slot[]>(options.max_pending_runs);
+  }
+  bool reserve(std::size_t bytes) {
+    auto current = buffer_bytes.load();
+    for(unsigned i = 0; i < 4 && current + bytes <= options.max_buffer_bytes; ++i)
+      if(buffer_bytes.compare_exchange_weak(current, current + bytes)) return true;
+    return false;
+  }
+  std::string scope(const std::string& name) const { return "agent:" + component(config.str("agent_id")) + "/actor:" + component(name); }
+  IntegrationResponse fallback(const Json& request, const std::string& reason, Slot* slot = nullptr) {
+    ++degraded;
+    if(slot) { ++slot->losses->count; slot->capture_complete = false; if(slot->reason.empty()) slot->reason = reason; }
+    const auto op = request.str("operation"), id = hash(instance + request.str("request_id"));
+    Json result{{"degraded", true}, {"reason", reason}, {"capture_complete", false}, {"policy_applied", false}};
+    if(op == "run.begin") result["run_id"] = id.substr(0, 40);
+    if(op == "activity.begin") {
+      result["activity_id"] = "unobserved-" + id.substr(0, 28); result["decision"] = "allow";
+      result["input"] = request["input"]; result["event_id"] = "";
+      result["context"] = Json{{"run_id", request["run_id"]}, {"activity_id", result["activity_id"]}, {"degraded", true}};
+    }
+    if(op == "loop.check") {
+      result["control_id"] = "unobserved-" + id.substr(0, 28); result["decision"] = "continue";
+      result["context"] = ""; result["event_id"] = "";
+    }
+    if(op == "run.end" || op == "run.abort") { result["closed"] = false; result["evaluation_status"] = "quarantined"; }
+    if(op == "activity.end" || op == "activity.abort" || op == "loop.commit") result["ended"] = false;
+    return {200, Json{{"ok", true}, {"result", result}}.dump_for_transport()};
+  }
+  Json make_run(const Json& request, const std::string& rid, Slot& slot) {
+    const auto start = boundary_begin_request(request, rid);
+    const auto level_name = start.str("level");
+    require(level_name.size() == 2 && level_name[0] == 'L' && level_name[1] >= '0' && level_name[1] <= '3', "level_not_supported");
+    const int level = level_name[1] - '0';
+    require(level <= config.str("max_level")[1] - '0' && identifier(start.str("conversation_id")), "level_or_identity_invalid");
+    const std::vector<std::string> caps{"model", "actions", "loop"};
+    std::set<std::string> declared;
+    for(const auto& cap : start["capabilities"].items()) {
+      require(std::find(caps.begin(), caps.end(), cap.text()) != caps.end(), "capability_not_supported"); declared.insert(cap.text());
+    }
+    if(level > 0) require(declared.count(caps[level - 1]), "required_boundary_missing");
+    Json run{{"kind", "integration-run-v1"}, {"local_capture", true},
+      {"identity", Json{{"agent_id", config["agent_id"]}, {"user_id", user}, {"run_id", rid}, {"conversation_id", start["conversation_id"]}}},
+      {"input", start["input"]}, {"level", level}, {"closed", false}, {"sequences", Json{{"task", 1}}},
+      {"requests", Json::Object{}}, {"receipt_counts", Json::Object{}}, {"observed_boundaries", Json::Object{}},
+      {"events", Json::Array{Json{{"event_id", "event-1"}, {"producer_id", "task"}, {"actor_id", "task"},
+        {"sequence", "1"}, {"timestamp_us", timestamp()}, {"kind", "run.start"}, {"input", start["input"]}}}}};
+    initialize_boundary_run(run, request);
+    if(level > 0) {
+      auto shadow = proto<v1::ShadowOptions>(config["shadow_options"]);
+      shadow.clear_target_scopes(); for(const auto& name : config["actors"].items()) shadow.add_target_scopes(scope(name.text()));
+      auto cached = std::atomic_load(&memory);
+      auto snapshot = compile_shadow_policy(cached->private_memory, proto<v1::Identity>(run["identity"]), shadow, cached->shared);
+      auto opts = proto<v1::RuntimeOptions>(config["runtime_options"]);
+      opts.set_requested_level(static_cast<v1::Level>(static_cast<int>(v1::L0) + level)); opts.set_fallback("strict");
+      opts.clear_allowed_users(); opts.add_allowed_users(user);
+      opts.clear_allowed_conversations(); opts.add_allowed_conversations(start.str("conversation_id"));
+      opts.clear_host_capabilities();
+      for(std::size_t i = 0; i < caps.size(); ++i)
+        if(declared.count(caps[i])) opts.add_host_capabilities(std::vector<std::string>{"context.request", "action.filter", "loop.decide"}[i]);
+      if(config.flag("auto_approve_experiences", false)) {
+        opts.clear_approved_experiences();
+        for(const auto& experience : snapshot.experiences()) {
+          auto* a = opts.add_approved_experiences(); a->set_memory_id(experience.memory_id()); a->set_content_revision(experience.content_revision());
+        }
+      }
+      auto policy = compile_runtime_policy(std::move(snapshot), opts);
+      apply_agent_version(run, config, cached->publications, &policy);
+      if(run.num("level", 0) > 0) slot.policy = std::make_unique<PolicyRuntime>(proto<v1::RuntimePolicy>(run["policy"]));
+    }
+    else apply_agent_version(run, config, std::atomic_load(&memory)->publications);
+    return run;
+  }
+  IntegrationResponse invoke(const std::string& bytes, const Json* parsed = nullptr, bool point_call = false) {
+    ++calls; Json request, reference; std::string operation, fingerprint_bytes = bytes;
+    try {
+      require(::getpid() == owner_pid, "local_process_changed");
+      require(bytes.size() <= options.max_request_bytes, "local_request_too_large");
+      request = parsed ? *parsed : Json::parse(bytes); require(request.object() && identifier(request.str("request_id")), "request_id_required");
+      auto op = request.str("operation"); operation = op;
+      const bool referenced = op == "point" && request.has("ref");
+      if(referenced) {
+        request["request_id"] = point_request_key(request);
+        reference = request; fingerprint_bytes = request.dump();
+        if(request.str("kind") == "run" && request.str("phase") == "before") {
+          Json empty;
+          request = point_request(resolve_point_reference(reference, empty, ""), config);
+          op = request.str("operation");
+        } else {
+          std::unique_lock<std::timed_mutex> begin(begins, std::defer_lock);
+          require(begin.try_lock_for(std::chrono::microseconds(options.contention_budget_us)), "local_busy");
+          const auto begin_id = point_run_key(reference);
+          for(std::size_t i = 0; i < options.max_pending_runs; ++i)
+            if(slots[i].begin_id == begin_id && slots[i].phase != free_slot) {
+              request["run_id"] = slots[i].id; break;
+            }
+          require(request.has("run_id"), "point_run_not_found");
+        }
+      }
+      if(op == "contract.describe") {
+        auto contract = describe_boundary_contract(config);
+        auto& operations = contract["operations"].items();
+        operations.erase(std::remove_if(operations.begin(), operations.end(),
+            [](const auto& value) { return value.text() == "evaluation.retry" || value.text() == "memory.status"
+                || value.text().rfind("agent_evaluation.", 0) == 0; }), operations.end());
+        contract["transport"] = "local.native.v1";
+        contract["limits"]["max_request_bytes"] = options.max_request_bytes;
+        return {200, Json{{"ok", true}, {"result", contract}}.dump()};
+      }
+      if(op == "run.begin") {
+        if(!enabled) return fallback(request, "local_evolution_paused");
+        std::unique_lock<std::timed_mutex> begin(begins, std::defer_lock);
+        if(!begin.try_lock_for(std::chrono::microseconds(options.contention_budget_us))) return fallback(request, "local_busy");
+        validate_local_data(request);
+        require(bytes.find(token) == std::string::npos, "credential_value_rejected");
+        for(std::size_t i = 0; i < options.max_pending_runs; ++i) {
+          auto& slot = slots[i];
+          // Only run.begin writes begin_id, while holding begins. Do not lock
+          // unrelated active runs or turn a busy duplicate into a second run.
+          if(slot.begin_id != request.str("request_id") || slot.phase == free_slot) continue;
+          std::unique_lock<std::timed_mutex> guard(slot.gate, std::defer_lock);
+          if(!guard.try_lock_for(std::chrono::microseconds(options.contention_budget_us))) {
+            ++std::atomic_load(&slot.losses)->count; return fallback(request, "local_busy");
+          }
+          if(slot.begin_fingerprint != hash(fingerprint_bytes)) return fallback(request, "request_id_conflict", slot.phase == active ? &slot : nullptr);
+          return {200, Json{{"ok", true}, {"result", slot.start_response}}.dump_for_transport()};
+        }
+        for(std::size_t i = 0; i < options.max_pending_runs; ++i) {
+          auto& slot = slots[i];
+          if(slot.phase != free_slot && slot.phase != persisted) continue;
+          std::unique_lock<std::timed_mutex> guard(slot.gate, std::try_to_lock);
+          if(!guard.owns_lock() || (slot.phase != free_slot && slot.phase != persisted)) continue;
+          const auto cost = bytes.size() * 16 + 1048576;
+          if(!reserve(cost)) return fallback(request, "local_buffer_full");
+          char prefix[9]; std::snprintf(prefix, sizeof(prefix), "%08x", static_cast<unsigned>(i));
+          const auto rid = std::string(prefix) + hash(instance + request.str("request_id")
+              + ":" + std::to_string(++generation)).substr(0, 32);
+          try {
+            slot.policy.reset(); auto state = make_run(request, rid, slot);
+            slot.id = rid; slot.begin_id = request.str("request_id"); slot.reason.clear();
+            slot.last_activity_ms = monotonic_ms();
+            slot.begin_fingerprint = hash(fingerprint_bytes); slot.end_fingerprint.clear(); slot.epoch = epoch.load();
+            std::atomic_store(&slot.losses, std::make_shared<CaptureLosses>(rid)); slot.reserved = cost;
+            slot.initial = state; slot.initial.fields().erase("policy");
+            slot.initial_saved = false; slot.capture_complete = true; slot.end_response = nullptr; slot.evaluation = 0;
+            slot.state = std::move(state);
+            slot.start_response = Json{{"run_id", rid}, {"level", "L" + std::to_string(slot.state.num("level", 0))}, {"protocol", "evolution.boundary.v1"},
+              {"capabilities", request.has("capabilities") ? request["capabilities"] : Json(Json::Array{})}, {"degraded", false}};
+            if(slot.state.has("policy_gate")) slot.start_response["policy_gate"] = slot.state["policy_gate"];
+            if(slot.state.has("agent_version_id")) slot.start_response["agent_version_id"] = slot.state["agent_version_id"];
+            if(referenced) {
+              slot.start_response = point_result(reference, request, slot.start_response);
+              record_point_reference(slot.state, reference, slot.start_response);
+              slot.initial["point_bindings"] = slot.state["point_bindings"];
+            }
+            slot.phase = active;
+            return {200, Json{{"ok", true}, {"result", slot.start_response}}.dump_for_transport()};
+          } catch(...) { buffer_bytes -= cost; throw; }
+        }
+        return fallback(request, "local_capacity_reached");
+      }
+      const auto rid = request.str("run_id");
+      require(rid.size() == 40 && rid.find_first_not_of("0123456789abcdef") == std::string::npos, "run_not_local");
+      const auto index = std::stoul(rid.substr(0, 8), nullptr, 16); require(index < options.max_pending_runs, "run_not_local");
+      auto& slot = slots[index]; InFlight flight(slot);
+      // A slot can be reused. Contention losses belong to this run's immutable
+      // identity, never to whichever run happens to occupy the slot later.
+      const auto losses = std::atomic_load(&slot.losses);
+      require(losses && losses->run_id == rid, "run_not_local");
+      std::unique_lock<std::timed_mutex> guard(slot.gate, std::defer_lock);
+      if(!guard.try_lock_for(std::chrono::microseconds(options.contention_budget_us))) {
+        if(op != "run.status" && op != "activity.status") ++losses->count;
+        return fallback(request, "local_busy");
+      }
+      require(slot.phase != free_slot && slot.id == rid, "run_not_local");
+      if(referenced && slot.state["requests"].has(reference.str("request_id"))) {
+        const auto& previous = slot.state["requests"][reference.str("request_id")];
+        if(previous.str("fingerprint") != hash(fingerprint_bytes))
+          return fallback(reference, "request_id_conflict", slot.phase == active ? &slot : nullptr);
+        return {200, Json{{"ok", true}, {"result", previous["response"]}}.dump_for_transport()};
+      }
+      if(op == "run.status") {
+        static const char* statuses[] = {"not_scheduled", "pending", "running", "completed", "failed", "disabled", "quarantined"};
+        Json result{{"run_id", rid}, {"closed", slot.phase != active}, {"persisted", slot.phase == persisted},
+          {"capture_complete", slot.capture_complete.load() && slot.losses->count == 0 && slot.epoch == epoch.load()},
+          {"degraded", slot.losses->count != 0 || slot.epoch != epoch.load()}, {"evaluation_status", statuses[slot.evaluation.load()]}};
+        return {200, Json{{"ok", true}, {"result", result}}.dump()};
+      }
+      if(slot.phase != active) {
+        if((op == "run.end" || op == "run.abort" || (referenced && reference.str("kind") == "run"))
+            && !slot.end_response.null() && slot.end_fingerprint == hash(fingerprint_bytes))
+          return {200, Json{{"ok", true}, {"result", slot.end_response}}.dump_for_transport()};
+        return fallback(request, "local_run_closed");
+      }
+      try {
+        require(enabled.load(), "local_evolution_paused");
+        validate_local_data(request);
+        require(bytes.find(token) == std::string::npos, "credential_value_rejected");
+        const auto key = request.str("request_id"), fingerprint = hash(fingerprint_bytes);
+        if(slot.state["requests"].has(key)) {
+          const auto& previous = slot.state["requests"][key];
+          require(previous.str("fingerprint") == fingerprint, "request_id_conflict");
+          return {200, Json{{"ok", true}, {"result", previous["response"]}}.dump_for_transport()};
+        }
+        require((referenced || slot.losses->count == 0) && slot.epoch == epoch.load(), "local_capture_degraded");
+        if(referenced && slot.losses->count != 0) slot.state["incomplete"] = true;
+        const auto cost = bytes.size() * 16 + 4096;
+        require(slot.reserved + cost <= config.num("max_run_bytes", 16777216) && reserve(cost), "local_buffer_full");
+        slot.reserved += cost;
+        if(op == "capture.gap") throw Error("capture_gap_reported");
+        auto result = referenced ? dispatch_referenced_point(slot.state, reference, config, slot.policy.get())
+            : dispatch_boundary(slot.state, request, config, slot.policy.get());
+        slot.last_activity_ms = monotonic_ms();
+        result["degraded"] = false;
+        slot.state["requests"][key] = Json{{"fingerprint", fingerprint}, {"response", result}};
+        if(slot.state.flag("closed", false)) {
+          slot.capture_complete = !slot.state.flag("incomplete", false);
+          slot.evaluation = !slot.capture_complete ? 6 : (config.flag("auto_evaluate", true) ? 1 : 5);
+          slot.end_fingerprint = fingerprint;
+          result["persisted"] = false; slot.end_response = result; slot.phase = closed;
+          if(referenced) {
+            auto terminal = reference; terminal["phase"] = "after"; terminal["kind"] = "run";
+            const auto end_key = point_request_key(terminal);
+            if(slot.state["requests"].has(end_key)) {
+              slot.end_response = slot.state["requests"][end_key]["response"];
+              slot.end_fingerprint = slot.state["requests"][end_key].str("fingerprint");
+            }
+          }
+        }
+        return {200, Json{{"ok", true}, {"result", result}}.dump_for_transport()};
+      } catch(const Error& error) {
+        auto reply = fallback(request, error.what(), &slot);
+        if(referenced) {
+          abort_point_reference(slot.state, reference, config, slot.policy.get());
+          if(slot.state.flag("closed", false)) { slot.phase = closed; slot.evaluation = 6; }
+        }
+        if(op == "run.end" || op == "run.abort" || (referenced && reference.str("kind") == "run"
+            && (reference.str("phase") == "after" || reference.str("phase") == "abort"))) {
+          slot.end_fingerprint = hash(fingerprint_bytes); slot.end_response = Json::parse(reply.body)["result"]; slot.phase = closed; slot.evaluation = 6;
+        }
+        return reply;
+      } catch(...) {
+        auto reply = fallback(request, "local_boundary_failed", &slot);
+        if(referenced) {
+          abort_point_reference(slot.state, reference, config, slot.policy.get());
+          if(slot.state.flag("closed", false)) { slot.phase = closed; slot.evaluation = 6; }
+        }
+        if(op == "run.end" || op == "run.abort" || (referenced && reference.str("kind") == "run"
+            && (reference.str("phase") == "after" || reference.str("phase") == "abort"))) {
+          slot.end_fingerprint = hash(fingerprint_bytes); slot.end_response = Json::parse(reply.body)["result"]; slot.phase = closed; slot.evaluation = 6;
+        }
+        return reply;
+      }
+    } catch(const Error& error) {
+      if(!point_call && operation != "run.begin" && operation != "contract.describe" && operation != "capture.gap") ++epoch;
+      return fallback(request, error.what());
+    } catch(...) {
+      if(!point_call && operation != "run.begin" && operation != "contract.describe" && operation != "capture.gap") ++epoch;
+      return fallback(request, "local_unavailable");
+    }
+  }
+  std::string metrics() const {
+    return Json{{"transport", "local.native.v1"}, {"enabled", enabled.load()}, {"calls", calls.load()}, {"degraded_calls", degraded.load()},
+      {"buffer_bytes", buffer_bytes.load()}, {"published_runs", published.load()},
+      {"persistence_errors", persistence_errors.load()}, {"learning_errors", learning_errors.load()},
+      {"memory_refreshes", memory_refreshes.load()}}.dump();
+  }
+  void drain() {
+    std::unique_lock<std::mutex> single(maintenance, std::try_to_lock); if(!single.owns_lock()) return;
+    for(std::size_t i = 0; i < options.max_pending_runs; ++i) {
+      auto& slot = slots[i]; Json data; bool final = false;
+      if(slot.phase == active && monotonic_ms() - slot.last_activity_ms.load() >= config.num("run_lease_ms", 86400000)) {
+        std::unique_lock<std::timed_mutex> guard(slot.gate, std::try_to_lock);
+        if(guard.owns_lock() && slot.phase == active
+            && monotonic_ms() - slot.last_activity_ms.load() >= config.num("run_lease_ms", 86400000)) {
+          ++slot.losses->count; slot.reason = "run_lease_expired"; slot.capture_complete = false; slot.phase = closed;
+        }
+      }
+      if(slot.phase == active) {
+        // Initial is immutable after active is published. Only this maintenance
+        // writer can persist/recycle it; never contend with a business boundary.
+        if(slot.initial_saved) continue;
+        data = slot.initial;
+      } else {
+        if(slot.phase != closed) continue;
+        std::unique_lock<std::timed_mutex> guard(slot.gate, std::try_to_lock);
+        if(!guard.owns_lock() || slot.inflight != 0 || slot.phase != closed) continue;
+        final = true; data = std::move(slot.state); slot.phase = writing;
+      }
+      try {
+        if(final && (slot.losses->count != 0 || slot.epoch != epoch.load())) {
+          data["incomplete"] = true; data["local_degradation_reason"] = slot.reason.empty() ? "local_busy" : slot.reason;
+          if(!data.flag("closed", false)) {
+            auto unlimited = config; unlimited["max_events"] = config.num("max_events", 10000) * 8 + 32;
+            dispatch_boundary(data, Json{{"operation", "run.abort"}, {"status", "unknown"}, {"output", nullptr}}, unlimited, slot.policy.get());
+          }
+          data["evaluation_status"] = "quarantined";
+          slot.evaluation = 6;
+        }
+        const auto response = service->persist_local(token, data.dump());
+        require(response.status == 200, "local_persistence_failed");
+        if(final) {
+          const bool complete = !data.flag("incomplete", false);
+          Json retired; std::unique_ptr<PolicyRuntime> old_policy;
+          {
+            std::lock_guard<std::timed_mutex> guard(slot.gate);
+            slot.capture_complete = complete; buffer_bytes -= slot.reserved; slot.reserved = 0;
+            retired = std::move(slot.initial); old_policy = std::move(slot.policy); slot.phase = persisted; ++published;
+          }
+          service->wake_background();
+        } else slot.initial_saved = true;
+      } catch(...) {
+        ++persistence_errors;
+        if(final) { std::lock_guard<std::timed_mutex> guard(slot.gate); slot.state = std::move(data); slot.phase = closed; }
+      }
+    }
+    const auto lost = degraded.load();
+    if(lost != checkpointed) {
+      try { service->checkpoint_local(token, instance, metrics()); checkpointed = lost; }
+      catch(...) { ++persistence_errors; }
+    }
+  }
+  void evaluate(bool flush = false) {
+    std::unique_lock<std::mutex> single(learning, std::try_to_lock); if(!single.owns_lock()) return;
+    try {
+      service->process_evaluations(flush);
+      const auto env = Json::parse(service->local_environment(token, memory_version));
+      if(env.has("memory")) {
+        auto next = std::make_shared<const Memory>(env);
+        retired_memories.push_back(std::atomic_exchange(&memory, std::move(next)));
+        memory_version = env.num("memory_version", 0); ++memory_refreshes;
+      }
+      retired_memories.erase(std::remove_if(retired_memories.begin(), retired_memories.end(),
+          [](const auto& value) { return value.use_count() == 1; }), retired_memories.end());
+      if(status_version == env.num("work_version", 0)) return;
+      bool retry_status = false;
+      for(std::size_t i = 0; i < options.max_pending_runs; ++i) {
+        auto& slot = slots[i]; std::string rid;
+        if(slot.phase != persisted || (slot.evaluation != 1 && slot.evaluation != 2)) continue;
+        {
+          std::unique_lock<std::timed_mutex> guard(slot.gate, std::try_to_lock);
+          if(!guard.owns_lock()) { retry_status = true; continue; }
+          if(slot.phase != persisted || (slot.evaluation != 1 && slot.evaluation != 2)) continue;
+          rid = slot.id;
+        }
+        const auto response = service->call(token, Json{{"operation", "run.status"}, {"request_id", "local-background-status"}, {"run_id", rid}}.dump());
+        if(response.status != 200) { retry_status = true; continue; }
+        const auto status = Json::parse(response.body)["result"].str("evaluation_status");
+        const std::vector<std::string> names{"not_scheduled", "pending", "running", "completed", "failed", "disabled", "quarantined"};
+        const auto found = std::find(names.begin(), names.end(), status);
+        if(slot.phase != persisted) continue;
+        std::unique_lock<std::timed_mutex> guard(slot.gate, std::try_to_lock);
+        if(!guard.owns_lock()) retry_status = true;
+        else if(slot.id == rid && found != names.end()) slot.evaluation = static_cast<unsigned>(found - names.begin());
+      }
+      if(!retry_status) status_version = env.num("work_version", 0);
+    } catch(...) { ++learning_errors; }
+  }
+};
+
+LocalRuntime::LocalRuntime(const std::filesystem::path& path, const std::string& token, LocalRuntimeOptions options)
+    : impl_(std::make_unique<Impl>(path, token, options)) {
+  if(options.background) {
+    impl_->writer = std::thread([this] {
+      while(!impl_->stopping) {
+        try { impl_->drain(); } catch(...) { ++impl_->persistence_errors; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(impl_->options.poll_interval_ms));
+      }
+    });
+    try {
+      impl_->learner = std::thread([this] {
+        while(!impl_->stopping) {
+          const auto version = impl_->service->work_version();
+          impl_->evaluate();
+          if(!impl_->stopping) impl_->service->wait_for_work(version, 30000);
+        }
+      });
+    } catch(...) { impl_->stopping = true; impl_->writer.join(); throw; }
+  }
+}
+LocalRuntime::~LocalRuntime() {
+  impl_->stopping = true;
+  impl_->service->wake_background();
+  if(impl_->writer.joinable()) impl_->writer.join();
+  if(impl_->learner.joinable()) impl_->learner.join();
+  // Shutdown runs outside business boundaries; abandoned work is never learned.
+  for(std::size_t i = 0; i < impl_->options.max_pending_runs; ++i) {
+    auto& slot = impl_->slots[i];
+    if(slot.phase == active) { ++slot.losses->count; slot.reason = "producer_shutdown"; slot.phase = closed; }
+  }
+  try { impl_->drain(); } catch(...) {}
+}
+IntegrationResponse LocalRuntime::invoke(const std::string& request) noexcept {
+  try {
+    if(request.size() <= impl_->options.max_request_bytes) {
+      integration::Json point;
+      try { point = integration::Json::parse(request); }
+      catch(...) { return impl_->invoke(request); }
+      if(point["operation"].string() && point["operation"].text() == "point") {
+        try {
+          if(point.has("ref")) {
+            auto response = impl_->invoke(request, &point, true);
+            auto body = integration::Json::parse(response.body);
+            if(body["result"].flag("degraded", false)) {
+              body["result"] = integration::point_fallback(point, body["result"].str("reason", "point_unavailable"));
+              response.body = body.dump_for_transport();
+            }
+            return response;
+          }
+          require(!point["context"].flag("degraded", false), "upstream_capture_degraded");
+          const auto packet = integration::point_request(point, impl_->config);
+          auto response = impl_->invoke(packet.dump(), &packet, true);
+          auto body = integration::Json::parse(response.body);
+          if(body.flag("ok", false)) body["result"] = integration::point_result(point, packet, body["result"]);
+          response.body = body.dump_for_transport(); return response;
+        } catch(...) {
+          const auto& parent = point["context"];
+          const auto rid = parent["run_id"].string() ? parent["run_id"].text() : "";
+          const auto request_id = point["request_id"].string() ? point["request_id"].text() : "invalid";
+          if(!rid.empty()) {
+            impl_->invoke(Json{{"operation", "capture.gap"}, {"request_id", "gap-" + hash(request_id).substr(0, 32)},
+                {"run_id", rid}, {"reason", "missing_boundary"}}.dump(), nullptr, true);
+            const auto kind = point["kind"].string() ? point["kind"].text() : parent["kind"].string() ? parent["kind"].text() : "custom";
+            const auto phase = point["phase"].string() ? point["phase"].text() : "invalid";
+            if(kind == "run" && (phase == "after" || phase == "abort"))
+              impl_->invoke(Json{{"operation", "run.abort"}, {"request_id", "abort-" + hash(request_id).substr(0, 32)},
+                  {"run_id", rid}, {"status", "unknown"}, {"output", nullptr}}.dump(), nullptr, true);
+          }
+          return {200, integration::Json{{"ok", true}, {"result", integration::point_fallback(point, "point_invalid")}}.dump_for_transport()};
+        }
+      }
+      return impl_->invoke(request, &point);
+    }
+    return impl_->invoke(request);
+  }
+  catch(...) { return {503, R"({"ok":false,"error":"local_unavailable"})"}; }
+}
+std::string LocalRuntime::metrics() const { return impl_->metrics(); }
+IntegrationResponse LocalRuntime::manage(const std::string& request) noexcept {
+  try {
+    require(::getpid() == impl_->owner_pid, "local_process_changed");
+    require(request.size() <= impl_->options.max_request_bytes, "local_request_too_large", 413);
+    const auto message = Json::parse(request);
+    require(message.str("operation").rfind("agent_evaluation.", 0) == 0, "management_operation_required");
+    return impl_->service->call(impl_->token, request);
+  } catch(const Error& error) { return {error.status, Json{{"ok", false}, {"error", error.what()}}.dump()}; }
+  catch(...) { return {503, R"({"ok":false,"error":"local_management_unavailable"})"}; }
+}
+void LocalRuntime::set_enabled(bool enabled) noexcept {
+  if(impl_->enabled.exchange(enabled) != enabled) ++impl_->epoch;
+}
+void LocalRuntime::drain() { impl_->drain(); }
+void LocalRuntime::evaluate_pending() { impl_->evaluate(true); }
+}  // namespace trajectory::evolution

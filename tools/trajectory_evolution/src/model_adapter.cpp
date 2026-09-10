@@ -394,6 +394,15 @@ class OpenAiCompatibleModelAdapter final : public ModelAdapter {
       curl_easy_setopt(handle.get(), CURLOPT_WRITEFUNCTION, append_response);
       curl_easy_setopt(handle.get(), CURLOPT_WRITEDATA, &buffer);
       curl_easy_setopt(handle.get(), CURLOPT_NOSIGNAL, 1L);
+      if(options_.cancelled) {
+        curl_easy_setopt(handle.get(), CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(handle.get(), CURLOPT_XFERINFODATA, &options_.cancelled);
+        curl_easy_setopt(handle.get(), CURLOPT_XFERINFOFUNCTION,
+            +[](void* context, curl_off_t, curl_off_t, curl_off_t, curl_off_t) -> int {
+              try { return (*static_cast<std::function<bool()>*>(context))() ? 1 : 0; }
+              catch(...) { return 1; }
+            });
+      }
       curl_easy_setopt(handle.get(), CURLOPT_FOLLOWLOCATION, 0L);
       curl_easy_setopt(handle.get(), CURLOPT_MAXREDIRS, 0L);
       curl_easy_setopt(handle.get(), CURLOPT_SSL_VERIFYPEER, 1L);

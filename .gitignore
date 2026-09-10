@@ -47,6 +47,7 @@ coverage/
 # OS-specific
 .DS_Store
 Thumbs.db
+*.orig
 
 # Local config
 local_config.txt
@@ -148,8 +149,11 @@ artifacts_storage/
 Makefile
 Testing/Temporary/
 Thumbs.db
+*.orig
 tmp
 trace_output
+# Local experiment inputs and drivers; results belong in trace_output/.
+/local_experiments/
 vendor/fmt/
 vendor/googletest/
 vendor/gtest/

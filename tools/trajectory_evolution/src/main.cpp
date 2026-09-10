@@ -1,5 +1,12 @@
 #include "agentflow/trajectory/evolution_pipeline.h"
 #include "agentflow/trajectory/hybrid_evaluator.h"
+#include "agentflow/trajectory/runtime_config.h"
+#include "trace_cli.h"
+#include "shadow_cli.h"
+#include "policy_cli.h"
+#include "dataset_cli.h"
+#include "learn_cli.h"
+#include "trajectory_evolution/integration.h"
 
 #include <cctype>
 #include <cstdlib>
@@ -11,6 +18,7 @@
 #include <set>
 #include <string>
 #include <system_error>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -19,6 +27,7 @@ namespace trajectory = agentflow::trajectory;
 
 struct CommandLine {
   std::filesystem::path input;
+  std::vector<std::filesystem::path> config_sources;
   std::filesystem::path json_output;
   std::filesystem::path protobuf_output;
   std::filesystem::path requests_output;
@@ -32,6 +41,7 @@ struct CommandLine {
   std::string model_id;
   std::string api_key_env;
   bool no_api_key = false;
+  std::uint32_t sessionlog_max_output_tokens = 0;
   bool no_memory = false;
   bool pretty = true;
   bool selection_explicit = false;
@@ -44,8 +54,19 @@ struct CommandLine {
 void print_usage(std::ostream& output) {
   output
       << "Usage:\n"
+      << "  trajectory_evolution serve --config <service.json>\n"
+      << "  trajectory_evolution learn [LOG_OR_DIRECTORY] --config <service.json> [--enqueue-only]\n"
       << "  trajectory_evolution evaluate [options] <dialogue.jsonl|analysis.json>\n"
       << "  trajectory_evolution evaluate [options] <sessionlog-directory>\n"
+      << "  trajectory_evolution evaluate [options] <run.trace.json|run.trace.pb>\n"
+      << "  trajectory_evolution doctor <trace|sessionlog> [--level L0..L4]\n"
+      << "      [--manifest PATH] [--fallback strict|downgrade]\n"
+      << "  trajectory_evolution shadow compile|query < request.json\n"
+      << "  trajectory_evolution dataset build|check|run [options]\n"
+      << "\n"
+      << "Runtime configuration:\n"
+      << "  --config PATH                 JSON config; overrides discovery/env\n"
+      << "  AGENTFLOW_TRAJECTORY_CONFIG  Optional config path environment variable\n"
       << "\n"
       << "Single-dialogue outputs:\n"
       << "  -o, --output PATH             Write Protobuf-JSON Evaluation\n"
@@ -55,11 +76,9 @@ void print_usage(std::ostream& output) {
       << "  --output-root PATH            Required root for per-dialogue Evaluations\n"
       << "  --batch-json-out PATH         Override batch report JSON path\n"
       << "  --batch-protobuf-out PATH     Override batch report Protobuf path\n"
-      << "  --memory-out PATH             Override evolution memory Protobuf path\n"
-      << "  --memory-json-out PATH        Override readable memory JSON path\n"
-      << "  --no-memory                   Evaluate and build candidates without merging memory\n"
-      << "  --min-supporting-dialogues N  Candidate gate (default: 2)\n"
-      << "  --min-supporting-episodes N   Candidate gate (default: 2)\n"
+      << "  --no-memory                   Required for standalone directory analysis; use learn for memory\n"
+      << "  --min-supporting-dialogues N  Override configured Candidate gate\n"
+      << "  --min-supporting-episodes N   Override configured Candidate gate\n"
       << "  --meta-reflection             One optional cross-dialogue model synthesis call\n"
       << "\n"
       << "Common outputs:\n"
@@ -74,16 +93,16 @@ void print_usage(std::ostream& output) {
       << "  --thinking-mode MODE          enabled, disabled, or auto\n"
       << "  --api-key-env NAME            Read API key from this environment variable\n"
       << "  --no-api-key                  Use a keyless loopback/provider endpoint\n"
-      << "  --timeout-ms N                Overall HTTP timeout (default: 30000)\n"
-      << "  --connect-timeout-ms N        Connect timeout (default: 5000)\n"
-      << "  --model-retries N             Transport retries (default: 1)\n"
-      << "  --max-model-calls N           Batch-wide model-call budget (default: 512)\n"
+      << "  --timeout-ms N                Override configured overall HTTP timeout\n"
+      << "  --connect-timeout-ms N        Override configured connect timeout\n"
+      << "  --model-retries N             Override configured transport retries\n"
+      << "  --max-model-calls N           Override configured model-call budget\n"
       << "  --max-output-tokens N         Model output budget\n"
       << "  --strict-model                Single-file mode fails on model errors\n"
       << "\n"
       << "Input controls:\n"
       << "  --allow-invalid-trace         Quarantine invalid traces; never model them\n"
-      << "  --max-input-files N           Directory input limit (default: 100000)\n"
+      << "  --max-input-files N           Override configured directory input limit\n"
       << "  -h, --help                    Show this help\n";
 }
 
@@ -123,7 +142,42 @@ std::string require_value(int argc, char** argv, int* index, const char* option)
 }
 
 CommandLine parse_arguments(int argc, char** argv) {
+  for(int index = 1; index < argc; ++index) {
+    const std::string argument = argv[index];
+    if(argument == "-h" || argument == "--help") {
+      print_usage(std::cout);
+      std::exit(0);
+    }
+  }
+
+  std::filesystem::path requested_config;
+  for(int index = 1; index < argc; ++index) {
+    if(std::string(argv[index]) != "--config") {
+      continue;
+    }
+    if(!requested_config.empty()) {
+      throw trajectory::EvaluationError("--config may only be specified once");
+    }
+    requested_config = require_value(argc, argv, &index, "--config");
+  }
+  const trajectory::RuntimeConfiguration runtime =
+      trajectory::load_runtime_configuration(
+          requested_config.empty()
+              ? trajectory::discover_runtime_configuration()
+              : requested_config);
+
   CommandLine command;
+  command.config_sources = runtime.source_files;
+  command.evaluator = runtime.evaluator;
+  command.evolution = runtime.evolution;
+  command.http = runtime.model;
+  command.model_endpoint = runtime.model.endpoint;
+  command.model_id = runtime.model.model_id;
+  command.api_key_env = runtime.api_key_env;
+  command.no_api_key = runtime.no_api_key;
+  command.selection_explicit = runtime.model_selection_explicit;
+  command.max_output_tokens_explicit = runtime.max_output_tokens_explicit;
+  command.sessionlog_max_output_tokens = runtime.sessionlog_max_output_tokens;
   for(int index = 1; index < argc; ++index) {
     const std::string argument = argv[index];
     if(index == 1 && argument == "evaluate") {
@@ -132,6 +186,8 @@ CommandLine parse_arguments(int argc, char** argv) {
     if(argument == "-h" || argument == "--help") {
       print_usage(std::cout);
       std::exit(0);
+    } else if(argument == "--config") {
+      (void)require_value(argc, argv, &index, argument.c_str());
     } else if(argument == "-o" || argument == "--output") {
       command.json_output = require_value(argc, argv, &index, argument.c_str());
     } else if(argument == "--protobuf-out") {
@@ -152,6 +208,15 @@ CommandLine parse_arguments(int argc, char** argv) {
       command.no_memory = true;
     } else if(argument == "--meta-reflection") {
       command.evolution.enable_meta_reflection = true;
+    } else if(argument == "--memory-full-curation-threshold") {
+      command.evolution.full_curation_new_entry_threshold = parse_size(
+          require_value(argc, argv, &index, argument.c_str()), argument);
+    } else if(argument == "--memory-max-entries") {
+      command.evolution.max_memory_entries = parse_size(
+          require_value(argc, argv, &index, argument.c_str()), argument);
+    } else if(argument == "--memory-replay-window") {
+      command.evolution.max_applied_batch_ids = parse_size(
+          require_value(argc, argv, &index, argument.c_str()), argument);
     } else if(argument == "--min-supporting-dialogues") {
       command.evolution.min_supporting_dialogues = parse_size(
           require_value(argc, argv, &index, argument.c_str()), argument);
@@ -216,9 +281,10 @@ CommandLine parse_arguments(int argc, char** argv) {
   if(input_error) {
     throw trajectory::EvaluationError("cannot inspect input path");
   }
-  if((directory || command.input.extension() == ".jsonl")
+  if((directory || command.input.extension() == ".jsonl"
+       || trajectory::is_standard_trace_input(command.input))
      && !command.max_output_tokens_explicit) {
-    command.http.max_output_tokens = 4096;
+    command.http.max_output_tokens = command.sessionlog_max_output_tokens;
   }
   if(directory && command.output_root.empty()) {
     throw trajectory::EvaluationError(
@@ -242,11 +308,14 @@ CommandLine parse_arguments(int argc, char** argv) {
   if(command.no_memory
      && (!command.memory_output.empty() || !command.memory_json_output.empty())) {
     throw trajectory::EvaluationError(
-        "--no-memory cannot be combined with memory output options");
+        "--no-memory cannot be combined with memory curation options");
   }
   if(command.evolution.min_supporting_dialogues == 0U
      || command.evolution.min_supporting_episodes == 0U
-     || command.evolution.max_input_files == 0U) {
+     || command.evolution.max_input_files == 0U
+     || command.evolution.max_memory_entries == 0U
+     || command.evolution.max_applied_batch_ids == 0U
+     || command.evolution.full_curation_new_entry_threshold == 0U) {
     throw trajectory::EvaluationError("evolution limits must be greater than zero");
   }
 
@@ -321,10 +390,12 @@ bool path_is_within(
 }
 
 void ensure_distinct_outputs(const CommandLine& command) {
-  const std::vector<std::filesystem::path> inputs = {
+  std::vector<std::filesystem::path> inputs = {
       command.input,
       command.model_responses,
   };
+  inputs.insert(
+      inputs.end(), command.config_sources.begin(), command.config_sources.end());
   const std::vector<std::filesystem::path> outputs = {
       command.output_root,
       command.json_output,
@@ -370,7 +441,7 @@ void ensure_distinct_outputs(const CommandLine& command) {
 void ensure_dialogue_output_distinct(
     const CommandLine& command,
     const std::filesystem::path& path) {
-  const std::vector<std::filesystem::path> reserved = {
+  std::vector<std::filesystem::path> reserved = {
       command.input,
       command.model_responses,
       command.requests_output,
@@ -379,6 +450,10 @@ void ensure_dialogue_output_distinct(
       command.memory_output,
       command.memory_json_output,
   };
+  reserved.insert(
+      reserved.end(),
+      command.config_sources.begin(),
+      command.config_sources.end());
   for(const auto& other : reserved) {
     if(paths_conflict(path, other)) {
       throw trajectory::EvaluationError(
@@ -495,6 +570,11 @@ int run_single(
 int run_directory(
     CommandLine* command,
     const std::shared_ptr<trajectory::ModelAdapter>& adapter) {
+  if(!command->no_memory) throw trajectory::EvaluationError(
+      "directory learning now uses: learn LOG_DIR --config boundary-service.json; "
+      "use evaluate ... --no-memory only for standalone analysis (no memory writes)");
+  if(!command->memory_output.empty() || !command->memory_json_output.empty())
+    throw trajectory::EvaluationError("memory output is managed by learn --config SERVICE_JSON");
   trajectory::TrajectoryEvolutionPipeline pipeline(
       command->evaluator, command->evolution, adapter);
   trajectory::EvolutionBatchOutput output = pipeline.evaluate_directory(
@@ -509,16 +589,6 @@ int run_directory(
   }
   if(command->batch_protobuf_output.empty()) {
     command->batch_protobuf_output = run_root / "batch.evaluation.pb";
-  }
-  if(!command->no_memory) {
-    if(command->memory_output.empty()) {
-      command->memory_output =
-          command->output_root / "memory" / "evolution-memory.pb";
-    }
-    if(command->memory_json_output.empty()) {
-      command->memory_json_output =
-          command->output_root / "memory" / "evolution-memory.json";
-    }
   }
   ensure_distinct_outputs(*command);
 
@@ -552,15 +622,6 @@ int run_directory(
         protobuf_path);
   }
 
-  if(!command->no_memory) {
-    const auto update = trajectory::TrajectoryEvolutionPipeline::update_memory_file(
-        output.report,
-        command->memory_output,
-        command->memory_json_output,
-        command->evolution.max_memory_bytes);
-    output.report.mutable_memory_update()->CopyFrom(update);
-  }
-
   write_text(
       command->batch_json_output,
       trajectory::TrajectoryEvolutionPipeline::to_json(
@@ -578,15 +639,31 @@ int run_directory(
       << "failed=" << output.report.evaluation_failed_count() << '\n'
       << "candidates=" << output.report.candidates_size() << '\n'
       << "batch_json=" << command->batch_json_output << '\n';
-  if(!command->no_memory) {
-    std::cout << "memory=" << command->memory_output << '\n';
-  }
   return output.report.evaluation_succeeded_count() == 0U ? 3 : 0;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
+  namespace trajectory = agentflow::trajectory;
+  if(argc > 1 && std::string(argv[1]) == "learn") {
+    return ::trajectory::evolution::run_learning_import(argc, argv);
+  }
+  if(argc > 1 && std::string(argv[1]) == "dataset") {
+    return ::trajectory::evolution::run_dataset(argc, argv);
+  }
+  if(argc > 1 && std::string(argv[1]) == "serve") {
+    return ::trajectory::evolution::run_integration_server(argc, argv);
+  }
+  if(argc > 1 && std::string(argv[1]) == "runtime") {
+    return trajectory::run_policy_runtime(argc, argv);
+  }
+  if(argc > 1 && std::string(argv[1]) == "shadow") {
+    return trajectory::run_shadow(argc, argv);
+  }
+  if(argc > 1 && std::string(argv[1]) == "doctor") {
+    return trajectory::run_doctor(argc, argv);
+  }
   CommandLine command;
   std::shared_ptr<trajectory::ModelAdapter> adapter;
   try {

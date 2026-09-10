@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "requested_level": "L0",
+  "declared_capabilities": [
+    "run_observation"
+  ],
+  "fallback": "strict"
+}

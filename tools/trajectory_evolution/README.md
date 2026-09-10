@@ -1,172 +1,82 @@
-# AgentFlow C++ 轨迹进化
+# Trajectory Evolution
 
-`trajectory_evolution` 是一个独立的离线 C++ 工具，把建立进化记忆库之前的步骤收敛在同一个目录、同一个进程和同一个命令中：
+同一后台评测模块用于 L0 基线、L1–L3 策略准入与 L4 GEPA 多轮反思搜索。
+GEPA 保存多父候选谱系：既能反思改写，也能将不同分支的改进重组到同一个后代；使用真实 Agent 试验筛选，经留出集准入后发布，支持恢复搜索和离线加载。
+配置与接入步骤见[任务评测指南](docs/19-datasets-and-benchmarks.md)，状态管理见[私有记忆](docs/13-private-memory.md)。
 
-```text
-SessionLog JSONL
-  → Loop Episode 与确定性指标
-  → 规则/可选模型的 Hybrid Evaluation
-  → 跨 Dialogue 候选归并与反证检查
-  → 可选的一次元反思
-  → 质量门
-  → Protobuf 进化记忆库
+框架与语言无关的轨迹采集、评测反思、两级记忆管理和受控策略组件。核心用 C++ 实现，提供进程内原生 ABI 与独立 HTTP 服务，通过统一执行边界接入各类 Agent。
+
+[完整文档](docs/README.md) · [快速开始](docs/04-quickstart.md) · [公共＋私有记忆机制](docs/14-shared-memory.md) · [全部配图](docs/figures/README.md)
+
+![组件架构](docs/figures/01-system.svg)
+
+## 功能分级
+
+- L0：真实边界采集、结构校验、规则/模型评测、反思与持续入库。
+- L1：将匹配且获授权的经验加入实际模型输入。
+- L2：在动作派发前施加明确规则，保留宿主串行/并行调度。
+- L3：按当前 loop 的状态作 Continue/Replan/Stop，并核验宿主实际执行。
+- L4：GEPA 反思改写、逐题／多目标前沿、多提案筛选、双亲重组、留出集准入和策略持久化；可选 ComBEE 分组反思。候选使用已有 L1–L3 打点。
+
+已接入 L1–L3 后，在 `agent-evaluation.json` 增加 `"gepa_config": "gepa.json"`，
+配置训练/验证/留出任务和反思模型即可启用后台搜索；无需增加宿主打点。
+[GEPA 配置、算法与离线版本使用](docs/24-evolution-and-gepa.md#启用-gepa)。
+
+**公共＋私有记忆管理默认开启。** 省略 sharing 同样启用；显式 enabled=false 可关闭公共机制。
+经验注入由 auto_approve_experiences 授权，默认 false；使用公共语义提炼前，请在配置模板中设置评测模型。
+
+## 最短上手路径
+
+新接入只需配置参数，并在原程序中插入包提供的 `point`：传入已有的任务 ID、调用 ID、父调用 ID，
+组件负责上下文关联、轨迹记录、策略准备、并行合流和待完成任务收尾。不需要新增 observer、适配器或上下文存储文件。
+Python 提供 `call / acall / allow_loop`，JS/TS 提供 `call / allowLoop`，可直接包住原有调用或循环条件。
+其他语言使用相同的 JSON 打点协议；模型、工具仍由原程序执行，后台评测和学习不在主流程里等待。
+具体插入代码见[统一打点教程](docs/08-instrumentation.md#统一打点推荐入口)。
+Python 还提供按配置取得用户客户端的 `from evolution_configured import points`，
+只需设置 `EVOLUTION_POINT_CONFIG`，不必在宿主另写初始化、连接或身份管理文件。
+AgentFlow v1 已在现有 Python 入口插入这组打点，启用步骤见[异步接入中的 v1 配置](docs/09-async-and-multi-agent.md#agentflow-v1-已有打点如何启用)。
+
+先[独立安装](docs/02-installation.md)，复制完整 config 并配置自己的身份和数据目录，再执行[第一条真实任务](docs/04-quickstart.md)。
+
+```sh
+cmake -S tools/trajectory_evolution -B build/trajectory-evolution -DCMAKE_BUILD_TYPE=Release
+cmake --build build/trajectory-evolution -j2
+cmake --install build/trajectory-evolution --prefix "$PWD/build/evolution-install"
 ```
 
-它不修改 Harness、Coordinator、Skill Executor 或 Runtime 的在线执行路径，也不会自动激活候选策略。记忆条目目前始终是待验证的 `CANDIDATE`，为后续实验、回放和策略增强提供输入。
+以上从源码仓库根目录执行；独立拿到组件源码时将 -S 改为组件目录即可，不需构建整个 AgentFlow。
+安装包包含 docs 及 SVG 配图，使用时不依赖本仓库根目录的 docs 或任何个人远程环境。
 
-## 目录职责
+## 先选对生命周期
 
-本目录包含完整的离线进化前半闭环：
+| 宿主形态 | 入口 | 关键条件 |
+| --- | --- | --- |
+| 常驻进程、需要主链低延迟 | [原生 LocalRuntime](docs/06-native-runtime.md) | 实例必须覆盖整个 run；资源竞争可以降级 |
+| 多个短进程共同完成任务 | [HTTP 服务](docs/07-http-and-clients.md) | 服务持有状态；打点传已有业务 ID，无须新增消息字段 |
+| 已有日志 | [learn 导入](docs/23-import-and-migration.md) | 同一身份、来源校验与学习队列，用于历史轨迹学习 |
 
-- `loop_episode_analyzer`：把 SessionLog 还原为 Coordinator/Skill Episode，计算重复、无进展、状态回摆、不可重试失败等确定性诊断；
-- `hybrid_evaluator`：融合规则事实与可选模型判断，输出任务结果、逐 Episode 语义判断和 Dialogue 反思；
-- `evolution_pipeline`：跨 Dialogue 生成候选、聚合支持/反证、执行质量门和可选元反思；
-- `EvolutionMemoryStore`：以 Protobuf 为权威格式，幂等地保存候选、证据、批次和修订历史；
-- `trajectory_evolution`：统一命令行入口。
+原生与 HTTP 入口都不会自动监听 Agent 进程。HTTP 有通信与持久化开销；原生后台线程随宿主退出而结束。
+派发后 Coordinator 退出的场景，按[异步生命周期](docs/09-async-and-multi-agent.md)接入，由常驻服务维护跨进程 run。
 
-Protobuf 契约位于 [`proto/hybrid_evaluation.proto`](proto/hybrid_evaluation.proto)。
+## 文档导航
 
-## 构建与测试
+指南已归并到组件内部的 docs，按安装、快速开始、设计、实现与边界展开，共 24 个专章。
+按下表进入对应专题。
 
-在 AgentFlow 开发环境中运行：
+| 主题 | 文档 |
+| --- | --- |
+| <a id="levels"></a>概念、目标与整体架构 | [打开专章](docs/01-overview.md) |
+| <a id="setup"></a>安装、构建与部署 | [打开专章](docs/02-installation.md) |
+| <a id="languages"></a>HTTP 服务与跨语言客户端 | [打开专章](docs/07-http-and-clients.md) |
+| <a id="protocol"></a>接口协议、身份和自定义字段 | [打开专章](docs/05-protocol.md) |
+| <a id="instrumentation"></a>接入位置：同步、ReAct 与多层 Agent | [打开专章](docs/08-instrumentation.md) |
+| <a id="concurrency"></a>异步、并发、消息队列与任务收尾 | [打开专章](docs/09-async-and-multi-agent.md) |
+| <a id="extensions"></a>接口协议、身份和自定义字段 | [打开专章](docs/05-protocol.md) |
+| <a id="memory"></a>公共与私有协作：晋升、冲突、信任与淘汰 | [打开专章](docs/14-shared-memory.md) |
+| <a id="operations"></a>状态查询、排错与长期运行 | [打开专章](docs/21-operations.md) |
+| <a id="compatibility"></a>导入历史日志、SDK 与兼容迁移 | [打开专章](docs/23-import-and-migration.md) |
+| <a id="offline"></a>导入历史日志、SDK 与兼容迁移 | [打开专章](docs/23-import-and-migration.md) |
+| <a id="sdk"></a>导入历史日志、SDK 与兼容迁移 | [打开专章](docs/23-import-and-migration.md) |
+| <a id="verification"></a>测试、验收、扩展与源码阅读 | [打开专章](docs/22-testing-and-extension.md) |
 
-```bash
-conda run -n agentflow-dev cmake \
-  -S tools/trajectory_evolution \
-  -B build/trajectory-evolution \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_TESTING=ON
-
-conda run -n agentflow-dev cmake \
-  --build build/trajectory-evolution -j2
-
-conda run -n agentflow-dev ctest \
-  --test-dir build/trajectory-evolution \
-  --output-on-failure
-```
-
-## 从 SessionLog 建立记忆库
-
-默认只运行确定性规则，不访问网络：
-
-```bash
-build/trajectory-evolution/trajectory_evolution evaluate \
-  trace_output/sessionlogs/by-user \
-  --output-root trace_output/evolution \
-  --model-selection none
-```
-
-一次目录运行会生成：
-
-```text
-trace_output/evolution/
-├── by-user/<user>/<conversation>/<dialogue>.evaluation.json
-├── by-user/<user>/<conversation>/<dialogue>.evaluation.pb
-├── runs/<batch-id>/batch.evaluation.json
-├── runs/<batch-id>/batch.evaluation.pb
-└── memory/
-    ├── evolution-memory.pb
-    ├── evolution-memory.json
-    └── evolution-memory.pb.lock
-```
-
-- `evaluation.pb/json` 是每个 Dialogue 的完整 Hybrid Evaluation；
-- `batch.evaluation.pb/json` 保存本批输入、失败隔离结果、候选、元反思状态和记忆更新结果；
-- `evolution-memory.pb` 是权威记忆库；
-- `evolution-memory.json` 是每次运行同步生成的可读视图；
-- `.lock` 是跨进程写锁文件，可以长期保留。
-
-同一个 `batch_id` 重放不会增加记忆修订号。批次身份覆盖成功评测结果（其中包含 SessionLog 内容指纹）、最终候选、元反思结果，以及失败输入身份和错误信息；这些内容变化时会形成新批次。记忆写入使用进程间文件锁和同目录临时文件原子替换。
-
-目录中的单个坏 JSONL 会记录为失败的 `EvaluationRunSummary`，不会阻止其他 Dialogue 完成。只有本批一个成功评测都没有时，命令才返回失败退出码。
-
-## 质量门和记忆语义
-
-候选来源有两类：
-
-1. 确定性诊断，例如 `non_retryable_repeat`、`exact_repeat`、`no_state_progress`、`state_oscillation`、`result_not_consumed`；
-2. 已通过模型响应严格校验的 Dialogue 反思，包括 Skill 编排、Prompt 和停止条件建议。
-
-可选元反思只允许合并 `target_type` 与 `target_scope` 相同的既有候选，并且只能引用本批真实 Seed ID 和 Event ID。任何字段非法时，整次元反思原子拒绝，原始规则候选继续有效。
-
-候选状态：
-
-- `PROPOSED`：支持的 Dialogue 和 Episode 数达到门槛，且没有反证；
-- `INSUFFICIENT_SUPPORT`：证据真实，但尚未达到门槛；
-- `CONFLICTED`：相同作用域和错误条件下存在 `USEFUL` 或 `NECESSARY_RETRY` 反证；
-- `REJECTED_BY_GATE`：没有可回链的支持证据，不写入记忆库。
-
-默认门槛是至少 2 个 Dialogue、2 个 Episode，可通过以下选项调整：
-
-```bash
---min-supporting-dialogues 2
---min-supporting-episodes 2
-```
-
-`PROPOSED`、`INSUFFICIENT_SUPPORT` 和 `CONFLICTED` 都会以候选状态进入记忆，便于后续积累支持、观察冲突和保留负证据；它们不会自动成为线上策略。每条记忆保存首次/最近批次、观察批次集合、去重证据和发生实质变化时的候选快照修订。
-
-## 可选模型评测与元反思
-
-直连 OpenAI-compatible Chat Completions Endpoint：
-
-```bash
-export EVOLUTION_API_KEY='...'
-
-build/trajectory-evolution/trajectory_evolution evaluate \
-  trace_output/sessionlogs/by-user \
-  --output-root trace_output/evolution-model \
-  --model-selection suspicious \
-  --meta-reflection \
-  --model-endpoint 'https://provider.example/v1/chat/completions' \
-  --model-id 'MODEL_ID' \
-  --api-key-env EVOLUTION_API_KEY \
-  --timeout-ms 240000 \
-  --max-output-tokens 4096 \
-  --max-model-calls 512
-```
-
-`--model-selection suspicious` 对每个 Dialogue 只请求一次模型，评测任务结果、可疑 Episode 和反思；`all` 会把所有 Episode 纳入同一次 Dialogue 请求。`--meta-reflection` 最多再进行一次跨 Dialogue 调用，并与 Dialogue 调用共用 `--max-model-calls` 批次预算。
-
-Endpoint 必须是完整路径。生产地址必须使用 HTTPS；HTTP 仅允许 Loopback；默认禁止重定向和系统代理。API Key 只能通过 `--api-key-env` 指定的环境变量读取，不接受命令行明文 Key。
-
-模型不可用、传输失败或输出非法时，规则层继续完成并记录稳定错误码。模型原始响应不写入评测或记忆，只保存指纹和已校验的结构化结论。
-
-如需离线复核请求，可显式增加：
-
-```bash
---requests-out trace_output/evolution-model/model-requests.jsonl
-```
-
-该文件包含脱敏、限长后的具体内容，属于敏感派生数据，不应提交到 Git。也可以用 `--model-responses RESPONSES.jsonl` 回放预录模型响应。
-
-## 单 Dialogue 兼容模式
-
-统一二进制仍支持只评测一个 SessionLog：
-
-```bash
-build/trajectory-evolution/trajectory_evolution evaluate \
-  DIALOGUE.jsonl \
-  --model-selection none \
-  --output DIALOGUE.evaluation.json \
-  --protobuf-out DIALOGUE.evaluation.pb
-```
-
-旧 `analysis.json` 也可作为单文件兼容输入，但目录模式只发现 `*.jsonl`，且不再要求先落盘 `analysis.json`。
-
-## 隐私与完整性边界
-
-- 原始 Prompt、Messages、Tool 参数/结果不会复制进最终 Evaluation、Batch 或 Memory Protobuf；
-- 具体内容只在启用模型时构造为瞬时、脱敏、限长请求；
-- 常见供应商 Key、Bearer/JWT、私钥、敏感字段和显式配置的 Secret 会被检查；发现凭据形态时拒绝持久化；
-- Trace 完整性失败默认拒绝；`--allow-invalid-trace` 只允许隔离保存评测，不允许它生成候选或发送给模型；
-- 输出根目录和模型回放文件必须位于 SessionLog 输入根目录之外，避免下一批把派生产物重新当作原始轨迹；
-- 每条候选证据保留 User/Conversation/Dialogue、Episode、Diagnostic 和 Event ID，可回到 SessionLog 验证。
-
-## 退出码
-
-- `0`：至少一个 Dialogue 完成；模型降级和个别文件失败会写入报告；
-- `2`：命令行、模型配置或静态路径冲突；
-- `3`：本批没有成功评测，或评测/持久化阶段失败；
-- `4`：未预期异常。
-
-当前实现止于“候选进化记忆库”。下一阶段应从记忆库选择候选，在隔离环境中生成策略变体、回放/对照评测，并只把通过验证的修订提升为 `VALIDATED`；不应直接让离线反思修改线上 Prompt、Skill 编排或 Loop 条件。
+完整章节目录、阅读路线和源码索引见[文档首页](docs/README.md)。
