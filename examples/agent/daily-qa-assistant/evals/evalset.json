@@ -1,0 +1,749 @@
+{
+  "name": "daily-qa-assistant-long-horizon-evalset",
+  "version": "1.0.0",
+  "description": "日常问答助手长程任务测评集：验证任务执行成功率与多意图识别准确率。每个 case 为一段 3~5 轮的多轮对话，expected_skills 为该轮意图识别 ground truth（期望 coordinator dispatch 的 skill 集合，[] 表示不应 dispatch），通过 sessionlog 的 skill.dispatch 事件自动核对。",
+  "skill_names": [
+    "weather-query",
+    "amap-nearby",
+    "web-search",
+    "image-gen"
+  ],
+  "categories": [
+    "single-intent",
+    "multi-intent",
+    "cross-turn",
+    "long-horizon",
+    "negative"
+  ],
+  "cases": [
+    {
+      "id": "SI-001",
+      "category": "single-intent",
+      "difficulty": "easy",
+      "goal": "天气单意图：识别天气意图并 dispatch weather-query，用真实数据回答；穿插纯常识负例轮。",
+      "turns": [
+        {
+          "user": "东莞今天天气怎么样？适合穿什么？",
+          "expected_skills": ["weather-query"],
+          "must_include": ["天气"],
+          "rubric": "回复包含今日天气现象与温度/体感，并给出穿衣建议；天气数据应来自真实查询（心知天气），不得编造。"
+        },
+        {
+          "user": "那未来三天的预报呢？周末适合去爬山吗？",
+          "expected_skills": ["weather-query"],
+          "must_include": ["预报"],
+          "rubric": "给出未来 3 天逐日天气/温度区间，并针对周末是否适合爬山给出基于预报的建议；无需用户重复城市名（承接东莞上下文）。"
+        },
+        {
+          "user": "24 节气分别是什么？",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "纯常识问题，应直接列举 24 节气，不应 dispatch 任何 skill。"
+        }
+      ]
+    },
+    {
+      "id": "SI-002",
+      "category": "single-intent",
+      "difficulty": "easy",
+      "goal": "周边 POI 单意图：识别周边搜索意图并 dispatch amap-nearby；跨轮保持地点上下文。",
+      "turns": [
+        {
+          "user": "松山湖附近有什么咖啡店？",
+          "expected_skills": ["amap-nearby"],
+          "must_include": ["咖啡"],
+          "rubric": "给出咖啡店名称与地址（或距离/方位），数据来自高德真实查询，不编造店名。"
+        },
+        {
+          "user": "再帮我找找附近的加油站",
+          "expected_skills": ["amap-nearby"],
+          "must_include": ["加油站"],
+          "rubric": "『附近』承接松山湖上下文，搜索结果应为松山湖附近的加油站。"
+        },
+        {
+          "user": "咖啡因每天摄入多少算过量？",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "健康常识问题，直接回答，不应 dispatch 任何 skill。"
+        }
+      ]
+    },
+    {
+      "id": "SI-003",
+      "category": "single-intent",
+      "difficulty": "easy",
+      "goal": "公交单意图：识别公交查询意图并 dispatch amap-nearby 查询站点线路。",
+      "turns": [
+        {
+          "user": "深圳华为站有哪些公交线路？",
+          "expected_skills": ["amap-nearby"],
+          "must_include": ["华为"],
+          "rubric": "列出经停华为站的公交线路名（如 M 线等），来自高德公交查询。"
+        },
+        {
+          "user": "那深圳北站呢？",
+          "expected_skills": ["amap-nearby"],
+          "must_include": ["深圳北"],
+          "rubric": "上下文切换到深圳北站查询公交线路，无需用户重复『公交线路』。"
+        },
+        {
+          "user": "公交和地铁有什么区别？",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "常识解释，不应 dispatch 任何 skill。"
+        }
+      ]
+    },
+    {
+      "id": "SI-004",
+      "category": "single-intent",
+      "difficulty": "easy",
+      "goal": "网页搜索单意图：实时信息类问题 dispatch web-search 并注明来源。",
+      "turns": [
+        {
+          "user": "帮我搜一下最近有什么值得关注的科技新闻",
+          "expected_skills": ["web-search"],
+          "must_include": [],
+          "rubric": "回复基于真实网页搜索结果，注明信息来源与时间，不编造新闻。"
+        },
+        {
+          "user": "再搜下最近 AI 领域有什么重大发布",
+          "expected_skills": ["web-search"],
+          "must_include": [],
+          "rubric": "延续搜索意图，给出带来源的 AI 新闻摘要。"
+        },
+        {
+          "user": "帮我讲一个简短的科技史小故事",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "创作/常识类问题，直接回答，不应 dispatch 任何 skill。"
+        }
+      ]
+    },
+    {
+      "id": "SI-005",
+      "category": "single-intent",
+      "difficulty": "easy",
+      "goal": "文生图单意图：明确画图请求 dispatch image-gen，并在回复附上图片路径/链接。",
+      "turns": [
+        {
+          "user": "帮我画一只在樱花树下打盹的橘猫",
+          "expected_skills": ["image-gen"],
+          "must_include": [],
+          "rubric": "调用文生图生成图片，并在回复末尾附上图片路径或链接。"
+        },
+        {
+          "user": "再画一张，背景换成雪地",
+          "expected_skills": ["image-gen"],
+          "must_include": [],
+          "rubric": "承接上一轮主体（橘猫），仅更换背景重新生成，附图片路径/链接。"
+        },
+        {
+          "user": "用一段话描写雪景",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "纯写作任务，直接给出描写文字，不应 dispatch 任何 skill。"
+        }
+      ]
+    },
+    {
+      "id": "MI-001",
+      "category": "multi-intent",
+      "difficulty": "medium",
+      "goal": "双意图（天气+周边餐饮）：单轮并行 dispatch weather-query 与 amap-nearby，融合两路数据回答。",
+      "turns": [
+        {
+          "user": "深圳今天天气怎么样？附近有什么好吃的川菜馆？",
+          "expected_skills": ["weather-query", "amap-nearby"],
+          "must_include": ["天气", "川菜"],
+          "rubric": "一轮内同时覆盖：深圳天气（现象+温度）与附近的川菜馆（名称+地址/距离），两类数据融合成连贯回复。"
+        },
+        {
+          "user": "明天呢？想吃清淡点，帮我找找粤菜馆",
+          "expected_skills": ["weather-query", "amap-nearby"],
+          "must_include": ["粤菜"],
+          "rubric": "『明天呢』指查深圳明天天气，同时搜索粤菜馆；两意图均应识别。"
+        },
+        {
+          "user": "大芬油画村附近有哪些公交站？",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "公交站点查询，dispatch amap-nearby；不应对『油画村』触发 image-gen。"
+        }
+      ]
+    },
+    {
+      "id": "MI-002",
+      "category": "multi-intent",
+      "difficulty": "medium",
+      "goal": "双意图（天气+POI）：天气与遛娃地点的组合意图识别。",
+      "turns": [
+        {
+          "user": "查一下东莞明天的天气，再帮我找找附近适合遛娃的公园",
+          "expected_skills": ["weather-query", "amap-nearby"],
+          "must_include": ["公园"],
+          "rubric": "同时回答明天天气与附近公园列表，公园应有名称与位置。"
+        },
+        {
+          "user": "后天的天气呢？顺便看看公园附近有没有便利店",
+          "expected_skills": ["weather-query", "amap-nearby"],
+          "must_include": [],
+          "rubric": "两个意图都承接上轮：后天天气 + 公园附近便利店。"
+        },
+        {
+          "user": "带小孩逛公园有什么注意事项？",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "常识建议，直接回答，不应 dispatch 任何 skill。"
+        }
+      ]
+    },
+    {
+      "id": "MI-003",
+      "category": "multi-intent",
+      "difficulty": "hard",
+      "goal": "三意图（天气+搜索+文生图）：单轮识别并并行 dispatch 三个 skill。",
+      "turns": [
+        {
+          "user": "我明天去广州出差：查下广州的天气、搜一下最新的高铁票预售政策、再帮我画一张广州塔的明信片风格插画",
+          "expected_skills": ["weather-query", "web-search", "image-gen"],
+          "must_include": [],
+          "rubric": "一轮内三个意图全部识别：广州天气、高铁预售政策（注明来源）、广州塔插画（附图片路径/链接）。"
+        },
+        {
+          "user": "广州塔附近有什么酒店和餐厅推荐？",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "周边 POI 搜索覆盖酒店与餐厅两类关键词。"
+        },
+        {
+          "user": "帮我看看广州塔周边的公交站有哪些",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "公交站点查询，dispatch amap-nearby。"
+        }
+      ]
+    },
+    {
+      "id": "MI-004",
+      "category": "multi-intent",
+      "difficulty": "medium",
+      "goal": "双意图（搜索+POI）：实时赛事信息与周边餐厅组合。",
+      "turns": [
+        {
+          "user": "今天有什么足球比赛？顺便查下东莞篮球中心附近有什么餐厅",
+          "expected_skills": ["web-search", "amap-nearby"],
+          "must_include": [],
+          "rubric": "赛事比分/赛程来自真实搜索并注明来源；餐厅来自高德 POI，附名称地址。"
+        },
+        {
+          "user": "篮球中心附近有公交站吗？",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "公交站点查询，dispatch amap-nearby；不应误 dispatch web-search。"
+        },
+        {
+          "user": "篮球比赛每队几个人上场？",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "常识问题，直接回答。"
+        }
+      ]
+    },
+    {
+      "id": "MI-005",
+      "category": "multi-intent",
+      "difficulty": "medium",
+      "goal": "双意图（文生图+搜索/天气）：画图与信息查询的组合，两轮交叉不同 skill 对。",
+      "turns": [
+        {
+          "user": "帮我画一张中秋赏月的水墨画，顺便搜一下今年中秋节有什么活动",
+          "expected_skills": ["image-gen", "web-search"],
+          "must_include": [],
+          "rubric": "画图（附图片路径/链接）+ 活动信息搜索（注明来源）同时完成。"
+        },
+        {
+          "user": "把画改成卡通风格再生成一张，另外查下中秋节期间深圳的天气",
+          "expected_skills": ["image-gen", "weather-query"],
+          "must_include": [],
+          "rubric": "重画（卡通风格）+ 深圳中秋期间天气，两意图均应识别。"
+        },
+        {
+          "user": "中秋节有哪些传统习俗？",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "常识问答，直接回答。"
+        }
+      ]
+    },
+    {
+      "id": "MI-006",
+      "category": "multi-intent",
+      "difficulty": "medium",
+      "goal": "双意图（天气+POI）连续两轮交叉组合，再以单意图画图收尾。",
+      "turns": [
+        {
+          "user": "周末想去爬梧桐山，查下深圳的天气，再看看梧桐山附近哪里可以吃饭",
+          "expected_skills": ["weather-query", "amap-nearby"],
+          "must_include": [],
+          "rubric": "深圳天气 + 梧桐山附近餐饮，两意图均识别。"
+        },
+        {
+          "user": "爬山回来想吃清淡的，附近有粥店吗？再看看明天会不会下雨",
+          "expected_skills": ["amap-nearby", "weather-query"],
+          "must_include": [],
+          "rubric": "粥店 POI（承接梧桐山上下文）+ 明天降雨情况。"
+        },
+        {
+          "user": "帮我画一张梧桐山云海的风景图",
+          "expected_skills": ["image-gen"],
+          "must_include": [],
+          "rubric": "文生图，附图片路径/链接。"
+        }
+      ]
+    },
+    {
+      "id": "CT-001",
+      "category": "cross-turn",
+      "difficulty": "medium",
+      "goal": "跨轮指代（天气）：后轮用『那明天呢』等省略表达，考察上下文承接后仍正确 dispatch。",
+      "turns": [
+        {
+          "user": "东莞今天天气怎么样？",
+          "expected_skills": ["weather-query"],
+          "must_include": ["天气"],
+          "rubric": "今日东莞天气：现象+温度。"
+        },
+        {
+          "user": "那明天呢？",
+          "expected_skills": ["weather-query"],
+          "must_include": [],
+          "rubric": "无需重复城市名，识别为查询东莞明天天气并重新 dispatch weather-query（明天数据需新查询，不能用上轮缓存作答）。"
+        },
+        {
+          "user": "后天适合晾晒被子吗？",
+          "expected_skills": ["weather-query"],
+          "must_include": [],
+          "rubric": "识别为东莞后天天气查询，结合天气给晾晒建议。"
+        },
+        {
+          "user": "帮我画一张雨后彩虹的水彩图",
+          "expected_skills": ["image-gen"],
+          "must_include": [],
+          "rubric": "文生图，附图片路径/链接。"
+        }
+      ],
+      "final_rubric": "整段对话围绕东莞天气展开，后三轮均正确承接『东莞』上下文，意图切换（画图）也被正确识别。"
+    },
+    {
+      "id": "CT-002",
+      "category": "cross-turn",
+      "difficulty": "medium",
+      "goal": "跨轮指代（餐饮）：『换成火锅呢』等省略表达承接地点与查询类型。",
+      "turns": [
+        {
+          "user": "松山湖附近有什么川菜馆？",
+          "expected_skills": ["amap-nearby"],
+          "must_include": ["川菜"],
+          "rubric": "高德 POI 搜索川菜馆，给出名称+地址。"
+        },
+        {
+          "user": "换成火锅呢？",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "识别为松山湖附近火锅店查询（地点承接），重新 dispatch。"
+        },
+        {
+          "user": "离松山湖最近的公交站是哪个？",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "公交站点查询，dispatch amap-nearby。"
+        },
+        {
+          "user": "帮我搜一下松山湖商圈最近的餐饮优惠活动",
+          "expected_skills": ["web-search"],
+          "must_include": [],
+          "rubric": "优惠活动属实时信息，dispatch web-search 并注明来源；不应误用 amap-nearby。"
+        }
+      ],
+      "final_rubric": "四轮地点上下文（松山湖）保持一致，查询类型切换（川菜→火锅→公交→优惠活动）均被正确识别。"
+    },
+    {
+      "id": "CT-003",
+      "category": "cross-turn",
+      "difficulty": "medium",
+      "goal": "跨轮指代（公交/地点链）：华为站→地铁站→深圳北站便利店的地点链承接。",
+      "turns": [
+        {
+          "user": "深圳华为站有哪些公交线路经过？",
+          "expected_skills": ["amap-nearby"],
+          "must_include": ["华为"],
+          "rubric": "列出经停华为站的公交线路。"
+        },
+        {
+          "user": "那附近的地铁站有哪些？",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "『附近』承接华为站，查询华为站附近地铁站。"
+        },
+        {
+          "user": "深圳北站附近有没有便利店？",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "地点切换到深圳北站查便利店，dispatch amap-nearby。"
+        },
+        {
+          "user": "帮我搜一下华为基地附近的停车场收费标准",
+          "expected_skills": ["web-search"],
+          "must_include": [],
+          "rubric": "收费标准属实时信息，dispatch web-search 并注明来源。"
+        }
+      ],
+      "final_rubric": "地点链承接正确：华为站→地铁站→深圳北站→华为基地，每轮意图类型识别无误。"
+    },
+    {
+      "id": "CT-004",
+      "category": "cross-turn",
+      "difficulty": "medium",
+      "goal": "跨轮指代（图像迭代）：同款风格/第一张构图等指代，连续文生图。",
+      "turns": [
+        {
+          "user": "画一张宇航员在火星骑自行车的科幻插画",
+          "expected_skills": ["image-gen"],
+          "must_include": [],
+          "rubric": "生成科幻插画，附图片路径/链接。"
+        },
+        {
+          "user": "同款风格再来一张，主角换成柴犬",
+          "expected_skills": ["image-gen"],
+          "must_include": [],
+          "rubric": "承接『同款风格』与火星背景，主角换成柴犬重新生成。"
+        },
+        {
+          "user": "把第一张的构图保留，风格改成水彩，再生成一次",
+          "expected_skills": ["image-gen"],
+          "must_include": [],
+          "rubric": "『第一张』指代正确（宇航员骑车），风格改水彩再生成。"
+        },
+        {
+          "user": "现在火星上有哪些探测器？搜一下最新进展",
+          "expected_skills": ["web-search"],
+          "must_include": [],
+          "rubric": "实时信息搜索，注明来源；不应继续调用 image-gen。"
+        }
+      ],
+      "final_rubric": "三轮画图的指代与风格要求逐轮递进且正确执行，第四轮意图切换为搜索。"
+    },
+    {
+      "id": "CT-005",
+      "category": "cross-turn",
+      "difficulty": "easy",
+      "goal": "跨轮指代（跑步场景）：天气→晚上→粥店→画图的轻量长程链。",
+      "turns": [
+        {
+          "user": "东莞今天适合户外跑步吗？先看看天气",
+          "expected_skills": ["weather-query"],
+          "must_include": ["天气"],
+          "rubric": "查询东莞今日天气并结合跑步场景给建议。"
+        },
+        {
+          "user": "那晚上呢？",
+          "expected_skills": ["weather-query"],
+          "must_include": [],
+          "rubric": "识别为东莞今晚天气，重新 dispatch 查询。"
+        },
+        {
+          "user": "跑完想吃清淡的，附近有什么粥店？",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "POI 查询粥店（地点上下文为东莞/当地），dispatch amap-nearby。"
+        },
+        {
+          "user": "帮我画一张清晨公园跑步的场景图",
+          "expected_skills": ["image-gen"],
+          "must_include": [],
+          "rubric": "文生图，附图片路径/链接。"
+        }
+      ]
+    },
+    {
+      "id": "LH-001",
+      "category": "long-horizon",
+      "difficulty": "hard",
+      "goal": "长程任务：周末出游全链路规划（天气→餐饮→配图→门票），四轮跨四个 skill。",
+      "turns": [
+        {
+          "user": "我周末想去广州塔玩，先查下广州这两天的天气怎么样",
+          "expected_skills": ["weather-query"],
+          "must_include": ["天气"],
+          "rubric": "给出广州近期（含周末）天气概况与温度。"
+        },
+        {
+          "user": "帮我找找广州塔附近评分高的粤菜馆",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "高德 POI 搜索广州塔附近粤菜馆，尽量给出评分与地址。"
+        },
+        {
+          "user": "帮我画一张广州塔夜景的朋友圈配图",
+          "expected_skills": ["image-gen"],
+          "must_include": [],
+          "rubric": "文生图夜景配图，附图片路径/链接。"
+        },
+        {
+          "user": "最后搜一下广州塔的门票价格和开放时间",
+          "expected_skills": ["web-search"],
+          "must_include": [],
+          "rubric": "门票/开放时间为实时信息，dispatch web-search 并注明来源。"
+        }
+      ],
+      "final_rubric": "四轮构成完整出游规划：天气→餐饮→配图→门票，信息相互衔接（如结合天气提示出行），跨轮无遗忘。"
+    },
+    {
+      "id": "LH-002",
+      "category": "long-horizon",
+      "difficulty": "hard",
+      "goal": "长程任务：雨天亲子备选方案（天气趋势→逐日→室内游乐场→海报）。",
+      "turns": [
+        {
+          "user": "东莞最近几天会下雨吗？看看周末天气",
+          "expected_skills": ["weather-query"],
+          "must_include": ["雨"],
+          "rubric": "基于真实预报回答近期（含周末）降雨情况；不应因『看看』而误用 web-search。"
+        },
+        {
+          "user": "把未来三天的天气详细说说",
+          "expected_skills": ["weather-query"],
+          "must_include": ["天气"],
+          "rubric": "逐日给出未来 3 天天气/温度/降水。"
+        },
+        {
+          "user": "帮我找找南城这边适合小孩的室内游乐场",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "POI 搜索室内亲子游乐场（南城为东莞下辖区，承接前文城市上下文）。"
+        },
+        {
+          "user": "给周末的亲子活动画一张海报",
+          "expected_skills": ["image-gen"],
+          "must_include": [],
+          "rubric": "文生图海报，附图片路径/链接。"
+        }
+      ],
+      "final_rubric": "从天气趋势到室内备选方案再到海报，任务链完整，城市上下文（东莞）全程保持。"
+    },
+    {
+      "id": "LH-003",
+      "category": "long-horizon",
+      "difficulty": "hard",
+      "goal": "长程任务：搬家考察（天气→配套→公交→房价→概念图），5 轮 4 skill。",
+      "turns": [
+        {
+          "user": "我想搬到松山湖住，先查下东莞今天的天气",
+          "expected_skills": ["weather-query"],
+          "must_include": ["天气"],
+          "rubric": "东莞今日天气查询。"
+        },
+        {
+          "user": "松山湖附近3公里内有哪些超市和医院？",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "周边搜索覆盖超市与医院两类，附名称/地址/距离。"
+        },
+        {
+          "user": "查一下可园附近有哪些公交站，我以后出行要参考",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "公交站点查询，dispatch amap-nearby。"
+        },
+        {
+          "user": "搜一下松山湖片区的房价水平",
+          "expected_skills": ["web-search"],
+          "must_include": [],
+          "rubric": "房价为实时信息，dispatch web-search 并注明来源与时间。"
+        },
+        {
+          "user": "画一张松山湖湖景的生活概念图",
+          "expected_skills": ["image-gen"],
+          "must_include": [],
+          "rubric": "文生图概念图，附图片路径/链接。"
+        }
+      ],
+      "final_rubric": "五轮覆盖 4 个 skill，围绕『搬到松山湖居住』形成完整考察报告式回答体验，上下文无漂移。"
+    },
+    {
+      "id": "LH-004",
+      "category": "long-horizon",
+      "difficulty": "hard",
+      "goal": "长程任务：节日策划（搜索日期→贺卡插画→天气→餐厅公交）。",
+      "turns": [
+        {
+          "user": "搜一下今年母亲节是哪一天",
+          "expected_skills": ["web-search"],
+          "must_include": [],
+          "rubric": "dispatch web-search 查询并明确给出今年母亲节日期。"
+        },
+        {
+          "user": "帮我画一张康乃馨贺卡的插画",
+          "expected_skills": ["image-gen"],
+          "must_include": [],
+          "rubric": "文生图贺卡插画，附图片路径/链接。"
+        },
+        {
+          "user": "再查下东莞母亲节前后几天的天气，看看适不适合出游",
+          "expected_skills": ["weather-query"],
+          "must_include": ["天气"],
+          "rubric": "天气查询并结合出游建议。"
+        },
+        {
+          "user": "可园附近有什么老字号餐厅？顺便看看附近有哪些公交站",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "餐厅+公交站两类 POI 查询，dispatch amap-nearby 完成。"
+        }
+      ],
+      "final_rubric": "节日策划链完整：日期→贺卡→天气→聚餐交通，各轮意图与 skill 对应无误。"
+    },
+    {
+      "id": "LH-005",
+      "category": "long-horizon",
+      "difficulty": "medium",
+      "goal": "长程任务：通勤决策（天气→公交→地铁接驳→配图）。",
+      "turns": [
+        {
+          "user": "深圳今天早上天气怎么样？想先了解适不适合骑车",
+          "expected_skills": ["weather-query"],
+          "must_include": ["天气"],
+          "rubric": "深圳今日（早晨）天气并结合骑行建议。"
+        },
+        {
+          "user": "帮我看看华为站有哪些公交线路可以选",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "华为站公交线路查询。"
+        },
+        {
+          "user": "华为站附近有地铁站吗？",
+          "expected_skills": ["amap-nearby"],
+          "must_include": [],
+          "rubric": "承接华为站上下文查地铁站。"
+        },
+        {
+          "user": "把清晨城市通勤的场景画一张图给我",
+          "expected_skills": ["image-gen"],
+          "must_include": [],
+          "rubric": "文生图通勤场景，附图片路径/链接。"
+        }
+      ],
+      "final_rubric": "通勤决策链完整：天气→公交→地铁→配图，华为站上下文保持一致。"
+    },
+    {
+      "id": "NG-001",
+      "category": "negative",
+      "difficulty": "easy",
+      "goal": "负例：数学与写作类请求，全程不应 dispatch 任何 skill。",
+      "turns": [
+        {
+          "user": "1+1等于几？圆周率前10位是什么？",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "直接给出正确答案，不 dispatch 任何 skill。"
+        },
+        {
+          "user": "帮我写一首关于秋天的五言绝句",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "直接创作五言绝句，不 dispatch 任何 skill。"
+        },
+        {
+          "user": "把这首诗翻译成英文",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "承接上一轮的诗进行翻译，不 dispatch 任何 skill。"
+        }
+      ],
+      "final_rubric": "三轮均零 skill 调用，回答正确自然。"
+    },
+    {
+      "id": "NG-002",
+      "category": "negative",
+      "difficulty": "easy",
+      "goal": "负例：科学常识问答，全程零 skill 调用。",
+      "turns": [
+        {
+          "user": "为什么天空是蓝色的？",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "瑞利散射解释，不 dispatch 任何 skill。"
+        },
+        {
+          "user": "光的三原色是哪三种？",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "直接回答，不 dispatch。"
+        },
+        {
+          "user": "红色和绿色光混合是什么颜色？",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "直接回答（黄色），不 dispatch。"
+        }
+      ],
+      "final_rubric": "三轮均零 skill 调用，科学解释准确。"
+    },
+    {
+      "id": "NG-003",
+      "category": "negative",
+      "difficulty": "easy",
+      "goal": "负例：办公写作场景（含指代改写），全程零 skill 调用。",
+      "turns": [
+        {
+          "user": "帮我写一封请病假的邮件，语气诚恳一点",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "直接写出邮件，不 dispatch 任何 skill。"
+        },
+        {
+          "user": "语气再正式一点，重写一遍",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "承接上一轮邮件改写，不 dispatch。"
+        },
+        {
+          "user": "再帮我列一个周末学习 Python 的计划",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "直接列计划，不 dispatch。"
+        }
+      ],
+      "final_rubric": "三轮均零 skill 调用，写作质量良好且上下文连贯。"
+    },
+    {
+      "id": "NG-004",
+      "category": "negative",
+      "difficulty": "medium",
+      "goal": "负例+陷阱：前两轮含『天气/冷』等诱饵词但属常识解释，第三轮真实画图意图。",
+      "turns": [
+        {
+          "user": "天气冷的时候为什么湖水会结冰，海水不容易结冰？",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "物理常识解释，不得因出现『天气』而 dispatch weather-query。"
+        },
+        {
+          "user": "给我讲个适合冬天讲的冷笑话",
+          "expected_skills": [],
+          "must_include": [],
+          "rubric": "直接讲冷笑话，不得因『冷』字误 dispatch weather-query。"
+        },
+        {
+          "user": "把'冬日暖阳'画成一幅抽象画",
+          "expected_skills": ["image-gen"],
+          "must_include": [],
+          "rubric": "明确的画图请求，dispatch image-gen 并附图片路径/链接。"
+        }
+      ],
+      "final_rubric": "诱饵词未触发误分发（前两轮零调用），第三轮真实意图被正确识别。"
+    }
+  ]
+}

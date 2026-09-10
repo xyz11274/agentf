@@ -94,6 +94,17 @@ python3 examples/agent/harness_agent_v2/test_client.py \
 #   "帮我画一只在樱花树下打盹的橘猫"
 ```
 
+## 评测
+
+长程任务测评集（任务执行成功率 / 多意图识别准确率）与评测 runner 见 [evals/README.md](evals/README.md)：
+
+```bash
+python3 evals/run_eval.py --port 17892            # 全量 25 例（约 1~3 小时）
+python3 evals/run_eval.py --port 17892 --category multi-intent   # 只跑多意图分类
+```
+
+> 依赖 sessionlog 轨迹核对意图分发，`.env` 中 `AF_SESSIONLOG_ENABLED=1`（已配置）。
+
 ## 环境变量
 
 | 变量 | 用途 | 必填 |
