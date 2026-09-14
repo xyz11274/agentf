@@ -335,7 +335,7 @@ Library API 可以修改该限制，但必须：
 | --- | ---: |
 | `root_causes` | 64 |
 | `skill_orchestration_changes` | 64 |
-| `prompt_changes` | 64 |
+| `experience_injections` | 64 |
 | `stop_condition_changes` | 64 |
 | `wasted_episode_ids` | 64 |
 | 各处 `evidence_event_ids` | 256 |

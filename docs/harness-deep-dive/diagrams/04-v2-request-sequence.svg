@@ -1,0 +1,163 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1220" viewBox="0 0 1800 1220" role="img" aria-labelledby="title desc">
+  <title id="title">Harness v2 默认请求时序</title>
+  <desc id="desc">展示从客户端、Bridge、AgentFlow、Worker 到 Harness、LLM 和执行后端的完整请求、工具循环、流式进度与最终响应时序。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#07111f"/><stop offset="1" stop-color="#11172b"/></linearGradient>
+    <linearGradient id="af" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#16415a"/><stop offset="1" stop-color="#1a2a45"/></linearGradient>
+    <linearGradient id="harness" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#6548c7"/><stop offset="1" stop-color="#326cce"/></linearGradient>
+    <linearGradient id="exec" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#176057"/><stop offset="1" stop-color="#18405a"/></linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#020713" flood-opacity=".55"/></filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#75dcff"/></marker>
+    <marker id="returnArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#ffd166"/></marker>
+    <marker id="streamArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#b99cff"/></marker>
+    <style>
+      .title{font:700 34px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#f8fbff}
+      .subtitle{font:400 16px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#93a8c2}
+      .actor{font:700 15px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#f7fbff}
+      .actor-sub{font:500 11px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#bdd0e5}
+      .phase{font:800 11px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#aabbd0;letter-spacing:1.8px}
+      .msg{font:600 12px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#dcecff}
+      .ret{font:600 12px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#ffe6a1}
+      .note{font:500 11px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#b7c9de}
+      .num{font:700 10px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#07111f}
+      .call{fill:none;stroke:#75dcff;stroke-width:2.2;marker-end:url(#arrow)}
+      .return{fill:none;stroke:#ffd166;stroke-width:2;stroke-dasharray:7 6;marker-end:url(#returnArrow)}
+      .stream{fill:none;stroke:#b99cff;stroke-width:2;stroke-dasharray:3 6;marker-end:url(#streamArrow)}
+      .life{stroke:#42536e;stroke-width:1.5;stroke-dasharray:6 7}
+    </style>
+  </defs>
+
+  <rect width="1800" height="1220" rx="28" fill="url(#bg)"/>
+  <circle cx="1570" cy="130" r="250" fill="#5668ff" opacity=".04"/>
+  <text x="58" y="62" class="title">Harness v2 · 默认请求时序</text>
+  <text x="58" y="94" class="subtitle">从 API 到 AgentFlow 调度，再进入单节点 Agent Loop；进度走 DataBus，完成走 stdout JSON</text>
+
+  <g>
+    <rect x="50" y="128" width="178" height="70" rx="18" fill="#17243a" stroke="#3c5571"/>
+    <rect x="292" y="128" width="178" height="70" rx="18" fill="#17243a" stroke="#3c5571"/>
+    <rect x="534" y="128" width="178" height="70" rx="18" fill="url(#af)" stroke="#3e7b9b"/>
+    <rect x="776" y="128" width="178" height="70" rx="18" fill="url(#af)" stroke="#3e7b9b"/>
+    <rect x="1018" y="128" width="178" height="70" rx="18" fill="url(#harness)" stroke="#a08aff"/>
+    <rect x="1260" y="128" width="178" height="70" rx="18" fill="#2c2454" stroke="#7e6cc0"/>
+    <rect x="1502" y="128" width="248" height="70" rx="18" fill="url(#exec)" stroke="#45a89e"/>
+  </g>
+
+  <text x="139" y="157" text-anchor="middle" class="actor">用户 / Client</text><text x="139" y="181" text-anchor="middle" class="actor-sub">messages · upload</text>
+  <text x="381" y="157" text-anchor="middle" class="actor">Bridge / Sidecar</text><text x="381" y="181" text-anchor="middle" class="actor-sub">HTTP · stream · package</text>
+  <text x="623" y="157" text-anchor="middle" class="actor">agentflowd</text><text x="623" y="181" text-anchor="middle" class="actor-sub">RPC · registry · poller</text>
+  <text x="865" y="157" text-anchor="middle" class="actor">AgentFlow Worker</text><text x="865" y="181" text-anchor="middle" class="actor-sub">Task · Workflow · Node</text>
+  <text x="1107" y="157" text-anchor="middle" class="actor">Harness v2</text><text x="1107" y="181" text-anchor="middle" class="actor-sub">coordinator_agent_loop</text>
+  <text x="1349" y="157" text-anchor="middle" class="actor">LLM Service</text><text x="1349" y="181" text-anchor="middle" class="actor-sub">function calling</text>
+  <text x="1626" y="157" text-anchor="middle" class="actor">Tool Registry / Executor</text><text x="1626" y="181" text-anchor="middle" class="actor-sub">Host · HTTP · e2b · MCP</text>
+
+  <line x1="139" y1="198" x2="139" y2="1160" class="life"/>
+  <line x1="381" y1="198" x2="381" y2="1160" class="life"/>
+  <line x1="623" y1="198" x2="623" y2="1160" class="life"/>
+  <line x1="865" y1="198" x2="865" y2="1160" class="life"/>
+  <line x1="1107" y1="198" x2="1107" y2="1160" class="life"/>
+  <line x1="1349" y1="198" x2="1349" y2="1160" class="life"/>
+  <line x1="1626" y1="198" x2="1626" y2="1160" class="life"/>
+
+  <rect x="35" y="226" width="1730" height="258" rx="20" fill="#102033" opacity=".52" stroke="#273c55"/>
+  <rect x="35" y="502" width="1730" height="444" rx="20" fill="#171b3a" opacity=".55" stroke="#3d3869"/>
+  <rect x="35" y="964" width="1730" height="180" rx="20" fill="#102b31" opacity=".48" stroke="#2a5459"/>
+  <text x="58" y="250" class="phase">PHASE 01 · ROUTE &amp; BOOTSTRAP</text>
+  <text x="58" y="526" class="phase">PHASE 02 · IN-PROCESS AGENT LOOP</text>
+  <text x="58" y="988" class="phase">PHASE 03 · COMMIT &amp; RESPONSE</text>
+
+  <g>
+    <circle cx="163" cy="282" r="13" fill="#75dcff"/><text x="163" y="286" text-anchor="middle" class="num">1</text>
+    <path d="M139 282 H368" class="call"/>
+    <text x="253" y="270" text-anchor="middle" class="msg">messages + stream + files</text>
+
+    <circle cx="405" cy="326" r="13" fill="#75dcff"/><text x="405" y="330" text-anchor="middle" class="num">2</text>
+    <path d="M381 326 H610" class="call"/>
+    <text x="495" y="314" text-anchor="middle" class="msg">agent.execute</text>
+
+    <circle cx="647" cy="370" r="13" fill="#75dcff"/><text x="647" y="374" text-anchor="middle" class="num">3</text>
+    <path d="M623 370 H852" class="call"/>
+    <text x="737" y="358" text-anchor="middle" class="msg">route → Session → dispatcher</text>
+
+    <rect x="750" y="390" width="230" height="60" rx="14" fill="#172c43" stroke="#3c6783"/>
+    <text x="865" y="414" text-anchor="middle" class="note">dummy_pre_skill 完成</text>
+    <text x="865" y="435" text-anchor="middle" class="note">→ re-trigger coordinator Task</text>
+
+    <circle cx="889" cy="466" r="13" fill="#75dcff"/><text x="889" y="470" text-anchor="middle" class="num">4</text>
+    <path d="M865 466 H1094" class="call"/>
+    <text x="979" y="454" text-anchor="middle" class="msg">shell wrapper → execute()</text>
+  </g>
+
+  <rect x="1002" y="520" width="210" height="410" rx="18" fill="#5541b8" opacity=".16" stroke="#8b78e7"/>
+  <rect x="1089" y="530" width="36" height="388" rx="12" fill="#765fe2" opacity=".38"/>
+
+  <g>
+    <rect x="926" y="542" width="362" height="74" rx="16" fill="#211f47" stroke="#6658a5"/>
+    <text x="1107" y="568" text-anchor="middle" class="msg">初始化 Harness Runtime</text>
+    <text x="1107" y="590" text-anchor="middle" class="note">AF_* → agent.md → SKILL.md → history → hooks → tools</text>
+    <rect x="1037" y="601" width="140" height="22" rx="11" fill="#39316d"/>
+    <text x="1107" y="616" text-anchor="middle" class="actor-sub">一次装配，循环复用</text>
+
+    <rect x="978" y="638" width="744" height="272" rx="18" fill="none" stroke="#7d69c7" stroke-width="1.5" stroke-dasharray="7 6"/>
+    <rect x="994" y="626" width="148" height="26" rx="13" fill="#30275c" stroke="#7d69c7"/>
+    <text x="1068" y="644" text-anchor="middle" class="actor-sub">LOOP · max_rounds</text>
+
+    <circle cx="1131" cy="678" r="13" fill="#75dcff"/><text x="1131" y="682" text-anchor="middle" class="num">5</text>
+    <path d="M1107 678 H1336" class="call"/>
+    <text x="1221" y="666" text-anchor="middle" class="msg">messages + tool schemas</text>
+
+    <circle cx="1325" cy="722" r="13" fill="#ffd166"/><text x="1325" y="726" text-anchor="middle" class="num">6</text>
+    <path d="M1349 722 H1120" class="return"/>
+    <text x="1235" y="710" text-anchor="middle" class="ret">assistant / tool_calls</text>
+
+    <rect x="1024" y="744" width="166" height="46" rx="13" fill="#292052" stroke="#6c5cb0"/>
+    <text x="1107" y="763" text-anchor="middle" class="note">无 tool_calls</text>
+    <text x="1107" y="780" text-anchor="middle" class="actor-sub">→ final branch</text>
+
+    <circle cx="1131" cy="816" r="13" fill="#75dcff"/><text x="1131" y="820" text-anchor="middle" class="num">7</text>
+    <path d="M1107 816 H1613" class="call"/>
+    <text x="1360" y="804" text-anchor="middle" class="msg">validate → classify → execute_in_batches</text>
+
+    <circle cx="1602" cy="860" r="13" fill="#ffd166"/><text x="1602" y="864" text-anchor="middle" class="num">8</text>
+    <path d="M1626 860 H1120" class="return"/>
+    <text x="1373" y="848" text-anchor="middle" class="ret">tool result + file paths</text>
+
+    <rect x="1178" y="875" width="320" height="24" rx="12" fill="#30285c"/>
+    <text x="1338" y="892" text-anchor="middle" class="actor-sub">Artifact collect · role=tool feedback · continue</text>
+  </g>
+
+  <g>
+    <path d="M1107 700 C950 700 760 700 394 700" class="stream"/>
+    <text x="750" y="687" text-anchor="middle" class="msg" style="fill:#d7ccff">DataBus response_push(progress / chunk)</text>
+    <rect x="292" y="674" width="178" height="52" rx="14" fill="#251f46" stroke="#6456a2"/>
+    <text x="381" y="696" text-anchor="middle" class="note">独立流式通道</text>
+    <text x="381" y="716" text-anchor="middle" class="actor-sub">不完成 Workflow</text>
+  </g>
+
+  <g>
+    <circle cx="1083" cy="1018" r="13" fill="#ffd166"/><text x="1083" y="1022" text-anchor="middle" class="num">9</text>
+    <path d="M1107 1018 H878" class="return"/>
+    <text x="993" y="1006" text-anchor="middle" class="ret">stdout JSON {response, status}</text>
+
+    <rect x="1002" y="1040" width="210" height="48" rx="14" fill="#15333c" stroke="#3c7775"/>
+    <text x="1107" y="1060" text-anchor="middle" class="note">final hooks · save messages</text>
+    <text x="1107" y="1079" text-anchor="middle" class="actor-sub">artifact links committed</text>
+
+    <circle cx="841" cy="1088" r="13" fill="#ffd166"/><text x="841" y="1092" text-anchor="middle" class="num">10</text>
+    <path d="M865 1088 H636" class="return"/>
+    <text x="751" y="1076" text-anchor="middle" class="ret">Workflow complete</text>
+
+    <circle cx="599" cy="1122" r="13" fill="#ffd166"/><text x="599" y="1126" text-anchor="middle" class="num">11</text>
+    <path d="M623 1122 H394" class="return"/>
+    <text x="509" y="1110" text-anchor="middle" class="ret">response queue / notification</text>
+
+    <circle cx="357" cy="1156" r="13" fill="#ffd166"/><text x="357" y="1160" text-anchor="middle" class="num">12</text>
+    <path d="M381 1156 H152" class="return"/>
+    <text x="267" y="1144" text-anchor="middle" class="ret">final response + artifacts</text>
+  </g>
+
+  <g transform="translate(1270,1128)">
+    <line x1="0" y1="0" x2="44" y2="0" class="call"/><text x="55" y="4" class="actor-sub">调用</text>
+    <line x1="116" y1="0" x2="160" y2="0" class="return"/><text x="171" y="4" class="actor-sub">返回</text>
+    <line x1="238" y1="0" x2="282" y2="0" class="stream"/><text x="293" y="4" class="actor-sub">流式侧链</text>
+  </g>
+</svg>

@@ -76,6 +76,58 @@ def _llm_response(*, content: str = "", tool_calls=None, finish: str = "stop") -
     }
 
 
+@pytest.mark.parametrize("recovers", [True, False])
+def test_incomplete_final_answer_uses_bounded_recovery(skill_env, recovers):
+    from agentflow_runtime import skill_executor as se
+
+    bus, registry, config = _FakeDataBus(), MagicMock(), MagicMock()
+    registry.get_tools.return_value = []
+    config.skill_max_iterations.return_value = 3
+    config.node_execution_timeout.return_value = 3600
+    config.skill_max_completion_tokens.return_value = 4000
+    config.skill_llm_recovery_attempts.return_value = 1
+    config.skill_llm_top_k.return_value = 0
+    config.skill_llm_stop.return_value = None
+    config.skill_llm_temperature.return_value = 0.7
+    config.skill_llm_top_p.return_value = 1.0
+    config.skill_llm_frequency_penalty.return_value = 0
+    config.skill_llm_presence_penalty.return_value = 0
+    broken = "<think>first</think><think>unfinished\n</｜DSML｜tool_calls>"
+    llm = MagicMock(side_effect=[_llm_response(content=broken), _llm_response(
+        content="<think>one</think><think>two</think>完整结果" if recovers else broken)])
+    hooks = []
+
+    def hook(name, payload, **kwargs):
+        hooks.append((name, payload))
+        return payload
+
+    for name, replacement in {
+        "DataBusClient": lambda: bus, "AgentConfig": config, "_LocalToolRegistry": lambda *a, **k: registry,
+        "call_llm": llm, "hook_trigger": hook, "emit_event": lambda *a, **k: None,
+        "load_skills_from_list": lambda *a, **k: {}, "_ensure_artifacts_in_package": lambda artifacts: artifacts,
+        "resolve_llm_config": lambda *a, **k: {"model":"test", "api_key":"test-key", "base_url":"http://unused.invalid"},
+        "_evolution": None,
+    }.items():
+        skill_env.setattr(se, name, replacement)
+    with patch("sys.stdout", io.StringIO()):
+        se.execute()
+    assert llm.call_count == 2
+    assert llm.call_args_list[1].kwargs["max_completion_tokens"] == 4000
+    messages = llm.call_args_list[1].args[0]
+    assert any(m.get("content") == se.LLM_FINAL_RESPONSE_RECOVERY_PROMPT for m in messages)
+    assert broken not in json.dumps(messages)
+    result = json.loads(dict(bus.put_calls)["skill_result:skill-runner"])
+    assert result["status"] == ("completed" if recovers else "tool_call_error")
+    assert "<think>" not in result["skill_result"] and "DSML" not in result["skill_result"]
+    if recovers:
+        assert result["skill_result"] == "完整结果"
+    decisions = [p for n,p in hooks if n == se.hook_events.SKILL_EXECUTOR_RECOVERY_DECISION]
+    assert decisions[0]["reason"] == "incomplete_final_response"
+    assert decisions[0]["action"] == "retry"
+    if not recovers:
+        assert decisions[-1]["action"] == "stop"
+
+
 def test_semantic_recovery_retries_when_progress_push_succeeds(skill_env):
     """A successful progress push must not bypass the semantic retry."""
     from agentflow_runtime import skill_executor

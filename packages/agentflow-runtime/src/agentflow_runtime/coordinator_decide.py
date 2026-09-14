@@ -65,6 +65,7 @@ from agentflow_runtime.trace import emit_span, SpanKind, SpanStatus
 from agentflow_runtime.security import install_stderr_redaction
 from agentflow_runtime.parse_af_input import parse_af_input, parse_stream
 from prompts import (
+    LLM_FINAL_RESPONSE_RECOVERY_PROMPT,
     COORDINATOR_FALLBACK_SYSTEM,
     DECISION_FAILURE_PROMPT,
     DECISION_PARTIAL_SUCCESS_PROMPT,
@@ -86,6 +87,7 @@ except ImportError:
 from agentflow_runtime.coordinator_common import (
     append_artifacts_markdown,
     bind_package_paths,
+    final_response_text,
     is_empty_llm_response,
     llm_error_response,
     parse_agent_md,
@@ -1305,6 +1307,7 @@ def execute():
     # tool result 返回给模型(与 skill_executor 同模式),让模型重新决策;
     # 直到模型直接输出 final response / 成功 dispatch skill / 达到轮次上限。
     _tool_loop_round = 0
+    _final_response_recovered = False
     while True:
         _tool_loop_round += 1
         # ── 工具循环轮次上限保护 ──
@@ -1512,6 +1515,21 @@ def execute():
         # 复用 coordinator_common.is_empty_llm_response(单一真相源 F4,霰弹式收敛)
         _is_empty_response = is_empty_llm_response(raw)
         if _is_empty_response:
+            # 供应商可能以 finish=stop 返回未闭合的思考块。原文已落轨迹，
+            # 不回灌残缺内容；只借用现有循环恢复一次，不扩展总轮次预算。
+            if (isinstance(_obs_content, str) and _obs_content.strip()
+                    and not _final_response_recovered and _tool_loop_round < max_iterations):
+                _final_response_recovered = True
+                messages.append({"role": "user", "content": LLM_FINAL_RESPONSE_RECOVERY_PROMPT})
+                retry_payload = {
+                    "round": current_round, "tool_loop_round": _tool_loop_round,
+                    "action": "retry", "reason": "incomplete_final_response",
+                    "tool_calls": [], "elapsed_s": round(time.time() - _t0, 1),
+                }
+                emit_event(hook_events.COORDINATOR_TOOL_LOOP_RETRY, dict(retry_payload), level="WARN")
+                hook_trigger(hook_events.COORDINATOR_TOOL_LOOP_RETRY, dict(retry_payload),
+                             ctx=AgentContext(messages=messages))
+                continue
             err_msg = "LLM returned empty response (no content and no tool calls)"
             emit_event(hook_events.COORDINATOR_LLM_ERROR, {
                 "round": current_round,
@@ -1534,14 +1552,7 @@ def execute():
 
         if not tool_calls:
             # LLM made no tool_call → final response
-            raw_response = msg.get("content", "")
-            # Strip <think> tags: keep reasoning in trace, only show user-facing content
-            import re as _re
-            think_match = _re.search(r"</think>\s*", raw_response)
-            if think_match:
-                response_text = raw_response[think_match.end():].strip()
-            else:
-                response_text = raw_response
+            response_text = final_response_text(msg.get("content", ""))
             response_text = append_artifacts_markdown(
                 response_text, completed_skill_artifacts
             )

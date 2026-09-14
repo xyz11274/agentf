@@ -1,0 +1,184 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1050" viewBox="0 0 1600 1050" role="img" aria-labelledby="title desc">
+  <title id="title">Harness v1 与 v2 双模式架构</title>
+  <desc id="desc">左侧展示 AgentFlow 框架驱动、跨 Coordinator 与 Skill Workflow 的 v1；右侧展示单个 Coordinator 节点进程内自循环的 v2。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#081220"/>
+      <stop offset="1" stop-color="#10162a"/>
+    </linearGradient>
+    <linearGradient id="left" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#251d3f"/>
+      <stop offset="1" stop-color="#151d31"/>
+    </linearGradient>
+    <linearGradient id="right" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#12333c"/>
+      <stop offset="1" stop-color="#131f32"/>
+    </linearGradient>
+    <linearGradient id="v1" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#a78bfa"/><stop offset="1" stop-color="#6d5dfc"/></linearGradient>
+    <linearGradient id="v2" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#5eead4"/><stop offset="1" stop-color="#22a7c7"/></linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#020713" flood-opacity=".55"/></filter>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="10" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <marker id="violetArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#b69cff"/></marker>
+    <marker id="tealArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#67ead9"/></marker>
+    <marker id="goldArrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#ffd166"/></marker>
+    <style>
+      .title{font:700 34px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#f8fbff}
+      .subtitle{font:400 16px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#94a9c3}
+      .mode{font:800 25px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#fff}
+      .mode-sub{font:500 14px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#b7c7db}
+      .eyebrow{font:700 11px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#9db1c9;letter-spacing:1.6px}
+      .h1{font:700 18px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#f4f9ff}
+      .h2{font:700 14px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#eaf4ff}
+      .body{font:500 12.5px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#aec1d8}
+      .small{font:500 11px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#91a5bd}
+      .violet{fill:none;stroke:#b69cff;stroke-width:2.4;marker-end:url(#violetArrow)}
+      .teal{fill:none;stroke:#67ead9;stroke-width:2.5;marker-end:url(#tealArrow)}
+      .data{fill:none;stroke:#ffd166;stroke-width:2.1;stroke-dasharray:7 7;marker-end:url(#goldArrow)}
+    </style>
+  </defs>
+
+  <rect width="1600" height="1050" rx="28" fill="url(#bg)"/>
+  <text x="58" y="62" class="title">Harness 双模式架构</text>
+  <text x="58" y="94" class="subtitle">同一套 Agent Package 骨架，两种控制权归属：AgentFlow 事件式外循环 vs Python 进程内 Agent Loop</text>
+
+  <g>
+    <rect x="54" y="132" width="720" height="704" rx="28" fill="url(#left)" stroke="#58487e" stroke-width="1.5"/>
+    <rect x="826" y="132" width="720" height="704" rx="28" fill="url(#right)" stroke="#31727a" stroke-width="1.5"/>
+  </g>
+
+  <g>
+    <rect x="82" y="160" width="72" height="38" rx="19" fill="url(#v1)"/>
+    <text x="118" y="186" text-anchor="middle" class="mode" style="font-size:18px">v1</text>
+    <text x="174" y="183" class="mode">框架驱动委派</text>
+    <text x="82" y="224" class="mode-sub">Coordinator 每次只决策一段；循环跨越多个 Workflow/进程</text>
+
+    <rect x="854" y="160" width="72" height="38" rx="19" fill="url(#v2)"/>
+    <text x="890" y="186" text-anchor="middle" class="mode" style="font-size:18px">v2</text>
+    <text x="946" y="183" class="mode">进程内 Agent Loop</text>
+    <text x="854" y="224" class="mode-sub">Coordinator 是主 Agent；在一个 Workflow Node 内调用工具直到收敛</text>
+  </g>
+
+  <g>
+    <rect x="82" y="258" width="664" height="544" rx="22" fill="#11182b" stroke="#3b3459"/>
+    <text x="104" y="289" class="eyebrow">AGENTFLOW CONTROL ENVELOPE</text>
+    <rect x="104" y="310" width="620" height="62" rx="15" fill="#171f34" stroke="#3f4e67"/>
+    <text x="126" y="336" class="h2">C++ Dispatcher / Session / Runtime</text>
+    <text x="126" y="357" class="small">维护 next_skills、pending、实例池、完成通知与 re-trigger</text>
+
+    <rect x="104" y="406" width="224" height="146" rx="20" fill="#2a2050" stroke="#8069c2"/>
+    <rect x="124" y="426" width="90" height="24" rx="12" fill="#513d8d"/>
+    <text x="169" y="443" text-anchor="middle" class="small" style="fill:#e8deff">PROCESS A</text>
+    <text x="124" y="481" class="h1">Coordinator v1</text>
+    <text x="124" y="507" class="body">LLM + 唯一工具 run_skills</text>
+    <text x="124" y="530" class="small">一次决策后退出进程</text>
+
+    <rect x="500" y="406" width="224" height="146" rx="20" fill="#18253a" stroke="#47627d"/>
+    <rect x="520" y="426" width="90" height="24" rx="12" fill="#273e59"/>
+    <text x="565" y="443" text-anchor="middle" class="small" style="fill:#d6ecff">STATE BUS</text>
+    <text x="520" y="481" class="h1">DataBus</text>
+    <text x="520" y="507" class="body">dispatch manifest</text>
+    <text x="520" y="530" class="body">next_skills · history · result</text>
+
+    <rect x="104" y="616" width="620" height="154" rx="20" fill="#171f34" stroke="#3f4e67"/>
+    <text x="124" y="644" class="eyebrow">INDEPENDENT SKILL WORKFLOW INSTANCES</text>
+    <g>
+      <rect x="124" y="666" width="174" height="78" rx="15" fill="#242043" stroke="#6857a0"/>
+      <text x="142" y="694" class="h2">skill-runner · 1</text><text x="142" y="718" class="small">LLM + domain tools</text>
+      <rect x="327" y="666" width="174" height="78" rx="15" fill="#242043" stroke="#6857a0"/>
+      <text x="345" y="694" class="h2">skill-runner · 2</text><text x="345" y="718" class="small">独立进程 / 上下文</text>
+      <rect x="530" y="666" width="174" height="78" rx="15" fill="#242043" stroke="#6857a0"/>
+      <text x="548" y="694" class="h2">skill-runner · N</text><text x="548" y="718" class="small">instance pool 并行</text>
+    </g>
+
+    <path d="M328 458 C400 458 424 458 488 458" class="data"/>
+    <path d="M612 552 V586 C612 600 618 604 618 616" class="violet"/>
+    <path d="M500 520 C450 552 424 596 414 650" class="data"/>
+    <path d="M212 616 C190 584 187 572 204 552" class="violet"/>
+    <rect x="344" y="382" width="136" height="25" rx="12" fill="#392d5d" stroke="#7d68b6"/>
+    <text x="412" y="399" text-anchor="middle" class="small">① yield control</text>
+    <rect x="348" y="571" width="130" height="25" rx="12" fill="#3d311b" stroke="#9b7930"/>
+    <text x="413" y="588" text-anchor="middle" class="small">② dispatch key</text>
+    <rect x="121" y="573" width="140" height="25" rx="12" fill="#392d5d" stroke="#7d68b6"/>
+    <text x="191" y="590" text-anchor="middle" class="small">④ re-trigger</text>
+
+    <g transform="translate(350,476)">
+      <circle cx="0" cy="0" r="26" fill="#171424" stroke="#8069c2"/>
+      <text x="0" y="-3" text-anchor="middle" class="small">3×</text>
+      <text x="0" y="12" text-anchor="middle" class="small">边界</text>
+    </g>
+  </g>
+
+  <g>
+    <rect x="854" y="258" width="664" height="544" rx="22" fill="#101c2b" stroke="#2d4f57"/>
+    <text x="876" y="289" class="eyebrow">AGENTFLOW CONTROL ENVELOPE</text>
+    <rect x="876" y="310" width="620" height="62" rx="15" fill="#152431" stroke="#36535e"/>
+    <text x="898" y="336" class="h2">C++ Dispatcher / Session / Runtime</text>
+    <text x="898" y="357" class="small">只负责启动一次 coordinator_workflow，并接收最终 stdout JSON</text>
+
+    <rect x="876" y="398" width="620" height="372" rx="24" fill="#132b34" stroke="#3b7a78" stroke-width="1.5"/>
+    <rect x="898" y="420" width="124" height="25" rx="12" fill="#19504e"/>
+    <text x="960" y="437" text-anchor="middle" class="small" style="fill:#d4fff8">PROCESS A · ONE NODE</text>
+    <text x="898" y="476" class="h1">Coordinator v2 · Agent Loop</text>
+
+    <circle cx="1186" cy="590" r="135" fill="#2ec4b6" opacity=".08"/>
+    <circle cx="1186" cy="590" r="82" fill="url(#v2)" filter="url(#glow)"/>
+    <text x="1186" y="579" text-anchor="middle" class="h1" style="fill:#06232a">LLM</text>
+    <text x="1186" y="604" text-anchor="middle" class="body" style="fill:#07323a">continuous messages</text>
+    <text x="1186" y="627" text-anchor="middle" class="small" style="fill:#0b4148">decide · act · observe</text>
+
+    <rect x="912" y="515" width="176" height="70" rx="16" fill="#17323d" stroke="#39726f"/>
+    <text x="930" y="543" class="h2">Prompt + Skills</text>
+    <text x="930" y="565" class="small">一次装配，持续复用</text>
+
+    <rect x="1284" y="515" width="176" height="70" rx="16" fill="#17323d" stroke="#39726f"/>
+    <text x="1302" y="543" class="h2">Tool Registry</text>
+    <text x="1302" y="565" class="small">直接暴露 Harness tools</text>
+
+    <rect x="912" y="630" width="176" height="70" rx="16" fill="#17323d" stroke="#39726f"/>
+    <text x="930" y="658" class="h2">State &amp; Context</text>
+    <text x="930" y="680" class="small">进程内 messages</text>
+
+    <rect x="1284" y="630" width="176" height="70" rx="16" fill="#17323d" stroke="#39726f"/>
+    <text x="1302" y="658" class="h2">Executors</text>
+    <text x="1302" y="680" class="small">batch → host/http/e2b</text>
+
+    <path d="M1088 550 C1118 550 1122 564 1128 572" class="teal"/>
+    <path d="M1284 550 C1254 550 1250 564 1244 572" class="teal"/>
+    <path d="M1088 665 C1118 665 1122 626 1128 617" class="teal"/>
+    <path d="M1284 665 C1254 665 1250 626 1244 617" class="teal"/>
+
+    <path d="M1186 672 C1305 770 1460 675 1440 550 C1422 438 1270 405 1190 468" fill="none" stroke="#67ead9" stroke-width="3" marker-end="url(#tealArrow)"/>
+    <rect x="1244" y="716" width="186" height="27" rx="13" fill="#16423f" stroke="#48aea1"/>
+    <text x="1337" y="734" text-anchor="middle" class="small">tool result 回灌后 continue</text>
+
+    <rect x="898" y="731" width="238" height="24" rx="12" fill="#1a3540"/>
+    <text x="1017" y="748" text-anchor="middle" class="small">AgentFlow boundary crossing：1×</text>
+  </g>
+
+  <g>
+    <rect x="760" y="416" width="80" height="146" rx="22" fill="#0c1424" stroke="#3d4b66"/>
+    <text x="800" y="447" text-anchor="middle" class="eyebrow" style="font-size:9px">CONTROL</text>
+    <text x="800" y="466" text-anchor="middle" class="eyebrow" style="font-size:9px">OWNERSHIP</text>
+    <path d="M800 487 V536" stroke="#52627f" stroke-width="2"/>
+    <circle cx="800" cy="512" r="7" fill="#d5e5fa"/>
+    <text x="800" y="549" text-anchor="middle" class="small">framework</text>
+    <text x="800" y="578" text-anchor="middle" class="small">python</text>
+  </g>
+
+  <text x="54" y="882" class="eyebrow">ARCHITECTURE TRADE-OFFS</text>
+  <rect x="54" y="902" width="1492" height="104" rx="22" fill="#0e192a" stroke="#303f58"/>
+  <g>
+    <rect x="78" y="925" width="272" height="58" rx="16" fill="#191d35" stroke="#514576"/>
+    <text x="98" y="949" class="h2">上下文</text><text x="98" y="971" class="small">v1 重建 / v2 原生连续</text>
+    <rect x="372" y="925" width="272" height="58" rx="16" fill="#191d35" stroke="#514576"/>
+    <text x="392" y="949" class="h2">隔离与治理</text><text x="392" y="971" class="small">v1 Skill 可见 / v2 Node 内聚</text>
+    <rect x="666" y="925" width="272" height="58" rx="16" fill="#19232f" stroke="#3a666a"/>
+    <text x="686" y="949" class="h2">并发</text><text x="686" y="971" class="small">v1 实例池 / v2 工具批次</text>
+    <rect x="960" y="925" width="272" height="58" rx="16" fill="#19232f" stroke="#3a666a"/>
+    <text x="980" y="949" class="h2">时延</text><text x="980" y="971" class="small">v1 多次启停 / v2 少跨层</text>
+    <rect x="1254" y="925" width="268" height="58" rx="16" fill="#19232f" stroke="#3a666a"/>
+    <text x="1274" y="949" class="h2">恢复粒度</text><text x="1274" y="971" class="small">v1 分段 / v2 进程级</text>
+  </g>
+
+  <text x="800" y="1030" text-anchor="middle" class="small">当前模板默认 v2；v1 保留为框架原生委派路径和未来 Subagent 的结构基础</text>
+</svg>

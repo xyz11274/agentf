@@ -10,6 +10,23 @@
 - [CONTENT_LIMITS.md](CONTENT_LIMITS.md)
 - [BATCH_AND_MEMORY_FIELDS.md](BATCH_AND_MEMORY_FIELDS.md)
 
+
+## 运行时配置也是可追踪输入
+
+统一命令在读取 SessionLog 前，先从 `--config`、
+`AGENTFLOW_TRAJECTORY_CONFIG` 或仓库默认位置加载 `runtime.json`，再读取其中引用的
+8 份模型 Prompt。配置和 Prompt 在一次进程内形成共享只读快照；下一次命令会重新
+读取文件，因此修改无需重新编译，又不会让一个长批次在中途混用两个版本。
+
+进入 `evaluator_config_fingerprint` 的是影响 Evaluation/Evolution 语义的规范化参数、
+8 份 Prompt 的内容指纹，以及实际参与相关评测阶段的模型适配器身份。原始 Prompt
+正文不会复制到 Batch 或 Memory；需要审计具体请求时，必须显式使用
+`--requests-out`，且该文件应作为敏感派生产物保留在 Git 之外。
+
+配置只允许保存 API Key 的环境变量名称，不能保存 Key 值。模板占位符、相对路径、
+文件大小、资源范围和未知字段会在任何模型请求之前统一校验。输出路径也不能覆盖
+本次配置快照的任一源文件。完整使用规则见
+[`tools/trajectory_evolution/README.md`](../../tools/trajectory_evolution/README.md)。
 ## 1. 先给出完整结论
 
 目录模式的真实数据链路是：
@@ -42,7 +59,7 @@ Loop Episode 重建
         │
         ├── 任务是否完成
         ├── 可疑 Episode 的语义判断
-        └── 编排 / Prompt / 停止条件反思
+        └── 编排 / 经验注入 / 停止条件反思
         │
         ▼
 规则与模型融合
@@ -391,7 +408,7 @@ episode_count / invalid_episode_count
 
 ```text
 skill_orchestration_changes → SKILL_ORCHESTRATION
-prompt_changes              → PROMPT
+experience_injections       → EXPERIENCE_INJECTION
 stop_condition_changes      → LOOP_STOP_CONDITION
 ```
 
@@ -503,12 +520,16 @@ confidence
 
 ## 13. 第十一步：合并并原子写入 EvolutionMemoryStore
 
-CLI 在得到 Batch 后调用 `update_memory_file()`。
+CLI 在得到 Batch 后统一调用 `curate_memory_file()`：配置模型适配器时自动执行语义
+整理，未配置时保守地完成确定性入库。原有确定性接口仍保留给库调用方兼容使用。
 
 ### 13.1 先加跨进程锁
 
-程序在 `evolution-memory.pb.lock` 上取得排他文件锁，然后才读取和更新 Memory。
-这使两个离线评测进程不会同时覆盖同一份记忆库。
+CLI 整理先读取基线并在锁外完成需要的模型调用，提交时再在
+`evolution-memory.pb.lock` 上取得排他锁、重新读取并比较基线；若其他进程已写入，则
+基于新版本有限次重算。这既避免远程模型调用长期占锁，也避免两个进程互相覆盖
+Memory。重算时完全相同的模型请求复用本次调用内的响应；缓存不落盘、不跨批次，真实
+模型调用计数和预算不会被同一次并发重试重复消耗。
 
 ### 13.2 加载或初始化
 
@@ -537,24 +558,63 @@ revision 不增加
 
 ### 13.4 Candidate 级合并
 
-`REJECTED_BY_GATE` 被跳过。其他候选使用：
+`REJECTED_BY_GATE` 被跳过。其他候选先按稳定 `candidate_id` 和历史来源别名
+查找；未命中时，只对相同 `target_type` 和规范化 `target_scope` 的历史项建立短名单。
+字符 3-gram 相似度仅负责短名单排序，不会自动合并。
+
+规范化后的类型、作用域、触发条件和修改建议完全相同时，确定性合并。配置模型适配器
+后，其他模糊项自动由模型判断 `DUPLICATE`、`RELATED`、`CONTRADICTS` 或
+`DISTINCT`；没有模型、请求失败、越权引用或低置信结果都按 `UNRESOLVED` 保守独立
+入库。高置信 `DUPLICATE` 合并到既有 canonical Memory；`RELATED` 和
+`CONTRADICTS` 建立双向关系但保留两个 Entry。已确认冲突不会被后续 `RELATED`
+判断覆盖。
+
+新 Entry 使用首次 Candidate 派生的稳定 ID：
 
 ```text
-memory_id = memory:<candidate_id>
+memory_id = memory:<canonical_candidate_id>
 ```
 
-新候选会：
+语义重复 Candidate 不改写该 ID，而是加入 `source_candidate_ids`。每个输入 Candidate
+都在 `memory_update.decisions[]` 中保存最终 Memory 映射、动作、关系、匹配方法、
+短名单、置信度、理由、模型指纹和错误码。Memory Entry 只保留当前 Candidate、来源
+别名及紧凑关系；Revision 只保存 Candidate 快照。关系上的 `decision_id` 可回链到 Batch
+中的详细判断。
 
-- 创建 `EvolutionMemoryEntry`；
-- 状态设为 `CANDIDATE`；
-- 保存 `first_batch_id`、`last_batch_id` 和 `observed_batch_ids`；
-- 写入当前 revision 的完整候选快照。
+### 13.5 自动周期全库整理
 
-已有候选会合并支持证据、反证和 Seed 来源，再重新计算支持数、置信度和质量门状态。
-只有候选内容发生实质变化时才增加 `revisions[]` 快照；没有变化则只统计为
-`unchanged_entry_count`。
+每次真正新建 Entry 都累加 `new_entries_since_full_curation`；后续容量淘汰不回减该值，
+以免延迟复核。默认累计 20 次时，同一次 `evaluate` 自动开始全库复核；可用 `--memory-full-curation-threshold N` 调整：
 
-### 13.5 原子持久化
+1. 先按规范化策略键确定性合并重复项，并保留所有来源 Candidate ID 作为别名；
+2. 对每条 `CANDIDATE` 或 `VALIDATED` 记忆复核最多 8 个同类型、同作用域候选；
+3. `DUPLICATE` 合并，`RELATED` / `CONTRADICTS` 建立双向关系，`DISTINCT` 保持独立；
+4. 全部完成后把待复核计数清零。
+
+若全库只有互不兼容的独立项，没有语义比较请求，即使未配置模型也可以完整结束。若有
+必要比较但模型、预算或响应不可用，本批已经完成的增量入库仍正常提交，
+`full_curation_completed=false`，待复核计数保持不变，后续新 Batch 自动重试。全库决策
+写入同一 `memory_update.decisions[]`，以 `full_store_curation=true` 区分。
+
+### 13.6 有界工作集与容量淘汰
+
+全库整理之后、提交之前，同一事务执行确定性容量管理：
+
+- `--memory-max-entries N` 控制工作集 Entry 上限，默认 512；
+- `--memory-replay-window N` 控制最近 Batch 的精确幂等窗口，默认 4096；
+- 总 Protobuf 继续受 256 MiB 字节硬上限保护；超限时不再直接放弃本批，而是先淘汰
+  低优先级 Entry。
+
+淘汰顺序依次比较 Memory 生命周期、Candidate 状态、支持用户/Dialogue/Episode 数、
+置信度和最近修订；`VALIDATED` 最后淘汰。由 `CONTRADICTS` 连接的记忆作为一个整体
+保留或淘汰，删除后重建双向关系。每个删除动作以
+`MemoryUpdateDecision.action=EVICTED` 写入本批，原始证据仍可从 Batch Evaluation 和
+SessionLog 重建。
+
+Batch ID 退出精确窗口后，不再承诺 Batch 级永久幂等；若 Candidate/别名仍在工作集，
+稳定映射仍会阻止重复。若二者都已淘汰，旧批重放可能重新进入工作集。
+
+### 13.7 原子持久化
 
 更新顺序是：
 
@@ -568,7 +628,7 @@ JSON 视图写入失败不会否定已经成功写入的 Protobuf，但会在 `M
 记录 `memory_json_view_write_failed`。
 
 Memory 中的 Entry 当前始终以 `EVOLUTION_MEMORY_STATUS_CANDIDATE` 创建。管线不会
-自动把它提升为 `VALIDATED`，更不会直接修改在线 Coordinator、Skill Prompt 或
+自动把它提升为 `VALIDATED`，更不会直接把经验注入在线上下文或修改 Skill 编排与
 Loop 条件。
 
 ## 14. 最终落盘目录及写入顺序
@@ -655,6 +715,8 @@ memory_id
 | Dialogue 模型网络失败 | 保留规则结果，标记 degraded | 否 | 仅规则候选 |
 | Dialogue 模型响应非法 | 原子丢弃该响应 | 否 | 仅规则候选 |
 | 元反思失败 | 保留元反思前候选 | 否 | 是，使用原候选 |
+| 记忆语义判断失败/低置信 | 该候选保守独立入库并记录错误码 | 否 | 是，不猜测性合并 |
+| 周期全库复核未完成 | 保留本批增量入库和 pending 计数，后续重试 | 否 | 已产生候选不丢失 |
 | 某候选证据不足 | 标为 INSUFFICIENT_SUPPORT | 否 | 进入 Memory 继续积累 |
 | 某候选存在反证 | 标为 CONFLICTED | 否 | 进入 Memory 保存冲突 |
 | 相同 Batch 重放 | 幂等返回，不增加 revision | 否 | 不重复写入 |
@@ -672,7 +734,7 @@ build/trajectory-evolution/trajectory_evolution evaluate \
   --model-selection none
 ```
 
-规则、Dialogue 模型评测、元反思和记忆合并全部启用：
+规则、Dialogue 模型评测、元反思和自动记忆语义整理全部启用：
 
 ```bash
 export EVOLUTION_API_KEY='从安全环境注入，不要写入命令历史或仓库'
@@ -682,6 +744,7 @@ build/trajectory-evolution/trajectory_evolution evaluate \
   --output-root trace_output/evolution-model \
   --model-selection suspicious \
   --meta-reflection \
+  --memory-full-curation-threshold 20 \
   --model-endpoint 'https://provider.example/v1/chat/completions' \
   --model-id 'MODEL_ID' \
   --api-key-env EVOLUTION_API_KEY \
@@ -706,7 +769,7 @@ build/trajectory-evolution/trajectory_evolution evaluate \
 
 ```text
 候选选择
-  → 生成 Coordinator / Skill Prompt / Loop Policy 变体
+  → 生成 Skill 编排 / 经验注入 / Loop 停止策略变体
   → 隔离回放或 A/B 实验
   → 比较任务成功率、无效 Loop、Token、时延和安全指标
   → 将通过门槛的候选提升为 VALIDATED

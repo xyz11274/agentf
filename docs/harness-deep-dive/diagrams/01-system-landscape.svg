@@ -1,0 +1,240 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1080" viewBox="0 0 1600 1080" role="img" aria-labelledby="title desc">
+  <title id="title">AgentFlow Harness 系统全景</title>
+  <desc id="desc">展示入口与控制面、AgentFlow C++ 执行引擎、Python Harness 智能体运行层，以及 LLM、MCP、Host、HTTP 和 e2b 执行环境之间的关系。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#08111f"/>
+      <stop offset="0.52" stop-color="#0b1728"/>
+      <stop offset="1" stop-color="#10182c"/>
+    </linearGradient>
+    <linearGradient id="afBand" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#102e43"/>
+      <stop offset="1" stop-color="#13243a"/>
+    </linearGradient>
+    <linearGradient id="hBand" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#261d48"/>
+      <stop offset="1" stop-color="#172743"/>
+    </linearGradient>
+    <linearGradient id="brain" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#8b5cf6"/>
+      <stop offset="1" stop-color="#4f7cff"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#000814" flood-opacity="0.42"/>
+    </filter>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="9" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrowCyan" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#55d7ff"/>
+    </marker>
+    <marker id="arrowAmber" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#f6c85f"/>
+    </marker>
+    <marker id="arrowViolet" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b597ff"/>
+    </marker>
+    <style>
+      .title{font:700 34px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#f7fbff;letter-spacing:.4px}
+      .subtitle{font:400 16px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#91a7c2}
+      .section{font:700 14px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#8ea5c0;letter-spacing:1.8px}
+      .card-title{font:700 18px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#f6fbff}
+      .card-sub{font:400 13px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#9db1ca}
+      .small{font:500 12px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#bed0e4}
+      .tiny{font:500 11px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#91a7c2}
+      .pill{font:600 11px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#dff8ff;letter-spacing:.3px}
+      .flow{fill:none;stroke:#55d7ff;stroke-width:2.5;marker-end:url(#arrowCyan)}
+      .data{fill:none;stroke:#f6c85f;stroke-width:2.2;stroke-dasharray:7 7;marker-end:url(#arrowAmber)}
+      .asset{fill:none;stroke:#b597ff;stroke-width:2.2;stroke-dasharray:2 7;stroke-linecap:round;marker-end:url(#arrowViolet)}
+    </style>
+  </defs>
+
+  <rect width="1600" height="1080" rx="28" fill="url(#bg)"/>
+  <circle cx="1395" cy="95" r="210" fill="#4f7cff" opacity="0.055"/>
+  <circle cx="1460" cy="915" r="260" fill="#8b5cf6" opacity="0.045"/>
+  <path d="M0 265 H1600" stroke="#2a3a50" stroke-width="1" opacity=".7"/>
+  <path d="M0 842 H1600" stroke="#2a3a50" stroke-width="1" opacity=".7"/>
+
+  <text x="60" y="62" class="title">AgentFlow Harness · 系统全景</text>
+  <text x="60" y="94" class="subtitle">AgentFlow 负责可靠调度与执行，Harness 负责 LLM 的认知、工具、状态与治理</text>
+  <g transform="translate(1215,54)">
+    <line x1="0" y1="0" x2="44" y2="0" class="flow"/>
+    <text x="56" y="4" class="tiny">控制 / 调用</text>
+    <line x1="150" y1="0" x2="194" y2="0" class="data"/>
+    <text x="206" y="4" class="tiny">状态 / 数据</text>
+  </g>
+
+  <text x="60" y="132" class="section">01 · EXPERIENCE &amp; CONTROL PLANE</text>
+  <g>
+    <rect x="60" y="150" width="310" height="84" rx="18" fill="#111f31" stroke="#2c4662"/>
+    <circle cx="102" cy="192" r="20" fill="#17344a" stroke="#55d7ff"/>
+    <circle cx="102" cy="184" r="6" fill="none" stroke="#86e7ff" stroke-width="2"/>
+    <path d="M90 205 Q102 193 114 205" fill="none" stroke="#86e7ff" stroke-width="2" stroke-linecap="round"/>
+    <text x="138" y="184" class="card-title">用户与业务客户端</text>
+    <text x="138" y="207" class="card-sub">messages · stream · uploads</text>
+
+    <rect x="462" y="150" width="310" height="84" rx="18" fill="#111f31" stroke="#2c4662"/>
+    <rect x="492" y="173" width="42" height="38" rx="9" fill="#17344a" stroke="#55d7ff"/>
+    <path d="M502 185 H524 M502 193 H518 M502 201 H526" stroke="#86e7ff" stroke-width="2" stroke-linecap="round"/>
+    <text x="555" y="184" class="card-title">Sidecar / Bridge</text>
+    <text x="555" y="207" class="card-sub">协议适配 · 包管理 · 流式转发</text>
+
+    <rect x="864" y="150" width="310" height="84" rx="18" fill="#111f31" stroke="#2c4662"/>
+    <circle cx="906" cy="192" r="20" fill="#17344a" stroke="#55d7ff"/>
+    <path d="M896 192 H916 M906 182 V202" stroke="#86e7ff" stroke-width="2" stroke-linecap="round"/>
+    <text x="942" y="184" class="card-title">Agent Package Control</text>
+    <text x="942" y="207" class="card-sub">template → package → workspace</text>
+
+    <rect x="1266" y="150" width="274" height="84" rx="18" fill="#111f31" stroke="#2c4662"/>
+    <circle cx="1308" cy="192" r="20" fill="#17344a" stroke="#55d7ff"/>
+    <path d="M1297 188 H1319 V202 H1297 Z M1302 183 H1314" fill="none" stroke="#86e7ff" stroke-width="2"/>
+    <text x="1344" y="184" class="card-title">Artifacts / Storage</text>
+    <text x="1344" y="207" class="card-sub">上传 · URL · 下载</text>
+  </g>
+  <path d="M370 192 H450" class="flow"/>
+  <path d="M772 192 H852" class="asset"/>
+
+  <text x="60" y="292" class="section">02 · EXECUTION CORE</text>
+  <g>
+    <rect x="60" y="312" width="680" height="500" rx="26" fill="url(#afBand)" stroke="#24516c" stroke-width="1.4"/>
+    <rect x="800" y="312" width="740" height="500" rx="26" fill="url(#hBand)" stroke="#4e3f81" stroke-width="1.4"/>
+  </g>
+
+  <g>
+    <rect x="88" y="338" width="174" height="34" rx="17" fill="#0e3a51" stroke="#37bde9"/>
+    <text x="175" y="360" text-anchor="middle" class="pill">AGENTFLOW · C++</text>
+    <text x="88" y="405" class="card-title">可靠执行引擎</text>
+    <text x="88" y="428" class="card-sub">只理解 Package / Session / Task / Workflow / Node</text>
+
+    <rect x="88" y="458" width="624" height="70" rx="16" fill="#10263a" stroke="#2d5771"/>
+    <circle cx="120" cy="493" r="16" fill="#17415a"/>
+    <path d="M112 493 H128 M120 485 V501" stroke="#8ce8ff" stroke-width="2"/>
+    <text x="150" y="487" class="card-title">agentflowd</text>
+    <text x="150" y="510" class="card-sub">RPC · AgentRegistry · ResponsePoller · 生命周期</text>
+
+    <rect x="88" y="546" width="294" height="112" rx="16" fill="#10263a" stroke="#2d5771"/>
+    <text x="110" y="577" class="card-title">Framework</text>
+    <text x="110" y="602" class="small">MMAgent · Session · Task</text>
+    <text x="110" y="624" class="small">Workflow · Node · Edge</text>
+    <rect x="279" y="568" width="78" height="25" rx="12" fill="#143c51"/>
+    <text x="318" y="585" text-anchor="middle" class="tiny">编排语义</text>
+
+    <rect x="400" y="546" width="312" height="112" rx="16" fill="#10263a" stroke="#2d5771"/>
+    <text x="422" y="577" class="card-title">Runtime</text>
+    <text x="422" y="602" class="small">Scheduler → Deployer → Worker</text>
+    <text x="422" y="624" class="small">并发 · 超时 · 多语言节点</text>
+    <rect x="606" y="568" width="80" height="25" rx="12" fill="#143c51"/>
+    <text x="646" y="585" text-anchor="middle" class="tiny">执行治理</text>
+
+    <rect x="88" y="676" width="624" height="104" rx="16" fill="#0d2235" stroke="#846b2f"/>
+    <circle cx="121" cy="712" r="15" fill="#4a3b17"/>
+    <path d="M111 708 C111 700 131 700 131 708 V720 C131 728 111 728 111 720 Z M111 708 C111 716 131 716 131 708" fill="none" stroke="#f6c85f" stroke-width="1.8"/>
+    <text x="151" y="709" class="card-title">MMDataBus</text>
+    <text x="151" y="733" class="card-sub">sys / llm / ctx · data_ref · UDS · response_push</text>
+    <text x="151" y="756" class="tiny">跨 C++ / Python 的状态面与流式通道</text>
+  </g>
+
+  <g>
+    <rect x="828" y="338" width="178" height="34" rx="17" fill="#392568" stroke="#a886ff"/>
+    <text x="917" y="360" text-anchor="middle" class="pill">HARNESS · PYTHON</text>
+    <text x="828" y="405" class="card-title">智能体运行层</text>
+    <text x="828" y="428" class="card-sub">理解 Prompt / Skill / Tool / Context / Artifact</text>
+
+    <circle cx="1167" cy="580" r="116" fill="#6e54d7" opacity=".12"/>
+    <circle cx="1167" cy="580" r="82" fill="url(#brain)" filter="url(#glow)"/>
+    <text x="1167" y="567" text-anchor="middle" class="card-title">Coordinator</text>
+    <text x="1167" y="592" text-anchor="middle" class="small">LLM Agent Loop</text>
+    <text x="1167" y="615" text-anchor="middle" class="tiny">think · call · observe</text>
+
+    <rect x="828" y="472" width="224" height="88" rx="16" fill="#1b2945" stroke="#5b4e89"/>
+    <text x="848" y="503" class="card-title">Prompt &amp; Skills</text>
+    <text x="848" y="527" class="small">agent.md · SKILL.md</text>
+    <text x="848" y="547" class="tiny">身份 + 方法论 + 约束</text>
+
+    <rect x="1281" y="472" width="231" height="88" rx="16" fill="#1b2945" stroke="#5b4e89"/>
+    <text x="1301" y="503" class="card-title">Tool Registry</text>
+    <text x="1301" y="527" class="small">builtin · override · MCP</text>
+    <text x="1301" y="547" class="tiny">函数定义 + 执行路由</text>
+
+    <rect x="828" y="614" width="224" height="88" rx="16" fill="#1b2945" stroke="#5b4e89"/>
+    <text x="848" y="645" class="card-title">Context &amp; State</text>
+    <text x="848" y="669" class="small">history · compaction</text>
+    <text x="848" y="689" class="tiny">轮次 · 中断 · DataBus</text>
+
+    <rect x="1281" y="614" width="231" height="88" rx="16" fill="#1b2945" stroke="#5b4e89"/>
+    <text x="1301" y="645" class="card-title">Governance</text>
+    <text x="1301" y="669" class="small">hooks · trace · policies</text>
+    <text x="1301" y="689" class="tiny">干预 · 审计 · 死循环保护</text>
+
+    <rect x="946" y="728" width="442" height="54" rx="16" fill="#201d3e" stroke="#6a589d"/>
+    <text x="966" y="750" class="small">Artifact Pipeline</text>
+    <text x="966" y="770" class="tiny">extract → normalize → download → upload → render</text>
+
+    <path d="M1052 516 C1095 516 1098 539 1110 548" class="asset"/>
+    <path d="M1281 516 C1241 516 1237 539 1225 548" class="flow"/>
+    <path d="M1052 658 C1095 658 1098 621 1110 611" class="data"/>
+    <path d="M1281 658 C1241 658 1238 621 1225 611" class="asset"/>
+    <path d="M1167 662 V716" class="asset"/>
+  </g>
+
+  <path d="M740 545 C766 545 774 545 800 545" class="flow"/>
+  <rect x="730" y="500" width="80" height="28" rx="14" fill="#123649" stroke="#55d7ff"/>
+  <text x="770" y="519" text-anchor="middle" class="tiny">执行节点</text>
+  <path d="M800 716 C770 716 762 731 712 731" class="data"/>
+  <rect x="720" y="745" width="88" height="28" rx="14" fill="#3c3118" stroke="#f6c85f"/>
+  <text x="764" y="764" text-anchor="middle" class="tiny">状态回写</text>
+
+  <path d="M617 234 V445" class="flow"/>
+  <path d="M1019 234 V295 C1019 303 1008 306 994 312" class="asset"/>
+  <path d="M1399 234 V295 C1399 303 1410 306 1426 312" class="asset"/>
+
+  <text x="60" y="869" class="section">03 · MODEL &amp; TOOL EXECUTION PLANE</text>
+  <g>
+    <rect x="60" y="890" width="284" height="124" rx="20" fill="#111f31" stroke="#3c5673"/>
+    <circle cx="100" cy="930" r="19" fill="#2b2350" stroke="#a886ff"/>
+    <path d="M90 930 Q100 914 110 930 Q100 946 90 930" fill="none" stroke="#c5b2ff" stroke-width="2"/>
+    <text x="132" y="924" class="card-title">LLM Service</text>
+    <text x="132" y="948" class="card-sub">HTTP / UDS · function calling</text>
+    <rect x="84" y="973" width="236" height="24" rx="12" fill="#1d2940"/>
+    <text x="202" y="989" text-anchor="middle" class="tiny">reasoning · completion · streaming</text>
+
+    <rect x="382" y="890" width="250" height="124" rx="20" fill="#111f31" stroke="#3c5673"/>
+    <circle cx="422" cy="930" r="19" fill="#173b3a" stroke="#5eead4"/>
+    <path d="M412 930 H432 M422 920 V940" stroke="#8ff6e8" stroke-width="2"/>
+    <text x="454" y="924" class="card-title">Host Executor</text>
+    <text x="454" y="948" class="card-sub">subprocess · local files</text>
+    <text x="406" y="985" class="tiny">AF_SANDBOX_MODE=none</text>
+
+    <rect x="670" y="890" width="250" height="124" rx="20" fill="#111f31" stroke="#3c5673"/>
+    <circle cx="710" cy="930" r="19" fill="#173b3a" stroke="#5eead4"/>
+    <rect x="701" y="921" width="18" height="18" rx="3" fill="none" stroke="#8ff6e8" stroke-width="2"/>
+    <text x="742" y="924" class="card-title">HTTP Sandbox</text>
+    <text x="742" y="948" class="card-sub">local / Docker · POST /exec</text>
+    <text x="694" y="985" class="tiny">filesystem &amp; process isolation</text>
+
+    <rect x="958" y="890" width="250" height="124" rx="20" fill="#111f31" stroke="#3c5673"/>
+    <circle cx="998" cy="930" r="19" fill="#173b3a" stroke="#5eead4"/>
+    <path d="M987 935 L998 921 L1009 935 M990 936 H1006" fill="none" stroke="#8ff6e8" stroke-width="2"/>
+    <text x="1030" y="924" class="card-title">e2b Sandbox</text>
+    <text x="1030" y="948" class="card-sub">SDK · remote workspace</text>
+    <text x="982" y="985" class="tiny">manifest-driven projection</text>
+
+    <rect x="1246" y="890" width="294" height="124" rx="20" fill="#111f31" stroke="#3c5673"/>
+    <circle cx="1286" cy="930" r="19" fill="#3e2c1f" stroke="#f6c85f"/>
+    <circle cx="1286" cy="930" r="7" fill="none" stroke="#ffe09a" stroke-width="2"/>
+    <path d="M1286 911 V918 M1286 942 V949 M1267 930 H1274 M1298 930 H1305" stroke="#ffe09a" stroke-width="2"/>
+    <text x="1318" y="924" class="card-title">MCP Servers</text>
+    <text x="1318" y="948" class="card-sub">stdio / HTTP · external tools</text>
+    <text x="1270" y="985" class="tiny">direct bridge · sandbox bypass</text>
+  </g>
+
+  <path d="M1110 465 C1084 420 1035 406 965 406 C862 406 812 848 250 848 V878 C250 883 236 887 212 890" class="flow"/>
+  <path d="M1396 560 V850 C1396 866 1225 866 1083 890" class="flow"/>
+  <path d="M1396 560 V850 C1396 866 1100 866 795 890" class="flow"/>
+  <path d="M1396 560 V850 C1396 866 920 866 507 890" class="flow"/>
+  <path d="M1450 560 C1518 600 1532 702 1500 878" class="data"/>
+
+  <rect x="654" y="1035" width="292" height="28" rx="14" fill="#101e30" stroke="#2f435b"/>
+  <text x="800" y="1054" text-anchor="middle" class="tiny">Agent Package 是 AgentFlow 与 Harness 的装配边界</text>
+</svg>

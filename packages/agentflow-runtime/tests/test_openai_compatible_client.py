@@ -338,6 +338,25 @@ def test_rejects_credential_bearing_remote_http_endpoint():
         )
 
 
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("mode", ["enabled", "disabled", "auto"])
+def test_explicit_thinking_mode(monkeypatch, stream, mode):
+    monkeypatch.setenv("AF_LLM_THINKING_MODE", mode)
+    client = client_module.OpenAiCompatibleClient(
+        model="test-model", base_url="https://provider.example/v1", api_key="test")
+    body = client.build_request_body([], stream=stream)
+    assert body["thinking"] == {"type": mode}
+    assert body["enable_thinking"] == (stream if mode == "auto" else mode == "enabled")
+
+
+def test_invalid_thinking_mode_fails_before_transport(monkeypatch):
+    monkeypatch.setenv("AF_LLM_THINKING_MODE", "invalid-value")
+    client = client_module.OpenAiCompatibleClient(
+        model="test-model", base_url="https://provider.example/v1", api_key="test")
+    with pytest.raises(ValueError, match="AF_LLM_THINKING_MODE"):
+        client.build_request_body([])
+
+
 def test_transport_enforces_tls_no_redirects_and_no_ambient_proxy(monkeypatch):
     calls = []
 

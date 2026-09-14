@@ -127,6 +127,7 @@ RUN_SKILLS_TOOL_DEFINITION = {
             "properties": {
                 "skills": {
                     "type": "array",
+                    "minItems": 1,
                     "items": {
                         "type": "object",
                         "properties": {
@@ -156,7 +157,8 @@ RUN_SKILLS_TOOL_DEFINITION = {
                         },
                         "required": ["name", "prompt"],
                     },
-                    "description": "要执行的 skill 列表，每个 skill 带有任务指派信息",
+                    "description": "要执行的 skill 列表，至少包含一项，每个 skill 带有任务指派信息。"
+                                   "没有待执行工作时直接回复用户，不要用空列表结束任务。",
                 },
                 "reason": {
                     "type": "string",

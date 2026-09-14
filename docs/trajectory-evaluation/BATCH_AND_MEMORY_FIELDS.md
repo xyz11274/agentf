@@ -270,6 +270,12 @@ proposal_fingerprint
 证据数量不参与 `candidate_id`，所以同一候选可以跨 Batch 不断增加证据而保持同一个
 Memory Entry。目标、适用范围、触发条件或建议内容实质变化时，会形成新 ID。
 
+新结构化经验使用 `generator_version=scoped-experience-generator-v1`，其作用域、
+触发条件与行为分别来自 `reflection.experience_details`，证据只取该条引用。
+这不增加 Memory 字段，也不是效果验证或上线批准。旧字符串经验仍可入库管理，
+但不能与新契约经验经精确去重、元反思或语义整理合并后获得新注入资格；新 Shadow
+会用 `experience_contract` 原因排除旧经验。不要手工改版本号代替重新评测。
+
 ### 6.2 要改什么
 
 | 字段 | 含义 |
@@ -288,7 +294,7 @@ Memory Entry。目标、适用范围、触发条件或建议内容实质变化�
 | 值 | 修改对象 |
 | --- | --- |
 | `SKILL_ORCHESTRATION` | Coordinator 的 Skill 选择、并发和重排逻辑 |
-| `PROMPT` | Coordinator 或 Skill Prompt |
+| `EXPERIENCE_INJECTION` | 可检索并注入后续决策上下文的复用经验 |
 | `LOOP_STOP_CONDITION` | Loop 结束与无进展检测条件 |
 | `RETRY_POLICY` | 可重试/不可重试错误处理策略 |
 | `TOOL_RESULT_CONSUMPTION` | Tool Result 写回下一轮上下文的规则 |
@@ -429,9 +435,23 @@ output_candidate_count = 9
 | `revision_before` | 更新前 Store revision。 |
 | `revision_after` | 更新后 Store revision。 |
 | `inserted_entry_count` | 新建的 Memory Entry 数。 |
-| `updated_entry_count` | Candidate 内容发生实质变化并新增快照的 Entry 数。 |
-| `unchanged_entry_count` | 找到同一 Entry，但合并后 Candidate 内容未变化的数量。 |
-| `error_code` | 非致命持久化附属错误，例如 JSON 视图写入失败。 |
+| `updated_entry_count` | Candidate、来源映射或关系发生实质变化的既有 Entry 数。 |
+| `unchanged_entry_count` | 找到同一 Entry，但合并后没有实质变化的数量。 |
+| `error_code` | 非致命持久化附属错误，例如 JSON 视图写入失败或幂等映射缺失。 |
+| `decisions` | 每个输入 Candidate 的增量决策，以及本次触发的全库复核决策。 |
+| `curator_version` | 产生本次决策的 Memory Curator 版本。 |
+| `model_requested_count` | 记忆整理实际发出的外部模型请求数；并发重算复用相同响应时不重复计数。 |
+| `model_succeeded_count` | 实际模型请求中，通过结构、安全和引用边界校验的数量。 |
+| `model_failed_count` | 实际模型请求中，传输失败或响应未通过校验的数量。 |
+| `concurrency_retry_count` | 提交前发现 Memory 已被其他进程更新而重新计算的次数。 |
+| `full_curation_triggered` | 本次是否达到新增记忆阈值并启动全库复核。 |
+| `full_curation_completed` | 确定性合并和所有必要语义复核是否完整完成。 |
+| `pending_new_entry_count` | Store 中累计、尚未被一次完整全库复核清零的新 Entry 数。 |
+| `full_curation_examined_count` | 本次全库复核实际形成决策的项目数。 |
+| `full_curation_merged_count` | 本次全库复核合并掉的重复 Entry 数。 |
+| `full_curation_error_code` | 全库复核未完成的原因；不表示增量入库失败。 |
+| `evicted_entry_count` | 本次为满足 Entry 数或总字节上限而淘汰的 Entry 数。 |
+| `pruned_applied_batch_id_count` | 本次从精确 Batch 幂等窗口移除的最旧 Batch ID 数。 |
 
 典型首次写入：
 
@@ -456,16 +476,48 @@ output_candidate_count = 9
 ```
 
 由于 Protobuf JSON 省略默认值，第二个例子没有显示 `applied=false`。
+幂等重放仍会执行纯容量维护，以便旧 Store 在更严格的新配置下收敛；此时
+`revision` 不增加，但 `evicted_entry_count` 或
+`pruned_applied_batch_id_count` 可以非零。
+
+
+`decisions[]` 中最重要的字段是：
+
+| 字段 | 含义 |
+| --- | --- |
+| `candidate_id` | 本批输入 Candidate。 |
+| `memory_id` | 最终归属的稳定 Memory；插入和合并都必须有值。 |
+| `matched_memory_id` | 匹配到的历史 Memory；新建独立项时为空。 |
+| `action` | `INSERTED`、`MERGED`、`UNCHANGED`、`SKIPPED`、`LINKED` 或 `EVICTED`。 |
+| `relation` | `EXACT`、`DUPLICATE`、`RELATED`、`CONTRADICTS`、`DISTINCT` 或 `UNRESOLVED`。 |
+| `match_method` | 按 Candidate ID、已存别名、结构化规则或模型得出。 |
+| `considered_matches` | 送入语义判断的短名单、字符相似度、内容指纹和 Memory 状态。 |
+| `confidence / reason` | 决策置信度和中文理由。 |
+| `adapter / model_id` | 使用模型时的适配器和模型身份。 |
+| `request_fingerprint / response_fingerprint` | 可审计但不暴露原始响应的请求/响应指纹。 |
+| `error_code / attempts` | 降级原因和模型传输尝试次数。 |
+| `decision_id` | 可由 Batch 中详细判断稳定回链到 Memory 关系的审计 ID。 |
+| `full_store_curation` | `true` 表示周期全库复核产生，不是本批 Candidate 的首次增量决策。 |
+
+CLI 配置模型适配器后会自动进行语义整理；未配置模型时，存在兼容短名单但规则无法
+证明关系的候选会独立入库，并记录 `relation=UNRESOLVED`、
+`error_code=adapter_not_configured`。这不是全批失败，而是避免猜测性合并的保守结果。
 
 使用 `--no-memory` 时不会更新 Store，`memory_update` 通常保持默认值并从 JSON 中
 省略。
+同一 Candidate 在一次更新中可以先有 `INSERTED` 决策，再有一条
+`EVICTED` 决策：前者表示入库判断，后者表示最终容量管理结果。淘汰决策保存被移除
+的 `candidate_id`、`memory_id`、确定性理由和稳定 `decision_id`。被淘汰 Entry
+不复制到另一个无限增长的 Archive Store；完整证据仍在 Batch Evaluation、逐 Dialogue
+Evaluation 和 SessionLog 中。
+
 
 ## 10. `EvolutionMemoryStore` 顶层字段
 
 ```text
 EvolutionMemoryStore
 ├── schema_version / store_kind / store_version
-├── revision
+├── revision / new_entries_since_full_curation
 ├── applied_batch_ids[]
 └── entries[]
 ```
@@ -474,10 +526,11 @@ EvolutionMemoryStore
 | --- | --- |
 | `schema_version` | Memory Protobuf 结构版本。当前为 1。 |
 | `store_kind` | 固定为 `trajectory_evolution_memory`，防止误读其他 PB。 |
-| `store_version` | Memory 合并与持久化语义版本。 |
+| `store_version` | Memory 文件与基础持久化语义版本。 |
+| `new_entries_since_full_curation` | 自上次完整全库复核后的新建次数；容量淘汰不回减，以免推迟全库复核。 |
 | `revision` | 已成功应用的新 Batch 次数形成的 Store 全局修订号。 |
-| `applied_batch_ids` | 已应用 Batch 的去重集合。 |
-| `entries` | 跨批次累计的 `EvolutionMemoryEntry`。 |
+| `applied_batch_ids` | 最近已应用 Batch 的精确去重窗口，默认最多 4096 项。 |
+| `entries` | 当前有界工作集中的 `EvolutionMemoryEntry`，默认最多 512 项。 |
 
 `revision` 不是 Candidate 数量，也不是 Entry 更新次数。每个此前未应用的 Batch 会使
 它增加 1；相同 Batch 重放不增加。
@@ -486,7 +539,20 @@ EvolutionMemoryStore
 `applied_batch_ids`，Store revision 仍会增加。这表示 Store 已消费该批次，而不是
 表示一定新增了策略。
 
+### 10.1 容量与淘汰语义
+Memory 不是无限历史仓库，而是可由上游产物重建的有界工作集。每批整理结束时：
+
+1. 先把 `applied_batch_ids` 截到最近的配置窗口；
+2. 若 Entry 数或序列化字节超限，按生命周期、候选状态、支持用户/Dialogue/Episode、
+   置信度和最近修订选择低优先级项；
+3. `VALIDATED` 比 `CANDIDATE` 更晚淘汰，`REJECTED` / `ARCHIVED` 更早淘汰；
+4. `CONTRADICTS` 连通组整体保留或整体淘汰；
+5. 删除后重建双向关系，最终 Protobuf 不得超过配置字节上限。
+
+精确 Batch 幂等只保证最近窗口。旧 Batch ID 退出窗口后，只要 Candidate/来源别名仍在
+Memory，稳定映射仍会阻止重复；若两者都已淘汰，旧批重放可能重新入库。
 ## 11. `entries[]`：一条累计记忆
+
 
 每项是 `EvolutionMemoryEntry`。
 
@@ -498,10 +564,18 @@ EvolutionMemoryStore
 | `first_batch_id` | 该记忆首次出现的 Batch。 |
 | `last_batch_id` | 最近观察并合并该记忆的 Batch。 |
 | `observed_batch_ids` | 所有观察到该记忆的 Batch ID，去重保存。 |
-| `revisions` | 该 Entry 发生实质变化时保存的候选快照。 |
+| `revisions` | Candidate 内容发生实质变化时保存的 Candidate 快照。 |
+| `source_candidate_ids` | 所有被映射到该 Memory 的 Candidate ID；语义重复项作为别名保留。 |
+| `relations` | 与其他 Memory 的 `RELATED` 或 `CONTRADICTS` 双向关系。 |
 
-`memory_id` 由稳定 `candidate_id` 派生。新的支持证据、反证或状态变化通常更新同一
-Entry，而不是创建新 Entry。
+`memory_id` 由首次成为该 Entry canonical Candidate 的稳定 `candidate_id` 派生，后续
+语义重复 Candidate 不会改写它，而是加入 `source_candidate_ids`。这给出稳定的
+`candidate_id → memory_id` 映射；新的支持证据、反证或状态变化通常更新同一 Entry。
+
+每条 `EvolutionMemoryRelation` 只保存 `target_memory_id`、关系类型、置信度和
+`decision_id`。详细短名单、理由、模型身份与错误留在产生它的 Batch decision 中。
+关系只表示候选策略之间的语义，不表示依赖执行顺序；`RELATED` 和 `CONTRADICTS` 都
+不会合并两个 Entry。冲突关系具有安全优先级，不会被后续 `RELATED` 复核覆盖。
 
 ### 11.1 Memory 生命周期状态
 
@@ -512,7 +586,7 @@ Entry，而不是创建新 Entry。
 | `CANDIDATE` | 待实验验证的进化假设。 |
 | `VALIDATED` | 未来经过回放/A-B 实验验证的策略。 |
 | `REJECTED` | 未来经实验否决的策略。 |
-| `ARCHIVED` | 不再参与当前选择，但保留历史。 |
+| `ARCHIVED` | 不再参与当前选择；容量不足时会早于活跃候选淘汰。 |
 
 当前管线创建新 Entry 时只会设置为 `CANDIDATE`，还没有实现自动晋升、拒绝或归档。
 
@@ -526,14 +600,18 @@ Entry，而不是创建新 Entry。
 | `batch_id` | 导致该变化的 Batch。 |
 | `candidate_snapshot` | 当时完整的 Candidate 状态。 |
 
-新 Entry 会立即写入第一个快照。已有 Entry 在合并新证据后，只有 Candidate 的序列化
-内容真的发生变化才新增快照，例如：
+工作集中的新 Entry 会立即写入第一个 Candidate 快照。已有 Entry 在 Candidate 聚合内容或来源
+别名发生实质变化时新增快照，例如：
 
 - 新增支持 Dialogue 或 Episode；
 - 新增反证；
 - 置信度发生变化；
 - 从 INSUFFICIENT_SUPPORT 变成 PROPOSED；
 - 从 PROPOSED 变成 CONFLICTED。
+
+Revision 有意保持紧凑，只回放 Candidate 内容；当前来源别名和关系保存在 Entry，关系
+判断的完整依据保存在 Batch `memory_update.decisions[]`。仅关系变化不会伪造 Candidate
+快照。
 
 同一新 Batch 观察到候选，但合并后内容完全相同时：
 
@@ -575,36 +653,57 @@ candidate.status = CONFLICTED
 完整算法可以简化为：
 
 ```text
-取得 evolution-memory.pb.lock 排他锁
-  │
-  ▼
 读取并校验 evolution-memory.pb；不存在则初始化
   │
   ▼
 batch_id 是否已在 applied_batch_ids？
-  ├── 是：标记 idempotent_replay，revision 不变
-  └── 否：revision + 1，记录 batch_id
-            │
-            ▼
-      遍历 batch.candidates
-        ├── REJECTED_BY_GATE：跳过
-        ├── memory_id 不存在：插入 Entry + 首次快照
-        └── memory_id 已存在：合并证据并重新计算 Candidate
-                              ├── 有变化：更新 + 新快照
-                              └── 无变化：unchanged
-            │
-            ▼
-凭据扫描
+  ├── 是：恢复 Candidate→Memory 映射，revision 不变，不调用模型
+  └── 否：逐 Candidate 自动整理
+            ├── REJECTED_BY_GATE：跳过
+            ├── 稳定 ID/历史别名命中：合并到 canonical Memory
+            ├── 规范化策略键完全相同：确定性合并
+            ├── 无结构兼容项：作为 DISTINCT 插入
+            └── 有兼容短名单但规则无法判断
+                  ├── 已配置模型：判断 DUPLICATE / RELATED /
+                  │                 CONTRADICTS / DISTINCT
+                  └── 无模型或判断失败：作为 UNRESOLVED 独立插入
   │
   ▼
-临时文件写入 + flush + rename 原子替换 PB
+新建 Entry 累加 pending 计数（后续容量淘汰不回减）
+  ├── 未达到阈值：结束本次增量管理
+  └── 达到阈值：同一次调用自动全库复核
+        ├── 先确定性合并规范化重复项
+        ├── 每条可用记忆复核最多 8 个同类型、同作用域候选
+        ├── 全部完成：pending 清零
+        └── 模型、预算或响应失败：保留已入库结果和 pending，后续自动重试
+  │
+  ▼
+模型调用与容量规划都在锁外完成
+  │
+  ▼
+容量规划
+  ├── applied_batch_ids 保留最近配置窗口
+  ├── Entry 数/总字节超限：按确定性优先级淘汰
+  └── CONTRADICTS 连通组不得拆分
+  │
+  ▼
+取得排他锁后重新读取 Memory
+  ├── 基线已变化：基于新版本重新整理
+  │                 完全相同的模型请求复用本次响应
+  └── 基线未变化：revision + 1，记录 batch_id 和每项 decision
+  │
+  ▼
+凭据扫描 → 临时文件写入 + flush + rename 原子替换 PB
   │
   ▼
 同步生成 JSON 可读视图并释放锁
 ```
 
-Memory 合并不会把一个 Candidate 的证据静默复制到另一个 Candidate。只有
-`candidate_id` 相同才会更新同一 Entry。
+字符相似度只用于对同类型、同作用域 Memory 排序，不能自动合并。相同稳定 ID、
+历史别名、规范化策略键完全一致，或高置信模型 `DUPLICATE` 才会更新同一 Entry。
+模型失败、低置信度和无法判断都会独立入库，因此单个整理失败不会阻止本批其他候选。
+`RELATED` 和 `CONTRADICTS` 都保留双方；冲突关系优先且不可被后续相关关系降级。未来
+策略选择器必须对冲突组执行“至多激活一条”，当前记忆管理层不提前伪造激活状态。
 
 ## 15. 如何从 Memory 反查原始轨迹
 
@@ -624,7 +723,7 @@ EvolutionMemoryStore.entries[].memory_id
 
 | 层 | 最适合查看什么 |
 | --- | --- |
-| Memory | 跨批次累计结论、状态和历史 |
+| Memory | 当前有界工作集中的跨批次结论、状态和修订 |
 | Batch | 某次运行如何产生/更新这些候选 |
 | Dialogue Evaluation | 规则、模型、融合和 Episode 结构证据 |
 | SessionLog | Prompt、Tool 参数/结果和实际事件原文 |
