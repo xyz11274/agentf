@@ -89,6 +89,66 @@
       }
     },
     "schemas": {
+      "EvaluationNextRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "evaluation.next",
+            "type": "string",
+            "enum": [
+              "evaluation.next"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "consumer": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1024
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "consumer",
+          "index"
+        ],
+        "additionalProperties": false
+      },
+      "EvaluationFailRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "evaluation.fail",
+            "type": "string",
+            "enum": [
+              "evaluation.fail"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "consumer": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "consumer"
+        ],
+        "additionalProperties": false
+      },
       "TaskBeginRequest": {
         "type": "object",
         "properties": {
@@ -312,6 +372,10 @@
               "privacy_rejected",
               "missing_boundary"
             ]
+          },
+          "error_code": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,95}$"
           }
         },
         "required": [
@@ -1516,6 +1580,11 @@
             "minLength": 1,
             "maxLength": 128
           },
+          "control_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
           "caused_by": {
             "type": "array",
             "items": {
@@ -1538,7 +1607,13 @@
           "type",
           "data"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "not": {
+          "required": [
+            "activity_id",
+            "control_id"
+          ]
+        }
       },
       "RunEndRequest": {
         "type": "object",
@@ -2118,6 +2193,12 @@
       "InvokeRequest": {
         "oneOf": [
           {
+            "$ref": "#/components/schemas/EvaluationNextRequest"
+          },
+          {
+            "$ref": "#/components/schemas/EvaluationFailRequest"
+          },
+          {
             "$ref": "#/components/schemas/TaskBeginRequest"
           },
           {
@@ -2235,6 +2316,8 @@
         "discriminator": {
           "propertyName": "operation",
           "mapping": {
+            "evaluation.next": "#/components/schemas/EvaluationNextRequest",
+            "evaluation.fail": "#/components/schemas/EvaluationFailRequest",
             "task.begin": "#/components/schemas/TaskBeginRequest",
             "task.status": "#/components/schemas/TaskStatusRequest",
             "evaluation.retry": "#/components/schemas/EvaluationRetryRequest",

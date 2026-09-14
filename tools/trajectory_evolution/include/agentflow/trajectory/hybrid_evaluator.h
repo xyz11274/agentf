@@ -64,6 +64,7 @@ struct OpenAiCompatibleOptions {
   std::string model_id;
   std::string api_key;
   std::string thinking_type;
+  // One evaluate call divides this network budget across remaining attempts.
   std::uint32_t timeout_ms = 30000;
   std::uint32_t connect_timeout_ms = 5000;
   std::uint32_t max_retries = 1;
@@ -73,6 +74,11 @@ struct OpenAiCompatibleOptions {
   bool disable_proxy = true;
   // Optional background cancellation; unset preserves the original transport.
   std::function<bool()> cancelled;
+  // Opt in only when the provider supports JSON object output.
+  bool json_object_output = false;
+  // Optional SSE transport; a zero idle budget preserves legacy waiting.
+  bool stream = false;
+  std::uint32_t idle_timeout_ms = 0;
 };
 
 std::shared_ptr<ModelAdapter> make_jsonl_model_adapter(

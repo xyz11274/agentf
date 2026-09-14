@@ -187,7 +187,7 @@ void LocalSandbox::wait_for_server_ready(int port, int timeout_ms) {
   std::string probe = "http://127.0.0.1:" + std::to_string(port) + "/exec";
   while (std::chrono::steady_clock::now() < deadline) {
     // 用 popen(curl) 探测——发一个空 POST 看是否响应
-    std::string cmd = "curl -s -m 1 -X POST -H 'Content-Type: application/json' "
+    std::string cmd = "curl -s --noproxy '*' -m 1 -X POST -H 'Content-Type: application/json' "
                       "-d '{\"tool\":\"bash\",\"tool_params\":{\"command\":\"echo ready\"},\"opts\":{}}' "
                       "'" + probe + "' 2>/dev/null";
     FILE* fp = popen(cmd.c_str(), "r");
@@ -219,6 +219,9 @@ std::string LocalSandbox::curl_post(const std::string& path, const std::string& 
   // 安全版本：fork+execvp 数组形式 + stdin 管道传 body（避免 shell 注入，CWE-77）
   // body 通过 --data-binary @- 从 stdin 读取，不经过命令行参数
   // 与 exe_loader.cpp 既有 fork+exec 模式一致（F5 单一真相来源）
+  // 认证头由可信 HTTP server 写入私有文件，值不进入命令行或工具环境。
+  const std::string auth_header = "@/tmp/agentflow-local-auth-" + std::to_string(getuid())
+                                  + "/" + endpoint_.substr(endpoint_.rfind(':') + 1);
   int stdin_pipe[2];
   int stdout_pipe[2];
 
@@ -258,9 +261,11 @@ std::string LocalSandbox::curl_post(const std::string& path, const std::string& 
     char* const args[] = {
         const_cast<char*>("curl"),
         const_cast<char*>("-s"),
+        const_cast<char*>("--noproxy"), const_cast<char*>("*"),
         const_cast<char*>("-m"), timeout_str,
         const_cast<char*>("-X"), const_cast<char*>("POST"),
         const_cast<char*>("-H"), const_cast<char*>("Content-Type: application/json"),
+        const_cast<char*>("-H"), const_cast<char*>(auth_header.c_str()),
         const_cast<char*>("--data-binary"), const_cast<char*>("@-"),
         const_cast<char*>(path.c_str()),
         nullptr

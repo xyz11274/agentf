@@ -17,6 +17,14 @@ struct TaskEvaluationOptions {
   // Appended for aggregate-initializer compatibility with existing C++ callers.
   // Frozen configuration supplied by a background caller; CLI paths stay valid.
   std::string config_json;
+  // Optional checkpoint from the same dataset, versions and grading settings.
+  std::filesystem::path resume_report;
+  // Explicit model-only regrading: preserve execution and deterministic checks.
+  // Mutually exclusive with resume_report; never starts an Agent subprocess.
+  std::filesystem::path regrade_report;
+  // With regrade_report, rerun configured checks on retained evidence as well.
+  // Other source checks (including artifact/privacy failures) remain in force.
+  bool recheck = false;
 };
 
 // Canonical behavior fingerprint, independent of run IDs and memory counters.

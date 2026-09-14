@@ -166,21 +166,29 @@ struct AgentEvaluationService::Impl {
       if(variant.has("instrumentation_config")) bytes += read(variant.str("instrumentation_config"));
     if(evaluation["judge"].flag("enabled", false)) {
       bytes += read(evaluation["judge"].str("prompt"));
+      if(evaluation["judge"].has("loop_review_prompt")) bytes += read(evaluation["judge"].str("loop_review_prompt"));
       bytes += read(evaluation["judge"].str("runtime_config"));
     }
-    return digest(bytes);
+    // Missing activity state now uses the current request, changing execution.
+    return digest("boundary-current-request-v1\n" + bytes);
   }
   explicit Impl(const fs::path& file, const fs::path& data, std::function<void()> callback, const std::string& control_json)
       : root(fs::absolute(data)), config_path(fs::absolute(file)), changed(std::move(callback)) {
     controls = control_json.empty() ? Json() : Json::parse(control_json);
     validate_control_learning(controls);
     config = Json::parse(read(config_path));
-    keys(config, {"schema_version", "dataset", "evaluation_config", "agent", "min_interval_ms", "max_jobs", "max_jobs_per_hour", "gate", "gepa_config"});
+    keys(config, {"schema_version", "dataset", "evaluation_config", "agent", "min_interval_ms", "max_jobs", "max_jobs_per_hour", "gate", "gepa_config", "training"});
     require(config.num("schema_version", 0) == 1 && config["agent"].object() && !config["agent"].str("revision").empty(), "agent_evaluation_config_invalid");
     validate_local_data(config);
     auto resolve = [&](const std::string& name) { fs::path p(config.str(name)); require(!p.empty(), "evaluation_path_required"); return p.is_absolute() ? p : config_path.parent_path() / p; };
     dataset_path = resolve("dataset"); evaluation_path = resolve("evaluation_config");
     if(config.has("gepa_config")) gepa = load_gepa_config(resolve("gepa_config"));
+    if(!config.has("training")) config["training"] = Json::Object{};
+    const auto& training = config["training"];
+    keys(training, {"enabled", "min_experiences", "batch_size", "max_batches"});
+    if(training.has("enabled")) training.flag("enabled", true);
+    for(const auto* key : {"min_experiences", "batch_size", "max_batches"})
+      require(training.num(key, 1) > 0 && training.num(key, 1) <= 512, "training_limit_invalid");
     evaluation = Json::parse(read(evaluation_path));
     evaluation["require_trace"] = true;
     require(evaluation["variants"].items().size() == 1, "evaluation_host_must_be_single");
@@ -196,7 +204,8 @@ struct AgentEvaluationService::Impl {
       for(std::size_t i; (i = value.find(marker)) != std::string::npos;) value.replace(i, marker.size(), evaluation_path.parent_path().string());
       argument = value;
     }
-    if(evaluation["judge"].flag("enabled", false)) for(const auto* key : {"prompt", "runtime_config"}) {
+    if(evaluation["judge"].flag("enabled", false)) for(const auto* key : {"prompt", "runtime_config", "loop_review_prompt"}) {
+      if(std::string(key) == "loop_review_prompt" && !evaluation["judge"].has(key)) continue;
       fs::path p(evaluation["judge"].str(key)); if(p.is_relative()) p = evaluation_path.parent_path() / p;
       evaluation["judge"][key] = p.string();
     }
@@ -258,6 +267,8 @@ struct AgentEvaluationService::Impl {
       for(const auto& p : state["jobs"].fields()) {
         if(p.second.str("status") == "pending" || p.second.str("status") == "running") continue;
         bool pinned = state["latest"].str(lane(p.second.str("user"), p.second.str("level"))) == p.first;
+        if(state["training"].object()) for(const auto& training : state["training"].fields())
+          pinned |= training.second.str("job_id") == p.first;
         for(const auto& publication : state["publications"].fields()) pinned |= publication.second.str("job_id") == p.first;
         if(!pinned && p.second.num("queued_ms", 0) < time) { oldest = p.first; time = p.second.num("queued_ms", 0); }
       }
@@ -286,10 +297,13 @@ struct AgentEvaluationService::Impl {
     if(groups.has("baseline") && gate.has("max_token_ratio")) reject(candidate["host_reported_metrics"]["tokens"].num("observations", 0) != candidate.num("trials", 0)
         || base["host_reported_metrics"]["tokens"].num("observations", 0) != base.num("trials", 0), "token_metric_unobserved");
     if(groups.has("baseline") && gate.has("min_invalid_loop_reduction")) {
-      const auto& a = candidate["invalid_loop_lower_bound"], b = base["invalid_loop_lower_bound"];
+      const auto& a = candidate.has("invalid_loop_assessment") ? candidate["invalid_loop_assessment"] : candidate["invalid_loop_lower_bound"];
+      const auto& b = base.has("invalid_loop_assessment") ? base["invalid_loop_assessment"] : base["invalid_loop_lower_bound"];
+      reject(a.str("method", "rule_lower_bound") != b.str("method", "rule_lower_bound"), "loop_metric_mismatch");
       reject(a.num("observations", 0) != candidate.num("trials", 0) || b.num("observations", 0) != base.num("trials", 0)
           || a["mean"].null() || b["mean"].null(), "loop_metric_unobserved");
       reject(numeric(a["mean"]) > numeric(b["mean"]) * (1 - numeric(gate["min_invalid_loop_reduction"])), "loop_target_not_met");
+      reject(numeric(gate["min_invalid_loop_reduction"]) > 0 && numeric(b["mean"]) <= 0, "loop_baseline_has_no_observed_waste");
     }
     const bool scored = numeric(candidate["coverage"], -1) >= coverage && numeric(base["coverage"], -1) >= coverage
         && candidate.num("scored", 0) >= gate.num("min_trials", 2) && base.num("scored", 0) >= gate.num("min_trials", 2);
@@ -329,7 +343,8 @@ struct AgentEvaluationService::Impl {
           if(trial.variant_id() != "candidate" || (trial.verdict() != "passed" && trial.verdict() != "failed")) continue;
           bool applied = false;
           const auto evidence = json(trial.evidence());
-          if(evidence["trace"]["events"].array()) for(const auto& event : evidence["trace"]["events"].items())
+          const auto traces = evidence["traces"].array() ? evidence["traces"] : Json(Json::Array{evidence["trace"]});
+          for(const auto& trace : traces.items()) if(trace["events"].array()) for(const auto& event : trace["events"].items())
             if(event.str("kind") == "advice.applied" && event["application"].str("status") == "applied"
                 && event["attributes"]["receipt"]["experiences"].array())
               for(const auto& ref : event["attributes"]["receipt"]["experiences"].items())
@@ -393,7 +408,22 @@ struct AgentEvaluationService::Impl {
       Json verdict; std::string error; bool completed = false; dataset::v1::TaskEvaluationReport report;
       try {
         require(fingerprint() == context, "evaluation_configuration_changed");
-        if(job.flag("gepa", false)) {
+        TaskEvaluationOptions options;
+        options.cancelled = [&] { return stopping || cancel_running; };
+        for(auto attempt = job.num("attempt", 0); attempt > 1; --attempt) {
+          const auto previous = root / id / ("attempt-" + std::to_string(attempt - 1));
+          if(fs::exists(previous / "manifest.json")) { options.resume_report = previous / "report.json"; break; }
+        }
+        if(job.flag("training", false)) {
+          auto settings = evaluation; auto host = evaluation["variants"].items().front();
+          host["id"] = "training"; host["version"] = job["version"]; host["artifact"] = artifact;
+          settings["variants"] = Json::Array{host}; settings["splits"] = Json::Array{"train"};
+          settings["task_ids"] = job["task_ids"];
+          options.config_json = settings.dump();
+          report = run_task_evaluation(dataset_path, evaluation_path,
+              root / id / ("attempt-" + std::to_string(job.num("attempt", 0))), options);
+          require(report.complete(), "training_report_incomplete");
+        } else if(job.flag("gepa", false)) {
           const auto seed = Json::parse(read(root / id / "seed.json"));
           const auto result = run_gepa_search(seed, base, dataset_path, evaluation_path, evaluation,
               gepa, controls, root / id / "search", context, [&] { return stopping || cancel_running; });
@@ -404,14 +434,14 @@ struct AgentEvaluationService::Impl {
           a["id"] = "baseline"; a["version"] = agent_version_id(base.dump()); a["artifact"] = base;
           b["id"] = "candidate"; b["version"] = job["version"]; b["artifact"] = artifact;
           settings["variants"] = artifact.str("level") == "L0" ? Json(Json::Array{b}) : Json(Json::Array{a, b});
-          TaskEvaluationOptions options; options.config_json = settings.dump();
-          options.cancelled = [&] { return stopping || cancel_running; };
+          options.config_json = settings.dump();
           report = run_task_evaluation(dataset_path, evaluation_path,
               root / id / ("attempt-" + std::to_string(job.num("attempt", 0))), options);
         }
         require(!stopping && !cancel_running, "evaluation_cancelled");
         require(fingerprint() == context, "evaluation_configuration_changed");
-        verdict = gate_result(report); completed = true;
+        if(!job.flag("training", false)) verdict = gate_result(report);
+        completed = true;
       } catch(const Error& e) { error = e.what(); }
       catch(...) { error = "agent_evaluation_failed"; }
       {
@@ -420,7 +450,8 @@ struct AgentEvaluationService::Impl {
         current["status"] = completed ? (verdict.flag("scored", false)
             ? (verdict.flag("passed", false) ? "passed" : "rejected") : "inconclusive") : "error";
         if(!error.empty()) current["error"] = error;
-        if(completed) {
+        if(completed && job.flag("training", false)) current["status"] = "completed";
+        if(completed && !job.flag("training", false)) {
           if(job.flag("gepa", false)) {
             current["search"] = job["search"];
             current["version"] = agent_version_id(artifact.dump());
@@ -468,6 +499,109 @@ AgentEvaluationService::~AgentEvaluationService() {
   impl_->stopping = true; impl_->wake.notify_all(); if(impl_->worker.joinable()) impl_->worker.join();
 }
 std::string AgentEvaluationService::agent_configuration() const { return impl_->config["agent"].dump(); }
+std::string AgentEvaluationService::prepare_training(const std::string& user,
+    const std::string& seed_json, bool learning_pending, bool learning_failed) {
+  if(impl_->gepa.null() || !impl_->config["training"].flag("enabled", true))
+    return Json{{"status", "disabled"}}.dump();
+  const auto seed = Json::parse(seed_json);
+  require(seed.str("user_id") == user && seed["agent"].dump() == impl_->config["agent"].dump(),
+      "evaluation_owner_or_agent_mismatch", 403);
+  const auto usable = memories(seed).fields().size();
+  const auto& settings = impl_->config["training"];
+  const auto minimum = settings.num("min_experiences", 3);
+  const auto data = read_evaluation_dataset(impl_->dataset_path);
+  for(const auto& issue : data.issues()) require(issue.severity() != "error", "training_dataset_invalid");
+  // Memory counters are deliberately absent: learning must not create a fresh
+  // training budget for the same frozen application and dataset.
+  const auto key = lane(user, "training");
+  const auto identity = digest(impl_->config["agent"].dump() + '\n' + data.dataset_version());
+  std::lock_guard<std::mutex> guard(impl_->mutex);
+  require(!impl_->state.has("worker_error"), "evaluation_worker_unavailable", 503);
+  auto& progress = impl_->state["training"][key];
+  const auto previous = progress.dump();
+  const bool new_identity = progress.str("identity") != identity;
+  if(new_identity)
+    progress = Json{{"identity", identity}, {"user", user}, {"batches", 0}, {"tasks", Json::Array{}}};
+  progress["usable_experiences"] = usable; progress["min_experiences"] = minimum;
+  auto finish = [&](const std::string& status) {
+    progress["status"] = status;
+    const auto bytes = progress.dump();
+    if(bytes != previous) impl_->save();
+    return bytes;
+  };
+  if(learning_failed && !new_identity) return finish("learning_failed");
+  const auto id = progress.str("job_id");
+  if(!id.empty()) {
+    const auto& job = impl_->state["jobs"][id];
+    require(job.flag("training", false) && job.str("user") == user, "training_job_missing");
+    const auto status = job.str("status");
+    if(job.str("context") != impl_->context
+        && (status == "superseded" || status == "interrupted" || status == "error")
+        && !job.flag("cancel_requested", false) && job.str("error") != "evaluation_cancelled"
+        && !job.has("training_import")) {
+      // Requeue the same reserved batch under the new context. Never reuse its
+      // old checkpoint or reset the dataset's task/batch budget.
+      const auto tasks = job["task_ids"], artifact = baseline(seed);
+      require(!tasks.items().empty(), "training_tasks_missing");
+      const auto next = digest(id + '\n' + impl_->context);
+      impl_->make_room();
+      write(impl_->root / next / "candidate.json", artifact.dump());
+      write(impl_->root / next / "baseline.json", artifact.dump());
+      impl_->state["jobs"][next] = Json{{"user", user}, {"level", "L0"}, {"version", agent_version_id(artifact.dump())},
+          {"status", "pending"}, {"queued_ms", now_ms()}, {"context", impl_->context}, {"attempt", 0},
+          {"training", true}, {"task_ids", tasks}, {"supersedes", id}};
+      impl_->state["jobs"][id]["status"] = "superseded";
+      progress["job_id"] = next; progress["run_ids"] = Json::Array{};
+      const auto result = finish("training"); impl_->wake.notify_all(); return result;
+    }
+    if(job.str("status") == "pending" || job.str("status") == "running") return finish("training");
+    if(job.str("status") != "completed") return finish("training_failed");
+    if(!job.has("training_import")) {
+      auto result = Json::parse(finish("ready_to_import"));
+      result["report_directory"] = (impl_->root / id / ("attempt-" + std::to_string(job.num("attempt", 0)))).string();
+      result["dataset_directory"] = impl_->dataset_path.string(); result["baseline"] = impl_->load_artifact(id);
+      return result.dump();
+    }
+    if(!job["training_import"].flag("ok", false)) return finish("import_failed");
+  }
+  if(learning_pending) return finish("waiting_for_learning");
+  if(usable >= minimum && seed.str("level") != "L0") return finish("ready");
+  if(progress.num("batches", 0) >= settings.num("max_batches", 4)) return finish("budget_exhausted");
+  std::set<std::string> used;
+  for(const auto& task : progress["tasks"].items()) used.insert(task.text());
+  Json tasks = Json::Array{}, versions = Json::Array{};
+  for(const auto& task : data.tasks()) {
+    if(task.split() != "train" || task.review_status() != "reviewed" || used.count(task.task_version())) continue;
+    if(tasks.items().size() >= settings.num("batch_size", 16)) break;
+    tasks.push(task.task_id()); used.insert(task.task_version()); versions.push(task.task_version());
+  }
+  if(tasks.items().empty()) return finish("training_exhausted");
+  const auto artifact = baseline(seed);
+  const auto version = agent_version_id(artifact.dump());
+  const auto job_id = digest(key + '\n' + identity + '\n' + tasks.dump());
+  impl_->make_room();
+  write(impl_->root / job_id / "candidate.json", artifact.dump());
+  write(impl_->root / job_id / "baseline.json", artifact.dump());
+  impl_->state["jobs"][job_id] = Json{{"user", user}, {"level", "L0"}, {"version", version},
+      {"status", "pending"}, {"queued_ms", now_ms()}, {"context", impl_->context}, {"attempt", 0},
+      {"training", true}, {"task_ids", tasks}};
+  progress["batches"] = progress.num("batches", 0) + 1; progress["job_id"] = job_id;
+  for(const auto& version : versions.items()) progress["tasks"].push(version);
+  progress["run_ids"] = Json::Array{};
+  const auto result = finish("training"); impl_->wake.notify_all(); return result;
+}
+void AgentEvaluationService::complete_training_import(const std::string& user,
+    const std::string& id, const std::string& bytes) {
+  const auto result = Json::parse(bytes); validate_local_data(result);
+  std::lock_guard<std::mutex> guard(impl_->mutex);
+  auto& job = impl_->state["jobs"][id];
+  require(job.flag("training", false) && job.str("user") == user && job.str("status") == "completed",
+      "training_job_not_importable");
+  job["training_import"] = result;
+  impl_->state["training"][lane(user, "training")]["run_ids"] = result["result"].has("run_ids")
+      ? result["result"]["run_ids"] : Json(Json::Array{});
+  impl_->save();
+}
 std::string AgentEvaluationService::submit(const std::string& user, const std::string& bytes) {
   const auto version = agent_version_id(bytes); const auto artifact = Json::parse(bytes);
   require(artifact.str("user_id") == user && artifact["agent"].dump() == impl_->config["agent"].dump(), "evaluation_owner_or_agent_mismatch", 403);
@@ -497,6 +631,8 @@ std::string AgentEvaluationService::submit(const std::string& user, const std::s
 std::string AgentEvaluationService::status(const std::string& user) const {
   std::lock_guard<std::mutex> guard(impl_->mutex); Json result{{"jobs", Json::Object{}}, {"publications", Json::Object{}}};
   if(impl_->state.has("worker_error")) result["worker_error"] = impl_->state["worker_error"];
+  if(impl_->state["training"].has(lane(user, "training")))
+    result["training"] = impl_->state["training"][lane(user, "training")];
   for(const auto& p : impl_->state["jobs"].fields()) if(p.second.str("user") == user) result["jobs"][p.first] = p.second;
   for(const auto& p : impl_->state["publications"].fields()) if(p.second.str("user") == user && p.second.str("context") == impl_->context)
     result["publications"][p.second.str("level")] = p.second;
@@ -526,7 +662,9 @@ void AgentEvaluationService::retry(const std::string& user, const std::string& i
   require(impl_->state["jobs"].has(id) && impl_->state["jobs"][id].str("user") == user, "evaluation_job_not_found", 404);
   auto& job = impl_->state["jobs"][id]; const auto status = job.str("status");
   require(status == "error" || status == "interrupted" || status == "inconclusive", "evaluation_job_not_retryable", 409);
-  require(impl_->state["latest"].str(lane(user, job.str("level"))) == id && job.str("context") == impl_->context, "evaluation_job_obsolete", 409);
+  const auto latest = job.flag("training", false) ? impl_->state["training"][lane(user, "training")].str("job_id")
+      : impl_->state["latest"].str(lane(user, job.str("level")));
+  require(latest == id && job.str("context") == impl_->context, "evaluation_job_obsolete", 409);
   job["status"] = "pending"; job.fields().erase("error"); job.fields().erase("cancel_requested"); job["queued_ms"] = now_ms(); impl_->save(); impl_->wake.notify_all();
 }
 void AgentEvaluationService::cancel(const std::string& user, const std::string& id) {

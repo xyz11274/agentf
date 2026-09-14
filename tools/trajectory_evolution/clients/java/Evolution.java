@@ -20,6 +20,33 @@ import java.util.concurrent.TimeUnit;
 
 /** Native Java transport for the entire L0-L3 protocol. No AgentFlow dependency. */
 public final class Evolution {
+    @FunctionalInterface
+    public interface Receiver { void accept(JsonNode input) throws Exception; }
+
+    /** Call on a valid host thread. An asynchronous dispatch may return immediately;
+     * normal run-end points, not this callback, determine completion. */
+    public static boolean evaluate(Receiver receive) throws Failure {
+        if (!"1".equals(System.getenv("TRAJECTORY_EVOLUTION_EVALUATION_ENTRY"))) return false;
+        Evolution client = new Evolution(System.getenv("TRAJECTORY_EVOLUTION_TRIAL_URL"),
+            System.getenv("TRAJECTORY_EVOLUTION_TRIAL_TOKEN"), 5000, 2097152, 0);
+        String consumer = UUID.randomUUID().toString();
+        try {
+            for (int index = 0;;) {
+                ObjectNode request = JSON.createObjectNode().put("consumer", consumer).put("index", index);
+                JsonNode packet = client.invoke("evaluation.next", request);
+                String state = packet.path("state").asText();
+                if (state.equals("done")) return true;
+                if (state.equals("waiting")) { Thread.sleep(100); continue; }
+                if (!state.equals("input") || packet.path("index").asInt(-1) != index) throw new Failure("evaluation_entry_failed", 0);
+                receive.accept(packet.get("input"));
+                ++index;
+            }
+        } catch (Exception error) {
+            try { client.invoke("evaluation.fail", JSON.createObjectNode().put("consumer", consumer)); } catch (Exception ignored) { }
+            if (error instanceof InterruptedException) Thread.currentThread().interrupt();
+            throw new Failure("evaluation_entry_failed", 0);
+        }
+    }
     public static final class Failure extends Exception {
         public final int status;
         Failure(String code, int status) { super(code); this.status = status; }

@@ -527,6 +527,7 @@ def _download_from_sandbox(local_path: Path, sandbox_url: str) -> None:
     import base64 as _base64
     import json as _json
     import urllib.request
+    from agentflow_runtime.security.local_sandbox_auth import local_sandbox_headers, local_sandbox_urlopen
 
     _t0 = time.monotonic()
     try:
@@ -540,10 +541,11 @@ def _download_from_sandbox(local_path: Path, sandbox_url: str) -> None:
         req = urllib.request.Request(
             f"{sandbox_url.rstrip('/')}/artifact/download",
             data=body,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", **local_sandbox_headers(sandbox_url)},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        opener = local_sandbox_urlopen if os.environ.get("AF_SANDBOX_MODE") == "local" else urllib.request.urlopen
+        with opener(req, timeout=10) as resp:
             result = _json.loads(resp.read().decode("utf-8"))
 
         content_b64 = result.get("content_b64")

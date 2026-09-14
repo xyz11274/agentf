@@ -10,13 +10,189 @@
 
 轨迹评测分析已有执行记录；任务评测调用受信宿主运行固定任务，再按预设标准判分。
 
+L4 数据准备复用这个任务评测器：缺少可用经验时，用原 Agent 的无策略版本执行 `train`，
+再通过专门的完整性与来源校验进入既有学习队列。普通 `dataset run` 仍只评测，不自行修改记忆；
+`val`、`holdout` 以及候选策略的评测轨迹不作为此入口的学习来源。
+配置与边界见[自动补充训练](24-evolution-and-gepa.md#经验不足时自动补充训练)。
+
 ![评测集：任务、标准与冻结版本](figures/19-dataset.svg)
 
 读图：同一个任务评测器服务离线对照、后台策略准入与 GEPA 多轮候选比较。 [放大 SVG](figures/19-dataset.svg)。
 
 ## 在后台评测真实 Agent，并控制策略发布
 
-### 已使用组件打点的 Agent：组件自动装配评测
+### 更换评分模型或提示词后，仅重评已有执行
+
+包内示例配置使用 `judge.include_model_requests=false`：评分输入省略明确标为模型活动
+（`attributes.semantic=model`）的请求载荷，避免系统提示词、工具定义、重复历史淹没真实执行证据。
+模型实际输出、工具实参与返回、任务、状态、产物、事件顺序及并发因果关系仍保留。
+完整模型请求继续记录在原始轨迹和 Trial 中；未标语义的活动及自定义工具输入不按字段名猜测删除。
+模型输入用 `evidence_view=model_requests_omitted` 标注投影范围。需要核验具体模型请求或提示词注入时设为 true；
+已有配置省略该选项时保持原完整请求行为。配置值参与评分上下文指纹，不与另一种视图混用成绩。
+
+已有完整任务报告时，可以只更新模型业务评分和 loop 评审，避免重复执行工具和生成媒体：
+
+```sh
+trajectory_evolution dataset run DATASET --config evaluation.json --output-root NEW_OUTPUT --regrade-report PREVIOUS_OUTPUT/report.json
+```
+
+`evaluation.json` 中开启 judge，并指定新提示词或模型；数据集、任务选择、重复次数和 Agent
+版本须与原报告一致。`parallelism` 此时控制评分请求并发，不启动 Agent。
+组件校验原 manifest、任务版本和产物哈希，保留原始轨迹、执行 ID、耗时、用量及确定性检查结果，
+重新计算全部模型评分。这里不会重新执行配置中的 command、checks 或产物检查；
+若要更换执行环境或确定性验收标准，请使用普通 `dataset run` 重新执行。
+
+新报告的 `configuration.model_only_regrade=true`，`execution_source` 记录来源 run、原配置指纹和报告哈希；
+新配置指纹同时绑定来源与本次评分配置。`summary.agent_reexecuted=false`，`regraded_trials`
+记录实际尝试重评的数量，评分失败仍明确标为错误。取消后报告 `complete=false`，尚未重评的旧成绩
+不写入新报告。原目录不覆盖；新报告不会作为普通同配置执行检查点自动复用，也不自动发布策略或更新记忆。
+
+增加 `--recheck` 可同时在已保存证据上运行当前 `checks`，仍不启动 Agent。相同 ID 的原规则结果被重新计算，
+其他原检查继续保留，尤其是产物、隐私和任务预算失败；不重新执行产物采集或生成工具。
+此时 `configuration.rechecked_configured_checks=true`、`model_only_regrade=false`，指纹与仅模型重评区分。
+
+### 把可计算的任务限制交给规则检查
+
+例如题目明确限定某操作最多执行一次，可在同一份评测配置中填写：
+
+```json
+{"checks":{"task-id":[{"id":"video-attempt-limit","op":"action_count","operation":"generate_video","max":1}]}}
+```
+
+`operation` 是接入方实际记录的操作名称；评测器不导入框架模块，也不内置业务工具名称。
+`min`、`max` 至少填写一个，均为 0–1000000 的整数；可选 `status` 为 completed、failed 或 cancelled，
+限定所计执行的终态。未填 status 时，失败调用也计入次数，不能因为未生成产物而忽略重试。
+计数覆盖本题全部 run/轮次，按 `(run_id, execution_id, action_id)` 配对，start/end 不重复计数，
+SDK 过滤而明确 `executed=false` 的动作不计入实际调用。
+
+此规则需要完整的标准轨迹、action.start 的操作名称及 action.end 的 `attributes.executed` 布尔观测。
+没有轨迹、动作未闭合或缺少执行标记时记为评测错误，不把未知次数当成零。完整轨迹确实没有匹配调用时才为零。
+规则失败不能被模型的 passed 覆盖；模型仍可进行独立语义及 loop 评审。规则只能落实题目已有的约束，
+不从任意自然语言自动推断次数限制；基线和候选必须使用同一份配置。
+
+### 任务入口绑定（推荐）
+
+已经接入模型、动作、循环和 run 结束打点后，只需再绑定原有的任务接收函数。
+绑定放在**依赖初始化完成后、开始接收正常用户请求之前**。它不是另一个 Agent，也不重写调度逻辑。
+
+Python 同步程序，在现有启动位置插入：
+
+```python
+from evolution_entry import evaluate
+
+# handle_message 是应用原有的函数，接收一个字符串或 JSON 值。
+# initialise_dependencies() 应在这里之前完成，保持应用原有初始化。
+if not evaluate(handle_message):
+    start_original_server()
+```
+
+异步程序在原有事件循环内插入，不创建替代事件循环：
+
+```python
+from evolution_entry import aevaluate
+
+if not await aevaluate(handle_message):
+    await start_original_server()
+```
+
+`handle_message` 可以同步完成任务，也可以只向消息总线投递后返回。其返回值不参与评分；
+最终答案取已有 run 结束打点的 `output`。后一轮等待前一轮真实结束且轨迹持久化，
+不会因派发函数返回、子进程退出或收到一段流式文本就提前开始。
+每轮对应一个逻辑 run，内部任意数量的并发活动仍属于该 run。
+后台消费者必须先就绪；如果消费者由事件循环驱动，使用异步封装，不能在该循环内调用阻塞版。
+
+如果 Agent 执行中还要访问自身的 HTTP 接口、接收消息或上传制品，原服务必须与评测同时运行。
+这时不要在服务启动前等待 `aevaluate` 完成：在依赖初始化后用
+`asyncio.create_task(aevaluate(handle_message))` 启动接收任务，再继续原服务的启动；
+服务退出时取消并等待这个任务。例如 FastAPI 的 lifespan 在 `yield` 前创建任务，
+在 `finally` 中取消并等待，不能在 `yield` 前直接 `await aevaluate(...)`。
+同步服务同理：先启动原有消费者/监听服务，再进入评测接收循环。
+组件仍以闭合轨迹为完成依据，后台接收不改变逐题和多轮执行顺序。
+
+在 `evaluation.json` 中配置原本的启动命令和输入格式。下面假设原有处理函数接收
+`message/user_id/conversation_id/request_id` 字段：
+
+```json
+{
+  "id": "baseline",
+  "version": "my-agent-revision-1",
+  "command": ["python3", "{config_dir}/app.py"],
+  "instrumentation_config": "boundary-service.json",
+  "entry": {
+    "input": {
+      "message": {"$eval": "input"},
+      "user_id": {"$eval": "user_id"},
+      "conversation_id": {"$eval": "conversation_id"},
+      "request_id": {"$eval": "run_key"}
+    },
+    "output_pointer": "/answer"
+  },
+  "pass_env": ["MY_MODEL_API_KEY"]
+}
+```
+
+这是完整配置中 `variants` 数组的一项。复制包内 `config/evaluation.json` 后修改即可；
+运行命令仍是 `trajectory_evolution dataset run DATASET --config evaluation.json --output-root NEW_OUTPUT`。
+`command` 指向原程序的前台启动命令，不要指向会自行脱离进程组的 daemonize 脚本。
+原程序所需的配置、工具和数据仍由部署方提供；组件创建工作目录并不等于自动隔离数据库、网络写入或共享文件。
+请使用测试账户、测试服务和独立工具目录，不连接生产任务队列。
+
+如果原函数只接收一个字符串，使用 `"entry": {"input": {"$eval": "input"}}`。
+`$eval` 只替换一个 JSON 值，不执行代码，不做字符串拼接，不导入任何框架模块。
+模板中的普通字段名应与原函数输入一致；不要求修改成组件规定的业务字段名。
+
+| 可绑定值 | 含义 |
+| --- | --- |
+| `input` | 当前轮用户输入 |
+| `messages` | 当前轮以前的真实问答，加上本轮用户输入；不包含未来问题或评分标准 |
+| `user_id` | 冻结版本所属的测试用户 |
+| `conversation_id` | 本次 trial 的独立会话 ID；同题多轮保持一致 |
+| `run_key` | 当前输入的业务关联 ID；不同轮次不同 |
+| `turn` | 从 0 开始的轮次 |
+| `initial_state` | 数据集给定的初始条件；非空时必须显式绑定并由原入口处理 |
+| `constraints`、`budget` | 本题执行约束与预算 |
+
+`output_pointer` 是相对 run 结束 `output` 的 JSON Pointer，用于提取后续对话的 assistant 内容；
+例如结束输出为 `{"answer":"完成","state":{}}` 时使用 `/answer`。
+省略时把整个输出作为内容，结构化对象编码为 JSON 文本；完整输出仍保留在轨迹和评测证据中。
+路径不存在会明确报错，不用空字符串继续。输入消息/历史上限为 1 MiB，超限报错，不静默截断。
+
+包自动选择跨进程采集和每输入一条 run，用户不需要再填写 `instrumentation_transport` 或 `run_layout`。
+原生 SDK 仅在这种评测模式下转向试验采集端；正常原生执行路径保持不变。
+凭据从子进程环境传入，不写入输入消息或评测报告；标准答案、评分 rubric 与 split 不投递给接收函数。
+每个 trial 独占一个入口接收者；第二个绑定者被拒绝，避免并发重复消费。
+回调异常不会自动重试业务任务，只返回固定错误码；缺 run、缺结束或遗留分支按试验总 timeout 处理。
+组件不会根据历史日志猜测或反射调用任意未知函数，用户仍需指出已有的 JSON/文本输入边界。
+
+例如 AgentFlow 的绑定位置是接收用户任务、将其交给原调度系统的入口，而不是某个被派发的
+Coordinator/Skill 子进程。子进程只继续使用已有打点。若这个入口尚未暴露成可绑定的 JSON/文本接收函数，
+须先在原任务接收边界接入上述封装；仅修改 v1 子进程中的观察打点，不会让它自动收到离线评测题目。
+
+#### 各语言使用同一封装
+
+| 语言 | 插入的包内调用 |
+| --- | --- |
+| Python | `evaluate(handle_message)` / `await aevaluate(handle_message)` |
+| JS / TS | 从 `evolution.mjs` / `evolution.ts` 导入，`await evaluate(handleMessage)` |
+| Rust | `trajectory_evolution_client::evaluate(handle_message).await?`；接收器返回 `Result<(), E>` 的 Future |
+| Go | `evolution.Evaluate(ctx, handleMessage)`；接收器签名 `func(context.Context, any) error` |
+| Java | `Evolution.evaluate(existingReceiver)`；在允许阻塞的线程使用，接收器可以只是异步投递 |
+| C# | `await Evolution.EvaluateAsync(HandleMessage)`；接收器签名 `Func<JsonNode?, Task>` |
+| C++ | `trajectory_evolution_http::evaluate(existingJsonReceiver)`；包含 `clients/cpp/evaluation_entry.hpp`，链接 `trajectory_evolution_local` |
+| C / 其他 FFI 语言 | `te_evaluate(receiver, context)`；包含 `trajectory_evolution/evaluation_entry.h`，回调接收 UTF-8 JSON，返回 0 表示已接收 |
+
+除 C ABI 使用 `0=未启用、1=完成、-1=错误` 外，其他封装以 bool 区分未启用/完成，以异常或 error 表示失败。
+封装内部的输入拉取只在评测子进程中发生；生产模式是一次环境标志检查，不增加空闲轮询。
+有线程亲和性的程序应在正确线程调用接收器，不能把同步封装放进其唯一事件线程。
+对于其他语言，可以通过 C ABI 复用完整投递循环，无需自行编写启动器或评分逻辑。
+
+底层统一协议为 `evaluation.next {consumer,index}` 和 `evaluation.fail {consumer}`，使用同一个认证 `/v1/invoke`。
+next 返回 `input/waiting/done/failed`；输入请求可重复取得同轮数据，但业务调用的至多一次由包内顺序封装保证。
+接收进程中断后不自动换接收者重放，整次 trial 按失败/超时处理，防止不确定的外部副作用重复执行。
+
+### 兼容：已有 stdin 任务入口
+
+#### 已使用组件打点的旧任务入口
 
 已使用原生 C ABI 或组件 HTTP 打点的 Agent，可在 variant 中配置：
 
@@ -35,7 +211,8 @@ task 的字段为 task_id、task_input、followup_inputs、initial_state、const
 group_id、split、标准答案和判分规则不传给宿主。需要临时会话标识时可使用顶层 trial_id，不依赖 group_id。
 入口执行原有业务代码与 point，无需写版本文件、汇总计数、读取轨迹文件或打印评测响应 JSON。
 成功输出取任务 after 的 output；可检查状态放在 output.state，产物声明可放在 output.artifacts。
-每个 trial 对应一个完整逻辑 run，多轮与并发活动都归入它。
+每个 trial 对应一次完整任务评测，可包含一个或多个真实 run。例如一个三轮对话任务，
+宿主可以保留三个独立 dialogue/run；同一次派发里的并发活动仍归入所属 run。
 
 组件负责：
 
@@ -48,13 +225,30 @@ group_id、split、标准答案和判分规则不传给宿主。需要临时会�
 无 artifact 时此模式生成 L0 基线；后台 AgentEvaluationService 会自动提供 L0 或 L1–L3 的冻结 artifact。
 instrumentation_config 也进入后台评测配置指纹，修改后旧准入结果不继续沿用。
 没有终态快照、版本不符或有采集缺口的试验记为评测错误，不记作能力通过。
-异常退出时仍尝试保存已采集的结构化证据：完整、版本一致的轨迹保留在 evidence.trace，
+异常退出时仍尝试保存已采集的结构化证据：完整、版本一致的单条轨迹保留在 evidence.trace，多条保留在 evidence.traces，
 并从实际事件汇总 metrics；不完整轨迹放入 evidence.failure_capture，包含 complete=false 和 validation，
 不将部分计数填作完整试验指标。没有可用记录、身份不符或隐私检查未通过时，只记录
 failure_evidence_unavailable 警告。原始 stdout/stderr 不作为故障证据保存；试跑原有错误码、超时判定和发布门禁保持不变。
 `instrumentation_transport` 默认为 `native`；使用配置式 HTTP 打点时设置为 `http`，评测器会启动独立的本地临时采集服务，
 通过 `TRAJECTORY_EVOLUTION_TRIAL_URL/CONFIG/TOKEN` 指向试验实例，包内配置式客户端自动读取，避免流入生产服务。
 完全自定义的远程测试宿主仍可使用下文的任务宿主协议。
+
+多 run 评测按首事件时间、再按 run_id 排序，不使用文件名或目录枚举顺序。每条都必须
+属于同一试验、同一用户和同一冻结版本，并具有完整终态。单 run 的原字段不变；多 run 使用：
+
+- `evidence.traces`、`execution_run_ids`：逐条保留真实轨迹及身份，不拼造新 run。
+- `evidence.output.turns`、`output.final`：各轮终态输出与最后一轮输出；`state` 取最后一轮。
+- `metrics`：对每轮都已观测到的指标求和；任一轮缺失的指标不填零、不发布不完整总计。
+- `evidence.trajectory.runs`：逐轮分析；`summary` 保存 run_count 和无效 loop 下界总和。
+- `evidence.failure_capture.runs`：异常退出且存在不完整 run 时逐条保存校验结果，不生成全任务指标。
+
+记忆反馈也会检查所有 run 中的实际策略应用回执。各轮调用预算按整项任务合计，
+进程超时仍由 trial 的统一截止时间约束，不因多轮而自动延长。
+
+在 variant 中设置 `run_layout: "per_input"` 表示每次输入产生一个 Run，评测器会预先等待
+`1 + followup_inputs.length` 个完整 Run。默认 `single` 表示整个任务一个 Run。
+这个参数也决定异步派发后的结束条件：前一轮结束、后一轮尚未创建的空隙不会触发提前清理。
+缺轮、额外轮次或开放的活动均不能作为完整任务通过验收。
 
 `AgentEvaluationService` 复用本章的任务执行器和判分标准。评测对象是“固定版本下 Agent 的完整执行”，
 包括经验注入、动作选择与循环控制的实际效果。轨迹分析负责从过去的执行中提出改进；这里重新运行固定任务，检验改进是否有效。
@@ -70,7 +264,9 @@ failure_evidence_unavailable 警告。原始 stdout/stderr 不作为故障证据
 L4 是实验编排的调用方；候选的 `level` 仍是其实际使用的 L0–L3 运行能力。
 既有 `dataset run` 保持纯评测模式。自动提交、发布登记、记忆反馈由管理层完成。
 
-### 第一步：准备独立的测试入口
+### 兼容：自定义完整任务宿主协议
+
+以下为已有外部评测宿主保留的低层协议。新接入使用上面的任务入口绑定，不需要编写下面的程序。
 
 评测宿主是你提供的一个程序，Python、C++、Rust、TypeScript 等均可：从 stdin 读一条 JSON，
 运行同一套 Agent 实现，从 stdout 返回一条结果 JSON。调试信息使用 stderr。
@@ -235,6 +431,16 @@ manage 不执行 Agent 任务本身，但可能等待管理锁及落盘；不要
 同用户同级待运行候选被新候选替代时记为 superseded；正在执行的旧候选保留报告，完成后重新核验父版本与最新候选再决定发布。
 重启将 running 标为 interrupted，需要显式 retry；error/inconclusive 也可以 retry，成功和业务拒绝不自动重试。
 取消会终止正在运行的测试进程组；已经进入模型评分 HTTP 请求时，收尾受评分器 HTTP 超时约束。
+取消后不再领取新题。已经执行的结果继续落盘，未启动的题目不生成 Trial；报告与 manifest 的 `complete=false`。
+`summary.planned_trials` 为计划总数，`summary.not_started_trials` 为未启动数；评分汇总只统计已执行的 Trial。
+
+后台 `retry` 在新 attempt 中恢复同一任务最近一个带 manifest 的报告。数据集、策略版本、评测配置和模型提示词指纹必须一致：
+有效的通过/业务失败题目保留原成绩；Agent 已执行完成但模型评分失败时只重新评分；取消、未执行或没有有效检查点的题目重新运行。
+复用保留原 trial/run ID、轨迹、用量及 Agent 耗时，并核验、复制已保存的产物；旧报告和旧成绩不覆盖。
+报告记录 `summary.resume_source`（来源 run ID 与报告 SHA-256）、`reused_trials`、`regraded_trials` 和 `regraded_trial_ids`；
+`model_calls` 只统计本次 attempt 新发起的逻辑评分调用。取消恢复任务时，已有检查点仍保留在不完整报告中。
+报告或产物哈希不匹配、上下文改变时拒绝复用。没有 manifest 的硬崩溃目录不自动视为有效检查点。
+C++ 调用方可通过 `TaskEvaluationOptions.resume_report` 指定来源；默认留空，原 CLI 执行行为不变。
 
 `max_jobs` 默认 256，约束内存管理索引；已发布、各级最新和活跃任务保留在索引内，较早终态任务转存 job.json，
 完整试验报告继续保留，并维持已完成任务去重。全为受保护任务时返回容量错误。
@@ -543,17 +749,37 @@ op 支持 exists、equals、contains、at_most、at_least；exists 省略 value�
 
 `judge.enabled=false` 为纯规则；true 为规则加模型（无规则时为纯模型）。模型使用本包现有 OpenAI-compatible 适配器，
 从 `judge.runtime_config` 或 `--model-config` 读取配置；外置模板是 [task-judge-system.txt](../config/prompts/task-judge-system.txt)。
-模型接收任务、后续输入、expected_behavior 和经检查的具体证据；超过 judge.max_input_bytes 时返回错误。
-模型输出包含中文理由、passed/failed/uncertain，以及 allowed_evidence_paths 中的证据路径。
+模型接收任务、后续输入、expected_behavior、constraints 和经检查的具体证据；超过 judge.max_input_bytes 时返回错误。
+默认模板分别核对必需动作、实际条件分支和禁止项。题目明确禁止重试时，换参数、模型或协议再次调用也需按禁止项验收；
+不能因最终如实报告失败而忽略先前违规。效率评审与业务评分分开，但违反业务禁令仍应判业务失败。
+反之，题目允许失败后合规停止的分支时，不因没有成功产物额外判失败。模型理由与证据仍需复核，协议有效不保证语义判断正确。
+`judge.share_repeated_text=true` 对事件输入中不少于 512 字节的重复文本做无损引用，降低重复历史消息的评审开销。
+第一次出现的完整原文保留在原位置，后续相同输入使用 `{"$evidence_ref":"原文路径"}`；
+请求附带 `evidence_text_refs`，每项包含相对于 `evidence` 的 `source` 和引用位置 `paths`，按表填回原文即可恢复证据。
+所有输出、工具结果、状态和产物始终直接保留；不生成空值，事件和轮次数量不变。仅引用后更小才采用，仍受请求字节上限约束。
+原始轨迹、落盘试验报告和确定性检查不压缩；引用前后均检查隐私。随附配置已启用并配有读取说明，
+未指定两个共享选项时，默认启用完整输入共享。显式配置 `share_repeated_text` 时仍保留原行为；
+也可用 `judge.share_repeated_inputs=true` 共享事件输入中完全相同的大块数组和对象（包含长文本去重），
+适合消息历史和工具定义反复出现在多个事件里的轨迹。两项显式为 false 可关闭共享；自定义模板需保留引用读取说明。
+引用仍使用同一张 `evidence_text_refs` 表，源中可包含其他已登记引用，递归填回即可完整恢复；
+源不会在后续被替换，引用无环。自定义模板开启此项时，也需说明数组/对象及嵌套引用的读取方式。
+模型请求不带整份 `trajectory` 分析、`loaded_version`、`execution_run_id` 和采集生产者序号；
+本地报告仍完整保留。字段清单及并发说明见[评测模型输入](11-evaluation.md#各模型入口的最小输入)。
+模型输出包含中文理由、passed/failed/uncertain，以及 allowed_evidence_paths 授权范围内的证据路径。
+可引用顶层路径或实际存在的子路径，例如 `/output`、`/output/final/response`；程序以未压缩的原始证据验证存在性。
+不存在的字段、数组越界、相似名称的其他根路径和仅存在于模型请求中的引用包装仍拒绝。
 模型故障、截断、引用错误或预算耗尽记为 error，证据不足记为 uncertain；规则明确失败时直接保留失败结论。
 完整 JSON 围栏在移除标记后解析，其余响应按结构要求校验。
 格式或引用校验失败时，judge.max_repair_attempts 控制额外修复次数（默认1，可设0关闭，最多3）；每次计入总模型预算，
 修复请求使用固定校验错误与原始证据，保持任务执行、产物和验收标准不变。
 checks 中的 attempts 记录实际发出的判分请求次数。传输重试仍独立由 runtime.model.max_retries 控制。
+JSON 语法失败时，恢复请求的 validation_feedback.json_error 和最终失败报告的
+evidence.judge_validation_error.json_error 包含 parser_code、静态 description、字节 offset 与 response_bytes。
+这些字段用于区分格式错误，不保存未校验的响应正文；解析标志、Unicode/重复键/深度校验和重试上限不变，恢复成功不残留该诊断。
 
 三个时间/数量预算分开配置：
 
-- `timeout_ms` 与任务 budget.timeout_ms 取较小值，限制宿主进程整体墙钟时间；到期终止其进程组，记任务超时失败。
+- `timeout_ms` 与任务 budget.timeout_ms 取较小值，限制宿主进程整体墙钟时间；到期回收本次评测的后代进程，记任务超时失败。
 - `budget.max_steps/max_tool_calls` 由宿主在执行中限制，评测器对返回计数再验收；缺少计数明确标记不可观测。
 - 模型 HTTP timeout、thinking 和传输重试在 runtime.model 中配置；judge.max_model_calls 控制逻辑评测调用数。
 
@@ -563,6 +789,63 @@ Agent Plan 示例的模型 HTTP timeout 为 30 分钟、thinking 为 disabled、
 `repetitions` 控制每题重复次数，`parallelism` 控制并发试验数；`variants` 可增加手工准备的第二版 Agent。
 所有版本运行同一批选中任务和重复编号，按标识配对，不按完成先后配对。第一版是比较基线。
 这只是固定版本对照，不会生成候选、调用 GEPA 或自动发布。模型、工具、初始记忆等外部条件应由宿主固定并体现在 version 标识中。
+
+评测启动的进程由组件 CLI 的私有子进程托管；Linux 下使用 subreaper 回收 double-fork 或另建会话的后台执行器。
+超时与取消会先结束本次评测所属的后代，再清理工作目录。该设置不进入主 Agent 或 SDK 宿主进程，
+不影响其他进程；使用 SDK 运行离线评测时，需随库一起安装组件 CLI。
+不完整的超时轨迹保留在报告的 `failure_capture` 中，不进入经验库，也不会阻挡同批其他合格完整轨迹。
+
+### 评测无效 loop
+
+规则默认只统计明确不可重试、输入相同、存在先后因果关系的重复调用。这是下界，等于 0 不意味着实际没有浪费。
+需要评估“前提不足仍尝试、完成后继续执行”等语义浪费时，在现有 `judge` 中增加：
+
+```json
+"loop_review_prompt": "prompts/task-loop-review.txt"
+```
+
+模型评分必须同时启用。该文件是外置附加模板，接在任务验收模板之后；仍是同一次评分请求，不新增 Agent 调用或前台等待。
+组件按 Run、执行实例、loop 和轮次整理真实事件，把同轮的控制、模型、工具步骤合并；并发分支分别计数。
+模型通过 `iteration_reviews` 逐轮给出中文依据、`decision=keep/waste/uncertain` 和该轮事件引用；
+先说明理由，再判定是否可省去整轮。`complete` 必须覆盖全部已观测轮次且没有 uncertain 决策。
+程序从完整评审中的 waste 项生成 `wasted_iterations` 和 count，keep 项保留供复核，不计入浪费。
+遗漏轮次、未知轮次、重复计数、缺少本轮引用会被协议校验拒绝。
+合理探索、必要收尾、正常错误报告、独立并行工作不能仅因失败或耗时被算作浪费。
+
+每条轮次评审必须引用本轮事件；说明重复原因时，也可引用同一 Run 中本轮开始前的事件。
+子任务结果若经 `caused_by` 因果链汇入本轮事件，也可作为附加证据，用于核实派发轮的实际贡献；
+这不表示派发时已知结果，也不把子任务轮次合并进父轮计数。
+仅引用其他轮次、跨 Run、无因果汇入的后续事件或不存在的事件仍被拒绝。并行任务仅在时间上重叠不构成汇入关系。
+该校验核实引用范围，语义结论仍由评审模型判断。
+尚未计算的 `loop_review` 不作为证据发给模型；路径恢复反馈列出已通过隐私检查的错误路径，
+并由外置提示词要求从已有授权路径中重新选择，不把 JSON 字符串内容或猜测下标当作证据路径。
+随附任务评分模板仅从 `allowed_evidence_paths` 选择根级路径，详细事件 ID 和事实写入中文理由；
+自定义模板仍可引用真实存在的子路径，程序继续严格检查。路径恢复最终失败时，
+`evidence.judge_validation_error` 保存错误代码和经过隐私检查、限长的 `invalid_evidence_paths`，不保存原始模型响应。
+可解析且通过隐私检查的上次评分进入 `validation_feedback.previous_response`，用于按原输出定位格式与循环引用错误；
+它不是执行证据，不直接成为最终评分，修正结果仍须通过全部校验和原有重试、请求大小上限。
+循环引用错误另外通过 `validation_feedback.loop_review_error` 给出未满足的 `constraint`，
+以及适用时的 `iteration_review_index`（上次输出数组的零起始下标；兼容旧评审的 `wasted_iteration_index`）。最终失败的检查理由保留该约束代码，
+用于区分未知/重复轮次、无本轮锚点、越出允许时序的事件等原因，不放宽任何引用校验。
+具体事件引用错误还包含 `reference`：轮次 ID、该轮的 `decision`、`evidence_event_index`、限长的错误事件 ID，以及该轮真实的
+`allowed_iteration_event_ids`。模型仍需重新核对引用是否支持结论，不能只换成合法 ID。
+最终仍失败时，这份诊断保存在 `evidence.loop_review.validation_error`；不保存未通过校验的判分，
+不产生浪费计数，也不增加重试。恢复成功的结果不残留此错误字段。
+
+结果保存在 `evidence.loop_review`：`method=model_review`，`status=complete/uncertain/not_reviewed`；
+`observed_iterations` 为可评审轮次数，`wasted_iterations` 保存证据，`count` 由程序去重计数。
+`iteration_reviews` 保存新格式的全部逐轮判定。旧自定义评分模板仅返回 `wasted_iterations` 的格式仍可读取，
+随附模板使用逐轮格式。整体 uncertain 时保留逐轮说明，但 count 为 null、wasted_iterations 为空，不以局部判定冒作完整统计。
+未观测到循环、评审不完整或模型失败时，数量保持 `null`，不会回退为规则的 0。
+`invalid_loop_lower_bound` 继续独立保存；`invalid_loop_assessment` 是本次用于优化的口径、均值与观测数。
+GEPA 的 loop 目标和后台发布门禁复用这一口径；开启评审后使用模型估计，否则使用规则下界，不混合两者。
+任务正确率仍由原来的任务标准独立判定。
+显式开启逐轮评审后，规则已经判失败的任务也会调用评分模型以取得效率证据；规则失败仍保持失败，
+不会被模型改判成功。未开启时继续跳过这类模型调用。
+
+要求至少下降 30% 时，在 `agent-evaluation.json` 的 `gate` 增加 `"min_invalid_loop_reduction": 0.3`，
+并保留 `"max_pass_rate_drop": 0`。未完整观测、口径不同或基线为 0，均不能通过正比例下降门禁。
+模板内容纳入评测指纹，修改模板后需重新评测，不复用旧分数。
 
 ### 报告在哪里、如何理解
 
@@ -582,11 +865,13 @@ my-first-evaluation/
 
 | 字段                                                        | 含义                                                                    |
 | ----------------------------------------------------------- | ----------------------------------------------------------------------- |
-| complete                                                    | 所有计划试验都有终态记录，包含成功、失败和取消                          |
+| complete                                                    | 所有计划试验都有终态记录，且批次没有被取消                              |
 | trial_id / task_id / task_version / variant_id / repetition | 精确关联哪道题、哪版题、哪个 Agent 版本、哪次重复                       |
 | execution_status / verdict                                  | 分别记录宿主执行状态与独立验收结果                                      |
 | checks                                                      | 每个规则或模型判定的状态、理由与证据路径                                |
 | evidence                                                    | 经隐私校验的实际输出、宿主状态、可选轨迹/分析、独立读盘得到的产物事实   |
+| evidence.trace / traces                                      | 分别用于单 run 与多 run；同一响应不同时提供两种形式 |
+| evidence.execution_run_id / execution_run_ids                 | 冻结版本试验中实际执行的 run 标识，与 trial_id 保持绑定 |
 | evidence.runner_error / exit_code                            | 异常退出但取得安全采集证据时保留的运行器错误与进程退出码 |
 | evidence.failure_capture                                    | 失败试跑的部分轨迹与结构校验结果；complete=false，不作为完整评测证据 |
 | metrics                                                     | 通用边界轨迹按已观测执行重算的步骤、工具、loop 和 token；其他轨迹保留宿主报告值，缺失值保持未观测状态 |
@@ -595,11 +880,41 @@ my-first-evaluation/
 | summary.pass_rate_all_trials                                | passed / 全部计划试验数；配合 errors/uncertain 阅读，避免排除故障后虚高 |
 | by_variant / by_category / by_split                         | 分 Agent 版本、能力类别、数据集合的相同统计                             |
 | invalid_loop_lower_bound                                    | 依据轨迹证据计算的无效 loop 规则下界与观测数                            |
+| evidence.loop_review                                        | 可选逐轮模型评审及真实事件引用；未完成的评审不产生数量 |
+| invalid_loop_assessment                                     | 优化使用的 method、mean、observations；模型估计与规则下界分开 |
 | comparisons                                                 | 相同任务与重复编号的配对胜/负/平、未能比较的数量及通过率差              |
 
 产物由 C++ 从实际工作目录读取，拒绝越界路径、符号链接、缺失文件和超限内容；支持 JSON、文本和 PNG。
-JSON/文本经过隐私门槛后保留，PNG 内置校验只覆盖文件头和尺寸；视觉语义、视频、数据库副作用等由受信宿主提供独立检查结果，
-可由外部验收器完成图片解码或视觉检查，将结果写入 state 后再执行对应规则。
+除了在 Run 终态声明 `output.artifacts`，也可在评测配置中列出已知的必需文件，无需改 Agent 打点：
+
+```json
+{
+  "artifacts": {
+    "task-id": [{"path": "outputs/report.json", "media_type": "application/json"}]
+  }
+}
+```
+
+键可以是任务 ID 或 `*`，路径相对隔离 trial 的工作目录；两者与终态声明合并，同路径媒体类型必须一致。
+`path` 列出必需产物，缺失就是验收失败。动态目录或可选交付分支可改用配置侧的 `pattern`，例如：
+
+```json
+{"artifacts":{"*": [{"pattern":"outputs/*/assets/*.png","media_type":"image/png"}]}}
+```
+
+`path` 和 `pattern` 二选一。`pattern` 仅支持单层 `*`，不跨目录、不匹配隐藏文件、不支持 `**`、`?`、字符组或转义。
+只扫描配置指定的目录，最多 16 层、8192 个目录项、32 个去重后的文件；拒绝匹配到的符号链接。
+零匹配不自动判成功或失败，仍依据任务的交付要求和允许的失败分支评分；固定 `path` 仍是必需文件。
+按任务区分交付物和故障样本。例如诊断题故意把纯文本写入 `broken.png`，应声明该样本为 `text/plain`，
+再把诊断报告声明为 `application/json`；正常生成题才声明 `image/png`。媒体类型由验收配置指定，不由后缀推断。
+避免用通用图片规则同时覆盖正常图片交付题和伪图片诊断题，否则会把题目要求的故障样本误判为交付失败。
+这些配置不进入被测模型输入。文件依然经过相同的读盘、格式、大小和隐私检查，供规则和模型判分。
+产物失败时仍保留已验证的完整轨迹、逐轮分析和指标。
+JSON/文本经过隐私门槛后保留。构建时启用 libpng 后，PNG 完成 RGBA 像素解码并标记 `validation: decoded`；
+损坏、截断或展开后超过 `min(max_artifact_bytes, 64 MiB)` 的图片验收失败。未启用则标记 `header_only`。
+解码不增加模型调用，像素和二进制内容不进入文本评测输入；事实保留尺寸、文件大小、哈希及验证范围。
+评测器验证文件可用性，不代替 Agent 的执行动作：若题目明确要求 Agent 自行检查文件，仍需轨迹证明该动作发生。
+画面语义、视频、数据库副作用等由受信验收器提供检查结果，可写入 state 后执行对应规则。
 原始 stdout/stderr 不落盘，敏感响应不发给模型；工作目录在试验退出后清理，仅保留通过检查的产物。
 媒体与编码内容按业务场景增加专项隐私检查；敏感数据在获得所有者授权后于隔离环境中处理。
 
@@ -645,7 +960,7 @@ build/check 构建和校验任务集，run 执行任务并比较固定版本。
    约束输出与墙钟时间，超时或取消时清理本地进程组；外部服务的隔离和取消由宿主处理。
 4. 校验 trial_id、执行状态、隐私和可选标准轨迹；轨迹必须闭合且与最终响应身份、状态、输出一致。
    用标准分析器计算确定性诊断。无轨迹或缺失内部边界时不推断循环；返回计数标明宿主来源，缺失指标不填零。
-5. 校验产物路径、大小与媒体类型；JSON 和文本做内容检查，PNG 提取文件头与尺寸，标记 header_only。
+5. 收集配置指定的产物，校验路径、大小与媒体类型；JSON 和文本做内容检查，PNG 验证范围记录在 validation 中。
    完整解码、视觉检查与数据库验收等事实，由宿主测试设施产生并写入证据。
 6. 规则以 JSON Pointer 读取事实，执行 exists/equals/contains/at_most/at_least；明确规则失败锁定失败。
    启用模型时，只有尚未明确失败的任务才送预设 rubric 和具体证据；复用模型适配器、外置模板与超时配置，不传凭据。

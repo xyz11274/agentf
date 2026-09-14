@@ -417,6 +417,14 @@ TEST(SandboxLifecycleTest, LocalHttpEndpointsAreIsolated) {
 
     EXPECT_NE(first.endpoint(), second.endpoint());
     EXPECT_NE(first.workdir(), second.workdir());
+
+    // 真实 curl 请求必须携带各自的私有认证头，且产物不跨沙箱共享。
+    agentflow::sandbox::ExecOptions opts;
+    EXPECT_EQ(first.exec("write_file", R"({"path":"auth-check.txt","content":"cpp-auth-ok"})", opts).exit_code, 0);
+    const auto read = first.exec("read_file", R"({"path":"auth-check.txt"})", opts);
+    EXPECT_EQ(read.exit_code, 0);
+    EXPECT_NE(read.stdout.find("cpp-auth-ok"), std::string::npos);
+    EXPECT_NE(second.exec("read_file", R"({"path":"auth-check.txt"})", opts).exit_code, 0);
   }
 
   fs::remove_all(workdir_root);

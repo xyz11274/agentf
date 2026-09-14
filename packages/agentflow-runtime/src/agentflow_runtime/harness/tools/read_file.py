@@ -11,7 +11,7 @@ import json
 import os
 
 TOOL_NAME = "read_file"
-TOOL_DESCRIPTION = "Read the contents of a file from the local filesystem. Use with max_chars to avoid reading overly large files."
+TOOL_DESCRIPTION = "Read a text file from the local filesystem. Use max_chars to limit long text. For images and other binary files, use a binary-aware tool to inspect metadata instead."
 TOOL_PARAMS = {
     "type": "object",
     "properties": {

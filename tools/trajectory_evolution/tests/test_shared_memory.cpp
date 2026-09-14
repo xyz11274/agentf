@@ -37,7 +37,8 @@ Json config() {
 }
 struct Model : agentflow::trajectory::ModelAdapter {
   unsigned calls = 0; std::string relation = "related", draft_text = advice;
-  bool fail = false, safe = true, new_entry = false;
+  bool fail = false, safe = true, new_entry = false, fenced = false;
+  std::string error_stage;
   agentflow::trajectory::RawModelResponse evaluate(const agentflow::trajectory::ModelRequest& request) override {
     ++calls;
     agentflow::trajectory::RawModelResponse r; r.transport_ok = !fail; r.attempts = 1;
@@ -52,7 +53,10 @@ struct Model : agentflow::trajectory::ModelAdapter {
         {"match_id", existing.empty() || new_entry ? "" : existing.front().str("memory_id")},
         {"privacy_safe", safe}, {"generalizable", safe}, {"supported", true}, {"non_overriding", true}, {"confidence", 0.99}};
     } else out = Json{{"relation", relation}, {"confidence", 0.99}};
-    r.body = out.dump(); return r;
+    r.body = out.dump();
+    if(request.system_prompt == error_stage) r.error_code = "output_token_limit_reached";
+    if(fenced) r.body = "```json\r\n" + r.body + "\r\n```";
+    return r;
   }
   std::string name() const override { return "fixture"; }
   std::string model_id() const override { return "deterministic-test-model"; }
@@ -93,8 +97,8 @@ v1::RuntimeQuery query(const v1::RuntimePolicy& policy) {
   q.mutable_advice_query()->set_target_scope(scope); q.mutable_advice_query()->set_task(condition);
   q.set_execution_id("exec"); q.set_boundary("llm"); return q;
 }
-void automatic_and_duplicate() {
-  Fixture f; f.add("alice"); f.drain();
+void automatic_and_duplicate(bool fenced = false) {
+  Fixture f; f.model->fenced = fenced; f.add("alice"); f.drain();
   check(shared_memory_view(f.state).experiences_size() == 0, "one user cannot satisfy independent-user gate");
   f.add("bob"); f.drain();
   const auto public_view = shared_memory_view(f.state);
@@ -193,6 +197,12 @@ void gates_and_failures() {
   Fixture failed; failed.model->fail = true; failed.add("alice"); failed.drain();
   check(failed.model->calls <= 2 && failed.state["entries"].fields().empty(), "unbounded retry or failure published");
   check(failed.state.dump().find("raw diagnostic") == std::string::npos, "provider diagnostics leaked");
+  for(const auto* stage : {"DISTILL", "REVIEW"}) {
+    Fixture incomplete; incomplete.model->error_stage = stage;
+    incomplete.add("alice"); incomplete.drain();
+    check(incomplete.state["entries"].fields().empty(), "truncated model response entered public memory");
+    check(incomplete.model->calls <= 4, "truncated response caused unbounded retries");
+  }
   Fixture unavailable; unavailable.add("alice"); unavailable.cycle(false);
   check(unavailable.state.str("last_status") == "waiting_for_model" && unavailable.state.num("next_due_ms", 0) == 0, "unconfigured model caused empty polling");
   check(unavailable.snapshot("alice").experiences_size() == 1, "model failure broke private path");
@@ -231,7 +241,8 @@ int main(int argc, char** argv) {
       check(store.entries_size() > 0, "fixture memory was not admitted");
       std::cout << store.SerializeAsString(); return 0;
     }
-    automatic_and_duplicate(); conflict_and_recovery(); gates_and_failures(); freshness_capacity_and_recovery();
+    automatic_and_duplicate(); automatic_and_duplicate(true);
+    conflict_and_recovery(); gates_and_failures(); freshness_capacity_and_recovery();
     std::cout << "Shared/private memory: promotion, deduplication, disputes, evidence withdrawal, expiry, snapshots, privacy and failure gates passed\n";
   } catch(const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

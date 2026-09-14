@@ -333,6 +333,9 @@ void test_real_content_and_sanitization() {
   auto trace = blackbox();
   event(trace, "begin").mutable_input()->set_string_value("查询中文发票，凭据 " + secret);
   (*trace.mutable_attributes()->mutable_fields())["business_context"].set_string_value("需要增值税发票");
+  auto* training = (*trace.mutable_attributes()->mutable_fields())["training_evaluation"].mutable_struct_value();
+  (*training->mutable_fields())["expected_behavior"].set_string_value("需要真实解析失败，写入读回不能代替解析");
+  (*training->mutable_fields())["verdict"].set_string_value("failed");
   (*event(trace, "begin").mutable_attributes()->mutable_fields())["api_key"].set_string_value(secret);
   auto options = model_options();
   options.redaction_secrets.push_back(secret);
@@ -344,6 +347,9 @@ void test_real_content_and_sanitization() {
   expect(request.system_prompt.find("框架中立") != std::string::npos, "neutral prompt not loaded");
   expect(request.user_prompt.find("查询中文发票") != std::string::npos, "model sees only fingerprints");
   expect(request.user_prompt.find("增值税发票") != std::string::npos, "run custom content omitted");
+  expect(request.user_prompt.find("training_evaluation") != std::string::npos
+      && request.user_prompt.find("需要真实解析失败，写入读回不能代替解析") != std::string::npos,
+      "training acceptance omitted from analysis request");
   expect(request.user_prompt.find(secret) == std::string::npos, "request contains secret");
   expect(te::Evaluator::to_json(output.report).find(secret) == std::string::npos,
          "persisted report contains secret");

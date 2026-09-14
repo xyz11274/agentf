@@ -16,6 +16,7 @@ if(NOT Protobuf_FOUND)
   find_package(Protobuf REQUIRED)
 endif()
 find_package(Threads REQUIRED)
+find_package(PNG QUIET)
 
 if(TARGET protobuf::protoc)
   set(AGENTFLOW_PROTOC_EXECUTABLE "$<TARGET_FILE:protobuf::protoc>")
@@ -174,7 +175,14 @@ target_link_libraries(agentflow_trajectory_evolution PUBLIC
   CURL::libcurl
   OpenSSL::Crypto
   Threads::Threads
+  ${CMAKE_DL_LIBS}
 )
+if(PNG_FOUND)
+  target_link_libraries(agentflow_trajectory_evolution PUBLIC PNG::PNG)
+  target_compile_definitions(agentflow_trajectory_evolution PRIVATE EVOLUTION_HAS_PNG=1)
+endif()
+set_source_files_properties(src/evaluation_process.cpp PROPERTIES COMPILE_DEFINITIONS
+  "EVOLUTION_BUILD_CLI=\"${CMAKE_CURRENT_BINARY_DIR}/trajectory_evolution\";EVOLUTION_INSTALLED_CLI=\"${CMAKE_INSTALL_FULL_BINDIR}/trajectory_evolution\"")
 
 if(NOT MSVC)
   target_compile_options(agentflow_trajectory_evolution PRIVATE
@@ -185,6 +193,7 @@ if(NOT MSVC)
 endif()
 
 add_executable(trajectory_evolution
+  src/evaluation_supervisor.cpp
   src/learn_cli.cpp
   src/dataset_cli.cpp
   src/task_evaluation_cli.cpp
@@ -203,7 +212,8 @@ target_link_libraries(trajectory_evolution PRIVATE
 set_target_properties(agentflow_trajectory_evolution PROPERTIES EXPORT_NAME core)
 set_target_properties(agentflow_hybrid_evaluation_proto PROPERTIES EXPORT_NAME proto)
 add_library(TrajectoryEvolution::core ALIAS agentflow_trajectory_evolution)
-add_library(trajectory_evolution_local SHARED src/local_c.cpp clients/c/evolution.c)
+target_sources(agentflow_trajectory_evolution PRIVATE clients/c/evolution.c)
+add_library(trajectory_evolution_local SHARED src/local_c.cpp src/evaluation_entry_client.cpp)
 target_include_directories(trajectory_evolution_local PRIVATE src ${RAPIDJSON_INCLUDE_ROOT})
 target_include_directories(trajectory_evolution_local PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -239,8 +249,10 @@ install(FILES ${HYBRID_EVALUATION_GENERATED_DIR}/hybrid_evaluation.pb.h
     DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 install(DIRECTORY config/ DESTINATION ${CMAKE_INSTALL_DATADIR}/trajectory_evolution/config)
 install(DIRECTORY proto/ DESTINATION ${CMAKE_INSTALL_DATADIR}/trajectory_evolution/proto)
-install(DIRECTORY examples/ DESTINATION ${CMAKE_INSTALL_DATADIR}/trajectory_evolution/examples
-    PATTERN "__pycache__" EXCLUDE PATTERN "*.pyc" EXCLUDE)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples")
+  install(DIRECTORY examples/ DESTINATION ${CMAKE_INSTALL_DATADIR}/trajectory_evolution/examples
+      PATTERN "__pycache__" EXCLUDE PATTERN "*.pyc" EXCLUDE)
+endif()
 install(DIRECTORY integrations/ DESTINATION ${CMAKE_INSTALL_DATADIR}/trajectory_evolution/integrations
     PATTERN "__pycache__" EXCLUDE PATTERN "*.pyc" EXCLUDE)
 install(DIRECTORY clients/ DESTINATION ${CMAKE_INSTALL_DATADIR}/trajectory_evolution/clients
@@ -282,6 +294,9 @@ if(BUILD_TESTING)
     add_test(NAME AgentEvaluationTests COMMAND ${Python3_EXECUTABLE}
         -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_agent_evaluation.py ${CMAKE_CURRENT_BINARY_DIR} ${AGENTFLOW_PROTOC_EXECUTABLE})
     set_tests_properties(AgentEvaluationTests PROPERTIES TIMEOUT 240)
+    add_test(NAME TrainingBootstrapTests COMMAND ${Python3_EXECUTABLE}
+        -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_training_bootstrap.py ${CMAKE_CURRENT_BINARY_DIR} ${AGENTFLOW_PROTOC_EXECUTABLE})
+    set_tests_properties(TrainingBootstrapTests PROPERTIES TIMEOUT 180)
     add_test(NAME GepaSearchTests COMMAND ${Python3_EXECUTABLE}
         -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gepa_search.py ${CMAKE_CURRENT_BINARY_DIR} ${AGENTFLOW_PROTOC_EXECUTABLE})
     set_tests_properties(GepaSearchTests PROPERTIES TIMEOUT 360)

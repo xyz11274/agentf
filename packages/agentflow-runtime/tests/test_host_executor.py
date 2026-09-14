@@ -119,6 +119,33 @@ def test_read_file_default_reads_all(executor, tmp_path):
     assert result.content == "only line\n"
 
 
+@pytest.mark.parametrize("offset,limit", [(0, 0), (2, 1)])
+def test_read_file_rejects_binary_even_with_line_selection(executor, tmp_path, offset, limit):
+    """Binary headers are rejected before selecting apparently textual lines."""
+    f = tmp_path / "image.png"
+    f.write_bytes(b"\x89PNG\x00\nseemingly textual line\n")
+    result = executor.read_file(str(f), offset=offset, limit=limit)
+    assert result.content == ""
+    assert "Binary content detected" in result.error
+
+
+def test_read_file_rejects_nul_after_probe(executor, tmp_path):
+    f = tmp_path / "payload.dat"
+    f.write_bytes(b"a" * 9000 + b"\x00private binary payload")
+    result = executor.read_file(str(f))
+    assert result.content == ""
+    assert "Binary content detected" in result.error
+
+
+def test_read_file_preserves_unicode_and_replacement_behavior(executor, tmp_path):
+    f = tmp_path / "text.txt"
+    f.write_bytes("中文\n".encode("utf-8") + b"legacy\xff\n")
+    result = executor.read_file(str(f))
+    assert result.error is None
+    assert result.content == "中文\nlegacy\ufffd\n"
+    assert result.total_lines == 2
+
+
 # ---------------------------------------------------------------------------
 # write_file
 # ---------------------------------------------------------------------------

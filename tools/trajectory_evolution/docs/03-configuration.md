@@ -50,6 +50,62 @@ service 配置控制应用身份与运行权限，runtime 配置控制后台评�
 服务根据 Bearer 令牌确定用户，不信任请求自报 `user_id`。参与同一用户任务的服务进程使用该用户授权，
 不同用户使用不同凭据。浏览器通过应用后端的身份网关访问组件，长期服务令牌保存在后端。
 
+### 工具正常返回，但业务结果失败
+
+`call/acall` 只知道原函数是否正常返回。若工具把失败放在返回的 JSON 里，可在 service 配置的
+`instrumentation.action_outcomes` 声明映射，所有语言的 `point` 共用此处理，不需要增加宿主回调：
+
+```json
+{
+  "instrumentation": {
+    "action_outcomes": [
+      {"pointer":"/status","equals":"security_policy_blocked","status":"failed",
+       "error":{"code":"security_policy_blocked","retryability":"non_retryable"}},
+      {"pointer":"/status","equals":"failed","status":"failed"},
+      {"pointer":"/error","nonempty":true,"status":"failed",
+       "error":{"code":"tool_error","retryability":"unknown"}}
+    ]
+  }
+}
+```
+
+把该字段合入已有配置，保留 level、binding 等配置。规则只作用于 `kind=action` 或声明为 action
+语义的活动，在 `after` 且 `executed=true` 时匹配；不影响模型、run、异常中断或被跳过的调用。
+返回值可以是 JSON 对象，也可以是包含一层 JSON 的字符串；原始 output 和交还 Agent 的值不改写。
+
+- 最多 32 条，按顺序取第一条匹配规则。`pointer` 是 RFC 6901 路径，最长 256 字节。
+- `equals` 为精确匹配的 JSON 标量，或使用 `nonempty:true`，二者只能选一个。
+  后者不匹配缺失值、null、false、0、空字符串、空数组和空对象。
+- `status` 可为 completed、failed、cancelled、unknown；可选 `error` 只接受固定 code 和
+  retryability（unknown、retryable、non_retryable），不从错误文本猜测是否能重试。
+- 宿主显式提供 status 或 error 时优先使用宿主结果，不由映射覆盖。未配置、未命中或文本不是 JSON 时保持原行为。
+- 映射只记录该动作结果，不改变业务控制流、并发兄弟分支和 Run 的 execution_status。
+  将 `/error` 用作普通业务数据的工具应配置其实际状态字段，不启用示例中的通用 error 规则。
+
+修改后重新加载采集服务配置，用于新实验；不要改写既有轨迹。是否可重试只有在宿主有明确依据时才填写，
+例如文件暂时不存在并不天然等于永远不可重试。
+
+### 模型调用以返回值报告错误
+
+部分模型客户端遇到超时或供应商拒绝时返回错误对象，不抛异常。这种情况可单独配置
+`instrumentation.model_outcomes`，沿用上面的规则格式、优先级和校验：
+
+```json
+{
+  "instrumentation": {
+    "model_outcomes": [
+      {"pointer":"/error","nonempty":true,"status":"failed",
+       "error":{"code":"model_error","retryability":"unknown"}}
+    ]
+  }
+}
+```
+
+只有模型客户端确实用 `/error` 表示调用失败时才使用此示例；其他返回结构配置对应路径。
+规则仅作用于 model 语义的活动（含通过 activity_types 声明的别名），不沿用 action_outcomes，
+不改变原始返回值、Agent 的错误恢复方式、并发分支或 run 完成状态。没有上报 usage 时仍保持指标未知，
+不会因失败而补写零 token。未配置 model_outcomes 时维持现有行为；宿主显式 status/error 优先。
+
 ## 可选：启用模型评测和元反思
 
 ### 可选：策略生效前先运行 Agent 任务评测
@@ -85,8 +141,36 @@ service 增加 `policy_evaluation_file`，指向 [agent-evaluation.json](../conf
 `model_selection=all` 纳入全部 Episode；`suspicious` 主要评估可疑 Episode；`none` 关闭此阶段模型评测。
 仅设置 `none` 不会关闭另行启用的元反思或语义记忆整理。
 
-`timeout_ms=1800000` 表示单次 HTTP 尝试最多 30 分钟。
+`timeout_ms=1800000` 表示一次模型调用的 HTTP 阶段共用最多 30 分钟，包含连接、响应等待、传输重试及退避。
+每次尝试按“剩余时间 / 剩余可尝试次数”分配响应等待，避免第一次卡住就耗尽重试机会。
+例如允许重试一次时，首次最多约 15 分钟；后续尝试使用退避后的剩余时间，总计仍不超过 30 分钟。
+`max_retries=0` 时一次请求可使用全部时间；`max_retries` 仍限制重试次数，短暂故障可在剩余预算内恢复。
+`connect_timeout_ms` 限制单次连接等待，且仍受总预算约束。JSON/引用协议恢复是另一次有界模型调用，单独计入调用次数。
 使用 `thinking_mode=disabled` 前，确认所选模型接口支持该参数。
+
+支持 JSON 输出模式的模型可在 `model` 中设置 `"json_object_output": true`，
+组件会发送 `response_format: {"type": "json_object"}`。省略或设为 `false` 时不发送该参数，
+保持旧接口兼容；模型不支持时应关闭，不会自动切换服务地址。
+此开关作用于使用该配置的评测、反思和 GEPA 请求，不改变主 Agent 的聊天输出。
+JSON 模式只约束输出格式，不替代既有的结构、证据、隐私和业务校验，也不能避免输出预算耗尽。
+
+支持 SSE 的兼容接口可另外启用：
+
+```json
+{"model": {"stream": true, "idle_timeout_ms": 60000}}
+```
+
+将这两个字段合入完整配置。`stream` 默认 `false`；`idle_timeout_ms` 默认 `0`（关闭），非零值要求开启 stream。
+`idle_timeout_ms` 约束一次请求连续没有响应正文数据的等待时间，包含首个正文数据到达前的等待；
+心跳数据也会重置该计时，它不判断模型是否产生了语义进展。到期可按已有重试预算恢复，仍受 timeout_ms 总上限约束。
+正常持续输出可以超过 idle_timeout_ms；总超时、输出字节限制和模型调用预算仍然生效。
+流必须完整闭合后才做评分和入库；缺失结束标记、错误帧、多选项或截断输出都不采纳。
+供应商忽略 stream、返回正常 JSON 响应时仍可解析；明确不支持此参数的接口保持 stream=false。
+普通与流式响应均拒绝协议对象中的重复字段；单候选响应若显式提供 index，必须为 0。
+这些异常返回 invalid_api_response，不取冲突字段中的某一个值继续评分，也不进入 JSON 内容修复。
+适配器内部复用连接，最多保留 8 个空闲句柄；并发调用各自持有独立句柄，不新增全局凭据或跨实例缓存。
+这些选项只改变本组件的后台模型通信，不改变 Agent 的业务请求。
+
 模型 Prompt、规则和预算都在 [config](../config/) 中，不需要重新编译。
 服务规则修改需重启并用于新任务；评测配置用于下一次评测，正在执行的任务/批次不在中途换快照。
 
@@ -133,6 +217,7 @@ service 增加 `policy_evaluation_file`，指向 [agent-evaluation.json](../conf
 | auto_approve_experiences | false | 默认不自动授予经验注入权限 |
 | max_iterations / max_no_progress / max_replans | 12 / 3 / 1 | default scope 的模板循环约束 |
 | model.timeout_ms / connect_timeout_ms | 30000 / 5000 | 后台模型调用与连接等待限制 |
+| model.stream / idle_timeout_ms | false / 0 | 可选流式传输 / 连续无正文数据的超时；默认关闭 |
 | model.sessionlog_max_output_tokens | 4096 | 当前内容感知后台采用的输出预算 |
 
 配置中的通用 `model.max_output_tokens` 默认 800；服务的内容感知路径在没有入口显式覆盖时选用 sessionlog_max_output_tokens。

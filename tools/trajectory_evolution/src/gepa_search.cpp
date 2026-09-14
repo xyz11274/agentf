@@ -2,6 +2,7 @@
 #include "gepa_strategy.h"
 #include "control_generation.h"
 #include "local_support.h"
+#include "model_json.h"
 #include "agentflow/trajectory/runtime_config.h"
 #include "trajectory_evolution/agent_evaluation.h"
 
@@ -108,6 +109,61 @@ Json source_experiences(const Json& artifact) {
   return result;
 }
 
+Json feedback_trial(const dataset::v1::EvaluationTrial& trial) {
+  const auto raw = json(trial), evidence = json(trial.evidence());
+  Json result{{"verdict", trial.verdict()}, {"checks", excerpt(raw["checks"])},
+      {"metrics", json(trial.metrics())}, {"execution_status", trial.execution_status()}};
+  auto& view = result["evidence"];
+  for(const auto* field : {"output", "state", "artifacts", "loop_review"})
+    if(evidence.has(field)) view[field] = excerpt(evidence[field]);
+  const auto traces = evidence.has("traces") ? evidence["traces"]
+      : evidence.has("trace") ? Json(Json::Array{evidence["trace"]}) : Json(Json::Array{});
+  for(const auto& trace : traces.items()) {
+    Json run{{"run_id", trace["identity"]["run_id"]}, {"actions", Json::Array{}}};
+    std::map<std::string, Json> starts;
+    for(const auto& event : trace["events"].items())
+      if(event.str("kind") == "action.start") starts[event.str("action_id")] = event;
+    for(const auto& event : trace["events"].items()) {
+      const auto kind = event.str("kind");
+      if(kind != "action.end" && kind != "run.start" && kind != "run.end" && kind != "loop.decision") continue;
+      const auto found = starts.find(event.str("action_id"));
+      const auto start = found == starts.end() ? Json(Json::Object{}) : found->second;
+      Json action = Json::Object{};
+      for(const auto* field : {"event_id", "kind", "actor_id", "execution_id", "loop_id", "iteration",
+                              "status", "error", "decision", "reason", "outcome"})
+        if(event.has(field)) action[field] = excerpt(event[field]);
+      const auto operation = event.str("operation", start.str("operation"));
+      if(!operation.empty()) action["operation"] = operation;
+      if(event["attributes"].has("executed")) action["executed"] = event["attributes"]["executed"];
+      const bool model = event["attributes"].str("semantic") == "model"
+          || start["attributes"].str("semantic") == "model";
+      // Reflection uses task/rubric, actual decisions and tool outcomes. Replayed
+      // model message histories and provider envelopes do not add new actions.
+      if(!model) {
+        if(event.has("input")) action["input"] = excerpt(event["input"]);
+        else if(start.has("input")) action["input"] = excerpt(start["input"]);
+      }
+      if(event.has("output")) {
+        const auto& output = event["output"];
+        action["output"] = excerpt(output);
+        if(model && output["choices"].array()) {
+          action["output"] = Json::Array{};
+          for(const auto& choice : output["choices"].items()) {
+            Json message = Json::Object{};
+            for(const auto* field : {"content", "tool_calls", "function_call", "refusal"})
+              if(choice["message"].has(field)) message[field] = excerpt(choice["message"][field]);
+            if(choice.has("finish_reason")) message["finish_reason"] = choice["finish_reason"];
+            action["output"].push(message);
+          }
+        }
+      }
+      run["actions"].push(action);
+    }
+    view["runs"].push(run);
+  }
+  return result;
+}
+
 struct Search {
   fs::path dataset_path, evaluation_path, root;
   Json seed, baseline, evaluation, config, controls, tree;
@@ -140,23 +196,29 @@ struct Search {
     if(cache.str("status") == "complete" && (final || config.flag("cache_evaluations", true))) {
       const auto bytes = read(root / "evaluations" / key / ("attempt-" + std::to_string(cache.num("attempt", 0))) / "report.json", 134217728);
       require(hash(bytes) == cache.str("report_hash"), "gepa_report_changed");
-      return proto<Report>(Json::parse(bytes));
+      const auto report = proto<Report>(Json::parse(bytes));
+      // Older complete entries may still lack an enabled objective metric.
+      if(final || scores(report).fields().size() == ids.size()) return report;
     }
     check();
     if(!final && config.flag("cache_evaluations", true)) {
       std::map<std::string, std::vector<dataset::v1::EvaluationTrial>> reused;
-      Json sources = Json::Array{}; Report joined;
+      Json sources = Json::Array{}, source_refs = Json::Array{}; Report joined;
       for(const auto& entry : static_cast<const Json&>(tree)["evaluations"].fields()) {
         const auto& previous = entry.second;
-        if(entry.first == key || previous.str("status") != "complete" || previous.str("split") != split
+        if((previous.str("status") != "complete" && previous.str("status") != "inconclusive")
+            || previous.str("split") != split
             || previous.str("version") != b.str("version") || previous.has("baseline_version")) continue;
         bool overlaps = false;
         for(const auto& id : previous["task_ids"].items())
           overlaps |= std::find(ids.begin(), ids.end(), id.text()) != ids.end() && !reused.count(id.text());
         if(!overlaps) continue;
-        const auto bytes = read(root / "evaluations" / entry.first / ("attempt-" + std::to_string(previous.num("attempt", 0))) / "report.json", 134217728);
+        const auto source_report = fs::path("evaluations") / entry.first / ("attempt-" + std::to_string(previous.num("attempt", 0))) / "report.json";
+        const auto bytes = read(root / source_report, 134217728);
         require(hash(bytes) == previous.str("report_hash"), "gepa_report_changed");
-        const auto report = proto<Report>(Json::parse(bytes)); require(scored(report), "gepa_report_changed");
+        const auto report = proto<Report>(Json::parse(bytes));
+        if(previous.str("status") == "complete") require(scored(report), "gepa_report_changed");
+        if(!report.complete()) continue;
         std::map<std::string, std::vector<dataset::v1::EvaluationTrial>> grouped;
         for(const auto& trial : report.trials()) if(trial.variant_id() == "candidate"
             && std::find(ids.begin(), ids.end(), trial.task_id()) != ids.end() && !reused.count(trial.task_id()))
@@ -165,21 +227,34 @@ struct Search {
         for(auto& item : grouped) {
           std::set<unsigned> repetitions; for(const auto& trial : item.second) repetitions.insert(trial.repetition());
           if(item.second.size() == evaluation.num("repetitions", 1) && repetitions.size() == item.second.size()) {
+            // A failed sibling does not invalidate this task. Reuse only its
+            // complete repetitions with all objective metrics still observed.
+            Report task_report; task_report.set_complete(true);
+            for(const auto& trial : item.second) *task_report.add_trials() = trial;
+            if(scores(task_report).fields().size() != 1) continue;
             reused.emplace(item.first, std::move(item.second)); used = true;
           }
         }
-        if(used) { sources.push(entry.first); if(joined.schema_version() == 0) joined = report; }
+        if(used) {
+          sources.push(entry.first);
+          // Same-key retries refer to the earlier attempt, never their own report.
+          source_refs.push(Json{{"key", entry.first}, {"report", source_report.string()}, {"report_hash", previous["report_hash"]}});
+          if(joined.schema_version() == 0) joined = report;
+        }
       }
       if(!reused.empty()) {
         std::vector<std::string> missing; for(const auto& id : ids) if(!reused.count(id)) missing.push_back(id);
         Report fresh; bool complete = true;
-        if(!missing.empty()) { fresh = evaluate(candidate, missing, split); complete = scored(fresh); }
+        if(!missing.empty()) { fresh = evaluate(candidate, missing, split); complete = fresh.complete(); }
         const auto reused_count = reused.size() * evaluation.num("repetitions", 1);
         for(const auto& trial : fresh.trials()) reused[trial.task_id()].push_back(trial);
         if(!missing.empty()) {
           auto subset = settings; subset["task_ids"] = Json::Array{};
           for(const auto& id : missing) subset["task_ids"].push(id);
-          sources.push(hash(context + subset.dump()));
+          const auto fresh_key = hash(context + subset.dump());
+          const auto& added = static_cast<const Json&>(tree)["evaluations"][fresh_key];
+          sources.push(fresh_key);
+          source_refs.push(Json{{"key", fresh_key}, {"report", added["report"]}, {"report_hash", added["report_hash"]}});
         }
         joined.clear_trials();
         for(const auto& id : ids) for(const auto& trial : reused[id]) *joined.add_trials() = trial;
@@ -189,10 +264,12 @@ struct Search {
         auto configuration = json(joined.configuration()); configuration["task_ids"] = selected;
         *joined.mutable_configuration() = proto<google::protobuf::Struct>(configuration);
         *joined.mutable_summary() = proto<google::protobuf::Struct>(Json{{"trials", std::size_t(joined.trials_size())},
-            {"reused_trials", reused_count}, {"source_reports", sources}});
-        cache["attempt"] = cache.num("attempt", 0) + 1; cache["status"] = complete ? "complete" : "inconclusive";
+            {"reused_trials", reused_count}, {"source_reports", sources}, {"source_report_refs", source_refs}});
+        cache["attempt"] = cache.num("attempt", 0) + 1;
+        cache["status"] = scores(joined).fields().size() == ids.size() ? "complete" : "inconclusive";
         cache["version"] = b["version"]; cache["split"] = split; cache["task_ids"] = selected;
         cache["trials_reserved"] = 0; cache["source_reports"] = sources;
+        cache["source_report_refs"] = source_refs;
         const auto directory = fs::path("evaluations") / key / ("attempt-" + std::to_string(cache.num("attempt", 0)));
         const auto bytes = json(joined).dump(); write(root / directory / "report.json", bytes);
         write(root / directory / "report.pb", joined.SerializeAsString());
@@ -210,14 +287,24 @@ struct Search {
     save();
     TaskEvaluationOptions options; options.config_json = settings.dump();
     options.cancelled = [&] { return (cancelled && cancelled()) || now() >= tree.num("started_ms", 0) + config.num("timeout_ms", 1800000); };
+    if(cache.num("attempt", 0) > 1 && (final || config.flag("cache_evaluations", true))) {
+      const auto previous = root / "evaluations" / key / ("attempt-" + std::to_string(cache.num("attempt", 0) - 1));
+      // Resume validates context, manifest and artifacts, retaining execution
+      // evidence while retrying only failed judgments or unfinished trials.
+      if(fs::exists(previous / "manifest.json")) options.resume_report = previous / "report.json";
+    }
     const auto directory = root / "evaluations" / key / ("attempt-" + std::to_string(cache.num("attempt", 0)));
     auto report = run_task_evaluation(dataset_path, evaluation_path, directory, options);
     check();
-    cache["status"] = scored(report) ? "complete" : "inconclusive";
+    cache["status"] = scored(report) && (final || scores(report).fields().size() == ids.size()) ? "complete" : "inconclusive";
     cache["report_hash"] = hash(read(directory / "report.json", 134217728));
     cache["report"] = (fs::path("evaluations") / key / directory.filename() / "report.json").string();
     tree["evaluations"][key] = cache;
-    save(); return report;
+    save();
+    for(const auto& trial : report.trials()) for(const auto& check : trial.checks())
+      if(check.check_id() == "model" && check.status() == "error" && check.reason() == "evaluation_judge_http_429")
+        throw Error("gepa_model_rate_limited");
+    return report;
   }
   Json scores(const Report& report) const {
     Json result = Json::Object{};
@@ -225,22 +312,31 @@ struct Search {
     for(const auto& trial : report.trials()) {
       if(trial.variant_id() != "candidate") continue;
       const auto metrics = json(trial.metrics()), evidence = json(trial.evidence());
-      const auto& loops = evidence["trajectory"]["summary"]["invalid_loop_lower_bound"];
+      const auto loops = evidence.has("loop_review")
+          ? (evidence["loop_review"].str("status") == "complete" ? evidence["loop_review"]["count"] : Json())
+          : evidence["trajectory"]["summary"]["invalid_loop_lower_bound"];
       const auto& objective = config["objective"];
       const auto lw = number(objective["invalid_loop_weight"], 0.2);
       const auto tw = number(objective["token_weight"], 0.05);
       const auto dw = number(objective["latency_weight"], 0);
-      if((lw && loops.null()) || (tw && metrics["tokens"].null())) return Json(Json::Object{});
+      const bool unknown_tokens = metrics["tokens"].null();
+      if((lw && loops.null()) || (tw && unknown_tokens
+          && config.str("unknown_token_policy", "reject") != "worst_case")) return Json(Json::Object{});
       auto penalty = [](double x, double scale) { return x / (scale + x); };
+      // This bounded cost has supremum 1. An explicit conservative policy
+      // uses that bound for ranking; it never invents a measured token count.
+      const auto token_cost = unknown_tokens ? 1.0
+          : penalty(number(metrics["tokens"]), number(objective["token_scale"], 10000));
       const double fitness = (trial.verdict() == "passed" ? 1.0 : 0.0)
           - lw * penalty(number(loops), number(objective["invalid_loop_scale"], 1))
-          - tw * penalty(number(metrics["tokens"]), number(objective["token_scale"], 10000))
+          - tw * token_cost
           - dw * penalty(trial.duration_ms(), number(objective["latency_scale_ms"], 60000));
       auto& row = result[trial.task_id()];
       row["fitness"] = number(row["fitness"]) + fitness;
       row["quality"] = number(row["quality"]) + (trial.verdict() == "passed" ? 1 : 0);
       if(lw) row["loop_efficiency"] = number(row["loop_efficiency"]) + 1 - penalty(number(loops), number(objective["invalid_loop_scale"], 1));
-      if(tw) row["token_efficiency"] = number(row["token_efficiency"]) + 1 - penalty(number(metrics["tokens"]), number(objective["token_scale"], 10000));
+      if(tw) row["token_efficiency"] = number(row["token_efficiency"]) + 1 - token_cost;
+      if(tw && unknown_tokens) row["unknown_token_trials"] = row.num("unknown_token_trials", 0) + 1;
       if(dw) row["latency_efficiency"] = number(row["latency_efficiency"]) + 1 - penalty(trial.duration_ms(), number(objective["latency_scale_ms"], 60000));
       row["repetitions"] = row.num("repetitions", 0) + 1;
     }
@@ -332,6 +428,7 @@ struct Search {
     Json result{{"parent_version", agent_version_id(parent.dump())}, {"experiences", source_experiences(parent)},
         {"components", components(parent)}, {"selected_components", selected}, {"feedback", Json::Array{}},
         {"objective", config["objective"]}, {"limits", Json{{"max_experience_bytes", config.num("max_experience_bytes", 2048)}}}};
+    for(auto& experience : result["experiences"].items()) experience.fields().erase("content");
     if(controls.flag("enabled", false)) {
       const auto policy = proto<v1::RuntimePolicy>(parent["policy"]);
       result["controls"] = control_generation_input(policy.snapshot(), without_generated_controls(policy.options()), controls);
@@ -346,8 +443,12 @@ struct Search {
       const dataset::v1::EvaluationTask* task = nullptr;
       for(const auto& value : dataset.tasks()) if(value.task_id() == trial->task_id()) task = &value;
       require(task && task->split() == "train", "gepa_reflection_split_violation");
+      Json turns = Json::Array{}, constraints = Json::Array{};
+      for(const auto& turn : task->followup_inputs()) turns.push(clip(turn, 4096));
+      for(const auto& constraint : task->constraints()) constraints.push(clip(constraint, 4096));
       Json row{{"task_id", task->task_id()}, {"task_input", clip(task->task_input(), 4096)},
-          {"expected_behavior", clip(task->expected_behavior(), 4096)}, {"trial", excerpt(json(*trial))}};
+          {"followup_inputs", turns}, {"constraints", constraints},
+          {"expected_behavior", clip(task->expected_behavior(), 4096)}, {"trial", feedback_trial(*trial)}};
       auto trial_packet = result; trial_packet["feedback"].push(row);
       if(trial_packet.dump().size() > config.num("max_input_bytes", 65536)) {
         row["trial"] = Json{{"verdict", trial->verdict()}, {"checks", excerpt(json(*trial)["checks"])},
@@ -419,13 +520,19 @@ struct Search {
     validate_local_data(Json(request.system_prompt));
     write(root / "reflections" / (name + ".request.json"), Json{{"system", request.system_prompt}, {"input", input}}.dump());
     const auto response = adapter->evaluate(request); check();
+    if(response.error_code == "http_429") {
+      // The provider rejected this call; retry the same generation, retaining
+      // its reserved budget and already completed execution checkpoints.
+      tree["nodes"].items()[node]["status"] = "pending";
+      save(); throw Error("gepa_model_rate_limited");
+    }
     require(response.transport_ok && response.error_code.empty() && response.body.size() <= 262144, "gepa_reflection_transport_failed");
-    auto body = Json::parse(response.body);
+    auto body = Json::parse(legacy::unwrap_model_json(response.body));
     if(body.has("choices")) {
       require(body["choices"].array() && body["choices"].items().size() == 1, "gepa_reflection_choice_invalid");
       const auto& choice = body["choices"].items().front();
       require(choice.str("finish_reason") == "stop", "gepa_reflection_incomplete");
-      body = Json::parse(choice["message"].str("content"));
+      body = Json::parse(legacy::unwrap_model_json(choice["message"].str("content")));
     }
     validate_local_data(body); return body;
   }
@@ -503,7 +610,8 @@ struct Search {
   }
   void error(std::size_t index, const std::exception& exception) {
     const std::string code = exception.what();
-    if(code == "gepa_cancelled" || code == "gepa_time_budget_exhausted") { save(); throw Error(code.c_str()); }
+    if(code == "gepa_cancelled" || code == "gepa_time_budget_exhausted"
+        || code == "gepa_model_rate_limited") { save(); throw Error(code.c_str()); }
     auto& node = tree["nodes"].items()[index]; node["error_stage"] = node["status"]; node["status"] = "error";
     // Persist fixed codes only; model/transport diagnostics can contain secrets.
     const std::set<std::string> codes{"gepa_trial_budget_exhausted", "gepa_parent_evaluation_inconclusive",
@@ -815,7 +923,7 @@ Json load_gepa_config(const fs::path& path) {
       "epsilon", "top_k", "component_selector", "minibatch_strategy", "skip_perfect_score", "perfect_score", "acceptance",
       "proposals_per_round", "proposal_selection", "proposal_top_k", "cache_evaluations",
       "sampling_strategy", "parents_per_round", "target_fitness",
-      "reflection_strategy", "duplication_factor", "aggregation_prompt_file"});
+      "reflection_strategy", "duplication_factor", "aggregation_prompt_file", "unknown_token_policy"});
   require(config.num("schema_version", 0) == 1, "gepa_config_invalid");
   bound(config, "max_rounds", 8, 1, 256); bound(config, "max_model_calls", 8, 1, 256);
   bound(config, "max_trials", 400, 4, 10000); bound(config, "timeout_ms", 1800000, 1000, 86400000);
@@ -842,6 +950,7 @@ Json load_gepa_config(const fs::path& path) {
   choice("proposal_selection", "all_improvements", {"all_improvements", "best", "top_k"});
   choice("sampling_strategy", "same_parent", {"single", "same_parent", "independent", "pxn"});
   choice("reflection_strategy", "single", {"single", "combee"});
+  choice("unknown_token_policy", "reject", {"reject", "worst_case"});
   for(const auto* key : {"epsilon", "perfect_score", "target_fitness"}) if(config.has(key))
     require(number(config[key], -1) >= 0 && number(config[key], -1) <= 1, "gepa_strategy_invalid");
   require(number(config["min_improvement"], 0.000001) > 0 && number(config["min_improvement"], 0.000001) <= 1, "gepa_improvement_invalid");

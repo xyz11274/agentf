@@ -42,7 +42,10 @@ def _private_payload(value, public_env_names=()):
         elif isinstance(item, (list, tuple)):
             pending.extend(item)
         elif isinstance(item, str):
-            if _CREDENTIAL.search(item) or any(secret in item for secret in secrets):
+            # The host may already have removed a URL signature. Check the
+            # remaining text, but still match known secret values on the original.
+            inspected = item.replace("<redacted:credential_field>", "")
+            if _CREDENTIAL.search(inspected) or any(secret in item for secret in secrets):
                 return True
     return False
 

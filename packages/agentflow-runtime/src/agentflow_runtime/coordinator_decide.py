@@ -1330,7 +1330,8 @@ def execute():
             databus.put("_coordinator_decision_index", str(_decision_index))
         if _evolution is not None and not _evolution.allow_loop({
             "ref": {"run": dialogue_id, "key": f"coordinator-loop:{_decision_index}"},
-            "loop_id": "coordinator", "state": messages[-1] if messages else {},
+            "loop_id": "coordinator", "actor_id": "coordinator",
+            "state": messages[-1] if messages else {},
         }, user_id=_user_id()):
             response_text = append_artifacts_markdown(
                 "循环控制已停止重复协调，基于已有结果输出。", completed_skill_artifacts,
@@ -1620,7 +1621,7 @@ def execute():
             if run_skills_call_count > 1
             else ""
         )
-        for tc in tool_calls:
+        for tool_index, tc in enumerate(tool_calls):
             func = tc.get("function", {})
             name = func.get("name", "")
             arguments_error = ""
@@ -1742,6 +1743,16 @@ def execute():
                 }, ctx=_dispatch_ctx)
             else:
                 result_str = json.dumps({"error": f"Unknown tool: {name}"})
+
+            if _evolution is not None:
+                _evolution.point({
+                    "phase": "event", "kind": "custom", "name": "tool.result",
+                    "ref": {"run": dialogue_id,
+                            "key": f"coordinator-tool:{_decision_index}:{tool_index}"},
+                    "input": {"name": name, "tool_call_id": tc.get("id", ""),
+                              "arguments": func.get("arguments", "{}"),
+                              "output": result_str},
+                }, user_id=_user_id())
 
             messages.append({
                 "role": "tool",

@@ -516,7 +516,8 @@ RuntimeConfiguration load_runtime_configuration(
       {"endpoint", "model_id", "api_key_env", "no_api_key", "thinking_mode",
        "timeout_ms", "connect_timeout_ms", "max_retries",
        "max_response_bytes", "max_request_bytes", "max_output_tokens",
-       "sessionlog_max_output_tokens", "disable_proxy"},
+       "sessionlog_max_output_tokens", "disable_proxy", "json_object_output",
+       "stream", "idle_timeout_ms"},
       "model");
   output.model.endpoint = required_string(
       model, "endpoint", "model", true);
@@ -540,6 +541,15 @@ RuntimeConfiguration load_runtime_configuration(
   output.sessionlog_max_output_tokens = required_uint32(
       model, "sessionlog_max_output_tokens", "model");
   output.model.disable_proxy = required_bool(model, "disable_proxy", "model");
+  if(model.HasMember("json_object_output")) {
+    output.model.json_object_output = required_bool(
+        model, "json_object_output", "model");
+  }
+  if(model.HasMember("stream")) output.model.stream = required_bool(model, "stream", "model");
+  if(model.HasMember("idle_timeout_ms"))
+    output.model.idle_timeout_ms = required_uint32(model, "idle_timeout_ms", "model");
+  if(output.model.idle_timeout_ms && !output.model.stream)
+    throw EvaluationError("model.idle_timeout_ms requires stream");
   if(output.model.timeout_ms == 0U || output.model.connect_timeout_ms == 0U
      || output.model.max_retries > 10U
      || output.model.max_response_bytes == 0U

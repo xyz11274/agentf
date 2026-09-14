@@ -45,6 +45,8 @@ class Model(BaseHTTPRequestHandler):
     calls = 0
     entered = threading.Event()
     release = threading.Event()
+    status = 503
+    response = b"fixture model unavailable"
 
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length", 0)))
@@ -52,9 +54,9 @@ class Model(BaseHTTPRequestHandler):
         type(self).entered.set()
         type(self).release.wait(20)
         try:
-            self.send_response(503)
+            self.send_response(type(self).status)
             self.end_headers()
-            self.wfile.write(b"fixture model unavailable")
+            self.wfile.write(type(self).response)
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -244,6 +246,34 @@ def interrupted_analysis():
         assert Model.calls == before + 2
 
 
+def strict_error_codes():
+    def completion(content, finish="stop"):
+        return json.dumps({"choices": [{"message": {"content": content}, "finish_reason": finish}]}).encode()
+    cases = [(503, TOKENS["user-a"].encode(), "http_503"),
+             (200, completion("{not-json"), "invalid_json"),
+             (200, completion("{", "length"), "output_token_limit_reached"),
+             (200, completion(TOKENS["user-a"]), "credential_like_output")]
+    try:
+        for status, response, code in cases:
+            Model.status, Model.response = status, response
+            root = fixture("strict-" + code)
+            runtime = read(root / "config/standard-runtime.json")
+            runtime["evaluation"]["strict_model"] = True
+            runtime["model"].update(api_key_env="INTEGRATION_TEST_A", no_api_key=False)
+            write(root / "config/standard-runtime.json", runtime)
+            before = Model.calls
+            with service(root) as (call, _):
+                rid = run(call)
+                wait(lambda: state(root, rid)["evaluation_status"] == "failed")
+                expected = "dialogue_model_" + code
+                assert state(root, rid)["evaluation_error"] == expected, state(root, rid)
+                assert jobs(root)[0]["errors"][rid] == expected
+                assert Model.calls == before + 1, "strict failure must not add unbounded retries"
+                assert not list((root / "data/by-user").glob("*/evaluation/*/*.evaluation.json"))
+    finally:
+        Model.status, Model.response = 503, b"fixture model unavailable"
+
+
 def checkpoints():
     root = fixture("reuse-analysis")
     before = Model.calls
@@ -352,18 +382,60 @@ def idle_cache():
         client.close()
 
 
+def archived_jobs_restart():
+    root = fixture("archived-jobs-restart")
+    config = read(root / "service.json")
+    config["max_stored_runs"] = 2
+    write(root / "service.json", config)
+    before = Model.calls
+    with service(root) as (call, _):
+        for _ in range(4):
+            rid = run(call)
+            wait(lambda: done(root, [rid]))
+        assert len(jobs(root)) == 4 and Model.calls == before + 4
+    saved = {path: path.stat().st_mtime_ns for path in (root / "data/by-user").rglob("*.evaluation.json")}
+    with service(root):
+        time.sleep(0.15)
+        assert Model.calls == before + 4, "restart replayed archived learning jobs"
+        assert all(job["state"] == "completed" for job in jobs(root))
+    assert all(path.stat().st_mtime_ns == timestamp for path, timestamp in saved.items())
+
+
+def repeated_shutdown_drains():
+    root = fixture("repeated-shutdown")
+    Model.entered.clear(); Model.release.clear()
+    try:
+        with service(root) as (call, process):
+            rid = run(call)
+            assert Model.entered.wait(5)
+            process.terminate()
+            time.sleep(0.4)
+            process.terminate()
+            time.sleep(0.15)
+            assert process.poll() is None, "second SIGTERM interrupted durable worker drain"
+            Model.release.set()
+            assert process.wait(10) == 0
+            assert done(root, [rid])
+        before = Model.calls
+        with service(root):
+            time.sleep(0.15)
+            assert Model.calls == before, "drained shutdown caused duplicate analysis"
+    finally:
+        Model.release.set()
+
+
 MODEL = ThreadingHTTPServer(("127.0.0.1", 0), Model)
 Model.release.set()
 thread = threading.Thread(target=MODEL.serve_forever, daemon=True); thread.start()
 try:
-    for test in (batching, deadlines, configuration_backoff, busy_arrivals, interrupted_analysis, checkpoints, isolated_failure,
-                 publication_failure, bounded_batches, idle_cache):
+    for test in (batching, deadlines, configuration_backoff, busy_arrivals, interrupted_analysis, strict_error_codes, checkpoints, isolated_failure,
+                 publication_failure, bounded_batches, idle_cache, archived_jobs_restart, repeated_shutdown_drains):
         test()
         print(test.__name__ + ": passed", flush=True)
     for path in (ROOT).rglob("*"):
         if path.is_file() and "data" in path.parts:
             assert all(token.encode() not in path.read_bytes() for token in TOKENS.values()), path
-    result = {"checks": 10, "paid_provider_calls": 0, "fixture_model_calls": Model.calls, "output": str(ROOT)}
+    result = {"checks": 13, "paid_provider_calls": 0, "fixture_model_calls": Model.calls, "output": str(ROOT)}
     write(ROOT / "test-summary.json", result)
     print(json.dumps(result))
 finally:

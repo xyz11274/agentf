@@ -6,6 +6,7 @@
 #include "policy_cli.h"
 #include "dataset_cli.h"
 #include "learn_cli.h"
+#include "evaluation_process.h"
 #include "trajectory_evolution/integration.h"
 
 #include <cctype>
@@ -646,6 +647,9 @@ int run_directory(
 
 int main(int argc, char** argv) {
   namespace trajectory = agentflow::trajectory;
+  if(argc > 1 && std::string(argv[1]) == "--internal-evaluation-supervisor") {
+    return ::trajectory::evolution::run_evaluation_supervisor(argc, argv);
+  }
   if(argc > 1 && std::string(argv[1]) == "learn") {
     return ::trajectory::evolution::run_learning_import(argc, argv);
   }

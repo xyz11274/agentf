@@ -76,6 +76,37 @@ func New(endpoint, token string, options Options) (*Client, error) {
 
 func (c *Client) Close() { c.http.CloseIdleConnections() }
 
+// Evaluate binds an existing receiver; normal application startup is a no-op.
+// The receiver only acknowledges delivery. Run-end points supply the real result.
+func Evaluate(ctx context.Context, receive func(context.Context, any) error) (bool, error) {
+	if os.Getenv("TRAJECTORY_EVOLUTION_EVALUATION_ENTRY") != "1" { return false, nil }
+	c, err := New(os.Getenv("TRAJECTORY_EVOLUTION_TRIAL_URL"), os.Getenv("TRAJECTORY_EVOLUTION_TRIAL_TOKEN"), Options{Timeout: 5 * time.Second})
+	if err != nil { return true, &Error{Code: "evaluation_entry_failed"} }
+	defer c.Close()
+	var salt [16]byte
+	if _, err = rand.Read(salt[:]); err != nil { return true, &Error{Code: "evaluation_entry_failed"} }
+	consumer := hex.EncodeToString(salt[:])
+	fail := func() (bool, error) {
+		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, _ = c.Invoke(cleanup, "evaluation.fail", map[string]any{"consumer": consumer}, "")
+		return true, &Error{Code: "evaluation_entry_failed"}
+	}
+	for index := 0; ; {
+		packet, err := c.Invoke(ctx, "evaluation.next", map[string]any{"consumer": consumer, "index": index}, "")
+		if err != nil { return fail() }
+		switch packet["state"] {
+		case "done": return true, nil
+		case "waiting":
+			select { case <-ctx.Done(): return fail(); case <-time.After(100 * time.Millisecond): }
+		case "input":
+			if packet["index"] != float64(index) || receive(ctx, packet["input"]) != nil { return fail() }
+			index++
+		default: return fail()
+		}
+	}
+}
+
 // Point uses one total deadline and never turns an observer outage into an Agent error.
 func (c *Client) Point(ctx context.Context, fields map[string]any, budget time.Duration) (result map[string]any) {
 	ref, _ := fields["ref"].(map[string]any)

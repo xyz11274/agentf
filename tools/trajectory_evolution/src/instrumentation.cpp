@@ -198,7 +198,7 @@ void abort_point_reference(Json& run, const Json& request, const Json& config, c
 void validate_instrumentation(const Json& config) {
   if(!config.has("instrumentation")) return;
   const auto& options = config["instrumentation"];
-  keys(options, {"level", "capabilities", "binding", "scope_id", "output_metrics"});
+  keys(options, {"level", "capabilities", "binding", "scope_id", "output_metrics", "action_outcomes", "model_outcomes"});
   const auto level = options.str("level", "L0");
   require(level == "L0" || level == "L1" || level == "L2" || level == "L3", "instrumentation_level_invalid");
   if(options.has("capabilities")) {
@@ -213,6 +213,28 @@ void validate_instrumentation(const Json& config) {
     for(const auto& metric : options["output_metrics"].fields())
       require(metric.second.string() && metric.second.text().size() <= 256
           && rapidjson::Pointer(metric.second.text().c_str()).IsValid(), "output_metric_pointer_invalid");
+  }
+  for(const auto* mapping : {"action_outcomes", "model_outcomes"}) if(options.has(mapping)) {
+    const auto& rules = options[mapping];
+    require(rules.array() && rules.items().size() <= 32, "action_outcomes_invalid");
+    for(const auto& rule : rules.items()) {
+      keys(rule, {"pointer", "equals", "nonempty", "status", "error"});
+      const auto path = rule.str("pointer");
+      require(rule.has("pointer") && rule["pointer"].string() && path.size() <= 256
+          && path.find('\0') == std::string::npos && rapidjson::Pointer(path.c_str()).IsValid(), "action_outcome_pointer_invalid");
+      require(rule.has("equals") != rule.has("nonempty"), "action_outcome_match_invalid");
+      if(rule.has("equals")) require(!rule["equals"].object() && !rule["equals"].array()
+          && rule["equals"].dump().size() <= 256, "action_outcome_match_invalid");
+      if(rule.has("nonempty")) require(rule["nonempty"].boolean(), "action_outcome_match_invalid");
+      const auto status = rule.str("status");
+      require(status == "completed" || status == "failed" || status == "cancelled" || status == "unknown", "status_invalid");
+      if(rule.has("error")) {
+        keys(rule["error"], {"code", "retryability"});
+        const auto retry = rule["error"].str("retryability");
+        require(status != "completed" && identifier(rule["error"].str("code"))
+            && (retry == "unknown" || retry == "retryable" || retry == "non_retryable"), "error_info_invalid");
+      }
+    }
   }
 }
 
@@ -268,6 +290,34 @@ Json point_request(const Json& request, const Json& config) {
       packet["operation"] = phase == "abort" ? "activity.abort" : "activity.end";
       packet["activity_id"] = context["activity_id"];
       copy("executed"); copy("error"); copy("metrics");
+      // A normal function return need not mean business success. Only apply
+      // explicitly configured mappings; preserve host outcomes and raw output.
+      const auto mapping = semantic == "model" ? "model_outcomes" : "action_outcomes";
+      if((semantic == "action" || semantic == "model") && phase == "after" && request.flag("executed", false)
+          && !request.has("status") && !request.has("error") && options.has(mapping)) {
+        const auto bytes = request["output"].string() ? request["output"].text() : request["output"].dump();
+        rapidjson::Document output;
+        output.Parse<rapidjson::kParseValidateEncodingFlag | rapidjson::kParseIterativeFlag>(bytes.data(), bytes.size());
+        if(!output.HasParseError()) for(const auto& rule : options[mapping].items()) {
+          const auto* value = rapidjson::Pointer(rule.str("pointer").c_str()).Get(output);
+          if(!value) continue;
+          bool matched = false;
+          if(rule.has("equals")) {
+            const auto expected_bytes = rule["equals"].dump();
+            rapidjson::Document expected; expected.Parse(expected_bytes.data(), expected_bytes.size());
+            matched = *value == expected;
+          } else {
+            matched = !value->IsNull() && !(value->IsBool() && !value->GetBool())
+                && !(value->IsNumber() && value->GetDouble() == 0)
+                && !(value->IsString() && value->GetStringLength() == 0)
+                && !(value->IsArray() && value->Empty()) && !(value->IsObject() && value->ObjectEmpty());
+          }
+          if(!matched) continue;
+          packet["status"] = rule["status"];
+          if(rule.has("error")) packet["error"] = rule["error"];
+          break;
+        }
+      }
       if(semantic == "model" && phase == "after" && options.has("output_metrics")) {
         rapidjson::Document output; const auto bytes = request["output"].dump(); output.Parse(bytes.c_str());
         for(const auto& metric : options["output_metrics"].fields()) {
@@ -296,6 +346,7 @@ Json point_request(const Json& request, const Json& config) {
     require(request.has("input"), "point_input_required");
     packet["operation"] = "event.record"; packet["type"] = request["name"]; packet["data"] = request["input"];
     if(context.has("activity_id")) packet["activity_id"] = context["activity_id"];
+    else if(context.has("control_id")) packet["control_id"] = context["control_id"];
     return packet;
   }
   require(phase == "before", "point_phase_invalid");

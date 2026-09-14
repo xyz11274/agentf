@@ -156,6 +156,8 @@ IntegrationHttpServer::~IntegrationHttpServer() = default;
 unsigned IntegrationHttpServer::port() const { return impl_->bound_port; }
 bool IntegrationHttpServer::flush_capture(unsigned timeout_ms) { return impl_->service.flush_capture(timeout_ms); }
 bool IntegrationHttpServer::capture_finished() const { return impl_->service.capture_finished(); }
+bool IntegrationHttpServer::capture_finished(std::size_t expected_runs) const { return impl_->service.capture_finished(expected_runs); }
+std::string IntegrationHttpServer::evaluation_entry_status() const { return impl_->service.evaluation_entry_status(); }
 
 int run_integration_server(int argc, char** argv) {
   if(argc == 3 && std::string(argv[2]) == "--help") {
@@ -165,7 +167,6 @@ int run_integration_server(int argc, char** argv) {
   }
   try {
     require(argc == 4 && std::string(argv[2]) == "--config", "usage: serve --config <service.json>");
-    IntegrationHttpServer server(argv[3]);
     stopping = 0;
     const auto previous_term = std::signal(SIGTERM, stop_server), previous_int = std::signal(SIGINT, stop_server);
     struct WorkerCleanup {
@@ -176,6 +177,8 @@ int run_integration_server(int argc, char** argv) {
         std::signal(SIGTERM, term); std::signal(SIGINT, interrupt);
       }
     } cleanup{previous_term, previous_int};
+    // Keep the handler installed until background work and capture are drained.
+    IntegrationHttpServer server(argv[3]);
     std::cout << "trajectory-integration.v1 listening=127.0.0.1:" << server.port() << std::endl;
     while(!stopping) ::poll(nullptr, 0, 200);
     return 0;

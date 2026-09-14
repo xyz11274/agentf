@@ -32,6 +32,12 @@ class AgentEvaluationService {
   std::string feedback(const std::string& user) const;
   std::string search_tree(const std::string& user, const std::string& job_id) const;
   std::string agent_configuration() const;
+  // Background-only seed preparation. Training uses the same isolated host,
+  // queue and limits as evaluation, but never publishes a policy or score.
+  std::string prepare_training(const std::string& user, const std::string& seed_json,
+                               bool learning_pending, bool learning_failed);
+  void complete_training_import(const std::string& user, const std::string& job_id,
+                                const std::string& result_json);
   void retry(const std::string& user, const std::string& job_id);
   void cancel(const std::string& user, const std::string& job_id);
  private:

@@ -3,6 +3,7 @@
 #include "trajectory_evolution/request_binding.h"
 #include "agentflow/trajectory/experience.h"
 #include "integration_json.h"
+#include "instrumentation.h"
 #include "trace_internal.h"
 
 #include <fstream>
@@ -302,6 +303,82 @@ void boundary_tests(const fs::path& folder) {
   c["policy_scopes"] = c["actors"]; c.fields().erase("actors");
   c["activity_types"] = Json{{"vendor.generate", Json{{"semantic", "model"}, {"required_input_paths", Json::Array{"/messages"}}}},
     {"warehouse.lookup", Json{{"semantic", "action"}, {"required_input_paths", Json::Array{"/query"}}}}};
+  c["instrumentation"]["action_outcomes"] = Json::Array{
+    Json{{"pointer", "/status"}, {"equals", "blocked"}, {"status", "failed"},
+      {"error", Json{{"code", "policy_blocked"}, {"retryability", "non_retryable"}}}},
+    Json{{"pointer", "/status"}, {"equals", "failed"}, {"status", "failed"}},
+    Json{{"pointer", "/error"}, {"nonempty", true}, {"status", "failed"},
+      {"error", Json{{"code", "tool_error"}, {"retryability", "unknown"}}}}};
+  validate_instrumentation(c);
+  const Json observation{{"request_id", "mapped-outcome"}, {"phase", "after"}, {"kind", "action"}, {"executed", true},
+    {"context", Json{{"run_id", "mapping-fixture"}, {"activity_id", "activity-fixture"}}}};
+  for(const auto& output : std::vector<Json>{Json{{"status", "failed"}}, "{\"status\":\"failed\"}",
+      Json{{"error", "failed to read"}}, Json{{"error", Json{{"code", "missing"}}}}}) {
+    auto request = observation; request["output"] = output;
+    const auto packet = point_request(request, c);
+    check(packet.str("status") == "failed" && packet["output"].dump() == output.dump(), "mapped failure preserves original result");
+    check(point_request(request, Json::Object{}).str("status") == "completed", "unconfigured result mapping stays compatible");
+    request["status"] = "cancelled";
+    check(point_request(request, c).str("status") == "cancelled", "explicit host status takes priority");
+    request.fields().erase("status"); request["executed"] = false;
+    check(point_request(request, c).str("status") == "cancelled", "unexecuted operation is not a business failure");
+    request["executed"] = true; request["phase"] = "abort";
+    check(point_request(request, c).str("status") == "unknown", "aborted capture is not classified from partial output");
+  }
+  for(const auto& empty : std::vector<Json>{nullptr, false, 0, "", Json::Array{}, Json::Object{}}) {
+    auto request = observation; request["output"] = Json{{"error", empty}};
+    check(point_request(request, c).str("status") == "completed", "empty error must not invent failure");
+  }
+  for(const auto& output : std::vector<Json>{"plain text", "{invalid", Json{{"status", "succeeded"}}, Json::Array{}}) {
+    auto request = observation; request["output"] = output;
+    check(point_request(request, c).str("status") == "completed", "unmatched result keeps original outcome");
+  }
+  for(const auto* kind : {"model", "custom", "run"}) {
+    auto request = observation; request["kind"] = kind; request["actual_input"] = "original";
+    request["output"] = Json{{"status", "failed"}};
+    check(point_request(request, c).str("status") == "completed", "action mapping never changes models or whole run status");
+  }
+  c["instrumentation"]["model_outcomes"] = Json::Array{
+    Json{{"pointer", "/error"}, {"nonempty", true}, {"status", "failed"},
+      {"error", Json{{"code", "model_error"}, {"retryability", "unknown"}}}}};
+  validate_instrumentation(c);
+  for(const auto* kind : {"model", "vendor.generate"}) {
+    auto request = observation; request["kind"] = kind; request["actual_input"] = "original";
+    request["output"] = Json{{"error", "provider timeout"}};
+    auto packet = point_request(request, c);
+    check(packet.str("status") == "failed" && packet["error"].str("code") == "model_error"
+        && packet["output"].dump() == request["output"].dump() && !packet.has("metrics"),
+        "mapped model error preserves output and unknown usage");
+    request["output"] = "{\"error\":\"provider timeout\"}";
+    check(point_request(request, c).str("status") == "failed", "model output accepts one JSON string layer");
+    request["status"] = "unknown";
+    check(point_request(request, c).str("status") == "unknown", "host model status wins");
+    request.fields().erase("status"); request["error"] = Json{{"code", "host_error"}, {"retryability", "retryable"}};
+    check(point_request(request, c)["error"].str("code") == "host_error", "host model error wins");
+    request.fields().erase("error"); request["executed"] = false;
+    check(point_request(request, c).str("status") == "cancelled", "unexecuted model stays cancelled");
+    request["executed"] = true; request["phase"] = "abort";
+    check(point_request(request, c).str("status") == "unknown", "aborted model capture stays unknown");
+    request["phase"] = "after"; request.fields().erase("actual_input");
+    check(point_request(request, c).str("operation") == "activity.abort", "mapping does not repair missing execution evidence");
+    request["actual_input"] = "original";
+    for(const auto& output : std::vector<Json>{nullptr, "plain text", "{invalid", Json{{"error", ""}}, Json{{"choices", Json::Array{}}}}) {
+      request["output"] = output;
+      check(point_request(request, c).str("status") == "completed", "model mapping requires positive match");
+    }
+  }
+  for(const auto& rule : std::vector<Json>{
+      Json{{"pointer", "bad"}, {"equals", "failed"}, {"status", "failed"}},
+      Json{{"pointer", "/status"}, {"equals", "failed"}, {"nonempty", true}, {"status", "failed"}},
+      Json{{"pointer", "/error"}, {"nonempty", false}, {"status", "failed"}},
+      Json{{"pointer", "/error"}, {"nonempty", true}, {"status", "completed"},
+        {"error", Json{{"code", "error"}, {"retryability", "unknown"}}}}}) {
+    for(const auto* mapping : {"action_outcomes", "model_outcomes"}) {
+      auto invalid = c; invalid["instrumentation"][mapping] = Json::Array{rule};
+      bool rejected = false; try { validate_instrumentation(invalid); } catch(const Error&) { rejected = true; }
+      check(rejected, "invalid outcome mapping rejected at configuration load");
+    }
+  }
   write(folder / "service.json", c.dump()); seed(folder / "data");
   std::string resumed_run; Json reserved;
   {
@@ -348,6 +425,46 @@ void boundary_tests(const fs::path& folder) {
     for(const auto& event : captured["events"].items()) check(!event.has("loop_id"), "activity must not imply a loop iteration");
     check(client.invoke("run.status").str("evaluation_status") == "completed", "neutral data reaches evaluation and memory");
 
+    {
+      start("L0", "mapped-failure-isolation");
+      auto failed = begin("action", "read", Json{{"path", "missing.txt"}});
+      auto sibling = begin("action", "lookup", Json{{"q", "independent"}});
+      auto observed = observation;
+      observed["context"] = Json{{"run_id", client.run}, {"activity_id", failed["activity_id"]}};
+      observed["output"] = "{\"status\":\"blocked\",\"error\":\"fixture restriction\"}";
+      client.invoke("activity.end", point_request(observed, c));
+      check(!client.invoke("run.status").flag("closed", false), "mapped failure does not end concurrent sibling");
+      finish(sibling); close(); captured = trace("mapped-failure-isolation");
+      bool mapped_failure = false, healthy_sibling = false;
+      for(const auto& event : captured["events"].items()) {
+        if(event.str("kind") != "action.end") continue;
+        mapped_failure |= event.str("status") == "failed" && event["error"].str("code") == "policy_blocked"
+            && event["error"].str("retryability") == "non_retryable" && event["output"].dump() == observed["output"].dump();
+        healthy_sibling |= event.str("status") == "completed";
+      }
+      check(mapped_failure && healthy_sibling && captured["events"].items().back()["outcome"].str("execution_status") == "completed",
+          "configured failure is captured without changing run execution status");
+    }
+
+    {
+      start("L0", "mapped-model-failure-isolation");
+      auto failed = begin("model", "provider", "question");
+      auto sibling = begin("action", "lookup", Json{{"q", "independent"}});
+      auto observed = observation; observed["kind"] = "model"; observed["actual_input"] = "question";
+      observed["context"] = Json{{"run_id", client.run}, {"activity_id", failed["activity_id"]}};
+      observed["output"] = Json{{"error", "provider timeout"}};
+      client.invoke("activity.end", point_request(observed, c));
+      check(!client.invoke("run.status").flag("closed", false), "mapped model failure leaves sibling running");
+      finish(sibling); close(); captured = trace("mapped-model-failure-isolation");
+      bool mapped_failure = false;
+      for(const auto& event : captured["events"].items())
+        mapped_failure |= event.str("kind") == "action.end" && event.str("status") == "failed"
+            && event["error"].str("code") == "model_error" && event["output"].dump() == observed["output"].dump();
+      check(mapped_failure && te::validate_trace(proto<v1::TraceRun>(captured)).report.trace_valid()
+          && captured["events"].items().back()["outcome"].str("execution_status") == "completed",
+          "model failure is captured without changing workflow completion");
+    }
+
     start("L1", "neutral-bindings");
     auto messages = begin("vendor.generate", "chat", Json{{"messages", Json::Array{Json{{"role", "user"}, {"content", "素材"}}}}},
       Json{{"binding", Json{{"pointer", "/messages"}, {"mode", "system_message"}}}, {"actor_id", "dynamic-worker-17"}});
@@ -366,6 +483,73 @@ void boundary_tests(const fs::path& folder) {
     close(); captured = trace("neutral-bindings");
     auto report = te::analyze_trace(te::validate_trace(proto<v1::TraceRun>(captured)));
     check(!report.episodes.empty() && report.episodes[0].actor_id == "my-agent/actor:assistant", "dynamic actor metadata does not change memory scope");
+
+    {
+      const auto opened = client.invoke("run.begin", Json{{"input", "库存查询"}, {"level", "L1"},
+        {"capabilities", Json::Array{"model", "actions"}}, {"conversation_id", "current-request-state"}});
+      client.run = opened.str("run_id");
+      const Json binding{{"pointer", "/body/m~1n~0/0/messages"}, {"mode", "system_message"}};
+      const Json instructions = Json::Array{
+        Json{{"role", "system"}, {"content", std::string(20000, 's') + "STATIC_ONLY 视频生成缺少素材"}},
+        Json{{"role", "developer"}, {"content", "DEVELOPER_ONLY 视频生成缺少素材"}},
+        Json{{"role", 7}, {"content", "普通说明"}}, Json{{"role", "user"}, {"content", "库存查询"}}};
+      auto payload = [&](Json messages) {
+        return Json{{"body", Json{{"m/n~", Json::Array{Json{{"messages", messages}}}}}},
+          {"tools", std::string(20000, 't') + "SCHEMA_ONLY 视频生成缺少素材"}};
+      };
+      auto current = instructions;
+      current.push(Json{{"role", "assistant"}, {"content", std::string(20000, 'x')}});
+      current.push(Json{{"role", "tool"}, {"content", "视频生成缺少素材"}});
+      const auto original = payload(current);
+      auto prepared = begin("model", "chat", original, Json{{"binding", binding}});
+      check(prepared["input"].dump().find("先补充图片") != std::string::npos,
+            "current tool result must trigger advice without an extra state field");
+      // The sibling has no failure, even while the first activity is still open.
+      auto sibling = begin("model", "chat", payload(instructions), Json{{"binding", binding}});
+      check(sibling["input"].dump() == payload(instructions).dump(),
+            "system/developer/schema text and a sibling state must not trigger advice");
+      finish(sibling); finish(prepared);
+      for(const auto& state : std::vector<Json>{"", Json::Object{}, false}) {
+        auto explicit_state = begin("model", "chat", original, Json{{"binding", binding}, {"state", state}});
+        check(explicit_state["input"].dump() == original.dump(), "explicit empty state remains authoritative");
+        finish(explicit_state);
+      }
+      auto implicit_state = begin("model", "chat", original, Json{{"binding", binding}, {"state", nullptr}});
+      check(implicit_state["input"].dump().find("先补充图片") != std::string::npos, "null state uses the current request");
+      finish(implicit_state);
+      auto observed_only = begin("model", "chat", original, Json{{"binding", binding}, {"apply_policy", false}});
+      check(observed_only["input"].dump() == original.dump(), "observation-only input remains untouched"); finish(observed_only);
+      auto missing = payload(Json::Array{}); missing["body"]["m/n~"].items()[0].fields().erase("messages");
+      auto absent_messages = begin("model", "chat", missing, Json{{"binding", binding}});
+      check(absent_messages["input"].dump() == missing.dump(), "missing messages do not select advice from tool schemas"); finish(absent_messages);
+      auto alias = begin("vendor.generate", "chat", Json{{"messages", Json::Array{Json{{"role", "tool"}, {"content", "视频生成缺少素材"}}}}},
+        Json{{"binding", Json{{"pointer", "/messages"}, {"mode", "system_message"}}}});
+      check(alias["input"].dump().find("先补充图片") != std::string::npos, "configured model aliases use the same default state"); finish(alias);
+      auto explicit_match = begin("model", "chat", payload(instructions), Json{{"binding", binding}, {"state", "视频生成缺少素材"}});
+      check(explicit_match["input"].dump().find("先补充图片") != std::string::npos, "explicit state overrides the neutral request"); finish(explicit_match);
+      auto native = begin("model", "text-api", "视频生成缺少素材",
+        Json{{"binding", Json{{"pointer", ""}, {"mode", "text"}}}});
+      check(native["input"].text().find("先补充图片") != std::string::npos, "bare text request supplies retrieval context"); finish(native);
+      auto action = begin("action", "lookup", Json{{"current", "available"}}); finish(action);
+      close(); captured = trace("current-request-state");
+      unsigned queries = 0; bool original_preserved = false, action_state = false;
+      for(const auto& event : captured["events"].items()) {
+        if(event.str("kind") == "step.start" && event.str("step_id") == "step-" + prepared.str("activity_id"))
+          original_preserved = event["input"].dump() == original.dump();
+        if(event["attributes"].str("type") != "policy.query") continue;
+        const auto& query = event["attributes"]["decision"]["query"];
+        const auto state = query["advice_query"].str("state"); ++queries;
+        if(event.str("step_id") == "step-" + prepared.str("activity_id")) {
+          check(state.size() <= 8192 && state.find("视频生成缺少素材") != std::string::npos,
+                "bounded retrieval keeps the latest tool result");
+          check(state.find("STATIC_ONLY") == std::string::npos && state.find("DEVELOPER_ONLY") == std::string::npos
+              && state.find("SCHEMA_ONLY") == std::string::npos, "retrieval excludes static instructions and schemas");
+        }
+        if(query.str("boundary") == "actions") action_state = state.find("available") != std::string::npos;
+      }
+      check(queries == 11 && original_preserved && action_state, "default state retains trace and per-call query semantics");
+      check(client.invoke("run.status")["receipts"].num("failed", 0) == 0, "retrieval default preserves injection receipts");
+    }
 
     start("L3", "neutral-loop");
     auto loop = [&](const std::string& id = "react-main") {
@@ -388,6 +572,78 @@ void boundary_tests(const fs::path& folder) {
     check(blocked.str("decision") == "reject" && allowed.str("decision") == "allow", "L2 rejects individual action only");
     finish(allowed); finish(blocked, "cancelled", false); close(); trace("neutral-loop");
     check(client.invoke("run.status")["receipts"].num("failed", 0) == 0, "native model/action/loop receipt consistent");
+
+    {
+      start("L0", "neutral-event-loop");
+      const auto left = loop("left"), right = loop("right"); commit(left); commit(right);
+      const auto action = begin("action", "lookup", nullptr, Json{{"control_id", right["control_id"]}});
+      Json event{{"request_id", "point-event-context"}, {"phase", "event"}, {"kind", "custom"}, {"name", "dispatch.result"},
+        {"input", Json{{"status", "invalid_arguments"}, {"error", "empty dispatch"}}},
+        {"context", Json{{"run_id", client.run}, {"control_id", left["control_id"]}}}};
+      auto packet = point_request(event, c);
+      check(packet["control_id"].dump() == left["control_id"].dump(), "event point retains explicit loop context");
+      packet["request_id"] = "same-loop-event";
+      const auto observed = client.invoke("event.record", packet);
+      check(client.invoke("event.record", packet).dump() == observed.dump(), "event retry is idempotent");
+      event["context"]["activity_id"] = action["activity_id"];
+      packet = point_request(event, c);
+      check(packet.has("activity_id") && !packet.has("control_id"), "activity context takes priority for event points");
+      client.invoke("event.record", packet);
+      client.invoke("event.record", Json{{"type", "bad"}, {"data", nullptr}, {"control_id", "missing"}}, 404);
+      client.invoke("event.record", Json{{"type", "bad"}, {"data", nullptr}, {"control_id", left["control_id"]},
+        {"activity_id", action["activity_id"]}}, 400);
+      client.invoke("event.record", Json{{"type", "run.note"}, {"data", "unscoped observation"}});
+      finish(action); close(); captured = trace("neutral-event-loop");
+      unsigned left_events = 0, right_events = 0, unscoped = 0;
+      for(const auto& recorded : captured["events"].items()) {
+        if(recorded.str("kind") != "custom") continue;
+        if(recorded["attributes"].str("event_type") == "run.note") {
+          check(!recorded.has("loop_id"), "unscoped event does not invent loop context"); ++unscoped;
+        } else {
+          check(recorded.str("iteration") == "1", "custom result stays in its original iteration");
+          left_events += recorded.str("loop_id") == "left";
+          right_events += recorded.str("loop_id") == "right";
+        }
+      }
+      check(left_events == 1 && right_events == 1 && unscoped == 1, "parallel loop event contexts stay distinct");
+      start("L0", "neutral-event-cross-run");
+      client.invoke("event.record", Json{{"type", "bad"}, {"data", nullptr}, {"control_id", left["control_id"]}}, 404);
+      close(); trace("neutral-event-cross-run");
+    }
+
+    {
+      auto point = [&](Json fields) {
+        fields["operation"] = "point";
+        fields["request_id"] = "point-fixture-" + std::to_string(++client.sequence);
+        const auto response = service.call(token_a, fields.dump());
+        check(response.status == 200, "reference event point: " + response.body);
+        const auto result = Json::parse(response.body)["result"];
+        check(!result.flag("degraded", false), "reference event capture: " + result.str("reason"));
+        return result;
+      };
+      const Json ref{{"run", "reference-event-run"}};
+      const auto opened = point(Json{{"phase", "before"}, {"kind", "run"}, {"ref", ref},
+        {"input", "task"}, {"level", "L0"}, {"conversation_id", "neutral-reference-event"}});
+      client.run = opened["context"].str("run_id");
+      auto current = [&](const std::string& key) { auto value = ref; value["key"] = key; return value; };
+      point(Json{{"phase", "guard"}, {"kind", "loop"}, {"ref", current("round-1")},
+        {"loop_id", "dispatch"}, {"actor_id", "planner"}, {"state", "ready"}});
+      point(Json{{"phase", "before"}, {"kind", "model"}, {"ref", current("model")}, {"input", "original"}});
+      point(Json{{"phase", "after"}, {"kind", "model"}, {"ref", current("model")},
+        {"actual_input", "original"}, {"executed", true}, {"output", "dispatch requested"}});
+      point(Json{{"phase", "event"}, {"kind", "custom"}, {"name", "dispatch.result"}, {"ref", current("result")},
+        {"input", Json{{"status", "invalid_arguments"}, {"error", "empty dispatch"}}}});
+      point(Json{{"phase", "guard"}, {"kind", "loop"}, {"ref", current("round-2")},
+        {"loop_id", "dispatch"}, {"actor_id", "planner"}, {"state", "error received"}});
+      point(Json{{"phase", "after"}, {"kind", "run"}, {"ref", ref}, {"output", "done"}});
+      captured = trace("neutral-reference-event"); unsigned results = 0;
+      for(const auto& event : captured["events"].items()) if(event.str("kind") == "custom") {
+        check(event.str("loop_id") == "dispatch" && event.str("iteration") == "1" && event.str("actor_id") == "planner",
+            "one result point inherits its loop without host-managed control IDs");
+        check(event["attributes"]["data"].str("status") == "invalid_arguments", "original result data retained"); ++results;
+      }
+      check(results == 1, "one logical result produces one custom event");
+    }
 
     start("L3", "neutral-replan-observations");
     first = loop(); commit(first); second = loop(); commit(second);
@@ -459,6 +715,25 @@ void boundary_tests(const fs::path& folder) {
     client.invoke("event.record", Json{{"type", "advice.applied"}, {"data", Json{{"status", "applied"}}}});
     check(client.invoke("run.status")["receipts"].fields().empty(), "extension cannot forge core receipt");
     client.invoke("capture.gap", Json{{"reason", "privacy_rejected"}}); close();
+
+    auto diagnostic = Json::parse(service.call(token_a, Json{{"operation", "point"}, {"request_id", "diagnostic-open"},
+        {"phase", "before"}, {"kind", "run"}, {"level", "L0"}, {"conversation_id", "gap-diagnostic"}, {"input", "task"}}.dump()).body)["result"];
+    auto failed_point = Json::parse(service.call(token_a, Json{{"operation", "point"}, {"request_id", "diagnostic-fail"},
+        {"phase", "before"}, {"kind", "custom"}, {"context", diagnostic["context"]},
+        {"input", Json{{"api_key", "never-persist-diagnostic-value"}}}}.dump()).body)["result"];
+    check(failed_point.flag("degraded", false) && failed_point.str("reason") == "sensitive_field_rejected",
+        "point failure preserves a safe diagnostic code");
+    client.run = diagnostic.str("run_id");
+    client.invoke("capture.gap", Json{{"reason", "missing_boundary"}, {"error_code", "unsafe code\ntext"}}, 400);
+    client.invoke("capture.gap", Json{{"reason", "missing_boundary"}, {"error_code", token_a}}, 400);
+    close();
+    service.process_evaluations();
+    const auto diagnostic_trace = read(folder / "data/by-user/user-a/quarantine/gap-diagnostic" / (client.run + ".trace.json"));
+    bool has_code = false;
+    for(const auto& event : diagnostic_trace["events"].items())
+      has_code |= event["attributes"].str("error_code") == "sensitive_field_rejected";
+    check(has_code && diagnostic_trace.dump().find("never-persist-diagnostic-value") == std::string::npos,
+        "capture gap retains the rejection cause but no private payload");
 
     auto minimal = client.invoke("run.begin", Json{{"input", "non-chat task"}}); client.run = minimal.str("run_id");
     auto request = Json{{"kind", "action"}, {"name", "queue-consumer"}, {"input", nullptr}, {"request_id", "durable-reservation"}};

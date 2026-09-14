@@ -28,6 +28,8 @@ int run_task_evaluation_cli(int argc, char** argv) {
     if(argc == 4 && std::string(argv[3]) == "--help") {
       std::cout << "trajectory_evolution dataset run DATASET --config evaluation.json --output-root NEW_DIR\n"
                    "  [--model-config runtime.json] [--allow-unreviewed]\n"
+                   "  [--regrade-report PREVIOUS_REPORT] (model judgment only; no Agent execution)\n"
+                   "  [--recheck] (with --regrade-report: also recheck configured rules on saved evidence)\n"
                    "Offline only; configured host commands execute with your permissions.\n"
                    "Exit 0: all passed; 1: task failures; 3: incomplete grading; 2: invalid configuration.\n";
       return 0;
@@ -40,10 +42,12 @@ int run_task_evaluation_cli(int argc, char** argv) {
       if(!arg.empty() && arg[0] != '-' && dataset.empty()) { dataset = arg; continue; }
       require(seen.insert(arg).second, "evaluation_duplicate_argument");
       if(arg == "--allow-unreviewed") options.allow_unreviewed = true;
-      else if(arg == "--config" || arg == "--output-root" || arg == "--model-config") {
+      else if(arg == "--recheck") options.recheck = true;
+      else if(arg == "--config" || arg == "--output-root" || arg == "--model-config" || arg == "--regrade-report") {
         require(++i < argc, "evaluation_missing_argument");
         if(arg == "--config") config = argv[i];
         else if(arg == "--output-root") output = argv[i];
+        else if(arg == "--regrade-report") options.regrade_report = argv[i];
         else options.model_config = argv[i];
       } else throw Error("evaluation_argument_invalid");
     }

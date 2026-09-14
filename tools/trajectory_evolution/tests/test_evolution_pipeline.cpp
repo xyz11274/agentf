@@ -1,4 +1,5 @@
 #include "agentflow/trajectory/evolution_pipeline.h"
+#include <google/protobuf/struct.pb.h>
 #include "agentflow/trajectory/experience.h"
 
 #include <chrono>
@@ -121,6 +122,11 @@ class MetaAdapter final : public trajectory::ModelAdapter {
        == std::string::npos) {
       throw std::runtime_error("meta fixture did not receive the seed whitelist");
     }
+    for(const std::string field : {"\"target_type\":", "\"target_scope\":"}) {
+      const auto first = request.user_prompt.find(field);
+      if(first == std::string::npos || request.user_prompt.find(field, first + field.size()) != std::string::npos)
+        throw std::runtime_error("meta fixture target context must be transmitted once");
+    }
     std::vector<std::string> seed_ids;
     const std::regex pattern(R"REGEX("seed_id":"([^"]+)")REGEX");
     for(std::sregex_iterator iterator(
@@ -151,8 +157,11 @@ class MetaAdapter final : public trajectory::ModelAdapter {
           "\"observed_problem\":\"失败后缺少统一的停止约束。\","
           "\"proposed_change\":\"" + proposal_ + "\","
           "\"expected_benefit\":\"减少无效循环并保留可恢复错误的正常重试。\","
-          "\"confidence\":0.93,\"evidence_event_ids\":[\""
-        + request.allowed_event_ids.front() + "\"]}]}";
+          "\"confidence\":0.93"
+        + (evidence_json.empty() ? "" : ",\"evidence_event_ids\":" + evidence_json)
+        + "}]}";
+    response.error_code = error_code;
+    if(fenced) response.body = " \r\n```json\r\n" + response.body + "\r\n```\t";
     return response;
   }
 
@@ -165,6 +174,9 @@ class MetaAdapter final : public trajectory::ModelAdapter {
   }
 
   std::string proposal_;
+  std::string error_code;
+  std::string evidence_json;
+  bool fenced = false;
   int calls = 0;
 };
 
@@ -215,6 +227,8 @@ class MemoryMatchAdapter final : public trajectory::ModelAdapter {
         "{\"relation\":\"" + relation_ + "\",\"memory_id\":\""
         + memory_id + "\",\"confidence\":" + std::to_string(confidence_)
         + ",\"reason\":\"两个候选的适用范围相同，按测试关系处理。\"}";
+    if(fenced) response.body = "```\n" + response.body + "\n```";
+    response.error_code = error_code;
     return response;
   }
 
@@ -227,9 +241,11 @@ class MemoryMatchAdapter final : public trajectory::ModelAdapter {
   }
 
   std::string relation_;
+  std::string error_code;
   std::function<void()> on_first_call_;
   double confidence_ = 0.0;
   bool valid_json_ = true;
+  bool fenced = false;
   int calls = 0;
 };
 
@@ -422,8 +438,10 @@ void test_batch_identity_includes_evaluation_result() {
       "changed evaluation result must produce a new batch identity");
 }
 
-void test_meta_reflection_merges_validated_seeds() {
+void test_meta_reflection_merges_validated_seeds(bool fenced = false, const std::string& error = {}) {
   auto adapter = std::make_shared<MetaAdapter>();
+  adapter->fenced = fenced;
+  adapter->error_code = error;
   trajectory::EvolutionOptions options;
   options.enable_meta_reflection = true;
   trajectory::TrajectoryEvolutionPipeline pipeline({}, options, adapter);
@@ -435,6 +453,15 @@ void test_meta_reflection_merges_validated_seeds() {
       "注入经验：确定性失败后应重新规划，不能继续调用。" );
   const auto output = pipeline.synthesize_reports({first, second});
   expect(adapter->calls == 1, "meta reflection must use one model call");
+  if(!error.empty()) {
+    expect(output.report.meta_reflection().status() == ep::MODEL_CALL_STATUS_INVALID_RESPONSE
+        && output.report.meta_reflection().error_code() == error
+        && output.report.candidates_size() == 2,
+        "provider error must preserve seeds without applying the partial merge");
+    for(const auto& seed : output.report.candidates())
+      expect(!seed.meta_reflection_applied(), "errored meta response applied to a seed");
+    return;
+  }
   expect(
       output.report.meta_reflection().status()
           == ep::MODEL_CALL_STATUS_SUCCEEDED,
@@ -450,6 +477,27 @@ void test_meta_reflection_merges_validated_seeds() {
   expect(
       output.report.candidates(0).source_seed_ids_size() == 2,
       "meta source seed IDs are incomplete");
+  expect(output.report.candidates(0).support_evidence_size() == 2,
+      "selected seed evidence must be inherited without model citations");
+  expect(output.model_requests.front().user_prompt.find("\"evidence_event_ids\"") == std::string::npos,
+      "redundant event citations must not enter the model request");
+  if(!fenced) {
+    adapter->evidence_json = "[\"event-episode-a\"]";
+    const auto legacy = pipeline.synthesize_reports({first, second});
+    expect(legacy.report.meta_reflection().status() == ep::MODEL_CALL_STATUS_SUCCEEDED
+        && legacy.report.candidates(0).SerializeAsString() == output.report.candidates(0).SerializeAsString(),
+        "legacy subset citations must retain the same selected-seed evidence");
+    adapter->evidence_json = "[\"unknown-event\"]";
+    const auto unknown = pipeline.synthesize_reports({first, second});
+    expect(unknown.report.meta_reflection().status() == ep::MODEL_CALL_STATUS_INVALID_RESPONSE
+        && unknown.report.meta_reflection().error_code() == "unknown_evidence_event_id",
+        "optional legacy citations must not bypass evidence validation");
+    adapter->evidence_json = "[]";
+    const auto empty = pipeline.synthesize_reports({first, second});
+    expect(empty.report.meta_reflection().status() == ep::MODEL_CALL_STATUS_INVALID_RESPONSE
+        && empty.report.meta_reflection().error_code() == "invalid_candidate_group",
+        "explicit empty legacy citations must remain invalid");
+  }
 }
 
 void test_meta_reflection_isolates_compatibility_groups() {
@@ -735,7 +783,7 @@ void test_default_memory_curation_is_conservative() {
       "default curation did not record its conservative decision");
 }
 
-void test_memory_curator_merges_semantic_duplicate() {
+void test_memory_curator_merges_semantic_duplicate(bool fenced = false) {
   const auto first = make_prompt_batch(
       "duplicate-a", "网络超时后减少重复调用并重新规划。" );
   const auto second = make_prompt_batch(
@@ -752,6 +800,7 @@ void test_memory_curator_merges_semantic_duplicate() {
       initial.entries(0).candidate().candidate_id();
 
   auto adapter = std::make_shared<MemoryMatchAdapter>("DUPLICATE");
+  adapter->fenced = fenced;
   trajectory::EvolutionOptions options;
   trajectory::TrajectoryEvolutionPipeline curator({}, options, adapter);
   auto output = curator.curate_memory_file(
@@ -841,7 +890,7 @@ void test_memory_curator_records_related_entries() {
       "compact relations do not link back to the batch decision");
 }
 
-void test_memory_curator_model_failure_does_not_merge() {
+void test_memory_curator_model_failure_does_not_merge(const std::string& error = {}) {
   const auto first = make_prompt_batch(
       "failure-a", "网络超时后减少重复调用并重新规划。" );
   const auto second = make_prompt_batch(
@@ -851,7 +900,8 @@ void test_memory_curator_model_failure_does_not_merge() {
   trajectory::TrajectoryEvolutionPipeline::update_memory_file(
       first, protobuf_path);
 
-  auto adapter = std::make_shared<MemoryMatchAdapter>("DUPLICATE", 0.95, false);
+  auto adapter = std::make_shared<MemoryMatchAdapter>("DUPLICATE", 0.95, !error.empty());
+  adapter->error_code = error;
   trajectory::EvolutionOptions options;
   options.enable_memory_semantic_matching = true;
   trajectory::TrajectoryEvolutionPipeline curator({}, options, adapter);
@@ -862,7 +912,7 @@ void test_memory_curator_model_failure_does_not_merge() {
               == ep::MEMORY_UPDATE_ACTION_INSERTED
           && output.result.decisions(0).relation()
               == ep::MEMORY_MATCH_RELATION_UNRESOLVED
-          && output.result.decisions(0).error_code() == "invalid_json",
+          && output.result.decisions(0).error_code() == (error.empty() ? "invalid_json" : error),
       "invalid model output was not handled conservatively");
   const auto memory = trajectory::TrajectoryEvolutionPipeline::load_memory(
       protobuf_path);
@@ -1146,6 +1196,64 @@ void test_full_curation_defers_without_required_resources() {
           && no_budget_output.result.pending_new_entry_count() == 2
           && adapter->calls == 0,
       "insufficient full-store budget consumed a partial review");
+}
+
+void test_memory_rate_limit_stops_the_batch(
+    bool during_incremental, bool concurrent_update = false) {
+  const auto first = make_prompt_batch(
+      "rate-a", "网络超时后减少重复调用并重新规划。" );
+  const auto second = make_prompt_batch(
+      "rate-b", "网络读取超时后停止当前工具并切换备用路径。" );
+  auto incoming = make_prompt_batch(
+      "rate-c", during_incremental
+          ? "连接失败时先检查状态，再决定是否使用离线方案。"
+          : "网络超时后减少重复调用并重新规划。" );
+  if(during_incremental) {
+    const auto extra = make_prompt_batch(
+        "rate-d", "离线方案不可用时向用户说明阻塞原因。" );
+    incoming.add_candidates()->CopyFrom(extra.candidates(0));
+  }
+  ep::EvolutionMemoryStore seeded;
+  (void)trajectory::TrajectoryEvolutionPipeline::merge_memory(first, &seeded);
+  (void)trajectory::TrajectoryEvolutionPipeline::merge_memory(second, &seeded);
+  TempDirectory temporary;
+  const auto path = temporary.path() / "memory.pb";
+  trajectory::TrajectoryEvolutionPipeline::write_protobuf(seeded, path);
+  auto adapter = std::make_shared<MemoryMatchAdapter>(
+      "DISTINCT", 0.95, true, [path, concurrent_update]() {
+        if(!concurrent_update) return;
+        auto memory = trajectory::TrajectoryEvolutionPipeline::load_memory(path);
+        const auto extra = make_prompt_batch(
+            "rate-concurrent", "网络恢复后先确认原任务是否仍需继续。" );
+        (void)trajectory::TrajectoryEvolutionPipeline::merge_memory(extra, &memory);
+        trajectory::TrajectoryEvolutionPipeline::write_protobuf(memory, path);
+      });
+  adapter->error_code = "http_429";
+  trajectory::EvolutionOptions options;
+  options.full_curation_new_entry_threshold = 2;
+  trajectory::TrajectoryEvolutionPipeline curator({}, options, adapter);
+  const auto output = curator.curate_memory_file(incoming, path);
+  const auto memory = trajectory::TrajectoryEvolutionPipeline::load_memory(path);
+  expect(adapter->calls == 1 && output.result.model_requested_count() == 1
+          && output.result.model_failed_count() == 1
+          && output.model_requests.size() == 1,
+      "memory rate limit did not stop subsequent model requests");
+  expect(output.result.applied() && !output.result.full_curation_completed()
+          && output.result.full_curation_error_code() == "http_429"
+          && output.result.concurrency_retry_count() == (concurrent_update ? 1 : 0),
+      "memory rate limit lost the committed update or pending review status");
+  expect(memory.entries_size() == 2 + (during_incremental ? 2 : 0)
+              + (concurrent_update ? 1 : 0)
+          && memory.new_entries_since_full_curation() >= 2,
+      "rate-limited curation removed memories or cleared pending work");
+  adapter->error_code.clear();
+  const auto next = make_prompt_batch(
+      "rate-next", "网络超时后减少重复调用并重新规划。" );
+  const auto recovered = curator.curate_memory_file(next, path);
+  expect(recovered.result.full_curation_completed()
+          && recovered.result.model_requested_count() > 0
+          && recovered.result.pending_new_entry_count() == 0,
+      "rate limit incorrectly prevented a later batch from resuming curation");
 }
 
 void test_memory_capacity_bounds_working_set_and_replay_window() {
@@ -1463,11 +1571,31 @@ void test_file_failure_does_not_abort_batch() {
 
 int main() {
   try {
+    google::protobuf::Value safe_url;
+    safe_url.set_string_value("https://example.invalid/image.png?sig=<redacted:credential_field>");
+    trajectory::ensure_safe_evolution_data(safe_url);
+    for(const auto& value : {"https://example.invalid/image.png?sig=<redacted:credential_field>\n\n如需进一步调整，请告诉我。",
+                            R"({"output":"https://example.invalid/image.png?sig=<redacted:credential_field>\n\n如需进一步调整，请告诉我。"})"}) {
+      safe_url.set_string_value(value);
+      trajectory::ensure_safe_evolution_data(safe_url);
+    }
+    for(const auto& value : {"https://example.invalid/?sig=<redacted:credential_field>actual-private-signature",
+                            "https://example.invalid/?sig=<redacted:actual-private-signature>",
+                            "https://example.invalid/?sig=<redacted:credential_field>&token=actual-private-signature",
+                            R"({"output":"\u0061\u0072\u006b-aaaaaaaaaaaaaaaaaaaaaaaa"})"}) {
+      safe_url.set_string_value(value);
+      bool rejected = false;
+      try { trajectory::ensure_safe_evolution_data(safe_url); } catch(const trajectory::EvaluationError&) { rejected = true; }
+      expect(rejected, "credential hidden beside a redaction placeholder was accepted");
+    }
     test_cross_dialogue_gate_and_contradiction();
     test_composite_source_identity_has_boundaries();
     test_invalid_trace_is_quarantined();
     test_batch_identity_includes_evaluation_result();
     test_meta_reflection_merges_validated_seeds();
+    test_meta_reflection_merges_validated_seeds(true);
+    test_meta_reflection_merges_validated_seeds(false, "output_token_limit_reached");
+    test_meta_reflection_merges_validated_seeds(true, "invalid_api_response");
     test_meta_reflection_isolates_compatibility_groups();
     test_scoped_and_legacy_experiences_remain_separate();
     test_batch_identity_includes_meta_reflection_result();
@@ -1475,12 +1603,18 @@ int main() {
     test_memory_file_replay_recovers_json_view();
     test_default_memory_curation_is_conservative();
     test_memory_curator_merges_semantic_duplicate();
+    test_memory_curator_merges_semantic_duplicate(true);
     test_memory_curator_records_related_entries();
     test_conflict_relation_survives_later_related_review();
     test_full_curation_runs_after_retained_threshold();
     test_failed_full_curation_keeps_pending_work();
     test_memory_curator_model_failure_does_not_merge();
+    test_memory_curator_model_failure_does_not_merge("output_token_limit_reached");
+    test_memory_curator_model_failure_does_not_merge("invalid_api_response");
     test_full_curation_defers_without_required_resources();
+    test_memory_rate_limit_stops_the_batch(false);
+    test_memory_rate_limit_stops_the_batch(true);
+    test_memory_rate_limit_stops_the_batch(true, true);
     test_memory_capacity_bounds_working_set_and_replay_window();
     test_idempotent_replay_applies_capacity_migration();
     test_memory_capacity_preserves_validated_memory();

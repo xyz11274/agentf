@@ -4,6 +4,7 @@
 #include "instrumentation.h"
 #include "local_support.h"
 #include "agent_evaluation_support.h"
+#include "../clients/c/evolution.h"
 
 #include <atomic>
 #include <chrono>
@@ -61,6 +62,10 @@ std::shared_ptr<IntegrationService> backend(const std::filesystem::path& path) {
 bool isolated_trial() {
   return std::getenv("TRAJECTORY_EVOLUTION_TRIAL_CONFIG") && std::getenv("TRAJECTORY_EVOLUTION_TRIAL_TOKEN");
 }
+bool entry_trial() {
+  const auto* mode = std::getenv("TRAJECTORY_EVOLUTION_EVALUATION_ENTRY");
+  return mode && std::string(mode) == "1" && isolated_trial() && std::getenv("TRAJECTORY_EVOLUTION_TRIAL_URL");
+}
 enum Phase { free_slot, active, closed, writing, persisted };
 struct CaptureLosses {
   const std::string run_id;
@@ -109,13 +114,20 @@ struct LocalRuntime::Impl {
   std::atomic<std::size_t> memory_refreshes{0};
 
   Impl(const std::filesystem::path& path, std::string bearer, LocalRuntimeOptions limits)
-      : options(limits), service(backend(isolated_trial() ? std::filesystem::path(std::getenv("TRAJECTORY_EVOLUTION_TRIAL_CONFIG")) : path)),
+      : options(limits), service(entry_trial() ? nullptr : backend(isolated_trial() ? std::filesystem::path(std::getenv("TRAJECTORY_EVOLUTION_TRIAL_CONFIG")) : path)),
         token(isolated_trial() ? std::getenv("TRAJECTORY_EVOLUTION_TRIAL_TOKEN") : std::move(bearer)) {
     require(options.max_request_bytes >= 1024 && options.max_request_bytes <= 1048576
         && options.max_buffer_bytes >= 1048576 && options.max_buffer_bytes <= 1073741824
         && options.max_pending_runs > 0 && options.max_pending_runs <= 1024
         && options.poll_interval_ms >= 1 && options.poll_interval_ms <= 1000
         && options.contention_budget_us <= 10000, "local_limits_invalid");
+    if(!service) {
+      // Only isolated trials use this transport. Production remains in-process.
+      config["trial_url"] = std::getenv("TRAJECTORY_EVOLUTION_TRIAL_URL");
+      static std::once_flag initialized;
+      std::call_once(initialized, [] { require(te_initialize() == 0, "transport_initialization_failed"); });
+      return;
+    }
     const auto env = Json::parse(service->local_environment(token));
     config = env["config"]; user = env.str("user_id");
     options.max_request_bytes = std::min(options.max_request_bytes, config.num("max_request_bytes", 1048576));
@@ -131,6 +143,17 @@ struct LocalRuntime::Impl {
     for(unsigned i = 0; i < 4 && current + bytes <= options.max_buffer_bytes; ++i)
       if(buffer_bytes.compare_exchange_weak(current, current + bytes)) return true;
     return false;
+  }
+  IntegrationResponse trial_invoke(const std::string& request) {
+    require(::getpid() == owner_pid && request.size() <= options.max_request_bytes, "local_request_invalid");
+    require(enabled, "local_disabled");
+    const auto url = config.str("trial_url");
+    te_client client{url.c_str(), token.c_str(), 5000, 2097152, 0};
+    char* bytes = nullptr; long status = 0; const char* code = nullptr;
+    const auto error = te_invoke(&client, request.c_str(), &bytes, &status, &code);
+    std::unique_ptr<char, decltype(&te_free)> owned(bytes, &te_free);
+    if(error || !bytes) return {503, R"({"ok":false,"error":"evaluation_capture_unavailable"})"};
+    return {static_cast<int>(status), bytes};
   }
   std::string scope(const std::string& name) const { return "agent:" + component(config.str("agent_id")) + "/actor:" + component(name); }
   IntegrationResponse fallback(const Json& request, const std::string& reason, Slot* slot = nullptr) {
@@ -255,6 +278,11 @@ struct LocalRuntime::Impl {
           if(slot.phase != free_slot && slot.phase != persisted) continue;
           std::unique_lock<std::timed_mutex> guard(slot.gate, std::try_to_lock);
           if(!guard.owns_lock() || (slot.phase != free_slot && slot.phase != persisted)) continue;
+          // Reclaim this completed slot's bounded replay cache before reserving
+          // a new run. Active or still-writing slots are never reclaimed here.
+          if(slot.phase == persisted) {
+            buffer_bytes -= slot.reserved; slot.reserved = 0; slot.state = Json();
+          }
           const auto cost = bytes.size() * 16 + 1048576;
           if(!reserve(cost)) return fallback(request, "local_buffer_full");
           char prefix[9]; std::snprintf(prefix, sizeof(prefix), "%08x", static_cast<unsigned>(i));
@@ -294,14 +322,14 @@ struct LocalRuntime::Impl {
       require(losses && losses->run_id == rid, "run_not_local");
       std::unique_lock<std::timed_mutex> guard(slot.gate, std::defer_lock);
       if(!guard.try_lock_for(std::chrono::microseconds(options.contention_budget_us))) {
-        if(op != "run.status" && op != "activity.status") ++losses->count;
+        if(slot.phase == active && op != "run.status" && op != "activity.status") ++losses->count;
         return fallback(request, "local_busy");
       }
       require(slot.phase != free_slot && slot.id == rid, "run_not_local");
-      if(referenced && slot.state["requests"].has(reference.str("request_id"))) {
-        const auto& previous = slot.state["requests"][reference.str("request_id")];
+      if((referenced || slot.phase != active) && slot.state["requests"].has(request.str("request_id"))) {
+        const auto& previous = slot.state["requests"][request.str("request_id")];
         if(previous.str("fingerprint") != hash(fingerprint_bytes))
-          return fallback(reference, "request_id_conflict", slot.phase == active ? &slot : nullptr);
+          return fallback(referenced ? reference : request, "request_id_conflict", slot.phase == active ? &slot : nullptr);
         return {200, Json{{"ok", true}, {"result", previous["response"]}}.dump_for_transport()};
       }
       if(op == "run.status") {
@@ -410,7 +438,9 @@ struct LocalRuntime::Impl {
         if(slot.phase != closed) continue;
         std::unique_lock<std::timed_mutex> guard(slot.gate, std::try_to_lock);
         if(!guard.owns_lock() || slot.inflight != 0 || slot.phase != closed) continue;
-        final = true; data = std::move(slot.state); slot.phase = writing;
+        auto receipts = slot.state["requests"];
+        final = true; data = std::move(slot.state);
+        slot.state = Json::Object{}; slot.state["requests"] = std::move(receipts); slot.phase = writing;
       }
       try {
         if(final && (slot.losses->count != 0 || slot.epoch != epoch.load())) {
@@ -426,10 +456,12 @@ struct LocalRuntime::Impl {
         require(response.status == 200, "local_persistence_failed");
         if(final) {
           const bool complete = !data.flag("incomplete", false);
+          const auto replay_bytes = data["requests"].dump().size() * 4 + 4096;
           Json retired; std::unique_ptr<PolicyRuntime> old_policy;
           {
             std::lock_guard<std::timed_mutex> guard(slot.gate);
-            slot.capture_complete = complete; buffer_bytes -= slot.reserved; slot.reserved = 0;
+            const auto retained = std::min(slot.reserved, replay_bytes);
+            slot.capture_complete = complete; buffer_bytes -= slot.reserved - retained; slot.reserved = retained;
             retired = std::move(slot.initial); old_policy = std::move(slot.policy); slot.phase = persisted; ++published;
           }
           service->wake_background();
@@ -485,6 +517,7 @@ struct LocalRuntime::Impl {
 
 LocalRuntime::LocalRuntime(const std::filesystem::path& path, const std::string& token, LocalRuntimeOptions options)
     : impl_(std::make_unique<Impl>(path, token, options)) {
+  if(!impl_->service) return;
   if(options.background) {
     impl_->writer = std::thread([this] {
       while(!impl_->stopping) {
@@ -504,6 +537,7 @@ LocalRuntime::LocalRuntime(const std::filesystem::path& path, const std::string&
   }
 }
 LocalRuntime::~LocalRuntime() {
+  if(!impl_->service) return;
   impl_->stopping = true;
   impl_->service->wake_background();
   if(impl_->writer.joinable()) impl_->writer.join();
@@ -517,6 +551,7 @@ LocalRuntime::~LocalRuntime() {
 }
 IntegrationResponse LocalRuntime::invoke(const std::string& request) noexcept {
   try {
+    if(!impl_->service) return impl_->trial_invoke(request);
     if(request.size() <= impl_->options.max_request_bytes) {
       integration::Json point;
       try { point = integration::Json::parse(request); }
@@ -560,9 +595,10 @@ IntegrationResponse LocalRuntime::invoke(const std::string& request) noexcept {
   }
   catch(...) { return {503, R"({"ok":false,"error":"local_unavailable"})"}; }
 }
-std::string LocalRuntime::metrics() const { return impl_->metrics(); }
+std::string LocalRuntime::metrics() const { return impl_->service ? impl_->metrics() : R"({"evaluation_remote":true})"; }
 IntegrationResponse LocalRuntime::manage(const std::string& request) noexcept {
   try {
+    if(!impl_->service) return impl_->trial_invoke(request);
     require(::getpid() == impl_->owner_pid, "local_process_changed");
     require(request.size() <= impl_->options.max_request_bytes, "local_request_too_large", 413);
     const auto message = Json::parse(request);
@@ -574,6 +610,6 @@ IntegrationResponse LocalRuntime::manage(const std::string& request) noexcept {
 void LocalRuntime::set_enabled(bool enabled) noexcept {
   if(impl_->enabled.exchange(enabled) != enabled) ++impl_->epoch;
 }
-void LocalRuntime::drain() { impl_->drain(); }
-void LocalRuntime::evaluate_pending() { impl_->evaluate(true); }
+void LocalRuntime::drain() { if(impl_->service) impl_->drain(); }
+void LocalRuntime::evaluate_pending() { if(impl_->service) impl_->evaluate(true); }
 }  // namespace trajectory::evolution

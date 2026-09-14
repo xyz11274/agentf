@@ -12,6 +12,15 @@ from evolution_configured import ConfiguredPoints, _LocalPoints, _private_payloa
 
 
 class ConfiguredPointsTests(unittest.TestCase):
+    def test_redacted_url_history_is_not_a_live_credential(self):
+        safe = "https://example.invalid/image.png?sig=<redacted:credential_field>"
+        self.assertFalse(_private_payload({"input": safe}))
+        for value in (safe + "actual-private-signature", safe + "&token=actual-private-signature",
+                      "https://example.invalid/?sig=<redacted:actual-private-signature>"):
+            self.assertTrue(_private_payload({"input": value}))
+        with patch.dict(os.environ, {"VENDOR_API_KEY": "<redacted:credential_field>"}):
+            self.assertTrue(_private_payload({"input": safe}))
+
     def test_disabled_keeps_original_call_and_identity(self):
         with patch.dict(os.environ, {"EVOLUTION_POINT_CONFIG": ""}):
             client = ConfiguredPoints()

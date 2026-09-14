@@ -15,6 +15,32 @@ public sealed class EvolutionError(string code, int status = 0) : Exception(code
 /// <summary>Native HTTP transport; all L0-L3 boundaries use the same InvokeAsync.</summary>
 public sealed class Evolution : IDisposable
 {
+    /// <summary>Bind an existing receiver; its acknowledgement does not finish a run.</summary>
+    public static async Task<bool> EvaluateAsync(Func<JsonNode?, Task> receive, CancellationToken cancellation = default)
+    {
+        if (Environment.GetEnvironmentVariable("TRAJECTORY_EVOLUTION_EVALUATION_ENTRY") != "1") return false;
+        using var client = new Evolution(Environment.GetEnvironmentVariable("TRAJECTORY_EVOLUTION_TRIAL_URL") ?? "",
+            Environment.GetEnvironmentVariable("TRAJECTORY_EVOLUTION_TRIAL_TOKEN") ?? "", 5000, 2097152, 0);
+        var consumer = Guid.NewGuid().ToString("N");
+        try
+        {
+            for (var index = 0; ;)
+            {
+                var packet = await client.InvokeAsync("evaluation.next", new JsonObject { ["consumer"] = consumer, ["index"] = index }, cancellation: cancellation);
+                var state = packet["state"]?.GetValue<string>();
+                if (state == "done") return true;
+                if (state == "waiting") { await Task.Delay(100, cancellation); continue; }
+                if (state != "input" || packet["index"]?.GetValue<int>() != index) throw new EvolutionError("evaluation_entry_failed");
+                await receive(packet["input"]);
+                ++index;
+            }
+        }
+        catch
+        {
+            try { await client.InvokeAsync("evaluation.fail", new JsonObject { ["consumer"] = consumer }); } catch { }
+            throw new EvolutionError("evaluation_entry_failed");
+        }
+    }
     private readonly Uri endpoint;
     private readonly string token;
     private readonly int timeoutMs, maxBytes, retries;

@@ -47,8 +47,9 @@ def boundary_schema():
     add("loop.check", dict(metadata, loop_id=identifier, state={}, apply_policy={"type": "boolean", "default": True}), ["loop_id", "state"])
     add("loop.commit", {"control_id": identifier, "decision": decision, "extensions": extensions, "caused_by": causes}, ["control_id", "decision"])
     add("loop.abort", {"control_id": identifier, "decision": decision, "extensions": extensions, "caused_by": causes}, ["control_id", "decision"])
-    add("event.record", {"type": identifier, "data": {}, "activity_id": identifier, "caused_by": causes,
+    add("event.record", {"type": identifier, "data": {}, "activity_id": identifier, "control_id": identifier, "caused_by": causes,
         "extensions": extensions}, ["type", "data"])
+    cases[-1]["not"] = {"required": ["activity_id", "control_id"]}
     for operation in ["run.end", "run.abort"]:
         outcome = {"enum": ["failed", "cancelled", "unknown"]} if operation.endswith("abort") else status
         add(operation, {"status": outcome, "business_status": {"enum": ["succeeded", "failed", "partial", "unknown"]},

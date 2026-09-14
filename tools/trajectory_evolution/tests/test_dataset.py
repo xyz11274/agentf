@@ -43,6 +43,8 @@ class Provider(http.server.BaseHTTPRequestHandler):
         if behavior == "short":
             cases = []
         text = "not-json" if behavior == "invalid" else json.dumps({"cases": cases}, ensure_ascii=False)
+        if behavior == "fenced":
+            text = "```json\r\n" + text + "\r\n```"
         response = {"choices": [{"finish_reason": "length" if behavior == "length" else "stop",
                                   "message": {"content": text}}]}
         body = json.dumps(response).encode()
@@ -267,6 +269,15 @@ class DatasetTests(unittest.TestCase):
             self.assertEqual(request["thinking"], {"type": "disabled"})
             self.assertEqual(request["max_tokens"], 8192)
             self.assertNotIn(FAKE_KEY, json.dumps(request))
+        self.cli("check", output)
+
+    def test_fenced_generation_keeps_the_review_gate(self):
+        self.synthetic()
+        Provider.behavior = "fenced"
+        output, summary = self.build()
+        self.assertEqual(summary["task_count"], 3)
+        self.assertEqual(summary["model_calls"], 2)
+        self.assertTrue(all(x["split"] == "train" and x["review_status"] == "pending" for x in tasks(output)))
         self.cli("check", output)
 
     def test_model_cannot_approve_or_choose_split(self):

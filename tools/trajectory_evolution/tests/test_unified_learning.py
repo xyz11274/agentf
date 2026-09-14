@@ -230,6 +230,25 @@ def rejection_and_recovery(root, logs):
     assert status["shared_quarantined_users"] == 0
 
 
+def training_does_not_vote_as_real_users(port):
+    root = fixture("training-evidence")
+    for user in ("user-a", "user-b"):
+        for n in range(2):
+            write(root / "input" / f"{user}-{n}.trace.json", trace(user, f"training-{user}-{n}"))
+    learn(root, root / "input")
+    for path in (root / "data/runs").glob("*.json"):
+        run = read(path)
+        run["training_source"] = {"kind": "baseline_training"}
+        write(path, run)
+    for user in ("user-a", "user-b"):
+        seed_verified_memory(root, user)
+    model_config(root, port)
+    before = Model.calls
+    learn(root)
+    assert Model.calls == before, "simulated users reached real-user public promotion"
+    assert not read(root / "data/memory/evolution-memory.json").get("experiences")
+
+
 def echo_and_legacy(port):
     root = fixture("echo-evidence")
     for user in ("user-a", "user-b"):
@@ -276,6 +295,7 @@ try:
     root, logs = import_and_share(MODEL.server_port)
     rejection_and_recovery(root, logs)
     echo_and_legacy(MODEL.server_port)
+    training_does_not_vote_as_real_users(MODEL.server_port)
     print("Unified learning passed: two users, offline/online, queue/restart/dedup, verified publication, scoped status, privacy and damaged-user isolation")
     print("fixtures=" + str(ROOT))
 finally:

@@ -7,6 +7,27 @@
     {
       "type": "object",
       "properties": {
+        "operation": {"const": "evaluation.next"},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "consumer": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"},
+        "index": {"type": "integer", "minimum": 0, "maximum": 1024}
+      },
+      "required": ["operation", "request_id", "consumer", "index"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {"const": "evaluation.fail"},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "consumer": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
+      },
+      "required": ["operation", "request_id", "consumer"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
         "operation": {
           "const": "task.begin"
         },
@@ -203,6 +224,10 @@
             "privacy_rejected",
             "missing_boundary"
           ]
+        },
+        "error_code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,95}$"
         }
       },
       "required": [

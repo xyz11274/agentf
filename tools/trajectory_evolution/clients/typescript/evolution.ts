@@ -13,6 +13,28 @@ export class EvolutionError extends Error {
   constructor(code: string, status = 0) { super(code); this.name = "EvolutionError"; this.status = status; }
 }
 
+/** Bind an existing receiver on its own event loop. No work outside a trial. */
+export async function evaluate(receive: (input: any) => any): Promise<boolean> {
+  const env = (globalThis as any).process?.env;
+  if(env?.TRAJECTORY_EVOLUTION_EVALUATION_ENTRY !== "1") return false;
+  const client = new Evolution({ url: env.TRAJECTORY_EVOLUTION_TRIAL_URL, token: env.TRAJECTORY_EVOLUTION_TRIAL_TOKEN,
+    timeoutMs: 5000, retries: 0 });
+  const consumer = crypto.randomUUID();
+  try {
+    for(let index = 0;;) {
+      const packet = await client.invoke("evaluation.next", { consumer, index });
+      if(packet.state === "done") return true;
+      if(packet.state === "waiting") { await new Promise(resolve => setTimeout(resolve, 100)); continue; }
+      if(packet.state !== "input" || packet.index !== index) throw new Error("evaluation_entry_response_invalid");
+      await receive(packet.input);
+      ++index;
+    }
+  } catch {
+    await client.invoke("evaluation.fail", { consumer }).catch(() => {});
+    throw new EvolutionError("evaluation_entry_failed");
+  }
+}
+
 export abstract class PointClient {
   private gaps = new Set<string>(); private gapsFull = false;
   abstract point(fields: ObjectValue, ...options: any[]): any;

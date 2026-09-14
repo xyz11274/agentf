@@ -12,6 +12,36 @@ fn decode<T: for<'a> Deserialize<'a>>(value: Value) -> Result<T, Error> {
     serde_json::from_value(value).map_err(|_| Error::new("response_invalid"))
 }
 
+/// Bind an existing async receiver on the caller's runtime. Inactive online.
+/// Acknowledgement is not completion; normal run-end points unlock each turn.
+pub async fn evaluate<F, Fut, E>(mut receive: F) -> Result<bool, Error>
+where F: FnMut(Value) -> Fut, Fut: Future<Output = Result<(), E>> {
+    if std::env::var("TRAJECTORY_EVOLUTION_EVALUATION_ENTRY").as_deref() != Ok("1") { return Ok(false); }
+    let client = Evolution::with_limits(&std::env::var("TRAJECTORY_EVOLUTION_TRIAL_URL").unwrap_or_default(),
+        &std::env::var("TRAJECTORY_EVOLUTION_TRIAL_TOKEN").unwrap_or_default(), Duration::from_secs(5), 0, 2097152)?;
+    let consumer = uuid::Uuid::new_v4().to_string();
+    let result: Result<bool, Error> = async {
+        let mut index = 0usize;
+        loop {
+            let packet = client.invoke("evaluation.next", json!({"consumer": consumer, "index": index})).await?;
+            match packet["state"].as_str() {
+                Some("done") => return Ok(true),
+                Some("waiting") => tokio::time::sleep(Duration::from_millis(100)).await,
+                Some("input") if packet["index"].as_u64() == Some(index as u64) => {
+                    receive(packet["input"].clone()).await.map_err(|_| Error::new("evaluation_entry_failed"))?;
+                    index += 1;
+                },
+                _ => return Err(Error::new("evaluation_entry_failed")),
+            }
+        }
+    }.await;
+    if result.is_err() {
+        let _ = client.invoke("evaluation.fail", json!({"consumer": consumer})).await;
+        return Err(Error::new("evaluation_entry_failed"));
+    }
+    result
+}
+
 #[derive(Clone)]
 pub struct Evolution {
     http: reqwest::Client, url: String, token: Arc<String>, retries: u8, max_bytes: usize,

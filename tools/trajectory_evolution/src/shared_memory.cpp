@@ -1,5 +1,6 @@
 #include "shared_memory.h"
 #include "local_support.h"
+#include "model_json.h"
 #include "agentflow/trajectory/experience.h"
 
 #include <chrono>
@@ -56,8 +57,9 @@ Json ask(const std::shared_ptr<ModelAdapter>& model, const std::string& prompt, 
     const auto response = model->evaluate(request);
     audit["response_fingerprint"] = hash(response.body);
     audit["transport_attempts"] = audit.num("transport_attempts", 0) + response.attempts;
-    require(response.transport_ok && response.body.size() <= 65536, "shared_model_response_failed");
-    auto value = Json::parse(response.body); validate_local_data(value);
+    require(response.transport_ok && response.error_code.empty()
+        && response.body.size() <= 65536, "shared_model_response_failed");
+    auto value = Json::parse(agentflow::trajectory::unwrap_model_json(response.body)); validate_local_data(value);
     audit["state"] = "completed"; return value;
   } catch(...) { audit["state"] = "failed"; throw; }
 }
@@ -380,7 +382,9 @@ void process_shared_memory(Json& state, const Json& config, const PrivateMemoryL
     if(record.num("attempts", 0) >= options.num("max_attempts", 2)) { record["state"] = "rejected"; continue; }
     if(!model || budget == 0) { pending = true; continue; }
     try {
-      const auto result = ask(model, config.str("shared_relation_prompt"), Json{{"private", content(own)}, {"public", json(shared)}}, state, record, budget, checkpoint);
+      const Json public_content{{"target_scope", shared.target_scope()},
+          {"trigger_pattern", shared.trigger_pattern()}, {"content", shared.content()}};
+      const auto result = ask(model, config.str("shared_relation_prompt"), Json{{"private", content(own)}, {"public", public_content}}, state, record, budget, checkpoint);
       keys(result, {"relation", "confidence"});
       const auto r = result.str("relation");
       require(std::holds_alternative<double>(result["confidence"].value)

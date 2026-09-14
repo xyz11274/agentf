@@ -1,6 +1,7 @@
 #include "trajectory_evolution/integration.h"
 #include "trajectory_evolution/evolution.h"
 #include "trajectory_evolution/request_binding.h"
+#include "trajectory_evolution/task_evaluation.h"
 #include "integration_json.h"
 #include "boundary_runtime.h"
 #include "instrumentation.h"
@@ -9,6 +10,7 @@
 #include "trace_internal.h"
 #include "shared_memory.h"
 #include "agent_evaluation_support.h"
+#include "evaluation_entry.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -32,6 +34,33 @@ using namespace integration;
 namespace fs = std::filesystem;
 namespace legacy = agentflow::trajectory;
 namespace ep = legacy::evaluation;
+
+std::string evaluation_error_code(const legacy::EvaluationError& error) {
+  // Exception messages may contain paths or provider data. Publish only known
+  // strict-evaluation codes, never the raw message or model response.
+  const std::string message = error.what();
+  std::string code;
+  for(const std::string prefix : {"strict dialogue model evaluation failed: ",
+      "strict dialogue model evaluation could not run: "})
+    if(message.compare(0, prefix.size(), prefix) == 0) code = message.substr(prefix.size());
+  static const std::set<std::string> allowed{
+      "model_request_too_large", "model_call_limit_reached", "adapter_not_configured",
+      "adapter_exception", "transport_error", "invalid_response_size", "credential_like_output",
+      "invalid_json", "missing_dialogue_section", "invalid_task_outcome",
+      "episode_assessment_count_mismatch", "invalid_episode_assessment",
+      "unknown_or_duplicate_episode_id", "invalid_reflection", "unknown_wasted_episode_id",
+      "missing_record", "request_too_large", "client_initialization_failed", "header_allocation_failed",
+      "output_token_limit_reached", "invalid_api_response", "response_too_large", "transport_exhausted"};
+  bool known = allowed.count(code);
+  // HTTP and libcurl diagnostics consist only of a bounded numeric status.
+  for(const std::string prefix : {"http_", "transport_"}) {
+    if(code.compare(0, prefix.size(), prefix) != 0) continue;
+    const auto number = code.substr(prefix.size());
+    known |= !number.empty() && number.size() <= 3
+        && std::all_of(number.begin(), number.end(), [](char c) { return c >= '0' && c <= '9'; });
+  }
+  return known ? "dialogue_model_" + code : "trace_evaluation_failed";
+}
 
 std::string digest(const std::string& text) {
   unsigned char bytes[SHA256_DIGEST_LENGTH];
@@ -190,6 +219,7 @@ struct IntegrationService::Impl {
   std::uint64_t capture_revision = 0;
   std::string capture_epoch;
   bool buffered_capture = false;
+  EvaluationEntry evaluation_entry;
 
   explicit Impl(const fs::path& path, const std::map<std::string, std::string>& environment) : config_path(fs::absolute(path)) {
     config = Json::parse(read_file(config_path, 262144));
@@ -248,9 +278,13 @@ struct IntegrationService::Impl {
       const auto relative = root.lexically_relative(version_file.parent_path());
       require(!relative.empty() && *relative.begin() != ".." && relative != ".", "evaluation_data_directory_not_isolated");
       const auto version = Json::parse(read_file(version_file, 2097152));
-      keys(version, {"version", "artifact", "trial_id"});
+      keys(version, {"version", "artifact", "trial_id", "entry"});
       require(version.str("version") == agent_version_id(version["artifact"].dump()), "evaluation_version_invalid");
       require(identifier(version.str("trial_id")), "evaluation_trial_id_required");
+      if(version.has("entry")) {
+        EvaluationEntry::validate(version["entry"]["binding"]);
+        evaluation_entry.specification = version["entry"];
+      }
       config["evaluation_version"] = version;
       config["auto_evaluate"] = false; config["sharing"] = Json{{"enabled", false}};
       config.fields().erase("policy_evaluation_file");
@@ -437,6 +471,7 @@ struct IntegrationService::Impl {
         && (run["learning"].flag("trace_published", false) || run["learning"].has("publication_error"));
   }
   void evict_finished() {
+    if(evaluation_entry.enabled()) return;
     for(auto it = runs.begin(); it != runs.end();) {
       if(evictable(it->second)) it = runs.erase(it); else ++it;
     }
@@ -515,6 +550,8 @@ struct IntegrationService::Impl {
         const auto rid = id.size() == 40 && id.find_first_not_of("0123456789abcdef") == std::string::npos ? id
             : digest("import\n" + config.str("agent_id") + '\n' + user + '\n' + origin.conversation_id() + '\n' + id).substr(0, 40);
         const auto run = read_run(rid);
+        // Synthetic training identities are not independent real-user votes.
+        if(run.has("training_source")) continue;
         if(!run.flag("closed", false) || run.flag("incomplete", false) || run.str("evaluation_status") != "completed"
             || run["identity"].str("user_id") != user || run["identity"].str("conversation_id") != origin.conversation_id()) continue;
         const auto raw = read_file(trace_path(run), run_limit);
@@ -748,8 +785,10 @@ struct IntegrationService::Impl {
     std::size_t count = 0;
     for(const auto& entry : fs::directory_iterator(root / "learning/jobs")) {
       if(entry.path().extension() != ".json") continue;
-      require(++count <= config.num("max_stored_runs", 10000), "learning_job_limit_reached");
       auto job = read_job(entry.path().stem().string());
+      // Archived history is retained for replay, not part of live queue capacity.
+      if(job.str("state") != "completed" && job.str("state") != "failed")
+        require(++count <= config.num("max_stored_runs", 10000), "learning_job_limit_reached");
       for(const auto& id : job["runs"].items()) {
         auto run = read_run(id.text());
         require(run.flag("closed", false) && run["identity"].str("user_id") == job.str("user"), "learning_job_identity_mismatch");
@@ -1088,11 +1127,19 @@ struct IntegrationService::Impl {
       return Json{{"ended", true}, {"event_id", run["executions"][execution]["end_event"]}};
     }
     if(op == "capture.gap") {
-      keys(request, {"operation", "request_id", "run_id", "reason"});
+      keys(request, {"operation", "request_id", "run_id", "reason", "error_code"});
       const auto reason = request.str("reason");
       require(reason == "observer_unavailable" || reason == "privacy_rejected" || reason == "missing_boundary", "gap_reason_invalid");
+      Json attributes{{"type", "capture.gap"}, {"reason", reason}};
+      if(request.has("error_code")) {
+        const auto code = request.str("error_code");
+        require(!code.empty() && code.size() <= 96 && code.front() >= 'a' && code.front() <= 'z'
+            && code.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") == std::string::npos,
+            "gap_error_code_invalid");
+        attributes["error_code"] = code;
+      }
       run["incomplete"] = true;
-      emit(run, "custom", Json{{"attributes", Json{{"type", "capture.gap"}, {"reason", reason}}}}, "capture");
+      emit(run, "custom", Json{{"attributes", attributes}}, "capture");
       return Json{{"capture_complete", false}};
     }
     if(op == "step.begin") {
@@ -1343,6 +1390,22 @@ struct IntegrationService::Impl {
     const auto bytes = request.dump();
     for(const auto& principal : principals) require(bytes.find(principal.first) == std::string::npos, "credential_value_rejected");
     const auto op = request.str("operation");
+    if(op == "evaluation.next" || op == "evaluation.fail") {
+      require(evaluation_entry.enabled(), "evaluation_entry_not_enabled", 409);
+      require(user == evaluation_entry.specification.str("user_id"), "evaluation_entry_user_mismatch", 403);
+      if(op == "evaluation.fail") {
+        keys(request, {"operation", "request_id", "consumer"});
+        require(!evaluation_entry.consumer.empty() && request.str("consumer") == evaluation_entry.consumer,
+            "evaluation_entry_already_bound", 409);
+        if(evaluation_entry.failure.empty()) evaluation_entry.failure = "evaluation_entry_handler_failed";
+        return Json{{"state", "failed"}};
+      }
+      const auto found = runs.find(evaluation_entry.run_id);
+      auto result = evaluation_entry.next(request, found == runs.end() ? Json{} : found->second,
+          !capture_dirty.count(evaluation_entry.run_id));
+      safe_data(result);
+      return result;
+    }
     const bool referenced = op == "point" && request.has("ref");
     if(referenced) request["request_id"] = point_request_key(request);
     if(op == "contract.describe") {
@@ -1406,6 +1469,7 @@ struct IntegrationService::Impl {
     Json response;
     if(beginning) {
       require(found == runs.end(), "request_id_conflict", 409);
+      evaluation_entry.before_run();
       Json empty;
       const auto root_point = referenced ? resolve_point_reference(request, empty, run_id) : Json{};
       const auto root_request = referenced ? point_request(root_point, config) : request;
@@ -1438,6 +1502,7 @@ struct IntegrationService::Impl {
     if(!run.flag("closed", false)) run["last_activity_ms"] = millis();
     run["requests"][key] = Json{{"fingerprint", fingerprint}, {"response", response}};
     save(run); if(beginning) ++stored_count;
+    if(beginning && evaluation_entry.enabled()) evaluation_entry.run_id = run_id;
     runs[run_id] = std::move(run);
     return response;
   }
@@ -1466,10 +1531,19 @@ bool IntegrationService::flush_capture(unsigned timeout_ms) {
   return impl_->capture_changed.wait_for(guard, std::chrono::milliseconds(timeout_ms), [&] { return impl_->capture_dirty.empty(); });
 }
 bool IntegrationService::capture_finished() const {
+  return capture_finished(1);
+}
+bool IntegrationService::capture_finished(std::size_t expected_runs) const {
   std::lock_guard<std::mutex> guard(impl_->mutex);
-  if(!impl_->stored_count || !impl_->capture_dirty.empty()) return false;
+  if(impl_->stored_count < expected_runs || !impl_->stored_count || !impl_->capture_dirty.empty()) return false;
   for(const auto& item : impl_->runs) if(!item.second.flag("closed", false)) return false;
   return true;
+}
+std::string IntegrationService::evaluation_entry_status() const {
+  std::lock_guard<std::mutex> guard(impl_->mutex);
+  const auto& entry = impl_->evaluation_entry;
+  if(!entry.failure.empty()) return entry.failure;
+  return entry.done && impl_->capture_dirty.empty() ? "completed" : "";
 }
 void IntegrationService::refresh_agent_evaluations() {
   if(!impl_->assessments) return;
@@ -1481,13 +1555,16 @@ void IntegrationService::refresh_agent_evaluations() {
   for(const auto& user : users) {
     const auto publications = Json::parse(impl_->assessments->publications(user));
     const auto feedback = Json::parse(impl_->assessments->feedback(user));
+    const auto training_progress = Json::parse(impl_->assessments->status(user))["training"];
+    const auto training_state = training_progress.str("status");
     ep::EvolutionMemoryStore memory; v1::SharedExperienceStore shared; Json config; std::uint64_t generation;
     {
       std::lock_guard<std::mutex> guard(impl_->mutex);
       auto& current_generation = impl_->memory_versions[user]; if(!current_generation) current_generation = 1;
       generation = current_generation;
       impl_->approved_versions[user] = publications;
-      if(impl_->assessed_memory_versions[user] == generation) continue;
+      if(impl_->assessed_memory_versions[user] == generation
+          && training_state != "waiting_for_learning" && training_state != "ready_to_import") continue;
       impl_->ensure_memory(user);
       memory = legacy::TrajectoryEvolutionPipeline::load_memory(impl_->memory_path(user), impl_->run_limit);
       shared = impl_->shared_view(user); config = impl_->config;
@@ -1532,6 +1609,7 @@ void IntegrationService::refresh_agent_evaluations() {
       if(eligibility_changed) impl_->queue_sharing(user);
       snapshot = compile_shadow_policy(memory, identity, shadow, shared);
     }
+    std::vector<Json> artifacts;
     for(int n = 0; n <= config.str("max_level")[1] - '0'; ++n) {
       Json artifact{{"schema_version", 1}, {"agent", agent}, {"user_id", user}, {"level", "L" + std::to_string(n)}, {"policy", nullptr}};
       if(n > 0) {
@@ -1557,26 +1635,63 @@ void IntegrationService::refresh_agent_evaluations() {
         }
         artifact["policy"] = json(compile_runtime_policy(snapshot, options));
       }
-      impl_->assessments->submit(user, artifact.dump());
+      artifacts.push_back(std::move(artifact));
     }
+    if(config.flag("auto_evaluate", true) && artifacts.back().str("level") == config.str("max_level")
+        && config.str("max_level") != "L0" && (config.flag("auto_approve_experiences", false)
+            || !proto<v1::RuntimeOptions>(config["runtime_options"]).approved_experiences().empty())) {
+      bool pending = false, failed = false;
+      { std::lock_guard<std::mutex> guard(impl_->mutex);
+        for(const auto& item : impl_->learning_queue) pending |= item.second.str("user") == user;
+        if(training_progress["run_ids"].array()) for(const auto& id : training_progress["run_ids"].items()) {
+          const auto found = impl_->evaluation_outcomes.find(id.text());
+          const auto outcome = found == impl_->evaluation_outcomes.end()
+              ? impl_->read_run(id.text()).str("evaluation_status") : found->second;
+          failed |= outcome != "pending" && outcome != "running" && outcome != "completed";
+        }
+      }
+      const auto training = Json::parse(impl_->assessments->prepare_training(user, artifacts.back().dump(), pending, failed));
+      const auto state = training.str("status");
+      if(state == "ready_to_import") {
+        const auto response = import_training_report(training.str("report_directory"),
+            training.str("dataset_directory"), training["baseline"].dump());
+        impl_->assessments->complete_training_import(user, training.str("job_id"), response.body);
+        std::lock_guard<std::mutex> guard(impl_->mutex);
+        ++impl_->memory_versions[user]; impl_->notify_work();
+        continue;
+      }
+      if(state != "ready" && state != "disabled") {
+        std::lock_guard<std::mutex> guard(impl_->mutex); impl_->assessed_memory_versions[user] = generation;
+        continue;
+      }
+    }
+    for(const auto& artifact : artifacts) impl_->assessments->submit(user, artifact.dump());
     { std::lock_guard<std::mutex> guard(impl_->mutex); impl_->assessed_memory_versions[user] = generation; }
   }
   { std::lock_guard<std::mutex> guard(impl_->mutex);
     impl_->assessment_error.clear(); impl_->assessment_failures = 0; impl_->assessment_retry_ms = 0; }
 }
 IntegrationResponse IntegrationService::import_file(const fs::path& path) {
+  return import_source(path, "", "");
+}
+
+IntegrationResponse IntegrationService::import_source(const fs::path& path,
+    const std::string& training_trace, const std::string& training_source) {
   try {
-    auto bytes = read_file(path, impl_->run_limit);
+    auto bytes = training_trace.empty() ? read_file(path, impl_->run_limit) : training_trace;
+    require(bytes.size() <= impl_->run_limit, "import_trace_size_limit");
     std::string user, conversation, source_id, evidence_hash, format;
-    if(is_trace_path(path)) {
-      const auto validated = validate_trace(read_trace(path, {impl_->run_limit, impl_->event_limit}), {impl_->run_limit, impl_->event_limit});
+    if(!training_trace.empty() || is_trace_path(path)) {
+      const auto validated = validate_trace(training_trace.empty()
+          ? read_trace(path, {impl_->run_limit, impl_->event_limit}) : parse_trace_json(bytes),
+          {impl_->run_limit, impl_->event_limit});
       require(validated.report.trace_valid(), "import_trace_invalid");
       const auto& identity = validated.trace.identity();
       for(const auto& event : validated.trace.events()) if(event.kind() == "run.start")
-        require(!json(event.attributes()).has("evaluation_trial_id"), "evaluation_trace_not_learning_source");
+        require(!training_source.empty() || !json(event.attributes()).has("evaluation_trial_id"), "evaluation_trace_not_learning_source");
       require(identity.agent_id() == impl_->config.str("agent_id"), "import_application_mismatch");
       user = identity.user_id(); conversation = identity.conversation_id(); source_id = identity.run_id();
-      require(bytes == read_file(path, impl_->run_limit), "import_source_changed");
+      if(training_trace.empty()) require(bytes == read_file(path, impl_->run_limit), "import_source_changed");
       bytes = json(validated.trace).dump(); format = "trace";
       safe_data(json(validated.trace));
       evidence_hash = digest(trace_content_jsonl(validated.trace));
@@ -1606,7 +1721,19 @@ IntegrationResponse IntegrationService::import_file(const fs::path& path) {
           && old["identity"].str("conversation_id") == conversation, "import_identity_conflict", 409);
       const auto expected = old.flag("imported", false) ? old.str("import_evidence_fingerprint")
           : digest(trace_content_jsonl(proto<v1::TraceRun>(impl_->trace(old))));
-      require(expected == evidence_hash, "import_content_conflict", 409);
+      bool same_training_source = false;
+      if(!training_source.empty() && old.has("training_source")) {
+        const auto source = Json::parse(training_source);
+        auto previous = old["training_source"], incoming = source;
+        previous.fields().erase("source_evidence_fingerprint");
+        incoming.fields().erase("source_evidence_fingerprint");
+        same_training_source = previous.dump() == incoming.dump()
+            && !source.str("source_evidence_fingerprint").empty()
+            && old["training_source"].str("source_evidence_fingerprint", expected) == source.str("source_evidence_fingerprint");
+      }
+      // Adding offline acceptance context must not replay an already imported
+      // report. Older imports stay immutable, including their cached analysis.
+      require(expected == evidence_hash || same_training_source, "import_content_conflict", 409);
       return {200, Json{{"ok", true}, {"result", Json{{"run_id", rid}, {"reused", true},
           {"evaluation_status", old.str("evaluation_status")}}}}.dump()};
     }
@@ -1617,6 +1744,7 @@ IntegrationResponse IntegrationService::import_file(const fs::path& path) {
       {"closed", true}, {"level", 0}, {"events", Json::Array{}}, {"requests", Json::Object{}},
       {"evaluation_status", impl_->config.flag("auto_evaluate", true) ? "pending" : "disabled"},
       {"learning", Json{{"trace_published", true}, {"capture_bytes", bytes.size()}}}};
+    if(!training_source.empty()) run["training_source"] = Json::parse(training_source);
     const auto target = impl_->trace_path(run);
     if(fs::exists(target)) require(read_file(target, impl_->run_limit) == bytes, "import_content_conflict", 409);
     else atomic_write(target, bytes);
@@ -1625,13 +1753,129 @@ IntegrationResponse IntegrationService::import_file(const fs::path& path) {
   } catch(const Error& error) { return {error.status, Json{{"ok", false}, {"error", error.what()}}.dump()}; }
   catch(...) { return {400, R"({"ok":false,"error":"import_rejected"})"}; }
 }
+
+IntegrationResponse IntegrationService::import_training_evaluation(const fs::path& directory,
+    const fs::path& dataset_directory) {
+  return import_training_report(directory, dataset_directory, "");
+}
+IntegrationResponse IntegrationService::import_training_report(const fs::path& directory,
+    const fs::path& dataset_directory, const std::string& baseline_json) {
+  try {
+    const auto dataset = read_evaluation_dataset(dataset_directory);
+    for(const auto& issue : dataset.issues()) require(issue.severity() != "error", "training_dataset_invalid");
+    const auto bytes = read_file(directory / "report.json", 134217728);
+    const auto report_fingerprint = digest(bytes);
+    const auto manifest = Json::parse(read_file(directory / "manifest.json", 1048576));
+    const auto report = Json::parse(bytes);
+    require(manifest.flag("complete", false) && report.flag("complete", false)
+        && manifest["files"].str("report.json") == report_fingerprint
+        && manifest.str("run_id") == report.str("run_id"), "training_report_invalid");
+    require(report.str("dataset_version") == dataset.dataset_version()
+        && manifest.str("dataset_version") == dataset.dataset_version(), "training_dataset_mismatch");
+    require(report["trials"].array() && !report["trials"].items().empty(), "training_trials_required");
+    std::map<std::string, const dataset::v1::EvaluationTask*> tasks;
+    for(const auto& task : dataset.tasks()) tasks[task.task_id()] = &task;
+    std::map<std::string, std::string> revisions;
+    for(const auto& variant : report["configuration"]["variants"].items())
+      require(revisions.emplace(variant.str("id"), variant.str("version")).second, "training_variant_duplicate");
+    std::vector<std::pair<std::string, std::string>> pending;
+    std::set<std::string> run_ids, trial_ids;
+    std::size_t rejected = 0;
+    // Validate the whole batch before importing anything. Never silently select
+    // training rows out of a report that also exposes validation/holdout cases.
+    for(const auto& trial : report["trials"].items()) {
+      const auto found = tasks.find(trial.str("task_id"));
+      require(found != tasks.end() && trial.str("split") == "train" && found->second->split() == "train"
+          && trial.str("task_version") == found->second->task_version()
+          && found->second->review_status() == "reviewed", "training_task_not_admissible");
+      require(trial_ids.insert(trial.str("trial_id")).second, "training_trial_duplicate");
+      const auto revision = revisions.find(trial.str("variant_id"));
+      require(revision != revisions.end() && !revision->second.empty(), "training_variant_missing");
+      if(trial.str("verdict") != "passed" && trial.str("verdict") != "failed") { ++rejected; continue; }
+      const auto& evidence = trial["evidence"];
+      // A timed-out trial may retain only a partial capture. Keep its failure
+      // in the report without blocking complete traces from other trials.
+      if(trial.str("execution_status") == "timeout" && trial.str("error_code") == "runner_timeout"
+          && !evidence.has("trace") && !evidence.has("traces")) { ++rejected; continue; }
+      require(evidence.has("trace") != evidence.has("traces"), "training_trace_required");
+      const auto traces = evidence.has("traces") ? evidence["traces"] : Json(Json::Array{evidence["trace"]});
+      require(traces.array() && !traces.items().empty() && traces.items().size() <= 1024, "training_trace_limit");
+      Json trial_runs = Json::Array{}, constraints = Json::Array{};
+      for(const auto& trace : traces.items()) trial_runs.push(trace["identity"]["run_id"]);
+      for(const auto& constraint : found->second->constraints()) constraints.push(constraint);
+      for(const auto& trace : traces.items()) {
+        const auto validated = validate_trace(parse_trace_json(trace.dump()), {impl_->run_limit, impl_->event_limit});
+        require(validated.report.trace_valid(), "training_trace_invalid");
+        const auto& identity = validated.trace.identity();
+        require(identity.agent_id() == impl_->config.str("agent_id")
+            && run_ids.insert(identity.run_id()).second, "training_trace_identity_invalid");
+        const Json baseline = baseline_json.empty() ? Json{{"schema_version", 1}, {"agent", Json{{"revision", revision->second},
+            {"name", impl_->config.str("application_id", impl_->config.str("agent_id"))}}},
+            {"user_id", identity.user_id()}, {"level", "L0"}, {"policy", nullptr}} : Json::parse(baseline_json);
+        require(baseline.str("level") == "L0" && baseline["policy"].null()
+            && baseline.str("user_id") == identity.user_id(), "training_requires_unmodified_baseline");
+        const auto version = agent_version_id(baseline.dump());
+        if(!baseline_json.empty()) require(revision->second == version, "training_trace_version_mismatch");
+        require(evidence.str("loaded_version") == version, "training_requires_unmodified_baseline");
+        bool bound = false;
+        for(const auto& event : validated.trace.events()) if(event.kind() == "run.start") {
+          const auto attributes = json(event.attributes());
+          bound = attributes.str("agent_version_id") == version
+              && attributes.str("evaluation_trial_id") == trial.str("trial_id");
+        }
+        require(bound, "training_trace_version_mismatch");
+        const Json source{{"kind", "baseline_training"}, {"dataset_version", dataset.dataset_version()},
+            {"task_id", found->second->task_id()}, {"task_version", found->second->task_version()},
+            {"trial_id", trial.str("trial_id")}, {"report_fingerprint", report_fingerprint},
+            {"source_evidence_fingerprint", digest(trace_content_jsonl(validated.trace))}};
+        auto enriched = json(validated.trace);
+        // This is offline trial context, not a new execution event or an
+        // instruction to the Agent. Keep the original report/events unchanged.
+        enriched["attributes"]["training_evaluation"] = Json{
+            {"expected_behavior", found->second->expected_behavior()}, {"constraints", constraints},
+            {"verdict", trial["verdict"]}, {"checks", trial["checks"]}, {"run_ids", trial_runs}};
+        safe_data(enriched);
+        const auto enriched_bytes = enriched.dump();
+        require(enriched_bytes.size() <= impl_->run_limit, "import_trace_size_limit");
+        pending.emplace_back(enriched_bytes, source.dump());
+      }
+    }
+    require(!pending.empty(), "training_no_complete_traces");
+    require(bytes == read_file(directory / "report.json", 134217728), "training_report_changed");
+    std::size_t imported = 0, reused = 0;
+    Json admitted_runs = Json::Array{};
+    for(const auto& item : pending) {
+      const auto response = import_source({}, item.first, item.second);
+      if(response.status != 200) { ++rejected; continue; }
+      const auto result = Json::parse(response.body)["result"];
+      admitted_runs.push(result["run_id"]);
+      if(result.flag("reused", false)) ++reused; else ++imported;
+    }
+    require(imported || reused, "training_no_admitted_traces");
+    return {200, Json{{"ok", true}, {"result", Json{{"imported", imported}, {"reused", reused},
+        {"rejected", rejected}, {"run_ids", admitted_runs}}}}.dump()};
+  } catch(const Error& error) { return {error.status, Json{{"ok", false}, {"error", error.what()}}.dump()}; }
+  catch(...) { return {400, R"({"ok":false,"error":"training_import_rejected"})"}; }
+}
 std::string IntegrationService::learning_status() const {
   std::lock_guard<std::mutex> guard(impl_->mutex);
   Json outcomes = Json::Object{};
   for(const auto& p : impl_->evaluation_outcomes) outcomes[p.second] = outcomes.num(p.second, 0) + 1;
   std::set<std::string> users;
   for(const auto& p : impl_->principals) if(fs::exists(impl_->memory_path(p.second))) users.insert(p.second);
+  std::size_t assessment_pending = 0, training_pending = 0, training_failed = 0;
+  if(impl_->assessments) for(const auto& user : users) {
+    const auto assessment = Json::parse(impl_->assessments->status(user));
+    for(const auto& job : assessment["jobs"].fields())
+      assessment_pending += job.second.str("status") == "pending" || job.second.str("status") == "running";
+    const auto state = assessment["training"].str("status");
+    training_pending += state == "training" || state == "ready_to_import" || state == "waiting_for_learning";
+    training_failed += state == "training_failed" || state == "import_failed" || state == "learning_failed"
+        || state == "budget_exhausted" || state == "training_exhausted";
+  }
   return Json{{"pending_runs", impl_->learning_queue.size()}, {"unpublished_runs", impl_->unpublished.size()},
+      {"agent_evaluation_pending_jobs", assessment_pending}, {"training_pending_users", training_pending},
+      {"training_failed_users", training_failed},
       {"evaluating", impl_->evaluating}, {"shared_pending_users", impl_->sharing_pending_users},
       {"shared_status", impl_->sharing_status}, {"agent_evaluation_error", impl_->assessment_error},
       {"shared_next_due_ms", impl_->sharing_due_ms}, {"run_outcomes", outcomes},
@@ -1725,6 +1969,8 @@ IntegrationResponse IntegrationService::call(const std::string& token, const std
         if(op == "agent_evaluation.retry") impl_->assessments->retry(user, message.str("job_id"));
         else impl_->assessments->cancel(user, message.str("job_id"));
         result = Json{{"accepted", true}};
+        std::lock_guard<std::mutex> guard(impl_->mutex);
+        ++impl_->memory_versions[user]; impl_->notify_work();
       }
       return {200, Json{{"ok", true}, {"result", result}}.dump()};
     }
@@ -1745,6 +1991,16 @@ IntegrationResponse IntegrationService::call(const std::string& token, const std
         return {200, Json{{"ok", true}, {"result", result}}.dump_for_transport()};
       } catch(...) {
         // Fail open for the business call, but never learn a partially captured run.
+        // Preserve only a bounded, privacy-checked error code, never exception text.
+        std::string failure_code = "point_capture_degraded";
+        try { throw; }
+        catch(const Error& error) {
+          const std::string code = error.what();
+          if(!code.empty() && code.size() <= 96 && code.front() >= 'a' && code.front() <= 'z'
+              && code.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") == std::string::npos) {
+            try { safe_data(code); failure_code = code; } catch(...) {}
+          }
+        } catch(...) {}
         auto parent = static_cast<const Json&>(message)["context"];
         if(message.has("ref")) {
           try {
@@ -1766,7 +2022,7 @@ IntegrationResponse IntegrationService::call(const std::string& token, const std
         }
         try {
           impl_->call(token, Json{{"operation", "capture.gap"}, {"request_id", "gap-" + digest(request_id).substr(0, 32)},
-              {"run_id", rid}, {"reason", "missing_boundary"}});
+              {"run_id", rid}, {"reason", "missing_boundary"}, {"error_code", failure_code}});
           const auto kind = message["kind"].string() ? message["kind"].text() : parent["kind"].string() ? parent["kind"].text() : "custom";
           const auto phase = message["phase"].string() ? message["phase"].text() : "invalid";
           if(message.has("ref") && impl_->runs.count(rid)) {
@@ -1789,7 +2045,7 @@ IntegrationResponse IntegrationService::call(const std::string& token, const std
                   {"run_id", rid}, {"activity_id", parent["activity_id"]}, {"status", "unknown"}, {"output", nullptr}});
           }
         } catch(...) {}
-        return {200, Json{{"ok", true}, {"result", point_fallback(message, "point_capture_degraded")}}.dump_for_transport()};
+        return {200, Json{{"ok", true}, {"result", point_fallback(message, failure_code)}}.dump_for_transport()};
       }
     }
     return {200, Json{{"ok", true}, {"result", impl_->call(token, message)}}.dump_for_transport()};
@@ -1989,6 +2245,9 @@ void IntegrationService::process_evaluations(bool flush) {
       } catch(const Error& error) {
         failed_calls += job["analysis_model_calls"].num(id.text(), 0);
         job["errors"][id.text()] = error.what(); impl_->save_job(job);
+      } catch(const legacy::EvaluationError& error) {
+        failed_calls += job["analysis_model_calls"].num(id.text(), 0);
+        job["errors"][id.text()] = evaluation_error_code(error); impl_->save_job(job);
       } catch(...) {
         failed_calls += job["analysis_model_calls"].num(id.text(), 0);
         job["errors"][id.text()] = "trace_evaluation_failed"; impl_->save_job(job);

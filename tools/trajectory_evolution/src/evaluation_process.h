@@ -20,6 +20,9 @@ struct EvaluationProcessResult {
   double duration_ms = 0;
 };
 
+// Internal CLI entry; ordinary applications call run_evaluation_process.
+int run_evaluation_supervisor(int argc, char** argv);
+
 // No shell expansion; only explicitly selected environment variables reach the
 // host. stdout/stderr are bounded in memory and never logged verbatim.
 EvaluationProcessResult run_evaluation_process(
@@ -29,6 +32,7 @@ EvaluationProcessResult run_evaluation_process(
     std::size_t timeout_ms, std::size_t max_output_bytes,
     const std::function<bool()>& cancelled,
     const EvaluationProcessLimits& limits = {},
-    const std::function<bool()>& capture_finished = {});
+    const std::function<bool()>& capture_finished = {},
+    const std::function<std::string()>& entry_status = {});
 
 }  // namespace trajectory::evolution

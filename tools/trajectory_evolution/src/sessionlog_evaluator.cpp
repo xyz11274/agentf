@@ -3,6 +3,8 @@
 #include "agentflow/trajectory/loop_episode_analyzer.h"
 #include "agentflow/trajectory/experience.h"
 #include "trace_internal.h"
+#include "model_json.h"
+#include "model_input.h"
 
 #include <algorithm>
 #include <array>
@@ -220,9 +222,15 @@ bool contains_credential_pattern(const std::string& value) {
 }
 
 struct SanitizerState {
+  struct CachedString {
+    std::string value;
+    std::uint64_t redactions, truncations;
+  };
   std::vector<std::string> secrets;
   std::uint64_t redaction_count = 0;
   std::uint64_t truncation_count = 0;
+  std::unordered_map<std::string, CachedString> strings;
+  std::size_t cached_bytes = 0;
 };
 
 void replace_all(
@@ -243,6 +251,20 @@ std::string truncate_utf8(const std::string& value, SanitizerState* state) {
     return value;
   }
   std::size_t boundary = kMaxContentStringBytes;
+  // A complete opaque credential may straddle the slice. Move the cut before
+  // it; sanitizing only the sliced prefix cannot recognize that credential.
+  std::size_t previous;
+  do {
+    previous = boundary;
+    for(const auto& secret : state->secrets) {
+      if(secret.empty() || !boundary) continue;
+      const auto start = value.rfind(secret, boundary - 1);
+      if(start != std::string::npos && secret.size() > boundary - start) {
+        boundary = start;
+        ++state->redaction_count;
+      }
+    }
+  } while(previous != boundary);
   while(boundary > 0U
         && (static_cast<unsigned char>(value[boundary]) & 0xc0U) == 0x80U) {
     --boundary;
@@ -253,6 +275,13 @@ std::string truncate_utf8(const std::string& value, SanitizerState* state) {
 }
 
 std::string redact_string(const std::string& input, SanitizerState* state) {
+  const auto cached = state->strings.find(input);
+  if(cached != state->strings.end()) {
+    state->redaction_count += cached->second.redactions;
+    state->truncation_count += cached->second.truncations;
+    return cached->second.value;
+  }
+  const auto redactions = state->redaction_count, truncations = state->truncation_count;
   std::string output = truncate_utf8(input, state);
   for(const auto& secret : state->secrets) {
     replace_all(
@@ -275,6 +304,15 @@ std::string redact_string(const std::string& input, SanitizerState* state) {
       output = std::regex_replace(output, pattern, "<REDACTED:LOCAL_PATH>");
       ++state->redaction_count;
     }
+  }
+  // Request-local only: reuse identical sanitization without sharing secrets or
+  // changing per-occurrence audit counts. Bound retained raw + sanitized bytes.
+  const auto size = input.size() + output.size();
+  if(input.size() >= 512 && size <= 262144 && state->strings.size() < 512
+     && state->cached_bytes + size <= 4194304) {
+    state->strings.emplace(input, SanitizerState::CachedString{
+        output, state->redaction_count - redactions, state->truncation_count - truncations});
+    state->cached_bytes += size;
   }
   return output;
 }
@@ -696,6 +734,7 @@ struct EpisodeJudgment {
 
 struct DialogueValidation {
   bool valid = false;
+  bool json_fence_unwrapped = false;
   std::string error_code;
   ep::AggregateStatus task_outcome = ep::AGGREGATE_STATUS_UNSPECIFIED;
   double task_confidence = 0.0;
@@ -737,10 +776,10 @@ DialogueValidation validate_dialogue_response(
     return output;
   }
 
+  const auto body = unwrap_model_json(response.body, &output.json_fence_unwrapped);
   rapidjson::Document document;
-  document.Parse<rapidjson::kParseValidateEncodingFlag>(
-      response.body.data(), response.body.size());
-  if(document.HasParseError() || !document.IsObject()) {
+  document.Parse<rapidjson::kParseValidateEncodingFlag | rapidjson::kParseIterativeFlag>(body.data(), body.size());
+  if(document.HasParseError() || !unique_object_fields(document)) {
     output.error_code = "invalid_json";
     return output;
   }
@@ -786,10 +825,10 @@ DialogueValidation validate_dialogue_response(
     judgment.verdict = parse_verdict(optional_string(value, "verdict"));
     if(judgment.verdict == ep::SEMANTIC_VERDICT_UNSPECIFIED
        || !response_confidence(value, &judgment.confidence)
-       || !bounded_response_string(
-           value, "expected_state_change", &judgment.expected_state_change)
-       || !bounded_response_string(
-           value, "observed_state_change", &judgment.observed_state_change)
+       || (value.HasMember("expected_state_change") && !bounded_response_string(
+           value, "expected_state_change", &judgment.expected_state_change))
+       || (value.HasMember("observed_state_change") && !bounded_response_string(
+           value, "observed_state_change", &judgment.observed_state_change))
        || !bounded_response_string(
            value, "concise_reason", &judgment.concise_reason)
        || (require_chinese_reason && !has_cjk(judgment.concise_reason))
@@ -1011,6 +1050,7 @@ ModelRequest make_dialogue_request(
       "sanitized_untrusted_sessionlog_evidence",
       allocator);
 
+  model_input::dialogue_view(payload, standard_trace);
   ModelRequest request;
   request.system_prompt = standard_trace && !prompts.standard_dialogue_system.empty()
       ? prompts.standard_dialogue_system : prompts.dialogue_system;
@@ -1230,6 +1270,12 @@ EvaluationOutput HybridTrajectoryEvaluator::evaluate_content(
       experience_scopes(*report),
       secrets,
       options_.require_chinese_reason);
+  if(validation.json_fence_unwrapped) {
+    auto* issue = report->add_issues();
+    issue->set_severity("info");
+    issue->set_code("dialogue_model_json_fence_unwrapped");
+    issue->set_message("已移除响应最外层的单个 JSON 代码块；内容仍经过完整协议与证据校验。");
+  }
   if(!validation.valid) {
     const ep::ModelCallStatus status = response.transport_ok
         ? ep::MODEL_CALL_STATUS_INVALID_RESPONSE

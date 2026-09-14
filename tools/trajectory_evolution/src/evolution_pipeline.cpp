@@ -1,6 +1,7 @@
 #include "agentflow/trajectory/evolution_pipeline.h"
 #include "agentflow/trajectory/experience.h"
 #include "trajectory_evolution/trace.h"
+#include "model_json.h"
 
 #include <algorithm>
 #include <array>
@@ -271,15 +272,48 @@ const std::vector<std::regex>& credential_patterns() {
 bool contains_secret(
     const std::string& value,
     const std::vector<std::string>& secrets) {
-  for(const auto& secret : secrets) {
-    if(!secret.empty() && value.find(secret) != std::string::npos) {
-      return true;
+  // Inspect decoded JSON strings independently: escaped newlines after a
+  // redacted URL must not join the signature to the following prose.
+  std::vector<std::pair<std::string, unsigned>> pending{{value, 0}};
+  const auto visit_limit = std::max<std::size_t>(1024,
+      std::min(value.size(), std::numeric_limits<std::size_t>::max() / 2) * 2);
+  std::size_t visited = 0;
+  while(!pending.empty()) {
+    auto current = std::move(pending.back()); pending.pop_back();
+    if(++visited > visit_limit || current.second > 16) return true;
+    const auto& text = current.first;
+    for(const auto& secret : secrets) {
+      if(!secret.empty() && text.find(secret) != std::string::npos) return true;
     }
+    const auto first = text.find_first_not_of(" \t\r\n");
+    if(first != std::string::npos && (text[first] == '{' || text[first] == '[' || text[first] == '"')) {
+      rapidjson::Document document;
+      document.Parse<rapidjson::kParseIterativeFlag>(text.data(), text.size());
+      if(!document.HasParseError()) {
+        std::vector<const JsonValue*> fields{&document};
+        while(!fields.empty()) {
+          const auto* item = fields.back(); fields.pop_back();
+          if(++visited > visit_limit) return true;
+          if(item->IsObject()) for(auto it = item->MemberBegin(); it != item->MemberEnd(); ++it) {
+            fields.push_back(&it->name); fields.push_back(&it->value);
+          }
+          else if(item->IsArray()) for(const auto& child : item->GetArray()) fields.push_back(&child);
+          else if(item->IsString()) pending.emplace_back(
+              std::string(item->GetString(), item->GetStringLength()), current.second + 1);
+        }
+        continue;
+      }
+    }
+    // Only the exact host placeholder is exempt. Adjacent credential text and
+    // known secret values (including JSON-escaped values) remain rejected.
+    auto inspected = text;
+    const std::string marker = "<redacted:credential_field>";
+    for(auto position = inspected.find(marker); position != std::string::npos;
+        position = inspected.find(marker, position)) inspected.erase(position, marker.size());
+    if(std::any_of(credential_patterns().begin(), credential_patterns().end(),
+        [&](const auto& pattern) { return std::regex_search(inspected, pattern); })) return true;
   }
-  return std::any_of(
-      credential_patterns().begin(),
-      credential_patterns().end(),
-      [&](const auto& pattern) { return std::regex_search(value, pattern); });
+  return false;
 }
 
 std::string safe_error_message(
@@ -992,11 +1026,20 @@ ModelRequest make_meta_request(
   rapidjson::Document payload;
   payload.SetObject();
   auto& allocator = payload.GetAllocator();
-  payload.AddMember("schema_version", 1, allocator);
-  payload.AddMember("scope", "cross_dialogue_candidate_synthesis", allocator);
   JsonValue seeds(rapidjson::kArrayType);
   std::vector<std::string> allowed_events;
   std::map<std::string, std::vector<std::string>> allowed_seed_groups;
+  const bool common_target = !candidates.empty() && std::all_of(
+      candidates.begin(), candidates.end(), [&](const auto& candidate) {
+        return candidate.target_type() == candidates.Get(0).target_type()
+            && candidate.target_scope() == candidates.Get(0).target_scope();
+      });
+  // Normal synthesis already groups by target; transmit that context once.
+  if(common_target) {
+    payload.AddMember("target_type", JsonValue(
+        ep::CandidateTargetType_Name(candidates.Get(0).target_type()).c_str(), allocator), allocator);
+    payload.AddMember("target_scope", JsonValue(candidates.Get(0).target_scope().c_str(), allocator), allocator);
+  }
   for(const auto& candidate : candidates) {
     JsonValue seed(rapidjson::kObjectType);
     seed.AddMember(
@@ -1005,21 +1048,15 @@ ModelRequest make_meta_request(
         allocator);
     const std::string target = ep::CandidateTargetType_Name(
         candidate.target_type());
-    seed.AddMember(
-        "target_type", JsonValue(target.c_str(), allocator), allocator);
-    seed.AddMember(
-        "target_scope",
-        JsonValue(candidate.target_scope().c_str(), allocator),
-        allocator);
+    if(!common_target) {
+      seed.AddMember("target_type", JsonValue(target.c_str(), allocator), allocator);
+      seed.AddMember("target_scope", JsonValue(candidate.target_scope().c_str(), allocator), allocator);
+    }
     const std::string compatibility_group =
         (is_scoped_experience(candidate) ? "scoped-experience-v1:" : "")
         + target + ":" + candidate.target_scope();
     allowed_seed_groups[compatibility_group].push_back(
         candidate.candidate_id());
-    seed.AddMember(
-        "compatibility_group",
-        JsonValue(compatibility_group.c_str(), allocator),
-        allocator);
     seed.AddMember(
         "trigger_pattern",
         JsonValue(candidate.trigger_pattern().c_str(), allocator),
@@ -1032,15 +1069,11 @@ ModelRequest make_meta_request(
         "proposed_change",
         JsonValue(candidate.proposed_change().c_str(), allocator),
         allocator);
-    seed.AddMember("support_dialogues", candidate.support_dialogue_count(), allocator);
-    seed.AddMember("support_episodes", candidate.support_episode_count(), allocator);
+    // Support gates and provenance stay local; the model only merges meaning.
     seed.AddMember("contradictions", candidate.contradiction_count(), allocator);
-    JsonValue evidence(rapidjson::kArrayType);
     for(const auto& event_id : candidate_event_ids(candidate)) {
-      evidence.PushBack(JsonValue(event_id.c_str(), allocator), allocator);
       append_unique(&allowed_events, event_id);
     }
-    seed.AddMember("evidence_event_ids", evidence, allocator);
     seeds.PushBack(seed, allocator);
   }
   payload.AddMember("candidate_seeds", seeds, allocator);
@@ -1060,10 +1093,6 @@ ModelRequest make_meta_request(
   }
   payload.AddMember(
       "allowed_seed_groups", compatibility_groups, allocator);
-  payload.AddMember(
-      "content_policy",
-      "sanitized_untrusted_candidate_evidence",
-      allocator);
 
   ModelRequest request;
   request.system_prompt = prompts.meta_reflection_system;
@@ -1109,7 +1138,7 @@ MetaValidation validate_meta_response(
     const std::vector<std::string>& secrets,
     bool require_chinese) {
   MetaValidation output;
-  if(!response.transport_ok) {
+  if(!response.transport_ok || !response.error_code.empty()) {
     output.error_code = response.error_code.empty()
         ? "transport_error" : response.error_code;
     return output;
@@ -1122,9 +1151,10 @@ MetaValidation validate_meta_response(
     output.error_code = "credential_in_response";
     return output;
   }
+  const auto body = unwrap_model_json(response.body);
   rapidjson::Document document;
-  document.Parse(response.body.data(), response.body.size());
-  if(document.HasParseError() || !document.IsObject()) {
+  document.Parse<rapidjson::kParseValidateEncodingFlag | rapidjson::kParseIterativeFlag>(body.data(), body.size());
+  if(document.HasParseError() || !unique_object_fields(document)) {
     output.error_code = "invalid_json";
     return output;
   }
@@ -1147,8 +1177,8 @@ MetaValidation validate_meta_response(
     const JsonValue* confidence = find_member(group, "confidence");
     if(!group.IsObject() || seed_ids == nullptr || !seed_ids->IsArray()
        || seed_ids->Empty() || seed_ids->Size() > kMaxMetaSeedsPerGroup
-       || evidence_ids == nullptr || !evidence_ids->IsArray()
-       || evidence_ids->Empty() || evidence_ids->Size() > 256U
+       || (evidence_ids != nullptr && (!evidence_ids->IsArray()
+           || evidence_ids->Empty() || evidence_ids->Size() > 256U))
        || confidence == nullptr || !confidence->IsNumber()
        || !std::isfinite(confidence->GetDouble())
        || confidence->GetDouble() < 0.0 || confidence->GetDouble() > 1.0) {
@@ -1206,7 +1236,9 @@ MetaValidation validate_meta_response(
         selected_events.insert(event_id);
       }
     }
-    for(const auto& value : evidence_ids->GetArray()) {
+    // Evidence is inherited from the selected seeds below. Legacy model
+    // responses may cite a subset, but those optional citations remain strict.
+    if(evidence_ids != nullptr) for(const auto& value : evidence_ids->GetArray()) {
       if(!value.IsString()) {
         output.error_code = "invalid_evidence_event_id";
         return output;
@@ -1397,6 +1429,7 @@ struct MemoryCurationContext {
   std::unordered_map<std::string, RawModelResponse>* response_cache = nullptr;
   std::vector<std::string> secrets;
   std::size_t max_memory_bytes = 0;
+  bool model_rate_limited = false;
 };
 
 std::string candidate_content_fingerprint(
@@ -1685,9 +1718,6 @@ JsonValue candidate_summary_json(
     const ep::EvolutionCandidate& candidate,
     Allocator& allocator) {
   JsonValue output(rapidjson::kObjectType);
-  output.AddMember(
-      "candidate_id",
-      JsonValue(candidate.candidate_id().c_str(), allocator), allocator);
   const std::string target = ep::CandidateTargetType_Name(
       candidate.target_type());
   output.AddMember("target_type", JsonValue(target.c_str(), allocator), allocator);
@@ -1703,15 +1733,10 @@ JsonValue candidate_summary_json(
   output.AddMember(
       "proposed_change",
       JsonValue(candidate.proposed_change().c_str(), allocator), allocator);
-  output.AddMember(
-      "expected_benefit",
-      JsonValue(candidate.expected_benefit().c_str(), allocator), allocator);
-  output.AddMember(
-      "error_class",
-      JsonValue(candidate.error_class().c_str(), allocator), allocator);
-  output.AddMember(
-      "retryability",
-      JsonValue(candidate.retryability().c_str(), allocator), allocator);
+  if(!candidate.error_class().empty()) output.AddMember(
+      "error_class", JsonValue(candidate.error_class().c_str(), allocator), allocator);
+  if(!candidate.retryability().empty()) output.AddMember(
+      "retryability", JsonValue(candidate.retryability().c_str(), allocator), allocator);
   return output;
 }
 
@@ -1722,7 +1747,6 @@ ModelRequest make_memory_match_request(
     const PromptTemplates& prompts) {
   rapidjson::Document payload(rapidjson::kObjectType);
   auto& allocator = payload.GetAllocator();
-  payload.AddMember("scope", "memory_candidate_curation", allocator);
   payload.AddMember(
       "incoming_candidate", candidate_summary_json(incoming, allocator), allocator);
   JsonValue options(rapidjson::kArrayType);
@@ -1731,18 +1755,11 @@ ModelRequest make_memory_match_request(
     JsonValue option(rapidjson::kObjectType);
     option.AddMember(
         "memory_id", JsonValue(entry.memory_id().c_str(), allocator), allocator);
-    const std::string status = ep::EvolutionMemoryStatus_Name(entry.status());
-    option.AddMember("memory_status", JsonValue(status.c_str(), allocator), allocator);
-    option.AddMember("lexical_score", item.lexical_score, allocator);
     option.AddMember(
         "candidate", candidate_summary_json(entry.candidate(), allocator), allocator);
     options.PushBack(option, allocator);
   }
   payload.AddMember("memory_options", options, allocator);
-  payload.AddMember(
-      "content_policy",
-      "sanitized_untrusted_memory_candidates",
-      allocator);
 
   ModelRequest request;
   request.system_prompt = prompts.memory_curator_system;
@@ -1764,7 +1781,7 @@ ParsedMemoryMatch validate_memory_match_response(
     const std::vector<std::string>& secrets,
     bool require_chinese) {
   ParsedMemoryMatch output;
-  if(!response.transport_ok) {
+  if(!response.transport_ok || !response.error_code.empty()) {
     output.error_code = response.error_code.empty()
         ? "transport_error" : response.error_code;
     return output;
@@ -1777,9 +1794,10 @@ ParsedMemoryMatch validate_memory_match_response(
     output.error_code = "credential_in_response";
     return output;
   }
+  const auto body = unwrap_model_json(response.body);
   rapidjson::Document document;
-  document.Parse(response.body.data(), response.body.size());
-  if(document.HasParseError() || !document.IsObject()) {
+  document.Parse<rapidjson::kParseValidateEncodingFlag | rapidjson::kParseIterativeFlag>(body.data(), body.size());
+  if(document.HasParseError() || !unique_object_fields(document)) {
     output.error_code = "invalid_json";
     return output;
   }
@@ -2575,6 +2593,10 @@ ParsedMemoryMatch run_memory_match(
     }
   }
   if(!response_cached) {
+    if(context->model_rate_limited) {
+      output.error_code = "http_429";
+      return output;
+    }
     if(context->remaining_model_calls == 0U) {
       output.error_code = "model_call_limit_reached";
       return output;
@@ -2594,6 +2616,9 @@ ParsedMemoryMatch run_memory_match(
       (*context->response_cache)[request.packet_id] = response;
     }
     model_called = true;
+  }
+  if(response.error_code == "http_429") {
+    context->model_rate_limited = true;
   }
   decision->set_attempts(response.attempts);
   if(!response.body.empty()) {
@@ -3194,6 +3219,10 @@ bool run_full_store_curation(
   if(semantic_review_count == 0U) {
     return true;
   }
+  if(context->model_rate_limited) {
+    result->set_full_curation_error_code("http_429");
+    return false;
+  }
   if(context->adapter == nullptr) {
     result->set_full_curation_error_code("adapter_not_configured");
     return false;
@@ -3236,6 +3265,10 @@ bool run_full_store_curation(
       decision->set_reason(
           "本条全库语义复核未完成；保留现有记忆，等待下次周期重试。");
       completed = false;
+      if(parsed.error_code == "http_429") {
+        result->set_full_curation_error_code(parsed.error_code);
+        break;
+      }
       continue;
     }
 
@@ -3602,6 +3635,7 @@ MemoryUpdateOutput TrajectoryEvolutionPipeline::curate_memory_file(
   std::uint64_t requested_total = 0;
   std::uint64_t succeeded_total = 0;
   std::uint64_t failed_total = 0;
+  bool model_rate_limited = false;
   const std::vector<std::string> secrets = collected_secrets(
       evaluator_options_.redaction_secrets);
   std::unordered_map<std::string, RawModelResponse> response_cache;
@@ -3621,8 +3655,11 @@ MemoryUpdateOutput TrajectoryEvolutionPipeline::curate_memory_file(
     context.response_cache = &response_cache;
     context.secrets = secrets;
     context.max_memory_bytes = max_file_bytes;
+    // A concurrent write must not restart calls to a rate-limited provider.
+    context.model_rate_limited = model_rate_limited;
     ep::MemoryUpdateResult result = curate_memory_in_place(
         batch, &planned, &context);
+    model_rate_limited = context.model_rate_limited;
     remaining_calls = context.remaining_model_calls;
     requested_total += result.model_requested_count();
     succeeded_total += result.model_succeeded_count();

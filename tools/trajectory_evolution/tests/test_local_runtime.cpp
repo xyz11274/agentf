@@ -119,6 +119,22 @@ int main() {
     check(fs::exists(root / "data/by-user/native-user/memory/evolution-memory.pb"), "memory pipeline missing");
     const auto status = client.call("run.status"); check(status.str("evaluation_status") == "completed", "background evaluation failed");
 
+    // Drain deterministically between a completion and its transport retry.
+    // Background timing must not decide whether an identical callback succeeds.
+    Client replay{runtime}; replay.sequence = 5000; replay.start();
+    const auto activity = replay.call("activity.begin", Json{{"kind", "action"}, {"name", "read"}, {"input", "safe"}});
+    Json completion{{"operation", "activity.end"}, {"request_id", "replayed-completion"}, {"run_id", replay.run},
+        {"activity_id", activity["activity_id"]}, {"status", "completed"}, {"executed", true}, {"output", "done"}};
+    const auto receipt = runtime.invoke(completion.dump()).body;
+    replay.finish(); runtime.drain();
+    auto retried = std::async(std::launch::async, [&] {
+      deny_business_io(); return runtime.invoke(completion.dump()).body;
+    }).get();
+    check(retried == receipt, "persisting a run discarded completion idempotency");
+    completion["output"] = "different";
+    check(Json::parse(runtime.invoke(completion.dump()).body)["result"].str("reason") == "request_id_conflict",
+        "closed-run replay accepted changed content");
+
     Client paused{runtime}; paused.sequence = 10000; paused.start(); runtime.set_enabled(false);
     auto skipped = paused.call("activity.begin", Json{{"kind", "action"}, {"name", "read"}, {"input", Json::Object{}}}, false);
     check(skipped.flag("degraded", false) && !skipped.flag("policy_applied", true), "pause was not explicit");

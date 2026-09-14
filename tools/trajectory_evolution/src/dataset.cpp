@@ -3,6 +3,7 @@
 #include "agentflow/trajectory/runtime_config.h"
 #include "integration_json.h"
 #include "local_support.h"
+#include "model_json.h"
 
 #include <algorithm>
 #include <array>
@@ -381,6 +382,12 @@ struct Builder {
                 const std::string& group, std::size_t count, std::size_t si, std::size_t index) {
     require(result.model_calls() < max_calls, "dataset_model_call_limit");
     Json request{{"source_kind", kind}, {"requested_count", count}, {"untrusted_evidence", evidence}};
+    if(kind == "traces") {
+      // Task extraction needs actual content, not evaluation routing or per-loop
+      // rule packets. Content reference paths remain relative to this evidence.
+      for(const auto* field : {"episodes", "selected_episode_ids", "allowed_experience_scopes"})
+        request["untrusted_evidence"].fields().erase(field);
+    }
     safe(request);
     const auto body = request.dump();
     require(body.size() <= runtime->model.max_request_bytes, "dataset_model_input_too_large");
@@ -400,7 +407,7 @@ struct Builder {
       throw Error("dataset_model_failed");
     }
     require(response.body.size() <= runtime->model.max_response_bytes, "dataset_model_output_too_large");
-    const auto generated = Json::parse(response.body);
+    const auto generated = Json::parse(legacy::unwrap_model_json(response.body));
     safe(generated);
     integration::keys(generated, {"cases"});
     require(generated["cases"].array() && generated["cases"].items().size() <= count,

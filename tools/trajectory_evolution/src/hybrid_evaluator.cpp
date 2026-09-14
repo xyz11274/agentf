@@ -1,5 +1,7 @@
 #include "agentflow/trajectory/hybrid_evaluator.h"
+#include "model_input.h"
 #include "trajectory_evolution/trace.h"
+#include "model_json.h"
 
 #include <algorithm>
 #include <array>
@@ -507,10 +509,10 @@ ModelValidation validate_model_response(
     return output;
   }
 
+  const auto body = unwrap_model_json(response.body);
   rapidjson::Document document;
-  document.Parse<rapidjson::kParseValidateEncodingFlag>(
-      response.body.data(), response.body.size());
-  if(document.HasParseError() || !document.IsObject()) {
+  document.Parse<rapidjson::kParseValidateEncodingFlag | rapidjson::kParseIterativeFlag>(body.data(), body.size());
+  if(document.HasParseError() || !unique_object_fields(document)) {
     output.error_code = "invalid_json";
     return output;
   }
@@ -538,12 +540,12 @@ ModelValidation validate_model_response(
   }
   output.confidence = confidence->GetDouble();
   try {
-    output.expected_state_change = member_string(
+    if(document.HasMember("expected_state_change")) output.expected_state_change = member_string(
         document,
         "expected_state_change",
         "model_response",
         kMaxModelStateBytes);
-    output.observed_state_change = member_string(
+    if(document.HasMember("observed_state_change")) output.observed_state_change = member_string(
         document,
         "observed_state_change",
         "model_response",
@@ -564,9 +566,9 @@ ModelValidation validate_model_response(
     return output;
   }
 
-  if(output.expected_state_change.empty()
-     || output.observed_state_change.empty()
-     || output.concise_reason.empty()) {
+  if(output.concise_reason.empty()
+     || (document.HasMember("expected_state_change") && output.expected_state_change.empty())
+     || (document.HasMember("observed_state_change") && output.observed_state_change.empty())) {
     output.error_code = "missing_text_field";
     return output;
   }
@@ -712,10 +714,14 @@ ModelRequest make_model_request(
   request.packet_id = packet.packet_id();
   request.system_prompt = prompts.episode_system;
   request.allowed_event_ids = allowed_event_ids(packet);
+  rapidjson::Document evidence;
+  const auto raw = protobuf_json(packet, false);
+  evidence.Parse(raw.data(), raw.size());
+  model_input::analysis_view(evidence);
   request.user_prompt = render_prompt_template(
       "episode_user",
       prompts.episode_user,
-      {{"evidence_json", protobuf_json(packet, false)}},
+      {{"evidence_json", model_input::bytes(evidence)}},
       std::numeric_limits<std::size_t>::max());
   return request;
 }

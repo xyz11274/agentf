@@ -59,6 +59,13 @@ L1 起模型活动提供 `binding`，结束时显式填写 `status`。
 | `error`           | activity.end 可给 code、retryability、message；retryability 为 unknown/retryable/non_retryable |
 | `business_status` | run.end 的业务结果，默认为 unknown                                                             |
 
+模型/动作活动未提供 `state` 或值为 null 时，组件默认从当前调用的 `input` 构造检索状态。
+消息模式按 `binding.pointer` 取消息数组，排除 system/developer 消息，不把工具定义或已有系统经验当成观察结果；
+其他输入形式使用当前 input。显式 state（包括空字符串、空对象、false）始终优先。
+检索副本受 `query_context.max_state_bytes` 和 `shadow_options.max_query_bytes` 限制，保留首尾片段；
+不裁剪实际模型请求或原始采集内容，不从其他调用/并发分支拼接状态。`apply_policy=false` 与 L0 不做此检索。
+这不是模型摘要，也不会增加模型调用；loop.check 的 state 仍由原有循环打点提供。
+
 完整逐字段约束以 [新协议 Schema](../api/boundary-v1.schema.json)、[全部请求 Schema](../api/invoke-v1.schema.json)
 和 [OpenAPI](../api/openapi.json) 为准。生命周期、权限、隐私和条件必填由服务进一步校验。
 run.begin 可传 `contract_version=1`；未知版本明确拒绝，不静默降级。
@@ -92,6 +99,12 @@ rpc("event.record", {
 
 扩展内容进入轨迹和受限的模型评测内容，但规则不会自动理解任意新字段；可在外置 Prompt 中说明领域含义。
 自定义事件保存业务补充信息；activity.end 负责活动收尾，advice.applied 由系统核验生成。扩展字段同样经过隐私检查。
+
+需要将自定义结果关联到具体执行轮次时，`event.record` 可选传同一 Run 的 `control_id`；
+关联到具体活动时传 `activity_id`，两者不能同时传。组件继承所选上下文的执行流、轮次和执行者，
+不按事件到达时间猜测它属于哪个并行分支。未指定关联时，事件保持 Run 级观察，不生成额外轮次。
+使用 `phase: "event"` 的打点接口时无需另行填写这些 ID：组件优先沿用打点上下文中的活动，
+没有活动时沿用循环上下文。该打点只记录结果，不启动操作、不应用策略、不代替活动收尾。
 
 ## 身份、作用域与执行流
 

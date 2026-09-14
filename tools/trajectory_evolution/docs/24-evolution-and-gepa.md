@@ -122,18 +122,85 @@ L4 是后台优化能力。`max_level`、`instrumentation.level` 和候选的 `l
    ```json
    "gepa_config": "gepa.json"
    ```
-
 5. 服务配置继续使用 `"policy_evaluation_file": "agent-evaluation.json"`。允许的经验通过 `auto_approve_experiences` 或 `runtime_options.approved_experiences` 进入候选。
-6. 启动组件。后台提交的 L1–L3 候选有已批准经验时自动进行 GEPA；L0 与无可改写经验的候选仍走原来的单次评测。也可使用既有 `agent_evaluation.submit` 提交冻结候选。
+6. 启动组件。后台先检查当前用户与公共库合并后的可用经验。不足时自动执行训练任务、采集和学习；足够后提交 L1–L3 种子进入 GEPA。也可使用既有 `agent_evaluation.submit` 提交已准备好的冻结候选。
 
 留出任务数 × repetitions 至少满足 `gate.min_trials`。修改配置或提示词不需要重新编译；重启组件建立新实验上下文，避免在同一棵树中混用不同配置的成绩。
 
 省略 `gepa_config` 就保持原评测行为。这里不需要新的宿主 hook、observer、适配器或打点。
 
+## 经验不足时自动补充训练
+
+此机制不限于首次启动或空库。后台先按既有编译规则处理用户私有经验与公共经验的重复、冲突、归档状态、作用域和授权，再统计最终策略中实际存在且已批准的经验。数据库总行数、历史版本数和已经失效的批准记录都不计入。
+
+在 `agent-evaluation.json` 配置：
+
+```json
+"training": {
+  "enabled": true,
+  "min_experiences": 3,
+  "batch_size": 16,
+  "max_batches": 4
+}
+```
+
+以上也是省略参数时的默认值；各数量范围为 1–512。`min_experiences` 是可配置的数据准备门槛，不是任务成功率指标。最终策略仍要接受独立的真实执行评测和发布门禁。
+
+| 当前情况                                        | 后台行为                                                                                 |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| 没有经验，或过滤与授权后不足`min_experiences` | 用原 Agent 的 L0 无策略版本执行下一批已审核训练题                                        |
+| 经验很多，但无法进入当前策略                    | 按实际可用经验数判断，不用存储总数跳过训练                                               |
+| 本批轨迹正在分析或入库                          | 等待既有学习队列完成，不同时启动下一批                                                   |
+| 本批学习完成但仍不足                            | 在预算内选择未使用的训练题，再补充一批                                                   |
+| 已满足门槛                                      | 停止补充训练，编译种子并进入 GEPA                                                        |
+| 训练执行、入库或学习发生错误                    | 保留具体阶段状态，不自动无限重试                                                         |
+| 批次数用尽或训练题耗尽，经验仍不足              | 记录`budget_exhausted` 或 `training_exhausted`，保留已生成的经验自动学习需要服务配置 |
+
+`auto_evaluate=true`
+
+。通常配合
+
+`auto_approve_experiences=true`，使质量与隐私门禁通过的经验可以成为待评测候选；它不会绕过策略发布评测。使用手工批准列表时，只统计其中仍然匹配内容版本的经验。缺少目标级别的打点能力或批准权限需要修正配置，训练不会扩大宿主权限。每批复用已配置的原程序启动命令、入口绑定、打点采集、超时、隔离进程、并发和每小时评测限额。主 Agent 不等待训练。训练量额外受 `batch_size × max_batches` 限制；`repetitions` 决定每题实际执行次数，多轮题继续按原评测器收集多个 Run。
+
+### 数据入库边界
+
+1. 仅选取冻结数据集里 `split=train` 且 `review_status=reviewed` 的题目；验证集和留出集不进入经验库。
+2. 原 Agent 以明确的 L0、空策略版本执行。校验报告完成标记和指纹、数据集与题目版本，以及每条真实轨迹的用户、应用、版本、试验 ID 和闭合完整性。
+3. 有可信完整轨迹的成功或业务失败样本都可以学习；执行状态不明、截断或缺失轨迹不能充当学习证据。已有隐私检查保持生效。
+4. 通过校验的轨迹进入原来的分析、元反思与记忆管理队列。Run 清单保留 `training_source`，原轨迹中的评测 ID 不删除。直接从普通日志入口导入评测轨迹仍被拒绝。
+5. 训练身份用于该用户的私有种子经验，不作为独立真实用户为公共经验投票；公共库原有推广、冲突和淘汰门禁保持不变。
+
+导入后的轨迹副本在 `attributes.training_evaluation` 保存离线验收上下文：`expected_behavior`、`constraints`、
+试验 `verdict`、`checks` 和整场试验的 `run_ids`。原始报告与执行事件不变；这些字段不是新增执行结果，
+而是后续分析、反思判断必需动作是否完成的参考。多轮试验的总体结论不直接套用于其中每个 Run。
+例如解析命令被拦截，之后仅写入和读回 JSON 文件，不能当成已经实际运行解析器。
+上下文经过相同隐私与大小检查；普通会话不需要提供这些字段。已经导入的旧轨迹不会被回填或重复分析。
+
+### 重启、去重与查看状态
+
+进度和已经使用的题目版本记录在组件现有 `agent-evaluation/state.json`，不按记忆 revision 重置训练预算。相同应用版本和数据集版本在重启后继续使用该进度；已完成的报告导入也是幂等的。执行中被中断的训练保留 `interrupted`，不会擅自再调用宿主。
+
+使用既有 `agent_evaluation.status`，查看返回的 `training`：
+
+| 字段                                         | 含义                                                                                          |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `status`                                   | `training`、`ready_to_import`、`waiting_for_learning`、`ready`，或明确的失败/耗尽原因 |
+| `usable_experiences` / `min_experiences` | 当前真正可用于种子的经验数 / 准备门槛                                                         |
+| `batches`                                  | 已经分配的补充训练批次数                                                                      |
+| `tasks`                                    | 本次应用版本和数据集下已使用的题目版本，用于避免重复分配                                      |
+| `job_id` / `run_ids`                     | 当前训练作业 / 该批已接收入学习队列的真实 Run                                                 |
+| `identity`                                 | 应用版本与冻结数据集的进度标识，不包含记忆计数                                                |
+
+对应的作业带 `training=true`，不会充当发布成绩，也不会生成生产策略发布记录。后台学习失败显示 `learning_failed`；报告无法入库显示 `import_failed`。已有 `agent_evaluation.retry` 可显式重试执行失败/中断的训练作业；更换训练集或应用版本会建立新的数据准备进度。
+
+修改评测配置后重启服务，尚未完成且未主动取消的当前训练批次会在新配置下重新排队：保留原任务清单和批次预算，使用新的作业目录，不复用旧配置的检查点。新作业的 `supersedes` 指向旧作业，旧报告保留可追溯。已完成批次不重跑；同一配置下的失败以及主动取消仍需显式处理，不会自动无限重试。
+
+离线执行可使用 `trajectory_evolution learn --config SERVICE_JSON`：无需预先有用户会话，组件在配置了 GEPA 与自动学习时完成补充训练、学习和后续策略评测。命令等待后台队列，不因暂时没有待学习日志而提前退出；经验仍不足或学习失败会以非零退出码报告。省略输入时不会清空已有记忆。
+
 ## 一次搜索的完整算法
 
 1. **冻结实验上下文。** 保存当前生产基线和记忆编译得到的 seed。上下文绑定任务集版本、宿主 revision、评测配置、反思配置/提示词和控制授权。当前生产基线尚未发布时使用 L0。
-2. **评测树根。** 在验证集执行 seed，保存逐题质量与成本。缺乏有效评分或启用目标所需指标时停止，不能把未知成本计成零。
+2. **评测树根。** 在验证集执行 seed，保存逐题质量与成本。缺乏有效评分或循环证据时停止；未知 token 默认拒绝，也可显式使用下文的保守成本策略，不能把未知用量计成零。
 3. **选择父节点或重组分支。** 默认保留逐题最优节点，移除前沿覆盖被更优候选包含的冗余节点，按占据前沿的频次抽样。内部节点和叶节点采用相同资格规则。已有新候选且存在合适双亲时优先尝试重组。
 4. **抽取训练小批次与组件。** 默认按 epoch 重新洗牌，末批可短于 minibatch_size，不重复填充题目。父子使用相同任务与 repetitions；每个父节点轮换可改组件，后代继承轮换游标。可以配置同父多个提案、独立采样或 P×N 采样。
 5. **生成反思改写。** 模型看到当前实际经验、生成控制规则、选中组件、训练输入、输出、判分与轨迹。失败案例优先。验证与留出任务正文不进入反思。可选满分跳过检查实际质量和 fitness，而非仅检查业务成功。
@@ -144,6 +211,14 @@ L4 是后台优化能力。`max_level`、`instrumentation.level` 和候选的 `l
 10. **最终验收。** 先固定 winner，再在留出集比较生产基线与 winner。使用原来的质量、覆盖率、配对样本、时延、token、无效循环准入规则。留出失败就保留原生产版本，不把失败详情反馈给反思模型后继续针对同一留出集搜索。
 11. **发布。** 只有该用户/等级的任务仍是最新候选、生产父版本未改变且准入通过，才登记新版本。新 run 从缓存取用；已开始的 run 保持原版本。
 
+逐题补测会检查同一上下文中已结束批次的有效题目，包括当前批次的上一次尝试：即使该批次另有题目评分出错，已完整评分且具备
+当前目标所需指标的题目仍可复用，包括正常判定的业务失败。每题必须保留全部 repetitions；error、uncertain、
+缺失循环指标、未完成评分或默认策略下缺失 token 的记录不充当有效成绩。报告哈希、版本、split 及上下文绑定仍须通过校验，
+不从最终留出对照提取记录用于搜索；`cache_evaluations=false` 仍完整重测。
+缓存命中还会核验当前目标需要的指标；历史索引中的 `complete` 不会让缺少 token 或循环指标的种子报告永久卡住。
+补测结果仍不确定时，报告的 `complete` 保留“本批执行已结束”的含义，缓存标记为 `inconclusive`，下次只补测未获有效成绩的题目。
+拼接报告的 `source_report_refs` 记录来源缓存键、具体 attempt 报告路径和哈希；同一缓存键的重试指向旧报告，便于追溯复用来源。
+
 `accepted` 表示候选已有有效验证成绩，`winner` 表示验证阶段选中；是否生产生效以 `decision.json.published` 为准。
 反思变异和双亲重组共用一个谱系，不使用 MCTS 的 UCT 或随机 rollout。节点与边来自实际候选生成和真实试验。
 
@@ -151,11 +226,11 @@ L4 是后台优化能力。`max_level`、`instrumentation.level` 和候选的 `l
 
 例如共同祖先 O 有经验 E0 与编排 S0。A 将经验改为 E1，B 将编排改为 S1。重组可生成同时包含 E1、S1 的 C，并记录 parents=[A,B]。
 
-| 组件 | 祖先 O | 分支 A | 分支 B | 重组 C |
-| --- | --- | --- | --- | --- |
-| experience:memory-a | E0 | E1 | E0 | E1，来源 A |
-| action_rules | S0 | S0 | S1 | S1，来源 B |
-| loop_rules | L0 | L0 | L0 | L0 |
+| 组件                | 祖先 O | 分支 A | 分支 B | 重组 C     |
+| ------------------- | ------ | ------ | ------ | ---------- |
+| experience:memory-a | E0     | E1     | E0     | E1，来源 A |
+| action_rules        | S0     | S0     | S1     | S1，来源 B |
+| loop_rules          | L0     | L0     | L0     | L0         |
 
 A 即使已有其他子节点，也可和叶节点 B 重组。筛选依据是前沿表现，而不是节点是否位于最深一层。
 
@@ -171,7 +246,7 @@ A 即使已有其他子节点，也可和叶节点 B 重组。筛选依据是前
 
 为同一个父版本尝试多个方向，并为重组留出节点预算，可在 gepa.json 中设置：
 
-~~~json
+```json
 {
   "use_merge": true,
   "max_rounds": 16,
@@ -182,17 +257,17 @@ A 即使已有其他子节点，也可和叶节点 B 重组。筛选依据是前
   "component_selector": "all",
   "proposal_selection": "all_improvements"
 }
-~~~
+```
 
 以上是需要合入既有配置的字段，不是独立的完整配置文件。允许合并不表示每轮强制合并；没有互补分支时继续反思。达到反思调用数上限后，剩余节点、试验和时间预算仍可用于重组。
 
 ## 可优化内容与记忆的关系
 
-| 改写类型 | 生效方式 | 保持不变的边界 |
-| --- | --- | --- |
-| 经验文本 | `RuntimeOptions.experience_overrides` 按来源 `memory_id/content_revision` 覆盖注入正文 | 来源记忆、触发条件、scope、检索和私有/公共冲突筛选不变 |
-| L2 生成规则 | 已开启 `control_learning` 时，复用允许操作与参数白名单生成必需参数规则 | 不新增宿主操作，不扩大作用域，不修改手工规则 |
-| L3 生成规则 | 根据已批准经验收紧已有基础循环规则 | 不放松基础上限，遵守配置的最小轮数，不修改宿主业务代码 |
+| 改写类型    | 生效方式                                                                                   | 保持不变的边界                                         |
+| ----------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| 经验文本    | `RuntimeOptions.experience_overrides` 按来源 `memory_id/content_revision` 覆盖注入正文 | 来源记忆、触发条件、scope、检索和私有/公共冲突筛选不变 |
+| L2 生成规则 | 已开启`control_learning` 时，复用允许操作与参数白名单生成必需参数规则                    | 不新增宿主操作，不扩大作用域，不修改手工规则           |
+| L3 生成规则 | 根据已批准经验收紧已有基础循环规则                                                         | 不放松基础上限，遵守配置的最小轮数，不修改宿主业务代码 |
 
 默认每次反思只允许修改轮换选中的组件。component_selector=all 时，可使用 experiences 数组修改多条获选经验，并可同时提交获选控制类别。未提交的控制类别保持原值；提交的类别替换该类完整生成规则。组件越权、格式错误或泄露测试值均记录固定错误码。
 
@@ -212,40 +287,49 @@ fitness = task_pass
 
 默认权重为无效 loop `0.2`、token `0.05`、时延 `0`，三个成本权重之和必须小于 `0.5`。
 重复试验先在每道题内取平均，整体比较先看任务通过率，再比较 fitness。模型调用数等其他指标继续保留在逐次报告中。
-`invalid_loops` 是规则观察到的 `invalid_loop_lower_bound`，并不等于全部业务浪费。
-启用非零权重的指标必须可观测；token 应在每次模型结束打点提供 usage，不能只提供一个未经调用记录支撑的汇总数字。
+`invalid_loops` 默认是规则观察到的 `invalid_loop_lower_bound`，并不等于全部业务浪费。
+在任务评测配置中启用 `judge.loop_review_prompt` 后，改用同一次评分请求给出的逐轮模型估计；
+每条结论绑定真实轮次和事件。详见[无效 loop 评测](19-datasets-and-benchmarks.md#评测无效-loop)。
+规则下界仍独立保存，模型评审缺失或不完整时不回退为零。发布门禁读取相同口径，并拒绝将基线 0 到候选 0 当作正比例下降。
+默认要求启用非零权重的指标可观测；token 应在每次模型结束打点提供 usage，不能只提供一个未经调用记录支撑的汇总数字。
+模型超时后可能确实没有 usage。此时可在 gepa.json 显式设置 `unknown_token_policy="worst_case"`：
+仅将未知 token 的归一化成本按其上界 1 参与排序，仍扣除完整 token_weight，不改写 Trial 的未知用量。
+每道题的 `unknown_token_trials` 记录这种情况的次数；存在时，fitness 和 token_efficiency 是保守下界，不是精确成本收益。
+该选项不接受缺失/不确定的业务评分或循环证据，也不放宽发布门禁；配置 max_token_ratio 时仍要求完整成本观测。
+缺省 `unknown_token_policy="reject"` 保持原严格行为。策略参与评测上下文指纹，缓存不跨这两种口径复用。
 
-| `gepa.json` 参数 | 默认 | 用途 |
-| --- | --- | --- |
-| `max_rounds` / `max_model_calls` | 8 / 8 | 非根节点总数 / 反思模型请求预算；重组、跳过和失败也占节点名额；单请求不做隐式传输重试 |
-| `max_trials` | 400 | 实际预留的宿主试跑数，包括 repetition、基线和中断后重试 |
-| `timeout_ms` | 1800000 | 整棵搜索的墙钟截止时间，重启不清零 |
-| `minibatch_size` | 4 | 每轮父子训练任务数，上限为训练集大小 |
-| `patience` | 4 | 连续无整体最优改进、且前沿成员不变的批次／重组次数；0 表示不启用，省略字段也不启用 |
-| `max_feedback_trials` | 4 | 进入一次反思的训练案例数，失败案例优先 |
-| `max_input_bytes` | 65536 | 序列化反思输入上限，不含 system prompt 与传输外壳 |
-| `max_experience_bytes` | 2048 | 单条新经验 UTF-8 字节上限，仍受运行时注入总长度约束 |
-| `seed` / `min_improvement` | 42 / 0.000001 | 可重复抽样 / 同通过率下的最低 fitness 改进 |
+| `gepa.json` 参数                   | 默认          | 用途                                                                                  |
+| ------------------------------------ | ------------- | ------------------------------------------------------------------------------------- |
+| `max_rounds` / `max_model_calls` | 8 / 8         | 非根节点总数 / 反思模型请求预算；重组、跳过和失败也占节点名额；单请求不做隐式传输重试 |
+| `max_trials`                       | 400           | 实际预留的宿主试跑数，包括 repetition、基线和中断后重试                               |
+| `timeout_ms`                       | 1800000       | 整棵搜索的墙钟截止时间，重启不清零                                                    |
+| `minibatch_size`                   | 4             | 每轮父子训练任务数，上限为训练集大小                                                  |
+| `patience`                         | 4             | 连续无整体最优改进、且前沿成员不变的批次／重组次数；0 表示不启用，省略字段也不启用    |
+| `max_feedback_trials`              | 4             | 进入一次反思的训练案例数，失败案例优先                                                |
+| `max_input_bytes`                  | 65536         | 序列化反思输入上限，不含 system prompt 与传输外壳                                     |
+| `max_experience_bytes`             | 2048          | 单条新经验 UTF-8 字节上限，仍受运行时注入总长度约束                                   |
+| `seed` / `min_improvement`       | 42 / 0.000001 | 可重复抽样 / 同通过率下的最低 fitness 改进                                            |
 
 搜索与重组配置：
 
-| 参数 | 默认 | 可选值与行为 |
-| --- | --- | --- |
-| `candidate_selection_strategy` | pareto | pareto 按前沿覆盖频次；current_best 选整体最优；epsilon_greedy 探索所有有效候选；top_k_pareto 从前沿前 K 名抽样；fair 保留旧的选择次数加权方式 |
-| `epsilon` / `top_k` | 0.1 / 5 | epsilon_greedy 的随机探索概率 / top_k_pareto 的候选上限 |
-| `frontier_type` | instance | instance 逐题 fitness；objective 整体质量与启用的效率维度；hybrid 两者并集；cartesian 逐题 × 各目标 |
-| `prune_dominated` | true | 删除前沿覆盖被不差候选包含的冗余成员，成绩及覆盖相同时保留稳定代表 |
-| `component_selector` | round_robin | round_robin 轮换一个组件；all 允许改写所有组件；model_choice 是保留的模型自行选择模式 |
-| `minibatch_strategy` | epoch_shuffled | 每个 epoch 重新洗牌；fixed 保留旧固定排列轮转方式 |
-| `sampling_strategy` | same_parent | single 单提案；same_parent 同父同批 N 个；independent 每提案独立选父和训练批；pxn 选 P 组父版本、每组 N 个 |
-| `proposals_per_round` / `parents_per_round` | 1 / 2 | 上述 N / P；实际总提案上限 8，并受剩余节点、模型预算限制；独立选父允许重复抽到同一版本 |
-| `proposal_selection` / `proposal_top_k` | all_improvements / 2 | all_improvements 保留所有改善者；best 只保留增益最大者；top_k 保留增益前 K 个 |
-| `acceptance` | strict_improvement | strict_improvement 严格改善；improvement_or_equal 要求平均质量与 fitness 均不退化 |
-| `use_merge` / `max_merge_invocations` | true / 5 | 是否重组 / 双亲组合最多尝试数；无效组合、重复、失败也计数 |
-| `merge_minibatch_size` | 4 | 从一方领先、另一方领先、平分三组轮流取题；不重复补题，最多取完整验证集 |
-| `cache_evaluations` | true | 复用同版本、同 split、同上下文的完成试验；false 允许重新测量随机执行，最终已完成 holdout 在恢复时仍复用 |
-| `skip_perfect_score` / `perfect_score` | false / 1 | 每道训练题质量均为 1、fitness 均达到阈值时跳过反思 |
-| `target_fitness` | 未启用 | 最优验证质量为 1 且平均 fitness 达标时提前结束搜索；仍执行最终准入 |
+| 参数                                            | 默认                 | 可选值与行为                                                                                                                                   |
+| ----------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `candidate_selection_strategy`                | pareto               | pareto 按前沿覆盖频次；current_best 选整体最优；epsilon_greedy 探索所有有效候选；top_k_pareto 从前沿前 K 名抽样；fair 保留旧的选择次数加权方式 |
+| `epsilon` / `top_k`                         | 0.1 / 5              | epsilon_greedy 的随机探索概率 / top_k_pareto 的候选上限                                                                                        |
+| `frontier_type`                               | instance             | instance 逐题 fitness；objective 整体质量与启用的效率维度；hybrid 两者并集；cartesian 逐题 × 各目标                                           |
+| `prune_dominated`                             | true                 | 删除前沿覆盖被不差候选包含的冗余成员，成绩及覆盖相同时保留稳定代表                                                                             |
+| `component_selector`                          | round_robin          | round_robin 轮换一个组件；all 允许改写所有组件；model_choice 是保留的模型自行选择模式                                                          |
+| `minibatch_strategy`                          | epoch_shuffled       | 每个 epoch 重新洗牌；fixed 保留旧固定排列轮转方式                                                                                              |
+| `sampling_strategy`                           | same_parent          | single 单提案；same_parent 同父同批 N 个；independent 每提案独立选父和训练批；pxn 选 P 组父版本、每组 N 个                                     |
+| `proposals_per_round` / `parents_per_round` | 1 / 2                | 上述 N / P；实际总提案上限 8，并受剩余节点、模型预算限制；独立选父允许重复抽到同一版本                                                         |
+| `proposal_selection` / `proposal_top_k`     | all_improvements / 2 | all_improvements 保留所有改善者；best 只保留增益最大者；top_k 保留增益前 K 个                                                                  |
+| `acceptance`                                  | strict_improvement   | strict_improvement 严格改善；improvement_or_equal 要求平均质量与 fitness 均不退化                                                              |
+| `use_merge` / `max_merge_invocations`       | true / 5             | 是否重组 / 双亲组合最多尝试数；无效组合、重复、失败也计数                                                                                      |
+| `merge_minibatch_size`                        | 4                    | 从一方领先、另一方领先、平分三组轮流取题；不重复补题，最多取完整验证集                                                                         |
+| `cache_evaluations`                           | true                 | 复用同版本、同 split、同上下文的完成试验；false 允许重新测量随机执行，最终已完成 holdout 在恢复时仍复用                                        |
+| `unknown_token_policy`                       | reject               | reject 拒绝缺失的非零权重 token 指标；worst_case 显式使用最保守成本惩罚，保留未知次数和原始用量缺失 |
+| `skip_perfect_score` / `perfect_score`      | false / 1            | 每道训练题质量均为 1、fitness 均达到阈值时跳过反思                                                                                             |
+| `target_fitness`                              | 未启用               | 最优验证质量为 1 且平均 fitness 达标时提前结束搜索；仍执行最终准入                                                                             |
 
 多提案模型请求在同一个后台搜索中顺序执行，共用预算；宿主试验继续使用 evaluation 配置的 parallelism。训练批序列和组件选择计划先保存再执行，中断后保留已完成的兄弟提案。
 
@@ -294,28 +378,28 @@ data/agent-evaluation/<job-id>/
     published-version.json       已发布版本包：完整策略＋版本 ID＋验收信息
 ```
 
-| `tree.json` 字段 | 含义 |
-| --- | --- |
-| `schema_version` / `algorithm` / `context` | 谱系格式 2 / gepa-reflective-dag-v2 / 冻结实验上下文指纹；配置文件自己的 schema_version 仍为 1 |
-| `seed_version` / `baseline_version` | 搜索起点 / 生产对照版本的行为 ID |
-| `nodes[].id / parents / kind / depth` | 节点序号、父节点数组、seed/reflection/merge、最长父路径深度；根 parents=[]，反思一个父，重组两个父，depth=max(双亲深度)+1 |
-| `nodes[].parent` | 保留旧字段，指向 parents 第一项，根为 null；读取完整谱系应使用 parents |
-| `nodes[].ancestor / component_sources / conflicts` | 重组的共同祖先 / 每个组件采用的父节点 / 双方独立修改且不同的组件；相同组件的来源稳定记录第一方 |
-| `nodes[].tasks / components / component_cursor / batch` | 本节点小批次、允许改写组件、后续轮换游标、所属反思提案批次；重组使用验证子集 |
-| `nodes[].version` | 完整策略行为 ID；未形成有效策略的错误节点可缺省 |
-| `nodes[].status / reason / error / error_stage` | 候选阶段、反思改动原因、固定错误码与失败阶段 |
-| `nodes[].selections / previous_best` | 被选作父节点次数 / 重组创建时的整体最优；多提案批次将 previous_best 保存在 batch |
-| `nodes[].screening` | 同一训练小批次上的父子逐题成绩 |
-| `nodes[].validation` | 验证集逐题的 fitness、quality、repetitions，以及启用的 loop_efficiency/token_efficiency/latency_efficiency |
-| `nodes[].reflection_stages` | ComBEE 已完成的 map/reduce 阶段、组件、文件前缀与反馈数量；普通反思没有此字段 |
-| `nodes[].duplicate_of` | 相同行为版本首次出现的节点；重复节点不另行评测 |
-| `frontier / frontier_mapping / winner / active` | 当前前沿并集 / 每个任务或目标对应的最优候选 / 验证阶段选中节点 / 尚在处理节点 |
-| `batch / reflection_batches / training_batches` | 尚未结束的提案批次及冻结计划 / 已创建批次数 / 已采样的训练批次数；batch 结束后为 null |
-| `merge_attempts / merge_due` | 已尝试双亲、祖先和对应节点 / 是否有待尝试的重组机会 |
-| `rounds / model_calls / trials_used` | 已占用的预算；中断请求不能假定没有费用 |
-| `evaluations` | 按行为版本、任务子集、配置形成的缓存索引，含报告路径、哈希和 attempt；拼接报告有 source_reports，trials_reserved=0，仅补跑缺题 |
-| `holdout_started / selected_version` | 是否已冻结最终比较对象 / 选中的完整行为版本 |
-| `status / stop_reason / started_ms / finished_ms` | 整棵树的状态、停止原因和毫秒时间戳 |
+| `tree.json` 字段                                        | 含义                                                                                                                           |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `schema_version` / `algorithm` / `context`          | 谱系格式 2 / gepa-reflective-dag-v2 / 冻结实验上下文指纹；配置文件自己的 schema_version 仍为 1                                 |
+| `seed_version` / `baseline_version`                   | 搜索起点 / 生产对照版本的行为 ID                                                                                               |
+| `nodes[].id / parents / kind / depth`                   | 节点序号、父节点数组、seed/reflection/merge、最长父路径深度；根 parents=[]，反思一个父，重组两个父，depth=max(双亲深度)+1      |
+| `nodes[].parent`                                        | 保留旧字段，指向 parents 第一项，根为 null；读取完整谱系应使用 parents                                                         |
+| `nodes[].ancestor / component_sources / conflicts`      | 重组的共同祖先 / 每个组件采用的父节点 / 双方独立修改且不同的组件；相同组件的来源稳定记录第一方                                 |
+| `nodes[].tasks / components / component_cursor / batch` | 本节点小批次、允许改写组件、后续轮换游标、所属反思提案批次；重组使用验证子集                                                   |
+| `nodes[].version`                                       | 完整策略行为 ID；未形成有效策略的错误节点可缺省                                                                                |
+| `nodes[].status / reason / error / error_stage`         | 候选阶段、反思改动原因、固定错误码与失败阶段                                                                                   |
+| `nodes[].selections / previous_best`                    | 被选作父节点次数 / 重组创建时的整体最优；多提案批次将 previous_best 保存在 batch                                               |
+| `nodes[].screening`                                     | 同一训练小批次上的父子逐题成绩                                                                                                 |
+| `nodes[].validation`                                    | 验证集逐题的 fitness、quality、repetitions，以及启用的 loop_efficiency/token_efficiency/latency_efficiency                     |
+| `nodes[].reflection_stages`                             | ComBEE 已完成的 map/reduce 阶段、组件、文件前缀与反馈数量；普通反思没有此字段                                                  |
+| `nodes[].duplicate_of`                                  | 相同行为版本首次出现的节点；重复节点不另行评测                                                                                 |
+| `frontier / frontier_mapping / winner / active`         | 当前前沿并集 / 每个任务或目标对应的最优候选 / 验证阶段选中节点 / 尚在处理节点                                                  |
+| `batch / reflection_batches / training_batches`         | 尚未结束的提案批次及冻结计划 / 已创建批次数 / 已采样的训练批次数；batch 结束后为 null                                          |
+| `merge_attempts / merge_due`                            | 已尝试双亲、祖先和对应节点 / 是否有待尝试的重组机会                                                                            |
+| `rounds / model_calls / trials_used`                    | 已占用的预算；中断请求不能假定没有费用                                                                                         |
+| `evaluations`                                           | 按行为版本、任务子集、配置形成的缓存索引，含报告路径、哈希和 attempt；拼接报告有 source_reports，trials_reserved=0，仅补跑缺题 |
+| `holdout_started / selected_version`                    | 是否已冻结最终比较对象 / 选中的完整行为版本                                                                                    |
+| `status / stop_reason / started_ms / finished_ms`       | 整棵树的状态、停止原因和毫秒时间戳                                                                                             |
 
 `versions/*.json` 包含完整 RuntimePolicy，可重算 policy_id 和 agent_version_id。记录文件通过临时文件、fsync 和原子替换发布；目录/文件限制为当前用户可访问，拒绝符号链接路径。
 
@@ -340,7 +424,11 @@ evo.manage("agent_evaluation.retry", {"job_id": job_id})
 ```
 
 进程异常退出后，同上下文中运行中的 GEPA 任务自动重新排队。完整评测缓存通过报告哈希校验后复用；已生成策略从文件恢复。中断于反思调用时无法确认模型是否完成，节点记为 `interrupted`，消耗的预算保留，继续后续轮次。
+同一组评测已有有效检查点时，恢复会核验配置、报告清单和产物哈希。已完成 Agent 执行但模型评分失败的试次只补评分，保留原试次 ID、轨迹、调用指标和执行时延；没有可复用执行证据的试次才重新执行。未完成报告仍不会作为已通过成绩使用。`cache_evaluations=false` 保留训练和验证的重新执行语义，最终留出评测的恢复仍复用有效检查点；重试继续占用原有保守预算。
+评分或反思 API 返回 HTTP 429 时，GEPA 作业以 `gepa_model_rate_limited` 停止，保留当前代、已生成候选和评测检查点，不继续尝试后续代或进入留出评测。限流解除后使用 `agent_evaluation.retry` 接续；已消耗预算不退还。业务失败仍参与原有候选筛选，不触发此暂停。
 主动取消不会自动重启；可显式 retry。retry 不重置预算、截止时间或留出集候选。更换数据/模型/宿主 revision/配置后是新实验上下文，不复用旧成绩。
+统一活动边界的检索状态默认值升级也会改变评测上下文：旧报告保留供审计，但不会直接续用旧搜索或旧发布准入结果。
+相同新上下文内的恢复、完整成绩缓存和逐题补测仍正常复用，不在每个 run 重置版本。
 
 恢复会校验父引用只能指向较早的有效节点、双亲无祖先/后代关系、共同祖先、深度、批次任务和预算。旧单父记录可规范化为 parents，但本次算法指纹升级会为新提交建立新上下文，不把旧算法运行中的试验直接混入新的搜索。已有发布包和离线加载接口保持兼容。
 隔离试验只继承显式绑定的标准输入输出，不继承组件服务锁；父服务中断后，已完成缓存仍可恢复，未完成试验重跑时重新占预算。
@@ -368,22 +456,22 @@ evo.manage("agent_evaluation.retry", {"job_id": job_id})
 
 对照的是 [GEPA 核心接口](https://gepa-ai.github.io/gepa/api/core/optimize/)、[合并提案实现](https://github.com/gepa-ai/gepa/blob/main/src/gepa/proposer/merge.py)、[提案筛选策略](https://github.com/gepa-ai/gepa/blob/main/src/gepa/strategies/proposal_selection.py) 与 [ComBEE](https://gepa-ai.github.io/gepa/guides/combee/)。Hermes 将技能交给 DSPy GEPA 优化；这里复用其搜索思想，搜索对象换成框架无关的完整策略。
 
-| GEPA 机制 | 本组件对应实现 |
-| --- | --- |
-| 真实执行反馈驱动改写 | train 的具体任务、输出、检查、轨迹进入外部反思提示词 |
-| 逐任务前沿与覆盖去冗余 | instance 前沿、prune_dominated、按占据前沿频次抽样 |
-| 多目标与多种父选择 | objective/hybrid/cartesian，以及最优、epsilon、Top-K 等选父方式 |
-| 轮换组件与联合改写 | round_robin/all；经验按 ID，生成动作／循环规则按类别 |
-| 训练批轮换与满分跳过 | epoch 洗牌、末批不补重复题、可选 skip_perfect_score |
-| 同父、独立、P×N 多提案 | 冻结批次计划；all_improvements/best/top_k 筛选改善者 |
-| 双亲重组 | 共同祖先、跨分支组件继承、冲突处理、合并子集验证、全验证及双亲谱系 |
-| 中间节点继续进化 | 内部节点和叶节点同样参与选父与重组，不限最新一代 |
-| 小批次接纳和验证复评 | 严格改善或不退化；质量优先；选中提案才执行完整验证 |
-| 相同策略执行缓存 | 精确报告缓存＋逐题补测；版本、split、配置绑定；报告哈希检查 |
-| 分组聚合反思 | 可选 ComBEE，分组与汇总调用统一预算、校验、阶段持久化 |
-| 请求、试验、时间与停止控制 | 调用数、真实试跑数、截止时间、patience、目标阈值、取消 |
-| 搜索状态持久化 | DAG、完整策略、试验、批次计划、阶段与预算可恢复 |
-| 最终生产准入 | 在已有统一评测器上冻结 winner，再做独立 holdout；版本发布和离线包 |
+| GEPA 机制                  | 本组件对应实现                                                     |
+| -------------------------- | ------------------------------------------------------------------ |
+| 真实执行反馈驱动改写       | train 的具体任务、输出、检查、轨迹进入外部反思提示词               |
+| 逐任务前沿与覆盖去冗余     | instance 前沿、prune_dominated、按占据前沿频次抽样                 |
+| 多目标与多种父选择         | objective/hybrid/cartesian，以及最优、epsilon、Top-K 等选父方式    |
+| 轮换组件与联合改写         | round_robin/all；经验按 ID，生成动作／循环规则按类别               |
+| 训练批轮换与满分跳过       | epoch 洗牌、末批不补重复题、可选 skip_perfect_score                |
+| 同父、独立、P×N 多提案    | 冻结批次计划；all_improvements/best/top_k 筛选改善者               |
+| 双亲重组                   | 共同祖先、跨分支组件继承、冲突处理、合并子集验证、全验证及双亲谱系 |
+| 中间节点继续进化           | 内部节点和叶节点同样参与选父与重组，不限最新一代                   |
+| 小批次接纳和验证复评       | 严格改善或不退化；质量优先；选中提案才执行完整验证                 |
+| 相同策略执行缓存           | 精确报告缓存＋逐题补测；版本、split、配置绑定；报告哈希检查        |
+| 分组聚合反思               | 可选 ComBEE，分组与汇总调用统一预算、校验、阶段持久化              |
+| 请求、试验、时间与停止控制 | 调用数、真实试跑数、截止时间、patience、目标阈值、取消             |
+| 搜索状态持久化             | DAG、完整策略、试验、批次计划、阶段与预算可恢复                    |
+| 最终生产准入               | 在已有统一评测器上冻结 winner，再做独立 holdout；版本发布和离线包  |
 
 保留的实现差异与交付边界：
 

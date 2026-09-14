@@ -15,6 +15,7 @@ import os
 import requests
 
 from agentflow_runtime.common.runtime_context import artifact_routing_id
+from agentflow_runtime.security.local_sandbox_auth import local_sandbox_headers
 from agentflow_runtime.executors.base import (
     ExecResult,
     FileContent,
@@ -107,6 +108,18 @@ class HTTPExecutor(ToolExecutor):
             resolved_path, workdir = local_scope
             tool_params = {**tool_params, "path": resolved_path}
 
+        local_bash = tool == "bash" and os.environ.get("AF_SANDBOX_MODE") == "local"
+        if local_bash:
+            package = os.environ.get("AF_AGENT_PACKAGE_DIR", "")
+            requested = workdir or "."
+            if package and os.path.realpath(requested) == os.path.realpath(package):
+                requested = "."
+            local_scope = self._local_path_scope(tool, requested)
+            if local_scope is None:
+                return {"error": "Local bash requires a current-user workspace; workdir is outside its boundary",
+                        "tool": tool}
+            workdir = local_scope[0]
+
         # cwd 按沙箱类型分流：bash.py 缺省 cwd 透传的是宿主 agent_package_dir，
         # 该路径在容器内不存在，透传给 sandbox server 的 subprocess 会 FileNotFoundError 崩。
         # HTTPExecutor 看不到 daemon 的宿主↔容器挂载点映射，但容器内 SANDBOX_WORKDIR=/workdir
@@ -115,11 +128,20 @@ class HTTPExecutor(ToolExecutor):
         # 显式 cwd override（沙箱内绝对路径）不是宿主 agent_package_dir 起始，不受影响。
         # 注：本段 cwd 清洗只对 bash 生效；Local 文件工具使用上方收敛后的用户/skill
         # 工作根，不进入宿主 cwd 清洗。
-        if tool == "bash" and workdir:
+        if tool == "bash" and workdir and not local_bash:
             agent_pkg_dir = os.environ.get("AF_AGENT_PACKAGE_DIR", "")
             if agent_pkg_dir and workdir.startswith(agent_pkg_dir):
                 workdir = ""
         try:
+            request_options = {}
+            if os.environ.get("AF_SANDBOX_MODE") == "local":
+                request_options = {
+                    "headers": local_sandbox_headers(self.endpoint),
+                    "proxies": {"http": "", "https": ""},
+                    "allow_redirects": False,
+                }
+                if local_bash:
+                    os.makedirs(local_scope[1], exist_ok=True)
             resp = requests.post(
                 f"{self.endpoint}/exec",
                 json={
@@ -132,6 +154,7 @@ class HTTPExecutor(ToolExecutor):
                     },
                 },
                 timeout=timeout + 5,
+                **request_options,
             )
             data = resp.json()
             if not isinstance(data, dict):

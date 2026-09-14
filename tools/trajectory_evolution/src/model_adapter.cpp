@@ -1,5 +1,7 @@
 #include "agentflow/trajectory/hybrid_evaluator.h"
+#include "model_json.h"
 
+#include <algorithm>
 #include <chrono>
 #include <curl/curl.h>
 #include <fstream>
@@ -212,6 +214,12 @@ std::string make_openai_request_body(
       allocator);
   document.AddMember("temperature", 0.0, allocator);
   document.AddMember("max_tokens", options.max_output_tokens, allocator);
+  if(options.stream) document.AddMember("stream", true, allocator);
+  if(options.json_object_output) {
+    rapidjson::Value format(rapidjson::kObjectType);
+    format.AddMember("type", "json_object", allocator);
+    document.AddMember("response_format", format, allocator);
+  }
   if(!options.thinking_type.empty()) {
     rapidjson::Value thinking(rapidjson::kObjectType);
     thinking.AddMember(
@@ -226,7 +234,8 @@ std::string make_openai_request_body(
   system_message.AddMember("role", "system", allocator);
   system_message.AddMember(
       "content",
-      rapidjson::Value(request.system_prompt.c_str(), allocator),
+      rapidjson::Value(request.system_prompt.data(),
+          static_cast<rapidjson::SizeType>(request.system_prompt.size()), allocator),
       allocator);
   messages.PushBack(system_message, allocator);
 
@@ -234,7 +243,8 @@ std::string make_openai_request_body(
   user_message.AddMember("role", "user", allocator);
   user_message.AddMember(
       "content",
-      rapidjson::Value(request.user_prompt.c_str(), allocator),
+      rapidjson::Value(request.user_prompt.data(),
+          static_cast<rapidjson::SizeType>(request.user_prompt.size()), allocator),
       allocator);
   messages.PushBack(user_message, allocator);
   document.AddMember("messages", messages, allocator);
@@ -245,6 +255,7 @@ struct ResponseBuffer {
   std::string bytes;
   std::size_t limit = 0;
   bool exceeded = false;
+  std::chrono::steady_clock::time_point activity = std::chrono::steady_clock::now();
 };
 
 std::size_t append_response(
@@ -262,7 +273,9 @@ std::size_t append_response(
     buffer->exceeded = true;
     return 0;
   }
-  buffer->bytes.append(data, bytes);
+  try { buffer->bytes.append(data, bytes); }
+  catch(...) { return 0; } // Never unwind a C callback on allocation failure.
+  if(bytes) buffer->activity = std::chrono::steady_clock::now();
   return bytes;
 }
 
@@ -285,20 +298,29 @@ std::string extract_model_content(
     std::string* finish_reason) {
   finish_reason->clear();
   rapidjson::Document document;
-  document.Parse(body.data(), body.size());
-  if(document.HasParseError() || !document.IsObject()) {
+  document.Parse<rapidjson::kParseValidateEncodingFlag | rapidjson::kParseIterativeFlag>(body.data(), body.size());
+  if(document.HasParseError() || !unique_object_fields(document)
+     || (document.HasMember("error") && !document["error"].IsNull())) {
     return {};
   }
   const JsonValue* choices = find_member(document, "choices");
-  if(choices == nullptr || !choices->IsArray() || choices->Empty()) {
+  if(choices == nullptr || !choices->IsArray() || choices->Size() != 1) {
     return {};
   }
   const JsonValue& choice = (*choices)[0];
+  if(!unique_object_fields(choice)) return {};
+  const auto* index = find_member(choice, "index");
+  if(index && (!index->IsInt() || index->GetInt() != 0)) return {};
   const JsonValue* finish = find_member(choice, "finish_reason");
-  if(finish != nullptr && finish->IsString()) {
+  if(finish != nullptr && !finish->IsNull()) {
+    if(!finish->IsString()) return {};
     finish_reason->assign(finish->GetString(), finish->GetStringLength());
+    if(*finish_reason != "stop" && *finish_reason != "length") return {};
   }
   const JsonValue* message = find_member(choice, "message");
+  if(!message || !unique_object_fields(*message)) return {};
+  const auto* refusal = message ? find_member(*message, "refusal") : nullptr;
+  if(refusal && !refusal->IsNull() && (!refusal->IsString() || refusal->GetStringLength())) return {};
   const JsonValue* content = message == nullptr
       ? nullptr
       : find_member(*message, "content");
@@ -306,6 +328,62 @@ std::string extract_model_content(
     return {};
   }
   return std::string(content->GetString(), content->GetStringLength());
+}
+
+std::string extract_stream_content(const std::string& body, std::size_t limit,
+                                   std::string* finish_reason) {
+  // Some compatible providers ignore stream and return a normal JSON envelope.
+  const auto first = body.find_first_not_of(" \r\n\t");
+  if(first != std::string::npos && body[first] == '{')
+    return body.size() <= limit ? extract_model_content(body, finish_reason) : std::string();
+  std::string result, line, data;
+  bool done = false;
+  auto frame = [&]() -> bool {
+    if(data.empty()) return true;
+    if(done) return false;
+    if(data == "[DONE]") { done = true; data.clear(); return true; }
+    rapidjson::Document value;
+    value.Parse<rapidjson::kParseValidateEncodingFlag | rapidjson::kParseIterativeFlag>(data.data(), data.size());
+    if(value.HasParseError() || !unique_object_fields(value)
+       || (value.HasMember("error") && !value["error"].IsNull())) return false;
+    const auto* choices = find_member(value, "choices");
+    if(!choices || !choices->IsArray() || choices->Size() > 1) return false;
+    for(const auto& choice : choices->GetArray()) {
+      const auto* index = find_member(choice, "index");
+      if(!unique_object_fields(choice) || (index && (!index->IsInt() || index->GetInt() != 0))) return false;
+      const auto* delta = find_member(choice, "delta");
+      if(!delta || !unique_object_fields(*delta)) return false;
+      const auto* refusal = find_member(*delta, "refusal");
+      if(refusal && !refusal->IsNull() && (!refusal->IsString() || refusal->GetStringLength())) return false;
+      const auto* content = find_member(*delta, "content");
+      if(content && !content->IsNull()) {
+        if(!content->IsString() || result.size() + content->GetStringLength() > limit
+           || (!finish_reason->empty() && content->GetStringLength())) return false;
+        result.append(content->GetString(), content->GetStringLength());
+      }
+      const auto* finish = find_member(choice, "finish_reason");
+      if(finish && !finish->IsNull()) {
+        if(!finish->IsString() || !finish_reason->empty()) return false;
+        finish_reason->assign(finish->GetString(), finish->GetStringLength());
+      }
+    }
+    data.clear(); return true;
+  };
+  std::istringstream lines(body);
+  bool first_line = true;
+  while(std::getline(lines, line)) {
+    if(first_line && line.compare(0, 3, "\xef\xbb\xbf") == 0) line.erase(0, 3);
+    first_line = false;
+    if(!line.empty() && line.back() == '\r') line.pop_back();
+    if(line.empty()) { if(!frame()) return {}; }
+    else if(line.compare(0, 5, "data:") == 0) {
+      const auto offset = line.size() > 5 && line[5] == ' ' ? 6 : 5;
+      if(!data.empty()) data += '\n';
+      data += line.substr(offset);
+    }
+  }
+  if(!frame() || !done || (*finish_reason != "stop" && *finish_reason != "length")) return {};
+  return result;
 }
 
 class OpenAiCompatibleModelAdapter final : public ModelAdapter {
@@ -335,6 +413,11 @@ class OpenAiCompatibleModelAdapter final : public ModelAdapter {
        || options_.max_output_tokens > 32768) {
       throw EvaluationError("model retry or output-token limit is invalid");
     }
+    if(options_.idle_timeout_ms && !options_.stream)
+      throw EvaluationError("model idle timeout requires streaming");
+    if(options_.api_key.size() > 16384 || options_.api_key.find_first_of("\r\n") != std::string::npos
+       || options_.api_key.find('\0') != std::string::npos)
+      throw EvaluationError("model credential contains invalid header bytes");
     if(options_.max_response_bytes == 0
        || options_.max_response_bytes > 8U * 1024U * 1024U) {
       throw EvaluationError("model response byte limit is invalid");
@@ -344,6 +427,10 @@ class OpenAiCompatibleModelAdapter final : public ModelAdapter {
       throw EvaluationError("model request byte limit is invalid");
     }
     initialize_curl();
+  }
+
+  ~OpenAiCompatibleModelAdapter() override {
+    for(auto* handle : idle_handles_) curl_easy_cleanup(handle);
   }
 
   RawModelResponse evaluate(const ModelRequest& request) override {
@@ -356,30 +443,58 @@ class OpenAiCompatibleModelAdapter final : public ModelAdapter {
       return response;
     }
 
+    // Retries share one network budget; a stalled attempt must not renew it.
+    const auto deadline = std::chrono::steady_clock::now()
+        + std::chrono::milliseconds(options_.timeout_ms);
     const std::uint32_t max_attempts = options_.max_retries + 1U;
     for(std::uint32_t attempt = 1; attempt <= max_attempts; ++attempt) {
+      if(options_.cancelled && options_.cancelled()) {
+        response.error_code = "transport_" + std::to_string(CURLE_ABORTED_BY_CALLBACK);
+        return response;
+      }
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+          deadline - std::chrono::steady_clock::now());
+      if(remaining.count() <= 0) {
+        response.error_code = "transport_" + std::to_string(CURLE_OPERATION_TIMEDOUT);
+        return response;
+      }
+      // Reserve time for later attempts instead of spending it all on a stall.
+      const auto attempt_timeout = std::max<std::int64_t>(
+          1, remaining.count() / (max_attempts - attempt + 1U));
       response.attempts = attempt;
       ResponseBuffer buffer;
-      buffer.limit = options_.max_response_bytes;
+      // SSE framing is bounded separately from the decoded content budget.
+      buffer.limit = options_.stream ? std::min<std::size_t>(8U * 1024U * 1024U,
+          options_.max_response_bytes * 32U) : options_.max_response_bytes;
 
-      std::unique_ptr<CURL, decltype(&curl_easy_cleanup)> handle(
-          curl_easy_init(),
-          &curl_easy_cleanup);
+      const auto release = [this](CURL* handle) noexcept {
+        curl_easy_reset(handle); // Clears credential/callback pointers, keeps connections.
+        try {
+          std::lock_guard<std::mutex> guard(handles_mutex_);
+          if(idle_handles_.size() < 8) { idle_handles_.push_back(handle); return; }
+        } catch(...) {}
+        curl_easy_cleanup(handle);
+      };
+      CURL* available = nullptr;
+      {
+        std::lock_guard<std::mutex> guard(handles_mutex_);
+        if(!idle_handles_.empty()) { available = idle_handles_.back(); idle_handles_.pop_back(); }
+      }
+      std::unique_ptr<CURL, decltype(release)> handle(available ? available : curl_easy_init(), release);
       if(!handle) {
         response.error_code = "client_initialization_failed";
         return response;
       }
 
-      curl_slist* header_list = nullptr;
-      header_list = curl_slist_append(header_list, "Content-Type: application/json");
-      if(!options_.api_key.empty()) {
-        const std::string authorization = "Authorization: Bearer " + options_.api_key;
-        header_list = curl_slist_append(header_list, authorization.c_str());
-      }
       std::unique_ptr<curl_slist, decltype(&curl_slist_free_all)> headers(
-          header_list,
-          &curl_slist_free_all);
-      if(!headers) {
+          nullptr, &curl_slist_free_all);
+      const auto header = [&](const std::string& value) {
+        auto* list = curl_slist_append(headers.get(), value.c_str());
+        if(!list) return false;
+        headers.release(); headers.reset(list); return true;
+      };
+      if(!header("Content-Type: application/json")
+         || (!options_.api_key.empty() && !header("Authorization: Bearer " + options_.api_key))) {
         response.error_code = "header_allocation_failed";
         return response;
       }
@@ -394,12 +509,23 @@ class OpenAiCompatibleModelAdapter final : public ModelAdapter {
       curl_easy_setopt(handle.get(), CURLOPT_WRITEFUNCTION, append_response);
       curl_easy_setopt(handle.get(), CURLOPT_WRITEDATA, &buffer);
       curl_easy_setopt(handle.get(), CURLOPT_NOSIGNAL, 1L);
-      if(options_.cancelled) {
+      struct Progress {
+        const OpenAiCompatibleOptions* options;
+        const ResponseBuffer* buffer;
+        bool idle = false;
+      } progress{&options_, &buffer};
+      if(options_.cancelled || options_.idle_timeout_ms) {
         curl_easy_setopt(handle.get(), CURLOPT_NOPROGRESS, 0L);
-        curl_easy_setopt(handle.get(), CURLOPT_XFERINFODATA, &options_.cancelled);
+        curl_easy_setopt(handle.get(), CURLOPT_XFERINFODATA, &progress);
         curl_easy_setopt(handle.get(), CURLOPT_XFERINFOFUNCTION,
             +[](void* context, curl_off_t, curl_off_t, curl_off_t, curl_off_t) -> int {
-              try { return (*static_cast<std::function<bool()>*>(context))() ? 1 : 0; }
+              auto& state = *static_cast<Progress*>(context);
+              try {
+                if(state.options->cancelled && state.options->cancelled()) return 1;
+                state.idle = state.options->idle_timeout_ms && std::chrono::steady_clock::now()
+                    - state.buffer->activity >= std::chrono::milliseconds(state.options->idle_timeout_ms);
+                return state.idle ? 1 : 0;
+              }
               catch(...) { return 1; }
             });
       }
@@ -409,7 +535,7 @@ class OpenAiCompatibleModelAdapter final : public ModelAdapter {
       curl_easy_setopt(handle.get(), CURLOPT_SSL_VERIFYHOST, 2L);
       curl_easy_setopt(
           handle.get(), CURLOPT_TIMEOUT_MS,
-          static_cast<long>(options_.timeout_ms));
+          static_cast<long>(attempt_timeout));
       curl_easy_setopt(
           handle.get(), CURLOPT_CONNECTTIMEOUT_MS,
           static_cast<long>(options_.connect_timeout_ms));
@@ -421,14 +547,17 @@ class OpenAiCompatibleModelAdapter final : public ModelAdapter {
         curl_easy_setopt(handle.get(), CURLOPT_NOPROXY, "*");
       }
 
-      const CURLcode curl_result = curl_easy_perform(handle.get());
+      CURLcode curl_result = curl_easy_perform(handle.get());
+      if(progress.idle) curl_result = CURLE_OPERATION_TIMEDOUT;
       long http_status = 0;
       curl_easy_getinfo(handle.get(), CURLINFO_RESPONSE_CODE, &http_status);
 
       if(curl_result == CURLE_OK && http_status >= 200 && http_status < 300) {
         response.transport_ok = true;
         std::string finish_reason;
-        response.body = extract_model_content(buffer.bytes, &finish_reason);
+        response.body = options_.stream
+            ? extract_stream_content(buffer.bytes, options_.max_response_bytes, &finish_reason)
+            : extract_model_content(buffer.bytes, &finish_reason);
         if(finish_reason == "length") {
           response.error_code = "output_token_limit_reached";
         } else if(response.body.empty()) {
@@ -450,8 +579,10 @@ class OpenAiCompatibleModelAdapter final : public ModelAdapter {
         }
         return response;
       }
-      std::this_thread::sleep_for(
-          std::chrono::milliseconds(100U * attempt));
+      const auto pause = std::min(std::chrono::milliseconds(100U * attempt),
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              deadline - std::chrono::steady_clock::now()));
+      if(pause.count() > 0) std::this_thread::sleep_for(pause);
     }
     response.error_code = "transport_exhausted";
     return response;
@@ -467,6 +598,8 @@ class OpenAiCompatibleModelAdapter final : public ModelAdapter {
 
  private:
   OpenAiCompatibleOptions options_;
+  std::mutex handles_mutex_;
+  std::vector<CURL*> idle_handles_;
 };
 
 }  // namespace

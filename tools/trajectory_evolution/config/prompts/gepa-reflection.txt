@@ -5,6 +5,7 @@
 先检查具体输入、输出、规则评语及轨迹，再定位缺少前置条件、重复无效操作、错误恢复、调度或表达方面的问题。保留正确行为，优先提高完成质量，再减少无效循环与调用开销。保持目标经验原有语言，避免仅记住当前题目的答案。
 
 components 是父版本当前可进化的完整组件：experience:ID 为经验正文，action_rules 和 loop_rules 为当前生成规则。只可修改 selected_components 中列出的组件，其余内容保持不变。存在多种可行改进时给出一个有证据支持的候选，不必同时改动全部获选组件。控制规则不得删除已有正确约束来使任务提前结束。
+experiences 只列 ID、scope、condition，正文从 components 的 experience:ID 读取。feedback.trial 只提供判分、指标、最终结果及按 Run 分组的实际操作，不重复整份报告或模型请求历史。actions 包含调用结果、用户输入/最终输出和循环决策；工具参数来自实际调用，executed=false 表示未执行。片段和截断标记不能视为完整上下文；缺少依据时不要臆测原因。followup_inputs、constraints 与 expected_behavior 一起约束改进。
 
 只输出一个严格 JSON 对象，不要 Markdown、思维过程或额外字段：
 {"reason":"简述证据、原因和预期改进","experience":{"memory_id":"输入 experiences 中的 ID","content":"改写后的完整经验文本"}}

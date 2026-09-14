@@ -24,6 +24,7 @@ class GepaSearchTests(unittest.TestCase):
         self.release = threading.Event()
         self.release.set()
         self.behavior = "normal"
+        self.fenced = False
         self.pause_on = None
         owner = self
 
@@ -34,7 +35,49 @@ class GepaSearchTests(unittest.TestCase):
             def do_POST(self):
                 request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
                 packet = json.loads(request["messages"][-1]["content"])
+                if "loop_inventory" in packet:
+                    owner.judge_requests.append(packet)
+                    if getattr(owner, "fail_search_judge", False) and packet["task_input"].startswith(
+                            getattr(owner, "fail_search_prefix", "")) and any(
+                            (owner.root / "production/agent-evaluation").glob("*/search/tree.json")):
+                        self.send_response(getattr(owner, "search_judge_status", 503))
+                        self.send_header("Content-Length", "0"); self.end_headers()
+                        return
+                    inventory = packet["loop_inventory"]
+                    key = next(iter(inventory), None)
+                    judgment = dict(verdict="passed", reason="测试评分器确认任务输出。", evidence_paths=["/output"],
+                        loop_review=dict(status="complete" if key else "uncertain", wasted_iterations=[dict(iteration_id=key,
+                            reason="测试中将本轮标为可省去，用于核验评分口径。", evidence_event_ids=[inventory[key]["event_ids"][0]])] if key else []))
+                    if getattr(owner, "seed_fault", None) and packet["task_input"].startswith("VALIDATION_PRIVATE") \
+                            and any((owner.root / "production/agent-evaluation").glob("*/search/tree.json")):
+                        owner.seed_judge_tasks.append(packet["task_input"])
+                        if "乙类" in packet["task_input"]:
+                            judgment["verdict"] = "failed"
+                        elif owner.seed_failures and owner.seed_fault != "tokens":
+                            owner.seed_failures -= 1
+                            judgment["verdict"] = "uncertain"
+                    if getattr(owner, "cache_fault", None) and packet["task_input"].startswith("TRAIN_VISIBLE") \
+                            and any((owner.root / "production/agent-evaluation").glob("*/search/tree.json")):
+                        owner.cache_train_calls.append(packet["task_input"])
+                        if len(owner.cache_train_calls) == 1:
+                            if owner.cache_fault == "invalid":
+                                judgment["loop_review"]["wasted_iterations"][0]["iteration_id"] = "unknown-iteration"
+                            else:
+                                judgment["loop_review"] = dict(status="uncertain", wasted_iterations=[])
+                        else:
+                            if not owner.cache_failed_task:
+                                owner.cache_failed_task = packet["task_input"]
+                            if packet["task_input"] == owner.cache_failed_task:
+                                judgment["verdict"] = "failed"
+                    response = json.dumps(dict(choices=[dict(message=dict(content=json.dumps(judgment)))])).encode()
+                    self.send_response(200); self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(response))); self.end_headers(); self.wfile.write(response)
+                    return
                 owner.requests.append(packet)
+                if getattr(owner, "fail_reflection_rate_limit", False):
+                    self.send_response(429)
+                    self.send_header("Content-Length", "0"); self.end_headers()
+                    return
                 level = packet.get("controls", {}).get("level", "L1")
                 ordinal = sum(p.get("controls", {}).get("level", "L1") == level for p in owner.requests)
                 if owner.pause_on is None or owner.pause_on == (level, ordinal):
@@ -75,11 +118,15 @@ class GepaSearchTests(unittest.TestCase):
                         controls["loop_rules"] = [dict(memory_id="test-experience", max_iterations=2,
                             max_no_progress=1, reason="根据重复任务的执行反馈收紧循环次数。")]
                     content = json.dumps(dict(reason="根据训练执行的结果修改受限规则。", controls=controls), ensure_ascii=False)
+                elif owner.behavior == "no_change":
+                    memory_id = packet["experiences"][0]["memory_id"]
+                    content = json.dumps(dict(reason="测试缓存，不修改已有经验。", experience=dict(
+                        memory_id=memory_id, content=packet["components"]["experience:" + memory_id])))
                 elif owner.behavior == "bad_json":
                     content = "not-json"
                 else:
                     n = len(owner.requests)
-                    current = packet["experiences"][0]["content"]
+                    current = packet["components"]["experience:" + packet["experiences"][0]["memory_id"]]
                     if n == 4:
                         memory_id, text = "unauthorized-memory", "禁止扩大范围"
                     elif n == 5:
@@ -93,6 +140,8 @@ class GepaSearchTests(unittest.TestCase):
                             if "核验" in current else "缺少素材时先核验乙类任务。")
                     content = json.dumps(dict(reason="根据训练输出与失败检查，修复遗漏的核验步骤。",
                         experience=dict(memory_id=memory_id, content=text)), ensure_ascii=False)
+                if owner.fenced:
+                    content = " \r\n```json\r\n" + content + "\r\n```\t"
                 response = json.dumps(dict(choices=[dict(finish_reason="stop", message=dict(content=content))])).encode()
                 try:
                     self.send_response(200)
@@ -202,6 +251,30 @@ class GepaSearchTests(unittest.TestCase):
         fixture.write(self.root / "test-summary.json", dict(job_id=job_id, search=job["search"],
             states=sorted(states), published=True, privacy="passed", restart="no duplicate search"))
         print("GEPA artifact:", self.root / "test-summary.json")
+
+    def test_json_fence_preserves_search_publication_and_privacy_gates(self):
+        self.fenced = True
+        self.test_reflection_tree_holdout_publication_and_restart()
+
+    def test_search_uses_reviewed_loops_instead_of_the_zero_rule_bound(self):
+        self.judge_requests = []
+        config = json.loads((self.root / "gepa.json").read_text())
+        config.update(max_rounds=1, max_model_calls=1)
+        fixture.write(self.root / "gepa.json", config)
+        self.evaluation["checks"] = {}
+        self.evaluation["variants"][0]["command"][-2] = "gepa_review"
+        self.evaluation["judge"] = dict(enabled=True, runtime_config="model.json",
+            prompt="prompts/task-judge-system.txt", loop_review_prompt="prompts/task-loop-review.txt",
+            max_model_calls=100, max_input_bytes=1048576)
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+        self.start()
+        job_id, job, _ = self.wait_search()
+        self.assertEqual(job["status"], "passed", job)
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        for score in tree["nodes"][0]["validation"].values():
+            self.assertEqual(score["loop_efficiency"], .5)  # Model count=1, rule lower bound=0.
+        self.assertTrue(self.judge_requests)
+        self.assertEqual(job["gate"]["candidate"]["invalid_loop_assessment"]["method"], "model_review")
 
     def test_holdout_rejection_does_not_publish_or_reflect_again(self):
         self.evaluation["variants"][0]["command"][-2] = "gepa_holdout_failure"
@@ -640,6 +713,266 @@ class GepaSearchTests(unittest.TestCase):
         tree = self.call("agent_evaluation.tree", job_id=job_id)
         self.assertEqual(tree["trials_used"], 21)
         self.assertFalse(any(item.get("source_reports") for item in tree["evaluations"].values()))
+
+    def check_partial_cache(self, fault, enabled=True):
+        self.judge_requests, self.cache_train_calls = [], []
+        self.cache_fault, self.cache_failed_task = fault, None
+        self.behavior = "no_change"
+        tasks = [json.loads(line) for line in (self.root / "gepa-tasks.jsonl").read_text().splitlines()]
+        tasks.append(dict(tasks[0], task_id="train-c", group_id="train-c", task_input="TRAIN_VISIBLE 丙类：核验后完成独立计算。"))
+        (self.root / "gepa-tasks.jsonl").write_text("\n".join(json.dumps(task, ensure_ascii=False) for task in tasks))
+        result = subprocess.run([str(fixture.CLI), "dataset", "build", "--config", str(self.root / "gepa-dataset.json"),
+            "--output-root", str(self.root / "partial-dataset")], capture_output=True, text=True, timeout=20)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assessment["dataset"] = "partial-dataset"
+        fixture.write(self.root / "agent-evaluation.json", self.assessment)
+        config = json.loads((self.root / "gepa.json").read_text())
+        config.update(max_rounds=3, max_model_calls=3, minibatch_size=2, cache_evaluations=enabled)
+        fixture.write(self.root / "gepa.json", config)
+        self.evaluation["checks"] = {}
+        self.evaluation["variants"][0]["command"][-2] = "gepa_review"
+        self.evaluation["judge"] = dict(enabled=True, runtime_config="model.json", max_repair_attempts=0,
+            prompt="prompts/task-judge-system.txt", loop_review_prompt="prompts/task-loop-review.txt",
+            max_model_calls=100, max_input_bytes=1048576)
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+        self.start()
+        job_id, _, _ = self.wait_search()
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertEqual(tree["nodes"][1]["error"], "gepa_parent_evaluation_inconclusive")
+        self.assertEqual(len(self.cache_train_calls), 4 if enabled else 6)
+        if enabled:
+            self.assertEqual(self.cache_train_calls.count(self.cache_train_calls[0]), 2)
+            self.assertEqual(self.cache_train_calls.count(self.cache_failed_task), 1)
+            partial = {key for key, value in tree["evaluations"].items() if value["status"] == "inconclusive"}
+            if fault == "invalid":
+                self.assertTrue(any(partial & set(value.get("source_reports", [])) for value in tree["evaluations"].values()))
+        else:
+            self.assertFalse(any(value.get("source_reports") for value in tree["evaluations"].values()))
+        self.assertGreaterEqual(len([node for node in tree["nodes"][2:] if node["status"] == "duplicate"]), 1)
+
+    def test_partial_cache_reuses_scored_tasks_but_retries_judge_error(self):
+        self.check_partial_cache("invalid")
+
+    def test_partial_cache_does_not_reuse_unknown_loop_metrics(self):
+        self.check_partial_cache("uncertain")
+
+    def test_partial_cache_can_be_disabled(self):
+        self.check_partial_cache("invalid", enabled=False)
+
+    def check_seed_cache_recovery(self, fault, enabled=True, failures=1, repetitions=1):
+        self.judge_requests, self.seed_judge_tasks = [], []
+        self.seed_fault, self.seed_failures = fault, failures
+        self.behavior = "no_change"
+        config = json.loads((self.root / "gepa.json").read_text())
+        config.update(max_rounds=1, max_model_calls=1, cache_evaluations=enabled)
+        fixture.write(self.root / "gepa.json", config)
+        self.evaluation.update(checks={}, repetitions=repetitions)
+        self.evaluation["variants"][0]["command"][-2] = "gepa_review"
+        if fault == "tokens":
+            self.env["GEPA_MISSING_METRIC_ONCE"] = str(self.root / "metric-missing-once")
+            self.evaluation["variants"][0]["pass_env"].append("GEPA_MISSING_METRIC_ONCE")
+        self.evaluation["judge"] = dict(enabled=True, runtime_config="model.json", max_repair_attempts=0,
+            prompt="prompts/task-judge-system.txt", loop_review_prompt="prompts/task-loop-review.txt",
+            max_model_calls=100, max_input_bytes=1048576)
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+        self.start()
+        job_id, job, _ = self.wait_search()
+        self.assertEqual(job.get("error"), "gepa_seed_evaluation_inconclusive")
+        root = self.root / "production/agent-evaluation" / job_id / "search"
+        before = self.call("agent_evaluation.tree", job_id=job_id)
+        key = next(iter(before["evaluations"]))
+        original = before["evaluations"][key]
+        original_bytes = (root / original["report"]).read_bytes()
+        self.assertEqual(original["status"], "inconclusive")
+        if fault == "tokens":
+            report = json.loads(original_bytes)
+            self.assertTrue(all(t["verdict"] in ("passed", "failed") for t in report["trials"]))
+            self.assertTrue(any("tokens" not in t["metrics"] for t in report["trials"]))
+            # Simulate an older cache index without changing its report or hash.
+            fixture.AgentEvaluationTests.tearDown(self)
+            before["evaluations"][key]["status"] = "complete"
+            fixture.write(root / "tree.json", before)
+            self.start()
+        for attempt in range(failures):
+            self.call("agent_evaluation.retry", job_id=job_id)
+            _, job, _ = self.wait_search()
+            tree = self.call("agent_evaluation.tree", job_id=job_id)
+            cached = tree["evaluations"][key]
+            if attempt + 1 < failures:
+                self.assertEqual(job.get("error"), "gepa_seed_evaluation_inconclusive")
+                report = json.loads((root / cached["report"]).read_text())
+                self.assertTrue(report["complete"], "a completed trial batch became structurally incomplete")
+                self.assertEqual(cached["status"], "inconclusive")
+        self.assertIn(job["status"], ("passed", "rejected"), job)
+        self.assertEqual(tree["nodes"][0]["status"], "accepted")
+        self.assertEqual(len(self.seed_judge_tasks), repetitions * (2 + failures * (1 if enabled else 2)))
+        self.assertEqual(sum("乙类" in task for task in self.seed_judge_tasks), repetitions * (1 if enabled else 1 + failures))
+        self.assertEqual((root / original["report"]).read_bytes(), original_bytes)
+        if enabled:
+            self.assertEqual(cached["trials_reserved"], 0)
+            refs = cached["source_report_refs"]
+            self.assertTrue(any(ref["key"] == key and ref["report"] != cached["report"] for ref in refs))
+            for ref in refs:
+                self.assertTrue((root / ref["report"]).is_file())
+        else:
+            self.assertNotIn("source_report_refs", cached)
+
+    def test_exact_seed_retry_reuses_valid_tasks(self):
+        self.check_seed_cache_recovery("uncertain", repetitions=2)
+
+    def test_judge_failure_retry_preserves_completed_execution(self):
+        self.judge_requests = []
+        self.fail_search_judge = True
+        self.behavior = "no_change"
+        config = json.loads((self.root / "gepa.json").read_text())
+        config.update(max_rounds=1, max_model_calls=1)
+        fixture.write(self.root / "gepa.json", config)
+        self.evaluation["checks"] = {}
+        self.evaluation["variants"][0]["command"][-2] = "gepa_review"
+        self.evaluation["judge"] = dict(enabled=True, runtime_config="model.json", max_repair_attempts=0,
+            prompt="prompts/task-judge-system.txt", loop_review_prompt="prompts/task-loop-review.txt",
+            max_model_calls=100, max_input_bytes=1048576)
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+        self.start()
+        job_id, job, _ = self.wait_search()
+        self.assertEqual(job.get("error"), "gepa_seed_evaluation_inconclusive")
+        root = self.root / "production/agent-evaluation" / job_id / "search"
+        before = self.call("agent_evaluation.tree", job_id=job_id)
+        key, original = next(iter(before["evaluations"].items()))
+        source = root / original["report"]
+        source_bytes = source.read_bytes()
+        old = json.loads(source_bytes)
+        self.assertEqual(len(old["trials"]), 2)
+        self.assertTrue(all(t["execution_status"] == "completed"
+            and t["error_code"] == "evaluation_judge_failed" for t in old["trials"]))
+        self.fail_search_judge = False
+        self.call("agent_evaluation.retry", job_id=job_id)
+        _, job, _ = self.wait_search()
+        self.assertIn(job["status"], ("passed", "rejected"), job)
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        restored = json.loads((root / tree["evaluations"][key]["report"]).read_text())
+        self.assertEqual(restored["summary"].get("regraded_trials"), 2)
+        for previous, current in zip(old["trials"], restored["trials"]):
+            for field in ("trial_id", "task_id", "task_version", "duration_ms", "metrics", "execution_status"):
+                self.assertEqual(current[field], previous[field], field)
+            self.assertEqual(current["evidence"]["trace"], previous["evidence"]["trace"])
+        self.assertEqual(source.read_bytes(), source_bytes)
+
+    def test_exact_seed_retry_keeps_good_tasks_after_another_failure(self):
+        self.check_seed_cache_recovery("uncertain", failures=2)
+
+    def test_rate_limited_parent_judge_preserves_the_pending_generation(self):
+        self.judge_requests = []
+        self.fail_search_judge, self.search_judge_status = True, 429
+        self.fail_search_prefix = "TRAIN_VISIBLE"
+        self.behavior = "no_change"
+        config = json.loads((self.root / "gepa.json").read_text())
+        config.update(max_rounds=2, max_model_calls=2)
+        fixture.write(self.root / "gepa.json", config)
+        self.evaluation["checks"] = {}
+        self.evaluation["variants"][0]["command"][-2] = "gepa_review"
+        self.evaluation["judge"] = dict(enabled=True, runtime_config="model.json", max_repair_attempts=0,
+            prompt="prompts/task-judge-system.txt", loop_review_prompt="prompts/task-loop-review.txt",
+            max_model_calls=100, max_input_bytes=1048576)
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+        self.start()
+        job_id, job, _ = self.wait_search()
+        self.assertEqual(job.get("error"), "gepa_model_rate_limited")
+        root = self.root / "production/agent-evaluation" / job_id / "search"
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertEqual((tree["rounds"], tree["model_calls"], tree["active"]), (1, 0, 1))
+        self.assertEqual(len(tree["nodes"]), 2)
+        self.assertEqual(tree["nodes"][1]["status"], "pending")
+        self.assertFalse(tree.get("holdout_started", False))
+        key, cached = next((k, v) for k, v in tree["evaluations"].items() if v["split"] == "train")
+        previous = json.loads((root / cached["report"]).read_text())
+        self.fail_search_judge = False
+        self.call("agent_evaluation.retry", job_id=job_id)
+        _, job, _ = self.wait_search()
+        self.assertIn(job["status"], ("passed", "rejected"), job)
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        restored = json.loads((root / tree["evaluations"][key]["report"]).read_text())
+        self.assertEqual(restored["summary"].get("regraded_trials"), 2)
+        self.assertEqual([t["trial_id"] for t in previous["trials"]], [t["trial_id"] for t in restored["trials"]])
+        self.assertEqual(tree["rounds"], 2)
+        self.assertEqual(tree["model_calls"], 2)
+
+    def test_rate_limited_reflection_retries_the_same_generation(self):
+        self.fail_reflection_rate_limit = True
+        self.behavior = "no_change"
+        config = json.loads((self.root / "gepa.json").read_text())
+        config.update(max_rounds=1, max_model_calls=3)
+        fixture.write(self.root / "gepa.json", config)
+        self.start()
+        job_id, job, _ = self.wait_search()
+        self.assertEqual(job.get("error"), "gepa_model_rate_limited")
+        before = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertEqual((before["rounds"], before["model_calls"], before["active"]), (1, 1, 1))
+        self.assertEqual(before["nodes"][1]["status"], "pending")
+        self.assertFalse(before.get("holdout_started", False))
+        self.fail_reflection_rate_limit = False
+        self.call("agent_evaluation.retry", job_id=job_id)
+        _, job, _ = self.wait_search()
+        self.assertIn(job["status"], ("passed", "rejected"), job)
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertEqual((tree["rounds"], tree["model_calls"]), (1, 2))
+        self.assertEqual(len(self.requests), 2)
+        self.assertEqual(tree["nodes"][1]["status"], "duplicate")
+        for key, cached in before["evaluations"].items():
+            self.assertEqual(tree["evaluations"][key]["attempt"], cached["attempt"])
+
+    def test_legacy_complete_seed_cache_with_missing_tokens_is_recoverable(self):
+        self.check_seed_cache_recovery("tokens")
+
+    def check_conservative_cost(self, fault):
+        self.judge_requests, self.seed_judge_tasks = [], []
+        self.seed_fault, self.seed_failures = fault, 1
+        self.behavior = "no_change"
+        config = json.loads((self.root / "gepa.json").read_text())
+        config.update(max_rounds=1, max_model_calls=1, unknown_token_policy="worst_case")
+        fixture.write(self.root / "gepa.json", config)
+        self.evaluation.update(checks={}, repetitions=2)
+        self.evaluation["variants"][0]["command"][-2] = "gepa_review"
+        if fault == "tokens":
+            self.env["GEPA_MISSING_METRIC_ONCE"] = str(self.root / "metric-missing-once")
+            self.evaluation["variants"][0]["pass_env"].append("GEPA_MISSING_METRIC_ONCE")
+        self.evaluation["judge"] = dict(enabled=True, runtime_config="model.json", max_repair_attempts=0,
+            prompt="prompts/task-judge-system.txt", loop_review_prompt="prompts/task-loop-review.txt",
+            max_model_calls=100, max_input_bytes=1048576)
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+        self.start()
+        job_id, job, _ = self.wait_search()
+        if fault != "tokens":
+            self.assertEqual(job.get("error"), "gepa_seed_evaluation_inconclusive")
+            return
+        self.assertIn(job["status"], ("passed", "rejected"), job)
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        root = self.root / "production/agent-evaluation" / job_id / "search"
+        source = next(v for v in tree["evaluations"].values() if v.get("split") == "val")
+        report = json.loads((root / source["report"]).read_text())
+        self.assertTrue(any("tokens" not in t["metrics"] for t in report["trials"]))
+        objective = config["objective"]
+        for task, row in tree["nodes"][0]["validation"].items():
+            trials = [t for t in report["trials"] if t["task_id"] == task]
+            missing = sum("tokens" not in t["metrics"] for t in trials)
+            self.assertEqual(row.get("unknown_token_trials", 0), missing)
+            costs = [t["metrics"]["tokens"] / (objective["token_scale"] + t["metrics"]["tokens"])
+                     if "tokens" in t["metrics"] else 1.0 for t in trials]
+            expected = sum((t["verdict"] == "passed")
+                - objective["invalid_loop_weight"] * t["evidence"]["loop_review"]["count"]
+                    / (objective["invalid_loop_scale"] + t["evidence"]["loop_review"]["count"])
+                - objective["token_weight"] * cost for t, cost in zip(trials, costs)) / len(trials)
+            self.assertAlmostEqual(row["fitness"], expected)
+            self.assertAlmostEqual(row["token_efficiency"], sum(1 - c for c in costs) / len(costs))
+
+    def test_unknown_tokens_can_use_explicit_conservative_cost(self):
+        self.check_conservative_cost("tokens")
+
+    def test_conservative_cost_does_not_accept_uncertain_grading(self):
+        self.check_conservative_cost("uncertain")
+
+    def test_exact_seed_retry_can_disable_cache(self):
+        self.check_seed_cache_recovery("uncertain", enabled=False)
 
     def test_round_robin_rejects_mutation_of_an_unselected_component(self):
         self.configure_merge(component_selector="round_robin", max_rounds=1, max_model_calls=1, proposals_per_round=1)

@@ -112,6 +112,8 @@ C++ 也可以直接使用 `include/trajectory_evolution/local_runtime.h`，链�
 也可选择 HTTP 共享状态模式，并按业务并发量验证时延与吞吐。
 活跃 run 通过创建它的原生实例访问；跨实例协作使用 HTTP 服务。
 原生幂等缓存只保留到槽位被新任务复用，不支持进程退出后的 RPC 重放；每个新任务必须使用新 request_id。
+终态落盘不会清除回调回执；相同请求仍返回原结果，内容变更仍报冲突。
+回执计入 `max_buffer_bytes` 的保守预留，新任务回收已落盘槽位时释放；主线程不为重试读取磁盘。
 长期审计读取后台持久化结果。跨进程续写方式见[异步、并发、消息队列与任务收尾](09-async-and-multi-agent.md)。
 
 ![函数返回与进程退出是两种事件](figures/06-native-lifetime.svg)

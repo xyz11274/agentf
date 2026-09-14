@@ -620,6 +620,11 @@
           "minLength": 1,
           "maxLength": 128
         },
+        "control_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
         "caused_by": {
           "type": "array",
           "items": {
@@ -642,7 +647,13 @@
         "type",
         "data"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "not": {
+        "required": [
+          "activity_id",
+          "control_id"
+        ]
+      }
     },
     {
       "type": "object",

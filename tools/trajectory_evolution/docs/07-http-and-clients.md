@@ -23,6 +23,10 @@
 支持 UTF-8 JSON 和 HTTP 的语言均可接入；随包客户端提供常用语言封装。
 新接入优先使用 **`point`**；`invoke` 保留低层严格 RPC。
 
+离线/后台评测额外使用包内 `evaluate` 入口绑定，详见[任务入口绑定](19-datasets-and-benchmarks.md#任务入口绑定推荐)。
+它连接试验专属服务并把题目交给原有接收函数，不要求语言客户端了解框架内部的调度器。
+生产服务默认不开放 `evaluation.next/fail`，只有评测器创建的专属实例启用。
+
 | 语言 | 简化打点调用 | 通信预算 |
 | --- | --- | --- |
 | Python | `client.point(fields, timeout_ms=20)` | 单次，不重试 |
@@ -145,6 +149,11 @@ Content-Type: application/json
 ```
 
 成功返回 `{"ok":true,"result":{...}}`，失败返回固定错误码 `{"ok":false,"error":"..."}`。
+采集服务处理 `point` 失败时采用业务放行：返回 `degraded=true`，`reason` 保留可安全公开的错误码；
+已开始的轨迹中，`capture.gap` 的 `attributes.error_code` 记录同一个原因。
+例如 `sensitive_field_rejected` 表示输入含敏感字段，`status_invalid` 表示终态值不符合协议。
+只保留限长、经过隐私检查的代码，不保存异常原文或被拒绝的载荷；无法安全归类时使用 `point_capture_degraded`。
+这类轨迹仍按不完整记录隔离，不进入学习队列。
 使用 HTTP/1.1 Content-Length，不发送 chunked 请求体；Key 放在认证层，不放 JSON 或 URL。
 其他语言可直接调用该接口；使用生成客户端时，按快速开始和协议用例验证请求与响应。
 

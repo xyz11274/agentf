@@ -9,4 +9,4 @@ description = "Framework-neutral native and HTTP instrumentation points"
 requires-python = ">=3.9"
 
 [tool.setuptools]
-py-modules = ["evolution", "evolution_local", "evolution_point", "evolution_configured"]
+py-modules = ["evolution", "evolution_local", "evolution_point", "evolution_configured", "evolution_entry"]

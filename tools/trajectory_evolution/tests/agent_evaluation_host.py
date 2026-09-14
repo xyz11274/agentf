@@ -23,6 +23,10 @@ if mode == "gepa_merge_pause":
         while not Path(os.environ["GEPA_MERGE_RELEASE"]).exists() and time.monotonic() < deadline:
             time.sleep(.05)
 workspace = Path.cwd()
+if mode == "resume":
+    with open(os.environ["EVOLUTION_TEST_EXECUTIONS"], "a", encoding="utf-8") as stream:
+        stream.write(request["trial_id"] + "\n")
+    (workspace / "proof.txt").write_text("verified execution", encoding="utf-8")
 version_file = workspace / "version.json"
 version_file.write_text(json.dumps(dict(version=request["version"], artifact=artifact, trial_id=request["trial_id"])))
 config = json.loads((SOURCE / "config/service.json").read_text())
@@ -40,14 +44,19 @@ level = artifact["level"]
 capabilities = ["model", "actions", "loop"][:int(level[1])]
 run = evo.invoke("run.begin", dict(input=request["task"]["task_input"], level=level, capabilities=capabilities))
 rid = run["run_id"]
+activity_scope = {}
+if mode in ("gepa_review", "resume"):
+    control = evo.invoke("loop.check", dict(run_id=rid, loop_id="reviewed-loop", state={}))
+    evo.invoke("loop.commit", dict(run_id=rid, control_id=control["control_id"], decision=control["decision"]))
+    activity_scope["control_id"] = control["control_id"]
 model_input = {"messages": [{"role": "user", "content": request["task"]["task_input"]}]}
 call = evo.invoke("activity.begin", dict(run_id=rid, kind="model", name="fixture-model", input=model_input,
-    binding={"pointer": "/messages", "mode": "system_message"}))
+    binding={"pointer": "/messages", "mode": "system_message"}, **activity_scope))
 result = 0 if mode == "bad_candidate" and level != "L0" else 20
 if mode in ("memory_bad", "memory_good"):
     injected = call["input"] != model_input
     result = 20 if injected == (mode == "memory_good") else 0
-if mode in ("gepa", "gepa_holdout_failure", "gepa_merge", "gepa_merge_regression"):
+if mode in ("gepa", "gepa_holdout_failure", "gepa_merge", "gepa_merge_regression", "gepa_review"):
     # Only the request actually produced by the point can affect this fixture.
     text = json.dumps(call["input"], ensure_ascii=False)
     family = "甲类" if "甲类" in request["task"]["task_input"] else "乙类"
@@ -56,10 +65,16 @@ if mode in ("gepa", "gepa_holdout_failure", "gepa_merge", "gepa_merge_regression
         result = 0
 if mode in ("gepa_actions", "gepa_loops"):
     result = 0
+missing_metric = False
+if mode == "gepa_review" and level != "L0" and "VALIDATION_PRIVATE 甲类" in request["task"]["task_input"]:
+    marker = os.environ.get("GEPA_MISSING_METRIC_ONCE")
+    if marker and not Path(marker).exists():
+        Path(marker).touch()
+        missing_metric = True
 evo.invoke("activity.end", dict(run_id=rid, activity_id=call["activity_id"], status="completed",
                                output=result, actual_input=call["input"], executed=True,
-                               **({"metrics": {"tokens": 100}} if mode.startswith("gepa") else {})))
-action = evo.invoke("activity.begin", dict(run_id=rid, kind="action", name="calculate", input={"value": result}))
+                               **({"metrics": {"tokens": 100}} if mode.startswith("gepa") and not missing_metric else {})))
+action = evo.invoke("activity.begin", dict(run_id=rid, kind="action", name="calculate", input={"value": result}, **activity_scope))
 blocked = mode in ("gepa_actions", "gepa_merge", "gepa_merge_regression") and action["decision"] == "reject"
 if blocked and (mode == "gepa_actions" or family == "乙类"):
     result = 20

@@ -17,7 +17,8 @@
 ## 自动闭环做了什么
 
 启用 `policy_evaluation_file` 时，在轨迹学习之外另有独立的 **Agent 任务评测工作者**：
-它运行冻结版本与任务集，不占用主 Agent 的模型/动作/循环调用链，也不把测试轨迹重新排入学习队列。
+它运行冻结版本与任务集，不占用主 Agent 的模型/动作/循环调用链。候选、验证集和留出集轨迹不进入学习队列；
+只有[经验不足时的已审核训练任务](24-evolution-and-gepa.md#经验不足时自动补充训练)，通过专用报告校验后进入同一学习队列。
 只有候选行为版本改变才提交，空队列等待通知；默认两次启动间隔 60 秒，每小时最多 12 个版本作业。
 记忆评测摘要的更新不产生新的行为版本。调度、重启去重、取消和报告归档规则见[第 19 章](19-datasets-and-benchmarks.md)。
 
@@ -66,6 +67,24 @@
 批次建立前失败时，错误与退避时间记录在 learning/schedule.json 的 last_error 和 retry_after_ms。
 `runs/<run_id>.json` 中的 learning 保存 queued_at_ms、job_id、analysis_state、phase 和指纹；
 `learning/jobs/<job_id>.json` 记录冻结成员、错误与阶段，供排查，不改变业务状态接口。
+
+严格模型评测失败时，`errors[run_id]` 和 Run 的 `evaluation_error` 保留安全错误码：
+
+| 错误码示例 | 含义 |
+| --- | --- |
+| `dialogue_model_http_503` / `dialogue_model_transport_28` | 服务返回错误 / 请求超时 |
+| `dialogue_model_output_token_limit_reached` | 输出被 token 上限截断，不能作为完整评测入库 |
+| `dialogue_model_invalid_json` / `dialogue_model_invalid_episode_assessment` | JSON 或单项评测未满足协议 |
+| `dialogue_model_credential_like_output` | 模型响应含凭据迹象，已拒绝保留 |
+| `trace_evaluation_failed` | 不属于已识别安全错误码的异常，需本地诊断 |
+
+记录只包含组件已知错误码或有界数值状态，不包含原始异常、模型响应、路径或密钥。
+这些诊断不会放宽严格校验，不会把失败轨迹标记为学习成功，也不会新增自动重试。
+
+模型返回最外层单个 JSON 代码块时，评测、元反思、记忆整理、数据集生成与 GEPA
+共用单层解包逻辑，再分别执行各自的原有完整校验。配置文件和采集日志的 JSON 解析不变。
+报告 `issues` 中的 `dialogue_model_json_fence_unwrapped` 记录这一格式处理；原响应指纹仍保留。
+正文前后夹带说明、多段代码块、非法 JSON、伪造证据或凭据都不会因此被接受。
 
 注意：模型请求发出后、报告落盘前崩溃，无法仅靠本地文件判断服务商是否已完成或计费。
 恢复时标记 analysis_interrupted_unknown_outcome，要求显式重试；不自动重复付费调用。

@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import logging.handlers
+import os
 import subprocess
 import sys
 import time
@@ -226,9 +227,29 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             exc,
         )
 
+    evaluation_task = None
     try:
+        # Optional evaluation input binding; normal startup has no dependency
+        # on the evolution package. Keep the original chat/session/DataBus path.
+        if os.environ.get("TRAJECTORY_EVOLUTION_EVALUATION_ENTRY") == "1":
+            from evolution_entry import aevaluate
+            from routes.chat_rest import ChatRestRequest, chat_rest
+
+            # The HTTP listener must start while trials run: tools can upload
+            # artifacts back to this same Bridge during an evaluated turn.
+            evaluation_task = asyncio.create_task(aevaluate(lambda task: chat_rest(
+                agent_id=task["agent_id"],
+                body=ChatRestRequest.model_validate(task["body"]),
+                client=daemon_client, provider=session_provider, stream=False,
+            )))
         yield
     finally:
+        if evaluation_task is not None:
+            evaluation_task.cancel()
+            try:
+                await evaluation_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         poll_task.cancel()
         if sync_task is not None:
             sync_task.cancel()

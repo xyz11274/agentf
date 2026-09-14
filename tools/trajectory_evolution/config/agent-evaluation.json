@@ -6,6 +6,12 @@
   "min_interval_ms": 60000,
   "max_jobs": 256,
   "max_jobs_per_hour": 12,
+  "training": {
+    "enabled": true,
+    "min_experiences": 3,
+    "batch_size": 16,
+    "max_batches": 4
+  },
   "gate": {
     "min_trials": 2,
     "memory_min_pairs": 2,

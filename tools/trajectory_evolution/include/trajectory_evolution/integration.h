@@ -26,6 +26,9 @@ class IntegrationService {
   // Trusted local import, not an HTTP path-reading endpoint. Completed historical
   // logs enter the same durable queue as live runs; exact reimports are no-ops.
   IntegrationResponse import_file(const std::filesystem::path& path);
+  // Explicit cold-start admission: only verified, unmodified L0 training trials.
+  IntegrationResponse import_training_evaluation(const std::filesystem::path& report_directory,
+      const std::filesystem::path& dataset_directory);
   std::string learning_status() const;
   void process_evaluations();
   // Explicit maintenance may flush a small batch; background workers obey cadence.
@@ -40,9 +43,15 @@ class IntegrationService {
   // Maintenance only. Wait for already accepted buffered capture, not learning.
   bool flush_capture(unsigned timeout_ms = 5000);
   bool capture_finished() const;
+  bool capture_finished(std::size_t expected_runs) const;
+  std::string evaluation_entry_status() const;
 
  private:
   friend class LocalRuntime;
+  IntegrationResponse import_source(const std::filesystem::path& path,
+      const std::string& training_trace, const std::string& training_source);
+  IntegrationResponse import_training_report(const std::filesystem::path& report_directory,
+      const std::filesystem::path& dataset_directory, const std::string& baseline_json);
   void refresh_agent_evaluations();
   // Startup/background bridge only; never exposed through the HTTP dispatcher.
   std::string local_environment(const std::string& bearer, std::uint64_t memory_version = 0);
@@ -61,6 +70,8 @@ class IntegrationHttpServer {
   unsigned port() const;
   bool flush_capture(unsigned timeout_ms = 5000);
   bool capture_finished() const;
+  bool capture_finished(std::size_t expected_runs) const;
+  std::string evaluation_entry_status() const;
  private:
   struct Impl;
   std::unique_ptr<Impl> impl_;

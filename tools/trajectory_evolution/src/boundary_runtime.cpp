@@ -69,6 +69,33 @@ v1::RuntimeOptions binding_options(const Json& binding) {
   validate_request_binding(options); return options;
 }
 
+std::string activity_query_state(const Json& request, const std::string& semantic, const Json& config) {
+  if(!request["state"].null()) return bounded_query_text(request["state"], config, false);
+  if(semantic != "model" || request["binding"].str("mode") != "system_message")
+    return bounded_query_text(request["input"], config, false);
+  // Follow the configured binding, not a provider-specific messages field.
+  const auto path = request["binding"].str("pointer");
+  const rapidjson::Pointer pointer(path.c_str(), path.size());
+  const Json* value = &request["input"];
+  for(std::size_t i = 0; value && i < pointer.GetTokenCount(); ++i) {
+    const auto& token = pointer.GetTokens()[i];
+    if(value->object()) {
+      const auto found = value->fields().find(std::string(token.name, token.length));
+      value = found == value->fields().end() ? nullptr : &found->second;
+    } else if(value->array() && token.index != rapidjson::kPointerInvalidIndex && token.index < value->items().size()) {
+      value = &value->items()[token.index];
+    } else value = nullptr;
+  }
+  Json messages = Json::Array{};
+  if(value && value->array()) for(const auto& message : value->items()) {
+    const auto& role = message["role"];
+    // Static instructions, including earlier injections, are not observations.
+    if(role.string() && (role.text() == "system" || role.text() == "developer")) continue;
+    messages.push(message);
+  }
+  return bounded_query_text(messages, config, false);
+}
+
 class Runtime {
  public:
   Json& run;
@@ -185,7 +212,7 @@ class Runtime {
       if(request.has("binding")) { binding_options(request["binding"]); item["binding"] = request["binding"]; }
     }
     if(apply_policy && semantic != "custom" && run.num("level", 0) > 0) {
-      auto q = query(item, semantic == "model" ? "llm" : "actions", id, request["state"]);
+      auto q = query(item, semantic == "model" ? "llm" : "actions", id, activity_query_state(request, semantic, config));
       if(semantic == "action") {
         auto* action = q.add_actions(); action->set_action_id(id); action->set_operation(name);
         *action->mutable_arguments() = proto<google::protobuf::Struct>(prepared.object() ? prepared : Json{{"value", prepared}});
@@ -473,13 +500,20 @@ Json dispatch_boundary(Json& run, const Json& request, const Json& config, const
     return runtime.commit_loop(request, op == "loop.abort");
   }
   if(op == "event.record") {
-    keys(request, {"operation", "request_id", "run_id", "type", "data", "activity_id", "caused_by", "extensions"});
+    keys(request, {"operation", "request_id", "run_id", "type", "data", "activity_id", "control_id", "caused_by", "extensions"});
     require(identifier(request.str("type")) && request.has("data"), "event_fields_required");
+    require(!request.has("activity_id") || !request.has("control_id"), "event_context_exclusive");
     auto fields = Json{{"attributes", Json{{"type", "extension.event"}, {"event_type", request["type"]},
       {"data", request["data"]}, {"extensions", extensions(request)}}}};
     if(request.has("activity_id")) {
       require(run["activities"].has(request.str("activity_id")), "activity_not_found", 404);
       const auto context = event_context(run["activities"][request.str("activity_id")]);
+      for(const auto& pair : context.fields()) fields[pair.first] = pair.second;
+    } else if(request.has("control_id")) {
+      // A point may report a local result after loop.commit, without opening
+      // another activity. Keep its explicit round, not the latest sibling loop.
+      require(run["controls"].has(request.str("control_id")), "control_not_found", 404);
+      const auto context = event_context(run["controls"][request.str("control_id")]);
       for(const auto& pair : context.fields()) fields[pair.first] = pair.second;
     }
     return Json{{"event_id", runtime.emit("custom", fields, "extension-" + hash(request.str("request_id")).substr(0, 24), runtime.causes(request))}};

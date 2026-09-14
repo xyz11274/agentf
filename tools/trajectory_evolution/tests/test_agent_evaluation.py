@@ -1,5 +1,7 @@
 """Version-bound background evaluation and production-path isolation."""
 import json
+import hashlib
+import http.server
 import os
 from pathlib import Path
 import select
@@ -7,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.request
@@ -109,6 +112,170 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         self.assertEqual(result.returncode, 0, result.stderr)
         (folder / "evolution-memory.pb").write_bytes(result.stdout)
 
+    def prepare_checkpoint_retry(self, invalid_json=False):
+        requests = []
+        self.pause_resume_judge = False
+        self.resume_judge_entered = threading.Event()
+        self.resume_judge_release = threading.Event()
+        owner = self
+
+        class Judge(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                requests.append(body)
+                if owner.pause_resume_judge and len(requests) >= 4:
+                    owner.resume_judge_entered.set()
+                    owner.resume_judge_release.wait(5)
+                packet = json.loads(body["messages"][1]["content"])
+                reviews = [dict(iteration_id=k, decision="keep", reason="该轮提供完成任务所需的结果。",
+                    evidence_event_ids=[v.get("anchor_event_id", v["event_ids"][0])])
+                    for k, v in packet.get("loop_inventory", {}).items()]
+                judgment = dict(verdict="passed", reason="实际输出满足任务要求。", evidence_paths=["/output"],
+                    loop_review=dict(status="complete", iteration_reviews=reviews))
+                content = "{" if invalid_json and len(requests) == 2 else json.dumps(judgment)
+                payload = json.dumps(dict(choices=[dict(finish_reason="stop", message=dict(content=content))])).encode()
+                self.send_response(503 if len(requests) == 2 and not invalid_json else 200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                try:
+                    self.wfile.write(payload)
+                except OSError:
+                    pass  # Cancellation closes the in-flight grading socket.
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Judge)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        self.addCleanup(self.resume_judge_release.set)
+        shutil.copytree(SOURCE / "config", self.root / "model-config")
+        runtime_path = self.root / "model-config/standard-runtime.json"
+        runtime = json.loads(runtime_path.read_text())
+        runtime["model"].update(endpoint=f"http://127.0.0.1:{server.server_port}/chat/completions",
+            model_id="checkpoint-judge", no_api_key=True, max_retries=0, timeout_ms=3000)
+        write(runtime_path, runtime)
+        self.config.update(max_level="L0", principals=self.config["principals"][:1])
+        write(self.root / "service.json", self.config)
+        self.evaluation["repetitions"] = 3
+        self.evaluation["variants"][0]["command"][-2] = "resume"
+        self.evaluation["variants"][0]["pass_env"] = ["EVOLUTION_TEST_EXECUTIONS"]
+        self.env["EVOLUTION_TEST_EXECUTIONS"] = str(self.root / "executions.txt")
+        self.evaluation["artifacts"] = {"*": [dict(path="proof.txt", media_type="text/plain")]}
+        self.evaluation["judge"] = dict(enabled=True, runtime_config=str(runtime_path),
+            prompt=str(SOURCE / "config/prompts/task-judge-system.txt"),
+            loop_review_prompt=str(SOURCE / "config/prompts/task-loop-review.txt"), max_repair_attempts=0)
+        write(self.root / "evaluation.json", self.evaluation)
+        self.start()
+        job_id, job = self.wait_checkpoint_job()
+        self.assertEqual(job["status"], "inconclusive", job)
+        self.assertEqual(len(requests), 3)
+        folder = self.root / "production/agent-evaluation" / job_id
+        return job_id, folder, requests
+
+    def wait_checkpoint_job(self):
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            state = self.call("agent_evaluation.status")
+            if len(state["jobs"]) == 1:
+                job_id, job = next(iter(state["jobs"].items()))
+                if job["status"] not in ("pending", "running"):
+                    return job_id, job
+            time.sleep(.02)
+        self.fail("checkpoint job did not finish")
+
+    def test_retry_reuses_execution_and_only_regrades_failed_judgment(self):
+        job_id, folder, requests = self.prepare_checkpoint_retry()
+        original = (folder / "attempt-1/report.json").read_bytes()
+        first = json.loads(original)
+        self.call("agent_evaluation.retry", job_id=job_id)
+        _, job = self.wait_checkpoint_job()
+        self.assertEqual(job["status"], "passed", job)
+        resumed = json.loads((folder / "attempt-2/report.json").read_text())
+        self.assertTrue(resumed["complete"])
+        self.assertEqual(resumed["summary"]["reused_trials"], 2)
+        self.assertEqual(resumed["summary"]["regraded_trials"], 1)
+        self.assertEqual(resumed["summary"]["model_calls"], 1)
+        self.assertEqual(resumed["summary"]["resume_source"]["report_sha256"], hashlib.sha256(original).hexdigest())
+        self.assertEqual(len(requests), 4)
+        self.assertEqual(len((self.root / "executions.txt").read_text().splitlines()), 3)
+        self.assertEqual((folder / "attempt-1/report.json").read_bytes(), original)
+        for before, after in zip(first["trials"], resumed["trials"]):
+            self.assertEqual(before["trial_id"], after["trial_id"])
+            self.assertEqual(before["duration_ms"], after["duration_ms"])
+            self.assertEqual(before["evidence"]["trace"], after["evidence"]["trace"])
+            if before["verdict"] == "passed":
+                self.assertEqual(before, after)
+            name = after["evidence"]["artifacts"]["proof.txt"]["stored_file"]
+            self.assertEqual((folder / "attempt-2/artifacts" / after["trial_id"] / name).read_text(), "verified execution")
+
+    def test_retry_rejects_changed_report_without_executing_agent(self):
+        job_id, folder, requests = self.prepare_checkpoint_retry()
+        path = folder / "attempt-1/report.json"
+        path.write_bytes(path.read_bytes() + b" ")
+        self.call("agent_evaluation.retry", job_id=job_id)
+        _, job = self.wait_checkpoint_job()
+        self.assertEqual(job["error"], "evaluation_checkpoint_changed")
+        self.assertEqual(len(requests), 3)
+        self.assertEqual(len((self.root / "executions.txt").read_text().splitlines()), 3)
+
+    def test_successful_regrade_clears_previous_validation_diagnostics(self):
+        job_id, folder, requests = self.prepare_checkpoint_retry(invalid_json=True)
+        first = json.loads((folder / "attempt-1/report.json").read_text())
+        failed = next(t for t in first["trials"] if t.get("error_code") == "evaluation_judge_failed")
+        self.assertEqual(failed["evidence"]["judge_validation_error"]["code"], "invalid_json")
+        self.call("agent_evaluation.retry", job_id=job_id)
+        _, job = self.wait_checkpoint_job()
+        self.assertEqual(job["status"], "passed", job)
+        resumed = json.loads((folder / "attempt-2/report.json").read_text())
+        retried = next(t for t in resumed["trials"] if t["trial_id"] == failed["trial_id"])
+        self.assertNotIn("judge_validation_error", retried["evidence"])
+        self.assertEqual(retried["evidence"]["loop_review"]["status"], "complete")
+        self.assertEqual(len(requests), 4)
+        self.assertEqual(len((self.root / "executions.txt").read_text().splitlines()), 3)
+
+    def test_cancelled_regrade_keeps_checkpoints_for_another_retry(self):
+        job_id, folder, _ = self.prepare_checkpoint_retry()
+        original = json.loads((folder / "attempt-1/report.json").read_text())
+        self.pause_resume_judge = True
+        self.call("agent_evaluation.retry", job_id=job_id)
+        self.assertTrue(self.resume_judge_entered.wait(5))
+        self.call("agent_evaluation.cancel", job_id=job_id)
+        self.resume_judge_release.set()
+        _, job = self.wait_checkpoint_job()
+        self.assertEqual(job["error"], "evaluation_cancelled", job)
+        cancelled = json.loads((folder / "attempt-2/report.json").read_text())
+        self.assertFalse(cancelled["complete"])
+        self.assertEqual({t["trial_id"] for t in cancelled["trials"]}, {t["trial_id"] for t in original["trials"]})
+        self.pause_resume_judge = False
+        self.call("agent_evaluation.retry", job_id=job_id)
+        _, job = self.wait_checkpoint_job()
+        self.assertEqual(job["status"], "passed", job)
+        self.assertEqual(len((self.root / "executions.txt").read_text().splitlines()), 3)
+
+    def test_retry_rejects_changed_grading_context(self):
+        job_id, folder, requests = self.prepare_checkpoint_retry()
+        path = folder / "attempt-1/report.json"
+        report = json.loads(path.read_text()); report["config_fingerprint"] = "0" * 64; write(path, report)
+        manifest_path = folder / "attempt-1/manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["files"]["report.json"] = hashlib.sha256(path.read_bytes()).hexdigest(); write(manifest_path, manifest)
+        self.call("agent_evaluation.retry", job_id=job_id)
+        _, job = self.wait_checkpoint_job()
+        self.assertEqual(job["error"], "evaluation_checkpoint_context_mismatch")
+        self.assertEqual(len(requests), 3)
+
+    def test_retry_rejects_changed_deliverable(self):
+        job_id, folder, requests = self.prepare_checkpoint_retry()
+        first = json.loads((folder / "attempt-1/report.json").read_text())["trials"][0]
+        name = first["evidence"]["artifacts"]["proof.txt"]["stored_file"]
+        (folder / "attempt-1/artifacts" / first["trial_id"] / name).write_text("changed")
+        self.call("agent_evaluation.retry", job_id=job_id)
+        _, job = self.wait_checkpoint_job()
+        self.assertEqual(job["error"], "evaluation_checkpoint_artifact_changed")
+        self.assertEqual(len(requests), 3)
+
     def test_bundle_feedback_does_not_archive_each_memory(self):
         self.add_memory()
         self.config["auto_approve_experiences"] = True
@@ -199,6 +366,13 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
     def test_all_levels_publish_and_reload(self):
         self.start()
         result = self.wait_jobs()
+        material = ((self.root / "agent-evaluation.json").read_text() + (self.root / "evaluation.json").read_text()
+                    + json.loads((self.root / "dataset/manifest.json").read_text())["metadata"]["dataset_version"])
+        old_context = hashlib.sha256(material.encode()).hexdigest()
+        context = hashlib.sha256(("boundary-current-request-v1\n" + material).encode()).hexdigest()
+        self.assertNotEqual(context, old_context)
+        self.assertTrue(all(job["context"] == context for job in result["jobs"].values()),
+                        "execution-semantic upgrade must not reuse the old evaluation context")
         self.assertEqual(set(result["publications"]), {"L0", "L1", "L2", "L3"}, result)
         for job in result["jobs"].values():
             self.assertEqual(job["status"], "passed", job)
@@ -246,6 +420,17 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         self.assertEqual(denied["error"], "evaluation_job_not_found")
         rejected = self.call("agent_evaluation.submit", artifact={"revision": TOKEN})
         self.assertEqual(rejected["error"], "credential_value_rejected")
+
+    def test_zero_baseline_is_not_a_positive_loop_reduction(self):
+        config = json.loads((self.root / "agent-evaluation.json").read_text())
+        config["gate"]["min_invalid_loop_reduction"] = .3
+        write(self.root / "agent-evaluation.json", config)
+        self.start()
+        result = self.wait_jobs()
+        self.assertEqual(set(result["publications"]), {"L0"})
+        for job in result["jobs"].values():
+            if job["level"] != "L0":
+                self.assertIn("loop_baseline_has_no_observed_waste", job["gate"]["reasons"])
 
     def test_wrong_loaded_version_is_rejected(self):
         self.evaluation["variants"][0]["command"][-2] = "wrong_version"

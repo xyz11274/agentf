@@ -17,6 +17,9 @@
 ## 构建或使用安装包
 
 源码构建依赖 C++17、CMake、Protobuf/Protoc、libcurl、OpenSSL、Threads 和 RapidJSON。
+安装 libpng 开发包后，CMake 自动启用评测产物的完整 PNG 像素解码；使用包含最新安全修复的 libpng。
+未安装时仍能构建，PNG 证据明确标为 `header_only`，无法据此判定图片可解码；已安装时为 `decoded`。
+PNG 解码只发生在后台评测，不进入主 Agent 打点路径。
 以下命令在本仓库根目录执行；如果独立拿到组件源码，将 `-S` 改为组件目录即可，不需要构建整个 AgentFlow。
 
 ```sh

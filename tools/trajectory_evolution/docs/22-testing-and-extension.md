@@ -24,6 +24,10 @@ python3 tools/trajectory_evolution/api/build_openapi.py --check
 ```
 
 回归测试使用本地原生/HTTP 入口与可控响应，无需业务模型 Key；供应商和业务场景通过任务评测单独验收。
+`TaskEvaluationTests` 同时验证包内任务入口绑定：同步/异步接收、派发后由子进程完成、
+常驻程序收尾、C ABI、JS、原生打点转发、多轮历史及会话身份、回调异常、缺失 run/end、
+额外 run、未绑定初始条件和缺失结果路径。测试接收器是确定性夹具，不作为真实 Agent 能力成绩。
+只运行这部分时使用 `ctest --test-dir build/trajectory-evolution -R TaskEvaluationTests --output-on-failure`。
 LocalRuntimeTests 在业务线程禁止文件/网络/睡眠系统调用后完成 40 轮 L3 流程，输出耗时分位数；
 LocalLanguageClientTests 覆盖两用户三会话九次任务、真实回执、逆序分支、慢评测、落盘失败、容量和中断恢复。
 测试结果在 build/trajectory-evolution/local-runtime.* 与 local-clients.* 下的 test-summary.json。
@@ -65,6 +69,7 @@ LocalLanguageClientTests 覆盖两用户三会话九次任务、真实回执、�
 | 快照资格与检索 | `src/shadow_runtime.cpp`：compile_shadow_policy、query_advice |
 | 策略和应用回执 | `src/policy_runtime.cpp`：compile_runtime_policy、decide、verify |
 | 任意 JSON 参数绑定 | `src/request_binding.cpp` |
+| 无专用宿主的任务投递 | `src/evaluation_entry.h`、`clients/python/evolution_entry.py`、各语言 `evaluate` 封装 |
 | 外部配置和模板加载 | `src/runtime_config.cpp` |
 
 算法集中在组件目录，AgentFlow Hook 和 SessionLog 作为其中一种集成方式。
@@ -87,6 +92,21 @@ LocalRuntimeTests 覆盖。HTTP 超时用本地慢响应服务验证一次尝试
 
 可控响应覆盖拒绝、冲突、超时等程序分支；真实模型使用固定任务集验证语义判断。
 真实 AgentFlow、其他框架和真实供应商要按自己的部署另跑验收，不继承“所有框架都通过”的结论。
+
+### 模型与长期运行的边界回归
+
+| 场景 | 程序要求 | 回归位置 |
+| --- | --- | --- |
+| 正文合法但带传输/截断错误 | 评分、元反思、私有匹配及公共审查拒绝采纳 | TaskEvaluationTests、TrajectoryEvolutionTests、SharedMemoryTests |
+| SSE 缺结束标记、错误帧、多选项、超大输出 | 不提交局部结果；连续无数据按独立 idle 预算恢复 | TaskEvaluationTests |
+| 连续模型调用与并发 | 可复用连接，每个在途调用独占句柄；预算仍有界 | TaskEvaluationTests |
+| 精简输入与短响应 | 业务数据可还原、真实证据保留；兼容旧状态描述字段 | SessionLogHybridEvaluatorTests、TrajectoryHybridEvaluatorTests |
+| 凭据跨截断点、提示词包含 NUL | 不留下已知凭据前缀；发送内容不在 NUL 处静默截短 | SessionLogHybridEvaluatorTests、TaskEvaluationTests |
+| 历史批次数超过活跃容量 | 重启正常，不重新分析已完成报告 | LearningScheduleTests |
+| 正在收尾时再收到停止信号 | 保持清理处理器直到后台结束，检查点落盘后退出 | LearningScheduleTests |
+
+历史学习批次保留供追溯，不占待处理任务数量限额；这不等于磁盘无限容量或重启扫描恒定耗时。
+部署仍需按第 21 章检查磁盘和历史归档。连续停止测试验证优雅收尾，不覆盖 SIGKILL、宿主断电或外部强制删除文件。
 
 ## 如何扩展而不破坏框架无关性
 
