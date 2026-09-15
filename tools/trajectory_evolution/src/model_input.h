@@ -81,11 +81,17 @@ inline void task_evidence_view(Value& evidence, bool include_model_requests = tr
     if(include_model_requests || !trace.IsObject() || !trace.HasMember("events") || !trace["events"].IsArray()) return;
     for(auto& event : trace["events"].GetArray()) {
       if(!event.IsObject() || !event.HasMember("attributes")) continue;
-      const auto& attributes = event["attributes"];
+      auto& attributes = event["attributes"];
       // Only explicitly typed model requests: never guess from provider field
       // names or strip similarly shaped tool arguments/custom activity data.
       if(attributes.IsObject() && attributes.HasMember("semantic") && attributes["semantic"] == "model")
         event.RemoveMember("input");
+      // Retrieval diagnostics repeat the query and injected context, not an
+      // execution observation. Keep action/progress decisions and receipts.
+      if(event.HasMember("kind") && event["kind"] == "custom" && attributes.IsObject()
+         && attributes.HasMember("type") && attributes["type"] == "policy.query"
+         && attributes.HasMember("decision"))
+        omit(attributes["decision"], {"query", "context", "experiences", "policy_id"});
     }
   };
   if(evidence.HasMember("trace")) execution_view(evidence["trace"]);

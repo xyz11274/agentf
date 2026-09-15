@@ -23,12 +23,48 @@ double mean(const Json& scores, const std::string& field) {
   }
   return total / scores.fields().size();
 }
-bool no_worse(const Json& candidate, const Json& parent) {
+bool loops_no_worse(const Json& candidate, const Json& parent) {
   if(!candidate.object() || !parent.object() || candidate.fields().empty()
       || candidate.fields().size() != parent.fields().size()) return false;
   for(const auto& item : parent.fields()) if(!candidate.has(item.first)) return false;
+  std::size_t observed = 0;
+  for(const auto& item : parent.fields()) {
+    const auto& a = candidate[item.first]; const auto& b = item.second;
+    if(!a.has("invalid_loops") && !b.has("invalid_loops")) continue;
+    if(!a.has("invalid_loops") || !b.has("invalid_loops") || a["invalid_loops"].null()
+        || b["invalid_loops"].null() || a.str("loop_method") != b.str("loop_method")) return false;
+    ++observed;
+  }
+  // A disabled loop objective has no counts. Partial observations are not zero.
+  return !observed || (observed == parent.fields().size()
+      && mean(candidate, "invalid_loops") <= mean(parent, "invalid_loops") + 1e-12);
+}
+bool no_worse(const Json& candidate, const Json& parent) {
+  if(!loops_no_worse(candidate, parent)) return false;
   return mean(candidate, "quality") >= mean(parent, "quality") - 1e-12
       && mean(candidate, "fitness") >= mean(parent, "fitness") - 1e-12;
+}
+bool local_gain(const Json& candidate, const Json& parent, double minimum) {
+  if(!candidate.object() || !parent.object() || parent.fields().empty()
+      || candidate.fields().size() != parent.fields().size()) return false;
+  bool gained = false;
+  for(const auto& task : parent.fields()) {
+    if(!candidate.has(task.first)) return false;
+    const auto& a = candidate[task.first]; const auto& b = task.second;
+    for(const auto* key : {"quality", "fitness"})
+      if(!a.has(key) || !b.has(key) || a[key].null() || b[key].null()) return false;
+    if(a.has("invalid_loops") || b.has("invalid_loops"))
+      if(!a.has("invalid_loops") || !b.has("invalid_loops") || a["invalid_loops"].null()
+          || b["invalid_loops"].null() || a.str("loop_method") != b.str("loop_method")) return false;
+    const auto quality = number(a["quality"]) - number(b["quality"]);
+    gained |= quality > minimum;
+    for(const auto* key : {"fitness", "loop_efficiency", "token_efficiency", "latency_efficiency"}) {
+      if(a.has(key) != b.has(key) || (a.has(key) && (a[key].null() || b[key].null()))) return false;
+      // Preserve specialists, not speed gains obtained by failing the same task.
+      if(a.has(key) && quality >= -1e-12) gained |= number(a[key]) > number(b[key]) + minimum;
+    }
+  }
+  return gained;
 }
 std::vector<std::size_t> parents(const Json& node) {
   std::vector<std::size_t> result;
@@ -155,8 +191,22 @@ Json select_merge(const Json& nodes, const Json& mapping, const Json& attempts, 
     std::set_intersection(a.begin(), a.end(), b.begin(), b.end(), std::back_inserter(common));
     std::stable_sort(common.begin(), common.end(), [&](auto x, auto y) { return nodes.items()[x].num("depth", 0) > nodes.items()[y].num("depth", 0); });
     for(auto base : common) {
-      if(!no_worse(nodes.items()[pair[0]]["validation"], nodes.items()[base]["validation"])
-          || !no_worse(nodes.items()[pair[1]]["validation"], nodes.items()[base]["validation"])) continue;
+      // Frontier specialists may lose on average while improving different tasks.
+      // Require a real local gain; the combined child still has to beat both parents.
+      auto gain = [&](std::size_t id) {
+        const auto& candidate = nodes.items()[id]["validation"];
+        const auto& ancestor = nodes.items()[base]["validation"];
+        if(config.str("acceptance") == "pareto")
+          return local_gain(candidate, ancestor, number(config["min_improvement"], 0.000001));
+        if(candidate.fields().size() != ancestor.fields().size()) return false;
+        bool improved = false;
+        for(const auto& task : ancestor.fields()) {
+          if(!candidate.has(task.first)) return false;
+          improved |= better(Json{{task.first, candidate[task.first]}}, Json{{task.first, task.second}});
+        }
+        return improved;
+      };
+      if(!gain(pair[0]) || !gain(pair[1])) continue;
       bool seen = false;
       for(const auto& attempt : attempts.items()) seen |= attempt.num("first", SIZE_MAX) == pair[0]
           && attempt.num("second", SIZE_MAX) == pair[1] && attempt.num("ancestor", SIZE_MAX) == base;

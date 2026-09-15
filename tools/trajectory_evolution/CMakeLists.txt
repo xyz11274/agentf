@@ -156,6 +156,7 @@ add_library(agentflow_trajectory_evolution STATIC
   src/integration_service.cpp
   src/integration_http.cpp
   src/boundary_runtime.cpp
+  src/model_contract.cpp
   src/instrumentation.cpp
   src/control_generation.cpp
   src/gepa_search.cpp
@@ -299,7 +300,7 @@ if(BUILD_TESTING)
     set_tests_properties(TrainingBootstrapTests PROPERTIES TIMEOUT 180)
     add_test(NAME GepaSearchTests COMMAND ${Python3_EXECUTABLE}
         -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gepa_search.py ${CMAKE_CURRENT_BINARY_DIR} ${AGENTFLOW_PROTOC_EXECUTABLE})
-    set_tests_properties(GepaSearchTests PROPERTIES TIMEOUT 360)
+    set_tests_properties(GepaSearchTests PROPERTIES TIMEOUT 600)
     add_test(NAME DocumentationTests COMMAND ${Python3_EXECUTABLE}
         -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_documentation.py)
     add_test(NAME TaskEvaluationTests COMMAND ${Python3_EXECUTABLE}
@@ -333,6 +334,9 @@ if(BUILD_TESTING)
     set_tests_properties(InstrumentationTests PROPERTIES TIMEOUT 120)
     add_test(NAME ConfiguredPointClientTests COMMAND ${Python3_EXECUTABLE}
       -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_configured_points.py ${CMAKE_CURRENT_BINARY_DIR})
+    add_test(NAME AutomaticContractTests COMMAND ${Python3_EXECUTABLE}
+      -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_automatic_contracts.py ${CMAKE_CURRENT_BINARY_DIR})
+    set_tests_properties(AutomaticContractTests PROPERTIES TIMEOUT 120)
   endif()
   add_executable(test_integration_service tests/test_integration_service.cpp)
   target_include_directories(test_integration_service PRIVATE src ${RAPIDJSON_INCLUDE_ROOT})

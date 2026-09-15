@@ -1,6 +1,7 @@
 """HTTP/JSON transport for every L0-L3 boundary; Python standard library only."""
 import http.client
 import json
+import logging
 import os
 import re
 import time
@@ -55,11 +56,29 @@ class Evolution(PointCalls):
             fields = self._point_fields(fields)
             if type(timeout_ms) is not int or not 1 <= timeout_ms <= 5000:
                 raise ValueError("point_timeout_invalid")
-            return self._point_observed(fields, self._invoke("point", fields, request_id, timeout_ms / 1000, 0))
-        except Exception:
+            result = self._invoke("point", fields, request_id, timeout_ms / 1000, 0)
+            if fields.get("kind") == "run" and result.get("degraded"):
+                code = result.get("reason", "point_capture_degraded")
+                if not isinstance(code, str) or not re.fullmatch(r"[a-z_]{1,96}", code):
+                    code = "point_capture_degraded"
+                try:
+                    logging.getLogger(__name__).warning("run point capture degraded: %s", code)
+                except Exception:
+                    pass
+            return self._point_observed(fields, result)
+        except Exception as error:
             fields = fields if isinstance(fields, dict) else {}
             context = dict(fields["context"]) if isinstance(fields.get("context"), dict) else {}
             kind = fields.get("kind", context.get("kind", "custom"))
+            if kind == "run":
+                # Fixed transport codes only; never log business input or exception text.
+                code = str(error) if isinstance(error, EvolutionError) else "observer_unavailable"
+                if not re.fullmatch(r"[a-z_]{1,96}", code):
+                    code = "observer_unavailable"
+                try:
+                    logging.getLogger(__name__).warning("run point capture degraded: %s", code)
+                except Exception:
+                    pass
             context.update(kind=kind, degraded=True, caused_by=[])
             context.setdefault("run_id", "unobserved-" + request_id)
             return self._point_observed(fields, {"context": context, "input": fields.get("input"), "degraded": True, "capture_complete": False,

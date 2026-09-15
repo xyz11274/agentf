@@ -39,7 +39,10 @@ class GepaSearchTests(unittest.TestCase):
                     owner.judge_requests.append(packet)
                     if getattr(owner, "fail_search_judge", False) and packet["task_input"].startswith(
                             getattr(owner, "fail_search_prefix", "")) and any(
-                            (owner.root / "production/agent-evaluation").glob("*/search/tree.json")):
+                            (owner.root / "production/agent-evaluation").glob("*/search/tree.json")) \
+                            and getattr(owner, "search_judge_failures", 1):
+                        if hasattr(owner, "search_judge_failures"):
+                            owner.search_judge_failures -= 1
                         self.send_response(getattr(owner, "search_judge_status", 503))
                         self.send_header("Content-Length", "0"); self.end_headers()
                         return
@@ -118,6 +121,10 @@ class GepaSearchTests(unittest.TestCase):
                         controls["loop_rules"] = [dict(memory_id="test-experience", max_iterations=2,
                             max_no_progress=1, reason="根据重复任务的执行反馈收紧循环次数。")]
                     content = json.dumps(dict(reason="根据训练执行的结果修改受限规则。", controls=controls), ensure_ascii=False)
+                elif owner.behavior == "disable_enable":
+                    content = json.dumps(dict(reason="比较停用经验，并恢复种子批准的同一经验。",
+                        experience=dict(memory_id="test-experience", content=None if ordinal == 1 else
+                            "缺少素材时核验甲类任务，并核验乙类任务，独立计算继续。")), ensure_ascii=False)
                 elif owner.behavior == "no_change":
                     memory_id = packet["experiences"][0]["memory_id"]
                     content = json.dumps(dict(reason="测试缓存，不修改已有经验。", experience=dict(
@@ -255,6 +262,27 @@ class GepaSearchTests(unittest.TestCase):
     def test_json_fence_preserves_search_publication_and_privacy_gates(self):
         self.fenced = True
         self.test_reflection_tree_holdout_publication_and_restart()
+
+    def test_disabled_experience_remains_available_for_later_generations(self):
+        self.behavior = "disable_enable"
+        config = json.loads((self.root / "gepa.json").read_text())
+        config.update(max_rounds=2, max_model_calls=2, acceptance="improvement_or_equal")
+        fixture.write(self.root / "gepa.json", config)
+        self.start()
+        job_id, job, _ = self.wait_search()
+        root = self.root / "production/agent-evaluation" / job_id
+        seed = json.loads((root / "seed.json").read_text())
+        disabled = json.loads((root / "search/versions/1.json").read_text())
+        self.assertFalse(disabled["policy"]["options"].get("approved_experiences"))
+        self.assertFalse(disabled["policy"]["options"].get("experience_overrides"))
+        self.assertEqual(disabled["policy"]["snapshot"], seed["policy"]["snapshot"])
+        self.assertIsNone(self.requests[1]["components"]["experience:test-experience"])
+        self.assertEqual(self.requests[1]["experiences"][0]["memory_id"], "test-experience")
+        restored = json.loads((root / "search/versions/2.json").read_text())
+        self.assertEqual(restored["policy"]["options"]["approved_experiences"],
+                         seed["policy"]["options"]["approved_experiences"])
+        self.assertEqual(restored["policy"]["snapshot"], seed["policy"]["snapshot"])
+        self.assertEqual(job["status"], "passed", job)
 
     def test_search_uses_reviewed_loops_instead_of_the_zero_rule_bound(self):
         self.judge_requests = []
@@ -398,9 +426,83 @@ class GepaSearchTests(unittest.TestCase):
         rule = self.exercise_controls("actions", "L2")
         self.assertEqual(rule["required_arguments"], ["verified"])
 
+    def test_l2_search_reports_real_control_space_without_duplicate_memories(self):
+        self.exercise_controls("actions", "L2")
+        job_id, job, _ = self.wait_search("L2")
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertIn("action_rules", tree["available_components"])
+        self.assertEqual(tree["search_warnings"], [])
+        self.assertEqual(job["search"]["available_components"], tree["available_components"])
+        packet = next(p for p in self.requests if p.get("controls", {}).get("level") == "L2")
+        self.assertNotIn("memories", packet["controls"])
+        self.assertEqual(packet["controls"]["limits"]["actions"], {"calculate": ["verified"]})
+
+    def test_l2_without_control_authorization_reports_experience_only_search(self):
+        self.config["max_level"] = "L2"
+        fixture.write(self.root / "service.json", self.config)
+        config = json.loads((self.root / "gepa.json").read_text())
+        config.update(max_rounds=1, max_model_calls=1)
+        fixture.write(self.root / "gepa.json", config)
+        self.start()
+        job_id, job, _ = self.wait_search("L2")
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertNotIn("action_rules", tree["available_components"])
+        self.assertEqual(tree["search_warnings"], [])
+        self.assertEqual(tree["fixed_controls"], ["observed_tool_required_arguments"])
+        self.assertEqual(job["search"]["search_warnings"], tree["search_warnings"])
+
+    def test_rewritten_experiences_keep_original_constraints_in_reflection(self):
+        self.start()
+        self.wait_search()
+        originals = [item["original_content"] for packet in self.requests
+                     for item in packet["experiences"] if "original_content" in item]
+        self.assertTrue(originals)
+        self.assertEqual(len(set(originals)), 1)
+        for packet in self.requests:
+            for item in packet["experiences"]:
+                self.assertIn("condition", item)
+                self.assertIn("scope", item)
+                self.assertNotIn("content", item)
+
+    def test_l2_enabled_without_operations_warns_without_crashing(self):
+        self.config.update(max_level="L2", control_learning=dict(
+            enabled=True, prompt_file="prompts/gepa-reflection.txt"))
+        fixture.write(self.root / "service.json", self.config)
+        config = json.loads((self.root / "gepa.json").read_text())
+        config.update(max_rounds=1, max_model_calls=1)
+        fixture.write(self.root / "gepa.json", config)
+        self.start()
+        job_id, job, _ = self.wait_search("L2")
+        self.assertNotEqual(job["status"], "error", job)
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertNotIn("action_rules", tree["available_components"])
+        self.assertEqual(tree["search_warnings"], [])
+        self.assertEqual(job["search"]["fixed_controls"], ["observed_tool_required_arguments"])
+
     def test_l3_generated_loop_rules_reach_actual_host(self):
         rule = self.exercise_controls("loops", "L3")
         self.assertEqual(int(rule["max_iterations"]), 2)
+
+    def test_l3_loop_search_without_manual_tool_whitelist(self):
+        self.behavior = "loops"
+        self.evaluation["variants"][0]["command"][-2] = "gepa_loops"
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+        self.config.update(max_level="L3", control_learning=dict(
+            enabled=True, prompt_file="prompts/gepa-reflection.txt", max_rules=2, min_iterations=2, min_no_progress=1))
+        fixture.write(self.root / "service.json", self.config)
+        config = json.loads((self.root / "gepa.json").read_text())
+        config.update(max_rounds=1, max_model_calls=1)
+        fixture.write(self.root / "gepa.json", config)
+        self.start()
+        job_id, job, _ = self.wait_search("L3")
+        self.assertEqual(job["status"], "passed", job)
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertIn("loop_rules", tree["available_components"])
+        self.assertNotIn("action_rules", tree["available_components"])
+        candidate = json.loads((self.root / "production/agent-evaluation" / job_id / "candidate.json").read_text())
+        generated = [rule for rule in candidate["policy"]["options"]["loop_rules"] if "source_experience" in rule]
+        self.assertEqual(len(generated), 1)
+        self.assertEqual(int(generated[0]["max_iterations"]), 2)
 
     def configure_merge(self, mode="gepa_merge", **overrides):
         self.behavior = "merge"
@@ -463,6 +565,19 @@ class GepaSearchTests(unittest.TestCase):
         self.assertFalse(job.get("published", False))
         self.assertNotEqual(tree["winner"], 3)
         self.assertEqual(tree["model_calls"], 2)
+
+    def test_pareto_screening_keeps_joint_search_and_final_gate(self):
+        self.configure_merge(acceptance="pareto", frontier_type="hybrid")
+        self.assessment["gate"]["min_invalid_loop_reduction"] = .15
+        fixture.write(self.root / "agent-evaluation.json", self.assessment)
+        self.start()
+        job_id, job, _ = self.wait_search("L2")
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        self.assertEqual(tree["nodes"][3]["kind"], "merge")
+        self.assertEqual(tree["nodes"][3]["status"], "accepted")
+        # Retaining a useful node is not permission to bypass the publish gate.
+        self.assertFalse(job.get("published", False))
+        self.assertNotEqual(job["status"], "passed")
 
     def test_partial_merge_validation_only_executes_each_task_once(self):
         self.configure_merge(merge_minibatch_size=1)
@@ -857,6 +972,78 @@ class GepaSearchTests(unittest.TestCase):
                 self.assertEqual(current[field], previous[field], field)
             self.assertEqual(current["evidence"]["trace"], previous["evidence"]["trace"])
         self.assertEqual(source.read_bytes(), source_bytes)
+
+    def test_transient_judge_retry_regrades_only_the_failed_task(self):
+        self.judge_requests = []
+        self.fail_search_judge = True
+        self.fail_search_prefix = "VALIDATION_PRIVATE 甲类"
+        self.behavior = "no_change"
+        config = json.loads((self.root / "gepa.json").read_text())
+        config.update(max_rounds=1, max_model_calls=1)
+        fixture.write(self.root / "gepa.json", config)
+        self.config["evaluation_levels"] = ["L1"]
+        fixture.write(self.root / "service.json", self.config)
+        self.evaluation["checks"] = {}
+        self.evaluation["variants"][0]["command"][-2] = "gepa_review"
+        self.evaluation["judge"] = dict(enabled=True, runtime_config="model.json", max_repair_attempts=0,
+            prompt="prompts/task-judge-system.txt", loop_review_prompt="prompts/task-loop-review.txt",
+            max_model_calls=100, max_input_bytes=1048576)
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+        self.start()
+        job_id, job, _ = self.wait_search()
+        self.assertEqual(job.get("error"), "gepa_seed_evaluation_inconclusive")
+        self.fail_search_judge = False
+        self.call("agent_evaluation.retry", job_id=job_id)
+        _, job, _ = self.wait_search()
+        self.assertIn(job["status"], ("passed", "rejected"), job)
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        root = self.root / "production/agent-evaluation" / job_id / "search"
+        key, cached = next((k, v) for k, v in tree["evaluations"].items() if v["split"] == "val")
+        self.assertEqual(cached["attempt"], 3)
+        before = json.loads((root / "evaluations" / key / "attempt-1/report.json").read_text())
+        after = json.loads((root / cached["report"]).read_text())
+        self.assertEqual(after["summary"].get("regraded_trials"), 1)
+        self.assertEqual(sum(p["task_input"].startswith("VALIDATION_PRIVATE") for p in self.judge_requests), 4)
+        old = {t["task_id"]: t for t in before["trials"]}
+        for trial in after["trials"]:
+            previous = old[trial["task_id"]]
+            for field in ("trial_id", "duration_ms", "metrics", "execution_status"):
+                self.assertEqual(trial[field], previous[field], field)
+            self.assertEqual(trial["evidence"]["trace"], previous["evidence"]["trace"])
+
+    def test_transient_judge_recovers_automatically_without_agent_reexecution(self):
+        self.judge_requests = []
+        self.fail_search_judge, self.search_judge_failures = True, 1
+        self.fail_search_prefix = "VALIDATION_PRIVATE 甲类"
+        self.behavior = "no_change"
+        config = json.loads((self.root / "gepa.json").read_text())
+        config.update(max_rounds=1, max_model_calls=1)
+        fixture.write(self.root / "gepa.json", config)
+        self.config["evaluation_levels"] = ["L1"]
+        fixture.write(self.root / "service.json", self.config)
+        self.evaluation["checks"] = {}
+        self.evaluation["variants"][0]["command"][-2] = "gepa_review"
+        self.evaluation["judge"] = dict(enabled=True, runtime_config="model.json", max_repair_attempts=0,
+            prompt="prompts/task-judge-system.txt", loop_review_prompt="prompts/task-loop-review.txt",
+            max_model_calls=100, max_input_bytes=1048576)
+        fixture.write(self.root / "evaluation.json", self.evaluation)
+        self.start()
+        job_id, job, _ = self.wait_search()
+        self.assertIn(job["status"], ("passed", "rejected"), job)
+        tree = self.call("agent_evaluation.tree", job_id=job_id)
+        root = self.root / "production/agent-evaluation" / job_id / "search"
+        key, cached = next((k, v) for k, v in tree["evaluations"].items() if v["split"] == "val")
+        self.assertEqual(cached["attempt"], 2)
+        before = json.loads((root / "evaluations" / key / "attempt-1/report.json").read_text())
+        after = json.loads((root / cached["report"]).read_text())
+        self.assertEqual(after["summary"].get("regraded_trials"), 1)
+        self.assertEqual(sum(p["task_input"].startswith("VALIDATION_PRIVATE") for p in self.judge_requests), 3)
+        old = {t["task_id"]: t for t in before["trials"]}
+        for trial in after["trials"]:
+            previous = old[trial["task_id"]]
+            for field in ("trial_id", "duration_ms", "metrics", "execution_status"):
+                self.assertEqual(trial[field], previous[field], field)
+            self.assertEqual(trial["evidence"]["trace"], previous["evidence"]["trace"])
 
     def test_exact_seed_retry_keeps_good_tasks_after_another_failure(self):
         self.check_seed_cache_recovery("uncertain", failures=2)

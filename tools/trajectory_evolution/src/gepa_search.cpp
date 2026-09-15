@@ -219,6 +219,11 @@ struct Search {
         const auto report = proto<Report>(Json::parse(bytes));
         if(previous.str("status") == "complete") require(scored(report), "gepa_report_changed");
         if(!report.complete()) continue;
+        // An exact checkpoint can regrade failed judgments without rerunning
+        // the agent. Splitting it into a fresh subset loses that checkpoint.
+        if(entry.first == key && std::any_of(report.trials().begin(), report.trials().end(), [](const auto& trial) {
+          return trial.execution_status() == "completed" && trial.error_code() == "evaluation_judge_failed";
+        })) { reused.clear(); break; }
         std::map<std::string, std::vector<dataset::v1::EvaluationTrial>> grouped;
         for(const auto& trial : report.trials()) if(trial.variant_id() == "candidate"
             && std::find(ids.begin(), ids.end(), trial.task_id()) != ids.end() && !reused.count(trial.task_id()))
@@ -304,6 +309,28 @@ struct Search {
     for(const auto& trial : report.trials()) for(const auto& check : trial.checks())
       if(check.check_id() == "model" && check.status() == "error" && check.reason() == "evaluation_judge_http_429")
         throw Error("gepa_model_rate_limited");
+    // Recover a transient judgment once from the exact execution checkpoint.
+    // Never replay host failures or start another unbounded transport loop.
+    if(cache.num("attempt", 0) == 1 && (final || config.flag("cache_evaluations", true))
+        && fs::exists(directory / "manifest.json")
+        && tree.num("trials_used", 0) + cost + (final ? 0 : reserve) <= config.num("max_trials", 400)) {
+      const std::set<std::string> transient{"evaluation_judge_transport_6", "evaluation_judge_transport_7",
+          "evaluation_judge_transport_18", "evaluation_judge_transport_28", "evaluation_judge_transport_52",
+          "evaluation_judge_transport_55", "evaluation_judge_transport_56", "evaluation_judge_http_408",
+          "evaluation_judge_http_500", "evaluation_judge_http_502", "evaluation_judge_http_503", "evaluation_judge_http_504"};
+      bool regrade = false;
+      for(const auto& trial : report.trials()) {
+        if(trial.execution_status() != "completed") return report;
+        if(trial.error_code().empty()) continue;
+        if(trial.error_code() != "evaluation_judge_failed") return report;
+        const auto failed = std::find_if(trial.checks().begin(), trial.checks().end(), [](const auto& check) {
+          return check.check_id() == "model" && check.status() == "error";
+        });
+        if(failed == trial.checks().end() || !transient.count(failed->reason())) return report;
+        regrade = true;
+      }
+      if(regrade) return evaluate(candidate, ids, split, final);
+    }
     return report;
   }
   Json scores(const Report& report) const {
@@ -334,6 +361,12 @@ struct Search {
       auto& row = result[trial.task_id()];
       row["fitness"] = number(row["fitness"]) + fitness;
       row["quality"] = number(row["quality"]) + (trial.verdict() == "passed" ? 1 : 0);
+      if(lw) {
+        const auto method = evidence.has("loop_review") ? "model_review" : "rule_lower_bound";
+        if(row.has("loop_method") && row.str("loop_method") != method) return Json(Json::Object{});
+        row["loop_method"] = method;
+        row["invalid_loops"] = number(row["invalid_loops"]) + number(loops);
+      }
       if(lw) row["loop_efficiency"] = number(row["loop_efficiency"]) + 1 - penalty(number(loops), number(objective["invalid_loop_scale"], 1));
       if(tw) row["token_efficiency"] = number(row["token_efficiency"]) + 1 - token_cost;
       if(tw && unknown_tokens) row["unknown_token_trials"] = row.num("unknown_token_trials", 0) + 1;
@@ -343,7 +376,7 @@ struct Search {
     for(auto& item : result.fields()) {
       item.second["fitness"] = number(item.second["fitness"]) / item.second.num("repetitions", 1);
       item.second["quality"] = number(item.second["quality"]) / item.second.num("repetitions", 1);
-      for(const auto* field : {"loop_efficiency", "token_efficiency", "latency_efficiency"})
+      for(const auto* field : {"invalid_loops", "loop_efficiency", "token_efficiency", "latency_efficiency"})
         if(item.second.has(field)) item.second[field] = number(item.second[field]) / item.second.num("repetitions", 1);
     }
     return result;
@@ -353,8 +386,9 @@ struct Search {
     return values.fields().empty() ? -1e9 : sum / values.fields().size();
   }
   bool improves(const Json& child, const Json& parent) const {
-    if(child.fields().empty() || child.fields().size() != parent.fields().size()) return false;
-    for(const auto& item : parent.fields()) if(!child.has(item.first)) return false;
+    // The deployment gate compares raw loop means, not bounded efficiencies.
+    // More correct answers must not hide a regression in the configured loop objective.
+    if(!gepa::loops_no_worse(child, parent)) return false;
     const auto difference = mean(child, "quality") - mean(parent, "quality");
     return difference > 1e-12 || (difference >= -1e-12
         && mean(child, "fitness") > mean(parent, "fitness") + number(config["min_improvement"], 0.000001));
@@ -377,15 +411,22 @@ struct Search {
   }
   Json components(const Json& candidate) const {
     Json result = Json::Object{};
+    // Keep the seed-authorized axes when a candidate disables an experience.
+    const auto authorized = source_experiences(seed);
+    for(const auto& item : authorized.items()) result["experience:" + item.str("memory_id")] = nullptr;
     const auto experiences = source_experiences(candidate);
     for(const auto& item : experiences.items()) result["experience:" + item.str("memory_id")] = item["content"];
     const auto policy = proto<v1::RuntimePolicy>(candidate["policy"]);
     if(controls.flag("enabled", false) && policy.options().requested_level() >= v1::L2) {
-      result["action_rules"] = Json::Array{};
-      for(const auto& rule : policy.options().action_rules()) if(rule.has_source_experience()) {
-        Json arguments = Json::Array{}; for(const auto& key : rule.required_arguments()) arguments.push(key);
-        result["action_rules"].push(Json{{"memory_id", rule.source_experience().memory_id()}, {"operation", rule.operation()},
-            {"required_arguments", arguments}, {"reason", rule.reason()}});
+      // Missing actions selects automatic wire-contract validation. Those
+      // required fields are fixed facts, not reflection/search parameters.
+      if(controls["actions"].object() && !controls["actions"].fields().empty()) {
+        result["action_rules"] = Json::Array{};
+        for(const auto& rule : policy.options().action_rules()) if(rule.has_source_experience()) {
+          Json arguments = Json::Array{}; for(const auto& key : rule.required_arguments()) arguments.push(key);
+          result["action_rules"].push(Json{{"memory_id", rule.source_experience().memory_id()}, {"operation", rule.operation()},
+              {"required_arguments", arguments}, {"reason", rule.reason()}});
+        }
       }
       if(policy.options().requested_level() >= v1::L3 && without_generated_controls(policy.options()).loop_rules_size()) {
         result["loop_rules"] = Json::Array{};
@@ -403,20 +444,26 @@ struct Search {
     validate_local_data(values);
     auto result = parent; const auto policy = proto<v1::RuntimePolicy>(parent["policy"]); auto options = policy.options();
     options.clear_experience_overrides();
-    const auto experiences = source_experiences(parent);
+    options.clear_approved_experiences();
+    const auto experiences = source_experiences(seed);
     for(const auto& item : experiences.items()) {
+      if(values["experience:" + item.str("memory_id")].null()) continue;
       const auto id = item.str("memory_id"), content = values["experience:" + id].text();
       require(!content.empty() && content.size() <= config.num("max_experience_bytes", 2048), "gepa_experience_limit");
-      for(const auto& entry : policy.snapshot().experiences()) if(entry.memory_id() == id && entry.content() != content) {
-        auto* rewrite = options.add_experience_overrides(); rewrite->set_content(content);
-        rewrite->mutable_source_experience()->set_memory_id(id);
-        rewrite->mutable_source_experience()->set_content_revision(entry.content_revision());
+      for(const auto& entry : policy.snapshot().experiences()) if(entry.memory_id() == id) {
+        auto* approved = options.add_approved_experiences();
+        approved->set_memory_id(id); approved->set_content_revision(entry.content_revision());
+        if(entry.content() != content) {
+          auto* rewrite = options.add_experience_overrides(); rewrite->set_content(content);
+          *rewrite->mutable_source_experience() = *approved;
+        }
       }
     }
     std::sort(options.mutable_experience_overrides()->begin(), options.mutable_experience_overrides()->end(),
         [](const auto& a, const auto& b) { return a.source_experience().memory_id() < b.source_experience().memory_id(); });
-    if(values.has("action_rules")) {
-      Json draft{{"action_rules", values["action_rules"]}, {"loop_rules", values.has("loop_rules") ? values["loop_rules"] : Json(Json::Array{})}};
+    if(values.has("action_rules") || values.has("loop_rules")) {
+      Json draft{{"action_rules", values.has("action_rules") ? values["action_rules"] : Json(Json::Array{})},
+          {"loop_rules", values.has("loop_rules") ? values["loop_rules"] : Json(Json::Array{})}};
       options = apply_control_draft(policy.snapshot(), without_generated_controls(options), controls, draft);
     }
     result["policy"] = json(compile_runtime_policy(policy.snapshot(), options));
@@ -425,13 +472,21 @@ struct Search {
     agent_version_id(result.dump()); return result;
   }
   Json packet(const Json& parent, const Report& feedback, const Json& selected) const {
-    Json result{{"parent_version", agent_version_id(parent.dump())}, {"experiences", source_experiences(parent)},
+    Json result{{"parent_version", agent_version_id(parent.dump())}, {"experiences", source_experiences(seed)},
         {"components", components(parent)}, {"selected_components", selected}, {"feedback", Json::Array{}},
+        {"acceptance", config.str("acceptance", "strict_improvement")},
         {"objective", config["objective"]}, {"limits", Json{{"max_experience_bytes", config.num("max_experience_bytes", 2048)}}}};
-    for(auto& experience : result["experiences"].items()) experience.fields().erase("content");
+    const auto policy = proto<v1::RuntimePolicy>(parent["policy"]);
+    for(auto& experience : result["experiences"].items()) {
+      for(const auto& source : policy.snapshot().experiences())
+        if(source.memory_id() == experience.str("memory_id")
+            && result["components"]["experience:" + source.memory_id()].dump() != Json(source.content()).dump())
+          experience["original_content"] = source.content();
+      experience.fields().erase("content");
+    }
     if(controls.flag("enabled", false)) {
-      const auto policy = proto<v1::RuntimePolicy>(parent["policy"]);
       result["controls"] = control_generation_input(policy.snapshot(), without_generated_controls(policy.options()), controls);
+      result["controls"].fields().erase("memories");  // Sources already appear above; do not duplicate the snapshot.
     }
     // Only training content reaches reflection. Validation/holdout scores select
     // candidates but their tasks, rubrics and traces never enter this packet.
@@ -700,8 +755,12 @@ struct Search {
         second[id] = tree["nodes"].items()[ids[1]]["validation"][id];
       }
       node["screening"] = Json{{"parents", Json::Array{first, second}}, {"candidate", values}, {"split", "val"}};
+      const auto retained = [&](const Json& parent) {
+        return gepa::no_worse(values, parent) || (config.str("acceptance") == "pareto"
+            && gepa::local_gain(values, parent, number(config["min_improvement"], 0.000001)));
+      };
       node["status"] = values.fields().empty() ? "inconclusive"
-          : gepa::no_worse(values, first) && gepa::no_worse(values, second) ? "screened" : "rejected_merge";
+          : retained(first) && retained(second) ? "screened" : "rejected_merge";
       save();
     }
     if(node.str("status") == "screened") validate(index);
@@ -765,6 +824,16 @@ struct Search {
     if(!tree.has("merge_attempts")) tree["merge_attempts"] = Json::Array{};
     if(!tree.has("batch")) tree["batch"] = nullptr;
     tree["schema_version"] = 2; tree["algorithm"] = "gepa-reflective-dag-v2";
+    tree["available_components"] = Json::Array{};
+    const auto available = components(seed);
+    for(const auto& item : available.fields()) tree["available_components"].push(item.first);
+    tree["search_warnings"] = Json::Array{};
+    tree["fixed_controls"] = Json::Array{};
+    if(proto<v1::RuntimePolicy>(seed["policy"]).options().requested_level() >= v1::L2)
+      tree["fixed_controls"].push("observed_tool_required_arguments");
+    if(proto<v1::RuntimePolicy>(seed["policy"]).options().requested_level() >= v1::L2
+        && controls.has("actions") && !available.has("action_rules"))
+      tree["search_warnings"].push("action_rule_learning_unavailable");
     if(tree["nodes"].items()[0].str("status") == "seed") {
       const auto report = evaluate(seed, val, "val"); const auto values = scores(report);
       require(!values.fields().empty(), "gepa_seed_evaluation_inconclusive");
@@ -878,8 +947,11 @@ struct Search {
           if(node.str("status") == "proposed") {
             const auto child = artifact(index); const auto screening = evaluate(child, batch, "train"); const auto values = scores(screening);
             node["screening"] = Json{{"parent", parent_scores}, {"candidate", values}};
-            const bool pass = config.str("acceptance", "strict_improvement") == "improvement_or_equal"
-                ? gepa::no_worse(values, parent_scores) : improves(values, parent_scores);
+            const auto acceptance = config.str("acceptance", "strict_improvement");
+            const bool pass = acceptance == "pareto"
+                ? gepa::no_worse(values, parent_scores) || gepa::local_gain(values, parent_scores,
+                    number(config["min_improvement"], 0.000001))
+                : acceptance == "improvement_or_equal" ? gepa::no_worse(values, parent_scores) : improves(values, parent_scores);
             node["status"] = values.fields().empty() ? "inconclusive" : pass ? "screened" : "rejected_minibatch"; save();
           }
           if(node.str("status") == "screened" && tree["batch"].null()) validate(index);
@@ -910,6 +982,9 @@ struct Search {
         {"winner", tree["winner"]}, {"selected_version", tree["selected_version"]}, {"stop_reason", tree["stop_reason"]}};
     summary["merge_attempts"] = tree["merge_attempts"].items().size();
     summary["reflection_batches"] = tree.num("reflection_batches", 0);
+    summary["available_components"] = tree["available_components"];
+    summary["search_warnings"] = tree["search_warnings"];
+    summary["fixed_controls"] = tree["fixed_controls"];
     return {selected, report, summary};
   }
 };
@@ -946,7 +1021,7 @@ Json load_gepa_config(const fs::path& path) {
   choice("frontier_type", "instance", {"instance", "objective", "hybrid", "cartesian"});
   choice("component_selector", "round_robin", {"round_robin", "all", "model_choice"});
   choice("minibatch_strategy", "epoch_shuffled", {"epoch_shuffled", "fixed"});
-  choice("acceptance", "strict_improvement", {"strict_improvement", "improvement_or_equal"});
+  choice("acceptance", "strict_improvement", {"strict_improvement", "improvement_or_equal", "pareto"});
   choice("proposal_selection", "all_improvements", {"all_improvements", "best", "top_k"});
   choice("sampling_strategy", "same_parent", {"single", "same_parent", "independent", "pxn"});
   choice("reflection_strategy", "single", {"single", "combee"});
@@ -983,7 +1058,7 @@ Json load_gepa_config(const fs::path& path) {
 std::string gepa_config_fingerprint(const Json& config) {
   if(config.null()) return {};
   auto runtime = legacy::load_runtime_configuration(config.str("runtime_config"));
-  std::string bytes = "gepa-reflective-dag-v2:" + config.dump() + read(config.str("config_file")) + read(config.str("prompt_file"));
+  std::string bytes = "gepa-reflective-dag-v2-automatic-contracts:" + config.dump() + read(config.str("config_file")) + read(config.str("prompt_file"));
   if(config.has("aggregation_prompt_file")) bytes += read(config.str("aggregation_prompt_file"));
   for(const auto& path : runtime.source_files) bytes += read(path);
   if(runtime.model.endpoint.empty()) if(const auto* base = std::getenv("OPENAI_BASE_URL")) bytes += base;

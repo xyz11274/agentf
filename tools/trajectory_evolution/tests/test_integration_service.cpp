@@ -479,7 +479,7 @@ void boundary_tests(const fs::path& folder) {
     auto receipt_status = client.invoke("run.status");
     check(receipt_status["receipts"].num("applied", 0) == 3 && receipt_status["receipts"].num("failed", 0) == 1, "verify actual native request without altering policy hash");
     client.invoke("activity.begin", Json{{"kind", "vendor.generate"}, {"name", "chat"}, {"input", Json::Object{}}}, 400);
-    client.invoke("activity.begin", Json{{"kind", "model"}, {"name", "chat"}, {"input", "missing binding"}}, 400);
+    client.invoke("activity.begin", Json{{"kind", "model"}, {"name", "chat"}, {"input", Json{{"unmapped", Json::Array{1}}}}}, 400);
     close(); captured = trace("neutral-bindings");
     auto report = te::analyze_trace(te::validate_trace(proto<v1::TraceRun>(captured)));
     check(!report.episodes.empty() && report.episodes[0].actor_id == "my-agent/actor:assistant", "dynamic actor metadata does not change memory scope");

@@ -189,12 +189,17 @@ struct LocalRuntime::Impl {
     if(level > 0) require(declared.count(caps[level - 1]), "required_boundary_missing");
     Json run{{"kind", "integration-run-v1"}, {"local_capture", true},
       {"identity", Json{{"agent_id", config["agent_id"]}, {"user_id", user}, {"run_id", rid}, {"conversation_id", start["conversation_id"]}}},
-      {"input", start["input"]}, {"level", level}, {"closed", false}, {"sequences", Json{{"task", 1}}},
+      {"input", start["input"]}, {"level", level}, {"capabilities", start["capabilities"]}, {"closed", false}, {"sequences", Json{{"task", 1}}},
       {"requests", Json::Object{}}, {"receipt_counts", Json::Object{}}, {"observed_boundaries", Json::Object{}},
       {"events", Json::Array{Json{{"event_id", "event-1"}, {"producer_id", "task"}, {"actor_id", "task"},
         {"sequence", "1"}, {"timestamp_us", timestamp()}, {"kind", "run.start"}, {"input", start["input"]}}}}};
     initialize_boundary_run(run, request);
-    if(level > 0) {
+    if(config.has("offline_version")) {
+      std::vector<std::string> scopes;
+      for(const auto& name : config["actors"].items()) scopes.push_back(scope(name.text()));
+      apply_agent_version(run, config, std::atomic_load(&memory)->publications, nullptr, scopes);
+      if(run.num("level", 0) > 0) slot.policy = std::make_unique<PolicyRuntime>(proto<v1::RuntimePolicy>(run["policy"]));
+    } else if(level > 0) {
       auto shadow = proto<v1::ShadowOptions>(config["shadow_options"]);
       shadow.clear_target_scopes(); for(const auto& name : config["actors"].items()) shadow.add_target_scopes(scope(name.text()));
       auto cached = std::atomic_load(&memory);

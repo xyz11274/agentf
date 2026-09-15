@@ -1,0 +1,4 @@
+
+agentflow-v1-outfit�
+Gshared-148ec0c63fef6aee2a85c237752227ac74be582396e5b909948bd23efa8eb47c)agent:agentflow-v1-outfit/actor:assistant�当需要写入包含大量引号或特殊字符的文件，或使用 bash 重定向写入失败且错误为 'No such file or directory' 且目标目录不存在时"�优先使用 write_file 工具写入文件，该工具会自动创建父目录并避免引号转义问题；若必须使用 bash 写入，先执行 mkdir -p 创建目标目录，再执行写入操作，以避免因目录不存在导致的写入失败。�
+Gshared-e8ba8a1d2507b1539f1da6e8cccab684e35891ff22750d970f1c793cf3d135ef)agent:agentflow-v1-outfit/actor:assistant�当 coordinator 已获得所有委派 skill 的成功结果且结果覆盖用户需求，或已确定直接回复用户、无新委派需求时"直接回复用户，不要调用 run_skills；若确需调用，必须传入非空 skills 数组，避免空参数被拒绝。

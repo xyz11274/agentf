@@ -27,6 +27,8 @@ L4 数据准备复用这个任务评测器：缺少可用经验时，用原 Agen
 （`attributes.semantic=model`）的请求载荷，避免系统提示词、工具定义、重复历史淹没真实执行证据。
 模型实际输出、工具实参与返回、任务、状态、产物、事件顺序及并发因果关系仍保留。
 完整模型请求继续记录在原始轨迹和 Trial 中；未标语义的活动及自定义工具输入不按字段名猜测删除。
+精简视图也省略组件 `custom/policy.query` 诊断中重复的查询、注入上下文、经验列表和策略编号；
+其动作/循环决定及独立注入回执保留，业务自定义事件不受影响。
 模型输入用 `evidence_view=model_requests_omitted` 标注投影范围。需要核验具体模型请求或提示词注入时设为 true；
 已有配置省略该选项时保持原完整请求行为。配置值参与评分上下文指纹，不与另一种视图混用成绩。
 
@@ -136,6 +138,32 @@ if not await aevaluate(handle_message):
 `command` 指向原程序的前台启动命令，不要指向会自行脱离进程组的 daemonize 脚本。
 原程序所需的配置、工具和数据仍由部署方提供；组件创建工作目录并不等于自动隔离数据库、网络写入或共享文件。
 请使用测试账户、测试服务和独立工具目录，不连接生产任务队列。
+
+### 用导出的策略包进行全新对照评测
+
+保持同一个 Agent 启动命令、打点配置和输入绑定，基线不提供策略；策略组只增加发布包路径：
+
+```json
+{
+  "id": "L3",
+  "policy_version_file": "versions/published-version.json",
+  "command": ["python3", "{config_dir}/app.py"],
+  "instrumentation_config": "boundary-service.json",
+  "entry": {"input": {"$eval": "input"}},
+  "pass_env": ["MY_MODEL_API_KEY"]
+}
+```
+
+这是 `variants` 中的一项；`command`、`entry` 应沿用当前 Agent 的正常部署配置。
+`policy_version_file` 与内联 `artifact` 互斥，必须配合 `instrumentation_config`；无需填写 `version`，
+组件从包中读取并验证。如果填写，必须与包内版本一致。路径相对评测配置文件解析。
+包只需一个文件；不需要旧训练任务、历史日志、经验库、反思提示词或旧实验启动材料。
+评测会冻结包内容并纳入配置指纹，同路径换成另一份策略不会复用旧检查点。
+
+每个试次使用隔离状态和新的运行身份，策略组通过真实离线加载入口验证宿主权限与运行能力；
+L0 不注入策略。评测只运行 Agent 和判分，不搜索、不重新编译历史记忆、不更新经验库。
+评分模型配置仅供评测器判分，主 Agent 的模型配置仅供执行，两者都不是策略包的隐藏依赖。
+评测失败或策略加载降级仍按失败记录，不作为有效 L3 成绩。
 
 如果原函数只接收一个字符串，使用 `"entry": {"input": {"$eval": "input"}}`。
 `$eval` 只替换一个 JSON 值，不执行代码，不做字符串拼接，不导入任何框架模块。
@@ -440,7 +468,15 @@ manage 不执行 Agent 任务本身，但可能等待管理锁及落盘；不要
 报告记录 `summary.resume_source`（来源 run ID 与报告 SHA-256）、`reused_trials`、`regraded_trials` 和 `regraded_trial_ids`；
 `model_calls` 只统计本次 attempt 新发起的逻辑评分调用。取消恢复任务时，已有检查点仍保留在不完整报告中。
 报告或产物哈希不匹配、上下文改变时拒绝复用。没有 manifest 的硬崩溃目录不自动视为有效检查点。
-C++ 调用方可通过 `TaskEvaluationOptions.resume_report` 指定来源；默认留空，原 CLI 执行行为不变。
+C++ 调用方通过 `TaskEvaluationOptions.resume_report` 指定来源；命令行使用
+`dataset run DATASET --config evaluation.json --output-root NEW_DIR --resume-report OLD_DIR/report.json`。
+两者都要求同一配置与有效 manifest；与 `--regrade-report` 互斥。默认不指定，保持全新执行。
+
+只复核已执行题目的模型评分时，可使用 `--regrade-report OLD_DIR/report.json`，不重新调用 Agent。
+来源是暂停后的不完整批次时，必须在新配置的 `task_ids` 显式列出要重评的题目；
+所选题目的所有版本、重复编号都必须已经完成执行。缺题、取消或执行失败不能当作可重评轨迹。
+不指定 `task_ids` 时仍要求来源批次完整。程序校验 manifest、报告/产物哈希、题目及执行身份，
+新目录只保存选中题目的重评，来源报告、轨迹、用量、耗时与试验 ID 保持不变。
 
 `max_jobs` 默认 256，约束内存管理索引；已发布、各级最新和活跃任务保留在索引内，较早终态任务转存 job.json，
 完整试验报告继续保留，并维持已完成任务去重。全为受保护任务时返回容量错误。
@@ -759,13 +795,23 @@ op 支持 exists、equals、contains、at_most、at_least；exists 省略 value�
 所有输出、工具结果、状态和产物始终直接保留；不生成空值，事件和轮次数量不变。仅引用后更小才采用，仍受请求字节上限约束。
 原始轨迹、落盘试验报告和确定性检查不压缩；引用前后均检查隐私。随附配置已启用并配有读取说明，
 未指定两个共享选项时，默认启用完整输入共享。显式配置 `share_repeated_text` 时仍保留原行为；
-也可用 `judge.share_repeated_inputs=true` 共享事件输入中完全相同的大块数组和对象（包含长文本去重），
-适合消息历史和工具定义反复出现在多个事件里的轨迹。两项显式为 false 可关闭共享；自定义模板需保留引用读取说明。
+也可用 `judge.share_repeated_inputs=true` 共享事件输入、输出、属性及注入回执中完全相同的大块数组、对象和文字。
+实际内容第一次出现时完整保留，后续位置使用引用；事件身份、顺序、顶层最终输出、状态及产物仍直接保留。
+这覆盖模型与工具结果同时出现在 action.end、step.end，以及回执重复携带应用信息的情况。
+两项显式为 false 可关闭共享；自定义模板需保留引用读取说明。
 引用仍使用同一张 `evidence_text_refs` 表，源中可包含其他已登记引用，递归填回即可完整恢复；
 源不会在后续被替换，引用无环。自定义模板开启此项时，也需说明数组/对象及嵌套引用的读取方式。
 模型请求不带整份 `trajectory` 分析、`loaded_version`、`execution_run_id` 和采集生产者序号；
 本地报告仍完整保留。字段清单及并发说明见[评测模型输入](11-evaluation.md#各模型入口的最小输入)。
 模型输出包含中文理由、passed/failed/uncertain，以及 allowed_evidence_paths 授权范围内的证据路径。
+
+模型输入还提供 `observed_action_counts`：从原始轨迹按 Run、执行实例、action 配对计算的实际操作次数，
+包含失败调用、排除明确未执行的调用；缺少执行标记时为 null，而不是零。它不增加题目的次数限制。
+`artifact_provenance=evaluator_after_execution_not_agent_actions` 标明 artifacts 是评测器事后检查，
+不能替代题目要求 Agent 自己完成的文件核验。文字验收条件未列成 required_checks，也不因此免除。
+逐轮清单按锚点在各 Run 中的观测顺序分配短 ID，多于九轮时补零保持排序；
+并发依赖仍看 caused_by，落盘保留原规范轮次 ID。模型先核对标准与执行事实，再逐轮评审，最后汇总 verdict；
+只检查输出协议不能保证模型语义正确，关键对照仍应结合具体工具事实复核。
 可引用顶层路径或实际存在的子路径，例如 `/output`、`/output/final/response`；程序以未压缩的原始证据验证存在性。
 不存在的字段、数组越界、相似名称的其他根路径和仅存在于模型请求中的引用包装仍拒绝。
 模型故障、截断、引用错误或预算耗尽记为 error，证据不足记为 uncertain；规则明确失败时直接保留失败结论。
@@ -955,7 +1001,8 @@ build/check 构建和校验任务集，run 执行任务并比较固定版本。
 1. 先验证冻结数据集、选中集合、审核状态、版本/重复编号、每题判分覆盖、所有限制和模型配置，再创建输出目录。
    现有目录拒绝覆盖。任务来源中的代码不会被执行，只有操作者配置的受信 command 可以启动。
 2. 固定任务×重复×显式版本构成计划。有限工作线程各取一个试验，以不可混淆的 trial_id 关联请求、轨迹、产物和成绩。
-   每次新建工作目录，环境按白名单传递；标准输入是 JSON，标准输出是单个终态 JSON，不假定宿主语言和内部编排架构。
+   每次新建工作目录，环境按白名单传递。推荐的 `entry` 接入由包负责投递任务、等待 run 结束并汇总结果；宿主绑定现有收消息入口，不需要另写启动器。
+   兼容旧有 `stdio` 接入时才约定标准输入为 JSON、标准输出为单个终态 JSON；这不是所有接入方式的共同要求。
 3. `evaluation_process.cpp` 使用 posix_spawn 参数数组而非 shell。非阻塞管道同时发送输入、读取输出、排空 stderr，
    约束输出与墙钟时间，超时或取消时清理本地进程组；外部服务的隔离和取消由宿主处理。
 4. 校验 trial_id、执行状态、隐私和可选标准轨迹；轨迹必须闭合且与最终响应身份、状态、输出一致。

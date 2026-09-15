@@ -66,37 +66,12 @@ int64_t extract_json_id(const std::string& json) {
 }
 
 std::string extract_json_params(const std::string& json) {
-  std::string search = "\"params\"";
-  size_t pos = json.find(search);
-  if (pos == std::string::npos) return "";
-  pos = json.find(':', pos);
-  if (pos == std::string::npos) return "";
-  pos++;
-  while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) pos++;
-  if (pos >= json.size()) return "";
-
-  if (json[pos] == '{') {
-    int depth = 0;
-    size_t start = pos;
-    for (; pos < json.size(); pos++) {
-      if (json[pos] == '{') depth++;
-      else if (json[pos] == '}') {
-        depth--;
-        if (depth == 0) return json.substr(start, pos - start + 1);
-      }
-    }
-  } else if (json[pos] == '[') {
-    int depth = 0;
-    size_t start = pos;
-    for (; pos < json.size(); pos++) {
-      if (json[pos] == '[') depth++;
-      else if (json[pos] == ']') {
-        depth--;
-        if (depth == 0) return json.substr(start, pos - start + 1);
-      }
-    }
-  }
-  return "";
+  rapidjson::Document d;
+  d.Parse(json.c_str());
+  if (d.HasParseError() || !d.IsObject() || !d.HasMember("params")) return "";
+  const auto& params = d["params"];
+  if (!params.IsObject() && !params.IsArray()) return "";
+  return rj_stringify(params);
 }
 
 std::string json_escape(const std::string& s) {

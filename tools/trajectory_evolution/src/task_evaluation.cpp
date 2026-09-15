@@ -264,6 +264,7 @@ struct Variant {
   std::string instrumentation_transport = "native";
   std::string run_layout = "single";
   Json entry = nullptr;
+  bool published_policy = false;
 };
 
 // The evaluator owns isolation/version/trace assembly; the host only emits points.
@@ -278,6 +279,7 @@ std::vector<std::string> instrumented_environment(const Variant& variant, const 
   config["instrumentation"]["level"] = variant.artifact["level"];
   config["principals"] = Json::Array{Json{{"user_id", variant.artifact["user_id"]}, {"token_env", "TRAJECTORY_EVOLUTION_TRIAL_TOKEN"}}};
   Json version{{"version", variant.version}, {"artifact", variant.artifact}, {"trial_id", trial}};
+  if(variant.published_policy) version["published_policy"] = true;
   if(!variant.entry.null()) {
     const auto& state = request["task"]["initial_state"];
     require(state.null() || (state.object() && state.fields().empty())
@@ -395,6 +397,11 @@ void compact_judge_evidence(Json& input, bool share_inputs = false) {
     for(rapidjson::SizeType i = 0; i < events.Size(); ++i) {
       auto& event = events[i];
       if(event.HasMember("input")) sharing.collect(event["input"], path + "/events/" + std::to_string(i) + "/input");
+      // Activity/step ends and application receipts repeat execution values
+      // too. Share their exact payloads, never event identities or ordering.
+      if(share_inputs) for(const auto* field : {"output", "attributes", "application"})
+        if(event.HasMember(field)) sharing.collect(event[field],
+            path + "/events/" + std::to_string(i) + "/" + field, std::string(field) != "attributes");
     }
   };
   if(evidence.HasMember("trace")) collect_trace(evidence["trace"], "/trace");
@@ -773,9 +780,35 @@ struct Evaluator {
     const auto repairs = config["judge"].num("max_repair_attempts", 1);
     const bool review_loops = config["judge"].has("loop_review_prompt");
     const auto inventory = review_loops ? loop_inventory(evidence) : Json(Json::Object{});
+    Json observed_action_counts = Json::Object{};
+    const auto traces = evidence.has("traces") ? evidence["traces"]
+        : evidence.has("trace") ? Json(Json::Array{evidence["trace"]}) : Json(Json::Array{});
+    std::set<std::string> operations;
+    for(const auto& trace : traces.items()) for(const auto& event : trace["events"].items())
+      if(event.str("kind") == "action.start" && !event.str("operation").empty())
+        operations.insert(event.str("operation"));
+    // Count original observations before payload sharing. Missing execution
+    // markers stay unknown; repeated results never collapse separate calls.
+    for(const auto& operation : operations) {
+      try { observed_action_counts[operation] = action_count(Json{{"operation", operation}}, evidence); }
+      catch(const Error&) { observed_action_counts[operation] = nullptr; }
+    }
     Json model_inventory = Json::Object{}, iteration_ids = Json::Object{};
-    for(const auto& item : inventory.fields()) {
-      const auto id = "i" + std::to_string(model_inventory.fields().size() + 1);
+    std::map<std::pair<std::string, std::string>, std::size_t> event_order;
+    for(const auto& trace : traces.items()) for(const auto& event : trace["events"].items())
+      event_order.emplace(std::make_pair(trace["identity"].str("run_id"), event.str("event_id")), event_order.size());
+    std::vector<std::pair<std::string, Json>> ordered(inventory.fields().begin(), inventory.fields().end());
+    auto rank = [&](const Json& item) {
+      const auto found = event_order.find({item.str("run_id"), item.str("anchor_event_id")});
+      return found == event_order.end() ? event_order.size() : found->second;
+    };
+    std::stable_sort(ordered.begin(), ordered.end(), [&](const auto& a, const auto& b) { return rank(a.second) < rank(b.second); });
+    // Short aliases follow observed execution order, not hash order. Padding
+    // keeps i10 after i09 in JSON objects; canonical IDs and causal links stay local.
+    const auto width = std::to_string(ordered.size()).size();
+    for(const auto& item : ordered) {
+      const auto number = std::to_string(model_inventory.fields().size() + 1);
+      const auto id = "i" + std::string(width - number.size(), '0') + number;
       model_inventory[id] = item.second; iteration_ids[id] = item.first;
     }
     Json required_checks = Json::Array{};
@@ -805,6 +838,8 @@ struct Evaluator {
                 {"evidence_paths", Json::Array{evidence.has("traces") ? "/traces" : evidence.has("trace") ? "/trace" : "/output"}}}}};
         // Deployment checks are acceptance constraints, not an Agent assertion.
         if(!required_checks.items().empty()) input["required_checks"] = required_checks;
+        if(!traces.items().empty()) input["observed_action_counts"] = observed_action_counts;
+        if(model_evidence.has("artifacts")) input["artifact_provenance"] = "evaluator_after_execution_not_agent_actions";
         // The not-yet-computed assessment is not execution evidence.
         input["evidence"].fields().erase("loop_review");
         if(!include_model_requests) input["evidence_view"] = "model_requests_omitted";
@@ -1374,15 +1409,28 @@ dv::TaskEvaluationReport run_task_evaluation(const fs::path& dataset_directory,
   }
   require(!splits.empty(), "evaluation_split_required");
   std::set<std::string> variant_ids, task_ids;
-  const auto& variants = config["variants"].items();
+  auto& variants = evaluator.config["variants"].items();
   require(!variants.empty() && variants.size() <= 8, "evaluation_variant_limit");
-  for(const auto& value : variants) {
-    integration::keys(value, {"id", "version", "command", "pass_env", "artifact", "instrumentation_config", "instrumentation_transport", "run_layout", "entry"});
+  for(auto& value : variants) {
+    integration::keys(value, {"id", "version", "command", "pass_env", "artifact", "policy_version_file", "instrumentation_config", "instrumentation_transport", "run_layout", "entry"});
+    if(value.has("policy_version_file")) {
+      require(!value.has("artifact") && value.has("instrumentation_config"), "evaluation_policy_source_conflict");
+      require(!value.str("policy_version_file").empty(), "evaluation_policy_file_required");
+      const auto bundle = Json::parse(read_file(evaluator.resolve(value.str("policy_version_file")), 4194304));
+      integration::keys(bundle, {"schema_version", "version", "artifact", "evaluation"});
+      require(bundle.num("schema_version", 0) == 1 && bundle["evaluation"]["gate"].flag("passed", false)
+          && bundle.str("version") == agent_version_id(bundle["artifact"].dump()), "offline_policy_bundle_invalid");
+      require(!value.has("version") || value.str("version") == bundle.str("version"), "evaluation_version_invalid");
+      // Resolve once before execution; the content participates in provenance
+      // and checkpoint identity, not just the file's mutable pathname.
+      value["artifact"] = bundle["artifact"]; value["version"] = bundle["version"];
+    }
     label(value.str("id")); label(value.str("version"));
     require(variant_ids.insert(value.str("id")).second, "evaluation_variant_duplicate");
     if(value.has("artifact"))
       require(value.str("version") == agent_version_id(value["artifact"].dump()), "evaluation_version_invalid");
     Variant variant{value.str("id"), command(value, evaluator.config_dir), environment(value), value.str("version"), value["artifact"], nullptr};
+    variant.published_policy = value.has("policy_version_file");
     variant.instrumentation_transport = value.str("instrumentation_transport", "native");
     variant.run_layout = value.str("run_layout", "single");
     if(value.has("entry")) {
@@ -1403,6 +1451,7 @@ dv::TaskEvaluationReport run_task_evaluation(const fs::path& dataset_directory,
       variant.instrumentation_config = Json::parse(read_file(path, 262144));
       auto& settings = variant.instrumentation_config;
       for(const auto* key : {"runtime_config", "experience_template_file"}) {
+        if(variant.published_policy) continue;
         const fs::path resource(settings.str(key));
         require(!resource.empty(), "evaluation_instrumentation_config_invalid");
         if(resource.is_relative()) settings[key] = (path.parent_path() / resource).string();
@@ -1417,6 +1466,7 @@ dv::TaskEvaluationReport run_task_evaluation(const fs::path& dataset_directory,
     }
     evaluator.variants.push_back(std::move(variant));
   }
+  require(config.dump().size() <= 4194304, "evaluation_config_size_limit");
   std::vector<const dv::EvaluationTask*> tasks;
   std::set<std::string> selected_ids;
   if(config.has("task_ids")) {
@@ -1504,7 +1554,8 @@ dv::TaskEvaluationReport run_task_evaluation(const fs::path& dataset_directory,
         before.fields().erase(key); after.fields().erase(key);
       }
       require(before.dump() == after.dump(), "evaluation_checkpoint_context_mismatch");
-      require(previous.complete() && manifest.flag("complete", false), "evaluation_regrade_source_incomplete");
+      require(previous.complete() == manifest.flag("complete", false)
+          && (previous.complete() || !selected_ids.empty()), "evaluation_regrade_source_incomplete");
       // A new judge does not re-execute the runner or deterministic checks.
       // Bind this distinct report to both the captured execution and new judge;
       // normal same-config resume must not accept it as a fresh execution.
@@ -1524,6 +1575,9 @@ dv::TaskEvaluationReport run_task_evaluation(const fs::path& dataset_directory,
       indexes.emplace(std::make_tuple(jobs[i].task->task_id(), evaluator.variants[jobs[i].variant].id, jobs[i].repetition), i);
     std::set<std::size_t> seen; std::set<std::string> trial_ids;
     for(const auto& trial : previous.trials()) {
+      // Explicit subset review can reuse finished tasks from a paused batch.
+      // Every selected execution must still be present and complete below.
+      if(regrade_only && !selected_ids.empty() && !selected_ids.count(trial.task_id())) continue;
       const auto found = indexes.find(std::make_tuple(trial.task_id(), trial.variant_id(), trial.repetition()));
       require(found != indexes.end() && seen.insert(found->second).second
           && trial_ids.insert(trial.trial_id()).second, "evaluation_checkpoint_trial_mismatch");
@@ -1595,7 +1649,7 @@ dv::TaskEvaluationReport run_task_evaluation(const fs::path& dataset_directory,
           results[index] = evaluator.trial(*job.task, job.variant, job.repetition, id);
         }
         require(retained_bytes.fetch_add(results[index].ByteSizeLong()) + results[index].ByteSizeLong()
-            <= max_report_bytes / 2, "evaluation_report_size_limit");
+            <= max_report_bytes, "evaluation_report_size_limit");
         // Persist each finished trial. A crash leaves useful checkpoints, but
         // without the final manifest it is never a completed evaluation batch.
         write_file(evaluator.output / "trials" / (results[index].trial_id() + ".json"), integration::json(results[index]).dump() + "\n");
@@ -1645,7 +1699,8 @@ dv::TaskEvaluationReport run_task_evaluation(const fs::path& dataset_directory,
   auto report_json = integration::json(report);
   report_json["complete"] = report.complete();
   const auto json = report_json.dump() + "\n";
-  require(json.size() <= 134217728, "evaluation_report_size_limit");
+  require(json.size() <= max_report_bytes && report.ByteSizeLong() <= max_report_bytes,
+      "evaluation_report_size_limit");
   const auto pb = report.SerializeAsString();
   const auto markdown = markdown_report(report);
   write_file(evaluator.output / "report.json", json);

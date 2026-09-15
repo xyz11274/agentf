@@ -7,7 +7,9 @@
 namespace trajectory::evolution::integration::gepa {
 
 double mean(const Json& scores, const std::string& field);
+bool loops_no_worse(const Json& candidate, const Json& parent);
 bool no_worse(const Json& candidate, const Json& parent);
+bool local_gain(const Json& candidate, const Json& parent, double minimum = 0.000001);
 std::vector<std::size_t> parents(const Json& node);
 std::set<std::size_t> ancestors(const Json& nodes, std::size_t index);
 void validate_nodes(Json& nodes);
