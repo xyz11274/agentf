@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "splits": ["train"],
+  "repetitions": 1,
+  "parallelism": 2,
+  "max_trials": 1000,
+  "timeout_ms": 1800000,
+  "max_output_bytes": 1048576,
+  "max_artifact_bytes": 16777216,
+  "require_trace": false,
+  "variants": [{
+    "id": "baseline",
+    "version": "replace-with-your-agent-version",
+    "command": ["YOUR_NORMAL_AGENT_EXECUTABLE"],
+    "instrumentation_config": "boundary-service.json",
+    "entry": {"input": {"$eval": "input"}},
+    "pass_env": []
+  }],
+  "checks": {},
+  "judge": {
+    "enabled": true,
+    "runtime_config": "standard-runtime.json",
+    "prompt": "prompts/task-judge-system.txt",
+    "include_model_requests": false,
+    "share_repeated_text": true,
+    "max_model_calls": 100,
+    "max_input_bytes": 262144
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "name": "evaluation-execution-demo-v1",
+  "split_seed": "execution-demo-v1",
+  "split_percent": [60, 20, 20],
+  "budget": {"max_steps": 16, "max_tool_calls": 32, "timeout_ms": 1800000},
+  "sources": [{"kind": "golden", "path": "demo-tasks.jsonl"}]
+}

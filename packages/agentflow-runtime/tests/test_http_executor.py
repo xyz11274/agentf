@@ -43,6 +43,9 @@ def _set_local_identity(monkeypatch, tmp_path):
     monkeypatch.setenv("AF_AGENT_PACKAGE_DIR", str(package_root))
     monkeypatch.setenv("AF_USER_ID", "user-a")
     monkeypatch.setenv("AF_CLIENT_ID", "conv-a")
+    # Transport-only fixtures have no listener; real authentication is covered
+    # by test_local_command's subprocess HTTP integration tests.
+    monkeypatch.setattr("agentflow_runtime.executors.http.local_sandbox_headers", lambda _endpoint: {})
     return package_root, user_root, skills_root
 
 

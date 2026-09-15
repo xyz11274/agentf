@@ -1,0 +1,215 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1050" viewBox="0 0 1600 1050" role="img" aria-labelledby="title desc">
+  <title id="title">Harness 内部解剖</title>
+  <desc id="desc">以 Agent Loop 为核心，展示知识装配、状态、工具、执行环境、Hook、Trace 和 Artifact 等 Harness 子系统。</desc>
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="44%" r="78%">
+      <stop offset="0" stop-color="#18224a"/>
+      <stop offset="0.46" stop-color="#0c1730"/>
+      <stop offset="1" stop-color="#07101e"/>
+    </radialGradient>
+    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a78bfa"/>
+      <stop offset="0.48" stop-color="#6d5dfc"/>
+      <stop offset="1" stop-color="#3d8cff"/>
+    </linearGradient>
+    <linearGradient id="knowledge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#182d45"/>
+      <stop offset="1" stop-color="#122139"/>
+    </linearGradient>
+    <linearGradient id="action" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#173540"/>
+      <stop offset="1" stop-color="#122139"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="0" dy="12" stdDeviation="15" flood-color="#020714" flood-opacity=".55"/>
+    </filter>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="14" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#7ddcff"/>
+    </marker>
+    <marker id="arrowGold" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#ffd166"/>
+    </marker>
+    <style>
+      .title{font:700 34px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#f8fbff}
+      .subtitle{font:400 16px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#93a9c5}
+      .label{font:700 13px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#9fb3cc;letter-spacing:1.6px}
+      .h1{font:700 19px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#f8fbff}
+      .h2{font:700 15px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#ecf7ff}
+      .body{font:500 13px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#b7cae0}
+      .small{font:500 11.5px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#91a6c0}
+      .step{font:700 12px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#eafaff}
+      .flow{fill:none;stroke:#7ddcff;stroke-width:2.5;marker-end:url(#arrow)}
+      .state{fill:none;stroke:#ffd166;stroke-width:2.2;stroke-dasharray:7 7;marker-end:url(#arrowGold)}
+    </style>
+  </defs>
+
+  <rect width="1600" height="1050" rx="28" fill="url(#bg)"/>
+  <circle cx="800" cy="530" r="410" fill="none" stroke="#6373c9" stroke-opacity=".13" stroke-width="1"/>
+  <circle cx="800" cy="530" r="330" fill="none" stroke="#6373c9" stroke-opacity=".18" stroke-width="1" stroke-dasharray="3 12"/>
+  <circle cx="800" cy="530" r="245" fill="#6f5cff" opacity=".035"/>
+
+  <text x="58" y="62" class="title">Harness 内部解剖</text>
+  <text x="58" y="94" class="subtitle">一个 Agent Loop，三类输入，四条治理侧链，多个可替换执行后端</text>
+
+  <g>
+    <rect x="54" y="138" width="332" height="672" rx="26" fill="url(#knowledge)" stroke="#31506d"/>
+    <rect x="1214" y="138" width="332" height="672" rx="26" fill="url(#action)" stroke="#28626c"/>
+  </g>
+
+  <g>
+    <rect x="78" y="162" width="144" height="30" rx="15" fill="#14364c" stroke="#4aa9d0"/>
+    <text x="150" y="182" text-anchor="middle" class="label" style="font-size:11px;fill:#c9f3ff">KNOWLEDGE IN</text>
+    <text x="78" y="232" class="h1">认知装配层</text>
+    <text x="78" y="258" class="body">决定 Agent 知道什么、遵循什么</text>
+
+    <rect x="78" y="294" width="284" height="116" rx="18" fill="#10263a" stroke="#345b79"/>
+    <circle cx="108" cy="328" r="15" fill="#183d56" stroke="#63d6ff"/>
+    <path d="M100 322 H116 M100 328 H116 M100 334 H112" stroke="#a4ecff" stroke-width="1.8" stroke-linecap="round"/>
+    <text x="137" y="327" class="h2">agent.md</text>
+    <text x="100" y="360" class="body">frontmatter：模型、skills、配置</text>
+    <text x="100" y="384" class="body">正文：身份、目标、业务边界</text>
+
+    <rect x="78" y="430" width="284" height="116" rx="18" fill="#10263a" stroke="#345b79"/>
+    <circle cx="108" cy="464" r="15" fill="#2c2958" stroke="#aa8cff"/>
+    <path d="M100 469 L108 456 L116 469 Z" fill="none" stroke="#d5c7ff" stroke-width="1.8"/>
+    <text x="137" y="463" class="h2">SKILL.md</text>
+    <text x="100" y="496" class="body">领域方法、步骤、质量规则</text>
+    <text x="100" y="520" class="body">脚本使用方式与失败降级</text>
+
+    <rect x="78" y="566" width="284" height="116" rx="18" fill="#10263a" stroke="#345b79"/>
+    <circle cx="108" cy="600" r="15" fill="#3b3018" stroke="#ffd166"/>
+    <path d="M100 600 H116 M108 592 V608" stroke="#ffe7a1" stroke-width="1.8"/>
+    <text x="137" y="599" class="h2">Runtime Context</text>
+    <text x="100" y="632" class="body">AF_INPUT · Session · Dialogue</text>
+    <text x="100" y="656" class="body">历史消息 · 完成 Skill 信息</text>
+
+    <rect x="78" y="710" width="284" height="72" rx="16" fill="#0d2033" stroke="#2a465f"/>
+    <text x="100" y="739" class="small">Prompt assembly order</text>
+    <text x="100" y="762" class="body">协议 → Skills → Agent identity</text>
+  </g>
+
+  <g>
+    <rect x="1238" y="162" width="134" height="30" rx="15" fill="#143d43" stroke="#47c7b8"/>
+    <text x="1305" y="182" text-anchor="middle" class="label" style="font-size:11px;fill:#c8fff8">ACTION OUT</text>
+    <text x="1238" y="232" class="h1">执行与交付层</text>
+    <text x="1238" y="258" class="body">决定 Agent 能做什么、在哪里做</text>
+
+    <rect x="1238" y="294" width="284" height="130" rx="18" fill="#102b36" stroke="#327079"/>
+    <circle cx="1268" cy="328" r="15" fill="#173f42" stroke="#5eead4"/>
+    <path d="M1259 328 H1277 M1268 319 V337" stroke="#a6fff4" stroke-width="1.8"/>
+    <text x="1297" y="327" class="h2">Tool Registry</text>
+    <text x="1260" y="360" class="body">builtin → package override</text>
+    <text x="1260" y="384" class="body">skill scripts → MCP tools</text>
+    <text x="1260" y="405" class="small">schema + name → execute route</text>
+
+    <rect x="1238" y="444" width="284" height="142" rx="18" fill="#102b36" stroke="#327079"/>
+    <circle cx="1268" cy="478" r="15" fill="#173f42" stroke="#5eead4"/>
+    <path d="M1259 482 L1268 471 L1277 482" fill="none" stroke="#a6fff4" stroke-width="1.8"/>
+    <text x="1297" y="477" class="h2">ToolExecutor</text>
+    <rect x="1260" y="505" width="68" height="25" rx="12" fill="#19454a"/><text x="1294" y="522" text-anchor="middle" class="small">Host</text>
+    <rect x="1336" y="505" width="68" height="25" rx="12" fill="#19454a"/><text x="1370" y="522" text-anchor="middle" class="small">HTTP</text>
+    <rect x="1412" y="505" width="68" height="25" rx="12" fill="#19454a"/><text x="1446" y="522" text-anchor="middle" class="small">e2b</text>
+    <text x="1260" y="558" class="body">路径翻译 · 超时 · 文件操作</text>
+
+    <rect x="1238" y="606" width="284" height="116" rx="18" fill="#102b36" stroke="#327079"/>
+    <circle cx="1268" cy="640" r="15" fill="#45341b" stroke="#ffd166"/>
+    <path d="M1258 645 H1278 M1262 635 H1274" stroke="#ffe5a0" stroke-width="1.8"/>
+    <text x="1297" y="639" class="h2">Artifact Pipeline</text>
+    <text x="1260" y="672" class="body">extract · normalize · download</text>
+    <text x="1260" y="696" class="body">upload · render links</text>
+
+    <rect x="1238" y="742" width="284" height="40" rx="14" fill="#0e2a32" stroke="#2b5d64"/>
+    <text x="1380" y="767" text-anchor="middle" class="small">stdout JSON + response_push</text>
+  </g>
+
+  <path d="M386 500 C455 500 454 474 505 474" class="state"/>
+  <path d="M1095 474 C1145 474 1146 500 1214 500" class="flow"/>
+
+  <g>
+    <text x="800" y="147" text-anchor="middle" class="label">THE AGENT LOOP</text>
+    <path d="M800 206 C962 206 1095 338 1095 500 C1095 663 962 794 800 794 C637 794 505 663 505 500 C505 338 637 206 800 206 Z" fill="none" stroke="#6f83d7" stroke-width="24" stroke-opacity=".13"/>
+    <path d="M800 206 C962 206 1095 338 1095 500" fill="none" stroke="#7ddcff" stroke-width="3" marker-end="url(#arrow)"/>
+    <path d="M1095 500 C1095 663 962 794 800 794" fill="none" stroke="#7ddcff" stroke-width="3" marker-end="url(#arrow)"/>
+    <path d="M800 794 C637 794 505 663 505 500" fill="none" stroke="#7ddcff" stroke-width="3" marker-end="url(#arrow)"/>
+    <path d="M505 500 C505 338 637 206 800 206" fill="none" stroke="#7ddcff" stroke-width="3" marker-end="url(#arrow)"/>
+
+    <circle cx="800" cy="500" r="132" fill="#6d5dfc" opacity=".14" filter="url(#glow)"/>
+    <circle cx="800" cy="500" r="98" fill="url(#core)" filter="url(#shadow)"/>
+    <circle cx="800" cy="500" r="76" fill="none" stroke="#e2dbff" stroke-opacity=".35"/>
+    <text x="800" y="478" text-anchor="middle" class="h1" style="font-size:23px">LLM</text>
+    <text x="800" y="507" text-anchor="middle" class="body" style="fill:#f1edff">Decision Core</text>
+    <text x="800" y="535" text-anchor="middle" class="small" style="fill:#ddd7ff">observe → decide → act</text>
+
+    <g>
+      <rect x="685" y="176" width="230" height="66" rx="18" fill="#172c45" stroke="#4a7fa0"/>
+      <circle cx="715" cy="209" r="16" fill="#18405a"/><text x="715" y="214" text-anchor="middle" class="step">1</text>
+      <text x="744" y="205" class="h2">Guard &amp; Budget</text>
+      <text x="744" y="225" class="small">timeout · interrupt · tokens</text>
+
+      <rect x="997" y="293" width="230" height="66" rx="18" fill="#172c45" stroke="#4a7fa0"/>
+      <circle cx="1027" cy="326" r="16" fill="#18405a"/><text x="1027" y="331" text-anchor="middle" class="step">2</text>
+      <text x="1056" y="322" class="h2">Compose Context</text>
+      <text x="1056" y="342" class="small">compress · reminder · hooks</text>
+
+      <rect x="1030" y="616" width="230" height="66" rx="18" fill="#172c45" stroke="#4a7fa0"/>
+      <circle cx="1060" cy="649" r="16" fill="#18405a"/><text x="1060" y="654" text-anchor="middle" class="step">3</text>
+      <text x="1089" y="645" class="h2">Function Call</text>
+      <text x="1089" y="665" class="small">validate · classify · batch</text>
+
+      <rect x="685" y="758" width="230" height="66" rx="18" fill="#172c45" stroke="#4a7fa0"/>
+      <circle cx="715" cy="791" r="16" fill="#18405a"/><text x="715" y="796" text-anchor="middle" class="step">4</text>
+      <text x="744" y="787" class="h2">Execute Tools</text>
+      <text x="744" y="807" class="small">host · HTTP · e2b · MCP</text>
+
+      <rect x="373" y="616" width="230" height="66" rx="18" fill="#172c45" stroke="#4a7fa0"/>
+      <circle cx="403" cy="649" r="16" fill="#18405a"/><text x="403" y="654" text-anchor="middle" class="step">5</text>
+      <text x="432" y="645" class="h2">Observe Result</text>
+      <text x="432" y="665" class="small">role=tool · artifacts · audit</text>
+
+      <rect x="373" y="293" width="230" height="66" rx="18" fill="#172c45" stroke="#4a7fa0"/>
+      <circle cx="403" cy="326" r="16" fill="#18405a"/><text x="403" y="331" text-anchor="middle" class="step">6</text>
+      <text x="432" y="322" class="h2">Converge / Retry</text>
+      <text x="432" y="342" class="small">final · recover · next round</text>
+    </g>
+
+    <path d="M800 368 V389" class="state"/>
+    <path d="M898 500 H963" class="flow"/>
+    <path d="M800 598 V728" class="flow"/>
+    <path d="M702 500 H635" class="state"/>
+  </g>
+
+  <g>
+    <text x="58" y="860" class="label">CROSS-CUTTING GOVERNANCE</text>
+    <rect x="54" y="884" width="1492" height="112" rx="24" fill="#0e192b" stroke="#34405e"/>
+
+    <rect x="82" y="908" width="334" height="64" rx="16" fill="#151d36" stroke="#5e4f8b"/>
+    <circle cx="112" cy="940" r="15" fill="#322755"/>
+    <path d="M105 940 L110 945 L120 934" fill="none" stroke="#c5b3ff" stroke-width="2"/>
+    <text x="141" y="936" class="h2">Hooks &amp; AgentContext</text>
+    <text x="141" y="958" class="small">observe · rewrite payload · inject · block</text>
+
+    <rect x="438" y="908" width="334" height="64" rx="16" fill="#151d36" stroke="#5e4f8b"/>
+    <circle cx="468" cy="940" r="15" fill="#2b334f"/>
+    <path d="M460 947 V935 L468 928 L476 935 V947" fill="none" stroke="#a9c7ff" stroke-width="1.8"/>
+    <text x="497" y="936" class="h2">Trace &amp; Observability</text>
+    <text x="497" y="958" class="small">C++ parent span · NDJSON · stderr audit</text>
+
+    <rect x="794" y="908" width="334" height="64" rx="16" fill="#151d36" stroke="#5e4f8b"/>
+    <circle cx="824" cy="940" r="15" fill="#403318"/>
+    <path d="M815 940 H833 M824 931 V949" stroke="#ffe7a2" stroke-width="1.8"/>
+    <text x="853" y="936" class="h2">Safety &amp; Policies</text>
+    <text x="853" y="958" class="small">tool-loop guard · ordered writes · limits</text>
+
+    <rect x="1150" y="908" width="368" height="64" rx="16" fill="#151d36" stroke="#5e4f8b"/>
+    <circle cx="1180" cy="940" r="15" fill="#173b3b"/>
+    <path d="M1172 940 H1188 M1180 932 V948" stroke="#9ff7ea" stroke-width="1.8"/>
+    <text x="1209" y="936" class="h2">Configuration</text>
+    <text x="1209" y="958" class="small">agent.md → node env → global env → fallback</text>
+  </g>
+
+  <text x="800" y="1023" text-anchor="middle" class="small">Harness 的核心价值：把一次模型调用提升为可治理、可扩展、可交付的 Agent 执行过程</text>
+</svg>

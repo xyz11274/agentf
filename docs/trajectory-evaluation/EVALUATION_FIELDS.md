@@ -129,7 +129,7 @@ assessments[].final_verdict
 
 | 字段 | 含义 |
 | --- | --- |
-| `tool_call_count` | Tool 调用总数。 |
+| `tool_call_count` | Tool 调用总数。标准轨迹分析 v2 排除 semantic=model/custom，以及 executed=false 的调用；无语义标记的旧 action 保持原解释。 |
 | `failed_tool_call_count` | 状态为 error、failed、timeout、cancelled 等的调用数。 |
 | `non_retryable_failed_tool_call_count` | 明确标记为不可重试的失败调用数。 |
 | `dispatch_batch_count` | Coordinator 派发的 Skill 批次数。 |
@@ -447,13 +447,36 @@ EpisodeAssessment
 | `summary` | 对整个 Dialogue 的反思摘要。 |
 | `root_causes` | 根因候选。 |
 | `skill_orchestration_changes` | Skill 编排改进建议。 |
-| `prompt_changes` | Prompt 改进建议。 |
+| `experience_injections` | 经验建议的字符串阅读视图；也兼容旧报告，不作为新注入资格证明。 |
+| `experience_details` | 新增的结构化经验对象数组，每条分别保存执行者、条件、行为和证据。 |
 | `stop_condition_changes` | Loop 结束条件改进建议。 |
 | `wasted_episode_ids` | 模型认为浪费的 Episode。 |
 | `evidence_event_ids` | 支撑反思的原始 Event。 |
 
-这些字段是候选进化材料，不代表建议已经自动写入 Skill、Prompt、Coordinator 或
-停止策略。后续晋升前仍需要跨 Dialogue 聚合、置信度统计、灰度验证和回滚策略。
+这些字段是候选进化材料，不代表经验已经自动注入在线上下文，也不代表建议已经自动
+写入 Skill 编排或停止策略。后续晋升前仍需要跨 Dialogue 聚合、置信度统计、灰度
+验证和回滚策略。
+
+`experience_details[]` 的四个字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `target_scope` | 谁执行建议。必须来自当前轨迹的 `allowed_experience_scopes`，不从某个失败技能猜测。 |
+| `trigger_pattern` | 执行者在当前任务中能够观察的适用条件，不是 `validated_dialogue_reflection` 等来源标签。 |
+| `proposed_change` | 该执行者可实施的一条行为经验，包含必要例外，不是开发改造任务。 |
+| `evidence_event_ids` | 直接支持本条经验的事件，不自动继承整个 Dialogue 的所有浪费步骤。 |
+
+作用域最多 512 UTF-8 字节，条件与行为各最多 2048 字节，引用不能为空且必须属于
+实际提供给模型的事件。标准轨迹的作用域保留 `agent:…/actor:…`，无需 Coordinator 架构。
+模型响应里的 `reflection.experience_injections` 接收这些对象，评测器将合格对象写入
+`experience_details`，并把行为文本同步到字符串阅读视图。旧字符串响应仍可读取，
+但带 `legacy_experience_unscoped` 警告；没有新经验契约，不进入新的注入快照。
+同一反思已有结构化条目时，不会再把字符串视图重复生成一遍候选。
+
+经验单项错误对应 `invalid_experience_contract`、`invalid_experience_scope`、
+`invalid_experience_evidence`，数组错误对应 `invalid_experience_list`，均隔离经验并
+记录 warning。只要任务和步骤评测有效，模型调用仍可记为成功；结构通过不等于语义
+正确，也不意味着经验已经批准。
 
 ## 11. 报告级问题与模型调用元数据
 
@@ -473,7 +496,7 @@ EpisodeAssessment
 | 字段 | 含义 |
 | --- | --- |
 | `model_requested_count` | 实际发起的对话级模型调用数。直连模式通常最多为 1。 |
-| `model_succeeded_count` | 响应通过全部校验的调用数。 |
+| `model_succeeded_count` | 任务和步骤响应通过校验的调用数；可能另有已隔离的经验条目 warning。 |
 | `model_failed_count` | Transport 或响应校验失败数。 |
 | `model_failures_degraded` | 模型失败后是否降级保留规则结果。 |
 

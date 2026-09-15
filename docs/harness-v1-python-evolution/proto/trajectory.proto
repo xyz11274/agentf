@@ -1,0 +1,716 @@
+syntax = "proto3";
+
+package agentflow.trajectory.v1;
+
+// Python experiment contract for Harness v1 trajectory capture, replay and
+// evolution. Published field numbers must never be reused.
+
+enum NodeKind {
+  NODE_KIND_UNSPECIFIED = 0;
+  NODE_KIND_RUN_ROOT = 1;
+  NODE_KIND_VERSION_MANIFEST = 2;
+  NODE_KIND_COORDINATOR_TURN = 3;
+  NODE_KIND_STATE_SNAPSHOT = 4;
+  NODE_KIND_MODEL_CALL = 5;
+  NODE_KIND_DECISION = 6;
+  NODE_KIND_DISPATCH_GROUP = 7;
+  NODE_KIND_SKILL_INVOCATION = 8;
+  NODE_KIND_SKILL_LOOP_STEP = 9;
+  NODE_KIND_TOOL_CALL = 10;
+  NODE_KIND_TOOL_RESULT = 11;
+  NODE_KIND_STATE_TRANSITION = 12;
+  NODE_KIND_JOIN = 13;
+  NODE_KIND_FINAL_RESPONSE = 14;
+  NODE_KIND_EVALUATION = 15;
+  NODE_KIND_HUMAN_FEEDBACK = 16;
+  NODE_KIND_MISSING_EVENT = 17;
+}
+
+enum LifecyclePhase {
+  LIFECYCLE_PHASE_UNSPECIFIED = 0;
+  LIFECYCLE_PHASE_CREATED = 1;
+  LIFECYCLE_PHASE_STARTED = 2;
+  LIFECYCLE_PHASE_UPDATED = 3;
+  LIFECYCLE_PHASE_COMPLETED = 4;
+  LIFECYCLE_PHASE_FAILED = 5;
+  LIFECYCLE_PHASE_CANCELLED = 6;
+  LIFECYCLE_PHASE_TIMED_OUT = 7;
+  LIFECYCLE_PHASE_SNAPSHOT = 8;
+  LIFECYCLE_PHASE_SEALED = 9;
+}
+
+enum NodeStatus {
+  NODE_STATUS_UNSPECIFIED = 0;
+  NODE_STATUS_PENDING = 1;
+  NODE_STATUS_RUNNING = 2;
+  NODE_STATUS_SUCCEEDED = 3;
+  NODE_STATUS_FAILED = 4;
+  NODE_STATUS_CANCELLED = 5;
+  NODE_STATUS_TIMED_OUT = 6;
+  NODE_STATUS_INCOMPLETE = 7;
+  NODE_STATUS_SKIPPED = 8;
+}
+
+enum RunStatus {
+  RUN_STATUS_UNSPECIFIED = 0;
+  RUN_STATUS_RUNNING = 1;
+  RUN_STATUS_SUCCEEDED = 2;
+  RUN_STATUS_FAILED = 3;
+  RUN_STATUS_CANCELLED = 4;
+  RUN_STATUS_TIMED_OUT = 5;
+  RUN_STATUS_INCOMPLETE = 6;
+}
+
+enum EdgeKind {
+  EDGE_KIND_UNSPECIFIED = 0;
+  EDGE_KIND_CONTAINS = 1;
+  EDGE_KIND_CAUSES = 2;
+  EDGE_KIND_DEPENDS_ON = 3;
+  EDGE_KIND_RETRIES = 4;
+  EDGE_KIND_BRANCHES_FROM = 5;
+  EDGE_KIND_JOINS = 6;
+  EDGE_KIND_OBSERVES = 7;
+  EDGE_KIND_EVALUATES = 8;
+  EDGE_KIND_DERIVED_FROM = 9;
+}
+
+enum LoopLevel {
+  LOOP_LEVEL_UNSPECIFIED = 0;
+  LOOP_LEVEL_FRAMEWORK_REENTRY = 1;
+  LOOP_LEVEL_COORDINATOR_RETRY = 2;
+  LOOP_LEVEL_SKILL_STEP = 3;
+}
+
+enum ActionKind {
+  ACTION_KIND_UNSPECIFIED = 0;
+  ACTION_KIND_CONTINUE = 1;
+  ACTION_KIND_DISPATCH_SKILLS = 2;
+  ACTION_KIND_CALL_TOOL = 3;
+  ACTION_KIND_RESPOND = 4;
+  ACTION_KIND_ASK_USER = 5;
+  ACTION_KIND_ABORT = 6;
+  ACTION_KIND_WAIT = 7;
+}
+
+enum ExecutionPhase {
+  EXECUTION_PHASE_UNSPECIFIED = 0;
+  EXECUTION_PHASE_TRIGGERED = 1;
+  EXECUTION_PHASE_CONTEXT_BUILT = 2;
+  EXECUTION_PHASE_DECIDING = 3;
+  EXECUTION_PHASE_DISPATCH_PERSISTED = 4;
+  EXECUTION_PHASE_YIELDED = 5;
+  EXECUTION_PHASE_SKILL_RUNNING = 6;
+  EXECUTION_PHASE_SKILL_COMPLETED = 7;
+  EXECUTION_PHASE_RESUMED = 8;
+  EXECUTION_PHASE_FINALIZING = 9;
+  EXECUTION_PHASE_TERMINAL = 10;
+}
+
+enum DispatchMode {
+  DISPATCH_MODE_UNSPECIFIED = 0;
+  DISPATCH_MODE_SERIAL = 1;
+  DISPATCH_MODE_PARALLEL = 2;
+  DISPATCH_MODE_DYNAMIC = 3;
+}
+
+enum JoinPolicy {
+  JOIN_POLICY_UNSPECIFIED = 0;
+  JOIN_POLICY_ALL = 1;
+  JOIN_POLICY_ANY = 2;
+  JOIN_POLICY_QUORUM = 3;
+  JOIN_POLICY_DEADLINE = 4;
+  JOIN_POLICY_MANUAL = 5;
+}
+
+enum SideEffectLevel {
+  SIDE_EFFECT_LEVEL_UNSPECIFIED = 0;
+  SIDE_EFFECT_LEVEL_NONE = 1;
+  SIDE_EFFECT_LEVEL_READ_ONLY = 2;
+  SIDE_EFFECT_LEVEL_IDEMPOTENT_WRITE = 3;
+  SIDE_EFFECT_LEVEL_NON_IDEMPOTENT_WRITE = 4;
+  SIDE_EFFECT_LEVEL_UNKNOWN = 5;
+}
+
+enum TerminationReason {
+  TERMINATION_REASON_UNSPECIFIED = 0;
+  TERMINATION_REASON_TASK_COMPLETED = 1;
+  TERMINATION_REASON_NEEDS_USER_INPUT = 2;
+  TERMINATION_REASON_MAX_ROUNDS = 3;
+  TERMINATION_REASON_BUDGET_EXHAUSTED = 4;
+  TERMINATION_REASON_NON_RETRYABLE_ERROR = 5;
+  TERMINATION_REASON_POLICY_STOP = 6;
+  TERMINATION_REASON_CANCELLED = 7;
+  TERMINATION_REASON_SAFETY_BLOCKED = 8;
+  TERMINATION_REASON_RUNTIME_FAILURE = 9;
+}
+
+enum EvaluationVerdict {
+  EVALUATION_VERDICT_UNSPECIFIED = 0;
+  EVALUATION_VERDICT_PASS = 1;
+  EVALUATION_VERDICT_FAIL = 2;
+  EVALUATION_VERDICT_PARTIAL = 3;
+  EVALUATION_VERDICT_INCONCLUSIVE = 4;
+}
+
+enum InvalidLoopCategory {
+  INVALID_LOOP_CATEGORY_UNSPECIFIED = 0;
+  INVALID_LOOP_CATEGORY_NOT_INVALID = 1;
+  INVALID_LOOP_CATEGORY_EXACT_REPEAT = 2;
+  INVALID_LOOP_CATEGORY_NO_STATE_PROGRESS = 3;
+  INVALID_LOOP_CATEGORY_NON_RETRYABLE_REPEAT = 4;
+  INVALID_LOOP_CATEGORY_RESULT_NOT_CONSUMED = 5;
+  INVALID_LOOP_CATEGORY_CONTINUED_AFTER_SUFFICIENT = 6;
+  INVALID_LOOP_CATEGORY_INVALID_ACTION_REPEAT = 7;
+  INVALID_LOOP_CATEGORY_STATE_OSCILLATION = 8;
+  INVALID_LOOP_CATEGORY_REVIEW_REQUIRED = 9;
+}
+
+enum LabelSource {
+  LABEL_SOURCE_UNSPECIFIED = 0;
+  LABEL_SOURCE_RULE = 1;
+  LABEL_SOURCE_EVALUATOR = 2;
+  LABEL_SOURCE_HUMAN = 3;
+}
+
+enum Compression {
+  COMPRESSION_UNSPECIFIED = 0;
+  COMPRESSION_NONE = 1;
+  COMPRESSION_GZIP = 2;
+  COMPRESSION_ZSTD = 3;
+}
+
+enum ReplayMode {
+  REPLAY_MODE_UNSPECIFIED = 0;
+  REPLAY_MODE_STRUCTURAL = 1;
+  REPLAY_MODE_RECORDED = 2;
+  REPLAY_MODE_BRANCH = 3;
+  REPLAY_MODE_SHADOW = 4;
+}
+
+enum CandidateKind {
+  CANDIDATE_KIND_UNSPECIFIED = 0;
+  CANDIDATE_KIND_PROMPT = 1;
+  CANDIDATE_KIND_SKILL_ORCHESTRATION = 2;
+  CANDIDATE_KIND_STOP_POLICY = 3;
+  CANDIDATE_KIND_COMPOSITE = 4;
+}
+
+enum CandidateStatus {
+  CANDIDATE_STATUS_UNSPECIFIED = 0;
+  CANDIDATE_STATUS_PROPOSED = 1;
+  CANDIDATE_STATUS_VALIDATING = 2;
+  CANDIDATE_STATUS_REJECTED = 3;
+  CANDIDATE_STATUS_PROMOTED = 4;
+  CANDIDATE_STATUS_ARCHIVED = 5;
+}
+
+enum MutationKind {
+  MUTATION_KIND_UNSPECIFIED = 0;
+  MUTATION_KIND_INITIAL = 1;
+  MUTATION_KIND_TEXTUAL_FEEDBACK = 2;
+  MUTATION_KIND_PROMPT_REWRITE = 3;
+  MUTATION_KIND_ADD_SKILL = 4;
+  MUTATION_KIND_REMOVE_SKILL = 5;
+  MUTATION_KIND_REORDER_SKILLS = 6;
+  MUTATION_KIND_CHANGE_PARALLELISM = 7;
+  MUTATION_KIND_CHANGE_JOIN_POLICY = 8;
+  MUTATION_KIND_CHANGE_STOP_POLICY = 9;
+  MUTATION_KIND_CROSSOVER = 10;
+  MUTATION_KIND_MANUAL_EDIT = 11;
+}
+
+message BlobRef {
+  string sha256 = 1;
+  string media_type = 2;
+  uint64 size_bytes = 3;
+  Compression compression = 4;
+  bool encrypted = 5;
+
+  oneof storage {
+    bytes inline_data = 6;
+    string uri = 7;
+  }
+
+  string redaction_policy_id = 8;
+  map<string, string> attributes = 9;
+}
+
+message VersionRef {
+  string component_kind = 1;
+  string component_id = 2;
+  string version = 3;
+  string digest = 4;
+  string source_uri = 5;
+  map<string, string> attributes = 6;
+}
+
+message VersionManifest {
+  string coordinator_version = 1;
+  string source_commit = 2;
+  repeated VersionRef prompts = 3;
+  repeated VersionRef skills = 4;
+  repeated VersionRef tools = 5;
+  repeated VersionRef models = 6;
+  repeated VersionRef policies = 7;
+  repeated VersionRef evaluators = 8;
+  VersionRef trajectory_schema = 9;
+  string environment_digest = 10;
+  map<string, string> runtime_config = 11;
+}
+
+message RunIdentity {
+  string run_id = 1;
+  string trace_id = 2;
+  string session_id = 3;
+  string dialogue_id = 4;
+  string task_id = 5;
+  string request_id = 6;
+}
+
+message RedactionMetadata {
+  bool contains_sensitive_data = 1;
+  repeated string applied_policy_ids = 2;
+  repeated string removed_fields = 3;
+  string access_class = 4;
+}
+
+message ArtifactRef {
+  string artifact_id = 1;
+  string logical_name = 2;
+  BlobRef content = 3;
+  string producer_node_id = 4;
+  map<string, string> attributes = 5;
+}
+
+message RunRoot {
+  BlobRef input = 1;
+  string experiment_id = 2;
+  string candidate_id = 3;
+  string dataset_id = 4;
+  string dataset_split = 5;
+  string example_id = 6;
+  uint64 random_seed = 7;
+}
+
+message CoordinatorTurn {
+  uint32 framework_reentry_index = 1;
+  string trigger_event_id = 2;
+  string input_state_hash = 3;
+  string output_state_hash = 4;
+  uint32 internal_retry_count = 5;
+  TerminationReason termination_reason = 6;
+}
+
+message StateSlotRef {
+  string scope = 1;
+  string key = 2;
+  string value_hash = 3;
+  BlobRef value = 4;
+}
+
+message StateSnapshot {
+  string state_hash = 1;
+  ExecutionPhase execution_phase = 2;
+  repeated StateSlotRef slots = 3;
+  BlobRef canonical_snapshot = 4;
+}
+
+message StateTransition {
+  ExecutionPhase from_phase = 1;
+  ExecutionPhase to_phase = 2;
+  string before_state_hash = 3;
+  string after_state_hash = 4;
+  BlobRef delta = 5;
+  repeated string touched_keys = 6;
+  string observable_reason = 7;
+}
+
+message ModelSamplingConfig {
+  double temperature = 1;
+  double top_p = 2;
+  uint32 max_output_tokens = 3;
+  uint64 seed = 4;
+  uint32 candidate_count = 5;
+  map<string, string> provider_options = 6;
+}
+
+message ModelCall {
+  string model_call_id = 1;
+  LoopLevel loop_level = 2;
+  uint32 round_index = 3;
+  VersionRef model = 4;
+  repeated VersionRef prompt_versions = 5;
+  BlobRef observable_input = 6;
+  BlobRef observable_output = 7;
+  ModelSamplingConfig sampling = 8;
+  uint64 input_tokens = 9;
+  uint64 output_tokens = 10;
+  uint64 cached_input_tokens = 11;
+  uint64 latency_us = 12;
+  string finish_reason = 13;
+  string provider_request_id = 14;
+}
+
+message ActionCandidate {
+  string action_id = 1;
+  ActionKind kind = 2;
+  BlobRef structured_payload = 3;
+  double proposal_score = 4;
+  string validation_error = 5;
+  string generator = 6;
+}
+
+message Decision {
+  LoopLevel loop_level = 1;
+  uint32 round_index = 2;
+  string decision_state_hash = 3;
+  repeated ActionCandidate candidates = 4;
+  string chosen_action_id = 5;
+  VersionRef decision_policy = 6;
+  BlobRef observable_reason = 7;
+  bool accepted_by_runtime = 8;
+  string rejection_reason = 9;
+}
+
+message DispatchGroup {
+  string dispatch_group_id = 1;
+  DispatchMode mode = 2;
+  JoinPolicy join_policy = 3;
+  uint32 quorum = 4;
+  uint64 deadline_us = 5;
+  repeated string skill_invocation_ids = 6;
+}
+
+message SkillInvocation {
+  string skill_invocation_id = 1;
+  string dispatch_group_id = 2;
+  string runner_name = 3;
+  string business_skill_id = 4;
+  VersionRef business_skill_version = 5;
+  string exec_skill_key = 6;
+  BlobRef arguments = 7;
+  BlobRef result = 8;
+  repeated ArtifactRef artifacts = 9;
+  repeated VersionRef loaded_skills = 10;
+  bool force_load = 11;
+  uint32 dispatch_index = 12;
+}
+
+message SkillLoopStep {
+  string skill_invocation_id = 1;
+  uint32 round_index = 2;
+  string before_state_hash = 3;
+  string after_state_hash = 4;
+  string chosen_action_id = 5;
+  bool made_progress = 6;
+  BlobRef progress_signal = 7;
+  TerminationReason termination_reason = 8;
+}
+
+message ToolCall {
+  string tool_call_id = 1;
+  VersionRef tool = 2;
+  BlobRef arguments = 3;
+  string normalized_signature = 4;
+  SideEffectLevel side_effect_level = 5;
+  string idempotency_key = 6;
+  uint64 timeout_us = 7;
+}
+
+message ToolResult {
+  string tool_call_id = 1;
+  NodeStatus status = 2;
+  BlobRef output = 3;
+  repeated ArtifactRef artifacts = 4;
+  string error_type = 5;
+  string error_message = 6;
+  bool retryable = 7;
+  uint64 latency_us = 8;
+}
+
+message Join {
+  string dispatch_group_id = 1;
+  JoinPolicy policy = 2;
+  repeated string arrived_invocation_ids = 3;
+  repeated string missing_invocation_ids = 4;
+  bool condition_satisfied = 5;
+  string output_state_hash = 6;
+}
+
+message FinalResponse {
+  BlobRef content = 1;
+  TerminationReason termination_reason = 2;
+  string final_state_hash = 3;
+  bool streamed = 4;
+  bool stream_complete = 5;
+}
+
+message Score {
+  string name = 1;
+  double value = 2;
+  double minimum = 3;
+  double maximum = 4;
+  string unit = 5;
+  map<string, string> attributes = 6;
+}
+
+message InvalidLoopAnnotation {
+  string loop_node_id = 1;
+  LoopLevel loop_level = 2;
+  InvalidLoopCategory category = 3;
+  LabelSource source = 4;
+  double confidence = 5;
+  string rule_id = 6;
+  BlobRef evidence = 7;
+}
+
+message EvaluationRecord {
+  string evaluation_id = 1;
+  string scope_node_id = 2;
+  repeated string scope_descendant_node_ids = 3;
+  VersionRef evaluator = 4;
+  string dataset_id = 5;
+  string dataset_split = 6;
+  string example_id = 7;
+  repeated Score scores = 8;
+  EvaluationVerdict verdict = 9;
+  BlobRef textual_feedback = 10;
+  double confidence = 11;
+  repeated InvalidLoopAnnotation invalid_loop_annotations = 12;
+  uint64 evaluated_at_us = 13;
+}
+
+message HumanFeedback {
+  string feedback_id = 1;
+  string scope_node_id = 2;
+  BlobRef content = 3;
+  string reviewer_pseudonym = 4;
+  EvaluationVerdict verdict = 5;
+  repeated Score scores = 6;
+  uint64 created_at_us = 7;
+}
+
+message MissingEvent {
+  NodeKind expected_kind = 1;
+  LifecyclePhase expected_phase = 2;
+  string expected_semantic_node_id = 3;
+  repeated string inferred_from_event_ids = 4;
+  string reason = 5;
+}
+
+message EventPayload {
+  oneof value {
+    RunRoot run_root = 1;
+    VersionManifest version_manifest = 2;
+    CoordinatorTurn coordinator_turn = 3;
+    StateSnapshot state_snapshot = 4;
+    ModelCall model_call = 5;
+    Decision decision = 6;
+    DispatchGroup dispatch_group = 7;
+    SkillInvocation skill_invocation = 8;
+    SkillLoopStep skill_loop_step = 9;
+    ToolCall tool_call = 10;
+    ToolResult tool_result = 11;
+    StateTransition state_transition = 12;
+    Join join = 13;
+    FinalResponse final_response = 14;
+    EvaluationRecord evaluation = 15;
+    HumanFeedback human_feedback = 16;
+    MissingEvent missing_event = 17;
+  }
+}
+
+// Immutable event written by collectors. semantic_node_id is stable across the
+// CREATED/STARTED/UPDATED/COMPLETED events for one logical node.
+message TrajectoryEvent {
+  uint32 schema_version = 1;
+  string event_id = 2;
+  string semantic_node_id = 3;
+  RunIdentity identity = 4;
+  uint64 timestamp_us = 5;
+  string producer_id = 6;
+  uint64 producer_sequence = 7;
+  string idempotency_key = 8;
+  NodeKind kind = 9;
+  LifecyclePhase lifecycle_phase = 10;
+  string primary_parent_event_id = 11;
+  repeated string causal_parent_event_ids = 12;
+  EventPayload payload = 13;
+  map<string, string> attributes = 14;
+  RedactionMetadata redaction = 15;
+}
+
+// Materialized semantic node. It can always be rebuilt from TrajectoryEvent.
+message TrajectoryNode {
+  string node_id = 1;
+  NodeKind kind = 2;
+  string primary_parent_id = 3;
+  repeated string causal_parent_ids = 4;
+  repeated string source_event_ids = 5;
+  NodeStatus status = 6;
+  uint64 started_at_us = 7;
+  uint64 ended_at_us = 8;
+  EventPayload payload = 9;
+  map<string, string> attributes = 10;
+}
+
+message TrajectoryEdge {
+  string edge_id = 1;
+  string from_node_id = 2;
+  string to_node_id = 3;
+  EdgeKind kind = 4;
+  string observable_reason = 5;
+  map<string, string> attributes = 6;
+}
+
+message RecordedDependency {
+  string dependency_id = 1;
+  string request_node_id = 2;
+  string result_node_id = 3;
+  SideEffectLevel side_effect_level = 4;
+  BlobRef recorded_request = 5;
+  BlobRef recorded_result = 6;
+  bool safe_for_live_replay = 7;
+}
+
+message ReplayManifest {
+  repeated ReplayMode supported_modes = 1;
+  repeated RecordedDependency dependencies = 2;
+  uint64 random_seed = 3;
+  string initial_state_hash = 4;
+  string final_state_hash = 5;
+  VersionRef state_reducer = 6;
+  bool has_explicit_missing_events = 7;
+}
+
+message DerivedMetrics {
+  uint32 framework_reentry_count = 1;
+  uint32 coordinator_retry_count = 2;
+  uint32 skill_step_count = 3;
+  uint32 invalid_framework_reentry_count = 4;
+  uint32 invalid_coordinator_retry_count = 5;
+  uint32 invalid_skill_step_count = 6;
+  uint64 input_tokens = 7;
+  uint64 output_tokens = 8;
+  uint64 model_call_count = 9;
+  uint64 tool_call_count = 10;
+  uint64 duration_us = 11;
+  repeated Score quality_scores = 12;
+}
+
+message TrajectoryRun {
+  uint32 schema_version = 1;
+  RunIdentity identity = 2;
+  RunStatus status = 3;
+  VersionManifest versions = 4;
+  repeated TrajectoryNode nodes = 5;
+  repeated TrajectoryEdge edges = 6;
+  ReplayManifest replay = 7;
+  DerivedMetrics metrics = 8;
+  uint64 started_at_us = 9;
+  uint64 ended_at_us = 10;
+  uint64 sealed_at_us = 11;
+  uint64 materialization_revision = 12;
+  repeated string missing_event_ids = 13;
+  map<string, string> labels = 14;
+}
+
+message TrajectoryArchive {
+  uint32 schema_version = 1;
+  repeated TrajectoryRun runs = 2;
+}
+
+message CandidateTarget {
+  string target_kind = 1;
+  string target_id = 2;
+  VersionRef baseline_version = 3;
+  VersionRef candidate_version = 4;
+}
+
+message MutationRecord {
+  MutationKind kind = 1;
+  string operator_id = 2;
+  VersionRef operator_version = 3;
+  BlobRef instruction = 4;
+  BlobRef textual_feedback = 5;
+  uint64 random_seed = 6;
+  map<string, string> attributes = 7;
+}
+
+message AggregatedEvaluation {
+  string dataset_id = 1;
+  string dataset_split = 2;
+  uint64 run_count = 3;
+  repeated Score mean_scores = 4;
+  repeated Score confidence_interval_lower = 5;
+  repeated Score confidence_interval_upper = 6;
+  double average_invalid_loops = 7;
+  double invalid_loop_reduction = 8;
+}
+
+message EvolutionCandidate {
+  string candidate_id = 1;
+  CandidateKind kind = 2;
+  repeated string parent_candidate_ids = 3;
+  repeated CandidateTarget targets = 4;
+  MutationRecord mutation = 5;
+  repeated string run_ids = 6;
+  repeated string evaluation_node_ids = 7;
+  repeated AggregatedEvaluation aggregated_evaluations = 8;
+  CandidateStatus status = 9;
+  uint64 created_at_us = 10;
+  uint64 updated_at_us = 11;
+  map<string, string> attributes = 12;
+}
+
+message OptimizationObjective {
+  string objective_id = 1;
+  string primary_metric = 2;
+  double target_relative_improvement_lower = 3;
+  double target_relative_improvement_upper = 4;
+  repeated Score quality_constraints = 5;
+  repeated Score safety_constraints = 6;
+  repeated Score cost_constraints = 7;
+}
+
+message EvolutionSearchTree {
+  uint32 schema_version = 1;
+  string experiment_id = 2;
+  string baseline_candidate_id = 3;
+  repeated EvolutionCandidate candidates = 4;
+  OptimizationObjective objective = 5;
+  string train_dataset_id = 6;
+  string dev_dataset_id = 7;
+  string test_dataset_id = 8;
+  uint64 created_at_us = 9;
+  map<string, string> labels = 10;
+}
+
+message ReplayRequest {
+  string source_run_id = 1;
+  ReplayMode mode = 2;
+  string fork_node_id = 3;
+  string candidate_id = 4;
+  VersionManifest override_versions = 5;
+  bool allow_read_only_tools = 6;
+  bool allow_write_tools = 7;
+  uint64 random_seed = 8;
+}
+
+message StateDivergence {
+  string node_id = 1;
+  string expected_state_hash = 2;
+  string actual_state_hash = 3;
+  BlobRef diagnostic = 4;
+}
+
+message ReplayResult {
+  string replay_id = 1;
+  string source_run_id = 2;
+  string replay_run_id = 3;
+  ReplayMode mode = 4;
+  NodeStatus status = 5;
+  repeated StateDivergence divergences = 6;
+  BlobRef diagnostic = 7;
+}
+

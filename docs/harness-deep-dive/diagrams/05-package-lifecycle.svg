@@ -1,0 +1,166 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title desc">
+  <title id="title">Harness Agent Package 生命周期</title>
+  <desc id="desc">展示模板、固化 Agent Package、运行实例和沙箱投影四个阶段，以及用户资产、模板资产、运行时数据和 Python Runtime 的不同所有权。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#08111f"/><stop offset="1" stop-color="#11182b"/></linearGradient>
+    <linearGradient id="folder1" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#203655"/><stop offset="1" stop-color="#172640"/></linearGradient>
+    <linearGradient id="folder2" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#34275c"/><stop offset="1" stop-color="#20213e"/></linearGradient>
+    <linearGradient id="folder3" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#16444a"/><stop offset="1" stop-color="#172b3d"/></linearGradient>
+    <linearGradient id="folder4" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#4b351c"/><stop offset="1" stop-color="#252339"/></linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="170%"><feDropShadow dx="0" dy="12" stdDeviation="15" flood-color="#020713" flood-opacity=".55"/></filter>
+    <marker id="arrow" markerWidth="11" markerHeight="11" refX="10" refY="5.5" orient="auto"><path d="M0 0 L11 5.5 L0 11 Z" fill="#72dcff"/></marker>
+    <marker id="assetArrow" markerWidth="11" markerHeight="11" refX="10" refY="5.5" orient="auto"><path d="M0 0 L11 5.5 L0 11 Z" fill="#b99cff"/></marker>
+    <style>
+      .title{font:700 34px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#f8fbff}
+      .subtitle{font:400 16px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#93a8c2}
+      .num{font:800 17px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#08111f}
+      .phase{font:800 20px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#f8fbff}
+      .path{font:500 11px ui-monospace,SFMono-Regular,Consolas,monospace;fill:#a9bdd4}
+      .h2{font:700 14px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#eff8ff}
+      .body{font:500 12px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#b8cae0}
+      .small{font:500 11px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;fill:#90a5be}
+      .tag{font:700 10px Inter,"Noto Sans CJK SC","Source Han Sans SC","PingFang SC","Microsoft YaHei",sans-serif;letter-spacing:.7px}
+      .flow{fill:none;stroke:#72dcff;stroke-width:2.6;marker-end:url(#arrow)}
+      .asset{fill:none;stroke:#b99cff;stroke-width:2.2;stroke-dasharray:3 7;marker-end:url(#assetArrow)}
+    </style>
+  </defs>
+
+  <rect width="1600" height="1000" rx="28" fill="url(#bg)"/>
+  <circle cx="1390" cy="110" r="260" fill="#7c5cff" opacity=".04"/>
+  <text x="58" y="62" class="title">Harness Agent Package · 四阶段生命周期</text>
+  <text x="58" y="94" class="subtitle">创建蓝图、静态权威源、可变运行现场、按需沙箱投影：同一 Agent 的四种物理形态</text>
+
+  <g>
+    <path d="M54 198 Q54 174 78 174 H178 L211 208 H352 Q376 208 376 232 V716 Q376 740 352 740 H78 Q54 740 54 716 Z" fill="url(#folder1)" stroke="#416889" stroke-width="1.4"/>
+    <path d="M444 198 Q444 174 468 174 H568 L601 208 H742 Q766 208 766 232 V716 Q766 740 742 740 H468 Q444 740 444 716 Z" fill="url(#folder2)" stroke="#6e5a9d" stroke-width="1.4"/>
+    <path d="M834 198 Q834 174 858 174 H958 L991 208 H1132 Q1156 208 1156 232 V716 Q1156 740 1132 740 H858 Q834 740 834 716 Z" fill="url(#folder3)" stroke="#39787e" stroke-width="1.4"/>
+    <path d="M1224 198 Q1224 174 1248 174 H1348 L1381 208 H1522 Q1546 208 1546 232 V716 Q1546 740 1522 740 H1248 Q1224 740 1224 716 Z" fill="url(#folder4)" stroke="#806342" stroke-width="1.4"/>
+  </g>
+
+  <g>
+    <circle cx="86" cy="224" r="19" fill="#72dcff"/><text x="86" y="230" text-anchor="middle" class="num">1</text>
+    <text x="116" y="224" class="phase">Template</text>
+    <text x="78" y="254" class="path">frontend/bridge/templates/.../harness_agent/</text>
+    <rect x="78" y="284" width="274" height="30" rx="15" fill="#15364d" stroke="#4c83a5"/>
+    <text x="215" y="304" text-anchor="middle" class="tag" fill="#c9f3ff">FRAMEWORK-MAINTAINED BLUEPRINT</text>
+
+    <rect x="78" y="340" width="274" height="94" rx="16" fill="#14283f" stroke="#355574"/>
+    <text x="98" y="369" class="h2">调度骨架</text>
+    <text x="98" y="394" class="body">agent.json · workflow JSON</text>
+    <text x="98" y="417" class="body">nodes wrappers · package.json</text>
+
+    <rect x="78" y="452" width="274" height="94" rx="16" fill="#14283f" stroke="#355574"/>
+    <text x="98" y="481" class="h2">运行准备</text>
+    <text x="98" y="506" class="body">setup.sh · requirements.txt</text>
+    <text x="98" y="529" class="body">tests · harness skeleton</text>
+
+    <rect x="78" y="564" width="274" height="128" rx="16" fill="#102338" stroke="#355574"/>
+    <text x="98" y="593" class="h2">创建时合并规则</text>
+    <text x="98" y="618" class="body">模板拥有：基础设施</text>
+    <text x="98" y="641" class="body">用户拥有：agent.md / Skills</text>
+    <text x="98" y="664" class="body">智能合并：agent.json</text>
+  </g>
+
+  <g>
+    <circle cx="476" cy="224" r="19" fill="#b99cff"/><text x="476" y="230" text-anchor="middle" class="num">2</text>
+    <text x="506" y="224" class="phase">Stored Package</text>
+    <text x="468" y="254" class="path">resource/agent-packages/{name}/</text>
+    <rect x="468" y="284" width="274" height="30" rx="15" fill="#3c2e68" stroke="#826cc0"/>
+    <text x="605" y="304" text-anchor="middle" class="tag" fill="#e7ddff">STATIC SOURCE OF TRUTH</text>
+
+    <rect x="468" y="340" width="274" height="116" rx="16" fill="#292143" stroke="#5c4c85"/>
+    <text x="488" y="369" class="h2">用户业务资产</text>
+    <text x="488" y="394" class="body">agent.md</text>
+    <text x="488" y="417" class="body">harness/skills/</text>
+    <text x="488" y="440" class="body">harness/tools/（覆盖项）</text>
+
+    <rect x="468" y="474" width="274" height="94" rx="16" fill="#292143" stroke="#5c4c85"/>
+    <text x="488" y="503" class="h2">模板资产副本</text>
+    <text x="488" y="528" class="body">tasks · workflows · nodes</text>
+    <text x="488" y="551" class="body">setup · requirements · tests</text>
+
+    <rect x="468" y="586" width="274" height="106" rx="16" fill="#251d3a" stroke="#5c4c85"/>
+    <text x="488" y="615" class="h2">禁止运行态污染</text>
+    <text x="488" y="640" class="body">无 .venv / outputs / workspace</text>
+    <text x="488" y="663" class="body">可重复派生、可版本化</text>
+  </g>
+
+  <g>
+    <circle cx="866" cy="224" r="19" fill="#5eead4"/><text x="866" y="230" text-anchor="middle" class="num">3</text>
+    <text x="896" y="224" class="phase">Runtime Workspace</text>
+    <text x="858" y="254" class="path">examples/agent/{name}/</text>
+    <rect x="858" y="284" width="274" height="30" rx="15" fill="#16464a" stroke="#4aa59e"/>
+    <text x="995" y="304" text-anchor="middle" class="tag" fill="#d4fff8">MUTABLE RUNTIME INSTANCE</text>
+
+    <rect x="858" y="340" width="274" height="94" rx="16" fill="#15333d" stroke="#35666c"/>
+    <text x="878" y="369" class="h2">从 ② 增量同步</text>
+    <text x="878" y="394" class="body">资产覆盖刷新</text>
+    <text x="878" y="417" class="body">运行数据保留 · load 幂等</text>
+
+    <rect x="858" y="452" width="274" height="116" rx="16" fill="#15333d" stroke="#35666c"/>
+    <text x="878" y="481" class="h2">运行期私有数据</text>
+    <text x="878" y="506" class="body">.venv · outputs/</text>
+    <text x="878" y="529" class="body">workspace/{user}_{client}/</text>
+    <text x="878" y="552" class="body">.agentfoundry · preferences</text>
+
+    <rect x="858" y="586" width="274" height="106" rx="16" fill="#102c34" stroke="#35666c"/>
+    <text x="878" y="615" class="h2">daemon 运行语义</text>
+    <text x="878" y="640" class="body">只 load 当前目录</text>
+    <text x="878" y="663" class="body">不感知模板/固化/运行三态</text>
+  </g>
+
+  <g>
+    <circle cx="1256" cy="224" r="19" fill="#ffd166"/><text x="1256" y="230" text-anchor="middle" class="num">4</text>
+    <text x="1286" y="224" class="phase">Sandbox Projection</text>
+    <text x="1248" y="254" class="path">/home/user/workspace/...</text>
+    <rect x="1248" y="284" width="274" height="30" rx="15" fill="#4a371b" stroke="#9a7534"/>
+    <text x="1385" y="304" text-anchor="middle" class="tag" fill="#ffe7a5">EPHEMERAL EXECUTION VIEW</text>
+
+    <rect x="1248" y="340" width="274" height="130" rx="16" fill="#30291f" stroke="#66533a"/>
+    <text x="1268" y="369" class="h2">manifest includes</text>
+    <text x="1268" y="394" class="body">harness/skills/**</text>
+    <text x="1268" y="417" class="body">harness/tools/** · data/**</text>
+    <text x="1268" y="440" class="body">requirements · .env · setup</text>
+    <text x="1268" y="460" class="small">新增文件按 glob 实时进入</text>
+
+    <rect x="1248" y="488" width="274" height="104" rx="16" fill="#30291f" stroke="#66533a"/>
+    <text x="1268" y="517" class="h2">不上传</text>
+    <text x="1268" y="542" class="body">nodes · tests · .venv</text>
+    <text x="1268" y="565" class="body">outputs · workspace · caches</text>
+
+    <rect x="1248" y="610" width="274" height="82" rx="16" fill="#29251f" stroke="#66533a"/>
+    <text x="1268" y="639" class="h2">执行后端</text>
+    <text x="1268" y="664" class="body">HTTP Sandbox / e2b SDK</text>
+  </g>
+
+  <path d="M376 470 H431" class="asset"/>
+  <rect x="377" y="430" width="68" height="25" rx="12" fill="#25213c" stroke="#7761aa"/>
+  <text x="411" y="447" text-anchor="middle" class="small">merge</text>
+
+  <path d="M766 470 H821" class="flow"/>
+  <rect x="768" y="430" width="68" height="25" rx="12" fill="#153446" stroke="#4d839c"/>
+  <text x="802" y="447" text-anchor="middle" class="small">load</text>
+
+  <path d="M1156 470 H1211" class="asset"/>
+  <rect x="1153" y="430" width="76" height="25" rx="12" fill="#302946" stroke="#7761aa"/>
+  <text x="1191" y="447" text-anchor="middle" class="small">project</text>
+
+  <g>
+    <rect x="54" y="790" width="1492" height="142" rx="24" fill="#0e192a" stroke="#32425a"/>
+    <text x="82" y="820" class="tag" fill="#9db1c9">SHARED RUNTIME DISTRIBUTION</text>
+    <rect x="82" y="844" width="1436" height="62" rx="18" fill="#171d38" stroke="#594b86"/>
+    <circle cx="116" cy="875" r="17" fill="#34275f" stroke="#a78bfa"/>
+    <path d="M107 875 H125 M116 866 V884" stroke="#dacfff" stroke-width="2"/>
+    <text x="148" y="870" class="h2">Python package · agentflow-runtime</text>
+    <text x="148" y="892" class="body">Coordinator / Skill Executor / Tools / Executors / Hooks / Trace / Artifact · 机制代码唯一权威源</text>
+    <rect x="1164" y="858" width="326" height="34" rx="17" fill="#282047" stroke="#6958a3"/>
+    <text x="1327" y="880" text-anchor="middle" class="body">wrapper import / PYTHONPATH / sandbox upload</text>
+  </g>
+
+  <path d="M215 790 V754" class="asset"/>
+  <path d="M605 790 V754" class="asset"/>
+  <path d="M995 790 V754" class="asset"/>
+  <path d="M1385 790 V754" class="asset"/>
+
+  <text x="800" y="968" text-anchor="middle" class="small">静态资产向右派生；运行数据只在 Workspace 与 Sandbox 中产生，不能反向污染 Stored Package</text>
+</svg>

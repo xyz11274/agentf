@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "agent_id": "agentflow-tutorial",
+  "data_dir": "./build/evolution-no-hooks-example/data",
+  "port": 18766,
+  "max_level": "L3",
+  "principals": [
+    {"user_id": "tutorial-user-a", "token_env": "EVOLUTION_USER_A_TOKEN"}
+  ],
+  "actors": ["coordinator", "executor"],
+  "runtime_config": "../../config/standard-runtime.json",
+  "experience_template_file": "../../config/prompts/runtime-experience.txt",
+  "auto_evaluate": true,
+  "auto_approve_experiences": false,
+  "shadow_options": {
+    "max_policy_entries": 128,
+    "max_advice_items": 3,
+    "max_advice_bytes": 4096,
+    "max_query_bytes": 32768,
+    "max_memory_bytes": 16777216,
+    "max_snapshot_bytes": 262144,
+    "max_match_terms": 128,
+    "min_matched_terms": 2,
+    "stop_terms": ["任务", "用户", "工具", "执行"]
+  },
+  "runtime_options": {
+    "max_context_bytes": 4096,
+    "approved_experiences": [],
+    "request_context_pointer": "/messages",
+    "request_context_mode": "system_message",
+    "action_rules": [],
+    "loop_rules": [
+      {
+        "rule_id": "tutorial-coordinator-limit",
+        "actor_id": "coordinator",
+        "max_iterations": 12,
+        "max_no_progress": 3,
+        "no_progress_decision": "replan",
+        "max_replans": 1,
+        "replan_context": "当前任务没有新进展。检查缺失输入，改变方案，不重复相同派发。",
+        "reason": "达到 Coordinator 的授权循环限制"
+      },
+      {
+        "rule_id": "tutorial-executor-limit",
+        "actor_id": "executor",
+        "max_iterations": 12,
+        "max_no_progress": 3,
+        "no_progress_decision": "replan",
+        "max_replans": 1,
+        "replan_context": "当前分支没有新进展。检查工具前置条件，必要时说明无法完成的部分。",
+        "reason": "达到当前 Skill 的授权循环限制"
+      }
+    ]
+  }
+}

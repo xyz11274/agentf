@@ -13,6 +13,13 @@ LLM_ERROR_WITH_ARTIFACTS = "文本整理暂时失败，已生成的产物仍可�
 # Used when LLM call fails with no artifacts to show
 LLM_ERROR_NO_ARTIFACTS = "抱歉，本次模型调用失败，任务未能完成，请稍后重试。"
 
+# Used for a response containing reasoning but no complete final answer.
+LLM_FINAL_RESPONSE_RECOVERY_PROMPT = (
+    "上一轮未形成完整的最终答复。请返回面向用户的完整答复；"
+    "如需工具，请使用结构化 tool_calls，不要输出思考块或内部工具协议标记。"
+    "保留已确认的结果，不重复已完成的操作。"
+)
+
 # ---------------------------------------------------------------------------
 # Artifact-related UI templates
 # ---------------------------------------------------------------------------

@@ -219,6 +219,14 @@ class OpenAiCompatibleClient(LlmClient):
             for key, value in extra_body.items():
                 if value is not None and key not in core_keys:
                     body[key] = value
+        # Opt-in provider thinking mode; preserve existing defaults when unset.
+        thinking_mode = os.environ.get("AF_LLM_THINKING_MODE", "").strip()
+        if thinking_mode:
+            if thinking_mode not in {"enabled", "disabled", "auto"}:
+                raise ValueError("AF_LLM_THINKING_MODE must be enabled, disabled, or auto")
+            body["thinking"] = {"type": thinking_mode}
+            if thinking_mode != "auto":
+                body["enable_thinking"] = thinking_mode == "enabled"
         return body
 
     def chat_completion(

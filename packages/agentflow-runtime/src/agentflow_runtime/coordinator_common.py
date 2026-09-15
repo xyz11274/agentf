@@ -113,18 +113,18 @@ def put_e2e_response(databus, response_text: str, *, log_timing: bool = False) -
       - 不是真业务路径——真业务路径是 session_router->enqueue_response_message()。
       - 失败只 WARN 不抛——dialogue cleanup 后 DataBus 拒写已 cleanup key 是合理的。
       - WARN 留 stderr:让 skill_stderr.<pid>.log 能看到失败,但不污染真路径。
-    统一 key:v1 用 `_e2e_response`(global namespace),v2 曾用 dialogue-scoped
-    `e2e_response:{sid}:{did}`——e2e 测试读 `_e2e_response`,收敛到 v1。
+    统一 key:通过 put_global 写入 session sys namespace,不加 dialogue 前缀。
+    v2 曾用 dialogue-scoped `e2e_response:{sid}:{did}`,此处收敛到 `_e2e_response`。
     """
     if not databus.is_connected():
         return
     try:
         if log_timing:
             _t7 = time.time()
-            databus._client.raw().put("_e2e_response", response_text)
+        if not databus.put_global("_e2e_response", response_text):
+            print("[flow] WARN: e2e_response put failed", file=sys.stderr)
+        if log_timing:
             print(f"[timing] e2e_put={time.time()-_t7:.1f}s", file=sys.stderr)
-        else:
-            databus._client.raw().put("_e2e_response", response_text)
     except Exception as exc:
         print(f"[flow] WARN: e2e_response put failed: {exc}", file=sys.stderr)
 
@@ -146,6 +146,27 @@ def build_llm_extra_body() -> dict:
 
 # ── 空响应检测（v1 语义） ──
 
+def final_response_text(content) -> str:
+    """剥离思考块，保留代码引用；未闭合时没有可交付的最终正文。"""
+    if not isinstance(content, str):
+        return ""
+    # 代码块和行内代码里的标记是字面内容，不参与协议解析。
+    changed = False
+    invalid = False
+
+    def replace(match):
+        nonlocal changed, invalid
+        block = match.group()
+        if block.startswith("<think>") or block == "</think>":
+            changed = True
+            invalid |= block == "</think>" or not block.endswith("</think>")
+            return ""
+        return block
+
+    text = re.sub(r"```[\s\S]*?```|`[^`\n]*`|<think>[\s\S]*?</think>|<think>[\s\S]*$|</think>", replace, content)
+    return "" if invalid else text.lstrip() if changed else content
+
+
 def is_empty_llm_response(raw: dict) -> bool:
     """检测没有用户可见内容、也没有工具调用的 LLM 响应。"""
     if not isinstance(raw, dict):
@@ -161,7 +182,7 @@ def is_empty_llm_response(raw: dict) -> bool:
         return True
     content = msg.get("content", "")
     has_content = (
-        bool(content.strip()) if isinstance(content, str) else bool(content)
+        bool(final_response_text(content).strip()) if isinstance(content, str) else bool(content)
     )
     return not has_content and not msg.get("tool_calls")
 

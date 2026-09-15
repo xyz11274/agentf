@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "name": "agent-evaluation-starter-v1",
+  "split_seed": "agent-evaluation-v1",
+  "split_percent": [60, 20, 20],
+  "max_tasks": 1000,
+  "max_input_bytes": 8388608,
+  "max_model_calls": 8,
+  "generation_max_output_tokens": 8192,
+  "runtime_config": "standard-runtime.json",
+  "generation_prompt": "prompts/dataset-system.txt",
+  "budget": {"max_steps": 32, "max_tool_calls": 64, "timeout_ms": 1800000},
+  "sources": [{"kind": "golden", "path": "../examples/evaluation-dataset/tasks.jsonl"}]
+}

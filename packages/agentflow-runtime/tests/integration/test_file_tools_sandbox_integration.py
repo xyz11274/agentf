@@ -32,7 +32,7 @@ def _find_free_port() -> int:
 
 
 @pytest.fixture
-def sandbox_server(monkeypatch: pytest.MonkeyPatch):
+def sandbox_server(monkeypatch: pytest.MonkeyPatch, request):
     """拉起 sandbox_http_server.py，yield (endpoint, workdir)，销毁子进程。
 
     chdir(workdir)：默认无 AF_SANDBOX_MODE 时工具走 HostExecutor，
@@ -43,8 +43,10 @@ def sandbox_server(monkeypatch: pytest.MonkeyPatch):
     workdir = Path(__file__).resolve().parent / "_sandbox_workdir_test"
     workdir.mkdir(exist_ok=True)
     monkeypatch.chdir(workdir)
+    profile = getattr(request, "param", "isolated")
     proc = subprocess.Popen(
-        [sys.executable, _SERVER, "--port", str(port), "--host", "127.0.0.1"],
+        [sys.executable, _SERVER, "--port", str(port), "--host", "127.0.0.1",
+         "--security-profile", profile],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         cwd=str(workdir),
     )
@@ -52,11 +54,7 @@ def sandbox_server(monkeypatch: pytest.MonkeyPatch):
     import requests
     for _ in range(50):
         try:
-            requests.post(
-                f"{endpoint}/exec",
-                json={"tool": "bash", "tool_params": {"command": "echo ready"}, "opts": {}},
-                timeout=1,
-            )
+            requests.get(endpoint, proxies={"http": "", "https": ""}, timeout=1)
             break
         except Exception:
             if proc.poll() is not None:
@@ -181,6 +179,19 @@ def test_read_file_returns_content(sandbox_server):
     ))
     assert "content" in result, f"read_file 未返回 content 字段: {result}"
     assert "hello content for read" in result["content"], f"内容不一致: {result}"
+
+
+def test_read_file_binary_error_crosses_sandbox_boundary(sandbox_server):
+    """二进制读取错误穿过 HTTP 边界，不变成空内容成功或乱码。"""
+    endpoint, workdir = sandbox_server
+    path = Path(workdir) / "binary-read.png"
+    path.write_bytes(b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+    try:
+        result = json.loads(read_execute({"file_path": "binary-read.png"}, sandbox_endpoint=endpoint))
+        assert result.get("content", "") == ""
+        assert "Binary content detected" in result.get("error", "")
+    finally:
+        path.unlink(missing_ok=True)
 
 
 # AC-US2-002: read_file 传入 ../../../etc/passwd 沙箱侧双检拒绝含路径名
@@ -358,6 +369,7 @@ def test_artifact_download_rejects_non_artifact_paths(
 
 
 
+@pytest.mark.parametrize("sandbox_server", ["restricted-local"], indirect=True)
 def test_local_executor_scopes_user_workspace_and_static_skills(
     sandbox_server, monkeypatch, tmp_path
 ):
@@ -398,6 +410,7 @@ def test_local_executor_scopes_user_workspace_and_static_skills(
     assert skill_file.read_text(encoding="utf-8") == "static-skill"
 
 
+@pytest.mark.parametrize("sandbox_server", ["restricted-local"], indirect=True)
 def test_local_executor_list_dir_preserves_user_boundary(
     sandbox_server, monkeypatch, tmp_path
 ):

@@ -239,6 +239,9 @@ class FixedModelAdapter final : public trajectory::ModelAdapter {
           "\"observed_state_change\":\"证据显示状态已变化\","
           "\"concise_reason\":\"" + reason
         + "\",\"evidence_event_ids\":[\"" + event_id + "\"]}";
+    if(fenced) response.body = "```json\r\n" + response.body + "\r\n```";
+    if(compact) response.body = "{\"verdict\":\"" + verdict + "\",\"confidence\":0.81,\"concise_reason\":\""
+        + reason + "\",\"evidence_event_ids\":[\"" + event_id + "\"]}";
     return response;
   }
 
@@ -251,6 +254,8 @@ class FixedModelAdapter final : public trajectory::ModelAdapter {
   }
 
   int calls = 0;
+  bool fenced = false;
+  bool compact = false;
 
  private:
   Mode mode_;
@@ -427,6 +432,30 @@ void test_model_can_resolve_uncertain_business_failure() {
   expect(
       coordinator.decision_source() == ep::DECISION_SOURCE_MODEL,
       "unassessed rule plus model should use model source");
+}
+
+void test_fenced_model_response_preserves_validation() {
+  trajectory::EvaluatorOptions options;
+  options.model_selection = trajectory::ModelSelection::all;
+  for(const auto mode : {FixedModelAdapter::Mode::valid_useful,
+                        FixedModelAdapter::Mode::unknown_evidence,
+                        FixedModelAdapter::Mode::credential}) {
+    auto adapter = std::make_shared<FixedModelAdapter>(mode);
+    adapter->fenced = true;
+    const auto output = evaluate("fenced-response", options, adapter);
+    expect(adapter->calls > 0, "fenced response was not evaluated");
+    expect(output.report.model_failed_count()
+        == (mode == FixedModelAdapter::Mode::valid_useful ? 0 : adapter->calls),
+        "JSON envelope changed evidence or privacy validation");
+  }
+  auto compact = std::make_shared<FixedModelAdapter>(FixedModelAdapter::Mode::valid_useful);
+  compact->compact = true;
+  const auto output = evaluate("compact-response", options, compact);
+  expect(output.report.model_failed_count() == 0 && output.report.model_succeeded_count() == 3,
+      "compact episode response was rejected");
+  for(const auto& item : output.report.assessments())
+    expect(item.model().expected_state_change().empty() && item.model().observed_state_change().empty(),
+        "compact response fabricated a state description");
 }
 
 void test_invalid_model_evidence_degrades_without_corrupting_rules() {
@@ -660,6 +689,7 @@ int main() {
     test_conflicting_shared_evaluation_is_rejected();
     test_hard_rule_cannot_be_overridden();
     test_model_can_resolve_uncertain_business_failure();
+    test_fenced_model_response_preserves_validation();
     test_invalid_model_evidence_degrades_without_corrupting_rules();
     test_credential_like_model_output_is_rejected();
     test_strict_model_failure_throws();

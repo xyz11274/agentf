@@ -202,16 +202,24 @@ def _exec_tool(tool_name: str, tool_params: dict, opts: dict) -> dict:
 
     # -- 安全前检（前置层，不等委托） --
     if tool_name == "bash":
-        if _restricted_local():
-            return _exec_result(
-                1,
-                stderr="security_policy_blocked: bash is disabled in restricted-local mode",
-            )
         command = tool_params.get("command", "")
         if not command:
             return _exec_result(1, stderr="command must not be empty")
         if is_dangerous(command):
             return _exec_result(1, stderr=f"Dangerous command rejected: {command}")
+        if _restricted_local():
+            from agentflow_runtime.security.local_command import run_local_command
+
+            # 宿主模式仅在独立受限子进程执行，不经过 HostExecutor 或 unsafe opt-in。
+            started = time.monotonic()
+            result = run_local_command(command, workdir, opts.get("timeout_ms", 30000) / 1000)
+            stdout, out_truncated = _truncate(result["stdout"], output_max_bytes)
+            stderr, err_truncated = _truncate(result["stderr"], output_max_bytes)
+            return _exec_result(
+                result["exit_code"], stdout, stderr,
+                result["truncated"] or out_truncated or err_truncated,
+                int((time.monotonic() - started) * 1000),
+            )
 
     elif tool_name in ("read_file", "write_file", "edit_file", "list_dir"):
         old_path = tool_params.get("path", "")
@@ -431,6 +439,16 @@ class SandboxHttpHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """处理 POST 请求。"""
+        if _restricted_local():
+            from agentflow_runtime.security.local_sandbox_auth import HEADER
+
+            auth = getattr(self.server, "local_auth", None)
+            if auth is None or not auth.accepts(self.headers.get(HEADER, "")):
+                self._send_json(401, {"error": {
+                    "code": "LOCAL_SANDBOX_AUTH_REQUIRED",
+                    "message": "Local sandbox authentication required",
+                }})
+                return
         if _restricted_local() and self.path.startswith("/pty/"):
             self._send_json(403, {"error": {
                 "code": "SECURITY_POLICY_BLOCKED",
@@ -946,8 +964,6 @@ def main():
         threading.Thread(target=_parent_monitor, args=(args.parent_pid,), daemon=True).start()
 
     server = ThreadingHTTPServer((args.host, args.port), SandboxHttpHandler)
-    logging.info("sandbox_http_server listening on 0.0.0.0:%d (parent=%d)",
-                 args.port, args.parent_pid)
 
     def shutdown(signum, frame):
         logging.info("Received signal %d, shutting down", signum)
@@ -956,10 +972,22 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
 
+    local_auth = None
     try:
+        if _restricted_local():
+            from agentflow_runtime.security.local_sandbox_auth import LocalSandboxAuth
+
+            local_auth = LocalSandboxAuth(server.server_port)
+            server.local_auth = local_auth
+        logging.info("sandbox_http_server listening on %s:%d (parent=%d)",
+                     args.host, server.server_port, args.parent_pid)
         server.serve_forever()
     except KeyboardInterrupt:
         server.shutdown()
+    finally:
+        server.server_close()
+        if local_auth is not None:
+            local_auth.close()
 
 
 if __name__ == "__main__":

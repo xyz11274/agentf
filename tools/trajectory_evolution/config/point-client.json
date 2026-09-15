@@ -1,0 +1,6 @@
+{
+  "url": "http://127.0.0.1:8766",
+  "point_timeout_ms": 20,
+  "principals": [{"user_id": "user-a", "token_env": "EVOLUTION_USER_A_TOKEN"}],
+  "privacy": {"public_env_names": []}
+}

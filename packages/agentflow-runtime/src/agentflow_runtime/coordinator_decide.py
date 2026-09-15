@@ -50,6 +50,8 @@ from agentflow_runtime.common.runtime_context import (
     dialogue_id as _dialogue_id,
     input as _input,
     session_id as _session_id,
+    user_id as _user_id,
+    client_id as _client_id,
     skill_artifacts as _skill_artifacts,
     skill_result as _skill_result,
     skill_success as _skill_success,
@@ -63,6 +65,7 @@ from agentflow_runtime.trace import emit_span, SpanKind, SpanStatus
 from agentflow_runtime.security import install_stderr_redaction
 from agentflow_runtime.parse_af_input import parse_af_input, parse_stream
 from prompts import (
+    LLM_FINAL_RESPONSE_RECOVERY_PROMPT,
     COORDINATOR_FALLBACK_SYSTEM,
     DECISION_FAILURE_PROMPT,
     DECISION_PARTIAL_SUCCESS_PROMPT,
@@ -72,12 +75,19 @@ from prompts import (
     SKILL_COMPLETION_TEMPLATE,
 )
 from agentflow_runtime.round_reminder import build_round_reminder
+
+try:
+    from evolution_configured import points as _evolution
+except ImportError:
+    _evolution = None
+
 # 霰弹式收敛(2026-08-14):产物处理/parse_agent_md/e2e_response/llm_error 兜底等
 # 与 v2(coordinator_agent_loop.py)共享的纯逻辑统一收口到 coordinator_common,
 # 本模块不再各自维护重复实现(单一真相源 F4)。
 from agentflow_runtime.coordinator_common import (
     append_artifacts_markdown,
     bind_package_paths,
+    final_response_text,
     is_empty_llm_response,
     llm_error_response,
     parse_agent_md,
@@ -504,11 +514,27 @@ def handle_run_skills_call(args: Any, databus: DataBusClient,
         }, ensure_ascii=False)
 
     # ③ Write next_skills → framework takes over scheduling
+    if _evolution is not None:
+        for _, spec, dispatch_key in accepted_specs:
+            _evolution.point({
+                "phase": "before", "kind": "custom", "name": "skill",
+                "ref": {"run": dialogue_id, "key": dispatch_key},
+                "actor_id": spec["name"],
+                "input": {"skill_name": spec["name"], "prompt": spec.get("prompt", ""),
+                          "load_skills": spec.get("load_skills", [])},
+            }, user_id=_user_id())
     next_skills_written = databus.put(
         "next_skills",
         json.dumps(next_skills_specs, ensure_ascii=False),
     )
     if not next_skills_written:
+        if _evolution is not None:
+            for _, _, dispatch_key in accepted_specs:
+                _evolution.point({
+                    "phase": "after", "kind": "custom",
+                    "ref": {"run": dialogue_id, "key": dispatch_key},
+                    "status": "failed", "output": {"error": "next_skills_write_failed"},
+                }, user_id=_user_id())
         rejected.extend({
             "name": spec["name"],
             "request_index": request_index,
@@ -927,6 +953,11 @@ def execute():
         if _dialogue_end_emitted:
             return
         _dialogue_end_emitted = True
+        if _evolution is not None:
+            _evolution.point({
+                "phase": "after", "kind": "run", "ref": {"run": dialogue_id},
+                "output": {"status": status, "response": response_text},
+            }, user_id=_user_id())
         end_ctx = ctx or AgentContext()
         try:
             hook_trigger(hook_mounts.AGENT_DIALOGUE_END, {
@@ -978,6 +1009,11 @@ def execute():
     # Dialogue start is emitted once; every event-driven re-entry is a separate
     # Coordinator activation and uses the existing coordinator.trigger event.
     if not is_completion_trigger:
+        if _evolution is not None:
+            _evolution.point({
+                "phase": "before", "kind": "run", "ref": {"run": dialogue_id},
+                "conversation_id": _client_id() or dialogue_id, "input": raw_input,
+            }, user_id=_user_id())
         hook_trigger(
             hook_mounts.AGENT_DIALOGUE_START,
             dict(activation_payload),
@@ -1271,6 +1307,7 @@ def execute():
     # tool result 返回给模型(与 skill_executor 同模式),让模型重新决策;
     # 直到模型直接输出 final response / 成功 dispatch skill / 达到轮次上限。
     _tool_loop_round = 0
+    _final_response_recovered = False
     while True:
         _tool_loop_round += 1
         # ── 工具循环轮次上限保护 ──
@@ -1294,6 +1331,18 @@ def execute():
         _decision_index += 1
         if databus.is_connected():
             databus.put("_coordinator_decision_index", str(_decision_index))
+        if _evolution is not None and not _evolution.allow_loop({
+            "ref": {"run": dialogue_id, "key": f"coordinator-loop:{_decision_index}"},
+            "loop_id": "coordinator", "actor_id": "coordinator",
+            "state": messages[-1] if messages else {},
+        }, user_id=_user_id()):
+            response_text = append_artifacts_markdown(
+                "循环控制已停止重复协调，基于已有结果输出。", completed_skill_artifacts,
+            )
+            _emit_dialogue_end_once("loop_control_stop", response_text)
+            print(json.dumps({"response": response_text, "status": "loop_control_stop"}, ensure_ascii=False))
+            put_e2e_response(databus, response_text)
+            return
         _trace_indices = {
             "activation_index": current_round,
             "decision_index": _decision_index,
@@ -1466,6 +1515,21 @@ def execute():
         # 复用 coordinator_common.is_empty_llm_response(单一真相源 F4,霰弹式收敛)
         _is_empty_response = is_empty_llm_response(raw)
         if _is_empty_response:
+            # 供应商可能以 finish=stop 返回未闭合的思考块。原文已落轨迹，
+            # 不回灌残缺内容；只借用现有循环恢复一次，不扩展总轮次预算。
+            if (isinstance(_obs_content, str) and _obs_content.strip()
+                    and not _final_response_recovered and _tool_loop_round < max_iterations):
+                _final_response_recovered = True
+                messages.append({"role": "user", "content": LLM_FINAL_RESPONSE_RECOVERY_PROMPT})
+                retry_payload = {
+                    "round": current_round, "tool_loop_round": _tool_loop_round,
+                    "action": "retry", "reason": "incomplete_final_response",
+                    "tool_calls": [], "elapsed_s": round(time.time() - _t0, 1),
+                }
+                emit_event(hook_events.COORDINATOR_TOOL_LOOP_RETRY, dict(retry_payload), level="WARN")
+                hook_trigger(hook_events.COORDINATOR_TOOL_LOOP_RETRY, dict(retry_payload),
+                             ctx=AgentContext(messages=messages))
+                continue
             err_msg = "LLM returned empty response (no content and no tool calls)"
             emit_event(hook_events.COORDINATOR_LLM_ERROR, {
                 "round": current_round,
@@ -1488,14 +1552,7 @@ def execute():
 
         if not tool_calls:
             # LLM made no tool_call → final response
-            raw_response = msg.get("content", "")
-            # Strip <think> tags: keep reasoning in trace, only show user-facing content
-            import re as _re
-            think_match = _re.search(r"</think>\s*", raw_response)
-            if think_match:
-                response_text = raw_response[think_match.end():].strip()
-            else:
-                response_text = raw_response
+            response_text = final_response_text(msg.get("content", ""))
             response_text = append_artifacts_markdown(
                 response_text, completed_skill_artifacts
             )
@@ -1575,7 +1632,7 @@ def execute():
             if run_skills_call_count > 1
             else ""
         )
-        for tc in tool_calls:
+        for tool_index, tc in enumerate(tool_calls):
             func = tc.get("function", {})
             name = func.get("name", "")
             arguments_error = ""
@@ -1697,6 +1754,16 @@ def execute():
                 }, ctx=_dispatch_ctx)
             else:
                 result_str = json.dumps({"error": f"Unknown tool: {name}"})
+
+            if _evolution is not None:
+                _evolution.point({
+                    "phase": "event", "kind": "custom", "name": "tool.result",
+                    "ref": {"run": dialogue_id,
+                            "key": f"coordinator-tool:{_decision_index}:{tool_index}"},
+                    "input": {"name": name, "tool_call_id": tc.get("id", ""),
+                              "arguments": func.get("arguments", "{}"),
+                              "output": result_str},
+                }, user_id=_user_id())
 
             messages.append({
                 "role": "tool",

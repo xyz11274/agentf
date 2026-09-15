@@ -1,0 +1,185 @@
+{
+  "schema_version": 1,
+  "trace_kind": "trajectory.v1",
+  "identity": {
+    "run_id": "invoice-run-2",
+    "agent_id": "invoice-agent",
+    "user_id": "demo-user",
+    "conversation_id": "invoice-demo"
+  },
+  "events": [
+    {
+      "event_id": "begin",
+      "kind": "run.start",
+      "producer_id": "root",
+      "sequence": "1",
+      "actor_id": "assistant",
+      "input": "请根据订单状态查询发票；如果权限不足，说明原因。"
+    },
+    {
+      "event_id": "s1",
+      "kind": "step.start",
+      "producer_id": "worker",
+      "actor_id": "assistant",
+      "execution_id": "invoice-exec",
+      "step_id": "step-1",
+      "loop_id": "invoice-loop",
+      "iteration": "1",
+      "sequence": "1",
+      "input": "查询发票"
+    },
+    {
+      "event_id": "a1",
+      "kind": "action.start",
+      "producer_id": "worker",
+      "actor_id": "assistant",
+      "execution_id": "invoice-exec",
+      "step_id": "step-1",
+      "loop_id": "invoice-loop",
+      "iteration": "1",
+      "sequence": "2",
+      "action_id": "call-1",
+      "operation": "fetch_invoice",
+      "input": {
+        "order_id": "order-demo"
+      }
+    },
+    {
+      "event_id": "b1",
+      "kind": "action.end",
+      "producer_id": "worker",
+      "actor_id": "assistant",
+      "execution_id": "invoice-exec",
+      "step_id": "step-1",
+      "loop_id": "invoice-loop",
+      "iteration": "1",
+      "sequence": "3",
+      "action_id": "call-1",
+      "status": "failed",
+      "output": "调用方没有发票读取权限",
+      "error": {
+        "code": "permission_denied",
+        "message": "需要授权后重试",
+        "retryability": "non_retryable"
+      }
+    },
+    {
+      "event_id": "e1",
+      "kind": "step.end",
+      "producer_id": "worker",
+      "actor_id": "assistant",
+      "execution_id": "invoice-exec",
+      "step_id": "step-1",
+      "loop_id": "invoice-loop",
+      "iteration": "1",
+      "sequence": "4",
+      "status": "failed",
+      "output": "无法读取发票"
+    },
+    {
+      "event_id": "l1",
+      "kind": "loop.decision",
+      "producer_id": "worker",
+      "actor_id": "assistant",
+      "execution_id": "invoice-exec",
+      "step_id": "step-1",
+      "loop_id": "invoice-loop",
+      "iteration": "1",
+      "sequence": "5",
+      "decision": "continue",
+      "reason": "原样再试一次",
+      "state_before": "permission_missing",
+      "state_after": "permission_missing"
+    },
+    {
+      "event_id": "s2",
+      "kind": "step.start",
+      "producer_id": "worker",
+      "actor_id": "assistant",
+      "execution_id": "invoice-exec",
+      "step_id": "step-2",
+      "loop_id": "invoice-loop",
+      "iteration": "2",
+      "sequence": "6",
+      "input": "查询发票"
+    },
+    {
+      "event_id": "a2",
+      "kind": "action.start",
+      "producer_id": "worker",
+      "actor_id": "assistant",
+      "execution_id": "invoice-exec",
+      "step_id": "step-2",
+      "loop_id": "invoice-loop",
+      "iteration": "2",
+      "sequence": "7",
+      "action_id": "call-2",
+      "operation": "fetch_invoice",
+      "input": {
+        "order_id": "order-demo"
+      }
+    },
+    {
+      "event_id": "b2",
+      "kind": "action.end",
+      "producer_id": "worker",
+      "actor_id": "assistant",
+      "execution_id": "invoice-exec",
+      "step_id": "step-2",
+      "loop_id": "invoice-loop",
+      "iteration": "2",
+      "sequence": "8",
+      "action_id": "call-2",
+      "status": "failed",
+      "output": "调用方没有发票读取权限",
+      "error": {
+        "code": "permission_denied",
+        "message": "需要授权后重试",
+        "retryability": "non_retryable"
+      }
+    },
+    {
+      "event_id": "e2",
+      "kind": "step.end",
+      "producer_id": "worker",
+      "actor_id": "assistant",
+      "execution_id": "invoice-exec",
+      "step_id": "step-2",
+      "loop_id": "invoice-loop",
+      "iteration": "2",
+      "sequence": "9",
+      "status": "failed",
+      "output": "无法读取发票"
+    },
+    {
+      "event_id": "l2",
+      "kind": "loop.decision",
+      "producer_id": "worker",
+      "actor_id": "assistant",
+      "execution_id": "invoice-exec",
+      "step_id": "step-2",
+      "loop_id": "invoice-loop",
+      "iteration": "2",
+      "sequence": "10",
+      "decision": "stop",
+      "reason": "权限不足，停止操作",
+      "state_before": "permission_missing",
+      "state_after": "permission_missing"
+    },
+    {
+      "event_id": "end",
+      "kind": "run.end",
+      "producer_id": "root",
+      "sequence": "2",
+      "actor_id": "assistant",
+      "output": "发票未取得，请先授权。",
+      "outcome": {
+        "execution_status": "completed",
+        "business_status": "failed"
+      }
+    }
+  ],
+  "attributes": {
+    "scenario": "独立组件示例：不可重试错误后的重复操作"
+  }
+}

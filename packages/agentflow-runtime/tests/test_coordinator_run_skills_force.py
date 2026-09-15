@@ -113,6 +113,64 @@ def test_empty_llm_response_does_not_depend_on_zero_usage(raw):
     assert cd.is_empty_llm_response(raw) is True
 
 
+@pytest.mark.parametrize("recovers,max_rounds", [(True, 3), (False, 3), (False, 1)])
+def test_incomplete_final_answer_is_recovered_once_or_failed(monkeypatch, recovers, max_rounds):
+    from agentflow_runtime import coordinator_decide as cd
+
+    fake_bus, recorder, config = _FakeDataBus(), MagicMock(), MagicMock()
+    recorder.is_connected = False
+    config.coordinator_max_iterations.return_value = max_rounds
+    config.max_completion_tokens.return_value = 4000
+    config.node_timeout_sec.return_value = 3600
+    config.llm_top_k.return_value = 0
+    config.llm_stop.return_value = None
+    config.llm_temperature.return_value = 0.7
+    config.llm_top_p.return_value = 1.0
+    config.llm_frequency_penalty.return_value = 0
+    config.llm_presence_penalty.return_value = 0
+    raw = "<think>first</think>\n<think>unfinished\n</｜DSML｜tool_calls>"
+    responses = [raw, "<think>one</think><think>two</think>完整答复" if recovers else raw]
+    calls, events = [], []
+
+    def call(messages, **kwargs):
+        calls.append(json.loads(json.dumps(messages)))
+        return {"choices": [{"finish_reason": "stop", "message": {
+            "role": "assistant", "content": responses[len(calls)-1],
+        }}], "usage": {"prompt_tokens": 2, "completion_tokens": 2}}
+
+    def hook(name, payload, **kwargs):
+        events.append((name, payload))
+        return payload
+
+    for name, replacement in {
+        "DataBusClient": lambda: fake_bus, "AgentConfig": config, "get_recorder": lambda: recorder,
+        "_load_dotenv": lambda: None, "_init_skills": lambda: None, "_AVAILABLE_SKILLS": ["skill-a"],
+        "bind_package_paths": lambda *args: None, "parse_agent_md": lambda _path: ({}, ""),
+        "resolve_llm_config": lambda *args, **kwargs: {"model":"test", "api_key":"test-key", "base_url":"http://unused.invalid"},
+        "load_hooks_from_dir": lambda _path: None, "hook_trigger": hook, "emit_event": lambda *a, **k: None,
+        "put_e2e_response": lambda *a, **k: None, "call_llm": call, "_evolution": None,
+        "compress_messages": lambda m, *a, **k: (m, "skip"), "build_round_reminder": lambda *a, **k: None,
+    }.items():
+        monkeypatch.setattr(cd, name, replacement)
+    monkeypatch.setenv("AF_INPUT", "完成任务")
+    monkeypatch.setenv("AF_DIALOGUE_ID", "incomplete-final")
+    monkeypatch.setenv("AF_SESSION_ID", "incomplete-final")
+    monkeypatch.delenv("AF_COMPLETED_SKILL_NAME", raising=False)
+    monkeypatch.delenv("AF_COMPLETED_BATCH_KEY", raising=False)
+    cd.execute()
+    assert len(calls) == min(2, max_rounds)
+    if len(calls) == 2:
+        assert calls[1][-1]["content"] == cd.LLM_FINAL_RESPONSE_RECOVERY_PROMPT
+        assert raw not in json.dumps(calls[1])
+    endings = [p for n,p in events if n == cd.hook_mounts.AGENT_DIALOGUE_END]
+    assert len(endings) == 1
+    assert endings[0]["status"] == ("normal" if recovers else "llm_error")
+    assert "<think>" not in endings[0]["response_text"]
+    assert "DSML" not in endings[0]["response_text"]
+    if recovers:
+        assert endings[0]["response_text"] == "完整答复"
+
+
 # ════════════════════════════════════════════════════════════════════
 # ① 默认 run_skills 不应硬编码 force=true（根因 bug 复现）
 # ════════════════════════════════════════════════════════════════════
@@ -675,8 +733,12 @@ def test_completed_batch_is_consumed_before_max_iterations_return(monkeypatch):
     assert "elapsed_s" in dialogue_end_payloads[0]
 
 
-def test_dispatch_failure_reaches_after_dispatch_hook(monkeypatch):
-    """manifest 全部失败时仍应触发分发后 Hook，供 sessionlog 结构化落盘。"""
+@pytest.mark.parametrize(("skills", "status", "stage"), [
+    ([{"name": "skill-a", "prompt": "A"}], "dispatch_failed", "manifest_write"),
+    ([], "invalid_arguments", "argument_validation"),
+])
+def test_dispatch_failure_reaches_after_dispatch_hook(monkeypatch, skills, status, stage):
+    """分发失败同时进入 Hook 和本轮结果打点，不能等下一轮输入才记录。"""
     from agentflow_runtime import coordinator_decide as cd
 
     fake_bus = _FakeDataBus(
@@ -687,6 +749,17 @@ def test_dispatch_failure_reaches_after_dispatch_hook(monkeypatch):
     dispatch_payloads = []
     lifecycle_events = []
     retry_payloads = []
+    point_events = []
+    execution_order = []
+
+    def capture_point(fields, **kwargs):
+        if fields.get("name") == "tool.result":
+            point_events.append(fields)
+            execution_order.append("tool.result")
+
+    evolution = MagicMock()
+    evolution.allow_loop.return_value = True
+    evolution.point.side_effect = capture_point
 
     def capture_hook(event_name, payload, **kwargs):
         if event_name in {
@@ -712,7 +785,7 @@ def test_dispatch_failure_reaches_after_dispatch_hook(monkeypatch):
                         "function": {
                             "name": "run_skills",
                             "arguments": json.dumps({
-                                "skills": [{"name": "skill-a", "prompt": "A"}],
+                                "skills": skills,
                                 "reason": "trace failure",
                             }),
                         },
@@ -764,7 +837,12 @@ def test_dispatch_failure_reaches_after_dispatch_hook(monkeypatch):
     monkeypatch.setattr(cd, "emit_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(cd, "put_e2e_response", lambda *args, **kwargs: None)
     monkeypatch.setattr(cd, "get_recorder", lambda: recorder)
-    monkeypatch.setattr(cd, "call_llm", lambda *args, **kwargs: next(llm_responses))
+    def next_llm_response(*args, **kwargs):
+        execution_order.append("model")
+        return next(llm_responses)
+
+    monkeypatch.setattr(cd, "call_llm", next_llm_response)
+    monkeypatch.setattr(cd, "_evolution", evolution)
     monkeypatch.setattr(cd, "compress_messages", lambda messages, *args, **kwargs: (messages, "skip"))
     monkeypatch.setattr(cd, "build_round_reminder", lambda *args, **kwargs: None)
     monkeypatch.setenv("AF_INPUT", "请执行 skill-a")
@@ -780,16 +858,27 @@ def test_dispatch_failure_reaches_after_dispatch_hook(monkeypatch):
         cd.hook_events.COORDINATOR_TRIGGER,
     ]
     assert len(dispatch_payloads) == 1
-    assert dispatch_payloads[0]["status"] == "dispatch_failed"
-    assert dispatch_payloads[0]["requested_skill_names"] == ["skill-a"]
+    assert dispatch_payloads[0]["status"] == status
+    assert dispatch_payloads[0]["requested_skill_names"] == [skill["name"] for skill in skills]
     assert dispatch_payloads[0]["skill_names"] == []
-    assert dispatch_payloads[0]["rejected"][0]["stage"] == "manifest_write"
+    assert dispatch_payloads[0]["rejected"][0]["stage"] == stage
     assert len(retry_payloads) == 1
     assert retry_payloads[0]["action"] == "retry"
     assert retry_payloads[0]["reason"] == "no_skill_dispatched"
     assert retry_payloads[0]["round"] == 1
     assert retry_payloads[0]["tool_loop_round"] == 1
     assert retry_payloads[0]["tool_calls"][0]["function"]["name"] == "run_skills"
+    assert execution_order == ["model", "tool.result", "model"]
+    assert len(point_events) == 1
+    point = point_events[0]
+    assert point["phase"] == "event"
+    assert point["kind"] == "custom"
+    assert point["ref"] == {"run": "dlg-trace", "key": "coordinator-tool:1:0"}
+    assert point["input"]["tool_call_id"] == "call-dispatch"
+    assert point["input"]["name"] == "run_skills"
+    assert json.loads(point["input"]["arguments"])["skills"] == skills
+    assert json.loads(point["input"]["output"])["status"] == status
+    assert evolution.allow_loop.call_args_list[0].args[0]["actor_id"] == "coordinator"
 
 @pytest.mark.parametrize(
     ("args", "error_fragment"),
@@ -820,6 +909,19 @@ def test_invalid_run_skills_arguments_do_not_write_databus(args, error_fragment)
     assert result["rejected"][0]["stage"] == "argument_validation"
     assert fake_bus.sys_puts == {}
     assert fake_bus.global_puts == {}
+
+
+def test_run_skills_schema_matches_nonempty_dispatch_validation():
+    """发给模型的列表约束应与执行侧的非空校验一致。"""
+    from agentflow_runtime import coordinator_decide as cd
+    from agentflow_runtime.prompts.coordinator import RUN_SKILLS_TOOL_DEFINITION
+
+    schema = RUN_SKILLS_TOOL_DEFINITION["function"]["parameters"]["properties"]["skills"]
+    assert schema["minItems"] == 1
+    assert cd._validate_run_skills_args({"skills": []}, ["outfit-stylist"])
+    assert cd._validate_run_skills_args({
+        "skills": [{"name": "outfit-stylist", "prompt": "推荐穿搭"}],
+    }, ["outfit-stylist"]) == ""
 
 
 def test_run_skills_validator_enforces_available_skill_names():

@@ -1,4 +1,7 @@
 #include "agentflow/trajectory/hybrid_evaluator.h"
+#include "model_input.h"
+#include "trajectory_evolution/trace.h"
+#include "model_json.h"
 
 #include <algorithm>
 #include <array>
@@ -506,10 +509,10 @@ ModelValidation validate_model_response(
     return output;
   }
 
+  const auto body = unwrap_model_json(response.body);
   rapidjson::Document document;
-  document.Parse<rapidjson::kParseValidateEncodingFlag>(
-      response.body.data(), response.body.size());
-  if(document.HasParseError() || !document.IsObject()) {
+  document.Parse<rapidjson::kParseValidateEncodingFlag | rapidjson::kParseIterativeFlag>(body.data(), body.size());
+  if(document.HasParseError() || !unique_object_fields(document)) {
     output.error_code = "invalid_json";
     return output;
   }
@@ -537,12 +540,12 @@ ModelValidation validate_model_response(
   }
   output.confidence = confidence->GetDouble();
   try {
-    output.expected_state_change = member_string(
+    if(document.HasMember("expected_state_change")) output.expected_state_change = member_string(
         document,
         "expected_state_change",
         "model_response",
         kMaxModelStateBytes);
-    output.observed_state_change = member_string(
+    if(document.HasMember("observed_state_change")) output.observed_state_change = member_string(
         document,
         "observed_state_change",
         "model_response",
@@ -563,9 +566,9 @@ ModelValidation validate_model_response(
     return output;
   }
 
-  if(output.expected_state_change.empty()
-     || output.observed_state_change.empty()
-     || output.concise_reason.empty()) {
+  if(output.concise_reason.empty()
+     || (document.HasMember("expected_state_change") && output.expected_state_change.empty())
+     || (document.HasMember("observed_state_change") && output.observed_state_change.empty())) {
     output.error_code = "missing_text_field";
     return output;
   }
@@ -704,18 +707,22 @@ bool should_select_model(
       || packet.terminal_status() == "max_rounds_reached";
 }
 
-ModelRequest make_model_request(const ep::EpisodeEvidencePacket& packet) {
+ModelRequest make_model_request(
+    const ep::EpisodeEvidencePacket& packet,
+    const PromptTemplates& prompts) {
   ModelRequest request;
   request.packet_id = packet.packet_id();
-  request.system_prompt = HybridTrajectoryEvaluator::system_prompt();
+  request.system_prompt = prompts.episode_system;
   request.allowed_event_ids = allowed_event_ids(packet);
-  request.user_prompt =
-      "请评估以下单个循环步骤。只能依据证据包，不得推测未记录内容。\n"
-      "证据包（结构化且已去敏）：\n"
-      + protobuf_json(packet, false)
-      + "\n请只返回一个 JSON 对象，字段为：verdict、confidence、"
-        "expected_state_change、observed_state_change、concise_reason、"
-        "evidence_event_ids。";
+  rapidjson::Document evidence;
+  const auto raw = protobuf_json(packet, false);
+  evidence.Parse(raw.data(), raw.size());
+  model_input::analysis_view(evidence);
+  request.user_prompt = render_prompt_template(
+      "episode_user",
+      prompts.episode_user,
+      {{"evidence_json", model_input::bytes(evidence)}},
+      std::numeric_limits<std::size_t>::max());
   return request;
 }
 
@@ -955,10 +962,20 @@ HybridTrajectoryEvaluator::HybridTrajectoryEvaluator(
   if(options_.max_file_bytes == 0 || options_.max_model_calls > kMaxEpisodes) {
     throw EvaluationError("invalid evaluator resource limits");
   }
+  if(options_.model_selection != ModelSelection::none
+     && options_.prompts == nullptr) {
+    options_.prompts = load_default_prompt_templates();
+  }
 }
 
 EvaluationOutput HybridTrajectoryEvaluator::evaluate_file(
     const std::filesystem::path& path) const {
+  if(::trajectory::evolution::is_trace_path(path)) {
+    ::trajectory::evolution::TraceLimits limits;
+    limits.max_bytes = options_.max_file_bytes;
+    return evaluate_trace_json(::trajectory::evolution::to_json(
+        ::trajectory::evolution::read_trace(path, limits), false));
+  }
   const std::string input = read_bounded_file(path, options_.max_file_bytes);
   return evaluate_json(input);
 }
@@ -1204,7 +1221,11 @@ EvaluationOutput HybridTrajectoryEvaluator::evaluate_json(
     const bool selected = should_select_model(
         options_.model_selection, assessment->evidence(), assessment->rule());
     if(selected) {
-      ModelRequest request = make_model_request(assessment->evidence());
+      if(options_.prompts == nullptr) {
+        throw EvaluationError("model evaluation requires prompt templates");
+      }
+      ModelRequest request = make_model_request(
+          assessment->evidence(), *options_.prompts);
       const bool request_too_large =
           request.system_prompt.size() > kMaxModelRequestBytes
           || request.user_prompt.size()
@@ -1355,15 +1376,7 @@ void HybridTrajectoryEvaluator::write_model_requests_jsonl(
 }
 
 std::string HybridTrajectoryEvaluator::system_prompt() {
-  return
-      "你是 AgentFlow 轨迹评测器。"
-      "判断一个循环步骤在当时是否产生必要进展。"
-      "确定性规则已经独立运行，你只补充任务语义，不得修改证据。"
-      "只能引用证据包内的 event_id；不得编造事实，"
-      "不得输出密钥、Token、原始 Prompt、"
-      "Tool 参数或 Tool 结果。verdict 只能是 useful、invalid、necessary_retry、"
-      "premature_stop、uncertain。concise_reason 必须使用简体中文。"
-      "输出必须是单个 JSON 对象，不要 Markdown，不要额外文字。";
+  return load_default_prompt_templates()->episode_system;
 }
 
 std::string to_string(ModelSelection selection) {

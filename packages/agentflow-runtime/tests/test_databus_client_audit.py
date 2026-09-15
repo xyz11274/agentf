@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import pytest
+
 from agentflow_runtime.databus_client import DataBusClient
 
 
@@ -70,3 +72,26 @@ def test_response_push_disconnected_skips_audit(capsys) -> None:
     assert ok is False
     err = capsys.readouterr().err
     assert "[audit] databus.response_push" not in err, f"未推送不应有审计日志, stderr: {err}"
+
+
+@pytest.mark.parametrize("log_timing", [False, True])
+@pytest.mark.parametrize("state", ["connected", "failed", "disconnected"])
+def test_e2e_response_uses_session_namespace_and_remains_best_effort(capsys, log_timing, state):
+    """旁路写入保留 session 上下文，失败或未连接不能影响业务返回。"""
+    from agentflow_runtime.coordinator_common import put_e2e_response
+
+    client = MagicMock()
+    if state == "failed":
+        client.sys.return_value.put.side_effect = RuntimeError("uds broken")
+    bus = _make_bus(None if state == "disconnected" else client)
+
+    assert put_e2e_response(bus, "done", log_timing=log_timing) is None
+
+    client.raw.assert_not_called()
+    if state == "disconnected":
+        client.sys.assert_not_called()
+    else:
+        client.sys.return_value.put.assert_called_once_with("_e2e_response", "done")
+    err = capsys.readouterr().err
+    assert ("e2e_response put failed" in err) == (state == "failed")
+    assert ("[timing] e2e_put=" in err) == (log_timing and state != "disconnected")

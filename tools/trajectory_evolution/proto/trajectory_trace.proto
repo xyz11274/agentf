@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package trajectory.evolution.v1;
+
+import "google/protobuf/struct.proto";
+
+// Levels describe this component's contract, not a claim of policy effectiveness.
+enum Level {
+  LEVEL_NONE = 0;
+  L0 = 1;
+  L1 = 2;
+  L2 = 3;
+  L3 = 4;
+  L4 = 5;
+}
+
+enum CheckStatus {
+  NOT_VERIFIED = 0;
+  PASS = 1;
+  FAIL = 2;
+  NOT_APPLICABLE = 3;
+}
+
+message Identity {
+  string run_id = 1;
+  string agent_id = 2;
+  string user_id = 3;
+  string conversation_id = 4;
+}
+
+message RunOutcome {
+  // completed | failed | cancelled | unknown; separate from task success.
+  string execution_status = 1;
+  // succeeded | failed | partial | unknown
+  string business_status = 2;
+}
+
+message ErrorInfo {
+  string code = 1;
+  string message = 2;
+  // retryable | non_retryable | unknown
+  string retryability = 3;
+}
+
+message Application {
+  string query_id = 1;
+  string policy_id = 2;
+  string policy_revision = 3;
+  string decision_id = 4;
+  // applied | rejected | failed; an injection receipt is not proof of compliance.
+  string status = 5;
+  string reason = 6;
+  string experiment_id = 7;
+  string cohort = 8;
+}
+
+message TraceEvent {
+  string event_id = 1;
+  // run.start/end, step.start/end, action.start/end, loop.decision,
+  // advice.applied, state.changed, evaluation, custom
+  string kind = 2;
+  string producer_id = 3;
+  uint64 sequence = 4;
+  uint64 timestamp_us = 5;
+  string actor_id = 6;
+  string execution_id = 7;
+  string step_id = 8;
+  string action_id = 9;
+  string loop_id = 10;
+  uint64 iteration = 11;
+  repeated string caused_by = 12;
+  string operation = 13;
+  // completed | failed | cancelled | unknown, required on step/action end.
+  string status = 14;
+  google.protobuf.Value input = 15;
+  google.protobuf.Value output = 16;
+  ErrorInfo error = 17;
+  string state_before = 18;
+  string state_after = 19;
+  // continue | replan | stop
+  string decision = 20;
+  string reason = 21;
+  RunOutcome outcome = 22;
+  Application application = 23;
+  google.protobuf.Struct attributes = 24;
+}
+
+message TraceRun {
+  uint32 schema_version = 1;
+  // Must equal trajectory.v1; prevents misidentifying legacy analysis JSON.
+  string trace_kind = 2;
+  Identity identity = 3;
+  repeated TraceEvent events = 4;
+  google.protobuf.Struct attributes = 5;
+}
+
+message CapabilityManifest {
+  uint32 schema_version = 1;
+  Level requested_level = 2;
+  repeated string declared_capabilities = 3;
+  repeated string not_applicable = 4;
+  // downgrade | strict
+  string fallback = 5;
+}
+
+message TraceIssue {
+  string code = 1;
+  // error | warning. No raw event content is copied to validation output.
+  string severity = 2;
+  uint64 event_index = 3;
+}
+
+message CapabilityCheck {
+  string capability = 1;
+  Level required_level = 2;
+  bool declared = 3;
+  CheckStatus data_status = 4;
+  CheckStatus runtime_status = 5;
+  repeated string reasons = 6;
+}
+
+message CapabilityReport {
+  uint32 schema_version = 1;
+  string source_format = 2;
+  Level requested_level = 3;
+  Level data_level = 4;
+  Level verified_level = 5;
+  Level effective_level = 6;
+  Level component_level = 7;
+  bool requested_level_satisfied = 8;
+  bool trace_valid = 9;
+  uint64 event_count = 10;
+  uint64 duplicate_event_count = 11;
+  repeated CapabilityCheck checks = 12;
+  repeated TraceIssue issues = 13;
+}

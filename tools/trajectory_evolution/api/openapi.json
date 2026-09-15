@@ -1,0 +1,3287 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Trajectory Evolution Integration",
+    "version": "1.0.0",
+    "description": "Framework- and language-independent L0-L3 boundaries. The service collects traces and evaluates/curates memory; hosts apply prepared requests, per-action plans and loop decisions. No L4 support."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8766",
+      "description": "Local sidecar; remote hosts must use an HTTPS gateway."
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "operationId": "health",
+        "security": [],
+        "tags": [
+          "Integration"
+        ],
+        "responses": {
+          "200": {
+            "description": "Protocol availability, not an Agent capability certification.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/invoke": {
+      "post": {
+        "operationId": "invoke",
+        "tags": [
+          "Integration"
+        ],
+        "description": "Use run.begin/activity.*/loop.*/event.record for the framework-neutral profile; task.begin/step.* remain a compatibility profile. Use a stable request_id per logical RPC. Reuse that ID and identical contents after a network failure; never retry the host's side effect. Except task.begin, run.begin, contract.describe, memory.status and agent_evaluation.*, send run_id. memory.status and agent_evaluation.* are scoped management operations, outside the native invoke hot path. IDs stay with callbacks/queue messages, not credentials. HTTP/1.1 Content-Length is required; chunked bodies and redirects are not supported.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvokeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Durably accepted RPC; result shape depends on operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvokeResponse"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Fixed error code. Never include a credential in diagnostics. See README.md#operations for lifecycle and privacy handling.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "opaque service token"
+      }
+    },
+    "schemas": {
+      "EvaluationNextRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "evaluation.next",
+            "type": "string",
+            "enum": [
+              "evaluation.next"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "consumer": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1024
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "consumer",
+          "index"
+        ],
+        "additionalProperties": false
+      },
+      "EvaluationFailRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "evaluation.fail",
+            "type": "string",
+            "enum": [
+              "evaluation.fail"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "consumer": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,128}$"
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "consumer"
+        ],
+        "additionalProperties": false
+      },
+      "TaskBeginRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "task.begin",
+            "type": "string",
+            "enum": [
+              "task.begin"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "conversation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "input": {},
+          "level": {
+            "enum": [
+              "L0",
+              "L1",
+              "L2",
+              "L3"
+            ]
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "model",
+                "actions",
+                "loop"
+              ]
+            },
+            "maxItems": 3
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "conversation_id",
+          "input",
+          "capabilities"
+        ],
+        "additionalProperties": false
+      },
+      "TaskStatusRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "task.status",
+            "type": "string",
+            "enum": [
+              "task.status"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id"
+        ],
+        "additionalProperties": false
+      },
+      "EvaluationRetryRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "evaluation.retry",
+            "type": "string",
+            "enum": [
+              "evaluation.retry"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id"
+        ],
+        "additionalProperties": false
+      },
+      "TaskEndRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "task.end",
+            "type": "string",
+            "enum": [
+              "task.end"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "output": {},
+          "status": {
+            "enum": [
+              "completed",
+              "failed",
+              "cancelled",
+              "unknown"
+            ]
+          },
+          "business_status": {
+            "enum": [
+              "succeeded",
+              "failed",
+              "partial",
+              "unknown"
+            ]
+          },
+          "capture_complete": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id"
+        ],
+        "additionalProperties": false
+      },
+      "TaskAbortRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "task.abort",
+            "type": "string",
+            "enum": [
+              "task.abort"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "output": {},
+          "status": {
+            "enum": [
+              "failed",
+              "cancelled",
+              "unknown"
+            ]
+          },
+          "business_status": {
+            "enum": [
+              "succeeded",
+              "failed",
+              "partial",
+              "unknown"
+            ]
+          },
+          "capture_complete": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "CaptureGapRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "capture.gap",
+            "type": "string",
+            "enum": [
+              "capture.gap"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "reason": {
+            "enum": [
+              "observer_unavailable",
+              "privacy_rejected",
+              "missing_boundary"
+            ]
+          },
+          "error_code": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,95}$"
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "StepBeginRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "step.begin",
+            "type": "string",
+            "enum": [
+              "step.begin"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "execution_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "actor_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "state": {},
+          "caused_by": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 64
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id"
+        ],
+        "additionalProperties": false
+      },
+      "StepEndRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "step.end",
+            "type": "string",
+            "enum": [
+              "step.end"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "step_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "output": {},
+          "status": {
+            "enum": [
+              "completed",
+              "failed",
+              "cancelled",
+              "unknown"
+            ]
+          },
+          "decision": {
+            "enum": [
+              "continue",
+              "replan",
+              "stop"
+            ]
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "step_id"
+        ],
+        "additionalProperties": false
+      },
+      "StateRecordRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "state.record",
+            "type": "string",
+            "enum": [
+              "state.record"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "step_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "before": {},
+          "after": {}
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "step_id",
+          "before",
+          "after"
+        ],
+        "additionalProperties": false
+      },
+      "ModelPrepareRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "model.prepare",
+            "type": "string",
+            "enum": [
+              "model.prepare"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "step_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "request": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "step_id",
+          "request"
+        ],
+        "additionalProperties": false
+      },
+      "ModelObserveRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "model.observe",
+            "type": "string",
+            "enum": [
+              "model.observe"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "step_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "call_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "request": {
+            "type": "object"
+          },
+          "output": {},
+          "status": {
+            "enum": [
+              "completed",
+              "failed",
+              "cancelled",
+              "unknown"
+            ]
+          },
+          "transport_allowed": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "retryability": {
+                "enum": [
+                  "unknown",
+                  "retryable",
+                  "non_retryable"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "retryability"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "step_id",
+          "call_id",
+          "request",
+          "transport_allowed"
+        ],
+        "additionalProperties": false
+      },
+      "ActionsPrepareRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "actions.prepare",
+            "type": "string",
+            "enum": [
+              "actions.prepare"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "step_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "operation": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "arguments": {
+                  "type": "object"
+                },
+                "delegate": {
+                  "type": "object",
+                  "properties": {
+                    "actor_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "execution_id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    },
+                    "completion": {
+                      "enum": [
+                        "execution",
+                        "delivery"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "actor_id",
+                    "execution_id"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id",
+                "operation",
+                "arguments"
+              ],
+              "additionalProperties": false
+            },
+            "maxItems": 128,
+            "minItems": 1
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "step_id",
+          "actions"
+        ],
+        "additionalProperties": false
+      },
+      "ActionObserveRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "action.observe",
+            "type": "string",
+            "enum": [
+              "action.observe"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "step_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "call_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "output": {},
+          "status": {
+            "enum": [
+              "completed",
+              "failed",
+              "cancelled",
+              "unknown"
+            ]
+          },
+          "executed": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "retryability": {
+                "enum": [
+                  "unknown",
+                  "retryable",
+                  "non_retryable"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "retryability"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "step_id",
+          "call_id",
+          "executed"
+        ],
+        "additionalProperties": false
+      },
+      "ExecutionStatusRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "execution.status",
+            "type": "string",
+            "enum": [
+              "execution.status"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "execution_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "execution_id"
+        ],
+        "additionalProperties": false
+      },
+      "ExecutionEndRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "execution.end",
+            "type": "string",
+            "enum": [
+              "execution.end"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "execution_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "failed",
+              "cancelled",
+              "unknown"
+            ]
+          },
+          "output": {}
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "execution_id"
+        ],
+        "additionalProperties": false
+      },
+      "ExecutionAbortRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "execution.abort",
+            "type": "string",
+            "enum": [
+              "execution.abort"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{40}$"
+          },
+          "execution_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "status": {
+            "enum": [
+              "failed",
+              "cancelled",
+              "unknown"
+            ]
+          },
+          "output": {}
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "execution_id",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "ContractDescribeRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "contract.describe",
+            "type": "string",
+            "enum": [
+              "contract.describe"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "operation",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "MemoryStatusRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "memory.status",
+            "type": "string",
+            "enum": [
+              "memory.status"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "operation",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "RunBeginRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "run.begin",
+            "type": "string",
+            "enum": [
+              "run.begin"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "input": {},
+          "conversation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "contract_version": {
+            "const": 1
+          },
+          "level": {
+            "enum": [
+              "L0",
+              "L1",
+              "L2",
+              "L3"
+            ]
+          },
+          "capabilities": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "model",
+                "actions",
+                "loop"
+              ]
+            }
+          },
+          "extensions": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "input"
+        ],
+        "additionalProperties": false
+      },
+      "ActivityBeginRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "activity.begin",
+            "type": "string",
+            "enum": [
+              "activity.begin"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "actor_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "scope_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "caused_by": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 64,
+            "uniqueItems": true
+          },
+          "extensions": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "input": {},
+          "stream_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "control_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "state": {},
+          "binding": {
+            "type": "object",
+            "properties": {
+              "pointer": {
+                "type": "string",
+                "pattern": "^(|/.*)$"
+              },
+              "mode": {
+                "enum": [
+                  "text",
+                  "system_message"
+                ]
+              }
+            },
+            "required": [
+              "pointer",
+              "mode"
+            ],
+            "additionalProperties": false
+          },
+          "apply_policy": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "kind",
+          "name",
+          "input"
+        ],
+        "additionalProperties": false
+      },
+      "ActivityEndRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "activity.end",
+            "type": "string",
+            "enum": [
+              "activity.end"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "activity_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "failed",
+              "cancelled",
+              "unknown"
+            ]
+          },
+          "output": {},
+          "actual_input": {},
+          "executed": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "retryability": {
+                "enum": [
+                  "unknown",
+                  "retryable",
+                  "non_retryable"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "retryability"
+            ],
+            "additionalProperties": false
+          },
+          "extensions": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "caused_by": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 64,
+            "uniqueItems": true
+          },
+          "metrics": {
+            "type": "object",
+            "properties": {
+              "input_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              },
+              "output_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              },
+              "tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              },
+              "cached_input_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "activity_id",
+          "status",
+          "output"
+        ],
+        "additionalProperties": false
+      },
+      "ActivityAbortRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "activity.abort",
+            "type": "string",
+            "enum": [
+              "activity.abort"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "activity_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "status": {
+            "enum": [
+              "failed",
+              "cancelled",
+              "unknown"
+            ]
+          },
+          "output": {},
+          "actual_input": {},
+          "executed": {
+            "type": "boolean"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "retryability": {
+                "enum": [
+                  "unknown",
+                  "retryable",
+                  "non_retryable"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "retryability"
+            ],
+            "additionalProperties": false
+          },
+          "extensions": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "caused_by": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 64,
+            "uniqueItems": true
+          },
+          "metrics": {
+            "type": "object",
+            "properties": {
+              "input_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              },
+              "output_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              },
+              "tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              },
+              "cached_input_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "activity_id",
+          "status",
+          "output"
+        ],
+        "additionalProperties": false
+      },
+      "ActivityStatusRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "activity.status",
+            "type": "string",
+            "enum": [
+              "activity.status"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "activity_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "activity_id"
+        ],
+        "additionalProperties": false
+      },
+      "LoopCheckRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "loop.check",
+            "type": "string",
+            "enum": [
+              "loop.check"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "actor_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "scope_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "caused_by": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 64,
+            "uniqueItems": true
+          },
+          "extensions": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "loop_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "state": {},
+          "apply_policy": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "loop_id",
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "LoopCommitRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "loop.commit",
+            "type": "string",
+            "enum": [
+              "loop.commit"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "control_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "decision": {
+            "enum": [
+              "continue",
+              "replan",
+              "stop"
+            ]
+          },
+          "extensions": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "caused_by": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 64,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "control_id",
+          "decision"
+        ],
+        "additionalProperties": false
+      },
+      "LoopAbortRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "loop.abort",
+            "type": "string",
+            "enum": [
+              "loop.abort"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "control_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "decision": {
+            "enum": [
+              "continue",
+              "replan",
+              "stop"
+            ]
+          },
+          "extensions": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "caused_by": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 64,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "control_id",
+          "decision"
+        ],
+        "additionalProperties": false
+      },
+      "EventRecordRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "event.record",
+            "type": "string",
+            "enum": [
+              "event.record"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "data": {},
+          "activity_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "control_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "caused_by": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 64,
+            "uniqueItems": true
+          },
+          "extensions": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "type",
+          "data"
+        ],
+        "additionalProperties": false,
+        "not": {
+          "required": [
+            "activity_id",
+            "control_id"
+          ]
+        }
+      },
+      "RunEndRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "run.end",
+            "type": "string",
+            "enum": [
+              "run.end"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "failed",
+              "cancelled",
+              "unknown"
+            ]
+          },
+          "business_status": {
+            "enum": [
+              "succeeded",
+              "failed",
+              "partial",
+              "unknown"
+            ]
+          },
+          "output": {},
+          "capture_complete": {
+            "type": "boolean"
+          },
+          "defer_if_pending": {
+            "type": "boolean"
+          },
+          "extensions": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "caused_by": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 64,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "status",
+          "output"
+        ],
+        "additionalProperties": false
+      },
+      "RunAbortRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "run.abort",
+            "type": "string",
+            "enum": [
+              "run.abort"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          },
+          "status": {
+            "enum": [
+              "failed",
+              "cancelled",
+              "unknown"
+            ]
+          },
+          "business_status": {
+            "enum": [
+              "succeeded",
+              "failed",
+              "partial",
+              "unknown"
+            ]
+          },
+          "output": {},
+          "capture_complete": {
+            "type": "boolean"
+          },
+          "defer_if_pending": {
+            "type": "boolean"
+          },
+          "extensions": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "caused_by": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "maxItems": 64,
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id",
+          "status",
+          "output"
+        ],
+        "additionalProperties": false
+      },
+      "PointRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "point",
+            "type": "string",
+            "enum": [
+              "point"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "phase": {
+            "enum": [
+              "before",
+              "after",
+              "abort",
+              "event",
+              "heartbeat",
+              "guard",
+              "gap"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "capture_gap": {
+            "type": "boolean"
+          },
+          "ref": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "run"
+            ],
+            "properties": {
+              "run": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "key": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "parent": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "after": {
+                "type": "array",
+                "maxItems": 64,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              }
+            }
+          },
+          "context": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "causes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "maxItems": 64
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "input": {},
+          "output": {},
+          "status": {
+            "enum": [
+              "completed",
+              "failed",
+              "cancelled",
+              "unknown"
+            ]
+          },
+          "business_status": {
+            "enum": [
+              "succeeded",
+              "failed",
+              "partial",
+              "unknown"
+            ]
+          },
+          "executed": {
+            "type": "boolean"
+          },
+          "actual_input": {},
+          "decision": {
+            "enum": [
+              "continue",
+              "replan",
+              "stop"
+            ]
+          },
+          "loop_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "actor_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "scope_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "state": {},
+          "binding": {
+            "type": "object",
+            "properties": {
+              "pointer": {
+                "type": "string",
+                "pattern": "^(|/.*)$"
+              },
+              "mode": {
+                "enum": [
+                  "text",
+                  "system_message"
+                ]
+              }
+            },
+            "required": [
+              "pointer",
+              "mode"
+            ],
+            "additionalProperties": false
+          },
+          "metrics": {
+            "type": "object",
+            "properties": {
+              "input_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              },
+              "output_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              },
+              "tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              },
+              "cached_input_tokens": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1000000000
+              }
+            },
+            "additionalProperties": false
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "retryability": {
+                "enum": [
+                  "unknown",
+                  "retryable",
+                  "non_retryable"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "retryability"
+            ],
+            "additionalProperties": false
+          },
+          "extensions": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "conversation_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "level": {
+            "enum": [
+              "L0",
+              "L1",
+              "L2",
+              "L3"
+            ]
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "model",
+                "actions",
+                "loop"
+              ]
+            }
+          },
+          "apply_policy": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "phase"
+        ],
+        "additionalProperties": false
+      },
+      "RunStatusRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "run.status",
+            "type": "string",
+            "enum": [
+              "run.status"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id"
+        ],
+        "additionalProperties": false
+      },
+      "RunHeartbeatRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "run.heartbeat",
+            "type": "string",
+            "enum": [
+              "run.heartbeat"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "run_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "run_id"
+        ],
+        "additionalProperties": false
+      },
+      "Agent_EvaluationStatusRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "agent_evaluation.status",
+            "type": "string",
+            "enum": [
+              "agent_evaluation.status"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "operation",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "Agent_EvaluationFeedbackRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "agent_evaluation.feedback",
+            "type": "string",
+            "enum": [
+              "agent_evaluation.feedback"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          }
+        },
+        "required": [
+          "operation",
+          "request_id"
+        ],
+        "additionalProperties": false
+      },
+      "Agent_EvaluationSubmitRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "agent_evaluation.submit",
+            "type": "string",
+            "enum": [
+              "agent_evaluation.submit"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "artifact": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "artifact"
+        ],
+        "additionalProperties": false
+      },
+      "Agent_EvaluationRetryRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "agent_evaluation.retry",
+            "type": "string",
+            "enum": [
+              "agent_evaluation.retry"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "job_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "job_id"
+        ],
+        "additionalProperties": false
+      },
+      "Agent_EvaluationCancelRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "agent_evaluation.cancel",
+            "type": "string",
+            "enum": [
+              "agent_evaluation.cancel"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "job_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "job_id"
+        ],
+        "additionalProperties": false
+      },
+      "Agent_EvaluationTreeRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "agent_evaluation.tree",
+            "type": "string",
+            "enum": [
+              "agent_evaluation.tree"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "job_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "job_id"
+        ],
+        "additionalProperties": false
+      },
+      "InvokeRequest": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/EvaluationNextRequest"
+          },
+          {
+            "$ref": "#/components/schemas/EvaluationFailRequest"
+          },
+          {
+            "$ref": "#/components/schemas/TaskBeginRequest"
+          },
+          {
+            "$ref": "#/components/schemas/TaskStatusRequest"
+          },
+          {
+            "$ref": "#/components/schemas/EvaluationRetryRequest"
+          },
+          {
+            "$ref": "#/components/schemas/TaskEndRequest"
+          },
+          {
+            "$ref": "#/components/schemas/TaskAbortRequest"
+          },
+          {
+            "$ref": "#/components/schemas/CaptureGapRequest"
+          },
+          {
+            "$ref": "#/components/schemas/StepBeginRequest"
+          },
+          {
+            "$ref": "#/components/schemas/StepEndRequest"
+          },
+          {
+            "$ref": "#/components/schemas/StateRecordRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ModelPrepareRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ModelObserveRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ActionsPrepareRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ActionObserveRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ExecutionStatusRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ExecutionEndRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ExecutionAbortRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ContractDescribeRequest"
+          },
+          {
+            "$ref": "#/components/schemas/MemoryStatusRequest"
+          },
+          {
+            "$ref": "#/components/schemas/RunBeginRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ActivityBeginRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ActivityEndRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ActivityAbortRequest"
+          },
+          {
+            "$ref": "#/components/schemas/ActivityStatusRequest"
+          },
+          {
+            "$ref": "#/components/schemas/LoopCheckRequest"
+          },
+          {
+            "$ref": "#/components/schemas/LoopCommitRequest"
+          },
+          {
+            "$ref": "#/components/schemas/LoopAbortRequest"
+          },
+          {
+            "$ref": "#/components/schemas/EventRecordRequest"
+          },
+          {
+            "$ref": "#/components/schemas/RunEndRequest"
+          },
+          {
+            "$ref": "#/components/schemas/RunAbortRequest"
+          },
+          {
+            "$ref": "#/components/schemas/PointRequest"
+          },
+          {
+            "$ref": "#/components/schemas/RunStatusRequest"
+          },
+          {
+            "$ref": "#/components/schemas/RunHeartbeatRequest"
+          },
+          {
+            "$ref": "#/components/schemas/Agent_EvaluationStatusRequest"
+          },
+          {
+            "$ref": "#/components/schemas/Agent_EvaluationFeedbackRequest"
+          },
+          {
+            "$ref": "#/components/schemas/Agent_EvaluationSubmitRequest"
+          },
+          {
+            "$ref": "#/components/schemas/Agent_EvaluationRetryRequest"
+          },
+          {
+            "$ref": "#/components/schemas/Agent_EvaluationCancelRequest"
+          },
+          {
+            "$ref": "#/components/schemas/Agent_EvaluationTreeRequest"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "operation",
+          "mapping": {
+            "evaluation.next": "#/components/schemas/EvaluationNextRequest",
+            "evaluation.fail": "#/components/schemas/EvaluationFailRequest",
+            "task.begin": "#/components/schemas/TaskBeginRequest",
+            "task.status": "#/components/schemas/TaskStatusRequest",
+            "evaluation.retry": "#/components/schemas/EvaluationRetryRequest",
+            "task.end": "#/components/schemas/TaskEndRequest",
+            "task.abort": "#/components/schemas/TaskAbortRequest",
+            "capture.gap": "#/components/schemas/CaptureGapRequest",
+            "step.begin": "#/components/schemas/StepBeginRequest",
+            "step.end": "#/components/schemas/StepEndRequest",
+            "state.record": "#/components/schemas/StateRecordRequest",
+            "model.prepare": "#/components/schemas/ModelPrepareRequest",
+            "model.observe": "#/components/schemas/ModelObserveRequest",
+            "actions.prepare": "#/components/schemas/ActionsPrepareRequest",
+            "action.observe": "#/components/schemas/ActionObserveRequest",
+            "execution.status": "#/components/schemas/ExecutionStatusRequest",
+            "execution.end": "#/components/schemas/ExecutionEndRequest",
+            "execution.abort": "#/components/schemas/ExecutionAbortRequest",
+            "contract.describe": "#/components/schemas/ContractDescribeRequest",
+            "memory.status": "#/components/schemas/MemoryStatusRequest",
+            "run.begin": "#/components/schemas/RunBeginRequest",
+            "activity.begin": "#/components/schemas/ActivityBeginRequest",
+            "activity.end": "#/components/schemas/ActivityEndRequest",
+            "activity.abort": "#/components/schemas/ActivityAbortRequest",
+            "activity.status": "#/components/schemas/ActivityStatusRequest",
+            "loop.check": "#/components/schemas/LoopCheckRequest",
+            "loop.commit": "#/components/schemas/LoopCommitRequest",
+            "loop.abort": "#/components/schemas/LoopAbortRequest",
+            "event.record": "#/components/schemas/EventRecordRequest",
+            "run.end": "#/components/schemas/RunEndRequest",
+            "run.abort": "#/components/schemas/RunAbortRequest",
+            "point": "#/components/schemas/PointRequest",
+            "run.status": "#/components/schemas/RunStatusRequest",
+            "run.heartbeat": "#/components/schemas/RunHeartbeatRequest",
+            "agent_evaluation.status": "#/components/schemas/Agent_EvaluationStatusRequest",
+            "agent_evaluation.feedback": "#/components/schemas/Agent_EvaluationFeedbackRequest",
+            "agent_evaluation.submit": "#/components/schemas/Agent_EvaluationSubmitRequest",
+            "agent_evaluation.retry": "#/components/schemas/Agent_EvaluationRetryRequest",
+            "agent_evaluation.cancel": "#/components/schemas/Agent_EvaluationCancelRequest",
+            "agent_evaluation.tree": "#/components/schemas/Agent_EvaluationTreeRequest"
+          }
+        }
+      },
+      "TaskBeginResult": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "L0",
+              "L1",
+              "L2",
+              "L3"
+            ]
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "model",
+                "actions",
+                "loop"
+              ]
+            }
+          },
+          "persisted": {
+            "type": "boolean"
+          },
+          "policy_gate": {
+            "type": "string"
+          },
+          "agent_version_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "level",
+          "capabilities"
+        ],
+        "additionalProperties": false
+      },
+      "TaskStatusResult": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "closed": {
+            "type": "boolean"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "L0",
+              "L1",
+              "L2",
+              "L3"
+            ]
+          },
+          "capture_complete": {
+            "type": "boolean"
+          },
+          "event_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "evaluation_status": {
+            "type": "string"
+          },
+          "evaluation_error": {
+            "type": "string"
+          },
+          "observed_boundaries": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            }
+          },
+          "receipts": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "run_id",
+          "closed",
+          "level",
+          "capture_complete",
+          "event_count",
+          "evaluation_status",
+          "evaluation_error",
+          "observed_boundaries",
+          "receipts"
+        ],
+        "additionalProperties": false
+      },
+      "EvaluationRetryResult": {
+        "type": "object",
+        "properties": {
+          "evaluation_status": {
+            "type": "string",
+            "enum": [
+              "pending"
+            ]
+          },
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "evaluation_status"
+        ],
+        "additionalProperties": false
+      },
+      "MemoryStatusResult": {
+        "type": "object",
+        "properties": {
+          "application_id": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "private_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "private_entries": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "public_entries": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "public_revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cross_relations": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "sharing_enabled": {
+            "type": "boolean"
+          },
+          "sharing_status": {
+            "type": "string"
+          },
+          "public_available": {
+            "type": "boolean"
+          },
+          "retired_public_entries": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "application_id",
+          "user_id",
+          "private_revision",
+          "private_entries",
+          "public_entries",
+          "public_revision",
+          "cross_relations",
+          "sharing_enabled",
+          "sharing_status",
+          "public_available",
+          "retired_public_entries"
+        ],
+        "additionalProperties": false
+      },
+      "CaptureGapResult": {
+        "type": "object",
+        "properties": {
+          "capture_complete": {
+            "type": "boolean",
+            "const": false
+          },
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "capture_complete"
+        ],
+        "additionalProperties": false
+      },
+      "StepBeginResult": {
+        "type": "object",
+        "properties": {
+          "step_id": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "iteration": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "continue",
+              "replan",
+              "stop"
+            ]
+          },
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "step_id",
+          "event_id",
+          "reason",
+          "iteration",
+          "decision"
+        ],
+        "additionalProperties": false
+      },
+      "TaskEndResult": {
+        "type": "object",
+        "properties": {
+          "closed": {
+            "type": "boolean"
+          },
+          "capture_complete": {
+            "type": "boolean"
+          },
+          "evaluation_status": {
+            "type": "string"
+          },
+          "metrics": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "closed",
+          "capture_complete",
+          "evaluation_status"
+        ],
+        "additionalProperties": false
+      },
+      "StateRecordResult": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "event_id"
+        ],
+        "additionalProperties": false
+      },
+      "CallEndResult": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "type": "string"
+          },
+          "ended": {
+            "type": "boolean"
+          },
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "event_id",
+          "ended"
+        ],
+        "additionalProperties": false
+      },
+      "ModelPrepareResult": {
+        "type": "object",
+        "properties": {
+          "call_id": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "request": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "call_id",
+          "event_id",
+          "request"
+        ],
+        "additionalProperties": false
+      },
+      "ActionsPrepareResult": {
+        "type": "object",
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "call_id": {
+                  "type": "string"
+                },
+                "event_id": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                },
+                "decision": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "reject"
+                  ]
+                },
+                "context": {
+                  "type": "object",
+                  "properties": {
+                    "run_id": {
+                      "type": "string"
+                    },
+                    "execution_id": {
+                      "type": "string"
+                    },
+                    "actor_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "run_id",
+                    "execution_id",
+                    "actor_id"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "required": [
+                "id",
+                "call_id",
+                "event_id",
+                "reason",
+                "decision"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actions"
+        ],
+        "additionalProperties": false
+      },
+      "ExecutionStatusResult": {
+        "type": "object",
+        "properties": {
+          "context": {
+            "type": "object",
+            "properties": {
+              "run_id": {
+                "type": "string"
+              },
+              "execution_id": {
+                "type": "string"
+              },
+              "actor_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "execution_id",
+              "actor_id"
+            ],
+            "additionalProperties": false
+          },
+          "ended": {
+            "type": "boolean"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "unknown"
+            ]
+          },
+          "output": {},
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "context",
+          "ended",
+          "event_id",
+          "status",
+          "output"
+        ],
+        "additionalProperties": false
+      },
+      "RunBeginResult": {
+        "type": "object",
+        "properties": {
+          "run_id": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "L0",
+              "L1",
+              "L2",
+              "L3"
+            ]
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "model",
+                "actions",
+                "loop"
+              ]
+            }
+          },
+          "protocol": {
+            "const": "evolution.boundary.v1"
+          },
+          "persisted": {
+            "type": "boolean"
+          },
+          "policy_gate": {
+            "type": "string"
+          },
+          "agent_version_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "level",
+          "capabilities",
+          "protocol"
+        ],
+        "additionalProperties": false
+      },
+      "HeartbeatResult": {
+        "type": "object",
+        "properties": {
+          "alive": {
+            "const": true
+          },
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "alive"
+        ],
+        "additionalProperties": false
+      },
+      "ActivityBeginResult": {
+        "type": "object",
+        "properties": {
+          "activity_id": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "allow",
+              "reject"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "semantic": {
+            "enum": [
+              "model",
+              "action",
+              "custom"
+            ]
+          },
+          "input": {},
+          "context": {
+            "type": "object",
+            "properties": {
+              "run_id": {
+                "type": "string"
+              },
+              "activity_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "run_id",
+              "activity_id"
+            ],
+            "additionalProperties": false
+          },
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "activity_id",
+          "event_id",
+          "decision",
+          "reason",
+          "semantic",
+          "input",
+          "context"
+        ],
+        "additionalProperties": false
+      },
+      "ActivityStatusResult": {
+        "type": "object",
+        "properties": {
+          "activity_id": {
+            "type": "string"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "ended": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "output": {},
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "activity_id",
+          "event_id",
+          "ended",
+          "status",
+          "output"
+        ],
+        "additionalProperties": false
+      },
+      "LoopCheckResult": {
+        "type": "object",
+        "properties": {
+          "control_id": {
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "continue",
+              "replan",
+              "stop"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "context": {
+            "type": "string"
+          },
+          "iteration": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "control_id",
+          "decision",
+          "reason",
+          "context",
+          "iteration",
+          "event_id"
+        ],
+        "additionalProperties": false
+      },
+      "ContractDescribeResult": {
+        "type": "object",
+        "properties": {
+          "protocol": {
+            "const": "evolution.boundary.v1"
+          },
+          "contract_version": {
+            "const": 1
+          },
+          "max_level": {
+            "type": "string",
+            "enum": [
+              "L0",
+              "L1",
+              "L2",
+              "L3"
+            ]
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "required_fields": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "optional_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "extension_field": {
+            "const": "extensions"
+          },
+          "policy_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "activity_types": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "limits": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "persisted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "protocol",
+          "contract_version",
+          "max_level",
+          "operations",
+          "required_fields",
+          "optional_fields",
+          "extension_field",
+          "policy_scopes",
+          "activity_types",
+          "limits"
+        ],
+        "additionalProperties": false
+      },
+      "PointResult": {
+        "type": "object",
+        "required": [
+          "context"
+        ],
+        "properties": {
+          "context": {
+            "type": "object",
+            "required": [
+              "kind",
+              "run_id"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "run_id": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "additionalProperties": true
+      },
+      "AgentEvaluationStatusResult": {
+        "type": "object",
+        "properties": {
+          "jobs": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "publications": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "worker_error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "jobs",
+          "publications"
+        ],
+        "additionalProperties": false
+      },
+      "AgentEvaluationFeedbackResult": {
+        "type": "object",
+        "propertyNames": {
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "AgentEvaluationSubmitResult": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id"
+        ],
+        "additionalProperties": false
+      },
+      "AgentEvaluationUpdateResult": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accepted"
+        ],
+        "additionalProperties": false
+      },
+      "InvokeResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "result": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TaskBeginResult"
+              },
+              {
+                "$ref": "#/components/schemas/TaskStatusResult"
+              },
+              {
+                "$ref": "#/components/schemas/EvaluationRetryResult"
+              },
+              {
+                "$ref": "#/components/schemas/MemoryStatusResult"
+              },
+              {
+                "$ref": "#/components/schemas/CaptureGapResult"
+              },
+              {
+                "$ref": "#/components/schemas/StepBeginResult"
+              },
+              {
+                "$ref": "#/components/schemas/TaskEndResult"
+              },
+              {
+                "$ref": "#/components/schemas/StateRecordResult"
+              },
+              {
+                "$ref": "#/components/schemas/CallEndResult"
+              },
+              {
+                "$ref": "#/components/schemas/ModelPrepareResult"
+              },
+              {
+                "$ref": "#/components/schemas/ActionsPrepareResult"
+              },
+              {
+                "$ref": "#/components/schemas/ExecutionStatusResult"
+              },
+              {
+                "$ref": "#/components/schemas/RunBeginResult"
+              },
+              {
+                "$ref": "#/components/schemas/HeartbeatResult"
+              },
+              {
+                "$ref": "#/components/schemas/ActivityBeginResult"
+              },
+              {
+                "$ref": "#/components/schemas/ActivityStatusResult"
+              },
+              {
+                "$ref": "#/components/schemas/LoopCheckResult"
+              },
+              {
+                "$ref": "#/components/schemas/ContractDescribeResult"
+              },
+              {
+                "$ref": "#/components/schemas/PointResult"
+              },
+              {
+                "$ref": "#/components/schemas/AgentEvaluationStatusResult"
+              },
+              {
+                "$ref": "#/components/schemas/AgentEvaluationFeedbackResult"
+              },
+              {
+                "$ref": "#/components/schemas/AgentEvaluationSubmitResult"
+              },
+              {
+                "$ref": "#/components/schemas/AgentEvaluationUpdateResult"
+              }
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "result"
+        ],
+        "additionalProperties": false
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "type": "string",
+            "pattern": "^[a-z_]{1,96}$"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "additionalProperties": false
+      },
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "protocol": {
+            "type": "string",
+            "const": "trajectory-integration.v1"
+          },
+          "max_level": {
+            "type": "string",
+            "enum": [
+              "L0",
+              "L1",
+              "L2",
+              "L3"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "protocol",
+          "max_level"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

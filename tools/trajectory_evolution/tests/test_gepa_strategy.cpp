@@ -1,0 +1,102 @@
+#include "../src/gepa_strategy.h"
+#include <iostream>
+#include <stdexcept>
+
+using trajectory::evolution::integration::Json;
+namespace gepa = trajectory::evolution::integration::gepa;
+void check(bool value) { if(!value) throw std::runtime_error("GEPA strategy assertion failed"); }
+template<class F> void rejects(F fn) {
+  try { fn(); } catch(const trajectory::evolution::integration::Error&) { return; }
+  throw std::runtime_error("expected GEPA strategy rejection");
+}
+Json scores(double a, double b) {
+  return Json{{"a", Json{{"quality", a}, {"fitness", a}}},
+      {"b", Json{{"quality", b}, {"fitness", b}}}};
+}
+Json node(std::size_t id, Json parent, std::size_t depth, double a, double b) {
+  return Json{{"id", id}, {"parent", parent}, {"depth", depth}, {"status", "accepted"}, {"validation", scores(a, b)}};
+}
+int main() {
+  try {
+    Json nodes = Json::Array{node(0, nullptr, 0, 0, 0), node(1, 0, 1, 1, 0),
+        node(2, 0, 1, 0, 1), node(3, 1, 2, .8, 0)};
+    gepa::validate_nodes(nodes);
+    check(gepa::parents(nodes.items()[0]).empty());
+    check(gepa::parents(nodes.items()[1]) == std::vector<std::size_t>{0});
+    const Json config{{"seed", 42}};
+    const auto mapping = gepa::frontier_map(nodes, {"a", "b"}, config);
+    check(gepa::pool(mapping) == std::vector<std::size_t>({1, 2}));
+    // Node 1 already has a child; node 2 is a leaf. Both contribute to one child.
+    const auto plan = gepa::select_merge(nodes, mapping, Json::Array{}, config, 0);
+    check(plan.num("first", 99) == 1 && plan.num("second", 99) == 2 && plan.num("ancestor", 99) == 0);
+    check(gepa::select_merge(nodes, mapping, Json::Array{plan}, config, 0).null());
+    check(gepa::select_merge(nodes, Json{{"a", Json::Array{1, 3}}}, Json::Array{}, config, 0).null());
+    Json base{{"experience:a", "original"}, {"action_rules", "base"}, {"loop_rules", "base"}};
+    auto a = base, b = base; a["experience:a"] = "A"; b["action_rules"] = "B";
+    auto merged = gepa::recombine(base, a, b, 1, 2, true);
+    check(merged.flag("useful", false) && merged["components"].str("experience:a") == "A"
+        && merged["components"].str("action_rules") == "B");
+    check(merged["sources"].num("experience:a", 99) == 1 && merged["sources"].num("action_rules", 99) == 2);
+    a["loop_rules"] = "A-loop"; b["loop_rules"] = "B-loop";
+    merged = gepa::recombine(base, a, b, 1, 2, false);
+    check(merged.flag("useful", false) && merged["components"].str("loop_rules") == "B-loop"
+        && merged["conflicts"].items().size() == 1);
+    check(!gepa::recombine(base, a, a, 1, 2, true).flag("useful", true));
+    check(!gepa::recombine(base, base, b, 0, 2, true).flag("useful", true));
+    auto invalid_components = b; invalid_components.fields().erase("loop_rules");
+    rejects([&] { gepa::recombine(base, a, invalid_components, 1, 2, true); });
+    auto child = node(4, 1, 2, 1, 1);
+    child["parents"] = Json::Array{1, 2}; child["ancestor"] = 0; child["kind"] = "merge";
+    nodes.push(child); nodes.push(node(5, 4, 3, 1, 1));
+    gepa::validate_nodes(nodes);
+    check(gepa::ancestors(nodes, 5) == std::set<std::size_t>({0, 1, 2, 4}));
+    for(int kind = 0; kind < 5; ++kind) {
+      auto broken = nodes;
+      if(kind == 0) broken.items()[4]["parents"] = Json::Array{1, 3};
+      if(kind == 1) broken.items()[4]["parents"] = Json::Array{1, 1};
+      if(kind == 2) broken.items()[4]["parents"] = Json::Array{1, 5};
+      if(kind == 3) broken.items()[4]["ancestor"] = 3;
+      if(kind == 4) broken.items()[4]["depth"] = 1;
+      rejects([&] { gepa::validate_nodes(broken); });
+    }
+    check(gepa::pool(gepa::frontier_map(nodes, {"a", "b"}, config)) == std::vector<std::size_t>{4});
+    auto strategies = config; strategies["candidate_selection_strategy"] = "current_best";
+    check(gepa::select_parent(nodes, mapping, strategies, 0) == 4);
+    strategies["candidate_selection_strategy"] = "epsilon_greedy"; strategies["epsilon"] = 1;
+    std::set<std::size_t> selected;
+    for(unsigned i = 0; i < 200; ++i) selected.insert(gepa::select_parent(nodes, mapping, strategies, i));
+    check(selected.size() == nodes.items().size());
+    strategies["candidate_selection_strategy"] = "top_k_pareto"; strategies["top_k"] = 1;
+    check(gepa::select_parent(nodes, gepa::frontier_map(nodes, {"a", "b"}, config), strategies, 0) == 4);
+    Json frequencies{{"a", Json::Array{1}}, {"b", Json::Array{1}}, {"c", Json::Array{2}}};
+    unsigned first = 0;
+    for(unsigned i = 0; i < 1000; ++i) first += gepa::select_parent(nodes, frequencies, config, i) == 1;
+    check(first > 550 && first < 800);
+    auto objectives = config; objectives["frontier_type"] = "hybrid";
+    for(auto& n : nodes.items()) for(auto& score : n["validation"].fields()) score.second["token_efficiency"] = .5;
+    nodes.items()[2]["validation"]["a"]["token_efficiency"] = 1;
+    nodes.items()[2]["validation"]["b"]["token_efficiency"] = 1;
+    const auto hybrid = gepa::pool(gepa::frontier_map(nodes, {"a", "b"}, objectives));
+    check(std::find(hybrid.begin(), hybrid.end(), 2) != hybrid.end());
+    objectives["frontier_type"] = "cartesian";
+    check(!gepa::frontier_map(nodes, {"a", "b"}, objectives).fields().empty());
+    check(gepa::select_components(base, "all", 0).items().size() == 3);
+    check(gepa::select_components(base, "round_robin", 0).dump() == gepa::select_components(base, "round_robin", 3).dump());
+    for(auto id : {1, 2}) {
+      nodes.items()[id]["status"] = "screened";
+      nodes.items()[id]["screening"] = Json{{"parent", scores(0, 0)}, {"candidate", scores(id == 1 ? 1 : .5, 1)}};
+    }
+    check(gepa::select_proposals(nodes, Json::Array{1, 2, 3}, config).size() == 2);
+    auto selection = config; selection["proposal_selection"] = "best";
+    check(gepa::select_proposals(nodes, Json::Array{1, 2}, selection) == std::vector<std::size_t>{1});
+    nodes.items()[1]["screening"]["parent"] = scores(.9, 1);
+    check(gepa::select_proposals(nodes, Json::Array{1, 2}, selection) == std::vector<std::size_t>{2});
+    selection["proposal_selection"] = "top_k"; selection["proposal_top_k"] = 2;
+    check(gepa::select_proposals(nodes, Json::Array{1, 2}, selection).size() == 2);
+    check(gepa::no_worse(scores(1, 1), scores(1, 0)));
+    check(!gepa::no_worse(scores(1, 0), scores(1, 1)));
+    check(!gepa::no_worse(Json::Object{}, scores(1, 0)));
+    std::cout << "GEPA DAG, recombination, selection, components and acceptance passed\n";
+    return 0;
+  } catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
+}

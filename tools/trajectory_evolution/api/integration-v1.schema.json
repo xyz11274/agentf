@@ -1,0 +1,652 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:trajectory-evolution:integration:v1",
+  "title": "Trajectory Evolution integration v1 request",
+  "description": "Runtime additionally checks UTF-8 byte limits, credentials, identity ownership, level capabilities and lifecycle preconditions.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "operation": {"const": "evaluation.next"},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "consumer": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"},
+        "index": {"type": "integer", "minimum": 0, "maximum": 1024}
+      },
+      "required": ["operation", "request_id", "consumer", "index"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {"const": "evaluation.fail"},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "consumer": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$"}
+      },
+      "required": ["operation", "request_id", "consumer"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "task.begin"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "conversation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "input": {},
+        "level": {
+          "enum": [
+            "L0",
+            "L1",
+            "L2",
+            "L3"
+          ]
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "model",
+              "actions",
+              "loop"
+            ]
+          },
+          "maxItems": 3
+        }
+      },
+      "required": [
+        "operation",
+        "request_id",
+        "conversation_id",
+        "input",
+        "capabilities"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "task.status"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        }
+      },
+      "required": [
+        "operation",
+        "request_id",
+        "run_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "evaluation.retry"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        }
+      },
+      "required": [
+        "operation",
+        "request_id",
+        "run_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "task.end"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "output": {},
+        "status": {
+          "enum": [
+            "completed",
+            "failed",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        "business_status": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "unknown"
+          ]
+        },
+        "capture_complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "operation",
+        "request_id",
+        "run_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "task.abort"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "output": {},
+        "status": {
+          "enum": [
+            "failed",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        "business_status": {
+          "enum": [
+            "succeeded",
+            "failed",
+            "partial",
+            "unknown"
+          ]
+        },
+        "capture_complete": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "operation",
+        "request_id",
+        "run_id",
+        "status"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "capture.gap"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "reason": {
+          "enum": [
+            "observer_unavailable",
+            "privacy_rejected",
+            "missing_boundary"
+          ]
+        },
+        "error_code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,95}$"
+        }
+      },
+      "required": [
+        "operation",
+        "request_id",
+        "run_id",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "step.begin"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "execution_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "actor_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "state": {},
+        "caused_by": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "maxItems": 64
+        }
+      },
+      "required": [
+        "operation",
+        "request_id",
+        "run_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "step.end"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "step_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "output": {},
+        "status": {
+          "enum": [
+            "completed",
+            "failed",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        "decision": {
+          "enum": [
+            "continue",
+            "replan",
+            "stop"
+          ]
+        }
+      },
+      "required": [
+        "operation",
+        "request_id",
+        "run_id",
+        "step_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "state.record"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "step_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "before": {},
+        "after": {}
+      },
+      "required": [
+        "operation",
+        "request_id",
+        "run_id",
+        "step_id",
+        "before",
+        "after"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "model.prepare"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "step_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "request": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "operation",
+        "request_id",
+        "run_id",
+        "step_id",
+        "request"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "model.observe"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "step_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "call_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "request": {
+          "type": "object"
+        },
+        "output": {},
+        "status": {
+          "enum": [
+            "completed",
+            "failed",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        "transport_allowed": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "retryability": {
+              "enum": [
+                "unknown",
+                "retryable",
+                "non_retryable"
+              ]
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "retryability"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "operation",
+        "request_id",
+        "run_id",
+        "step_id",
+        "call_id",
+        "request",
+        "transport_allowed"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "actions.prepare"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "step_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "operation": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "arguments": {
+                "type": "object"
+              },
+              "delegate": {
+                "type": "object",
+                "properties": {
+                  "actor_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                  "execution_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                  "completion": {"enum": ["execution", "delivery"]}
+                },
+                "required": ["actor_id", "execution_id"],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "id",
+              "operation",
+              "arguments"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 128,
+          "minItems": 1
+        }
+      },
+      "required": [
+        "operation",
+        "request_id",
+        "run_id",
+        "step_id",
+        "actions"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "action.observe"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "run_id": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$"
+        },
+        "step_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "call_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "output": {},
+        "status": {
+          "enum": [
+            "completed",
+            "failed",
+            "cancelled",
+            "unknown"
+          ]
+        },
+        "executed": {
+          "type": "boolean"
+        },
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "retryability": {
+              "enum": [
+                "unknown",
+                "retryable",
+                "non_retryable"
+              ]
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "retryability"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "operation",
+        "request_id",
+        "run_id",
+        "step_id",
+        "call_id",
+        "executed"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {"const": "execution.status"},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "run_id": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "execution_id": {"type": "string", "minLength": 1, "maxLength": 128}
+      },
+      "required": ["operation", "request_id", "run_id", "execution_id"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {"const": "execution.end"},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "run_id": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "execution_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "status": {"enum": ["completed", "failed", "cancelled", "unknown"]},
+        "output": {}
+      },
+      "required": ["operation", "request_id", "run_id", "execution_id"],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {"const": "execution.abort"},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "run_id": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+        "execution_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "status": {"enum": ["failed", "cancelled", "unknown"]},
+        "output": {}
+      },
+      "required": ["operation", "request_id", "run_id", "execution_id", "status"],
+      "additionalProperties": false
+    }
+  ]
+}

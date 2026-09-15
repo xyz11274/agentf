@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="569" viewBox="0 0 1100 569" role="img" aria-labelledby="title desc">
+<title id="title">扩展哪一层，需要同步什么</title><desc id="desc">各行列出对应对象、处理方式与适用条件。 通用协议保留基础字段，框架专属信息放入扩展字段。</desc>
+<defs><style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei","PingFang SC",sans-serif;}</style><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L9 4.5L0 9Z" fill="#203248"/></marker></defs>
+<rect width="1100" height="569" fill="#ffffff"/>
+<text x="36" y="52" font-size="30" font-weight="700" fill="#203248" data-max-width="1016"><tspan x="36" dy="0">扩展哪一层，需要同步什么</tspan></text>
+<text x="36" y="94" font-size="18" font-weight="400" fill="#536477" data-max-width="1016"><tspan x="36" dy="0">各行列出对应对象、处理方式与适用条件。</tspan></text>
+<rect x="40" y="140" width="1020" height="53" rx="10" fill="#203248" stroke="none" stroke-width="1.5"/>
+<text x="54" y="170" font-size="20" font-weight="600" fill="#ffffff" data-max-width="312"><tspan x="54" dy="0">改动</tspan></text>
+<text x="394" y="170" font-size="20" font-weight="600" fill="#ffffff" data-max-width="312"><tspan x="394" dy="0">实现位置</tspan></text>
+<text x="734" y="170" font-size="20" font-weight="600" fill="#ffffff" data-max-width="312"><tspan x="734" dy="0">回归重点</tspan></text>
+<rect x="40" y="193" width="1020" height="55" rx="0" fill="#edf4fb" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="54" y="224" font-size="19" font-weight="600" fill="#285f96" data-max-width="312"><tspan x="54" dy="0">新语言</tspan></text>
+<text x="394" y="224" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="394" dy="0">HTTP JSON / C ABI 包装</tspan></text>
+<path d="M380 201L380 240" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="734" y="224" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="734" dy="0">身份、幂等与错误语义</tspan></text>
+<path d="M720 201L720 240" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<rect x="40" y="248" width="1020" height="55" rx="0" fill="#ffffff" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="54" y="279" font-size="19" font-weight="600" fill="#285f96" data-max-width="312"><tspan x="54" dy="0">新框架</tspan></text>
+<text x="394" y="279" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="394" dy="0">真实边界插入与上下文</tspan></text>
+<path d="M380 256L380 295" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="734" y="279" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="734" dy="0">异步归属、退出与最终收尾</tspan></text>
+<path d="M720 256L720 295" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<rect x="40" y="303" width="1020" height="55" rx="0" fill="#edf4fb" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="54" y="334" font-size="19" font-weight="600" fill="#285f96" data-max-width="312"><tspan x="54" dy="0">新领域指标</tspan></text>
+<text x="394" y="334" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="394" dy="0">analyzer / prompts</tspan></text>
+<path d="M380 311L380 350" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="734" y="334" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="734" dy="0">有效、无效和未知样本</tspan></text>
+<path d="M720 311L720 350" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<rect x="40" y="358" width="1020" height="55" rx="0" fill="#ffffff" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="54" y="389" font-size="19" font-weight="600" fill="#285f96" data-max-width="312"><tspan x="54" dy="0">新控制</tspan></text>
+<text x="394" y="389" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="394" dy="0">规则和执行边界</tspan></text>
+<path d="M380 366L380 405" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="734" y="389" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="734" dy="0">授权、作用域与实际回执</tspan></text>
+<path d="M720 366L720 405" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<rect x="40" y="413" width="1020" height="55" rx="0" fill="#edf4fb" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="54" y="444" font-size="19" font-weight="600" fill="#285f96" data-max-width="312"><tspan x="54" dy="0">新存储</tspan></text>
+<text x="394" y="444" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="394" dy="0">持久化与版本协议</tspan></text>
+<path d="M380 421L380 460" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<text x="734" y="444" font-size="19" font-weight="400" fill="#203248" data-max-width="312"><tspan x="734" dy="0">原子写、恢复、幂等与隔离</tspan></text>
+<path d="M720 421L720 460" fill="none" stroke="#dce4ec" stroke-width="1.5"/>
+<rect x="32" y="490" width="1036" height="51" rx="12" fill="#fff4e8" stroke="#e6c5a4" stroke-width="1.5"/>
+<text x="52" y="518" font-size="18" font-weight="400" fill="#a65e19" data-max-width="984"><tspan x="52" dy="0">通用协议保留基础字段，框架专属信息放入扩展字段。</tspan></text>
+</svg>

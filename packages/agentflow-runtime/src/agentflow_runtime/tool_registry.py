@@ -225,7 +225,7 @@ class _LocalToolRegistry:
         allow_unsafe_local = os.environ.get(
             "AF_ALLOW_UNSAFE_LOCAL_SECRET_TOOLS", ""
         ).strip().lower() in {"1", "true", "yes"}
-        if (name == "bash" and sandbox_mode in {"none", "local"}
+        if (name == "bash" and sandbox_mode == "none"
                 and has_registered_secrets() and not allow_unsafe_local):
             return _blocked_tool_result(
                 str(name),

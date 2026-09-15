@@ -1,0 +1,161 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="297mm" height="186.82258mm" viewBox="0 0 2480 1560" role="img" aria-labelledby="figure-title figure-desc">
+<title id="figure-title">Trajectory Evolution｜当前增量闭环与 GEPA 路线总览</title><desc id="figure-desc">三栏架构总览。左栏：已实现 L0–L3 的固定运行策略、真实执行边界和异步采集。中栏：增量调度、单轨迹评测与候选检查点、进化记忆和缓存通知，仅影响后续新 run。右栏：尚未实现的 GEPA 父子候选、真实实验、独立留出与发布。底部区分 Memory revision、memory_version、policy_id；没有把缓存计数等同于策略进化代数。</desc>
+<metadata>Current implementation diagram, 2026-09-08. Sources: tools/trajectory_evolution/README.md and ALGORITHMS.md; integration_service.cpp, local_runtime.cpp and policy_runtime.cpp. Solid paths: implemented L0–L3; purple dashed region: planned GEPA/L4. Editable SVG is authoritative; PNG and PDF are synchronized exports. No model or business experiment is run by this figure.</metadata>
+<defs><style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei","PingFang SC",sans-serif;} .icon{fill:none;stroke:currentColor;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;}</style>
+<marker id="arrow-blue" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L9 4.5L0 9Z" fill="#285f96"/></marker>
+<marker id="arrow-teal" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L9 4.5L0 9Z" fill="#18755f"/></marker>
+<marker id="arrow-purple" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L9 4.5L0 9Z" fill="#7750a3"/></marker>
+<marker id="arrow-amber" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L9 4.5L0 9Z" fill="#a65e19"/></marker>
+<marker id="arrow-ink" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L9 4.5L0 9Z" fill="#203248"/></marker>
+<g id="db" class="icon"><ellipse cx="30" cy="12" rx="25" ry="9"/><path d="M5 12V53C5 65 55 65 55 53V12M5 30C5 42 55 42 55 30M5 46C5 58 55 58 55 46"/></g><g id="doc" class="icon"><path d="M12 4H39L52 17V60H12ZM39 4V17H52M22 29H42M22 40H42M22 51H34"/></g><g id="agent" class="icon"><rect x="7" y="18" width="48" height="37" rx="10"/><path d="M31 18V7M22 44H40M7 30H2V43H7M55 30H60V43H55"/><circle cx="21" cy="32" r="3"/><circle cx="41" cy="32" r="3"/></g><g id="policy" class="icon"><path d="M12 4H39L52 17V60H12ZM39 4V17H52M22 28H42M22 39H42M22 49L29 55L43 44"/></g></defs>
+<rect x="0" y="0" width="2480" height="1560" rx="0" fill="#ffffff" stroke="none" stroke-width="2"/>
+<text x="32" y="67" font-size="49" font-weight="700" fill="#203248" text-anchor="start" data-max-width="2240">Trajectory Evolution｜当前增量闭环与 GEPA 路线</text>
+<text x="34" y="117" font-size="25" font-weight="400" fill="#536477" text-anchor="start" data-max-width="1820">主链不等待学习 · 已分析样本不重复评测 · 记忆更新只影响新 Run · 紫色虚线表示尚未实现的能力</text>
+<text x="2448" y="60" font-size="25" font-weight="500" fill="#536477" text-anchor="end" data-max-width="280">2026.09.08</text>
+<rect x="1880" y="89" width="244" height="38" rx="19" fill="#ffffff" stroke="#18755f" stroke-width="2"/>
+<text x="2002" y="116" font-size="24" font-weight="600" fill="#18755f" text-anchor="middle" data-max-width="224">已实现 · L0–L3</text>
+<rect x="2144" y="89" width="304" height="38" rx="19" fill="#ffffff" stroke="#7750a3" stroke-width="2" stroke-dasharray="9 6"/>
+<text x="2296" y="116" font-size="24" font-weight="600" fill="#7750a3" text-anchor="middle" data-max-width="284">规划 · GEPA / L4</text>
+<rect x="32" y="157" width="760" height="1135" rx="18" fill="#edf4fb" stroke="#cad5df" stroke-width="2"/>
+<rect x="816" y="157" width="800" height="1135" rx="18" fill="#edf7f1" stroke="#cad5df" stroke-width="2"/>
+<rect x="1640" y="157" width="808" height="1135" rx="18" fill="#f4effa" stroke="#7750a3" stroke-width="2" stroke-dasharray="9 6"/>
+<text x="56" y="210" font-size="34" font-weight="700" fill="#285f96" text-anchor="start" data-max-width="712">01  真实执行与策略应用</text>
+<text x="840" y="210" font-size="34" font-weight="700" fill="#18755f" text-anchor="start" data-max-width="752">02  仅新样本的后台学习</text>
+<text x="1664" y="210" font-size="34" font-weight="700" fill="#7750a3" text-anchor="start" data-max-width="760">03  GEPA 多轮验证与发布</text>
+<rect x="56" y="247" width="712" height="147" rx="13" fill="#ffffff" stroke="#285f96" stroke-width="2"/>
+<text x="75" y="284" font-size="30" font-weight="700" fill="#285f96" text-anchor="start" data-max-width="674">Run 开始：固定本次策略</text>
+<text x="75" y="322" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="674">L1–L3：run.begin 从内存记忆编译 P-A</text>
+<text x="75" y="353" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="674">快照包含合格经验、授权范围与动作 / Loop 规则</text>
+<text x="75" y="384" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="674">同一 Run 始终用 P-A；控制效果还须实际回报</text>
+<path d="M409 397V419" fill="none" stroke="#285f96" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-blue)"/>
+<rect x="56" y="423" width="712" height="119" rx="13" fill="#ffffff" stroke="#285f96" stroke-width="2"/>
+<text x="75" y="460" font-size="30" font-weight="700" fill="#285f96" text-anchor="start" data-max-width="674">L1 · 模型调用前后</text>
+<text x="75" y="498" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="674">activity.begin 返回增强输入；宿主调用模型</text>
+<text x="75" y="529" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="674">activity.end 回报实际输入，校验经验是否真的应用</text>
+<rect x="56" y="560" width="712" height="147" rx="13" fill="#ffffff" stroke="#285f96" stroke-width="2"/>
+<text x="75" y="597" font-size="30" font-weight="700" fill="#285f96" text-anchor="start" data-max-width="674">L2 · 动作调用前后</text>
+<text x="75" y="635" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="674">activity.begin 做 allow / reject 检查</text>
+<text x="75" y="666" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="674">宿主负责串行、并行、消息派发与按 ID 合流</text>
+<text x="75" y="697" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="674">activity.end 回报成功 / 失败；单分支失败不覆盖全局</text>
+<rect x="56" y="718" width="712" height="119" rx="13" fill="#ffffff" stroke="#285f96" stroke-width="2"/>
+<text x="75" y="755" font-size="30" font-weight="700" fill="#285f96" text-anchor="start" data-max-width="674">L3 · 当前循环决策</text>
+<text x="75" y="793" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="674">loop.check → 宿主执行决定 → loop.commit</text>
+<text x="75" y="824" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="674">有限继续 / 重规划 / 停止；不替宿主定义全局终态</text>
+<path d="M409 839V861" fill="none" stroke="#285f96" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-blue)"/>
+<rect x="56" y="865" width="712" height="178" rx="13" fill="#ffffff" stroke="#285f96" stroke-width="2"/>
+<text x="75" y="902" font-size="30" font-weight="700" fill="#285f96" text-anchor="start" data-max-width="674">Run 结束：先返回业务</text>
+<text x="75" y="940" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="674">等待已登记活动和控制全部闭合，再 run.end</text>
+<text x="75" y="971" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="674">L0 已采集输入、输出、显式结果与因果事件</text>
+<text x="75" y="1002" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="674">本地终态先进入内存队列，writer 异步持久化</text>
+<text x="75" y="1033" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="674">未保存时 persisted=false；崩溃可能丢失尾部</text>
+<rect x="56" y="1051" width="712" height="83" rx="12" fill="#ffffff" stroke="#285f96" stroke-width="2"/>
+<use xlink:href="#agent" transform="translate(70 1060) scale(0.8)" color="#285f96"/>
+<text x="139" y="1086" font-size="28" font-weight="700" fill="#285f96" text-anchor="start" data-max-width="609">组件本地边界：只做有界内存处理</text>
+<text x="139" y="1118" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="609">不在业务路径等待后台模型、磁盘或 HTTP。</text>
+<rect x="56" y="1155" width="712" height="112" rx="12" fill="#ffffff" stroke="#cad5df" stroke-width="2"/>
+<text x="74" y="1190" font-size="28" font-weight="700" fill="#285f96" text-anchor="start" data-max-width="670">任务时序</text>
+<text x="74" y="1225" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="674">A 开始用 R10 / P-A → 后台更新 R11 → B 用 P-B</text>
+<text x="74" y="1255" font-size="24" font-weight="600" fill="#285f96" text-anchor="start" data-max-width="674">后台更新期间，仍在执行的 A 不换策略。</text>
+<rect x="840" y="247" width="752" height="148" rx="13" fill="#ffffff" stroke="#18755f" stroke-width="2"/>
+<text x="858" y="284" font-size="30" font-weight="700" fill="#18755f" text-anchor="start" data-max-width="716">轨迹落盘与完整性</text>
+<text x="858" y="323" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">本地缓冲 → writer → 标准 TraceRun</text>
+<text x="858" y="355" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">按 user / conversation / run 隔离；记录事件因果</text>
+<text x="858" y="387" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">脱敏 + 完整性校验；有缺口则 quarantine，不学习</text>
+<path d="M1216 399V418" fill="none" stroke="#18755f" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-teal)"/>
+<rect x="840" y="424" width="752" height="184" rx="13" fill="#ffffff" stroke="#18755f" stroke-width="2"/>
+<text x="858" y="461" font-size="30" font-weight="700" fill="#18755f" text-anchor="start" data-max-width="716">增量调度：冻结新批次</text>
+<text x="858" y="500" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">同用户满 20 条，或最老新样本等待 10 分钟</text>
+<text x="858" y="532" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">距前批结束至少 60 秒；每批 ≤ 32 条 / 32 MiB</text>
+<text x="858" y="564" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">单个学习批次串行执行，新 Run 留在下批</text>
+<text x="858" y="596" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">参数可配置；小批超时不是评测完成时限</text>
+<path d="M1216 612V632" fill="none" stroke="#18755f" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-teal)"/>
+<rect x="840" y="638" width="752" height="182" rx="13" fill="#ffffff" stroke="#18755f" stroke-width="2"/>
+<text x="858" y="675" font-size="30" font-weight="700" fill="#18755f" text-anchor="start" data-max-width="716">混合评测、反思与候选</text>
+<text x="858" y="714" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">规则 + 可选模型；模型看脱敏、限长的具体内容</text>
+<text x="858" y="746" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">已完成 evaluation 复用；入库前保存候选 PB</text>
+<text x="858" y="778" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">来源指纹、证据与支持度校验；新报告可提供反证</text>
+<text x="858" y="810" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">跨轨迹元反思可配置；各阶段共享模型预算</text>
+<path d="M1216 824V829" fill="none" stroke="#18755f" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-teal)"/>
+<rect x="840" y="835" width="752" height="205" rx="13" fill="#ffffff" stroke="#18755f" stroke-width="2"/>
+<text x="858" y="872" font-size="30" font-weight="700" fill="#18755f" text-anchor="start" data-max-width="716">Memory 持续管理</text>
+<text x="858" y="911" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">去重 / 相关 / 冲突 / 独立入库，跨批累计证据</text>
+<text x="858" y="941" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">新增记忆达阈值后自动全库整理，超容量则淘汰</text>
+<text x="858" y="971" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">冲突、证据不足或未授权经验不进入应用快照</text>
+<text x="858" y="1001" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">Memory PB 持久化；revision 记录库修订</text>
+<text x="858" y="1031" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">记忆入库 ≠ 自动发布新控制代码或证明收益</text>
+<path d="M1216 1044V1052" fill="none" stroke="#18755f" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-teal)"/>
+<rect x="840" y="1058" width="752" height="209" rx="13" fill="#ffffff" stroke="#18755f" stroke-width="2"/>
+<text x="858" y="1095" font-size="30" font-weight="700" fill="#18755f" text-anchor="start" data-max-width="716">通知缓存，供新 Run 使用</text>
+<text x="858" y="1134" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">库修订变化 → memory_version 计数增加</text>
+<text x="858" y="1166" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">后台比较计数；变化才重新加载 Memory PB</text>
+<text x="858" y="1198" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">空闲不重复分析、不反复全库重载</text>
+<text x="858" y="1230" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">run.begin 从新缓存编译新的运行快照</text>
+<text x="858" y="1262" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="716">已有 run.policy 保持不变；快照随运行状态保存</text>
+<path d="M771 992H798V316H834" fill="none" stroke="#18755f" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-teal)"/>
+<path d="M835 1177H809V362H773" fill="none" stroke="#285f96" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#arrow-blue)"/>
+<rect x="593" y="874" width="152" height="38" rx="19" fill="#ffffff" stroke="#18755f" stroke-width="2"/>
+<text x="669" y="901" font-size="23" font-weight="600" fill="#18755f" text-anchor="middle" data-max-width="132">新轨迹 →</text>
+<rect x="630" y="257" width="116" height="38" rx="19" fill="#ffffff" stroke="#285f96" stroke-width="2"/>
+<text x="688" y="284" font-size="23" font-weight="600" fill="#285f96" text-anchor="middle" data-max-width="96">← 记忆</text>
+<text x="1664" y="258" font-size="25" font-weight="600" fill="#7750a3" text-anchor="start" data-max-width="760">待补充：父子策略谱系、真实试验器与发布门</text>
+<rect x="1664" y="282" width="760" height="98" rx="12" fill="#ffffff" stroke="#7750a3" stroke-width="2" stroke-dasharray="9 6"/>
+<text x="1684" y="318" font-size="29" font-weight="700" fill="#7750a3" text-anchor="start" data-max-width="720">冻结任务、初态、授权与预算</text>
+<text x="1684" y="354" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="720">固定训练 / 搜索验证 / 最终留出划分，先测基线。</text>
+<rect x="1903" y="412" width="280" height="77" rx="14" fill="#ffffff" stroke="#7750a3" stroke-width="2" stroke-dasharray="9 6"/>
+<text x="2043" y="459" font-size="33" font-weight="700" fill="#7750a3" text-anchor="middle" data-max-width="246">父策略 P0</text>
+<path d="M2043 383V405" fill="none" stroke="#7750a3" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow-purple)"/>
+<rect x="1664" y="538" width="356" height="103" rx="13" fill="#ffffff" stroke="#7750a3" stroke-width="2" stroke-dasharray="9 6"/>
+<text x="1842" y="576" font-size="30" font-weight="700" fill="#7750a3" text-anchor="middle" data-max-width="320">候选 P1</text>
+<text x="1842" y="615" font-size="24" font-weight="400" fill="#203248" text-anchor="middle" data-max-width="320">例：只调整经验组件</text>
+<rect x="2068" y="538" width="356" height="103" rx="13" fill="#ffffff" stroke="#7750a3" stroke-width="2" stroke-dasharray="9 6"/>
+<text x="2246" y="576" font-size="30" font-weight="700" fill="#7750a3" text-anchor="middle" data-max-width="320">候选 P2</text>
+<text x="2246" y="615" font-size="24" font-weight="400" fill="#203248" text-anchor="middle" data-max-width="320">例：只调整循环参数</text>
+<path d="M2043 492V513H1842V532" fill="none" stroke="#7750a3" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow-purple)"/>
+<path d="M2043 513H2246V532" fill="none" stroke="#7750a3" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow-purple)"/>
+<rect x="1664" y="674" width="760" height="194" rx="12" fill="#ffffff" stroke="#7750a3" stroke-width="2" stroke-dasharray="9 6"/>
+<text x="1683" y="710" font-size="28" font-weight="700" fill="#7750a3" text-anchor="start" data-max-width="722">逐任务真实成绩 → 保留各自优势候选</text>
+<text x="1683" y="749" font-size="24" font-weight="600" fill="#536477" text-anchor="start" data-max-width="128">候选</text>
+<text x="1855" y="749" font-size="24" font-weight="600" fill="#536477" text-anchor="middle" data-max-width="164">检索任务</text>
+<text x="2044" y="749" font-size="24" font-weight="600" fill="#536477" text-anchor="middle" data-max-width="164">失败恢复</text>
+<text x="2233" y="749" font-size="24" font-weight="600" fill="#536477" text-anchor="middle" data-max-width="164">并发任务</text>
+<text x="1684" y="782" font-size="24" font-weight="500" fill="#203248" text-anchor="start" data-max-width="130">P0</text>
+<text x="1855" y="782" font-size="24" font-weight="400" fill="#536477" text-anchor="middle" data-max-width="164">待实测</text>
+<text x="2044" y="782" font-size="24" font-weight="400" fill="#536477" text-anchor="middle" data-max-width="164">待实测</text>
+<text x="2233" y="782" font-size="24" font-weight="400" fill="#536477" text-anchor="middle" data-max-width="164">待实测</text>
+<text x="1684" y="813" font-size="24" font-weight="500" fill="#203248" text-anchor="start" data-max-width="130">P1</text>
+<text x="1855" y="813" font-size="24" font-weight="400" fill="#536477" text-anchor="middle" data-max-width="164">待实测</text>
+<text x="2044" y="813" font-size="24" font-weight="400" fill="#536477" text-anchor="middle" data-max-width="164">待实测</text>
+<text x="2233" y="813" font-size="24" font-weight="400" fill="#536477" text-anchor="middle" data-max-width="164">待实测</text>
+<text x="1684" y="844" font-size="24" font-weight="500" fill="#203248" text-anchor="start" data-max-width="130">P2</text>
+<text x="1855" y="844" font-size="24" font-weight="400" fill="#536477" text-anchor="middle" data-max-width="164">待实测</text>
+<text x="2044" y="844" font-size="24" font-weight="400" fill="#536477" text-anchor="middle" data-max-width="164">待实测</text>
+<text x="2233" y="844" font-size="24" font-weight="400" fill="#536477" text-anchor="middle" data-max-width="164">待实测</text>
+<path d="M1842 645V658H2044V669" fill="none" stroke="#7750a3" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow-purple)"/>
+<path d="M2246 645V658H2044" fill="none" stroke="#7750a3" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 6"/>
+<rect x="1664" y="900" width="760" height="149" rx="12" fill="#ffffff" stroke="#7750a3" stroke-width="2" stroke-dasharray="9 6"/>
+<text x="1684" y="939" font-size="29" font-weight="700" fill="#7750a3" text-anchor="start" data-max-width="720">训练小批初筛 → 完整搜索验证</text>
+<text x="1684" y="978" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="720">父子恢复相同初态重跑，结合轨迹反思变异</text>
+<text x="1684" y="1008" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="720">候选竞争与可选合并；合并必须重新实测</text>
+<text x="1684" y="1038" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="720">搜索验证可回流；独立留出不参与本轮搜索</text>
+<path d="M2044 872V895" fill="none" stroke="#7750a3" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow-purple)"/>
+<rect x="1664" y="1082" width="760" height="185" rx="12" fill="#ffffff" stroke="#7750a3" stroke-width="2" stroke-dasharray="9 6"/>
+<text x="1684" y="1122" font-size="29" font-weight="700" fill="#7750a3" text-anchor="start" data-max-width="720">独立留出 → 策略晋升 / 撤回</text>
+<text x="1684" y="1162" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="720">质量、安全、开销等门槛通过后才发布</text>
+<text x="1684" y="1193" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="720">没有通过或证据不足：保留旧正式策略</text>
+<text x="1684" y="1224" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="720">发布需要精确父子版本与实际应用回执</text>
+<text x="1684" y="1255" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="720">这一整栏尚未实现，不能视为当前自动闭环。</text>
+<path d="M2044 1053V1076" fill="none" stroke="#7750a3" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 6" marker-end="url(#arrow-purple)"/>
+<rect x="32" y="1314" width="2416" height="189" rx="15" fill="#f6f8fb" stroke="#cad5df" stroke-width="2"/>
+<text x="52" y="1357" font-size="32" font-weight="700" fill="#203248" text-anchor="start" data-max-width="2300">不要把下面三个标识当成同一种“版本”</text>
+<text x="52" y="1402" font-size="30" font-weight="700" fill="#18755f" text-anchor="start" data-max-width="758">Memory revision</text>
+<text x="52" y="1443" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="758">磁盘记忆修订号；持久化，可供回溯。</text>
+<text x="52" y="1480" font-size="24" font-weight="500" fill="#536477" text-anchor="start" data-max-width="758">库更新也可能仅是证据或批次记录变化。</text>
+<text x="852" y="1402" font-size="30" font-weight="700" fill="#285f96" text-anchor="start" data-max-width="774">memory_version</text>
+<text x="852" y="1443" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="774">进程内缓存通知计数；重启后可重新计数。</text>
+<text x="852" y="1480" font-size="24" font-weight="500" fill="#536477" text-anchor="start" data-max-width="774">仅决定是否重载，不是策略内容或进化代数。</text>
+<text x="1676" y="1402" font-size="30" font-weight="700" fill="#285f96" text-anchor="start" data-max-width="752">policy_id / run.policy</text>
+<text x="1676" y="1443" font-size="24" font-weight="400" fill="#203248" text-anchor="start" data-max-width="752">运行策略的哈希标识与完整快照；随 Run 保存。</text>
+<text x="1676" y="1480" font-size="24" font-weight="500" fill="#536477" text-anchor="start" data-max-width="752">当前有运行快照，没有 GEPA 父子版本关系。</text>
+<text x="34" y="1537" font-size="23" font-weight="400" fill="#536477" text-anchor="start" data-max-width="2410">依据：组件 README / ALGORITHMS · 实线为已实现，紫色虚线为规划 · R10 / P-A 是图示简称 · 无效 Loop ↓30%–60% 是课题目标，非已测收益。</text>
+</svg>

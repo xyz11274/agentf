@@ -1,0 +1,35 @@
+# Harness v1 问题清单
+
+| 问题 | 位置 | 诱发原因 | 可能导致的结果 |
+|---|---|---|---|
+| Tool Call 语义恢复正常情况下不会重试 | packages/agentflow-runtime/src/agentflow_runtime/skill_executor.py:753-794 | continue 写在 response_push 的 except 中；progress 上报成功时直接落入错误返回 | 可恢复的截断或非法 Tool Call 被直接终止；恢复次数和 Loop 数据失真 |
+| Skill 逻辑失败被上报为成功 | skill_executor.py:476-507、516-543、668-698、714-739、753-794、840-904、1082-1103；src/agent/agent.cpp:1863-1876 | Skill 输出 llm_error、timeout 等状态后正常 return，Python 退出码仍为 0；C++ 只根据 workflow_completed 设置 skill_success | 失败轨迹被当成成功样本；成功率、收敛率和无效 Loop 数不可信 |
+| Skill 完成回传丢失 dispatch 身份 | coordinator_decide.py:217-247；src/runtime/runtime.cpp:1627-1702；src/agent/agent.cpp:1880-1904 | exec_skill_key 只传到 Skill 输入，Python 输出和 C++ completion metadata 都没有把它带回 | 无法把 SkillCompleted 唯一关联到 DispatchRequested；并发轨迹树可能连错父节点 |
+| 同批 skill-runner 的 task_id 可能相同 | src/agent/agent.cpp:1230-1256、2840-2851 | task_id 由相同模板名、相同 message_id 和 skill-runner 名生成，没有包含 exec_skill_key | 多个执行在日志和 Recorder 中显示成同一个 task；无法区分同名或并行 Skill |
+| 并行 Skill 共用结果键 | src/runtime/runtime.cpp:106-119、1193-1293、1643-1691 | build_framework_key 明确忽略 workflow_id；同一 dialogue 的多个 Skill 都写 skill_result、skill_name、artifacts_json | A 的完成事件可能读取到 B 的结果、业务名或产物；Coordinator 基于错误结果继续决策 |
+| 处理一个 Skill 完成事件时可能清掉兄弟完成事件 | src/agent/agent.cpp:1913-1919；src/agent/task.cpp:183-207、293-307 | clear_data_exchange_messages 无条件清空整个队列，没有按消息类型或 execution id 过滤 | 并行 Skill 的 completion 丢失；pending 计数无法归零；对话挂起或丢结果 |
+| LLM trace index 并发写会丢项 | packages/agentflow-runtime/src/agentflow_runtime/recorder.py:427-438 | 多个进程同时执行“读取 JSON 列表—append—覆盖写回”，没有 CAS 或原子 append | 实际发生的 LLM Call 不在索引中；轨迹缺轮次；无效 Loop 次数被低估 |
+| emit_event 没有真正写入 NDJSON | packages/agentflow-runtime/src/agentflow_runtime/observability.py:49-79；trace/emit.py:87-118 | span_event 只创建事件并输出 stderr，没有把事件加入当前 TraceSpan | 错误、重试、超时和 Tool Call 等事件无法从 NDJSON 回放 |
+| Tool 调用和结果缺少可靠持久事件 | skill_executor.py:796-802、970-987；trace/emit.py:87-118 | Tool 信息主要写 messages 和 stderr，没有独立 ToolCall span/event | Tool 执行后若进程崩溃，结果可能完全丢失；无法准确分析 Tool Loop |
+| Recorder 记录值可能和真正执行值不同 | recorder.py:337-396；coordinator_decide.py:626-630；skill_executor.py:661-666 | Recorder 先保存原始 LLM response，after_llm hook 随后可以原地修改同一个 choice 对象 | 按 Recorder 回放得到的分支与线上实际分支不同；Hook 效果可能被错误归因给 Prompt |
+| 最终响应可能绕过 pending Skill 屏障 | src/agent/agent.cpp:2326-2381、2473-2545；coordinator_decide.py:920-940 | C++ 只在 found_next_skills 分支检查 pending；Coordinator correction loop 会删除 next_skills | 兄弟 Skill 尚未完成时就向客户端发送 final；final 后又出现 Skill completion |
+| Skill 完成结果被放成 role=user | coordinator_decide.py:462-474 | 异步 Skill 结果晚于 run_skills 的同步 Tool ACK 到达，代码用 user 消息重新注入 Coordinator | 内部结果被误认为用户输入；用户轮数和角色标签失真；Skill 输出获得过高消息权限 |
+| run_skills 的 role=tool 只是调度确认，不是执行结果 | coordinator_decide.py:207-258、855-859 | run_skills 只写 manifest 和 next_skills，随后立即返回“已调度 N 个 Skill” | 普通轨迹解析器会把 DispatchAccepted 误当 SkillCompleted；ACK 与真实完成无法关联 |
+| Dialogue Start/End 实际是 Coordinator 激活 Start/End | coordinator_decide.py:354-361、728-758 | 每次 Skill completion 都会重启 Coordinator；每次候选 final 都触发 dialogue end | 同一 dialogue 出现多个 start/end；可能先 end 再 start；生命周期轨迹错误 |
+| Coordinator round 混入 Skill completion 次数 | coordinator_decide.py:391-406、521-525 | 每收到一个 Skill completion 就增加 current_round；内部 Tool correction 又使用另一套 round | 并发 Skill 越多，表面 Loop 越多；max_iterations 和无效 Loop 指标含义错误 |
+| 最终响应只自动附加最近完成 Skill 的产物 | coordinator_decide.py:261-284、725-727、782 | 每次 Coordinator 只接收当前 completion 的 AF_SKILL_ARTIFACTS，没有聚合整个 dispatch batch | 较早完成 Skill 的产物可能不出现在最终附件中；Artifact 节点与 Skill 执行关联不完整 |
+| Dispatch 写入不是事务，且忽略写入结果 | coordinator_decide.py:217-258；databus_client.py:98-109、146-162 | manifest、last_prompt、next_skills 分多次写入；put 返回 False 仍返回 status=dispatched | 出现孤儿 manifest、缺失 manifest 或假调度；轨迹有 DispatchAccepted 但没有真实执行 |
+| run_skills 参数缺少运行时校验 | coordinator_decide.py:794-845、214-227 | JSON 解析后没有检查 skills 类型、name、prompt、load_skills 和 Skill 白名单 | JSON 合法但结构错误时 Coordinator 崩溃；非法 Skill 名进入调度和轨迹 |
+| Hook 阻断的 Skill 仍被记为已调度 | coordinator_decide.py:823-845、867-919 | Skill 名先加入 _dispatched_skills，之后 Hook 才设置 blocked；阻断后没有移除 | 发出错误的 skills_dispatched 事件并 return 等待；实际没有任何 Skill 启动 |
+| 重复调度只检查最近完成的 Skill | coordinator_decide.py:180-204、381-389、804-817 | 只保存 completed_skill 和每个 Skill 的最后一个 prompt，没有完整 pending/completed ledger | 较早完成的 Skill 可以被同 prompt 再次调度；产生无效 Loop 和重复成本 |
+| Dispatch manifest 缓存丢失时继续执行 unknown-skill | skill_executor.py:330-370 | exec_skill_key 缺失、DataBus 失败或 manifest 非法时选择通用回退，而不是终止 | 调度链断裂被伪装成正常 Skill；可能返回与原任务无关的 completed 结果 |
+| Workflow JSON 声明和 Python 实际输出不一致 | frontend/bridge/templates/agent_template/harness_agent/skill_workflow.json:15-24；coordinator_workflow.json:52-64；skill_executor.py:1019-1025 | Skill workflow 声明 response，但实际输出 skill_result、skill_name、rounds_used；Coordinator 声明 coordinator_status 但未稳定输出 | Rust 按声明实现时字段缺失；Protobuf adapter 无法确定真实 ABI；静态校验失效 |
+| after_tool Hook 改写结果不检查数量和类型 | skill_executor.py:943-959 | 改写结果直接 list 化后与 tool_calls 使用 zip，没有校验长度、tool_call_id 和三元组结构 | Tool result 被静默截断或错配；下一轮消息缺少部分 Tool response；也可能直接解包崩溃 |
+| Hook 原地追加 Artifact 不会回写输出 | context.py:17-32；skill_executor.py:872-888、1048-1064 | 只在 ctx.artifacts 对象身份改变时重写 artifacts_json；append 不改变对象身份 | Hook 生成的 Artifact 不进入 Skill result，也无法进入后续轨迹和最终响应 |
+| 空最终文本仍标记 completed | skill_executor.py:1020-1032 | output.status 先固定为 completed；空文本只记录 WARN | 空结果被当成成功；Coordinator 继续按照成功路径决策 |
+| Timeout 和 Max Rounds 返回的不是可靠汇总 | skill_executor.py:476-497、1082-1094 | 直接把 messages 最后一条 content 当 skill_result；最后一条可能是 Tool JSON 或恢复提示 | 内部协议文本被当成业务结果；停止原因和有效成果无法区分 |
+| Recorder 缺少关键执行身份 | recorder.py:97-117、379-396；src/runtime/runtime.cpp:2119-2143 | Recorder 未保存 AF_EXEC_SKILL_KEY、worker id、source、skill、round；Runtime 的 unique execution_id 也未传给 Python | LLM Call 无法稳定挂到对应 Skill execution；同名并发调用只能靠时间猜测 |
+| SpanWriter 写失败可能反过来打断业务 | trace/emit.py:70-82；trace/span_writer.py:68-89 | emit_span 的 finally 直接写文件，没有异常隔离 | 磁盘或目录异常会让观测代码导致 Coordinator/Skill 失败 |
+| SpanWriter 的锁不能保护多进程并发 | trace/span_writer.py:43-48、68-89 | 使用 threading.Lock，只对单个 Python 进程有效；并行 Skill 各自拥有不同锁 | 同一 dialogue 的 NDJSON 可能出现写入竞争、半行或损坏记录 |
+| Tool registry 覆盖实现后仍保留旧 schema | tool_registry.py:205-226 | 同名 Tool 覆盖 _modules，但 _tools 继续 append | LLM 看到多个同名 Tool 定义，实际执行使用最后一个实现；Tool schema 与执行实现不一致 |
+| LLM retry 次数记录永远为 0 | recorder.py:260、349-396；common/clients/openai_compatible_client.py:121-267 | retry loop 在 HTTP client 内部，Recorder 的 attempt 没有接收真实尝试次数 | 无法区分网络重试、语义恢复和 Agent Loop；重试优化数据不可信 |

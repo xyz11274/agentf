@@ -5,6 +5,35 @@ coordinator 只提取 choices[0].message.content 作为 response_text，
 tool_calls 等 raw JSON 不应出现在 response_text 中。
 """
 import json
+import pytest
+
+
+@pytest.mark.parametrize("content, expected", [
+    ("正常答复", "正常答复"),
+    ("<think>第一段</think>\n<think>第二段</think>\n最终答复", "最终答复"),
+    ("<think>第一段</think>\n<think>未闭合\n</｜DSML｜tool_calls>", ""),
+    ("<think>只有思考</think>", ""),
+    ("<think>未闭合", ""),
+    ("前文\n<think>第二段</think>\n最终答复", "前文\n\n最终答复"),
+    ("前文\n<think>未闭合", ""),
+    ("<think>读取 `file.txt` 后报告</think>完整答复", "完整答复"),
+    ("<think>检查\n```json\n{}\n```\n完成</think>完整答复", "完整答复"),
+    ("说明中的 `<think>` 字符串", "说明中的 `<think>` 字符串"),
+    ("```xml\n<think>literal</think>\n```", "```xml\n<think>literal</think>\n```"),
+])
+def test_final_response_extraction_handles_all_leading_reasoning(content, expected):
+    from agentflow_runtime.coordinator_common import final_response_text, is_empty_llm_response
+    from agentflow_runtime.skill_executor import validate_tool_calls
+
+    message = {"role": "assistant", "content": content}
+    choice = {"message": message, "finish_reason": "stop"}
+    assert final_response_text(content) == expected
+    assert is_empty_llm_response({"choices": [choice]}) == (not expected)
+    assert validate_tool_calls(choice) == ((True, "") if expected else (False, "incomplete_final_response"))
+    assert message["content"] == content  # Raw trace evidence is not rewritten.
+    message["tool_calls"] = [{"function": {"name": "write_file", "arguments": "{}"}}]
+    assert validate_tool_calls(choice) == (True, "")
+    assert not is_empty_llm_response({"choices": [choice]})
 
 
 # 模拟 LLM 返回的响应（非流式）

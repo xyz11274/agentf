@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="768" viewBox="0 0 1100 768" role="img" aria-labelledby="title desc">
+<title id="title">部署方式：一个目录，一个写入所有者</title><desc id="desc">选择所有者之后，再选择业务进程如何上报。 每个 data_dir 由一个原生进程或 serve 服务持有写入权。</desc>
+<defs><style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei","PingFang SC",sans-serif;}</style><marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L9 4.5L0 9Z" fill="#203248"/></marker></defs>
+<rect width="1100" height="768" fill="#ffffff"/>
+<text x="36" y="52" font-size="30" font-weight="700" fill="#203248" data-max-width="1016"><tspan x="36" dy="0">部署方式：一个目录，一个写入所有者</tspan></text>
+<text x="36" y="94" font-size="18" font-weight="400" fill="#536477" data-max-width="1016"><tspan x="36" dy="0">选择所有者之后，再选择业务进程如何上报。</tspan></text>
+<rect x="32" y="140" width="1036" height="165" rx="16" fill="#edf4fb" stroke="#cad5df" stroke-width="1.5"/>
+<text x="52" y="171" font-size="21" font-weight="700" fill="#285f96" data-max-width="988"><tspan x="52" dy="0">原生部署</tspan></text>
+<rect x="52" y="188" width="489" height="99" rx="12" fill="#ffffff" stroke="#285f96" stroke-width="1.5"/>
+<rect x="52" y="202" width="4" height="71" rx="2" fill="#285f96" stroke="none" stroke-width="1.5"/>
+<text x="70" y="218" font-size="21" font-weight="700" fill="#285f96" data-max-width="453"><tspan x="70" dy="0">常驻宿主</tspan></text>
+<text x="70" y="248" font-size="19" font-weight="400" fill="#203248" data-max-width="453"><tspan x="70" dy="0">持有 LocalRuntime 至任务结束</tspan></text>
+<rect x="559" y="188" width="489" height="99" rx="12" fill="#ffffff" stroke="#285f96" stroke-width="1.5"/>
+<rect x="559" y="202" width="4" height="71" rx="2" fill="#285f96" stroke="none" stroke-width="1.5"/>
+<text x="577" y="218" font-size="21" font-weight="700" fill="#285f96" data-max-width="453"><tspan x="577" dy="0">后台线程</tspan></text>
+<text x="577" y="248" font-size="19" font-weight="400" fill="#203248" data-max-width="453"><tspan x="577" dy="0">落盘、评测、更新视图</tspan></text>
+<rect x="32" y="323" width="1036" height="165" rx="16" fill="#edf7f1" stroke="#cad5df" stroke-width="1.5"/>
+<text x="52" y="354" font-size="21" font-weight="700" fill="#18755f" data-max-width="988"><tspan x="52" dy="0">HTTP 部署</tspan></text>
+<rect x="52" y="371" width="489" height="99" rx="12" fill="#ffffff" stroke="#18755f" stroke-width="1.5"/>
+<rect x="52" y="385" width="4" height="71" rx="2" fill="#18755f" stroke="none" stroke-width="1.5"/>
+<text x="70" y="401" font-size="21" font-weight="700" fill="#18755f" data-max-width="453"><tspan x="70" dy="0">多个业务进程</tspan></text>
+<text x="70" y="431" font-size="19" font-weight="400" fill="#203248" data-max-width="453"><tspan x="70" dy="0">短连接或异步客户端；主动上报</tspan></text>
+<rect x="559" y="371" width="489" height="99" rx="12" fill="#ffffff" stroke="#18755f" stroke-width="1.5"/>
+<rect x="559" y="385" width="4" height="71" rx="2" fill="#18755f" stroke="none" stroke-width="1.5"/>
+<text x="577" y="401" font-size="21" font-weight="700" fill="#18755f" data-max-width="453"><tspan x="577" dy="0">一个常驻服务</tspan></text>
+<text x="577" y="431" font-size="19" font-weight="400" fill="#203248" data-max-width="453"><tspan x="577" dy="0">持有同一 run；串行协调写入</tspan></text>
+<rect x="32" y="506" width="1036" height="165" rx="16" fill="#fff4e8" stroke="#cad5df" stroke-width="1.5"/>
+<text x="52" y="537" font-size="21" font-weight="700" fill="#a65e19" data-max-width="988"><tspan x="52" dy="0">共有边界</tspan></text>
+<rect x="52" y="554" width="489" height="99" rx="12" fill="#ffffff" stroke="#a65e19" stroke-width="1.5"/>
+<rect x="52" y="568" width="4" height="71" rx="2" fill="#a65e19" stroke="none" stroke-width="1.5"/>
+<text x="70" y="584" font-size="21" font-weight="700" fill="#a65e19" data-max-width="453"><tspan x="70" dy="0">同一个 data_dir</tspan></text>
+<text x="70" y="614" font-size="19" font-weight="400" fill="#203248" data-max-width="453"><tspan x="70" dy="0">服务锁阻止多个独立写入者</tspan></text>
+<rect x="559" y="554" width="489" height="99" rx="12" fill="#ffffff" stroke="#a65e19" stroke-width="1.5"/>
+<rect x="559" y="568" width="4" height="71" rx="2" fill="#a65e19" stroke="none" stroke-width="1.5"/>
+<text x="577" y="584" font-size="21" font-weight="700" fill="#a65e19" data-max-width="453"><tspan x="577" dy="0">业务执行</tspan></text>
+<text x="577" y="614" font-size="19" font-weight="400" fill="#203248" data-max-width="453"><tspan x="577" dy="0">仍由宿主负责，不由进化服务代跑</tspan></text>
+<rect x="32" y="689" width="1036" height="51" rx="12" fill="#fff4e8" stroke="#e6c5a4" stroke-width="1.5"/>
+<text x="52" y="717" font-size="18" font-weight="400" fill="#a65e19" data-max-width="984"><tspan x="52" dy="0">每个 data_dir 由一个原生进程或 serve 服务持有写入权。</tspan></text>
+</svg>

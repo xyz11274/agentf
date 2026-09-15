@@ -1926,7 +1926,9 @@ JsonValue evaluation_json(
 JsonValue episode_json(const LoopEpisode& episode, Allocator& allocator) {
   JsonValue output(rapidjson::kObjectType);
   output.AddMember("episode_id", make_string(episode.episode_id, allocator), allocator);
-  output.AddMember("scope", make_string(to_string(episode.scope), allocator), allocator);
+  output.AddMember("scope", make_string(
+      episode.scope == LoopScope::agent ? "agent:" + episode.actor_id
+                                       : to_string(episode.scope), allocator), allocator);
   output.AddMember("owner_id", make_string(episode.owner_id, allocator), allocator);
   output.AddMember("skill_name", make_string(episode.skill_name, allocator), allocator);
   output.AddMember(
@@ -2117,6 +2119,8 @@ std::string to_string(LoopScope scope) {
       return "coordinator";
     case LoopScope::skill:
       return "skill";
+    case LoopScope::agent:
+      return "agent";
     case LoopScope::unknown:
       return "unknown";
   }

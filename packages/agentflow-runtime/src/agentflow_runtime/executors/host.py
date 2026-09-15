@@ -90,6 +90,11 @@ class HostExecutor(ToolExecutor):
 
         try:
             with open(path, encoding="utf-8", errors="replace") as f:
+                # Text reads must not send binary payloads into model context.
+                binary_error = "Binary content detected; read_file only returns text. Use a binary-aware tool to inspect file metadata."
+                if "\x00" in f.read(8192):
+                    return FileContent(error=binary_error)
+                f.seek(0)
                 if offset > 0 or limit > 0:
                     lines = f.readlines()
                     start = max(0, offset - 1) if offset > 0 else 0
@@ -103,6 +108,8 @@ class HostExecutor(ToolExecutor):
                     content = f.read()
                     total_lines = len(content.splitlines())
 
+            if "\x00" in content:
+                return FileContent(error=binary_error)
             return FileContent(content=content, total_lines=total_lines)
         except PermissionError:
             return FileContent(error=f"Permission denied: {path}")

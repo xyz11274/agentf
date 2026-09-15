@@ -21,6 +21,7 @@ from agentflow_runtime.common.runtime_context import artifact_session_id
 
 
 from .secrets import find_registered_secret_exposures, register_environment_secrets
+from .local_sandbox_auth import local_sandbox_headers, local_sandbox_urlopen
 
 
 IMAGE_SUFFIXES = frozenset({
@@ -99,15 +100,36 @@ def _validate_suffix(path: PurePosixPath, allowed_suffixes: frozenset[str]) -> N
         raise TrustedMediaError(f"unsupported media type: {path.suffix or '<none>'}")
 
 
+def _local_media_path(relative: PurePosixPath) -> Path:
+    """Use the same private workspace as Local file tools, never package assets."""
+    identity = artifact_session_id()
+    if not identity or Path(identity).name != identity or identity in {".", ".."}:
+        raise TrustedMediaError("artifact session identity is unavailable")
+    prefix = PurePosixPath("workspace", identity)
+    if relative.parts[0] == "workspace":
+        if relative.parts[:2] != prefix.parts:
+            raise TrustedMediaError("media path targets another workspace")
+        relative = relative.relative_to(prefix)
+    root = _agent_root()
+    workspace = root / "workspace"
+    user_root = workspace / identity
+    destination = (user_root / Path(*relative.parts)).resolve()
+    if (workspace.resolve() != workspace or user_root.resolve() != user_root
+            or not destination.is_relative_to(user_root)):
+        raise TrustedMediaError("media path escapes the private workspace")
+    return destination
+
+
 def _post_json(endpoint: str, route: str, payload: dict, timeout: int = 60) -> dict:
-    request = urllib.request.Request(
-        endpoint.rstrip("/") + route,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
     try:
-        with direct_urlopen(request, timeout=timeout) as response:
+        request = urllib.request.Request(
+            endpoint.rstrip("/") + route,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", **local_sandbox_headers(endpoint)},
+            method="POST",
+        )
+        opener = local_sandbox_urlopen if os.environ.get("AF_SANDBOX_MODE") == "local" else direct_urlopen
+        with opener(request, timeout=timeout) as response:
             result = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         raise TrustedMediaError(
@@ -160,11 +182,13 @@ def materialize_media(
 
     relative = _normalize_workspace_path(value)
     _validate_suffix(relative, allowed_suffixes)
-    local_path = (_agent_root() / Path(*relative.parts)).resolve()
+    is_local = os.environ.get("AF_SANDBOX_MODE", "") == "local"
+    local_path = (_local_media_path(relative) if is_local
+                  else (_agent_root() / Path(*relative.parts)).resolve())
     if local_path.is_file():
         yield str(local_path)
         return
-    if not sandbox_endpoint:
+    if is_local or not sandbox_endpoint:
         raise TrustedMediaError(f"media file not found: {relative.as_posix()}")
 
     result = _post_json(
@@ -206,6 +230,13 @@ def publish_media(
     if exposure.applied:
         raise TrustedMediaError("generated media blocked by credential isolation policy")
 
+    if os.environ.get("AF_SANDBOX_MODE", "") == "local":
+        destination = _local_media_path(relative)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+        # Absolute Local paths are accepted by both file tools and artifact
+        # collection; returning a package-relative prefix would be nested twice.
+        return str(destination)
     if sandbox_endpoint:
         _post_json(
             sandbox_endpoint,

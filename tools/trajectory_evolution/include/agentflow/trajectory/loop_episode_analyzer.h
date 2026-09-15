@@ -14,6 +14,7 @@ enum class LoopScope {
   unknown,
   coordinator,
   skill,
+  agent,
 };
 
 enum class InvalidLoopCategory {
@@ -109,6 +110,8 @@ struct LoopEpisode {
   std::vector<std::string> source_event_ids;
   std::vector<EvaluationSummary> evaluations;
   std::vector<std::string> diagnostic_ids;
+  // Only standard traces use actor_id; legacy serialized fields stay unchanged.
+  std::string actor_id;
 };
 
 struct LoopDiagnostic {

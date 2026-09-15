@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="1160" viewBox="0 0 1100 1160" role="img" aria-labelledby="title desc">
+<title id="title">GEPA：反思变异、双亲重组与留出集准入</title>
+<desc id="desc">主 Agent 使用固定版本。后台通过训练反馈反思和前沿选择建立多父候选谱系。内部节点 V1 已有后代 V3，仍可与另一分支的叶节点 V2 联合生成 V4，分别贡献经验和动作规则。新组合经过验证和最终留出集验收后发布。完整策略与试验记录可恢复和离线加载。</desc>
+<defs>
+  <style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif;fill:#203248} .small{font-size:16px;fill:#536477} .label{font-size:18px} .heading{font-size:21px;font-weight:700} .edge{fill:none;stroke:#778ba3;stroke-width:2;marker-end:url(#arrow)} .loop{fill:none;stroke:#8b64b0;stroke-width:2;stroke-dasharray:6 5;marker-end:url(#arrow)}</style>
+  <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M0 0L9 4.5L0 9Z" fill="#778ba3"/></marker>
+</defs>
+<rect width="1100" height="1160" fill="#fff"/>
+<text x="36" y="52" font-size="30" font-weight="700" data-max-width="1030">GEPA：反思变异、双亲重组与留出集准入</text>
+<text x="36" y="92" class="label">一个后台优化器，复用现有评测器；L4 不增加主 Agent 打点。</text>
+
+<rect x="32" y="122" width="1036" height="118" rx="16" fill="#edf5fd" stroke="#adc5df"/>
+<text x="52" y="151" class="heading">前台 · 一次 run 固定一个已发布版本</text>
+<rect x="52" y="170" width="193" height="48" rx="9" fill="#fff" stroke="#adc5df"/>
+<rect x="286" y="170" width="193" height="48" rx="9" fill="#fff" stroke="#adc5df"/>
+<rect x="520" y="170" width="272" height="48" rx="9" fill="#fff" stroke="#adc5df"/>
+<rect x="833" y="170" width="212" height="48" rx="9" fill="#fff" stroke="#adc5df"/>
+<text x="75" y="201" class="label">用户任务 / 原有打点</text>
+<text x="315" y="201" class="label">缓存中的完整策略</text>
+<text x="546" y="201" class="label">模型 · 并行动作 · 循环控制</text>
+<text x="875" y="201" class="label">结果与执行轨迹</text>
+<path class="edge" d="M245 194H279M479 194H513M792 194H826"/>
+
+<rect x="32" y="263" width="1036" height="632" rx="16" fill="#fbf9fe" stroke="#d0bfdf"/>
+<text x="52" y="296" class="heading">后台 · 单父反思与双亲重组共用多轮谱系</text>
+<rect x="52" y="320" width="269" height="123" rx="12" fill="#edf5fd" stroke="#adc5df"/>
+<text x="69" y="350" class="heading">固定任务集</text>
+<text x="69" y="380" class="label">train：小批次试验与反思</text>
+<text x="69" y="405" class="label">val：逐题成绩与候选选择</text>
+<text x="69" y="429" class="small">holdout 留到搜索结束后使用</text>
+
+<rect x="52" y="464" width="269" height="171" rx="12" fill="#f0e9f9" stroke="#b49aca"/>
+<text x="69" y="495" class="heading">反思 · 可选 ComBEE</text>
+<text x="69" y="526" class="label">父版本的实际经验文本</text>
+<text x="69" y="552" class="label">训练输入、输出、判分与轨迹</text>
+<text x="69" y="584" class="small">经验改写 / 受限控制规则</text>
+<text x="69" y="610" class="small">隐私、来源授权、范围和长度校验</text>
+
+<rect x="52" y="657" width="269" height="212" rx="12" fill="#fff5e9" stroke="#e1bd91"/>
+<text x="69" y="687" class="heading">试验与资源边界</text>
+<text x="69" y="719" class="label">独立实例执行真实 Agent</text>
+<text x="69" y="746" class="label">先保任务质量，再比较成本</text>
+<text x="69" y="779" class="small">轮数 / 反思请求 / 宿主试跑预算</text>
+<text x="69" y="805" class="small">总截止时间 / patience</text>
+<text x="69" y="831" class="small">同版本同题缓存；中断计入预算</text>
+<text x="69" y="854" class="small">未知指标保留为未知</text>
+
+<rect x="589" y="327" width="219" height="82" rx="12" fill="#edf5fd" stroke="#85a9ce" stroke-width="2"/>
+<text x="609" y="360" class="heading">V0 · seed</text>
+<text x="609" y="388" class="small">经验 E0 + 规则 S0</text>
+<path class="edge" d="M699 410V439H480V465M699 439H877V465"/>
+<rect x="367" y="473" width="229" height="96" rx="12" fill="#f0e9f9" stroke="#b49aca" stroke-width="2"/>
+<text x="386" y="505" class="heading">V1 · 经验分支</text>
+<text x="386" y="533" class="small">parent = V0 · 完整验证</text>
+<text x="386" y="556" class="small">E1 + S0 · 已有子节点 V3</text>
+<rect x="760" y="473" width="256" height="96" rx="12" fill="#f0e9f9" stroke="#b49aca" stroke-width="2"/>
+<text x="779" y="505" class="heading">V2 · 编排分支</text>
+<text x="779" y="533" class="small">parent = V0 · 部分任务领先</text>
+<text x="779" y="556" class="small">E0 + S1 · 与 V1 互补</text>
+<path class="edge" d="M480 570V598H454V623M480 598H637V623M888 570V610H717V623M888 610V623"/>
+<rect x="351" y="630" width="209" height="105" rx="12" fill="#f0e9f9" stroke="#b49aca" stroke-width="2"/>
+<text x="367" y="661" class="heading">V3 · 继续变异</text>
+<text x="367" y="690" class="small">parent = V1，深度 2</text>
+<text x="367" y="715" class="small">V1 仍可参与分支重组</text>
+<rect x="578" y="630" width="198" height="105" rx="12" fill="#e9f6ef" stroke="#6eaa89" stroke-width="2"/>
+<text x="594" y="661" class="heading">V4 · 联合重组</text>
+<text x="594" y="690" class="small">parents = [V1, V2]</text>
+<text x="594" y="715" class="small">E1 + S1 · 重新验证</text>
+<rect x="794" y="630" width="222" height="105" rx="12" fill="#fff0ed" stroke="#d6a79e"/>
+<text x="810" y="661" class="heading">V5 · 退化</text>
+<text x="810" y="690" class="small">parent = V2</text>
+<text x="810" y="715" class="small">保留证据，不进入父节点池</text>
+
+<rect x="351" y="764" width="665" height="105" rx="12" fill="#fff" stroke="#b49aca" stroke-width="2"/>
+<text x="371" y="794" class="heading">逐题前沿：保留不同任务上的最优候选</text>
+<text x="371" y="825" class="label">前沿去冗余 → 按覆盖频次选父 → 反思 / 双亲重组</text>
+<text x="371" y="853" class="small">每个节点保存完整策略；重组保存双亲、共同祖先和组件来源。</text>
+<path class="loop" d="M1016 816H1045V449H887V465"/>
+<path class="loop" d="M351 815H337V548H323"/>
+
+<rect x="32" y="920" width="1036" height="182" rx="16" fill="#edf7f1" stroke="#b4d4c2"/>
+<text x="52" y="954" class="heading">搜索结束 · 先固定 winner，再使用独立留出集验收</text>
+<rect x="52" y="977" width="207" height="91" rx="10" fill="#fff" stroke="#b4d4c2"/>
+<text x="69" y="1009" class="label">生产基线 vs winner</text>
+<text x="69" y="1037" class="small">holdout 配对真实执行</text>
+<rect x="300" y="977" width="219" height="91" rx="10" fill="#fff" stroke="#b4d4c2"/>
+<text x="317" y="1009" class="label">统一质量与成本准入</text>
+<text x="317" y="1037" class="small">失败保留原生产版本</text>
+<rect x="560" y="977" width="209" height="91" rx="10" fill="#fff" stroke="#b4d4c2"/>
+<text x="577" y="1009" class="label">核验父版本、任务</text>
+<text x="577" y="1037" class="small">通过后登记发布</text>
+<rect x="810" y="977" width="235" height="91" rx="10" fill="#fff" stroke="#6eaa89" stroke-width="2"/>
+<text x="827" y="1009" class="label">后续 run / 离线加载</text>
+<text x="827" y="1037" class="small">完整策略 + 验收信息</text>
+<path class="edge" d="M259 1022H293M519 1022H553M769 1022H803"/>
+<text x="52" y="1087" class="small">选中和发布分别记录；留出结果不回送反思，不在同一实验里继续针对留出集搜索。</text>
+<text x="36" y="1139" class="label">tree.json + versions + reflections + evaluations：保留历史、恢复进度、定位每一次改进。</text>
+</svg>

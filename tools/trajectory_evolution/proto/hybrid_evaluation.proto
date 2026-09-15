@@ -215,14 +215,25 @@ message DialogueTaskAssessment {
   uint32 attempts = 11;
 }
 
+// Explicit recipient, condition, behavior and evidence; never an activation grant.
+message ExperienceAdvice {
+  string target_scope = 1;
+  string trigger_pattern = 2;
+  string proposed_change = 3;
+  repeated string evidence_event_ids = 4;
+}
+
 message EvolutionReflection {
   string summary = 1;
   repeated string root_causes = 2;
   repeated string skill_orchestration_changes = 3;
-  repeated string prompt_changes = 4;
+  repeated string experience_injections = 4;
   repeated string stop_condition_changes = 5;
   repeated string wasted_episode_ids = 6;
   repeated string evidence_event_ids = 7;
+  // Additive: experience_injections remains the readable/legacy string view.
+  repeated ExperienceAdvice experience_details = 8;
+  reserved "prompt_changes";
 }
 
 message HybridEvaluationReport {
@@ -254,10 +265,11 @@ message HybridEvaluationReport {
 enum CandidateTargetType {
   CANDIDATE_TARGET_TYPE_UNSPECIFIED = 0;
   CANDIDATE_TARGET_TYPE_SKILL_ORCHESTRATION = 1;
-  CANDIDATE_TARGET_TYPE_PROMPT = 2;
+  CANDIDATE_TARGET_TYPE_EXPERIENCE_INJECTION = 2;
   CANDIDATE_TARGET_TYPE_LOOP_STOP_CONDITION = 3;
   CANDIDATE_TARGET_TYPE_RETRY_POLICY = 4;
   CANDIDATE_TARGET_TYPE_TOOL_RESULT_CONSUMPTION = 5;
+  reserved "CANDIDATE_TARGET_TYPE_PROMPT";
 }
 
 enum EvolutionCandidateStatus {
@@ -282,6 +294,34 @@ enum EvolutionMemoryStatus {
   EVOLUTION_MEMORY_STATUS_VALIDATED = 2;
   EVOLUTION_MEMORY_STATUS_REJECTED = 3;
   EVOLUTION_MEMORY_STATUS_ARCHIVED = 4;
+}
+
+enum MemoryUpdateAction {
+  MEMORY_UPDATE_ACTION_UNSPECIFIED = 0;
+  MEMORY_UPDATE_ACTION_INSERTED = 1;
+  MEMORY_UPDATE_ACTION_MERGED = 2;
+  MEMORY_UPDATE_ACTION_UNCHANGED = 3;
+  MEMORY_UPDATE_ACTION_SKIPPED = 4;
+  MEMORY_UPDATE_ACTION_LINKED = 5;
+  MEMORY_UPDATE_ACTION_EVICTED = 6;
+}
+
+enum MemoryMatchRelation {
+  MEMORY_MATCH_RELATION_UNSPECIFIED = 0;
+  MEMORY_MATCH_RELATION_EXACT = 1;
+  MEMORY_MATCH_RELATION_DUPLICATE = 2;
+  MEMORY_MATCH_RELATION_RELATED = 3;
+  MEMORY_MATCH_RELATION_CONTRADICTS = 4;
+  MEMORY_MATCH_RELATION_DISTINCT = 5;
+  MEMORY_MATCH_RELATION_UNRESOLVED = 6;
+}
+
+enum MemoryMatchMethod {
+  MEMORY_MATCH_METHOD_UNSPECIFIED = 0;
+  MEMORY_MATCH_METHOD_CANDIDATE_ID = 1;
+  MEMORY_MATCH_METHOD_STORED_ALIAS = 2;
+  MEMORY_MATCH_METHOD_STRUCTURED_RULE = 3;
+  MEMORY_MATCH_METHOD_MODEL = 4;
 }
 
 message CandidateEvidence {
@@ -366,6 +406,33 @@ message MetaReflectionAssessment {
   uint64 output_candidate_count = 9;
 }
 
+message MemoryMatchOption {
+  string memory_id = 1;
+  double lexical_score = 2;
+  string content_fingerprint = 3;
+  EvolutionMemoryStatus memory_status = 4;
+}
+
+message MemoryUpdateDecision {
+  string candidate_id = 1;
+  string memory_id = 2;
+  string matched_memory_id = 3;
+  MemoryUpdateAction action = 4;
+  MemoryMatchRelation relation = 5;
+  MemoryMatchMethod match_method = 6;
+  double confidence = 7;
+  string reason = 8;
+  repeated MemoryMatchOption considered_matches = 9;
+  string adapter = 10;
+  string model_id = 11;
+  string request_fingerprint = 12;
+  string response_fingerprint = 13;
+  string error_code = 14;
+  uint32 attempts = 15;
+  string decision_id = 16;
+  bool full_store_curation = 17;
+}
+
 message MemoryUpdateResult {
   bool requested = 1;
   bool applied = 2;
@@ -376,6 +443,20 @@ message MemoryUpdateResult {
   uint64 updated_entry_count = 7;
   uint64 unchanged_entry_count = 8;
   string error_code = 9;
+  repeated MemoryUpdateDecision decisions = 10;
+  string curator_version = 11;
+  uint64 model_requested_count = 12;
+  uint64 model_succeeded_count = 13;
+  uint64 model_failed_count = 14;
+  uint64 concurrency_retry_count = 15;
+  bool full_curation_triggered = 16;
+  bool full_curation_completed = 17;
+  uint64 pending_new_entry_count = 18;
+  uint64 full_curation_examined_count = 19;
+  uint64 full_curation_merged_count = 20;
+  string full_curation_error_code = 21;
+  uint64 evicted_entry_count = 22;
+  uint64 pruned_applied_batch_id_count = 23;
 }
 
 message HybridEvaluationBatchReport {
@@ -395,10 +476,27 @@ message HybridEvaluationBatchReport {
   MemoryUpdateResult memory_update = 14;
 }
 
+message EvolutionMemoryRelation {
+  string target_memory_id = 1;
+  MemoryMatchRelation relation = 2;
+  double confidence = 3;
+  reserved 4 to 7;
+  string decision_id = 8;
+}
+
 message EvolutionMemoryRevision {
   uint64 store_revision = 1;
+  reserved 4 to 6;
   string batch_id = 2;
   EvolutionCandidate candidate_snapshot = 3;
+}
+
+message MemoryEvaluationFeedback {
+  string content_revision = 1;
+  string status = 2;
+  repeated string report_ids = 3;
+  uint64 positive_trial_count = 4;
+  uint64 negative_trial_count = 5;
 }
 
 message EvolutionMemoryEntry {
@@ -409,6 +507,9 @@ message EvolutionMemoryEntry {
   string last_batch_id = 5;
   repeated string observed_batch_ids = 6;
   repeated EvolutionMemoryRevision revisions = 7;
+  repeated string source_candidate_ids = 8;
+  repeated EvolutionMemoryRelation relations = 9;
+  MemoryEvaluationFeedback evaluation_feedback = 10;
 }
 
 message EvolutionMemoryStore {
@@ -418,4 +519,6 @@ message EvolutionMemoryStore {
   uint64 revision = 4;
   repeated string applied_batch_ids = 5;
   repeated EvolutionMemoryEntry entries = 6;
+  reserved 7;
+  uint64 new_entries_since_full_curation = 8;
 }

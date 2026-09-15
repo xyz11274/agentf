@@ -40,8 +40,10 @@ from agentflow_runtime.common.runtime_context import (
     input as _input,
     batch_id as _batch_id,
     session_id as _session_id,
+    user_id as _user_id,
 )
 from agentflow_runtime.common.agent_config import AgentConfig
+from agentflow_runtime.coordinator_common import final_response_text
 from agentflow_runtime.databus_client import DataBusClient
 from agentflow_runtime.tool_policies import execute_in_batches
 from agentflow_runtime.compaction import (
@@ -61,6 +63,7 @@ from agentflow_runtime.context import AgentContext
 from agentflow_runtime.hooks import load_hooks_from_dir, trigger as hook_trigger
 from agentflow_runtime.trace import emit_span, SpanKind, SpanStatus
 from prompts import (
+    LLM_FINAL_RESPONSE_RECOVERY_PROMPT,
     SKILL_ARTIFACT_AUTO_COLLECT_PROMPT,
     SKILL_ASK_USER_FALLBACK_PROMPT,
     SKILL_FALLBACK_SYSTEM,
@@ -72,6 +75,14 @@ from prompts import (
     SKILL_TOOL_PRIORITY_PROMPT,
 )
 from agentflow_runtime.round_reminder import build_round_reminder
+
+try:
+    from evolution_configured import points as _evolution
+except ImportError:
+    _evolution = None
+if os.environ.get("AF_COORDINATOR_VERSION", "v1") != "v1":
+    _evolution = None
+
 from agentflow_runtime.security import install_stderr_redaction, redact_secrets
 from agentflow_runtime.harness.mcp import MCP_AVAILABLE, MCPBridge, discover_servers  # noqa: F401, E402
 
@@ -286,6 +297,11 @@ def validate_tool_calls(choice: dict) -> tuple[bool, str]:
     """Reject truncated or syntactically broken tool calls before execution."""
     if choice.get("finish_reason") == "length":
         return False, "completion_truncated"
+    message = choice.get("message", {})
+    content = message.get("content")
+    if (not message.get("tool_calls") and isinstance(content, str) and content.strip()
+            and not final_response_text(content).strip()):
+        return False, "incomplete_final_response"
     for tool_call in choice.get("message", {}).get("tool_calls") or []:
         function = tool_call.get("function", {})
         name = function.get("name", "unknown")
@@ -452,6 +468,12 @@ def _finish_dispatch_manifest_error(
         "error": manifest_error,
     }
     messages = [{"role": "user", "content": user_input}] if user_input else []
+    if _evolution is not None:
+        _evolution.point({
+            "phase": "after", "kind": "custom",
+            "ref": {"run": _dialogue_id(), "key": exec_skill_key},
+            "status": "failed", "output": output,
+        }, user_id=_user_id())
     ctx = AgentContext(messages=messages, artifacts=[])
 
     with emit_span(
@@ -654,6 +676,13 @@ def execute():
         if _skill_end_emitted or not isinstance(output, dict):
             return
         _skill_end_emitted = True
+        if _evolution is not None:
+            _evolution.point({
+                "phase": "after", "kind": "custom",
+                "ref": {"run": dialogue_id, "key": exec_skill_key},
+                "status": "unknown" if output.get("status") == "unhandled_exception" else "completed",
+                "output": output,
+            }, user_id=_user_id())
         end_ctx = ctx or AgentContext(
             messages=messages,
             artifacts=generated_artifacts,
@@ -802,6 +831,20 @@ def execute():
 
         _turn_start = time.time()
         for round_i in range(max_rounds):
+            if _evolution is not None and not _evolution.allow_loop({
+                "ref": {"run": dialogue_id, "key": f"{exec_skill_key}:loop:{round_i + 1}",
+                        "parent": exec_skill_key},
+                "state": {"last_result": messages[-1] if messages else {}, "artifacts": generated_artifacts},
+            }, user_id=_user_id()):
+                output = {
+                    "skill_result": _summarize_tool_history(messages), "status": "loop_control_stop",
+                    "skill_name": skill_name, "rounds_used": round_i,
+                    "artifacts_json": json.dumps(generated_artifacts, ensure_ascii=False),
+                }
+                if databus.is_connected():
+                    databus.put("skill_result:skill-runner", json.dumps(output, ensure_ascii=True))
+                print(json.dumps(output, ensure_ascii=False))
+                return
             elapsed = time.time() - _turn_start
             # Reserve enough time for result, skill.end and span persistence.
             # The cap also applies to hard-compaction LLM calls in this process.
@@ -1077,10 +1120,13 @@ def execute():
                 if has_recovery_attempt and has_next_round:
                     previous_completion_budget = completion_budget
                     recovery_attempts += 1
-                    completion_budget = min(completion_budget * 2, 16384)
+                    if invalid_reason != "incomplete_final_response":
+                        completion_budget = min(completion_budget * 2, 16384)
                     messages.append({
                         "role": "user",
-                        "content": SKILL_RECOVERY_PROMPT,
+                        "content": (LLM_FINAL_RESPONSE_RECOVERY_PROMPT
+                                    if invalid_reason == "incomplete_final_response"
+                                    else SKILL_RECOVERY_PROMPT),
                     })
                     hook_trigger(hook_events.SKILL_EXECUTOR_RECOVERY_DECISION, {
                         "skill_name": skill_name,
@@ -1308,6 +1354,16 @@ def execute():
                     safe_args, _redaction = redact_secrets(args)
                     args_preview = json.dumps(safe_args, ensure_ascii=False)[:200]
                     print(f"[flow]   tool_call: {name} args={args_preview}", file=sys.stderr)
+                    if _evolution is not None:
+                        result = _evolution.call({
+                            "kind": "action", "name": name,
+                            "ref": {"run": dialogue_id,
+                                    "key": f"{exec_skill_key}:tool:{round_i + 1}:{tc.get('id', _tool_call_ordinals[id(tc)])}",
+                                    "parent": exec_skill_key},
+                            "actor_id": skill_name, "input": args,
+                        }, lambda actual: tool_registry.execute(name, actual),
+                            user_id=_user_id(), result_format="json_text")
+                        return name, args, result
                     return name, args, tool_registry.execute(name, args)
 
                 _timed_out_tool_call_ids = set()
@@ -1569,9 +1625,7 @@ def execute():
                     return
             else:
                 # Task complete → output result
-                response_text = msg.get("content", "")
-                if not isinstance(response_text, str):
-                    response_text = ""
+                response_text = final_response_text(msg.get("content", ""))
                 _empty_final_result = not response_text.strip()
                 _has_tool_failure = bool(unresolved_tool_failures)
                 _final_status = (

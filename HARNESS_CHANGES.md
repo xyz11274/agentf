@@ -3708,3 +3708,2819 @@
   - `docs/trajectory-evaluation/BATCH_AND_MEMORY_FIELDS.md`
   - `docs/trajectory-evaluation/SESSIONLOG_TO_EVOLUTION_MEMORY.md`
   - `HARNESS_CHANGES.md`
+
+### CHG-20260903-133：新增无向量数据库的进化记忆管理层
+
+- 日期：2026-09-03
+- 问题：原 Memory 仅按完全相同的 `candidate_id` 插入或合并，无法直接回答本批
+  Candidate 最终对应哪个 Memory，也不能保留跨生成器的语义重复、相关/冲突关系、
+  模型整理依据和完整来源映射。文本相近候选会持续膨胀，若直接用模糊规则合并又会
+  污染后续策略实验的数据血缘。
+- 风险分析：GitNexus 索引比当前 HEAD 落后且仍处于 incomplete 状态；对新增
+  `curate_memory_file`、Memory 消息和测试函数的影响分析均返回 `UNKNOWN/not found`，
+  没有可作为放行依据的调用图。按规范补充文本检索，确认改动只位于独立
+  `tools/trajectory_evolution` 的 CLI、Protobuf、实现和测试，以及既有说明文档；未进入
+  Harness、Coordinator、Skill Executor 或 Runtime 在线链路，未得到 HIGH/CRITICAL
+  在线流程风险结论。
+- 最小改动：
+  - 不引入向量数据库或新依赖；在同类型、同规范化作用域内全量扫描，用字符 3-gram
+    相似度只做最多 8 项短名单排序，任何相似度都不能自动合并。
+  - 保留既有 `merge_memory` / `update_memory_file` 接口；新增可选
+    `curate_memory_file` 和 `--memory-semantic-match`。默认行为不调用模型，模糊项以
+    `UNRESOLVED` 独立入库。
+  - 稳定 ID/历史来源别名直接复用 canonical Memory；规范化策略键完全相同按规则
+    合并。可选模型只判断 `DUPLICATE`、`RELATED`、`CONTRADICTS`、`DISTINCT`；只有
+    高置信重复才合并，相关和冲突只建立双向关系。模型失败、非法输出、越权引用、
+    低置信度或预算耗尽均保守独立入库，不影响其他 Candidate。
+  - Protobuf 以追加字段保持兼容：保存每个 Candidate 的映射决策、候选短名单、方法、
+    置信度、理由、模型/请求/响应指纹和错误码；Entry 保存所有来源 Candidate ID 和
+    Memory 关系；Revision 同时快照 Candidate、生命周期状态、来源映射和关系。
+  - 模型调用不持有 Memory 文件锁；提交时在锁内比较基线，发现并发更新后有限次
+    重算。PB 仍以临时文件加 rename 原子替换，JSON 仍是可再生视图。
+  - 写入前校验 Candidate 指纹/稳定 ID、canonical Memory ID、来源唯一归属和关系
+    目标；损坏 Candidate 在 revision 或 batch_id 变化前原子拒绝。同批次重放恢复
+    Candidate→Memory 映射，不增加 revision、不再次调用模型，并可补齐旧 Store 的
+    curator/source 元数据。
+- 涉及文件：
+  - `tools/trajectory_evolution/proto/hybrid_evaluation.proto`
+  - `tools/trajectory_evolution/include/agentflow/trajectory/evolution_pipeline.h`
+  - `tools/trajectory_evolution/src/evolution_pipeline.cpp`
+  - `tools/trajectory_evolution/src/main.cpp`
+  - `tools/trajectory_evolution/tests/test_evolution_pipeline.cpp`
+  - `tools/trajectory_evolution/README.md`
+  - `docs/trajectory-evaluation/BATCH_AND_MEMORY_FIELDS.md`
+  - `docs/trajectory-evaluation/SESSIONLOG_TO_EVOLUTION_MEMORY.md`
+  - `HARNESS_CHANGES.md`
+- 验证结果：
+  - 普通构建和 GCC 15 警告即错误构建均通过；完整 4/4 CTest 通过。
+  - 回归覆盖首次插入、同批幂等、跨批证据合并、JSON 视图恢复、旧 Memory 元数据
+    迁移、默认保守入库、模型重复合并、相关/冲突双向关系、低置信拒绝合并、非法模型
+    输出降级、损坏 Candidate 原子拒绝和单文件失败隔离。
+  - CLI 在未配置模型时显式使用 `--memory-semantic-match` 会在执行前以退出码 2 拒绝；
+    默认模式不访问网络。
+  - AddressSanitizer + UndefinedBehaviorSanitizer 构建的 4/4 CTest 通过，无内存错误或
+    未定义行为报告。
+  - 使用现有 4 个真实 Dialogue 做无网络 CLI 验收：4 个全部评测成功，1 个 Candidate
+    写入 revision=1；相同输入重放得到同一 batch_id，`idempotent_replay=true`，
+    revision 保持 1，并恢复同一 Candidate→Memory 映射。
+- 边界：本次完成候选记忆的增量整理、稳定映射和关系管理，仍不实现实验验证、自动
+  晋升/拒绝/归档或线上策略注入；这些必须由后续闭环在回放/A-B 证据通过后执行。
+
+### CHG-20260904-134：记忆入库与管理自动化，并增加周期全库复核
+
+- 日期：2026-09-04
+- 问题：已有记忆整理需要调用方显式开启，且只处理当前 Batch，没有“新增一定数量后
+  自动复核全库”的闭环。长期运行会留下跨批次重复项；冲突关系若被后续相关判断覆盖，
+  还可能让未来策略选择器同时注入互斥策略。文件乐观并发重算也可能重复发送完全相同的
+  模型请求。
+- 风险分析：GitNexus 索引尚未包含本次未提交符号，对 `prefer_relation`、
+  `run_full_store_curation`、`run_memory_match`、`curate_memory_in_place` 及新增测试的
+  impact 均返回 `UNKNOWN/not found`，不能将 0 caller 当作低风险。补充文本调用链确认
+  变更封闭在 `tools/trajectory_evolution` 的离线 CLI、库实现、Protobuf 和测试，以及
+  对应说明文档；未修改 Harness、Coordinator、Skill Executor 或 Runtime 在线链路。
+- 最小改动：
+  - CLI 统一走 `curate_memory_file()`；只要配置模型适配器，兼容短名单的语义整理自动
+    执行，不再需要 `--memory-semantic-match`。无模型或单项判断失败时保守独立入库，
+    不阻塞其他 Candidate。
+  - 每个新候选立即按稳定 ID/历史别名、规范化重复规则和最多 8 项同类型同作用域短名单
+    整理。高置信 `DUPLICATE` 合并；`RELATED` / `CONTRADICTS` 保留双方并建立双向关系；
+    `DISTINCT` 独立保存。
+  - Store 持久化 `new_entries_since_full_curation`，只累计真正新建并保留的 Entry。默认每
+    20 条自动在同一次调用内复核全库，可用 `--memory-full-curation-threshold N` 调整。
+    全库先确定性合并规范化重复项，再逐条复核兼容短名单；没有可比较项时不要求模型。
+  - 全库某项失败不会回滚增量入库或其他复核结果；`full_curation_completed=false` 并保留
+    pending 计数，后续新 Batch 自动重试。预算不足在发送请求前整体延期，避免半批消耗。
+  - 冲突关系采用安全优先级：一旦确认 `CONTRADICTS`，后续更高置信 `RELATED` 也不能
+    降级覆盖。两条记忆均保留；当前层不伪造激活状态，未来策略选择器必须对冲突组至多
+    激活一条。
+  - 详细短名单、理由、模型身份、请求/响应指纹、错误和每项稳定 `decision_id` 保存在
+    Batch；Memory 只保留当前 Candidate、来源别名、紧凑双向关系和 Candidate revision。
+    被移除的试验字段号改为 `reserved`，防止旧 Protobuf 数据被误读为新字段。
+  - 乐观并发重算在单次 `curate_memory_file()` 生命周期内按请求指纹复用原始模型响应；
+    缓存不落盘、不跨批次，模型预算和计数只统计真实外部请求。提交仍使用文件锁、基线
+    比较和原子 rename。
+  - 所有 Candidate 身份和批次内重复 ID 在 revision、batch_id 或 Memory 内容变化前统一
+    校验；全库合并保留被合并项的来源 Candidate ID，使旧 Batch 仍能幂等回放到 canonical
+    `memory_id`。
+- 涉及文件：
+  - `tools/trajectory_evolution/proto/hybrid_evaluation.proto`
+  - `tools/trajectory_evolution/include/agentflow/trajectory/evolution_pipeline.h`
+  - `tools/trajectory_evolution/src/evolution_pipeline.cpp`
+  - `tools/trajectory_evolution/src/main.cpp`
+  - `tools/trajectory_evolution/tests/test_evolution_pipeline.cpp`
+  - `tools/trajectory_evolution/README.md`
+  - `docs/trajectory-evaluation/BATCH_AND_MEMORY_FIELDS.md`
+  - `docs/trajectory-evaluation/SESSIONLOG_TO_EVOLUTION_MEMORY.md`
+  - `HARNESS_CHANGES.md`
+- 验证结果：
+  - 普通构建与完整 4/4 CTest 通过。
+  - GCC `-Werror` 独立构建与完整 4/4 CTest 通过，无新增编译警告。
+  - AddressSanitizer + UndefinedBehaviorSanitizer 独立构建与完整 4/4 CTest 通过，无内存
+    错误或未定义行为报告。
+  - 回归覆盖自动增量整理、阈值全库复核、失败与预算隔离、无可比较项无需模型、冲突
+    不降级、合并后别名幂等回放、批内重复 ID 原子拒绝，以及并发重算不重复请求模型。
+  - CLI 帮助只暴露 `--memory-full-curation-threshold`，已移除旧手动语义整理开关。
+  - 使用仓库现有 10 条真实 SessionLog 做无网络端到端验收：10/10 Evaluation 成功，
+    生成 1 个 Candidate；阈值设为 1 时同次调用得到 `full_curation_triggered=true`、
+    `full_curation_completed=true`。再次运行得到 `idempotent_replay=true`，revision 保持
+    1，Candidate→Memory 映射不变。产物仅位于被忽略的 `build/` 验证目录。
+  - GitNexus `detect-changes --scope all` 返回 low、0 affected process，但只识别到文档
+    符号，没有覆盖本批新增 C++ 符号；因此不将该结果当作完整代码影响证明，仍以文本
+    调用链、三类构建和回归测试作为代码边界依据。
+- 边界：不引入向量数据库、新依赖、独立全库管理程序或在线策略注入；不自动晋升、
+  拒绝、归档 Memory。策略选择和冲突组互斥激活属于下一落地单元。
+
+### CHG-20260904-135：为进化记忆库增加确定性容量淘汰
+
+- 日期：2026-09-04
+- 问题：增量去重和每 20 条新增记忆触发的全库复核只能合并重复项，不能限制彼此独立
+  的 Memory；`entries`、`applied_batch_ids` 和 Entry 内累计证据仍可随长期运行持续
+  增长。原有 256 MiB 限制只在规划后报错，既没有选择性淘汰，也会使整个新 Batch
+  无法提交。
+- 风险分析：
+  - Repository：`AgentFlow (/root/lai-code/Agent/AgentFlow)`，Worktree 同路径，分支
+    `harness_agent_poc_evo`。GitNexus 已刷新到当前提交 `46a2daa`。
+  - `run_full_store_curation` 上游影响为 LOW：1 个直接调用者、4 个受影响符号、2 条
+    evolution 内部流程。`curate_memory_in_place` 上游影响为 LOW：2 个直接调用者、
+    3 个受影响符号、2 条内部流程。
+  - `curate_memory_file`、`EvolutionOptions` 和构造器方法因 C++ 方法解析得到
+    UNKNOWN；按规则补充精确文本调用搜索，确认调用点仅在独立
+    `tools/trajectory_evolution` CLI、测试和文档中。未修改 Harness、Coordinator、
+    Skill Executor 或 Runtime 在线路径，未发现 HIGH/CRITICAL 风险。
+- 最小改动：
+  - `EvolutionOptions` 增加默认 512 条的 Memory 工作集上限和默认 4096 项的最近
+    Batch 精确幂等窗口；CLI 对应
+    `--memory-max-entries` / `--memory-replay-window`，两者都必须大于零。
+  - 每批增量与可选全库复核完成后，在同一 Memory 事务内先裁剪最旧 Batch ID，再按
+    生命周期、Candidate 状态、支持用户/Dialogue/Episode、置信度和最近修订确定性
+    淘汰低优先级 Entry；`VALIDATED` 最后淘汰。
+  - `CONTRADICTS` 连通组作为原子淘汰单元，不能只删一侧；淘汰后统一重建双向关系。
+    若 Entry 数已满足但 Protobuf 仍超过字节限制，继续按相同顺序淘汰，最终保留硬
+    字节上限。
+  - 每个删除动作写入 `MemoryUpdateDecision(action=EVICTED)`，并增加
+    `evicted_entry_count` 与 `pruned_applied_batch_id_count`。详细来源不复制到新的
+    Archive Store，继续由既有 Batch Evaluation、Dialogue Evaluation 和 SessionLog
+    保存，避免把无界增长转移到另一份 Memory。
+  - 幂等重放不重新合并 Candidate、也不增加 revision，但允许执行纯容量迁移，使旧
+    Store 在更严格配置下立即收敛。超过最近 Batch 窗口后不保证永久 Batch 级幂等；
+    Candidate/别名仍在时稳定映射继续去重，两者均淘汰后旧批可重新进入工作集。
+  - Memory Curator 版本提升为 `evolution-memory-curator-v2`；Store wire 结构和
+    `store_version=v1` 保持兼容，不引入向量数据库、新依赖或独立管理程序。
+- 涉及文件：
+  - `tools/trajectory_evolution/proto/hybrid_evaluation.proto`
+  - `tools/trajectory_evolution/include/agentflow/trajectory/evolution_pipeline.h`
+  - `tools/trajectory_evolution/src/evolution_pipeline.cpp`
+  - `tools/trajectory_evolution/src/main.cpp`
+  - `tools/trajectory_evolution/tests/test_evolution_pipeline.cpp`
+  - `tools/trajectory_evolution/README.md`
+  - `docs/trajectory-evaluation/BATCH_AND_MEMORY_FIELDS.md`
+  - `docs/trajectory-evaluation/SESSIONLOG_TO_EVOLUTION_MEMORY.md`
+  - `HARNESS_CHANGES.md`
+- 验证结果：
+  - 普通构建、GCC `-Werror` 构建、ASan + UBSan 构建均成功，三套完整 4/4 CTest
+    全部通过。
+  - 新回归覆盖同优先级最旧淘汰、最近 Batch 窗口、淘汰审计、幂等容量迁移、
+    `VALIDATED` 优先保留、冲突组原子淘汰和序列化字节硬上限。
+  - 使用现有 10 条 SessionLog 做无网络 CLI 验收，10/10 Evaluation 成功、1 个
+    Candidate 写入；设置 Entry/Batch 上限均为 1 后重放得到相同 `batch_id`、
+    `idempotent_replay=true`、revision 保持 1，Memory 保持 1 条。
+- 边界：当前淘汰依据是候选证据质量与修订新旧，不包含尚未实现的策略激活次数、
+  在线收益或 A/B 实验结果；后续选择/验证层产生这些指标后，应将它们接入保留优先级。
+
+### CHG-20260904-136：轨迹进化 Prompt 与运行参数外置化
+
+- 日期：2026-09-04
+- 问题：轨迹评测、Dialogue 反思、跨轨迹元反思和记忆整理的模型 Prompt 原本写在
+  C++ 字符串中，Evaluation/Evolution/HTTP 默认参数也散落在头文件和 CLI；修改策略
+  需要重新编译，无法安全地按实验替换，也无法明确记录一批运行使用了哪一版 Prompt。
+- 风险分析：
+  - GitNexus 索引已刷新到 21,505 个节点、40,313 条边和 240 条执行流。
+  - `parse_arguments`、`ensure_distinct_outputs`、`ensure_dialogue_output_distinct`、
+    `make_model_request`、`make_dialogue_request`、`make_meta_request`、
+    `config_fingerprint` 和相关构造器的上游影响为 LOW。
+  - `make_memory_match_request` / `run_memory_match` 位于增量入库、全库整理和文件锁
+    路径，GitNexus 返回 HIGH，已在修改前告知；本次只替换其 Prompt 来源，不改变
+    短名单、关系判定、失败隔离、模型预算、锁、并发重算或原子提交语义。
+  - 新增加载函数尚未进入索引，impact 为 UNKNOWN；按规范用精确文本搜索确认调用点
+    仅在 `tools/trajectory_evolution` 的 CLI、Evaluator、Pipeline、静态兼容访问器和
+    新测试中。未修改 Harness、Coordinator、Skill Executor 或 Runtime 在线底座。
+- 最小改动：
+  - 新增版本化 `config/runtime.json`，集中承载 CLI 实际使用的 Evaluation、Evolution
+    和模型 HTTP 参数；CLI 参数仍可逐项覆盖。配置优先从 `--config`、环境变量
+    `AGENTFLOW_TRAJECTORY_CONFIG`、仓库默认路径依次发现。
+  - 4 类模型请求的 system/user Prompt 共 8 份，全部迁移到 `config/prompts/`；C++
+    只保留证据 JSON 构造、响应契约和安全校验，不再内嵌模型策略正文。
+  - 启动时一次性读取并严格校验配置和 Prompt，Evaluator/Pipeline 共享同一个
+    `shared_ptr<const PromptTemplates>` 快照。文件修改在下一次命令生效，运行中的
+    批次不热切换，兼顾免编译替换与同批可复现性。
+  - 模板只允许声明的占位符且必须恰好出现一次；替换后的 SessionLog/候选内容不会
+    被二次解释为模板语法。配置和 Prompt 有独立大小上限，Prompt 路径必须相对配置
+    目录且不能使用 `..`，未知字段和重复字段被拒绝。
+  - API Key 值仍只从 `model.api_key_env` 指向的环境变量读取；配置 schema 不接受
+    `api_key` 字段。输出冲突检查同时保护本次加载的 runtime config 和 8 个 Prompt。
+  - 影响评测语义的规范化参数与全部 Prompt 内容指纹进入
+    `evaluator_config_fingerprint`，因此 Prompt 改动可沿 Batch 身份追踪。
+  - 协议枚举、严格模型响应校验、凭据检测、路径/请求绝对上限等安全不变量继续留在
+    C++，不能通过热配置关闭。
+- 涉及文件：
+  - `tools/trajectory_evolution/config/runtime.json`
+  - `tools/trajectory_evolution/config/prompts/*.txt`
+  - `tools/trajectory_evolution/include/agentflow/trajectory/prompt_templates.h`
+  - `tools/trajectory_evolution/include/agentflow/trajectory/runtime_config.h`
+  - `tools/trajectory_evolution/include/agentflow/trajectory/hybrid_evaluator.h`
+  - `tools/trajectory_evolution/include/agentflow/trajectory/evolution_pipeline.h`
+  - `tools/trajectory_evolution/src/runtime_config.cpp`
+  - `tools/trajectory_evolution/src/hybrid_evaluator.cpp`
+  - `tools/trajectory_evolution/src/sessionlog_evaluator.cpp`
+  - `tools/trajectory_evolution/src/evolution_pipeline.cpp`
+  - `tools/trajectory_evolution/src/main.cpp`
+  - `tools/trajectory_evolution/tests/test_runtime_config.cpp`
+  - `tools/trajectory_evolution/CMakeLists.txt`
+  - `tools/trajectory_evolution/README.md`
+  - `docs/trajectory-evaluation/SESSIONLOG_TO_EVOLUTION_MEMORY.md`
+  - `HARNESS_CHANGES.md`
+- 验证结果：
+  - 普通构建和 GCC `-Werror` 构建均成功；两套完整 5/5 CTest 全部通过。
+  - ASan + UBSan 构建的完整 5/5 CTest 通过，无内存错误或未定义行为报告。
+  - 新测试覆盖默认快照、无需重编译的下一次加载生效、运行中快照不突变、证据内
+    `{{...}}` 不被二次解析、缺失占位符拒绝和明文 `api_key` 字段拒绝。
+  - 使用现有真实 SessionLog，通过显式 `--config` 完成离线 CLI 评测，轨迹完整性
+    有效且未请求模型；产物仅写入被忽略的 `build/` 验证目录。
+- 边界：这是进程/批次边界的热替换，不监视运行中字段变化。若未来把该 CLI 改为
+  常驻服务，应在新 Batch 边界原子交换已完整校验的新快照，仍不能在 Batch 中途重载。
+
+### CHG-20260904-137：Prompt 进化目标替换为经验注入
+
+- 日期：2026-09-04
+- 问题：Dialogue Reflection 和 Evolution Candidate 把与 Skill 编排、Loop 收敛并列的
+  第三类进化目标定义为 Prompt 修改，不符合后续通过进化记忆检索并注入经验的方案。
+- 风险分析：
+  - GitNexus 对 `EvolutionReflection`、`CandidateTargetType`、
+    `validate_dialogue_response` 和 `TrajectoryEvolutionPipeline::synthesize_reports`
+    均返回 `UNKNOWN`；精确引用检查确认活动调用集中在 Dialogue 响应校验、候选生成、
+    Protobuf 契约和两组回归测试。
+  - 这是公开 Protobuf/JSON 名称变更：保留字段号 4 和枚举数值 2，旧二进制 Protobuf
+    仍可解析；旧 JSON 字段 `prompt_changes` 不再接受，应重新评测生成新结果。
+- 最小改动：
+  - `EvolutionReflection.prompt_changes` 替换为 `experience_injections`；候选类型
+    `PROMPT` 替换为 `EXPERIENCE_INJECTION`，旧名称设为 `reserved`，防止误复用。
+  - Dialogue 模型输出契约明确要求生成可在相似场景复用并注入后续决策上下文的行为
+    经验，禁止返回修改 Prompt 模板或源代码的建议。
+  - 候选生成器升级为 `evolution-candidate-generator-v2`，避免新经验候选与旧语义候选
+    共享稳定身份；Dialogue 模型契约标识同步升级为 `content-aware-dialogue-v2`。
+    模型调用使用的 system/user Prompt 技术字段保持不变。
+  - 同步更新字段说明、流程说明和回归断言。
+- 涉及文件：
+  - `tools/trajectory_evolution/proto/hybrid_evaluation.proto`
+  - `tools/trajectory_evolution/src/sessionlog_evaluator.cpp`
+  - `tools/trajectory_evolution/src/evolution_pipeline.cpp`
+  - `tools/trajectory_evolution/config/prompts/dialogue-system.txt`
+  - `tools/trajectory_evolution/config/prompts/dialogue-user.txt`
+  - `tools/trajectory_evolution/tests/test_sessionlog_evaluator.cpp`
+  - `tools/trajectory_evolution/tests/test_evolution_pipeline.cpp`
+  - `tools/trajectory_evolution/README.md`
+  - `docs/trajectory-evaluation/EVALUATION_FIELDS.md`
+  - `docs/trajectory-evaluation/BATCH_AND_MEMORY_FIELDS.md`
+  - `docs/trajectory-evaluation/CONTENT_LIMITS.md`
+  - `docs/trajectory-evaluation/SESSIONLOG_TO_EVOLUTION_MEMORY.md`
+  - `HARNESS_CHANGES.md`
+- 验证结果：Release 模式重新生成 Protobuf 并完整编译成功；5/5 CTest 全部通过。
+- 边界：历史 Memory 中由旧 `PROMPT` 语义生成的条目内容不会自动改写成经验；继续实验
+  前应使用新字段重新评测并生成 Memory，避免把旧 Prompt 修改建议误作可注入经验。
+
+### CHG-20260907-138：按兼容组隔离跨轨迹元反思
+
+- 日期：2026-09-07
+- 问题：元反思原先把所有 Candidate Seed 放入一次模型请求。虽然输入提供了由
+  `target_type + target_scope` 构成的白名单，`deepseek-v4-flash` 在 Seed 增长到
+  50～60 条时仍可能跨白名单组合并，严格校验器随后以
+  `incompatible_seed_group` 原子拒绝整次元反思。
+- 风险分析：GitNexus 无法解析匿名命名空间中的 `make_meta_request` 和
+  `TrajectoryEvolutionPipeline::synthesize_reports`，返回 `UNKNOWN`，不能作为低风险
+  结论。补充精确引用检查确认改动仅位于离线 `tools/trajectory_evolution` 的候选合成
+  路径和对应测试；没有修改 AgentFlow C++ 底座、Harness、SessionLog Hook、
+  Coordinator 或 Skill Executor。
+- 最小改动：
+  - 在发送模型请求前，按 `target_type + target_scope` 确定性划分 Seed；每个至少包含
+    2 个 Seed 的兼容组独立请求元反思，单例直接保留，不再依赖模型自行遵守跨组边界。
+  - 所有请求在发送前统一检查单请求大小和整批模型调用预算；预算不足或任一请求过大时
+    不发送部分批次。所有兼容组都通过现有严格校验后才原子替换候选，任一组失败仍保留
+    原始 Seed，不会让不合规结果进入 Memory。
+  - Batch 继续使用一个 `meta_reflection` 汇总状态；请求/响应指纹和 attempts 对本次全部
+    分组请求聚合，`model_requests` 逐请求保留审计记录。服务端 Seed、Evidence、中文文本、
+    凭据和大小校验均未放宽。
+  - 热加载元反思提示词同时明确 Seed 白名单子集和已选 Seed 证据并集约束；不需要重新
+    编译即可替换，C++ 仍负责不可绕过的结构校验。
+- 涉及文件：
+  - `tools/trajectory_evolution/src/evolution_pipeline.cpp`
+  - `tools/trajectory_evolution/tests/test_evolution_pipeline.cpp`
+  - `tools/trajectory_evolution/config/prompts/meta-reflection-user.txt`
+  - `HARNESS_CHANGES.md`
+- 验证结果：
+  - 普通构建和 GCC `-Werror` 构建均成功；两套完整 5/5 CTest 全部通过。新增测试覆盖
+    两个不同 Skill scope 的兼容组分别调用、分别合并及完整来源追踪。
+  - 删除全部旧派生产物、仅保留 16 份原始 SessionLog 后，使用
+    `deepseek-v4-flash`、`thinking=disabled` 和 30 分钟单请求超时完成全量重建：
+    16/16 Dialogue 模型评测成功，轨迹完整性 16/16 有效，目录失败数为 0。
+  - 63 个输入 Seed 被拆为 6 个单兼容组元反思请求；元反思状态为 `SUCCEEDED`，生成
+    21 个合并候选，最终保留 25 个 Candidate。Memory 从空库写入 revision 1，最终
+    保留 19 条 Entry，并完成周期全库整理。
+  - 共记录 54 个脱敏模型请求包；对整个 `trace_output` 扫描当前环境中的真实密钥值和
+    常见凭据前缀均为 0 命中文件，且没有 `.tmp` / `.part` 残留。
+- 最终产物：
+  `trace_output/evolution-model-full-deepseek-v4-flash-experience-v2-rerun-20260904/`。
+
+### CHG-20260907-139：记录独立交付与完整 L4 能力补充方案
+
+- 日期：2026-09-07。
+- 目标与诱发原因：当前离线链路已可生成和管理候选记忆，但独立接入、在线应用、
+  受控实验和发布回滚仍需补充，将讨论结论固定为实施与验收依据。
+- 改动内容：新增现状对照、L0–L4 接入条件、通用轨迹、独立打包、策略运行时、应用
+  回执、实验验证、内容版本绑定、持续运行、数据隔离及分阶段验收清单。
+- 涉及文件：
+  - `docs/trajectory-evaluation/INDEPENDENT_DELIVERY_AND_L4_PLAN.md`
+  - `HARNESS_CHANGES.md`
+- 验证方式：核对公共接口与实现边界，检查文档相对链接和补丁空白格式。
+- 遗留事项：本文是方案，不代表 L4 已实现或通过验证；尚未新增在线接口。
+
+### CHG-20260907-140：同步远程同名分支的通用问答助手示例
+
+- 日期：2026-09-07。
+- 目标与诱发原因：远程 `origin/harness_agent_poc_evo` 新增提交，按用户要求更新本地。
+- 改动内容：fetch 后以 fast-forward 从 `46a2daa` 更新至 `79e1bb4`，引入 9 个提交，
+  最终文件差异为新增 `examples/agent/daily-qa-assistant` 下的 37 个文件。
+- 涉及文件：远程新增示例目录及本记录；未重写提交、未创建本地合并提交。
+- 验证结果：远程变更与未提交文件无重叠；更新前后本地未暂存差异、暂存差异和未跟踪
+  文件列表指纹完全一致；当前分支与远程提交一致。凭据仅用于交互认证，未配置持久存储。
+- 遗留事项：此次仅同步远程，未启动新增示例或运行其模型/工具测试；原本地改动仍未提交。
+
+### CHG-20260907-141：独立交付第一单元——标准轨迹、L0 接入检查与安装包
+
+- 日期：2026-09-07。
+- 目标：不破坏当前 AgentFlow 的前提下，建立框架中立输入和独立交付边界。
+- 风险分析：按要求调用 GitNexus impact；当前索引未解析到离线入口及新增符号，
+  返回 UNKNOWN，不能视为低风险或没有调用者。补充检查确认涉及 CLI 单文件入口、
+  Pipeline 批量评测、内容评测和离线测试；未修改 AgentFlow C++ 底座、Harness、
+  SessionLog Hook、Coordinator 或 Skill Executor，也未重建整个仓库索引。
+- 本次改动：
+  - 新增 TraceRun JSON/Protobuf 协议：必需运行身份、开始/结束和显式业务/执行结果，
+    可选步骤、动作、Loop、因果关系、应用回执及自定义结构化内容。
+  - 原 SessionLog 分析器原样保留；标准入口独立解释通用执行步骤，再复用既有
+    Evaluation、候选合成、元反思、记忆管理和持久化路径。保留旧输出协议和 C++ API。
+  - 标准轨迹校验覆盖去重、冲突、配对、执行归属、生产者序号、悬空因果和环；
+    稳定排序不被当作并行之间的因果关系。局部分支失败不覆盖显式 Run 结果。
+  - 新增中立模型系统提示词和可选配置；真实中文输入、输出和自定义字段经过既有
+    脱敏与限长后进入模型。缺少中立提示词时拒绝标准轨迹模型请求，旧配置继续可用。
+  - 作用域同时包含 Agent 与角色，避免不同 Agent 的同名角色混合；标准内容
+    指纹稳定化，包含 Run 身份及上下文。通用规则仅保守识别明确的不可重试重复。
+  - 新增 doctor，区分声明、结构性数据证据、实际验证和生效级别，支持 strict /
+    downgrade 与不适用说明。当前实现上限为 L0，L1–L4 运行检查明确 NOT_VERIFIED。
+  - 新增中立公共头、TrajectoryEvolution::core CMake 导出、安装配置/协议/示例，
+    保留原命令并新增 TRAJECTORY_EVOLUTION_CONFIG 与 Linux 安装目录配置发现。
+- 涉及模块：tools/trajectory_evolution 内的协议、公开接口、离线入口、配置、
+  标准分析器、CMake、测试及示例；另更新独立交付计划文档和本记录。
+  工作区原有未提交变更保留，未将其全部归入本次改动。
+- 验证结果：
+  - Release 构建成功；原五组加标准轨迹/CLI 两组，共 7/7 CTest 全部通过。
+  - 16 份真实 SessionLog 重评测成功，0 失败；34 个 JSON/Protobuf/Batch 文件
+    与本次独立化修改前逐字节一致，Batch ID 也一致。
+  - 测试覆盖黑盒输入、并行失败隔离与结果归因、乱序、重复、损坏因果、资源限制、
+    实际中文内容、凭据脱敏、伪造证据拒绝、无效轨迹不调用模型、JSON/PB、
+    候选入库、重复批次幂等，以及数据字段齐全也不能认证在线 L4。
+  - 独立安装 CLI 从仓库外工作目录运行成功；外部 CMake 消费者只链接安装包：
+    evaluated=2、failed=0、candidates=1、memory_entries=1、replay_idempotent=true。
+    CLI 磁盘批次重放后 Memory 仍为 1 条，revision=1。
+  - 本次使用离线可控模型适配器验证内容与模型协议，没有调用真实供应商 API。
+- 本地验证产物：build/trajectory-evolution/ 下的 compatibility-l0-before、
+  compatibility-l0-after、install、standalone-consumer、standalone-results；
+  未覆盖当前正式 evaluation/memory，未提交或推送代码和产物。
+- 使用说明：tools/trajectory_evolution/STANDARD_TRACE.md。
+- 后续边界：本次不是完整 L4；Shadow 查询/回执、在线注入、动作/Loop 控制、
+  实验验证和自动发布仍待后续单元实现。
+
+### CHG-20260907-142：在独立交付说明中补充 GEPA 多轮优化算法
+
+- 日期：2026-09-07。
+- 目标：将已讨论的 GEPA 搜索机制纳入原有独立交付与 L4 方案，不另建一套说明或程序。
+- 改动内容：
+  - 补充框架中立的试验输入 / 输出契约，明确真实策略应用、回执和任务结果归因。
+  - 定义完整策略候选、任务级成绩、父版本选择、局部反思变异、小批筛选、完整验证、
+    可选合并及最终留出验证；区分 GEPA 机制与本组件的保护条件和保守实现变体。
+  - 明确训练 / 搜索验证 / 留出隔离、预算与恢复、并行失败边界、记忆快照冻结以及
+    候选入库不等于策略验证，并同步更新验收清单和实施顺序。
+- 影响范围：仅修改本条记录和原独立交付说明，不改变函数、接口实现、C++ 底座、
+  Harness、模型配置、现有轨迹或评测 / 记忆产物。
+- 影响检查：GitNexus MCP 未挂载，强制使用已有命令的一次 CLI 检查返回 ENOENT；
+  未安装依赖或重建索引，未取得调用者 / 执行流结论，不将图检查视为通过。此次仅为
+  Markdown 修改，不涉及可执行符号，也不提交代码。
+- 涉及文件：
+  - `docs/trajectory-evaluation/INDEPENDENT_DELIVERY_AND_L4_PLAN.md`
+  - `HARNESS_CHANGES.md`
+- 验证方式：核对算法与现有 L0–L4、Runtime 和 Memory 边界，检查章节、相对链接与
+  补丁空白格式；文档变更不触发模型调用或运行测试。
+- 后续边界：GEPA 搜索、试验接口和发布控制仍为待实现设计，当前已交付能力不变。
+
+### CHG-20260907-143：绘制独立交付与 GEPA 流程总览图
+
+- 日期：2026-09-07。
+- 目标：参考 ACBench Figure 1 的三栏论文图布局，将当前流程与规划中的自进化闭环
+  画成可直接查看、编辑和用于汇报的示意图，不使用 Mermaid 代替图件。
+- 改动内容：
+  - 原创 SVG 展示离线轨迹 / 评测 / 记忆、GEPA 候选竞争与反思试验、独立 C++ 组件
+    及宿主接入；配套 PNG 与单页 PDF，并在原独立交付说明开头嵌入和链接。
+  - 实线与虚线区分已实现和规划中能力，明确只有 L0 已验证；矩阵分数仅为示意，
+    30%–60% 为课题目标，不是已获得的实验结果。
+  - 搜索验证的成绩回流候选池，最终留出不参与搜索，避免图中形成错误的数据反馈。
+- 影响范围：仅文档与静态图件，不改变 C++、Harness、评测、记忆管理或模型配置。
+  GitNexus 文档目标检查未取得调用图结论，不将工具不可用视为影响检查通过；未安装
+  GitNexus 或重建索引，不涉及可执行符号修改。
+- 涉及文件：
+  - `docs/trajectory-evaluation/figures/trajectory-evolution-overview.svg`
+  - `docs/trajectory-evaluation/figures/trajectory-evolution-overview.png`
+  - `docs/trajectory-evaluation/figures/trajectory-evolution-overview.pdf`
+  - `docs/trajectory-evaluation/INDEPENDENT_DELIVERY_AND_L4_PLAN.md`
+  - `HARNESS_CHANGES.md`
+- 验证结果：SVG 结构和内部引用有效；PNG 为 4960×2320；PDF 为单页，文字未超出
+  页面边界且包含修正后的搜索反馈说明；15 处文档本地链接均有效，补丁格式检查通过。
+  已视觉复核中文、线稿图标、箭头和虚线状态边界；未调用业务模型或重跑已有实验。
+
+### CHG-20260907-144：补充 A4 详细运行与分级接入图
+
+- 日期：2026-09-07。
+- 目标：把原总览进一步展开为一张 A4 横向详细图，说明宿主具体接入点与完整数据流，
+  保留原图，不改变任何运行代码。
+- 改动内容：
+  - 展示 L0 事件采集、L1 上下文注入、L2 动作控制、L3 循环决策与 L4 真实试验 /
+    发布接口，各自明确插入位置、输入和产出。
+  - 画出宿主执行、串并行分支、循环返回、旁路采集，及校验、规则 / 内容级模型评测、
+    反思、候选质量门、去重 / 关系判断、周期全库整理和容量淘汰。
+  - 展开 Memory → PolicyCompiler → 不可变 PolicyBundle → QueryAdvice → 宿主应用
+    与回执；标明版本、作用域、冲突、Shadow 和默认行为边界。
+  - 展示 GEPA 父子真实试验、小批筛选、完整搜索验证、候选池反馈、可选合并、
+    独立留出和发布撤回；试验轨迹复用评测，不立即改变正式记忆快照。
+  - 配套 SVG、高清 PNG 和 A4 单页 PDF，在原方案内补充阅读顺序与跨区端口释义。
+- 影响范围：仅静态图件、原方案文档与本条记录；不修改 C++、Harness、模型配置、
+  轨迹或评测 / 记忆结果。已有本地导出缓存不属于项目功能变更。
+- 影响检查：对本仓库文档目标执行一次不安装依赖的 GitNexus CLI 检查，返回 ENOENT；
+  调用者、执行流和图风险未获验证，不将工具不可用视为通过；不涉及可执行符号变更。
+- 涉及文件：
+  - `docs/trajectory-evaluation/figures/trajectory-evolution-runtime-a4.svg`
+  - `docs/trajectory-evaluation/figures/trajectory-evolution-runtime-a4.png`
+  - `docs/trajectory-evaluation/figures/trajectory-evolution-runtime-a4.pdf`
+  - `docs/trajectory-evaluation/INDEPENDENT_DELIVERY_AND_L4_PLAN.md`
+  - `HARNESS_CHANGES.md`
+- 验证结果：179 处文字经浏览器测量，无超宽、越界或明显重叠；SVG 内部引用与
+  19 处文档本地链接有效。PDF 为 A4 横向单页，关键等级 / Hook 名称可正确提取，
+  文字未超出页面；PNG 为 5940×4200。已视觉复核并行、循环、搜索反馈与留出发布
+  连线；补丁格式检查通过，未调用业务模型或重跑实验。
+- 能力边界：当前仅 L0 已验证；L1–L4、Runtime、GEPA 和自动发布均明确标为规划，
+  此图不代表新增能力已经实现或策略收益已经验证。
+
+
+### CHG-20260907-145：落地经验类 Shadow Runtime、查询和未应用轨迹
+
+- 当前状态（2026-09-09）：本条中的 AgentFlow 事件、SessionLog 扩展和示例 Hook 挂载已撤回；独立进化组件保留，见 CHG-20260909-169。
+- 日期：2026-09-07。
+- 目标：在现有 Memory 之后打通只观察的查询单元；保持 AgentFlow 兼容，不提前实现
+  实际注入、动作 / Loop 控制或 GEPA，也不提升 doctor 的 L0 已验证上限。
+- 新增组件：
+  - 本目录内的 shadow_policy.proto、shadow_runtime.h / .cpp、shadow_cli、
+    integrations/agentflow/shadow_hook.py、config/shadow.json 及回归测试。
+  - C++ 编译每 Run 不可变快照，过滤身份不明、混合用户、错误作用域、冲突 / 反证、
+    未达状态门槛和不安全内容；仅选择 EXPERIENCE_INJECTION。
+  - C++ QueryAdvice 使用中文相邻汉字 / 英文单词进行确定性匹配、排序和限量；
+    保存 Memory / Candidate 来源、内容修订、快照 ID、输入指纹和命中理由。
+  - 复用原二进制的 shadow compile / query JSON stdin 入口及既有安全门，
+    不增加在线模型调用、向量库或常驻服务；C++ SDK 随独立 CMake 包导出。
+- AgentFlow 最小接入：
+  - 新增两个观察事件；SessionLog 原文件及两个包副本同步增加对应采集分支。
+  - 本地 examples Agent 使用符号链接挂载唯一 Hook 源文件；默认关闭，不修改
+    .env、API、模型、消息、技能派发、业务结果和原有日志目录结构。
+  - dialogue.start 固定快照，v1 跨进程重触发 / v2 后续决策从 DataBus 复用；
+    key 同时包含宿主 dialogue 清理前缀和完整身份哈希。
+  - 初始化失败固定为本 Run 错误；查询失败不影响原执行或其他 Run；
+    连接建连 / RPC / 子进程均有限制，连接在返回和异常出口关闭，结束时清理状态。
+  - SessionLog 记录 snapshot / query，并关联本次 llm.request 和 LLM span；
+    始终 mode=shadow、application_status=not_applied，不伪造 advice.applied。
+- 兼容性与边界：
+  - 未修改 AgentFlow C++ 底座、Coordinator 或 Skill Executor 的执行实现。
+  - 快照只做完整性校验，不是鉴权签名；部署方负责可信身份、Agent / Memory 绑定。
+    不自动跨用户共享；宿主需保证一个 Run 只有一个有效 start。
+  - Shadow 有受限同步开销，不代表零延迟；词面命中不是语义适用性或效果证明。
+  - 核心校验沿用 C++ 安全门；Python Hook 显式登记宿主环境凭据并复用脱敏，
+    未登记的任意秘密仍需调用方治理；未调用真实 API，不宣称完成线上安全验收。
+- 验证结果：
+  - C++ 构建成功，8 / 8 组 CTest 通过；覆盖不可变快照、Protobuf 回放、中文 /
+    英文匹配、冲突两端排除、作用域 / 用户隔离、24 路并发和 Shadow 不提升 L1。
+  - Python 129 条通过：新增 13 条 + 原 Hook、Span、安全与 SessionLog 116 条。
+    新增用例使用真实 C++ 子进程、DataBus SDK 与测试 UDS 服务，验证两用户、
+    三会话、12 次查询及跨进程重入；结束后没有影子状态残留，v1 / v2 因果关联正确。
+  - 含 Shadow 的合成完整 SessionLog 经现有 evaluate 命令成功评测。
+  - 独立安装 CLI 可从非根目录使用；外部 CMake 消费者只链接安装包，返回
+    standalone_shadow=matched、application=not_applied、trace_kind=custom。
+  - 补丁格式检查通过；安装规则排除 __pycache__ / .pyc。测试和验收内容仅在
+    build/shadow-tests、build/shadow-sdk-consumer 与 build/trajectory-evolution 下，
+    未覆盖现有真实 SessionLog、Evaluation 或 Memory，未进行 git 提交或推送。
+- 影响检查：按 GitNexus 影响分析要求尝试已有 MCP / CLI 路径，工具不可用；
+  调用者、执行流及图风险仍未取得结论，不视为通过。已复核实际接入点并进行
+  上述回归；未安装 GitNexus、重建索引或重试不可用的 bwrap。
+- 使用与后续：
+  - 使用说明：tools/trajectory_evolution/SHADOW_RUNTIME.md。
+  - 原 README、STANDARD_TRACE.md、独立交付说明同步标注第二单元状态；
+    既有规划图没有被当作已实现证明。
+  - 下一单元是受控经验注入、真实应用回执和 L1 探针；本轮不启动真实 hchat 实验。
+
+
+### CHG-20260907-146：最小接入实现受控 L1–L3 与实际应用回执
+
+- 当前状态（2026-09-09）：本条中的 AgentFlow 运行时接入已撤回，包括 Loop 控制、经验注入、逐调用拦截和回执采集；独立进化组件保留，见 CHG-20260909-169。
+- 日期：2026-09-07。
+- 目标：按本轮“连续实现到 L3、保持最小改动”的要求，在既有 Memory / Shadow 上
+  实现经验注入、逐调用动作干预和实例级 Loop 控制；默认关闭，保留 AgentFlow 兼容。
+- 独立组件新增：
+  - `proto/runtime_policy.proto`、`include/trajectory_evolution/policy_runtime.h`、
+    `src/policy_runtime.cpp`、`src/policy_cli.*`、默认关闭的 `config/policy-runtime.json`、
+    外部经验模板及 `integrations/agentflow/runtime_hook.py`。
+  - 复用原 Shadow 快照、检索、安全检查和同用户 / 非冲突候选过滤；不另建服务或向量库。
+  - C++ 纯查询与回执验证：严格 / 降级能力检查、Memory ID + 内容修订显式批准、
+    单次调用 ID 过滤、必选参数检查、Continue / Replan / Stop、Protobuf 状态保存。
+  - Loop 状态绑定 Run 策略、作用域和执行实例；重复轮次幂等，旧 / 跨实例状态拒绝。
+    状态计数在宿主最终决策后写入，不能把被其他 Hook 拒绝的 Stop 留为粘滞停止态。
+  - Prompt / 阈值由外部配置提供，Run 内固定版本；不把自然语言记忆自动变成强控制规则。
+- AgentFlow 薄接入：
+  - AgentContext 新增单次 `request_context`，所有 Hook 完成后构造请求副本；
+    未注入时保留原列表路径，不在多轮历史中累计经验。
+  - v1 / v2 / Skill Executor 各补一个 Loop 决策边界；停止发生在下一次 LLM span
+    创建前，保留已有产物，正常输出 `policy_stopped`，不改 Python 退出码协议。
+  - v1 派发仅按原始 request_index 跳过单项；Skill / v2 按 tool_call_id 跳过单次调用。
+    不修改 `execute_in_batches`，不扩大原 force 语义，不取消其余并发分支。
+  - v2 工具结果新增调用 ID、原始序号及业务错误观察，不能把返回错误内容记成成功。
+  - Recorder 的最终请求观察增加 `transport_allowed`；安全门拦截的请求不能产生
+    成功应用回执。回执区分建议、实际请求、实际跳过及实际 Loop 决策，不证明模型遵从。
+  - 热关闭 / 请求未发生 / 回执组件失败均保留未应用或验证失败记录，清理进程内待办。
+  - SessionLog 源文件和两个包副本同步采集 snapshot / query / receipt / error、
+    Loop 决策及 v2 工具事件；原用户 / 会话 / Dialogue 目录结构不变。
+  - examples Agent 挂载组件入口，默认关闭；没有修改业务 `.env`、API 或模型配置。
+- 实际测试发现并修正：
+  - `AF_EXEC_SKILL_KEY` 被 C++ 通用 KEY 环境扫描误当作密钥，导致 Skill 策略查询拒绝。
+    仅在适配器中将该执行身份改为通过协议传入，不向子进程传同名环境变量；
+    实际凭据仍参与安全检查，没有放宽通用安全门。
+  - 保持旧按名称跳过工具的结果字段不变；新增原因只用于新逐调用控制。
+  - 策略 `decision_id` 独立生成，不误用贯穿多轮的父 Skill span ID。
+- 影响边界：
+  - 未修改 AgentFlow C++ 底座，未改已有编排 / 并行调度实现，未改 Memory 的入库字段。
+  - 执行变化集中在三个 Python 决策入口、通用上下文 / 回执边界和组件内新文件。
+  - 未实现 L4 GEPA、自动实验、自动发布或回滚；L2 是前置条件 / 逐项拒绝，不是新调度器。
+  - `component_level` 更新为 L3；离线 doctor 仍只验证到 L0，不把宿主声明当在线认证。
+- 验证结果：
+  - 最终 C++ 构建及 9 / 9 组 CTest 通过；覆盖版本 / 作用域 / 用户隔离、缺失能力降级、
+    24 路并发、实际回执、重复 / 被删除 / 被拦截的注入、实例级 Stop 和有界 Replan。
+  - Python 完整本地回归 515 条通过，1 条真实 API 测试默认跳过；已另行真实执行该测试。
+    覆盖原恢复 / Span / 并行 / 安全测试，以及 v1 / v2 / Skill 实际执行与提前退出。
+  - v2 的同批三个同名工具分别为 skipped、completed、error，仍按原始 ID 顺序回灌；
+    被拒绝的调用未执行，失败分支未阻止另一个正常分支。
+  - 真实 DataBus SDK + 测试 UDS：2 个用户、3 个会话、各 2 个 Run，跨进程重新加载
+    Hook，身份及版本无串用，连接关闭，正常 Run 结束后状态无残留。
+  - 本地 HTTP 服务实际收到的消息每次只有一个注入块；三条 SessionLog 回执均关联
+    各自 `llm.transport.request`；现有 evaluate 程序评测该日志 evaluated=1、failed=0。
+  - 使用用户授权的 Agent Plan 进行 3 次真实模型调用，模型 deepseek-v4-flash、
+    thinking=disabled，均返回非空回答，3 条回执均为 applied。密钥经关闭回显的 stdin
+    进入测试进程，没有写入项目配置、源码或文档；测试产物凭据扫描未发现泄漏。
+    结果：`build/trajectory-evolution/policy-live-20260907-b/test_live_model_injection0/live-acceptance.json`。
+  - 独立安装消费者只 find_package / 链接 TrajectoryEvolution::core，全部策略断言实际运行通过。
+  - 外部沙箱集成组曾因本地代理 / 服务初始化超时失败，已中止；上述完整回归明确排除
+    该组，不把它计为通过，没有为此重试 bwrap 或修改沙箱 / 网络环境。
+  - 补丁格式和三份 SessionLog 一致性检查通过；未覆盖既有真实轨迹、Evaluation 或 Memory。
+- 影响分析：
+  - 按仓库 GitNexus 影响分析技能检查 Recorder、Context、三个执行入口、dispatch 与
+    Runtime 接入符号。MCP 未挂载；已有 CLI 可以启动，但索引不兼容，定向检查仍为
+    UNKNOWN / partial。一次 index-only 刷新因图数据库缓冲区不足失败，未重新安装工具。
+  - 调用者 / 执行流 / 图风险未获有效结论，不视为通过；通过逐调用点检查和上述
+    回归约束修改范围。没有进行 git 提交或推送。
+- 使用说明：`tools/trajectory_evolution/POLICY_RUNTIME.md`；README、STANDARD_TRACE 和
+  独立交付方案同步更新。L4 及长期收益验证仍是后续工作，本次不宣称无效 Loop 已下降。
+
+### CHG-20260908-147：更新进化组件 README 的完整流程、配置与接入说明
+
+- 日期：2026-09-08。
+- 目标：说明当前实际实现及用户配置、运行、持续入库和接入方式，不扩展执行代码。
+- 文档更新：
+  - `tools/trajectory_evolution/README.md` 增加使用导航与完整流程，区分离线评测入库、
+    Shadow 只读观察、受控 L1–L3 和尚未实现的 L4 / GEPA 自动试验发布。
+  - 补充构建依赖、本地配置与 Prompt 副本、环境变量凭据、模型请求路径、可配置的
+    30 分钟 HTTP 超时示例，以及模型评测、元反思和记忆整理的调用边界。
+  - 补充 AgentFlow Hook 挂载、用户/会话/Run 身份、经验 ID + 内容修订批准、
+    L2/L3 规则示例、关闭方法及实际应用回执的检查方式。
+  - 补充标准日志、doctor、独立 CMake SDK 与 runtime compile/query/verify 协议，
+    明确仅交付日志不等于在线控制接入，宿主需执行决策并提供真实观察。
+  - 修正目录支持的输入后缀、持续入库与重放窗口说明；同步更正 STANDARD_TRACE.md
+    和 SHADOW_RUNTIME.md 中“L1–L3 尚未实现”的过时表述。
+- 验证与边界：
+  - 核对当前源码、配置模板、Protobuf 及 CLI 帮助；实际运行示例 doctor，
+    trace_valid=true、verified_level=L0、component_level=L3，与文档一致。
+  - README JSON 示例与 Bash 语法、本地链接/导航及补丁格式检查通过。
+  - 本次仅改 Markdown，未改变 C++/Python、业务配置、模型、Hook 挂载或既有轨迹/
+    Evaluation/Memory；没有调用付费模型，没有进行 git 提交或推送。
+  - 按仓库要求尝试 GitNexus 入口影响分析，已有 CLI 返回 evaluate_trace 未解析、
+    risk=UNKNOWN，调用者/执行流/图风险未获结论，不视为通过；没有再次安装或重建索引。
+
+### CHG-20260908-148：将经验生成、记忆筛选与注入收敛到明确的适用条件
+
+- 日期：2026-09-08。
+- 问题：旧经验混有复盘、开发改造建议、测试特例和跨角色职责；作用域常由唯一 Skill
+  推测，触发条件可能只是来源标签。Shadow 从问题和建议正文召回，L1 只注入正文，
+  丢失适用条件，容易把词面命中说成已经适用。
+- 最小实现范围：仅修改 `tools/trajectory_evolution` 的生成/记忆/运行时、外部 Prompt、
+  协议及测试，并同步使用文档；本次未修改 AgentFlow C++ 底座或 Python 执行入口。
+- 生成和证据：
+  - 新增 Protobuf `ExperienceAdvice` 和 `reflection.experience_details`，保留旧字符串
+    `experience_injections` 作为可读/兼容视图，不增加 Memory 字段或新的管理程序。
+  - 每条经验明确 target_scope、trigger_pattern、proposed_change、evidence_event_ids；
+    作用域从真实轨迹执行者白名单选择，证据逐条引用，不继承整个 Dialogue 的浪费步骤。
+  - AgentFlow 和框架中立日志复用同一契约；无效经验单项 warning 隔离，任务及步骤
+    评测仍可成功。旧字符串响应保留阅读能力，但不视为具备新注入契约。
+  - 外部评测/元反思 Prompt 要求原子、条件化、可执行经验，保留核验、恢复依据和
+    独立分支；不将一次性限制或测试次数泛化，不混淆业务结果与工作流状态。
+- 记忆与运行时：
+  - 使用既有 generator_version 区分 `scoped-experience-generator-v1`；元反思分组、
+    精确去重、增量语义整理与周期全库复核隔离新旧契约，避免旧经验经合并获得资格。
+    Curator 算法版本更新为 v3；同批重放与来源映射保持幂等。
+  - 新 Shadow 排除旧/不合格经验并记录 `experience_contract`；匹配词只来自条件，
+    原有用户隔离、冲突、证据、状态和大小过滤保持。
+  - L1 保留作用域、条件和行为，序列化为固定字段顺序的 JSON 经验记录；超预算时
+    跳过整条，不截掉条件只留建议。新增回归复现并排除无序 Map 导致回执重算不同的问题。
+  - 外部注入模板不再保证经验适用：要求结合当前条件、权限和预算判断，不能仅为
+    套用经验额外探测，不提升文本权限。ID + 内容修订仍需显式批准。
+  - 新 Shadow schema_version=2，旧版本 1 仍可只读回放，但不能编译成新 Active。
+    Runtime ID 更新为 `runtime-v2:`，禁止旧策略静默改用新渲染语义；需在 Run 间升级。
+- 验证：
+  - 完整 C++ 构建及 9/9 组 CTest 通过；覆盖 SessionLog/标准轨迹 → 模型响应校验
+    → 候选 → Memory → Shadow → L1、逐条错误隔离、作用域/证据保真、新旧契约分组、
+    持续入库/周期整理、幂等、32 次重复渲染、24 路并发、整条预算与被删改条件的回执。
+  - Python 本地回归 515 条通过，1 条真实 API 测试默认跳过；沿用原隔离外部沙箱组
+    的测试范围。使用受控响应和本地真实 C++/HTTP/UDS，不调用付费模型。
+  - 新安装包导出新增头文件与 Protobuf；外部 CMake 消费者仅链接
+    `TrajectoryEvolution::core` 验证注入接口。真正旧二进制生成的 v1 快照可由新版本
+    shadow query 只读回放，matched；旧 Active 编译明确拒绝。
+  - 正式 Memory 的 19 条记录及 PB/JSON 校验和未变化；对两个用户分别只读编译后
+    入选均为 0，旧经验有明确排除计数，没有偷偷重写或自动批准。
+  - 测试安装和验收产物只在 `build/trajectory-evolution/experience-*`；未覆盖正式
+    SessionLog/Evaluation/Memory，未改业务 API、密钥或配置，未提交或推送 Git。
+- 影响检查与边界：
+  - 遵循 GitNexus exploring/impact 技能，编辑前尝试影响分析；已有 CLI 无法解析
+    当前演进符号，结果仍为 UNKNOWN，不视为通过。通过逐调用入口核对和上述回归
+    约束范围；没有再次安装工具、重建索引或重试不可用的 bwrap。
+  - 生成契约和 Prompt 自查不是独立语义审查，不证明收益、模型遵从或长期有效性。
+    仍保留人工批准和后续 L4 对照验证边界。
+  - 旧库仅保留与隔离；使用更新后的 Prompt 从原始轨迹重新评测才能生成新经验。
+    私有 Prompt 副本需同步契约，不能手工修改生成器/快照版本冒充通过。
+- 文档：README、POLICY_RUNTIME、SHADOW_RUNTIME、Evaluation 字段和 Batch/Memory 字段说明。
+
+### CHG-20260908-149：明确跨语言接入、L0–L4 嵌入点及通用交付缺口
+
+- 日期：2026-09-08。
+- 目标：回应接入步骤复杂、非 C++ 宿主难复用、各等级如何影响 Agent 说明不足的问题。
+- 文档修改：
+  - README 开头改为接入者导航，区分 C++ 核心、SDK/本地 CLI 通信与宿主执行边界。
+    明确其他语言可用 JSON stdin/stdout，不需要 C++ FFI、生成 Protobuf 代码或 DataBus。
+  - 新增 L0–L4 的具体代码位置、输入、输出和实际影响；说明公共 Run 初始化/收尾、
+    L3 → L1 → L2 的执行顺序，以及最终请求、逐调用结果和实例级控制回执的位置。
+  - 区分 L1 软影响、L2 真正拒绝动作、L3 Stop/Replan，以及尚未实现的 L4 隔离试验/
+    GEPA/发布回滚。能力是累计条件，不是填写 requested_level 就创建对应 Hook。
+  - 补充 AgentFlow 真实 Hook/源码映射，其他宿主不需要照搬 Coordinator、Skill 或目录。
+  - 新增 Python 标准库传输示例：直接发送内存 JSON，不要求每次手写三份请求文件。
+    明确该示例只是低层调用，不是已完成的通用 SDK。
+  - 明确现有约束：evaluate 仍读本地文件/目录，CLI 每次启动进程，快照/Loop 状态/
+    回执关联需宿主管理，doctor 声明与在线能力字段不同，尚无 HTTP/gRPC 服务或
+    各平台完整预编译发行物；L1/Replan 验证仅支持 messages/system/字符串 content。
+  - README 单列待实现的通用接入封装方向：高层配置、Run 句柄、实例隔离、真实观察
+    适配、跨语言示例与交付探针；不将规划接口伪装为已实现功能。POLICY_RUNTIME 同步说明。
+- 验证：
+  - 从 README 提取 runtime_rpc 函数，用 Python 标准库调用真实 C++ CLI，非 AgentFlow
+    作用域下完成 compile/query/verify：一个缺参数动作被拒绝，两个允许项实际本地执行，
+    回执 applied；没有导入 AgentFlow Runtime、连接 DataBus 或调用模型/网络。
+  - 核对 Protobuf、PolicyRuntime、CLI 和宿主 Hook 的真实实现；检查本地链接/导航、
+    JSON/Python/Bash 示例语法及补丁格式。
+- 影响与范围：
+  - 仅修改 README、POLICY_RUNTIME 和本记录，未改变执行源码、协议、配置、Hook、
+    正式轨迹/Evaluation/Memory；没有借此扩建服务、安装 SDK、调用付费模型或提交 Git。
+  - 按 GitNexus exploring/impact 指引查询当前 AgentFlow 仓库：索引落后 9 个提交、
+    FTS 降级，compile_runtime_policy 未解析，风险 UNKNOWN，不视为无影响。
+    已按实际调用入口核对文档；没有修复/重建已知不可用索引，也没有重试 bwrap。
+  - 本次澄清并记录通用接入缺口，不宣称已经解决所有易用性问题或实现 L4。
+
+### CHG-20260908-150：补充无日志、无 Hook 的独立 Agent 从零接入示例
+
+- 日期：2026-09-08。
+- 目标：以完全独立的新 Agent 为前提说明接入，不假设复用 AgentFlow Runtime、
+  SessionLog、DataBus、Coordinator/Skill 或既有 Hook。
+- 文档修改：
+  - README 新增导航和从零示例：由宿主自己的任务入口、步骤和工具调用处生成标准
+    TraceRun JSON；Python 标准库仅用于展示，明确示例函数不是已交付的采集 SDK。
+  - 示例区分执行终态和业务结果，异常继续传播；事件在发生时复制，避免后续业务
+    修改污染历史；完整落盘后发布 .trace.json，采集失败报警且不覆盖业务结果。
+  - 给出 doctor、目录 evaluate 命令和真实输出结构，解释初次建立空 Memory、
+    后续批次持续入库及模型评测入口；不从两个成功演示任务凭空生成经验。
+  - 明确只包装原 Agent 入口时仅有输入/输出；内部模型、动作、循环需要在自有代码
+    中继续记录。分别说明 L1–L3 查询、实际应用和回执位置，以及独立 actor 作用域。
+  - 补充同步示例的并发、取消、进程崩溃与隐私边界；不把记录 Loop 等同于控制 Loop，
+    不将配置或复制 AgentFlow Hook 冒充独立 Agent 的自动接入，L4 仍明确为未实现。
+- 验证：
+  - 直接提取并运行 README 代码，两个同步工具调用生成 2 条真实标准轨迹；C++
+    doctor 均验证为有效 L0，目录 evaluate 成功 2、失败 0、候选 0，按用户/会话
+    生成 Evaluation，初始化空 Memory 的 JSON/PB。
+  - 额外检查工具异常、派发前缺参数、业务失败但执行正常、业务未知、取消及可变
+    输入快照隔离；这 6 条轨迹也通过 C++ doctor。检查写入失败不改变业务返回值。
+  - 无 AgentFlow 导入、Hook 挂载、模型/API 或网络调用；测试产物仅在
+    build/trajectory-evolution/logless-demo，不修改正式轨迹、评测结果或记忆库。
+- 影响与范围：
+  - 只修改 README 和本记录，不修改 AgentFlow、C++、协议、配置或现有 Hook。
+  - 按仓库 GitNexus 指引尝试 validate_trace 的 upstream impact；当前索引未解析
+    该符号，风险 UNKNOWN，未当作无影响。结合实际协议、校验实现和上述运行验证
+    核对文档；没有重新安装工具、重建索引或重试不可用的 bwrap，未提交或推送 Git。
+
+### CHG-20260908-151：将 README 整理为用户使用说明书
+
+- 日期：2026-09-08。
+- 目标：用户只需知道怎么安装、配置、插入代码、运行及查看结果，不需先学习内部实现。
+- 修改：
+  - README 改为按使用场景组织的操作说明书，独立同步 Python Agent 给出三个明确
+    位置：文件顶部导入、替换原 Agent 调用、任务结束后的后台评测调用。
+  - 将上一条已有的同步采集示例提取到 examples/standard-agent/agent_with_trace.py，
+    供直接导入；增加可选 agent_id 参数，避免用户为更换 Agent 名称修改示例内部。
+    不新增 AgentFlow 依赖，不将此示例称为全等级或生产级通用客户端。
+  - 将原有实现、协议、低层接入和高级配置说明保留在 INTEGRATION_REFERENCE.md，
+    同步 POLICY_RUNTIME 中的两处章节链接，避免用户操作步骤混入开发细节。
+  - 明确当前简易接法仅提供整次任务的 L0 记录；独立 Agent 的 L1–L3 尚无同等
+    通用简易封装，L4 未实现，不把规划接口写成可用函数。
+  - 安装清单增加迁移后的参考文档，examples 安装排除 Python 缓存；不改 C++ 运行逻辑。
+- 验证：
+  - 原样执行 README 的导入、入口替换与后台评测代码：2 个用户、3 次任务生成
+    3 条有效轨迹，真实 CLI 评测成功 3、失败 0，生成按用户/会话组织的结果及空 Memory。
+  - 提取后的示例继续通过工具异常、派发前缺参数和写入失败不覆盖业务返回值检查。
+  - 校验 Python/Bash 代码语法及说明书、参考文档、Policy Runtime 的本地链接与锚点。
+  - 在 build 内独立安装，确认手册、参考文档、示例随包提供且没有 Python 缓存；
+    使用安装版示例、CLI 和配置完成另一条轨迹评测并初始化 Memory。
+- 影响与范围：
+  - 按 GitNexus exploring/impact 指引查询本仓库，索引落后 9 个提交、FTS 降级，
+    run_recorded 未解析，风险 UNKNOWN，未视为无影响；按已有示例、实际接口和运行
+    检查确认范围，没有安装或重建工具。此次不改变 AgentFlow 底座、评测算法或协议。
+  - 测试与安装产物只在 build/trajectory-evolution/user-manual-*，未调用模型/API，
+    未改正式日志、Evaluation、Memory、密钥或业务配置；未提交或推送 Git。
+
+### CHG-20260908-152：纠正独立接入对语言与整体调用入口的错误假设
+
+- 日期：2026-09-08。
+- 问题：前一版使用说明把同步 Python 的整体调用包装作为主要接法，未满足
+  TypeScript、Rust、异步 ReAct 及无整体 run 函数的独立交付要求。
+- 文档修正：
+  - README 改为按任务、模型、动作、下一步调度、完成/取消等事件定位接入；
+    事件可分布在不同函数、回调、Worker 或进程中，不要求改造成同步 Agent。
+  - 同步 Python 示例保留为折叠的可选演示，不再作为通用接入前提或交付完成证明。
+  - 独立交付计划及开发参考明确以 C++ HTTP + JSON 服务和共享语义的语言客户端
+    为通用接入方向；保留既有 SDK、CLI、离线文件评测与 AgentFlow 接入兼容。
+  - 补充任务关联、重复与乱序事件、分支隔离、流式响应、异常/取消、未完成轨迹、
+    鉴权与真实执行回执要求；用户不负责拼整份 TraceRun 或管理内部策略快照。
+  - 新增原生 TypeScript、Rust 和无整体入口的异步 ReAct 验收要求，不用 Python
+    替代宿主，也不以输入/输出的黑盒测试宣称已完成通用 L1–L3 接入。
+- 当前边界：
+  - 事件式服务和通用客户端仍未实现；本次修正说明与交付约束，不将规划 API 写成
+  现成函数，不声称文档修改已经解决运行接入问题。
+  - 未修改 C++ 或 Python 执行代码、配置、业务模型、正式轨迹或记忆库，未启动服务。
+- 核查：
+  - 对照 TraceRun/TraceEvent、RuntimeCommand、实际 CLI 入口与既有独立交付计划；
+    确认核心协议不依赖 Python，但当前离线入口没有增量事件收集服务。
+  - 按 GitNexus exploring/impact 指引查询 AgentFlow：索引落后 9 个提交、FTS 降级，
+    RuntimeCommand 未解析，风险 UNKNOWN；未视为调用方/执行流程已检查通过。
+    仅核对文档与实际契约，不重建索引、不新增依赖，未提交或推送 Git。
+
+### CHG-20260908-153：落地框架与语言无关的事件式 L0–L3 接入
+
+- 日期：2026-09-08。
+- 目标：不再假定 Python、AgentFlow Hook、已有日志或完整的 agent.run()；任何能够
+  发送 HTTP/JSON 的通用语言都可在独立回调、ReAct 路由和 Worker 中接入同一套能力。
+- 独立服务与采集：
+  - tools/trajectory_evolution 新增 C++ IntegrationService 与 serve --config 入口，
+    暴露 POST /v1/invoke、GET /v1/health；13 个业务操作覆盖任务、步骤、模型、动作、
+    状态、采集缺口和评测重试。宿主只发送边界数据，不手工拼整份 TraceRun。
+  - 身份来自服务令牌映射；每用户隔离轨迹、评测和 Memory。run/conversation/execution/
+    step/call 分别关联任务、会话、并发分支与具体调用；乱序结果按调用 ID 归位。
+  - 模型与动作分为 prepare/observe，保留真实请求、结果、执行状态、业务状态及因果边。
+    单个动作失败不终止兄弟分支；Stop 只作用于当前 execution，不把查询决定冒充已应用。
+  - 请求 ID 与内容指纹形成持久幂等账本；原请求重试不重复记事件，换内容返回冲突。
+    私有原子快照支持重启与跨回调恢复；正式轨迹由后台发布，重启后可补发。
+  - 完整任务自动进入评测、候选/可选模型元反思、入库与管理；继续复用现有 C++ 核心。
+    明确的缺口或中断进入 quarantine，capture_complete=false；不将其当完整训练样本。
+- L1–L3 执行接入：
+  - L1 按冻结的用户记忆/授权产生经验，支持 JSON Pointer 指定真实请求字段；复制请求，
+    不污染长期对话历史。回执核验实际发送边界的内容，不只比较指纹或接受宿主声明。
+  - RuntimeOptions 新增可选 request_context_pointer/request_context_mode；未配置仍保留
+    既有 messages 路径与验证行为，原 AgentFlow Hook 不需切换到 HTTP 服务。
+  - L2 逐调用允许/拒绝，保留同名动作与原串并行调度；收齐观察后核验过滤回执。
+  - L3 按独立执行分支维护进展与重规划预算，返回 continue/replan/stop；宿主在下一步
+    调度位置实际应用并回报。现阶段控制规则由配置授权，不将其宣称为 GEPA 学习结果。
+- 所有通用语言的接入面：
+  - 交付 OpenAPI 3.1 与唯一请求 JSON Schema、生成一致性检查及可选语言生成入口。
+    协议没有语言白名单；其他语言可直接 HTTP 调用或使用自己的 OpenAPI 工具。
+  - 随包提供 Python、JavaScript、TypeScript、Go、Java、C#、C、C++、Rust 原生封装。
+    JS 从 TS 机械生成，避免维护两套逻辑。C 接口不绑定宿主 JSON 库；不强制加载完整核心。
+  - TS/JS/Rust 另有模型/工具执行包装与可跨回调传递的句柄；原始 invoke 客户端返回
+    明确错误，语言指南给出观察失败的最小补缺/unknown 收尾方法，不掩盖业务结果。
+  - README 改为用户说明书；LANGUAGE_GUIDE/INTEGRATION_API 说明每层具体插入哪里、
+    发送什么、如何影响 Agent，以及异步、并发、流式、取消和跨进程恢复的约束。
+- 安全与运行边界：
+  - 服务默认只监听 loopback；远程通过 HTTPS 网关。令牌只放 Header，拒绝危险字段和
+    已知凭据，固定错误码不回显正文；不能承诺识别任意无标记的业务秘密。
+  - 限制请求/响应、JSON 深度、事件数、任务状态大小、在途队列、历史存储和连接等待；
+    单实例数据锁、私有权限、拒绝符号链接；已发布终态按需读取，不全部常驻内存。
+  - 修正新服务的长中文 ID 编码超过文件名长度、线程创建异常退出时的收尾；修正新增
+    C# 客户端返回 JsonNode 仍附着父对象的问题。测试不在后台发布完成之前强行停服务。
+  - 超时、评测 Prompt 和模型参数沿用外置配置；服务控制配置重启后用于新任务，同任务
+    不热换冻结策略。磁盘仍需部署方保留期管理，副作用幂等仍由宿主业务执行器保证。
+- 验证：
+  - 全部 13 组 CTest 通过：包含既有 C++ 核心、策略/轨迹兼容测试、新服务、HTTP 与协议。
+  - Python/JS/Go/Java/C#/C/C++ 七个原生进程共生成 28 条完整轨迹，逐条通过 Schema 与
+    doctor；覆盖 L0–L3、中文长 ID、同名动作、乱序完成、分支失败、幂等冲突、Replan/Stop。
+    七个隐私拒收场景被隔离，输出中未检出测试令牌与被拒收的测试凭据。
+  - 原生 TS/Rust 回调场景另验证 2 用户、3 会话、多输入与多分支；HTTP 模型评测接口桩
+    验证真实模型调用链路、记忆入库、经验应用与重启恢复，没有使用付费供应商 API。
+  - AgentFlow runtime 与既有 evolution Hook 回归 515 通过、1 跳过；未运行已知需要
+    外部沙箱的 integration 目录。初次包含该目录的检查受到本地代理影响，不冒称通过。
+  - TS 严格类型检查及 JS 生成一致性通过；OpenAPI Generator 校验无问题，成功生成
+    Kotlin 客户端。Kotlin 仅验证生成，未编译/运行；不把生成器支持列表当作全语言实测。
+  - 安装版二进制、配置及 Python 客户端独立完成采集→规则评测→初始化 Memory；外部
+    C++ 消费者仅链接安装版 SDK，2 条评测成功、重复入库幂等。测试数据/工具链位于 build。
+- 影响与范围：
+  - 新运行代码、客户端、协议、配置和测试均在 tools/trajectory_evolution 内；同步更新
+    使用说明、开发参考、独立交付计划和本记录；保留旧 SessionLog、CLI、SDK、Hook 接法。
+  - 本次没有改 AgentFlow 的 C++ 执行底座，没有更换业务 API/Key、删除正式轨迹或 Memory，
+    未提交或推送 Git；保留工作区原有的其他修改。
+  - 按 GitNexus exploring/impact 要求尝试查询与上游分析；当前索引落后且未解析新增符号，
+    返回 UNKNOWN，不作为低风险或无调用者证明；结合实际入口核对和运行回归约束修改。
+    没有重新安装/重建 GitNexus，也没有重试已知不可用的 bwrap。
+  - 本次交付到 L3。L4 的 GEPA 搜索、对照实验、策略发布和回滚尚未实现；不承诺仅凭
+    接入完成就实现目标无效 Loop 降幅，也不把 applied 回执当作模型遵从或收益证明。
+
+### CHG-20260908-154：补充无 SessionLog、无 Hook 的从零接入教程
+
+- 日期：2026-09-08。
+- 用户需求：将“假设 AgentFlow 没有 SessionLog，也没有 Hook，如何接入”的场景写成
+  逐步操作示例，明确在哪个终端执行、打开哪个文件、插入什么及如何验收。
+- 新增内容：
+  - tools/trajectory_evolution/examples/agentflow-no-hooks/README.md：12 步教程，覆盖
+    启动、凭据、输出查看、同会话多输入、新会话、Coordinator/Executor/公共模型客户端
+    的代码位置、DataBus/manifest 上下文传递、失败/取消收尾及 L0–L3 启用条件。
+  - 同目录 walkthrough.py 和 service.json：连接真实 C++ 服务的可运行教学例子。
+    Coordinator 派发后退出、两个 Skill 独立进程并发、新 Coordinator 进程按调用 ID 合流；
+    图片失败不取消穿搭成功分支，最终执行 completed、业务 partial。
+  - 包 README 增加直接入口，现有 examples 安装规则自动包含教程、配置和脚本，未改 CMake。
+- 验证：
+  - 修正示例初版缺少 shadow_options 导致 L3 task.begin 校验失败的问题，仅补齐教学配置。
+  - 复测 L0/L1/L2/L3 和第二个会话，共 5 条轨迹 capture_complete=true、后台规则评测
+    completed，逐条 doctor 结构校验通过；另有初次 L0/L3 教学验证成功记录。
+  - 校验文档的 11 个 Bash、17 个 Python、1 个 JSON 代码块语法及全部本地链接。
+    业务插入片段明确保留原调用和业务变量，不冒充可直接替换整个函数的完整补丁。
+  - 在 build/evolution-no-hooks-install 验证三份示例文件随包安装、内容一致、配置与客户端
+    相对路径可解析。测试数据仅位于 build/evolution-no-hooks-example。
+- 范围与边界：
+  - 未修改 AgentFlow 运行代码、C++ 底座、现有 Hook、业务 API/Key 或正式轨迹与 Memory；
+    未提交或推送 Git。测试启动的教学服务已停止，结果保留在 build 下。
+  - 小例子使用固定模型/工具回复，不访问供应商 API，不是真实 AgentFlow 或沙箱验收；
+    不以分级调用通过声称验证了经验收益、动作拒绝或循环 Stop，也不把空 Memory 当错误。
+  - 按仓库探索/影响检查指引核对实际入口；GitNexus impact 未解析 IntegrationService，
+    返回 UNKNOWN，未作为无调用者或低风险证明。进一步核对 HTTP 服务和调用链，
+    限定修改为文档与隔离示例，没有安装或重建 GitNexus。
+
+### CHG-20260908-155：用通用边界契约解除框架、语言和执行层级假设
+
+- 日期：2026-09-08。
+- 用户要求：不是增加若干框架适配器，而是任何具备相应字段与执行边界的程序都能接入；
+  同时语言无关、可扩展，交付到 L3。旧字段不合适时可调整，不强行为兼容保留旧语义。
+- 对外契约与配置：
+  - 新增 evolution.boundary.v1：run.begin/end/abort/status、activity.begin/end/abort/status、
+    loop.check/commit、event.record、contract.describe；共用已有 capture.gap/evaluation.retry。
+  - C++ 仅是服务实现语言，对外统一 HTTP/UTF-8 JSON。现有原生客户端的 invoke 可直接使用
+    全部新操作，无需新增语言专属 Agent 包装或框架适配器。
+  - 新入口不需要 Coordinator/Skill、预注册执行角色、step、执行树、父进程常驻或串行调用。
+    输入/输出支持任意 JSON；conversation_id 可选，非聊天任务默认以 run_id 分组。
+  - boundary-service.json 使用 application_id、policy_scopes，区分应用、策略分区与动态
+    actor_id。旧 agent_id/actors 只保留兼容配置语义；冲突配置拒绝，不静默猜测。
+  - activity_types 可配置自定义名称对应 model/action/custom 和必填输入 JSON Pointer；
+    extensions 与自定义事件保留领域数据，不能覆盖身份/状态或伪造系统回执。
+  - 新增 boundary-v1.schema.json、统一 invoke-v1.schema.json，更新 OpenAPI 与生成一致性检查。
+    新旧入口共用原身份隔离、事务持久化、请求幂等、容量与隐私检查，不另写一套存储后端。
+- 执行与轨迹：
+  - 活动彼此独立，可并发、逆序完成，通过显式 caused_by 表达合流/DAG，不把到达顺序当因果。
+    派发前登记预期工作，跨进程只传 run_id/activity_id；发送进程退出后接收方仍可结束记录。
+  - 普通分支失败只记录该分支；activity.abort 只关闭当前活动并标记采集不完整，其他活动继续。
+    run.end 拒绝未完成活动或未回报控制，未知/缺失轨迹隔离而非伪造成业务全局失败。
+  - 循环必须显式 loop.check/commit，活动不再隐含一轮循环。各 loop_id 独立，等待本循环内
+    已登记活动时不 Stop/Replan；Stop 后旧 control_id 也不能绕过停止状态再次派发。
+  - 模型调用逐次提供 binding，可定位消息数组、文本字段、嵌套字段或根字符串；对照
+    actual_input 核验，不改写已冻结策略及其 hash/授权/预算。
+  - 同次 Replan 的并发模型分别生成回执，先失败的调用不抹掉后续成功观测；宿主回报的循环
+    决定不匹配时不能记作 applied。中断收尾不会伪造已观察到模型调用。
+  - 标准分析沿明确的间接因果边识别不可重试重复；同一轮多个无效活动按轮次去重，避免
+    将动作/episode 数量当作无效 loop 数。评测使用策略分区归属，保留实际执行者元数据。
+  - 更新外置标准评测 Prompt：区分活动、循环、策略分区；extensions 作为不可信业务证据。
+    新数据沿既有校验、规则/模型评测、批次反思与记忆管理链路处理。
+- 保留兼容与使用文档：
+  - 原 SessionLog、离线 CLI、SDK、AgentFlow Hook 和旧 Step 接口保留。先前补充的旧接口
+    delegate、execution.end/abort/status、execution/delivery 完成模式也保留并做回归。
+  - 新 README、FRAMEWORK_GUIDE 以统一契约和插入位置为主，涵盖同步/异步、直接/间接通信、
+    非聊天任务、多执行者与多循环；LANGUAGE_GUIDE 各语言示例统一采用新 invoke 操作。
+  - 旧教程移至 LEGACY_STEP_GUIDE/LEGACY_DISTRIBUTED_GUIDE，旧 API 参考明确标注兼容范围；
+    配置、协议和文档一并纳入独立安装包。不是要求外部开发者先读内部实现。
+- 验证结果：
+  - 全部 15 组 CTest 通过，包含标准轨迹/旧 SessionLog、策略、记忆、服务、HTTP、旧异步
+    委派与新增 BoundaryTransportTests；新服务测试另覆盖自定义字段、模型绑定、独立循环、
+    重规划乱序回执、间接因果重试、无效轮次去重、隐私隔离和重启恢复。
+  - Python/JS/C/C++/Go/Java/C# 七种原生进程完成同一套新旧协议测试：42 条完整轨迹，7 条
+    隐私隔离轨迹；请求与响应通过 JSON Schema 校验，完整轨迹逐条 doctor 通过。
+    结果：build/trajectory-evolution/language-clients.23c8p787/test-summary.json。
+  - C++ 发起、Python/JS 独立进程接续同一新协议 run，生产进程退出、接收方重叠执行、
+    逆序完成、一个失败另一个成功并合流，轨迹 doctor 通过：
+    build/trajectory-evolution/boundary-transport.g4dq5caj/test-summary.json。
+  - TS 实际 HTTP 链路产生 12 条完整轨迹、12 次本地模型评测接口桩调用；覆盖两用户三会话
+    多输入及新增通用协议任务，模型接收到具体内容/extensions，已有记忆实际注入新协议请求。
+    结果：build/trajectory-evolution/integration-http.57rpYd/test-summary.json。
+    使用可控评测模型响应，未调用付费供应商；本轮该套测试没有运行 Rust 二进制，不冒称已测。
+  - build/evolution-boundary-install 独立安装后，新配置与安装版 Python 客户端完成新协议
+    L3 调用、轨迹 doctor、自动规则评测与 Memory 初始化；结果位于
+    build/trajectory-evolution/installed-service.obb98l0n/test-summary.json。
+  - 核对 114 个文档本地链接无缺失，OpenAPI 生成一致性和 git diff --check 通过。
+- 范围与边界：
+  - 本次运行代码集中在 tools/trajectory_evolution，未修改 AgentFlow C++ 执行底座，未改
+    业务 API/Key 或删除正式轨迹/Memory，未提交或推送；保留工作区已有其他修改。
+  - 按仓库要求阅读 GitNexus 探索/影响/重构指引并尝试 query/impact；索引落后且关键新增
+    符号未解析，返回 UNKNOWN，不能当作图检查通过。另核对 HTTP/CLI/分析/测试实际调用方，
+    以局部实现与回归约束风险；未重新安装 GitNexus、未反复尝试 bwrap。
+  - 契约不依赖特定框架，但接入方仍必须提供真实边界并使用返回值；没有零代码接入黑盒或
+    已实测全部框架的承诺。applied 是宿主观测核验，不是网络抓包证明或进化收益证明。
+    L4/GEPA 自动搜索发布、远程业务取消、磁盘保留策略不在本次实现范围。
+
+### CHG-20260908-156：合并使用手册并清理过时文档
+
+- 日期：2026-09-08。
+- 用户要求：Markdown 太多且接法混杂，合为一份，并清除过时内容。
+- 文档整理：
+  - tools/trajectory_evolution 下原有 13 份 Markdown 合并为唯一 README.md，不再要求
+    用户在总览、语言、框架、接口、Step 教程与 Runtime 手册之间来回跳转。
+  - 按安装配置、各语言客户端、统一接口字段、L0–L3 真实插入点、异步并发、扩展数据、
+    自动评测和记忆管理、排错与限制、离线/SDK/迁移、验收重新组织，不是直接拼接旧文档。
+  - 删除根目录 FRAMEWORK_GUIDE、LANGUAGE_GUIDE、LEGACY_STEP_GUIDE、LEGACY_DISTRIBUTED_GUIDE、
+    INTEGRATION_REFERENCE、INTEGRATION_API、STANDARD_TRACE、POLICY_RUNTIME、SHADOW_RUNTIME
+    共 9 份旧手册；删除 examples/agentflow-no-hooks 下 README/RPC_WALKTHROUGH 和
+    examples/distributed-agent 下 README 共 3 份重复教程。均指对应 .md 文件。
+  - 清除以旧 Step/框架角色为新接入前提的说明及已过时的能力状态；必要迁移提示集中在
+    README 第 10 节，明确当前到 L3、L4 尚未实现以及接入方必须提供真实执行边界。
+- 配套调整：
+  - CMake 安装清单只安装 README，示例代码、配置、客户端与协议文件仍照常安装。
+  - OpenAPI 生成器与生成结果的错误处理说明改指 README#operations，仅修改文档描述。
+  - 修复独立交付历史规划中的旧手册链接；旧架构图元数据指向当前手册，并注明历史状态。
+  - 修正安装后 SDK 头文件的位置说明，避免源码相对链接在安装包中失效。
+  - 不删除组件外的私人研究/历史文档；本 HARNESS_CHANGES 继续单独保存变更历史。
+- 验证：
+  - 组件重新构建成功，全部 15 组 CTest 通过；OpenAPI 生成一致性与 git diff --check 通过。
+  - 检查唯一 README 的本地链接、章节锚点及 19 个 JSON/Python/Shell 示例的语法。
+  - 新前缀 build/trajectory-evolution/doc-consolidation.JfunEp/install 下只含一份使用
+    Markdown，配置与客户端仍可使用；安装版完成 L3 接入、doctor、自动规则评测和 Memory
+    初始化，未调用供应商 API。结果位于 build/trajectory-evolution/installed-service.ibxfqg_7。
+- 范围与恢复：
+  - 删除前已将原 13 份文档压缩备份到
+    build/trajectory-evolution/doc-consolidation.JfunEp/previous-docs.tar.gz，可按原路径恢复；
+    备份是本地构建产物，不进入交付文档或安装清单。
+  - 本次不改 C++/Python 执行逻辑、API 字段语义、业务配置、凭据、轨迹或 Memory；保留已有
+    工作区修改，未提交或推送 Git。
+  - 按仓库指引执行 GitNexus impact；文档与生成器目标未被索引解析，结果 UNKNOWN，未视为
+    低风险或图检查通过。另核对实际引用、安装依赖与本地回归，未安装或重建 GitNexus。
+
+### CHG-20260908-157：本地低延迟入口、后台采集与可控进化边界
+
+- 用户要求：主 Agent 不等待进化组件的 HTTP、落盘或评测；本地开销尽量小，进化必须可控，
+  并为后续 GEPA 保留清晰的接入位置。接受资源不足时显式降级，不伪造完整轨迹。
+- 运行代码集中在 tools/trajectory_evolution：
+  - 新增 LocalRuntime、local_c C ABI、Python ctypes 与 JS/TS N-API 客户端。应用启动时创建一次，
+    业务边界只调用内存状态机；落盘、评测、反思、记忆更新由后台处理。支持接口仍为
+    evolution.boundary.v1 的 L0–L3 业务边界，不要求特定 Agent 框架或聊天式主循环。
+  - 复用 boundary_runtime 的决定、参数绑定和真实回执校验，仅增加可选的已编译 PolicyRuntime
+    参数，避免同一任务逐次重建策略；原 HTTP 路径继续使用原行为，不改 AgentFlow C++ 底座。
+  - IntegrationService 增加仅供本地后台调用的配置/记忆读取、终态持久化与数字指标写入。
+    不向本地配置快照导出 API Key 或用户凭据，不减弱原有隐私字段、正则及已知秘密检测。
+  - 有界任务槽位和内存预留，单请求默认 64 KiB、保留预算 64 MiB、待落盘任务最多 64 个；
+    继续服从部署配置中的请求/活跃任务上限。预算不是进程 RSS 或硬实时上限。
+  - 同一任务固定策略快照，保留用户/scope/版本授权及 actual_input、executed、loop.commit
+    真实回执。新增 set_enabled 暂停/恢复：撤掉进化增强，不绕过宿主权限、业务循环上限，
+    不取消兄弟分支或撤回已经发生的副作用；跨切换的旧任务隔离，新任务才重新启用。
+  - 容量、竞争、隐私或内部错误显式返回 degraded/capture_complete/policy_applied 标记；
+    业务使用原输入和原调度，有缺口的运行 quarantine。后台磁盘/模型失败不阻塞主链，
+    通过内存 metrics 与发生降级时的 local-runtime 状态文件观测。
+- 本轮验证时发现并修正：
+  - 后台扫描短暂锁住活跃任务，造成正常顺序调用偶发 local_busy：改为读取不可变开始快照，
+    后台不再例行锁活跃任务，结束后才转移终态。没有以增加业务等待或吞掉缺口掩盖问题。
+  - 中断恢复只在内存隔离、状态文件仍未结束：校验身份与路径后持久化恢复终态。
+    本地后台持久化同时复用终态缓存回收，避免隔离任务/关闭自动评测时绕过原 HTTP 清理入口；
+    只回收可从磁盘读取的内存终态，不删除轨迹文件。
+  - 槽位复用后的旧请求 ID 可能重用持久化 run_id：增加实例内生成序号，保留窗口内幂等，
+    过期窗口不覆盖历史运行。忙碌的重复 begin 不再误创建第二个运行。
+  - 原生接口自描述不再宣称支持需后台 I/O 的 evaluation.retry，并返回实际本地请求上限。
+    能明确归属为新任务 begin 的拒收不再污染已有其他任务；无法归属的损失仍保守隔离。
+  - Python 进程边界与 ctypes 返回类型、JS 非法字段/非有限数字和 N-API 资源释放补齐。
+    Node 测试采用与构建工具链匹配的 C++ 运行库，README 说明 GLIBCXX 加载不兼容的处理。
+- 可控进化/GEPA：
+  - README 第 8.4 节明确“入库不等于上线”，默认不自动授权经验，运行中的策略不可热换，
+    实际应用不等于收益证明。GEPA 后续位于后台候选优化阶段，需固定试验数据、预算、
+    留出评测、安全门槛和发布授权；线上只读已发布快照，不等待搜索。
+  - 本次未实现 GEPA 搜索器、候选发布登记、流量灰度或自动回滚，不冒称完成 L4。
+- 验证与本地产物：
+  - 17 组 CTest 全部通过，保留 HTTP、旧 SessionLog、标准轨迹、策略与记忆回归。
+    新增原生跨语言回归在修正后台竞争后连续通过三次。
+  - C++ 业务线程禁文件/网络/睡眠系统调用后完成 40 轮 L3、323 次边界/状态调用，轨迹校验
+    与规则评测、Memory 流程通过；最终完整回归中的中位数约 1.19 ms、P99 约 1.34 ms，
+    最大约 5.05 ms。结果：build/trajectory-evolution/local-runtime.6ul0WW/test-summary.json。
+    这是小请求、可控工具负载的测量，不是任意输入/并发量的时延保证。
+  - Python/JS 原生测试覆盖两用户三会话九次任务、反向完成、一个分支失败不影响其他分支、
+    未授权经验不注入、真实输入不符产生失败回执、容量、隐私拒收、暂停及进程中断恢复。
+    磁盘不可写时一轮业务边界约 49 ms；模型评测被挂起时两轮约 68 ms，均未等待故障解除。
+    结果：build/trajectory-evolution/local-clients.v7rvl2it/test-summary.json。
+  - 真正同时写同一 run 的 4 个生产者触发显式降级，结果隔离而非完整学习样本；此用例不是
+    “并发无损通过”。常规两用户/多 run 和逻辑重叠活动测试无降级。
+  - 独立前缀 build/trajectory-evolution/local-install.kSYsw1 安装版原生/Python 与 HTTP/Python
+    均完成 doctor、规则评测和 Memory 初始化；分别见 installed-local.3stryuav 与
+    installed-service.3nh21mbc 下的 test-summary.json。所有测试使用假凭据和可控本地模型，
+    未调用用户付费 API，测试产物没有实际 Key。
+- 交付边界：
+  - 原生 run.end 仅进入内存，persisted=false；不得在业务答复前 drain、close 或等待评测。
+    关闭阶段可以等待当前评测超时。进程崩溃可能丢失未落盘尾部，不能承诺零丢失。
+  - 原生句柄和幂等窗口属于创建客户端；跨进程续写同一 run 仍用 HTTP，或由长生命周期
+    所有者收取回调。真正同 run 多线程争锁会降级；无损接入需在已有调度器中依次提交短记录，
+    业务工具仍可并行。原生库目前是 Linux/POSIX，不冒称已交付所有系统的原生 SDK。
+  - 唯一组件 README 已更新配置、接法、管理与限制；未新增分散说明文档，未改业务 API/Key、
+    用户现有轨迹或环境，未提交/推送 Git，保留工作区已有其他修改。
+  - GitNexus impact 对新增关键符号仍为 UNKNOWN；detect-changes 显示已有索引的 35 文件、
+    45 符号及 low/0 processes，但不能覆盖未解析的新入口，未据此宣称全图无影响。
+    已补查实际调用与完整回归；未重建/安装 GitNexus，未重试 bwrap。
+
+### CHG-20260908-158：补充进化算法与数据流详解
+
+- 用户要求：在使用手册之外新增一份算法说明，详细解释采集、日志处理、评测、进化记忆生成、记忆管理、策略生成与更新。
+- 新增 tools/trajectory_evolution/ALGORITHMS.md，按实际源码组织 15 节，包含事件因果校验、并发配对、内容感知评测、
+  候选支持度公式、元反思、字节三元组 Dice 短名单、四类记忆关系、全库整理、冲突成组淘汰与乐观文件更新。
+  补充经验资格筛选、中文双字关键词检索、版本授权、L1–L3 状态机和回执、配置生效时机及贯穿全链路的假设案例。
+- 明确区分当前实现与 GEPA/L4 规划；说明入库、PROPOSED、版本授权、实际应用和收益证明不是同一个状态。
+  如实记录通用诊断范围、本地竞争降级、截断、无向量检索、记忆与历史产物保留、非自动规则发布等边界。
+- README 新增算法文档入口，CMake 安装列表增加该文档；未改运行算法或 AgentFlow C++ 底座，未触碰 API/Key、环境和现有轨迹。
+- 验证：15 节/15 个锚点、50 个本地与锚点链接、JSON 示例和代码围栏检查通过；CMake 重新配置通过，独立前缀
+  build/trajectory-evolution/algorithm-docs.knDrqM 已安装并逐字比对 README 与 ALGORITHMS。仅文档与安装项变更，未重跑模型或业务测试。
+- 影响分析：GitNexus 现有索引落后 9 个提交，查询未解析相关入口，CMake 目标 impact 为 UNKNOWN；不将空结果视为无影响，
+  已直接核对实际源码、配置与安装调用。未重建/安装索引，未提交或推送 Git，保留工作区已有其他修改。
+
+### CHG-20260908-159：自动进化改为持久化增量批次，消除重复合成与空闲全库刷新
+
+- 用户要求：已分析日志不重复分析；控制触发频率、防止重复启动积压；空闲不频繁刷新，兼顾并发、失败和重启边界。
+- 范围仅为 tools/trajectory_evolution 及本文；未修改 AgentFlow C++ 底座、采集协议和业务控制接口，未新增依赖。
+- integration_service.cpp：完整 run 只入队，待学习索引与活跃业务容量分开。按用户分组，默认满 20 条或最老样本等待
+  10 分钟后具备执行条件；一次最多 32 条/32 MiB，批次间至少 60 秒。单个服务仅一个评测批次运行，后到 run 留待下批。
+  learning 配置可调整数量、等待、间隔、容量和故障退避；单轨迹、元反思与整理共用模型预算，严格模式失败也预留调用预算。
+- 增加 learning/schedule.json 和 learning/jobs 的轻量检查点，记录冷却/退避、冻结成员、阶段、错误和候选 PB；
+  runs.learning 记录来源/报告指纹、分析状态和重试代次。重启复用报告，入库重试复用候选，同一批次保持记忆入库幂等。
+  完成批次先保存终态，再补齐各 run；重试代次用于防止旧批次在恢复时重新接管已单独重试的样本。
+- 一个报告损坏、分析失败或某用户轨迹发布失败，不拖住其他有效样本/用户；failed 不自动无限重试，沿用现有
+  evaluation.retry 管理操作。共享配置/存储故障保存稳定错误码与退避时间，重启不绕过退避；未改变 HTTP 状态响应字段。
+- 模型请求发出、报告未落盘即中断时，标记 analysis_interrupted_unknown_outcome，要求显式重试；成功缓存丢失或被修改
+  时不自动覆盖、不默默重新付费。候选模型阶段同样保守恢复。此机制不承诺模型服务商侧 exactly-once，也不改变离线显式重评。
+- evolution_pipeline.cpp：新增接收 Memory 的 synthesize_reports 重载，保留旧入口；只用新报告合成候选，跨批证据在记忆中累积。
+  新报告仍检查已有记忆的反证，只有新增反证才带回该候选，不再重复扫描最近 32 份历史报告。recent_reports 仅兼容接收。
+- local_runtime.cpp / integration_http.cpp：学习线程改为事件/截止时间唤醒；记忆仅在组件提交新修订后重新加载，新增
+  memory_refreshes 指标。修正持久化通知与本地槽位发布的先后竞态，保证完成状态可以被后台刷新；主业务边界不新增 I/O。
+- 策略含义：memory_version 只是进程内缓存失效标记；Memory revision 和 run.policy/policy_id 仍按原机制保存。
+  本次没有引入 GEPA 父子策略谱系、自动策略晋升或运行中策略替换；本地未落盘尾部依然可能在崩溃时丢失。
+- 文档：README 8.2 补充配置、调度、重试和容量边界；ALGORITHMS 更新增量合成、检查点、缓存通知与版本含义。
+  阈值/等待表示启动资格，不保证处理完成期限；持续输入高于处理能力仍需容量规划。外部修改 Memory PB 需重启本地客户端加载。
+- 验证：Release 构建成功，CTest 18/18 通过。新增 LearningScheduleTests 的 10 组场景覆盖数量/最大等待触发、跨重启冷却
+  与配置故障退避、用户隔离、后台阻塞时新任务继续、强杀后的未知调用结果、报告/候选复用、幂等恢复、缓存丢失拒绝重评、
+  单样本/发布失败隔离、模型预算截批、空闲不刷新和真正更新后刷新；增量反证、旧 HTTP 契约与无 I/O 主链回归均通过。
+  测试记录：build/trajectory-evolution/learning-schedule.hclq3bev/test-summary.json，26 次本地假模型请求，付费 API 调用 0 次。
+- 独立安装前缀 build/trajectory-evolution/learning-install.3EAqkv 的原生/Python 和 HTTP/Python 测试均通过，轨迹 doctor、
+  规则评测、记忆初始化与假凭据未落盘检查通过；结果分别位于 installed-local.fqk_x9vr 和 installed-service.9c5dmhzu。
+  配置 JSON、文档链接/围栏/JSON 示例、git diff --check 通过。未触碰真实 API/Key、环境或既有业务轨迹，未提交或推送 Git。
+
+### CHG-20260908-160：原有总览图与 A4 运行图同步当前增量学习和策略机制
+
+- 用户要求：修改之前绘制的图，使其对应当前方案；保留原目录和文件名，不引入新的运行流程。
+- 更新 docs/trajectory-evaluation/figures/trajectory-evolution-overview 与 trajectory-evolution-runtime-a4
+  两套图件的 SVG、PNG、PDF。总览采用“当前执行 / 增量学习 / GEPA 规划”三栏；详细图保留 A4 横向单页。
+- 将 L0–L3 改为已实现，使用现有 run.begin/end、activity.begin/end、loop.check/commit 边界名称；
+  展示宿主并发、按 ID 合流、单分支失败不覆盖全局结果、本地先返回业务与后台异步落盘的区别。
+- 增加按用户隔离的新样本队列、20 条/10 分钟触发资格、60 秒批次间隔、32 条/32 MiB 上限、
+  冻结批次、共享模型预算、分析和候选检查点、单样本失败隔离、显式重试与跨重启退避。
+- 分开绘制持久化 Memory revision、进程内 memory_version 缓存计数和 policy_id/run.policy 运行快照，
+  用 Run A/R10/P-A、后台更新 R11、新 Run B/P-B 的例子说明旧 run 不换策略。
+  GEPA 父子谱系、真实对照、留出验证与晋升/撤回仍单独标为规划，不把缓存计数解释为进化代数。
+- 同步 INDEPENDENT_DELIVERY_AND_L4_PLAN.md 的图注、读图顺序和交付说明，删除过时的“仅 L0 已验证”图注、
+  旧图端口表和示意成绩数字；图中课题收益目标仍明确为未实测目标。
+- 验证：SVG XML、图件链接、关键状态与版本标签检查通过；按实际 Noto Sans CJK 字体检查 252 处文字，
+  未检测到宽度溢出或文字间覆盖，并完成渲染后的目视复查。PNG 分别为 3508×2207 和 3508×2480；
+  两份 PDF 均为单页，详细图 MediaBox 对应 297×210 mm。git diff --check 通过。
+- 仅更新图件与相关 Markdown；未修改运行代码、配置、API/Key 或既有轨迹，未调用模型、未提交或推送 Git。
+
+### CHG-20260908-161：增加 Hermes 式离线评测任务集构建，为 L4 提供固定评测材料
+
+- 用户要求：借鉴 Hermes 的评测集做法，在进入 L4 之前准备可复用的任务集；保持最小改动、框架和语言无关。
+- 范围仅为 tools/trajectory_evolution 和本文。增加 dataset.cpp / dataset_cli.cpp、公开 dataset.h、独立
+  evaluation_dataset.proto；现有 main.cpp 仅增加 dataset 子命令分派和帮助，CMake 注册新增源文件、协议和测试。
+  未修改 AgentFlow C++ 底座、Harness、在线边界、记忆管理、后台调度或现有策略生效机制，未新增第三方依赖。
+- 三来源：golden 导入人工 JSONL；synthetic 读取能力说明分批调用模型出题；traces 读取标准 JSON/PB 或兼容 SessionLog。
+  轨迹提取复用现有 Evaluator 的结构校验、内容脱敏和限长，无 adapter 准备证据不额外调用评价模型；
+  对已经完整掩码的敏感字段删除其键值，再通过共享隐私门槛。原始模型回复、凭据和私人路径不进入数据集或诊断。
+- 提示词外置 config/prompts/dataset-system.txt；config/dataset.json 控制来源、分组种子、配比、总量、逻辑模型调用
+  预算与出题输出 Token。模型 URL/模型名/Key/超时/thinking/传输重试复用现有 runtime 配置，支持已有环境变量，
+  不写入真实 Key、不自动读取 .env。任务 budget 与模型 HTTP timeout 明确区分；本模块不执行任务或实施宿主预算。
+- 模型只能返回任务、后续输入、标准、类别、难度和声明式初态；不能自批 reviewed、指定 split 或伪造来源。
+  模型生成和轨迹派生任务默认为 pending、训练用途；golden 重新导入保留原有来源与学习暴露，不把旧样本伪装成新留出。
+- 以归一化输入、后续输入、初态检测精确重复，合并场景组和来源；冲突标准、重复 ID 对应不同任务、组内划分冲突拒绝。
+  用 split_seed/group_id 的 SHA-256 桶做稳定划分，已暴露给学习的组和 learning_groups 全部限制到 train；
+  空集合警告，不用事件或同一会话不同轮次拼凑独立验证。近义样本与外部使用历史仍需要导入方标记，未宣称语义去重完成。
+- 冻结输出 dataset.pb、train/val/holdout.jsonl 和最后写入的 manifest.json；公开 JSON Schema 与 Protobuf 协议。
+  task_version/dataset_version 是评测材料内容版本，不是策略版本。check 交叉核对文件哈希、PB/JSONL、分组与版本。
+  目标目录存在时提前拒绝；输出目录 0700、文件 0600。失败可能留下不能通过 check 的不完整目录，不覆盖或删除旧输出。
+- 增加 24 条中文声明式用例：并发与逆序合流、依赖、网络重试、权限、循环、前置条件、多轮更新、会话隔离、图片/视频、
+  产物真实性、代码回归、数据清洗、隐私与幂等。默认 21 个场景组、14 train / 5 val / 5 holdout，全部 pending。
+  实际任务集位于 trace_output/datasets/agent-evaluation-starter-v1；不是付费模型生成，也不是已执行的 Agent 实验。
+- 使用说明集中更新 README 10.4，ALGORITHMS 15.3 补充数据算法；解释训练/验证/留出、来源继承、审核、各层预算与失效边界。
+  被测 Agent 不能收到整条用例中的 expected_behavior 和故障安排；真实执行器、产物判定、基线/候选对照仍属后续 L4。
+- 验证：Release 完整构建成功；CTest 19/19 通过（原有 18 组全部通过，新增 EvaluationDatasetTests 含 32 项测试）。
+  新测试覆盖稳定版本、同组隔离、已学习数据拒绝留出、重复冲突、部分失败、不可覆盖、篡改/缺失文件/符号链接、敏感值、
+  中文与自定义字段、模型输出伪造/截断/无效 JSON/HTTP 失败、预算、初始化失败重入、标准轨迹和旧 SessionLog。
+  新测试记录 build/trajectory-evolution/dataset-tests.8w34edb4/test-summary.json，16 次本地假模型请求，付费调用 0 次。
+  独立安装目录 build/trajectory-evolution/dataset-install.gZNgda 的 CLI 构建/校验成功，生成同一内容版本；
+  单独 C++ 消费者仅通过安装包 TrajectoryEvolution::core 与 dataset.h 读取任务集成功。
+  24 条源任务与 24 条冻结任务通过 JSON Schema；Markdown 围栏与 git diff --check 通过。
+- 编辑前对 CLI 入口进行 GitNexus impact，现有索引不能解析该入口；未将 UNKNOWN 视作低风险，沿用已知限制并核对真实调用范围。
+  未重建索引、未提交或推送 Git，保留工作区已有其他改动。隐私检查不承诺识别所有个人信息，reviewed 不代表 L4 已就绪。
+
+### CHG-20260908-162：补齐独立任务评测执行、规则/模型验收和报告，不启用进化
+
+- 用户明确要求评测集不是只有题目，须完成可实际运行的评测相关功能，暂不做进化。新增功能集中在
+  tools/trajectory_evolution；不修改 AgentFlow C++ 底座、Harness、在线 Hook、Memory、策略或学习调度。
+- 增加 task_evaluation.cpp、evaluation_process.cpp、task_evaluation_cli.cpp 和公开 task_evaluation.h；
+  原 dataset CLI 仅增加 run 分派，main 仅同步帮助。沿用现有 evaluation_dataset.proto 添加 TrialCheck、EvaluationTrial、
+  TaskEvaluationReport，不修改已冻结任务字段和版本语义；不增加 C++ 第三方依赖。
+- dataset run 校验冻结数据集、集合选择、审核状态、规则覆盖和预算后，按任务×重复×显式版本执行。
+  每次单独工作目录、唯一 trial_id、环境变量白名单；用 stdin/stdout JSON 调用任意语言的受信宿主程序，
+  同步/异步、多 Agent、队列/DataBus 内部实现由宿主等待并关联终态。不给被测对象发送 rubric、集合划分或判分规则。
+- Linux 进程监督使用 posix_spawn 和参数数组，不经过 shell；非阻塞读写避免大输入/输出互等，限制 stdout+stderr 总量，
+  超时与取消终止进程组，异常路径清理子进程。工作目录隔离不冒充安全沙箱，外部数据库/远端任务/权限隔离仍由宿主负责。
+- 规则支持 JSON Pointer 的 exists/equals/contains/at_most/at_least；独立读盘验证 JSON/text/PNG 产物，
+  拒绝越界、符号链接、缺失、敏感文本和超限内容。PNG 内置检查只证明文件头和尺寸，完整解码与视觉语义不能伪造。
+  声明产物缺失属于业务验收失败，不进入环境故障未评分桶；执行状态和业务判定独立保存。
+- 模型验收复用既有 ModelAdapter 和 runtime 配置，提示词外置 task-judge-system.txt，接收具体安全证据和成功标准。
+  规则失败不再调模型覆盖；模型故障、截断、引用错误、预算耗尽保持 error，不确定保持 uncertain，不默认为通过。
+  真实复跑暴露了非 JSON 回复与不存在的引用，已增加显式证据路径白名单、完整 JSON 围栏兼容及可配置有界格式修复。
+  max_repair_attempts 默认1、范围0–3；每次计入总模型预算并记录 attempts，只重试判分，不重跑宿主或重复生成图片。
+- 可选标准轨迹校验身份、因果闭合、结束状态和最终输出一致性；无效轨迹保留经隐私校验的诊断证据，不送模型。
+  不把 Episode 数当 loop 数。缺少轨迹/计数保留不可观测标记，规则无效 loop 统计明确为下界。
+- 每次试验落 trials/<trial_id>.json，汇总生成 report.md、report.json、report.pb、results.jsonl，最后写 manifest。
+  按版本/类别/集合统计评分覆盖率、明确评分通过率和全量试验通过比例，配对比较按 task_id+repetition，不按返回顺序。
+  complete 仅指计划试验均有终态；失败/取消也有记录。运行中断保留已完成条目，不自动重跑、不覆盖旧目录。
+- 模型/步骤/任务时间预算分别配置；不把 Agent API 调用次数与评测模型调用预算混为一谈。
+  C++ 不原样落 stdout/stderr；敏感响应不发模型，只有通过检查的产物被保留。不能承诺识别所有编码秘密或图像隐私。
+- 增加三条已审核可执行示例及独立 Agent Plan 工具型宿主：并发数据源失败隔离汇总、三轮预算修改、图片生成/下载/完整解码。
+  示例使用用户指定 Agent Plan 接口，文本 deepseek-v4-flash，图片 doubao-seedream-5.0-lite；严格保留 /api/plan/v3，
+  不回退普通按量路由。配置可修改、thinking disabled、模型 HTTP timeout 30分钟；密钥仅从进程环境读取，无真实密钥入库。
+  示例图片解码使用 Pillow；该依赖不进入 C++ 核心。通用程序不依赖这两个模型或火山服务。
+- 增加 TaskEvaluationTests，最终28项回归覆盖通过/失败/未评分、并发逆序与版本配对、后代超时清理、取消、预算、
+  环境白名单、凭据拦截、实际产物、无效/错归属轨迹、模型异常/引用/格式修复和不可覆盖。完整 CTest 20/20 通过。
+  真实执行保留所有三轮结果，不删除中间失败：首轮3/3通过；第二轮1通过、2评测协议错误；修复后最终3/3通过，
+  模型验收3次均一次成功，实际图片2048×2048可解码。最终报告 trace_output/evaluation/agentplan-task-eval-20260908-verified/report.md。
+  最终三份轨迹有效；三轮32个结果文件及模块源码的真实密钥字面值扫描无命中，最终报告文件哈希、JSON Schema、
+  Markdown围栏和图片解码复核通过。此验证不是全量 AgentFlow 业务基线，也不代表进化收益已达标。
+- README 10.5 集中说明命令、所有语言的宿主入口、异步关联、预算、失败分类、字段和安全边界；ALGORITHMS 15.4
+  说明算法，移除对应“真实执行与固定版本对照尚未实现”的过时内容。L4 GEPA搜索、自动选择、发布/回滚仍未实现。
+- 修改前进行 GitNexus impact；新增入口与帮助入口未被索引正确覆盖，结果 UNKNOWN，未据此宣称无影响。
+  核对实际 CLI/CMake/协议调用范围并运行完整回归；未重建索引，未提交或推送 Git，保留其他既有工作区改动。
+
+### CHG-20260909-163：统一按用户学习、公共经验自动管理与跨库安全编译
+
+- 按用户要求统一离线和在线学习：新增 learn 命令和受信本地 import_file API，复用 IntegrationService 的原有队列、
+  单轨迹评测缓存、候选检查点和私人入库流程。HTTP、原生后台、日志导入使用相同服务配置与 data_dir，
+  不再从混合用户日志直接生成一份可注入的公共库。旧 evaluate 目录模式仅允许 --no-memory 诊断，不再写 Memory；
+  单文件评测和 Pipeline SDK 保留。原日志不改动，已有旧版混合 Memory 不删除、不自动升级为公共经验。
+- 目录统一为 by-user/<user>/memory 保存私人库、同级 memory 保存可用公共经验，learning/shared-memory.json 保存
+  内部管理账本；每个用户的 shared-relations.json 只包含该用户的跨库关系。公共 PB 为 SharedExperienceStore，
+  只含应用、修订与经验 ID/scope/条件/建议，不携带用户身份、私人正文历史或来源候选 ID。
+- 新增 shared_memory.cpp/.h：同一后台工作者自动执行泛化提炼、单独复核、独立证据计票、跨库比较、争议暂停、
+  支持撤回、恢复与淘汰。默认至少两名用户、每名至少两次完整且已评测 run；核验来源身份和实际内容指纹，
+  已记录经验注入的轨迹不作为推广的独立证据，同用户重复记忆只计一票。没有可核验来源则保留私人用途。
+- 公共经验状态 pending_support/published/disputed/reserve；任一当前有效跨库冲突使公共经验全局暂停，
+  合格私人经验仍可使用。未知关系保守不合用公共，不假定独立；已失效关系按双方内容版本清理。
+  更换评审模型/提示词不等于推翻既有反证，保留未消解冲突；坏用户文件/取消鉴权不阻塞其他用户且不自动清除反证。
+- 默认最多 64 条可用公共经验、128 条工作集，允许新候选积累独立支持后替代旧条目；各用户支持单独计算新鲜度，
+  默认 30 天没有新核验支持则不计票。长期无新证据的条目退出工作集，有界保留淘汰摘要；来源和关系缓存也有限制。
+  账本读写采用同一 256 MiB 硬上限，避免允许写出的合法默认缓存无法在重启时读入。
+- 公共管理按变更用户 FIFO、单周期模型预算与最小间隔执行，默认每周期最多 8 次逻辑调用、至少间隔 60 秒。
+  无新工作时只等待最早证据到期，不全库轮询；缺模型不空转。有界失败重试、调用前检查点、重启恢复与公共投影修订核对。
+  未持久化的模型响应无法保证供应商 exactly-once，公共审核中断重试可能再次计费；此限制已写入文档。
+- 同一目录以服务锁约束单写入者；learn 不和正在使用该目录的服务/原生进程同时写。支持标准 JSON/PB 副本幂等复用，
+  同身份内容不同拒绝覆盖；非法身份、跨应用/未配置用户、不完整轨迹、凭据字段拒收。SessionLog 使用原有专用评测器，
+  不误走标准轨迹解析。导入增加递归敏感字段检查，避免只扫序列化文本而遗漏任意格式的敏感键值。
+- 编译器保留私人所有权门槛，单独接收受信公共投影；对关系按双方版本建立索引，匹配失败不放行。
+  运行时优先合格私人、跨库重复只注入一份；先过滤授权再使用 top-K，修复未授权私人条目挤占公共名额。
+  快照预算包含关系字节，裁剪时同步去掉孤立关系。本地后台原子更新私人＋公共视图，业务边界不新增模型/磁盘/网络调用，
+  已开始 run 保持固定策略；公共撤销影响后续 run，不冒充能追回已发送上下文。
+- 端到端测试发现并最小修复原 finalize_candidate 的 Episode 去重：键由 episode_id 改为
+  user/conversation/dialogue/episode_id，防止不同 run 同名 step-1 被少计支持。修复后台私人写入容量可能大于运行时读取容量：
+  统一入库上限取 evolution、run 与 shadow 读取上限的最小值，不写出下一轮无法载入的私人库。
+- 增加认证用户范围内的 memory.status 及 learn 工作区状态汇总，更新生成的 JSON Schema/OpenAPI；管理接口不放入原生热路径。
+  三份公共管理提示词外置，sharing 配置可替换，复用现有模型与环境变量密钥；未写入真实密钥、未改模型供应商配置。
+- 新增 SharedMemoryTests、UnifiedLearningTests：固定模型响应与实际文件/服务进程验证多用户推广、去重、冲突恢复、
+  容量替代、独立证据过期、版本失效、模型异常、隐私、坏用户隔离、标准 JSON/PB 重复导入、在线实际注入和旧 SessionLog 兼容。
+  全量 CTest 22/22 通过，包含低延迟原生无 I/O 约束、异步/跨语言、现有记忆管理和任务评测回归。
+  这是机制回归，不是实际供应商模型的语义正确性、隐私零泄露或业务收益证明，也未实现 L4 GEPA 自动发布。
+- README 第 8、10.1 节和 ALGORITHMS 第 8.5 节集中说明目录、命令、控制开关、算法、恢复与边界，不额外拆分说明文档。
+  代码修改限于 tools/trajectory_evolution，不修改 AgentFlow C++ 调度底座、Harness 或业务 Hook。
+  GitNexus impact 对新入口和 finalize_candidate 为 UNKNOWN；按已知索引限制核对实际调用链，不把空图当低风险。
+  未提交/推送 Git，未删除用户数据或既有产物。
+
+### CHG-20260909-164：组件内分章手册、配图与默认开启两级记忆
+
+- 按用户要求，将交付文档集中到 tools/trajectory_evolution/docs/，不放在 AgentFlow 根目录的 docs 中。
+  共 24 个专章，覆盖安装配置、快速开始、协议、原生/HTTP 接入、同步/异步/多 Agent、采集评测、反思、
+  私人/公共记忆、策略应用、学习调度、持久化恢复、基线评测、安全运维、扩展迁移与 GEPA 能力边界。
+  每章提供目标、设计思路、具体使用与算法细节、实现定位和相邻章节导航，不依赖个人远程开发环境。
+- 公共＋私有记忆专章集中解释晋升资格、独立证据、去重、冲突导致全局暂停、私人优先、关系版本失效、
+  支持撤回、恢复、TTL、容量淘汰、后台预算、重试检查点、持久化字段和状态接口，并列出已知限制。
+  明确 published/applied 不等于已证明进化收益，L4 GEPA 自动搜索与发布仍未实现。
+- 将原 README 与 ALGORITHMS 的有效内容迁入对应章节，入口文件改为导航并保留旧显式锚点。
+  移除省略 sharing 默认关闭、跨用户共享尚未实现等过时描述；不改写历史变更记录。
+  特别区分 HTTP 常驻服务与原生对象生命周期，说明 Coordinator 退出、DataBus 派发和最终汇总的真实接入条件。
+- 新增 51 张可编辑 SVG，沿用浅色分区、蓝绿紫配色和圆角卡片风格；包括架构、时序、状态转换、
+  目录、时间线和字段对照，各章至少两张，公共记忆五张。配图无需 Mermaid 插件或联网资源即可显示。
+  对全部图片进行实际渲染、字体宽度和画布边界检查，并复查中文断行与时序编号遮挡。
+- 功能修改仅将 shared_memory_options 的 enabled 默认值改为 true；省略配置和空对象同样启用，
+  显式 enabled=false 保持关闭。auto_approve_experiences 默认仍为 false，不扩大经验自动注入授权。
+  补充默认推广和显式关闭不调模型、不修改账本的回归；未改 AgentFlow 调度底座、业务 Hook、环境或供应商配置。
+- CMake 安装包含 docs 和 SVG。新增 DocumentationTests 检查 Markdown 围栏、本地链接与锚点、
+  交付包路径边界、章节完整性、SVG 安全属性和可见标题，防止排版过程丢失文字。
+  全量 CTest 23/23 通过；24 章、51 图、455 个本地链接通过源码及安装包检查。
+  独立安装后实际运行服务、采集、后台规则评测与记忆初始化通过，供应商模型调用为 0。
+- GitNexus impact 对相关新增入口仍为 UNKNOWN，按已知索引限制核对实际归一化调用链与测试入口，
+  不将空图视为低风险。未重建索引，未调用付费模型，未提交/推送 Git，保留既有工作区改动和用户数据。
+
+### CHG-20260909-165：清理图表中的否定式提醒文案
+
+- 按用户要求，清理自进化组件手册的图片和表格，删除专门列举不能代表、不能冒充等内容的说明列；
+  其余相关文字改为对象含义、状态、处理方式和使用条件，保留已有功能与技术语义。
+- 同步更新 SVG 标题、正文、无障碍说明、章节图注和图集索引；沿用现有配色与版式，并按列数重新排版。
+  正文中的技术边界说明保留，L4 仍标明后续规划；不修改程序、配置、接口或运行行为。
+- 运行文档链接、锚点、SVG 结构与可见标题校验，并对配图进行渲染和文字宽度检查。
+  GitNexus 对文档目录的影响查询为 UNKNOWN；补充核对 CMake 安装、文档测试和 Markdown 引用。
+  本次仅修改组件内文档及本记录，未提交或推送 Git。
+
+### CHG-20260909-166：更新 L0–L4 等级图文件与引用
+
+- 针对用户反馈，单独复核“L0–L4：新增能力与真实责任”图，确认仅保留三列，统一列名为等级、接入位置、新增能力。
+- 将图片改名为 01-level-capabilities.svg，并更新概念章节与图集引用，避免继续使用同名旧预览。
+  原图片内容保留在新路径，未新增一份重复源图；其他历史图件不改动。
+- 影响查询为 UNKNOWN，按现有索引限制核对实际文档引用；重新校验文档链接并渲染图片。
+  本次只改图件及文档，不修改运行代码、接口或配置，未提交或推送 Git。
+
+### CHG-20260909-167：按交付手册风格复核全文与配图
+
+- 按用户要求删除概念章节中列举能力缺口的整段，以及公共记忆章节中重复的保证与限制清单。
+  通读组件 README、算法导航和 24 个专章，将内部审查式提醒改为功能定义、配置条件、操作步骤和故障处理。
+  保留身份归属、授权、并发、隐私、持久化和错误状态的技术语义，不改变使用条件或默认行为。
+- 同步清理正文、表格、SVG 可见文字、无障碍说明、图注和图集索引中的同类措辞。
+  等级图标题统一为“L0–L4：接入位置与能力分级”；沿用已有配色、版式和图件路径。
+- 完整闭环章节按采集、学习、授权、应用、回流与实际示例组织；统一策略评测与 GEPA 放入后续规划，
+  明确规划中的评测覆盖 L1–L3 策略更新。此次仅整理说明，未实现或变更策略发布、评测门槛等运行逻辑。
+- 修复评测算法列表的编号和重复说明，核对产物校验步骤与现有实现一致。
+  DocumentationTests 通过，24 章、28 个 Markdown、51 张图和 459 个本地链接通过检查；
+  全部配图渲染及文字宽度检查通过，并目视复核等级图和控制范围图。章节列表编号检查通过。
+- GitNexus 文档影响查询为 UNKNOWN，按既有索引限制核对安装规则、文档测试和实际引用。
+  修改限于组件文档、配图及本记录，未改运行代码、配置、接口或用户数据，未调用模型，未提交或推送 Git。
+
+### CHG-20260909-168：复用真实 Agent 评测、后台版本准入与记忆状态反馈
+
+- 在 `tools/trajectory_evolution` 内新增 AgentEvaluationService，复用既有 task_evaluation 执行器、固定任务集、规则/模型判分和报告。
+  L0 测原始 Agent，L1–L3 测完整冻结策略；同一提交/查询接口供后续 L4 搜索器调用，本次未加入 GEPA 搜索循环。
+- 行为版本绑定 Agent 部署修订、用户、等级、经验快照和控制规则，独立保存候选及父版本。
+  宿主必须实际加载候选并返回 loaded_version；轨迹保留自身 run ID，通过 run.start 上的 agent_version_id/evaluation_trial_id 关联试验。
+  完整性、所有权、版本、输出、隐私与产物检查继续复用现有验证，错误及证据不足不作为成功发布。
+- 新增可选 policy_evaluation_file 配置，在后台独立线程与子进程中执行任务，对照质量、覆盖率、配对样本及可选时延/token/无效 loop 门槛。
+  前台使用缓存中的已发布且仍兼容版本；无可用版本时按 L0 原始逻辑继续，已有 run 不切换版本。
+  旧配置不设置此字段则保持原授权行为；AgentFlow C++ 调度底座未改动。
+- 后台作业有持久化去重、启动冷却、每小时预算、有限并发、取消、显式重试和崩溃中断状态。
+  较旧终态作业移出有界管理索引后保留报告和去重记录；最新/活跃/已发布作业保留。
+  冻结测试实例使用独立 data_dir，关闭递归学习；测试轨迹带来源标识，生产导入拒绝作为学习来源。
+  增加测试进程 nice、地址空间及 CPU 秒配置，保留可配置的宿主和模型 HTTP 超时。
+- 版本评测结果自动写入用户 memory/evaluation-state.json；私有 PB/JSON 新增 evaluation_feedback，按内容版本保存状态、报告与配对计数。
+  组合版本失败仅登记复核；同级、单条经验变化、真实 applied 回执及确定配对结果满足 memory_min_pairs 后，才自动验证或归档私有经验。
+  不确定/基础设施错误不作为反证，不跨用户改写公共记忆；归档会通知原公共管理机制复核私人来源。
+  反馈按报告 ID 幂等，纯管理修订不会重复触发同一行为版本评测。
+- HTTP 增加 agent_evaluation 管理操作；原生新增独立 LocalRuntime::manage / te_local_manage 及 Python manage 包装。
+  管理调用与低延迟 invoke 分离，复用已运行的后台服务；其他通用语言可以通过 UTF-8 JSON C ABI 接入。
+- 更新配置模板、请求/响应 Schema、OpenAPI、使用手册的评测/私有记忆/版本/调度/接入/存储章节和完整闭环 SVG。
+  新测试覆盖版本发布与重启、错误版本、并行后台与前台隔离、用户隔离、组合失败不批量归档、单条改善验证与退化归档、原生管理。
+  使用确定性业务模型替身验证实际采集和策略接口；未使用生产 API Key 或调用付费模型。
+- 影响查询因新入口未入索引返回 UNKNOWN，补充核对实际调用路径并运行组件回归。所有实现位于独立组件及本记录中，未提交或推送 Git。
+- 验证：完整 CTest 24 组通过，其中新增评测管理测试含 8 个场景；独立安装的 HTTP 与原生客户端测试通过。
+  源码版/安装版文档均通过 24 章、28 个 Markdown、51 张 SVG、475 个本地链接检查，OpenAPI 生成一致性和 git diff --check 通过。
+  测试构建使用 CMake 解析出的 protoc，不依赖特定开发机路径；新增 C++ options 字段放在末尾，保留既有聚合初始化兼容性。
+
+### CHG-20260909-169：撤回 AgentFlow 进化接入及残留的 Loop 控制
+
+- 按用户要求撤回整个 AgentFlow 接入改动，不仅撤回最近新增的适配器；独立组件 `tools/trajectory_evolution` 的实现保留。
+- 删除 `agentflow_runtime/loop_control.py`，移除 Coordinator v1/v2 和 Skill Executor 的 `decide_loop` 调用及 `policy_stopped` 出口；恢复原有轮次与终止处理。
+- 撤回 AgentContext 的 `request_context` / `build_request_messages` 及其脱敏扩展；LLM 请求恢复原消息路径。
+- 撤回按 request_index / tool_call_id 拦截的新增分支、v2 工具接入点、进化事件和 Recorder 的进化回执字段；原 Hook 能力、并行调度与安全门保留。
+- 三份 SessionLog 同步撤回进化专用事件和字段，保留原日志采集、用户 / 会话目录及既有轨迹修复。
+- 删除 examples 中的进化 Runtime Hook 包装文件与 Shadow Hook 符号链接，并清理对应 Python 缓存；组件内源文件保留，未删除 SessionLog 或业务 Hook。
+- 核对后，上述 12 个受跟踪的运行时、测试和 SessionLog 文件均与接入前的 HEAD 一致；未整体重置工作区，未改 C++ 底座、业务环境或运行服务。
+- 调用核对覆盖三条执行入口、请求上下文、派发 / 工具边界、Hook 目录和三份日志采集；索引为 AgentFlow / 46a2daa，落后 HEAD 9 个提交，影响查询为 UNKNOWN / partial，已补充源码引用核对。
+- 原有组件目录中的旧 AgentFlow Hook 适配器及其专用测试本次未改造；已从宿主卸载，不属于当前 AgentFlow 的运行链路。
+- 验证：AgentFlow Python 本地回归 481 项通过（未运行外部沙箱集成组），SessionLog 回归 56 项通过；相关宿主源码及缓存无 Loop Control / 进化挂载残留，补丁格式检查通过。未调用生产模型，未提交或推送 Git。
+- 后续接入验收目标（用户确认）：组件面向任意通用语言及同步 / 异步、单 / 多 Agent、直接 / 间接通信框架。用户只需在必要环节调用统一打点接口、传入必要字段并配置参数，无需另写框架适配器、日志转换器、配置器或进化控制程序。
+- 组件负责跨语言通信、轨迹规范化与因果关联、后台评测反思、记忆管理和策略版本管理，并封装日志采集与策略生效接口；宿主不依赖既有 Hook 或特定框架内部代码，主执行路径不等待后台评测与学习。后续若出现必须由用户补写上述逻辑的接入步骤，应补齐组件封装。
+
+### CHG-20260909-170：统一打点、实际应用顺序与独立组件边界修复
+
+- 新增通用 `operation=point`，原生与 HTTP 共用规范化实现。before/after/abort/event/heartbeat 使用同一 JSON；
+  返回不透明 context，跨线程、回调和消息队列原样传递，causes 支持多个完成分支合流。保留原 run/activity/loop 低层接口。
+- 打点内部先记录原输入，再准备策略和待执行输入；结束点记录实际输入、executed、结果和 usage，随后核验 applied 回执。
+  未报告实际发送或执行证据时按 unknown 隔离，不将“返回增强参数”作为“已应用”。异常内容不落盘，也不输出包含内容的异常文本。
+- 修复循环建议提前改变已提交状态：未采纳 replan 不消耗预算、不注入重规划内容；未采纳 stop 不锁死后续活动。
+  循环 abort 不虚构实际 loop.decision。多个模型和动作独立记录结果，不按完成顺序匹配。
+- 任务 after 提前收尾返回 pending，不中止在途兄弟分支。HTTP 的终态载荷被拒收时，只将对应活动/循环收为 unknown，
+  其余分支仍能收尾；坏心跳不结束任务。原生非法或降级 context 不再扩大为其他 run 的全局采集缺口。
+  并发缺口计数随具体 run 身份保存，无效 ID 先校验再竞争槽位；旧 run 延迟到达的错误不污染复用该槽位的新 run。
+- L1/L2/L3 按已声明的 model/actions/loop 能力独立校验；model+loop 不必额外实现工具边界。
+  后台候选编译遵循 instrumentation.capabilities。原始模型输入和轨迹保留完整内容，检索 query 使用 UTF-8 安全的有界首尾摘要。
+- 新增从真实边界汇总的模型/工具/循环/步骤计数；未执行的拒绝动作不计入调用数。可选模型 usage 支持 token 汇总，缺失不补零。
+  任务评测优先使用通用轨迹观测计数，宿主计数不一致时保留警告；未打点的内部调用不在这些计数的覆盖范围内。
+- 新增可配置 run_lease_ms 与无事件心跳，过期采集收为 unknown/quarantined，不取消业务。max_stored_runs 改为热区容量，
+  已落盘且无待评测作业的终态记录自动移动到 archive/runs 分片目录；不删除轨迹、历史和幂等记录，旧请求仍可查询和重放。
+- 原生入口加入可配置的短竞争预算 contention_budget_us，默认每次锁竞争 1 ms、上限 10 ms，0 保留立即降级；不在业务线程做外部 I/O。
+  Python、JS/TS、Rust、Go、Java、C# 提供 point 包装，HTTP 默认一次 20 ms 通信预算；保留 invoke 的原有严格错误与重试语义。
+  C ABI 增加 te_remote_point，其他 FFI 语言可复用同一协议。传输失败返回原输入和 allow/continue，并标记采集不完整。
+- 任务评测新增可选 instrumentation_config：组件自动准备隔离原生采集配置、冻结版本和试验身份，读取终态轨迹并汇总指标。
+  被测 Agent 只需执行业务和已有打点，不再手工生成 evaluation 响应、版本绑定或 trace 对象；测试令牌仅通过子进程环境传递。
+  旧评测宿主协议保留，测试实例关闭学习、共享和递归评测，不改生产实例或业务环境。
+- README、快速开始及接入/配置/低延迟/评测/运维专章同步更新；请求 Schema、OpenAPI 和 JavaScript 产物同步生成。
+  未改 AgentFlow 的 C++ 底座、Python 执行器、SessionLog 或 Hook，也未重新挂载进化组件。
+- 验证：完整 CTest 25 组通过；新增统一打点测试覆盖原生和 HTTP、逆序与四并发、失败/跳过/未知、真实回执、隐私拒收、
+  任务隔离及慢 HTTP 降级。独立安装的 HTTP/原生采集、后台评测与记忆初始化通过；不调用生产模型或付费 API。
+  实际语言运行覆盖 Python、C、C++、JavaScript；Rust、Go、Java、C# 因本机无对应工具链，尚未做编译运行验收。
+- 影响查询延续既有索引 UNKNOWN 状态，补充核对 HTTP、原生、C ABI、评测与安装调用路径；不将空调用图作为安全结论。
+  本条记录的是接入和执行正确性修复，自动从经验生成 L2/L3 可执行规则、通用 HTTP 评测自动装配、HTTP 服务端异步持久化仍需继续完善；
+  本次不将静态规则执行或短超时降级宣称为这些能力已完成。未提交或推送 Git。
+
+### CHG-20260909-171：撤回 v1 接入尝试，明确仅打点的交付约束
+
+- 按用户要求撤回本轮 Coordinator v1、Skill Executor 和共享 LLM 调用入口中的进化接入改动，包括新增的 DataBus 上下文字段、策略分支、装饰器和模型调用包装；三个文件已逐一确认与接入前 HEAD 一致。
+- 删除本轮新增的 `agentflow_runtime/evolution_observer.py`；宿主源码中不再保留对该封装的引用。未改动原有业务修复、C++ 底座、SessionLog、启动配置或服务，独立组件中的改动保留。
+- 接入负担以不要求用户编写额外程序为边界：用户只配置必要参数，并在明确的位置插入包提供的打点调用、传入已有的必要字段；不要求用户新建文件，或自行实现适配器、Observer、日志转换、上下文管理、评测程序及进化控制逻辑。
+- 上述要求同时适用于任意框架及通用编程语言，不以 AgentFlow、Python、既有 Hook 或单进程串行调用为前提；同步、异步、回调、单/多 Agent、直接/间接通信都使用组件提供的统一接入契约。
+- 通信、采集、脱敏、关联、持久化、降级、评测反思、记忆管理、策略生成/发布/注入及先后顺序由组件封装。接口不足时修改组件，不将内部职责转移给接入者，也不再未经确认向宿主补专用封装。
+- 验证：相关 Python 回归 92 项通过，覆盖派发、并行工具、恢复、终态、打断与安全边界；回退文件无未提交差异，补丁格式检查通过。未重新挂载，未调用生产模型，未提交或推送 Git。
+
+### CHG-20260909-172：包内完成编号关联、异步收尾与通用调用打点
+
+- 统一 point 新增 ref.run/key/parent/after，直接使用原业务任务及调用编号；内部 context、活动编号、等待集合和因果合流由组件管理。
+  HTTP 持久化关联及幂等响应；原生保留有界槽位、终态重放和任务级缺口。旧 context 接口继续兼容，不要求新增消息或 DataBus 字段。
+- 父工作/任务提前报告结束时保存待完成状态，子工作终态到达后自动闭合；70 分支逆序完成可自动分段合流，不把返回顺序当作调用顺序。
+  单支终态内容被拒收时只将该支补为 unknown，其余分支继续完成；修复 HTTP 错误恢复访问空 context 时意外插入字段、导致 ref 恢复被拒的问题。
+- Python 提供 call/acall/allow_loop，JS/TS 提供 call/allowLoop，通用 JSON 与 C ABI 保留各语言统一入口。
+  封装原输入记录、策略准备、原业务调用、实际结果和回执核验；异常重抛原对象，不记录可能带密钥的异常文本，业务调用不自动重试。
+  循环作用域按所属工作隔离，已提交 replan 自动作用于后续同分支模型调用；工具 JSON 文本接口的拒绝结果保持原类型。
+- Python 配置入口 evolution_configured 随包安装，无需宿主新建初始化文件；按已有用户选客户端，缺配置时直通原调用。
+  本机 HTTP 单次通信默认 20 ms、无重试；这是通信预算，不包括初始化、编码或宿主调度时间。
+  发送前检查敏感字段、环境密钥及常见凭据；命中只发送无内容 gap/abort，保留原业务数据，缺失轨迹隔离。
+  privacy.public_env_names 可声明非认证类业务编号，显式 EVOLUTION_SECRET_ENV_NAMES 优先，凭据模式及字段检查仍保留。
+- 新增 output_metrics 的可配置 JSON Pointer 提取，不要求宿主改写各模型的 usage；校验非负整数，缺失值保持未知。
+  修复内部 JSON 数值表示导致有效整数 token 未被提取的问题。
+- HTTP 增加有界后台持久化，排队/写入中数据计入容量；原生和 HTTP 自动评测均复用冻结试验版本、隔离目录和通用打点。
+  短派发进程退出后，评测监督仍等待已登记工作收尾，统一遵守整体超时。
+  配置式 Python HTTP 入口自动使用试验配置和凭据，不回写生产目录；原生试验不从该入口回退到生产 HTTP。
+- 控制建议的类型/作用域校验和提示词保留在组件内；本次没有新增向外部模型发送私有记忆并自动生成可执行规则的运行路径。
+  配置授权的 L1–L3 执行能力与外部模型自动生成控制规则分开记录。
+- 更新接口 Schema/OpenAPI、包安装、使用指南与异步配图；不新增宿主适配器。新增工具链验证实际覆盖 Python、C、C++、JavaScript、Go、Rust、Java、C#，
+  共 56 条有效轨迹；原生/HTTP/后台评测与配置客户端等完整 CTest 26 组通过。
+
+### CHG-20260909-173：经明确授权仅以通用 SDK 打点接入 v1
+
+- 在用户明确同意 L1/L2 生效及 L3 可提前结束当前循环后，接入现有 coordinator_decide.py、skill_executor.py、llm_call.py，合计新增 112 行。
+  没有新增宿主 Observer、适配器、Hook、配置器、上下文管理文件，没有修改 DataBus 字段、C++ 底座、SessionLog 或业务模型配置。
+  旧专用 loop_control.py 未恢复；循环点直接使用组件的通用 allow_loop。
+- Coordinator 首次输入建立 run，完成唤醒沿用同一任务，最终答复收尾；派发前用现有 dispatch key 登记工作，提交明确失败时关闭对应记录。
+  Skill 的正常/错误终态沿用现有统一出口回报，不让单个业务失败改写整个 C++ 工作流状态；并行工具调度和结果回灌顺序保持原实现。
+- 模型调用仅将非认证输入交给组件，API Key 和客户端认证继续留在原调用闭包中；L1 在实际调用前注入。
+  L2 作用于实际工具执行点，拒绝返回结构化 JSON 文本；L3 在 Coordinator / Skill 的下一轮位置生效，终止时沿用原结果写入/终态路径。
+  默认未配置客户端时无采集网络请求；服务模板默认 L0，L1–L3 需要显式等级、能力和策略授权。共享 Skill/LLM 的 v2 路径不启用本次打点。
+- 开启采集的跨进程测试发现 AF_EXEC_SKILL_KEY 会被 KEY 环境变量检测误判为秘密；以通用客户端参数声明它和 AF_COMPLETED_BATCH_KEY 为非敏感编号，
+  不在组件里硬编码 AgentFlow 特殊识别。补充该配置与认证密钥仍受保护的回归测试。
+- 验证：AgentFlow Python 本地回归 481 项通过（排除外部 integration 组），组件完整 CTest 26 组通过，补丁格式检查通过。
+  新宿主测试调用真实 v1 函数与真实 C++ 进化服务，两个独立 Skill 进程并发；模型、工具、DataBus 为测试替身，没有调用付费 API。
+  采集完整 90 个事件，6 次 LLM、2 次实际工具执行、6 个循环点、90 个 fixture token；L2 拒绝动作不计入执行次数。
+  逆序完成保持 tool_call_id 对应，单支工具失败不影响兄弟任务，L1 注入进入实际请求，两个 L3 终止出口和采集服务断开后的原调用均通过。
+  轨迹 doctor 校验通过，capture_complete=true；业务结果保持 unknown，不擅自把工具或任务结果判成业务成功。
+  测试凭据未进入采集目录。结果在 build/trajectory-evolution/v1-points.dimqxr6k/test-summary.json。
+- 安装及启用说明位于组件 docs/02、08、09，提供通用 point-client.json 模板。未替用户启动常驻生产采集服务或改现有 daemon 环境，未提交或推送 Git。
+- 影响检查绑定当前 AgentFlow 仓库；新组件符号延续 UNKNOWN，v1 核对共享 LLM、派发、工具并行和既有终态调用路径后以回归验证，不将空图解释为无影响。
+
+### CHG-20260909-174：实现 GEPA 多轮反思搜索、候选树与持久化策略
+
+- 在 trajectory_evolution 内实现 C++ GEPA 反思搜索，参考 Hermes self-evolution 的训练/验证/留出流程，
+  复用现有真实 Agent 任务评测器。主要实现位于 src/gepa_search.cpp，不要求宿主安装 DSPy。
+  没有修改 AgentFlow C++ 底座，没有新增或修改 v1 打点、Observer、DataBus 字段、业务模型配置或生产环境。
+- AgentEvaluationService 配置 gepa_config 后，带已批准经验的 L1–L3 候选自动进入搜索。
+  逐题最优候选并集形成父节点池，按选择次数加权抽样；训练小批次比较父子，改善后运行完整验证集，再继续反思。
+  每个子节点记录唯一父节点、深度、完整策略、改动原因、逐题成绩和评测引用，保留重复、退化、越权及异常分支。
+  候选变异为一条经验正文或一组授权控制规则；不加入任意代码执行或跨候选合并。
+- RuntimeOptions 增加可选 experience_overrides：策略版本覆盖注入文本，原记忆正文、来源 revision、触发条件、scope 与跨库关系不变。
+  L2/L3 生成规则复用 control_learning 的来源授权、操作/参数白名单与循环收紧限制。旧配置与不含覆盖字段的策略继续可用。
+  搜索试验不写回生产记忆，也不将组合改写的成绩当作单条来源记忆的因果正反证。
+- 最终先冻结 winner，再用留出集与当前生产基线配对验收，沿用统一质量、覆盖率、样本、时延、token 和 loop 门槛。
+  留出失败不继续针对该留出集反思；仅最新任务且生产父版本未改变时发布。已有 run 不换版本，下一 run 仍检查当前授权和记忆兼容性。
+- 在 agent-evaluation/<job-id>/search 下保存 tree.json、versions、reflections、evaluations 和最终决策。
+  原子写入、报告哈希与行为版本核验支持恢复；异常退出的同上下文搜索自动排队，完成的试验缓存复用。
+  反思中断保留已预留预算，主动取消不自动恢复；同一 seed/上下文不会因 parent 发布变化重复自触发。
+  限制轮数、模型请求、宿主试跑、总时间与 patience，预留最终留出成本；缺失目标指标保持未知。
+  增加 task_ids 过滤和管理操作 agent_evaluation.tree，更新 JSON Schema/OpenAPI。
+- 通过验收且实际发布时导出 published-version.json，包含完整策略、行为 ID 与验收信息。
+  policy_version_file 可在无原 memory 数据库的部署加载版本；复用现有打点，保持用户/应用/规则边界，关闭后台进化并继续采集普通业务轨迹。
+  文件属于可信部署输入；离线版本冻结当时的经验状态，撤销需要停用或替换版本文件并重启。
+- 为现有模型传输增加可选取消回调，GEPA 反思和任务评分均接入；取消/总截止时间不再只能等完整 HTTP timeout。
+  未设置回调的原传输行为保持不变，API Key 仍只来自环境变量，不进入反思输入、候选或版本文件。
+- 验证：组件全量 CTest 28/28 通过；新增 GEPA 集成测试 8 项覆盖 L1 改写、L2 实际动作拒绝、L3 实际循环停止、
+  留出失败、取消响应、中断恢复、预算保留、跨用户隔离、离线注入及泄露测试值拦截。OpenAPI、文档链接、SVG 结构和补丁格式检查通过。
+  一次完整案例实际完成 6 轮反思，形成 7 个节点、至少两层父子关系，执行 18 次隔离宿主试验，选中节点 2 并发布。
+  测试使用本地模型响应 fixture，不调用付费 API；不将 fixture 成绩作为真实业务收益。
+  结果：build/trajectory-evolution/agent-evaluation-tests.sboo1u2h/case.bl9wuica/test-summary.json。
+- 文档更新组件 README、docs/24 GEPA 专章及相关章节，重绘候选树/前后台执行示意图，清除本次能力对应的过时规划标记。
+  新组件入口的图索引仍为 UNKNOWN，已核对评测、策略编译、HTTP/原生调用路径并完成回归，未将 UNKNOWN 当作低风险。未提交或推送 Git。
+
+### CHG-20260909-175：补齐 GEPA 双亲联合重组、搜索策略与分组反思
+
+- 对照 Hermes 使用的 DSPy GEPA 和上游 GEPA 核心，增加跨分支双亲重组：内部节点与另一分支的叶节点可以共同生成一个后代，
+  不再只是分别被选为单一父节点。按共同祖先比较组件，分别继承两边的互补改进；冲突按验证质量及 fitness 选择，平分稳定处理。
+  同一双亲／祖先只尝试一次，禁止祖先和后代互相重组；无实际互补、重复、越权或退化组合保留原因并跳过，不覆盖父版本。
+- 搜索谱系升级为 schema_version=2、gepa-reflective-dag-v2，记录 parents、kind、ancestor、component_sources、conflicts；
+  保留 parent 作为第一父编号兼容字段，深度取最长父路径。每个有效节点仍保存不可变完整策略，可追溯多父来源并恢复进度。
+  旧单父记录支持规范化读取；算法指纹升级使新搜索使用新上下文，旧发布包与离线加载保持兼容。
+- 增加前沿覆盖去冗余、覆盖频次抽样，以及 current_best、epsilon_greedy、top_k_pareto；保留旧 fair 模式。
+  前沿支持逐任务、整体目标、两者并集、任务×目标；组件支持轮换和联合改写。
+  默认训练集按 epoch 洗牌，末批不重复补齐；可选满分跳过、目标阈值和不退化接纳，patience 同时考虑整体最优及前沿变化。
+- 增加 single、same_parent、independent、P×N 提案批次，以及全部改善者／最佳增益／Top-K 筛选。
+  批次计划、任务、组件和完成状态先落盘；按相对各自父版本的平均质量与 fitness 增益排名，再执行完整验证。
+  经验可同时改写多条；未提交的生成控制类别保留，提交的类别按完整数组替换，仍遵守来源授权与基础规则。
+- 重组不调用反思模型，先在覆盖双亲优势与平分任务的验证子集上比较，平均质量与 fitness 均不低于双方后再完整验证。
+  增加同版本、同 split、同上下文的逐题缓存复用，只补跑缺题；拼接报告保存 source_reports、不重复计入试跑数。
+  支持显式关闭搜索缓存；最终冻结的留出评测在恢复时仍复用，不把验证或留出正文送入反思。
+- 增加可选 ComBEE：复制、洗牌、分组反思，再按组件汇总；默认 single，不增加默认模型请求数。
+  分组与汇总提示词均在 config/prompts，所有调用共用模型预算、取消、总截止时间与隐私／授权检查。
+  开始前检查完整分组所需请求数，预算不足不启动部分工作；每阶段独立记录，中断不退还已占调用预算。
+  修复复制反馈后单组超出原输入上限的边界：压缩为具体关键证据、必要时减少记录并标记截断，仍超限则拒绝。
+- 所有节点和重组尝试均占统一预算，反思用尽后仍可在剩余节点、试验和时间预算内重组；继续预留最终留出成本。
+  发布仍经过现有质量／效率门禁、最新任务、生产父版本、用户和来源授权检查；不把组合成绩直接当作单条记忆的因果反馈。
+- 恢复测试发现隔离试验继承服务文件锁，会在父服务异常退出后阻止重启。
+  在包内 evaluation_process.cpp 使用 spawn close-from，仅保留显式标准输入输出，关闭继承的服务锁和其他描述符；
+  安装指南注明当前 Linux 运行器需要 glibc 2.34 及以上。未修改 AgentFlow 的 C++ 底座、v1 打点、DataBus、Hook、模型或环境配置。
+- 配置与算法集中于原搜索文件及新增 gepa_strategy.h/.cpp，复用原后台任务评测器，不新增宿主接入点或框架适配程序。
+  更新既有 README、docs/24 和配图，增加逐项上游对照、完整配置、ComBEE、字段与恢复说明；不另建分散手册。
+  保留质量优先、受限策略空间与统一协议，不引入任意宿主代码改写、Python 框架依赖或外部可视化平台。
+- 验证：完整 CTest 29/29 组通过，GEPA 集成测试由 8 项扩展为 27 项，另有 C++ 算法测试覆盖内部节点＋叶节点联合重组、
+  谱系非法引用、组件冲突、前沿与多提案排名；覆盖缓存开关、合并退化、ComBEE 隐私／预算／中断、双亲恢复与既有离线注入。
+  一个 L2 搜索使用 2 次反思、18 次隔离宿主试验，形成 4 节点，节点 3 同时继承节点 1 的经验和节点 2 的动作规则，并通过留出验收发布。
+  结果：build/trajectory-evolution/agent-evaluation-tests.hdcgj0qe/case.4wo83gkx/merge-summary.json。
+- 独立安装后的 HTTP 与原生采集、自动评测、记忆初始化通过；源码和安装文档的 24 章、51 张 SVG、478 个本地链接校验通过。
+  既有 v1 两进程并发打点验收通过，保留失败分支隔离、回执顺序、两个停止出口和采集不可用时的原调用行为，
+  结果：build/trajectory-evolution/v1-points.rrngpv4n/test-summary.json。
+  所有模型响应为本地测试夹具，没有调用付费 API；测试成绩用于验证机制，不作为业务收益结论。
+  影响检查沿用新组件符号 UNKNOWN 的已知索引边界，补充核对后台调用及回归；未提交或推送 Git。
+
+### CHG-20260910-176：修复冷启动核对中的请求透传、失败留痕与指标分类
+
+- 对外 JSON 返回增加独立传输编码：安全整数范围内的整数值保持整数记号，
+  覆盖原生、HTTP、C ABI 及降级返回，避免 max_tokens=4096 被传回为 4096.0。
+  原有落盘、哈希和版本指纹继续使用旧规范编码，不重写既有版本。
+  此修复针对已确认的类型变化；前次 HTTP 400 未保留服务端正文，不将它断言为唯一拒绝原因。
+- 隔离评测试跑异常退出时，在清理工作区前读取已采集的结构化证据，核对用户、试验与加载版本并执行隐私检查。
+  完整轨迹保留 evidence.trace、实际调用指标及分析；不完整轨迹单列 failure_capture 并标记 complete=false，
+  不将部分调用指标当成完整成绩。没有打点或证据不安全时保留固定原因，不保存原始 stderr。
+  仍维持 runner_nonzero_exit／timeout 的失败判定，不让失败轨迹被当成合格策略评测。
+- 标准轨迹分析按 semantic 区分模型、业务工具及自定义活动，明确 executed=false 的动作不计入工具执行或重试。
+  模型调用仍保留在原始轨迹、步骤结果及适用的重复调用诊断中；同名模型与工具不再相互匹配为重试。
+  未提供 semantic／executed 的旧轨迹保留原默认语义；analyzer_version 升级为 standard-trace-analyzer-v2。
+- 回归新增无策略及降级请求整数透传、规范编码稳定、模型／工具分类、未执行动作、
+  原生与 HTTP 异常退出的完整／部分／缺失轨迹及敏感内容拦截。
+  完整 CTest 29/29 组通过；最后补充未执行动作边界后重新构建，相关 7/7 组回归通过。
+  本轮验证使用本地夹具，未新增付费 API 调用，未据此声称真实 L4 实验已经通过。
+- 更新既有采集、评测、数据集章节与字段说明，补充 harness 问题清单中的三项组件问题。
+  未修改 AgentFlow C++ 底座、v1、DataBus 或线上配置，未提交或推送 Git。
+
+### CHG-20260910-177：允许真实 v1 显式关闭 thinking，并补充真实 Agent 评测宿主
+
+- 诱发原因：进化评测的 `thinking_mode` 只配置评测模型，不控制被评测 Agent 自身；
+  v1 的 HTTP 客户端在流式请求中沿用启用 thinking 的默认值，真实任务仍会产生推理 token。
+- 最小修改：`OpenAiCompatibleClient.build_request_body` 支持显式环境变量
+  `AF_LLM_THINKING_MODE=enabled|disabled|auto`；设置时传递供应商 thinking 参数，
+  未设置时保留原行为。无效取值在发送请求前报错，不静默使用意外配置。
+- 新增可选评测宿主 `tools/trajectory_evolution/examples/evaluation-dataset/agentflow-v1-host.py`：
+  接收现有 dataset-run 请求，部署隔离的真实 v1 包，启动 `agentflowd`，通过正常 `agent.execute`
+  和响应通知执行任务。决策、DataBus、Skill 和工具仍由真实 Agent 执行；没有另写替代 Agent。
+  隔离副本同时重定位工作流的工作目录，避免节点启动脚本又读原包的 `.env`；凭据只从进程环境继承。
+  回环连接绕过环境代理，子进程和专属短 socket 目录在退出时清理。
+- 涉及文件：上述宿主、`packages/agentflow-runtime/src/agentflow_runtime/common/clients/openai_compatible_client.py`
+  及 `packages/agentflow-runtime/tests/test_openai_compatible_client.py`。
+- 验证：HTTP 客户端与 Recorder 共 39 项回归通过；真实新试跑已确认 Coordinator 与
+  outfit-stylist 的模型均为 `deepseek-v4-flash`，并实际调用沙箱工具。整批及 L4 验收仍在进行，
+  不将单条试跑或数据集构建成功记为 L4 已通过。
+- 图影响分析：新宿主未被索引；HTTP 客户端方法虽可定位，但图遍历返回 UNKNOWN/部分结果。
+  已直接核对 Recorder 与客户端调用点，不将 UNKNOWN 当作低风险。未修改 AgentFlow C++ 底座。
+
+### CHG-20260910-178：评测器保留多轮任务中的多个真实 Run
+
+- 诱发原因：一个评测任务可有 followup_inputs，而真实 v1 每轮对话产生独立 Run；旧评测器仅接受一个 Run，
+  会把正常的多轮执行拒绝为多余轨迹。将它们硬拼成一个 Run 又会破坏原身份与父子关系。
+- 在组件 task_evaluation.cpp 中按事件时间整理同一试验的多个 Run，逐条校验用户、版本、终态和隐私，
+  保留原始 traces、execution_run_ids、逐轮输出与分析。单 Run 响应保持兼容。
+  完整指标按任务汇总；任一轮未知的指标仍未知，不按零补齐。进程失败时保留逐轮证据，
+  有不完整轮次则不输出全任务计数；进程错误和发布门禁不放宽。
+- agent_evaluation.cpp 的记忆反馈遍历多条真实轨迹中的策略应用回执，仍沿用原有来源与归因判断。
+  真实 v1 评测宿主移除旧多轮限制；宿主摘要仅保存每轮最终通知与通知数，完整调用证据仍由打点采集。
+- 完整回归进一步复现异步两轮之间的提前结束竞态：新增 variant.run_layout=single|per_input，
+  预先确定应收集的 Run 数量；包内采集结束检查增加带数量的重载，保留原 C++ 接口。
+  第一轮结束而下一轮尚未创建时继续等待，数量不符拒绝完整成绩；失败报告标明预期和实际轮数。
+- 验证：TaskEvaluationTests 共 32 项通过，新增原生、HTTP、异步派发、多轮顺序、缺失指标、
+  完成后异常退出、部分完成和用户归属错误场景。测试中的模型/工具为协议夹具，真实整批和 L4 仍在运行。
+- 更新数据集与评测章节和问题清单。图影响分析为 UNKNOWN，已核对 GEPA 的汇总读取和记忆回执读取；
+  未修改 AgentFlow C++ 底座、v1 执行流或 DataBus。
+
+### CHG-20260910-179：评测可直接验收配置声明的必需文件，产物失败保留轨迹
+
+- 诱发原因：仅从 Run 终态读取 artifacts 时，未声明的真实文件不会进入独立读盘验收，
+  评测只拿到工具返回和最终回复。多 Run 的产物检查失败还会在写回完整 evidence 前返回。
+- 最小修改：评测配置支持按 task_id 或通配键声明必需 artifacts，复用原文件、格式、大小和隐私验证。
+  路径、媒体类型、未知任务和重复声明在执行前校验；不扫描工作目录，不向被测模型传递验收配置。
+  配置与宿主相同声明合并，类型冲突拒绝；未配置时保持原行为。可选生成分支不应列为必需产物。
+- 在产物验收前写回已验证的完整证据，缺失文件或格式错误不丢失真实多轮轨迹、分析和指标。
+  真实 v1 宿主默认会话标识采用任务 ID，重复试验仍由独立部署目录隔离，便于配置稳定的产物相对路径。
+- 验证：完整 CTest 29/29 组通过（TaskEvaluationTests 32 项），覆盖原生、HTTP、异步宿主不额外声明文件、
+  配置非法提前拒绝、缺失产物以及多轮失败时的轨迹保留；保留原路径越界、符号链接和凭据检查。
+  实验中已生成图片的独立完整解码检查通过，但未因此将全部媒体任务或 L4 宣称为业务通过。
+- 更新原评测章节及问题清单；图入口为已知 UNKNOWN，已直接核对 CLI、后台评测和 GEPA 共用调用点。
+  不改变 AgentFlow C++ 底座、v1 决策、工具执行或日志采集协议。
+
+### CHG-20260910-180：评测任务入口由组件管理，不再要求专用启动器
+
+- 问题：已有评测默认要求用户编写读取 stdin、驱动 Agent 的宿主；v1 冷启动又增加了专用启动器，
+  换框架仍需重写，不能满足仅做入口绑定和打点的交付约定。
+- 新增显式 `variant.entry`，配置 JSON 输入字段绑定和终态输出提取位置。启动命令是原程序命令，
+  包内封装调用已有接收函数；没有 entry 的旧 stdin/stdout 协议保持兼容。
+- C++ 组件负责按题投递、固定测试用户/会话/策略、等待完整且持久化的 run.end 后推进下一轮，
+  不把异步派发返回值或中间进程退出当作任务完成。每个 trial 一个接收者，拒绝额外 Run 和重复绑定，
+  回调不自动重试，超时/取消继续清理本次进程组。
+- 新增 `evaluation.next/fail` 认证协议以及 Python、JS/TS、Rust、Go、Java、C# 和 C/C++ 入口封装。
+  普通应用未启用评测标志时直接返回，无连接、线程或轮询；异步封装使用宿主现有事件循环。
+- 原生 LocalRuntime 仅在新入口评测模式下转发至试验采集端，避免重复打开采集目录而争锁；
+  生产原生路径不变。评分、记忆管理、候选比较和 GEPA 继续使用原任务评测器。
+- 输入模板仅绑定明确的 JSON 值，不执行代码；评分标准不下发，凭据不写入任务包。
+  初始状态未绑定、输出路径缺失、轨迹不完整、历史超限等保留明确错误，不静默补齐。
+- 移除 `examples/evaluation-dataset/agentflow-v1-host.py`；这是前次实验新增、未提交的专用驱动，
+  不删除既有数据集、采集记录或实验结果。examples 目录缺失不再阻断安装；指定示例文件的配置仍需替换数据源。
+- 更新默认评测配置、OpenAPI/请求 Schema、README 及原有评测/客户端/测试章节；没有新增 AgentFlow 框架适配器，
+  没有修改 v1、DataBus 或 AgentFlow C++ 底座。具体框架仍需在其真实输入接收边界绑定已有函数。
+- 验证：任务评测回归 38 项通过；Python/C/C++/JS/Rust/Go/Java/C# 原有跨语言协议回归通过；
+  C++ 普通函数与 const 闭包绑定实际编译并验证未启用时不调用；最终全量回归 29/29 个套件通过。
+- 影响检查：相关新符号为已知 UNKNOWN，直接核对 dataset CLI、后台 AgentEvaluationService、
+  GEPA 及 LocalRuntime/C ABI 调用路径，未把索引未解析当作无影响。
+
+### CHG-20260910-181：真实 Bridge 绑定评测入口，修复已脱敏链接导致的多轮采集拒绝
+
+- 问题：真实 v1 的后续对话包含已脱敏的媒体链接，Python 和 C++ 隐私检查会把
+  `sig=<redacted:credential_field>` 再当成凭据，拒绝下一轮打点；业务继续而采集不完整。
+- 修改：仅在凭据格式匹配时跳过这一精确的既有脱敏占位符；显式环境密钥仍与原文比较。
+  同时处理 Protobuf JSON 对尖括号的转义形式。占位符后的实际内容、其他查询凭据和任意自造占位符继续拒绝。
+- Bridge 仅在评测入口标志启用时，将已有 `chat_rest` 接收函数交给包内 `aevaluate`；
+  原会话、异步 DataBus 调度与普通启动保持不变，没有增加替代 Agent 或专用启动器。
+- 文件：`frontend/bridge/main.py`、`frontend/bridge/tests/test_evaluation_entry_binding.py`，
+  组件 `clients/python/evolution_configured.py`、`src/evolution_pipeline.cpp` 及对应回归测试。
+- 验证：Python 脱敏边界回归、C++ 脱敏边界回归及 Bridge 启用/未启用入口绑定测试；
+  不以协议测试代替完整真实多轮实验验收。
+
+### CHG-20260910-182：L4 按有效经验不足自动补充训练，不再仅覆盖空库
+
+- 诱发原因：原后台只有候选评测/GEPA，没有把训练评测接到学习队列；统一拒绝评测轨迹入库
+  会阻断冷启动。只判断库是否为空也会遗漏经验过少、作用域不匹配、归档或冲突过滤后不足的情况。
+- 修改：复用既有后台评测线程与任务执行器，用原 Agent 的 L0 无策略版本分批运行训练题。
+  以编译和授权后实际可用的经验数判断是否准备好种子；配置 `training.min_experiences`、
+  `batch_size`、`max_batches`，默认分别为 3、16、4。足够后自动转入既有策略评测/GEPA。
+- 加入可信本地训练报告入库入口：检查完整报告指纹、冻结数据集、train/reviewed、题目版本、
+  L0 版本、真实用户/应用/试验 ID 和闭合轨迹；普通日志入口仍拒绝评测轨迹。
+  验证集、留出集和注入候选的评测数据不能走此训练入口。成功及有完整证据的业务失败均可学习。
+- 复用原分析、元反思、私有记忆管理队列；Run 清单保留 `training_source`，训练身份不增加
+  公共经验的独立真实用户支持票数。没有更改公共库的推广和冲突门槛。
+- 进度写入既有评测状态文件。同一应用/数据集的题目分配和预算不随记忆 revision 或重启重置。
+  等待本批学习完成再补下一批；执行/入库/学习错误、题目耗尽和预算耗尽均有独立状态。
+  归档的已完成 Run 仍读取其真实学习结果，不误判失败；没有自动无界重试。
+- 离线 `learn --config` 不再因暂时没有待分析日志而提前退出；等待训练与策略评测队列。
+  等待使用处理前的工作版本，避免完成通知先于等待而造成空等；数据仍不足以非零退出码报告。
+- 文件：组件 `src/agent_evaluation.cpp`、`src/integration_service.cpp`、`src/learn_cli.cpp`、
+  对应头文件、默认评测配置、训练/任务/公共经验回归、README 与原有第 19/24 章。
+- 影响检查：图索引对新增组件入口仍为 UNKNOWN；直接核对后台刷新、HTTP/原生管理、离线 learn、
+  任务评测和 GEPA 调用链。改动位于独立组件，不改 AgentFlow C++ 底座或增加宿主打点。
+- 验证：新增 8 项确定性训练补充测试全部通过，覆盖空库、非空但不足、过滤后不可用、
+  充足时跳过、重启去重、归档、入库/学习失败和离线等待。最终其余 29/29 个 CTest 套件通过；
+  GEPA 搜索套件另行运行通过，Bridge 可选入口绑定 2 项通过，`git diff --check` 通过。
+- 边界：经验数量门槛是可配置的数据准备条件，不是质量评分。真实任务的正确率、无效 loop 改善、
+  元反思成功率和最终策略收益仍需独立模型实验验收。
+
+### CHG-20260910-183：可选评测入口不阻塞 Bridge HTTP 服务启动
+
+- 问题：在 Bridge lifespan 的启动阶段直接等待完整评测，使 HTTP 端口直到评测结束才启动；
+  真实 Agent 执行中回传图片、视频或文件时无法访问同一个 Bridge 的制品接口。
+- 修改：仅在启用评测入口时，将包内 `aevaluate` 放入当前事件循环的后台任务，继续完成服务启动；
+  服务关闭时取消并等待该任务。仍调用原 `chat_rest`、会话提供者和真实 DataBus 链路。
+- 文件：`frontend/bridge/main.py`、`frontend/bridge/tests/test_evaluation_entry_binding.py`；
+  原评测指南第 19 章补充需要同时保持 HTTP/消息服务运行时的接入顺序。
+  不改变普通启动路径、v1 打点或 AgentFlow C++ 底座。
+- 影响检查：按仓库影响分析流程核对 lifespan 的应用注册、启用/未启用分支、聊天与关闭路径；
+  图结果仍为已知 UNKNOWN，未把未解析调用关系当作无影响。
+- 验证：Bridge 入口绑定、聊天 SSE 和 daemon 路由共 45 项测试通过。真实 v1 三轮预检正常结束，
+  3 条 Run 轨迹闭合、17 次 LLM 调用有执行者归属，文件上传成功；图片的后续路径核验仍被判为业务失败，
+  未将该失败写成完整业务或 L4 验收通过。
+
+### CHG-20260910-184：保留采集拒绝原因，修复脱敏链接后换行的误判
+
+- 真实训练发现：多轮生成图片后，第二轮的模型返回与 Run 结束打点被拒绝，
+  评测返回 `evaluation_entry_trace_incomplete`。原来只记录 `missing_boundary`，无法区分具体原因。
+- 诊断补充：采集服务处理 `point` 失败时，在降级响应和 `capture.gap.attributes.error_code`
+  中保留经过隐私检查、仅含小写字母/数字/下划线、最长 96 字符的错误码。
+  不输出异常原文或被拒绝的载荷；旧 `capture.gap` 请求保持兼容，未知原因仍使用固定降级码。
+- 根因：对整段序列化 JSON 做凭据正则匹配时，脱敏占位符被移除，但后续换行是字面量 `\n`；
+  正则将换行转义与后续中文一起算作签名值，误报 `credential_value_rejected`。
+- 修复：在原隐私检查函数内部解码 JSON，分别检查字符串内容及嵌套 JSON 字符串。
+  已知密钥同时检查原文和解码内容；只豁免原有精确占位符，旁接实际签名、其他查询凭据和转义密钥仍拒绝。
+  业务请求/响应不修改，采集不完整的轨迹继续隔离，训练入库门槛不放宽。
+- 文件：组件 `src/integration_service.cpp`、`src/evolution_pipeline.cpp`、对应测试、
+  现有请求 Schema/OpenAPI 和第 7 章。没有修改 AgentFlow C++ 底座或增加宿主打点。
+- 影响检查：原采集、元反思响应校验、记忆匹配与持久化共用隐私函数；
+  按仓库影响分析流程核对这些调用路径，并补充 JSON 换行、嵌套 JSON、转义凭据和错误码落盘回归。
+- 长轨迹回归同时发现固定扫描节点上限会误拒完整的 40 轮原生轨迹；改为按输入字节数限制扫描工作量，
+  保留嵌套 JSON 解码层数保护。原生无业务线程 I/O、40 轮采集与后续学习测试已恢复通过。
+- 真实三轮复测：3 条 Run 闭合、16 次 LLM 调用有执行者归属，未出现 `capture.gap`，
+  已知测试 API 密钥扫描无命中。图片路径核验的业务失败仍被单独判分，未当作采集失败或 L4 验收成功。
+- 最终完整回归：30/30 个 CTest 套件通过，包含长轨迹原生运行、补训和 GEPA 搜索。
+
+### CHG-20260910-185：Local 媒体读写与文件工具使用同一私有目录
+
+- 问题：真实多轮训练中，两张图片已经生成，但后续读文件误报不存在。媒体工具在存在沙箱端点时
+  将 `assets/card.png` 上传到包根目录，Local 文件工具却在 `workspace/<用户与会话>/assets` 中查找。
+- 修改：仅 Local 模式将媒体生成与素材读取统一到现有用户/会话工作目录，返回文件工具和产物收集
+  都支持的绝对路径；私有文件不存在时不回退到共享包目录或共享传输端点。
+  校验跨用户目录和符号链接越界；Docker/E2B 继续使用原沙箱相对路径传输。
+- 文件：`packages/agentflow-runtime/src/agentflow_runtime/security/trusted_media.py`、
+  `packages/agentflow-runtime/tests/test_trusted_media_local.py`。不改调度器、v1 打点或 C++ 底座。
+- 影响检查：按仓库要求检查两个媒体入口；图查询仍为已知 UNKNOWN，直接确认图片生成、视频生成、
+  穿搭图片分析三个调用路径及后续文件工具/产物收集，没有把图中的空调用集合当作无影响。
+- 验证：Local 媒体、凭据安全边界、HTTP 文件工具和路由标识共 45 项测试通过，覆盖有/无沙箱端点、
+  生成后再读、路径幂等、共享目录不回退、缺失身份、跨用户/符号链接拒绝与远端上传兼容。
+- 扩大回归至产物收集、URL、用户上传边界和密钥脱敏后，91/91 项测试通过。
+- 真实 v1 训练题 `t-05` 三轮复测由程序判定通过：两个名片版本均能读取，第三轮成功保存核验索引，
+  没有第三次生成；14 次 LLM 调用、6 次工具调用，3 条 Run 闭合且无采集缺口。
+
+### CHG-20260910-186：任务评测补充逐轮效率证据，统一 GEPA 与发布门禁的统计口径
+
+- 问题：真实轨迹存在前提不足后的重复尝试，但规则只识别严格的不可重试同参数重试，
+  因而规则下界为 0。仅比较下界或总调用次数，不能证明无效 loop 实际减少；原比例门禁还会把 0→0 当作达标。
+- 修改：现有任务评分器可通过 `judge.loop_review_prompt` 加载外置逐轮评审模板。
+  同一次评分请求同时返回业务验收与循环效率；不新增宿主打点、Agent 调用或前台网络等待。
+- 按 Run、执行实例、loop、轮次合并同轮控制/模型/工具事件；模型浪费结论必须引用该轮事件，
+  未知轮次、重复项、跨轮引用和无效结构均拒绝。完整评审才计算数量，不确定、未观测、模型错误不填 0。
+- 规则 `invalid_loop_lower_bound` 不变；新增证据内 `loop_review` 和汇总 `invalid_loop_assessment`，
+  明确区分模型估计与规则下界。GEPA 和后台门禁读取同一口径；正比例下降还要求基线确实大于 0。
+  任务正确率和循环效率分开，既有精度门禁不放宽。
+- 文件：组件任务评测、GEPA 评分、后台门禁、外置模板、相应测试和任务评测指南。
+  无 Protobuf 字段变更，无 AgentFlow C++ 底座修改。新模板计入配置指纹，旧配置保持原评测口径。
+- 影响检查：按仓库流程检查任务评分/汇总、GEPA scores 和后台 gate_result；图索引仍为已知 UNKNOWN，
+  直接核对 dataset run、自动训练、后台策略评测与 GEPA 的共同调用链。
+- 补充边界：统一 Protobuf 数字/字符串轮次表示；显式启用逐轮评审时，规则判失败的任务仍可获得
+  效率证据，但业务失败结论不允许被模型覆盖。默认未启用时仍跳过这些模型调用。
+
+### CHG-20260910-187：严格轨迹评测失败保留安全错误码
+
+- 问题：真实训练轨迹入库时，严格内容评测的 `EvaluationError` 落入通用异常处理，
+  一律显示 `trace_evaluation_failed`，无法区分响应协议、输出截断、服务或网络错误。
+- 修改：只对已知严格评测错误提取内部错误码，通过固定白名单及有界 HTTP/libcurl 数值校验后，
+  写入原作业的 `errors[run_id]` 和 Run 的 `evaluation_error`；其他异常继续使用通用错误。
+  不保存原始异常、模型响应或密钥，不改变严格评测、同批隔离、计费预算和显式重试行为。
+- 文件：组件 `src/integration_service.cpp`、`tests/test_learning_schedule.py`、第 17 章调度文档。
+  没有修改 AgentFlow C++ 底座、宿主打点或配置接口。
+- 影响检查：检查 `IntegrationService::process_evaluations` 与严格内容评测调用链；
+  图索引仍为 UNKNOWN，直接核对离线 learn 和后台工作者的错误、检查点与重试路径。
+- 验证：训练补充、任务评测、学习调度、统一入库和 SessionLog 评测 5 个专项套件全部通过；
+  新增调度测试覆盖 HTTP 503、非法 JSON、输出截断和响应夹带凭据，均保留失败状态且不泄漏响应。
+  这项修改修复诊断信息丢失，不代表此前真实模型评测失败的根因已解决。
+- 最终复核：包含 CHG-186 逐轮效率评测与失败分支补充在内，独立组件 30/30 个 CTest 套件通过
+  （238.35 秒），`git diff --check` 通过；测试均为本地回归，不作为真实 L4 收益验证结果。
+
+### CHG-20260910-188：模型响应统一兼容单层 JSON 代码块
+
+- 问题：真实 v1 测试轨迹结构正常，但内容模型诊断返回 `invalid_json`。
+  任务评分器已经支持单层 Markdown JSON 包装，内容评测器仍直接解析原文，存在不一致。
+- 修改：仅移除完整包住响应的单层 JSON/无语言代码块，支持 LF/CRLF；随后执行原有 JSON 对象、
+  字段、证据与经验校验。凭据检查仍针对完整原始响应，响应指纹不变，不增加模型调用或自动重试。
+  `issues` 增加安全格式标记 `dialogue_model_json_fence_unwrapped`，不记录原始模型内容。
+- 文件：组件新增内部 `src/model_json.h`，内容/回合评测、任务评分、元反思、私有与公共记忆整理、
+  数据集生成及 GEPA 的模型响应解析统一复用；补充对应回归和第 17 章调度文档。
+  配置、轨迹及 HTTP 协议的普通 JSON 解析不变。
+  没有更改 AgentFlow C++ 底座或正式运行配置。
+- 影响检查：内容评测入口和 `validate_dialogue_response`；图索引对新增组件仍为 UNKNOWN，
+  已核对标准轨迹与 SessionLog 共用的直接调用链、后续报告和经验生成入口。
+- 真实复测：同一输入、同一火山 `deepseek-v4-flash`、关闭 thinking，1 次请求成功，
+  报告确认实际移除了 JSON 代码块，得到 1 条待审核经验建议。此前诊断失败，未写入经验库。
+  尚不能据此认定其他全部历史失败同源，也不将单条评测成功当作完整 L4 验收。
+- 本地验证：补充单层包装、LF/CRLF、额外说明、多代码块、非对象、严格失败、伪造证据和凭据拒绝测试；
+  全量 30/30 个 CTest 套件通过（235.97 秒），`git diff --check` 通过。
+- 下游复核：统一解包后再跑全量 30/30 套件通过（246.70 秒），包含元反思、私有去重、公共提炼/审查、
+  数据集 review 门槛和 GEPA 发布/隐私门槛的包装响应回归；未增加模型请求与重试。
+
+### CHG-20260910-189：明确任务条件分支与必要收尾的评分口径
+
+- 问题：真实训练任务允许工具失败后如实停止，评分理由却只因缺少视频产物判失败；逐轮评审又将
+  向上游返回结果、向用户报告失败按“没有新状态”计为浪费，可能污染后续版本比较。
+- 修改：任务评分明确按 `expected_behavior` 中实际触发的分支逐项验收，不自行加严或放宽要求；
+  效率评分明确区分必要交付与同一接收对象的重复交付，不将前一轮错误重复归罪于终态报告。
+- 文件：`config/prompts/task-judge-system.txt`、`config/prompts/task-loop-review.txt`。仅修改外置提示词，
+  不改 AgentFlow 底座、评分门槛、数据集或既有分数。结果仍由真实重跑重新产生。
+- 边界：模型评分仍可能误判；这些规则收紧判据，不替代证据核验，也不保证所有语义判断正确。
+- 验证：任务评分与文档测试通过；真实三轮任务诊断请求返回合法 JSON。未手动覆盖旧评分。
+
+### CHG-20260910-190：任务评分请求共享重复长文本
+
+- 问题：真实三轮任务的评分请求达到 1,968,500 字节、581,770 个输入 token；同一段消息历史在多个
+  事件和后续模型上下文中重复出现，增加评审开销和输入超限风险。不能据此断言它是此前所有 JSON 失败的根因。
+- 修改：只在发送评分请求前，对事件输入中出现至少两次且不少于 512 字节的完整字符串使用引用；
+  第一处保留完整原文，后续使用 `{"$evidence_ref":"原文路径"}`，`evidence_text_refs` 保存明确的引用关系。
+  所有输出、工具结果、状态和产物保持原文。引用后更小才采用，不截断、不丢弃、不以摘要或指纹代替原文；请求字节上限继续生效。
+- 配置：`judge.share_repeated_text` 是可选布尔开关，随附配置开启，旧配置省略时维持原请求格式。
+- 边界：隐私检查在共享前后执行，原始轨迹、试验报告、确定性检查、事件 ID、循环分组及评分证据引用规则不变。
+  原证据中的同名字段不会成为组件生成的位置表，也不改变事件执行次数。
+- 文件：组件 `src/task_evaluation.cpp`、外置任务评分提示词及本地回归测试。没有更改 AgentFlow 底座。
+- 真实复核纠正：最初的全字段 `null` 占位虽然通过无损还原测试，却被模型误读为没有最终答复。
+  已撤掉空值占位，并缩小到重复事件输入；不将该版本的评分用于训练或版本对照。
+- 回归覆盖：完整中文文本、数组、特殊 JSON Pointer、真实空值、同名不可信字段的还原，
+  最终输出与每个工具结果原文不变，以及旧配置、非法开关和重复凭据拒绝。
+- 验证：46 项任务评分回归通过；同一条真实穿搭记录用新引用格式诊断，评分恢复为 passed、循环引用有效，
+  原始记录逐字节不变。证据请求从 614,105 字节降为 257,099 字节（减少约 58.1%）；关闭 thinking。
+  该诊断不覆盖或代替正式训练、验证与留出评分。
+- 最终回归：输入引用版本全量 30/30 个 CTest 套件通过（244.98 秒），`git diff --check` 通过。
+
+### CHG-20260910-191：任务评分支持授权范围内的具体证据路径
+
+- 问题：多轮任务出现 `evaluation_judge_evidence_invalid`。原代码仅接受顶层白名单路径逐字相等，
+  即使模型引用的是实际存在的 `/output/final/response` 或某个轨迹事件，也会被拒绝。
+- 修改：允许白名单路径及其实际存在的子路径；先按完整路径段检查授权范围，再用原始证据解析 JSON Pointer。
+  不存在、越界、伪造根前缀以及请求压缩包装的路径仍被拒绝；同步更新外置提示词及格式恢复说明。
+- 文件：组件 `src/task_evaluation.cpp`、任务评分提示词、评分测试及第 19 章文档。无 AgentFlow 底座修改。
+- 边界：该错误也可能来自真正不存在的路径，因此不将本次全部失败都归为白名单过严；没有直接接受或改写旧评分。
+- 验证：全量 30/30 个 CTest 套件通过（361.74 秒）；覆盖真实子字段、数组索引，以及不存在字段、
+  根前缀伪造、越界索引和请求包装路径的拒绝。
+
+### CHG-20260910-192：文本文件工具拒绝含 NUL 的二进制内容
+
+- 问题：真实三轮名片任务用 `read_file` 读取 PNG，执行器以 UTF-8 替换解码后将二进制乱码作为成功文本返回，
+  进入后续模型输入和轨迹。该次模型调用随后长时间未返回，但不能据此断言乱码是网络等待的唯一原因。
+- 修改：HostExecutor 的文本读取先检查开头 8192 字符，返回前也检查所选内容；遇到 NUL 返回明确的二进制读取错误，
+  不返回乱码。工具描述明确限于文本，二进制文件应通过支持相应格式的工具核验元数据。
+- 边界：不根据扩展名猜测格式，不宣称该检查识别所有二进制；正常中文、行选择和既有非 UTF-8 替换行为保持不变。
+  媒体原始字节下载接口不受影响，不改 AgentFlow C++ 底座。
+- 回归覆盖：PNG 头、带行选择的二进制读取、探测窗口之后的 NUL、中文文本及原替换行为、HTTP 沙箱错误传播。
+- 验证：文件执行器及真实 HTTP 沙箱相关测试 58/58 通过；测试命令对回环地址绕过环境代理，未更改全局环境配置。
+
+### CHG-20260910-193：循环评审允许引用先前因果证据
+
+- 问题：真实视频轨迹的脱敏诊断请求返回合法 JSON，但对重复操作引用了先前轮次的真实事件；旧校验要求所有
+  引用都属于被判定轮次，导致这种因果说明被统一拒绝为 `evaluation_loop_review_invalid`。
+- 修改：每条结论仍必须包含本轮事件，同时允许同一 Run 内、本轮第一个事件之前的真实事件作为依据。
+  未知、跨 Run、未来事件、重复引用以及完全缺少本轮锚点仍被拒绝；不直接接受或改写旧评分。
+- 文件：组件 `src/task_evaluation.cpp`、循环评审外置提示词、任务评分回归测试和第 19 章文档；无 AgentFlow 底座修改。
+- 边界：结构校验确保事件引用可信，不替代模型对必要收尾、有效探索和业务效果的语义判断。
+- 时序以既有轨迹校验器的因果拓扑排序为准，不依赖异步采集时 JSON 数组的到达顺序；补充乱序输入回归。
+- 验证：任务评分及文档测试通过，包含“本轮 + 先前原因”放行、未来引用与无本轮锚点拒绝；开始真实 v1 冷启动复测。
+- 完整回归：30/30 个 CTest 套件通过（364.22 秒）。真实三轮名片训练题已通过任务评分；
+  本轮仍存在其他题的模型证据路径错误，按 error 保留并排除出合格训练导入，不将局部通过写成全链路完成。
+
+### CHG-20260910-194：评分路径恢复提供具体反馈并隔离待生成结果
+
+- 问题：真实复测连续出现 `evaluation_judge_evidence_invalid`；旧恢复请求没有指出哪些路径不合法，
+  模型只能重新猜测。请求还包含尚未计算的 `loop_review` 占位结果，与禁止引用自身评审结果的规则不一致。
+- 修改：请求副本移除未生成的循环评审；校验收集不合法路径，隐私检查通过且限长后才传入下一次恢复反馈。
+  错误 JSON Pointer 语法也进入原有有界格式恢复；外置提示词说明 JSON 字符串不是嵌套对象，恢复时选取已有授权路径。
+- 边界：不自动修改、丢弃错误引用以凑出通过结果，不放宽业务标准、不增加重试次数；原始轨迹不变。
+  最终仍不合法的评分保持 error，不能进入合格训练导入或策略发布。没有修改 AgentFlow C++ 底座。
+- 回归覆盖：待评审结果不进入模型证据、缺失路径与非法转义的准确反馈、有界重试后不残留前次引用。
+- 同源恢复：可解析且隐私校验通过的上次输出进入 `validation_feedback.previous_response`，同时覆盖循环引用错误的修正；
+  它不进入执行证据或自动成为最终评分，仍受既有请求大小和重试上限约束。
+- 定向真实复测：视频题已一次通过；JSON 修复题路径校验通过后仍出现循环引用错误，继续使用原有一次格式恢复进行验证。
+- 恢复补齐后：两道真实题均在最多两次评分请求内完成协议校验，完整 CTest 30/30 通过（245.62 秒）。
+  复核发现 JSON 题存在业务误判，另按下一项修正，不把协议通过等同于业务判分正确。
+
+### CHG-20260910-195：任务评分区分安全拦截与实际业务执行
+
+- 问题：真实任务要求实际触发一次 JSON 解析失败，但 `bash` 在本地凭据保护下被拦截，未运行解析器；
+  模型却将“命令被拦截 + 写入/读回修正文件”评为全部完成，属于业务误判。
+- 修改：只调整外置任务验收提示词，明确调用尝试、安全/权限拒绝、实际业务失败三者不同；
+  未执行的强制动作不能由如实说明替代，除非冻结的成功标准明确允许相应降级分支。
+- 边界：不关闭本地凭据保护、不扩大命令执行权限、不修改冻结任务标准或手工改写评分。
+- 真实复测：JSON 修复题正确判为 failed；视频题仍出现两次无效 JSON，另按下一项修正。
+
+### CHG-20260910-196：模型适配器支持显式启用 JSON 输出模式
+
+- 问题：真实视频任务的评分即使有格式说明和一次恢复，仍偶发返回无效 JSON，无法形成有效训练评分。
+- 修改：组件模型配置增加可选布尔值 `json_object_output`；仅设为 true 时发送标准
+  `response_format: {"type": "json_object"}`。默认不发送，保留旧配置及不支持此模式的服务兼容性。
+- 范围：共用模型适配器及配置读取、任务评分回归和配置指南；未改 AgentFlow C++ 底座或主 Agent 输出格式。
+- 边界：不放宽结构、证据、隐私、业务及发布门槛；不增加重试、不改 API 地址，格式模式不保证语义正确。
+- 接口验证：授权测试接口返回 HTTP 200、合法 JSON 对象、reasoning_tokens=0；不含用户轨迹的固定文本探测。
+- 验证：53 项任务评分用例以及配置、模型边界、文档套件通过。真实 v1 视频题重新执行后，
+  一次模型评分通过输出和证据校验；接口返回 UnsupportedModel 时按冻结标准验收如实停止分支，
+  不将它记为视频生成成功，也不据此宣称完成 L4。
+- 完整回归：30/30 个 CTest 套件通过；真实双用户空库训练继续执行。
+
+### CHG-20260910-197：循环评审补充必要交付的反例核对
+
+- 问题：JSON 模式复测输出合法，但模型把“无效空调度后的首次最终回复”也列为浪费，
+  理由同时承认该轮完成交付，重复计算了同一错误的成本。
+- 修改：只补充外置循环评审提示词的通用三轮反例与输出前自检；删除候选轮时保持其他轮原样，
+  无此前等价交付证据的必要回复/上报轮不能列入浪费。不改变业务评分或手工改写历史结果。
+- 边界：循环语义判断仍是模型估计，不能将格式校验通过当成语义绝对正确；后续真实实验继续复核。
+- 后续真实核对：训练首题仍出现首次最终回复误计，提示词补充没有完全解决该问题；保留为未解决的评测偏差，
+  不将本轮模型计数直接作为已实现无效 loop 降幅的证明。
+
+### CHG-20260910-198：循环引用错误提供具体约束和条目位置
+
+- 问题：正式训练题的 JSON 已合法，但循环引用两次校验失败。原恢复仅提供统一错误码，
+  无法区分未知轮次、重复引用、缺少本轮锚点或不允许的时序引用，日志也不能说明具体原因。
+- 修改：组件原校验条件拆分为具名约束，反馈只增加约束代码与数组下标；最终失败理由保留约束代码。
+  既有 `evaluation_loop_review_invalid` 错误分类、全部校验条件、最多一次恢复及隐私/大小门槛保持不变。
+- 文件：任务评分源文件、回归测试、外置循环评审提示词及第 19 章；不改 AgentFlow 底座，不重写旧评分。
+- 运行边界：当前进程及其正在执行的训练批次不会中途切换二进制或评分提示词；后续批次按既有机制读取配置。
+  本次代码改动待回归后用于修复复测，最终收益对照需要在同一固定配置下重新验证。
+- 定向验证：54 项任务评分用例及文档套件通过；覆盖未知/重复轮次、未来引用和缺少本轮锚点的具体反馈，
+  原错误分类和最多两次模型请求保持不变。全量组件回归继续运行。
+- 完整回归：30/30 个 CTest 套件通过；本轮真实任务继续使用在途进程，未重写已有报告。
+
+### CHG-20260910-199：训练批次逐题排除不完整的超时轨迹
+
+- 问题：真实训练题达到超时，只保留 `failure_capture.complete=false`；它的业务 verdict 为 failed，
+  原导入逻辑因此继续要求完整 trace，进而拒绝整批其他完整轨迹。
+- 修改：仅对 `execution_status=timeout` 且 `error_code=runner_timeout`、没有完整 trace/traces 的条目计为拒收并跳过。
+  正常业务失败但轨迹完整的条目仍可入库；报告中的原始失败和部分轨迹保留，不补造 run.end。
+- 边界：全批次 train/reviewed/版本/重复 ID 验证仍先执行；损坏或伪造的完整轨迹仍拒绝，不从混有验证/留出题的报告中选取训练行。
+- 范围：组件训练接纳函数和混合批次回归；未修改 AgentFlow C++ 底座。
+- 验证：含真实超时执行的混合批次接纳完整行、拒收不完整行；任务评分及冷启动补库套件通过。
+
+### CHG-20260910-200：评测专用子进程回收脱离进程组的后台执行器
+
+- 问题：真实 v1 超时后，Python 执行器仍存活并在约 164 秒后写出 span，重建了已清理的 `.work`。
+  原实现只杀一个进程组；独立会话/进程组中的执行器不在其中，随后批次收尾的空目录删除抛错。
+- 修改：复用组件 CLI 的私有子进程入口，在独立进程中设置 subreaper，原 Agent 命令仍原样执行。
+  结束、超时或评测父进程退出时，回收该子进程所属的全部后代，确认退出后才进入工作目录清理。
+- 边界：不在主 Agent/SDK 宿主进程中设置 subreaper，不扫描或杀其他用户的进程；资源限额在原 Agent 启动前生效。
+  用户无需编写启动器或框架适配代码；主 Agent 的运行方式和 AgentFlow C++ 底座不改。
+- 验证重点：double-fork + setsid 后代、延迟写目录、无关进程不受影响，以及已有同步/异步/多轮入口行为。
+- 定向验证：56 项任务评分用例及冷启动补库套件通过；脱离进程组的后代已被回收，工作目录没有被延迟写入重建。
+- 全量回归：30/30 个 CTest 套件通过（400.19 秒）。真实 v1 两题复测完成后无遗留后台进程、无 `.work` 残留；
+  两题业务失败按冻结标准保留，未把进程正常退出误报为业务成功。
+
+### CHG-20260911-201：逐轮判定与浪费计数分离
+
+- 问题：真实评分将“首次回复是必要收尾，不能省去”放进浪费数组，单靠补充提示词仍出现理由与计数矛盾。
+- 修改：同一次模型评分改为逐轮输出依据及 keep/waste/uncertain 判定，程序仅从完整评审的 waste 项计算数量。
+  complete 必须覆盖所有观测轮次、无重复和不确定判定；全部依据落盘，必要收尾的 keep 项不进入浪费列表。
+- 边界：不按中文关键词猜判分、不手工删除旧报告条目、不增加模型调用次数、不放宽证据与发布门槛。
+  旧自定义评分格式继续兼容；新模板使用逐轮格式。模型语义判断仍需真实复核，协议通过不等于判断必然正确。
+- 范围：组件任务评分、外置循环评审提示词、回归和说明文档；未修改 AgentFlow C++ 底座或主 Agent 的流程。
+- 定向回归：59 项任务评分用例及冷启动补库、文档套件通过。真实两题均使用逐轮格式完成评分；
+  必要回复、skill 上报和读回验证均标为 keep，未再出现理由明确说“不能省去”却被计入浪费的矛盾。
+  此轮仍暴露业务验收误判，按下一项处理，尚不能用于宣称实现收益。
+
+### CHG-20260911-202：任务验收先核对强制动作，再给总判定
+
+- 问题：真实 JSON 修复题未实际执行解析器，模型再次以“写入和读回成功”判整题通过；
+  这会使不完整业务执行成为成功训练反馈，与冻结标准不符。
+- 修改：只调整任务验收的外置提示词和请求契约说明，要求先逐项核对实际动作及适用条件分支、最后给判定，
+  补充权限拦截不等于业务错误、部分产物成功不能替代必需动作的失败示例。
+- 边界：不更改原任务、成功标准、权限保护或评分代码的通过门槛，不将历史评分直接改成预设答案。
+  仍须用真实执行结果检验模型判分，提示词本身不是语义正确的证明。
+- 真实复测：JSON 修复题一次模型评分即正确判 failed，明确区分被拦截的解析动作与成功的文件写入/读回。
+  6 个观测轮次全部有逐轮判定，必要尝试及收尾保留；没有把业务未完成误记为评测执行错误。
+- 固定构建后的完整回归：30/30 个 CTest 套件通过（399.73 秒），包含 59 项任务评分用例。
+  随后使用冻结评分配置重启真实双用户空库实验，尚未据定向复测结果宣称 GEPA 或收益目标完成。
+
+### CHG-20260911-203：打点按配置保留工具业务失败
+
+- 问题：真实 v1 工具返回 JSON 中含 failed、security_policy_blocked 或非空 error，但函数正常返回，
+  通用打点默认将 action.end 记为 completed。错误原文仍在，结构化失败指标却缺失。
+- 修改：现有 instrumentation 增加可选 action_outcomes，以 JSON Pointer 和精确值/非空条件映射动作状态及固定错误码。
+  统一作用于原生和 HTTP 的 point 标准化，不增加宿主函数、语言适配器或模型请求。
+- 边界：默认关闭；显式宿主状态优先。只处理实际执行的 action 正常返回，不改原始 output、模型或整个 Run 的状态，
+  不影响并发兄弟分支。重试属性由配置明确给出，不从任意错误文案推断。
+- 影响检查：point_request、validate_instrumentation 及边界测试；已核对原生/HTTP、引用式打点和离线回放的共同入口。
+  无 AgentFlow C++ 底座修改。在途实验保持原二进制与配置，本修复先在独立构建目录回归。
+- 定向验证：IntegrationServiceTests 通过，覆盖对象/JSON 文本、显式状态优先、未执行/中断隔离、
+  空错误和非法配置；并发动作中一个映射为失败，另一个正常完成，最终 Run 仍正常闭合，原始工具结果不变。
+- 独立构建后的组件回归：30/30 个 CTest 套件通过（278.83 秒）。在途真实实验继续使用冻结版本，
+  该通过结果不代替下一次真实采集对新映射的验证。
+- 后续真实 v1 隔离复测：3 个完整 Run 中，3 次安全拦截及 1 次文件读取失败正确映射为 action.failed，
+  原始工具结果不变，三个 Run 的执行状态均为 completed；业务评分仍分别保留通过/失败，未提升为整轮执行故障。
+
+### CHG-20260911-204：循环引用恢复定位到具体事件，并保留最终诊断
+
+- 问题：60 题真实基线中仍出现 event_not_in_iteration_or_prior_context；恢复只给约束和评审条目下标，
+  模型无法直接定位该项中的错误引用。恢复耗尽后又只保存约束名称，丢失条目位置，复核困难。
+- 修改：仅在具体事件引用失败时，反馈增加对应轮次及 keep/waste/uncertain 判定、引用下标、限长的错误事件 ID 和本轮真实事件列表；
+  模型须重新检查结论与证据，不允许为了通过格式校验而改用无关引用。最终失败的安全诊断写入
+  evidence.loop_review.validation_error，恢复成功不残留该字段。
+- 边界：原有本轮锚点、先前因果范围、跨 Run/未来/重复引用拒绝、重试次数、评分门槛和隐私检查全部不变；
+  不保存未通过校验的模型判分，不修改已生成的分数或在途实验配置。无 AgentFlow C++ 底座改动。
+- 影响检查：validate_loop_review、model_grade 及既有恢复测试；图索引对新增组件仍为 UNKNOWN，
+  已核对直接调用链为任务评分、后台 Agent 评测与 GEPA，独立构建验证后再用于后续真实复测。
+- 验证：60 项任务评分测试与文档定向通过；随后独立构建全量 30/30 个 CTest 套件通过（398.52 秒）。
+  覆盖具体错误事件、无重试时保留诊断、恢复后清除错误，以及引用限制和未知效率不变。
+- 真实复测：原 daemon、Bridge、DataBus 的 3 道隔离题均以 1 次模型评分形成完整评审，0 个协议错误；
+  2 题业务通过，核算题因未实际运行代码正确保持失败。天气评分引用与工具返回一致，必要最终交付未计为浪费。
+  该复测没有触发新的引用恢复分支，因此不将其视为模型恢复能力或全部语义偏差已经解决的证明；
+  不写入正式经验库，不代替冻结基线、GEPA 或最终收益对照。
+- 补充定位：诊断保留该轮 decision 后，60 项任务评分与文档测试再次通过。真实视频题经 1 次协议恢复
+  形成完整的 15 轮评审，业务结果因重复尝试保持 failed，评测 errors=0；未扩大引用范围或修改已有评分。
+  该结果只证明此次有界恢复成功，仍需继续核对探索与重复尝试的语义判断。
+
+### CHG-20260911-205：明确评测事实来源、禁止尝试和事件引用
+
+- 问题：真实基线的文件缺失题中，评分理由承认又读取技能目录，仍将“不得尝试从其他路径获取”判为满足；
+  两题还在有界恢复后因证据路径错误未完成评分。较早复核也发现用户场景参数与工具实测值混淆。
+- 修改：仅补充任务/循环评测提示词。区分用户描述、Agent 陈述与工具事实；按标准分别核对行为禁止项和结果禁止项；
+  明确事件 ID 不等于数组下标，无法核实位置时引用允许的上层路径；新参数本身不构成合理探索的依据。
+- 边界：不增加模型调用，不扩大证据权限，不改变任务标准、评分门槛、循环定义或重试次数，不修改 AgentFlow 底座。
+  提示词由任务评测共用入口加载，影响独立评测、后台评测与 GEPA；在途实验保留冻结提示词，修复单独验证。
+- 验证：60 项任务评分测试与文档测试通过（36.79 秒）。两道真实 v1 复测均完成执行，
+  但各经 2 次评分仍被循环引用校验拒绝，不能认定语义评测已修复；未接受这些模型分数，也未写入经验库。
+  错误诊断分别定位到 keep 引用了下一轮文件读取结果、waste 引用了下一轮输入里的空调度报错。
+  后者的 run_skills 结果只进入原 hook 和下一轮消息，当前通用打点未独立记录本轮调度结果；
+  该采集缺口待补齐，不通过放松未来事件限制来规避，也不在在途基线中混入新的打点版本。
+
+### CHG-20260911-206：单次结果打点保留所在循环
+
+- 问题：通用 phase=event 打点只传递活动关联，处于循环上下文但没有活动的调度结果会丢失轮次归属。
+  v1 还需补充独立的调度结果打点，不能以扩大模型的未来事件引用范围替代采集。
+- 修改：进化包 event.record 增加可选 control_id；单次事件优先沿用活动，否则沿用明确的循环上下文。
+  两类关联互斥、限于同一 Run，不按最新事件或并行分支猜测所属轮次；无关联的旧调用保持 Run 级事件。
+- 影响范围：原生/HTTP 共用的打点与事件记录路径，同步维护接口 schema 和协议说明；
+  不启动操作、不应用策略、不改变 loop 计数规则、不修改 AgentFlow C++ 底座。
+  v1 调度结果补点见下一项；原冻结实验已停止，不向在途基线混入新的采集版本。
+- 验证：真实接口封装路径的 Run → loop.guard → model → 单次结果 → 下一轮测试通过；
+  覆盖并行循环显式归属、请求幂等、活动优先、跨 Run 拒绝、无关联旧事件兼容。
+  IntegrationServiceTests、IntegrationOpenApiContractTests 通过；接口 JSON Schema 同步生成并验证。
+  补齐 v1 打点后，进化包全量 CTest 30/30 通过（含 GEPA、跨语言接口、私有/共享记忆和任务评测）。
+
+### CHG-20260911-207：v1 在本轮记录 Coordinator 工具结果
+
+- 问题：run_skills 参数错误、重复拦截或调度失败时，不产生 Skill 分支；结果虽已进入原 Hook 和消息历史，
+  通用采集却要等下一轮输入才能看到。模型评审因此可能把当前轮的失败引用到下一轮，触发未来证据校验拒绝。
+- 修改：在工具结果产生后、加入消息历史前补一个通用 tool.result 事件，保留原工具名、调用 ID、参数和返回值；
+  事件引用键由决策序号和该响应内工具序号组成。Coordinator 循环标记 actor_id，由包继承明确轮次关联。
+- 影响范围：v1 execute 的工具结果出口，经 main 和节点入口调用；不依赖旧 Hook，不新增宿主辅助文件，
+  不改变业务返回、派发、重试或 C++ 底座。事件不创建活动，不引入待闭合 span，仍经过现有隐私检查。
+  GitNexus 已定位 execute 和回归测试；当前索引遍历不完整，未将 UNKNOWN 当作无影响，已核对实际入口与调用处。
+- 验证：test_coordinator_run_skills_force.py 33 项通过，包含 manifest 写入失败、空 skills 参数拒绝，
+  断言结果只记录一次、位于纠错模型调用前、业务状态不变。相关其他测试 24 项通过；
+  resource 示例的 response_key_deleted_after_dispatch 旧夹具未提供可用 Skill，未进入派发分支，
+  用 HEAD 版本 execute 复现同一失败，非本次补点回归；未通过修改生产行为使该夹具通过。
+- 真实复测：t-06/t-09 共 2 个闭合 Run、14 次模型调用，thinking token 均为 0；
+  无重复事件 ID、向后缺失因果引用或未闭合活动，未加载策略。t-09 的空 skills 返回已作为 event-76
+  归入 Coordinator 第 3 轮，不再只出现在第 4 轮输入。8 个程序产物扫描未发现配置中 2 个已知密钥值。
+  t-06 一次评分通过，t-09 仍因模型构造了无效证据路径而评分失败，未据此接受评分或入库；后续修复见下一项。
+
+### CHG-20260911-208：默认评分使用明确证据地址，并落盘路径失败诊断
+
+- 问题：真实图片任务已执行完成，但模型连续构造不存在的 JSON Pointer，恢复后仍失败；
+  最终报告只保留 evidence_invalid，无法直接看到被拒绝的具体路径。
+- 修改：外置默认任务评分模板从 allowed_evidence_paths 原样选择根级路径，具体 Run、事件 ID 和事实写入理由；
+  不减少模型可读的原始内容，不改变循环引用校验。自定义模板的合法子路径继续兼容。
+  路径校验最终失败时，在 evidence.judge_validation_error 保存代码和已有隐私、长度保护下的错误路径；
+  不保存未验证的原始评分，恢复成功不残留错误字段，不增加重试。
+- 影响范围：进化包任务评分 model_grade，由单条 trial 调用，供离线 dataset run 和后台/GEPA 评测复用；
+  图索引未覆盖该符号，已核对真实调用处。无 AgentFlow C++ 底座改动。
+- 验证：TaskEvaluationTests 与 DocumentationTests 通过；合法子路径仍可评分，非法路径继续拒绝并保留诊断，
+  成功恢复不残留诊断。真实复测待确认，不能仅以协议测试通过认定模型评分已稳定。
+
+### CHG-20260911-209：响应测试旁路保留 DataBus session 上下文
+
+- 问题：真实 v1 结束时，旧 put_e2e_response 直接调用 raw().put，未携带 UDS 所需 session/namespace，
+  持续产生 Invalid params 警告。正常答案经 session_router 返回，旁路报错不是任务评分失败的原因。
+- 修改：改用已有 put_global，写入 session sys 下无 dialogue 前缀的 `_e2e_response`，同时沿用脱敏；
+  返回 False 仍打印警告，未连接仍跳过，异常不传播到业务主路径，保留可选 timing。
+- 影响范围：v1/v2 共用的响应测试旁路；图查询未给出完整调用图，已逐一核对导入和调用，
+  以及 DataBus put_global 和现有 contract 的 session namespace 语义。未修改 C++、正常响应或进化接口。
+- 验证：补充连接正常、写入失败、未连接与 timing 开关组合，断言不访问 raw、不影响函数返回。
+  当前 runtime 相关测试共 63 项通过；真实复测结束未再出现该旁路警告。
+
+### CHG-20260911-210：区分空调度校验失败与真正交付
+
+- 问题：修复证据路径后，两道真实任务各经一次模型评分完成，但 t-06 将已有明确工具契约下的空调度
+  判为“向用户交付前的必要步骤”；该轮未派发工作也未发送最终答案，实际交付在下一轮，浪费计数被低估。
+- 修改：仅补充外置 loop-review 提示词，明确调用/校验报错不等于交付；已知不合法、无新信息且无其他工作
+  的空调度与真正交付分开判断。保留首次探明未知限制、产生必要新信息和同轮有其他工作的例外。
+- 影响范围：默认逐轮模型评分，不改 Agent 行为、工具校验、采集数据或计数代码，不自动改写模型分数。
+  两次协议成功不能证明评分语义稳定，仍需真实复测。
+
+### CHG-20260911-211：run_skills Schema 与已有非空校验对齐
+
+- 问题：执行端拒绝空 skills，但模型收到的数组 Schema 未声明 minItems；形式约束与执行契约不一致，
+  增加了空调度后再纠错的机会。现有系统提示虽要求无工作时直接回复，工具声明仍应一致。
+- 修改：仅在既有 skills 数组声明 minItems=1，并说明无工作应直接回复，不以空列表结束任务。
+  不改变可用 Skill、并行行为、执行侧校验、成功条件或进化接口；无 C++ 修改。
+- 影响范围：RUN_SKILLS_TOOL_DEFINITION 经 v1 的 _init_skills 深拷贝后发送给模型；已做图影响查询并核对导入。
+  当前真实两道任务的 Agent 均已结束，仅评分等待中，本改动不追改已记录的请求与轨迹。
+  后续基线和候选均从同一修复版本运行，此人工契约修复不计作 GEPA 的策略收益。
+- 验证：增加声明与非空参数校验的一致性测试，验证空列表拒绝、合法单项仍接受。
+  当前 runtime 相关测试 64/64 通过。
+
+### CHG-20260911-212：可选无损共享重复的评测输入结构
+
+- 问题：真实 10 次模型调用对应的轨迹有 30 份 messages 和 tools；工具定义约 146 KB，独立内容约 14 KB。
+  旧打包只共享长字符串，重复数组/对象仍增加请求体；本次评分连接发送约 550 KB 后长时间等待响应。
+  重复内容已确认，尚不能据此断言全部远端等待都由请求大小造成。
+- 修改：增加可选 judge.share_repeated_inputs（默认 false），在原有事件输入去重函数里共享完全相同的
+  大块 JSON 值，涵盖消息数组和工具定义对象。首次来源地址保留，后续引用可按显式表递归还原，引用关系无环。
+  旧 share_repeated_text 模式仍只共享文本；自定义模板需自行选择新选项并遵守嵌套引用的读取契约。
+- 边界：仅组装评测模型请求，原始轨迹和报告不变；输出、状态、产物直接保留。引用前后均检查隐私，
+  只在打包后更小时采用，不放宽请求上限、证据校验或模型判分标准。无 AgentFlow C++ 底座改动。
+- 影响范围：compact_judge_evidence 仅由任务 model_grade 调用，选项由 initialize_model 验证；
+  图索引未覆盖这些符号，已核对实际调用和配置入口。运行中的旧预检仍使用旧请求，未改其证据。
+- 验证：TaskEvaluationTests、DocumentationTests 通过；覆盖旧文本还原、新结构递归还原、转义路径、
+  不可信同名引用对象、输出/状态不变、请求进一步缩小、敏感数据先拒绝、非法选项在执行前拒绝。
+  最终全量 CTest 30/30 通过。开启新打包的真实 v1 t-06/t-09 复测 2/2 通过，评分各调用模型一次；
+  t-06 的空调度正确记为 1 轮 waste，真正交付保留，t-09 生成图片成功并评为 0 轮浪费。
+  两个 Run 共 136 事件、14 次模型调用，全部闭合、无重复 ID 或缺失前置因果，thinking token 均为 0，
+  无策略注入；8 个程序产物未检出配置中 2 个已知密钥及其常见编码形式。未作同轨迹的严格时延对照。
+
+### CHG-20260911-213：任务禁止项优先于一般重试建议
+
+- 问题：真实冷启动训练中，视频题明确允许工具失败后报告并停止、禁止重试，模型却把一次已重试的执行判通过；
+  另一执行虽判失败，理由错误地说标准不允许失败分支，并把换模型重试评为必要探索。
+  同时发现任务 constraints 已传给执行端，却未进入评分请求，单独写在该字段中的约束可能漏评。
+- 修改：任务评分补传已有 constraints；提示词和输出理由契约明确分别核验必需动作、条件分支和禁止项。
+  明确禁止后的重试属于业务违规，不能被“效率差不等于业务失败”或一般替代建议覆盖；
+  保留合法失败分支、必要收尾及混合工作轮的独立判断，不自动改写模型分数。
+- 影响范围：共用任务评分入口及两段外置提示词，供 dataset run、后台评测和 GEPA 使用；
+  已做图影响查询并核对 model_grade 的 trial 调用与模板加载处，索引 UNKNOWN 未当作无影响。
+  不修改 AgentFlow 底座、数据集、评分门槛或重试预算，不新增模型调用。
+- 验证：增加 constraints 原样进入评分、禁止项契约和默认模板加载的回归断言；真实评分语义仍待复测。
+  发现问题后已主动停止本轮主进程，不把这批评分用于后续收益结论；前一用户 8 题协议均有效，
+  但其中 t-04 的通过结论存在上述错误，协议通过不能替代语义核验。
+  首轮真实复测已正确拒绝再次生成视频，但另一次把仅 echo 已知错误的 bash 调用误认成视频重试；
+  继续限定禁令的操作对象，区分重做失败业务、打印错误和空调度，不把效率浪费自动升级为业务违规。
+  后续真实复测中，两次确有视频重试的执行判失败，一次仅生成一次并报告失败的执行按合规失败分支判通过；
+  另一条 17 次模型调用的长轨迹仍因两次 invalid_json 无法评分，保留未评测状态，未记为零浪费。
+  TaskEvaluationTests（61 项）、DocumentationTests、AgentEvaluationTests、GepaSearchTests 均通过；
+  无效 loop 仍是模型估计，逐轮边界判断继续复核，不把这些预检作为 L4 收益证明。
+
+### CHG-20260911-214：无效评分 JSON 提供无正文解析诊断
+
+- 问题：真实长轨迹在已开启 JSON 输出模式后仍两次返回 invalid_json，旧报告只有统一错误码，
+  无法区分缺少分隔符、字符串转义、编码等语法失败，也无法让有界恢复收到具体错误位置。
+- 修改：任务评分沿用相同 RapidJSON 解析标志与 Json::convert 校验，在语法失败时记录静态解析错误描述、
+  解析码、字节位置和响应字节数；反馈到既有恢复请求，最终失败写入 judge_validation_error。
+  不保存或回显未通过校验的响应正文，恢复成功不残留诊断，不改变格式接受范围、评分或重试预算。
+- 影响范围：仅任务 model_grade 路径及现有格式恢复测试；已做图查询并核对 trial 的唯一直接调用，
+  不修改共享 Json 解析器、AgentFlow 底座、宿主运行或数据集。
+- 验证：补充禁用恢复时诊断落盘、恢复时具体反馈、成功无残留和无正文断言，全量 CTest 30/30 通过。
+  同一条真实长轨迹复现 8,393 字节响应在第 0 字节非法值；后续重评也有合法 JSON，起始格式问题仍在定位，
+  不保存原始响应、不将偶发成功当作已修复。
+
+### CHG-20260911-215：逐轮评审允许引用已汇入的异步子任务结果
+
+- 问题：真实 Coordinator 第 3 轮派发图片任务，子任务生成成功（event-113）经结束事件汇入父任务（event-122），
+  但旧校验只接受本轮事件或本轮开始前的事件，错误拒绝这条确有因果关联的结果。
+- 修改：在同一 Run 的已验证 DAG 中反向遍历本轮事件的 caused_by，允许这些因果前置事件作为附加证据。
+  仍须至少一个本轮锚点；不以时间重叠或父节点的全部后代作为依据，不接收未汇入的并行结果、无关后续事件或其他 Run。
+  本轮开始前是否已知信息仍由评审区分，原有轮次划分、分支计数、业务门槛不变。
+- 影响范围：仅任务逐轮证据校验、外置提示词及文档；已进行图影响查询并核对 model_grade 的直接调用。
+  不改采集协议、AgentFlow C++ 底座、Agent 行为或模型调用预算。
+- 验证：新增异步汇入、无锚点、时间重叠但未汇入、未来事件及乱序输入回归；TaskEvaluationTests 62 项及文档测试通过。
+  同一条真实长轨迹重新评分一次即返回合法评审，但无效轮次出现新的语义分歧，另列下项处理，未启动收益对比。
+
+### CHG-20260911-216：区分业务必要性与重试链条的结构依赖
+
+- 问题：同一真实轨迹的逐轮评分出现 8 轮与 0 轮浪费的分歧；0 轮版本承认多次重试违反停止要求，
+  却以“属于重试的一部分”“包含分析和决策”为由全部保留，混淆内部步骤依赖和业务必要贡献。
+- 修改：仅补充外置评审提示词，要求 keep 的额外贡献有实际事件支持；内部分析、参数准备、重复错误记录、
+  后续日志引用本轮，不单独构成必要工作。不要求语义上省去无用操作后原始消息和 DAG 逐字不变；
+  同时保留首次必要交付，避免把无效重试和必要结果报告重复计算。
+- 边界：不改轮次计数、模型分数或通过门槛，不把模型估计改称确定性事实；语义稳定性待真实重评。
+- 验证：修改后同一真实长轨迹连续两次重评均一次调用完成，业务判失败、无效轮次均为 8；
+  只证明该案例的复核一致，不能保证所有模型判分准确。预检 4 个 Run 共 368 事件、38 次模型调用、17 次工具调用，
+  未发现步骤未闭合、重复事件 ID 或缺失前置引用；10 个产物未检出配置中已知密钥及其常见编码。
+  正式冷启动从保留的原 60 题数据集重新开始，预检与诊断结果不入训练库；偶发 JSON 格式失败继续监测。
+  修改后全量 CTest 30/30 通过。正式新批次 t-01 的必要上游结果报告仍被模型记为浪费，
+  该语义疑点保留待复核；不能仅凭格式通过或诊断案例一致宣称逐轮评分完全可靠。
+
+### CHG-20260911-217：训练轨迹分析保留任务验收依据
+
+- 问题：真实 t-08 要求记录解析器实际失败并验证修复。解析命令被安全策略拦截后，Agent 只写入和读回文件，
+  任务评分正确判失败；训练导入却只传轨迹和来源 ID，未传验收依据，后续分析误判整体成功并生成替代验证经验。
+- 修改：仅在通过完整性、L0、train、版本校验的导入副本中补充 attributes.training_evaluation，
+  包含原任务标准、约束、整场试验的判分与检查、对应 Run 列表。已有通用内容通路把它送入分析模型。
+  原报告、执行事件与 Agent 请求不变；提示词要求核对真实执行证据，并区分多轮试验整体结论与当前 Run。
+- 边界：验收上下文不是新的工具执行结果，不无条件覆盖模型判断；使用既有隐私与大小检查，
+  val/holdout、非 L0 和普通评测轨迹仍不可借此入库。相同已验证报告重复导入仍幂等，旧导入不回填、不重分析。
+- 影响范围：组件内 import_training_report 和 import_source，分别覆盖后台冷启动与显式训练导入；
+  已做图影响查询并核对调用处，不修改 AgentFlow 底座或在线打点。主要回归点为导入幂等、多轮范围和证据完整性。
+- 验证：新增验收上下文、事件不变、旧记录幂等、上下文凭据拒绝及模型请求可见性断言；
+  隔离构建完成，全量 CTest 30/30 通过（304.04 秒）。真实模型复测仍待完成，不能据此认定语义误判已消除。
+  原实验运行期间未替换二进制或冻结提示词；待其自然结束后，随 CHG-218/219 编译并用于新一轮冷启动。
+
+### CHG-20260912-218：精简模型输入与减少本地重复处理
+
+- 问题：同一模型请求在步骤开始、动作开始和动作结束中重复记录，每轮又携带累积历史。
+  直接用于离线分析造成正文重复、输入膨胀；真实 214 事件轨迹超过 2 MiB，未能发起分析。
+  其他入口还重复发送结构分析、存储字段或组件正文；任务评分的全局锁覆盖 HTTP 等待，使已配置的并发串行化。
+- 修改：只精简模型请求副本，原始轨迹、报告、证据和版本仍完整保存。
+  内容分析始终共享相同脱敏值，保留每次执行与因果身份；移除重复事件头、结构指纹等非语义字段。
+  任务验收不再传整份规则分析与存储元数据，默认共享重复输入；验收仍引用原始轨迹完成校验。
+  元反思、记忆匹配、公私关系和数据集生成只传各自所需语义字段；GEPA 保留训练任务、标准、约束与实际操作反馈，
+  组件正文只传一次，不再回传累积模型历史。未引入额外的模型摘要调用。
+- 提速：脱敏缓存限定单请求，保留原文与结果合计最多 4 MiB、512 项，不跨用户或请求复用、不落盘，
+  按每次出现累计原有审计计数。重复值共享表也有大小、条数和路径上限，放不下的内容保留原文。
+  内置 HTTP 评分适配器只在锁内预留调用预算，网络等待按已有 parallelism 并行；自定义适配器保持串行约定。
+  不改默认并发、超时、调用预算、评分门槛、训练/验证隔离或 AgentFlow 底座。
+- 影响范围：内容分析、任务验收、元反思、记忆管理、数据集生成和 GEPA 的请求装配；
+  已做图影响查询并核对实际调用处，索引无法解析的新入口没有作为低风险依据。
+- 验证：精简前后同一真实样本的用户输入分别为 43,592→21,903 字节、562,705→147,379 字节；
+  原先超限的 2,830,012 字节长轨迹现在输入 464,986 字节，保留 214 事件、60 个评测单元。
+  单次本地组装实测为 67→50 ms、487→304 ms、2178→964 ms，包含读取、分析与写出，并非纯模型时延基准。
+  小/中样本无截断；长样本原有的 42 次内容截断与 129 次脱敏计数未增加或丢失。
+  长样本使用指定 API 一次调用成功返回完整 60 项评测。添加引用递归还原、特殊路径、伪引用、脱敏计数、
+  唯一内容仍拒绝超限和 HTTP 并发回归；全量 CTest 30/30 通过，最新边界调整的定向回归通过。
+  输入缩小不意味着外部 API 耗时同比下降，也不代表 L4 收益已达到验收要求。
+
+### CHG-20260912-219：合并冗长评分规则，明确逐轮判定顺序
+
+- 问题：任务与循环提示词反复追加案例，合计 16,741 字节；真实评分仍会将已违反重试禁令的操作称为必要探索，
+  或将不同派发实例的相同轮次混淆。协议恢复重复引用错误事件，又增加等待。
+- 修改：仅整理两段外置提示词，合并同义规则并明确先核验约束、再核验独立贡献、最后核验交付。
+  任务验收保留分支、禁止项、实际执行与产物证据边界；提示理由简短列出事实，不复述全文。
+  默认逐轮输出只选本轮清单中 1–2 个直接证据，前提事实在理由中说明；完整上下文仍供模型阅读。
+  后端对既有调用方的因果证据校验范围、返回格式、调用预算和评分门槛不变，不自动把模型分数改成预设结果。
+- 验证：合并后初版提示词约 7.7 KiB，任务评分与文档定向回归通过；真实 t-01 一次调用完成，
+  写入、上游结果报告和最终交付 4 轮均保留。长任务的引用与效率结论仍继续复核，不把格式成功视为语义正确。
+  默认本轮锚点规则复测后，真实 t-10 一次调用（45.6 秒）返回 18 轮完整评审，6 轮违规重试/无依据操作为 waste，
+  业务判失败且所有证据引用通过；原先 invalid_json 的 t-15 经一次有界引用修复完成 11 轮评审。
+  该轮冻结系统提示词为 7,862 字节，较 16,741 字节减少约 53%；这些样例不构成模型判分永远正确的保证。
+  当前实验 378 个文本产物共约 329 MB，未检出配置中已知密钥及其检查的常见编码；该检查不等于覆盖所有隐私类型。
+  最终全量 CTest 30/30 通过（263.76 秒）；正式程序重新编译，冻结数据集保持原样，未将诊断重评导入经验库。
+  新一轮 t-06 中，完整轨迹明确未做文件检查，模型却以文件存在性未知判 uncertain。
+  继续补充已确认必需动作缺失优先判 failed 的顺序，不把 Agent 没做检查与采集缺失混为一谈；
+  仅调整外置提示词，同一轨迹单独复核，不回写原评分、不热换在跑实验的冻结配置。
+  该轨迹复核一次调用 7.56 秒，正确判 failed，循环与引用校验通过；补充默认提示词长度及判定优先级回归。
+  补充后源码模板合计 8,107 字节，仍比原版减少约 52%；64 项任务评测测试及文档测试再次通过。
+  新实验首个用户的 8 条导入轨迹均保留训练验收上下文，8 次分析全部成功，元反思成功，私有库生成 6 条候选记录。
+  其中满足当前编译条件的经验为 1 条，程序按原门槛继续补充训练，尚未发布 L4 策略。
+  第二用户 t-05 的真实执行已闭合，但评分两次引用了不属于本轮或前置因果上下文的 event-35，
+  被 evaluation_loop_review_invalid 拒绝；保留 error，不补造引用、不记为零浪费。该输出稳定性问题仍待后续复核。
+
+### CHG-20260912-220：复用逐轮校验结果并补齐锚点恢复上下文
+
+- 问题：同一任务逐轮评审时，每一轮都复制、解析、完整性验证并排序整条 Run，长轨迹重复本地计算。
+  missing_iteration_anchor 原来只反馈评审下标，未像其他引用错误一样明确提供对应轮次和本轮事件。
+- 修改：校验函数内按原始 Run 数组位置惰性缓存已验证排序；每个匹配 Run 在一次评审中只解析、验证一次，
+  不跨调用、用户或协议恢复复用，也不省略其他 Run 的验证。缺少锚点的反馈补充 iteration_id、decision 和
+  allowed_iteration_event_ids；不改变引用合法范围，不自动补引用、不改变判分或恢复次数。
+- 影响范围：组件的 validate_loop_review 及测试、使用说明；已运行图影响查询并核对 model_grade → 校验的调用。
+  不修改 AgentFlow 底座、日志事件、线上打点或在跑实验的冻结二进制与配置。
+- 验证：新增禁用恢复时保持 error/未知计数、恢复收到本轮事件、成功无残留诊断的回归；65 项任务评测测试通过。
+  本轮真实 t-16 三个 Run、183 个事件单独复核仍连续两次缺少首项锚点，输入 387,263 字节，
+  单次调用与诊断约 15.2 / 10.2 秒。仅补充反馈尚未解决模型错引，保留错误，未回写正式评分或导入经验库。
+  后一次同轨迹诊断一次调用 47.3 秒完成 19 轮评审，业务判失败、无效轮次为 3，引用全部通过；
+  该结果只证明此条评审完成，不把偶发成功视为错引问题已稳定解决。全量 CTest 30/30 通过（265.22 秒）。
+
+### CHG-20260912-221：GEPA 复用部分批次中的有效单题成绩
+
+- 问题：逐题缓存只读取整份 report 已评分的批次，某一题出错会让同批有效题目也失去复用资格。
+  本轮真实 L1 搜索中，相同版本的 t-03 和 t-27 已有有效成绩，后续重叠批次仍重复执行。
+- 修改：补测时可读取同版本、同 split、同上下文的其他已结束 inconclusive 报告，按题检查全部 repetitions
+  及当前目标所需指标；通过现有 scores 校验后才复用。正常业务 failed 仍是有效观测，评分错误、uncertain
+  和缺失必需指标不能充当成绩。保留报告哈希校验，完整批次总分和发布门槛不放宽。
+- 边界：不跨用户实验、策略版本或 split，不从最终留出对照取样用于搜索；关闭缓存仍完整重测。
+  不修改在跑实验或 AgentFlow 底座。已执行图影响查询并核对训练、验证、合并及最终对照的实际调用。
+- 验证：新增评分错误、循环指标未知、关闭缓存 3 项回归，通过本地隔离 Agent 与模型响应 fixture 验证：
+  三个交叉小批次从 6 次训练试跑降为 4 次，只重测出错/缺指标的题，已评分的业务失败不重复试跑。
+  不把该局部测试减少的次数当作真实 Agent 的无效 loop 收益；正式 L4 门槛仍未通过。
+  全量 CTest 30/30 通过（282.20 秒），其中 GEPA 集成测试 32 项；在跑正式实验未替换二进制。
+
+### CHG-20260912-222：限制传输重试总等待
+
+- 问题：HTTP 适配器每次重试又获得完整 timeout_ms，配置 30 分钟、重试一次时，最坏网络等待接近 60 分钟。
+- 修改：HTTP 阶段使用同一单调时钟截止时间，连接、响应和退避共用 timeout_ms；后续尝试只使用剩余时间，
+  不把耗尽时间重置。max_retries 仍限定次数，短暂故障仍可恢复；协议修复仍单独计次，网络故障不进入协议修复。
+  参数仍来自外部配置；未缩短用户设置的 30 分钟，未修改 AgentFlow 底座、评分标准或用户 API 配置。
+- 影响范围：组件共用 HTTP 适配器及回归、配置说明。已做图影响查询并核对任务评分、轨迹分析、
+  记忆管理、数据集生成及 GEPA 的实际调用；UNKNOWN 未当作无影响。不热换在跑实验的冻结二进制和配置。
+- 验证：新增总预算耗尽、部分时间后重试、503 恢复及 401 不重试回归，覆盖网络错误不触发语义恢复；
+  定向 3 项通过；撤回输出共享后的最终代码全量 CTest 30/30 通过（278.41 秒）。
+  真实 t-05 压缩尝试一次调用 29.24 秒完成，业务仍判 failed、10 项评审引用有效，
+  但无效轮次从 1 变为 3，其中把首次向上游交付结果误判为可省。因此未保留事件输出共享，
+  继续直接发送实际结果正文；不能把协议成功或输入更小视为评测语义准确。诊断未改原评分或入库。
+  本次 3 个诊断产物未检出配置中 2 个已知密钥及检查的常见编码；冻结 60 题数据集 5 个文件哈希未变。
+
+### CHG-20260912-223：当前调用为经验检索提供默认状态
+
+- 问题：统一活动打点未显式提供 state 时，检索只看到 run 初始任务，无法利用后续工具结果。
+  本轮真实 L1 种子验证的 97 次模型策略查询，state 全为字符串 null；其中 36 次实际请求已有工具错误信息。
+  这会让按运行中问题触发的经验缺少检索依据，不能仅凭已加载策略版本判断注入有效。
+- 修改：仅在活动未提供 state 或值为 null 时，从当前 input 提取检索副本。system_message 模式沿已配置的
+  binding JSON Pointer 读取消息，排除 system/developer 静态指令；其他模式和动作使用当前 input。
+  显式 state（含空字符串、空对象、false）保持优先。沿用现有首尾裁剪与字节上限，不新增配置或模型调用。
+  不读取其他并发分支、不改原请求和轨迹正文；L0、apply_policy=false 与 loop.check 原有行为不变。
+- 缓存边界：执行语义变化加入既有评测上下文指纹，旧报告保留，但不直接续用旧搜索或旧发布准入结果；
+  同一新上下文仍可恢复并复用有效成绩，避免新旧执行方式混测。离线策略文件格式不变。
+- 影响范围：组件共享活动边界、后台评测上下文及回归/说明；已运行 scoped 图影响查询并核对原生、HTTP、
+  configured point 的实际入口。索引未解析的符号未作为无影响依据；未修改 AgentFlow v1 或 C++ 底座。
+- 验证：先复现无 state 时未注入，再覆盖嵌套/转义/数组路径、模型别名、纯文本、动作、显式空状态、
+  静态指令排除、并发兄弟分支隔离、原始输入保留和注入回执。评测上下文更新与重启加载回归通过；
+  隔离构建全量 CTest 30/30 通过（279.77 秒），git diff --check 通过。
+  已有真实轨迹本地回放 97 次旧检索全部与原记录一致；使用新默认状态后 70 次检索结果发生变化，
+  未调用模型、未改正式成绩或记忆库。该结果证明缺失状态影响检索，不等于真实任务成功率或无效 loop 已改善。
+  在跑实验仍使用冻结旧版，未热换二进制、配置或清理其产物。
+
+### CHG-20260912-224：给逐轮评分提供可复制的真实事件锚点
+
+- 问题：应用前述修复后的真实冷启动中，t-02 连续两次将技能第 2 轮的 event-31 引用给第 1 轮，
+  被 event_not_in_iteration_or_prior_context 正确拒绝。自由选择事件引用仍会触发额外评分与协议恢复。
+- 修改：在既有 loop_inventory 中增加 anchor_event_id，来自该轮一条真实已执行的 action.end。
+  默认提示词要求逐字复制这个定位 ID，贡献和前提仍根据整轮原始内容判断、在理由中说明。
+  不新增模型调用、不改变轮次分组、业务标准、keep/waste 判定或后端证据校验；不替模型补写引用。
+  自定义评分器仍可返回原有合法的多证据格式，未执行动作不能生成这个锚点。
+- 影响范围：任务评测输入清单、默认逐轮提示词、回归及说明。已执行 scoped 图影响查询，
+  并核对 loop_inventory → model_grade → trial 的实际调用；未将 UNKNOWN 当作无影响。
+  不改 AgentFlow 底座，不热换正在运行的实验配置。
+- 验证：新增真实 action.end、执行标记和同分支/同轮次归属断言，先复现缺少字段，再通过补丁回归；
+  保留并发、乱序、父子因果、非法未来引用拒绝等测试。隔离构建全量 CTest 30/30 通过（279.56 秒），
+  git diff --check 通过。单条真实 t-02 诊断输入为 8,192 字节系统提示词及 136,404 字节用户输入，
+  4 个锚点均属于对应轮次，未检出配置中 7 个已知密钥及检查的常见编码。
+  首次 t-02 请求在总预算 30 分钟耗尽后返回 transport_28，未重置等待预算；同轨迹重试 13.15 秒完成。
+  再复核 t-07、t-16，分别 34.16、31.49 秒完成，三条共 30 轮的引用均通过校验，均只用一次评分调用；
+  t-02 判 passed，t-07、t-16 仍因违规重试等业务问题判 failed，不把引用修好当业务通过。
+  诊断未回写正式成绩或导入经验库。停止旧进程后才部署补丁并从空经验库重启，保留原 60 题数据集；
+  单条复测不代替完整 L4 准入与收益验证。
+
+### CHG-20260912-225：为已配置的传输重试保留等待预算
+
+- 问题：共享总截止时间后，首次请求仍可独占全部 timeout_ms；真实实验出现请求等待 30 分钟后失败，
+  相同输入再次调用十余秒成功的情况，已有 max_retries 却没有剩余时间恢复。
+- 修改：每次 HTTP 尝试使用剩余总时间除以剩余可尝试次数，未用完的时间留给后续尝试。
+  连接、响应及退避仍共用原截止时间；max_retries=0 保持一次使用完整预算，401 等非暂态错误不重试。
+  不新增参数、不改变模型输入、评分标准、协议修复次数或 AgentFlow 底座，30 分钟总上限保持不变。
+- 影响范围：组件共用 HTTP 适配器，涉及轨迹分析、任务评分、元反思、记忆管理、数据集生成及 GEPA。
+  已执行图影响查询并核对工厂函数实际调用；UNKNOWN 未作为无影响依据。
+- 验证：先用本地 HTTP fixture 复现首次卡住无重试、503 后再卡住及超时后可恢复三项失败；
+  补充连续超时、关闭重试、成功恢复与鉴权失败的次数及总时间断言。
+  修复后任务评测 66 项测试通过，全量 CTest 30/30 通过（280.08 秒），git diff --check 通过。
+  真实实验已完成的任务与评测结果保留，在当前后台批次结束后部署，不将测试 fixture 计入实验成绩。
+  正式构建定向 CTest 4/4 通过（49.50 秒）；旧 HTTP 服务完成当前批次后正常退出，再以相同配置恢复。
+  仅重试 3 条失败/中断分析，19 个训练 Run 均恢复为 completed，其余成功分析未重新调用模型。
+  私有库生成与元反思已完成，真实基线及策略对照仍在运行，尚未达到完整 L4 成功条件。
+
+### CHG-20260912-226：同批次 GEPA 恢复只补测无效题目
+
+- 问题：真实 L1 种子评测有一题 uncertain、一题执行超时，重试会重复执行同批有效题目；
+  L2 的 15 题虽然均得到 passed/failed 判分，但一次 LLM 超时缺少 token 用量，无法计算启用 token 权重的适应度。
+  旧缓存仅按 verdict 标记 complete，精确命中时直接返回，因此后续重试仍卡在同一份缺指标报告。
+- 修改：搜索评测的 complete 缓存同时要求目标所需指标可用，读取旧 complete 缓存时也复核。
+  同一缓存键的旧尝试纳入既有逐题复用，仅补测缺指标、uncertain 或评分失败的题目；正常业务 failed 仍是有效观测。
+  补测再次失败时，已结束报告保持 complete，缓存保持 inconclusive，后续仍可复用有效题目。
+- 边界：保留全部 repetitions、版本/split/上下文及报告哈希校验，不补写 token、不将未知计为零、不改成功门槛。
+  最终留出对照不纳入训练缓存复用；关闭缓存仍完整重测。source_report_refs 固定到实际旧 attempt 路径和哈希，
+  避免同键重试的复用来源指向新生成的报告。已执行影响查询并核对 Search.evaluate 的种子、训练、验证、合并及恢复调用；
+  图查询 UNKNOWN 未作为无影响依据。不改 AgentFlow 底座或业务模型输入。
+- 验证：新增本地 fixture 先复现同批重复执行、缺 token 报告误标 complete；
+  修复后同批逐题恢复、连续失败、旧索引兼容、关闭缓存 4 项回归通过；
+  隔离构建全量 CTest 30/30 通过（315.60 秒），git diff --check 通过。
+
+### CHG-20260913-227：按配置记录模型错误返回值
+
+- 问题：真实 v1 的 L2 种子评测中，一次 LLM 超时以错误对象正常返回，打点将它记为 completed。
+  原有 action_outcomes 只处理工具语义，无法表达模型客户端的错误返回约定；原始错误正文仍在，token 用量未知。
+- 修改：组件增加可选 instrumentation.model_outcomes，复用既有有界 JSON Pointer 规则校验和首个命中逻辑，
+  只匹配 model 语义及其别名。不内置框架或供应商字段，不增加宿主回调，不修改 AgentFlow 底座。
+  action_outcomes 仍只处理工具；未配置的新字段不影响既有行为。
+- 边界：仅处理 after、executed=true 且没有显式 status/error 的观测；保留原始输入输出、未知指标，
+  不代替缺失执行证据、不更改 Agent 控制流、并发兄弟分支或 run 的 execution_status。
+  配置变化用于新评测上下文，不回写历史记录或热改在跑实验的冻结配置。
+- 影响范围：共享 point_request、validate_instrumentation、配置说明及回归。已执行上游图查询并核对
+  原生/HTTP 打点、别名解析与配置加载调用；图查询 UNKNOWN 未作为无影响依据。
+- 验证：覆盖对象/JSON 字符串返回、别名、未命中、显式结果优先、未执行/中断、缺实际输入和缺用量，
+  以及失败模型与健康并发分支的完整轨迹。IntegrationServiceTests 通过，
+  隔离构建全量 CTest 30/30 通过（315.34 秒），git diff --check 通过。
+
+### CHG-20260913-228：模型异常不能以合法正文进入评分和记忆
+
+- 问题：元反思、私有语义匹配及公共经验处理只检查 transport_ok，没有一致拒绝非空 error_code。
+  HTTP 适配器还可能采纳含合法 JSON 的供应商错误、拒绝、异常结束或多选项响应。
+  因此输出已截断/调用失败时，仍有机会被当作成功判断或用于合并记忆。
+- 修改：三个语义入口先拒绝适配器错误；普通响应拒绝明确错误、拒绝、异常 finish_reason 和多选项。
+  保留旧兼容接口省略 finish_reason 的行为；保留失败时的规则、原始 Seed 与既有记忆，不伪造有效结论。
+  模型 JSON 解析增加 UTF-8 与非递归解析检查，已有证据、类型、置信度和作用域校验不放宽。
+- 位置：tools/trajectory_evolution/src/model_adapter.cpp、evolution_pipeline.cpp、shared_memory.cpp、
+  hybrid_evaluator.cpp、sessionlog_evaluator.cpp；对应 TaskEvaluationTests、TrajectoryEvolutionTests、SharedMemoryTests。
+- 验证：先复现截断正文误入公共库、错误元反思覆盖 Seed、四种异常响应被评分成功，再验证补丁拒绝这些结果。
+  定向测试通过；输入/输出错误与业务失败继续分开记录。
+
+### CHG-20260913-229：收紧模型输入副本与重复输出
+
+- 问题：存储来源、协议空值、结构指纹和同组上下文重复进入模型；逐步结果重复生成两段状态描述，
+  根因和证据引用也可能扩写，增加传输、预填充和生成成本。
+- 修改：仅在模型输入副本中移除来源、重复 selected 标记、空 dispatch、协议头空字符串及明确存储字段；
+  旧 analysis 路径也不发送包 ID/结构指纹。元反思的支持门槛继续本地检查，同组目标类型/分区只传一次。
+  保留真实用户要求、工具输入/结果、业务自定义字段、空状态、因果关系、全部事件及已有精确共享机制。
+  expected_state_change、observed_state_change 改为兼容可选输出，默认提示词只要求简短对比理由；
+  证据采用最小充分集合，确有因果或矛盾核验需要时仍补齐引用，不硬减证据数量或成功标准。
+- 位置：src/model_input.h、hybrid_evaluator.cpp、sessionlog_evaluator.cpp、evolution_pipeline.cpp；
+  config/prompts/episode-user.txt、dialogue-user.txt、meta-reflection-user.txt（均在 trajectory_evolution 目录内）。
+- 验证：应用字段、空值、精确共享还原、硬规则优先和新旧结果格式回归通过。
+  真实 80 事件/22 Episode 样本在本轮初次纯输入对照中，system+user 从 204545 降至 199631 字节（约 2.4%）；
+  最终增加简短输出/引用说明后为 199932 字节。剩余主要是真实内容及 Agent 内部提示词，未用盲目截断制造降幅。
+  输入变短不等于供应商耗时同比下降，不新增模型摘要调用。
+
+### CHG-20260913-230：可选流式空闲超时与连接复用
+
+- 问题：普通整包响应无法区分持续生成与长时间没有响应，可能等到很长的总超时；每次创建新连接增加握手成本。
+- 修改：model 增加可选 stream（默认 false）、idle_timeout_ms（默认 0，非零要求 stream）。
+  SSE 完整收齐后才提交结果，缺结束标记、错误帧、异常选择或超出内容预算时拒绝；支持兼容接口返回普通 JSON。
+  无正文数据达到 idle_timeout_ms 后按原有传输预算恢复，心跳也计作数据；总截止时间和重试次数不延长。
+  每个在途调用独占句柄，最多缓存 8 个空闲句柄复用连接；清除旧凭据/回调指针，不跨适配器共享认证。
+  补齐头部分配失败清理及 C 回调异常边界。
+- 位置：include/agentflow/trajectory/hybrid_evaluator.h、src/model_adapter.cpp、src/runtime_config.cpp。
+- 验证：分片 UTF-8、CRLF、多行 SSE、JSON 回退、length、缺 DONE、坏帧、多选项、超大输出、无数据恢复、
+  HTTP/1.1 连接复用与非法配置拒绝均有本地回归；调用预算未因传输重试增加。
+  同一真实 v1 轨迹使用现有 .env 的 deepseek-v4-flash、thinking disabled，stream=true、idle_timeout_ms=60000，
+  suspicious 诊断 4.396 秒完成、1 次调用/1 次尝试、整次判断及反思校验成功；其选中 Episode 为 0，
+  不将此结果当成全部逐步评测或整套 L4 收益验收。正式批次、成绩和记忆库未被诊断改写。
+  同轨迹补跑 all 模式，12.912 秒完成、1 次调用/1 次尝试，22/22 Episode 的模型结果及整体反思校验成功；
+  输入 200281 字节，80 个事件全部保留，未再生成两段重复状态描述。两份真实诊断输出均未命中本次已知密钥扫描。
+  单样本耗时不用于推导稳定 P95 或相对于旧版本的加速倍数。
+
+### CHG-20260913-231：修复截断边界的凭据前缀与 NUL 输入不一致
+
+- 问题：已知密钥横跨 32 KiB 截断点时，先截短可能留下完整匹配无法识别的前缀；
+  HTTP 请求构造用 C 字符串长度，提示词含 NUL 时本地指纹覆盖全文，API 却只收到前半段。
+- 修改：已知密钥跨切点时前移到密钥之前，累计脱敏计数，再调整 UTF-8 边界；保留原截断标记和内容区分。
+  模型消息按显式字节长度序列化，不在 NUL 处静默截短。凭据含 CR/LF/NUL 或过长时在构造头部前拒绝。
+- 位置：src/sessionlog_evaluator.cpp::truncate_utf8、src/model_adapter.cpp::make_openai_request_body 及适配器构造检查。
+- 验证：跨切点不泄露已知前缀、NUL 后正文确实发送、短输出不补造状态字段的回归通过。
+  单条真实诊断的请求和报告未命中环境中已知凭据原文、Base64 或 URL 编码；这不作为任意个人信息已被自动识别的保证。
+
+### CHG-20260913-232：历史批次容量与优雅退出生命周期
+
+- 问题：recover_jobs 把已归档 Run 的历史完成批次也计入 max_stored_runs，长期积累后服务无法重启。
+  HTTP 停止处理器早于后台对象析构恢复，收尾期间第二次 SIGTERM 可能按默认行为直接终止进程。
+- 修改：只有未完成/未失败的批次占恢复队列容量，历史报告仍校验并保留，不重新调用模型；
+  调整现有局部对象构造顺序，让停止处理器覆盖后台析构收尾过程，不增加新的调度器或恢复协议。
+- 位置：src/integration_service.cpp::recover_jobs、src/integration_http.cpp::run_integration_server。
+- 验证：活跃上限 2、完成 4 批次的测试先复现 learning_job_limit_reached，修复后重启且报告时间戳/调用数不变；
+  连续两次 SIGTERM 后仍完成当前检查点，退出码 0，再启动没有重复分析。LearningScheduleTests 13 项场景通过。
+  历史保留仍需磁盘管理，未声称无限保留或恒定重启耗时；SIGKILL/宿主断电不属于优雅退出。
+
+本轮上述修改均局限于自进化组件及其说明、回归，不改 AgentFlow C++ 底座。
+编辑前已尝试对应上游图影响查询；索引存储版本不兼容返回 UNKNOWN，未作为无影响证明，
+另核对模型工厂、评测/反思/记忆调用链及服务恢复/析构调用。未执行提交或远程推送。
+验证汇总：隔离构建全量 CTest 30/30 通过（312.54 秒），包括 TaskEvaluationTests 72 项、GEPA 36 项及调度 13 项场景。
+最后补齐 SSE 拒绝内容与 error:null 兼容的同类边界后，额外定向测试通过，并重新构建正式目录、复跑相关 6 组测试。
+本地原生路径测试在业务线程禁止文件/网络/睡眠调用的条件下完成 323 次调用，P95 约 1.335 ms；该数字仅描述测试负载。
+OpenAPI 一致性及 git diff --check 通过。大规模冷启动实验仍暂停，没有把诊断输出写回正式评测、私库或公共库。
+
+### CHG-20260913-233：补齐异步媒体任务的实际文件证据
+
+- 问题：真实 Agent 的异步产物位于动态目录，终态只返回文本时没有 artifact 声明，评测器无法读盘；
+  原 PNG 验收只有文件头和尺寸，任务要求图片可解码时证据不足，可能使 GEPA Seed 长期不能完成评分。
+- 修改：在现有 artifacts 配置中支持受限的单层 pattern，按任务/通用配置收集真实文件；
+  保留必需 path 的缺失失败语义，pattern 零匹配仍交由任务标准判分。限制层数、扫描量、文件数，拒绝越界和符号链接。
+  可选 libpng 在后台完成有内存上限的像素解码，事实明确区分 decoded/header_only，原始解码错误正文不进入报告。
+  不增加模型调用，不要求被测 Agent 增加工具操作，不用评测器的检查代替题目明确要求 Agent 自己执行的检查。
+- 位置：tools/trajectory_evolution/src/task_evaluation.cpp、CMakeLists.txt、cmake/TrajectoryEvolutionConfig.cmake.in、
+  tests/evaluation_host.py、tests/test_task_evaluation.py；安装与评测文档同步。
+- 影响：共用任务评测、后台版本评测及 GEPA；不改 AgentFlow C++ 底座。图影响查询为 UNKNOWN，另外核对三个入口的实际调用。
+- 验证：动态收集/零匹配/去重、非法路径/符号链接/超量、媒体类型冲突及损坏/截断/解码膨胀的 7 项定向测试通过。
+  额外检查 IEND 和块 CRC，避免像素读完但文件尾缺失仍通过。
+  真实 v1 的 v-image-logo 复测实际收集 2048×2048 PNG（2345504 字节），像素解码通过；
+  业务与逐轮评审均完成，4 次 Agent LLM 调用、1 次图片工具调用、1 次验收模型调用，无 uncertain/error。
+  此单题只验证修复链路，不是 L4 收益验收。
+  补充故障样本声明类型的回归：伪 PNG 按 text/plain 读盘，JSON 诊断按 application/json 验收；
+  不按扩展名强制转换媒体类型。与损坏 PNG 拒绝、文件失败后的逐轮评审三项联合复测通过。
+
+### CHG-20260913-234：继续精简输入，并保留业务失败的效率评测
+
+- 问题：模型还收到已解析的 SDK 打点引用和本地产物存储名；产物验收失败直接 return，
+  导致已完整采集的执行无法做循环效率评审，GEPA 在已知业务失败上反而缺少优化指标。
+- 修改：仅从模型副本删 point_reference 和 stored_file，保留因果边、执行身份、业务正文和训练验收标准。
+  产物失败记录安全错误码并保留硬失败，显式启用逐轮评审时继续评审已验证轨迹；模型不能覆盖文件失败。
+- 位置：tools/trajectory_evolution/src/model_input.h、src/task_evaluation.cpp 及对应回归。
+- 验证：先复现缺失文件使模型调用次数为 0；新增回归要求仍完成 loop_review 且业务保持 failed。
+  全量回归发现 training_evaluation 含验收要求，已撤回对整个字段的删除，不以减字节为由丢失判分条件。
+  同一真实 80 事件/22 步轨迹复评一次成功，模型总输入从 200281 降至 191770 字节；
+  耗时 19.373 秒，38 次脱敏，已知凭据原文/Base64/URL 编码扫描无命中。
+  单次延迟高于上一样本，不据此宣称供应商稳定提速；输入缩减不等价于每次服务端响应都会更快。
+
+### CHG-20260913-235：原生 Run 落盘后的重复回调保持幂等
+
+- 问题：后台 drain 移走完整状态时连 requests 回执也移走；并发分支全部收尾后，
+  同一完成通知重试可能因恰好已经落盘而返回 local_run_closed。该时序问题被完整回归触发。
+- 修改：落盘后在槽位保留回执表，闭合前后统一检查请求指纹；保留量计入现有缓冲预算，
+  新 Run 回收已落盘槽位时释放，不新增磁盘查询、模型调用或主线程等待 I/O。
+- 位置：tools/trajectory_evolution/src/local_runtime.cpp、tests/test_local_runtime.cpp。
+- 验证：新增确定性用例，在完成通知与重试之间主动 drain，先复现旧实现失败；
+  重试线程禁止文件/网络 I/O，并检查不同内容仍被拒绝。多分支回调回归一并复测。
+  修复后定向 4 组回归通过；全量 CTest 30/30 通过（302.54 秒）。
+  原生业务线程禁止文件/网络/睡眠时仍完成 323 次调用，P95 约 1.35 ms，仅描述该测试负载。
+  正式 v1 实验已按新的评测上下文恢复；基线、L4 搜索和最终配对验收仍由同一程序继续执行，尚未宣称收益达标。
+  保持活跃 Run 的原暂停校验顺序；已闭合 Run 的锁竞争不再记为活动采集缺口。
+  这两项收尾边界再跑原生、打点、服务和传输 4 组回归，全部通过（5.42 秒）。
+  正式构建此前相关 6 组回归通过（56.30 秒）；新增真实图片报告及当前基线结果的 14 个文件未命中已知凭据扫描。
+
+### CHG-20260913-236：删去模型输入中的重复邻居事实和默认规则说明
+
+- 问题：完整 Episode 列表之外又重复提供前后同执行流步骤的序号和终态，未命中规则的固定说明也逐项重复。
+- 修改：邻居关系保留 episode_id；只有完整目标存在且字段值完全相同时才删除摘要中的重复字段。
+  缺失目标、不一致属性、明确规则与不同的具体说明保留；只省略固定 UNASSESSED 说明，不将其视为有效执行。
+- 位置：tools/trajectory_evolution/src/model_input.h、config/prompts/dialogue-user.txt、对应回归与第 11 章。
+- 验证：新增缺目标、矛盾状态、硬规则及不同说明的回归；内容分析与标准轨迹相关 3 组测试通过。
+  原始日志、输出协议、事件数量、授权分区和业务正文不变，不增加模型调用。
+  同一已授权真实轨迹使用现有 API 复评成功：1 次模型调用、80 事件、22 项评测、38 次脱敏。
+  system+user 从 191770 降至 186498 字节；Episode 部分从 15030 降至 9596 字节。
+  本次报告、脱敏请求和已完成基线结果共 14 个文件未命中已知凭据原文/Base64/URL 编码扫描。
+
+### CHG-20260913-237：拒绝有歧义的模型协议响应
+
+- 问题：JSON 对象含重复 choices、finish_reason 或 content 时，旧解析器取第一个字段；
+  单响应 index 不为 0 也可能被接收。合成供应商用例已复现 5 种异常响应被实际评为 passed。
+- 修改：普通响应及 SSE 的协议对象拒绝重复字段；单候选若提供 index 必须为整数 0。
+  缺省 index 保持兼容；错误返回 invalid_api_response，不把有冲突的响应带入评分、反思或记忆。
+  内容评测、旧 analysis 评测、元反思和私有关系判断也复用非递归重复字段检查；有歧义的正文按 invalid_json 拒绝。
+  已有 Json 协议层继续保留其 duplicate_json_key 检查，不新增正文摘要或修复模型调用。
+- 位置：tools/trajectory_evolution/src/model_adapter.cpp、model_json.h、hybrid_evaluator.cpp、sessionlog_evaluator.cpp、
+  evolution_pipeline.cpp、对应测试、第 3 章。
+- 影响：共用 HTTP 模型适配器的评测、数据集生成、元反思、记忆和 GEPA 入口；不改 AgentFlow C++ 底座。
+  对本次修改的三个函数执行图影响查询均为 UNKNOWN，另外核对共用适配器和内容分析调用链，未作低风险结论。
+  首轮完整回归 30/30 通过（303.20 秒）；补齐正文嵌套对象的同源校验后再次执行回归。
+  当前真实 v1 实验保持原进程和冻结配置，不在一组结果中途混用新旧评测器。
+  最终完整 CTest 30/30 通过（303.41 秒），额外内容评测、元反思/私库和公共库 4 组复核通过（3.42 秒）。
+  最终真实 API 复核 11.779 秒完成：仍为 1 次调用、80 事件及 22 项成功评测，输入 186498 字节。
+  这是单条轨迹验证，不是稳定延迟分位数或 L4 收益证明；真实基线和策略对照实验仍独立进行。
+
+### CHG-20260913-238：逐轮评测使用短引用，结果保留稳定 ID
+
+- 问题：真实 v1 的 h-video-terminal 已正常执行且轨迹完整，但模型两次返回不存在的轮次引用，
+  触发 evaluation_loop_review_invalid:unknown_iteration；原清单要求逐字复制 64 位哈希。
+- 修改：仅在任务评测的模型输入边界使用 i1、i2 等短编号，保留全部轮次元数据和事件正文。
+  完整性、唯一性和因果证据校验通过后，已验证评测结果恢复原始稳定 ID；未知或重复引用不作猜测匹配。
+  恢复反馈使用同一请求的短编号；不加模型调用、不降低评分标准、不改 AgentFlow 执行代码。
+- 位置：tools/trajectory_evolution/src/task_evaluation.cpp、tests/test_task_evaluation.py、第 11 章。
+- 影响：数据集验收、后台策略评测和 GEPA 共用的 model_grade；图影响分析为 UNKNOWN，
+  已核对直接评分调用点与现有逐轮/多分支回归，不据此作低风险结论。
+- 验证：修复前运行 80 项任务评测测试，新增短引用回归按预期失败，其余 79 项通过；
+  修复后任务评测 80 项通过，完整 CTest 30/30 通过（301.29 秒）。
+  正式实验暂不混用新旧评测器，继续对已授权真实轨迹单独复核，不覆盖旧成绩。
+  真实 API 复核两条冻结轨迹：h-video-terminal 的 unknown_iteration 与 t-13 的漏评均恢复为完整评审，
+  各 1 次模型调用、14.765 秒和 9.491 秒，分别覆盖 8 轮、17 轮；校验后仍使用原始稳定 ID。
+  两条业务结论仍为 failed，各确认 4 次无效循环；未重跑 Agent，原始文件哈希保持一致。
+  两份诊断及当时已完成的 29 份基线结果共 31 个文件未命中已知凭据原文/Base64/URL 编码扫描。
+
+### CHG-20260913-239：取消评测后停止领取新题，保留实际执行结果
+
+- 问题：取消旧批次后，剩余未启动题目仍逐条生成错误 Trial，报告还标为 complete；
+  真实实验执行到 35 题时取消，最终却产生 60 个 Trial，容易把 25 条未执行记录误读为评测结果。
+- 修改：工作线程领取任务后先检查取消；保留已执行 Trial，不为未启动题目生成成绩。
+  报告和 manifest 明确 complete=false；summary 用 planned_trials、not_started_trials 区分计划与实际执行数。
+  ProtoJSON 报告显式保留 complete 的 false 值；原始事件、业务判定、评分标准和发布门槛不变。
+- 位置：tools/trajectory_evolution/src/task_evaluation.cpp、tests/test_task_evaluation.py、第 19 章。
+- 影响：数据集运行、后台训练/策略评测和 GEPA 共用的 run_task_evaluation；不改 AgentFlow C++ 底座。
+  图影响查询为 UNKNOWN，已核对上述直接调用路径及其对不完整报告的拒绝逻辑，不视为低风险。
+- 验证：新增取消回归先在旧代码复现虚假 complete；修复后验证已完成文件保持不变、未启动题目无 Trial、
+  实际数量与报告一致、取消仍返回退出码 3。最终任务评测 80/80 通过（58.13 秒），
+  后台评测和 GEPA 回归分别通过（40.77 秒、300.92 秒）。真实基线与 GEPA 收益仍由正式实验验证。
+
+### CHG-20260913-240：未知 token 的显式保守成本策略
+
+- 问题：真实 v1 的 h-discount-shipping 在 Coordinator 模型请求超时后没有收到 usage；
+  轨迹、业务评分和逐轮评审完整，但非零 token 权重使 GEPA 将整组成绩判为不可用。
+  这是供应商未返回用量，不是日志漏记，不能补成零 token。
+- 修改：新增 unknown_token_policy，缺省 reject 保留原严格行为；显式 worst_case 时，
+  未知 token 的归一化成本采用上界 1，仍扣除完整 token_weight；原始 Trial 和用量保持不变。
+  评分表用 unknown_token_trials 标明次数，此时 fitness/token_efficiency 为保守下界。
+  不接受不完整业务/loop 评分，不改变质量、无效 loop 或 max_token_ratio 发布门禁。
+  配置进入原有上下文指纹，严格和保守模式不混用缓存；未知次数不参与 Pareto 目标维度。
+- 位置：tools/trajectory_evolution/src/gepa_search.cpp、tests/test_gepa_search.py、第 24 章。
+- 影响：GEPA 种子、父子筛选、验证和缓存有效性共用的 scores，以及配置入口；不改 AgentFlow C++ 底座。
+  图查询为 UNKNOWN，已检查上述实际调用路径、保留原严格模式回归，未视为低风险。
+- 验证：新增重复试验下保守惩罚的精确数值核验、原始 token 仍缺失、评分不确定仍拒绝；
+  同时复测缺省严格模式的旧缓存恢复，定向 3 项通过（16.565 秒）。
+  最终 GEPA、后台评测、训练冷启动、文档、配置和策略共 6 组回归通过（314.24 秒）。
+  正式 v1 继续使用相同数据集、质量门槛和 loop 下降目标；本条不宣称真实收益已达标。
+
+### CHG-20260913-241：同配置评测断点恢复，评分失败不重跑完整 Agent
+
+- 问题：真实基线前 40 题评分完整，第 41 题 t-26 的 Agent 已执行完成，但评分请求发生 transport_28；
+  旧的后台 retry 会重新执行整批，重复消耗工具、媒体生成和模型调用。
+- 修改：后台在新 attempt 恢复同配置、同数据集和策略版本的已校验报告；有效题目直接复用，
+  仅模型评分失败的已执行题目重新评分，取消或未执行题目才运行 Agent。默认 C++/CLI 不指定恢复来源时保持原路径。
+  原 trial/run ID、轨迹、Agent 耗时和用量保留；按哈希核验并复制产物，报告记录复用来源和重评题目，旧文件不覆盖。
+  取消恢复过程也保留已存在的检查点；报告、配置或产物不一致时拒绝复用，不降低任何评分或发布条件。
+- 位置：tools/trajectory_evolution/include/trajectory_evolution/task_evaluation.h、src/task_evaluation.cpp、
+  src/agent_evaluation.cpp、后台评测回归及第 19 章。不改 AgentFlow C++ 底座。
+- 影响：CLI、后台训练/策略评测和 GEPA 共用评测器；图影响查询仍为 UNKNOWN，已对照直接调用点，默认路径保留。
+- 真实诊断：相同 t-26 轨迹在原配置下单次评分成功，输入 212801 字节、17.595 秒，未重跑 Agent 或覆盖原错误记录。
+  恢复、报告修改、配置不符、产物修改和重评取消的 5 项回归通过；完整回归 30/30 通过（310.66 秒）。
+  复核补充：新评分先移除旧评分诊断，避免成功重评仍携带旧的 JSON/loop 校验错误；原 attempt 保留。
+  补充后后台评测、任务评测、冷启动三组回归再次通过（58.05 秒）。
+  正式 v1 attempt-2 已确认 40 条有效 Trial 与原记录逐条相同，t-26 单次重评通过且保留原轨迹和执行耗时，
+  11 个原产物恢复，原报告 SHA256 未变；取消和未开始题目继续真实执行。完整基线与 GEPA 收益另由最终报告确认。
+
+### CHG-20260913-242：区分评测器的产物检查与 Agent 自己执行的检查
+
+- 问题：真实 L3 种子试验 v-image-chinese-path 中，Agent 明确说明无法精确测量像素，只给出预期 2K；
+  模型评分却把 evidence.artifacts 中评测器测得的 2048×2048 归给 Agent，判为完成实际检查。
+  无策略基线中的相似未完成行为被判失败，会导致不可靠的策略收益判断。
+- 修改：评分提示词明确产物检查发生在 Agent 执行之后；其元数据能验收产物，但不能代替
+  标准要求 Agent 实际执行的读取、解析、测量或报告。保留真实产物事实、原标准和模型输入结构。
+- 位置：tools/trajectory_evolution/config/prompts/task-judge-system.txt、tests/test_task_evaluation.py。
+  共用评分入口影响基线、后台评测和 GEPA；图查询仍为 UNKNOWN，已检查提示词加载和实际调用位置。
+  本条不改 AgentFlow C++ 底座、Agent 工具或质量/loop 发布门槛。
+- 验证：提示词传输回归验证真实产物尺寸仍进入模型输入；修正测试夹具的高度断言后，任务评测 81 项通过，
+  与后台评测、训练冷启动共三组回归全部通过（57.95 秒）。真实基线和 L3 轨迹在新提示词下均判 failed，
+  各一次模型调用，分别 30.751 秒、23.864 秒，loop 评审完整；未重跑 Agent，未覆盖原报告。
+  已停止真实 GEPA；仍须统一重评旧结果并继续正式搜索，本条不宣称最终策略收益达标。
+  旧评分不能直接作为新评审规则下的对照，不手工修改 Trial、报告或搜索树的分数。
+
+### CHG-20260913-243：更换模型裁判后只重评，不重复执行 Agent
+
+- 问题：同配置恢复不能复用更换评分提示词前的分数；重新启动整批又会重复执行 Agent、网络请求和媒体生成。
+- 修改：新增显式 `--regrade-report` / `TaskEvaluationOptions.regrade_report`，核验完整原报告、任务及版本、产物哈希，
+  保留原执行 ID、轨迹、耗时、用量和确定性检查，只重做模型判分与 loop 评审。
+  新报告绑定原执行来源及新评分指纹，`model_only_regrade=true`、`agent_reexecuted=false`；原报告不覆盖。
+  不重新执行 command/checks，不放宽普通同配置恢复校验，不自动发布策略或更新记忆。
+  取消时不混入未重评的旧成绩；预算耗尽如实记为评分错误，不补成通过。
+- 位置：tools/trajectory_evolution/include/trajectory_evolution/task_evaluation.h、src/task_evaluation.cpp、
+  src/task_evaluation_cli.cpp、tests/test_task_evaluation.py、docs/19-datasets-and-benchmarks.md。
+- 验证：新增 5 项回归，任务评测共 86 项通过；与后台评测、训练冷启动、GEPA、文档共五组通过（312.75 秒）。
+  第一轮真实重评没有重新执行 Agent，但发现语义误判后主动取消；该报告 complete=false，不用于发布或收益比较。
+  取消产生的 transport_42 / evaluation_cancelled 是主动中断记录，不是新的供应商故障。
+
+### CHG-20260913-244：缩短任务裁判输入，明确实际证据和验收标准的边界
+
+- 问题：真实重评出现将文字识别语法错误视为实际解析、漏数多次失败的视频生成调用、
+  将用户给定天气当成编造、将内部重试建议当成题目禁令，以及把缺失检查套入生成失败分支。
+  大量模型请求中的系统提示词、工具定义和重复历史也增加读取开销。
+- 修改：`judge.include_model_requests=false` 只在评分副本中省略明确声明 `attributes.semantic=model` 的输入，
+  保留模型实际输出、工具参数/结果、任务、状态、产物与并发因果关系；原始 Trial 不改。
+  未声明语义的活动不猜测删除；选项缺省保留旧完整请求行为，包内示例显式启用新视图，可设 true 恢复。
+  评分提示词区分实际执行与模型推断，失败调用也计入次数；用户给定数据是任务条件，内部建议不新增业务禁令。
+  生成成功后遗漏必需验证，不自动适用生成失败分支。未更改数据集、Agent 行为或发布门槛。
+- 位置：tools/trajectory_evolution/src/model_input.h、src/task_evaluation.cpp、config/evaluation.json、
+  config/prompts/task-judge-system.txt、tests/test_task_evaluation.py、第 19 章。
+- 影响：任务评测共用输入投影、CLI/后台/GEPA；图查询为 UNKNOWN，已核对直接调用点与配置指纹，
+  不作为低风险结论。不改 AgentFlow C++ 底座，不将本地实验配置副本作为项目功能。
+- 验证：新增投影回归检查原始请求仍保存、工具/自定义输入和事件输出不变，任务评测 87 项通过；
+  与后台评测、冷启动、文档四组通过（61.80 秒）。第一轮真实 6 例中仍有 2 例不一致，继续修正验收边界；
+  随后天气正例及基线/种子两份图片反例均符合证据，均 1 次调用、loop 评审完整，原文件哈希未变。
+  图片两份输入从 296069/298651 字节降至 200663/202051 字节，时延仍波动，不据单次测量宣称稳定提速。
+  完整回归 29 组通过，另 1 组因仍匹配旧提示词原句失败；更新该断言后，任务评测 87 项再次通过（61.97 秒），
+  30 组覆盖验证完成，保留 6000 字节提示词上限与原评分约束测试。
+  统一批次复核到 t-07 时再次出现“真实生成调用 3 次但判通过”，与单条复核相反；已停止继续采用该批成绩。
+  这表明输入精简和提示词边界修复不能替代事实级验收约束；调用次数、执行证据和明确重试禁令仍须加强确定性核验。
+  此问题未宣称彻底解决，GEPA 仍暂停，旧/中间成绩不作为优化收益。
+  最新整批已在停止请求前结束：60 条、39 passed / 21 failed、0 errors / uncertain，60 次模型调用，347.939 秒；
+  complete=true 只表示批次执行完整，不表示模型判分正确。t-07 的 reason 自己记录生成调用 3 次仍判 passed，
+  因而本批明确不用于最终基线或发布。原 60 条执行/指标不变，60 条 loop 评审完整，4 个 manifest 文件哈希通过；
+  新报告及 18 个产物未匹配已知凭据原文/Base64/URL 编码。真实评测进程已退出，无后台 Agent 实验仍在运行。
+
+### CHG-20260913-245：实际工具调用次数的确定性验收与保存证据重检
+
+- 问题：模型裁判会把已违反明确调用次数上限的任务判为通过，不能直接用这类成绩比较基线与 GEPA。
+- 修改：任务 checks 新增 `action_count`，按完整轨迹中的 action.start/action.end 配对及
+  `attributes.executed` 计数，支持 operation、min/max 和可选终态；实际执行后失败的调用也计数，
+  未执行调用不计数。证据缺失或无法配对时记为 error，不当作零次；模型通过不能覆盖规则失败。
+  `--regrade-report` 新增显式 `--recheck`：只用保存证据重算当前配置的规则并重评模型，不重跑 Agent；
+  替换同 ID 的普通规则，保留其他检查与原产物失败，不覆盖原报告。默认 regrade 仍是模型重评。
+- 位置：tools/trajectory_evolution/include/trajectory_evolution/task_evaluation.h、src/task_evaluation.cpp、
+  src/task_evaluation_cli.cpp、tests/test_task_evaluation.py、docs/19-datasets-and-benchmarks.md。
+- 验证：任务评测 93 项全部通过（62.71 秒）。新增并发样例曾错误复用跨分支 action ID，导致三例在
+  进入计数前被原轨迹校验拒绝；现仅移除样例对 ID 的覆盖，保留原唯一 ID，不改变轨迹契约。
+  覆盖失败/未执行调用、状态过滤、未知证据、模型不能覆盖失败、重检不执行 Agent、原报告不变及产物失败保留。
+- 状态：规则能力已实现并验证；真实实验仍需统一重检，尚无可信 GEPA 收益结论。
+  图查询仍为 UNKNOWN，已核对调用位置与配置指纹；不修改 AgentFlow C++ 底座或实验门槛。
+
+### CHG-20260913-246：恢复有凭据时的本地 Bash，并补齐隔离与 HTTP 认证
+
+- 问题：CHG-20260828-078 在工具入口以 local + 凭据存在为条件拒绝 Bash；restricted-local HTTP server
+  另有无条件禁令，HostExecutor 也默认拒绝宿主命令。因此真实 API 场景下 JSON 实际解析、图片尺寸检查等
+  正常任务失去执行能力。git blame 将入口限制定位到 d2ee5508；不是 API 地址或网络故障。
+- 新增：security/local_command.py 使用独立子进程、清理后的环境、Landlock 文件规则和 seccomp 进程限制；
+  不使用服务进程内 preexec_fn，不临时修改父进程环境。只授予任务工作区写权限及运行库读取权限；
+  隔离失败不回退，超时或正常退出后清理同组后台子进程。保留 TCP/UDP 网络；不是独立网络命名空间。
+  security/local_sandbox_auth.py 提供私有认证头文件及生命周期管理，凭据不写入任务工作区或子进程环境，
+  仅允许可信客户端为 numeric loopback endpoint 读取，防止命令通过未认证 HTTP 请求绕过文件隔离。
+- 位置：packages/agentflow-runtime/src/agentflow_runtime/security/local_command.py、local_sandbox_auth.py、
+  packages/agentflow-runtime/tests/test_local_command.py。
+- 验证：15 项独立测试通过；与原安全边界、HTTPExecutor、HostExecutor 回归共 68 项通过（6.19 秒）。
+  覆盖虚构凭据不继承、JSON 与中文图片实读、文件及符号链接越界、进程文件读取、进程控制、回环 HTTP 请求、
+  并发目录隔离、后台清理、隔离初始化失败、认证文件不可读和认证轮换。未使用真实凭据作泄露探测。
+  后续边界复核发现非 ASCII 认证头会使 compare_digest 抛 TypeError，已改为正常拒绝；构造器也先校验端口，
+  非整数、布尔值、越界值和路径字符串均在任何文件访问之前拒绝。补充两项回归后，共 17 项独立测试、
+  70 项联合回归通过（6.16 秒）。使用虚构文件检查原始 fchmodat2 系统调用，返回 EPERM，文件权限未改变。
+  新模块及调用点图查询为 UNKNOWN，已复核实际调用链，不把空结果当作低风险。
+- 接入：用户明确授权后，ToolRegistry 仅保留 none 模式的凭据禁令；local Bash 通过 HTTPExecutor
+  收敛到当前用户工作区，再由 restricted-local server 启动受限子进程。缺失用户身份、越界 cwd、隔离
+  初始化失败均拒绝；HostExecutor 禁令及工具参数/返回值脱敏不变，没有设置 unsafe opt-in。
+  server 所有 POST 入口验证私有认证头；Python 工具、媒体/产物 HTTP 传输同步携带认证。
+  C++ 仅修改 LocalSandbox curl 认证头文件和本地直连参数，不改调度或工作流语义；就绪探测也绕过
+  环境代理（真实复测曾出现 server 已监听但探测误走代理、5 秒启动超时）。本地认证请求禁止重定向。
+- 接入位置：tool_registry.py、executors/http.py、security/trusted_media.py、artifact_pipeline.py、
+  docker/sandbox/http_server/sandbox_http_server.py、src/sandbox/sandbox_local.cpp；
+  测试另涉及 test_http_executor.py、integration/test_file_tools_sandbox_integration.py、
+  tests/integration/sandbox_lifecycle_test.cpp。
+- 接入验证：24 项隔离/真实 HTTP 测试，加安全边界、HTTP/Host、媒体、服务端回归共 95 项通过（8.43 秒）；
+  文件/产物/其他执行器兼容回归 96 项通过（5.67 秒），4 项远程 E2B 测试未运行。
+  旧 Local 集成样例原来启动 isolated server，现改为真实 restricted-local fixture，不绕过认证。
+  agentflowd 与 C++ 测试目标编译成功，双 LocalSandbox 真实 curl 写读及相互隔离测试通过（2.422 秒）。
+  全部安全探测使用虚构凭据；这些结果不等于完整主机网络攻击面或真实 API 场景已全部验证。
+- 实验边界：恢复执行能力后已更新运行版本标识，后续在相同新运行代码与评分配置下重跑无策略基线和候选；
+  不把执行器修复的收益算作 GEPA 收益，不复用旧上下文中的缓存分数。完整 GEPA 收益仍待实测。
+
+### CHG-20260913-247：未闭合思考内容不能作为正常最终答案
+
+- 问题：真实 v1 训练题 t-01 收到 finish_reason=stop，但正文包含两个开头思考块，第二个未闭合并以
+  内部工具协议片段结尾。Coordinator 原来只寻找第一个结束标记，剩余残片被标记 normal 并返回用户；
+  Skill 的空结果校验也将这类非空残片视为完成。请求已关闭 thinking，不能仅依赖供应商遵守该开关。
+- 修改：coordinator_common.final_response_text 统一剥离完整思考块（包括正文中间的块），未闭合或仅有思考时返回空正文；
+  保留代码块与行内代码引用的标记，不重写记录的原始模型响应。Coordinator 借用现有决策循环最多恢复一次，
+  不增加总轮次上限；失败走 llm_error。Skill 复用原有语义恢复次数与轮次上限，耗尽后走 tool_call_error；
+  两处都不回灌坏响应，不因这类错误翻倍输出预算，恢复提示放在 prompts/common.py。
+- 位置：packages/agentflow-runtime/src/agentflow_runtime/coordinator_common.py、coordinator_decide.py、
+  skill_executor.py、prompts/common.py、prompts/__init__.py；测试位于 test_coordinator_response_clean.py、
+  test_coordinator_run_skills_force.py、test_skill_executor_recovery_control_flow.py。
+- 验证：最终正文提取、恢复成功、连续失败、总轮次不足、原文保留、正常结构化工具调用、普通标记引用、
+  重复调度及本地安全相关联合回归 151 项通过（9.03 秒）。没有修改 C++ 或裁判通过门槛。
+  图分析仍为 UNKNOWN，已核对共享函数及两条真实消费路径。
+- 补充验证：正文中间的思考块、思考块内的行内代码和多行代码一并覆盖，相关 78 项测试通过（1.08 秒）；
+  并行工具、dispatch manifest、HTTP 模型客户端另 51 项通过（1.58 秒）。用该批原始响应复核，
+  残缺 t-01 被拒绝，t-03/t-04 保留有效正文且没有剩余思考标记。该批 33 个日志/JSON/Protobuf 文件
+  未匹配配置中已知凭据的原文、Base64 或 URL 编码（不等同于任意编码泄露的完整证明）。
+- 实验：发现问题后已取消该批作业并停止实验服务，不将其中成绩用于 GEPA 收益。取消前真实 v1 已生成
+  两张图片并成功执行 Bash；t-08 完成真实 JSON 解析失败、修复尾逗号、保存与读回，随后裁判因取消退出。
+  共享 /tmp 写入被隔离拒绝，改用私有工作区后成功；不为此开放其他用户或认证文件所在目录。
+  新运行版本复测及完整冷启动结果另行核验。
+
+### CHG-20260913-248：验收按实际错误来源判断，不接受兜底成功声明
+
+- 问题：真实 v1 的 t-08 命令在写入共享 /tmp 时被隔离拒绝，后续解析器因 && 短路没有执行，
+  但 || echo 输出了“预期解析失败”并令整体退出码为 0；模型裁判据此误判通过。原轨迹保留了
+  完整实参、stdout、stderr 与退出码，问题在验收而非采集丢失。后续正确文件不能补足缺失步骤。
+- 修改：裁判提示明确按执行顺序检查前置失败与兜底输出，工具事实引用原始执行轨迹；请求中的
+  evidence_paths 示例有轨迹时使用 /trace 或 /traces，无轨迹时仍用 /output。恢复提示不再要求
+  校验器禁止的子路径。无新增协议字段，不放宽沙箱权限、不改数据集或通过门槛。
+- 位置：tools/trajectory_evolution/config/prompts/task-judge-system.txt、src/task_evaluation.cpp、
+  tests/test_task_evaluation.py。影响 CLI、后台与 GEPA 共用裁判；不改 AgentFlow C++ 底座。
+  图查询为 UNKNOWN，已核对 model_grade 的正常评测与 regrade 两个调用点，不把未知风险当作低风险。
+- 验证：任务评测 93 项通过（63.63 秒），覆盖无轨迹与有轨迹的引用示例、证据保留、硬规则优先及恢复。
+  对同一批 8 条真实证据使用程序 --regrade-report：4 passed、4 failed、0 error/uncertain，
+  8 次模型调用，agent_reexecuted=false；t-08 正确指出前置权限失败、解析器未执行并判 failed。
+  原始报告、工具调用次数及执行时延不变；模型语义判分仍需实测复核，不据单批结果宣称完全确定性。
+  本轮扫描 104 个结果/日志文件，未匹配配置中已知凭据的原文、Base64 或 URL 编码。
+- 后续：不将旧评分衍生的记忆用于新实验；按用户要求清理上一轮实验产物，保留冻结的 60 题数据集，
+  使用同一修复后的执行代码和裁判配置继续无策略基线与候选评测。完整 GEPA 收益尚未得出。
+
+### CHG-20260913-249：元反思不再重复生成程序已有的事件引用
+
+- 问题：真实 v1 的 10 份日志分析均成功，但跨轨迹元反思因 unknown_evidence_event_id 失败。
+  旧请求要求模型再次选择、抄写事件 ID；验证后的引用没有参与最终证据合并，候选实际始终从
+  所选 seeds 继承支持和反证。因此重复生成这组 ID 增加了模型输入与协议失败点。
+- 修改：默认元反思请求只提供候选内容、兼容分组和 seed_id，不向模型发送/索取冗余事件列表。
+  程序继续检查 seed 白名单、重复使用、类型/scope/经验契约以及字段约束，沿用原证据合并与去重；
+  旧响应若显式提供 evidence_event_ids，仍检查非空、数量、类型及所选 seeds 的合法子集。
+  未放行未知引用，未改变记忆字段、支持门槛或批准条件；不修改 AgentFlow C++ 底座。
+- 位置：tools/trajectory_evolution/src/evolution_pipeline.cpp 的 make_meta_request/validate_meta_response、
+  config/prompts/meta-reflection-system.txt、meta-reflection-user.txt、tests/test_evolution_pipeline.cpp、
+  docs/12-reflection-and-candidates.md。图分析为 UNKNOWN，已核对 synthesize_reports 调用与既有证据合并路径。
+- 验证：元反思/记忆回归通过，新格式与合法旧格式生成完全相同的候选证据；未知及显式空旧引用继续拒绝。
+  与统一学习、学习调度、文档共 4 组回归全部通过（15.43 秒）。
+  使用本轮真实 v1 已保存的 10 份分析，通过组件公开 synthesize_reports API 复测：2 次模型调用，
+  请求合计 24230 字节，MODEL_CALL_STATUS_SUCCEEDED；19 条种子产生 6 条合并候选，保留未合并项后共 13 条。
+  其中 2 条达到 PROPOSED、11 条支持不足，没有强行批准或发布；未重跑 Agent 或单条日志分析。
+- 范围：这是元反思阶段修复与真实复测，不代表完整 L4 或 GEPA 收益已经验证。
+
+### CHG-20260913-250：配置更新后接续未完成的冷启动训练批次
+
+- 问题：修复元反思后重启实验，配置指纹发生变化；一个待执行训练作业被标记 superseded，
+  另一个中断作业保留 training_report_incomplete。prepare_training 仅返回 training_failed，
+  显式 retry 又拒绝旧指纹，导致服务存活但训练不再推进。
+- 修改：只对当前训练批次中配置已变化、未完成且未主动取消的作业，按当前配置创建新作业；
+  保留原任务清单及已占用的任务/批次预算，新目录不读取旧检查点，supersedes 记录旧作业 ID。
+  已完成批次不重跑；相同配置下的失败不自动重试；主动取消和入库/学习失败仍保留原处理边界。
+- 位置：tools/trajectory_evolution/src/agent_evaluation.cpp 的 prepare_training，
+  tests/test_training_bootstrap.py、docs/24-evolution-and-gepa.md。只修改组件训练调度，
+  不修改 AgentFlow C++ 底座或 Agent 执行代码。图分析为 UNKNOWN，已核对后台调度调用点。
+- 验证：新增待执行、中断、失败作业的配置变更恢复，以及未变配置、主动取消、已完成批次不重跑回归；
+  TrainingBootstrapTests、AgentEvaluationTests、TrajectoryEvolutionTests 三组全部通过（50.45 秒）。
+  已知凭据扫描覆盖当前 89 个产物文件，没有原文、Base64 或 URL 编码匹配；不代表对任意编码泄露的证明。
+
+### CHG-20260913-251：业务与循环裁判共享实际生效的验收规则
+
+- 问题：配置已限制视频最多调用一次，但模型输入仅含任务文字，没有对应配置规则；真实 t-10
+  四次调用被程序判为 failed，模型却以“题目未明确次数、换模型属于首次探索”判 passed，且将重试漏计为有效循环。
+  硬规则保护了最终业务判定，但未保护用于 GEPA 的循环效率指标。
+- 修改：model_grade 只补充当前任务及全局生效的 required_checks，去掉检查 ID，并附带已有指标对应的
+  步骤/工具预算；不发送其他题目规则或旧判分。业务与逐轮提示使用同一套标准，模型仍核对实际证据。
+  不改变原始轨迹、主 Agent 请求、失败隔离、通过门槛或模型调用次数；程序硬规则仍拥有最终判定权。
+- 位置：tools/trajectory_evolution/src/task_evaluation.cpp 的 model_grade、config/prompts/task-judge-system.txt、
+  tests/test_task_evaluation.py、docs/11-evaluation.md。影响普通评测、后台及 GEPA 复用的裁判，不修改 AgentFlow C++ 底座。
+  图分析为 UNKNOWN，已核对正常执行与 regrade 两个调用点。
+- 验证：TaskEvaluationTests 94 项通过（64.40 秒），AgentEvaluationTests 与 DocumentationTests 也通过。
+  对本轮已完成的 8 条真实 v1 证据执行 --regrade-report：8 次模型调用，agent_reexecuted=false，
+  6 passed、2 failed、0 error/uncertain。t-04 明确按 max=1 拒绝三次视频调用，两次换模型重试均计入浪费；
+  业务结果及真实执行计数不变，整体效率指标重新计算。结果位于本轮 rule-context-regrade，未手工改分或入库。
+
+### CHG-20260913-252：区分被拦截的重复派发与目标操作重试
+
+- 问题：真实 v1 的 h-network-unavailable 只执行一次 web_fetch，并实际保存离线搭配文件；
+  裁判却把 duplicate_guard 拦截的重复 skill 派发解释为“违规重试网络”，混淆业务禁令与循环浪费。
+- 修改：共用任务裁判提示明确按目标操作判定，未再次执行目标工具的调度拦截不算该操作重试；
+  仍评审该轮是否可省，且保留“标准明确禁止对应调度尝试”的例外。不放行真实的超限或被禁重试。
+  删除重复示例，提示词从 5898 缩短到 5690 字节，无新增字段、模型调用或编译依赖。
+- 位置：tools/trajectory_evolution/config/prompts/task-judge-system.txt、tests/test_task_evaluation.py、
+  docs/11-evaluation.md。影响普通评测、后台与 GEPA 共用裁判，不修改 v1 或 C++ 执行链路。
+  图分析为 UNKNOWN，已核对 model_grade 及原有提示词测试的实际调用点。
+- 验证：TaskEvaluationTests 94 项通过（64.355 秒），覆盖提示词边界与长度、未执行动作计数、
+  并行失败、规则优先及循环评审；这是协议与回归验证，不将旧评分手工改为通过。
+
+### CHG-20260913-253：逐轮效率提示不再扩大业务失败条件
+
+- 问题：真实 GEPA 训练题 t-23 的交付满足全部题目要求，裁判仍引用 Agent 内部“不要再次派发”的
+  提示判业务 failed。共用效率提示中的“违规仍使业务 failed”没有限定标准来源，与业务主契约产生混淆。
+- 修改：效率提示明确内部规范不能新增业务禁令，浪费可以与业务 passed 并存；业务 failed 的理由先引用
+  本题 expected_behavior、constraints 或 required_checks 的对应标准，再列违反事实。
+  不增加字段或每次评测的模型调用，不修改 Agent、C++ 执行链路、数据集或通过门槛。
+- 位置：tools/trajectory_evolution/config/prompts/task-judge-system.txt、task-loop-review.txt、
+  tests/test_task_evaluation.py、docs/11-evaluation.md。共用调用路径已核对，图分析仍为 UNKNOWN。
+- 验证：TaskEvaluationTests 94 项通过（64.415 秒）；用程序对原 4 条训练证据执行 model-only regrade，
+  4 次模型调用，4 passed、0 failed/error/uncertain，agent_reexecuted=false。
+  t-23 从错误的 failed 改为 passed，但仍记录 1 次循环浪费；另外 3 题业务结果不变。
+  4 条试次的身份、执行状态、调用指标和 Agent 时延均与源报告一致，未手工修改评分或回写旧报告。
+
+### CHG-20260913-254：GEPA 恢复复用已完成执行，仅补失败评分
+
+- 问题：真实 L4 第 3 轮中，Agent 已完成任务，但连续评分请求超时；普通评测支持检查点补评分，
+  GEPA 的内部 evaluate 未传入 resume_report，恢复同一组评测时会重复启动 Agent。
+- 修改：同一上下文、版本、任务集合的前次尝试存在 manifest 时，接入现有检查点恢复；
+  配置、报告与产物哈希继续由原评测器校验，保留试次 ID、轨迹、指标、执行时延，只补失败评分或未完成执行。
+  不改评分标准、主 Agent、超时参数或预算；cache_evaluations=false 的训练/验证仍重新执行。
+- 位置：tools/trajectory_evolution/src/gepa_search.cpp、tests/test_gepa_search.py、
+  docs/24-evolution-and-gepa.md。仅修改组件，不修改 AgentFlow C++ 底座。
+  图分析为 UNKNOWN，已核对训练、验证和最终成对留出评测的共用调用入口；不视为无影响。
+- 验证：新增本地裁判 HTTP 503 回归，修改前复现恢复未走 regrade，修改后通过（6.12 秒），
+  两条试次仅补评分，原试次 ID、任务版本、轨迹、指标、执行时延及旧报告字节保持不变。
+  GepaSearchTests、AgentEvaluationTests、DocumentationTests 三组全部通过（317.35 秒）。
+  原真实 GEPA 第 3 轮恢复后，4 条已完成执行仅补 4 次评分，3 passed、1 failed、0 error；
+  regraded_trials=4，新尝试的 .work 为空。逐条核对原试次身份、轨迹、产物、输出、调用指标与执行时延均未变化。
+  配置、数据集、通过门槛保持不变，原错误报告保留；这不代表最终 GEPA 收益已经达标。
+
+### CHG-20260913-255：HTTP 429 保留当前 GEPA 代并停止搜索
+
+- 问题：真实实验中评分 API 返回 429 后，GEPA 把无法评分视作普通候选无结论，继续推进；
+  实际仅做 3 次反思，却消耗了 10 轮预算，后 7 轮均因缺少有效父版本评分而失败。
+- 修改：评分报告先完整保存，再检查明确的模型 HTTP 429；反思 HTTP 429 保留当前 pending 代。
+  两者以 gepa_model_rate_limited 返回作业层，不清除 active、不推进后续代或留出评测。
+  限流解除后通过原 retry 接续，复用检查点、候选和已完成成绩，不退还已占预算；业务失败不受影响。
+- 位置：tools/trajectory_evolution/src/gepa_search.cpp 的 evaluate、reflect、error，
+  tests/test_gepa_search.py、docs/24-evolution-and-gepa.md；不修改 AgentFlow C++ 底座。
+  图分析为 UNKNOWN，已核对训练、验证、留出评测和反思调用的异常传播路径。
+- 验证：新增父版本评分与反思两个 429 回归，旧实现均复现未按预期停止；修复后连同原评分恢复测试
+  3 项通过（17.34 秒）；GepaSearchTests、AgentEvaluationTests、DocumentationTests 全部通过（328.66 秒）。
+  未手工回退真实旧树的轮次或修改其已冻结的留出版本。
+
+### CHG-20260913-256：记忆管理被限流后停止本批后续模型请求
+
+- 问题：真实批次的增量匹配及全库整理共发起 49 次模型请求，3 次返回 HTTP 429；原逻辑把限流当作
+  单条语义失败后继续请求，放大失败开销，且并发重算可能重新发起请求。
+- 修改：仅在当前入库调用内记住明确的 HTTP 429，后续不再发起新语义请求；并发写入重算继承此状态。
+  精确去重、保守保存和已完成的有效关系仍保留；全库整理记录 http_429 并保留待处理计数。
+  后续新批次可以重试，相同已应用批次仍按原规则幂等，不伪造模型成功或退还预算。
+- 位置：tools/trajectory_evolution/src/evolution_pipeline.cpp 的 MemoryCurationContext、run_memory_match、
+  run_full_store_curation、curate_memory_file，tests/test_evolution_pipeline.cpp、docs/13-private-memory.md。
+  仅修改组件，不修改 AgentFlow C++ 底座；图分析为 UNKNOWN，已核对入库、全库整理与并发重算调用。
+- 验证：新增增量入库、全库整理、并发重算与后续批次恢复回归，旧实现已复现限流后仍继续调用；修复后通过。
+  TrajectoryEvolutionTests、UnifiedLearningTests、LearningScheduleTests、SharedMemoryTests、DocumentationTests
+  五组全部通过（15.34 秒）；没有改变真实旧批次的不完整标记或把回归测试当作真实 API 复测结果。

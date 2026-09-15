@@ -34,6 +34,11 @@ __all__ = ["call_llm", "resolve_llm_config", "get_recorder",
 
 from agentflow_runtime.recorder import get_recorder  # noqa: E402
 
+try:
+    from evolution_configured import points as _evolution
+except ImportError:
+    _evolution = None
+
 
 def call_llm(messages: list, model: str = "gpt-4o-mini",
              base_url: str = "", api_key: str = "",
@@ -81,6 +86,22 @@ def call_llm(messages: list, model: str = "gpt-4o-mini",
             timeout = int(os.environ["AF_LLM_TIMEOUT"])
         except ValueError:
             pass
+    if _evolution is not None and os.environ.get("AF_COORDINATOR_VERSION", "v1") == "v1":
+        return _evolution.call({
+            "ref": {
+                "run": os.environ.get("AF_DIALOGUE_ID", ""),
+                **({"parent": os.environ["AF_EXEC_SKILL_KEY"]}
+                   if os.environ.get("AF_EXEC_SKILL_KEY") else {}),
+            },
+            "kind": "model", "name": "model_call", "actor_id": skill or source or "model",
+            "input": {"messages": messages, "model": model, "tools": tools,
+                      "max_completion_tokens": max_completion_tokens},
+            "extensions": {"source": source, "round": round_i},
+        }, lambda request: get_recorder().trace_call(
+            request["messages"], model, base_url, api_key, tools,
+            max_completion_tokens, timeout, connect_timeout, stream,
+            source=source, skill=skill, round_i=round_i, extra_body=extra_body),
+            user_id=os.environ.get("AF_USER_ID", ""))
     return get_recorder().trace_call(
         messages, model, base_url, api_key, tools,
         max_completion_tokens, timeout, connect_timeout, stream,

@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:trajectory-evolution:evaluation-task:v1",
+  "title": "Evaluation task JSONL record (input or frozen output)",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["group_id", "task_input", "expected_behavior", "category", "difficulty"],
+  "properties": {
+    "task_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "group_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "task_input": {"type": "string", "minLength": 1},
+    "followup_inputs": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1}},
+    "expected_behavior": {"type": "string", "minLength": 1},
+    "category": {"type": "string", "minLength": 1, "maxLength": 128},
+    "difficulty": {"enum": ["easy", "medium", "hard"]},
+    "initial_state": {"type": "object"},
+    "constraints": {"type": "array", "maxItems": 64, "items": {"type": "string", "minLength": 1}},
+    "budget": {
+      "type": "object", "additionalProperties": false,
+      "required": ["max_steps", "max_tool_calls", "timeout_ms"],
+      "properties": {
+        "max_steps": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "max_tool_calls": {"type": "integer", "minimum": 1, "maximum": 100000},
+        "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 86400000}
+      }
+    },
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "kind": {"enum": ["golden", "synthetic", "traces"]},
+        "source_fingerprints": {"type": "array", "maxItems": 1024, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+        "learning_exposed": {"type": "boolean"},
+        "model_id": {"type": "string"},
+        "prompt_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "review_status": {"enum": ["pending", "reviewed"]},
+    "split": {"enum": ["train", "val", "holdout"]},
+    "task_version": {"type": "string", "pattern": "^task-v1:[0-9a-f]{64}$"},
+    "attributes": {"type": "object"}
+  },
+  "$comment": "C++ additionally enforces UTF-8 byte limits, privacy gates, group isolation, provenance and content hashes. JSON Schema alone does not attest trial readiness."
+}

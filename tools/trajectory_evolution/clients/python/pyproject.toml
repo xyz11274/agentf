@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trajectory-evolution-client"
+version = "0.1.0"
+description = "Framework-neutral native and HTTP instrumentation points"
+requires-python = ">=3.9"
+
+[tool.setuptools]
+py-modules = ["evolution", "evolution_local", "evolution_point", "evolution_configured", "evolution_entry"]

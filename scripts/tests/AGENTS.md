@@ -15,6 +15,7 @@
 | `run_perf.sh` | 性能测试三层策略(L1 mock LLM / L2 真实 LLM 简答 / L3 真实业务) | `./scripts/tests/run_perf.sh [layer1\|layer2\|layer3\|--help]` | `tests/perf/run_concurrent_perf.py` + 测试环境 key | ❌ |
 | `test_skills_upload_e2e.sh` | skill 上传/列举/删除 JSON-RPC E2E | `./scripts/tests/test_skills_upload_e2e.sh` | 已运行 daemon(`AF_HOST/AF_PORT`) | ❌ |
 | `test_start_bridge.py` | `start_bridge.sh` 启动配置的静态断言(dev reload 范围 / prod 无 reload) | `pytest scripts/tests/test_start_bridge.py` | pytest | ❌(由 CI/pytest 单独收集) |
+| `test_secret_scanner.py` | 厂商无关的硬编码凭据扫描器单测 | `pytest scripts/tests/test_secret_scanner.py` | pytest | ❌（由 Credential Safety CI 单独执行扫描器） |
 
 ## 决策表:什么场景跑哪个
 
@@ -27,15 +28,17 @@
 | 验证**已部署**的远程 bridge 可用性 | `remote_e2e_test.sh --bridge-url URL` |
 | 压测并发/性能 | `run_perf.sh layer1/2/3` |
 | 验证 skill 上传接口 | `test_skills_upload_e2e.sh` |
+| 验证源码凭据门禁 | `pytest scripts/tests/test_secret_scanner.py` 后运行 `python3 scripts/quality/scan_secrets.py --tracked` |
 | 只验证 start_bridge.sh 配置 | `test_start_bridge.py` |
+| `test_secret_scanner.py` | 厂商无关的硬编码凭据扫描器单测 | `pytest scripts/tests/test_secret_scanner.py` | pytest | ❌（由 Credential Safety CI 单独执行扫描器） |
 
 ## 合并分析结论(2026-08-07)
 
-**结论:不做脚本合并,保留现状。** 6 个脚本场景互不重叠,强行合并会引入参数分支与依赖耦合,且 `regression_test.sh` 是稳定入口不应改动:
+**结论:不做脚本合并,保留现状。** 7 个脚本场景互不重叠,强行合并会引入参数分支与依赖耦合,且 `regression_test.sh` 是稳定入口不应改动:
 
 - `e2b_fork_smoke.sh` 是 regression 的**组成部分**(被引用),不能删/并;
 - `remote_e2e_test.sh` 是 regression 的**互补场景**(远程 vs 本地),regression 已显式指引它;
-- `run_perf.sh` / `test_skills_upload_e2e.sh` / `test_start_bridge.py` 是独立专项,并入 regression 会拖慢全量回归且职责混乱。
+- `run_perf.sh` / `test_skills_upload_e2e.sh` / `test_start_bridge.py` / `test_secret_scanner.py` 是独立专项,并入 regression 会拖慢全量回归且职责混乱。
 
 "脚本太多不知道运行哪个"的根因是**缺少入口说明**,由本文件的速查表 + 决策表解决,而非物理合并。
 

@@ -1,63 +1,45 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **aisf_agentflow** (23305 symbols, 37859 relationships, 208 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **AgentFlow** (19631 symbols, 34951 relationships, 192 execution flows).
 
-> Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
+> Index stale? Run `node .gitnexus/run.cjs analyze --index-only` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? Bootstrap with `npx`, `bunx`, or `pnpm dlx` — e.g. `bunx gitnexus@latest analyze` (npm 11 npx crash; #1939).
 
 ## Always Do
 
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows. For regression review, compare against the default branch: `detect_changes({scope: "compare", base_ref: "main"})`.
+- **MUST run impact analysis before editing.** Use `impact({target: "symbolName", direction: "upstream"})` (MCP) or `node .gitnexus/run.cjs impact "symbolName" --direction upstream --repo .` (CLI fallback); report callers, processes, and risk. Never substitute grep for graph analysis.
+- **MUST analyze graph changes before committing.** Use `detect_changes({scope: "all"})` (MCP) or `node .gitnexus/run.cjs detect-changes --scope all --repo .` (CLI fallback). `partial: true` or `truncated: true` is not a clean check — a zero means unseen, not unaffected; re-run it. For regression review: `detect_changes({scope: "compare", base_ref: "main"})` or `node .gitnexus/run.cjs detect-changes --scope compare --base-ref "main" --repo .`.
 - **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
+- **MUST treat `risk: UNKNOWN` as unresolved, not as low.** An empty caller set is not evidence the symbol is unused — it can also mean the callers are not resolvable by the index (plain-object property access, dynamic dispatch, cross-language calls). `impact` pairs `UNKNOWN` with a `riskNote` saying so. Confirm with a text search before treating the symbol as safe to change or delete; do not proceed on the strength of a zero.
+- When exploring unfamiliar code, use `query({search_query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
 - When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `context({name: "symbolName"})`.
+- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
 
 ## Never Do
 
-- NEVER edit a function, class, or method without first running `impact` on it.
-- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
+- NEVER edit a function, class, or method before MCP/CLI impact analysis.
+- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis, and never read `UNKNOWN` as an all-clear — it means the walk could not answer, which is the one verdict that requires confirming by other means.
 - NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
-- NEVER commit changes without running `detect_changes()` to check affected scope.
+- NEVER commit before MCP/CLI graph change analysis.
 
 ## Resources
 
 | Resource | Use for |
-|----------|---------|
-| `gitnexus://repo/aisf_agentflow/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/aisf_agentflow/clusters` | All functional areas |
-| `gitnexus://repo/aisf_agentflow/processes` | All execution flows |
-| `gitnexus://repo/aisf_agentflow/process/{name}` | Step-by-step execution trace |
+| --- | --- |
+| `gitnexus://repo/AgentFlow/context` | Codebase overview, check index freshness |
+| `gitnexus://repo/AgentFlow/clusters` | All functional areas |
+| `gitnexus://repo/AgentFlow/processes` | All execution flows |
+| `gitnexus://repo/AgentFlow/process/{name}` | Step-by-step execution trace |
 
 ## CLI
 
 | Task | Read this skill file |
-|------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
-| Work in the Tests area (1058 symbols) | `.claude/skills/generated/tests/SKILL.md` |
-| Work in the Agent area (289 symbols) | `.claude/skills/generated/agent/SKILL.md` |
-| Work in the Routes area (186 symbols) | `.claude/skills/generated/routes/SKILL.md` |
-| Work in the Databus area (179 symbols) | `.claude/skills/generated/databus/SKILL.md` |
-| Work in the Scripts area (151 symbols) | `.claude/skills/generated/scripts/SKILL.md` |
-| Work in the Daemon area (143 symbols) | `.claude/skills/generated/daemon/SKILL.md` |
-| Work in the Agentflow_runtime area (128 symbols) | `.claude/skills/generated/agentflow-runtime/SKILL.md` |
-| Work in the Sidecar area (128 symbols) | `.claude/skills/generated/sidecar/SKILL.md` |
-| Work in the Integration area (112 symbols) | `.claude/skills/generated/integration/SKILL.md` |
-| Work in the Unit area (90 symbols) | `.claude/skills/generated/unit/SKILL.md` |
-| Work in the Stores area (89 symbols) | `.claude/skills/generated/stores/SKILL.md` |
-| Work in the Runtime area (85 symbols) | `.claude/skills/generated/runtime/SKILL.md` |
-| Work in the Sandbox area (83 symbols) | `.claude/skills/generated/sandbox/SKILL.md` |
-| Work in the Dsl area (81 symbols) | `.claude/skills/generated/dsl/SKILL.md` |
-| Work in the E2b area (71 symbols) | `.claude/skills/generated/e2b/SKILL.md` |
-| Work in the Worker area (71 symbols) | `.claude/skills/generated/worker/SKILL.md` |
-| Work in the Components area (69 symbols) | `.claude/skills/generated/components/SKILL.md` |
-| Work in the Features area (60 symbols) | `.claude/skills/generated/features/SKILL.md` |
-| Work in the Workflow area (56 symbols) | `.claude/skills/generated/workflow/SKILL.md` |
-| Work in the E2e area (52 symbols) | `.claude/skills/generated/e2e/SKILL.md` |
+| --- | --- |
+| Understand architecture / "How does X work?" | `.claude/skills/gitnexus-exploring/SKILL.md` |
+| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus-impact-analysis/SKILL.md` |
+| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus-debugging/SKILL.md` |
+| Rename / extract / split / refactor | `.claude/skills/gitnexus-refactoring/SKILL.md` |
+| Tools, resources, schema reference | `.claude/skills/gitnexus-guide/SKILL.md` |
+| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->

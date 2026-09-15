@@ -1,0 +1,107 @@
+syntax = "proto3";
+
+package trajectory.evolution.dataset.v1;
+
+import "google/protobuf/struct.proto";
+
+message TaskBudget {
+  uint32 max_steps = 1;
+  uint32 max_tool_calls = 2;
+  uint32 timeout_ms = 3;
+}
+
+message TaskProvenance {
+  // golden | synthetic | traces. These are data sources, not quality ratings.
+  string kind = 1;
+  repeated string source_fingerprints = 2;
+  // Exposed tasks and their groups are restricted to the training split.
+  bool learning_exposed = 3;
+  string model_id = 4;
+  string prompt_fingerprint = 5;
+}
+
+message EvaluationTask {
+  string task_id = 1;
+  // One conversation or related scenario family must stay in one split.
+  string group_id = 2;
+  string task_input = 3;
+  repeated string followup_inputs = 4;
+  string expected_behavior = 5;
+  string category = 6;
+  string difficulty = 7;
+  // Declarative fixtures only. The dataset builder never executes their content.
+  google.protobuf.Struct initial_state = 8;
+  repeated string constraints = 9;
+  TaskBudget budget = 10;
+  TaskProvenance provenance = 11;
+  // pending | reviewed. Only an importing operator can attest review.
+  string review_status = 12;
+  // train | val | holdout
+  string split = 13;
+  string task_version = 14;
+  google.protobuf.Struct attributes = 15;
+}
+
+message DatasetIssue {
+  string severity = 1;
+  string code = 2;
+  uint32 source_index = 3;
+  uint32 item_index = 4;
+}
+
+message EvaluationDataset {
+  uint32 schema_version = 1;
+  string dataset_kind = 2;
+  string name = 3;
+  string dataset_version = 4;
+  string split_seed = 5;
+  repeated uint32 split_percent = 6;
+  repeated EvaluationTask tasks = 7;
+  repeated DatasetIssue issues = 8;
+  uint32 model_calls = 9;
+  string generator_version = 10;
+}
+
+message TrialCheck {
+  string check_id = 1;
+  // passed | failed | uncertain | error
+  string status = 2;
+  string reason = 3;
+  repeated string evidence_paths = 4;
+  uint32 attempts = 5;
+}
+
+message EvaluationTrial {
+  string trial_id = 1;
+  string task_id = 2;
+  string task_version = 3;
+  string group_id = 4;
+  string category = 5;
+  string split = 6;
+  string variant_id = 7;
+  uint32 repetition = 8;
+  string execution_status = 9;
+  // passed | failed | uncertain | error; execution success is not task success.
+  string verdict = 10;
+  repeated TrialCheck checks = 11;
+  google.protobuf.Struct metrics = 12;
+  google.protobuf.Struct evidence = 13;
+  string error_code = 14;
+  double duration_ms = 15;
+  repeated string warnings = 16;
+}
+
+message TaskEvaluationReport {
+  uint32 schema_version = 1;
+  string report_kind = 2;
+  string run_id = 3;
+  string dataset_version = 4;
+  string evaluator_version = 5;
+  string config_fingerprint = 6;
+  repeated EvaluationTrial trials = 7;
+  google.protobuf.Struct summary = 8;
+  google.protobuf.Struct comparisons = 9;
+  // All planned trials have terminal records; does not mean all tasks passed.
+  bool complete = 10;
+  google.protobuf.Struct configuration = 11;
+}
