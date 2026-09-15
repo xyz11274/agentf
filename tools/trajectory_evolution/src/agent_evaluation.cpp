@@ -242,13 +242,17 @@ struct AgentEvaluationService::Impl {
       if(pair.second.str("status") == "pending" && pair.second.str("context") != context) pair.second["status"] = "superseded";
     }
     for(const auto& p : state["publications"].fields()) {
-      if(p.second.str("context") != context) continue;
+      if(p.second.null()) continue;  // A rejected lane has no publication yet.
       const auto artifact = load_artifact(p.second.str("job_id"));
-      const auto& job = state["jobs"][p.second.str("job_id")];
+      auto& job = state["jobs"][p.second.str("job_id")];
       require(agent_version_id(artifact.dump()) == p.second.str("version") && job.str("status") == "passed"
           && job["gate"].flag("passed", false) && job.str("user") == artifact.str("user_id")
+          && job.str("version") == p.second.str("version") && job.str("context") == p.second.str("context")
           && p.first == lane(job.str("user"), artifact.str("level")), "evaluation_publication_changed");
-      published[p.first] = artifact;
+      // The durable publication may precede the final job save or bundle write.
+      job["published"] = true;
+      export_publication(p.second.str("job_id"), job, artifact);
+      if(p.second.str("context") == context) published[p.first] = artifact;
     }
     state.fields().erase("worker_error");
     save();
@@ -259,6 +263,17 @@ struct AgentEvaluationService::Impl {
   }
   void save() {
     const auto bytes = state.dump(); require(bytes.size() <= 16777216, "evaluation_state_limit"); write(root / "state.json", bytes);
+  }
+  void export_publication(const std::string& id, const Json& job, const Json& artifact) const {
+    const auto bundle = Json{{"schema_version", 1}, {"version", job["version"]}, {"artifact", artifact},
+        {"evaluation", Json{{"job_id", id}, {"context", job["context"]}, {"gate", job["gate"]}}}};
+    // Keep the existing GEPA path; fixed-candidate jobs have no search directory.
+    const auto path = root / id / (job.flag("gepa", false) ? "search/published-version.json" : "published-version.json");
+    if(fs::exists(path)) {
+      require(Json::parse(read(path)).dump() == bundle.dump(), "evaluation_export_changed");
+      return;
+    }
+    write(path, bundle.dump());
   }
   void make_room() {
     // Bound the live index without discarding reproducible reports or dedup IDs.
@@ -466,14 +481,12 @@ struct AgentEvaluationService::Impl {
           if(verdict.flag("passed", false) && state["latest"].str(key) == id && previous == job.str("parent_version")) {
             state["publications"][key] = Json{{"user", job["user"]}, {"level", artifact["level"]}, {"job_id", id}, {"version", current["version"]}, {"context", context}};
             // Persist before making the new snapshot available to consumers.
-            save(); published[key] = artifact; current["published"] = true;
+            current["published"] = true; save(); published[key] = artifact;
+            export_publication(id, current, artifact);
           }
           if(job.flag("gepa", false)) {
             write(root / id / "search/decision.json", Json{{"gate", verdict}, {"published", current.flag("published", false)},
                 {"version", current["version"]}, {"parent_version", current["parent_version"]}, {"context", context}}.dump());
-            if(current.flag("published", false)) write(root / id / "search/published-version.json",
-                Json{{"schema_version", 1}, {"version", current["version"]}, {"artifact", artifact},
-                    {"evaluation", Json{{"job_id", id}, {"context", context}, {"gate", verdict}}}}.dump());
           }
         }
         save();

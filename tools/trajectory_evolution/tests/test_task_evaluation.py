@@ -207,6 +207,27 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(report["summary"]["model_calls"], 0)
         self.assertTrue((self.root / "evaluation/report.pb").is_file())
 
+    def test_report_budget_covers_full_report_not_half_the_trial_evidence(self):
+        host = self.config["variants"][0]["command"]
+        self.config["variants"][0]["command"] = [sys.executable, "-c",
+            "import json, subprocess, sys\n"
+            f"response=json.loads(subprocess.run({host!r},input=sys.stdin.read(),capture_output=True,text=True,check=True).stdout)\n"
+            "response['state']['details']='verified payload '*1400\nprint(json.dumps(response))\n"]
+        self.config["max_report_bytes"] = 40000
+        report = self.evaluate()
+        trial_bytes = len(json.dumps(report["trials"][0], ensure_ascii=False,
+                                     separators=(",", ":")).encode())
+        report_bytes = (self.root / "evaluation/report.json").stat().st_size
+        self.assertGreater(trial_bytes, self.config["max_report_bytes"] // 2)
+        self.assertLessEqual(report_bytes, self.config["max_report_bytes"])
+
+        # Trial evidence fits, but summary and metadata must also fit the limit.
+        self.config["max_report_bytes"] = trial_bytes + 1024
+        self.assertLess(self.config["max_report_bytes"], report_bytes)
+        self.evaluate(code=2, name="limited")
+        self.assertTrue(list((self.root / "limited/trials").glob("*.json")))
+        self.assertFalse((self.root / "limited/report.json").exists())
+
     def counted_actions(self, skipped=False):
         host = self.config["variants"][0]["command"][:-1] + ["loop_trace"]
         wrapper = (
@@ -238,6 +259,26 @@ class TrialTests(unittest.TestCase):
         packet = json.loads(REQUESTS[-1]["messages"][1]["content"])
         self.assertIn(dict(op="action_count", operation="calculate", max=3), packet["required_checks"])
         self.assertTrue(all("id" not in check for check in packet["required_checks"]))
+
+    def test_judge_receives_observed_action_counts_without_inventing_observations(self):
+        self.model()
+        host = self.config["variants"][0]["command"].copy()
+        for name, skipped, expected in (("all", False, 4), ("skipped", True, 3),
+                                        ("unknown", None, None)):
+            with self.subTest(name=name):
+                self.config["variants"][0]["command"] = host.copy()
+                if skipped is None:
+                    self.mode("loop_trace")
+                else:
+                    self.counted_actions(skipped=skipped)
+                report = self.evaluate(name=name)
+                packet = json.loads(REQUESTS[-1]["messages"][1]["content"])
+                self.assertEqual(packet["observed_action_counts"], {"calculate": expected})
+                self.assertNotIn("observed_action_counts", report["trials"][0]["evidence"])
+        self.config["variants"][0]["command"] = host
+        self.evaluate(name="no-trace")
+        packet = json.loads(REQUESTS[-1]["messages"][1]["content"])
+        self.assertNotIn("observed_action_counts", packet)
 
     def test_judge_receives_only_current_task_and_global_check_constraints(self):
         self.make_dataset(cases=[dict(task_id=name, group_id=name, task_input=f"计算{name}任务的总量20。",
@@ -319,6 +360,41 @@ class TrialTests(unittest.TestCase):
         self.config["checks"] = {"*": [dict(id="output", op="exists", path="/output")]}
         self.assertIsNone(self.evaluate(code=2, name="missing-regrade", extra=("--recheck",)))
 
+    def test_cli_resume_reuses_execution_and_regrades_only_judge_errors(self):
+        self.model()
+        host = self.config["variants"][0]["command"][:-1] + ["trace"]
+        counter = self.root / "host-count"
+        wrapper = (
+            "import pathlib, subprocess, sys\n"
+            f"counter=pathlib.Path({str(counter)!r})\n"
+            "counter.write_text(str(int(counter.read_text())+1) if counter.exists() else '1')\n"
+            f"subprocess.run({host!r},input=sys.stdin.read(),text=True,check=True)\n"
+        )
+        self.config["variants"][0]["command"] = [sys.executable, "-c", wrapper]
+        Provider.behavior = "http_error"
+        first = self.evaluate(code=3)
+        source = self.root / "evaluation/report.json"
+        original = source.read_bytes()
+        self.assertEqual(first["trials"][0]["error_code"], "evaluation_judge_failed")
+        Provider.behavior = "passed"
+        second = self.evaluate(name="resumed", extra=("--resume-report", source))
+        before, after = first["trials"][0], second["trials"][0]
+        self.assertEqual(after["verdict"], "passed")
+        for key in ("trial_id", "duration_ms", "execution_status", "metrics"):
+            self.assertEqual(before.get(key), after.get(key))
+        self.assertEqual(before["evidence"]["trace"], after["evidence"]["trace"])
+        self.assertEqual(second["summary"]["regraded_trials"], 1)
+        self.assertEqual(second["summary"]["model_calls"], 1)
+        third = self.evaluate(name="resumed-again", extra=("--resume-report", self.root / "resumed/report.json"))
+        self.assertEqual(third["summary"]["reused_trials"], 1)
+        self.assertEqual(third["summary"]["model_calls"], 0)
+        self.assertEqual(counter.read_text(), "1")
+        self.assertEqual(source.read_bytes(), original)
+        self.evaluate(code=2, name="conflict", extra=("--resume-report", source, "--regrade-report", source))
+        self.config["variants"][0]["version"] = "changed"
+        self.evaluate(code=2, name="changed", extra=("--resume-report", source))
+        self.assertEqual(counter.read_text(), "1")
+
     def test_model_only_regrade_preserves_execution_and_source(self):
         self.model()
         self.mode("trace")
@@ -344,6 +420,64 @@ class TrialTests(unittest.TestCase):
         provenance = second["configuration"]["execution_source"]
         self.assertEqual(provenance["report_sha256"], hashlib.sha256(original).hexdigest())
         self.assertEqual(provenance["config_fingerprint"], first["config_fingerprint"])
+        self.assertEqual(source.read_bytes(), original)
+
+    def test_model_only_regrade_explicit_subset_of_paused_batch(self):
+        self.config["parallelism"] = 1
+        self.make_dataset(cases=[dict(task_id=name, group_id=name, task_input=f"计算任务{name}的总量20。",
+            expected_behavior="总量为20。", initial_state=dict(value=20), difficulty="easy", category="data",
+            split="train", review_status="reviewed") for name in ("a", "b", "c")])
+        self.model(); self.mode("trace")
+        host = self.config["variants"][0]["command"].copy()
+        entered = self.root / "second-task-entered"
+        wrapper = (
+            "import json, pathlib, subprocess, sys, time\n"
+            "request=sys.stdin.read()\n"
+            "if json.loads(request)['task']['task_id']=='b':\n"
+            f" pathlib.Path({str(entered)!r}).touch()\n"
+            " time.sleep(30)\n"
+            f"subprocess.run({host!r},input=request,text=True,check=True)\n"
+        )
+        self.config["variants"][0]["command"] = [sys.executable, "-c", wrapper]
+        write_json(self.root / "evaluation.json", self.config)
+        process = subprocess.Popen([str(CLI), "dataset", "run", str(self.dataset),
+            "--config", str(self.root / "evaluation.json"), "--output-root", str(self.root / "evaluation")],
+            env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 5
+            while not entered.exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.assertTrue(entered.exists())
+            process.send_signal(signal.SIGINT)
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, 3, stdout + stderr)
+        finally:
+            if process.poll() is None:
+                process.terminate(); process.communicate(timeout=10)
+        first = json.loads((self.root / "evaluation/report.json").read_text())
+        self.assertFalse(first["complete"])
+        self.assertEqual(first["trials"][0]["task_id"], "a")
+        self.assertEqual(first["trials"][0]["execution_status"], "completed")
+        self.assertEqual(first["trials"][1]["execution_status"], "cancelled")
+        source = self.root / "evaluation/report.json"
+        original = source.read_bytes()
+        self.config["variants"][0]["command"] = host[:-1] + ["nonzero"]
+        count = len(REQUESTS)
+        self.assertIsNone(self.evaluate(code=2, name="unselected", extra=("--regrade-report", source)))
+        self.config["task_ids"] = ["b"]
+        self.assertIsNone(self.evaluate(code=2, name="unfinished", extra=("--regrade-report", source)))
+        self.config["task_ids"] = ["c"]
+        self.assertIsNone(self.evaluate(code=2, name="absent", extra=("--regrade-report", source)))
+        self.assertEqual(len(REQUESTS), count)
+        self.config["task_ids"] = ["a"]
+        second = self.evaluate(name="subset", extra=("--regrade-report", source))
+        self.assertTrue(second["complete"])
+        self.assertEqual(second["summary"]["planned_trials"], 1)
+        self.assertEqual(second["summary"]["regraded_trials"], 1)
+        self.assertFalse(second["summary"]["agent_reexecuted"])
+        before, after = first["trials"][0], second["trials"][0]
+        for key in ("trial_id", "duration_ms", "execution_status", "evidence"):
+            self.assertEqual(before[key], after[key])
         self.assertEqual(source.read_bytes(), original)
 
     def test_model_only_regrade_keeps_hard_checks_and_verifies_artifacts(self):
@@ -477,6 +611,40 @@ class TrialTests(unittest.TestCase):
         count = len(REQUESTS)
         self.assertIsNone(self.evaluate(code=2, name="invalid-view"))
         self.assertEqual(len(REQUESTS), count)
+
+    def test_execution_view_omits_retrieval_payload_but_keeps_decisions(self):
+        self.model()
+        host = self.config["variants"][0]["command"][:-1] + ["loop_trace"]
+        wrapper = (
+            "import json, subprocess, sys\n"
+            f"response=json.loads(subprocess.run({host!r},input=sys.stdin.read(),capture_output=True,text=True,check=True).stdout)\n"
+            "for index, kind in enumerate(('policy.query', 'application.query'), 1):\n"
+            " response['trace']['events'].insert(-1, dict(event_id='query-'+str(index), kind='custom', "
+            "actor_id='agent', producer_id='diagnostic', sequence=index, timestamp_us='1', "
+            "attributes=dict(type=kind, decision=dict(query='retrieval-only-'*1000, context='context-only-'*1000, "
+            "experiences=['experience-only-'*1000], policy_id='policy-diagnostic', status='ready', "
+            "actions=[dict(decision='deny', reason='already-completed')], progress=dict(decision='stop')))))\n"
+            "print(json.dumps(response))\n"
+        )
+        self.config["variants"][0]["command"] = [sys.executable, "-c", wrapper]
+        self.config["max_output_bytes"] = 1048576
+        self.config["judge"]["share_repeated_text"] = False
+        self.evaluate()
+        full = json.loads(REQUESTS[-1]["messages"][1]["content"])
+        self.config["judge"]["include_model_requests"] = False
+        report = self.evaluate(name="retrieval-view")
+        packet = json.loads(REQUESTS[-1]["messages"][1]["content"])
+        raw = {e["event_id"]: e for e in report["trials"][0]["evidence"]["trace"]["events"]}
+        compact = {e["event_id"]: e for e in packet["evidence"]["trace"]["events"]}
+        decision = compact["query-1"]["attributes"]["decision"]
+        self.assertEqual(set(decision), {"status", "actions", "progress"})
+        for field in decision:
+            self.assertEqual(decision[field], raw["query-1"]["attributes"]["decision"][field])
+        self.assertEqual(compact["query-2"]["attributes"], raw["query-2"]["attributes"])
+        self.assertIn("query", raw["query-1"]["attributes"]["decision"])
+        self.assertTrue(any(e.get("attributes", {}).get("decision", {}).get("query")
+                            for e in full["evidence"]["trace"]["events"]))
+        self.assertLess(len(json.dumps(packet)), len(json.dumps(full)) - 40000)
 
     def entry_mode(self, *flags):
         for key in ("run_layout", "instrumentation_transport"):
@@ -677,6 +845,46 @@ class TrialTests(unittest.TestCase):
         self.entry_mode("--extra-run")
         trial = self.evaluate(code=3, name="unexpected-run")["trials"][0]
         self.assertIn(trial["error_code"], ("evaluation_entry_unexpected_run", "runner_nonzero_exit", "evaluation_entry_handler_failed"))
+
+    def test_published_policy_file_is_bound_to_fresh_evaluation(self):
+        self.entry_mode()
+        variant = self.config["variants"][0]
+        variant.pop("version")
+        variant["policy_version_file"] = "published-version.json"
+        owner = json.loads((self.root / "instrumentation.json").read_text())["principals"][0]["user_id"]
+        artifact = dict(schema_version=1.0, agent=dict(name="test", revision="fresh-host-1"),
+                        user_id=owner, level="L0", policy=None)
+        def publish():
+            version = "agent-version-v1:" + hashlib.sha256(json.dumps(
+                artifact, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            write_json(self.root / "published-version.json", dict(schema_version=1, version=version,
+                       artifact=artifact, evaluation=dict(gate=dict(passed=True))))
+            return version
+        first_version = publish()
+        first = self.evaluate(name="published-first")
+        self.assertEqual(first["configuration"]["variants"][0]["version"], first_version)
+        self.assertEqual(first["trials"][0]["evidence"]["loaded_version"], first_version)
+        artifact["agent"]["revision"] = "fresh-host-2"
+        second_version = publish()
+        second = self.evaluate(name="published-second")
+        self.assertNotEqual(first_version, second_version)
+        self.assertNotEqual(first["config_fingerprint"], second["config_fingerprint"])
+        self.assertNotEqual(first["trials"][0]["trial_id"], second["trials"][0]["trial_id"])
+
+    def test_published_policy_file_rejects_invalid_or_ambiguous_source(self):
+        self.entry_mode()
+        variant = self.config["variants"][0]
+        variant.pop("version")
+        variant["policy_version_file"] = "published-version.json"
+        for label, bundle in (("rejected", dict(schema_version=1, evaluation=dict(gate=dict(passed=False)))),
+                              ("changed", dict(schema_version=1, version="changed", artifact=dict(
+                                  schema_version=1, agent=dict(revision="v1"), user_id="user-a", level="L0", policy=None),
+                                  evaluation=dict(gate=dict(passed=True))))):
+            write_json(self.root / "published-version.json", bundle)
+            self.assertIsNone(self.evaluate(code=2, name=label))
+            self.assertFalse((self.root / label).exists())
+        variant["artifact"] = None
+        self.assertIsNone(self.evaluate(code=2, name="ambiguous"))
 
     def test_component_owns_instrumented_evaluation(self):
         config = json.loads((SOURCE / "config/boundary-service.json").read_text())
@@ -1116,6 +1324,15 @@ class TrialTests(unittest.TestCase):
         self.model()
         self.config["judge"]["share_repeated_text"] = True
         self.mode("repeated_evidence")
+        host = self.config["variants"][0]["command"]
+        wrapper = (
+            "import json, subprocess, sys\n"
+            f"response=json.loads(subprocess.run({host!r},input=sys.stdin.read(),capture_output=True,text=True,check=True).stdout)\n"
+            "for event in response['trace']['events']:\n"
+            " event['attributes']={'custom_receipt':{'text':'完整回执。'*100, 'nested/~':[1, True, None]}}\n"
+            "print(json.dumps(response, ensure_ascii=False))\n"
+        )
+        self.config["variants"][0]["command"] = [sys.executable, "-c", wrapper]
         repeated = "这是必须保留的中文完整证据。" * 80
         details = {"nested/~": [repeated, None, {"again/~": repeated}],
                    "copies": [repeated] * 10, "unique": "不重复的证据。" * 80,
@@ -1213,8 +1430,8 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(restore(packed), model_view(original))
         self.assertEqual(packed["output"], original["output"])
         self.assertEqual(packed["state"], original["state"])
-        for event, raw in zip(packed["trace"]["events"], original["trace"]["events"]):
-            self.assertEqual(event.get("output"), raw.get("output"))
+        self.assertTrue(any("/output" in path for path in aliases))
+        self.assertTrue(any("/attributes/" in path for path in aliases))
         self.assertLess(len(REQUESTS[-1]["messages"][1]["content"].encode()), previous_bytes)
 
     def test_minimum_judge_input_is_the_default(self):
@@ -1612,6 +1829,43 @@ class TrialTests(unittest.TestCase):
         for item in review["iteration_reviews"] + review["wasted_iterations"]:
             self.assertIn(item["evidence_event_ids"][0], canonical[item["iteration_id"]]["event_ids"])
         self.assertEqual(report["summary"]["model_calls"], 1)
+
+    def test_loop_review_short_refs_follow_observations_not_hashes(self):
+        self.model(); self.mode("loop_trace")
+        command = self.config["variants"][0]["command"]
+        # Twelve observed iterations cross the i9/i10 lexical boundary without
+        # merging the six independently observed execution branches.
+        wrapper = ("import json,subprocess,sys\n"
+                   "value=json.loads(subprocess.check_output(sys.argv[1:],input=sys.stdin.buffer.read()))\n"
+                   "trace=value['trace']; original=trace['events']; events=[original[0]]; ends=[]\n"
+                   "for run in range(3):\n"
+                   " for raw in original[1:-1]:\n"
+                   "  item=json.loads(json.dumps(raw))\n"
+                   "  for field in ('event_id','execution_id','loop_id','step_id','action_id','producer_id'):\n"
+                   "   if field in item: item[field]=f'{run}-'+item[field]\n"
+                   "  item['caused_by']=[key if key=='start' else f'{run}-'+key for key in item['caused_by']]\n"
+                   "  item['timestamp_us']=str(len(events)+1); events.append(item)\n"
+                   " ends.extend(f'{run}-'+key for key in original[-1]['caused_by'])\n"
+                   "end=original[-1]; end['caused_by']=ends; end['timestamp_us']=str(len(events)+1)\n"
+                   "events.append(end); trace['events']=events\nprint(json.dumps(value))\n")
+        self.config["variants"][0]["command"] = [sys.executable, "-c", wrapper, *command]
+        self.config["judge"]["loop_review_prompt"] = "prompts/task-loop-review.txt"
+        Provider.behavior = "loops_detailed"
+        report = self.evaluate()
+        packet = json.loads(REQUESTS[-1]["messages"][1]["content"])
+        inventory = packet["loop_inventory"]
+        self.assertEqual(list(inventory), [f"i{i:02}" for i in range(1, 13)])
+        trace = packet["evidence"]["trace"]
+        order = {(trace["identity"]["run_id"], event["event_id"]): index
+                 for index, event in enumerate(trace["events"])}
+        ranks = [order[(item["run_id"], item["anchor_event_id"])] for item in inventory.values()]
+        self.assertEqual(ranks, sorted(ranks))
+        reviews = report["trials"][0]["evidence"]["loop_review"]["iteration_reviews"]
+        self.assertEqual(len({item["iteration_id"] for item in reviews}), 12)
+        self.assertTrue(all(len(item["iteration_id"]) == 64 for item in reviews))
+        prompt = REQUESTS[-1]["messages"][0]["content"]
+        self.assertIn("最后综合核验输出 verdict", prompt)
+        self.assertIn("不表示并发分支之间存在依赖", prompt)
 
     def test_loop_review_rejects_duplicates_unknown_ids_and_other_loop_evidence(self):
         self.model(); self.mode("loop_trace")

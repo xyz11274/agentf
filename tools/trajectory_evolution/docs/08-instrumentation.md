@@ -84,18 +84,21 @@ export EVOLUTION_POINT_CONFIG="/你的部署目录/config/point-client.json"
 ```json
 "instrumentation": {
   "level": "L3",
-  "capabilities": ["model", "actions", "loop"],
-  "binding": {"pointer": "/messages", "mode": "system_message"},
-  "output_metrics": {
-    "input_tokens": "/usage/prompt_tokens",
-    "output_tokens": "/usage/completion_tokens"
-  }
+  "capabilities": ["model", "actions", "loop"]
 }
 ```
 
 只观察设 L0；L1 接模型点；L2 接动作执行点；L3 接循环条件点。capabilities 只填实际接入的能力。
-纯文本请求的 binding 改为 `{"pointer":"","mode":"text"}`。其他请求结构只修改 JSON Pointer，不需要写转换器。
-output_metrics 按提供商的真实响应字段配置，可省略；没有的计数保持未知，不填零。
+常见输入无需填写 binding：纯文本、messages 消息数组、system 字符串/首个文本块、Responses 的
+instructions/input、prompt 字符串，以及已有 systemInstruction.parts[0].text 均可识别。
+采用 input_schema 工具定义的 Messages 请求会选择单独的 system 字段，不往 messages 塞入 system 角色。
+自定义结构可在模型点直接给 binding（JSON Pointer 和 text/system_message 模式）；显式设置优先于自动识别。
+usage 中的 prompt/completion_tokens、input/output_tokens 和 usageMetadata 中的 token 计数自动读取；
+缓存输入和独立思考 token 按对应格式合并。output_metrics 或打点 metrics 可覆盖，缺失、冲突或非法值保持未知。
+工具定义从结束点的 actual_input 提取，即真正发送的请求；不从模型回复、描述文本或工具执行参数猜必填项。
+客户端不需要增加工具注册点，也不需要填写 control_learning.actions。
+只有 user/assistant 消息、无法区分模型接口时，包复用最后一条用户消息中已有的文本字段，
+不擅自新增 system 角色；需要指定指令层级或采用其他格式时，在同一打点用 binding 覆盖。
 授权、评测准入和规则参数见[策略版本](15-policy-snapshots.md)、[运行控制](16-runtime-controls.md)和[任务评测](19-datasets-and-benchmarks.md)。
 
 ## 2. 收到新任务时插入

@@ -1,4 +1,5 @@
 #include "boundary_runtime.h"
+#include "model_contract.h"
 
 #include "trajectory_evolution/evolution.h"
 #include "trajectory_evolution/request_binding.h"
@@ -69,12 +70,12 @@ v1::RuntimeOptions binding_options(const Json& binding) {
   validate_request_binding(options); return options;
 }
 
-std::string activity_query_state(const Json& request, const std::string& semantic, const Json& config) {
+std::string activity_query_state(const Json& request, const std::string& semantic, const Json& config, const Json& binding) {
   if(!request["state"].null()) return bounded_query_text(request["state"], config, false);
-  if(semantic != "model" || request["binding"].str("mode") != "system_message")
+  if(semantic != "model" || binding.str("mode") != "system_message")
     return bounded_query_text(request["input"], config, false);
   // Follow the configured binding, not a provider-specific messages field.
-  const auto path = request["binding"].str("pointer");
+  const auto path = binding.str("pointer");
   const rapidjson::Pointer pointer(path.c_str(), path.size());
   const Json* value = &request["input"];
   for(std::size_t i = 0; value && i < pointer.GetTokenCount(); ++i) {
@@ -202,17 +203,32 @@ class Runtime {
       if(!request.has("stream_id")) item["stream_id"] = c["stream_id"];
       links.push(c["commit_event"]);
     }
+    // Keep tool contracts local to a task/branch. Neither another user's trace
+    // nor a concurrent sibling can grant permissions to this activity.
+    const auto& ref = request["extensions"]["point_reference"];
+    const auto branch = ref.object() ? ref.str("parent", "root")
+        : request.has("control_id") ? request.str("control_id") : request["caused_by"].dump();
+    item["contract_scope"] = hash(item.str("scope_id") + "\n" + item.str("actor_id") + "\n" + branch);
     auto fields = event_context(item); fields["input"] = request["input"]; fields["operation"] = name;
     fields["attributes"] = Json{{"type", "boundary.activity"}, {"activity_kind", kind}, {"semantic", semantic},
       {"policy_scope", item["scope_id"]}, {"apply_policy", apply_policy}, {"extensions", extensions(request)}};
     item["start_event"] = emit("step.start", fields, item.str("step_id"), join(links, id));
     Json prepared = request["input"]; std::string reason;
     if(semantic == "model") {
-      require(!apply_policy || run.num("level", 0) == 0 || request.has("binding"), "model_binding_required");
-      if(request.has("binding")) { binding_options(request["binding"]); item["binding"] = request["binding"]; }
+      const auto binding = request.has("binding") ? request["binding"] : infer_model_binding(prepared);
+      require(!apply_policy || run.num("level", 0) == 0 || !binding.null(), "model_binding_required");
+      if(!binding.null()) { binding_options(binding); item["binding"] = binding; }
     }
-    if(apply_policy && semantic != "custom" && run.num("level", 0) > 0) {
-      auto q = query(item, semantic == "model" ? "llm" : "actions", id, activity_query_state(request, semantic, config));
+    bool contract_failed = false;
+    if(semantic == "action") {
+      const auto& contracts = static_cast<const Json&>(run)["tool_contracts"][item.str("contract_scope")];
+      item["contract_check"] = check_tool_contract(contracts, name, prepared);
+      contract_failed = apply_policy && run.num("level", 0) >= 2 && item["contract_check"].str("status") == "failed";
+      item["contract_check"]["enforced"] = contract_failed;
+      if(contract_failed) { item["decision"] = "reject"; reason = item["contract_check"].str("reason") + ": " + item["contract_check"]["missing"].dump(); }
+    }
+    if(apply_policy && !contract_failed && semantic != "custom" && run.num("level", 0) > 0) {
+      auto q = query(item, semantic == "model" ? "llm" : "actions", id, activity_query_state(request, semantic, config, item["binding"]));
       if(semantic == "action") {
         auto* action = q.add_actions(); action->set_action_id(id); action->set_operation(name);
         *action->mutable_arguments() = proto<google::protobuf::Struct>(prepared.object() ? prepared : Json{{"value", prepared}});
@@ -234,6 +250,7 @@ class Runtime {
       fields = event_context(item); fields["action_id"] = id; fields["operation"] = name; fields["input"] = prepared;
       fields["attributes"] = Json{{"phase", "prepared"}, {"activity_kind", kind}, {"semantic", semantic}, {"decision", item["decision"]}};
       if(item.has("binding")) fields["attributes"]["request_binding"] = item["binding"];
+      if(item.has("contract_check")) fields["attributes"]["contract_check"] = item["contract_check"];
       item["call_event"] = emit("action.start", fields, id, Json::Array{item["start_event"]});
     }
     run["activities"][id] = item;
@@ -261,6 +278,27 @@ class Runtime {
     }
     auto fields = event_context(item); fields["output"] = request["output"]; fields["status"] = status;
     fields["attributes"] = Json{{"extensions", extensions(request)}};
+    if(semantic == "model" && !interrupted && status == "completed" && request.flag("executed", false)) {
+      const auto inferred = infer_model_usage(request["output"]);
+      fields["attributes"]["metrics"] = inferred;
+      // Explicit measured/mapped values take precedence over wire-format defaults.
+      if(request.has("metrics")) for(const auto& metric : request["metrics"].fields())
+        fields["attributes"]["metrics"][metric.first] = metric.second;
+      const auto contracts = model_tool_contracts(request["actual_input"]);
+      fields["attributes"]["tool_contracts"] = contracts;
+      const auto scope = item.str("contract_scope");
+      if(run["tool_contracts"].has(scope) || run["tool_contracts"].null() || run["tool_contracts"].fields().size() < 128) {
+        auto& stored = run["tool_contracts"][scope];
+        if(stored.null()) stored = contracts;
+        else if(stored.object()) {
+          for(auto& previous : stored.fields())
+            if(!contracts.has(previous.first) || previous.second.dump() != contracts[previous.first].dump()) previous.second = nullptr;
+          for(const auto& entry : contracts.fields())
+            if(!stored.has(entry.first)) stored[entry.first] = entry.second;
+          if(stored.fields().size() > 64 || stored.dump().size() > 65536) stored = "capacity_exceeded";
+        }
+      }
+    }
     if(request.has("error")) {
       const auto error = proto<v1::ErrorInfo>(request["error"]);
       require(status != "completed" && identifier(error.code()) && (error.retryability() == "unknown"
@@ -271,7 +309,8 @@ class Runtime {
     if(semantic != "custom") {
       fields["action_id"] = id;
       fields["attributes"]["semantic"] = semantic;
-      if(request.has("metrics") && !interrupted && request.flag("executed", false)) fields["attributes"]["metrics"] = request["metrics"];
+      if(request.has("metrics") && !interrupted && request.flag("executed", false))
+        for(const auto& metric : request["metrics"].fields()) fields["attributes"]["metrics"][metric.first] = metric.second;
       if(request.has("actual_input")) fields["input"] = request["actual_input"];
       if(!interrupted) fields["attributes"]["executed"] = request["executed"];
       links.push(item["call_event"]);

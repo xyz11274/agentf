@@ -8,7 +8,7 @@ namespace trajectory::evolution::integration {
 
 using PrivateMemoryLoader = std::function<agentflow::trajectory::evaluation::EvolutionMemoryStore(const std::string&)>;
 using SharedCheckpoint = std::function<void(const Json&)>;
-using PublicEvidenceCheck = std::function<std::string(const std::string&,
+using PublicEvidenceCheck = std::function<Json(const std::string&,
     const agentflow::trajectory::evaluation::EvolutionMemoryEntry&)>;
 
 // These functions run only on the single background worker. Model text is not

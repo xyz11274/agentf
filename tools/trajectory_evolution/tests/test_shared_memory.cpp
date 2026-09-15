@@ -207,6 +207,40 @@ void gates_and_failures() {
   check(unavailable.state.str("last_status") == "waiting_for_model" && unavailable.state.num("next_due_ms", 0) == 0, "unconfigured model caused empty polling");
   check(unavailable.snapshot("alice").experiences_size() == 1, "model failure broke private path");
 }
+void training_publication() {
+  Fixture f; f.add("alice"); f.add("bob");
+  const std::string a(64, 'a'), b(64, 'b');
+  std::map<std::string, Json> groups{{"alice", Json::Array{a}}, {"bob", Json::Array{a}}};
+  auto drain = [&] {
+    for(int i = 0; i < 30 && !f.state["pending_users"].items().empty(); ++i) {
+      f.state["next_due_ms"] = 0;
+      process_shared_memory(f.state, f.cfg, [&](const auto& user) { return f.memories.at(user); }, f.model,
+          [](const auto&) {}, [&](const auto& user, const auto&) -> Json {
+            if(f.unverified.count(user)) return Json::Object{};
+            return Json{{"fingerprint", "training-" + user + groups[user].dump()},
+                {"online_verified", false}, {"training_groups", groups[user]}};
+          });
+    }
+  };
+  drain();
+  check(shared_memory_view(f.state).experiences_size() == 0, "duplicate training group counted as independent users");
+  groups["bob"] = Json::Array{b}; enqueue_shared_memory(f.state, "bob"); drain();
+  check(shared_memory_view(f.state).experiences_size() == 1, "independent training groups did not publish");
+  const auto id = shared_memory_view(f.state).experiences(0).memory_id();
+  check(f.state["entries"][id].num("supporting_users", 99) == 0
+      && f.state["entries"][id].num("supporting_training_groups", 0) == 2, "training provenance mislabeled as users");
+  f.cfg["sharing"]["allow_training_sources"] = false; reconcile_shared_memory(f.state, f.cfg["sharing"]);
+  check(shared_memory_view(f.state).experiences_size() == 0, "training opt-out did not withdraw public advice");
+  f.cfg["sharing"]["allow_training_sources"] = true; reconcile_shared_memory(f.state, f.cfg["sharing"]);
+  f.state["relations"]["conflict"] = Json{{"state", "accepted"}, {"user_key", "alice"},
+      {"relation", Json{{"relation", "conflict"}, {"shared_memory_id", id}}}};
+  reconcile_shared_memory(f.state, f.cfg["sharing"]);
+  check(shared_memory_view(f.state).experiences_size() == 0, "private conflict did not suspend training-backed public advice");
+  f.state["relations"].fields().erase("conflict");
+  f.unverified.insert("bob"); enqueue_shared_memory(f.state, "bob"); drain();
+  check(shared_memory_view(f.state).experiences_size() == 0, "withdrawn training evidence remained published");
+}
+
 int main(int argc, char** argv) {
   try {
     // Fixture codec only: the production CLI has no private-memory seeding API.
@@ -243,6 +277,7 @@ int main(int argc, char** argv) {
     }
     automatic_and_duplicate(); automatic_and_duplicate(true);
     conflict_and_recovery(); gates_and_failures(); freshness_capacity_and_recovery();
+    training_publication();
     std::cout << "Shared/private memory: promotion, deduplication, disputes, evidence withdrawal, expiry, snapshots, privacy and failure gates passed\n";
   } catch(const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

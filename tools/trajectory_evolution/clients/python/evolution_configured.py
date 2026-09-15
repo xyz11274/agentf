@@ -155,5 +155,19 @@ class ConfiguredPoints:
         client = self._client(user_id)
         return client is None or client.allow_loop(fields, timeout_ms=self._config.get("point_timeout_ms", 20))
 
+    async def acall(self, fields, execute, *, user_id="", result_format="json"):
+        client = self._client(user_id)
+        if client is None:
+            return await execute(fields.get("input"))
+        fields = dict(fields)
+        if "ref" in fields and "key" not in fields["ref"]:
+            fields["ref"] = dict(fields["ref"], key=uuid.uuid4().hex)
+        return await client.acall(fields, execute, result_format=result_format,
+                                  timeout_ms=self._config.get("point_timeout_ms", 20))
+
+    async def aallow_loop(self, fields, *, user_id=""):
+        client = self._client(user_id)
+        return client is None or await client.aallow_loop(fields, timeout_ms=self._config.get("point_timeout_ms", 20))
+
 
 points = ConfiguredPoints()

@@ -1,5 +1,6 @@
 """Version-bound background evaluation and production-path isolation."""
 import json
+from contextlib import closing
 import hashlib
 import http.server
 import os
@@ -184,6 +185,32 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
                     return job_id, job
             time.sleep(.02)
         self.fail("checkpoint job did not finish")
+
+    def test_automatic_level_selection_only_schedules_l2(self):
+        self.add_memory()
+        self.config.update(max_level="L2", evaluation_levels=["L2"])
+        write(self.root / "service.json", self.config)
+        self.start()
+        deadline = time.monotonic() + 15
+        result = {}
+        while time.monotonic() < deadline:
+            result = self.call("agent_evaluation.status")
+            if result["jobs"] and all(x["status"] not in ("pending", "running") for x in result["jobs"].values()):
+                break
+            time.sleep(0.05)
+        self.assertTrue(result["jobs"], result)
+        self.assertEqual({x["level"] for x in result["jobs"].values()}, {"L2"})
+        for job in result["jobs"].values():
+            self.assertNotIn(job["status"], ("pending", "running", "error"), job)
+
+    def test_empty_automatic_levels_leaves_background_evaluation_idle(self):
+        self.add_memory()
+        self.config.update(evaluation_levels=[])
+        write(self.root / "service.json", self.config)
+        self.start()
+        for _ in range(5):
+            self.assertFalse(self.call("agent_evaluation.status")["jobs"])
+            time.sleep(0.1)
 
     def test_retry_reuses_execution_and_only_regrades_failed_judgment(self):
         job_id, folder, requests = self.prepare_checkpoint_retry()
@@ -374,18 +401,152 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         self.assertTrue(all(job["context"] == context for job in result["jobs"].values()),
                         "execution-semantic upgrade must not reuse the old evaluation context")
         self.assertEqual(set(result["publications"]), {"L0", "L1", "L2", "L3"}, result)
-        for job in result["jobs"].values():
+        bundles = {}
+        for job_id, job in result["jobs"].items():
             self.assertEqual(job["status"], "passed", job)
             self.assertEqual(job["gate"]["candidate"]["host_reported_metrics"]["llm_calls"]["mean"], 2)
+            folder = self.root / "production/agent-evaluation" / job_id
+            path = folder / "published-version.json"
+            bundle = json.loads(path.read_text())
+            self.assertEqual(bundle["artifact"], json.loads((folder / "candidate.json").read_text()))
+            self.assertEqual(bundle["version"], job["version"])
+            self.assertEqual(bundle["evaluation"], dict(job_id=job_id, context=job["context"], gate=job["gate"]))
+            self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+            bundles[path] = path.read_bytes()
         run = self.call("run.begin", input="test", level="L3", capabilities=["model", "actions", "loop"])
         self.assertEqual(run["level"], "L3", run)
         self.assertEqual(run["policy_gate"], "published")
         self.assertIn("agent-version-v1:", run["agent_version_id"])
         self.call("run.end", run_id=run["run_id"], status="completed", output="done")
         count = len(result["jobs"])
-        self.tearDown(); self.start()
+        self.tearDown()
+        # Simulate a pre-fix installation: published state exists, exports do not.
+        for path in bundles:
+            path.unlink()
+        self.start()
         restored = self.wait_jobs()
         self.assertEqual(len(restored["jobs"]), count)
+        for job_id, job in result["jobs"].items():
+            self.assertEqual(restored["jobs"][job_id]["attempt"], job["attempt"])
+        for path, content in bundles.items():
+            self.assertEqual(path.read_bytes(), content)
+        mtimes = {path: path.stat().st_mtime_ns for path in bundles}
+        self.tearDown(); self.start(); self.wait_jobs()
+        self.assertEqual({path: path.stat().st_mtime_ns for path in bundles}, mtimes)
+
+    def test_fixed_candidate_bundle_runs_offline_without_memory(self):
+        self.add_memory()
+        self.config["actors"].append("worker/secondary")
+        self.config["auto_approve_experiences"] = True
+        write(self.root / "service.json", self.config)
+        self.start()
+        state = self.wait_jobs()
+        job_id, job = next((key, value) for key, value in state["jobs"].items() if value["level"] == "L3")
+        self.assertTrue(job["published"], job)
+        self.tearDown()
+        self.config.pop("policy_evaluation_file")
+        self.config.update(policy_version_file=str(self.root / "production/agent-evaluation" / job_id / "published-version.json"),
+                           data_dir=str(self.root / "offline"))
+        # A deployed bundle needs no training runtime, prompt files or memory.
+        for key in ("runtime_config", "experience_template_file", "shadow_options", "runtime_options"):
+            self.config.pop(key, None)
+        write(self.root / "service.json", self.config)
+        self.start()
+        run = self.call("run.begin", input="生成视频时缺少图片素材，计算总量20。", level="L3",
+                        capabilities=["model", "actions", "loop"])
+        self.assertEqual(run.get("agent_version_id"), job["version"], run)
+        activity = self.call("activity.begin", run_id=run["run_id"], kind="model", name="offline-model",
+            input={"messages": [{"role": "user", "content": "生成视频时缺少图片素材，计算总量20。"}]},
+            binding={"pointer": "/messages", "mode": "system_message"})
+        self.assertIn("缺少图片素材时先补充素材", json.dumps(activity["input"], ensure_ascii=False))
+        self.call("activity.end", run_id=run["run_id"], activity_id=activity["activity_id"],
+                  status="completed", output="20", actual_input=activity["input"], executed=True)
+        self.call("run.end", run_id=run["run_id"], status="completed", output="20")
+        other = self.call("run.begin", token=TOKEN_B, input="生成视频时缺少图片素材。", level="L3",
+                          capabilities=["model", "actions", "loop"])
+        self.assertNotIn("agent_version_id", other)
+        self.call("run.end", token=TOKEN_B, run_id=other["run_id"], status="completed", output="done")
+        self.assertFalse((self.root / "offline/agent-evaluation").exists())
+        self.assertFalse((self.root / "offline/by-user/user-a/memory").exists())
+
+    def test_offline_native_bundle_ignores_unused_files_and_checks_authority(self):
+        self.add_memory()
+        self.config["actors"].append("worker/secondary")
+        self.config["auto_approve_experiences"] = True
+        write(self.root / "service.json", self.config)
+        self.start()
+        state = self.wait_jobs()
+        self.tearDown()
+        job_id, job = next((key, value) for key, value in state["jobs"].items() if value["level"] == "L3")
+        self.config.pop("policy_evaluation_file")
+        self.config.update(policy_version_file=str(self.root / "production/agent-evaluation" / job_id / "published-version.json"),
+                           data_dir=str(self.root / "offline-native"), runtime_config="deleted-runtime.json",
+                           experience_template_file="deleted-template.txt", shadow_options={},
+                           runtime_options=dict(request_context_pointer="/messages", request_context_mode="system_message"))
+        old_memory = self.root / "offline-native/by-user/user-a/memory/evolution-memory.pb"
+        old_memory.parent.mkdir(parents=True)
+        old_memory.write_bytes(b"unused malformed historical memory")
+        write(self.root / "service.json", self.config)
+        sys.path.insert(0, str(SOURCE / "clients/python"))
+        from evolution_local import LocalEvolution
+        os.environ.update(EVAL_USER_A_TOKEN=TOKEN, EVAL_USER_B_TOKEN=TOKEN_B)
+        with closing(LocalEvolution(BUILD / "libtrajectory_evolution_local.so", self.root / "service.json", TOKEN)) as client:
+            run = client.invoke("run.begin", dict(conversation_id="native-offline", input="生成视频时缺少图片素材。",
+                                level="L3", capabilities=["model", "actions", "loop"]))
+            self.assertEqual(run.get("agent_version_id"), job["version"], run)
+            self.assertEqual(run.get("policy_gate"), "offline_version", run)
+            client.invoke("run.end", dict(run_id=run["run_id"], status="completed", output="done"))
+            missing = client.invoke("run.begin", dict(conversation_id="missing-boundary", input="test",
+                                    level="L3", capabilities=["loop"]))
+            self.assertTrue(missing.get("degraded"), missing)
+            self.assertEqual(missing.get("reason"), "offline_policy_capability_missing", missing)
+            client.drain()
+        self.assertEqual(old_memory.read_bytes(), b"unused malformed historical memory")
+        self.config["runtime_options"] = dict(loop_rules=[dict(rule_id="new-strict-limit", actor_id="assistant",
+            max_iterations=1, no_progress_decision="stop", reason="current deployment budget")])
+        write(self.root / "service.json", self.config)
+        with closing(LocalEvolution(BUILD / "libtrajectory_evolution_local.so", self.root / "service.json", TOKEN)) as client:
+            denied = client.invoke("run.begin", dict(conversation_id="strict-deployment", input="test",
+                                   level="L3", capabilities=["model", "actions", "loop"]))
+            self.assertTrue(denied.get("degraded"), denied)
+            self.assertEqual(denied.get("reason"), "offline_policy_limits_changed", denied)
+
+    def test_restart_rejects_changed_export(self):
+        self.start()
+        state = self.wait_jobs()
+        self.tearDown()
+        job_id = next(key for key, value in state["jobs"].items() if value["level"] == "L3")
+        path = self.root / "production/agent-evaluation" / job_id / "published-version.json"
+        bundle = json.loads(path.read_text())
+        bundle["evaluation"]["gate"]["passed"] = False
+        write(path, bundle)
+        before = path.read_bytes()
+        result = subprocess.run([str(CLI), "serve", "--config", str(self.root / "service.json")],
+                                env=self.env, capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_backfill_old_context_does_not_approve_current_context(self):
+        self.start()
+        state = self.wait_jobs()
+        self.tearDown()
+        paths = {key: self.root / "production/agent-evaluation" / key / "published-version.json"
+                 for key in state["jobs"]}
+        original = {key: path.read_bytes() for key, path in paths.items()}
+        for path in paths.values():
+            path.unlink()
+        evaluation = json.loads((self.root / "agent-evaluation.json").read_text())
+        evaluation["gate"]["max_pass_rate_drop"] = 0.01
+        write(self.root / "agent-evaluation.json", evaluation)
+        self.config["evaluation_levels"] = []
+        write(self.root / "service.json", self.config)
+        self.start()
+        current = self.call("agent_evaluation.status")
+        self.assertEqual(current["publications"], {})
+        self.assertEqual(set(current["jobs"]), set(state["jobs"]))
+        for key, path in paths.items():
+            self.assertEqual(path.read_bytes(), original[key])
+            self.assertEqual(current["jobs"][key]["attempt"], state["jobs"][key]["attempt"])
 
     def test_native_management_uses_existing_background_service(self):
         sys.path.insert(0, str(SOURCE / "clients/python"))
@@ -413,6 +574,9 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         self.start()
         result = self.wait_jobs()
         self.assertEqual(set(result["publications"]), {"L0"}, result)
+        for job_id, job in result["jobs"].items():
+            exported = self.root / "production/agent-evaluation" / job_id / "published-version.json"
+            self.assertEqual(exported.exists(), job["level"] == "L0")
         run = self.call("run.begin", input="test", level="L3", capabilities=["model", "actions", "loop"])
         self.assertEqual(run["level"], "L0", run)
         denied = self.call("agent_evaluation.retry", token=TOKEN_B, job_id=next(iter(result["jobs"])))

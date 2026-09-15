@@ -205,8 +205,8 @@ L4 是后台优化能力。`max_level`、`instrumentation.level` 和候选的 `l
 4. **抽取训练小批次与组件。** 默认按 epoch 重新洗牌，末批可短于 minibatch_size，不重复填充题目。父子使用相同任务与 repetitions；每个父节点轮换可改组件，后代继承轮换游标。可以配置同父多个提案、独立采样或 P×N 采样。
 5. **生成反思改写。** 模型看到当前实际经验、生成控制规则、选中组件、训练输入、输出、判分与轨迹。失败案例优先。验证与留出任务正文不进入反思。可选满分跳过检查实际质量和 fitness，而非仅检查业务成功。
 6. **建立子节点。** 反思节点记录一个父节点；重组节点记录两个父节点、共同祖先、组件来源和冲突。所有候选都经过隐私、来源、范围、长度和控制边界检查，再编译完整策略。相同行为版本记为 duplicate，跳过额外试跑。
-7. **小批次筛选。** 反思候选默认要求严格改善，先保质量再看 fitness；可配置不退化接纳。同批提案可全部保留改善者，或按相对各自父版本的平均质量增益、fitness 增益选最佳／Top-K。不同提案的批大小可能不同，使用均值增益比较。
-8. **验证并更新前沿。** 被选中的反思提案执行完整验证集。重组候选先在覆盖双方优势与平分任务的验证子集上比较，质量和 fitness 均不低于双方才继续完整验证。同版本、同 split、同上下文的已完成逐题记录复用，只补跑缺题。
+7. **小批次筛选。** 反思候选默认要求严格改善，先保质量再看 fitness；可配置不退化接纳，或 acceptance=pareto 保留局部优势。同批提案可全部保留通过筛选者，或按相对各自父版本的平均质量增益、fitness 增益选最佳／Top-K。不同提案的批大小可能不同，使用均值增益比较。
+8. **验证并更新前沿。** 被选中的反思提案执行完整验证集。重组候选先在覆盖双方优势与平分任务的验证子集上比较，按下述严格或 Pareto 筛选进入完整验证。同版本、同 split、同上下文的已完成逐题记录复用，只补跑缺题。
 9. **停止搜索。** 达到轮数、模型调用数、试验预算、耐心或总时间边界。试验预算预留最终留出集的基线＋候选成本；预算不足不会再启动一个无法负担的试验。
 10. **最终验收。** 先固定 winner，再在留出集比较生产基线与 winner。使用原来的质量、覆盖率、配对样本、时延、token、无效循环准入规则。留出失败就保留原生产版本，不把失败详情反馈给反思模型后继续针对同一留出集搜索。
 11. **发布。** 只有该用户/等级的任务仍是最新候选、生产父版本未改变且准入通过，才登记新版本。新 run 从缓存取用；已开始的 run 保持原版本。
@@ -236,13 +236,13 @@ A 即使已有其他子节点，也可和叶节点 B 重组。筛选依据是前
 
 重组规则：
 
-1. 两个候选必须来自同一冻结实验，具有共同祖先，彼此不是祖先与后代；祖先的质量和 fitness 不高于两者。
+1. 两个候选必须来自同一冻结实验的有效前沿，具有共同祖先，彼此不是祖先与后代；每个分支至少在一个验证任务上优于祖先。分支可以平均成绩较低，但在不同任务上各有优势。
 2. 优先使用较深的共同祖先，固定 seed 使分支抽样可复现。同一双亲／祖先组合只尝试一次。
 3. 某组件只有一方改变时采用该方；双方相同时保留共同值；双方改变且内容不同时，优先采用验证质量／fitness 更好一方，平分稳定选择第一方。
 4. 至少两个差异组件实际来自不同分支才形成有效重组。仅一条经验且没有其他可变组件时，重组通常不会产生新组合，记录 skipped_merge。
 5. 经验按 memory_id 分组件；生成 action_rules 与 loop_rules 各作为一组，保持组内规则顺序。不修改手工规则、授权、来源 revision、scope、触发条件或底座代码。
 6. 重组本身不调用反思模型。重新编译后再校验组合授权和总规则数，并重新评测；任何检查失败均保留原父版本。
-7. 子集成绩同时满足 quality(C) ≥ quality(A)、quality(B) 以及 fitness(C) ≥ fitness(A)、fitness(B)，才进入完整验证。最终发布仍独立经过 holdout 准入。
+7. 默认要求子集 quality、fitness 均不低于任一双亲，且原始无效 loop 均值不升，才进入完整验证。acceptance=pareto 时，相对每一位父节点“不退化”或“至少一题有局部优势”即可继续验证；分支相对共同祖先的资格也按同一局部优势规则判断。最终发布仍独立经过 holdout 准入。
 
 为同一个父版本尝试多个方向，并为重组留出节点预算，可在 gepa.json 中设置：
 
@@ -266,10 +266,21 @@ A 即使已有其他子节点，也可和叶节点 B 重组。筛选依据是前
 | 改写类型    | 生效方式                                                                                   | 保持不变的边界                                         |
 | ----------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
 | 经验文本    | `RuntimeOptions.experience_overrides` 按来源 `memory_id/content_revision` 覆盖注入正文 | 来源记忆、触发条件、scope、检索和私有/公共冲突筛选不变 |
-| L2 生成规则 | 已开启`control_learning` 时，复用允许操作与参数白名单生成必需参数规则                    | 不新增宿主操作，不扩大作用域，不修改手工规则           |
+| L2 固定契约 | 自动使用当前分支实际模型请求的工具定义检查必填参数；不是可变搜索维度 | 不把可选字段升级为必填，不从自然语言推断权限 |
+| L2 显式扩展规则 | 兼容已有 control_learning.actions 授权，生成附来源的参数规则 | 属于可选高级配置；普通接入不需要填写工具清单 |
 | L3 生成规则 | 根据已批准经验收紧已有基础循环规则                                                         | 不放松基础上限，遵守配置的最小轮数，不修改宿主业务代码 |
 
-默认每次反思只允许修改轮换选中的组件。component_selector=all 时，可使用 experiences 数组修改多条获选经验，并可同时提交获选控制类别。未提交的控制类别保持原值；提交的类别替换该类完整生成规则。组件越权、格式错误或泄露测试值均记录固定错误码。
+随包配置使用 component_selector=model_choice，将授权组件交给模型按训练证据选择，不强迫改写与当前题目无关的经验。round_robin 仍可显式启用；all 与 model_choice 都允许模型从获选组件中选择小改动。没有相关依据可返回空 experiences 数组，按重复版本处理，不额外执行 Agent。未提交的控制类别保持原值；提交的类别替换该类完整生成规则。组件越权、格式错误或泄露测试值均记录固定错误码。
+
+反思输入始终保留经验的 scope 与 condition；正文已改写时额外提供 original_content，便于保留原约束与例外。提示词要求新正文适用于原条件，不把一种工具或错误的经验替换成另一种情境。该语义约束仍需真实评测验证，不是静态语义证明。controls 不再重复携带同一份来源记忆。
+
+默认无需 control_learning.actions：模型/动作点自动提供固定工具契约，GEPA 不再学习接口已规定的 required。
+开启 control_learning 并保留基础 loop_rules 后，即使没有 actions 白名单，L3 也可以独立搜索循环阈值。
+tree.json 及作业 search 摘要的 available_components 只列可变维度；fixed_controls 中的
+observed_tool_required_arguments 表示启用了观测式固定校验，具体哪些工具被识别以真实轨迹为准。
+L2 默认仍可优化经验文本，其固定参数检查不计为一次 GEPA 动作规则变异。
+已有显式 actions 继续兼容；显式提供空白名单或关闭相应学习时才提示 action_rule_learning_unavailable。
+生成规则与固定校验均不负责改变宿主调度顺序；依赖历史的重复派发改进通过相关经验或循环规则表达。
 
 `snapshot.experiences` 保存原始来源，`experience_overrides` 保存当前版本的改写。这样能持续解释“这条新指令来自哪条记忆”，而不会把一次试验直接写回私有/公共记忆库。GEPA 的候选与最终组合试验也不自动生成单条记忆的因果正反证。
 在线使用时仍核验当前记忆批准状态、内容 revision 和跨库关系；来源失效或权限改变时，旧策略停止生效。
@@ -286,7 +297,22 @@ fitness = task_pass
 ```
 
 默认权重为无效 loop `0.2`、token `0.05`、时延 `0`，三个成本权重之和必须小于 `0.5`。
-重复试验先在每道题内取平均，整体比较先看任务通过率，再比较 fitness。模型调用数等其他指标继续保留在逐次报告中。
+重复试验先在每道题内取平均。启用 loop 目标后，父子筛选与最终验证集选优先检查同一任务集合、相同计量口径的原始无效 loop 均值不得上升，再比较任务通过率与 fitness。不能用答对率提高或有界成本饱和来掩盖更多无效循环。例如 [0,10] 的均值为 5，不能因归一化后较好而替代 [1,1] 的均值 1。模型调用数等其他指标继续保留在逐次报告中。
+此检查针对搜索时的训练/验证样本，不保证未见任务上的收益。冻结版本仍必须在 holdout 与基线独立比较；原来的通过率、loop 降幅等发布门槛保持不变，失败时不发布、不读取 holdout 轨迹继续反思。
+
+`acceptance=pareto` 只放宽中间反思与重组的筛选：任务集合与计量口径必须相同，至少一题质量改善，
+或某题质量不降且 fitness/循环/token/时延效率之一改善，才算局部优势；未知指标不算优势。
+同题失败换来的低耗时不计为该题效率收益。候选仍需完整验证，按配置的前沿规则取得后续选父资格，
+并不自动发布。整体 winner 的选优与最终发布门槛不随中间筛选放宽。
+
+若最终要求“成功率不降、无效 loop 至少下降 15%、平均 Agent 耗时不增加”，在 agent-evaluation 的 gate 中
+同时设置 `max_pass_rate_drop:0`、`min_invalid_loop_reduction:0.15`、`max_latency_ratio:1`；
+搜索 objective 同时给 latency_weight 非零权重。减少循环次数并不必然减少墙钟时间，长请求、重试、
+更多输入 token 和并发关键路径都可能抵消收益。trial.duration_ms 是实际宿主执行耗时，不包含之后的模型判分。
+
+L3 搜索需要种子本身为 L3、开启 control_learning，并有可收紧的基础 loop_rules；
+检查 tree.available_components 是否包含 loop_rules。最终核验还应检查生成规则的 source_experience、
+匹配条件及真实执行中的 loop.decision/应用回执；只有等级标签或经验正文变化，不能证明循环控制产生了实际效果。
 `invalid_loops` 默认是规则观察到的 `invalid_loop_lower_bound`，并不等于全部业务浪费。
 在任务评测配置中启用 `judge.loop_review_prompt` 后，改用同一次评分请求给出的逐轮模型估计；
 每条结论绑定真实轮次和事件。详见[无效 loop 评测](19-datasets-and-benchmarks.md#评测无效-loop)。
@@ -318,12 +344,12 @@ fitness = task_pass
 | `epsilon` / `top_k`                         | 0.1 / 5              | epsilon_greedy 的随机探索概率 / top_k_pareto 的候选上限                                                                                        |
 | `frontier_type`                               | instance             | instance 逐题 fitness；objective 整体质量与启用的效率维度；hybrid 两者并集；cartesian 逐题 × 各目标                                           |
 | `prune_dominated`                             | true                 | 删除前沿覆盖被不差候选包含的冗余成员，成绩及覆盖相同时保留稳定代表                                                                             |
-| `component_selector`                          | round_robin          | round_robin 轮换一个组件；all 允许改写所有组件；model_choice 是保留的模型自行选择模式                                                          |
+| `component_selector`                          | model_choice（随包配置） | round_robin 轮换一个组件；all/model_choice 提供所有授权组件，由模型按证据选择；旧配置省略该字段时仍按 round_robin 处理 |
 | `minibatch_strategy`                          | epoch_shuffled       | 每个 epoch 重新洗牌；fixed 保留旧固定排列轮转方式                                                                                              |
 | `sampling_strategy`                           | same_parent          | single 单提案；same_parent 同父同批 N 个；independent 每提案独立选父和训练批；pxn 选 P 组父版本、每组 N 个                                     |
 | `proposals_per_round` / `parents_per_round` | 1 / 2                | 上述 N / P；实际总提案上限 8，并受剩余节点、模型预算限制；独立选父允许重复抽到同一版本                                                         |
 | `proposal_selection` / `proposal_top_k`     | all_improvements / 2 | all_improvements 保留所有改善者；best 只保留增益最大者；top_k 保留增益前 K 个                                                                  |
-| `acceptance`                                  | strict_improvement   | strict_improvement 严格改善；improvement_or_equal 要求平均质量与 fitness 均不退化                                                              |
+| `acceptance`                                  | strict_improvement   | strict_improvement 严格改善；improvement_or_equal 不退化；pareto 允许局部优势进入完整验证，不放宽最终发布门槛 |
 | `use_merge` / `max_merge_invocations`       | true / 5             | 是否重组 / 双亲组合最多尝试数；无效组合、重复、失败也计数                                                                                      |
 | `merge_minibatch_size`                        | 4                    | 从一方领先、另一方领先、平分三组轮流取题；不重复补题，最多取完整验证集                                                                         |
 | `cache_evaluations`                           | true                 | 复用同版本、同 split、同上下文的完成试验；false 允许重新测量随机执行，最终已完成 holdout 在恢复时仍复用                                        |
@@ -390,7 +416,9 @@ data/agent-evaluation/<job-id>/
 | `nodes[].status / reason / error / error_stage`         | 候选阶段、反思改动原因、固定错误码与失败阶段                                                                                   |
 | `nodes[].selections / previous_best`                    | 被选作父节点次数 / 重组创建时的整体最优；多提案批次将 previous_best 保存在 batch                                               |
 | `nodes[].screening`                                     | 同一训练小批次上的父子逐题成绩                                                                                                 |
-| `nodes[].validation`                                    | 验证集逐题的 fitness、quality、repetitions，以及启用的 loop_efficiency/token_efficiency/latency_efficiency                     |
+| `nodes[].validation`                                    | 验证集逐题的 fitness、quality、repetitions，以及启用的 invalid_loops 原始均值、loop_method 口径和 loop_efficiency/token_efficiency/latency_efficiency |
+| `available_components / search_warnings`                | 可变组件名称 / 显式动作学习配置问题；省略 actions 使用自动固定契约，不提示缺少手填清单 |
+| `fixed_controls` | 固定执行约束；observed_tool_required_arguments 表示从真实模型点提供的定义进行顶层必填参数检查，具体覆盖见轨迹 |
 | `nodes[].reflection_stages`                             | ComBEE 已完成的 map/reduce 阶段、组件、文件前缀与反馈数量；普通反思没有此字段                                                  |
 | `nodes[].duplicate_of`                                  | 相同行为版本首次出现的节点；重复节点不另行评测                                                                                 |
 | `frontier / frontier_mapping / winner / active`         | 当前前沿并集 / 每个任务或目标对应的最优候选 / 验证阶段选中节点 / 尚在处理节点                                                  |
@@ -437,7 +465,13 @@ evo.manage("agent_evaluation.retry", {"job_id": job_id})
 
 ## 离线加载预先进化版本
 
-将通过验收且实际发布的 `published-version.json` 作为可信部署文件，连同原部署配置保存。它包含完整策略和来源经验，不需要原来的 memory 数据库。
+将通过验收且实际发布的 `published-version.json` 作为可信部署文件。它包含完整策略、来源经验快照、触发条件、检索参数、经验模板和控制规则；导入不需要原来的 memory 数据库、训练配置、提示词文件或实验目录。
+
+固定候选评测通过并发布后，自动写入 `agent-evaluation/<job_id>/published-version.json`；GEPA 作业继续使用
+`agent-evaluation/<job_id>/search/published-version.json`。未通过验收或未获得发布资格的候选不导出。
+重启时，已登记发布但缺少文件的版本会按原验收记录校验并补导出，不重新执行 Agent 或调用评测模型；
+这不会把旧评测上下文的通过记录当作新上下文的准入。已有且一致的文件不会重复写入，
+文件内容与发布记录不一致时明确报错。
 
 在组件服务配置中删除 `policy_evaluation_file`，加入：
 
@@ -445,12 +479,16 @@ evo.manage("agent_evaluation.retry", {"job_id": job_id})
 "policy_version_file": "versions/published-version.json"
 ```
 
-保持相同 application/user、scope、运行能力与规则边界。组件启动时验证版本哈希和验收标记；新 run 会绑定自己的运行身份，但 `agent_version_id` 仍指向冻结行为版本。使用方式与原有打点相同。
+保留当前应用正常运行所需的身份、认证和打点配置；其中的 application/user 需要获得该版本授权，scope 和运行能力需要覆盖策略要求。宿主的模型密钥、工具实现仍由宿主管理，不包含在策略包中。离线模式不读取 `runtime_config`、`experience_template_file` 或历史经验库，也不根据当前记忆重新编译策略。
 
-该模式自动关闭轨迹学习、共享管理和后台策略评测，保留正常轨迹采集；没有反思模型请求，也不会把业务 run 标成 evaluation trial。不同用户不会获得这个私有版本，权限或边界不兼容时回到 L0。
+策略行为使用包内冻结值，不要求当前部署的检索默认值、模板或请求字段绑定与训练时一致。当前部署显式规定的上下文上限、基础动作规则和循环上限仍作为限制检查；导入不会放松这些限制。组件验证版本哈希和验收标记，新 run 绑定当前 conversation/run 身份，`agent_version_id` 仍指向同一冻结行为版本。HTTP 与原生打点使用相同校验。
+
+该模式自动关闭轨迹学习、共享管理和后台策略评测，保留正常轨迹采集；没有反思模型请求，也不会把业务 run 标成 evaluation trial。不同用户不会获得这个私有版本；用户或等级不匹配时返回 L0 和 `offline_policy_incompatible`。缺少打点能力、作用域或违反当前限制时返回明确错误，原生客户端保持既有 fail-open 降级行为；不能把降级执行计为该策略的有效评测。
 这里的离线指进化组件固定版本运行；主 Agent 的模型/工具是否联网由宿主决定。文件是受信部署输入，SHA-256 用于完整性核验，不是签名服务；部署方负责保存、分发和撤销文件。
 
 离线版本冻结了当时的私有/公共经验关系；它不持续接收在线记忆撤回。需要撤销时停用或替换版本文件并重启组件。在线部署继续使用当前记忆状态核验。
+
+验证导出后独立生效时，使用新的任务集和空状态目录。L0 不加载策略，L1–L3 对照组只在评测 `variants` 中增加 `policy_version_file`，其余模型、工具、预算和评分配置保持一致。评测会走实际离线加载校验，而不是直接绕过校验替换内存中的策略。配置示例见第 19 章。
 
 ## 与上游 GEPA 的逐项对照
 
@@ -476,7 +514,7 @@ evo.manage("agent_evaluation.retry", {"job_id": job_id})
 保留的实现差异与交付边界：
 
 - 上游可搜索任意字符串组件；本包只改写已批准经验与授权控制规则，手工策略和宿主程序保持原样。通用打点无需改变。
-- 上游常以单一总分比较。本包先保任务质量，再优化无效循环、token、时延；多提案按平均增益排序，避免末批较短造成总分偏置。重组子集同时要求质量和 fitness 不低于双亲。组件冲突平分时采用稳定选择。
+- 上游常以单一总分比较。本包先保任务质量，再优化无效循环、token、时延；多提案按平均增益排序，避免末批较短造成总分偏置。重组默认要求不差于双亲，也可用 Pareto 模式保留局部优势继续验证。组件冲突平分时采用稳定选择。
 - GEPA 的自定义 Python callable、DSPy/LangChain 等框架适配器、编码代理提案器不放入交付依赖；对外继续使用统一协议与配置。引入任意宿主代码改写需要另行定义执行授权和隔离契约。
 - 模型提案在后台顺序生成，任务试验按配置并行；不额外引入分布式调度系统。模型调用数、试验数和时间是明确预算，供应商金额换算、WandB/MLflow 等可视化服务不作为搜索核心依赖。
 - 发布另有用户、记忆 revision、控制权限和生产父版本检查；搜索分数不会直接覆盖记忆正文、越过授权，或将组合收益归因到每条记忆。

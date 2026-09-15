@@ -6524,3 +6524,216 @@ OpenAPI 一致性及 git diff --check 通过。大规模冷启动实验仍暂停
 - 验证：新增增量入库、全库整理、并发重算与后续批次恢复回归，旧实现已复现限流后仍继续调用；修复后通过。
   TrajectoryEvolutionTests、UnifiedLearningTests、LearningScheduleTests、SharedMemoryTests、DocumentationTests
   五组全部通过（15.34 秒）；没有改变真实旧批次的不完整标记或把回归测试当作真实 API 复测结果。
+
+### CHG-20260914-257：GEPA 原始 loop 防回归、经验边界与互补分支合并
+
+- 问题：L1 留出集通过率从 13/15 提高到 15/15，但无效 loop 均值从 1.1333 升至 1.4，
+  未通过发布门槛。原搜索优先通过率，并用饱和归一化成本比较效率，可能掩盖原始次数回归。
+  同时，轮换选中的经验可能与训练反馈无关，多代正文发生与原触发条件不一致的漂移。
+- 修改：逐题成绩保留 invalid_loops 原始均值与 loop_method；启用 loop 目标时，父子筛选、
+  验证集最终选优及重组 no_worse 检查同样本、同口径的原始 loop 均值不得增加。
+  不修改任务评分、数据集、holdout 发布门槛，也不将未知 loop 当成零。
+  随包配置使用 model_choice；保留显式 round_robin 兼容。反思可返回空改动；正文已改写时
+  提供 original_content，提示词要求保持原条件、约束与例外，不能把可恢复错误扩大为整项终止。
+  controls 删除重复的来源记忆，未增加模型调用；语义泛化仍由真实评测检验。
+- L2：原真实实验未开启 control_learning，实际只能优化经验。搜索树与摘要增加
+  available_components/search_warnings，未开启或操作白名单缺失时明确提示，既不崩溃也不自动扩权。
+  生成规则仍只核验缺失/空参数，不能解释为依赖历史状态的重复派发控制。
+- 合并：原先要求两条分支整体均不差于共同祖先，提前排除了逐任务前沿上的局部专长。
+  现允许每条分支至少有一项验证任务改善后尝试融合；仍要求非祖先关系、共同祖先、
+  不同分支实际贡献互补组件，且融合候选真实子集成绩不差于双亲，最终另过 holdout。
+  更新配置指纹，防止旧成绩与新规则在同一恢复上下文混用。
+- 公共库排查：管理周期已完成，47 条受管来源均为训练轨迹，7 个合格经验来源被记为
+  private_only/independent_evidence_missing，公共提炼 attempts=0。现有 public_evidence 排除
+  training_source；未删除该保护。纯离线训练晋升公共经验需要另外定义准入规则，本次不声称已验证公共生成。
+- 位置：tools/trajectory_evolution/src/gepa_search.cpp、gepa_strategy.cpp/.h、config/gepa.json、
+  config/prompts/gepa-reflection.txt、相关测试、docs/24-evolution-and-gepa.md、14-shared-memory.md；
+  本地分类问题清单同步补充。没有修改 AgentFlow C++ 底座、v1 业务代码或凭据。
+  图分析：scores/improves/packet/no_worse 为 LOW；select_merge 为 UNKNOWN，已核对直接调用。
+  components 为 HIGH，保持其实现不变；搜索由后台评测 worker 调用，不进入主 Agent 执行链路。
+- 验证：GEPA 主回归 44 项、配置/策略两项通过（347.59 秒）；补充 L2 缺失操作白名单等
+  3 项复测通过（23.606 秒）。覆盖原始 loop 回归、度量缺失/口径差异、低均值互补分支、
+  双亲共同生成并发布子节点、L2 实际工具规则、L3 循环规则、原始约束传递和已有恢复流程。
+  用户要求暂停真实实验，因此保留旧报告，未继续真实 API 试验；不把本地回归当作留出收益达标。
+  AgentEvaluationTests、SharedMemoryTests、UnifiedLearningTests、PolicyRuntimeTests、DocumentationTests
+  五组亦全部通过（52.92 秒），git diff --check 通过。
+
+### CHG-20260914-258：从通用打点自动提取工具契约，减少手工接入
+
+- 问题：要求用户重复配置工具名、参数名单、模型注入位置和 token 映射，且 L3 循环搜索
+  被动作名单绑定；Python 配置入口缺少异步快捷方法。普通接入因此需要额外维护框架相关信息。
+- 修改：在包内共享边界读取实际模型请求的结构化工具声明，自动检查后续动作的顶层必填参数。
+  OpenAI 兼容、Anthropic、Responses、Gemini 及旧 functions 格式共用同一实现；
+  不从回复文本、用户历史或源码推断工具权限，不把可选、空值或 null 自动判为缺失。
+  L0/L1 仅观测；L2 及以上、允许应用策略时才拒绝明确缺少必填参数的动作。
+  缺少定义、定义冲突、超过容量时保持 unknown 并保留原调用。只检查存在性，不代替完整 JSON Schema 校验。
+- 并发与轨迹：定义限定在当前 run/actor/scope/分支，不跨用户和 run 复用；冲突不采用最后写入者。
+  缓存最多 128 个分支，每分支 64 个工具、64 KiB 紧凑定义；轨迹记录 tool_contracts、
+  contract_check 及 enforced，不把固定检查伪装成某条进化策略的应用回执。
+- 模型点：常见请求自动识别注入位置；响应 usage 自动提取输入、输出、缓存等计数。
+  显式 binding、metrics/output_metrics 保持优先；未知格式仍可在同一打点声明位置或计数。
+  非法或冲突的计数保持未知，不补零；未新增模型调用或第三方依赖。
+  对无法区分接口的纯 user/assistant 请求，复用已有用户文本，不新增可能不兼容的 system 角色。
+- GEPA：默认不再要求 control_learning.actions。固定接口契约不是可学习参数；
+  available_components 只列实际可变维度，fixed_controls 单列固定校验。
+  L2 默认可优化经验，已有显式动作扩展规则继续兼容；L3 有循环授权和基础上限即可独立搜索。
+  未实现任意调度顺序改写。配置指纹隔离旧搜索缓存；本条取代 CHG-257 中缺少动作名单即警告的默认行为。
+- 接入：ConfiguredPoints 补齐 acall/aallow_loop，沿用包内身份、超时和隐私处理；
+  文档区分推荐 entry 接入与旧 stdio 协议，不再要求普通用户另写评测启动器。
+  配置章列出仍需提供的任务关系、业务结果、原消息入口、评分标准和授权/预算，区分必要事实与可选映射。
+- 位置：tools/trajectory_evolution 内的 model_contract.cpp/.h、boundary_runtime.cpp、
+  gepa_search.cpp、Python 配置客户端、相关测试与使用文档。没有修改 v1 业务代码或 AgentFlow C++ 底座。
+  图分析：components 为 HIGH，已告知并核对 compose/mutate/merge/packet 等调用；
+  边界和新增测试的 UNKNOWN 已用直接调用与入口核对补充，未将其视为无影响。
+- 真实 API 实验保持停止；数据集、memory 和已有实验报告保留，本次只运行本地回归。
+  测试套件增加后 GEPA 的 CTest 上限调整为 600 秒，不修改生产模型调用超时。
+- 验证：完整构建通过；30 组非 GEPA 搜索回归全部通过（183.91 秒），涵盖评测、训练冷启动、
+  私有/公共记忆、策略、跨语言/跨进程及日志分析。GEPA 46 项全部通过（373.609 秒），
+  包括无动作名单的 L3、显式 L2 兼容、双亲合并、离线版本和中断恢复；旧 360 秒上限的一次超时
+  已用完整成功结果复核。最后的请求格式兼容补丁重新构建并通过 11 组定向回归（22.49 秒），
+  自动契约场景在原生/HTTP 下各有 6 条闭合轨迹，均通过 doctor，且未保存测试接入令牌。
+  git diff --check 通过。以上为本地确定性测试，不作为真实模型效果或留出集收益结论。
+
+### CHG-20260914-259：冷启动训练来源的公共经验准入与定级评测
+
+- 问题：public_evidence 一律排除 training_source，纯离线冷启动虽然已有合格私有经验，
+  公共提炼仍不会执行。不能通过重复创建测试用户来满足真实用户支持门槛。
+- 修改：复用原有公共管理流程，训练证据必须匹配当前冻结数据集的已审核 train 任务与版本，
+  属于已导入的无策略 L0 baseline_training，且采集、分析、来源指纹及 trial 绑定核验通过。
+  排除经验注入回声；验证/留出与带策略候选轨迹不进入此通道。还需配置真实 Agent 策略评测入口。
+- 支持分别记录：online_verified / supporting_users 为真实在线来源；training_groups /
+  supporting_training_groups 按数据集版本与任务组去重，跨测试身份重跑同组只计一次。
+  默认 allow_training_sources=true、min_training_groups=2；任一类支持单独达标才能晋升，
+  不把两类票混合凑门槛。模型提炼、独立请求复核、跨库去重/冲突、撤回、过期和容量淘汰保持原路径。
+  公共 published 只表示可编译候选经验，不代替候选策略的真实 Agent 评测与发布门槛。
+- 定级：服务配置可选 evaluation_levels；["L2"] 只自动提交 L2 作业，仍有配对 L0 基线。
+  省略保留原来的各级评测，[] 不自动提交策略评测或补充训练；不取消已排队作业，不限制显式评测。
+  普通实验不依赖手工工具白名单、必填参数名单或注入/用量映射。
+- 位置：tools/trajectory_evolution/src/shared_memory.cpp/.h、integration_service.cpp，
+  对应测试及文档第 3、14 章。没有修改 AgentFlow C++ 底座或 v1 业务代码。
+  图分析：update_publication 为 HIGH，已在修改前告知；其余已解析调用为 LOW，
+  构造入口等 UNKNOWN 已核对直接调用，不按无影响处理。
+- 验证：构建成功；AgentEvaluation、TrainingBootstrap、UnifiedLearning、AutomaticContract、
+  SharedMemory 五组通过（71.73 秒）；新增指定 L2/空等级两项回归通过（2.351 秒）。
+  文档更新后五组定向回归再通过（16.98 秒）。覆盖同组跨用户不增票、独立组晋升、关闭训练支持、
+  冲突暂停与证据撤回。首轮真实 API 验证完成 28 次公共提炼/复核/关系调用，产生 2 条 published、
+  2 条 pending_support；真实用户支持均为 0。14 项跨库关系均完成，无管理错误。
+- 真实 v1 正式 L2 实验已启动，使用原冻结数据集及现有私人/公共经验；收益以其最终报告为准。
+  实际执行已观察到私人/公共经验的 host_boundary_verified 回执，以及自动工具契约校验；
+  无手工 L2 工具名单，未修改现有宿主业务代码。启动时的环境缺项已补齐并重新运行，失败试跑不计成果。
+  一条历史训练轨迹重试仍因模型引用不存在的事件 ID 被拒绝，保持 failed 并排除于公共支持，
+  未将此记录改写为成功，也不将启动实验表述为最终验收通过。
+
+
+### CHG-20260914-260：GEPA 混合批次评分续跑复用完整执行检查点
+
+- 日期：2026-09-14。
+- 问题与诱因：同一批次部分题目评分超时、其他题目正常时，跨任务缓存先复用正常题目，再把缺失题目拆成新评测配置；新配置失去原来的执行检查点，可能重新调用已经完成的 Agent。
+- 改动：在同键报告存在 execution_status=completed、error_code=evaluation_judge_failed 的记录时，优先交给已有检查点续评路径。仅增加 5 行生产逻辑；不改变传输重试次数、业务判分、无效 loop 口径或发布门槛，不修改 AgentFlow 底座及 v1 业务代码。
+- 位置：tools/trajectory_evolution/src/gepa_search.cpp 的 Search::evaluate；新增回归在 tests/test_gepa_search.py。
+- 影响分析：Search::evaluate 为 LOW，直接影响 Search::run/validate/merge，间接进入后台 AgentEvaluationService；测试 HTTP 回调的图结果为 UNKNOWN，已确认由本地测试服务器动态调用。
+- 验证：构建成功；4 项定向回归通过（28.743 秒），覆盖混合失败续评、全部评分失败、429 保留代次及部分缓存恢复。真实 v1 的 t-10、t-22 续评通过，四题原始轨迹、耗时和调用指标逐项不变，报告记录 regraded_trials=2。
+- 全量 GepaSearchTests、GepaConfigurationTests、GepaStrategyTests 均通过（381.18 秒）；实验中候选的业务失败保留，不当作程序异常改写成绩。
+
+### CHG-20260914-261：运行边界采集降级输出安全错误码
+
+- 日期：2026-09-14。
+- 问题与诱因：Python HTTP 打点失败时保持业务执行，但调用方未检查返回值时，run 起止采集丢失没有明确诊断信息，评测可能一直等到整题超时。
+- 改动：只在 run 边界采集降级时输出经过格式校验的固定错误码，覆盖 HTTP 传输异常与服务端 fail-open 响应；不记录业务输入、身份或原始异常，不改变业务返回值、采集完整性判断及重试策略。
+- 位置：tools/trajectory_evolution/clients/python/evolution.py 的 Evolution.point；不修改 AgentFlow C++ 或 v1 业务代码。
+- 影响分析：GitNexus LOW，两个直接关联为配置客户端的覆盖类及其 point 方法。
+- 验证：3 项定向安全诊断检查通过，InstrumentationTests 通过（3.78 秒）。三轮真实 v1 复现收齐三个 run，125/55/72 个事件全部正常闭合；此前偶发第三轮缺失尚未稳定复现，本条仅改善可定位性，不将其标记为根因已修复。
+
+### CHG-20260914-262：GEPA 支持受限经验停用与恢复
+
+- 日期：2026-09-14。
+- 问题与诱因：搜索仅能改写已批准经验的正文，不能评测不注入某条经验的效果；经验无收益或引入干扰时，继续强化文字并不一定改善执行。
+- 改动：experience:ID 的值允许为 null，表示从该候选的 approved_experiences 中移除；种子批准的组件轴、原始经验及适用条件继续保留，后续子代可用完整正文恢复同一来源。复用现有策略字段，不新增 Protobuf 字段，不删除记忆、不放松基础规则；引用被停用来源的生成规则仍须通过既有授权校验。
+- 位置：tools/trajectory_evolution/src/gepa_search.cpp 的 components、compose、packet，以及 config/prompts/gepa-reflection.txt；不修改 AgentFlow 底座或 v1 执行业务。
+- 影响分析：components 为 HIGH，覆盖反思、变异、融合及后台评测；compose、packet 为 LOW。已在修改前告知风险。测试 HTTP 回调为 UNKNOWN，确认是本地 fixture 服务器的动态入口。
+- 验证：编译成功；经验停用后下一代恢复、改写保留原始约束、双父分支联合生成三项回归通过（26.728 秒）。完整 GepaSearchTests、GepaConfigurationTests、GepaStrategyTests 均通过（385.97 秒）；真实收益须以程序最终判分为准。
+
+### CHG-20260914-263：GEPA 临时评分错误自动补评一次
+
+- 问题与诱因：真实 v1 候选四题均已完成，但三题评分请求超时；搜索直接标记候选 inconclusive 并跳过验证。之后对相同轨迹重评，四题全部通过且无效 loop 为 0，说明不能把临时评分不可用等同于候选无收益。
+- 改动：Search::evaluate 只对完整执行检查点中的临时网络/服务端评分错误自动补评一次，复用既有续评路径；已成功评分和 Agent 执行不重跑。保留总时限与试验预算，不重试执行失败、鉴权失败、协议错误或 429；持续错误保持 inconclusive，不伪造判分。
+- 位置：tools/trajectory_evolution/src/gepa_search.cpp、tests/test_gepa_search.py；不修改 AgentFlow 底座、v1、模型提示词或评分口径。
+- 影响分析：GitNexus evaluate（限定上述 C++ 文件）为 LOW，直接涉及 run/validate/merge，间接进入后台评测。测试回调为 UNKNOWN，已确认由本地 ThreadingHTTPServer 调用。
+- 验证：编译成功；自动恢复、持续失败后的显式重试、429 保留代次三项回归通过（14.705 秒）。检查原 trial_id、轨迹、耗时与调用指标不变，仅失败题目发生补评。完整 GepaSearchTests、GepaConfigurationTests、GepaStrategyTests 均通过（387.82 秒）。
+
+### CHG-20260915-264：固定候选自动导出与真实 v1 固定复现
+
+- 问题与诱因：导出 published-version.json 的逻辑仅在 GEPA 分支内。固定候选即使通过验收并发布，也只有 candidate.json 和发布记录，没有可直接离线加载的版本包；发布保存和文件落盘之间中断也缺少补导出。
+- 最小修复：AgentEvaluationService 复用同一导出方法。固定候选输出到作业根目录，GEPA 保留 search/ 路径；仅实际发布的版本导出。将 published 标记和发布登记一同保存，重启时核对原版本、用户、等级、上下文与通过门槛，再补齐缺失文件。空发布占位跳过；旧上下文只补文件，不获得新上下文的准入。已有且一致的文件不重写，不一致时报错，继续使用原有原子写入和 0600 权限。
+- 位置：tools/trajectory_evolution/src/agent_evaluation.cpp、tests/test_agent_evaluation.py；更新包文档第 24 章。没有改动 AgentFlow C++ 底座或 v1 执行业务。
+- 影响分析：GitNexus 对构造/后台线程入口及新增复现入口为 UNKNOWN，已确认 integration_service 的服务构造、工作线程与脚本 __main__ 调用关系，未按无影响处理。GEPA 定向回归入口为 LOW。
+- 固定复现：增加 scripts/reproduce_v1_l3.py 与 configs/reproduction/v1-l3/。保留最终验收的 L0/L3 版本、15 道 holdout 题、评分规则、模型参数和运行材料指纹，调用原有 agentflowd + Bridge 入口；不增加另一份 Agent，不重新搜索或更新记忆。凭据读取已有本地 .env，生成输入放 build，结果放 trace_output/v1-l3-reproduction 的新目录，不覆盖旧报告。
+- 验证：重新构建成功；AgentEvaluationTests 全部 20 项通过（66.109 秒），另 3 项 GEPA 发布/拒绝/离线加载回归通过（21.945 秒）。覆盖固定 L0–L3 自动导出、旧记录补导出、幂等、内容不一致拒绝、旧上下文不重新准入、离线经验注入及用户隔离。真实验收作业 6614d774… 已按原发布记录补导出，固定复现 --check 通过；本次未重新执行 30 个真实模型试次，不将历史 50% 无效 loop 降幅作为新的测量结果。
+
+### CHG-20260915-265：策略包独立导入及真实离线路径对照
+
+- 问题与诱因：离线加载先按当前配置读取经验库、编译策略，再要求与发布策略整体兼容；仅请求字段绑定不同也会拒绝导入。初始化还读取旧 runtime/template 文件。评测内联 artifact 绕过这条离线路径，导致评测通过不能证明单文件部署成功。
+- 最小修复：HTTP 和原生入口在离线模式直接绑定包内完整策略，不读取或编译历史经验，不加载反思配置和外部经验模板；保留应用/用户隔离、作用域和能力校验，以及当前显式基础规则和更严格预算。作用域沿用宿主现有编码，避免特殊字符身份误判。在线记忆编译/评测逻辑不变，不修改 AgentFlow C++ 底座或 v1 业务代码。
+- 评测接入：variants 新增 policy_version_file，验证发布标记和内容版本后冻结 artifact；与内联 artifact 互斥。包内容进入配置指纹，避免同路径换包复用旧结果；策略组走真实离线校验，保留完整试次身份与轨迹验证。版本文件读取上限与发布包保持一致。
+- 位置：自进化包 src/agent_evaluation_support.h、integration_service.cpp、local_runtime.cpp、task_evaluation.cpp 及对应测试；文档第 19、24 章。
+- 影响分析：共享 apply_agent_version 图分析为 CRITICAL，覆盖 HTTP/native、评测和调用链；修改前已告知。实际修改限制在离线分支，在线入口一起回归。
+- 验证：完整构建成功；AgentEvaluation、TaskEvaluation、LocalRuntime、IntegrationService、BoundaryTransport、Instrumentation、Documentation 七组通过（73.59 秒），另三项 GEPA 发布/拒绝/离线回归通过（21.984 秒）。覆盖旧文件缺失、旧经验损坏但不读取、特殊字符作用域、用户隔离、能力缺失与更严格限制、换包指纹变化、无效包拒绝。实际已发布 L3 包在无旧配置/模板/经验的原生实例中成功加载并在匹配条件下完成注入，版本 ID 不变。
+- 全新真实 v1 对照已启动：15 个新多轮任务、两组各两次，共 60 个任务试次；只复用导出策略，不复用旧训练/评测配置或经验库。业务收益等待程序完整结果，不把历史降幅作为本轮成绩。
+- 真实接入复核：同一两轮任务的 L0/L3 均 execution_status=completed，四个 Run 起止完整；L0 为 0 次注入，L3 为 4 次 llm/applied/host_boundary_verified，加载版本与原发布包一致。其余未实际应用的回执仍为 rejected，不计注入。该复核未使用模型判分，只验证执行/采集/导入链路；L0/L3 分别 5/6 次 LLM 调用，不能用它宣称性能提升。正式 60 试次对照于 02:18 UTC 重新启动。
+
+### CHG-20260915-266：评分执行视图省略重复策略检索载荷
+
+- 问题与诱因：include_model_requests=false 已去掉模型请求，但 policy.query 诊断仍重复携带查询、注入上下文及经验列表；真实 L3 多轮任务的评分输入因此超过 262144 字节。
+- 最小修复：只在精简评分视图中，省略明确标为 custom/policy.query 的 decision.query/context/experiences/policy_id。保留动作决定、循环决定、注入回执和所有真实执行输出；不改变原始轨迹、分析、策略、评分标准及长度上限，不处理同名业务字段。不修改 AgentFlow 底座。
+- 位置：tools/trajectory_evolution/src/model_input.h 的 task_evidence_view；tests/test_task_evaluation.py；包文档第 19 章。
+- 影响分析：图分析返回 CRITICAL，修改前已告知；核对实际调用为 task_evaluation 的模型输入构造，未修改其他分析视图。
+- 验证：构建成功，TaskEvaluationTests 全部 97 项通过（65.146 秒）。真实 JSON 修复题的两次 L3 均完成两轮采集和模型评分，未再超限；两次业务判分为 failed，原样保留，不作为策略收益。
+
+### CHG-20260915-267：RPC 参数解析不再误计字符串中的括号
+
+- 问题与诱因：RpcServer 的 extract_json_params 仍手工数大括号/中括号，不区分 JSON 字符串。第一轮回答含 layers:2,} 等不配对文本时，第二轮请求携带历史导致合法参数被截断，daemon 返回参数错误，评测记录 evaluation_entry_handler_failed。
+- 最小修复：该函数改用同文件已有 RapidJSON 解析和序列化方法，仅接受对象/数组参数；其他业务、派发、打点和策略逻辑不变。这是实际协议层缺陷，故必要地修改这一处 AgentFlow C++ 底座函数。
+- 位置：src/daemon/rpc_server.cpp；tests/unit/src/test_rpc_handler_gtest.cpp。
+- 影响分析：GitNexus 返回 UNKNOWN，已通过调用处确认 RpcServer::handle_request 直接使用它，覆盖 TCP/WebSocket/UDS 的请求分发，未按无影响处理。
+- 验证：原真实失败轨迹可本地确定性复现：完整请求合法，但旧截取结果非合法 JSON。重新构建 agentflowd 和 daemon 测试；5 项 RpcServerTest 通过，新增真实 UDS 收发测试覆盖字符串括号、转义引号/反斜线、嵌套对象、数组、空参数集合及非法标量。修复后真实 L0/L3 各两次复测共 8 个 Run 全部闭合，4 个试次均正常完成评分，无入口异常；业务通过 2/4，失败按原判分保留。另五组服务、原生、打点及文档回归全部通过（5.65 秒）。
+
+### CHG-20260915-268：评分去重覆盖重复输出与回执，CLI 接通已有断点续跑
+
+- 问题与诱因：三轮真实任务的 L3 轨迹完整，但相同模型/工具输出在 action.end、step.end 中重复，注入回执也重复携带字段；原 compact_judge_evidence 只共享 input，精简后仍超过评分上限。TaskEvaluationOptions 已支持安全续跑，但 CLI 未暴露入口，暂停后难以复用已执行题目。
+- 最小修复：share_repeated_inputs=true 时，使用同一无损引用表共享事件 output、attributes 内的载荷、application；不改事件身份与顺序，不改顶层状态及产物，不截断内容，且只有总字节减少才采用。CLI 新增 --resume-report，将路径传给原有检查点实现；保留配置/版本/提示词指纹、报告和产物哈希核验，与 --regrade-report 互斥。
+- 位置：自进化包 src/task_evaluation.cpp、task_evaluation_cli.cpp、tests/test_task_evaluation.py；文档第 19 章。不改 AgentFlow 底座、策略包、数据集或评分标准。
+- 影响分析：compact_judge_evidence 的图结果为 CRITICAL 且符号数据异常，不作为可信完整调用清单；已告知并人工确认实际调用在模型评测组包。CLI 为 UNKNOWN，确认由 dataset_cli 的 run 子命令调用。
+- 验证：构建成功；无损还原（含自定义属性、嵌套引用和同名伪引用）、CLI 只补评不重执行、默认去重三项回归通过（4.991 秒）。新测试覆盖原始轨迹/ID/用量/耗时和源报告不变、重复续跑不调用模型、配置变化和模式冲突拒绝。正式实验保留已完成的通过与失败，仅补评评分失败和续跑未完成题目。
+
+
+### CHG-20260915-269：报告容量使用完整配置预算，并校验最终序列化大小
+
+- 问题与诱因：累计 trial 的 Protobuf 大小只允许达到 max_report_bytes 的一半，配置 128 MiB 时约 64 MiB 即提前报 evaluation_report_size_limit；最终 JSON 却只检查固定 128 MiB，没有严格遵守较小配置值。
+- 最小修复：累计证据使用完整配置预算；最终 JSON 和 Protobuf 均按 max_report_bytes 校验。配置可选范围、评分输入、Agent 执行、策略及数据集均不改变。
+- 位置：自进化包 src/task_evaluation.cpp、tests/test_task_evaluation.py；不修改 AgentFlow 底座。
+- 影响分析：run_task_evaluation 图查询仍为 UNKNOWN，候选最高 CRITICAL；已告知并确认命令行评测、GEPA、后台评测共用此函数，只修改报告存储边界。
+- 验证：构建成功；报告超过原半预算仍可正常保存、trial 能容纳但最终报告超限被拒绝、CLI 复用执行仅补评分、模型重评不改源数据的 3 项定向测试通过。真实实验在 Agent 退出后保存检查点，19 条已有评分逐项完全一致，另 1 条仅补评分，其轨迹、产物、输出、版本、指标与耗时均未改变。
+- 完整回归：TaskEvaluationTests 的 99 项测试全部通过，DocumentationTests 通过，总计 67.28 秒；单元测试未调用付费模型。
+
+### CHG-20260915-270：评分输入补充执行事实，逐轮清单按观测顺序排列
+
+- 问题与诱因：模型理由曾把 5 次实际视频调用写成 3 次，或先判业务通过、再承认逐轮存在被题目禁止的重试；哈希顺序的轮次清单增加阅读负担。另有裁判把评测器事后解码产物、内部 Skill 说明当作 Agent 已完成题目要求的文件核验。
+- 最小修复：模型输入增加 observed_action_counts，复用已有严格 action 配对计数，包含失败、排除明确未执行，缺少观测为 null；artifact_provenance 明示产物检查来自评测器。短轮次 ID 按各 Run 中锚点的观测顺序生成并补零排序，落盘规范 ID、事件和因果关系不变。提示词明确文字标准不因未配置硬检查而免除，内部规范不能减免必需动作；先核验事实和逐轮贡献，最后输出 verdict。
+- 位置：自进化包 src/task_evaluation.cpp、config/prompts/task-judge-system.txt、task-loop-review.txt、tests/test_task_evaluation.py。不修改 AgentFlow 底座或 v1 业务逻辑。
+- 影响分析：model_grade 图查询为 CRITICAL；已告知该入口由初次评测、模型重评、GEPA 和后台评测共用。图索引调用映射存在已知不完整/歧义，另核对实际调用入口，不将其当作无影响。
+- 验证：102 项任务评测测试通过；覆盖未知/未执行计数、12 轮补零排序及六个独立执行分支，原始轨迹与规范 ID 不变。真实旧轨迹复核中，t-04 的 5 次/1 次视频调用分别失败/通过；t-07 的 8 次/3 次调用均因停止条件违规失败；h-image-english 两条均识别缺少 Agent 实际文件核验。最终两条文件复核未重跑 Agent。模型协议正确不等于语义永远正确，仍保留原始评分与各次复核供审计，不手工覆写结论。
+
+### CHG-20260915-271：允许显式选择暂停批次中已完成的题目重评
+
+- 问题与诱因：仅支持完整报告重评，暂停大批实验后，即使目标题目的两臂均已执行完成，也无法单独诊断评分。
+- 最小修复：--regrade-report 在显式配置 task_ids 时可读取不完整批次，但选中题目的全部版本与重复编号必须已完成执行；缺题、取消或失败执行继续拒绝。不指定题目仍要求源批次完整。原 manifest、报告/产物哈希、身份和题目一致性检查保留。
+- 位置：自进化包 src/task_evaluation.cpp 的 run_task_evaluation 及 tests/test_task_evaluation.py。
+- 验证：暂停三题批次后，仅完成题可重评，取消题、未开始题及未显式选择均被拒绝；模型重评不再执行宿主。真实暂停批次成功复核选中题，来源报告 SHA-256、试验 ID、执行耗时、用量与产物保持不变。
+
+### CHG-20260915-272：GEPA 可保留局部优势继续反思和双亲重组
+
+- 问题与诱因：中间子节点也必须满足整体质量、fitness 与原始 loop 不退化，可能在完整验证前丢弃有价值的局部改进，减少分支互补机会。只优化 loop 而未启用时延目标/门槛，也不能保证 Agent 更快。
+- 最小修复：新增可选 acceptance=pareto。相同题目集合、相同 loop 口径下，至少一题质量改善，或某题质量不降且 fitness/循环/token/时延效率之一改善，允许进入完整验证；缺失指标不当作收益。同题失败换来的低耗时不算该题效率优势。重组对子代与双亲、分支与共同祖先使用同一规则；默认严格模式不变，最终 winner 和 holdout 发布门槛不放宽。反思输入明示当前接纳方式，L3 有循环规则组件时检查实际阈值改进。
+- 位置：自进化包 src/gepa_strategy.h/.cpp、src/gepa_search.cpp、config/prompts/gepa-reflection.txt 及相应测试。不修改 AgentFlow 底座。
+- 影响分析：共享搜索、选父与重组入口图查询为 UNKNOWN/候选 CRITICAL，已告知并核对真实调用；修改限于可选中间筛选，不改变授权、版本持久化和最终准入。
+- 验证：GepaSearchTests 完整通过（404.27 秒），策略/配置测试通过；覆盖局部优势、缺失指标、效率分支参与重组、合并退化拦截、无手工工具白名单的 L3 规则执行，以及中间合并通过但最终 loop 门槛不满足时仍不发布。真实收益由新一轮固定数据划分的真实 v1 实验测量，不能由单元测试推断。

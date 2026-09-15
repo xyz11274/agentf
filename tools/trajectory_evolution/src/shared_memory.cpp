@@ -72,12 +72,15 @@ bool gate(const Json& review, const Json& options) {
       && review.flag("supported", false) && review.flag("non_overriding", false);
 }
 void update_publication(Json& state, const Json& options) {
-  std::map<std::string, std::set<std::string>> supporters, disputes;
+  std::map<std::string, std::set<std::string>> supporters, training, disputes;
   for(const auto& pair : state["sources"].fields()) {
     const auto& s = pair.second;
     if(s.str("state") == "accepted" && !s.str("entry_id").empty()
-        && s.num("last_evidence_ms", 0) + options.num("max_evidence_age_ms", 2592000000ULL) > now_ms())
-      supporters[s.str("entry_id")].insert(s.str("user_key"));
+        && s.num("last_evidence_ms", 0) + options.num("max_evidence_age_ms", 2592000000ULL) > now_ms()) {
+      if(s.flag("online_verified", true)) supporters[s.str("entry_id")].insert(s.str("user_key"));
+      if(options.flag("allow_training_sources", true)) for(const auto& group : s["training_groups"].items())
+        training[s.str("entry_id")].insert(group.text());
+    }
   }
   for(const auto& pair : state["relations"].fields()) {
     const auto& r = pair.second;
@@ -87,16 +90,18 @@ void update_publication(Json& state, const Json& options) {
   for(auto& pair : state["entries"].fields()) {
     auto& e = pair.second;
     e["supporting_users"] = supporters[pair.first].size();
+    e["supporting_training_groups"] = training[pair.first].size();
     e["disputing_users"] = disputes[pair.first].size();
     e["state"] = !disputes[pair.first].empty() ? "disputed"
-        : (supporters[pair.first].size() >= options.num("min_supporting_users", 2) ? "published" : "pending_support");
+        : (supporters[pair.first].size() >= options.num("min_supporting_users", 2)
+            || training[pair.first].size() >= options.num("min_training_groups", 2) ? "published" : "pending_support");
   }
   std::vector<std::string> active;
   for(const auto& p : state["entries"].fields()) if(p.second.str("state") == "published") active.push_back(p.first);
   std::sort(active.begin(), active.end(), [&](const auto& a, const auto& b) {
     const auto& x = state["entries"][a]; const auto& y = state["entries"][b];
-    return std::make_tuple(x.num("supporting_users", 0), x.num("last_evidence_ms", 0), a)
-        > std::make_tuple(y.num("supporting_users", 0), y.num("last_evidence_ms", 0), b);
+    return std::make_tuple(x.num("supporting_users", 0) + x.num("supporting_training_groups", 0), x.num("last_evidence_ms", 0), a)
+        > std::make_tuple(y.num("supporting_users", 0) + y.num("supporting_training_groups", 0), y.num("last_evidence_ms", 0), b);
   });
   for(std::size_t i = options.num("max_entries", 64); i < active.size(); ++i) state["entries"][active[i]]["state"] = "reserve";
 }
@@ -145,11 +150,13 @@ Json shared_memory_options(Json options) {
   if(options.null()) options = Json::Object{};
   keys(options, {"enabled", "min_supporting_users", "max_entries", "max_sources", "max_relations",
     "max_model_calls_per_cycle", "min_interval_ms", "max_attempts", "min_confidence",
-    "distill_prompt_file", "review_prompt_file", "relation_prompt_file", "min_source_runs", "max_evidence_age_ms"});
+    "distill_prompt_file", "review_prompt_file", "relation_prompt_file", "min_source_runs", "max_evidence_age_ms",
+    "allow_training_sources", "min_training_groups"});
   const Json defaults{{"enabled", true}, {"min_supporting_users", 2}, {"max_entries", 64},
     {"max_sources", 8192}, {"max_relations", 32768}, {"max_model_calls_per_cycle", 8},
     {"min_interval_ms", 60000}, {"max_attempts", 2}, {"min_confidence", 0.9},
-    {"min_source_runs", 2}, {"max_evidence_age_ms", std::size_t(2592000000ULL)}};
+    {"min_source_runs", 2}, {"max_evidence_age_ms", std::size_t(2592000000ULL)},
+    {"allow_training_sources", true}, {"min_training_groups", 2}};
   for(const auto& p : defaults.fields()) if(!options.has(p.first)) options[p.first] = p.second;
   require(options.num("min_supporting_users", 0) >= 1 && options.num("min_supporting_users", 0) <= 256
       && options.num("max_entries", 0) >= 1 && options.num("max_entries", 0) <= 128
@@ -159,11 +166,12 @@ Json shared_memory_options(Json options) {
       && options.num("min_interval_ms", 0) >= 10 && options.num("min_interval_ms", 0) <= 86400000
       && options.num("max_attempts", 0) >= 1 && options.num("max_attempts", 0) <= 4
       && options.num("min_source_runs", 0) >= 1 && options.num("min_source_runs", 0) <= 256
+      && options.num("min_training_groups", 0) >= 2 && options.num("min_training_groups", 0) <= 256
       && options.num("max_evidence_age_ms", 0) >= 1000 && options.num("max_evidence_age_ms", 0) <= 31536000000ULL
       && std::holds_alternative<double>(options["min_confidence"].value)
       && std::get<double>(options["min_confidence"].value) >= 0.5
       && std::get<double>(options["min_confidence"].value) <= 1.0, "sharing_configuration_invalid");
-  options.flag("enabled", false); return options;
+  options.flag("enabled", false); options.flag("allow_training_sources", true); return options;
 }
 Json new_shared_memory(const std::string& app) {
   return Json{{"schema_version", 1}, {"application_id", app}, {"revision", 0}, {"next_due_ms", 0},
@@ -258,19 +266,30 @@ void process_shared_memory(Json& state, const Json& config, const PrivateMemoryL
     state["next_due_ms"] = next_due(state, options, model != nullptr); checkpoint(state); return;
   }
   std::map<std::string, v1::ShadowExperience> eligible;
-  std::map<std::string, std::string> proofs;
+  std::map<std::string, Json> proofs;
   for(const auto& item : snapshot.experiences()) eligible.emplace(hash(user + '\0' + item.memory_id()), item);
   for(const auto& item : memory.entries()) {
     const auto key = hash(user + '\0' + item.memory_id());
     if(eligible.count(key)) {
-      try { proofs[key] = evidence(user, item); } catch(...) { proofs[key] = ""; }
+      try {
+        auto proof = evidence(user, item);
+        // String callbacks retain the existing verified real-user contract.
+        if(proof.string()) proof = Json{{"fingerprint", proof}, {"online_verified", true}, {"training_groups", Json::Array{}}};
+        keys(proof, {"fingerprint", "online_verified", "training_groups"});
+        require(proof["fingerprint"].string() && proof.str("fingerprint").size() <= 256
+            && proof["training_groups"].array() && proof["training_groups"].items().size() <= 256, "shared_evidence_invalid");
+        proof.flag("online_verified", false);
+        for(const auto& group : proof["training_groups"].items()) require(group.string() && group.text().size() == 64
+            && group.text().find_first_not_of("0123456789abcdef") == std::string::npos, "shared_evidence_invalid");
+        proofs[key] = std::move(proof);
+      } catch(...) { proofs[key] = Json::Object{}; }
     }
   }
   // A source that was archived, contradicted, removed or rewritten no longer
   // supplies evidence to the public pool. Other users' support is untouched.
   for(auto& pair : state["sources"].fields()) if(pair.second.str("user_key") == user_key) {
     const auto found = eligible.find(pair.first);
-    if(found == eligible.end() || proofs[pair.first].empty() || pair.second.str("fingerprint") != hash(content(found->second).dump())) {
+    if(found == eligible.end() || proofs[pair.first].str("fingerprint").empty() || pair.second.str("fingerprint") != hash(content(found->second).dump())) {
       pair.second["state"] = "withdrawn"; pair.second["entry_id"] = "";
     }
   }
@@ -302,9 +321,12 @@ void process_shared_memory(Json& state, const Json& config, const PrivateMemoryL
     auto& source = sources[pair.first];
     if(source.str("fingerprint") != fingerprint || source.str("state") == "withdrawn")
       source = Json{{"fingerprint", fingerprint}, {"user_key", user_key}, {"state", "pending"}, {"attempts", 0}};
-    if(proofs[pair.first].empty()) { source["state"] = "private_only"; source["reason"] = "independent_evidence_missing"; continue; }
-    if(source.str("evidence_fingerprint") != proofs[pair.first]) {
-      source["evidence_fingerprint"] = proofs[pair.first]; source["last_evidence_ms"] = now_ms();
+    const auto& proof = proofs[pair.first];
+    if(proof.str("fingerprint").empty()) { source["state"] = "private_only"; source["reason"] = "independent_evidence_missing"; continue; }
+    source["online_verified"] = proof.flag("online_verified", false);
+    source["training_groups"] = proof["training_groups"];
+    if(source.str("evidence_fingerprint") != proof.str("fingerprint")) {
+      source["evidence_fingerprint"] = proof["fingerprint"]; source["last_evidence_ms"] = now_ms();
       if(source.str("state") == "retired" || source.str("state") == "private_only") { source["state"] = "pending"; source["attempts"] = 0; }
       const auto id = source.str("entry_id");
       if(state["entries"].has(id)) state["entries"][id]["last_evidence_ms"] = now_ms();
@@ -342,7 +364,7 @@ void process_shared_memory(Json& state, const Json& config, const PrivateMemoryL
             auto victim = state["entries"].fields().begin();
             for(auto it = state["entries"].fields().begin(); it != state["entries"].fields().end(); ++it) {
               const auto score = [](const Json& e) { return std::make_tuple(e.str("state") == "published",
-                  e.num("supporting_users", 0), e.num("last_evidence_ms", 0)); };
+                  e.num("supporting_users", 0) + e.num("supporting_training_groups", 0), e.num("last_evidence_ms", 0)); };
               if(score(it->second) < score(victim->second)) victim = it;
             }
             if(victim->second.str("state") == "published") {

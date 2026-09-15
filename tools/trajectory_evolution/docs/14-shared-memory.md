@@ -79,7 +79,7 @@ public_evidence 逐条读取候选的 support_evidence，检查对应的受管 r
 1. 来源 user_id 必须是当前用户，conversation/run 身份有效且能定位同一条受管记录。
 2. run 已关闭、采集完整、evaluation_status=completed，且用户/会话归属一致。
 3. 候选 source_fingerprint 与受管来源指纹一致，实际轨迹文件的摘要也与保存值一致。
-4. 同一个 run/来源指纹只计一次，默认每个来源至少两条不同完整 run。
+4. 同一个 run/来源指纹只计一次；在线来源默认至少两条不同完整 run，训练来源另按下面的任务组核验。
 5. 能核验的来源集合排序后计算 evidence_fingerprint，保存为支持依据。
 
 来源内容指纹与磁盘报告指纹按各自格式计算，由程序核验对应来源。
@@ -98,8 +98,29 @@ public_evidence 逐条读取候选的 support_evidence，检查对应的受管 r
 
 来源标记 private_only / independent_evidence_missing，不调用公共提炼模型。
 合格私人经验仍可按自身条件使用。
+诊断时查看 learning/shared-memory.json：last_status=processed、pending_users 为空且 sources 为上述状态，表示管理周期已执行但缺少独立证据，不是公共模型请求失败。公共投影可能只包含 application_id，未写出的 experiences 表示空库。
 重要区别：跨库冲突审查使用合格私人经验，不额外要求它已经达到 min_source_runs 的公共推广门槛；
 用户的合理差异不必先有多次成功 run 才能对公共建议提出冲突。
+
+### 离线训练来源的公共准入
+
+冷启动训练也能提供公共来源，但与真实用户支持分别计数。默认开启 `allow_training_sources`，
+同时必须配置 `policy_evaluation_file`，使生成策略具有后续真实 Agent 评测入口。
+程序只接纳已有训练导入流程校验过的无策略基线轨迹，并再次核对：
+
+- 当前冻结数据集中的任务为 `train`、`reviewed`，dataset_version 和 task_version 一致。
+- 受管记录为已导入的 L0 `baseline_training`，采集完整、分析成功、来源指纹匹配。
+- `run.start` 的 evaluation_trial_id 与训练来源绑定；轨迹有训练评测的 passed 或 failed 结论。
+- 没有经验注入回执。失败案例可以提供经验，采集失败或分析失败不能提供支持。
+
+随后仍经过模型提炼、另一请求复核、私有—公共关系核验。训练支持按
+`hash(dataset_version + group_id)` 去重，默认一个公共条目至少需要两个独立任务组。
+同一道题换用户、重复运行或同组变体都不会增加任务组票；人工测试身份不会增加 supporting_users。
+验证集、留出集与带策略候选轨迹不进入这条学习路径。
+
+满足门槛后，条目进入公共投影，供用户自己的经验与公共经验一起编译候选策略。
+这不等于策略已取得效果收益：策略仍需原有配对 Agent 评测与发布门槛，才可作为获准版本应用。
+关闭 allow_training_sources 会撤回训练支持；冲突、证据过期、来源撤回、容量限制与在线来源共用原有管理机制。
 
 
 ![晋升审查：提炼与复核两次请求](figures/14-review.svg)
@@ -138,17 +159,18 @@ review 拒绝终止本次提炼候选；已确认的私有—公共 conflict 触
 新条目的 memory_id 为 shared- 加 SHA256(application_id、分隔符和三字段规范 JSON)。
 公共建议的 ID 绑定其内容与作用域。
 
-如果复核判定 duplicate，只能匹配存在且同 scope 的公共条目，新增用户支持关系，不覆盖原建议正文。
+如果复核判定 duplicate，只能匹配存在且同 scope 的公共条目，补充来源支持关系，不覆盖原建议正文。
 相同规范内容得到同一个 ID；近义关系经过语义比较。
 
-公开资格按 accepted 且未过期来源的不同 user_key 集合计票：
+公开资格按 accepted 且未过期来源分别计算真实用户支持与训练任务组支持：
 
 - 每个用户最多一票，与该用户贡献几条近似经验无关。
 - 默认至少两个不同用户；每个用户的被接纳来源都需要通过独立 run 核验。
 - 同一用户重放日志、重复提交同一候选、重复读取相同文件不会增票。
 - 各用户的新证据分别刷新自己的支持来源。
+- 训练来源使用独立任务组门槛，不把用户数与任务组数混在一起凑发布门槛。
 
-公共经验的可信度管理使用审查门槛、独立用户支持和争议状态；各项信息分别记录。
+公共经验的可信度管理使用审查门槛、独立来源支持和争议状态；两类支持与争议分别记录。
 
 
 ![公共状态：支持与争议共同决定](figures/14-public-states.svg)
@@ -157,17 +179,19 @@ review 拒绝终止本次提炼候选；已确认的私有—公共 conflict 触
 
 ## 8. 发布状态如何计算
 
-令 S 为新鲜有效支持用户集合，D 为已确认当前冲突用户集合：
+令 S 为新鲜有效支持用户集合，T 为训练任务组集合，D 为已确认当前冲突用户集合。
+支持充分指 S 达到 min_supporting_users，或启用训练来源且 T 达到 min_training_groups：
 
 | 状态 | 条件 | 是否进入公开 PB / 新快照 |
 | --- | --- | --- |
-| pending_support | 没有争议，支持用户数小于门槛 | 不进入 |
+| pending_support | 没有争议，两类支持均未达到各自门槛 | 不进入 |
 | published | 没有争议，支持充分，容量排名在前 max_entries | 可进入公共投影；还需用户关系和授权筛选 |
 | disputed | 至少一个 accepted conflict | 全局不进入新公共投影 |
 | reserve | 支持充分，但可用集合排名超出上限 | 候补，不进入 |
 | retired | 已移出 entries 工作集，记录淘汰摘要 | 不进入，保留有界淘汰摘要 |
 
-可发布集合按 supporting_users、last_evidence_ms、稳定 ID 依次排序；支持多、新证据新者优先。
+可发布集合按 supporting_users + supporting_training_groups、last_evidence_ms、稳定 ID 依次排序；
+此求和只用于容量排名，不改变两类独立发布门槛。支持多、新证据新者优先。
 默认可发布 64 条，整个候选工作集最多 128 条；发布后按用户关系、适用条件和授权筛选。
 
 
@@ -226,7 +250,7 @@ max_evidence_age_ms 默认 30 天，以独立证据集合变化或核验更新�
 
 两种过期分别处理：
 
-- 用户来源过期：该用户的票不再计入 S，支持不足会降到 pending_support。
+- 来源过期：其用户票或训练任务组支持不再计入 S/T，支持不足会降到 pending_support。
 - 公共条目长期没有新证据：移出工作集，reason=evidence_expired。
 
 工作集满时，优先从非 published 条目中按支持少、证据旧选择淘汰对象；有支持的新候选可以积累后替代旧条目。
@@ -248,6 +272,8 @@ retire 会移除条目与其关系，将相关来源标记 retired 并清空 ent
     "enabled": true,
     "min_supporting_users": 2,
     "min_source_runs": 2,
+    "allow_training_sources": true,
+    "min_training_groups": 2,
     "min_confidence": 0.9,
     "max_entries": 64,
     "max_sources": 8192,
@@ -267,7 +293,9 @@ retire 会移除条目与其关系，将相关来源标记 retired 并清空 ent
 | --- | --- | --- | --- |
 | enabled | true | bool | 缺省开启；false 关闭公共管理与公共输入 |
 | min_supporting_users | 2 | 1–256 人 | 一个公共条目的不同支持用户门槛 |
-| min_source_runs | 2 | 1–256 条 | 每个私人来源需要核验的不同 run 数 |
+| min_source_runs | 2 | 1–256 条 | 在线来源需要核验的不同 run 数 |
+| allow_training_sources | true | bool | 允许经冻结训练任务与轨迹核验的来源；还需 policy_evaluation_file |
+| min_training_groups | 2 | 2–256 组 | 单条公共经验的不同训练任务组门槛；跨用户同组只计一次 |
 | min_confidence | 0.9 | 0.5–1.0 | 公共复核、非精确跨库关系的最低模型置信度 |
 | max_entries | 64 | 1–128 条 | published 上限；总工作集上限为两倍 |
 | max_sources | 8192 | 1–65536 条 | 受审私人来源缓存上限 |
@@ -309,7 +337,7 @@ retire 会移除条目与其关系，将相关来源标记 retired 并清空 ent
 | --- | --- |
 | schema_version、application_id | 管理协议与应用归属 |
 | revision | 公共投影内容变化时递增 |
-| entries | 公共工作集：experience、state、supporting_users、disputing_users、last_evidence_ms |
+| entries | 公共工作集：experience、state、supporting_users、supporting_training_groups、disputing_users、last_evidence_ms |
 | sources | 以 hash(user + memory_id) 定位的私人来源状态和证据/审查指纹 |
 | users | hash(user) 到真实用户 ID 的内部映射 |
 | pending_users | 去重的 user_key FIFO |
@@ -322,7 +350,8 @@ retire 会移除条目与其关系，将相关来源标记 retired 并清空 ent
 | user_errors | 被隔离用户的管理错误；不公开私人异常正文 |
 
 sources 常见字段为 user_key、fingerprint、state、attempts、evidence_fingerprint、
-last_evidence_ms、entry_id、reason、distill、review。
+last_evidence_ms、entry_id、reason、distill、review，以及 online_verified、training_groups。
+online_verified 表示来源满足真实在线 run 门槛；training_groups 保存核验过的任务组摘要，不保存题目正文。
 fingerprint 基于 scope、触发条件和建议内容计算，相同用户与相同正文的重复审查保持支持计数不变。
 
 sources 状态包括 pending、private_only、accepted、rejected、failed、withdrawn、retired。

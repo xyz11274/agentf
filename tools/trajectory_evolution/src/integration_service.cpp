@@ -228,7 +228,7 @@ struct IntegrationService::Impl {
           "recent_reports", "max_level", "principals", "actors", "runtime_config", "auto_evaluate",
           "auto_approve_experiences", "shadow_options", "runtime_options", "experience_template_file",
           "application_id", "policy_scopes", "activity_types", "learning", "sharing",
-          "policy_evaluation_file", "evaluation_version_file", "policy_version_file", "query_context", "instrumentation", "run_lease_ms", "http_persistence", "control_learning"});
+          "policy_evaluation_file", "evaluation_version_file", "policy_version_file", "query_context", "instrumentation", "run_lease_ms", "http_persistence", "control_learning", "evaluation_levels"});
     validate_control_learning(config["control_learning"]);
     if(config["control_learning"].flag("enabled", false))
       require(config.has("policy_evaluation_file") || config.has("evaluation_version_file") || config.has("policy_version_file"), "control_learning_requires_evaluation");
@@ -255,6 +255,13 @@ struct IntegrationService::Impl {
     validate_instrumentation(config);
     require(config.num("schema_version", 0) == 1 && identifier(config.str("agent_id")), "configuration_invalid");
     level(config.str("max_level"));
+    if(config.has("evaluation_levels")) {
+      require(config["evaluation_levels"].array() && config["evaluation_levels"].items().size() <= 4, "evaluation_levels_invalid");
+      std::set<std::string> selected;
+      for(const auto& value : config["evaluation_levels"].items())
+        require(value.string() && level(value.text()) <= level(config.str("max_level"))
+            && selected.insert(value.text()).second, "evaluation_levels_invalid");
+    }
     require(!config.str("data_dir").empty(), "data_directory_required");
     root = fs::absolute(config.str("data_dir")).lexically_normal();
     require(root != root.root_path(), "data_directory_invalid");
@@ -266,7 +273,7 @@ struct IntegrationService::Impl {
       keys(bundle, {"schema_version", "version", "artifact", "evaluation"});
       require(bundle.num("schema_version", 0) == 1 && bundle.str("version") == agent_version_id(bundle["artifact"].dump())
           && bundle["evaluation"]["gate"].flag("passed", false), "offline_policy_bundle_invalid");
-      require(bundle["artifact"]["policy"]["snapshot"]["identity"].str("agent_id") == config.str("agent_id")
+      require((bundle["artifact"].str("level") == "L0" || bundle["artifact"]["policy"]["snapshot"]["identity"].str("agent_id") == config.str("agent_id"))
           && bundle["artifact"].str("level") <= config.str("max_level"), "offline_policy_not_authorized");
       config["offline_version"] = bundle["artifact"];
       config["auto_evaluate"] = false; config["sharing"] = Json{{"enabled", false}};
@@ -277,8 +284,8 @@ struct IntegrationService::Impl {
       version_file = fs::absolute(version_file).lexically_normal();
       const auto relative = root.lexically_relative(version_file.parent_path());
       require(!relative.empty() && *relative.begin() != ".." && relative != ".", "evaluation_data_directory_not_isolated");
-      const auto version = Json::parse(read_file(version_file, 2097152));
-      keys(version, {"version", "artifact", "trial_id", "entry"});
+      const auto version = Json::parse(read_file(version_file, 4194304));
+      keys(version, {"version", "artifact", "trial_id", "entry", "published_policy"});
       require(version.str("version") == agent_version_id(version["artifact"].dump()), "evaluation_version_invalid");
       require(identifier(version.str("trial_id")), "evaluation_trial_id_required");
       if(version.has("entry")) {
@@ -286,6 +293,7 @@ struct IntegrationService::Impl {
         evaluation_entry.specification = version["entry"];
       }
       config["evaluation_version"] = version;
+      if(version.flag("published_policy", false)) config["offline_version"] = version["artifact"];
       config["auto_evaluate"] = false; config["sharing"] = Json{{"enabled", false}};
       config.fields().erase("policy_evaluation_file");
     }
@@ -293,14 +301,17 @@ struct IntegrationService::Impl {
       fs::path value(config.str(name)); require(!value.empty(), "configuration_path_missing");
       return value.is_absolute() ? value : config_path.parent_path() / value;
     };
-    evaluator_path = local("runtime_config");
-    const auto evaluation = legacy::load_runtime_configuration(evaluator_path);
-    if(!evaluation.model.endpoint.empty() || !evaluation.model.model_id.empty()) {
-      require(!evaluation.model.endpoint.empty() && !evaluation.model.model_id.empty()
-          && (!evaluation.api_key_env.empty() != evaluation.no_api_key), "evaluation_configuration_invalid");
+    if(!config.has("offline_version")) {
+      evaluator_path = local("runtime_config");
+      const auto evaluation = legacy::load_runtime_configuration(evaluator_path);
+      if(!evaluation.model.endpoint.empty() || !evaluation.model.model_id.empty()) {
+        require(!evaluation.model.endpoint.empty() && !evaluation.model.model_id.empty()
+            && (!evaluation.api_key_env.empty() != evaluation.no_api_key), "evaluation_configuration_invalid");
+      }
+      config["runtime_options"]["experience_template"] = read_file(local("experience_template_file"), 16384);
+    } else if(!config.has("runtime_options")) {
+      config["runtime_options"] = Json::Object{};
     }
-    const auto tmpl = read_file(local("experience_template_file"), 16384);
-    config["runtime_options"]["experience_template"] = tmpl;
     config["sharing"] = shared_memory_options(config["sharing"]);
     if(config["sharing"].flag("enabled", false)) {
       for(const auto& pair : std::vector<std::pair<std::string, std::string>>{
@@ -540,8 +551,11 @@ struct IntegrationService::Impl {
     sharing_due_ms = sharing_state.num("next_due_ms", 0);
     sharing_pending_users = sharing_state["pending_users"].items().size(); sharing_status = "pending"; notify_work();
   }
-  std::string public_evidence(const std::string& user, const ep::EvolutionMemoryEntry& entry) const {
-    std::set<std::string> sources;
+  Json public_evidence(const std::string& user, const ep::EvolutionMemoryEntry& entry) const {
+    std::set<std::string> sources, training_sources, groups;
+    std::map<std::string, std::string> training_tasks;
+    std::string training_dataset;
+    bool dataset_loaded = false;
     for(const auto& evidence : entry.candidate().support_evidence()) {
       try {
         const auto& origin = evidence.source();
@@ -550,8 +564,10 @@ struct IntegrationService::Impl {
         const auto rid = id.size() == 40 && id.find_first_not_of("0123456789abcdef") == std::string::npos ? id
             : digest("import\n" + config.str("agent_id") + '\n' + user + '\n' + origin.conversation_id() + '\n' + id).substr(0, 40);
         const auto run = read_run(rid);
-        // Synthetic training identities are not independent real-user votes.
-        if(run.has("training_source")) continue;
+        const bool training = run.has("training_source");
+        // Training requires the frozen corpus and the downstream policy
+        // evaluator. Synthetic identities never count as real-user votes.
+        if(training && (!assessments || !config["sharing"].flag("allow_training_sources", true))) continue;
         if(!run.flag("closed", false) || run.flag("incomplete", false) || run.str("evaluation_status") != "completed"
             || run["identity"].str("user_id") != user || run["identity"].str("conversation_id") != origin.conversation_id()) continue;
         const auto raw = read_file(trace_path(run), run_limit);
@@ -571,12 +587,43 @@ struct IntegrationService::Impl {
           }
           if(influenced) continue;
         }
-        sources.insert(rid + ':' + expected);
+        if(training) {
+          if(!dataset_loaded) {
+            dataset_loaded = true;
+            fs::path settings(config.str("policy_evaluation_file"));
+            if(settings.is_relative()) settings = config_path.parent_path() / settings;
+            const auto evaluation = Json::parse(read_file(settings, 1048576));
+            fs::path path(evaluation.str("dataset"));
+            if(path.is_relative()) path = settings.parent_path() / path;
+            const auto dataset = read_evaluation_dataset(path);
+            for(const auto& issue : dataset.issues()) require(issue.severity() != "error", "training_dataset_invalid");
+            training_dataset = dataset.dataset_version();
+            for(const auto& task : dataset.tasks()) if(task.split() == "train" && task.review_status() == "reviewed" && !task.group_id().empty())
+              training_tasks[task.task_id() + '\n' + task.task_version()] = digest(training_dataset + '\n' + task.group_id());
+          }
+          const auto& source = run["training_source"];
+          const auto task = training_tasks.find(source.str("task_id") + '\n' + source.str("task_version"));
+          if(source.str("kind") != "baseline_training" || source.str("dataset_version") != training_dataset
+              || task == training_tasks.end() || !run.flag("imported", false) || run.num("level", 0) != 0
+              || !identifier(source.str("trial_id"))
+              || source.str("report_fingerprint").size() != 64 || source.str("source_evidence_fingerprint").size() != 64) continue;
+          const auto captured = Json::parse(raw);
+          bool bound = false;
+          for(const auto& event : captured["events"].items()) if(event.str("kind") == "run.start")
+            bound |= event["attributes"].str("evaluation_trial_id") == source.str("trial_id");
+          if(!bound) continue;
+          const auto& accepted = captured["attributes"]["training_evaluation"];
+          if(accepted.str("verdict") != "passed" && accepted.str("verdict") != "failed") continue;
+          groups.insert(task->second); training_sources.insert(rid + ':' + expected);
+        } else sources.insert(rid + ':' + expected);
       } catch(...) { /* Unavailable or unverifiable provenance cannot authorize sharing. */ }
     }
-    if(sources.size() < config["sharing"].num("min_source_runs", 2)) return {};
+    const bool online = sources.size() >= config["sharing"].num("min_source_runs", 2);
+    if(!online && groups.empty()) return Json::Object{};
     std::string material; for(const auto& source : sources) material += source + '\n';
-    return digest(material);
+    for(const auto& source : training_sources) material += source + '\n';
+    Json independent = Json::Array{}; for(const auto& group : groups) independent.push(group);
+    return Json{{"fingerprint", digest(material + independent.dump())}, {"online_verified", online}, {"training_groups", independent}};
   }
   void run_sharing(const std::shared_ptr<legacy::ModelAdapter>& model) {
     if(!config["sharing"].flag("enabled", false)) return;
@@ -1024,12 +1071,17 @@ struct IntegrationService::Impl {
     require(active < active_limit && stored_count < config.num("max_stored_runs", 10000), "service_capacity_reached", 507);
     Json run{{"kind", "integration-run-v1"}, {"identity", Json{{"agent_id", config["agent_id"]},
       {"user_id", user}, {"conversation_id", request["conversation_id"]}, {"run_id", rid}}},
-      {"input", request["input"]}, {"level", requested}, {"closed", false}, {"events", Json::Array{}},
+      {"input", request["input"]}, {"level", requested}, {"capabilities", request["capabilities"]}, {"closed", false}, {"events", Json::Array{}},
       {"sequences", Json::Object{}}, {"executions", Json::Object{}}, {"steps", Json::Object{}},
       {"models", Json::Object{}}, {"actions", Json::Object{}}, {"batches", Json::Object{}},
       {"requests", Json::Object{}}, {"receipt_counts", Json::Object{}}, {"observed_boundaries", Json::Object{}}};
-    ensure_memory(user);
-    if(requested > 0) {
+    if(!config.has("offline_version")) ensure_memory(user);
+    if(config.has("offline_version")) {
+      std::vector<std::string> scopes;
+      for(const auto& actor : config["actors"].items()) scopes.push_back(scope(actor.text()));
+      apply_agent_version(run, config, approved_versions[user], nullptr, scopes);
+    }
+    else if(requested > 0) {
       auto shadow = proto<v1::ShadowOptions>(config["shadow_options"]);
       shadow.clear_target_scopes(); for(const auto& actor : config["actors"].items()) shadow.add_target_scopes(scope(actor.text()));
       const auto memory = legacy::TrajectoryEvolutionPipeline::load_memory(memory_path(user), shadow.max_memory_bytes());
@@ -1637,7 +1689,8 @@ void IntegrationService::refresh_agent_evaluations() {
       }
       artifacts.push_back(std::move(artifact));
     }
-    if(config.flag("auto_evaluate", true) && artifacts.back().str("level") == config.str("max_level")
+    if(config.flag("auto_evaluate", true) && (!config.has("evaluation_levels") || !config["evaluation_levels"].items().empty())
+        && artifacts.back().str("level") == config.str("max_level")
         && config.str("max_level") != "L0" && (config.flag("auto_approve_experiences", false)
             || !proto<v1::RuntimeOptions>(config["runtime_options"]).approved_experiences().empty())) {
       bool pending = false, failed = false;
@@ -1665,7 +1718,14 @@ void IntegrationService::refresh_agent_evaluations() {
         continue;
       }
     }
-    for(const auto& artifact : artifacts) impl_->assessments->submit(user, artifact.dump());
+    for(const auto& artifact : artifacts) {
+      if(config.has("evaluation_levels")) {
+        bool selected = false;
+        for(const auto& value : config["evaluation_levels"].items()) selected |= value.text() == artifact.str("level");
+        if(!selected) continue;
+      }
+      impl_->assessments->submit(user, artifact.dump());
+    }
     { std::lock_guard<std::mutex> guard(impl_->mutex); impl_->assessed_memory_versions[user] = generation; }
   }
   { std::lock_guard<std::mutex> guard(impl_->mutex);
@@ -1889,9 +1949,11 @@ std::string IntegrationService::local_environment(const std::string& token, std:
   auto& version = impl_->memory_versions[user]; if(!version) version = 1;
   Json result{{"memory_version", static_cast<std::size_t>(version)}, {"work_version", static_cast<std::size_t>(impl_->work_generation)}};
   if(known_version == version) return result.dump();
-  impl_->ensure_memory(user);
   ep::EvolutionMemoryStore memory;
-  require(memory.ParseFromString(read_file(impl_->memory_path(user), impl_->run_limit)), "memory_invalid");
+  if(!impl_->config.has("offline_version")) {
+    impl_->ensure_memory(user);
+    require(memory.ParseFromString(read_file(impl_->memory_path(user), impl_->run_limit)), "memory_invalid");
+  }
   result["config"] = impl_->config; result["user_id"] = user; result["memory"] = json(memory);
   result["shared_memory"] = json(impl_->shared_view(user));
   result["published_versions"] = impl_->approved_versions[user];

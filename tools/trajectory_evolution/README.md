@@ -38,6 +38,9 @@ Python 提供 `call / acall / allow_loop`，JS/TS 提供 `call / allowLoop`，�
 具体插入代码见[统一打点教程](docs/08-instrumentation.md#统一打点推荐入口)。
 Python 还提供按配置取得用户客户端的 `from evolution_configured import points`，
 只需设置 `EVOLUTION_POINT_CONFIG`，不必在宿主另写初始化、连接或身份管理文件。
+常见模型请求的注入位置、工具定义和响应 token 用量由包内识别；不需要逐个维护工具/参数白名单。
+L2 从实际发送的工具 JSON Schema 自动检查顶层必填参数，固定接口约束与 GEPA 可变策略分开记录。
+自定义输入格式可在同一打点提供 binding；接入事实和可选高级配置见[接入参数审查](docs/03-configuration.md#接入参数审查)。
 AgentFlow v1 已在现有 Python 入口插入这组打点，启用步骤见[异步接入中的 v1 配置](docs/09-async-and-multi-agent.md#agentflow-v1-已有打点如何启用)。
 
 先[独立安装](docs/02-installation.md)，复制完整 config 并配置自己的身份和数据目录，再执行[第一条真实任务](docs/04-quickstart.md)。

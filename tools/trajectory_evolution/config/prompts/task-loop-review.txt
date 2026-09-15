@@ -1,6 +1,6 @@
-本次启用逐轮效率评审：在业务 verdict、reason、evidence_paths 之外输出 loop_review。业务只按主契约的本题标准验收；工具内部规范或效率建议不能新增业务禁令。浪费可与业务 passed 同时成立，明确违反本题禁令的重试也不能解释为必要探索。
+本次启用逐轮效率评审：先核对标准与执行事实，输出 reason、evidence_paths，再输出 loop_review，最后综合核验输出 verdict，避免未读完整执行就提前判通过。业务只按主契约的本题标准验收；工具内部规范或效率建议不能新增业务禁令。浪费可与业务 passed 同时成立，明确违反本题禁令的重试也不能解释为必要探索。
 
-loop_inventory 的每个键对应一个 Run、执行实例、loop 和轮次；同轮模型/工具/控制事件已合并，不合并并发分支或不同轮次。逐一评审全部键，不遗漏或重复。
+loop_inventory 的每个键对应一个 Run、执行实例、loop 和轮次；同轮模型/工具/控制事件已合并，不合并并发分支或不同轮次。键按锚点在各 Run 中的观测顺序排列，不表示并发分支之间存在依赖；前因仍以 caused_by 为准。逐一评审全部键，不遗漏或重复。
 无效轮次：依据该轮开始前已知的信息，省去整轮不会减少标准要求的成果、必要信息或实际交付。只判“整轮可省”，不是某个动作不理想。
 
 每轮按以下顺序判断：
@@ -15,5 +15,6 @@ loop_inventory 的每个键对应一个 Run、执行实例、loop 和轮次；�
 loop_review 格式：{"status":"complete","iteration_reviews":[{"iteration_id":"loop_inventory中的键","reason":"该轮首次向用户交付结果，省去会丢失答复。","decision":"keep","evidence_event_ids":["该键的anchor_event_id原值"]}]}。
 每项按 iteration_id、reason、decision、evidence_event_ids 顺序输出，一两句简体中文说明实际贡献和省去影响，再填写一致的 keep/waste/uncertain。不要自行输出 count 或 wasted_iterations，程序计算。全部键都有 keep/waste 结论才 complete；存在 uncertain 或清单为空时整体 uncertain，空清单返回空数组。不把缺少评审当零浪费。
 
-输出前复核：理由承认“只有已禁止的重试、无额外贡献”应 waste；承认“首次必要交付”应 keep。例：A 得到不可重试错误，B 无依据再次调用，C 首次报告结果；B 可省，C 保留，不因 B 本可回答而删 C。
+输出前复核：理由承认“只有已禁止的重试、无额外贡献”应 waste；承认“首次必要交付”应 keep。例：A 得到不可重试错误，B 无依据再次调用，C 首次报告结果；B 可省，C 保留，不因 B 本可回答而删 C。重新派发不是新用户目标，不能把同一目标的再次尝试当作首次探索。
+最后汇总业务结论：逐轮核验若发现违反本题明确的必需动作、禁令或停止条件，整体不能 passed；不得一边认定违反题目，一边因最终如实报告而判通过。例如题目要求失败后停止，实际失败后换模型再次尝试再报告，仍违反停止条件，无须另写数字上限或“不得重试”。仅效率浪费、内部规范冲突不能据此判业务失败。
 若 validation_feedback.loop_review_error 存在，constraint 指出约束，iteration_review_index 是 previous_response 中零起始下标（旧格式为 wasted_iteration_index）。reference.evidence_event_index 指出错误引用，allowed_iteration_event_ids 给出真实本轮事件；重核全部评审项的键与锚点，不照抄旧引用，不用无关合法 ID 替换错误证据。找不到支持依据则该轮及整体 uncertain，反馈不意味着该轮一定浪费。

@@ -96,6 +96,58 @@ int main() {
     check(gepa::no_worse(scores(1, 1), scores(1, 0)));
     check(!gepa::no_worse(scores(1, 0), scores(1, 1)));
     check(!gepa::no_worse(Json::Object{}, scores(1, 0)));
+    check(gepa::local_gain(scores(1, .5), scores(.8, .8)));
+    check(!gepa::local_gain(scores(.5, .5), scores(.8, .8)));
+    check(!gepa::local_gain(scores(.8, .8), scores(.8, .8)));
+    auto faster = scores(1, 0), slower = scores(1, 1);
+    for(auto& item : faster.fields()) item.second["latency_efficiency"] = 1;
+    for(auto& item : slower.fields()) item.second["latency_efficiency"] = .5;
+    check(gepa::local_gain(faster, slower));
+    faster["a"]["quality"] = 0;
+    check(!gepa::local_gain(faster, slower));
+    faster["a"]["quality"] = 1; faster["b"].fields().erase("latency_efficiency");
+    check(!gepa::local_gain(faster, slower));
+    check(!gepa::local_gain(Json::Object{}, slower));
+    // Saturating fitness can prefer [0, 10] to [1, 1], despite more raw waste.
+    auto parent_loops = scores(.8, .8), child_loops = scores(1, 1);
+    for(auto* values : {&parent_loops, &child_loops}) for(auto& item : values->fields()) {
+      item.second["invalid_loops"] = 1;
+      item.second["loop_method"] = "model_review";
+    }
+    child_loops["a"]["invalid_loops"] = 0; child_loops["b"]["invalid_loops"] = 10;
+    check(!gepa::loops_no_worse(child_loops, parent_loops));
+    check(!gepa::no_worse(child_loops, parent_loops));
+    child_loops["b"]["invalid_loops"] = 1;
+    check(gepa::no_worse(child_loops, parent_loops));
+    child_loops["b"]["loop_method"] = "rule_lower_bound";
+    check(!gepa::loops_no_worse(child_loops, parent_loops));
+    child_loops["b"].fields().erase("invalid_loops");
+    check(!gepa::loops_no_worse(child_loops, parent_loops));
+    parent_loops["b"].fields().erase("invalid_loops");
+    check(!gepa::loops_no_worse(child_loops, parent_loops));
+    check(gepa::loops_no_worse(scores(1, 1), scores(1, 1)));
+    auto efficiency_nodes = Json(Json::Array{node(0, nullptr, 0, 1, 1), node(1, 0, 1, 1, 1), node(2, 0, 1, 1, 1)});
+    for(auto& n : efficiency_nodes.items()) for(auto& item : n["validation"].fields()) {
+      item.second["fitness"] = n.num("id", 0) ? .8 : .9;
+      item.second["latency_efficiency"] = .5;
+    }
+    efficiency_nodes.items()[1]["validation"]["a"]["latency_efficiency"] = .8;
+    efficiency_nodes.items()[2]["validation"]["b"]["latency_efficiency"] = .8;
+    const Json efficiency_frontier{{"a", Json::Array{1}}, {"b", Json::Array{2}}};
+    check(gepa::select_merge(efficiency_nodes, efficiency_frontier, Json::Array{}, config, 0).null());
+    auto exploratory = config; exploratory["acceptance"] = "pareto";
+    check(!gepa::select_merge(efficiency_nodes, efficiency_frontier, Json::Array{}, exploratory, 0).null());
+    // Below-average specialists can supply complementary components to one child.
+    Json specialists = Json::Array{node(0, nullptr, 0, .8, .8), node(1, 0, 1, 1, .5),
+        node(2, 0, 1, .5, 1), node(3, 1, 2, .9, .5)};
+    gepa::validate_nodes(specialists);
+    check(!gepa::no_worse(specialists.items()[1]["validation"], specialists.items()[0]["validation"]));
+    const auto specialists_plan = gepa::select_merge(specialists,
+        gepa::frontier_map(specialists, {"a", "b"}, config), Json::Array{}, config, 0);
+    check(specialists_plan.num("first", 99) == 1 && specialists_plan.num("second", 99) == 2);
+    specialists.items()[2]["validation"] = scores(.8, .8);
+    check(gepa::select_merge(specialists, Json{{"a", Json::Array{1}}, {"b", Json::Array{2}}},
+        Json::Array{}, config, 0).null());
     std::cout << "GEPA DAG, recombination, selection, components and acceptance passed\n";
     return 0;
   } catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }

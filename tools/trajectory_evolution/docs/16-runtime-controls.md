@@ -29,14 +29,14 @@
 2. 只保留 memory_id 与 content_revision 同时匹配批准项的经验。
 3. 用结构化 JSON 放入经验模板，逐条检查 `max_context_bytes`；放不下的条目跳过。
 4. 外面加带 policy_id 的经验边界标记，用于识别与回执验证。
-5. 根据宿主 `binding.pointer` 指定的 JSON 位置注入，返回增强后的参数。
+5. 根据显式 binding 或包内识别的输入位置注入，返回增强后的参数。
 
 `src/request_binding.cpp` 支持两种绑定模式：
 
 - `text`：追加到指定字符串。
 - `system_message`：追加到指定消息数组的 system 内容；没有适合位置时创建 system 消息。
 
-宿主语言和模型 SDK 可自行选择，通过 binding 描述输入位置。
+宿主语言和模型 SDK 可自行选择；常见格式自动识别，自定义结构通过同一打点的 binding 描述输入位置。
 将返回的 input 用于实际发送，并在结束时回报 actual_input。
 
 结束时提供 `actual_input` 和 `executed`。`PolicyRuntime::verify` 重新计算同一次查询应有的增强内容，检查是否真的允许发送、
@@ -47,8 +47,21 @@
 
 ### L2：逐动作过滤，不重写宿主并行调度
 
-L2 按部署配置的动作规则进行确定性判定。
-每个动作先默认为 allow，再按 scope 与 operation 精确匹配规则：
+L2 首先执行包内的工具契约检查，无需逐工具配置：
+
+1. 模型结束点从 actual_input 的工具定义提取操作名称及 JSON Schema 顶层 required。
+2. 支持 function/parameters、input_schema、Responses 扁平工具、functionDeclarations 和旧 functions 形式。
+3. 按 Run、scope、执行者和并发分支保存紧凑定义；不保存说明文本作为权限或规则。
+4. 对同一分支的动作检查必填键是否存在。required 不等于非空；可选键不会被自动提升为必填。
+5. 未观察到定义、同一分支定义冲突、定义格式不合法时记录 unknown，不猜测约束或拒绝业务调用。
+
+只在 L2/L3 且 apply_policy=true 时拦截缺少必填键的动作，L0/L1 保留原执行。
+action.start.attributes.contract_check 记录检查状态、缺失键及 enforced；模型 action.end 的
+attributes.tool_contracts 记录实际输入中提取的紧凑定义。此检查不调用模型，不进行磁盘或网络请求。
+它是顶层 required 检查，不替代工具本身的类型、嵌套字段、权限或业务校验。
+缓存最多 128 个分支组，每组最多 64 个操作、每次紧凑定义最多 64 KiB；超限记 unknown，原调用继续。
+
+如另外配置了动作规则，通过契约检查后再按 scope 与 operation 精确匹配：
 
 - `deny=true`：拒绝该动作。
 - `required_arguments`：任一指定顶层参数缺失或为空则拒绝。
@@ -57,7 +70,8 @@ L2 按部署配置的动作规则进行确定性判定。
 
 L2 不自动重排序、串行化或取消兄弟动作，也不把一个动作拒绝改写成整个任务失败。
 通过的动作仍由宿主按原来的串并行关系执行。
-回执核对被拒绝的 action_id 确实出现在 skipped 集合，并没有出现在 executed 集合。
+显式策略的回执核对被拒绝的 action_id 确实出现在 skipped 集合，并没有出现在 executed 集合。
+固定契约拒绝通过 contract_check 和 action.end.executed=false 记录，不伪装成某条经验策略的拒绝。
 回执对照控制决定与实际执行情况；业务工具的返回状态单独记录。
 
 ### L3：有状态的循环收敛控制
