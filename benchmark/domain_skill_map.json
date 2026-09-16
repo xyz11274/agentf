@@ -1,0 +1,10 @@
+{
+  "_comment": "product xlsx 垂域意图 → daily-qa-assistant skill 名映射表（2026-09-16 确认）。QA 复用已有 web-search（真实 API）；其余 6 个为 mock skill（固定成功返回示例数据），见 examples/agent/daily-qa-assistant/harness/skills/。",
+  "QA": ["web-search"],
+  "观影": ["movie-query"],
+  "GUI": ["device-gui"],
+  "健康": ["health-advice"],
+  "居家": ["smart-home"],
+  "知识库": ["knowledge-base"],
+  "记忆": ["user-memory"]
+}
