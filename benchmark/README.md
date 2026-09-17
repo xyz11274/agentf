@@ -13,13 +13,14 @@
 ```
 benchmark/
 ├── evalset_schema.py     # evalset.v2 schema 定义 / 归一 / 校验
-├── converters.py         # 三个 converter（coldstart JSONL / product xlsx / daily-qa JSON）+ 合并 CLI
+├── converters.py         # converter（coldstart JSONL / product xlsx / daily-qa JSON / hotpotqa JSON）+ 合并 CLI
 ├── domain_skill_map.json # product 垂域意图 → skill 名映射表（已确认，见下）
 ├── run_eval.py           # 统一评测 runner（以 daily-qa run_eval.py 为底座扩展）
-├── datasets/             # 预生成的三份 evalset.v2（直接评测，无需自己跑 converter）
+├── datasets/             # 预生成的 evalset.v2（直接评测，无需自己跑 converter）
 │   ├── coldstart.json    #   60 case / 60 轮（单轮任务，无意图 GT，split=train/val/holdout）
 │   ├── product.json      #   1074 case / 1910 轮（多轮多意图，GT 已映射为 skill 集合）
-│   └── daily-qa.json     #   25 case / 86 轮（多轮对话）
+│   ├── daily-qa.json     #   25 case / 86 轮（多轮对话）
+│   └── hotpotqa.json     # 700 case / 700 轮（HotpotQA 多跳问答，单轮，无意图 GT，split=train/val）
 ├── reports/              # 评测报告输出
 └── README.md
 ```
@@ -77,6 +78,7 @@ python3 run_eval.py --evalset datasets/product.json --baseline reports/report-ol
 python3 converters.py ../trace_output/v1-l4-coldstart/dataset/{train,val,holdout}.jsonl -o datasets/coldstart.json
 python3 converters.py ../test_cases/product/*.xlsx -o datasets/product.json
 python3 converters.py ../examples/agent/daily-qa-assistant/evals/evalset.json -o datasets/daily-qa.json
+python3 converters.py ../test_cases/opensource/hotpot_train_500.json ../test_cases/opensource/hotpot_dev_200.json -o datasets/hotpotqa.json
 ```
 
 ## 离线自进化（GEPA）使用说明
