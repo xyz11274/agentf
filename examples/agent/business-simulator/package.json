@@ -1,0 +1,16 @@
+{
+  "name": "business-simulator",
+  "version": "1.0.0",
+  "description": "业务验收 Agent：真实联网、提醒、文件和图片；独立可运行的家居与预约测试系统，按状态与库存验证执行结果。",
+  "author": "AgentFlow",
+  "workflows": [
+    "coordinator_workflow.json",
+    "dummy_pre_skill_workflow.json",
+    "skill_workflow.json"
+  ],
+  "metadata": {
+    "type": "business-agent",
+    "category": "business-acceptance",
+    "default_execution_mode": "real"
+  }
+}

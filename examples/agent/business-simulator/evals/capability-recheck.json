@@ -1,0 +1,1648 @@
+{
+  "checked_at": "2026-09-17T05:53:15.445220+00:00",
+  "notice": "Adapter probes plus static candidates, not LLM benchmark pass/fail counts. Probe data is isolated synthetic diagnostic input, never inserted into benchmark cases or runtime state.",
+  "cases": 1074,
+  "turns": 1910,
+  "conversion": {
+    "differences": [],
+    "raw_only": [],
+    "normalized_only": [],
+    "warnings": [],
+    "renamed_ids": [
+      {
+        "normalized_id": "product:Two_Intent_Hybrid:DH_YT_YTLY_03_009",
+        "raw_id": "DH_YT_YTLY_03_009",
+        "source": "Two_Intent_Hybrid.xlsx",
+        "reason": "existing converter duplicate-id namespace"
+      }
+    ],
+    "operation_codes_preserved_in_normalized": false
+  },
+  "label_gaps": {
+    "no_expected_skills": 727,
+    "no_expected_behavior": 216,
+    "plan_only_gui_turns": 251
+  },
+  "sources": [
+    {
+      "file": "test_cases/product/One_Intent_Hybrid.xlsx",
+      "rows": 295,
+      "sha256": "d0f56a3ba2995d8921ff8df7e431753aa71739469d280cff4d64b201ae8b1293"
+    },
+    {
+      "file": "test_cases/product/Three_Intent_Hybrid.xlsx",
+      "rows": 506,
+      "sha256": "c84c5f7c0f14ba72cb9f80c0d323731e79f5cb631c149934fccde0d88f612c77"
+    },
+    {
+      "file": "test_cases/product/Two_Intent_Hybrid.xlsx",
+      "rows": 273,
+      "sha256": "a2770466207fe250ec872571b79b336680a50df419f225428e8722757606856d"
+    }
+  ],
+  "normalized_sha256": "bbd0ff3599bd9534eb5eeb36a60022a6a26ed5d7f280c9fac10d59ed5249ee01",
+  "source_sha256": {
+    "harness/business_sim/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "harness/business_sim/_live_search.py": "1cf7da726e4da6de4925e3333d9a85faa73cc9f086ce0186d460079c9b8d5ff1",
+    "harness/business_sim/appointments.py": "9659be1cf6ce09420f5293b0a3f1b352d1193e45a644395ef5d3715ba7efcb33",
+    "harness/business_sim/backend.py": "049291e30a7d7767b6b7752999667a2d1de5eead093ac93ccbd4fcf314d40e1b",
+    "harness/business_sim/backend_client.py": "bf7cf175c84569a631cd9a85e966b8f1740c59bda44465524bec940620a7c5e4",
+    "harness/business_sim/contracts.py": "0d8a214910a71b1f002f6ee17607688272095f2273decb21f760503280158b66",
+    "harness/business_sim/device_world.py": "6782b10c9dbe9975d33715a1047855964039fb3f770597b84ece182580deaa99",
+    "harness/business_sim/health_records.py": "64d987b9a776ca9fb109b54e8da040586feec4e0a12592205f95729df4020616",
+    "harness/business_sim/live_information.py": "5bd247e264115283d613ab72fd648738f39d141040421f6d1720c1e9ca9c8fe8",
+    "harness/business_sim/real_services.py": "bef46b55a05da82608b6a1bbfa3e5bb7fcd8217c2c6b54b4ce818dbd3ba41532",
+    "harness/business_sim/reminders.py": "5480183b8029a779e640b6d98fb373856779cda2c8fb677afe721180c023df3b",
+    "harness/business_sim/services.py": "f766502018ff8302dff1b2e758c13883c8cff0caf0f4056103308ffff06b0d0b",
+    "harness/business_sim/state.py": "731f1224f6316152595b8e18bb2690c6b2ef2149f546b889b27b3f7539c993bf",
+    "harness/business_sim/tool_scope.py": "1c3701b4d46b5a70d63bc19da6ad824de81079dc34e527b4c6d01aee7e72d095",
+    "evals/audit_capabilities.py": "820e8f09926c3b8369d22cb1d6919d0517b70f34eb535c7f41406aa62af62d46",
+    "evals/audit_corpus.py": "f4b22856a4c9a50b34aa09f0cd3a5217901ea42c7cbadfaefa363148b1142ac4",
+    "evals/check_business_results.py": "ec2dea6a5b279fe504fdb96d8b6ee9b1a6e4ea2f44d62b887d18a95e1efe71fb",
+    "evals/conversation_client.py": "45b8e2abe2ae5f6157ed15e539c05ab2d2e65a5b122c2836e867a0db9f15d971",
+    "evals/recheck_capabilities.py": "a97fa3fc916e35a98be80a3e04922b7226c96a8e996841953db57ba0716065a3",
+    "evals/run_isolated.py": "8f97e9761a754b5af4b269c3b7b0c1eab22f602253c19693a6adbc1d773626c3",
+    "evals/run_product_eval.py": "9c424f59f0bbd03341f9647a195ad40efd7966868da759134d86efd1f64f2abd",
+    "evals/run_representative.py": "ef325cd30cfa12437c04e6da06129d962f667c29c7f506a9a5684de90098e1e2",
+    "evals/smoke_live.py": "790289ab6d9066407943eca37d540f774402fa0cd2c534c5037c181c06bf5c19",
+    "evals/smoke_real.py": "d56f81b5fcb638cee07d154b536e0cc05eaabc38181433910e3797b3797a44b1"
+  },
+  "dataset_candidates": {
+    "uncatalogued_hospital_mentions": {
+      "cases": 81,
+      "turns": 81,
+      "items": [
+        {
+          "id": "SYS_DYT_01_081",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 247,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "帮我挂一个协和医院心内科的号"
+        },
+        {
+          "id": "SYS_DYT_01_088",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 254,
+          "matches": [
+            "儿童医院"
+          ],
+          "user": "小孩有点发烧，帮我挂今天儿童医院儿科的号"
+        },
+        {
+          "id": "SYS_DYT_01_089",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 255,
+          "matches": [
+            "中医院"
+          ],
+          "user": "想调理一下身体，帮我挂个中医院的中医内科"
+        },
+        {
+          "id": "QA_JK_WYYL_007",
+          "turn": 2,
+          "source": "Two_Intent_Hybrid.xlsx",
+          "excel_row": 110,
+          "matches": [
+            "同仁医院"
+          ],
+          "user": "有没有同仁医院的？"
+        },
+        {
+          "id": "SYS_DYT_02_001",
+          "turn": 1,
+          "source": "Two_Intent_Hybrid.xlsx",
+          "excel_row": 159,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "帮我在北京协和医院挂一个明天上午的内科号，另外把吃药提醒也设置一下"
+        },
+        {
+          "id": "SYS_DYT_02_006",
+          "turn": 1,
+          "source": "Two_Intent_Hybrid.xlsx",
+          "excel_row": 164,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "帮我挂个协和医院的神经内科号，顺便在优酷视频上搜一下德云社的相声看看"
+        },
+        {
+          "id": "SYS_DYT_02_011",
+          "turn": 1,
+          "source": "Two_Intent_Hybrid.xlsx",
+          "excel_row": 169,
+          "matches": [
+            "朝阳医院"
+          ],
+          "user": "预约一下明天下午两点朝阳医院的消化内科，最近看病挺多的顺便把健康档案也建一份"
+        },
+        {
+          "id": "SYS_DYT_02_015",
+          "turn": 1,
+          "source": "Two_Intent_Hybrid.xlsx",
+          "excel_row": 173,
+          "matches": [
+            "安贞医院",
+            "同仁医院"
+          ],
+          "user": "约一个明天上午安贞医院的心内科号，再去同仁医院挂个下午的眼科的号"
+        },
+        {
+          "id": "SYS_DYT_02_017",
+          "turn": 1,
+          "source": "Two_Intent_Hybrid.xlsx",
+          "excel_row": 175,
+          "matches": [
+            "朝阳医院"
+          ],
+          "user": "帮我在朝阳医院挂一个明天下午的内科号，顺便看看我家的家电使用习惯"
+        },
+        {
+          "id": "SYS_DYT_02_021",
+          "turn": 1,
+          "source": "Two_Intent_Hybrid.xlsx",
+          "excel_row": 179,
+          "matches": [
+            "北医三院"
+          ],
+          "user": "约一个后天北医三院的骨科号，再给我推荐几部好看的科幻电影"
+        },
+        {
+          "id": "SYS_DYT_02_022",
+          "turn": 1,
+          "source": "Two_Intent_Hybrid.xlsx",
+          "excel_row": 180,
+          "matches": [
+            "安贞医院"
+          ],
+          "user": "挂一个明天上午安贞医院的号，顺便查一下明天北京的天气"
+        },
+        {
+          "id": "SYS_DYT_02_023",
+          "turn": 1,
+          "source": "Two_Intent_Hybrid.xlsx",
+          "excel_row": 181,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "帮我在协和医院挂个皮肤科号，然后查一下我之前挂过的号"
+        },
+        {
+          "id": "SYS_DYT_02_024",
+          "turn": 1,
+          "source": "Two_Intent_Hybrid.xlsx",
+          "excel_row": 182,
+          "matches": [
+            "同仁医院"
+          ],
+          "user": "约一个同仁医院眼科的号，对了看看我现在都有哪些吃药提醒"
+        },
+        {
+          "id": "SYS_DYT_02_038",
+          "turn": 1,
+          "source": "Two_Intent_Hybrid.xlsx",
+          "excel_row": 196,
+          "matches": [
+            "北医三院"
+          ],
+          "user": "看看我现在有哪些吃药提醒，另外帮我在北医三院挂一个皮肤科号"
+        },
+        {
+          "id": "SYS_DYT_02_046",
+          "turn": 1,
+          "source": "Two_Intent_Hybrid.xlsx",
+          "excel_row": 204,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "看看我的健康档案上的就诊记录，另外在协和医院挂一个消化内科号"
+        },
+        {
+          "id": "SYS_DYT_02_054",
+          "turn": 1,
+          "source": "Two_Intent_Hybrid.xlsx",
+          "excel_row": 212,
+          "matches": [
+            "安贞医院"
+          ],
+          "user": "看看我出门的时候一般怎么设置家电，再在安贞医院挂个心内科号"
+        },
+        {
+          "id": "SYS_DYT_02_055",
+          "turn": 1,
+          "source": "Two_Intent_Hybrid.xlsx",
+          "excel_row": 213,
+          "matches": [
+            "阜外医院"
+          ],
+          "user": "推荐几部好看的喜剧电影，另外在阜外医院挂一个心血管内科号"
+        },
+        {
+          "id": "SYS_DYT_02_062",
+          "turn": 1,
+          "source": "Two_Intent_Hybrid.xlsx",
+          "excel_row": 220,
+          "matches": [
+            "北医三院"
+          ],
+          "user": "如何卸载联通云手机APP，可以卸载的话也挂个北医三院皮肤科号"
+        },
+        {
+          "id": "TGJK_YD2_005",
+          "turn": 3,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 40,
+          "matches": [
+            "同仁医院"
+          ],
+          "user": "有没有同仁医院的？"
+        },
+        {
+          "id": "SYS_DYT_03_001",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 148,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "提醒我吃一下药，另外建一份健康档案，北京协和医院内科帮我挂个号"
+        },
+        {
+          "id": "SYS_DYT_03_006",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 153,
+          "matches": [
+            "朝阳医院"
+          ],
+          "user": "优酷视频帮我搜一下《繁花》，朝阳医院消化内科有号吗帮我挂一个，同时把吃药提醒设上"
+        },
+        {
+          "id": "SYS_DYT_03_010",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 157,
+          "matches": [
+            "安贞医院"
+          ],
+          "user": "弄一份健康档案，对了安贞医院心内科有号吗帮我挂一个，接下来打开腾讯视频看个电影"
+        },
+        {
+          "id": "SYS_DYT_03_013",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 160,
+          "matches": [
+            "阜外医院"
+          ],
+          "user": "给我在中国联通APP充一百块话费，另外帮我约个阜外医院眼科号，顺便建一份健康档案"
+        },
+        {
+          "id": "SYS_DYT_03_015",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 162,
+          "matches": [
+            "北医三院"
+          ],
+          "user": "给我加个每天吃药的提醒，北医三院骨科帮我约个号，另外健康档案也生成一份"
+        },
+        {
+          "id": "SYS_DYT_03_016",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 163,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "整理一下门诊信息生成健康档案，协和医院皮肤科有号吗帮我挂一个，再把吃药提醒设上"
+        },
+        {
+          "id": "SYS_DYT_03_017",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 164,
+          "matches": [
+            "同仁医院"
+          ],
+          "user": "酷狗音乐给我放一首邓紫棋的歌，同仁医院眼科帮我约个号，对了耳鼻喉科也挂一个"
+        },
+        {
+          "id": "SYS_DYT_03_018",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 165,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "腾讯视频帮我搜一下《庆余年》，另外健康档案帮我生成一份，哦对了协和医院内科有号吗帮我挂一个"
+        },
+        {
+          "id": "SYS_DYT_03_020",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 167,
+          "matches": [
+            "安贞医院"
+          ],
+          "user": "门诊信息帮我整理成一份健康档案，还有安贞医院心内科帮我约个号，顺便把上个月的门诊记录也整理成档案"
+        },
+        {
+          "id": "SYS_DYT_03_024",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 171,
+          "matches": [
+            "同仁医院"
+          ],
+          "user": "我想去协和看内科，顺便在同仁医院帮我约个眼科号，然后推荐几部好看的电影"
+        },
+        {
+          "id": "SYS_DYT_03_028",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 175,
+          "matches": [
+            "北医三院"
+          ],
+          "user": "北医三院骨科有号吗帮我挂一个，然后在芒果TV看看有什么好看的电视剧，查查我家电使用习惯"
+        },
+        {
+          "id": "SYS_DYT_03_030",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 177,
+          "matches": [
+            "安贞医院"
+          ],
+          "user": "我想去安贞医院看心内科，健康档案也生成一份，卧室空调开到25度"
+        },
+        {
+          "id": "SYS_DYT_03_031",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 178,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "协和医院皮肤科有号吗帮我挂一个，再帮我约个消化内科的号，然后把窗帘拉开"
+        },
+        {
+          "id": "SYS_DYT_03_032",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 179,
+          "matches": [
+            "阜外医院"
+          ],
+          "user": "提醒我按时吃药，另外阜外医院心血管内科帮我约个号，看看我平时出门怎么控制家电"
+        },
+        {
+          "id": "SYS_DYT_03_035",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 182,
+          "matches": [
+            "朝阳医院"
+          ],
+          "user": "朝阳医院帮我约个消化内科的号，神经内科也挂一个，搜一下北京到上海的高铁票"
+        },
+        {
+          "id": "SYS_DYT_03_040",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 187,
+          "matches": [
+            "安贞医院"
+          ],
+          "user": "生成一份健康档案，安贞医院心内科有号吗帮我挂一个，顺便查查我的挂号记录"
+        },
+        {
+          "id": "SYS_DYT_03_043",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 190,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "协和医院挂个内科号，如何进行联通云手机账号注销，哦对了把吃药提醒设上"
+        },
+        {
+          "id": "SYS_DYT_03_044",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 191,
+          "matches": [
+            "同仁医院"
+          ],
+          "user": "在QQ音乐上放一首周杰伦的歌，查一下我的挂号记录，接下来在同仁医院挂个眼科号"
+        },
+        {
+          "id": "SYS_DYT_03_047",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 194,
+          "matches": [
+            "北医三院"
+          ],
+          "user": "提醒我按时吃药，客厅的空调调到26度，再去北医三院挂个骨科号"
+        },
+        {
+          "id": "SYS_DYT_03_048",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 195,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "安排一下吃药提醒，查查我的健康档案，另外在协和医院挂个内科号"
+        },
+        {
+          "id": "SYS_DYT_03_050",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 197,
+          "matches": [
+            "安贞医院"
+          ],
+          "user": "安贞医院挂个心内科号，查一下我之前的挂号记录，另外把吃药提醒安排一下"
+        },
+        {
+          "id": "SYS_DYT_03_053",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 200,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "提醒我按时吃药，联通云手机有什么功能，再去协和医院挂个皮肤科号"
+        },
+        {
+          "id": "SYS_DYT_03_056",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 203,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "把门诊信息整理成健康档案，查一下我的挂号记录，接下来在协和医院挂个皮肤科号"
+        },
+        {
+          "id": "SYS_DYT_03_058",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 205,
+          "matches": [
+            "阜外医院"
+          ],
+          "user": "阜外医院挂个心内科号，看看我的吃药提醒列表，然后用中国联通充一百话费"
+        },
+        {
+          "id": "SYS_DYT_03_059",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 206,
+          "matches": [
+            "朝阳医院"
+          ],
+          "user": "把吃药提醒设好，看看我平时出门的家电控制习惯，另外去朝阳医院挂个皮肤科号"
+        },
+        {
+          "id": "SYS_DYT_03_064",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 211,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "帮我约一个协和医院的皮肤科号，客厅的灯打开，有没有好看的电影推荐几部"
+        },
+        {
+          "id": "SYS_DYT_03_076",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 223,
+          "matches": [
+            "朝阳医院"
+          ],
+          "user": "帮我在朝阳医院预约一个明天的内科号，如何登录/登出联通云手机账户，有没有好看的纪录片推荐"
+        },
+        {
+          "id": "SYS_DYT_03_077",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 224,
+          "matches": [
+            "安贞医院"
+          ],
+          "user": "安贞医院挂个心内科号，看看我早上和晚上的吃药提醒各有哪些"
+        },
+        {
+          "id": "SYS_DYT_03_078",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 225,
+          "matches": [
+            "中医院",
+            "北医三院"
+          ],
+          "user": "帮我预约北医三院的消化内科号，搜一下附近有什么好的中医院，查查我的挂号记录"
+        },
+        {
+          "id": "SYS_DYT_03_079",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 226,
+          "matches": [
+            "阜外医院"
+          ],
+          "user": "阜外医院挂个心内科号，最近胸闷应该怎么办，看看我的吃药提醒列表"
+        },
+        {
+          "id": "SYS_DYT_03_081",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 228,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "看看我的吃药提醒列表，协和医院挂个皮肤科号，对了弄一份健康档案"
+        },
+        {
+          "id": "SYS_DYT_03_090",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 237,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "我想看下我的吃药提醒列表，帮我在协和医院挂个内科号，同时再挂一个皮肤科号"
+        },
+        {
+          "id": "SYS_DYT_03_092",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 239,
+          "matches": [
+            "阜外医院"
+          ],
+          "user": "有没有好看的喜剧电影，阜外医院挂个心内科号，哦对了弄一个吃药提醒"
+        },
+        {
+          "id": "SYS_DYT_03_093",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 240,
+          "matches": [
+            "北医三院"
+          ],
+          "user": "调出来看看我的吃药提醒列表，北医三院挂个骨科号，吃药提醒也重新调整一下"
+        },
+        {
+          "id": "SYS_DYT_03_095",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 242,
+          "matches": [
+            "同仁医院"
+          ],
+          "user": "帮我查下我的挂号记录，用中国联通充五十话费，同时去同仁医院挂个眼科号"
+        },
+        {
+          "id": "SYS_DYT_03_097",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 244,
+          "matches": [
+            "朝阳医院"
+          ],
+          "user": "我想看下我的挂号信息，朝阳医院挂个消化内科号，接下来用腾讯视频看个电影"
+        },
+        {
+          "id": "SYS_DYT_03_098",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 245,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "看看我的健康档案，协和医院挂个皮肤科号，再把最新的就诊信息生成一份档案"
+        },
+        {
+          "id": "SYS_DYT_03_099",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 246,
+          "matches": [
+            "安贞医院"
+          ],
+          "user": "窗帘拉上，安贞医院挂个心内科号，另外再挂一个明天的体检号"
+        },
+        {
+          "id": "SYS_DYT_03_100",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 247,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "最近老是失眠有什么好办法，弄一份健康档案，还有去协和医院挂个神经内科号"
+        },
+        {
+          "id": "SYS_DYT_03_101",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 248,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "查查我的健康档案，协和医院挂个内科号，然后查一下我的挂号记录"
+        },
+        {
+          "id": "SYS_DYT_03_109",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 256,
+          "matches": [
+            "安贞医院"
+          ],
+          "user": "了解一下我平时的家电控制习惯，安贞医院挂个心内科号，想看喜剧片有什么好片子吗"
+        },
+        {
+          "id": "SYS_DYT_03_113",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 260,
+          "matches": [
+            "北医三院"
+          ],
+          "user": "给我推几部战争片吧，北医三院挂个骨科号，这几天膝盖疼应该怎么办"
+        },
+        {
+          "id": "SYS_DYT_03_114",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 261,
+          "matches": [
+            "同仁医院"
+          ],
+          "user": "云手机画面严重卡顿怎么办，同仁医院挂个眼科号，老是眼睛干涩有什么好的办法"
+        },
+        {
+          "id": "SYS_DYT_03_115",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 262,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "查查我的健康档案上的门诊记录，协和医院挂个皮肤科号，再查查健康档案的用药信息"
+        },
+        {
+          "id": "SYS_DYT_03_118",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 265,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "老是失眠应该看什么科，协和医院挂个神经内科号，想看文艺片有什么好片子吗"
+        },
+        {
+          "id": "SYS_DYT_03_124",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 271,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "附近有哪些靠谱的体检中心，有合适的话帮我建份健康档案，再在协和医院挂个全科的号"
+        },
+        {
+          "id": "SYS_DYT_03_126",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 273,
+          "matches": [
+            "北医三院"
+          ],
+          "user": "一个账号最多能拥有多少台云手机，确实有限制就帮我在北医三院挂个皮肤科号，然后去爱奇艺追追新剧"
+        },
+        {
+          "id": "SYS_DYT_03_132",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 279,
+          "matches": [
+            "安贞医院"
+          ],
+          "user": "血压偏高饮食上要注意什么，需要吃药控制就帮我设个吃药提醒，再在安贞医院挂个心内科号"
+        },
+        {
+          "id": "SYS_DYT_03_167",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 314,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "出门的时候家电怎么自动控制的，回家后又会自动开哪些设备，另外帮我在协和医院挂个内科号"
+        },
+        {
+          "id": "SYS_DYT_03_172",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 319,
+          "matches": [
+            "安贞医院"
+          ],
+          "user": "健康档案调出来看看，推荐几部悬疑片呗，还有在安贞医院挂个心内科号"
+        },
+        {
+          "id": "SYS_DYT_03_176",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 323,
+          "matches": [
+            "北医三院"
+          ],
+          "user": "挂号记录帮我查一下，膝盖疼看什么科比较好，挂个北医三院骨科的号"
+        },
+        {
+          "id": "SYS_DYT_03_177",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 324,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "明天上海天气怎么样，北京到上海的高铁票还有吗，对了协和医院挂个皮肤科号"
+        },
+        {
+          "id": "SYS_DYT_03_241",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 388,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "帮我在协和医院挂个神经内科号，最近失眠有什么好办法，要是医生建议用药就帮我设个吃药提醒"
+        },
+        {
+          "id": "SYS_DYT_03_245",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 392,
+          "matches": [
+            "安贞医院"
+          ],
+          "user": "在安贞医院挂个心内科号，血压偏高应该注意什么，要是有健康建议就去爱奇艺看看有什么养生节目"
+        },
+        {
+          "id": "SYS_DYT_03_249",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 396,
+          "matches": [
+            "北医三院"
+          ],
+          "user": "在北医三院挂个骨科号，看看骨科恢复期间有什么护理方法，如果涉及用药就帮我设个吃药提醒"
+        },
+        {
+          "id": "SYS_DYT_03_253",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 400,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "在协和医院挂个内科号，问问应用分身，有解答的话帮我设个吃药提醒"
+        },
+        {
+          "id": "SYS_DYT_03_257",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 404,
+          "matches": [
+            "同仁医院"
+          ],
+          "user": "在同仁医院挂个眼科号，顺便搜一下附近有什么好的体检中心，搜到靠谱的就帮我建份健康档案准备去做个体检"
+        },
+        {
+          "id": "SYS_DYT_03_261",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 408,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "帮我在协和医院挂个神经内科号，最近失眠有什么好办法，要是医生建议调理就把卧室灯调暗点"
+        },
+        {
+          "id": "SYS_DYT_03_265",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 412,
+          "matches": [
+            "安贞医院"
+          ],
+          "user": "我想去安贞医院看心内科，血压高饮食方面要注意啥，有调理建议的话就把客厅空调打开"
+        },
+        {
+          "id": "SYS_DYT_03_269",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 416,
+          "matches": [
+            "北医三院"
+          ],
+          "user": "北医三院骨科能挂号吗帮我挂一个，搜搜附近有什么适合散步的公园，环境不错就把客厅空调开着准备回来休息"
+        },
+        {
+          "id": "SYS_DYT_03_273",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 420,
+          "matches": [
+            "协和医院"
+          ],
+          "user": "协和医院内科挂号，问问云手机是否支持群控，有解答的话给我推荐几部好看的电影"
+        },
+        {
+          "id": "SYS_DYT_03_277",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 424,
+          "matches": [
+            "同仁医院"
+          ],
+          "user": "同仁医院眼科帮我挂个号，明天北京天气怎么样，天气好就看看我出门时的家电控制习惯"
+        }
+      ]
+    },
+    "gui_actions_missing_explicit_templates": {
+      "cases": 45,
+      "turns": 45,
+      "items": [
+        {
+          "id": "CK_GUI_FHCK_00_055",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 76,
+          "matches": [
+            "签到"
+          ],
+          "user": "打开腾讯视频，去我的金币里签到"
+        },
+        {
+          "id": "CK_GUI_FHCK_00_057",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 77,
+          "matches": [
+            "签到"
+          ],
+          "user": "打开芒果TV，去签到拆盲盒"
+        },
+        {
+          "id": "CK_GUI_FHCK_00_061",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 78,
+          "matches": [
+            "签到"
+          ],
+          "user": "打开酷狗音乐，领取每日签到奖励"
+        },
+        {
+          "id": "CK_GUI_FHCK_00_109",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 79,
+          "matches": [
+            "收藏"
+          ],
+          "user": "帮我把现在正在播放的这首歌收藏到我的'心动时刻'歌单里。"
+        },
+        {
+          "id": "CK_GUI_FHCK_00_112",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 80,
+          "matches": [
+            "收藏"
+          ],
+          "user": "帮我打开网易云音乐，找到陈奕迅的《孤勇者》，然后收藏这首歌。"
+        },
+        {
+          "id": "CK_GUI_FHCK_00_104",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 81,
+          "matches": [
+            "评论"
+          ],
+          "user": "帮我到QQ音乐里给周杰伦的《七里香》发个评论，就说'前奏一响，青春回来了'。"
+        },
+        {
+          "id": "CK_GUI_FHCK_00_105",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 82,
+          "matches": [
+            "评论"
+          ],
+          "user": "帮我给网易云音乐里的《平凡之路》这首歌发个评论，内容是'每次听都有新感受'。"
+        },
+        {
+          "id": "CK_GUI_FHCK_00_018",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 83,
+          "matches": [
+            "签到"
+          ],
+          "user": "咸鱼之王领取每日签到奖励"
+        },
+        {
+          "id": "CK_GUI_FHCK_00_119",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 85,
+          "matches": [
+            "收藏"
+          ],
+          "user": "帮我收藏周迅主演的长视频，就在芒果TV里找。"
+        },
+        {
+          "id": "CK_GUI_FHCK_00_120",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 86,
+          "matches": [
+            "收藏"
+          ],
+          "user": "帮我到芒果TV里找《小巷人家》，然后点击收藏。"
+        },
+        {
+          "id": "CK_GUI_FHCK_00_021",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 97,
+          "matches": [
+            "安装"
+          ],
+          "user": "到应用市场安装豆包"
+        },
+        {
+          "id": "CK_GUI_FHCK_00_053",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 98,
+          "matches": [
+            "安装"
+          ],
+          "user": "帮我从华为应用市场安装'Courseraing'这个网课应用，确认是官方正版的。"
+        },
+        {
+          "id": "CK_GUI_FHCK_00_127",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 101,
+          "matches": [
+            "收藏"
+          ],
+          "user": "帮我把红果短剧排行榜里系统推荐的热门短剧收藏一下。"
+        },
+        {
+          "id": "SYS_DYT_01_009",
+          "turn": 1,
+          "source": "One_Intent_Hybrid.xlsx",
+          "excel_row": 175,
+          "matches": [
+            "收藏"
+          ],
+          "user": "把QQ音乐里正在放的这首歌收藏一下"
+        },
+        {
+          "id": "QA_GUI_YDYL_012",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 11,
+          "matches": [
+            "安装"
+          ],
+          "user": "帮我在华为应用市场搜一下Coursera，如果能搜到官方正版就发起安装，然后告诉我这个APP适合学哪些课程，零基础学Python从哪开始比较好。"
+        },
+        {
+          "id": "QA_GUI_HHYL_002",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 13,
+          "matches": [
+            "签到"
+          ],
+          "user": "帮我查下EDG最近比赛，如果赢了就帮我在爱奇艺播放电视剧周榜第一的第一集庆祝；另外芒果TV帮我签到拆盲盒。"
+        },
+        {
+          "id": "QA_GUI_HHYL_003",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 14,
+          "matches": [
+            "签到"
+          ],
+          "user": "帮我对比一下雅思和托福的考试区别，对比完帮我在华为应用市场装个Coursera备考用。顺便帮我把酷狗每日签到领了。"
+        },
+        {
+          "id": "TGJK_YD2_009",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 44,
+          "matches": [
+            "安装"
+          ],
+          "user": "我有个地方最近老是隐隐作痛，胸口下面，肚脐上面那块，应该是胃吧。你先帮我分析一下是什么问题，严不严重？如果建议就医，就帮我挂个下周一的消化内科专家号。顺便到应用市场安装豆包。"
+        },
+        {
+          "id": "TGJK_YD3_001",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 48,
+          "matches": [
+            "打车"
+          ],
+          "user": "从这里打车到最近的医院要多久？如果能查到打车时间，就帮我挂上海瑞金医院的皮肤科，明天上午，挂好了帮我查一下从我现在的位置到上海瑞金医院的最快路线，要避开拥堵。"
+        },
+        {
+          "id": "TGJK_WYD_002",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 54,
+          "matches": [
+            "安装"
+          ],
+          "user": "赶稿后颈椎酸得不行，能帮我列个15分钟居家锻炼计划吗？最好有国家体育总局认证的教程视频参考。顺便到应用市场安装豆包。再帮我设个每天早晚8点吃维生素D的提醒。"
+        },
+        {
+          "id": "TGJK_WYD_003",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 55,
+          "matches": [
+            "签到"
+          ],
+          "user": "赶稿后颈椎酸得不行，能帮我列个15分钟居家锻炼计划吗？最好有国家体育总局认证的教程视频参考。顺便打开腾讯视频，去我的金币里签到。最近总是睡不好，而且白天没精神，是不是缺什么维生素啊？"
+        },
+        {
+          "id": "TGJK_WYD_004",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 56,
+          "matches": [
+            "签到"
+          ],
+          "user": "什么是碳中和？和碳达峰有什么区别？顺便打开腾讯视频，去我的金币里签到。查看我的健康档案。"
+        },
+        {
+          "id": "TGJK_WYD_005",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 57,
+          "matches": [
+            "签到"
+          ],
+          "user": "我想用Python写一个web网页，能实现todolist打卡和工作日志记录，该从哪开始？顺便打开酷狗音乐，领取每日签到奖励。帮我设个每天早晚8点吃维生素D的提醒。"
+        },
+        {
+          "id": "TGJK_WYD_006",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 58,
+          "matches": [
+            "收藏"
+          ],
+          "user": "有9枚硬币，其中一枚是假的，重量比真的轻。另外帮我把现在正在播放的这首歌收藏到我的'心动时刻'歌单里。对了，我有哪些吃药提醒？"
+        },
+        {
+          "id": "TGJK_WYD_011",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 63,
+          "matches": [
+            "签到"
+          ],
+          "user": "什么是碳中和？顺便打开酷狗音乐，领取每日签到奖励。我有哪些吃药提醒？"
+        },
+        {
+          "id": "TGJJ_YD2_002",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 66,
+          "matches": [
+            "签到"
+          ],
+          "user": "什么是碳中和？如果碳中和是净零排放，打开客厅灯。咸鱼之王领取每日签到奖励。"
+        },
+        {
+          "id": "TGJJ_YD2_004",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 68,
+          "matches": [
+            "签到"
+          ],
+          "user": "高铁速度这么快为啥不设安全带？如果原因是高铁运行平稳，紧急制动概率极低，我准备睡觉了，帮我关掉客厅的所有灯和电视，打开卧室的床头灯，空调调到27度睡眠模式，窗帘关一半。顺便打开腾讯视频，去我的金币里签到。"
+        },
+        {
+          "id": "TGJJ_YD2_005",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 69,
+          "matches": [
+            "收藏"
+          ],
+          "user": "有9枚硬币，其中一枚是假的，重量比真的轻。用天平至少称几次能找出来？如果答案是至少2次，就把卧室的所有灯都关了。另外帮我打开网易云音乐，找到陈奕迅的《孤勇者》，然后收藏这首歌。"
+        },
+        {
+          "id": "TGJJ_YD3_005",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 81,
+          "matches": [
+            "打车"
+          ],
+          "user": "把空调设为制冷模式，风力调中档，再把客厅灯亮度调到50%。如果这些设置下发成功，就用高德地图查一下我附近价格最低的餐馆，按价格从低到高排；再告诉我从这里打车到最近的医院要多久。"
+        },
+        {
+          "id": "TGJJ_WYD_002",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 83,
+          "matches": [
+            "签到"
+          ],
+          "user": "赶稿后颈椎酸得不行，能帮我列个15分钟居家锻炼计划吗？最好有国家体育总局认证的教程视频参考。顺便打开芒果TV，去签到拆盲盒。打开台灯，关闭窗帘，打开风扇。"
+        },
+        {
+          "id": "TGJJ_WYD_003",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 84,
+          "matches": [
+            "收藏"
+          ],
+          "user": "赶稿后颈椎酸得不行，能帮我列个15分钟居家锻炼计划吗？最好有国家体育总局认证的教程视频参考。帮我打开网易云音乐，找到陈奕迅的《孤勇者》，然后收藏这首歌。空调26度制热，窗帘关一半，床头灯调成暖光。"
+        },
+        {
+          "id": "TGJJ_WYD_004",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 85,
+          "matches": [
+            "安装"
+          ],
+          "user": "我约了明天上午的面试，但临时有个重要项目要交付，需要推迟。帮我写封邮件给HR，措辞要委婉专业。同时到应用市场安装豆包。把空调设为制冷模式，风力调中档，再把客厅灯亮度调到50%。"
+        },
+        {
+          "id": "TGJJ_WYD_012",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 93,
+          "matches": [
+            "安装"
+          ],
+          "user": "我想用Python写一个web网页，能实现todolist打卡和工作日志记录，该从哪开始？帮我从华为应用市场安装'Courseraing'这个网课应用，确认是官方正版的。把空调调到25度。"
+        },
+        {
+          "id": "TGZS_WYYL_004",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 126,
+          "matches": [
+            "签到"
+          ],
+          "user": "奔驰 C260L，95 加满多少钱？顺便帮我打开腾讯视频去金币页面签到，另外云手机画面很不清晰怎么办？"
+        },
+        {
+          "id": "TGZS_WYYL_008",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 130,
+          "matches": [
+            "签到"
+          ],
+          "user": "我下周五要去上海出差，高铁到虹桥站方便吗？顺便打开芒果TV去签到拆盲盒，另外云手机里的应用分身是什么情况？"
+        },
+        {
+          "id": "TGZS_WYYL_009",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 131,
+          "matches": [
+            "签到"
+          ],
+          "user": "我周末去大理玩，第一天洱海骑行加古城逛逛，第二天崇圣寺三塔，时间够用吗？顺便打开酷狗音乐领取每日签到奖励，另外云机使用相机拍照时无法放大缩小是怎么回事？"
+        },
+        {
+          "id": "TGZS_WYYL_010",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 132,
+          "matches": [
+            "收藏"
+          ],
+          "user": "北京今天多少度啊？另外，帮我把现在正在播放的这首歌收藏到我的\"心动时刻\"歌单里，对了，云手机无法直接使用 NFC 功能，比如移动支付、门禁刷卡，这是为什么？"
+        },
+        {
+          "id": "TGZS_WYYL_011",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 133,
+          "matches": [
+            "收藏"
+          ],
+          "user": "我想注册个商标，需要准备什么材料？大概要花多少钱？另外，帮我打开网易云音乐找到陈奕迅的《孤勇者》然后收藏，对了，云手机的一键上云是干什么的？"
+        },
+        {
+          "id": "TGZS_WYYL_012",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 134,
+          "matches": [
+            "评论"
+          ],
+          "user": "给我推荐几个雨天也能逛的地方。还有，帮我到QQ音乐里给周杰伦的《七里香》发个评论，就说\"前奏一响，青春回来了\"，另外福建没使用定向流量的问题一般是什么原因？"
+        },
+        {
+          "id": "TGZS_WYYL_013",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 135,
+          "matches": [
+            "评论"
+          ],
+          "user": "我在北京中关村软件园工作，帮忙查下附近 24 小时自习室现在营业吗？评分和从软件园步行要多久？另外，帮我给网易云音乐里的《平凡之路》发个评论，内容是\"每次听都有新感受\"，对了，一键上云好像只支持极少部分 App 是怎么回事？"
+        },
+        {
+          "id": "TGZS_WYYL_014",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 136,
+          "matches": [
+            "收藏"
+          ],
+          "user": "30G 流量要领取的问题，能不能自动到账？另外，帮我收藏周迅主演的长视频，就在芒果TV里找，对了，东北这周冷不冷？"
+        },
+        {
+          "id": "TGZS_WYYL_015",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 137,
+          "matches": [
+            "收藏"
+          ],
+          "user": "请问联通云支持哪些 PC 平台的游戏？有列表吗？另外，帮我到芒果TV里找《小巷人家》然后点击收藏，对了，薛定谔的猫到底是个啥思想实验？"
+        },
+        {
+          "id": "TGZS_YDYL_001",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 138,
+          "matches": [
+            "打车"
+          ],
+          "user": "从这里打车到最近的医院要多久？如果查到了最近医院，就用高德地图马上打个车过去，确认下车型和上车点别搞错。另外，打游戏网络很卡该怎么排查？"
+        },
+        {
+          "id": "TGZS_YDYL_008",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 145,
+          "matches": [
+            "安装"
+          ],
+          "user": "我想用 Python 写一个 web 网页，能实现 todolist 打卡和工作日志记录，该从哪开始？如果推荐 Flask 作为 web 框架，帮我到应用市场安装豆包，用它辅助写代码。另外，联通云智电脑可以访问互联网吗？"
+        },
+        {
+          "id": "SYS_DYT_03_135",
+          "turn": 1,
+          "source": "Three_Intent_Hybrid.xlsx",
+          "excel_row": 282,
+          "matches": [
+            "卸载"
+          ],
+          "user": "如何卸载联通云手机APP，能卸载的话用网易云音乐放点催眠曲助眠，吃药提醒也安排上"
+        }
+      ]
+    }
+  },
+  "probes": [
+    {
+      "id": "gui_action_vocabulary",
+      "expected": "Plans can express favorite/install/checkin/comment/taxi steps",
+      "observed": {
+        "favorite": "failed",
+        "install": "failed",
+        "uninstall": "failed",
+        "checkin": "failed",
+        "comment": "failed",
+        "taxi": "failed"
+      },
+      "status": "gap_reproduced",
+      "related_cases": [
+        "TGZS_WYYL_015",
+        "TGJK_WYD_002",
+        "TGZS_YDYL_001"
+      ],
+      "relevance": "schema_and_dataset"
+    },
+    {
+      "id": "gui_send_content_lost",
+      "expected": "A saved send plan retains the supplied message and target",
+      "observed": {
+        "steps": [
+          "打开审计聊天应用",
+          "进入目标会话/收件人界面",
+          "填写用户指定内容",
+          "核对对象和内容/金额，确认后提交"
+        ],
+        "constraints": {},
+        "message_retained": false
+      },
+      "status": "gap_reproduced",
+      "related_cases": [],
+      "relevance": "boundary_probe"
+    },
+    {
+      "id": "hospital_catalog",
+      "expected": "Requested hospitals are represented in the declared test world",
+      "observed": {
+        "协和医院": "not_found",
+        "朝阳医院": "not_found",
+        "安贞医院": "not_found",
+        "同仁医院": "not_found",
+        "阜外医院": "not_found",
+        "儿童医院": "not_found",
+        "中医院": "not_found",
+        "北医三院": "not_found"
+      },
+      "status": "gap_reproduced",
+      "related_cases": [
+        "SYS_DYT_01_081",
+        "SYS_DYT_02_015",
+        "SYS_DYT_03_032"
+      ],
+      "relevance": "dataset"
+    },
+    {
+      "id": "department_catalog",
+      "expected": "Clinical department names and aliases from the dataset resolve",
+      "observed": {
+        "神经内科": "not_found",
+        "中医内科": "not_found",
+        "心血管内科": "not_found",
+        "体检": "not_found"
+      },
+      "status": "gap_reproduced",
+      "related_cases": [
+        "SYS_DYT_01_085",
+        "SYS_DYT_01_089",
+        "SYS_DYT_03_032"
+      ],
+      "relevance": "dataset"
+    },
+    {
+      "id": "doctor_catalog",
+      "expected": "Named doctors can be resolved or disambiguated against a useful catalog",
+      "observed": {
+        "status": "not_found",
+        "data": {
+          "available_doctors": [
+            "测试医师甲"
+          ],
+          "scheduler_running": false
+        }
+      },
+      "status": "gap_reproduced",
+      "related_cases": [
+        "SYS_DYT_01_086"
+      ],
+      "relevance": "dataset"
+    },
+    {
+      "id": "appointment_evening",
+      "expected": "Honor the supplied time or reject/clarify; never silently book a different time",
+      "observed": {
+        "input": "明天晚上",
+        "booked_time": "09:00"
+      },
+      "status": "gap_reproduced",
+      "related_cases": [],
+      "relevance": "boundary_probe"
+    },
+    {
+      "id": "appointment_chinese_hour",
+      "expected": "Honor the supplied time or reject/clarify; never silently book a different time",
+      "observed": {
+        "input": "明天下午3点",
+        "booked_time": "14:00"
+      },
+      "status": "gap_reproduced",
+      "related_cases": [],
+      "relevance": "boundary_probe"
+    },
+    {
+      "id": "appointment_query_period",
+      "expected": "An afternoon filter excludes morning reservations",
+      "observed": {
+        "requested": "下午",
+        "returned_times": [
+          "14:00",
+          "09:00"
+        ]
+      },
+      "status": "gap_reproduced",
+      "related_cases": [],
+      "relevance": "boundary_probe"
+    },
+    {
+      "id": "reminder_update",
+      "expected": "Existing reminders can be adjusted, including meal-relative changes",
+      "observed": {
+        "status": "failed",
+        "reason": "args.action: not one of ['triage', 'record_save', 'record_query', 'reminder_create', 'reminder_query', 'reminder_cancel', 'notifications', 'appointment_catalog', 'appointment_slots', 'appointment_create', 'appointment_query', 'appointment_cancel', 'appointment_reschedule']"
+      },
+      "status": "gap_reproduced",
+      "related_cases": [
+        "QA_JK_WYYL_011"
+      ],
+      "relevance": "dataset"
+    },
+    {
+      "id": "reminder_weekday_becomes_daily",
+      "expected": "Unsupported recurrence is rejected or weekdays are preserved",
+      "observed": {
+        "requested_period": "周一到周五",
+        "calendar_rules": [
+          "RRULE:FREQ=DAILY;UNTIL=20261002T155959Z"
+        ]
+      },
+      "status": "gap_reproduced",
+      "related_cases": [],
+      "relevance": "boundary_probe"
+    },
+    {
+      "id": "reminder_query_filter",
+      "expected": "An explicit reminder ID/medicine filter is honored",
+      "observed": {
+        "returned": [
+          {
+            "medicine": "审计甲",
+            "active": true
+          },
+          {
+            "medicine": "审计乙",
+            "active": false
+          }
+        ]
+      },
+      "status": "gap_reproduced",
+      "related_cases": [],
+      "relevance": "boundary_probe"
+    },
+    {
+      "id": "record_query_filter",
+      "expected": "Patient and record ID filters select only the requested local record",
+      "observed": {
+        "patients_returned": [
+          "审计甲",
+          "审计乙"
+        ]
+      },
+      "status": "gap_reproduced",
+      "related_cases": [],
+      "relevance": "boundary_probe"
+    },
+    {
+      "id": "record_negated_fact_dropped",
+      "expected": "A true negative fact is retained instead of treated as a placeholder",
+      "observed": {
+        "symptoms": "咳嗽三天"
+      },
+      "status": "gap_reproduced",
+      "related_cases": [],
+      "relevance": "boundary_probe"
+    },
+    {
+      "id": "home_habit_analysis",
+      "expected": "Time-window energy ranking and co-occurrence have dedicated observations/analysis",
+      "observed": {
+        "fields": [
+          "enough_history",
+          "history",
+          "inference",
+          "modeList",
+          "sample_count"
+        ],
+        "inference": "observed_switch_time_median; not presence detection",
+        "modes": [
+          {
+            "mode": "ARRIVE_HOME_MODE",
+            "habitTime": "18:30",
+            "observation_days": 3,
+            "commandList": [
+              {
+                "commandText": ""
+              },
+              {
+                "commandText": ""
+              },
+              {
+                "commandText": ""
+              }
+            ]
+          }
+        ]
+      },
+      "status": "gap_reproduced",
+      "related_cases": [
+        "ZJ_JJ_XGCX_003",
+        "ZJ_JJ_XGCX_004",
+        "ZJ_JJ_XGCX_005"
+      ],
+      "relevance": "dataset"
+    },
+    {
+      "id": "home_habit_operation_code",
+      "expected": "The original habits response carries operation_type 100053",
+      "observed": {
+        "operation_type": null,
+        "has_mode_list": true
+      },
+      "status": "gap_reproduced",
+      "related_cases": [
+        "ZJ_JJ_XGCX_001"
+      ],
+      "relevance": "dataset"
+    },
+    {
+      "id": "movie_detail_selection",
+      "expected": "A detail request resolves the requested index rather than returning the full list",
+      "observed": {
+        "requested_index": 2,
+        "returned_titles": [
+          "审计影片1",
+          "审计影片2"
+        ]
+      },
+      "status": "gap_reproduced",
+      "related_cases": [
+        "TGYJ_WYD_012"
+      ],
+      "relevance": "dataset"
+    },
+    {
+      "id": "memory_same_user_new_client",
+      "expected": "If long-term cross-device memory is required, a new client retains the user's preference",
+      "observed": {
+        "same_user": true,
+        "different_client": true,
+        "preferences": {}
+      },
+      "status": "gap_reproduced",
+      "related_cases": [],
+      "relevance": "product_boundary"
+    },
+    {
+      "id": "historical_weather",
+      "expected": "Historical scenarios need archival data beyond the forecast adapter",
+      "observed": {
+        "status": "unsupported",
+        "reason": "此天气接口支持近92天及未来16天范围。"
+      },
+      "status": "gap_reproduced",
+      "related_cases": [
+        "DH_WD_LWWD_03_007"
+      ],
+      "relevance": "boundary_probe_related_dataset"
+    },
+    {
+      "id": "write_retry_requires_request_id",
+      "expected": "Retry safety requires a stable identity for each logical write",
+      "observed": {
+        "repeated_calls_without_request_id": 2,
+        "reminder_count": 2
+      },
+      "status": "gap_reproduced",
+      "related_cases": [],
+      "relevance": "operational_risk"
+    }
+  ]
+}

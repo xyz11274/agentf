@@ -1,0 +1,186 @@
+{
+  "sysagent": {
+    "implementation": "coordinator",
+    "evidence": "user-provided architecture"
+  },
+  "qaagent": {
+    "skill": "web-search",
+    "actions": [
+      "query",
+      "save_document",
+      "get_document"
+    ],
+    "description": "综合问答；离线信息检索、写作、推理、上下文修正",
+    "evidence": "corpus-backed domain; name-to-domain inferred"
+  },
+  "healthagent": {
+    "skill": "health-advice",
+    "actions": [
+      "triage",
+      "record_save",
+      "record_query",
+      "reminder_create",
+      "reminder_query",
+      "reminder_cancel",
+      "appointment_create",
+      "appointment_query",
+      "appointment_cancel"
+    ],
+    "description": "健康导诊、健康档案、用药提醒、挂号及查询",
+    "evidence": "corpus-backed domain; name-to-domain inferred"
+  },
+  "homelifeagent": {
+    "skill": "smart-home",
+    "actions": [
+      "control",
+      "query",
+      "habits"
+    ],
+    "description": "家电批量控制、设备状态、使用习惯",
+    "evidence": "corpus-backed domain; name-to-domain inferred"
+  },
+  "GUIagent": {
+    "skill": "device-gui",
+    "actions": [
+      "plan",
+      "execute",
+      "query"
+    ],
+    "description": "APP 搜索、播放、导航、订购等操作规划和本地模拟",
+    "evidence": "corpus-backed domain; name-to-domain inferred"
+  },
+  "movieagent": {
+    "skill": "movie-query",
+    "actions": [
+      "recommend",
+      "detail",
+      "play",
+      "pause",
+      "resume",
+      "query"
+    ],
+    "description": "电影筛选、推荐列表、详情、偏好、序号选片、播放控制",
+    "evidence": "corpus-backed domain; name-to-domain inferred"
+  },
+  "woagent": {
+    "skill": "knowledge-base",
+    "actions": [
+      "search"
+    ],
+    "description": "联通云手机样例知识库检索；原 Agent 对应关系为推定",
+    "evidence": "corpus-backed domain; name-to-domain inferred"
+  },
+  "wisdomagent": {
+    "skill": "user-memory",
+    "actions": [
+      "read",
+      "write",
+      "delete"
+    ],
+    "description": "用户显式偏好的增删改查；原 Agent 对应关系为推定",
+    "evidence": "corpus-backed domain; name-to-domain inferred"
+  },
+  "multimodalagent": {
+    "skill": "multimodal",
+    "actions": [
+      "plan",
+      "query"
+    ],
+    "description": "针对实际提供的文本/媒体描述做理解；生成任务仅保存方案",
+    "evidence": "name-based hypothesis; no dedicated corpus labels"
+  },
+  "studybuddyagent": {
+    "skill": "study-buddy",
+    "actions": [
+      "save",
+      "query",
+      "delete"
+    ],
+    "description": "学习辅导、分步讲解和学习计划",
+    "evidence": "name-based hypothesis; no dedicated corpus labels"
+  },
+  "emotionchatagent": {
+    "skill": "emotion-chat",
+    "actions": [
+      "save",
+      "query",
+      "delete"
+    ],
+    "description": "情绪陪伴和用户主动保存的自助计划",
+    "evidence": "name-based hypothesis; no dedicated corpus labels"
+  },
+  "thirdproxyagent": {
+    "skill": "third-party",
+    "actions": [
+      "query",
+      "status"
+    ],
+    "description": "第三方服务离线目录检索、服务可用性查询",
+    "evidence": "name-based hypothesis; no dedicated corpus labels"
+  },
+  "officeagent": {
+    "skill": "office-work",
+    "actions": [
+      "save",
+      "query",
+      "delete"
+    ],
+    "description": "邮件、总结、会议纪要、日程草稿，保留文档版本",
+    "evidence": "name-based hypothesis; no dedicated corpus labels"
+  },
+  "customagent": {
+    "skill": "custom-workflow",
+    "actions": [
+      "save",
+      "query",
+      "delete"
+    ],
+    "description": "保存/查询自定义任务计划，不执行任意代码",
+    "evidence": "name-based hypothesis; no dedicated corpus labels"
+  },
+  "multidevagent": {
+    "skill": "multi-device",
+    "actions": [
+      "list",
+      "select"
+    ],
+    "description": "模拟设备发现、目标设备选择与状态查询",
+    "evidence": "name-based hypothesis; no dedicated corpus labels"
+  },
+  "travelagent": {
+    "skill": "travel-planner",
+    "actions": [
+      "query",
+      "save"
+    ],
+    "description": "行程、酒店、交通方案与离线目录",
+    "evidence": "name-based hypothesis; no dedicated corpus labels"
+  },
+  "foodieagent": {
+    "skill": "foodie",
+    "actions": [
+      "query",
+      "save"
+    ],
+    "description": "餐厅、菜谱、饮食偏好与离线目录",
+    "evidence": "name-based hypothesis; no dedicated corpus labels"
+  },
+  "shoppingagent": {
+    "skill": "shopping",
+    "actions": [
+      "query",
+      "save"
+    ],
+    "description": "商品比较、预算清单与离线目录，不真实下单",
+    "evidence": "name-based hypothesis; no dedicated corpus labels"
+  },
+  "srvagent": {
+    "skill": "service-manager",
+    "actions": [
+      "list",
+      "status"
+    ],
+    "description": "模拟服务发现、健康状态与调用事件；职责为推定",
+    "evidence": "name-based hypothesis; no dedicated corpus labels"
+  }
+}

@@ -1,0 +1,1019 @@
+{
+  "schema_version": 1,
+  "snapshot_date": "2026-09-17",
+  "notice": "所有外部服务记录均为合成测试资料，不代表实时业务。无测试用例 ID、预期答案或标准评分。",
+  "movies": [
+    {
+      "id": "m001",
+      "title": "流浪地球2",
+      "type": [
+        "科幻",
+        "冒险"
+      ],
+      "actors": [
+        "吴京",
+        "刘德华"
+      ],
+      "rating": 8.3,
+      "family_friendly": true,
+      "highlight": "面对危机的合作与责任",
+      "aliases": [
+        "流浪地球二"
+      ],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m002",
+      "title": "星际穿越",
+      "type": [
+        "科幻",
+        "冒险"
+      ],
+      "actors": [
+        "马修·麦康纳"
+      ],
+      "rating": 9.4,
+      "family_friendly": true,
+      "highlight": "太空探索与亲情选择",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m003",
+      "title": "头号玩家",
+      "type": [
+        "科幻",
+        "冒险"
+      ],
+      "actors": [
+        "泰伊·谢里丹"
+      ],
+      "rating": 8.6,
+      "family_friendly": true,
+      "highlight": "虚拟世界的解谜冒险",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m004",
+      "title": "哪吒之魔童闹海",
+      "type": [
+        "动画",
+        "奇幻"
+      ],
+      "actors": [
+        "配音演员"
+      ],
+      "rating": 8.4,
+      "family_friendly": true,
+      "highlight": "伙伴成长与命运抗争",
+      "aliases": [
+        "哪吒2"
+      ],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m005",
+      "title": "疯狂动物城",
+      "type": [
+        "动画",
+        "喜剧"
+      ],
+      "actors": [
+        "配音演员"
+      ],
+      "rating": 9.2,
+      "family_friendly": true,
+      "highlight": "动物城市中的合作破案",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m006",
+      "title": "寻梦环游记",
+      "type": [
+        "动画",
+        "音乐",
+        "治愈"
+      ],
+      "actors": [
+        "配音演员"
+      ],
+      "rating": 9.1,
+      "family_friendly": true,
+      "highlight": "关于家庭与记忆的音乐旅程",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m007",
+      "title": "触不可及",
+      "type": [
+        "喜剧",
+        "治愈"
+      ],
+      "actors": [
+        "弗朗索瓦·克鲁塞"
+      ],
+      "rating": 9.0,
+      "family_friendly": true,
+      "highlight": "跨越生活差异的友谊",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m008",
+      "title": "海蒂和爷爷",
+      "type": [
+        "剧情",
+        "治愈"
+      ],
+      "actors": [
+        "布鲁诺·甘茨"
+      ],
+      "rating": 9.0,
+      "family_friendly": true,
+      "highlight": "阿尔卑斯山中的温暖成长",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m009",
+      "title": "疯狂的石头",
+      "type": [
+        "喜剧",
+        "犯罪"
+      ],
+      "actors": [
+        "黄渤",
+        "郭涛"
+      ],
+      "rating": 8.6,
+      "family_friendly": false,
+      "highlight": "多线索误会构成的喜剧",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m010",
+      "title": "功夫",
+      "type": [
+        "动作",
+        "喜剧"
+      ],
+      "actors": [
+        "周星驰"
+      ],
+      "rating": 8.8,
+      "family_friendly": false,
+      "highlight": "小人物的武侠成长",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m011",
+      "title": "红海行动",
+      "type": [
+        "动作",
+        "战争"
+      ],
+      "actors": [
+        "张译"
+      ],
+      "rating": 8.2,
+      "family_friendly": false,
+      "highlight": "团队协作下的营救",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m012",
+      "title": "飞屋环游记",
+      "type": [
+        "动画",
+        "冒险",
+        "治愈"
+      ],
+      "actors": [
+        "配音演员"
+      ],
+      "rating": 9.0,
+      "family_friendly": true,
+      "highlight": "旅行与重新建立联结",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m013",
+      "title": "肖申克的救赎",
+      "type": [
+        "剧情"
+      ],
+      "actors": [
+        "蒂姆·罗宾斯",
+        "摩根·弗里曼"
+      ],
+      "rating": 9.6,
+      "family_friendly": false,
+      "highlight": "困境中的希望与坚持",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m014",
+      "title": "地球脉动",
+      "type": [
+        "纪录片",
+        "自然"
+      ],
+      "actors": [
+        "大卫·爱登堡"
+      ],
+      "rating": 9.5,
+      "family_friendly": true,
+      "highlight": "自然生态的观察",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m015",
+      "title": "宇宙时空之旅",
+      "type": [
+        "纪录片",
+        "科普"
+      ],
+      "actors": [
+        "尼尔·德格拉斯·泰森"
+      ],
+      "rating": 9.1,
+      "family_friendly": true,
+      "highlight": "宇宙与科学史",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m016",
+      "title": "深蓝",
+      "type": [
+        "纪录片",
+        "自然"
+      ],
+      "actors": [
+        "旁白"
+      ],
+      "rating": 9.0,
+      "family_friendly": true,
+      "highlight": "海洋生命的世界",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m017",
+      "title": "阿甘正传",
+      "type": [
+        "剧情",
+        "励志"
+      ],
+      "actors": [
+        "汤姆·汉克斯"
+      ],
+      "rating": 9.4,
+      "family_friendly": true,
+      "highlight": "平凡人的坚持和善意",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    },
+    {
+      "id": "m018",
+      "title": "新警察故事",
+      "type": [
+        "动作",
+        "犯罪"
+      ],
+      "actors": [
+        "成龙"
+      ],
+      "rating": 7.8,
+      "family_friendly": false,
+      "highlight": "警察团队的行动故事",
+      "aliases": [],
+      "source": "synthetic-catalog; ratings are fixtures, not live ratings"
+    }
+  ],
+  "devices": [
+    {
+      "id": "device-1",
+      "room": "客厅",
+      "device": "灯",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "brightness": [
+          0,
+          100
+        ]
+      }
+    },
+    {
+      "id": "device-2",
+      "room": "客厅",
+      "device": "空调",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "temperature": [
+          16,
+          30
+        ],
+        "mode": [
+          "制冷",
+          "制热",
+          "自动",
+          "除湿"
+        ]
+      }
+    },
+    {
+      "id": "device-3",
+      "room": "客厅",
+      "device": "窗帘",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "position": [
+          0,
+          100
+        ]
+      }
+    },
+    {
+      "id": "device-4",
+      "room": "卧室",
+      "device": "灯",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "brightness": [
+          0,
+          100
+        ]
+      }
+    },
+    {
+      "id": "device-5",
+      "room": "卧室",
+      "device": "空调",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "temperature": [
+          16,
+          30
+        ],
+        "mode": [
+          "制冷",
+          "制热",
+          "自动",
+          "除湿"
+        ]
+      }
+    },
+    {
+      "id": "device-6",
+      "room": "卧室",
+      "device": "窗帘",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "position": [
+          0,
+          100
+        ]
+      }
+    },
+    {
+      "id": "device-7",
+      "room": "书房",
+      "device": "灯",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "brightness": [
+          0,
+          100
+        ]
+      }
+    },
+    {
+      "id": "device-8",
+      "room": "书房",
+      "device": "空调",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "temperature": [
+          16,
+          30
+        ],
+        "mode": [
+          "制冷",
+          "制热",
+          "自动",
+          "除湿"
+        ]
+      }
+    },
+    {
+      "id": "device-9",
+      "room": "书房",
+      "device": "窗帘",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "position": [
+          0,
+          100
+        ]
+      }
+    },
+    {
+      "id": "device-10",
+      "room": "厨房",
+      "device": "灯",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "brightness": [
+          0,
+          100
+        ]
+      }
+    },
+    {
+      "id": "device-11",
+      "room": "厨房",
+      "device": "空调",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "temperature": [
+          16,
+          30
+        ],
+        "mode": [
+          "制冷",
+          "制热",
+          "自动",
+          "除湿"
+        ]
+      }
+    },
+    {
+      "id": "device-12",
+      "room": "厨房",
+      "device": "窗帘",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "position": [
+          0,
+          100
+        ]
+      }
+    },
+    {
+      "id": "device-13",
+      "room": "客厅",
+      "device": "风扇",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "mode": [
+          "低速",
+          "中速",
+          "高速"
+        ]
+      }
+    },
+    {
+      "id": "device-14",
+      "room": "客厅",
+      "device": "电视",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "volume": [
+          0,
+          100
+        ]
+      }
+    },
+    {
+      "id": "device-15",
+      "room": "客厅",
+      "device": "加湿器",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "mode": [
+          "低",
+          "高"
+        ]
+      }
+    },
+    {
+      "id": "device-16",
+      "room": "客厅",
+      "device": "空气净化器",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "mode": [
+          "自动",
+          "睡眠"
+        ]
+      }
+    },
+    {
+      "id": "device-17",
+      "room": "客厅",
+      "device": "扫地机器人",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "mode": [
+          "清扫",
+          "回充"
+        ]
+      }
+    },
+    {
+      "id": "device-18",
+      "room": "客厅",
+      "device": "插座",
+      "online": true,
+      "power": false,
+      "capabilities": {}
+    },
+    {
+      "id": "device-19",
+      "room": "客厅",
+      "device": "热水器",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "temperature": [
+          30,
+          60
+        ]
+      }
+    },
+    {
+      "id": "device-20",
+      "room": "客厅",
+      "device": "音箱",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "volume": [
+          0,
+          100
+        ]
+      }
+    },
+    {
+      "id": "device-21",
+      "room": "客厅",
+      "device": "台灯",
+      "online": true,
+      "power": false,
+      "capabilities": {
+        "brightness": [
+          0,
+          100
+        ]
+      }
+    }
+  ],
+  "knowledge": [
+    {
+      "id": "cloud-overview",
+      "title": "云手机是什么及功能",
+      "keywords": [
+        "云手机",
+        "联通",
+        "功能",
+        "通话",
+        "电影"
+      ],
+      "text": "样例产品是一台在云端运行的虚拟安卓手机，通过客户端远程操作，可安装应用、聊天、看视频和使用应用分身。",
+      "source": "simulation-product-manual/v1"
+    },
+    {
+      "id": "cloud-login",
+      "title": "注册登录",
+      "keywords": [
+        "注册",
+        "登录",
+        "验证码"
+      ],
+      "text": "样例流程：打开客户端或 H5，进入登录页，使用本机号码或手机号验证码登录。首次成功登录创建样例账号。",
+      "source": "simulation-product-manual/v1"
+    },
+    {
+      "id": "cloud-count",
+      "title": "设备数量与免费领取",
+      "keywords": [
+        "数量",
+        "多少台",
+        "免费",
+        "领取"
+      ],
+      "text": "样例规则：同一账号可管理多台设备，一笔订单一台；免费试用资格需查询活动规则与账号权益，本模拟没有真实账号资格。",
+      "source": "simulation-product-manual/v1"
+    },
+    {
+      "id": "cloud-activation",
+      "title": "订购与生效",
+      "keywords": [
+        "生效",
+        "订购",
+        "支付"
+      ],
+      "text": "样例流程：订单支付并完成开通后进入设备列表查看状态；未获得订单回执不能声称开通成功。",
+      "source": "simulation-product-manual/v1"
+    },
+    {
+      "id": "cloud-clone",
+      "title": "应用分身与一键上云",
+      "keywords": [
+        "分身",
+        "一键上云"
+      ],
+      "text": "样例支持将本地应用信息同步到云手机后独立安装运行；分身数据与原应用隔离，需重新登录。",
+      "source": "simulation-product-manual/v1"
+    },
+    {
+      "id": "cloud-crash",
+      "title": "应用闪退排查",
+      "keywords": [
+        "闪退",
+        "打不开"
+      ],
+      "text": "排查版本兼容性、应用缓存和剩余空间；先重启应用再尝试更新。重装前先备份，不承诺保留未同步的数据。",
+      "source": "simulation-product-manual/v1"
+    },
+    {
+      "id": "cloud-lag",
+      "title": "画面卡顿排查",
+      "keywords": [
+        "卡顿",
+        "网络",
+        "流畅"
+      ],
+      "text": "检查网络延迟和带宽，尝试稳定 Wi-Fi、降低画质、关闭本地占网程序，并核对云端负载；仍异常时记录时间交由服务支持。",
+      "source": "simulation-product-manual/v1"
+    },
+    {
+      "id": "cloud-data",
+      "title": "活动流量权益",
+      "keywords": [
+        "30G",
+        "流量",
+        "领取条件"
+      ],
+      "text": "30G 活动资格、时效和费用依赖实际活动与账号状态。本模拟未接入权益系统，不能确认是否符合领取条件。",
+      "source": "simulation-product-manual/v1"
+    },
+    {
+      "id": "cloud-migrate",
+      "title": "数据迁移和上传",
+      "keywords": [
+        "迁移",
+        "上传",
+        "文件",
+        "备份"
+      ],
+      "text": "样例流程：确认两端设备和空间，使用文件上传或备份恢复功能，迁移后检查文件完整性。上传失败先检查网络、权限、格式和容量。",
+      "source": "simulation-product-manual/v1"
+    },
+    {
+      "id": "cloud-app",
+      "title": "应用安装和卸载",
+      "keywords": [
+        "安装",
+        "卸载",
+        "自己",
+        "APP"
+      ],
+      "text": "样例允许安装兼容应用；可通过客户端入口上传安装包。卸载本地客户端与退订云设备是不同动作，退订前检查数据备份。",
+      "source": "simulation-product-manual/v1"
+    },
+    {
+      "id": "cloud-billing",
+      "title": "通话和流量费用",
+      "keywords": [
+        "拨打",
+        "费用",
+        "收费",
+        "下载",
+        "流量"
+      ],
+      "text": "通话、套餐以及本地客户端的视频传输流量分别计费，具体以实际套餐为准；云端下载不等于本地连接完全不耗流量。",
+      "source": "simulation-product-manual/v1"
+    },
+    {
+      "id": "cloud-batch",
+      "title": "群控能力",
+      "keywords": [
+        "群控",
+        "批量"
+      ],
+      "text": "当前样例面向单设备交互，不提供群控；不能从此推断真实产品能力。",
+      "source": "simulation-product-manual/v1"
+    }
+  ],
+  "information": [
+    {
+      "id": "weather-北京",
+      "topic": "weather",
+      "location": "北京",
+      "keywords": [
+        "北京",
+        "天气",
+        "下雨",
+        "温度",
+        "湿度",
+        "日落"
+      ],
+      "title": "北京天气模拟快照",
+      "condition": "小雨",
+      "temperature_c": 22,
+      "humidity_pct": 65,
+      "rain": true,
+      "sunset": "18:20",
+      "date": "2026-09-17",
+      "source": "synthetic-weather-fixture"
+    },
+    {
+      "id": "weather-上海",
+      "topic": "weather",
+      "location": "上海",
+      "keywords": [
+        "上海",
+        "天气",
+        "下雨",
+        "温度",
+        "湿度",
+        "日落"
+      ],
+      "title": "上海天气模拟快照",
+      "condition": "多云",
+      "temperature_c": 27,
+      "humidity_pct": 65,
+      "rain": false,
+      "sunset": "18:20",
+      "date": "2026-09-17",
+      "source": "synthetic-weather-fixture"
+    },
+    {
+      "id": "weather-杭州",
+      "topic": "weather",
+      "location": "杭州",
+      "keywords": [
+        "杭州",
+        "天气",
+        "下雨",
+        "温度",
+        "湿度",
+        "日落"
+      ],
+      "title": "杭州天气模拟快照",
+      "condition": "晴",
+      "temperature_c": 28,
+      "humidity_pct": 65,
+      "rain": false,
+      "sunset": "18:20",
+      "date": "2026-09-17",
+      "source": "synthetic-weather-fixture"
+    },
+    {
+      "id": "weather-深圳",
+      "topic": "weather",
+      "location": "深圳",
+      "keywords": [
+        "深圳",
+        "天气",
+        "下雨",
+        "温度",
+        "湿度",
+        "日落"
+      ],
+      "title": "深圳天气模拟快照",
+      "condition": "阵雨",
+      "temperature_c": 29,
+      "humidity_pct": 65,
+      "rain": true,
+      "sunset": "18:20",
+      "date": "2026-09-17",
+      "source": "synthetic-weather-fixture"
+    },
+    {
+      "id": "weather-东莞",
+      "topic": "weather",
+      "location": "东莞",
+      "keywords": [
+        "东莞",
+        "天气",
+        "下雨",
+        "温度",
+        "湿度",
+        "日落"
+      ],
+      "title": "东莞天气模拟快照",
+      "condition": "多云",
+      "temperature_c": 28,
+      "humidity_pct": 65,
+      "rain": false,
+      "sunset": "18:20",
+      "date": "2026-09-17",
+      "source": "synthetic-weather-fixture"
+    },
+    {
+      "id": "route-001",
+      "topic": "travel",
+      "keywords": [
+        "北京",
+        "上海",
+        "高铁",
+        "虹桥",
+        "票价"
+      ],
+      "title": "北京到上海模拟交通目录",
+      "duration_hours": [
+        4.5,
+        6.5
+      ],
+      "price_cny": [
+        550,
+        700
+      ],
+      "source": "synthetic-transport-fixture"
+    },
+    {
+      "id": "hotel-001",
+      "topic": "travel",
+      "keywords": [
+        "酒店",
+        "虹桥",
+        "上海",
+        "地铁"
+      ],
+      "title": "虹桥安居酒店（虚构）",
+      "location": "上海",
+      "address": "模拟虹桥路100号",
+      "walking_minutes_to_metro": 8,
+      "price_cny": 380,
+      "source": "synthetic-hotel-fixture"
+    },
+    {
+      "id": "travel-001",
+      "topic": "travel",
+      "keywords": [
+        "大理",
+        "洱海",
+        "古城",
+        "三塔"
+      ],
+      "title": "大理两日模拟行程",
+      "days": [
+        "洱海骑行与古城",
+        "三塔与返程"
+      ],
+      "source": "synthetic-itinerary-fixture"
+    },
+    {
+      "id": "food-001",
+      "topic": "food",
+      "keywords": [
+        "附近",
+        "火锅",
+        "餐厅",
+        "招牌菜",
+        "吃饭"
+      ],
+      "title": "暖锅小馆（虚构）",
+      "address": "模拟生活街1号",
+      "price_per_person_cny": 90,
+      "rating": 4.6,
+      "dishes": [
+        "番茄锅",
+        "菌菇拼盘"
+      ],
+      "source": "synthetic-restaurant-fixture"
+    },
+    {
+      "id": "food-002",
+      "topic": "food",
+      "keywords": [
+        "附近",
+        "清淡",
+        "餐厅",
+        "素食"
+      ],
+      "title": "青禾食堂（虚构）",
+      "address": "模拟生活街8号",
+      "price_per_person_cny": 45,
+      "rating": 4.7,
+      "dishes": [
+        "杂粮饭",
+        "时蔬"
+      ],
+      "source": "synthetic-restaurant-fixture"
+    },
+    {
+      "id": "shop-001",
+      "topic": "shopping",
+      "keywords": [
+        "露营",
+        "帐篷",
+        "电源",
+        "睡袋",
+        "预算",
+        "价格"
+      ],
+      "title": "露营装备模拟报价",
+      "items": [
+        {
+          "name": "车顶帐篷",
+          "price_cny": 2200
+        },
+        {
+          "name": "睡袋",
+          "price_cny": 200
+        },
+        {
+          "name": "防潮垫",
+          "price_cny": 100
+        },
+        {
+          "name": "户外电源",
+          "price_cny": 600
+        },
+        {
+          "name": "便携桌椅",
+          "price_cny": 300
+        }
+      ],
+      "source": "synthetic-price-fixture"
+    },
+    {
+      "id": "exhibit-001",
+      "topic": "events",
+      "keywords": [
+        "展览",
+        "亲子",
+        "孩子",
+        "免费"
+      ],
+      "title": "儿童艺术馆体验展（虚构）",
+      "address": "模拟文化路10号",
+      "price_cny": 0,
+      "age_min": 3,
+      "opening_hours": "09:00–17:00",
+      "reservation_required": true,
+      "source": "synthetic-event-fixture"
+    },
+    {
+      "id": "traffic-001",
+      "topic": "traffic",
+      "keywords": [
+        "京港澳",
+        "高速",
+        "管制",
+        "河北"
+      ],
+      "title": "道路状态模拟快照",
+      "controlled": false,
+      "date": "2026-09-17",
+      "source": "synthetic-road-fixture"
+    }
+  ],
+  "terminals": [
+    {
+      "id": "phone-1",
+      "name": "模拟手机",
+      "type": "1"
+    },
+    {
+      "id": "speaker-1",
+      "name": "模拟音箱",
+      "type": "2"
+    },
+    {
+      "id": "tv-1",
+      "name": "模拟大屏",
+      "type": "3"
+    }
+  ]
+}

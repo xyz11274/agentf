@@ -1,0 +1,222 @@
+{
+  "notice": "Static capability inventory only; not a pass rate or a claim of original business equivalence.",
+  "sources": [
+    {
+      "file": "test_cases/product/One_Intent_Hybrid.xlsx",
+      "sha256": "d0f56a3ba2995d8921ff8df7e431753aa71739469d280cff4d64b201ae8b1293",
+      "rows": 295,
+      "columns": [
+        "用例编号",
+        "用例标题",
+        "预置条件（可选）",
+        "S1场景",
+        "S2场景",
+        "S3场景",
+        "S4场景（可选）",
+        "分类标识",
+        "规划路标",
+        "智能等级",
+        "用例等级（level 0重统计）",
+        "用例责任人",
+        "测试步骤（语料）",
+        "预期结果",
+        "预期意图",
+        "声纹ID",
+        "预期操作类型",
+        "设备类型"
+      ]
+    },
+    {
+      "file": "test_cases/product/Three_Intent_Hybrid.xlsx",
+      "sha256": "c84c5f7c0f14ba72cb9f80c0d323731e79f5cb631c149934fccde0d88f612c77",
+      "rows": 506,
+      "columns": [
+        "用例编号",
+        "用例标题",
+        "预置条件（可选）",
+        "S1场景",
+        "S2场景",
+        "S3场景",
+        "S4场景（可选）",
+        "分类标识",
+        "规划路标",
+        "智能等级",
+        "用例等级（level 0重统计）",
+        "用例责任人",
+        "测试步骤（语料）",
+        "预期结果",
+        "预期意图",
+        "声纹ID",
+        "预期操作类型",
+        "设备类型"
+      ]
+    },
+    {
+      "file": "test_cases/product/Two_Intent_Hybrid.xlsx",
+      "sha256": "a2770466207fe250ec872571b79b336680a50df419f225428e8722757606856d",
+      "rows": 273,
+      "columns": [
+        "用例编号",
+        "用例标题",
+        "预置条件（可选）",
+        "S1场景",
+        "S2场景",
+        "S3场景",
+        "S4场景（可选）",
+        "分类标识",
+        "规划路标",
+        "智能等级",
+        "用例等级（level 0重统计）",
+        "用例责任人",
+        "测试步骤（语料）",
+        "预期结果",
+        "预期意图",
+        "声纹ID",
+        "预期操作类型",
+        "设备类型"
+      ]
+    }
+  ],
+  "cases": 1074,
+  "turns": 1910,
+  "categories": {
+    "智能对话": 83,
+    "智能操控": 45,
+    "智家服务": 37,
+    "GUI泛化": 49,
+    "健康导诊": 81,
+    "健康档案查询": 21,
+    "健康档案生成": 49,
+    "吃药提醒任务查询": 24,
+    "吃药提醒任务生成": 50,
+    "居家习惯": 25,
+    "居家操控": 81,
+    "挂号": 48,
+    "挂号查询": 27,
+    "火山问答": 60,
+    "知识库问答": 61,
+    "观影意图": 30,
+    "多意图": 303
+  },
+  "annotated_domains": {
+    "QA": 1055,
+    "GUI": 176,
+    "观影": 76,
+    "健康": 83,
+    "居家": 99,
+    "知识库": 75,
+    "记忆": 1
+  },
+  "operation_occurrences": {
+    "100051": 217,
+    "100053": 72,
+    "100101": 22,
+    "100151": 156,
+    "100152": 137,
+    "100153": 70,
+    "100154": 167,
+    "100155": 186,
+    "100156": 62,
+    "100157": 68,
+    "200002": 127,
+    "300001": 170
+  },
+  "operation_map": {
+    "100051": [
+      "smart-home",
+      "control"
+    ],
+    "100053": [
+      "smart-home",
+      "habits"
+    ],
+    "100101": [
+      "movie-query",
+      "play"
+    ],
+    "200002": [
+      "movie-query",
+      "recommend"
+    ],
+    "300001": [
+      "device-gui",
+      "plan"
+    ],
+    "100151": [
+      "health-advice",
+      "reminder_create"
+    ],
+    "100152": [
+      "health-advice",
+      "record_save"
+    ],
+    "100153": [
+      "health-advice",
+      "record_query"
+    ],
+    "100154": [
+      "health-advice",
+      "appointment_create"
+    ],
+    "100155": [
+      "health-advice",
+      "triage"
+    ],
+    "100156": [
+      "health-advice",
+      "appointment_query"
+    ],
+    "100157": [
+      "health-advice",
+      "reminder_query"
+    ]
+  },
+  "unimplemented_operation_codes": [],
+  "expected_skills": [
+    "device-gui",
+    "health-advice",
+    "knowledge-base",
+    "movie-query",
+    "smart-home",
+    "user-memory",
+    "web-search"
+  ],
+  "unregistered_skills": [],
+  "turns_without_intent_labels": 727,
+  "turns_without_expected_behavior": 216,
+  "turns_without_either_label": 216,
+  "preconditions": [
+    {
+      "file": "One_Intent_Hybrid.xlsx",
+      "id": "ZJ_GY_KSP_01_021",
+      "precondition": "已注入声纹 B，用户喜好科幻"
+    },
+    {
+      "file": "One_Intent_Hybrid.xlsx",
+      "id": "ZJ_GY_KSP_01_022",
+      "precondition": "已注入声纹 B，用户喜好科幻"
+    },
+    {
+      "file": "One_Intent_Hybrid.xlsx",
+      "id": "ZJ_GY_KSP_01_027",
+      "precondition": "已注入声纹 B，用户喜好动画"
+    },
+    {
+      "file": "One_Intent_Hybrid.xlsx",
+      "id": "ZJ_JK_CYTX_004",
+      "precondition": "已有健康档案及医嘱用药记录"
+    },
+    {
+      "file": "Three_Intent_Hybrid.xlsx",
+      "id": "QA_GY_HHYL_005",
+      "precondition": "已注入声纹 B，用户喜好科幻"
+    }
+  ],
+  "limitations": [
+    "Text benchmark does not verify original UDS messages or real devices.",
+    "Public weather/search are connected; live commerce and traffic require dedicated providers.",
+    "Original operation/intent labels may conflict; no labels are rewritten.",
+    "Agent names beyond corpus domains have inferred roles.",
+    "Image files and local scheduled notifications are implemented; phone push, video generation, physical devices and transactions remain disconnected."
+  ]
+}

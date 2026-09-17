@@ -1,0 +1,3 @@
+# Runtime dependencies are installed through the repository package.
+PyYAML>=6.0
+requests>=2.31
