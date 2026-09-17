@@ -1,0 +1,24 @@
+{
+  "server": {
+    "listen": "127.0.0.1:17893",
+    "uds_biz_path": "/tmp/agentflow/business-simulator/biz.sock",
+    "uds_ctrl_path": "/tmp/agentflow/business-simulator/ctrl.sock"
+  },
+  "runtime": {
+    "worker_threads": 4,
+    "worker_default_workflow_threads": 1,
+    "worker_control_threads": 1,
+    "worker_business_threads": 1
+  },
+  "sandbox": {
+    "mode": "none",
+    "allow_fallback": false
+  },
+  "logging": {"level": "info"},
+  "daemon": {
+    "pid_file": "/tmp/agentflow/business-simulator/daemon.pid",
+    "drain_timeout_ms": 5000
+  },
+  "trace": {"output_dir": "trace_output/business-simulator"},
+  "agents": []
+}

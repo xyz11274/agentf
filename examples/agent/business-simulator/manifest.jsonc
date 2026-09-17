@@ -1,0 +1,21 @@
+{
+  "includes": [
+    "harness/**",
+    "data/**",
+    "requirements.txt",
+    "setup.sh"
+  ],
+  "excludes": [
+    ".venv",
+    "__pycache__",
+    ".pytest_cache",
+    ".git",
+    "nodes",
+    "outputs",
+    "tests",
+    ".env",
+    ".env.*",
+    "*.sqlite3",
+    "*.sqlite3-*"
+  ]
+}

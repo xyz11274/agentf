@@ -1,0 +1,72 @@
+{
+  "id": "skill-workflow",
+  "version": "2.0",
+  "name": "Generic Skill Executor",
+  "nodes": [
+    {
+      "id": "skill_executor",
+      "name": "Universal Skill Executor",
+      "type": "task",
+      "execution_mode": "shell_script",
+      "command": "bash nodes/skill_executor.sh",
+      "working_dir": "examples/agent/business-simulator",
+      "json_output": true,
+      "enable_hot_reload": false,
+      "inputs": [
+        {
+          "name": "input",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "session_id",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "dialogue_id",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "exec_skill_key",
+          "type": "string",
+          "required": false
+        },
+        {
+          "name": "batch_id",
+          "type": "string",
+          "required": false
+        }
+      ],
+      "outputs": [
+        {
+          "name": "skill_result",
+          "type": "string"
+        },
+        {
+          "name": "status",
+          "type": "string"
+        },
+        {
+          "name": "skill_name",
+          "type": "string"
+        },
+        {
+          "name": "rounds_used",
+          "type": "int"
+        },
+        {
+          "name": "artifacts_json",
+          "type": "string"
+        },
+        {
+          "name": "error",
+          "type": "string"
+        }
+      ],
+      "timeout_ms": 600000
+    }
+  ],
+  "edges": []
+}
