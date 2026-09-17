@@ -5,6 +5,7 @@
   - .jsonl  coldstart（trajectory_evolution dataset，每行一个单轮 task）
   - .xlsx   product 用例（测试步骤/预期结果/预期意图 编号语料，stdlib zipfile 解析）
   - .json   daily-qa evalset（或已是 evalset.v2 的文件，幂等归一）
+  - .json   hotpotqa 原始样本列表（含 question/answer/context，自动识别）
 
 用法：
   python3 converters.py INPUT [INPUT...] -o OUT.json [--map domain_skill_map.json]
@@ -253,6 +254,71 @@ def convert_product(path: Path, domain_map: dict, warnings: list) -> dict:
     return evalset
 
 
+# ── hotpotqa 原始 JSON → evalset.v2 ────────────────────────────────
+
+def convert_hotpotqa(path: Path, data: list) -> dict:
+    """HotpotQA 样本列表（_id/question/answer/context/supporting_facts/type/level）
+    → evalset.v2 单轮 case，split 由文件名推断（*train* → train，*dev* → val）。
+
+    每轮提问沿用 EvoAgentX benchmark_and_evaluation.py 的拼接格式：
+      Context: Title: {标题}\nText: {句子平铺}\n\nTitle: ...\n\nQuestion: {q}\nAnswer:
+    （单个 Context: 前缀，各段 "Title/Text" 块以空行连接，拼到 Question 前面）。
+    答案入 expected_behavior 作判分标准；HotpotQA 无意图标注，
+    expected_skills 置 None（意图指标跳过）。
+    """
+    stem = path.stem.lower()
+    split = "train" if "train" in stem else "val" if "dev" in stem else ""
+    evalset = empty_evalset(
+        name=f"hotpotqa:{path.stem}",
+        description=f"HotpotQA 转换（来源 {path}，多跳问答，段落平铺为 Context）",
+    )
+    for item in data:
+        qid = item["_id"]
+        # EvoAgentX 方式：各段 "Title: ...\nText: ..." 平铺后以空行连接，
+        # 整体冠以单个 "Context: " 前缀，再接 "Question: ...\nAnswer:"
+        blocks = ["Title: {}\nText: {}".format(para[0], " ".join(para[1]))
+                  for para in item.get("context") or []]
+        user = "Context: {}\n\nQuestion: {}\nAnswer:".format(
+            "\n\n".join(blocks), item["question"])
+
+        level = item.get("level", "")
+        case = {
+            "id": f"hotpotqa-{split}-{qid}",
+            "category": f"hotpotqa-{item.get('type', 'unknown')}",
+            "difficulty": level if level in ("easy", "medium", "hard") else "",
+            "goal": "多跳阅读理解：在给定证据段落中回答问题，答案需与标准答案一致。",
+            "constraints": ["仅依据 Context 中的段落作答，不得依赖外部检索或编造事实。"],
+            "turns": [{
+                "user": user,
+                "expected_skills": None,
+                "expected_behavior": f"标准答案：{item['answer']}",
+                "must_include": [],
+                "must_not_include": [],
+            }],
+            "provenance": {
+                "kind": "opensource",
+                "source": str(path),
+                "hotpot_id": qid,
+                "type": item.get("type", ""),
+                "level": level,
+                "answer": item["answer"],
+                "supporting_facts": [
+                    [t, s] for t, s in item.get("supporting_facts") or []
+                ],
+            },
+        }
+        if split:
+            case["split"] = split
+        evalset["cases"].append(case)
+    return evalset
+
+
+def _looks_like_hotpotqa(data) -> bool:
+    return (isinstance(data, list) and bool(data) and isinstance(data[0], dict)
+            and "question" in data[0] and "answer" in data[0]
+            and isinstance(data[0].get("context"), list))
+
+
 # ── daily-qa evalset.json → evalset.v2 ────────────────────────────
 
 def convert_daily_qa(path: Path) -> dict:
@@ -300,6 +366,10 @@ def convert_one(path: Path, domain_map: dict, warnings: list) -> dict:
     if suffix == ".xlsx":
         return convert_product(path, domain_map, warnings)
     if suffix == ".json":
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        if _looks_like_hotpotqa(data):
+            return convert_hotpotqa(path, data)
         return convert_daily_qa(path)
     raise ValueError(f"无法识别的输入格式: {path}")
 
