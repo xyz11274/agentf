@@ -1,7 +1,7 @@
 #include "agentflow/trajectory/hybrid_evaluator.h"
 #include "trajectory_evolution/evolution.h"
 #include "agentflow/trajectory/experience.h"
-#include "../src/model_input.h"
+#include "../src/model/model_input.h"
 
 #include <algorithm>
 #include <chrono>

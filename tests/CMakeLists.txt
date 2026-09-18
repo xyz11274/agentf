@@ -27,6 +27,7 @@ endif()
 # Other test executables
 add_executable(test_agent_gtest
     unit/src/test_agent_gtest.cpp
+    unit/src/test_session_router_isolation.cpp
 )
 target_link_libraries(test_agent_gtest PRIVATE
     agentflow

@@ -22,6 +22,27 @@ import java.util.concurrent.TimeUnit;
 public final class Evolution {
     @FunctionalInterface
     public interface Receiver { void accept(JsonNode input) throws Exception; }
+    @FunctionalInterface
+    public interface CallExecutor { JsonNode execute(JsonNode input) throws Exception; }
+
+    /** Full observation outcome. {@link #call} keeps the output-only API. */
+    public static final class CallResult {
+        public final JsonNode output, prepared, receipt;
+        public final boolean executed;
+        private CallResult(JsonNode output, JsonNode prepared, JsonNode receipt, boolean executed) {
+            this.output = output; this.prepared = prepared; this.receipt = receipt; this.executed = executed;
+        }
+    }
+    /** Full loop outcome for hosts that need both decision receipts. */
+    public static final class LoopResult {
+        public final boolean allowed;
+        public final String decision;
+        public final JsonNode prepared, receipt;
+        private LoopResult(boolean allowed, String decision, JsonNode prepared, JsonNode receipt) {
+            this.allowed = allowed; this.decision = decision; this.prepared = prepared; this.receipt = receipt;
+        }
+    }
+
 
     /** Call on a valid host thread. An asynchronous dispatch may return immediately;
      * normal run-end points, not this callback, determine completion. */
@@ -110,6 +131,78 @@ public final class Evolution {
             catch (Failure error) { if (attempt >= retries || (error.status > 0 && error.status < 500)) throw error; }
         }
     }
+    /** Wrap one existing JSON call. The business executor is invoked at most once. */
+    public JsonNode call(ObjectNode fields, CallExecutor execute) throws Exception {
+        return callWithReceipt(fields, execute, 20).output;
+    }
+    public JsonNode call(ObjectNode fields, CallExecutor execute, int budgetMs) throws Exception {
+        return callWithReceipt(fields, execute, budgetMs).output;
+    }
+    public CallResult callWithReceipt(ObjectNode fields, CallExecutor execute, int budgetMs) throws Exception {
+        if (fields == null || execute == null) throw new IllegalArgumentException("fields_and_executor_required");
+        ObjectNode before = fields.deepCopy(); before.put("phase", "before");
+        JsonNode prepared = point(before, budgetMs);
+        JsonNode actual = prepared.has("input") ? prepared.get("input") : fields.get("input");
+        ObjectNode identity = finishIdentity(fields, prepared);
+        String kind = fields.path("kind").asText("custom");
+        if ("reject".equals(prepared.path("decision").asText())) {
+            String reason = prepared.path("reason").asText("policy_rejected");
+            ObjectNode output = JSON.createObjectNode().put("status", "rejected").put("reason", reason).put("error", reason);
+            ObjectNode after = identity.deepCopy(); after.put("kind", kind).put("phase", "after").put("executed", false);
+            after.set("actual_input", actual); after.set("output", output);
+            return new CallResult(output, prepared, point(after, budgetMs), false);
+        }
+        final JsonNode output;
+        try { output = execute.execute(actual); }
+        catch (Exception error) {
+            ObjectNode abort = identity.deepCopy(); abort.put("kind", kind).put("phase", "abort").put("status", "unknown");
+            abort.putNull("output"); point(abort, budgetMs);
+            throw error;
+        }
+        ObjectNode after = identity.deepCopy(); after.put("kind", kind).put("phase", "after").put("executed", true);
+        after.set("actual_input", actual); after.set("output", output);
+        return new CallResult(output, prepared, point(after, budgetMs), true);
+    }
+
+    public boolean allowLoop(ObjectNode fields) { return allowLoop(fields, 20); }
+    public boolean allowLoop(ObjectNode fields, int budgetMs) { return checkLoop(fields, budgetMs).allowed; }
+    /** Evaluate and commit one loop decision, exposing both protocol receipts. */
+    public LoopResult checkLoop(ObjectNode fields, int budgetMs) {
+        if (fields == null) throw new IllegalArgumentException("fields_required");
+        ObjectNode request = fields.deepCopy(); request.put("kind", "loop");
+        if (fields.has("ref")) {
+            request.put("phase", "guard");
+            JsonNode receipt = point(request, budgetMs);
+            String decision = receipt.path("decision").asText("continue");
+            return new LoopResult(!"stop".equals(decision), decision, receipt, receipt);
+        }
+        request.put("phase", "before");
+        JsonNode prepared = point(request, budgetMs);
+        String decision = prepared.path("decision").asText("continue");
+        ObjectNode after = finishIdentity(fields, prepared);
+        after.put("kind", "loop").put("phase", "after").put("decision", decision);
+        JsonNode receipt = point(after, budgetMs);
+        return new LoopResult(!"stop".equals(decision), decision, prepared, receipt);
+    }
+
+    public JsonNode captureGap(ObjectNode fields, String reason) throws Failure {
+        if (fields == null || reason == null || reason.isEmpty()) throw new IllegalArgumentException("fields_and_reason_required");
+        ObjectNode request = fields.deepCopy(); request.put("reason", reason);
+        return invoke("capture.gap", request);
+    }
+    public JsonNode evaluationNext(String consumer, int index) throws Failure {
+        return invoke("evaluation.next", JSON.createObjectNode().put("consumer", consumer).put("index", index));
+    }
+    public JsonNode evaluationFail(String consumer) throws Failure {
+        return invoke("evaluation.fail", JSON.createObjectNode().put("consumer", consumer));
+    }
+    private static ObjectNode finishIdentity(ObjectNode fields, JsonNode prepared) {
+        ObjectNode identity = JSON.createObjectNode();
+        if (fields.has("ref")) identity.set("ref", fields.get("ref").deepCopy());
+        else if (prepared.path("context").isObject()) identity.set("context", prepared.get("context").deepCopy());
+        return identity;
+    }
+
     public JsonNode point(ObjectNode fields) { return point(fields, 20); }
     public JsonNode point(ObjectNode fields, int budgetMs) {
         String id = UUID.randomUUID().toString();

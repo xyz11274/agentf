@@ -80,6 +80,75 @@ class _FakeDataBus:
         return True
 
 
+def test_evolution_orders_real_dispatch_manifests_and_merges_one_tool_result(monkeypatch, tmp_path):
+    """包控制依赖；v1 继续使用原派发函数和异步批次协议。"""
+    import os
+    import subprocess
+    from types import SimpleNamespace
+    from agentflow_runtime import coordinator_decide as cd
+
+    repo = Path(__file__).resolve().parents[3]
+    build = repo / "build/trajectory-evolution"
+    if not (build / "test_integration_service").is_file() or not (build / "libtrajectory_evolution_local.so").is_file():
+        pytest.skip("requires the trajectory-evolution native test build")
+    monkeypatch.syspath_prepend(str(repo / "tools/trajectory_evolution/clients/python"))
+    from evolution_local import LocalEvolution
+    monkeypatch.setenv("INTEGRATION_TEST_A", "fixture-principal-alpha-00000001")
+    monkeypatch.setenv("INTEGRATION_TEST_B", "fixture-principal-bravo-00000002")
+    subprocess.run([str(build / "test_integration_service"), "--fixture", str(tmp_path)], check=True, capture_output=True)
+    path = tmp_path / "service.json"
+    config = json.loads(path.read_text())
+    config["auto_evaluate"] = False
+    config["runtime_options"]["schedule_rules"] = [dict(rule_id="prepare-first",
+        target_scope="agent:my-agent/actor:assistant", before_operation="prepare", after_operation="image",
+        require_success=True, reason="prepare first")]
+    path.write_text(json.dumps(config))
+    client = LocalEvolution(build / "libtrajectory_evolution_local.so", path, os.environ["INTEGRATION_TEST_A"], background=False)
+    facade = SimpleNamespace(point=lambda fields, **kwargs: client.point(fields))
+    monkeypatch.setattr(cd, "_evolution", facade)
+    bus, dialogue = _FakeDataBus(), "real-dispatch-contract"
+    try:
+        client.point(dict(phase="before", kind="run", ref=dict(run=dialogue), input="test", level="L2", capabilities=["schedule"]))
+        specs = [dict(name="image", prompt="B"), dict(name="prepare", prompt="A"), dict(name="report", prompt="C")]
+        binding = dict(items="/skills", operation="/name", receipt="/batch_id", accepted="/dispatches",
+            accepted_index="/request_index", accepted_id="/exec_skill_key", results="/results",
+            result_id="/exec_skill_key", result_success="/skill_success", result_operation="/business_skill_name",
+            result_status="/skill_status", result_output="/skill_result")
+        submit = lambda args: cd.handle_run_skills_call(args, bus, "session", dialogue)
+        ack = json.loads(client.dispatch(dict(name="run_skills", ref=dict(run=dialogue, key="plan"),
+            input=dict(skills=specs), binding=binding), submit, result_format="json_text"))
+
+        def complete_wave():
+            result = []
+            for spec in json.loads(bus.sys_puts["next_skills"]):
+                manifest = json.loads(bus.global_puts[spec["exec_skill_key"]])
+                result.append(dict(exec_skill_key=spec["exec_skill_key"], business_skill_name=manifest["skill_name"],
+                    skill_success=True, workflow_success=True, skill_status="success", skill_result="done"))
+                client.point(dict(phase="after", kind="custom", ref=dict(run=dialogue, key=spec["exec_skill_key"]), output="done"))
+            return dict(batch_id=manifest["batch_id"], results=result)
+
+        first = complete_wave()
+        assert [row["business_skill_name"] for row in first["results"]] == ["prepare", "report"]
+        resumed = client.resume_dispatch(dict(ref=dict(run=dialogue, key="first"), input=first), submit, result_format="json_text")
+        assert resumed["pending"]
+        second = complete_wave()
+        assert [row["business_skill_name"] for row in second["results"]] == ["image"]
+        assert second["batch_id"] != first["batch_id"]
+        resumed = client.resume_dispatch(dict(ref=dict(run=dialogue, key="second"), input=second), submit, result_format="json_text")
+        assert not resumed["pending"]
+        batch = resumed["completion"]
+        assert batch["batch_id"] == ack["batch_id"]
+        history = [{"role": "assistant", "tool_calls": [{"id": "call-1", "type": "function",
+            "function": {"name": "run_skills", "arguments": json.dumps(dict(skills=specs))}}]},
+            {"role": "tool", "tool_call_id": "call-1", "content": json.dumps(ack)}]
+        history = cd.attach_skill_completion_result(history, cd.build_skill_batch_completion_message(batch), batch_id=batch["batch_id"])
+        assert len(history) == 2 and history[1]["tool_call_id"] == "call-1"
+        assert json.loads(history[1]["content"])["status"] == "execution_completed"
+        assert client.point(dict(phase="after", kind="run", ref=dict(run=dialogue), output="done"))["capture_complete"]
+    finally:
+        client.close()
+
+
 def _call_handle(args: dict, dialogue_id: str = "dlg_test",
                  fake_bus: _FakeDataBus | None = None) -> tuple[str, _FakeDataBus]:
     """直接调 handle_run_skills_call，返回 (返回值文本, fake_bus)。"""
@@ -89,6 +158,32 @@ def _call_handle(args: dict, dialogue_id: str = "dlg_test",
         fake_bus = _FakeDataBus()
     ret = cd.handle_run_skills_call(args, fake_bus, "sess_test", dialogue_id)
     return ret, fake_bus
+
+
+def test_l2_guard_rejects_one_skill_before_manifest_without_blocking_sibling(monkeypatch):
+    from agentflow_runtime import coordinator_decide as cd
+
+    seen = []
+
+    class Guard:
+        def point(self, request, **_kwargs):
+            seen.append(request)
+            return {"decision": "reject", "reason": "two settled failures"} if (
+                request.get("phase") == "guard" and request.get("name") == "forge-image-gen"
+            ) else {"decision": "allow"}
+
+    monkeypatch.setattr(cd, "_evolution", Guard())
+    bus = _FakeDataBus()
+    result = json.loads(cd.handle_run_skills_call({"skills": [
+        {"name": "forge-image-gen", "prompt": "retry"},
+        {"name": "outfit-stylist", "prompt": "independent"},
+    ]}, bus, "session", "guard-dialogue", evolution_parent_ref="skill-plan:1:1"))
+    assert [entry["name"] for entry in result["rejected"]] == ["forge-image-gen"]
+    assert result["skills"] == ["outfit-stylist"]
+    assert len([key for key in bus.global_puts if key.startswith("dispatch:")]) == 1
+    assert [entry["name"] for entry in seen if entry.get("phase") == "guard"] == [
+        "forge-image-gen", "outfit-stylist",
+    ]
 
 
 @pytest.mark.parametrize("raw", [
@@ -756,10 +851,14 @@ def test_dispatch_failure_reaches_after_dispatch_hook(monkeypatch, skills, statu
         if fields.get("name") == "tool.result":
             point_events.append(fields)
             execution_order.append("tool.result")
+        # 与真实打点接口一致，未拦截的 guard 也返回允许决定。
+        return {"input": fields.get("input"), "decision": "allow"}
 
     evolution = MagicMock()
     evolution.allow_loop.return_value = True
     evolution.point.side_effect = capture_point
+    evolution.call.side_effect = lambda fields, execute, **kwargs: execute(fields["input"])
+    evolution.dispatch.side_effect = lambda fields, execute, **kwargs: execute(fields["input"])
 
     def capture_hook(event_name, payload, **kwargs):
         if event_name in {

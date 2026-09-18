@@ -108,7 +108,7 @@ L1–L3 必须接到实际发送/执行/调度位置，仅上传历史日志无�
 
 ## 实现定位
 
-- `src/integration_service.cpp → src/boundary_runtime.cpp → src/trace_analyzer.cpp → src/evolution_pipeline.cpp → src/shared_memory.cpp → src/shadow_runtime.cpp → src/policy_runtime.cpp`
+- `src/service/integration_service.cpp → src/runtime/boundary_runtime.cpp → src/analysis/trace_analyzer.cpp → src/analysis/evolution_pipeline.cpp → src/memory/shared_memory.cpp → src/runtime/shadow_runtime.cpp → src/runtime/policy_runtime.cpp`
 
 ---
 

@@ -168,10 +168,10 @@ learn 导入 SessionLog 后也使用此布局；SessionLog 副本保留 .jsonl�
 
 ## 实现定位
 
-- `src/integration_service.cpp::save / recover_jobs / checkpoint_sharing`
-- `src/evolution_pipeline.cpp::curate_memory_file`
-- `src/local_runtime.cpp::drain`
-- `src/learn_cli.cpp`
+- `src/service/integration_service.cpp::save / recover_jobs / checkpoint_sharing`
+- `src/analysis/evolution_pipeline.cpp::curate_memory_file`
+- `src/service/local_runtime.cpp::drain`
+- `src/cli/learn_cli.cpp`
 
 ---
 

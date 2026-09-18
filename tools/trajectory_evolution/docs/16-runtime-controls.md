@@ -1,4 +1,4 @@
-# 16 · L1–L3：经验注入、动作约束和循环控制
+# 16 · L1–L3：经验注入、技能编排和循环控制
 
 [文档首页](README.md)
 
@@ -31,7 +31,7 @@
 4. 外面加带 policy_id 的经验边界标记，用于识别与回执验证。
 5. 根据显式 binding 或包内识别的输入位置注入，返回增强后的参数。
 
-`src/request_binding.cpp` 支持两种绑定模式：
+`src/runtime/request_binding.cpp` 支持两种绑定模式：
 
 - `text`：追加到指定字符串。
 - `system_message`：追加到指定消息数组的 system 内容；没有适合位置时创建 system 消息。
@@ -45,7 +45,55 @@
 这些状态用于记录策略应用，业务结果另行保存。
 模型请求中的经验内容通过 actual_input 核验，业务效果由后续任务评测衡量。
 
-### L2：逐动作过滤，不重写宿主并行调度
+### L2：技能编排
+
+`schedule_rules` 作用于实际待派发的任务批次。每条规则包含 `before_operation`、`after_operation`、
+`require_success`、scope、规则 ID 和经验来源。新生成的规则还包含 `task_terms`（均须出现在当前 run 的任务文本中）及可选的 `exclude_terms`（任一出现即不命中）。不满足条件时保持宿主原计划；旧版未设置条件的手工规则仍按原语义运行。它不生成新技能，也不修改技能参数。
+
+例如原计划同时运行 A、B、C，规则要求 A→B，组件先返回 A、C；观察到 A 完成后才允许 B。
+`require_success=true` 时 A 失败会跳过 B，但不取消 C；为 false 时只要求 A 已结束，允许 B 处理失败结果。
+同名技能的不同实例保留不同 action_id。原有依赖始终保留；候选依赖形成环时整批退回原计划，并记录 conflict。
+当 before_operation 与 after_operation 相同，规则按宿主批次中的原始顺序串行这些实例，不添加自依赖。
+这适用于已经有执行证据支持的共享资源顺序约束；多实例本身不代表必须串行，未配置规则的同名实例仍保持原来的并行行为。
+无规则、等级低于 L2 或未声明 `schedule` 能力时，不附加进化依赖。
+目前这是“已有批次的编排”：只有宿主提出 A、B 后才能重排，不会在新 dialogue 开始时凭用户问题创建技能工作流或跳过 Coordinator 决策。文本条件是本地确定性匹配；候选必须在训练轨迹中产生差异。部署前应让验证集同时覆盖依赖任务和独立任务，检查过度串行化。
+
+协议由 `activity.begin(kind=schedule)`、`schedule.observe` 和 `activity.end` 组成，也可使用统一 point。
+prepare 返回 ready；实际派发与完成分别上报 running 和终态。调度 ACK 不作为终态。
+包内状态可持久化；依赖等待不占宿主工作槽，也不轮询模型。
+只有实际开始/结束顺序满足计划、所有分支结算、跳过分支明确未执行后，才能形成 applied 回执。
+只返回计划、仅调整数组顺序或只有派发 ACK，均不能得到该回执。
+
+自动生成的跨操作规则遇到多个同名实例时，仅调整宿主已经明确的实例依赖。例如 A1→B1、A2→B2 不会被扩成所有 A→所有 B，A1 失败只阻断需要其成功的 B1；没有配对依据则保留原计划。单一 A/B 配对与显式的同操作串行化仍可直接执行；用户手工配置的基础规则保持其明确指定的语义。
+
+异步整批完成型宿主可使用包内 `dispatch/resume_dispatch`，见[接入位置](08-instrumentation.md#异步批量技能编排)。
+此模式按 wave 释放任务：同一 wave 中的独立任务仍可并行，下一 wave 等宿主报告当前批次完成。
+它不承诺逐分支完成即刻释放后继；需要这种粒度的宿主使用上面的 schedule 点，在现有单任务回调处消费 ready。
+若外层另有 action 打点包住派发调用，编排点的 `ref.parent` 应引用该 action 的 `ref.key`；原生接口使用父 action 的开始事件作为 `caused_by`。包据此区分派发封装与实际工作，不通过操作名推测父子关系。父 action 的 ACK 不计为业务成功进展，真实结果按各子任务的终态计入所属 loop。
+
+### 配套能力：逐动作参数护栏
+
+#### 同一目标跨执行实例的重试预算
+
+`repeat_failed_operation` 仍按同一 loop 的操作失败链工作。需要阻止重新启动 worker 后继续重复相同目标时，GEPA 可生成 `repeat_failed_target`，编译为带 `failure_key_arguments` 的 action rule。例如操作 `generate` 的 `output` 参数标识产物目标：
+
+```json
+{"memory_id":"已批准经验ID","primitive_id":"repeat_failed_target","operation":"generate","failure_key_arguments":["output"],"max_failed_attempts":2,"reason":"同一目标重复失败后停止再次派发"}
+```
+
+目标参数由训练证据提出并验证，不要求宿主再写工具适配器。既有 action 打点负责观察实际参数与结果；运行时只做本地结构化比较，不调用模型。参数必须是 1–4 个标量字段，组合能标识同一业务目标。通用选项、随机调用 ID 和整段自然语言指令不适合作为目标标识。
+
+| 情况 | 计数与执行 |
+| --- | --- |
+| 同一 run、scope、操作与目标，换 worker/执行实例重试 | 保留已落定失败链；达到阈值才拒绝后续尝试 |
+| 不同目标、不同操作、不同 run | 分开计数，不传播失败 |
+| 两个并发首次尝试 | 开始时冻结相同计数，不互相当作已知失败后的重试 |
+| 同目标成功 | 清除连续失败链 |
+| 参数缺失、值为空或不是标量 | 不推断目标身份，不按其他任务的失败拦截 |
+| 动作未执行、取消、结果未知、仅收到派发 ACK | 不增加业务失败次数 |
+| actual_input 改变了目标参数 | 不把失败算到原计划目标 |
+
+运行态每个 run 最多保存 256 个目标失败键，只持久化其摘要与有界计数。新规则和参数随策略包导出，离线加载使用相同逻辑。L0/L1 不因该规则增加动作拦截。
 
 L2 首先执行包内的工具契约检查，无需逐工具配置：
 
@@ -68,7 +116,7 @@ attributes.tool_contracts 记录实际输入中提取的紧凑定义。此检查
 - 空值包括 null、未设置、空字符串、空数组、空对象；数字 0 或 false 不因为是假值就视为缺失。
 - 同一动作首条实际触发的拒绝规则确定 reason/rule_id。
 
-L2 不自动重排序、串行化或取消兄弟动作，也不把一个动作拒绝改写成整个任务失败。
+参数护栏本身不重排序、串行化或取消兄弟动作，也不把一个动作拒绝改写成整个任务失败。
 通过的动作仍由宿主按原来的串并行关系执行。
 显式策略的回执核对被拒绝的 action_id 确实出现在 skipped 集合，并没有出现在 executed 集合。
 固定契约拒绝通过 contract_check 和 action.end.executed=false 记录，不伪装成某条经验策略的拒绝。
@@ -77,11 +125,19 @@ L2 不自动重排序、串行化或取消兄弟动作，也不把一个动作�
 ### L3：有状态的循环收敛控制
 
 每个 loop 保留独立的 `LoopProgress`：执行流、scope、policy_id、轮次、状态指纹、连续无进展次数、重规划次数和上次决定。
+
+GEPA 的 `bounded_recovery_budget` 可在有无效恢复证据时收紧匹配基础规则的 `max_replans`，但不能增加预算。设为 0 时，当前执行分支达到原有无进展阈值后直接 stop，不再附加 replan；不是遇到一次失败就 stop。专用 actor 规则、其他并发分支和 pending 屏障保持独立，导出的版本保存该预算，离线加载无需重新学习。
 不会使用一个全局计数器让其他并行 loop 相互影响。
 
-通用边界在 `loop.check` 对 state 做稳定 JSON 序列化并计算 SHA-256。
-“无进展”只判断指纹相同，不理解业务意义。state 应包含稳定、与进度有关的事实，例如已完成子任务、已有素材、待满足条件。
-state 使用影响业务进展的稳定字段，排除无关时间戳或随机 ID，并随真实进展更新。
+通用边界在 `loop.check` 对 state 做稳定 JSON 序列化并计算 SHA-256，保留原有的连续相同状态判定。
+另外，包内在实际 action 结束时记录操作名、实际参数、终态和结果的哈希：同一执行分支的一步中，所有已完成调用都只重复之前见过的输入／输出组合时，累加 `repeated_action_steps`；出现新的组合则清零。结果中的业务 ID、时间戳等字段完整参与哈希，不按字段名删除。最多保留 256 个组合，超出后退回原有状态判定，不把缓存溢出当作停滞。
+
+同步 action 与异步编排结果使用同一条进展统计路径。编排中的实际成功／失败按操作名更新所属 loop；重复回调不重复计数，未执行或未知结果不充当已执行进展。包含成功分支的已结算步骤仍保留成功进展，在途分支仍阻止提前停止；记录失败不等于立即停止整个任务。
+
+重复失败使用每次动作开始时已观察到的失败链长度：两个并发首次尝试各自失败不等于连续重试两次，只有在已知失败之后开始的新尝试才延长失败链。同步工具与异步技能使用相同规则。是否新增文件也不是业务进展的判断条件；读取、核验、修改文本等正常工作保留其实际输入和结果指纹。
+
+两个信号取较大值作为本次 `no_progress`。工具信号补充宿主消息中随机传输 ID 导致的漏检，不覆盖原有状态判定，也不表示理解了业务语义。新的参数或工具结果、独立分支和在途动作均有单独处理；没有已完成动作时仅使用状态判定。重规划消费本次重复计数，后续继续重复才再次累计。
+state 仍宜包含与进度有关的稳定事实，例如已完成子任务、已有素材和待满足条件。这两种运行信号与离线评测的“无效 loop”是不同口径。
 
 核心状态机为：
 
@@ -92,6 +148,7 @@ state 使用影响业务进展的稳定字段，排除无关时间戳或随机 I
 否则：
     fingerprint 与前次相同且存在前次轮次 → no_progress += 1
     fingerprint 改变                       → no_progress = 0
+    no_progress = max(no_progress, repeated_action_steps)
 
     max_iterations > 0 且 iteration > max_iterations → stop
     否则 max_no_progress > 0 且 no_progress >= max_no_progress：
@@ -109,10 +166,25 @@ max_no_progress=3 时，首次状态建立基准，之后连续三次相同状�
 stop 按宿主回报核验；replan 在后续模型活动中核对重规划上下文是否进入请求。
 并发模型调用分别验证各自的 actual_input。
 stop 作用于对应 loop；其他循环和在途操作继续由宿主调度，副作用通过业务接口处理。
+普通模式可由独立的 `replan_on_failure` 规则响应结构化重复失败，但失败次数不并入基础 `no_progress` 阈值。宿主没有采用建议时，重新计算进度也遵守这一分界，避免后续轮次过早触发停止或重规划。
+
+### 激进控制模式
+
+在服务的 `runtime_options` 中设置 `"aggressive_controls": true`，重新编译策略后生效。
+该选项写入策略版本和导出包，离线加载时不需要额外配置；默认 false，旧策略保持原行为。
+
+- 来源仍须批准且 revision 一致，但可执行控制不再要求来源经验同时命中 L1 词面检索或 top-k。
+- 同一 loop 内，同一操作连续结构化失败，即使修改参数、请求 ID 或报错文本，也形成 `repeated_failure_steps`：首次为 0，第二次为 1。信号在普通模式也采集，供已批准的失败重规划规则使用；只有激进模式将它并入通用无进展阈值。
+- 一个结算步骤中有成功动作时不增加此信号；某操作成功后清除它的失败计数。在途动作仍阻止干预，兄弟 loop 的计数相互独立。每个 loop 最多记录 64 种失败操作，超出时不凭空认定新操作停滞。
+- GEPA 可以在 `control_learning.min_iterations` 与基础上限之间搜索较低的 `max_iterations`，也可以收紧 `max_no_progress`。这是一种 scope 内分支预算，不是业务语义判断。
+
+例如 `max_no_progress=1`、`no_progress_decision="stop"` 时，第二次同操作失败后，若本步没有成功动作且没有在途活动，下一次检查可停止本分支。
+激进设置也可能提前终止原本可以恢复的任务；候选仍须经过质量、无效 loop、时延和真实应用回执评测，不因开启该选项放宽发布门槛。
+L0 不应用这些控制，L1 检索方式、用户隔离和宿主硬依赖不变。整个判定不增加在线模型调用。
 
 ## 配置规则与学习建议的边界
 
-L1 可使用通过审核的经验正文；L2 action_rules 和 L3 loop_rules 是部署方显式配置的结构化规则。
+L1 可使用通过审核的经验正文；L2 schedule_rules、配套 action_rules 和 L3 loop_rules 是结构化规则。
 动作和循环控制使用显式配置的机器规则，经验建议通过模型上下文参与决策。
 启用 GEPA 后，后台也可在 `control_learning` 授权范围内生成结构化规则；生成规则附带来源经验 revision，
 经过真实任务评测后随完整策略发布。手工基础规则仍保留，生成循环限制只能收紧基础边界。
@@ -134,9 +206,9 @@ set_enabled 控制当前原生客户端，多实例部署分别管理开关。
 
 ## 实现定位
 
-- `src/request_binding.cpp`
-- `src/policy_runtime.cpp::PolicyRuntime::decide / observe`
-- `src/boundary_runtime.cpp`
+- `src/runtime/request_binding.cpp`
+- `src/runtime/policy_runtime.cpp::PolicyRuntime::decide / observe`
+- `src/runtime/boundary_runtime.cpp`
 - `proto/runtime_policy.proto`
 - `tests/test_policy_runtime.cpp`
 

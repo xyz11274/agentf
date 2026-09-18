@@ -38,6 +38,18 @@ if(NOT RAPIDJSON_INCLUDE_ROOT)
     "or pass -DRAPIDJSON_INCLUDE_DIR=<prefix>.")
 endif()
 
+# 内部实现按职责分目录；这里集中维护搜索路径，避免每个目标重复一长串目录。
+set(TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/analysis
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/runtime
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/service
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/model
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/memory
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/evaluation
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/gepa
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/cli
+)
+
 set(HYBRID_EVALUATION_PROTO
   ${CMAKE_CURRENT_SOURCE_DIR}/proto/hybrid_evaluation.proto
 )
@@ -137,34 +149,37 @@ target_link_libraries(agentflow_hybrid_evaluation_proto PUBLIC
 )
 
 add_library(agentflow_trajectory_evolution STATIC
-  src/agent_evaluation.cpp
-  src/dataset.cpp
-  src/task_evaluation.cpp
-  src/evaluation_process.cpp
-  src/evolution_pipeline.cpp
-  src/hybrid_evaluator.cpp
-  src/loop_episode_analyzer.cpp
-  src/model_adapter.cpp
-  src/runtime_config.cpp
-  src/sessionlog_evaluator.cpp
-  src/trace_contract.cpp
-  src/trace_analyzer.cpp
-  src/shadow_runtime.cpp
-  src/shared_memory.cpp
-  src/policy_runtime.cpp
-  src/request_binding.cpp
-  src/integration_service.cpp
-  src/integration_http.cpp
-  src/boundary_runtime.cpp
-  src/model_contract.cpp
-  src/instrumentation.cpp
-  src/control_generation.cpp
-  src/gepa_search.cpp
-  src/gepa_strategy.cpp
-  src/local_runtime.cpp
+  src/evaluation/agent_evaluation.cpp
+  src/evaluation/dataset.cpp
+  src/evaluation/task_evaluation.cpp
+  src/evaluation/evaluation_process.cpp
+  src/analysis/evolution_pipeline.cpp
+  src/analysis/hybrid_evaluator.cpp
+  src/analysis/loop_episode_analyzer.cpp
+  src/model/model_adapter.cpp
+  src/model/runtime_config.cpp
+  src/analysis/sessionlog_evaluator.cpp
+  src/analysis/trace_contract.cpp
+  src/analysis/trace_analyzer.cpp
+  src/runtime/shadow_runtime.cpp
+  src/memory/shared_memory.cpp
+  src/runtime/policy_runtime.cpp
+  src/runtime/orchestration.cpp
+  src/runtime/request_binding.cpp
+  src/service/integration_service.cpp
+  src/service/integration_http.cpp
+  src/runtime/boundary_runtime.cpp
+  src/model/model_contract.cpp
+  src/runtime/instrumentation.cpp
+  src/runtime/dispatch_runtime.cpp
+  src/gepa/control_generation.cpp
+  src/gepa/gepa_search.cpp
+  src/gepa/gepa_strategy.cpp
+  src/service/local_runtime.cpp
 )
 set_target_properties(agentflow_trajectory_evolution PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(agentflow_trajectory_evolution
+  PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS}
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
@@ -182,7 +197,7 @@ if(PNG_FOUND)
   target_link_libraries(agentflow_trajectory_evolution PUBLIC PNG::PNG)
   target_compile_definitions(agentflow_trajectory_evolution PRIVATE EVOLUTION_HAS_PNG=1)
 endif()
-set_source_files_properties(src/evaluation_process.cpp PROPERTIES COMPILE_DEFINITIONS
+set_source_files_properties(src/evaluation/evaluation_process.cpp PROPERTIES COMPILE_DEFINITIONS
   "EVOLUTION_BUILD_CLI=\"${CMAKE_CURRENT_BINARY_DIR}/trajectory_evolution\";EVOLUTION_INSTALLED_CLI=\"${CMAKE_INSTALL_FULL_BINDIR}/trajectory_evolution\"")
 
 if(NOT MSVC)
@@ -194,16 +209,17 @@ if(NOT MSVC)
 endif()
 
 add_executable(trajectory_evolution
-  src/evaluation_supervisor.cpp
-  src/learn_cli.cpp
-  src/dataset_cli.cpp
-  src/task_evaluation_cli.cpp
-  src/main.cpp
-  src/trace_cli.cpp
-  src/shadow_cli.cpp
-  src/policy_cli.cpp
+  src/cli/evaluation_supervisor.cpp
+  src/cli/learn_cli.cpp
+  src/cli/dataset_cli.cpp
+  src/cli/task_evaluation_cli.cpp
+  src/cli/main.cpp
+  src/cli/trace_cli.cpp
+  src/cli/shadow_cli.cpp
+  src/cli/policy_cli.cpp
 )
 target_include_directories(trajectory_evolution PRIVATE
+  ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS}
   ${RAPIDJSON_INCLUDE_ROOT}
 )
 target_link_libraries(trajectory_evolution PRIVATE
@@ -214,8 +230,9 @@ set_target_properties(agentflow_trajectory_evolution PROPERTIES EXPORT_NAME core
 set_target_properties(agentflow_hybrid_evaluation_proto PROPERTIES EXPORT_NAME proto)
 add_library(TrajectoryEvolution::core ALIAS agentflow_trajectory_evolution)
 target_sources(agentflow_trajectory_evolution PRIVATE clients/c/evolution.c)
-add_library(trajectory_evolution_local SHARED src/local_c.cpp src/evaluation_entry_client.cpp)
-target_include_directories(trajectory_evolution_local PRIVATE src ${RAPIDJSON_INCLUDE_ROOT})
+add_library(trajectory_evolution_local SHARED src/service/local_c.cpp src/service/evaluation_entry_client.cpp
+    clients/cpp/evolution_points.cpp)
+target_include_directories(trajectory_evolution_local PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_ROOT})
 target_include_directories(trajectory_evolution_local PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
@@ -230,7 +247,7 @@ if(LOCAL_NODE_EXECUTABLE)
   find_path(LOCAL_NODE_INCLUDE node_api.h HINTS "${LOCAL_NODE_BIN}/../include/node"
       /usr/include/node /usr/local/include/node)
   if(LOCAL_NODE_INCLUDE)
-    add_library(trajectory_evolution_local_node MODULE src/local_node.cpp)
+    add_library(trajectory_evolution_local_node MODULE src/service/local_node.cpp)
     target_include_directories(trajectory_evolution_local_node PRIVATE include "${LOCAL_NODE_INCLUDE}")
     target_link_libraries(trajectory_evolution_local_node PRIVATE trajectory_evolution_local)
     set_target_properties(trajectory_evolution_local_node PROPERTIES PREFIX "" SUFFIX ".node" INSTALL_RPATH "$ORIGIN")
@@ -278,7 +295,7 @@ install(EXPORT TrajectoryEvolutionTargets NAMESPACE TrajectoryEvolution::
 include(CTest)
 if(BUILD_TESTING)
   add_executable(test_local_runtime tests/test_local_runtime.cpp)
-  target_include_directories(test_local_runtime PRIVATE src ${RAPIDJSON_INCLUDE_ROOT})
+  target_include_directories(test_local_runtime PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_ROOT})
   target_compile_definitions(test_local_runtime PRIVATE LOCAL_TEST_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}"
       LOCAL_TEST_BUILD="${CMAKE_CURRENT_BINARY_DIR}")
   target_link_libraries(test_local_runtime PRIVATE agentflow_trajectory_evolution)
@@ -290,8 +307,24 @@ if(BUILD_TESTING)
   target_link_libraries(test_client_c PRIVATE trajectory_http_client_test)
   add_executable(test_client_cpp tests/clients/probe.cpp)
   target_link_libraries(test_client_cpp PRIVATE trajectory_http_client_test)
+  add_executable(test_evolution_points clients/cpp/evolution_points_test.cpp)
+  target_include_directories(test_evolution_points PRIVATE ${RAPIDJSON_INCLUDE_ROOT})
+  target_link_libraries(test_evolution_points PRIVATE trajectory_evolution_local)
+  add_test(NAME EvolutionPointsTests COMMAND test_evolution_points)
+  find_program(TRAJECTORY_EVOLUTION_GO_EXECUTABLE go)
+  if(TRAJECTORY_EVOLUTION_GO_EXECUTABLE)
+    add_test(NAME GoLocalClientTests
+        COMMAND ${TRAJECTORY_EVOLUTION_GO_EXECUTABLE} test -race ./...)
+    set_tests_properties(GoLocalClientTests PROPERTIES TIMEOUT 120
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/clients/go
+        ENVIRONMENT
+            "TRAJECTORY_EVOLUTION_TEST_BUILD=${CMAKE_CURRENT_BINARY_DIR}")
+  endif()
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
+    add_test(NAME DispatchClientTests COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dispatch_client.py ${CMAKE_CURRENT_BINARY_DIR})
+    set_tests_properties(DispatchClientTests PROPERTIES TIMEOUT 120)
     add_test(NAME AgentEvaluationTests COMMAND ${Python3_EXECUTABLE}
         -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_agent_evaluation.py ${CMAKE_CURRENT_BINARY_DIR} ${AGENTFLOW_PROTOC_EXECUTABLE})
     set_tests_properties(AgentEvaluationTests PROPERTIES TIMEOUT 240)
@@ -300,7 +333,8 @@ if(BUILD_TESTING)
     set_tests_properties(TrainingBootstrapTests PROPERTIES TIMEOUT 180)
     add_test(NAME GepaSearchTests COMMAND ${Python3_EXECUTABLE}
         -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gepa_search.py ${CMAKE_CURRENT_BINARY_DIR} ${AGENTFLOW_PROTOC_EXECUTABLE})
-    set_tests_properties(GepaSearchTests PROPERTIES TIMEOUT 600)
+    # 该测试当前包含 102 个串行场景；上限覆盖慢机器，但不改变任何运行时超时。
+    set_tests_properties(GepaSearchTests PROPERTIES TIMEOUT 1800)
     add_test(NAME DocumentationTests COMMAND ${Python3_EXECUTABLE}
         -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_documentation.py)
     add_test(NAME TaskEvaluationTests COMMAND ${Python3_EXECUTABLE}
@@ -339,7 +373,7 @@ if(BUILD_TESTING)
     set_tests_properties(AutomaticContractTests PROPERTIES TIMEOUT 120)
   endif()
   add_executable(test_integration_service tests/test_integration_service.cpp)
-  target_include_directories(test_integration_service PRIVATE src ${RAPIDJSON_INCLUDE_ROOT})
+  target_include_directories(test_integration_service PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_ROOT})
   target_compile_definitions(test_integration_service PRIVATE
       INTEGRATION_TEST_SOURCE="${CMAKE_CURRENT_SOURCE_DIR}")
   target_link_libraries(test_integration_service PRIVATE agentflow_trajectory_evolution)
@@ -356,16 +390,17 @@ if(BUILD_TESTING)
     endif()
   endif()
   add_executable(test_policy_runtime tests/test_policy_runtime.cpp)
+  target_include_directories(test_policy_runtime PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS})
   add_executable(test_gepa_config tests/test_gepa_config.cpp)
-  target_include_directories(test_gepa_config PRIVATE ${RAPIDJSON_INCLUDE_ROOT})
+  target_include_directories(test_gepa_config PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_ROOT})
   target_link_libraries(test_gepa_config PRIVATE agentflow_trajectory_evolution)
   add_test(NAME GepaConfigurationTests COMMAND test_gepa_config ${CMAKE_CURRENT_SOURCE_DIR}/config/gepa.json)
   add_executable(test_gepa_strategy tests/test_gepa_strategy.cpp)
-  target_include_directories(test_gepa_strategy PRIVATE ${RAPIDJSON_INCLUDE_ROOT})
+  target_include_directories(test_gepa_strategy PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_ROOT})
   target_link_libraries(test_gepa_strategy PRIVATE agentflow_trajectory_evolution)
   add_test(NAME GepaStrategyTests COMMAND test_gepa_strategy)
   add_executable(test_shared_memory tests/test_shared_memory.cpp)
-  target_include_directories(test_shared_memory PRIVATE src ${RAPIDJSON_INCLUDE_ROOT})
+  target_include_directories(test_shared_memory PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_ROOT})
   target_link_libraries(test_shared_memory PRIVATE agentflow_trajectory_evolution)
   add_test(NAME SharedMemoryTests COMMAND test_shared_memory)
   target_link_libraries(test_policy_runtime PRIVATE agentflow_trajectory_evolution)

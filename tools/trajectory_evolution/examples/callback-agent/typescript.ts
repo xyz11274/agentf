@@ -32,11 +32,13 @@ export async function conversation(client: Evolution, conversationId: string): P
       { id: "video", operation: "video", arguments: {} },
       { id: "fast-failure", operation: "lookup", arguments: { topic: "模拟网络失败" } },
     ]);
-    const results = await Promise.all(planned.map(action => action.execute(async spec => {
+    const settled = await Promise.allSettled(planned.map(action => action.execute(async spec => {
       if(spec.id === "fast-failure") throw new Error("simulated network failure");
       await new Promise(resolve => setTimeout(resolve, spec.id === "slow" ? 15 : 1));
       return { found: spec.id };
     })));
+    const results = settled.map((result, index) => result.status === "fulfilled" ? result.value
+      : { id: planned[index].action.id, status: "failed" });
     if(results.find(r => r.id === "slow")?.status !== "completed") throw new Error("independent branch was lost");
     if(results.find(r => r.id === "fast-failure")?.status !== "failed") throw new Error("failure was hidden");
   }

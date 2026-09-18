@@ -291,8 +291,8 @@ JSON 模式只约束输出格式，不替代既有的结构、证据、隐私和
 
 ## 实现定位
 
-- `src/integration_service.cpp::Impl`
-- `src/runtime_config.cpp`
+- `src/service/integration_service.cpp::Impl`
+- `src/model/runtime_config.cpp`
 - `config/boundary-service.json`
 - `config/standard-runtime.json`
 

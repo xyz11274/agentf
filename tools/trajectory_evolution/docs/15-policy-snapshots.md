@@ -32,7 +32,7 @@ hash 排除本次 run/conversation ID、快照 ID 和记忆库修订等运行或
 
 ### Memory 不会原样塞进模型
 
-`src/shadow_runtime.cpp` 的 `compile_shadow_policy` 为当前 Run 筛选经验。
+`src/runtime/shadow_runtime.cpp` 的 `compile_shadow_policy` 为当前 Run 筛选经验。
 候选类型有多种，但当前自动注入只读取符合新契约的 EXPERIENCE_INJECTION。
 RETRY_POLICY、LOOP_STOP_CONDITION 等候选仍可保存、分析，**不会自动翻译成 L2/L3 控制规则**。
 
@@ -76,12 +76,13 @@ content_revision 不只是建议正文的 hash，来源别名、条件等快照�
 只从 `trigger_pattern` 提取适用条件关键词，不从历史失败描述或建议正文提取。
 否则“以前提到过视频失败”容易让所有视频任务误命中一条特定前置条件经验。
 
-- ASCII 字母/数字/下划线组成的词，转小写，长度至少 2。
-- 连续汉字生成相邻双字词，例如“缺少图片素材”产生“缺少、少图、图片、片素、素材”。
-- 非汉字边界会中断汉字组合；不使用中文语义分词或词向量。
-- 去掉配置中的 stop_terms，去重后保留最多 max_match_terms 项。
+- ASCII 字母/数字/下划线组成完整词，转小写；`generate_image` 不拆成 `generate` 和 `image`。
+- 英文常见词尾归一成一个词项，例如 `timeouts` → `timeout`；原词与词干不重复计数，`status` 不裁成 `statu`。
+- 连续汉字生成 2–4 字候选。计分时优先较长片段，同一片段的子串和重叠窗口只算一次。短双字片段只能补充相邻的具体短语，不能把散落的“文件、需要、结果”等词凑成多个证据。
+- 条件里带引号的英文多词短语按完整短语核验；例如没有出现 `No such file or directory` 时，不能只凭 `bash + file` 命中这条写入失败经验。
+- 去掉配置中的 stop_terms，保留最多 max_match_terms 项；不部署编码模型或向量数据库。
 
-策略检索使用**中文字符双元组 + ASCII 词**；记忆短名单使用**字节三元组 Dice**。
+策略检索使用有界的多粒度词面证据；记忆短名单仍使用字节三元组 Dice，两者用途不同。
 
 
 ![从两库到一次有界注入](figures/15-selection.svg)
@@ -92,40 +93,86 @@ content_revision 不只是建议正文的 hash，来源别名、条件等快照�
 
 ### 检索是确定性的词面匹配
 
-`ShadowRuntime::query_advice` 先核对用户/会话/Run 身份、scope 和输入预算，再对 `task + state` 提取词项。
-对每条同 scope 经验计算：
+`ShadowRuntime::query_advice` 先核对用户/会话/Run 身份、scope 和输入预算，再检索 `task + state` 的观察内容：
+
+1. JSON 只提取值，不把 `role`、`status` 等字段名算成业务证据；嵌套的 JSON 工具结果也按相同规则处理。
+2. 消息结构排除 system/developer 指令和工具定义，保留用户内容、实际调用的名称/参数、工具结果。`<system-reminder>`、既有经验与控制注入块不参与匹配，即使它们放在 user 消息里。
+3. 自动打点的消息检索保留最新用户请求，以及最新 assistant 消息与其后的全部工具结果；同批并行返回不会只取最后一条。较早已经消费的结果不再反复触发建议，新出现的相同失败仍可再次匹配。宿主显式提供的 `state` 继续优先使用。
+4. 先清洗检索副本，再做 UTF-8 安全的首尾限长，避免截断 JSON 后又把字段名当成普通文本。原始轨迹和实际模型请求不变。
+5. 条件中出现带下划线的明确标识时，至少一个该类标识必须出现在观察中；通用 `_error`、`_status`、`_result` 结果标签不能代替它。其他匹配词也须来自包含该标识的观察段落，不能把预算报告的“成功”和下一段建议中的 `generate_image` 拼为图片生成成功。
+6. 中文窗口若以“的、了、且、或、当、时、与、把”等虚词开头或结尾，不算独立具体词项。“的文件”与“目录不存在”不能因此组合成写文件失败。
+
+对同 scope、已授权经验计算：
 
 ```text
-matched_terms = 经验条件词项 ∩ 当前任务/状态词项
-score = |matched_terms|
+matched_terms = 条件与观察共有的、去除重复和重叠后的独立词项
+score = Σ 词项信息权重 × 当前合格经验条件中的逆文档频率权重
 ```
 
-命中数至少为 `min_matched_terms` 才入选，默认 2。
-先按有效授权过滤，再优先私人经验、同类按命中数降序和 memory_id 升序排列；跨库重复只选一份，
+独立命中数至少为 `min_matched_terms` 才入选，默认 2；至少包含一个具体词项，不能仅靠通用双字词通过。
+纯中文命中若仍依赖短片段凑足门槛，还要求不重叠的命中字符数达到 `4 × min_matched_terms`；
+“用户需求 + 覆盖”这样的一小段通用描述不能替代完整任务完成条件。已有足量具体词项时不附加该限制。
+先按有效授权过滤，再优先私人经验、同类按加权得分、独立命中数降序和 memory_id 升序排列；跨库重复只选一份，
 最后受数量与总字节预算约束，随包最多 3 条、4096 字节。未授权的私人经验不会耗掉公共经验的 top-K 名额。
 纯 Shadow 查询没有 Runtime 授权概念，仍只提供未应用建议。
-这里没有把 memory.confidence、历史收益、余弦距离或 BM25 加权到运行时排序中。
+这里不使用 memory.confidence、历史收益或余弦距离，也不在在线检索路径调用模型。
 
 命中只说明词面相关。例如“已经提供图片素材”也可能命中包含“缺少图片素材”的词项。
-词面检索生成 shadow 建议，再按权限和上下文条件筛选。
-注入模板提示宿主模型核对当前条件、权限和预算。
+词面检索生成 shadow 建议，再按权限和上下文预算注入。查询次数、经验命中次数和实际应用回执分别统计；注入发生不等于注入有益。
+L2/L3 已批准控制来源的结构化判定保持独立，不受 L1 top-K 或词面门槛限制。
+
+### 版本内适用条件改写
+
+GEPA 可在 `RuntimeOptions.experience_overrides` 中同时保存 `content`、可选 `trigger_pattern`、可选 `observed_operations`。
+来源 `memory_id/content_revision`、scope 和记忆快照不变；条件变化进入策略版本 hash，随策略导出、融合与离线加载保存。
+旧的仅正文改写格式继续有效。模型输出省略条件时继承父版本；空 `trigger_pattern` 恢复来源条件，空操作数组移除该门槛。
+
+`observed_operations` 是最多 16 个操作名的 any-of 条件：当前分支上一批已执行并结束的 action 至少包含其中一个，随后模型请求才可候选注入；词面条件仍需满足。
+它不判断操作是否业务成功。操作计划、自然语言建议、未执行/被拒绝的动作不满足条件。没有可靠分支证据时不推测命中。
+一般规划、前置澄清类经验可以不带该条件；结果消费类经验可由后台反思生成条件，不要求宿主新增打点。
+
+包根据现有 point 祖先、loop 或显式 stream 隔离观察，成功完成一次模型请求后消费该请求已看到的操作证据。
+模型请求期间新完成的动作保留到下次请求；传输失败不消费；同名工具的并发分支互不借用。观察缓存有数量上限，空分支及时释放。
+被改写的私有经验有公共重复项时，公共项不会绕过新条件恢复旧正文。上述可选约束只影响 L1，L2/L3 的控制授权和结构条件保持独立。
+
+### 下一阶段：后台编译、在线路由的轻量语义匹配
+
+词面证据不能覆盖所有否定、改写和跨语言表达。后续可采用**后台语义编译 + 在线确定性路由**：模型只在经验入库、内容修订或策略候选生成时运行，不进入 Agent 的请求链；在线不部署编码模型、不查询向量库，也不要求主 Agent 判断经验是否适用。
+
+编译产物随经验内容版本保存在策略快照中，最小字段为：`source_content_revision`、`positive_features`、`negative_features`、`required_facts`、`excluded_facts`、`thresholds` 和 `compiler_version`。正向/反向特征由经验条件及少量正反例离线提炼，支持中英文同义表达、短语和不同权重；事实条件是协议打点已提供的有界结构字段，不从自由文本猜测“工具已成功”或“前提已满足”。编译结果必须通过字段白名单、长度、隐私、来源版本和范围校验，未通过就保持旧版检索或不注入，不把模型输出直接当成可执行规则。
+
+在线查询遵守固定顺序：
+
+1. 先校验用户、私有/公共冲突关系、授权内容版本、目标 scope 和当前策略版本。
+2. 已知事实命中 `excluded_facts` 时否决；`required_facts` 缺失时不猜测成立。没有提供所需结构事实的框架保留 L1 的保守检索，不能因此触发 L2/L3 控制。
+3. 对有界任务文本和状态文本分字段分词，利用离线倒排表召回候选；计算正向相关分、反向证据惩罚及候选间 margin。短语可提高置信度，否定或反例命中会降低置信度。
+4. 只保留同时超过最低分和区分 margin 的候选；接近阈值、正反冲突或语言未知时放弃注入。之后仍执行现有私有优先、去重、top-K 和字节预算。
+
+L1 可使用这一路由选择经验；L2/L3 的拒绝、重排与停止仍由受授权的结构化谓词和真实状态决定，不能由文本相似度单独驱动。策略发布评测应固定覆盖同义改写、否定句、前提已满足、跨语言、跨用户/跨 scope、公共私有冲突，以及未提供结构事实的宿主。对每条路由记录来源修订、编译器版本、命中/否决原因与最终应用回执，使“规则发布但未触发”和误触发都能从轨迹中复核。
+
+这一节是后续路由契约，不属于当前检索修复。将扩展计算移到离线、让在线使用稀疏索引的思路与 [Doc2Query](https://arxiv.org/abs/1904.08375)、[Doc2Query--](https://arxiv.org/abs/2301.03266) 和 [SPLADE-doc](https://arxiv.org/abs/2109.10086) 的索引侧计算方向一致；这里的结构事实门禁与发布评测是本组件额外需要的控制约束。
 
 ### 从影子建议到获准策略
 
-`src/policy_runtime.cpp` 的 `compile_runtime_policy` 将以下内容编译为固定策略：
+`src/runtime/policy_runtime.cpp` 的 `compile_runtime_policy` 将以下内容编译为固定策略：
 
 1. 已验证的 schema 2 经验快照。
 2. 用户与可选 conversation 白名单。
 3. 宿主已声明能力与请求等级。
 4. `approved_experiences` 中的 memory_id + content_revision 精确授权。
-5. 外部配置的动作规则、循环规则、注入模板与大小限制。
+5. 外部配置的技能编排规则、动作护栏、循环规则、注入模板与大小限制。
 
-能力逐级要求模型输入边界、动作过滤边界、循环决定边界。
+能力按实际边界声明：模型输入、技能编排/动作过滤、循环决定。
 策略编译支持 strict 和 downgrade：前者在接入能力不足时拒绝，后者降到宿主已满足的等级。
-通用接入的 `model/actions/loop` 能力会映射为内部策略能力；宿主仍必须正确使用返回值。
+通用接入的 `model/actions/schedule/loop` 能力会映射为内部策略能力；宿主仍必须正确使用返回值。
 
 `policy_id = runtime-v2:<固定策略内容的 SHA-256>`，包含本次快照与配置。
 每次查询在这个策略中决定，不在主链重新读记忆文件或调用模型。
+
+新增实际接入能力后，可用 `trajectory_evolution runtime recompile` 从 stdin 接收
+`{"policy": 原完整策略, "options": 新完整选项}`，复用已验证经验快照并生成新的 policy_id。
+此操作不调用模型、不改记忆库；不是原版本的原地修改，原评测缓存不能充当新版评测结果。
+原策略须通过完整性校验，新选项仍要经过编译校验；部署时仍检查宿主实际能力与授权。
 
 默认 `auto_approve_experiences=false`，没有匹配的版本授权就不注入。
 显式开启自动批准时，系统在建立 Run 时为通过快照筛选的经验添加当前版本授权。
@@ -184,9 +231,9 @@ approved_experiences 使用对应经验的策略内容版本。
 
 ## 实现定位
 
-- `src/shadow_runtime.cpp::compile_shadow_policy / ShadowRuntime::query`
-- `src/policy_runtime.cpp::compile_runtime_policy`
-- `src/local_runtime.cpp`
+- `src/runtime/shadow_runtime.cpp::compile_shadow_policy / ShadowRuntime::query`
+- `src/runtime/policy_runtime.cpp::compile_runtime_policy`
+- `src/service/local_runtime.cpp`
 - `proto/shadow_policy.proto`
 - `proto/runtime_policy.proto`
 

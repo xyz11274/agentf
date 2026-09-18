@@ -202,11 +202,11 @@ L4 是后台优化能力。`max_level`、`instrumentation.level` 和候选的 `l
 1. **冻结实验上下文。** 保存当前生产基线和记忆编译得到的 seed。上下文绑定任务集版本、宿主 revision、评测配置、反思配置/提示词和控制授权。当前生产基线尚未发布时使用 L0。
 2. **评测树根。** 在验证集执行 seed，保存逐题质量与成本。缺乏有效评分或循环证据时停止；未知 token 默认拒绝，也可显式使用下文的保守成本策略，不能把未知用量计成零。
 3. **选择父节点或重组分支。** 默认保留逐题最优节点，移除前沿覆盖被更优候选包含的冗余节点，按占据前沿的频次抽样。内部节点和叶节点采用相同资格规则。已有新候选且存在合适双亲时优先尝试重组。
-4. **抽取训练小批次与组件。** 默认按 epoch 重新洗牌，末批可短于 minibatch_size，不重复填充题目。父子使用相同任务与 repetitions；每个父节点轮换可改组件，后代继承轮换游标。可以配置同父多个提案、独立采样或 P×N 采样。
-5. **生成反思改写。** 模型看到当前实际经验、生成控制规则、选中组件、训练输入、输出、判分与轨迹。失败案例优先。验证与留出任务正文不进入反思。可选满分跳过检查实际质量和 fitness，而非仅检查业务成功。
+4. **抽取训练小批次与组件。** 默认按 epoch 重新洗牌，末批可短于 minibatch_size，不重复填充题目。父子使用相同任务与 repetitions；全树共享轮换游标，动作、经验、循环组件交错安排，分支不会重置进度。已发现某控制组件的可执行训练机会时，为它保留一个对应样本，其余继续按 epoch 抽样。可以配置同父多个提案、独立采样或 P×N 采样。
+5. **生成反思改写。** 模型只接收本轮获选组件当前值、合法来源和有预算限制的训练反馈；与控制条件直接相关的证据优先，然后才按失败及低收益排序。新发现且尚未探索的控制机会优先得到一次反思，经验则优先修改训练中实际注入的条目。验证与留出任务正文不进入反思。可选满分跳过检查实际质量和 fitness，而非仅检查业务成功。
 6. **建立子节点。** 反思节点记录一个父节点；重组节点记录两个父节点、共同祖先、组件来源和冲突。所有候选都经过隐私、来源、范围、长度和控制边界检查，再编译完整策略。相同行为版本记为 duplicate，跳过额外试跑。
 7. **小批次筛选。** 反思候选默认要求严格改善，先保质量再看 fitness；可配置不退化接纳，或 acceptance=pareto 保留局部优势。同批提案可全部保留通过筛选者，或按相对各自父版本的平均质量增益、fitness 增益选最佳／Top-K。不同提案的批大小可能不同，使用均值增益比较。
-8. **验证并更新前沿。** 被选中的反思提案执行完整验证集。重组候选先在覆盖双方优势与平分任务的验证子集上比较，按下述严格或 Pareto 筛选进入完整验证。同版本、同 split、同上下文的已完成逐题记录复用，只补跑缺题。
+8. **验证并更新前沿。** 被选中的反思提案执行验证。开启评测缓存时，训练中尚无实际应用回执的新控制规则先探测至多 `minibatch_size` 道验证题；同一规则在训练和探测中均有查询机会却始终零应用，则标记 `unobserved_controls`，结束该候选，不再消耗剩余验证题。训练未命中而验证已命中的规则继续完整验证，探测题从缓存复用。没有查询机会不按此规则提前结束；关闭缓存时保持完整验证。重组候选先在覆盖双方优势与平分任务的验证子集上比较，按下述严格或 Pareto 筛选进入完整验证。同版本、同 split、同上下文的已完成逐题记录复用，只补跑缺题。
 9. **停止搜索。** 达到轮数、模型调用数、试验预算、耐心或总时间边界。试验预算预留最终留出集的基线＋候选成本；预算不足不会再启动一个无法负担的试验。
 10. **最终验收。** 先固定 winner，再在留出集比较生产基线与 winner。使用原来的质量、覆盖率、配对样本、时延、token、无效循环准入规则。留出失败就保留原生产版本，不把失败详情反馈给反思模型后继续针对同一留出集搜索。
 11. **发布。** 只有该用户/等级的任务仍是最新候选、生产父版本未改变且准入通过，才登记新版本。新 run 从缓存取用；已开始的 run 保持原版本。
@@ -215,11 +215,35 @@ L4 是后台优化能力。`max_level`、`instrumentation.level` 和候选的 `l
 当前目标所需指标的题目仍可复用，包括正常判定的业务失败。每题必须保留全部 repetitions；error、uncertain、
 缺失循环指标、未完成评分或默认策略下缺失 token 的记录不充当有效成绩。报告哈希、版本、split 及上下文绑定仍须通过校验，
 不从最终留出对照提取记录用于搜索；`cache_evaluations=false` 仍完整重测。
+
+反思输入受题数和字节预算限制。选择训练反馈时先保留失败题，再按既有目标函数的 fitness 从低到高选择；因此任务虽然通过，但包含较多无效轮次或较高调用成本，也有机会优先进入反思，不再仅按题目顺序截取前几条。
+L1 经验反思可查看精简后的模型输出；L2/L3 控制反思只保留所选边界的执行证据，不重复发送模型请求和响应信封。`actions[].action_control` 只在存在匹配 action_id 的真实动作策略查询时提供查询事件 ID、scope、可用的 schema 必填参数与控制决定；否则为 null。模型输出中的 tool_calls 是计划，不能据此推断动作控制已获得介入机会。宿主在打点前拒绝的调用不应被描述为新增 L2 拦截收益；事后拦截也不能消除已经发生的模型轮次。这些字段只来自训练执行证据，不扩展动作授权，也不改变原始日志。
+`loop.decision` 的 `loop_control` 通过同一轨迹内的控制步骤关联实际循环查询。`observed_no_progress` 保留规则判定前的计数：取连续状态不变次数与连续仅重复已有动作输入／输出的步骤数之较大值，包括 replan 清零前的值；`proposed_decision` 与外层宿主实际 `decision` 分开保存。没有查询、未更新计数或有在途动作时不推断计数。反思只使用这项运行时证据判断无进展阈值是否可能命中，离线评审的 waste 仍用于效果评价，两者不能互相替代；不额外发送状态全文或指纹字符串。
+L3 反思会额外保留压缩后的评审 `loop_review`，并按轨迹中的实际先后顺序排列所选循环事件；L2 编排／动作反馈不携带该评审字段，以免挤占执行证据预算。
 缓存命中还会核验当前目标需要的指标；历史索引中的 `complete` 不会让缺少 token 或循环指标的种子报告永久卡住。
 补测结果仍不确定时，报告的 `complete` 保留“本批执行已结束”的含义，缓存标记为 `inconclusive`，下次只补测未获有效成绩的题目。
 拼接报告的 `source_report_refs` 记录来源缓存键、具体 attempt 报告路径和哈希；同一缓存键的重试指向旧报告，便于追溯复用来源。
 
-`accepted` 表示候选已有有效验证成绩，`winner` 表示验证阶段选中；是否生产生效以 `decision.json.published` 为准。
+### 实际应用证据
+
+`control_coverage.rules` 分别记录 L1 改写经验、L2 技能编排、参数护栏和 L3 循环规则，`boundary` 分别为 `llm`、`schedule`、`actions`、`loop`。三个计数有不同含义：
+
+| 字段 | 含义 |
+| --- | --- |
+| `queries` | 对应作用范围内实际发生的策略查询次数 |
+| `triggered` | 查询选择了该改写经验，或规则提出了动作拒绝、循环 replan/stop |
+| `applied` | 查询与实际执行回执的策略、查询、决定和经验来源均匹配，确认改写进入模型请求或控制已执行 |
+
+L1 改写的覆盖标识由完整改写内容及来源计算；文本变化后不能沿用旧文本的注入证据。保留原文的经验不增加改写覆盖项，主动禁用经验也不要求注入回执。生成的控制规则继续使用其内容标识。缺少真实应用的候选标记为 `unobserved_controls`；最终发布门禁使用 `generated_control_not_observed`，这两项也适用于未被实际注入的 L1 改写。
+
+完整验证保留本候选训练阶段已取得的应用证据，并可继承任一父节点中内容相同的规则证据。不要求一条场景规则在每道题或每个数据划分中都命中；训练中命中、验证中未遇到对应场景时，应用证据仍有效。训练、验证的查询计数在提前淘汰判定时分别检查，避免把训练查询当成验证机会。生效覆盖只证明策略被执行，质量、时延和无效循环收益仍须独立通过验证与留出对照。
+
+`control_coverage.rules` 和 `complete` 检查当前生成规则／经验改写是否被使用；空规则集合只表示没有待核验规则，不表示各级能力都已生效。
+`capabilities` 分别统计 `llm`、`actions`、`schedule`、`loop` 的 `queries`、`triggered`、`applied` 及 `required`。`level_complete` 与 `unobserved_capabilities` 检查本级已声明能力：L1 核验实际请求注入；L2 已声明 schedule 时必须有真实技能编排，否则核验动作控制；L3 另须有实际 replan 或 stop。仅查询、始终 continue、计划和派发 ACK 都不计实际应用。
+
+GEPA 默认启用 `gate.require_level_coverage`，最终缺少某级生效证据时以 `level_capability_not_observed` 拒绝发布。固定候选评测默认保留原行为，也可通过该开关要求全级别验证；单能力诊断可以显式关闭，但仍输出完整覆盖统计且不跳过生成规则检查。不要求每道题触发所有能力。搜索阶段可以累计相同规则的应用证据；最终全级别验收使用本次最终评测中的实际回执，不用训练或父节点历史计数代替当前能力证明。
+
+`accepted` 表示候选已有有效验证成绩且现有生成规则应用覆盖完整；局部改进仍可保留并参与多父融合，不要求每个中间节点独立覆盖全部级别。最终选优考虑全级别生效覆盖，`winner` 表示验证阶段选中；是否生产生效以 `decision.json.published` 为准。
 反思变异和双亲重组共用一个谱系，不使用 MCTS 的 UCT 或随机 rollout。节点与边来自实际候选生成和真实试验。
 
 ## 双亲如何一起生成后代
@@ -240,7 +264,7 @@ A 即使已有其他子节点，也可和叶节点 B 重组。筛选依据是前
 2. 优先使用较深的共同祖先，固定 seed 使分支抽样可复现。同一双亲／祖先组合只尝试一次。
 3. 某组件只有一方改变时采用该方；双方相同时保留共同值；双方改变且内容不同时，优先采用验证质量／fitness 更好一方，平分稳定选择第一方。
 4. 至少两个差异组件实际来自不同分支才形成有效重组。仅一条经验且没有其他可变组件时，重组通常不会产生新组合，记录 skipped_merge。
-5. 经验按 memory_id 分组件；生成 action_rules 与 loop_rules 各作为一组，保持组内规则顺序。不修改手工规则、授权、来源 revision、scope、触发条件或底座代码。
+5. 经验按 memory_id 分组件，正文、版本内触发条件与可选操作证据约束一起继承或融合；生成 schedule_rules、action_rules 与 loop_rules 各作为一组，保持组内规则顺序。不修改手工规则、授权、来源 revision、scope 或底座代码。
 6. 重组本身不调用反思模型。重新编译后再校验组合授权和总规则数，并重新评测；任何检查失败均保留原父版本。
 7. 默认要求子集 quality、fitness 均不低于任一双亲，且原始无效 loop 均值不升，才进入完整验证。acceptance=pareto 时，相对每一位父节点“不退化”或“至少一题有局部优势”即可继续验证；分支相对共同祖先的资格也按同一局部优势规则判断。最终发布仍独立经过 holdout 准入。
 
@@ -265,25 +289,53 @@ A 即使已有其他子节点，也可和叶节点 B 重组。筛选依据是前
 
 | 改写类型    | 生效方式                                                                                   | 保持不变的边界                                         |
 | ----------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
-| 经验文本    | `RuntimeOptions.experience_overrides` 按来源 `memory_id/content_revision` 覆盖注入正文 | 来源记忆、触发条件、scope、检索和私有/公共冲突筛选不变 |
-| L2 固定契约 | 自动使用当前分支实际模型请求的工具定义检查必填参数；不是可变搜索维度 | 不把可选字段升级为必填，不从自然语言推断权限 |
+| 经验及适用条件 | `RuntimeOptions.experience_overrides` 按来源 `memory_id/content_revision` 保存正文、可选 `trigger_pattern` 和 `observed_operations` | 来源记忆、scope、授权及私有/公共冲突筛选不变；新条件随版本保存 |
+| L2 技能编排 | `schedule_rules` 选择现有技能之间的 A→B、B→A 或恢复无新增依赖的并行计划；新规则带任务包含/排除条件 | 只作用于实际批次，保留宿主硬依赖；不创建新动作，不改业务参数 |
+| L2 固定契约 | 自动使用当前分支实际模型请求的工具定义检查必填参数是否存在；不是可变搜索维度 | 不把可选字段升级为必填，不从自然语言推断权限 |
+| L2 通用生成规则 | `schema_required_nonempty` 将运行时 schema 的必填参数约束为存在且非空 | 仅有真实动作边界证据时尝试，不重复宿主已有拒绝 |
 | L2 显式扩展规则 | 兼容已有 control_learning.actions 授权，生成附来源的参数规则 | 属于可选高级配置；普通接入不需要填写工具清单 |
-| L3 生成规则 | 根据已批准经验收紧已有基础循环规则                                                         | 不放松基础上限，遵守配置的最小轮数，不修改宿主业务代码 |
+| L3 生成规则 | 根据已批准经验收紧连续无进展阈值，或开启工具失败后的有界重规划 | 不降低总轮数上限，不放松基础限制，不影响并发兄弟分支 |
 
-随包配置使用 component_selector=model_choice，将授权组件交给模型按训练证据选择，不强迫改写与当前题目无关的经验。round_robin 仍可显式启用；all 与 model_choice 都允许模型从获选组件中选择小改动。没有相关依据可返回空 experiences 数组，按重复版本处理，不额外执行 Agent。未提交的控制类别保持原值；提交的类别替换该类完整生成规则。组件越权、格式错误或泄露测试值均记录固定错误码。
+随包配置使用 `component_selector=round_robin`，按全树共享游标交错安排经验、动作与循环组件。新发现且尚未尝试的可执行控制机会优先获得一次生成机会；缺少证据时暂缓该控制组件，优先改写本批次确实注入过的经验。`all` 与 `model_choice` 可显式选择，允许模型从全部授权组件中选择改动。没有可靠依据可返回空 experiences 数组，按重复版本处理，不额外执行 Agent。未提交的控制类别保持原值；提交的类别替换该类完整生成规则。组件越权、格式错误或泄露测试值均记录固定错误码。
 
-反思输入始终保留经验的 scope 与 condition；正文已改写时额外提供 original_content，便于保留原约束与例外。提示词要求新正文适用于原条件，不把一种工具或错误的经验替换成另一种情境。该语义约束仍需真实评测验证，不是静态语义证明。controls 不再重复携带同一份来源记忆。
+反思输入保留经验的 scope 与当前 condition；正文已改写时提供 original_content。经验组件兼容正文字符串，也支持 `{content, trigger_pattern, observed_operations}` 对象。可基于误注入证据收窄或澄清触发条件，不能换成无关工具或取消任务要求。`observed_operations` 要求同分支近期有真实已执行的动作，不能由文本提及代替；前置规划经验可以不设置。
+
+模型调用反馈中的 `experience_query` 只保留 scope、经验 ID、观察到的操作和应用状态，不重复请求历史。`application_status=applied` 表示注入已核验，不能仅凭查询 ID 宣称生效。条件和正文一起通过真实候选评测；不因工具返回成功就允许省略用户明确要求的文件或图片验证。controls 不再重复携带同一份来源记忆。
 
 默认无需 control_learning.actions：模型/动作点自动提供固定工具契约，GEPA 不再学习接口已规定的 required。
-开启 control_learning 并保留基础 loop_rules 后，即使没有 actions 白名单，L3 也可以独立搜索循环阈值。
+开启 control_learning 并保留基础 loop_rules 后，即使没有 actions 白名单，L3 也可以独立搜索连续无进展阈值和失败恢复。
 tree.json 及作业 search 摘要的 available_components 只列可变维度；fixed_controls 中的
 observed_tool_required_arguments 表示启用了观测式固定校验，具体哪些工具被识别以真实轨迹为准。
-L2 默认仍可优化经验文本，其固定参数检查不计为一次 GEPA 动作规则变异。
-已有显式 actions 继续兼容；显式提供空白名单或关闭相应学习时才提示 action_rule_learning_unavailable。
-生成规则与固定校验均不负责改变宿主调度顺序；依赖历史的重复派发改进通过相关经验或循环规则表达。
+L2 固定参数存在性检查不计为一次 GEPA 动作规则变异；通用非空原语是独立可变组件。已有显式 actions 继续兼容。
+参数规则与固定校验不改变执行顺序；顺序与并行关系由独立的 schedule_rules 组件优化。
+运行入口声明 schedule.dispatch 时才提供该搜索维度，无需用户填写技能白名单。
+候选只能为本次实际批次增加依赖；移除上一版本的生成边可恢复并行，但不能删除宿主固有依赖。
+反思输入中的 schedule_plans 只包含任务实例 ID、操作名称和依赖，不重复传入技能 prompt。
+训练样本优先选择已审查的依赖案例，其次选择任务文本含明确先后线索或已执行失败的编排案例；没有这些线索的训练任务仍轮转探索。先后线索只影响抽样，不能直接生成规则；独立并行任务不单独构成串行收益证据。预检比较依赖图是否真正改变，正式试验按实际启动/完成事件核验应用；排序后的数组或 ACK 不作为证明。验证集应同时覆盖依赖和独立任务，防止过宽条件把原本并行的技能串行化。
 
 `snapshot.experiences` 保存原始来源，`experience_overrides` 保存当前版本的改写。这样能持续解释“这条新指令来自哪条记忆”，而不会把一次试验直接写回私有/公共记忆库。GEPA 的候选与最终组合试验也不自动生成单条记忆的因果正反证。
 在线使用时仍核验当前记忆批准状态、内容 revision 和跨库关系；来源失效或权限改变时，旧策略停止生效。
+
+### 让控制能力获得真实机会
+
+机会来自训练执行，不来自留出集，也不扩展动作授权。每次父策略训练后，程序记录具备实际干预条件的训练题 ID。后续对应组件的批次保留一个已知机会，其余仍按原批次顺序覆盖训练任务；运行时重新检查条件，不把历史命中当作新节点已命中。
+
+反思输入只提供获选组件，并优先保留与该组件相关的执行片段。草稿编译后，`control_preflight` 用新策略重放这些已采集查询，检查它能否改变父策略的实际决定。默认轮换模式下，没有差异触发的新规则记为 `untriggerable_controls`，不再为它执行一整批 Agent。此阶段不调用模型、不执行业务工具，结果仅代表存在触发机会。
+
+模型改错组件时，最多修正一次：保留获选组件、来源、限制和一条原训练反馈，优先选择包含该组件可执行证据的记录；编排记录保留实际 `schedule_plans`。不重传越界草稿或整批轨迹，不加入验证／留出内容，仍受同一输入大小和模型调用预算约束。仅修正来源 ID 时不发送执行反馈。
+
+空草稿或编译后没有实际组件变化，保留父版本并记录 `duplicate` / `skip_reason=no_behavior_change`，不启动候选试次。判重比较经过 Protobuf 解析的授权组件，空数组、空字符串、false 的省略与显式表示不会制造一个新候选；已导出策略的公开版本 ID 保持兼容。主动移除已有生成规则或禁用经验仍是实际变更。
+编排机会按 action_id 实例计数，同名技能多实例也有候选机会，但顺序改变必须另有收益证据。独立并行任务允许返回空草稿，不能为满足等级统计而人为串行。
+
+随后仍要启动真实候选 Agent。L1 必须在实际模型请求中找到改写正文；L2 编排必须有满足依赖顺序的真实执行记录，参数护栏须确认被拒绝动作未执行；L3 重规划必须确认上下文进入下一次模型请求，停止必须有宿主停止回执。真实应用记录和性能收益分开保存，命中本身不等于有效提升。
+
+`replan_on_failure` 是可选的 L3 原语，旧策略默认关闭。组件在 action 结束时识别显式 `status=failed`，或已执行结果顶层的 `status=failed/error/rejected`、`success=false`、非零数值 `exit_code`。字符串结果最多解析 64 KiB，不解释自然语言、不递归猜测嵌套业务语义，也不改变工作流成功状态。失败仅计入该 action 关联的 loop；有在途动作时保留观察，下一次完成的控制步骤消费本次所见计数，之后到达的失败仍保留。只有基础规则允许 replan 且预算尚余才重新规划，耗尽恢复预算不会仅因失败而停止任务。
+
+### 同口径选择与独立验收
+
+搜索先评测种子，再在同一验证集运行一次 L0 基线。节点记录 `optimization`：质量和配置中的时延、token 约束为可行性条件，无效 loop 目标记录剩余差距；前沿仍保留局部有优势的分支以供融合。最终候选优先按可行性、距目标的差距、逐题非退化比例选择，再比较原 fitness。验证数据不进入反思输入；训练反馈负责修改，验证指标负责选择，留出集只评测冻结后的最终候选。
+
+单次对照仍受模型与网络波动影响。版本的应用回执用于证明行为发生改变；确认收益时还应在固定版本、相同任务与预算下做重复配对评测，并保留逐题差异。不能把没有实际应用证据的分数上升归功于策略。
 
 ## 评分目标与预算
 
@@ -297,7 +349,7 @@ fitness = task_pass
 ```
 
 默认权重为无效 loop `0.2`、token `0.05`、时延 `0`，三个成本权重之和必须小于 `0.5`。
-重复试验先在每道题内取平均。启用 loop 目标后，父子筛选与最终验证集选优先检查同一任务集合、相同计量口径的原始无效 loop 均值不得上升，再比较任务通过率与 fitness。不能用答对率提高或有界成本饱和来掩盖更多无效循环。例如 [0,10] 的均值为 5，不能因归一化后较好而替代 [1,1] 的均值 1。模型调用数等其他指标继续保留在逐次报告中。
+重复试验先在每道题内取平均。严格改善或不退化筛选要求同一任务集合、相同计量口径的原始无效 loop 均值不得上升，再比较任务通过率与 fitness；Pareto 中间筛选允许保留局部优势，见下文。完整验证后的 winner 按前述 optimization 比较可行性和距部署目标的差距，不只依赖有界 fitness。不能用答对率提高或有界成本饱和来掩盖更多无效循环。例如 [0,10] 的均值为 5，不能因归一化后较好而替代 [1,1] 的均值 1。模型调用数等其他指标继续保留在逐次报告中。
 此检查针对搜索时的训练/验证样本，不保证未见任务上的收益。冻结版本仍必须在 holdout 与基线独立比较；原来的通过率、loop 降幅等发布门槛保持不变，失败时不发布、不读取 holdout 轨迹继续反思。
 
 `acceptance=pareto` 只放宽中间反思与重组的筛选：任务集合与计量口径必须相同，至少一题质量改善，
@@ -344,7 +396,7 @@ L3 搜索需要种子本身为 L3、开启 control_learning，并有可收紧的
 | `epsilon` / `top_k`                         | 0.1 / 5              | epsilon_greedy 的随机探索概率 / top_k_pareto 的候选上限                                                                                        |
 | `frontier_type`                               | instance             | instance 逐题 fitness；objective 整体质量与启用的效率维度；hybrid 两者并集；cartesian 逐题 × 各目标                                           |
 | `prune_dominated`                             | true                 | 删除前沿覆盖被不差候选包含的冗余成员，成绩及覆盖相同时保留稳定代表                                                                             |
-| `component_selector`                          | model_choice（随包配置） | round_robin 轮换一个组件；all/model_choice 提供所有授权组件，由模型按证据选择；旧配置省略该字段时仍按 round_robin 处理 |
+| `component_selector`                          | round_robin | 全树交错轮换并按训练执行证据安排控制机会；all/model_choice 提供所有授权组件，由模型按证据选择 |
 | `minibatch_strategy`                          | epoch_shuffled       | 每个 epoch 重新洗牌；fixed 保留旧固定排列轮转方式                                                                                              |
 | `sampling_strategy`                           | same_parent          | single 单提案；same_parent 同父同批 N 个；independent 每提案独立选父和训练批；pxn 选 P 组父版本、每组 N 个                                     |
 | `proposals_per_round` / `parents_per_round` | 1 / 2                | 上述 N / P；实际总提案上限 8，并受剩余节点、模型预算限制；独立选父允许重复抽到同一版本                                                         |
@@ -406,8 +458,11 @@ data/agent-evaluation/<job-id>/
 
 | `tree.json` 字段                                        | 含义                                                                                                                           |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `schema_version` / `algorithm` / `context`          | 谱系格式 2 / gepa-reflective-dag-v2 / 冻结实验上下文指纹；配置文件自己的 schema_version 仍为 1                                 |
+| `schema_version` / `algorithm` / `context`          | 谱系格式 2 / gepa-reflective-dag-v4-constrained-portfolio / 冻结实验上下文指纹；配置文件自己的 schema_version 仍为 1                                 |
 | `seed_version` / `baseline_version`                   | 搜索起点 / 生产对照版本的行为 ID                                                                                               |
+| `baseline_validation / optimization_contract` | 同一验证集的固定行为基线成绩 / 本次质量、无效循环及成本目标；不含留出反馈 |
+| `component_cursor / component_selections` | 全树组件轮换位置 / 各组件真正得到的反思次数 |
+| `training_opportunities / deferred_components` | 各控制组件已发现可干预机会的训练题 ID / 当前批次缺少可执行证据而暂缓的次数 |
 | `nodes[].id / parents / kind / depth`                   | 节点序号、父节点数组、seed/reflection/merge、最长父路径深度；根 parents=[]，反思一个父，重组两个父，depth=max(双亲深度)+1      |
 | `nodes[].parent`                                        | 保留旧字段，指向 parents 第一项，根为 null；读取完整谱系应使用 parents                                                         |
 | `nodes[].ancestor / component_sources / conflicts`      | 重组的共同祖先 / 每个组件采用的父节点 / 双方独立修改且不同的组件；相同组件的来源稳定记录第一方                                 |
@@ -416,6 +471,10 @@ data/agent-evaluation/<job-id>/
 | `nodes[].status / reason / error / error_stage`         | 候选阶段、反思改动原因、固定错误码与失败阶段                                                                                   |
 | `nodes[].selections / previous_best`                    | 被选作父节点次数 / 重组创建时的整体最优；多提案批次将 previous_best 保存在 batch                                               |
 | `nodes[].screening`                                     | 同一训练小批次上的父子逐题成绩                                                                                                 |
+| `nodes[].validation_probe`                              | 控制规则分批验证的逐题成绩及查询、触发、应用计数；仅在执行探测时存在，不等于完整验证成绩 |
+| `nodes[].repair_error`                                  | 触发一次来源或获选组件修正的固定错误码；修正仍计入模型调用预算 |
+| `nodes[].component_fallback / control_preflight` | 组件调整的来源、去向及原因 / 新控制规则在真实训练查询上的差异触发次数；预检不是实际应用回执 |
+| `nodes[].optimization` | 对固定验证基线的可行性、目标距离、逐题不退化比例、原始指标与尚未达到的约束 |
 | `nodes[].validation`                                    | 验证集逐题的 fitness、quality、repetitions，以及启用的 invalid_loops 原始均值、loop_method 口径和 loop_efficiency/token_efficiency/latency_efficiency |
 | `available_components / search_warnings`                | 可变组件名称 / 显式动作学习配置问题；省略 actions 使用自动固定契约，不提示缺少手填清单 |
 | `fixed_controls` | 固定执行约束；observed_tool_required_arguments 表示从真实模型点提供的定义进行顶层必填参数检查，具体覆盖见轨迹 |
@@ -431,10 +490,29 @@ data/agent-evaluation/<job-id>/
 
 `versions/*.json` 包含完整 RuntimePolicy，可重算 policy_id 和 agent_version_id。记录文件通过临时文件、fsync 和原子替换发布；目录/文件限制为当前用户可访问，拒绝符号链接路径。
 
-常见分支终态包括 accepted、rejected_minibatch、rejected_merge、duplicate、skipped_merge、skipped_perfect、not_selected、inconclusive、error、interrupted。它们分别保留有效成绩、筛选拒绝、跳过原因、证据缺口或固定错误码；被批次排名淘汰的 not_selected 不运行完整验证。
+常见分支终态包括 accepted、rejected_minibatch、rejected_merge、duplicate、skipped_merge、skipped_perfect、not_selected、unobserved_controls、unobserved_changes、inconclusive、error、interrupted。它们分别保留有效成绩、筛选拒绝、跳过原因、证据缺口或固定错误码；被批次排名淘汰的 not_selected 不运行完整验证。unobserved_controls 表示缺少当前规则的真实应用证据；unobserved_changes 表示训练与验证均未观察到相对父节点的实际决策变化。二者均不表示策略在所有任务上永远无效；查询次数和规则解释不算应用回执。
 重组节点的 screening 记录双方与子版本在相同验证子集上的成绩；不是一次训练反思。
 
 ## 查看、取消与恢复
+
+### 搜索证据与本轮执行证据
+
+候选节点的 `control_coverage` 可以保留同内容规则在训练和父节点中的使用证据；`validation_control_coverage` 单独保存本次验证的实际查询、触发和应用次数。发布结果的 `gate.control_coverage` 仅来自当前最终评测，合并历史后的数据另放在 `gate.historical_control_coverage`。默认的 L1/L2/L3 能力验收使用本次最终评测回执，历史上某次应用不能代替当前应用。
+
+`screening.applied_changes` 按任务和边界记录候选相对父策略的实际决策差异。程序在同一份已采集查询上本地回放父策略，再核对候选的执行回执；不额外调用模型或重新执行 Agent。停止注入、移除限制等改动，也必须能关联到真正执行的模型/动作或已提交的控制边界。仅修改解释文字不算控制条件变化。
+
+Pareto 筛选中的局部收益，只从存在上述差异的任务计算；没采用改动的题，其随机时延改善不能成为局部优势。原始逐题得分、耗时和循环数仍完整保留。重组候选分别对两个父节点记录 `screening.parent_applied_changes`；完整验证在 `validation_applied_changes` 中按父节点 ID 记录。训练与验证都没有观察到任何决策改动的候选记为 `unobserved_changes`，不作为已验证的新版本。
+
+控制草稿只改变 `reason`、未改变可执行条件时记为 `duplicate`，`skip_reason=no_control_predicate_change`，不重复运行 Agent。L1 的经验正文和适用条件仍参与去重，不会因为措辞不同而丢弃真正的经验改写。
+
+### 从失败证据生成可执行修正
+
+- 对数据集明确标注的成功依赖，若真实训练批次同时包含前后操作、任务短语也命中，程序会把错误的 `require_success=false` 校正为 `true`，记录 `schedule_contract_repair`。这只用训练证据，不读取验证或留出任务来改写规则，不新增模型调用。
+- 当基础 L3 已在最小无进展阈值处 replan，继续降低阈值无法产生不同决策。开放的 `bounded_recovery_budget` 允许降低 `max_replans`；0 表示达到原无进展条件后停止本分支。首次失败、独立分支和在途动作不因这条改动被直接终止。
+- 不支持的 `replan_on_failure` 草稿最多进入一次有界能力修复；修复输入只包含可用能力及紧凑训练反馈，不无限重试。
+- 对同目标跨执行实例的重复失败，使用 `repeat_failed_target`，详见[运行时控制](16-runtime-controls.md)。反思输入中的 `failure_key_candidates` 是观测到的重复参数，不是自动认定的业务身份；编译、差分预检和真实评测继续验收生成规则。
+
+主动取消的外层作业和搜索树都使用 `cancelled` 状态；即使取消发生在评分完成与发布之间，也不会继续发布。可显式 retry；旧实验上下文与新执行语义不混用。
 
 HTTP 与原生管理入口使用同样的 operation。原生 Python 示例：
 
@@ -454,6 +532,10 @@ evo.manage("agent_evaluation.retry", {"job_id": job_id})
 进程异常退出后，同上下文中运行中的 GEPA 任务自动重新排队。完整评测缓存通过报告哈希校验后复用；已生成策略从文件恢复。中断于反思调用时无法确认模型是否完成，节点记为 `interrupted`，消耗的预算保留，继续后续轮次。
 同一组评测已有有效检查点时，恢复会核验配置、报告清单和产物哈希。已完成 Agent 执行但模型评分失败的试次只补评分，保留原试次 ID、轨迹、调用指标和执行时延；没有可复用执行证据的试次才重新执行。未完成报告仍不会作为已通过成绩使用。`cache_evaluations=false` 保留训练和验证的重新执行语义，最终留出评测的恢复仍复用有效检查点；重试继续占用原有保守预算。
 评分或反思 API 返回 HTTP 429 时，GEPA 作业以 `gepa_model_rate_limited` 停止，保留当前代、已生成候选和评测检查点，不继续尝试后续代或进入留出评测。限流解除后使用 `agent_evaluation.retry` 接续；已消耗预算不退还。业务失败仍参与原有候选筛选，不触发此暂停。
+
+普通反思草稿误填未批准的控制来源时，记录 `control_source_not_approved`。模型预算尚有余量且 `control_learning.max_attempts >= 2` 时，只额外修正一次：输入原草稿、合法来源和控制约束，不重复发送训练轨迹，也不重新执行 Agent。组件不替模型选择来源，修正结果仍须通过原有授权和隐私校验；持续错误或预算不足就结束该节点。基础规则的 `rule_id` 不是经验 `memory_id`，不同执行实例的无效 loop 数也不等于单实例 `max_no_progress` 计数。
+普通反思改动了轮转未选中的组件时，记录 `gepa_component_not_authorized`，并在同一次数与预算约束下进行一次紧凑修正。修正输入只保留原草稿、获选组件当前值、合法来源和控制约束；训练轨迹不重复发送。程序不会自动采纳越界内容，第二次结果仍须通过原有组件授权、来源、隐私和行为兼容检查。
+训练或验证批次只有单个 runner 超时时，检查点最多补跑该未完成试次一次；同批已经完成且具备评分和目标指标的试次直接复用。再次超时仍保留 `inconclusive`，不会删除慢任务、用较小样本冒充原批次或伪造成绩。
 主动取消不会自动重启；可显式 retry。retry 不重置预算、截止时间或留出集候选。更换数据/模型/宿主 revision/配置后是新实验上下文，不复用旧成绩。
 统一活动边界的检索状态默认值升级也会改变评测上下文：旧报告保留供审计，但不会直接续用旧搜索或旧发布准入结果。
 相同新上下文内的恢复、完整成绩缓存和逐题补测仍正常复用，不在每个 run 重置版本。
@@ -529,16 +611,16 @@ ctest --test-dir build/trajectory-evolution -R 'GepaSearchTests|GepaStrategyTest
 
 ## 实现定位
 
-- `src/evolution_pipeline.cpp`
-- `src/shared_memory.cpp`
-- `src/policy_runtime.cpp`
-- `src/task_evaluation.cpp`
-- `src/agent_evaluation.cpp`
-- `src/gepa_search.cpp`
-- `src/gepa_strategy.cpp`
-- `src/evaluation_process.cpp`
-- `src/control_generation.cpp`
-- `src/agent_evaluation_support.h`
+- `src/analysis/evolution_pipeline.cpp`
+- `src/memory/shared_memory.cpp`
+- `src/runtime/policy_runtime.cpp`
+- `src/evaluation/task_evaluation.cpp`
+- `src/evaluation/agent_evaluation.cpp`
+- `src/gepa/gepa_search.cpp`
+- `src/gepa/gepa_strategy.cpp`
+- `src/evaluation/evaluation_process.cpp`
+- `src/gepa/control_generation.cpp`
+- `src/evaluation/agent_evaluation_support.h`
 - `config/gepa.json`
 - `config/prompts/gepa-reflection.txt`
 - `config/prompts/gepa-aggregate.txt`

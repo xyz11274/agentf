@@ -395,8 +395,8 @@ entries { memory_id: "test-experience" status: EVOLUTION_MEMORY_STATUS_CANDIDATE
         result = self.wait_jobs()
         material = ((self.root / "agent-evaluation.json").read_text() + (self.root / "evaluation.json").read_text()
                     + json.loads((self.root / "dataset/manifest.json").read_text())["metadata"]["dataset_version"])
-        old_context = hashlib.sha256(material.encode()).hexdigest()
-        context = hashlib.sha256(("boundary-current-request-v1\n" + material).encode()).hexdigest()
+        old_context = hashlib.sha256(("boundary-current-request-v1:verified-controls-v1:failure-replan-v2:skill-schedule-v2:control-outcomes-v4:aggressive-controls-v1:retrieval-evidence-v4\n" + material).encode()).hexdigest()
+        context = hashlib.sha256(("boundary-current-request-v1:verified-controls-v1:failure-replan-v3:skill-schedule-v4:control-outcomes-v8:aggressive-controls-v1:retrieval-evidence-v5:control-feedback-v3:actor-loops-v2\n" + material).encode()).hexdigest()
         self.assertNotEqual(context, old_context)
         self.assertTrue(all(job["context"] == context for job in result["jobs"].values()),
                         "execution-semantic upgrade must not reuse the old evaluation context")

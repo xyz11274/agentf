@@ -178,7 +178,14 @@ def import_and_share(port):
     learned = learn(root)
     public = read(root / "data/memory/evolution-memory.json")
     assert len(public.get("experiences", [])) == 1, (learned, read(root / "data/learning/shared-memory.json"))
-    assert 4 <= Model.calls - before <= 8, Model.calls - before
+    shared = read(root / "data/learning/shared-memory.json")
+    sources = list(shared["sources"].values())
+    relations = [r for r in shared["relations"].values() if r.get("method") == "model"]
+    # Each source gets one distillation and one review; non-exact relations
+    # get one additional review. A learn invocation can drain several cycles.
+    assert sources and all(s["state"] == "accepted" and s["attempts"] == 1 for s in sources)
+    assert all(r["state"] == "accepted" and r["attempts"] == 1 for r in relations)
+    assert Model.calls - before == 2 * len(sources) + len(relations), Model.calls - before
     for forbidden in ("user-a", "user-b", "private-", "candidate-", "私人历史", "task-user"):
         assert forbidden not in json.dumps(public, ensure_ascii=False), forbidden
         assert forbidden not in json.dumps(Model.requests, ensure_ascii=False), forbidden

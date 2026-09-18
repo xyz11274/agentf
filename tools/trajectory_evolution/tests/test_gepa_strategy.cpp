@@ -1,4 +1,4 @@
-#include "../src/gepa_strategy.h"
+#include "../src/gepa/gepa_strategy.h"
 #include <iostream>
 #include <stdexcept>
 
@@ -62,6 +62,14 @@ int main() {
     check(gepa::pool(gepa::frontier_map(nodes, {"a", "b"}, config)) == std::vector<std::size_t>{4});
     auto strategies = config; strategies["candidate_selection_strategy"] = "current_best";
     check(gepa::select_parent(nodes, mapping, strategies, 0) == 4);
+    auto constrained = nodes;
+    for(auto& n : constrained.items()) for(auto& score : n["validation"].fields()) {
+      score.second["feasible_score"] = 0; score.second["goal_score"] = .9;
+    }
+    for(auto& score : constrained.items()[2]["validation"].fields()) {
+      score.second["feasible_score"] = 1; score.second["goal_score"] = .8;
+    }
+    check(gepa::select_parent(constrained, gepa::frontier_map(constrained, {"a", "b"}, config), strategies, 0) == 2);
     strategies["candidate_selection_strategy"] = "epsilon_greedy"; strategies["epsilon"] = 1;
     std::set<std::size_t> selected;
     for(unsigned i = 0; i < 200; ++i) selected.insert(gepa::select_parent(nodes, mapping, strategies, i));
@@ -81,7 +89,20 @@ int main() {
     objectives["frontier_type"] = "cartesian";
     check(!gepa::frontier_map(nodes, {"a", "b"}, objectives).fields().empty());
     check(gepa::select_components(base, "all", 0).items().size() == 3);
+    check(gepa::select_components(base, "round_robin", 0).items().front().text() == "action_rules");
+    check(gepa::select_components(base, "round_robin", 1).items().front().text() == "experience:a");
+    check(gepa::select_components(base, "round_robin", 2).items().front().text() == "loop_rules");
     check(gepa::select_components(base, "round_robin", 0).dump() == gepa::select_components(base, "round_robin", 3).dump());
+    auto orchestration = base; orchestration["schedule_rules"] = "base";
+    check(gepa::select_components(orchestration, "round_robin", 0).items().front().text() == "schedule_rules");
+    check(gepa::select_components(orchestration, "round_robin", 1).items().front().text() == "action_rules");
+    check(gepa::select_components(orchestration, "round_robin", 2).items().front().text() == "experience:a");
+    check(gepa::select_components(orchestration, "round_robin", 3).items().front().text() == "loop_rules");
+    auto first_branch = orchestration, second_branch = orchestration;
+    first_branch["schedule_rules"] = "prepare-before-image"; second_branch["loop_rules"] = "bounded-recovery";
+    const auto combined = gepa::recombine(orchestration, first_branch, second_branch, 1, 2, true);
+    check(combined.flag("useful", false) && combined["components"].str("schedule_rules") == "prepare-before-image"
+        && combined["components"].str("loop_rules") == "bounded-recovery");
     for(auto id : {1, 2}) {
       nodes.items()[id]["status"] = "screened";
       nodes.items()[id]["screening"] = Json{{"parent", scores(0, 0)}, {"candidate", scores(id == 1 ? 1 : .5, 1)}};

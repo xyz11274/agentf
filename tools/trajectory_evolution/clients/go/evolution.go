@@ -1,4 +1,4 @@
-// Package evolution is a framework-neutral HTTP transport for every L0-L3 boundary.
+// Package evolution provides framework-neutral HTTP and in-process transports for L0-L3 boundaries.
 package evolution
 
 import (
@@ -43,6 +43,28 @@ type pointGaps struct {
 	full bool
 }
 
+// CallResult exposes both point receipts while preserving the business value.
+type CallResult struct {
+	Output   any
+	Before   map[string]any
+	After    map[string]any
+	Executed bool
+}
+
+// LoopDecision contains the guard and, for context-based points, its commit.
+type LoopDecision struct {
+	Allow  bool
+	Before map[string]any
+	After  map[string]any
+}
+
+func (d LoopDecision) Receipt() map[string]any {
+	if d.After != nil {
+		return d.After
+	}
+	return d.Before
+}
+
 var safeCode = regexp.MustCompile(`^[a-z_]{1,96}$`)
 
 func New(endpoint, token string, options Options) (*Client, error) {
@@ -79,12 +101,18 @@ func (c *Client) Close() { c.http.CloseIdleConnections() }
 // Evaluate binds an existing receiver; normal application startup is a no-op.
 // The receiver only acknowledges delivery. Run-end points supply the real result.
 func Evaluate(ctx context.Context, receive func(context.Context, any) error) (bool, error) {
-	if os.Getenv("TRAJECTORY_EVOLUTION_EVALUATION_ENTRY") != "1" { return false, nil }
+	if os.Getenv("TRAJECTORY_EVOLUTION_EVALUATION_ENTRY") != "1" {
+		return false, nil
+	}
 	c, err := New(os.Getenv("TRAJECTORY_EVOLUTION_TRIAL_URL"), os.Getenv("TRAJECTORY_EVOLUTION_TRIAL_TOKEN"), Options{Timeout: 5 * time.Second})
-	if err != nil { return true, &Error{Code: "evaluation_entry_failed"} }
+	if err != nil {
+		return true, &Error{Code: "evaluation_entry_failed"}
+	}
 	defer c.Close()
 	var salt [16]byte
-	if _, err = rand.Read(salt[:]); err != nil { return true, &Error{Code: "evaluation_entry_failed"} }
+	if _, err = rand.Read(salt[:]); err != nil {
+		return true, &Error{Code: "evaluation_entry_failed"}
+	}
 	consumer := hex.EncodeToString(salt[:])
 	fail := func() (bool, error) {
 		cleanup, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -94,15 +122,25 @@ func Evaluate(ctx context.Context, receive func(context.Context, any) error) (bo
 	}
 	for index := 0; ; {
 		packet, err := c.Invoke(ctx, "evaluation.next", map[string]any{"consumer": consumer, "index": index}, "")
-		if err != nil { return fail() }
+		if err != nil {
+			return fail()
+		}
 		switch packet["state"] {
-		case "done": return true, nil
+		case "done":
+			return true, nil
 		case "waiting":
-			select { case <-ctx.Done(): return fail(); case <-time.After(100 * time.Millisecond): }
+			select {
+			case <-ctx.Done():
+				return fail()
+			case <-time.After(100 * time.Millisecond):
+			}
 		case "input":
-			if packet["index"] != float64(index) || receive(ctx, packet["input"]) != nil { return fail() }
+			if packet["index"] != float64(index) || receive(ctx, packet["input"]) != nil {
+				return fail()
+			}
 			index++
-		default: return fail()
+		default:
+			return fail()
 		}
 	}
 }
@@ -171,6 +209,98 @@ func (c *Client) Point(ctx context.Context, fields map[string]any, budget time.D
 	}
 	return map[string]any{"context": context, "input": fields["input"], "decision": decision, "degraded": true,
 		"capture_complete": false, "policy_applied": false, "closed": false, "ended": false, "reason": "observer_unavailable"}
+}
+
+// Call wraps one existing JSON-in/JSON-out operation. execute is invoked at
+// most once, skipped after rejection, and its original error is returned.
+func (c *Client) Call(ctx context.Context, fields map[string]any, execute func(any) (any, error), budget time.Duration) (CallResult, error) {
+	beforeFields := cloneFields(fields)
+	beforeFields["phase"] = "before"
+	before := c.Point(ctx, beforeFields, budget)
+	actual, exists := before["input"]
+	if !exists {
+		actual = fields["input"]
+	}
+	terminal := make(map[string]any, 7)
+	if ref, ok := fields["ref"]; ok {
+		terminal["ref"] = ref
+	} else {
+		terminal["context"] = before["context"]
+	}
+	kind, _ := fields["kind"].(string)
+	if kind == "" {
+		kind = "custom"
+	}
+	terminal["kind"] = kind
+	if before["decision"] == "reject" {
+		reason, _ := before["reason"].(string)
+		if reason == "" {
+			reason = "policy_rejected"
+		}
+		output := map[string]any{"status": "rejected", "reason": reason, "error": reason}
+		terminal["phase"], terminal["executed"] = "after", false
+		terminal["actual_input"], terminal["output"] = actual, output
+		after := c.Point(ctx, terminal, budget)
+		return CallResult{Output: output, Before: before, After: after, Executed: false}, nil
+	}
+	output, err := execute(actual)
+	if err != nil {
+		terminal["phase"], terminal["status"], terminal["output"] = "abort", "unknown", nil
+		after := c.Point(ctx, terminal, budget)
+		return CallResult{Before: before, After: after, Executed: true}, err
+	}
+	terminal["phase"], terminal["executed"] = "after", true
+	terminal["actual_input"], terminal["output"] = actual, output
+	after := c.Point(ctx, terminal, budget)
+	return CallResult{Output: output, Before: before, After: after, Executed: true}, nil
+}
+
+// CheckLoop preserves both point protocols: a referenced boundary is a single
+// guard, while a context-based boundary is committed with a matching after.
+func (c *Client) CheckLoop(ctx context.Context, fields map[string]any, budget time.Duration) LoopDecision {
+	request := cloneFields(fields)
+	request["kind"] = "loop"
+	_, referenced := request["ref"]
+	if referenced {
+		request["phase"] = "guard"
+	} else {
+		request["phase"] = "before"
+	}
+	before := c.Point(ctx, request, budget)
+	decision, _ := before["decision"].(string)
+	if decision == "" {
+		decision = "continue"
+	}
+	result := LoopDecision{Allow: decision != "stop", Before: before}
+	if !referenced {
+		result.After = c.Point(ctx, map[string]any{"context": before["context"], "kind": "loop",
+			"phase": "after", "decision": decision}, budget)
+	}
+	return result
+}
+
+func (c *Client) AllowLoop(ctx context.Context, fields map[string]any, budget time.Duration) bool {
+	return c.CheckLoop(ctx, fields, budget).Allow
+}
+
+func (c *Client) CaptureGap(ctx context.Context, fields map[string]any) (map[string]any, error) {
+	return c.Invoke(ctx, "capture.gap", fields, "")
+}
+
+func (c *Client) EvaluationNext(ctx context.Context, consumer string, index int) (map[string]any, error) {
+	return c.Invoke(ctx, "evaluation.next", map[string]any{"consumer": consumer, "index": index}, "")
+}
+
+func (c *Client) EvaluationFail(ctx context.Context, consumer string) (map[string]any, error) {
+	return c.Invoke(ctx, "evaluation.fail", map[string]any{"consumer": consumer}, "")
+}
+
+func cloneFields(fields map[string]any) map[string]any {
+	copy := make(map[string]any, len(fields)+1)
+	for key, value := range fields {
+		copy[key] = value
+	}
+	return copy
 }
 
 // Invoke can run concurrently. Reuse requestID after ambiguous transport failures.

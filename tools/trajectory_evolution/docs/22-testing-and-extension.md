@@ -57,20 +57,20 @@ LocalLanguageClientTests 覆盖两用户三会话九次任务、真实回执、�
 | 想理解什么 | 源码与关键入口 |
 | --- | --- |
 | 日志数据契约 | [trajectory_trace.proto](../proto/trajectory_trace.proto) |
-| 通用边界生成事件 | `src/boundary_runtime.cpp`：begin_activity、end_activity、check_loop、commit_loop |
-| 本地主链与后台分离 | `src/local_runtime.cpp`：make_run、invoke、后台持久化和 evaluate |
-| 自动串起评测与入库 | `src/integration_service.cpp`：process_evaluations |
-| 因果图与事件校验 | `src/trace_contract.cpp`：validate_trace |
-| 标准轨迹分析 | `src/trace_analyzer.cpp`：analyze_trace |
-| 规则评测与融合 | `src/hybrid_evaluator.cpp`：assess_rules 及模型评测处理 |
-| 具体内容交给模型 | `src/sessionlog_evaluator.cpp`：make_dialogue_request、evaluate_content |
-| 候选、元反思、记忆管理 | `src/evolution_pipeline.cpp`：synthesize_reports、finalize_candidate、curate_memory_file |
+| 通用边界生成事件 | `src/runtime/boundary_runtime.cpp`：begin_activity、end_activity、check_loop、commit_loop |
+| 本地主链与后台分离 | `src/service/local_runtime.cpp`：make_run、invoke、后台持久化和 evaluate |
+| 自动串起评测与入库 | `src/service/integration_service.cpp`：process_evaluations |
+| 因果图与事件校验 | `src/analysis/trace_contract.cpp`：validate_trace |
+| 标准轨迹分析 | `src/analysis/trace_analyzer.cpp`：analyze_trace |
+| 规则评测与融合 | `src/analysis/hybrid_evaluator.cpp`：assess_rules 及模型评测处理 |
+| 具体内容交给模型 | `src/analysis/sessionlog_evaluator.cpp`：make_dialogue_request、evaluate_content |
+| 候选、元反思、记忆管理 | `src/analysis/evolution_pipeline.cpp`：synthesize_reports、finalize_candidate、curate_memory_file |
 | 新经验契约 | `include/agentflow/trajectory/experience.h` |
-| 快照资格与检索 | `src/shadow_runtime.cpp`：compile_shadow_policy、query_advice |
-| 策略和应用回执 | `src/policy_runtime.cpp`：compile_runtime_policy、decide、verify |
-| 任意 JSON 参数绑定 | `src/request_binding.cpp` |
-| 无专用宿主的任务投递 | `src/evaluation_entry.h`、`clients/python/evolution_entry.py`、各语言 `evaluate` 封装 |
-| 外部配置和模板加载 | `src/runtime_config.cpp` |
+| 快照资格与检索 | `src/runtime/shadow_runtime.cpp`：compile_shadow_policy、query_advice |
+| 策略和应用回执 | `src/runtime/policy_runtime.cpp`：compile_runtime_policy、decide、verify |
+| 任意 JSON 参数绑定 | `src/runtime/request_binding.cpp` |
+| 无专用宿主的任务投递 | `src/evaluation/evaluation_entry.h`、`clients/python/evolution_entry.py`、各语言 `evaluate` 封装 |
+| 外部配置和模板加载 | `src/model/runtime_config.cpp` |
 
 算法集中在组件目录，AgentFlow Hook 和 SessionLog 作为其中一种集成方式。
 

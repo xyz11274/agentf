@@ -298,6 +298,318 @@ void delegation_tests(const fs::path& folder) {
   std::cout << "Delegation: causal contexts, pending barriers, reverse results, nested abort isolation, rollback, restart passed\n";
 }
 
+void outcome_progress_tests(const fs::path& folder) {
+  auto c = config(folder); write(folder / "service.json", c.dump());
+  te::IntegrationService service(folder / "service.json"); Client client{service};
+  client.run = client.invoke("run.begin", Json{{"input", "inspect a repeated result"}, {"level", "L3"}, {"conversation_id", "outcomes"},
+      {"capabilities", Json::Array{"model", "actions", "loop"}}}).str("run_id");
+  auto control = [&](const std::string& branch, int transport) {
+    auto check = client.invoke("loop.check", Json{{"loop_id", branch}, {"state", Json{{"transport_id", transport}}}});
+    client.invoke("loop.commit", Json{{"control_id", check["control_id"]}, {"decision", check["decision"]}});
+    return check;
+  };
+  auto action = [&](const Json& step, const std::string& name, int business_id) {
+    auto call = client.invoke("activity.begin", Json{{"kind", "action"}, {"name", name},
+        {"input", Json{{"path", "report.json"}}}, {"control_id", step["control_id"]}});
+    client.invoke("activity.end", Json{{"activity_id", call["activity_id"]}, {"status", "completed"},
+        {"executed", true}, {"output", Json{{"business_id", business_id}, {"ok", true}}}});
+  };
+  auto first = control("main", 1); action(first, "read", 1);
+  auto second = control("main", 2);
+  check(second.str("decision") == "continue", "first action is progress"); action(second, "read", 2);
+  auto third = control("main", 3);
+  check(third.str("decision") == "continue", "changed business result is progress"); action(third, "read", 1);
+  auto recovery = control("main", 4);
+  check(recovery.str("decision") == "replan", "repeated action outcome was hidden by transport state");
+  auto model = client.invoke("activity.begin", Json{{"kind", "model"}, {"name", "recovery"},
+      {"input", Json{{"system", "continue"}}}, {"binding", Json{{"pointer", "/system"}, {"mode", "text"}}},
+      {"control_id", recovery["control_id"]}});
+  check(model["input"].str("system").find(recovery.str("context")) != std::string::npos, "replan context not injected");
+  client.invoke("activity.end", Json{{"activity_id", model["activity_id"]}, {"status", "completed"},
+      {"executed", true}, {"actual_input", model["input"]}, {"output", "use another approach"}});
+  auto sibling = control("sibling", 1); action(sibling, "read", 1);
+  check(control("sibling", 2).str("decision") == "continue", "main branch progress leaked into sibling");
+  action(recovery, "read", 1);
+  check(control("main", 5).str("decision") == "stop", "repeat after bounded recovery did not stop");
+  auto pending_first = control("pending-outcomes", 1); action(pending_first, "read", 1);
+  auto pending_second = control("pending-outcomes", 2); action(pending_second, "read", 1);
+  auto pending = client.invoke("activity.begin", Json{{"kind", "action"}, {"name", "read"},
+      {"input", Json{{"path", "report.json"}}}, {"control_id", pending_second["control_id"]}});
+  check(control("pending-outcomes", 3).str("decision") == "continue", "repeated outcome must wait for in-flight work");
+  client.invoke("activity.end", Json{{"activity_id", pending["activity_id"]}, {"status", "completed"},
+      {"executed", true}, {"output", Json{{"business_id", 1}, {"ok", true}}}});
+  check(control("pending-outcomes", 4).str("decision") == "replan", "pending step must not consume repeated outcomes");
+  auto overflow = control("bounded-outcomes", 1);
+  for(int i = 0; i <= 256; ++i) action(overflow, "read", i);
+  auto after_overflow = control("bounded-outcomes", 2);
+  check(after_overflow.str("decision") == "continue", "new outcomes are progress");
+  action(after_overflow, "read", 1);
+  check(control("bounded-outcomes", 3).str("decision") == "continue", "outcome capacity must fall back to the host state");
+  auto material = [&](const Json& step, const char* operation, const char* prompt, const Json& artifacts) {
+    auto call = client.invoke("activity.begin", Json{{"kind", "action"}, {"name", operation},
+        {"input", Json{{"prompt", prompt}}}, {"control_id", step["control_id"]}});
+    client.invoke("activity.end", Json{{"activity_id", call["activity_id"]}, {"status", "completed"},
+        {"executed", true}, {"output", Json{{"artifacts_json", artifacts.dump()}, {"summary", prompt}}}});
+  };
+  auto produced = control("material-repeat", 1);
+  material(produced, "make-image", "create", Json::Array{Json{{"path", "image.png"}}});
+  auto followup = control("material-repeat", 2);
+  check(followup.str("decision") == "continue", "new artifact was not counted as progress");
+  material(followup, "make-image", "read image and verify contrast", Json::Array{});
+  auto verified = control("material-repeat", 3);
+  check(verified.str("decision") == "continue", "verification without a new file was mistaken for no progress");
+  material(verified, "make-image", "read image and verify contrast", Json::Array{});
+  check(control("material-repeat", 4).str("decision") == "replan",
+      "identical verification results must still trigger bounded recovery");
+  auto new_asset = control("material-new", 1);
+  material(new_asset, "make-image", "first", Json::Array{Json{{"path", "first.png"}}});
+  new_asset = control("material-new", 2);
+  material(new_asset, "make-image", "second", Json::Array{Json{{"path", "second.png"}}});
+  check(control("material-new", 3).str("decision") == "continue", "new artifact was mistaken for no progress");
+  auto ambiguous = [&](const char* branch, const Json& output) {
+    material(control(branch, 1), "make-image", "first", Json::Array{Json{{"path", "first.png"}}});
+    auto step = control(branch, 2);
+    auto call = client.invoke("activity.begin", Json{{"kind", "action"}, {"name", "make-image"},
+        {"input", Json{{"prompt", "follow-up"}}}, {"control_id", step["control_id"]}});
+    client.invoke("activity.end", Json{{"activity_id", call["activity_id"]}, {"status", "completed"},
+        {"executed", true}, {"output", output}});
+    check(control(branch, 3).str("decision") == "continue", "ambiguous artifact field suppressed real progress");
+  };
+  ambiguous("material-malformed", Json{{"artifacts_json", "not-json"}, {"summary", "new answer"}});
+  ambiguous("material-input-files", Json{{"files", Json::Array{"input.txt"}}, {"summary", "new answer"}});
+  client.invoke("run.end", Json{{"status", "completed"}, {"output", "done"}});
+  service.process_evaluations();
+  auto trace = read(folder / "data/by-user/user-a/traces/outcomes" / (client.run + ".trace.json"));
+  check(te::validate_trace(proto<v1::TraceRun>(trace)).report.trace_valid(), "outcome control trace must remain valid");
+}
+
+void aggressive_failure_tests(const fs::path& folder) {
+  for(const bool aggressive : {false, true}) {
+    const auto data = folder / (aggressive ? "aggressive" : "standard");
+    auto c = config(data); c["runtime_options"]["aggressive_controls"] = aggressive;
+    auto& rule = c["runtime_options"]["loop_rules"].items()[0];
+    rule["no_progress_decision"] = "stop"; rule["max_no_progress"] = 1; rule["max_iterations"] = 64;
+    write(data / "service.json", c.dump());
+    te::IntegrationService service(data / "service.json"); Client client{service};
+    client.run = client.invoke("run.begin", Json{{"input", "retry with changing arguments"}, {"level", "L3"},
+        {"conversation_id", "failure-progress"}, {"capabilities", Json::Array{"model", "actions", "loop"}}}).str("run_id");
+    int revision = 0;
+    auto control = [&](const std::string& branch) {
+      auto value = client.invoke("loop.check", Json{{"loop_id", branch}, {"state", Json{{"revision", ++revision}}}});
+      client.invoke("loop.commit", Json{{"control_id", value["control_id"]}, {"decision", value["decision"]}});
+      return value;
+    };
+    auto begin = [&](const Json& step, const std::string& operation) {
+      return client.invoke("activity.begin", Json{{"kind", "action"}, {"name", operation},
+          {"input", Json{{"attempt", ++revision}}}, {"control_id", step["control_id"]}});
+    };
+    auto finish = [&](const Json& call, bool success) {
+      client.invoke("activity.end", Json{{"activity_id", call["activity_id"]}, {"status", "completed"},
+          {"executed", true}, {"output", Json{{"success", success}, {"request_id", ++revision}}}});
+    };
+    auto first = control("failed"); finish(begin(first, "generate"), false);
+    auto second = control("failed"); check(second.str("decision") == "continue", "one failure is not a repeated failure");
+    finish(begin(second, "generate"), false);
+    auto pending = begin(second, "lookup");
+    check(control("failed").str("decision") == "continue", "pending sibling cannot be interrupted");
+    finish(pending, false);
+    check(control("failed").str("decision") == (aggressive ? "stop" : "continue"), "changing parameters masked repeated failure");
+    auto sibling = control("sibling"); finish(begin(sibling, "generate"), false);
+    check(control("sibling").str("decision") == "continue", "failure counters crossed executions");
+    auto parallel = control("parallel-first-attempts");
+    const auto left = begin(parallel, "generate"), right = begin(parallel, "generate");
+    finish(left, false); finish(right, false);
+    parallel = control("parallel-first-attempts");
+    check(parallel.str("decision") == "continue", "two independent first failures became a repeated retry");
+    finish(begin(parallel, "generate"), false);
+    check(control("parallel-first-attempts").str("decision") == (aggressive ? "stop" : "continue"),
+        "a later retry must still count after the parallel batch settles");
+    auto mixed = control("mixed"); finish(begin(mixed, "generate"), false);
+    mixed = control("mixed"); finish(begin(mixed, "generate"), false); finish(begin(mixed, "lookup"), true);
+    mixed = control("mixed"); check(mixed.str("decision") == "continue", "successful fallback must remain progress");
+    finish(begin(mixed, "generate"), true);
+    mixed = control("mixed"); finish(begin(mixed, "generate"), false);
+    check(control("mixed").str("decision") == "continue", "success must reset the operation failure streak");
+    client.invoke("run.end", Json{{"status", "completed"}, {"output", "done"}}); service.process_evaluations();
+    const auto trace = read(data / "data/by-user/user-a/traces/failure-progress" / (client.run + ".trace.json"));
+    check(te::validate_trace(proto<v1::TraceRun>(trace)).report.trace_valid(), "aggressive trace is invalid");
+  }
+}
+
+void schedule_outcome_tests(const fs::path& folder) {
+  for(const bool aggressive : {false, true}) {
+    const auto data = folder / (aggressive ? "aggressive" : "standard");
+    auto c = config(data); c["runtime_options"]["aggressive_controls"] = aggressive;
+    auto& rule = c["runtime_options"]["loop_rules"].items()[0];
+    rule["no_progress_decision"] = "stop"; rule["max_no_progress"] = 1; rule["max_iterations"] = 64;
+    write(data / "service.json", c.dump());
+    te::IntegrationService service(data / "service.json"); Client client{service};
+    client.run = client.invoke("run.begin", Json{{"input", "observe asynchronous results"}, {"level", "L3"},
+        {"conversation_id", "schedule-progress"}, {"capabilities", Json::Array{"actions", "schedule", "loop"}}}).str("run_id");
+    int revision = 0;
+    auto control = [&](const std::string& branch) {
+      auto value = client.invoke("loop.check", Json{{"loop_id", branch}, {"state", Json{{"revision", ++revision}}}});
+      client.invoke("loop.commit", Json{{"control_id", value["control_id"]}, {"decision", value["decision"]}});
+      return value;
+    };
+    auto batch = [&](const Json& step, bool parallel, int stable_input = -1) {
+      auto wrapper = client.invoke("activity.begin", Json{{"kind", "action"}, {"name", "dispatch"},
+          {"input", Json{{"attempt", revision}}}, {"control_id", step["control_id"]}});
+      Json actions = Json::Array{Json{{"action_id", "a"}, {"operation", "generate"},
+          {"arguments", Json{{"attempt", stable_input < 0 ? revision : stable_input}}}}};
+      if(parallel) actions.push(Json{{"action_id", "b"}, {"operation", "lookup"}, {"arguments", Json{{"attempt", revision}}}});
+      auto plan = client.invoke("activity.begin", Json{{"kind", "schedule"}, {"name", "batch"},
+          {"input", Json{{"actions", actions}}}, {"control_id", step["control_id"]},
+          {"caused_by", Json::Array{wrapper["event_id"]}}});
+      client.invoke("activity.end", Json{{"activity_id", wrapper["activity_id"]}, {"status", "completed"},
+          {"executed", true}, {"output", Json{{"accepted", true}, {"receipt", ++revision}}}});
+      for(const auto& action : actions.items()) client.invoke("schedule.observe", Json{{"activity_id", plan["activity_id"]},
+          {"input", Json{{"action_id", action["action_id"]}, {"status", "running"}}}});
+      return plan;
+    };
+    auto finish = [&](const Json& plan, const std::string& action, bool success) {
+      return client.invoke("schedule.observe", Json{{"activity_id", plan["activity_id"]},
+          {"input", Json{{"action_id", action}, {"status", success ? "succeeded" : "failed"},
+              {"output", Json{{"result", revision}}}}}});
+    };
+    auto close = [&](const Json& plan) {
+      client.invoke("activity.end", Json{{"activity_id", plan["activity_id"]}, {"status", "completed"}, {"output", "settled"}});
+    };
+    auto first = batch(control("retries"), false); finish(first, "a", false);
+    check(!finish(first, "a", false).flag("changed", true), "duplicate result must not be counted twice"); close(first);
+    auto next = control("retries"); check(next.str("decision") == "continue", "one asynchronous failure is not a streak");
+    auto second = batch(next, false); finish(second, "a", false); close(second);
+    check(control("retries").str("decision") == (aggressive ? "stop" : "continue"),
+        "dispatch ACK hid repeated asynchronous failure");
+    check(control("independent").str("decision") == "continue", "asynchronous failure crossed loops");
+    auto parallel_step = control("parallel-first-failures");
+    const auto parallel_plan = client.invoke("activity.begin", Json{{"kind", "schedule"}, {"name", "same-operation-batch"},
+        {"control_id", parallel_step["control_id"]}, {"input", Json{{"actions", Json::Array{
+          Json{{"action_id", "left"}, {"operation", "generate"}, {"arguments", Json{{"item", "left"}}}},
+          Json{{"action_id", "right"}, {"operation", "generate"}, {"arguments", Json{{"item", "right"}}}}}}}}});
+    for(const auto* action : {"left", "right"}) client.invoke("schedule.observe", Json{{"activity_id", parallel_plan["activity_id"]},
+        {"input", Json{{"action_id", action}, {"status", "running"}}}});
+    finish(parallel_plan, "right", false); finish(parallel_plan, "left", false); close(parallel_plan);
+    check(control("parallel-first-failures").str("decision") == "continue", "parallel child failures stopped the whole loop");
+    for(const bool reverse : {false, true}) {
+      const std::string branch = reverse ? "mixed-reverse" : "mixed";
+      for(int i = 0; i < 2; ++i) {
+        auto step = control(branch); check(step.str("decision") == "continue", "successful branch must remain progress");
+        auto plan = batch(step, true);
+        finish(plan, reverse ? "b" : "a", reverse);
+        check(control(branch).str("decision") == "continue", "in-flight branch was interrupted");
+        finish(plan, reverse ? "a" : "b", !reverse); close(plan);
+      }
+      check(control(branch).str("decision") == "continue", "completion order changed mixed-batch progress");
+    }
+    auto reset = batch(control("reset"), false); finish(reset, "a", false); close(reset);
+    reset = batch(control("reset"), false); finish(reset, "a", true); close(reset);
+    reset = batch(control("reset"), false); finish(reset, "a", false); close(reset);
+    check(control("reset").str("decision") == "continue", "successful scheduled action did not clear its failure streak");
+    auto asset = [&](const Json& plan, const Json& artifacts, const char* summary) {
+      client.invoke("schedule.observe", Json{{"activity_id", plan["activity_id"]},
+          {"input", Json{{"action_id", "a"}, {"status", "succeeded"},
+              {"output", Json{{"artifacts_json", artifacts.dump()}, {"summary", summary}}}}}});
+      close(plan);
+    };
+    asset(batch(control("material-repeat"), false), Json::Array{Json{{"path", "first.png"}}}, "created");
+    check(control("material-repeat").str("decision") == "continue", "scheduled artifact was not progress");
+    asset(batch(control("material-repeat"), false, 7), Json::Array{}, "verified image contrast");
+    auto verified = control("material-repeat");
+    check(verified.str("decision") == "continue", "scheduled verification without a file was mistaken for no progress");
+    asset(batch(verified, false, 7), Json::Array{}, "verified image contrast");
+    check(control("material-repeat").str("decision") == "stop", "identical scheduled results must still stop");
+    asset(batch(control("material-new"), false), Json::Array{Json{{"path", "first.png"}}}, "created");
+    asset(batch(control("material-new"), false), Json::Array{Json{{"path", "second.png"}}}, "created another");
+    check(control("material-new").str("decision") == "continue", "new scheduled artifact was mistaken for repeated work");
+    auto transport = control("dispatch-error");
+    auto wrapper = client.invoke("activity.begin", Json{{"kind", "action"}, {"name", "dispatch"},
+        {"input", Json::Object{}}, {"control_id", transport["control_id"]}});
+    auto uncertain = client.invoke("activity.begin", Json{{"kind", "schedule"}, {"name", "batch"},
+        {"input", Json{{"actions", Json::Array{Json{{"action_id", "a"}, {"operation", "generate"}}}}}},
+        {"control_id", transport["control_id"]}, {"caused_by", Json::Array{wrapper["event_id"]}}});
+    for(const auto* status : {"running", "unknown"}) client.invoke("schedule.observe", Json{{"activity_id", uncertain["activity_id"]},
+        {"input", Json{{"action_id", "a"}, {"status", status}, {"output", nullptr}}}});
+    close(uncertain);
+    client.invoke("activity.end", Json{{"activity_id", wrapper["activity_id"]}, {"status", "failed"},
+        {"executed", true}, {"output", "dispatch transport failed"}});
+    check(control("dispatch-error").str("decision") == "continue", "unknown child became a repeated business failure");
+    client.invoke("run.end", Json{{"status", "completed"}, {"output", "done"}}); service.process_evaluations();
+    const auto trace = read(data / "data/by-user/user-a/traces/schedule-progress" / (client.run + ".trace.json"));
+    check(te::validate_trace(proto<v1::TraceRun>(trace)).report.trace_valid(), "schedule outcome trace is invalid");
+    bool transport_seen = false;
+    for(const auto& event : trace["events"].items()) {
+      const auto& query = event["attributes"]["decision"]["query"];
+      if(query.str("boundary") == "loop" && query.str("execution_id") == "dispatch-error" && query.str("iteration") == "2")
+        transport_seen = query.num("failed_actions", 0) == 1 && query.num("repeated_failure_steps", 0) == 0;
+    }
+    check(transport_seen, "delegation hid the dispatch transport failure or counted its unknown child");
+  }
+}
+
+void failure_replan_tests(const fs::path& folder) {
+  auto c = config(folder);
+  auto& rule = c["runtime_options"]["loop_rules"].items()[0];
+  rule["max_no_progress"] = 3; rule["replan_on_failure"] = true;
+  write(folder / "service.json", c.dump());
+  te::IntegrationService service(folder / "service.json"); Client client{service};
+  client.run = client.invoke("run.begin", Json{{"input", "failure recovery"}, {"level", "L3"},
+      {"capabilities", Json::Array{"model", "actions", "loop"}}}).str("run_id");
+  auto check_loop = [&](const char* id, int state) {
+    return client.invoke("loop.check", Json{{"loop_id", id}, {"state", state}});
+  };
+  auto commit = [&](const Json& control) {
+    client.invoke("loop.commit", Json{{"control_id", control["control_id"]}, {"decision", control["decision"]}});
+  };
+  auto first = check_loop("work", 1); commit(first);
+  auto action = client.invoke("activity.begin", Json{{"kind", "action"}, {"name", "lookup"},
+      {"input", Json::Object{}}, {"control_id", first["control_id"]}});
+  auto pending = client.invoke("activity.begin", Json{{"kind", "action"}, {"name", "lookup"},
+      {"input", Json::Object{}}, {"control_id", first["control_id"]}});
+  client.invoke("activity.end", Json{{"activity_id", action["activity_id"]}, {"status", "completed"},
+      {"executed", true}, {"output", "{\"status\":\"failed\",\"request_id\":\"changing\"}"}});
+  auto waiting = check_loop("work", 2);
+  check(waiting.str("decision") == "continue", "failure must wait for pending sibling"); commit(waiting);
+  client.invoke("activity.end", Json{{"activity_id", pending["activity_id"]}, {"status", "completed"},
+      {"executed", true}, {"output", Json{{"success", true}}}});
+  auto independent = check_loop("other", 1);
+  check(independent.str("decision") == "continue", "failure crossed execution boundary"); commit(independent);
+  auto recovery = check_loop("work", 3);
+  check(recovery.str("decision") == "replan", "failure opportunity was lost while sibling was pending"); commit(recovery);
+  auto model = client.invoke("activity.begin", Json{{"kind", "model"}, {"name", "recover"},
+      {"input", Json{{"system", "continue task"}}}, {"binding", Json{{"pointer", "/system"}, {"mode", "text"}}},
+      {"control_id", recovery["control_id"]}});
+  check(model["input"].str("system").find(recovery.str("context")) != std::string::npos, "replan did not reach model");
+  client.invoke("activity.end", Json{{"activity_id", model["activity_id"]}, {"status", "completed"},
+      {"executed", true}, {"actual_input", model["input"]}, {"output", "recovered"}});
+  auto next = check_loop("work", 4);
+  check(next.str("decision") == "continue", "already consumed failure triggered again"); commit(next);
+  client.invoke("run.end", Json{{"status", "completed"}, {"output", "done"}});
+
+  client.run = client.invoke("run.begin", Json{{"input", "host declines recovery"}, {"level", "L3"},
+      {"conversation_id", "declined-failure-replan"},
+      {"capabilities", Json::Array{"model", "actions", "loop"}}}).str("run_id");
+  auto fail = [&](const Json& control, int attempt) {
+    auto call = client.invoke("activity.begin", Json{{"kind", "action"}, {"name", "lookup"},
+        {"input", Json{{"attempt", attempt}}}, {"control_id", control["control_id"]}});
+    client.invoke("activity.end", Json{{"activity_id", call["activity_id"]}, {"status", "completed"},
+        {"executed", true}, {"output", Json{{"success", false}, {"attempt", attempt}}}});
+  };
+  first = check_loop("declined", 1); commit(first); fail(first, 1);
+  auto declined = check_loop("declined", 2);
+  check(declined.str("decision") == "replan", "first failure should offer recovery");
+  client.invoke("loop.commit", Json{{"control_id", declined["control_id"]}, {"decision", "continue"}});
+  fail(declined, 2);
+  declined = check_loop("declined", 3);
+  check(declined.str("decision") == "replan", "repeated failure should offer recovery");
+  client.invoke("loop.commit", Json{{"control_id", declined["control_id"]}, {"decision", "continue"}});
+  auto unchanged = check_loop("declined", 3);
+  check(unchanged.str("decision") == "continue", "one unchanged state is below the ordinary threshold"); commit(unchanged);
+  unchanged = check_loop("declined", 3);
+  check(unchanged.str("decision") == "continue", "declined failure must not inflate ordinary no-progress"); commit(unchanged);
+  client.invoke("run.end", Json{{"status", "completed"}, {"output", "done"}});
+}
+
 void boundary_tests(const fs::path& folder) {
   auto c = config(folder); c["application_id"] = c["agent_id"]; c.fields().erase("agent_id");
   c["policy_scopes"] = c["actors"]; c.fields().erase("actors");
@@ -492,6 +804,7 @@ void boundary_tests(const fs::path& folder) {
       const Json instructions = Json::Array{
         Json{{"role", "system"}, {"content", std::string(20000, 's') + "STATIC_ONLY 视频生成缺少素材"}},
         Json{{"role", "developer"}, {"content", "DEVELOPER_ONLY 视频生成缺少素材"}},
+        Json{{"role", "user"}, {"content", "<system-reminder>REMINDER_ONLY 视频生成缺少素材</system-reminder>"}},
         Json{{"role", 7}, {"content", "普通说明"}}, Json{{"role", "user"}, {"content", "库存查询"}}};
       auto payload = [&](Json messages) {
         return Json{{"body", Json{{"m/n~", Json::Array{Json{{"messages", messages}}}}}},
@@ -543,12 +856,76 @@ void boundary_tests(const fs::path& folder) {
           check(state.size() <= 8192 && state.find("视频生成缺少素材") != std::string::npos,
                 "bounded retrieval keeps the latest tool result");
           check(state.find("STATIC_ONLY") == std::string::npos && state.find("DEVELOPER_ONLY") == std::string::npos
-              && state.find("SCHEMA_ONLY") == std::string::npos, "retrieval excludes static instructions and schemas");
+              && state.find("SCHEMA_ONLY") == std::string::npos && state.find("REMINDER_ONLY") == std::string::npos,
+                "retrieval excludes static instructions, reminders and schemas");
         }
         if(query.str("boundary") == "actions") action_state = state.find("available") != std::string::npos;
       }
       check(queries == 11 && original_preserved && action_state, "default state retains trace and per-call query semantics");
       check(client.invoke("run.status")["receipts"].num("failed", 0) == 0, "retrieval default preserves injection receipts");
+    }
+
+    {
+      const auto opened = client.invoke("run.begin", Json{{"input", "库存查询"}, {"level", "L1"},
+        {"capabilities", Json::Array{"model"}}, {"conversation_id", "current-observation-window"}});
+      client.run = opened.str("run_id");
+      const Json binding{{"pointer", "/messages"}, {"mode", "system_message"}};
+      Json history = Json::Array{
+        Json{{"role", "user"}, {"content", "库存查询"}},
+        Json{{"role", "assistant"}, {"content", "检查请求"}},
+        Json{{"role", "tool"}, {"content", "视频生成缺少素材"}}};
+      auto ask = [&](const Json& messages, bool expected) {
+        const Json original{{"messages", messages}};
+        auto model = begin("model", "chat", original, Json{{"binding", binding}});
+        check((model["input"].dump().find("先补充图片") != std::string::npos) == expected,
+              "advice must follow current observations, not consumed history");
+        if(!expected) check(model["input"].dump() == original.dump(), "history must remain intact for the model");
+        finish(model);
+      };
+      ask(history, true);
+      history.push(Json{{"role", "assistant"}, {"content", "转为查询库存"}});
+      history.push(Json{{"role", "tool"}, {"content", "库存查询成功，20 件"}});
+      ask(history, false);
+      history.push(Json{{"role", "user"}, {"content", "新任务：计算价格"}});
+      ask(history, false);
+      // All results from the latest parallel batch remain visible, not only
+      // its last result. A genuinely recurring failure may trigger again.
+      history.push(Json{{"role", "assistant"}, {"content", "同时查询库存和视频"}});
+      history.push(Json{{"role", "tool"}, {"content", "视频生成缺少素材"}});
+      history.push(Json{{"role", "tool"}, {"content", "库存查询成功"}});
+      ask(history, true);
+      close(); captured = trace("current-observation-window");
+      bool complete_history = false;
+      for(const auto& event : captured["events"].items())
+        if(event.str("kind") == "step.start" && event["input"]["messages"].array())
+          complete_history |= event["input"]["messages"].dump() == history.dump();
+      check(complete_history, "retrieval window must not truncate the recorded request");
+    }
+
+    {
+      start("L1", "observed-operation-isolation");
+      const Json a{{"stream_id", "branch-a"}}, b{{"stream_id", "branch-b"}};
+      auto first = begin("action", "generate_image", Json::Object{}, a); finish(first);
+      auto rejected = begin("action", "not_executed", Json::Object{}, a); finish(rejected, "cancelled", false);
+      auto sibling = begin("model", "chat", Json{{"system", "network timeout"}}, b); finish(sibling);
+      auto consumer = begin("model", "chat", Json{{"system", "network timeout"}}, a);
+      auto concurrent = begin("action", "read_file", Json::Object{}, a); finish(concurrent);
+      finish(consumer);
+      auto next = begin("model", "chat", Json{{"system", "network timeout"}}, a); finish(next);
+      auto consumed = begin("model", "chat", Json{{"system", "network timeout"}}, a); finish(consumed);
+      close(); captured = trace("observed-operation-isolation");
+      std::map<std::string, std::set<std::string>> seen;
+      for(const auto& event : captured["events"].items()) {
+        const auto& query = event["attributes"]["decision"]["query"];
+        if(query.str("boundary") != "llm") continue;
+        auto& observed = seen[event.str("step_id")];
+        if(query["observed_operations"].array())
+          for(const auto& operation : query["observed_operations"].items()) observed.insert(operation.text());
+      }
+      check(seen["step-" + sibling.str("activity_id")].empty(), "sibling did not inherit operation evidence");
+      check(seen["step-" + consumer.str("activity_id")] == std::set<std::string>{"generate_image"}, "only executed tools count");
+      check(seen["step-" + next.str("activity_id")] == std::set<std::string>{"read_file"}, "concurrent completion survives consumption");
+      check(seen["step-" + consumed.str("activity_id")].empty(), "old operations cannot trigger every later request");
     }
 
     start("L3", "neutral-loop");
@@ -776,6 +1153,247 @@ void lifecycle_tests(const fs::path& folder) {
   std::cout << "Lifecycle: automatic archive, durable idempotency, heartbeat and lease quarantine passed\n";
 }
 
+void schedule_tests(const fs::path& folder) {
+  auto c = config(folder); c["auto_evaluate"] = false;
+  c["runtime_options"]["schedule_rules"] = Json::Array{Json{{"rule_id", "prepare-before-image"},
+      {"target_scope", "agent:my-agent/actor:assistant"}, {"before_operation", "prepare"}, {"after_operation", "image"},
+      {"require_success", true}, {"reason", "先准备，再生成"}}};
+  write(folder / "service.json", c.dump()); seed(folder / "data");
+  const Json actions = Json::Array{
+      Json{{"action_id", "b"}, {"operation", "image"}, {"arguments", Json{{"prompt", "海报"}}}},
+      Json{{"action_id", "a"}, {"operation", "prepare"}, {"arguments", Json::Object{}}},
+      Json{{"action_id", "c"}, {"operation", "report"}, {"arguments", Json::Object{}}}};
+  std::string run, activity;
+  {
+    te::IntegrationService service(folder / "service.json"); Client client{service};
+    client.run = client.invoke("run.begin", Json{{"conversation_id", "schedule"}, {"level", "L2"},
+        {"input", "准备海报并独立写报告"}, {"capabilities", Json::Array{"schedule"}}}).str("run_id");
+    run = client.run;
+    const auto prepared = client.invoke("activity.begin", Json{{"kind", "schedule"}, {"name", "skills"},
+        {"input", Json{{"actions", actions}}}});
+    activity = prepared.str("activity_id");
+    check(prepared["ready"].items().size() == 2 && prepared["ready"].items()[0].str("action_id") == "a", "dependent skill not ready");
+    auto observe = [&](const char* id, const char* state, int status = 200) {
+      return client.invoke("schedule.observe", Json{{"activity_id", activity},
+          {"input", Json{{"action_id", id}, {"status", state}, {"output", "result"}}}}, status);
+    };
+    observe("b", "running", 400);
+    observe("a", "running"); observe("c", "running"); observe("c", "succeeded");
+    const auto repeated = observe("c", "succeeded");
+    check(!repeated.flag("changed", true), "duplicate completion is idempotent");
+    client.invoke("activity.end", Json{{"activity_id", activity}, {"status", "completed"}, {"output", "ack"}}, 409);
+    check(service.flush_capture(), "persist unfinished batch");
+  }
+  {
+    te::IntegrationService service(folder / "service.json"); Client client{service};
+    client.run = run; client.sequence = 100;
+    auto observe = [&](const char* id, const char* state) {
+      return client.invoke("schedule.observe", Json{{"activity_id", activity},
+          {"input", Json{{"action_id", id}, {"status", state}, {"output", "result"}}}});
+    };
+    const auto next = observe("a", "succeeded");
+    check(next["ready"].items().size() == 1 && next["ready"].items()[0].str("action_id") == "b", "restart releases only successor");
+    observe("b", "running"); check(observe("b", "succeeded").flag("finished", false), "all branches settled");
+    client.invoke("activity.end", Json{{"activity_id", activity}, {"status", "completed"}, {"output", "done"}});
+    check(client.invoke("run.status")["receipts"].num("applied", 0) == 1, "one observed schedule receipt");
+    client.invoke("run.end", Json{{"status", "completed"}, {"output", "done"}});
+    check(service.flush_capture(), "persist schedule trace");
+    service.process_evaluations();
+    const auto trace = read(folder / "data/by-user/user-a/traces/schedule" / (run + ".trace.json"));
+    check(te::validate_trace(proto<v1::TraceRun>(trace)).report.trace_valid(), "schedule trace causal structure");
+    std::string a_end; bool causally_ordered = false;
+    for(const auto& event : trace["events"].items()) {
+      if(event["attributes"].str("logical_action_id") == "a" && event.str("kind") == "action.end") a_end = event.str("event_id");
+      if(event["attributes"].str("logical_action_id") == "b" && event.str("kind") == "action.start")
+        for(const auto& cause : event["caused_by"].items()) causally_ordered |= !a_end.empty() && cause.text() == a_end;
+    }
+    check(causally_ordered, "B starts causally after A actually ended");
+
+    unsigned point_sequence = 0;
+    auto point = [&](Json request) {
+      request["operation"] = "point";
+      request["request_id"] = "schedule-point-" + std::to_string(++point_sequence);
+      const auto response = service.call(token_a, request.dump());
+      check(response.status == 200, "schedule point response");
+      const auto result = Json::parse(response.body)["result"];
+      check(!result.flag("degraded", false), "schedule point degraded: " + result.dump());
+      return result;
+    };
+    const Json ref{{"run", "schedule-point-run"}};
+    const Json plan_ref{{"run", "schedule-point-run"}, {"key", "plan"}};
+    point(Json{{"phase", "before"}, {"kind", "run"}, {"ref", ref}, {"input", "先准备再生成，独立报告继续"},
+        {"level", "L2"}, {"capabilities", Json::Array{"schedule"}}});
+    const auto prepared = point(Json{{"phase", "before"}, {"kind", "schedule"}, {"ref", plan_ref},
+        {"input", Json{{"actions", actions}}}});
+    check(prepared["ready"].items().size() == 2, "point supplies ready actions");
+    auto settled = [&](const char* id, const char* status) {
+      return point(Json{{"phase", "event"}, {"kind", "schedule"},
+          {"ref", Json{{"run", "schedule-point-run"}, {"parent", "plan"}, {"key", std::string(id) + ":" + status}}},
+          {"input", Json{{"action_id", id}, {"status", status}, {"output", "result"}}}});
+    };
+    settled("c", "running"); settled("a", "running");
+    const auto failure = settled("a", "failed");
+    check(failure["skipped"].items().size() == 1 && failure["skipped"].items()[0].text() == "b", "point skips only failed dependency");
+    settled("b", "skipped"); settled("c", "succeeded");
+    point(Json{{"phase", "after"}, {"kind", "schedule"}, {"ref", plan_ref}, {"output", "partial"}});
+    const auto closed = point(Json{{"phase", "after"}, {"kind", "run"}, {"ref", ref}, {"output", "partial"}});
+    check(closed.flag("closed", false) && closed.flag("capture_complete", false), "point schedule closes complete trace");
+  }
+  std::cout << "L2 scheduling: dependency, independent parallel branch, restart and causal receipt passed\n";
+}
+
+void dispatch_tests(const fs::path& folder) {
+  auto c = config(folder); c["auto_evaluate"] = false;
+  c["runtime_options"]["schedule_rules"] = Json::Array{Json{{"rule_id", "a-before-b"},
+      {"target_scope", "agent:my-agent/actor:assistant"}, {"before_operation", "prepare"}, {"after_operation", "image"},
+      {"require_success", true}, {"reason", "Prepare input first"}}};
+  write(folder / "service.json", c.dump()); seed(folder / "data");
+  te::IntegrationService service(folder / "service.json"); unsigned sequence = 0;
+  auto point = [&](Json request) {
+    request["operation"] = "point"; request["request_id"] = "dispatch-" + std::to_string(++sequence);
+    const auto response = service.call(token_a, request.dump());
+    check(response.status == 200, "dispatch HTTP response");
+    const auto result = Json::parse(response.body)["result"];
+    check(!result.flag("degraded", false), "dispatch degraded: " + result.dump()); return result;
+  };
+  const Json binding{{"items", "/jobs"}, {"operation", "/name"}, {"receipt", "/ticket"},
+      {"accepted", "/accepted"}, {"accepted_index", "/index"}, {"accepted_id", "/id"},
+      {"results", "/results"}, {"result_id", "/id"}, {"result_success", "/ok"},
+      {"result_operation", "/name"}, {"result_status", "/status"}, {"result_output", "/output"}};
+  for(const auto failure : {false, true}) {
+    const std::string run = failure ? "failed-dispatch" : "ordered-dispatch";
+    const Json ref{{"run", run}}, plan{{"run", run}, {"key", "batch"}};
+    point(Json{{"phase", "before"}, {"kind", "run"}, {"ref", ref}, {"input", "prepare then image"},
+        {"level", "L2"}, {"capabilities", Json::Array{"schedule"}}});
+    auto next = point(Json{{"phase", "before"}, {"kind", "dispatch"}, {"name", "dispatch"},
+        {"ref", plan}, {"binding", binding}, {"input", Json{{"jobs", Json::Array{
+          Json{{"name", "image"}}, Json{{"name", "prepare"}}, Json{{"name", "report"}}}}, {"reason", "keep me"}}}});
+    check(next["input"]["jobs"].items().size() == 2 && next["input"]["jobs"].items()[0].str("name") == "prepare"
+        && next["input"].str("reason") == "keep me", "first wave preserves envelope and independent parallel branch");
+    auto command = [&](const std::string& name, Json input) {
+      input["wave_id"] = next["wave_id"];
+      return point(Json{{"phase", "event"}, {"kind", "dispatch"}, {"name", name},
+          {"ref", Json{{"run", run}, {"parent", "batch"}, {"key", name + std::to_string(sequence)}}}, {"input", input}});
+    };
+    check(command("claim", Json::Object{}).flag("execute", false), "claim actual host callback");
+    check(!command("claim", Json::Object{}).flag("execute", true), "second process must not dispatch twice");
+    const Json first_ack{{"ticket", "first"}, {"accepted", Json::Array{
+        Json{{"index", 1}, {"id", "host-a"}}, Json{{"index", 2}, {"id", "host-c"}}}}};
+    const auto ack = command("accept", Json{{"output", first_ack}});
+    check(ack.flag("pending", false), "ACK waits for real completion");
+    const auto logical = ack["output"].str("ticket");
+    auto complete = [&](const Json& payload) {
+      return point(Json{{"phase", "event"}, {"kind", "dispatch"}, {"name", "complete"},
+          {"ref", Json{{"run", run}, {"key", "completion-" + std::to_string(sequence)}}}, {"input", payload}});
+    };
+    const Json first{{"ticket", "first"}, {"results", Json::Array{
+        Json{{"id", "host-c"}, {"ok", true}, {"name", "report"}},
+        Json{{"id", "host-a"}, {"ok", !failure}, {"name", "prepare"}}}}};
+    next = complete(first);
+    if(!failure) {
+      check(next["input"]["jobs"].items().size() == 1 && next["input"]["jobs"].items()[0].str("name") == "image", "second wave only after completion");
+      check(command("claim", Json::Object{}).flag("execute", false), "claim successor wave");
+      next = complete(first);
+      check(!command("claim", Json::Object{}).flag("execute", true), "duplicate completion cannot repeat successor");
+      const Json second_ack{{"ticket", "second"}, {"accepted", Json::Array{Json{{"index", 1}, {"id", "host-b"}}}}};
+      command("accept", Json{{"output", second_ack}});
+      next = complete(Json{{"ticket", "second"}, {"results", Json::Array{Json{{"id", "host-b"}, {"ok", true}, {"name", "image"}}}}});
+    }
+    const auto& result = next["completion"];
+    check(!next.flag("pending", true) && result.str("ticket") == logical && result["results"].items().size() == 3,
+        "physical batches become one logical completion");
+    check(result["results"].items()[0].str("name") == "image" && result["results"].items()[1].str("name") == "prepare"
+        && result["results"].items()[2].str("name") == "report", "result order follows request, not completion order");
+    if(failure) check(result["results"].items()[0].str("status") == "skipped"
+        && result["results"].items()[2].flag("ok", false), "failed prerequisite does not cancel report");
+    check(point(Json{{"phase", "after"}, {"kind", "run"}, {"ref", ref}, {"output", "done"}}).flag("capture_complete", false),
+        "asynchronous dispatch run fully captured");
+  }
+  std::cout << "Async dispatch: ordered waves, duplicate delivery, stable results and failure isolation passed\n";
+}
+
+void dispatch_guard_tests(const fs::path& folder) {
+  auto c = config(folder); c["runtime_options"]["action_rules"].push(Json{{"rule_id", "stop-third-failed-skill"},
+      {"target_scope", "agent:my-agent/actor:assistant"}, {"operation", "*"},
+      {"max_failed_attempts", 2}, {"reason", "same skill already failed twice"}});
+  write(folder / "service.json", c.dump()); seed(folder / "data");
+  te::IntegrationService service(folder / "service.json");
+  unsigned sequence = 0;
+  auto point = [&](Json request) {
+    request["operation"] = "point"; request["request_id"] = "dispatch-guard-" + std::to_string(++sequence);
+    const auto reply = service.call(token_a, request.dump());
+    check(reply.status == 200, "dispatch guard point: " + reply.body);
+    const auto result = Json::parse(reply.body)["result"];
+    check(!result.flag("degraded", false), "dispatch guard degraded: " + result.str("reason"));
+    return result;
+  };
+  const Json run{{"run", "dispatch-guard-run"}};
+  point(Json{{"phase", "before"}, {"kind", "run"}, {"ref", run}, {"input", "test"}, {"level", "L3"},
+      {"capabilities", Json::Array{"model", "actions", "loop"}}});
+  auto ref = [&](const char* key) { auto value = run; value["key"] = key; return value; };
+  point(Json{{"phase", "guard"}, {"kind", "loop"}, {"ref", ref("first-round")},
+      {"loop_id", "coordinator"}, {"actor_id", "assistant"}, {"state", "start"}});
+  for(const auto* key : {"failure-one", "failure-two"}) {
+    const auto before = point(Json{{"phase", "before"}, {"kind", "action"}, {"name", "forge-image-gen"},
+        {"actor_id", "assistant"}, {"ref", ref(key)}, {"input", Json::Object{}}});
+    check(before.str("decision") == "allow", "first two attempts stay available");
+    point(Json{{"phase", "after"}, {"kind", "action"}, {"ref", ref(key)},
+        {"status", "failed"}, {"executed", true}, {"output", "fixture failure"}});
+  }
+  const auto blocked = point(Json{{"phase", "guard"}, {"kind", "action"}, {"name", "forge-image-gen"},
+      {"actor_id", "assistant"}, {"ref", ref("repeat-guard")}, {"input", Json::Object{}}});
+  const auto sibling = point(Json{{"phase", "guard"}, {"kind", "action"}, {"name", "outfit-stylist"},
+      {"actor_id", "assistant"}, {"ref", ref("sibling-guard")}, {"input", Json::Object{}}});
+  check(blocked.str("decision") == "reject" && sibling.str("decision") == "allow",
+      "L2 guard blocks only a settled repeated failure");
+  point(Json{{"phase", "after"}, {"kind", "run"}, {"ref", run}, {"output", "done"}});
+  std::cout << "L2 dispatch guard: repeat failed skill blocked, sibling allowed\n";
+}
+
+void target_retry_tests(const fs::path& folder) {
+  auto c = config(folder); c["auto_evaluate"] = false;
+  c["runtime_options"]["action_rules"] = Json::Array{Json{{"rule_id", "same-target-budget"},
+      {"target_scope", "agent:my-agent/actor:assistant"}, {"operation", "generate"},
+      {"max_failed_attempts", 2}, {"failure_key_arguments", Json::Array{"output"}}, {"reason", "同一目标重试预算已耗尽"}}};
+  write(folder / "service.json", c.dump());
+  te::IntegrationService service(folder / "service.json"); Client client{service};
+  auto start = [&] {
+    client.run = client.invoke("run.begin", Json{{"input", "independent targets"}, {"level", "L2"},
+        {"conversation_id", "target-retry"}, {"capabilities", Json::Array{"actions"}}}).str("run_id");
+  };
+  int sequence = 0;
+  auto begin = [&](const std::string& target, const std::string& operation = "generate") {
+    Json input = Json::Object{}; if(!target.empty()) input["output"] = target;
+    return client.invoke("activity.begin", Json{{"kind", "action"}, {"name", operation}, {"input", input},
+        {"actor_id", "assistant"}, {"stream_id", "execution-" + std::to_string(++sequence)}});
+  };
+  auto finish = [&](const Json& call, bool success, const std::string& actual = "") {
+    const bool executed = call.str("decision") == "allow";
+    Json request{{"activity_id", call["activity_id"]}, {"executed", executed},
+        {"status", executed ? "completed" : "cancelled"}, {"output", Json{{"success", success}}}};
+    if(!actual.empty()) request["actual_input"] = Json{{"output", actual}};
+    client.invoke("activity.end", request);
+  };
+  start();
+  for(int n = 0; n < 2; ++n) { const auto call = begin("A"); check(call.str("decision") == "allow", "initial/retry allowed"); finish(call, false); }
+  const auto blocked = begin("A"); check(blocked.str("decision") == "reject", "redispatch cannot reset target budget"); finish(blocked, false);
+  const auto left = begin("B"), right = begin("B");
+  check(left.str("decision") == "allow" && right.str("decision") == "allow", "independent concurrent initial attempts");
+  finish(left, false); finish(right, false);
+  const auto retry = begin("B"); check(retry.str("decision") == "allow", "parallel failures count once"); finish(retry, false);
+  const auto exhausted = begin("B"); check(exhausted.str("decision") == "reject", "settled retry exhausts target budget"); finish(exhausted, false);
+  finish(begin("C"), false); finish(begin("C"), true);
+  const auto reset = begin("C"); check(reset.str("decision") == "allow", "success resets streak"); finish(reset, false);
+  finish(begin("D"), false, "changed-target"); finish(begin("D"), false);
+  const auto unchanged = begin("D"); check(unchanged.str("decision") == "allow", "changed actual input not counted against planned target"); finish(unchanged, true);
+  const auto other = begin("A", "independent"); check(other.str("decision") == "allow", "another operation continues"); finish(other, true);
+  for(int n = 0; n < 3; ++n) { const auto absent = begin(""); check(absent.str("decision") == "allow", "missing identity is not shared failure"); finish(absent, false); }
+  client.invoke("run.end", Json{{"status", "completed"}, {"output", "done"}}); start();
+  const auto fresh = begin("A"); check(fresh.str("decision") == "allow", "new run does not inherit failures"); finish(fresh, true);
+  client.invoke("run.end", Json{{"status", "completed"}, {"output", "done"}});
+  std::cout << "Target retry: redispatch, concurrency, success reset and run isolation passed\n";
+}
+
 int main(int argc, char** argv) {
   try {
     ::setenv("INTEGRATION_TEST_A", token_a.c_str(), 1); ::setenv("INTEGRATION_TEST_B", token_b.c_str(), 1);
@@ -786,8 +1404,19 @@ int main(int argc, char** argv) {
       write(folder / "service.json", c.dump()); seed(folder / "data");
       std::cout << "Fixture ready\n"; return 0;
     }
-    std::string path = (fs::current_path() / "integration-service.XXXXXX").string();
-    check(::mkdtemp(path.data()), "temporary test directory"); run_tests(path); delegation_tests(fs::path(path) / "delegation");
-    boundary_tests(fs::path(path) / "boundary"); lifecycle_tests(fs::path(path) / "lifecycle"); return 0;
+    std::string path = (fs::temp_directory_path() / "agentflow-integration-service.XXXXXX").string();
+    check(::mkdtemp(path.data()), "temporary test directory");
+    struct Cleanup {
+      fs::path path;
+      ~Cleanup() { std::error_code ignored; fs::remove_all(path, ignored); }
+    } cleanup{path};
+    run_tests(path); delegation_tests(fs::path(path) / "delegation");
+    boundary_tests(fs::path(path) / "boundary"); failure_replan_tests(fs::path(path) / "failure-replan");
+    outcome_progress_tests(fs::path(path) / "outcome-progress");
+    aggressive_failure_tests(fs::path(path) / "aggressive-failures");
+    schedule_outcome_tests(fs::path(path) / "schedule-outcomes");
+    lifecycle_tests(fs::path(path) / "lifecycle"); schedule_tests(fs::path(path) / "schedule");
+    dispatch_tests(fs::path(path) / "dispatch"); dispatch_guard_tests(fs::path(path) / "dispatch-guard");
+    target_retry_tests(fs::path(path) / "target-retry"); return 0;
   } catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

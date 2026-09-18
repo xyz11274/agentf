@@ -62,7 +62,24 @@ const rpc = (operation, fields) => evo.invoke(operation, fields);
 应用正常停止时调用 `evo.close()`。Python fork 后在子进程重新初始化，
 为不同写入进程配置独立数据目录；跨进程协作传递协议上下文。
 
-其他通用语言通过 `include/trajectory_evolution/local_c.h` 的 C ABI 调用，不需要实现评测器：
+Rust、Go、Java 和 C# 也提供进程内客户端，直接使用随包封装即可：
+
+| 语言 | 原生客户端入口 | 部署条件 |
+| --- | --- | --- |
+| Rust | `LocalEvolution::new(library, config, token, options)`；[源码](../clients/rust/src/local.rs) | 运行时加载共享库，无新增 crate 依赖；对象释放时关闭 |
+| Go | `OpenLocal(config, token, LocalOptions{LibraryPath: library})`；[源码](../clients/go/local.go) | 当前支持 Linux＋cgo；退出时 `Close()` |
+| Java | `new LocalEvolution(library, config, token)`；[源码](../clients/java/LocalEvolution.java) | JDK 17＋随包 Maven 声明的 JNA；支持 try-with-resources |
+| C# | `new LocalEvolution(library, config, token)`；[源码](../clients/csharp/LocalEvolution.cs) | 使用 .NET 原生加载接口，无新增第三方依赖；支持 using |
+| C/C++ | `te_points_open_local(handle)` / `Points::local(handle)`；[C](../clients/c/evolution_points.h)、[C++](../clients/cpp/evolution_points.hpp) | 包装已有本地句柄，关闭包装后再关闭句柄 |
+
+这些客户端提供 point、调用包装、循环判断、采集缺口和本地管理方法；请求字段与 HTTP 一致。
+`manage` 处理 `agent_evaluation.*` 后台管理操作；隔离评测投题 `evaluation.next/fail` 使用 HTTP 评测入口，
+即使 Agent 的业务打点使用本地库，也由现有 evaluate 入口负责接收评测任务。
+Java、Go、C# 的关闭与在途原生调用通过生命周期锁协调；Rust 通过所有权和对象生命周期约束释放。
+本轮原生库验证平台为 Linux；其他系统需要对应平台构建的核心库及独立验收。
+部署时让宿主加载与核心库构建工具链兼容的 C++ 运行库，避免初始化报 `GLIBCXX_* not found`。
+
+其他支持 FFI 的语言通过 `include/trajectory_evolution/local_c.h` 的 C ABI 调用：
 
 | 接口                                                    | 放在哪里/约定                                                  |
 | ------------------------------------------------------- | -------------------------------------------------------------- |
@@ -73,9 +90,8 @@ const rpc = (operation, fields) => evo.invoke(operation, fields);
 | `te_local_free(result)`                               | 由此接口统一释放 ABI 返回字符串                                |
 | `te_local_close(handle)`                              | 停止所有调用方后，在应用关闭阶段排空并退出                     |
 
-C/C++ 直接链接 `trajectory_evolution_local`；Rust 用 `extern "C"`，Go 用 cgo，Java 用 FFM/JNA，
-C# 使用 P/Invoke，其他语言使用各自的 FFI。长度参数按 UTF-8 **字节数**传递。
-Rust、Go、Java、C# 可通过各自的 FFI 调用 C ABI，也可使用随包 HTTP 客户端连接服务。
+C/C++ 直接链接 `trajectory_evolution_local`；Rust、Go、Java 和 C# 的封装负责 ABI 调用和返回内存释放。
+自行绑定其他语言时，长度参数按 UTF-8 **字节数**传递；也可通过 HTTP 和统一 JSON 协议接入。
 C++ 也可以直接使用 `include/trajectory_evolution/local_runtime.h`，链接 `TrajectoryEvolution::core`。
 
 原生 JSON 返回 `{"ok":true,"result":{...}}`；Python/JS 包装返回内部 result。
@@ -122,7 +138,7 @@ C++ 也可以直接使用 `include/trajectory_evolution/local_runtime.h`，链�
 
 ## 本地低延迟采集的实际边界
 
-`src/local_runtime.cpp` 将业务边界和后台工作分开：
+`src/service/local_runtime.cpp` 将业务边界和后台工作分开：
 
 1. 应用启动时建立长生命周期客户端，加载配置、鉴权和初始记忆；这些步骤可以有 I/O。
 2. `run.begin` 从内存记忆编译并固定本次策略；活动与循环边界只进行有界内存处理。
@@ -166,8 +182,8 @@ LocalRuntime 实例应覆盖所管理任务的整个生命周期。
 
 - `include/trajectory_evolution/local_c.h`
 - `include/trajectory_evolution/local_runtime.h`
-- `src/local_c.cpp`
-- `src/local_runtime.cpp`
+- `src/service/local_c.cpp`
+- `src/service/local_runtime.cpp`
 - `clients/python/evolution_local.py`
 - `clients/javascript/evolution-local.mjs`
 

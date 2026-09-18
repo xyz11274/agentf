@@ -53,13 +53,15 @@ export abstract class PointClient {
   async call(fields: ObjectValue, execute: (input: any) => any, ...options: any[]): Promise<any> {
     const prepared = await this.point({ ...fields, phase: "before" }, ...options);
     const identity = fields.ref ? { ref: fields.ref } : { context: prepared.context };
-    const actual = prepared.input;
+    const actual = prepared.input ?? fields.input;
     let output;
-    if(prepared.decision === "reject") output = { status: "rejected", reason: prepared.reason ?? "policy_rejected" };
+    if(prepared.decision === "reject") output = { status: "rejected", reason: prepared.reason ?? "policy_rejected",
+      error: prepared.reason ?? "policy_rejected" };
     else {
       try { output = await execute(actual); }
       catch(error) {
-        await this.point({ ...identity, kind: fields.kind, phase: "abort", status: "unknown", output: null }, ...options);
+        try { await this.point({ ...identity, kind: fields.kind, phase: "abort", status: "unknown", output: null }, ...options); }
+        catch { /* An observer failure cannot replace the business exception. */ }
         throw error;
       }
     }
@@ -109,7 +111,13 @@ export class Evolution extends PointClient {
     }
   }
   private async send(operation: string, fields: ObjectValue, requestId: string, timeoutMs: number, retries: number): Promise<ObjectValue> {
-    const body = JSON.stringify({ ...fields, operation, request_id: requestId });
+    let body: string;
+    try {
+      body = JSON.stringify({ ...fields, operation, request_id: requestId }, (_key, value) => {
+        if(typeof value === "number" && !Number.isFinite(value)) throw new Error("non_finite_number");
+        return value;
+      });
+    } catch { throw new EvolutionError("request_invalid"); }
     if(new TextEncoder().encode(body).length > 2097152) throw new EvolutionError("request_too_large");
     for(let attempt = 0; ; ++attempt) {
       try {
@@ -136,6 +144,7 @@ export class Evolution extends PointClient {
           const code = typeof payload.error === "string" && /^[a-z_]{1,96}$/.test(payload.error) ? payload.error : "rpc_failed";
           throw new EvolutionError(code, response.status);
         }
+        if(!payload.result || typeof payload.result !== "object" || Array.isArray(payload.result)) throw new EvolutionError("response_invalid", response.status);
         return payload.result;
       } catch(error) {
         const failure = error instanceof EvolutionError ? error : new EvolutionError("observer_unavailable");
@@ -249,7 +258,11 @@ export class PlannedAction {
     const executed = this.handle.decision === "allow";
     if(executed) {
       try { output = await send(this.action); status = "completed"; }
-      catch { status = "failed"; output = { error: "action_failed" }; }
+      catch(error) {
+        try { await this.observe(null, "failed", true); }
+        catch { /* An observer failure cannot replace the business exception. */ }
+        throw error;
+      }
     } else output = { error: "policy_rejected", reason: this.handle.reason };
     const receipt = await this.observe(output, status, executed);
     return { id: this.action.id, output, status, event_id: receipt?.event_id ?? null };

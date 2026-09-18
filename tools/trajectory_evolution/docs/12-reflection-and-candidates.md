@@ -16,7 +16,7 @@
 
 ## 怎样从评测生成进化候选
 
-主要入口是 `src/evolution_pipeline.cpp` 的 `synthesize_reports`。
+主要入口是 `src/analysis/evolution_pipeline.cpp` 的 `synthesize_reports`。
 本阶段读取已经生成的 evaluation，并基于批次报告组织候选。
 
 通用后台只消费尚未学习的新 Run，不再构造滚动的历史报告窗口。按用户分队列，达到
@@ -186,7 +186,7 @@ PROPOSED 只是通过当前支持门槛，之后仍有私库冲突、scope、内
 
 ## 实现定位
 
-- `src/evolution_pipeline.cpp::synthesize_reports / finalize_candidate`
+- `src/analysis/evolution_pipeline.cpp::synthesize_reports / finalize_candidate`
 - `include/agentflow/trajectory/experience.h`
 - `config/prompts/meta-reflection-system.txt`
 - `proto/hybrid_evaluation.proto`

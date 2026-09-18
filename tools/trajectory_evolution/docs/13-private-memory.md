@@ -263,8 +263,8 @@ PB 提交成功但 JSON 镜像写入失败时记录 memory_json_view_write_faile
 
 ## 实现定位
 
-- `src/evolution_pipeline.cpp::curate_memory_in_place / run_full_store_curation / enforce_memory_capacity`
-- `src/shadow_runtime.cpp::compile_shadow_policy`
+- `src/analysis/evolution_pipeline.cpp::curate_memory_in_place / run_full_store_curation / enforce_memory_capacity`
+- `src/runtime/shadow_runtime.cpp::compile_shadow_policy`
 - `proto/hybrid_evaluation.proto`
 
 ---

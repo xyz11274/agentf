@@ -91,9 +91,9 @@ HTTP memory.status 返回认证用户的私库与关系统计，以及对应应�
 
 ## 实现定位
 
-- `src/integration_service.cpp::learning_status / memory.status`
-- `src/local_runtime.cpp::metrics`
-- `src/learn_cli.cpp`
+- `src/service/integration_service.cpp::learning_status / memory.status`
+- `src/service/local_runtime.cpp::metrics`
+- `src/cli/learn_cli.cpp`
 - `api/openapi.json`
 
 ---

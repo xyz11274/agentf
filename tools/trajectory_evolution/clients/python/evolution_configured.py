@@ -169,5 +169,19 @@ class ConfiguredPoints:
         client = self._client(user_id)
         return client is None or await client.aallow_loop(fields, timeout_ms=self._config.get("point_timeout_ms", 20))
 
+    def dispatch(self, fields, execute, *, user_id="", result_format="json"):
+        client = self._client(user_id)
+        if client is None:
+            return execute(fields.get("input"))
+        return client.dispatch(fields, execute, result_format=result_format,
+                               timeout_ms=self._config.get("point_timeout_ms", 20))
+
+    def resume_dispatch(self, fields, execute, *, user_id="", result_format="json"):
+        client = self._client(user_id)
+        if client is None:
+            return {"pending": False, "completion": fields.get("input")}
+        return client.resume_dispatch(fields, execute, result_format=result_format,
+                                      timeout_ms=self._config.get("point_timeout_ms", 20))
+
 
 points = ConfiguredPoints()

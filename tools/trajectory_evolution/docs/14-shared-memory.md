@@ -215,6 +215,7 @@ review 拒绝终止本次提炼候选；已确认的私有—公共 conflict 触
 
 “私有优先”不恢复已经被私库反证/冲突禁用的条目，也不绕过该私有条目的版本授权。
 运行时先过滤授权再排序 top-K，将名额用于获准使用的条目。
+没有重复或冲突关系时，私有与公共经验按当前检索相关度排序，相关度相同才优先私有。私有条目不会仅凭来源占满名额。对于两边都命中的重复经验，私有副本继承两者较高的检索分数并优先去重；未获授权的私有副本不阻止公共经验被采用。
 不过快照中的跨库安全筛选在最终运行时授权之前进行，尚未核验的合格私有—公共关系仍会保守阻止组合。
 
 新用户满足应用、scope、授权和触发条件后即可使用公共候选；私人证据按该用户的执行轨迹独立积累。
@@ -447,10 +448,10 @@ shared_status、shared_next_due_ms、managed_users。原生 invoke 不支持磁�
 
 ## 实现定位
 
-- `src/shared_memory.cpp`
-- `src/shared_memory.h`
-- `src/integration_service.cpp::public_evidence / queue_sharing / run_sharing`
-- `src/shadow_runtime.cpp`
+- `src/memory/shared_memory.cpp`
+- `src/memory/shared_memory.h`
+- `src/service/integration_service.cpp::public_evidence / queue_sharing / run_sharing`
+- `src/runtime/shadow_runtime.cpp`
 - `proto/shadow_policy.proto`
 
 ---
