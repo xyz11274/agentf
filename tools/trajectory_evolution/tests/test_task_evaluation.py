@@ -360,6 +360,11 @@ class TrialTests(unittest.TestCase):
         self.config["checks"] = {"*": [dict(id="output", op="exists", path="/output")]}
         self.assertIsNone(self.evaluate(code=2, name="missing-regrade", extra=("--recheck",)))
 
+    def test_internal_contract_check_id_is_reserved_before_execution(self):
+        self.config["checks"] = {"*": [dict(id="contract.schedule_success", op="exists", path="/output")]}
+        self.assertIsNone(self.evaluate(code=2, name="reserved-contract-id"))
+        self.assertFalse((self.root / "reserved-contract-id").exists())
+
     def test_cli_resume_reuses_execution_and_regrades_only_judge_errors(self):
         self.model()
         host = self.config["variants"][0]["command"][:-1] + ["trace"]
@@ -587,6 +592,16 @@ class TrialTests(unittest.TestCase):
             "  event.setdefault('attributes', {})['semantic']='model'\n"
             "  if 'input' in event: event['input']={'messages':[{'role':'system','content':'request-only-data' * 2000}], 'tools':[{'name':'placeholder'}]}\n"
             " elif 'input' in event: event['input']={'messages':'business-field-must-stay','value':20}\n"
+            "events=response['trace']['events']; terminal=events[-1]\n"
+            "events.insert(-1, dict(event_id='handoff-start', kind='step.start', producer_id='coordinator', "
+            "actor_id='coordinator', execution_id='coordinator', step_id='handoff', sequence=1, "
+            "timestamp_us='100', caused_by=['right-2-step.end'], "
+            "input={'role':'tool','tool_call_id':'dispatch-1','content':'cross-boundary-result'}))\n"
+            "events.insert(-1, dict(event_id='handoff-end', kind='step.end', producer_id='coordinator', "
+            "actor_id='coordinator', execution_id='coordinator', step_id='handoff', sequence=2, "
+            "timestamp_us='101', caused_by=['handoff-start'], status='completed', "
+            "output={'content':'cross-boundary-result'}))\n"
+            "terminal['caused_by'].append('handoff-end')\n"
             "print(json.dumps(response))\n"
         )
         self.config["variants"][0]["command"] = [sys.executable, "-c", wrapper]
@@ -599,13 +614,20 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(packet["evidence_view"], "model_requests_omitted")
         self.assertLess(len(REQUESTS[-1]["messages"][1]["content"].encode()), full_bytes / 2)
         original = report["trials"][0]["evidence"]["trace"]["events"]
-        for actual, raw in zip(packet["evidence"]["trace"]["events"], original):
-            if raw.get("attributes", {}).get("semantic") == "model":
-                self.assertNotIn("input", actual)
-            else:
-                self.assertEqual(actual.get("input"), raw.get("input"))
-            for key in ("event_id", "caused_by", "output", "execution_id", "iteration", "status", "attributes"):
-                self.assertEqual(actual.get(key), raw.get(key))
+        compact = packet["evidence"]["trace"]["events"]
+        self.assertTrue(any(e.get("kind") == "action.end" for e in compact))
+        self.assertFalse(any(e.get("kind") == "run.start" for e in compact))
+        action_steps = {e.get("step_id") for e in compact if e.get("kind") in ("action.start", "action.end")}
+        self.assertFalse(any(e.get("kind") in ("step.start", "step.end") and
+                             e.get("step_id") in action_steps for e in compact))
+        self.assertFalse(any(e.get("kind") == "action.start" and
+                             e.get("attributes", {}).get("semantic") == "model" for e in compact))
+        self.assertFalse(any('request-only-data' in json.dumps(e.get('input')) for e in compact))
+        self.assertTrue(any('business-field-must-stay' in json.dumps(e.get('input')) for e in compact))
+        self.assertTrue(any(e.get('input', {}).get('content') == 'cross-boundary-result'
+                            for e in compact if isinstance(e.get('input'), dict)))
+        self.assertTrue(any(e.get("event_id") for e in compact))
+        self.assertTrue(any(e.get("caused_by") for e in compact))
         self.assertTrue(any('request-only-data' in json.dumps(e.get('input')) for e in original))
         self.config["judge"]["include_model_requests"] = "false"
         count = len(REQUESTS)
@@ -636,10 +658,7 @@ class TrialTests(unittest.TestCase):
         packet = json.loads(REQUESTS[-1]["messages"][1]["content"])
         raw = {e["event_id"]: e for e in report["trials"][0]["evidence"]["trace"]["events"]}
         compact = {e["event_id"]: e for e in packet["evidence"]["trace"]["events"]}
-        decision = compact["query-1"]["attributes"]["decision"]
-        self.assertEqual(set(decision), {"status", "actions", "progress"})
-        for field in decision:
-            self.assertEqual(decision[field], raw["query-1"]["attributes"]["decision"][field])
+        self.assertNotIn("query-1", compact)
         self.assertEqual(compact["query-2"]["attributes"], raw["query-2"]["attributes"])
         self.assertIn("query", raw["query-1"]["attributes"]["decision"])
         self.assertTrue(any(e.get("attributes", {}).get("decision", {}).get("query")
@@ -1431,7 +1450,8 @@ class TrialTests(unittest.TestCase):
         self.assertEqual(packed["output"], original["output"])
         self.assertEqual(packed["state"], original["state"])
         self.assertTrue(any("/output" in path for path in aliases))
-        self.assertTrue(any("/attributes/" in path for path in aliases))
+        self.assertTrue(any(path.endswith("/attributes") or "/attributes/" in path
+                            for path in aliases))
         self.assertLess(len(REQUESTS[-1]["messages"][1]["content"].encode()), previous_bytes)
 
     def test_minimum_judge_input_is_the_default(self):

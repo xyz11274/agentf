@@ -22,6 +22,7 @@ import os
 import pty as pty_mod
 import re
 import signal
+import socket
 import struct
 import sys
 import termios
@@ -926,6 +927,8 @@ def main():
     global _SECURITY_PROFILE
     parser = argparse.ArgumentParser(description="Sandbox HTTP Server")
     parser.add_argument("--port", type=int, default=8080, help="监听端口")
+    parser.add_argument("--listen-fd", type=int, default=None,
+                        help="LocalSandbox 已绑定的监听 socket，避免并发选端口竞争")
     parser.add_argument("--host", default="0.0.0.0", help="监听地址（默认 0.0.0.0）")
     parser.add_argument("--parent-pid", type=int, default=0,
                         help="父进程 PID（非 0 时启动监控线程）")
@@ -963,7 +966,18 @@ def main():
     if args.parent_pid:
         threading.Thread(target=_parent_monitor, args=(args.parent_pid,), daemon=True).start()
 
-    server = ThreadingHTTPServer((args.host, args.port), SandboxHttpHandler)
+    if args.listen_fd is None:
+        server = ThreadingHTTPServer((args.host, args.port), SandboxHttpHandler)
+    else:
+        server = ThreadingHTTPServer((args.host, args.port), SandboxHttpHandler,
+                                     bind_and_activate=False)
+        server.socket.close()
+        server.socket = socket.socket(fileno=args.listen_fd)
+        server.socket.set_inheritable(False)
+        server.server_address = server.socket.getsockname()
+        server.server_name = socket.getfqdn(server.server_address[0])
+        server.server_port = server.server_address[1]
+        server.server_activate()
 
     def shutdown(signum, frame):
         logging.info("Received signal %d, shutting down", signum)

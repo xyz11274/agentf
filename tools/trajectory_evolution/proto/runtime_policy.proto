@@ -14,6 +14,11 @@ message ExperienceApproval {
 message ExperienceOverride {
   ExperienceApproval source_experience = 1;
   string content = 2;
+  // Empty preserves the source condition; the approved memory stays immutable.
+  string trigger_pattern = 3;
+  // Optional any-of guard over executed actions in the current observation batch.
+  // A mention or proposed tool call is not an observation.
+  repeated string observed_operations = 4;
 }
 message ActionRule {
   string rule_id = 1;
@@ -22,8 +27,56 @@ message ActionRule {
   bool deny = 4;
   repeated string required_arguments = 5;
   string reason = 6;
-  // Generated rules require this approved experience to match the current query.
+  // Provenance and authorization are independent of L1 retrieval limits.
   ExperienceApproval source_experience = 7;
+  // predicate: match the executable condition in this scope. Empty retains
+  // legacy experience-retrieval gating for previously exported policies.
+  string match_mode = 8;
+  // Reject a new operation only after this many settled failures in the run.
+  uint32 max_failed_attempts = 9;
+  // Stable scalar arguments identifying one target within this run. Empty
+  // retains execution-local retry counting used by existing policy bundles.
+  repeated string failure_key_arguments = 10;
+}
+// L2 orchestration is separate from action validation. Only actions already
+// present in a host batch may be ordered; host dependencies are never removed.
+message ScheduleRule {
+  string rule_id = 1;
+  string target_scope = 2;
+  string before_operation = 3;
+  // Equal operation names serialize distinct instances in original batch order.
+  string after_operation = 4;
+  bool require_success = 5; // false: wait for completion, including failure
+  string reason = 6;
+  ExperienceApproval source_experience = 7;
+  // Optional local task guard. Empty retains existing exported policy behavior.
+  repeated string task_terms = 8; // all must occur in the current run task
+  repeated string exclude_terms = 9; // none may occur in the current run task
+}
+message ActionDependency {
+  string action_id = 1;
+  bool require_success = 2;
+  string rule_id = 3; // empty for an original host dependency
+}
+message ScheduledAction {
+  string action_id = 1;
+  repeated ActionDependency after = 2;
+}
+message SchedulePlan {
+  string policy_id = 1;
+  string execution_id = 2;
+  repeated ScheduledAction actions = 3;
+  repeated string rule_ids = 4;
+  string status = 5; // unchanged | scheduled | conflict (host plan retained)
+}
+message ScheduledActionState {
+  string action_id = 1;
+  // waiting | running | succeeded | failed | cancelled | unknown | skipped
+  string status = 2;
+}
+message ScheduleState {
+  SchedulePlan plan = 1;
+  repeated ScheduledActionState actions = 2;
 }
 message LoopRule {
   string rule_id = 1;
@@ -36,6 +89,11 @@ message LoopRule {
   string replan_context = 7;
   string reason = 8;
   ExperienceApproval source_experience = 9;
+  string match_mode = 10; // predicate | empty (legacy experience retrieval)
+  // Replan after an observed action failure; never stop solely on this signal.
+  bool replan_on_failure = 11;
+  // Empty applies to every actor in the scope; otherwise only this actor.
+  string actor_id = 12;
 }
 message RuntimeOptions {
   Level requested_level = 1;
@@ -54,6 +112,10 @@ message RuntimeOptions {
   string request_context_pointer = 11; // RFC 6901 pointer, e.g. /system
   string request_context_mode = 12; // text | system_message
   repeated ExperienceOverride experience_overrides = 13;
+  repeated ScheduleRule schedule_rules = 14;
+  // Executable controls bypass legacy L1 retrieval and count repeated failed
+  // operations even when their arguments/error text change. Persisted in bundles.
+  bool aggressive_controls = 15;
 }
 message RuntimePolicy {
   uint32 schema_version = 1;
@@ -66,6 +128,13 @@ message RuntimeAction {
   string action_id = 1;
   string operation = 2;
   google.protobuf.Struct arguments = 3;
+  // Derived by the boundary from the current model request. This is runtime
+  // schema evidence, not a configured or learned tool allowlist.
+  repeated string schema_required_arguments = 4;
+  repeated ActionDependency after = 5;
+  uint32 prior_failures = 6;
+  // Package-observed target failure counts, keyed by the matching rule ID.
+  map<string, uint32> target_failures = 7;
 }
 // The caller persists this per execution instance, never per skill name.
 message LoopProgress {
@@ -82,13 +151,23 @@ message LoopProgress {
 }
 message RuntimeQuery {
   AdviceQuery advice_query = 1;
-  string boundary = 2; // llm | actions | loop
+  string boundary = 2; // llm | actions | schedule | loop
   string execution_id = 3;
   repeated RuntimeAction actions = 4;
   uint64 iteration = 5;
   string state_fingerprint = 6;
   LoopProgress previous = 7;
   bool pending_actions = 8;
+  // Completed failed actions since this execution's previous settled control step.
+  uint32 failed_actions = 9;
+  // Consecutive settled steps containing only previously observed action
+  // input/output pairs in this execution. Complements unchanged-state detection.
+  uint32 repeated_action_steps = 10;
+  // Repeated failures of an operation since its last success. Populated only
+  // for a settled step with failures and no successful action, in aggressive mode.
+  uint32 repeated_failure_steps = 11;
+  repeated string observed_operations = 12;
+  string actor_id = 13;
 }
 message ActionDecision {
   string action_id = 1;
@@ -104,6 +183,7 @@ message RuntimeDecision {
   repeated ExperienceApproval experiences = 5;
   repeated ActionDecision actions = 6;
   LoopProgress progress = 7;
+  SchedulePlan schedule = 8;
 }
 message RuntimeObservation {
   // The final serialized request, not the mutable prompt history.
@@ -113,6 +193,8 @@ message RuntimeObservation {
   repeated string executed_action_ids = 4;
   repeated string skipped_action_ids = 5;
   string loop_decision = 6;
+  // Ordered observations from actual starts/completions, not dispatch ACKs.
+  repeated ScheduledActionState schedule_events = 7;
 }
 message RuntimeReceipt {
   Identity identity = 1;
@@ -122,6 +204,7 @@ message RuntimeReceipt {
   string call_id = 5;
   repeated string action_ids = 6;
   repeated ExperienceApproval experiences = 7;
+  repeated string rule_ids = 8;
 }
 message RuntimeCommand {
   string memory_path = 1;

@@ -7,6 +7,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -100,6 +101,9 @@ class SessionRouter {
 
   mutable std::mutex mutex_;
   std::condition_variable request_cv_;
+  std::condition_variable allocation_cv_;
+  std::set<std::string> pending_routes_;
+  std::set<std::string> reserved_sessions_;
   std::thread router_thread_;
   std::thread aging_thread_;
   std::atomic<bool> running_{false};

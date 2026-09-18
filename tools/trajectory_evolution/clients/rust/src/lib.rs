@@ -1,4 +1,8 @@
 //! Distributed callback integration. This crate never executes an Agent object.
+mod local;
+
+pub use local::LocalEvolution;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{collections::HashSet, fmt, future::Future, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
@@ -47,6 +51,54 @@ pub struct Evolution {
     http: reqwest::Client, url: String, token: Arc<String>, retries: u8, max_bytes: usize,
     point_gaps: Arc<Mutex<(HashSet<String>, bool)>>,
 }
+
+/// Business output plus the two point receipts produced around one host call.
+#[derive(Clone, Debug)]
+pub struct PointCallResult {
+    pub output: Value,
+    pub before: Value,
+    pub after: Value,
+    pub executed: bool,
+}
+
+/// The decision and receipts produced at a loop boundary. Referenced points
+/// use only before (phase=guard); context-based points also commit after.
+#[derive(Clone, Debug)]
+pub struct LoopDecision {
+    pub allow: bool,
+    pub before: Value,
+    pub after: Option<Value>,
+}
+
+impl LoopDecision {
+    pub fn receipt(&self) -> &Value { self.after.as_ref().unwrap_or(&self.before) }
+}
+
+/// Integration errors remain separate from the host's original error value.
+pub enum CallError<E> {
+    Integration(Error),
+    Host { source: E, before: Value, abort: Value },
+}
+
+impl<E> fmt::Debug for CallError<E> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Integration(error) => error.fmt(f),
+            Self::Host { .. } => write!(f, "host_call_failed"),
+        }
+    }
+}
+
+impl<E> CallError<E> {
+    pub fn host_error(&self) -> Option<&E> {
+        match self { Self::Host { source, .. } => Some(source), _ => None }
+    }
+
+    pub fn receipt(&self) -> Option<&Value> {
+        match self { Self::Host { abort, .. } => Some(abort), _ => None }
+    }
+}
+
 impl Evolution {
     pub fn new(url: &str, token: &str, timeout: Duration) -> Result<Self, Error> {
         Self::with_limits(url, token, timeout, 1, 2 * 1024 * 1024)
@@ -112,6 +164,83 @@ impl Evolution {
             "policy_applied": false, "decision": if kind == "loop" { "continue" } else { "allow" },
             "closed": false, "ended": false, "reason": "observer_unavailable"}))
     }
+
+    /// Wrap one existing async JSON-in/JSON-out operation. The business
+    /// closure executes at most once and is skipped after a policy rejection.
+    pub async fn call<F, Fut, E>(&self, mut fields: Value, execute: F) -> Result<PointCallResult, CallError<E>>
+    where F: FnOnce(Value) -> Fut, Fut: Future<Output = Result<Value, E>> {
+        fields.as_object_mut().ok_or_else(|| CallError::Integration(Error::new("object_required")))?
+            .insert("phase".into(), json!("before"));
+        let before = self.point(fields.clone()).await;
+        let actual = before.get("input").cloned()
+            .or_else(|| fields.get("input").cloned()).unwrap_or(Value::Null);
+        let mut terminal = if fields.get("ref").is_some() {
+            json!({"ref": fields["ref"].clone()})
+        } else {
+            json!({"context": before["context"].clone()})
+        };
+        terminal["kind"] = fields.get("kind").cloned().unwrap_or_else(|| json!("custom"));
+        if before.get("decision").and_then(Value::as_str) == Some("reject") {
+            let reason = before.get("reason").and_then(Value::as_str).unwrap_or("policy_rejected");
+            let output = json!({"status": "rejected", "reason": reason, "error": reason});
+            terminal["phase"] = json!("after");
+            terminal["executed"] = json!(false);
+            terminal["actual_input"] = actual;
+            terminal["output"] = output.clone();
+            let after = self.point(terminal).await;
+            return Ok(PointCallResult { output, before, after, executed: false });
+        }
+        match execute(actual.clone()).await {
+            Ok(output) => {
+                terminal["phase"] = json!("after");
+                terminal["executed"] = json!(true);
+                terminal["actual_input"] = actual;
+                terminal["output"] = output.clone();
+                let after = self.point(terminal).await;
+                Ok(PointCallResult { output, before, after, executed: true })
+            }
+            Err(error) => {
+                terminal["phase"] = json!("abort");
+                terminal["status"] = json!("unknown");
+                terminal["output"] = Value::Null;
+                let abort = self.point(terminal).await;
+                Err(CallError::Host { source: error, before, abort })
+            }
+        }
+    }
+
+    pub async fn check_loop(&self, mut fields: Value) -> Result<LoopDecision, Error> {
+        let referenced = fields.get("ref").is_some();
+        let object = fields.as_object_mut().ok_or_else(|| Error::new("object_required"))?;
+        object.insert("kind".into(), json!("loop"));
+        object.insert("phase".into(), json!(if referenced { "guard" } else { "before" }));
+        let before = self.point(fields).await;
+        let allow = before.get("decision").and_then(Value::as_str) != Some("stop");
+        if referenced {
+            return Ok(LoopDecision { allow, before, after: None });
+        }
+        let terminal = json!({"context": before["context"].clone(), "kind": "loop",
+            "phase": "after", "decision": before.get("decision").cloned().unwrap_or_else(|| json!("continue"))});
+        let after = self.point(terminal).await;
+        Ok(LoopDecision { allow, before, after: Some(after) })
+    }
+
+    pub async fn allow_loop(&self, fields: Value) -> Result<bool, Error> {
+        Ok(self.check_loop(fields).await?.allow)
+    }
+
+    pub async fn capture_gap(&self, fields: Value) -> Result<Value, Error> {
+        self.invoke("capture.gap", fields).await
+    }
+
+    pub async fn evaluation_next(&self, consumer: &str, index: usize) -> Result<Value, Error> {
+        self.invoke("evaluation.next", json!({"consumer": consumer, "index": index})).await
+    }
+
+    pub async fn evaluation_fail(&self, consumer: &str) -> Result<Value, Error> {
+        self.invoke("evaluation.fail", json!({"consumer": consumer})).await
+    }
+
     fn point_observed(&self, fields: &Value, result: Value) -> Value {
         if let Some(run) = fields["ref"]["run"].as_str().filter(|r| r.len() <= 1024) {
             let mut gaps = self.point_gaps.lock().unwrap_or_else(|e| e.into_inner());

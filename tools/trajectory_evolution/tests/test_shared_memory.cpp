@@ -97,6 +97,40 @@ v1::RuntimeQuery query(const v1::RuntimePolicy& policy) {
   q.mutable_advice_query()->set_target_scope(scope); q.mutable_advice_query()->set_task(condition);
   q.set_execution_id("exec"); q.set_boundary("llm"); return q;
 }
+void relevant_public_experience_is_not_starved() {
+  auto own = memory("alice");
+  own.mutable_entries(0)->mutable_candidate()->set_trigger_pattern("network timeout");
+  own.mutable_entries(0)->mutable_candidate()->set_proposed_change(
+      "On a network timeout, inspect connectivity before a bounded retry; independent operations can continue.");
+  auto opts = proto<v1::ShadowOptions>(config()["shadow_options"]); opts.set_max_advice_items(1);
+  const auto private_snapshot = te::compile_shadow_policy(own, identity(), opts);
+  v1::SharedExperienceStore shared;
+  shared.set_application_id("test-app"); shared.set_user_id("alice"); shared.set_revision(1);
+  auto* published = shared.add_experiences();
+  published->set_memory_id("shared-network"); published->set_target_scope(scope);
+  published->set_trigger_pattern("network timeout certificate handshake");
+  published->set_content("When the TLS handshake times out, inspect the certificate chain before retrying.");
+  auto* relation = shared.add_relations(); relation->set_relation("related");
+  relation->set_private_memory_id(private_snapshot.experiences(0).memory_id());
+  relation->set_private_content_revision(private_snapshot.experiences(0).content_revision());
+  relation->set_shared_memory_id(published->memory_id());
+  relation->set_shared_content_revision(shared_content_revision(*published));
+  auto decide = [&](bool approve_private = true) {
+    const auto runtime_policy = policy(te::compile_shadow_policy(own, identity(), opts, shared), approve_private);
+    auto q = query(runtime_policy); q.mutable_advice_query()->set_task("network timeout certificate handshake");
+    return te::PolicyRuntime(runtime_policy).decide(q);
+  };
+  auto result = decide();
+  check(result.experiences_size() == 1 && result.experiences(0).memory_id() == "shared-network",
+      "a less relevant private memory displaced specific public advice");
+  relation->set_relation("duplicate"); result = decide();
+  check(result.experiences_size() == 1 && result.experiences(0).memory_id() == "private-alice",
+      "private duplicate precedence was lost");
+  result = decide(false);
+  check(result.experiences_size() == 1 && result.experiences(0).memory_id() == "shared-network",
+      "an unapproved private memory suppressed usable public advice");
+}
+
 void automatic_and_duplicate(bool fenced = false) {
   Fixture f; f.model->fenced = fenced; f.add("alice"); f.drain();
   check(shared_memory_view(f.state).experiences_size() == 0, "one user cannot satisfy independent-user gate");
@@ -107,6 +141,18 @@ void automatic_and_duplicate(bool fenced = false) {
   for(const auto& forbidden : {"alice", "bob", "私人历史", "private-", "candidate-"}) check(bytes.find(forbidden) == std::string::npos, "private provenance in public pool");
   auto p = policy(f.snapshot("alice"));
   check(te::PolicyRuntime(p).decide(query(p)).experiences_size() == 1, "cross-pool duplicate injected twice");
+  auto narrowed_options = p.options();
+  for(const auto& experience : p.snapshot().experiences()) if(!experience.application_shared()) {
+    auto* rewrite = narrowed_options.add_experience_overrides();
+    rewrite->mutable_source_experience()->set_memory_id(experience.memory_id());
+    rewrite->mutable_source_experience()->set_content_revision(experience.content_revision());
+    rewrite->set_content(experience.content()); rewrite->add_observed_operations("video");
+  }
+  const auto narrowed = te::compile_runtime_policy(p.snapshot(), narrowed_options);
+  auto observation = query(narrowed);
+  check(te::PolicyRuntime(narrowed).decide(observation).experiences().empty(), "public duplicate bypassed private applicability");
+  observation.add_observed_operations("video");
+  check(te::PolicyRuntime(narrowed).decide(observation).experiences_size() == 1, "valid private advice lost after observation guard");
   auto public_only = policy(f.snapshot("alice"), false);
   const auto result = te::PolicyRuntime(public_only).decide(query(public_only));
   check(result.experiences_size() == 1 && result.experiences(0).memory_id().find("shared-") == 0, "unapproved private duplicate blocks public");
@@ -275,7 +321,7 @@ int main(int argc, char** argv) {
       check(store.entries_size() > 0, "fixture memory was not admitted");
       std::cout << store.SerializeAsString(); return 0;
     }
-    automatic_and_duplicate(); automatic_and_duplicate(true);
+    automatic_and_duplicate(); automatic_and_duplicate(true); relevant_public_experience_is_not_starved();
     conflict_and_recovery(); gates_and_failures(); freshness_capacity_and_recovery();
     training_publication();
     std::cout << "Shared/private memory: promotion, deduplication, disputes, evidence withdrawal, expiry, snapshots, privacy and failure gates passed\n";

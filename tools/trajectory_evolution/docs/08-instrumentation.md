@@ -84,11 +84,12 @@ export EVOLUTION_POINT_CONFIG="/你的部署目录/config/point-client.json"
 ```json
 "instrumentation": {
   "level": "L3",
-  "capabilities": ["model", "actions", "loop"]
+  "capabilities": ["model", "actions", "schedule", "loop"]
 }
 ```
 
-只观察设 L0；L1 接模型点；L2 接动作执行点；L3 接循环条件点。capabilities 只填实际接入的能力。
+只观察设 L0；L1 接模型点；L2 编排接批量派发与完成点（schedule），参数护栏接动作点（actions）；L3 接循环条件点。
+capabilities 只填实际接入的能力。旧的 actions 接法继续工作，但参数检查不等于完成技能编排。
 常见输入无需填写 binding：纯文本、messages 消息数组、system 字符串/首个文本块、Responses 的
 instructions/input、prompt 字符串，以及已有 systemInstruction.parts[0].text 均可识别。
 采用 input_schema 工具定义的 Messages 请求会选择单独的 system 字段，不往 messages 塞入 system 角色。
@@ -100,6 +101,61 @@ usage 中的 prompt/completion_tokens、input/output_tokens 和 usageMetadata �
 只有 user/assistant 消息、无法区分模型接口时，包复用最后一条用户消息中已有的文本字段，
 不擅自新增 system 角色；需要指定指令层级或采用其他格式时，在同一打点用 binding 覆盖。
 授权、评测准入和规则参数见[策略版本](15-policy-snapshots.md)、[运行控制](16-runtime-controls.md)和[任务评测](19-datasets-and-benchmarks.md)。
+
+## 异步批量技能编排
+
+接入两处：**原有的批量派发调用**，以及**原有的整批完成回调**。不要在提交 ACK 时上报整批完成。
+包内共享 C++ 状态机负责分批、等待、关联和合并；不需要新增宿主进程、调度文件或轮询循环。
+Python 原生与 HTTP 客户端共用下面的包装；其他语言可使用本节末的同一 JSON 点协议。
+
+假设原派发参数为 `{"jobs":[{"name":"A", ...}, ...]}`，返回 `ticket` 和 accepted 数组，
+每项含该次调用内从 1 开始的 index 和宿主分配的 id。完成回调含同一 ticket 及 results 数组。
+在原派发处改为：
+
+```python
+ack = evo.dispatch({
+    "ref": {"run": task_id, "key": batch_call_id}, "name": "dispatch",
+    "input": original_arguments,
+    "binding": {
+        "items": "/jobs", "operation": "/name", "receipt": "/ticket",
+        "accepted": "/accepted", "accepted_index": "/index", "accepted_id": "/id",
+        "results": "/results", "result_id": "/id", "result_success": "/ok",
+        "result_operation": "/name", "result_status": "/status", "result_output": "/output"
+    }
+}, original_dispatch)
+```
+
+binding 是现有字段的位置，不是要新增的业务字段。items/receipt/accepted/results 相对于对应完整报文，
+其余相对于数组内单项。result_operation/status/output 用于表达未执行的依赖跳过，不生成虚假的业务成功结果。
+如果原计划已有硬依赖，额外填 action_id 和 after 的位置；after 使用
+`[{"action_id":"前置实例 ID","require_success":true}]`，包保留这些边。
+返回 JSON 字符串的原函数加 `result_format="json_text"`。
+
+在原有完成回调里、继续调用模型之前插入：
+
+```python
+resumed = evo.resume_dispatch({
+    "ref": {"run": task_id, "key": completion_event_id},
+    "input": original_completion
+}, original_dispatch)
+if resumed["pending"]:
+    return  # 下一批已由同一个原派发函数提交，等待宿主正常的完成回调。
+original_completion = resumed["completion"]
+# 后面原有的结果处理和模型决策代码不变。
+```
+
+包将多个物理 ticket 合成同一个逻辑结果，按原请求顺序汇总，不按完成顺序排列。
+未被管理的普通完成消息原样返回。重复完成通知通过 claim 防止再次提交后继。
+派发失败会留下失败结果；成功依赖的后继被跳过，独立分支保留。没有实际终态的条目记录 unknown，轨迹标记不完整。
+初次准备不可用时保留原派发；取得执行权的结果不确定或提交后观察失败时不重试业务调用，避免重复副作用。
+一旦进入分批，采集服务就持有尚未提交的计划，不能在中途移除该服务或切换配置；应先完成/中止活动 run。
+
+所有语言共用 `operation=point, kind=dispatch`：before 携带 input/binding；返回 wave_id/input/plan_ref。
+每次实际提交前，event/name=claim 携带 wave_id，只有 execute=true 才调用原派发函数。
+之后 event/name=accept 携带 wave_id/output（真实 ACK）；完成入口用 event/name=complete 携带真实完成报文。
+claim/accept 的 ref.parent 指向 plan_ref.key；每次 claim 使用新的 ref.key。
+返回下一 wave 时继续同一协议，pending=true 表示等宿主完成通知，completion 表示逻辑批次已结束。
+提交抛异常时发送 event/name=abort；不重新调用业务函数。协议状态属于认证后的同一 run，不能跨用户串联。
 
 ## 2. 收到新任务时插入
 
@@ -136,7 +192,8 @@ result = evo.call({"ref": {"run": task_id, "key": tool_call_id, "parent": work_i
                    "kind": "action", "name": tool_name, "input": arguments}, execute_tool)
 ```
 
-JS/TS 对应为 `await evo.call(fields, originalFunction)`，同时支持同步和异步函数。
+JS/TS 对应为 `await evo.call(fields, originalFunction)`；Rust、Go、Java、C#、C++ 和 C 分别使用
+`call`、`Call`、`call`、`CallAsync`、`Points::call` 和 `te_points_call`。
 call 内部完成 before → 使用准备输入执行一次 → after；异常时记录 unknown 并原样抛回业务层，不记录异常文本。
 动作被规则拒绝时不执行函数，返回 `{"status":"rejected","reason":"..."}`，并记录 executed=false。
 调用包装不重试业务副作用，不负责改变原程序的并发或异常传播规则。
@@ -176,8 +233,9 @@ while original_condition and evo.allow_loop({
     ...  # 原来的一轮业务逻辑，iteration_id 每轮不同
 ```
 
-异步 Python 使用 `await evo.aallow_loop(...)`，JS/TS 使用 `await evo.allowLoop(...)`。
-任意其他语言用 `point({"phase":"guard","kind":"loop","ref":...,"state":...})` 的 decision 不等于 stop 作为原循环的继续条件。
+异步 Python 使用 `await evo.aallow_loop(...)`，JS/TS 使用 `await evo.allowLoop(...)`；Rust、Go、Java、C#、C++ 和 C
+分别使用 `allow_loop`、`AllowLoop`、`allowLoop`、`AllowLoopAsync`、`Points::allow_loop` 和 `te_points_allow_loop`。
+未使用随包包装的语言，可用 `point({"phase":"guard","kind":"loop","ref":...,"state":...})` 的 decision 不等于 stop 作为原循环的继续条件。
 guard 在组件内部一次完成检查和记录，不需要调用方再组装 loop.commit。
 不能只调用后丢弃返回决定：循环条件必须使用它。其他宿主限制放在前面的 original_condition 中。
 
@@ -200,7 +258,7 @@ business_status 可选 succeeded/failed/partial/unknown；业务失败不等于�
 
 ## 运行保证与限制
 
-原生打点只走有界内存路径；HTTP point 默认单次 20 ms 预算且不重试。Python call/acall 及 JS/TS call 的每个前后打点分别使用该预算。
+原生打点只走有界内存路径；HTTP point 默认单次 20 ms 预算且不重试。各语言调用包装的每个前后打点分别使用该预算。
 业务不等待落盘、模型评测、记忆管理或策略再编译。服务可使用 buffered 持久化，由后台写盘；durable 模式在响应前确保持久化。
 采集失败保留原输入和原业务调用，SDK 在后续同任务打点中自动报告缺口，残缺轨迹进入隔离而不是学习。
 客户端实例应复用；进程崩溃或持续断网且没有后续上报时，已注册未完成工作由组件租约识别，默认 24 小时，配置 run_lease_ms。
@@ -208,9 +266,9 @@ business_status 可选 succeeded/failed/partial/unknown；业务失败不等于�
 
 ## 实现定位
 
-- `src/instrumentation.cpp`：编号解析、自动合流、延期收尾、循环 guard、指标映射。
-- `src/local_runtime.cpp / src/integration_service.cpp`：同一协议的原生与 HTTP 执行。
-- `clients/python/evolution_point.py / clients/typescript/evolution.ts`：包内调用包装与采集缺口管理。
+- `src/runtime/instrumentation.cpp`：编号解析、自动合流、延期收尾、循环 guard、指标映射。
+- `src/service/local_runtime.cpp / src/service/integration_service.cpp`：同一协议的原生与 HTTP 执行。
+- `clients/`：Python、JS/TS、Rust、Go、Java、C#、C 与 C++ 的调用包装、循环判断和采集缺口管理。
 - `tests/test_instrumentation.py / tests/test_language_clients.py`：同步、异步、并行和跨语言回归。
 
 [下一章：异步、并发、消息队列与任务收尾](09-async-and-multi-agent.md)

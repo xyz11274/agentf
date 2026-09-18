@@ -17,7 +17,7 @@
 ## 从执行边界生成事件
 
 通用入口由组件生成标准事件，宿主只需在自己掌握的实际执行位置调用边界接口。
-源码入口是 `src/boundary_runtime.cpp`。
+源码入口是 `src/runtime/boundary_runtime.cpp`。
 
 | 宿主边界 | 组件生成/保存的主要内容 |
 | --- | --- |
@@ -56,7 +56,7 @@
 
 ### 结构校验流程
 
-`src/trace_contract.cpp` 的 `validate_trace` 大致执行以下算法：
+`src/analysis/trace_contract.cpp` 的 `validate_trace` 大致执行以下算法：
 
 1. 校验协议版本、身份、事件数、文件大小和 `capture_complete`。
 2. 按 `event_id` 去重：同 ID、同 Protobuf 内容保留一条并记录重复；同 ID、不同内容报告冲突。
@@ -82,7 +82,7 @@
 
 ### 从事件组织 Episode
 
-`src/trace_analyzer.cpp` 的 `analyze_trace` 以 step 为主要单位：
+`src/analysis/trace_analyzer.cpp` 的 `analyze_trace` 以 step 为主要单位：
 
 1. 对每个 step.start / step.end 建立 Episode。
 2. 将同一 `step_id` 的动作开始/结束、状态与相关观察归入对应 Episode。
@@ -124,10 +124,10 @@ TraceRun 保存身份与事件，分析器据此组织 Episode。
 ## 实现定位
 
 - `proto/trajectory_trace.proto`
-- `src/trace_contract.cpp`
-- `src/trace_analyzer.cpp`
-- `src/boundary_runtime.cpp`
-- `src/sessionlog_evaluator.cpp`
+- `src/analysis/trace_contract.cpp`
+- `src/analysis/trace_analyzer.cpp`
+- `src/runtime/boundary_runtime.cpp`
+- `src/analysis/sessionlog_evaluator.cpp`
 
 ---
 

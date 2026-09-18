@@ -8,8 +8,13 @@
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <netinet/in.h>
+#include <set>
 #include <string>
+#include <sys/socket.h>
+#include <sys/wait.h>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 #include "daemon/config.h"
@@ -428,4 +433,92 @@ TEST(SandboxLifecycleTest, LocalHttpEndpointsAreIsolated) {
   }
 
   fs::remove_all(workdir_root);
+}
+
+// 不同 daemon 的进程内锁互不相通；故意延迟 server 启动，稳定覆盖选端口到 bind
+// 之间的竞争窗口。每个进程都必须读回自己的文件，不能借用其他实例的 HTTP 服务。
+TEST(SandboxLifecycleTest, LocalHttpEndpointsAreIsolatedAcrossProcesses) {
+  const auto server = fs::path(EXAMPLES_DIR).parent_path() /
+      "docker/sandbox/http_server/sandbox_http_server.py";
+  ASSERT_TRUE(fs::exists(server));
+  char temporary[] = "/tmp/agentflow_local_concurrent_XXXXXX";
+  ASSERT_NE(mkdtemp(temporary), nullptr);
+  const fs::path root(temporary);
+  const auto delayed_server = root / "delayed_server.py";
+  std::ofstream(delayed_server) << "import runpy, time\ntime.sleep(0.5)\nrunpy.run_path("
+                              << "'" << server.string() << "', run_name='__main__')\n";
+
+  const int probe = socket(AF_INET, SOCK_STREAM, 0);
+  ASSERT_GE(probe, 0);
+  sockaddr_in address{};
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  ASSERT_EQ(bind(probe, reinterpret_cast<sockaddr*>(&address), sizeof(address)), 0);
+  socklen_t size = sizeof(address);
+  ASSERT_EQ(getsockname(probe, reinterpret_cast<sockaddr*>(&address), &size), 0);
+  const int port = ntohs(address.sin_port);
+  close(probe);
+
+  int start[2];
+  ASSERT_EQ(pipe(start), 0);
+  std::vector<pid_t> workers;
+  for(int i = 0; i < 4; ++i) {
+    const auto pid = fork();
+    ASSERT_GE(pid, 0);
+    if(pid == 0) {
+      close(start[1]);
+      char ready;
+      if(read(start[0], &ready, 1) != 1) _exit(2);
+      close(start[0]);
+      int result = 0;
+      try {
+        const auto identity = std::to_string(i);
+        agentflow::sandbox::LocalSandbox sandbox(
+            make_key(identity, "client", "agent"), (root / identity).string(),
+            delayed_server.string(), port, 1024 * 1024);
+        agentflow::sandbox::ExecOptions opts;
+        const auto written = sandbox.exec("write_file",
+            "{\"path\":\"identity.txt\",\"content\":\"" + identity + "\"}", opts);
+        const auto read_back = sandbox.exec("read_file", R"({"path":"identity.txt"})", opts);
+        if(written.exit_code != 0 || read_back.exit_code != 0 ||
+           read_back.stdout != identity) result = 3;
+        std::ofstream(root / (identity + ".endpoint")) << sandbox.endpoint();
+        for(int tick = 0; tick < 200 && !fs::exists(root / "release"); ++tick)
+          std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      } catch(const std::exception&) {
+        result = 4;
+      }
+      _exit(result);
+    }
+    workers.push_back(pid);
+  }
+  close(start[0]);
+  EXPECT_EQ(write(start[1], "xxxx", 4), 4);
+  close(start[1]);
+  for(int tick = 0; tick < 160; ++tick) {
+    bool ready = true;
+    for(int i = 0; i < 4; ++i)
+      ready = ready && fs::exists(root / (std::to_string(i) + ".endpoint"));
+    if(ready) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  std::ofstream(root / "release") << "ready";
+  for(const auto pid : workers) {
+    int status = 0;
+    ASSERT_EQ(waitpid(pid, &status, 0), pid);
+    EXPECT_TRUE(WIFEXITED(status));
+    if(WIFEXITED(status)) {
+      EXPECT_EQ(WEXITSTATUS(status), 0);
+    }
+  }
+  std::set<std::string> endpoints;
+  for(int i = 0; i < 4; ++i) {
+    std::ifstream input(root / (std::to_string(i) + ".endpoint"));
+    std::string endpoint;
+    input >> endpoint;
+    EXPECT_FALSE(endpoint.empty());
+    endpoints.insert(endpoint);
+  }
+  EXPECT_EQ(endpoints.size(), 4u);
+  fs::remove_all(root);
 }

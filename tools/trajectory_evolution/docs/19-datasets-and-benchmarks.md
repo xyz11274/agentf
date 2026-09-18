@@ -8,6 +8,14 @@
 
 ## 设计思路
 
+### 执行依赖的确定性验收
+
+模型评分之外，任务评测会核对真实调度中的成功依赖。数据集 `attributes` 明确提供 `dependency` 和 `stop_on_failure: true` 时，评测检查已观测到的依赖边；`dependency` 为 `independent`、`parallel` 或 `none` 时不据此增加成功约束。调度计划本身明确标记 `require_success=true` 的边，也需要遵守其成功前提。
+
+如果前置动作实际失败，但依赖动作仍实际启动，增加失败检查 `contract.schedule_success`。依赖 skill 启动后自行判断“无需调用工具”，或最后回复写了“已跳过”，不能抵消已发生的错误派发。独立 C 分支仍可继续，跳过而未执行的 B 不算违规。检查同时支持单 run、多 run 和不同事件排列；以批次、动作实例及结构化终态关联，不凭技能名称猜依赖，也不把未知结果算成失败。
+
+此检查不替代完整业务评分：没有声明、没有观测到依赖边或缺乏相关执行证据时，不凭自然语言补出约束。初次评分和仅重评分都使用同一检查；已保存轨迹可以重新验收，不需要重新调用主 Agent。历史 L0 报告导入时也重新核对这些确定性条件；基线缓存记录验收规则版本，避免旧判分口径与新候选混用。
+
 轨迹评测分析已有执行记录；任务评测调用受信宿主运行固定任务，再按预设标准判分。
 
 L4 数据准备复用这个任务评测器：缺少可用经验时，用原 Agent 的无策略版本执行 `train`，
@@ -417,11 +425,13 @@ Coordinator 的派发进程退出只意味着派发结束，不能代替整个�
 | max_latency_ratio          | 未启用 | 候选平均 Agent 时延 / 基线时延上限                                   |
 | max_token_ratio            | 未启用 | 候选平均 token / 基线 token 上限；缺计数时拒绝此项                   |
 | min_invalid_loop_reduction | 未启用 | 规则确认无效 loop 下界的下降比例，例如 0.3；缺有效轨迹指标时拒绝此项 |
+| require_level_coverage     | GEPA 为 true；固定候选为 false | 核验目标等级的实际应用回执；L1 经验注入、L2 已接入的技能编排（无编排接口时为动作控制）、L3 重规划或停止均须有执行证据 |
 
 质量先满足门槛，成本改善不能抵消质量失败。基线无效 loop 为 0 时，候选也需为 0；报告保留原始数值。
 L0 用于基线测量，不要求相对自身取得成本或循环改善。
 错误、取消和模型评分不确定会降低覆盖率；证据不足为 inconclusive，不计作经验反证。
 宿主超时是一次未按预算完成的失败，基础设施不可用应返回 environment_error。
+`require_level_coverage` 不要求每道题触发所有能力。GEPA 可保留只改善部分能力的中间节点；最终候选缺少某一级的实际应用时，以 `level_capability_not_observed` 拒绝发布。仅查询、生成规则、派发 ACK 或始终 continue 不计实际应用。`control_coverage.capabilities` 提供各边界的 `queries/triggered/applied`，`unobserved_capabilities` 列出缺少的能力；每条生成规则还须通过原有的独立覆盖检查。
 
 报告同时提供总试验数、确定评分数、通过/失败/错误/不确定数量、覆盖率、各变体与分类汇总、
 配对胜负、平均/P95 Agent 时延、LLM/工具调用数及 tokens。未知计数不补成 0。
@@ -1025,11 +1035,11 @@ Agent 版本、模型、工具数据和初始记忆。具体命令与配置见�
 
 ## 实现定位
 
-- `src/dataset.cpp`
-- `src/task_evaluation.cpp`
-- `src/agent_evaluation.cpp`
-- `src/agent_evaluation_support.h`
-- `src/evaluation_process.cpp`
+- `src/evaluation/dataset.cpp`
+- `src/evaluation/task_evaluation.cpp`
+- `src/evaluation/agent_evaluation.cpp`
+- `src/evaluation/agent_evaluation_support.h`
+- `src/evaluation/evaluation_process.cpp`
 - `proto/evaluation_dataset.proto`
 - `config/dataset.json`
 - `config/evaluation.json`

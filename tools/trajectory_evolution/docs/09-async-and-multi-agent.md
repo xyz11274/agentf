@@ -149,9 +149,9 @@ python -B tools/trajectory_evolution/tests/test_agentflow_points.py build/trajec
 
 ## 实现定位
 
-- `src/instrumentation.cpp`：ref 关联、待完成父工作、自动合流与结束。
-- `src/integration_service.cpp`：跨进程状态、后台写盘和未完成任务恢复。
-- `src/local_runtime.cpp`：进程内有界执行与独立运行状态。
+- `src/runtime/instrumentation.cpp`：ref 关联、待完成父工作、自动合流与结束。
+- `src/service/integration_service.cpp`：跨进程状态、后台写盘和未完成任务恢复。
+- `src/service/local_runtime.cpp`：进程内有界执行与独立运行状态。
 - `tests/test_instrumentation.py`：70 个分支逆序完成、异常、拒绝、嵌套及自动收尾。
 - `tests/test_task_evaluation.py`：派发进程退出后，仍等待已打点的后台工作完成。
 

@@ -80,7 +80,11 @@ void matching_and_privacy() {
   add(store, "wrong-type")->mutable_candidate()->set_target_type(
       ep::CANDIDATE_TARGET_TYPE_LOOP_STOP_CONDITION);
   auto snapshot = te::compile_shadow_policy(store, identity(), options());
-  expect(snapshot.experiences_size() == 1, "compiler crossed ownership/scope/type");
+  expect(snapshot.experiences_size() == 2, "compiler crossed ownership/scope/type");
+  const auto control = std::find_if(snapshot.experiences().begin(), snapshot.experiences().end(),
+      [](const auto& item) { return item.memory_id() == "wrong-type"; });
+  expect(control != snapshot.experiences().end() && !control->control_target_type().empty()
+      && control->match_terms().empty(), "control source was not isolated from L1 matching");
   expect(te::to_json(snapshot).find("user-b") == std::string::npos, "foreign owner leaked");
   te::ShadowRuntime runtime(snapshot);
   auto result = runtime.query_advice(query());
@@ -95,6 +99,8 @@ void matching_and_privacy() {
          "query IDs changed identical input fingerprint");
   expect(runtime.query_advice(query("明天巴黎气温如何")).status() == "no_match",
          "unrelated task matched");
+  expect(runtime.query_advice(query("请生成一张图片")).status() == "no_match",
+         "a generic Chinese bigram caused an unrelated match");
 
   for(int field = 0; field < 5; ++field) {
     auto bad = query();
@@ -167,6 +173,8 @@ void secrets_english_and_concurrency() {
   const te::ShadowRuntime runtime(snapshot);
   auto response = runtime.query_advice(query("NETWORK TIMEOUT " + secret));
   expect(response.status() == "matched", "English matching failed");
+  expect(runtime.query_advice(query("network timeouts")).status() == "matched",
+         "English word normalization failed");
   expect(te::to_json(response).find(secret) == std::string::npos, "query echoed secret");
   std::vector<std::future<v1::AdviceResult>> pending;
   for(int i = 0; i < 24; ++i) {
@@ -230,6 +238,89 @@ void observation_is_not_injection() {
   expect(report.data_level() == v1::L0 && report.verified_level() == v1::L0,
          "Shadow was counted as injection");
 }
+
+void retrieval_evidence_and_independent_matches() {
+  auto check = [](const std::string& pattern, const std::string& text, bool matched,
+                  const char* message) {
+    auto store = memory();
+    add(store, "m")->mutable_candidate()->set_trigger_pattern(pattern);
+    te::ShadowRuntime runtime(te::compile_shadow_policy(store, identity(), options()));
+    auto q = query("库存核算"); q.set_state(text);
+    const auto result = runtime.query_advice(q);
+    expect(result.status() == (matched ? "matched" : "no_match"), message);
+    return result;
+  };
+  const std::string image = "当 generate_image 返回 status=succeeded 且 files 非空时";
+  check(image, R"([{"role":"tool","content":"{\"status\":\"success\",\"weather\":\"晴\"}"}])", false,
+        "JSON field names were treated as applicability evidence");
+  check(image, R"([{"role":"tool","content":"{\"status\":\"succeeded\"}"}])", false,
+        "a status value and its word variants passed the match threshold");
+  check("当结构化生成工具（如 generate_image）返回 status=succeeded 且 files 非空，或返回 tool_error 但执行报告显示生成已成功且 files 非空时",
+        "tool_error 执行报告：CSV 已成功保存，用户未要求图片，未调用生成工具", false,
+        "generic report wording bypassed the named operation in the condition");
+  check("当 generate_video 工具返回 HTTP 404 UnsupportedModel，模型不支持 Agent Plan 特性时",
+        "agent 正在核算预算，bash 返回 HTTP 200，但目录不存在", false,
+        "generic protocol terms triggered advice for another operation");
+  check(image, R"([{"role":"assistant","tool_calls":[{"id":"call-a","type":"function","function":{"name":"generate_image","arguments":"{}"}}]},{"role":"tool","content":"{\"status\":\"succeeded\",\"files\":[\"result.png\"]}"}])", true,
+        "real operation and result evidence was lost");
+  check(image, R"({"role":"function","name":"generate_image","content":"{\"status\":\"succeeded\"}"})", true,
+        "a named function result lost its actual operation");
+  check(image, R"({"role":"user","name":"generate_image","content":"succeeded"})", false,
+        "a participant name was treated as an executed operation");
+  check("generate_image failed", "generate_video failed", false,
+        "splitting operation identifiers matched an unrelated operation");
+  const std::string completion = "当 coordinator 已获得所有委派 skill 的成功结果时";
+  check(completion, R"([{"role":"user","content":"核算库存"},{"role":"user","content":"<system-reminder>直接给出 skill_result 文本结果交还 coordinator</system-reminder>"}])", false,
+        "a user-role system reminder triggered completion advice");
+  check(completion, R"({"messages":[{"role":"system","content":"coordinator skill"},{"role":"developer","content":"coordinator skill"},{"role":"user","content":"核算库存"}],"tools":[{"description":"coordinator skill"}]})", false,
+        "instructions or tool schemas entered retrieval");
+  check(completion, "<trajectory-experience policy=\"old\">coordinator skill</trajectory-experience>", false,
+        "an old injection triggered itself");
+  check(completion, "<system-reminder>coordinator skill", false,
+        "an incomplete reminder became retrieval evidence");
+  check(completion, "coordinator 已获得所有 skill 的成功结果", true,
+        "actual completion text was filtered with the reminders");
+  check("当 coordinator 已获得所有委派 skill 的成功结果且结果覆盖用户需求时",
+        "报告需要覆盖用户需求中的天气信息", false,
+        "a partial Han phrase triggered unrelated completion advice");
+  const std::string write = "当需要写入包含大量引号或特殊字符的文件，或使用 bash 重定向写入失败且错误为 'No such file or directory' 且目标目录不存在时";
+  check(write, "没有上传照片，仅说明需要补充首帧，不要多次尝试不存在的路径或其他用户文件", false,
+        "overlapping Han substrings triggered unrelated file-writing advice");
+  check(write, "请确认用户上传的衣物照片素材是否存在。upload 目录为空或不存在，没有可用的上传图片。"
+        "如果确认没有素材，请明确返回素材缺失，不要生成新图片，也不要引用服务器上其他用户的文件。", false,
+        "function-word fragments triggered file-writing advice for a missing image");
+  check(write, "上传素材目录不存在，不要引用其他用户的文件。", false,
+        "a directory observation without a write failure triggered write recovery");
+  check("当结构化生成工具（如 generate_image）返回 status=succeeded 且 files 非空，或返回 tool_error 但执行报告显示生成已成功且 files 非空时",
+        "执行报告：预算已成功保存，全部任务完成。\\n\\n下一步建议\\n\\n"
+        "若用户需要，可进一步生成效果图（generate_image），但需用户明确意图。", false,
+        "a hypothetical tool mention borrowed success evidence from another paragraph");
+  check(image, std::string(4000, ' ') + "generate_image generate_image succeeded", true,
+        "repeated anchors must not change valid applicability");
+  check(write, "bash 写入失败: No such file or directory", true,
+        "real file-writing failure no longer matched");
+  check(write, "bash: file report.csv exists; read completed", false,
+        "words inside an error literal independently triggered failure advice");
+  check(write, "bash: no such file or directory", true,
+        "case normalization lost an actual error literal");
+  check(image, "{ \n \"role\":\"tool\", \"content\":\"generate_image succeeded", false,
+        "truncated JSON with whitespace fell back to its raw keys and values");
+  check("生成视频时缺少图片素材", "图片素材", false,
+        "one Han phrase was counted as multiple independent matches");
+  check("生成视频时缺少图片素材", "生成视频但是没有图片素材", true,
+        "related Chinese evidence no longer matched");
+  check("视频生成缺少素材", "视频生成缺少图片素材", true,
+        "a short fragment could not extend a specific Chinese phrase");
+  check("network timeout", "timeouts", false,
+        "one English word and its stem passed the match threshold");
+  const auto normalized = check("network timeout", "network timeouts", true,
+        "English plural normalization was lost");
+  expect(normalized.advice(0).matched_terms_size() == 2, "English variants were counted repeatedly");
+  check("network timeout", R"({"role":"user","content":"network timeouts"})", true,
+        "structured user content was lost");
+  check("network timeout", "<system-reminder>库存核算</system-reminder>network timeouts", true,
+        "real text outside an instruction block was lost");
+}
 }  // namespace
 
 int main() {
@@ -239,6 +330,7 @@ int main() {
     secrets_english_and_concurrency();
     observation_is_not_injection();
     experience_contract_and_condition_matching();
+    retrieval_evidence_and_independent_matches();
     std::cout << "ShadowRuntimeTests passed\n";
     return 0;
   } catch(const std::exception& error) {

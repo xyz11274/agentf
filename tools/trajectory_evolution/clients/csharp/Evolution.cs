@@ -15,6 +15,9 @@ public sealed class EvolutionError(string code, int status = 0) : Exception(code
 /// <summary>Native HTTP transport; all L0-L3 boundaries use the same InvokeAsync.</summary>
 public sealed class Evolution : IDisposable
 {
+    public sealed record CallResult(JsonNode? Output, JsonObject Prepared, JsonObject Receipt, bool Executed);
+    public sealed record LoopResult(bool Allowed, string Decision, JsonObject Prepared, JsonObject Receipt);
+
     /// <summary>Bind an existing receiver; its acknowledgement does not finish a run.</summary>
     public static async Task<bool> EvaluateAsync(Func<JsonNode?, Task> receive, CancellationToken cancellation = default)
     {
@@ -89,6 +92,86 @@ public sealed class Evolution : IDisposable
             catch (EvolutionError error) { if (attempt >= retries || (error.Status > 0 && error.Status < 500) || cancellation.IsCancellationRequested) throw; }
         }
     }
+    /// <summary>Wrap one existing JSON call. The business delegate is awaited at most once.</summary>
+    public async Task<JsonNode?> CallAsync(JsonObject fields, Func<JsonNode?, Task<JsonNode?>> execute,
+        int budgetMs = 20, CancellationToken cancellation = default) =>
+        (await CallWithReceiptAsync(fields, execute, budgetMs, cancellation).ConfigureAwait(false)).Output;
+
+    /// <summary>Call wrapper that also exposes the before decision and terminal receipt.</summary>
+    public async Task<CallResult> CallWithReceiptAsync(JsonObject fields, Func<JsonNode?, Task<JsonNode?>> execute,
+        int budgetMs = 20, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(fields); ArgumentNullException.ThrowIfNull(execute);
+        var before = (JsonObject)fields.DeepClone(); before["phase"] = "before";
+        var prepared = await PointAsync(before, budgetMs, cancellation).ConfigureAwait(false);
+        var actual = prepared.ContainsKey("input") ? prepared["input"]?.DeepClone() : fields["input"]?.DeepClone();
+        var identity = FinishIdentity(fields, prepared);
+        var kind = fields["kind"] is JsonValue label && label.TryGetValue<string>(out var name) ? name : "custom";
+        if (prepared["decision"]?.GetValue<string>() == "reject")
+        {
+            var reason = prepared["reason"]?.GetValue<string>() ?? "policy_rejected";
+            JsonNode output = new JsonObject { ["status"] = "rejected", ["reason"] = reason, ["error"] = reason };
+            var after = (JsonObject)identity.DeepClone(); after["kind"] = kind; after["phase"] = "after";
+            after["executed"] = false; after["actual_input"] = actual?.DeepClone(); after["output"] = output.DeepClone();
+            var receipt = await PointAsync(after, budgetMs, cancellation).ConfigureAwait(false);
+            return new CallResult(output, prepared, receipt, false);
+        }
+        JsonNode? result;
+        try { result = await execute(actual?.DeepClone()).ConfigureAwait(false); }
+        catch
+        {
+            var abort = (JsonObject)identity.DeepClone(); abort["kind"] = kind; abort["phase"] = "abort";
+            abort["status"] = "unknown"; abort["output"] = null;
+            await PointAsync(abort, budgetMs, CancellationToken.None).ConfigureAwait(false);
+            throw;
+        }
+        var completed = (JsonObject)identity.DeepClone(); completed["kind"] = kind; completed["phase"] = "after";
+        completed["executed"] = true; completed["actual_input"] = actual?.DeepClone(); completed["output"] = result?.DeepClone();
+        var terminal = await PointAsync(completed, budgetMs, cancellation).ConfigureAwait(false);
+        return new CallResult(result, prepared, terminal, true);
+    }
+
+    public async Task<bool> AllowLoopAsync(JsonObject fields, int budgetMs = 20, CancellationToken cancellation = default) =>
+        (await CheckLoopAsync(fields, budgetMs, cancellation).ConfigureAwait(false)).Allowed;
+
+    public async Task<LoopResult> CheckLoopAsync(JsonObject fields, int budgetMs = 20, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(fields);
+        var request = (JsonObject)fields.DeepClone(); request["kind"] = "loop";
+        if (fields.ContainsKey("ref"))
+        {
+            request["phase"] = "guard";
+            var receipt = await PointAsync(request, budgetMs, cancellation).ConfigureAwait(false);
+            var decision = receipt["decision"]?.GetValue<string>() ?? "continue";
+            return new LoopResult(decision != "stop", decision, receipt, receipt);
+        }
+        request["phase"] = "before";
+        var prepared = await PointAsync(request, budgetMs, cancellation).ConfigureAwait(false);
+        var selected = prepared["decision"]?.GetValue<string>() ?? "continue";
+        var after = FinishIdentity(fields, prepared); after["kind"] = "loop"; after["phase"] = "after"; after["decision"] = selected;
+        var terminal = await PointAsync(after, budgetMs, cancellation).ConfigureAwait(false);
+        return new LoopResult(selected != "stop", selected, prepared, terminal);
+    }
+
+    public Task<JsonObject> CaptureGapAsync(JsonObject fields, string reason, CancellationToken cancellation = default)
+    {
+        ArgumentNullException.ThrowIfNull(fields);
+        if (string.IsNullOrEmpty(reason)) throw new ArgumentException("reason_required", nameof(reason));
+        var request = (JsonObject)fields.DeepClone(); request["reason"] = reason;
+        return InvokeAsync("capture.gap", request, cancellation: cancellation);
+    }
+    public Task<JsonObject> EvaluationNextAsync(string consumer, int index, CancellationToken cancellation = default) =>
+        InvokeAsync("evaluation.next", new JsonObject { ["consumer"] = consumer, ["index"] = index }, cancellation: cancellation);
+    public Task<JsonObject> EvaluationFailAsync(string consumer, CancellationToken cancellation = default) =>
+        InvokeAsync("evaluation.fail", new JsonObject { ["consumer"] = consumer }, cancellation: cancellation);
+    private static JsonObject FinishIdentity(JsonObject fields, JsonObject prepared)
+    {
+        var identity = new JsonObject();
+        if (fields["ref"] is JsonNode reference) identity["ref"] = reference.DeepClone();
+        else if (prepared["context"] is JsonNode context) identity["context"] = context.DeepClone();
+        return identity;
+    }
+
     public async Task<JsonObject> PointAsync(JsonObject fields, int budgetMs = 20, CancellationToken cancellation = default)
     {
         var id = Guid.NewGuid().ToString("N");

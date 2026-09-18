@@ -439,7 +439,8 @@ def _invalid_run_skills_result(error: str) -> dict:
 
 
 def handle_run_skills_call(args: Any, databus: DataBusClient,
-                           session_id: str, dialogue_id: str) -> str:
+                           session_id: str, dialogue_id: str,
+                           evolution_parent_ref: str = "") -> str:
     """Intercept run_skills tool_call → write dispatch info to DataBus → trigger framework.
 
     All skills are routed through a single 'skill-runner' task.
@@ -462,6 +463,18 @@ def handle_run_skills_call(args: Any, databus: DataBusClient,
     batch_id = f"batch:{dialogue_id}:{dispatch_round}"
     for i, spec in enumerate(skills, 1):
         dispatch_key = f"dispatch:{dialogue_id}:{dispatch_round}:{i}"
+        if _evolution is not None and evolution_parent_ref:
+            guard = _evolution.point({
+                "phase": "guard", "kind": "action", "name": spec["name"],
+                "ref": {"run": dialogue_id, "key": dispatch_key + ":guard",
+                        "parent": evolution_parent_ref},
+                "actor_id": "coordinator", "input": spec,
+                "extensions": {"metrics": {"tool_call": False}},
+            }, user_id=_user_id())
+            if guard.get("decision") == "reject":
+                rejected.append({"name": spec["name"], "request_index": i,
+                                 "stage": "evolution_policy", "error": guard.get("reason", "policy_rejected")})
+                continue
         dispatch_data = {
             "skill_name": spec["name"],
             "prompt": spec.get("prompt", ""),
@@ -1080,12 +1093,32 @@ def execute():
             # example max_iterations). C++ final gating waits for this marker;
             # delaying it until message assembly can otherwise deadlock a
             # successfully parsed terminal Batch.
-            completed_batch_message = build_skill_batch_completion_message(
-                completed_batch
-            )
             if databus.is_connected():
                 _remember_completed_batch_dispatches(databus, dialogue_id, completed_batch)
                 _mark_completed_batch_consumed(databus, completed_batch_key)
+            if _evolution is not None:
+                resumed = _evolution.resume_dispatch({
+                    "ref": {"run": dialogue_id, "key": completed_batch_key},
+                    "input": completed_batch,
+                }, lambda actual: handle_run_skills_call(
+                    actual, databus, session_id, dialogue_id
+                ), user_id=_user_id(), result_format="json_text")
+                if resumed.get("pending"):
+                    # A scheduling wave is not another LLM decision. Keep the
+                    # original run_skills ACK until every planned branch settles.
+                    if databus.is_connected():
+                        databus.delete("response")
+                    print("[flow]   skill schedule continues; waiting for next batch", file=sys.stderr)
+                    return
+                completed_batch = resumed.get("completion", completed_batch)
+                completed_skill_names = list(dict.fromkeys(
+                    result.get("business_skill_name") or result.get("framework_skill_name") or result.get("exec_skill_key")
+                    for result in completed_batch["results"]
+                ))
+                successful_count = sum(result.get("skill_success") is True for result in completed_batch["results"])
+                skill_success = ("true" if successful_count == len(completed_batch["results"])
+                                 else "partial" if successful_count else "false")
+            completed_batch_message = build_skill_batch_completion_message(completed_batch)
         except (ValueError, TypeError) as exc:
             error_text = f"内部错误：并行 Skill 批次结果读取失败（{exc}）"
             emit_event(hook_events.COORDINATOR_LLM_ERROR, {
@@ -1724,7 +1757,29 @@ def execute():
                         }
                         result_str = json.dumps(dispatch_result, ensure_ascii=False)
                     else:
-                        result_str = handle_run_skills_call(args, databus, session_id, dialogue_id)
+                        result_str = _evolution.call({
+                            "kind": "action", "name": name,
+                            "ref": {"run": dialogue_id,
+                                    "key": f"coordinator-dispatch:{_decision_index}:{tool_index}"},
+                            "actor_id": "coordinator", "input": args,
+                            "extensions": {"metrics": {"tool_call": False}},
+                        }, lambda actual: _evolution.dispatch({
+                            "name": "run_skills", "actor_id": "coordinator", "input": actual,
+                            "ref": {"run": dialogue_id, "key": f"skill-plan:{_decision_index}:{tool_index}",
+                                    "parent": f"coordinator-dispatch:{_decision_index}:{tool_index}"},
+                            "binding": {
+                                "items": "/skills", "operation": "/name", "receipt": "/batch_id",
+                                "accepted": "/dispatches", "accepted_index": "/request_index",
+                                "accepted_id": "/exec_skill_key", "results": "/results",
+                                "result_id": "/exec_skill_key", "result_success": "/skill_success",
+                                "result_operation": "/business_skill_name", "result_status": "/skill_status",
+                                "result_output": "/skill_result",
+                            },
+                        }, lambda scheduled: handle_run_skills_call(
+                            scheduled, databus, session_id, dialogue_id,
+                            evolution_parent_ref=f"skill-plan:{_decision_index}:{tool_index}"
+                        ), user_id=_user_id(), result_format="json_text"),
+                            user_id=_user_id(), result_format="json_text")
                         try:
                             dispatch_result = json.loads(result_str)
                         except (json.JSONDecodeError, TypeError):

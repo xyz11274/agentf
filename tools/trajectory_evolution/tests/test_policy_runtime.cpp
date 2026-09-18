@@ -1,6 +1,9 @@
 #include "trajectory_evolution/evolution.h"
+#include "trajectory_evolution/orchestration.h"
 #include "agentflow/trajectory/experience.h"
-#include "../src/control_generation.h"
+#include "../src/gepa/control_generation.h"
+#include "../src/evaluation/evaluation_contracts.h"
+#include "../src/gepa/failure_ledger.h"
 #include <future>
 #include <iostream>
 #include <stdexcept>
@@ -34,6 +37,23 @@ v1::RuntimePolicy policy() {
   auto* evidence = candidate->add_support_evidence(); evidence->set_evidence_id("evidence-a");
   evidence->mutable_source()->set_user_id("user-a");
   evidence->mutable_source()->set_dialogue_id("source-a");
+  auto* control_entry = memory.add_entries();
+  control_entry->set_memory_id("orchestration-z");
+  control_entry->set_status(ep::EVOLUTION_MEMORY_STATUS_CANDIDATE);
+  auto* control = control_entry->mutable_candidate();
+  control->set_schema_version(1); control->set_candidate_id("candidate-orchestration-z");
+  control->set_generator_version("evolution-candidate-generator-v2");
+  control->set_target_type(ep::CANDIDATE_TARGET_TYPE_SKILL_ORCHESTRATION);
+  control->set_target_scope("coordinator");
+  control->set_status(ep::EVOLUTION_CANDIDATE_STATUS_PROPOSED);
+  control->set_trigger_pattern("同批图片生成依赖计划完成");
+  control->set_observed_problem("图片技能在规划完成前被并行派发");
+  control->set_proposed_change("同一批次先完成 planner，再执行 image。");
+  control->set_support_user_count(1);
+  auto* control_evidence = control->add_support_evidence();
+  control_evidence->set_evidence_id("evidence-orchestration-z");
+  control_evidence->mutable_source()->set_user_id("user-a");
+  control_evidence->mutable_source()->set_dialogue_id("source-orchestration-z");
   v1::Identity identity;
   identity.set_agent_id("agent-a"); identity.set_user_id("user-a");
   identity.set_conversation_id("conv-a"); identity.set_run_id("run-a");
@@ -43,15 +63,17 @@ v1::RuntimePolicy policy() {
   limits.set_max_query_bytes(16384); limits.set_max_memory_bytes(1048576); limits.set_max_snapshot_bytes(262144);
   limits.set_max_match_terms(128); limits.set_min_matched_terms(2);
   auto snapshot = te::compile_shadow_policy(memory, identity, limits);
-  check(snapshot.experiences_size() == 1);
+  check(snapshot.experiences_size() == 2);
   v1::RuntimeOptions options;
   options.set_requested_level(v1::L3); options.set_fallback("strict");
   for(auto cap : {"context.request", "action.filter", "loop.decide"}) options.add_host_capabilities(cap);
   options.add_allowed_users("user-a"); options.add_allowed_conversations("conv-a");
   options.set_experience_template("授权经验：\n{{experience}}"); options.set_max_context_bytes(4096);
-  auto* approval = options.add_approved_experiences();
-  approval->set_memory_id(snapshot.experiences(0).memory_id());
-  approval->set_content_revision(snapshot.experiences(0).content_revision());
+  for(const auto& experience : snapshot.experiences()) {
+    auto* approval = options.add_approved_experiences();
+    approval->set_memory_id(experience.memory_id());
+    approval->set_content_revision(experience.content_revision());
+  }
   auto* action = options.add_action_rules();
   action->set_rule_id("image-required"); action->set_target_scope("coordinator");
   action->set_operation("video"); action->add_required_arguments("image"); action->set_reason("缺少图片素材");
@@ -133,6 +155,42 @@ void injection_and_evidence() {
   rejects([&] { te::PolicyRuntime altered(p); });
 }
 
+void evolvable_applicability() {
+  const auto original = policy();
+  auto options = original.options();
+  auto* rewrite = options.add_experience_overrides();
+  *rewrite->mutable_source_experience() = original.options().approved_experiences(0);
+  rewrite->set_content(original.snapshot().experiences(0).content());
+  rewrite->set_trigger_pattern("network timeout");
+  auto changed = te::compile_runtime_policy(original.snapshot(), options);
+  check(changed.policy_id() != original.policy_id());
+  check(changed.snapshot().SerializeAsString() == original.snapshot().SerializeAsString());
+  auto q = query(changed);
+  check(te::PolicyRuntime(changed).decide(q).status() == "no_change");
+  q.mutable_advice_query()->set_task("network timeouts");
+  check(te::PolicyRuntime(changed).decide(q).context().find("network timeout") != std::string::npos);
+  rewrite->add_observed_operations("download");
+  changed = te::compile_runtime_policy(original.snapshot(), options);
+  check(te::PolicyRuntime(changed).decide(q).status() == "no_change");
+  q.mutable_advice_query()->set_state("We may call download later; network timeout");
+  check(te::PolicyRuntime(changed).decide(q).status() == "no_change");
+  q.add_observed_operations("read_file");
+  check(te::PolicyRuntime(changed).decide(q).status() == "no_change");
+  q.add_observed_operations("download");
+  check(te::PolicyRuntime(changed).decide(q).status() == "ready");
+  v1::RuntimePolicy restored;
+  check(restored.ParseFromString(changed.SerializeAsString()));
+  check(te::PolicyRuntime(restored).decide(q).SerializeAsString() == te::PolicyRuntime(changed).decide(q).SerializeAsString());
+  // L1 applicability cannot disable legacy source-gated action protection.
+  *options.mutable_action_rules(0)->mutable_source_experience() = original.options().approved_experiences(0);
+  const auto guarded = te::compile_runtime_policy(original.snapshot(), options);
+  auto action_query = query(guarded, "actions");
+  auto* action = action_query.add_actions(); action->set_action_id("a"); action->set_operation("video");
+  check(te::PolicyRuntime(guarded).decide(action_query).actions(0).decision() == "reject");
+  options.mutable_experience_overrides(0)->set_trigger_pattern(" \n ");
+  rejects([&] { te::compile_runtime_policy(original.snapshot(), options); });
+}
+
 void independent_actions() {
   auto p = policy(); te::PolicyRuntime runtime(p); auto q = query(p, "actions");
   for(auto id : {"video-bad", "video-ok", "independent"}) {
@@ -192,7 +250,28 @@ void generated_controls() {
   const auto p = policy();
   auto base = p.options(); base.clear_action_rules(); base.mutable_loop_rules(0)->set_max_no_progress(3);
   const auto settings = in::Json::parse(R"({"enabled":true,"prompt_file":"test.txt","actions":{"video":["image"]}})");
-  const auto draft = in::Json::parse(R"({"action_rules":[{"memory_id":"experience-a","operation":"video","required_arguments":["image"],"reason":"先确认素材"}],"loop_rules":[{"memory_id":"experience-a","max_iterations":3,"reason":"限制重复"}]})");
+  const auto generation_input = in::control_generation_input(p.snapshot(), base, settings);
+  check(generation_input["memories"].items().size() == 1);
+  check(generation_input["control_sources"].items().size() == 1
+      && generation_input["control_sources"].items().front().str("memory_id") == "orchestration-z");
+  auto redundant_replan = base;
+  redundant_replan.set_aggressive_controls(true);
+  redundant_replan.mutable_loop_rules(0)->set_max_no_progress(1);
+  const auto redundant_input = in::control_generation_input(p.snapshot(), redundant_replan, settings);
+  check(std::none_of(redundant_input["loop_primitives"].items().begin(),
+      redundant_input["loop_primitives"].items().end(), [](const auto& primitive) {
+        return primitive.str("primitive_id") == "replan_on_failure";
+      }));
+  const auto redundant_draft = in::Json::parse(R"({"action_rules":[],"loop_rules":[
+    {"memory_id":"experience-a","replan_on_failure":true,"reason":"与基础阈值相同"}]})");
+  bool redundant_rejected = false;
+  try { in::apply_control_draft(p.snapshot(), redundant_replan, settings, redundant_draft); }
+  catch(const in::Error& error) {
+    redundant_rejected = true;
+    check(std::string(error.what()) == "control_failure_replan_not_authorized");
+  }
+  check(redundant_rejected);
+  const auto draft = in::Json::parse(R"({"action_rules":[{"memory_id":"experience-a","operation":"video","required_arguments":["image"],"reason":"先确认素材"}],"loop_rules":[{"memory_id":"experience-a","max_iterations":6,"max_no_progress":2,"reason":"限制无进展重复"}]})");
   const auto learned = te::compile_runtime_policy(p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, draft));
   check(in::generated_controls_authorized(learned, te::compile_runtime_policy(p.snapshot(), base), settings));
   auto q = query(learned, "actions");
@@ -202,7 +281,7 @@ void generated_controls() {
   check(matched.actions(0).decision() == "reject" && matched.actions(1).decision() == "allow");
   check(matched.experiences_size() == 1);
   q.mutable_advice_query()->set_task("完全无关的算术问题");
-  check(te::PolicyRuntime(learned).decide(q).actions(0).decision() == "allow");
+  check(te::PolicyRuntime(learned).decide(q).actions(0).decision() == "reject");
   auto invalid = draft; invalid["loop_rules"].items()[0]["max_iterations"] = 100;
   bool rejected = false;
   try { in::apply_control_draft(p.snapshot(), base, settings, invalid); } catch(...) { rejected = true; }
@@ -212,10 +291,542 @@ void generated_controls() {
   check(rejected);
   auto altered = learned; altered.mutable_options()->mutable_loop_rules(1)->set_max_iterations(100);
   check(!in::generated_controls_authorized(altered, p, settings));
+  const auto automatic_settings = in::Json::parse(R"({"enabled":true,"prompt_file":"test.txt"})");
+  const auto automatic_draft = in::Json::parse(R"({"action_rules":[{"memory_id":"experience-a","primitive_id":"schema_required_nonempty","reason":"必填参数不能为空"}],"loop_rules":[]})");
+  const auto automatic = te::compile_runtime_policy(p.snapshot(),
+      in::apply_control_draft(p.snapshot(), base, automatic_settings, automatic_draft));
+  check(in::generated_controls_authorized(automatic,
+      te::compile_runtime_policy(p.snapshot(), base), automatic_settings));
+  auto automatic_query = query(automatic, "actions");
+  auto* schema_action = automatic_query.add_actions();
+  schema_action->set_action_id("schema-action"); schema_action->set_operation("any-tool");
+  schema_action->add_schema_required_arguments("items");
+  (*schema_action->mutable_arguments()->mutable_fields())["items"].mutable_list_value();
+  check(te::PolicyRuntime(automatic).decide(automatic_query).actions(0).decision() == "reject");
+  (*schema_action->mutable_arguments()->mutable_fields())["items"].mutable_list_value()->add_values()->set_string_value("one");
+  check(te::PolicyRuntime(automatic).decide(automatic_query).actions(0).decision() == "allow");
+  schema_action->add_schema_required_arguments("items");
+  rejects([&] { te::PolicyRuntime(automatic).decide(automatic_query); });
+  const auto retry_draft = in::Json::parse(R"({"action_rules":[{"memory_id":"experience-a","primitive_id":"repeat_failed_operation","reason":"同一技能连续两次失败后停止重复派发"}],"loop_rules":[]})");
+  const auto retry_policy = te::compile_runtime_policy(p.snapshot(),
+      in::apply_control_draft(p.snapshot(), base, automatic_settings, retry_draft));
+  check(in::generated_controls_authorized(retry_policy,
+      te::compile_runtime_policy(p.snapshot(), base), automatic_settings));
+  auto retry_query = query(retry_policy, "actions");
+  auto* retry_action = retry_query.add_actions();
+  retry_action->set_action_id("failed-skill"); retry_action->set_operation("forge-image-gen");
+  retry_action->set_prior_failures(1);
+  auto* independent_action = retry_query.add_actions();
+  independent_action->set_action_id("independent-skill"); independent_action->set_operation("outfit-stylist");
+  check(te::PolicyRuntime(retry_policy).decide(retry_query).actions(0).decision() == "allow");
+  retry_action->set_prior_failures(2);
+  const auto guarded = te::PolicyRuntime(retry_policy).decide(retry_query);
+  check(guarded.actions(0).decision() == "reject" && guarded.actions(1).decision() == "allow");
+  auto invalid_automatic = automatic;
+  invalid_automatic.mutable_options()->mutable_action_rules(0)->set_deny(true);
+  rejects([&] { te::compile_runtime_policy(invalid_automatic.snapshot(), invalid_automatic.options()); });
+}
+
+void failure_replanning() {
+  namespace in = te::integration;
+  const auto p = policy();
+  auto base = p.options(); base.mutable_loop_rules(0)->set_max_no_progress(3);
+  const auto settings = in::Json::parse(R"({"enabled":true,"prompt_file":"test.txt"})");
+  const auto draft = in::Json::parse(R"({"action_rules":[],"loop_rules":[{"memory_id":"experience-a","replan_on_failure":true,"reason":"失败后检查恢复路径"}]})");
+  const auto learned = te::compile_runtime_policy(p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, draft));
+  check(in::generated_controls_authorized(learned, te::compile_runtime_policy(p.snapshot(), base), settings));
+  te::PolicyRuntime runtime(learned);
+  auto q = query(learned, "loop"); q.set_iteration(1); q.set_state_fingerprint("initial");
+  *q.mutable_previous() = runtime.decide(q).progress();
+  q.set_iteration(2); q.set_state_fingerprint("changed-error-id"); q.set_failed_actions(1);
+  q.set_pending_actions(true); check(runtime.decide(q).progress().decision() == "continue");
+  q.set_pending_actions(false);
+  auto first = runtime.decide(q);
+  check(first.progress().decision() == "continue");
+  *q.mutable_previous() = first.progress();
+  q.set_iteration(3); q.set_state_fingerprint("changed-error-again"); q.set_repeated_failure_steps(1);
+  const auto decision = runtime.decide(q);
+  check(decision.progress().decision() == "replan" && decision.progress().no_progress() == 0);
+  *q.mutable_previous() = decision.progress();
+  q.set_iteration(4); q.set_state_fingerprint("different-error"); q.set_repeated_failure_steps(0);
+  check(runtime.decide(q).progress().decision() == "continue");
+  q.clear_previous(); q.set_execution_id("independent"); q.set_iteration(1); q.set_failed_actions(0);
+  check(runtime.decide(q).progress().decision() == "continue");
+}
+
+void skill_orchestration() {
+  auto p = policy(); auto options = p.options();
+  options.add_host_capabilities("schedule.dispatch");
+  auto* rule = options.add_schedule_rules();
+  rule->set_rule_id("plan-before-image"); rule->set_target_scope("coordinator");
+  rule->set_before_operation("planner"); rule->set_after_operation("image");
+  rule->set_require_success(true); rule->set_reason("先确认计划，再生成图片");
+  for(const auto& source : options.approved_experiences())
+    if(source.memory_id() == "orchestration-z") *rule->mutable_source_experience() = source;
+  p = te::compile_runtime_policy(p.snapshot(), options);
+  te::PolicyRuntime runtime(p);
+  auto q = query(p, "schedule");
+  for(const auto& pair : {std::make_pair("b", "image"), {"a", "planner"}, {"c", "report"}}) {
+    auto* action = q.add_actions(); action->set_action_id(pair.first); action->set_operation(pair.second);
+  }
+  const auto decision = runtime.decide(q);
+  check(decision.status() == "ready" && decision.schedule().rule_ids_size() == 1);
+  check(decision.schedule().actions(0).action_id() == "b"); // input order is not execution order
+  auto state = te::begin_schedule(decision.schedule());
+  check(te::ready_schedule(state) == std::vector<std::string>({"a", "c"}));
+  rejects([&] { te::advance_schedule(state, "b", "running"); });
+  rejects([&] { te::advance_schedule(state, "a", "succeeded"); }); // an ACK is not completion
+  state = te::advance_schedule(state, "a", "running");
+  check(te::ready_schedule(state) == std::vector<std::string>({"c"}));
+  v1::ScheduleState restored;
+  check(restored.ParseFromString(state.SerializeAsString()));
+  check(te::ready_schedule(restored) == std::vector<std::string>({"c"}));
+  state = te::advance_schedule(restored, "a", "succeeded");
+  check(te::ready_schedule(state) == std::vector<std::string>({"b", "c"}));
+  check(te::advance_schedule(state, "a", "succeeded").SerializeAsString() == state.SerializeAsString());
+  rejects([&] { te::advance_schedule(state, "a", "failed"); });
+  v1::RuntimeObservation actual;
+  auto observe = [&](const char* id, const char* status) {
+    auto* event = actual.add_schedule_events(); event->set_action_id(id); event->set_status(status);
+  };
+  observe("a", "running"); observe("c", "running"); observe("c", "succeeded");
+  observe("a", "succeeded"); observe("b", "running"); observe("b", "succeeded");
+  for(const auto* id : {"a", "b", "c"}) actual.add_executed_action_ids(id);
+  const auto receipt = runtime.verify(q, actual);
+  check(receipt.application().status() == "applied" && receipt.rule_ids_size() == 1);
+  auto reordered = actual;
+  reordered.mutable_schedule_events()->SwapElements(3, 4);
+  check(runtime.verify(q, reordered).application().status() == "failed");
+  actual.clear_schedule_events();
+  check(runtime.verify(q, actual).application().status() == "failed"); // a plan alone proves nothing
+
+  auto failed = te::begin_schedule(decision.schedule());
+  failed = te::advance_schedule(failed, "a", "running");
+  failed = te::advance_schedule(failed, "a", "failed");
+  check(failed.actions(0).status() == "skipped" && te::ready_schedule(failed) == std::vector<std::string>({"c"}));
+  failed = te::advance_schedule(failed, "c", "running");
+  failed = te::advance_schedule(failed, "c", "succeeded");
+  check(te::schedule_finished(failed));
+  observe("a", "running"); observe("a", "failed"); observe("c", "running"); observe("c", "succeeded");
+  actual.clear_executed_action_ids(); actual.add_executed_action_ids("a"); actual.add_executed_action_ids("c");
+  check(runtime.verify(q, actual).application().status() == "failed"); // skipped work needs an observation
+  actual.add_skipped_action_ids("b");
+  check(runtime.verify(q, actual).application().status() == "applied");
+
+  auto settled_options = options; settled_options.mutable_schedule_rules(0)->set_require_success(false);
+  auto settled = te::begin_schedule(te::plan_schedule(settled_options, q));
+  settled = te::advance_schedule(settled, "a", "running");
+  settled = te::advance_schedule(settled, "a", "failed");
+  check(te::ready_schedule(settled) == std::vector<std::string>({"b", "c"}));
+
+  auto plain = options; plain.clear_schedule_rules();
+  auto parallel = te::begin_schedule(te::plan_schedule(plain, q));
+  check(te::ready_schedule(parallel) == std::vector<std::string>({"b", "a", "c"}));
+  auto l1 = options; l1.set_requested_level(v1::L1);
+  check(te::plan_schedule(l1, q).status() == "unchanged");
+  auto foreign = q; foreign.mutable_advice_query()->set_target_scope("skill:worker");
+  check(te::plan_schedule(options, foreign).status() == "unchanged");
+  auto duplicate = q; auto* a2 = duplicate.add_actions(); a2->set_action_id("a2"); a2->set_operation("planner");
+  check(te::plan_schedule(options, duplicate).status() == "unchanged");
+  auto explicit_join = duplicate;
+  for(const auto* predecessor : {"a", "a2"}) explicit_join.mutable_actions(0)->add_after()->set_action_id(predecessor);
+  const auto joined = te::plan_schedule(options, explicit_join);
+  check(joined.actions(0).after_size() == 2 && joined.actions(0).after(0).require_success()
+      && joined.actions(0).after(1).require_success());
+  auto manual = options; manual.mutable_schedule_rules(0)->clear_source_experience();
+  check(te::plan_schedule(manual, duplicate).actions(0).after_size() == 2);
+
+  auto multilingual = options;
+  multilingual.mutable_schedule_rules(0)->add_task_terms("先完成");
+  auto* english = multilingual.add_schedule_rules(); *english = multilingual.schedule_rules(0);
+  english->set_rule_id("plan-before-image-en"); english->clear_task_terms(); english->add_task_terms("first complete");
+  auto chinese_task = q; chinese_task.mutable_advice_query()->set_task("先完成计划，再生成图片");
+  auto english_task = q; english_task.mutable_advice_query()->set_task("first complete the plan, then generate the image");
+  check(te::plan_schedule(multilingual, chinese_task).rule_ids(0) == "plan-before-image");
+  check(te::plan_schedule(multilingual, english_task).rule_ids(0) == "plan-before-image-en");
+  const auto hinted_policy = te::compile_runtime_policy(p.snapshot(), multilingual);
+  te::PolicyRuntime hinted(hinted_policy);
+  auto first_model = query(hinted_policy, "llm");
+  first_model.mutable_advice_query()->set_task("先完成计划，再生成图片");
+  const auto hint = hinted.decide(first_model);
+  check(hint.context().find("planner") != std::string::npos
+      && hint.context().find("image") != std::string::npos);
+  check(hint.experiences_size() == 0); // A planning hint is not an L1 experience receipt.
+  first_model.add_observed_operations("planner");
+  check(hinted.decide(first_model).context().empty());
+  first_model.clear_observed_operations();
+  first_model.mutable_advice_query()->set_task("独立生成报告");
+  check(hinted.decide(first_model).context().empty());
+  auto same_guard = multilingual; same_guard.mutable_schedule_rules(1)->set_task_terms(0, "先完成");
+  rejects([&] { te::validate_schedule_rules(same_guard); });
+
+  // Host prerequisites win when a learned edge would create a cycle.
+  auto host_order = q;
+  host_order.mutable_actions(1)->add_after()->set_action_id("b");
+  const auto conflict = te::plan_schedule(options, host_order);
+  check(conflict.status() == "conflict" && conflict.rule_ids_size() == 0);
+  check(te::ready_schedule(te::begin_schedule(conflict)) == std::vector<std::string>({"b", "c"}));
+  auto cyclic = options;
+  auto* reverse = cyclic.add_schedule_rules(); *reverse = cyclic.schedule_rules(0);
+  reverse->set_rule_id("reverse"); reverse->set_before_operation("image"); reverse->set_after_operation("planner");
+  rejects([&] { te::compile_runtime_policy(p.snapshot(), cyclic); });
+  auto alternative = cyclic;
+  alternative.mutable_schedule_rules(0)->add_task_terms("先完成计划");
+  alternative.mutable_schedule_rules(0)->add_exclude_terms("先生成图片");
+  alternative.mutable_schedule_rules(1)->add_task_terms("先生成图片");
+  alternative.mutable_schedule_rules(1)->add_exclude_terms("先完成计划");
+  const auto alternative_policy = te::compile_runtime_policy(p.snapshot(), alternative);
+  auto forward_task = q; forward_task.mutable_advice_query()->set_task("先完成计划，然后生成图片");
+  auto reverse_task = q; reverse_task.mutable_advice_query()->set_task("先生成图片，然后完成计划");
+  check(te::PolicyRuntime(alternative_policy).decide(forward_task).schedule().rule_ids(0) == "plan-before-image");
+  check(te::PolicyRuntime(alternative_policy).decide(reverse_task).schedule().rule_ids(0) == "reverse");
+  alternative.mutable_schedule_rules(0)->clear_exclude_terms();
+  alternative.mutable_schedule_rules(1)->clear_exclude_terms();
+  rejects([&] { te::compile_runtime_policy(p.snapshot(), alternative); });
+  alternative.mutable_schedule_rules(0)->add_exclude_terms("计划");
+  rejects([&] { te::compile_runtime_policy(p.snapshot(), alternative); });
+  auto invalid = q; invalid.mutable_actions(0)->add_after()->set_action_id("not-in-batch");
+  rejects([&] { te::plan_schedule(options, invalid); });
+  invalid = q; invalid.mutable_actions(0)->add_after()->set_action_id("b");
+  rejects([&] { te::plan_schedule(options, invalid); });
+  auto compatible = p.options(); compatible.clear_schedule_rules();
+  compatible.clear_host_capabilities(); compatible.set_requested_level(v1::L2);
+  compatible.add_host_capabilities("schedule.dispatch");
+  check(te::compile_runtime_policy(p.snapshot(), compatible).effective_level() == v1::L2);
+
+  namespace in = te::integration;
+  const auto settings = in::Json::parse(R"({"enabled":true,"prompt_file":"test.txt"})");
+  const auto draft = in::Json::parse(R"({"action_rules":[],"loop_rules":[],"schedule_rules":[{"memory_id":"experience-a","before_operation":"planner","after_operation":"image","require_success":true,"task_terms":["先完成","生成视频"],"exclude_terms":["互不依赖"],"reason":"先确认计划再生成"}]})");
+  auto base = options; base.clear_schedule_rules();
+  const auto learned = te::compile_runtime_policy(p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, draft));
+  check(in::generated_controls_authorized(learned, te::compile_runtime_policy(p.snapshot(), base), settings));
+  check(in::without_generated_controls(learned.options()).schedule_rules_size() == 0);
+  auto dependent = q;
+  dependent.mutable_advice_query()->set_task("请先完成 planner，再生成视频");
+  check(te::PolicyRuntime(learned).decide(dependent).schedule().status() == "scheduled");
+  const auto variant_draft = in::Json::parse(R"({"action_rules":[],"loop_rules":[],"schedule_rules":[{"memory_id":"experience-a","before_operation":"planner","after_operation":"image","require_success":true,"task_terms":["先完成"],"reason":"先完成计划"},{"memory_id":"experience-a","before_operation":"planner","after_operation":"image","require_success":true,"task_terms":["first complete"],"reason":"Complete the plan first"}]})");
+  const auto variant_policy = te::compile_runtime_policy(p.snapshot(),
+      in::apply_control_draft(p.snapshot(), base, settings, variant_draft));
+  check(in::generated_controls_authorized(variant_policy, te::compile_runtime_policy(p.snapshot(), base), settings));
+  auto english_dependent = q;
+  english_dependent.mutable_advice_query()->set_task("first complete planner, then generate image");
+  check(te::PolicyRuntime(variant_policy).decide(english_dependent).schedule().status() == "scheduled");
+  auto independent = q;
+  independent.mutable_advice_query()->set_task("请分别完成 planner 和生成视频，两个任务互不依赖");
+  check(te::PolicyRuntime(learned).decide(independent).schedule().status() == "unchanged");
+  independent.mutable_advice_query()->set_task("请先完成 planner，再生成视频；但两项互不依赖");
+  check(te::PolicyRuntime(learned).decide(independent).schedule().status() == "unchanged");
+  auto changed = learned; changed.mutable_options()->mutable_schedule_rules(0)->set_rule_id("unverified-rule");
+  check(!in::generated_controls_authorized(changed, te::compile_runtime_policy(p.snapshot(), base), settings));
+  check(in::control_generation_input(p.snapshot(), base, settings).has("schedule_primitives"));
+  base.clear_host_capabilities(); base.add_host_capabilities("action.filter");
+  check(!in::control_generation_input(p.snapshot(), base, settings).has("schedule_primitives"));
+  try { in::apply_control_draft(p.snapshot(), base, settings, draft); throw std::runtime_error("schedule capability missing"); }
+  catch(const in::Error& error) { check(std::string(error.what()) == "control_schedule_not_authorized"); }
+}
+
+void aggressive_controls() {
+  namespace in = te::integration;
+  const auto p = policy(); auto opts = p.options();
+  *opts.mutable_action_rules(0)->mutable_source_experience() = opts.approved_experiences(0);
+  *opts.mutable_loop_rules(0)->mutable_source_experience() = opts.approved_experiences(0);
+  opts.mutable_loop_rules(0)->set_no_progress_decision("stop");
+  const auto strict = te::compile_runtime_policy(p.snapshot(), opts);
+  auto q = query(strict, "actions"); q.mutable_advice_query()->set_task("unrelated language");
+  auto* action = q.add_actions(); action->set_action_id("video-a"); action->set_operation("video");
+  check(te::PolicyRuntime(strict).decide(q).actions(0).decision() == "allow");
+  opts.set_aggressive_controls(true);
+  const auto aggressive = te::compile_runtime_policy(p.snapshot(), opts);
+  check(aggressive.policy_id() != strict.policy_id());
+  check(te::PolicyRuntime(aggressive).decide(q).actions(0).decision() == "reject");
+  q.clear_actions(); q.set_boundary("loop"); q.set_iteration(1); q.set_state_fingerprint("new-state");
+  q.set_repeated_failure_steps(1);
+  check(te::PolicyRuntime(strict).decide(q).progress().decision() == "continue");
+  check(te::PolicyRuntime(aggressive).decide(q).progress().decision() == "stop");
+  q.set_pending_actions(true);
+  check(te::PolicyRuntime(aggressive).decide(q).progress().decision() == "continue");
+  q.set_pending_actions(false); q.mutable_advice_query()->set_target_scope("skill:worker");
+  check(te::PolicyRuntime(aggressive).decide(q).progress().decision() == "continue");
+  auto base = p.options(); base.set_aggressive_controls(true); base.clear_action_rules();
+  const auto settings = in::Json::parse(R"({"enabled":true,"prompt_file":"test.txt","min_iterations":1})");
+  const auto draft = in::Json::parse(R"({"action_rules":[],"loop_rules":[{"memory_id":"experience-a","max_iterations":2,"reason":"按实际试验缩短分支预算"}]})");
+  const auto learned = te::compile_runtime_policy(p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, draft));
+  check(in::generated_controls_authorized(learned, te::compile_runtime_policy(p.snapshot(), base), settings));
+  const auto actor_draft = in::Json::parse(R"({"action_rules":[],"loop_rules":[{"memory_id":"experience-a","actor_id":"coordinator","max_iterations":2,"reason":"只限制协调分支"}]})");
+  const auto actor_policy = te::compile_runtime_policy(p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, actor_draft));
+  auto actor_query = query(actor_policy, "loop"); actor_query.set_iteration(3);
+  actor_query.set_state_fingerprint("new-state"); actor_query.set_actor_id("coordinator");
+  check(te::PolicyRuntime(actor_policy).decide(actor_query).progress().decision() == "stop");
+  actor_query.set_actor_id("worker");
+  check(te::PolicyRuntime(actor_policy).decide(actor_query).progress().decision() == "continue");
+  const auto aggressive_input = in::control_generation_input(p.snapshot(), base, settings);
+  check(aggressive_input["loop_primitives"].items().size() == 3);
+  for(const auto& primitive : aggressive_input["loop_primitives"].items())
+    check(primitive.str("primitive_id") != "replan_on_failure");
+  auto stopped = base; auto* stopped_loop = stopped.mutable_loop_rules(0);
+  stopped_loop->set_no_progress_decision("stop"); stopped_loop->set_max_replans(0);
+  const auto stopped_input = in::control_generation_input(p.snapshot(), stopped, settings);
+  check(stopped_input["loop_primitives"].items().size() == 2);
+  for(const auto& primitive : stopped_input["loop_primitives"].items())
+    check(primitive.str("primitive_id") != "replan_on_failure");
+  base.set_aggressive_controls(false);
+  try { in::apply_control_draft(p.snapshot(), base, settings, draft); throw std::runtime_error("unapproved aggressive limit"); }
+  catch(const in::Error& error) { check(std::string(error.what()) == "control_loop_semantic_scope_required"); }
+}
+
+void actor_scoped_loops() {
+  namespace in = te::integration;
+  const auto original = policy(); auto base = original.options();
+  base.set_aggressive_controls(true);
+  const auto settings = in::Json::parse(R"({"enabled":true,"prompt_file":"test.txt","min_iterations":1})");
+  const auto draft = in::Json::parse(R"({"action_rules":[],"loop_rules":[
+    {"memory_id":"experience-a","actor_id":"planner","max_iterations":2,"reason":"规划分支预算"},
+    {"memory_id":"experience-a","actor_id":"worker","max_iterations":4,"reason":"执行分支预算"},
+    {"memory_id":"experience-a","max_iterations":5,"reason":"其他分支预算"}]})");
+  const auto compiled = te::compile_runtime_policy(original.snapshot(), in::apply_control_draft(original.snapshot(), base, settings, draft));
+  check(in::generated_controls_authorized(compiled, te::compile_runtime_policy(original.snapshot(), base), settings));
+  for(bool reverse : {false, true}) {
+    auto options = compiled.options();
+    if(reverse) options.mutable_loop_rules()->SwapElements(1, 3);
+    const auto current = te::compile_runtime_policy(original.snapshot(), options);
+    auto q = query(current, "loop"); q.set_iteration(3); q.set_state_fingerprint("progress");
+    q.set_actor_id("planner"); check(te::PolicyRuntime(current).decide(q).progress().decision() == "stop");
+    q.set_actor_id("worker"); check(te::PolicyRuntime(current).decide(q).progress().decision() == "continue");
+    q.set_iteration(5); check(te::PolicyRuntime(current).decide(q).progress().decision() == "stop");
+    q.set_actor_id("other"); check(te::PolicyRuntime(current).decide(q).progress().decision() == "continue");
+    q.set_iteration(6); check(te::PolicyRuntime(current).decide(q).progress().decision() == "stop");
+  }
+  auto duplicate = draft; duplicate["loop_rules"].push(draft["loop_rules"].items()[0]);
+  try { in::apply_control_draft(original.snapshot(), base, settings, duplicate); throw std::runtime_error("duplicate actor accepted"); }
+  catch(const in::Error& error) { check(std::string(error.what()) == "control_duplicate_loop_scope"); }
+  auto scoped_base = base;
+  scoped_base.mutable_loop_rules(0)->set_max_no_progress(3);
+  auto* worker_base = scoped_base.add_loop_rules(); *worker_base = scoped_base.loop_rules(0);
+  worker_base->set_rule_id("worker-base"); worker_base->set_actor_id("worker");
+  worker_base->set_no_progress_decision("stop"); worker_base->set_max_replans(0); worker_base->clear_replan_context();
+  const auto unauthorized = in::Json::parse(R"({"action_rules":[],"loop_rules":[
+    {"memory_id":"experience-a","actor_id":"worker","replan_on_failure":true,"reason":"另一个分支拥有重规划预算"}]})");
+  try { in::apply_control_draft(original.snapshot(), scoped_base, settings, unauthorized); throw std::runtime_error("cross-actor replan accepted"); }
+  catch(const in::Error& error) { check(std::string(error.what()) == "control_failure_replan_not_authorized"); }
+
+  in::Json events = in::Json::Array{};
+  for(const auto* actor : {"planner", "worker", "other"}) {
+    auto q = query(compiled, "loop"); q.set_actor_id(actor); q.set_iteration(3); q.set_state_fingerprint("progress");
+    q.mutable_advice_query()->set_query_id(actor); q.mutable_advice_query()->set_decision_id(actor);
+    events.push(in::Json{{"kind", "custom"}, {"attributes", in::Json{{"type", "policy.query"},
+        {"decision", in::json(te::PolicyRuntime(compiled).decide(q))}}}});
+  }
+  te::dataset::v1::TaskEvaluationReport report;
+  *report.mutable_configuration() = in::proto<google::protobuf::Struct>(in::Json{{"variants", in::Json::Array{
+      in::Json{{"id", "candidate"}, {"version", "actor-version"}}}}});
+  auto* trial = report.add_trials(); trial->set_variant_id("candidate"); trial->set_execution_status("completed"); trial->set_verdict("passed");
+  *trial->mutable_evidence() = in::proto<google::protobuf::Struct>(in::Json{{"loaded_version", "actor-version"},
+      {"trace", in::Json{{"events", events}}}});
+  const auto coverage = in::control_coverage(in::Json{{"level", "L3"}, {"policy", in::json(compiled)}}, report);
+  for(const auto& rule : compiled.options().loop_rules()) if(rule.has_source_experience())
+    check(coverage["rules"][rule.rule_id()].num("queries", 0) == (rule.actor_id().empty() ? 3 : 1));
+}
+
+void independent_workflow_pairs() {
+  auto p = policy(); auto options = p.options(); options.add_host_capabilities("schedule.dispatch");
+  auto* rule = options.add_schedule_rules();
+  rule->set_rule_id("prepare-image-pair"); rule->set_target_scope("coordinator");
+  rule->set_before_operation("prepare"); rule->set_after_operation("image");
+  rule->set_require_success(true); rule->set_reason("Each image requires its own prepared input.");
+  *rule->mutable_source_experience() = options.approved_experiences(0);
+  p = te::compile_runtime_policy(p.snapshot(), options);
+  auto q = query(p, "schedule");
+  for(const auto& pair : {std::make_pair("a1", "prepare"), {"b1", "image"},
+                         {"a2", "prepare"}, {"b2", "image"}, {"independent", "lookup"}}) {
+    auto* action = q.add_actions(); action->set_action_id(pair.first); action->set_operation(pair.second);
+  }
+  check(te::plan_schedule(options, q).status() == "unchanged");
+  q.mutable_actions(1)->add_after()->set_action_id("a1");
+  q.mutable_actions(3)->add_after()->set_action_id("a2");
+  const auto plan = te::plan_schedule(options, q);
+  check(plan.status() == "scheduled" && plan.actions(1).after_size() == 1 && plan.actions(3).after_size() == 1);
+  auto state = te::begin_schedule(plan);
+  state = te::advance_schedule(state, "a1", "running");
+  state = te::advance_schedule(state, "a2", "running");
+  state = te::advance_schedule(state, "a1", "failed");
+  state = te::advance_schedule(state, "a2", "succeeded");
+  check(state.actions(1).status() == "skipped");
+  check(te::ready_schedule(state) == std::vector<std::string>({"b2", "independent"}));
+}
+
+void same_operation_orchestration() {
+  auto p = policy(); auto options = p.options();
+  options.add_host_capabilities("schedule.dispatch");
+  auto* rule = options.add_schedule_rules();
+  rule->set_rule_id("one-render-at-a-time"); rule->set_target_scope("coordinator");
+  rule->set_before_operation("render"); rule->set_after_operation("render");
+  rule->set_require_success(false); rule->set_reason("同一资源上的调用按提交顺序执行");
+  const auto compiled = te::compile_runtime_policy(p.snapshot(), options);
+  auto q = query(compiled, "schedule");
+  for(const auto& pair : {std::make_pair("r1", "render"), {"other", "lookup"}, {"r2", "render"}, {"r3", "render"}}) {
+    auto* action = q.add_actions(); action->set_action_id(pair.first); action->set_operation(pair.second);
+  }
+  auto state = te::begin_schedule(te::PolicyRuntime(compiled).decide(q).schedule());
+  check(te::ready_schedule(state) == std::vector<std::string>({"r1", "other"}));
+  state = te::advance_schedule(state, "r1", "running");
+  state = te::advance_schedule(state, "r1", "failed");
+  check(te::ready_schedule(state) == std::vector<std::string>({"other", "r2"}));
+  state = te::advance_schedule(state, "r2", "running");
+  state = te::advance_schedule(state, "r2", "succeeded");
+  check(te::ready_schedule(state) == std::vector<std::string>({"other", "r3"}));
+  auto conflict = q; conflict.mutable_actions(0)->add_after()->set_action_id("r3");
+  check(te::plan_schedule(options, conflict).status() == "conflict");
+  options.clear_schedule_rules();
+  check(te::ready_schedule(te::begin_schedule(te::plan_schedule(options, q)))
+      == std::vector<std::string>({"r1", "other", "r2", "r3"}));
+}
+
+void level_application_coverage() {
+  namespace in = te::integration;
+  auto p = policy(); auto options = p.options(); options.add_host_capabilities("schedule.dispatch");
+  auto* rule = options.add_schedule_rules();
+  rule->set_rule_id("order"); rule->set_target_scope("coordinator");
+  rule->set_before_operation("prepare"); rule->set_after_operation("image"); rule->set_reason("prepare first");
+  p = te::compile_runtime_policy(p.snapshot(), options); te::PolicyRuntime runtime(p);
+  const in::Json artifact{{"level", "L3"}, {"policy", in::json(p)}};
+  te::dataset::v1::TaskEvaluationReport report;
+  *report.mutable_configuration() = in::proto<google::protobuf::Struct>(in::Json{{"variants", in::Json::Array{
+      in::Json{{"id", "candidate"}, {"version", "fixture-version"}}}}});
+  auto* trial = report.add_trials(); trial->set_variant_id("candidate"); trial->set_execution_status("completed"); trial->set_verdict("passed");
+  in::Json events = in::Json::Array{};
+  auto coverage = [&] {
+    *trial->mutable_evidence() = in::proto<google::protobuf::Struct>(in::Json{{"loaded_version", "fixture-version"},
+        {"trace", in::Json{{"events", events}}}});
+    return in::control_coverage(artifact, report);
+  };
+  auto result = coverage();
+  check(result.flag("complete", false) && !result.flag("level_complete", true));
+  auto observe = [&](v1::RuntimeQuery q, const v1::RuntimeObservation& observed) {
+    q.mutable_advice_query()->set_query_id(q.boundary()); q.mutable_advice_query()->set_decision_id(q.boundary());
+    const auto decision = runtime.decide(q); const auto receipt = runtime.verify(q, observed);
+    events.push(in::Json{{"kind", "custom"}, {"attributes", in::Json{{"type", "policy.query"}, {"decision", in::json(decision)}}}});
+    events.push(in::Json{{"kind", "advice.applied"}, {"application", in::json(receipt.application())},
+        {"attributes", in::Json{{"receipt", in::json(receipt)}}}});
+  };
+  auto q = query(p); v1::RuntimeObservation observed; observed.set_call_id("model"); observed.set_transport_allowed(true);
+  *observed.mutable_request() = in::proto<google::protobuf::Struct>(in::Json{{"messages", in::Json::Array{
+      in::Json{{"role", "system"}, {"content", runtime.decide(q).context()}}}}});
+  observe(q, observed); result = coverage();
+  check(result["capabilities"]["llm"].num("applied", 0) == 1 && !result.flag("level_complete", true));
+  q = query(p, "schedule");
+  for(const auto& name : {"image", "prepare"}) { auto* a = q.add_actions(); a->set_action_id(name); a->set_operation(name); }
+  observed.Clear(); observe(q, observed); // An unexecuted plan cannot close the capability gap.
+  result = coverage(); check(result["capabilities"]["schedule"].num("applied", 0) == 0);
+  events.items().resize(2);
+  for(const auto& pair : {std::make_pair("prepare", "running"), {"prepare", "succeeded"}, {"image", "running"}, {"image", "succeeded"}}) {
+    auto* event = observed.add_schedule_events(); event->set_action_id(pair.first); event->set_status(pair.second);
+  }
+  observed.add_executed_action_ids("prepare"); observed.add_executed_action_ids("image"); observe(q, observed);
+  q = query(p, "loop"); q.set_iteration(7); q.set_state_fingerprint("state");
+  observed.Clear(); observed.set_loop_decision("stop"); observe(q, observed);
+  result = coverage();
+  check(result.flag("level_complete", false) && result["capabilities"]["schedule"].num("applied", 0) == 1
+      && result["capabilities"]["loop"].num("applied", 0) == 1);
+}
+
+void bounded_recovery_budget() {
+  namespace in = te::integration;
+  const auto p = policy(); auto base = p.options();
+  base.set_aggressive_controls(true); base.mutable_loop_rules(0)->set_max_no_progress(1);
+  const auto settings = in::Json::parse(R"({"enabled":true,"prompt_file":"test.txt"})");
+  const auto draft = in::Json::parse(R"({"action_rules":[],"loop_rules":[
+    {"memory_id":"experience-a","actor_id":"worker","max_replans":0,"reason":"重规划后仍无进展"}]})");
+  const auto original = te::compile_runtime_policy(p.snapshot(), base);
+  const auto learned = te::compile_runtime_policy(p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, draft));
+  check(in::generated_controls_authorized(learned, original, settings));
+  auto q = query(learned, "loop"); q.set_actor_id("worker"); q.set_iteration(3);
+  q.set_state_fingerprint("changed"); q.set_failed_actions(1);
+  check(te::PolicyRuntime(learned).decide(q).progress().decision() == "continue");
+  q.set_repeated_failure_steps(1);
+  check(te::PolicyRuntime(learned).decide(q).progress().decision() == "stop");
+  q.set_pending_actions(true);
+  check(te::PolicyRuntime(learned).decide(q).progress().decision() == "continue");
+  q.set_pending_actions(false); q.set_actor_id("independent-worker");
+  check(te::PolicyRuntime(learned).decide(q).progress().decision() == "replan");
+  auto invalid = draft; invalid["loop_rules"].items()[0]["max_replans"] = 2;
+  bool rejected = false;
+  try { in::apply_control_draft(p.snapshot(), base, settings, invalid); }
+  catch(const in::Error& error) { rejected = std::string(error.what()) == "control_loop_relaxes_limit"; }
+  check(rejected);
+}
+
+void target_retry_rule() {
+  namespace in = te::integration;
+  const auto p = policy(); auto base = p.options(); base.clear_action_rules();
+  const auto settings = in::Json::parse(R"({"enabled":true,"prompt_file":"test.txt"})");
+  const auto draft = in::Json::parse(R"({"action_rules":[{"memory_id":"experience-a",
+    "primitive_id":"repeat_failed_target","operation":"generate","failure_key_arguments":["output"],
+    "max_failed_attempts":2,"reason":"同一目标失败后停止重派发"}],"loop_rules":[]})");
+  const auto learned = te::compile_runtime_policy(p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, draft));
+  check(in::generated_controls_authorized(learned, te::compile_runtime_policy(p.snapshot(), base), settings));
+  const auto& rule = learned.options().action_rules(0);
+  check(rule.failure_key_arguments_size() == 1 && rule.failure_key_arguments(0) == "output");
+  auto q = query(learned, "actions"); auto* action = q.add_actions();
+  action->set_action_id("next-execution"); action->set_operation("generate");
+  action->set_prior_failures(50);
+  check(te::PolicyRuntime(learned).decide(q).actions(0).decision() == "allow");
+  (*action->mutable_target_failures())[rule.rule_id()] = 2;
+  check(te::PolicyRuntime(learned).decide(q).actions(0).decision() == "reject");
+  action->set_operation("independent");
+  check(te::PolicyRuntime(learned).decide(q).actions(0).decision() == "allow");
+  auto invalid = draft; invalid["action_rules"].items()[0]["failure_key_arguments"] = in::Json::Array{"output", "output"};
+  bool rejected = false;
+  try { in::apply_control_draft(p.snapshot(), base, settings, invalid); } catch(const in::Error&) { rejected = true; }
+  check(rejected);
+}
+
+void schedule_execution_contract() {
+  namespace in = te::integration; using in::Json;
+  const auto constraints = Json::parse(R"({"dependency":"A_before_B","stop_on_failure":true})");
+  auto evidence = Json::parse(R"({"trace":{"events":[
+    {"step_id":"batch","attributes":{"type":"policy.query","decision":{"query":{"boundary":"schedule"},
+      "schedule":{"actions":[{"action_id":"A"},{"action_id":"B","after":[{"action_id":"A"}]}]}}}},
+    {"step_id":"batch","kind":"action.end","status":"failed","attributes":{"type":"schedule.action","logical_action_id":"A","executed":true}},
+    {"step_id":"batch","kind":"action.start","attributes":{"type":"schedule.action","logical_action_id":"B","executed":true}}
+  ]}})");
+  check(in::schedule_contract_check(constraints, evidence).str("status") == "failed");
+  check(in::schedule_contract_check(Json::Object{}, evidence).null());
+  check(in::schedule_contract_check(Json{{"dependency", Json::Array{"A", "B"}},
+      {"stop_on_failure", true}}, evidence).null());
+  check(in::schedule_contract_check(Json{{"dependency", "A_before_B"},
+      {"stop_on_failure", "true"}}, evidence).null());
+  auto independent = constraints; independent["dependency"] = "independent";
+  check(in::schedule_contract_check(independent, evidence).null());
+  auto& events = evidence["trace"]["events"].items();
+  events[2]["attributes"]["logical_action_id"] = "C";
+  check(in::schedule_contract_check(constraints, evidence).str("status") == "passed");
+  events[2]["attributes"]["logical_action_id"] = "B";
+  events[2]["attributes"]["executed"] = false;
+  check(in::schedule_contract_check(constraints, evidence).str("status") == "passed");
+  events[2]["attributes"]["executed"] = true; events[1]["status"] = "completed";
+  check(in::schedule_contract_check(constraints, evidence).str("status") == "passed");
+  events[1]["attributes"]["observed_failure"] = true;
+  events[0]["attributes"]["decision"]["schedule"]["actions"].items()[1]["after"].items()[0]["require_success"] = true;
+  check(in::schedule_contract_check(Json::Object{}, evidence).str("status") == "failed");
+  std::reverse(events.begin(), events.end());
+  check(in::schedule_contract_check(constraints, evidence).str("status") == "failed");
+  Json multi{{"traces", Json::Array{evidence["trace"], Json{{"events", Json::Array{}}}}}};
+  check(in::schedule_contract_check(constraints, multi).str("status") == "failed");
 }
 
 int main() {
-  try { injection_and_evidence(); independent_actions(); loop_controls(); generated_controls(); }
+  const std::vector<std::pair<const char*, void(*)()>> cases = {
+    {"injection_and_evidence", injection_and_evidence}, {"evolvable_applicability", evolvable_applicability},
+    {"independent_actions", independent_actions}, {"loop_controls", loop_controls},
+    {"generated_controls", generated_controls}, {"failure_replanning", failure_replanning},
+    {"bounded_recovery_budget", bounded_recovery_budget},
+    {"target_retry_rule", target_retry_rule}, {"schedule_execution_contract", schedule_execution_contract},
+    {"skill_orchestration", skill_orchestration}, {"independent_workflow_pairs", independent_workflow_pairs},
+    {"same_operation_orchestration", same_operation_orchestration}, {"level_application_coverage", level_application_coverage},
+    {"aggressive_controls", aggressive_controls}, {"actor_scoped_loops", actor_scoped_loops}};
+  try { for(const auto& test : cases) {
+    try { test.second(); } catch(const std::exception& error) { throw std::runtime_error(std::string(test.first) + ": " + error.what()); }
+  } }
   catch(const std::exception& exc) { std::cerr << exc.what() << '\n'; return 1; }
   std::cout << "L1-L3 policy boundaries passed\n";
 }

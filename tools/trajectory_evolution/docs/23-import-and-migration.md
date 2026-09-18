@@ -83,8 +83,8 @@ target_link_libraries(your_target PRIVATE TrajectoryEvolution::core)
 
 ## 实现定位
 
-- `src/learn_cli.cpp`
-- `src/integration_service.cpp::import_file`
+- `src/cli/learn_cli.cpp`
+- `src/service/integration_service.cpp::import_file`
 - `include/trajectory_evolution/evolution.h`
 - `integrations/agentflow/`
 - `examples/standalone-consumer/`

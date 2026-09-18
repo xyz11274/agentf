@@ -160,28 +160,8 @@ bool SessionRouter::handle_route_message(const MMAgentMsgQue::Message& message) 
   const std::string route_key = (!user_id.empty() || !client_id.empty()) ? user_id + ":" + client_id : std::string();
   const std::string session_hint = session_it != message.metadata.end() ? session_it->second : std::string();
 
-  std::shared_ptr<MMAgentSession> session;
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if(!route_key.empty()) {
-      if(const auto routed = active_routes_.find(route_key); routed != active_routes_.end()) {
-        session = routed->second;
-      }
-    }
-    if(!session && !session_hint.empty()) {
-      if(const auto physical = physical_sessions_.find(session_hint); physical != physical_sessions_.end()) {
-        session = physical->second;
-      }
-    }
-  }
-  if(!session) {
-    session = allocate_session_for_route(route_key, user_id, client_id, session_hint);
-  } else if(!route_key.empty()) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    active_routes_[route_key] = session;
-    session_to_route_[session->get_session_id()] = route_key;
-    session->bind_route(user_id, client_id);
-  }
+  // Allocation owns lookup, reservation and identity validation as one operation.
+  auto session = allocate_session_for_route(route_key, user_id, client_id, session_hint);
 
   RouteHandler handler;
   {
@@ -198,56 +178,97 @@ bool SessionRouter::handle_route_message(const MMAgentMsgQue::Message& message) 
 std::shared_ptr<MMAgentSession> SessionRouter::allocate_session_for_route(
     const std::string& route_key, const std::string& user_id, const std::string& client_id,
     const std::string& session_hint) {
-  // First, try to find a session without holding the lock (for factory call)
   SessionFactory factory_copy;
+  std::shared_ptr<MMAgentSession> session;
   {
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
+    // Same-route requests wait for initialization, including a factory running
+    // outside this mutex. They must never observe a partially bound session.
+    if(!route_key.empty()) {
+      allocation_cv_.wait(lock, [&] { return pending_routes_.count(route_key) == 0; });
+      if(const auto it = active_routes_.find(route_key); it != active_routes_.end()) {
+        return it->second;
+      }
+    }
+    if(!session_hint.empty()) {
+      const auto found = physical_sessions_.find(session_hint);
+      if(found != physical_sessions_.end()) {
+        // A physical session hint is not permission to overwrite its owner.
+        if(reserved_sessions_.count(session_hint)) {
+          return nullptr;
+        }
+        const auto owner = session_to_route_.find(session_hint);
+        if(owner != session_to_route_.end()) {
+          return route_key.empty() || owner->second == route_key ? found->second : nullptr;
+        }
+        // Internal control messages address a physical session without a user
+        // route. Preserve its running tasks even if it was activated directly.
+        if(route_key.empty()) {
+          return found->second;
+        }
+        session = found->second;
+      }
+    }
+    if(!session) {
+      for(const auto& candidate : session_pool_) {
+        if(candidate && !reserved_sessions_.count(candidate->get_session_id()) &&
+           !session_to_route_.count(candidate->get_session_id()) && candidate->is_available()) {
+          session = candidate;
+          break;
+        }
+      }
+    }
+    if(!route_key.empty()) pending_routes_.insert(route_key);
+    if(session) reserved_sessions_.insert(session->get_session_id());
     factory_copy = session_factory_;
   }
 
-  std::shared_ptr<MMAgentSession> session;
-  if(!session_hint.empty()) {
+  auto finish = [&](bool publish) {
     std::lock_guard<std::mutex> lock(mutex_);
-    if(const auto it = physical_sessions_.find(session_hint); it != physical_sessions_.end()) {
-      session = it->second;
+    if(session) {
+      if(publish) {
+        physical_sessions_[session->get_session_id()] = session;
+        if(!route_key.empty()) {
+          active_routes_[route_key] = session;
+          session_to_route_[session->get_session_id()] = route_key;
+        }
+      }
+      reserved_sessions_.erase(session->get_session_id());
     }
-  }
-  if(!session) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for(const auto& candidate : session_pool_) {
-      if(candidate && candidate->is_available()) {
-        session = candidate;
-        break;
+    pending_routes_.erase(route_key);
+    allocation_cv_.notify_all();
+  };
+  try {
+    if(!session && factory_copy) {
+      session = factory_copy(user_id, client_id);
+      if(session) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto id = session->get_session_id();
+        if(reserved_sessions_.count(id) || session_to_route_.count(id)) {
+          session.reset();  // A factory must return a new unowned session.
+        } else {
+          reserved_sessions_.insert(id);
+        }
       }
     }
-  }
-
-  // If no pool session available, use factory to create a new session
-  if(!session && factory_copy) {
-    // Create session outside of lock to avoid potential deadlock
-    session = factory_copy(user_id, client_id);
-    if(session) {
-      std::lock_guard<std::mutex> lock(mutex_);
-      // Register the new session
-      physical_sessions_[session->get_session_id()] = session;
-      Logger::instance().info_f("[SessionRouter] Created new session via factory: session_id=%s for route=%s",
-                               session->get_session_id().c_str(), route_key.c_str());
+    if(!session) {
+      finish(false);
+      return nullptr;
     }
+    // Keep callbacks and expensive construction outside the router mutex, while
+    // the reservation prevents any other route from selecting this session.
+    session->reset_for_pool();
+    if(!session->activate()) {
+      finish(false);
+      return nullptr;
+    }
+    if(!route_key.empty()) session->bind_route(user_id, client_id);
+    finish(true);
+    return session;
+  } catch(...) {
+    finish(false);
+    throw;
   }
-
-  if(!session) {
-    return nullptr;
-  }
-
-  session->reset_for_pool();
-  session->activate();
-  if(!route_key.empty()) {
-    session->bind_route(user_id, client_id);
-    std::lock_guard<std::mutex> lock(mutex_);
-    active_routes_[route_key] = session;
-    session_to_route_[session->get_session_id()] = route_key;
-  }
-  return session;
 }
 
 void SessionRouter::release_expired_sessions() {

@@ -17,7 +17,7 @@ def run(command, **kwargs):
 
 run(["go", "build", "-o", OUT / "go-probe", SOURCE / "tests/clients/probe.go"], cwd=SOURCE / "clients/go")
 run(["cargo", "build", "--locked", "--manifest-path", SOURCE / "clients/rust/Cargo.toml",
-     "--example", "contract_probe", "--target-dir", OUT / "rust"])
+     "--example", "contract_probe", "--example", "local_contract_probe", "--target-dir", OUT / "rust"])
 run(["mvn", "-q", "-f", SOURCE / "clients/java/pom.xml", "dependency:build-classpath",
      "-Dmdep.outputFile=" + str(OUT / "java-classpath.txt")])
 classpath = (OUT / "java-classpath.txt").read_text().strip()
@@ -33,3 +33,5 @@ commands = {
 }
 run([sys.executable, SOURCE / "tests/test_language_clients.py", BUILD],
     env=dict(os.environ, EVOLUTION_LANGUAGE_PROBES=json.dumps(commands)))
+run([sys.executable, SOURCE / "tests/test_rust_local_client.py", BUILD,
+     OUT / "rust/debug/examples/local_contract_probe"])

@@ -47,7 +47,7 @@ tool_call_count 及其失败计数只统计业务工具；明确 executed=false 
 
 ### 执行价值的规则判定
 
-`src/hybrid_evaluator.cpp` 中的规则判定顺序是：
+`src/analysis/hybrid_evaluator.cpp` 中的规则判定顺序是：
 
 | 证据 | 规则结果 |
 | --- | --- |
@@ -60,7 +60,7 @@ tool_call_count 及其失败计数只统计业务工具；明确 executed=false 
 
 ### 模型看见什么
 
-通用轨迹与 SessionLog 的内容感知路径都在 `src/sessionlog_evaluator.cpp`。
+通用轨迹与 SessionLog 的内容感知路径都在 `src/analysis/sessionlog_evaluator.cpp`。
 该配置同时供标准轨迹和 SessionLog 评测入口使用。
 
 `make_dialogue_request` 将以下内容交给评测模型：
@@ -263,9 +263,9 @@ strict_model 控制模型错误是否升级为评测错误；失败响应保留�
 
 ## 实现定位
 
-- `src/trace_analyzer.cpp`
-- `src/hybrid_evaluator.cpp`
-- `src/sessionlog_evaluator.cpp`
+- `src/analysis/trace_analyzer.cpp`
+- `src/analysis/hybrid_evaluator.cpp`
+- `src/analysis/sessionlog_evaluator.cpp`
 - `include/agentflow/trajectory/hybrid_evaluator.h`
 - `proto/hybrid_evaluation.proto`
 

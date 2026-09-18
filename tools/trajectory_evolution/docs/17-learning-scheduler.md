@@ -136,8 +136,8 @@ auto_evaluate=false 不会自动替你后台学习；learn --enqueue-only 也只
 
 ## 实现定位
 
-- `src/integration_service.cpp::process_evaluations / observe_queue / run_sharing`
-- `src/local_runtime.cpp`
+- `src/service/integration_service.cpp::process_evaluations / observe_queue / run_sharing`
+- `src/service/local_runtime.cpp`
 - `tests/test_learning_schedule.py`
 - `tests/test_unified_learning.py`
 

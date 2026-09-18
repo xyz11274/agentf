@@ -118,8 +118,8 @@ PY
 ## 实现定位
 
 - `clients/python/evolution.py`
-- `src/integration_http.cpp`
-- `src/boundary_runtime.cpp`
+- `src/service/integration_http.cpp`
+- `src/runtime/boundary_runtime.cpp`
 - `examples/standard-agent/`
 
 ---

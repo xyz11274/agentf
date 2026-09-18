@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <map>
 #include <set>
 
 #include "shadow_policy.pb.h"
@@ -34,10 +35,14 @@ class ShadowRuntime {
   v1::AdviceResult query_advice(const v1::AdviceQuery& query) const;
   v1::AdviceResult query_advice(const v1::AdviceQuery& query,
                               const std::set<std::string>& approved_ids) const;
+  v1::AdviceResult query_advice(const v1::AdviceQuery& query,
+                              const std::set<std::string>& approved_ids,
+                              const std::map<std::string, std::string>& triggers) const;
 
  private:
   v1::AdviceResult query(const v1::AdviceQuery& query,
-                         const std::set<std::string>* approved_ids) const;
+                         const std::set<std::string>* approved_ids,
+                         const std::map<std::string, std::string>* triggers = nullptr) const;
   const v1::ShadowPolicySnapshot snapshot_;
 };
 

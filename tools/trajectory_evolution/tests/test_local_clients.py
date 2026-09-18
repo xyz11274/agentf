@@ -260,6 +260,27 @@ def authorization_and_reuse():
         c.close()
 
 
+def java_native_contract():
+    maven = shutil.which("mvn")
+    if not maven:
+        return False
+    root = fixture("java-native")
+    command = [maven, "-q", "-f", str(SOURCE / "clients/java/pom.xml"),
+               "-Dtest=LocalEvolutionNativeContractTest", f"-Devolution.native.library={LIBRARY}",
+               f"-Devolution.native.config={root / 'service.json'}", "test"]
+    cache = (BUILD / "CMakeCache.txt").read_text()
+    compiler = re.search(r"^CMAKE_CXX_COMPILER:[^=]+=(.+)$", cache, re.MULTILINE).group(1)
+    runtime = subprocess.run([compiler, "-print-file-name=libstdc++.so.6"],
+                             check=True, capture_output=True, text=True).stdout.strip()
+    env = os.environ.copy()
+    if Path(runtime).is_file():
+        env["LD_LIBRARY_PATH"] = str(Path(runtime).resolve().parent) + os.pathsep + env.get("LD_LIBRARY_PATH", "")
+    result = subprocess.run(command, capture_output=True, text=True, timeout=60, env=env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    valid_traces(root, 1)
+    return True
+
+
 def main():
     multi_user()
     busy = capacity_and_concurrency()
@@ -269,6 +290,8 @@ def main():
     authorization_and_reuse()
     node = shutil.which("node")
     tested = ["python"]
+    if java_native_contract():
+        tested.append("java")
     if node and (BUILD / "trajectory_evolution_local_node.node").exists():
         root = fixture("javascript")
         # Node loads its C++ runtime before dlopen; match the library's compiler.

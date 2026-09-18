@@ -126,8 +126,8 @@ rpc("event.record", {
 
 - `api/openapi.json`
 - `api/boundary-v1.schema.json`
-- `src/boundary_runtime.cpp::describe_boundary_contract`
-- `src/integration_json.h`
+- `src/runtime/boundary_runtime.cpp::describe_boundary_contract`
+- `src/service/integration_json.h`
 
 ---
 

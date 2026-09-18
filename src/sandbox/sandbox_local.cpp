@@ -51,13 +51,18 @@ static std::mutex& local_server_launch_mutex() {
   return mutex;
 }
 
-// fork 前解析实际监听端口；配置端口已被其他 LocalSandbox 占用时，
-// 由内核分配一个空闲的 loopback 端口。
-static int select_local_server_port(int requested_port) {
-  auto try_bind = [](int candidate, int* selected_port) -> int {
+// fork 前保留实际监听 socket，交给子进程直接使用；不能先 close 再 bind，
+// 否则不同 daemon 的进程内锁无法阻止同时选中同一端口。
+static int select_local_server_port(int requested_port, int* listener_fd) {
+  auto try_bind = [listener_fd](int candidate, int* selected_port) -> int {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
       return errno;
+    }
+    if (fcntl(sock, F_SETFD, FD_CLOEXEC) < 0) {
+      int error = errno;
+      close(sock);
+      return error;
     }
 
     struct sockaddr_in addr;
@@ -80,7 +85,7 @@ static int select_local_server_port(int requested_port) {
     }
 
     *selected_port = ntohs(addr.sin_port);
-    close(sock);
+    *listener_fd = sock;
     return 0;
   };
 
@@ -136,7 +141,9 @@ int LocalSandbox::launch_http_server(const std::string& sandbox_http_server_path
   // 与 exe_loader.cpp 既有 fork+exec 模式一致（F5 单一真相来源）
 
   std::lock_guard<std::mutex> launch_guard(local_server_launch_mutex());
-  port = select_local_server_port(port);
+  int listener_fd = -1;
+  port = select_local_server_port(port, &listener_fd);
+  const std::string listener_fd_str = std::to_string(listener_fd);
 
   // FR-024：在 fork 前计算父进程 PID，避免 fork 后子进程 getppid() 竞态
   // （fork 后、getppid() 前父进程死亡 → 子进程被 init 收养 → getppid()==1，
@@ -146,9 +153,12 @@ int LocalSandbox::launch_http_server(const std::string& sandbox_http_server_path
 
   pid_t pid = fork();
   if (pid < 0) {
+    close(listener_fd);
     throw SandboxFactory::SandboxLaunchException("fork() failed");
   }
   if (pid == 0) {
+    // 仅本次 server 的 exec 保留 socket，其他 worker 不继承。
+    if (fcntl(listener_fd, F_SETFD, 0) < 0) _exit(127);
     // 子进程：重定向 stderr→stdout（供父进程读端口），chdir 到 workdir
     dup2(STDOUT_FILENO, STDERR_FILENO);
     (void)chdir(workdir_.c_str());
@@ -165,6 +175,7 @@ int LocalSandbox::launch_http_server(const std::string& sandbox_http_server_path
     // execl python3 sandbox_http_server.py --port <port> --host 127.0.0.1 --parent-pid <ppid>
     execlp("python3", "python3", sandbox_http_server_path.c_str(),
            "--port", std::to_string(port).c_str(),
+           "--listen-fd", listener_fd_str.c_str(),
            "--host", "127.0.0.1",  // B17：只监听 loopback
            "--parent-pid", parent_pid_str.c_str(),
            "--security-profile", "restricted-local",
@@ -173,11 +184,22 @@ int LocalSandbox::launch_http_server(const std::string& sandbox_http_server_path
     _exit(127);
   }
   // 父进程
+  close(listener_fd);
   server_pid_ = pid;
 
   // 持有启动锁直到当前子进程真正占有选定端口。否则后一实例可能探测到旧
   // server 的响应，并把兄弟实例的 endpoint 误认成自己的 endpoint。
-  wait_for_server_ready(port);
+  try {
+    wait_for_server_ready(port);
+  } catch (...) {
+    // 构造失败不会调用析构，必须回收尚未就绪的子进程及其监听 socket。
+    if (server_pid_ > 0) {
+      kill(server_pid_, SIGKILL);
+      while (waitpid(server_pid_, nullptr, 0) < 0 && errno == EINTR) {}
+      server_pid_ = -1;
+    }
+    throw;
+  }
   return port;
 }
 
@@ -190,15 +212,14 @@ void LocalSandbox::wait_for_server_ready(int port, int timeout_ms) {
     std::string cmd = "curl -s --noproxy '*' -m 1 -X POST -H 'Content-Type: application/json' "
                       "-d '{\"tool\":\"bash\",\"tool_params\":{\"command\":\"echo ready\"},\"opts\":{}}' "
                       "'" + probe + "' 2>/dev/null";
+    bool ready = false;
     FILE* fp = popen(cmd.c_str(), "r");
     if (fp) {
       char buf[256];
       std::string resp;
       while (fgets(buf, sizeof(buf), fp)) resp += buf;
       pclose(fp);
-      if (!resp.empty()) {
-        return;  // server 就绪
-      }
+      ready = !resp.empty();
     }
     // 检查子进程是否已退出（启动失败）
     int status;
@@ -208,6 +229,7 @@ void LocalSandbox::wait_for_server_ready(int port, int timeout_ms) {
       throw SandboxFactory::SandboxLaunchException(
           "sandbox_http_server.py exited prematurely (exit status=" + std::to_string(status) + ")");
     }
+    if (ready && waited == 0) return;
     usleep(100000);  // 100ms 轮询间隔
   }
   // 超时

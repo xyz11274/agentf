@@ -43,6 +43,23 @@ point 的 fields 使用[统一打点教程](08-instrumentation.md#统一打点�
 `invoke` 的原有严格错误、重试与超时配置保持不变，适合管理操作或需要明确错误处理的调用方。
 这是通信预算，线程调度、初始化和 JSON 编解码还有本地开销；客户端应在启动时创建并复用。
 
+各客户端还提供同一语义的高层包装，自动执行 before → 一次业务调用 → after，或完成一次 loop guard：
+
+| 语言 | 调用包装 | 循环判断 | 缺口／隔离评测 |
+| --- | --- | --- | --- |
+| Python | `call / acall` | `allow_loop / aallow_loop` | `invoke("capture.gap", …) / evaluate / aevaluate` |
+| JS / TS | `call` | `allowLoop` | `gap / evaluate` |
+| Rust | `call` | `allow_loop / check_loop` | `capture_gap / evaluation_next / evaluation_fail` |
+| Go | `Call` | `AllowLoop / CheckLoop` | `CaptureGap / EvaluationNext / EvaluationFail` |
+| Java | `call / callWithReceipt` | `allowLoop / checkLoop` | `captureGap / evaluationNext / evaluationFail` |
+| C# | `CallAsync / CallWithReceiptAsync` | `AllowLoopAsync / CheckLoopAsync` | `CaptureGapAsync / EvaluationNextAsync / EvaluationFailAsync` |
+| C++ | `Points::call` | `Points::allow_loop` | `Points::capture_gap / evaluation_next / evaluation_fail` |
+| C | `te_points_call` | `te_points_allow_loop` | `te_points_capture_gap / te_points_evaluation_next / te_points_evaluation_fail` |
+
+包装不会重试业务副作用；观察端失败时保持宿主原有业务结果或异常。上述语言均有 HTTP 客户端和随包原生入口；
+原生入口的部署条件见[第 6 章](06-native-runtime.md)。`evaluation.next/fail` 属于隔离评测 HTTP 服务，
+原生业务打点通过 `manage` 调用后台管理操作，不将评测投题发送到 `te_local_invoke`。
+
 | 语言     | 使用哪些文件                                                                                            | 返回值                     |
 | -------- | ------------------------------------------------------------------------------------------------------- | -------------------------- |
 | Python   | [evolution.py](../clients/python/evolution.py)，仅标准库，无需 requests                                  | 已拆开 result 的 dict      |
@@ -189,8 +206,8 @@ HTTP 服务不会替你安装系统服务或自动拉起 Agent，部署方负责
 
 ## 实现定位
 
-- `src/integration_http.cpp::run_integration_server`
-- `src/integration_service.cpp::call`
+- `src/service/integration_http.cpp::run_integration_server`
+- `src/service/integration_service.cpp::call`
 - `clients/python/evolution.py`
 - `clients/typescript/`
 - `clients/rust/`

@@ -29,6 +29,10 @@ message ShadowExperience {
   repeated string match_terms = 8;
   // Set only by the trusted application publication path, never by a trace.
   bool application_shared = 9;
+  // Empty means an L1-injectable experience (including legacy snapshots).
+  // Other values are immutable evidence sources for executable L2/L3 rules
+  // and must never be returned by ShadowRuntime as prompt advice.
+  string control_target_type = 10;
 }
 
 // Public projection only: no source user, conversation, evidence or review data.

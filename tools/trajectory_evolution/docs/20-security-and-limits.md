@@ -77,11 +77,11 @@ HTTP 受请求、run、活动和持久化容量限制，失败需要按协议处
 
 ## 实现定位
 
-- `src/integration_service.cpp::authenticate / safe_data`
-- `src/shared_memory.cpp::public_text / gate`
-- `src/local_support.h`
-- `src/evolution_pipeline.cpp::ensure_safe_evolution_data`
-- `src/evaluation_process.cpp`
+- `src/service/integration_service.cpp::authenticate / safe_data`
+- `src/memory/shared_memory.cpp::public_text / gate`
+- `src/service/local_support.h`
+- `src/analysis/evolution_pipeline.cpp::ensure_safe_evolution_data`
+- `src/evaluation/evaluation_process.cpp`
 
 ---
 
