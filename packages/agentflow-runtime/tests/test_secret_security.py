@@ -272,6 +272,52 @@ def test_stderr_wrapper_redacts_credentials_split_across_writes():
     assert "<redacted:test.stderr>" in output
 
 
+@pytest.mark.parametrize("source", [
+    "sig = f.read(8)\nprint(sig)",
+    "signature = image.read(16)\nprint(signature)",
+    "sig = hashlib.sha256(data).digest()\nprint(sig)",
+    "data = f.read(8)\nsig = hashlib.sha256(data).digest()\nprint(sig)",
+])
+def test_file_signature_expressions_remain_executable(source):
+    import hashlib
+    import io
+
+    safe, report = redact_secrets(source)
+    assert safe == source
+    assert not report.applied
+    data = b"\x89PNG\r\n\x1a\n"
+    scope = {"f": io.BytesIO(data), "image": io.BytesIO(data), "hashlib": hashlib, "data": data}
+    exec(compile(safe, "<signature-check>", "exec"), scope)
+    # 工具参数实际经过 JSON 字符串边界，转义后的代码同样不能被破坏。
+    encoded = json.dumps({"command": source})
+    safe_encoded, _ = redact_secrets(encoded)
+    assert json.loads(safe_encoded)["command"] == source
+
+
+def test_signature_literals_and_registered_values_remain_protected():
+    token = "opaque-signature-value-998877"
+    for sample in (f"sig={token}", f"signature='{token}'", {"signature": token}):
+        safe, report = redact_secrets(sample)
+        assert report.applied
+        assert token not in json.dumps(safe)
+    register_secret("test.expression_secret", "f.read(8)")
+    safe, report = redact_secrets("sig = f.read(8)")
+    assert report.applied
+    assert "f.read(8)" not in safe
+
+
+@pytest.mark.parametrize("sample", [
+    "sig=opaque.header.signature",
+    "https://example.test/image?sig=f.read(8)",
+    "https://example.test/image?signature=opaque.header.signature",
+])
+def test_signature_expression_exception_does_not_release_url_or_dotted_tokens(sample):
+    safe, report = redact_secrets(sample)
+    assert report.applied
+    assert "<redacted:credential_field>" in safe
+    assert safe != sample
+
+
 def test_ordinary_configuration_is_not_over_redacted():
     value = {
         "model": "glm-5.3",

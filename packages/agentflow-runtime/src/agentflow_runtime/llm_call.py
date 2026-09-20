@@ -98,7 +98,7 @@ def call_llm(messages: list, model: str = "gpt-4o-mini",
                       "max_completion_tokens": max_completion_tokens},
             "extensions": {"source": source, "round": round_i},
         }, lambda request: get_recorder().trace_call(
-            request["messages"], model, base_url, api_key, tools,
+            request["messages"], model, base_url, api_key, request.get("tools"),
             max_completion_tokens, timeout, connect_timeout, stream,
             source=source, skill=skill, round_i=round_i, extra_body=extra_body),
             user_id=os.environ.get("AF_USER_ID", ""))
