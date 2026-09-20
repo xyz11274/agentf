@@ -333,7 +333,7 @@ if(BUILD_TESTING)
     set_tests_properties(TrainingBootstrapTests PROPERTIES TIMEOUT 180)
     add_test(NAME GepaSearchTests COMMAND ${Python3_EXECUTABLE}
         -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_gepa_search.py ${CMAKE_CURRENT_BINARY_DIR} ${AGENTFLOW_PROTOC_EXECUTABLE})
-    # 该测试当前包含 102 个串行场景；上限覆盖慢机器，但不改变任何运行时超时。
+    # 搜索回归包含多组串行场景；上限覆盖慢机器，但不改变任何运行时超时。
     set_tests_properties(GepaSearchTests PROPERTIES TIMEOUT 1800)
     add_test(NAME DocumentationTests COMMAND ${Python3_EXECUTABLE}
         -B ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_documentation.py)
@@ -399,6 +399,10 @@ if(BUILD_TESTING)
   target_include_directories(test_gepa_strategy PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_ROOT})
   target_link_libraries(test_gepa_strategy PRIVATE agentflow_trajectory_evolution)
   add_test(NAME GepaStrategyTests COMMAND test_gepa_strategy)
+  add_executable(test_gepa_evidence tests/test_gepa_evidence.cpp)
+  target_include_directories(test_gepa_evidence PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_ROOT})
+  target_link_libraries(test_gepa_evidence PRIVATE agentflow_trajectory_evolution)
+  add_test(NAME GepaEvidenceTests COMMAND test_gepa_evidence)
   add_executable(test_shared_memory tests/test_shared_memory.cpp)
   target_include_directories(test_shared_memory PRIVATE ${TRAJECTORY_EVOLUTION_INTERNAL_INCLUDE_DIRS} ${RAPIDJSON_INCLUDE_ROOT})
   target_link_libraries(test_shared_memory PRIVATE agentflow_trajectory_evolution)

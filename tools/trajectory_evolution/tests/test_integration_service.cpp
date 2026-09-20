@@ -22,7 +22,8 @@ const std::string token_a = "fixture-principal-alpha-00000001";
 const std::string token_b = "fixture-principal-bravo-00000002";
 void check(bool condition, const std::string& label) { if(!condition) throw std::runtime_error(label); }
 Json read(const fs::path& path) {
-  std::ifstream input(path); return Json::parse(std::string(std::istreambuf_iterator<char>(input), {}));
+  std::ifstream input(path); check(bool(input), "fixture read unavailable: " + path.string());
+  return Json::parse(std::string(std::istreambuf_iterator<char>(input), {}));
 }
 void write(const fs::path& path, const std::string& bytes) {
   fs::create_directories(path.parent_path()); std::ofstream output(path); output << bytes;
@@ -796,6 +797,47 @@ void boundary_tests(const fs::path& folder) {
     auto report = te::analyze_trace(te::validate_trace(proto<v1::TraceRun>(captured)));
     check(!report.episodes.empty() && report.episodes[0].actor_id == "my-agent/actor:assistant", "dynamic actor metadata does not change memory scope");
 
+    // 多轮聊天保留完整原始输入；检索不能把上一轮助手的事实借给本轮。
+    for(const bool serialized : {false, true}) {
+      const std::string conversation = serialized ? "current-task-string" : "current-task-object";
+      const Json messages = Json::Array{
+        Json{{"role", "user"}, {"content", "历史请求"}},
+        Json{{"role", "assistant"}, {"content", "HISTORY_ONLY 视频生成缺少素材"}},
+        Json{{"role", "user"}, {"content", "CURRENT_ONLY 查询库存"}}};
+      const Json envelope{{"messages", messages}, {"stream", false}};
+      const Json raw = serialized ? Json(envelope.dump()) : envelope;
+      const auto opened = client.invoke("run.begin", Json{{"input", raw}, {"level", "L1"},
+        {"capabilities", Json::Array{"model"}}, {"conversation_id", conversation}});
+      client.run = opened.str("run_id");
+      const Json binding{{"pointer", "/messages"}, {"mode", "system_message"}};
+      const Json original{{"messages", messages}};
+      const auto model = begin("model", "chat", original, Json{{"binding", binding}});
+      check(model["input"].dump() == original.dump(), "historical task text triggered advice for a fresh request");
+      finish(model);
+      const auto observed = begin("model", "chat", original,
+          Json{{"binding", binding}, {"state", "视频生成缺少素材"}});
+      check(observed["input"].dump().find("先补充图片") != std::string::npos,
+          "current state lost its independent retrieval evidence");
+      finish(observed); close(); captured = trace(conversation);
+      check(captured["events"].items().front()["input"].dump() == raw.dump(),
+          "current task projection changed the complete recorded run input");
+      bool original_preserved = false, fresh_state = false; unsigned queries = 0;
+      for(const auto& event : captured["events"].items()) {
+        if(event.str("kind") == "step.start" && event.str("step_id") == "step-" + model.str("activity_id"))
+          original_preserved = event["input"].dump() == original.dump();
+        if(event["attributes"].str("type") != "policy.query") continue;
+        const auto& query = event["attributes"]["decision"]["query"]["advice_query"];
+        ++queries;
+        check(query.str("task").find("CURRENT_ONLY") != std::string::npos
+            && query.str("task").find("HISTORY_ONLY") == std::string::npos,
+            "boundary query.task kept previous-turn history or lost the current user input");
+        if(event.str("step_id") == "step-" + observed.str("activity_id"))
+          fresh_state = query.str("state").find("视频生成缺少素材") != std::string::npos;
+      }
+      check(queries == 2 && original_preserved && fresh_state,
+          "current task filtering changed trace provenance or the current observation");
+    }
+
     {
       const auto opened = client.invoke("run.begin", Json{{"input", "库存查询"}, {"level", "L1"},
         {"capabilities", Json::Array{"model", "actions"}}, {"conversation_id", "current-request-state"}});
@@ -881,8 +923,36 @@ void boundary_tests(const fs::path& folder) {
               "advice must follow current observations, not consumed history");
         if(!expected) check(model["input"].dump() == original.dump(), "history must remain intact for the model");
         finish(model);
+        return model;
       };
       ask(history, true);
+      const Json reminder{{"role", "user"},
+          {"content", "<system-reminder>REMINDER_ONLY 视频生成缺少素材</system-reminder>"}};
+      Json current = Json::Array{
+        Json{{"role", "user"}, {"content", "库存查询"}},
+        Json{{"role", "assistant"}, {"content", nullptr}, {"tool_calls", Json::Array{
+          Json{{"id", "widget-call"}, {"type", "function"},
+            {"function", Json{{"name", "render_widget"}, {"arguments", "{}"}}}}}}},
+        Json{{"role", "tool"}, {"tool_call_id", "widget-call"},
+          {"content", Json{{"status", "failed"}, {"error", "视频生成缺少素材"}}.dump()}},
+        reminder};
+      const auto after_reminder = ask(current, true);
+      auto mixed_user = current;
+      mixed_user.items().back()["content"] = "新任务：计算价格 <system-reminder>REMINDER_ONLY 视频生成缺少素材</system-reminder>";
+      ask(mixed_user, false);
+      auto next_action = current;
+      next_action.push(Json{{"role", "assistant"}, {"content", nullptr}, {"tool_calls", Json::Array{
+        Json{{"id", "stock-call"}, {"type", "function"},
+          {"function", Json{{"name", "lookup_stock"}, {"arguments", "{}"}}}}}}});
+      next_action.push(Json{{"role", "tool"}, {"tool_call_id", "stock-call"},
+        {"content", Json{{"status", "succeeded"}, {"count", 20}}.dump()}});
+      next_action.push(reminder);
+      ask(next_action, false);
+      ask(Json::Array{
+        Json{{"role", "system"}, {"content", "render_widget failed 视频生成缺少素材"}},
+        Json{{"role", "developer"}, {"content", "render_widget failed 视频生成缺少素材"}}, reminder}, false);
+      current.push(Json{{"role", "assistant"}, {"content", nullptr}});
+      ask(current, true);
       history.push(Json{{"role", "assistant"}, {"content", "转为查询库存"}});
       history.push(Json{{"role", "tool"}, {"content", "库存查询成功，20 件"}});
       ask(history, false);
@@ -895,11 +965,24 @@ void boundary_tests(const fs::path& folder) {
       history.push(Json{{"role", "tool"}, {"content", "库存查询成功"}});
       ask(history, true);
       close(); captured = trace("current-observation-window");
-      bool complete_history = false;
-      for(const auto& event : captured["events"].items())
+      bool complete_history = false, reminder_observation = false, reminder_applied = false;
+      for(const auto& event : captured["events"].items()) {
         if(event.str("kind") == "step.start" && event["input"]["messages"].array())
           complete_history |= event["input"]["messages"].dump() == history.dump();
+        if(event.str("step_id") != "step-" + after_reminder.str("activity_id")) continue;
+        if(event["attributes"].str("type") == "policy.query") {
+          const auto state = event["attributes"]["decision"]["query"]["advice_query"].str("state");
+          reminder_observation = state.find("render_widget") != std::string::npos
+              && state.find("failed") != std::string::npos
+              && state.find("视频生成缺少素材") != std::string::npos
+              && state.find("REMINDER_ONLY") == std::string::npos;
+        }
+        if(event.str("kind") == "advice.applied")
+          reminder_applied |= event["application"].str("status") == "applied";
+      }
       check(complete_history, "retrieval window must not truncate the recorded request");
+      check(reminder_observation && reminder_applied,
+            "reminder-only user messages preserve the current operation/result and its applied advice");
     }
 
     {
@@ -1394,6 +1477,366 @@ void target_retry_tests(const fs::path& folder) {
   std::cout << "Target retry: redispatch, concurrency, success reset and run isolation passed\n";
 }
 
+void l123_boundary_regression_tests(const fs::path& folder) {
+  auto c = config(folder); c["auto_evaluate"] = false;
+  c["runtime_options"]["loop_rules"].items()[0]["no_progress_decision"] = "stop";
+  c["runtime_options"]["action_rules"] = Json::Array{Json{{"rule_id", "settled-target"},
+      {"target_scope", "agent:my-agent/actor:assistant"}, {"operation", "generate"},
+      {"max_failed_attempts", 1}, {"failure_key_arguments", Json::Array{"output"}}, {"reason", "同一目标已失败"}}};
+  write(folder / "service.json", c.dump());
+  te::IntegrationService service(folder / "service.json"); unsigned sequence = 0;
+  auto point = [&](Json request) {
+    request["operation"] = "point"; request["request_id"] = "boundary-fix-" + std::to_string(++sequence);
+    const auto reply = service.call(token_a, request.dump());
+    check(reply.status == 200, "boundary regression HTTP: " + reply.body);
+    auto result = Json::parse(reply.body)["result"];
+    check(!result.flag("degraded", false), "boundary regression degraded: " + result.dump()); return result;
+  };
+  auto ref = [](const std::string& run, const std::string& key = "root") {
+    return Json{{"run", run}, {"key", key}};
+  };
+  auto start = [&](const std::string& run, const std::string& level) {
+    point(Json{{"phase", "before"}, {"kind", "run"}, {"ref", ref(run)}, {"input", "Answer in English"},
+        {"level", level}, {"capabilities", Json::Array{"model", "actions", "schedule", "loop"}}});
+  };
+  auto guard = [&](const std::string& run, const std::string& key, const Json& state, bool finalize = false) {
+    return point(Json{{"phase", "guard"}, {"kind", "loop"}, {"ref", ref(run, key)},
+        {"loop_id", "main"}, {"actor_id", "assistant"}, {"state", state},
+        {"extensions", Json{{"finalize_on_stop", finalize}}}});
+  };
+  auto finish = [&](const std::string& run) {
+    check(point(Json{{"phase", "after"}, {"kind", "run"}, {"ref", ref(run)}, {"output", "done"}})
+        .flag("capture_complete", false), "boundary regression trace complete");
+  };
+  const Json request{{"messages", Json::Array{Json{{"role", "user"}, {"content", "Answer in English"}}}},
+      {"tools", Json::Array{}}, {"tool_choice", "auto"}, {"parallel_tool_calls", true}};
+  for(const std::string level : {"L0", "L3"}) {
+    const auto run = "finalize-" + level; start(run, level);
+    check(guard(run, "loop-1", "unchanged", true).str("decision") == "continue", "first loop continues");
+    const auto stopped = guard(run, "loop-2", "unchanged", true);
+    check(stopped.str("decision") == (level == "L3" ? "finalize" : "continue"), "finalization only after L3 stop");
+    auto prepared = point(Json{{"phase", "before"}, {"kind", "model"}, {"ref", ref(run, "answer")},
+        {"actor_id", "assistant"}, {"input", request}});
+    check(prepared.str("decision") == "allow", "one final model is permitted");
+    if(level == "L0") check(prepared["input"].dump() == request.dump(), "L0 request is unchanged");
+    else check(!prepared["input"].has("tools") && !prepared["input"].has("tool_choice")
+        && !prepared["input"].has("parallel_tool_calls")
+        && prepared["input"].dump().find("Report failures and unfinished work honestly") != std::string::npos,
+        "final response uses external prompt and no tools");
+    point(Json{{"phase", "after"}, {"kind", "model"}, {"ref", ref(run, "answer")},
+        {"executed", true}, {"input", prepared["input"]}, {"output", Json{{"content", "The operation failed."}}}});
+    if(level == "L3") {
+      auto denied = point(Json{{"phase", "guard"}, {"kind", "action"}, {"name", "generate"},
+          {"actor_id", "assistant"}, {"ref", ref(run, "late-action")}, {"input", Json{{"output", "B"}}}});
+      check(denied.str("decision") == "reject", "finalization cannot launch new work");
+      auto extra = point(Json{{"phase", "before"}, {"kind", "model"}, {"ref", ref(run, "second-answer")},
+          {"actor_id", "assistant"}, {"input", request}});
+      check(extra.str("decision") == "reject", "finalization has exactly one model budget");
+      point(Json{{"phase", "after"}, {"kind", "model"}, {"ref", ref(run, "second-answer")},
+          {"executed", false}, {"input", extra["input"]}, {"output", nullptr}});
+      auto schedule = point(Json{{"phase", "before"}, {"kind", "schedule"}, {"ref", ref(run, "late-schedule")},
+          {"input", Json{{"actions", Json::Array{Json{{"action_id", "one"}, {"operation", "generate"}}}}}}});
+      check(schedule.str("decision") == "reject" && schedule["ready"].items().empty()
+          && schedule.flag("finished", false), "late schedule is skipped, not degraded to allow");
+      point(Json{{"phase", "after"}, {"kind", "schedule"}, {"ref", ref(run, "late-schedule")}, {"output", nullptr}});
+      check(guard(run, "loop-3", "changed", true).str("decision") == "stop", "finalization cannot reopen loop");
+    }
+    finish(run);
+  }
+  const Json binding{{"items", "/jobs"}, {"operation", "/name"}, {"receipt", "/ticket"},
+      {"accepted", "/accepted"}, {"accepted_index", "/index"}, {"accepted_id", "/id"},
+      {"results", "/results"}, {"result_id", "/id"}, {"result_success", "/ok"},
+      {"result_operation", "/name"}, {"result_status", "/status"}, {"result_output", "/output"}};
+  auto batch = [&](const std::string& run, const std::string& key, bool success, const std::string& result) {
+    auto wave = point(Json{{"phase", "before"}, {"kind", "dispatch"}, {"actor_id", "assistant"},
+        {"ref", ref(run, key)}, {"binding", binding},
+        {"input", Json{{"jobs", Json::Array{Json{{"name", "generate"}, {"output", "A"}}}}}}});
+    auto command = [&](const std::string& name, Json input) {
+      input["wave_id"] = wave["wave_id"];
+      return point(Json{{"phase", "event"}, {"kind", "dispatch"}, {"name", name},
+          {"ref", Json{{"run", run}, {"parent", key}, {"key", key + name}}}, {"input", input}});
+    };
+    command("claim", Json::Object{});
+    const auto id = "host-" + key;
+    command("accept", Json{{"output", Json{{"ticket", key}, {"accepted", Json::Array{Json{{"index", 1}, {"id", id}}}}}}});
+    const auto settled = command("complete", Json{{"ticket", key}, {"results", Json::Array{Json{
+        {"id", id}, {"name", "generate"}, {"ok", success}, {"output", result}}}}});
+    check(settled.flag("managed", false) && !settled.flag("pending", true), "batch really settled");
+  };
+  start("async-target", "L2"); batch("async-target", "first", false, "failed");
+  for(const auto target : {"A", "B"}) {
+    auto result = point(Json{{"phase", "guard"}, {"kind", "action"}, {"name", "generate"},
+        {"actor_id", "assistant"}, {"ref", ref("async-target", target)}, {"input", Json{{"output", target}}}});
+    check(result.str("decision") == (std::string(target) == "A" ? "reject" : "allow"),
+        "async settlement limits only the failed target without requiring a loop");
+  }
+  finish("async-target");
+  const std::vector<std::pair<Json, bool>> outcomes{
+      {Json{{"status", "security_policy_blocked"}}, true}, {Json{{"error", Json{{"code", "network"}}}}, true},
+      {Json{{"error", "network"}}, true}, {Json{{"ok", false}}, true},
+      {Json{{"success", true}, {"error", "previous attempt failed"}}, false},
+      {Json{{"status", "completed"}, {"error", "previous attempt failed"}}, false},
+      {Json{{"error", false}}, false}, {"free text mentions error", false}};
+  for(std::size_t i = 0; i < outcomes.size(); ++i) {
+    const auto run = "structured-outcome-" + std::to_string(i); start(run, "L2");
+    const Json input{{"output", "A"}};
+    point(Json{{"phase", "before"}, {"kind", "action"}, {"name", "generate"},
+        {"actor_id", "assistant"}, {"ref", ref(run, "first")}, {"input", input}});
+    point(Json{{"phase", "after"}, {"kind", "action"}, {"ref", ref(run, "first")},
+        {"executed", true}, {"output", outcomes[i].first}});
+    const auto again = point(Json{{"phase", "guard"}, {"kind", "action"}, {"name", "generate"},
+        {"actor_id", "assistant"}, {"ref", ref(run, "second")}, {"input", input}});
+    check(again.str("decision") == (outcomes[i].second ? "reject" : "allow"), "structured failure classification");
+    finish(run);
+  }
+  for(const bool changed : {false, true}) {
+    const std::string run = changed ? "business-progress" : "transport-only"; start(run, "L3");
+    guard(run, "round-1", "one"); batch(run, "first", true, "artifact-A");
+    check(guard(run, "round-2", "two").str("decision") == "continue", "first result is progress");
+    batch(run, "second", true, changed ? "artifact-B" : "artifact-A");
+    check(guard(run, "round-3", "three").str("decision") == (changed ? "continue" : "stop"),
+        "business output, not a fresh transport ID, defines progress"); finish(run);
+  }
+  std::cout << "L1-L3 regressions: bounded finalization, async target isolation and business progress passed\n";
+}
+
+void settled_budget_progress_tests(const fs::path& folder) {
+  auto c = config(folder); c["auto_evaluate"] = false;
+  c["runtime_options"]["action_rules"] = Json::Array{Json{{"rule_id", "verify-budget"},
+      {"target_scope", "agent:my-agent/actor:assistant"}, {"operation", "verify"},
+      {"max_attempts", 1}, {"reason", "已落定检查预算"}}};
+  auto& rule = c["runtime_options"]["loop_rules"].items()[0];
+  rule["no_progress_decision"] = "stop"; rule["max_no_progress"] = 1; rule["max_iterations"] = 64;
+  write(folder / "service.json", c.dump());
+  te::IntegrationService service(folder / "service.json"); Client client{service};
+  client.run = client.invoke("run.begin", Json{{"input", "verify and independent work"}, {"level", "L3"},
+      {"conversation_id", "budget-progress"}, {"capabilities", Json::Array{"model", "actions", "loop"}}}).str("run_id");
+  int n = 0;
+  auto control = [&](const char* branch) {
+    auto step = client.invoke("loop.check", Json{{"loop_id", branch}, {"state", Json{{"new_prompt", ++n}}}});
+    client.invoke("loop.commit", Json{{"control_id", step["control_id"]}, {"decision", step["decision"]}}); return step;
+  };
+  auto begin = [&](const Json& step, const char* operation) {
+    return client.invoke("activity.begin", Json{{"kind", "action"}, {"name", operation},
+        {"input", Json{{"changed_prompt", ++n}}}, {"control_id", step["control_id"]}});
+  };
+  auto finish = [&](const Json& call) {
+    const bool executed = call.str("decision") == "allow";
+    client.invoke("activity.end", Json{{"activity_id", call["activity_id"]}, {"executed", executed},
+        {"status", executed ? "completed" : "cancelled"}, {"output", Json{{"success", true}, {"result", ++n}}}});
+  };
+  auto step = control("coordinator"); auto first = begin(step, "verify"); finish(first);
+  step = control("coordinator"); check(step.str("decision") == "continue", "first verification remains progress");
+  auto blocked = begin(step, "verify"); check(blocked.str("decision") == "reject", "new prompt evaded settled budget"); finish(blocked);
+  auto useful = begin(step, "search"); finish(useful);
+  step = control("coordinator"); check(step.str("decision") == "continue", "blocked branch stopped useful sibling");
+  auto pending = begin(step, "search"); finish(begin(step, "verify"));
+  check(control("coordinator").str("decision") == "continue", "pending sibling interrupted by rejection");
+  finish(pending);
+  step = control("coordinator"); check(step.str("decision") == "continue", "settled new sibling result was ignored");
+  finish(begin(step, "verify"));
+  check(control("coordinator").str("decision") == "stop", "rejected redispatch with changed prompt did not converge");
+  check(control("independent").str("decision") == "continue", "another execution inherited stopped loop");
+  client.invoke("run.end", Json{{"status", "completed"}, {"output", "done"}});
+}
+
+void terminal_recovery_chain_tests(const fs::path& folder) {
+  auto c = config(folder); c["auto_evaluate"] = false;
+  c["runtime_options"]["action_rules"] = Json::Array{Json{{"rule_id", "terminal-video"},
+      {"target_scope", "agent:my-agent/actor:assistant"}, {"operation", "video"},
+      {"terminal_error_codes", Json::Array{"UnsupportedModel"}}, {"error_scope_arguments", Json::Array{"model"}},
+      {"max_failed_attempts", 1}, {"reason", "本配置已明确不支持，不重复提交"}}};
+  auto& loop_rule = c["runtime_options"]["loop_rules"].items()[0];
+  loop_rule["no_progress_decision"] = "stop"; loop_rule["max_replans"] = 0;
+  loop_rule["max_no_progress"] = 1; loop_rule["max_iterations"] = 64;
+  loop_rule["error_codes"] = Json::Array{"UnsupportedModel"};
+  loop_rule["after_action_rejection"] = true;
+  write(folder / "service.json", c.dump());
+  te::IntegrationService service(folder / "service.json"); Client client{service};
+  client.run = client.invoke("run.begin", Json{{"input", "video plus independent report"}, {"level", "L3"},
+      {"conversation_id", "terminal-chain"}, {"capabilities", Json::Array{"model", "actions", "loop"}}}).str("run_id");
+  int n = 0;
+  auto control = [&](const char* branch) {
+    auto step = client.invoke("loop.check", Json{{"loop_id", branch}, {"state", Json{{"message", ++n}}}});
+    client.invoke("loop.commit", Json{{"control_id", step["control_id"]}, {"decision", step["decision"]}}); return step;
+  };
+  auto begin = [&](const Json& step, const char* operation, const char* model) {
+    return client.invoke("activity.begin", Json{{"kind", "action"}, {"name", operation},
+        {"input", Json{{"model", model}, {"output", "output-" + std::to_string(++n)}}},
+        {"control_id", step["control_id"]}});
+  };
+  auto finish = [&](const Json& call, bool fail) {
+    const bool executed = call.str("decision") == "allow";
+    client.invoke("activity.end", Json{{"activity_id", call["activity_id"]}, {"executed", executed},
+        {"status", executed ? "completed" : "cancelled"},
+        {"output", fail ? Json{{"status", "failed"}, {"error", Json{{"code", "UnsupportedModel"}}}}
+                         : Json{{"success", true}}}});
+  };
+  const auto report_step = control("report"); auto report = begin(report_step, "write", "original");
+  auto step = control("video"); finish(begin(step, "video", "original"), true);
+  step = control("video"); check(step.str("decision") == "continue", "one failure stopped the whole task");
+  auto rejected = begin(step, "video", "original");
+  check(rejected.str("decision") == "reject", "changed output path evaded terminal guard"); finish(rejected, false);
+  check(control("video").str("decision") == "stop", "terminal rejection was followed by another retry budget");
+  finish(report, false);
+  check(control("report").str("decision") == "continue", "failed video stopped an independent report");
+  auto changed = begin(control("other-config"), "video", "fixed");
+  check(changed.str("decision") == "allow", "terminal failure poisoned another configuration"); finish(changed, false);
+  // 失败之后的成功、同轮成功分支和待完成分支不能携带旧拒绝/错误条件。
+  step = control("recovered"); finish(begin(step, "video", "recoverable"), true);
+  step = control("recovered"); auto denied = begin(step, "video", "recoverable"); finish(denied, false);
+  auto useful = begin(step, "write", "report");
+  check(control("recovered").str("decision") == "continue", "conditional rule interrupted pending useful work");
+  finish(useful, false);
+  step = control("recovered"); check(step.str("decision") == "continue", "successful recovery kept stale terminal condition");
+  check(control("recovered").str("decision") == "continue", "consumed rejection leaked to a later step");
+  step = control("success-first"); finish(begin(step, "write", "report"), false);
+  finish(begin(step, "video", "success-first"), true);
+  step = control("success-first"); check(step.str("decision") == "continue", "completion order suppressed useful work");
+  finish(begin(step, "video", "success-first"), false);
+  check(control("success-first").str("decision") == "continue", "retired mixed-batch error resurfaced after commit");
+  auto old_step = control("late-after-check"); finish(begin(old_step, "write", "report"), false);
+  auto checkpoint = client.invoke("loop.check", Json{{"loop_id", "late-after-check"}, {"state", Json{{"message", ++n}}}});
+  finish(begin(old_step, "video", "late-after-check"), true);
+  client.invoke("loop.commit", Json{{"control_id", checkpoint["control_id"]}, {"decision", checkpoint["decision"]}});
+  check(control("late-after-check").str("decision") == "continue", "late failure stopped without a repeated rejection");
+  step = control("unrelated-rejection"); auto missing = begin(step, "video", "original");
+  check(missing.str("decision") == "allow", "another execution inherited the terminal action rejection"); finish(missing, false);
+  check(control("unrelated-rejection").str("decision") == "continue", "another execution inherited terminal error codes");
+  client.invoke("run.end", Json{{"status", "completed"}, {"output", "report succeeded, video failed"}});
+  service.process_evaluations();
+  const auto trace = read(folder / "data/by-user/user-a/traces/terminal-chain" / (client.run + ".trace.json"));
+  check(te::validate_trace(proto<v1::TraceRun>(trace)).report.trace_valid(), "conditional recovery trace invalid");
+  bool matched = false, recovered = false, sibling = false, retired = false, late = false;
+  for(const auto& event : trace["events"].items()) {
+    const auto& q = event["attributes"]["decision"]["query"];
+    if(q.str("boundary") != "loop") continue;
+    if(q.str("execution_id") == "video" && q.str("iteration") == "3")
+      matched = q.num("rejected_actions", 0) == 1 && q["error_codes"].array()
+          && q["error_codes"].items().front().text() == "UnsupportedModel";
+    if(q.str("execution_id") == "recovered" && q.str("iteration") == "4")
+      recovered = q.num("rejected_actions", 0) == 0 && (!q["error_codes"].array() || q["error_codes"].items().empty());
+    if(q.str("execution_id") == "unrelated-rejection" && q.str("iteration") == "2")
+      sibling = q.num("rejected_actions", 0) == 0 && (!q["error_codes"].array() || q["error_codes"].items().empty());
+    if(q.str("execution_id") == "success-first" && q.str("iteration") == "3")
+      retired = q.num("rejected_actions", 0) == 1 && (!q["error_codes"].array() || q["error_codes"].items().empty());
+    if(q.str("execution_id") == "late-after-check" && q.str("iteration") == "3")
+      late = q["error_codes"].array() && q["error_codes"].items().size() == 1
+          && q["error_codes"].items().front().text() == "UnsupportedModel";
+  }
+  check(matched && recovered && sibling && retired && late, "conditional loop queries lost error/rejection causality");
+}
+
+void terminal_branch_isolation_tests(const fs::path& folder) {
+  auto c = config(folder); c["auto_evaluate"] = false;
+  c["runtime_options"]["action_rules"] = Json::Array{Json{{"rule_id", "terminal-video"},
+      {"target_scope", "agent:my-agent/actor:assistant"}, {"operation", "video"},
+      {"terminal_error_codes", Json::Array{"UnsupportedModel"}}, {"error_scope_arguments", Json::Array{"model"}},
+      {"max_failed_attempts", 1}, {"reason", "同一分支的配置错误不重复提交"}}};
+  write(folder / "service.json", c.dump());
+  te::IntegrationService service(folder / "service.json"); Client client{service};
+  for(const bool explicit_model : {false, true}) for(const bool use_loop : {false, true}) {
+    const auto conversation = std::string(explicit_model ? "explicit" : "default") + (use_loop ? "-loop" : "-stream");
+    auto start = [&] {
+      client.run = client.invoke("run.begin", Json{{"input", "two independent video tasks"}, {"level", "L2"},
+          {"conversation_id", conversation}, {"capabilities", Json::Array{"actions", "loop"}}}).str("run_id");
+    };
+    start();
+    auto begin = [&](const char* branch, bool apply = true, const char* model = "same-model") {
+      Json input{{"output", std::string(branch) + ".mp4"}};
+      if(explicit_model) input["model"] = model;
+      Json request{{"kind", "action"}, {"name", "video"}, {"stream_id", branch},
+          {"input", input}, {"apply_policy", apply}};
+      if(use_loop) {
+        auto control = client.invoke("loop.check", Json{{"loop_id", branch}, {"state", Json::Object{}}});
+        client.invoke("loop.commit", Json{{"control_id", control["control_id"]}, {"decision", control["decision"]}});
+        request["control_id"] = control["control_id"];
+      }
+      return client.invoke("activity.begin", request);
+    };
+    auto finish = [&](const Json& call, bool failed) {
+      const bool executed = call.str("decision") == "allow";
+      client.invoke("activity.end", Json{{"activity_id", call["activity_id"]}, {"executed", executed},
+          {"actual_input", call["input"]},
+          {"status", executed ? "completed" : "cancelled"},
+          {"output", failed ? Json{{"error", Json{{"code", "UnsupportedModel"}}}} : Json{{"success", true}}}});
+    };
+    auto first = begin("left"); check(first.str("decision") == "allow", "first branch must execute"); finish(first, true);
+    // 同工具、同默认/显式模型；右分支首次取快照晚于左分支失败，仍必须允许执行。
+    auto sibling = begin("right"); check(sibling.str("decision") == "allow", "sibling first attempt inherited terminal failure");
+    finish(sibling, true);
+    for(const auto* branch : {"left", "right"}) {
+      auto retry = begin(branch); check(retry.str("decision") == "reject", "own terminal retry was not rejected"); finish(retry, false);
+    }
+    // 宿主明确观测到左分支恢复成功，只清理该分支，不能解除右分支的错误记录。
+    finish(begin("left", false), false);
+    auto recovered = begin("left"); check(recovered.str("decision") == "allow", "successful branch retained terminal failure"); finish(recovered, false);
+    auto independent = begin("right"); check(independent.str("decision") == "reject", "sibling success cleared another branch failure"); finish(independent, false);
+    if(explicit_model) {
+      auto changed = begin("right", true, "fixed-model");
+      check(changed.str("decision") == "allow", "changed model inherited old configuration failure"); finish(changed, false);
+    }
+    client.invoke("run.end", Json{{"status", "completed"}, {"output", "isolated terminal observations"}});
+    start();
+    auto fresh = begin("right"); check(fresh.str("decision") == "allow", "new run inherited terminal failure"); finish(fresh, false);
+    client.invoke("run.end", Json{{"status", "completed"}, {"output", "fresh run"}});
+  }
+}
+
+void finalization_capability_tests(const fs::path& folder) {
+  for(const auto& flags : {std::pair{true, true}, std::pair{true, false}, std::pair{false, true}}) {
+    const bool available = flags.first && flags.second;
+    const auto root = folder / (flags.first ? (flags.second ? "supported" : "no-opt-in") : "no-template");
+    auto c = config(root); c["auto_evaluate"] = false;
+    auto& rule = c["runtime_options"]["loop_rules"].items()[0];
+    rule["max_iterations"] = 2; rule["max_no_progress"] = 0; rule["require_finalization"] = true;
+    if(!flags.first) {
+      write(root / "empty-finalization.txt", "");
+      c["finalization_template_file"] = (root / "empty-finalization.txt").string();
+    }
+    write(root / "service.json", c.dump());
+    te::IntegrationService service(root / "service.json"); Client client{service};
+    client.run = client.invoke("run.begin", Json{{"input", "finish settled work"}, {"level", "L3"},
+        {"conversation_id", "finalization-capability"}, {"capabilities", Json::Array{"model", "actions", "loop"}}}).str("run_id");
+    std::size_t iteration = 0;
+    auto control = [&] {
+      Json request{{"loop_id", "main"}, {"actor_id", "assistant"}, {"state", Json{{"step", ++iteration}}}};
+      if(flags.second) request["extensions"] = Json{{"finalize_on_stop", true}};
+      auto step = client.invoke("loop.check", request);
+      client.invoke("loop.commit", Json{{"control_id", step["control_id"]}, {"decision", step["decision"]}}); return step;
+    };
+    auto step = control(); check(step.str("decision") == "continue", "finalization must retain minimum work");
+    const auto pending = client.invoke("activity.begin", Json{{"kind", "action"}, {"name", "lookup"},
+        {"input", Json::Object{}}, {"control_id", step["control_id"]}});
+    check(control().str("decision") == "continue", "pending branch continues before cap");
+    check(control().str("decision") == "continue", "finalization cap cannot truncate pending work");
+    client.invoke("activity.end", Json{{"activity_id", pending["activity_id"]}, {"executed", true},
+        {"status", "completed"}, {"output", Json{{"success", true}}}});
+    step = control();
+    check(step.str("decision") == (available ? "stop" : "continue"), "finalization requires both local template and current boundary opt-in");
+    if(available) {
+      auto answer = client.invoke("activity.begin", Json{{"kind", "model"}, {"name", "answer"},
+          {"input", Json{{"system", "Answer from observed results"}, {"tools", Json::Array{}}}},
+          {"control_id", step["control_id"]}});
+      check(answer.str("decision") == "allow" && !answer["input"].has("tools"), "conditional cap retains answer-only finalization");
+      client.invoke("activity.end", Json{{"activity_id", answer["activity_id"]}, {"executed", true},
+          {"actual_input", answer["input"]}, {"status", "completed"}, {"output", Json{{"content", "Lookup completed."}}}});
+    }
+    client.invoke("run.end", Json{{"status", "completed"}, {"output", "done"}});
+    check(service.flush_capture(), "persist finalization capability trace");
+    service.process_evaluations();
+    const auto trace = read(root / "data/by-user/user-a/traces/finalization-capability" / (client.run + ".trace.json"));
+    check(te::validate_trace(proto<v1::TraceRun>(trace)).report.trace_valid(), "finalization capability trace valid");
+    unsigned queries = 0;
+    for(const auto& event : trace["events"].items()) {
+      const auto& query = event["attributes"]["decision"]["query"];
+      if(query.str("boundary") != "loop") continue;
+      ++queries; check(query.flag("can_finalize", false) == available, "finalization query must reflect the local boundary, not a different host");
+    }
+    check(queries == 4, "all finalization checks are captured");
+  }
+}
+
 int main(int argc, char** argv) {
   try {
     ::setenv("INTEGRATION_TEST_A", token_a.c_str(), 1); ::setenv("INTEGRATION_TEST_B", token_b.c_str(), 1);
@@ -1417,6 +1860,11 @@ int main(int argc, char** argv) {
     schedule_outcome_tests(fs::path(path) / "schedule-outcomes");
     lifecycle_tests(fs::path(path) / "lifecycle"); schedule_tests(fs::path(path) / "schedule");
     dispatch_tests(fs::path(path) / "dispatch"); dispatch_guard_tests(fs::path(path) / "dispatch-guard");
-    target_retry_tests(fs::path(path) / "target-retry"); return 0;
+    target_retry_tests(fs::path(path) / "target-retry");
+    settled_budget_progress_tests(fs::path(path) / "budget-progress");
+    terminal_recovery_chain_tests(fs::path(path) / "terminal-chain");
+    terminal_branch_isolation_tests(fs::path(path) / "terminal-branches");
+    finalization_capability_tests(fs::path(path) / "finalization-capability");
+    l123_boundary_regression_tests(fs::path(path) / "l123-regression"); return 0;
   } catch(const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

@@ -463,18 +463,6 @@ def handle_run_skills_call(args: Any, databus: DataBusClient,
     batch_id = f"batch:{dialogue_id}:{dispatch_round}"
     for i, spec in enumerate(skills, 1):
         dispatch_key = f"dispatch:{dialogue_id}:{dispatch_round}:{i}"
-        if _evolution is not None and evolution_parent_ref:
-            guard = _evolution.point({
-                "phase": "guard", "kind": "action", "name": spec["name"],
-                "ref": {"run": dialogue_id, "key": dispatch_key + ":guard",
-                        "parent": evolution_parent_ref},
-                "actor_id": "coordinator", "input": spec,
-                "extensions": {"metrics": {"tool_call": False}},
-            }, user_id=_user_id())
-            if guard.get("decision") == "reject":
-                rejected.append({"name": spec["name"], "request_index": i,
-                                 "stage": "evolution_policy", "error": guard.get("reason", "policy_rejected")})
-                continue
         dispatch_data = {
             "skill_name": spec["name"],
             "prompt": spec.get("prompt", ""),
@@ -1368,6 +1356,7 @@ def execute():
             "ref": {"run": dialogue_id, "key": f"coordinator-loop:{_decision_index}"},
             "loop_id": "coordinator", "actor_id": "coordinator",
             "state": messages[-1] if messages else {},
+            "extensions": {"finalize_on_stop": True},
         }, user_id=_user_id()):
             response_text = append_artifacts_markdown(
                 "循环控制已停止重复协调，基于已有结果输出。", completed_skill_artifacts,

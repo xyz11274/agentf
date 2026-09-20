@@ -132,6 +132,7 @@ Json dispatch_referenced_point(Json& run, const Json& request, const Json& confi
     }
     auto committed = dispatch_referenced_point(run, after, config, cached_policy);
     committed["decision"] = proposal["decision"]; committed["reason"] = proposal["reason"];
+    if(request.str("kind") == "loop" && committed.flag("finalizing", false)) committed["decision"] = "finalize";
     return committed;
   }
   auto point = resolve_point_reference(request, run, run["identity"].str("run_id"));

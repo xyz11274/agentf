@@ -120,7 +120,8 @@ if blocked and (mode in ("gepa_actions", "gepa_schema_actions") or family == "�
 if mode == "gepa_merge_regression" and blocked and "核验甲类" in text:
     result = 0
 evo.invoke("activity.end", dict(run_id=rid, activity_id=action["activity_id"], status="cancelled" if blocked else "completed",
-                               output={"success": False} if mode in ("gepa_failure_replan", "gepa_full", "gepa_repeat_guard", "gepa_repeat_tool", "gepa_repeat_target") else result, executed=not blocked))
+                               output={"success": False, "error": {"code": "FixtureUnavailable"}} if recovery_budget else
+                               {"success": False} if mode in ("gepa_failure_replan", "gepa_full", "gepa_repeat_guard", "gepa_repeat_tool", "gepa_repeat_target") else result, executed=not blocked))
 if mode == "gepa_repeat_target":
     for index in (2, 3):
         retry = evo.invoke("activity.begin", dict(run_id=rid, kind="action", name="calculate",
@@ -158,7 +159,7 @@ if mode in ("gepa_failure_replan", "gepa_full"):
         retry = evo.invoke("activity.begin", dict(run_id=rid, kind="action", name="calculate",
             input=action_input, control_id=control["control_id"]))
         evo.invoke("activity.end", dict(run_id=rid, activity_id=retry["activity_id"], status="completed",
-            output={"success": False}, executed=True))
+            output={"success": False, "error": {"code": "FixtureUnavailable"}} if recovery_budget else {"success": False}, executed=True))
         control = evo.invoke("loop.check", dict(run_id=rid, loop_id="reviewed-loop", state={"new_error_id": "different-again"}))
         evo.invoke("loop.commit", dict(run_id=rid, control_id=control["control_id"], decision=control["decision"]))
     if recovery_budget and control["decision"] == "stop":

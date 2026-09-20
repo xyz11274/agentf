@@ -22,6 +22,12 @@ int main() {
         node(2, 0, 1, 0, 1), node(3, 1, 2, .8, 0)};
     gepa::validate_nodes(nodes);
     check(gepa::parents(nodes.items()[0]).empty());
+    auto corrected = nodes;
+    corrected.items()[1]["status"] = "unobserved_changes";
+    rejects([&] { gepa::validate_nodes(corrected); });
+    corrected.items()[1]["attribution_previous_status"] = "accepted";
+    gepa::validate_nodes(corrected);
+    for(const auto id : gepa::pool(gepa::frontier_map(corrected, {"a", "b"}, Json{}))) check(id != 1);
     check(gepa::parents(nodes.items()[1]) == std::vector<std::size_t>{0});
     const Json config{{"seed", 42}};
     const auto mapping = gepa::frontier_map(nodes, {"a", "b"}, config);

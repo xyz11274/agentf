@@ -564,7 +564,7 @@ v1::AdviceResult ShadowRuntime::query(const v1::AdviceQuery& query,
   input.clear_query_id();
   input.clear_decision_id();
   result.set_input_fingerprint(digest(stable_bytes(input)));
-  auto text = integration::retrieval_text(integration::Json(query.task()))
+  auto text = integration::current_task_retrieval_text(integration::Json(query.task()))
       + "\n" + integration::retrieval_text(integration::Json(query.state()));
   const auto all_keywords = terms(text);
   std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return std::tolower(c); });

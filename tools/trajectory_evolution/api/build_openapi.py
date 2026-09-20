@@ -74,7 +74,7 @@ def boundary_schema():
     for operation in ("agent_evaluation.status", "agent_evaluation.feedback"):
         add(operation, {}, [], run=False)
     add("agent_evaluation.submit", {"artifact": extensions}, ["artifact"], run=False)
-    for operation in ("agent_evaluation.retry", "agent_evaluation.cancel", "agent_evaluation.tree"):
+    for operation in ("agent_evaluation.retry", "agent_evaluation.cancel", "agent_evaluation.tree", "agent_evaluation.replay_holdout"):
         add(operation, {"job_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}, ["job_id"], run=False)
     return {"$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "urn:trajectory-evolution:boundary:v1",
         "title": "Framework-neutral boundary protocol v1",
@@ -142,6 +142,7 @@ def build(schema):
     }
     schemas.update({name: object_schema(fields) for name, fields in results.items()})
     schemas["TaskEndResult"]["properties"].update(metrics=free_object, pending=boolean)
+    schemas["CallEndResult"]["properties"]["finalizing"] = boolean
     for name in results:
         schemas[name]["properties"]["persisted"] = boolean
     schemas["PointResult"] = {"type": "object", "required": ["context"], "properties": {

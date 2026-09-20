@@ -6,9 +6,14 @@
 
 namespace trajectory::evolution::integration::gepa {
 namespace {
+// 本文件只负责 GEPA 搜索中的“选择与组合”，不执行模型调用，也不改变运行时策略。
+// 所有判断都基于已落盘的节点、逐题验证分数和显式配置，因此中断恢复后应得到
+// 与中断前相同的父节点、前沿和融合结果。
 double number(const Json& value, double fallback = 0) {
   return std::holds_alternative<double>(value.value) ? std::get<double>(value.value) : fallback;
 }
+  // 候选排序使用稳定的多目标字典序：质量和适应度优先，随后才比较循环与时延。
+  // 这里仅决定搜索顺序，不等价于发布门禁；发布仍需独立留出集复核。
 bool better(const Json& a, const Json& b) {
   const auto feasible = mean(a, "feasible_score") - mean(b, "feasible_score");
   if(std::abs(feasible) > 1e-12 && mean(a, "feasible_score") > -1e9 && mean(b, "feasible_score") > -1e9)
@@ -24,6 +29,7 @@ bool better(const Json& a, const Json& b) {
 }
 }
 
+  // 输入是 task_id -> 指标对象。缺失字段按零处理，以免不完整评测被误当成高分。
 double mean(const Json& scores, const std::string& field) {
   if(!scores.object() || scores.fields().empty()) return -1e9;
   double total = 0;
@@ -33,6 +39,8 @@ double mean(const Json& scores, const std::string& field) {
   }
   return total / scores.fields().size();
 }
+  // 循环目标采用逐题约束，而不是只比较均值。这样可避免少数任务的大幅改善
+  // 掩盖另一些任务无效循环显著增加的退化。
 bool loops_no_worse(const Json& candidate, const Json& parent) {
   if(!candidate.object() || !parent.object() || candidate.fields().empty()
       || candidate.fields().size() != parent.fields().size()) return false;
@@ -45,15 +53,18 @@ bool loops_no_worse(const Json& candidate, const Json& parent) {
         || b["invalid_loops"].null() || a.str("loop_method") != b.str("loop_method")) return false;
     ++observed;
   }
-  // A disabled loop objective has no counts. Partial observations are not zero.
+  // 关闭循环目标时没有可比较的计数；部分观测不能被当作零值。
   return !observed || (observed == parent.fields().size()
       && mean(candidate, "invalid_loops") <= mean(parent, "invalid_loops") + 1e-12);
 }
+  // Pareto 接受条件：质量、适应度以及循环三类核心目标均不得倒退。
 bool no_worse(const Json& candidate, const Json& parent) {
   if(!loops_no_worse(candidate, parent)) return false;
   return mean(candidate, "quality") >= mean(parent, "quality") - 1e-12
       && mean(candidate, "fitness") >= mean(parent, "fitness") - 1e-12;
 }
+  // “局部专长”允许节点总体均值不占优，但至少在一个任务上形成超过阈值的改进。
+  // 该信号用于保留多样分支，最终能否发布仍由全局验证与留出门禁决定。
 bool local_gain(const Json& candidate, const Json& parent, double minimum) {
   if(!candidate.object() || !parent.object() || parent.fields().empty()
       || candidate.fields().size() != parent.fields().size()) return false;
@@ -70,12 +81,13 @@ bool local_gain(const Json& candidate, const Json& parent, double minimum) {
     gained |= quality > minimum;
     for(const auto* key : {"fitness", "loop_efficiency", "token_efficiency", "latency_efficiency", "goal_score", "robustness_score"}) {
       if(a.has(key) != b.has(key) || (a.has(key) && (a[key].null() || b[key].null()))) return false;
-      // Preserve specialists, not speed gains obtained by failing the same task.
+      // 保留在特定任务上真正改进的专长节点，不能把同一任务失败换来的速度收益当作改进。
       if(a.has(key) && quality >= -1e-12) gained |= number(a[key]) > number(b[key]) + minimum;
     }
   }
   return gained;
 }
+  // 统一读取单亲变异和双亲融合节点，调用方无需根据节点类型分支。
 std::vector<std::size_t> parents(const Json& node) {
   std::vector<std::size_t> result;
   if(node.has("parents")) {
@@ -83,6 +95,7 @@ std::vector<std::size_t> parents(const Json& node) {
   } else if(!node["parent"].null()) result.push_back(node["parent"].integer());
   return result;
 }
+  // 迭代展开祖先而非递归，避免深搜索树造成调用栈增长；同时用集合阻断坏数据中的环。
 std::set<std::size_t> ancestors(const Json& nodes, std::size_t index) {
   std::set<std::size_t> result;
   auto pending = parents(nodes.items().at(index));
@@ -95,6 +108,8 @@ std::set<std::size_t> ancestors(const Json& nodes, std::size_t index) {
   }
   return result;
 }
+  // 恢复搜索前先验证整棵树。任何悬空父节点、向前引用或重复节点编号都必须
+  // 在选择阶段前暴露，不能让损坏的持久化状态悄悄影响下一代。
 void validate_nodes(Json& nodes) {
   require(nodes.array() && !nodes.items().empty(), "gepa_tree_invalid");
   for(std::size_t i = 0; i < nodes.items().size(); ++i) {
@@ -102,7 +117,11 @@ void validate_nodes(Json& nodes) {
     require(node.num("id", SIZE_MAX) == i && ids.size() <= 2 && (i ? !ids.empty() : ids.empty()), "gepa_tree_invalid");
     std::set<std::size_t> unique; std::size_t depth = 0;
     for(auto id : ids) {
-      require(id < i && unique.insert(id).second && nodes.items()[id].str("status") == "accepted", "gepa_tree_invalid");
+      require(id < i && unique.insert(id).second, "gepa_tree_invalid");
+      const auto& parent = nodes.items()[id];
+      // 归因纠正不删除历史父子边；新父节点仍只从 accepted 节点中选择。
+      require(parent.str("status") == "accepted" || (parent.str("status") == "unobserved_changes"
+          && parent.str("attribution_previous_status") == "accepted"), "gepa_tree_invalid");
       depth = std::max(depth, nodes.items()[id].num("depth", 0) + 1);
     }
     require(node.num("depth", SIZE_MAX) == depth
@@ -118,6 +137,8 @@ void validate_nodes(Json& nodes) {
   }
 }
 Json frontier_map(const Json& nodes, const std::vector<std::string>& tasks, const Json& config) {
+  // 为每道验证题分别维护非支配前沿。这样总体均值一般、但在特定任务上有效的
+  // 分支仍可成为父节点，避免搜索过早塌缩为单一路径。
   Json mapping = Json::Object{};
   const auto mode = config.str("frontier_type", "instance");
   auto add = [&](const std::string& key, const std::string& task, const std::string& field) {
@@ -141,8 +162,8 @@ Json frontier_map(const Json& nodes, const std::vector<std::string>& tasks, cons
   if(mode == "cartesian") for(const auto& task : tasks)
     for(const auto* field : {"quality", "loop_efficiency", "token_efficiency", "latency_efficiency"})
       add("pair:" + Json(Json::Array{task, field}).dump(), task, field);
-  // Remove candidates whose frontier coverage is contained in an at-least-as-good
-  // candidate. Equal coverage/scores keep one deterministic representative.
+  // 删除被“不差于它且覆盖范围包含它”的候选支配的节点；覆盖与分数相同时
+  // 保留一个确定性代表，避免同一前沿被重复扩张。
   if(config.flag("prune_dominated", true)) {
     std::map<std::size_t, std::set<std::string>> coverage;
     for(const auto& item : mapping.fields()) for(const auto& id : item.second.items()) coverage[id.integer()].insert(item.first);
@@ -162,11 +183,14 @@ Json frontier_map(const Json& nodes, const std::vector<std::string>& tasks, cons
   return mapping;
 }
 std::vector<std::size_t> pool(const Json& mapping) {
+  // 将逐题前沿去重为候选池；节点在多道题命中时仍只保留一次。
   std::set<std::size_t> ids;
   for(const auto& item : mapping.fields()) for(const auto& id : item.second.items()) ids.insert(id.integer());
   return {ids.begin(), ids.end()};
 }
 std::size_t select_parent(const Json& nodes, const Json& mapping, const Json& config, std::size_t round) {
+  // 父节点选择只在当前前沿池内进行。轮询模式保证弱势专长分支仍有繁殖机会，
+  // 最优模式则用于收敛阶段集中预算；两种模式都不会读取最终留出集。
   auto ids = pool(mapping); require(!ids.empty(), "gepa_frontier_empty");
   const auto strategy = config.str("candidate_selection_strategy", "pareto");
   std::vector<std::size_t> accepted;
@@ -191,6 +215,9 @@ std::size_t select_parent(const Json& nodes, const Json& mapping, const Json& co
   return ids[std::discrete_distribution<std::size_t>(weights.begin(), weights.end())(random)];
 }
 Json select_merge(const Json& nodes, const Json& mapping, const Json& attempts, const Json& config, std::size_t round) {
+  // 合并只能从前沿节点中选取：单亲扩张探索当前最优，双亲合并探索互补改进。
+  // 双亲候选必须来自不同、互不为祖先的分支，并共享一个可追溯祖先。
+  // attempts 记录已试组合，确保恢复后不会反复花费模型预算生成同一对子节点。
   const auto ids = pool(mapping); std::vector<std::array<std::size_t, 2>> pairs;
   for(std::size_t a = 0; a < ids.size(); ++a) for(std::size_t b = a + 1; b < ids.size(); ++b) pairs.push_back({ids[a], ids[b]});
   std::mt19937 random(static_cast<unsigned>(config.num("seed", 42) + round));
@@ -202,8 +229,8 @@ Json select_merge(const Json& nodes, const Json& mapping, const Json& attempts, 
     std::set_intersection(a.begin(), a.end(), b.begin(), b.end(), std::back_inserter(common));
     std::stable_sort(common.begin(), common.end(), [&](auto x, auto y) { return nodes.items()[x].num("depth", 0) > nodes.items()[y].num("depth", 0); });
     for(auto base : common) {
-      // Frontier specialists may lose on average while improving different tasks.
-      // Require a real local gain; the combined child still has to beat both parents.
+      // 前沿专长节点的整体均值可能较低，但会在不同任务上各有提升。
+      // 因而要求相对共同祖先存在真实局部增益；生成的子节点仍须分别胜过两个父节点。
       auto gain = [&](std::size_t id) {
         const auto& candidate = nodes.items()[id]["validation"];
         const auto& ancestor = nodes.items()[base]["validation"];
@@ -231,6 +258,8 @@ Json recombine(const Json& ancestor, const Json& first, const Json& second,
   require(ancestor.object() && first.object() && second.object()
       && first.fields().size() == ancestor.fields().size() && second.fields().size() == ancestor.fields().size(), "gepa_components_changed");
   Json result{{"components", Json::Object{}}, {"sources", Json::Object{}}, {"conflicts", Json::Array{}}};
+  // 采用三方合并：共同祖先提供基线，两个父节点各自相对祖先的改动才有资格进入子代。
+  // 当双方同时改写同一组件时记录冲突，并按调用方给定的稳定优先级选择，保证可复现。
   std::set<std::size_t> contributors; bool complementary = false;
   for(const auto& item : ancestor.fields()) {
     const auto& key = item.first;
@@ -246,15 +275,17 @@ Json recombine(const Json& ancestor, const Json& first, const Json& second,
     result["sources"][key] = source;
     if(a != b) contributors.insert(source);
   }
-  // A nominal two-parent edge must actually combine changes from both branches.
+  // 名义上的双亲边必须实际合并两个分支的改动，不能退化为单亲复制。
   result["useful"] = complementary && contributors.size() == 2;
   return result;
 }
 Json select_components(const Json& components, const std::string& strategy, std::size_t cursor) {
   Json selected = Json::Array{};
   if(strategy == "round_robin") {
-    // Interleave executable controls with experience mutations. A large memory
-    // set must not consume every useful round before L2/L3 are revisited.
+  // 组件轮询将 L1 经验、L2 编排、L3 循环控制交错安排，防止经验条目数量较多时
+  // 长期挤占控制策略的变异预算。
+    // 让可执行控制规则与经验改写交替进入候选。经验集合很大时，也不能在再次
+    // 探索 L2/L3 前耗尽所有有效轮次。
     std::vector<std::string> experiences;
     for(const auto& item : components.fields())
       if(item.first != "action_rules" && item.first != "loop_rules" && item.first != "schedule_rules") experiences.push_back(item.first);
@@ -277,6 +308,8 @@ Json select_components(const Json& components, const std::string& strategy, std:
 std::vector<std::size_t> select_proposals(const Json& nodes, const Json& ids, const Json& config) {
   std::vector<std::size_t> result;
   for(const auto& id : ids.items()) if(nodes.items().at(id.integer()).str("status") == "screened") result.push_back(id.integer());
+  // 预筛选只缩小需要做昂贵完整验证的集合；未通过筛选的节点仍保留在搜索树中，
+  // 便于审计失败原因，但不会进入发布候选。
   const auto strategy = config.str("proposal_selection", "all_improvements");
   if(strategy != "all_improvements") {
     auto improvement = [&](auto id) {

@@ -1185,6 +1185,29 @@
         "job_id"
       ],
       "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "const": "agent_evaluation.replay_holdout"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "job_id": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "operation",
+        "request_id",
+        "job_id"
+      ],
+      "additionalProperties": false
     }
   ]
 }

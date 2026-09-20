@@ -8,6 +8,7 @@ patterns are only a defence-in-depth fallback.
 
 from __future__ import annotations
 
+import ast
 import base64
 import json
 import os
@@ -236,6 +237,23 @@ def _redact_text(text: str, path: str, report: _ReportBuilder) -> str:
 
     def _replace_match(match: re.Match[str], label: str) -> str:
         value = match.group("value")
+        # sig/signature 也常用于文件头、校验代码；表达式不是凭据字面值。
+        # 已注册密钥在上一步按实际值处理，URL/带引号的签名仍走脱敏。
+        prefix = match.group("prefix")
+        before = match.string[max(0, match.start() - 2):match.start()]
+        assignment_boundary = (not before or before[-1] in " \t\r\n;\"'"
+                               or before.endswith(("\\n", "\\r", "\\t")))
+        if (label == "credential_field"
+                and assignment_boundary
+                and re.fullmatch(r"(?i)[\"']?(?:sig|signature)\s*=\s*", prefix)):
+            try:
+                # JSON 中的换行写成反斜线转义，不能把下一行一并当作凭据。
+                expression_text = value.split("\\", 1)[0]
+                expression = ast.parse(expression_text, mode="eval").body if len(expression_text) <= 1024 else None
+            except (SyntaxError, ValueError, RecursionError):
+                expression = None
+            if isinstance(expression, ast.Call):
+                return match.group(0)
         suffix = match.groupdict().get("suffix") or ""
         escaped_suffix = ""
         if suffix and value.endswith("\\"):

@@ -1,0 +1,1 @@
+Execution is finished. Give the user a final answer using only the observed results, in the language requested by the user. Report failures and unfinished work honestly; preserve available artifacts. Do not call tools, delegate, retry, or claim unobserved success.

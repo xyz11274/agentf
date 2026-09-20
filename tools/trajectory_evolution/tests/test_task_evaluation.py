@@ -842,6 +842,30 @@ class TrialTests(unittest.TestCase):
         report = self.evaluate(code=3, name="entry-unbound-state")
         self.assertEqual(report["trials"][0]["error_code"], "evaluation_entry_initial_state_unbound")
 
+    def test_entry_capture_failure_does_not_wait_for_trial_timeout(self):
+        for label, expected in (("rejected-start", "evaluation_entry_capture_sensitive_field_rejected"),
+                                ("missing-start-gap", "evaluation_entry_capture_task_not_found"),
+                                ("open-gap", "evaluation_entry_trace_incomplete"),
+                                ("rejected-child", "evaluation_entry_capture_sensitive_field_rejected")):
+            with self.subTest(label=label):
+                self.entry_mode("--" + label)
+                report = self.evaluate(code=3, name="capture-" + label)
+                trial = report["trials"][0]
+                self.assertEqual(trial["error_code"], expected, trial)
+                self.assertEqual(trial["execution_status"], "error")
+                self.assertLess(trial["duration_ms"], 3000)
+                capture = trial["evidence"]["failure_capture"]
+                self.assertFalse(capture["complete"])
+                self.assertEqual(capture["expected_runs"], 2)
+                self.assertTrue(any(run["complete"] for run in capture["runs"]))
+                self.assertEqual(report["summary"]["model_calls"], 0)
+
+    def test_entry_late_previous_failure_does_not_poison_next_turn(self):
+        self.entry_mode("--late-previous-failure")
+        trial = self.evaluate(name="late-previous-failure")["trials"][0]
+        self.assertEqual(trial["verdict"], "passed", trial)
+        self.assertEqual(len(trial["evidence"]["traces"]), 2)
+
     @unittest.skipUnless(shutil.which("node"), "Node is not installed")
     def test_javascript_entry_uses_same_protocol(self):
         self.entry_mode()
@@ -936,6 +960,26 @@ class TrialTests(unittest.TestCase):
                 self.assertTrue(trial["evidence"]["trace"]["attributes"]["capture_complete"])
                 self.assertIn("agent_version_id", trial["evidence"]["trace"]["events"][0]["attributes"])
                 self.assertEqual(trial["evidence"]["artifacts"]["report.json"]["json"]["total"], 20)
+
+    def test_capture_budget_is_independent_of_stdout(self):
+        config = json.loads((SOURCE / "config/boundary-service.json").read_text())
+        config["runtime_config"] = str(SOURCE / "config/standard-runtime.json")
+        config["experience_template_file"] = str(SOURCE / "config/prompts/runtime-experience.txt")
+        config["instrumentation"] = {"level": "L0", "capabilities": ["model", "actions", "loop"],
+                                     "binding": {"pointer": "", "mode": "text"}}
+        write_json(self.root / "instrumentation.json", config)
+        self.config["variants"][0].update(
+            command=[sys.executable, "-B", str(SOURCE / "tests/instrumented_agent.py"),
+                     str(BUILD / "libtrajectory_evolution_local.so"), "--file"],
+            instrumentation_config=str(self.root / "instrumentation.json"))
+        self.config.update(timeout_ms=5000, require_trace=True, max_output_bytes=2048)
+        trial = self.evaluate(name="small-stdout")["trials"][0]
+        self.assertEqual(trial["verdict"], "passed")
+        self.assertGreater(len(json.dumps(trial["evidence"]["trace"]).encode()), 2048)
+        self.config["max_trace_bytes"] = 128
+        limited = self.evaluate(code=3, name="small-trace")["trials"][0]
+        self.assertEqual(limited["error_code"], "evaluation_trace_bytes_limit")
+        self.assertEqual(limited["verdict"], "error")
 
     def test_configured_artifacts_are_validated_before_execution(self):
         for name, files in (("unknown-task", {"missing-task": []}),

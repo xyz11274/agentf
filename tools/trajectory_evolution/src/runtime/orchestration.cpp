@@ -90,6 +90,8 @@ void validate_schedule_rules(const v1::RuntimeOptions& options) {
         && identifier(rule.target_scope()) && identifier(rule.before_operation()) && identifier(rule.after_operation())
         && !rule.reason().empty() && rule.reason().size() <= 1024, "schedule_rule_invalid");
     require(rule.task_terms_size() <= 8 && rule.exclude_terms_size() <= 8, "schedule_task_guard_invalid");
+    require((rule.before_argument().empty() && rule.after_argument().empty())
+        || (identifier(rule.before_argument()) && identifier(rule.after_argument())), "schedule_resource_guard_invalid");
     std::set<std::string> terms;
     for(const auto* list : {&rule.task_terms(), &rule.exclude_terms()}) for(const auto& term : *list)
       require(term.size() >= 2 && term.size() <= 128 && identifier(term)
@@ -100,6 +102,7 @@ void validate_schedule_rules(const v1::RuntimeOptions& options) {
     std::sort(ordered_terms.begin(), ordered_terms.end());
     std::sort(ordered_exclusions.begin(), ordered_exclusions.end());
     std::string guard = rule.target_scope() + "\n" + rule.before_operation() + "\n" + rule.after_operation();
+    guard += "\nresource:" + rule.before_argument() + "\n" + rule.after_argument();
     for(const auto& term : ordered_terms) guard += "\n+" + term;
     for(const auto& term : ordered_exclusions) guard += "\n-" + term;
     require(guards.insert(guard).second, "schedule_rule_duplicate");
@@ -165,10 +168,25 @@ v1::SchedulePlan plan_schedule(const v1::RuntimeOptions& options, const v1::Runt
         const auto& before = query.actions(j);
         if(before.operation() != rule.before_operation()
             || (rule.before_operation() == rule.after_operation() && j >= i)) continue;
+        // 只用显式资源身份配对；不同产物与缺失参数不推断为同一工作流。
+        const bool resource_bound = !rule.before_argument().empty();
+        if(resource_bound) {
+          const auto& outputs = before.arguments().fields();
+          const auto& inputs = query.actions(i).arguments().fields();
+          const auto output = outputs.find(rule.before_argument()), input = inputs.find(rule.after_argument());
+          if(output == outputs.end() || input == inputs.end()
+              || output->second.kind_case() != google::protobuf::Value::kStringValue
+              || input->second.kind_case() != google::protobuf::Value::kStringValue
+              || output->second.string_value().empty() || output->second.string_value().size() > 512
+              || output->second.string_value().find("<redacted") != std::string::npos
+              || output->second.string_value().find("[REDACTED") != std::string::npos
+              || output->second.string_value().find("[redacted") != std::string::npos
+              || output->second.string_value() != input->second.string_value()) continue;
+        }
         // Operation-level learning cannot identify which of several independent
         // instances belong together. Refine known edges instead of guessing an
         // all-to-all dependency that lets one failure cancel unrelated work.
-        if(ambiguous && std::none_of(original.actions(i).after().begin(), original.actions(i).after().end(),
+        if(ambiguous && !resource_bound && std::none_of(original.actions(i).after().begin(), original.actions(i).after().end(),
             [&](const auto& edge) { return edge.action_id() == before.action_id(); })) continue;
         v1::ActionDependency* edge = nullptr;
         for(auto& existing : *target->mutable_after()) if(existing.action_id() == before.action_id()) edge = &existing;
@@ -222,7 +240,8 @@ v1::ScheduleState advance_schedule(v1::ScheduleState state, const std::string& a
   if(status == "running") {
     const auto ready = ready_schedule(state);
     require(std::find(ready.begin(), ready.end(), action_id) != ready.end(), "schedule_predecessor_pending");
-  } else require(found->second == "running", "schedule_action_not_running");
+  } else require(found->second == "running" || (found->second == "waiting" && status == "cancelled"),
+      "schedule_action_not_running");
   for(auto& item : *state.mutable_actions()) if(item.action_id() == action_id) item.set_status(status);
   // A failed prerequisite affects its success-dependent descendants only.
   bool changed = true;
