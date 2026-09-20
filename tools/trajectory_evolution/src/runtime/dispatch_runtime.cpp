@@ -49,8 +49,12 @@ Json subpoint(Json& run, const Json& state, const Json& data, const Json& config
 }
 Json observe(Json& run, Json& state, const std::string& action, const std::string& status,
              const Json& output, const Json& config, const PolicyRuntime* policy) {
-  return subpoint(run, state, Json{{"phase", "event"}, {"input", Json{{"action_id", action},
-      {"status", status}, {"output", output}}}}, config, policy, action + ":" + status);
+  Json event{{"phase", "event"}, {"input", Json{{"action_id", action},
+      {"status", status}, {"output", output}}}};
+  // 比较业务结果，不把异步回执 ID 当成进展；原始 output 仍完整进入轨迹。
+  const auto result = read_path(output, state["binding"].str("result_output"));
+  if(!result.null()) event["extensions"]["progress_output"] = result;
+  return subpoint(run, state, event, config, policy, action + ":" + status);
 }
 Json missing_result(const Json& state, const std::string& action, const std::string& status) {
   const auto& b = state["binding"];
@@ -83,14 +87,48 @@ Json next_wave(Json& run, Json& state, const Json& config, const PolicyRuntime* 
     dispatch_referenced_point(run, Json{{"operation", "point"}, {"phase", "after"}, {"kind", "schedule"},
         {"ref", state["ref"]}, {"output", completion}}, config, policy);
     state["finished"] = true; state["completion"] = completion;
-    return Json{{"managed", true}, {"pending", false}, {"completion", completion}};
+    Json response{{"managed", true}, {"pending", false}, {"completion", completion}};
+    if(!state.has("wave")) {
+      // 首波全部被策略取消时没有宿主 ACK，返回可识别的拒绝及各分支原因。
+      auto ack = completion; ack["status"] = "cancelled"; ack["reason"] = "all_dispatch_actions_rejected";
+      write_path(ack, state["binding"].str("accepted"), Json::Array{});
+      response["output"] = ack; state["ack"] = ack;
+    }
+    return response;
   }
   require(!view["ready"].items().empty(), "dispatch_completion_pending", 409);
+  Json ready = Json::Array{};
+  bool filter = false;
+  if(run.num("level", 0) >= 2 && state.flag("apply_policy", true)) {
+    const auto& caps = static_cast<const Json&>(run)["policy"]["options"]["host_capabilities"];
+    if(caps.array()) for(const auto& cap : caps.items()) filter |= cap.text() == "action.filter";
+  }
+  for(const auto& action : view["ready"].items()) {
+    if(filter) {
+      // 每波都在组件中检查；异步恢复沿原计划归因，不依赖宿主回调透传 parent。
+      const auto guard = dispatch_referenced_point(run, Json{{"operation", "point"}, {"phase", "guard"},
+          {"kind", "action"}, {"name", action["operation"]}, {"input", action["arguments"]},
+          {"ref", Json{{"run", state["ref"]["run"]}, {"parent", state["ref"]["key"]},
+              {"key", state.str("id") + ":guard:" + action.str("action_id")}}},
+          {"extensions", Json{{"metrics", Json{{"tool_call", false}}}}}}, config, policy);
+      if(guard.str("decision") == "reject") {
+        auto result = missing_result(state, action.str("action_id"), "cancelled");
+        write_path(result, state["binding"].str("result_output"),
+            Json{{"status", "rejected"}, {"reason", guard["reason"]}});
+        observe(run, state, action.str("action_id"), "cancelled", result, config, policy);
+        state["outcomes"][action.str("action_id")] = result;
+        continue;
+      }
+    }
+    ready.push(action);
+  }
+  // 取消仅传播到 require_success 后代；不依赖成功的下一波仍可继续。
+  if(ready.items().empty()) return next_wave(run, state, config, policy);
   const auto seq = state.num("sequence", 0) + 1; state["sequence"] = seq;
   Json wave{{"id", state.str("id") + ":wave:" + std::to_string(seq)}, {"claimed", false},
-      {"accepted", false}, {"actions", view["ready"]}};
+      {"accepted", false}, {"actions", ready}};
   Json items = Json::Array{};
-  for(const auto& action : view["ready"].items()) items.push(action["arguments"]);
+  for(const auto& action : ready.items()) items.push(action["arguments"]);
   auto payload = state["payload"]; write_path(payload, state["binding"].str("items"), items);
   wave["input"] = payload; state["wave"] = wave;
   return Json{{"managed", true}, {"pending", false}, {"wave_id", wave["id"]}, {"input", payload},
@@ -125,7 +163,8 @@ Json dispatch_batch_point(Json& run, const Json& request, const Json& config, co
     const auto prepared = dispatch_referenced_point(run, before, config, policy);
     const auto key = point_call_key(request);
     Json state{{"id", prepared["context"]["activity_id"]}, {"ref", request["ref"]}, {"binding", request["binding"]},
-        {"payload", request["input"]}, {"actions", actions}, {"outcomes", Json::Object{}}, {"finished", false}};
+        {"payload", request["input"]}, {"actions", actions}, {"outcomes", Json::Object{}}, {"finished", false},
+        {"apply_policy", request.flag("apply_policy", true)}};
     auto result = next_wave(run, state, config, policy); run["dispatch_plans"][key] = state;
     return result;
   }

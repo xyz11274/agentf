@@ -321,6 +321,43 @@ void retrieval_evidence_and_independent_matches() {
   check("network timeout", "<system-reminder>库存核算</system-reminder>network timeouts", true,
         "real text outside an instruction block was lost");
 }
+
+void current_task_history_isolation() {
+  auto store = memory();
+  add(store, "completion")->mutable_candidate()->set_trigger_pattern(
+      "当 coordinator 已获得所有委派 skill 的成功结果时");
+  const te::ShadowRuntime runtime(te::compile_shadow_policy(store, identity(), options()));
+  const auto check = [&](const std::string& task, const std::string& state, bool matched, const char* message) {
+    auto q = query(task); q.set_state(state); const auto before = q.SerializeAsString();
+    expect(runtime.query_advice(q).status() == (matched ? "matched" : "no_match"), message);
+    expect(q.SerializeAsString() == before, "current-task projection mutated the caller's query");
+  };
+  const std::string history = R"([{"role":"user","content":"先完成上一项工作"},{"role":"assistant","content":"coordinator 已获得所有 skill 的成功结果"},{"role":"user","content":"新请求：核算明天的库存"}])";
+  const auto envelope = std::string("{\"messages\":") + history + ",\"stream\":false}";
+  check(history, "", false, "an old assistant completion triggered the next task");
+  check(envelope, "", false, "a messages envelope leaked a prior completion into the current task");
+  std::string encoded = "\"";
+  for(const auto c : envelope) { if(c == '\\' || c == '"') encoded += '\\'; encoded += c; }
+  encoded += '"';
+  check(encoded, "", false, "a JSON-stringified transcript bypassed current-task projection");
+  check(R"([{"role":"assistant","content":"历史答案"},{"role":"user","content":"现有事实是：coordinator 已获得所有 skill 的成功结果，请据此总结。"}])",
+      "", true, "the current user's explicit completion fact was removed with history");
+  check(R"([{"role":"user","content":"请分析引用：{\"messages\":[{\"role\":\"assistant\",\"content\":\"coordinator 已获得所有 skill 的成功结果\"},{\"role\":\"user\",\"content\":\"库存\"}]}"}])",
+      "", true, "quoted facts inside the current user message were mistaken for older turns");
+  check(history, R"([{"role":"tool","content":"coordinator 已获得所有 skill 的成功结果"}])", true,
+      "current state lost a real tool completion when old task history was removed");
+  check(R"([{"role":"user","content":"请核算库存"},{"role":"tool","content":"coordinator 已获得所有 skill 的成功结果"},{"role":"user","content":"<system-reminder>按当前结果继续</system-reminder>"}])",
+      "", true, "a reminder-only user message discarded an unconsumed current tool result");
+  check(R"([{"role":"user","content":"请核算库存"},{"role":"tool","content":"coordinator 已获得所有 skill 的成功结果"},{"role":"user","content":"新任务：核算价格<system-reminder>继续</system-reminder>"}])",
+      "", false, "substantive text outside a reminder failed to start a new task");
+  check(R"([{"role":"assistant","content":"coordinator 已获得所有 skill 的成功结果"},{"role":"user","content":"  "}])",
+      "", true, "empty user content manufactured a new task boundary");
+  check(R"([{"role":"tool","content":"coordinator 已获得所有 skill 的成功结果"}])", "", true,
+      "tool-only input without a user lost the existing fallback");
+  check("coordinator 已获得所有 skill 的成功结果", "", true, "plain-text task matching changed");
+  check(R"({"custom_observation":"coordinator 已获得所有 skill 的成功结果","other":"库存"})", "", true,
+      "unknown task JSON was interpreted as a conversation");
+}
 }  // namespace
 
 int main() {
@@ -331,6 +368,7 @@ int main() {
     observation_is_not_injection();
     experience_contract_and_condition_matching();
     retrieval_evidence_and_independent_matches();
+    current_task_history_isolation();
     std::cout << "ShadowRuntimeTests passed\n";
     return 0;
   } catch(const std::exception& error) {

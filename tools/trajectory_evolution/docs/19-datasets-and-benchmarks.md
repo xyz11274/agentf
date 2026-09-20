@@ -265,6 +265,11 @@ instrumentation_config 也进入后台评测配置指纹，修改后旧准入结
 并从实际事件汇总 metrics；不完整轨迹放入 evidence.failure_capture，包含 complete=false 和 validation，
 不将部分计数填作完整试验指标。没有可用记录、身份不符或隐私检查未通过时，只记录
 failure_evidence_unavailable 警告。原始 stdout/stderr 不作为故障证据保存；试跑原有错误码、超时判定和发布门禁保持不变。
+
+使用 `entry` 的隔离评测中，当前轮打点被拒绝时会及时返回 `evaluation_entry_capture_<错误码>`；已记录采集缺口但未结束的 run 返回 `evaluation_entry_trace_incomplete`。即使根打点未创建成功，也不会在已知采集失败后继续等待整题超时。业务流程的 fail-open 行为不变，普通业务失败不触发此错误；上一轮已结束 run 的迟到异常不污染下一轮。没有采集错误、仅等待异步任务完成时，仍须真实 `run.end` 且落盘后才能推进，接收器返回不能代替 run 结束。
+
+采集模式的轨迹预算与 stdout/stderr 预算分开配置：`max_output_bytes` 继续限制进程输出；`max_trace_bytes` 限制一个 trial 内所有采集 run 文件的总字节数，默认 32 MiB，可配置范围为 128 字节至 64 MiB。超限返回 `evaluation_trace_bytes_limit`，记作评测异常，不截断为一条看似完整的轨迹。此项不会扩大模型输入预算、产物预算或报告预算；长轨迹不会仅因超过 stdout 上限而读取失败。
+
 `instrumentation_transport` 默认为 `native`；使用配置式 HTTP 打点时设置为 `http`，评测器会启动独立的本地临时采集服务，
 通过 `TRAJECTORY_EVOLUTION_TRIAL_URL/CONFIG/TOKEN` 指向试验实例，包内配置式客户端自动读取，避免流入生产服务。
 完全自定义的远程测试宿主仍可使用下文的任务宿主协议。
@@ -425,13 +430,15 @@ Coordinator 的派发进程退出只意味着派发结束，不能代替整个�
 | max_latency_ratio          | 未启用 | 候选平均 Agent 时延 / 基线时延上限                                   |
 | max_token_ratio            | 未启用 | 候选平均 token / 基线 token 上限；缺计数时拒绝此项                   |
 | min_invalid_loop_reduction | 未启用 | 规则确认无效 loop 下界的下降比例，例如 0.3；缺有效轨迹指标时拒绝此项 |
-| require_level_coverage     | GEPA 为 true；固定候选为 false | 核验目标等级的实际应用回执；L1 经验注入、L2 已接入的技能编排（无编排接口时为动作控制）、L3 重规划或停止均须有执行证据 |
+| require_level_coverage     | false | 显式启用严格覆盖验收：生成规则及本级能力均须有应用证据；默认覆盖情况只作诊断，不阻挡效果达标的候选 |
 
 质量先满足门槛，成本改善不能抵消质量失败。基线无效 loop 为 0 时，候选也需为 0；报告保留原始数值。
 L0 用于基线测量，不要求相对自身取得成本或循环改善。
 错误、取消和模型评分不确定会降低覆盖率；证据不足为 inconclusive，不计作经验反证。
 宿主超时是一次未按预算完成的失败，基础设施不可用应返回 environment_error。
-`require_level_coverage` 不要求每道题触发所有能力。GEPA 可保留只改善部分能力的中间节点；最终候选缺少某一级的实际应用时，以 `level_capability_not_observed` 拒绝发布。仅查询、生成规则、派发 ACK 或始终 continue 不计实际应用。`control_coverage.capabilities` 提供各边界的 `queries/triggered/applied`，`unobserved_capabilities` 列出缺少的能力；每条生成规则还须通过原有的独立覆盖检查。
+默认按通过率、无效 loop 和时延等已配置效果门槛选择并验收策略，不要求为了达到 L3 而强行触发技能编排。`control_coverage.capabilities` 仍提供各边界的 `queries/triggered/applied`，`unobserved_capabilities` 和 `unobserved_rules` 如实列出未覆盖内容，不会因关闭覆盖门槛被改成已覆盖。GEPA 搜索仍核验新改动的实际应用及相对父策略的决策变化，不把完全未采用改动的随机收益当成新策略收益。
+
+需要专门验收全级能力时，显式设置 `require_level_coverage=true`：缺少生成规则证据以 `generated_control_not_observed` 拒绝，缺少本次最终评测的某级实际应用以 `level_capability_not_observed` 拒绝。不要求每道题触发所有能力；仅查询、生成规则、派发 ACK 或始终 continue 不计实际应用。
 
 报告同时提供总试验数、确定评分数、通过/失败/错误/不确定数量、覆盖率、各变体与分类汇总、
 配对胜负、平均/P95 Agent 时延、LLM/工具调用数及 tokens。未知计数不补成 0。

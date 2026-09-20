@@ -1,4 +1,5 @@
 #include "trajectory_evolution/evolution.h"
+#include "trajectory_evolution/agent_evaluation.h"
 #include "trajectory_evolution/orchestration.h"
 #include "agentflow/trajectory/experience.h"
 #include "../src/gepa/control_generation.h"
@@ -102,9 +103,46 @@ void injection_and_evidence() {
     }
   }
   check(result.context().find("图片素材") != std::string::npos);
+  check(result.context().find(p.policy_id()) == std::string::npos);
+  check(result.policy_id() == p.policy_id());
+  auto another_identity = p.snapshot().identity(); another_identity.set_run_id("another-run");
+  const auto rebound = te::bind_runtime_policy(p, another_identity);
+  check(rebound.policy_id() != p.policy_id());
+  check(te::PolicyRuntime(rebound).decide(query(rebound)).context() == result.context());
+  auto other_controls = p.options(); other_controls.mutable_action_rules(0)->set_reason("changed control metadata");
+  const auto control_variant = te::compile_runtime_policy(p.snapshot(), other_controls);
+  check(control_variant.policy_id() != p.policy_id());
+  check(te::PolicyRuntime(control_variant).decide(query(control_variant)).context() == result.context());
+  auto replan = query(p, "loop"); replan.set_iteration(2); replan.set_repeated_action_steps(1);
+  auto other_replan = query(control_variant, "loop"); other_replan.set_iteration(2); other_replan.set_repeated_action_steps(1);
+  const auto recovery = runtime.decide(replan);
+  check(recovery.progress().decision() == "replan" && !recovery.context().empty());
+  check(recovery.context().find(p.policy_id()) == std::string::npos);
+  check(te::PolicyRuntime(control_variant).decide(other_replan).context() == recovery.context());
   check(result.context().find("\"trigger_pattern\":\"视频生成缺少素材\"") != std::string::npos);
   check(result.context().find("\"target_scope\":\"coordinator\"") != std::string::npos);
   check(result.context().find("缺少图片仍重试") == std::string::npos);
+  ep::EvolutionMemoryStore memory;
+  memory.set_schema_version(1); memory.set_store_kind("trajectory_evolution_memory");
+  memory.set_store_version("evolution-memory-store-v1"); memory.set_revision(1);
+  for(const auto* id : {"advice-one", "advice-two"}) {
+    auto* entry = memory.add_entries(); entry->set_memory_id(id); entry->set_status(ep::EVOLUTION_MEMORY_STATUS_CANDIDATE);
+    auto* candidate = entry->mutable_candidate(); candidate->set_schema_version(1); candidate->set_candidate_id(id);
+    candidate->set_generator_version(agentflow::trajectory::kScopedExperienceGeneratorVersion);
+    candidate->set_target_type(ep::CANDIDATE_TARGET_TYPE_EXPERIENCE_INJECTION); candidate->set_target_scope("coordinator");
+    candidate->set_status(ep::EVOLUTION_CANDIDATE_STATUS_PROPOSED); candidate->set_trigger_pattern("视频生成缺少素材");
+    candidate->set_observed_problem("缺少图片仍重试"); candidate->set_proposed_change("请先补充图片素材，独立检索任务继续。");
+    candidate->set_support_user_count(1); auto* evidence = candidate->add_support_evidence(); evidence->set_evidence_id(id);
+    evidence->mutable_source()->set_user_id("user-a"); evidence->mutable_source()->set_dialogue_id(id);
+  }
+  auto duplicate_snapshot = te::compile_shadow_policy(memory, p.snapshot().identity(), p.snapshot().options());
+  auto duplicate_options = p.options(); duplicate_options.clear_approved_experiences();
+  for(const auto& entry : duplicate_snapshot.experiences()) {
+    auto* approval = duplicate_options.add_approved_experiences(); approval->set_memory_id(entry.memory_id());
+    approval->set_content_revision(entry.content_revision());
+  }
+  const auto deduplicated = te::PolicyRuntime(te::compile_runtime_policy(duplicate_snapshot, duplicate_options)).decide(q);
+  check(deduplicated.experiences_size() == 1);
   std::vector<std::future<void>> injections;
   for(int i = 0; i < 24; ++i) injections.push_back(std::async(std::launch::async, [&] {
     check(runtime.decide(q).context() == result.context());
@@ -169,6 +207,7 @@ void evolvable_applicability() {
   check(te::PolicyRuntime(changed).decide(q).status() == "no_change");
   q.mutable_advice_query()->set_task("network timeouts");
   check(te::PolicyRuntime(changed).decide(q).context().find("network timeout") != std::string::npos);
+  check(te::PolicyRuntime(changed).decide(q).context().find(original.snapshot().experiences(0).trigger_pattern()) == std::string::npos);
   rewrite->add_observed_operations("download");
   changed = te::compile_runtime_policy(original.snapshot(), options);
   check(te::PolicyRuntime(changed).decide(q).status() == "no_change");
@@ -189,6 +228,42 @@ void evolvable_applicability() {
   check(te::PolicyRuntime(guarded).decide(action_query).actions(0).decision() == "reject");
   options.mutable_experience_overrides(0)->set_trigger_pattern(" \n ");
   rejects([&] { te::compile_runtime_policy(original.snapshot(), options); });
+}
+
+void disabled_injection_keeps_control_approval() {
+  const auto original = policy();
+  auto options = original.options();
+  const auto source = options.approved_experiences(0);
+  *options.mutable_action_rules(0)->mutable_source_experience() = source;
+  *options.mutable_loop_rules(0)->mutable_source_experience() = source;
+  // Legacy retrieval-gated controls must survive too, not only predicate rules.
+  const auto parent = te::compile_runtime_policy(original.snapshot(), options);
+  *options.add_disabled_injections() = source;
+  auto disabled = te::compile_runtime_policy(original.snapshot(), options);
+  check(disabled.policy_id() != parent.policy_id());
+  check(disabled.snapshot().SerializeAsString() == parent.snapshot().SerializeAsString());
+  check(te::PolicyRuntime(parent).decide(query(parent)).experiences_size() == 1);
+  check(te::PolicyRuntime(disabled).decide(query(disabled)).context().empty());
+  auto actions = query(disabled, "actions");
+  auto* action = actions.add_actions(); action->set_action_id("missing-image"); action->set_operation("video");
+  check(te::PolicyRuntime(disabled).decide(actions).actions(0).decision() == "reject");
+  auto loop = query(disabled, "loop"); loop.set_iteration(7); loop.set_state_fingerprint("state");
+  check(te::PolicyRuntime(disabled).decide(loop).progress().decision() == "stop");
+  v1::RuntimePolicy reloaded;
+  check(reloaded.ParseFromString(disabled.SerializeAsString()));
+  check(te::PolicyRuntime(reloaded).decide(query(reloaded)).context().empty());
+  check(te::PolicyRuntime(reloaded).decide(actions).actions(0).decision() == "reject");
+  auto restored = disabled.options(); restored.clear_disabled_injections();
+  check(te::compile_runtime_policy(disabled.snapshot(), restored).policy_id() == parent.policy_id());
+  auto invalid = options;
+  invalid.mutable_disabled_injections(0)->set_content_revision("not-approved");
+  rejects([&] { te::compile_runtime_policy(original.snapshot(), invalid); });
+  invalid = options; *invalid.add_disabled_injections() = source;
+  rejects([&] { te::compile_runtime_policy(original.snapshot(), invalid); });
+  invalid = options; invalid.clear_approved_experiences();
+  rejects([&] { te::compile_runtime_policy(original.snapshot(), invalid); });
+  invalid = options; *invalid.mutable_disabled_injections(0) = options.approved_experiences(1);
+  rejects([&] { te::compile_runtime_policy(original.snapshot(), invalid); });
 }
 
 void independent_actions() {
@@ -755,6 +830,105 @@ void bounded_recovery_budget() {
   check(rejected);
 }
 
+void conditional_recovery_budget() {
+  namespace in = te::integration;
+  const auto p = policy(); auto base = p.options(); base.set_aggressive_controls(true);
+  const auto settings = in::Json::parse(R"({"enabled":true,"prompt_file":"test.txt"})");
+  const auto draft = in::Json::parse(R"({"action_rules":[],"loop_rules":[
+    {"memory_id":"experience-a","actor_id":"worker","max_replans":0,
+     "error_codes":["UnsupportedModel"],"after_action_rejection":true,"reason":"已拒绝的不可恢复错误不再次重规划"}]})");
+  const auto original = te::compile_runtime_policy(p.snapshot(), base);
+  const auto learned = te::compile_runtime_policy(p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, draft));
+  check(in::generated_controls_authorized(learned, original, settings));
+  auto q = query(learned, "loop"); q.set_actor_id("worker"); q.set_iteration(3);
+  q.set_repeated_action_steps(1); q.set_state_fingerprint("changed");
+  te::PolicyRuntime runtime(learned);
+  check(runtime.decide(q).progress().decision() == "replan"); // No observed condition: use the base budget.
+  q.add_error_codes("Timeout"); q.set_rejected_actions(1);
+  check(runtime.decide(q).progress().decision() == "replan");
+  q.clear_error_codes(); q.add_error_codes("UnsupportedModel"); q.set_rejected_actions(0);
+  check(runtime.decide(q).progress().decision() == "replan"); // AND, not OR.
+  q.set_rejected_actions(1);
+  check(runtime.decide(q).progress().decision() == "stop");
+  q.set_pending_actions(true);
+  check(runtime.decide(q).progress().decision() == "continue");
+  q.set_pending_actions(false); q.set_actor_id("independent-worker");
+  check(runtime.decide(q).progress().decision() == "replan");
+  q.set_actor_id("worker"); q.clear_error_codes(); q.set_rejected_actions(0);
+  check(runtime.decide(q).progress().decision() == "replan"); // An old error is not inferred from reason/task text.
+  auto rejection_only = draft; rejection_only["loop_rules"].items()[0].fields().erase("error_codes");
+  const auto rejected_policy = te::compile_runtime_policy(p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, rejection_only));
+  check(in::generated_controls_authorized(rejected_policy, original, settings));
+  q = query(rejected_policy, "loop"); q.set_actor_id("worker"); q.set_iteration(2); q.set_repeated_action_steps(1);
+  q.set_rejected_actions(1); check(te::PolicyRuntime(rejected_policy).decide(q).progress().decision() == "stop");
+  auto error_only = draft; error_only["loop_rules"].items()[0]["after_action_rejection"] = false;
+  const auto error_policy = te::compile_runtime_policy(p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, error_only));
+  check(in::generated_controls_authorized(error_policy, original, settings));
+  q = query(error_policy, "loop"); q.set_actor_id("worker"); q.set_iteration(2); q.set_repeated_action_steps(1);
+  q.add_error_codes("UnsupportedModel"); check(te::PolicyRuntime(error_policy).decide(q).progress().decision() == "stop");
+  auto duplicate = draft; duplicate["loop_rules"].items()[0]["error_codes"] = in::Json::Array{"UnsupportedModel", "UnsupportedModel"};
+  bool bad = false; try { in::apply_control_draft(p.snapshot(), base, settings, duplicate); } catch(const in::Error&) { bad = true; }
+  check(bad);
+  auto conditional_base = base; conditional_base.mutable_loop_rules(0)->add_error_codes("UnsupportedModel");
+  conditional_base.mutable_loop_rules(0)->set_after_action_rejection(true);
+  for(auto relaxed : {rejection_only, error_only}) {
+    relaxed["loop_rules"].items()[0]["error_codes"] = in::Json::Array{};
+    bad = false; try { in::apply_control_draft(p.snapshot(), conditional_base, settings, relaxed); }
+    catch(const in::Error&) { bad = true; }
+    check(bad);
+  }
+  // 原生查询同样有独立边界；合法重复码不必被强制视为无效。
+  auto bounded = query(original); bounded.set_rejected_actions(10000);
+  for(int i = 0; i < 64; ++i) bounded.add_error_codes("UnsupportedModel");
+  check(te::PolicyRuntime(original).decide(bounded).status() == "ready");
+  bounded.add_error_codes("UnsupportedModel");
+  rejects([&] { te::PolicyRuntime(original).decide(bounded); });
+  bounded.clear_error_codes(); bounded.set_rejected_actions(10001);
+  rejects([&] { te::PolicyRuntime(original).decide(bounded); });
+  bounded.set_rejected_actions(0);
+  for(const auto& code : {std::string{}, std::string(129, 'x'), std::string("bad\ncode"), std::string("x\0y", 3)}) {
+    bounded.clear_error_codes(); bounded.add_error_codes(code);
+    rejects([&] { te::PolicyRuntime(original).decide(bounded); });
+  }
+}
+
+void finalization_condition() {
+  namespace in = te::integration;
+  const auto p = policy(); auto base = p.options(); base.set_aggressive_controls(true);
+  const auto settings = in::Json::parse(R"({"enabled":true,"prompt_file":"test.txt"})");
+  const auto draft = in::Json::parse(R"({"action_rules":[],"loop_rules":[
+    {"memory_id":"experience-a","actor_id":"worker","max_iterations":2,
+     "require_finalization":true,"reason":"跳过重复执行后仍保留最终答复"}]})");
+  const auto original = te::compile_runtime_policy(p.snapshot(), base);
+  const auto learned = te::compile_runtime_policy(p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, draft));
+  check(learned.options().loop_rules(1).require_finalization());
+  check(in::generated_controls_authorized(learned, original, settings));
+  const auto exported = in::proto<v1::RuntimePolicy>(in::json(learned));
+  check(exported.options().loop_rules(1).require_finalization() && exported.policy_id() == learned.policy_id());
+  auto q = query(learned, "loop"); q.set_actor_id("worker"); q.set_iteration(3); q.set_state_fingerprint("new-state");
+  te::PolicyRuntime runtime(learned);
+  check(runtime.decide(q).progress().decision() == "continue"); // No capability: retain the original budget.
+  q.set_can_finalize(true); check(runtime.decide(q).progress().decision() == "stop");
+  q.set_pending_actions(true); check(runtime.decide(q).progress().decision() == "continue");
+  q.set_pending_actions(false); q.set_actor_id("independent-worker");
+  check(runtime.decide(q).progress().decision() == "continue");
+  q.set_actor_id("worker"); q.set_can_finalize(false); q.set_iteration(7);
+  check(runtime.decide(q).progress().decision() == "stop"); // The base bound remains effective.
+  auto legacy = draft; legacy["loop_rules"].items()[0].fields().erase("require_finalization");
+  const auto old = te::compile_runtime_policy(p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, legacy));
+  q = query(old, "loop"); q.set_actor_id("worker"); q.set_iteration(3);
+  check(te::PolicyRuntime(old).decide(q).progress().decision() == "stop");
+  check(in::generated_controls_authorized(old, original, settings));
+  auto conditional_base = base; conditional_base.mutable_loop_rules(0)->set_require_finalization(true);
+  const auto inherited = te::compile_runtime_policy(p.snapshot(), in::apply_control_draft(p.snapshot(), conditional_base, settings, legacy));
+  check(inherited.options().loop_rules(1).require_finalization());
+  check(in::generated_controls_authorized(inherited, te::compile_runtime_policy(p.snapshot(), conditional_base), settings));
+  auto relaxed = draft; relaxed["loop_rules"].items()[0]["require_finalization"] = false;
+  bool bad = false; try { in::apply_control_draft(p.snapshot(), conditional_base, settings, relaxed); }
+  catch(const in::Error& error) { bad = std::string(error.what()) == "control_loop_relaxes_condition"; }
+  check(bad);
+}
+
 void target_retry_rule() {
   namespace in = te::integration;
   const auto p = policy(); auto base = p.options(); base.clear_action_rules();
@@ -814,12 +988,62 @@ void schedule_execution_contract() {
   check(in::schedule_contract_check(constraints, multi).str("status") == "failed");
 }
 
+void scoped_control_roundtrip() {
+  namespace in = te::integration; using in::Json;
+  const auto p = policy(); auto base = p.options(); base.clear_action_rules();
+  base.add_host_capabilities("schedule.dispatch");
+  const Json settings{{"enabled", true}, {"prompt_file", "test.txt"}};
+  const auto draft = Json::parse(R"({"action_rules":[
+    {"memory_id":"experience-a","primitive_id":"terminal_failure","operation":"render",
+     "terminal_error_codes":["UnsupportedModel"],"error_scope_arguments":["model"],"reason":"配置故障不重试"},
+    {"memory_id":"experience-a","primitive_id":"operation_budget","operation":"verify",
+     "max_attempts":2,"reason":"重复检查预算"}],"loop_rules":[],"schedule_rules":[
+    {"memory_id":"orchestration-z","before_operation":"prepare","after_operation":"render",
+     "before_argument":"output","after_argument":"input","require_success":true,"reason":"同一资源先准备再消费"}]})");
+  const auto learned = te::compile_runtime_policy(p.snapshot(), in::apply_control_draft(p.snapshot(), base, settings, draft));
+  check(in::generated_controls_authorized(learned, te::compile_runtime_policy(p.snapshot(), base), settings));
+  const auto exported = in::proto<v1::RuntimePolicy>(in::Json::parse(in::json(learned).dump()));
+  auto q = query(exported, "actions");
+  auto* a = q.add_actions(); a->set_action_id("verification"); a->set_operation("verify");
+  (*a->mutable_target_failures())[exported.options().action_rules(1).rule_id()] = 2;
+  auto* b = q.add_actions(); b->set_action_id("other"); b->set_operation("search");
+  const auto decision = te::PolicyRuntime(exported).decide(q);
+  check(decision.actions(0).decision() == "reject" && decision.actions(1).decision() == "allow");
+  auto schedule = query(exported, "schedule"); schedule.set_execution_id("batch");
+  schedule.mutable_advice_query()->set_task("Prepare two independent images / 准备两个独立图片");
+  for(const auto* resource : {"a.png", "b.png"}) {
+    auto* producer = schedule.add_actions(); producer->set_action_id(std::string("prepare-") + resource);
+    producer->set_operation("prepare"); (*producer->mutable_arguments()->mutable_fields())["output"].set_string_value(resource);
+    auto* consumer = schedule.add_actions(); consumer->set_action_id(std::string("render-") + resource);
+    consumer->set_operation("render"); (*consumer->mutable_arguments()->mutable_fields())["input"].set_string_value(resource);
+  }
+  const auto plan = te::plan_schedule(exported.options(), schedule);
+  check(plan.status() == "scheduled" && plan.actions(1).after_size() == 1 && plan.actions(3).after_size() == 1);
+  check(plan.actions(1).after(0).action_id() == "prepare-a.png" && plan.actions(3).after(0).action_id() == "prepare-b.png");
+  auto state = te::begin_schedule(plan); state = te::advance_schedule(state, "prepare-a.png", "running");
+  state = te::advance_schedule(state, "prepare-a.png", "failed");
+  const auto ready = te::ready_schedule(state);
+  check(ready.size() == 1 && ready[0] == "prepare-b.png");
+  schedule.mutable_actions(3)->clear_arguments();
+  check(te::plan_schedule(exported.options(), schedule).actions(3).after_size() == 0);
+  (*schedule.mutable_actions(0)->mutable_arguments()->mutable_fields())["output"].set_string_value("<redacted:resource>");
+  (*schedule.mutable_actions(1)->mutable_arguments()->mutable_fields())["input"].set_string_value("<redacted:resource>");
+  check(te::plan_schedule(exported.options(), schedule).actions(1).after_size() == 0);
+  auto invalid = draft; invalid["action_rules"].items()[0]["required_arguments"] = Json::Array{"secret"};
+  bool rejected = false; try { in::apply_control_draft(p.snapshot(), base, settings, invalid); } catch(const in::Error&) { rejected = true; }
+  check(rejected);
+}
+
 int main() {
   const std::vector<std::pair<const char*, void(*)()>> cases = {
+    {"scoped_control_roundtrip", scoped_control_roundtrip},
     {"injection_and_evidence", injection_and_evidence}, {"evolvable_applicability", evolvable_applicability},
+    {"disabled_injection_keeps_control_approval", disabled_injection_keeps_control_approval},
     {"independent_actions", independent_actions}, {"loop_controls", loop_controls},
     {"generated_controls", generated_controls}, {"failure_replanning", failure_replanning},
     {"bounded_recovery_budget", bounded_recovery_budget},
+    {"conditional_recovery_budget", conditional_recovery_budget},
+    {"finalization_condition", finalization_condition},
     {"target_retry_rule", target_retry_rule}, {"schedule_execution_contract", schedule_execution_contract},
     {"skill_orchestration", skill_orchestration}, {"independent_workflow_pairs", independent_workflow_pairs},
     {"same_operation_orchestration", same_operation_orchestration}, {"level_application_coverage", level_application_coverage},

@@ -90,8 +90,8 @@ std::size_t bounded(const Json& value, const std::string& name, std::size_t fall
   return result;
 }
 
-// RFC 6901 pointers, including escaped names and arrays. Missing is different
-// from an explicit JSON null; no executable expressions or regex evaluation.
+// 支持 RFC 6901 指针（含转义名称与数组）。字段缺失不同于显式 JSON null；
+// 此处不执行表达式，也不进行正则求值。
 const Json* pointer(const Json& value, const std::string& path) {
   if(path.empty()) return &value;
   require(path.front() == '/' && path.size() <= 2048, "evaluation_pointer_invalid");
@@ -176,8 +176,8 @@ std::size_t action_count(const Json& check, const Json& evidence) {
       if(found->second->operation() != check.str("operation")) continue;
       const auto attributes = integration::json(event.attributes());
       require(attributes.has("executed"), "evaluation_action_evidence_unavailable");
-      // Count observations, not proposed calls, start/end pairs, or successful
-      // artifacts. Execution identity is local to each run and concurrent scope.
+      // 统计真实观测，而不是建议调用、起止配对或成功产物。执行身份只在各 run
+      // 与并发作用域内有效，不能跨作用域合并。
       if(attributes.flag("executed", false) && (check.str("status").empty() || event.status() == check.str("status"))) ++count;
     }
     require(ended.size() == starts.size(), "evaluation_action_evidence_unavailable");
@@ -234,7 +234,7 @@ std::vector<std::string> command(const Json& config, const fs::path& config_dir)
     for(std::size_t pos = 0; (pos = item.find(marker, pos)) != std::string::npos;) {
       item.replace(pos, marker.size(), config_dir.string()); pos += config_dir.string().size();
     }
-    // A command-line argument is not an acceptable channel for credentials.
+    // 命令行参数不是传递凭据的可接受通道。
     safe(Json(item));
     result.push_back(std::move(item));
   }
@@ -269,7 +269,7 @@ struct Variant {
   bool published_policy = false;
 };
 
-// The evaluator owns isolation/version/trace assembly; the host only emits points.
+// 评测器负责隔离、版本与轨迹组装；宿主只负责发出打点。
 std::vector<std::string> instrumented_environment(const Variant& variant, const fs::path& workspace, const std::string& trial, const Json& request) {
   auto config = variant.instrumentation_config;
   config["data_dir"] = (workspace / "capture").string();
@@ -295,7 +295,7 @@ std::vector<std::string> instrumented_environment(const Variant& variant, const 
   unsigned char salt[32]; require(RAND_bytes(salt, sizeof(salt)) == 1, "evaluation_secret_unavailable");
   const auto token = hash(std::string(reinterpret_cast<const char*>(salt), sizeof(salt)));
   auto env = variant.environment;
-  // Environment values stay in process memory, not in the config or reports.
+  // 环境变量值只留在进程内存中，绝不写入配置或报告。
   const std::string config_key = "TRAJECTORY_EVOLUTION_TRIAL_CONFIG=", token_key = "TRAJECTORY_EVOLUTION_TRIAL_TOKEN=";
   env.erase(std::remove_if(env.begin(), env.end(), [&](const auto& entry) {
     return entry.rfind("TRAJECTORY_EVOLUTION_TRIAL_", 0) == 0
@@ -313,6 +313,8 @@ Json instrumented_run(const Variant& variant, const fs::path& workspace, const s
   for(const auto& entry : fs::directory_iterator(folder)) {
     require(++count <= 1024, "evaluation_run_limit");
     if(entry.path().extension() != ".json") continue;
+    require(fs::is_regular_file(entry.path()) && !fs::is_symlink(entry.path()), "evaluation_file_not_regular");
+    require(fs::file_size(entry.path()) <= max_bytes - bytes, "evaluation_trace_bytes_limit");
     const auto content = read_file(entry.path(), max_bytes - bytes);
     bytes += content.size();
     const auto item = Json::parse(content);
@@ -323,8 +325,8 @@ Json instrumented_run(const Variant& variant, const fs::path& workspace, const s
     runs.push(item);
   }
   require(!runs.items().empty(), "evaluation_trace_missing");
-  // Directory iteration order is not dialogue order. Preserve each real run;
-  // a multi-turn trial does not manufacture one synthetic execution trace.
+  // 目录遍历顺序不等于对话顺序。必须保留每个真实 run；多轮试验不能伪造为一条
+  // 合成执行轨迹。
   std::sort(runs.items().begin(), runs.items().end(), [](const Json& a, const Json& b) {
     const auto at = a["events"].items().front().str("timestamp_us");
     const auto bt = b["events"].items().front().str("timestamp_us");
@@ -376,7 +378,7 @@ Json trial_trace_analysis(const std::vector<ValidatedTrace>& traces) {
     const auto part = boundary ? integration::boundary_metrics(value["events"]) : Json(Json::Object{});
     if(first) metrics = part;
     else for(auto it = metrics.fields().begin(); it != metrics.fields().end();) {
-      // A missing metric in any run is unknown, not zero in the trial total.
+      // 任一 run 缺失指标都表示未知，不能在试验总计中按零处理。
       if(!part.has(it->first)) it = metrics.fields().erase(it);
       else { it->second = it->second.integer() + part[it->first].integer(); ++it; }
     }
@@ -399,8 +401,8 @@ void compact_judge_evidence(Json& input, bool share_inputs = false) {
     for(rapidjson::SizeType i = 0; i < events.Size(); ++i) {
       auto& event = events[i];
       if(event.HasMember("input")) sharing.collect(event["input"], path + "/events/" + std::to_string(i) + "/input");
-      // Activity/step ends and application receipts repeat execution values
-      // too. Share their exact payloads, never event identities or ordering.
+      // 活动／步骤结束事件和应用回执也会重复执行值；仅共享完全相同的负载，
+      // 绝不能共享事件身份或事件顺序。
       if(share_inputs) for(const auto* field : {"output", "attributes", "application"})
         if(event.HasMember(field)) sharing.collect(event[field],
             path + "/events/" + std::to_string(i) + "/" + field);
@@ -423,8 +425,8 @@ Json loop_inventory(const Json& evidence) {
       : evidence.has("trace") ? Json(Json::Array{evidence["trace"]}) : Json(Json::Array{});
   std::set<std::string> executed;
   for(const auto& raw : traces.items()) {
-    // Protobuf JSON represents uint64 as strings; canonicalize equivalent wire
-    // forms before grouping, so one round cannot be split by numeric spelling.
+    // Protobuf JSON 把 uint64 表示为字符串；分组前要规范化等价线缆表示，
+    // 避免同一轮因数字写法不同被拆分。
     const auto trace = integration::json(integration::proto<v1::TraceRun>(raw));
     for(const auto& event : trace["events"].items()) {
       if(event.str("loop_id").empty() || event.str("execution_id").empty() || event.str("iteration", "0") == "0") continue;
@@ -436,7 +438,7 @@ Json loop_inventory(const Json& evidence) {
       item["event_ids"].push(event["event_id"]);
       if(event.str("kind") == "action.end" && event["attributes"].flag("executed", true)) {
         executed.insert(id);
-        // A concrete locator, not a precomputed judgment or generated evidence.
+        // 这里只接受具体定位符，不能接受预先计算的判断或生成式证据。
         if(!item.has("anchor_event_id")) item["anchor_event_id"] = event["event_id"];
       }
     }
@@ -490,13 +492,13 @@ Json validate_loop_review(const Json& value, const Json& inventory, const Json& 
     auto in_round = [&](const std::string& event) {
       return std::any_of(own.begin(), own.end(), [&](const Json& entry) { return entry.text() == event; });
     };
-    // Keep a current-round anchor. Joined child results can precede a round's
-    // completion without preceding its start; unrelated later events cannot.
+    // 保留当前轮锚点。已汇合的子结果可能在本轮结束前到达、却未显式先于开始；
+    // 但不能把无关的后续事件并入本轮。
     std::set<std::string> preceding;
     for(std::size_t t = 0; t < traces.items().size(); ++t) {
       const auto& trace = traces.items()[t];
       if(trace["identity"]["run_id"].text() != inventory[id]["run_id"].text()) continue;
-      // Reuse validated ordering within this review, never across requests.
+      // 只在当前审查内复用已验证顺序，绝不能跨请求复用。
       auto found = ordered_traces.find(t);
       if(found == ordered_traces.end())
         found = ordered_traces.emplace(t, validate_trace(parse_trace_json(trace.dump())).trace).first;
@@ -531,8 +533,8 @@ Json validate_loop_review(const Json& value, const Json& inventory, const Json& 
   }
   Json result{{"method", "model_review"}, {"status", status}, {"observed_iterations", inventory.fields().size()},
       {"count", status == "complete" ? Json(wasted.items().size()) : Json(nullptr)}, {"wasted_iterations", wasted}};
-  // Keep every decision for audit; counts are derived only from explicit waste
-  // decisions in a complete review. Legacy custom graders remain compatible.
+  // 为审计保留每个判断；计数只能来自完整审查中的显式浪费判断，
+  // 同时兼容旧版自定义评分器。
   if(detailed) result["iteration_reviews"] = value["iteration_reviews"];
   return result;
 }
@@ -541,8 +543,8 @@ struct Workspace {
   fs::path path;
   explicit Workspace(fs::path value) : path(std::move(value)) { make_directory(path); }
   ~Workspace() {
-    // This path is a newly created, evaluator-owned trial directory. Never a
-    // user workspace or unresolved path supplied by a task or child process.
+    // 该路径必须是评测器新建且拥有的试验目录，绝不能是用户工作区、任务或子进程
+    // 提供的未解析路径。
     std::error_code ignored; fs::remove_all(path, ignored);
   }
 };
@@ -580,8 +582,8 @@ void collect_artifacts(Json& response, const Json& files, const fs::path& worksp
   for(const auto& file : files.items()) {
     const auto name = artifact_path(file, true);
     if(!file.has("pattern")) { add(name, file); continue; }
-    // Configured, component-wise patterns never recurse or follow symlinks.
-    // A zero-match optional branch is left to the task's acceptance criteria.
+    // 配置的逐组件模式不递归，也不跟随符号链接；可选分支零匹配是否可接受
+    // 由任务验收条件决定。
     std::vector<fs::path> candidates{workspace};
     for(const auto& part : fs::path(name)) {
       std::vector<fs::path> next;
@@ -621,8 +623,8 @@ Json artifacts(const Json& response, const fs::path& workspace, const fs::path& 
   const auto& entries = response["artifacts"].items();
   require(entries.size() <= 32, "evaluation_artifact_count_limit");
   std::size_t total = 0;
-  // Verify all artifacts before retaining any, so a rejected trial cannot leave
-  // earlier unchecked files or signed download URLs in the report directory.
+  // 先校验全部产物再保留任一产物，避免被拒试验把早先未检查的文件或带签名下载 URL
+  // 留在报告目录。
   std::vector<std::pair<std::string, std::string>> accepted;
   for(const auto& item : entries) {
     const auto name = artifact_path(item, false);
@@ -641,7 +643,7 @@ Json artifacts(const Json& response, const fs::path& workspace, const fs::path& 
     if(media == "application/json") {
       facts["json"] = Json::parse(bytes); safe(facts["json"]);
     } else if(media.rfind("text/", 0) == 0) {
-      // JSON encoding validates UTF-8; all textual artifact bytes pass privacy.
+      // JSON 编码会验证 UTF-8；全部文本产物字节都必须通过隐私检查。
       safe(Json::parse(Json(bytes).dump()));
       require(bytes.find('\0') == std::string::npos, "evaluation_text_artifact_invalid");
       facts["text"] = bytes;
@@ -656,8 +658,7 @@ Json artifacts(const Json& response, const fs::path& workspace, const fs::path& 
       require(u32(16) > 0 && u32(20) > 0, "evaluation_image_dimensions_invalid");
       facts["validation"] = "header_only";
 #if defined(EVOLUTION_HAS_PNG) && defined(PNG_SIMPLIFIED_READ_SUPPORTED)
-      // The simplified pixel reader can finish before IEND. Validate the
-      // complete container as well, including chunk bounds and checksums.
+      // 简化像素读取器可能在 IEND 前结束；还要验证完整容器，包括分块边界与校验和。
       std::size_t offset = 8;
       bool ended = false;
       while(offset < bytes.size()) {
@@ -675,8 +676,8 @@ Json artifacts(const Json& response, const fs::path& workspace, const fs::path& 
       struct ImageCleanup { png_image& image; ~ImageCleanup() { png_image_free(&image); } } cleanup{image};
       require(png_image_begin_read_from_memory(&image, bytes.data(), bytes.size()) != 0,
           "evaluation_image_decode_failed");
-      // Bound decompression before allocating pixels; preserve alpha and use
-      // the minimal row stride. Decoder messages are not persisted evidence.
+      // 分配像素前限制解压规模；保留 alpha 并使用最小行跨度。解码器消息不能作为
+      // 持久化证据。
       image.format = PNG_FORMAT_RGBA;
       const std::uint64_t pixel_bytes = std::uint64_t(image.width) * image.height * 4;
       require(pixel_bytes > 0 && pixel_bytes <= std::min<std::size_t>(max_bytes, 64 * 1024 * 1024),
@@ -710,7 +711,7 @@ struct Evaluator {
   std::string judge_prompt;
   std::mutex judge_mutex;
   std::size_t model_calls = 0, max_model_calls = 0;
-  std::size_t timeout = 0, max_bytes = 0, max_artifact_bytes = 0;
+  std::size_t timeout = 0, max_bytes = 0, max_trace_bytes = 0, max_artifact_bytes = 0;
   EvaluationProcessLimits resources;
   bool model_enabled = false, require_trace = false;
   bool require_chinese_reason = true;
@@ -789,8 +790,7 @@ struct Evaluator {
     for(const auto& trace : traces.items()) for(const auto& event : trace["events"].items())
       if(event.str("kind") == "action.start" && !event.str("operation").empty())
         operations.insert(event.str("operation"));
-    // Count original observations before payload sharing. Missing execution
-    // markers stay unknown; repeated results never collapse separate calls.
+    // 共享负载前先统计原始观测。缺失执行标记仍是未知；重复结果不能折叠不同调用。
     for(const auto& operation : operations) {
       try { observed_action_counts[operation] = action_count(Json{{"operation", operation}}, evidence); }
       catch(const Error&) { observed_action_counts[operation] = nullptr; }
@@ -805,8 +805,8 @@ struct Evaluator {
       return found == event_order.end() ? event_order.size() : found->second;
     };
     std::stable_sort(ordered.begin(), ordered.end(), [&](const auto& a, const auto& b) { return rank(a.second) < rank(b.second); });
-    // Short aliases follow observed execution order, not hash order. Padding
-    // keeps i10 after i09 in JSON objects; canonical IDs and causal links stay local.
+    // 短别名按观测到的执行顺序而非哈希顺序生成；补零保证 JSON 对象里 i10 排在 i09
+    // 之后，规范 ID 与因果链接仍留在本地。
     const auto width = std::to_string(ordered.size()).size();
     for(const auto& item : ordered) {
       const auto number = std::to_string(model_inventory.fields().size() + 1);
@@ -838,11 +838,11 @@ struct Evaluator {
             {"contract", Json{{"verdict", "passed|failed|uncertain"},
                 {"reason", "先用简体中文分别核对expected_behavior和constraints中的强制动作、适用条件分支、每条禁止项，再决定verdict；必需项未完成或违反禁止项均不能passed"},
                 {"evidence_paths", Json::Array{evidence.has("traces") ? "/traces" : evidence.has("trace") ? "/trace" : "/output"}}}}};
-        // Deployment checks are acceptance constraints, not an Agent assertion.
+        // 部署检查是验收约束，不是 Agent 自己声称成功的依据。
         if(!required_checks.items().empty()) input["required_checks"] = required_checks;
         if(!traces.items().empty()) input["observed_action_counts"] = observed_action_counts;
         if(model_evidence.has("artifacts")) input["artifact_provenance"] = "evaluator_after_execution_not_agent_actions";
-        // The not-yet-computed assessment is not execution evidence.
+        // 尚未计算出的评估不能当作执行证据。
         input["evidence"].fields().erase("loop_review");
         if(!include_model_requests) input["evidence_view"] = "model_requests_omitted";
         if(review_loops) {
@@ -884,9 +884,8 @@ struct Evaluator {
           if(options.cancelled && options.cancelled()) throw Error("evaluation_cancelled");
           ++model_calls;
           result.set_attempts(attempt + 1);
-          // The built-in HTTP adapter owns a fresh CURL handle per call. Keep
-          // the budget reservation atomic, but do not serialize worker I/O.
-          // Injected adapters retain the original serialized-call contract.
+          // 内置 HTTP 适配器每次调用使用新的 CURL 句柄。预算预留必须原子化，
+          // 但不能因此串行化工作线程 I/O；注入式适配器仍遵守原有的串行调用契约。
           if(!options.model_adapter) lock.unlock();
           response = adapter->evaluate(request);
         }
@@ -900,7 +899,7 @@ struct Evaluator {
         rapidjson::Document document;
         document.Parse<rapidjson::kParseValidateEncodingFlag | rapidjson::kParseIterativeFlag>(body.data(), body.size());
         if(document.HasParseError()) {
-          // Static parser diagnostics only; never retain an unvalidated body.
+          // 只保留静态解析诊断，绝不保留未验证的响应体。
           json_diagnostic = Json{{"parser_code", static_cast<int>(document.GetParseError())},
               {"description", rapidjson::GetParseError_En(document.GetParseError())},
               {"offset", static_cast<std::size_t>(document.GetErrorOffset())}, {"response_bytes", body.size()}};
@@ -929,7 +928,7 @@ struct Evaluator {
           try { valid = valid && pointer(evidence, path); }
           catch(const Error&) { valid = false; }
           if(!valid) {
-            // Only already privacy-checked, bounded paths enter recovery.
+            // 只有已通过隐私检查且受长度限制的路径才能进入恢复流程。
             if(path.size() <= 2048) invalid_paths.push(path);
             else invalid_paths.push("<path exceeds 2048 bytes>");
             continue;
@@ -940,8 +939,8 @@ struct Evaluator {
         if(review_loops) {
           auto review = validate_loop_review(value["loop_review"], model_inventory,
               evidence, require_chinese_reason, loop_diagnostic);
-          // Short references are model-local. Persist the original identities
-          // only after coverage, uniqueness and causal evidence are validated.
+          // 短引用只在模型输入中局部有效；原始身份只有在覆盖、唯一性与因果证据
+          // 通过验证后才能持久化。
           for(const auto* key : {"iteration_reviews", "wasted_iterations"})
             if(review.has(key)) for(auto& item : review[key].items())
               item["iteration_id"] = iteration_ids[item.str("iteration_id")];
@@ -959,7 +958,7 @@ struct Evaluator {
         if(!repairable.count(validation_error)) break;
       } catch(...) { result.set_reason("evaluation_judge_failed"); break; }
     }
-    // Retain bounded repair diagnostics, not an unvalidated model judgment.
+    // 只保留有界的修复诊断，不能保留未经验证的模型判断。
     if(!invalid_paths.items().empty()) evidence["judge_validation_error"] = Json{
         {"code", validation_error}, {"invalid_evidence_paths", invalid_paths}};
     if(!json_diagnostic.null()) evidence["judge_validation_error"] = Json{
@@ -1035,7 +1034,7 @@ struct Evaluator {
         request["artifact"] = variant.artifact;
         request["evaluation_mode"] = true;
       }
-      // No rubric, split, review metadata, or grader assertions enter the host.
+      // 评分量表、数据切分、审查元数据与评分器断言都不能进入宿主进程。
       auto trial_env = variant.instrumentation_config.null() ? variant.environment
           : instrumented_environment(variant, workspace.path, id, request);
       std::unique_ptr<IntegrationHttpServer> observer;
@@ -1058,12 +1057,12 @@ struct Evaluator {
         result.set_execution_status(process.error_code == "runner_timeout" ? "timeout"
             : process.error_code == "runner_cancelled" ? "cancelled" : "error");
         if(process.error_code == "runner_timeout") result.set_verdict("failed");
-        // Keep the runner verdict. Capture is independent of its exit
-        // code; only bounded, owner/version-checked and privacy-safe data survive.
+        // 保留 runner 自己的结论。采集与退出码独立；只有有界、已校验归属／版本且
+        // 隐私安全的数据可以保留下来。
         if(!variant.instrumentation_config.null()) {
           try {
             if(observer) require(observer->flush_capture(), "evaluation_capture_not_persisted");
-            const auto runs = instrumented_run(variant, workspace.path, id, max_bytes);
+            const auto runs = instrumented_run(variant, workspace.path, id, max_trace_bytes);
             Json traces = Json::Array{}, captures = Json::Array{};
             std::vector<ValidatedTrace> validations;
             bool complete = runs.items().size() == expected_runs;
@@ -1111,7 +1110,7 @@ struct Evaluator {
       }
       if(observer) require(observer->flush_capture(), "evaluation_capture_not_persisted");
       const auto response = variant.instrumentation_config.null() ? Json::parse(process.output)
-          : instrumented_response(variant, workspace.path, id, max_bytes, expected_runs);
+          : instrumented_response(variant, workspace.path, id, max_trace_bytes, expected_runs);
       integration::keys(response, {"schema_version", "trial_id", "execution_status", "output", "state",
           "metrics", "trace", "traces", "artifacts", "loaded_version"});
       require(response.num("schema_version", 0) == 1 && response.str("trial_id") == id,
@@ -1200,7 +1199,7 @@ struct Evaluator {
       }
       *result.mutable_metrics() = integration::proto<google::protobuf::Struct>(metrics);
       evidence["metrics"] = metrics;
-      // A missing/invalid deliverable must not discard validated execution evidence.
+      // 交付物缺失或无效不能丢弃已经验证过的执行证据。
       *result.mutable_evidence() = integration::proto<google::protobuf::Struct>(evidence);
       if(!metrics.has("steps") || !metrics.has("tool_calls")) result.add_warnings("step_or_tool_budget_unobserved");
       bool failed = false, unavailable = false;
@@ -1224,8 +1223,7 @@ struct Evaluator {
         result.set_error_code(status == "environment_error" ? "runner_environment_error" : "runner_cancelled");
         return result;
       }
-      // Host execution outcome and business acceptance remain separate. A
-      // post-processing failure does not erase a verifiably completed artifact.
+      // 宿主执行结果与业务验收必须分离；后处理失败不能抹掉已可验证完成的产物。
       if(status == "failed") result.add_warnings("host_execution_failed");
       const std::map<std::string, std::size_t> budgets{{"steps", task.budget().max_steps()},
                                                      {"tool_calls", task.budget().max_tool_calls()}};
@@ -1250,8 +1248,7 @@ struct Evaluator {
         if(failed && !unavailable) result.set_verdict("failed");
       }
       if(unavailable) result.set_error_code("evaluation_check_evidence_invalid");
-      // Hard failures remain failures. Explicit loop review still examines
-      // those traces so failed business tasks retain efficiency evidence.
+      // 硬失败仍是失败；显式循环审查仍要检查这些轨迹，使失败业务任务也保留效率证据。
       if(model_enabled && ((!failed && !unavailable) || config["judge"].has("loop_review_prompt"))) {
         auto judgment = model_grade(task, evidence);
         *result.mutable_evidence() = integration::proto<google::protobuf::Struct>(evidence);
@@ -1399,7 +1396,7 @@ dv::TaskEvaluationReport run_task_evaluation(const fs::path& dataset_directory,
   evaluator.output = fs::absolute(output_directory); evaluator.options = options;
   const auto& config = evaluator.config;
   integration::keys(config, {"schema_version", "splits", "repetitions", "parallelism", "max_trials", "timeout_ms",
-      "max_output_bytes", "max_artifact_bytes", "max_report_bytes", "require_trace", "variants", "checks", "judge", "resources", "task_ids", "artifacts"});
+      "max_output_bytes", "max_trace_bytes", "max_artifact_bytes", "max_report_bytes", "require_trace", "variants", "checks", "judge", "resources", "task_ids", "artifacts"});
   require(config.num("schema_version", 0) == 1, "evaluation_config_version_invalid");
   const auto repetitions = bounded(config, "repetitions", 1, 1, 100);
   const auto parallelism = bounded(config, "parallelism", 1, 1, 16);
@@ -1407,6 +1404,8 @@ dv::TaskEvaluationReport run_task_evaluation(const fs::path& dataset_directory,
   const auto max_report_bytes = bounded(config, "max_report_bytes", 33554432, 1024, 134217728);
   evaluator.timeout = bounded(config, "timeout_ms", 1800000, 1, 86400000);
   evaluator.max_bytes = bounded(config, "max_output_bytes", 1048576, 128, 8388608);
+  // 标准输出响应与多轮轨迹独立限额；不扩大模型评分输入或产物预算。
+  evaluator.max_trace_bytes = bounded(config, "max_trace_bytes", 33554432, 128, 67108864);
   evaluator.max_artifact_bytes = bounded(config, "max_artifact_bytes", 16777216, 1, 67108864);
   evaluator.require_trace = config.flag("require_trace", false);
   if(config.has("resources")) {
@@ -1435,8 +1434,7 @@ dv::TaskEvaluationReport run_task_evaluation(const fs::path& dataset_directory,
       require(bundle.num("schema_version", 0) == 1 && bundle["evaluation"]["gate"].flag("passed", false)
           && bundle.str("version") == agent_version_id(bundle["artifact"].dump()), "offline_policy_bundle_invalid");
       require(!value.has("version") || value.str("version") == bundle.str("version"), "evaluation_version_invalid");
-      // Resolve once before execution; the content participates in provenance
-      // and checkpoint identity, not just the file's mutable pathname.
+      // 执行前只解析一次；文件内容参与来源与检查点身份，而不仅是可变的文件路径。
       value["artifact"] = bundle["artifact"]; value["version"] = bundle["version"];
     }
     label(value.str("id")); label(value.str("version"));
@@ -1533,8 +1531,8 @@ dv::TaskEvaluationReport run_task_evaluation(const fs::path& dataset_directory,
   report.set_config_fingerprint(hash(config.dump() + evaluator.judge_prompt + evaluator.model_config_fingerprint));
   report.set_run_id("evaluation:" + hash(dataset.dataset_version() + config.dump()
       + std::to_string(std::chrono::system_clock::now().time_since_epoch().count()) + std::to_string(getpid())));
-  // Configuration is provenance, not credentials. Never persist resolved env
-  // values or absolute runner/runtime paths; retain explicit version labels.
+  // 配置是来源信息而不是凭据；绝不能持久化已解析的环境变量值或 runner／runtime 的
+  // 绝对路径，只保留显式版本标签。
   Json metadata{{"splits", config["splits"]}, {"repetitions", repetitions}, {"parallelism", parallelism},
       {"model_enabled", evaluator.model_enabled}, {"allow_unreviewed", options.allow_unreviewed},
       {"variants", Json::Array{}}};
@@ -1571,9 +1569,8 @@ dv::TaskEvaluationReport run_task_evaluation(const fs::path& dataset_directory,
       require(before.dump() == after.dump(), "evaluation_checkpoint_context_mismatch");
       require(previous.complete() == manifest.flag("complete", false)
           && (previous.complete() || !selected_ids.empty()), "evaluation_regrade_source_incomplete");
-      // A new judge does not re-execute the runner or deterministic checks.
-      // Bind this distinct report to both the captured execution and new judge;
-      // normal same-config resume must not accept it as a fresh execution.
+      // 更换评分器不能重新执行 runner 或确定性检查。该独立报告要同时绑定已采集执行
+      // 与新评分器；普通同配置恢复不能把它当作一次新的执行。
       metadata["model_only_regrade"] = !options.recheck;
       if(options.recheck) metadata["rechecked_configured_checks"] = true;
       metadata["execution_source"] = Json{{"run_id", previous.run_id()},
@@ -1590,8 +1587,7 @@ dv::TaskEvaluationReport run_task_evaluation(const fs::path& dataset_directory,
       indexes.emplace(std::make_tuple(jobs[i].task->task_id(), evaluator.variants[jobs[i].variant].id, jobs[i].repetition), i);
     std::set<std::size_t> seen; std::set<std::string> trial_ids;
     for(const auto& trial : previous.trials()) {
-      // Explicit subset review can reuse finished tasks from a paused batch.
-      // Every selected execution must still be present and complete below.
+      // 显式子集审查可以复用暂停批次里的已完成任务；但每个被选执行仍必须存在且完整。
       if(regrade_only && !selected_ids.empty() && !selected_ids.count(trial.task_id())) continue;
       const auto found = indexes.find(std::make_tuple(trial.task_id(), trial.variant_id(), trial.repetition()));
       require(found != indexes.end() && seen.insert(found->second).second
@@ -1625,17 +1621,16 @@ dv::TaskEvaluationReport run_task_evaluation(const fs::path& dataset_directory,
     while(true) {
       const auto index = next.fetch_add(1); if(index >= total) return;
       try {
-        // Cancellation stops scheduling, not just subprocess execution. Keep
-        // real trial outcomes without manufacturing errors for unstarted work.
+        // 取消会停止调度，而不仅是终止子进程；保留真实试验结果，不能为未启动工作
+        // 人为制造错误。
         const auto& job = jobs[index];
         const bool cancelled = options.cancelled && options.cancelled();
-        // Unreviewed old scores are not results under the new judge.
+        // 未由新评分器审查的旧分数，不是新评分器下的结果。
         if(regrade_only && cancelled) continue;
         const auto saved = checkpoint.find(index);
         if(saved != checkpoint.end()) {
           results[index] = saved->second; restored[index] = 1;
-          // Retain original execution IDs and duration; verify deliverable bytes
-          // before copying them into the new, independently readable report.
+          // 保留原始执行 ID 与时长；复制到新的独立可读报告前必须验证交付物字节。
           const auto evidence = integration::json(saved->second.evidence());
           std::vector<std::pair<std::string, std::string>> files; std::size_t bytes = 0;
           if(evidence["artifacts"].object()) for(const auto& entry : evidence["artifacts"].fields()) {
@@ -1665,8 +1660,7 @@ dv::TaskEvaluationReport run_task_evaluation(const fs::path& dataset_directory,
         }
         require(retained_bytes.fetch_add(results[index].ByteSizeLong()) + results[index].ByteSizeLong()
             <= max_report_bytes, "evaluation_report_size_limit");
-        // Persist each finished trial. A crash leaves useful checkpoints, but
-        // without the final manifest it is never a completed evaluation batch.
+        // 持久化每个完成试验。崩溃会留下可用检查点，但没有最终清单就绝不是完整评测批次。
         write_file(evaluator.output / "trials" / (results[index].trial_id() + ".json"), integration::json(results[index]).dump() + "\n");
       } catch(...) {
         std::lock_guard<std::mutex> lock(failure_mutex); if(!failure) failure = std::current_exception();

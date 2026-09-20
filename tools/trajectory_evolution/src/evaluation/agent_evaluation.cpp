@@ -5,15 +5,18 @@
 #include "local_support.h"
 #include "control_generation.h"
 #include "gepa_search.h"
+#include "agentflow/trajectory/runtime_config.h"
 
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <fstream>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <thread>
 #include <openssl/sha.h>
+#include <openssl/evp.h>
 #include <fcntl.h>
 #include <sys/file.h>
 #include <sys/stat.h>
@@ -126,6 +129,7 @@ bool published_policy_compatible(const v1::RuntimePolicy& published, const v1::R
   a = without_generated_controls(a); b = without_generated_controls(b);
   a.clear_approved_experiences(); b.clear_approved_experiences();
   a.clear_experience_overrides(); b.clear_experience_overrides();
+  a.clear_disabled_injections(); b.clear_disabled_injections();
   if(json(a).dump() != json(b).dump() || json(old.snapshot().options()).dump() != json(current.snapshot().options()).dump()) return false;
   for(const auto& approved : old.options().approved_experiences()) {
     bool allowed = false, present = false;
@@ -135,7 +139,7 @@ bool published_policy_compatible(const v1::RuntimePolicy& published, const v1::R
       present |= approved.memory_id() == item.memory_id() && approved.content_revision() == item.content_revision();
     if(!allowed || !present) return false;
   }
-  // A changed relation can alter joint eligibility even when both texts survive.
+  // 即使两段经验文本都仍存在，关系变化也可能改变它们能否共同被选中。
   if(old.snapshot().cross_relations_size() != current.snapshot().cross_relations_size()) return false;
   for(int i = 0; i < old.snapshot().cross_relations_size(); ++i)
     if(json(old.snapshot().cross_relations(i)).dump() != json(current.snapshot().cross_relations(i)).dump()) return false;
@@ -157,6 +161,32 @@ struct AgentEvaluationService::Impl {
   std::thread worker;
   std::size_t max_jobs = 256, interval = 60000, hourly = 12;
 
+  std::string host_command_fingerprint() const {
+    // 只读取命令显式引用的文件，不扫描目录或解释 shell/module 的传递依赖；
+    // 后者仍由宿主 revision 负责。本包 CLI 由运行时语义版本管理，避免搜索重编译使成绩失效。
+    std::string bytes = "host-command-files-v1\n";
+    std::error_code error;
+    const auto self = fs::canonical("/proc/self/exe", error);
+    for(const auto& variant : evaluation["variants"].items()) for(const auto& argument : variant["command"].items()) {
+      const fs::path path(argument.text());
+      error.clear();
+      if(!fs::is_regular_file(path, error)) continue;
+      const auto resolved = fs::canonical(path, error);
+      if(error || resolved == self) continue;
+      std::ifstream stream(resolved, std::ios::binary);
+      require(bool(stream), "evaluation_file_unavailable");
+      std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> hash(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+      require(hash && EVP_DigestInit_ex(hash.get(), EVP_sha256(), nullptr) == 1, "evaluation_hash_failed");
+      char block[65536];
+      while(stream.read(block, sizeof(block)) || stream.gcount())
+        require(EVP_DigestUpdate(hash.get(), block, static_cast<std::size_t>(stream.gcount())) == 1, "evaluation_hash_failed");
+      require(stream.eof(), "evaluation_read_failed");
+      unsigned char result[EVP_MAX_MD_SIZE]; unsigned int size = 0;
+      require(EVP_DigestFinal_ex(hash.get(), result, &size) == 1, "evaluation_hash_failed");
+      bytes += argument.text() + '=' + digest(std::string(reinterpret_cast<const char*>(result), size)) + '\n';
+    }
+    return digest(bytes);
+  }
   std::string evaluation_fingerprint() const {
     const auto data = read_evaluation_dataset(dataset_path);
     for(const auto& issue : data.issues()) require(issue.severity() != "error", "evaluation_dataset_invalid");
@@ -168,8 +198,7 @@ struct AgentEvaluationService::Impl {
       if(evaluation["judge"].has("loop_review_prompt")) bytes += read(evaluation["judge"].str("loop_review_prompt"));
       bytes += read(evaluation["judge"].str("runtime_config"));
     }
-    // The host revision is part of the baseline version. Environment-backed
-    // model selection is included without recording credentials.
+    // 宿主版本属于基线版本的一部分；环境中选择的模型也要纳入指纹，但绝不记录凭据。
     for(const auto* name : {"OPENAI_BASE_URL", "OPENAI_MODEL"})
       if(const auto* value = std::getenv(name)) bytes += std::string(name) + "=" + value + "\n";
     return digest("gepa-baseline-evaluation-v1:boundary-current-request-v1:verified-controls-v1:failure-replan-v2:skill-schedule-v2:control-outcomes-v5:aggressive-controls-v1:retrieval-evidence-v4\n" + bytes);
@@ -179,7 +208,7 @@ struct AgentEvaluationService::Impl {
     const auto data = read_evaluation_dataset(dataset_path);
     for(const auto& issue : data.issues()) require(issue.severity() != "error", "evaluation_dataset_invalid");
     bytes += data.dataset_version();
-    if(!gepa.null()) bytes += gepa_config_fingerprint(gepa) + controls.dump();
+    if(!gepa.null()) bytes += gepa_config_fingerprint(gepa) + controls.dump() + host_command_fingerprint();
     for(const auto& variant : evaluation["variants"].items())
       if(variant.has("instrumentation_config")) bytes += read(variant.str("instrumentation_config"));
     if(evaluation["judge"].flag("enabled", false)) {
@@ -187,8 +216,44 @@ struct AgentEvaluationService::Impl {
       if(evaluation["judge"].has("loop_review_prompt")) bytes += read(evaluation["judge"].str("loop_review_prompt"));
       bytes += read(evaluation["judge"].str("runtime_config"));
     }
-    // Runtime semantics are part of the frozen experiment, not just its JSON.
-    return digest("boundary-current-request-v1:verified-controls-v1:failure-replan-v3:skill-schedule-v4:control-outcomes-v8:aggressive-controls-v1:retrieval-evidence-v5:control-feedback-v3:actor-loops-v2\n" + bytes);
+    // 冻结实验不仅由 JSON 决定，还必须绑定运行时语义版本。
+    return digest("boundary-current-request-v1:verified-controls-v1:failure-replan-v3:skill-schedule-v4:control-outcomes-v8:terminal-branch-v1:aggressive-controls-v1:retrieval-evidence-v7:current-turn-v1:control-feedback-v3:actor-loops-v2:effect-selection-v1\n" + bytes);
+  }
+  std::string candidate_evaluation_fingerprint() const {
+    // 搜索/反思变化不使真实执行成绩失效；运行时或评分语义变化必须更新此版本。
+    std::string bytes = "candidate-evaluation-v1:boundary-current-request-v1:verified-controls-v1:failure-replan-v3:skill-schedule-v4:control-outcomes-v8:terminal-branch-v1:aggressive-controls-v1:retrieval-evidence-v7:current-turn-v1:actor-loops-v2:finalization-v1:task-evaluator-v1:schedule-success-v1\n";
+    bytes += evaluation.dump() + read_evaluation_dataset(dataset_path).dataset_version() + config["agent"].dump()
+        + host_command_fingerprint();
+    std::set<std::string> environment{"PATH", "LANG", "LC_ALL", "TZ", "OPENAI_BASE_URL", "OPENAI_MODEL"};
+    for(const auto& variant : evaluation["variants"].items()) {
+      if(variant["pass_env"].array()) for(const auto& name : variant["pass_env"].items()) environment.insert(name.text());
+      if(!variant.has("instrumentation_config")) continue;
+      const fs::path path(variant.str("instrumentation_config"));
+      const auto content = read(path); bytes += content;
+      const auto settings = Json::parse(content);
+      auto resource = [&](const char* field) {
+        fs::path value(settings.str(field)); return value.is_absolute() ? value : path.parent_path() / value;
+      };
+      if(settings.has("experience_template_file")) bytes += read(resource("experience_template_file"), 16384);
+      const auto finish = settings.has("finalization_template_file") ? resource("finalization_template_file")
+          : settings.has("experience_template_file") ? resource("experience_template_file").parent_path() / "runtime-finalization.txt" : fs::path{};
+      if(!finish.empty() && fs::exists(finish)) bytes += read(finish, 16384);
+    }
+    if(evaluation["judge"].flag("enabled", false)) {
+      bytes += read(evaluation["judge"].str("prompt"));
+      if(evaluation["judge"].has("loop_review_prompt")) bytes += read(evaluation["judge"].str("loop_review_prompt"));
+      const auto runtime = agentflow::trajectory::load_runtime_configuration(evaluation["judge"].str("runtime_config"));
+      for(const auto& source : runtime.source_files) bytes += read(source);
+      bytes += runtime.model.endpoint + '\n' + runtime.model.model_id;
+      if(!runtime.no_api_key) environment.insert(runtime.api_key_env.empty() ? "OPENAI_API_KEY" : runtime.api_key_env);
+    }
+    // 只返回摘要；环境原文（含账户切换）不进入文件、日志或模型请求。
+    for(const auto& name : environment) {
+      bytes += '\n' + name + '=';
+      if(const auto* value = std::getenv(name.c_str())) bytes += digest(value);
+      else bytes += "<unset>";
+    }
+    return digest(bytes);
   }
   explicit Impl(const fs::path& file, const fs::path& data, std::function<void()> callback, const std::string& control_json)
       : root(fs::absolute(data)), config_path(fs::absolute(file)), changed(std::move(callback)) {
@@ -216,7 +281,7 @@ struct AgentEvaluationService::Impl {
       const fs::path resource(evaluation["variants"].items()[0].str("instrumentation_config"));
       if(resource.is_relative()) evaluation["variants"].items()[0]["instrumentation_config"] = (evaluation_path.parent_path() / resource).string();
     }
-    // Host commands and environment names remain deployment-controlled.
+    // 宿主命令和环境变量名始终由部署侧控制，服务不会自行改写它们。
     for(auto& argument : evaluation["variants"].items()[0]["command"].items()) {
       auto value = argument.text(); const std::string marker = "{config_dir}";
       for(std::size_t i; (i = value.find(marker)) != std::string::npos;) value.replace(i, marker.size(), evaluation_path.parent_path().string());
@@ -252,13 +317,18 @@ struct AgentEvaluationService::Impl {
     require(state.num("schema_version", 0) == 1 && state["jobs"].fields().size() <= max_jobs, "evaluation_state_invalid");
     for(auto& pair : state["jobs"].fields()) {
       require(pair.first.size() == 64 && pair.first.find_first_not_of("0123456789abcdef") == std::string::npos, "evaluation_job_invalid");
+      const auto replay_compatible = pair.second["final_holdout_replay"].object()
+          && pair.second["final_holdout_replay"].num("requested_count", 0) == 3
+          && pair.second["final_holdout_replay"].str("evaluation_context") == evaluation_fingerprint()
+          && pair.second["final_holdout_replay"].str("candidate_evaluation_context") == candidate_evaluation_fingerprint();
+      const auto context_compatible = pair.second.str("context") == context || replay_compatible;
       if(pair.second.str("status") == "running") {
-        const bool resume = pair.second.flag("gepa", false) && pair.second.str("context") == context
+        const bool resume = pair.second.flag("gepa", false) && context_compatible
             && !pair.second.flag("cancel_requested", false);
         pair.second["status"] = resume ? "pending" : "interrupted";
         if(!resume) pair.second["error"] = "evaluation_interrupted_retry_required";
       }
-      if(pair.second.str("status") == "pending" && pair.second.str("context") != context) pair.second["status"] = "superseded";
+      if(pair.second.str("status") == "pending" && !context_compatible) pair.second["status"] = "superseded";
     }
     for(const auto& p : state["publications"].fields()) {
       if(p.second.null()) continue;  // A rejected lane has no publication yet.
@@ -268,7 +338,7 @@ struct AgentEvaluationService::Impl {
           && job["gate"].flag("passed", false) && job.str("user") == artifact.str("user_id")
           && job.str("version") == p.second.str("version") && job.str("context") == p.second.str("context")
           && p.first == lane(job.str("user"), artifact.str("level")), "evaluation_publication_changed");
-      // The durable publication may precede the final job save or bundle write.
+      // 持久化发布记录可能早于最后一次作业保存或 bundle 写入，恢复时必须补齐这一步。
       job["published"] = true;
       export_publication(p.second.str("job_id"), job, artifact);
       if(p.second.str("context") == context) published[p.first] = artifact;
@@ -286,7 +356,7 @@ struct AgentEvaluationService::Impl {
   void export_publication(const std::string& id, const Json& job, const Json& artifact) const {
     const auto bundle = Json{{"schema_version", 1}, {"version", job["version"]}, {"artifact", artifact},
         {"evaluation", Json{{"job_id", id}, {"context", job["context"]}, {"gate", job["gate"]}}}};
-    // Keep the existing GEPA path; fixed-candidate jobs have no search directory.
+    // 保留 GEPA 的既有目录约定；固定候选作业没有搜索目录。
     const auto path = root / id / (job.flag("gepa", false) ? "search/published-version.json" : "published-version.json");
     if(fs::exists(path)) {
       require(Json::parse(read(path)).dump() == bundle.dump(), "evaluation_export_changed");
@@ -295,7 +365,7 @@ struct AgentEvaluationService::Impl {
     write(path, bundle.dump());
   }
   void make_room() {
-    // Bound the live index without discarding reproducible reports or dedup IDs.
+    // 只限制活动索引的规模，不能删除可复现报告或去重标识。
     while(state["jobs"].fields().size() >= max_jobs) {
       std::string oldest; std::size_t time = SIZE_MAX;
       for(const auto& p : state["jobs"].fields()) {
@@ -347,16 +417,18 @@ struct AgentEvaluationService::Impl {
     reject(!paired, "insufficient_paired_trials");
     const auto current_controls = control_coverage(artifact, report);
     const auto controls = merge_control_coverage(current_controls, search_coverage);
-    reject(!controls.flag("complete", false), "generated_control_not_observed");
-    if(gate.flag("require_level_coverage", !gepa.null()))
+    // 与搜索选优一致：默认按效果验收，未命中的规则和能力仍完整保留在报告中。
+    if(gate.flag("require_level_coverage", false)) {
+      reject(!controls.flag("complete", false), "generated_control_not_observed");
       reject(!current_controls.flag("level_complete", false), "level_capability_not_observed");
+    }
     return Json{{"passed", reasons.items().empty()}, {"scored", scored && paired}, {"reasons", reasons}, {"baseline", base}, {"candidate", candidate},
         {"comparison", groups.has("baseline") ? "paired" : "baseline_only"}, {"control_coverage", current_controls},
         {"historical_control_coverage", controls}};
   }
   void record_feedback(const std::string& id, const Json& job, const Json& artifact, const Json& base,
                        const Json& verdict, const dataset::v1::TaskEvaluationReport& report) {
-    // Bundle evidence is recorded separately from causal, per-memory validation.
+    // 发布包证据与按记忆归因的因果验证分开记录，二者不能互相替代。
     auto& feedback = state["feedback"][job.str("user")];
     if(!feedback.object()) feedback = Json::Object{};
     const auto referenced = memories(artifact);
@@ -448,7 +520,19 @@ struct AgentEvaluationService::Impl {
       }
       Json verdict; std::string error; bool completed = false; dataset::v1::TaskEvaluationReport report;
       try {
-        require(fingerprint() == context, "evaluation_configuration_changed");
+        const bool holdout_replay = job["final_holdout_replay"].object();
+        auto verify_context = [&] {
+          if(!holdout_replay) {
+            require(fingerprint() == context, "evaluation_configuration_changed");
+            return;
+          }
+          const auto& replay = job["final_holdout_replay"];
+          require(replay.num("requested_count", 0) == 3
+              && replay.str("evaluation_context") == evaluation_fingerprint()
+              && replay.str("candidate_evaluation_context") == candidate_evaluation_fingerprint(),
+              "evaluation_holdout_replay_context_changed");
+        };
+        verify_context();
         TaskEvaluationOptions options;
         options.cancelled = [&] { return stopping || cancel_running; };
         for(auto attempt = job.num("attempt", 0); attempt > 1; --attempt) {
@@ -467,9 +551,50 @@ struct AgentEvaluationService::Impl {
         } else if(job.flag("gepa", false)) {
           const auto seed = Json::parse(read(root / id / "seed.json"));
           const auto result = run_gepa_search(seed, base, dataset_path, evaluation_path, evaluation,
-              gepa, config["gate"], controls, root / id / "search", context, evaluation_fingerprint(),
-              [&] { return stopping || cancel_running; });
+              gepa, config["gate"], controls, root / id / "search", holdout_replay ? job.str("context") : context,
+              evaluation_fingerprint(), candidate_evaluation_fingerprint(), [&] { return stopping || cancel_running; }, nullptr,
+              holdout_replay ? job["final_holdout_replay"].num("requested_count", 0) : 0, holdout_replay);
           artifact = result.artifact; report = result.holdout; job["search"] = result.summary;
+          if(!result.finalists.empty()) {
+            Json finalist_gates = Json::Array{};
+            Json final_selection;
+            bool selected_passing_finalist = false;
+            job["search"].fields().erase("gate_winner");
+            for(std::size_t rank = 0; rank < result.finalists.size(); ++rank) {
+              const auto& finalist = result.finalists[rank];
+              const auto candidate_gate = gate_result(finalist.holdout, finalist.artifact, finalist.control_coverage);
+              const auto version = agent_version_id(finalist.artifact.dump());
+              const Json diagnostic{{"rank", rank + 1}, {"node", finalist.node}, {"version", version},
+                  {"scored", candidate_gate["scored"]}, {"passed", candidate_gate["passed"]},
+                  {"reasons", candidate_gate["reasons"]}};
+              finalist_gates.push(diagnostic);
+              // 留出前冻结验证排序。按该顺序第一个通过门禁的候选获胜，
+              // 后续候选的留出分数绝不能反向重排它。
+              const bool passed = candidate_gate.flag("scored", false) && candidate_gate.flag("passed", false);
+              // 全部失败时仍固定保留验证排名第一名，不能让末尾失败分支覆盖结果。
+              if(rank == 0 || (!selected_passing_finalist && passed)) {
+                artifact = finalist.artifact;
+                report = finalist.holdout;
+                verdict = candidate_gate;
+                final_selection = diagnostic;
+              }
+              if(passed && !selected_passing_finalist) {
+                selected_passing_finalist = true;
+                job["search"]["gate_winner"] = diagnostic;
+              }
+            }
+            job["search"]["finalist_gates"] = finalist_gates;
+            job["search"]["final_holdout_selection"] = final_selection;
+            if(holdout_replay) {
+              job["final_holdout_replay"]["state"] = "completed";
+              job["final_holdout_replay"]["gate_winner"] = job["search"]["gate_winner"];
+            }
+          // GEPA 可能在验证阶段即被拒绝，此时根本不会产生留出候选。
+          } else if(result.summary.str("status") == "validation_rejected")
+            verdict = Json{{"scored", true}, {"passed", false}, {"stage", "validation"},
+                {"reasons", result.summary["optimization"]["reasons"]},
+                {"optimization", result.summary["optimization"]},
+                {"control_coverage", result.summary["control_coverage"]}};
         } else {
           auto settings = evaluation; auto host = evaluation["variants"].items().front();
           auto a = host, b = host;
@@ -481,8 +606,8 @@ struct AgentEvaluationService::Impl {
               root / id / ("attempt-" + std::to_string(job.num("attempt", 0))), options);
         }
         require(!stopping && !cancel_running, "evaluation_cancelled");
-        require(fingerprint() == context, "evaluation_configuration_changed");
-        if(!job.flag("training", false)) verdict = gate_result(report, artifact,
+        verify_context();
+        if(!job.flag("training", false) && verdict.null()) verdict = gate_result(report, artifact,
             job.flag("gepa", false) ? job["search"]["control_coverage"] : Json{});
         completed = true;
       } catch(const Error& e) { error = e.what(); }
@@ -490,8 +615,8 @@ struct AgentEvaluationService::Impl {
       {
         std::lock_guard<std::mutex> guard(mutex);
         auto& current = state["jobs"][id]; current["finished_ms"] = now_ms();
-        // Cancellation may arrive after grading but before publication takes
-        // this lock. It must still prevent publication and remain a cancellation.
+        // 取消可能发生在评分结束、取得发布锁之前；此时仍必须阻止发布，
+        // 并把最终状态保持为“已取消”。
         const bool cancelled = current.flag("cancel_requested", false);
         if(cancelled) { completed = false; error = "evaluation_cancelled"; }
         current["status"] = cancelled ? "cancelled" : completed ? (verdict.flag("scored", false)
@@ -499,26 +624,43 @@ struct AgentEvaluationService::Impl {
         if(!error.empty()) current["error"] = error;
         if(completed && job.flag("training", false)) current["status"] = "completed";
         if(completed && !job.flag("training", false)) {
+          const bool holdout_replay = job["final_holdout_replay"].object();
           if(job.flag("gepa", false)) {
             current["search"] = job["search"];
-            current["version"] = agent_version_id(artifact.dump());
-            write(root / id / "candidate.json", artifact.dump());
+            if(holdout_replay) {
+              current["final_holdout_replay"] = job["final_holdout_replay"];
+              current["replay_version"] = agent_version_id(artifact.dump());
+              write(root / id / "replay-candidate.json", artifact.dump());
+            } else {
+              current["version"] = agent_version_id(artifact.dump());
+              write(root / id / "candidate.json", artifact.dump());
+            }
           }
           current["gate"] = verdict;
-          // Search mutations do not rewrite memory or create per-memory evidence.
+          // 搜索产生的候选变更不改写记忆库，也不凭空生成按记忆归因的证据。
           if(verdict.flag("scored", false) && !job.flag("gepa", false)) record_feedback(id, current, artifact, base, verdict, report);
           const auto key = lane(job.str("user"), artifact.str("level"));
           const auto previous = state["publications"][key].str("context") == context
               ? state["publications"][key].str("version") : "";
-          if(verdict.flag("passed", false) && state["latest"].str(key) == id && previous == job.str("parent_version")) {
+          if(!holdout_replay && verdict.flag("passed", false) && state["latest"].str(key) == id && previous == job.str("parent_version")) {
             state["publications"][key] = Json{{"user", job["user"]}, {"level", artifact["level"]}, {"job_id", id}, {"version", current["version"]}, {"context", context}};
-            // Persist before making the new snapshot available to consumers.
+            // 先持久化，再向消费者暴露新快照，避免读到半发布状态。
             current["published"] = true; save(); published[key] = artifact;
+            if(job.flag("gepa", false)) write(root / id / "search/selected-version.json", artifact.dump());
             export_publication(id, current, artifact);
           }
           if(job.flag("gepa", false)) {
+            if(holdout_replay || !verdict.flag("passed", false)) fs::remove(root / id / "search/selected-version.json");
             write(root / id / "search/decision.json", Json{{"gate", verdict}, {"published", current.flag("published", false)},
-                {"version", current["version"]}, {"parent_version", current["parent_version"]}, {"context", context}}.dump());
+                {"version", holdout_replay ? current["replay_version"] : current["version"]},
+                {"parent_version", current["parent_version"]}, {"context", context}, {"retrospective", holdout_replay}}.dump());
+          }
+          if(holdout_replay) {
+            // 已经见过留出集的候选只能用于诊断新协议，
+            // 绝不能成为可发布的评测结果。
+            current["final_holdout_replay"]["state"] = "completed";
+            current["final_holdout_replay"]["publishable"] = false;
+            current["status"] = "rejected";
           }
         }
         save();
@@ -556,8 +698,7 @@ std::string AgentEvaluationService::prepare_training(const std::string& user,
   const auto minimum = settings.num("min_experiences", 3);
   const auto data = read_evaluation_dataset(impl_->dataset_path);
   for(const auto& issue : data.issues()) require(issue.severity() != "error", "training_dataset_invalid");
-  // Memory counters are deliberately absent: learning must not create a fresh
-  // training budget for the same frozen application and dataset.
+  // 有意不把记忆数量放入训练预算：同一冻结应用与数据集不能因学习而获得一份新预算。
   const auto key = lane(user, "training");
   const auto identity = digest(impl_->config["agent"].dump() + '\n' + data.dataset_version());
   std::lock_guard<std::mutex> guard(impl_->mutex);
@@ -584,8 +725,8 @@ std::string AgentEvaluationService::prepare_training(const std::string& user,
         && (status == "superseded" || status == "interrupted" || status == "error")
         && !job.flag("cancel_requested", false) && job.str("error") != "evaluation_cancelled"
         && !job.has("training_import")) {
-      // Requeue the same reserved batch under the new context. Never reuse its
-      // old checkpoint or reset the dataset's task/batch budget.
+      // 在新上下文中重新排入同一已保留批次；不能复用旧检查点，
+      // 也不能重置数据集的任务／批次预算。
       const auto tasks = job["task_ids"], artifact = baseline(seed);
       require(!tasks.items().empty(), "training_tasks_missing");
       const auto next = digest(id + '\n' + impl_->context);
@@ -658,8 +799,8 @@ std::string AgentEvaluationService::submit(const std::string& user, const std::s
   if(parent == version) return publication.str("job_id");
   const bool search = !impl_->gepa.null() && artifact.str("level") != "L0"
       && proto<v1::RuntimePolicy>(artifact["policy"]).options().approved_experiences_size() > 0;
-  // A completed search must not schedule itself again when publication changes
-  // the parent but the memory seed, dataset and configuration are unchanged.
+  // 发布改变父版本但记忆种子、数据集与配置未变时，
+  // 已完成的搜索绝不能再次被调度。
   const auto id = digest(user + '\n' + version + '\n' + (search ? "gepa" : parent) + '\n' + impl_->context);
   if(impl_->state["jobs"].has(id)) return id;
   if(fs::exists(impl_->root / id / "job.json")) return id;
@@ -700,6 +841,40 @@ std::string AgentEvaluationService::search_tree(const std::string& user, const s
   require(impl_->state["jobs"][id].flag("gepa", false), "evaluation_job_not_search", 409);
   const auto path = impl_->root / id / "search/tree.json";
   return fs::exists(path) ? read(path, 16777216) : Json{{"status", "pending"}}.dump();
+}
+std::string AgentEvaluationService::replay_holdout(const std::string& user, const std::string& id) {
+  constexpr std::size_t kFinalists = 3;
+  std::lock_guard<std::mutex> guard(impl_->mutex);
+  require(!impl_->state.has("worker_error"), "evaluation_worker_unavailable", 503);
+  require(impl_->state["jobs"].has(id) && impl_->state["jobs"][id].str("user") == user, "evaluation_job_not_found", 404);
+  auto& job = impl_->state["jobs"][id];
+  require(job.flag("gepa", false) && job.str("status") == "rejected" && !job.flag("published", false),
+      "evaluation_holdout_replay_not_allowed", 409);
+  require(impl_->state["latest"].str(lane(user, job.str("level"))) == id, "evaluation_job_obsolete", 409);
+  require(!job["final_holdout_replay"].object(), "evaluation_holdout_replay_already_requested", 409);
+  const auto path = impl_->root / id / "search/tree.json";
+  // 历史回放只能复用语义一致的冻结 L0；否则候选与基线来自不同执行定义，不能比较。
+  require(fs::exists(path), "evaluation_search_tree_missing", 409);
+  const auto tree = Json::parse(read(path, 16777216));
+  require(tree.str("context") == job.str("context") && tree.str("status") == "completed"
+      && tree.flag("holdout_started", false) && tree["active"].null() && tree["batch"].null(),
+      "evaluation_holdout_replay_state_invalid", 409);
+  const auto source = tree["holdout_baseline_cache"]["source"];
+  require(tree["holdout_baseline_cache"].str("status") == "hit"
+      && source["identity"].str("evaluation_context") == impl_->evaluation_fingerprint(),
+      "evaluation_holdout_replay_context_changed", 409);
+  const auto data = read_evaluation_dataset(impl_->dataset_path);
+  std::size_t holdout = 0; for(const auto& task : data.tasks()) holdout += task.split() == "holdout";
+  const auto trials = holdout * impl_->evaluation.num("repetitions", 1) * kFinalists;
+  require(tree.num("trials_used", SIZE_MAX) + trials <= impl_->gepa.num("max_trials", 0),
+      "evaluation_holdout_replay_budget_exhausted", 409);
+  job["final_holdout_replay"] = Json{{"schema_version", 1}, {"requested_count", kFinalists},
+      {"state", "queued"}, {"requested_ms", now_ms()}, {"evaluation_context", impl_->evaluation_fingerprint()},
+      {"candidate_evaluation_context", impl_->candidate_evaluation_fingerprint()}};
+  job["status"] = "pending"; job["queued_ms"] = now_ms();
+  job.fields().erase("error"); job.fields().erase("cancel_requested");
+  impl_->save(); impl_->wake.notify_all();
+  return Json{{"accepted", true}, {"job_id", id}, {"requested_candidates", kFinalists}}.dump();
 }
 void AgentEvaluationService::retry(const std::string& user, const std::string& id) {
   std::lock_guard<std::mutex> guard(impl_->mutex);

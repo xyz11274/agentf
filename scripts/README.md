@@ -23,6 +23,7 @@ Python Bridge 生产模式只监听 loopback；SideCar 是唯一外部入口。
 | `start_mock_uds_server.sh` | 单独启动 Mock UDS Server（替代 UDSPluginServer，用于本地 LLM 调用调试） |
 | `start_web.sh` | 启动 Vue/Vite 开发服务器 |
 | `run_agent.sh` | 旧 harness_agent 交互演示，仅保留开发用途 |
+| `reproduce_v1_l3.py` | 真实 v1 固定 L0/L3 对照复现；[使用说明](../configs/reproduction/v1-l3/README.md) |
 | `regression_test.sh` | C++ 单元与 E2E 回归 |
 
 ## 配置文件

@@ -73,4 +73,37 @@ inline std::string retrieval_text(const Json& value) {
   return result;
 }
 
+// 任务检索只使用当前轮消息，避免上一轮助手的完成状态触发新请求的收尾经验。
+// 仅识别已有 messages/role 契约；未知结构保持原投影，模型输入和轨迹不变。
+inline std::string current_task_retrieval_text(const Json& value, unsigned depth = 0) {
+  if(depth > 48) return {};
+  if(value.string()) {
+    const auto text = value.text();
+    const auto begin = text.find_first_not_of(" \t\r\n");
+    if(begin != std::string::npos && (text[begin] == '{' || text[begin] == '[' || text[begin] == '"')) {
+      try { return current_task_retrieval_text(Json::parse(text), depth + 1); }
+      catch(const Error&) { /* 非完整消息封装沿用原投影，不猜测回合边界。 */ }
+    }
+    return retrieval_text(value);
+  }
+  const Json* messages = value.object() && value["messages"].array() ? &value["messages"]
+      : value.array() ? &value : nullptr;
+  if(!messages) return retrieval_text(value);
+  auto latest_user = messages->items().size();
+  for(std::size_t i = 0; i < messages->items().size(); ++i) {
+    const auto& message = messages->items()[i];
+    if(!message.object() || !message["role"].string()) return retrieval_text(value);
+    const auto role = message.str("role");
+    if(role != "user" && role != "assistant" && role != "tool" && role != "function"
+        && role != "system" && role != "developer") return retrieval_text(value);
+    if(role == "user" && retrieval_text(message).find_first_not_of(" \t\r\n") != std::string::npos)
+      latest_user = i;
+  }
+  if(latest_user == messages->items().size()) return retrieval_text(value);
+  Json current = Json::Array{};
+  for(std::size_t i = latest_user; i < messages->items().size(); ++i) current.push(messages->items()[i]);
+  // 不再对当前用户内容做轮次切分；引用、代码和后续未消费工具结果均保留。
+  return retrieval_text(current);
+}
+
 }  // namespace trajectory::evolution::integration

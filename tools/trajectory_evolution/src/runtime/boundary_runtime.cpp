@@ -2,6 +2,7 @@
 #include "model_contract.h"
 #include "retrieval_text.h"
 #include "failure_ledger.h"
+#include "schedule_evidence.h"
 
 #include "trajectory_evolution/evolution.h"
 #include "trajectory_evolution/request_binding.h"
@@ -36,14 +37,14 @@ bool ended(const Json& value) { return value.flag("ended", false); }
 Json progress_state(Json value) {
   auto normalize_message = [](Json& message) {
     if(message.str("role") != "tool" || !message.has("content")) return;
-    // This identifier belongs to the transport envelope, not the tool result.
-    // Never strip business IDs, timestamps, or fields inside the payload.
+    // 该标识属于传输信封，而非工具业务结果。
+    // 绝不能删除载荷内部的业务 ID、时间戳或字段。
     message.fields().erase("tool_call_id");
     if(message["content"].string()) {
       try {
         const auto parsed = Json::parse(message["content"].text());
         if(parsed.object() || parsed.array()) message["content"] = parsed;
-      } catch(...) { /* Plain-text tool results remain valid observations. */ }
+      } catch(...) { /* 纯文本工具结果仍是有效观察。 */ }
     }
   };
   normalize_message(value);
@@ -60,11 +61,22 @@ bool failed_action(const Json& request) {
   }
   if(!output.object()) return false;
   const auto& status = output["status"];
-  if(status.string() && (status.text() == "failed" || status.text() == "error" || status.text() == "rejected")) return true;
+  if(status.string() && (status.text() == "failed" || status.text() == "error" || status.text() == "rejected"
+      || status.text() == "tool_error" || status.text() == "security_policy_blocked"
+      || status.text() == "timeout" || status.text() == "blocked" || status.text() == "denied")) return true;
+  if(std::holds_alternative<bool>(output["ok"].value) && !output["ok"].boolean()) return true;
   if(std::holds_alternative<bool>(output["success"].value) && !output["success"].boolean()) return true;
   if(std::holds_alternative<double>(output["exit_code"].value)
       && std::get<double>(output["exit_code"].value) != 0) return true;
-  // Free text is not interpreted. This observation does not change workflow status.
+  // 已声明成功的结果可以附带历史错误，不能因此恢复已结束的失败链。
+  if((status.string() && (status.text() == "completed" || status.text() == "success" || status.text() == "succeeded"))
+      || (std::holds_alternative<bool>(output["success"].value) && output["success"].boolean())
+      || (std::holds_alternative<bool>(output["ok"].value) && output["ok"].boolean())
+      || (std::holds_alternative<double>(output["exit_code"].value) && std::get<double>(output["exit_code"].value) == 0)) return false;
+  const auto& error = output["error"];
+  if((error.string() && !error.text().empty()) || (error.object() && !error.fields().empty())
+      || (std::holds_alternative<bool>(error.value) && error.boolean())) return true;
+  // 不解释自由文本；这种观察不改变工作流状态。
   return false;
 }
 std::string terminal(const Json& request) {
@@ -101,7 +113,7 @@ v1::RuntimeOptions binding_options(const Json& binding) {
   const auto pointer = binding.str("pointer"), mode = binding.str("mode");
   require(pointer.empty() || pointer.front() == '/', "binding_pointer_invalid");
   v1::RuntimeOptions options;
-  // A private envelope permits any JSON model argument, including a bare string.
+  // 私有信封允许任意 JSON 模型参数，包括裸字符串。
   options.set_request_context_pointer("/payload" + pointer);
   options.set_request_context_mode(mode);
   validate_request_binding(options); return options;
@@ -111,7 +123,7 @@ std::string activity_query_state(const Json& request, const std::string& semanti
   if(!request["state"].null()) return bounded_query_text(request["state"], config, false);
   if(semantic != "model" || binding.str("mode") != "system_message")
     return bounded_query_text(request["input"], config, false);
-  // Follow the configured binding, not a provider-specific messages field.
+  // 必须遵循配置的绑定路径，不能假定某个供应商特有的 messages 字段。
   const auto path = binding.str("pointer");
   const rapidjson::Pointer pointer(path.c_str(), path.size());
   const Json* value = &request["input"];
@@ -126,14 +138,18 @@ std::string activity_query_state(const Json& request, const std::string& semanti
   }
   Json messages = Json::Array{};
   if(value && value->array()) {
-    // Retrieve against the current request and latest assistant/tool segment.
-    // A consumed result in the transcript must not repeatedly trigger advice
-    // after the branch has moved to a different action. Preserve the full input
-    // for the model and trace; explicit host state remains authoritative.
+    // 检索只面向当前请求及最近的 assistant/tool 片段。
+    // 分支已转入另一动作后，已消费的历史结果不能反复触发经验。
+    // 模型和轨迹仍保留完整输入，明确的宿主状态始终具有最高优先级。
+    // 这使检索窗口收缩不会改写真实的业务上下文。
     std::size_t latest_user = value->items().size(), segment = 0;
     for(std::size_t i = 0; i < value->items().size(); ++i) {
       const auto& role = value->items()[i]["role"];
       if(!role.string()) continue;
+      if(role.text() != "user" && role.text() != "assistant") continue;
+      // 纯提示消息没有可检索观察，不能截断它之前尚待消费的真实工具结果。
+      // 混有实际用户内容时仍建立新边界；过滤规则与后续检索投影保持一致。
+      if(retrieval_text(value->items()[i]).find_first_not_of(" \t\r\n") == std::string::npos) continue;
       if(role.text() == "user") { latest_user = i; segment = i; }
       else if(role.text() == "assistant") segment = i;
     }
@@ -148,6 +164,8 @@ std::string activity_query_state(const Json& request, const std::string& semanti
   return bounded_query_text(messages, config, false);
 }
 
+// 单个 run 的可恢复边界状态机：跨语言打点最终在此收敛为 events、activities、loops 与 controls。
+// 它只记录宿主已经观察到的事实；策略建议必须经 activity/loop 的提交打点才能改变运行状态。
 class Runtime {
  public:
   Json& run;
@@ -157,6 +175,7 @@ class Runtime {
       : run(value), config(configuration), cached_policy(policy) {}
 
   std::string emit(const std::string& kind, Json fields, const std::string& producer, Json causes = Json::Array{}) {
+    // event_id 在 run 内单调递增；producer 的 sequence 在各执行流内独立递增，二者共同支持并发回放。
     require(run["events"].items().size() < config.num("max_events", 10000), "event_capacity_reached", 507);
     require(causes.items().size() <= 64, "too_many_causes");
     const auto id = "event-" + std::to_string(run["events"].items().size() + 1);
@@ -192,13 +211,14 @@ class Runtime {
     }
     return links;
   }
+  // 为策略构造有界、分支隔离的查询快照；该快照不替代宿主保存的完整状态。
   v1::RuntimeQuery query(const Json& item, const std::string& boundary, const std::string& id, const Json& state) const {
     v1::RuntimeQuery q;
     *q.mutable_advice_query()->mutable_identity() = proto<v1::Identity>(run["identity"]);
     q.mutable_advice_query()->set_target_scope(qualified_scope(config, item.str("scope_id")));
     q.mutable_advice_query()->set_query_id("query-" + id); q.mutable_advice_query()->set_decision_id("decision-" + id);
     if(run.num("level", 0) > 0) {
-      // Only the retrieval view is bounded; the original request and trace stay intact.
+      // 只有供检索的视图受长度限制；原始请求和完整轨迹保持不变。
       q.mutable_advice_query()->set_task(bounded_query_text(run["input"], config, true));
       q.mutable_advice_query()->set_state(bounded_query_text(state, config, false));
       if(boundary == "llm" && item.has("observation_scope")) {
@@ -229,6 +249,7 @@ class Runtime {
     emit("advice.applied", fields, item.str("step_id"));
     run["receipt_counts"][result.application().status()] = run["receipt_counts"].num(result.application().status(), 0) + 1;
   }
+  // 只在宿主报告真实结束后写入循环账本；派发建议本身不能被当作业务结果。
   void record_action_outcome(const Json& item, const Json& request, bool failed) {
     const auto status = request.str("status");
     if(request.flag("executed", false) && (status == "completed" || status == "failed")
@@ -236,22 +257,32 @@ class Runtime {
       auto attempts = item["target_attempts"];
       if(request.has("actual_input")) {
         const auto actual = target_failure_snapshot(run["policy"]["options"], qualified_scope(config, item.str("scope_id")),
-            item.str("name"), request["actual_input"], run["target_failures"]);
+            item.str("name"), request["actual_input"], run["target_failures"], item.str("stream_id"));
         for(auto it = attempts.fields().begin(); it != attempts.fields().end();)
           if(actual[it->first].str("key") != it->second.str("key")) it = attempts.fields().erase(it);
           else ++it;
       }
-      settle_target_failure(run["target_failures"], attempts, failed);
+      settle_target_failure(run["target_failures"], attempts, failed,
+          request.has("progress_output") ? request["progress_output"] : request["output"]);
     }
     if(!item.has("loop_id")) return;
     auto& loop = run["loops"][item.str("loop_id")];
     if(failed) loop["failed_actions"] = loop.num("failed_actions", 0) + 1;
-    // Keep a real dispatch error, but measure business progress at its children.
+    // 保留真实的派发错误，但业务进展由其子动作的真实结果衡量。
     if(item.flag("delegates_schedule", false)) return;
+    if(!request.flag("executed", false) && item.str("decision") == "reject"
+        && item["query"].str("boundary") == "actions") {
+      // 已验证的动作拦截不产生业务进展，但也不是一次实际工具失败。
+      // 同轮其他分支有新结果时 outcome_revision 会前进，不会因此全局停止。
+      loop["observed_actions"] = loop.num("observed_actions", 0) + 1;
+      loop["rejected_actions"] = loop.num("rejected_actions", 0) + 1;
+      return;
+    }
     if(!request.flag("executed", false) || (status != "completed" && status != "failed")) return;
-    // Observe actual outcomes, not transport IDs in the next message.
-    // Keep every business field: changed arguments/results are progress.
-    const auto outcome = progress_state(Json{{"role", "tool"}, {"content", request["output"]}});
+    // 观察真实业务结果，而不是下一条消息里的传输 ID。
+    // 保留全部业务字段：参数或结果发生变化都意味着进展。
+    const auto outcome = progress_state(Json{{"role", "tool"},
+        {"content", request.has("progress_output") ? request["progress_output"] : request["output"]}});
     const auto signature = hash(Json{{"operation", item["name"]},
         {"input", request.has("actual_input") ? request["actual_input"] : item["input"]},
         {"status", status}, {"output", outcome}}.dump());
@@ -263,24 +294,31 @@ class Runtime {
       loop["outcome_revision"] = loop.num("outcome_revision", 0) + 1;
     }
     loop["observed_actions"] = loop.num("observed_actions", 0) + 1;
-    // Keep failure progress independent of arguments and transport text.
-    // A successful action in the settled step remains useful progress.
+    // 失败进度与参数、传输文本分离。
+    // 同一结算批次中的成功动作仍是有效进展。
     if(!loop["operation_failures"].object()) loop["operation_failures"] = Json::Object{};
     if(!failed) {
       loop["operation_failures"].fields().erase(operation);
+      // 成功意味着当前执行有进展；旧故障码不能污染后续无关步骤。
+      for(auto& entry : loop["operation_failures"].fields())
+        if(entry.second.object()) entry.second.fields().erase("error_code");
       loop["last_successful_action"] = loop["observed_actions"];
     } else if(loop["operation_failures"].has(operation) || loop["operation_failures"].fields().size() < 64) {
       auto& failure = loop["operation_failures"][operation];
       if(!failure.has("epoch")) failure["epoch"] = loop["observed_actions"];
       const auto prior = item.num("prior_failures", failure.num("count", 0));
       const bool same_streak = item.num("failure_epoch", failure.num("epoch", 0)) == failure.num("epoch", 0);
-      // Parallel attempts see the same prior failures; they are not retries of
-      // one another. A success may also have reset the old failure streak.
+      // 并行尝试看见的是同一份先验失败，彼此并不是重试。
+      // 其中任一成功也可能已经重置旧的失败链。
       failure["count"] = std::min<std::size_t>(10000,
           std::max(failure.num("count", 0), same_streak ? prior + 1 : std::size_t(1)));
       failure["last_action"] = loop["observed_actions"];
+      auto code = structured_error_code(request.has("progress_output") ? request["progress_output"] : request["output"]);
+      if(code.empty() && request.has("error")) code = structured_error_code(request["error"]);
+      failure["error_code"] = code;
     }
   }
+  // begin 只准备输入、记录策略决定并发出开始事件；动作是否执行及其结果必须由 end/abort 回写。
   Json begin_activity(const Json& request) {
     keys(request, {"operation", "request_id", "run_id", "kind", "name", "input", "actor_id", "scope_id", "stream_id",
       "control_id", "state", "binding", "caused_by", "extensions", "apply_policy"});
@@ -305,21 +343,28 @@ class Runtime {
       const auto control = request.str("control_id");
       require(run["controls"].has(control), "control_not_found", 404);
       const auto& c = run["controls"][control];
-      require(c.flag("committed", false) && c.str("actual_decision") != "stop", "control_does_not_allow_activity", 409);
-      require(!run["loops"][c.str("loop_id")].flag("stopped", false), "loop_already_stopped", 409);
+      const auto& loop = run["loops"][c.str("loop_id")];
+      const bool finalizing = loop.flag("finalizing", false);
+      require(c.flag("committed", false) && (c.str("actual_decision") != "stop" || finalizing), "control_does_not_allow_activity", 409);
+      require(!loop.flag("stopped", false) || finalizing, "loop_already_stopped", 409);
+      if(finalizing) {
+        // 收尾不恢复执行预算：只允许一次模型答复，动作在边界直接拒绝。
+        item["finalizing"] = true;
+        if(semantic != "model" || loop.flag("final_model_started", false)) item["decision"] = "reject";
+      }
       require(item.str("scope_id") == c.str("scope_id"), "control_scope_mismatch", 409);
       item["control_id"] = control; item["loop_id"] = c["loop_id"]; item["iteration"] = c["iteration"];
       if(!request.has("stream_id")) item["stream_id"] = c["stream_id"];
       links.push(c["commit_event"]);
     }
-    // Keep tool contracts local to a task/branch. Neither another user's trace
-    // nor a concurrent sibling can grant permissions to this activity.
+    // 工具契约只在当前任务/分支内生效，其他用户轨迹或并发同级分支均不能为本活动授权。
+    // 这样才能避免跨分支错误复用工具权限。
     const auto& ref = request["extensions"]["point_reference"];
     const auto branch = ref.object() ? ref.str("parent", "root")
         : request.has("control_id") ? request.str("control_id") : request["caused_by"].dump();
     item["contract_scope"] = hash(item.str("scope_id") + "\n" + item.str("actor_id") + "\n" + branch);
-    // Reuse package-owned point ancestry or an explicit execution stream. An
-    // anonymous activity must not inherit evidence from a concurrent sibling.
+    // 复用包维护的打点祖先关系或显式执行流。
+    // 匿名活动不能继承并发同级分支的证据。
     if(ref.object() || request.has("stream_id") || item.has("loop_id")) {
       const auto observation_branch = ref.object() ? ref.str("parent", "root")
           : item.has("loop_id") ? item.str("loop_id") : item.str("stream_id");
@@ -331,6 +376,7 @@ class Runtime {
       {"policy_scope", item["scope_id"]}, {"apply_policy", apply_policy}, {"extensions", extensions(request)}};
     item["start_event"] = emit("step.start", fields, item.str("step_id"), join(links, id));
     Json prepared = request["input"]; std::string reason;
+    if(item.str("decision") == "reject") reason = "loop_finalization_only";
     if(semantic == "model") {
       const auto binding = request.has("binding") ? request["binding"] : infer_model_binding(prepared);
       require(!apply_policy || run.num("level", 0) == 0 || !binding.null(), "model_binding_required");
@@ -339,7 +385,7 @@ class Runtime {
     bool contract_failed = false;
     if(semantic == "action") {
       item["target_attempts"] = target_failure_snapshot(run["policy"]["options"], qualified_scope(config, item.str("scope_id")),
-          name, prepared, run["target_failures"]);
+          name, prepared, run["target_failures"], item.str("stream_id"));
       if(item.has("loop_id")) {
         const auto& failure = static_cast<const Json&>(run)["loops"][item.str("loop_id")]["operation_failures"][name];
         item["prior_failures"] = failure.num("count", 0);
@@ -351,12 +397,12 @@ class Runtime {
       item["contract_check"]["enforced"] = contract_failed;
       if(contract_failed) { item["decision"] = "reject"; reason = item["contract_check"].str("reason") + ": " + item["contract_check"]["missing"].dump(); }
     }
-    if(apply_policy && !contract_failed && semantic != "custom" && run.num("level", 0) > 0) {
+    if(apply_policy && !contract_failed && !item.flag("finalizing", false) && semantic != "custom" && run.num("level", 0) > 0) {
       auto q = query(item, semantic == "model" ? "llm" : "actions", id, activity_query_state(request, semantic, config, item["binding"]));
       if(semantic == "action") {
         auto* action = q.add_actions(); action->set_action_id(id); action->set_operation(name);
         if(item.has("loop_id")) action->set_prior_failures(
-            run["loops"][item.str("loop_id")]["operation_failures"][name].num("count", 0));
+            item.num("prior_failures", 0));
         *action->mutable_arguments() = proto<google::protobuf::Struct>(prepared.object() ? prepared : Json{{"value", prepared}});
         for(const auto& attempt : item["target_attempts"].fields())
           (*action->mutable_target_failures())[attempt.first] = attempt.second.num("count", 0);
@@ -377,10 +423,25 @@ class Runtime {
         prepared = json(wrapped)["payload"];
       } else { item["decision"] = decision.actions(0).decision(); reason = decision.actions(0).reason(); }
     }
+    if(item.flag("finalizing", false) && semantic == "model" && item.str("decision") != "reject") {
+      // 使用既有模型请求绑定；不改写业务历史，不再检索或注入新经验。
+      const auto options = binding_options(item["binding"]);
+      auto wrapped = proto<google::protobuf::Struct>(Json{{"payload", prepared}});
+      wrapped = inject_request_context(wrapped, config.str("finalization_context"), options);
+      prepared = json(wrapped)["payload"];
+      // 通用 messages 协议的工具声明；其他协议仍由动作边界阻止执行。
+      if(prepared.object()) {
+        prepared.fields().erase("tools"); prepared.fields().erase("tool_choice");
+        prepared.fields().erase("functions"); prepared.fields().erase("function_call");
+        prepared.fields().erase("parallel_tool_calls");
+      }
+      run["loops"][item.str("loop_id")]["final_model_started"] = true;
+    }
     if(semantic != "custom") {
       fields = event_context(item); fields["action_id"] = id; fields["operation"] = name; fields["input"] = prepared;
       fields["attributes"] = Json{{"phase", "prepared"}, {"activity_kind", kind}, {"semantic", semantic}, {"decision", item["decision"]}};
       fields["attributes"]["metric_tool_call"] = request["extensions"]["metrics"].flag("tool_call", true);
+      if(item.flag("finalizing", false)) fields["attributes"]["finalizing"] = true;
       if(item.has("binding")) fields["attributes"]["request_binding"] = item["binding"];
       if(item.has("contract_check")) fields["attributes"]["contract_check"] = item["contract_check"];
       item["call_event"] = emit("action.start", fields, id, Json::Array{item["start_event"]});
@@ -390,18 +451,23 @@ class Runtime {
       auto q = query(item, "schedule", id, Json{});
       for(const auto& action : prepared["actions"].items()) {
         auto parsed = proto<v1::RuntimeAction>(action);
-        parsed.clear_arguments(); // Scheduling depends on identities/edges, not prompt bodies.
+        parsed.clear_arguments();
         *q.add_actions() = parsed;
       }
+      // 在没有资源规则时也保留有限的候选资源，供后续生成与反事实回放使用。
+      project_schedule_evidence(q, prepared);
       v1::SchedulePlan plan;
-      if(apply_policy && run.num("level", 0) >= 2) {
+      if(apply_policy && !item.flag("finalizing", false) && run.num("level", 0) >= 2) {
         plan = decide(item, q).schedule(); item["query"] = json(q);
       } else plan = plan_schedule(v1::RuntimeOptions{}, q);
-      item["schedule"] = json(begin_schedule(plan));
+      auto schedule = begin_schedule(plan);
+      if(item.flag("finalizing", false))
+        for(auto& action : *schedule.mutable_actions()) action.set_status("skipped");
+      item["schedule"] = json(schedule);
       item["schedule_events"] = Json::Array{};
       item["schedule_skipped"] = Json::Array{};
-      // An explicit causal parent is the dispatch envelope, not another
-      // completed business action. Do not infer this from operation names.
+      // 显式因果父节点是派发信封，而非另一已完成业务动作。
+      // 不能从操作名推断这一关系。
       for(auto& entry : run["activities"].fields()) {
         auto& parent = entry.second;
         if(ended(parent) || parent.str("semantic") != "action" || parent.str("loop_id") != item.str("loop_id")) continue;
@@ -428,6 +494,7 @@ class Runtime {
     return Json{{"schedule", json(state.plan())}, {"ready", ready}, {"skipped", skipped},
         {"finished", schedule_finished(state)}};
   }
+  // 编排分支逐项结算：并发动作可任意顺序返回，但每次状态迁移都按同一计划校验前置条件。
   Json observe_schedule(const Json& request) {
     keys(request, {"operation", "request_id", "run_id", "activity_id", "input", "caused_by", "extensions"});
     const auto id = request.str("activity_id");
@@ -442,6 +509,22 @@ class Runtime {
     std::string previous;
     for(const auto& action : state.actions()) if(action.action_id() == action_id) previous = action.status();
     require(!previous.empty(), "schedule_action_not_found", 404);
+    if(status == "cancelled" && previous == "waiting") {
+      require(input.has("output") && input["output"].has("executed")
+          && !input["output"]["executed"].boolean(), "schedule_cancellation_observation_required");
+      // 未派发的取消不制造 running/执行事件，也不占业务失败预算。
+      state = advance_schedule(std::move(state), action_id, status);
+      auto fields = event_context(item); fields["output"] = input["output"]; fields["status"] = status;
+      fields["attributes"] = Json{{"type", "schedule.cancelled"}, {"logical_action_id", action_id}, {"executed", false}};
+      Json links = causes(request); links.push(item["start_event"]);
+      item["schedule_end_events"][action_id] = emit("custom", fields, item.str("step_id"), join(links, id));
+      item["schedule_output_hashes"][action_id] = hash(input["output"].dump());
+      item["schedule_events"].push(Json{{"action_id", action_id}, {"status", status}});
+      item["schedule"] = json(state);
+      auto result = schedule_view(item); result["changed"] = true;
+      result["event_id"] = item["schedule_end_events"][action_id];
+      return result;
+    }
     if(status == "skipped") {
       require(previous == "skipped", "schedule_skip_not_authorized", 409);
       bool known = false;
@@ -467,7 +550,8 @@ class Runtime {
       const auto event_action_id = id + "-" + hash(action_id).substr(0, 16);
       auto fields = event_context(item); fields["action_id"] = event_action_id;
       fields["attributes"] = Json{{"type", "schedule.action"}, {"logical_action_id", action_id},
-          {"metric_tool_call", false}, {"executed", true}};
+          {"metric_tool_call", false}, {"executed", true},
+          {"target_scope", qualified_scope(config, item.str("scope_id"))}};
       const Json* scheduled = nullptr;
       for(const auto& action : item["input"]["actions"].items())
         if(action.str("action_id") == action_id) scheduled = &action;
@@ -475,10 +559,14 @@ class Runtime {
       fields["operation"] = (*scheduled)["operation"];
       Json links = causes(request);
       if(status == "running") {
+        item["schedule_attempts"][action_id]["stream_id"] = event_action_id;
+        item["schedule_attempts"][action_id]["target_attempts"] = target_failure_snapshot(
+            run["policy"]["options"], qualified_scope(config, item.str("scope_id")),
+            fields.str("operation"), (*scheduled)["arguments"], run["target_failures"], event_action_id);
         if(item.has("loop_id")) {
           const auto& failure = static_cast<const Json&>(run)["loops"][item.str("loop_id")]["operation_failures"][fields.str("operation")];
-          item["schedule_attempts"][action_id] = Json{{"prior_failures", failure.num("count", 0)},
-              {"failure_epoch", failure.num("epoch", 0)}};
+          item["schedule_attempts"][action_id]["prior_failures"] = failure.num("count", 0);
+          item["schedule_attempts"][action_id]["failure_epoch"] = failure.num("epoch", 0);
         }
         links.push(item["start_event"]);
         for(const auto& action : state.plan().actions()) if(action.action_id() == action_id)
@@ -496,13 +584,20 @@ class Runtime {
         fields["attributes"]["executed"] = ran;
         if(status == "succeeded" || status == "failed") {
           fields["attributes"]["observed_failure"] = status == "failed";
-          if(item.has("loop_id")) {
-            auto attempt = item["schedule_attempts"][action_id];
-            attempt["loop_id"] = item["loop_id"]; attempt["name"] = fields["operation"];
-            attempt["input"] = (*scheduled)["arguments"];
-            record_action_outcome(attempt,
-                Json{{"status", fields["status"]}, {"executed", ran}, {"output", input["output"]}}, status == "failed");
+          auto attempt = item["schedule_attempts"][action_id];
+          if(item.has("loop_id")) attempt["loop_id"] = item["loop_id"];
+          attempt["name"] = fields["operation"]; attempt["scope_id"] = item["scope_id"];
+          attempt["input"] = (*scheduled)["arguments"];
+          Json observed{{"status", fields["status"]}, {"executed", ran}, {"output", input["output"]}};
+          if(request["extensions"].has("progress_output")) {
+            observed["progress_output"] = request["extensions"]["progress_output"];
+            fields["attributes"]["progress_output_bound"] = true;
           }
+          if(status == "failed") {
+            const auto code = structured_error_code(observed.has("progress_output") ? observed["progress_output"] : observed["output"]);
+            if(!code.empty()) fields["attributes"]["observed_error_code"] = code;
+          }
+          record_action_outcome(attempt, observed, status == "failed");
         }
         links.push(item["schedule_start_events"][action_id]);
         item["schedule_end_events"][action_id] = emit("action.end", fields, event_action_id, join(links, event_action_id));
@@ -515,6 +610,7 @@ class Runtime {
     result["event_id"] = status == "running" ? item["schedule_start_events"][action_id] : item["schedule_end_events"][action_id];
     return result;
   }
+  // end/abort 是写入真实结果、工具契约和故障账本的唯一入口；中断只标记捕获不完整。
   Json end_activity(const Json& request, bool interrupted = false) {
     keys(request, {"operation", "request_id", "run_id", "activity_id", "status", "output", "actual_input", "executed", "error", "extensions", "caused_by", "metrics"});
     const auto id = request.str("activity_id"), status = terminal(request);
@@ -556,7 +652,7 @@ class Runtime {
     if(semantic == "model" && !interrupted && status == "completed" && request.flag("executed", false)) {
       const auto inferred = infer_model_usage(request["output"]);
       fields["attributes"]["metrics"] = inferred;
-      // Explicit measured/mapped values take precedence over wire-format defaults.
+      // 显式测量或映射的值优先于从线缆格式推断的默认值。
       if(request.has("metrics")) for(const auto& metric : request["metrics"].fields())
         fields["attributes"]["metrics"][metric.first] = metric.second;
       const auto contracts = model_tool_contracts(request["actual_input"]);
@@ -587,6 +683,10 @@ class Runtime {
       if(semantic == "action" && !interrupted) {
         const bool failed = failed_action(request);
         fields["attributes"]["observed_failure"] = failed;
+        if(failed) {
+          const auto code = structured_error_code(request["output"]);
+          if(!code.empty()) fields["attributes"]["observed_error_code"] = code;
+        }
         if(item.flag("delegates_schedule", false)) fields["attributes"]["delegates_schedule"] = true;
         record_action_outcome(item, request, failed);
       }
@@ -607,8 +707,8 @@ class Runtime {
             if(operations.has(item.str("name")) || operations.fields().size() < 64)
               operations[item.str("name")] = run["events"].items().size();
           } else if(semantic == "model" && status == "completed") {
-            // Consume only evidence visible to this request. Actions finishing
-            // concurrently remain available to the next request in the branch.
+            // 只消费当前请求可见的证据。
+            // 并发完成的动作仍留给该分支的下一次请求。
             for(auto it = operations.fields().begin(); it != operations.fields().end();) {
               if(it->second.integer() <= item.num("observation_cursor", 0)) it = operations.fields().erase(it);
               else ++it;
@@ -628,7 +728,7 @@ class Runtime {
       if(semantic == "model" && item.has("control_id")) {
         auto& control = run["controls"][item.str("control_id")];
         if(control.str("decision") == "replan" && control.str("actual_decision") == "replan") {
-          // Concurrent model calls have independent observations of the same replan.
+          // 并发模型调用对同一次 replan 具有彼此独立的观察结果。
           const auto actual = control.str("actual_decision") == "replan" ? observation : v1::RuntimeObservation{};
           receipt(control, control["query"], actual, item["binding"]); control["replan_observed"] = true;
         }
@@ -645,6 +745,7 @@ class Runtime {
     item["ended"] = true; item["status"] = status; item["output"] = request["output"];
     return Json{{"ended", true}, {"event_id", item["end_event"]}};
   }
+  // check 只快照截至当前的状态；真正消费故障和进度要等宿主通过 commit 确认决定后才发生。
   Json check_loop(const Json& request) {
     keys(request, {"operation", "request_id", "run_id", "loop_id", "state", "actor_id", "scope_id", "caused_by", "extensions", "apply_policy"});
     const bool apply_policy = request.flag("apply_policy", true);
@@ -652,7 +753,7 @@ class Runtime {
     require(identifier(loop_id) && request.has("state"), "loop_fields_required");
     auto& loop = run["loops"][loop_id];
     if(loop.null()) loop = Json{{"scope_id", scope}, {"iteration", 0}, {"stopped", false}};
-    require(loop.str("scope_id") == scope && !loop.flag("stopped", false), "loop_stopped_or_scope_changed", 409);
+    require(loop.str("scope_id") == scope && (!loop.flag("stopped", false) || loop.flag("finalizing", false)), "loop_stopped_or_scope_changed", 409);
     Json links = causes(request);
     if(loop.has("control_id")) {
       const auto& previous = run["controls"][loop.str("control_id")];
@@ -663,13 +764,21 @@ class Runtime {
     Json item{{"step_id", "step-" + id}, {"stream_id", loop_id}, {"loop_id", loop_id}, {"iteration", std::to_string(iteration)},
       {"actor_id", request.str("actor_id", "unspecified")}, {"scope_id", scope}, {"decision", "continue"}, {"context", ""}, {"committed", false}};
     require(identifier(item.str("actor_id")), "activity_identity_invalid");
+    item["finalize_on_stop"] = request["extensions"].flag("finalize_on_stop", false)
+        && !config.str("finalization_context").empty();
     auto fields = event_context(item); fields["input"] = request["state"];
     fields["attributes"] = Json{{"type", "boundary.control"}, {"policy_scope", scope}, {"apply_policy", apply_policy}, {"extensions", extensions(request)}};
     item["start_event"] = emit("step.start", fields, item.str("step_id"), join(links, id));
-    if(apply_policy && run.num("level", 0) > 0) {
+    if(loop.flag("stopped", false)) {
+      item["decision"] = "stop"; item["reason"] = "loop_already_stopped";
+    } else if(apply_policy && run.num("level", 0) > 0) {
       auto q = query(item, "loop", id, request["state"]); q.set_iteration(iteration); q.set_state_fingerprint(hash(progress_state(request["state"]).dump()));
+      // 收尾能力由当前打点和已加载模板共同确认，不能从任务文字或其它分支继承。
+      q.set_can_finalize(item.flag("finalize_on_stop", false));
       item["observed_actions"] = loop.num("observed_actions", 0);
       item["outcome_revision"] = loop.num("outcome_revision", 0);
+      item["observed_rejections"] = loop.num("rejected_actions", 0);
+      item["observed_successful_action"] = loop.num("last_successful_action", 0);
       if(!loop.flag("action_outcomes_overflow", false)
           && loop.num("observed_actions", 0) > loop.num("consumed_actions", 0)
           && loop.num("outcome_revision", 0) == loop.num("consumed_outcome_revision", 0))
@@ -680,6 +789,15 @@ class Runtime {
           if(entry.second.num("last_action", 0) > loop.num("consumed_actions", 0))
             q.set_repeated_failure_steps(std::max<std::size_t>(q.repeated_failure_steps(), entry.second.num("count", 1) - 1));
       q.set_failed_actions(loop.num("failed_actions", 0));
+      if(loop.num("last_successful_action", 0) <= loop.num("consumed_actions", 0)) {
+        const auto rejected = loop.num("rejected_actions", 0), consumed = loop.num("consumed_rejections", 0);
+        q.set_rejected_actions(std::min<std::size_t>(10000, rejected > consumed ? rejected - consumed : 0));
+        std::set<std::string> codes;
+        if(loop["operation_failures"].object()) for(const auto& entry : loop["operation_failures"].fields()) {
+          const auto code = entry.second.str("error_code");
+          if(identifier(code) && q.error_codes_size() < 64 && codes.insert(code).second) q.add_error_codes(code);
+        }
+      }
       if(loop.has("progress")) *q.mutable_previous() = proto<v1::LoopProgress>(loop["progress"]);
       bool pending = false;
       for(const auto& pair : run["activities"].fields()) pending |= !ended(pair.second) && pair.second.str("loop_id") == loop_id;
@@ -692,6 +810,7 @@ class Runtime {
     return Json{{"control_id", id}, {"decision", item["decision"]}, {"reason", item.str("reason")},
       {"context", item["context"]}, {"iteration", iteration}, {"event_id", item["start_event"]}};
   }
+  // commit 写入宿主实际采用的决定；若与建议不同，则丢弃未经确认的进度推断并从事实重新计算。
   Json commit_loop(const Json& request, bool interrupted = false) {
     keys(request, {"operation", "request_id", "run_id", "control_id", "decision", "extensions", "caused_by"});
     const auto id = request.str("control_id"), decision = request.str("decision");
@@ -714,8 +833,16 @@ class Runtime {
     if(item["query"].object() && !item["query"].flag("pending_actions", false) && !interrupted) {
       const auto observed = item["query"].num("failed_actions", 0), pending = loop.num("failed_actions", 0);
       loop["failed_actions"] = pending > observed ? pending - observed : 0;
+      // 整批结算时清理旧错误，避免成功/失败的返回顺序改变下一轮条件。
+      // 只消费 check 已观察的范围，check 后新到达的失败仍留给下一轮。
+      if(item.num("observed_successful_action", 0) > loop.num("consumed_actions", 0)
+          && loop["operation_failures"].object())
+        for(auto& entry : loop["operation_failures"].fields())
+          if(entry.second.object() && entry.second.num("last_action", 0) <= item.num("observed_actions", 0))
+            entry.second.fields().erase("error_code");
       loop["consumed_actions"] = item.num("observed_actions", 0);
       loop["consumed_outcome_revision"] = item.num("outcome_revision", 0);
+      loop["consumed_rejections"] = item.num("observed_rejections", 0);
       loop["repeated_action_steps"] = decision == "replan" && item.str("decision") == "replan"
           ? 0 : item["query"].num("repeated_action_steps", 0);
     }
@@ -733,19 +860,25 @@ class Runtime {
       progress.set_decision(decision);
       loop["progress"] = json(progress);
     }
-    if(decision == "stop") loop["stopped"] = true;
+    if(decision == "stop") {
+      loop["stopped"] = true;
+      if(!interrupted && item.flag("finalize_on_stop", false) && !loop.has("finalizing")) loop["finalizing"] = true;
+    }
     if(!interrupted) run["observed_boundaries"]["loop"] = true;
-    return Json{{"ended", true}, {"event_id", item["end_event"]}};
+    Json result{{"ended", true}, {"event_id", item["end_event"]}};
+    if(loop.flag("finalizing", false)) result["finalizing"] = decision == "stop" && !loop.flag("final_model_started", false);
+    return result;
   }
 };
-}  // namespace
+}  // 匿名命名空间
 
 std::string bounded_query_text(const Json& value, const Json& config, bool task) {
   const auto available = config["shadow_options"].num("max_query_bytes", 32768);
   const auto budget = available > 2048 ? (available - 2048) / 2 : 128;
-  // Project before truncation so nested tool JSON and instruction blocks stay
-  // recognizable. The original input is still retained in the trace.
-  return query_excerpt(retrieval_text(value), std::min(budget, config["query_context"].num(task ? "max_task_bytes" : "max_state_bytes", 8192)));
+  // 先投影再截断，保证嵌套工具 JSON 与指令块仍可识别。
+  // 原始输入仍完整保留在轨迹中。
+  return query_excerpt(task ? current_task_retrieval_text(value) : retrieval_text(value),
+      std::min(budget, config["query_context"].num(task ? "max_task_bytes" : "max_state_bytes", 8192)));
 }
 
 Json boundary_metrics(const Json& events) {
@@ -775,7 +908,7 @@ Json boundary_metrics(const Json& events) {
           : metrics.num("input_tokens", 0) + metrics.num("output_tokens", 0);
     }
   }
-  // Unknown usage stays unknown, rather than making an expensive trial look free.
+  // 未知用量必须保持未知，不能让高成本试验被误记为免费。
   const auto calls = result.num("llm_calls", 0);
   if(input_calls == calls) result["input_tokens"] = inputs;
   if(output_calls == calls) result["output_tokens"] = outputs;
@@ -828,7 +961,7 @@ Json describe_boundary_contract(const Json& config) {
     {"activity_types", config.has("activity_types") ? config["activity_types"] : Json(Json::Object{})},
     {"limits", Json{{"max_request_bytes", config.num("max_request_bytes", 1048576)}, {"max_events", config.num("max_events", 10000)}}}};
   if(config.has("policy_evaluation_file"))
-    for(const auto* operation : {"agent_evaluation.status", "agent_evaluation.feedback", "agent_evaluation.submit", "agent_evaluation.retry", "agent_evaluation.cancel", "agent_evaluation.tree"})
+    for(const auto* operation : {"agent_evaluation.status", "agent_evaluation.feedback", "agent_evaluation.submit", "agent_evaluation.retry", "agent_evaluation.cancel", "agent_evaluation.tree", "agent_evaluation.replay_holdout"})
       result["operations"].push(operation);
   return result;
 }
@@ -849,6 +982,7 @@ void initialize_boundary_run(Json& run, const Json& request) {
   if(run.has("agent_version_id")) run["events"].items().front()["attributes"]["agent_version_id"] = run["agent_version_id"];
   if(run.has("evaluation_trial_id")) run["events"].items().front()["attributes"]["evaluation_trial_id"] = run["evaluation_trial_id"];
 }
+// 按协议操作名分发打点；所有状态迁移经此入口校验，避免不同语言客户端绕过 run 的因果与关闭约束。
 Json dispatch_boundary(Json& run, const Json& request, const Json& config, const PolicyRuntime* cached_policy) {
   Runtime runtime(run, config, cached_policy); const auto op = request.str("operation");
   if(op == "activity.status") {
@@ -885,8 +1019,8 @@ Json dispatch_boundary(Json& run, const Json& request, const Json& config, const
       const auto context = event_context(run["activities"][request.str("activity_id")]);
       for(const auto& pair : context.fields()) fields[pair.first] = pair.second;
     } else if(request.has("control_id")) {
-      // A point may report a local result after loop.commit, without opening
-      // another activity. Keep its explicit round, not the latest sibling loop.
+      // loop.commit 之后打点仍可上报局部结果，无需新开活动。
+      // 保留其显式轮次，不能改挂到最近的同级循环。
       require(run["controls"].has(request.str("control_id")), "control_not_found", 404);
       const auto context = event_context(run["controls"][request.str("control_id")]);
       for(const auto& pair : context.fields()) fields[pair.first] = pair.second;
@@ -930,4 +1064,4 @@ Json dispatch_boundary(Json& run, const Json& request, const Json& config, const
   }
   throw Error("operation_not_found", 404);
 }
-}  // namespace trajectory::evolution::integration
+}  // trajectory::evolution::integration 命名空间

@@ -37,6 +37,14 @@ message ActionRule {
   // Stable scalar arguments identifying one target within this run. Empty
   // retains execution-local retry counting used by existing policy bundles.
   repeated string failure_key_arguments = 10;
+  // Exact structured error codes. A matching terminal failure blocks this
+  // operation/configuration in the current run, independent of output paths.
+  repeated string terminal_error_codes = 11;
+  repeated string error_scope_arguments = 12;
+  // Explicit per-run operation budget, including successful/no-op delegations.
+  // Parallel initial attempts form one settled round; no semantic completion is inferred.
+  uint32 max_attempts = 13;
+  repeated string attempt_key_arguments = 14;
 }
 // L2 orchestration is separate from action validation. Only actions already
 // present in a host batch may be ordered; host dependencies are never removed.
@@ -52,6 +60,10 @@ message ScheduleRule {
   // Optional local task guard. Empty retains existing exported policy behavior.
   repeated string task_terms = 8; // all must occur in the current run task
   repeated string exclude_terms = 9; // none may occur in the current run task
+  // Optional resource identity: equality of non-empty scalar string arguments
+  // pairs producer/consumer instances without relying on task language.
+  string before_argument = 10;
+  string after_argument = 11;
 }
 message ActionDependency {
   string action_id = 1;
@@ -94,6 +106,13 @@ message LoopRule {
   bool replan_on_failure = 11;
   // Empty applies to every actor in the scope; otherwise only this actor.
   string actor_id = 12;
+  // Optional settled-outcome predicates. Both must match when both are set.
+  // Empty preserves legacy rules; error codes are exact structured values.
+  repeated string error_codes = 13;
+  bool after_action_rejection = 14;
+  // Apply only when the current host boundary supports an answer-only finish.
+  // False preserves the behavior of existing policies.
+  bool require_finalization = 15;
 }
 message RuntimeOptions {
   Level requested_level = 1;
@@ -116,6 +135,8 @@ message RuntimeOptions {
   // Executable controls bypass legacy L1 retrieval and count repeated failed
   // operations even when their arguments/error text change. Persisted in bundles.
   bool aggressive_controls = 15;
+  // Disable only L1 text injection; source approval still authorizes existing controls.
+  repeated ExperienceApproval disabled_injections = 16;
 }
 message RuntimePolicy {
   uint32 schema_version = 1;
@@ -168,6 +189,12 @@ message RuntimeQuery {
   uint32 repeated_failure_steps = 11;
   repeated string observed_operations = 12;
   string actor_id = 13;
+  // Package-observed facts from this execution only. Useful successful actions
+  // suppress stale failure/rejection conditions in the current settled step.
+  repeated string error_codes = 14;
+  uint32 rejected_actions = 15;
+  // Derived from this boundary's explicit opt-in and a loaded finish template.
+  bool can_finalize = 16;
 }
 message ActionDecision {
   string action_id = 1;

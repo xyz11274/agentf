@@ -8,15 +8,15 @@
 
 namespace trajectory::evolution {
 
-// Frozen behavior is rebound within the same application and user only.
+// 冻结行为只能在同一应用与同一用户范围内重新绑定。
 v1::RuntimePolicy bind_runtime_policy(const v1::RuntimePolicy& policy,
                                       const v1::Identity& identity);
 bool published_policy_compatible(const v1::RuntimePolicy& published,
                                  const v1::RuntimePolicy& current,
                                  const std::string& control_learning_json = {});
 
-// Shared L0-L4 evaluator. Submission and I/O belong to management/background
-// callers, never to model/action/loop hot paths. Each trial runs a separate host.
+// L0-L4 共用评测器。提交和 I/O 属于管理／后台调用方，绝不能进入模型、动作、循环的
+// 热路径；每次试验都在独立宿主中运行。
 class AgentEvaluationService {
  public:
   AgentEvaluationService(const std::filesystem::path& config,
@@ -31,9 +31,10 @@ class AgentEvaluationService {
   std::string publications(const std::string& user) const;
   std::string feedback(const std::string& user) const;
   std::string search_tree(const std::string& user, const std::string& job_id) const;
+  std::string replay_holdout(const std::string& user, const std::string& job_id);
   std::string agent_configuration() const;
-  // Background-only seed preparation. Training uses the same isolated host,
-  // queue and limits as evaluation, but never publishes a policy or score.
+  // 只在后台准备种子。训练与评测共用隔离宿主、队列和限制，
+  // 但绝不发布策略或分数。
   std::string prepare_training(const std::string& user, const std::string& seed_json,
                                bool learning_pending, bool learning_failed);
   void complete_training_import(const std::string& user, const std::string& job_id,

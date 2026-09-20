@@ -38,9 +38,27 @@ def receive(message):
     if "--no-run" in sys.argv:
         return "accepted"
     ref = {"run": message["key"]}
+    if turn and "--late-previous-failure" in sys.argv:
+        previous = {"run": message["key"].rsplit("-", 1)[0] + "-" + str(turn - 1)}
+        client.point(dict(phase="after", kind="run", ref=previous,
+                          output={"api_key": "never-store-this-value"}), timeout_ms=5000)
+    if turn and "--rejected-start" in sys.argv:
+        client.point(dict(phase="before", kind="run", ref=ref,
+                          input={"api_key": os.environ["EVAL_TEST_API_KEY"]}), timeout_ms=5000)
+        return "accepted"
+    if turn and "--missing-start-gap" in sys.argv:
+        client.point(dict(phase="gap", kind="run", ref=ref), timeout_ms=5000)
+        return "accepted"
     run = client.point(dict(phase="before", kind="run", ref=ref,
                            conversation_id=message["conversation"], input=message["text"]), timeout_ms=5000)
     assert not run.get("degraded"), run
+    if turn and "--open-gap" in sys.argv:
+        client.point(dict(phase="gap", kind="run", ref=ref), timeout_ms=5000)
+        return "accepted"
+    if turn and "--rejected-child" in sys.argv:
+        client.point(dict(phase="before", kind="model", ref=dict(ref, key="rejected"),
+                          input={"api_key": os.environ["EVAL_TEST_API_KEY"]}), timeout_ms=5000)
+        return "accepted"
     if "--extra-run" in sys.argv:
         client.point(dict(phase="before", kind="run", ref={"run": message["key"] + "-extra"}, input="extra"), timeout_ms=5000)
     # A background worker receives the same existing message, not a whole Agent.

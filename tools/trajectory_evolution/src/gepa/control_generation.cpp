@@ -14,6 +14,8 @@ constexpr const char* kSchemaRequiredNonempty = "$schema_required_nonempty";
 constexpr const char* kSchemaPrimitive = "schema_required_nonempty";
 constexpr const char* kRepeatPrimitive = "repeat_failed_operation";
 constexpr const char* kTargetRepeatPrimitive = "repeat_failed_target";
+constexpr const char* kTerminalPrimitive = "terminal_failure";
+constexpr const char* kBudgetPrimitive = "operation_budget";
 
 std::string rule_id(const Json& item) {
   const auto text = item.dump(); unsigned char bytes[SHA256_DIGEST_LENGTH];
@@ -36,9 +38,8 @@ bool failure_replan_available(const v1::RuntimeOptions& base, const v1::LoopRule
   return std::any_of(base.loop_rules().begin(), base.loop_rules().end(), [&](const auto& rule) {
     if(selected && &rule != selected) return false;
     if(rule.has_source_experience() || rule.no_progress_decision() != "replan" || !rule.max_replans()) return false;
-    // With aggressive failure counting and a threshold of one, the base
-    // no-progress branch already replans on the first repeated failure. A
-    // learned replan_on_failure rule cannot change that decision.
+    // 激进失败计数且阈值为一时，基础“无进展”分支已会在首次重复失败后重规划；
+    // 此时学习得到的 replan_on_failure 无法再改变该决策，不能将其视为有效变异。
     return !base.aggressive_controls() || !rule.max_no_progress() || rule.max_no_progress() > 1;
   });
 }
@@ -98,10 +99,20 @@ Json control_generation_input(const v1::ShadowPolicySnapshot& snapshot,
           {"effect", "reject_retries_of_the_same_explicit_target_across_executions_within_one_run"},
           {"limits", "Use an observed exact operation, 1-4 scalar failure_key_arguments identifying the target (not an entire prompt), and max_failed_attempts 1-4. Different targets, missing keys and concurrent initial attempts remain independent. Success clears the failure streak."}}}},
       {"matching", "New controls use scope and executable predicates, independent of L1 retrieval. Loop limits apply to each execution in the scope."},
+      {"loop_conditions", Json{{"error_codes", "Optional exact structured failure codes observed in the same execution; any listed code matches."},
+          {"after_action_rejection", "Optional true: requires a verified settled L2 rejection in this execution. Successful progress suppresses stale conditions; pending branches continue."},
+          {"require_finalization", "Optional true: only applies at a boundary with explicit answer-only finalization support and a loaded finish template. Required when a cap replaces the reviewed final answer."},
+          {"combination", "All specified conditions must match. Narrowed recovery budgets need the observed condition, not only a reason describing it."}}},
       {"limits", limits}, {"base_action_rules", raw.has("action_rules") ? raw["action_rules"] : Json(Json::Array{})},
       {"base_loop_rules", raw.has("loop_rules") ? raw["loop_rules"] : Json(Json::Array{})}};
   if(!control_sources.items().empty()) input["control_sources"] = std::move(control_sources);
+  input["action_primitives"].push(Json{{"primitive_id", kTerminalPrimitive},
+      {"effect", "reject_after_an_observed_structured_terminal_error_in_the_same_operation_and_configuration"},
+      {"limits", "Use an exact observed operation and terminal_error_codes copied from structured failures. error_scope_arguments identify provider/model/configuration, never output paths or prompts. Missing optional configuration denotes the same default. Transient network failures are not terminal. Other operations/configurations remain independent."}});
   if(base.requested_level() >= v1::L3 && base.loop_rules_size()) {
+    input["action_primitives"].push(Json{{"primitive_id", kBudgetPrimitive},
+        {"effect", "bound_settled_attempt_rounds_for_an_exact_operation_in_one_run_including_successful_noop_delegations"},
+        {"limits", "Use observed operation, max_attempts 1-16, optional 1-4 stable scalar attempt_key_arguments. Empty keys explicitly share a per-operation budget within this run. Parallel first attempts count as one round. This is a learned budget, not proof of task completion; retain only if task quality is preserved. Never key by free-form prompt."}});
     input["loop_primitives"] = Json::Array{};
     input["loop_primitives"].push(Json{{"primitive_id", "bounded_no_progress"},
         {"effect", "tighten_max_no_progress_from_observed_no_progress_in_the_same_execution"},
@@ -124,6 +135,8 @@ Json control_generation_input(const v1::ShadowPolicySnapshot& snapshot,
         {"effect", "wait_for_before_operation_completion_before_dispatching_after_operation_in_the_same_batch"},
         {"limits", "Matching task_terms also provide a concise first-planning hint to propose both operations in one batch; the host model may ignore it. Only operations actually emitted in the same batch can be ordered. Use reusable task_terms with optional exclude_terms; each term is checked locally against the current run task. Equal operation names serialize distinct instances in host batch order. Keep host dependencies. require_success skips dependent work on failure; false waits for completion only. Unrelated actions remain parallel. A planning hint is not an applied schedule receipt."}}};
     input["base_schedule_rules"] = raw.has("schedule_rules") ? raw["schedule_rules"] : Json(Json::Array{});
+    input["schedule_primitives"].items()[0]["resource_condition"] =
+        "Instead of task_terms, before_argument/after_argument may select equal nonempty resource strings shown in schedule_plans.actions.arguments, including the component-derived __evolution_resource (a unique shared explicit file path). This pairs independent producer/consumer instances across task languages. Missing or unequal resources do not match; never use full prompt text as a resource. Shared resources alone do not prove a dependency. Both actions must exist in the same batch.";
   }
   return input;
 }
@@ -148,8 +161,26 @@ v1::RuntimeOptions apply_control_draft(const v1::ShadowPolicySnapshot& snapshot,
           + schedules.items().size() <= options.num("max_rules", 4), "control_draft_limits_invalid");
   auto result = base;
   for(const auto& item : draft["action_rules"].items()) {
-    keys(item, {"memory_id", "operation", "required_arguments", "primitive_id", "reason", "match_mode", "max_failed_attempts", "failure_key_arguments"});
+    keys(item, {"memory_id", "operation", "required_arguments", "primitive_id", "reason", "match_mode", "max_failed_attempts", "failure_key_arguments", "terminal_error_codes", "error_scope_arguments", "max_attempts", "attempt_key_arguments"});
     const auto primitive = item.str("primitive_id");
+    const auto terminal_codes = item.has("terminal_error_codes") ? item["terminal_error_codes"] : Json(Json::Array{});
+    const auto error_keys = item.has("error_scope_arguments") ? item["error_scope_arguments"] : Json(Json::Array{});
+    const bool terminal_rule = (primitive.empty() || primitive == kTerminalPrimitive)
+        && identifier(item.str("operation")) && item.str("operation") != kSchemaOperation
+        && terminal_codes.array() && !terminal_codes.items().empty() && terminal_codes.items().size() <= 8
+        && error_keys.array() && error_keys.items().size() <= 4
+        && (!item.has("required_arguments") || (item["required_arguments"].array() && item["required_arguments"].items().empty()))
+        && item.num("max_failed_attempts", 1) == 1;
+    const auto budget_keys = item.has("attempt_key_arguments") ? item["attempt_key_arguments"] : Json(Json::Array{});
+    const bool budget_rule = (primitive.empty() || primitive == kBudgetPrimitive)
+        && base.requested_level() >= v1::L3 && identifier(item.str("operation")) && item.str("operation") != kSchemaOperation
+        && item.num("max_attempts", 0) >= 1 && item.num("max_attempts", 0) <= 16
+        && budget_keys.array() && budget_keys.items().size() <= 4 && item.num("max_failed_attempts", 0) == 0
+        && (!item.has("required_arguments") || (item["required_arguments"].array() && item["required_arguments"].items().empty()));
+    require(budget_rule || (item.num("max_attempts", 0) == 0 && budget_keys.array() && budget_keys.items().empty()),
+        "control_budget_rule_invalid");
+    require(terminal_rule || (terminal_codes.array() && terminal_codes.items().empty()
+        && error_keys.array() && error_keys.items().empty()), "control_terminal_rule_invalid");
     const bool primitive_rule = primitive == kSchemaPrimitive
         && !item.has("operation") && !item.has("required_arguments");
     const bool repeat_rule = primitive == kRepeatPrimitive
@@ -161,16 +192,16 @@ v1::RuntimeOptions apply_control_draft(const v1::ShadowPolicySnapshot& snapshot,
         && (!item.has("required_arguments") || (item["required_arguments"].array() && item["required_arguments"].items().empty()));
     const auto operation = primitive_rule || repeat_rule ? std::string(kSchemaOperation) : item.str("operation");
     const Json arguments = primitive_rule ? Json(Json::Array{kSchemaRequiredNonempty})
-        : repeat_rule || target_repeat ? Json(Json::Array{}) : item["required_arguments"];
+        : repeat_rule || target_repeat || terminal_rule || budget_rule ? Json(Json::Array{}) : item["required_arguments"];
     const bool schema_rule = operation == kSchemaOperation
         && arguments.array()
         && arguments.items().size() == 1
         && arguments.items().front().text() == kSchemaRequiredNonempty;
-    const auto max_failed = item.num("max_failed_attempts", repeat_rule || target_repeat ? 2 : 0);
-    const bool repeat_authorized = (operation == kSchemaOperation || target_repeat) && arguments.array()
-        && arguments.items().empty() && max_failed >= (target_repeat ? 1 : 2) && max_failed <= 4;
-    const bool authorized = (primitive.empty() || primitive_rule || repeat_rule || target_repeat)
-        && (schema_rule || repeat_authorized || options["actions"].has(operation));
+    const auto max_failed = terminal_rule ? 1 : item.num("max_failed_attempts", repeat_rule || target_repeat ? 2 : 0);
+    const bool repeat_authorized = (operation == kSchemaOperation || target_repeat || terminal_rule) && arguments.array()
+        && arguments.items().empty() && max_failed >= (target_repeat || terminal_rule ? 1 : 2) && max_failed <= 4;
+    const bool authorized = (primitive.empty() || primitive_rule || repeat_rule || target_repeat || terminal_rule || budget_rule)
+        && (schema_rule || repeat_authorized || budget_rule || options["actions"].has(operation));
     require(failure_keys.array() && (failure_keys.items().empty() || target_repeat), "control_argument_not_authorized");
     require(base.requested_level() >= v1::L2, "control_operation_not_authorized");
     require(authorized, "control_operation_not_authorized");
@@ -179,6 +210,26 @@ v1::RuntimeOptions apply_control_draft(const v1::ShadowPolicySnapshot& snapshot,
     auto* rule = result.add_action_rules(); rule->set_rule_id(rule_id(item)); rule->set_target_scope(experience.target_scope());
     rule->set_operation(operation); rule->set_reason(item.str("reason"));
     rule->set_max_failed_attempts(max_failed);
+    if(budget_rule) {
+      require(!target_repeat && !terminal_rule, "control_budget_rule_invalid");
+      rule->set_max_attempts(item.num("max_attempts", 0));
+      std::set<std::string> seen;
+      for(const auto& key : budget_keys.items()) {
+        require(identifier(key.text()) && seen.insert(key.text()).second, "control_budget_rule_invalid");
+        rule->add_attempt_key_arguments(key.text());
+      }
+    }
+    if(terminal_rule) {
+      std::set<std::string> seen_codes, seen_keys;
+      for(const auto& code : terminal_codes.items()) {
+        require(identifier(code.text()) && code.text().size() <= 128 && seen_codes.insert(code.text()).second,
+            "control_terminal_rule_invalid"); rule->add_terminal_error_codes(code.text());
+      }
+      for(const auto& key : error_keys.items()) {
+        require(identifier(key.text()) && seen_keys.insert(key.text()).second, "control_terminal_rule_invalid");
+        rule->add_error_scope_arguments(key.text());
+      }
+    }
     std::set<std::string> target_keys;
     for(const auto& key : failure_keys.items()) {
       require(identifier(key.text()) && target_keys.insert(key.text()).second, "control_argument_not_authorized");
@@ -186,7 +237,7 @@ v1::RuntimeOptions apply_control_draft(const v1::ShadowPolicySnapshot& snapshot,
     for(const auto& key : target_keys) rule->add_failure_key_arguments(key);
     rule->set_match_mode(item.str("match_mode", "predicate"));
     require(rule->match_mode().empty() || rule->match_mode() == "predicate", "runtime_rule_match_mode_invalid");
-    require(arguments.array() && (!arguments.items().empty() || repeat_authorized), "control_arguments_required");
+    require(arguments.array() && (!arguments.items().empty() || repeat_authorized || budget_rule), "control_arguments_required");
     std::set<std::string> unique;
     for(const auto& key : arguments.items()) {
       bool allowed = schema_rule && key.text() == kSchemaRequiredNonempty;
@@ -199,7 +250,7 @@ v1::RuntimeOptions apply_control_draft(const v1::ShadowPolicySnapshot& snapshot,
   }
   std::set<std::pair<std::string, std::string>> scopes;
   for(const auto& item : draft["loop_rules"].items()) {
-    keys(item, {"memory_id", "max_iterations", "max_no_progress", "max_replans", "replan_on_failure", "reason", "match_mode", "actor_id"});
+    keys(item, {"memory_id", "max_iterations", "max_no_progress", "max_replans", "replan_on_failure", "reason", "match_mode", "actor_id", "error_codes", "after_action_rejection", "require_finalization"});
     require(base.requested_level() >= v1::L3, "control_loop_level_required");
     const auto memory_id = item.str("memory_id");
     const auto& experience = source(snapshot, base, memory_id);
@@ -224,9 +275,8 @@ v1::RuntimeOptions apply_control_draft(const v1::ShadowPolicySnapshot& snapshot,
         && tighter(no_progress, original->max_no_progress(), options.num("min_no_progress", 1)), "control_loop_relaxes_limit");
     if(iterations == original->max_iterations() && no_progress == original->max_no_progress()
         && failure_replan == original->replan_on_failure() && replans == original->max_replans()) continue;
-    // Without a compiled semantic route, a learned rule is scoped only by
-    // actor and execution. A global iteration cap could stop unrelated long
-    // tasks, while repeated normalized state is an observable progress fact.
+    // 可执行条件仅使用当前分支的观测事实，不把 reason 当作语义条件。
+    // 全局轮数上限仍须显式允许；普通长任务不能被经验描述隐式截停。
     require(base.aggressive_controls() || iterations == original->max_iterations(), "control_loop_semantic_scope_required");
     auto* rule = result.add_loop_rules(); *rule = *original;
     rule->set_rule_id(rule_id(item)); rule->set_max_iterations(iterations); rule->set_max_no_progress(no_progress); rule->set_reason(item.str("reason"));
@@ -234,6 +284,29 @@ v1::RuntimeOptions apply_control_draft(const v1::ShadowPolicySnapshot& snapshot,
     rule->set_max_replans(replans);
     if(!replans) { rule->set_no_progress_decision("stop"); rule->clear_replan_context(); }
     rule->set_actor_id(item.str("actor_id"));
+    if(item.has("error_codes")) {
+      require(item["error_codes"].array() && item["error_codes"].items().size() <= 8, "control_loop_condition_invalid");
+      rule->clear_error_codes(); std::set<std::string> codes;
+      for(const auto& code : item["error_codes"].items()) {
+        require(code.string() && identifier(code.text()) && code.text().size() <= 128 && codes.insert(code.text()).second,
+            "control_loop_condition_invalid");
+        rule->add_error_codes(code.text());
+      }
+    }
+    if(item.has("after_action_rejection")) {
+      rule->set_after_action_rejection(item.flag("after_action_rejection", false));
+    }
+    if(item.has("require_finalization")) {
+      rule->set_require_finalization(item.flag("require_finalization", false));
+    }
+    require(!original->after_action_rejection() || rule->after_action_rejection(), "control_loop_relaxes_condition");
+    require(!original->require_finalization() || rule->require_finalization(), "control_loop_relaxes_condition");
+    if(original->error_codes_size()) {
+      require(rule->error_codes_size() > 0, "control_loop_relaxes_condition");
+      for(const auto& code : rule->error_codes())
+        require(std::find(original->error_codes().begin(), original->error_codes().end(), code)
+            != original->error_codes().end(), "control_loop_relaxes_condition");
+    }
     rule->set_match_mode(item.str("match_mode", "predicate"));
     require(rule->match_mode().empty() || rule->match_mode() == "predicate", "runtime_rule_match_mode_invalid");
     rule->mutable_source_experience()->set_memory_id(experience.memory_id());
@@ -241,7 +314,7 @@ v1::RuntimeOptions apply_control_draft(const v1::ShadowPolicySnapshot& snapshot,
     rule->clear_rule_id(); rule->set_rule_id(rule_id(json(*rule)));
   }
   for(const auto& item : schedules.items()) {
-    keys(item, {"memory_id", "before_operation", "after_operation", "require_success", "reason", "task_terms", "exclude_terms"});
+    keys(item, {"memory_id", "before_operation", "after_operation", "require_success", "reason", "task_terms", "exclude_terms", "before_argument", "after_argument"});
     require(base.requested_level() >= v1::L2
         && std::find(base.host_capabilities().begin(), base.host_capabilities().end(), "schedule.dispatch")
             != base.host_capabilities().end(), "control_schedule_not_authorized");
@@ -251,9 +324,12 @@ v1::RuntimeOptions apply_control_draft(const v1::ShadowPolicySnapshot& snapshot,
     rule->set_target_scope(experience.target_scope());
     rule->set_before_operation(item.str("before_operation")); rule->set_after_operation(item.str("after_operation"));
     rule->set_require_success(item.flag("require_success", false)); rule->set_reason(item.str("reason"));
-    require(item["task_terms"].array() && !item["task_terms"].items().empty()
-        && item["task_terms"].items().size() <= 8, "control_schedule_task_guard_required");
-    for(const auto& term : item["task_terms"].items()) rule->add_task_terms(term.text());
+    rule->set_before_argument(item.str("before_argument")); rule->set_after_argument(item.str("after_argument"));
+    const auto terms = item.has("task_terms") ? item["task_terms"] : Json(Json::Array{});
+    require(terms.array() && terms.items().size() <= 8
+        && (!terms.items().empty() || (!rule->before_argument().empty() && !rule->after_argument().empty())),
+        "control_schedule_task_guard_required");
+    for(const auto& term : terms.items()) rule->add_task_terms(term.text());
     require(item["exclude_terms"].null() || (item["exclude_terms"].array()
         && item["exclude_terms"].items().size() <= 8), "control_schedule_task_guard_invalid");
     if(item["exclude_terms"].array())
@@ -283,14 +359,32 @@ bool generated_controls_authorized(const v1::RuntimePolicy& candidate,
         item["failure_key_arguments"] = Json::Array{};
         for(const auto& key : rule.failure_key_arguments()) item["failure_key_arguments"].push(key);
       }
+      if(rule.terminal_error_codes_size()) {
+        item["primitive_id"] = kTerminalPrimitive; item["terminal_error_codes"] = Json::Array{};
+        item["error_scope_arguments"] = Json::Array{};
+        for(const auto& code : rule.terminal_error_codes()) item["terminal_error_codes"].push(code);
+        for(const auto& key : rule.error_scope_arguments()) item["error_scope_arguments"].push(key);
+      }
+      if(rule.max_attempts()) {
+        item["primitive_id"] = kBudgetPrimitive; item["max_attempts"] = std::size_t(rule.max_attempts());
+        item["attempt_key_arguments"] = Json::Array{};
+        for(const auto& key : rule.attempt_key_arguments()) item["attempt_key_arguments"].push(key);
+      }
       draft["action_rules"].push(std::move(item));
     }
     for(const auto& rule : candidate.options().loop_rules()) if(rule.has_source_experience()) {
       const auto& entry = source(current.snapshot(), current.options(), rule.source_experience().memory_id());
       require(entry.content_revision() == rule.source_experience().content_revision() && entry.target_scope() == rule.target_scope(), "control_source_changed");
-      draft["loop_rules"].push(Json{{"memory_id", entry.memory_id()}, {"actor_id", rule.actor_id()}, {"max_iterations", std::size_t(rule.max_iterations())},
+      Json item{{"memory_id", entry.memory_id()}, {"actor_id", rule.actor_id()}, {"max_iterations", std::size_t(rule.max_iterations())},
           {"max_no_progress", std::size_t(rule.max_no_progress())}, {"max_replans", std::size_t(rule.max_replans())}, {"replan_on_failure", rule.replan_on_failure()},
-          {"reason", rule.reason()}, {"match_mode", rule.match_mode()}});
+          {"reason", rule.reason()}, {"match_mode", rule.match_mode()}};
+      if(rule.error_codes_size()) {
+        item["error_codes"] = Json::Array{};
+        for(const auto& code : rule.error_codes()) item["error_codes"].push(code);
+      }
+      if(rule.after_action_rejection()) item["after_action_rejection"] = true;
+      if(rule.require_finalization()) item["require_finalization"] = true;
+      draft["loop_rules"].push(std::move(item));
     }
     for(const auto& rule : candidate.options().schedule_rules()) if(rule.has_source_experience()) {
       const auto& entry = source(current.snapshot(), current.options(), rule.source_experience().memory_id());
@@ -300,7 +394,8 @@ bool generated_controls_authorized(const v1::RuntimePolicy& candidate,
       for(const auto& term : rule.exclude_terms()) exclude_terms.push(term);
       draft["schedule_rules"].push(Json{{"memory_id", entry.memory_id()}, {"before_operation", rule.before_operation()},
           {"after_operation", rule.after_operation()}, {"require_success", rule.require_success()},
-          {"reason", rule.reason()}, {"task_terms", task_terms}, {"exclude_terms", exclude_terms}});
+          {"reason", rule.reason()}, {"task_terms", task_terms}, {"exclude_terms", exclude_terms},
+          {"before_argument", rule.before_argument()}, {"after_argument", rule.after_argument()}});
     }
     if(draft["action_rules"].items().empty() && draft["loop_rules"].items().empty()
         && draft["schedule_rules"].items().empty()) return true;
@@ -359,9 +454,13 @@ Json control_coverage(const Json& artifact, const dataset::v1::TaskEvaluationRep
           : std::string(category) == "schedule_rules" ? "schedule" : "loop"},
           {"queries", 0}, {"triggered", 0}, {"applied", 0}};
     }
-  // Rewritten experience text also needs an actual model-request receipt.
-  // Hash the complete rewrite so evidence for an older text cannot approve it.
+  // 改写后的经验文本也必须有真实模型请求回执。对完整改写内容哈希，避免旧文本
+  // 的证据错误地批准新文本。
   for(const auto& rewrite : items(artifact["policy"]["options"]["experience_overrides"])) {
+    bool disabled = false;
+    for(const auto& source : items(artifact["policy"]["options"]["disabled_injections"]))
+      disabled |= source.dump() == rewrite["source_experience"].dump();
+    if(disabled) continue;
     const auto id = "experience-" + rule_id(rewrite);
     Json rule{{"source_experience", rewrite["source_experience"]}};
     for(const auto& experience : items(artifact["policy"]["snapshot"]["experiences"]))

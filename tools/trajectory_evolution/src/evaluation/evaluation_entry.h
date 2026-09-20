@@ -87,6 +87,11 @@ struct EvaluationEntry {
     consumer = who;
     if(!failure.empty()) return Json{{"state", "failed"}};
     if(requested == index + 1) {
+      // 已确认采集缺口时不再等待 run.end；接收回执本身仍不能结束异步 run。
+      if(run.flag("incomplete", false)) {
+        failure = "evaluation_entry_trace_incomplete";
+        return Json{{"state", "failed"}};
+      }
       if(run.null() || !run.flag("closed", false) || !persisted)
         return Json{{"state", "waiting"}, {"retry_after_ms", 100}};
       advance(run);

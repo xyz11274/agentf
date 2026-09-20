@@ -2190,6 +2190,33 @@
         ],
         "additionalProperties": false
       },
+      "Agent_EvaluationReplay_HoldoutRequest": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "const": "agent_evaluation.replay_holdout",
+            "type": "string",
+            "enum": [
+              "agent_evaluation.replay_holdout"
+            ]
+          },
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "job_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "operation",
+          "request_id",
+          "job_id"
+        ],
+        "additionalProperties": false
+      },
       "InvokeRequest": {
         "oneOf": [
           {
@@ -2311,6 +2338,9 @@
           },
           {
             "$ref": "#/components/schemas/Agent_EvaluationTreeRequest"
+          },
+          {
+            "$ref": "#/components/schemas/Agent_EvaluationReplay_HoldoutRequest"
           }
         ],
         "discriminator": {
@@ -2355,7 +2385,8 @@
             "agent_evaluation.submit": "#/components/schemas/Agent_EvaluationSubmitRequest",
             "agent_evaluation.retry": "#/components/schemas/Agent_EvaluationRetryRequest",
             "agent_evaluation.cancel": "#/components/schemas/Agent_EvaluationCancelRequest",
-            "agent_evaluation.tree": "#/components/schemas/Agent_EvaluationTreeRequest"
+            "agent_evaluation.tree": "#/components/schemas/Agent_EvaluationTreeRequest",
+            "agent_evaluation.replay_holdout": "#/components/schemas/Agent_EvaluationReplay_HoldoutRequest"
           }
         }
       },
@@ -2656,6 +2687,9 @@
             "type": "string"
           },
           "ended": {
+            "type": "boolean"
+          },
+          "finalizing": {
             "type": "boolean"
           },
           "persisted": {

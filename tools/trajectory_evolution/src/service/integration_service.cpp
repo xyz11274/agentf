@@ -227,7 +227,7 @@ struct IntegrationService::Impl {
     keys(config, {"schema_version", "agent_id", "data_dir", "port", "http_timeout_ms", "workers",
           "max_request_bytes", "max_run_bytes", "max_events", "max_active_runs", "max_stored_runs",
           "recent_reports", "max_level", "principals", "actors", "runtime_config", "auto_evaluate",
-          "auto_approve_experiences", "shadow_options", "runtime_options", "experience_template_file",
+          "auto_approve_experiences", "shadow_options", "runtime_options", "experience_template_file", "finalization_template_file",
           "application_id", "policy_scopes", "activity_types", "learning", "sharing",
           "policy_evaluation_file", "evaluation_version_file", "policy_version_file", "query_context", "instrumentation", "run_lease_ms", "http_persistence", "control_learning", "evaluation_levels"});
     validate_control_learning(config["control_learning"]);
@@ -313,6 +313,11 @@ struct IntegrationService::Impl {
     } else if(!config.has("runtime_options")) {
       config["runtime_options"] = Json::Object{};
     }
+    // 收尾模板随包交付；显式路径可替换，旧部署缺少模板时不启用收尾。
+    const auto finalization_path = config.has("finalization_template_file") ? local("finalization_template_file")
+        : config.has("experience_template_file") ? local("experience_template_file").parent_path() / "runtime-finalization.txt" : fs::path{};
+    if(!finalization_path.empty() && (config.has("finalization_template_file") || fs::exists(finalization_path)))
+      config["finalization_context"] = read_file(finalization_path, 16384);
     config["sharing"] = shared_memory_options(config["sharing"]);
     if(config["sharing"].flag("enabled", false)) {
       for(const auto& pair : std::vector<std::pair<std::string, std::string>>{
@@ -2021,6 +2026,9 @@ IntegrationResponse IntegrationService::call(const std::string& token, const std
       } else if(op == "agent_evaluation.tree") {
         keys(message, {"operation", "request_id", "job_id"});
         result = Json::parse(impl_->assessments->search_tree(user, message.str("job_id")));
+      } else if(op == "agent_evaluation.replay_holdout") {
+        keys(message, {"operation", "request_id", "job_id"});
+        result = Json::parse(impl_->assessments->replay_holdout(user, message.str("job_id")));
       } else if(op == "agent_evaluation.submit") {
         keys(message, {"operation", "request_id", "artifact"});
         // Uploaded experiments never expand the configured user's authorization.
@@ -2080,6 +2088,15 @@ IntegrationResponse IntegrationService::call(const std::string& token, const std
         const auto rid = parent["run_id"].string() ? parent["run_id"].text() : "";
         const auto request_id = message["request_id"].string() ? message["request_id"].text() : "invalid";
         const auto active = impl_->runs.find(rid);
+        // 业务打点继续 fail-open；隔离评测必须及时报告采集失败，不能等整题超时。
+        // 根打点失败时尚无 run 可写 gap；旧轮迟到的失败不得污染当前轮。
+        auto& entry = impl_->evaluation_entry;
+        if(entry.enabled() && entry.delivered && !entry.done && entry.failure.empty()
+            && impl_->authenticate(token) == entry.specification.str("user_id")
+            && ((!rid.empty() && entry.run_id == rid)
+                || (entry.run_id.empty() && active == impl_->runs.end()
+                    && (!rid.empty() || (message.str("kind") == "run" && message.str("phase") == "before")))))
+          entry.failure = "evaluation_entry_capture_" + failure_code;
         if(active != impl_->runs.end() && active->second["identity"].str("user_id") == impl_->authenticate(token)
             && active->second.flag("buffered_capture", false)
             && (!active->second.flag("closed", false) || impl_->capture_dirty.count(rid))) {

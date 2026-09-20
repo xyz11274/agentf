@@ -73,6 +73,7 @@ v1::Level validate_options(const v1::RuntimeOptions& options) {
               && options.allowed_conversations_size() <= 256
               && options.approved_experiences_size() <= 512
               && options.experience_overrides_size() <= 64
+              && options.disabled_injections_size() <= 512
               && options.action_rules_size() <= 64 && options.loop_rules_size() <= 64
               && options.host_capabilities_size() <= 32,
           "runtime_limits_invalid");
@@ -95,6 +96,10 @@ v1::Level validate_options(const v1::RuntimeOptions& options) {
                 && ids.insert(approval.memory_id()).second, "runtime_approval_invalid");
   }
   ids.clear();
+  for(const auto& source : options.disabled_injections())
+    require(approved_source(source) && ids.insert(source.memory_id()).second,
+            "runtime_disabled_injection_invalid");
+  ids.clear();
   for(const auto& item : options.experience_overrides()) {
     require(approved_source(item.source_experience())
                 && ids.insert(item.source_experience().memory_id()).second
@@ -113,20 +118,36 @@ v1::Level validate_options(const v1::RuntimeOptions& options) {
         && rule.required_arguments_size() == 1
         && rule.required_arguments(0) == kSchemaRequiredNonempty;
     const bool repeat_rule = rule.max_failed_attempts() > 0 && rule.required_arguments_size() == 0;
+    const bool budget_rule = rule.max_attempts() > 0 && rule.required_arguments_size() == 0;
     require(!rule.has_source_experience() || approved_source(rule.source_experience()), "runtime_rule_source_not_approved");
     require(identifier(rule.rule_id()) && ids.insert(rule.rule_id()).second
                 && identifier(rule.target_scope()) && identifier(rule.operation())
                 && !rule.reason().empty() && rule.reason().size() <= 1024
-                && (rule.deny() || rule.required_arguments_size() > 0 || repeat_rule)
+                && (rule.deny() || rule.required_arguments_size() > 0 || repeat_rule || budget_rule)
                 && rule.required_arguments_size() <= 32
                 && rule.max_failed_attempts() <= 16
                 && rule.failure_key_arguments_size() <= 4
+                && rule.terminal_error_codes_size() <= 8 && rule.error_scope_arguments_size() <= 4
+                && (!rule.terminal_error_codes_size() || (repeat_rule && !rule.failure_key_arguments_size()
+                    && rule.operation() != kSchemaOperation))
+                && (!rule.error_scope_arguments_size() || rule.terminal_error_codes_size())
+                && rule.max_attempts() <= 64 && rule.attempt_key_arguments_size() <= 4
+                && (!rule.max_attempts() || (budget_rule && !rule.max_failed_attempts()
+                    && !rule.terminal_error_codes_size() && !rule.failure_key_arguments_size() && rule.operation() != kSchemaOperation))
+                && (!rule.attempt_key_arguments_size() || budget_rule)
                 && (!rule.failure_key_arguments_size() || (repeat_rule && rule.operation() != kSchemaOperation))
                 && (rule.operation() != kSchemaOperation || ((schema_rule || repeat_rule) && !rule.deny())), "runtime_action_rule_invalid");
     for(const auto& key : rule.required_arguments()) require(identifier(key), "runtime_argument_invalid");
     std::set<std::string> failure_keys;
     for(const auto& key : rule.failure_key_arguments())
       require(identifier(key) && failure_keys.insert(key).second, "runtime_argument_invalid");
+    for(const auto& key : rule.error_scope_arguments())
+      require(identifier(key) && failure_keys.insert(key).second, "runtime_argument_invalid");
+    for(const auto& key : rule.attempt_key_arguments())
+      require(identifier(key) && failure_keys.insert(key).second, "runtime_argument_invalid");
+    std::set<std::string> codes;
+    for(const auto& code : rule.terminal_error_codes())
+      require(identifier(code) && code.size() <= 128 && codes.insert(code).second, "runtime_argument_invalid");
   }
   std::set<std::tuple<std::string, std::string, bool>> loop_scopes;
   for(const auto& rule : options.loop_rules()) {
@@ -139,12 +160,16 @@ v1::Level validate_options(const v1::RuntimeOptions& options) {
                 && (rule.max_iterations() > 0 || rule.max_no_progress() > 0)
                 && rule.max_iterations() <= 10000 && rule.max_no_progress() <= 10000
                 && rule.max_replans() <= 16 && !rule.reason().empty() && rule.reason().size() <= 1024
+                && rule.error_codes_size() <= 8
                 && (rule.no_progress_decision() == "stop" || rule.no_progress_decision() == "replan")
                 && (!rule.replan_on_failure() || rule.no_progress_decision() == "replan")
                 && (rule.no_progress_decision() != "replan" || (rule.max_replans() > 0
                     && !rule.replan_context().empty()
                     && rule.replan_context().size() + 128 <= options.max_context_bytes())),
             "runtime_loop_rule_invalid");
+    std::set<std::string> codes;
+    for(const auto& code : rule.error_codes())
+      require(identifier(code) && code.size() <= 128 && codes.insert(code).second, "runtime_argument_invalid");
   }
   for(const auto& rule : options.schedule_rules())
     require(ids.insert(rule.rule_id()).second, "runtime_rule_id_duplicate");
@@ -172,8 +197,10 @@ bool missing(const google::protobuf::Struct& arguments, const std::string& key) 
       || (value.kind_case() == google::protobuf::Value::kStructValue && value.struct_value().fields().empty())
       || (value.kind_case() == google::protobuf::Value::kStringValue && value.string_value().empty());
 }
-std::string wrap(const std::string& policy_id, const std::string& content) {
-  return "\n<trajectory-experience policy=\"" + policy_id + "\">\n" + content
+std::string wrap(const std::string&, const std::string& content) {
+  // 版本归因保留在 decision／receipt，不把每个 run 的编号混入模型正文。
+  // 无关控制规则变化不能改变相同经验的输入，也不应破坏提示词缓存。
+  return "\n<trajectory-experience>\n" + content
       + "\n</trajectory-experience>";
 }
 bool request_contains(const google::protobuf::Struct& request, const std::string& context) {
@@ -190,8 +217,10 @@ bool request_contains(const google::protobuf::Struct& request, const std::string
   }
   return count == 1;
 }
-}  // namespace
+}  // 匿名命名空间
 
+// 编译阶段把经验快照和经校验的选项固定为一个不可变策略版本；后续运行时只读取该版本。
+// 这样同一 policy_id 在不同打点处会得到一致的 L1、L2、L3 决策。
 v1::RuntimePolicy compile_runtime_policy(v1::ShadowPolicySnapshot snapshot,
                                          const v1::RuntimeOptions& options) {
   require(snapshot.schema_version() == 2, "runtime_experience_contract_missing");
@@ -203,6 +232,13 @@ v1::RuntimePolicy compile_runtime_policy(v1::ShadowPolicySnapshot snapshot,
   *policy.mutable_options() = options;
   policy.set_effective_level(validate_options(options));
   const auto& identity = policy.snapshot().identity();
+  for(const auto& disabled : options.disabled_injections()) {
+    bool matched = false;
+    for(const auto& source : policy.snapshot().experiences())
+      matched |= source.control_target_type().empty() && source.memory_id() == disabled.memory_id()
+          && source.content_revision() == disabled.content_revision();
+    require(matched, "runtime_disabled_injection_source_invalid");
+  }
   for(const auto& item : options.experience_overrides()) {
     bool matched = false;
     for(const auto& source : policy.snapshot().experiences())
@@ -240,27 +276,39 @@ PolicyRuntime::PolicyRuntime(v1::RuntimePolicy policy)
         approved_ids_.insert(e.memory_id());
 }
 
+// 决策函数没有副作用：它只把当前打点查询映射为建议、控制或循环结论。
+// 业务状态只能在宿主随后提交实际执行结果时推进，不能把策略建议误记为已发生事实。
 v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery& query) const {
   ensure_safe_evolution_data(query);
-  require(query.observed_operations_size() <= 64, "runtime_query_invalid");
+  require(query.observed_operations_size() <= 64 && query.error_codes_size() <= 64
+      && query.rejected_actions() <= 10000, "runtime_query_invalid");
   for(const auto& operation : query.observed_operations()) require(identifier(operation), "runtime_query_invalid");
+  for(const auto& code : query.error_codes())
+    require(identifier(code) && code.size() <= 128, "runtime_query_invalid");
   auto eligible = approved_ids_;
+  // L1 停用仅改变文字注入；动作、编排与循环仍使用原来源批准。
+  if(query.boundary() == "llm") for(const auto& disabled : policy_.options().disabled_injections()) {
+    eligible.erase(disabled.memory_id());
+    for(const auto& relation : policy_.snapshot().cross_relations())
+      if(relation.relation() == "duplicate" && relation.private_memory_id() == disabled.memory_id()
+          && relation.private_content_revision() == disabled.content_revision())
+        eligible.erase(relation.shared_memory_id());
+  }
   std::map<std::string, std::string> triggers;
   for(const auto& rewrite : policy_.options().experience_overrides()) {
-    if(query.boundary() != "llm") break; // L1 applicability cannot weaken executable controls.
+    if(query.boundary() != "llm") break; // L1 的适用条件只影响经验注入，不能削弱可执行控制。
     const auto& id = rewrite.source_experience().memory_id();
     if(!rewrite.trigger_pattern().empty()) triggers[id] = rewrite.trigger_pattern();
     if(!rewrite.observed_operations().empty() && std::none_of(
         rewrite.observed_operations().begin(), rewrite.observed_operations().end(),
         [&](const auto& operation) { return contains(query.observed_operations(), operation); })) eligible.erase(id);
-    // A shadowed public duplicate must not restore the old condition/body when
-    // the canonical private component was narrowed in this policy version.
+    // 当前版本若收窄私有规范记录，已被遮蔽的公共副本不能恢复旧条件或旧正文。
     for(const auto& relation : policy_.snapshot().cross_relations())
       if(relation.relation() == "duplicate" && relation.private_memory_id() == id
           && relation.private_content_revision() == rewrite.source_experience().content_revision())
         eligible.erase(relation.shared_memory_id());
   }
-  // Reuse identity, scope and input budget checks for all three boundaries.
+  // 三类边界共用身份、作用域和输入预算校验，保证检索的适用口径一致。
   const auto advice = shadow_.query_advice(query.advice_query(), eligible, triggers);
   require(advice.status() != "error" && identifier(query.execution_id())
               && query.ByteSizeLong() <= 128U * 1024U && query.actions_size() <= 128,
@@ -274,8 +322,8 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery& query) const {
   const auto& options = policy_.options();
   auto source_matches = [&](const auto& rule) {
     if(!rule.has_source_experience()) return true;
-    // A source is still revision-pinned and approved. Executable conditions
-    // must not disappear because unrelated L1 advice occupied the top-k slots.
+    // 可执行规则的来源仍须版本固定且已批准；不能因为无关 L1 建议占满 top-k
+    // 就让这条规则的条件消失。
     if(rule.match_mode() == "predicate" || options.aggressive_controls())
       return approved_ids_.count(rule.source_experience().memory_id()) != 0;
     return std::any_of(advice.advice().begin(), advice.advice().end(), [&](const auto& item) {
@@ -283,6 +331,7 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery& query) const {
           && item.experience().content_revision() == rule.source_experience().content_revision();
     });
   };
+  // L1 只在模型请求边界生成经验上下文；动作、编排和循环控制均不依赖提示词命中。
   if(query.boundary() == "llm" && policy_.effective_level() >= v1::L1
       && contains(options.host_capabilities(), "context.request")) {
     std::string content;
@@ -318,10 +367,11 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery& query) const {
         if(append_context(item)) ++hints;
       }
     }
+    std::set<std::pair<std::string, std::string>> injected_content;
     for(const auto& match : advice.advice()) {
       const auto& experience = match.experience();
-      // Prefer an approved private duplicate; related/independent advice may
-      // still complement it. No private approval means the public copy can win.
+      // 优先采用已批准的私有重复记录；相关或独立建议仍可补充。若无私有批准记录，
+      // 公共副本才可入选。
       if(experience.application_shared() && std::any_of(policy_.snapshot().cross_relations().begin(),
           policy_.snapshot().cross_relations().end(), [&](const auto& r) {
             return r.relation() == "duplicate" && r.shared_memory_id() == experience.memory_id()
@@ -333,21 +383,28 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery& query) const {
       if(approved == options.approved_experiences().end()) continue;
       if(!agentflow::trajectory::experience_fields_valid(
           experience.target_scope(), experience.trigger_pattern(), experience.content())) continue;
-      // Typed JSON preserves field order when verify() recomputes the same context.
+      // 有类型 JSON 保留字段顺序，使 verify() 重算时得到相同的上下文。
       agentflow::trajectory::evaluation::ExperienceAdvice item;
       item.set_target_scope(experience.target_scope());
       item.set_trigger_pattern(experience.trigger_pattern());
       item.set_proposed_change(experience.content());
       for(const auto& rewrite : options.experience_overrides())
         if(rewrite.source_experience().memory_id() == approved->memory_id()
-            && rewrite.source_experience().content_revision() == approved->content_revision())
+            && rewrite.source_experience().content_revision() == approved->content_revision()) {
           item.set_proposed_change(rewrite.content());
-      if(!append_context(item)) continue;
+          // 检索与注入使用同一版本的适用条件，不能展示来源记忆的旧条件。
+          if(!rewrite.trigger_pattern().empty()) item.set_trigger_pattern(rewrite.trigger_pattern());
+        }
+      // 同一有效建议可能来自不同私有/公共记录；一次请求只注入一份。
+      const auto content_key = std::make_pair(item.target_scope(), item.proposed_change());
+      if(injected_content.count(content_key) || !append_context(item)) continue;
+      injected_content.insert(content_key);
       *result.add_experiences() = *approved;
       applied.insert(experience.memory_id());
     }
     if(!result.context().empty()) result.set_status("ready");
   } else if(query.boundary() == "actions") {
+    // L2 在动作真正派发前逐项给出准入结论；拒绝不等价于一次已执行的业务失败。
     std::set<std::string> action_ids;
     for(const auto& action : query.actions()) {
       require(identifier(action.action_id()) && identifier(action.operation())
@@ -368,9 +425,10 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery& query) const {
         if(rule.target_scope() != query.advice_query().target_scope()
             || (!schema_rule && rule.operation() != kSchemaOperation && rule.operation() != action.operation()) || !source_matches(rule)) continue;
         const auto target = action.target_failures().find(rule.rule_id());
-        const auto failures = rule.failure_key_arguments_size()
+        const auto failures = rule.failure_key_arguments_size() || rule.terminal_error_codes_size() || rule.max_attempts()
             ? (target == action.target_failures().end() ? 0 : target->second) : action.prior_failures();
-        bool reject = rule.deny() || (repeat_rule && failures >= rule.max_failed_attempts());
+        bool reject = rule.deny() || (repeat_rule && failures >= rule.max_failed_attempts())
+            || (rule.max_attempts() && failures >= rule.max_attempts());
         if(schema_rule) {
           for(const auto& key : action.schema_required_arguments()) reject |= missing(action.arguments(), key);
         } else for(const auto& key : rule.required_arguments()) reject |= missing(action.arguments(), key);
@@ -384,6 +442,7 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery& query) const {
       }
     }
   } else if(query.boundary() == "schedule") {
+    // L2 编排仅描述依赖和顺序，实际并发/串行状态仍由宿主的 schedule.observe 打点确认。
     auto effective = options;
     effective.set_requested_level(policy_.effective_level());
     *result.mutable_schedule() = plan_schedule(effective, query);
@@ -395,6 +454,7 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery& query) const {
           *result.add_experiences() = rule.source_experience();
     }
   } else if(query.boundary() == "loop") {
+    // L3 根据宿主已经观察到的循环状态作出 continue/replan/stop 建议，不能越过在途动作。
     require(query.iteration() > 0 && query.state_fingerprint().size() <= 128, "runtime_iteration_invalid");
     const auto& previous = query.previous();
     require((previous.execution_id().empty() && previous.iteration() == 0)
@@ -406,7 +466,7 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery& query) const {
     *progress = previous;
     if(query.pending_actions() || policy_.effective_level() < v1::L3
         || !contains(options.host_capabilities(), "loop.decide")) {
-      // Never stop/replan while the host still owns in-flight actions.
+      // 宿主仍持有在途动作时，绝不能停止或重规划。
       progress->set_decision("continue");
       return result;
     }
@@ -414,8 +474,13 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery& query) const {
     for(const auto& candidate : options.loop_rules())
       if(candidate.target_scope() == query.advice_query().target_scope() && source_matches(candidate)
           && (candidate.actor_id().empty() || candidate.actor_id() == query.actor_id())
+          && (!candidate.require_finalization() || query.can_finalize())
+          && (!candidate.after_action_rejection() || query.rejected_actions())
+          && (candidate.error_codes().empty() || std::any_of(candidate.error_codes().begin(), candidate.error_codes().end(),
+              [&](const auto& code) { return contains(query.error_codes(), code); }))
           && (!rule || (rule->actor_id().empty() && !candidate.actor_id().empty())
               || (rule->actor_id() == candidate.actor_id() && candidate.has_source_experience()))) rule = &candidate;
+    // 同一轮次只能重放同一状态指纹，保证重试幂等且不会吞掉并发分支的新结果。
     if(previous.iteration() == query.iteration()) {
       require(previous.fingerprint() == query.state_fingerprint(), "runtime_duplicate_iteration_changed");
     } else {
@@ -444,9 +509,8 @@ v1::RuntimeDecision PolicyRuntime::decide(const v1::RuntimeQuery& query) const {
           } else if(rule->replan_on_failure()
               && (rule->has_source_experience() ? query.repeated_failure_steps() : query.failed_actions())
               && progress->replans() < rule->max_replans()) {
-            // Learned recovery rules require a repeated structured failure;
-            // one failed action alone is not evidence that another loop helps.
-            // Manual base rules retain their explicit failed-action semantics.
+            // 学习得到的恢复规则必须看到重复的结构化失败；单次动作失败不足以证明
+            // 再开一轮循环会有收益。人工基线规则仍保留其显式失败动作语义。
             progress->set_decision("replan");
             progress->set_replans(progress->replans() + 1);
           }
@@ -532,4 +596,4 @@ v1::RuntimeReceipt PolicyRuntime::verify(const v1::RuntimeQuery& query,
   return receipt;
 }
 
-}  // namespace trajectory::evolution
+}  // trajectory::evolution 命名空间

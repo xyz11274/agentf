@@ -88,6 +88,10 @@ def node(folder, mode):
     captures, executions = [], []
     def model(messages, *args, **kwargs):
         captures.append(json.loads(json.dumps(messages)))
+        if mode == "finalize":
+            assert args[3] is None, "the transport reused tools removed by the model point"
+            assert "Report failures and unfinished work honestly" in json.dumps(messages)
+            return response("The operation failed; no new work was started.")
         if mode == "dispatch-ordered":
             return response(calls=[tool("run_skills", {"skills": [
                 {"name": name, "prompt": "视频生成缺少图片素材，完成 " + name}
@@ -164,7 +168,20 @@ def node(folder, mode):
             # from the policy engine's repeated-state tests.
             stack.enter_context(patch.object(points, "allow_loop", return_value=False))
         with contextlib.redirect_stdout(output):
-            module.execute()
+            if mode == "finalize":
+                run_ref = {"run": os.environ["AF_DIALOGUE_ID"]}
+                points.point(dict(ref=run_ref, phase="before", kind="run", input="Answer in English"), user_id="user-a")
+                for index in range(3):
+                    assert points.allow_loop(dict(ref=dict(run_ref, key=f"loop-{index}"), actor_id="assistant",
+                        state="unchanged", loop_id="main", extensions={"finalize_on_stop": True}), user_id="user-a")
+                actual = llm_call.call_llm([{"role": "user", "content": "Answer in English"}],
+                    tools=[{"type": "function", "function": {"name": "run_skills"}}], source="assistant")
+                assert actual["choices"][0]["message"]["content"].startswith("The operation failed")
+                assert not points.allow_loop(dict(ref=dict(run_ref, key="loop-final"), actor_id="assistant",
+                    state="changed", loop_id="main", extensions={"finalize_on_stop": True}), user_id="user-a")
+                points.point(dict(ref=run_ref, phase="after", kind="run", output=actual), user_id="user-a")
+            else:
+                module.execute()
     (folder / (mode + ".result.json")).write_text(json.dumps({"models": captures, "tools": executions,
                                                              "output": output.getvalue()}, ensure_ascii=False))
 
@@ -308,6 +325,9 @@ def main(build):
             stopped = json.loads((root / (mode + ".result.json")).read_text())
             assert stopped["models"] == [] and stopped["tools"] == []
             assert json.loads(stopped["output"].splitlines()[-1])["status"] == "loop_control_stop"
+        finish(launch("finalize", {"AF_DIALOGUE_ID": "finalize", "AF_EXEC_SKILL_KEY": ""}))
+        finalization = json.loads((root / "finalize.result.json").read_text())
+        assert len(finalization["models"]) == 1 and finalization["tools"] == []
         unavailable = root / "unavailable-client.json"
         unavailable.write_text(json.dumps({"url": "http://127.0.0.1:1", "principals": config["principals"],
                                             "point_timeout_ms": 10}))
