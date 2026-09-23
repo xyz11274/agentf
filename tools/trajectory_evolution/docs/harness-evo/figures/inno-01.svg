@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 680" width="960" height="680">
+  <style>text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif; }</style>
+  <rect width="960" height="680" fill="#ffffff"/>
+  <text x="480" y="38" text-anchor="middle" fill="#111827" font-size="18" font-weight="600">自进化引擎核心创新点</text>
+  <rect x="40" y="66" width="440" height="128" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+  <text x="60" y="98" fill="#111827" font-size="14.5" font-weight="600">① 应用回执核验</text>
+  <text x="60" y="132" fill="#374151" font-size="12.5">applied 由 verify 按实际发送输入重算</text>
+  <text x="60" y="158" fill="#6b7280" font-size="12">不信任回执声明，三态 applied/failed/rejected</text>
+  <rect x="500" y="66" width="440" height="128" rx="8" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+  <text x="520" y="98" fill="#111827" font-size="14.5" font-weight="600">② 授权不可变 hash</text>
+  <text x="520" y="132" fill="#374151" font-size="12.5">授权字段纳入策略 hash</text>
+  <text x="520" y="158" fill="#6b7280" font-size="12">撤权 / 改写立即使旧版本失效</text>
+  <rect x="40" y="216" width="440" height="128" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+  <text x="60" y="248" fill="#111827" font-size="14.5" font-weight="600">③ 多父谱系 · 双亲重组</text>
+  <text x="60" y="282" fill="#374151" font-size="12.5">跨分支改进重组到同一后代</text>
+  <text x="60" y="308" fill="#6b7280" font-size="12">GEPA 扩展：谱系图而非单链</text>
+  <rect x="500" y="216" width="440" height="128" rx="8" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+  <text x="520" y="248" fill="#111827" font-size="14.5" font-weight="600">④ 口径统一评测底座</text>
+  <text x="520" y="282" fill="#374151" font-size="12.5">L0 / L1–L3 / L4 共用 Hybrid</text>
+  <text x="520" y="308" fill="#6b7280" font-size="12">规则结论在融合时保留</text>
+  <rect x="40" y="366" width="440" height="128" rx="8" fill="#f0fdfa" stroke="#99f6e4" stroke-width="1.5"/>
+  <text x="60" y="398" fill="#111827" font-size="14.5" font-weight="600">⑤ 无向量库记忆治理</text>
+  <text x="60" y="432" fill="#374151" font-size="12.5">Dice 三元组短名单 + 语义判定</text>
+  <text x="60" y="458" fill="#6b7280" font-size="12">冲突关系两端都排除</text>
+  <rect x="500" y="366" width="440" height="128" rx="8" fill="#fef2f2" stroke="#fecaca" stroke-width="1.5"/>
+  <text x="520" y="398" fill="#111827" font-size="14.5" font-weight="600">⑥ L0–L4 渐进 + 冻结快照</text>
+  <text x="520" y="432" fill="#374151" font-size="12.5">新 run 用新版，旧 run 不换版</text>
+  <text x="520" y="458" fill="#6b7280" font-size="12">随时可停、可回退、可审计</text>
+  <rect x="40" y="516" width="440" height="128" rx="8" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1.5"/>
+  <text x="60" y="548" fill="#111827" font-size="14.5" font-weight="600">⑦ 独立工具 · 离线闭环</text>
+  <text x="60" y="582" fill="#374151" font-size="12.5">采集 / 学习 / 注入不依赖宿主框架</text>
+  <text x="60" y="608" fill="#6b7280" font-size="12">learn CLI 导入历史日志离线进化，版本包可移植</text>
+  <rect x="500" y="516" width="440" height="128" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+  <text x="520" y="548" fill="#111827" font-size="14.5" font-weight="600">⑧ 语言与 Harness 框架无关</text>
+  <text x="520" y="582" fill="#374151" font-size="12.5">8 语言客户端 + ABI / HTTP 双接入</text>
+  <text x="520" y="608" fill="#6b7280" font-size="12">协议先行，任意 Harness 可接入进化（含反向注入）</text>
+</svg>
