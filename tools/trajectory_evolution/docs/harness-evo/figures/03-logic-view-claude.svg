@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 740" width="960" height="740">
+  <style>text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', 'Microsoft JhengHei', 'SimHei', sans-serif; }</style>
+  <defs><marker id="ac" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><polygon points="0 0, 8 4, 0 8" fill="#5a5a5a"/></marker></defs>
+  <rect width="960" height="740" fill="#f8f6f3"/>
+  <text x="480" y="40" text-anchor="middle" fill="#1a1a1a" font-size="20" font-weight="700">逻辑视图：核心子系统划分与依赖</text>
+  <text x="30" y="115" fill="#6a6a6a" font-size="14" font-weight="600">输入源</text>
+  <text x="30" y="640" fill="#6a6a6a" font-size="14" font-weight="600">持久化</text>
+  <rect x="100" y="70" width="260" height="76" rx="12" fill="#a8c5e6" stroke="#4a4a4a" stroke-width="2.5"/>
+  <text x="230" y="100" text-anchor="middle" fill="#1a1a1a" font-size="15" font-weight="600">Harness 原生平台</text>
+  <text x="230" y="122" text-anchor="middle" fill="#1a1a1a" font-size="12.5">流水线 · 构建 · 部署 · 事件</text>
+  <rect x="600" y="70" width="260" height="76" rx="12" fill="#a8c5e6" stroke="#4a4a4a" stroke-width="2.5"/>
+  <text x="730" y="100" text-anchor="middle" fill="#1a1a1a" font-size="15" font-weight="600">Agent 宿主</text>
+  <text x="730" y="122" text-anchor="middle" fill="#1a1a1a" font-size="12.5">8 语言客户端 · 已有任务 ID</text>
+  <rect x="340" y="190" width="280" height="76" rx="12" fill="#9dd4c7" stroke="#4a4a4a" stroke-width="2.5"/>
+  <text x="480" y="220" text-anchor="middle" fill="#1a1a1a" font-size="15" font-weight="600">统一接入与轨迹采集</text>
+  <text x="480" y="242" text-anchor="middle" fill="#1a1a1a" font-size="12.5">point 打点 · binding · 并行合流</text>
+  <rect x="340" y="290" width="280" height="76" rx="12" fill="#9dd4c7" stroke="#4a4a4a" stroke-width="2.5"/>
+  <text x="480" y="320" text-anchor="middle" fill="#1a1a1a" font-size="15" font-weight="600">评测子系统</text>
+  <text x="480" y="342" text-anchor="middle" fill="#1a1a1a" font-size="12.5">规则 + 模型 Judge · Hybrid</text>
+  <rect x="340" y="390" width="280" height="76" rx="12" fill="#9dd4c7" stroke="#4a4a4a" stroke-width="2.5"/>
+  <text x="480" y="420" text-anchor="middle" fill="#1a1a1a" font-size="15" font-weight="600">反思与候选子系统</text>
+  <text x="480" y="442" text-anchor="middle" fill="#1a1a1a" font-size="12.5">Seed · 反证 · 元反思</text>
+  <rect x="340" y="490" width="280" height="76" rx="12" fill="#9dd4c7" stroke="#4a4a4a" stroke-width="2.5"/>
+  <text x="480" y="520" text-anchor="middle" fill="#1a1a1a" font-size="15" font-weight="600">记忆子系统</text>
+  <text x="480" y="542" text-anchor="middle" fill="#1a1a1a" font-size="12.5">私有 + 公共 · 信任 / 淘汰</text>
+  <rect x="680" y="290" width="240" height="76" rx="12" fill="#9dd4c7" stroke="#4a4a4a" stroke-width="2.5"/>
+  <text x="800" y="320" text-anchor="middle" fill="#1a1a1a" font-size="15" font-weight="600">运行时控制子系统</text>
+  <text x="800" y="342" text-anchor="middle" fill="#1a1a1a" font-size="12.5">L1 注入 · L2 编排 · L3 循环</text>
+  <rect x="680" y="440" width="240" height="76" rx="12" fill="#9dd4c7" stroke="#4a4a4a" stroke-width="2.5"/>
+  <text x="800" y="470" text-anchor="middle" fill="#1a1a1a" font-size="15" font-weight="600">策略子系统</text>
+  <text x="800" y="492" text-anchor="middle" fill="#1a1a1a" font-size="12.5">记忆检索 · 快照 · 版本</text>
+  <rect x="60" y="190" width="220" height="76" rx="12" fill="#f4e4c1" stroke="#4a4a4a" stroke-width="2.5"/>
+  <text x="170" y="220" text-anchor="middle" fill="#1a1a1a" font-size="15" font-weight="600">学习调度</text>
+  <text x="170" y="242" text-anchor="middle" fill="#1a1a1a" font-size="12.5">队列 · 分批 · 预算</text>
+  <rect x="60" y="320" width="220" height="76" rx="12" fill="#f4e4c1" stroke="#4a4a4a" stroke-width="2.5"/>
+  <text x="170" y="350" text-anchor="middle" fill="#1a1a1a" font-size="15" font-weight="600">GEPA 进化搜索</text>
+  <text x="170" y="372" text-anchor="middle" fill="#1a1a1a" font-size="12.5">多父谱系 · 双亲重组</text>
+  <rect x="70" y="600" width="195" height="60" rx="12" fill="#e8e6e3" stroke="#4a4a4a" stroke-width="2.5"/>
+  <text x="167" y="632" text-anchor="middle" fill="#1a1a1a" font-size="14" font-weight="600">轨迹 / 评测库</text>
+  <rect x="295" y="600" width="195" height="60" rx="12" fill="#e8e6e3" stroke="#4a4a4a" stroke-width="2.5"/>
+  <text x="392" y="632" text-anchor="middle" fill="#1a1a1a" font-size="14" font-weight="600">记忆库</text>
+  <rect x="520" y="600" width="195" height="60" rx="12" fill="#e8e6e3" stroke="#4a4a4a" stroke-width="2.5"/>
+  <text x="617" y="632" text-anchor="middle" fill="#1a1a1a" font-size="14" font-weight="600">策略快照</text>
+  <rect x="745" y="600" width="195" height="60" rx="12" fill="#e8e6e3" stroke="#4a4a4a" stroke-width="2.5"/>
+  <text x="842" y="632" text-anchor="middle" fill="#1a1a1a" font-size="14" font-weight="600">发布版本</text>
+  <line x1="230" y1="146" x2="400" y2="190" stroke="#5a5a5a" stroke-width="2" marker-end="url(#ac)"/>
+  <text x="258" y="162" text-anchor="middle" fill="#5a5a5a" font-size="13">point 打点</text>
+  <line x1="730" y1="146" x2="560" y2="190" stroke="#5a5a5a" stroke-width="2" marker-end="url(#ac)"/>
+  <text x="690" y="162" text-anchor="middle" fill="#5a5a5a" font-size="13">point 打点</text>
+  <line x1="480" y1="266" x2="480" y2="290" stroke="#5a5a5a" stroke-width="2" marker-end="url(#ac)"/>
+  <text x="480" y="270" text-anchor="middle" fill="#5a5a5a" font-size="13">轨迹 / Episode</text>
+  <line x1="480" y1="366" x2="480" y2="390" stroke="#5a5a5a" stroke-width="2" marker-end="url(#ac)"/>
+  <text x="480" y="370" text-anchor="middle" fill="#5a5a5a" font-size="13">评测结果</text>
+  <line x1="480" y1="466" x2="480" y2="490" stroke="#5a5a5a" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#ac)"/>
+  <text x="480" y="470" text-anchor="middle" fill="#5a5a5a" font-size="13">seed / 候选 入库</text>
+  <line x1="620" y1="528" x2="680" y2="478" stroke="#5a5a5a" stroke-width="2" marker-end="url(#ac)"/>
+  <text x="650" y="495" text-anchor="middle" fill="#5a5a5a" font-size="13">检索 top-k</text>
+  <line x1="800" y1="440" x2="800" y2="366" stroke="#5a5a5a" stroke-width="2" marker-end="url(#ac)"/>
+  <text x="800" y="395" text-anchor="middle" fill="#5a5a5a" font-size="13">快照下发</text>
+  <line x1="850" y1="290" x2="850" y2="146" stroke="#5a5a5a" stroke-width="2" marker-end="url(#ac)"/>
+  <text x="858" y="218" text-anchor="middle" fill="#5a5a5a" font-size="13">L1–L3 受控应用</text>
+  <line x1="680" y1="328" x2="620" y2="328" stroke="#5a5a5a" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#ac)"/>
+  <text x="650" y="318" text-anchor="middle" fill="#5a5a5a" font-size="13">结果回采</text>
+  <line x1="170" y1="266" x2="170" y2="320" stroke="#5a5a5a" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#ac)"/>
+  <text x="170" y="298" text-anchor="middle" fill="#5a5a5a" font-size="13">补训数据</text>
+  <line x1="140" y1="396" x2="140" y2="600" stroke="#5a5a5a" stroke-width="2" marker-end="url(#ac)"/>
+  <text x="140" y="520" text-anchor="middle" fill="#5a5a5a" font-size="13">候选版本</text>
+  <line x1="800" y1="516" x2="800" y2="600" stroke="#5a5a5a" stroke-width="2" marker-end="url(#ac)"/>
+  <text x="800" y="560" text-anchor="middle" fill="#5a5a5a" font-size="13">快照版本</text>
+  <line x1="480" y1="566" x2="480" y2="600" stroke="#5a5a5a" stroke-width="2" marker-end="url(#ac)"/>
+  <text x="480" y="575" text-anchor="middle" fill="#5a5a5a" font-size="13">记忆持久化</text>
+  <path d="M 410,266 L 310,266 L 310,600" fill="none" stroke="#5a5a5a" stroke-width="2" marker-end="url(#ac)"/>
+  <text x="316" y="560" fill="#5a5a5a" font-size="13" transform="rotate(90 316 560)" text-anchor="middle">轨迹入库</text>
+  <g transform="translate(700,700)">
+    <line x1="0" y1="8" x2="28" y2="8" stroke="#5a5a5a" stroke-width="2" marker-end="url(#ac)"/><text x="36" y="12" fill="#6a6a6a" font-size="12">读取 / 请求</text>
+    <line x1="140" y1="8" x2="168" y2="8" stroke="#5a5a5a" stroke-width="2" stroke-dasharray="5,3" marker-end="url(#ac)"/><text x="176" y="12" fill="#6a6a6a" font-size="12">写入 / 异步</text>
+  </g>
+</svg>

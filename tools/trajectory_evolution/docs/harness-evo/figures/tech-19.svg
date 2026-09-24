@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 328" width="480" height="328">
+  <style>text { font-family: 'Helvetica Neue', Helvetica, Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif; }</style>
+  <defs><marker id="ab" markerWidth="9" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 9 3, 0 6" fill="#2563eb"/></marker></defs>
+  <rect width="480" height="328" fill="#ffffff"/>
+  <text x="24" y="34" fill="#111827" font-size="14" font-weight="600">C9 无约束自主变更风险</text>
+  <rect x="40" y="64" width="400" height="42" rx="8" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+  <text x="240" y="90" text-anchor="middle" fill="#111827" font-size="12.5">风险：错误决策自动执行破坏生产</text>
+  <line x1="240" y1="108" x2="240" y2="127" stroke="#2563eb" stroke-width="1.5" marker-end="url(#ab)"/>
+  <rect x="40" y="130" width="400" height="42" rx="8" fill="#f0fdf4" stroke="#bbf7d0" stroke-width="1.5"/>
+  <text x="240" y="156" text-anchor="middle" fill="#111827" font-size="12.5">分级风控：低风险自动，高风险评审</text>
+  <line x1="240" y1="174" x2="240" y2="193" stroke="#2563eb" stroke-width="1.5" marker-end="url(#ab)"/>
+  <rect x="40" y="196" width="400" height="42" rx="8" fill="#fff7ed" stroke="#fed7aa" stroke-width="1.5"/>
+  <text x="240" y="222" text-anchor="middle" fill="#111827" font-size="12.5">影子策略先行 + 灰度发布</text>
+  <line x1="240" y1="240" x2="240" y2="259" stroke="#2563eb" stroke-width="1.5" marker-end="url(#ab)"/>
+  <rect x="40" y="262" width="400" height="42" rx="8" fill="#faf5ff" stroke="#e9d5ff" stroke-width="1.5"/>
+  <text x="240" y="288" text-anchor="middle" fill="#111827" font-size="12.5">一键回滚 + 全量审计 + set_enabled 暂停</text>
+</svg>

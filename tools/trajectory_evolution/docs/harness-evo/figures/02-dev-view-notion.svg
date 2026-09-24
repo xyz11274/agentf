@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 700" width="960" height="700">
+  <style>text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, 'PingFang SC', 'Microsoft YaHei', 'Microsoft JhengHei', 'SimHei', sans-serif; }</style>
+  <defs><marker id="nb" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#3b82f6"/></marker></defs>
+  <rect width="960" height="700" fill="#ffffff"/>
+  <text x="480" y="40" text-anchor="middle" fill="#111827" font-size="18" font-weight="500">开发视图：工程分层与包结构</text>
+  <text x="480" y="60" text-anchor="middle" fill="#9ca3af" font-size="12">src/ 实际布局 · 单向依赖 · 自上而下</text>
+  <text x="44" y="108" fill="#6b7280" font-size="11" font-weight="500" letter-spacing="0.08em">LAYER</text>
+  <text x="44" y="128" fill="#111827" font-size="14" font-weight="500">01  统一接入层</text>
+  <rect x="240" y="84" width="680" height="52" rx="4" fill="none" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,3"/>
+  <rect x="223" y="94" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="307" y="115" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">instrumentation</text>
+  <rect x="405" y="94" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="489" y="115" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">request-binding</text>
+  <rect x="587" y="94" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="671" y="115" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">orchestration</text>
+  <rect x="769" y="94" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="853" y="115" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">clients × 8 语言</text>
+  <line x1="580" y1="138" x2="580" y2="150" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#nb)"/>
+  <text x="44" y="172" fill="#6b7280" font-size="11" font-weight="500" letter-spacing="0.08em">LAYER</text>
+  <text x="44" y="192" fill="#111827" font-size="14" font-weight="500">02  采集与校验</text>
+  <rect x="240" y="148" width="680" height="52" rx="4" fill="none" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,3"/>
+  <rect x="224" y="158" width="228" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="338" y="179" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">trace-analyzer</text>
+  <rect x="466" y="158" width="228" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="580" y="179" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">trace-contract</text>
+  <rect x="708" y="158" width="228" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="822" y="179" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">loop-episode-analyzer</text>
+  <line x1="580" y1="202" x2="580" y2="214" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#nb)"/>
+  <text x="44" y="236" fill="#6b7280" font-size="11" font-weight="500" letter-spacing="0.08em">LAYER</text>
+  <text x="44" y="256" fill="#111827" font-size="14" font-weight="500">03  评测</text>
+  <rect x="240" y="212" width="680" height="52" rx="4" fill="none" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,3"/>
+  <rect x="223" y="222" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="307" y="243" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">agent-evaluation</text>
+  <rect x="405" y="222" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="489" y="243" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">task-evaluation</text>
+  <rect x="587" y="222" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="671" y="243" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">hybrid-evaluator</text>
+  <rect x="769" y="222" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="853" y="243" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">dataset</text>
+  <line x1="580" y1="266" x2="580" y2="278" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#nb)"/>
+  <text x="44" y="300" fill="#6b7280" font-size="11" font-weight="500" letter-spacing="0.08em">LAYER</text>
+  <text x="44" y="320" fill="#111827" font-size="14" font-weight="500">04  反思与记忆</text>
+  <rect x="240" y="276" width="680" height="52" rx="4" fill="none" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,3"/>
+  <rect x="273" y="286" width="300" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="423" y="307" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">evolution-pipeline</text>
+  <rect x="587" y="286" width="300" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="737" y="307" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">shared-memory</text>
+  <line x1="580" y1="330" x2="580" y2="342" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#nb)"/>
+  <text x="44" y="364" fill="#6b7280" font-size="11" font-weight="500" letter-spacing="0.08em">LAYER</text>
+  <text x="44" y="384" fill="#111827" font-size="14" font-weight="500">05  策略与运行时</text>
+  <rect x="240" y="340" width="680" height="52" rx="4" fill="none" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,3"/>
+  <rect x="223" y="350" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="307" y="371" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">policy-runtime</text>
+  <rect x="405" y="350" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="489" y="371" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">shadow-runtime</text>
+  <rect x="587" y="350" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="671" y="371" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">boundary-runtime</text>
+  <rect x="769" y="350" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="853" y="371" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">dispatch-runtime</text>
+  <line x1="580" y1="394" x2="580" y2="406" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#nb)"/>
+  <text x="44" y="428" fill="#6b7280" font-size="11" font-weight="500" letter-spacing="0.08em">LAYER</text>
+  <text x="44" y="448" fill="#111827" font-size="14" font-weight="500">06  进化搜索</text>
+  <rect x="240" y="404" width="680" height="52" rx="4" fill="none" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,3"/>
+  <rect x="223" y="414" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="307" y="435" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">gepa-search</text>
+  <rect x="405" y="414" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="489" y="435" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">gepa-strategy</text>
+  <rect x="587" y="414" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="671" y="435" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">control-generation</text>
+  <rect x="769" y="414" width="168" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="853" y="435" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">failure-ledger</text>
+  <line x1="580" y1="458" x2="580" y2="470" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#nb)"/>
+  <text x="44" y="492" fill="#6b7280" font-size="11" font-weight="500" letter-spacing="0.08em">LAYER</text>
+  <text x="44" y="512" fill="#111827" font-size="14" font-weight="500">07  服务与 CLI</text>
+  <rect x="240" y="468" width="680" height="52" rx="4" fill="none" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,3"/>
+  <rect x="224" y="478" width="228" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="338" y="499" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">local-runtime · 原生 ABI</text>
+  <rect x="466" y="478" width="228" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="580" y="499" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">integration-http · HTTP</text>
+  <rect x="708" y="478" width="228" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="822" y="499" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">cli × 5</text>
+  <line x1="580" y1="522" x2="580" y2="534" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#nb)"/>
+  <text x="44" y="556" fill="#6b7280" font-size="11" font-weight="500" letter-spacing="0.08em">LAYER</text>
+  <text x="44" y="576" fill="#111827" font-size="14" font-weight="500">08  协议与配置</text>
+  <rect x="240" y="532" width="680" height="52" rx="4" fill="none" stroke="#e5e7eb" stroke-width="1" stroke-dasharray="4,3"/>
+  <rect x="224" y="542" width="228" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="338" y="563" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">proto × 5</text>
+  <rect x="466" y="542" width="228" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="580" y="563" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">api schema + OpenAPI</text>
+  <rect x="708" y="542" width="228" height="32" rx="4" fill="#f9fafb" stroke="#e5e7eb" stroke-width="1"/>
+  <text x="822" y="563" text-anchor="middle" fill="#111827" font-size="13" font-weight="500">config + prompts</text>
+  <text x="44" y="604" fill="#9ca3af" font-size="11" letter-spacing="0.08em">ENGINEERING CONSTRAINT</text>
+  <text x="44" y="622" fill="#6b7280" font-size="12">单向依赖，禁止底层反向依赖上层；打点路径零阻塞宿主主链路。</text>
+</svg>
