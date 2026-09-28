@@ -270,7 +270,9 @@ def convert_product(path: Path, domain_map: dict, warnings: list) -> dict:
 
 def convert_hotpotqa(path: Path, data: list) -> dict:
     """HotpotQA 样本列表（_id/question/answer/context/supporting_facts/type/level）
-    → evalset.v2 单轮 case，split 由文件名推断（*train* → train，*dev* → val）。
+    → evalset.v2 单轮 case。
+
+    split 由文件名推断（*holdout* → holdout，*train* → train，*dev*/*val* → val）。
 
     每轮提问沿用 EvoAgentX benchmark_and_evaluation.py 的拼接格式：
       Context: Title: {标题}\nText: {句子平铺}\n\nTitle: ...\n\nQuestion: {q}\nAnswer:
@@ -279,7 +281,14 @@ def convert_hotpotqa(path: Path, data: list) -> dict:
     expected_skills 置 None（意图指标跳过）。
     """
     stem = path.stem.lower()
-    split = "train" if "train" in stem else "val" if "dev" in stem else ""
+    if "holdout" in stem:
+        split = "holdout"
+    elif "train" in stem:
+        split = "train"
+    elif "dev" in stem or "val" in stem:
+        split = "val"
+    else:
+        split = ""
     evalset = empty_evalset(
         name=f"hotpotqa:{path.stem}",
         description=f"HotpotQA 转换（来源 {path}，多跳问答，段落平铺为 Context）",
